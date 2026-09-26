@@ -17148,66 +17148,267 @@ function canopyEvidence(x: number, z: number): number {
   if (sampleCover(x - 5, z + r) === 10) n++;
   return n / 6;
 }
-// ── THE REBUILD IS SLICED, AND COMMITS WHOLE ──
+// ── THE CANOPY SCROLLS ──
 //
-// On the phone a whole rebuild was 124-217 ms in one frame (Nagato dump,
-// inside `treeRefresh`'s shrubs phase, max 309). It is a job: rows until
-// CANOPY_SLICE_MS of a frame is spent, first the nodes, then (one row behind)
-// the normals and the index, so nothing whole-lattice is left for the last
-// frame — the harness's commit of a 2.8 km outer ring was a 50 ms frame on its
-// own. Both rings commit TOGETHER when the second is done: committing the
-// inner one alone dropped the outer from the gather, and with terrain
-// streaming restarting the job every 1.5 s the outer ring was never up (the
-// device dump drew 0.11M of canopy, the inner square, and the hidden share
-// swung 8%-88% sweep to sweep, and the tree budget with it).
-//
-// WHAT RESTARTS IT. Distance: CANOPY_REBUILD_M, since the near field follows
-// the car in the vertex shader and the rings reach the draw range past it.
-// Terrain: a new tile moves the ground under the roof, but the stream lands a
-// tile every second or two while driving, so a terrain-only change waits
-// CANOPY_TERRAIN_MS since the last build.
-// The slice is a URL knob for the harness, whose software-rendered frames
-// make a 3 ms slice a build of minutes; the first build, with nothing up yet,
-// takes three slices a frame.
-const CANOPY_SLICE_MS = qsNum('canopyslice', 3), CANOPY_REBUILD_M = 300, CANOPY_TERRAIN_MS = 20000;
-interface CanopyJob { x0: number; z0: number; fx: number; fz: number; j: number; k: number; org: string; tb: number;
-  step: number; N: number; hole: [number, number, number, number] | null; mesh: THREE.Mesh;
-  pos: Float32Array; col: Float32Array; lift: Float32Array; plift: Float32Array; nrm: Float32Array; ev: Float32Array;
-  /** Ground (less baseY) and lift per node, half floats, for the crowns. */
-  tex: Uint16Array<ArrayBuffer>; baseY: number;
-  idx: Uint32Array; ni: number; ms: number; }
+// Rebuilding both rings from nothing every 300 m was ~0.5 s of CPU in the
+// harness and much longer on the phone at 3 ms a frame, and at 100 km/h the
+// car outran it: the seat reported the canopy gone around the car, the old
+// ring's faded edge showing where it should be. The rings now persist and
+// SCROLL: when the focus is CANOPY_SHIFT_NODES of a ring's step off its centre
+// the ring's lattice is copied over by whole rows and columns and only the
+// uncovered strip is computed, then the shell, normals and cells around it,
+// then the lot is swapped in at once. At 30 m/s that is a few thousand nodes a
+// second, not 130,000 per rebuild. A full rebuild is the same job with every
+// node dirty — first sight, a new origin, a treeRange change, and a slow
+// terrain refresh (CANOPY_TERRAIN_MS) as tiles refine under a parked view.
+// Jobs run in CANOPY_SLICE_MS of a frame (a URL knob: the harness's software
+// frames want more), three times that until the first ring is up.
+const CANOPY_SLICE_MS = qsNum('canopyslice', 3), CANOPY_SHIFT_NODES = 8, CANOPY_TERRAIN_MS = 45000;
+interface CanopyBuf { pos: Float32Array; col: Float32Array; lift: Float32Array; plift: Float32Array;
+  nrm: Float32Array; ev: Float32Array; tex: Uint16Array<ArrayBuffer>; idx: Uint32Array; ni: number }
+interface CanopyRing { mesh: THREE.Mesh; outer: boolean; step: number; N: number; V: number;
+  x0: number; z0: number; baseY: number; live: CanopyBuf; spare: CanopyBuf; tex: THREE.DataTexture | null }
+interface CanopyJob { R: CanopyRing; B: CanopyBuf; x0: number; z0: number; dirty: Uint8Array; rowDirty: Uint8Array;
+  phase: 0 | 1 | 2 | 3; j: number; ms: number; full: boolean }
 type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array; lift: Float32Array };
+let canopyRings: CanopyRing[] = [];
 let canopyJobs: CanopyJob[] = [];
-let canopyDone: CanopyJob[] = [];
 let canopyBox: [number, number, number, number] = [0, 0, 0, 0];
 let canopyStand: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
-/** The last COMMITTED lattices, inner then outer, which the tree gather reads
- *  to leave the interior of a closed stand to the canopy. */
+/** The live lattices, inner then outer, which the tree gather reads to leave
+ *  the interior of a closed stand to the canopy. */
 let canopyGrids: CanopyGrid[] = [];
-function canopyStartJobs(fx: number, fz: number, org: string, now: number): void {
-  const half = (CANOPY_N * CANOPY_STEP) / 2;
-  const ix0 = Math.round((fx - half) / 32) * 32, iz0 = Math.round((fz - half) / 32) * 32;
-  const span = CANOPY_N * CANOPY_STEP, oStep = CANOPY_STEP * 2;
-  const outerHalf = Math.max(half, treeRange + 60);
-  const M = Math.max(0, Math.ceil((outerHalf - half) / oStep));
-  const baseY = groundAt(fx, fz);
-  const mk = (x0: number, z0: number, step: number, N: number, hole: CanopyJob['hole'], mesh: THREE.Mesh): CanopyJob => {
-    const V = N + 1;
-    return { x0, z0, fx, fz, j: 0, k: 0, org, tb: terrainBuilds, step, N, hole, mesh,
-      pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3), lift: new Float32Array(V * V),
-      plift: new Float32Array(V * V), nrm: new Float32Array(V * V * 3), ev: new Float32Array(V * V),
-      tex: new Uint16Array(V * V * 2), baseY, idx: new Uint32Array(N * N * 6), ni: 0, ms: 0 };
-  };
-  canopyJobs = [mk(ix0, iz0, CANOPY_STEP, CANOPY_N, null, canopyMesh)];
-  canopyBox = [ix0, iz0, ix0 + span, iz0 + span];
+const canopyBuf = (V: number): CanopyBuf => ({ pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3),
+  lift: new Float32Array(V * V), plift: new Float32Array(V * V), nrm: new Float32Array(V * V * 3),
+  ev: new Float32Array(V * V), tex: new Uint16Array(V * V * 2), idx: new Uint32Array((V - 1) * (V - 1) * 6), ni: 0 });
+/** The rings a focus wants: the inner at CANOPY_STEP across CANOPY_N, the
+ *  outer at twice the step reaching the tree draw range. */
+function canopyWant(fx: number, fz: number): Array<{ outer: boolean; step: number; N: number; x0: number; z0: number }> {
+  const half = (CANOPY_N * CANOPY_STEP) / 2, oStep = CANOPY_STEP * 2;
+  const M = Math.max(0, Math.ceil((Math.max(half, treeRange + 60) - half) / oStep));
+  const out = [{ outer: false, step: CANOPY_STEP, N: CANOPY_N, x0: Math.round((fx - half) / CANOPY_STEP) * CANOPY_STEP, z0: Math.round((fz - half) / CANOPY_STEP) * CANOPY_STEP }];
   if (M > 0) {
-    canopyJobs.push(mk(ix0 - M * oStep, iz0 - M * oStep, oStep, 2 * M + span / oStep, [ix0, iz0, ix0 + span, iz0 + span], canopyOuter));
-    canopyBox = [ix0 - M * oStep, iz0 - M * oStep, ix0 + span + M * oStep, iz0 + span + M * oStep];
+    const oN = 2 * M + Math.round((CANOPY_N * CANOPY_STEP) / oStep), oh = (oN * oStep) / 2;
+    out.push({ outer: true, step: oStep, N: oN, x0: Math.round((fx - oh) / oStep) * oStep, z0: Math.round((fz - oh) / oStep) * oStep });
   }
-  canopyDone = [];
-  canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
-  canopyStandNext = canopyStandBuild(canopyBox);
+  return out;
 }
+/** Queue the job that brings ring R to origin (x0, z0): a shift where the
+ *  old lattice still covers some of it, everything dirty where it does not. */
+function canopyQueue(R: CanopyRing, x0: number, z0: number, full: boolean): void {
+  const V = R.V, B = R.spare;
+  const dirty = new Uint8Array(V * V), rowDirty = new Uint8Array(V);
+  const dx = Math.round((x0 - R.x0) / R.step), dz = Math.round((z0 - R.z0) / R.step);
+  const L = R.live;
+  if (full || Math.abs(dx) >= V || Math.abs(dz) >= V) { dirty.fill(1); rowDirty.fill(1); }
+  else {
+    // The old lattice, moved: node (i, j) of the new is (i+dx, j+dz) of the old.
+    const i0 = Math.max(0, -dx), i1 = Math.min(V, V - dx);
+    for (let j = 0; j < V; j++) {
+      const sj = j + dz;
+      if (sj < 0 || sj >= V || i1 <= i0) { dirty.fill(1, j * V, (j + 1) * V); rowDirty[j] = 1; continue; }
+      const d = j * V + i0, sOff = sj * V + i0 + dx, n = i1 - i0;
+      B.pos.set(L.pos.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+      B.col.set(L.col.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+      B.nrm.set(L.nrm.subarray(sOff * 3, (sOff + n) * 3), d * 3);
+      B.lift.set(L.lift.subarray(sOff, sOff + n), d);
+      B.plift.set(L.plift.subarray(sOff, sOff + n), d);
+      B.ev.set(L.ev.subarray(sOff, sOff + n), d);
+      B.tex.set(L.tex.subarray(sOff * 2, (sOff + n) * 2), d * 2);
+      if (i0 > 0 || i1 < V) { rowDirty[j] = 1; dirty.fill(1, j * V, j * V + i0); dirty.fill(1, j * V + i1, (j + 1) * V); }
+    }
+  }
+  canopyJobs.push({ R, B, x0, z0, dirty, rowDirty, phase: 0, j: 0, ms: 0, full });
+}
+/** One node: evidence, ground and the roof's lift over it. */
+function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: number, j: number): void {
+  const V = R.V, x = x0 + i * R.step, z = z0 + j * R.step, k = j * V + i;
+  // CLEAR OF THE ROAD BY A VERGE'S WIDTH. The carriageway and 7 m of verge
+  // are no canopy at all; the next 9 m count half, below where the roof
+  // starts, so the forest's side beside a road is its real edge trees and
+  // not a lattice wall standing over the kerb (the cab frames).
+  let ev = canopyEvidence(x, z);
+  if (ev > 0) {
+    if (onCarriageway(x, z, 7).road) ev = 0;
+    else if (onCarriageway(x, z, 16).road) ev *= 0.5;
+  }
+  B.ev[k] = ev;
+  const g = groundAt(x, z);
+  const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
+  // INSET AND UNDER THE EDGE. The roof starts only where the evidence says
+  // a stand is well under way (0.6) and is full at 0.85 — where the gather
+  // starts leaving trees to it — and it stands at 0.8 of the stand height,
+  // so the stand's own edge trees are its side and overtop the roof's rim.
+  const rise = Math.min(1, Math.max(0, (ev - 0.6) / 0.25));
+  B.lift[k] = rise * rise * (3 - 2 * rise) * stand * 0.8;
+  B.pos[k * 3] = x; B.pos[k * 3 + 1] = g; B.pos[k * 3 + 2] = z;
+  B.tex[k * 2] = THREE.DataUtils.toHalfFloat(g - R.baseY); B.tex[k * 2 + 1] = THREE.DataUtils.toHalfFloat(B.lift[k]);
+  // The ground's own palette under the stand; the shader pulls it toward
+  // leaf, and lets go of it at the ring's edge. Bare ground only ever colours
+  // the foot of an edge cell, so it takes its row neighbour's tone and skips
+  // the palette, the dearest call here.
+  if (ev > 0 || i === 0) {
+    const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
+    B.col[k * 3] = pc[0]; B.col[k * 3 + 1] = pc[1]; B.col[k * 3 + 2] = pc[2];
+  } else { B.col[k * 3] = B.col[k * 3 - 3]; B.col[k * 3 + 1] = B.col[k * 3 - 2]; B.col[k * 3 + 2] = B.col[k * 3 - 1]; }
+}
+/** The shell and the normal at one node, from the nodes around it. */
+function canopyShell(R: CanopyRing, B: CanopyBuf, i: number, j: number): void {
+  const V = R.V, k = j * V + i;
+  // ABSOLUTE, NOT RELATIVE: the envelope is the highest crown top over the
+  // neighbourhood — its ground AND its lift — less this node's own ground.
+  // A lift-only margin held on the coastal flat and failed on Nagato's 35°
+  // hillsides, where a crown a cell uphill stands metres above this node's
+  // shell and the shell's own triangles were drawn in its place (the teeth).
+  // A crown reaches a cell past its node and up to 1.39 of its lift.
+  let m = 0, top = -Infinity;
+  for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+    const ii = i + a, jj = j + b;
+    if (ii < 0 || jj < 0 || ii >= V || jj >= V) continue;
+    const kk = jj * V + ii;
+    m = Math.max(m, B.lift[kk]);
+    if (B.lift[kk] > 2.5) top = Math.max(top, B.pos[kk * 3 + 1] + B.lift[kk] * 1.4);
+  }
+  B.plift[k] = m > 2.5 ? Math.max(0, top + 2 - B.pos[k * 3 + 1]) : 0;
+  const h = (ii: number, jj: number): number => {
+    const kk = Math.min(V - 1, Math.max(0, jj)) * V + Math.min(V - 1, Math.max(0, ii));
+    return B.pos[kk * 3 + 1] + B.lift[kk];
+  };
+  const s2 = 2 * R.step;
+  const nx = -(h(i + 1, j) - h(i - 1, j)) / s2, nz = -(h(i, j + 1) - h(i, j - 1)) / s2, l = Math.hypot(nx, 1, nz);
+  B.nrm[k * 3] = nx / l; B.nrm[k * 3 + 1] = 1 / l; B.nrm[k * 3 + 2] = nz / l;
+}
+/** Every cell of the ring with a shell over any corner, less the inner
+ *  ring's square when this is the outer. */
+function canopyIndex(R: CanopyRing, B: CanopyBuf, x0: number, z0: number): void {
+  const V = R.V, N = R.N, inner = R.outer ? canopyRings[0] : null;
+  const H = inner ? [inner.x0, inner.z0, inner.x0 + inner.N * inner.step, inner.z0 + inner.N * inner.step] : null;
+  let ni = 0;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    if (H) {
+      const cx = x0 + (i + 0.5) * R.step, cz = z0 + (j + 0.5) * R.step;
+      if (cx > H[0] && cx < H[2] && cz > H[1] && cz < H[3]) continue;
+    }
+    const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
+    if (Math.max(B.plift[a], B.plift[b], B.plift[c], B.plift[d]) <= 0) continue;
+    B.idx[ni++] = a; B.idx[ni++] = c; B.idx[ni++] = b; B.idx[ni++] = b; B.idx[ni++] = c; B.idx[ni++] = d;
+  }
+  B.ni = ni;
+}
+function canopyCommitJob(J: CanopyJob): void {
+  const R = J.R, B = J.B;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(B.pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(B.col, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(B.nrm, 3));
+  geo.setAttribute('canLift', new THREE.BufferAttribute(B.plift, 1));
+  geo.setIndex(new THREE.BufferAttribute(B.idx.subarray(0, B.ni), 1));
+  R.mesh.geometry.dispose();
+  R.mesh.geometry = geo;
+  const tex = new THREE.DataTexture(B.tex, R.V, R.V, THREE.RGFormat, THREE.HalfFloatType);
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+  const U = R.outer ? canopyOut.u : canopyIn.u;
+  R.tex?.dispose(); R.tex = tex;
+  U.canTex.value = tex; U.canTexBox.value.set(J.x0, J.z0, R.step, R.V); U.canBaseY.value = R.baseY;
+  R.spare = R.live; R.live = B; R.x0 = J.x0; R.z0 = J.z0;
+  canopyGrids = canopyRings.map((r) => ({ x0: r.x0, z0: r.z0, V: r.V, step: r.step, ev: r.live.ev, lift: r.live.lift }));
+  const o = canopyRings[canopyRings.length - 1];
+  canopyBox = [o.x0, o.z0, o.x0 + o.N * o.step, o.z0 + o.N * o.step];
+  canopyU.box.value.set(...canopyBox);
+  let tris = 0;
+  for (const r of canopyRings) tris += r === R ? B.ni / 3 : r.live.ni / 3;
+  canopyStat.tris = tris; canopyStat.cells = tris / 2;
+  canopyStat.ms = +J.ms.toFixed(1);
+  canopyStat.builds++;
+  // The inner square moved: the outer's hole moves with it. The stand's
+  // colour follows the outer ring's box.
+  if (!R.outer && canopyRings[1] && !canopyJobs.some((q) => q.R === canopyRings[1])) canopyQueue(canopyRings[1], canopyRings[1].x0, canopyRings[1].z0, false);
+  if (R.outer || canopyRings.length === 1) {
+    const next = canopyStandBuild(canopyBox);
+    canopyStand?.tex.dispose();
+    canopyStand = next;
+    for (const Uu of [canopyIn.u, canopyOut.u]) { Uu.canStand.value = canopyStand.tex; Uu.canStandBox.value.copy(canopyStand.box); }
+  }
+}
+function stepCanopy(now: number): void {
+  canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
+  if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; return; }
+  const [fx, fz] = renderFocusXZ();
+  canopyU.foc.value.set(fx, fz, camMode !== 'top' && !canopyNearOff ? 1 : 0);
+  const org = `${origin.lat},${origin.lon}`;
+  const want = canopyWant(fx, fz);
+  // A new origin, a first sight, or a ring whose size no longer fits the draw
+  // range: the rings are made afresh and everything is dirty.
+  if (org !== canopyAt.org || canopyAt.t <= 0 || canopyRings.length !== want.length
+    || canopyRings.some((r, n) => r.N !== want[n].N)) {
+    canopyJobs = [];
+    const baseY = groundAt(fx, fz);
+    canopyRings = want.map((w) => {
+      const V = w.N + 1;
+      return { mesh: w.outer ? canopyOuter : canopyMesh, outer: w.outer, step: w.step, N: w.N, V,
+        x0: w.x0, z0: w.z0, baseY, live: canopyBuf(V), spare: canopyBuf(V), tex: null };
+    });
+    canopyGrids = [];
+    canopyOuter.geometry.setIndex([]); canopyMesh.geometry.setIndex([]);
+    for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
+    canopyBucket.clear();
+    canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
+  } else if (!canopyJobs.length) {
+    // THE SCROLL: a ring whose centre the focus has left by CANOPY_SHIFT_NODES
+    // steps moves under it. A ring drifting a long way from where its ground
+    // heights were based (half floats) is rebuilt on a fresh base instead.
+    for (let n = 0; n < canopyRings.length; n++) {
+      const R = canopyRings[n], w = want[n];
+      const off = Math.max(Math.abs(w.x0 - R.x0), Math.abs(w.z0 - R.z0)) / R.step;
+      if (off >= CANOPY_SHIFT_NODES) {
+        const gNow = groundAt(fx, fz);
+        const full = Math.abs(gNow - R.baseY) > 300;
+        if (full) R.baseY = gNow;
+        canopyQueue(R, w.x0, w.z0, full);
+      }
+    }
+    // Tiles refine under a parked view: a slow whole refresh.
+    if (!canopyJobs.length && terrainBuilds !== canopyAt.tb && now - canopyAt.t > CANOPY_TERRAIN_MS) {
+      for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
+      canopyAt.t = now; canopyAt.tb = terrainBuilds;
+    }
+  }
+  const J = canopyJobs[0];
+  if (!J) return;
+  const R = J.R, V = R.V, t0 = performance.now();
+  const slice = canopyGrids.length ? CANOPY_SLICE_MS : CANOPY_SLICE_MS * 3;
+  while (performance.now() - t0 < slice) {
+    if (J.phase === 0) {
+      // The dirty nodes, row by row.
+      if (J.j >= V) { J.phase = 1; J.j = 0; continue; }
+      const j = J.j++;
+      if (!J.rowDirty[j]) continue;
+      for (let i = 0; i < V; i++) if (J.dirty[j * V + i]) canopyNode(R, J.B, J.x0, J.z0, i, j);
+    } else if (J.phase === 1) {
+      // The shell and normals of every node a dirty node touches.
+      if (J.j >= V) { J.phase = 2; continue; }
+      const j = J.j++;
+      if (!J.rowDirty[j] && !(j > 0 && J.rowDirty[j - 1]) && !(j < V - 1 && J.rowDirty[j + 1])) continue;
+      for (let i = 0; i < V; i++) {
+        let hit = false;
+        for (let b = -1; b <= 1 && !hit; b++) {
+          const jj = j + b;
+          if (jj < 0 || jj >= V || !J.rowDirty[jj]) continue;
+          for (let a = -1; a <= 1; a++) { const ii = i + a; if (ii >= 0 && ii < V && J.dirty[jj * V + ii]) { hit = true; break; } }
+        }
+        if (hit) canopyShell(R, J.B, i, j);
+      }
+    } else if (J.phase === 2) {
+      canopyIndex(R, J.B, J.x0, J.z0);
+      J.phase = 3;
+    } else break;
+  }
+  J.ms += performance.now() - t0;
+  if (J.phase !== 3) return;
+  canopyJobs.shift();
+  canopyCommitJob(J);
+}
+
 // ── THE STAND'S OWN TREES ──
 //
 // The colour and conifer share the crowns take are the placed tree sites' own:
@@ -17220,7 +17421,8 @@ const CANOPY_TREE_KINDS = new Set(['broadleaf', 'conifer', 'palm', 'acacia']);
 let canopyStandNext: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
 const canopyBucket = new Map<string, [number, number, number, number, number]>();
 function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.DataTexture; box: THREE.Vector4 } {
-  canopyBucket.clear();
+  // Buckets that held no trees yet are asked again: seeding reaches them.
+  for (const [k, v] of canopyBucket) if (v[4] < 4) canopyBucket.delete(k);
   const W = Math.ceil((box[2] - box[0]) / CANOPY_STAND_M) + 1, Hh = Math.ceil((box[3] - box[1]) / CANOPY_STAND_M) + 1;
   const raw = new Float32Array(W * Hh * 4);
   const tint = new THREE.Color();
@@ -17270,145 +17472,6 @@ function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.D
   tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
   return { tex, box: new THREE.Vector4(box[0], box[1], 1 / (W * CANOPY_STAND_M), 1 / (Hh * CANOPY_STAND_M)) };
 }
-/** One lattice row of nodes: evidence, ground and the roof's lift over it. */
-function canopyRow(J: CanopyJob, j: number): void {
-  const V = J.N + 1;
-  for (let i = 0; i < V; i++) {
-    const x = J.x0 + i * J.step, z = J.z0 + j * J.step, k = j * V + i;
-    // CLEAR OF THE ROAD BY A VERGE'S WIDTH. The carriageway and 7 m of verge
-    // are no canopy at all; the next 9 m count half, below where the roof
-    // starts, so the forest's side beside a road is its real edge trees and
-    // not a lattice wall standing over the kerb (the cab frames).
-    let ev = canopyEvidence(x, z);
-    if (ev > 0) {
-      if (onCarriageway(x, z, 7).road) ev = 0;
-      else if (onCarriageway(x, z, 16).road) ev *= 0.5;
-    }
-    J.ev[k] = ev;
-    const g = groundAt(x, z);
-    const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
-    // INSET AND UNDER THE EDGE. The roof starts only where the evidence says
-    // a stand is well under way (0.6) and is full at 0.85 — where the gather
-    // starts leaving trees to it — and it stands at 0.8 of the stand height,
-    // so the stand's own edge trees are its side and overtop the roof's rim.
-    // The earlier roof rose at 0.3 to 0.88 and read as a slab with walls.
-    const rise = Math.min(1, Math.max(0, (ev - 0.6) / 0.25));
-    J.lift[k] = rise * rise * (3 - 2 * rise) * stand * 0.8;
-    J.pos[k * 3] = x; J.pos[k * 3 + 1] = g; J.pos[k * 3 + 2] = z;
-    J.tex[k * 2] = THREE.DataUtils.toHalfFloat(g - J.baseY); J.tex[k * 2 + 1] = THREE.DataUtils.toHalfFloat(J.lift[k]);
-    // The ground's own palette under the stand; the shader pulls it toward
-    // leaf, and lets go of it at the ring's edge.
-    // Bare ground (a third to a half of the lattice) only ever colours the
-    // foot of an edge cell, so it takes its row neighbour's tone and skips
-    // the palette, the dearest call here.
-    if (ev > 0 || i === 0) {
-      const pc = terrainPalette(sampleHeight(x, z) + baseElev, 0, 10, x, z);
-      J.col[k * 3] = pc[0]; J.col[k * 3 + 1] = pc[1]; J.col[k * 3 + 2] = pc[2];
-    } else { J.col[k * 3] = J.col[k * 3 - 3]; J.col[k * 3 + 1] = J.col[k * 3 - 2]; J.col[k * 3 + 2] = J.col[k * 3 - 1]; }
-  }
-}
-/** Normals and cells for row j of cells, once node row j+1 exists. */
-function canopyCells(J: CanopyJob, j: number): void {
-  const V = J.N + 1, H = J.hole, s2 = 2 * J.step;
-  const h = (i: number, jj: number): number => {
-    const ii = Math.min(V - 1, Math.max(0, i)), jc = Math.min(V - 1, Math.max(0, jj)), k = jc * V + ii;
-    return J.pos[k * 3 + 1] + J.lift[k];
-  };
-  // THE SHELL: over every crown the lift texture will stand here. A crown
-  // reaches a cell past its node and up to 1.39 of its lift (an emergent at
-  // the top of its jitter), and the ground under it can sit a couple of
-  // metres above this node's on a slope.
-  // ABSOLUTE, NOT RELATIVE: the envelope is the highest crown top over the
-  // neighbourhood — its ground AND its lift — less this node's own ground.
-  // A lift-only margin held on the coastal flat and failed on Nagato's 35°
-  // hillsides, where a crown a cell uphill stands metres above this node's
-  // shell and the shell's own triangles were drawn in its place (the teeth).
-  for (let i = 0; i < V; i++) {
-    let m = 0, top = -Infinity;
-    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
-      const ii = i + a, jj = j + b;
-      if (ii < 0 || jj < 0 || ii >= V || jj >= V) continue;
-      const kk = jj * V + ii;
-      m = Math.max(m, J.lift[kk]);
-      if (J.lift[kk] > 2.5) top = Math.max(top, J.pos[kk * 3 + 1] + J.lift[kk] * 1.4);
-    }
-    J.plift[j * V + i] = m > 2.5 ? Math.max(0, top + 2 - J.pos[(j * V + i) * 3 + 1]) : 0;
-  }
-  for (let i = 0; i < V; i++) {
-    const k = j * V + i;
-    const nx = -(h(i + 1, j) - h(i - 1, j)) / s2, nz = -(h(i, j + 1) - h(i, j - 1)) / s2, l = Math.hypot(nx, 1, nz);
-    J.nrm[k * 3] = nx / l; J.nrm[k * 3 + 1] = 1 / l; J.nrm[k * 3 + 2] = nz / l;
-  }
-  if (j >= J.N) return;
-  for (let i = 0; i < J.N; i++) {
-    if (H) {
-      const cx = J.x0 + (i + 0.5) * J.step, cz = J.z0 + (j + 0.5) * J.step;
-      if (cx > H[0] && cx < H[2] && cz > H[1] && cz < H[3]) continue;
-    }
-    const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
-    // A cell with no roof over any corner is ground: not drawn.
-    if (Math.max(J.plift[a], J.plift[b], J.plift[c], J.plift[d]) <= 0) continue;
-    J.idx.set([a, c, b, b, c, d], J.ni); J.ni += 6;
-  }
-}
-function canopyCommit(): void {
-  canopyStat.ms = 0; canopyStat.cells = 0; canopyStat.tris = 0;
-  const grids: CanopyGrid[] = [];
-  for (const J of canopyDone) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(J.pos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(J.col, 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(J.nrm, 3));
-    geo.setAttribute('canLift', new THREE.BufferAttribute(J.plift, 1));
-    geo.setIndex(new THREE.BufferAttribute(J.idx.subarray(0, J.ni), 1));
-    J.mesh.geometry.dispose();
-    J.mesh.geometry = geo;
-    const tex = new THREE.DataTexture(J.tex, J.N + 1, J.N + 1, THREE.RGFormat, THREE.HalfFloatType);
-    tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
-    const U = J.mesh === canopyMesh ? canopyIn.u : canopyOut.u;
-    U.canTex.value?.dispose();
-    U.canTex.value = tex; U.canTexBox.value.set(J.x0, J.z0, J.step, J.N + 1); U.canBaseY.value = J.baseY;
-    grids.push({ x0: J.x0, z0: J.z0, V: J.N + 1, step: J.step, ev: J.ev, lift: J.lift });
-    canopyStat.ms = +(canopyStat.ms + J.ms).toFixed(1);
-    canopyStat.cells += J.ni / 6; canopyStat.tris += J.ni / 3;
-  }
-  if (canopyDone.length < 2) canopyOuter.geometry.setIndex([]);
-  canopyGrids = grids;
-  canopyU.box.value.set(...canopyBox);
-  if (canopyStandNext) {
-    canopyStand?.tex.dispose();
-    canopyStand = canopyStandNext; canopyStandNext = null;
-    for (const U of [canopyIn.u, canopyOut.u]) { U.canStand.value = canopyStand.tex; U.canStandBox.value.copy(canopyStand.box); }
-  }
-  canopyDone = [];
-  canopyStat.builds++;
-}
-function stepCanopy(now: number): void {
-  canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
-  if (!CANOPY_ON) { canopyJobs = []; canopyDone = []; canopyGrids = []; return; }
-  const [fx, fz] = renderFocusXZ();
-  canopyU.foc.value.set(fx, fz, camMode !== 'top' && !canopyNearOff ? 1 : 0);
-  if (!canopyJobs.length) {
-    const org = `${origin.lat},${origin.lon}`;
-    const moved = Math.hypot(fx - canopyAt.x, fz - canopyAt.z);
-    const fresh = canopyAt.t <= 0 || org !== canopyAt.org || moved > CANOPY_REBUILD_M;
-    const ground = terrainBuilds !== canopyAt.tb && now - canopyAt.t > CANOPY_TERRAIN_MS;
-    if (!fresh && !ground) return;
-    canopyStartJobs(fx, fz, org, now);
-  }
-  const J = canopyJobs[0], V = J.N + 1, t0 = performance.now();
-  const slice = canopyGrids.length ? CANOPY_SLICE_MS : CANOPY_SLICE_MS * 3;
-  while (J.k < V && performance.now() - t0 < slice) {
-    if (J.j < V) canopyRow(J, J.j++);
-    // Cells of row k need node rows k-1..k+1 for their normals.
-    while (J.k < V && (J.k + 1 < J.j || J.j >= V)) canopyCells(J, J.k++);
-  }
-  J.ms += performance.now() - t0;
-  if (J.k < V) return;
-  canopyDone.push(J);
-  canopyJobs.shift();
-  if (!canopyJobs.length) canopyCommit();
-}
 /** A tree the canopy stands in for: its site is well inside a closed stand
  *  (every lattice node around it at full evidence, where the roof is at its
  *  full height) and past the near field, so its crown would be under the
@@ -17437,10 +17500,10 @@ function canopyHides(x: number, z: number, tallM = 0): boolean {
   return false;
 }
 (window as unknown as { __canopy?: object }).__canopy = (on?: boolean): object => {
-  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJobs = []; canopyDone = []; if (!on) canopyGrids = []; }
+  if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJobs = []; canopyRings = []; if (!on) canopyGrids = []; }
   const hist = [0, 0, 0, 0, 0, 0];
   for (const G of canopyGrids) for (const e of G.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
-  return { on: CANOPY_ON, ...canopyStat, budgetK: +canopyBudgetK().toFixed(3), job: canopyJobs.length ? canopyJobs[0].j : null, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
+  return { on: CANOPY_ON, ...canopyStat, budgetK: +canopyBudgetK().toFixed(3), job: canopyJobs.length ? `${canopyJobs[0].R.outer ? 'outer' : 'inner'}${canopyJobs[0].full ? ' full' : ' shift'} p${canopyJobs[0].phase} r${canopyJobs[0].j}` : null, queued: canopyJobs.length, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
 };
 /** Frames and A/Bs: the canopy's look dials (leaf relief, crown shadow, sun
  *  tones), `near: false` to lift the near-field clearing for a shot framed
@@ -62021,7 +62084,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('bldface', () => { BLD_FACE = qsOn('bldface', true); rebuildInPlace(); });
   onSwitch('bldpara', () => { BLD_PARA = qsOn('bldpara', true); rebuildInPlace(); });
   onSwitch('shrub', () => { SHRUB_ON = qs('shrub') !== '0'; });
-  onSwitch('canopy', () => { CANOPY_ON = qsOn('canopy', false); canopyAt.t = 0; canopyJobs = []; canopyDone = []; });
+  onSwitch('canopy', () => { CANOPY_ON = qsOn('canopy', false); canopyAt.t = 0; canopyJobs = []; canopyRings = []; });
   onSwitch('steepfill', () => { STEEP_FILL = qsNum('steepfill', 0.18); });
   onSwitch('swardsites', () => { SWARD_SITES = qsNum('swardsites', 12); });
   onSwitch('swardfull', () => { SWARD_FULL_MAX = qsNum('swardfull', 1.15); swardU.uSwardFull.value = SWARD_FULL_MAX; });
