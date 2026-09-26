@@ -16813,10 +16813,13 @@ vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cDen[4]; float cTop; float
 // crown beside the road as one smooth green balloon.
 float canDet = 0.0;
 float canClump(int k, vec3 p, float v) {
-  if (canDet < 0.01 || v < 0.5 || v > 1.7) return v;
+  if (canDet < 0.01 || v < 0.5 || v > 1.3) return v;
   float n = canN3(p * 0.85 + cH[k].xyz * 37.0);
   float n2 = canN3(p * 2.1 + cH[k].zxy * 19.0);
-  return v + ((n - 0.5) * 0.9 + (n2 - 0.5) * 0.4) * canDet;
+  // Mostly BITES: a clump may stand a little proud of the crown, but the
+  // noise may not grow islands of leaf out in the air beside it (the first
+  // cab frames had crown fragments floating in the sky).
+  return v + max(((n - 0.5) * 0.9 + (n2 - 0.5) * 0.4) * canDet, -0.2);
 }
 void canLoad(vec2 q) {
   cTop = -1e9; cHas = 0.0;
