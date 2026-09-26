@@ -16807,7 +16807,12 @@ void canLoad(vec2 q) {
     vec2 gl = canGL(c);
     float L = gl.y * canFadeAt(c) * (0.84 + 0.3 * h.z);
     float cone = step(h.w, texture2D(canStand, (c - canStandBox.xy) * canStandBox.zw).a);
-    float R = ${S} * mix(0.5, 0.7, h.z) * mix(1.0, 0.64, cone) * clamp(L / 11.0, 0.5, 1.0);
+    // A closed stand's crowns touch: 0.58-0.74 of the cell, the most the 2x2
+    // quadrant can hold (a crown centred a quarter in cannot reach 0.75 out).
+    // One in seven stands a head above the rest, as an emergent does.
+    float emergent = step(0.86, fract(h.x * 5.31 + h.y * 2.17));
+    L *= 1.0 + 0.22 * emergent;
+    float R = ${S} * mix(0.58, 0.74, fract(h.z * 3.7 + h.w)) * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
     float D = cone > 0.5 ? L * 0.78 : min(L * 0.62, R * 1.35);
     if (L < 2.5) R = -1.0;
     cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
@@ -16832,8 +16837,11 @@ vec3 canHit = vCanW;
 {
   vec3 ro = cameraPosition, rd = normalize(vCanW - cameraPosition);
   float t0 = length(vCanW - cameraPosition);
-  // A crown under two pixels is its mean: no march, the far path below.
-  float px = length(fwidth(vCanW.xz)) / ${S};
+  // A crown under two pixels is its mean: no march, the far path below. The
+  // footprint ACROSS the view, not along it: at a grazing angle a pixel runs
+  // tens of metres down the slope while the crowns across it are still four
+  // pixels wide, and the along-view measure cut the crowns off at 300 m.
+  float px = min(length(dFdx(vCanW)), length(dFdy(vCanW))) / ${S};
   bool march = px < 0.55 && vCanK > 0.02;
   vec3 standC = texture2D(canStand, (vCanW.xz - canStandBox.xy) * canStandBox.zw).rgb;
   standC *= standC;
@@ -16944,8 +16952,8 @@ vec3 canHit = vCanW;
     } else canShadow = 0.4;
   } else {
     // The mean of a crowned roof, for crowns under two pixels.
-    canSky = 0.62; canShadow = 0.72;
-    col = standC * 0.92;
+    canSky = 0.55; canShadow = 0.7;
+    col = standC * 0.85;
   }
   // THE RING'S EDGE IS THE TERRAIN'S FOREST: the vertex colour is the ground's
   // palette, and the crowns' own colour gives way to it over the last
@@ -17196,8 +17204,9 @@ function canopyCells(J: CanopyJob, j: number): void {
     return J.pos[k * 3 + 1] + J.lift[k];
   };
   // THE SHELL: over every crown the lift texture will stand here. A crown
-  // reaches a cell past its node and up to 1.14 of its lift, and the ground
-  // under it can sit a couple of metres above this node's on a slope.
+  // reaches a cell past its node and up to 1.39 of its lift (an emergent at
+  // the top of its jitter), and the ground under it can sit a couple of
+  // metres above this node's on a slope.
   for (let i = 0; i < V; i++) {
     let m = 0;
     for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
@@ -17205,7 +17214,7 @@ function canopyCells(J: CanopyJob, j: number): void {
       if (ii < 0 || jj < 0 || ii >= V || jj >= V) continue;
       m = Math.max(m, J.lift[jj * V + ii]);
     }
-    J.plift[j * V + i] = m > 2.5 ? m * 1.16 + 2 : 0;
+    J.plift[j * V + i] = m > 2.5 ? m * 1.4 + 2 : 0;
   }
   for (let i = 0; i < V; i++) {
     const k = j * V + i;
