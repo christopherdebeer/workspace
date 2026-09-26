@@ -17416,10 +17416,15 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
     if (kind != 2) {
       vec3 ls = normalize(canSun);
       float occ = 0.0;
+      // A coarse question, so the crowns' smooth bodies answer it: no leaf
+      // clumps, no eye hollow, no chase dissolve — twelve canIn with noise
+      // each was the dearest thing a near crown fragment did after its march.
+      float detSave = canDet; canDet = 0.0;
       for (int s = 1; s <= 3; s++) {
         vec3 ps = canHit + ls * (float(s) * 1.9 + 0.4);
-        for (int k = 0; k < 4; k++) if (k != hitK || kind != 0) { if (canIn(k, ps) < 1.0) occ += 0.34; }
+        for (int k = 0; k < 4; k++) if (k != hitK || kind != 0) { if (canIn0(k, ps) < 1.0) occ += 0.34; }
       }
+      canDet = detSave;
       canShadow = 1.0 - min(1.0, occ) * 0.85 * canLook.y;
     } else canShadow = 0.4;
     if (kind == 3) canShadow = 0.7;
@@ -17476,7 +17481,7 @@ normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
   reflectedLight.indirectDiffuse += diffuseColor.rgb * canSunC * wrap * (0.035 + 0.045 * canSky) * vCanK;
 }`);
   };
-  mat.customProgramCacheKey = () => 'canopy-diversity-10';
+  mat.customProgramCacheKey = () => 'canopy-diversity-11';
   return { mat, u };
 }
 const canopyIn = canopyMaterial(), canopyOut = canopyMaterial();
@@ -52971,7 +52976,7 @@ function telemetryReport(): string {
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
       + ` · no distance trigger, no priority: the near tier commits with the far one`);
   }
-  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather)`);
+  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather) · skel ${canopySkel.visible ? `${CANOPY_SKEL_M}m ${canopySkelStat.trees} trees ${(canopySkelStat.tris / 1e3).toFixed(1)}k tris ${canopySkelStat.ms}ms` : 'off'} · shade ${canShadeU.uCanShadeOn.value.x ? canShadeU.uCanShadeOn.value.y : 'off'}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
