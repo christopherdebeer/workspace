@@ -16850,6 +16850,42 @@ float canIn(int k, vec3 p) {
   float q = dl / (A.w * lobe);
   return q * q + e * e;
 }
+/** The mid-storey's top at p, off the loaded quadrant: lumpy foliage by a
+ *  couple of metres over a closed stand, nothing (-1e9) where there is none.
+ *  A function so the refinement re-evaluates it at every bisection instead of
+ *  bisecting against the endpoint's height. */
+float canFloorAt(vec3 p, out float gq) {
+  vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
+  gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
+  float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
+  return Lq > 2.5 ? gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq) : -1e9;
+}
+/** THE AGGREGATE STAND, AS A SURFACE THAT IS ACTUALLY MET. Where the crowns
+ *  are not resolved — under two pixels, or a march that spent its steps —
+ *  the stand is its mean roof, ground + 0.8 of the (faded) lift off the
+ *  lattice texture, and the ray is intersected with THAT: a hit is refined
+ *  and its depth written, a miss is a miss. It replaces a "mean forest" that
+ *  was simply declared wherever a march stopped, depth and all. */
+float canAggregate(vec3 ro, vec3 rd, float t, float step) {
+  float ta = t;
+  for (int s = 0; s < 24; s++) {
+    vec3 p = ro + rd * t;
+    vec2 gl = canGL(p.xz);
+    float L = gl.y * canFadeAt(p.xz);
+    if (L > 2.5 && p.y < gl.x + 0.8 * L) {
+      float tb = t;
+      for (int r = 0; r < 4; r++) {
+        float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
+        vec2 gm = canGL(pm.xz); float Lm = gm.y * canFadeAt(pm.xz);
+        if (Lm > 2.5 && pm.y < gm.x + 0.8 * Lm) tb = tm; else ta = tm;
+      }
+      return tb;
+    }
+    if (p.y < gl.x - 0.5) return -1.0;
+    ta = t; t += step;
+  }
+  return -1.0;
+}
 `)
       .replace('#include <color_fragment>', `#include <color_fragment>
 vec3 canHit = vCanW;
@@ -16869,8 +16905,8 @@ if (vCanF < 0.01) discard;
   vec3 col = standC; int kind = -1; int hitK = 0; int why = march ? 0 : 3;
   if (march) {
     float dt = clamp(t0 * 0.011, 0.7, 3.2);
-    float t = t0; vec2 qB = vec2(-1e9);
-    float tTrunk = 1e9;
+    float t = t0, tPrev = t0; vec2 qB = vec2(-1e9);
+    float tTrunk = 1e9; vec2 trunkC = vec2(0.0);
     for (int s = 0; s < ${CAN_STEPS}; s++) {
       vec3 p = ro + rd * t;
       vec2 q = floor(p.xz / ${S} - 0.5);
@@ -16887,7 +16923,7 @@ if (vCanF < 0.01) discard;
             float th = (-b - sqrt(disc)) / a;
             float yh = ro.y + rd.y * th;
             float yTop = cA[k].z - cB[k].x * (cB[k].y > 0.5 ? 0.85 : 0.8);
-            if (th > t0 && yh < yTop && yh > cB[k].w - 0.5 && th < tTrunk) { tTrunk = th; }
+            if (th > t0 && yh < yTop && yh > cB[k].w - 0.5 && th < tTrunk) { tTrunk = th; trunkC = cA[k].xy; }
           }
         }
       }
@@ -16904,45 +16940,50 @@ if (vCanF < 0.01) discard;
                        abs(rd.z) > 1e-5 ? ((rd.z > 0.0 ? hi.y : lo.y) - p.z) / rd.z : 1e9);
         float tDown = rd.y < -1e-5 ? (p.y - cTop) / -rd.y : 1e9;
         t += max(0.05, min(min(ex.x, ex.y) + 0.02, tDown));
+        // All of the jump was empty: the last known miss is just short of it.
+        tPrev = t - 0.05;
         continue;
       }
-      // Ground and lift here, bilinear over the quadrant's four crowns.
-      vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
-      float gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
-      float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
       // The mid-storey's top is foliage too: lumpy by a couple of metres,
       // not the flat shelf that read from the road as dark slabs.
       // No stand here (the clearing, a gap, the ring's faded edge): no floor,
       // and a ray that reaches the ground is a miss — the terrain is there.
-      float floorY = Lq > 2.5 ? gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq)) + (canN3(p * 0.45) - 0.5) * 2.4 * smoothstep(4.0, 9.0, Lq) : -1e9;
+      float gq;
+      float floorY = canFloorAt(p, gq);
       if (p.y < gq - 0.3 && floorY < -1e8) { why = 2; break; }
       float best = 9.0;
       for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
       if (best < 1.0) { kind = 0; }
       else if (p.y < floorY) { kind = 1; }
       if (kind >= 0) {
-        // Refine the surface between the last miss and this hit.
-        float ta = t - dt, tb = t;
+        // Refine the surface between the LAST MISS actually sampled (not
+        // t - dt: a skip may have jumped further) and this hit, re-evaluating
+        // the mid-storey's lumpy top at each bisection.
+        float ta = tPrev, tb = t;
         for (int r = 0; r < 4; r++) {
           float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
           float bm = 9.0; int km = hitK;
           for (int k = 0; k < 4; k++) { float v = canIn(k, pm); if (v < bm) { bm = v; km = k; } }
-          bool inside = kind == 0 ? bm < 1.0 : pm.y < floorY;
+          float gm;
+          bool inside = kind == 0 ? bm < 1.0 : pm.y < canFloorAt(pm, gm);
           if (kind == 0 && inside) hitK = km;
           if (inside) tb = tm; else ta = tm;
         }
         t = max(tb, t0);
         break;
       }
+      tPrev = t;
       t += dt;
     }
-    if (kind < 0 && why == 0) why = 1;
-    // OUT OF STEPS OVER A STAND IS A HIT, NOT A MISS. A ray skimming a
-    // forested ridge a kilometre out runs hundreds of metres through the shell
-    // just over the crowns and spends its steps before it meets one — and it
-    // was discarded, leaving the ridge's top bare. Where it stopped it is
-    // inside the stand's envelope: shade it as the stand's mean, there.
-    if (why == 1 && canLook.w < 1.5) kind = 3;
+    // OUT OF STEPS OVER A STAND. A ray skimming a forested ridge a kilometre
+    // out runs hundreds of metres through the shell just over the crowns and
+    // spends its steps before it meets one. It goes on against the stand's
+    // aggregate roof and is a hit only where it meets it (debug magenta when
+    // even that misses).
+    if (kind < 0 && why == 0) {
+      float tA = canAggregate(ro, rd, t, max(2.0 * dt, 4.0));
+      if (tA > 0.0) { t = tA; kind = 3; } else why = 1;
+    }
     if (kind < 0 && canLook.w < 1.5) discard;
     canHit = ro + rd * t;
     vec4 A = cA[hitK], B = cB[hitK], H = cH[hitK];
@@ -16989,7 +17030,7 @@ if (vCanF < 0.01) discard;
       canN = vec3(0.0, 1.0, 0.0);
       col = standC * 0.85; canSky = 0.55;
     } else {
-      vec2 d = canHit.xz - A.xy;
+      vec2 d = canHit.xz - trunkC;
       canN = normalize(vec3(d.x, 0.0, d.y));
       col = vec3(0.07, 0.045, 0.025) * (0.8 + 0.4 * canN3(vec3(canHit.xz * 2.0, canHit.y * 0.3)));
       canSky = 0.3;
@@ -17008,7 +17049,11 @@ if (vCanF < 0.01) discard;
     } else canShadow = 0.4;
     if (kind == 3) canShadow = 0.7;
   } else {
-    // The mean of a crowned roof, for crowns under two pixels.
+    // The mean of a crowned roof, for crowns under two pixels — met as the
+    // aggregate roof, so its depth is the stand's and not the shell's.
+    float tA = canAggregate(cameraPosition, normalize(vCanW - cameraPosition), t0, max(t0 * 0.02, 4.0));
+    if (tA < 0.0 && canLook.w < 1.5) discard;
+    if (tA > 0.0) canHit = cameraPosition + normalize(vCanW - cameraPosition) * tA;
     canSky = 0.55; canShadow = 0.7;
     col = standC * 0.85;
   }
@@ -17044,10 +17089,16 @@ normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
   // Leaves transmit the sun through their shaded side, and wrap a little past
   // the terminator — the skeletons' two terms, at their broadleaf strengths.
   vec3 cnV = normalize(normal), clV = normalize((viewMatrix * vec4(canSun, 0.0)).xyz);
+  // BY THE LIGHT THAT IS ACTUALLY THERE: the direct lights' own colour, so at
+  // dusk and night the transmission and wrap go with the sun and not before.
+  vec3 canSunC = vec3(0.0);
+  #if NUM_DIR_LIGHTS > 0
+  for (int i = 0; i < NUM_DIR_LIGHTS; i++) canSunC += directionalLights[i].color;
+  #endif
   float back = pow(max(dot(cnV, -clV), 0.0), 1.45);
-  reflectedLight.directDiffuse += diffuseColor.rgb * back * 0.55 * 0.34 * canShadow * vCanK;
+  reflectedLight.directDiffuse += diffuseColor.rgb * canSunC * back * 0.55 * 0.34 * canShadow * vCanK;
   float wrap = clamp((dot(cnV, clV) + 0.32) / 1.32, 0.0, 1.0);
-  reflectedLight.indirectDiffuse += diffuseColor.rgb * wrap * (0.035 + 0.045 * canSky) * vCanK;
+  reflectedLight.indirectDiffuse += diffuseColor.rgb * canSunC * wrap * (0.035 + 0.045 * canSky) * vCanK;
 }`);
   };
   mat.customProgramCacheKey = () => 'canopy-6';
@@ -17125,7 +17176,7 @@ interface CanopyJob { x0: number; z0: number; fx: number; fz: number; j: number;
   /** Ground (less baseY) and lift per node, half floats, for the crowns. */
   tex: Uint16Array<ArrayBuffer>; baseY: number;
   idx: Uint32Array; ni: number; ms: number; }
-type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array };
+type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array; lift: Float32Array };
 let canopyJobs: CanopyJob[] = [];
 let canopyDone: CanopyJob[] = [];
 let canopyBox: [number, number, number, number] = [0, 0, 0, 0];
@@ -17317,7 +17368,7 @@ function canopyCommit(): void {
     const U = J.mesh === canopyMesh ? canopyIn.u : canopyOut.u;
     U.canTex.value?.dispose();
     U.canTex.value = tex; U.canTexBox.value.set(J.x0, J.z0, J.step, J.N + 1); U.canBaseY.value = J.baseY;
-    grids.push({ x0: J.x0, z0: J.z0, V: J.N + 1, step: J.step, ev: J.ev });
+    grids.push({ x0: J.x0, z0: J.z0, V: J.N + 1, step: J.step, ev: J.ev, lift: J.lift });
     canopyStat.ms = +(canopyStat.ms + J.ms).toFixed(1);
     canopyStat.cells += J.ni / 6; canopyStat.tris += J.ni / 3;
   }
@@ -17363,7 +17414,7 @@ function stepCanopy(now: number): void {
  *  full height) and past the near field, so its crown would be under the
  *  roof. Edge trees, verge trees and the near field stay individual — that is
  *  where the budget this frees goes. */
-function canopyHides(x: number, z: number): boolean {
+function canopyHides(x: number, z: number, tallM = 0): boolean {
   const F = canopyU.foc.value;
   if (F.z > 0.5 && Math.hypot(x - F.x, z - F.y) < CANOPY_NEAR + 60) return false;
   for (const G of canopyGrids) {
@@ -17377,6 +17428,10 @@ function canopyHides(x: number, z: number): boolean {
       const k = (j + b) * G.V + i + a;
       if (k < 0 || k >= G.ev.length || G.ev[k] < 0.85) return false;
     }
+    // AN EMERGENT STAYS. A tree whose top stands clear of the roof here is a
+    // silhouette the crowns cannot carry, however closed the stand around it.
+    const lk = Math.round(v) * G.V + Math.round(u);
+    if (tallM > 0 && lk >= 0 && lk < G.lift.length && tallM > G.lift[lk] * 1.1) return false;
     return true;
   }
   return false;
@@ -17710,7 +17765,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
         if (!isEzKind(v.k)) continue;
         const dx = v.x - rfx, dz = v.z - rfz;
         const d2 = dx * dx + dz * dz;
-        if (d2 < treeR2 && canopyHides(v.x, v.z)) { canopyHid++; continue; }
+        if (d2 < treeR2 && canopyHides(v.x, v.z, EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale)) { canopyHid++; continue; }
         if (d2 < treeR2) { cand[v.k].push([d2, v]); impSeen(v, d2, 1); }
       }
     }
@@ -17825,7 +17880,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
             const dx = v.x - rfx, dz = v.z - rfz;
             const d2 = dx * dx + dz * dz;
             if (d2 < treeR2 || d2 >= impR2) continue;
-            if (canopyHides(v.x, v.z)) { canopyHid++; continue; }
+            if (canopyHides(v.x, v.z, EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale)) { canopyHid++; continue; }
             impFarSeen++;
             // ── AND ONLY A TREE INSIDE A STAND IS THINNED ──
             // The hash used to decide every one of them, which is how a lone
