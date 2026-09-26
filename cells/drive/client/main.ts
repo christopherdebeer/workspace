@@ -16700,20 +16700,51 @@ const CANOPY_EDGE_FADE = 260;
 /** The rings' world box (x0, z0, x1, z1) and the view's focus (x, z, near?),
  *  per frame: the near field follows the car in the vertex shader rather
  *  than by rebuilding the lattice every 120 m. */
-const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: { value: new THREE.Vector3(0, 0, 0) } };
-const canopyMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
-terrainFx(canopyMat);
-// THE CROWNS ARE DRAWN PER FRAGMENT, NOT BY THE LATTICE. A 6.5 m crown on a
-// 4 m lattice has no shape — the first frames read as a lawn from above — and a
-// lattice fine enough to carry it costs the triangles this layer exists to
-// save. Per-fragment work is the cheap resource here, so the jittered-cell dome
-// the CPU used to bake is evaluated in the fragment: it darkens the gaps and
-// bends the normal by its own gradient, band-limited on the footprint so a
-// crown under a pixel is its mean tone rather than a shimmer.
-{
-  const prev = canopyMat.onBeforeCompile;
-  canopyMat.onBeforeCompile = (sh, r) => {
-    prev?.call(canopyMat, sh, r);
+const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: { value: new THREE.Vector3(0, 0, 0) },
+  /** The sun the skeletons light by (LIGHT_DIR, moved in place by the sky). */
+  sun: { value: LIGHT_DIR },
+  /** Dials: leaf-clump relief, crown-on-crown shadow, the three sun tones. */
+  look: { value: new THREE.Vector4(1, 1, 1, 0) } };
+// ── THE CANOPY IS RAY-TRACED CROWNS IN A SHELL ──
+//
+// The lattice is a PROXY: a shell over the stand, a little above every crown
+// it holds. Each fragment of it casts the view ray into the shell and finds
+// the crown that ray actually meets — a jittered crown per CANOPY_CROWN cell,
+// an ellipsoid for broadleaf and a cone for conifer, each standing at its own
+// height off the lift texture — or, between them, the mid-storey of a closed
+// stand, a trunk, or nothing, in which case the fragment goes and the sky or
+// the hill behind shows through. So the stand's skyline is crowns, its side
+// is crowns stepping down to the edge over trunks, and from the drone every
+// crown is round and lit and shades its neighbour. The depth written is the
+// hit's, so an edge tree standing into the shell sorts against the crown it
+// actually meets and not against the shell.
+//
+// WHY IT CAN AFFORD THIS. The world is drawn at 320 lines: a full canopy
+// frame is some tens of thousands of fragments, each marching at most
+// CAN_STEPS points against the four crowns of its 2x2 cell quadrant, fetched
+// from two small textures only when the march crosses into a new quadrant.
+//
+// WHAT IT BORROWS FROM THE TREES, so the two read as one forest: the stand's
+// colour and conifer share are the local tree sites' own (the stand texture,
+// built from vegGrid), each crown jitters about it as a seeded tree does and
+// one in twelve is an autumn or silver outlier as `plantLook`'s are, and the
+// crown light is the skeletons' — three sun-aligned tones, sky exposure,
+// transmission on the shaded side and a wrap past the terminator.
+const CAN_STEPS = 28;
+function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
+  canTex: { value: THREE.Texture | null }; canTexBox: { value: THREE.Vector4 }; canBaseY: { value: number };
+  canStand: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
+  terrainFx(mat);
+  const u = {
+    canTex: { value: null as THREE.Texture | null }, canTexBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+    canBaseY: { value: 0 },
+    canStand: { value: null as THREE.Texture | null }, canStandBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+  };
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => {
+    prev?.call(mat, sh, r);
+    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 attribute float canLift;
@@ -16728,80 +16759,228 @@ varying vec3 vCanW; varying float vCanF; varying float vCanK;`)
   transformed.y += canLift * vCanF * mix(0.35, 1.0, vCanK);
   vCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;
 }`);
-    sh.uniforms.canBox = canopyU.box; sh.uniforms.canFoc = canopyU.foc;
+    const S = CANOPY_CROWN.toFixed(2);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vCanW; varying float vCanF; varying float vCanK;
-float canDome = 0.5; vec2 canGrad = vec2(0.0); float canTone = 0.5;
-float canH(vec2 c, float k) { return fract(sin(dot(c, vec2(127.1 + k * 17.0, 311.7 - k * 5.0))) * 43758.5453); }
-vec2 canEval(vec2 p) {
-  vec2 ci = floor(p); float dome = 0.0; float tone = 0.5;
-  for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) {
-    vec2 c = ci + vec2(float(a), float(b));
-    vec2 ctr = c + 0.15 + 0.7 * vec2(canH(c, 1.0), canH(c, 2.0));
-    float r = 0.55 + 0.35 * canH(c, 3.0);
-    float d2 = dot(p - ctr, p - ctr) / (r * r);
-    float v = d2 < 1.0 ? sqrt(1.0 - d2) : 0.0;
-    if (v > dome) { dome = v; tone = canH(c, 4.0); }
+uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
+uniform sampler2D canStand; uniform vec4 canStandBox;
+uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook;
+vec3 canN = vec3(0.0, 1.0, 0.0); float canShadow = 1.0; float canSky = 1.0; float canLeaf = 0.0;
+vec4 canH4(vec2 c) {
+  vec4 p4 = fract(vec4(c.xyx, c.y) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+  p4 += dot(p4, p4.wzxy + 33.33);
+  return fract((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+float canN3(vec3 p) {
+  vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  vec4 a = canH4(i.xy + i.z * 17.0), b = canH4(i.xy + (i.z + 1.0) * 17.0);
+  vec4 ax = canH4(i.xy + vec2(1.0, 0.0) + i.z * 17.0), bx = canH4(i.xy + vec2(1.0, 0.0) + (i.z + 1.0) * 17.0);
+  vec4 ay = canH4(i.xy + vec2(0.0, 1.0) + i.z * 17.0), by = canH4(i.xy + vec2(0.0, 1.0) + (i.z + 1.0) * 17.0);
+  vec4 axy = canH4(i.xy + vec2(1.0) + i.z * 17.0), bxy = canH4(i.xy + vec2(1.0) + (i.z + 1.0) * 17.0);
+  float lo = mix(mix(a.x, ax.x, f.x), mix(ay.x, axy.x, f.x), f.y);
+  float hi = mix(mix(b.x, bx.x, f.x), mix(by.x, bxy.x, f.x), f.y);
+  return mix(lo, hi, f.z);
+}
+/** Ground and lift at a world point, off the ring's own lattice. */
+vec2 canGL(vec2 xz) {
+  vec2 uv = ((xz - canTexBox.xy) / canTexBox.z + 0.5) / canTexBox.w;
+  vec2 t = texture2D(canTex, uv).rg;
+  return vec2(t.r + canBaseY, t.g);
+}
+float canFadeAt(vec2 xz) {
+  float f = canFoc.z > 0.5 ? clamp((length(xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
+  float ed = min(min(xz.x - canBox.x, canBox.z - xz.x), min(xz.y - canBox.y, canBox.w - xz.y));
+  return f * mix(0.35, 1.0, smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed));
+}
+// A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
+vec4 cA[4]; vec4 cB[4]; vec4 cH[4];
+void canLoad(vec2 q) {
+  for (int k = 0; k < 4; k++) {
+    vec2 cell = q + vec2(float(k - (k / 2) * 2), float(k / 2));
+    vec4 h = canH4(cell);
+    vec2 c = (cell + 0.25 + 0.5 * h.xy) * ${S};
+    vec2 gl = canGL(c);
+    float L = gl.y * canFadeAt(c) * (0.84 + 0.3 * h.z);
+    float cone = step(h.w, texture2D(canStand, (c - canStandBox.xy) * canStandBox.zw).a);
+    float R = ${S} * mix(0.5, 0.7, h.z) * mix(1.0, 0.64, cone) * clamp(L / 11.0, 0.5, 1.0);
+    float D = cone > 0.5 ? L * 0.78 : min(L * 0.62, R * 1.35);
+    if (L < 2.5) R = -1.0;
+    cA[k] = vec4(c, gl.x + L, R); cB[k] = vec4(D, cone, L, gl.x); cH[k] = h;
   }
-  return vec2(dome, tone);
-}`)
+}
+/** Inside-ness of point p in crown k: < 1 inside. */
+float canIn(int k, vec3 p) {
+  vec4 A = cA[k], B = cB[k];
+  if (A.w <= 0.0) return 9.0;
+  vec2 d = p.xz - A.xy;
+  if (B.y > 0.5) {
+    float s = (A.z - p.y) / B.x;
+    if (s < 0.0 || s > 1.0) return 9.0;
+    return length(d) / (A.w * max(s, 0.02));
+  }
+  float e = (p.y - (A.z - B.x * 0.5)) / (B.x * 0.5);
+  return dot(d, d) / (A.w * A.w) + e * e;
+}
+`)
       .replace('#include <color_fragment>', `#include <color_fragment>
+vec3 canHit = vCanW;
 {
-  // The near field is trees: the roof has sunk toward the ground there and
-  // goes before it reaches it.
-  if (vCanF < 0.15) discard;
-  vec2 p = vCanW.xz / ${CANOPY_CROWN.toFixed(2)};
-  float px = max(length(fwidth(p)), 1e-4);
-  float band = 1.0 - smoothstep(0.25, 0.6, px);
-  vec2 e0 = canEval(p);
-  float e = 0.08;
-  float gx = (canEval(p + vec2(e, 0.0)).x - e0.x) / e;
-  float gz = (canEval(p + vec2(0.0, e)).x - e0.x) / e;
-  // Past the band the crowns are their MEAN, and a closed canopy from above is
-  // dark: most of what a pixel covers is shadowed crown and gap. The first
-  // wide frames drew the mean at the lit tone and the forest read as a lawn.
-  canDome = mix(0.3, e0.x, band); canTone = mix(0.5, e0.y, band);
-  // A stand varies over tens of metres too — age, species, a gap — or the wide
-  // view is one flat carpet.
-  float canN;
-  { vec2 q = vCanW.xz / 70.0; vec2 qi = floor(q); vec2 qf = fract(q); qf = qf * qf * (3.0 - 2.0 * qf);
-    canN = mix(mix(canH(qi, 9.0), canH(qi + vec2(1.0, 0.0), 9.0), qf.x), mix(canH(qi + vec2(0.0, 1.0), 9.0), canH(qi + vec2(1.0, 1.0), 9.0), qf.x), qf.y); }
-  canGrad = vec2(gx, gz) * band * vCanK;
-  // THE STAND'S SIDE. A lattice face steeper than a roof is the edge of the
-  // forest, and lit with the roof's crown normal it drew as large pale shards
-  // from the drone. It takes the geometric normal, the shade of a forest's
-  // side, and loses its fragments in the crown gaps so its outline is crowns
-  // rather than a lattice step.
-  vec3 nG = normalize(cross(dFdx(vCanW), dFdy(vCanW)));
-  float canWall = smoothstep(0.45, 0.75, 1.0 - abs(nG.y));
-  if (canWall > 0.5 && e0.x < 0.22 && band > 0.5) discard;
-  canGrad *= 1.0 - canWall;
-  // THE RING'S EDGE IS THE TERRAIN'S FOREST. The vertex colour is the ground's
-  // own palette; everything that makes the canopy a canopy — the leaf pull,
-  // the stand variation, the crowns' dark mean — fades out over the last
-  // CANOPY_EDGE_FADE metres, so from the air the roof ends in the terrain's
-  // tone and not in a square.
-  vec3 canF = vec3(0.85, 1.05, 0.8) * (0.78 + 0.34 * canN) * mix(1.0, 0.55, canWall)
-    * mix(vec3(0.22, 0.24, 0.3), vec3(1.3, 1.35, 1.05), canDome) * (0.78 + 0.44 * canTone);
-  diffuseColor.rgb *= mix(vec3(1.0), canF, vCanK);
+  vec3 ro = cameraPosition, rd = normalize(vCanW - cameraPosition);
+  float t0 = length(vCanW - cameraPosition);
+  // A crown under two pixels is its mean: no march, the far path below.
+  float px = length(fwidth(vCanW.xz)) / ${S};
+  bool march = px < 0.55 && vCanK > 0.02;
+  vec3 standC = texture2D(canStand, (vCanW.xz - canStandBox.xy) * canStandBox.zw).rgb;
+  standC *= standC;
+  vec3 col = standC; int kind = -1; int hitK = 0;
+  if (march) {
+    float dt = clamp(t0 * 0.011, 0.7, 3.2);
+    float t = t0; vec2 qB = vec2(-1e9);
+    float tTrunk = 1e9;
+    for (int s = 0; s < ${CAN_STEPS}; s++) {
+      vec3 p = ro + rd * t;
+      vec2 q = floor(p.xz / ${S} - 0.5);
+      if (q != qB) {
+        qB = q; canLoad(q);
+        // Trunks, analytically: a vertical line under each crown, met by the
+        // ray's own plan, and only below the crown and above the ground.
+        for (int k = 0; k < 4; k++) {
+          if (cA[k].w <= 0.0) continue;
+          vec2 oc = ro.xz - cA[k].xy; vec2 dd = rd.xz;
+          float a = dot(dd, dd), b = dot(oc, dd), rt = 0.18 + 0.03 * cB[k].z;
+          float disc = b * b - a * (dot(oc, oc) - rt * rt);
+          if (disc > 0.0 && a > 1e-6) {
+            float th = (-b - sqrt(disc)) / a;
+            float yh = ro.y + rd.y * th;
+            float yTop = cA[k].z - cB[k].x * (cB[k].y > 0.5 ? 0.85 : 0.8);
+            if (th > t0 && yh < yTop && yh > cB[k].w - 0.5 && th < tTrunk) { tTrunk = th; }
+          }
+        }
+      }
+      if (t > tTrunk) { t = tTrunk; kind = 2; break; }
+      // Ground and lift here, bilinear over the quadrant's four crowns.
+      vec2 f = clamp(fract(p.xz / ${S} - 0.5), 0.0, 1.0);
+      float gq = mix(mix(cB[0].w, cB[1].w, f.x), mix(cB[2].w, cB[3].w, f.x), f.y);
+      float Lq = mix(mix(cB[0].z, cB[1].z, f.x), mix(cB[2].z, cB[3].z, f.x), f.y);
+      float floorY = gq + max(0.6, Lq * 0.46 * smoothstep(6.0, 11.0, Lq));
+      float best = 9.0;
+      for (int k = 0; k < 4; k++) { float v = canIn(k, p); if (v < best) { best = v; hitK = k; } }
+      if (best < 1.0) { kind = 0; }
+      else if (p.y < floorY) { kind = 1; }
+      if (kind >= 0) {
+        // Refine the surface between the last miss and this hit.
+        float ta = t - dt, tb = t;
+        for (int r = 0; r < 4; r++) {
+          float tm = 0.5 * (ta + tb); vec3 pm = ro + rd * tm;
+          float bm = 9.0; int km = hitK;
+          for (int k = 0; k < 4; k++) { float v = canIn(k, pm); if (v < bm) { bm = v; km = k; } }
+          bool inside = kind == 0 ? bm < 1.0 : pm.y < floorY;
+          if (kind == 0 && inside) hitK = km;
+          if (inside) tb = tm; else ta = tm;
+        }
+        t = max(tb, t0);
+        break;
+      }
+      t += dt;
+    }
+    if (kind < 0) discard;
+    canHit = ro + rd * t;
+    vec4 A = cA[hitK], B = cB[hitK], H = cH[hitK];
+    float closed = smoothstep(6.0, 11.0, B.z);
+    if (kind == 0) {
+      vec2 d = canHit.xz - A.xy;
+      if (B.y > 0.5) {
+        vec2 dir = length(d) > 1e-3 ? normalize(d) : vec2(0.0);
+        canN = normalize(vec3(dir.x, A.w / B.x, dir.y));
+      } else {
+        canN = normalize(vec3(d.x / (A.w * A.w), (canHit.y - (A.z - B.x * 0.5)) / (B.x * B.x * 0.25), d.y / (A.w * A.w)));
+      }
+      // Leaf clumps: a metre-scale bump on the crown, faded by its footprint.
+      float lp = 1.0 - smoothstep(0.35, 0.9, px * ${S} / 1.1);
+      if (lp > 0.01) {
+        vec3 lq = canHit / 1.1 + H.xyz * 31.0;
+        float n0 = canN3(lq), nx = canN3(lq + vec3(0.35, 0.0, 0.0)), ny = canN3(lq + vec3(0.0, 0.35, 0.0)), nz = canN3(lq + vec3(0.0, 0.0, 0.35));
+        canN = normalize(canN - vec3(nx - n0, ny - n0, nz - n0) * 2.2 * lp * canLook.x);
+        canLeaf = (n0 - 0.5) * lp;
+      }
+      // Sky exposure: high on the crown and high in the stand is open sky.
+      float up = B.y > 0.5 ? 1.0 - (A.z - canHit.y) / B.x : 0.5 + 0.5 * (canHit.y - (A.z - B.x * 0.5)) / (B.x * 0.5);
+      canSky = clamp(0.25 + 0.75 * up, 0.0, 1.0) * mix(1.0, clamp((canHit.y - B.w) / max(B.z, 1.0), 0.0, 1.0), 0.5 * closed);
+      // The crown's own colour about the stand's: a seeded tree's jitter, and
+      // one in twelve an outlier as plantLook's are.
+      col = standC * (0.8 + 0.4 * H.z) * vec3(1.0 + 0.16 * (H.y - 0.5), 1.0, 1.0 - 0.22 * (H.y - 0.5));
+      float odd = fract(H.x * 7.13 + H.w * 3.7);
+      if (odd < 0.045) col = mix(vec3(0.30, 0.12, 0.035), vec3(0.42, 0.2, 0.05), H.y);
+      else if (odd < 0.085) col = vec3(0.17, 0.23, 0.19) * (0.85 + 0.3 * H.y);
+      col *= 1.0 + canLeaf * 0.5;
+    } else if (kind == 1) {
+      // The mid-storey of a closed stand, or the shrubs and floor of an open
+      // edge: the colour of the stand in its own shade.
+      canN = vec3(0.0, 1.0, 0.0);
+      col = standC * mix(0.55, 0.8, canN3(canHit * 0.6));
+      canSky = mix(0.35, 0.12, closed);
+    } else {
+      vec2 d = canHit.xz - A.xy;
+      canN = normalize(vec3(d.x, 0.0, d.y));
+      col = vec3(0.07, 0.045, 0.025) * (0.8 + 0.4 * canN3(vec3(canHit.xz * 2.0, canHit.y * 0.3)));
+      canSky = 0.3;
+    }
+    // THE SUN, THROUGH THE NEIGHBOURS. Three taps toward the sun against the
+    // quadrant's crowns: the shade one crown casts across the next, which is
+    // most of what makes a canopy from above read as crowns and not a quilt.
+    if (kind != 2) {
+      vec3 ls = normalize(canSun);
+      float occ = 0.0;
+      for (int s = 1; s <= 3; s++) {
+        vec3 ps = canHit + ls * (float(s) * 1.9 + 0.4);
+        for (int k = 0; k < 4; k++) if (k != hitK || kind != 0) { if (canIn(k, ps) < 1.0) occ += 0.34; }
+      }
+      canShadow = 1.0 - min(1.0, occ) * 0.85 * canLook.y;
+    } else canShadow = 0.4;
+  } else {
+    // The mean of a crowned roof, for crowns under two pixels.
+    canSky = 0.62; canShadow = 0.72;
+    col = standC * 0.92;
+  }
+  // THE RING'S EDGE IS THE TERRAIN'S FOREST: the vertex colour is the ground's
+  // palette, and the crowns' own colour gives way to it over the last
+  // CANOPY_EDGE_FADE metres, as their height does.
+  diffuseColor.rgb = mix(diffuseColor.rgb, col, vCanK);
+  canShadow = mix(1.0, canShadow, vCanK);
+  // THREE LARGE TONES, ALIGNED TO THE SUN, as the skeletons' crowns take.
+  float facing = clamp(dot(canN, normalize(canSun)) * 0.5 + 0.5, 0.0, 0.999);
+  float band = floor((facing * 0.72 + canSky * 0.28) * 3.0) * 0.5;
+  diffuseColor.rgb *= mix(1.0, mix(0.82, 1.16, band) * mix(0.62, 1.3, canSky), vCanK * canLook.z);
+  vec4 clip = projectionMatrix * viewMatrix * vec4(canHit, 1.0);
+  gl_FragDepth = clamp(0.5 * clip.z / clip.w + 0.5, 0.0, 1.0);
 }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
+      .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
 {
-  vec3 nw = normalize(vec3(-canGrad.x * 0.35, 1.0, -canGrad.y * 0.35));
-  normal = normalize(normal + (viewMatrix * vec4(nw, 0.0)).xyz * 2.2);
+  reflectedLight.directDiffuse *= canShadow;
+  // Leaves transmit the sun through their shaded side, and wrap a little past
+  // the terminator — the skeletons' two terms, at their broadleaf strengths.
+  vec3 cnV = normalize(normal), clV = normalize((viewMatrix * vec4(canSun, 0.0)).xyz);
+  float back = pow(max(dot(cnV, -clV), 0.0), 1.45);
+  reflectedLight.directDiffuse += diffuseColor.rgb * back * 0.55 * 0.34 * canShadow * vCanK;
+  float wrap = clamp((dot(cnV, clV) + 0.32) / 1.32, 0.0, 1.0);
+  reflectedLight.indirectDiffuse += diffuseColor.rgb * wrap * (0.035 + 0.045 * canSky) * vCanK;
 }`);
   };
-  canopyMat.customProgramCacheKey = () => 'canopy-5';
+  mat.customProgramCacheKey = () => 'canopy-6';
+  return { mat, u };
 }
-const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
+const canopyIn = canopyMaterial(), canopyOut = canopyMaterial();
+const canopyMesh = new THREE.Mesh(new THREE.BufferGeometry(), canopyIn.mat);
 canopyMesh.name = 'canopy';
 canopyMesh.frustumCulled = false;
 scene.add(canopyMesh);
 // THE OUTER RING: the same surface at twice the step, from the inner square
 // out to the tree draw range, so every tree the canopy stands in for is
 // under a roof and the budget it frees can only go to edges and verges.
-const canopyOuter = new THREE.Mesh(new THREE.BufferGeometry(), canopyMat);
+const canopyOuter = new THREE.Mesh(new THREE.BufferGeometry(), canopyOut.mat);
 canopyOuter.name = 'canopy-outer';
 canopyOuter.frustumCulled = false;
 scene.add(canopyOuter);
@@ -16861,12 +17040,15 @@ function canopyEvidence(x: number, z: number): number {
 const CANOPY_SLICE_MS = qsNum('canopyslice', 3), CANOPY_REBUILD_M = 300, CANOPY_TERRAIN_MS = 20000;
 interface CanopyJob { x0: number; z0: number; fx: number; fz: number; j: number; k: number; org: string; tb: number;
   step: number; N: number; hole: [number, number, number, number] | null; mesh: THREE.Mesh;
-  pos: Float32Array; col: Float32Array; lift: Float32Array; nrm: Float32Array; ev: Float32Array;
+  pos: Float32Array; col: Float32Array; lift: Float32Array; plift: Float32Array; nrm: Float32Array; ev: Float32Array;
+  /** Ground (less baseY) and lift per node, half floats, for the crowns. */
+  tex: Uint16Array<ArrayBuffer>; baseY: number;
   idx: Uint32Array; ni: number; ms: number; }
 type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32Array };
 let canopyJobs: CanopyJob[] = [];
 let canopyDone: CanopyJob[] = [];
 let canopyBox: [number, number, number, number] = [0, 0, 0, 0];
+let canopyStand: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
 /** The last COMMITTED lattices, inner then outer, which the tree gather reads
  *  to leave the interior of a closed stand to the canopy. */
 let canopyGrids: CanopyGrid[] = [];
@@ -16876,11 +17058,13 @@ function canopyStartJobs(fx: number, fz: number, org: string, now: number): void
   const span = CANOPY_N * CANOPY_STEP, oStep = CANOPY_STEP * 2;
   const outerHalf = Math.max(half, treeRange + 60);
   const M = Math.max(0, Math.ceil((outerHalf - half) / oStep));
+  const baseY = groundAt(fx, fz);
   const mk = (x0: number, z0: number, step: number, N: number, hole: CanopyJob['hole'], mesh: THREE.Mesh): CanopyJob => {
     const V = N + 1;
     return { x0, z0, fx, fz, j: 0, k: 0, org, tb: terrainBuilds, step, N, hole, mesh,
       pos: new Float32Array(V * V * 3), col: new Float32Array(V * V * 3), lift: new Float32Array(V * V),
-      nrm: new Float32Array(V * V * 3), ev: new Float32Array(V * V), idx: new Uint32Array(N * N * 6), ni: 0, ms: 0 };
+      plift: new Float32Array(V * V), nrm: new Float32Array(V * V * 3), ev: new Float32Array(V * V),
+      tex: new Uint16Array(V * V * 2), baseY, idx: new Uint32Array(N * N * 6), ni: 0, ms: 0 };
   };
   canopyJobs = [mk(ix0, iz0, CANOPY_STEP, CANOPY_N, null, canopyMesh)];
   canopyBox = [ix0, iz0, ix0 + span, iz0 + span];
@@ -16890,6 +17074,69 @@ function canopyStartJobs(fx: number, fz: number, org: string, now: number): void
   }
   canopyDone = [];
   canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
+  canopyStandNext = canopyStandBuild(canopyBox);
+}
+// ── THE STAND'S OWN TREES ──
+//
+// The colour and conifer share the crowns take are the placed tree sites' own:
+// every vegGrid bucket under the rings is averaged (colour in linear light, up
+// to 240 sites a bucket) into a texel every CANOPY_STAND_M, blurred once so a
+// bucket's edge is a blend. Where a bucket holds no trees yet, the biome's
+// foliage band stands in, as `plantLook` would roll it on the mean.
+const CANOPY_STAND_M = 110;
+const CANOPY_TREE_KINDS = new Set(['broadleaf', 'conifer', 'palm', 'acacia']);
+let canopyStandNext: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
+const canopyBucket = new Map<string, [number, number, number, number, number]>();
+function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.DataTexture; box: THREE.Vector4 } {
+  canopyBucket.clear();
+  const W = Math.ceil((box[2] - box[0]) / CANOPY_STAND_M) + 1, Hh = Math.ceil((box[3] - box[1]) / CANOPY_STAND_M) + 1;
+  const raw = new Float32Array(W * Hh * 4);
+  const tint = new THREE.Color();
+  for (let v = 0; v < Hh; v++) for (let u = 0; u < W; u++) {
+    const x = box[0] + (u + 0.5) * CANOPY_STAND_M, z = box[1] + (v + 0.5) * CANOPY_STAND_M;
+    const key = vegKey(x, z);
+    let b = canopyBucket.get(key);
+    if (!b) {
+      b = [0, 0, 0, 0, 0];
+      const sites = vegGrid.get(key) ?? [];
+      const stride = Math.max(1, Math.floor(sites.length / 240));
+      for (let n = 0; n < sites.length; n += stride) {
+        const st = sites[n];
+        if (!CANOPY_TREE_KINDS.has(st.k)) continue;
+        b[0] += st.c.r; b[1] += st.c.g; b[2] += st.c.b; b[3] += st.k === 'conifer' ? 1 : 0; b[4]++;
+      }
+      canopyBucket.set(key, b);
+    }
+    const o = (v * W + u) * 4;
+    if (b[4] >= 4) { raw[o] = b[0] / b[4]; raw[o + 1] = b[1] / b[4]; raw[o + 2] = b[2] / b[4]; raw[o + 3] = b[3] / b[4]; }
+    else {
+      const w = climateAt(x, z).w;
+      let h = 0, l = 0, ws = 0;
+      for (let q = 0; q < BIOME_LIST.length; q++) {
+        const bi = BIOME_LIST[q];
+        h += w[q] * (bi.vegHue[0] + 0.5 * bi.vegHue[1]); l += w[q] * (bi.vegLit[0] + 0.5 * bi.vegLit[1]); ws += w[q];
+      }
+      tint.setHSL(ws > 0 ? h / ws : 0.26, 0.45, ws > 0 ? l / ws : 0.22);
+      raw[o] = tint.r; raw[o + 1] = tint.g; raw[o + 2] = tint.b; raw[o + 3] = 0.3;
+    }
+  }
+  const data = new Uint8Array(W * Hh * 4);
+  for (let v = 0; v < Hh; v++) for (let u = 0; u < W; u++) for (let c = 0; c < 4; c++) {
+    let sum = 0, n = 0;
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+      const uu = u + a, vv = v + b;
+      if (uu < 0 || vv < 0 || uu >= W || vv >= Hh) continue;
+      const wgt = a === 0 && b === 0 ? 2 : 1;
+      sum += raw[(vv * W + uu) * 4 + c] * wgt; n += wgt;
+    }
+    const m = sum / n;
+    // Colour as its square root: a forest's greens live under 0.1 linear,
+    // where eight bits are a staircase.
+    data[(v * W + u) * 4 + c] = Math.round(255 * Math.min(1, c < 3 ? Math.sqrt(m) : m));
+  }
+  const tex = new THREE.DataTexture(data, W, Hh, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+  return { tex, box: new THREE.Vector4(box[0], box[1], 1 / (W * CANOPY_STAND_M), 1 / (Hh * CANOPY_STAND_M)) };
 }
 /** One lattice row of nodes: evidence, ground and the roof's lift over it. */
 function canopyRow(J: CanopyJob, j: number): void {
@@ -16916,6 +17163,7 @@ function canopyRow(J: CanopyJob, j: number): void {
     const rise = Math.min(1, Math.max(0, (ev - 0.6) / 0.25));
     J.lift[k] = rise * rise * (3 - 2 * rise) * stand * 0.8;
     J.pos[k * 3] = x; J.pos[k * 3 + 1] = g; J.pos[k * 3 + 2] = z;
+    J.tex[k * 2] = THREE.DataUtils.toHalfFloat(g - J.baseY); J.tex[k * 2 + 1] = THREE.DataUtils.toHalfFloat(J.lift[k]);
     // The ground's own palette under the stand; the shader pulls it toward
     // leaf, and lets go of it at the ring's edge.
     // Bare ground (a third to a half of the lattice) only ever colours the
@@ -16934,6 +17182,18 @@ function canopyCells(J: CanopyJob, j: number): void {
     const ii = Math.min(V - 1, Math.max(0, i)), jc = Math.min(V - 1, Math.max(0, jj)), k = jc * V + ii;
     return J.pos[k * 3 + 1] + J.lift[k];
   };
+  // THE SHELL: over every crown the lift texture will stand here. A crown
+  // reaches a cell past its node and up to 1.14 of its lift, and the ground
+  // under it can sit a couple of metres above this node's on a slope.
+  for (let i = 0; i < V; i++) {
+    let m = 0;
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+      const ii = i + a, jj = j + b;
+      if (ii < 0 || jj < 0 || ii >= V || jj >= V) continue;
+      m = Math.max(m, J.lift[jj * V + ii]);
+    }
+    J.plift[j * V + i] = m > 2.5 ? m * 1.16 + 2 : 0;
+  }
   for (let i = 0; i < V; i++) {
     const k = j * V + i;
     const nx = -(h(i + 1, j) - h(i - 1, j)) / s2, nz = -(h(i, j + 1) - h(i, j - 1)) / s2, l = Math.hypot(nx, 1, nz);
@@ -16947,7 +17207,7 @@ function canopyCells(J: CanopyJob, j: number): void {
     }
     const a = j * V + i, b = a + 1, c = a + V, d = c + 1;
     // A cell with no roof over any corner is ground: not drawn.
-    if (Math.max(J.lift[a], J.lift[b], J.lift[c], J.lift[d]) <= 0) continue;
+    if (Math.max(J.plift[a], J.plift[b], J.plift[c], J.plift[d]) <= 0) continue;
     J.idx.set([a, c, b, b, c, d], J.ni); J.ni += 6;
   }
 }
@@ -16959,10 +17219,15 @@ function canopyCommit(): void {
     geo.setAttribute('position', new THREE.BufferAttribute(J.pos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(J.col, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(J.nrm, 3));
-    geo.setAttribute('canLift', new THREE.BufferAttribute(J.lift, 1));
+    geo.setAttribute('canLift', new THREE.BufferAttribute(J.plift, 1));
     geo.setIndex(new THREE.BufferAttribute(J.idx.subarray(0, J.ni), 1));
     J.mesh.geometry.dispose();
     J.mesh.geometry = geo;
+    const tex = new THREE.DataTexture(J.tex, J.N + 1, J.N + 1, THREE.RGFormat, THREE.HalfFloatType);
+    tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+    const U = J.mesh === canopyMesh ? canopyIn.u : canopyOut.u;
+    U.canTex.value?.dispose();
+    U.canTex.value = tex; U.canTexBox.value.set(J.x0, J.z0, J.step, J.N + 1); U.canBaseY.value = J.baseY;
     grids.push({ x0: J.x0, z0: J.z0, V: J.N + 1, step: J.step, ev: J.ev });
     canopyStat.ms = +(canopyStat.ms + J.ms).toFixed(1);
     canopyStat.cells += J.ni / 6; canopyStat.tris += J.ni / 3;
@@ -16970,6 +17235,11 @@ function canopyCommit(): void {
   if (canopyDone.length < 2) canopyOuter.geometry.setIndex([]);
   canopyGrids = grids;
   canopyU.box.value.set(...canopyBox);
+  if (canopyStandNext) {
+    canopyStand?.tex.dispose();
+    canopyStand = canopyStandNext; canopyStandNext = null;
+    for (const U of [canopyIn.u, canopyOut.u]) { U.canStand.value = canopyStand.tex; U.canStandBox.value.copy(canopyStand.box); }
+  }
   canopyDone = [];
   canopyStat.builds++;
 }
@@ -16977,7 +17247,7 @@ function stepCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
   if (!CANOPY_ON) { canopyJobs = []; canopyDone = []; canopyGrids = []; return; }
   const [fx, fz] = renderFocusXZ();
-  canopyU.foc.value.set(fx, fz, camMode !== 'top' ? 1 : 0);
+  canopyU.foc.value.set(fx, fz, camMode !== 'top' && !canopyNearOff ? 1 : 0);
   if (!canopyJobs.length) {
     const org = `${origin.lat},${origin.lon}`;
     const moved = Math.hypot(fx - canopyAt.x, fz - canopyAt.z);
@@ -17027,6 +17297,30 @@ function canopyHides(x: number, z: number): boolean {
   const hist = [0, 0, 0, 0, 0, 0];
   for (const G of canopyGrids) for (const e of G.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
   return { on: CANOPY_ON, ...canopyStat, budgetK: +canopyBudgetK().toFixed(3), job: canopyJobs.length ? canopyJobs[0].j : null, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
+};
+/** Frames and A/Bs: the canopy's look dials (leaf relief, crown shadow, sun
+ *  tones), `near: false` to lift the near-field clearing for a shot framed
+ *  on the focus itself, and `find` for a point `find` metres from the focus
+ *  whose whole neighbourhood is closed stand. */
+let canopyNearOff = false;
+(window as unknown as { __canopylook?: object }).__canopylook = (o: { leaf?: number; shadow?: number; tone?: number; near?: boolean; find?: number } = {}): object => {
+  const L = canopyU.look.value;
+  if (o.leaf !== undefined) L.x = o.leaf;
+  if (o.shadow !== undefined) L.y = o.shadow;
+  if (o.tone !== undefined) L.z = o.tone;
+  if (o.near !== undefined) canopyNearOff = !o.near;
+  let found: number[] | null = null;
+  if (o.find !== undefined && canopyGrids.length) {
+    const [fx, fz] = renderFocusXZ();
+    for (let a = 0; a < 64 && !found; a++) {
+      const th = (a / 64) * Math.PI * 2, x = fx + Math.cos(th) * o.find, z = fz + Math.sin(th) * o.find;
+      const G = canopyGrids[0], i = Math.round((x - G.x0) / G.step), j = Math.round((z - G.z0) / G.step);
+      let ok = i > 8 && j > 8 && i < G.V - 9 && j < G.V - 9;
+      for (let b = -8; ok && b <= 8; b++) for (let c = -8; ok && c <= 8; c++) if (G.ev[(j + b) * G.V + i + c] < 0.9) ok = false;
+      if (ok) found = [Math.round(x), Math.round(z), +groundAt(x, z).toFixed(1)];
+    }
+  }
+  return { look: L.toArray(), near: !canopyNearOff, found };
 };
 function refreshShrubs(): void {
   shrubs.visible = camMode !== 'top';
