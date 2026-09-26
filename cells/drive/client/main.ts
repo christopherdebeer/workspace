@@ -16736,7 +16736,7 @@ const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: 
 const CAN_STEPS = 40;
 function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
   canTex: { value: THREE.Texture | null }; canTexBox: { value: THREE.Vector4 }; canBaseY: { value: number };
-  canStand: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
+  canStand: { value: THREE.Texture | null }; canSpecies: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
   // Both faces: from inside the shell (a drone come down into the stand)
   // the crowns are behind its BACK faces.
   const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide });
@@ -16744,7 +16744,7 @@ function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
   const u = {
     canTex: { value: null as THREE.Texture | null }, canTexBox: { value: new THREE.Vector4(0, 0, 1, 1) },
     canBaseY: { value: 0 },
-    canStand: { value: null as THREE.Texture | null }, canStandBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+    canStand: { value: null as THREE.Texture | null }, canSpecies: { value: null as THREE.Texture | null }, canStandBox: { value: new THREE.Vector4(0, 0, 1, 1) },
   };
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, r) => {
@@ -16775,7 +16775,7 @@ varying vec3 vCanW; varying float vCanF; varying float vCanK;
 // needs it here, and one program shares the uniform across both.
 uniform mat4 projectionMatrix;
 uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
-uniform sampler2D canStand; uniform vec4 canStandBox;
+uniform sampler2D canStand; uniform sampler2D canSpecies; uniform vec4 canStandBox;
 uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook; uniform float canInside;
 vec3 canN = vec3(0.0, 1.0, 0.0); float canShadow = 1.0; float canSky = 1.0; float canLeaf = 0.0;
 vec4 canH4(vec2 c) {
@@ -16805,7 +16805,9 @@ float canFadeAt(vec2 xz) {
   return f * mix(0.35, 1.0, smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed));
 }
 // A crown: A = (centre x, centre z, top y, radius), B = (depth, cone?, lift, ground).
-vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cDen[4]; float cTop; float cHas;
+vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4];
+// shape = family (round/column/conic/umbrella/palm), minor axis, leaf scale, lobe strength.
+vec4 cShape[4]; float cDen[4]; float cTop; float cHas;
 // UP CLOSE A CROWN IS CLUMPS AND GAPS. canDet (1 inside ~25 m, 0 past 90) adds
 // two octaves of 3D noise to the inside-ness near the surface only, so the
 // outline breaks into leaf masses and the march sees through the gaps to the
@@ -16814,12 +16816,15 @@ vec4 cA[4]; vec4 cB[4]; vec4 cH[4]; vec2 cR[4]; float cDen[4]; float cTop; float
 float canDet = 0.0;
 float canClump(int k, vec3 p, float v) {
   if (canDet < 0.01 || v < 0.5 || v > 1.3) return v;
-  float n = canN3(p * 0.85 + cH[k].xyz * 37.0);
-  float n2 = canN3(p * 2.1 + cH[k].zxy * 19.0);
+  // Family-dependent leaf clusters, not identical noise on every tree.
+  vec3 leafP = p / cShape[k].z;
+  float n = canN3(leafP * 0.85 + cH[k].xyz * 37.0);
+  float n2 = canN3(leafP * 2.1 + cH[k].zxy * 19.0);
   // Mostly BITES: a clump may stand a little proud of the crown, but the
   // noise may not grow islands of leaf out in the air beside it (the first
   // cab frames had crown fragments floating in the sky).
-  return v + max(((n - 0.5) * 0.9 + (n2 - 0.5) * 0.4) * canDet, -0.2);
+  // Erosion only: preserve the four-crown neighbourhood's strict extent.
+  return v + max(0.0, ((n - 0.46) * 0.9 + (n2 - 0.48) * 0.4) * canDet);
 }
 void canLoad(vec2 q) {
   cTop = -1e9; cHas = 0.0;
@@ -16829,14 +16834,28 @@ void canLoad(vec2 q) {
     vec2 c = (cell + 0.25 + 0.5 * h.xy) * ${S};
     vec3 gl = canGL(c);
     float L = gl.y * canFadeAt(c) * (0.84 + 0.3 * h.z);
-    float cone = step(h.w, texture2D(canStand, (c - canStandBox.xy) * canStandBox.zw).a);
+    vec4 mixS = texture2D(canSpecies, (c - canStandBox.xy) * canStandBox.zw);
+    // Local family proportions; an independent seed chooses form within family.
+    float pick = fract(h.w * 7.17 + h.y * 3.91);
+    float family = pick < mixS.r ? 2.0 : pick < mixS.r + mixS.g ? 3.0 : pick < mixS.r + mixS.g + mixS.b ? 4.0 : 0.0;
+    if (family < 0.5 && fract(h.z * 9.13 + h.x) < mixS.a) family = 1.0;
+    float cone = family == 2.0 ? 1.0 : 0.0;
+    float minor = mix(0.70, 1.0, fract(h.x * 11.3 + h.z));
+    float leafScale = family == 2.0 ? 0.48 : family == 4.0 ? 1.5 : mix(0.65, 1.55, h.y);
+    cShape[k] = vec4(family, minor, leafScale, mix(0.12, 0.34, h.w));
     // A closed stand's crowns touch: 0.58-0.74 of the cell, the most the 2x2
     // quadrant can hold (a crown centred a quarter in cannot reach 0.75 out).
     // One in seven stands a head above the rest, as an emergent does.
     float emergent = step(0.86, fract(h.x * 5.31 + h.y * 2.17));
     L *= 1.0 + 0.22 * emergent;
     float R = ${S} * mix(0.58, 0.74, fract(h.z * 3.7 + h.w)) * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
-    float D = cone > 0.5 ? L * 0.78 : min(L * 0.62, R * 1.35);
+    // Crown proportions vary structurally, not with camera distance.
+    if (family == 1.0) R *= mix(0.48, 0.66, h.y);
+    if (family == 2.0) R *= mix(0.72, 1.0, h.x);
+    float D = cone > 0.5 ? L * mix(0.58, 0.88, h.y) : min(L * 0.72, R * mix(1.1, 1.85, h.x));
+    if (family == 1.0) D = L * mix(0.65, 0.85, h.x);
+    if (family == 3.0) D = min(L * 0.32, R * mix(0.40, 0.68, h.z));
+    if (family == 4.0) D = min(L * 0.28, R * mix(0.55, 0.85, h.z));
     // A STAND IS AS DENSE AS ITS COVER. The cell holds a tree with the
     // probability the tree cover around it gives: every cell in a closed
     // stand, scattered crowns with ground between in open woodland or a copse.
@@ -16855,11 +16874,21 @@ void canLoad(vec2 q) {
 float canIn(int k, vec3 p) {
   vec4 A = cA[k], B = cB[k];
   if (A.w <= 0.0) return 9.0;
-  vec2 d = p.xz - A.xy;
+  vec2 d0 = p.xz - A.xy;
+  vec4 shape = cShape[k];
+  // Rotate then compress one horizontal axis, always inside radius A.w.
+  vec2 d = vec2(d0.x * cR[k].x - d0.y * cR[k].y, d0.x * cR[k].y + d0.y * cR[k].x);
+  d.y /= shape.y;
   if (B.y > 0.5) {
     float s = (A.z - p.y) / B.x;
     if (s < 0.0 || s > 1.0) return 9.0;
-    return canClump(k, p, length(d) / (A.w * max(s, 0.02)));
+    // Uneven branch whorls, wholly inside the conservative cone envelope.
+    float whorl = 0.5 + 0.5 * sin(s * (7.0 + 4.0 * cH[k].z) * 6.2832 + cH[k].x * 6.2832);
+    // Broad branch tiers survive at middle distance; fine gaps fade with detail.
+    float tier = 0.5 + 0.5 * sin(s * (3.0 + 2.0 * cH[k].x) * 6.2832 + cH[k].y * 4.0);
+    float skirt = mix(0.78, 1.0, smoothstep(0.12, 0.88, tier));
+    skirt *= mix(1.0, mix(0.72, 1.0, smoothstep(0.12, 0.88, whorl)), canDet);
+    return canClump(k, p, length(d) / (A.w * max(s, 0.02) * skirt));
   }
   // A CROWN IS LOBED, NOT A BALL: three and five lobes about a seeded turn,
   // and a sag of the lower crown, so no two outlines are the same circle.
@@ -16872,7 +16901,24 @@ float canIn(int k, vec3 p) {
   // Lobes only ever bite INTO the crown: out past its radius it would leave
   // the 2x2 quadrant that is all the march looks at, and be cut off square.
   float lobe = 1.0 - 0.2 * (0.5 - 0.5 * s3) * cH[k].z - 0.14 * (0.5 - 0.5 * c5) * (1.0 - cH[k].z) - 0.08 * max(-e, 0.0);
+  lobe = min(lobe, 1.0 - shape.w * (0.5 + 0.5 * s3));
   float q = dl / (A.w * lobe);
+  if (shape.x == 3.0) {
+    // Flat umbrella with scalloped branch tips and an open underside.
+    float flatY = abs(e);
+    return canClump(k, p, q * q * q * q + flatY * flatY);
+  }
+  if (shape.x == 4.0) {
+    // Radial fronds: long drooping lobes around a compact crown hub.
+    float angle = atan(d.y, d.x);
+    float blades = 0.5 + 0.5 * cos(angle * (6.0 + floor(cH[k].z * 5.0)) + cH[k].x * 6.2832);
+    float radial = dl / A.w;
+    float frond = mix(1.0, mix(0.24, 1.0, pow(blades, 0.45)), smoothstep(0.1, 0.45, radial));
+    float droop = (p.y - (A.z - B.x * (0.18 + 0.60 * radial * radial))) / (B.x * 0.20);
+    // Explicit vertical bound guarantees the shell remains conservative.
+    if (p.y > A.z || p.y < A.z - B.x) return 9.0;
+    return (radial / frond) * (radial / frond) + droop * droop;
+  }
   return canClump(k, p, q * q + e * e);
 }
 /** The mid-storey's top at p, off the loaded quadrant: lumpy foliage by a
@@ -16950,6 +16996,9 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
     float tTrunk = 1e9; vec2 trunkC = vec2(0.0);
     for (int s = 0; s < ${CAN_STEPS}; s++) {
       vec3 p = ro + rd * t;
+      // Detail belongs to the sampled distance, including from inside a shell.
+      canDet = (1.0 - smoothstep(25.0, 90.0, t)) * canLook.x;
+      dt = clamp(t * 0.011, 0.7, 3.2);
       vec2 q = floor(p.xz / ${S} - 0.5);
       if (q != qB) {
         qB = q; canLoad(q);
@@ -17042,6 +17091,10 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
     if (kind < 0 && canLook.w < 1.5) discard;
     canHit = ro + rd * t;
     vec4 A = cA[hitK], B = cB[hitK], H = cH[hitK];
+    if (kind == 0) {
+      standC = texture2D(canStand, (A.xy - canStandBox.xy) * canStandBox.zw).rgb;
+      standC *= standC;
+    }
     float closed = smoothstep(6.0, 11.0, B.z);
     if (kind == 0) {
       vec2 d = canHit.xz - A.xy;
@@ -17068,7 +17121,7 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       // Leaf clumps: a metre-scale bump on the crown, faded by its footprint.
       float lp = 1.0 - smoothstep(0.35, 0.9, px * ${S} / 1.1);
       if (lp > 0.01) {
-        vec3 lq = canHit / 1.1 + H.xyz * 31.0;
+        vec3 lq = canHit / cShape[hitK].z + H.xyz * 31.0;
         float n0 = canN3(lq), nx = canN3(lq + vec3(0.35, 0.0, 0.0)), ny = canN3(lq + vec3(0.0, 0.35, 0.0)), nz = canN3(lq + vec3(0.0, 0.0, 0.35));
         canN = normalize(canN - vec3(nx - n0, ny - n0, nz - n0) * 1.5 * lp * canLook.x);
         canLeaf = (smoothstep(0.2, 0.8, n0) - 0.5) * lp;
@@ -17080,8 +17133,14 @@ if (!gl_FrontFacing && canInside < 0.5) discard;
       // one in twelve an outlier as plantLook's are.
       col = standC * (0.8 + 0.4 * H.z) * vec3(1.0 + 0.16 * (H.y - 0.5), 1.0, 1.0 - 0.22 * (H.y - 0.5));
       float odd = fract(H.x * 7.13 + H.w * 3.7);
-      if (odd < 0.045) col = mix(vec3(0.30, 0.12, 0.035), vec3(0.42, 0.2, 0.05), H.y);
-      else if (odd < 0.085) col = vec3(0.17, 0.23, 0.19) * (0.85 + 0.3 * H.y);
+      // Outliers stay in the stand's palette rather than injecting autumn globally.
+      if (odd < 0.045) col *= vec3(1.18, 0.94, 0.78);
+      else if (odd < 0.085) col = mix(col, standC * vec3(0.88, 1.04, 1.13), 0.65);
+      float family = cShape[hitK].x;
+      // Needle crowns are cool and dense, umbrella foliage warm and open.
+      if (family == 2.0) col *= vec3(0.78, 0.90, 0.86);
+      else if (family == 3.0) col *= vec3(1.10, 1.04, 0.82);
+      else if (family == 4.0) col *= vec3(0.88, 1.08, 0.82);
       col *= (1.0 + canLeaf * 0.35) * canDeep;
     } else if (kind == 1) {
       // The mid-storey of a closed stand, or the shrubs and floor of an open
@@ -17170,7 +17229,7 @@ normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
   reflectedLight.indirectDiffuse += diffuseColor.rgb * canSunC * wrap * (0.035 + 0.045 * canSky) * vCanK;
 }`);
   };
-  mat.customProgramCacheKey = () => 'canopy-6';
+  mat.customProgramCacheKey = () => 'canopy-diversity-8';
   return { mat, u };
 }
 const canopyIn = canopyMaterial(), canopyOut = canopyMaterial();
@@ -17243,7 +17302,7 @@ type CanopyGrid = { x0: number; z0: number; V: number; step: number; ev: Float32
 let canopyRings: CanopyRing[] = [];
 let canopyJobs: CanopyJob[] = [];
 let canopyBox: [number, number, number, number] = [0, 0, 0, 0];
-let canopyStand: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
+let canopyStand: { tex: THREE.DataTexture; species: THREE.DataTexture; box: THREE.Vector4 } | null = null;
 /** The live lattices, inner then outer, which the tree gather reads to leave
  *  the interior of a closed stand to the canopy. */
 let canopyGrids: CanopyGrid[] = [];
@@ -17255,7 +17314,7 @@ const canopyBuf = (V: number): CanopyBuf => ({ pos: new Float32Array(V * V * 3),
 function canopyWant(fx: number, fz: number): Array<{ outer: boolean; step: number; N: number; x0: number; z0: number }> {
   const half = (CANOPY_N * CANOPY_STEP) / 2, oStep = CANOPY_STEP * 2;
   const M = Math.max(0, Math.ceil((Math.max(half, treeRange + 60) - half) / oStep));
-  const out = [{ outer: false, step: CANOPY_STEP, N: CANOPY_N, x0: Math.round((fx - half) / CANOPY_STEP) * CANOPY_STEP, z0: Math.round((fz - half) / CANOPY_STEP) * CANOPY_STEP }];
+  const out = [{ outer: false, step: CANOPY_STEP, N: CANOPY_N, x0: Math.round((fx - half) / oStep) * oStep, z0: Math.round((fz - half) / oStep) * oStep }];
   if (M > 0) {
     const oN = 2 * M + Math.round((CANOPY_N * CANOPY_STEP) / oStep), oh = (oN * oStep) / 2;
     out.push({ outer: true, step: oStep, N: oN, x0: Math.round((fx - oh) / oStep) * oStep, z0: Math.round((fz - oh) / oStep) * oStep });
@@ -17289,6 +17348,36 @@ function canopyQueue(R: CanopyRing, x0: number, z0: number, full: boolean): void
   }
   canopyJobs.push({ R, B, x0, z0, dirty, rowDirty, phase: 0, j: 0, ms: 0, full });
 }
+
+// Heights are sampled sparsely and cached, then smoothly interpolated.
+// Use a robust middle of the population so one giant does not inflate a stand.
+const canopyHeights = new Map<string, number>();
+function canopyStandHeight(x: number, z: number): number {
+  const step = 110, ix = Math.floor(x / step), iz = Math.floor(z / step);
+  const sample = (i: number, j: number): number => {
+    const key = i + ',' + j;
+    const cached = canopyHeights.get(key);
+    if (cached !== undefined) return cached;
+    const sites = vegGrid.get(vegKey(i * step, j * step)) ?? [];
+    const heights: number[] = [];
+    const stride = Math.max(1, Math.floor(sites.length / 48));
+    for (let n = 0; n < sites.length; n += stride) {
+      const site = sites[n];
+      if (!isEzKind(site.k) || !['broadleaf', 'conifer', 'palm', 'acacia'].includes(site.k)) continue;
+      heights.push(EZ_M_PER_SCALE[site.k as EzFamily] * site.s * treeSizeScale);
+    }
+    heights.sort((a, b) => a - b);
+    const h = heights.length >= 4 ? heights[Math.floor(heights.length * 0.6)] : CANOPY_H;
+    const value = clamp(h, 6, 32) * (0.90 + 0.20 * canopyHash(i, j, 71));
+    canopyHeights.set(key, value);
+    return value;
+  };
+  let u = x / step - ix, v = z / step - iz;
+  u = u * u * (3 - 2 * u); v = v * v * (3 - 2 * v);
+  return (sample(ix, iz) * (1 - u) + sample(ix + 1, iz) * u) * (1 - v)
+    + (sample(ix, iz + 1) * (1 - u) + sample(ix + 1, iz + 1) * u) * v;
+}
+
 /** One node: evidence, ground and the roof's lift over it. */
 function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: number, j: number): void {
   const V = R.V, x = x0 + i * R.step, z = z0 + j * R.step, k = j * V + i;
@@ -17308,7 +17397,8 @@ function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: numb
   }
   B.ev[k] = ev;
   const g = groundAt(x, z);
-  const stand = CANOPY_H * (0.8 + 0.4 * canopyHash(Math.floor(x / 90), Math.floor(z / 90), 7));
+  // Smooth stand height from the actual local trees; no 90 m block steps.
+  const stand = canopyStandHeight(x, z);
   // THE CANOPY OWNS THE STAND TO ITS EDGE, AND THE THIN ONES TOO. The trees
   // reach full height wherever there is tree cover at all (0.1-0.3 of the
   // taps), and the cover's share is a DENSITY: the shader keeps a crown in
@@ -17400,12 +17490,20 @@ function canopyCommitJob(J: CanopyJob): void {
   canopyStat.builds++;
   // The inner square moved: the outer's hole moves with it. The stand's
   // colour follows the outer ring's box.
-  if (!R.outer && canopyRings[1] && !canopyJobs.some((q) => q.R === canopyRings[1])) canopyQueue(canopyRings[1], canopyRings[1].x0, canopyRings[1].z0, false);
+  if (!R.outer && canopyRings[1]) {
+    // Move the outer exclusion in the same frame as the inner square.
+    // Waiting for its next job leaves a missing strip behind the inner ring.
+    const outer = canopyRings[1];
+    canopyIndex(outer, outer.live, outer.x0, outer.z0);
+    outer.mesh.geometry.setIndex(new THREE.BufferAttribute(outer.live.idx.subarray(0, outer.live.ni), 1));
+    canopyStat.tris = canopyRings.reduce((sum, ring) => sum + ring.live.ni / 3, 0);
+    canopyStat.cells = canopyStat.tris / 2;
+  }
   if (R.outer || canopyRings.length === 1) {
     const next = canopyStandBuild(canopyBox);
-    canopyStand?.tex.dispose();
+    canopyStand?.tex.dispose(); canopyStand?.species.dispose();
     canopyStand = next;
-    for (const Uu of [canopyIn.u, canopyOut.u]) { Uu.canStand.value = canopyStand.tex; Uu.canStandBox.value.copy(canopyStand.box); }
+    for (const Uu of [canopyIn.u, canopyOut.u]) { Uu.canStand.value = canopyStand.tex; Uu.canSpecies.value = canopyStand.species; Uu.canStandBox.value.copy(canopyStand.box); }
   }
 }
 function stepCanopy(now: number): void {
@@ -17449,7 +17547,7 @@ function stepCanopy(now: number): void {
     canopyGrids = [];
     canopyOuter.geometry.setIndex([]); canopyMesh.geometry.setIndex([]);
     for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
-    canopyBucket.clear();
+    canopyBucket.clear(); canopyHeights.clear();
     canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
   } else if (!canopyJobs.length) {
     // THE SCROLL: a ring whose centre the focus has left by CANOPY_SHIFT_NODES
@@ -17467,6 +17565,7 @@ function stepCanopy(now: number): void {
     }
     // Tiles refine under a parked view: a slow whole refresh.
     if (!canopyJobs.length && terrainBuilds !== canopyAt.tb && now - canopyAt.t > CANOPY_TERRAIN_MS) {
+      canopyHeights.clear();
       for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
       canopyAt.t = now; canopyAt.tb = terrainBuilds;
     }
@@ -17516,30 +17615,46 @@ function stepCanopy(now: number): void {
 // foliage band stands in, as `plantLook` would roll it on the mean.
 const CANOPY_STAND_M = 110;
 const CANOPY_TREE_KINDS = new Set(['broadleaf', 'conifer', 'palm', 'acacia']);
-let canopyStandNext: { tex: THREE.DataTexture; box: THREE.Vector4 } | null = null;
-const canopyBucket = new Map<string, [number, number, number, number, number]>();
-function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.DataTexture; box: THREE.Vector4 } {
+let canopyStandNext: { tex: THREE.DataTexture; species: THREE.DataTexture; box: THREE.Vector4 } | null = null;
+const canopyBucket = new Map<string, [number, number, number, number, number, number, number]>();
+function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.DataTexture; species: THREE.DataTexture; box: THREE.Vector4 } {
   // Buckets that held no trees yet are asked again: seeding reaches them.
   for (const [k, v] of canopyBucket) if (v[4] < 4) canopyBucket.delete(k);
   const W = Math.ceil((box[2] - box[0]) / CANOPY_STAND_M) + 1, Hh = Math.ceil((box[3] - box[1]) / CANOPY_STAND_M) + 1;
-  const raw = new Float32Array(W * Hh * 4);
+  const raw = new Float32Array(W * Hh * 4), speciesRaw = new Float32Array(W * Hh * 4);
   const tint = new THREE.Color();
   for (let v = 0; v < Hh; v++) for (let u = 0; u < W; u++) {
     const x = box[0] + (u + 0.5) * CANOPY_STAND_M, z = box[1] + (v + 0.5) * CANOPY_STAND_M;
     const key = vegKey(x, z);
     let b = canopyBucket.get(key);
     if (!b) {
-      b = [0, 0, 0, 0, 0];
+      b = [0, 0, 0, 0, 0, 0, 0];
       const sites = vegGrid.get(key) ?? [];
       const stride = Math.max(1, Math.floor(sites.length / 240));
       for (let n = 0; n < sites.length; n += stride) {
         const st = sites[n];
         if (!CANOPY_TREE_KINDS.has(st.k)) continue;
         b[0] += st.c.r; b[1] += st.c.g; b[2] += st.c.b; b[3] += st.k === 'conifer' ? 1 : 0; b[4]++;
+        b[5] += st.k === 'acacia' ? 1 : 0; b[6] += st.k === 'palm' ? 1 : 0;
       }
       canopyBucket.set(key, b);
     }
     const o = (v * W + u) * 4;
+    const guild = guildNow(x, z);
+    speciesRaw[o + 3] = guild?.forms.includes('columnar') ? 0.70 : 0.12;
+    if (b[4] >= 4) {
+      speciesRaw[o] = b[3] / b[4]; speciesRaw[o + 1] = b[5] / b[4]; speciesRaw[o + 2] = b[6] / b[4];
+    } else {
+      let total = 0;
+      for (const [kind, weight] of guild?.trees ?? []) {
+        if (!CANOPY_TREE_KINDS.has(kind)) continue;
+        total += weight;
+        if (kind === 'conifer') speciesRaw[o] += weight;
+        if (kind === 'acacia') speciesRaw[o + 1] += weight;
+        if (kind === 'palm') speciesRaw[o + 2] += weight;
+      }
+      if (total > 0) for (let c = 0; c < 3; c++) speciesRaw[o + c] /= total;
+    }
     if (b[4] >= 4) { raw[o] = b[0] / b[4]; raw[o + 1] = b[1] / b[4]; raw[o + 2] = b[2] / b[4]; raw[o + 3] = b[3] / b[4]; }
     else {
       const w = climateAt(x, z).w;
@@ -17552,23 +17667,27 @@ function canopyStandBuild(box: [number, number, number, number]): { tex: THREE.D
       raw[o] = tint.r; raw[o + 1] = tint.g; raw[o + 2] = tint.b; raw[o + 3] = 0.3;
     }
   }
-  const data = new Uint8Array(W * Hh * 4);
+  const data = new Uint8Array(W * Hh * 4), speciesData = new Uint8Array(W * Hh * 4);
   for (let v = 0; v < Hh; v++) for (let u = 0; u < W; u++) for (let c = 0; c < 4; c++) {
-    let sum = 0, n = 0;
+    let sum = 0, speciesSum = 0, n = 0;
     for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
       const uu = u + a, vv = v + b;
       if (uu < 0 || vv < 0 || uu >= W || vv >= Hh) continue;
       const wgt = a === 0 && b === 0 ? 2 : 1;
-      sum += raw[(vv * W + uu) * 4 + c] * wgt; n += wgt;
+      sum += raw[(vv * W + uu) * 4 + c] * wgt;
+      speciesSum += speciesRaw[(vv * W + uu) * 4 + c] * wgt; n += wgt;
     }
     const m = sum / n;
+    speciesData[(v * W + u) * 4 + c] = Math.round(255 * Math.min(1, speciesSum / n));
     // Colour as its square root: a forest's greens live under 0.1 linear,
     // where eight bits are a staircase.
     data[(v * W + u) * 4 + c] = Math.round(255 * Math.min(1, c < 3 ? Math.sqrt(m) : m));
   }
   const tex = new THREE.DataTexture(data, W, Hh, THREE.RGBAFormat, THREE.UnsignedByteType);
   tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
-  return { tex, box: new THREE.Vector4(box[0], box[1], 1 / (W * CANOPY_STAND_M), 1 / (Hh * CANOPY_STAND_M)) };
+  const species = new THREE.DataTexture(speciesData, W, Hh, THREE.RGBAFormat, THREE.UnsignedByteType);
+  species.minFilter = THREE.LinearFilter; species.magFilter = THREE.LinearFilter; species.needsUpdate = true;
+  return { tex, species, box: new THREE.Vector4(box[0], box[1], 1 / (W * CANOPY_STAND_M), 1 / (Hh * CANOPY_STAND_M)) };
 }
 /** A tree the canopy stands in for: its site is well inside a closed stand
  *  (every lattice node around it at full evidence, where the roof is at its
@@ -17586,7 +17705,8 @@ function canopyHides(x: number, z: number, tallM = 0): boolean {
     // The inner grid answers where it covers; a point on its rim falls through
     // to the outer ring, whose own lattice covers the same ground coarser.
     const k = j * G.V + i;
-    if (G.ev[k] < 0.25) return false;
+    // Sparse crowns are not one-to-one replacements for manifest trees.
+    if (G.ev[k] < 0.85) return false;
     // AN EMERGENT STAYS: a tree whose top stands clear of the crowns here is
     // a silhouette the canopy cannot carry.
     if (tallM > 0 && tallM > G.lift[k] * 1.2) return false;
