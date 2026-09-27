@@ -10140,6 +10140,7 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     applyTileBuild(t, key, r, why);
     const t2 = performance.now();
     terrainBuilds++;
+    canopyGroundMoved(t.xs, t.zs, t.xs + t.w, t.zs + t.h);
     reseatBuildings(t); const t3 = performance.now();
     redrape(t);
     publishProductionRoadRenderPackets(key, terrainRevision.get(key) ?? 0);
@@ -10982,6 +10983,7 @@ function flushTerrain(now: number): void {
       const t1 = performance.now();
       // The ground under this tile just moved; anything standing on it follows.
       terrainBuilds++;
+      canopyGroundMoved(t.xs, t.zs, t.xs + t.w, t.zs + t.h);
       reseatBuildings(t);
       redrape(t);
       publishProductionRoadRenderPackets(key, terrainRevision.get(key) ?? 0);
@@ -14887,6 +14889,7 @@ function seedCell(gx: number, gz: number): void {
   vegDeferredAt.delete(key);
   vegSeeded.add(key);
   if (!vegGrid.has(key)) vegGrid.set(key, []);
+  { const [ax, az] = vegCellPos(gx, gz, 0, 0), [bx, bz] = vegCellPos(gx, gz, 1, 1); canopyGroundMoved(ax, az, bx, bz, true); }
   const t0 = performance.now();
   const stats = freshVegSeedStats();
 
@@ -17867,7 +17870,7 @@ function canopyShelterAt(x: number, z: number, y: number): number {
   if (k !== undefined) canShadeU.uCanShadeOn.value.y = k;
   return { on: canShadeU.uCanShadeOn.value.x, k: canShadeU.uCanShadeOn.value.y, box: canShadeU.uCanShadeBox.value.toArray() };
 };
-const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0, commitMs: 0, standMs: 0, shiftAt: 0 };
+const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0, commitMs: 0, standMs: 0, shiftAt: 0, stale: 0, staleNodes: 0 };
 // THE TREE BUDGET IS NOT SCALED BY THE CANOPY any more (it was, by the share of
 // trees the canopy stands in for, and the 0.3M dial default times that put
 // impostor cards close up). Hidden trees simply leave the gather; the budget
@@ -18149,6 +18152,51 @@ function canopyCommitJob(J: CanopyJob): void {
   }
   canopyStat.commitMs = Math.max(canopyStat.commitMs, +(performance.now() - tc).toFixed(1));
 }
+/** Ground that moved under the inner ring since it was built — a terrain tile
+ *  applied (the corridor refinement lands on the tiles around the truck a few
+ *  seconds after arrival) or a vegetation cell seeded (its trees set the
+ *  stand's height) — as boxes in local metres. The inner ring re-reads the
+ *  nodes inside them within CANOPY_STALE_R of the focus, as soon as no other
+ *  canopy job is running, instead of waiting for the whole parked refresh. */
+const canopyStale: Array<[number, number, number, number]> = [];
+const CANOPY_STALE_R = qsNum('canopystale', 400), CANOPY_STALE_MS = 1000;
+let canopyStaleAt = 0;
+function canopyGroundMoved(x0: number, z0: number, x1: number, z1: number, heights = false): void {
+  if (!CANOPY_ON || !canopyRings.length) return;
+  if (heights) {
+    const st = 110;
+    for (let i = Math.floor(Math.min(x0, x1) / st) - 1; i <= Math.ceil(Math.max(x0, x1) / st); i++)
+      for (let j = Math.floor(Math.min(z0, z1) / st) - 1; j <= Math.ceil(Math.max(z0, z1) / st); j++) canopyHeights.delete(i + ',' + j);
+  }
+  if (canopyStale.length < 64) canopyStale.push([Math.min(x0, x1), Math.min(z0, z1), Math.max(x0, x1), Math.max(z0, z1)]);
+}
+/** One job that recomputes the inner ring's nodes under the stale boxes, near
+ *  the focus: the lattice is copied over whole and only those nodes, their
+ *  shell and the index are redone. False when nothing near was stale. */
+function canopyQueueStale(R: CanopyRing, fx: number, fz: number): boolean {
+  const V = R.V, r2 = CANOPY_STALE_R * CANOPY_STALE_R;
+  const dirty = new Uint8Array(V * V), rowDirty = new Uint8Array(V);
+  let n = 0;
+  for (const [ax, az, bx, bz] of canopyStale) {
+    const i0 = Math.max(0, Math.floor((Math.max(ax, fx - CANOPY_STALE_R) - R.x0) / R.step));
+    const i1 = Math.min(V - 1, Math.ceil((Math.min(bx, fx + CANOPY_STALE_R) - R.x0) / R.step));
+    const j0 = Math.max(0, Math.floor((Math.max(az, fz - CANOPY_STALE_R) - R.z0) / R.step));
+    const j1 = Math.min(V - 1, Math.ceil((Math.min(bz, fz + CANOPY_STALE_R) - R.z0) / R.step));
+    for (let j = j0; j <= j1; j++) {
+      const dz = R.z0 + j * R.step - fz;
+      for (let i = i0; i <= i1; i++) {
+        const dx = R.x0 + i * R.step - fx, k = j * V + i;
+        if (dx * dx + dz * dz > r2 || dirty[k]) continue;
+        dirty[k] = 1; rowDirty[j] = 1; n++;
+      }
+    }
+  }
+  canopyStale.length = 0;
+  if (!n) return false;
+  canopyJobs.push({ R, B: R.spare, x0: R.x0, z0: R.z0, dx: 0, dz: 0, dirty, rowDirty, copy: true, phase: -1, j: 0, ms: 0, full: false, oni: 0 });
+  canopyStat.stale++; canopyStat.staleNodes += n;
+  return true;
+}
 function stepCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
   if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; canopySkel.visible = false; canopyU.skel.value.w = 0; canShadeU.uCanShadeOn.value.x = 0; return; }
@@ -18192,7 +18240,7 @@ function stepCanopy(now: number): void {
     canopyGrids = [];
     canopyOuter.geometry.setIndex([]); canopyMesh.geometry.setIndex([]);
     for (const R of canopyRings) canopyQueue(R, R.x0, R.z0, true);
-    canopyBucket.clear(); canopyHeights.clear();
+    canopyBucket.clear(); canopyHeights.clear(); canopyStale.length = 0;
     canopyAt = { x: fx, z: fz, t: now, org, tb: terrainBuilds };
   } else if (!canopyJobs.length) {
     // THE SCROLL: a ring whose centre the focus has left by CANOPY_SHIFT_NODES
@@ -18208,6 +18256,11 @@ function stepCanopy(now: number): void {
         canopyQueue(R, w.x0, w.z0, full);
         canopyStat.shiftAt = now;
       }
+    }
+    // Ground that moved near the focus: re-read those nodes now.
+    if (!canopyJobs.length && canopyStale.length && now - canopyStaleAt > CANOPY_STALE_MS) {
+      canopyStaleAt = now;
+      canopyQueueStale(canopyRings[0], fx, fz);
     }
     // Tiles refine under a parked view: a slow whole refresh.
     // …and only PARKED: a whole rebuild mid-drive queued the shifts behind it
@@ -18713,149 +18766,6 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     canopyStat.hid = canopyHid;
     { let got = 0; for (const f of EZ_FAMILIES) got += cand[f].length;
       canopyStat.share = canopyHid + got > 0 ? canopyHid / (canopyHid + got) : 0; }
-    // The annulus between the draw ring and the impostor's reach. It walks the
-    // manifest's own cells — which is the point of the manifest — and seeds any
-    // the manifest has not reached yet, under the same slice budget, so a wide
-    // reach fills in over a few refreshes instead of stalling one.
-    {
-      const impR = impostors && impostorDraw ? impostorReach() : 0;
-      const impCells = Math.ceil(impR / VEG_CELL);
-      if (impR > treeRange && impCells > reach) {
-        const impR2 = impR * impR;
-        // ── AND IT DECIDES MEMBERSHIP HERE, NOT IN THE PASS ──
-        //
-        // A list is a thing you allocate and then walk twice. At the seat's own
-        // REACH 8X the manifest knows 482,657 trees and the tier drew 17,709 of
-        // them, so the first cut built a 384,669-entry array of tuples every
-        // refresh — several megabytes of short-lived allocation — and then
-        // walked all of it to throw 96% away. The density test needs only the
-        // tree's own position and its family's full-density radius, both of
-        // which are in hand at the moment the site is read, so it is taken
-        // WHERE THE SITE IS READ and only survivors are kept.
-        //
-        // THE RADIUS IS LAST REFRESH'S EDGE, which is the same construction
-        // `ezTriPrice` uses for the same reason: the number this refresh needs
-        // is decided by an admission that has not run yet, and the previous
-        // sweep's answer converges in one and then stays converged, because the
-        // palette and the budget are stable per district. The first sweep after
-        // a hop draws a thinner far country and the second is right.
-        const farKeep2 = ezRecord((f) => {
-          const full = Math.max(IMPOSTOR_FULL_M, ezEdgeLast[f] || 0);
-          return full * full * impDensityMul;
-        });
-        // ── THE RADIUS ONE CELL TEST RETIRES NINETY-TWO SITES WITH ──
-        // A quarter of headroom over the tallest tree ever seen, and half the
-        // floor for the same reason the site filter takes half: a bound sitting
-        // exactly on the threshold can never let the threshold fall. Infinite
-        // until both are known, which culls nothing — that is the first sweep.
-        let impCull2 = Infinity;
-        if (impPoolFullLast && impPxFloorLast > 0 && impTallestM > 0) {
-          // ── THE MARGINS ARE MULTIPLIED, AND THEY COST AREA SQUARED ──
-          // A quarter of headroom over the tallest tree and half the floor look
-          // modest and compound to 2.5x the true radius — SIX TIMES the area,
-          // which on the device's 8.58 km reach left a 22% cut where an order of
-          // magnitude was wanted. Tightened with the reasons stated:
-          //   1.1  a taller tree than any yet seen. `impTallestM` is a measured
-          //        high-water mark over a session, so it is already an upper
-          //        bound on everything the gather has met.
-          //   0.8  room for the floor to FALL. A bound sitting exactly on the
-          //        threshold freezes it, since nothing below is evidence again;
-          //        a fifth of headroom lets it drop that much per sweep, which
-          //        at five seconds a sweep converges as fast as driving does.
-          // The control below is what makes this safe to tune: it asserts the
-          // cull changes nothing drawn, so a margin cut too far fails loudly
-          // rather than quietly deleting far trees.
-          let r = (IMP_PERCEPTIBLE_K * impTallestM * 1.1) / (0.8 * impPxFloorLast);
-          // Never inside a handover band: that one is a guarantee, not a budget.
-          for (const f of EZ_FAMILIES) r = Math.max(r, Math.sqrt(impBand2[f]));
-          // NEVER INSIDE THE DRAW RING. The near gather owns that ground and
-          // the annulus starts at its edge, so a radius below `treeRange` culls
-          // the entire far tier and calls it a saving.
-          const rc = Math.min(Math.max(r, treeRange), impR);
-          impCull2 = rc * rc;
-        }
-        for (const [gx, gz] of squareRings(cx, cz, impCells, reach + 1)) {
-          yield;
-          if (impCull2 < Infinity) {
-            // The cell's nearest corner bounds every tree standing in it. Both
-            // sides are in the absolute vegetation frame; `rfx`/`rfz` are local.
-            const bx = gx * VEG_CELL, bz = gz * VEG_CELL;
-            const ddx = Math.max(bx - rfax, 0, rfax - (bx + VEG_CELL));
-            const ddz = Math.max(bz - rfaz, 0, rfaz - (bz + VEG_CELL));
-            if (ddx * ddx + ddz * ddz > impCull2) { impFarCull++; continue; }
-          }
-          // ── A BUDGET FOR SEEDING MAY NOT DELETE TREES THAT ALREADY EXIST ──
-          //
-          // This walk used to `break` on `vegSeedLeft <= 0`, copied from the
-          // manifest walk twelve hundred lines down — where it belongs, because
-          // that walk's ONLY job is to seed. This walk's job is to READ, and
-          // `seedCell` already budgets itself: an already-seeded cell returns on
-          // a Set lookup and costs nothing. So the guard abandoned the entire
-          // remaining annulus over cells that were sitting in `vegGrid` full of
-          // trees, for want of time to seed cells that needed no seeding.
-          //
-          // AND THE BUDGET IS `VEG_SEED_MS - frameHeavyMs()`, so it is ZERO on
-          // exactly the device that needs the far tier most. A phone reported
-          // `reach 8580m · 282 kept of 282 seen past the draw ring` with the
-          // manifest holding 741,850 trees over a 5,512-cell annulus: the guard
-          // fired on the first cell of every refresh and the far tier did not
-          // exist. It did not degrade with frame time — it vanished with it,
-          // which is the same fault as the near ring's hash wearing a budget's
-          // clothes. The walk yields per cell, so the slice budget already
-          // bounds what one frame can spend here; nothing needs a second one.
-          //
-          // SO THE BUDGET STILL DECIDES WHETHER TO SEED — it just no longer
-          // decides whether to LOOK. Dropping it altogether was measured wrong
-          // in the other direction: with `?vegseed=0` the walk seeded all 5,512
-          // annulus cells in one sweep and no sweep ever finished, so the tier
-          // drew nothing at all. Seeding is the expensive half and the budget
-          // owns it; reading a cell that is already there is a Map lookup and
-          // belongs to nobody's budget.
-          if (vegSeedLeft > 0) seedCell(gx, gz);
-          const cell = vegGrid.get(`${gx},${gz}`);
-          if (!cell) continue;
-          impFarWalk++;
-          for (const v of cell) {
-            if (!isEzKind(v.k)) continue;
-            const dx = v.x - rfx, dz = v.z - rfz;
-            const d2 = dx * dx + dz * dz;
-            if (d2 < treeR2 || d2 >= impR2) continue;
-            if (canopyHides(v.x, v.z, EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale)) { canopyHid++; continue; }
-            impFarSeen++;
-            // ── AND ONLY A TREE INSIDE A STAND IS THINNED ──
-            // The hash used to decide every one of them, which is how a lone
-            // tree against open ground got deleted outright — see
-            // `impThinnable`. A stray, a fringe plant and a clump's anchor now
-            // go through whatever the density dial says.
-            if (impThinnable(v)
-              && hash2(Math.round(v.ax * 8) + 7919, Math.round(v.az * 8) + 104729) * d2 > farKeep2[v.k]) {
-              impFarThin++;
-              const tk = IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
-              if (tk * tk > d2) impFarThinBig++;
-              continue;
-            }
-            // ── THE FLOOR, WHERE THE SITE IS READ ──
-            // A tree too small to have cleared last sweep's threshold with room
-            // to spare cannot be drawn this sweep either. Counted, not kept.
-            const fTall = EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
-            if (impPoolFullLast && impPxFloorLast > 0 && d2 > impBand2[v.k]
-              && IMP_PERCEPTIBLE_K * fTall < 0.5 * impPxFloorLast * Math.sqrt(d2)) {
-              impFarSkip++;
-              const sk = IMP_PERCEPTIBLE_K * fTall;
-              if (sk * sk > d2) impFarSkipBig++;
-              // Demand stays honest, or the allocator would think the world had
-              // emptied and drop the floor that is doing the filtering.
-              impWant++;
-              continue;
-            }
-            candFar[v.k].push([d2, v]);
-            impSeen(v, d2, 1);
-          }
-        }
-      }
-      vegMark('impGather');
-      canopyStat.hid = canopyHid;
-    }
     // ── THE BUDGET GOES TO WHAT IS ACTUALLY HERE ── see the note by
     // `ezTriPrice`. `cand[fam].length` is every candidate inside the draw range,
     // so `want` is what this place would plant if only its own cap stopped it;
@@ -19133,6 +19043,186 @@ function* vegRefreshSteps(): Generator<void, void, void> {
     }
   }
   vegMark('place');
+  // ── THE NEAR COMMIT: STAGING BECOMES THE INSTANCES, BEFORE THE FAR GATHER ──
+  // The trees in the draw range are committed here, ahead of the card tier's
+  // gather out to the impostor reach, so a tree beside the road does not wait
+  // behind cards five kilometres out: that gather was most of an 11-second
+  // sweep on a phone. The cost is a window of a few frames in which the
+  // skeleton set is this sweep's and the cards are the last one's, so a tree
+  // crossing the skeleton edge may be drawn twice or not at all until the far
+  // commit lands — at the edge of the draw range, where a tree is a few pixels.
+  // ── STAGING BECOMES THE INSTANCES, IN ONE SLICE ──
+  // A mesh that has never been coloured has no colour attribute yet (three
+  // creates it on the first setColorAt); one slot through that path makes it.
+  const commit = (m: THREE.InstancedMesh, n: number, colours: boolean): void => {
+    const st = stg(m);
+    (m.instanceMatrix.array as Float32Array).set(st.m.subarray(0, n * 16));
+    m.count = n;
+    uploadPrefix(m.instanceMatrix, n);
+    if (!colours) return;
+    if (!m.instanceColor && n > 0) m.setColorAt(0, swardCol);
+    if (m.instanceColor) { (m.instanceColor.array as Float32Array).set(st.c.subarray(0, n * 3)); uploadPrefix(m.instanceColor, n); }
+  };
+  for (const k of Object.keys(vegMeshes) as VegKind[]) {
+    if (k === 'grass') continue;              // the sward keeps its own clock
+    commit(vegMeshes[k], counts[k], true);
+  }
+  commit(trunks, trunkN, false);
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) {
+    const tn = tierN.get(t)!;
+    t.n = tn.n; t.nNear = tn.nNear; t.nFar = tn.nFar;
+    t.nMid = tn.nMid; t.nMidNear = tn.nMidNear; t.nMidFar = tn.nMidFar;
+    commit(t.near, t.nNear, true); commit(t.far, t.nFar, true);
+    commit(t.midNear, t.nMidNear, true); commit(t.midFar, t.nMidFar, true);
+  }
+  ezPlaced = placed;
+  vegMark('nearCommit');
+  vegNearLag.n++; vegNearLag.ms += performance.now() - t0; vegNearLag.slices += vegSweepSlices + 1;
+  if (EZ_ON) {
+    // The annulus between the draw ring and the impostor's reach. It walks the
+    // manifest's own cells — which is the point of the manifest — and seeds any
+    // the manifest has not reached yet, under the same slice budget, so a wide
+    // reach fills in over a few refreshes instead of stalling one.
+    {
+      const impR = impostors && impostorDraw ? impostorReach() : 0;
+      const impCells = Math.ceil(impR / VEG_CELL);
+      if (impR > treeRange && impCells > reach) {
+        const impR2 = impR * impR;
+        // ── AND IT DECIDES MEMBERSHIP HERE, NOT IN THE PASS ──
+        //
+        // A list is a thing you allocate and then walk twice. At the seat's own
+        // REACH 8X the manifest knows 482,657 trees and the tier drew 17,709 of
+        // them, so the first cut built a 384,669-entry array of tuples every
+        // refresh — several megabytes of short-lived allocation — and then
+        // walked all of it to throw 96% away. The density test needs only the
+        // tree's own position and its family's full-density radius, both of
+        // which are in hand at the moment the site is read, so it is taken
+        // WHERE THE SITE IS READ and only survivors are kept.
+        //
+        // THE RADIUS IS LAST REFRESH'S EDGE, which is the same construction
+        // `ezTriPrice` uses for the same reason: the number this refresh needs
+        // is decided by an admission that has not run yet, and the previous
+        // sweep's answer converges in one and then stays converged, because the
+        // palette and the budget are stable per district. The first sweep after
+        // a hop draws a thinner far country and the second is right.
+        const farKeep2 = ezRecord((f) => {
+          const full = Math.max(IMPOSTOR_FULL_M, ezEdgeLast[f] || 0);
+          return full * full * impDensityMul;
+        });
+        // ── THE RADIUS ONE CELL TEST RETIRES NINETY-TWO SITES WITH ──
+        // A quarter of headroom over the tallest tree ever seen, and half the
+        // floor for the same reason the site filter takes half: a bound sitting
+        // exactly on the threshold can never let the threshold fall. Infinite
+        // until both are known, which culls nothing — that is the first sweep.
+        let impCull2 = Infinity;
+        if (impPoolFullLast && impPxFloorLast > 0 && impTallestM > 0) {
+          // ── THE MARGINS ARE MULTIPLIED, AND THEY COST AREA SQUARED ──
+          // A quarter of headroom over the tallest tree and half the floor look
+          // modest and compound to 2.5x the true radius — SIX TIMES the area,
+          // which on the device's 8.58 km reach left a 22% cut where an order of
+          // magnitude was wanted. Tightened with the reasons stated:
+          //   1.1  a taller tree than any yet seen. `impTallestM` is a measured
+          //        high-water mark over a session, so it is already an upper
+          //        bound on everything the gather has met.
+          //   0.8  room for the floor to FALL. A bound sitting exactly on the
+          //        threshold freezes it, since nothing below is evidence again;
+          //        a fifth of headroom lets it drop that much per sweep, which
+          //        at five seconds a sweep converges as fast as driving does.
+          // The control below is what makes this safe to tune: it asserts the
+          // cull changes nothing drawn, so a margin cut too far fails loudly
+          // rather than quietly deleting far trees.
+          let r = (IMP_PERCEPTIBLE_K * impTallestM * 1.1) / (0.8 * impPxFloorLast);
+          // Never inside a handover band: that one is a guarantee, not a budget.
+          for (const f of EZ_FAMILIES) r = Math.max(r, Math.sqrt(impBand2[f]));
+          // NEVER INSIDE THE DRAW RING. The near gather owns that ground and
+          // the annulus starts at its edge, so a radius below `treeRange` culls
+          // the entire far tier and calls it a saving.
+          const rc = Math.min(Math.max(r, treeRange), impR);
+          impCull2 = rc * rc;
+        }
+        for (const [gx, gz] of squareRings(cx, cz, impCells, reach + 1)) {
+          yield;
+          if (impCull2 < Infinity) {
+            // The cell's nearest corner bounds every tree standing in it. Both
+            // sides are in the absolute vegetation frame; `rfx`/`rfz` are local.
+            const bx = gx * VEG_CELL, bz = gz * VEG_CELL;
+            const ddx = Math.max(bx - rfax, 0, rfax - (bx + VEG_CELL));
+            const ddz = Math.max(bz - rfaz, 0, rfaz - (bz + VEG_CELL));
+            if (ddx * ddx + ddz * ddz > impCull2) { impFarCull++; continue; }
+          }
+          // ── A BUDGET FOR SEEDING MAY NOT DELETE TREES THAT ALREADY EXIST ──
+          //
+          // This walk used to `break` on `vegSeedLeft <= 0`, copied from the
+          // manifest walk twelve hundred lines down — where it belongs, because
+          // that walk's ONLY job is to seed. This walk's job is to READ, and
+          // `seedCell` already budgets itself: an already-seeded cell returns on
+          // a Set lookup and costs nothing. So the guard abandoned the entire
+          // remaining annulus over cells that were sitting in `vegGrid` full of
+          // trees, for want of time to seed cells that needed no seeding.
+          //
+          // AND THE BUDGET IS `VEG_SEED_MS - frameHeavyMs()`, so it is ZERO on
+          // exactly the device that needs the far tier most. A phone reported
+          // `reach 8580m · 282 kept of 282 seen past the draw ring` with the
+          // manifest holding 741,850 trees over a 5,512-cell annulus: the guard
+          // fired on the first cell of every refresh and the far tier did not
+          // exist. It did not degrade with frame time — it vanished with it,
+          // which is the same fault as the near ring's hash wearing a budget's
+          // clothes. The walk yields per cell, so the slice budget already
+          // bounds what one frame can spend here; nothing needs a second one.
+          //
+          // SO THE BUDGET STILL DECIDES WHETHER TO SEED — it just no longer
+          // decides whether to LOOK. Dropping it altogether was measured wrong
+          // in the other direction: with `?vegseed=0` the walk seeded all 5,512
+          // annulus cells in one sweep and no sweep ever finished, so the tier
+          // drew nothing at all. Seeding is the expensive half and the budget
+          // owns it; reading a cell that is already there is a Map lookup and
+          // belongs to nobody's budget.
+          if (vegSeedLeft > 0) seedCell(gx, gz);
+          const cell = vegGrid.get(`${gx},${gz}`);
+          if (!cell) continue;
+          impFarWalk++;
+          for (const v of cell) {
+            if (!isEzKind(v.k)) continue;
+            const dx = v.x - rfx, dz = v.z - rfz;
+            const d2 = dx * dx + dz * dz;
+            if (d2 < treeR2 || d2 >= impR2) continue;
+            if (canopyHides(v.x, v.z, EZ_M_PER_SCALE[v.k as EzFamily] * v.s * treeSizeScale)) { canopyHid++; continue; }
+            impFarSeen++;
+            // ── AND ONLY A TREE INSIDE A STAND IS THINNED ──
+            // The hash used to decide every one of them, which is how a lone
+            // tree against open ground got deleted outright — see
+            // `impThinnable`. A stray, a fringe plant and a clump's anchor now
+            // go through whatever the density dial says.
+            if (impThinnable(v)
+              && hash2(Math.round(v.ax * 8) + 7919, Math.round(v.az * 8) + 104729) * d2 > farKeep2[v.k]) {
+              impFarThin++;
+              const tk = IMP_PERCEPTIBLE_K * EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
+              if (tk * tk > d2) impFarThinBig++;
+              continue;
+            }
+            // ── THE FLOOR, WHERE THE SITE IS READ ──
+            // A tree too small to have cleared last sweep's threshold with room
+            // to spare cannot be drawn this sweep either. Counted, not kept.
+            const fTall = EZ_M_PER_SCALE[v.k] * v.s * treeSizeScale;
+            if (impPoolFullLast && impPxFloorLast > 0 && d2 > impBand2[v.k]
+              && IMP_PERCEPTIBLE_K * fTall < 0.5 * impPxFloorLast * Math.sqrt(d2)) {
+              impFarSkip++;
+              const sk = IMP_PERCEPTIBLE_K * fTall;
+              if (sk * sk > d2) impFarSkipBig++;
+              // Demand stays honest, or the allocator would think the world had
+              // emptied and drop the floor that is doing the filtering.
+              impWant++;
+              continue;
+            }
+            candFar[v.k].push([d2, v]);
+            impSeen(v, d2, 1);
+          }
+        }
+      }
+      vegMark('impGather');
+      canopyStat.hid = canopyHid;
+    }
+  }
   // ── THE IMPOSTOR TIER: THE CANDIDATES ADMISSION TURNED DOWN ──
   //
   // No new gathering: `cand` already holds every tree inside the draw range
@@ -19534,23 +19624,7 @@ function* vegRefreshSteps(): Generator<void, void, void> {
   // census is now expected to check it first.
   impProf.sweeps++;
   vegMark('impostor');
-  // ── THE COMMIT: STAGING BECOMES THE INSTANCES, IN ONE SLICE ──
-  // A mesh that has never been coloured has no colour attribute yet (three
-  // creates it on the first setColorAt); one slot through that path makes it.
-  const commit = (m: THREE.InstancedMesh, n: number, colours: boolean): void => {
-    const st = stg(m);
-    (m.instanceMatrix.array as Float32Array).set(st.m.subarray(0, n * 16));
-    m.count = n;
-    uploadPrefix(m.instanceMatrix, n);
-    if (!colours) return;
-    if (!m.instanceColor && n > 0) m.setColorAt(0, swardCol);
-    if (m.instanceColor) { (m.instanceColor.array as Float32Array).set(st.c.subarray(0, n * 3)); uploadPrefix(m.instanceColor, n); }
-  };
-  for (const k of Object.keys(vegMeshes) as VegKind[]) {
-    if (k === 'grass') continue;              // the sward keeps its own clock
-    commit(vegMeshes[k], counts[k], true);
-  }
-  commit(trunks, trunkN, false);
+  // ── THE FAR COMMIT: the cards, the tier the gather above just built ──
   if (impostors) {
     (impostors.instanceMatrix.array as Float32Array).set(impStage.m.subarray(0, impN * 16));
     impostors.count = impN;
@@ -19565,14 +19639,6 @@ function* vegRefreshSteps(): Generator<void, void, void> {
       uploadPrefix(a, impN);
     }
   }
-  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) {
-    const tn = tierN.get(t)!;
-    t.n = tn.n; t.nNear = tn.nNear; t.nFar = tn.nFar;
-    t.nMid = tn.nMid; t.nMidNear = tn.nMidNear; t.nMidFar = tn.nMidFar;
-    commit(t.near, t.nNear, true); commit(t.far, t.nFar, true);
-    commit(t.midNear, t.nMidNear, true); commit(t.midFar, t.nMidFar, true);
-  }
-  ezPlaced = placed;
   vegMark('upload');
   vegActiveRoles = activeRoles;
   ezEdgeLast = ezRecord((f) => Math.round(ezEdge[f]));
@@ -19665,6 +19731,9 @@ let vegSweepSlices = 0, vegSweepAt = 0;
 /** Completed sweeps, the mean wall gap between them, and the mean slices each
  *  took. The period is what a promotion from card to skeleton waits for. */
 const vegSweep = { n: 0, ms: 0, slices: 0 };
+/** From a sweep's start to its NEAR commit — the latency of a tree in the draw
+ *  range, which no longer waits on the card tier's far gather. */
+const vegNearLag = { n: 0, ms: 0, slices: 0 };
 /** One slice of the running refresh; true when it finished this frame. */
 function stepVegRefresh(): boolean {
   if (!vegJob) return false;
@@ -53251,17 +53320,17 @@ function telemetryReport(): string {
   }
   {
     // ── THE PERIOD A CARD WAITS TO BECOME A SKELETON ──
-    // Nothing changes tier until a sweep finishes: the commit is one slice at
-    // the end. So this, not the frame rate, is the latency of every LOD change
+    // The skeletons commit part way through a sweep and the cards at its end,
+    // each in one slice. So this, not the frame rate, is the latency of every LOD change
     // in the tree system — and the cadence is a CLOCK, not a distance, so
     // driving fast does not buy a faster answer.
     const n = Math.max(1, vegSweep.n);
     L.push(`trees refresh ${vegSweep.n} sweeps · every ${Math.round(vegSweep.ms / n)}ms`
       + ` in ${(vegSweep.slices / n).toFixed(1)} slices of ${VEG_STEP_MS}ms`
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
-      + ` · no distance trigger, no priority: the near tier commits with the far one`);
+      + ` · near tier commits ${vegNearLag.n ? `${Math.round(vegNearLag.ms / vegNearLag.n)}ms (${(vegNearLag.slices / vegNearLag.n).toFixed(1)} slices) into a sweep` : '—'}, cards at its end · no distance trigger`);
   }
-  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather) · skel ${canopySkel.visible ? `${CANOPY_SKEL_M}m ${canopySkelStat.trees} trees ${(canopySkelStat.tris / 1e3).toFixed(1)}k tris ${canopySkelStat.ms}ms (max ${canopySkelStat.maxMs}) ${canopySkelStat.builds} builds` : 'off'} · shade ${canShadeU.uCanShadeOn.value.x ? canShadeU.uCanShadeOn.value.y : 'off'} · light field ${canShadeU.uCanLightBox.value.w ? `${canLightAt.renders} renders ${canLightAt.ms}ms a band` : 'off'}`);
+  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · ground re-read ${canopyStat.stale}× (${canopyStat.staleNodes} nodes) · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather) · skel ${canopySkel.visible ? `${CANOPY_SKEL_M}m ${canopySkelStat.trees} trees ${(canopySkelStat.tris / 1e3).toFixed(1)}k tris ${canopySkelStat.ms}ms (max ${canopySkelStat.maxMs}) ${canopySkelStat.builds} builds` : 'off'} · shade ${canShadeU.uCanShadeOn.value.x ? canShadeU.uCanShadeOn.value.y : 'off'} · light field ${canShadeU.uCanLightBox.value.w ? `${canLightAt.renders} renders ${canLightAt.ms}ms a band` : 'off'}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);

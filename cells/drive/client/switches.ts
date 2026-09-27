@@ -278,6 +278,8 @@ export const SWITCHES = [
     note: 'how much the contour overlay smooths the terrain before drawing lines on zoomed-out views (up to three art pixels at 1); 0 draws the raw DEM' },
   { id: 'forestair', kind: 'number', marks: ['look'], fallback: '1',
     note: 'forest air: the low, damp-weather haze held under a closed canopy, lit where the light field says the sun gets in; 0 is none' },
+  { id: 'canopystale', kind: 'number', marks: ['bench'], fallback: '400',
+    note: 'metres from the focus within which the canopy re-reads its ground as soon as a terrain tile under it rebuilds or a vegetation cell seeds; 0 leaves it to the 45 s parked refresh' },
   { id: 'canopyskel', kind: 'number', marks: ['look'], fallback: '48',
     note: 'metres from the focus within which the canopy’s own trees get trunk-and-limb geometry from their crown seed; 0 is the analytic trunks alone' },
   { id: 'shrub', kind: 'toggle', marks: ['legacy'], apply: 'live', fallback: 'on',
