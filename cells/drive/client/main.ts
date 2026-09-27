@@ -7853,11 +7853,34 @@ const canShadeU = { uCanShadeTex: { value: null as THREE.Texture | null }, uCanS
 /** The forest's light on a receiver at world point wp (canShadeU): see the
  *  comment at its use in terrainFx. Shared with the rig's materials
  *  (canopyReceive) so the truck parked under crowns is in their shade too. */
-const CANSHADE_GLSL = `
-#ifndef DRIVE_CANSHADE_DECL
-#define DRIVE_CANSHADE_DECL
+const CANFLOOR_GLSL = `
+#ifndef DRIVE_CANFLOOR_DECL
+#define DRIVE_CANFLOOR_DECL
 uniform sampler2D uCanShadeTex; uniform vec4 uCanShadeBox; uniform float uCanShadeBase; uniform vec3 uCanShadeOn; uniform vec3 uCanShadeSun;
 uniform sampler2D uCanLightTex; uniform vec4 uCanLightBox;
+/** THE FOREST FLOOR at a ground point: x the closure over it (a closed,
+ *  tall stand, clamped strength), y the sun that reaches it (the light
+ *  field where it is, the coarse answer elsewhere). */
+vec2 canFloorAt(vec2 xz) {
+  if (uCanShadeOn.x < 0.5 || uCanShadeOn.y <= 0.0) return vec2(0.0, 1.0);
+  vec2 cuv = ((xz - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
+  if (cuv.x <= 0.0 || cuv.y <= 0.0 || cuv.x >= 1.0 || cuv.y >= 1.0) return vec2(0.0, 1.0);
+  vec3 ct = texture2D(uCanShadeTex, cuv).rgb;
+  float closure = smoothstep(0.45, 0.9, ct.b) * smoothstep(4.0, 9.0, ct.g) * clamp(uCanShadeOn.y, 0.0, 1.0);
+  float sunT = 1.0 - 0.85 * closure;
+  if (uCanLightBox.w > 0.5) {
+    vec2 luv = (xz - uCanLightBox.xy) / uCanLightBox.z;
+    float inF = smoothstep(0.0, 0.06, min(min(luv.x, luv.y), min(1.0 - luv.x, 1.0 - luv.y)));
+    sunT = mix(sunT, texture2D(uCanLightTex, luv).r, inF);
+  }
+  return vec2(closure, sunT);
+}
+#endif
+`;
+const CANSHADE_GLSL = `
+${CANFLOOR_GLSL}
+#ifndef DRIVE_CANSHADE_DECL
+#define DRIVE_CANSHADE_DECL
 void canShadeApply(vec3 wp, inout ReflectedLight rl) {
         if (uCanShadeOn.x > 0.5 && uCanShadeOn.y > 0.0) {
           vec2 cuv = ((wp.xz - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
@@ -8462,6 +8485,19 @@ function terrainFx(mat: THREE.Material, opts: {
       sh.uniforms.uSubBox = { value: new THREE.Vector4(...(opts.sub ? opts.sub.box : [0, 0, 0, 0])) };
       sh.uniforms.uGLut = gvU.uGLut;
       sh.fragmentShader = sh.fragmentShader
+        // LITTER. Where the canopy closes over the ground and the light field
+        // says little sun reaches it, the floor reads as leaf and needle litter
+        // over bare soil: the ground's own tone, browned. In the openings it
+        // keeps its colour and its grass (the sward reads the same field).
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        {
+          vec2 cfl = canFloorAt(vWorldP.xz);
+          float lit = cfl.x * (1.0 - cfl.y);
+          if (lit > 0.001) {
+            float lum = dot(diffuseColor.rgb, vec3(0.30, 0.59, 0.11));
+            diffuseColor.rgb = mix(diffuseColor.rgb, lum * vec3(1.28, 0.96, 0.62), lit * 0.6);
+          }
+        }`)
         .replace('#include <color_fragment>', `float subRelief = 0.0;
       #include <color_fragment>
       {
@@ -15993,9 +16029,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
     // keeps a uniform VALUE list per material even when two materials share a
     // compiled program, so three bands with identical shader source and
     // different steps cost one program and three uniform sets.
-    Object.assign(sh.uniforms, swardU, windU, bandU);
+    Object.assign(sh.uniforms, swardU, windU, bandU, canShadeU);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
+        ${CANFLOOR_GLSL}
         attribute float aId;
         attribute float aBlade;
         uniform sampler2D uField; uniform sampler2D uSwardCol; uniform sampler2D uSwardMask;
@@ -16224,6 +16261,11 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // swardBoostAt, so the profile probe and the field agree.
         sG *= 1.0 + uSwardBoost * (1.0 - smoothstep(uSwardBoostR * 0.35, uSwardBoostR, sD));
         float sWant = abs(sF.g) * uDens * sG;
+        // THE FOREST FLOOR: under a closed stand the grass thins to litter in
+        // the deep shade and comes back in the openings the light field finds,
+        // a little thicker than open ground (regeneration). See canFloorAt.
+        vec2 sFloor = canFloorAt(sP);
+        sWant *= mix(1.0, clamp(0.12 + 1.15 * sFloor.y, 0.0, 1.25), sFloor.x);
         float sGot = uSwardCapOn > 0.5 ? min(sWant, swardCap(sD)) : sWant;
         // WHAT THE CLAMP TOOK, PAID BACK IN AREA, AND ONLY THE LAST FEW PER
         // CENT OF IT. The law now sits under the envelope at every radius by
@@ -16355,7 +16397,8 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // stone is not growing and a reed stands in the one place that is wet
         // by definition, so shortening either would be the mineral share
         // speaking about something it does not describe.
-        float sShort = (sIsStone || sIsReed) ? 1.0 : (1.0 - 0.42 * sMineral) * mix(1.0, 0.25, sTrample);
+        float sShort = (sIsStone || sIsReed) ? 1.0 : (1.0 - 0.42 * sMineral) * mix(1.0, 0.25, sTrample)
+          * mix(1.0, 0.5 + 0.7 * sFloor.y, sFloor.x);
         vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sShort * sRangeScale * sAlive;
         // ── AND THE LUSHNESS THE COUNT COULD NOT CARRY IS SPENT HERE ──
         //
