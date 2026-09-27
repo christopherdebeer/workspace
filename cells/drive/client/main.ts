@@ -17926,126 +17926,214 @@ function stepCanopyLight(fx: number, fz: number, now: number): void {
 }
 // ── THE UNDERSTOREY: WHAT GROWS UNDER THE CROWNS, BY THE LIGHT THAT REACHES IT ──
 //
-// Between the trunks the near forest was grass and air. Two GPU lattices about
-// the focus stand what a floor carries, placed by the same light the ground is
+// Three GPU lattices about the focus, placed by the same light the ground is
 // lit by (canFloorAt: the closure over a point and the sun that reaches it):
-// FERNS where the stand is closed and the sun does not come through, SAPLINGS
-// in the gaps it does — regeneration where a crown has gone. A slot is a cell
-// of a world-fixed lattice with one jittered candidate from the integer hash,
-// so a plant stays where it is as you drive; the vertex shader reads the light
-// and either stands the plant or folds it to a point. No CPU work a frame
-// beyond two uniforms, no readback, nothing to rebuild when the light moves.
+// FERNS where the stand is closed and the sun does not come through, SHRUBS in
+// the half light, SAPLINGS in the gaps it does. A slot is a cell of a
+// world-fixed lattice with one jittered candidate from the integer hash, so a
+// plant stays where it is as you drive; the vertex shader reads the light and
+// either stands the plant or folds it to a point.
+//
+// A FLOOR IS PATCHES, NOT A SCATTER, AND NO TWO PLANTS ARE ONE SHAPE. The first
+// cut was one fern and one sapling, rotated and scaled, spread evenly — read
+// from the seat as the same plant everywhere. Now each kind's density rides
+// its own two-scale value noise (carpets and bare ground at ~25 m, clumps at
+// ~7 m), each plant's SHAPE is built in the vertex shader from its hash (a
+// fern's frond count, length, arch and droop give a spreading bracken, an
+// upright shuttlecock or a long drooping sword fern; a sapling is a broadleaf
+// of two or three lobes or a tiered young conifer by the stand's own conifer
+// share; a shrub is a mound of four lobes), and its colour from the hash and
+// the patch — fresh, deep and a bronzed, dying minority.
 const US_R = 60;
 const US_KINDS = [
-  { name: 'fern', step: 2.2 },
-  { name: 'sapling', step: 3.4 },
+  { name: 'fern', step: 1.9, r: 44 },
+  { name: 'sapling', step: 3.2, r: 60 },
+  { name: 'shrub', step: 2.6, r: 52 },
 ] as const;
+/** Nine fronds of three segments: attributes only (frond, along, side); the
+ *  vertex shader makes the shape. */
 function fernGeometry(): THREE.BufferGeometry {
-  const pos: number[] = [], part: number[] = [];
-  const fronds = 7;
-  for (let f = 0; f < fronds; f++) {
-    const a = (f / fronds) * Math.PI * 2 + 0.35 * Math.sin(f * 2.3);
-    const c = Math.cos(a), s = Math.sin(a), px = -s, pz = c;
-    // A frond: out and up from the crown, then over and down to its tip.
-    const len = 0.8 + 0.2 * ((f * 37) % 5) / 4;
-    const P = (r: number, y: number, w: number): [number, number, number, number, number, number] =>
-      [c * r * len + px * w, y, s * r * len + pz * w, c * r * len - px * w, y, s * r * len - pz * w];
-    const b = P(0.05, 0.05, 0.03), m = P(0.5, 0.95, 0.17), t = [c * len, 0.42, s * len];
-    pos.push(b[0], b[1], b[2], b[3], b[4], b[5], m[0], m[1], m[2]);
-    pos.push(b[3], b[4], b[5], m[3], m[4], m[5], m[0], m[1], m[2]);
-    pos.push(m[0], m[1], m[2], m[3], m[4], m[5], t[0], t[1], t[2]);
-    for (let k = 0; k < 9; k++) part.push(1);
+  const F = 9, SEG = 3;
+  const a: number[] = [], pos: number[] = [], idx: number[] = [];
+  for (let f = 0; f < F; f++) {
+    const base = a.length / 3;
+    for (let s = 0; s <= SEG; s++) for (const side of [-1, 1]) {
+      if (s === SEG && side === 1) continue;
+      a.push(f, s / SEG, s === SEG ? 0 : side); pos.push(0, 0, 0);
+    }
+    // Rows: (0,1) (2,3) (4,5), tip 6.
+    for (let s = 0; s < SEG - 1; s++) {
+      const l0 = base + s * 2, r0 = l0 + 1, l1 = l0 + 2, r1 = l0 + 3;
+      idx.push(l0, r0, l1, r0, r1, l1);
+    }
+    const lL = base + (SEG - 1) * 2, rL = lL + 1, tip = base + SEG * 2;
+    idx.push(lL, rL, tip);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('aPart', new THREE.Float32BufferAttribute(part, 1));
-  g.computeVertexNormals();
+  g.setAttribute('aUs', new THREE.Float32BufferAttribute(a, 3));
+  g.setIndex(idx);
   return g;
 }
-function saplingGeometry(): THREE.BufferGeometry {
-  const pos: number[] = [], part: number[] = [];
-  const tri = (a: number[], b: number[], c: number[], pt: number): void => { pos.push(...a, ...b, ...c); part.push(pt, pt, pt); };
-  // A stem, four-sided, a little lean in it.
-  const sr = 0.018, top = 0.86;
-  for (let k = 0; k < 4; k++) {
-    const a0 = (k / 4) * Math.PI * 2, a1 = ((k + 1) / 4) * Math.PI * 2;
-    const b0 = [Math.cos(a0) * sr, 0, Math.sin(a0) * sr], b1 = [Math.cos(a1) * sr, 0, Math.sin(a1) * sr];
-    const t0 = [Math.cos(a0) * sr * 0.5 + 0.03, top, Math.sin(a0) * sr * 0.5], t1 = [Math.cos(a1) * sr * 0.5 + 0.03, top, Math.sin(a1) * sr * 0.5];
-    tri(b0, b1, t1, 0); tri(b0, t1, t0, 0);
+/** A stem (part 0, a unit four-sided prism) and n lobes (parts 1..n, unit
+ *  octahedra about their own centre); the vertex shader places and sizes each. */
+function lobeGeometry(lobes: number, stem: boolean): THREE.BufferGeometry {
+  const pos: number[] = [], a: number[] = [], idx: number[] = [];
+  if (stem) {
+    for (let y = 0; y <= 1; y++) for (let k = 0; k < 4; k++) {
+      const an = (k / 4) * Math.PI * 2; pos.push(Math.cos(an), y, Math.sin(an)); a.push(0, 0, 0);
+    }
+    for (let k = 0; k < 4; k++) { const k1 = (k + 1) % 4; idx.push(k, k1, 4 + k1, k, 4 + k1, 4 + k); }
   }
-  // Two leafy masses, pressed octahedra, the upper smaller.
-  const blob = (cx: number, cy: number, cz: number, r: number, h: number): void => {
-    const V = [[r, 0, 0], [0, 0, r], [-r, 0, 0], [0, 0, -r]].map((v) => [v[0] + cx, cy, v[2] + cz]);
-    const up = [cx, cy + h, cz], dn = [cx, cy - h, cz];
-    for (let k = 0; k < 4; k++) { const a = V[k], b = V[(k + 1) % 4]; tri(a, up, b, 1); tri(b, dn, a, 1); }
-  };
-  blob(0.02, 0.58, 0.0, 0.30, 0.16);
-  blob(0.04, 0.82, 0.03, 0.22, 0.14);
+  for (let l = 1; l <= lobes; l++) {
+    const b = pos.length / 3;
+    for (const v of [[1, 0, 0], [0, 0, 1], [-1, 0, 0], [0, 0, -1], [0, 1, 0], [0, -1, 0]]) { pos.push(v[0], v[1], v[2]); a.push(l, 0, 0); }
+    for (let k = 0; k < 4; k++) { const k1 = (k + 1) % 4; idx.push(b + k, b + 4, b + k1, b + k1, b + 5, b + k); }
+  }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('aPart', new THREE.Float32BufferAttribute(part, 1));
+  g.setAttribute('aUs', new THREE.Float32BufferAttribute(a, 3));
+  g.setIndex(idx);
   g.computeVertexNormals();
   return g;
 }
+const US_GLSL_COMMON = `
+float usN(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  float a = canH4(i).x, b = canH4(i + vec2(1.0, 0.0)).x, c = canH4(i + vec2(0.0, 1.0)).x, d = canH4(i + vec2(1.0, 1.0)).x;
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}`;
 const usMeshes = US_KINDS.map((K, kind) => {
-  const base = kind === 0 ? fernGeometry() : saplingGeometry();
-  const n = Math.ceil((2 * US_R) / K.step) + 2;
+  const geo0 = kind === 0 ? fernGeometry() : kind === 1 ? lobeGeometry(3, true) : lobeGeometry(4, false);
+  const n = Math.ceil((2 * K.r) / K.step) + 2;
   const geo = new THREE.InstancedBufferGeometry();
-  geo.setAttribute('position', base.getAttribute('position'));
-  geo.setAttribute('normal', base.getAttribute('normal'));
-  geo.setAttribute('aPart', base.getAttribute('aPart'));
+  geo.setAttribute('position', geo0.getAttribute('position'));
+  if (geo0.getAttribute('normal')) geo.setAttribute('normal', geo0.getAttribute('normal'));
+  else geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(geo0.getAttribute('position').count * 3), 3));
+  geo.setAttribute('aUs', geo0.getAttribute('aUs'));
+  geo.setIndex(geo0.getIndex());
   const slot = new Float32Array(n * n * 2);
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { slot[(j * n + i) * 2] = i; slot[(j * n + i) * 2 + 1] = j; }
   geo.setAttribute('aSlot', new THREE.InstancedBufferAttribute(slot, 2));
   geo.instanceCount = n * n;
-  const u = { uUs: { value: new THREE.Vector4(0, 0, K.step, kind) }, uUsFoc: { value: new THREE.Vector3(0, 0, US_R) } };
-  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+  const u = { uUs: { value: new THREE.Vector4(0, 0, K.step, kind) }, uUsFoc: { value: new THREE.Vector3(0, 0, K.r) } };
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide, flatShading: kind !== 0 });
   mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, canShadeU, u);
+    Object.assign(sh.uniforms, canShadeU, u, { canSpecies: canopyIn.u.canSpecies, canStandBox: canopyIn.u.canStandBox });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 ${CAN_HASH_GLSL}
 ${CANFLOOR_GLSL}
-attribute vec2 aSlot; attribute float aPart;
+${US_GLSL_COMMON}
+uniform sampler2D canSpecies; uniform vec4 canStandBox;
+attribute vec2 aSlot; attribute vec3 aUs;
 uniform vec4 uUs; uniform vec3 uUsFoc;
 varying vec3 vUsCol;`)
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
 vec2 usCell = uUs.xy + aSlot;
 vec4 usH = canH4(usCell + vec2(uUs.w * 131.0, 17.0));
-vec2 usXZ = (usCell + 0.15 + 0.7 * usH.xy) * uUs.z;
+vec4 usH2 = canH4(usCell + vec2(uUs.w * 57.0 + 311.0, 91.0));
+vec2 usXZ = (usCell + 0.1 + 0.8 * usH.xy) * uUs.z;
 vec2 usF = canFloorAt(usXZ);
-// Ferns take the shade, saplings the light that comes through a gap.
-float usW = uUs.w < 0.5 ? usF.x * (1.0 - usF.y) : usF.x * smoothstep(0.3, 0.75, usF.y);
-float usKeep = step(usH.z, smoothstep(0.15, 0.7, usW) * (uUs.w < 0.5 ? 0.85 : 0.6));
+// The light each kind wants: ferns the shade, shrubs the half light, saplings the gaps.
+float usW = uUs.w < 0.5 ? usF.x * (1.0 - smoothstep(0.45, 0.9, usF.y))
+  : uUs.w < 1.5 ? usF.x * smoothstep(0.3, 0.75, usF.y)
+  : usF.x * (1.0 - smoothstep(0.25, 0.5, abs(usF.y - 0.45)));
+// Carpets and bare ground (~25 m), clumps within them (~7 m), per kind.
+vec2 po = vec2(uUs.w * 41.7, uUs.w * 13.3);
+float usPat = 0.62 * usN(usXZ / 25.0 + po) + 0.38 * usN(usXZ / 7.0 + po * 1.7);
+float usDen = smoothstep(0.12, 0.6, usW) * smoothstep(0.32, 0.72, usPat) * (uUs.w < 0.5 ? 1.25 : uUs.w < 1.5 ? 0.75 : 0.9);
+float usKeep = step(usH.z, usDen);
 float usS = usKeep * (1.0 - smoothstep(uUsFoc.z * 0.72, uUsFoc.z, length(usXZ - uUsFoc.xy)));
 float usA = usH.w * 6.2832, usC = cos(usA), usSn = sin(usA);
-objectNormal = vec3(usC * objectNormal.x - usSn * objectNormal.z, objectNormal.y, usSn * objectNormal.x + usC * objectNormal.z);`)
+vec3 usP = vec3(0.0); vec3 usNrm = objectNormal;
+if (uUs.w < 0.5) {
+  // A FERN from (frond, along, side). Style: spreading, shuttlecock, sword.
+  float st = usH2.x;
+  float nF = floor(mix(5.0, 9.99, usH2.y));
+  float len = st < 0.45 ? mix(0.8, 1.15, usH2.z) : st < 0.72 ? mix(0.45, 0.7, usH2.z) : mix(1.1, 1.5, usH2.z);
+  float arch = st < 0.45 ? mix(0.3, 0.5, usH2.w) : st < 0.72 ? mix(0.9, 1.3, usH2.w) : mix(0.35, 0.6, usH2.w);
+  float tipY = st < 0.45 ? 0.08 : st < 0.72 ? mix(0.7, 1.1, usH2.w) : -0.05;
+  float wid = st < 0.72 ? mix(0.16, 0.22, usH.x) : mix(0.08, 0.12, usH.x);
+  float fi = aUs.x, t = aUs.y;
+  float on = step(fi + 0.5, nF);
+  float fj = fract(sin(fi * 12.9898 + usH.y * 78.2) * 43758.5);
+  float ang = fi / nF * 6.2832 + (fj - 0.5) * 0.7;
+  float r = t * len * mix(0.8, 1.15, fj);
+  float y = arch * 4.0 * t * (1.0 - t) * mix(0.8, 1.2, fj) + tipY * t * t;
+  float w = wid * sin(3.1416 * min(t * 1.05, 1.0)) * (1.0 - 0.5 * t);
+  vec3 d = vec3(cos(ang), 0.0, sin(ang)), pp = vec3(-d.z, 0.0, d.x);
+  usP = (d * r + vec3(0.0, y, 0.0) + pp * aUs.z * w) * on;
+  float dy = arch * 4.0 * (1.0 - 2.0 * t) + 2.0 * tipY * t;
+  usNrm = normalize(vec3(0.0, 1.0, 0.0) * len - d * dy * 0.6);
+} else {
+  float part = aUs.x;
+  vec3 c = vec3(0.0); vec3 sz = vec3(1.0);
+  if (uUs.w < 1.5) {
+    // A SAPLING: a leaning stem and lobes up it — a broadleaf's two or three
+    // loose masses, or a young conifer's tiers, by the stand's conifer share.
+    float H = mix(1.2, 3.6, fract(usH2.y * 7.3 + usH2.z));
+    vec2 suv = (usXZ - canStandBox.xy) * canStandBox.zw;
+    float coni = step(usH2.x, texture2D(canSpecies, suv).r * 0.9 + 0.05);
+    float lean = (usH2.w - 0.5) * 0.25;
+    float nl = coni > 0.5 ? 3.0 : (usH.x < 0.5 ? 2.0 : 3.0);
+    if (part < 0.5) { c = vec3(0.0); sz = vec3(0.016 * H, H * 0.93, 0.016 * H); }
+    else if (coni > 0.5) {
+      float k = part - 1.0;
+      c = vec3(0.0, H * (0.38 + 0.24 * k), 0.0);
+      sz = vec3(H * (0.27 - 0.07 * k), H * (0.11 + 0.02 * k), H * (0.27 - 0.07 * k));
+    } else {
+      float k = part - 1.0;
+      vec4 lh = canH4(usCell + vec2(k * 7.0, 3.0));
+      c = vec3((lh.x - 0.5) * 0.3 * H, H * (0.58 + 0.16 * k), (lh.y - 0.5) * 0.3 * H);
+      float rr = H * mix(0.16, 0.28, lh.z) * (1.0 - 0.18 * k);
+      sz = vec3(rr, rr * mix(0.55, 0.85, lh.w), rr);
+      if (part > nl + 0.5) sz = vec3(0.0);
+    }
+    usP = c + position * sz;
+    usP.x += lean * usP.y; usP.z += lean * 0.5 * usP.y;
+  } else {
+    // A SHRUB: a mound of lobes about the centre, wide or tall by its hash.
+    float S = mix(0.55, 1.5, usH2.y);
+    float k = part - 1.0;
+    vec4 lh = canH4(usCell + vec2(k * 5.0, 9.0));
+    float an = k * 1.5708 + usH2.z * 6.2832 + (lh.x - 0.5) * 0.8;
+    float dist = S * mix(0.15, 0.45, lh.y) * (k < 0.5 ? 0.2 : 1.0);
+    float rr = S * mix(0.32, 0.5, lh.z);
+    c = vec3(cos(an) * dist, S * mix(0.25, 0.45, lh.w), sin(an) * dist);
+    sz = vec3(rr, rr * mix(0.6, 0.95, usH2.w), rr);
+    usP = c + position * sz;
+  }
+}
+usP *= usS;
+usP = vec3(usC * usP.x - usSn * usP.z, usP.y, usSn * usP.x + usC * usP.z);
+objectNormal = vec3(usC * usNrm.x - usSn * usNrm.z, usNrm.y, usSn * usNrm.x + usC * usNrm.z);`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
 {
-  float usHt = uUs.w < 0.5 ? mix(0.45, 1.05, usH.x) : mix(1.3, 3.4, fract(usH.y * 7.3 + usH.z));
-  float usRad = uUs.w < 0.5 ? mix(0.55, 1.15, usH.y) : usHt;
-  vec3 lp = transformed * vec3(usRad, usHt, usRad) * usS;
-  lp = vec3(usC * lp.x - usSn * lp.z, lp.y, usSn * lp.x + usC * lp.z);
   vec2 cuv = ((usXZ - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
   float usG = texture2D(uCanShadeTex, cuv).r + uCanShadeBase;
   // A little sunk: the lattice's ground is a 6 m bilinear of the drawn one.
-  transformed = lp + vec3(usXZ.x, usG - 0.12, usXZ.y);
-  float v = fract(usH.z * 5.7 + usH.x);
-  vUsCol = uUs.w < 0.5 ? mix(vec3(0.050, 0.110, 0.022), vec3(0.090, 0.150, 0.030), v)
-    : aPart < 0.5 ? vec3(0.060, 0.040, 0.022) : mix(vec3(0.070, 0.140, 0.030), vec3(0.120, 0.170, 0.040), v);
+  transformed = usP + vec3(usXZ.x, usG - (uUs.w < 0.5 ? 0.08 : 0.15), usXZ.y);
+  // Colour: fresh, deep, and a bronzed minority; the patch shifts the mix.
+  float v = fract(usH.z * 5.7 + usH.x), pat = usN(usXZ / 11.0 + 7.0);
+  vec3 fresh = vec3(0.090, 0.165, 0.030), deep = vec3(0.045, 0.095, 0.025), bronze = vec3(0.135, 0.100, 0.035);
+  vec3 leaf = mix(deep, fresh, clamp(v * 0.7 + pat * 0.6 - 0.15, 0.0, 1.0));
+  if (fract(usH2.z * 3.3 + usH.w) < (uUs.w < 0.5 ? 0.14 : 0.07) * (0.5 + pat)) leaf = mix(leaf, bronze, 0.75);
+  if (uUs.w > 1.5) leaf *= vec3(0.9, 0.95, 1.1) * mix(0.8, 1.05, usH2.x);
+  vUsCol = (uUs.w > 0.5 && uUs.w < 1.5 && aUs.x < 0.5) ? vec3(0.060, 0.042, 0.024) : leaf;
 }`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vUsCol;')
       .replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb = vUsCol;');
   };
-  mat.customProgramCacheKey = () => 'understorey-' + K.name;
+  mat.customProgramCacheKey = () => 'understorey2-' + K.name;
   canopyReceive(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = 'understorey-' + K.name;
   mesh.frustumCulled = false;
   mesh.visible = false;
   scene.add(mesh);
-  return { mesh, u, n, step: K.step };
+  return { mesh, u, n, step: K.step, r: K.r };
 });
 let US_ON = qsNum('understorey', 1) > 0;
 let NEAR_ON = true;
@@ -18057,7 +18145,7 @@ function stepUnderstorey(fx: number, fz: number): void {
     if (!on) continue;
     U.u.uUs.value.x = Math.floor(fx / U.step) - Math.floor(U.n / 2);
     U.u.uUs.value.y = Math.floor(fz / U.step) - Math.floor(U.n / 2);
-    U.u.uUsFoc.value.set(fx, fz, US_R);
+    U.u.uUsFoc.value.set(fx, fz, U.r);
   }
 }
 /** Canopy nodes standing in drawn water within r of the focus: the inner
