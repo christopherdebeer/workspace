@@ -7796,7 +7796,80 @@ function reveal(ex: number, ez: number): void {
  *  the sky mostly taken, broad sun patches through the gaps. Set at the inner
  *  ring's commit; x of uCanShadeOn is 0 with the canopy off. */
 const canShadeU = { uCanShadeTex: { value: null as THREE.Texture | null }, uCanShadeBox: { value: new THREE.Vector4(0, 0, 1, 1) },
-  uCanShadeBase: { value: 0 }, uCanShadeOn: { value: new THREE.Vector3(0, qsNum('canshade', 1), 0) }, uCanShadeSun: { value: LIGHT_DIR } };
+  uCanShadeBase: { value: 0 }, uCanShadeOn: { value: new THREE.Vector3(0, qsNum('canshade', 1), 0) }, uCanShadeSun: { value: LIGHT_DIR },
+  uCanLightTex: { value: null as THREE.Texture | null }, uCanLightBox: { value: new THREE.Vector4(0, 0, 1, 0) } };
+/** The forest's light on a receiver at world point wp (canShadeU): see the
+ *  comment at its use in terrainFx. Shared with the rig's materials
+ *  (canopyReceive) so the truck parked under crowns is in their shade too. */
+const CANSHADE_GLSL = `
+#ifndef DRIVE_CANSHADE_DECL
+#define DRIVE_CANSHADE_DECL
+uniform sampler2D uCanShadeTex; uniform vec4 uCanShadeBox; uniform float uCanShadeBase; uniform vec3 uCanShadeOn; uniform vec3 uCanShadeSun;
+uniform sampler2D uCanLightTex; uniform vec4 uCanLightBox;
+void canShadeApply(vec3 wp, inout ReflectedLight rl) {
+        if (uCanShadeOn.x > 0.5 && uCanShadeOn.y > 0.0) {
+          vec2 cuv = ((wp.xz - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
+          if (cuv.x > 0.0 && cuv.y > 0.0 && cuv.x < 1.0 && cuv.y < 1.0) {
+            vec3 ct = texture2D(uCanShadeTex, cuv).rgb;
+            float cg = ct.r + uCanShadeBase, cL = ct.g;
+            float closure = smoothstep(0.45, 0.9, ct.b) * smoothstep(4.0, 9.0, cL);
+            // Only below the crowns' base: crown tops and the shell keep the sky.
+            float below = 1.0 - smoothstep(0.35, 0.8, (wp.y - cg) / max(cL, 1.0));
+            // An intensity, clamped: past 1 it would extrapolate the mixes
+            // below into negative light.
+            float k = clamp(uCanShadeOn.y, 0.0, 1.0);
+            // The coarse answer, where the light field does not reach.
+            float sunT = 1.0 - 0.85 * closure, vis = 1.0 - 0.8 * closure;
+            if (uCanLightBox.w > 0.5) {
+              // The sun ray through this point meets 1.2 m over the ground at
+              // q; every point on that ray below the crowns shares its light.
+              vec3 ls = normalize(uCanShadeSun);
+              vec2 q = wp.xz + ls.xz / max(ls.y, 0.2) * max(cg + 1.2 - wp.y, 0.0);
+              vec2 luv = (q - uCanLightBox.xy) / uCanLightBox.z;
+              vec2 suv = (wp.xz - uCanLightBox.xy) / uCanLightBox.z;
+              float inF = smoothstep(0.0, 0.06, min(min(luv.x, luv.y), min(1.0 - luv.x, 1.0 - luv.y)))
+                        * smoothstep(0.0, 0.06, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
+              float fs = texture2D(uCanLightTex, luv).r, fv = texture2D(uCanLightTex, suv).g;
+              sunT = mix(sunT, fs, inF); vis = mix(vis, fv, inF);
+            }
+            float a = below * k;
+            if (a > 0.001) {
+              sunT = mix(1.0, sunT, a); vis = mix(1.0, vis, a);
+              rl.directDiffuse *= sunT;
+              rl.directSpecular *= sunT;
+              // The sky that reaches the floor: neutral enough to read bark and
+              // ground, a restrained leaf tint where most of it is foliage.
+              rl.indirectDiffuse *= (0.26 + 0.74 * vis) * mix(vec3(1.0), vec3(0.90, 1.0, 0.86), 1.0 - vis);
+            }
+          }
+        }
+}
+#endif
+`;
+/** A lit material that is not terrain (the rig's) takes the forest's light
+ *  too: a world-position varying and canShadeApply after the lights. Chained,
+ *  once per material. */
+function canopyReceive(mat: THREE.Material): void {
+  const m = mat as THREE.Material & { isMeshLambertMaterial?: boolean; isMeshStandardMaterial?: boolean; isMeshPhongMaterial?: boolean };
+  if (!(m.isMeshLambertMaterial || m.isMeshStandardMaterial || m.isMeshPhongMaterial)) return;
+  if (m.blending === THREE.AdditiveBlending || m.userData.canRecv) return;
+  m.userData.canRecv = true;
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = function (sh, r) {
+    prev?.call(m, sh, r);
+    Object.assign(sh.uniforms, canShadeU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCanRW;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\n  vCanRW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCanRW;')
+      .replace('#include <lights_pars_begin>', '#include <lights_pars_begin>\n' + CANSHADE_GLSL)
+      .replace('#include <lights_fragment_begin>', '#include <lights_fragment_begin>\n  canShadeApply(vCanRW, reflectedLight);');
+  };
+  const key = m.customProgramCacheKey?.bind(m);
+  m.customProgramCacheKey = () => (key ? key() : '') + '|canrecv';
+  m.needsUpdate = true;
+}
 const envU = {
   uCloudS: { value: 0 },                       // cover, for cloud shadows
   // METRES OF GROUND PER ART PIXEL, on the chart; 0 from the seat. What the
@@ -8204,13 +8277,6 @@ function terrainFx(mat: THREE.Material, opts: {
         uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
         uniform vec3 uSteepFill;
-        uniform sampler2D uCanShadeTex; uniform vec4 uCanShadeBox; uniform float uCanShadeBase; uniform vec3 uCanShadeOn; uniform vec3 uCanShadeSun;
-        float canShN(vec2 p) {
-          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-          vec4 h = fract(sin(vec4(dot(i, vec2(127.1, 311.7)), dot(i + vec2(1.0, 0.0), vec2(127.1, 311.7)),
-                                  dot(i + vec2(0.0, 1.0), vec2(127.1, 311.7)), dot(i + 1.0, vec2(127.1, 311.7)))) * 43758.5453);
-          return mix(mix(h.x, h.y, f.x), mix(h.z, h.w, f.x), f.y);
-        }
         // Declared once per program: slipify declares the same weather field
         // and a track wears both (a redefinition fails the link silently).
         #ifndef DRIVE_WX_DECL
@@ -8227,6 +8293,7 @@ function terrainFx(mat: THREE.Material, opts: {
       // difference between a hillside in shade and a hillside someone turned
       // the brightness down on — shaded ground is still lit by the sky, and if
       // this multiplied the finished colour it would take the sky away too.
+      .replace('#include <lights_pars_begin>', '#include <lights_pars_begin>\n' + CANSHADE_GLSL)
       .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
         reflectedLight.directDiffuse *= sunMarch(vWorldP);
         // SKYLIGHT ON A STEEP FACE (see uSteepFill): the indirect term gains
@@ -8249,26 +8316,7 @@ function terrainFx(mat: THREE.Material, opts: {
         // so a patch lies on the ground and climbs a trunk where it should.
         // Large and stable on purpose: under a 14-level dither a fine fleck
         // is noise, a patch is light.
-        if (uCanShadeOn.x > 0.5 && uCanShadeOn.y > 0.0) {
-          vec2 cuv = ((vWorldP.xz - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
-          if (cuv.x > 0.0 && cuv.y > 0.0 && cuv.x < 1.0 && cuv.y < 1.0) {
-            vec3 ct = texture2D(uCanShadeTex, cuv).rgb;
-            float cg = ct.r + uCanShadeBase, cL = ct.g;
-            float closure = smoothstep(0.45, 0.9, ct.b) * smoothstep(4.0, 9.0, cL);
-            closure *= 1.0 - smoothstep(0.35, 0.8, (vWorldP.y - cg) / max(cL, 1.0));
-            closure *= uCanShadeOn.y;
-            if (closure > 0.001) {
-              vec3 ls = normalize(uCanShadeSun);
-              vec2 q = vWorldP.xz + ls.xz / max(ls.y, 0.25) * max(cg + 0.55 * cL - vWorldP.y, 0.0);
-              float n = 0.65 * canShN(q / 9.0) + 0.35 * canShN(q / 3.6 + 17.0);
-              float gap = smoothstep(0.60, 0.70, n);
-              float sunT = mix(1.0, 0.07 + 0.93 * gap, closure);
-              reflectedLight.directDiffuse *= sunT;
-              reflectedLight.directSpecular *= sunT;
-              reflectedLight.indirectDiffuse *= mix(vec3(1.0), vec3(0.40, 0.47, 0.36), closure);
-            }
-          }
-        }
+        canShadeApply(vWorldP, reflectedLight);
       // CLOUD SHADOWS: not "the same kind of noise" any more — THE SAME FIELD,
       // read at the point where a ray from here to the sun leaves the deck the
       // sky is drawing. Same function, same phase, same coverage curve, so the
@@ -16880,47 +16928,13 @@ const canopyU = { box: { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) }, foc: 
 // crown light is the skeletons' — three sun-aligned tones, sky exposure,
 // transmission on the shaded side and a wrap past the terminator.
 const CAN_STEPS = 40;
-function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
-  canTex: { value: THREE.Texture | null }; canTexBox: { value: THREE.Vector4 }; canBaseY: { value: number };
-  canStand: { value: THREE.Texture | null }; canSpecies: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
-  // Both faces: from inside the shell (a drone come down into the stand)
-  // the crowns are behind its BACK faces.
-  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide });
-  terrainFx(mat);
-  const u = {
-    canTex: { value: null as THREE.Texture | null }, canTexBox: { value: new THREE.Vector4(0, 0, 1, 1) },
-    canBaseY: { value: 0 },
-    canStand: { value: null as THREE.Texture | null }, canSpecies: { value: null as THREE.Texture | null }, canStandBox: { value: new THREE.Vector4(0, 0, 1, 1) },
-  };
-  const prev = mat.onBeforeCompile;
-  mat.onBeforeCompile = (sh, r) => {
-    prev?.call(mat, sh, r);
-    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look, canInside: canopyU.inside, canCut: canopyU.cut, canSkel: canopyU.skel });
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>
-attribute float canLift;
-uniform vec4 canBox; uniform vec3 canFoc;
-varying vec3 vCanW; varying float vCanF; varying float vCanK;`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-{
-  vec3 cw = (modelMatrix * vec4(transformed, 1.0)).xyz;
-  vCanF = canFoc.z > 0.5 ? clamp((length(cw.xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
-  float ed = min(min(cw.x - canBox.x, canBox.z - cw.x), min(cw.z - canBox.y, canBox.w - cw.z));
-  vCanK = smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed);
-  // The shell never moves: the near clearing and the ring's edge only ever
-  // SHRINK crowns (canFadeAt), so the shell stays over every one. Shrinking
-  // the shell with them cut the crowns in the clearing's ramp.
-  transformed.y += canLift;
-  vCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;
-}`);
-    const S = CANOPY_CROWN.toFixed(2);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
-varying vec3 vCanW; varying float vCanF; varying float vCanK;
-// Three declares the projection only for the vertex stage; the hit's depth
-// needs it here, and one program shares the uniform across both.
-uniform mat4 projectionMatrix;
-uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
+/** The canopy's crown library — uniforms, the hash, the lattice reads, canLoad,
+ *  canIn0/canIn, the floor and the aggregate — shared by the canopy material and
+ *  the light field (canopyLightMat), so the light is cast by the very crowns
+ *  that are drawn. */
+function canopyLib(): string {
+  const S = CANOPY_CROWN.toFixed(2);
+  return `uniform sampler2D canTex; uniform vec4 canTexBox; uniform float canBaseY;
 uniform sampler2D canStand; uniform sampler2D canSpecies; uniform vec4 canStandBox;
 uniform vec4 canBox; uniform vec3 canFoc; uniform vec3 canSun; uniform vec4 canLook; uniform float canInside; uniform vec4 canCut; uniform vec4 canSkel;
 vec3 canN = vec3(0.0, 1.0, 0.0); float canShadow = 1.0; float canSky = 1.0; float canLeaf = 0.0;
@@ -17141,7 +17155,49 @@ float canAggregate(vec3 ro, vec3 rd, float t, float step) {
   }
   return -1.0;
 }
-`)
+`;
+}
+function canopyMaterial(): { mat: THREE.MeshLambertMaterial; u: {
+  canTex: { value: THREE.Texture | null }; canTexBox: { value: THREE.Vector4 }; canBaseY: { value: number };
+  canStand: { value: THREE.Texture | null }; canSpecies: { value: THREE.Texture | null }; canStandBox: { value: THREE.Vector4 } } } {
+  // Both faces: from inside the shell (a drone come down into the stand)
+  // the crowns are behind its BACK faces.
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, side: THREE.DoubleSide });
+  terrainFx(mat);
+  const u = {
+    canTex: { value: null as THREE.Texture | null }, canTexBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+    canBaseY: { value: 0 },
+    canStand: { value: null as THREE.Texture | null }, canSpecies: { value: null as THREE.Texture | null }, canStandBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+  };
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => {
+    prev?.call(mat, sh, r);
+    Object.assign(sh.uniforms, u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look, canInside: canopyU.inside, canCut: canopyU.cut, canSkel: canopyU.skel });
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+attribute float canLift;
+uniform vec4 canBox; uniform vec3 canFoc;
+varying vec3 vCanW; varying float vCanF; varying float vCanK;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+{
+  vec3 cw = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  vCanF = canFoc.z > 0.5 ? clamp((length(cw.xz - canFoc.xy) - ${CANOPY_NEAR.toFixed(1)}) / 40.0, 0.0, 1.0) : 1.0;
+  float ed = min(min(cw.x - canBox.x, canBox.z - cw.x), min(cw.z - canBox.y, canBox.w - cw.z));
+  vCanK = smoothstep(0.0, ${CANOPY_EDGE_FADE.toFixed(1)}, ed);
+  // The shell never moves: the near clearing and the ring's edge only ever
+  // SHRINK crowns (canFadeAt), so the shell stays over every one. Shrinking
+  // the shell with them cut the crowns in the clearing's ramp.
+  transformed.y += canLift;
+  vCanW = (modelMatrix * vec4(transformed, 1.0)).xyz;
+}`);
+    const S = CANOPY_CROWN.toFixed(2);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vCanW; varying float vCanF; varying float vCanK;
+// Three declares the projection only for the vertex stage; the hit's depth
+// needs it here, and one program shares the uniform across both.
+uniform mat4 projectionMatrix;
+${canopyLib()}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
 vec3 canHit = vCanW;
 // Well inside the near clearing a ray has nothing to meet within its reach.
@@ -17515,7 +17571,8 @@ canopySkel.name = 'canopy-skel';
 canopySkel.frustumCulled = false;
 scene.add(canopySkel);
 let canopySkelKey = '', canopySkelAt = { x: NaN, z: NaN };
-const canopySkelStat = { trees: 0, tris: 0, ms: 0, builds: 0, byFamily: [0, 0, 0, 0, 0] };
+const canopySkelStat = { trees: 0, tris: 0, ms: 0, maxMs: 0, made: 0, builds: 0, byFamily: [0, 0, 0, 0, 0] };
+const canopySkelCache = new Map<string, { sig: string; B: SkeletonBuilder }>();
 function canopySkelStep(fx: number, fz: number): void {
   const on = CANOPY_SKEL_M > 0 && renderer.capabilities.isWebGL2 && canopyRings.length > 0 && !!canopyStand && canopyGrids.length > 0;
   canopySkel.visible = on;
@@ -17551,49 +17608,148 @@ function canopySkelStep(fx: number, fz: number): void {
     return 0.35 + 0.65 * t * t * (3 - 2 * t);
   };
   const S = CANOPY_CROWN, rad = CANOPY_SKEL_M;
-  const B = new SkeletonBuilder();
+  // PER TREE, CACHED. A tree is regenerated only when its crown changed (a
+  // lattice commit that moved its ground or lift, its family); everything
+  // else is copied. The first cut rebuilt all ~150 on every 6 m of travel
+  // and every commit, a synchronous hitch outside the sliced lattice work.
   const byFamily = [0, 0, 0, 0, 0];
-  let trees = 0;
+  let trees = 0, made = 0, nV = 0, nI = 0;
+  const keep: Array<{ B: SkeletonBuilder }> = [];
+  const seen = new Set<string>();
   for (let cy = Math.floor((fz - rad) / S) - 1; cy <= Math.floor((fz + rad) / S) + 1; cy++) {
     for (let cx = Math.floor((fx - rad) / S) - 1; cx <= Math.floor((fx + rad) / S) + 1; cx++) {
       const c: CanopyCrown | null = canopyCrownAt(cx, cy, S, gl, species, fade);
       if (!c || Math.hypot(c.x - fx, c.z - fz) > rad) continue;
-      B.tree(c); trees++; byFamily[c.family]++;
+      const key = cx + ',' + cy, sig = `${c.family}|${c.ground.toFixed(2)}|${c.top.toFixed(2)}|${c.R.toFixed(2)}|${c.D.toFixed(2)}`;
+      let e = canopySkelCache.get(key);
+      if (!e || e.sig !== sig) { const B = new SkeletonBuilder(); B.tree(c); e = { sig, B }; canopySkelCache.set(key, e); made++; }
+      seen.add(key); keep.push(e); nV += e.B.pos.length; nI += e.B.idx.length;
+      trees++; byFamily[c.family]++;
     }
   }
+  for (const k of canopySkelCache.keys()) if (!seen.has(k)) canopySkelCache.delete(k);
+  const B = { pos: new Float32Array(nV), nrm: new Float32Array(nV), col: new Float32Array(nV), idx: new Uint32Array(nI) };
+  let ov = 0, oi = 0;
+  for (const e of keep) {
+    const base = ov / 3;
+    B.pos.set(e.B.pos, ov); B.nrm.set(e.B.nrm, ov); B.col.set(e.B.col, ov);
+    for (let i = 0; i < e.B.idx.length; i++) B.idx[oi + i] = e.B.idx[i] + base;
+    ov += e.B.pos.length; oi += e.B.idx.length;
+  }
+  canopySkelStat.made = made;
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(B.pos, 3));
-  geo.setAttribute('normal', new THREE.Float32BufferAttribute(B.nrm, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(B.col, 3));
-  geo.setIndex(B.idx);
+  geo.setAttribute('position', new THREE.BufferAttribute(B.pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(B.nrm, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(B.col, 3));
+  geo.setIndex(new THREE.BufferAttribute(B.idx, 1));
   canopySkel.geometry.dispose();
   canopySkel.geometry = geo;
   canopyU.skel.value.set(fx, fz, rad - 1, 1);
   canopySkelStat.trees = trees; canopySkelStat.tris = B.idx.length / 3; canopySkelStat.byFamily = byFamily;
-  canopySkelStat.ms = +(performance.now() - t0).toFixed(2); canopySkelStat.builds++;
+  canopySkelStat.ms = +(performance.now() - t0).toFixed(2); canopySkelStat.maxMs = Math.max(canopySkelStat.maxMs, canopySkelStat.ms); canopySkelStat.builds++;
 }
 (window as any).__canopyskel = (radius?: number) => {
   if (radius !== undefined) { CANOPY_SKEL_M = radius; canopySkelKey = ''; }
   return { ...canopySkelStat, on: canopySkel.visible, radius: CANOPY_SKEL_M, at: canopySkelAt };
 };
+// ── THE FOREST'S LIGHT FIELD: SUN AND SKY THROUGH THE CROWNS THAT ARE DRAWN ──
+//
+// A 128² field over CANLIGHT_M metres about the focus, rendered on the GPU by
+// the canopy's own crown library (canopyLib): from 1.2 m over each ground texel
+// a march toward the sun through the crowns gives R = sun transmission, and
+// five short marches up and out give G = the share of sky the point sees. So
+// a sun patch on the ground is under a real opening between drawn crowns, not
+// a noise, and the shade's depth follows how much sky there actually is. It is
+// rendered in four bands on four frames into a back buffer and swapped whole,
+// again when the focus has moved CANLIGHT_MOVE, the sun a degree, or the
+// canopy lattice under it committed (throttled to CANLIGHT_MIN_MS). terrainFx
+// reads it (canShadeU) for everything below the crowns.
+const CANLIGHT_N = 128, CANLIGHT_M = 192, CANLIGHT_MOVE = 40, CANLIGHT_MIN_MS = 1200;
+const canLightRT = [0, 1].map(() => new THREE.WebGLRenderTarget(CANLIGHT_N, CANLIGHT_N,
+  { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false }));
+const canLightU = { uOrg: { value: new THREE.Vector2() }, uSize: { value: CANLIGHT_M }, uLs: { value: new THREE.Vector3(0, 1, 0) } };
+const canLightMat = new THREE.ShaderMaterial({
+  uniforms: { ...canLightU } as any,
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `precision highp float;
+varying vec2 vUv; uniform vec2 uOrg; uniform float uSize; uniform vec3 uLs;
+${canopyLib()}
+float canLightMarch(vec3 p0, vec3 d, float dt, int n) {
+  float tr = 1.0; vec2 qB = vec2(-1e9);
+  for (int s = 0; s < 48; s++) {
+    if (s >= n) break;
+    vec3 p = p0 + d * (float(s) * dt + 0.3);
+    vec2 q = floor(p.xz / ${CANOPY_CROWN.toFixed(2)} - 0.5);
+    if (q != qB) { qB = q; canLoad(q); }
+    float best = 9.0;
+    for (int k = 0; k < 4; k++) best = min(best, canIn0(k, p));
+    // Foliage is not opaque: a metre of crown takes about half the light.
+    if (best < 1.0) tr *= exp(-0.7 * dt * smoothstep(1.0, 0.55, best));
+    if (tr < 0.03) return 0.0;
+  }
+  return tr;
+}
+void main() {
+  canDet = 0.0; canFloorOn = 0.0;
+  for (int k = 0; k < 4; k++) { cEye[k] = 0.0; cCut[k] = 0.0; }
+  vec2 xz = uOrg + vUv * uSize;
+  vec3 g0 = canGL(xz);
+  vec3 p0 = vec3(xz.x, g0.x + 1.2, xz.y);
+  vec3 ls = normalize(uLs);
+  // Past about 30 m up nothing more can be met; a low sun walks further.
+  float sun = ls.y > 0.03 ? canLightMarch(p0, ls, 1.1, int(min(48.0, 34.0 / max(ls.y, 0.3)))) : 1.0;
+  float sky = 0.40 * canLightMarch(p0, vec3(0.0, 1.0, 0.0), 1.6, 20)
+    + 0.15 * canLightMarch(p0, normalize(vec3(0.7, 1.0, 0.0)), 1.8, 18)
+    + 0.15 * canLightMarch(p0, normalize(vec3(-0.7, 1.0, 0.0)), 1.8, 18)
+    + 0.15 * canLightMarch(p0, normalize(vec3(0.0, 1.0, 0.7)), 1.8, 18)
+    + 0.15 * canLightMarch(p0, normalize(vec3(0.0, 1.0, -0.7)), 1.8, 18);
+  gl_FragColor = vec4(sun, sky, 0.0, 1.0);
+}`,
+  depthTest: false, depthWrite: false });
+let canLightFront = 0, canLightBand = -1;
+const canLightAt = { x: NaN, z: NaN, key: '', t: 0, sun: new THREE.Vector3(), ms: 0, renders: 0 };
+function stepCanopyLight(fx: number, fz: number, now: number): void {
+  const inner = canopyRings[0];
+  const ok = CANOPY_ON && canShadeU.uCanShadeOn.value.x > 0 && !!inner && !!canopyStand && renderer.capabilities.isWebGL2;
+  if (!ok) { canShadeU.uCanLightBox.value.w = 0; canLightBand = -1; return; }
+  if (canLightBand < 0) {
+    const key = `${canopyStat.builds}|${inner.x0}|${inner.z0}`;
+    const moved = !(Math.hypot(fx - canLightAt.x, fz - canLightAt.z) < CANLIGHT_MOVE);
+    const sunMoved = canLightAt.sun.angleTo(LIGHT_DIR) > 0.0175;
+    if (!moved && !sunMoved && key === canLightAt.key) return;
+    if (now - canLightAt.t < CANLIGHT_MIN_MS && !moved) return;
+    canLightAt.key = key; canLightAt.t = now; canLightAt.sun.copy(LIGHT_DIR);
+    canLightAt.x = fx; canLightAt.z = fz;
+    const U = canLightMat.uniforms as any;
+    Object.assign(U, canopyIn.u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look,
+      canInside: canopyU.inside, canCut: canopyU.cut, canSkel: canopyU.skel });
+    canLightU.uOrg.value.set(fx - CANLIGHT_M / 2, fz - CANLIGHT_M / 2);
+    canLightU.uLs.value.copy(LIGHT_DIR);
+    canLightBand = 0;
+  }
+  const t0 = performance.now();
+  const rt = canLightRT[1 - canLightFront], bh = CANLIGHT_N / 4;
+  rt.scissor.set(0, canLightBand * bh, CANLIGHT_N, bh); rt.scissorTest = true;
+  runPass(canLightMat, rt);
+  rt.scissorTest = false;
+  renderer.setRenderTarget(null);
+  canLightAt.ms = +(performance.now() - t0).toFixed(2);
+  if (++canLightBand >= 4) {
+    canLightBand = -1; canLightFront = 1 - canLightFront; canLightAt.renders++;
+    canShadeU.uCanLightTex.value = canLightRT[canLightFront].texture;
+    canShadeU.uCanLightBox.value.set(canLightU.uOrg.value.x, canLightU.uOrg.value.y, CANLIGHT_M, 1);
+  }
+}
+(window as any).__canlight = () => ({ ...canLightAt, sun: canLightAt.sun.toArray(), front: canLightFront, band: canLightBand, box: canShadeU.uCanLightBox.value.toArray() });
 (window as any).__canshade = (k?: number) => {
   if (k !== undefined) canShadeU.uCanShadeOn.value.y = k;
   return { on: canShadeU.uCanShadeOn.value.x, k: canShadeU.uCanShadeOn.value.y, box: canShadeU.uCanShadeBox.value.toArray() };
 };
 const canopyStat = { builds: 0, ms: 0, cells: 0, tris: 0, hid: 0, share: 0, commitMs: 0, standMs: 0, shiftAt: 0 };
-// ── THE BUDGET THE CANOPY FREES ──
-//
-// The tree triangle budget is a target the allocator always spends: measured at
-// Nagato, hiding 7,538 interior trees moved the bill from 0.68M to 0.72M,
-// because the slots went straight to trees further out. So with the canopy up
-// the budget itself shrinks by the share of trees the canopy stands in for,
-// less CANOPY_KEEP of it, which is left for the edges and verges the canopy
-// cannot draw.
-const CANOPY_KEEP = 0.25;
-function canopyBudgetK(): number {
-  if (!CANOPY_ON || !canopyGrids.length) return 1;
-  return Math.max(0.3, 1 - (1 - CANOPY_KEEP) * canopyStat.share);
-}
+// THE TREE BUDGET IS NOT SCALED BY THE CANOPY any more (it was, by the share of
+// trees the canopy stands in for, and the 0.3M dial default times that put
+// impostor cards close up). Hidden trees simply leave the gather; the budget
+// is spent on what is left. The canopy's own cost is its rows in telemetry.
 function canopyHash(i: number, j: number, k: number): number {
   let h = (i * 374761393 + j * 668265263 + k * 2147483647) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -17942,6 +18098,7 @@ function stepCanopy(now: number): void {
     }
   }
   canopySkelStep(fx, fz);
+  stepCanopyLight(fx, fz, now);
   const J = canopyJobs[0];
   if (!J) return;
   const R = J.R, V = R.V, t0 = performance.now();
@@ -18101,7 +18258,7 @@ function canopyHides(x: number, z: number, tallM = 0): boolean {
   if (on !== undefined) { CANOPY_ON = on; canopyAt.t = 0; canopyJobs = []; canopyRings = []; if (!on) canopyGrids = []; }
   const hist = [0, 0, 0, 0, 0, 0];
   for (const G of canopyGrids) for (const e of G.ev) hist[Math.min(5, Math.floor(e * 6 + 1e-6))]++;
-  return { on: CANOPY_ON, ...canopyStat, budgetK: +canopyBudgetK().toFixed(3), job: canopyJobs.length ? `${canopyJobs[0].R.outer ? 'outer' : 'inner'}${canopyJobs[0].full ? ' full' : ' shift'} p${canopyJobs[0].phase} r${canopyJobs[0].j}` : null, queued: canopyJobs.length, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
+  return { on: CANOPY_ON, ...canopyStat, job: canopyJobs.length ? `${canopyJobs[0].R.outer ? 'outer' : 'inner'}${canopyJobs[0].full ? ' full' : ' shift'} p${canopyJobs[0].phase} r${canopyJobs[0].j}` : null, queued: canopyJobs.length, rings: canopyGrids.length, at: [Math.round(canopyAt.x), Math.round(canopyAt.z)], evHist: hist };
 };
 /** Frames and A/Bs: the canopy's look dials (leaf relief, crown shadow, sun
  *  tones), `near: false` to lift the near-field clearing for a shot framed
@@ -36086,7 +36243,7 @@ car.add(headSpot, headSpot.target);
 // The rig throws a shadow, and so does every panel, wheel and light bar hung
 // off it. Nothing on the truck RECEIVES: the body is its own little studio and
 // self-shadowing at this map resolution is stripes, not shape.
-car.traverse((o) => { if ((o as THREE.Mesh).isMesh) castIfSolid(o); });
+car.traverse((o) => { if ((o as THREE.Mesh).isMesh) { castIfSolid(o); const mm = (o as THREE.Mesh).material; for (const x of Array.isArray(mm) ? mm : [mm]) canopyReceive(x); } });
 scene.add(car);
 // ── the x-ray silhouette: the rig, wherever something hides it ─────
 //
@@ -52976,7 +53133,7 @@ function telemetryReport(): string {
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
       + ` · no distance trigger, no priority: the near tier commits with the far one`);
   }
-  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather) · skel ${canopySkel.visible ? `${CANOPY_SKEL_M}m ${canopySkelStat.trees} trees ${(canopySkelStat.tris / 1e3).toFixed(1)}k tris ${canopySkelStat.ms}ms` : 'off'} · shade ${canShadeU.uCanShadeOn.value.x ? canShadeU.uCanShadeOn.value.y : 'off'}`);
+  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather) · skel ${canopySkel.visible ? `${CANOPY_SKEL_M}m ${canopySkelStat.trees} trees ${(canopySkelStat.tris / 1e3).toFixed(1)}k tris ${canopySkelStat.ms}ms (max ${canopySkelStat.maxMs}) ${canopySkelStat.builds} builds` : 'off'} · shade ${canShadeU.uCanShadeOn.value.x ? canShadeU.uCanShadeOn.value.y : 'off'} · light field ${canShadeU.uCanLightBox.value.w ? `${canLightAt.renders} renders ${canLightAt.ms}ms a band` : 'off'}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
@@ -62130,7 +62287,7 @@ function selectRig(model: RigModelId, loadout: RigLoadoutId, equipment: RigEquip
     if (!mesh.isMesh) return;
     castIfSolid(mesh);
     for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-      if (!marked.has(mat)) { marked.add(mat); noBlur(mat); }
+      if (!marked.has(mat)) { marked.add(mat); noBlur(mat); canopyReceive(mat); }
     }
   });
   beams.forEach((beam, i) => beam.position.copy(next.anchors.lamps[i]));
