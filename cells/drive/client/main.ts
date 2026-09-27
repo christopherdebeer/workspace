@@ -18190,10 +18190,14 @@ function stepUnderstorey(fx: number, fz: number): void {
 /** Composite at the art grid or the canvas, live, plus a timed bench of the
  *  composite pass alone into each (gl.finish-fenced, n reps): the fragment
  *  cost is the only thing that differs, so the ratio is the saving. */
-(window as any).__compart = (on?: boolean) => { if (on !== undefined) COMP_ART = on; return { on: COMP_ART, art: [rtComp.width, rtComp.height], canvas: [renderer.domElement.width, renderer.domElement.height] }; };
+(window as any).__compart = (on?: boolean) => { if (on !== undefined) { COMP_ART = on; composite(mblurAmt); } return { on: COMP_ART, art: [rtComp.width, rtComp.height], canvas: [renderer.domElement.width, renderer.domElement.height] }; };
 (window as any).__compbench = (n = 20) => {
   const gl = renderer.getContext();
-  const time = (f: () => void): number => { gl.finish(); const t = performance.now(); for (let i = 0; i < n; i++) f(); gl.finish(); return (performance.now() - t) / n; };
+  // gl.finish does not block across Chromium's GPU process; a one-pixel
+  // readPixels does, so it is the fence on both sides of the loop.
+  const px = new Uint8Array(4);
+  const sync = (): void => { renderer.setRenderTarget(null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); };
+  const time = (f: () => void): number => { sync(); const t = performance.now(); for (let i = 0; i < n; i++) f(); sync(); return (performance.now() - t) / n; };
   const canvasMs = time(() => runPass(compMat, null));
   const artMs = time(() => runPass(compMat, rtComp));
   compCopyMat.uniforms.src.value = rtComp.texture;
