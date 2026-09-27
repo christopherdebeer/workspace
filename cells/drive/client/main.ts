@@ -7403,7 +7403,11 @@ ${DITHER_GLSL}
       // Drawn before the quantise so white lands on the palette's top level.
       if (uContourOn > 0.5) {
         // White, one pixel, no halo: the line pass drew them (contourLineMat).
-        enc = mix(enc, vec3(1.0), texture2D(contourTex, vUv).r);
+        // Not on the rig or the drone: the contour pass has no depth for them,
+        // so it would draw the hillside's lines straight through the truck.
+        // They write zero alpha into the scene (noBlur) — the same mask the
+        // grade and the depth of field use.
+        enc = mix(enc, vec3(1.0), texture2D(contourTex, vUv).r * (1.0 - rigMask));
       }
       enc = ditherQuant(enc, floor(vUv * uPix), wPat, uDither, uBias, uLevels, uDChan);
       // Phosphor tint AFTER the quantise: tinting first would quantise the
