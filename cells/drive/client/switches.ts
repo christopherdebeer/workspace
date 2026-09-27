@@ -272,6 +272,8 @@ export const SWITCHES = [
     note: 'milliseconds of each frame the canopy rebuild may spend (tripled until the first build is up); the harness raises it because its software frames are slow' },
   { id: 'canshade', kind: 'number', marks: ['look'], fallback: '1',
     note: 'strength of the light under a closed canopy on everything below the crowns (ground, sward, shrubs, trunks); 0 is the open-sky light' },
+  { id: 'contoursmooth', kind: 'number', marks: ['look'], fallback: '1',
+    note: 'how much the contour overlay smooths the terrain before drawing lines on zoomed-out views (up to three art pixels at 1); 0 draws the raw DEM' },
   { id: 'forestair', kind: 'number', marks: ['look'], fallback: '1',
     note: 'forest air: the low, damp-weather haze held under a closed canopy, lit where the light field says the sun gets in; 0 is none' },
   { id: 'canopyskel', kind: 'number', marks: ['look'], fallback: '48',

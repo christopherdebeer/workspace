@@ -2529,46 +2529,13 @@ function gvLutFor(layer: 'cover' | 'eco'): THREE.DataTexture {
   return tex;
 }
 /**
- * ── CONTOURS, AS A TOPOGRAPHIC MAP DRAWS THEM ──
- *
- * Height above sea level (the world y plus the origin's elevation) in the
- * terrain's own fragment, so a line is where the DEM says that height is, at
- * every zoom and from the seat as well as the chart.
- *
- * THE INTERVAL IS THE MAP'S SCALE, not the slope's: chosen from the ground a
- * pixel covers (about one interval per four pixels of ground on a moderate
- * slope) and stepped 1-2-5 through the decades, the way printed series are —
- * 1, 2, 5, 10, 20, 50 m… The finer of the two steps around the ideal fades
- * out as the scale grows, so an interval change is a fade and not a pop.
- * Every fifth line of the coarser step is an INDEX contour, drawn heavier.
- *
- * LINES ARE A CONSTANT PIXEL WIDTH, from the distance to the nearest line in
- * pixels (the height difference over fwidth of height), antialiased over one
- * pixel; where a face is so steep that lines would crowd under three pixels
- * apart they thin out, as a cartographer drops them on a cliff.
+ * CONTOURS (the chart's CONTOUR layer) are a pass of their own: the fine
+ * terrain and the far shell re-rendered as HEIGHT into rtContour, smoothed and
+ * turned into one-pixel white lines at art resolution by contourLineMat, and
+ * inked over the finished scene in the composite. The interval is the map's
+ * scale, stepped 1-2-5, with the finer step fading; every fifth coarse line is
+ * an index contour, drawn brighter.
  */
-const CONTOUR_GLSL = `
-float contourCov(float h, float I, float dh, float wpx) {
-  float dpx = abs(fract(h / I + 0.5) - 0.5) * I / dh;
-  return 1.0 - smoothstep(wpx - 0.5, wpx + 0.5, dpx);
-}
-// (line coverage, index weight) at height h, on ground whose world position
-// is wp — the interval from the ground a pixel covers.
-vec2 contourAt(float h, vec3 wp) {
-  float fp = max(length(fwidth(wp.xz)), 1e-3);
-  float want = max(fp * 4.0, 0.25);
-  float lg = log(want) / log(10.0);
-  float dec = floor(lg), fr = lg - dec, b10 = pow(10.0, dec);
-  float I0 = fr < 0.30103 ? b10 : fr < 0.69897 ? 2.0 * b10 : 5.0 * b10;
-  float I1 = fr < 0.30103 ? 2.0 * b10 : fr < 0.69897 ? 5.0 * b10 : 10.0 * b10;
-  float w = clamp(log(want / I0) / log(I1 / I0), 0.0, 1.0);
-  float dh = max(fwidth(h), 1e-4);
-  float minor = contourCov(h, I0, dh, 0.6) * (1.0 - w) * smoothstep(2.5, 5.0, I0 / dh);
-  float major = contourCov(h, I1, dh, 0.7) * smoothstep(2.0, 4.0, I1 / dh);
-  float index = contourCov(h, I1 * 5.0, dh, 1.4) * smoothstep(1.5, 3.0, I1 * 5.0 / dh);
-  return vec2(max(max(minor * 0.7, major * 0.9), index), index);
-}
-`;
 const gvU = {
   uGView: { value: TDETAIL === 'dom' ? GROUND_VIEW.substrate : GROUND_VIEW.off },
   uGLut: { value: gvLutFor('cover') },
@@ -6249,6 +6216,7 @@ rtScene.depthTexture = new THREE.DepthTexture(2, 2);
 // target with a material that writes only the line coverage, and the
 // composite lays it over the finished frame. Only while the chip is on.
 const rtContour = mkRT(true, true);
+const rtContourLine = mkRT(false, true);
 rtContour.samples = 0;
 const rtA = mkRT(false), rtB = mkRT(false);
 const rtC = mkRT(false), rtD = mkRT(false); // bright-pass ping-pong for bloom
@@ -6315,6 +6283,7 @@ resizePost = () => {
   rtDofNear.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtM.setSize(w, Math.max(2, h));
   rtContour.setSize(w, Math.max(2, h));
+  rtContourLine.setSize(w, Math.max(2, h));
   pixSize.set(w, Math.max(2, h));
   // The tree crowns turn a distance into ART PIXELS to decide how far to close
   // onto their own hull, and the art grid is this number. Set here rather than
@@ -7430,25 +7399,11 @@ ${DITHER_GLSL}
       // "does this touch the drive" question. The bay's copy pass keeps the
       // dial's pattern — it is never a wide chart.
       float wPat = (uDWide > 0.5 && uMpp > 60.0) ? uDPatWide : uDPat;
-      // ── CONTOURS, OVER EVERYTHING, IN AN INK THAT READS ON WHAT IS UNDER ──
-      // A printed map has one brown because it prints on paper; this one runs
-      // over black forest, bright rock and water, where one ink vanishes on one
-      // of them. Dark brown over light ground, pale tan over dark, each with a
-      // one-pixel halo of the opposite so a line holds against its own
-      // background; index contours heavier.
+      // ── CONTOURS, OVER EVERYTHING ──
+      // Drawn before the quantise so white lands on the palette's top level.
       if (uContourOn > 0.5) {
-        vec2 cp = 1.0 / uPix;
-        vec4 c0 = texture2D(contourTex, vUv);
-        float nb = max(max(texture2D(contourTex, vUv + vec2(cp.x, 0.0)).r, texture2D(contourTex, vUv - vec2(cp.x, 0.0)).r),
-                       max(texture2D(contourTex, vUv + vec2(0.0, cp.y)).r, texture2D(contourTex, vUv - vec2(0.0, cp.y)).r));
-        float lum = dot(enc, vec3(0.299, 0.587, 0.114));
-        float darkG = 1.0 - smoothstep(0.30, 0.45, lum);
-        vec3 inkL = mix(vec3(0.36, 0.20, 0.08), vec3(0.22, 0.11, 0.04), c0.g);
-        vec3 inkD = mix(vec3(0.86, 0.76, 0.55), vec3(0.97, 0.90, 0.72), c0.g);
-        vec3 ink = mix(inkL, inkD, darkG);
-        vec3 halo = mix(vec3(0.95, 0.91, 0.80), vec3(0.06, 0.05, 0.04), darkG);
-        enc = mix(enc, halo, clamp(nb - c0.r, 0.0, 1.0) * 0.3);
-        enc = mix(enc, ink, c0.r);
+        // White, one pixel, no halo: the line pass drew them (contourLineMat).
+        enc = mix(enc, vec3(1.0), texture2D(contourTex, vUv).r);
       }
       enc = ditherQuant(enc, floor(vUv * uPix), wPat, uDither, uBias, uLevels, uDChan);
       // Phosphor tint AFTER the quantise: tinting first would quantise the
@@ -7773,7 +7728,7 @@ composite = (amt: number): void => {
   compMat.uniforms.dofFarTex.value = rtDofFar.texture;
   compMat.uniforms.dofNearTex.value = rtDofNear.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
-  compMat.uniforms.contourTex.value = rtContour.texture;
+  compMat.uniforms.contourTex.value = rtContourLine.texture;
   // Forest air: a floor so a dry clear stand holds almost none, the rest
   // from the weather's damp; never on the chart.
   compMat.uniforms.uForestAir.value = CANOPY_ON && camMode !== 'top' && FOREST_AIR > 0
@@ -9087,13 +9042,58 @@ const contourMat = new THREE.ShaderMaterial({
   fragmentShader: `precision highp float;
     uniform float uBase; uniform float uSphere; uniform float uDrop; uniform vec3 uPlanetC; uniform float uR;
     varying vec3 vW;
-    ${CONTOUR_GLSL}
     void main() {
       float h = uSphere > 0.5 ? length(vW - uPlanetC) - uR + uBase + uDrop : vW.y + uBase;
-      vec2 c = contourAt(h, vW);
-      gl_FragColor = vec4(c.x, c.y, 0.0, 1.0);
+      // HEIGHT, NOT LINES: split into 32 m steps and the metres within them,
+      // both exact in half floats, so the line pass can smooth it (a weighted
+      // mean of both channels recombines exactly — it is linear). b is the
+      // ground a pixel covers, which sets the interval and the smoothing; a
+      // marks terrain.
+      float hi = floor(h / 32.0);
+      gl_FragColor = vec4(hi, h - hi * 32.0, max(length(fwidth(vW.xz)), 1e-3), 1.0);
     }`,
 });
+/** THE CONTOUR LINES, at art resolution, from the height pass. Crisp one-pixel
+ *  white lines at every zoom and camera. Zoomed out, the DEM's fractal detail
+ *  would make them ragged, so the height is SMOOTHED first — a Gaussian of up
+ *  to three art pixels that grows with the ground a pixel covers (none close
+ *  up, full past ~100 m a pixel), weighted against taps whose footprint
+ *  differs so a near ridge does not bleed into the valley behind it. */
+const contourLineU = { uC: { value: null as THREE.Texture | null }, uPx: { value: new THREE.Vector2(1, 1) },
+  uSmooth: { value: qsNum('contoursmooth', 1) } };
+const contourLineMat = new THREE.ShaderMaterial({
+  uniforms: contourLineU,
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `precision highp float;
+    uniform sampler2D uC; uniform vec2 uPx; uniform float uSmooth;
+    varying vec2 vUv;
+    float cLine(float h, float I, float dh) { return step(abs(fract(h / I + 0.5) - 0.5) * I / dh, 0.5); }
+    void main() {
+      vec4 c0 = texture2D(uC, vUv);
+      float fp0 = max(c0.b, 1e-3);
+      float r = 3.0 * uSmooth * clamp((log(fp0) / log(10.0) - 0.5) / 1.5, 0.0, 1.0);
+      float hs = 0.0, ws = 0.0;
+      for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) {
+        vec2 o = vec2(float(i), float(j)) * (r * 0.5);
+        vec4 c = texture2D(uC, vUv + o * uPx);
+        float w = c.a * exp(-dot(o, o) / max(r * r * 0.5, 1e-3)) * exp(-abs(log(max(c.b, 1e-3) / fp0)) * 2.0);
+        hs += w * (c.r * 32.0 + c.g); ws += w;
+      }
+      float h = ws > 1e-4 ? hs / ws : c0.r * 32.0 + c0.g;
+      float dh = max(length(vec2(dFdx(h), dFdy(h))), 1e-4);
+      float want = max(fp0 * 6.0, 0.5);
+      float lg = log(want) / log(10.0);
+      float dec = floor(lg), fr = lg - dec, b10 = pow(10.0, dec);
+      float I0 = fr < 0.30103 ? b10 : fr < 0.69897 ? 2.0 * b10 : 5.0 * b10;
+      float I1 = fr < 0.30103 ? 2.0 * b10 : fr < 0.69897 ? 5.0 * b10 : 10.0 * b10;
+      float wf = clamp(log(want / I0) / log(I1 / I0), 0.0, 1.0);
+      float minor = cLine(h, I0, dh) * (1.0 - wf) * smoothstep(3.0, 6.0, I0 / dh);
+      float major = cLine(h, I1, dh) * smoothstep(3.0, 6.0, I1 / dh);
+      float index = cLine(h, I1 * 5.0, dh) * smoothstep(2.0, 4.0, I1 * 5.0 / dh);
+      float a = max(max(minor * 0.55, major * 0.75), index) * step(0.5, c0.a);
+      gl_FragColor = vec4(a, index, 0.0, 1.0);
+    }`,
+  depthTest: false, depthWrite: false });
 function planetSunFx(mat: THREE.MeshLambertMaterial): void {
   const base = mat.onBeforeCompile;
   mat.onBeforeCompile = function (sh, renderer) {
@@ -55629,7 +55629,12 @@ function tick(now: number): void {
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); drawStatSample(renderer.info.render.calls, renderer.info.render.triangles); }
-  if (chartOn.contour) { const _p = performance.now(); renderContours(); profAdd('contour', _p); }
+  if (chartOn.contour) {
+    const _p = performance.now(); renderContours();
+    contourLineU.uC.value = rtContour.texture; contourLineU.uPx.value.set(1 / rtContour.width, 1 / rtContour.height);
+    runPass(contourLineMat, rtContourLine);
+    profAdd('contour', _p);
+  }
   { const _p = performance.now(); sampleShadowMotion(performance.now()); profAdd('shadowTelemetry', _p); }
   { const _p = performance.now(); composite(mblurAmt); profAdd('composite', _p); }
   // Kept every frame, blur or none: the jump guard above compares against it,
