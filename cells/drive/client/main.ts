@@ -7068,6 +7068,16 @@ ${DITHER_GLSL}
     // FOREST AIR (see its use): the canopy lattice and light field, shared.
     uniform sampler2D uCanShadeTex; uniform vec4 uCanShadeBox; uniform float uCanShadeBase; uniform vec3 uCanShadeOn; uniform vec3 uCanShadeSun;
     uniform sampler2D uCanLightTex; uniform vec4 uCanLightBox; uniform float uForestAir;
+    uniform sampler2D uCanNearTex; uniform vec4 uCanNearBox;
+    // The near sun flecks, as CANFLOOR_GLSL's canNearSun (declared after this).
+    float canNearSun(vec2 q, float fs) {
+      if (uCanNearBox.w < 0.5) return fs;
+      vec2 uv = (q - uCanNearBox.xy) / uCanNearBox.z;
+      float e = smoothstep(0.0, 0.12, min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y)));
+      if (e <= 0.0) return fs;
+      float r = texture2D(uCanNearTex, uv).r;
+      return mix(fs, mix(r, smoothstep(0.15, 0.85, r), 0.6), e);
+    }
     // Density of forest air at pw, and (w) how much of it the sun reaches.
     vec2 forestAirD(vec3 pw){
       vec2 cuv = ((pw.xz - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
@@ -7084,7 +7094,7 @@ ${DITHER_GLSL}
         vec3 ls = normalize(uCanShadeSun);
         vec2 q = pw.xz + ls.xz / max(ls.y, 0.2) * max(g + 1.2 - pw.y, 0.0);
         vec2 luv = (q - uCanLightBox.xy) / uCanLightBox.z;
-        if (luv.x > 0.0 && luv.y > 0.0 && luv.x < 1.0 && luv.y < 1.0) lit = texture2D(uCanLightTex, luv).r * max(ls.y, 0.0);
+        if (luv.x > 0.0 && luv.y > 0.0 && luv.x < 1.0 && luv.y < 1.0) lit = canNearSun(q, texture2D(uCanLightTex, luv).r) * max(ls.y, 0.0);
       }
       return vec2(d, lit);
     }
@@ -7808,7 +7818,8 @@ function reveal(ex: number, ez: number): void {
  *  ring's commit; x of uCanShadeOn is 0 with the canopy off. */
 const canShadeU = { uCanShadeTex: { value: null as THREE.Texture | null }, uCanShadeBox: { value: new THREE.Vector4(0, 0, 1, 1) },
   uCanShadeBase: { value: 0 }, uCanShadeOn: { value: new THREE.Vector3(0, qsNum('canshade', 1), 0) }, uCanShadeSun: { value: LIGHT_DIR },
-  uCanLightTex: { value: null as THREE.Texture | null }, uCanLightBox: { value: new THREE.Vector4(0, 0, 1, 0) } };
+  uCanLightTex: { value: null as THREE.Texture | null }, uCanLightBox: { value: new THREE.Vector4(0, 0, 1, 0) },
+  uCanNearTex: { value: null as THREE.Texture | null }, uCanNearBox: { value: new THREE.Vector4(0, 0, 1, 0) } };
 /** The forest's light on a receiver at world point wp (canShadeU): see the
  *  comment at its use in terrainFx. Shared with the rig's materials
  *  (canopyReceive) so the truck parked under crowns is in their shade too. */
@@ -7817,6 +7828,19 @@ const CANFLOOR_GLSL = `
 #define DRIVE_CANFLOOR_DECL
 uniform sampler2D uCanShadeTex; uniform vec4 uCanShadeBox; uniform float uCanShadeBase; uniform vec3 uCanShadeOn; uniform vec3 uCanShadeSun;
 uniform sampler2D uCanLightTex; uniform vec4 uCanLightBox;
+uniform sampler2D uCanNearTex; uniform vec4 uCanNearBox;
+/** The near field's sun flecks over the coarse answer fs, at the 1.2 m plane
+ *  point q; the coarse answer outside it, faded over its last eighth. */
+float canNearSun(vec2 q, float fs) {
+  if (uCanNearBox.w < 0.5) return fs;
+  vec2 uv = (q - uCanNearBox.xy) / uCanNearBox.z;
+  float e = smoothstep(0.0, 0.12, min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y)));
+  if (e <= 0.0) return fs;
+  float r = texture2D(uCanNearTex, uv).r;
+  // A fleck has the leaves' edge: firmer than the linear filter's ramp.
+  r = mix(r, smoothstep(0.15, 0.85, r), 0.6);
+  return mix(fs, r, e);
+}
 /** THE FOREST FLOOR at a ground point: x the closure over it (a closed,
  *  tall stand, clamped strength), y the sun that reaches it (the light
  *  field where it is, the coarse answer elsewhere). */
@@ -7832,6 +7856,7 @@ vec2 canFloorAt(vec2 xz) {
     float inF = smoothstep(0.0, 0.06, min(min(luv.x, luv.y), min(1.0 - luv.x, 1.0 - luv.y)));
     sunT = mix(sunT, texture2D(uCanLightTex, luv).r, inF);
   }
+  sunT = mix(sunT, canNearSun(xz, sunT), step(0.001, closure));
   return vec2(closure, sunT);
 }
 #endif
@@ -7865,6 +7890,7 @@ void canShadeApply(vec3 wp, inout ReflectedLight rl) {
                         * smoothstep(0.0, 0.06, min(min(suv.x, suv.y), min(1.0 - suv.x, 1.0 - suv.y)));
               float fs = texture2D(uCanLightTex, luv).r, fv = texture2D(uCanLightTex, suv).g;
               sunT = mix(sunT, fs, inF); vis = mix(vis, fv, inF);
+              sunT = canNearSun(q, sunT);
             }
             float a = below * k;
             if (a > 0.001) {
@@ -17780,79 +17806,252 @@ function canopySkelStep(fx: number, fz: number): void {
 // reads it (canShadeU) for everything below the crowns.
 const FOREST_AIR = qsNum('forestair', 1);
 const CANLIGHT_N = 128, CANLIGHT_M = 192, CANLIGHT_MOVE = 40, CANLIGHT_MIN_MS = 1200;
-const canLightRT = [0, 1].map(() => new THREE.WebGLRenderTarget(CANLIGHT_N, CANLIGHT_N,
-  { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false }));
-const canLightU = { uOrg: { value: new THREE.Vector2() }, uSize: { value: CANLIGHT_M }, uLs: { value: new THREE.Vector3(0, 1, 0) } };
-const canLightMat = new THREE.ShaderMaterial({
-  uniforms: { ...canLightU } as any,
+// ── THE NEAR LIGHT FIELD: SUN FLECKS ──
+//
+// The coarse field's 1.5 m texels and smooth crown bodies give a sun patch the
+// size of a gap between crowns and no edge — the forest floor lit in soft
+// blobs. Within CANNEAR_M about the focus a second field marches the sun at
+// a third of a metre through the crowns WITH their leaf clumps (canDet 1) and
+// at leaf absorption, into 0.4 m texels: a fleck the size of a hole in the
+// leaves, its edge the leaves' own. Sun only; the sky's share stays the
+// coarse field's, which is where it varies. Eight bands, eight frames.
+const CANNEAR_N = qsNum('cannear', 160), CANNEAR_M = 64, CANNEAR_MOVE = 10, CANNEAR_MIN_MS = 500;
+interface LightField { N: number; M: number; move: number; minMs: number; bands: number; sunDeg: number;
+  rt: THREE.WebGLRenderTarget[]; mat: THREE.ShaderMaterial; front: number; band: number;
+  at: { x: number; z: number; key: string; t: number; sun: THREE.Vector3; ms: number; renders: number };
+  publish: (tex: THREE.Texture, x0: number, z0: number, m: number) => void; unpublish: () => void }
+function lightFieldMaterial(det: number, abs: number, dt: number, sky: boolean): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+  uniforms: { uOrg: { value: new THREE.Vector2() }, uSize: { value: 1 }, uLs: { value: new THREE.Vector3(0, 1, 0) } } as any,
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `precision highp float;
 varying vec2 vUv; uniform vec2 uOrg; uniform float uSize; uniform vec3 uLs;
 ${canopyLib()}
+// dt is the step inside and near a crown; clear air between crowns is crossed
+// at three times it, which is safe because a crown's surface is never thinner
+// than a step there.
 float canLightMarch(vec3 p0, vec3 d, float dt, int n) {
-  float tr = 1.0; vec2 qB = vec2(-1e9);
-  for (int s = 0; s < 48; s++) {
+  float tr = 1.0, t = 0.3; vec2 qB = vec2(-1e9);
+  for (int s = 0; s < 64; s++) {
     if (s >= n) break;
-    vec3 p = p0 + d * (float(s) * dt + 0.3);
+    vec3 p = p0 + d * t;
     vec2 q = floor(p.xz / ${CANOPY_CROWN.toFixed(2)} - 0.5);
     if (q != qB) { qB = q; canLoad(q); }
     float best = 9.0;
     for (int k = 0; k < 4; k++) best = min(best, canIn0(k, p));
-    // Foliage is not opaque: a metre of crown takes about half the light.
-    if (best < 1.0) tr *= exp(-0.7 * dt * smoothstep(1.0, 0.55, best));
+    // Foliage is not opaque: ${abs.toFixed(2)} of the light a metre of crown.
+    if (best < 1.0) tr *= exp(-${abs.toFixed(2)} * dt * smoothstep(1.0, 0.55, best));
     if (tr < 0.03) return 0.0;
+    t += best > 1.6 ? dt * 3.0 : dt;
   }
   return tr;
 }
 void main() {
-  canDet = 0.0; canFloorOn = 0.0;
+  canDet = ${det.toFixed(2)}; canFloorOn = 0.0;
   for (int k = 0; k < 4; k++) { cEye[k] = 0.0; cCut[k] = 0.0; }
   vec2 xz = uOrg + vUv * uSize;
   vec3 g0 = canGL(xz);
   vec3 p0 = vec3(xz.x, g0.x + 1.2, xz.y);
   vec3 ls = normalize(uLs);
   // Past about 30 m up nothing more can be met; a low sun walks further.
-  float sun = ls.y > 0.03 ? canLightMarch(p0, ls, 1.1, int(min(48.0, 34.0 / max(ls.y, 0.3)))) : 1.0;
-  float sky = 0.40 * canLightMarch(p0, vec3(0.0, 1.0, 0.0), 1.6, 20)
+  float sun = ls.y > 0.03 ? canLightMarch(p0, ls, ${dt.toFixed(2)}, int(min(64.0, 34.0 / max(ls.y, 0.3) / ${(dt * 1.6).toFixed(2)}))) : 1.0;
+  ${sky ? `float sky = 0.40 * canLightMarch(p0, vec3(0.0, 1.0, 0.0), 1.6, 20)
     + 0.15 * canLightMarch(p0, normalize(vec3(0.7, 1.0, 0.0)), 1.8, 18)
     + 0.15 * canLightMarch(p0, normalize(vec3(-0.7, 1.0, 0.0)), 1.8, 18)
     + 0.15 * canLightMarch(p0, normalize(vec3(0.0, 1.0, 0.7)), 1.8, 18)
-    + 0.15 * canLightMarch(p0, normalize(vec3(0.0, 1.0, -0.7)), 1.8, 18);
+    + 0.15 * canLightMarch(p0, normalize(vec3(0.0, 1.0, -0.7)), 1.8, 18);` : 'float sky = 1.0;'}
   gl_FragColor = vec4(sun, sky, 0.0, 1.0);
 }`,
   depthTest: false, depthWrite: false });
-let canLightFront = 0, canLightBand = -1;
-const canLightAt = { x: NaN, z: NaN, key: '', t: 0, sun: new THREE.Vector3(), ms: 0, renders: 0 };
-function stepCanopyLight(fx: number, fz: number, now: number): void {
+}
+function lightField(N: number, M: number, move: number, minMs: number, bands: number, sunDeg: number,
+  mat: THREE.ShaderMaterial, publish: LightField['publish'], unpublish: () => void): LightField {
+  return { N, M, move, minMs, bands, sunDeg, mat, publish, unpublish, front: 0, band: -1,
+    rt: [0, 1].map(() => new THREE.WebGLRenderTarget(N, N,
+      { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false })),
+    at: { x: NaN, z: NaN, key: '', t: 0, sun: new THREE.Vector3(), ms: 0, renders: 0 } };
+}
+const canLightF = lightField(CANLIGHT_N, CANLIGHT_M, CANLIGHT_MOVE, CANLIGHT_MIN_MS, 4, 1,
+  lightFieldMaterial(0, 0.7, 1.1, true),
+  (tex, x0, z0, m) => { canShadeU.uCanLightTex.value = tex; canShadeU.uCanLightBox.value.set(x0, z0, m, 1); },
+  () => { canShadeU.uCanLightBox.value.w = 0; });
+const canNearF = lightField(CANNEAR_N, CANNEAR_M, CANNEAR_MOVE, CANNEAR_MIN_MS, 8, 0.5,
+  lightFieldMaterial(1, 1.5, 0.34, false),
+  (tex, x0, z0, m) => { canShadeU.uCanNearTex.value = tex; canShadeU.uCanNearBox.value.set(x0, z0, m, 1); },
+  () => { canShadeU.uCanNearBox.value.w = 0; });
+// The coarse field's names, which the telemetry and __canlight read.
+const canLightAt = canLightF.at;
+function stepLightField(F: LightField, on: boolean, fx: number, fz: number, now: number): void {
   const inner = canopyRings[0];
-  const ok = CANOPY_ON && canShadeU.uCanShadeOn.value.x > 0 && !!inner && !!canopyStand && renderer.capabilities.isWebGL2;
-  if (!ok) { canShadeU.uCanLightBox.value.w = 0; canLightBand = -1; return; }
-  if (canLightBand < 0) {
+  if (!on || !inner) { F.unpublish(); F.band = -1; return; }
+  if (F.band < 0) {
     const key = `${canopyStat.builds}|${inner.x0}|${inner.z0}`;
-    const moved = !(Math.hypot(fx - canLightAt.x, fz - canLightAt.z) < CANLIGHT_MOVE);
-    const sunMoved = canLightAt.sun.angleTo(LIGHT_DIR) > 0.0175;
-    if (!moved && !sunMoved && key === canLightAt.key) return;
-    if (now - canLightAt.t < CANLIGHT_MIN_MS && !moved) return;
-    canLightAt.key = key; canLightAt.t = now; canLightAt.sun.copy(LIGHT_DIR);
-    canLightAt.x = fx; canLightAt.z = fz;
-    const U = canLightMat.uniforms as any;
+    const moved = !(Math.hypot(fx - F.at.x, fz - F.at.z) < F.move);
+    const sunMoved = F.at.sun.angleTo(LIGHT_DIR) > F.sunDeg * Math.PI / 180;
+    if (!moved && !sunMoved && key === F.at.key) return;
+    if (now - F.at.t < F.minMs && !moved) return;
+    F.at.key = key; F.at.t = now; F.at.sun.copy(LIGHT_DIR);
+    F.at.x = fx; F.at.z = fz;
+    const U = F.mat.uniforms as any;
     Object.assign(U, canopyIn.u, { canBox: canopyU.box, canFoc: canopyU.foc, canSun: canopyU.sun, canLook: canopyU.look,
       canInside: canopyU.inside, canCut: canopyU.cut, canSkel: canopyU.skel });
-    canLightU.uOrg.value.set(fx - CANLIGHT_M / 2, fz - CANLIGHT_M / 2);
-    canLightU.uLs.value.copy(LIGHT_DIR);
-    canLightBand = 0;
+    U.uOrg.value.set(fx - F.M / 2, fz - F.M / 2); U.uSize.value = F.M;
+    U.uLs.value.copy(LIGHT_DIR);
+    F.band = 0;
   }
   const t0 = performance.now();
-  const rt = canLightRT[1 - canLightFront], bh = CANLIGHT_N / 4;
-  rt.scissor.set(0, canLightBand * bh, CANLIGHT_N, bh); rt.scissorTest = true;
-  runPass(canLightMat, rt);
+  const rt = F.rt[1 - F.front], bh = F.N / F.bands;
+  rt.scissor.set(0, F.band * bh, F.N, bh); rt.scissorTest = true;
+  runPass(F.mat, rt);
   rt.scissorTest = false;
   renderer.setRenderTarget(null);
-  canLightAt.ms = +(performance.now() - t0).toFixed(2);
-  if (++canLightBand >= 4) {
-    canLightBand = -1; canLightFront = 1 - canLightFront; canLightAt.renders++;
-    canShadeU.uCanLightTex.value = canLightRT[canLightFront].texture;
-    canShadeU.uCanLightBox.value.set(canLightU.uOrg.value.x, canLightU.uOrg.value.y, CANLIGHT_M, 1);
+  F.at.ms = +(performance.now() - t0).toFixed(2);
+  if (++F.band >= F.bands) {
+    F.band = -1; F.front = 1 - F.front; F.at.renders++;
+    const U = F.mat.uniforms as any;
+    F.publish(F.rt[F.front].texture, U.uOrg.value.x, U.uOrg.value.y, F.M);
+  }
+}
+function stepCanopyLight(fx: number, fz: number, now: number): void {
+  const ok = CANOPY_ON && canShadeU.uCanShadeOn.value.x > 0 && !!canopyStand && renderer.capabilities.isWebGL2;
+  stepLightField(canLightF, ok, fx, fz, now);
+  // The near field only once the coarse one stands, and only where a flecked
+  // floor can be seen: not over the wide chart.
+  stepLightField(canNearF, ok && CANNEAR_N > 0 && canShadeU.uCanLightBox.value.w > 0.5 && chartMpp() < 1, fx, fz, now);
+}
+// ── THE UNDERSTOREY: WHAT GROWS UNDER THE CROWNS, BY THE LIGHT THAT REACHES IT ──
+//
+// Between the trunks the near forest was grass and air. Two GPU lattices about
+// the focus stand what a floor carries, placed by the same light the ground is
+// lit by (canFloorAt: the closure over a point and the sun that reaches it):
+// FERNS where the stand is closed and the sun does not come through, SAPLINGS
+// in the gaps it does — regeneration where a crown has gone. A slot is a cell
+// of a world-fixed lattice with one jittered candidate from the integer hash,
+// so a plant stays where it is as you drive; the vertex shader reads the light
+// and either stands the plant or folds it to a point. No CPU work a frame
+// beyond two uniforms, no readback, nothing to rebuild when the light moves.
+const US_R = 60;
+const US_KINDS = [
+  { name: 'fern', step: 2.2 },
+  { name: 'sapling', step: 3.4 },
+] as const;
+function fernGeometry(): THREE.BufferGeometry {
+  const pos: number[] = [], part: number[] = [];
+  const fronds = 7;
+  for (let f = 0; f < fronds; f++) {
+    const a = (f / fronds) * Math.PI * 2 + 0.35 * Math.sin(f * 2.3);
+    const c = Math.cos(a), s = Math.sin(a), px = -s, pz = c;
+    // A frond: out and up from the crown, then over and down to its tip.
+    const len = 0.8 + 0.2 * ((f * 37) % 5) / 4;
+    const P = (r: number, y: number, w: number): [number, number, number, number, number, number] =>
+      [c * r * len + px * w, y, s * r * len + pz * w, c * r * len - px * w, y, s * r * len - pz * w];
+    const b = P(0.05, 0.05, 0.03), m = P(0.5, 0.95, 0.17), t = [c * len, 0.42, s * len];
+    pos.push(b[0], b[1], b[2], b[3], b[4], b[5], m[0], m[1], m[2]);
+    pos.push(b[3], b[4], b[5], m[3], m[4], m[5], m[0], m[1], m[2]);
+    pos.push(m[0], m[1], m[2], m[3], m[4], m[5], t[0], t[1], t[2]);
+    for (let k = 0; k < 9; k++) part.push(1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('aPart', new THREE.Float32BufferAttribute(part, 1));
+  g.computeVertexNormals();
+  return g;
+}
+function saplingGeometry(): THREE.BufferGeometry {
+  const pos: number[] = [], part: number[] = [];
+  const tri = (a: number[], b: number[], c: number[], pt: number): void => { pos.push(...a, ...b, ...c); part.push(pt, pt, pt); };
+  // A stem, four-sided, a little lean in it.
+  const sr = 0.018, top = 0.86;
+  for (let k = 0; k < 4; k++) {
+    const a0 = (k / 4) * Math.PI * 2, a1 = ((k + 1) / 4) * Math.PI * 2;
+    const b0 = [Math.cos(a0) * sr, 0, Math.sin(a0) * sr], b1 = [Math.cos(a1) * sr, 0, Math.sin(a1) * sr];
+    const t0 = [Math.cos(a0) * sr * 0.5 + 0.03, top, Math.sin(a0) * sr * 0.5], t1 = [Math.cos(a1) * sr * 0.5 + 0.03, top, Math.sin(a1) * sr * 0.5];
+    tri(b0, b1, t1, 0); tri(b0, t1, t0, 0);
+  }
+  // Two leafy masses, pressed octahedra, the upper smaller.
+  const blob = (cx: number, cy: number, cz: number, r: number, h: number): void => {
+    const V = [[r, 0, 0], [0, 0, r], [-r, 0, 0], [0, 0, -r]].map((v) => [v[0] + cx, cy, v[2] + cz]);
+    const up = [cx, cy + h, cz], dn = [cx, cy - h, cz];
+    for (let k = 0; k < 4; k++) { const a = V[k], b = V[(k + 1) % 4]; tri(a, up, b, 1); tri(b, dn, a, 1); }
+  };
+  blob(0.02, 0.58, 0.0, 0.30, 0.16);
+  blob(0.04, 0.82, 0.03, 0.22, 0.14);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('aPart', new THREE.Float32BufferAttribute(part, 1));
+  g.computeVertexNormals();
+  return g;
+}
+const usMeshes = US_KINDS.map((K, kind) => {
+  const base = kind === 0 ? fernGeometry() : saplingGeometry();
+  const n = Math.ceil((2 * US_R) / K.step) + 2;
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.setAttribute('position', base.getAttribute('position'));
+  geo.setAttribute('normal', base.getAttribute('normal'));
+  geo.setAttribute('aPart', base.getAttribute('aPart'));
+  const slot = new Float32Array(n * n * 2);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { slot[(j * n + i) * 2] = i; slot[(j * n + i) * 2 + 1] = j; }
+  geo.setAttribute('aSlot', new THREE.InstancedBufferAttribute(slot, 2));
+  geo.instanceCount = n * n;
+  const u = { uUs: { value: new THREE.Vector4(0, 0, K.step, kind) }, uUsFoc: { value: new THREE.Vector3(0, 0, US_R) } };
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, canShadeU, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+${CAN_HASH_GLSL}
+${CANFLOOR_GLSL}
+attribute vec2 aSlot; attribute float aPart;
+uniform vec4 uUs; uniform vec3 uUsFoc;
+varying vec3 vUsCol;`)
+      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+vec2 usCell = uUs.xy + aSlot;
+vec4 usH = canH4(usCell + vec2(uUs.w * 131.0, 17.0));
+vec2 usXZ = (usCell + 0.15 + 0.7 * usH.xy) * uUs.z;
+vec2 usF = canFloorAt(usXZ);
+// Ferns take the shade, saplings the light that comes through a gap.
+float usW = uUs.w < 0.5 ? usF.x * (1.0 - usF.y) : usF.x * smoothstep(0.3, 0.75, usF.y);
+float usKeep = step(usH.z, smoothstep(0.15, 0.7, usW) * (uUs.w < 0.5 ? 0.85 : 0.6));
+float usS = usKeep * (1.0 - smoothstep(uUsFoc.z * 0.72, uUsFoc.z, length(usXZ - uUsFoc.xy)));
+float usA = usH.w * 6.2832, usC = cos(usA), usSn = sin(usA);
+objectNormal = vec3(usC * objectNormal.x - usSn * objectNormal.z, objectNormal.y, usSn * objectNormal.x + usC * objectNormal.z);`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+{
+  float usHt = uUs.w < 0.5 ? mix(0.45, 1.05, usH.x) : mix(1.3, 3.4, fract(usH.y * 7.3 + usH.z));
+  float usRad = uUs.w < 0.5 ? mix(0.55, 1.15, usH.y) : usHt;
+  vec3 lp = transformed * vec3(usRad, usHt, usRad) * usS;
+  lp = vec3(usC * lp.x - usSn * lp.z, lp.y, usSn * lp.x + usC * lp.z);
+  vec2 cuv = ((usXZ - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
+  float usG = texture2D(uCanShadeTex, cuv).r + uCanShadeBase;
+  // A little sunk: the lattice's ground is a 6 m bilinear of the drawn one.
+  transformed = lp + vec3(usXZ.x, usG - 0.12, usXZ.y);
+  float v = fract(usH.z * 5.7 + usH.x);
+  vUsCol = uUs.w < 0.5 ? mix(vec3(0.050, 0.110, 0.022), vec3(0.090, 0.150, 0.030), v)
+    : aPart < 0.5 ? vec3(0.060, 0.040, 0.022) : mix(vec3(0.070, 0.140, 0.030), vec3(0.120, 0.170, 0.040), v);
+}`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vUsCol;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb = vUsCol;');
+  };
+  mat.customProgramCacheKey = () => 'understorey-' + K.name;
+  canopyReceive(mat);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'understorey-' + K.name;
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  scene.add(mesh);
+  return { mesh, u, n, step: K.step };
+});
+const US_ON = qsNum('understorey', 1) > 0;
+function stepUnderstorey(fx: number, fz: number): void {
+  const on = US_ON && CANOPY_ON && canShadeU.uCanShadeOn.value.x > 0 && canShadeU.uCanLightBox.value.w > 0.5
+    && renderer.capabilities.isWebGL2 && chartMpp() < 1;
+  for (const U of usMeshes) {
+    U.mesh.visible = on;
+    if (!on) continue;
+    U.u.uUs.value.x = Math.floor(fx / U.step) - Math.floor(U.n / 2);
+    U.u.uUs.value.y = Math.floor(fz / U.step) - Math.floor(U.n / 2);
+    U.u.uUsFoc.value.set(fx, fz, US_R);
   }
 }
 /** FOREST SHELTER AT A POINT, on the CPU (audio, and anything else that asks
@@ -17873,7 +18072,8 @@ function canopyShelterAt(x: number, z: number, y: number): number {
   const ss = (e0: number, e1: number, t: number): number => { const k = clamp((t - e0) / (e1 - e0), 0, 1); return k * k * (3 - 2 * k); };
   return ss(0.45, 0.9, den) * ss(4, 9, L) * (1 - ss(0.35, 0.8, (y - g) / Math.max(L, 1)));
 }
-(window as any).__canlight = () => ({ ...canLightAt, sun: canLightAt.sun.toArray(), front: canLightFront, band: canLightBand, box: canShadeU.uCanLightBox.value.toArray() });
+(window as any).__canlight = () => ({ ...canLightAt, sun: canLightAt.sun.toArray(), front: canLightF.front, band: canLightF.band, box: canShadeU.uCanLightBox.value.toArray(),
+  near: { ...canNearF.at, sun: canNearF.at.sun.toArray(), band: canNearF.band, box: canShadeU.uCanNearBox.value.toArray() } });
 (window as any).__canshade = (k?: number) => {
   if (k !== undefined) canShadeU.uCanShadeOn.value.y = k;
   return { on: canShadeU.uCanShadeOn.value.x, k: canShadeU.uCanShadeOn.value.y, box: canShadeU.uCanShadeBox.value.toArray() };
@@ -18207,7 +18407,7 @@ function canopyQueueStale(R: CanopyRing, fx: number, fz: number): boolean {
 }
 function stepCanopy(now: number): void {
   canopyMesh.visible = CANOPY_ON; canopyOuter.visible = CANOPY_ON;
-  if (!CANOPY_ON) { canopyJobs = []; canopyRings = []; canopyGrids = []; canopySkel.visible = false; canopyU.skel.value.w = 0; canShadeU.uCanShadeOn.value.x = 0; return; }
+  if (!CANOPY_ON) { for (const U of usMeshes) U.mesh.visible = false; canopyJobs = []; canopyRings = []; canopyGrids = []; canopySkel.visible = false; canopyU.skel.value.w = 0; canShadeU.uCanShadeOn.value.x = 0; return; }
   const [fx, fz] = renderFocusXZ();
   // NO NEAR CLEARING. The canopy is the forest in a closed stand at every
   // distance; the split with the individual trees is WHERE (edges, open
@@ -18282,6 +18482,7 @@ function stepCanopy(now: number): void {
   }
   canopySkelStep(fx, fz);
   stepCanopyLight(fx, fz, now);
+  stepUnderstorey(fx, fz);
   const J = canopyJobs[0];
   if (!J) return;
   const R = J.R, V = R.V, t0 = performance.now();
@@ -53338,7 +53539,7 @@ function telemetryReport(): string {
       + ` · cooldown ${vegSeedDeferred ? `${VEG_SEED_CATCHUP}ms (seeding behind)` : '900ms'}`
       + ` · near tier commits ${vegNearLag.n ? `${Math.round(vegNearLag.ms / vegNearLag.n)}ms (${(vegNearLag.slices / vegNearLag.n).toFixed(1)} slices) into a sweep` : '—'}, cards at its end · no distance trigger`);
   }
-  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · ground re-read ${canopyStat.stale}× (${canopyStat.staleNodes} nodes) · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather) · skel ${canopySkel.visible ? `${CANOPY_SKEL_M}m ${canopySkelStat.trees} trees ${(canopySkelStat.tris / 1e3).toFixed(1)}k tris ${canopySkelStat.ms}ms (max ${canopySkelStat.maxMs}) ${canopySkelStat.builds} builds` : 'off'} · shade ${canShadeU.uCanShadeOn.value.x ? canShadeU.uCanShadeOn.value.y : 'off'} · light field ${canShadeU.uCanLightBox.value.w ? `${canLightAt.renders} renders ${canLightAt.ms}ms a band` : 'off'}`);
+  if (CANOPY_ON) L.push(`canopy on · rings ${canopyGrids.length} · ${(canopyStat.tris / 1e3).toFixed(0)}k tris · build ${canopyStat.ms}ms sliced · ground re-read ${canopyStat.stale}× (${canopyStat.staleNodes} nodes) · stands in for ${canopyStat.hid} trees (${(canopyStat.share * 100).toFixed(0)}% of the near gather) · tree budget unscaled (hidden trees are out of the gather) · skel ${canopySkel.visible ? `${CANOPY_SKEL_M}m ${canopySkelStat.trees} trees ${(canopySkelStat.tris / 1e3).toFixed(1)}k tris ${canopySkelStat.ms}ms (max ${canopySkelStat.maxMs}) ${canopySkelStat.builds} builds` : 'off'} · shade ${canShadeU.uCanShadeOn.value.x ? canShadeU.uCanShadeOn.value.y : 'off'} · light field ${canShadeU.uCanLightBox.value.w ? `${canLightAt.renders} renders ${canLightAt.ms}ms a band` : 'off'} · flecks ${canShadeU.uCanNearBox.value.w ? `${canNearF.at.renders} renders ${canNearF.at.ms}ms a band` : 'off'}`);
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · price ${_treePrice} · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge} · mid ${_treeMid} at ${EZ_FULL_PX}px`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
