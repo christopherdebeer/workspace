@@ -17917,7 +17917,7 @@ function stepCanopyLight(fx: number, fz: number, now: number): void {
   stepLightField(canLightF, ok, fx, fz, now);
   // The near field only once the coarse one stands, and only where a flecked
   // floor can be seen: not over the wide chart.
-  stepLightField(canNearF, ok && CANNEAR_N > 0 && canShadeU.uCanLightBox.value.w > 0.5 && chartMpp() < 1, fx, fz, now);
+  stepLightField(canNearF, ok && NEAR_ON && CANNEAR_N > 0 && canShadeU.uCanLightBox.value.w > 0.5 && chartMpp() < 1, fx, fz, now);
 }
 // ── THE UNDERSTOREY: WHAT GROWS UNDER THE CROWNS, BY THE LIGHT THAT REACHES IT ──
 //
@@ -18042,7 +18042,8 @@ objectNormal = vec3(usC * objectNormal.x - usSn * objectNormal.z, objectNormal.y
   scene.add(mesh);
   return { mesh, u, n, step: K.step };
 });
-const US_ON = qsNum('understorey', 1) > 0;
+let US_ON = qsNum('understorey', 1) > 0;
+let NEAR_ON = true;
 function stepUnderstorey(fx: number, fz: number): void {
   const on = US_ON && CANOPY_ON && canShadeU.uCanShadeOn.value.x > 0 && canShadeU.uCanLightBox.value.w > 0.5
     && renderer.capabilities.isWebGL2 && chartMpp() < 1;
@@ -18054,6 +18055,13 @@ function stepUnderstorey(fx: number, fz: number): void {
     U.u.uUsFoc.value.set(fx, fz, US_R);
   }
 }
+/** The forest floor's two layers, live, for a one-boot A/B: `us` the
+ *  understorey, `near` the sun-fleck field. */
+(window as any).__forestfloor = (o: { us?: boolean; near?: boolean } = {}) => {
+  if (o.us !== undefined) US_ON = o.us;
+  if (o.near !== undefined) { NEAR_ON = o.near; if (!o.near) canNearF.at.key = ''; }
+  return { us: US_ON, near: NEAR_ON, fleckBox: canShadeU.uCanNearBox.value.toArray(), visible: usMeshes.map((u) => u.mesh.visible) };
+};
 /** FOREST SHELTER AT A POINT, on the CPU (audio, and anything else that asks
  *  around the listener): the same closure the ground's light starts from —
  *  the inner ring's density where its roof is tall enough to stand under —
