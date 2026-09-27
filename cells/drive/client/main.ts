@@ -51684,6 +51684,11 @@ const writeUrl = (la: number, lo: number): void => {
     const cm = camMode === 'drone' || camMode === 'god' ? lastPov : camMode;
     const zm = camMode === 'top' && Math.abs(zoomT - 1) > 0.05
       ? `&z=${zoomT >= 30 ? zoomT.toFixed(0) : zoomT.toFixed(1)}` : '';
+    // The chart's tilt rides beside its zoom, for the same reason: a reload
+    // mid-survey should resume the view that was being read, not snap back
+    // to the stock angle. Written only in the chart and only off the stock.
+    const tl = camMode === 'top' && Math.abs(chartTiltDeg - CAM.tilt) > 0.5
+      ? `&ctilt=${chartTiltDeg.toFixed(0)}` : '';
     const ln = lineOn ? '&line=1' : '';
     // AND KEEP WHAT THE DRIVE DOES NOT OWN. This line rebuilds the query from
     // scratch, which silently deleted every parameter it did not itself write:
@@ -51697,7 +51702,7 @@ const writeUrl = (la: number, lo: number): void => {
     for (const [k, v] of new URLSearchParams(location.search)) {
       if (!URL_OWNED.has(k)) keep += `&${k}=${encodeURIComponent(v)}`;
     }
-    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}&cam=${cm}${zm}${m}${ln}${keep}`);
+    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}&cam=${cm}${zm}${tl}${m}${ln}${keep}`);
   } catch { /* fine */ }
 };
 // Surface grip: tarmac is fast, everything else asks you to slow down —
@@ -59348,7 +59353,7 @@ function shotState(): { lines: [string, string, string]; god: { x: number; z: nu
   const sun = Math.round((Math.asin(clamp(SUN_DIR.y, -1, 1)) * 180) / Math.PI);
   // Every switch in the URL that is not the address itself: the look and
   // bench levers this session was opened with.
-  const owned = new Set(['lat', 'lon', 'h', 'cam', 'z', 'run']);
+  const owned = new Set(['lat', 'lon', 'h', 'cam', 'z', 'ctilt', 'run']);
   const flags = queryPairs()
     .filter(([k]) => !owned.has(k)).map(([k, v]) => `${k}=${v}`).join(' ');
   return {
@@ -63180,6 +63185,7 @@ if (timeFromUrl < 0 && !qs('time')
   // to both the target and the current so the camera does not spend the first
   // seconds flying out from street level.
   { const z0 = parseFloat(qs('z') ?? ''); if (Number.isFinite(z0)) zoomT = zoomCur = clamp(z0, ZOOM_MIN, ZOOM_MAX); }
+  { const t0 = parseFloat(qs('ctilt') ?? ''); if (Number.isFinite(t0)) chartTiltDeg = clamp(t0, CHART_TILT_MIN, CHART_TILT_MAX); }
   // The default spawn faces its vista — El Capitan's rim looks southeast
   // down the valley; a URL heading always wins.
   if (!Number.isFinite(h0) && !qsHas('lat') && !qsHas('random')) state.heading = (145 * Math.PI) / 180;

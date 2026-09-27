@@ -75,6 +75,8 @@ export const SWITCHES = [
     note: 'spawn heading in degrees' },
   { id: 'z', kind: 'number', marks: ['world', 'owned'], fallback: 'the remembered zoom',
     note: 'chart zoom at boot' },
+  { id: 'ctilt', kind: 'number', marks: ['world', 'owned'], fallback: 'the stock chart tilt',
+    note: 'chart tilt in degrees at boot, 0 (horizon) to 89.5 (face-on)' },
   { id: 'cam', kind: 'choice', marks: ['world', 'owned'], fallback: 'the remembered view',
     note: 'open in chase, cab or top' },
   { id: 'random', kind: 'toggle', marks: ['world'], fallback: 'off',
