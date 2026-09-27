@@ -1,8 +1,8 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:0ed66b132dc87b5bcec7297aecbcd9c69afa782f0c700f613ebdf94869c8c847",
-  "syncedAt": "2026-09-27T17:59:27.435Z",
+  "treeVersion": "tree:5c75b53e17df1984e392a8f8cfb2b3e03f7e4d9aa4c2590fc443bd80085533d1",
+  "syncedAt": "2026-09-27T18:06:32.472Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
     "CLAUDE.md": "sha256:cbc5573077f9516c1c6670aa42f66a65cb99245ec0f1ae1a1a9324da35df3aea",
@@ -28,7 +28,7 @@
     "client/birdscape.ts": "sha256:325d1b0b7ad99bdaa6a7dc89866e4eef0e95a1ca8f734a346c30dd742e04f3b9",
     "client/bridge-forms.test.ts": "sha256:2f9b9441c339aa475873dc38b69f213bc4e8a3de77f0331841ffc0e6148c2154",
     "client/building-fabric.ts": "sha256:d453f3cebba205df4635f0a4f6788c65ebbb2ba28ca7bff88cbfddc3dd687982",
-    "client/canopy-seed.ts": "sha256:d7f23801ccdac88952942668fb3675507c0a3473dba6a0e48313d98dd385897f",
+    "client/canopy-seed.ts": "sha256:4652af09d666a052ae1b9752f758aa5a69db72b879532e4472e122d0b2366c82",
     "client/chart-layers.ts": "sha256:f393f6b131e3d5ae90bca715f0fb92659075f82c5f6f456ffc8a7555d961b242",
     "client/climate.ts": "sha256:99b75a220a2cca48c088a781c1ef25f0efc695514cf40d012ca171fc2fd27adb",
     "client/clip.test.mjs": "sha256:c20f652c7ac87951b80a22b9554c28ba25d246345f905420fa3155a3bbc83c81",
@@ -99,7 +99,7 @@
     "client/lab-dials.ts": "sha256:a4384291f86bdad09f6780370c3c940233d4c11bad9dc1966137c2a523fe6b02",
     "client/labs.ts": "sha256:656fe6912ce271ac982bd85ac74273688a48466a5f73d7888d6d251221e715cb",
     "client/landmarks.ts": "sha256:f84d2a41a45e77fed0f24da8759e4610885dbb5b2fe2ee9cc337db6f85fa2ae4",
-    "client/main.ts": "sha256:39e3f5d766989f0736f286232b8779cf5ecacf3c644bb3bb2158a9082c2d8161",
+    "client/main.ts": "sha256:613e7175e5bf1e13444985f0df0d5281622ba74f96e5d874a25f77f999befa2e",
     "client/marks-lab.ts": "sha256:ed0da10b3fd5b830a089ebc05d654889e21914f42ac27a32aaabd0faa367c2c0",
     "client/marks.ts": "sha256:5c9f621367010d3bad256dba5dc6e2bfd38e1b554754b1c6c00356e681a16dc8",
     "client/menu.ts": "sha256:e0b7a0a7a285d65b56e48d2c9a2ebc77cd1a8b2bbfddcc749329c3d8dc0157e9",
