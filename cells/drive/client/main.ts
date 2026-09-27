@@ -6229,6 +6229,18 @@ const rtC = mkRT(false), rtD = mkRT(false); // bright-pass ping-pong for bloom
 // circle radii separately; FAR and NEAR never share colour, because sharing is
 // what lets a soft background bleed through a sharp silhouette.
 const rtDofPrep = mkRT(false), rtDofFar = mkRT(false), rtDofNear = mkRT(false);
+// ── THE COMPOSITE AT THE ART GRID ──
+// The scene is 111x240 on a phone at 240P, but the composite ran on the
+// canvas: 780x1688 at DPR 2, fifty fragments of haze, fog march, depth of
+// field and palette for every art pixel, each one computing the same answer
+// bar the half-res soft buffers' bilinear drift inside the cell. `compart=1`
+// composites into this target instead and a copy pass magnifies it NEAREST —
+// the pixel grid the dither and scanlines already key to. 8-bit on purpose:
+// the composite's output is the palette-quantised frame, the canvas is 8-bit.
+const rtComp = new THREE.WebGLRenderTarget(2, 2, { type: THREE.UnsignedByteType, depthBuffer: false });
+rtComp.texture.minFilter = THREE.NearestFilter;
+rtComp.texture.magFilter = THREE.NearestFilter;
+let COMP_ART = qs('compart') === '1';
 // THE SHUTTER'S OWN TARGET. Full pixel-grid size and NEAREST like rtScene,
 // not half like the blur pair: this is not a soft copy of the frame, it IS
 // the frame, and everything downstream reads it in rtScene's place.
@@ -6289,6 +6301,7 @@ resizePost = () => {
   rtM.setSize(w, Math.max(2, h));
   rtContour.setSize(w, Math.max(2, h));
   rtContourLine.setSize(w, Math.max(2, h));
+  rtComp.setSize(w, Math.max(2, h));
   pixSize.set(w, Math.max(2, h));
   // The tree crowns turn a distance into ART PIXELS to decide how far to close
   // onto their own hull, and the art grid is this number. Set here rather than
@@ -7443,6 +7456,12 @@ ${DITHER_GLSL}
       gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
     }`,
 });
+const compCopyMat = new THREE.ShaderMaterial({
+  uniforms: { src: { value: null as THREE.Texture | null } },
+  vertexShader: QUAD_VS,
+  fragmentShader: 'uniform sampler2D src; varying vec2 vUv; void main(){ gl_FragColor = texture2D(src, vUv); }',
+  depthTest: false, depthWrite: false,
+});
 /**
  * SIGNED CIRCLE-OF-CONFUSION PREPARATION.
  *
@@ -7753,7 +7772,11 @@ composite = (amt: number): void => {
   compMat.uniforms.uForestAir.value = CANOPY_ON && camMode !== 'top' && FOREST_AIR > 0
     ? FOREST_AIR * (0.12 + 0.88 * clamp(Math.max(wxL.fog, wxL.wet * 0.7, wxL.rain), 0, 1)) : 0;
   compMat.uniforms.uContourOn.value = chartOn.contour ? 1 : 0;
-  runPass(compMat, null);
+  if (COMP_ART) {
+    runPass(compMat, rtComp);
+    compCopyMat.uniforms.src.value = rtComp.texture;
+    runPass(compCopyMat, null);
+  } else runPass(compMat, null);
   if (xrayMode === 1 || xrayMode === 3) {
     dofDebugMat.uniforms.uView.value = xrayMode;
     dofDebugMat.uniforms.uActive.value = dofOn ? 1 : 0;
@@ -18164,6 +18187,19 @@ function stepUnderstorey(fx: number, fz: number): void {
 };
 /** The forest floor's two layers, live, for a one-boot A/B: `us` the
  *  understorey, `near` the sun-fleck field. */
+/** Composite at the art grid or the canvas, live, plus a timed bench of the
+ *  composite pass alone into each (gl.finish-fenced, n reps): the fragment
+ *  cost is the only thing that differs, so the ratio is the saving. */
+(window as any).__compart = (on?: boolean) => { if (on !== undefined) COMP_ART = on; return { on: COMP_ART, art: [rtComp.width, rtComp.height], canvas: [renderer.domElement.width, renderer.domElement.height] }; };
+(window as any).__compbench = (n = 20) => {
+  const gl = renderer.getContext();
+  const time = (f: () => void): number => { gl.finish(); const t = performance.now(); for (let i = 0; i < n; i++) f(); gl.finish(); return (performance.now() - t) / n; };
+  const canvasMs = time(() => runPass(compMat, null));
+  const artMs = time(() => runPass(compMat, rtComp));
+  compCopyMat.uniforms.src.value = rtComp.texture;
+  const copyMs = time(() => runPass(compCopyMat, null));
+  return { canvasMs, artMs, copyMs, frags: { canvas: renderer.domElement.width * renderer.domElement.height, art: rtComp.width * rtComp.height } };
+};
 (window as any).__forestfloor = (o: { us?: boolean; near?: boolean } = {}) => {
   if (o.us !== undefined) US_ON = o.us;
   if (o.near !== undefined) { NEAR_ON = o.near; if (!o.near) canNearF.at.key = ''; }
@@ -63415,6 +63451,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('hydroskip', () => { HYDRO_SKIP = qs('hydroskip') !== '0'; rebuildInPlace(); });
   onSwitch('hydroground', () => { HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150)); rebuildInPlace(); });
   onSwitch('hydroeps', () => { HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02)); rebuildInPlace(); });
+  onSwitch('compart', () => { COMP_ART = qs('compart') === '1'; });
   onSwitch('treetris', () => { const t = Number(qs('treetris')); treeTriBudget = Number.isFinite(t) && t > 0 ? t : 2400000; });
   onSwitch('treerange', () => { const r = Number(qs('treerange')); treeRange = Number.isFinite(r) && r > 0 ? clamp(r, 100, 6000) : 700; });
   onSwitch('treepop', () => { const q = Number(qs('treepop')); treePopulationScale = Number.isFinite(q) && q > 0 ? clamp(q, 0.05, 32) : 1; });

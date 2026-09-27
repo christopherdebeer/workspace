@@ -280,6 +280,8 @@ export const SWITCHES = [
     note: 'forest air: the low, damp-weather haze held under a closed canopy, lit where the light field says the sun gets in; 0 is none' },
   { id: 'understorey', kind: 'number', marks: ['look'], fallback: '1',
     note: 'ferns in the canopy’s shade and saplings in its sunlit gaps, placed by the forest light field; 0 is the bare floor' },
+  { id: 'compart', kind: 'number', marks: ['bench'], apply: 'live', fallback: '0',
+    note: 'composite at the art grid and magnify nearest (1), rather than per canvas pixel (0) — fifty times fewer composite fragments on a DPR-2 phone at 240P' },
   { id: 'cannear', kind: 'number', marks: ['look'], fallback: '160',
     note: 'texels a side of the near sun-fleck field over the 64 m about the focus (0.4 m at 160); 0 leaves the floor to the coarse field’s soft patches' },
   { id: 'canopystale', kind: 'number', marks: ['bench'], fallback: '400',
