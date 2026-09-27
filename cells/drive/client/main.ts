@@ -4677,6 +4677,11 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     oceanCoverage: ocean,
     surfaceOccluders,
   }).then(() => {
+    // The canopy keeps out of drawn water, so a new field re-reads it there —
+    // at most every 8 s a tile: a streaming river rebuilds its field often,
+    // and a water edge that moved a texel does not need a canopy re-read each time.
+    { const now = performance.now(), last = canopyHydroAt.get(key) ?? -1e9;
+      if (now - last > 8000) { canopyHydroAt.set(key, now); canopyGroundMoved(t.xs, t.zs, t.xs + t.w, t.zs + t.h); } }
     publishHydroShoreBreakLines(t, key);
     queueProductionSubstrateShadow(t, key);
   })
@@ -18055,6 +18060,20 @@ function stepUnderstorey(fx: number, fz: number): void {
     U.u.uUsFoc.value.set(fx, fz, US_R);
   }
 }
+/** Canopy nodes standing in drawn water within r of the focus: the inner
+ *  ring's lattice read where hydroWet says water. 0 is the rule holding. */
+(window as any).__canopywater = (r = 300) => {
+  const R = canopyRings[0]; if (!R) return null;
+  const [fx, fz] = renderFocusXZ(); let wet = 0, wetEv = 0, n = 0;
+  for (let j = 0; j < R.V; j++) for (let i = 0; i < R.V; i++) {
+    const x = R.x0 + i * R.step, z = R.z0 + j * R.step;
+    if (Math.hypot(x - fx, z - fz) > r) continue;
+    n++;
+    if (!hydroWet(x, z)) continue;
+    wet++; if (R.live.ev[j * R.V + i] > 0) wetEv++;
+  }
+  return { nodes: n, wet, wetWithCanopy: wetEv, stale: canopyStat.stale };
+};
 /** The forest floor's two layers, live, for a one-boot A/B: `us` the
  *  understorey, `near` the sun-fleck field. */
 (window as any).__forestfloor = (o: { us?: boolean; near?: boolean } = {}) => {
@@ -18244,6 +18263,15 @@ function canopyNode(R: CanopyRing, B: CanopyBuf, x0: number, z0: number, i: numb
     if (c7.road) ev = 0;
     else if (c7.track && onCarriageway(x, z, 2.5).track) ev = 0;
     else if (onCarriageway(x, z, 10).road) ev *= 0.6;
+    // AND CLEAR OF WATER. WorldCover calls a river through a forest forest
+    // (its 10 m pixels do not see a channel under the crowns), so the stand
+    // stood in the river. The drawn water is the authority, as the mesh
+    // trees' own veto reads it; a bank a few metres off takes the overhang at
+    // reduced cover, as a road's verge does. No mangrove or swamp forest yet.
+    if (ev > 0) {
+      if (hydroWet(x, z)) ev = 0;
+      else if (hydroWet(x + 5, z) || hydroWet(x - 5, z) || hydroWet(x, z + 5) || hydroWet(x, z - 5)) ev *= 0.55;
+    }
   }
   B.ev[k] = ev;
   const g = groundAt(x, z);
@@ -18375,6 +18403,7 @@ function canopyCommitJob(J: CanopyJob): void {
  *  nodes inside them within CANOPY_STALE_R of the focus, as soon as no other
  *  canopy job is running, instead of waiting for the whole parked refresh. */
 const canopyStale: Array<[number, number, number, number]> = [];
+const canopyHydroAt = new Map<string, number>();
 const CANOPY_STALE_R = qsNum('canopystale', 400), CANOPY_STALE_MS = 1000;
 let canopyStaleAt = 0;
 function canopyGroundMoved(x0: number, z0: number, x1: number, z1: number, heights = false): void {
