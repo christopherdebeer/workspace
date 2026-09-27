@@ -17721,7 +17721,7 @@ function canopySkelStep(fx: number, fz: number): void {
       if (!c || Math.hypot(c.x - fx, c.z - fz) > rad) continue;
       const key = cx + ',' + cy, sig = `${c.family}|${c.ground.toFixed(2)}|${c.top.toFixed(2)}|${c.R.toFixed(2)}|${c.D.toFixed(2)}`;
       let e = canopySkelCache.get(key);
-      if (!e || e.sig !== sig) { const B = new SkeletonBuilder(); B.tree(c); e = { sig, B }; canopySkelCache.set(key, e); made++; }
+      if (!e || e.sig !== sig) { const B = new SkeletonBuilder(); B.tree(c, (gx, gz) => groundAt(gx, gz)); e = { sig, B }; canopySkelCache.set(key, e); made++; }
       seen.add(key); keep.push(e); nV += e.B.pos.length; nI += e.B.idx.length;
       trees++; byFamily[c.family]++;
     }

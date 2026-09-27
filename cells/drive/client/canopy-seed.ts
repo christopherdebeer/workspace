@@ -142,24 +142,51 @@ export class SkeletonBuilder {
     }
   }
 
-  /** One tree. Returns the triangles it added. */
-  tree(c: CanopyCrown): number {
+  /** One tree. Returns the triangles it added. `groundAt` (optional) is the
+   *  ground height at a nearby point, for what lies on the floor beside it. */
+  tree(c: CanopyCrown, groundAt?: (x: number, z: number) => number): number {
     const t0 = this.idx.length;
     const { x, z, top, R, D, ground, L, family, rot, h } = c;
     const rt = 0.12 + 0.018 * L;
     const yB = top - D;
     const tone = 0.8 + 0.4 * h[2];
     const r = (n: number): number => fract(h[3] * (13.1 + n * 7.7) + h[0] * (3.3 + n * 1.9));
+    // The crown's ground is the canopy lattice's (6 m, half floats); the drawn
+    // mesh can sit a metre off it on a slope, so the bole and its roots stand
+    // on the drawn ground where it is known and reach below both.
+    const gDrawn = groundAt ? groundAt(x, z) : ground;
+    const base = Math.min(ground, gDrawn) - 0.3;
+    // ROOT FLARES: the bole does not stand on the ground like a post, it
+    // spreads into it. Three or four buttresses running out and down.
+    if (family !== 4) {
+      const nr = 3 + (r(60) > 0.5 ? 1 : 0);
+      for (let i = 0; i < nr; i++) {
+        const a = rot + (i / nr) * 6.2832 + (r(61 + i) - 0.5) * 0.8;
+        const reach = rt * (2.2 + 1.6 * r(70 + i));
+        this.prism(x, gDrawn + rt * 1.6, z, x + Math.cos(a) * reach, (groundAt ? groundAt(x + Math.cos(a) * reach, z + Math.sin(a) * reach) : gDrawn) - 0.15, z + Math.sin(a) * reach, rt * 0.55, rt * 0.12, 3, tone * 0.85);
+      }
+    }
+    // DEADFALL: a seeded minority of trees has a fallen limb or a log on the
+    // floor beside it — the anchors that give the ground scale and history.
+    if (groundAt && r(80) < (family === 2 ? 0.16 : 0.1)) {
+      const a = rot + r(81) * 6.2832, d0 = 1.2 + 2.5 * r(82);
+      const len = (family === 2 ? 3 : 2) + 5 * r(83);
+      const ax = x + Math.cos(a) * d0, az = z + Math.sin(a) * d0;
+      const b = a + 1.2 + r(84) * 2.0;
+      const bx = ax + Math.cos(b) * len, bz = az + Math.sin(b) * len;
+      const lr = rt * (r(85) > 0.6 ? 0.8 : 0.35);
+      this.prism(ax, groundAt(ax, az) + lr * 0.6, az, bx, groundAt(bx, bz) + lr * 0.4, bz, lr, lr * 0.7, 5, tone * 0.7);
+    }
     if (family === 4) {
       // Palm: a slender bole straight to the frond hub; the fronds are the shader's.
-      this.prism(x, ground - 0.3, z, x, top - D * 0.3, z, rt * 0.8, rt * 0.6, 6, tone * 1.2);
+      this.prism(x, base, z, x, top - D * 0.3, z, rt * 0.8, rt * 0.6, 6, tone * 1.2);
       return (this.idx.length - t0) / 3;
     }
     if (family === 2) {
       // Conifer: a tapering bole nearly to the top, whorls of short limbs
       // drooping outward inside the cone, and dead stubs below the crown.
       const yTop = top - D * 0.1;
-      this.prism(x, ground - 0.3, z, x, yTop, z, rt, rt * 0.2, 6, tone);
+      this.prism(x, base, z, x, yTop, z, rt, rt * 0.2, 6, tone);
       const dy = 1.6 + 0.6 * r(1);
       let n = 0;
       for (let y = Math.max(ground + 1.6, yB - 2.5); y < top - D * 0.25 && n < 9; y += dy, n++) {
@@ -181,7 +208,7 @@ export class SkeletonBuilder {
     const yF = umb ? yB - 0.3 - 0.6 * r(2) : yB + D * (col ? 0.12 : 0.18) * r(3);
     const lean = 0.15 * R * r(4), la = rot + r(5) * 6.28;
     const fx = x + Math.cos(la) * lean, fz = z + Math.sin(la) * lean;
-    this.prism(x, ground - 0.3, z, fx, yF, fz, rt, rt * 0.72, 6, tone);
+    this.prism(x, base, z, fx, yF, fz, rt, rt * 0.72, 6, tone);
     const limbs = col ? 3 : umb ? 4 : 3 + (r(6) > 0.5 ? 1 : 0);
     for (let i = 0; i < limbs; i++) {
       const a = rot + (i / limbs) * 6.2832 + (r(10 + i) - 0.5) * 0.9;
