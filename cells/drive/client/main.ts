@@ -17740,6 +17740,24 @@ function stepCanopyLight(fx: number, fz: number, now: number): void {
     canShadeU.uCanLightBox.value.set(canLightU.uOrg.value.x, canLightU.uOrg.value.y, CANLIGHT_M, 1);
   }
 }
+/** FOREST SHELTER AT A POINT, on the CPU (audio, and anything else that asks
+ *  around the listener): the same closure the ground's light starts from —
+ *  the inner ring's density where its roof is tall enough to stand under —
+ *  and 1 only below the crowns' base, so an ear above the roof is exposed. */
+function canopyShelterAt(x: number, z: number, y: number): number {
+  const R = canopyRings[0];
+  if (!CANOPY_ON || !R || !canopyGrids.length) return 0;
+  const V = R.V, u = (x - R.x0) / R.step, v = (z - R.z0) / R.step;
+  if (u < 0 || v < 0 || u >= V - 1 || v >= V - 1) return 0;
+  const i = Math.floor(u), j = Math.floor(v), a = u - i, b = v - j, T = R.live.tex;
+  const f = (c: number): number => {
+    const at = (ii: number, jj: number): number => halfToFloat(T[(jj * V + ii) * 4 + c]);
+    return (at(i, j) * (1 - a) + at(i + 1, j) * a) * (1 - b) + (at(i, j + 1) * (1 - a) + at(i + 1, j + 1) * a) * b;
+  };
+  const g = f(0) + R.baseY, L = f(1), den = f(2);
+  const ss = (e0: number, e1: number, t: number): number => { const k = clamp((t - e0) / (e1 - e0), 0, 1); return k * k * (3 - 2 * k); };
+  return ss(0.45, 0.9, den) * ss(4, 9, L) * (1 - ss(0.35, 0.8, (y - g) / Math.max(L, 1)));
+}
 (window as any).__canlight = () => ({ ...canLightAt, sun: canLightAt.sun.toArray(), front: canLightFront, band: canLightBand, box: canShadeU.uCanLightBox.value.toArray() });
 (window as any).__canshade = (k?: number) => {
   if (k !== undefined) canShadeU.uCanShadeOn.value.y = k;
@@ -52231,6 +52249,7 @@ let ambRiverAt = 0;
  *  water 220 m off (the fourth ring above) and a meadow with no tree in it
  *  was as quiet as a car park (this). */
 let ambGrassL = 0;
+let ambShelterL = 0;
 /** How enclosed the truck is, 0 open sky and 1 inside a bore — glided, so a
  *  portal is an entrance rather than a switch. */
 let encL = 0;
@@ -54688,12 +54707,19 @@ function tick(now: number): void {
         : c === COVER.shrub ? 0.5 : c === COVER.moss ? 0.4 : c === COVER.tree ? 0.25 : 0;
     }
     ambGrassL = gr / 5;
+    ambShelterL = canopyShelterAt(earX, earZ, earY);
   }
   const windAmb = clamp(windKmhNow() / 55, 0, 1);
+  // UNDER THE CROWNS the wind at the ear drops and the roof keeps talking:
+  // the rustle is the canopy overhead, in the regional wind (a closed stand
+  // is all foliage whatever the tree sites under the ear say), while the
+  // exposed wind noise the mixer draws is cut by the shelter.
+  const earWind = windAmb * (1 - 0.65 * ambShelterL);
   const bed = ambientBed(earSpeed, !earDrone && engineSt === 'on');
   dbgAmb = {
     listener: earDrone ? 'drone' : 'truck', distance: +truckDist.toFixed(1),
-    rustle: +(windAmb * ambVegL * bed * ambHeightGain).toFixed(3),
+    rustle: +(windAmb * Math.max(ambVegL, 0.9 * ambShelterL) * bed * ambHeightGain).toFixed(3),
+    shelter: +ambShelterL.toFixed(2),
     river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
     // Activity belongs to the habitat; masking affects phrase gain, not scheduling.
     birds: +(clamp((sunAlt + 0.04) / 0.16, 0, 1) * (1 - wxL.rain) * ambVegL).toFixed(3),
@@ -54734,7 +54760,7 @@ function tick(now: number): void {
     slideV: +slideV.toFixed(2), spinL: +wheelSlipL.toFixed(3),
     surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, audioSlip,
-    surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
+    surfKind === 'water' ? 0 : surfQ, wheelSlipL, earWind,
     engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0,
     dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet, earSpeed, Math.hypot(state.speed, slideV));
   // The rig against the world: bodywork on a wall while moving, the hull's
