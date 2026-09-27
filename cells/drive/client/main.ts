@@ -7096,6 +7096,29 @@ ${DITHER_GLSL}
     uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
     uniform float uFogTop; uniform float uFogAmt; uniform vec3 uFogC; uniform float uFogDeck;
     uniform vec4 uRainFlow; uniform float uRainCurtain; uniform float uRainRegional;
+    // FOREST AIR (see its use): the canopy lattice and light field, shared.
+    uniform sampler2D uCanShadeTex; uniform vec4 uCanShadeBox; uniform float uCanShadeBase; uniform vec3 uCanShadeOn; uniform vec3 uCanShadeSun;
+    uniform sampler2D uCanLightTex; uniform vec4 uCanLightBox; uniform float uForestAir;
+    // Density of forest air at pw, and (w) how much of it the sun reaches.
+    vec2 forestAirD(vec3 pw){
+      vec2 cuv = ((pw.xz - uCanShadeBox.xy) / uCanShadeBox.z + 0.5) / uCanShadeBox.w;
+      if (cuv.x <= 0.0 || cuv.y <= 0.0 || cuv.x >= 1.0 || cuv.y >= 1.0) return vec2(0.0);
+      vec3 ct = texture2D(uCanShadeTex, cuv).rgb;
+      float g = ct.r + uCanShadeBase, L = ct.g;
+      float closure = smoothstep(0.45, 0.9, ct.b) * smoothstep(4.0, 9.0, L);
+      float h = pw.y - g;
+      // Lying low in the stand, gone toward the crowns' base; broad pockets.
+      float d = closure * exp(-max(h, 0.0) / 3.5) * (1.0 - smoothstep(0.3, 0.6, h / max(L, 1.0)))
+        * (0.7 + 0.3 * sin(pw.x * 0.045 + sin(pw.z * 0.031) * 2.0));
+      float lit = 0.0;
+      if (uCanLightBox.w > 0.5 && d > 0.0) {
+        vec3 ls = normalize(uCanShadeSun);
+        vec2 q = pw.xz + ls.xz / max(ls.y, 0.2) * max(g + 1.2 - pw.y, 0.0);
+        vec2 luv = (q - uCanLightBox.xy) / uCanLightBox.z;
+        if (luv.x > 0.0 && luv.y > 0.0 && luv.x < 1.0 && luv.y < 1.0) lit = texture2D(uCanLightTex, luv).r * max(ls.y, 0.0);
+      }
+      return vec2(d, lit);
+    }
     float wxFogD(vec3 pw){
       vec4 wxs = texture2D(uWxTex, (pw.xz - uWxMin) * uWxInv);
       // Broad terrain-space pockets keep a fog bank from reading as a slab.
@@ -7227,6 +7250,31 @@ ${DITHER_GLSL}
         // Mist receives the same broad solar tint as the distant air.
         vec3 mistColour = mix(uFogC, hazeAt(dir, uHazeWarm), 0.24);
         col = mix(col, mistColour, min(fogF, 0.965));
+      }
+      // FOREST AIR, along the ray. A closed stand holds a little air near its
+      // floor: almost nothing in a dry clear stand (uForestAir's floor), more
+      // in damp or foggy weather, low and in broad pockets, gone toward the
+      // crowns' base and out at the stand's edge. Looking in from an opening
+      // crosses a lot of it; looking out crosses only what is between the eye
+      // and the edge. Air the light field says the sun reaches is lit — a
+      // pale warm glow in an opening, never a beam drawn for its own sake —
+      // and air in the shade darkens a step toward the stand's own tone.
+      if (uCanShadeOn.x > 0.5 && uForestAir > 0.001) {
+        float tf = min(t, 180.0), st = tf / 6.0;
+        float od = 0.0, litOd = 0.0;
+        for (int fi = 0; fi < 6; fi++) {
+          vec2 fa = forestAirD(camPos + dir * ((float(fi) + 0.5) * st));
+          od += fa.x; litOd += fa.x * fa.y;
+        }
+        od *= st * 0.012 * uForestAir; litOd *= st * 0.012 * uForestAir;
+        float a = 1.0 - exp(-od);
+        if (a > 0.001) {
+          float litShare = od > 1e-5 ? litOd / od : 0.0;
+          vec3 hz = hazeAt(dir, uHazeWarm);
+          vec3 shadeAir = mix(hz * 0.42, vec3(0.055, 0.075, 0.05), 0.35);
+          vec3 sunAir = hz * vec3(1.25, 1.18, 1.0);
+          col = mix(col, mix(shadeAir, sunAir, clamp(litShare * 1.6, 0.0, 1.0)), min(a, 0.4));
+        }
       }
       if (uFogAmt > 0.001 && uRainCurtain > 0.001 && uRainRegional > 0.01) {
         // Twelve fixed midpoint samples, no temporal jitter or history buffer.
@@ -7726,6 +7774,10 @@ composite = (amt: number): void => {
   compMat.uniforms.dofNearTex.value = rtDofNear.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
   compMat.uniforms.contourTex.value = rtContour.texture;
+  // Forest air: a floor so a dry clear stand holds almost none, the rest
+  // from the weather's damp; never on the chart.
+  compMat.uniforms.uForestAir.value = CANOPY_ON && camMode !== 'top' && FOREST_AIR > 0
+    ? FOREST_AIR * (0.12 + 0.88 * clamp(Math.max(wxL.fog, wxL.wet * 0.7, wxL.rain), 0, 1)) : 0;
   compMat.uniforms.uContourOn.value = chartOn.contour ? 1 : 0;
   runPass(compMat, null);
   if (xrayMode === 1 || xrayMode === 3) {
@@ -7870,6 +7922,8 @@ function canopyReceive(mat: THREE.Material): void {
   m.customProgramCacheKey = () => (key ? key() : '') + '|canrecv';
   m.needsUpdate = true;
 }
+compMat.uniforms.uForestAir = { value: 0 };
+Object.assign(compMat.uniforms, canShadeU);
 const envU = {
   uCloudS: { value: 0 },                       // cover, for cloud shadows
   // METRES OF GROUND PER ART PIXEL, on the chart; 0 from the seat. What the
@@ -17664,6 +17718,7 @@ function canopySkelStep(fx: number, fz: number): void {
 // again when the focus has moved CANLIGHT_MOVE, the sun a degree, or the
 // canopy lattice under it committed (throttled to CANLIGHT_MIN_MS). terrainFx
 // reads it (canShadeU) for everything below the crowns.
+const FOREST_AIR = qsNum('forestair', 1);
 const CANLIGHT_N = 128, CANLIGHT_M = 192, CANLIGHT_MOVE = 40, CANLIGHT_MIN_MS = 1200;
 const canLightRT = [0, 1].map(() => new THREE.WebGLRenderTarget(CANLIGHT_N, CANLIGHT_N,
   { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false }));
