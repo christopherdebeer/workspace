@@ -17103,7 +17103,15 @@ void canLoad(vec2 q) {
   for (int k = 0; k < 4; k++) {
     vec2 cell = q + vec2(float(k - (k / 2) * 2), float(k / 2));
     vec4 h = canH4(cell);
-    vec2 c = (cell + 0.25 + 0.5 * h.xy) * ${S};
+    // THE CROWN'S SIZE IS DRAWN FIRST AND ITS PLACE SECOND, so a small crown
+    // may wander the whole cell and a big one stays central. A crown of cell
+    // radius rf is found from every point it covers as long as it lies in
+    // [-0.5, 1.5] of its cell — the 2x2 quadrant's reach — so its centre may
+    // sit anywhere in [rf - 0.5, 1.5 - rf]. The old fixed [0.25, 0.75] kept
+    // every crown near its cell's middle, and from above the stand read as
+    // the lattice it is.
+    float rf = mix(0.50, 0.84, fract(h.z * 3.7 + h.w));
+    vec2 c = (cell + (rf - 0.5) + h.xy * (2.0 - 2.0 * rf)) * ${S};
     vec3 gl = canGL(c);
     float L = gl.y * canFadeAt(c) * (0.84 + 0.3 * h.z);
     vec4 mixS = texture2D(canSpecies, (c - canStandBox.xy) * canStandBox.zw);
@@ -17115,12 +17123,12 @@ void canLoad(vec2 q) {
     float minor = mix(0.70, 1.0, fract(h.x * 11.3 + h.z));
     float leafScale = family == 2.0 ? 0.48 : family == 4.0 ? 1.5 : mix(0.65, 1.55, h.y);
     cShape[k] = vec4(family, minor, leafScale, mix(0.12, 0.34, h.w));
-    // A closed stand's crowns touch: 0.58-0.74 of the cell, the most the 2x2
-    // quadrant can hold (a crown centred a quarter in cannot reach 0.75 out).
+    // A closed stand's crowns touch: rf is 0.50-0.84 of the cell, placed so
+    // the 2x2 quadrant always holds it (above).
     // One in seven stands a head above the rest, as an emergent does.
     float emergent = step(0.86, fract(h.x * 5.31 + h.y * 2.17));
     L *= 1.0 + 0.22 * emergent;
-    float R = ${S} * mix(0.58, 0.74, fract(h.z * 3.7 + h.w)) * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
+    float R = ${S} * rf * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
     // Crown proportions vary structurally, not with camera distance.
     if (family == 1.0) R *= mix(0.48, 0.66, h.y);
     if (family == 2.0) R *= mix(0.72, 1.0, h.x);
@@ -17643,7 +17651,7 @@ normal = normalize(mix(normal, (viewMatrix * vec4(canN, 0.0)).xyz, vCanK));`)
   reflectedLight.indirectDiffuse += diffuseColor.rgb * canSunC * wrap * (0.035 + 0.045 * canSky) * vCanK;
 }`);
   };
-  mat.customProgramCacheKey = () => 'canopy-diversity-11';
+  mat.customProgramCacheKey = () => 'canopy-diversity-12';
   return { mat, u };
 }
 const canopyIn = canopyMaterial(), canopyOut = canopyMaterial();

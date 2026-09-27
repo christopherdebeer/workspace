@@ -74,7 +74,9 @@ export function canopyCrownAt(cellX: number, cellY: number, S: number,
   species: (x: number, z: number) => [number, number, number, number],
   fade: (x: number, z: number) => number): CanopyCrown | null {
   const h = canH4(cellX, cellY);
-  const x = (cellX + 0.25 + 0.5 * h[0]) * S, z = (cellY + 0.25 + 0.5 * h[1]) * S;
+  // Size first, place second — see the shader's canLoad.
+  const rf = mix(0.50, 0.84, fract(h[2] * 3.7 + h[3]));
+  const x = (cellX + (rf - 0.5) + h[0] * (2 - 2 * rf)) * S, z = (cellY + (rf - 0.5) + h[1] * (2 - 2 * rf)) * S;
   const g = gl(x, z);
   let L = g[1] * fade(x, z) * (0.84 + 0.3 * h[2]);
   const mixS = species(x, z);
@@ -85,7 +87,7 @@ export function canopyCrownAt(cellX: number, cellY: number, S: number,
   const minor = mix(0.70, 1.0, fract(h[0] * 11.3 + h[2]));
   const emergent = fract(h[0] * 5.31 + h[1] * 2.17) >= 0.86 ? 1 : 0;
   L *= 1.0 + 0.22 * emergent;
-  let R = S * mix(0.58, 0.74, fract(h[2] * 3.7 + h[3])) * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
+  let R = S * rf * mix(1.0, 0.66, cone) * clamp(L / 11.0, 0.55, 1.0);
   if (family === 1) R *= mix(0.48, 0.66, h[1]);
   if (family === 2) R *= mix(0.72, 1.0, h[0]);
   let D = cone ? L * mix(0.58, 0.88, h[1]) : Math.min(L * 0.72, R * mix(1.1, 1.85, h[0]));
