@@ -16426,7 +16426,9 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sGm = length(uGust);
         vec2 sGd = sGm > 1e-4 ? uGust / sGm : vec2(0.0, 1.0);
         float sPhase = dot(sP, sGd) * 0.42;
-        sLp.xz += uGust * (sIsStone ? 0.0 : sStiffness)
+        // SHELTERED. Under closed crowns the understory barely stirs while the
+        // roof moves; an opening lets the gust down to the ground.
+        sLp.xz += uGust * (sIsStone ? 0.0 : sStiffness) * mix(1.0, 0.25 + 0.75 * sFloor.y, sFloor.x)
           * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sPhase)));
         // A dead slot collapses to a point: zero area, so it costs its vertices
         // and not one fragment. Cheaper than a branch around the whole shader.
@@ -52347,7 +52349,7 @@ let ambRiverAt = 0;
  *  water 220 m off (the fourth ring above) and a meadow with no tree in it
  *  was as quiet as a car park (this). */
 let ambGrassL = 0;
-let ambShelterL = 0;
+let ambShelterL = 0, canopyDripL = 0;
 /** How enclosed the truck is, 0 open sky and 1 inside a bore — glided, so a
  *  portal is an entrance rather than a switch. */
 let encL = 0;
@@ -54813,6 +54815,11 @@ function tick(now: number): void {
   // is all foliage whatever the tree sites under the ear say), while the
   // exposed wind noise the mixer draws is cut by the shelter.
   const earWind = windAmb * (1 - 0.65 * ambShelterL);
+  // RAIN UNDER THE CROWNS: fewer drops reach the truck, and the canopy goes
+  // on dripping after a shower eases (a slow memory of the rain, heard only
+  // where there is a roof of leaves to drip from).
+  canopyDripL = Math.max(wxL.rain, canopyDripL * Math.exp(-dt / 70));
+  const earRain = clamp(wxL.rain * (1 - 0.55 * ambShelterL) + Math.max(0, canopyDripL - wxL.rain) * 0.3 * ambShelterL, 0, 1);
   const bed = ambientBed(earSpeed, !earDrone && engineSt === 'on');
   dbgAmb = {
     listener: earDrone ? 'drone' : 'truck', distance: +truckDist.toFixed(1),
@@ -54857,7 +54864,7 @@ function tick(now: number): void {
   dbgSlip = { skid: +skid.toFixed(3), axle: +tyreAudioSlip.toFixed(3), audio: +audioSlip.toFixed(3),
     slideV: +slideV.toFixed(2), spinL: +wheelSlipL.toFixed(3),
     surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
-  audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, audioSlip,
+  audio.update(state.speed, throttle, surfKind, groundedF, earRain, engRev, engGear, audioSlip,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, earWind,
     engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0,
     dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet, earSpeed, Math.hypot(state.speed, slideV));
