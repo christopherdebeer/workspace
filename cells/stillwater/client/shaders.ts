@@ -998,7 +998,8 @@ void main(){
     float bladeK = 1. - smoothstep(-aa, aa, blade);
     oc = mix(oc, vec3(.48, .35, .21), bladeK * .5);
     // a blade in the water reads darker and wet
-    float wet = uOar.y * smoothstep(.2, .6, sin(uOar.z * TAU) * .5 + .5);
+    // wet exactly while the blade drives through the water (cos > 0; see oarWater in world.ts)
+    float wet = uOar.y * smoothstep(0., .3, cos(uOar.z * TAU));
     oc = mix(oc, vec3(.12, .20, .17), bladeK * wet * .55);
     col = mix(col, oc * light, oarK);
     cover = max(cover, oarK);

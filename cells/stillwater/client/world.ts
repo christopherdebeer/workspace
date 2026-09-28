@@ -399,6 +399,7 @@ export class Pond {
     for (const w of this.weeds) w.y -= s;
     for (const g of this.gusts) g.y -= s;
     for (const p of this.trail) p.y -= s;
+    for (const p of this.puddles) p.y -= s;
     for (let i = 1; i < this.rope.length; i += 2) {
       this.rope[i] -= s;
       this.ropePrev[i] -= s;
@@ -537,13 +538,7 @@ export class Pond {
     b.sway = Math.sin(this.t * 0.7) * 0.012 + Math.sin(this.t * 0.31) * 0.01;
     const prev = b.stroke;
     b.stroke += dt * (0.35 + b.speed / 45) * b.rowing;
-    // the blades catch the water at the top of each stroke: a puddle and a swirl
-    if (Math.floor(prev) !== Math.floor(b.stroke) && b.rowing > 0.3) {
-      for (const side of [-1, 1]) {
-        const [tx, ty] = this.oarTip(side);
-        this.impulses.push({ x: tx, y: ty, r: 8, s: 1.4 * b.rowing, foam: true });
-      }
-    }
+    this.oarWater(prev, dt);
     this.wake(dt);
     this.trailAcc += dt;
     if (this.trailAcc > 0.08) {
@@ -551,6 +546,72 @@ export class Pond {
       this.trail.push({ x: b.x, y: b.y, hx: Math.sin(b.heading), hy: Math.cos(b.heading), speed: b.speed, t: this.t });
       while (this.trail.length && this.t - this.trail[0].t > 9) this.trail.shift();
     }
+  }
+
+  /**
+   * Water moved by the oars. The stroke cycle: the blade drops in at the
+   * catch (frac 0.75, oars furthest forward), drives aft through the water
+   * while cos(2π·stroke) > 0, and lifts out at the release (frac 0.25).
+   *   catch   a splash and a little white water
+   *   drive   the blade drags a line of disturbance, and every so often sheds
+   *           a packet of pushed water that travels AFT — the way the stroke
+   *           threw it — and a little outward, stirring the surface as it
+   *           goes and slowing to rest
+   *   release the classic pair of swirls either side of where the blade left
+   */
+  puddles: Array<{ x: number; y: number; vx: number; vy: number; age: number; life: number; s: number }> = [];
+  private shedAcc = 0;
+
+  private oarWater(prev: number, dt: number) {
+    const b = this.boat;
+    const crossed = (at: number) => b.stroke - prev > 0 && Math.floor(prev - at) !== Math.floor(b.stroke - at);
+    const hx = Math.sin(b.heading);
+    const hy = Math.cos(b.heading);
+    const k = b.rowing * Math.min(1, 0.4 + b.speed / 30);
+    if (b.rowing > 0.3 && crossed(0.75)) {
+      for (const side of [-1, 1]) {
+        const [tx, ty] = this.oarTip(side);
+        this.impulses.push({ x: tx, y: ty, r: 7, s: 1.2 * k, foam: true });
+      }
+    }
+    const drive = Math.cos(b.stroke * Math.PI * 2);
+    if (b.rowing > 0.3 && drive > 0.05) {
+      this.shedAcc += dt;
+      const shed = this.shedAcc > 0.12;
+      if (shed) this.shedAcc = 0;
+      for (const side of [-1, 1]) {
+        const [tx, ty] = this.oarTip(side);
+        this.impulses.push({ x: tx, y: ty, r: 6, s: 0.35 * k * drive, foam: Math.random() < 0.3 * drive });
+        if (shed) {
+          // pushed water leaves aft, a little outward, faster the harder the pull
+          const ox = hy * side;
+          const oy = -hx * side;
+          const v = 22 + b.speed * 0.6;
+          this.puddles.push({ x: tx, y: ty, vx: -hx * v + ox * 7, vy: -hy * v + oy * 7, age: 0, life: 1.8, s: 0.55 * k * drive });
+        }
+      }
+    }
+    if (b.rowing > 0.3 && crossed(0.25)) {
+      for (const side of [-1, 1]) {
+        const [tx, ty] = this.oarTip(side);
+        const px = hy * 5;
+        const py = -hx * 5;
+        this.impulses.push({ x: tx + px, y: ty + py, r: 6, s: 0.9 * k, foam: true });
+        this.impulses.push({ x: tx - px, y: ty - py, r: 6, s: 0.9 * k, foam: true });
+      }
+    }
+    // the travelling packets stir the water along their way, slowing as they go
+    for (const p of this.puddles) {
+      p.age += dt;
+      const drag = Math.exp(-1.6 * dt);
+      p.vx *= drag;
+      p.vy *= drag;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      const fade = 1 - p.age / p.life;
+      if (Math.random() < 0.5) this.impulses.push({ x: p.x, y: p.y, r: 5 + p.age * 3, s: p.s * fade, foam: p.age < 0.5 && Math.random() < 0.3 });
+    }
+    this.puddles = this.puddles.filter((p) => p.age < p.life);
   }
 
   private wakeAcc = 0;
