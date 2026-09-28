@@ -69,6 +69,7 @@ export const PROGRAMS: Array<[string, string, string]> = [
   ['fish', S.FISH_VS, S.FISH_FS],
   ['pad', S.PAD_VS, S.PAD_FS],
   ['flower', S.FLOWER_VS, S.FLOWER_FS],
+  ['floater', S.FLOATER_VS, S.FLOATER_FS],
   ['boat', S.BOAT_VS, S.BOAT_FS],
   ['ribbon', S.RIBBON_VS, S.RIBBON_FS],
   ['mote', S.MOTE_VS, S.MOTE_FS],
@@ -98,6 +99,7 @@ export class Renderer {
   private fishInst: Instanced;
   private flowerInst: Instanced;
   private weedInst: Instanced;
+  private floatInst: Instanced;
   private chan = new Float32Array(66);
   private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
@@ -161,6 +163,7 @@ export class Renderer {
     this.fishInst = new Instanced(gl, this.quad, 220, 3);
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
     this.weedInst = new Instanced(gl, this.quad, 600, 2);
+    this.floatInst = new Instanced(gl, this.quad, 4000, 2);
 
     this.dropTex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.dropTex);
@@ -305,6 +308,14 @@ export class Renderer {
     this.weedInst.count = wn;
     this.weedInst.upload();
 
+    let fln = 0;
+    for (const fl of pond.floaters) {
+      if (!inView(fl.x, fl.y, fl.size * 2) || fln >= 4000) continue;
+      this.floatInst.set(fln++, fl.x, fl.y, fl.size, fl.ang, fl.kind, fl.seed, 0, 0);
+    }
+    this.floatInst.count = fln;
+    this.floatInst.upload();
+
     const pads = f.pads;
     let rows = 0;
     let n = 0;
@@ -445,6 +456,10 @@ export class Renderer {
     const shadowOff: [number, number] = [(-sun[0] / sun[2]) * 3, (-sun[1] / sun[2]) * 3];
     this.ribbon(f, rope.map(([x, y]) => [x + shadowOff[0], y + shadowOff[1]] as [number, number]), 1.8, [0, 0, 0], 0.3, false);
     this.ribbon(f, rope, 1.25, [0.6, 0.19, 0.13], 1, false);
+
+    // duckweed, petals, leaves and buds afloat — under the pads' edges
+    this.common(this.p.floater, f);
+    this.floatInst.draw();
 
     // pads
     const pad = this.p.pad;

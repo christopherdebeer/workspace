@@ -421,24 +421,61 @@ float pressAt(vec2 p){
   return smoothstep(.45, 1., dot(p / max(length(p), 1e-4), vDent.xy / give));
 }
 
+float curl;
+
+/** Leaf-local polar angle, measured from the notch (which sits a little off the local axis). */
+float leafAngle(vec2 p){ return atan(p.x, p.y) - (fract(seed * 8.3) - .5) * .16; }
+
+/**
+ * How much the edge at angle a is lifted off the water (0..~1): not a rim
+ * all round — a real pad lies flat and only a few stretches of its margin
+ * curl up, breathing slowly with the water.
+ */
+float edgeLift(float a){
+  float n = texture(uNoise, vec2(a / TAU * 2. + seed * 3.1, seed * 7.3 + uTime * .006)).r;
+  float n2 = texture(uNoise, vec2(a / TAU * 5. + seed * 1.7, seed * 2.9 - uTime * .004)).g;
+  return pow(clamp((n * .75 + n2 * .45) * 1.7 - 1.05, 0., 1.), 1.4) * curl;
+}
+
 float shapeD(vec2 p){
-  float a = atan(p.x, p.y);
-  float len = length(p);
-  float R = .965 + .016 * sin(a * 9. + seed * 20.) + .01 * sin(a * 23. + seed * 7.)
-          + .03 * (texture(uNoise, vec2(a / TAU * 3., seed * 5.)).r - .5);
+  // slightly oval, and not round at all at a glance
+  vec2 q = p * vec2(1. + (fract(seed * 4.3) - .5) * .14, 1.);
+  float a = leafAngle(q);
+  float len = length(q);
+  float R = .955
+          + .03 * sin(2. * a + seed * 11.) + .022 * sin(3. * a + seed * 23.)
+          + .008 * sin(a * 11. + seed * 20.) + .005 * sin(a * 27. + seed * 7.)
+          + .025 * (texture(uNoise, vec2(a / TAU * 3., seed * 5.)).r - .5);
+  // a curled-up stretch of margin looks narrower from above
+  R -= edgeLift(a) * .05;
   // pressed: the arc facing the contact goes flat against it (a chord, not a dent)
   float give = length(vDent.xy);
   if (give > .002) {
     vec2 dir = vDent.xy / give;
-    float c = dot(p / max(len, 1e-4), dir);
+    float c = dot(p / max(length(p), 1e-4), dir);
     float chord = (1. - give) / max(c, 1e-3);
     R = mix(R, min(R, chord), smoothstep(.2, .6, c));
     // after a knock the leaf flexes, an ellipse wobbling along the knock
     float ad = atan(dir.x, dir.y);
     R += vDent.z * .06 * cos(2. * (a - ad));
   } else R += vDent.z * .05 * cos(2. * a + seed * 9.);
-  float nw = (.03 + .07 * len) * (.7 + .5 * fract(seed * 3.7));
-  return max(len - R, (nw - abs(a)) * len);
+  float d = len - R;
+  // the sinus: a narrow slit between two rounded lobes, sometimes nearly closed
+  float nw = (.012 + .05 * len) * (.4 + 1.1 * fract(seed * 3.7));
+  float slit = (nw - abs(a)) * len;
+  float k = .025;
+  float h = clamp(.5 + .5 * (slit - d) / k, 0., 1.);
+  d = mix(d, slit, h) + k * h * (1. - h);
+  // an insect's nibble or two out of the margin
+  for (int i = 0; i < 2; i++) {
+    float hi = fract(seed * (13.1 + float(i) * 7.7));
+    if (hi < .55) continue;
+    float ba = (hi - .55) / .45 * TAU * .8 + .4;
+    vec2 c0 = vec2(sin(ba), cos(ba)) * (.97 + .03 * hi);
+    float rb = .04 + .07 * fract(hi * 9.1);
+    d = max(d, rb - length(q - c0));
+  }
+  return d;
 }
 
 float veins(vec2 p, float len){
@@ -446,7 +483,8 @@ float veins(vec2 p, float len){
   float a = atan(p.x, p.y);
   float N = 17. + floor(fract(seed * 5.3) * 8.);
   float warp = texture(uNoise, p * .18 + so).r - .5;
-  float f = a * N / TAU + warp * .35 + len * .25;
+  // veins sweep in a gentle curve from the hub, not straight spokes
+  float f = a * N / TAU + warp * .45 + len * len * (fract(seed * 6.1) - .5) * 1.4;
   float arc = TAU * max(len, .02) / N;
   float d1 = abs(fract(f + .5) - .5) * arc;
   float aa = uPx / vR;
@@ -458,14 +496,16 @@ float veins(vec2 p, float len){
   return max(primary * smoothstep(.03, .1, len), secondary);
 }
 
-float curl;
 float heightAt(vec2 p){
   float len = length(p);
-  float h = .045 * (1. - len * len);
-  h += .1 * curl * smoothstep(.78, 1., len);
+  // flat on the water, draped over its small swells, a little sag where the stem holds it
+  float h = .03 * (texture(uNoise, p * .32 + so + uTime * .004).g - .5);
+  h -= .022 * exp(-len * len * 28.);
+  // only some stretches of the margin curl up
+  h += edgeLift(leafAngle(p)) * smoothstep(.62, 1., len) * .17;
   // a pressed edge rides up over what it meets
   h += length(vDent.xy) * pressAt(p) * smoothstep(.45, 1., len) * 1.1;
-  h -= .007 * veins(p, len);
+  h -= .004 * veins(p, len);
   h += .014 * (texture(uNoise, p * .5 + so * 2.3).g - .5);
   return h;
 }
@@ -486,7 +526,7 @@ vec3 albedo(vec2 p, float len, float vein){
   c = mix(c, vec3(.62, .57, .25), smoothstep(.6, .85, texture(uNoise, p * .2 + so * 4.).g) * max(0., age - .5) * 1.2);
   float spot = 1. - smoothstep(.02, .06, texture(uNoise, p * 1.2 + so * 6.).b);
   c = mix(c, vec3(.33, .25, .10), spot * step(.84, age) * .5);
-  c = mix(c, c * 1.18 + vec3(.05, .06, .02), vein * .55);
+  c = mix(c, c * 1.12 + vec3(.035, .04, .01), vein * .32 * (1. - len * .5));
   c *= .88 + .16 * (1. - len);
   return c;
 }
@@ -505,10 +545,12 @@ vec3 leafLit(vec2 p, vec3 Ll, out float vein){
   vec3 c = a * (uAmb + uSunCol * wrap * .95 + LAMP * lampAt(vW) * 1.4);
   vec3 H = normalize(Ll + vec3(0., 0., 1.));
   float nh = max(dot(n, H), 0.);
-  c += uSunCol * (pow(nh, 90.) * .3 + pow(nh, 14.) * .045);
-  // the curled rim shows a little of the wine-red underside
-  float rimAmt = smoothstep(.86, .99, len) * curl * fract(seed * 11.3);
-  c = mix(c, vec3(.34, .12, .10) * (uAmb + uSunCol * .5), rimAmt * .55);
+  // waxy, but not evenly: a film of water here, a dry dull patch there
+  float gloss = mix(.3, 1.25, smoothstep(.35, .75, texture(uNoise, p * .6 + so * 1.3).r));
+  c += uSunCol * (pow(nh, 90.) * .28 + pow(nh, 16.) * .04) * gloss;
+  // only where the margin lifts does the wine-red underside show
+  float rimAmt = smoothstep(.8, .98, len) * edgeLift(leafAngle(p)) * (.6 + .8 * fract(seed * 11.3));
+  c = mix(c, vec3(.36, .12, .10) * (uAmb + uSunCol * .5), clamp(rimAmt, 0., .75));
   return c;
 }
 
@@ -542,9 +584,11 @@ void main(){
 
   // outside the leaf: only its soft contact shadow on the water (a chosen leaf doesn't glow; its dew does)
   if (d > 0.) {
-    vec2 sp = p + Ll.xy * .06;
+    // a leaf lying on the water casts almost nothing; a curled-up edge casts more
+    float lift = edgeLift(leafAngle(p));
+    vec2 sp = p + Ll.xy * (.018 + lift * .07);
     float sd = shapeD(sp);
-    float shadow = (1. - smoothstep(0., .16, sd)) * .42;
+    float shadow = (1. - smoothstep(0., .05 + lift * .1, sd)) * (.16 + lift * .3);
     if (shadow < .002) discard;
     o = vec4(0., 0., 0., shadow);
     return;
@@ -626,6 +670,8 @@ void main(){
   // keyboard focus: a thin bright ring
   col = mix(col, vec3(1., .95, .8), vC.y * (1. - smoothstep(0., aa * 2., abs(d + .03))) * .8);
 
+  // the leaf margin: a fine paler line, as the blade thins to its edge
+  col = mix(col, col * 1.2 + vec3(.05, .05, .01), (1. - smoothstep(-aa * 2.5, -aa * .5, d)) * .5);
   float cover = 1. - smoothstep(-aa, aa, d);
   o = vec4(col, 1.) * cover;
 }`;
@@ -783,6 +829,86 @@ void main(){
   float m2 = texture(uNoise, (wp - drift * 1.7) / 320.).g;
   float mist = smoothstep(.38, .95, m * .75 + m2 * .45) * uMist;
   o = vec4(uMistCol * mist, mist);
+}`;
+
+// ─── small things afloat: duckweed, petals, a fallen leaf, lily buds ─────
+
+export const FLOATER_VS = /* glsl */ `${HEAD}
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec4 iA; // x, y, size, angle
+layout(location=2) in vec4 iB; // kind, seed, -, -
+uniform vec4 uView;
+out vec2 vP;
+out vec4 vB;
+out float vAng;
+out vec2 vW;
+void main(){
+  vec2 q = aPos * 1.5;
+  float c = cos(iA.w), s = sin(iA.w);
+  vec2 w = vec2(c * q.x - s * q.y, s * q.x + c * q.y) * iA.z;
+  vP = q; vB = iB; vAng = iA.w; vW = iA.xy + w;
+  gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw, 0., 1.);
+}`;
+
+export const FLOATER_FS = /* glsl */ `${HEAD}${COMMON}
+in vec2 vP;
+in vec4 vB;
+in float vAng;
+in vec2 vW;
+out vec4 o;
+float ell(vec2 p, vec2 c, vec2 r, float a){ vec2 q = rot(p - c, a) / r; return length(q) - 1.; }
+void main(){
+  vec2 p = vP;
+  float kind = vB.x, seed = vB.y;
+  vec3 Ll = vec3(rot(uSun.xy, -vAng), uSun.z);
+  vec2 sh = Ll.xy * .18;
+  float d, ds;
+  vec3 base;
+  vec3 n = vec3(0., 0., 1.);
+  float aa = fwidth(p.x) * 1.2;
+  if (kind < .5) {
+    // duckweed: two or three glossy oval fronds budding from one another
+    d = ell(p, vec2(0.), vec2(.62, .46), 0.);
+    ds = ell(p + sh, vec2(0.), vec2(.62, .46), 0.);
+    if (seed > .35) { vec2 c1 = vec2(.55, .35); d = min(d, ell(p, c1, vec2(.45, .34), .7)); ds = min(ds, ell(p + sh, c1, vec2(.45, .34), .7)); }
+    if (seed > .7) { vec2 c2 = vec2(-.5, .4); d = min(d, ell(p, c2, vec2(.38, .3), -.6)); ds = min(ds, ell(p + sh, c2, vec2(.38, .3), -.6)); }
+    base = mix(vec3(.22, .38, .10), vec3(.40, .54, .15), fract(seed * 7.1));
+    base *= .85 + .3 * smoothstep(-1., 0., d);
+    n = normalize(vec3(-p * .35, 1.));
+  } else if (kind < 1.5) {
+    // a fallen petal: long, cupped, pale
+    d = ell(p, vec2(0.), vec2(.3, .95), 0.);
+    ds = ell(p + sh * 1.5, vec2(0.), vec2(.3, .95), 0.);
+    base = mix(vec3(.96, .94, .9), vec3(.98, .78, .85), step(.6, seed)) * (.8 + .25 * smoothstep(-.9, .9, p.y));
+    n = normalize(vec3(-p.x * 1.4, 0., 1.));
+  } else if (kind < 2.5) {
+    // a willow leaf: lanceolate, a midrib, going yellow and brown at the tips
+    float w = .24 * pow(max(0., 1. - p.y * p.y), .8);
+    d = (abs(p.x) - w) * 1.4;
+    d = max(d, abs(p.y) - 1.);
+    vec2 ps = p + sh;
+    float ws = .24 * pow(max(0., 1. - ps.y * ps.y), .8);
+    ds = max((abs(ps.x) - ws) * 1.4, abs(ps.y) - 1.);
+    base = mix(vec3(.55, .52, .16), vec3(.52, .32, .10), smoothstep(.3, 1., abs(p.y)) * (.5 + seed));
+    base *= 1. - (1. - smoothstep(0., .03, abs(p.x))) * .25;
+    n = normalize(vec3(-sign(p.x) * .4, 0., 1.));
+  } else {
+    // a closed lily bud standing a little out of the water: green sepals, a blush at the tip
+    d = ell(p, vec2(0.), vec2(.42, .75), 0.);
+    ds = ell(p + sh * 3., vec2(0.), vec2(.42, .75), 0.);
+    float sep = abs(fract((atan(p.x, p.y) + seed) / TAU * 4.) - .5);
+    base = mix(vec3(.22, .36, .12), vec3(.85, .55, .60), smoothstep(.2, .75, p.y) * .7);
+    base *= .8 + .35 * smoothstep(.0, .3, sep);
+    n = normalize(vec3(-p * vec2(1.1, .6), .8));
+  }
+  float cover = 1. - smoothstep(-aa, aa, d);
+  float shadow = (1. - smoothstep(-aa, .25, ds)) * .3 * (1. - cover);
+  if (cover < .003 && shadow < .003) discard;
+  float lit = max((dot(n, Ll) + .3) / 1.3, 0.);
+  vec3 col = base * (uAmb + uSunCol * lit * .9 + LAMP * lampAt(vW) * 1.2);
+  vec3 H = normalize(Ll + vec3(0., 0., 1.));
+  col += uSunCol * pow(max(dot(n, H), 0.), 40.) * (kind < .5 ? .18 : .15);
+  o = vec4(col * cover, cover + shadow);
 }`;
 
 // ─── water lilies ──────────────────────────────────────────────────────────
@@ -1130,6 +1256,8 @@ export const SHADERS = {
   MIST_FS,
   FLOWER_VS,
   FLOWER_FS,
+  FLOATER_VS,
+  FLOATER_FS,
   BOAT_VS,
   BOAT_FS,
   RIBBON_VS,

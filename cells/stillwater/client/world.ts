@@ -79,6 +79,26 @@ export interface Pad {
   layer: number;
 }
 
+/**
+ * The small things afloat besides the pads, which make a pond read as a pond:
+ * duckweed gathering in rafts in the slack water, petals shed by the lilies,
+ * a fallen willow leaf, a closed lily bud. Nothing tethers them: they drift
+ * with the current, blow with the wind, part around the hull and the oars and
+ * rock outward on every ripple.
+ */
+export interface Floater {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  ang: number;
+  va: number;
+  size: number;
+  /** 0 duckweed, 1 petal, 2 fallen leaf, 3 lily bud */
+  kind: number;
+  seed: number;
+}
+
 export interface Deep {
   x: number;
   y: number;
@@ -209,6 +229,7 @@ export class Pond {
   /** Sounds the water made this step (main.ts plays them). */
   sounds: Array<{ kind: 'dip' | 'drip'; s: number }> = [];
   weeds: Weed[] = [];
+  floaters: Floater[] = [];
   gusts: Gust[] = [];
   /** The boat's recent path (newest last): where the wake is drawn from. */
   trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
@@ -297,12 +318,124 @@ export class Pond {
     }
   }
 
+  private growFloaters(y0: number, y1: number, span: number) {
+    const rand = this.rand;
+    const add = (x: number, y: number, kind: number, size: number) =>
+      this.floaters.push({ x, y, vx: 0, vy: 0, ang: rand() * Math.PI * 2, va: 0, size, kind, seed: rand() });
+    // duckweed rafts: patches in the slack water, dense at their hearts, fraying at the edges
+    const patches = Math.round(((y1 - y0) * span) / 70000 + rand());
+    for (let i = 0; i < patches; i++) {
+      const y = y0 + rand() * (y1 - y0);
+      const cx = this.channel(y);
+      const half = this.channelHalf(y);
+      const side = rand() < 0.5 ? -1 : 1;
+      const x = cx + side * (half * (0.45 + rand() * 0.9));
+      const pr = 22 + rand() * 60;
+      // area-dense at the heart, a ragged fringe: a raft, not a sprinkle
+      const n = Math.round(pr * pr * 0.07);
+      const stretch = 1 + rand() * 0.8;
+      for (let k = 0; k < n; k++) {
+        const a = rand() * Math.PI * 2;
+        const d = Math.pow(rand(), 0.55) * pr * (0.75 + 0.35 * Math.sin(a * 3 + i));
+        add(x + Math.cos(a) * d * stretch, y + Math.sin(a) * d, 0, 1.3 + rand() * 1.3);
+      }
+    }
+    // a sprinkle of loose fronds everywhere slack
+    const loose = Math.round(((y1 - y0) * span) / 14000);
+    for (let i = 0; i < loose; i++) {
+      const y = y0 + rand() * (y1 - y0);
+      add(this.channel(y) + (rand() * 2 - 1) * (this.halfW + 60), y, 0, 1.4 + rand() * 1.4);
+    }
+    // petals shed around the lilies
+    for (const p of this.pads) {
+      if (!p.flower || p.y < y0 || p.y >= y1) continue;
+      const n = 2 + Math.floor(rand() * 4);
+      for (let k = 0; k < n; k++) {
+        const a = rand() * Math.PI * 2;
+        const d = p.r * (1.05 + rand() * 0.8);
+        add(p.x + Math.cos(a) * d, p.y + Math.sin(a) * d, 1, 5 + rand() * 3);
+      }
+    }
+    // the odd fallen willow leaf, and closed buds among the bank pads
+    if (rand() < 0.7) {
+      const y = y0 + rand() * (y1 - y0);
+      add(this.channel(y) + (rand() * 2 - 1) * this.halfW, y, 2, 11 + rand() * 7);
+    }
+    for (let i = 0; i < 2; i++) {
+      if (rand() < 0.4) continue;
+      const y = y0 + rand() * (y1 - y0);
+      const cx = this.channel(y);
+      const side = rand() < 0.5 ? -1 : 1;
+      add(cx + side * (this.channelHalf(y) + 30 + rand() * 120), y, 3, 7 + rand() * 4);
+    }
+  }
+
+  private stepFloaters(dt: number, active: { y0: number; y1: number }) {
+    const b = this.boat;
+    const hs = Math.sin(b.heading);
+    const hc = Math.cos(b.heading);
+    const half = BOAT_LEN * 0.4;
+    const tips = this.boat.rowing > 0.3 && Math.cos(b.stroke * Math.PI * 2) > 0.05 ? [this.oarTip(-1), this.oarTip(1)] : [];
+    const drag = Math.exp(-1.4 * dt);
+    const t = this.t;
+    for (const f of this.floaters) {
+      if (f.y < active.y0 || f.y > active.y1) continue;
+      const light = f.kind === 3 ? 0.35 : 1;
+      const [fx, fy] = this.flow(f.x, f.y);
+      const [wx, wy] = this.wind(f.x, f.y);
+      f.vx += ((fx * 0.8 - f.vx) * 0.6 + wx * 1.1 * light) * dt;
+      f.vy += ((fy * 0.8 - f.vy) * 0.6 + wy * 1.1 * light) * dt;
+      // the hull parts them, and the boat's passage drags them along its sides
+      const lx = f.x - (b.x - hs * half);
+      const ly = f.y - (b.y - hc * half);
+      const u = clamp((lx * hs + ly * hc) / (half * 2), 0, 1);
+      const qx = f.x - (b.x - hs * half + hs * half * 2 * u);
+      const qy = f.y - (b.y - hc * half + hc * half * 2 * u);
+      const qd = Math.hypot(qx, qy) || 1;
+      const reach = BOAT_BEAM * 0.55 + f.size;
+      if (qd < reach) {
+        f.vx += (qx / qd) * (reach - qd) * 14 * dt + hs * b.speed * 0.6 * dt;
+        f.vy += (qy / qd) * (reach - qd) * 14 * dt + hc * b.speed * 0.6 * dt;
+        f.va += (Math.random() - 0.5) * 4 * dt;
+      }
+      // blades in the drive sweep them aft
+      for (const [tx, ty] of tips) {
+        const dx = f.x - tx;
+        const dy = f.y - ty;
+        const d = Math.hypot(dx, dy);
+        if (d < 18) {
+          f.vx += ((dx / (d || 1)) * 20 - hs * 30) * dt * 3;
+          f.vy += ((dy / (d || 1)) * 20 - hc * 30) * dt * 3;
+          f.va += (Math.random() - 0.5) * 6 * dt;
+        }
+      }
+      // every ripple rocks them outward as it passes
+      for (const r of this.rings) {
+        const age = t - r.t;
+        const dx = f.x - r.x;
+        const dy = f.y - r.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (Math.abs(d - age * RING_SPEED) > 10) continue;
+        const k = (r.s * Math.exp(-age * 0.9)) / (1 + d / 90);
+        f.vx += (dx / d) * k * 60 * dt;
+        f.vy += (dy / d) * k * 60 * dt;
+      }
+      f.vx *= drag;
+      f.vy *= drag;
+      f.va *= Math.exp(-1.5 * dt);
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      f.ang += f.va * dt;
+    }
+  }
+
   /** Regrow everything around the boat (after a resize wider than the field was grown for). */
   regrow(halfW: number, yMin: number) {
     this.halfW = halfW;
     this.pads = this.pads.filter((p) => p.y < yMin);
     this.deep = this.deep.filter((d) => d.y < yMin);
     this.weeds = this.weeds.filter((w) => w.y < yMin);
+    this.floaters = this.floaters.filter((f) => f.y < yMin);
     this.genY = yMin;
   }
 
@@ -380,6 +513,7 @@ export class Pond {
         depth: 0.35 + rand() * 0.55,
       });
     }
+    this.growFloaters(y0, y1, span);
     // weed beds root in the shallows toward the banks, sparser in the open run
     const weedCount = Math.round(((y1 - y0) * span) / 2600);
     for (let i = 0; i < weedCount; i++) {
@@ -398,6 +532,7 @@ export class Pond {
     this.pads = this.pads.filter((p) => p.y > yMin || p.selected);
     this.deep = this.deep.filter((d) => d.y > yMin);
     this.weeds = this.weeds.filter((w) => w.y > yMin);
+    this.floaters = this.floaters.filter((f) => f.y > yMin);
   }
 
   rebaseIfNeeded(): number {
@@ -412,6 +547,7 @@ export class Pond {
     }
     for (const d of this.deep) d.y -= s;
     for (const w of this.weeds) w.y -= s;
+    for (const f of this.floaters) f.y -= s;
     for (const g of this.gusts) g.y -= s;
     for (const p of this.trail) p.y -= s;
     for (const p of this.puddles) p.y -= s;
@@ -439,6 +575,7 @@ export class Pond {
     this.stepGusts(dt);
     this.stepBoat(dt, reduced);
     this.stepPads(dt, active);
+    this.stepFloaters(dt, active);
     this.stepRope();
   }
 
