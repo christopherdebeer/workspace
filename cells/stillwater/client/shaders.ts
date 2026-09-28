@@ -759,16 +759,17 @@ void main(){
     // puddles stranded on the dry side of the line
     float pud = texture(uNoise, p * 2.1 + so * 2.7).b;
     wet = max(wet, (.2 - pud) * 2. - max(0., -wet) * 2.5 - .05);
-    float under = smoothstep(-.025, .05, wet);
-    // deeper under the further past the line: darker, cooler, flatter
-    float depthK = clamp(wet * 2.5, 0., 1.);
+    float under = smoothstep(-.04, .12, wet);
+    // deeper under the further past the line: darker, cooler, flatter (gently: it's a thin film)
+    float depthK = clamp(wet * 1.6, 0., 1.);
     float lum = dot(col, vec3(.3, .59, .11));
-    vec3 river = mix(vec3(lum), col, .55) * mix(vec3(.55, .68, .62), vec3(.28, .42, .40), depthK) + uAmb * vec3(.03, .10, .09);
+    vec3 river = mix(vec3(lum), col, .55) * mix(vec3(.74, .83, .77), vec3(.44, .56, .52), depthK) + uAmb * vec3(.03, .10, .09);
     // light playing on the water sheeting over it
     float glint = texture(uNoise, vW / 9. + uTime * vec2(.06, .03)).r * texture(uNoise, vW / 5. - uTime * .05).g;
-    river += uSunCol * pow(glint, 3.) * .35;
+    river += uSunCol * pow(glint, 3.) * .2;
     col = mix(col, river, under);
-    col += vec3(.8, .95, .9) * exp(-wet * wet * 1400.) * vSink * .55;
+    // the meniscus: a soft, faint sheen where the film begins, not a drawn line
+    col += vec3(.8, .95, .9) * exp(-wet * wet * 500.) * vSink * .16;
   }
   // the leaf margin: a fine paler line, as the blade thins to its edge
   col = mix(col, col * 1.2 + vec3(.05, .05, .01), (1. - smoothstep(-aa * 2.5, -aa * .5, d)) * .5);
@@ -1273,7 +1274,9 @@ void main(){
   if (dall > aa) discard;
   vec2 Lxy = rot(uSun.xy, uBoat.z);
   // the lantern lights its own boat too, not just the cloak beside it
-  vec3 light = uAmb + uSunCol * .8 * sunThrough(vBW) + LAMP * lampAt(vBW) * 1.1;
+  // (sits in the scene's light, not a spotlight: the lantern is behind glass and hangs
+  // over the bow, so its own boat gets a warm wash rather than the full glare)
+  vec3 light = uAmb * .85 + uSunCol * .55 * sunThrough(vBW) + LAMP * lampAt(vBW) * .4;
   float grain = texture(uNoise, vec2(p.x * .05, p.y * .006)).r;
 
   // hull
@@ -1283,7 +1286,7 @@ void main(){
     float bev = clamp((dh + 3.2) / 3.2, 0., 1.);
     vec2 g = vec2(sign(p.x), 0.);
     float lit = .8 + .35 * dot(g, Lxy) * (bev * 2. - 1.) + .2 * (1. - abs(bev * 2. - 1.));
-    col = mix(vec3(.60, .44, .26), vec3(.76, .60, .38), grain) * lit;
+    col = mix(vec3(.52, .38, .23), vec3(.64, .50, .32), grain) * lit;
   } else {
     // planked floor with ribs, deepening toward the keel
     float plank = floor((p.x + 20.) / 5.2);
@@ -1300,7 +1303,7 @@ void main(){
     for (int k = 0; k < 3; k++) {
       float sy = k == 0 ? 26. : k == 1 ? -14. : -40.;
       float band = abs(p.y - sy) - 3.2;
-      if (band < 0.) col = mix(vec3(.66, .50, .30), vec3(.78, .62, .38), grain) * (.9 + .1 * sin(p.x * .7));
+      if (band < 0.) col = mix(vec3(.56, .42, .26), vec3(.66, .52, .33), grain) * (.9 + .1 * sin(p.x * .7));
       else if (p.y < sy && band < 2.4) col *= .7;
     }
     // a little wicker basket toward the stern, in front of the rower, a checked cloth over it
@@ -1350,7 +1353,7 @@ void main(){
     vec3 L3 = vec3(Lxy, uSun.z);
     // the figure's frame is mirrored: its light comes from the mirrored side too
     vec3 Lf = vec3(L3.x, -L3.y, L3.z);
-    vec3 lit = uAmb + uSunCol * .9 * sunThrough(vBW) + LAMP * lampAt(vBW) * 1.1;
+    vec3 lit = uAmb * .85 + uSunCol * .55 * sunThrough(vBW) + LAMP * lampAt(vBW) * .4;
     float hands;
     float dArms = sdArms(p, at, hands) + fuzz(p) * .5;
     vec2 hfq = fq - vec2(0., headLead());
@@ -1360,7 +1363,7 @@ void main(){
     float grain = texture(uNoise, p * vec2(1.6, .55)).a;
     float fibre = step(.93, hash12(floor(p * 4.)));
     float wool = (.86 + .16 * felt) * (.9 + .12 * grain) + fibre * .06;
-    vec3 grey = vec3(.47, .46, .43);
+    vec3 grey = vec3(.40, .39, .37);
     // the cape: soft heavy folds falling from the shoulders to the hem
     vec2 cq = (fq - vec2(0., -4.)) / vec2(12., 10.);
     vec3 n = normalize(vec3(cq * .9, .75));
@@ -1372,12 +1375,12 @@ void main(){
     vec3 sleeve = grey * .95 * wool * (.75 + .3 * max(L3.z, 0.));
     rc = mix(rc, sleeve * (.82 + .18 * smoothstep(-2.4, 0., dArms)), armK);
     float handK = 1. - smoothstep(-aa, aa, hands);
-    rc = mix(rc, vec3(.93, .74, .60) * .85, handK);
+    rc = mix(rc, vec3(.93, .74, .60) * .7, handK);
     // the hood, a shade darker, softly rounded; its opening faces the stern
     float hoodK = 1. - smoothstep(-aa, aa, dHood);
     vec2 hq = hfq - vec2(0., 2.2);
     vec3 hn = normalize(vec3(hq / vec2(5.8, 6.4) * .95, .6));
-    vec3 hood = vec3(.41, .40, .38) * wool * (.5 + .6 * max(dot(hn, Lf), 0.));
+    vec3 hood = vec3(.35, .34, .33) * wool * (.5 + .6 * max(dot(hn, Lf), 0.));
     hood += vec3(.12) * smoothstep(-1.2, 0., dHood) * .5;
     vec2 oq = (hq - vec2(0., 4.3)) / vec2(3.1, 2.1);
     float open_ = length(oq);
@@ -1385,7 +1388,7 @@ void main(){
     float hair = (1. - smoothstep(.72, .95, open_)) * smoothstep(-.6, .1, -oq.y + .15);
     float cheek = (1. - smoothstep(.45, .7, length(oq - vec2(0., .45))));
     hood = mix(hood, vec3(.36, .22, .12) * (.8 + .3 * sin(oq.x * 9.)), hair);
-    hood = mix(hood, vec3(.95, .77, .65), cheek * .85);
+    hood = mix(hood, vec3(.95, .77, .65) * .8, cheek * .85);
     rc = mix(rc, hood, hoodK);
     col = mix(col, rc * lit, rowK);
     cover = max(cover, rowK);

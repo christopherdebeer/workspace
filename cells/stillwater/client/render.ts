@@ -454,8 +454,21 @@ export class Renderer {
     for (let i = 0; i < pond.rope.length; i += 2) rope.push([pond.rope[i], pond.rope[i + 1]]);
     const sun = f.light.sun;
     const shadowOff: [number, number] = [(-sun[0] / sun[2]) * 3, (-sun[1] / sun[2]) * 3];
-    this.ribbon(f, rope.map(([x, y]) => [x + shadowOff[0], y + shadowOff[1]] as [number, number]), 1.8, [0, 0, 0], 0.3, false);
-    this.ribbon(f, rope, 1.25, [0.6, 0.19, 0.13], 1, false);
+    const solid = (k: number, a: number) => new Array<number>(k).fill(a);
+    this.ribbon(f, rope.map(([x, y]) => [x + shadowOff[0], y + shadowOff[1]] as [number, number]), 1.8, [0, 0, 0], solid(rope.length, 0.3), false);
+    this.ribbon(f, rope, 1.25, [0.6, 0.19, 0.13], solid(rope.length, 1), false);
+    // its end: a whipped knot and a small cork float riding the water
+    const [ex, ey] = rope[rope.length - 1];
+    const [px, py] = rope[rope.length - 2];
+    const el = Math.hypot(ex - px, ey - py) || 1;
+    const ux = (ex - px) / el;
+    const uy = (ey - py) / el;
+    const along = (a: number) => [ex + ux * a, ey + uy * a] as [number, number];
+    const cork = [0, 1.5, 4, 6.5, 9, 10.5].map(along);
+    this.ribbon(f, [along(-1.2), along(0.8)], 1.9, [0.42, 0.13, 0.09], solid(2, 1), false);
+    this.ribbon(f, cork.map(([x, y]) => [x + shadowOff[0], y + shadowOff[1]] as [number, number]), [0.8, 3, 3.8, 3.8, 3, 0.8], [0, 0, 0], solid(6, 0.3), false);
+    this.ribbon(f, cork, [0.6, 2.4, 3.1, 3.1, 2.4, 0.6], [0.62, 0.47, 0.3], solid(6, 1), false);
+    this.ribbon(f, [7.5, 9, 10.4].map(along), [2.2, 2, 0.5], [0.66, 0.2, 0.13], solid(3, 1), false);
 
     // duckweed, petals, leaves and buds afloat — under the pads' edges
     this.common(this.p.floater, f);

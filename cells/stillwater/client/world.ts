@@ -300,7 +300,9 @@ export class Pond {
   constructor(seed: number) {
     this.rand = seeded(seed);
     this.boat.x = this.channel(0);
-    const n = 30;
+    // a painter line off the stern, long enough to stream out and show the water
+    // moving, short enough that its cork end stays in view behind the boat
+    const n = 16;
     this.rope = new Float32Array(n * 2);
     this.ropePrev = new Float32Array(n * 2);
     for (let i = 0; i < n; i++) {
@@ -1369,8 +1371,10 @@ export class Pond {
       const along = wx * tx + wy * ty;
       const nx = wx - along * tx;
       const ny = wy - along * ty;
-      vx = ux + along * tx * kt + nx * kn;
-      vy = uy + along * ty * kt + ny * kn;
+      // the cork at the free end drags harder than the line: it's what keeps the line streaming straight
+      const ka = i === n - 1 ? kt * kt * kt : kt;
+      vx = ux + along * tx * ka + nx * kn;
+      vy = uy + along * ty * ka + ny * kn;
       pr[i * 2] = x;
       pr[i * 2 + 1] = y;
       r[i * 2] = x + vx * dt;
