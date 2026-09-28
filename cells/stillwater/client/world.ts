@@ -249,8 +249,8 @@ export interface Boat {
   strokeTo: number;
   /** Rowing rhythm, 0..1: taps in quick succession pull harder (it fades when they stop). */
   rhythm: number;
-  /** A lean on one oar from a tap off the centreline (radians of heading, fading). */
-  veer: number;
+  /** A lean on one oar for the stroke in hand (−1 port … 1 starboard): it yaws the boat only while the blades pull. */
+  lean: number;
   /** Until this time the boat keeps the heading it was given instead of following the channel. */
   manualUntil: number;
 }
@@ -375,7 +375,7 @@ export class Pond {
   trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
   private trailAcc = 0;
   // at rest the oars sit at the finish (stroke .25): a tap pushes the arms away, then pulls
-  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0.25, rowing: 0, sway: 0, power: 0.2, helm: null, manualUntil: 0, strokeTo: 0.25, rhythm: 0, veer: 0 };
+  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0.25, rowing: 0, sway: 0, power: 0.2, helm: null, manualUntil: 0, strokeTo: 0.25, rhythm: 0, lean: 0 };
   rope: Float32Array;
   ropePrev: Float32Array;
   /** Accumulated rebase offset: world y + origin is the "true" distance travelled. */
@@ -1015,12 +1015,15 @@ export class Pond {
   /**
    * A tap: one stroke. Taps in quick succession find a rhythm and pull harder;
    * `bias` (−1 left … 1 right, where the tap fell across the boat) leans on
-   * that oar, so tapping to the right veers the boat right a little.
+   * that oar for the stroke, so the pull itself turns the boat a little.
    */
   stroke(bias = 0) {
     const b = this.boat;
     b.rhythm = Math.min(1, b.rhythm + 0.4);
-    b.veer = clamp(b.veer + clamp(bias, -1, 1) * 0.38, -0.75, 0.75);
+    b.lean = clamp(bias, -1, 1);
+    // a deliberate lean holds the heading it wins for a while (as a drag does), so
+    // taps to one side add up; a centred tap leaves the river to steer
+    if (Math.abs(b.lean) > 0.25) b.manualUntil = Math.max(b.manualUntil, this.t + 3.5);
     this.queueStrokes(1);
   }
 
@@ -1088,10 +1091,9 @@ export class Pond {
     // push away, the blades go in and pull, and then the boat glides, waiting.
     // A rhythm of taps pulls harder; the lean from an off-centre tap fades
     b.rhythm *= Math.exp(-0.2 * dt);
-    b.veer *= Math.exp(-0.3 * dt);
-    want = clamp(want + b.veer, -1.3, 1.3);
     const pending = b.strokeTo - b.stroke;
     const working = pending > 1e-4;
+    if (!working) b.lean = 0;
     const effort = working ? (b.surge > 0 ? 1 : 0.55 + 0.45 * b.rhythm) : 0.2;
     b.power += (effort - b.power) * (1 - Math.exp(-(working ? 6 : 1.5) * dt));
     b.rowing += ((working ? 1 : 0) - b.rowing) * (1 - Math.exp(-(working ? 7 : 2.2) * dt));
@@ -1101,7 +1103,12 @@ export class Pond {
       const inDrive = Math.cos(b.stroke * Math.PI * 2) > 0;
       const cadence = (inDrive ? 0.6 : 0.42) * (reduced ? 0.8 : 1);
       b.stroke = Math.min(b.strokeTo, b.stroke + dt * cadence);
-      if (inDrive) b.surge = Math.max(0, b.surge - dt * 25);
+      if (inDrive) {
+        b.surge = Math.max(0, b.surge - dt * 25);
+        // one oar pulling harder than the other: the boat yaws with the pull itself
+        // (about 5° over a stroke at a full lean, more with a harder pull)
+        b.heading += b.lean * Math.cos(b.stroke * Math.PI * 2) * b.power * b.rowing * dt * 0.28;
+      }
     }
     // thrust only from blades in the water; water drag always
     const drive = Math.max(0, Math.cos(b.stroke * Math.PI * 2));
