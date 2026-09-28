@@ -28,39 +28,42 @@ const sound = new Sound();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
 
-// ─── progress (kept per device; losing it costs nothing) ───────────────────
-const SAVE = 'stillwater.v2';
-let stageIx = 0;
-let stageSolves = 0;
+// ─── proficiency (continuous, local, deliberately low-stakes) ──────────────
+const startupParams = new URLSearchParams(location.search);
+const SAVE = 'stillwater.v3';
+let mastery = 0.04;
+let totalSolves = 0;
+let activeStage: N.Stage = N.STAGES[0];
 try {
-  const saved = JSON.parse(localStorage.getItem(SAVE) ?? 'null') as { stage?: number; solves?: number } | null;
-  if (saved && typeof saved.stage === 'number') {
-    stageIx = Math.max(0, Math.min(N.STAGES.length - 1, saved.stage));
-    stageSolves = saved.solves ?? 0;
+  const saved = JSON.parse(localStorage.getItem(SAVE) ?? 'null') as { mastery?: number; solves?: number } | null;
+  if (saved && typeof saved.mastery === 'number') {
+    mastery = Math.max(0, Math.min(1, saved.mastery));
+    totalSolves = saved.solves ?? 0;
+  } else {
+    const old = JSON.parse(localStorage.getItem('stillwater.v2') ?? 'null') as { stage?: number; solves?: number } | null;
+    if (old && typeof old.stage === 'number') {
+      const anchors = [0.04, 0.22, 0.44, 0.66, 0.84];
+      mastery = Math.max(0, Math.min(1, (anchors[old.stage] ?? 0.04) + Math.min(0.06, (old.solves ?? 0) * 0.008)));
+    }
   }
 } catch {
   /* storage unavailable */
 }
+const levelParam = Number(startupParams.get('level'));
+if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
+const forcedStage = N.stageForId(startupParams.get('stage'));
+if (forcedStage) activeStage = forcedStage;
 const save = () => {
   try {
-    localStorage.setItem(SAVE, JSON.stringify({ stage: stageIx, solves: stageSolves }));
+    localStorage.setItem(SAVE, JSON.stringify({ mastery, solves: totalSolves }));
   } catch {
     /* storage unavailable */
   }
 };
-{
-  // `?stage=groups` starts at a stage (for trying one out; progress still saves from there)
-  const ask = new URLSearchParams(location.search).get('stage');
-  const ix = N.STAGES.findIndex((st) => st.id === ask);
-  if (ix >= 0) {
-    stageIx = ix;
-    stageSolves = 0;
-  }
-}
-const stage = () => N.STAGES[stageIx];
+const stage = () => activeStage;
 
 // ─── world ─────────────────────────────────────────────────────────────────
-const params = new URLSearchParams(location.search);
+const params = startupParams;
 /** `?bare=1`: hide the pads (for looking at the water and the bed). */
 const bare = !!params.get('bare');
 const urlSeed = Number(params.get('seed'));
@@ -68,7 +71,7 @@ const urlSeed = Number(params.get('seed'));
 const timeScale = Math.max(0.1, Math.min(8, Number(params.get('timescale')) || 1));
 const rand = seeded(urlSeed || (Date.now() % 100000) + 7);
 const pond = new Pond(Math.floor(rand() * 1e9));
-pond.dewFor = (r) => N.dewFor(stage(), r);
+pond.dewFor = (r) => N.dewForMastery(mastery, r);
 const school = new School(reduced ? { schools: 2, perSchool: 14, loners: 6 } : { schools: 4, perSchool: 22, loners: 12 }, pond.boat.x, pond.boat.y + 200);
 
 let renderer!: Renderer;
@@ -161,7 +164,7 @@ let checkAt = 0;
 function visibleDewy(): Pad[] {
   const out: Pad[] = [];
   for (const p of pond.pads) {
-    if (!p.drops.length) continue;
+    if (!liveCount(p)) continue;
     const [sx, sy] = toScreen(p.x, p.y);
     const m = Math.max(18, p.r * 0.5 * cam.zoom);
     if (sx < m || sx > cam.cssW - m) continue;
@@ -192,15 +195,34 @@ function counts(pads: Pad[]) {
   return pads.map(liveCount);
 }
 
+let unsolvableSince = 0;
+let targetFriction = 0;
+
+function targetDewy(): Pad[] {
+  return visibleDewy().filter((p) => {
+    const [, sy] = toScreen(p.x, p.y);
+    return sy > cam.cssH * 0.18 && sy < cam.cssH * (BOAT_AT - 0.16);
+  });
+}
+
 function setTarget() {
-  const st = stage();
-  const seen = visibleDewy();
-  let t = N.chooseTarget(st, counts(seen), rand, lastSolved);
+  const safe = targetDewy();
+  const seen = safe.length >= 2 ? safe : visibleDewy();
+  const activity = forcedStage
+    ? (() => {
+        const t = N.chooseTarget(forcedStage, counts(seen), rand, lastSolved);
+        return t ? { stage: forcedStage, target: t } : null;
+      })()
+    : N.chooseActivity(mastery, counts(seen), rand, lastSolved);
+
+  let st = activity?.stage ?? forcedStage ?? N.pickStage(mastery, rand);
+  let t = activity?.target ?? N.chooseTarget(st, counts(visibleDewy()), rand, lastSolved);
+
   if (!t) {
-    // the pond in view can't make anything in range yet: pick a number and let dew form for it
     const value = st.min + Math.floor(rand() * (st.max - st.min + 1));
+    const broad = visibleDewy();
     const dry = visibleDry();
-    const all = [...seen, ...dry];
+    const all = [...broad, ...dry];
     const fix = N.repair(st, counts(all), value);
     if (fix) {
       fix.forEach((c, i) => condense(all[i], c));
@@ -211,22 +233,53 @@ function setTarget() {
       return;
     }
   }
+
+  activeStage = st;
   target = t;
+  targetFriction = 0;
+  unsolvableSince = 0;
   ui.setTarget(t, st.display);
   ui.say(N.hintFor(st, t, firstTarget), firstTarget ? 9 : 5);
   firstTarget = false;
 }
 
-/** Drift can carry a needed leaf out of view: condense dew so the ask stays answerable. */
+/**
+ * Physics may carry a needed leaf away. An untouched ask quietly dissolves and
+ * is redrawn from the new landscape. Exact condensation repair is reserved for
+ * a child already midway through that answer.
+ */
 function keepSolvable() {
-  if (!target || lock > 0) return;
+  if (!target || lock > 0) {
+    unsolvableSince = 0;
+    return;
+  }
   const st = stage();
   const seen = visibleDewy();
-  if (N.solvable(st, counts(seen), target.value)) return;
+  if (N.solvable(st, counts(seen), target.value)) {
+    unsolvableSince = 0;
+    return;
+  }
+  if (!unsolvableSince) unsolvableSince = pond.t;
+  const lostFor = pond.t - unsolvableSince;
+  if (lostFor < 1.5) return;
+
+  if (!selection.length) {
+    target = null;
+    ui.clearTarget();
+    ui.quiet();
+    nextTargetAt = pond.t + 0.55;
+    unsolvableSince = 0;
+    return;
+  }
+
+  if (lostFor < 3.2) return;
   const dry = visibleDry();
   const all = [...seen, ...dry];
   const fix = N.repair(st, counts(all), target.value);
-  if (fix) fix.forEach((c, i) => condense(all[i], c));
+  if (fix) {
+    fix.forEach((c, i) => condense(all[i], c));
+    unsolvableSince = 0;
+  }
 }
 
 function gathered() {
@@ -260,12 +313,14 @@ function choose(p: Pad) {
       ui.progress(verdict.gathered);
       break;
     case 'mismatch':
+      targetFriction++;
       for (const q of selection.slice(0, -1)) q.selected = false;
       selection = [p];
       ui.progress(verdict.gathered);
       ui.say('leaves that match', 3);
       break;
     case 'over':
+      targetFriction++;
       ui.progress(Math.min(verdict.gathered, target.value));
       ui.say('let a few drops return to the water', 3);
       lock = 1.2;
@@ -314,12 +369,8 @@ function solve() {
   target = null;
   pond.propel(90 + value * 14);
   ui.say(['and the water carries you', 'onward', 'the river opens', 'further down the water'][Math.floor(rand() * 4)], 3);
-  stageSolves++;
-  const st = stage();
-  if (stageSolves >= st.solves && stageIx < N.STAGES.length - 1) {
-    stageIx++;
-    stageSolves = 0;
-  }
+  mastery = N.learn(mastery, stage(), { value }, targetFriction);
+  totalSolves++;
   save();
   nextTargetAt = pond.t + 3.4;
 }
@@ -555,16 +606,18 @@ let fastFor = 0;
 
 function adapt(ms: number, dt: number) {
   frameMs += (ms - frameMs) * 0.05;
-  if (frameMs > 24) {
+  if (frameMs > 23) {
     slowFor += dt;
     fastFor = 0;
-  } else if (frameMs < 13) {
+  } else if (frameMs < 18.2) {
+    // A 60 Hz browser presents at ~16.7 ms. The old <13 ms recovery gate
+    // made every temporary down-step effectively permanent.
     fastFor += dt;
     slowFor = 0;
   } else {
     slowFor = fastFor = 0;
   }
-  const next = slowFor > 1.5 ? scale - 0.1 : fastFor > 5 ? scale + 0.1 : scale;
+  const next = slowFor > 1.8 ? scale - 0.1 : fastFor > 4 ? scale + 0.1 : scale;
   const clamped = Math.max(0.5, Math.min(1, Math.round(next * 10) / 10));
   if (clamped !== scale) {
     scale = clamped;
@@ -734,6 +787,8 @@ Object.defineProperty(window, '__stillwater', {
   get: () => ({
     renderer: 'webgl2',
     stage: stage().id,
+    mastery: Math.round(mastery * 1000) / 1000,
+    totalSolves,
     target: target?.value ?? null,
     gathered: gathered(),
     selected: selection.map((p) => p.id),

@@ -143,6 +143,19 @@ export class School {
       }
     }
 
+    // Flocking neighbourhoods are spatially bucketed. Largest radius is 110,
+    // so a 120-unit grid preserves the same local rules without O(n²) scans.
+    const cell = 120;
+    const grid = new Map<string, number[]>();
+    const gridKey = (x: number, y: number) => x + ',' + y;
+    for (let i = 0; i < n; i++) {
+      const f = fish[i];
+      const k = gridKey(Math.floor(f.x / cell), Math.floor(f.y / cell));
+      const bucket = grid.get(k);
+      if (bucket) bucket.push(i);
+      else grid.set(k, [i]);
+    }
+
     for (let i = 0; i < n; i++) {
       const f = fish[i];
       const minnow = f.kind === 3;
@@ -154,26 +167,33 @@ export class School {
       let my = 0;
       let count = 0;
       const radius = minnow ? 48 : f.kind === 0 ? 70 : 110;
-      for (let j = 0; j < n; j++) {
-        if (i === j) continue;
-        const g = fish[j];
-        if (minnow ? g.school !== f.school : g.school >= 0 || Math.abs(g.z - f.z) > 0.28 || (g.kind === 0) !== (f.kind === 0)) continue;
-        const dx = g.x - f.x;
-        const dy = g.y - f.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 > radius * radius) continue;
-        const d = Math.sqrt(d2) || 0.01;
-        const personal = (f.size + g.size) * (minnow ? 0.75 : 0.9);
-        if (d < personal) {
-          sx -= (dx / d) * (personal - d);
-          sy -= (dy / d) * (personal - d);
+      const gx0 = Math.floor(f.x / cell);
+      const gy0 = Math.floor(f.y / cell);
+      for (let gx = gx0 - 1; gx <= gx0 + 1; gx++)
+        for (let gy = gy0 - 1; gy <= gy0 + 1; gy++) {
+          const bucket = grid.get(gridKey(gx, gy));
+          if (!bucket) continue;
+          for (const j of bucket) {
+            if (i === j) continue;
+            const g = fish[j];
+            if (minnow ? g.school !== f.school : g.school >= 0 || Math.abs(g.z - f.z) > 0.28 || (g.kind === 0) !== (f.kind === 0)) continue;
+            const dx = g.x - f.x;
+            const dy = g.y - f.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 > radius * radius) continue;
+            const d = Math.sqrt(d2) || 0.01;
+            const personal = (f.size + g.size) * (minnow ? 0.75 : 0.9);
+            if (d < personal) {
+              sx -= (dx / d) * (personal - d);
+              sy -= (dy / d) * (personal - d);
+            }
+            ax += g.vx;
+            ay += g.vy;
+            mx += g.x;
+            my += g.y;
+            count++;
+          }
         }
-        ax += g.vx;
-        ay += g.vy;
-        mx += g.x;
-        my += g.y;
-        count++;
-      }
       let fx = sx * (minnow ? 3 : 2.2);
       let fy = sy * (minnow ? 3 : 2.2);
       if (count) {

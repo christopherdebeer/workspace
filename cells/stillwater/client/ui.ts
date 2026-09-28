@@ -90,6 +90,13 @@ export class Overlay {
     this.hint.classList.remove('show');
   }
 
+  clearTarget() {
+    this.target.innerHTML = '';
+    this.dots = [];
+    this.bar = null;
+    this.value = 0;
+  }
+
   announce(text: string) {
     this.live.textContent = text;
   }

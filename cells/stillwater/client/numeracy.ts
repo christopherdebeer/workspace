@@ -3,22 +3,18 @@
  * in the drop counts of the pads that are in view and a random source, and gets
  * back a target, a verdict on a selection, or a repair.
  *
- * One rule set from counting to multiplication, as a ladder of stages:
- *
- *   gather   2–5    any leaves whose drops sum to the target      · • • •
- *   add      5–10   same, bigger                                  ten-frame
- *   more     9–20   same, bigger again                            ten-frames
- *   groups   4–20   leaves that all hold the same number of drops  rows × cols
- *   times    6–36   same, shown only as a numeral                  18
+ * One rule set runs from counting to multiplication as an overlapping
+ * capability field rather than a ladder. Proficiency only biases what the pond
+ * is likely to ask; earlier forms remain present as later relationships emerge.
  *
  * "groups" is repeated addition made visible (the target is drawn as an array
  * of dots, one row per leaf); "times" drops the array and leaves the product.
  * Any factorisation the pond offers is accepted: 18 is three leaves of six or
  * six leaves of three, whichever the water happens to hold.
  *
- * Solvability comes from the pond, not from a layout table: a target is only
- * ever drawn from counts that are in view, and when drift carries a needed leaf
- * away, `repair` names an empty leaf in view for dew to condense on.
+ * Solvability comes from the pond, not from a layout table: the next ask is
+ * drawn from dew already visible in a stable stretch ahead. Repair remains only
+ * as a continuity fallback once a child has begun an answer.
  */
 
 export type Rule = 'sum' | 'groups';
@@ -36,16 +32,16 @@ export interface Stage {
   max: number;
   /** Most leaves a solution may need (keeps sums of many ones out). */
   maxParts: number;
-  /** Solves before the next stage opens. */
-  solves: number;
+  /** Rough latent difficulty, 0..1, used only to calibrate proficiency. */
+  difficulty: number;
 }
 
 export const STAGES: readonly Stage[] = [
-  { id: 'gather', rule: 'sum', display: 'line', maxDrops: 3, minDrops: 1, min: 2, max: 5, maxParts: 3, solves: 4 },
-  { id: 'add', rule: 'sum', display: 'frames', maxDrops: 5, minDrops: 1, min: 5, max: 10, maxParts: 3, solves: 5 },
-  { id: 'more', rule: 'sum', display: 'frames', maxDrops: 7, minDrops: 2, min: 9, max: 20, maxParts: 4, solves: 6 },
-  { id: 'groups', rule: 'groups', display: 'array', maxDrops: 5, minDrops: 2, min: 4, max: 20, maxParts: 4, solves: 6 },
-  { id: 'times', rule: 'groups', display: 'numeral', maxDrops: 6, minDrops: 2, min: 6, max: 36, maxParts: 6, solves: Infinity },
+  { id: 'gather', rule: 'sum', display: 'line', maxDrops: 3, minDrops: 1, min: 2, max: 5, maxParts: 3, difficulty: 0.05 },
+  { id: 'add', rule: 'sum', display: 'frames', maxDrops: 5, minDrops: 1, min: 5, max: 10, maxParts: 3, difficulty: 0.25 },
+  { id: 'more', rule: 'sum', display: 'frames', maxDrops: 7, minDrops: 2, min: 9, max: 20, maxParts: 4, difficulty: 0.48 },
+  { id: 'groups', rule: 'groups', display: 'array', maxDrops: 5, minDrops: 2, min: 4, max: 20, maxParts: 4, difficulty: 0.68 },
+  { id: 'times', rule: 'groups', display: 'numeral', maxDrops: 6, minDrops: 2, min: 6, max: 36, maxParts: 6, difficulty: 0.88 },
 ];
 
 export interface Target {
@@ -66,6 +62,78 @@ function shuffle<T>(xs: T[], rand: Rand): T[] {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+const smooth01 = (a: number, b: number, x: number) => {
+  const t = clamp01((x - a) / Math.max(1e-6, b - a));
+  return t * t * (3 - 2 * t);
+};
+const bell = (x: number, centre: number, width: number) => {
+  const z = (x - centre) / width;
+  return Math.exp(-1.6 * z * z);
+};
+
+export function stageForId(id: string | null | undefined): Stage | null {
+  return STAGES.find((s) => s.id === id) ?? null;
+}
+
+/** Overlapping curriculum field: new forms emerge smoothly; earlier forms persist forever. */
+export function stageWeight(stage: Stage, mastery0: number): number {
+  const m = clamp01(mastery0);
+  switch (stage.id) {
+    case 'gather':
+      return 0.18 + 1.4 * (1 - smooth01(0.08, 0.62, m));
+    case 'add':
+      return 0.11 + 1.12 * bell(m, 0.28, 0.24);
+    case 'more':
+      return 0.09 * smooth01(0.08, 0.28, m) + 1.08 * bell(m, 0.50, 0.25) * smooth01(0.10, 0.35, m);
+    case 'groups':
+      return 0.08 * smooth01(0.18, 0.42, m) + 1.05 * bell(m, 0.70, 0.24) * smooth01(0.24, 0.58, m);
+    case 'times':
+      return 0.06 * smooth01(0.38, 0.62, m) + 1.15 * smooth01(0.48, 0.92, m);
+  }
+}
+
+export function pickStage(mastery: number, rand: Rand): Stage {
+  const weights = STAGES.map((s) => stageWeight(s, mastery));
+  let r = rand() * weights.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < STAGES.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return STAGES[i];
+  }
+  return STAGES[0];
+}
+
+function weightedStageOrder(mastery: number, rand: Rand): Stage[] {
+  const pool = STAGES.map((stage) => ({ stage, w: stageWeight(stage, mastery) })).filter((p) => p.w > 0.005);
+  const out: Stage[] = [];
+  while (pool.length) {
+    const total = pool.reduce((s, p) => s + p.w, 0);
+    if (total <= 0) {
+      out.push(...pool.splice(0).map((p) => p.stage));
+      break;
+    }
+    let r = rand() * total;
+    let at = 0;
+    for (; at < pool.length - 1; at++) {
+      r -= pool[at].w;
+      if (r <= 0) break;
+    }
+    out.push(pool.splice(at, 1)[0].stage);
+  }
+  return out;
+}
+
+/** Dew follows proficiency, not the current ask, so the ecology stays continuous. */
+export function dewForMastery(mastery0: number, rand: Rand): number {
+  const m = clamp01(mastery0);
+  const dryChance = 0.70 - 0.08 * smooth01(0.25, 0.82, m);
+  if (rand() < dryChance) return 0;
+  const max = Math.max(3, Math.min(6, Math.round(3 + 3 * smooth01(0.08, 0.92, m))));
+  if (rand() < 0.30 * smooth01(0.25, 0.72, m)) return pickInt(rand, 2, Math.min(4, max));
+  const min = rand() < 0.45 * smooth01(0.35, 0.80, m) ? 2 : 1;
+  return pickInt(rand, min, max);
 }
 
 /** Drops for a fresh leaf at this stage: most leaves stay dry, so the dewy ones can be counted at a glance. */
@@ -140,6 +208,33 @@ export function chooseTarget(stage: Stage, counts: readonly number[], rand: Rand
     }
   }
   return found.length ? { value: found[0] } : null;
+}
+
+/**
+ * Choose the next relationship from what the landscape already contains.
+ * Proficiency biases the capability order; physical availability has final say.
+ */
+export function chooseActivity(mastery: number, counts: readonly number[], rand: Rand, avoid?: number): { stage: Stage; target: Target } | null {
+  for (const stage of weightedStageOrder(mastery, rand)) {
+    const target = chooseTarget(stage, counts, rand, avoid);
+    if (target) return { stage, target };
+  }
+  return null;
+}
+
+/**
+ * Tiny Elo-like update. friction counts gentle over/mismatch moments before a
+ * solve. There is no failure state; hesitation simply carries less evidence.
+ */
+export function learn(mastery0: number, stage: Stage, target: Target, friction: number): number {
+  const mastery = clamp01(mastery0);
+  const span = Math.max(1, stage.max - stage.min);
+  const within = (target.value - stage.min) / span;
+  const difficulty = clamp01(stage.difficulty + (within - 0.5) * 0.12);
+  const expected = 1 / (1 + Math.exp((difficulty - mastery) * 5.5));
+  const quality = 1 / (1 + Math.max(0, friction) * 0.38);
+  const k = 0.052 * (0.72 + 0.28 * (1 - mastery));
+  return clamp01(mastery + k * (quality - expected));
 }
 
 /**

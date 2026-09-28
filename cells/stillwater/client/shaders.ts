@@ -499,9 +499,8 @@ float leafAngle(vec2 p){ return atan(p.x, p.y) - (fract(seed * 8.3) - .5) * .16;
  * curl up, breathing slowly with the water.
  */
 float edgeLift(float a){
-  float n = texture(uNoise, vec2(a / TAU * 2. + seed * 3.1, seed * 7.3 + uTime * .006)).r;
-  float n2 = texture(uNoise, vec2(a / TAU * 5. + seed * 1.7, seed * 2.9 - uTime * .004)).g;
-  return pow(clamp((n * .75 + n2 * .45) * 1.7 - 1.05, 0., 1.), 1.4) * curl;
+  vec2 nn = texture(uNoise, vec2(a / TAU * 2.6 + seed * 3.1 + uTime * .0015, seed * 7.3 - uTime * .001)).rg;
+  return pow(clamp((nn.x * .75 + nn.y * .45) * 1.7 - 1.05, 0., 1.), 1.4) * curl;
 }
 
 float shapeD(vec2 p){
@@ -578,7 +577,6 @@ float heightAt(vec2 p){
     float along = dot(p, vDent.xy / gv);
     h -= vSink * along * .16;
   }
-  h -= .004 * veins(p, len);
   h += .014 * (texture(uNoise, p * .5 + so * 2.3).g - .5);
   return h;
 }
@@ -705,8 +703,12 @@ void main(){
     vec2 qn = q / max(dl, 1e-4);
     // the lens: a magnified, brighter piece of the leaf beneath
     vec2 pr = dd.xy + q * dd.z * .45 - n.xy * dd.z * .06;
-    float v2;
-    vec3 under = leafLit(pr, Ll, v2);
+    // Magnify leaf material without rebuilding a second procedural normal.
+    float prLen = length(pr);
+    float v2 = veins(pr, prLen);
+    vec3 under = albedo(pr, prLen, v2);
+    float underShade = sunThrough(vW + rot((pr - p) * vR, vAng));
+    under *= (uAmb + uSunCol * .72 * underShade + LAMP * lampAt(vW) * .8);
     under = mix(vec3(dot(under, vec3(.3, .59, .11))), under, 1.15) * 1.22 + .035;
     // sunlight focused through the drop onto the leaf, on the side away from the sun
     vec2 fc = q + Ll.xy * .45;
@@ -796,9 +798,9 @@ uniform float uAspect;
 uniform vec4 uGust[4];    // x, y, radius, level
 uniform vec4 uGustDir[4]; // dx, dy, radial, -
 vec2 waves(vec2 p){
-  return (texture(uNoise, p / 256.).rg - .5) * .085
-       + (texture(uNoise, p / 64.).gr - .5) * .065
-       + (texture(uNoise, p / 28.).rg - .5) * .03;
+  vec4 a = texture(uNoise, p / 220.);
+  vec4 b = texture(uNoise, p / 48.);
+  return (a.rg - .5) * .098 + (b.ba - .5) * .052;
 }
 void main(){
   vec2 wp = vWorld;
@@ -816,7 +818,8 @@ void main(){
     float k = g.w * (1. - smoothstep(g.z * .35, g.z * 1.25, length(wp - g.xy)));
     vec2 dir = uGustDir[i].z > .5 ? normalize(wp - g.xy + .001) : uGustDir[i].xy;
     vec2 q = wp - dir * uTime * 55.;
-    grad += ((texture(uNoise, q / 11.).rg - .5) * .55 + (texture(uNoise, q / 5.).gr - .5) * .32) * k;
+    vec4 gn = texture(uNoise, q / 9.);
+    grad += ((gn.rg - .5) * .62 + (gn.ba - .5) * .30) * k;
     rough = max(rough, k);
   }
   float h = 0.;
@@ -842,7 +845,8 @@ void main(){
   // as far below as the trees are above, so it looks smaller and slides slower
   // than the surface; ripples, wakes and gusts break it up.
   vec2 q = uView.xy + (wp - uView.xy) * (1. + uDepthK * CANOPY_H) + n.xy * 190.;
-  float cloud = texture(uNoise, q / 900. + uTime * vec2(.0012, .0006)).g * .6 + texture(uNoise, q / 330. + uTime * .001).r * .4;
+  vec4 cloudN = texture(uNoise, q / 720. + uTime * vec2(.0012, .0006));
+  float cloud = cloudN.g * .62 + cloudN.a * .38;
   vec3 sky = mix(uSky0, uSky1, clamp(R.y * .5 + .5, 0., 1.));
   sky = mix(sky, mix(sky, vec3(1.), .55) * (1. - uDusk * .6), smoothstep(.5, .75, cloud) * .7);
   // stars in the gaps at night
@@ -865,7 +869,8 @@ void main(){
   vec3 Ls = normalize(uSun);
   col *= 1. + clamp(-dot(simG, Ls.xy) * 2.2, -.28, .4);
   // white water: bubbly, broken, fading
-  float bub = texture(uNoise, wp / 7. + uTime * .03).a * .6 + texture(uNoise, wp / 19. - uTime * .02).r * .6;
+  vec4 foamN = texture(uNoise, wp / 9. + uTime * vec2(.03, -.02));
+  float bub = foamN.a * .65 + foamN.r * .55;
   float fm = smoothstep(.25, .9, foam * bub * 1.4);
   col = mix(col, vec3(.86, .9, .86) * (uAmb * 1.3 + uSunCol * .75), fm * .8);
   // the lantern: warm light on the water around the boat and its glints in the ripples
