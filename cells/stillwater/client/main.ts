@@ -388,7 +388,8 @@ canvasEl.addEventListener('pointerdown', (e) => {
     choose(p);
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
-    pond.impulses.push({ x: wx, y: wy, r: 10, s: 1.2 });
+    // one plop: a single clean ring spreading out, like a raindrop or a fingertip
+    pond.impulses.push({ x: wx, y: wy, r: 6, s: 2.6 });
     school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
     gust = pond.gust({ x: wx, y: wy, dx: 0, dy: 0, s: 0.6, r: 120, life: 1.8, radial: true, held: true });
@@ -501,7 +502,7 @@ document.addEventListener('visibilitychange', () => {
 // ─── light and air ─────────────────────────────────────────────────────────
 // `?time=0.5` starts at that point of the day (0 afternoon · .3 golden · .5 dusk · .7 night · .9 dawn)
 const dayStart = Number.isFinite(Number(params.get('time'))) && params.get('time') !== null ? Number(params.get('time')) : 0.08;
-const atmosphere = new Atmosphere(reduced ? { flies: 14, pollen: 16, silt: 30 } : { flies: 34, pollen: 40, silt: 70 });
+const atmosphere = new Atmosphere(reduced ? { flies: 14, pollen: 16, silt: 30 } : { flies: 56, pollen: 40, silt: 70 });
 
 function gathers(dt: number, dusk: number): Mote[] {
   const out: Mote[] = [];
@@ -636,6 +637,8 @@ function frame(now: number) {
     thread.push([z.x, z.y]);
   }
 
+  // resolution steps BEFORE drawing: resizing the canvas clears it, and after the draw that blanked a frame
+  adapt(ms, dt);
   const sky = skyAt(dayStart + pond.t / DAY);
   const air = atmosphere.step(dt, pond.t, {
     x: cam.x,
@@ -660,7 +663,6 @@ function frame(now: number) {
     },
     dt,
   );
-  adapt(ms, dt);
   requestAnimationFrame(frame);
 }
 

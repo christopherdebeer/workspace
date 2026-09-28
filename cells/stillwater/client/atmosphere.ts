@@ -75,6 +75,10 @@ interface Fly {
   h: number;
   phase: number;
   rate: number;
+  /** Where it's darting now, and when it next changes its mind. */
+  tx: number;
+  ty: number;
+  next: number;
 }
 
 interface Speck {
@@ -108,7 +112,7 @@ export class Atmosphere {
     const at = (): [number, number] => [f.x + rnd(-f.hw, f.hw) * 1.2, f.y + rnd(-f.hh, f.hh) * 1.2];
     while (this.flies.length < this.count.flies) {
       const [x, y] = at();
-      this.flies.push({ x, y, vx: 0, vy: 0, h: rnd(0.3, 1.6), phase: rnd(0, 20), rate: rnd(0.25, 0.6) });
+      this.flies.push({ x, y, vx: 0, vy: 0, h: rnd(0.3, 1.6), phase: rnd(0, 20), rate: rnd(0.5, 1.2), tx: 0, ty: 0, next: 0 });
     }
     while (this.pollen.length < this.count.pollen) {
       const [x, y] = at();
@@ -160,24 +164,35 @@ export class Atmosphere {
       below.push({ x: p.x, y: p.y, size: p.s * 2.4, r: 0.75, g: 0.85, b: 0.65, a: tw, core: 0.2, z: parallax(p.d) });
     }
 
-    // fireflies: out at dusk, a few lingering by day; each blinks on its own slow pulse
+    // fireflies: out at dusk, a few lingering by day. Small and busy — they dart,
+    // hang, dart again — and each flashes briefly on its own rhythm (sometimes twice)
     const out = 0.12 + 0.88 * sky.dusk;
     for (let i = 0; i < this.flies.length; i++) {
       const fl = this.flies[i];
+      if (t >= fl.next) {
+        const hover = Math.random() < 0.3;
+        const a = Math.random() * Math.PI * 2;
+        const sp = hover ? rnd(0, 6) : rnd(25, 65);
+        fl.tx = Math.cos(a) * sp;
+        fl.ty = Math.sin(a) * sp;
+        fl.next = t + (hover ? rnd(0.4, 1.2) : rnd(0.15, 0.6));
+      }
       const [wx, wy] = f.wind(fl.x, fl.y);
-      fl.vx += (Math.sin(t * 0.7 + fl.phase * 3) * 14 - fl.vx * 0.8 + wx * 1.2) * dt;
-      fl.vy += (Math.cos(t * 0.53 + fl.phase * 2) * 14 - fl.vy * 0.8 + wy * 1.2) * dt;
+      const k = 1 - Math.exp(-7 * dt);
+      fl.vx += (fl.tx - fl.vx) * k + (wx * 1.4 + Math.sin(t * 13 + fl.phase * 7) * 30) * dt;
+      fl.vy += (fl.ty - fl.vy) * k + (wy * 1.4 + Math.cos(t * 11 + fl.phase * 5) * 30) * dt;
       fl.x += fl.vx * dt;
       fl.y += fl.vy * dt;
-      fl.h += Math.sin(t * 0.4 + fl.phase) * 0.05 * dt;
+      fl.h = Math.max(0.2, Math.min(1.8, fl.h + Math.sin(t * 1.3 + fl.phase) * 0.3 * dt));
       this.wrap(fl, f, 60);
       if (i / this.flies.length > out) continue;
-      const pulse = Math.pow(Math.max(0, Math.sin(t * fl.rate * Math.PI + fl.phase)), 6);
-      const glow = (0.3 + 0.7 * pulse) * (0.35 + 0.65 * sky.dusk);
+      const cyc = (t * fl.rate + fl.phase) % 2.2;
+      const flash = Math.exp(-Math.pow((cyc - 0.2) * 9, 2)) + (fl.phase % 1 > 0.6 ? Math.exp(-Math.pow((cyc - 0.55) * 9, 2)) * 0.7 : 0);
+      const glow = (0.18 + 0.82 * flash) * (0.35 + 0.65 * sky.dusk);
       const par = 1 / (1 - DEPTH_K * fl.h * 0.8);
-      above.push({ x: fl.x, y: fl.y, size: 7 + 18 * pulse, r: 1, g: 0.92, b: 0.5, a: glow, core: 0.9, z: par });
+      above.push({ x: fl.x, y: fl.y, size: 2.6 + 6 * flash, r: 1, g: 0.95, b: 0.55, a: glow, core: 1, z: par });
       // its light on the water below: softer, dimmer, at the surface
-      above.push({ x: fl.x, y: fl.y, size: 26 + 30 * pulse, r: 0.9, g: 0.85, b: 0.45, a: glow * 0.18, core: 0, z: 1 });
+      if (flash > 0.05) above.push({ x: fl.x, y: fl.y, size: 10 + 12 * flash, r: 0.9, g: 0.85, b: 0.45, a: glow * 0.14, core: 0, z: 1 });
     }
     return { above, below };
   }

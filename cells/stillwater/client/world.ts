@@ -63,6 +63,18 @@ export interface Pad {
   flower: number;
   /** In contact with the hull last step (to fire a bump only on first touch). */
   touching: boolean;
+  /**
+   * Soft-body look, not a rigid disk: `dx,dy` points (world) toward where the
+   * pad is pressed — by neighbours or the hull — with length = how deep the
+   * edge gives there (flattened and riding up, in the shader); `wob` is a
+   * decaying flex after an impact.
+   */
+  dx: number;
+  dy: number;
+  wob: number;
+  /** Contact accumulated this step (pad-radius units, toward the contact). */
+  cx: number;
+  cy: number;
   /** Draw order within a layer. */
   layer: number;
 }
@@ -112,6 +124,8 @@ export interface Impulse {
   y: number;
   r: number;
   s: number;
+  /** Churns white water too (stern wash, oar catches, hard bumps). */
+  foam?: boolean;
 }
 
 export interface Bump {
@@ -181,6 +195,9 @@ export class Pond {
   bumps: Bump[] = [];
   weeds: Weed[] = [];
   gusts: Gust[] = [];
+  /** The boat's recent path (newest last): where the wake is drawn from. */
+  trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
+  private trailAcc = 0;
   boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0, helm: null, manualUntil: 0 };
   rope: Float32Array;
   ropePrev: Float32Array;
@@ -323,6 +340,11 @@ export class Pond {
         focus: false,
         flower,
         touching: false,
+        dx: 0,
+        dy: 0,
+        wob: 0,
+        cx: 0,
+        cy: 0,
         layer: rand(),
       };
       pad.drops = layDrops(count, r, rand);
@@ -376,6 +398,7 @@ export class Pond {
     for (const d of this.deep) d.y -= s;
     for (const w of this.weeds) w.y -= s;
     for (const g of this.gusts) g.y -= s;
+    for (const p of this.trail) p.y -= s;
     for (let i = 1; i < this.rope.length; i += 2) {
       this.rope[i] -= s;
       this.ropePrev[i] -= s;
@@ -420,11 +443,7 @@ export class Pond {
       const lvl = Pond.gustLevel(g);
       if (lvl < 0.05) continue;
       if (g.radial) {
-        const n = 10;
-        for (let i = 0; i < n; i++) {
-          const a = (i / n) * Math.PI * 2 + this.t;
-          this.impulses.push({ x: g.x + Math.cos(a) * g.r * 0.5, y: g.y + Math.sin(a) * g.r * 0.5, r: 7, s: 0.45 * lvl });
-        }
+        // a puff only pushes; the tap itself made the one plop (see main.ts)
       } else {
         const px = -g.dy;
         const py = g.dx;
@@ -434,7 +453,7 @@ export class Pond {
           this.impulses.push({ x: g.x + g.dx * f + px * o, y: g.y + g.dy * f + py * o, r: 6, s: 0.5 * lvl });
         }
       }
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < (g.radial ? 0 : 3); i++) {
         const a = Math.random() * Math.PI * 2;
         const d = Math.sqrt(Math.random()) * g.r;
         this.impulses.push({ x: g.x + Math.cos(a) * d, y: g.y + Math.sin(a) * d, r: 4, s: 0.3 * lvl });
@@ -522,10 +541,16 @@ export class Pond {
     if (Math.floor(prev) !== Math.floor(b.stroke) && b.rowing > 0.3) {
       for (const side of [-1, 1]) {
         const [tx, ty] = this.oarTip(side);
-        this.impulses.push({ x: tx, y: ty, r: 8, s: 1.1 * b.rowing });
+        this.impulses.push({ x: tx, y: ty, r: 8, s: 1.4 * b.rowing, foam: true });
       }
     }
     this.wake(dt);
+    this.trailAcc += dt;
+    if (this.trailAcc > 0.08) {
+      this.trailAcc = 0;
+      this.trail.push({ x: b.x, y: b.y, hx: Math.sin(b.heading), hy: Math.cos(b.heading), speed: b.speed, t: this.t });
+      while (this.trail.length && this.t - this.trail[0].t > 9) this.trail.shift();
+    }
   }
 
   private wakeAcc = 0;
@@ -541,12 +566,14 @@ export class Pond {
     const s = Math.sin(b.heading);
     const at = (lx: number, ly: number): [number, number] => [b.x + lx * c + ly * s, b.y - lx * s + ly * c];
     const [bx, by] = at(0, BOAT_LEN * 0.47);
-    this.impulses.push({ x: bx, y: by, r: 7, s: 0.35 + 0.6 * k });
+    this.impulses.push({ x: bx, y: by, r: 8, s: 0.8 + 1.2 * k });
     for (const side of [-1, 1]) {
-      const [qx, qy] = at(side * BOAT_BEAM * 0.45, BOAT_LEN * 0.18);
-      this.impulses.push({ x: qx, y: qy, r: 6, s: 0.25 + 0.45 * k });
-      const [sx, sy] = at(side * BOAT_BEAM * 0.3, -BOAT_LEN * 0.48);
-      this.impulses.push({ x: sx, y: sy, r: 6, s: 0.2 + 0.4 * k });
+      // the shoulders throw the arms of the V
+      const [qx, qy] = at(side * BOAT_BEAM * 0.5, BOAT_LEN * 0.22);
+      this.impulses.push({ x: qx, y: qy, r: 7, s: 0.6 + 1.0 * k });
+      // the stern quarters leave churned, foamy water
+      const [sx, sy] = at(side * BOAT_BEAM * 0.3, -BOAT_LEN * 0.5);
+      this.impulses.push({ x: sx, y: sy, r: 7, s: 0.4 + 0.8 * k, foam: Math.random() < 0.25 });
     }
   }
 
@@ -646,8 +673,12 @@ export class Pond {
         b.speed = Math.max(0, b.speed - into * mass * 0.012);
         if (!p.touching && (pen > 2 || into > 3)) {
           this.bumps.push({ x: cx + nx * hullR, y: cy + ny * hullR, strength: clamp(into / 30 + pen / 20, 0.1, 1) });
-          this.impulses.push({ x: p.x - nx * p.r * 0.9, y: p.y - ny * p.r * 0.9, r: 10, s: 0.8 });
+          this.impulses.push({ x: p.x - nx * p.r * 0.9, y: p.y - ny * p.r * 0.9, r: 10, s: 0.8, foam: into > 8 });
         }
+        // the hull presses the near edge in, and a hard nudge sets the leaf flexing
+        p.cx -= nx * (pen / p.r) * 2.2;
+        p.cy -= ny * (pen / p.r) * 2.2;
+        p.wob = Math.min(1, p.wob + into * 0.004 * dt * 60);
         p.touching = true;
       } else p.touching = false;
     }
@@ -673,12 +704,26 @@ export class Pond {
             if (q.id <= p.id) continue;
             const dx = q.x - p.x;
             const dy = q.y - p.y;
-            const rest = (p.r + q.r) * (p.bank && q.bank ? 0.8 : 0.92);
+            const touch = p.r + q.r;
             const d2 = dx * dx + dy * dy;
-            if (d2 >= rest * rest) continue;
+            if (d2 >= touch * touch) continue;
             const d = Math.sqrt(d2) || 0.01;
             const nx = dx / d;
             const ny = dy / d;
+            // edges that meet give a little: each pad is pressed toward the other
+            const overlap = touch - d;
+            p.cx += nx * (overlap / p.r);
+            p.cy += ny * (overlap / p.r);
+            q.cx -= nx * (overlap / q.r);
+            q.cy -= ny * (overlap / q.r);
+            // and a hard meeting sets both flexing
+            const closing = (p.vx - q.vx) * nx + (p.vy - q.vy) * ny;
+            if (closing > 3) {
+              p.wob = Math.min(1, p.wob + closing * 0.015);
+              q.wob = Math.min(1, q.wob + closing * 0.015);
+            }
+            const rest = touch * (p.bank && q.bank ? 0.8 : 0.92);
+            if (d >= rest) continue;
             const pen = rest - d;
             const mp = p.r * p.r;
             const mq = q.r * q.r;
@@ -717,6 +762,15 @@ export class Pond {
         this.impulses.push({ x: p.x + (p.vx / ps) * p.r, y: p.y + (p.vy / ps) * p.r, r: 6, s: Math.min(0.7, ps / 40) });
       }
       p.bob *= Math.exp(-2.4 * dt);
+      // settle the soft-body pose toward this step's contacts, then clear them
+      const give = Math.min(0.2, Math.hypot(p.cx, p.cy) * 0.45);
+      const cl = Math.hypot(p.cx, p.cy) || 1;
+      const k = 1 - Math.exp(-7 * dt);
+      p.dx += ((p.cx / cl) * give - p.dx) * k;
+      p.dy += ((p.cy / cl) * give - p.dy) * k;
+      p.cx = 0;
+      p.cy = 0;
+      p.wob *= Math.exp(-1.6 * dt);
       p.sel += ((p.selected ? 1 : 0) - p.sel) * (1 - Math.exp(-6 * dt));
       for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : 5) * dt));
       p.drops = p.drops.filter((d) => d.to > 0 || d.a > 0.01);

@@ -156,7 +156,7 @@ export class Renderer {
       }
       if (gl.isContextLost()) throw new Error(`context lost after compiling ${name}`);
     }
-    this.padInst = new Instanced(gl, this.quad, MAX_PADS, 3);
+    this.padInst = new Instanced(gl, this.quad, MAX_PADS, 4);
     this.deepInst = new Instanced(gl, this.quad, 400, 3);
     this.fishInst = new Instanced(gl, this.quad, 220, 3);
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
@@ -320,7 +320,9 @@ export class Renderer {
           this.dropData.set([d.x, d.y, d.r, Math.max(0, Math.min(1, d.a))], (row * DROP_COLS + k) * 4);
         }
       }
-      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, 0, (p.seed * 13.1) % 1);
+      // soft body: where it's pressed (and how far it gives), and its flex after a knock
+      const flex = p.wob * Math.sin(f.time * 7 + p.seed * 30);
+      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, 0, (p.seed * 13.1) % 1, p.dx, p.dy, flex, 0);
       if (p.flower) flowers.push(p);
     }
     this.padInst.count = n;
@@ -434,6 +436,8 @@ export class Renderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
+    this.wakeRibbons(f);
+
     // rope, trailing on the water
     const rope: Array<[number, number]> = [];
     for (let i = 0; i < pond.rope.length; i += 2) rope.push([pond.rope[i], pond.rope[i + 1]]);
@@ -492,6 +496,56 @@ export class Renderer {
     gl.disable(gl.BLEND);
   }
 
+  /**
+   * The boat's wake, drawn from its recent path: the wave sim's ripples run
+   * faster than a rowing boat, so they can only ever make rings — a V needs
+   * the boat to outrun its waves. So each point the bow passed spreads two
+   * crests sideways at the Kelvin angle (tan 19.5° ≈ 0.35 of the distance
+   * travelled since), each a lit crest with a trough beside it; behind the
+   * stern, a trail of broken white water. Both fade with age and with speed.
+   */
+  private wakeRibbons(f: FrameInput) {
+    const tr = f.pond.trail;
+    if (tr.length < 3) return;
+    const now = f.pond.t;
+    const bowK = 0.46 * 112;
+    for (const side of [-1, 1]) {
+      for (const [lift, col, a0, off] of [
+        [0, [0, 0, 0] as [number, number, number], 0.16, 5],
+        [1, [0.85, 0.95, 0.88] as [number, number, number], 0.22, 0],
+      ] as Array<[number, [number, number, number], number, number]>) {
+        void lift;
+        const pts: Array<[number, number]> = [];
+        const ws: number[] = [];
+        const as: number[] = [];
+        for (let i = tr.length - 1; i >= 0; i--) {
+          const p = tr[i];
+          const age = now - p.t;
+          const spread = 20 + p.speed * age * 0.35 + off;
+          const px = p.hy * side;
+          const py = -p.hx * side;
+          pts.push([p.x + p.hx * bowK * 0.7 + px * spread, p.y + p.hy * bowK * 0.7 + py * spread]);
+          ws.push(1.2 + age * 0.9);
+          as.push(a0 * Math.pow(Math.max(0, 1 - age / 8), 1.4) * Math.min(1, p.speed / 14) * Math.min(1, age * 3));
+        }
+        this.ribbon(f, pts, ws, col, as, false);
+      }
+    }
+    // the wash: churned water off the stern, widening and breaking up
+    const pts: Array<[number, number]> = [];
+    const ws: number[] = [];
+    const as: number[] = [];
+    for (let i = tr.length - 1; i >= 0; i--) {
+      const p = tr[i];
+      const age = now - p.t;
+      if (age > 4.5) break;
+      pts.push([p.x - p.hx * 56, p.y - p.hy * 56]);
+      ws.push(7 + age * 5);
+      as.push(Math.max(0, 1 - age / 4.5) * Math.min(1, p.speed / 16));
+    }
+    if (pts.length > 2) this.ribbon(f, pts, ws, [0.88, 0.93, 0.9], as, 2);
+  }
+
   private stepSim(f: FrameInput, dt: number, hw: number, hh: number) {
     const gl = this.gl;
     const { cam, pond } = f;
@@ -528,7 +582,8 @@ export class Renderer {
       const list = imps.slice(from, from + 48);
       from += 48;
       const data = new Float32Array(48 * 4);
-      list.forEach((im, i) => data.set([im.x, im.y, im.r, im.s], i * 4));
+      // a negative radius tells the sim this one churns foam too
+      list.forEach((im, i) => data.set([im.x, im.y, im.foam ? -im.r : im.r, im.s], i * 4));
       gl.uniform4fv(sp.u.uImp, data);
       gl.uniform1i(sp.u.uImpN, list.length);
       this.fullscreen();
@@ -536,7 +591,7 @@ export class Renderer {
     }
   }
 
-  private ribbon(f: FrameInput, pts: Array<[number, number]>, width: number, color: [number, number, number], alpha: number, glow: boolean) {
+  private ribbon(f: FrameInput, pts: Array<[number, number]>, width: number | number[], color: [number, number, number], alpha: number | number[], glow: boolean | 2) {
     const gl = this.gl;
     const n = Math.min(pts.length, 400);
     if (n < 2) return;
@@ -549,16 +604,18 @@ export class Renderer {
       const l = Math.hypot(tx, ty) || 1;
       tx /= l;
       ty /= l;
-      const nx = -ty * width;
-      const ny = tx * width;
+      const wi = typeof width === 'number' ? width : width[i];
+      const ai = typeof alpha === 'number' ? alpha : alpha[i];
+      const nx = -ty * wi;
+      const ny = tx * wi;
       const along = i / (n - 1);
-      const fade = glow ? 1 : Math.min(1, (1 - along) * 3);
-      d.set([pts[i][0] + nx, pts[i][1] + ny, 1, along, alpha * fade, 0, pts[i][0] - nx, pts[i][1] - ny, -1, along, alpha * fade, 0], i * 12);
+      const fade = glow || typeof alpha !== 'number' ? 1 : Math.min(1, (1 - along) * 3);
+      d.set([pts[i][0] + nx, pts[i][1] + ny, 1, along, ai * fade, 0, pts[i][0] - nx, pts[i][1] - ny, -1, along, ai * fade, 0], i * 12);
     }
     const pr = this.p.ribbon;
     this.common(pr, f);
     gl.uniform3fv(pr.u.uColor, color);
-    gl.uniform1f(pr.u.uGlow, glow ? 1 : 0);
+    gl.uniform1f(pr.u.uGlow, glow === 2 ? 2 : glow ? 1 : 0);
     gl.bindVertexArray(this.ribbonVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.ribbonBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, d, 0, n * 12);

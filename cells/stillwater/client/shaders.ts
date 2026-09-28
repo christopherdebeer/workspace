@@ -66,9 +66,15 @@ float at(vec2 uv){
   if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) return 0.;
   return texture(uPrev, uv).r;
 }
+float foamAt(vec2 uv){
+  if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) return 0.;
+  return texture(uPrev, uv).b;
+}
 void main(){
   vec2 uv = vUv + uShift;
   vec2 c = (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) ? vec2(0.) : texture(uPrev, uv).rg;
+  // white water: spreads a touch, fades over a few seconds
+  float foam = mix(foamAt(uv), (foamAt(uv - vec2(uTexel.x, 0.)) + foamAt(uv + vec2(uTexel.x, 0.)) + foamAt(uv - vec2(0., uTexel.y)) + foamAt(uv + vec2(0., uTexel.y))) * .25, .25) * .988;
   float l = at(uv - vec2(uTexel.x, 0.)), r = at(uv + vec2(uTexel.x, 0.));
   float d = at(uv - vec2(0., uTexel.y)), u = at(uv + vec2(0., uTexel.y));
   // slow waves: c^2 well under the 0.5 stability limit keeps ripples at a walking pace
@@ -80,10 +86,11 @@ void main(){
   for (int i = 0; i < 48; i++) {
     if (i >= uImpN) break;
     vec4 im = uImp[i];
-    float k = 1. - smoothstep(0., im.z, length(wp - im.xy));
+    float k = 1. - smoothstep(0., abs(im.z), length(wp - im.xy));
     h -= im.w * k * .55;
+    if (im.z < 0.) foam += im.w * k * .35;
   }
-  o = vec4(clamp(h, -4., 4.), c.r, 0., 1.);
+  o = vec4(clamp(h, -4., 4.), c.r, clamp(foam, 0., 2.), 1.);
 }`;
 
 // ─── riverbed, caustics, pad shadows through the water column ─────────────
@@ -359,6 +366,7 @@ layout(location=0) in vec2 aPos;
 layout(location=1) in vec4 iA; // x, y, r, angle
 layout(location=2) in vec4 iB; // seed, sel, bob, row
 layout(location=3) in vec4 iC; // drops, focus, submerged depth, tint
+layout(location=4) in vec4 iD; // press toward (world x, y; length = give), flex, -
 uniform vec4 uView;
 uniform float uMode; // 0 floating, 1 occlusion, 2 submerged
 uniform float uDepthK;
@@ -369,6 +377,7 @@ out vec4 vC;
 out float vAng;
 out float vR;
 out vec2 vW;
+out vec3 vDent;
 void main(){
   float s = uMode > .5 && uMode < 1.5 ? 1.02 : 1.36;
   vec2 q = aPos * s;
@@ -380,6 +389,7 @@ void main(){
   vAng = iA.w;
   vR = r;
   vW = iA.xy + w;
+  vDent = vec3(rot(iD.xy, -iA.w), iD.z);
   float par = uMode > 1.5 ? 1. / (1. + uDepthK * iC.z) : 1.;
   gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw * par, 0., 1.);
 }`;
@@ -388,6 +398,7 @@ export const PAD_FS = /* glsl */ `${HEAD}${COMMON}
 in vec2 vP;
 in vec4 vB;
 in vec4 vC;
+in vec3 vDent;
 in float vAng;
 in float vR;
 in vec2 vW;
@@ -399,11 +410,33 @@ uniform float uPx; // world units per device pixel
 float seed;
 vec2 so; // seed offset into the noise tile
 
+/**
+ * How far the edge is pushed in toward the pad's centre where it is pressed
+ * (a neighbour or the hull), 0..1 across the pressed arc. The pad is a soft
+ * leaf, not a disk: the pressed arc flattens against what it meets.
+ */
+float pressAt(vec2 p){
+  float give = length(vDent.xy);
+  if (give < .002) return 0.;
+  return smoothstep(.45, 1., dot(p / max(length(p), 1e-4), vDent.xy / give));
+}
+
 float shapeD(vec2 p){
   float a = atan(p.x, p.y);
   float len = length(p);
   float R = .965 + .016 * sin(a * 9. + seed * 20.) + .01 * sin(a * 23. + seed * 7.)
           + .03 * (texture(uNoise, vec2(a / TAU * 3., seed * 5.)).r - .5);
+  // pressed: the arc facing the contact goes flat against it (a chord, not a dent)
+  float give = length(vDent.xy);
+  if (give > .002) {
+    vec2 dir = vDent.xy / give;
+    float c = dot(p / max(len, 1e-4), dir);
+    float chord = (1. - give) / max(c, 1e-3);
+    R = mix(R, min(R, chord), smoothstep(.2, .6, c));
+    // after a knock the leaf flexes, an ellipse wobbling along the knock
+    float ad = atan(dir.x, dir.y);
+    R += vDent.z * .06 * cos(2. * (a - ad));
+  } else R += vDent.z * .05 * cos(2. * a + seed * 9.);
   float nw = (.03 + .07 * len) * (.7 + .5 * fract(seed * 3.7));
   return max(len - R, (nw - abs(a)) * len);
 }
@@ -430,6 +463,8 @@ float heightAt(vec2 p){
   float len = length(p);
   float h = .045 * (1. - len * len);
   h += .1 * curl * smoothstep(.78, 1., len);
+  // a pressed edge rides up over what it meets
+  h += length(vDent.xy) * pressAt(p) * smoothstep(.45, 1., len) * 1.1;
   h -= .007 * veins(p, len);
   h += .014 * (texture(uNoise, p * .5 + so * 2.3).g - .5);
   return h;
@@ -505,14 +540,13 @@ void main(){
     return;
   }
 
-  // outside the leaf: a soft contact shadow, and a warm halo when chosen
+  // outside the leaf: only its soft contact shadow on the water (a chosen leaf doesn't glow; its dew does)
   if (d > 0.) {
     vec2 sp = p + Ll.xy * .06;
     float sd = shapeD(sp);
     float shadow = (1. - smoothstep(0., .16, sd)) * .42;
-    float halo = (1. - smoothstep(0., .3, d)) * sel * .35;
-    if (shadow < .002 && halo < .002) discard;
-    o = vec4(vec3(1., .86, .5) * halo, shadow);
+    if (shadow < .002) discard;
+    o = vec4(0., 0., 0., shadow);
     return;
   }
 
@@ -523,6 +557,7 @@ void main(){
   int count = int(vC.x + .5);
   int row = int(vB.w + .5);
   float shadow = 0.;
+  float glowK = 0.;
   float inside = 0.;
   vec2 dq = vec2(0.);
   vec4 dd = vec4(0.);
@@ -536,8 +571,11 @@ void main(){
     shadow = max(shadow, (1. - smoothstep(.7, 1.2, sdist)) * dr.w);
     float dl = length(q);
     if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); }
+    glowK = max(glowK, exp(-max(dl - 1., 0.) * 2.2) * dr.w);
   }
   col *= 1. - shadow * .38;
+  // a chosen drop's light spills a little onto the leaf around it
+  col += vec3(1., .8, .42) * sel * glowK * .22;
 
   if (inside > 0.) {
     vec2 q = dq;
@@ -553,8 +591,8 @@ void main(){
     // sunlight focused through the drop onto the leaf, on the side away from the sun
     vec2 fc = q + Ll.xy * .45;
     under += uSunCol * vec3(1., .97, .82) * exp(-dot(fc, fc) * 9.) * .75;
-    // chosen: the dew catches a warm inner light
-    under += vec3(1., .82, .42) * sel * .3 * (1. - dl * .6);
+    // chosen: the dew itself lights, warm from within
+    under += vec3(1., .82, .42) * sel * .75 * (1. - dl * .5);
     // refraction bends the edge away: a thin dark rim, heaviest toward the sun
     float toSun = max(0., dot(qn, Ll.xy) / max(length(Ll.xy), 1e-3));
     under *= 1. - smoothstep(.62, .98, dl) * (.38 + .45 * toSun);
@@ -568,13 +606,21 @@ void main(){
     vec3 H = normalize(Ll + vec3(0., 0., 1.));
     float nh = max(dot(n, H), 0.);
     c += uSunCol * (pow(nh, 600.) * 5. + pow(nh, 70.) * .35 + pow(nh, 12.) * .05);
+    // the lantern: its own pinpoint in every drop within reach, and a warm focus beneath
+    vec2 tl = uLamp.xy - vW;
+    vec3 Lp = normalize(vec3(rot(tl, -vAng), 32.));
+    vec2 fall = tl / (uLamp.z * 2.4);
+    float lampK = uLamp.w * exp(-dot(fall, fall) * 1.6);
+    vec3 Hp = normalize(Lp + vec3(0., 0., 1.));
+    float nhp = max(dot(n, Hp), 0.);
+    c += LAMP * lampK * (pow(nhp, 500.) * 4. + pow(nhp, 40.) * .25);
+    vec2 fl2 = q + Lp.xy * .45;
+    c += LAMP * lampK * exp(-dot(fl2, fl2) * 9.) * .35;
     float edge = 1. - smoothstep(1. - aa / dd.z * 1.5, 1., dl);
     col = mix(col, c, edge * smoothstep(0., .2, dd.w));
   }
 
-  // selection: a luminous rim
-  float len = length(p);
-  col += vec3(1., .86, .5) * sel * smoothstep(.8, 1., len) * .22;
+
   // keyboard focus: a thin bright ring
   col = mix(col, vec3(1., .95, .8), vC.y * (1. - smoothstep(0., aa * 2., abs(d + .03))) * .8);
 
@@ -621,6 +667,8 @@ void main(){
     rough = max(rough, k);
   }
   float h = 0.;
+  vec2 simG = vec2(0.);
+  float foam = 0.;
   if (uSimOn > .5) {
     vec2 s = (vUv - .5) / uSimScale + .5;
     h = texture(uSim, s).r;
@@ -628,7 +676,9 @@ void main(){
     float hr = texture(uSim, s + vec2(uSimTexel.x, 0.)).r;
     float hd = texture(uSim, s - vec2(0., uSimTexel.y)).r;
     float hu = texture(uSim, s + vec2(0., uSimTexel.y)).r;
-    grad += vec2(hr - hl, hu - hd) * .85;
+    simG = vec2(hr - hl, hu - hd);
+    grad += simG * .85;
+    foam = texture(uSim, s).b;
   }
   vec3 n = normalize(vec3(-grad, 1.));
   vec3 under = texture(uUnder, vUv + n.xy * .035).rgb;
@@ -643,6 +693,13 @@ void main(){
   float rs = max(dot(R, normalize(uSun)), 0.);
   col += uSunCol * (pow(rs, 1400.) * (5. + rough * 6.) + pow(rs, 90.) * .08);
   col += vec3(.7, .85, .75) * clamp(h, 0., 1.) * .05;
+  // ripples and wakes catch the light: faces toward the sun brighten, the backs darken
+  vec3 Ls = normalize(uSun);
+  col *= 1. + clamp(-dot(simG, Ls.xy) * 2.2, -.28, .4);
+  // white water: bubbly, broken, fading
+  float bub = texture(uNoise, wp / 7. + uTime * .03).a * .6 + texture(uNoise, wp / 19. - uTime * .02).r * .6;
+  float fm = smoothstep(.25, .9, foam * bub * 1.4);
+  col = mix(col, vec3(.86, .9, .86) * (uAmb * 1.3 + uSunCol * .75), fm * .8);
   // the lantern: warm light on the water around the boat and its glints in the ripples
   float lamp = lampAt(wp);
   vec3 toLamp = normalize(vec3(uLamp.xy - wp, 26.));
@@ -980,19 +1037,31 @@ layout(location=0) in vec2 aPos;  // world
 layout(location=1) in vec4 iA;    // side, along, alpha, -
 uniform vec4 uView;
 out vec4 vA;
+out vec2 vWp;
 void main(){
   vA = iA;
+  vWp = aPos;
   gl_Position = vec4((aPos - uView.xy) * uView.zw, 0., 1.);
 }`;
 
 export const RIBBON_FS = /* glsl */ `${HEAD}
 in vec4 vA;
+in vec2 vWp;
 out vec4 o;
 uniform vec3 uColor;
 uniform float uGlow;
 uniform float uTime;
+uniform sampler2D uNoise;
 void main(){
   float edge = 1. - smoothstep(.3, 1., abs(vA.x));
+  if (uGlow > 1.5) {
+    // white water: bubbly and broken, thinning toward its edges and with age
+    float n = texture(uNoise, vWp / 9. + uTime * .02).a * .55 + texture(uNoise, vWp / 23.).r * .6;
+    float body = 1. - smoothstep(.1, 1., abs(vA.x));
+    float fm = smoothstep(.62 - .3 * vA.z, 1.05, n + body * .3) * vA.z * .7;
+    o = vec4(uColor * fm, fm * .8);
+    return;
+  }
   if (uGlow > .5) {
     float shimmer = .65 + .35 * sin(vA.y * 40. - uTime * 3.);
     o = vec4(uColor * edge * shimmer * vA.z, 0.);
