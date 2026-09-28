@@ -267,6 +267,7 @@ export class Renderer {
     if (u.uPx) gl.uniform1f(u.uPx, 1 / (cam.zoom * this.dpr * this.scale));
     if (u.uAspect) gl.uniform1f(u.uAspect, cam.cssW / cam.cssH);
     if (u.uDepthK) gl.uniform1f(u.uDepthK, DEPTH_K);
+    if (u.uDusk) gl.uniform1f(u.uDusk, light.dusk);
     if (u.uLamp) {
       const [lx, ly] = f.pond.bow();
       gl.uniform4f(u.uLamp, lx, ly, 150, f.lantern);

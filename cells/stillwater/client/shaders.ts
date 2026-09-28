@@ -131,7 +131,40 @@ vec2 flowAt(vec2 wp){
 }
 `;
 
-export const BED_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}
+/**
+ * The trees over the river. Nobody sees them directly — the camera looks down —
+ * but they are everywhere in the scene twice over: MIRRORED in the water
+ * (sky and clouds in the open ribbon over mid-river, leaves reaching out from
+ * both banks, stars at night), and as the SHADE they cast, dappling water,
+ * bed, leaves and boat with sun flecks through the gaps. One field for both,
+ * so the reflection and the shade agree.
+ */
+const CANOPY = /* glsl */ `
+uniform float uDusk;
+const float CANOPY_H = 6.;
+float canopyAt(vec2 q){
+  vec2 ch = chanAt(q.y);
+  float off = abs(q.x - ch.x);
+  float reach = smoothstep(ch.y * .1, ch.y + 170., off);
+  float big = texture(uNoise, q / 760.).r;
+  float mid = texture(uNoise, q / 170. + 3.1).g;
+  float fine = texture(uNoise, q / 36. + uTime * vec2(.004, .002)).r;
+  float leaf = texture(uNoise, q / 11. + uTime * vec2(.006, .003)).b;
+  float v = reach * 1.2 + (big - .5) * .8 + (mid - .5) * .55 + (fine - .5) * .35 + (leaf - .5) * .18 - .5;
+  // crisp at the leaf edges: a silhouette, not a blur
+  return smoothstep(0., .07, v);
+}
+/** Sunlight reaching a point on the water after the canopy: 1 open sky … ~.35 deep shade, with sun flecks. */
+float sunThrough(vec2 wp){
+  vec3 L = normalize(uSun);
+  vec2 q = wp + L.xy / max(L.z, .3) * CANOPY_H * 42.;
+  float c = canopyAt(q);
+  float fleck = smoothstep(.62, .8, texture(uNoise, q / 14. + uTime * vec2(.01, .006)).a);
+  return 1. - c * (.65 - fleck * .45);
+}
+`;
+
+export const BED_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}${CANOPY}
 in vec2 vUv;
 in vec2 vWorld;
 out vec4 o;
@@ -246,7 +279,7 @@ void main(){
   float sh = texture(uOcc, suv).r * .4
     + texture(uOcc, suv + vec2(blur, 0.)).r * .15 + texture(uOcc, suv - vec2(blur, 0.)).r * .15
     + texture(uOcc, suv + vec2(0., blur)).r * .15 + texture(uOcc, suv - vec2(0., blur)).r * .15;
-  float light = 1. - sh * .88;
+  float light = (1. - sh * .88) * sunThrough(wp + up);
 
   // caustics drift downstream with the surface that makes them, sharper in the shallows
   vec2 cu = (wp - fl * uTime * .6) / 256.;
@@ -396,7 +429,7 @@ void main(){
   gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw * par, 0., 1.);
 }`;
 
-export const PAD_FS = /* glsl */ `${HEAD}${COMMON}
+export const PAD_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}${CANOPY}
 in vec2 vP;
 in vec4 vB;
 in vec4 vC;
@@ -551,12 +584,13 @@ vec3 leafLit(vec2 p, vec3 Ll, out float vein){
   vec3 n = normalize(vec3(-(hx - h0) / e, -(hy - h0) / e, 1.) * vec3(1.6, 1.6, 1.));
   vec3 a = albedo(p, len, vein);
   float wrap = max((dot(n, Ll) + .35) / 1.35, 0.);
-  vec3 c = a * (uAmb + uSunCol * wrap * .95 + LAMP * lampAt(vW) * 1.4);
+  float shade = sunThrough(vW);
+  vec3 c = a * (uAmb + uSunCol * wrap * .95 * shade + LAMP * lampAt(vW) * 1.4);
   vec3 H = normalize(Ll + vec3(0., 0., 1.));
   float nh = max(dot(n, H), 0.);
   // waxy, but not evenly: a film of water here, a dry dull patch there
   float gloss = mix(.3, 1.25, smoothstep(.35, .75, texture(uNoise, p * .6 + so * 1.3).r));
-  c += uSunCol * (pow(nh, 90.) * .28 + pow(nh, 16.) * .04) * gloss;
+  c += uSunCol * (pow(nh, 90.) * .28 + pow(nh, 16.) * .04) * gloss * shade;
   // only where the margin lifts does the wine-red underside show
   float rimAmt = smoothstep(.8, .98, len) * edgeLift(leafAngle(p)) * (.6 + .8 * fract(seed * 11.3));
   c = mix(c, vec3(.36, .12, .10) * (uAmb + uSunCol * .5), clamp(rimAmt, 0., .75));
@@ -705,7 +739,7 @@ void main(){
 
 // ─── water surface ─────────────────────────────────────────────────────────
 
-export const SURFACE_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}
+export const SURFACE_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}${CANOPY}
 in vec2 vUv;
 in vec2 vWorld;
 out vec4 o;
@@ -760,13 +794,28 @@ void main(){
   vec3 V = normalize(vec3((vUv - .5) * vec2(uAspect, 1.) * .55, 1.));
   float fr = .02 + .98 * pow(1. - max(dot(n, V), 0.), 5.);
   vec3 R = reflect(-V, n);
-  float cloud = texture(uNoise, R.xy * .6 + uTime * vec2(.002, .001)).g;
-  vec3 sky = mix(uSky0, uSky1, clamp(R.y * .5 + .5, 0., 1.)) * (.85 + .3 * cloud);
+  // the reflection: whatever is overhead, mirrored. It sits at a virtual depth
+  // as far below as the trees are above, so it looks smaller and slides slower
+  // than the surface; ripples, wakes and gusts break it up.
+  vec2 q = uView.xy + (wp - uView.xy) * (1. + uDepthK * CANOPY_H) + n.xy * 190.;
+  float cloud = texture(uNoise, q / 900. + uTime * vec2(.0012, .0006)).g * .6 + texture(uNoise, q / 330. + uTime * .001).r * .4;
+  vec3 sky = mix(uSky0, uSky1, clamp(R.y * .5 + .5, 0., 1.));
+  sky = mix(sky, mix(sky, vec3(1.), .55) * (1. - uDusk * .6), smoothstep(.5, .75, cloud) * .7);
+  // stars in the gaps at night
+  float star = step(.996, hash12(floor(q / 3.))) * uDusk * (.6 + .4 * sin(uTime * 2. + hash12(floor(q / 3.) + 7.) * 40.));
+  sky += vec3(.8, .85, 1.) * star;
+  float canopy = canopyAt(q);
+  float leafy = texture(uNoise, q / 22.).r;
+  vec3 leaves = mix(vec3(.03, .06, .035), vec3(.16, .24, .10), leafy) * (uAmb * 1.4 + uSunCol * .25);
+  sky = mix(sky, leaves, canopy);
   // wind-roughened water loses its mirror: it darkens and catches the sky in a scatter of glints
-  vec3 col = mix(under, sky, clamp(fr * 2.2 + .05 + rough * .18, 0., .7));
+  // a dark river is a good mirror for what's bright above it, and a window where the trees are dark
+  float mirror = clamp(fr * 2.2 + .085 + rough * .16, 0., .7);
+  vec3 col = mix(under, sky, mirror);
   col *= 1. - rough * .2;
   float rs = max(dot(R, normalize(uSun)), 0.);
-  col += uSunCol * (pow(rs, 1400.) * (5. + rough * 6.) + pow(rs, 90.) * .08);
+  // sun glints only where sunlight actually reaches the water
+  col += uSunCol * (pow(rs, 1400.) * (5. + rough * 6.) + pow(rs, 90.) * .08) * pow(sunThrough(wp), 2.);
   col += vec3(.7, .85, .75) * clamp(h, 0., 1.) * .05;
   // ripples and wakes catch the light: faces toward the sun brighten, the backs darken
   vec3 Ls = normalize(uSun);
@@ -877,7 +926,7 @@ void main(){
   gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw, 0., 1.);
 }`;
 
-export const FLOATER_FS = /* glsl */ `${HEAD}${COMMON}
+export const FLOATER_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}${CANOPY}
 in vec2 vP;
 in vec4 vB;
 in float vAng;
@@ -932,7 +981,7 @@ void main(){
   float shadow = (1. - smoothstep(-aa, .25, ds)) * .3 * (1. - cover);
   if (cover < .003 && shadow < .003) discard;
   float lit = max((dot(n, Ll) + .3) / 1.3, 0.);
-  vec3 col = base * (uAmb + uSunCol * lit * .9 + LAMP * lampAt(vW) * 1.2);
+  vec3 col = base * (uAmb + uSunCol * lit * .9 * sunThrough(vW) + LAMP * lampAt(vW) * 1.2);
   vec3 H = normalize(Ll + vec3(0., 0., 1.));
   col += uSunCol * pow(max(dot(n, H), 0.), 40.) * (kind < .5 ? .18 : .15);
   o = vec4(col * cover, cover + shadow);
@@ -1027,6 +1076,7 @@ uniform vec4 uBoat; // x, y, heading, scale
 uniform vec3 uSun;
 uniform float uShadow;
 out vec2 vL;
+out vec2 vBW;
 void main(){
   vec2 local = aPos * vec2(96., 78.);
   float c = cos(uBoat.z), s = sin(uBoat.z);
@@ -1034,11 +1084,13 @@ void main(){
   vec2 pos = uBoat.xy + w;
   if (uShadow > .5) pos += -uSun.xy / max(uSun.z, .3) * 9.;
   vL = local;
+  vBW = pos;
   gl_Position = vec4((pos - uView.xy) * uView.zw, 0., 1.);
 }`;
 
-export const BOAT_FS = /* glsl */ `${HEAD}${COMMON}
+export const BOAT_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}${CANOPY}
 in vec2 vL;
+in vec2 vBW;
 out vec4 o;
 uniform vec4 uBoat;
 uniform vec4 uOar;   // sweep, rowing, stroke, lantern glow
@@ -1134,7 +1186,7 @@ void main(){
   }
   if (dall > aa) discard;
   vec2 Lxy = rot(uSun.xy, uBoat.z);
-  vec3 light = uAmb + uSunCol * .8;
+  vec3 light = uAmb + uSunCol * .8 * sunThrough(vBW);
   float grain = texture(uNoise, vec2(p.x * .05, p.y * .006)).r;
 
   // hull
