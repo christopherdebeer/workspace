@@ -1,12 +1,12 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:d3b5a750335f3c52263e4debd535ea37ccdb7df7aa74af7b0f18bd064112bc4e",
-  "syncedAt": "2026-09-28T23:17:06.586Z",
+  "treeVersion": "tree:0b275585673ad66802eb8389d6be85d00f307778a049ade6bb21e226cf480524",
+  "syncedAt": "2026-09-28T23:19:43.825Z",
   "files": {
     "ENVIRONMENT-STATE.md": "sha256:f8fd9a3f3931d83488a6fc2612b7ef4c425f9d3b7a0c88c868c320421bcfdfe9",
     "LEARNING-DESIGN.md": "sha256:2c335e52d6128885e3a20d41a568fc25fa08ecb4f17e39cdbf48c9544480ec1c",
-    "REVIEW-2026-09-28.md": "sha256:bc8f13a52ac26d5631706e8d4f03844c8d79d807bc7a6c30d84216e3f6e17ac6",
+    "REVIEW-2026-09-28.md": "sha256:d93b8ca7efe0116e96dd3d145a1f17731f075420070c166f8b0c70019db68fcd",
     "client/atmosphere.ts": "sha256:77d6d08e10634177c66bfd287b9804c3234d21988cefc9a531b23ea882e39414",
     "client/audio.ts": "sha256:64af3cf2b1efc4d7b11a8af0c68779615647b478b9e063e7ce9fa82f78acb7db",
     "client/fish.ts": "sha256:83005ea3886d3c9ef8d75cf68b7647b1e3395c7e9933c34d7fb21ff7e19ea32b",
@@ -17,10 +17,10 @@
     "client/render.ts": "sha256:86c80631652d2f0691f85258c0016d2b8452f4662f5f8af6153b1cbcfab64fe0",
     "client/report.ts": "sha256:efd02eea840a032358656ea168fb069158427aeba1f0242eb6e6b1e536ceaaf9",
     "client/shaders.ts": "sha256:377a68ae232d8de0b2d2eb52c284b68eb844f0dd7990e930f611f0396a1011a3",
-    "client/ui.ts": "sha256:7f52297e0deef735b2ef01b0c949a24e250c5fcc7c71ab75cc044484d351a99d",
+    "client/ui.ts": "sha256:8a602146583662c747d77a9927e8d0b31d4d5280a0fb6917de99fbd32561e69e",
     "client/world.ts": "sha256:fb21654d67d7e51cf7c80c3eeee084578797b5894749aa4f8712d794f9565bc6",
     "index.ts": "sha256:1ff0dd274bf7f3f9858290c144d6acac14646a6be45ebf5f6ddd31333a1abbdc",
-    "static/index.html": "sha256:e8fbe4aab5033acac75fbc1ab9d85dfee542aab4b91ad7c7c62b533dd3de4767",
+    "static/index.html": "sha256:a69b09c99580748299c3b54e7da9959cba03c6b1bc37bf15ac33cd019f0ae227",
     "tsconfig.json": "sha256:7f810c55dd1ac18c2cee979d7b1e5cf5a6f3233b8029b80c00e15602e284f0d0"
   }
 }

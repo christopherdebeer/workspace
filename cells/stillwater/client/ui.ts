@@ -116,32 +116,48 @@ export class Overlay {
   }
 
   /**
-   * The start: the children who have rowed here before, each a leaf to tap,
-   * and a place for a new name. `pick` is called with the chosen name.
+   * The start, in play's own slots: the children who have rowed here before,
+   * each a leaf to tap where the numeral will sit, a place for a new name,
+   * and the question on the hint line. `pick` is called with the chosen name.
    */
   start(names: string[], pick: (name: string) => void) {
-    const start = document.getElementById('start');
-    const list = document.getElementById('names');
-    const form = document.getElementById('newname') as HTMLFormElement | null;
-    const input = document.getElementById('newname-input') as HTMLInputElement | null;
-    if (!start || !list || !form || !input) return;
-    list.innerHTML = '';
+    const el = this.target;
+    el.className = 'target who';
+    el.innerHTML = '';
+    this.dots = [];
+    this.bar = null;
     for (const name of names) {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = name;
       b.addEventListener('click', () => pick(name));
-      list.appendChild(b);
+      el.appendChild(b);
     }
+    const form = document.createElement('form');
+    form.autocomplete = 'off';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 14;
+    input.placeholder = names.length ? 'or a new name' : 'your name';
+    input.setAttribute('aria-label', 'A new name');
+    input.setAttribute('enterkeyhint', 'go');
+    const go = document.createElement('button');
+    go.type = 'submit';
+    go.className = 'add';
+    go.textContent = 'row';
+    form.append(input, go);
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const name = input.value.trim().slice(0, 14);
       if (name) pick(name);
     });
-    start.classList.remove('away');
+    el.appendChild(form);
+    this.say('who is rowing today?', 0);
   }
 
   hideStart() {
-    document.getElementById('start')?.classList.add('away');
+    this.clearTarget();
+    this.target.className = 'target';
+    this.quiet();
   }
 }
