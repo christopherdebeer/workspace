@@ -131,7 +131,10 @@ export class School {
       const my = cy[s] / cn[s];
       const ox = mx - view.x;
       const oy = my - view.y;
-      if (oy < -view.hh - 300 || Math.abs(ox) > view.hw + 450 || oy > view.hh + 800) {
+      // (just out of sight is enough: they face upstream, so they fall behind a boat going
+      // downstream, and the keep-near-the-view pull below would otherwise hold them in a
+      // band just off-screen for ever)
+      if (oy < -view.hh - 70 || Math.abs(ox) > view.hw + 160 || oy > view.hh + 800) {
         // the school is lost behind: bring it in ahead, out of sight
         const nx = view.x + rnd(-view.hw, view.hw);
         const ny = view.y + view.hh + rnd(80, 260);
@@ -239,7 +242,7 @@ export class School {
       const oy = f.y - view.y;
       if (Math.abs(ox) > view.hw + 60) fx -= Math.sign(ox) * 30;
       if (Math.abs(oy) > view.hh + 80) fy -= Math.sign(oy) * 30;
-      if (!minnow && (oy < -view.hh - 260 || Math.abs(ox) > view.hw + 400 || oy > view.hh + 700)) {
+      if (!minnow && (oy < -view.hh - 70 || Math.abs(ox) > view.hw + 160 || oy > view.hh + 700)) {
         Object.assign(f, this.loner(view.x + rnd(-view.hw, view.hw), view.y + view.hh + rnd(80, 240), i));
         continue;
       }
