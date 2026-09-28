@@ -16041,7 +16041,10 @@ function refreshSwardField(full = true): void {
   swardLedger.masks++; swardLedger.maskMs += swardMaskMs; if (swardMaskMs > swardLedger.maskMax) swardLedger.maskMax = swardMaskMs;
 }
 /** One band of the sward: a lattice of `side²` slots at `step` metres. */
-interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: number;
+/** A block of a band's lattice: its own slice of the slot ids, drawn by its own
+ *  mesh so it can be culled. `ix0..ix1` and `iz0..iz1` are lattice indices. */
+interface SwardBlock { mesh: THREE.Mesh; ix0: number; ix1: number; iz0: number; iz1: number }
+interface SwardBand { mesh: THREE.Object3D; blocks: SwardBlock[]; side: number; step: number; reach: number;
   uBase: { value: THREE.Vector2 }; uStep: { value: number }; uSide: { value: number };
   /** The base cell as an EXACT INTEGER index. See the note by sBaseI. */
   uBaseI: { value: THREE.Vector2 };
@@ -16617,22 +16620,27 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
 // step, lattice side, and the handover window (in0,in1,out0,out1) in metres.
 // Adjacent bands share their edges exactly, which is what makes the weights
 // sum to one and the density continuous across a handover.
+/**
+ * ── A BAND IS SWARD_BLOCKS² DRAWS, AND THE ONES THE CAMERA CANNOT SEE ARE NOT MADE ──
+ *
+ * Each band was one instanced draw of its whole square lattice with culling off,
+ * and `__passbench` put it at 86% of the world pass at Camps Bay in chase — every
+ * slot runs the vertex shader (the field, the mask, the hashes) and most of the
+ * square is behind or beside a camera whose portrait view is a narrow wedge. A
+ * block owns a rectangle of the lattice's slot ids; its bounding sphere is placed
+ * over that rectangle in the world every frame, three's own frustum test does the
+ * rest, and a block wholly inside the band's inner handover or outside its outer
+ * one is hidden outright, since its weight there is zero. The ids are the same
+ * ids, so the shader cannot tell a block from the whole: nothing drawn changes.
+ * `?swardblocks=1` is one block a band, the old single draw.
+ */
+const SWARD_BLOCKS = Math.max(1, Math.round(qsNum('swardblocks', 8)));
+const swardSrcGeo = grassGeo();
 const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
-  const geo = new THREE.InstancedBufferGeometry();
-  const src = grassGeo();
-  geo.setAttribute('position', src.getAttribute('position'));
-  geo.setAttribute('normal', src.getAttribute('normal'));
-  // Which card each vertex belongs to — the flower branch builds a stem and a
-  // head out of them. See grassGeo.
-  geo.setAttribute('aBlade', src.getAttribute('aBlade'));
-  // aId RATHER THAN gl_InstanceID: the id is wanted in the vertex shader and
-  // an attribute works whatever GLSL version three settles on, at 4 bytes a
-  // slot. It also gives InstancedBufferGeometry something to count.
-  const ids = new Float32Array(side * side);
-  for (let i = 0; i < ids.length; i++) ids[i] = i;
-  geo.setAttribute('aId', new THREE.InstancedBufferAttribute(ids, 1));
-  geo.instanceCount = side * side;
-  const band: SwardBand = { mesh: null as unknown as THREE.Mesh, side, step, reach: (side * step) / 2,
+  const group = new THREE.Group();
+  group.name = 'sward';
+  const blocks: SwardBlock[] = [];
+  const band: SwardBand = { mesh: group, blocks, side, step, reach: (side * step) / 2,
     uBase: { value: new THREE.Vector2() }, uBaseI: { value: new THREE.Vector2() },
     uStep: { value: step },
     uSide: { value: side }, uReach: { value: (side * step) / 2 }, uDens: { value: 1 },
@@ -16643,16 +16651,65 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
     uBlend: band.uBlend } as unknown as Record<string, { value: unknown }>);
   terrainFx(mat);
   grainFx(mat, `grain-sward${bi}`, 0.85, 3.6);
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.name = 'sward';
-  mesh.frustumCulled = false;      // the lattice spans the whole field
-  mesh.castShadow = false;         // see the header: sub-pixel, and it doubles the vertices
-  mesh.receiveShadow = false;
-  mesh.visible = false;            // until the field has been built once
-  scene.add(mesh);
-  band.mesh = mesh;
+  const B = Math.min(SWARD_BLOCKS, side);
+  for (let by = 0; by < B; by++) for (let bx = 0; bx < B; bx++) {
+    const ix0 = Math.floor((bx * side) / B), ix1 = Math.floor(((bx + 1) * side) / B);
+    const iz0 = Math.floor((by * side) / B), iz1 = Math.floor(((by + 1) * side) / B);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.setAttribute('position', swardSrcGeo.getAttribute('position'));
+    geo.setAttribute('normal', swardSrcGeo.getAttribute('normal'));
+    // Which card each vertex belongs to — the flower branch builds a stem and a
+    // head out of them. See grassGeo.
+    geo.setAttribute('aBlade', swardSrcGeo.getAttribute('aBlade'));
+    // aId RATHER THAN gl_InstanceID: the id is wanted in the vertex shader and
+    // an attribute works whatever GLSL version three settles on, at 4 bytes a
+    // slot. A block's ids are its own rectangle of the band's lattice.
+    const ids = new Float32Array((ix1 - ix0) * (iz1 - iz0));
+    let n = 0;
+    for (let iz = iz0; iz < iz1; iz++) for (let ix = ix0; ix < ix1; ix++) ids[n++] = iz * side + ix;
+    geo.setAttribute('aId', new THREE.InstancedBufferAttribute(ids, 1));
+    geo.instanceCount = n;
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'sward';
+    mesh.frustumCulled = SWARD_BLOCKS > 1;
+    mesh.castShadow = false;         // see the header: sub-pixel, and it doubles the vertices
+    mesh.receiveShadow = false;
+    group.add(mesh);
+    blocks.push({ mesh, ix0, ix1, iz0, iz1 });
+  }
+  group.visible = false;             // until the field has been built once
+  scene.add(group);
   return band;
 });
+/** Place every block's bounding sphere over its rectangle of the lattice and
+ *  hide the blocks the band's own weights zero. `gy` is the ground at the focus;
+ *  the sphere is made tall enough to hold any ground a block can stand on. */
+const swardCullStat = { blocks: 0, ringHidden: 0 };
+function swardPlaceBlocks(b: SwardBand, fx: number, fz: number, gy: number): void {
+  const bix = b.uBaseI.value.x, biz = b.uBaseI.value.y, h = b.side * 0.5, st = b.step;
+  const bl = b.uBlend.value;
+  for (const k of b.blocks) {
+    // World extent of the rectangle, widened by the stagger and the jitter
+    // (under a step and a half) so no tuft stands outside its own sphere.
+    const x0 = (bix + k.ix0 - h - 1.5) * st, x1 = (bix + k.ix1 - h + 1.5) * st;
+    const z0 = (biz + k.iz0 - h - 1.5) * st, z1 = (biz + k.iz1 - h + 1.5) * st;
+    const dxN = Math.max(x0 - fx, 0, fx - x1), dzN = Math.max(z0 - fz, 0, fz - z1);
+    const dN = Math.hypot(dxN, dzN);
+    const dF = Math.hypot(Math.max(Math.abs(x0 - fx), Math.abs(x1 - fx)), Math.max(Math.abs(z0 - fz), Math.abs(z1 - fz)));
+    const inRing = dF > bl.x && dN < bl.w;
+    k.mesh.visible = inRing;
+    swardCullStat.blocks++;
+    if (!inRing) { swardCullStat.ringHidden++; continue; }
+    const hw = (x1 - x0) * 0.5, hd = (z1 - z0) * 0.5;
+    // Ground within a block can sit well off the focus's: allow a slope of one
+    // in one out to the block's far edge, and never less than forty metres.
+    const vy = Math.max(40, dF);
+    const sp = k.mesh.geometry.boundingSphere!;
+    sp.center.set((x0 + x1) * 0.5, gy, (z0 + z1) * 0.5);
+    sp.radius = Math.hypot(hw, hd, vy);
+  }
+}
 /** GPU sward on? `?sward=cpu` goes back to the old lattice. */
 let swardGpu = qs('sward') !== 'cpu';
 /** Per-frame: the lattice origins, the eye, the tint, the density. All uniform
@@ -16743,6 +16800,7 @@ function swardFrame(): void {
     (swardU as unknown as Record<string, { value: THREE.Color }>)[SWARD_FLOW_NAMES[ci * 3 + si]]
       .value.setRGB(cr, cg, cb);
   }
+  const swardFocusY = SWARD_BLOCKS > 1 ? groundAt(fx, fz) : 0;
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
     // The base cell, as an index and as metres. The INDEX is the authority: the
@@ -16759,6 +16817,7 @@ function swardFrame(): void {
     // here because its top stop was re-spaced to the near lattice's ceiling.
     b.uDens.value = vegScale * grassScale * SWARD_SITES * chartFade;
     b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
+    if (b.mesh.visible && SWARD_BLOCKS > 1) swardPlaceBlocks(b, fx, fz, swardFocusY);
   }
   // ── AND NOW THE SLOW HALF: THE EVIDENCE FIELD ──
   //
@@ -18223,7 +18282,8 @@ function stepUnderstorey(fx: number, fz: number): void {
     const m = o as THREE.Mesh & { isInstancedMesh?: boolean; count?: number };
     if (!m.isMesh) return;
     const g = m.geometry as THREE.BufferGeometry | undefined;
-    const t = ((g?.index?.count ?? g?.getAttribute?.('position')?.count ?? 0) / 3) * (m.isInstancedMesh ? (m.count ?? 1) : 1);
+    const ib = g as THREE.InstancedBufferGeometry | undefined;
+    const t = ((g?.index?.count ?? g?.getAttribute?.('position')?.count ?? 0) / 3) * (m.isInstancedMesh ? (m.count ?? 1) : ib?.isInstancedBufferGeometry ? ib.instanceCount : 1);
     const k = keyOf(o); const e = by.get(k) ?? { tris: 0, meshes: [] };
     e.tris += t; e.meshes.push(o); by.set(k, e);
   });
@@ -18252,6 +18312,23 @@ function stepUnderstorey(fx: number, fz: number): void {
   }
   renderer.shadowMap.autoUpdate = shadow;
   return { art: [rtScene.width, rtScene.height], whole: { ...whole, ms: +whole.ms.toFixed(2) }, shadowMapMs: +(withShadow.ms - whole.ms).toFixed(2), rows };
+};
+/** Re-render the HELD scene with the sward's block culling on or off and put it
+ *  through the composite, so a screenshot either side differs by the culling
+ *  and nothing else (the frame loop is stood down with __draw(false), so the
+ *  wind clock does not move). Reports how many blocks each band drew. */
+(window as any).__swardcull = (on: boolean) => {
+  for (const b of swardBands) for (const k of b.blocks) {
+    k.mesh.frustumCulled = on && SWARD_BLOCKS > 1;
+    if (!on) k.mesh.visible = true;
+  }
+  if (on) { const [fx, fz] = renderFocusXZ(); const gy = groundAt(fx, fz); for (const b of swardBands) if (b.mesh.visible) swardPlaceBlocks(b, fx, fz, gy); }
+  renderer.setRenderTarget(rtScene); renderer.render(scene, camera); renderer.setRenderTarget(null);
+  const calls = renderer.info.render.calls, tris = renderer.info.render.triangles;
+  composite(mblurAmt);
+  const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  return { on, calls, tris, bands: swardBands.map((b) => ({ step: b.step, blocks: b.blocks.length,
+    drawn: b.blocks.filter((k) => k.mesh.visible && (!k.mesh.frustumCulled || fr.intersectsSphere(k.mesh.geometry.boundingSphere!))).length })) };
 };
 (window as any).__forestfloor = (o: { us?: boolean; near?: boolean } = {}) => {
   if (o.us !== undefined) US_ON = o.us;

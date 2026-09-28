@@ -280,6 +280,8 @@ export const SWITCHES = [
     note: 'forest air: the low, damp-weather haze held under a closed canopy, lit where the light field says the sun gets in; 0 is none' },
   { id: 'understorey', kind: 'number', marks: ['look'], fallback: '1',
     note: 'ferns in the canopy’s shade and saplings in its sunlit gaps, placed by the forest light field; 0 is the bare floor' },
+  { id: 'swardblocks', kind: 'number', marks: ['bench'], fallback: '8',
+    note: 'blocks a side each sward band is split into so the ones outside the view are not drawn; 1 is the old single draw a band' },
   { id: 'compart', kind: 'number', marks: ['bench'], apply: 'live', fallback: '1',
     note: 'composite at the art grid and magnify nearest (1, the default), or per canvas pixel (0) — about fifty times fewer composite fragments on a DPR-2 phone at 240P' },
   { id: 'cannear', kind: 'number', marks: ['look'], fallback: '160',
