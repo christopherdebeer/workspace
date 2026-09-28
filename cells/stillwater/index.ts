@@ -21,15 +21,13 @@ const respond = (statusCode: number, contentType: string, body: string, cache = 
 
 export const handler = async (event: {
   rawPath?: string;
-  body?: string;
-  isBase64Encoded?: boolean;
-  requestContext?: { http?: { method?: string } };
+  rawQueryString?: string;
 }) => {
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/stillwater/, '') || '/';
   // field reports from the client (client/report.ts) — logged, read back with `cells.logs`
-  if (path === '/report' && event.requestContext?.http?.method === 'POST') {
-    const raw = event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString('utf8') : (event.body ?? '');
-    console.log('STILLWATER_REPORT ' + raw.slice(0, 16000));
+  if (path === '/report') {
+    const raw = new URLSearchParams(event.rawQueryString ?? '').get('d') ?? '';
+    console.log('STILLWATER_REPORT ' + raw.slice(0, 8000));
     return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
   }
   try {

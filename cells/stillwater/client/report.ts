@@ -1,7 +1,8 @@
 /**
  * Field reports. A phone that can't run the pond can't be debugged from here,
- * so failures (and one boot line per load) are POSTed to the cell's own
- * `/report`, which logs them — read back with `cells.logs` for stillwater.
+ * so failures (and one boot line per load) go to the cell's own `/report`,
+ * which logs them — read back with `cells.logs` for stillwater. A GET with
+ * the report in the query: the edge refuses an anonymous POST (401).
  * Fire-and-forget: a report must never itself break the page.
  */
 export function glInfo(): Record<string, unknown> {
@@ -28,8 +29,8 @@ export function glInfo(): Record<string, unknown> {
 
 export function report(kind: string, detail: Record<string, unknown>) {
   try {
-    const body = JSON.stringify({ kind, ua: navigator.userAgent, w: innerWidth, h: innerHeight, dpr: devicePixelRatio, ...detail }).slice(0, 16000);
-    fetch('/report', { method: 'POST', body, keepalive: true, headers: { 'content-type': 'application/json' } }).catch(() => {});
+    const body = JSON.stringify({ kind, ua: navigator.userAgent, w: innerWidth, h: innerHeight, dpr: devicePixelRatio, ...detail }).slice(0, 6000);
+    fetch('/report?d=' + encodeURIComponent(body), { keepalive: true, cache: 'no-store' }).catch(() => {});
   } catch {
     /* never */
   }
