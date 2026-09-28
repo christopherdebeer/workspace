@@ -1,8 +1,8 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:9bca65db2479075b5a7aafef3dcaaaa4c3f3ef70c96af6b67ce86f470cd8c97a",
-  "syncedAt": "2026-09-28T23:26:12.922Z",
+  "treeVersion": "tree:d45b5f74620c3c4de12a861c1530691808f768c24dda1e5f00263b8d6016fb6e",
+  "syncedAt": "2026-09-28T23:27:38.016Z",
   "files": {
     "ENVIRONMENT-STATE.md": "sha256:f8fd9a3f3931d83488a6fc2612b7ef4c425f9d3b7a0c88c868c320421bcfdfe9",
     "LEARNING-DESIGN.md": "sha256:2c335e52d6128885e3a20d41a568fc25fa08ecb4f17e39cdbf48c9544480ec1c",
@@ -20,7 +20,7 @@
     "client/ui.ts": "sha256:120f2d832521ef3421fa96b834053da2de17d88d9b99daa645973dc88f24e6af",
     "client/world.ts": "sha256:fb21654d67d7e51cf7c80c3eeee084578797b5894749aa4f8712d794f9565bc6",
     "index.ts": "sha256:1ff0dd274bf7f3f9858290c144d6acac14646a6be45ebf5f6ddd31333a1abbdc",
-    "static/index.html": "sha256:8753b4fd570500dc980b275e55f1c861d07ecdd89b66c07b8ef1f8f0ab23bdf6",
+    "static/index.html": "sha256:c37a8fd1c7646802c6e394046f5a890f215a725cc5eef8aea7d040f33b4590ef",
     "tsconfig.json": "sha256:7f810c55dd1ac18c2cee979d7b1e5cf5a6f3233b8029b80c00e15602e284f0d0"
   }
 }

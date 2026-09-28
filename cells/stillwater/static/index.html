@@ -41,8 +41,6 @@
     #start input { font: 16px Georgia, serif; font-style: italic; color: #f3f0d2; background: rgba(6, 26, 22, .28); border: 1px solid rgba(240, 236, 206, .4); border-radius: 12px; padding: 9px 12px; width: 150px; outline: none; text-align: center; }
     #start input:focus { border-color: rgba(240, 236, 206, .85); }
     #start input::placeholder { color: rgba(240, 236, 206, .5); }
-    #start button { position: static; opacity: 1; font: 15px Georgia, serif; letter-spacing: .4px; color: #f3f0d2; background: radial-gradient(circle at 35% 30%, #4f8a42, #2b5a30 70%, #1f4426); border-radius: 50% 50% 50% 50% / 55% 55% 45% 45%; padding: 9px 16px; box-shadow: 0 3px 12px rgba(0, 20, 16, .45), inset 0 1px 0 rgba(255, 255, 255, .12); }
-    #start button:active { transform: scale(.96); }
     #names { position: fixed; inset: 0; pointer-events: none; }
     #names span { position: absolute; transform: translate(-50%, -50%); font-size: 17px; letter-spacing: .6px; color: #f6f3d8; text-shadow: 0 1px 2px #0b2a1e, 0 0 14px rgba(0, 27, 25, .9); white-space: nowrap; transition: opacity .8s; }
     #names.away span { opacity: 0; }
@@ -64,7 +62,6 @@
     <p class="brand">STILLWATER</p>
     <form id="newname" autocomplete="off">
       <input id="newname-input" type="text" maxlength="14" placeholder="your name" aria-label="A new name" enterkeyhint="go" />
-      <button type="submit">row</button>
     </form>
   </div>
   <script type="module" src="/app.js"></script>
