@@ -16,6 +16,7 @@ import * as N from './numeracy';
 import { drawOrder, Camera, Light, Mote, Renderer } from './render';
 import { Sound } from './audio';
 import { Overlay } from './ui';
+import { glInfo, report } from './report';
 import { layDrops, liveCount, Pad, Pond, seeded } from './world';
 
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
@@ -68,9 +69,13 @@ const school = new School(reduced ? 18 : 34, pond.boat.x, pond.boat.y + 200);
 let renderer: Renderer;
 try {
   renderer = new Renderer(canvas);
+  report('boot', { gl: renderer.info() });
 } catch (err) {
+  const msg = err instanceof Error ? err.message : String(err);
   document.body.classList.add('nogl');
-  ui.say('this pond needs WebGL2 — try a newer browser', 0);
+  // say what actually failed: "needs WebGL2" was a guess, and a wrong one on iOS
+  ui.say(`the pond could not start (${msg.split('\n')[0].slice(0, 120)})`, 0);
+  report('gl-fail', { msg: msg.slice(0, 12000), gl: glInfo() });
   console.error(err);
   throw err;
 }

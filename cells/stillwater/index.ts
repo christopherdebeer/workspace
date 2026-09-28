@@ -19,8 +19,19 @@ const respond = (statusCode: number, contentType: string, body: string, cache = 
   body,
 });
 
-export const handler = async (event: { rawPath?: string }) => {
+export const handler = async (event: {
+  rawPath?: string;
+  body?: string;
+  isBase64Encoded?: boolean;
+  requestContext?: { http?: { method?: string } };
+}) => {
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/stillwater/, '') || '/';
+  // field reports from the client (client/report.ts) — logged, read back with `cells.logs`
+  if (path === '/report' && event.requestContext?.http?.method === 'POST') {
+    const raw = event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString('utf8') : (event.body ?? '');
+    console.log('STILLWATER_REPORT ' + raw.slice(0, 16000));
+    return { statusCode: 204, headers: { 'cache-control': 'no-store' }, body: '' };
+  }
   try {
     if (path === '/app.js') return respond(200, 'application/javascript; charset=utf-8', read('app.js'), 'public, max-age=60');
     if (path === '/' || path === '/index.html') return respond(200, 'text/html; charset=utf-8', read('static/index.html'));

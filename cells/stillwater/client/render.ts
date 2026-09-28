@@ -152,6 +152,12 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
 
+  info() {
+    const gl = this.gl;
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    return { renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER), sim: this.simOn };
+  }
+
   /** Size the drawing buffer and the offscreen targets for this CSS size, DPR and scale. */
   resize(cssW: number, cssH: number, dpr: number, scale: number) {
     const gl = this.gl;
