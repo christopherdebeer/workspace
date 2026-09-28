@@ -82,6 +82,9 @@ export interface Pad {
    */
   sink: number;
   caught: boolean;
+  /** The plant's rhizome on the bed this leaf's stem rises from. */
+  rx: number;
+  ry: number;
   /** Draw order within a layer. */
   layer: number;
 }
@@ -113,6 +116,42 @@ export interface Deep {
   ang: number;
   seed: number;
   depth: number;
+  /** A young leaf still under water rises from its plant's rhizome too. */
+  rx?: number;
+  ry?: number;
+}
+
+/**
+ * A water lily is a whole plant, not a disc on the water: a rhizome in the mud
+ * sends up long stems, each to a leaf (and now and then to a flower or bud),
+ * and young leaves unfurl beneath the surface before they reach it. Leaves of
+ * one plant share a rhizome, so a cluster of pads is really one plant.
+ */
+export interface Plant {
+  x: number;
+  y: number;
+  seed: number;
+  /** Rhizome segments on the bed (angle, length). */
+  arms: Array<[number, number]>;
+}
+
+/** A flower (open) or bud (closed) on its own stem among the leaves, not sitting on one. */
+export interface Bloom {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  ang: number;
+  size: number;
+  /** 1 open flower, 0 closed bud */
+  open: number;
+  variant: number;
+  seed: number;
+  /** Where its stem lets it rest, and the rhizome it rises from. */
+  ax: number;
+  ay: number;
+  rx: number;
+  ry: number;
 }
 
 /** A clump of rooted weed on the bed, streaming in the current. */
@@ -239,6 +278,8 @@ export class Pond {
   sounds: Array<{ kind: 'dip' | 'drip'; s: number }> = [];
   weeds: Weed[] = [];
   floaters: Floater[] = [];
+  plants: Plant[] = [];
+  blooms: Bloom[] = [];
   gusts: Gust[] = [];
   /** The boat's recent path (newest last): where the wake is drawn from. */
   trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
@@ -303,6 +344,36 @@ export class Pond {
     return [tx * speed + ex, ty * speed + ey];
   }
 
+  /** Depth of the bed (the shader's depthAt, less its fine noise) — where stems end. */
+  bedDepth(x: number, y: number): number {
+    const half = this.channelHalf(y);
+    const open = 1 - smooth(half * 0.35, half + 120, Math.abs(x - this.channel(y)));
+    return 0.22 + 0.78 * open;
+  }
+
+  /** The plant a new leaf at (x, y) belongs to: a rhizome close by, or a new plant. */
+  private plantFor(x: number, y: number): Plant {
+    let best: Plant | null = null;
+    let bd = 125;
+    for (let i = this.plants.length - 1; i >= 0 && i >= this.plants.length - 60; i--) {
+      const pl = this.plants[i];
+      const d = Math.hypot(pl.x - x, pl.y - y);
+      if (d < bd) {
+        bd = d;
+        best = pl;
+      }
+    }
+    if (best) return best;
+    const rand = this.rand;
+    const a = rand() * Math.PI * 2;
+    const d = 15 + rand() * 35;
+    const arms: Array<[number, number]> = [];
+    for (let k = 0, n = 2 + Math.floor(rand() * 3); k < n; k++) arms.push([rand() * Math.PI * 2, 14 + rand() * 26]);
+    const pl: Plant = { x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, seed: rand(), arms };
+    this.plants.push(pl);
+    return pl;
+  }
+
   /** A touch's breath of wind (see Gust). */
   gust(g: Omit<Gust, 'age'>): Gust {
     const full = { ...g, age: 0 };
@@ -355,27 +426,78 @@ export class Pond {
       const y = y0 + rand() * (y1 - y0);
       add(this.channel(y) + (rand() * 2 - 1) * (this.halfW + 60), y, 0, 1.4 + rand() * 1.4);
     }
-    // petals shed around the lilies
-    for (const p of this.pads) {
-      if (!p.flower || p.y < y0 || p.y >= y1) continue;
+    // petals shed around the open flowers
+    for (const b of this.blooms) {
+      if (!b.open || b.y < y0 || b.y >= y1) continue;
       const n = 2 + Math.floor(rand() * 4);
       for (let k = 0; k < n; k++) {
         const a = rand() * Math.PI * 2;
-        const d = p.r * (1.05 + rand() * 0.8);
-        add(p.x + Math.cos(a) * d, p.y + Math.sin(a) * d, 1, 5 + rand() * 3);
+        const d = b.size * (1.3 + rand() * 2.5);
+        add(b.x + Math.cos(a) * d, b.y + Math.sin(a) * d, 1, 5 + rand() * 3);
       }
     }
-    // the odd fallen willow leaf, and closed buds among the bank pads
+    // the odd fallen willow leaf
     if (rand() < 0.7) {
       const y = y0 + rand() * (y1 - y0);
       add(this.channel(y) + (rand() * 2 - 1) * this.halfW, y, 2, 11 + rand() * 7);
     }
-    for (let i = 0; i < 2; i++) {
-      if (rand() < 0.4) continue;
-      const y = y0 + rand() * (y1 - y0);
-      const cx = this.channel(y);
-      const side = rand() < 0.5 ? -1 : 1;
-      add(cx + side * (this.channelHalf(y) + 30 + rand() * 120), y, 3, 7 + rand() * 4);
+  }
+
+  /** Flowers and buds: afloat on a stem — pushed about, rocked by ripples, drawn back to where they stand. */
+  private stepBlooms(dt: number, active: { y0: number; y1: number }) {
+    const b = this.boat;
+    const hs = Math.sin(b.heading);
+    const hc = Math.cos(b.heading);
+    const half = BOAT_LEN * 0.4;
+    const tips = b.rowing > 0.3 && Math.cos(b.stroke * Math.PI * 2) > 0.05 ? [this.oarTip(-1), this.oarTip(1)] : [];
+    const t = this.t;
+    for (const f of this.blooms) {
+      if (f.y < active.y0 || f.y > active.y1) continue;
+      const dx0 = f.x - f.ax;
+      const dy0 = f.y - f.ay;
+      const d0 = Math.hypot(dx0, dy0);
+      if (d0 > 6) {
+        f.vx -= (dx0 / d0) * (d0 - 6) * 1.4 * dt;
+        f.vy -= (dy0 / d0) * (d0 - 6) * 1.4 * dt;
+      }
+      const [fx, fy] = this.flow(f.x, f.y);
+      const [wx, wy] = this.wind(f.x, f.y);
+      f.vx += (fx * 0.3 + wx * 0.5) * dt;
+      f.vy += (fy * 0.3 + wy * 0.5) * dt;
+      const u = clamp(((f.x - (b.x - hs * half)) * hs + (f.y - (b.y - hc * half)) * hc) / (half * 2), 0, 1);
+      const qx = f.x - (b.x - hs * half + hs * half * 2 * u);
+      const qy = f.y - (b.y - hc * half + hc * half * 2 * u);
+      const qd = Math.hypot(qx, qy) || 1;
+      const reach = BOAT_BEAM * 0.5 + f.size;
+      if (qd < reach) {
+        f.vx += (qx / qd) * (reach - qd) * 10 * dt;
+        f.vy += (qy / qd) * (reach - qd) * 10 * dt;
+      }
+      for (const [tx, ty] of tips) {
+        const dx = f.x - tx;
+        const dy = f.y - ty;
+        const d = Math.hypot(dx, dy) || 1;
+        if (d < f.size + 8) {
+          f.vx += ((dx / d) * 14 - hs * 20) * dt * 3;
+          f.vy += ((dy / d) * 14 - hc * 20) * dt * 3;
+        }
+      }
+      for (const r of this.rings) {
+        const age = t - r.t;
+        const dx = f.x - r.x;
+        const dy = f.y - r.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (Math.abs(d - age * RING_SPEED) > f.size) continue;
+        const k = (r.s * Math.exp(-age * 0.9)) / (1 + d / 90);
+        f.vx += (dx / d) * k * 30 * dt;
+        f.vy += (dy / d) * k * 30 * dt;
+      }
+      const drag = Math.exp(-1.6 * dt);
+      f.vx *= drag;
+      f.vy *= drag;
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      f.ang += Math.sin(t * 0.3 + f.seed * 20) * 0.02 * dt;
     }
   }
 
@@ -445,6 +567,8 @@ export class Pond {
     this.deep = this.deep.filter((d) => d.y < yMin);
     this.weeds = this.weeds.filter((w) => w.y < yMin);
     this.floaters = this.floaters.filter((f) => f.y < yMin);
+    this.plants = this.plants.filter((pl) => pl.y < yMin);
+    this.blooms = this.blooms.filter((b) => b.y < yMin);
     this.genY = yMin;
   }
 
@@ -475,8 +599,9 @@ export class Pond {
       // leave the boat's own water clear at the start
       if (ok && Math.abs(y - this.boat.y) < BOAT_LEN && Math.abs(x - this.boat.x) < BOAT_BEAM + r + 30) ok = false;
       if (!ok) continue;
-      const flower = bank && rand() < 0.07 ? 1 + Math.floor(rand() * 3) : 0;
-      const count = flower ? 0 : this.dewFor(rand);
+      const flower = 0;
+      const count = this.dewFor(rand);
+      const plant = this.plantFor(x, y);
       const pad: Pad = {
         id: this.nextId++,
         x,
@@ -504,6 +629,8 @@ export class Pond {
         cy: 0,
         sink: 0,
         caught: false,
+        rx: plant.x,
+        ry: plant.y,
         layer: rand(),
       };
       pad.drops = layDrops(count, r, rand);
@@ -511,18 +638,35 @@ export class Pond {
       this.pads.push(pad);
       near.push(pad);
     }
-    // submerged leaves and weed beds, seen through the water
-    const deepCount = Math.round(((y1 - y0) * span) / 26000);
+    // each plant born in this stretch: young leaves still under water, and now
+    // and then a flower or a bud on its own stem, standing among the leaves
+    for (const pl of this.plants) {
+      if (pl.y < y0 || pl.y >= y1) continue;
+      const young = rand() < 0.55 ? 1 + Math.floor(rand() * 2) : 0;
+      for (let k = 0; k < young; k++) {
+        const a = rand() * Math.PI * 2;
+        const d = 12 + rand() * 30;
+        this.deep.push({ x: pl.x + Math.cos(a) * d, y: pl.y + Math.sin(a) * d, r: 10 + rand() * 14, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.3 + rand() * 0.35, rx: pl.x, ry: pl.y });
+      }
+      if (rand() < 0.3) {
+        // find open water among its leaves for the flower to stand in
+        for (let tries = 0; tries < 8; tries++) {
+          const a = rand() * Math.PI * 2;
+          const d = 25 + rand() * 60;
+          const bx = pl.x + Math.cos(a) * d;
+          const by = pl.y + Math.sin(a) * d;
+          if (this.padAt(bx, by, near)) continue;
+          const open = rand() < 0.65 ? 1 : 0;
+          this.blooms.push({ x: bx, y: by, vx: 0, vy: 0, ang: rand() * Math.PI * 2, size: open ? 13 + rand() * 6 : 7 + rand() * 3, open, variant: 1 + Math.floor(rand() * 3), seed: rand(), ax: bx, ay: by, rx: pl.x, ry: pl.y });
+          break;
+        }
+      }
+    }
+    // and a few leaves sunk or drowned far from any plant
+    const deepCount = Math.round(((y1 - y0) * span) / 90000);
     for (let i = 0; i < deepCount; i++) {
       const y = y0 + rand() * (y1 - y0);
-      this.deep.push({
-        x: this.channel(y) + (rand() * 2 - 1) * (this.halfW + 80),
-        y,
-        r: 22 + rand() * 40,
-        ang: rand() * Math.PI * 2,
-        seed: rand(),
-        depth: 0.35 + rand() * 0.55,
-      });
+      this.deep.push({ x: this.channel(y) + (rand() * 2 - 1) * (this.halfW + 80), y, r: 22 + rand() * 30, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.5 + rand() * 0.4 });
     }
     this.growFloaters(y0, y1, span);
     // weed beds root in the shallows toward the banks, sparser in the open run
@@ -544,6 +688,8 @@ export class Pond {
     this.deep = this.deep.filter((d) => d.y > yMin);
     this.weeds = this.weeds.filter((w) => w.y > yMin);
     this.floaters = this.floaters.filter((f) => f.y > yMin);
+    this.plants = this.plants.filter((pl) => pl.y > yMin - 200);
+    this.blooms = this.blooms.filter((b) => b.y > yMin);
   }
 
   rebaseIfNeeded(): number {
@@ -555,10 +701,20 @@ export class Pond {
     for (const p of this.pads) {
       p.y -= s;
       p.ay -= s;
+      p.ry -= s;
     }
-    for (const d of this.deep) d.y -= s;
+    for (const d of this.deep) {
+      d.y -= s;
+      if (d.ry !== undefined) d.ry -= s;
+    }
     for (const w of this.weeds) w.y -= s;
     for (const f of this.floaters) f.y -= s;
+    for (const pl of this.plants) pl.y -= s;
+    for (const b of this.blooms) {
+      b.y -= s;
+      b.ay -= s;
+      b.ry -= s;
+    }
     for (const g of this.gusts) g.y -= s;
     for (const p of this.trail) p.y -= s;
     for (const p of this.puddles) p.y -= s;
@@ -588,6 +744,7 @@ export class Pond {
     this.stepBoat(dt, reduced);
     this.stepPads(dt, active);
     this.stepFloaters(dt, active);
+    this.stepBlooms(dt, active);
     this.stepRope();
   }
 

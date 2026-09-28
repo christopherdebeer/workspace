@@ -106,7 +106,7 @@ export class Renderer {
   private dropData = new Float32Array(DROP_COLS * MAX_DROP_ROWS * 4);
   private ribbonVao: WebGLVertexArrayObject;
   private ribbonBuf: WebGLBuffer;
-  private ribbonData = new Float32Array(6 * 2 * 400);
+  private ribbonData = new Float32Array(6 * 2 * 6000);
   private moteVao: WebGLVertexArrayObject;
   private moteBuf: WebGLBuffer;
   private moteData = new Float32Array(10 * 600);
@@ -314,13 +314,17 @@ export class Renderer {
       if (!inView(fl.x, fl.y, fl.size * 2) || fln >= 4000) continue;
       this.floatInst.set(fln++, fl.x, fl.y, fl.size, fl.ang, fl.kind, fl.seed, 0, 0);
     }
+    // closed buds on their stems draw with the floaters (kind 3)
+    for (const b of pond.blooms) {
+      if (b.open || !inView(b.x, b.y, b.size * 2) || fln >= 4000) continue;
+      this.floatInst.set(fln++, b.x, b.y, b.size, b.ang, 3, b.seed, 0, 0);
+    }
     this.floatInst.count = fln;
     this.floatInst.upload();
 
     const pads = f.pads;
     let rows = 0;
     let n = 0;
-    const flowers: Pad[] = [];
     for (const p of pads) {
       if (!inView(p.x, p.y, p.r * 1.4) || n >= MAX_PADS) continue;
       let row = -1;
@@ -335,7 +339,6 @@ export class Renderer {
       // soft body: where it's pressed (and how far it gives), and its flex after a knock
       const flex = p.wob * Math.sin(f.time * 7 + p.seed * 30);
       this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, 0, (p.seed * 13.1) % 1, p.dx, p.dy, flex, p.sink);
-      if (p.flower) flowers.push(p);
     }
     this.padInst.count = n;
     this.padInst.upload();
@@ -362,14 +365,9 @@ export class Renderer {
     this.fishInst.upload();
 
     let fl = 0;
-    for (const p of flowers) {
-      if (fl >= 120) break;
-      const c = Math.cos(p.ang);
-      const s = Math.sin(p.ang);
-      // the flower stands a little off-centre, on the side away from the notch
-      const ox = s * 0.18 * p.r;
-      const oy = -c * 0.18 * p.r;
-      this.flowerInst.set(fl++, p.x + ox, p.y + oy, p.r * 0.46, p.ang + p.seed * 3, p.flower, 1, p.seed, 0);
+    for (const b of pond.blooms) {
+      if (!b.open || !inView(b.x, b.y, b.size * 2) || fl >= 120) continue;
+      this.flowerInst.set(fl++, b.x, b.y, b.size, b.ang, b.variant, 1, b.seed, 0);
     }
     this.flowerInst.count = fl;
     this.flowerInst.upload();
@@ -407,6 +405,7 @@ export class Renderer {
     bindTex(gl, 1, this.occ!.tex);
     gl.uniform1i(weed.u.uOcc, 1);
     this.weedInst.draw();
+    this.plantParts(f, inView);
     this.motes(f, f.under, 0.5);
     const fishP = this.p.fish;
     this.common(fishP, f);
@@ -606,6 +605,106 @@ export class Renderer {
       this.fullscreen();
       [this.simA, this.simB] = [this.simB, this.simA];
     }
+  }
+
+  /**
+   * Many polylines as ONE strip (joined by degenerate triangles), one draw —
+   * a stem per leaf in view would otherwise be a draw call each.
+   */
+  private strips(f: FrameInput, lines: Array<{ pts: Array<[number, number]>; w: number[]; a: number[]; d: number[] }>, color: [number, number, number], mode: number) {
+    const gl = this.gl;
+    const d = this.ribbonData;
+    const cap = d.length / 6;
+    let v = 0;
+    const put = (x: number, y: number, side: number, along: number, a: number, depth: number) => {
+      if (v >= cap) return;
+      d.set([x, y, side, along, a, depth], v * 6);
+      v++;
+    };
+    for (const L of lines) {
+      const n = L.pts.length;
+      if (n < 2 || v + n * 2 + 2 > cap) continue;
+      for (let i = 0; i < n; i++) {
+        const a = L.pts[Math.max(0, i - 1)];
+        const c = L.pts[Math.min(n - 1, i + 1)];
+        let tx = c[0] - a[0];
+        let ty = c[1] - a[1];
+        const l = Math.hypot(tx, ty) || 1;
+        tx /= l;
+        ty /= l;
+        const nx = -ty * L.w[i];
+        const ny = tx * L.w[i];
+        const p = L.pts[i];
+        if (i === 0 && v > 0) put(p[0] + nx, p[1] + ny, 1, 0, 0, L.d[i]); // degenerate join
+        put(p[0] + nx, p[1] + ny, 1, i / (n - 1), L.a[i], L.d[i]);
+        put(p[0] - nx, p[1] - ny, -1, i / (n - 1), L.a[i], L.d[i]);
+        if (i === n - 1) put(p[0] - nx, p[1] - ny, -1, 1, 0, L.d[i]); // degenerate join
+      }
+    }
+    if (v < 4) return;
+    const pr = this.p.ribbon;
+    this.common(pr, f);
+    gl.uniform3fv(pr.u.uColor, color);
+    gl.uniform1f(pr.u.uGlow, mode);
+    if (pr.u.uOcc) {
+      bindTex(gl, 1, this.occ!.tex);
+      gl.uniform1i(pr.u.uOcc, 1);
+    }
+    gl.bindVertexArray(this.ribbonVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.ribbonBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, d, 0, v * 6);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, v);
+  }
+
+  /** The plants under the water: rhizomes on the bed, and a stem from each to every leaf, bud and flower. */
+  private plantParts(f: FrameInput, inView: (x: number, y: number, r: number) => boolean) {
+    const pond = f.pond;
+    const stems: Array<{ pts: Array<[number, number]>; w: number[]; a: number[]; d: number[] }> = [];
+    const stem = (x: number, y: number, rx: number, ry: number, topDepth: number, w0: number) => {
+      const bed = pond.bedDepth(rx, ry) * 0.97;
+      const [fx, fy] = pond.flow((x + rx) / 2, (y + ry) / 2);
+      // stems bow downstream in the current, and lean when their leaf is pushed away
+      const cx = (x + rx) / 2 + fx * 2.2;
+      const cy = (y + ry) / 2 + fy * 2.2;
+      const pts: Array<[number, number]> = [];
+      const w: number[] = [];
+      const a: number[] = [];
+      const d: number[] = [];
+      for (let i = 0; i <= 8; i++) {
+        const u = i / 8;
+        const k = 1 - u;
+        pts.push([k * k * x + 2 * k * u * cx + u * u * rx, k * k * y + 2 * k * u * cy + u * u * ry]);
+        w.push(w0 * (0.8 + 0.4 * u));
+        a.push(1);
+        d.push(topDepth + (bed - topDepth) * u);
+      }
+      stems.push({ pts, w, a, d });
+    };
+    for (const p of pond.pads) if (inView(p.x, p.y, p.r + 140)) stem(p.x, p.y, p.rx, p.ry, 0.04, 2.1);
+    for (const b of pond.blooms) if (inView(b.x, b.y, 160)) stem(b.x, b.y, b.rx, b.ry, 0.02, 1.7);
+    for (const dl of pond.deep) if (dl.rx !== undefined && dl.ry !== undefined && inView(dl.x, dl.y, 150)) stem(dl.x, dl.y, dl.rx, dl.ry, dl.depth, 1.6);
+    const rhiz: Array<{ pts: Array<[number, number]>; w: number[]; a: number[]; d: number[] }> = [];
+    for (const pl of pond.plants) {
+      if (!inView(pl.x, pl.y, 80)) continue;
+      const bed = pond.bedDepth(pl.x, pl.y) * 0.99;
+      for (const [ang, len] of pl.arms) {
+        const pts: Array<[number, number]> = [];
+        const w: number[] = [];
+        const a: number[] = [];
+        const d: number[] = [];
+        for (let i = 0; i <= 4; i++) {
+          const u = i / 4;
+          const wob = Math.sin(u * 5 + pl.seed * 20) * 3;
+          pts.push([pl.x + Math.cos(ang) * len * u - Math.sin(ang) * wob, pl.y + Math.sin(ang) * len * u + Math.cos(ang) * wob]);
+          w.push(4.5 - u * 1.5 + Math.sin(u * 9 + pl.seed * 7) * 0.8);
+          a.push(1);
+          d.push(bed);
+        }
+        rhiz.push({ pts, w, a, d });
+      }
+    }
+    this.strips(f, rhiz, [0.52, 0.38, 0.22], 3);
+    this.strips(f, stems, [0.50, 0.50, 0.24], 3);
   }
 
   private ribbon(f: FrameInput, pts: Array<[number, number]>, width: number | number[], color: [number, number, number], alpha: number | number[], glow: boolean | 2) {

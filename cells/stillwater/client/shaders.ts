@@ -717,10 +717,22 @@ void main(){
   float gvs = length(vDent.xy);
   if (vSink > .01 && gvs > .001) {
     vec2 dir = vDent.xy / gvs;
-    // the waterline wavers with the little waves lapping over the leaf
-    float lap = (texture(uNoise, vec2(dot(p, vec2(-dir.y, dir.x)) * .9, uTime * .15)).r - .5) * .07;
-    float wet = dot(p, dir) - (1. - vSink * 1.25) + lap;
-    float under = smoothstep(-.02, .06, wet);
+    // the waterline is where the river's level meets the leaf's surface, so it
+    // follows the leaf: bowed across the pressed side (the leaf bends as it goes
+    // under), wandering with the leaf's drape, running ahead in fingers down the
+    // vein grooves, lapping with the little waves, and leaving loose puddles
+    // just past the line
+    vec2 perp = vec2(-dir.y, dir.x);
+    float across = dot(p, perp);
+    float drape = (texture(uNoise, p * .45 + so * 1.9).g - .5) * .34 + (texture(uNoise, p * 1.3 + so).r - .5) * .12;
+    float fingers = veins(p * .985, length(p)) * .035 + veins(p * 1.015, length(p)) * .025;
+    float lap = (texture(uNoise, vec2(across * 1.4 + seed * 3., uTime * .22)).r - .5) * .09
+              + (texture(uNoise, vec2(across * 4.2 - uTime * .05, seed * 7.)).g - .5) * .035;
+    float wet = dot(p, dir) + across * across * .42 - (1. - vSink * 1.25) + drape + fingers + lap;
+    // puddles stranded on the dry side of the line
+    float pud = texture(uNoise, p * 2.1 + so * 2.7).b;
+    wet = max(wet, (.2 - pud) * 2. - max(0., -wet) * 2.5 - .05);
+    float under = smoothstep(-.025, .05, wet);
     // deeper under the further past the line: darker, cooler, flatter
     float depthK = clamp(wet * 2.5, 0., 1.);
     float lum = dot(col, vec3(.3, .59, .11));
@@ -1273,26 +1285,43 @@ void main(){
 
 export const RIBBON_VS = /* glsl */ `${HEAD}
 layout(location=0) in vec2 aPos;  // world
-layout(location=1) in vec4 iA;    // side, along, alpha, -
+layout(location=1) in vec4 iA;    // side, along, alpha, depth below the surface (0 = on it)
 uniform vec4 uView;
+uniform float uDepthK;
 out vec4 vA;
 out vec2 vWp;
+out vec2 vUv;
 void main(){
   vA = iA;
   vWp = aPos;
-  gl_Position = vec4((aPos - uView.xy) * uView.zw, 0., 1.);
+  // under the water, stems and rhizomes sit at their depth: smaller, slower
+  vec2 clip = (aPos - uView.xy) * uView.zw / (1. + uDepthK * max(iA.w, 0.));
+  vUv = clip * .5 + .5;
+  gl_Position = vec4(clip, 0., 1.);
 }`;
 
-export const RIBBON_FS = /* glsl */ `${HEAD}
+export const RIBBON_FS = /* glsl */ `${HEAD}${COMMON}
 in vec4 vA;
 in vec2 vWp;
+in vec2 vUv;
 out vec4 o;
 uniform vec3 uColor;
 uniform float uGlow;
-uniform float uTime;
-uniform sampler2D uNoise;
+uniform sampler2D uOcc;
 void main(){
   float edge = 1. - smoothstep(.3, 1., abs(vA.x));
+  if (uGlow > 2.5) {
+    // a stem or rhizome under the water: rounded, dimmed and greened by the depth above it
+    float round_ = 1. - vA.x * vA.x;
+    vec3 c = uColor * (.55 + .5 * round_) * (.85 + .3 * texture(uNoise, vWp / 13.).r);
+    float shade = 1. - texture(uOcc, vUv).r * .5;
+    c *= (uAmb * .9 + uSunCol * .45 * shade);
+    vec3 absorb = exp(-vA.w * vec3(1.6, .8, 1.0));
+    c = c * absorb + uAmb * vec3(.05, .21, .19) * (1. - absorb);
+    float a = (1. - smoothstep(.55, 1., abs(vA.x))) * vA.z;
+    o = vec4(c, 1.) * a;
+    return;
+  }
   if (uGlow > 1.5) {
     // white water: bubbly and broken, thinning toward its edges and with age
     float n = texture(uNoise, vWp / 9. + uTime * .02).a * .55 + texture(uNoise, vWp / 23.).r * .6;

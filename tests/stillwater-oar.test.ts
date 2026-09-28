@@ -6,7 +6,7 @@ function padAt(pond: Pond, x: number, y: number, r = 30): Pad {
     id: 99999, x, y, vx: 0, vy: 0, ang: 0, va: 0, ax: x, ay: y, r, seed: 0.5, bank: false,
     drops: [{ x: 0.35, y: 0, r: 0.2, a: 1, to: 1 }, { x: -0.4, y: 0, r: 0.2, a: 1, to: 1 }],
     selected: false, sel: 0, bob: 0, focus: false, flower: 0, touching: false, layer: 0,
-    dx: 0, dy: 0, wob: 0, cx: 0, cy: 0, sink: 0, caught: false,
+    dx: 0, dy: 0, wob: 0, cx: 0, cy: 0, sink: 0, caught: false, rx: x, ry: y,
   };
   pond.pads.push(pad);
   return pad;
