@@ -565,6 +565,8 @@ void main(){
     if (i >= count) break;
     vec4 dr = texelFetch(uDrops, ivec2(i, row), 0);
     if (dr.w < .01) continue;
+    // as the leaf flexes, its dew shivers
+    dr.xy += vec2(sin(float(i) * 2.3 + seed * 17.), cos(float(i) * 1.7 + seed * 11.)) * vDent.z * .025;
     float rr = dr.z * (.35 + .65 * dr.w);
     vec2 q = (p - dr.xy) / rr;
     float sdist = length(q + Ll.xy * .62);

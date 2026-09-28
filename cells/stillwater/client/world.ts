@@ -151,6 +151,8 @@ export interface Boat {
 }
 
 export const BOAT_LEN = 112;
+/** How fast a ripple front travels (world units/s), matched by eye to the GPU wave sim. */
+const RING_SPEED = 62;
 export const BOAT_BEAM = 40;
 
 type Rand = () => number;
@@ -193,6 +195,19 @@ export class Pond {
   deep: Deep[] = [];
   impulses: Impulse[] = [];
   bumps: Bump[] = [];
+  /**
+   * Ripple fronts the CPU keeps track of so pads can FEEL the water: every
+   * real splash (a plop, an oar catch or release, a hull bump) spreads a ring
+   * at about the wave sim's speed, and a pad bobs, is pushed outward and
+   * flexes as the front passes under it.
+   */
+  rings: Array<{ x: number; y: number; t: number; s: number }> = [];
+  /** Water drops falling from a lifted blade (drawn as glints, landing as tiny rings). */
+  drips: Array<{ x: number; y: number; age: number; life: number }> = [];
+  /** Things that startle fish (main.ts relays them to the school). */
+  startles: Array<{ x: number; y: number; r: number }> = [];
+  /** Sounds the water made this step (main.ts plays them). */
+  sounds: Array<{ kind: 'dip' | 'drip'; s: number }> = [];
   weeds: Weed[] = [];
   gusts: Gust[] = [];
   /** The boat's recent path (newest last): where the wake is drawn from. */
@@ -400,6 +415,8 @@ export class Pond {
     for (const g of this.gusts) g.y -= s;
     for (const p of this.trail) p.y -= s;
     for (const p of this.puddles) p.y -= s;
+    for (const r of this.rings) r.y -= s;
+    for (const d of this.drips) d.y -= s;
     for (let i = 1; i < this.rope.length; i += 2) {
       this.rope[i] -= s;
       this.ropePrev[i] -= s;
@@ -562,44 +579,133 @@ export class Pond {
   puddles: Array<{ x: number; y: number; vx: number; vy: number; age: number; life: number; s: number }> = [];
   private shedAcc = 0;
 
+/** The pad covering a world point, if any (nearest centre wins). */
+  padAt(x: number, y: number, pads: Pad[] = this.pads): Pad | null {
+    let best: Pad | null = null;
+    let bd = Infinity;
+    for (const p of pads) {
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d < p.r * 0.92 && d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Something meets the water here. On open water: a ripple (and a ring the
+   * pads will feel). On a leaf: no ripple on top of it — the leaf takes it,
+   * dipping, shoved away from the point and flexing.
+   */
+  splash(x: number, y: number, r: number, s: number, foam = false, pads?: Pad[]): Pad | null {
+    const p = this.padAt(x, y, pads);
+    if (p) {
+      const dx = p.x - x;
+      const dy = p.y - y;
+      const d = Math.hypot(dx, dy) || 1;
+      p.bob = Math.min(1, p.bob + s * 0.5);
+      p.vx += (dx / d) * s * 10;
+      p.vy += (dy / d) * s * 10;
+      p.wob = Math.min(1, p.wob + s * 0.35);
+      // the water it pushed down comes up round its edge
+      this.impulses.push({ x: p.x - (dx / d) * p.r * 1.02, y: p.y - (dy / d) * p.r * 1.02, r: 6, s: s * 0.4 });
+      return p;
+    }
+    this.impulses.push({ x, y, r, s, foam });
+    if (s >= 0.6) {
+      this.rings.push({ x, y, t: this.t, s });
+      if (this.rings.length > 40) this.rings.shift();
+    }
+    return null;
+  }
+
   private oarWater(prev: number, dt: number) {
     const b = this.boat;
     const crossed = (at: number) => b.stroke - prev > 0 && Math.floor(prev - at) !== Math.floor(b.stroke - at);
     const hx = Math.sin(b.heading);
     const hy = Math.cos(b.heading);
     const k = b.rowing * Math.min(1, 0.4 + b.speed / 30);
-    if (b.rowing > 0.3 && crossed(0.75)) {
+    const near = this.pads.filter((p) => Math.abs(p.x - b.x) < 160 && Math.abs(p.y - b.y) < 160);
+    const rowing = b.rowing > 0.3;
+    const drive = Math.cos(b.stroke * Math.PI * 2);
+
+    // the catch: blades drop in with a plunk; fish near them bolt
+    if (rowing && crossed(0.75)) {
       for (const side of [-1, 1]) {
         const [tx, ty] = this.oarTip(side);
-        this.impulses.push({ x: tx, y: ty, r: 7, s: 1.2 * k, foam: true });
+        this.splash(tx, ty, 7, 1.2 * k, true, near);
+        this.startles.push({ x: tx, y: ty, r: 90 });
       }
+      this.sounds.push({ kind: 'dip', s: k });
     }
-    const drive = Math.cos(b.stroke * Math.PI * 2);
-    if (b.rowing > 0.3 && drive > 0.05) {
+
+    // the drive: blades in the water shoulder leaves aside and throw water aft
+    if (rowing && drive > 0.05) {
       this.shedAcc += dt;
       const shed = this.shedAcc > 0.12;
       if (shed) this.shedAcc = 0;
       for (const side of [-1, 1]) {
         const [tx, ty] = this.oarTip(side);
-        this.impulses.push({ x: tx, y: ty, r: 6, s: 0.35 * k * drive, foam: Math.random() < 0.3 * drive });
-        if (shed) {
-          // pushed water leaves aft, a little outward, faster the harder the pull
-          const ox = hy * side;
-          const oy = -hx * side;
-          const v = 22 + b.speed * 0.6;
-          this.puddles.push({ x: tx, y: ty, vx: -hx * v + ox * 7, vy: -hy * v + oy * 7, age: 0, life: 1.8, s: 0.55 * k * drive });
+        for (const p of near) {
+          const dx = p.x - tx;
+          const dy = p.y - ty;
+          const d = Math.hypot(dx, dy) || 1;
+          const reach = p.r + 7;
+          if (d > reach) continue;
+          // the blade sweeps aft through the leaf's edge: out of the way, and aft with the stroke
+          const pen = reach - d;
+          p.vx += ((dx / d) * pen * 3 - hx * 14 * drive) * dt * 6;
+          p.vy += ((dy / d) * pen * 3 - hy * 14 * drive) * dt * 6;
+          p.x += (dx / d) * pen * 0.25;
+          p.y += (dy / d) * pen * 0.25;
+          p.cx -= (dx / d) * (pen / p.r) * 2;
+          p.cy -= (dy / d) * (pen / p.r) * 2;
+          p.wob = Math.min(1, p.wob + drive * dt * 2);
+          p.bob = Math.max(p.bob, 0.35);
+        }
+        if (!this.padAt(tx, ty, near)) {
+          this.impulses.push({ x: tx, y: ty, r: 6, s: 0.35 * k * drive, foam: Math.random() < 0.3 * drive });
+          if (shed) {
+            // pushed water leaves aft, a little outward, faster the harder the pull
+            const ox = hy * side;
+            const oy = -hx * side;
+            const v = 22 + b.speed * 0.6;
+            this.puddles.push({ x: tx, y: ty, vx: -hx * v + ox * 7, vy: -hy * v + oy * 7, age: 0, life: 1.8, s: 0.55 * k * drive });
+          }
         }
       }
     }
-    if (b.rowing > 0.3 && crossed(0.25)) {
+
+    // the release: a pair of swirls where the blade left
+    if (rowing && crossed(0.25)) {
       for (const side of [-1, 1]) {
         const [tx, ty] = this.oarTip(side);
         const px = hy * 5;
         const py = -hx * 5;
-        this.impulses.push({ x: tx + px, y: ty + py, r: 6, s: 0.9 * k, foam: true });
-        this.impulses.push({ x: tx - px, y: ty - py, r: 6, s: 0.9 * k, foam: true });
+        this.splash(tx + px, ty + py, 6, 0.9 * k, true, near);
+        this.splash(tx - px, ty - py, 6, 0.9 * k, true, near);
       }
     }
+
+    // the recovery: water runs off the lifted blades and drips back in
+    if (rowing && drive < -0.05) {
+      for (const side of [-1, 1]) {
+        if (Math.random() < dt * 9 * (-drive)) {
+          const [tx, ty] = this.oarTip(side);
+          this.drips.push({ x: tx + (Math.random() - 0.5) * 5, y: ty + (Math.random() - 0.5) * 5, age: 0, life: 0.18 + Math.random() * 0.1 });
+        }
+      }
+    }
+    for (const d of this.drips) {
+      d.age += dt;
+      if (d.age >= d.life) {
+        const hit = this.splash(d.x, d.y, 3, 0.35, false, near);
+        if (!hit) this.sounds.push({ kind: 'drip', s: 0.5 + Math.random() * 0.5 });
+      }
+    }
+    this.drips = this.drips.filter((d) => d.age < d.life);
+
     // the travelling packets stir the water along their way, slowing as they go
     for (const p of this.puddles) {
       p.age += dt;
@@ -609,6 +715,14 @@ export class Pond {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       const fade = 1 - p.age / p.life;
+      const under = this.padAt(p.x, p.y, near);
+      if (under) {
+        // pushed water arriving under a leaf nudges it along instead
+        under.vx += p.vx * 0.04 * fade;
+        under.vy += p.vy * 0.04 * fade;
+        p.age = p.life;
+        continue;
+      }
       if (Math.random() < 0.5) this.impulses.push({ x: p.x, y: p.y, r: 5 + p.age * 3, s: p.s * fade, foam: p.age < 0.5 && Math.random() < 0.3 });
     }
     this.puddles = this.puddles.filter((p) => p.age < p.life);
@@ -657,6 +771,7 @@ export class Pond {
   }
 
   private stepPads(dt: number, active: { y0: number; y1: number }) {
+    this.rings = this.rings.filter((r) => this.t - r.t < 3.5);
     const pads = this.pads.filter((p) => p.y > active.y0 && p.y < active.y1);
     const b = this.boat;
     const hc = Math.cos(b.heading);
@@ -703,6 +818,19 @@ export class Pond {
         p.va += ((wx * Math.sin(p.ang * 3 + p.seed * 9) - wy * Math.cos(p.ang * 2)) / p.r) * 0.35 * dt;
         p.bob = Math.max(p.bob, Math.min(0.6, Math.hypot(wx, wy) / 120));
       }
+      // ripple fronts passing under the leaf lift it, push it outward and set it flexing
+      for (const r of this.rings) {
+        const age = t - r.t;
+        const dx = p.x - r.x;
+        const dy = p.y - r.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (Math.abs(d - age * RING_SPEED) > p.r) continue;
+        const k = r.s * Math.exp(-age * 0.9) / (1 + d / 90);
+        p.bob = Math.max(p.bob, Math.min(0.8, k * 0.7));
+        p.vx += (dx / d) * k * 22 * dt;
+        p.vy += (dy / d) * k * 22 * dt;
+        p.wob = Math.min(1, p.wob + k * dt * 4);
+      }
 
       // hull contact
       const lx = p.x - sx;
@@ -735,6 +863,7 @@ export class Pond {
         if (!p.touching && (pen > 2 || into > 3)) {
           this.bumps.push({ x: cx + nx * hullR, y: cy + ny * hullR, strength: clamp(into / 30 + pen / 20, 0.1, 1) });
           this.impulses.push({ x: p.x - nx * p.r * 0.9, y: p.y - ny * p.r * 0.9, r: 10, s: 0.8, foam: into > 8 });
+          this.rings.push({ x: p.x - nx * p.r * 0.9, y: p.y - ny * p.r * 0.9, t: this.t, s: 0.7 });
         }
         // the hull presses the near edge in, and a hard nudge sets the leaf flexing
         p.cx -= nx * (pen / p.r) * 2.2;

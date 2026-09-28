@@ -389,7 +389,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
     // one plop: a single clean ring spreading out, like a raindrop or a fingertip
-    pond.impulses.push({ x: wx, y: wy, r: 6, s: 2.6 });
+    pond.splash(wx, wy, 6, 2.6);
     school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
     gust = pond.gust({ x: wx, y: wy, dx: 0, dy: 0, s: 0.6, r: 120, life: 1.8, radial: true, held: true });
@@ -529,6 +529,14 @@ function gathers(dt: number, dusk: number): Mote[] {
   return out;
 }
 
+/** Drops falling from the lifted blades: a glint each, shrinking toward the water. */
+function drips(sky: { sunCol: [number, number, number] }): Mote[] {
+  return pond.drips.map((d) => {
+    const k = d.age / d.life;
+    return { x: d.x, y: d.y, size: 3.2 - k * 1.2, r: 0.8 + sky.sunCol[0] * 0.2, g: 0.9, b: 0.95, a: 0.7 * (1 - k * 0.5), core: 1, z: 1.05 - k * 0.05 };
+  });
+}
+
 // ─── frame ─────────────────────────────────────────────────────────────────
 let last = performance.now();
 let frameMs = 16;
@@ -597,6 +605,14 @@ function frame(now: number) {
   cam.x += (b.x * 0.75 + pond.channel(b.y + 120) * 0.25 - cam.x) * (1 - Math.exp(-1.2 * dt));
   cam.y += (followY() - cam.y) * (1 - Math.exp(-3 * dt));
 
+  // the water's own events: fish bolt from oar catches, splashes and drips make their sounds
+  for (const st of pond.startles) school.scare(st.x, st.y, st.r);
+  pond.startles.length = 0;
+  for (const snd of pond.sounds) {
+    if (snd.kind === 'dip') sound.dip(snd.s);
+    else sound.drip(snd.s);
+  }
+  pond.sounds.length = 0;
   for (const bump of pond.bumps) {
     sound.knock(bump.strength);
     school.scare(bump.x, bump.y);
@@ -656,7 +672,7 @@ function frame(now: number) {
       pond,
       pads: bare ? [] : order,
       fish: school.fish,
-      motes: [...air.above, ...gathers(dt, sky.dusk)],
+      motes: [...air.above, ...gathers(dt, sky.dusk), ...drips(sky)],
       under: air.below,
       thread,
       lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,

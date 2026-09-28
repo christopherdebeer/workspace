@@ -12,6 +12,7 @@ export class Sound {
   private master: GainNode | null = null;
   private bed: GainNode | null = null;
   private wind: GainNode | null = null;
+  private noise: AudioBuffer | null = null;
   on = false;
 
   private start() {
@@ -64,6 +65,7 @@ export class Sound {
     this.master = master;
     this.bed = bed;
     this.wind = wind;
+    this.noise = buf;
   }
 
   toggle(): boolean {
@@ -121,6 +123,32 @@ export class Sound {
   breeze(level: number) {
     if (!this.ctx || !this.wind) return;
     this.wind.gain.setTargetAtTime(level * 0.9, this.ctx.currentTime, level > this.wind.gain.value ? 0.08 : 0.5);
+  }
+
+  /** An oar blade going in: a soft, low plunk of filtered noise. */
+  dip(strength: number) {
+    const ctx = this.ctx;
+    if (!ctx || !this.master || !this.on || !this.noise) return;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    src.playbackRate.value = 0.7 + Math.random() * 0.2;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 380 + Math.random() * 120;
+    bp.Q.value = 1.4;
+    const g = ctx.createGain();
+    const t = ctx.currentTime;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.35 * strength, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    src.connect(bp).connect(g).connect(this.master);
+    src.start(t, Math.random() * 2);
+    src.stop(t + 0.35);
+  }
+
+  /** A drop falling back in: a tiny, bright tick. */
+  drip(strength: number) {
+    this.voice(1300 + Math.random() * 900, 0, 0.012 * strength, 0.09);
   }
 
   /** The hull nudging a pad. */
