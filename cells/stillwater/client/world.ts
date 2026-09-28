@@ -164,6 +164,8 @@ export interface Boat {
   stroke: number;
   rowing: number;
   sway: number;
+  /** How hard each stroke pulls, 0..1 (the ONLY thing that makes the boat go faster). */
+  power: number;
   /** Where a finger on the boat is pulling it (world), or null. */
   helm: [number, number] | null;
   /** Until this time the boat keeps the heading it was given instead of following the channel. */
@@ -234,7 +236,7 @@ export class Pond {
   /** The boat's recent path (newest last): where the wake is drawn from. */
   trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
   private trailAcc = 0;
-  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0, helm: null, manualUntil: 0 };
+  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0, power: 0.2, helm: null, manualUntil: 0 };
   rope: Float32Array;
   ropePrev: Float32Array;
   /** Accumulated rebase offset: world y + origin is the "true" distance travelled. */
@@ -562,7 +564,8 @@ export class Pond {
 
   /** Grant forward glide for a solve: roughly `distance` units, fed in over a couple of seconds. */
   propel(distance: number) {
-    this.boat.surge += distance * 0.34;
+    // spent as full-power strokes: roughly one strong stroke per 40 units asked for
+    this.boat.surge += Math.min(90, distance * 0.3);
   }
 
   bow(): [number, number] {
@@ -639,7 +642,7 @@ export class Pond {
 
   /** One long pull on the oars (a tap on the boat). */
   stroke() {
-    this.boat.surge += 34;
+    this.boat.surge += 30;
   }
 
   /** Is a world point on the boat (hull, with a little grace)? */
@@ -659,12 +662,18 @@ export class Pond {
    * the finger is; let go and it holds that course a while before drifting
    * back to the channel.
    */
+  /**
+   * The oars are the only engine. The stroke cadence stays calm and nearly
+   * constant; what changes is how hard each stroke pulls (`power`). Thrust
+   * comes only while the blades are in the water (the drive, cos(2π·stroke)
+   * > 0), so the boat surges on each pull and glides, slowing, between them.
+   * A gentle cruise pulls lightly; a finger at the helm pulls harder the
+   * further ahead it is; a tap on the boat or a solved number spends `surge`
+   * on full-power strokes.
+   */
   private stepBoat(dt: number, reduced: boolean) {
     const b = this.boat;
-    const feed = Math.min(b.surge, dt * (18 + b.surge * 0.9));
-    b.surge -= feed;
-    b.speed += feed;
-    let cruise = reduced ? 4 : 10;
+    let effort = reduced ? 0.1 : 0.22;
     let want: number;
     if (b.helm) {
       const dx = b.helm[0] - b.x;
@@ -672,7 +681,7 @@ export class Pond {
       const d = Math.hypot(dx, dy);
       want = clamp(Math.atan2(dx, dy), -1.2, 1.2);
       // pull ahead to row hard; hold the boat itself to row steadily
-      cruise = clamp(12 + Math.max(0, dy) * 0.35 + d * 0.05, 12, 55);
+      effort = clamp(0.32 + Math.max(0, dy) * 0.004 + d * 0.0008, 0.32, 1);
       b.manualUntil = this.t + 4;
     } else if (this.t < b.manualUntil) {
       want = b.heading;
@@ -680,9 +689,22 @@ export class Pond {
       const look = 170;
       want = clamp(Math.atan2(this.channel(b.y + look) - b.x, look), -0.42, 0.42) + Math.sin(this.t * 0.13) * 0.04;
     }
-    b.speed += (cruise - b.speed) * (1 - Math.exp(-(b.helm ? 1.2 : 0.34) * dt));
-    b.heading += (want - b.heading) * (1 - Math.exp(-dt * (b.helm ? 1.6 : 0.25 + b.speed / 40)));
-    b.rowing += ((b.speed > 3 || b.surge > 1 ? 1 : 0) - b.rowing) * (1 - Math.exp(-2.5 * dt));
+    // a tap or a solve: a few full-power strokes, spent as they're pulled
+    effort = Math.max(effort, Math.min(1, b.surge / 25));
+    b.surge = Math.max(0, b.surge - dt * 11);
+    b.power += (effort - b.power) * (1 - Math.exp(-2.5 * dt));
+    b.rowing += (1 - b.rowing) * (1 - Math.exp(-1.5 * dt));
+    const prev = b.stroke;
+    b.stroke += dt * (0.36 + 0.08 * b.power) * b.rowing;
+    // thrust only from blades in the water; water drag always
+    const drive = Math.max(0, Math.cos(b.stroke * Math.PI * 2));
+    // tuned so a light cruise swings ~10–16 through each stroke and full power ~32–56, and the
+    // glide between pulls carries (a heavy wooden boat keeps its way)
+    const THRUST = 62;
+    b.speed += (THRUST * b.power * drive * b.rowing - 0.3 * b.speed - 0.0035 * b.speed * b.speed) * dt;
+    b.speed = Math.max(0, b.speed);
+    // the rudder is the oars too: the boat only turns as fast as it moves
+    b.heading += (want - b.heading) * (1 - Math.exp(-dt * (0.15 + b.speed / (b.helm ? 25 : 40))));
     // the current carries the boat a little; a gust leans on it
     const [fx, fy] = this.flow(b.x, b.y);
     const [wx, wy] = this.wind(b.x, b.y);
@@ -690,8 +712,6 @@ export class Pond {
     b.y += (Math.cos(b.heading) * b.speed + Math.max(0, fy) * 0.25 + wy * 0.06) * dt;
     b.heading += (Math.cos(b.heading) * wx - Math.sin(b.heading) * wy) * 0.0009 * dt;
     b.sway = Math.sin(this.t * 0.7) * 0.012 + Math.sin(this.t * 0.31) * 0.01;
-    const prev = b.stroke;
-    b.stroke += dt * (0.35 + b.speed / 45) * b.rowing;
     this.oarWater(prev, dt);
     this.wake(dt);
     this.trailAcc += dt;
@@ -762,7 +782,7 @@ export class Pond {
     const crossed = (at: number) => b.stroke - prev > 0 && Math.floor(prev - at) !== Math.floor(b.stroke - at);
     const hx = Math.sin(b.heading);
     const hy = Math.cos(b.heading);
-    const k = b.rowing * Math.min(1, 0.4 + b.speed / 30);
+    const k = b.rowing * (0.3 + 0.7 * b.power);
     const near = this.pads.filter((p) => Math.abs(p.x - b.x) < 160 && Math.abs(p.y - b.y) < 160);
     const rowing = b.rowing > 0.3;
     const drive = Math.cos(b.stroke * Math.PI * 2);
@@ -807,7 +827,7 @@ export class Pond {
             // pushed water leaves aft, a little outward, faster the harder the pull
             const ox = hy * side;
             const oy = -hx * side;
-            const v = 22 + b.speed * 0.6;
+            const v = 14 + b.power * 32;
             this.puddles.push({ x: tx, y: ty, vx: -hx * v + ox * 7, vy: -hy * v + oy * 7, age: 0, life: 1.8, s: 0.55 * k * drive });
           }
         }
@@ -904,7 +924,9 @@ export class Pond {
   oarAngle(): number {
     const b = this.boat;
     const stroke = Math.sin(b.stroke * Math.PI * 2);
-    return 0.35 + (stroke * 0.5 - 0.1) * b.rowing + Math.sin(this.t * 0.5) * 0.04;
+    // a harder pull is a LONGER stroke: the blades reach further forward and sweep further back
+    const reach = 0.22 + 0.42 * b.power;
+    return 0.35 + (stroke * reach - 0.1) * b.rowing + Math.sin(this.t * 0.5) * 0.04;
   }
 
   private stepPads(dt: number, active: { y0: number; y1: number }) {

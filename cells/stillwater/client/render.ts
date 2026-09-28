@@ -478,7 +478,8 @@ export class Renderer {
     const boat = this.p.boat;
     this.common(boat, f);
     gl.uniform4f(boat.u.uBoat, b.x, b.y, b.heading + b.sway, 1);
-    gl.uniform4f(boat.u.uOar, pond.oarAngle(), b.rowing, b.stroke, f.lantern);
+    // y: how much the rower throws into it (lean, wet blades) — effort, not speed
+    gl.uniform4f(boat.u.uOar, pond.oarAngle(), b.rowing * (0.3 + 0.9 * b.power), b.stroke, f.lantern);
     gl.bindVertexArray(this.fsVao);
     gl.uniform1f(boat.u.uShadow, 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
