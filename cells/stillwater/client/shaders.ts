@@ -1289,6 +1289,18 @@ void main(){
       if (band < 0.) col = mix(vec3(.66, .50, .30), vec3(.78, .62, .38), grain) * (.9 + .1 * sin(p.x * .7));
       else if (p.y < sy && band < 2.4) col *= .7;
     }
+    // a little wicker basket on the forward seat, a checked cloth over it
+    vec2 bq = p - vec2(4., 26.);
+    float basket = sdEllipse(bq, vec2(6.2, 4.6));
+    if (basket < 0.) {
+      float weave = .8 + .2 * sin(bq.x * 3.) * sin(bq.y * 3.);
+      vec3 wick = vec3(.72, .52, .28) * weave;
+      float cloth = 1. - smoothstep(-.5, .5, sdEllipse(bq - vec2(.6, .4), vec2(4.2, 3.)));
+      vec3 check = mix(vec3(.93, .9, .86), vec3(.78, .16, .14), step(.5, fract(bq.x * .45) ) * step(.5, fract(bq.y * .45)) + step(fract(bq.x * .45), .5) * step(fract(bq.y * .45), .5));
+      col = mix(wick * (.8 + .25 * smoothstep(0., -2., basket)), check, cloth);
+      float handle = abs(sdEllipse(bq, vec2(4.8, 1.2)));
+      col = mix(col, vec3(.6, .42, .22), (1. - smoothstep(.3, .8, handle)) * step(-.2, bq.y));
+    } else if (basket < 1.2) col *= .7;
     float coil = length(p - vec2(-9., -46.));
     col = mix(col, vec3(.55, .20, .14) * (.8 + .2 * sin(coil * 5.)), 1. - smoothstep(4., 5., coil));
   }
@@ -1345,10 +1357,15 @@ void main(){
     vec3 hn = normalize(vec3(hq / vec2(5.8, 6.4) * .95, .6));
     vec3 hood = vec3(.66, .11, .10) * (.5 + .65 * max(dot(hn, L3), 0.));
     hood += vec3(.35, .08, .06) * smoothstep(-1.2, 0., dHood) * .5;
-    float open_ = length((hq - vec2(0., 3.6)) / vec2(3.4, 2.4));
-    vec3 face = mix(vec3(.30, .17, .09), vec3(.95, .76, .62), smoothstep(.2, .9, (hq.y - 3.2) / 2.5));
-    hood = mix(hood, vec3(.12, .03, .03), (1. - smoothstep(.9, 1.15, open_)) * .8);
-    hood = mix(hood, face, 1. - smoothstep(.7, .9, open_));
+    // the opening, toward the bow: a soft shadow inside the hood's lip, a fringe of
+    // hair, and just the tip of a cheek and nose catching the light
+    vec2 oq = (hq - vec2(0., 4.3)) / vec2(3.1, 2.1);
+    float open_ = length(oq);
+    hood = mix(hood, hood * .45, (1. - smoothstep(.85, 1.25, open_)) * .7);
+    float hair = (1. - smoothstep(.72, .95, open_)) * smoothstep(-.6, .1, -oq.y + .15);
+    float cheek = (1. - smoothstep(.45, .7, length(oq - vec2(0., .45))));
+    hood = mix(hood, vec3(.36, .20, .10) * (.8 + .3 * sin(oq.x * 9.)), hair);
+    hood = mix(hood, vec3(.96, .78, .66), cheek * .85);
     rc = mix(rc, hood, hoodK);
     col = mix(col, rc * lit, rowK);
     cover = max(cover, rowK);
