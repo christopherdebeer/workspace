@@ -18228,10 +18228,15 @@ function stepUnderstorey(fx: number, fz: number): void {
     e.tris += t; e.meshes.push(o); by.set(k, e);
   });
   const time = (): { ms: number; tris: number; calls: number } => {
-    renderer.setRenderTarget(rtScene); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    // The fence reads the CANVAS: rtScene is half-float, and a byte read of it
+    // is an INVALID_OPERATION that returns at once and waits for nothing.
+    // Commands run in order, so reading the default framebuffer waits for
+    // every render issued before it.
+    const fence = (): void => { renderer.setRenderTarget(null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); };
+    fence();
     const t0 = performance.now(); let tris = 0, calls = 0;
     for (let i = 0; i < n; i++) { renderer.setRenderTarget(rtScene); renderer.render(scene, camera); tris = renderer.info.render.triangles; calls = renderer.info.render.calls; }
-    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    fence();
     const ms = (performance.now() - t0) / n; renderer.setRenderTarget(null);
     return { ms, tris, calls };
   };
