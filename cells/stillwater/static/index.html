@@ -31,6 +31,19 @@
     button:focus-visible { outline: 1px solid #ddd; border-radius: 4px; }
     #live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
     body.nogl #hint { opacity: .9; }
+    /* the start: who is rowing today? one tap on a name and the river begins */
+    #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 24px; background: rgba(6, 26, 22, .55); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); transition: opacity 1.8s; }
+    #start.away { opacity: 0; pointer-events: none; }
+    #start .brand { font-size: 13px; letter-spacing: 9px; margin: 0 0 6px 9px; opacity: .9; text-shadow: 0 2px 18px #001b19; }
+    #start .ask { font-style: italic; font-size: 16px; letter-spacing: .4px; opacity: .85; margin: 0; text-shadow: 0 1px 12px #001b19; }
+    #names { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; max-width: 360px; }
+    #names button, #newname button { position: static; opacity: 1; font-size: 17px; letter-spacing: .5px; color: #f3f0d2; background: radial-gradient(circle at 35% 30%, #4f8a42, #2b5a30 70%, #1f4426); border-radius: 50% 50% 50% 50% / 55% 55% 45% 45%; padding: 14px 22px; min-width: 88px; box-shadow: 0 4px 16px rgba(0, 20, 16, .45), inset 0 1px 0 rgba(255, 255, 255, .12); }
+    #names button:active, #newname button:active { transform: scale(.96); }
+    #newname { display: flex; gap: 10px; align-items: center; }
+    #newname input { font: 17px Georgia, serif; color: #f3f0d2; background: rgba(240, 236, 206, .08); border: 1px solid rgba(240, 236, 206, .35); border-radius: 10px; padding: 12px 14px; width: 170px; outline: none; }
+    #newname input:focus { border-color: rgba(240, 236, 206, .7); }
+    #newname input::placeholder { color: rgba(240, 236, 206, .45); font-style: italic; }
+    #newname button { padding: 12px 18px; min-width: 0; }
   </style>
 </head>
 <body>
@@ -43,6 +56,15 @@
     <div id="hint"></div>
     <button id="sound" type="button" aria-pressed="false">sound off</button>
     <div id="live" role="status" aria-live="polite"></div>
+  </div>
+  <div id="start" aria-label="Who is rowing today?">
+    <p class="brand">STILLWATER</p>
+    <p class="ask">who is rowing today?</p>
+    <div id="names"></div>
+    <form id="newname" autocomplete="off">
+      <input id="newname-input" type="text" maxlength="14" placeholder="a new name" aria-label="A new name" enterkeyhint="go" />
+      <button type="submit">row</button>
+    </form>
   </div>
   <script type="module" src="/app.js"></script>
 </body>

@@ -243,8 +243,10 @@ export interface Boat {
   sway: number;
   /** How hard each stroke pulls, 0..1 (the ONLY thing that makes the boat go faster). */
   power: number;
-  /** A finger driving the boat from behind: the heading it steers for, and how hard it pushes (0..1). */
-  helm: { steer: number; push: number } | null;
+  /** A finger behind the boat steering it (the oars only pull on a tap or a solve). */
+  helm: { steer: number } | null;
+  /** Stroke phase the oars are working toward: each tap or solved number queues one. */
+  strokeTo: number;
   /** Until this time the boat keeps the heading it was given instead of following the channel. */
   manualUntil: number;
 }
@@ -368,7 +370,8 @@ export class Pond {
   /** The boat's recent path (newest last): where the wake is drawn from. */
   trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
   private trailAcc = 0;
-  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0, power: 0.2, helm: null, manualUntil: 0 };
+  // at rest the oars sit at the finish (stroke .25): a tap pushes the arms away, then pulls
+  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0.25, rowing: 0, sway: 0, power: 0.2, helm: null, manualUntil: 0, strokeTo: 0.25 };
   rope: Float32Array;
   ropePrev: Float32Array;
   /** Accumulated rebase offset: world y + origin is the "true" distance travelled. */
@@ -688,7 +691,8 @@ export class Pond {
         // the root is unmistakably buried in the visible bank. Where the bank
         // itself runs beyond the grown view, the root naturally clips off-screen.
         const innerD = Math.max(18, half - (20 + rand() * 18));
-        const outerD = Math.min(this.halfW + 70, half + 38 + rand() * 30);
+        // the root is always beyond the grown field, so the pier comes in from off screen
+        const outerD = this.halfW + 80 + rand() * 40;
         const tipX = cx + ox * innerD;
         const tipY = y + oy * innerD;
         const rootX = cx + ox * outerD;
@@ -713,8 +717,8 @@ export class Pond {
       }
     };
 
-    if (rand() < 0.12) place(0);
-    if (rand() < 0.22) place(1);
+    // rare, and never a sign (blank boards read as props from above)
+    if (rand() < 0.035) place(0);
   }
 
   /** Regrow everything around the boat (after a resize wider than the field was grown for). */
@@ -919,7 +923,15 @@ export class Pond {
   /** Grant forward glide for a solve: roughly `distance` units, fed in over a couple of seconds. */
   propel(distance: number) {
     // spent as full-power strokes: roughly one strong stroke per 40 units asked for
-    this.boat.surge += Math.min(90, distance * 0.3);
+    const n = clamp(Math.round(distance / 40), 1, 3);
+    this.boat.surge += n * 25;
+    this.queueStrokes(n);
+  }
+
+  /** Queue whole strokes (at most two ahead of the one in hand). */
+  private queueStrokes(n: number) {
+    const b = this.boat;
+    b.strokeTo = Math.min(b.stroke + 2.999, Math.max(b.strokeTo, b.stroke) + n);
   }
 
   bow(): [number, number] {
@@ -997,7 +1009,7 @@ export class Pond {
 
   /** One long pull on the oars (a tap on the boat). */
   stroke() {
-    this.boat.surge += 30;
+    this.queueStrokes(1);
   }
 
   /**
@@ -1042,12 +1054,9 @@ export class Pond {
    */
   private stepBoat(dt: number, reduced: boolean) {
     const b = this.boat;
-    let effort = reduced ? 0.1 : 0.22;
     let want: number;
     if (b.helm) {
       want = clamp(b.helm.steer, -1.2, 1.2);
-      // a finger resting there rows steadily; pushing it on rows harder
-      effort = 0.32 + 0.68 * clamp(b.helm.push, 0, 1);
       b.manualUntil = this.t + 4;
     } else if (this.t < b.manualUntil) {
       want = b.heading;
@@ -1055,17 +1064,25 @@ export class Pond {
       const look = 170;
       want = clamp(Math.atan2(this.channel(b.y + look) - b.x, look), -0.42, 0.42) + Math.sin(this.t * 0.13) * 0.04;
     }
-    // a tap or a solve: a few full-power strokes, spent as they're pulled
-    effort = Math.max(effort, Math.min(1, b.surge / 25));
-    b.surge = Math.max(0, b.surge - dt * 11);
-    b.power += (effort - b.power) * (1 - Math.exp(-2.5 * dt));
-    b.rowing += (1 - b.rowing) * (1 - Math.exp(-1.5 * dt));
+    // the oars only work while a stroke is owed (a tap, or a solved number): the arms
+    // push away, the blades go in and pull, and then the boat glides, waiting
+    const pending = b.strokeTo - b.stroke;
+    const working = pending > 1e-4;
+    const effort = working ? (b.surge > 0 ? 1 : 0.62) : 0.2;
+    b.power += (effort - b.power) * (1 - Math.exp(-(working ? 6 : 1.5) * dt));
+    b.rowing += ((working ? 1 : 0) - b.rowing) * (1 - Math.exp(-(working ? 7 : 2.2) * dt));
     const prev = b.stroke;
-    b.stroke += dt * (0.36 + 0.08 * b.power) * b.rowing;
+    if (working) {
+      // recovery (.25 → .75) is unhurried; the drive (.75 → 1.25) quicker and firmer
+      const inDrive = Math.cos(b.stroke * Math.PI * 2) > 0;
+      const cadence = (inDrive ? 0.6 : 0.42) * (reduced ? 0.8 : 1);
+      b.stroke = Math.min(b.strokeTo, b.stroke + dt * cadence);
+      if (inDrive) b.surge = Math.max(0, b.surge - dt * 25);
+    }
     // thrust only from blades in the water; water drag always
     const drive = Math.max(0, Math.cos(b.stroke * Math.PI * 2));
-    // tuned so a light cruise swings ~10–16 through each stroke and full power ~32–56, and the
-    // glide between pulls carries (a heavy wooden boat keeps its way)
+    // tuned so a tap's stroke swings the boat up to ~30 and a solve's strong pulls ~50, and
+    // the glide between pulls carries (a heavy wooden boat keeps its way)
     const THRUST = 62;
     b.speed += (THRUST * b.power * drive * b.rowing - 0.3 * b.speed - 0.0035 * b.speed * b.speed) * dt;
     b.speed = Math.max(0, b.speed);
@@ -1320,7 +1337,9 @@ export class Pond {
     const stroke = Math.sin(b.stroke * Math.PI * 2);
     // a harder pull is a LONGER stroke: the blades reach further forward and sweep further back
     const reach = 0.22 + 0.42 * b.power;
-    return 0.35 + (stroke * reach - 0.1) * b.rowing + Math.sin(this.t * 0.5) * 0.04;
+    // at rest the blades sit where the stroke finishes (stroke .25), so a tap starts
+    // from there without a jump: the arms push away first, then pull
+    return 0.35 + (stroke * reach - 0.1) + Math.sin(this.t * 0.5) * 0.04;
   }
 
   private stepPads(dt: number, active: { y0: number; y1: number }) {
@@ -1541,10 +1560,22 @@ export class Pond {
       p.bob *= Math.exp(-2.4 * dt);
       // settle the soft-body pose toward this step's contacts, then clear them
       const give = Math.min(0.2, Math.hypot(p.cx, p.cy) * 0.45);
+      const pressed = Math.hypot(p.cx, p.cy) > 1e-6;
       const cl = Math.hypot(p.cx, p.cy) || 1;
       const k = 1 - Math.exp(-7 * dt);
-      p.dx += ((p.cx / cl) * give - p.dx) * k;
-      p.dy += ((p.cy / cl) * give - p.dy) * k;
+      if (pressed) {
+        p.dx += ((p.cx / cl) * give - p.dx) * k;
+        p.dy += ((p.cy / cl) * give - p.dy) * k;
+      } else {
+        // released: the press eases off, but while the leaf is still under the water
+        // keeps flooding from the side it went under (the shader draws the waterline
+        // along this direction, so losing it made the flood vanish in one go)
+        const dl = Math.hypot(p.dx, p.dy) || 1;
+        const floor = Math.min(dl, 0.03 * smooth(0.02, 0.15, p.sink));
+        const mag = floor + (dl - floor) * (1 - k);
+        p.dx = (p.dx / dl) * mag;
+        p.dy = (p.dy / dl) * mag;
+      }
       p.cx = 0;
       p.cy = 0;
       p.wob *= Math.exp(-1.6 * dt);

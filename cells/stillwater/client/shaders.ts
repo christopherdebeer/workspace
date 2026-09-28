@@ -1467,7 +1467,7 @@ void main(){
 }`;
 
 
-// ─── dormant bank architecture: piers and blank timber signs ──────────────
+// ─── dormant bank architecture: piers ─────────────────────────────────────
 
 export const STRUCTURE_VS = /* glsl */ `${HEAD}
 layout(location=0) in vec2 aPos;
@@ -1577,35 +1577,6 @@ void main(){
     shadow *= (1. - cover * .15);
     float light = .66 + .44 * max(uSun.z, 0.) * sunThrough(vW);
     col = wood * (uAmb * 1.08 + uSunCol * light);
-  } else {
-    vec2 boardP = p - vec2(0., .22);
-    float boardD = boxS(boardP, vec2(.88, .36));
-    vec2 postP = p - vec2(0., -.48);
-    float postD = boxS(postP, vec2(.12, .58));
-    float d = min(boardD, postD);
-    cover = 1. - smoothstep(-aa, aa, d);
-
-    float ds = min(boxS(boardP - shL, vec2(.9, .38)), boxS(postP - shL, vec2(.14, .60)));
-    shadow = (1. - smoothstep(-aa * 2., aa * 2., ds)) * .28 * (1. - cover);
-
-    float grain = texture(uNoise, vec2(p.x * 1.9 + seed * 5., p.y * .22 + seed * 13.)).r;
-    float weather = texture(uNoise, vW / 24. + seed * 2.).g;
-    // Same old, cool timber family as the pier. The blank sign should
-    // disappear into the bank rather than announce itself as a red prop.
-    vec3 wood = mix(vec3(.235, .235, .205), vec3(.39, .375, .31), grain * .42);
-    wood *= .84 + weather * .18;
-    wood = mix(wood, vec3(.17, .205, .145), smoothstep(.67, .9, weather) * .12);
-
-    float nails = 0.;
-    for (int k = -1; k <= 1; k += 2) {
-      vec2 q = boardP - vec2(float(k) * .67, 0.);
-      nails = max(nails, 1. - smoothstep(.035, .075, length(q)));
-    }
-    wood = mix(wood, vec3(.055, .05, .04), nails * .85);
-    wood = mix(wood, vec3(.145, .19, .125), smoothstep(.55, .9, weather) * smoothstep(-.2, .95, -p.y) * .15);
-
-    float light = .70 + .42 * max(uSun.z, 0.) * sunThrough(vW);
-    col = wood * (uAmb * 1.05 + uSunCol * light);
   }
 
   if (cover < .003 && shadow < .003) discard;

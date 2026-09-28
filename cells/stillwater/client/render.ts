@@ -509,7 +509,8 @@ export class Renderer {
     this.common(boat, f);
     gl.uniform4f(boat.u.uBoat, b.x, b.y, b.heading + b.sway, 1);
     // y: how much the rower throws into it (lean, wet blades) — effort, not speed
-    gl.uniform4f(boat.u.uOar, pond.oarAngle(), b.rowing * (0.3 + 0.9 * b.power), b.stroke, f.lantern);
+    // the rower's swing: laid back a little at rest (the finish), full through a stroke
+    gl.uniform4f(boat.u.uOar, pond.oarAngle(), (0.35 + 0.65 * b.rowing) * (0.3 + 0.9 * b.power), b.stroke, f.lantern);
     gl.bindVertexArray(this.fsVao);
     gl.uniform1f(boat.u.uShadow, 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

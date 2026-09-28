@@ -15,8 +15,10 @@ function padAt(pond: Pond, x: number, y: number, r = 30): Pad {
 
 /** Step until the blades are in the drive phase (cos(2π·stroke) well above 0). */
 function toDrive(pond: Pond) {
+  pond.stroke(); // the oars only work on a tap
   for (let i = 0; i < 600; i++) {
     if (Math.cos(pond.boat.stroke * Math.PI * 2) > 0.6 && pond.boat.rowing > 0.5) return;
+    if (pond.boat.strokeTo - pond.boat.stroke < 1e-4) pond.stroke();
     pond.step(1 / 60, { y0: -1e4, y1: 1e4 }, false);
   }
   throw new Error('never reached the drive');

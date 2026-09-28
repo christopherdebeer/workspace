@@ -29,50 +29,77 @@ const sound = new Sound();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
 
-// ─── proficiency (continuous, local, deliberately low-stakes) ──────────────
+// ─── who is rowing: one profile per child, each with its own proficiency and facts ──
 const startupParams = new URLSearchParams(location.search);
-const SAVE = 'stillwater.v3';
+interface Profile {
+  id: string;
+  name: string;
+  last: number;
+}
+const PROFILES = 'stillwater.profiles.v1';
+const readJSON = <T,>(key: string): T | null => {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? 'null') as T | null;
+  } catch {
+    return null;
+  }
+};
+const writeJSON = (key: string, v: unknown) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(v));
+  } catch {
+    /* storage unavailable */
+  }
+};
+let profiles: Profile[] = readJSON<Profile[]>(PROFILES) ?? [];
+let profile: Profile | null = null;
+const pKey = (id: string, what: string) => `stillwater.p.${id}.${what}`;
+
 let mastery = 0.04;
 let totalSolves = 0;
-/** When the river was last played (ms), for the welcome back. */
+/** When this child last rowed (ms), for the welcome back. */
 let lastPlayed = 0;
 let activeStage: N.Stage = N.STAGES[0];
-try {
-  const saved = JSON.parse(localStorage.getItem(SAVE) ?? 'null') as { mastery?: number; solves?: number; last?: number } | null;
+let memory = new L.Memory();
+
+/** Load (or create) the profile with this name, adopting any pre-profile save into the first one made. */
+function loadProfile(name: string) {
+  let pr = profiles.find((q) => q.name.toLowerCase() === name.toLowerCase());
+  if (!pr) {
+    pr = { id: Math.random().toString(36).slice(2, 10), name, last: 0 };
+    if (!profiles.length) {
+      const legacy = readJSON<{ mastery?: number; solves?: number; last?: number }>('stillwater.v3');
+      if (legacy) {
+        writeJSON(pKey(pr.id, 'v3'), legacy);
+        const facts = readJSON<unknown>('stillwater.facts.v1');
+        if (facts) writeJSON(pKey(pr.id, 'facts.v1'), facts);
+      }
+    }
+    profiles.push(pr);
+  }
+  profile = pr;
+  const saved = readJSON<{ mastery?: number; solves?: number; last?: number }>(pKey(pr.id, 'v3'));
+  mastery = 0.04;
+  totalSolves = 0;
+  lastPlayed = 0;
   if (saved && typeof saved.mastery === 'number') {
     mastery = Math.max(0, Math.min(1, saved.mastery));
     totalSolves = saved.solves ?? 0;
     lastPlayed = saved.last ?? 0;
-  } else {
-    const old = JSON.parse(localStorage.getItem('stillwater.v2') ?? 'null') as { stage?: number; solves?: number } | null;
-    if (old && typeof old.stage === 'number') {
-      const anchors = [0.04, 0.22, 0.44, 0.66, 0.84];
-      mastery = Math.max(0, Math.min(1, (anchors[old.stage] ?? 0.04) + Math.min(0.06, (old.solves ?? 0) * 0.008)));
-    }
   }
-} catch {
-  /* storage unavailable */
+  memory = startupParams.has('fresh') ? new L.Memory() : new L.Memory(readJSON(pKey(pr.id, 'facts.v1')));
+  const levelParam = Number(startupParams.get('level'));
+  if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
+  save();
 }
-const levelParam = Number(startupParams.get('level'));
-if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
 const forcedStage = N.stageForId(startupParams.get('stage'));
 if (forcedStage) activeStage = forcedStage;
-// the facts the river remembers (P1), kept beside the proficiency
-const FACTS = 'stillwater.facts.v1';
-let memory = new L.Memory();
-try {
-  memory = new L.Memory(JSON.parse(localStorage.getItem(FACTS) ?? 'null'));
-} catch {
-  /* storage unavailable */
-}
-if (startupParams.has('fresh')) memory = new L.Memory();
 const save = () => {
-  try {
-    localStorage.setItem(SAVE, JSON.stringify({ mastery, solves: totalSolves, last: Date.now() }));
-    localStorage.setItem(FACTS, JSON.stringify(memory));
-  } catch {
-    /* storage unavailable */
-  }
+  if (!profile) return;
+  profile.last = Date.now();
+  writeJSON(pKey(profile.id, 'v3'), { mastery, solves: totalSolves, last: profile.last });
+  writeJSON(pKey(profile.id, 'facts.v1'), memory);
+  writeJSON(PROFILES, profiles);
 };
 const stage = () => activeStage;
 
@@ -181,7 +208,7 @@ let selection: Pad[] = [];
 /** While > 0 (seconds), touches are ignored: the dew is lifting, or slipping back. */
 let lock = 0;
 let releaseAt = 0;
-let nextTargetAt = 1.2;
+let nextTargetAt = Infinity; // until a child has picked their name
 let firstTarget = true;
 let lastSolved: number | undefined;
 let checkAt = 0;
@@ -237,9 +264,8 @@ const smooth = (a: number, b: number, x: number) => {
   const k = clamp01((x - a) / (b - a));
   return k * k * (3 - 2 * k);
 };
-const welcome = lastPlayed > 0 && Date.now() - lastPlayed > 6 * 3600_000;
-let stretch = new L.Stretch(null, welcome);
-if (welcome) pond.bloomBoost = 2.2;
+let welcome = false;
+let stretch = new L.Stretch(null, false);
 
 /** The ask in play: how it was framed, and what the child did with it (P2, silently). */
 interface Ask {
@@ -685,6 +711,27 @@ function begin() {
   ui.fadeTitle();
 }
 
+/** A name was chosen at the start: load that child's river and let the asks begin. */
+function startAs(name: string) {
+  loadProfile(name);
+  welcome = lastPlayed > 0 && Date.now() - lastPlayed > 6 * 3600_000;
+  stretch = new L.Stretch(null, welcome);
+  if (welcome) pond.bloomBoost = 2.2;
+  ui.hideStart();
+  begin();
+  nextTargetAt = pond.t + 1.2;
+  canvasEl.focus({ preventScroll: true });
+}
+{
+  const auto = startupParams.get('profile');
+  const names = profiles
+    .slice()
+    .sort((a, b) => b.last - a.last)
+    .map((q) => q.name);
+  if (auto) startAs(auto);
+  else ui.start(names, startAs);
+}
+
 /**
  * Touch on open water is WIND, not a button: a tap is a round puff; a drag is
  * a firm gust that follows the finger and runs on across the water when it
@@ -694,10 +741,11 @@ function begin() {
  */
 let gust: Gust | null = null;
 /**
- * A finger on the boat, or on the water behind it, drives the boat — like a
- * hand at the stern: rest it there and the rower keeps a steady stroke, push
- * it on (drag up) to pull harder, slide it across to steer. A tap is one long
- * pull. The finger stays behind the boat, off the water it's heading into.
+ * The oars only pull when asked. A tap on the boat, or on the water behind
+ * it, is one stroke: the arms push away, the blades go in and pull, and the
+ * boat glides on until the next tap (a solved number rows a few strokes by
+ * itself). Sliding a finger across, behind the boat, steers. The finger stays
+ * behind the boat, off the water it's heading into.
  */
 let helm: { t: number; x: number; y: number; moved: boolean; steer: number } | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
@@ -712,7 +760,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
   if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && liveCount(hitPad)))) {
     helm = { t: performance.now(), x: e.clientX, y: e.clientY, moved: false, steer: pond.boat.heading };
-    pond.boat.helm = { steer: pond.boat.heading, push: 0 };
+    pond.boat.helm = { steer: pond.boat.heading };
     return;
   }
   // a leaf with dew is a choice; anywhere else — water or a dry leaf — the touch is wind
@@ -739,8 +787,8 @@ canvasEl.addEventListener('pointermove', (e) => {
     const dx = e.clientX - helm.x;
     const dy = e.clientY - helm.y;
     if (Math.hypot(dx, dy) > 10) helm.moved = true;
-    // up the screen is on down the river; across steers (about 30° for a thumb's slide)
-    pond.boat.helm = { steer: helm.steer + dx * 0.007, push: Math.max(0, -dy) / 140 };
+    // sliding across steers (about 30° for a thumb's slide); the oars only pull on a tap
+    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) pond.boat.helm = { steer: helm.steer + dx * 0.007 };
     return;
   }
   if (gust && drag) {
@@ -801,6 +849,7 @@ canvasEl.addEventListener('pointercancel', end);
 // keyboard: arrows walk the dewy leaves in view (reading order), Enter/Space chooses
 let focusIx = -1;
 canvasEl.addEventListener('keydown', (e) => {
+  if (!started) return;
   const pads = visibleDewy().sort((a, b) => b.y - a.y || a.x - b.x);
   if (e.key === 'Escape') {
     clearSelection();
@@ -1076,10 +1125,11 @@ Object.defineProperty(window, '__stillwater', {
     selected: selection.map((p) => p.id),
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
+    profile: profile?.name ?? null,
     boat: (() => {
       const [x, y] = toScreen(pond.boat.x, pond.boat.y);
       const b = pond.boat;
-      return { x: Math.round(x), y: Math.round(y), power: Math.round(b.power * 100) / 100, heading: Math.round(b.heading * 100) / 100, helm: !!b.helm };
+      return { x: Math.round(x), y: Math.round(y), power: Math.round(b.power * 100) / 100, heading: Math.round(b.heading * 100) / 100, helm: !!b.helm, speed: Math.round(b.speed), stroke: Math.round(b.stroke * 100) / 100, owed: Math.round((b.strokeTo - b.stroke) * 100) / 100 };
     })(),
     scale,
     frameMs: Math.round(frameMs * 10) / 10,

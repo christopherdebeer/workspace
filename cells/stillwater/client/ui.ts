@@ -114,4 +114,34 @@ export class Overlay {
   announce(text: string) {
     this.live.textContent = text;
   }
+
+  /**
+   * The start: the children who have rowed here before, each a leaf to tap,
+   * and a place for a new name. `pick` is called with the chosen name.
+   */
+  start(names: string[], pick: (name: string) => void) {
+    const start = document.getElementById('start');
+    const list = document.getElementById('names');
+    const form = document.getElementById('newname') as HTMLFormElement | null;
+    const input = document.getElementById('newname-input') as HTMLInputElement | null;
+    if (!start || !list || !form || !input) return;
+    list.innerHTML = '';
+    for (const name of names) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = name;
+      b.addEventListener('click', () => pick(name));
+      list.appendChild(b);
+    }
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = input.value.trim().slice(0, 14);
+      if (name) pick(name);
+    });
+    start.classList.remove('away');
+  }
+
+  hideStart() {
+    document.getElementById('start')?.classList.add('away');
+  }
 }
