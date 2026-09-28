@@ -1,8 +1,8 @@
 {
   "cell": "c15r/drive",
   "cellId": "drive-dcfd1204",
-  "treeVersion": "tree:cb0bb8cf497c672a745a046f5c579c41dc8aa7a6397d44dc23c8d1a9ae7c8e6a",
-  "syncedAt": "2026-09-27T23:57:53.397Z",
+  "treeVersion": "tree:6f699ccfa9a28720bb98b81f073058518bb330cc1c9eea6def2cab0eb77f3b59",
+  "syncedAt": "2026-09-28T01:36:49.131Z",
   "files": {
     "API-AUDIT-2026-09-11.md": "sha256:4520f25ecd5e2fbd159e3870ed438bd1b03c4ed36def3d4da2bcf70f6aab50c4",
     "CLAUDE.md": "sha256:cbc5573077f9516c1c6670aa42f66a65cb99245ec0f1ae1a1a9324da35df3aea",
@@ -99,7 +99,7 @@
     "client/lab-dials.ts": "sha256:a4384291f86bdad09f6780370c3c940233d4c11bad9dc1966137c2a523fe6b02",
     "client/labs.ts": "sha256:656fe6912ce271ac982bd85ac74273688a48466a5f73d7888d6d251221e715cb",
     "client/landmarks.ts": "sha256:f84d2a41a45e77fed0f24da8759e4610885dbb5b2fe2ee9cc337db6f85fa2ae4",
-    "client/main.ts": "sha256:de0bd313eee36521c3068ec87c2797f42c18da75c376d5f276ad25bb2b338e8e",
+    "client/main.ts": "sha256:fd700b7916cb47a9c669ce6f04860a99fc57db973b92f7d599cf5410e669b235",
     "client/marks-lab.ts": "sha256:ed0da10b3fd5b830a089ebc05d654889e21914f42ac27a32aaabd0faa367c2c0",
     "client/marks.ts": "sha256:5c9f621367010d3bad256dba5dc6e2bfd38e1b554754b1c6c00356e681a16dc8",
     "client/menu.ts": "sha256:e0b7a0a7a285d65b56e48d2c9a2ebc77cd1a8b2bbfddcc749329c3d8dc0157e9",
@@ -162,7 +162,7 @@
     "client/survey-store.ts": "sha256:d90c26a752d41d2f04e109d7513500d6dbaa731953eadd581c92f683db19068f",
     "client/sward-cover.ts": "sha256:9010cf79c9b08f39843c863a041a0c3c061745fe2046bf2f4eee57508eaa65bb",
     "client/sward-structure.ts": "sha256:bd59365753a9bda4ed9b2134a8c00a781832c05f01364aa2bc4cd77ceb721ddd",
-    "client/switches.ts": "sha256:074aa4a5574180854799538984ea09d6aafd2d3ac5dd93ec3113eacd836ee7b9",
+    "client/switches.ts": "sha256:b399dd00b289eb29f89a5a3b8649dbe4bd047771208035ecd5e65e6ed40148da",
     "client/sync.ts": "sha256:ac8e03406eb898f4c12e5459a49f3ea3f9aed051424bc22b99bf6f12fb778687",
     "client/tapes.ts": "sha256:678b1436e7ab4c69896330d5b99a090a2f3a6e9cabfa6e201e1a3257dfd3329c",
     "client/terrain-crossing.test.ts": "sha256:5dbc79fdf7cff2f61c3748aeb8766515ab88078df022f900b182eab7aec73e58",
