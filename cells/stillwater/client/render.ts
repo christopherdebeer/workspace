@@ -369,7 +369,7 @@ export class Renderer {
     let fn = 0;
     for (const fish of f.fish) {
       if (!inView(fish.x, fish.y, 60) || fn >= 220) continue;
-      this.fishInst.set(fn++, fish.x, fish.y, fish.heading, fish.size, fish.z, fish.kind, fish.tail, fish.effort, fish.flash, fish.seed, 0, 0);
+      this.fishInst.set(fn++, fish.x, fish.y, fish.heading, fish.size, fish.z, fish.kind, fish.tail, fish.effort, fish.flash, fish.seed, fish.turn, 0);
     }
     this.fishInst.count = fn;
     this.fishInst.upload();

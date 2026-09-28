@@ -729,34 +729,46 @@ function startAs(name: string) {
  * in the middle of the view, clear of the boat. A pad that drifts out of the
  * band is swapped for another. Tapping the pad starts as that child.
  */
-const namePads = new Map<Pad, string>();
+/** A name and the leaf it's written on; `a` fades it out when the leaf sinks or drifts off, and in on a new one. */
+interface NameSlot {
+  name: string;
+  pad: Pad | null;
+  a: number;
+}
 const startNames = profiles
   .slice()
   .sort((a, b) => b.last - a.last)
   .slice(0, 6)
   .map((q) => q.name);
 renderer.setNames(startNames);
+const nameSlots: NameSlot[] = startNames.map((name) => ({ name, pad: null, a: 0 }));
 /** When the start ended (pond time), for fading the names off the leaves. */
 let startedAt = -1;
-function placeNames() {
+function placeNames(dt: number) {
   if (started) return;
-  const names = startNames;
   const inBand = (p: Pad) => {
     const [sx, sy] = toScreen(p.x, p.y);
     // below the title (on the golden-ratio line) and above the name field at the foot
     return sx > 44 && sx < cam.cssW - 44 && sy > cam.cssH * 0.46 && sy < cam.cssH * 0.84 && !pond.onBoat(p.x, p.y);
   };
-  for (const [p, name] of namePads) if (!inBand(p) || !names.includes(name) || !pond.pads.includes(p)) namePads.delete(p);
-  const taken = new Set(namePads.values());
-  const free = pond.pads
-    .filter((p) => !namePads.has(p) && p.r >= 24 && inBand(p))
-    .filter((p) => [...namePads.keys()].every((q) => Math.hypot(q.x - p.x, q.y - p.y) > p.r + q.r + 30))
-    .sort((a, b) => b.r - a.r);
-  for (const name of names) {
-    if (taken.has(name)) continue;
-    const p = free.shift();
-    if (!p) break;
-    namePads.set(p, name);
+  // a name stays legible while its leaf is in the band and afloat; otherwise it
+  // fades, and once gone is written on another leaf, fading in there
+  const ok = (p: Pad | null) => !!p && pond.pads.includes(p) && inBand(p) && p.sink < 0.35;
+  const used = nameSlots.map((s) => s.pad).filter((p): p is Pad => !!p);
+  for (const slot of nameSlots) {
+    const valid = ok(slot.pad);
+    if (!valid && slot.a < 0.03) {
+      const p = pond.pads
+        .filter((q) => !used.includes(q) && q.r >= 24 && ok(q))
+        .filter((q) => used.every((u) => Math.hypot(u.x - q.x, u.y - q.y) > q.r + u.r + 30))
+        .sort((a, b) => b.r - a.r)[0];
+      if (p) {
+        slot.pad = p;
+        used.push(p);
+      } else slot.pad = null;
+    }
+    const target = ok(slot.pad) ? 1 - Math.min(1, slot.pad!.sink / 0.35) : 0;
+    slot.a += (target - slot.a) * (1 - Math.exp(-3.5 * dt));
   }
 }
 
@@ -764,7 +776,9 @@ function placeNames() {
 function nameSprites() {
   const a = started ? Math.max(0, 1 - (pond.t - startedAt) / 0.9) : 1;
   if (a <= 0) return [];
-  return [...namePads].map(([p, name]) => ({ i: startNames.indexOf(name), x: p.x, y: p.y, h: Math.max(13, Math.min(20, p.r * cam.zoom * 0.42)) / cam.zoom, a }));
+  return nameSlots
+    .filter((s) => s.pad && s.a > 0.01)
+    .map((s) => ({ i: startNames.indexOf(s.name), x: s.pad!.x, y: s.pad!.y, h: Math.max(13, Math.min(20, s.pad!.r * cam.zoom * 0.42)) / cam.zoom, a: a * s.a }));
 }
 {
   const auto = startupParams.get('profile');
@@ -796,7 +810,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   if (!started) {
     // a name on a leaf: that child begins. Anything else is just the river, touched
     const p = hit(e.clientX, e.clientY);
-    const name = p && namePads.get(p);
+    const name = p && nameSlots.find((s) => s.pad === p && s.a > 0.5)?.name;
     if (name) {
       p.bob = 1;
       startAs(name);
@@ -1039,7 +1053,21 @@ function frame(now: number) {
     renderer.shiftSim(shift);
     for (const l of lifts) l.y0 -= shift;
   }
-  school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw: cam.cssW / (2 * cam.zoom), hh }, shift, (x, y) => pond.flow(x, y));
+  const hw = cam.cssW / (2 * cam.zoom);
+  const interest: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < pond.floaters.length; i += 4) {
+    const fl = pond.floaters[i];
+    if (Math.abs(fl.x - cam.x) < hw + 40 && Math.abs(fl.y - cam.y) < hh + 40) interest.push({ x: fl.x, y: fl.y });
+  }
+  for (const p of pond.pads) if (p.drops.length && Math.abs(p.x - cam.x) < hw && Math.abs(p.y - cam.y) < hh) interest.push({ x: p.x + p.r * 0.9, y: p.y });
+  school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw, hh }, shift, (x, y) => pond.flow(x, y), interest);
+  // a big fish nosing at the surface: a small ring and a soft sound
+  for (const r of school.rises) {
+    pond.impulses.push({ x: r.x, y: r.y, r: 5, s: 0.35 });
+    pond.rings.push({ x: r.x, y: r.y, t: pond.t, s: 0.3 });
+    sound.drip(0.5, panAt(r.x));
+  }
+  school.rises.length = 0;
   if (shift) atmosphere.shift(shift);
   let breeze = 0;
   scareAcc += dt;
@@ -1082,7 +1110,7 @@ function frame(now: number) {
     sound.release();
   }
   if (!target && pond.t >= nextTargetAt) setTarget();
-  if (!started) placeNames();
+  if (!started) placeNames(dt);
   stepChimes();
   stepOpenings(dt);
   scaffold();
@@ -1190,10 +1218,12 @@ Object.defineProperty(window, '__stillwater', {
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
     profile: profile?.name ?? null,
-    names: [...namePads].map(([p, name]) => {
-      const [x, y] = toScreen(p.x, p.y);
-      return { name, x: Math.round(x), y: Math.round(y) };
-    }),
+    names: nameSlots
+      .filter((s) => s.pad)
+      .map((s) => {
+        const [x, y] = toScreen(s.pad!.x, s.pad!.y);
+        return { name: s.name, x: Math.round(x), y: Math.round(y), a: Math.round(s.a * 100) / 100 };
+      }),
     boat: (() => {
       const [x, y] = toScreen(pond.boat.x, pond.boat.y);
       const b = pond.boat;

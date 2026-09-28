@@ -302,7 +302,7 @@ export const FISH_VS = /* glsl */ `${HEAD}
 layout(location=0) in vec2 aPos;
 layout(location=1) in vec4 iA; // x, y, heading, size
 layout(location=2) in vec4 iB; // z, kind, tail phase, effort
-layout(location=3) in vec4 iC; // flash, seed, -, -
+layout(location=3) in vec4 iC; // flash, seed, turn rate, -
 uniform vec4 uView;
 uniform vec3 uSun;
 uniform float uShadow;
@@ -312,6 +312,7 @@ out vec4 vB;
 out vec2 vUv;
 out float vFlash;
 out float vSeed;
+out float vTurn;
 void main(){
   float z = iB.x;
   float len = iA.w * (1. - z * .18);
@@ -325,6 +326,7 @@ void main(){
   vB = iB;
   vFlash = iC.x;
   vSeed = iC.y;
+  vTurn = iC.z;
   // deeper fish sit smaller and slide slower (and their shadows sit on the bed)
   float d = uShadow > .5 ? 1.2 : .15 + z;
   vec2 clip = (pos - uView.xy) * uView.zw / (1. + uDepthK * d);
@@ -338,6 +340,7 @@ in vec4 vB;
 in vec2 vUv;
 in float vFlash;
 in float vSeed;
+in float vTurn;
 out vec4 o;
 uniform float uShadow;
 uniform sampler2D uOcc;
@@ -356,8 +359,11 @@ void main(){
   float along = P.y;
   // the beat is integrated per fish on the CPU (phase), so it never jumps
   float swim = phase;
-  float bendAmp = .06 + min(speed, 60.) * .0011;
-  float spine = sin(along * 2.6 - swim) * bendAmp * pow(clamp((1. - along) * .5, 0., 1.), 1.6);
+  float bendAmp = .085 + min(speed, 60.) * .0016;
+  // the swimming wave, growing toward the tail; and the whole body curving into a
+  // turn (a C, nose and tail toward the inside, the tail most)
+  float spine = sin(along * 2.6 - swim) * bendAmp * pow(clamp((1. - along) * .5, 0., 1.), 1.6)
+              + vTurn * .05 * (along - .25) * abs(along - .25);
   float x = P.x - spine;
   float soft = fwidth(P.x) * 1.4 + z * .05 + uShadow * .12;
   float u = (along + 1.) * .5;              // 0 tail tip … 1 nose

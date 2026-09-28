@@ -39,6 +39,25 @@ export interface Fish {
   tail: number;
   /** How hard it's swimming through the water (speed relative to the current, smoothed). */
   effort: number;
+  /** Turn rate (rad/s, smoothed): the body bends into a turn. */
+  turn: number;
+  /** Loners: what it's up to — 0 wander, 1 nosing at something, 2 curious about the boat, 3 a dart. */
+  mood: number;
+  /** Seconds until it thinks of something else. */
+  until: number;
+  /** Its goal (a point for 1; a unit direction for 3). */
+  gx: number;
+  gy: number;
+  /** Which way round it circles what it's looking at. */
+  orbit: number;
+  /** Seconds before it will take an interest in the boat again. */
+  cool: number;
+}
+
+/** A large fish nosing at something on the surface: a small ring. */
+export interface Rise {
+  x: number;
+  y: number;
 }
 
 export interface Scare {
@@ -54,6 +73,7 @@ const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 export class School {
   fish: Fish[] = [];
   scares: Scare[] = [];
+  rises: Rise[] = [];
   private schools: number;
 
   constructor(counts: { schools: number; perSchool: number; loners: number }, cx: number, cy: number) {
@@ -70,7 +90,7 @@ export class School {
   private minnow(x: number, y: number, z: number, school: number): Fish {
     const a = rnd(0, Math.PI * 2);
     const cruise = rnd(20, 28);
-    return { x, y, vx: Math.sin(a) * cruise, vy: Math.cos(a) * cruise, z: z + rnd(-0.06, 0.06), size: rnd(5.5, 8.5), kind: 3, phase: rnd(0, 100), cruise, school, flash: 0, tail: rnd(0, 6.3), effort: 0, seed: rnd(0, 1), heading: a };
+    return { x, y, vx: Math.sin(a) * cruise, vy: Math.cos(a) * cruise, z: z + rnd(-0.06, 0.06), size: rnd(5.5, 8.5), kind: 3, phase: rnd(0, 100), cruise, school, flash: 0, tail: rnd(0, 6.3), effort: 0, seed: rnd(0, 1), heading: a, turn: 0, mood: 0, until: 0, gx: 0, gy: 0, orbit: 1, cool: 0 };
   }
 
   private loner(x: number, y: number, i: number): Fish {
@@ -93,7 +113,60 @@ export class School {
       effort: 0,
       seed: rnd(0, 1),
       heading: a,
+      turn: 0,
+      mood: 0,
+      until: rnd(1, 5),
+      gx: 0,
+      gy: 0,
+      orbit: Math.random() < 0.5 ? -1 : 1,
+      cool: rnd(0, 20),
     };
+  }
+
+  /** A big fish thinks of something to do. */
+  private newMood(f: Fish, boat: Boat, interest: Array<{ x: number; y: number }>) {
+    const r = Math.random();
+    f.orbit = Math.random() < 0.5 ? -1 : 1;
+    if (r < 0.12) {
+      // a dart: off it goes, then it settles
+      const a = Math.random() * Math.PI * 2;
+      f.mood = 3;
+      f.gx = Math.sin(a);
+      f.gy = Math.cos(a);
+      f.until = rnd(0.35, 0.6);
+      return;
+    }
+    if (r < 0.5 && interest.length) {
+      // something on the surface nearby: go and nose at it
+      let best: { x: number; y: number } | null = null;
+      let bd = 260;
+      for (let k = 0; k < 8; k++) {
+        const it = interest[Math.floor(Math.random() * interest.length)];
+        const d = Math.hypot(it.x - f.x, it.y - f.y);
+        if (d < bd) {
+          bd = d;
+          best = it;
+        }
+      }
+      if (best) {
+        f.mood = 1;
+        f.gx = best.x;
+        f.gy = best.y;
+        f.until = rnd(5, 9);
+        return;
+      }
+    }
+    // the boat has gone quiet: one or two come and have a look, circling it, then
+    // lose interest for a good while (a visit, not a mob)
+    const visiting = this.fish.reduce((n, g) => n + (g.mood === 2 ? 1 : 0), 0);
+    if (r < 0.62 && f.cool <= 0 && visiting < 2 && boat.speed < 10 && Math.hypot(boat.x - f.x, boat.y - f.y) < 320) {
+      f.mood = 2;
+      f.until = rnd(6, 11);
+      f.cool = f.until + rnd(40, 90);
+      return;
+    }
+    f.mood = 0;
+    f.until = rnd(3, 7);
   }
 
   /** Something startled the water here (a tap, a gust, a bump). */
@@ -108,6 +181,8 @@ export class School {
     view: { x: number; y: number; hw: number; hh: number },
     shift: number,
     flow: (x: number, y: number) => [number, number],
+    /** Things on the surface a big fish might nose at (petals, duckweed, a dewy leaf). */
+    interest: Array<{ x: number; y: number }> = [],
   ) {
     if (shift) for (const f of this.fish) f.y -= shift;
     for (const s of this.scares) s.t += dt;
@@ -215,11 +290,47 @@ export class School {
       const wob = minnow ? 10 : 6;
       fx += Math.sin(f.phase * 0.7 + (minnow ? f.school * 3 : i)) * wob;
       fy += Math.cos(f.phase * 0.53 + (minnow ? f.school * 5 : i * 1.7)) * wob;
-      // rheotaxis: face into the current and hold against it
+      // the big fish are not sentries: they nose at petals and duckweed, come to
+      // look at a boat that has gone quiet (circling it at a distance), and now and
+      // then dart off for the joy of it
+      let curious = false;
+      if (!minnow) {
+        f.until -= dt;
+        f.cool -= dt;
+        if (f.until <= 0) this.newMood(f, boat, interest);
+        if (f.mood === 1 || f.mood === 2) {
+          const gx = f.mood === 2 ? boat.x : f.gx;
+          const gy = f.mood === 2 ? boat.y : f.gy;
+          const dx = gx - f.x;
+          const dy = gy - f.y;
+          const d = Math.hypot(dx, dy) || 1;
+          const keep = f.mood === 2 ? 70 : 10;
+          const ax = dx / d;
+          const ay = dy / d;
+          // draw in until close, then circle it
+          const toward = Math.max(-40, Math.min(40, (d - keep) * 0.9));
+          const ring = d < keep + 40 ? f.cruise * 1.3 : 0;
+          fx += ax * toward - ay * f.orbit * ring;
+          fy += ay * toward + ax * f.orbit * ring;
+          if (f.mood === 1 && d < 12 && f.z < 0.55) {
+            this.rises.push({ x: f.x, y: f.y });
+            f.until = 0;
+          }
+          if (f.mood === 2) {
+            curious = true;
+            if (boat.speed > 14) f.until = 0; // it's moving off; lose interest
+          }
+        } else if (f.mood === 3) {
+          fx += f.gx * 110;
+          fy += f.gy * 110;
+        }
+      }
+      // rheotaxis: face into the current and hold against it (the big fish only
+      // when they've nothing better to do)
       const [cx0, cy0] = flow(f.x, f.y);
       const cs = Math.hypot(cx0, cy0);
       if (cs > 0.5) {
-        const hold = minnow ? 0.25 : f.kind === 0 ? 0.35 : 0.6;
+        const hold = minnow ? 0.25 : f.mood !== 0 ? 0.06 : f.kind === 0 ? 0.25 : 0.4;
         fx += ((-cx0 / cs) * f.cruise - f.vx) * hold;
         fy += ((-cy0 / cs) * f.cruise - f.vy) * hold;
       }
@@ -231,12 +342,16 @@ export class School {
       f.tail += dt * (2.2 + f.effort * 0.11) * Math.sqrt(12 / f.size);
       // it points the way it swims through the water (upstream when holding
       // station), turning smoothly rather than snapping to every nudge
+      let turned = 0;
       if (rel > 1.5) {
         const want = Math.atan2(f.vx - cx0, f.vy - cy0);
         let dh = want - f.heading;
         dh = Math.atan2(Math.sin(dh), Math.cos(dh));
-        f.heading += dh * (1 - Math.exp(-(minnow ? 9 : 5) * dt));
+        turned = dh * (1 - Math.exp(-(minnow ? 9 : 5) * dt));
+        f.heading += turned;
       }
+      // the body bends into a turn (smoothed, so it flexes rather than snaps)
+      f.turn += (Math.max(-3, Math.min(3, turned / Math.max(dt, 1e-3))) - f.turn) * (1 - Math.exp(-6 * dt));
       // keep near the view; lone strays are re-seeded ahead
       const ox = f.x - view.x;
       const oy = f.y - view.y;
@@ -250,7 +365,7 @@ export class School {
       const bx = f.x - boat.x;
       const by = f.y - boat.y;
       const bd = Math.hypot(bx, by) || 1;
-      const shy = 95 * (1.2 - f.z);
+      const shy = curious ? 42 : 95 * (1.2 - f.z);
       if (bd < shy) {
         fx += (bx / bd) * (shy - bd) * 3;
         fy += (by / bd) * (shy - bd) * 3;
