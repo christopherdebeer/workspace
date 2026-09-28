@@ -1194,12 +1194,46 @@ float sdOars(vec2 p, out float blade){
   return min(d, blade);
 }
 
+/**
+ * The rower: a small figure in a red riding-hood cloak, sitting facing the bow
+ * (the oars are pushed — the handles are ahead of them), seen from above. A
+ * rounded hood whose soft point falls back, a glimpse of hair and cheek in its
+ * opening, the cape spread over the shoulders and down the back to a flared,
+ * rippled hem, and sleeved arms reaching to small hands on the oar handles.
+ * The whole figure leans into each stroke.
+ */
+vec2 rowerAt(){ return vec2(0., -6. + sin(uOar.z * TAU) * 2.6 * uOar.y); }
+float sdCape(vec2 q){
+  float hem = -14.5 + sin(q.x * .9 + 1.3) * .9 + sin(q.x * 2.3) * .35;
+  float d = min(sdEllipse(q - vec2(0., -.5), vec2(10.5, 7.5)), sdEllipse(q - vec2(0., -6.5), vec2(12.5, 8.5)));
+  return max(d, hem - q.y);
+}
+float sdHood(vec2 q){
+  vec2 h = q - vec2(0., 2.2);
+  float d = sdEllipse(h, vec2(5.8, 6.4));
+  // the hood's soft point, falling back between the shoulders
+  d = min(d, sdSeg(h, vec2(0., -2.), vec2(0., -9.)) - mix(2.8, 1.2, clamp((-h.y - 2.) / 7., 0., 1.)));
+  return d;
+}
+float sdArms(vec2 p, vec2 at, out float hands){
+  float d = 1e5; hands = 1e5;
+  for (int k = 0; k < 2; k++) {
+    float side = k == 0 ? -1. : 1.;
+    vec2 lock, tip, handle;
+    oar(side, lock, tip, handle);
+    vec2 shoulder = at + vec2(side * 7.5, 1.5);
+    vec2 hand = handle + normalize(lock - handle) * 1.5;
+    d = min(d, sdSeg(p, shoulder, hand) - 2.3);
+    hands = min(hands, length(p - hand) - 1.9);
+  }
+  return d;
+}
 float sdRower(vec2 p){
-  float lean = sin(uOar.z * TAU) * 3. * uOar.y;
-  vec2 q = p - vec2(0., -6. + lean);
-  float body = sdEllipse(q, vec2(11., 7.5));
-  float head = length(q - vec2(0., 1.5)) - 8.5; // the hat brim
-  return min(body, head);
+  vec2 at = rowerAt();
+  vec2 q = p - at;
+  float hands;
+  float arms = sdArms(p, at, hands);
+  return min(min(sdCape(q), sdHood(q)), min(arms, hands));
 }
 
 void main(){
@@ -1282,27 +1316,41 @@ void main(){
     cover = max(cover, oarK);
   }
 
-  // the rower: coat and a woven straw hat
+  // the rower in a red cloak
   float rowK = 1. - smoothstep(-aa, aa, dr);
   if (rowK > 0.) {
-    float lean = sin(uOar.z * TAU) * 3. * uOar.y;
-    vec2 q = p - vec2(0., -6. + lean);
-    vec2 hq = q - vec2(0., 1.5);
-    float hat = length(hq);
-    vec3 rc;
-    if (hat < 8.5) {
-      float a = atan(hq.y, hq.x);
-      float weave = .85 + .15 * sin(hat * 3.2) * sin(a * 18.);
-      rc = vec3(.80, .68, .44) * weave;
-      vec3 n = normalize(vec3(hq / 8.5 * .9, .8));
-      rc *= uAmb + uSunCol * max((dot(n, vec3(Lxy, uSun.z)) + .3) / 1.3, 0.);
-      rc *= 1. - smoothstep(7.5, 8.5, hat) * .25;
-    } else {
-      rc = vec3(.16, .20, .33);
-      vec3 n = normalize(vec3(q / vec2(11., 7.5) * .8, .7));
-      rc *= uAmb + uSunCol * max((dot(n, vec3(Lxy, uSun.z)) + .3) / 1.3, 0.);
-    }
-    col = mix(col, rc, rowK);
+    vec2 at = rowerAt();
+    vec2 q = p - at;
+    vec3 L3 = vec3(Lxy, uSun.z);
+    vec3 lit = uAmb + uSunCol * .9 * sunThrough(vBW) + LAMP * lampAt(vBW) * 1.1;
+    float hands;
+    float dArms = sdArms(p, at, hands);
+    float dHood = sdHood(q);
+    // the cape: soft folds falling from the shoulders, darker at the hem
+    vec3 cloak = vec3(.72, .13, .11);
+    vec2 cq = (q - vec2(0., -4.)) / vec2(12., 10.);
+    vec3 n = normalize(vec3(cq * .9, .75));
+    float fold = .82 + .18 * sin(atan(q.x, -(q.y + 1.)) * 9. + sin(q.y * .4) * 1.5);
+    vec3 rc = cloak * fold * (.55 + .6 * max(dot(n, L3), 0.));
+    rc *= .8 + .2 * smoothstep(-15., -9., q.y);
+    // arms in the same red, over the lap, with small hands on the handles
+    float armK = 1. - smoothstep(-aa, aa, dArms);
+    vec3 sleeve = cloak * .92 * (.7 + .35 * max(dot(normalize(vec3(0., 0., 1.)), L3), 0.));
+    rc = mix(rc, sleeve * (.85 + .15 * smoothstep(-2.3, 0., dArms)), armK);
+    float handK = 1. - smoothstep(-aa, aa, hands);
+    rc = mix(rc, vec3(.93, .74, .60) * .85, handK);
+    // the hood: rounded, a lighter rim, and in its opening (toward the bow) a curl of hair and a cheek
+    float hoodK = 1. - smoothstep(-aa, aa, dHood);
+    vec2 hq = q - vec2(0., 2.2);
+    vec3 hn = normalize(vec3(hq / vec2(5.8, 6.4) * .95, .6));
+    vec3 hood = vec3(.66, .11, .10) * (.5 + .65 * max(dot(hn, L3), 0.));
+    hood += vec3(.35, .08, .06) * smoothstep(-1.2, 0., dHood) * .5;
+    float open_ = length((hq - vec2(0., 3.6)) / vec2(3.4, 2.4));
+    vec3 face = mix(vec3(.30, .17, .09), vec3(.95, .76, .62), smoothstep(.2, .9, (hq.y - 3.2) / 2.5));
+    hood = mix(hood, vec3(.12, .03, .03), (1. - smoothstep(.9, 1.15, open_)) * .8);
+    hood = mix(hood, face, 1. - smoothstep(.7, .9, open_));
+    rc = mix(rc, hood, hoodK);
+    col = mix(col, rc * lit, rowK);
     cover = max(cover, rowK);
   }
   o = vec4(col, 1.) * cover;
