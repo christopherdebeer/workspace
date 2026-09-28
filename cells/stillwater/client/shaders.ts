@@ -1259,7 +1259,8 @@ void main(){
   }
   if (dall > aa) discard;
   vec2 Lxy = rot(uSun.xy, uBoat.z);
-  vec3 light = uAmb + uSunCol * .8 * sunThrough(vBW);
+  // the lantern lights its own boat too, not just the cloak beside it
+  vec3 light = uAmb + uSunCol * .8 * sunThrough(vBW) + LAMP * lampAt(vBW) * 1.1;
   float grain = texture(uNoise, vec2(p.x * .05, p.y * .006)).r;
 
   // hull
