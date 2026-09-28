@@ -50,9 +50,16 @@ class Water extends AudioWorkletProcessor {
     const n = Math.max(1, Math.floor(dur * this.sr));
     this.parts.push({ ph: 0, w: 2 * Math.PI * f / this.sr, a: amp, dec: Math.pow(0.001, 1 / n), grow: Math.pow(rise, 1 / n), pan, wait: Math.floor((delay || 0) * this.sr), att: 0 });
   }
-  burst(amp, dur, bright, pan, delay) {
+  /** Filtered noise; \`attack\` seconds of swell (0 = a crack — a snare, if it's bright). */
+  burst(amp, dur, bright, pan, delay, attack) {
     const n = Math.max(1, Math.floor(dur * this.sr));
-    this.bursts.push({ a: amp, dec: Math.pow(0.001, 1 / n), bright, pan, wait: Math.floor((delay || 0) * this.sr), s1: 0, s2: 0 });
+    const atk = attack ? 1 / Math.max(1, attack * this.sr) : 1;
+    this.bursts.push({ a: amp, dec: Math.pow(0.001, 1 / n), bright, pan, wait: Math.floor((delay || 0) * this.sr), s1: 0, s2: 0, e: atk >= 1 ? 1 : 0, atk });
+  }
+  /** A rising cavity 'bloop': the air a blade drags under, collapsing. */
+  plunge(f0, f1, amp, dur, pan, delay) {
+    const n = Math.max(1, Math.floor(dur * this.sr));
+    this.parts.push({ ph: 0, w: 2 * Math.PI * f0 / this.sr, a: amp, dec: Math.pow(0.001, 1 / n), grow: Math.pow(f1 / f0, 1 / n), pan, wait: Math.floor((delay || 0) * this.sr), att: 0, attRate: 1 / (0.012 * this.sr) });
   }
   /** A bubble of radius r millimetres (Minnaert pitch, rising as it decays). */
   bub(rmm, amp, pan, delay) {
@@ -67,16 +74,22 @@ class Water extends AudioWorkletProcessor {
     if (m.type === 'plop') {
       const s = m.s || 1;
       this.bub(4 + this.rnd() * 3, 0.28 * s, p);
-      this.burst(0.05 * s, 0.05, 0.6, p);
+      this.burst(0.05 * s, 0.08, 0.3, p, 0, 0.006);
       for (let i = 0; i < 4; i++) this.bub(1.2 + this.rnd() * 2, 0.05 * s, p + (this.rnd() - 0.5) * 0.2, 0.03 + this.rnd() * 0.12);
       return;
     }
     if (m.type === 'dip') {
+      // an oar going in is not a crack of noise (that's a snare) but: a low rising
+      // bloop of dragged-under air, a dark swell of displaced water, spray as many
+      // separate droplets thinning out, and bubbles rising after
       const s = m.s || 1;
-      this.burst(0.26 * s, 0.14, 0.75, p);
-      this.burst(0.14 * s, 0.3, 0.3, p, 0.02);
-      this.bub(5 + this.rnd() * 3, 0.16 * s, p, 0.01);
-      for (let i = 0; i < 11; i++) this.bub(1.5 + this.rnd() * 5, 0.09 * s, p + (this.rnd() - 0.5) * 0.25, this.rnd() * 0.25);
+      this.plunge(130 + this.rnd() * 40, 300 + this.rnd() * 80, 0.3 * s, 0.11, p, 0.005);
+      this.burst(0.2 * s, 0.32, 0.08, p, 0, 0.035);
+      for (let i = 0; i < 26; i++) {
+        const t = Math.pow(this.rnd(), 1.8) * 0.28;
+        this.bub(0.5 + this.rnd() * 1.1, (0.025 + this.rnd() * 0.03) * s * (1 - t * 2.5), p + (this.rnd() - 0.5) * 0.35, 0.01 + t);
+      }
+      for (let i = 0; i < 8; i++) this.bub(2 + this.rnd() * 5, 0.07 * s, p + (this.rnd() - 0.5) * 0.25, 0.04 + this.rnd() * 0.3);
       return;
     }
     if (m.type === 'gurgle') {
@@ -131,7 +144,7 @@ class Water extends AudioWorkletProcessor {
       for (let k = this.parts.length - 1; k >= 0; k--) {
         const b = this.parts[k];
         if (b.wait > 0) { b.wait--; continue; }
-        b.att = b.att < 1 ? b.att + 0.02 : 1;
+        b.att = b.att < 1 ? b.att + (b.attRate || 0.02) : 1;
         const v = Math.sin(b.ph) * b.a * b.att;
         b.ph += b.w;
         b.w *= b.grow;
@@ -147,8 +160,9 @@ class Water extends AudioWorkletProcessor {
         const n = this.rnd() * 2 - 1;
         s.s1 += (n - s.s1) * (0.08 + s.bright * 0.6);
         s.s2 += (s.s1 - s.s2) * 0.05;
-        const v = (s.s1 - s.s2 * (1 - s.bright)) * s.a;
-        s.a *= s.dec;
+        if (s.e < 1) s.e = Math.min(1, s.e + s.atk);
+        const v = (s.s1 - s.s2 * (1 - s.bright)) * s.a * s.e;
+        if (s.e >= 1) s.a *= s.dec;
         l += v * (1 - s.pan) * 0.5;
         r += v * (1 + s.pan) * 0.5;
         if (s.a < 0.00005) this.bursts.splice(k, 1);
