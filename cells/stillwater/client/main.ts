@@ -634,6 +634,16 @@ function frame(now: number) {
     shedHidden();
   }
 
+  // `?sinktest=1`: hold the dewy leaf nearest the centre pushed under at one edge (to look at the flooding)
+  if (params.get('sinktest')) {
+    const v = visibleDewy().sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))[0];
+    if (v) {
+      v.caught = true;
+      v.sink = 0.75;
+      v.dx = 0.15;
+      v.dy = 0.02;
+    }
+  }
   const order = drawOrder(pond.pads);
   const thread: Array<[number, number]> = [];
   if (selection.length > 1) {

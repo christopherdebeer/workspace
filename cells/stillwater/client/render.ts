@@ -333,7 +333,7 @@ export class Renderer {
       }
       // soft body: where it's pressed (and how far it gives), and its flex after a knock
       const flex = p.wob * Math.sin(f.time * 7 + p.seed * 30);
-      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, 0, (p.seed * 13.1) % 1, p.dx, p.dy, flex, 0);
+      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, 0, (p.seed * 13.1) % 1, p.dx, p.dy, flex, p.sink);
       if (p.flower) flowers.push(p);
     }
     this.padInst.count = n;

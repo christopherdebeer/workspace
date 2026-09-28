@@ -75,6 +75,13 @@ export interface Pad {
   /** Contact accumulated this step (pad-radius units, toward the contact). */
   cx: number;
   cy: number;
+  /**
+   * How far the leaf is pushed UNDER at its pressed edge (0..1) — by an oar
+   * blade, a hard tap. The shader floods that part of the leaf; the far edge
+   * tips up. `caught`: a blade is holding it this step (for the resurfacing).
+   */
+  sink: number;
+  caught: boolean;
   /** Draw order within a layer. */
   layer: number;
 }
@@ -495,6 +502,8 @@ export class Pond {
         wob: 0,
         cx: 0,
         cy: 0,
+        sink: 0,
+        caught: false,
         layer: rand(),
       };
       pad.drops = layDrops(count, r, rand);
@@ -733,6 +742,7 @@ export class Pond {
    *           goes and slowing to rest
    *   release the classic pair of swirls either side of where the blade left
    */
+  private lastTip: Array<[number, number] | null> = [null, null];
   puddles: Array<{ x: number; y: number; vx: number; vy: number; age: number; life: number; s: number }> = [];
   private shedAcc = 0;
 
@@ -758,15 +768,16 @@ export class Pond {
   splash(x: number, y: number, r: number, s: number, foam = false, pads?: Pad[]): Pad | null {
     const p = this.padAt(x, y, pads);
     if (p) {
-      const dx = p.x - x;
-      const dy = p.y - y;
-      const d = Math.hypot(dx, dy) || 1;
-      p.bob = Math.min(1, p.bob + s * 0.5);
-      p.vx += (dx / d) * s * 10;
-      p.vy += (dy / d) * s * 10;
-      p.wob = Math.min(1, p.wob + s * 0.35);
-      // the water it pushed down comes up round its edge
-      this.impulses.push({ x: p.x - (dx / d) * p.r * 1.02, y: p.y - (dy / d) * p.r * 1.02, r: 6, s: s * 0.4 });
+      // a leaf doesn't hop out of the way: the blow presses it down where it lands
+      const dx = x - p.x;
+      const dy = y - p.y;
+      p.sink = Math.min(1, Math.max(p.sink, s * 0.45));
+      p.cx += (dx / p.r) * 1.5 * s;
+      p.cy += (dy / p.r) * 1.5 * s;
+      p.bob = Math.min(1, p.bob + s * 0.25);
+      p.wob = Math.min(1, p.wob + s * 0.2);
+      p.vx -= (dx / p.r) * s * 2;
+      p.vy -= (dy / p.r) * s * 2;
       return p;
     }
     this.impulses.push({ x, y, r, s, foam });
@@ -804,23 +815,42 @@ export class Pond {
       if (shed) this.shedAcc = 0;
       for (const side of [-1, 1]) {
         const [tx, ty] = this.oarTip(side);
+        // a blade that comes down on a leaf CATCHES it: the struck edge goes under,
+        // the leaf is dragged along with the blade (which is locked in the water while
+        // the boat passes it — so, back along the boat), and the dew there is washed off
+        const last = this.lastTip[side < 0 ? 0 : 1];
+        const tvx = last ? (tx - last[0]) / Math.max(dt, 1e-3) : 0;
+        const tvy = last ? (ty - last[1]) / Math.max(dt, 1e-3) : 0;
         for (const p of near) {
-          const dx = p.x - tx;
-          const dy = p.y - ty;
+          const dx = tx - p.x;
+          const dy = ty - p.y;
           const d = Math.hypot(dx, dy) || 1;
-          const reach = p.r + 7;
-          if (d > reach) continue;
-          // the blade sweeps aft through the leaf's edge: out of the way, and aft with the stroke
-          const pen = reach - d;
-          p.vx += ((dx / d) * pen * 3 - hx * 14 * drive) * dt * 6;
-          p.vy += ((dy / d) * pen * 3 - hy * 14 * drive) * dt * 6;
-          p.x += (dx / d) * pen * 0.25;
-          p.y += (dy / d) * pen * 0.25;
-          p.cx -= (dx / d) * (pen / p.r) * 2;
-          p.cy -= (dy / d) * (pen / p.r) * 2;
-          p.wob = Math.min(1, p.wob + drive * dt * 2);
-          p.bob = Math.max(p.bob, 0.35);
+          if (d > p.r + 4) continue;
+          const into = Math.min(1, (p.r + 4 - d) / (p.r * 0.55));
+          p.caught = true;
+          p.sink = Math.min(1, Math.max(p.sink, (0.35 + 0.65 * into) * drive));
+          p.cx += (dx / p.r) * 2.2;
+          p.cy += (dy / p.r) * 2.2;
+          // held by the blade: its motion follows the blade's, and a little aft with the pull
+          const hold = 5 * drive * dt;
+          p.vx += (tvx - hx * 6 * drive - p.vx) * hold;
+          p.vy += (tvy - hy * 6 * drive - p.vy) * hold;
+          p.va += ((dx * (tvy - p.vy) - dy * (tvx - p.vx)) / (p.r * p.r)) * 0.5 * hold;
+          p.wob = Math.min(1, p.wob + drive * dt);
+          // water pours over the flooded edge
+          if (Math.random() < dt * 10) this.impulses.push({ x: p.x + (dx / d) * p.r, y: p.y + (dy / d) * p.r, r: 5, s: 0.35, foam: true });
+          if (!p.selected) {
+            const c = Math.cos(p.ang);
+            const sn = Math.sin(p.ang);
+            for (const dr of p.drops) {
+              if (dr.to <= 0) continue;
+              const wx = p.x + (c * dr.x - sn * dr.y) * p.r;
+              const wy = p.y + (sn * dr.x + c * dr.y) * p.r;
+              if (Math.hypot(wx - tx, wy - ty) < p.r * 0.55 * p.sink + 4) dr.to = 0;
+            }
+          }
         }
+        this.lastTip[side < 0 ? 0 : 1] = [tx, ty];
         if (!this.padAt(tx, ty, near)) {
           this.impulses.push({ x: tx, y: ty, r: 6, s: 0.35 * k * drive, foam: Math.random() < 0.3 * drive });
           if (shed) {
@@ -833,6 +863,8 @@ export class Pond {
         }
       }
     }
+
+    if (!(rowing && drive > 0.05)) this.lastTip = [null, null];
 
     // the release: a pair of swirls where the blade left
     if (rowing && crossed(0.25)) {
@@ -1120,6 +1152,19 @@ export class Pond {
       p.cx = 0;
       p.cy = 0;
       p.wob *= Math.exp(-1.6 * dt);
+      // let go, a sunk leaf comes back up, shedding the water off its face
+      if (!p.caught && p.sink > 0.01) {
+        const before = p.sink;
+        p.sink *= Math.exp(-2.2 * dt);
+        if (before > 0.3 && p.sink <= 0.3) {
+          const l = Math.hypot(p.dx, p.dy) || 1;
+          this.impulses.push({ x: p.x + (p.dx / l) * p.r * 0.8, y: p.y + (p.dy / l) * p.r * 0.8, r: 8, s: 0.7, foam: true });
+          this.rings.push({ x: p.x, y: p.y, t: this.t, s: 0.5 });
+          p.bob = Math.min(1, p.bob + 0.5);
+          p.wob = Math.min(1, p.wob + 0.4);
+        }
+      }
+      p.caught = false;
       p.sel += ((p.selected ? 1 : 0) - p.sel) * (1 - Math.exp(-6 * dt));
       for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : 5) * dt));
       p.drops = p.drops.filter((d) => d.to > 0 || d.a > 0.01);

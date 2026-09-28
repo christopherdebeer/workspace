@@ -378,6 +378,7 @@ out float vAng;
 out float vR;
 out vec2 vW;
 out vec3 vDent;
+out float vSink;
 void main(){
   float s = uMode > .5 && uMode < 1.5 ? 1.02 : 1.36;
   vec2 q = aPos * s;
@@ -390,6 +391,7 @@ void main(){
   vR = r;
   vW = iA.xy + w;
   vDent = vec3(rot(iD.xy, -iA.w), iD.z);
+  vSink = iD.w;
   float par = uMode > 1.5 ? 1. / (1. + uDepthK * iC.z) : 1.;
   gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw * par, 0., 1.);
 }`;
@@ -399,6 +401,7 @@ in vec2 vP;
 in vec4 vB;
 in vec4 vC;
 in vec3 vDent;
+in float vSink;
 in float vAng;
 in float vR;
 in vec2 vW;
@@ -505,6 +508,12 @@ float heightAt(vec2 p){
   h += edgeLift(leafAngle(p)) * smoothstep(.62, 1., len) * .17;
   // a pressed edge rides up over what it meets
   h += length(vDent.xy) * pressAt(p) * smoothstep(.45, 1., len) * 1.1;
+  // pushed under at one edge, the leaf pivots: the struck side goes down, the far side tips up
+  float gv = length(vDent.xy);
+  if (vSink > .01 && gv > .001) {
+    float along = dot(p, vDent.xy / gv);
+    h -= vSink * along * .16;
+  }
   h -= .004 * veins(p, len);
   h += .014 * (texture(uNoise, p * .5 + so * 2.3).g - .5);
   return h;
@@ -670,6 +679,24 @@ void main(){
   // keyboard focus: a thin bright ring
   col = mix(col, vec3(1., .95, .8), vC.y * (1. - smoothstep(0., aa * 2., abs(d + .03))) * .8);
 
+  // under the water where it's pushed down: the leaf seen through a film of river, a bright waterline
+  float gvs = length(vDent.xy);
+  if (vSink > .01 && gvs > .001) {
+    vec2 dir = vDent.xy / gvs;
+    // the waterline wavers with the little waves lapping over the leaf
+    float lap = (texture(uNoise, vec2(dot(p, vec2(-dir.y, dir.x)) * .9, uTime * .15)).r - .5) * .07;
+    float wet = dot(p, dir) - (1. - vSink * 1.25) + lap;
+    float under = smoothstep(-.02, .06, wet);
+    // deeper under the further past the line: darker, cooler, flatter
+    float depthK = clamp(wet * 2.5, 0., 1.);
+    float lum = dot(col, vec3(.3, .59, .11));
+    vec3 river = mix(vec3(lum), col, .55) * mix(vec3(.55, .68, .62), vec3(.28, .42, .40), depthK) + uAmb * vec3(.03, .10, .09);
+    // light playing on the water sheeting over it
+    float glint = texture(uNoise, vW / 9. + uTime * vec2(.06, .03)).r * texture(uNoise, vW / 5. - uTime * .05).g;
+    river += uSunCol * pow(glint, 3.) * .35;
+    col = mix(col, river, under);
+    col += vec3(.8, .95, .9) * exp(-wet * wet * 1400.) * vSink * .55;
+  }
   // the leaf margin: a fine paler line, as the blade thins to its edge
   col = mix(col, col * 1.2 + vec3(.05, .05, .01), (1. - smoothstep(-aa * 2.5, -aa * .5, d)) * .5);
   float cover = 1. - smoothstep(-aa, aa, d);
@@ -1042,6 +1069,23 @@ void oar(float side, out vec2 lock, out vec2 tip, out vec2 handle){
   handle = lock - dir * 15.;
 }
 
+/** 0 feathered … 1 squared: the blade turns on edge just before the catch and back after the release. */
+float oarSquare(){ return smoothstep(-.3, .15, cos(uOar.z * TAU)); }
+
+/** How far under the water the oar is at p (the blade end, through the pull), 0..1. */
+float oarUnder(vec2 p){
+  float u = 0.;
+  for (int k = 0; k < 2; k++) {
+    float side = k == 0 ? -1. : 1.;
+    vec2 lock, tip, handle;
+    oar(side, lock, tip, handle);
+    vec2 dir = normalize(tip - lock);
+    float fromTip = dot(tip - p, dir);
+    u = max(u, 1. - smoothstep(11., 16., fromTip));
+  }
+  return u * smoothstep(-.05, .3, cos(uOar.z * TAU)) * step(.05, uOar.y);
+}
+
 float sdOars(vec2 p, out float blade){
   float d = 1e5; blade = 1e5;
   for (int k = 0; k < 2; k++) {
@@ -1052,7 +1096,9 @@ float sdOars(vec2 p, out float blade){
     d = min(d, sdSeg(p, handle, tip - dir * 10.) - 1.4);
     vec2 bp = p - (tip - dir * 3.);
     vec2 bl = vec2(dot(bp, vec2(dir.y, -dir.x)), dot(bp, dir));
-    blade = min(blade, sdEllipse(bl, vec2(3.4, 9.)));
+    // feathered (flat, wide from above) on the return; squared (on edge, thin) through the pull
+    float wide = mix(3.8, 1.3, oarSquare());
+    blade = min(blade, sdEllipse(bl, vec2(wide, 9.)));
   }
   return min(d, blade);
 }
@@ -1074,6 +1120,13 @@ void main(){
   float dr = sdRower(p);
   float dall = min(dh, min(doar, dr));
   if (uShadow > .5) {
+    // lifted on the return the oars stand higher, so their shadows fall further; the
+    // submerged blades cast none
+    float bladeS;
+    vec2 lift = rot(uSun.xy, uBoat.z) * (1. - oarSquare()) * 8.;
+    float doarS = sdOars(p + lift, bladeS);
+    doarS = mix(doarS, 1e3, oarUnder(p + lift));
+    dall = min(dh, min(doarS, dr));
     float a = 1. - smoothstep(-4., 5., dall);
     if (a < .003) discard;
     o = vec4(0., 0., 0., a * .42);
@@ -1129,7 +1182,12 @@ void main(){
     // wet exactly while the blade drives through the water (cos > 0; see oarWater in world.ts)
     float wet = uOar.y * smoothstep(0., .3, cos(uOar.z * TAU));
     oc = mix(oc, vec3(.12, .20, .17), bladeK * wet * .55);
-    col = mix(col, oc * light, oarK);
+    // the end in the water: seen through the river, dimmer and green, with a waterline where it goes in
+    float sub = oarUnder(p);
+    oc = mix(oc * light, oc * vec3(.35, .5, .45) * light + vec3(.02, .06, .05), sub * .8);
+    oarK *= 1. - sub * .35;
+    col = mix(col, oc, oarK);
+    col += vec3(.8, .95, .9) * oarK * sub * (1. - sub) * 1.4;
     cover = max(cover, oarK);
   }
 
