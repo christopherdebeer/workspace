@@ -747,7 +747,7 @@ let gust: Gust | null = null;
  * itself). Sliding a finger across, behind the boat, steers. The finger stays
  * behind the boat, off the water it's heading into.
  */
-let helm: { t: number; x: number; y: number; moved: boolean; steer: number } | null = null;
+let helm: { t: number; x: number; y: number; moved: boolean; steer: number; sign: number; bias: number } | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
 
 canvasEl.addEventListener('pointerdown', (e) => {
@@ -759,7 +759,10 @@ canvasEl.addEventListener('pointerdown', (e) => {
   const hitPad = hit(e.clientX, e.clientY);
   // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
   if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && liveCount(hitPad)))) {
-    helm = { t: performance.now(), x: e.clientX, y: e.clientY, moved: false, steer: pond.boat.heading };
+    // where on the boat: across (a tap there leans on that oar) and fore or aft of the
+    // centre (dragging the front half swings the bow, the back half swings the stern)
+    const [lx, ly] = pond.boatLocal(bwx, bwy);
+    helm = { t: performance.now(), x: e.clientX, y: e.clientY, moved: false, steer: pond.boat.heading, sign: ly > 0 ? 1 : -1, bias: Math.max(-1, Math.min(1, lx / 30)) };
     pond.boat.helm = { steer: pond.boat.heading };
     return;
   }
@@ -787,8 +790,9 @@ canvasEl.addEventListener('pointermove', (e) => {
     const dx = e.clientX - helm.x;
     const dy = e.clientY - helm.y;
     if (Math.hypot(dx, dy) > 10) helm.moved = true;
-    // sliding across steers (about 30° for a thumb's slide); the oars only pull on a tap
-    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) pond.boat.helm = { steer: helm.steer + dx * 0.007 };
+    // sliding across steers (about 30° for a thumb's slide), turning the boat about its
+    // centre: the half you hold follows the finger. The oars only pull on a tap
+    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) pond.boat.helm = { steer: helm.steer + dx * 0.007 * helm.sign };
     return;
   }
   if (gust && drag) {
@@ -835,7 +839,7 @@ const end = (e: PointerEvent) => {
   pointerId = null;
   lastHit = null;
   if (helm) {
-    if (!helm.moved && performance.now() - helm.t < 350) pond.stroke();
+    if (!helm.moved && performance.now() - helm.t < 350) pond.stroke(helm.bias);
     pond.boat.helm = null;
     helm = null;
   }

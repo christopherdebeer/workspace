@@ -247,6 +247,10 @@ export interface Boat {
   helm: { steer: number } | null;
   /** Stroke phase the oars are working toward: each tap or solved number queues one. */
   strokeTo: number;
+  /** Rowing rhythm, 0..1: taps in quick succession pull harder (it fades when they stop). */
+  rhythm: number;
+  /** A lean on one oar from a tap off the centreline (radians of heading, fading). */
+  veer: number;
   /** Until this time the boat keeps the heading it was given instead of following the channel. */
   manualUntil: number;
 }
@@ -371,7 +375,7 @@ export class Pond {
   trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
   private trailAcc = 0;
   // at rest the oars sit at the finish (stroke .25): a tap pushes the arms away, then pulls
-  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0.25, rowing: 0, sway: 0, power: 0.2, helm: null, manualUntil: 0, strokeTo: 0.25 };
+  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0.25, rowing: 0, sway: 0, power: 0.2, helm: null, manualUntil: 0, strokeTo: 0.25, rhythm: 0, veer: 0 };
   rope: Float32Array;
   ropePrev: Float32Array;
   /** Accumulated rebase offset: world y + origin is the "true" distance travelled. */
@@ -1008,7 +1012,15 @@ export class Pond {
   }
 
   /** One long pull on the oars (a tap on the boat). */
-  stroke() {
+  /**
+   * A tap: one stroke. Taps in quick succession find a rhythm and pull harder;
+   * `bias` (−1 left … 1 right, where the tap fell across the boat) leans on
+   * that oar, so tapping to the right veers the boat right a little.
+   */
+  stroke(bias = 0) {
+    const b = this.boat;
+    b.rhythm = Math.min(1, b.rhythm + 0.4);
+    b.veer = clamp(b.veer + clamp(bias, -1, 1) * 0.38, -0.75, 0.75);
     this.queueStrokes(1);
   }
 
@@ -1024,6 +1036,14 @@ export class Pond {
     const lx = (x - b.x) * c - (y - b.y) * s;
     const ly = (x - b.x) * s + (y - b.y) * c;
     return ly < -BOAT_LEN * 0.4 && Math.abs(lx) < 150;
+  }
+
+  /** A world point in the boat's frame: across (right positive) and along (bow positive). */
+  boatLocal(x: number, y: number): [number, number] {
+    const b = this.boat;
+    const c = Math.cos(b.heading);
+    const s = Math.sin(b.heading);
+    return [(x - b.x) * c - (y - b.y) * s, (x - b.x) * s + (y - b.y) * c];
   }
 
   /** Is a world point on the boat (hull, with a little grace)? */
@@ -1065,10 +1085,14 @@ export class Pond {
       want = clamp(Math.atan2(this.channel(b.y + look) - b.x, look), -0.42, 0.42) + Math.sin(this.t * 0.13) * 0.04;
     }
     // the oars only work while a stroke is owed (a tap, or a solved number): the arms
-    // push away, the blades go in and pull, and then the boat glides, waiting
+    // push away, the blades go in and pull, and then the boat glides, waiting.
+    // A rhythm of taps pulls harder; the lean from an off-centre tap fades
+    b.rhythm *= Math.exp(-0.2 * dt);
+    b.veer *= Math.exp(-0.3 * dt);
+    want = clamp(want + b.veer, -1.3, 1.3);
     const pending = b.strokeTo - b.stroke;
     const working = pending > 1e-4;
-    const effort = working ? (b.surge > 0 ? 1 : 0.62) : 0.2;
+    const effort = working ? (b.surge > 0 ? 1 : 0.55 + 0.45 * b.rhythm) : 0.2;
     b.power += (effort - b.power) * (1 - Math.exp(-(working ? 6 : 1.5) * dt));
     b.rowing += ((working ? 1 : 0) - b.rowing) * (1 - Math.exp(-(working ? 7 : 2.2) * dt));
     const prev = b.stroke;
