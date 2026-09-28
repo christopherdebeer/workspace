@@ -1,0 +1,534 @@
+/**
+ * The river as a place: an endless field of lily pads generated ahead of the
+ * boat along a meandering channel, every one of them a floating body.
+ *
+ * WORLD UNITS. One unit is one CSS pixel at zoom 1; +y is downstream-forward
+ * (up the screen). The boat sits a little below centre and the camera follows
+ * it, so "progress" is the boat really moving through a field that is really
+ * there — never a new screen.
+ *
+ * EVERY PAD IS THE SAME KIND OF THING. Bank pads, channel pads, pads with dew,
+ * pads without: one struct, one physics step, one shader. Which ones carry dew
+ * is the pond's business (`condense`), not a layout.
+ *
+ * PHYSICS, kept deliberately soft:
+ *   - a slack stem tethers each pad to where it grew, so a pushed pad drifts
+ *     back rather than leaving for ever (and drags its anchor if shoved far);
+ *   - pad–pad contact is a soft spring with a little friction-to-spin, so a
+ *     crowded bank settles overlapping slightly, the way real pads do;
+ *   - the boat is a capsule that shoulders pads aside, spinning them by the
+ *     side it catches them on, and loses a breath of speed to each bump.
+ *
+ * REBASING. Positions would grow without bound on a long journey; every
+ * REBASE units of travel everything shifts back by REBASE. All world-anchored
+ * shader noise uses power-of-two periods that divide REBASE, so the seam is
+ * invisible.
+ */
+
+export const REBASE = 8192;
+
+export interface Drop {
+  /** Pad-local position and radius (pad radius = 1). */
+  x: number;
+  y: number;
+  r: number;
+  /** Presence 0..1 (animated towards `to`). */
+  a: number;
+  to: number;
+}
+
+export interface Pad {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  ang: number;
+  va: number;
+  ax: number;
+  ay: number;
+  r: number;
+  seed: number;
+  bank: boolean;
+  drops: Drop[];
+  /** Selected by the player (the thread passes through it). */
+  selected: boolean;
+  /** Animated selection glow 0..1. */
+  sel: number;
+  /** Dip from a tap, decays. */
+  bob: number;
+  /** Keyboard focus ring. */
+  focus: boolean;
+  /** 0 = none, else 1 + variant: a water lily blooming on this pad. */
+  flower: number;
+  /** In contact with the hull last step (to fire a bump only on first touch). */
+  touching: boolean;
+  /** Draw order within a layer. */
+  layer: number;
+}
+
+export interface Deep {
+  x: number;
+  y: number;
+  r: number;
+  ang: number;
+  seed: number;
+  depth: number;
+}
+
+export interface Impulse {
+  x: number;
+  y: number;
+  r: number;
+  s: number;
+}
+
+export interface Bump {
+  x: number;
+  y: number;
+  strength: number;
+}
+
+export interface Boat {
+  x: number;
+  y: number;
+  heading: number;
+  speed: number;
+  /** Speed still to be granted from a solve, fed in smoothly. */
+  surge: number;
+  stroke: number;
+  rowing: number;
+  sway: number;
+}
+
+export const BOAT_LEN = 112;
+export const BOAT_BEAM = 40;
+
+type Rand = () => number;
+
+export function seeded(seed: number): Rand {
+  let s = seed >>> 0 || 1;
+  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+}
+
+const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
+const smooth = (a: number, b: number, x: number) => {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+/** Lay `count` countable drops on a pad of radius `r` (world units), clear of the notch and each other. */
+export function layDrops(count: number, r: number, rand: Rand): Drop[] {
+  const out: Drop[] = [];
+  const base = (clamp(0.2 * r, 6.2, 9.5) / r) * (count > 3 ? 0.82 : 1) * (count > 5 ? 0.86 : 1);
+  for (let tries = 0; out.length < count && tries < 400; tries++) {
+    const dr = base * (0.82 + rand() * 0.36);
+    const ring = 0.72 - dr;
+    const rad = Math.sqrt(rand()) * ring;
+    const a = rand() * Math.PI * 2;
+    const x = Math.sin(a) * rad;
+    const y = Math.cos(a) * rad;
+    // the notch opens along local +y
+    const ang = Math.abs(Math.atan2(x, y));
+    if (ang < 0.42 && rad > 0.12) continue;
+    if (out.some((d) => Math.hypot(d.x - x, d.y - y) < (d.r + dr) * 1.55)) continue;
+    out.push({ x, y, r: dr, a: 0, to: 1 });
+  }
+  return out;
+}
+
+export const liveCount = (p: Pad) => p.drops.reduce((n, d) => n + (d.to > 0 ? 1 : 0), 0);
+
+export class Pond {
+  pads: Pad[] = [];
+  deep: Deep[] = [];
+  impulses: Impulse[] = [];
+  bumps: Bump[] = [];
+  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0 };
+  rope: Float32Array;
+  ropePrev: Float32Array;
+  /** Accumulated rebase offset: world y + origin is the "true" distance travelled. */
+  origin = 0;
+  private genY = -600;
+  private nextId = 1;
+  private rand: Rand;
+  halfW = 420;
+  t = 0;
+  /** Chooses drops for a freshly grown pad (the game's current stage decides). */
+  dewFor: (rand: Rand) => number = () => 0;
+
+  constructor(seed: number) {
+    this.rand = seeded(seed);
+    this.boat.x = this.channel(0);
+    const n = 30;
+    this.rope = new Float32Array(n * 2);
+    this.ropePrev = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      this.rope[i * 2] = this.ropePrev[i * 2] = this.boat.x;
+      this.rope[i * 2 + 1] = this.ropePrev[i * 2 + 1] = -BOAT_LEN * 0.48 - i * 9;
+    }
+  }
+
+  /** Channel centre line: a slow meander, in rebased world y. */
+  channel(y: number): number {
+    const Y = y + this.origin;
+    return 95 * Math.sin(Y / 1150) + 42 * Math.sin(Y / 430 + 1.3) + 16 * Math.sin(Y / 170 + 4.1);
+  }
+
+  /** Open-water half width: breathes between a narrow run and a wide pool. */
+  channelHalf(y: number): number {
+    const Y = y + this.origin;
+    return 84 + 28 * Math.sin(Y / 760 + 0.4) + 14 * Math.sin(Y / 290 + 2.2);
+  }
+
+  /** Grow pads until the field reaches `yMax`. */
+  ensure(yMax: number) {
+    while (this.genY < yMax) {
+      const y0 = this.genY;
+      this.genY += 200;
+      this.grow(y0, this.genY);
+    }
+  }
+
+  /** Regrow everything around the boat (after a resize wider than the field was grown for). */
+  regrow(halfW: number, yMin: number) {
+    this.halfW = halfW;
+    this.pads = this.pads.filter((p) => p.y < yMin);
+    this.deep = this.deep.filter((d) => d.y < yMin);
+    this.genY = yMin;
+  }
+
+  private grow(y0: number, y1: number) {
+    const rand = this.rand;
+    const span = this.halfW * 2 + 200;
+    const attempts = Math.round(((y1 - y0) * span) / 260);
+    const near = this.pads.filter((p) => p.y > y0 - 160);
+    for (let i = 0; i < attempts; i++) {
+      const y = y0 + rand() * (y1 - y0);
+      const cx = this.channel(y);
+      const x = cx + (rand() * 2 - 1) * (this.halfW + 100);
+      const off = Math.abs(x - cx);
+      const half = this.channelHalf(y);
+      const bank = off > half;
+      if (!bank && rand() > 0.035) continue;
+      const deepness = smooth(half, half + 260, off);
+      const r = bank ? 26 + rand() * 34 + deepness * 34 * rand() : 22 + rand() * 14;
+      const spacing = bank ? 0.72 : 1.05;
+      let ok = true;
+      for (const p of near) {
+        const need = (p.r + r) * (p.bank && bank ? spacing : 1.0);
+        if (Math.abs(p.y - y) < need && Math.hypot(p.x - x, p.y - y) < need) {
+          ok = false;
+          break;
+        }
+      }
+      // leave the boat's own water clear at the start
+      if (ok && Math.abs(y - this.boat.y) < BOAT_LEN && Math.abs(x - this.boat.x) < BOAT_BEAM + r + 30) ok = false;
+      if (!ok) continue;
+      const flower = bank && rand() < 0.07 ? 1 + Math.floor(rand() * 3) : 0;
+      const count = flower ? 0 : this.dewFor(rand);
+      const pad: Pad = {
+        id: this.nextId++,
+        x,
+        y,
+        vx: 0,
+        vy: 0,
+        ang: rand() * Math.PI * 2,
+        va: 0,
+        ax: x,
+        ay: y,
+        r,
+        seed: rand(),
+        bank,
+        drops: [],
+        selected: false,
+        sel: 0,
+        bob: 0,
+        focus: false,
+        flower,
+        touching: false,
+        layer: rand(),
+      };
+      pad.drops = layDrops(count, r, rand);
+      for (const d of pad.drops) d.a = 1;
+      this.pads.push(pad);
+      near.push(pad);
+    }
+    // submerged leaves and weed beds, seen through the water
+    const deepCount = Math.round(((y1 - y0) * span) / 9000);
+    for (let i = 0; i < deepCount; i++) {
+      const y = y0 + rand() * (y1 - y0);
+      this.deep.push({
+        x: this.channel(y) + (rand() * 2 - 1) * (this.halfW + 80),
+        y,
+        r: 22 + rand() * 40,
+        ang: rand() * Math.PI * 2,
+        seed: rand(),
+        depth: 0.35 + rand() * 0.55,
+      });
+    }
+    this.pads.sort((a, b) => Number(b.bank) - Number(a.bank) || a.layer - b.layer);
+  }
+
+  /** Forget what is far behind. Selected pads are kept so a selection never vanishes mid-gesture. */
+  cull(yMin: number) {
+    this.pads = this.pads.filter((p) => p.y > yMin || p.selected);
+    this.deep = this.deep.filter((d) => d.y > yMin);
+  }
+
+  rebaseIfNeeded(): number {
+    if (this.boat.y < REBASE) return 0;
+    const s = REBASE;
+    this.origin += s;
+    this.genY -= s;
+    this.boat.y -= s;
+    for (const p of this.pads) {
+      p.y -= s;
+      p.ay -= s;
+    }
+    for (const d of this.deep) d.y -= s;
+    for (let i = 1; i < this.rope.length; i += 2) {
+      this.rope[i] -= s;
+      this.ropePrev[i] -= s;
+    }
+    return s;
+  }
+
+  /** Grant forward glide for a solve: roughly `distance` units, fed in over a couple of seconds. */
+  propel(distance: number) {
+    this.boat.surge += distance * 0.34;
+  }
+
+  bow(): [number, number] {
+    const b = this.boat;
+    return [b.x + Math.sin(b.heading) * BOAT_LEN * 0.4, b.y + Math.cos(b.heading) * BOAT_LEN * 0.4];
+  }
+
+  step(dt: number, active: { y0: number; y1: number }, reduced: boolean) {
+    this.t += dt;
+    this.stepBoat(dt, reduced);
+    this.stepPads(dt, active);
+    this.stepRope();
+  }
+
+  private stepBoat(dt: number, reduced: boolean) {
+    const b = this.boat;
+    // feed the surge into speed smoothly, like a few strokes of the oars
+    const feed = Math.min(b.surge, dt * (18 + b.surge * 0.9));
+    b.surge -= feed;
+    b.speed += feed;
+    const idle = reduced ? 0 : 2.2;
+    b.speed += (idle - b.speed) * (1 - Math.exp(-0.34 * dt));
+    b.rowing += ((b.surge > 1 || b.speed > 14 ? 1 : 0) - b.rowing) * (1 - Math.exp(-2.5 * dt));
+    // steer for the channel ahead, only as fast as the boat is moving
+    const look = 170;
+    const aim = Math.atan2(this.channel(b.y + look) - b.x, look);
+    const want = clamp(aim, -0.42, 0.42) + Math.sin(this.t * 0.13) * 0.04;
+    b.heading += (want - b.heading) * (1 - Math.exp(-dt * (0.25 + b.speed / 40)));
+    b.x += Math.sin(b.heading) * b.speed * dt;
+    b.y += Math.cos(b.heading) * b.speed * dt;
+    b.sway = Math.sin(this.t * 0.7) * 0.012 + Math.sin(this.t * 0.31) * 0.01;
+    const prev = b.stroke;
+    b.stroke += dt * (0.55 + b.speed / 70) * b.rowing;
+    // the blades catch the water at the top of each stroke
+    if (Math.floor(prev) !== Math.floor(b.stroke) && b.rowing > 0.3) {
+      for (const side of [-1, 1]) {
+        const [tx, ty] = this.oarTip(side);
+        this.impulses.push({ x: tx, y: ty, r: 7, s: 0.9 * b.rowing });
+      }
+    }
+    // the bow parts the water continuously
+    if (b.speed > 4) {
+      const [bx, by] = this.bow();
+      this.impulses.push({ x: bx, y: by, r: 9, s: Math.min(0.5, b.speed / 90) });
+    }
+  }
+
+  /** Oar blade tip in world space (side -1 port, +1 starboard). */
+  oarTip(side: number): [number, number] {
+    const b = this.boat;
+    const sweep = this.oarAngle();
+    const lx = side * (BOAT_BEAM * 0.42 + Math.cos(sweep) * 56);
+    const ly = 4 - Math.sin(sweep) * 30;
+    const c = Math.cos(b.heading);
+    const s = Math.sin(b.heading);
+    return [b.x + lx * c + ly * s, b.y - lx * s + ly * c];
+  }
+
+  /** Current oar sweep (radians): resting when idle, a slow stroke when rowing. */
+  oarAngle(): number {
+    const b = this.boat;
+    const stroke = Math.sin(b.stroke * Math.PI * 2);
+    return 0.35 + (stroke * 0.5 - 0.1) * b.rowing + Math.sin(this.t * 0.5) * 0.04;
+  }
+
+  private stepPads(dt: number, active: { y0: number; y1: number }) {
+    const pads = this.pads.filter((p) => p.y > active.y0 && p.y < active.y1);
+    const b = this.boat;
+    const hc = Math.cos(b.heading);
+    const hs = Math.sin(b.heading);
+    const bvx = hs * b.speed;
+    const bvy = hc * b.speed;
+    const half = BOAT_LEN * 0.36;
+    const sx = b.x - hs * half;
+    const sy = b.y - hc * half;
+    const ex = b.x + hs * half;
+    const ey = b.y + hc * half;
+    const hullR = BOAT_BEAM * 0.5;
+    const drag = Math.exp(-0.85 * dt);
+    const spinDrag = Math.exp(-1.1 * dt);
+    const t = this.t;
+
+    for (const p of pads) {
+      // stem: slack tether, pulls back only past the slack
+      const dx = p.x - p.ax;
+      const dy = p.y - p.ay;
+      const d = Math.hypot(dx, dy);
+      const slack = 5 + p.r * 0.28;
+      if (d > slack) {
+        const k = (d - slack) * 0.9 * dt;
+        p.vx -= (dx / d) * k;
+        p.vy -= (dy / d) * k;
+        // shoved far, the stem gives and the pad finds a new place
+        if (d > slack * 3.2) {
+          p.ax += (dx / d) * (d - slack * 3.2);
+          p.ay += (dy / d) * (d - slack * 3.2);
+        }
+      }
+      // a breath of current and breeze
+      p.vx += Math.sin(t * 0.21 + p.seed * 40) * 0.5 * dt;
+      p.vy += Math.cos(t * 0.17 + p.seed * 31) * 0.4 * dt;
+      p.va += Math.sin(t * 0.11 + p.seed * 17) * 0.004 * dt;
+
+      // hull contact
+      const lx = p.x - sx;
+      const ly = p.y - sy;
+      const segx = ex - sx;
+      const segy = ey - sy;
+      const u = clamp((lx * segx + ly * segy) / (segx * segx + segy * segy), 0, 1);
+      // the hull tapers toward the bow and stern
+      const taper = 1 - Math.pow(Math.abs(u - 0.45) * 2, 2) * 0.45;
+      const cx = sx + segx * u;
+      const cy = sy + segy * u;
+      const nx0 = p.x - cx;
+      const ny0 = p.y - cy;
+      const nd = Math.hypot(nx0, ny0) || 1;
+      const rest = hullR * taper + p.r * 0.86;
+      if (nd < rest) {
+        const nx = nx0 / nd;
+        const ny = ny0 / nd;
+        const pen = rest - nd;
+        const into = Math.max(0, bvx * nx + bvy * ny);
+        p.vx += nx * (into * 0.9 + pen * 2.2);
+        p.vy += ny * (into * 0.9 + pen * 2.2);
+        p.x += nx * pen * 0.35;
+        p.y += ny * pen * 0.35;
+        // caught on one side of its centre, it turns
+        const tang = bvx * -ny + bvy * nx;
+        p.va += (tang / p.r) * 0.35 * dt * 10 * Math.min(1, pen / 6);
+        const mass = (p.r * p.r) / 1600;
+        b.speed = Math.max(0, b.speed - into * mass * 0.012);
+        if (!p.touching && (pen > 2 || into > 3)) {
+          this.bumps.push({ x: cx + nx * hullR, y: cy + ny * hullR, strength: clamp(into / 30 + pen / 20, 0.1, 1) });
+          this.impulses.push({ x: p.x - nx * p.r * 0.9, y: p.y - ny * p.r * 0.9, r: 10, s: 0.8 });
+        }
+        p.touching = true;
+      } else p.touching = false;
+    }
+
+    // pad–pad contact, bucketed
+    const cell = 150;
+    const grid = new Map<number, Pad[]>();
+    const key = (ix: number, iy: number) => ix * 73856093 + iy * 19349663;
+    for (const p of pads) {
+      const k = key(Math.floor(p.x / cell), Math.floor(p.y / cell));
+      const arr = grid.get(k);
+      if (arr) arr.push(p);
+      else grid.set(k, [p]);
+    }
+    for (const p of pads) {
+      const ix = Math.floor(p.x / cell);
+      const iy = Math.floor(p.y / cell);
+      for (let gx = ix - 1; gx <= ix + 1; gx++)
+        for (let gy = iy - 1; gy <= iy + 1; gy++) {
+          const arr = grid.get(key(gx, gy));
+          if (!arr) continue;
+          for (const q of arr) {
+            if (q.id <= p.id) continue;
+            const dx = q.x - p.x;
+            const dy = q.y - p.y;
+            const rest = (p.r + q.r) * (p.bank && q.bank ? 0.8 : 0.92);
+            const d2 = dx * dx + dy * dy;
+            if (d2 >= rest * rest) continue;
+            const d = Math.sqrt(d2) || 0.01;
+            const nx = dx / d;
+            const ny = dy / d;
+            const pen = rest - d;
+            const mp = p.r * p.r;
+            const mq = q.r * q.r;
+            const wp = mq / (mp + mq);
+            const wq = mp / (mp + mq);
+            const push = pen * 1.6 * dt * 8;
+            p.vx -= nx * push * wp;
+            p.vy -= ny * push * wp;
+            q.vx += nx * push * wq;
+            q.vy += ny * push * wq;
+            // rubbing edges trade a little spin
+            const rvt = (q.vx - p.vx) * -ny + (q.vy - p.vy) * nx;
+            p.va += (rvt / p.r) * 0.02 * wp;
+            q.va -= (rvt / q.r) * 0.02 * wq;
+            // soft positional settle so dense banks don't jitter
+            const settle = pen * 0.04;
+            p.x -= nx * settle * wp;
+            p.y -= ny * settle * wp;
+            q.x += nx * settle * wq;
+            q.y += ny * settle * wq;
+          }
+        }
+    }
+
+    for (const p of pads) {
+      p.vx *= drag;
+      p.vy *= drag;
+      p.va *= spinDrag;
+      p.va = clamp(p.va, -0.8, 0.8);
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.ang += p.va * dt;
+      p.bob *= Math.exp(-2.4 * dt);
+      p.sel += ((p.selected ? 1 : 0) - p.sel) * (1 - Math.exp(-6 * dt));
+      for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : 5) * dt));
+      p.drops = p.drops.filter((d) => d.to > 0 || d.a > 0.01);
+    }
+  }
+
+  private stepRope() {
+    const b = this.boat;
+    const n = this.rope.length / 2;
+    const r = this.rope;
+    const pr = this.ropePrev;
+    const stern = BOAT_LEN * 0.47;
+    r[0] = b.x - Math.sin(b.heading) * stern;
+    r[1] = b.y - Math.cos(b.heading) * stern;
+    for (let i = 1; i < n; i++) {
+      const x = r[i * 2];
+      const y = r[i * 2 + 1];
+      r[i * 2] += (x - pr[i * 2]) * 0.9 + Math.sin(this.t * 0.6 + i * 0.5) * 0.02;
+      r[i * 2 + 1] += (y - pr[i * 2 + 1]) * 0.9;
+      pr[i * 2] = x;
+      pr[i * 2 + 1] = y;
+    }
+    const seg = 9;
+    for (let it = 0; it < 4; it++)
+      for (let i = 1; i < n; i++) {
+        const ax = r[(i - 1) * 2];
+        const ay = r[(i - 1) * 2 + 1];
+        const dx = r[i * 2] - ax;
+        const dy = r[i * 2 + 1] - ay;
+        const d = Math.hypot(dx, dy) || 1;
+        const k = (d - seg) / d;
+        r[i * 2] -= dx * k;
+        r[i * 2 + 1] -= dy * k;
+      }
+  }
+}

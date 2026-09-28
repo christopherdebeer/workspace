@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0e2a25" />
+  <title>Stillwater</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0e2a25; color: #f0edce; font-family: Georgia, 'Iowan Old Style', serif; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; outline: none; }
+    #ui { position: fixed; inset: 0; pointer-events: none; }
+    header { position: absolute; top: max(24px, env(safe-area-inset-top)); width: 100%; text-align: center; text-shadow: 0 2px 18px #001b19; }
+    h1 { font-size: 12px; font-weight: normal; letter-spacing: 7px; margin: 0 0 16px; opacity: .7; transition: opacity 4s, margin 4s, font-size 4s; }
+    h1.quiet { opacity: .28; }
+    .target { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 14px; transition: opacity 1.2s, transform 1.2s; }
+    .target.arrive { opacity: 0; transform: translateY(-6px); }
+    .target i { width: 7px; height: 7px; border: 1px solid rgba(240, 236, 190, .8); border-radius: 50%; transition: background .6s, box-shadow .6s, transform .6s; }
+    .target i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
+    .target i.blank { border-color: rgba(240, 236, 190, .18); }
+    .target .frame { display: grid; grid-template-columns: repeat(5, 7px); gap: 6px; padding: 6px 8px; border: 1px solid rgba(240, 236, 190, .16); border-radius: 6px; }
+    .target.array { display: grid; grid-template-columns: repeat(var(--cols), 7px); gap: 7px; justify-content: center; }
+    .target.numeral { flex-direction: column; gap: 8px; }
+    .target.numeral b { font-weight: normal; font-size: 30px; letter-spacing: 2px; line-height: 1; }
+    .target .bar { width: 64px; height: 2px; background: rgba(240, 236, 190, .2); border-radius: 1px; overflow: hidden; }
+    .target .bar span { display: block; height: 100%; width: 0; background: #fdf6cc; box-shadow: 0 0 8px #f9e9a3; transition: width .6s; }
+    #hint { position: absolute; bottom: max(46px, calc(env(safe-area-inset-bottom) + 30px)); width: 100%; padding: 0 24px; text-align: center; font-size: 15px; font-style: italic; letter-spacing: .4px; text-shadow: 0 1px 12px #001b19; opacity: 0; transition: opacity 1.6s; }
+    #hint.show { opacity: .85; }
+    button { pointer-events: auto; position: absolute; bottom: max(10px, env(safe-area-inset-bottom)); right: 12px; border: 0; background: transparent; color: #ececc8; opacity: .5; font: 12px Georgia, serif; padding: 12px; cursor: pointer; }
+    button:focus-visible { outline: 1px solid #ddd; border-radius: 4px; }
+    #live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    body.nogl #hint { opacity: .9; }
+  </style>
+</head>
+<body>
+  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go."></canvas>
+  <div id="ui">
+    <header>
+      <h1 id="title">STILLWATER</h1>
+      <div id="target" class="target" aria-hidden="true"></div>
+    </header>
+    <div id="hint"></div>
+    <button id="sound" type="button" aria-pressed="false">sound off</button>
+    <div id="live" role="status" aria-live="polite"></div>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
