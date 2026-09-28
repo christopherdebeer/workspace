@@ -139,6 +139,8 @@ const toScreen = (x: number, y: number): [number, number] => [
   (x - cam.x) * cam.zoom + cam.cssW / 2,
   cam.cssH / 2 - (y - cam.y) * cam.zoom,
 ];
+/** Stereo position of a world x, from where it is on screen (-0.8 left … 0.8 right). */
+const panAt = (x: number) => Math.max(-0.8, Math.min(0.8, ((x - cam.x) * cam.zoom) / (cam.cssW / 2) * 0.8));
 const toWorld = (sx: number, sy: number): [number, number] => [
   cam.x + (sx - cam.cssW / 2) / cam.zoom,
   cam.y - (sy - cam.cssH / 2) / cam.zoom,
@@ -252,7 +254,7 @@ function choose(p: Pad) {
   selection.push(p);
   const st = stage();
   const verdict = N.judge(st, target.value, counts(selection));
-  sound.note(selection.length - 1 + Math.min(4, liveCount(p) - 1));
+  sound.note(selection.length - 1 + Math.min(4, liveCount(p) - 1), panAt(p.x));
   switch (verdict.kind) {
     case 'partial':
       ui.progress(verdict.gathered);
@@ -389,7 +391,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
     // one plop: a single clean ring spreading out, like a raindrop or a fingertip
-    pond.splash(wx, wy, 6, 2.6);
+    if (!pond.splash(wx, wy, 6, 2.6)) sound.plop(1, panAt(wx));
     school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
     gust = pond.gust({ x: wx, y: wy, dx: 0, dy: 0, s: 0.6, r: 120, life: 1.8, radial: true, held: true });
@@ -599,6 +601,7 @@ function frame(now: number) {
   }
   if (scareAcc > 0.25) scareAcc = 0;
   sound.breeze(breeze);
+  sound.river(pond.boat.speed, pond.boat.power * pond.boat.rowing, breeze);
 
   // the camera follows the boat, easing sideways toward the channel
   const b = pond.boat;
@@ -609,12 +612,14 @@ function frame(now: number) {
   for (const st of pond.startles) school.scare(st.x, st.y, st.r);
   pond.startles.length = 0;
   for (const snd of pond.sounds) {
-    if (snd.kind === 'dip') sound.dip(snd.s);
-    else sound.drip(snd.s);
+    const pan = panAt(snd.x);
+    if (snd.kind === 'dip') sound.dip(snd.s, pan);
+    else if (snd.kind === 'gurgle') sound.gurgle(snd.s, pan);
+    else sound.drip(snd.s, pan);
   }
   pond.sounds.length = 0;
   for (const bump of pond.bumps) {
-    sound.knock(bump.strength);
+    sound.knock(bump.strength, panAt(bump.x));
     school.scare(bump.x, bump.y);
   }
   pond.bumps.length = 0;

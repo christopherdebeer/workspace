@@ -338,56 +338,80 @@ in float vFlash;
 out vec4 o;
 uniform float uShadow;
 uniform sampler2D uOcc;
+/**
+ * A fish seen from ABOVE. The tail and dorsal fin stand vertical, so from up
+ * here they are nearly edge-on: thin lines, not the fan a side view shows.
+ * What reads is the back — plump behind the head, narrowing to a slim tail
+ * stalk — a dark ridge along the spine shading to lighter flanks, eyes bulging
+ * at the sides of the head, and the paired fins spread flat like small fans.
+ * The whole body bends as it swims, most at the tail.
+ */
 void main(){
   float z = vB.x, kind = vB.y, phase = vB.z, speed = vB.w;
-  float along = vQ.y;
-  float swim = uTime * (3. + speed * .12) + phase;
-  float wave = sin(along * 3.2 - swim) * .16 * pow(clamp((1. - along) * .5, 0., 1.), 1.4);
-  float x = vQ.x - wave;
-  float soft = fwidth(vQ.x) * 1.5 + z * .1 + uShadow * .25;
-  // body: a teardrop, widest behind the head
-  float t = clamp((along + .62) / 1.56, 0., 1.);
-  float bw = .4 * pow(sin(t * 3.14159), .75) * (1. - .25 * t);
-  float body = 1. - smoothstep(bw - soft, bw + soft, abs(x));
-  body *= step(-.66, along) * (1. - smoothstep(.93, .96, along));
-  // tail fan, forked
-  float tf = clamp((-.58 - along) / .42, 0., 1.);
-  float tw = .05 + tf * .34;
-  float tail = (1. - smoothstep(tw - soft, tw + soft, abs(x))) * step(along, -.58) * step(-1., along);
-  tail *= 1. - (1. - smoothstep(.0, .12 + soft, abs(x))) * smoothstep(.55, 1., tf) * .9;
-  // pectoral fins
+  // isotropic body units: along -1 (tail tip) … 1 (nose), across in the same units
+  vec2 P = vec2(vQ.x * .55, vQ.y);
+  float along = P.y;
+  float swim = uTime * (2.6 + speed * .12) + phase;
+  float bendAmp = .07 + min(speed, 60.) * .0012;
+  float spine = sin(along * 2.6 - swim) * bendAmp * pow(clamp((1. - along) * .5, 0., 1.), 1.6);
+  float x = P.x - spine;
+  float soft = fwidth(P.x) * 1.4 + z * .05 + uShadow * .12;
+  float u = (along + 1.) * .5;              // 0 tail tip … 1 nose
+  float plump = kind > 2.5 ? .115 : kind < .5 ? .15 : .19;
+  // body outline from above: rounded snout, widest at the shoulders, a slim tail stalk
+  float bodyU = clamp((u - .14) / .86, 0., 1.);
+  float w = plump * pow(sin(bodyU * 3.14159), .55) * mix(.28, 1., smoothstep(.0, .55, bodyU));
+  w *= 1. - smoothstep(.93, 1., u) * .35;
+  float body = (1. - smoothstep(w - soft, w + soft, abs(x))) * step(.14, u) * (1. - smoothstep(.985, 1., u));
+  // the tail fin is vertical: from above a thin blade, a touch wider as it sweeps across
+  float sweep = abs(cos(along * 2.6 - swim)) * bendAmp * 3.;
+  float tw = (.012 + sweep * .05) * (1. + (1. - u / .16) * .6);
+  float tail = (1. - smoothstep(tw - soft, tw + soft, abs(x))) * step(u, .16) * step(.0, u);
+  // the dorsal fin: a darker line along the spine
+  float dorsal = (1. - smoothstep(.0, .012 + soft, abs(x))) * smoothstep(.42, .5, u) * (1. - smoothstep(.66, .74, u));
+  // pectoral fins spread flat just behind the head, paddling; pelvics smaller, further back
   float fin = 0.;
   for (int k = -1; k <= 1; k += 2) {
-    vec2 fp = vec2(x - float(k) * .34, along - .28);
-    fp = rot(fp, float(k) * (.6 + .2 * sin(swim * .7)));
-    fin = max(fin, 1. - smoothstep(1. - soft * 4., 1. + soft * 4., length(fp / vec2(.09, .17))));
+    float sk = float(k);
+    vec2 fp = vec2(x - sk * plump * .95, along - .42);
+    fp = rot(fp, sk * (.9 + .25 * sin(swim * .8 + sk)));
+    fin = max(fin, 1. - smoothstep(1. - soft * 6., 1. + soft * 6., length(fp / vec2(.035, .11))));
+    vec2 pp = vec2(x - sk * plump * .6, along + .05);
+    pp = rot(pp, sk * .7);
+    fin = max(fin, (1. - smoothstep(1. - soft * 6., 1. + soft * 6., length(pp / vec2(.022, .06)))) * .8);
   }
-  float cover = max(body, max(tail * .8, fin * .6));
+  float cover = max(body, max(tail * .75, fin * .45));
   if (cover < .003) discard;
   if (uShadow > .5) { o = vec4(0., 0., 0., cover * .22 * (1. - z * .6)); return; }
-  vec3 col;
-  if (kind > 2.5) {
-    // minnow: olive back, silver flanks that flash white as the fish turns
-    float flank = smoothstep(.0, bw, abs(x));
-    col = mix(vec3(.22, .25, .17), vec3(.62, .66, .60), flank);
-    col += vec3(.9, .95, 1.) * vFlash * flank * .9;
+  float across = clamp(abs(x) / max(w, .01), 0., 1.);
+  vec3 back, flank;
+  if (kind > 2.5) { back = vec3(.20, .23, .16); flank = vec3(.55, .60, .54); }
+  else if (kind < .5) { back = vec3(.08, .10, .07); flank = vec3(.20, .22, .15); }
+  else if (kind < 1.5) { back = vec3(.55, .56, .48); flank = vec3(.80, .80, .72); }
+  else { back = vec3(.82, .78, .70); flank = vec3(.92, .90, .84); }
+  vec3 col = mix(back, flank, smoothstep(.25, .95, across));
+  if (kind > 1.5 && kind < 2.5) {
+    // koi: orange and white saddles, seen across the back
+    float blot = texture(uNoise, vec2(x * 1.6, along * .9) + phase * .013).r;
+    col = mix(col, vec3(.88, .40, .10) * mix(1., .8, across), smoothstep(.45, .55, blot));
   }
-  else if (kind < .5) col = vec3(.10, .13, .09) + vec3(.05, .06, .03) * smoothstep(.2, .0, abs(x));
-  else if (kind < 1.5) col = vec3(.70, .70, .60);
-  else {
-    float blot = texture(uNoise, vQ * .35 + phase * .013).r;
-    col = mix(vec3(.86, .84, .78), vec3(.85, .38, .12), smoothstep(.45, .55, blot));
+  // minnows show their silver flank when they turn
+  if (kind > 2.5) col += vec3(.9, .95, 1.) * vFlash * smoothstep(.4, 1., across) * .9;
+  // a rounded back: the spine catches the light, the sides fall away
+  vec3 n = normalize(vec3(sign(x) * across * 1.2, 0., 1.));
+  col *= .65 + .5 * max(dot(n, normalize(uSun)), 0.);
+  col += uSunCol * pow(1. - across, 6.) * .12 * step(.5, kind);
+  col = mix(col, back * .6, dorsal * .6);
+  // eyes at the sides of the head
+  for (int k = -1; k <= 1; k += 2) {
+    vec2 ep = vec2(x - float(k) * w * .78, u - .9);
+    float e = length(ep);
+    float r = plump * .16;
+    col = mix(col, vec3(.03), (1. - smoothstep(r * .8, r, e)) * body);
+    col += vec3(.8) * (1. - smoothstep(0., r * .35, length(ep - vec2(0., r * .3)))) * body * .6;
   }
-  // dorsal shade and a lighter flank catch
-  col *= 1. - .35 * (1. - smoothstep(0., bw * .7, abs(x))) * step(.5, kind);
-  col *= .85 + .3 * smoothstep(-.2, .3, x * sign(uSun.x + .01) * -1.);
-  // a rounded back, and eyes on the pale fish
-  float cyl = 1. - pow(clamp(abs(x) / max(bw, .01), 0., 1.), 2.);
-  col *= mix(1., .62 + .5 * cyl, body);
-  float eye = length(vec2(abs(x) - bw * .5, along - .74));
-  col = mix(col, vec3(.04, .04, .03), (1. - smoothstep(.03, .05, eye)) * step(.5, kind) * body);
-  // fins and tail are thin: more water shows through
-  col = mix(col, col * .6 + vec3(.02, .08, .07), max(tail, fin) * (1. - body) * .5);
+  // fins and tail are thin: the water shows through them
+  col = mix(col, col * .55 + vec3(.02, .07, .06), max(tail, fin) * (1. - body) * .6);
   float shade = 1. - texture(uOcc, vUv).r * .55;
   col *= (uAmb * .9 + uSunCol * .55) * shade;
   vec3 deep = vec3(.015, .085, .075);

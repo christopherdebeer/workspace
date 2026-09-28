@@ -275,7 +275,7 @@ export class Pond {
   /** Things that startle fish (main.ts relays them to the school). */
   startles: Array<{ x: number; y: number; r: number }> = [];
   /** Sounds the water made this step (main.ts plays them). */
-  sounds: Array<{ kind: 'dip' | 'drip'; s: number }> = [];
+  sounds: Array<{ kind: 'dip' | 'drip' | 'gurgle'; s: number; x: number }> = [];
   weeds: Weed[] = [];
   floaters: Floater[] = [];
   plants: Plant[] = [];
@@ -745,7 +745,7 @@ export class Pond {
     this.stepPads(dt, active);
     this.stepFloaters(dt, active);
     this.stepBlooms(dt, active);
-    this.stepRope();
+    this.stepRope(dt);
   }
 
   private stepGusts(dt: number) {
@@ -962,7 +962,7 @@ export class Pond {
         this.splash(tx, ty, 7, 1.2 * k, true, near);
         this.startles.push({ x: tx, y: ty, r: 90 });
       }
-      this.sounds.push({ kind: 'dip', s: k });
+      this.sounds.push({ kind: 'dip', s: k, x: b.x });
     }
 
     // the drive: blades in the water shoulder leaves aside and throw water aft
@@ -1025,6 +1025,7 @@ export class Pond {
 
     // the release: a pair of swirls where the blade left
     if (rowing && crossed(0.25)) {
+      this.sounds.push({ kind: 'gurgle', s: k, x: b.x });
       for (const side of [-1, 1]) {
         const [tx, ty] = this.oarTip(side);
         const px = hy * 5;
@@ -1047,7 +1048,7 @@ export class Pond {
       d.age += dt;
       if (d.age >= d.life) {
         const hit = this.splash(d.x, d.y, 3, 0.35, false, near);
-        if (!hit) this.sounds.push({ kind: 'drip', s: 0.5 + Math.random() * 0.5 });
+        if (!hit) this.sounds.push({ kind: 'drip', s: 0.5 + Math.random() * 0.5, x: d.x });
       }
     }
     this.drips = this.drips.filter((d) => d.age < d.life);
@@ -1328,7 +1329,16 @@ export class Pond {
     }
   }
 
-  private stepRope() {
+  /**
+   * A floating line dragged slowly through water. Each node moves relative to
+   * the WATER (the current carries it), and water resists a rope moving
+   * sideways several times more than sliding along its own length — so it
+   * streams out behind in long lazy curves instead of swinging like a chain.
+   * It floats: it drapes and snags around the edges of the leaves (nudging
+   * them), pushes through the duckweed, and ruffles the water where it's
+   * dragged sideways. Position-based: predict, drag, constrain, collide.
+   */
+  private stepRope(dt: number) {
     const b = this.boat;
     const n = this.rope.length / 2;
     const r = this.rope;
@@ -1336,16 +1346,42 @@ export class Pond {
     const stern = BOAT_LEN * 0.47;
     r[0] = b.x - Math.sin(b.heading) * stern;
     r[1] = b.y - Math.cos(b.heading) * stern;
+    pr[0] = r[0];
+    pr[1] = r[1];
+    const kn = Math.exp(-5.5 * dt); // across the rope: the water holds it
+    const kt = Math.exp(-0.7 * dt); // along it: it slides
     for (let i = 1; i < n; i++) {
       const x = r[i * 2];
       const y = r[i * 2 + 1];
-      r[i * 2] += (x - pr[i * 2]) * 0.9 + Math.sin(this.t * 0.6 + i * 0.5) * 0.02;
-      r[i * 2 + 1] += (y - pr[i * 2 + 1]) * 0.9;
+      let vx = (x - pr[i * 2]) / dt;
+      let vy = (y - pr[i * 2 + 1]) / dt;
+      const [ux, uy] = this.flow(x, y);
+      // tangent from the neighbours
+      const j0 = i - 1;
+      const j1 = Math.min(n - 1, i + 1);
+      let tx = r[j0 * 2] - r[j1 * 2];
+      let ty = r[j0 * 2 + 1] - r[j1 * 2 + 1];
+      const tl = Math.hypot(tx, ty) || 1;
+      tx /= tl;
+      ty /= tl;
+      const wx = vx - ux;
+      const wy = vy - uy;
+      const along = wx * tx + wy * ty;
+      const nx = wx - along * tx;
+      const ny = wy - along * ty;
+      vx = ux + along * tx * kt + nx * kn;
+      vy = uy + along * ty * kt + ny * kn;
       pr[i * 2] = x;
       pr[i * 2 + 1] = y;
+      r[i * 2] = x + vx * dt;
+      r[i * 2 + 1] = y + vy * dt;
+      // dragged sideways, it leaves a faint ripple
+      const side = Math.hypot(nx, ny);
+      if (side > 6 && Math.random() < dt * 3) this.impulses.push({ x, y, r: 4, s: Math.min(0.3, side / 60) });
     }
     const seg = 9;
-    for (let it = 0; it < 4; it++)
+    const near = this.pads.filter((p) => Math.abs(p.x - r[0]) < 320 && Math.abs(p.y - r[1]) < 320);
+    for (let it = 0; it < 6; it++) {
       for (let i = 1; i < n; i++) {
         const ax = r[(i - 1) * 2];
         const ay = r[(i - 1) * 2 + 1];
@@ -1353,8 +1389,66 @@ export class Pond {
         const dy = r[i * 2 + 1] - ay;
         const d = Math.hypot(dx, dy) || 1;
         const k = (d - seg) / d;
-        r[i * 2] -= dx * k;
-        r[i * 2 + 1] -= dy * k;
+        // the boat end is pinned; further along, both nodes share the correction
+        if (i === 1) {
+          r[i * 2] -= dx * k;
+          r[i * 2 + 1] -= dy * k;
+        } else {
+          r[(i - 1) * 2] += dx * k * 0.5;
+          r[(i - 1) * 2 + 1] += dy * k * 0.5;
+          r[i * 2] -= dx * k * 0.5;
+          r[i * 2 + 1] -= dy * k * 0.5;
+        }
       }
+      // a rope has some stiffness: it won't fold sharply, so each node eases toward the
+      // line through its neighbours (it bends in long curves, and drapes rather than kinks)
+      // off the stern cleat it leaves pointing aft, and curves away from there
+      const ax = r[0] - Math.sin(b.heading) * seg;
+      const ay = r[1] - Math.cos(b.heading) * seg;
+      r[2] += (ax - r[2]) * 0.3;
+      r[3] += (ay - r[3]) * 0.3;
+      for (let i = 1; i < n - 1; i++) {
+        const mx = (r[(i - 1) * 2] + r[(i + 1) * 2]) * 0.5;
+        const my = (r[(i - 1) * 2 + 1] + r[(i + 1) * 2 + 1]) * 0.5;
+        r[i * 2] += (mx - r[i * 2]) * 0.22;
+        r[i * 2 + 1] += (my - r[i * 2 + 1]) * 0.22;
+      }
+      // floating, it can't pass through a leaf: it drapes round the edge, and leans on it
+      for (let i = 2; i < n; i++) {
+        const x = r[i * 2];
+        const y = r[i * 2 + 1];
+        for (const p of near) {
+          const dx = x - p.x;
+          const dy = y - p.y;
+          const lim = p.r * 0.93 + 1.5;
+          if (Math.abs(dx) > lim || Math.abs(dy) > lim) continue;
+          const d = Math.hypot(dx, dy) || 1;
+          if (d >= lim) continue;
+          const push = lim - d;
+          r[i * 2] += (dx / d) * push * 0.35;
+          r[i * 2 + 1] += (dy / d) * push * 0.35;
+          if (it === 0) {
+            p.vx -= (dx / d) * push * 0.4;
+            p.vy -= (dy / d) * push * 0.4;
+          }
+        }
+      }
+    }
+    r[0] = b.x - Math.sin(b.heading) * stern;
+    r[1] = b.y - Math.cos(b.heading) * stern;
+    // it pushes through the duckweed and petals
+    for (const f of this.floaters) {
+      if (Math.abs(f.x - r[0]) > 300 || Math.abs(f.y - r[1]) > 300) continue;
+      for (let i = 1; i < n; i += 2) {
+        const dx = f.x - r[i * 2];
+        const dy = f.y - r[i * 2 + 1];
+        const d2 = dx * dx + dy * dy;
+        if (d2 > 25) continue;
+        const d = Math.sqrt(d2) || 1;
+        f.vx += (dx / d) * 18 * dt;
+        f.vy += (dy / d) * 18 * dt;
+      }
+    }
   }
+
 }
