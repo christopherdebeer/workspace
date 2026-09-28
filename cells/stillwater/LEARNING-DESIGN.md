@@ -1,6 +1,6 @@
 # Stillwater — making the learning land (and feel good)
 
-2026-09-28 · proposal · the interface, environment and feel are locked; everything
+2026-09-28 · **status: P1–P4, P6–P9 built; P5 partly (bonds, another way, both ways); see REVIEW Round 22** · the interface, environment and feel are locked; everything
 below works through the mechanics that already exist (dew on leaves, touching leaves
 to gather, the boat carried on by a solve, sound, light, blooms, fireflies), or adds
 the smallest possible piece to them.

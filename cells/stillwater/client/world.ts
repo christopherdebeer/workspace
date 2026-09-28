@@ -237,9 +237,61 @@ const smooth = (a: number, b: number, x: number) => {
 };
 
 /** Lay `count` countable drops on a pad of radius `r` (world units), clear of the notch and each other. */
-export function layDrops(count: number, r: number, rand: Rand): Drop[] {
+/**
+ * Dice-like arrangements for 1–7 (unit grid). Laid this way, a small count is
+ * seen at a glance (subitizing), and 6 reads as 3 and 3, 5 as 4 and 1, 7 as 6
+ * and 1. As a child's facts grow strong the dew falls back to natural scatter,
+ * which asks them to find the structure themselves (concreteness fading).
+ */
+const PATTERNS: Record<number, Array<[number, number]>> = {
+  1: [[0, 0]],
+  2: [[-1, -1], [1, 1]],
+  3: [[-1, -1], [0, 0], [1, 1]],
+  4: [[-1, -1], [1, -1], [-1, 1], [1, 1]],
+  5: [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]],
+  6: [[-1, -1.1], [-1, 0], [-1, 1.1], [1, -1.1], [1, 0], [1, 1.1]],
+  7: [[-1, -1.1], [-1, 0], [-1, 1.1], [0, 0], [1, -1.1], [1, 0], [1, 1.1]],
+};
+
+function patternDrops(count: number, base: number, rand: Rand): Drop[] | null {
+  const pts = PATTERNS[count];
+  if (!pts) return null;
+  let nn = Infinity;
+  let R = 0;
+  for (let i = 0; i < pts.length; i++) {
+    R = Math.max(R, Math.hypot(pts[i][0], pts[i][1]));
+    for (let j = i + 1; j < pts.length; j++) nn = Math.min(nn, Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]));
+  }
+  let dr = base;
+  let sc = pts.length > 1 ? (2 * dr * 1.3) / nn : 0;
+  if (sc * R + dr > 0.7) {
+    sc = (0.7 - dr) / Math.max(R, 1e-6);
+    dr = Math.min(dr, (sc * nn) / 2.5);
+  }
+  // turn the pattern so no drop sits in the leaf's notch (which opens along local +y)
+  const a0 = rand() * Math.PI * 2;
+  for (let tries = 0; tries < 72; tries++) {
+    const a = a0 + (tries * Math.PI * 2) / 72;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    const out = pts.map(([px, py]) => {
+      const x = (px * c - py * s) * sc;
+      const y = (px * s + py * c) * sc;
+      return { x, y, r: dr * (0.94 + rand() * 0.12), a: 0, to: 1 } as Drop;
+    });
+    if (out.every((d) => Math.hypot(d.x, d.y) <= 0.12 || Math.abs(Math.atan2(d.x, d.y)) >= 0.46)) return out;
+  }
+  return null;
+}
+
+export function layDrops(count: number, r: number, rand: Rand, pattern = false): Drop[] {
+  const base0 = (clamp(0.2 * r, 6.2, 9.5) / r) * (count > 3 ? 0.82 : 1) * (count > 5 ? 0.86 : 1);
+  if (pattern) {
+    const laid = patternDrops(count, base0, rand);
+    if (laid) return laid;
+  }
   const out: Drop[] = [];
-  const base = (clamp(0.2 * r, 6.2, 9.5) / r) * (count > 3 ? 0.82 : 1) * (count > 5 ? 0.86 : 1);
+  const base = base0;
   for (let tries = 0; out.length < count && tries < 400; tries++) {
     const dr = base * (0.82 + rand() * 0.36);
     const ring = 0.72 - dr;
@@ -296,6 +348,10 @@ export class Pond {
   t = 0;
   /** Chooses drops for a freshly grown pad (the game's current stage decides). */
   dewFor: (rand: Rand) => number = () => 0;
+  /** Whether a fresh leaf with this many drops lays them in a pattern (see PATTERNS). */
+  patternFor: (count: number, rand: Rand) => boolean = () => false;
+  /** More flowers along the water (a welcome back). */
+  bloomBoost = 1;
 
   constructor(seed: number) {
     this.rand = seeded(seed);
@@ -640,7 +696,7 @@ export class Pond {
         ry: plant.y,
         layer: rand(),
       };
-      pad.drops = layDrops(count, r, rand);
+      pad.drops = layDrops(count, r, rand, count > 0 && this.patternFor(count, rand));
       for (const d of pad.drops) d.a = 1;
       this.pads.push(pad);
       near.push(pad);
@@ -655,7 +711,7 @@ export class Pond {
         const d = 12 + rand() * 30;
         this.deep.push({ x: pl.x + Math.cos(a) * d, y: pl.y + Math.sin(a) * d, r: 10 + rand() * 14, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.3 + rand() * 0.35, rx: pl.x, ry: pl.y });
       }
-      if (rand() < 0.3) {
+      if (rand() < 0.3 * this.bloomBoost) {
         // find open water among its leaves for the flower to stand in
         for (let tries = 0; tries < 8; tries++) {
           const a = rand() * Math.PI * 2;
@@ -687,6 +743,26 @@ export class Pond {
       this.weeds.push({ x, y, len: 30 + rand() * 60, depth: 0.45 + rand() * 0.6, seed: rand(), kind: rand() < 0.35 ? 1 : 0 });
     }
     this.pads.sort((a, b) => Number(b.bank) - Number(a.bank) || a.layer - b.layer);
+  }
+
+  /**
+   * A flower opens beside a leaf: a bud rises on the leaf's own plant, just
+   * off its edge in open water, and opens. Returns the bloom (its size and
+   * `open` are eased by the caller).
+   */
+  bloomBeside(p: Pad, rand: Rand): Bloom | null {
+    const near = this.pads.filter((q) => Math.abs(q.x - p.x) < 200 && Math.abs(q.y - p.y) < 200);
+    for (let tries = 0; tries < 10; tries++) {
+      const a = rand() * Math.PI * 2;
+      const d = p.r + 8 + rand() * 10;
+      const bx = p.x + Math.cos(a) * d;
+      const by = p.y + Math.sin(a) * d;
+      if (this.padAt(bx, by, near)) continue;
+      const b: Bloom = { x: bx, y: by, vx: 0, vy: 0, ang: rand() * Math.PI * 2, size: 6, open: 0, variant: Pond.bloomKind(rand() * 0.72), seed: rand(), ax: bx, ay: by, rx: p.rx, ry: p.ry };
+      this.blooms.push(b);
+      return b;
+    }
+    return null;
   }
 
   /** Forget what is far behind. Selected pads are kept so a selection never vanishes mid-gesture. */

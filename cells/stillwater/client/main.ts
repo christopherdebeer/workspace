@@ -13,6 +13,7 @@
  */
 import { School } from './fish';
 import * as N from './numeracy';
+import * as L from './learning';
 import { drawOrder, Camera, Mote, Renderer } from './render';
 import { Atmosphere, DAY, skyAt } from './atmosphere';
 import { Sound } from './audio';
@@ -33,12 +34,15 @@ const startupParams = new URLSearchParams(location.search);
 const SAVE = 'stillwater.v3';
 let mastery = 0.04;
 let totalSolves = 0;
+/** When the river was last played (ms), for the welcome back. */
+let lastPlayed = 0;
 let activeStage: N.Stage = N.STAGES[0];
 try {
-  const saved = JSON.parse(localStorage.getItem(SAVE) ?? 'null') as { mastery?: number; solves?: number } | null;
+  const saved = JSON.parse(localStorage.getItem(SAVE) ?? 'null') as { mastery?: number; solves?: number; last?: number } | null;
   if (saved && typeof saved.mastery === 'number') {
     mastery = Math.max(0, Math.min(1, saved.mastery));
     totalSolves = saved.solves ?? 0;
+    lastPlayed = saved.last ?? 0;
   } else {
     const old = JSON.parse(localStorage.getItem('stillwater.v2') ?? 'null') as { stage?: number; solves?: number } | null;
     if (old && typeof old.stage === 'number') {
@@ -53,9 +57,19 @@ const levelParam = Number(startupParams.get('level'));
 if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
 const forcedStage = N.stageForId(startupParams.get('stage'));
 if (forcedStage) activeStage = forcedStage;
+// the facts the river remembers (P1), kept beside the proficiency
+const FACTS = 'stillwater.facts.v1';
+let memory = new L.Memory();
+try {
+  memory = new L.Memory(JSON.parse(localStorage.getItem(FACTS) ?? 'null'));
+} catch {
+  /* storage unavailable */
+}
+if (startupParams.has('fresh')) memory = new L.Memory();
 const save = () => {
   try {
-    localStorage.setItem(SAVE, JSON.stringify({ mastery, solves: totalSolves }));
+    localStorage.setItem(SAVE, JSON.stringify({ mastery, solves: totalSolves, last: Date.now() }));
+    localStorage.setItem(FACTS, JSON.stringify(memory));
   } catch {
     /* storage unavailable */
   }
@@ -71,7 +85,19 @@ const urlSeed = Number(params.get('seed'));
 const timeScale = Math.max(0.1, Math.min(8, Number(params.get('timescale')) || 1));
 const rand = seeded(urlSeed || (Date.now() % 100000) + 7);
 const pond = new Pond(Math.floor(rand() * 1e9));
-pond.dewFor = (r) => N.dewForMastery(mastery, r);
+/**
+ * Spacing, planted as ecology (P1): when a fact is due, its parts are grown
+ * into the dew of the leaves appearing ahead, so by the time they drift into
+ * view the river can ask for it.
+ */
+const planting: number[] = [];
+pond.dewFor = (r) => {
+  const n = N.dewForMastery(mastery, r);
+  if (n > 0 && planting.length && r() < 0.6) return planting.shift()!;
+  return n;
+};
+// dice-like dew for small counts early on, fading to natural scatter as proficiency grows (P8)
+pond.patternFor = (count, r) => count <= 7 && r() < Math.max(0.12, Math.min(0.85, 0.9 - mastery * 1.1));
 const school = new School(reduced ? { schools: 2, perSchool: 14, loners: 6 } : { schools: 4, perSchool: 22, loners: 12 }, pond.boat.x, pond.boat.y + 200);
 
 let renderer!: Renderer;
@@ -205,17 +231,94 @@ function targetDewy(): Pad[] {
   });
 }
 
+// ─── the learning arc (LEARNING-DESIGN.md) ────────────────────────────────
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const welcome = lastPlayed > 0 && Date.now() - lastPlayed > 6 * 3600_000;
+let stretch = new L.Stretch(null, welcome);
+if (welcome) pond.bloomBoost = 2.2;
+
+/** The ask in play: how it was framed, and what the child did with it (P2, silently). */
+interface Ask {
+  stage: N.Stage;
+  value: number;
+  phase: L.Phase;
+  /** "in two leaves" (a number bond). */
+  bond: boolean;
+  /** The same number again, another way (consolidate). */
+  again: boolean;
+  shownAt: number;
+  lastTouchAt: number;
+  scaffold: number;
+}
+let ask: Ask | null = null;
+/** The reach just answered, for the consolidate that follows it. */
+let lastReach: { stage: N.Stage; value: number; parts: number[] } | null = null;
+
+const timesOverGroups = () => N.stageWeight(N.STAGES[4], mastery) > N.stageWeight(N.STAGES[3], mastery);
+const inBand = (f: L.Fact) => N.stageWeight(L.stageOfFact(f, N.STAGES, timesOverGroups()), mastery) > 0.12;
+
+/** A due fact the visible dew can make now, asked in its own form. */
+function dueActivity(seen: Pad[]): { stage: N.Stage; target: N.Target } | null {
+  for (const f of memory.due(Date.now(), inBand)) {
+    // not the number just asked (several due facts can share a number)
+    if (f.value === lastSolved) continue;
+    const st = L.stageOfFact(f, N.STAGES, timesOverGroups());
+    if (!N.solvable(st, counts(seen), f.value)) continue;
+    return { stage: st, target: st.rule === 'groups' ? { value: f.value, rows: f.parts[0], cols: f.parts[1] } : { value: f.value } };
+  }
+  return null;
+}
+
+/** The reach's number again: a sum another way, a product the other way round. */
+function againActivity(seen: Pad[]): { stage: N.Stage; target: N.Target } | null {
+  if (!lastReach) return null;
+  const { stage: st, value, parts } = lastReach;
+  if (!N.solvable(st, counts(seen), value)) return null;
+  if (st.rule === 'groups') {
+    const [m, k] = parts;
+    return { stage: st, target: { value, rows: k, cols: m } };
+  }
+  return { stage: st, target: { value } };
+}
+
+/** Plant the most urgent due fact's parts into the leaves growing ahead. */
+function plantDue() {
+  if (planting.length) return;
+  const f = memory.due(Date.now(), inBand)[0];
+  if (!f) return;
+  if (f.rule === 'groups') for (let i = 0; i < f.parts[0]; i++) planting.push(f.parts[1]);
+  else planting.push(...f.parts);
+}
+
 function setTarget() {
+  const phase = stretch.phase;
+  if (phase === 'finale') {
+    startFinale();
+    return;
+  }
+  const m = clamp01(mastery + L.PHASE_OFFSET[phase]);
   const safe = targetDewy();
   const seen = safe.length >= 2 ? safe : visibleDewy();
-  const activity = forcedStage
-    ? (() => {
-        const t = N.chooseTarget(forcedStage, counts(seen), rand, lastSolved);
-        return t ? { stage: forcedStage, target: t } : null;
-      })()
-    : N.chooseActivity(mastery, counts(seen), rand, lastSolved);
+  let again = false;
+  let dueAsk = false;
+  let activity: { stage: N.Stage; target: N.Target } | null = null;
+  if (forcedStage) {
+    const t = N.chooseTarget(forcedStage, counts(seen), rand, lastSolved);
+    activity = t ? { stage: forcedStage, target: t } : null;
+  } else {
+    // a returning child's warm-up, and every reach, look first for what's due
+    if (phase === 'reach' || (phase === 'warm' && welcome)) {
+      activity = dueActivity(seen);
+      dueAsk = !!activity;
+    }
+    if (!activity && phase === 'consolidate') {
+      activity = againActivity(seen);
+      again = !!activity;
+    }
+    activity ??= N.chooseActivity(m, counts(seen), rand, lastSolved);
+  }
 
-  let st = activity?.stage ?? forcedStage ?? N.pickStage(mastery, rand);
+  let st = activity?.stage ?? forcedStage ?? N.pickStage(m, rand);
   let t = activity?.target ?? N.chooseTarget(st, counts(visibleDewy()), rand, lastSolved);
 
   if (!t) {
@@ -234,13 +337,130 @@ function setTarget() {
     }
   }
 
+  // a reach at adding is sometimes a bond: this number in exactly two leaves (P5)
+  const bond =
+    !forcedStage && phase === 'reach' && st.rule === 'sum' && st.id !== 'gather' && t.value >= 5 && rand() < (dueAsk ? 0.6 : 0.4) &&
+    !!L.solutionFor('sum', counts(visibleDewy()), t.value, 2, 2);
+
   activeStage = st;
   target = t;
   targetFriction = 0;
   unsolvableSince = 0;
+  ask = { stage: st, value: t.value, phase, bond, again, shownAt: pond.t, lastTouchAt: pond.t, scaffold: 0 };
   ui.setTarget(t, st.display);
-  ui.say(N.hintFor(st, t, firstTarget), firstTarget ? 9 : 5);
+  const w = N.numberWord(t.value);
+  ui.say(bond ? `${w} · in two leaves` : again ? (st.rule === 'groups' ? `${w} · the other way round` : `${w} · another way`) : N.hintFor(st, t, firstTarget), firstTarget ? 9 : 5);
   firstTarget = false;
+  plantDue();
+}
+
+// ─── the finale: the dew in view chimes its count and rises (P6) ───────────
+interface Chime {
+  at: number;
+  pad: Pad;
+  n: number;
+}
+let chimes: Chime[] = [];
+
+function startFinale() {
+  const leaves = visibleDewy()
+    .filter((p) => !p.selected)
+    .sort((a, b) => a.x - b.x)
+    .slice(0, 4);
+  let at = pond.t + 0.4;
+  for (const p of leaves) {
+    const n = liveCount(p);
+    for (let j = 0; j < n; j++) chimes.push({ at: at + j * 0.26, pad: p, n: j });
+    at += n * 0.26 + 0.5;
+  }
+  lock = at - pond.t + 0.3;
+  report('learn', learnSummary());
+  stretch.finished();
+  stretch = new L.Stretch(stretch);
+  nextTargetAt = at + L.PHASE_PAUSE.finale;
+}
+
+function stepChimes() {
+  if (!chimes.length) return;
+  const due = chimes.filter((c) => c.at <= pond.t);
+  chimes = chimes.filter((c) => c.at > pond.t);
+  for (const c of due) {
+    const p = c.pad;
+    sound.note(c.n, panAt(p.x));
+    const d = p.drops.find((dd) => dd.to > 0);
+    if (!d) continue;
+    d.to = 0;
+    const cs = Math.cos(p.ang);
+    const sn = Math.sin(p.ang);
+    lifts.push({ x0: p.x + cs * d.x * p.r - sn * d.y * p.r, y0: p.y + sn * d.x * p.r + cs * d.y * p.r, t: 0, dur: 1.6 + rand() * 0.5, delay: 0, bend: (rand() * 2 - 1) * 70 });
+    p.bob = Math.min(1, p.bob + 0.25);
+  }
+}
+
+function learnSummary() {
+  const now = Date.now();
+  const facts = Object.keys(memory.items);
+  return {
+    mastery: Math.round(mastery * 100) / 100,
+    firstTry: Math.round(stretch.firstTryRate() * 100) / 100,
+    meanQ: stretch.outcomes.length ? Math.round((stretch.outcomes.reduce((a, o) => a + o.q, 0) / stretch.outcomes.length) * 100) / 100 : null,
+    asks: stretch.outcomes.length,
+    facts: facts.length,
+    fluent: facts.filter((k) => memory.fluent(k, now)).length,
+    due: memory.due(now, () => true, 99).length,
+  };
+}
+
+// ─── the river helps, it never tells (P7) ──────────────────────────────────
+const HELP_AT = [7, 14, 22];
+
+function scaffold() {
+  if (!target || !ask || lock > 0 || selection.length) return;
+  if (ask.scaffold >= HELP_AT.length || pond.t - ask.lastTouchAt < HELP_AT[ask.scaffold]) return;
+  const seen = visibleDewy();
+  const sol = L.solutionFor(ask.stage.rule, counts(seen), ask.value, ask.stage.maxParts, ask.bond ? 2 : undefined);
+  if (!sol) return;
+  ask.scaffold++;
+  const pads = sol.map((i) => seen[i]);
+  if (ask.scaffold === 2) {
+    // one leaf of an answer drifts gently toward the boat
+    const p = pads[0];
+    const [bx, by] = pond.bow();
+    const d = Math.hypot(bx - p.x, by - p.y) || 1;
+    p.vx += ((bx - p.x) / d) * 22;
+    p.vy += ((by - p.y) / d) * 22;
+    p.bob = Math.min(1, p.bob + 0.6);
+  } else {
+    for (const p of pads) p.bob = Math.min(1, p.bob + 0.7);
+  }
+  sound.glint();
+}
+
+// ─── elegance: the river notices a good answer (P4) ────────────────────────
+interface Opening {
+  b: import('./world').Bloom;
+  t: number;
+  size: number;
+}
+let openings: Opening[] = [];
+
+function openBeside(p: Pad) {
+  const b = pond.bloomBeside(p, rand);
+  if (b) openings.push({ b, t: 0, size: 13 + rand() * 4 });
+}
+
+function stepOpenings(dt: number) {
+  for (const o of openings) {
+    o.t += dt;
+    // a bud rises, then opens
+    if (o.t < 0.9) o.b.size = 6 + 3 * (o.t / 0.9);
+    else {
+      o.b.open = 1;
+      const k = Math.min(1, (o.t - 0.9) / 1.4);
+      o.b.size = 9 + (o.size - 9) * (1 - (1 - k) * (1 - k));
+    }
+  }
+  openings = openings.filter((o) => o.t < 2.4);
 }
 
 /**
@@ -255,6 +475,11 @@ function keepSolvable() {
   }
   const st = stage();
   const seen = visibleDewy();
+  if (ask?.bond && !selection.length && !L.solutionFor('sum', counts(seen), target.value, 2, 2)) {
+    // the pair that made it in two has drifted off: quietly let it be any leaves
+    ask.bond = false;
+    ui.say(`gather ${N.numberWord(target.value)} drops`, 4);
+  }
   if (N.solvable(st, counts(seen), target.value)) {
     unsolvableSince = 0;
     return;
@@ -305,8 +530,13 @@ function choose(p: Pad) {
   if (!liveCount(p)) return;
   p.selected = true;
   selection.push(p);
+  if (ask) ask.lastTouchAt = pond.t;
   const st = stage();
-  const verdict = N.judge(st, target.value, counts(selection));
+  let verdict = N.judge(st, target.value, counts(selection));
+  // "in two leaves": a second leaf that doesn't make it starts the pair again from this one
+  if (ask?.bond && verdict.kind === 'partial' && selection.length >= 2) verdict = { kind: 'mismatch', gathered: liveCount(p) };
+  // passing exactly through ten on the way to a bigger number rings a low bell
+  if (st.rule === 'sum' && target.value > 10 && verdict.kind === 'partial' && verdict.gathered === 10) sound.ten(panAt(p.x));
   sound.note(selection.length - 1 + Math.min(4, liveCount(p) - 1), panAt(p.x));
   switch (verdict.kind) {
     case 'partial':
@@ -317,7 +547,7 @@ function choose(p: Pad) {
       for (const q of selection.slice(0, -1)) q.selected = false;
       selection = [p];
       ui.progress(verdict.gathered);
-      ui.say('leaves that match', 3);
+      ui.say(ask?.bond ? 'two leaves' : 'leaves that match', 3);
       break;
     case 'over':
       targetFriction++;
@@ -347,6 +577,9 @@ let lantern = 0;
 function solve() {
   if (!target) return;
   const value = target.value;
+  const chosen = counts(selection);
+  const chosenPads = selection.slice();
+  const others = counts(visibleDewy().filter((q) => !q.selected));
   sound.gathered();
   let k = 0;
   for (const p of selection) {
@@ -369,10 +602,49 @@ function solve() {
   target = null;
   pond.propel(90 + value * 14);
   ui.say(['and the water carries you', 'onward', 'the river opens', 'further down the water'][Math.floor(rand() * 4)], 3);
-  mastery = N.learn(mastery, stage(), { value }, targetFriction);
+  const st = stage();
+  // what the river learns from how it was made (P1, P2) — never shown
+  const phase = ask?.phase ?? 'relief';
+  const scaffolds = ask?.scaffold ?? 0;
+  const obs: L.Observation = {
+    secs: pond.t - (ask?.shownAt ?? pond.t),
+    leaves: chosen.length,
+    value,
+    friction: targetFriction,
+    scaffold: scaffolds,
+    counting: st.id === 'gather',
+  };
+  const q = L.quality(obs);
+  const fact = L.factOf(st.rule, chosen);
+  const { newWay } = memory.record(fact, q, Date.now());
+  mastery = N.learn(mastery, st, { value }, targetFriction + scaffolds);
+  if (phase === 'reach') lastReach = { stage: st, value, parts: fact.parts };
+  stretch.answered({ q, friction: targetFriction });
+  ask = null;
+
+  // and how the river answers a good one (P4)
+  const e = L.elegance(st.rule, chosen, others, st.maxParts, q, newWay);
+  if (e.fewest) openBeside(chosenPads[Math.floor(rand() * chosenPads.length)]);
+  if (e.bothWays) {
+    openBeside(chosenPads[0]);
+    openBeside(chosenPads[chosenPads.length - 1]);
+  }
+  if (e.double) {
+    // the two leaves drift together and touch
+    const [a, c] = chosenPads;
+    const dx = c.x - a.x;
+    const dy = c.y - a.y;
+    const d = Math.hypot(dx, dy) || 1;
+    a.vx += (dx / d) * 16;
+    a.vy += (dy / d) * 16;
+    c.vx -= (dx / d) * 16;
+    c.vy -= (dy / d) * 16;
+  }
+  if (e.fluent) lantern = Math.min(1.5, lantern + 0.35);
+
   totalSolves++;
   save();
-  nextTargetAt = pond.t + 3.4;
+  nextTargetAt = pond.t + L.PHASE_PAUSE[phase];
 }
 
 // ─── input ─────────────────────────────────────────────────────────────────
@@ -693,6 +965,10 @@ function frame(now: number) {
     sound.release();
   }
   if (!target && pond.t >= nextTargetAt) setTarget();
+  stepChimes();
+  stepOpenings(dt);
+  scaffold();
+  if (pond.bloomBoost > 1 && pond.t > 90) pond.bloomBoost = 1;
   if (pond.t >= checkAt) {
     checkAt = pond.t + 0.8;
     keepSolvable();
@@ -793,6 +1069,7 @@ Object.defineProperty(window, '__stillwater', {
     gathered: gathered(),
     selected: selection.map((p) => p.id),
     boatY: pond.boat.y + pond.origin,
+    learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
     boat: (() => {
       const [x, y] = toScreen(pond.boat.x, pond.boat.y);
       const b = pond.boat;

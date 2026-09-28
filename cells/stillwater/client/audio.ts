@@ -340,6 +340,14 @@ export class Sound {
     this.voice(f * 5.4, 0.01, 0.006, 0.6, 'sine', pan);
   }
 
+  /** Passing exactly through ten on the way to a bigger number: one low, round bell. */
+  ten(pan = 0) {
+    const f = PENTA[0] / 2;
+    this.voice(f, 0, 0.09, 3.6, 'sine', pan);
+    this.voice(f * 2, 0.004, 0.03, 2.2, 'sine', pan);
+    this.voice(f * 2.76, 0.008, 0.008, 1.1, 'sine', pan);
+  }
+
   /** The dew gathered: a slow rising chord. */
   gathered() {
     [0, 2, 4, 7].forEach((k, i) => {
