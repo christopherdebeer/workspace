@@ -455,8 +455,11 @@ export class Renderer {
     const sun = f.light.sun;
     const shadowOff: [number, number] = [(-sun[0] / sun[2]) * 3, (-sun[1] / sun[2]) * 3];
     const solid = (k: number, a: number) => new Array<number>(k).fill(a);
-    this.ribbon(f, rope.map(([x, y]) => [x + shadowOff[0], y + shadowOff[1]] as [number, number]), 1.8, [0, 0, 0], solid(rope.length, 0.3), false);
-    this.ribbon(f, rope, 1.25, [0.6, 0.19, 0.13], solid(rope.length, 1), false);
+    // a flat cotton ribbon: it twists as it lies, so it narrows where it turns on edge
+    const twist = rope.map((_, i) => 0.55 + 0.45 * Math.abs(Math.cos(i * 0.31 + Math.sin(f.time * 0.4 + i * 0.12) * 0.8)));
+    this.ribbon(f, rope, twist.map((w) => w * 1.9 + 0.5), [0.55, 0.66, 0.62], solid(rope.length, 0.1), false);
+    this.ribbon(f, rope.map(([x, y]) => [x + shadowOff[0], y + shadowOff[1]] as [number, number]), twist.map((w) => w * 1.3), [0, 0, 0], solid(rope.length, 0.22), false);
+    this.ribbon(f, rope, twist.map((w) => w * 1.05), [0.62, 0.2, 0.14], solid(rope.length, 1), false);
     // its end: a whipped knot and a small cork float riding the water
     const [ex, ey] = rope[rope.length - 1];
     const [px, py] = rope[rope.length - 2];

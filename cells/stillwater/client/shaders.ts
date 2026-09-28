@@ -1050,58 +1050,119 @@ in vec2 vP;
 in vec4 vB;
 in float vAng;
 out vec4 o;
-float petalLayer(vec2 p, float n, float off, float reach, float width, out vec2 lp){
+/**
+ * Flowers of several kinds, not one flower recoloured. Each is built from rings
+ * of petals; every petal is its own length, width and lean (seeded), so no two
+ * are the same and none is perfectly regular. All edges are antialiased from the
+ * screen-space footprint and nothing is finer than a pixel, so they don't crawl
+ * or shimmer as they turn and drift.
+ *   1 white water lily   — two rings of long pointed petals, green sepals beneath
+ *   2 pink lily          — flushed at the base, fading to pale tips
+ *   3 yellow lily        — half open, a cup of narrow upright petals
+ *   4 double rose lily   — many narrow petals, packed in four rings
+ *   5 spatterdock        — a small yellow globe of five thick cupped sepals, a flat disc in it
+ *   6 spent flower       — petals slack, browning, a few gone, a green seed head
+ */
+struct Petal { float d; float along; float side; float k; };
+Petal ring(vec2 p, float n, float off, float reach, float width, float point, float seed){
   float a = atan(p.y, p.x) - off;
-  float k = floor(a / (TAU / n) + .5);
-  float da = a - k * TAU / n;
-  float len = length(p);
-  lp = vec2(len * cos(da), len * sin(da));
-  vec2 e = vec2((lp.x - reach * .52) / (reach * .5), lp.y / (reach * width));
-  return length(e);
+  float sec = TAU / n;
+  float k = floor(a / sec + .5);
+  float h = hash12(vec2(k + seed * 17., seed * 31.));
+  float h2 = hash12(vec2(k * 3.1 + 7., seed * 13.));
+  float da = a - k * sec + (h2 - .5) * sec * .35;
+  float r = length(p);
+  vec2 lp = vec2(r * cos(da), r * sin(da));
+  float R = reach * (.84 + .3 * h);
+  float along = lp.x / R;
+  // an ellipse from the heart to the tip, tapering to a point toward the end
+  float halfW = R * width * (.85 + .3 * h2) * sqrt(max(0., along * (1. - along))) * 2.
+              * (1. - point * smoothstep(.45, 1., along) * .6);
+  float d = max(abs(lp.y) - halfW, max(-lp.x, lp.x - R));
+  Petal P; P.d = d; P.along = clamp(along, 0., 1.); P.side = lp.y / max(halfW, 1e-3); P.k = h;
+  return P;
 }
 void main(){
   vec2 p = vP;
-  float open = vB.y;
-  float variant = vB.x;
+  int v = int(vB.x + .5);
+  float seed = vB.z;
+  float px = fwidth(length(p)) * 1.2 + 1e-4;
   vec3 Ll = vec3(rot(uSun.xy, -vAng), uSun.z);
-  vec3 tipCol = variant < 1.5 ? vec3(.97, .96, .92) : variant < 2.5 ? vec3(.98, .80, .86) : vec3(.99, .93, .70);
-  vec3 baseCol = variant < 2.5 ? vec3(.86, .82, .62) : vec3(.95, .80, .45);
-  // shadow on the pad
-  vec2 lp;
-  float sd = petalLayer(p + Ll.xy * .12, 8., .2, .95 * open, .3, lp);
-  float shadow = (1. - smoothstep(.8, 1.3, sd)) * .35;
+
+  // the kind
+  float layers = 2., n0 = 14., reach0 = 1., width = .42, point = .65, cup = 0.;
+  vec3 base = vec3(.93, .92, .84), tip = vec3(.99, .98, .95), back = vec3(.86, .88, .80);
+  vec3 heart = vec3(.95, .76, .22);
+  float sepals = 1., spent = 0.;
+  if (v == 2) { layers = 3.; n0 = 12.; base = vec3(.86, .46, .58); tip = vec3(.99, .86, .90); back = vec3(.80, .52, .60); }
+  else if (v == 3) { layers = 2.; n0 = 12.; reach0 = .74; width = .26; cup = .7; base = vec3(.93, .84, .44); tip = vec3(.99, .95, .72); back = vec3(.84, .80, .52); heart = vec3(.97, .70, .16); }
+  else if (v == 4) { layers = 4.; n0 = 16.; width = .22; base = vec3(.70, .16, .34); tip = vec3(.93, .50, .62); back = vec3(.62, .22, .34); heart = vec3(.96, .62, .18); }
+  else if (v == 5) { layers = 1.; n0 = 5.; reach0 = .62; width = .95; point = 0.; cup = 1.; base = vec3(.80, .70, .16); tip = vec3(.98, .86, .26); back = vec3(.56, .58, .18); sepals = 0.; }
+  else if (v == 6) { layers = 2.; n0 = 11.; width = .3; spent = 1.; base = vec3(.74, .70, .58); tip = vec3(.80, .66, .52); back = vec3(.62, .56, .44); heart = vec3(.48, .50, .26); sepals = 1.; }
+
   vec3 col = vec3(0.);
   float cover = 0.;
-  // three rings of petals, inner on top; the first hit from the top wins
-  for (int L = 2; L >= 0; L--) {
-    float fl = float(L);
-    float reach = mix(.55, 1., 1. - fl * .28) * (.55 + .45 * open);
-    float n = L == 0 ? 8. : L == 1 ? 8. : 6.;
-    float off = fl * .39 + vB.z * 6.;
-    float e = petalLayer(p, n, off, reach, .27 - fl * .02, lp);
-    if (e < 1.) {
-      float along = clamp(lp.x / reach, 0., 1.);
-      vec3 c = mix(baseCol, tipCol, smoothstep(.1, .7, along));
-      // cupped: brighter where the petal faces the sun, a midrib crease
-      vec3 n3 = normalize(vec3(lp.y / reach * 1.5, -(along - .4) * 1.2, 1.));
-      n3.xy = rot(n3.xy, atan(p.y, p.x));
-      float lit = max((dot(n3, Ll) + .4) / 1.4, 0.);
-      c *= uAmb * 1.1 + uSunCol * lit * .85;
-      c *= 1. - (1. - smoothstep(0., .05, abs(lp.y / reach))) * .12;
-      c *= .82 + .18 * fl;
-      col = c;
-      cover = 1. - smoothstep(.9, 1., e);
-      break;
-    }
+  // shadow on the water, from the whole silhouette
+  float sh = length(p + Ll.xy * .1) - reach0 * .85;
+  float shadow = (1. - smoothstep(-.2, .25, sh)) * .3;
+
+  // green sepals first, underneath, peeking between the outer petals
+  if (sepals > .5) {
+    Petal S = ring(p, 4., seed * 6. + .4, reach0 * .8, .3, .8, seed + 5.);
+    float a = 1. - smoothstep(-px, px, S.d);
+    vec3 c = mix(vec3(.13, .24, .11), vec3(.28, .36, .17), S.along) * (uAmb * 1.1 + uSunCol * .7);
+    col = mix(col, c, a); cover = max(cover, a);
   }
-  // stamens
+  // rings, outer to inner: each drawn over the last
+  for (int L = 0; L < 4; L++) {
+    float fl = float(L);
+    if (fl >= layers) break;
+    float t = fl / max(layers - 1., 1.);
+    // inner petals stand more upright, so from above they are shorter
+    float reach = reach0 * mix(1., .52, t) * (1. - cup * .25 * t);
+    float n = n0 - fl * (v == 4 ? 2. : 1.);
+    float off = fl * 1.7 / n + seed * 6.;
+    Petal P = ring(p, n, off, reach, width * (1. - .15 * t), point, seed + fl);
+    if (spent > .5 && P.k < .3 && L == 0) continue;
+    float a = 1. - smoothstep(-px, px, P.d);
+    if (a <= 0.) continue;
+    vec3 c = mix(base, tip, smoothstep(.1, .8, P.along));
+    // cupped flowers show the paler, greener backs of their outer petals
+    c = mix(c, back, cup * (1. - t) * smoothstep(.3, .9, P.along) * .6);
+    if (spent > .5) c = mix(c, vec3(.52, .36, .22), smoothstep(.4, 1., P.along) * (.4 + .5 * P.k));
+    // form: rounded across the petal, curving up toward the tip; a faint midrib
+    vec3 n3 = normalize(vec3((P.along - .45) * (.9 + cup), P.side * .9, 1.));
+    n3.xy = rot(n3.xy, atan(p.y, p.x));
+    float lit = max((dot(n3, Ll) + .45) / 1.45, 0.);
+    c *= uAmb * 1.05 + uSunCol * lit * .8;
+    c *= 1. - (1. - smoothstep(0., .18, abs(P.side))) * .07;
+    // petals overlapping below are shadowed by the ones above them
+    c *= .8 + .2 * t;
+    // and each petal edge is a hair darker, so the layers read apart
+    c *= .9 + .1 * smoothstep(0., px * 3., -P.d);
+    col = mix(col, c, a);
+    cover = max(cover, a);
+  }
+  // the heart
   float r = length(p);
-  if (r < .2) {
-    float dots = step(.72, hash12(floor(p * 60.)));
-    vec3 c = mix(vec3(.93, .74, .22), vec3(1., .9, .45), dots) * (uAmb + uSunCol * .8);
-    float k = 1. - smoothstep(.17, .2, r);
-    col = mix(col, c, k);
-    cover = max(cover, k);
+  if (v == 5) {
+    // spatterdock: a flat ribbed stigma disc, green-yellow, in the cup
+    float disc = r - .2;
+    float ka = 1. - smoothstep(-px, px, disc);
+    float rays = .85 + .15 * cos(atan(p.y, p.x) * 12.) * smoothstep(.02, .12, r);
+    vec3 c = vec3(.72, .74, .26) * rays * (uAmb + uSunCol * .75);
+    col = mix(col, c, ka); cover = max(cover, ka);
+  } else if (v == 6) {
+    float ka = 1. - smoothstep(-px, px, r - .15);
+    vec3 c = heart * (.8 + .25 * smoothstep(.2, 0., r)) * (uAmb + uSunCol * .7);
+    col = mix(col, c, ka); cover = max(cover, ka);
+  } else {
+    // stamens: a soft ring of gold around a paler centre (no sub-pixel speckle)
+    float rs = .23 * reach0;
+    float ka = 1. - smoothstep(-px, px, r - rs);
+    float fil = .88 + .12 * cos(atan(p.y, p.x) * 18.) * smoothstep(px * 6., rs, r);
+    vec3 c = mix(heart * .75, heart * 1.15, smoothstep(rs * .3, rs, r)) * fil * (uAmb + uSunCol * .8);
+    col = mix(col, c, ka); cover = max(cover, ka);
   }
   if (cover < .003 && shadow < .003) discard;
   o = vec4(col * cover, cover + (1. - cover) * shadow);

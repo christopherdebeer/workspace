@@ -302,13 +302,18 @@ export class Pond {
     this.boat.x = this.channel(0);
     // a painter line off the stern, long enough to stream out and show the water
     // moving, short enough that its cork end stays in view behind the boat
-    const n = 16;
+    const n = 26;
     this.rope = new Float32Array(n * 2);
     this.ropePrev = new Float32Array(n * 2);
     for (let i = 0; i < n; i++) {
       this.rope[i * 2] = this.ropePrev[i * 2] = this.boat.x;
-      this.rope[i * 2 + 1] = this.ropePrev[i * 2 + 1] = -BOAT_LEN * 0.48 - i * 9;
+      this.rope[i * 2 + 1] = this.ropePrev[i * 2 + 1] = -BOAT_LEN * 0.48 - i * 5.4;
     }
+  }
+
+  /** Which flower: mostly white and pink lilies, some yellow and double rose, spatterdock, the odd spent one. */
+  static bloomKind(u: number): number {
+    return u < 0.3 ? 1 : u < 0.48 ? 2 : u < 0.6 ? 3 : u < 0.72 ? 4 : u < 0.9 ? 5 : 6;
   }
 
   /** Channel centre line: a slow meander, in rebased world y. */
@@ -659,7 +664,7 @@ export class Pond {
           const by = pl.y + Math.sin(a) * d;
           if (this.padAt(bx, by, near)) continue;
           const open = rand() < 0.65 ? 1 : 0;
-          this.blooms.push({ x: bx, y: by, vx: 0, vy: 0, ang: rand() * Math.PI * 2, size: open ? 13 + rand() * 6 : 7 + rand() * 3, open, variant: 1 + Math.floor(rand() * 3), seed: rand(), ax: bx, ay: by, rx: pl.x, ry: pl.y });
+          this.blooms.push({ x: bx, y: by, vx: 0, vy: 0, ang: rand() * Math.PI * 2, size: open ? 13 + rand() * 6 : 7 + rand() * 3, open, variant: Pond.bloomKind(rand()), seed: rand(), ax: bx, ay: by, rx: pl.x, ry: pl.y });
           break;
         }
       }
@@ -1315,7 +1320,8 @@ export class Pond {
       // let go, a sunk leaf comes back up, shedding the water off its face
       if (!p.caught && p.sink > 0.01) {
         const before = p.sink;
-        p.sink *= Math.exp(-2.2 * dt);
+        // slowly: the leaf is buoyant but the water sheeted over it has to run off first
+        p.sink *= Math.exp(-(0.75 + 0.5 * (1 - p.sink)) * dt);
         if (before > 0.3 && p.sink <= 0.3) {
           const l = Math.hypot(p.dx, p.dy) || 1;
           this.impulses.push({ x: p.x + (p.dx / l) * p.r * 0.8, y: p.y + (p.dy / l) * p.r * 0.8, r: 8, s: 0.7, foam: true });
@@ -1350,14 +1356,21 @@ export class Pond {
     r[1] = b.y - Math.cos(b.heading) * stern;
     pr[0] = r[0];
     pr[1] = r[1];
-    const kn = Math.exp(-5.5 * dt); // across the rope: the water holds it
+    const kn = Math.exp(-3.5 * dt); // across the rope: the water holds it
     const kt = Math.exp(-0.7 * dt); // along it: it slides
+    const t = this.t;
     for (let i = 1; i < n; i++) {
       const x = r[i * 2];
       const y = r[i * 2 + 1];
       let vx = (x - pr[i * 2]) / dt;
       let vy = (y - pr[i * 2 + 1]) / dt;
-      const [ux, uy] = this.flow(x, y);
+      let [ux, uy] = this.flow(x, y);
+      // a floating ribbon goes where the surface goes: the breeze on it, and the
+      // slow swell and eddies of the water, which wander it into soft curves
+      const [gx, gy] = this.wind(x, y);
+      const sw = Math.sin(t * 0.6 - i * 0.35) * 6.5 + Math.sin(t * 0.23 + i * 0.17 + x * 0.01) * 5;
+      ux += gx * 0.6 - Math.cos(b.heading) * sw * (i / n);
+      uy += gy * 0.6 + Math.sin(b.heading) * sw * (i / n);
       // tangent from the neighbours
       const j0 = i - 1;
       const j1 = Math.min(n - 1, i + 1);
@@ -1383,9 +1396,9 @@ export class Pond {
       const side = Math.hypot(nx, ny);
       if (side > 6 && Math.random() < dt * 3) this.impulses.push({ x, y, r: 4, s: Math.min(0.3, side / 60) });
     }
-    const seg = 9;
+    const seg = 5.4;
     const near = this.pads.filter((p) => Math.abs(p.x - r[0]) < 320 && Math.abs(p.y - r[1]) < 320);
-    for (let it = 0; it < 6; it++) {
+    for (let it = 0; it < 4; it++) {
       for (let i = 1; i < n; i++) {
         const ax = r[(i - 1) * 2];
         const ay = r[(i - 1) * 2 + 1];
@@ -1409,13 +1422,14 @@ export class Pond {
       // off the stern cleat it leaves pointing aft, and curves away from there
       const ax = r[0] - Math.sin(b.heading) * seg;
       const ay = r[1] - Math.cos(b.heading) * seg;
-      r[2] += (ax - r[2]) * 0.3;
-      r[3] += (ay - r[3]) * 0.3;
+      r[2] += (ax - r[2]) * 0.15;
+      r[3] += (ay - r[3]) * 0.15;
+      // only a whisper of stiffness: a soft line bends easily, it just won't crease
       for (let i = 1; i < n - 1; i++) {
         const mx = (r[(i - 1) * 2] + r[(i + 1) * 2]) * 0.5;
         const my = (r[(i - 1) * 2 + 1] + r[(i + 1) * 2 + 1]) * 0.5;
-        r[i * 2] += (mx - r[i * 2]) * 0.22;
-        r[i * 2 + 1] += (my - r[i * 2 + 1]) * 0.22;
+        r[i * 2] += (mx - r[i * 2]) * 0.035;
+        r[i * 2 + 1] += (my - r[i * 2 + 1]) * 0.035;
       }
       // floating, it can't pass through a leaf: it drapes round the edge, and leans on it
       for (let i = 2; i < n; i++) {
@@ -1432,8 +1446,8 @@ export class Pond {
           r[i * 2] += (dx / d) * push * 0.35;
           r[i * 2 + 1] += (dy / d) * push * 0.35;
           if (it === 0) {
-            p.vx -= (dx / d) * push * 0.4;
-            p.vy -= (dy / d) * push * 0.4;
+            p.vx -= (dx / d) * push * 0.15;
+            p.vy -= (dy / d) * push * 0.15;
           }
         }
       }
