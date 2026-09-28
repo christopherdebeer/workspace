@@ -16,8 +16,9 @@
  *     back rather than leaving for ever (and drags its anchor if shoved far);
  *   - pad–pad contact is a soft spring with a little friction-to-spin, so a
  *     crowded bank settles overlapping slightly, the way real pads do;
- *   - the boat is a capsule that shoulders pads aside, spinning them by the
- *     side it catches them on, and loses a breath of speed to each bump.
+ *   - the boat's hull loads pads downward. They flood, lose collision authority
+ *     and can pass beneath the hull; only a soft lateral shoulder and small yaw
+ *     remain while the leaf is still near the surface.
  *
  * REBASING. Positions would grow without bound on a long journey; every
  * REBASE units of travel everything shifts back by REBASE. All world-anchored
@@ -82,6 +83,17 @@ export interface Pad {
    */
   sink: number;
   caught: boolean;
+  /** Downward load accumulated by sustained hull/oar contact. */
+  load: number;
+  /** Vertical momentum of the leaf through the surface. */
+  sinkV: number;
+  /** Relative buoyant support and softness; generated once with the leaf. */
+  support: number;
+  compliance: number;
+  /** How recently the leaf was substantially flooded (0..1). */
+  wet: number;
+  /** Seconds of water-heavy dwell remaining after the load leaves. */
+  soak: number;
   /** The plant's rhizome on the bed this leaf's stem rises from. */
   rx: number;
   ry: number;
@@ -163,6 +175,25 @@ export interface Weed {
   seed: number;
   /** 0 ribbon grass, 1 feathery milfoil */
   kind: number;
+}
+
+/**
+ * Bank architecture that is scenery first. kind 0 = pier, 1 = blank sign.
+ * `state` is reserved for future environmental use and intentionally ignored
+ * by physics, input, learning and rendering today.
+ */
+export interface Landmark {
+  id: number;
+  x: number;
+  y: number;
+  ang: number;
+  /** Half extents in local space: width across, length along. */
+  w: number;
+  l: number;
+  seed: number;
+  kind: 0 | 1;
+  side: -1 | 1;
+  state: number;
 }
 
 /**
@@ -332,6 +363,7 @@ export class Pond {
   floaters: Floater[] = [];
   plants: Plant[] = [];
   blooms: Bloom[] = [];
+  landmarks: Landmark[] = [];
   gusts: Gust[] = [];
   /** The boat's recent path (newest last): where the wake is drawn from. */
   trail: Array<{ x: number; y: number; hx: number; hy: number; speed: number; t: number }> = [];
@@ -343,7 +375,9 @@ export class Pond {
   origin = 0;
   private genY = -600;
   private nextId = 1;
+  private nextLandmarkId = 1;
   private rand: Rand;
+  private landmarkRand: Rand;
   halfW = 420;
   t = 0;
   /** Chooses drops for a freshly grown pad (the game's current stage decides). */
@@ -355,6 +389,7 @@ export class Pond {
 
   constructor(seed: number) {
     this.rand = seeded(seed);
+    this.landmarkRand = seeded((seed ^ 0x51f15e) >>> 0);
     this.boat.x = this.channel(0);
     // a painter line off the stern, long enough to stream out and show the water
     // moving, short enough that its cork end stays in view behind the boat
@@ -623,6 +658,65 @@ export class Pond {
     }
   }
 
+  /**
+   * Sparse human traces at the bank. A separate RNG keeps their introduction
+   * from perturbing the established flora / numeracy ecology.
+   */
+  private growLandmarks(y0: number, y1: number) {
+    if (y1 < 300) return;
+    const rand = this.landmarkRand;
+    const place = (kind: 0 | 1) => {
+      const y = y0 + rand() * (y1 - y0);
+      const side: -1 | 1 = rand() < 0.5 ? -1 : 1;
+      const cx = this.channel(y);
+      const half = this.channelHalf(y);
+      const slope = (this.channel(y + 12) - this.channel(y - 12)) / 24;
+      const nn = Math.hypot(1, slope);
+      const ox = side / nn;
+      const oy = (-side * slope) / nn;
+      const ix = -ox;
+      const iy = -oy;
+
+      if (kind === 0) {
+        // Broad, modest old landing rather than a long boardwalk. In the
+        // overhead composition width is what gives it mass; length only needs
+        // to bridge bank vegetation to the open-water edge.
+        const w = 18 + rand() * 6;
+
+        // Define the pier by its endpoints rather than dropping a rectangle near
+        // the shoreline. The waterward tip only reaches a little into the run;
+        // the root is unmistakably buried in the visible bank. Where the bank
+        // itself runs beyond the grown view, the root naturally clips off-screen.
+        const innerD = Math.max(18, half - (20 + rand() * 18));
+        const outerD = Math.min(this.halfW + 70, half + 38 + rand() * 30);
+        const tipX = cx + ox * innerD;
+        const tipY = y + oy * innerD;
+        const rootX = cx + ox * outerD;
+        const rootY = y + oy * outerD;
+        const x = (tipX + rootX) * 0.5;
+        const py = (tipY + rootY) * 0.5;
+        const l = Math.hypot(tipX - rootX, tipY - rootY) * 0.5;
+        // Local +Y points from root toward the water.
+        const dirX = (tipX - rootX) / Math.max(1, l * 2);
+        const dirY = (tipY - rootY) / Math.max(1, l * 2);
+        const ang = Math.atan2(-dirX, dirY);
+        this.landmarks.push({ id: this.nextLandmarkId++, x, y: py, ang, w, l, seed: rand(), kind, side, state: 0 });
+      } else {
+        const w = 19 + rand() * 7;
+        const l = 14 + rand() * 4;
+        const x = cx + ox * (half + 42 + rand() * 22);
+        const py = y + oy * (half + 42 + rand() * 22);
+        const tx = slope / Math.hypot(slope, 1);
+        const ty = 1 / Math.hypot(slope, 1);
+        const ang = Math.atan2(-tx, ty) + (rand() - 0.5) * 0.18;
+        this.landmarks.push({ id: this.nextLandmarkId++, x, y: py, ang, w, l, seed: rand(), kind, side, state: 0 });
+      }
+    };
+
+    if (rand() < 0.12) place(0);
+    if (rand() < 0.22) place(1);
+  }
+
   /** Regrow everything around the boat (after a resize wider than the field was grown for). */
   regrow(halfW: number, yMin: number) {
     this.halfW = halfW;
@@ -632,6 +726,7 @@ export class Pond {
     this.floaters = this.floaters.filter((f) => f.y < yMin);
     this.plants = this.plants.filter((pl) => pl.y < yMin);
     this.blooms = this.blooms.filter((b) => b.y < yMin);
+    this.landmarks = this.landmarks.filter((m) => m.y < yMin);
     this.genY = yMin;
   }
 
@@ -692,6 +787,14 @@ export class Pond {
         cy: 0,
         sink: 0,
         caught: false,
+        load: 0,
+        sinkV: 0,
+        // Large old leaves have more area, but softer stems and retain more
+        // water: they yield slowly rather than behaving like rigid islands.
+        support: 0.82 + Math.min(0.28, r / 260),
+        compliance: 0.85 + smooth(42, 96, r) * 0.55 + rand() * 0.12,
+        wet: 0,
+        soak: 0,
         rx: plant.x,
         ry: plant.y,
         layer: rand(),
@@ -732,6 +835,7 @@ export class Pond {
       this.deep.push({ x: this.channel(y) + (rand() * 2 - 1) * (this.halfW + 80), y, r: 22 + rand() * 30, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.5 + rand() * 0.4 });
     }
     this.growFloaters(y0, y1, span);
+    this.growLandmarks(y0, y1);
     // weed beds root in the shallows toward the banks, sparser in the open run
     const weedCount = Math.round(((y1 - y0) * span) / 2600);
     for (let i = 0; i < weedCount; i++) {
@@ -773,6 +877,7 @@ export class Pond {
     this.floaters = this.floaters.filter((f) => f.y > yMin);
     this.plants = this.plants.filter((pl) => pl.y > yMin - 200);
     this.blooms = this.blooms.filter((b) => b.y > yMin);
+    this.landmarks = this.landmarks.filter((m) => m.y > yMin - 120);
   }
 
   rebaseIfNeeded(): number {
@@ -798,6 +903,7 @@ export class Pond {
       b.ay -= s;
       b.ry -= s;
     }
+    for (const m of this.landmarks) m.y -= s;
     for (const g of this.gusts) g.y -= s;
     for (const p of this.trail) p.y -= s;
     for (const p of this.puddles) p.y -= s;
@@ -1298,24 +1404,52 @@ export class Pond {
         const ny = ny0 / nd;
         const pen = rest - nd;
         const into = Math.max(0, bvx * nx + bvy * ny);
-        p.vx += nx * (into * 0.9 + pen * 2.2);
-        p.vy += ny * (into * 0.9 + pen * 2.2);
-        p.x += nx * pen * 0.35;
-        p.y += ny * pen * 0.35;
-        // caught on one side of its centre, it turns
+        const contact = clamp(pen / Math.max(10, p.r * 0.42) + into / 34, 0, 1);
+
+        // A leaf below the boat's draft progressively loses collision authority.
+        // The hull therefore presses THROUGH a mat instead of solving each leaf
+        // as a rigid lateral obstacle.
+        // Wet leaves remain physically soft for a while after they become
+        // visually shallower; collision does not snap back with the waterline.
+        const effectiveSink = Math.max(p.sink, p.wet * 0.58);
+        const authority = 1 - smooth(0.28, 0.82, effectiveSink);
+        p.caught = true;
+        p.load = Math.min(1.35, p.load + (1.15 + contact * 3.9) * p.compliance * dt);
+        p.sinkV += (0.35 + contact * 1.35) * p.compliance * (1 - p.sink) * dt;
+
+        // There is still a soft shoulder and spin while the leaf is afloat, but
+        // most of the hull's work goes DOWNWARD. Positional correction is tiny:
+        // overlap is allowed and becomes the visual act of submerging it.
+        const lateral = authority * authority;
+        p.vx += nx * (into * 0.16 + pen * 0.34) * lateral;
+        p.vy += ny * (into * 0.16 + pen * 0.34) * lateral;
+        p.x += nx * pen * 0.045 * lateral;
+        p.y += ny * pen * 0.045 * lateral;
+
         const tang = bvx * -ny + bvy * nx;
-        p.va += (tang / p.r) * 0.35 * dt * 10 * Math.min(1, pen / 6);
-        const mass = (p.r * p.r) / 1600;
-        b.speed = Math.max(0, b.speed - into * mass * 0.012);
+        p.va += (tang / p.r) * 0.14 * dt * 10 * Math.min(1, pen / 8) * lateral;
+
+        // The pad can nudge the heading and take a little way off the boat, but
+        // it should not ricochet the hull sideways. Steering remains authoritative.
+        const side = nx * hc - ny * hs;
+        b.heading -= side * contact * authority * (0.055 + Math.min(0.055, into / 500)) * dt;
+        const mass = (p.r * p.r) / 2200;
+        b.speed = Math.max(0, b.speed - into * mass * 0.0025 * authority);
+
         if (!p.touching && (pen > 2 || into > 3)) {
-          this.bumps.push({ x: cx + nx * hullR, y: cy + ny * hullR, strength: clamp(into / 30 + pen / 20, 0.1, 1) });
-          this.impulses.push({ x: p.x - nx * p.r * 0.9, y: p.y - ny * p.r * 0.9, r: 10, s: 0.8, foam: into > 8 });
-          this.rings.push({ x: p.x - nx * p.r * 0.9, y: p.y - ny * p.r * 0.9, t: this.t, s: 0.7 });
+          this.bumps.push({ x: cx + nx * hullR, y: cy + ny * hullR, strength: clamp(into / 45 + pen / 35, 0.08, 0.55) });
+          this.impulses.push({ x: p.x - nx * p.r * 0.88, y: p.y - ny * p.r * 0.88, r: 10, s: 0.55, foam: into > 12 });
+          this.rings.push({ x: p.x - nx * p.r * 0.88, y: p.y - ny * p.r * 0.88, t: this.t, s: 0.5 });
         }
-        // the hull presses the near edge in, and a hard nudge sets the leaf flexing
-        p.cx -= nx * (pen / p.r) * 2.2;
-        p.cy -= ny * (pen / p.r) * 2.2;
-        p.wob = Math.min(1, p.wob + into * 0.004 * dt * 60);
+
+        // Near edge floods first; the shader's existing waterline now exposes
+        // the same physical direction that is accumulating load.
+        p.cx -= nx * (pen / p.r) * (1.25 + contact);
+        p.cy -= ny * (pen / p.r) * (1.25 + contact);
+        p.wob = Math.min(1, p.wob + into * 0.0025 * dt * 60 + contact * dt * 0.8);
+        // a leaf the hull has put right under washes clean, as one under a blade does
+        // (an answer in progress keeps its dew: the ask is repaired, not lost mid-gesture)
+        if (p.sink > 0.85 && !p.selected) for (const dr of p.drops) dr.to = 0;
         p.touching = true;
       } else p.touching = false;
     }
@@ -1341,7 +1475,13 @@ export class Pond {
             if (q.id <= p.id) continue;
             const dx = q.x - p.x;
             const dy = q.y - p.y;
-            const touch = p.r + q.r;
+            // Submerged leaves stop behaving like rigid discs in the surface
+            // mat; neighbours can overlap and close above them.
+            const ps = Math.max(p.sink, p.wet * 0.52);
+            const qs = Math.max(q.sink, q.wet * 0.52);
+            const pr = p.r * (1 - 0.68 * smooth(0.3, 0.9, ps));
+            const qr = q.r * (1 - 0.68 * smooth(0.3, 0.9, qs));
+            const touch = pr + qr;
             const d2 = dx * dx + dy * dy;
             if (d2 >= touch * touch) continue;
             const d = Math.sqrt(d2) || 0.01;
@@ -1408,18 +1548,52 @@ export class Pond {
       p.cx = 0;
       p.cy = 0;
       p.wob *= Math.exp(-1.6 * dt);
-      // let go, a sunk leaf comes back up, shedding the water off its face
-      if (!p.caught && p.sink > 0.01) {
-        const before = p.sink;
-        // slowly: the leaf is buoyant but the water sheeted over it has to run off first
-        p.sink *= Math.exp(-(0.75 + 0.5 * (1 - p.sink)) * dt);
-        if (before > 0.3 && p.sink <= 0.3) {
-          const l = Math.hypot(p.dx, p.dy) || 1;
-          this.impulses.push({ x: p.x + (p.dx / l) * p.r * 0.8, y: p.y + (p.dy / l) * p.r * 0.8, r: 8, s: 0.7, foam: true });
-          this.rings.push({ x: p.x, y: p.y, t: this.t, s: 0.5 });
-          p.bob = Math.min(1, p.bob + 0.5);
-          p.wob = Math.min(1, p.wob + 0.4);
-        }
+
+      // Buoyancy is deliberately asymmetric. A hull can press a leaf down
+      // decisively, but a flooded leaf is water-heavy: after release it dwells
+      // low, drains, and only then rises on a soft overdamped spring.
+      const before = p.sink;
+      if (p.caught) {
+        p.soak = Math.max(p.soak, 0.55 + p.sink * 1.35);
+        // Direct oar pushes set sink without load; preserve enough hydrostatic
+        // load that they recover with the same organic timing as hull presses.
+        p.load = Math.max(p.load, p.sink * p.support * 0.72);
+      } else {
+        p.soak = Math.max(0, p.soak - dt);
+        p.load *= Math.exp(-0.48 * dt);
+      }
+
+      const pressureSink = clamp(p.load / Math.max(0.55, p.support), 0, 1);
+      if (p.caught) {
+        // Downward response remains responsive enough to make rowing through
+        // vegetation legible at normal boat speed.
+        p.sinkV += Math.max(0, pressureSink - p.sink) * (5.5 + 2.5 * p.compliance) * dt;
+      } else if (p.soak > 0) {
+        // While flooded, kill the rubber-band rebound and let retained load /
+        // inertia settle. A tiny restoring term prevents a numerical plateau.
+        const held = Math.max(pressureSink, p.sink * 0.965);
+        p.sinkV += (held - p.sink) * 0.34 * dt;
+      } else {
+        // Once drained enough to rise, wetness still damps buoyancy strongly.
+        // Recovery starts very gently and becomes more eager only as the leaf dries.
+        const dryK = 0.24 + (1 - p.wet) * 0.76;
+        p.sinkV += (pressureSink - p.sink) * (0.62 + p.support * 0.42) * dryK * dt;
+      }
+
+      p.sinkV *= Math.exp(-(p.caught ? 2.8 : p.soak > 0 ? 4.2 : 1.65) * dt);
+      p.sink = clamp(p.sink + p.sinkV * dt, 0, 1);
+      if (p.sink <= 0 && p.sinkV < 0) p.sinkV = 0;
+      if (p.sink >= 1 && p.sinkV > 0) p.sinkV = 0;
+
+      // Wetness has a much longer memory than geometric submergence. This both
+      // slows the lift and keeps collision soft until the leaf has visibly drained.
+      p.wet = Math.max(p.sink, p.wet * Math.exp(-0.18 * dt));
+      if (!p.caught && before > 0.3 && p.sink <= 0.3) {
+        const l = Math.hypot(p.dx, p.dy) || 1;
+        this.impulses.push({ x: p.x + (p.dx / l) * p.r * 0.8, y: p.y + (p.dy / l) * p.r * 0.8, r: 8, s: 0.7, foam: true });
+        this.rings.push({ x: p.x, y: p.y, t: this.t, s: 0.5 });
+        p.bob = Math.min(1, p.bob + 0.5);
+        p.wob = Math.min(1, p.wob + 0.4);
       }
       p.caught = false;
       p.sel += ((p.selected ? 1 : 0) - p.sel) * (1 - Math.exp(-6 * dt));
@@ -1527,6 +1701,10 @@ export class Pond {
         const x = r[i * 2];
         const y = r[i * 2 + 1];
         for (const p of near) {
+          // a floating line slides over a drowned leaf rather than shoving it along
+          // (else a leaf sunk under the stern is pushed ahead of the rope for ever)
+          const afloat = 1 - smooth(0.3, 0.8, Math.max(p.sink, p.wet * 0.5));
+          if (afloat <= 0) continue;
           const dx = x - p.x;
           const dy = y - p.y;
           const lim = p.r * 0.93 + 1.5;
@@ -1534,11 +1712,11 @@ export class Pond {
           const d = Math.hypot(dx, dy) || 1;
           if (d >= lim) continue;
           const push = lim - d;
-          r[i * 2] += (dx / d) * push * 0.35;
-          r[i * 2 + 1] += (dy / d) * push * 0.35;
+          r[i * 2] += (dx / d) * push * 0.35 * afloat;
+          r[i * 2 + 1] += (dy / d) * push * 0.35 * afloat;
           if (it === 0) {
-            p.vx -= (dx / d) * push * 0.15;
-            p.vy -= (dy / d) * push * 0.15;
+            p.vx -= (dx / d) * push * 0.15 * afloat;
+            p.vy -= (dy / d) * push * 0.15 * afloat;
           }
         }
       }

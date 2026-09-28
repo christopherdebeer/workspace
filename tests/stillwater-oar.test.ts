@@ -7,6 +7,7 @@ function padAt(pond: Pond, x: number, y: number, r = 30): Pad {
     drops: [{ x: 0.35, y: 0, r: 0.2, a: 1, to: 1 }, { x: -0.4, y: 0, r: 0.2, a: 1, to: 1 }],
     selected: false, sel: 0, bob: 0, focus: false, flower: 0, touching: false, layer: 0,
     dx: 0, dy: 0, wob: 0, cx: 0, cy: 0, sink: 0, caught: false, rx: x, ry: y,
+    load: 0, sinkV: 0, support: 0.82 + Math.min(0.28, r / 260), compliance: 1, wet: 0, soak: 0,
   };
   pond.pads.push(pad);
   return pad;
@@ -59,10 +60,13 @@ describe('stillwater: an oar blade on a lily pad', () => {
     for (let i = 0; i < 20; i++) pond.step(1 / 60, { y0: -1e4, y1: 1e4 }, false);
     const sunk = pad.sink;
     expect(sunk).toBeGreaterThan(0.3);
-    // move the leaf clear of the blades and let the water have it back
+    // move the leaf clear of the blades and let the water have it back: it is
+    // water-heavy at first (still mostly under after a second), then rises
     pad.x += 400;
     pad.ax += 400;
-    for (let i = 0; i < 120; i++) pond.step(1 / 60, { y0: -1e4, y1: 1e4 }, false);
+    for (let i = 0; i < 60; i++) pond.step(1 / 60, { y0: -1e4, y1: 1e4 }, false);
+    expect(pad.sink).toBeGreaterThan(sunk * 0.5);
+    for (let i = 0; i < 60 * 11; i++) pond.step(1 / 60, { y0: -1e4, y1: 1e4 }, false);
     expect(pad.sink).toBeLessThan(sunk * 0.2);
   });
 

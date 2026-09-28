@@ -70,6 +70,7 @@ export const PROGRAMS: Array<[string, string, string]> = [
   ['pad', S.PAD_VS, S.PAD_FS],
   ['flower', S.FLOWER_VS, S.FLOWER_FS],
   ['floater', S.FLOATER_VS, S.FLOATER_FS],
+  ['structure', S.STRUCTURE_VS, S.STRUCTURE_FS],
   ['boat', S.BOAT_VS, S.BOAT_FS],
   ['ribbon', S.RIBBON_VS, S.RIBBON_FS],
   ['mote', S.MOTE_VS, S.MOTE_FS],
@@ -100,6 +101,7 @@ export class Renderer {
   private flowerInst: Instanced;
   private weedInst: Instanced;
   private floatInst: Instanced;
+  private structureInst: Instanced;
   private chan = new Float32Array(66);
   private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
@@ -164,6 +166,7 @@ export class Renderer {
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
     this.weedInst = new Instanced(gl, this.quad, 600, 2);
     this.floatInst = new Instanced(gl, this.quad, 4000, 2);
+    this.structureInst = new Instanced(gl, this.quad, 96, 2);
 
     this.dropTex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.dropTex);
@@ -371,6 +374,14 @@ export class Renderer {
     this.flowerInst.count = fl;
     this.flowerInst.upload();
 
+    let lm = 0;
+    for (const m of pond.landmarks) {
+      if (!inView(m.x, m.y, Math.max(m.w, m.l) * 1.5) || lm >= 96) continue;
+      this.structureInst.set(lm++, m.x, m.y, m.w, m.l, m.ang, m.kind, m.seed, m.side);
+    }
+    this.structureInst.count = lm;
+    this.structureInst.upload();
+
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
 
@@ -487,6 +498,10 @@ export class Renderer {
     // flowers
     this.common(this.p.flower, f);
     this.flowerInst.draw();
+
+    // Dormant bank architecture: visible, but physically and semantically inert.
+    this.common(this.p.structure, f);
+    this.structureInst.draw();
 
     // boat
     const b = pond.boat;

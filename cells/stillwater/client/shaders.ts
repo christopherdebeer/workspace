@@ -1466,6 +1466,154 @@ void main(){
   o = vec4(col, 1.) * cover;
 }`;
 
+
+// ─── dormant bank architecture: piers and blank timber signs ──────────────
+
+export const STRUCTURE_VS = /* glsl */ `${HEAD}
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec4 iA; // x, y, half-width, half-length
+layout(location=2) in vec4 iB; // angle, kind, seed, side
+uniform vec4 uView;
+out vec2 vP;
+out vec4 vA;
+out vec4 vB;
+out vec2 vW;
+vec2 rotS(vec2 p, float a){ float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }
+void main(){
+  vP = aPos * 1.24;
+  vA = iA;
+  vB = iB;
+  vec2 local = vP * iA.zw;
+  vW = iA.xy + rotS(local, iB.x);
+  gl_Position = vec4((vW - uView.xy) * uView.zw, 0., 1.);
+}`;
+
+export const STRUCTURE_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}${CANOPY}
+in vec2 vP;
+in vec4 vA;
+in vec4 vB;
+in vec2 vW;
+out vec4 o;
+
+float boxS(vec2 p, vec2 b){
+  vec2 d = abs(p) - b;
+  return length(max(d, 0.)) + min(max(d.x, d.y), 0.);
+}
+
+void main(){
+  float kind = vB.y;
+  float seed = vB.z;
+  vec2 p = vP;
+  float aa = max(fwidth(p.x), fwidth(p.y)) * 1.5;
+
+  vec2 shW = -uSun.xy / max(uSun.z, .28) * 7.;
+  vec2 shL = rot(shW, -vB.x) / max(vA.zw, vec2(1.));
+  float cover = 0.;
+  float shadow = 0.;
+  vec3 col = vec3(0.);
+
+  if (kind < .5) {
+    // Silvered, water-worn timber. The deck is deliberately broad and quiet;
+    // construction detail comes from many small boards rather than red colour.
+    float wob = (texture(uNoise, vec2(p.y * .21 + seed * 9., seed * 17.)).r - .5) * .045;
+    float deckD = boxS(vec2(p.x + wob, p.y), vec2(.84, .94));
+    float deck = 1. - smoothstep(-aa, aa, deckD);
+
+    float ds = boxS(vec2(p.x + wob, p.y) - shL, vec2(.87, .98));
+    shadow = (1. - smoothstep(-aa * 2., aa * 2., ds)) * .27;
+
+    float grain = texture(uNoise, vec2(p.x * .22 + seed * 7., p.y * 2.4 + seed * 3.)).r;
+    float coarse = texture(uNoise, vW / 28. + seed).g;
+    float silver = texture(uNoise, vec2(p.x * .7 - seed * 4., p.y * 5.2)).b;
+    vec3 dry = mix(vec3(.245, .245, .215), vec3(.405, .395, .335), grain * .38 + coarse * .22);
+    dry = mix(dry, vec3(.46, .47, .42), smoothstep(.69, .93, silver) * .18);
+
+    // More, smaller transverse planks: a weathered landing, not a UI ladder.
+    float boards = 15. + floor(fract(seed * 13.) * 6.);
+    float by = fract((p.y + .94) / 1.88 * boards + seed * .37);
+    float seam = 1. - smoothstep(.014, .043, min(by, 1. - by));
+    dry *= 1. - seam * (.24 + .10 * coarse);
+
+    // Hairline longitudinal splits and occasional dark checks in old boards.
+    float splitN = texture(uNoise, vec2(p.x * 5.7 + seed * 15., floor((p.y + .94) * boards) * .31)).r;
+    float split = smoothstep(.955, .992, splitN) * smoothstep(.18, .78, abs(p.x));
+    dry *= 1. - split * .42;
+
+    // Waterward end: charcoal-grey with a restrained olive algae collar.
+    float wet = smoothstep(.30, .96, p.y);
+    dry = mix(dry, vec3(.135, .155, .14), wet * .54);
+    float algae = wet * smoothstep(.58, .88, coarse);
+    dry = mix(dry, vec3(.17, .225, .145), algae * .30);
+
+    float nx = abs(abs(p.x) - .61);
+    float ny = abs(by - .5);
+    float nail = (1. - smoothstep(.014, .036, nx)) * (1. - smoothstep(.045, .12, ny));
+    dry = mix(dry, vec3(.045, .05, .045), nail * .82);
+
+    float chipN = texture(uNoise, vec2(p.y * 3.1 + seed * 11., seed * 5.)).b;
+    float chip = smoothstep(.79, .95, abs(p.x)) * step(.76, chipN);
+    deck *= 1. - chip * .58;
+
+    // Round piles explain how the landing is held up. They sit just proud of
+    // both deck edges, darken toward the water and carry a mossy wet collar.
+    float pile = 0.;
+    float collar = 0.;
+    for (int yi = 0; yi < 3; yi++) {
+      float py = -.63 + float(yi) * .61;
+      for (int xi = -1; xi <= 1; xi += 2) {
+        vec2 q = (p - vec2(float(xi) * .84, py)) * vA.zw;
+        float r = yi == 2 ? 4.4 : 3.9;
+        float dd = length(q);
+        pile = max(pile, 1. - smoothstep(r - 1.0, r + 1.0, dd));
+        collar = max(collar, smoothstep(r * .62, r * .96, dd) * (1. - smoothstep(r, r + 1.2, dd)));
+      }
+    }
+    vec3 pileCol = mix(vec3(.115, .125, .115), vec3(.19, .205, .175), coarse * .25);
+    pileCol = mix(pileCol, vec3(.145, .205, .13), collar * (.28 + wet * .28));
+
+    cover = max(deck, pile);
+    // Deck lies over the piles where they overlap.
+    vec3 wood = mix(pileCol, dry, deck);
+    shadow *= (1. - cover * .15);
+    float light = .66 + .44 * max(uSun.z, 0.) * sunThrough(vW);
+    col = wood * (uAmb * 1.08 + uSunCol * light);
+  } else {
+    vec2 boardP = p - vec2(0., .22);
+    float boardD = boxS(boardP, vec2(.88, .36));
+    vec2 postP = p - vec2(0., -.48);
+    float postD = boxS(postP, vec2(.12, .58));
+    float d = min(boardD, postD);
+    cover = 1. - smoothstep(-aa, aa, d);
+
+    float ds = min(boxS(boardP - shL, vec2(.9, .38)), boxS(postP - shL, vec2(.14, .60)));
+    shadow = (1. - smoothstep(-aa * 2., aa * 2., ds)) * .28 * (1. - cover);
+
+    float grain = texture(uNoise, vec2(p.x * 1.9 + seed * 5., p.y * .22 + seed * 13.)).r;
+    float weather = texture(uNoise, vW / 24. + seed * 2.).g;
+    // Same old, cool timber family as the pier. The blank sign should
+    // disappear into the bank rather than announce itself as a red prop.
+    vec3 wood = mix(vec3(.235, .235, .205), vec3(.39, .375, .31), grain * .42);
+    wood *= .84 + weather * .18;
+    wood = mix(wood, vec3(.17, .205, .145), smoothstep(.67, .9, weather) * .12);
+
+    float nails = 0.;
+    for (int k = -1; k <= 1; k += 2) {
+      vec2 q = boardP - vec2(float(k) * .67, 0.);
+      nails = max(nails, 1. - smoothstep(.035, .075, length(q)));
+    }
+    wood = mix(wood, vec3(.055, .05, .04), nails * .85);
+    wood = mix(wood, vec3(.145, .19, .125), smoothstep(.55, .9, weather) * smoothstep(-.2, .95, -p.y) * .15);
+
+    float light = .70 + .42 * max(uSun.z, 0.) * sunThrough(vW);
+    col = wood * (uAmb * 1.05 + uSunCol * light);
+  }
+
+  if (cover < .003 && shadow < .003) discard;
+  vec3 outCol = col * cover;
+  float a = cover + shadow * (1. - cover);
+  o = vec4(outCol, a);
+}`;
+
 // ─── ribbons (rope, thread) ────────────────────────────────────────────────
 
 export const RIBBON_VS = /* glsl */ `${HEAD}
@@ -1582,6 +1730,8 @@ export const SHADERS = {
   FLOWER_FS,
   FLOATER_VS,
   FLOATER_FS,
+  STRUCTURE_VS,
+  STRUCTURE_FS,
   BOAT_VS,
   BOAT_FS,
   RIBBON_VS,
