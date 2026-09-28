@@ -16043,7 +16043,7 @@ function refreshSwardField(full = true): void {
 /** One band of the sward: a lattice of `side²` slots at `step` metres. */
 /** A block of a band's lattice: its own slice of the slot ids, drawn by its own
  *  mesh so it can be culled. `ix0..ix1` and `iz0..iz1` are lattice indices. */
-interface SwardBlock { mesh: THREE.Mesh; ix0: number; ix1: number; iz0: number; iz1: number }
+interface SwardBlock { mesh: THREE.Mesh; ix0: number; ix1: number; iz0: number; iz1: number; box: THREE.Box3; ring: boolean }
 interface SwardBand { mesh: THREE.Object3D; blocks: SwardBlock[]; side: number; step: number; reach: number;
   uBase: { value: THREE.Vector2 }; uStep: { value: number }; uSide: { value: number };
   /** The base cell as an EXACT INTEGER index. See the note by sBaseI. */
@@ -16669,14 +16669,17 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
     for (let iz = iz0; iz < iz1; iz++) for (let ix = ix0; ix < ix1; ix++) ids[n++] = iz * side + ix;
     geo.setAttribute('aId', new THREE.InstancedBufferAttribute(ids, 1));
     geo.instanceCount = n;
-    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1);
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e9);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'sward';
-    mesh.frustumCulled = SWARD_BLOCKS > 1;
+    // Culled by BOX in the scene's own onBeforeRender (below), not by three's
+    // sphere: a sphere tall enough to hold a block's ground is as wide as it
+    // is tall, and the first cut drew 60 of 64 blocks a band that way.
+    mesh.frustumCulled = false;
     mesh.castShadow = false;         // see the header: sub-pixel, and it doubles the vertices
     mesh.receiveShadow = false;
     group.add(mesh);
-    blocks.push({ mesh, ix0, ix1, iz0, iz1 });
+    blocks.push({ mesh, ix0, ix1, iz0, iz1, box: new THREE.Box3(), ring: true });
   }
   group.visible = false;             // until the field has been built once
   scene.add(group);
@@ -16697,19 +16700,32 @@ function swardPlaceBlocks(b: SwardBand, fx: number, fz: number, gy: number): voi
     const dxN = Math.max(x0 - fx, 0, fx - x1), dzN = Math.max(z0 - fz, 0, fz - z1);
     const dN = Math.hypot(dxN, dzN);
     const dF = Math.hypot(Math.max(Math.abs(x0 - fx), Math.abs(x1 - fx)), Math.max(Math.abs(z0 - fz), Math.abs(z1 - fz)));
-    const inRing = dF > bl.x && dN < bl.w;
-    k.mesh.visible = inRing;
+    k.ring = dF > bl.x && dN < bl.w;
+    k.mesh.visible = k.ring;
     swardCullStat.blocks++;
-    if (!inRing) { swardCullStat.ringHidden++; continue; }
-    const hw = (x1 - x0) * 0.5, hd = (z1 - z0) * 0.5;
+    if (!k.ring) { swardCullStat.ringHidden++; continue; }
     // Ground within a block can sit well off the focus's: allow a slope of one
-    // in one out to the block's far edge, and never less than forty metres.
-    const vy = Math.max(40, dF);
-    const sp = k.mesh.geometry.boundingSphere!;
-    sp.center.set((x0 + x1) * 0.5, gy, (z0 + z1) * 0.5);
-    sp.radius = Math.hypot(hw, hd, vy);
+    // in one out to the block's far edge, and never less than thirty metres.
+    // A tall box costs the top and bottom planes a little; the side planes,
+    // which are what a portrait view mostly culls by, are untouched by it.
+    const vy = Math.max(30, dF);
+    k.box.min.set(x0, gy - vy, z0);
+    k.box.max.set(x1, gy + vy + 3, z1);
   }
 }
+/** Per RENDER, against the camera that render uses — the world view, the dock's
+ *  POV, a probe — so no camera inherits another's culling. */
+const swardFrustum = new THREE.Frustum(), swardPV = new THREE.Matrix4();
+scene.onBeforeRender = (_r, _s, cam) => {
+  if (SWARD_BLOCKS <= 1 || !swardCullOn) return;
+  swardPV.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  swardFrustum.setFromProjectionMatrix(swardPV);
+  for (const b of swardBands) {
+    if (!b.mesh.visible) continue;
+    for (const k of b.blocks) k.mesh.visible = k.ring && swardFrustum.intersectsBox(k.box);
+  }
+};
+let swardCullOn = true;
 /** GPU sward on? `?sward=cpu` goes back to the old lattice. */
 let swardGpu = qs('sward') !== 'cpu';
 /** Per-frame: the lattice origins, the eye, the tint, the density. All uniform
@@ -18318,17 +18334,14 @@ function stepUnderstorey(fx: number, fz: number): void {
  *  and nothing else (the frame loop is stood down with __draw(false), so the
  *  wind clock does not move). Reports how many blocks each band drew. */
 (window as any).__swardcull = (on: boolean) => {
-  for (const b of swardBands) for (const k of b.blocks) {
-    k.mesh.frustumCulled = on && SWARD_BLOCKS > 1;
-    if (!on) k.mesh.visible = true;
-  }
+  swardCullOn = on;
+  for (const b of swardBands) for (const k of b.blocks) if (!on) { k.ring = true; k.mesh.visible = true; }
   if (on) { const [fx, fz] = renderFocusXZ(); const gy = groundAt(fx, fz); for (const b of swardBands) if (b.mesh.visible) swardPlaceBlocks(b, fx, fz, gy); }
   renderer.setRenderTarget(rtScene); renderer.render(scene, camera); renderer.setRenderTarget(null);
   const calls = renderer.info.render.calls, tris = renderer.info.render.triangles;
   composite(mblurAmt);
-  const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   return { on, calls, tris, bands: swardBands.map((b) => ({ step: b.step, blocks: b.blocks.length,
-    drawn: b.blocks.filter((k) => k.mesh.visible && (!k.mesh.frustumCulled || fr.intersectsSphere(k.mesh.geometry.boundingSphere!))).length })) };
+    drawn: b.blocks.filter((k) => k.mesh.visible).length })) };
 };
 (window as any).__forestfloor = (o: { us?: boolean; near?: boolean } = {}) => {
   if (o.us !== undefined) US_ON = o.us;
