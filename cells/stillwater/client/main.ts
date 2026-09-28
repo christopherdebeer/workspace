@@ -364,8 +364,13 @@ function begin() {
  * dew chooses it, and a drag from there traces across dewy leaves.
  */
 let gust: Gust | null = null;
-/** A finger on the boat: it rows toward the finger. */
-let helm: { t: number; x: number; y: number; moved: boolean } | null = null;
+/**
+ * A finger on the boat, or on the water behind it, drives the boat — like a
+ * hand at the stern: rest it there and the rower keeps a steady stroke, push
+ * it on (drag up) to pull harder, slide it across to steer. A tap is one long
+ * pull. The finger stays behind the boat, off the water it's heading into.
+ */
+let helm: { t: number; x: number; y: number; moved: boolean; steer: number } | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
 
 canvasEl.addEventListener('pointerdown', (e) => {
@@ -373,14 +378,14 @@ canvasEl.addEventListener('pointerdown', (e) => {
   pointerId = e.pointerId;
   canvasEl.setPointerCapture(e.pointerId);
   begin();
-  // the boat first: a finger on it takes the helm (a tap is one long stroke)
   const [bwx, bwy] = toWorld(e.clientX, e.clientY);
-  if (pond.onBoat(bwx, bwy)) {
-    helm = { t: performance.now(), x: e.clientX, y: e.clientY, moved: false };
-    pond.boat.helm = [bwx, bwy + 60];
+  const hitPad = hit(e.clientX, e.clientY);
+  // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
+  if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && liveCount(hitPad)))) {
+    helm = { t: performance.now(), x: e.clientX, y: e.clientY, moved: false, steer: pond.boat.heading };
+    pond.boat.helm = { steer: pond.boat.heading, push: 0 };
     return;
   }
-  const hitPad = hit(e.clientX, e.clientY);
   // a leaf with dew is a choice; anywhere else — water or a dry leaf — the touch is wind
   const p = hitPad && liveCount(hitPad) ? hitPad : null;
   lastHit = p;
@@ -402,8 +407,11 @@ canvasEl.addEventListener('pointerdown', (e) => {
 canvasEl.addEventListener('pointermove', (e) => {
   if (e.pointerId !== pointerId) return;
   if (helm) {
-    if (Math.hypot(e.clientX - helm.x, e.clientY - helm.y) > 10) helm.moved = true;
-    pond.boat.helm = toWorld(e.clientX, e.clientY);
+    const dx = e.clientX - helm.x;
+    const dy = e.clientY - helm.y;
+    if (Math.hypot(dx, dy) > 10) helm.moved = true;
+    // up the screen is on down the river; across steers (about 30° for a thumb's slide)
+    pond.boat.helm = { steer: helm.steer + dx * 0.007, push: Math.max(0, -dy) / 140 };
     return;
   }
   if (gust && drag) {
@@ -730,6 +738,11 @@ Object.defineProperty(window, '__stillwater', {
     gathered: gathered(),
     selected: selection.map((p) => p.id),
     boatY: pond.boat.y + pond.origin,
+    boat: (() => {
+      const [x, y] = toScreen(pond.boat.x, pond.boat.y);
+      const b = pond.boat;
+      return { x: Math.round(x), y: Math.round(y), power: Math.round(b.power * 100) / 100, heading: Math.round(b.heading * 100) / 100, helm: !!b.helm };
+    })(),
     scale,
     frameMs: Math.round(frameMs * 10) / 10,
     sim: renderer.simOn,

@@ -31,6 +31,14 @@ export interface Fish {
   school: number;
   /** Silver flash from turning, 0..1. */
   flash: number;
+  /** Which way it points: along its swim through the water, turned smoothly. */
+  heading: number;
+  /** Fixed per fish (its markings). */
+  seed: number;
+  /** Tail-beat phase (radians), integrated so the beat never jumps. */
+  tail: number;
+  /** How hard it's swimming through the water (speed relative to the current, smoothed). */
+  effort: number;
 }
 
 export interface Scare {
@@ -62,7 +70,7 @@ export class School {
   private minnow(x: number, y: number, z: number, school: number): Fish {
     const a = rnd(0, Math.PI * 2);
     const cruise = rnd(20, 28);
-    return { x, y, vx: Math.sin(a) * cruise, vy: Math.cos(a) * cruise, z: z + rnd(-0.06, 0.06), size: rnd(5.5, 8.5), kind: 3, phase: rnd(0, 100), cruise, school, flash: 0 };
+    return { x, y, vx: Math.sin(a) * cruise, vy: Math.cos(a) * cruise, z: z + rnd(-0.06, 0.06), size: rnd(5.5, 8.5), kind: 3, phase: rnd(0, 100), cruise, school, flash: 0, tail: rnd(0, 6.3), effort: 0, seed: rnd(0, 1), heading: a };
   }
 
   private loner(x: number, y: number, i: number): Fish {
@@ -81,6 +89,10 @@ export class School {
       cruise,
       school: -1,
       flash: 0,
+      tail: rnd(0, 6.3),
+      effort: 0,
+      seed: rnd(0, 1),
+      heading: a,
     };
   }
 
@@ -187,6 +199,20 @@ export class School {
         const hold = minnow ? 0.25 : f.kind === 0 ? 0.35 : 0.6;
         fx += ((-cx0 / cs) * f.cruise - f.vx) * hold;
         fy += ((-cy0 / cs) * f.cruise - f.vy) * hold;
+      }
+      // the tail beats with the work of swimming THROUGH the water: holding still
+      // against the current is a steady gentle swish, cruising a little quicker,
+      // a dart a flurry. Small fish beat faster than big ones.
+      const rel = Math.hypot(f.vx - cx0, f.vy - cy0);
+      f.effort += (Math.min(rel, 90) - f.effort) * (1 - Math.exp(-2.5 * dt));
+      f.tail += dt * (2.2 + f.effort * 0.11) * Math.sqrt(12 / f.size);
+      // it points the way it swims through the water (upstream when holding
+      // station), turning smoothly rather than snapping to every nudge
+      if (rel > 1.5) {
+        const want = Math.atan2(f.vx - cx0, f.vy - cy0);
+        let dh = want - f.heading;
+        dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+        f.heading += dh * (1 - Math.exp(-(minnow ? 9 : 5) * dt));
       }
       // keep near the view; lone strays are re-seeded ahead
       const ox = f.x - view.x;

@@ -301,8 +301,8 @@ void main(){
 export const FISH_VS = /* glsl */ `${HEAD}
 layout(location=0) in vec2 aPos;
 layout(location=1) in vec4 iA; // x, y, heading, size
-layout(location=2) in vec4 iB; // z, kind, phase, speed
-layout(location=3) in vec4 iC; // flash, -, -, -
+layout(location=2) in vec4 iB; // z, kind, tail phase, effort
+layout(location=3) in vec4 iC; // flash, seed, -, -
 uniform vec4 uView;
 uniform vec3 uSun;
 uniform float uShadow;
@@ -311,6 +311,7 @@ out vec2 vQ;
 out vec4 vB;
 out vec2 vUv;
 out float vFlash;
+out float vSeed;
 void main(){
   float z = iB.x;
   float len = iA.w * (1. - z * .18);
@@ -323,6 +324,7 @@ void main(){
   vQ = q;
   vB = iB;
   vFlash = iC.x;
+  vSeed = iC.y;
   // deeper fish sit smaller and slide slower (and their shadows sit on the bed)
   float d = uShadow > .5 ? 1.2 : .15 + z;
   vec2 clip = (pos - uView.xy) * uView.zw / (1. + uDepthK * d);
@@ -335,6 +337,7 @@ in vec2 vQ;
 in vec4 vB;
 in vec2 vUv;
 in float vFlash;
+in float vSeed;
 out vec4 o;
 uniform float uShadow;
 uniform sampler2D uOcc;
@@ -351,8 +354,9 @@ void main(){
   // isotropic body units: along -1 (tail tip) … 1 (nose), across in the same units
   vec2 P = vec2(vQ.x * .55, vQ.y);
   float along = P.y;
-  float swim = uTime * (2.6 + speed * .12) + phase;
-  float bendAmp = .07 + min(speed, 60.) * .0012;
+  // the beat is integrated per fish on the CPU (phase), so it never jumps
+  float swim = phase;
+  float bendAmp = .06 + min(speed, 60.) * .0011;
   float spine = sin(along * 2.6 - swim) * bendAmp * pow(clamp((1. - along) * .5, 0., 1.), 1.6);
   float x = P.x - spine;
   float soft = fwidth(P.x) * 1.4 + z * .05 + uShadow * .12;
@@ -392,7 +396,7 @@ void main(){
   vec3 col = mix(back, flank, smoothstep(.25, .95, across));
   if (kind > 1.5 && kind < 2.5) {
     // koi: orange and white saddles, seen across the back
-    float blot = texture(uNoise, vec2(x * 1.6, along * .9) + phase * .013).r;
+    float blot = texture(uNoise, vec2(x * 1.6, along * .9) + vSeed * 1.3).r;
     col = mix(col, vec3(.88, .40, .10) * mix(1., .8, across), smoothstep(.45, .55, blot));
   }
   // minnows show their silver flank when they turn

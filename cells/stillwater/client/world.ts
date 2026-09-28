@@ -212,8 +212,8 @@ export interface Boat {
   sway: number;
   /** How hard each stroke pulls, 0..1 (the ONLY thing that makes the boat go faster). */
   power: number;
-  /** Where a finger on the boat is pulling it (world), or null. */
-  helm: [number, number] | null;
+  /** A finger driving the boat from behind: the heading it steers for, and how hard it pushes (0..1). */
+  helm: { steer: number; push: number } | null;
   /** Until this time the boat keeps the heading it was given instead of following the channel. */
   manualUntil: number;
 }
@@ -818,6 +818,20 @@ export class Pond {
     this.boat.surge += 30;
   }
 
+  /**
+   * Is a world point in the water behind the boat (astern, roughly within the
+   * river's width of its wake)? Touch there drives the boat, so the finger
+   * never covers the water it's heading into.
+   */
+  behindBoat(x: number, y: number): boolean {
+    const b = this.boat;
+    const c = Math.cos(b.heading);
+    const s = Math.sin(b.heading);
+    const lx = (x - b.x) * c - (y - b.y) * s;
+    const ly = (x - b.x) * s + (y - b.y) * c;
+    return ly < -BOAT_LEN * 0.4 && Math.abs(lx) < 150;
+  }
+
   /** Is a world point on the boat (hull, with a little grace)? */
   onBoat(x: number, y: number): boolean {
     const b = this.boat;
@@ -849,12 +863,9 @@ export class Pond {
     let effort = reduced ? 0.1 : 0.22;
     let want: number;
     if (b.helm) {
-      const dx = b.helm[0] - b.x;
-      const dy = b.helm[1] - b.y;
-      const d = Math.hypot(dx, dy);
-      want = clamp(Math.atan2(dx, dy), -1.2, 1.2);
-      // pull ahead to row hard; hold the boat itself to row steadily
-      effort = clamp(0.32 + Math.max(0, dy) * 0.004 + d * 0.0008, 0.32, 1);
+      want = clamp(b.helm.steer, -1.2, 1.2);
+      // a finger resting there rows steadily; pushing it on rows harder
+      effort = 0.32 + 0.68 * clamp(b.helm.push, 0, 1);
       b.manualUntil = this.t + 4;
     } else if (this.t < b.manualUntil) {
       want = b.heading;
@@ -1082,27 +1093,31 @@ export class Pond {
     this.puddles = this.puddles.filter((p) => p.age < p.life);
   }
 
-  private wakeAcc = 0;
-  /** A V of waves off the bow and a trail off the stern quarters, stronger with speed. */
+  /**
+   * The hull's wake. A hull is a steady dent in the water that only makes waves
+   * by MOVING: each frame it disturbs the water in proportion to how far it has
+   * just travelled, at the stem where it parts the water, along the shoulders
+   * that throw the arms of the V, and at the stern quarters where it closes
+   * again. A stationary boat radiates nothing, and a slow one only a whisper,
+   * instead of a pulsed point source ringing out around it (and ahead of it).
+   */
   private wake(dt: number) {
     const b = this.boat;
-    if (b.speed < 2) return;
-    this.wakeAcc += dt;
-    if (this.wakeAcc < 1 / 30) return;
-    this.wakeAcc = 0;
+    if (b.speed < 1) return;
+    const d = b.speed * dt; // units moved this frame
     const k = Math.min(1, b.speed / 40);
     const c = Math.cos(b.heading);
     const s = Math.sin(b.heading);
     const at = (lx: number, ly: number): [number, number] => [b.x + lx * c + ly * s, b.y - lx * s + ly * c];
-    const [bx, by] = at(0, BOAT_LEN * 0.47);
-    this.impulses.push({ x: bx, y: by, r: 8, s: 0.8 + 1.2 * k });
+    // slow boats hardly make a bow wave at all; it builds with speed
+    const w = d * (0.4 + 1.4 * k);
+    const [bx, by] = at(0, BOAT_LEN * 0.45);
+    this.impulses.push({ x: bx, y: by, r: 6, s: w * 0.7 });
     for (const side of [-1, 1]) {
-      // the shoulders throw the arms of the V
-      const [qx, qy] = at(side * BOAT_BEAM * 0.5, BOAT_LEN * 0.22);
-      this.impulses.push({ x: qx, y: qy, r: 7, s: 0.6 + 1.0 * k });
-      // the stern quarters leave churned, foamy water
+      const [qx, qy] = at(side * BOAT_BEAM * 0.48, BOAT_LEN * 0.2);
+      this.impulses.push({ x: qx, y: qy, r: 6, s: w * 0.8 });
       const [sx, sy] = at(side * BOAT_BEAM * 0.3, -BOAT_LEN * 0.5);
-      this.impulses.push({ x: sx, y: sy, r: 7, s: 0.4 + 0.8 * k, foam: Math.random() < 0.25 });
+      this.impulses.push({ x: sx, y: sy, r: 7, s: w * 0.6, foam: k > 0.4 && Math.random() < 0.08 });
     }
   }
 
