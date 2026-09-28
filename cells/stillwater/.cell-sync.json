@@ -1,9 +1,21 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:f37f1ff6d10c6da0f3f05e821ae375ca6d8e0733f12ee67209fd2c93fe167709",
-  "syncedAt": "2026-09-28T10:05:47.918Z",
+  "treeVersion": "tree:cd5c4e0c3d06251addadc2db5cdf7f020991a73a7816fd141631277d46248254",
+  "syncedAt": "2026-09-28T10:34:34.051Z",
   "files": {
-    "index.ts": "sha256:0cb70408f8d318c2ac0467da45c2813e5f1de5d7bf0b5a47f5d3e52c3356bfaf"
+    "REVIEW-2026-09-28.md": "sha256:e1d53681e397e691cf3c26c1d6dd861b8bd9af53c52bf5b7fd00791cadcd389c",
+    "client/audio.ts": "sha256:73918cd0cc063b0edc32e7e7cabfaf2f43002a58fc2fdec663eda12ad0d21295",
+    "client/fish.ts": "sha256:3f85ccd520ba537d1d793db92245e0dcfb423eb04a736330c834bd81f1598dc7",
+    "client/gl.ts": "sha256:2a3a1dd493d3dd2ae6ba3084e963ac9e6c058a0f5c93cb80e37e9a1884164472",
+    "client/main.ts": "sha256:7d11fbc3f1f8262ca33ba6c97c6e53f4f364c43f7e988dae585723f82d07af09",
+    "client/numeracy.ts": "sha256:48b5d267370bc4cf3e7e3564046e8376153dbf936c9d6d2b757b824c34a614b0",
+    "client/render.ts": "sha256:3dfe9639639f262be1fff8284f4c908c49b83d82d937cb59b50fc52d271006b7",
+    "client/shaders.ts": "sha256:726e38c9544b9a4164d2f32077fc7e834e9b44ebc68456cc72f37c754af104a6",
+    "client/ui.ts": "sha256:244d768c06e0f859a1c68f73b6bf0071fc3692e313a031ba7409685b99bdc813",
+    "client/world.ts": "sha256:59a0b851ab8d0e29dad621c3ab24d221c8988a1b6bf883c97decad9720b669c2",
+    "index.ts": "sha256:0ab87365708dec26108a1816daf1c33ba19bdfdce00d84b64b5d3053b3b220f1",
+    "static/index.html": "sha256:39f46c07eafac6f369919834a2a75e5febb2bc148da04132b6d407e3fc9d864a",
+    "tsconfig.json": "sha256:7f810c55dd1ac18c2cee979d7b1e5cf5a6f3233b8029b80c00e15602e284f0d0"
   }
 }
