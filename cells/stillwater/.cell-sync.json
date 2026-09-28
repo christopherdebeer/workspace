@@ -1,26 +1,26 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:0b275585673ad66802eb8389d6be85d00f307778a049ade6bb21e226cf480524",
-  "syncedAt": "2026-09-28T23:19:43.825Z",
+  "treeVersion": "tree:9bca65db2479075b5a7aafef3dcaaaa4c3f3ef70c96af6b67ce86f470cd8c97a",
+  "syncedAt": "2026-09-28T23:26:12.922Z",
   "files": {
     "ENVIRONMENT-STATE.md": "sha256:f8fd9a3f3931d83488a6fc2612b7ef4c425f9d3b7a0c88c868c320421bcfdfe9",
     "LEARNING-DESIGN.md": "sha256:2c335e52d6128885e3a20d41a568fc25fa08ecb4f17e39cdbf48c9544480ec1c",
-    "REVIEW-2026-09-28.md": "sha256:d93b8ca7efe0116e96dd3d145a1f17731f075420070c166f8b0c70019db68fcd",
+    "REVIEW-2026-09-28.md": "sha256:ab460f10c283ae047aeae59094ce3ffa89c102011233ca4483511e171bd244b3",
     "client/atmosphere.ts": "sha256:77d6d08e10634177c66bfd287b9804c3234d21988cefc9a531b23ea882e39414",
-    "client/audio.ts": "sha256:64af3cf2b1efc4d7b11a8af0c68779615647b478b9e063e7ce9fa82f78acb7db",
+    "client/audio.ts": "sha256:e8baa3cbee2d2bb50801acdc39795d6559554b4cf740f71ea800faa817d2a7fc",
     "client/fish.ts": "sha256:83005ea3886d3c9ef8d75cf68b7647b1e3395c7e9933c34d7fb21ff7e19ea32b",
     "client/gl.ts": "sha256:7d472f7c58a3ce087fdfc6a5e50b60ddea8303cbb18e5ebd096a180972158450",
     "client/learning.ts": "sha256:c24cb94f18d3b3e600c449435ed2a4faa45460f460149fe2db508f3a0ce37f51",
-    "client/main.ts": "sha256:537fea83fe800c8a0b92a35dd8865a58c2a630e9b2fd74177ee0f469a5f14ce9",
+    "client/main.ts": "sha256:d7695e06788087f26053e29db66133263e100675e799270ceac97e1ad9431861",
     "client/numeracy.ts": "sha256:0a80505236aebe4caab051fee6c836d8c46ab2e5897332e1400e1d8fc610364a",
     "client/render.ts": "sha256:86c80631652d2f0691f85258c0016d2b8452f4662f5f8af6153b1cbcfab64fe0",
     "client/report.ts": "sha256:efd02eea840a032358656ea168fb069158427aeba1f0242eb6e6b1e536ceaaf9",
     "client/shaders.ts": "sha256:377a68ae232d8de0b2d2eb52c284b68eb844f0dd7990e930f611f0396a1011a3",
-    "client/ui.ts": "sha256:8a602146583662c747d77a9927e8d0b31d4d5280a0fb6917de99fbd32561e69e",
+    "client/ui.ts": "sha256:120f2d832521ef3421fa96b834053da2de17d88d9b99daa645973dc88f24e6af",
     "client/world.ts": "sha256:fb21654d67d7e51cf7c80c3eeee084578797b5894749aa4f8712d794f9565bc6",
     "index.ts": "sha256:1ff0dd274bf7f3f9858290c144d6acac14646a6be45ebf5f6ddd31333a1abbdc",
-    "static/index.html": "sha256:a69b09c99580748299c3b54e7da9959cba03c6b1bc37bf15ac33cd019f0ae227",
+    "static/index.html": "sha256:8753b4fd570500dc980b275e55f1c861d07ecdd89b66c07b8ef1f8f0ab23bdf6",
     "tsconfig.json": "sha256:7f810c55dd1ac18c2cee979d7b1e5cf5a6f3233b8029b80c00e15602e284f0d0"
   }
 }

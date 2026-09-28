@@ -119,6 +119,7 @@ const pond = new Pond(Math.floor(rand() * 1e9));
  */
 const planting: number[] = [];
 pond.dewFor = (r) => {
+  if (!started) return 0; // no dew until a child has begun: the start is just the river
   const n = N.dewForMastery(mastery, r);
   if (n > 0 && planting.length && r() < 0.6) return planting.shift()!;
   return n;
@@ -722,14 +723,48 @@ function startAs(name: string) {
   nextTargetAt = pond.t + 1.2;
   canvasEl.focus({ preventScroll: true });
 }
-{
-  const auto = startupParams.get('profile');
+/**
+ * Returning children find their names written on lily pads: one pad each,
+ * in the middle of the view, clear of the boat. A pad that drifts out of the
+ * band is swapped for another. Tapping the pad starts as that child.
+ */
+const namePads = new Map<Pad, string>();
+function placeNames() {
+  if (started) return;
   const names = profiles
     .slice()
     .sort((a, b) => b.last - a.last)
+    .slice(0, 6)
     .map((q) => q.name);
+  const inBand = (p: Pad) => {
+    const [sx, sy] = toScreen(p.x, p.y);
+    // in the middle of the view, but clear of the title and name field at its centre
+    const centre = Math.abs(sy - cam.cssH * 0.5) < cam.cssH * 0.1;
+    return sx > 44 && sx < cam.cssW - 44 && sy > cam.cssH * 0.22 && sy < cam.cssH * 0.76 && !centre && !pond.onBoat(p.x, p.y);
+  };
+  for (const [p, name] of namePads) if (!inBand(p) || !names.includes(name) || !pond.pads.includes(p)) namePads.delete(p);
+  const taken = new Set(namePads.values());
+  const free = pond.pads
+    .filter((p) => !namePads.has(p) && p.r >= 24 && inBand(p))
+    .filter((p) => [...namePads.keys()].every((q) => Math.hypot(q.x - p.x, q.y - p.y) > p.r + q.r + 30))
+    .sort((a, b) => b.r - a.r);
+  for (const name of names) {
+    if (taken.has(name)) continue;
+    const p = free.shift();
+    if (!p) break;
+    namePads.set(p, name);
+  }
+  ui.nameLabels(
+    [...namePads].map(([p, name]) => {
+      const [x, y] = toScreen(p.x, p.y);
+      return { name, x, y, size: Math.max(13, Math.min(20, p.r * cam.zoom * 0.42)) };
+    }),
+  );
+}
+{
+  const auto = startupParams.get('profile');
   if (auto) startAs(auto);
-  else ui.start(names, startAs);
+  else ui.start(profiles.length > 0, startAs);
 }
 
 /**
@@ -752,9 +787,19 @@ let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: bool
 
 canvasEl.addEventListener('pointerdown', (e) => {
   if (pointerId !== null) return;
+  armSound();
+  if (!started) {
+    // a name on a leaf: that child begins. Anything else is just the river, touched
+    const p = hit(e.clientX, e.clientY);
+    const name = p && namePads.get(p);
+    if (name) {
+      p.bob = 1;
+      startAs(name);
+      return;
+    }
+  }
   pointerId = e.pointerId;
   canvasEl.setPointerCapture(e.pointerId);
-  begin();
   const [bwx, bwy] = toWorld(e.clientX, e.clientY);
   const hitPad = hit(e.clientX, e.clientY);
   // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
@@ -880,6 +925,14 @@ canvasEl.addEventListener('keydown', (e) => {
 });
 
 const soundBtn = document.getElementById('sound') as HTMLButtonElement;
+/** Any first touch on the river turns the sound on; the button still toggles it. */
+function armSound() {
+  if (sound.on) return;
+  const on = sound.arm();
+  soundBtn.setAttribute('aria-pressed', String(on));
+  soundBtn.textContent = on ? 'sound on' : 'sound off';
+}
+document.getElementById('newname')?.addEventListener('pointerdown', armSound);
 soundBtn.addEventListener('click', () => {
   const on = sound.toggle();
   soundBtn.setAttribute('aria-pressed', String(on));
@@ -1024,6 +1077,7 @@ function frame(now: number) {
     sound.release();
   }
   if (!target && pond.t >= nextTargetAt) setTarget();
+  if (!started) placeNames();
   stepChimes();
   stepOpenings(dt);
   scaffold();

@@ -275,6 +275,12 @@ export class Sound {
     this.master.gain.setTargetAtTime(this.on ? 0.9 : 0.0001, ctx.currentTime, 0.4);
   }
 
+  /** The first touch turns the sound on (a user gesture is needed to start it at all). */
+  arm(): boolean {
+    if (!this.on) this.toggle();
+    return this.on;
+  }
+
   toggle(): boolean {
     this.on = !this.on;
     if (this.on && !this.ctx) this.start().catch(() => {});

@@ -116,48 +116,54 @@ export class Overlay {
   }
 
   /**
-   * The start, in play's own slots: the children who have rowed here before,
-   * each a leaf to tap where the numeral will sit, a place for a new name,
-   * and the question on the hint line. `pick` is called with the chosen name.
+   * The start: the title and a place for a new name at the centre of the
+   * river; returning children's names are written on lily pads (see
+   * `nameLabels`), and the question sits on the hint line.
    */
-  start(names: string[], pick: (name: string) => void) {
-    const el = this.target;
-    el.className = 'target who';
-    el.innerHTML = '';
-    this.dots = [];
-    this.bar = null;
-    for (const name of names) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = name;
-      b.addEventListener('click', () => pick(name));
-      el.appendChild(b);
+  start(hasNames: boolean, pick: (name: string) => void) {
+    const form = document.getElementById('newname') as HTMLFormElement | null;
+    const input = document.getElementById('newname-input') as HTMLInputElement | null;
+    if (form && input) {
+      input.placeholder = hasNames ? 'or a new name' : 'your name';
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = input.value.trim().slice(0, 14);
+        if (name) pick(name);
+      });
     }
-    const form = document.createElement('form');
-    form.autocomplete = 'off';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.maxLength = 14;
-    input.placeholder = names.length ? 'or a new name' : 'your name';
-    input.setAttribute('aria-label', 'A new name');
-    input.setAttribute('enterkeyhint', 'go');
-    const go = document.createElement('button');
-    go.type = 'submit';
-    go.className = 'add';
-    go.textContent = 'row';
-    form.append(input, go);
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const name = input.value.trim().slice(0, 14);
-      if (name) pick(name);
+    this.say(hasNames ? 'who is rowing today? · tap your name' : 'who is rowing today?', 0);
+  }
+
+  private labels: HTMLElement[] = [];
+
+  /** Names written on lily pads: screen positions, refreshed every frame while the start shows. */
+  nameLabels(items: Array<{ name: string; x: number; y: number; size: number }>) {
+    const box = document.getElementById('names');
+    if (!box) return;
+    while (this.labels.length < items.length) {
+      const el = document.createElement('span');
+      box.appendChild(el);
+      this.labels.push(el);
+    }
+    this.labels.forEach((el, i) => {
+      const it = items[i];
+      if (!it) {
+        el.style.display = 'none';
+        return;
+      }
+      el.style.display = '';
+      if (el.textContent !== it.name) el.textContent = it.name;
+      el.style.left = `${it.x}px`;
+      el.style.top = `${it.y}px`;
+      el.style.fontSize = `${Math.round(it.size)}px`;
     });
-    el.appendChild(form);
-    this.say('who is rowing today?', 0);
   }
 
   hideStart() {
-    this.clearTarget();
-    this.target.className = 'target';
+    document.getElementById('start')?.classList.add('away');
+    document.getElementById('names')?.classList.add('away');
+    window.setTimeout(() => this.nameLabels([]), 900);
+    this.title.classList.remove('hidden');
     this.quiet();
   }
 }

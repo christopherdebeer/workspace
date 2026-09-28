@@ -31,27 +31,41 @@
     button:focus-visible { outline: 1px solid #ddd; border-radius: 4px; }
     #live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
     body.nogl #hint { opacity: .9; }
-    /* the start lives in the same slots as play: names as leaves where the numeral goes, the question on the hint line */
-    .target.who { flex-wrap: wrap; gap: 10px; pointer-events: auto; max-width: 340px; margin: 0 auto; }
-    .target.who button, .target.who .add { position: static; opacity: 1; font: 15px Georgia, serif; letter-spacing: .4px; color: #f3f0d2; background: radial-gradient(circle at 35% 30%, #4f8a42, #2b5a30 70%, #1f4426); border-radius: 50% 50% 50% 50% / 55% 55% 45% 45%; padding: 9px 16px; box-shadow: 0 3px 12px rgba(0, 20, 16, .45), inset 0 1px 0 rgba(255, 255, 255, .12); }
-    .target.who button:active { transform: scale(.96); }
-    .target.who form { display: flex; align-items: center; gap: 6px; }
-    .target.who input { font: 15px Georgia, serif; font-style: italic; color: #f3f0d2; background: transparent; border: 0; border-bottom: 1px solid rgba(240, 236, 206, .45); padding: 6px 2px; width: 118px; outline: none; text-align: center; }
-    .target.who input:focus { border-bottom-color: rgba(240, 236, 206, .85); }
-    .target.who input::placeholder { color: rgba(240, 236, 206, .5); }
-    .target.who .add { padding: 7px 12px; }
+    /* the start: the title and a place for a new name sit at the centre of the river;
+       the children who have rowed here before have their names on lily pads to tap */
+    h1.hidden { opacity: 0; }
+    #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; pointer-events: none; transition: opacity 1.4s; }
+    #start.away { opacity: 0; }
+    #start .brand { font-size: 15px; letter-spacing: 10px; margin: 0 0 0 10px; opacity: .92; text-shadow: 0 2px 18px #001b19; }
+    #start form { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
+    #start input { font: 16px Georgia, serif; font-style: italic; color: #f3f0d2; background: rgba(6, 26, 22, .28); border: 1px solid rgba(240, 236, 206, .4); border-radius: 12px; padding: 9px 12px; width: 150px; outline: none; text-align: center; }
+    #start input:focus { border-color: rgba(240, 236, 206, .85); }
+    #start input::placeholder { color: rgba(240, 236, 206, .5); }
+    #start button { position: static; opacity: 1; font: 15px Georgia, serif; letter-spacing: .4px; color: #f3f0d2; background: radial-gradient(circle at 35% 30%, #4f8a42, #2b5a30 70%, #1f4426); border-radius: 50% 50% 50% 50% / 55% 55% 45% 45%; padding: 9px 16px; box-shadow: 0 3px 12px rgba(0, 20, 16, .45), inset 0 1px 0 rgba(255, 255, 255, .12); }
+    #start button:active { transform: scale(.96); }
+    #names { position: fixed; inset: 0; pointer-events: none; }
+    #names span { position: absolute; transform: translate(-50%, -50%); font-size: 17px; letter-spacing: .6px; color: #f6f3d8; text-shadow: 0 1px 2px #0b2a1e, 0 0 14px rgba(0, 27, 25, .9); white-space: nowrap; transition: opacity .8s; }
+    #names.away span { opacity: 0; }
   </style>
 </head>
 <body>
   <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go."></canvas>
   <div id="ui">
     <header>
-      <h1 id="title">STILLWATER</h1>
+      <h1 id="title" class="hidden">STILLWATER</h1>
       <div id="target" class="target" aria-hidden="true"></div>
     </header>
     <div id="hint"></div>
     <button id="sound" type="button" aria-pressed="false">sound off</button>
     <div id="live" role="status" aria-live="polite"></div>
+  </div>
+  <div id="names" aria-hidden="true"></div>
+  <div id="start">
+    <p class="brand">STILLWATER</p>
+    <form id="newname" autocomplete="off">
+      <input id="newname-input" type="text" maxlength="14" placeholder="your name" aria-label="A new name" enterkeyhint="go" />
+      <button type="submit">row</button>
+    </form>
   </div>
   <script type="module" src="/app.js"></script>
 </body>
