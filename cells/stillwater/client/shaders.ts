@@ -85,13 +85,47 @@ void main(){
 
 // ─── riverbed, caustics, pad shadows through the water column ─────────────
 
-export const BED_FS = /* glsl */ `${HEAD}${COMMON}
+/** The river's shape, shared by bed, surface and mist: channel samples, depth, current. */
+const RIVER = /* glsl */ `
+uniform vec2 uChan[33];
+uniform vec2 uSpanY;
+uniform float uDepthK;
+vec2 chanAt(float y){
+  float f = clamp((y - uSpanY.x) / (uSpanY.y - uSpanY.x), 0., 1.) * 32.;
+  float fi = min(floor(f), 31.);
+  int i = int(fi);
+  return mix(uChan[i], uChan[i + 1], f - fi);
+}
+float openAt(vec2 wp){
+  vec2 ch = chanAt(wp.y);
+  return 1. - smoothstep(ch.y * .35, ch.y + 120., abs(wp.x - ch.x));
+}
+float depthAt(vec2 wp){
+  float n = texture(uNoise, wp / 1024.).r;
+  float n2 = texture(uNoise, wp / 256.).g;
+  return .3 + .95 * openAt(wp) + .35 * (n - .5) + .12 * (n2 - .5);
+}
+vec2 flowAt(vec2 wp){
+  vec2 a = chanAt(wp.y - 20.), b = chanAt(wp.y + 20.);
+  vec2 tng = normalize(vec2((b.x - a.x) / 40., 1.));
+  float open = openAt(wp);
+  vec2 f = tng * (2.5 + 11. * open);
+  // eddies: the curl of a slow noise field, where the run meets the slack
+  float e = (1. - open) * open * 4. * 7.;
+  vec2 q = wp / 512. + uTime * .0015;
+  float n0 = texture(uNoise, q).r;
+  float nx = texture(uNoise, q + vec2(.004, 0.)).r;
+  float ny = texture(uNoise, q + vec2(0., .004)).r;
+  f += vec2(ny - n0, -(nx - n0)) / .004 * e * .02;
+  return f;
+}
+`;
+
+export const BED_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}
 in vec2 vUv;
 in vec2 vWorld;
 out vec4 o;
 uniform sampler2D uOcc;
-uniform vec2 uChan[33];
-uniform vec2 uSpanY;
 float caustic(vec2 uv, float time){
   vec2 p = mod(uv * TAU, TAU) - 250.;
   vec2 i = p; float c = 1.; float inten = .005;
@@ -103,49 +137,113 @@ float caustic(vec2 uv, float time){
   c /= 4.; c = 1.17 - pow(c, 1.4);
   return pow(abs(c), 8.);
 }
-float depthAt(vec2 wp){
-  float f = clamp((wp.y - uSpanY.x) / (uSpanY.y - uSpanY.x), 0., 1.) * 32.;
-  int i = int(floor(f));
-  vec2 ch = mix(uChan[i], uChan[min(i + 1, 32)], fract(f));
-  float off = abs(wp.x - ch.x);
-  float open = 1. - smoothstep(ch.y * .35, ch.y + 120., off);
-  float n = texture(uNoise, wp / 512.).r;
-  return .38 + .7 * open + .35 * (n - .5);
+float sdSeg(vec2 p, vec2 a, vec2 b){
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.);
+  return length(pa - ba * h);
 }
 void main(){
-  vec2 wp = vWorld;
-  float depth = depthAt(wp);
-  float n1 = texture(uNoise, wp / 512.).g;
-  float n2 = texture(uNoise, wp / 128.).r;
+  // parallax: the bed is deeper than the surface, so it looks smaller and slides slower beneath it
+  vec2 rel = vWorld - uView.xy;
+  float depth = depthAt(vWorld);
+  vec2 wp = uView.xy + rel * (1. + uDepthK * depth);
+  depth = depthAt(wp);
+  wp = uView.xy + rel * (1. + uDepthK * depth);
+  vec3 L = normalize(uSun);
+  vec2 fl = flowAt(wp);
+  vec2 fd = fl / max(length(fl), .01);
+  float open = openAt(wp);
+
+  float n1 = texture(uNoise, wp / 1024.).g;
+  float n2 = texture(uNoise, wp / 256.).r;
   float n3 = texture(uNoise, wp / 64.).g;
-  vec3 silt = mix(vec3(.16, .18, .11), vec3(.27, .27, .17), n1);
-  silt = mix(silt, vec3(.12, .17, .09), smoothstep(.55, .8, n2) * .7);          // weed mats
-  float ripple = sin(dot(wp, vec2(.09, .05)) + n2 * 7.) * .5 + .5;              // sand ripples
-  silt *= .88 + .18 * ripple * (1. - n1);
-  float cell = texture(uNoise, wp / 48.).b;                                      // pebbles
-  float stone = smoothstep(.42, .26, cell) * step(.62, hash12(floor(wp / 48. * 24.)));
-  silt = mix(silt, vec3(.33, .31, .24) * (.8 + .4 * n3), stone * .8);
-  silt *= .75 + .5 * n3;
+  float n4 = texture(uNoise, wp / 16.).a;
+  // silt in the slack water, paler sand where the current scours
+  vec3 silt = mix(vec3(.12, .13, .08), vec3(.21, .20, .13), n1);
+  vec3 sand = mix(vec3(.34, .31, .22), vec3(.47, .43, .31), n2);
+  float sandy = smoothstep(.4, .85, open + (n2 - .5) * .7);
+  vec3 col = mix(silt, sand, sandy);
+  col *= .82 + .22 * n3 + .1 * (n4 - .5);
 
-  // pads shade the bed from above: their shadow lands offset along the sun, softer with depth
-  vec2 off = -uSun.xy / max(uSun.z, .3) * depth * 42.;
-  vec2 suv = vUv + off * uView.zw * .5;
-  float sh = 0.;
-  float blur = .004 + depth * .006;
-  sh += texture(uOcc, suv).r * .4;
-  sh += texture(uOcc, suv + vec2(blur, 0.)).r * .15;
-  sh += texture(uOcc, suv - vec2(blur, 0.)).r * .15;
-  sh += texture(uOcc, suv + vec2(0., blur)).r * .15;
-  sh += texture(uOcc, suv - vec2(0., blur)).r * .15;
-  float light = 1. - sh * .9;
+  // ripple marks across the current, lit on the upstream face
+  float ph = dot(wp, fd) * .17 + n2 * 8. + n3 * 2.;
+  float slope = cos(ph) * (.6 + .4 * sin(ph));
+  vec3 rn = normalize(vec3(fd * slope * .45 * sandy, 1.));
+  col *= mix(1., dot(rn, L) / max(L.z, .3), .9);
 
-  float c = caustic(wp / 256., uTime * .35) * 1.4 + caustic(wp / 128. + .37, uTime * .27) * .6;
-  c *= light * (1.25 - depth * .6);
-  vec3 lit = silt * (uAmb * .8 + uSunCol * (.45 + c * 1.1) * light);
+  // leaf litter and dark detritus where the water is slack
+  float cellv = texture(uNoise, wp / 22.).b;
+  float litter = (1. - smoothstep(.06, .16, cellv)) * step(.55, hash12(floor(wp / 22. * 24.))) * (1. - sandy);
+  col = mix(col, mix(vec3(.10, .07, .03), vec3(.22, .14, .05), n3), litter * .75);
 
-  vec3 deep = vec3(.015, .085, .075);
-  float absorb = 1. - exp(-depth * 2.4);
-  o = vec4(mix(lit, deep, absorb), 1.);
+  // stones: lit domes with moss on their shoulders and shadows on the far side
+  vec2 g = wp / 30.;
+  vec2 ip = floor(g), fp = fract(g);
+  float best = 9.; vec2 bid = vec2(0.), br = vec2(0.);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    vec2 oc = vec2(float(i), float(j));
+    vec2 h = vec2(hash12(ip + oc), hash12(ip + oc + 17.3));
+    vec2 r = oc + h - fp;
+    float dd = dot(r, r);
+    if (dd < best) { best = dd; bid = ip + oc; br = r; }
+  }
+  float present = step(1. - mix(.34, .14, sandy), hash12(bid + 3.1));
+  float rad = .18 + .3 * hash12(bid + 9.7);
+  vec2 sq = br / vec2(1., .75 + .5 * hash12(bid + 4.4));
+  float dist = length(sq);
+  float stone = present * (1. - smoothstep(rad - .05, rad, dist));
+  float sshadow = present * (1. - smoothstep(-.02, .14, length(sq - L.xy / max(L.z, .3) * rad * .45) - rad)) * (1. - stone);
+  col *= 1. - sshadow * .45;
+  if (stone > 0.) {
+    float hz = sqrt(max(0., 1. - pow(dist / rad, 2.)));
+    vec3 sn = normalize(vec3(-sq / rad, hz + .15));
+    float tone = hash12(bid + 1.9);
+    vec3 sc = mix(vec3(.30, .29, .26), vec3(.45, .38, .28), tone) * (.8 + .4 * n4);
+    sc = mix(sc, vec3(.16, .24, .09), smoothstep(.55, .95, sn.z) * (1. - sandy * .6) * smoothstep(.3, .7, n3));
+    float lit = max(dot(sn, L), 0.) * 1.15 + .2;
+    col = mix(col, sc * lit, stone);
+  }
+
+  // sunken twigs
+  vec2 tc = floor(wp / 150.);
+  float th = hash12(tc + 5.5);
+  if (th < .16) {
+    vec2 c0 = (tc + .5 + (vec2(hash12(tc + 1.), hash12(tc + 2.)) - .5) * .3) * 150.;
+    float ang = hash12(tc + 3.) * 3.1416;
+    vec2 dir = vec2(cos(ang), sin(ang));
+    float len = 30. + 45. * hash12(tc + 4.);
+    float w = 1.6 + 1.8 * hash12(tc + 6.);
+    vec2 a0 = c0 - dir * len, a1 = c0 + dir * len;
+    vec2 fk = c0 + dir * len * .3;
+    vec2 fdir = vec2(cos(ang + .6), sin(ang + .6));
+    float d = min(sdSeg(wp, a0, a1) - w, sdSeg(wp, fk, fk + fdir * len * .5) - w * .6);
+    float dsh = min(sdSeg(wp - L.xy / max(L.z, .3) * 3., a0, a1) - w, sdSeg(wp - L.xy / max(L.z, .3) * 3., fk, fk + fdir * len * .5) - w * .6);
+    col *= 1. - (1. - smoothstep(0., 3., dsh)) * .4;
+    float twig = 1. - smoothstep(-.6, .6, d);
+    vec3 bark = mix(vec3(.13, .09, .05), vec3(.25, .18, .10), texture(uNoise, vec2(dot(wp, dir) * .05, dot(wp, vec2(-dir.y, dir.x)) * .4)).r);
+    bark *= .7 + .5 * clamp(-d / w, 0., 1.);
+    col = mix(col, bark, twig);
+  }
+
+  // pads above shade the bed: the shadow of a point is where its ray to the sun meets the surface
+  vec2 up = L.xy / max(L.z, .3) * depth * 42.;
+  vec2 suv = ((wp + up) - uView.xy) * uView.zw * .5 + .5;
+  float blur = .004 + depth * .007;
+  float sh = texture(uOcc, suv).r * .4
+    + texture(uOcc, suv + vec2(blur, 0.)).r * .15 + texture(uOcc, suv - vec2(blur, 0.)).r * .15
+    + texture(uOcc, suv + vec2(0., blur)).r * .15 + texture(uOcc, suv - vec2(0., blur)).r * .15;
+  float light = 1. - sh * .88;
+
+  // caustics drift downstream with the surface that makes them, sharper in the shallows
+  vec2 cu = (wp - fl * uTime * .6) / 256.;
+  float c = caustic(cu, uTime * .35) * 1.3 + caustic(cu * 2. + .37, uTime * .27) * .55;
+  c = pow(c, mix(.8, 1.4, depth - .3)) * light * (1.35 - depth * .7);
+  vec3 lit = col * (uAmb * .75 + uSunCol * (.42 + c * 1.15) * light);
+
+  // the water column: red goes first, then blue — deep water turns to green-black
+  vec3 absorb = exp(-depth * vec3(2.9, 1.55, 1.85));
+  vec3 deep = uAmb * vec3(.05, .21, .19);
+  o = vec4(lit * absorb + deep * (1. - absorb), 1.);
 }`;
 
 // ─── fish ──────────────────────────────────────────────────────────────────
@@ -157,6 +255,7 @@ layout(location=2) in vec4 iB; // z, kind, phase, speed
 uniform vec4 uView;
 uniform vec3 uSun;
 uniform float uShadow;
+uniform float uDepthK;
 out vec2 vQ;
 out vec4 vB;
 out vec2 vUv;
@@ -171,7 +270,9 @@ void main(){
   if (uShadow > .5) pos += -uSun.xy / max(uSun.z, .3) * (1.1 - z) * 38.;
   vQ = q;
   vB = iB;
-  vec2 clip = (pos - uView.xy) * uView.zw;
+  // deeper fish sit smaller and slide slower (and their shadows sit on the bed)
+  float d = uShadow > .5 ? 1.2 : .15 + z;
+  vec2 clip = (pos - uView.xy) * uView.zw / (1. + uDepthK * d);
   vUv = clip * .5 + .5;
   gl_Position = vec4(clip, 0., 1.);
 }`;
@@ -243,6 +344,7 @@ layout(location=2) in vec4 iB; // seed, sel, bob, row
 layout(location=3) in vec4 iC; // drops, focus, submerged depth, tint
 uniform vec4 uView;
 uniform float uMode; // 0 floating, 1 occlusion, 2 submerged
+uniform float uDepthK;
 vec2 rot(vec2 p, float a){ float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }
 out vec2 vP;
 out vec4 vB;
@@ -259,7 +361,8 @@ void main(){
   vC = iC;
   vAng = iA.w;
   vR = r;
-  gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw, 0., 1.);
+  float par = uMode > 1.5 ? 1. / (1. + uDepthK * iC.z) : 1.;
+  gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw * par, 0., 1.);
 }`;
 
 export const PAD_FS = /* glsl */ `${HEAD}${COMMON}
@@ -461,7 +564,7 @@ void main(){
 
 // ─── water surface ─────────────────────────────────────────────────────────
 
-export const SURFACE_FS = /* glsl */ `${HEAD}${COMMON}
+export const SURFACE_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}
 in vec2 vUv;
 in vec2 vWorld;
 out vec4 o;
@@ -471,12 +574,32 @@ uniform vec2 uSimTexel;
 uniform float uSimScale;
 uniform float uSimOn;
 uniform float uAspect;
+uniform vec4 uGust[4];    // x, y, radius, level
+uniform vec4 uGustDir[4]; // dx, dy, radial, -
+vec2 waves(vec2 p){
+  return (texture(uNoise, p / 256.).rg - .5) * .085
+       + (texture(uNoise, p / 64.).gr - .5) * .065
+       + (texture(uNoise, p / 28.).rg - .5) * .03;
+}
 void main(){
   vec2 wp = vWorld;
-  vec2 g1 = texture(uNoise, wp / 256. + uTime * vec2(.006, .004)).rg - .5;
-  vec2 g2 = texture(uNoise, wp / 64. - uTime * vec2(.009, .014)).gr - .5;
-  vec2 g3 = texture(uNoise, wp / 32. + uTime * vec2(-.012, .02)).rg - .5;
-  vec2 grad = g1 * .09 + g2 * .07 + g3 * .035;
+  // flow map: two phases of the wave texture carried along the current, cross-faded
+  vec2 fl = flowAt(wp);
+  float T = uTime / 6.;
+  float p0 = fract(T), p1 = fract(T + .5);
+  float w0 = 1. - abs(2. * p0 - 1.);
+  vec2 grad = waves(wp - fl * p0 * 6.) * w0 + waves(wp - fl * p1 * 6. + 41.) * (1. - w0);
+  // wind: a roughened, darker patch that runs with the gust
+  float rough = 0.;
+  for (int i = 0; i < 4; i++) {
+    vec4 g = uGust[i];
+    if (g.w <= 0.) continue;
+    float k = g.w * (1. - smoothstep(g.z * .35, g.z * 1.25, length(wp - g.xy)));
+    vec2 dir = uGustDir[i].z > .5 ? normalize(wp - g.xy + .001) : uGustDir[i].xy;
+    vec2 q = wp - dir * uTime * 55.;
+    grad += ((texture(uNoise, q / 11.).rg - .5) * .3 + (texture(uNoise, q / 5.).gr - .5) * .18) * k;
+    rough = max(rough, k);
+  }
   float h = 0.;
   if (uSimOn > .5) {
     vec2 s = (vUv - .5) / uSimScale + .5;
@@ -494,11 +617,88 @@ void main(){
   vec3 R = reflect(-V, n);
   float cloud = texture(uNoise, R.xy * .6 + uTime * vec2(.002, .001)).g;
   vec3 sky = mix(uSky0, uSky1, clamp(R.y * .5 + .5, 0., 1.)) * (.85 + .3 * cloud);
-  vec3 col = mix(under, sky, clamp(fr * 2.2 + .05, 0., .6));
-  float rs = max(dot(R, uSun), 0.);
-  col += uSunCol * (pow(rs, 1400.) * 5. + pow(rs, 90.) * .08);
+  vec3 col = mix(under, sky, clamp(fr * 2.2 + .05 + rough * .12, 0., .65));
+  col *= 1. - rough * .1;
+  float rs = max(dot(R, normalize(uSun)), 0.);
+  col += uSunCol * (pow(rs, 1400.) * (5. + rough * 6.) + pow(rs, 90.) * .08);
   col += vec3(.7, .85, .75) * clamp(h, 0., 1.) * .05;
   o = vec4(col, 1.);
+}`;
+
+// ─── weeds ─────────────────────────────────────────────────────────────────
+
+export const WEED_VS = /* glsl */ `${HEAD}
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec4 iA; // x, y, length, flow angle
+layout(location=2) in vec4 iB; // depth, seed, kind, flow speed
+uniform vec4 uView;
+uniform float uDepthK;
+out vec2 vQ;
+out vec4 vB;
+out vec2 vUv;
+void main(){
+  float u = aPos.y * .5 + .5;
+  vec2 dir = vec2(sin(iA.w), cos(iA.w));
+  vec2 perp = vec2(dir.y, -dir.x);
+  vec2 w = iA.xy + dir * u * iA.z + perp * aPos.x * iA.z * .38;
+  float d = iB.x * (1. - .35 * u);
+  vec2 clip = (w - uView.xy) * uView.zw / (1. + uDepthK * d);
+  vQ = vec2(aPos.x, u);
+  vB = iB;
+  vUv = clip * .5 + .5;
+  gl_Position = vec4(clip, 0., 1.);
+}`;
+
+export const WEED_FS = /* glsl */ `${HEAD}${COMMON}
+in vec2 vQ;
+in vec4 vB;
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uOcc;
+void main(){
+  float u = vQ.y, v = vQ.x;
+  float depth = vB.x, seed = vB.y, kind = vB.z, speed = vB.w;
+  float aa = fwidth(v) * 1.2;
+  float cover = 0.;
+  float tipK = 0.;
+  for (int k = 0; k < 5; k++) {
+    float fk = float(k);
+    float hk = hash12(vec2(seed * 91., fk));
+    float len = .55 + .45 * hk;
+    if (u > len) continue;
+    float uu = u / len;
+    // streaming in the current, a slow travelling wave down each blade
+    float c = (hk - .5) * .7 * (1. - uu * .5) + sin(uu * 3.2 - uTime * (1. + speed * .08) + hk * 6.) * .12 * uu;
+    float w = kind < .5 ? (.075 - .05 * uu) : (.03 + .07 * abs(sin(uu * 38. + hk * 5.))) * (1. - uu * .6);
+    float b = 1. - smoothstep(w - aa, w + aa, abs(v - c));
+    if (b > cover) { cover = b; tipK = uu; }
+  }
+  if (cover < .01) discard;
+  vec3 col = mix(vec3(.08, .16, .06), vec3(.30, .40, .12), tipK) * (kind < .5 ? 1. : .85);
+  float shade = 1. - texture(uOcc, vUv).r * .6;
+  col *= (uAmb * .9 + uSunCol * .6) * shade;
+  float d = depth * (1. - .35 * tipK);
+  vec3 absorb = exp(-d * vec3(2.9, 1.55, 1.85));
+  col = col * absorb + uAmb * vec3(.05, .21, .19) * (1. - absorb);
+  o = vec4(col, 1.) * cover * .92;
+}`;
+
+// ─── mist: low haze drifting over the water, thicker at dawn and dusk ─────
+
+export const MIST_FS = /* glsl */ `${HEAD}${COMMON}
+in vec2 vUv;
+in vec2 vWorld;
+out vec4 o;
+uniform float uMist;
+uniform vec3 uMistCol;
+uniform vec2 uWind;
+void main(){
+  vec2 wp = vWorld;
+  vec2 drift = uTime * vec2(3., 6.) + uWind;
+  float m = texture(uNoise, (wp - drift) / 900.).r;
+  float m2 = texture(uNoise, (wp - drift * 1.7) / 320.).g;
+  float mist = smoothstep(.38, .95, m * .75 + m2 * .45) * uMist;
+  o = vec4(uMistCol * mist, mist);
 }`;
 
 // ─── water lilies ──────────────────────────────────────────────────────────
@@ -782,15 +982,16 @@ void main(){
 export const MOTE_VS = /* glsl */ `${HEAD}
 layout(location=0) in vec2 aPos;  // world
 layout(location=1) in vec4 iA;    // size(px), r, g, b
-layout(location=2) in vec4 iB;    // alpha, core, -, -
+layout(location=2) in vec4 iB;    // alpha, core, parallax scale (1 = the surface), -
 uniform vec4 uView;
 uniform float uDpr;
 out vec4 vA;
 out vec4 vB;
 void main(){
   vA = iA; vB = iB;
-  gl_PointSize = iA.x * uDpr;
-  gl_Position = vec4((aPos - uView.xy) * uView.zw, 0., 1.);
+  float par = iB.z > 0. ? iB.z : 1.;
+  gl_PointSize = iA.x * uDpr * par;
+  gl_Position = vec4((aPos - uView.xy) * uView.zw * par, 0., 1.);
 }`;
 
 export const MOTE_FS = /* glsl */ `${HEAD}
@@ -827,6 +1028,9 @@ export const SHADERS = {
   PAD_VS,
   PAD_FS,
   SURFACE_FS,
+  WEED_VS,
+  WEED_FS,
+  MIST_FS,
   FLOWER_VS,
   FLOWER_FS,
   BOAT_VS,

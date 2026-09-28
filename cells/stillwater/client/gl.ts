@@ -12,7 +12,9 @@ export interface Program {
 }
 
 function compile(gl: GL, type: number, src: string, name: string): WebGLShader {
-  const sh = gl.createShader(type)!;
+  const sh = gl.createShader(type);
+  // null means the context is gone — on iOS, typically the GPU process dying on the PREVIOUS compile
+  if (!sh) throw new Error(`context lost before ${name} (isContextLost=${gl.isContextLost()})`);
   gl.shaderSource(sh, src);
   gl.compileShader(sh);
   if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {

@@ -60,7 +60,13 @@ export class School {
     this.scares.push({ x, y, t: 0 });
   }
 
-  step(dt: number, boat: Boat, view: { x: number; y: number; hw: number; hh: number }, shift: number) {
+  step(
+    dt: number,
+    boat: Boat,
+    view: { x: number; y: number; hw: number; hh: number },
+    shift: number,
+    flow: (x: number, y: number) => [number, number],
+  ) {
     if (shift) for (const f of this.fish) f.y -= shift;
     for (const s of this.scares) s.t += dt;
     this.scares = this.scares.filter((s) => s.t < 1.4);
@@ -106,6 +112,14 @@ export class School {
       f.phase += dt;
       fx += Math.sin(f.phase * 0.7 + i) * 6;
       fy += Math.cos(f.phase * 0.53 + i * 1.7) * 6;
+      // rheotaxis: fish turn to face into the current and hold against it
+      const [cx0, cy0] = flow(f.x, f.y);
+      const cs = Math.hypot(cx0, cy0);
+      if (cs > 0.5) {
+        const hold = f.kind === 0 ? 0.35 : 0.6;
+        fx += (-cx0 / cs * f.cruise - f.vx) * hold;
+        fy += (-cy0 / cs * f.cruise - f.vy) * hold;
+      }
       // keep near the view; far strays are re-seeded ahead
       const ox = f.x - view.x;
       const oy = f.y - view.y;
@@ -143,8 +157,10 @@ export class School {
       const target = sp > max ? max : sp < min ? min : sp + (f.cruise - sp) * 0.4 * dt;
       f.vx = (f.vx / sp) * target;
       f.vy = (f.vy / sp) * target;
-      f.x += f.vx * dt;
-      f.y += f.vy * dt;
+      // swimming is relative to the water, and the water is moving (less so near the bed)
+      const drag = 1 - f.z * 0.5;
+      f.x += (f.vx + cx0 * drag) * dt;
+      f.y += (f.vy + cy0 * drag) * dt;
     }
   }
 }

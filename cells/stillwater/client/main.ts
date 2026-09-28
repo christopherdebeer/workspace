@@ -13,11 +13,14 @@
  */
 import { School } from './fish';
 import * as N from './numeracy';
-import { drawOrder, Camera, Light, Mote, Renderer } from './render';
+import { drawOrder, Camera, Mote, Renderer } from './render';
+import { Atmosphere, DAY, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
-import { glInfo, report } from './report';
-import { layDrops, liveCount, Pad, Pond, seeded } from './world';
+import { glInfo, probe, report } from './report';
+import { PROGRAMS } from './render';
+import { program } from './gl';
+import { Gust, layDrops, liveCount, Pad, Pond, seeded } from './world';
 
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
 const ui = new Overlay();
@@ -67,15 +70,21 @@ pond.dewFor = (r) => N.dewFor(stage(), r);
 const school = new School(reduced ? 18 : 34, pond.boat.x, pond.boat.y + 200);
 
 let renderer: Renderer;
+canvas.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  report('context-lost', { compiled: renderer?.compiled });
+});
 try {
   renderer = new Renderer(canvas);
   report('boot', { gl: renderer.info() });
+  if (params.get('probe')) probe(PROGRAMS, program);
 } catch (err) {
   const msg = err instanceof Error ? err.message : String(err);
   document.body.classList.add('nogl');
   // say what actually failed: "needs WebGL2" was a guess, and a wrong one on iOS
   ui.say(`the pond could not start (${msg.split('\n')[0].slice(0, 120)})`, 0);
-  report('gl-fail', { msg: msg.slice(0, 12000), gl: glInfo() });
+  report('gl-fail', { msg: msg.slice(0, 12000), gl: glInfo(), compiled: (err as { compiled?: string[] }).compiled });
+  probe(PROGRAMS, program);
   console.error(err);
   throw err;
 }
@@ -320,6 +329,16 @@ function begin() {
   ui.fadeTitle();
 }
 
+/**
+ * Touch on open water is WIND, not a button: a tap is a round puff; a drag is
+ * a firm gust that follows the finger and runs on across the water when it
+ * lifts — ruffling the surface, pushing and turning pads, scattering fish,
+ * fireflies and pollen. Touch on a leaf chooses it, and a drag from a leaf
+ * traces across leaves.
+ */
+let gust: Gust | null = null;
+let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
+
 canvas.addEventListener('pointerdown', (e) => {
   if (pointerId !== null) return;
   pointerId = e.pointerId;
@@ -332,14 +351,41 @@ canvas.addEventListener('pointerdown', (e) => {
     choose(p);
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
-    pond.impulses.push({ x: wx, y: wy, r: 10, s: 1.4 });
+    pond.impulses.push({ x: wx, y: wy, r: 10, s: 1.2 });
     school.scare(wx, wy);
     if (selection.length && lock <= 0) clearSelection();
+    gust = pond.gust({ x: wx, y: wy, dx: 0, dy: 0, s: 0.6, r: 120, life: 1.8, radial: true, held: true });
+    drag = { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: false };
   }
 });
 
 canvas.addEventListener('pointermove', (e) => {
   if (e.pointerId !== pointerId) return;
+  if (gust && drag) {
+    const now = performance.now();
+    const dtm = Math.max(1, now - drag.t) / 1000;
+    const vx = (e.clientX - drag.x) / dtm;
+    const vy = (e.clientY - drag.y) / dtm;
+    drag.vx += (vx - drag.vx) * 0.3;
+    drag.vy += (vy - drag.vy) * 0.3;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    drag.t = now;
+    const sp = Math.hypot(drag.vx, drag.vy);
+    if (sp > 60) {
+      // screen y runs down, world y runs up
+      gust.radial = false;
+      gust.dx = drag.vx / sp;
+      gust.dy = -drag.vy / sp;
+      gust.s = Math.max(0.45, Math.min(1, sp / 900));
+      gust.r = 170;
+      gust.life = 3;
+    }
+    const [wx, wy] = toWorld(e.clientX, e.clientY);
+    gust.x = wx;
+    gust.y = wy;
+    return;
+  }
   const p = hit(e.clientX, e.clientY);
   if (!p || p === lastHit) return;
   // tracing back onto the previous leaf lets the last one go
@@ -358,6 +404,9 @@ const end = (e: PointerEvent) => {
   if (e.pointerId !== pointerId) return;
   pointerId = null;
   lastHit = null;
+  if (gust) gust.held = false; // let it run on and die away
+  gust = null;
+  drag = null;
 };
 canvas.addEventListener('pointerup', end);
 canvas.addEventListener('pointercancel', end);
@@ -402,40 +451,13 @@ document.addEventListener('visibilitychange', () => {
   last = performance.now();
 });
 
-// ─── light: a slow drift of the sun across the afternoon ──────────────────
-function lightAt(t: number): Light {
-  const ph = Math.sin((t / 480) * Math.PI * 2);
-  const az = 2.35 + ph * 0.3; // from the upper left
-  const el = 0.78 + ph * 0.06;
-  const sx = Math.sin(az) * Math.cos(el) * -1;
-  const sy = -Math.cos(az) * Math.cos(el);
-  const sz = Math.sin(el);
-  const warm = 0.5 + 0.5 * ph;
-  return {
-    sun: [sx, sy, sz],
-    sunCol: [1.02, 0.95 - warm * 0.06, 0.82 - warm * 0.12],
-    amb: [0.27, 0.36, 0.35],
-    sky0: [0.42, 0.55, 0.52],
-    sky1: [0.82, 0.88, 0.82],
-  };
-}
+// ─── light and air ─────────────────────────────────────────────────────────
+// `?time=0.5` starts at that point of the day (0 afternoon · .3 golden · .5 dusk · .7 night · .9 dawn)
+const dayStart = Number.isFinite(Number(params.get('time'))) && params.get('time') !== null ? Number(params.get('time')) : 0.08;
+const atmosphere = new Atmosphere(reduced ? { flies: 14, pollen: 16, silt: 30 } : { flies: 34, pollen: 40, silt: 70 });
 
-// ─── ambient motes ─────────────────────────────────────────────────────────
-const pollen = Array.from({ length: reduced ? 20 : 46 }, () => ({ x: rand(), y: rand(), p: rand() * 10, s: 1.6 + rand() * 2.4 }));
-
-function motes(dt: number): Mote[] {
+function gathers(dt: number, dusk: number): Mote[] {
   const out: Mote[] = [];
-  const hw = cam.cssW / (2 * cam.zoom);
-  const hh = cam.cssH / (2 * cam.zoom);
-  for (const m of pollen) {
-    m.p += dt;
-    // anchored to the water (they wrap around the view as it moves)
-    const wrap = (v: number, span: number) => ((v % span) + span) % span;
-    const x = cam.x - hw + wrap(m.x * hw * 2 + Math.sin(m.p * 0.13) * 40 + pond.t * 3 - cam.x, hw * 2);
-    const y = cam.y - hh + wrap(m.y * hh * 2 + Math.cos(m.p * 0.11) * 30 - cam.y, hh * 2);
-    const tw = 0.1 + 0.25 * Math.max(0, Math.sin(m.p * 0.6));
-    out.push({ x, y, size: m.s * 3, r: 1, g: 0.95, b: 0.75, a: tw, core: 0.4 });
-  }
   const [bx, by] = pond.bow();
   lifts = lifts.filter((l) => l.t < l.dur + l.delay);
   let arrived = 0;
@@ -448,11 +470,14 @@ function motes(dt: number): Mote[] {
     const my = (l.y0 + by) / 2 + 40;
     const x = (1 - e) * (1 - e) * l.x0 + 2 * (1 - e) * e * mx + e * e * bx;
     const y = (1 - e) * (1 - e) * l.y0 + 2 * (1 - e) * e * my + e * e * by;
-    out.push({ x, y, size: 16 - 6 * e, r: 1, g: 0.93, b: 0.7, a: 0.9 * (1 - e * 0.3), core: 1 });
+    out.push({ x, y, size: 16 - 6 * e, r: 1, g: 0.93, b: 0.7, a: 0.9 * (1 - e * 0.3), core: 1, z: 1 + 0.08 * Math.sin(e * Math.PI) });
     if (l.t - l.delay + dt >= l.dur) arrived++;
   }
   lantern = Math.min(1.5, lantern + arrived * 0.12) * Math.exp(-0.25 * dt);
-  out.push({ x: bx, y: by, size: 26 + lantern * 30, r: 1, g: 0.8, b: 0.45, a: 0.25 + lantern * 0.4, core: 0.3 });
+  // the lantern: a small warmth by day, the brightest thing on the river at night
+  const glow = lantern + dusk * 0.8;
+  out.push({ x: bx, y: by, size: 26 + glow * 40, r: 1, g: 0.8, b: 0.45, a: 0.22 + glow * 0.35, core: 0.3, z: 1.02 });
+  if (dusk > 0.2) out.push({ x: bx, y: by, size: 140 + glow * 80, r: 1, g: 0.72, b: 0.4, a: 0.05 * dusk + glow * 0.03, core: 0, z: 1 });
   return out;
 }
 
@@ -500,7 +525,11 @@ function frame(now: number) {
     renderer.shiftSim(shift);
     for (const l of lifts) l.y0 -= shift;
   }
-  school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw: cam.cssW / (2 * cam.zoom), hh }, shift);
+  school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw: cam.cssW / (2 * cam.zoom), hh }, shift, (x, y) => pond.flow(x, y));
+  if (shift) atmosphere.shift(shift);
+  let breeze = 0;
+  for (const g of pond.gusts) breeze = Math.max(breeze, Pond.gustLevel(g));
+  sound.breeze(breeze);
 
   // the camera follows the boat, easing sideways toward the channel
   const b = pond.boat;
@@ -547,17 +576,27 @@ function frame(now: number) {
     thread.push([z.x, z.y]);
   }
 
+  const sky = skyAt(dayStart + pond.t / DAY);
+  const air = atmosphere.step(dt, pond.t, {
+    x: cam.x,
+    y: cam.y,
+    hw: cam.cssW / (2 * cam.zoom),
+    hh,
+    flow: (x, y) => pond.flow(x, y),
+    wind: (x, y) => pond.wind(x, y),
+  }, sky);
   renderer.render(
     {
       cam,
-      light: lightAt(pond.t),
+      light: sky,
       time: pond.t,
       pond,
       pads: order,
       fish: school.fish,
-      motes: motes(dt),
+      motes: [...air.above, ...gathers(dt, sky.dusk)],
+      under: air.below,
       thread,
-      lantern,
+      lantern: lantern + sky.dusk,
     },
     dt,
   );

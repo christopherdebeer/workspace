@@ -76,6 +76,37 @@ export interface Deep {
   depth: number;
 }
 
+/** A clump of rooted weed on the bed, streaming in the current. */
+export interface Weed {
+  x: number;
+  y: number;
+  len: number;
+  depth: number;
+  seed: number;
+  /** 0 ribbon grass, 1 feathery milfoil */
+  kind: number;
+}
+
+/**
+ * A breath of wind from a touch: a travelling patch that ruffles the water,
+ * pushes and turns pads, scatters fish and specks. A tap is a round puff; a
+ * drag is a firm gust along the finger that carries on after it lifts.
+ */
+export interface Gust {
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+  /** 0..1 */
+  s: number;
+  r: number;
+  age: number;
+  life: number;
+  radial: boolean;
+  /** Still under the finger (it follows the finger and doesn't age). */
+  held: boolean;
+}
+
 export interface Impulse {
   x: number;
   y: number;
@@ -144,6 +175,8 @@ export class Pond {
   deep: Deep[] = [];
   impulses: Impulse[] = [];
   bumps: Bump[] = [];
+  weeds: Weed[] = [];
+  gusts: Gust[] = [];
   boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0 };
   rope: Float32Array;
   ropePrev: Float32Array;
@@ -181,6 +214,44 @@ export class Pond {
     return 84 + 28 * Math.sin(Y / 760 + 0.4) + 14 * Math.sin(Y / 290 + 2.2);
   }
 
+  /**
+   * The current (world units / s): along the channel's line, fastest in open
+   * water, slack under the banks, with slow eddies turning where it slows.
+   * The surface shader computes the same shape from the same channel samples,
+   * so what the water shows and what the pads feel agree.
+   */
+  flow(x: number, y: number): [number, number] {
+    const cx = this.channel(y);
+    const slope = (this.channel(y + 20) - this.channel(y - 20)) / 40;
+    const n = Math.hypot(slope, 1);
+    const tx = slope / n;
+    const ty = 1 / n;
+    const half = this.channelHalf(y);
+    const open = 1 - smooth(half * 0.35, half + 120, Math.abs(x - cx));
+    const speed = 2.5 + 11 * open;
+    // eddies: a slow curl field, strongest where open water meets the banks
+    const Y = y + this.origin;
+    const e = (1 - open) * open * 4 * 7;
+    const ex = Math.sin(Y / 97 + x / 131 + this.t * 0.05) * e;
+    const ey = Math.cos(x / 89 - Y / 143 + this.t * 0.04) * e * 0.6;
+    return [tx * speed + ex, ty * speed + ey];
+  }
+
+  /** A touch's breath of wind (see Gust). */
+  gust(g: Omit<Gust, 'age'>): Gust {
+    const full = { ...g, age: 0 };
+    this.gusts.push(full);
+    if (this.gusts.length > 6) this.gusts.shift();
+    return full;
+  }
+
+  /** Current strength 0..1 of a gust (rises fast, falls slow). */
+  static gustLevel(g: Gust): number {
+    if (g.held) return g.s;
+    const k = g.age / g.life;
+    return g.s * Math.min(1, k * 8) * Math.pow(Math.max(0, 1 - k), 1.6);
+  }
+
   /** Grow pads until the field reaches `yMax`. */
   ensure(yMax: number) {
     while (this.genY < yMax) {
@@ -195,6 +266,7 @@ export class Pond {
     this.halfW = halfW;
     this.pads = this.pads.filter((p) => p.y < yMin);
     this.deep = this.deep.filter((d) => d.y < yMin);
+    this.weeds = this.weeds.filter((w) => w.y < yMin);
     this.genY = yMin;
   }
 
@@ -267,6 +339,16 @@ export class Pond {
         depth: 0.35 + rand() * 0.55,
       });
     }
+    // weed beds root in the shallows toward the banks, sparser in the open run
+    const weedCount = Math.round(((y1 - y0) * span) / 2600);
+    for (let i = 0; i < weedCount; i++) {
+      const y = y0 + rand() * (y1 - y0);
+      const cx = this.channel(y);
+      const x = cx + (rand() * 2 - 1) * (this.halfW + 60);
+      const off = Math.abs(x - cx) / this.channelHalf(y);
+      if (off < 0.5 && rand() > 0.25) continue;
+      this.weeds.push({ x, y, len: 30 + rand() * 60, depth: 0.45 + rand() * 0.6, seed: rand(), kind: rand() < 0.35 ? 1 : 0 });
+    }
     this.pads.sort((a, b) => Number(b.bank) - Number(a.bank) || a.layer - b.layer);
   }
 
@@ -274,6 +356,7 @@ export class Pond {
   cull(yMin: number) {
     this.pads = this.pads.filter((p) => p.y > yMin || p.selected);
     this.deep = this.deep.filter((d) => d.y > yMin);
+    this.weeds = this.weeds.filter((w) => w.y > yMin);
   }
 
   rebaseIfNeeded(): number {
@@ -287,6 +370,8 @@ export class Pond {
       p.ay -= s;
     }
     for (const d of this.deep) d.y -= s;
+    for (const w of this.weeds) w.y -= s;
+    for (const g of this.gusts) g.y -= s;
     for (let i = 1; i < this.rope.length; i += 2) {
       this.rope[i] -= s;
       this.ropePrev[i] -= s;
@@ -306,9 +391,56 @@ export class Pond {
 
   step(dt: number, active: { y0: number; y1: number }, reduced: boolean) {
     this.t += dt;
+    this.stepGusts(dt);
     this.stepBoat(dt, reduced);
     this.stepPads(dt, active);
     this.stepRope();
+  }
+
+  private stepGusts(dt: number) {
+    for (const g of this.gusts) {
+      if (g.held) continue;
+      g.age += dt;
+      if (!g.radial) {
+        // a gust runs on across the water as a cat's paw
+        const v = 70 + 90 * g.s;
+        g.x += g.dx * v * dt;
+        g.y += g.dy * v * dt;
+        g.r += dt * 30;
+      } else g.r += dt * 60;
+    }
+    this.gusts = this.gusts.filter((g) => g.held || g.age < g.life);
+    // the wind roughens the water it touches
+    for (const g of this.gusts) {
+      const lvl = Pond.gustLevel(g);
+      const n = Math.round(lvl * 5);
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.sqrt(Math.random()) * g.r;
+        this.impulses.push({ x: g.x + Math.cos(a) * d, y: g.y + Math.sin(a) * d, r: 4 + Math.random() * 3, s: 0.22 * lvl });
+      }
+    }
+  }
+
+  /** Wind acceleration at a point (units/s²), summed over the live gusts. */
+  wind(x: number, y: number): [number, number] {
+    let wx = 0;
+    let wy = 0;
+    for (const g of this.gusts) {
+      const dx = x - g.x;
+      const dy = y - g.y;
+      const d = Math.hypot(dx, dy);
+      if (d > g.r * 1.3) continue;
+      const k = Pond.gustLevel(g) * (1 - smooth(g.r * 0.4, g.r * 1.3, d));
+      if (g.radial) {
+        wx += (dx / (d || 1)) * k * 70;
+        wy += (dy / (d || 1)) * k * 70;
+      } else {
+        wx += g.dx * k * 90;
+        wy += g.dy * k * 90;
+      }
+    }
+    return [wx, wy];
   }
 
   private stepBoat(dt: number, reduced: boolean) {
@@ -325,8 +457,12 @@ export class Pond {
     const aim = Math.atan2(this.channel(b.y + look) - b.x, look);
     const want = clamp(aim, -0.42, 0.42) + Math.sin(this.t * 0.13) * 0.04;
     b.heading += (want - b.heading) * (1 - Math.exp(-dt * (0.25 + b.speed / 40)));
-    b.x += Math.sin(b.heading) * b.speed * dt;
-    b.y += Math.cos(b.heading) * b.speed * dt;
+    // the current carries the boat a little; a strong gust nudges it
+    const [fx, fy] = this.flow(b.x, b.y);
+    const [wx, wy] = this.wind(b.x, b.y);
+    b.x += (Math.sin(b.heading) * b.speed + fx * 0.25 + wx * 0.04) * dt;
+    b.y += (Math.cos(b.heading) * b.speed + Math.max(0, fy) * 0.25 + wy * 0.04) * dt;
+    b.heading += (Math.cos(b.heading) * wx - Math.sin(b.heading) * wy) * 0.0006 * dt;
     b.sway = Math.sin(this.t * 0.7) * 0.012 + Math.sin(this.t * 0.31) * 0.01;
     const prev = b.stroke;
     b.stroke += dt * (0.55 + b.speed / 70) * b.rowing;
@@ -384,7 +520,7 @@ export class Pond {
       const dx = p.x - p.ax;
       const dy = p.y - p.ay;
       const d = Math.hypot(dx, dy);
-      const slack = 5 + p.r * 0.28;
+      const slack = 6 + p.r * 0.32;
       if (d > slack) {
         const k = (d - slack) * 0.9 * dt;
         p.vx -= (dx / d) * k;
@@ -395,10 +531,20 @@ export class Pond {
           p.ay += (dy / d) * (d - slack * 3.2);
         }
       }
-      // a breath of current and breeze
-      p.vx += Math.sin(t * 0.21 + p.seed * 40) * 0.5 * dt;
-      p.vy += Math.cos(t * 0.17 + p.seed * 31) * 0.4 * dt;
+      // the current leans every pad downstream against its stem
+      const [fx, fy] = this.flow(p.x, p.y);
+      p.vx += (fx * 0.6 - p.vx) * 0.12 * dt + Math.sin(t * 0.21 + p.seed * 40) * 0.4 * dt;
+      p.vy += (fy * 0.6 - p.vy) * 0.12 * dt + Math.cos(t * 0.17 + p.seed * 31) * 0.3 * dt;
       p.va += Math.sin(t * 0.11 + p.seed * 17) * 0.004 * dt;
+      // wind catches a pad by its edge: pushed, and turned by the side that caught it
+      const [wx, wy] = this.wind(p.x, p.y);
+      if (wx || wy) {
+        const catchK = 1.4 - Math.min(1, p.r / 90);
+        p.vx += wx * catchK * dt;
+        p.vy += wy * catchK * dt;
+        p.va += ((wx * Math.sin(p.ang * 3 + p.seed * 9) - wy * Math.cos(p.ang * 2)) / p.r) * 0.35 * dt;
+        p.bob = Math.max(p.bob, Math.min(0.6, Math.hypot(wx, wy) / 120));
+      }
 
       // hull contact
       const lx = p.x - sx;

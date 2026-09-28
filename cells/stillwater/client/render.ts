@@ -12,7 +12,8 @@
 import { ATTR, bindTarget, bindTex, dropTarget, GL, Instanced, noiseTexture, program, Program, quadBuffer, quadVao, renderTarget, Target } from './gl';
 import { SHADERS as S } from './shaders';
 import type { Fish } from './fish';
-import type { Pad, Pond } from './world';
+import { DEPTH_K, type Sky } from './atmosphere';
+import { Pond, type Pad } from './world';
 
 export interface Camera {
   x: number;
@@ -39,19 +40,39 @@ export interface Mote {
   b: number;
   a: number;
   core: number;
+  /** Parallax scale: 1 at the surface, <1 below it, >1 above it. */
+  z: number;
 }
 
 export interface FrameInput {
   cam: Camera;
-  light: Light;
+  light: Sky;
   time: number;
   pond: Pond;
   pads: Pad[];
   fish: Fish[];
   motes: Mote[];
+  /** Specks suspended under the surface (drawn in the underwater pass). */
+  under: Mote[];
   thread: Array<[number, number]>;
   lantern: number;
 }
+
+/** Every program, in build order. The probe in report.ts compiles these one context at a time. */
+export const PROGRAMS: Array<[string, string, string]> = [
+  ['sim', S.FULLSCREEN_VS, S.SIM_FS],
+  ['bed', S.FULLSCREEN_VS, S.BED_FS],
+  ['surface', S.FULLSCREEN_VS, S.SURFACE_FS],
+  ['mist', S.FULLSCREEN_VS, S.MIST_FS],
+  ['grade', S.FULLSCREEN_VS, S.GRADE_FS],
+  ['weed', S.WEED_VS, S.WEED_FS],
+  ['fish', S.FISH_VS, S.FISH_FS],
+  ['pad', S.PAD_VS, S.PAD_FS],
+  ['flower', S.FLOWER_VS, S.FLOWER_FS],
+  ['boat', S.BOAT_VS, S.BOAT_FS],
+  ['ribbon', S.RIBBON_VS, S.RIBBON_FS],
+  ['mote', S.MOTE_VS, S.MOTE_FS],
+];
 
 const MAX_PADS = 900;
 const MAX_DROP_ROWS = 512;
@@ -67,10 +88,15 @@ export class Renderer {
   private fsVao: WebGLVertexArrayObject;
   private noise: WebGLTexture;
   private p: Record<string, Program>;
+  /** Programs attempted so far, in order (for field reports). */
+  compiled: string[] = [];
   private padInst: Instanced;
   private deepInst: Instanced;
   private fishInst: Instanced;
   private flowerInst: Instanced;
+  private weedInst: Instanced;
+  private chan = new Float32Array(66);
+  private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
   private dropData = new Float32Array(DROP_COLS * MAX_DROP_ROWS * 4);
   private ribbonVao: WebGLVertexArrayObject;
@@ -104,23 +130,22 @@ export class Renderer {
     this.quad = quadBuffer(gl);
     this.fsVao = quadVao(gl, this.quad);
     this.noise = noiseTexture(gl);
-    const fs = S.FULLSCREEN_VS;
-    this.p = {
-      sim: program(gl, 'sim', fs, S.SIM_FS),
-      bed: program(gl, 'bed', fs, S.BED_FS),
-      surface: program(gl, 'surface', fs, S.SURFACE_FS),
-      grade: program(gl, 'grade', fs, S.GRADE_FS),
-      fish: program(gl, 'fish', S.FISH_VS, S.FISH_FS),
-      pad: program(gl, 'pad', S.PAD_VS, S.PAD_FS),
-      flower: program(gl, 'flower', S.FLOWER_VS, S.FLOWER_FS),
-      boat: program(gl, 'boat', S.BOAT_VS, S.BOAT_FS),
-      ribbon: program(gl, 'ribbon', S.RIBBON_VS, S.RIBBON_FS),
-      mote: program(gl, 'mote', S.MOTE_VS, S.MOTE_FS),
-    };
+    this.p = {};
+    for (const [name, vs, fs] of PROGRAMS) {
+      this.compiled.push(name);
+      try {
+        this.p[name] = program(gl, name, vs, fs);
+      } catch (e) {
+        (e as { compiled?: string[] }).compiled = this.compiled.slice();
+        throw e;
+      }
+      if (gl.isContextLost()) throw new Error(`context lost after compiling ${name}`);
+    }
     this.padInst = new Instanced(gl, this.quad, MAX_PADS, 3);
     this.deepInst = new Instanced(gl, this.quad, 400, 3);
     this.fishInst = new Instanced(gl, this.quad, 120, 2);
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
+    this.weedInst = new Instanced(gl, this.quad, 600, 2);
 
     this.dropTex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.dropTex);
@@ -172,7 +197,8 @@ export class Renderer {
     this.canvas.height = h;
     dropTarget(gl, this.under);
     dropTarget(gl, this.occ);
-    this.under = renderTarget(gl, w, h);
+    // under the surface is refracted and softened anyway: half resolution is plenty
+    this.under = renderTarget(gl, Math.max(1, w >> 1), Math.max(1, h >> 1));
     this.occ = renderTarget(gl, Math.max(1, w >> 2), Math.max(1, h >> 2));
     const simH = Math.min(420, Math.round((SIM_W * cssH) / cssW));
     if (this.simOn && (simH !== this.simH || !this.simA)) {
@@ -218,6 +244,9 @@ export class Renderer {
     }
     if (u.uPx) gl.uniform1f(u.uPx, 1 / (cam.zoom * this.dpr * this.scale));
     if (u.uAspect) gl.uniform1f(u.uAspect, cam.cssW / cam.cssH);
+    if (u.uDepthK) gl.uniform1f(u.uDepthK, DEPTH_K);
+    if (u.uChan) gl.uniform2fv(u.uChan, this.chan);
+    if (u.uSpanY) gl.uniform2f(u.uSpanY, this.span[0], this.span[1]);
   }
 
   private fullscreen() {
@@ -233,7 +262,26 @@ export class Renderer {
     const hh = cam.cssH / (2 * cam.zoom);
     const inView = (x: number, y: number, r: number) => Math.abs(x - cam.x) < hw + r && Math.abs(y - cam.y) < hh + r;
 
+    // ── the river's shape for this frame (bed, surface; wide enough for the bed's parallax) ──
+    const y0 = cam.y - hh * 1.5;
+    const y1 = cam.y + hh * 1.5;
+    this.span = [y0, y1];
+    for (let i = 0; i <= 32; i++) {
+      const y = y0 + ((y1 - y0) * i) / 32;
+      this.chan[i * 2] = pond.channel(y);
+      this.chan[i * 2 + 1] = pond.channelHalf(y);
+    }
+
     // ── instance data ──
+    let wn = 0;
+    for (const w of pond.weeds) {
+      if (!inView(w.x, w.y, w.len * 1.3 + 40) || wn >= 600) continue;
+      const [fx, fy] = pond.flow(w.x, w.y);
+      this.weedInst.set(wn++, w.x, w.y, w.len, Math.atan2(fx, fy), w.depth, w.seed, w.kind, Math.hypot(fx, fy));
+    }
+    this.weedInst.count = wn;
+    this.weedInst.upload();
+
     const pads = f.pads;
     let rows = 0;
     let n = 0;
@@ -311,22 +359,18 @@ export class Renderer {
     bindTarget(gl, this.under, 0, 0);
     const bed = this.p.bed;
     this.common(bed, f);
-    const chan = new Float32Array(66);
-    const y0 = cam.y - hh * 1.2;
-    const y1 = cam.y + hh * 1.2;
-    for (let i = 0; i <= 32; i++) {
-      const y = y0 + ((y1 - y0) * i) / 32;
-      chan[i * 2] = pond.channel(y);
-      chan[i * 2 + 1] = pond.channelHalf(y);
-    }
-    gl.uniform2fv(bed.u.uChan, chan);
-    gl.uniform2f(bed.u.uSpanY, y0, y1);
     bindTex(gl, 1, this.occ!.tex);
     gl.uniform1i(bed.u.uOcc, 1);
     this.fullscreen();
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    const weed = this.p.weed;
+    this.common(weed, f);
+    bindTex(gl, 1, this.occ!.tex);
+    gl.uniform1i(weed.u.uOcc, 1);
+    this.weedInst.draw();
+    this.motes(f, f.under, 0.5);
     const fishP = this.p.fish;
     this.common(fishP, f);
     bindTex(gl, 1, this.occ!.tex);
@@ -354,6 +398,14 @@ export class Renderer {
       gl.uniform2f(sf.u.uSimTexel, 1 / this.simW, 1 / this.simH);
       gl.uniform1f(sf.u.uSimScale, 1.15);
     }
+    const gu = new Float32Array(16);
+    const gd = new Float32Array(16);
+    pond.gusts.slice(-4).forEach((g, i) => {
+      gu.set([g.x, g.y, g.r, Pond.gustLevel(g)], i * 4);
+      gd.set([g.dx, g.dy, g.radial ? 1 : 0, 0], i * 4);
+    });
+    gl.uniform4fv(sf.u.uGust, gu);
+    gl.uniform4fv(sf.u.uGustDir, gd);
     this.fullscreen();
 
     gl.enable(gl.BLEND);
@@ -391,14 +443,24 @@ export class Renderer {
     gl.uniform1f(boat.u.uShadow, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
+    // low mist drifting over everything on the water
+    if (f.light.mist > 0.01) {
+      const mp = this.p.mist;
+      this.common(mp, f);
+      gl.uniform1f(mp.u.uMist, f.light.mist);
+      gl.uniform3fv(mp.u.uMistCol, f.light.mistCol);
+      gl.uniform2f(mp.u.uWind, 0, 0);
+      this.fullscreen();
+    }
+
     // the golden thread through the chosen leaves
     if (f.thread.length > 1) {
       this.ribbon(f, f.thread, 5, [0.55, 0.42, 0.16], 0.55, true);
       this.ribbon(f, f.thread, 1.3, [1, 0.9, 0.62], 0.9, true);
     }
 
-    // motes
-    this.motes(f);
+    // motes, fireflies, gathered dew
+    this.motes(f, f.motes);
 
     // grade
     const gr = this.p.grade;
@@ -476,15 +538,14 @@ export class Renderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, n * 2);
   }
 
-  private motes(f: FrameInput) {
+  private motes(f: FrameInput, list: Mote[], res = 1) {
     const gl = this.gl;
-    const list = f.motes;
     const n = Math.min(list.length, 600);
     if (!n) return;
     const d = this.moteData;
     for (let i = 0; i < n; i++) {
       const m = list[i];
-      d.set([m.x, m.y, m.size * this.scale, m.r, m.g, m.b, m.a, m.core, 0, 0], i * 10);
+      d.set([m.x, m.y, m.size * this.scale * res, m.r, m.g, m.b, m.a, m.core, m.z, 0], i * 10);
     }
     const pr = this.p.mote;
     this.common(pr, f);

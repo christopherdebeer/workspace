@@ -11,6 +11,7 @@ export class Sound {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private bed: GainNode | null = null;
+  private wind: GainNode | null = null;
   on = false;
 
   private start() {
@@ -46,9 +47,23 @@ export class Sound {
     src.connect(lp).connect(bed).connect(master);
     src.start();
     lfo.start();
+    // wind: the same noise, bright and band-passed, silent until a gust
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 900;
+    bp.Q.value = 0.6;
+    const wind = ctx.createGain();
+    wind.gain.value = 0;
+    const src2 = ctx.createBufferSource();
+    src2.buffer = buf;
+    src2.loop = true;
+    src2.playbackRate.value = 2.3;
+    src2.connect(bp).connect(wind).connect(master);
+    src2.start();
     this.ctx = ctx;
     this.master = master;
     this.bed = bed;
+    this.wind = wind;
   }
 
   toggle(): boolean {
@@ -100,6 +115,12 @@ export class Sound {
   release() {
     this.voice(PENTA[2], 0, 0.06, 1.2);
     this.voice(PENTA[0], 0.15, 0.06, 1.6);
+  }
+
+  /** A gust over the water, 0..1. */
+  breeze(level: number) {
+    if (!this.ctx || !this.wind) return;
+    this.wind.gain.setTargetAtTime(level * 0.9, this.ctx.currentTime, level > this.wind.gain.value ? 0.08 : 0.5);
   }
 
   /** The hull nudging a pad. */
