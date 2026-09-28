@@ -145,7 +145,8 @@ const float CANOPY_H = 6.;
 float canopyAt(vec2 q){
   vec2 ch = chanAt(q.y);
   float off = abs(q.x - ch.x);
-  float reach = smoothstep(ch.y * .1, ch.y + 170., off);
+  // the trees overhang the banks; the run itself is open to the sky
+  float reach = smoothstep(ch.y * .55, ch.y + 150., off);
   float big = texture(uNoise, q / 760.).r;
   float mid = texture(uNoise, q / 170. + 3.1).g;
   float fine = texture(uNoise, q / 36. + uTime * vec2(.004, .002)).r;
@@ -157,7 +158,9 @@ float canopyAt(vec2 q){
 /** Sunlight reaching a point on the water after the canopy: 1 open sky … ~.35 deep shade, with sun flecks. */
 float sunThrough(vec2 wp){
   vec3 L = normalize(uSun);
-  vec2 q = wp + L.xy / max(L.z, .3) * CANOPY_H * 42.;
+  // the leaves are low over the water, so their shadow lands close by (a long throw put the
+  // whole open run in the bank trees' shade and took the caustics with it)
+  vec2 q = wp + L.xy / max(L.z, .3) * 55.;
   float c = canopyAt(q);
   float fleck = smoothstep(.62, .8, texture(uNoise, q / 14. + uTime * vec2(.01, .006)).a);
   return 1. - c * (.65 - fleck * .45);
@@ -822,7 +825,7 @@ void main(){
   sky = mix(sky, leaves, canopy);
   // wind-roughened water loses its mirror: it darkens and catches the sky in a scatter of glints
   // a dark river is a good mirror for what's bright above it, and a window where the trees are dark
-  float mirror = clamp(fr * 2.2 + .085 + rough * .16, 0., .7);
+  float mirror = clamp(fr * 2.2 + .065 + rough * .16, 0., .7);
   vec3 col = mix(under, sky, mirror);
   col *= 1. - rough * .2;
   float rs = max(dot(R, normalize(uSun)), 0.);
