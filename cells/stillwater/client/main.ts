@@ -358,8 +358,8 @@ function begin() {
  * Touch on open water is WIND, not a button: a tap is a round puff; a drag is
  * a firm gust that follows the finger and runs on across the water when it
  * lifts — ruffling the surface, pushing and turning pads, scattering fish,
- * fireflies and pollen. Touch on a leaf chooses it, and a drag from a leaf
- * traces across leaves.
+ * fireflies and pollen. So is a touch on a dry leaf. Touch on a leaf holding
+ * dew chooses it, and a drag from there traces across dewy leaves.
  */
 let gust: Gust | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
@@ -369,8 +369,11 @@ canvasEl.addEventListener('pointerdown', (e) => {
   pointerId = e.pointerId;
   canvasEl.setPointerCapture(e.pointerId);
   begin();
-  const p = hit(e.clientX, e.clientY);
+  const hitPad = hit(e.clientX, e.clientY);
+  // a leaf with dew is a choice; anywhere else — water or a dry leaf — the touch is wind
+  const p = hitPad && liveCount(hitPad) ? hitPad : null;
   lastHit = p;
+  if (hitPad && !p) touchPad(hitPad);
   if (p) {
     touchPad(p);
     choose(p);
@@ -532,7 +535,12 @@ function adapt(ms: number, dt: number) {
   }
 }
 
+let perfSent = false;
 function frame(now: number) {
+  if (!perfSent && pond.t > 12) {
+    perfSent = true;
+    report('perf', { frameMs: Math.round(frameMs * 10) / 10, scale, sim: renderer.simOn, dpr });
+  }
   const ms = now - last;
   const dt = Math.min(ms / 1000 || 1 / 60, 1 / 20) * timeScale;
   last = now;

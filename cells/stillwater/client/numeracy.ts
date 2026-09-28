@@ -224,7 +224,7 @@ export function hintFor(stage: Stage, target: Target, first: boolean): string {
   const w = numberWord(target.value);
   switch (stage.id) {
     case 'gather':
-      return first ? `touch the leaves · gather ${w} drops` : `gather ${w} drops`;
+      return first ? `touch leaves with dew · gather ${w} drops` : `gather ${w} drops`;
     case 'add':
     case 'more':
       return `gather ${w} drops`;

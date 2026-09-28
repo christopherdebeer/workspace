@@ -607,7 +607,7 @@ void main(){
     float k = g.w * (1. - smoothstep(g.z * .35, g.z * 1.25, length(wp - g.xy)));
     vec2 dir = uGustDir[i].z > .5 ? normalize(wp - g.xy + .001) : uGustDir[i].xy;
     vec2 q = wp - dir * uTime * 55.;
-    grad += ((texture(uNoise, q / 11.).rg - .5) * .3 + (texture(uNoise, q / 5.).gr - .5) * .18) * k;
+    grad += ((texture(uNoise, q / 11.).rg - .5) * .55 + (texture(uNoise, q / 5.).gr - .5) * .32) * k;
     rough = max(rough, k);
   }
   float h = 0.;
@@ -627,8 +627,9 @@ void main(){
   vec3 R = reflect(-V, n);
   float cloud = texture(uNoise, R.xy * .6 + uTime * vec2(.002, .001)).g;
   vec3 sky = mix(uSky0, uSky1, clamp(R.y * .5 + .5, 0., 1.)) * (.85 + .3 * cloud);
-  vec3 col = mix(under, sky, clamp(fr * 2.2 + .05 + rough * .12, 0., .65));
-  col *= 1. - rough * .1;
+  // wind-roughened water loses its mirror: it darkens and catches the sky in a scatter of glints
+  vec3 col = mix(under, sky, clamp(fr * 2.2 + .05 + rough * .18, 0., .7));
+  col *= 1. - rough * .2;
   float rs = max(dot(R, normalize(uSun)), 0.);
   col += uSunCol * (pow(rs, 1400.) * (5. + rough * 6.) + pow(rs, 90.) * .08);
   col += vec3(.7, .85, .75) * clamp(h, 0., 1.) * .05;
