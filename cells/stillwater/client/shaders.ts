@@ -1177,6 +1177,34 @@ void main(){
   o = vec4(col * cover, cover + (1. - cover) * shadow);
 }`;
 
+// ─── names written on leaves (the start) ──────────────────────────────────
+
+export const NAME_VS = /* glsl */ `${HEAD}
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec4 iA; // x, y (world, the leaf's centre), width, height (world)
+layout(location=2) in vec4 iB; // atlas u0, v0, u1, v1
+layout(location=3) in vec4 iC; // alpha, -, -, -
+uniform vec4 uView;
+out vec2 vUv;
+out float vA;
+void main(){
+  // upright on the screen whatever the leaf's turn: a name is read, not grown
+  vec2 pos = iA.xy + aPos * iA.zw * .5;
+  vUv = vec2(mix(iB.x, iB.z, aPos.x * .5 + .5), mix(iB.y, iB.w, .5 - aPos.y * .5));
+  vA = iC.x;
+  gl_Position = vec4((pos - uView.xy) * uView.zw, 0., 1.);
+}`;
+
+export const NAME_FS = /* glsl */ `${HEAD}
+in vec2 vUv;
+in float vA;
+out vec4 o;
+uniform sampler2D uAtlas;
+void main(){
+  vec4 t = texture(uAtlas, vUv);
+  o = t * vA; // premultiplied
+}`;
+
 // ─── the boat ──────────────────────────────────────────────────────────────
 
 export const BOAT_VS = /* glsl */ `${HEAD}
@@ -1701,6 +1729,8 @@ export const SHADERS = {
   FLOWER_FS,
   FLOATER_VS,
   FLOATER_FS,
+  NAME_VS,
+  NAME_FS,
   STRUCTURE_VS,
   STRUCTURE_FS,
   BOAT_VS,

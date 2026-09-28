@@ -719,6 +719,7 @@ function startAs(name: string) {
   stretch = new L.Stretch(null, welcome);
   if (welcome) pond.bloomBoost = 2.2;
   ui.hideStart();
+  startedAt = pond.t;
   begin();
   nextTargetAt = pond.t + 1.2;
   canvasEl.focus({ preventScroll: true });
@@ -729,18 +730,21 @@ function startAs(name: string) {
  * band is swapped for another. Tapping the pad starts as that child.
  */
 const namePads = new Map<Pad, string>();
+const startNames = profiles
+  .slice()
+  .sort((a, b) => b.last - a.last)
+  .slice(0, 6)
+  .map((q) => q.name);
+renderer.setNames(startNames);
+/** When the start ended (pond time), for fading the names off the leaves. */
+let startedAt = -1;
 function placeNames() {
   if (started) return;
-  const names = profiles
-    .slice()
-    .sort((a, b) => b.last - a.last)
-    .slice(0, 6)
-    .map((q) => q.name);
+  const names = startNames;
   const inBand = (p: Pad) => {
     const [sx, sy] = toScreen(p.x, p.y);
-    // in the middle of the view, but clear of the title and name field at its centre
-    const centre = Math.abs(sy - cam.cssH * 0.5) < cam.cssH * 0.1;
-    return sx > 44 && sx < cam.cssW - 44 && sy > cam.cssH * 0.22 && sy < cam.cssH * 0.76 && !centre && !pond.onBoat(p.x, p.y);
+    // below the title (on the golden-ratio line) and above the name field at the foot
+    return sx > 44 && sx < cam.cssW - 44 && sy > cam.cssH * 0.46 && sy < cam.cssH * 0.84 && !pond.onBoat(p.x, p.y);
   };
   for (const [p, name] of namePads) if (!inBand(p) || !names.includes(name) || !pond.pads.includes(p)) namePads.delete(p);
   const taken = new Set(namePads.values());
@@ -754,12 +758,13 @@ function placeNames() {
     if (!p) break;
     namePads.set(p, name);
   }
-  ui.nameLabels(
-    [...namePads].map(([p, name]) => {
-      const [x, y] = toScreen(p.x, p.y);
-      return { name, x, y, size: Math.max(13, Math.min(20, p.r * cam.zoom * 0.42)) };
-    }),
-  );
+}
+
+/** The names for the renderer: on their leaves, sized to the leaf, fading once a child has begun. */
+function nameSprites() {
+  const a = started ? Math.max(0, 1 - (pond.t - startedAt) / 0.9) : 1;
+  if (a <= 0) return [];
+  return [...namePads].map(([p, name]) => ({ i: startNames.indexOf(name), x: p.x, y: p.y, h: Math.max(13, Math.min(20, p.r * cam.zoom * 0.42)) / cam.zoom, a }));
 }
 {
   const auto = startupParams.get('profile');
@@ -1141,6 +1146,7 @@ function frame(now: number) {
       under: air.below,
       thread,
       lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,
+      names: nameSprites(),
     },
     dt,
   );
@@ -1184,6 +1190,10 @@ Object.defineProperty(window, '__stillwater', {
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
     profile: profile?.name ?? null,
+    names: [...namePads].map(([p, name]) => {
+      const [x, y] = toScreen(p.x, p.y);
+      return { name, x: Math.round(x), y: Math.round(y) };
+    }),
     boat: (() => {
       const [x, y] = toScreen(pond.boat.x, pond.boat.y);
       const b = pond.boat;

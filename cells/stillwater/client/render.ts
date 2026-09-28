@@ -56,6 +56,8 @@ export interface FrameInput {
   under: Mote[];
   thread: Array<[number, number]>;
   lantern: number;
+  /** Names written on leaves at the start: which atlas entry, where, how tall (world), how faded. */
+  names?: Array<{ i: number; x: number; y: number; h: number; a: number }>;
 }
 
 /** Every program, in build order. The probe in report.ts compiles these one context at a time. */
@@ -70,6 +72,7 @@ export const PROGRAMS: Array<[string, string, string]> = [
   ['pad', S.PAD_VS, S.PAD_FS],
   ['flower', S.FLOWER_VS, S.FLOWER_FS],
   ['floater', S.FLOATER_VS, S.FLOATER_FS],
+  ['name', S.NAME_VS, S.NAME_FS],
   ['structure', S.STRUCTURE_VS, S.STRUCTURE_FS],
   ['boat', S.BOAT_VS, S.BOAT_FS],
   ['ribbon', S.RIBBON_VS, S.RIBBON_FS],
@@ -102,6 +105,10 @@ export class Renderer {
   private weedInst: Instanced;
   private floatInst: Instanced;
   private structureInst: Instanced;
+  private nameInst: Instanced;
+  private atlas: WebGLTexture | null = null;
+  /** Atlas rows: each name's uv rect and aspect (width / height). */
+  private atlasRows: Array<{ u0: number; v0: number; u1: number; v1: number; aspect: number }> = [];
   private chan = new Float32Array(66);
   private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
@@ -167,6 +174,7 @@ export class Renderer {
     this.weedInst = new Instanced(gl, this.quad, 600, 2);
     this.floatInst = new Instanced(gl, this.quad, 4000, 2);
     this.structureInst = new Instanced(gl, this.quad, 96, 2);
+    this.nameInst = new Instanced(gl, this.quad, 8, 3);
 
     this.dropTex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.dropTex);
@@ -495,6 +503,23 @@ export class Renderer {
     gl.uniform1i(pad.u.uDrops, 1);
     this.padInst.draw();
 
+    // names on the leaves, drawn with the pads so they move as one
+    if (f.names?.length && this.atlas) {
+      let k = 0;
+      for (const n of f.names) {
+        const row = this.atlasRows[n.i];
+        if (!row || k >= 8) continue;
+        this.nameInst.set(k++, n.x, n.y, n.h * row.aspect, n.h, row.u0, row.v0, row.u1, row.v1, n.a, 0, 0, 0);
+      }
+      this.nameInst.count = k;
+      this.nameInst.upload();
+      const np = this.p.name;
+      this.common(np, f);
+      bindTex(gl, 2, this.atlas);
+      gl.uniform1i(np.u.uAtlas, 2);
+      this.nameInst.draw();
+    }
+
     // flowers
     this.common(this.p.flower, f);
     this.flowerInst.draw();
@@ -736,6 +761,52 @@ export class Renderer {
     }
     this.strips(f, rhiz, [0.52, 0.38, 0.22], 3);
     this.strips(f, stems, [0.50, 0.50, 0.24], 3);
+  }
+
+  /**
+   * Bake names into a small texture (a row each, cream serif with a dark
+   * shadow) so they can be drawn on the leaves in the same pass as the leaves.
+   */
+  setNames(names: string[]) {
+    const gl = this.gl;
+    this.atlasRows = [];
+    if (!names.length) {
+      this.atlas = null;
+      return;
+    }
+    const PX = 48; // font size in the atlas (drawn down to ~13–20 css px)
+    const rowH = Math.round(PX * 1.5);
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d')!;
+    ctx.font = `${PX}px Georgia, 'Iowan Old Style', serif`;
+    const widths = names.map((n) => Math.ceil(ctx.measureText(n).width) + PX);
+    const W = Math.min(1024, Math.max(64, ...widths));
+    const H = rowH * names.length;
+    c.width = W;
+    c.height = H;
+    ctx.font = `${PX}px Georgia, 'Iowan Old Style', serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    names.forEach((n, i) => {
+      const y = i * rowH + rowH / 2;
+      ctx.shadowColor = 'rgba(0, 27, 25, .95)';
+      ctx.shadowBlur = PX * 0.35;
+      ctx.fillStyle = '#f6f3d8';
+      ctx.fillText(n, W / 2, y, W - 8);
+      ctx.shadowBlur = 0;
+      const w = Math.min(W, widths[i]);
+      this.atlasRows.push({ u0: (W / 2 - w / 2) / W, v0: (i * rowH) / H, u1: (W / 2 + w / 2) / W, v1: ((i + 1) * rowH) / H, aspect: w / rowH });
+    });
+    const tex = this.atlas ?? gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.atlas = tex;
   }
 
   private ribbon(f: FrameInput, pts: Array<[number, number]>, width: number | number[], color: [number, number, number], alpha: number | number[], glow: boolean | 2) {

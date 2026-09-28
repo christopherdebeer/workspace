@@ -31,19 +31,17 @@
     button:focus-visible { outline: 1px solid #ddd; border-radius: 4px; }
     #live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
     body.nogl #hint { opacity: .9; }
-    /* the start: the title and a place for a new name sit at the centre of the river;
-       the children who have rowed here before have their names on lily pads to tap */
+    /* the start: the title on the golden-ratio line, names written on leaves below it,
+       and a place for a new name in the hint's own slot */
     h1.hidden { opacity: 0; }
-    #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; pointer-events: none; transition: opacity 1.4s; }
+    #start { position: fixed; left: 0; right: 0; top: 38.2%; transform: translateY(-50%); text-align: center; pointer-events: none; transition: opacity 1.4s; }
     #start.away { opacity: 0; }
     #start .brand { font-size: 15px; letter-spacing: 10px; margin: 0 0 0 10px; opacity: .92; text-shadow: 0 2px 18px #001b19; }
-    #start form { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
-    #start input { font: 16px Georgia, serif; font-style: italic; color: #f3f0d2; background: rgba(6, 26, 22, .28); border: 1px solid rgba(240, 236, 206, .4); border-radius: 12px; padding: 9px 12px; width: 150px; outline: none; text-align: center; }
-    #start input:focus { border-color: rgba(240, 236, 206, .85); }
-    #start input::placeholder { color: rgba(240, 236, 206, .5); }
-    #names { position: fixed; inset: 0; pointer-events: none; }
-    #names span { position: absolute; transform: translate(-50%, -50%); font-size: 17px; letter-spacing: .6px; color: #f6f3d8; text-shadow: 0 1px 2px #0b2a1e, 0 0 14px rgba(0, 27, 25, .9); white-space: nowrap; transition: opacity .8s; }
-    #names.away span { opacity: 0; }
+    #newname { position: fixed; left: 0; right: 0; bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px)); display: flex; justify-content: center; pointer-events: none; transition: opacity 1.4s; }
+    #newname.away { opacity: 0; }
+    #newname input { pointer-events: auto; font: 16px Georgia, serif; font-style: italic; letter-spacing: .4px; color: #f3f0d2; background: transparent; border: 0; border-bottom: 1px solid rgba(240, 236, 206, .38); padding: 8px 6px; width: 200px; outline: none; text-align: center; text-shadow: 0 1px 12px #001b19; }
+    #newname input:focus { border-bottom-color: rgba(240, 236, 206, .8); }
+    #newname input::placeholder { color: rgba(240, 236, 206, .72); }
   </style>
 </head>
 <body>
@@ -57,13 +55,10 @@
     <button id="sound" type="button" aria-pressed="false">sound off</button>
     <div id="live" role="status" aria-live="polite"></div>
   </div>
-  <div id="names" aria-hidden="true"></div>
-  <div id="start">
-    <p class="brand">STILLWATER</p>
-    <form id="newname" autocomplete="off">
-      <input id="newname-input" type="text" maxlength="14" placeholder="your name" aria-label="A new name" enterkeyhint="go" />
-    </form>
-  </div>
+  <div id="start"><p class="brand">STILLWATER</p></div>
+  <form id="newname" autocomplete="off">
+    <input id="newname-input" type="text" maxlength="14" placeholder="who is rowing today?" aria-label="Who is rowing today? Type a new name" enterkeyhint="go" />
+  </form>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
