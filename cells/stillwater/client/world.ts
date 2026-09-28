@@ -130,6 +130,10 @@ export interface Boat {
   stroke: number;
   rowing: number;
   sway: number;
+  /** Where a finger on the boat is pulling it (world), or null. */
+  helm: [number, number] | null;
+  /** Until this time the boat keeps the heading it was given instead of following the channel. */
+  manualUntil: number;
 }
 
 export const BOAT_LEN = 112;
@@ -177,7 +181,7 @@ export class Pond {
   bumps: Bump[] = [];
   weeds: Weed[] = [];
   gusts: Gust[] = [];
-  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0 };
+  boat: Boat = { x: 0, y: 0, heading: 0, speed: 0, surge: 0, stroke: 0, rowing: 0, sway: 0, helm: null, manualUntil: 0 };
   rope: Float32Array;
   ropePrev: Float32Array;
   /** Accumulated rebase offset: world y + origin is the "true" distance travelled. */
@@ -410,14 +414,30 @@ export class Pond {
       } else g.r += dt * 60;
     }
     this.gusts = this.gusts.filter((g) => g.held || g.age < g.life);
-    // the wind roughens the water it touches
+    // the wind drives waves: a front of little crests along its leading edge,
+    // and a scatter of cat's-paw ripples inside it
     for (const g of this.gusts) {
       const lvl = Pond.gustLevel(g);
-      const n = Math.round(lvl * 5);
-      for (let i = 0; i < n; i++) {
+      if (lvl < 0.05) continue;
+      if (g.radial) {
+        const n = 10;
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + this.t;
+          this.impulses.push({ x: g.x + Math.cos(a) * g.r * 0.5, y: g.y + Math.sin(a) * g.r * 0.5, r: 7, s: 0.45 * lvl });
+        }
+      } else {
+        const px = -g.dy;
+        const py = g.dx;
+        for (let i = -3; i <= 3; i++) {
+          const o = (i / 3) * g.r * 0.8 + (Math.random() - 0.5) * 12;
+          const f = g.r * (0.35 + Math.random() * 0.25);
+          this.impulses.push({ x: g.x + g.dx * f + px * o, y: g.y + g.dy * f + py * o, r: 6, s: 0.5 * lvl });
+        }
+      }
+      for (let i = 0; i < 3; i++) {
         const a = Math.random() * Math.PI * 2;
         const d = Math.sqrt(Math.random()) * g.r;
-        this.impulses.push({ x: g.x + Math.cos(a) * d, y: g.y + Math.sin(a) * d, r: 4 + Math.random() * 3, s: 0.22 * lvl });
+        this.impulses.push({ x: g.x + Math.cos(a) * d, y: g.y + Math.sin(a) * d, r: 4, s: 0.3 * lvl });
       }
     }
   }
@@ -443,40 +463,90 @@ export class Pond {
     return [wx, wy];
   }
 
+  /** One long pull on the oars (a tap on the boat). */
+  stroke() {
+    this.boat.surge += 34;
+  }
+
+  /** Is a world point on the boat (hull, with a little grace)? */
+  onBoat(x: number, y: number): boolean {
+    const b = this.boat;
+    const c = Math.cos(b.heading);
+    const s = Math.sin(b.heading);
+    const lx = (x - b.x) * c - (y - b.y) * s;
+    const ly = (x - b.x) * s + (y - b.y) * c;
+    return Math.abs(lx) < BOAT_BEAM * 0.5 + 16 && Math.abs(ly) < BOAT_LEN * 0.5 + 12;
+  }
+
+  /**
+   * The boat never waits. It always rows gently on down the river (the
+   * journey is endless; the dew only adds to it). A finger on the boat takes
+   * the helm: it turns toward the finger and rows harder the further ahead
+   * the finger is; let go and it holds that course a while before drifting
+   * back to the channel.
+   */
   private stepBoat(dt: number, reduced: boolean) {
     const b = this.boat;
-    // feed the surge into speed smoothly, like a few strokes of the oars
     const feed = Math.min(b.surge, dt * (18 + b.surge * 0.9));
     b.surge -= feed;
     b.speed += feed;
-    const idle = reduced ? 0 : 2.2;
-    b.speed += (idle - b.speed) * (1 - Math.exp(-0.34 * dt));
-    b.rowing += ((b.surge > 1 || b.speed > 14 ? 1 : 0) - b.rowing) * (1 - Math.exp(-2.5 * dt));
-    // steer for the channel ahead, only as fast as the boat is moving
-    const look = 170;
-    const aim = Math.atan2(this.channel(b.y + look) - b.x, look);
-    const want = clamp(aim, -0.42, 0.42) + Math.sin(this.t * 0.13) * 0.04;
-    b.heading += (want - b.heading) * (1 - Math.exp(-dt * (0.25 + b.speed / 40)));
-    // the current carries the boat a little; a strong gust nudges it
+    let cruise = reduced ? 4 : 10;
+    let want: number;
+    if (b.helm) {
+      const dx = b.helm[0] - b.x;
+      const dy = b.helm[1] - b.y;
+      const d = Math.hypot(dx, dy);
+      want = clamp(Math.atan2(dx, dy), -1.2, 1.2);
+      // pull ahead to row hard; hold the boat itself to row steadily
+      cruise = clamp(12 + Math.max(0, dy) * 0.35 + d * 0.05, 12, 55);
+      b.manualUntil = this.t + 4;
+    } else if (this.t < b.manualUntil) {
+      want = b.heading;
+    } else {
+      const look = 170;
+      want = clamp(Math.atan2(this.channel(b.y + look) - b.x, look), -0.42, 0.42) + Math.sin(this.t * 0.13) * 0.04;
+    }
+    b.speed += (cruise - b.speed) * (1 - Math.exp(-(b.helm ? 1.2 : 0.34) * dt));
+    b.heading += (want - b.heading) * (1 - Math.exp(-dt * (b.helm ? 1.6 : 0.25 + b.speed / 40)));
+    b.rowing += ((b.speed > 3 || b.surge > 1 ? 1 : 0) - b.rowing) * (1 - Math.exp(-2.5 * dt));
+    // the current carries the boat a little; a gust leans on it
     const [fx, fy] = this.flow(b.x, b.y);
     const [wx, wy] = this.wind(b.x, b.y);
-    b.x += (Math.sin(b.heading) * b.speed + fx * 0.25 + wx * 0.04) * dt;
-    b.y += (Math.cos(b.heading) * b.speed + Math.max(0, fy) * 0.25 + wy * 0.04) * dt;
-    b.heading += (Math.cos(b.heading) * wx - Math.sin(b.heading) * wy) * 0.0006 * dt;
+    b.x += (Math.sin(b.heading) * b.speed + fx * 0.25 + wx * 0.06) * dt;
+    b.y += (Math.cos(b.heading) * b.speed + Math.max(0, fy) * 0.25 + wy * 0.06) * dt;
+    b.heading += (Math.cos(b.heading) * wx - Math.sin(b.heading) * wy) * 0.0009 * dt;
     b.sway = Math.sin(this.t * 0.7) * 0.012 + Math.sin(this.t * 0.31) * 0.01;
     const prev = b.stroke;
-    b.stroke += dt * (0.55 + b.speed / 70) * b.rowing;
-    // the blades catch the water at the top of each stroke
+    b.stroke += dt * (0.35 + b.speed / 45) * b.rowing;
+    // the blades catch the water at the top of each stroke: a puddle and a swirl
     if (Math.floor(prev) !== Math.floor(b.stroke) && b.rowing > 0.3) {
       for (const side of [-1, 1]) {
         const [tx, ty] = this.oarTip(side);
-        this.impulses.push({ x: tx, y: ty, r: 7, s: 0.9 * b.rowing });
+        this.impulses.push({ x: tx, y: ty, r: 8, s: 1.1 * b.rowing });
       }
     }
-    // the bow parts the water continuously
-    if (b.speed > 4) {
-      const [bx, by] = this.bow();
-      this.impulses.push({ x: bx, y: by, r: 9, s: Math.min(0.5, b.speed / 90) });
+    this.wake(dt);
+  }
+
+  private wakeAcc = 0;
+  /** A V of waves off the bow and a trail off the stern quarters, stronger with speed. */
+  private wake(dt: number) {
+    const b = this.boat;
+    if (b.speed < 2) return;
+    this.wakeAcc += dt;
+    if (this.wakeAcc < 1 / 30) return;
+    this.wakeAcc = 0;
+    const k = Math.min(1, b.speed / 40);
+    const c = Math.cos(b.heading);
+    const s = Math.sin(b.heading);
+    const at = (lx: number, ly: number): [number, number] => [b.x + lx * c + ly * s, b.y - lx * s + ly * c];
+    const [bx, by] = at(0, BOAT_LEN * 0.47);
+    this.impulses.push({ x: bx, y: by, r: 7, s: 0.35 + 0.6 * k });
+    for (const side of [-1, 1]) {
+      const [qx, qy] = at(side * BOAT_BEAM * 0.45, BOAT_LEN * 0.18);
+      this.impulses.push({ x: qx, y: qy, r: 6, s: 0.25 + 0.45 * k });
+      const [sx, sy] = at(side * BOAT_BEAM * 0.3, -BOAT_LEN * 0.48);
+      this.impulses.push({ x: sx, y: sy, r: 6, s: 0.2 + 0.4 * k });
     }
   }
 
@@ -641,6 +711,11 @@ export class Pond {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.ang += p.va * dt;
+      // a pad sliding through the water pushes a little wave ahead of it
+      const ps = Math.hypot(p.vx, p.vy);
+      if (ps > 9 && Math.random() < dt * 8) {
+        this.impulses.push({ x: p.x + (p.vx / ps) * p.r, y: p.y + (p.vy / ps) * p.r, r: 6, s: Math.min(0.7, ps / 40) });
+      }
       p.bob *= Math.exp(-2.4 * dt);
       p.sel += ((p.selected ? 1 : 0) - p.sel) * (1 - Math.exp(-6 * dt));
       for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : 5) * dt));

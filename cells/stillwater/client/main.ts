@@ -69,7 +69,7 @@ const timeScale = Math.max(0.1, Math.min(8, Number(params.get('timescale')) || 1
 const rand = seeded(urlSeed || (Date.now() % 100000) + 7);
 const pond = new Pond(Math.floor(rand() * 1e9));
 pond.dewFor = (r) => N.dewFor(stage(), r);
-const school = new School(reduced ? 18 : 34, pond.boat.x, pond.boat.y + 200);
+const school = new School(reduced ? { schools: 2, perSchool: 14, loners: 6 } : { schools: 4, perSchool: 22, loners: 12 }, pond.boat.x, pond.boat.y + 200);
 
 let renderer!: Renderer;
 let canvasEl = canvas;
@@ -362,6 +362,8 @@ function begin() {
  * dew chooses it, and a drag from there traces across dewy leaves.
  */
 let gust: Gust | null = null;
+/** A finger on the boat: it rows toward the finger. */
+let helm: { t: number; x: number; y: number; moved: boolean } | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
 
 canvasEl.addEventListener('pointerdown', (e) => {
@@ -369,6 +371,13 @@ canvasEl.addEventListener('pointerdown', (e) => {
   pointerId = e.pointerId;
   canvasEl.setPointerCapture(e.pointerId);
   begin();
+  // the boat first: a finger on it takes the helm (a tap is one long stroke)
+  const [bwx, bwy] = toWorld(e.clientX, e.clientY);
+  if (pond.onBoat(bwx, bwy)) {
+    helm = { t: performance.now(), x: e.clientX, y: e.clientY, moved: false };
+    pond.boat.helm = [bwx, bwy + 60];
+    return;
+  }
   const hitPad = hit(e.clientX, e.clientY);
   // a leaf with dew is a choice; anywhere else — water or a dry leaf — the touch is wind
   const p = hitPad && liveCount(hitPad) ? hitPad : null;
@@ -380,7 +389,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
     pond.impulses.push({ x: wx, y: wy, r: 10, s: 1.2 });
-    school.scare(wx, wy);
+    school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
     gust = pond.gust({ x: wx, y: wy, dx: 0, dy: 0, s: 0.6, r: 120, life: 1.8, radial: true, held: true });
     drag = { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: false };
@@ -389,6 +398,11 @@ canvasEl.addEventListener('pointerdown', (e) => {
 
 canvasEl.addEventListener('pointermove', (e) => {
   if (e.pointerId !== pointerId) return;
+  if (helm) {
+    if (Math.hypot(e.clientX - helm.x, e.clientY - helm.y) > 10) helm.moved = true;
+    pond.boat.helm = toWorld(e.clientX, e.clientY);
+    return;
+  }
   if (gust && drag) {
     const now = performance.now();
     const dtm = Math.max(1, now - drag.t) / 1000;
@@ -432,6 +446,11 @@ const end = (e: PointerEvent) => {
   if (e.pointerId !== pointerId) return;
   pointerId = null;
   lastHit = null;
+  if (helm) {
+    if (!helm.moved && performance.now() - helm.t < 350) pond.stroke();
+    pond.boat.helm = null;
+    helm = null;
+  }
   if (gust) gust.held = false; // let it run on and die away
   gust = null;
   drag = null;
@@ -536,6 +555,7 @@ function adapt(ms: number, dt: number) {
 }
 
 let perfSent = false;
+let scareAcc = 0;
 function frame(now: number) {
   if (!perfSent && pond.t > 12) {
     perfSent = true;
@@ -561,7 +581,14 @@ function frame(now: number) {
   school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw: cam.cssW / (2 * cam.zoom), hh }, shift, (x, y) => pond.flow(x, y));
   if (shift) atmosphere.shift(shift);
   let breeze = 0;
-  for (const g of pond.gusts) breeze = Math.max(breeze, Pond.gustLevel(g));
+  scareAcc += dt;
+  for (const g of pond.gusts) {
+    const lvl = Pond.gustLevel(g);
+    breeze = Math.max(breeze, lvl);
+    // fish bolt from the wind's shadow on the water as it passes over them
+    if (scareAcc > 0.25 && lvl > 0.15) school.scare(g.x, g.y, g.r * (0.8 + lvl * 0.6));
+  }
+  if (scareAcc > 0.25) scareAcc = 0;
   sound.breeze(breeze);
 
   // the camera follows the boat, easing sideways toward the channel

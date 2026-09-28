@@ -60,7 +60,7 @@ uniform vec2 uTexel;
 uniform vec2 uShift;
 uniform vec4 uRect;
 uniform float uSimScale;
-uniform vec4 uImp[24];
+uniform vec4 uImp[48];
 uniform int uImpN;
 float at(vec2 uv){
   if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) return 0.;
@@ -77,11 +77,11 @@ void main(){
   float occ = texture(uOcc, (vUv - .5) * uSimScale + .5).r;
   h *= 1. - occ * .06;
   vec2 wp = uRect.xy + vUv * uRect.zw;
-  for (int i = 0; i < 24; i++) {
+  for (int i = 0; i < 48; i++) {
     if (i >= uImpN) break;
     vec4 im = uImp[i];
     float k = 1. - smoothstep(0., im.z, length(wp - im.xy));
-    h -= im.w * k * .35;
+    h -= im.w * k * .55;
   }
   o = vec4(clamp(h, -4., 4.), c.r, 0., 1.);
 }`;
@@ -259,6 +259,7 @@ export const FISH_VS = /* glsl */ `${HEAD}
 layout(location=0) in vec2 aPos;
 layout(location=1) in vec4 iA; // x, y, heading, size
 layout(location=2) in vec4 iB; // z, kind, phase, speed
+layout(location=3) in vec4 iC; // flash, -, -, -
 uniform vec4 uView;
 uniform vec3 uSun;
 uniform float uShadow;
@@ -266,6 +267,7 @@ uniform float uDepthK;
 out vec2 vQ;
 out vec4 vB;
 out vec2 vUv;
+out float vFlash;
 void main(){
   float z = iB.x;
   float len = iA.w * (1. - z * .18);
@@ -277,6 +279,7 @@ void main(){
   if (uShadow > .5) pos += -uSun.xy / max(uSun.z, .3) * (1.1 - z) * 38.;
   vQ = q;
   vB = iB;
+  vFlash = iC.x;
   // deeper fish sit smaller and slide slower (and their shadows sit on the bed)
   float d = uShadow > .5 ? 1.2 : .15 + z;
   vec2 clip = (pos - uView.xy) * uView.zw / (1. + uDepthK * d);
@@ -288,6 +291,7 @@ export const FISH_FS = /* glsl */ `${HEAD}${COMMON}
 in vec2 vQ;
 in vec4 vB;
 in vec2 vUv;
+in float vFlash;
 out vec4 o;
 uniform float uShadow;
 uniform sampler2D uOcc;
@@ -319,7 +323,13 @@ void main(){
   if (cover < .003) discard;
   if (uShadow > .5) { o = vec4(0., 0., 0., cover * .22 * (1. - z * .6)); return; }
   vec3 col;
-  if (kind < .5) col = vec3(.10, .13, .09) + vec3(.05, .06, .03) * smoothstep(.2, .0, abs(x));
+  if (kind > 2.5) {
+    // minnow: olive back, silver flanks that flash white as the fish turns
+    float flank = smoothstep(.0, bw, abs(x));
+    col = mix(vec3(.22, .25, .17), vec3(.62, .66, .60), flank);
+    col += vec3(.9, .95, 1.) * vFlash * flank * .9;
+  }
+  else if (kind < .5) col = vec3(.10, .13, .09) + vec3(.05, .06, .03) * smoothstep(.2, .0, abs(x));
   else if (kind < 1.5) col = vec3(.70, .70, .60);
   else {
     float blot = texture(uNoise, vQ * .35 + phase * .013).r;
@@ -618,7 +628,7 @@ void main(){
     float hr = texture(uSim, s + vec2(uSimTexel.x, 0.)).r;
     float hd = texture(uSim, s - vec2(0., uSimTexel.y)).r;
     float hu = texture(uSim, s + vec2(0., uSimTexel.y)).r;
-    grad += vec2(hr - hl, hu - hd) * .5;
+    grad += vec2(hr - hl, hu - hd) * .85;
   }
   vec3 n = normalize(vec3(-grad, 1.));
   vec3 under = texture(uUnder, vUv + n.xy * .035).rgb;

@@ -1,10 +1,17 @@
 /**
- * Fish under the pads: a boids flock (separation, alignment, cohesion) with
- * depth. Fish only school with fish near their own depth, so a deep shoal of
- * dark minnows and a few pale carp near the surface move as separate crowds
- * through the same water. They shy from the hull and from a tap, and keep to
- * the stretch of river the camera can see — a fish that falls far behind is
- * quietly re-seeded ahead, out of sight.
+ * Fish under the pads, as boids (separation, alignment, cohesion) with depth.
+ *
+ * Two kinds of crowd share the water:
+ *   - SCHOOLS of small minnows (kind 3): each fish flocks only with its own
+ *     school, tightly, so a school turns as one body — and when it turns, the
+ *     flanks catch the light and the whole school flashes silver;
+ *   - a few larger fish (dark chub, pale carp, koi) that cruise loosely.
+ *
+ * Every fish holds nose-into-the-current (rheotaxis), shies from the hull,
+ * and bolts from a scare — a tap, a gust of touch-wind, a bumped pad. A school
+ * bolts together: the fish nearest the scare flee, and alignment carries the
+ * turn through the rest. Strays too far from the view are re-seeded ahead
+ * (a whole school at once, so schools stay schools).
  */
 import type { Boat } from './world';
 
@@ -16,16 +23,22 @@ export interface Fish {
   /** 0 = just under the surface, 1 = near the bed. */
   z: number;
   size: number;
-  /** 0 dark minnow, 1 pale ghost carp, 2 koi. */
+  /** 0 dark chub, 1 pale carp, 2 koi, 3 minnow. */
   kind: number;
   phase: number;
   cruise: number;
+  /** Which school (minnows); -1 for loners. */
+  school: number;
+  /** Silver flash from turning, 0..1. */
+  flash: number;
 }
 
 export interface Scare {
   x: number;
   y: number;
   t: number;
+  /** Reach (world units). */
+  r: number;
 }
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
@@ -33,31 +46,48 @@ const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 export class School {
   fish: Fish[] = [];
   scares: Scare[] = [];
+  private schools: number;
 
-  constructor(count: number, cx: number, cy: number) {
-    for (let i = 0; i < count; i++) this.fish.push(this.spawn(cx + rnd(-200, 200), cy + rnd(-400, 400), i));
+  constructor(counts: { schools: number; perSchool: number; loners: number }, cx: number, cy: number) {
+    this.schools = counts.schools;
+    for (let s = 0; s < counts.schools; s++) {
+      const x = cx + rnd(-180, 180);
+      const y = cy + rnd(-350, 350);
+      const z = rnd(0.15, 0.7);
+      for (let i = 0; i < counts.perSchool; i++) this.fish.push(this.minnow(x + rnd(-30, 30), y + rnd(-30, 30), z, s));
+    }
+    for (let i = 0; i < counts.loners; i++) this.fish.push(this.loner(cx + rnd(-200, 200), cy + rnd(-400, 400), i));
   }
 
-  private spawn(x: number, y: number, i: number): Fish {
-    const kind = i % 11 === 0 ? 2 : i % 4 === 0 ? 1 : 0;
-    const z = kind === 0 ? rnd(0.45, 0.95) : rnd(0.12, 0.45);
+  private minnow(x: number, y: number, z: number, school: number): Fish {
     const a = rnd(0, Math.PI * 2);
-    const cruise = kind === 0 ? rnd(16, 26) : rnd(9, 15);
+    const cruise = rnd(20, 28);
+    return { x, y, vx: Math.sin(a) * cruise, vy: Math.cos(a) * cruise, z: z + rnd(-0.06, 0.06), size: rnd(5.5, 8.5), kind: 3, phase: rnd(0, 100), cruise, school, flash: 0 };
+  }
+
+  private loner(x: number, y: number, i: number): Fish {
+    const kind = i % 5 === 0 ? 2 : i % 2 === 0 ? 1 : 0;
+    const a = rnd(0, Math.PI * 2);
+    const cruise = kind === 0 ? rnd(14, 20) : rnd(9, 14);
     return {
       x,
       y,
       vx: Math.sin(a) * cruise,
       vy: Math.cos(a) * cruise,
-      z,
-      size: kind === 0 ? rnd(11, 17) : kind === 1 ? rnd(24, 34) : rnd(26, 36),
+      z: kind === 0 ? rnd(0.45, 0.95) : rnd(0.15, 0.45),
+      size: kind === 0 ? rnd(12, 17) : rnd(24, 34),
       kind,
       phase: rnd(0, 100),
       cruise,
+      school: -1,
+      flash: 0,
     };
   }
 
-  scare(x: number, y: number) {
-    this.scares.push({ x, y, t: 0 });
+  /** Something startled the water here (a tap, a gust, a bump). */
+  scare(x: number, y: number, r = 150) {
+    this.scares.push({ x, y, t: 0, r });
+    if (this.scares.length > 24) this.scares.shift();
   }
 
   step(
@@ -72,91 +102,134 @@ export class School {
     this.scares = this.scares.filter((s) => s.t < 1.4);
     const fish = this.fish;
     const n = fish.length;
+
+    // school centroids, to keep schools together and re-seed them whole
+    const cx = new Float64Array(this.schools);
+    const cy = new Float64Array(this.schools);
+    const cn = new Float64Array(this.schools);
+    for (const f of fish)
+      if (f.school >= 0) {
+        cx[f.school] += f.x;
+        cy[f.school] += f.y;
+        cn[f.school]++;
+      }
+    for (let s = 0; s < this.schools; s++) {
+      if (!cn[s]) continue;
+      const mx = cx[s] / cn[s];
+      const my = cy[s] / cn[s];
+      const ox = mx - view.x;
+      const oy = my - view.y;
+      if (oy < -view.hh - 300 || Math.abs(ox) > view.hw + 450 || oy > view.hh + 800) {
+        // the school is lost behind: bring it in ahead, out of sight
+        const nx = view.x + rnd(-view.hw, view.hw);
+        const ny = view.y + view.hh + rnd(80, 260);
+        const z = rnd(0.15, 0.7);
+        for (const f of fish)
+          if (f.school === s) Object.assign(f, this.minnow(nx + rnd(-30, 30), ny + rnd(-30, 30), z, s));
+        cx[s] = nx * cn[s];
+        cy[s] = ny * cn[s];
+      }
+    }
+
     for (let i = 0; i < n; i++) {
       const f = fish[i];
+      const minnow = f.kind === 3;
       let sx = 0;
       let sy = 0;
       let ax = 0;
       let ay = 0;
-      let cx = 0;
-      let cy = 0;
+      let mx = 0;
+      let my = 0;
       let count = 0;
-      const radius = f.kind === 0 ? 70 : 110;
+      const radius = minnow ? 48 : f.kind === 0 ? 70 : 110;
       for (let j = 0; j < n; j++) {
         if (i === j) continue;
         const g = fish[j];
-        if (Math.abs(g.z - f.z) > 0.28 || (g.kind === 0) !== (f.kind === 0)) continue;
+        if (minnow ? g.school !== f.school : g.school >= 0 || Math.abs(g.z - f.z) > 0.28 || (g.kind === 0) !== (f.kind === 0)) continue;
         const dx = g.x - f.x;
         const dy = g.y - f.y;
         const d2 = dx * dx + dy * dy;
         if (d2 > radius * radius) continue;
         const d = Math.sqrt(d2) || 0.01;
-        const personal = (f.size + g.size) * 0.9;
+        const personal = (f.size + g.size) * (minnow ? 0.75 : 0.9);
         if (d < personal) {
           sx -= (dx / d) * (personal - d);
           sy -= (dy / d) * (personal - d);
         }
         ax += g.vx;
         ay += g.vy;
-        cx += g.x;
-        cy += g.y;
+        mx += g.x;
+        my += g.y;
         count++;
       }
-      let fx = sx * 2.2;
-      let fy = sy * 2.2;
+      let fx = sx * (minnow ? 3 : 2.2);
+      let fy = sy * (minnow ? 3 : 2.2);
       if (count) {
-        fx += (ax / count - f.vx) * 0.9 + (cx / count - f.x) * 0.25;
-        fy += (ay / count - f.vy) * 0.9 + (cy / count - f.y) * 0.25;
+        const al = minnow ? 1.8 : 0.9;
+        const co = minnow ? 0.5 : 0.25;
+        fx += (ax / count - f.vx) * al + (mx / count - f.x) * co;
+        fy += (ay / count - f.vy) * al + (my / count - f.y) * co;
+      }
+      if (minnow && cn[f.school]) {
+        // a straggler swims back to its school
+        fx += (cx[f.school] / cn[f.school] - f.x) * 0.08;
+        fy += (cy[f.school] / cn[f.school] - f.y) * 0.08;
       }
       // wander
       f.phase += dt;
-      fx += Math.sin(f.phase * 0.7 + i) * 6;
-      fy += Math.cos(f.phase * 0.53 + i * 1.7) * 6;
-      // rheotaxis: fish turn to face into the current and hold against it
+      const wob = minnow ? 10 : 6;
+      fx += Math.sin(f.phase * 0.7 + (minnow ? f.school * 3 : i)) * wob;
+      fy += Math.cos(f.phase * 0.53 + (minnow ? f.school * 5 : i * 1.7)) * wob;
+      // rheotaxis: face into the current and hold against it
       const [cx0, cy0] = flow(f.x, f.y);
       const cs = Math.hypot(cx0, cy0);
       if (cs > 0.5) {
-        const hold = f.kind === 0 ? 0.35 : 0.6;
-        fx += (-cx0 / cs * f.cruise - f.vx) * hold;
-        fy += (-cy0 / cs * f.cruise - f.vy) * hold;
+        const hold = minnow ? 0.25 : f.kind === 0 ? 0.35 : 0.6;
+        fx += ((-cx0 / cs) * f.cruise - f.vx) * hold;
+        fy += ((-cy0 / cs) * f.cruise - f.vy) * hold;
       }
-      // keep near the view; far strays are re-seeded ahead
+      // keep near the view; lone strays are re-seeded ahead
       const ox = f.x - view.x;
       const oy = f.y - view.y;
       if (Math.abs(ox) > view.hw + 60) fx -= Math.sign(ox) * 30;
       if (Math.abs(oy) > view.hh + 80) fy -= Math.sign(oy) * 30;
-      if (oy < -view.hh - 260 || Math.abs(ox) > view.hw + 400 || oy > view.hh + 700) {
-        Object.assign(f, this.spawn(view.x + rnd(-view.hw, view.hw), view.y + view.hh + rnd(80, 240), i));
+      if (!minnow && (oy < -view.hh - 260 || Math.abs(ox) > view.hw + 400 || oy > view.hh + 700)) {
+        Object.assign(f, this.loner(view.x + rnd(-view.hw, view.hw), view.y + view.hh + rnd(80, 240), i));
         continue;
       }
       // shy of the hull (near-surface fish more so)
       const bx = f.x - boat.x;
       const by = f.y - boat.y;
-      const bd = Math.hypot(bx, by);
+      const bd = Math.hypot(bx, by) || 1;
       const shy = 95 * (1.2 - f.z);
       if (bd < shy) {
         fx += (bx / bd) * (shy - bd) * 3;
         fy += (by / bd) * (shy - bd) * 3;
       }
-      // and of a tap, briefly and hard
+      // bolt from a scare: hard and fast, minnows hardest
       for (const s of this.scares) {
         const dx = f.x - s.x;
         const dy = f.y - s.y;
         const d = Math.hypot(dx, dy) || 1;
-        if (d < 150) {
-          const k = (150 - d) * 5 * (1 - s.t / 1.4);
+        if (d < s.r) {
+          const k = (s.r - d) * (minnow ? 9 : 5) * (1 - s.t / 1.4);
           fx += (dx / d) * k;
           fy += (dy / d) * k;
         }
       }
+      const pvx = f.vx;
+      const pvy = f.vy;
       f.vx += fx * dt;
       f.vy += fy * dt;
       const sp = Math.hypot(f.vx, f.vy) || 1;
-      const max = f.cruise * 3.2;
+      const max = f.cruise * (minnow ? 4.5 : 3.2);
       const min = f.cruise * 0.5;
       const target = sp > max ? max : sp < min ? min : sp + (f.cruise - sp) * 0.4 * dt;
       f.vx = (f.vx / sp) * target;
       f.vy = (f.vy / sp) * target;
+      // a sharp turn shows the flank: the silver flash
+      const turn = Math.abs(pvx * f.vy - pvy * f.vx) / ((Math.hypot(pvx, pvy) || 1) * target);
+      f.flash = Math.min(1, f.flash * Math.exp(-4 * dt) + turn * (minnow ? 6 : 1.5));
       // swimming is relative to the water, and the water is moving (less so near the bed)
       const drag = 1 - f.z * 0.5;
       f.x += (f.vx + cx0 * drag) * dt;

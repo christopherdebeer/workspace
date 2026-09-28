@@ -158,7 +158,7 @@ export class Renderer {
     }
     this.padInst = new Instanced(gl, this.quad, MAX_PADS, 3);
     this.deepInst = new Instanced(gl, this.quad, 400, 3);
-    this.fishInst = new Instanced(gl, this.quad, 120, 2);
+    this.fishInst = new Instanced(gl, this.quad, 220, 3);
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
     this.weedInst = new Instanced(gl, this.quad, 600, 2);
 
@@ -340,9 +340,9 @@ export class Renderer {
 
     let fn = 0;
     for (const fish of f.fish) {
-      if (!inView(fish.x, fish.y, 60) || fn >= 120) continue;
+      if (!inView(fish.x, fish.y, 60) || fn >= 220) continue;
       const speed = Math.hypot(fish.vx, fish.vy);
-      this.fishInst.set(fn++, fish.x, fish.y, Math.atan2(fish.vx, fish.vy), fish.size, fish.z, fish.kind, fish.phase, speed);
+      this.fishInst.set(fn++, fish.x, fish.y, Math.atan2(fish.vx, fish.vy), fish.size, fish.z, fish.kind, fish.phase, speed, fish.flash, 0, 0, 0);
     }
     this.fishInst.count = fn;
     this.fishInst.upload();
@@ -502,8 +502,12 @@ export class Renderer {
     const rw = hw * 2 * 1.15;
     const rh = hh * 2 * 1.15;
     this.simAcc = Math.min(this.simAcc + dt, 3 / 60);
-    const imps = pond.impulses.splice(0, pond.impulses.length).slice(-24);
-    let first = true;
+    // everything that touched the water this frame, shared across this frame's steps;
+    // if there's more than the steps can carry, keep an even sample rather than the newest
+    let imps = pond.impulses.splice(0, pond.impulses.length);
+    const cap = 48 * Math.max(1, Math.floor(this.simAcc * 60));
+    if (imps.length > cap) imps = imps.filter((_, i) => i % Math.ceil(imps.length / cap) === 0);
+    let from = 0;
     while (this.simAcc >= 1 / 60) {
       this.simAcc -= 1 / 60;
       const prev = this.simCam ?? [cam.x, cam.y];
@@ -521,9 +525,9 @@ export class Renderer {
       gl.uniform4f(sp.u.uRect, cam.x - rw / 2, cam.y - rh / 2, rw, rh);
       gl.uniform1f(sp.u.uSimScale, 1.15);
       gl.uniform4f(sp.u.uView, cam.x, cam.y, (2 * cam.zoom) / cam.cssW, (2 * cam.zoom) / cam.cssH);
-      const list = first ? imps : [];
-      first = false;
-      const data = new Float32Array(24 * 4);
+      const list = imps.slice(from, from + 48);
+      from += 48;
+      const data = new Float32Array(48 * 4);
       list.forEach((im, i) => data.set([im.x, im.y, im.r, im.s], i * 4));
       gl.uniform4fv(sp.u.uImp, data);
       gl.uniform1i(sp.u.uImpN, list.length);
