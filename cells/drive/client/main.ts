@@ -6240,7 +6240,7 @@ const rtDofPrep = mkRT(false), rtDofFar = mkRT(false), rtDofNear = mkRT(false);
 const rtComp = new THREE.WebGLRenderTarget(2, 2, { type: THREE.UnsignedByteType, depthBuffer: false });
 rtComp.texture.minFilter = THREE.NearestFilter;
 rtComp.texture.magFilter = THREE.NearestFilter;
-let COMP_ART = qs('compart') === '1';
+let COMP_ART = qs('compart') !== '0';
 // THE SHUTTER'S OWN TARGET. Full pixel-grid size and NEAREST like rtScene,
 // not half like the blur pair: this is not a soft copy of the frame, it IS
 // the frame, and everything downstream reads it in rtScene's place.
@@ -18203,6 +18203,50 @@ function stepUnderstorey(fx: number, fz: number): void {
   compCopyMat.uniforms.src.value = rtComp.texture;
   const copyMs = time(() => runPass(compCopyMat, null));
   return { canvasMs, artMs, copyMs, frags: { canvas: renderer.domElement.width * renderer.domElement.height, art: rtComp.width * rtComp.height } };
+};
+/** WHERE THE WORLD PASS'S TIME GOES, by layer. The scene is rendered into
+ *  its own art-grid target n times per variant, fenced by a one-pixel read,
+ *  once whole and once with each of the top layers (by pre-cull triangles,
+ *  keyed the way the dump's scene row keys them) hidden. A layer's cost is
+ *  the difference. On the harness this is SwiftShader, so read it as a
+ *  ranking and a ratio, never as a phone's milliseconds. */
+(window as any).__passbench = (n = 4, top = 10) => {
+  const gl = renderer.getContext();
+  const px = new Uint8Array(4);
+  const keyOf = (o: THREE.Object3D): string => {
+    const mn = ((o as THREE.Mesh).material as THREE.Material | undefined)?.name;
+    return ((o.name || (mn ? `mat:${mn}` : '') || (o.parent?.name ? `in:${o.parent.name}` : '') || 'unnamed')
+      .replace(/[\s/:]-?\d+.*$/, '')) || 'unnamed';
+  };
+  const by = new Map<string, { tris: number; meshes: THREE.Object3D[] }>();
+  scene.traverseVisible((o) => {
+    const m = o as THREE.Mesh & { isInstancedMesh?: boolean; count?: number };
+    if (!m.isMesh) return;
+    const g = m.geometry as THREE.BufferGeometry | undefined;
+    const t = ((g?.index?.count ?? g?.getAttribute?.('position')?.count ?? 0) / 3) * (m.isInstancedMesh ? (m.count ?? 1) : 1);
+    const k = keyOf(o); const e = by.get(k) ?? { tris: 0, meshes: [] };
+    e.tris += t; e.meshes.push(o); by.set(k, e);
+  });
+  const time = (): { ms: number; tris: number; calls: number } => {
+    renderer.setRenderTarget(rtScene); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const t0 = performance.now(); let tris = 0, calls = 0;
+    for (let i = 0; i < n; i++) { renderer.setRenderTarget(rtScene); renderer.render(scene, camera); tris = renderer.info.render.triangles; calls = renderer.info.render.calls; }
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const ms = (performance.now() - t0) / n; renderer.setRenderTarget(null);
+    return { ms, tris, calls };
+  };
+  const shadow = renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate = false;
+  time(); const whole = time();
+  renderer.shadowMap.autoUpdate = true; renderer.shadowMap.needsUpdate = true; const withShadow = time(); renderer.shadowMap.autoUpdate = false;
+  const rows: object[] = [];
+  for (const [k, e] of [...by.entries()].sort((x, y) => y[1].tris - x[1].tris).slice(0, top)) {
+    for (const m of e.meshes) m.visible = false;
+    const r = time();
+    for (const m of e.meshes) m.visible = true;
+    rows.push({ layer: k, preCull: Math.round(e.tris), meshes: e.meshes.length, ms: +(whole.ms - r.ms).toFixed(2), drawn: whole.tris - r.tris, calls: whole.calls - r.calls });
+  }
+  renderer.shadowMap.autoUpdate = shadow;
+  return { art: [rtScene.width, rtScene.height], whole: { ...whole, ms: +whole.ms.toFixed(2) }, shadowMapMs: +(withShadow.ms - whole.ms).toFixed(2), rows };
 };
 (window as any).__forestfloor = (o: { us?: boolean; near?: boolean } = {}) => {
   if (o.us !== undefined) US_ON = o.us;
@@ -63455,7 +63499,7 @@ if (timeFromUrl < 0 && !qs('time')
   onSwitch('hydroskip', () => { HYDRO_SKIP = qs('hydroskip') !== '0'; rebuildInPlace(); });
   onSwitch('hydroground', () => { HYDRO_GROUND_R = Math.max(0, qsNum('hydroground', 150)); rebuildInPlace(); });
   onSwitch('hydroeps', () => { HYDRO_GROUND_EPS = Math.max(0, qsNum('hydroeps', 0.02)); rebuildInPlace(); });
-  onSwitch('compart', () => { COMP_ART = qs('compart') === '1'; });
+  onSwitch('compart', () => { COMP_ART = qs('compart') !== '0'; });
   onSwitch('treetris', () => { const t = Number(qs('treetris')); treeTriBudget = Number.isFinite(t) && t > 0 ? t : 2400000; });
   onSwitch('treerange', () => { const r = Number(qs('treerange')); treeRange = Number.isFinite(r) && r > 0 ? clamp(r, 100, 6000) : 700; });
   onSwitch('treepop', () => { const q = Number(qs('treepop')); treePopulationScale = Number.isFinite(q) && q > 0 ? clamp(q, 0.05, 32) : 1; });
