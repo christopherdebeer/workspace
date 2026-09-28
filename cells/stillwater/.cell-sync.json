@@ -1,11 +1,11 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:6c16fa98211fb0b56977a067b61fd52d8a2433f1ea876c8a9fb012efd2215fe0",
-  "syncedAt": "2026-09-28T15:18:38.139Z",
+  "treeVersion": "tree:83aa0c83ec2c14e2a0dd7085c577382d515a03a909469dd76b74c15e5df2d6fa",
+  "syncedAt": "2026-09-28T15:18:53.720Z",
   "files": {
     "LEARNING-DESIGN.md": "sha256:c8fd872ab33c4240f872fc5aa188f5a762135d9d9d09c7df9890a6f6723bf07a",
-    "REVIEW-2026-09-28.md": "sha256:0036f58b58e23feb1916ecf323dc220d860c12c6704e263bb4d48406760a557c",
+    "REVIEW-2026-09-28.md": "sha256:94d0bd5787e4477cc3d47bb8264ed91886efe658647eead65d47452cc965dab6",
     "client/atmosphere.ts": "sha256:77d6d08e10634177c66bfd287b9804c3234d21988cefc9a531b23ea882e39414",
     "client/audio.ts": "sha256:e6f65c25694cd6f646f6b7e5b42bc377d9d6400ea16dd96f92c00a0c94f3d183",
     "client/fish.ts": "sha256:83005ea3886d3c9ef8d75cf68b7647b1e3395c7e9933c34d7fb21ff7e19ea32b",
