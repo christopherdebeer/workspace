@@ -16679,6 +16679,7 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
     mesh.castShadow = false;         // see the header: sub-pixel, and it doubles the vertices
     mesh.receiveShadow = false;
     group.add(mesh);
+    mesh.userData.benchKey = `sward@${step}`;
     blocks.push({ mesh, ix0, ix1, iz0, iz1, box: new THREE.Box3(), ring: true });
   }
   group.visible = false;             // until the field has been built once
@@ -16722,10 +16723,12 @@ scene.onBeforeRender = (_r, _s, cam) => {
   swardFrustum.setFromProjectionMatrix(swardPV);
   for (const b of swardBands) {
     if (!b.mesh.visible) continue;
-    for (const k of b.blocks) k.mesh.visible = k.ring && swardFrustum.intersectsBox(k.box);
+    for (const k of b.blocks) k.mesh.visible = k.ring && !benchHidden.has(k.mesh) && swardFrustum.intersectsBox(k.box);
   }
 };
 let swardCullOn = true;
+/** Meshes `__passbench` has hidden: the per-render culling must not show them again. */
+const benchHidden = new Set<THREE.Object3D>();
 /** GPU sward on? `?sward=cpu` goes back to the old lattice. */
 let swardGpu = qs('sward') !== 'cpu';
 /** Per-frame: the lattice origins, the eye, the tint, the density. All uniform
@@ -18289,6 +18292,7 @@ function stepUnderstorey(fx: number, fz: number): void {
   const gl = renderer.getContext();
   const px = new Uint8Array(4);
   const keyOf = (o: THREE.Object3D): string => {
+    if (typeof o.userData.benchKey === 'string') return o.userData.benchKey;
     const mn = ((o as THREE.Mesh).material as THREE.Material | undefined)?.name;
     return ((o.name || (mn ? `mat:${mn}` : '') || (o.parent?.name ? `in:${o.parent.name}` : '') || 'unnamed')
       .replace(/[\s/:]-?\d+.*$/, '')) || 'unnamed';
@@ -18321,9 +18325,9 @@ function stepUnderstorey(fx: number, fz: number): void {
   renderer.shadowMap.autoUpdate = true; renderer.shadowMap.needsUpdate = true; const withShadow = time(); renderer.shadowMap.autoUpdate = false;
   const rows: object[] = [];
   for (const [k, e] of [...by.entries()].sort((x, y) => y[1].tris - x[1].tris).slice(0, top)) {
-    for (const m of e.meshes) m.visible = false;
+    for (const m of e.meshes) { m.visible = false; benchHidden.add(m); }
     const r = time();
-    for (const m of e.meshes) m.visible = true;
+    for (const m of e.meshes) { m.visible = true; benchHidden.delete(m); }
     rows.push({ layer: k, preCull: Math.round(e.tris), meshes: e.meshes.length, ms: +(whole.ms - r.ms).toFixed(2), drawn: whole.tris - r.tris, calls: whole.calls - r.calls });
   }
   renderer.shadowMap.autoUpdate = shadow;
