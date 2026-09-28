@@ -3,11 +3,11 @@
  * journey starts), the target drawn as dew-dots, a line of hint that comes and
  * goes, the sound toggle, and a polite live region for screen readers.
  *
- * The target's SHAPE carries the maths without saying it:
+ * The target is always its numeral; under it a fading scaffold carries the maths:
  *   line     • • • •            counting
  *   frames   ten-frames         adding past five and ten
  *   array    rows of equal dots equal groups — one row per leaf
- *   numeral  18                 the product alone
+ *   numeral  (no dots)          the product alone
  */
 import type { Display, Target } from './numeracy';
 import { numberWord } from './numeracy';
@@ -26,45 +26,59 @@ export class Overlay {
     this.title.classList.add('quiet');
   }
 
-  setTarget(t: Target, display: Display) {
+  /**
+   * The ask is always the NUMERAL: reading "7" and gathering seven is the
+   * skill (numeral ↔ quantity), not matching dots to drops. Under it, the
+   * dots are a scaffold — a line, ten-frames, or an array of equal rows —
+   * whose strength is `support` (1 while a form is new, fading as the child
+   * grows past it). Once it has faded away a thin bar tracks the gathering.
+   */
+  setTarget(t: Target, display: Display, support = 1) {
     this.value = t.value;
     const el = this.target;
-    el.className = 'target ' + display;
+    el.className = 'target numeral';
     el.innerHTML = '';
     this.dots = [];
     this.bar = null;
+    const num = document.createElement('b');
+    num.textContent = String(t.value);
+    el.appendChild(num);
     const dot = () => {
       const i = document.createElement('i');
       this.dots.push(i);
       return i;
     };
-    if (display === 'line') {
-      for (let k = 0; k < t.value; k++) el.appendChild(dot());
-    } else if (display === 'frames') {
-      for (let f = 0; f < Math.ceil(t.value / 10); f++) {
-        const frame = document.createElement('span');
-        frame.className = 'frame';
-        for (let k = 0; k < 10; k++) {
-          const i = dot();
-          if (f * 10 + k >= t.value) i.className = 'blank';
-          frame.appendChild(i);
+    if (support >= 0.12 && display !== 'numeral') {
+      const sc = document.createElement('div');
+      sc.className = 'scaffold ' + display;
+      sc.style.opacity = String(Math.min(1, 0.25 + support * 0.75));
+      if (display === 'line') {
+        for (let k = 0; k < t.value; k++) sc.appendChild(dot());
+      } else if (display === 'frames') {
+        for (let f = 0; f < Math.ceil(t.value / 10); f++) {
+          const frame = document.createElement('span');
+          frame.className = 'frame';
+          for (let k = 0; k < 10; k++) {
+            const i = dot();
+            if (f * 10 + k >= t.value) i.className = 'blank';
+            frame.appendChild(i);
+          }
+          sc.appendChild(frame);
         }
-        el.appendChild(frame);
+        this.dots = this.dots.filter((d) => d.className !== 'blank');
+      } else {
+        const rows = t.rows ?? 1;
+        const cols = t.cols ?? t.value;
+        sc.style.setProperty('--cols', String(cols));
+        for (let k = 0; k < rows * cols; k++) sc.appendChild(dot());
       }
-      this.dots = this.dots.filter((d) => d.className !== 'blank');
-    } else if (display === 'array') {
-      const rows = t.rows ?? 1;
-      const cols = t.cols ?? t.value;
-      el.style.setProperty('--cols', String(cols));
-      for (let k = 0; k < rows * cols; k++) el.appendChild(dot());
+      el.appendChild(sc);
     } else {
-      const num = document.createElement('b');
-      num.textContent = String(t.value);
       const bar = document.createElement('span');
       bar.className = 'bar';
       const fill = document.createElement('span');
       bar.appendChild(fill);
-      el.append(num, bar);
+      el.appendChild(bar);
       this.bar = fill;
     }
     el.classList.add('arrive');

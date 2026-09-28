@@ -233,6 +233,10 @@ function targetDewy(): Pad[] {
 
 // ─── the learning arc (LEARNING-DESIGN.md) ────────────────────────────────
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const smooth = (a: number, b: number, x: number) => {
+  const k = clamp01((x - a) / (b - a));
+  return k * k * (3 - 2 * k);
+};
 const welcome = lastPlayed > 0 && Date.now() - lastPlayed > 6 * 3600_000;
 let stretch = new L.Stretch(null, welcome);
 if (welcome) pond.bloomBoost = 2.2;
@@ -347,7 +351,9 @@ function setTarget() {
   targetFriction = 0;
   unsolvableSince = 0;
   ask = { stage: st, value: t.value, phase, bond, again, shownAt: pond.t, lastTouchAt: pond.t, scaffold: 0 };
-  ui.setTarget(t, st.display);
+  // the dots under the numeral: full while this form is new to the child, fading as they grow past it
+  const support = 1 - smooth(st.difficulty - 0.02, st.difficulty + 0.3, mastery);
+  ui.setTarget(t, st.display, st.id === 'times' ? support * 0.5 : support);
   const w = N.numberWord(t.value);
   ui.say(bond ? `${w} · in two leaves` : again ? (st.rule === 'groups' ? `${w} · the other way round` : `${w} · another way`) : N.hintFor(st, t, firstTarget), firstTarget ? 9 : 5);
   firstTarget = false;

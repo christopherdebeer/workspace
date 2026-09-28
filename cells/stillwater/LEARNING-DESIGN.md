@@ -7,6 +7,40 @@ the smallest possible piece to them.
 
 ---
 
+## 0. The syllabus the river drives
+
+Early number, roughly **ages 4–8**. That is England's EYFS to Year 3, or US
+Common Core K–3, taught **concrete → pictorial → abstract** (Singapore/CPA).
+The dew is the concrete, the dot scaffold under the numeral is the pictorial,
+and the bare numeral is the abstract. One proficiency field moves through four
+strands. Earlier strands never leave the mix (interleaving), and each fact is
+reviewed on its own spaced schedule.
+
+| strand | what the child learns | how the river asks it | proficiency ≈ |
+|---|---|---|---|
+| **1. Number sense** | Subitizing 1–5; numeral ↔ quantity to 10; cardinality (the last count is how many). | `gather`: a numeral (2–5) with a full dot line beneath, answered from dice-pattern dew. | 0 – 0.3 |
+| **2. Composing numbers** | Number bonds within 10; make ten; doubles; addition within 20; bridging through ten. | `add` / `more`: numeral over fading ten-frames. Bond asks ("in two leaves"), "another way", the low bell through ten, doubles drawn together. | 0.15 – 0.65 |
+| **3. Equal groups** | Grouping; repeated addition; arrays; the idea of "lots of". | `groups`: matching leaves only, numeral over an array (one row per leaf), "the other way round". | 0.45 – 0.85 |
+| **4. Multiplication facts** | Products to 6 × 6 (the 2–6 tables); commutativity; recall rather than skip-counting. | `times`: the bare numeral (the array only faintly, for a shaky product). Any factorisation the water holds is accepted, and twin lilies mark a product made both ways. | 0.6 → |
+
+**Why numeral-first** (Round 23). Matching dots to drops is one-to-one
+correspondence. That skill comes *before* number, and a child can do it
+without ever knowing what "5" means. Asking with the numeral makes every ask
+a numeral → quantity retrieval, which is the skill. The dots stay as the
+pictorial bridge while a form is new, and fade (1 → 0 across roughly 0.3 of
+proficiency past each stage's difficulty) until only the numeral and a thin
+progress bar remain.
+
+**Not yet covered** (all fit the mechanics):
+- **Subtraction and missing addends:** "the boat has caught 5; make 9"; letting
+  surplus drops go, counted, on "over".
+- **Division as grouping:** "12 · leaves of 3" asks *how many leaves*, which is
+  quotitive division.
+- **The 7–10 tables:** dew holds at most 6 per leaf. Tens would need a "full
+  leaf = ten" convention, which is also the doorway to place value.
+
+---
+
 ## 1. Where the learning loop is today
 
 **The loop.**

@@ -19,7 +19,8 @@
     .target i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
     .target i.blank { border-color: rgba(240, 236, 190, .18); }
     .target .frame { display: grid; grid-template-columns: repeat(5, 7px); gap: 6px; padding: 6px 8px; border: 1px solid rgba(240, 236, 190, .16); border-radius: 6px; }
-    .target.array { display: grid; grid-template-columns: repeat(var(--cols), 7px); gap: 7px; justify-content: center; }
+    .target .scaffold { display: flex; justify-content: center; align-items: center; gap: 8px; transition: opacity 1.2s; }
+    .target .scaffold.array { display: grid; grid-template-columns: repeat(var(--cols), 7px); gap: 7px; justify-content: center; }
     .target.numeral { flex-direction: column; gap: 8px; }
     .target.numeral b { font-weight: normal; font-size: 30px; letter-spacing: 2px; line-height: 1; }
     .target .bar { width: 64px; height: 2px; background: rgba(240, 236, 190, .2); border-radius: 1px; overflow: hidden; }
