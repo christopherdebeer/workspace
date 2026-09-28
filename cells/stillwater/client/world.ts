@@ -327,7 +327,7 @@ export class Pond {
       near.push(pad);
     }
     // submerged leaves and weed beds, seen through the water
-    const deepCount = Math.round(((y1 - y0) * span) / 9000);
+    const deepCount = Math.round(((y1 - y0) * span) / 26000);
     for (let i = 0; i < deepCount; i++) {
       const y = y0 + rand() * (y1 - y0);
       this.deep.push({

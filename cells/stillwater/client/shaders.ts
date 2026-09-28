@@ -29,7 +29,10 @@ uniform vec3 uAmb;
 uniform vec3 uSky0;
 uniform vec3 uSky1;
 uniform sampler2D uNoise;
+uniform vec4 uLamp; // the boat's lantern: world x, y, reach, intensity
 const float TAU = 6.28318530718;
+const vec3 LAMP = vec3(1., .72, .42);
+float lampAt(vec2 wp){ vec2 d = (wp - uLamp.xy) / uLamp.z; return uLamp.w * exp(-dot(d, d) * 2.5); }
 vec2 rot(vec2 p, float a){ float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }
 float nz(vec2 p){ return texture(uNoise, p).r; }
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -103,7 +106,7 @@ float openAt(vec2 wp){
 float depthAt(vec2 wp){
   float n = texture(uNoise, wp / 1024.).r;
   float n2 = texture(uNoise, wp / 256.).g;
-  return .3 + .95 * openAt(wp) + .35 * (n - .5) + .12 * (n2 - .5);
+  return .22 + .78 * openAt(wp) + .3 * (n - .5) + .1 * (n2 - .5);
 }
 vec2 flowAt(vec2 wp){
   vec2 a = chanAt(wp.y - 20.), b = chanAt(wp.y + 20.);
@@ -160,7 +163,7 @@ void main(){
   float n4 = texture(uNoise, wp / 16.).a;
   // silt in the slack water, paler sand where the current scours
   vec3 silt = mix(vec3(.12, .13, .08), vec3(.21, .20, .13), n1);
-  vec3 sand = mix(vec3(.34, .31, .22), vec3(.47, .43, .31), n2);
+  vec3 sand = mix(vec3(.46, .41, .30), vec3(.60, .53, .39), n2);
   float sandy = smoothstep(.4, .85, open + (n2 - .5) * .7);
   vec3 col = mix(silt, sand, sandy);
   col *= .82 + .22 * n3 + .1 * (n4 - .5);
@@ -187,8 +190,10 @@ void main(){
     float dd = dot(r, r);
     if (dd < best) { best = dd; bid = ip + oc; br = r; }
   }
-  float present = step(1. - mix(.34, .14, sandy), hash12(bid + 3.1));
-  float rad = .18 + .3 * hash12(bid + 9.7);
+  // stones gather in gravel beds rather than scattering evenly
+  float bedK = smoothstep(.35, .75, texture(uNoise, wp / 600.).g);
+  float present = step(1. - mix(.08, .55, bedK) * mix(1., .5, sandy), hash12(bid + 3.1));
+  float rad = (.12 + .34 * pow(hash12(bid + 9.7), 1.6)) * mix(1., .7, bedK);
   vec2 sq = br / vec2(1., .75 + .5 * hash12(bid + 4.4));
   float dist = length(sq);
   float stone = present * (1. - smoothstep(rad - .05, rad, dist));
@@ -198,8 +203,10 @@ void main(){
     float hz = sqrt(max(0., 1. - pow(dist / rad, 2.)));
     vec3 sn = normalize(vec3(-sq / rad, hz + .15));
     float tone = hash12(bid + 1.9);
-    vec3 sc = mix(vec3(.30, .29, .26), vec3(.45, .38, .28), tone) * (.8 + .4 * n4);
-    sc = mix(sc, vec3(.16, .24, .09), smoothstep(.55, .95, sn.z) * (1. - sandy * .6) * smoothstep(.3, .7, n3));
+    vec3 sc = mix(vec3(.40, .39, .36), vec3(.55, .47, .36), tone) * (.75 + .45 * n4);
+    // speckled granite or dull sandstone, a film of algae on the crown in slack water
+    sc *= .9 + .2 * step(.6, hash12(floor(wp * 1.3)));
+    sc = mix(sc, vec3(.20, .27, .11), smoothstep(.7, .98, sn.z) * (1. - sandy) * smoothstep(.45, .8, n3) * .6);
     float lit = max(dot(sn, L), 0.) * 1.15 + .2;
     col = mix(col, sc * lit, stone);
   }
@@ -236,12 +243,12 @@ void main(){
 
   // caustics drift downstream with the surface that makes them, sharper in the shallows
   vec2 cu = (wp - fl * uTime * .6) / 256.;
-  float c = caustic(cu, uTime * .35) * 1.3 + caustic(cu * 2. + .37, uTime * .27) * .55;
+  float c = caustic(cu, uTime * .35) * 1.9 + caustic(cu * 2. + .37, uTime * .27) * .8;
   c = pow(c, mix(.8, 1.4, depth - .3)) * light * (1.35 - depth * .7);
-  vec3 lit = col * (uAmb * .75 + uSunCol * (.42 + c * 1.15) * light);
+  vec3 lit = col * (uAmb * .75 + uSunCol * (.42 + c * 1.15) * light + LAMP * lampAt(wp) * .8);
 
   // the water column: red goes first, then blue — deep water turns to green-black
-  vec3 absorb = exp(-depth * vec3(2.9, 1.55, 1.85));
+  vec3 absorb = exp(-depth * vec3(1.6, .8, 1.0));
   vec3 deep = uAmb * vec3(.05, .21, .19);
   o = vec4(lit * absorb + deep * (1. - absorb), 1.);
 }`;
@@ -351,6 +358,7 @@ out vec4 vB;
 out vec4 vC;
 out float vAng;
 out float vR;
+out vec2 vW;
 void main(){
   float s = uMode > .5 && uMode < 1.5 ? 1.02 : 1.36;
   vec2 q = aPos * s;
@@ -361,6 +369,7 @@ void main(){
   vC = iC;
   vAng = iA.w;
   vR = r;
+  vW = iA.xy + w;
   float par = uMode > 1.5 ? 1. / (1. + uDepthK * iC.z) : 1.;
   gl_Position = vec4((iA.xy + w - uView.xy) * uView.zw * par, 0., 1.);
 }`;
@@ -371,6 +380,7 @@ in vec4 vB;
 in vec4 vC;
 in float vAng;
 in float vR;
+in vec2 vW;
 out vec4 o;
 uniform float uMode;
 uniform sampler2D uDrops;
@@ -447,7 +457,7 @@ vec3 leafLit(vec2 p, vec3 Ll, out float vein){
   vec3 n = normalize(vec3(-(hx - h0) / e, -(hy - h0) / e, 1.) * vec3(1.6, 1.6, 1.));
   vec3 a = albedo(p, len, vein);
   float wrap = max((dot(n, Ll) + .35) / 1.35, 0.);
-  vec3 c = a * (uAmb + uSunCol * wrap * .95);
+  vec3 c = a * (uAmb + uSunCol * wrap * .95 + LAMP * lampAt(vW) * 1.4);
   vec3 H = normalize(Ll + vec3(0., 0., 1.));
   float nh = max(dot(n, H), 0.);
   c += uSunCol * (pow(nh, 90.) * .3 + pow(nh, 14.) * .045);
@@ -481,7 +491,7 @@ void main(){
     float vein;
     vec3 c = leafLit(p, Ll, vein) * vec3(.75, .95, .85);
     c = mix(c, vec3(.015, .085, .075), .45 + depth * .45);
-    o = vec4(c, 1.) * cover * .9;
+    o = vec4(c, 1.) * cover * (.75 - depth * .35);
     return;
   }
 
@@ -622,6 +632,10 @@ void main(){
   float rs = max(dot(R, normalize(uSun)), 0.);
   col += uSunCol * (pow(rs, 1400.) * (5. + rough * 6.) + pow(rs, 90.) * .08);
   col += vec3(.7, .85, .75) * clamp(h, 0., 1.) * .05;
+  // the lantern: warm light on the water around the boat and its glints in the ripples
+  float lamp = lampAt(wp);
+  vec3 toLamp = normalize(vec3(uLamp.xy - wp, 26.));
+  col += LAMP * (lamp * .12 + pow(max(dot(R, toLamp), 0.), 120.) * min(uLamp.w, 1.5) * .9 * smoothstep(uLamp.z * 2.5, 0., length(wp - uLamp.xy)));
   o = vec4(col, 1.);
 }`;
 
@@ -678,7 +692,7 @@ void main(){
   float shade = 1. - texture(uOcc, vUv).r * .6;
   col *= (uAmb * .9 + uSunCol * .6) * shade;
   float d = depth * (1. - .35 * tipK);
-  vec3 absorb = exp(-d * vec3(2.9, 1.55, 1.85));
+  vec3 absorb = exp(-d * vec3(1.6, .8, 1.0));
   col = col * absorb + uAmb * vec3(.05, .21, .19) * (1. - absorb);
   o = vec4(col, 1.) * cover * .92;
 }`;

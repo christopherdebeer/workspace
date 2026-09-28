@@ -84,6 +84,9 @@ export class Renderer {
   scale = 1;
   dpr = 1;
   simOn = false;
+  /** The wave field wants a float render target; `?nosim=1` (or a failed attempt) turns it off. */
+  simWanted = true;
+  private simAsked = false;
   private quad: WebGLBuffer;
   private fsVao: WebGLVertexArrayObject;
   private noise: WebGLTexture;
@@ -116,20 +119,32 @@ export class Renderer {
   private w = 0;
   private h = 0;
 
-  constructor(private canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext('webgl2', {
-      alpha: false,
-      antialias: false,
-      premultipliedAlpha: true,
-      powerPreference: 'high-performance',
-      preserveDrawingBuffer: false,
-    });
+  /**
+   * `attempt` picks progressively plainer context options. iOS 18.7 / Safari 26
+   * returned a context that was already lost before the first shader compiled
+   * (every shader compiles fine on its own there), so main.ts retries on a
+   * fresh canvas with the next set, and `step` names where a loss was seen.
+   */
+  constructor(private canvas: HTMLCanvasElement, public attempt = 0) {
+    const attrs: WebGLContextAttributes[] = [
+      { alpha: false, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: false },
+      { antialias: false },
+      {},
+    ];
+    const gl = canvas.getContext('webgl2', attrs[Math.min(attempt, attrs.length - 1)]);
     if (!gl) throw new Error('WebGL2 unavailable');
     this.gl = gl;
-    this.simOn = !!gl.getExtension('EXT_color_buffer_float') || !!gl.getExtension('EXT_color_buffer_half_float');
+    const step = (name: string) => {
+      this.compiled.push(name);
+      if (gl.isContextLost()) throw Object.assign(new Error(`context lost at ${name}`), { compiled: this.compiled.slice() });
+    };
+    step('create');
+    // float targets only for the wave field; asked for lazily in resize() (see there)
     this.quad = quadBuffer(gl);
     this.fsVao = quadVao(gl, this.quad);
+    step('buffers');
     this.noise = noiseTexture(gl);
+    step('noise');
     this.p = {};
     for (const [name, vs, fs] of PROGRAMS) {
       this.compiled.push(name);
@@ -201,6 +216,10 @@ export class Renderer {
     this.under = renderTarget(gl, Math.max(1, w >> 1), Math.max(1, h >> 1));
     this.occ = renderTarget(gl, Math.max(1, w >> 2), Math.max(1, h >> 2));
     const simH = Math.min(420, Math.round((SIM_W * cssH) / cssW));
+    if (this.simWanted && !this.simAsked) {
+      this.simAsked = true;
+      this.simOn = !!gl.getExtension('EXT_color_buffer_float') || !!gl.getExtension('EXT_color_buffer_half_float');
+    }
     if (this.simOn && (simH !== this.simH || !this.simA)) {
       dropTarget(gl, this.simA);
       dropTarget(gl, this.simB);
@@ -245,6 +264,10 @@ export class Renderer {
     if (u.uPx) gl.uniform1f(u.uPx, 1 / (cam.zoom * this.dpr * this.scale));
     if (u.uAspect) gl.uniform1f(u.uAspect, cam.cssW / cam.cssH);
     if (u.uDepthK) gl.uniform1f(u.uDepthK, DEPTH_K);
+    if (u.uLamp) {
+      const [lx, ly] = f.pond.bow();
+      gl.uniform4f(u.uLamp, lx, ly, 150, f.lantern);
+    }
     if (u.uChan) gl.uniform2fv(u.uChan, this.chan);
     if (u.uSpanY) gl.uniform2f(u.uSpanY, this.span[0], this.span[1]);
   }

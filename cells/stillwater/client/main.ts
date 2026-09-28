@@ -61,6 +61,8 @@ const stage = () => N.STAGES[stageIx];
 
 // ─── world ─────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
+/** `?bare=1`: hide the pads (for looking at the water and the bed). */
+const bare = !!params.get('bare');
 const urlSeed = Number(params.get('seed'));
 /** Test harnesses on software GL run at a few fps; they can ask the river to hurry. */
 const timeScale = Math.max(0.1, Math.min(8, Number(params.get('timescale')) || 1));
@@ -69,25 +71,48 @@ const pond = new Pond(Math.floor(rand() * 1e9));
 pond.dewFor = (r) => N.dewFor(stage(), r);
 const school = new School(reduced ? 18 : 34, pond.boat.x, pond.boat.y + 200);
 
-let renderer: Renderer;
+let renderer!: Renderer;
+let canvasEl = canvas;
+const attempts: string[] = [];
 canvas.addEventListener('webglcontextlost', (e) => {
   e.preventDefault();
   report('context-lost', { compiled: renderer?.compiled });
 });
-try {
-  renderer = new Renderer(canvas);
-  report('boot', { gl: renderer.info() });
-  if (params.get('probe')) probe(PROGRAMS, program);
-} catch (err) {
-  const msg = err instanceof Error ? err.message : String(err);
-  document.body.classList.add('nogl');
-  // say what actually failed: "needs WebGL2" was a guess, and a wrong one on iOS
-  ui.say(`the pond could not start (${msg.split('\n')[0].slice(0, 120)})`, 0);
-  report('gl-fail', { msg: msg.slice(0, 12000), gl: glInfo(), compiled: (err as { compiled?: string[] }).compiled });
-  probe(PROGRAMS, program);
-  console.error(err);
-  throw err;
+/**
+ * Start the renderer, retrying on a FRESH canvas with plainer context options
+ * if the context arrives lost (iOS 18.7 / Safari 26 did exactly that). Input
+ * listeners hang off the canvas, so a replacement takes over its id and place.
+ */
+for (let attempt = 0; attempt < 3 && !renderer; attempt++) {
+  try {
+    if (attempt > 0) {
+      const fresh = document.createElement('canvas');
+      fresh.id = canvasEl.id;
+      fresh.tabIndex = 0;
+      fresh.setAttribute('aria-label', canvasEl.getAttribute('aria-label') ?? '');
+      canvasEl.replaceWith(fresh);
+      canvasEl = fresh;
+    }
+    const r = new Renderer(canvasEl, attempt);
+    if (params.get('nosim')) r.simWanted = false;
+    renderer = r;
+    canvasEl.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      report('context-lost-live', { attempt, compiled: r.compiled });
+    });
+  } catch (err) {
+    attempts.push(`${attempt}: ${(err instanceof Error ? err.message : String(err)).split('\n')[0]} [${(err as { compiled?: string[] }).compiled?.join(',') ?? ''}]`);
+  }
 }
+if (!renderer) {
+  document.body.classList.add('nogl');
+  ui.say(`the pond could not start (${attempts[attempts.length - 1]?.slice(0, 120)})`, 0);
+  report('gl-fail', { attempts, gl: glInfo() });
+  probe(PROGRAMS, program);
+  throw new Error('stillwater: no renderer');
+}
+report('boot', { gl: renderer.info(), attempt: renderer.attempt, attempts });
+if (params.get('probe')) probe(PROGRAMS, program);
 
 const cam: Camera = { x: pond.boat.x, y: 0, zoom: 1, cssW: 1, cssH: 1 };
 let dpr = 1;
@@ -339,10 +364,10 @@ function begin() {
 let gust: Gust | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
 
-canvas.addEventListener('pointerdown', (e) => {
+canvasEl.addEventListener('pointerdown', (e) => {
   if (pointerId !== null) return;
   pointerId = e.pointerId;
-  canvas.setPointerCapture(e.pointerId);
+  canvasEl.setPointerCapture(e.pointerId);
   begin();
   const p = hit(e.clientX, e.clientY);
   lastHit = p;
@@ -359,7 +384,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 
-canvas.addEventListener('pointermove', (e) => {
+canvasEl.addEventListener('pointermove', (e) => {
   if (e.pointerId !== pointerId) return;
   if (gust && drag) {
     const now = performance.now();
@@ -408,12 +433,12 @@ const end = (e: PointerEvent) => {
   gust = null;
   drag = null;
 };
-canvas.addEventListener('pointerup', end);
-canvas.addEventListener('pointercancel', end);
+canvasEl.addEventListener('pointerup', end);
+canvasEl.addEventListener('pointercancel', end);
 
 // keyboard: arrows walk the dewy leaves in view (reading order), Enter/Space chooses
 let focusIx = -1;
-canvas.addEventListener('keydown', (e) => {
+canvasEl.addEventListener('keydown', (e) => {
   const pads = visibleDewy().sort((a, b) => b.y - a.y || a.x - b.x);
   if (e.key === 'Escape') {
     clearSelection();
@@ -591,12 +616,12 @@ function frame(now: number) {
       light: sky,
       time: pond.t,
       pond,
-      pads: order,
+      pads: bare ? [] : order,
       fish: school.fish,
       motes: [...air.above, ...gathers(dt, sky.dusk)],
       under: air.below,
       thread,
-      lantern: lantern + sky.dusk,
+      lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,
     },
     dt,
   );

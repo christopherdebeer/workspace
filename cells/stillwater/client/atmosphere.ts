@@ -173,9 +173,9 @@ export class Atmosphere {
       this.wrap(fl, f, 60);
       if (i / this.flies.length > out) continue;
       const pulse = Math.pow(Math.max(0, Math.sin(t * fl.rate * Math.PI + fl.phase)), 6);
-      const glow = (0.15 + 0.85 * pulse) * (0.35 + 0.65 * sky.dusk);
+      const glow = (0.3 + 0.7 * pulse) * (0.35 + 0.65 * sky.dusk);
       const par = 1 / (1 - DEPTH_K * fl.h * 0.8);
-      above.push({ x: fl.x, y: fl.y, size: 5 + 18 * pulse, r: 1, g: 0.92, b: 0.5, a: glow, core: 0.9, z: par });
+      above.push({ x: fl.x, y: fl.y, size: 7 + 18 * pulse, r: 1, g: 0.92, b: 0.5, a: glow, core: 0.9, z: par });
       // its light on the water below: softer, dimmer, at the surface
       above.push({ x: fl.x, y: fl.y, size: 26 + 30 * pulse, r: 0.9, g: 0.85, b: 0.45, a: glow * 0.18, core: 0, z: 1 });
     }
