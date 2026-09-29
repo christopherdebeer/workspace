@@ -42,8 +42,6 @@ export interface Mote {
   core: number;
   /** Parallax scale: 1 at the surface, <1 below it, >1 above it. */
   z: number;
-  /** Seeded water material for collected dew; omitted for other particles. */
-  water?: number;
 }
 
 export interface FrameInput {
@@ -125,9 +123,6 @@ export class Renderer {
   private moteBuf: WebGLBuffer;
   private moteData = new Float32Array(10 * 600);
   private under: Target | null = null;
-  private dewScene: WebGLTexture | null = null;
-  private dewSceneW = 0;
-  private dewSceneH = 0;
   private occ: Target | null = null;
   private simA: Target | null = null;
   private simB: Target | null = null;
@@ -596,20 +591,6 @@ export class Renderer {
       this.ribbon(f, f.thread, 1.3, [1, 0.9, 0.62], 0.9, true);
     }
 
-    // Only collection frames need a screen copy for water-lens refraction.
-    if (f.motes.some(m => m.water !== undefined)) {
-      this.dewScene ??= gl.createTexture();
-      bindTex(gl, 3, this.dewScene!);
-      if (this.dewSceneW !== this.w || this.dewSceneH !== this.h) {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.w, this.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        this.dewSceneW = this.w; this.dewSceneH = this.h;
-      }
-      gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, this.w, this.h);
-    }
     // motes, fireflies, gathered dew
     this.motes(f, f.motes);
 
@@ -899,14 +880,11 @@ export class Renderer {
     const d = this.moteData;
     for (let i = 0; i < n; i++) {
       const m = list[i];
-      d.set([m.x, m.y, m.size * this.scale * res, m.r, m.g, m.b, m.a, m.core, m.z, m.water === undefined ? 0 : 1 + m.water], i * 10);
+      d.set([m.x, m.y, m.size * this.scale * res, m.r, m.g, m.b, m.a, m.core, m.z, 0], i * 10);
     }
     const pr = this.p.mote;
     this.common(pr, f);
     gl.uniform1f(pr.u.uDpr, this.dpr);
-    bindTex(gl, 3, this.dewScene ?? this.noise);
-    gl.uniform1i(pr.u.uDewScene, 3);
-    gl.uniform2f(pr.u.uDewSceneSize, this.w, this.h);
     gl.bindVertexArray(this.moteVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.moteBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, d, 0, n * 10);
