@@ -384,7 +384,8 @@ function patternDrops(count: number, base: number, rand: Rand): Drop[] | null {
 }
 
 export function layDrops(count: number, r: number, rand: Rand, pattern = false): Drop[] {
-  const base0 = (clamp(0.2 * r, 6.2, 9.5) / r) * (count > 3 ? 0.82 : 1) * (count > 5 ? 0.86 : 1);
+  // dew, not marbles: a drop is a small thing on a leaf
+  const base0 = (clamp(0.16 * r, 4.8, 7.4) / r) * (count > 3 ? 0.84 : 1) * (count > 5 ? 0.88 : 1);
   if (pattern) {
     const laid = patternDrops(count, base0, rand);
     if (laid) return laid;

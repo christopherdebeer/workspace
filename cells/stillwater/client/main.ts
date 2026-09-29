@@ -441,7 +441,7 @@ function stepChimes() {
     d.to = 0;
     const cs = Math.cos(p.ang);
     const sn = Math.sin(p.ang);
-    lifts.push({ x0: p.x + cs * d.x * p.r - sn * d.y * p.r, y0: p.y + sn * d.x * p.r + cs * d.y * p.r, t: 0, dur: 1.6 + rand() * 0.5, delay: 0, bend: (rand() * 2 - 1) * 70 });
+    lifts.push({ x0: p.x + cs * d.x * p.r - sn * d.y * p.r, y0: p.y + sn * d.x * p.r + cs * d.y * p.r, t: 0, dur: 1.6 + rand() * 0.5, delay: 0, bend: (rand() * 2 - 1) * 70, radius: d.r * p.r });
     p.bob = Math.min(1, p.bob + 0.25);
   }
 }
@@ -620,6 +620,8 @@ interface Lift {
   dur: number;
   delay: number;
   bend: number;
+  /** The drop's radius on the leaf (world), where the light begins. */
+  radius: number;
 }
 let lifts: Lift[] = [];
 let lantern = 0;
@@ -641,7 +643,7 @@ function solve() {
       d.to = 0;
       const lx = d.x * p.r;
       const ly = d.y * p.r;
-      lifts.push({ x0: p.x + c * lx - s * ly, y0: p.y + s * lx + c * ly, t: 0, dur: 1.5 + rand() * 0.6, delay: k++ * 0.07, bend: (rand() * 2 - 1) * 60 });
+      lifts.push({ x0: p.x + c * lx - s * ly, y0: p.y + s * lx + c * ly, t: 0, dur: 1.5 + rand() * 0.6, delay: k++ * 0.07, bend: (rand() * 2 - 1) * 60, radius: d.r * p.r });
     }
     pond.impulses.push({ x: p.x, y: p.y, r: p.r * 0.6, s: 0.6 });
   }
@@ -1010,7 +1012,11 @@ function gathers(dt: number, dusk: number): Mote[] {
     const my = (l.y0 + by) / 2 + 40;
     const x = (1 - e) * (1 - e) * l.x0 + 2 * (1 - e) * e * mx + e * e * bx;
     const y = (1 - e) * (1 - e) * l.y0 + 2 * (1 - e) * e * my + e * e * by;
-    out.push({ x, y, size: 16 - 6 * e, r: 1, g: 0.93, b: 0.7, a: 0.9 * (1 - e * 0.3), core: 1, z: 1 + 0.08 * Math.sin(e * Math.PI) });
+    // the handover: the light begins as the drop itself (its size, pale, at rest on the leaf
+    // as the leaf's own drop fades), then warms and brightens as it lifts away
+    const wake = smooth(0, 0.35, k * l.dur);
+    const size = (l.radius * 2.4 * cam.zoom) * (1 - wake) + (16 - 6 * e) * wake;
+    out.push({ x, y, size, r: 1, g: 0.93 + 0.05 * (1 - wake), b: 0.7 + 0.25 * (1 - wake), a: (0.55 + 0.35 * wake) * (1 - e * 0.3), core: 0.6 + 0.4 * wake, z: 1 + 0.08 * Math.sin(e * Math.PI) });
     if (l.t - l.delay + dt >= l.dur) arrived++;
   }
   lantern = Math.min(1.5, lantern + arrived * 0.12) * Math.exp(-0.25 * dt);

@@ -720,57 +720,73 @@ void main(){
   float inside = 0.;
   vec2 dq = vec2(0.);
   vec4 dd = vec4(0.);
+  vec2 dropAxes = vec2(1.);
+  float dropShape = 0.;
   for (int i = 0; i < 10; i++) {
     if (i >= count) break;
     vec4 dr = texelFetch(uDrops, ivec2(i, row), 0);
     if (dr.w < .01) continue;
-    // as the leaf flexes, its dew shivers
-    dr.xy += vec2(sin(float(i) * 2.3 + seed * 17.), cos(float(i) * 1.7 + seed * 11.)) * vDent.z * .025;
+    // Contact line stays pinned; the cap lags and compresses as the leaf flexes.
+    float form = fract(dr.x * 17. + dr.y * 31. + seed);
+    float wobble = sin(uTime * (8. + form * 3.) + form * TAU) * min(.10, vDent.z * .10);
+    vec2 axes = vec2(.95 + form * .10 + wobble, 1.03 - form * .06 - wobble);
+    dr.xy -= vDent.xy * .006;
     float rr = dr.z * (.35 + .65 * dr.w);
-    vec2 q = (p - dr.xy) / rr;
+    vec2 q = (p - dr.xy) / (rr * axes);
     float sdist = length(q + Ll.xy * .62);
     shadow = max(shadow, (1. - smoothstep(.7, 1.2, sdist)) * dr.w);
     float dl = length(q);
-    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); }
+    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); dropAxes = axes; dropShape = form; }
     glowK = max(glowK, exp(-max(dl - 1., 0.) * 2.2) * dr.w);
   }
-  col *= 1. - shadow * .38;
-  // a chosen drop's light spills a little onto the leaf around it
-  col += vec3(1., .8, .42) * sel * glowK * .22;
+  col *= 1. - shadow * .30;
+  // a faint wet ring where the drop meets the leaf, and a chosen drop's light spilling a little
+  col *= 1. - smoothstep(.85, 1., glowK) * (1. - inside) * .10;
+  col += vec3(1., .8, .42) * sel * glowK * .18;
 
   if (inside > 0.) {
     vec2 q = dq;
     float dl = length(q);
     float z = sqrt(max(0., 1. - dl * dl));
-    vec3 n = normalize(vec3(q, z * 1.15));
+    float cap = .78 + dropShape * .35;
+    vec3 n = normalize(vec3(q / dropAxes, z / cap));
+    float canopyLight = sunThrough(vW);
+    float enchant = sel * (.25 + .45 * (1. - clamp(uSun.z, 0., 1.)));
     vec2 qn = q / max(dl, 1e-4);
     // the lens: a magnified, brighter piece of the leaf beneath
-    vec2 pr = dd.xy + q * dd.z * .45 - n.xy * dd.z * .06;
+    vec2 pr = dd.xy + q * dropAxes * dd.z * mix(.40, .66, dl * dl) - n.xy * dd.z * .08;
     // Magnify leaf material without rebuilding a second procedural normal.
     float prLen = length(pr);
     float v2 = veins(pr, prLen);
     vec3 under = albedo(pr, prLen, v2);
     float underShade = sunThrough(vW + rot((pr - p) * vR, vAng));
     under *= (uAmb + uSunCol * .72 * underShade + LAMP * lampAt(vW) * .8);
-    under = mix(vec3(dot(under, vec3(.3, .59, .11))), under, 1.15) * 1.22 + .035;
+    // water over the leaf: a touch darker and richer than the dry leaf, brighter where the
+    // drop focuses the light at its centre, darker toward the rim where the lens compresses
+    under = mix(under, under * vec3(.86, .96, .9), .6) * (.92 + .14 * (1. - dl * dl) - .28 * smoothstep(.55, 1., dl));
     // sunlight focused through the drop onto the leaf, on the side away from the sun
-    vec2 fc = q + Ll.xy * .45;
-    under += uSunCol * vec3(1., .97, .82) * exp(-dot(fc, fc) * 9.) * .75;
+    vec2 fc = q + Ll.xy * (.30 + cap * .18) + vDent.xy * .08;
+    under += uSunCol * vec3(1., .97, .82) * exp(-dot(fc, fc) * 12.) * .3 * canopyLight;
     // chosen: the dew itself lights, warm from within
-    under += vec3(1., .82, .42) * sel * .75 * (1. - dl * .5);
-    // refraction bends the edge away: a thin dark rim, heaviest toward the sun
+    under += vec3(1., .82, .42) * enchant * exp(-dot(q - vec2(.0, -.12), q - vec2(.0, -.12)) * 3.5);
+    // refraction bends the edge away: a dark contact line all round, heaviest toward the sun
     float toSun = max(0., dot(qn, Ll.xy) / max(length(Ll.xy), 1e-3));
-    under *= 1. - smoothstep(.62, .98, dl) * (.38 + .45 * toSun);
-    // and light gathers along the far inner edge
-    under += vec3(.85, .95, .85) * smoothstep(.55, .95, dl) * (1. - toSun) * smoothstep(.2, .9, dot(qn, -Ll.xy)) * .32;
-    // sky in the fresnel
-    float fr = .03 + .97 * pow(1. - n.z, 5.);
-    vec3 sky = mix(uSky0, uSky1, n.y * .5 + .5);
-    vec3 c = mix(under, sky, fr * .7);
-    // the sun's pinpoint, and the soft window of the sky around it
+    under *= 1. - smoothstep(.86, 1., dl) * (.28 + .18 * toSun);
+    // and a thin bright line inside the far rim, where light is trapped and thrown back
+    under += vec3(.9, 1., .9) * smoothstep(.84, .95, dl) * (1. - smoothstep(.95, 1., dl)) * (1. - toSun) * smoothstep(.1, .9, dot(qn, -Ll.xy)) * .5 * canopyLight;
+    // the sky, only at the rim (the fresnel), and only what the canopy lets through
+    float fr = .02 + .98 * pow(1. - n.z, 5.);
+    vec3 reflected = reflect(vec3(0., 0., -1.), n);
+    vec2 canopyUV = (vW + reflected.xy * 140.) / 520.;
+    float canopy = smoothstep(.36, .68, texture(uNoise, canopyUV).g) * (1. - canopyLight * .65);
+    vec3 sky = mix(uSky0, uSky1, reflected.z * .5 + .5);
+    sky = mix(sky, uAmb * vec3(.10, .18, .10), canopy * .8);
+    vec3 c = mix(under, sky, fr * .55);
+    // the sun's pinpoint: one sharp point with a small soft bloom, not a wash
     vec3 H = normalize(Ll + vec3(0., 0., 1.));
     float nh = max(dot(n, H), 0.);
-    c += uSunCol * (pow(nh, 600.) * 5. + pow(nh, 70.) * .35 + pow(nh, 12.) * .05);
+    float rough = max(.002, fwidth(nh) * 1.2);
+    c += uSunCol * canopyLight * (exp((nh - 1.) / rough) * .9 + pow(nh, 220.) * .2);
     // the lantern: its own pinpoint in every drop within reach, and a warm focus beneath
     vec2 tl = uLamp.xy - vW;
     vec3 Lp = normalize(vec3(rot(tl, -vAng), 32.));
