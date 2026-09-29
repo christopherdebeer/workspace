@@ -18,6 +18,7 @@ import { drawOrder, Camera, Mote, PageEntry, Renderer } from './render';
 import { Critters, type Critter } from './critters';
 import { butterflyId, dragonflyId, fishId, flowerId, Notebook, SPECIES } from './notebook';
 import { parseKey, recall } from './learning';
+import { Perf } from './perf';
 import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
@@ -757,6 +758,40 @@ function touchPad(p: Pad) {
   pond.impulses.push({ x: p.x - p.r * 0.8, y: p.y, r: 8, s: 0.5 });
 }
 
+// ─── telemetry to hand: three taps on the title copy a report ──────────────
+function telemetry() {
+  return {
+    at: new Date().toISOString(),
+    ua: navigator.userAgent,
+    w: innerWidth, h: innerHeight, dpr, scale, zoom: Math.round(cam.zoom * 100) / 100,
+    gl: renderer.info(),
+    sim: renderer.simOn,
+    audio: sound.path(),
+    reduced,
+    profile: profile?.name ?? null,
+    t: Math.round(pond.t),
+    boatY: Math.round(pond.boat.y + pond.origin),
+    reach: pond.reachHere(pond.boat.y),
+    learn: learnSummary(),
+    notebook: notebook.pages,
+    perf: perf.summary(),
+  };
+}
+{
+  const titleEl = document.getElementById('title');
+  let taps: number[] = [];
+  titleEl?.addEventListener('pointerdown', () => {
+    const now = performance.now();
+    taps = taps.filter((t) => now - t < 1500);
+    taps.push(now);
+    if (taps.length < 3) return;
+    taps = [];
+    const text = JSON.stringify(telemetry(), null, 1);
+    report('telemetry', telemetry());
+    navigator.clipboard?.writeText(text).then(() => ui.say('report copied', 3)).catch(() => ui.say('report sent', 3));
+  });
+}
+
 // ─── sharing: the basket ───────────────────────────────────────────────────
 /**
  * Tap the basket and a crumb goes over the stern; the big fish nearby come for
@@ -954,17 +989,21 @@ let pageOpen = false;
 let pageK = 0;
 let pageSide: 'creatures' | 'numbers' = 'creatures';
 const PAGE_COLS = 3;
-/** Each entry's place on the page, in CSS px, laid out for this screen. */
+const PAGE_ROWS = 4;
+const PER_PAGE = PAGE_COLS * PAGE_ROWS;
+/** Which leaf of the creatures pages is open (there can be many more species than fit one). */
+let pageLeaf = 0;
+const leaves = () => Math.max(1, Math.ceil(SPECIES.length / PER_PAGE));
+/** Each entry's place on the open leaf, in CSS px, laid out for this screen (a 3 × 4 grid). */
 function pageLayout(): Array<{ id: string; x: number; y: number }> {
-  const rows = Math.ceil(SPECIES.length / PAGE_COLS);
   const top = cam.cssH * 0.14;
-  const bottom = cam.cssH * 0.9;
+  const bottom = cam.cssH * 0.88;
   const left = cam.cssW * 0.08;
   const right = cam.cssW * 0.92;
-  return SPECIES.map((sp, i) => ({
+  return SPECIES.slice(pageLeaf * PER_PAGE, (pageLeaf + 1) * PER_PAGE).map((sp, i) => ({
     id: sp.id,
     x: left + ((i % PAGE_COLS) + 0.5) * ((right - left) / PAGE_COLS),
-    y: top + (Math.floor(i / PAGE_COLS) + 0.5) * ((bottom - top) / rows),
+    y: top + (Math.floor(i / PAGE_COLS) + 0.5) * ((bottom - top) / PAGE_ROWS),
   }));
 }
 function buildPage() {
@@ -980,7 +1019,7 @@ function buildPage() {
   close.textContent = 'close';
   close.addEventListener('click', () => togglePage(false));
   pageEl.appendChild(close);
-  const cellH = (cam.cssH * 0.76) / Math.ceil(SPECIES.length / PAGE_COLS);
+  const cellH = (cam.cssH * 0.74) / PAGE_ROWS;
   for (const { id, x, y } of pageLayout()) {
     const sp = SPECIES.find((s) => s.id === id)!;
     const has = notebook.has(id);
@@ -994,16 +1033,28 @@ function buildPage() {
       : `<small>${sp.where}</small>`;
     pageEl.appendChild(label);
   }
-  pageEl.appendChild(pageTurn('numbers'));
+  // the turns: back a leaf, on a leaf, and after the last leaf the numbers page
+  if (pageLeaf > 0) pageEl.appendChild(pageTurn('back'));
+  pageEl.appendChild(pageTurn(pageLeaf < leaves() - 1 ? 'on' : 'numbers'));
+  const folio = document.createElement('div');
+  folio.className = 'folio';
+  folio.textContent = `${pageLeaf + 1} / ${leaves()}`;
+  pageEl.appendChild(folio);
   pageEl.addEventListener('click', (e) => { if (e.target === pageEl) togglePage(false); });
 }
 /** The corner of the page that turns to the other one. */
-function pageTurn(to: 'creatures' | 'numbers') {
+function pageTurn(to: 'creatures' | 'numbers' | 'back' | 'on') {
   const turn = document.createElement('button');
-  turn.className = 'turn';
+  turn.className = 'turn' + (to === 'back' ? ' back' : '');
   turn.type = 'button';
-  turn.textContent = to === 'numbers' ? 'numbers ›' : '‹ creatures';
-  turn.addEventListener('click', () => { pageSide = to; buildPage(); });
+  turn.textContent = to === 'numbers' ? 'numbers ›' : to === 'on' ? 'more ›' : to === 'back' ? '‹ back' : '‹ creatures';
+  turn.addEventListener('click', () => {
+    if (to === 'back') pageLeaf -= 1;
+    else if (to === 'on') pageLeaf += 1;
+    else if (to === 'creatures') { pageSide = 'creatures'; pageLeaf = leaves() - 1; }
+    else pageSide = 'numbers';
+    buildPage();
+  });
   return turn;
 }
 /**
@@ -1047,7 +1098,7 @@ function buildNumbersPage() {
 }
 function togglePage(open = !pageOpen) {
   pageOpen = open;
-  if (open) buildPage();
+  if (open) { pageSide = 'creatures'; pageLeaf = 0; buildPage(); }
   pageEl.classList.toggle('open', open);
   document.body.classList.toggle('page', open);
   pageEl.setAttribute('aria-hidden', open ? 'false' : 'true');
@@ -1058,7 +1109,7 @@ function togglePage(open = !pageOpen) {
 notebookBtn.addEventListener('click', () => togglePage());
 /** What the renderer draws on the open page this frame. */
 function pageEntries(): PageEntry[] {
-  const cellH = (cam.cssH * 0.76) / Math.ceil(SPECIES.length / PAGE_COLS);
+  const cellH = (cam.cssH * 0.74) / PAGE_ROWS;
   const scale = Math.min(1, cellH / 110);
   return pageLayout().map(({ id, x, y }) => {
     const sp = SPECIES.find((s) => s.id === id)!;
@@ -1408,6 +1459,8 @@ function drips(sky: { sunCol: [number, number, number] }): Mote[] {
 
 // ─── frame ─────────────────────────────────────────────────────────────────
 let last = performance.now();
+const perf = new Perf();
+let perfReportAt = 90;
 let frameMs = 16;
 let slowFor = 0;
 let fastFor = 0;
@@ -1446,6 +1499,7 @@ function frame(now: number) {
   const ms = now - last;
   const dt = Math.min(ms / 1000 || 1 / 60, 1 / 20) * timeScale;
   last = now;
+  perf.begin(now);
 
   const hh = cam.cssH / (2 * cam.zoom);
   pond.ensure(cam.y + hh + 500);
@@ -1454,6 +1508,7 @@ function frame(now: number) {
   // physics at a fixed step
   const steps = Math.max(1, Math.round(dt * 60));
   for (let i = 0; i < steps; i++) pond.step(dt / steps, { y0: cam.y - hh - 200, y1: cam.y + hh + 300 }, reduced);
+  perf.mark('world');
   const shift = pond.rebaseIfNeeded();
   if (shift) {
     cam.y -= shift;
@@ -1467,7 +1522,9 @@ function frame(now: number) {
     if (Math.abs(fl.x - cam.x) < hw + 40 && Math.abs(fl.y - cam.y) < hh + 40) { if (fl.kind === 0) interest.push({ x: fl.x, y: fl.y }); }
   }
   for (const p of pond.pads) if (p.drops.length && Math.abs(p.x - cam.x) < hw && Math.abs(p.y - cam.y) < hh) interest.push({ x: p.x + p.r * 0.9, y: p.y });
+  perf.mark('prep');
   school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw, hh }, shift, (x, y) => pond.flow(x, y), interest, pond.crumbs);
+  perf.mark('fish');
   stepShare(dt);
   // a big fish nosing at the surface: a small ring and a soft sound
   for (const r of school.rises) {
@@ -1603,12 +1660,15 @@ function frame(now: number) {
     flow: (x: number, y: number) => pond.flow(x, y),
     wind: (x: number, y: number) => pond.wind(x, y),
   };
+  perf.mark('learn');
   const air = atmosphere.step(dt, pond.t, field, sky);
   const bugs = started
     ? critters.step(dt, pond.t, field, { pads: order, blooms: pond.blooms, boatAt: (lx, ly) => pond.boatWorld(lx, ly), boatHeading: pond.boat.heading }, sky)
     : [];
   lastBugs = bugs;
   pageK += ((pageOpen ? 1 : 0) - pageK) * Math.min(1, dt * 6);
+  perf.mark('air');
+  const moteList = [...air.above, ...gathers(dt, sky.dusk), ...drips(sky), ...crumbMotes()];
   renderer.render(
     {
       cam,
@@ -1618,7 +1678,7 @@ function frame(now: number) {
       pads: bare ? [] : order,
       fish: school.fish,
       critters: bugs,
-      motes: [...air.above, ...gathers(dt, sky.dusk), ...drips(sky), ...crumbMotes()],
+      motes: moteList,
       under: air.below,
       thread,
       lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,
@@ -1627,6 +1687,17 @@ function frame(now: number) {
     },
     dt,
   );
+  perf.mark('render');
+  perf.end(ms, {
+    worldSteps: steps, simSteps: renderer.lastSimSteps, pads: pond.pads.length, deep: pond.deep.length, floaters: pond.floaters.length,
+    blooms: pond.blooms.length, fish: school.fish.length, bugs: bugs.length, motes: moteList.length, under: air.below.length,
+    eddies: pond.eddies.length, puddles: pond.puddles.length, crumbs: pond.crumbs.length, impulses: pond.impulses.length, lifts: lifts.length,
+    scale: Math.round(scale * 10) / 10, page: pageOpen ? 1 : 0,
+  }, pond.t);
+  if (pond.t > perfReportAt) {
+    perfReportAt = pond.t + 120;
+    report('perf', { scale, dpr, ...perf.summary() });
+  }
   requestAnimationFrame(frame);
 }
 
@@ -1688,6 +1759,7 @@ Object.defineProperty(window, '__stillwater', {
     frameMs: Math.round(frameMs * 10) / 10,
     sim: renderer.simOn,
     audio: sound.path(),
+    perf: perf.summary(),
     notebook: Object.keys(notebook.seen),
     crumbs: pond.crumbs.filter((c) => !c.eaten).length,
     share: share ? { fish: share.fish.length, fed: share.fish.map((i, k) => (school.fish[i].fed ?? 0) - share!.base[k]) } : null,

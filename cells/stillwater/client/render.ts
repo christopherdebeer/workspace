@@ -148,6 +148,8 @@ export class Renderer {
   private simH = SIM_W;
   private simCam: [number, number] | null = null;
   private simAcc = 0;
+  /** Wave-sim steps taken in the last frame (telemetry). */
+  lastSimSteps = 0;
   private w = 0;
   private h = 0;
 
@@ -772,7 +774,9 @@ export class Renderer {
     if (imps.length > cap) imps = imps.filter((_, i) => i % Math.ceil(imps.length / cap) === 0);
     let from = 0;
     const flow = pond.flow(cam.x, cam.y);
+    this.lastSimSteps = 0;
     while (this.simAcc >= 1 / 60) {
+      this.lastSimSteps += 1;
       this.simAcc -= 1 / 60;
       const prev = this.simCam ?? [cam.x, cam.y];
       const shift: [number, number] = [(cam.x - prev[0]) / rw, (cam.y - prev[1]) / rh];
