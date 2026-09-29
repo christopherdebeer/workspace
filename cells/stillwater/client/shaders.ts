@@ -741,7 +741,7 @@ void main(){
   }
   col *= 1. - shadow * .15;
   // a chosen drop's light spills a little onto the leaf around it
-  col += vec3(1., .8, .42) * sel * glowK * .10;
+  col += vec3(1., .8, .42) * sel * glowK * .15;
 
   if (inside > 0.) {
     vec2 q = dq;
@@ -1763,11 +1763,15 @@ void main(){
     vec2 axes = vec2((.95 + seed * .10) * (1. - stretch * .18), (1.03 - seed * .06) * (1. + stretch * .20));
     vec2 q = p * 1.28 / axes;
     float r = length(q), aa = max(fwidth(r), .015);
-    if (r > 1. + aa) discard;
-    vec3 n = normalize(vec3(q / axes, sqrt(max(0., 1. - r*r)) / (.78 + seed*.35)));
+    // once it has let go of the leaf the drop turns to light, with a soft halo beyond its rim
+    float flight = vA.z;
+    float glowK = smoothstep(.0, .6, flight);
+    if (r > 1. + aa && glowK < .01) discard;
+    vec3 n = normalize(vec3(q / axes, sqrt(max(0., 1. - min(r, 1.) * min(r, 1.))) / (.78 + seed*.35)));
     vec2 uv = gl_FragCoord.xy / uDewSceneSize;
     vec2 offset = -n.xy * vA.x * uDpr * .16 / uDewSceneSize;
-    vec3 under = texture(uDewScene, clamp(uv + offset, vec2(.001), vec2(.999))).rgb;
+    // lightened, as the leaf's own dew lightens what it refracts: never darker than the dew it was
+    vec3 under = texture(uDewScene, clamp(uv + offset, vec2(.001), vec2(.999))).rgb * 1.25 + .06;
     vec3 reflected = reflect(vec3(0., 0., -1.), n);
     vec3 sky = mix(uSky0, uSky1, reflected.z * .5 + .5);
     float canopy = smoothstep(.36, .68, texture(uNoise, (vWorld + reflected.xy * 140.) / 520.).g);
@@ -1776,10 +1780,17 @@ void main(){
     vec3 c = mix(under, sky, fresnel * .85);
     float nh = max(dot(n, normalize(uSun + vec3(0.,0.,1.))), 0.);
     c += uSunCol * exp((nh - 1.) / max(.004, fwidth(nh) * 1.5)) * 1.4;
-    // A contained ember, growing only after release. The edge remains water.
-    c += vec3(1., .80, .40) * vA.y * exp(-dot(q, q) * 3.5);
-    float cover = (1. - smoothstep(1. - aa, 1. + aa, r)) * vB.x;
-    o = vec4(c * cover, cover);
+    // a contained ember while it is still water; then the whole drop is light: warm gold,
+    // brighter as it nears the lantern, with a halo the way the lantern itself has one
+    c += vec3(1., .80, .40) * vA.y * exp(-dot(q, q) * 2.2) * (1. - glowK);
+    vec3 gold = vec3(1., .93, .70) * (1.05 + vA.w * .7);
+    // pale from the moment it lets go (a lens over dark water would read as a bead of bronze)
+    vec3 lit = mix(max(c, vec3(.32, .36, .30)), gold, .25 + glowK * .7);
+    float body = 1. - smoothstep(1. - aa, 1. + aa, r);
+    float halo = exp(-r * r * 1.9) * glowK * (.45 + vA.w * .4);
+    float cover = (body + halo * (1. - body)) * vB.x;
+    vec3 col = (lit * body + gold * halo * (1. - body)) * vB.x;
+    o = vec4(col, cover);
     return;
   }
   float r = length(gl_PointCoord - .5) * 2.;

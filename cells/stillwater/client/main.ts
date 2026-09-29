@@ -1032,9 +1032,13 @@ function gathers(dt: number, dusk: number): Mote[] {
     const y = (1 - e) * (1 - e) * l.y0 + 2 * (1 - e) * e * my + e * e * by + height;
     const stretch = age < 0.28 ? Math.sin(age / 0.28 * Math.PI) :
       Math.sin((age - 0.28) * 15) * Math.exp(-(age - 0.28) * 3) * 0.3;
+    // water while it clings to the leaf; light once it has let go — gathered dew is
+    // what feeds the lantern, and it should read as brighter than the dew it was
     const magic = (.25 + dusk * .35) + smooth(.16, .65, age) * .25;
-    out.push({ x, y, size: Math.max(2, l.radius * 2.56 * cam.zoom * (1 - e * .42)),
-      r: magic, g: 0, b: 0, a: transfer * (1 - smooth(.92, 1, k)),
+    const flight = smooth(0.2, 0.75, age);
+    const near = clamp01(1 - Math.hypot(x - bx, y - by) / 140);
+    out.push({ x, y, size: Math.max(2, l.radius * 2.56 * cam.zoom * (1 - e * .3) + flight * 5),
+      r: magic, g: flight, b: near, a: transfer * (1 - smooth(.94, 1, k)),
       core: stretch, z: 1, water: l.seed });
     if (!l.arrived && previous < l.dur && age >= l.dur) { arrived++; l.arrived = true; }
   }
