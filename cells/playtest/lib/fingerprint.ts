@@ -17,7 +17,12 @@ export interface EngineFingerprint {
   core: string;
 }
 
-const h = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 12);
+/* The source is read from the deployed bundle, where the bundler renames an identifier
+ * that collides with another module's by appending digits (readFileSync → readFileSync2).
+ * Any unrelated module added to the cell can shift those suffixes, so they are dropped
+ * before hashing — otherwise a deploy that touches no engine code orphans every baseline. */
+const normalize = (src: string) => src.replace(/\b([A-Za-z_$][A-Za-z_$]*?)\d+\b/g, '$1');
+const h = (s: string) => createHash('sha256').update(normalize(s)).digest('hex').slice(0, 12);
 
 /* Only code and static declarations: a mechanic object may also carry state it
  * mutates during play, which would make the fingerprint drift between warm Lambdas. */

@@ -130,6 +130,19 @@ export async function runView(id: string, view: string, from = 0) {
 
 /* ── mechanics ──────────────────────────────────────────────────────── */
 
+/** Engine versions (by index) where every shared mechanic's hash changed at once: the
+ *  fingerprint method or the bundling changed, not the mechanics (no real edit touches all). */
+function rehashed(engines: db.Item[]): Set<number> {
+  const out = new Set<number>();
+  for (let i = 1; i < engines.length; i++) {
+    const a = (engines[i - 1].mechanics as Record<string, string>) ?? {};
+    const b = (engines[i].mechanics as Record<string, string>) ?? {};
+    const shared = Object.keys(a).filter((k) => k in b);
+    if (shared.length > 20 && shared.every((k) => a[k] !== b[k])) out.add(i);
+  }
+  return out;
+}
+
 interface RegisteredData {
   mechanics: Record<string, { config_key?: string; description?: string; since?: string; requires?: string[] }>;
   partial?: Record<string, { notes?: string }>;
@@ -141,6 +154,7 @@ export async function mechanics() {
   const meta = new Map(mechanicRegistry.getAllMechanicsMetadata().map((m) => [m.slug, m]));
   const fp = engineFingerprint();
   const engines = (await db.query('ENGINE')).sort((a, b) => String(a.firstSeen).localeCompare(String(b.firstSeen)));
+  const rehash = rehashed(engines);
   const backlog = (await db.query('BACKLOG')).map((b) => ({ ...strip(b), games: b.games instanceof Set ? [...b.games] : b.games })) as Array<Record<string, any>>;
 
   // Usage: which stored games (head definitions) and catalogue presets declare each mechanic.
@@ -164,6 +178,7 @@ export async function mechanics() {
     // Engine versions in which this mechanic's code changed.
     const changedIn: Array<{ engine: string; at: string }> = [];
     for (let i = 1; i < engines.length; i++) {
+      if (rehash.has(i)) continue;
       const a = (engines[i - 1].mechanics as Record<string, string>) ?? {};
       const b = (engines[i].mechanics as Record<string, string>) ?? {};
       if (a[slug] !== b[slug]) changedIn.push({ engine: String(engines[i].version), at: String(engines[i].firstSeen) });
@@ -231,9 +246,10 @@ async function deploys(): Promise<Change[]> {
 export async function changelog(limit = 150): Promise<Change[]> {
   const out: Change[] = [...(await deploys())];
   const engines = (await db.query('ENGINE')).sort((a, b) => String(a.firstSeen).localeCompare(String(b.firstSeen)));
+  const rehash = rehashed(engines);
   engines.forEach((e, i) => {
     const changed = i ? changedMechanics((engines[i - 1].mechanics as Record<string, string>) ?? {}, (e.mechanics as Record<string, string>) ?? {}) : [];
-    out.push({ at: String(e.firstSeen), kind: 'engine', title: i ? `engine ${e.version}` : `engine ${e.version} (first seen)`, detail: i ? (changed.length ? `mechanics changed: ${changed.slice(0, 12).join(', ')}${changed.length > 12 ? ` +${changed.length - 12}` : ''}` : 'core changed (no mechanic code changed)') : `${Object.keys((e.mechanics as object) ?? {}).length} mechanics`, ref: String(e.version) });
+    out.push({ at: String(e.firstSeen), kind: 'engine', title: i ? `engine ${e.version}` : `engine ${e.version} (first seen)`, detail: rehash.has(i) ? 're-fingerprinted: every mechanic hash changed at once (fingerprint method or bundling), not the mechanics — earlier baselines no longer match' : i ? (changed.length ? `mechanics changed: ${changed.slice(0, 12).join(', ')}${changed.length > 12 ? ` +${changed.length - 12}` : ''}` : 'core changed (no mechanic code changed)') : `${Object.keys((e.mechanics as object) ?? {}).length} mechanics`, ref: String(e.version) });
   });
   for (const g of await db.listGames()) {
     for (const d of await db.query(`GAME#${g.slug}`, 'DEF#')) {

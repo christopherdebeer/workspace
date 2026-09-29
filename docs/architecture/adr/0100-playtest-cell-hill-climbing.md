@@ -79,6 +79,18 @@ cell code).
   facts (odds, distance to goal) are the next lever on that side.
 - The engine now diverges from upstream playtest by design. Re-vendoring
   over `cells/playtest/engine` is refused without `--force`.
+- The fingerprint hashes the *bundled* source, and the bundler renames colliding
+  identifiers with digit suffixes (`readFileSync2`) that shift whenever any
+  module is added to the cell: the landing-page deploy moved the engine version
+  with no engine change and orphaned the baseline. Digit suffixes are now
+  stripped before hashing (verified: the bundles before and after that deploy
+  fingerprint identically). An engine version where every mechanic hash changes
+  at once is labelled a re-fingerprint in the change log, not 164 edits.
+- A public landing page (`GET /`, client/ + static/) explains the cell to
+  newcomers and shows games, climb progress, evals, runs (held-out: score only),
+  the mechanics catalogue with status/usage/history, the backlog and a merged
+  change log (deploy facts, engine versions, definitions, rounds, evals) from a
+  read-only `GET /api/*`; writes go through the MCP tools as the signed-in caller.
 - The jev · lab experiment keeps its own engine copy for the in-browser demo;
   it should eventually call this cell's tools instead of bundling the engine.
 - The Jev token the cell holds is `read:workspace` (the narrowest scope a
