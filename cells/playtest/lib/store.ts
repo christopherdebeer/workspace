@@ -146,7 +146,14 @@ export interface Suite extends Item {
   noise?: number;
 }
 export const DEFAULT_SUITE: Suite = { train: { seeds: [1, 2, 3], players: [2, 3] }, test: { seeds: [101, 102, 103], players: [2, 3] }, maxSteps: 150, epsilon: 0.01 };
-export const suiteHash = (s: Suite) => hash(JSON.stringify({ train: s.train, test: s.test, maxSteps: s.maxSteps }));
+/** Canonical JSON (sorted keys): DynamoDB returns map keys in any order, so a
+ *  plain JSON.stringify would give one suite two hashes and orphan baselines. */
+export function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v as object).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  return JSON.stringify(v);
+}
+export const suiteHash = (s: Suite) => hash(canonical({ train: s.train, test: s.test, maxSteps: s.maxSteps }));
 
 export async function getSuite(slug: string): Promise<Suite> {
   const s = (await get(`GAME#${slug}`, 'SUITE')) as Suite | undefined;

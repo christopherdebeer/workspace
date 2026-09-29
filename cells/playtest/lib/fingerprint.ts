@@ -19,14 +19,17 @@ export interface EngineFingerprint {
 
 const h = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 12);
 
+/* Only code and static declarations: a mechanic object may also carry state it
+ * mutates during play, which would make the fingerprint drift between warm Lambdas. */
+const STATIC_KEYS = new Set(['slug', 'name', 'alwaysEnabled', 'requires', 'dependencies', 'conflicts', 'defines', 'configSchema']);
 function hashObject(o: Record<string, unknown>): string {
   const parts = Object.keys(o)
     .sort()
+    .filter((k) => typeof o[k] === 'function' || STATIC_KEYS.has(k))
     .map((k) => {
       const v = o[k];
       if (typeof v === 'function') return `${k}=${v.toString()}`;
-      if (v && typeof v === 'object') return `${k}=${JSON.stringify(v)}`;
-      return `${k}=${String(v)}`;
+      return `${k}=${JSON.stringify(v)}`;
     });
   return h(parts.join('\n'));
 }
