@@ -1,13 +1,13 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:91fae6b690ef0e9599f876a68d47a619da78bfd113940f193925b0d66289d020",
-  "syncedAt": "2026-09-29T13:12:43.961Z",
+  "treeVersion": "tree:b5c7c33ebd372d73d68ceb822cc228bfc91da161c63597f1752065ce8ce852c7",
+  "syncedAt": "2026-09-29T13:14:22.832Z",
   "files": {
     "ENVIRONMENT-STATE.md": "sha256:f8fd9a3f3931d83488a6fc2612b7ef4c425f9d3b7a0c88c868c320421bcfdfe9",
     "LEARNING-DESIGN.md": "sha256:2c335e52d6128885e3a20d41a568fc25fa08ecb4f17e39cdbf48c9544480ec1c",
     "NARRATIVE-DESIGN.md": "sha256:f193d96b065f71f689890b6e7b2967ad5652703ccfca8499d1c6ca82a067db77",
-    "REVIEW-2026-09-28.md": "sha256:c146b13a0475f7fd58abea11de05e729c7d8dacfc386d9bedbea6f1f4d44d3a3",
+    "REVIEW-2026-09-28.md": "sha256:5ee7567dd2884460483537e3476a7f84c87c9a67a188f4a87aafe04e7857af20",
     "client/atmosphere.ts": "sha256:9ca8eeddd3f6c390e53139aa351bcffb994fc20045e8934ed1f41a5b9c23f8df",
     "client/audio.ts": "sha256:d49e07267be0a000d2af02985ebe0b3e03e477fe4cee3cf533209170cdaa58eb",
     "client/critters.ts": "sha256:faab35cb9c32771cee2a2de3fadb46eb26e65e52160cfa5713271d78d5654794",
@@ -22,7 +22,7 @@
     "client/report.ts": "sha256:efd02eea840a032358656ea168fb069158427aeba1f0242eb6e6b1e536ceaaf9",
     "client/shaders.ts": "sha256:e1dbf2e4a13f87ccf1487ad35950ac4b85af6dfff46dc38c2b3569dcee5f2df0",
     "client/ui.ts": "sha256:b6ded476ee6ff5c276aee995a52c0592766975c6e0f1d97a83278f325f92e8ea",
-    "client/world.ts": "sha256:3b7d2923f270996a573294e8cefdaabf372107ad01c41d8d92d677cd0e2d2a4e",
+    "client/world.ts": "sha256:7fc76fdf32d69c1d1a449ab00ab1867ce9951fd387baa3dfface72a2607aff32",
     "index.ts": "sha256:1ff0dd274bf7f3f9858290c144d6acac14646a6be45ebf5f6ddd31333a1abbdc",
     "static/index.html": "sha256:291d483d54d9023e7c2ec0bf5389eb3461b617431ae7d644da60bbba81106827",
     "tsconfig.json": "sha256:7f810c55dd1ac18c2cee979d7b1e5cf5a6f3233b8029b80c00e15602e284f0d0"

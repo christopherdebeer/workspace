@@ -1503,6 +1503,19 @@ export class Pond {
       c.vy = c.vy * k + fy * (1 - k);
       c.x += c.vx * dt;
       c.y += c.vy * dt;
+      // the hull is solid to a crumb: one the boat overtakes or swings over slides round the side
+      const [lx, ly] = this.boatLocal(c.x, c.y);
+      const halfB = BOAT_BEAM * 0.5 + 5;
+      const halfL = BOAT_LEN * 0.5 + 4;
+      if (Math.abs(lx) < halfB && Math.abs(ly) < halfL) {
+        const side = lx >= 0 ? 1 : -1;
+        const [nx, ny] = this.boatWorld(side * halfB, ly);
+        c.x = nx;
+        c.y = ny;
+        const b = this.boat;
+        c.vx += Math.cos(b.heading) * side * 12;
+        c.vy += -Math.sin(b.heading) * side * 12;
+      }
     }
     // a crumb the fish leave sinks after a while
     this.crumbs = this.crumbs.filter((c) => !c.eaten && c.age < 50);
