@@ -21,7 +21,7 @@ import { Overlay } from './ui';
 import { glInfo, probe, report } from './report';
 import { PROGRAMS } from './render';
 import { program } from './gl';
-import { layDrops, liveCount, Pad, Pond, seeded } from './world';
+import { layDrops, liveCount, Drop, Pad, Pond, seeded } from './world';
 
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
 const ui = new Overlay();
@@ -439,9 +439,7 @@ function stepChimes() {
     const d = p.drops.find((dd) => dd.to > 0);
     if (!d) continue;
     d.to = 0;
-    const cs = Math.cos(p.ang);
-    const sn = Math.sin(p.ang);
-    lifts.push({ x0: p.x + cs * d.x * p.r - sn * d.y * p.r, y0: p.y + sn * d.x * p.r + cs * d.y * p.r, t: 0, dur: 1.6 + rand() * 0.5, delay: 0, bend: (rand() * 2 - 1) * 70 });
+    liftDew(p, d, 0, 1.6 + rand() * 0.5, (rand() * 2 - 1) * 70);
     p.bob = Math.min(1, p.bob + 0.25);
   }
 }
@@ -620,9 +618,24 @@ interface Lift {
   dur: number;
   delay: number;
   bend: number;
+  radius: number;
+  seed: number;
+  pad: Pad;
+  drop: Drop;
+  arrived: boolean;
 }
 let lifts: Lift[] = [];
 let lantern = 0;
+
+function liftDew(p: Pad, d: Drop, delay: number, duration: number, bend: number) {
+  const c = Math.cos(p.ang), sn = Math.sin(p.ang);
+  const materialSeed = d.x * 17 + d.y * 31 + p.seed;
+  lifts.push({ x0: p.x + (c * d.x - sn * d.y) * p.r,
+    y0: p.y + (sn * d.x + c * d.y) * p.r, t: 0, dur: duration,
+    delay, bend, radius: d.r * p.r, seed: materialSeed - Math.floor(materialSeed),
+    pad: p, drop: d, arrived: false });
+}
+
 
 function solve() {
   if (!target) return;
@@ -634,14 +647,10 @@ function solve() {
   ui.solved();
   let k = 0;
   for (const p of selection) {
-    const c = Math.cos(p.ang);
-    const s = Math.sin(p.ang);
     for (const d of p.drops) {
       if (d.to <= 0) continue;
       d.to = 0;
-      const lx = d.x * p.r;
-      const ly = d.y * p.r;
-      lifts.push({ x0: p.x + c * lx - s * ly, y0: p.y + s * lx + c * ly, t: 0, dur: 1.5 + rand() * 0.6, delay: k++ * 0.07, bend: (rand() * 2 - 1) * 60 });
+      liftDew(p, d, k++ * 0.07, 1.5 + rand() * 0.6, (rand() * 2 - 1) * 60);
     }
     pond.impulses.push({ x: p.x, y: p.y, r: p.r * 0.6, s: 0.6 });
   }
@@ -1002,16 +1011,32 @@ function gathers(dt: number, dusk: number): Mote[] {
   lifts = lifts.filter((l) => l.t < l.dur + l.delay);
   let arrived = 0;
   for (const l of lifts) {
+    const previous = l.t - l.delay;
     l.t += dt;
-    const k = Math.max(0, Math.min(1, (l.t - l.delay) / l.dur));
-    if (k <= 0) continue;
+    const age = l.t - l.delay;
+    if (age < 0) { l.drop.a = 1; continue; }
+    // Stay attached to the moving leaf during the capillary release.
+    if (age < 0.28) {
+      const c = Math.cos(l.pad.ang), sn = Math.sin(l.pad.ang);
+      l.x0 = l.pad.x + (c * l.drop.x - sn * l.drop.y) * l.pad.r;
+      l.y0 = l.pad.y + (sn * l.drop.x + c * l.drop.y) * l.pad.r;
+    }
+    const transfer = smooth(0, 0.16, age);
+    l.drop.a = 1 - transfer;
+    const k = clamp01((age - 0.28) / (l.dur - 0.28));
     const e = k * k * (3 - 2 * k);
     const mx = (l.x0 + bx) / 2 + l.bend;
     const my = (l.y0 + by) / 2 + 40;
+    const height = Math.sin(Math.min(1, age / l.dur) * Math.PI) * 13;
     const x = (1 - e) * (1 - e) * l.x0 + 2 * (1 - e) * e * mx + e * e * bx;
-    const y = (1 - e) * (1 - e) * l.y0 + 2 * (1 - e) * e * my + e * e * by;
-    out.push({ x, y, size: 16 - 6 * e, r: 1, g: 0.93, b: 0.7, a: 0.9 * (1 - e * 0.3), core: 1, z: 1 + 0.08 * Math.sin(e * Math.PI) });
-    if (l.t - l.delay + dt >= l.dur) arrived++;
+    const y = (1 - e) * (1 - e) * l.y0 + 2 * (1 - e) * e * my + e * e * by + height;
+    const stretch = age < 0.28 ? Math.sin(age / 0.28 * Math.PI) :
+      Math.sin((age - 0.28) * 15) * Math.exp(-(age - 0.28) * 3) * 0.3;
+    const magic = (.25 + dusk * .35) + smooth(.16, .65, age) * .25;
+    out.push({ x, y, size: Math.max(2, l.radius * 2.56 * cam.zoom * (1 - e * .42)),
+      r: magic, g: 0, b: 0, a: transfer * (1 - smooth(.92, 1, k)),
+      core: stretch, z: 1, water: l.seed });
+    if (!l.arrived && previous < l.dur && age >= l.dur) { arrived++; l.arrived = true; }
   }
   lantern = Math.min(1.5, lantern + arrived * 0.12) * Math.exp(-0.25 * dt);
   // the lantern: a small warmth by day, the brightest thing on the river at night

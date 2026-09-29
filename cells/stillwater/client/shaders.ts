@@ -720,57 +720,72 @@ void main(){
   float inside = 0.;
   vec2 dq = vec2(0.);
   vec4 dd = vec4(0.);
+  vec2 dropAxes = vec2(1.);
+  float dropShape = 0.;
   for (int i = 0; i < 10; i++) {
     if (i >= count) break;
     vec4 dr = texelFetch(uDrops, ivec2(i, row), 0);
     if (dr.w < .01) continue;
-    // as the leaf flexes, its dew shivers
-    dr.xy += vec2(sin(float(i) * 2.3 + seed * 17.), cos(float(i) * 1.7 + seed * 11.)) * vDent.z * .025;
+    // Contact line stays pinned; the cap lags and compresses as the leaf flexes.
+    float form = fract(dr.x * 17. + dr.y * 31. + seed);
+    float wobble = sin(uTime * (8. + form * 3.) + form * TAU) * min(.10, vDent.z * .10);
+    vec2 axes = vec2(.95 + form * .10 + wobble, 1.03 - form * .06 - wobble);
+    dr.xy -= vDent.xy * .006;
     float rr = dr.z * (.35 + .65 * dr.w);
-    vec2 q = (p - dr.xy) / rr;
+    vec2 q = (p - dr.xy) / (rr * axes);
     float sdist = length(q + Ll.xy * .62);
     shadow = max(shadow, (1. - smoothstep(.7, 1.2, sdist)) * dr.w);
     float dl = length(q);
-    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); }
+    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); dropAxes = axes; dropShape = form; }
     glowK = max(glowK, exp(-max(dl - 1., 0.) * 2.2) * dr.w);
   }
-  col *= 1. - shadow * .38;
+  col *= 1. - shadow * .15;
   // a chosen drop's light spills a little onto the leaf around it
-  col += vec3(1., .8, .42) * sel * glowK * .22;
+  col += vec3(1., .8, .42) * sel * glowK * .10;
 
   if (inside > 0.) {
     vec2 q = dq;
     float dl = length(q);
     float z = sqrt(max(0., 1. - dl * dl));
-    vec3 n = normalize(vec3(q, z * 1.15));
+    float cap = .78 + dropShape * .35;
+    vec3 n = normalize(vec3(q / dropAxes, z / cap));
+    float canopyLight = sunThrough(vW);
+    float enchant = sel * (.25 + .45 * (1. - clamp(uSun.z, 0., 1.)));
     vec2 qn = q / max(dl, 1e-4);
     // the lens: a magnified, brighter piece of the leaf beneath
-    vec2 pr = dd.xy + q * dd.z * .45 - n.xy * dd.z * .06;
+    vec2 pr = dd.xy + q * dropAxes * dd.z * mix(.40, .66, dl * dl) - n.xy * dd.z * .08;
     // Magnify leaf material without rebuilding a second procedural normal.
     float prLen = length(pr);
     float v2 = veins(pr, prLen);
     vec3 under = albedo(pr, prLen, v2);
     float underShade = sunThrough(vW + rot((pr - p) * vR, vAng));
     under *= (uAmb + uSunCol * .72 * underShade + LAMP * lampAt(vW) * .8);
-    under = mix(vec3(dot(under, vec3(.3, .59, .11))), under, 1.15) * 1.22 + .035;
+    under *= 1.04;
     // sunlight focused through the drop onto the leaf, on the side away from the sun
-    vec2 fc = q + Ll.xy * .45;
-    under += uSunCol * vec3(1., .97, .82) * exp(-dot(fc, fc) * 9.) * .75;
+    vec2 fc = q + Ll.xy * (.30 + cap * .18) + vDent.xy * .08;
+    under += uSunCol * vec3(1., .97, .82) * exp(-dot(fc, fc) * 12.) * .48 * canopyLight;
     // chosen: the dew itself lights, warm from within
-    under += vec3(1., .82, .42) * sel * .75 * (1. - dl * .5);
+    under += vec3(1., .82, .42) * enchant * exp(-dot(q - vec2(.0, -.12), q - vec2(.0, -.12)) * 3.5);
     // refraction bends the edge away: a thin dark rim, heaviest toward the sun
     float toSun = max(0., dot(qn, Ll.xy) / max(length(Ll.xy), 1e-3));
-    under *= 1. - smoothstep(.62, .98, dl) * (.38 + .45 * toSun);
+    under *= 1. - smoothstep(.80, 1., dl) * (.12 + .16 * toSun);
     // and light gathers along the far inner edge
-    under += vec3(.85, .95, .85) * smoothstep(.55, .95, dl) * (1. - toSun) * smoothstep(.2, .9, dot(qn, -Ll.xy)) * .32;
+    under += vec3(.85, .95, .85) * smoothstep(.55, .95, dl) * (1. - toSun) * smoothstep(.2, .9, dot(qn, -Ll.xy)) * .14 * canopyLight;
     // sky in the fresnel
     float fr = .03 + .97 * pow(1. - n.z, 5.);
-    vec3 sky = mix(uSky0, uSky1, n.y * .5 + .5);
-    vec3 c = mix(under, sky, fr * .7);
+    vec3 reflected = reflect(vec3(0., 0., -1.), n);
+    vec2 canopyUV = (vW + reflected.xy * 140.) / 520.;
+    float canopy = smoothstep(.36, .68, texture(uNoise, canopyUV).g) * (1. - canopyLight * .65);
+    vec3 sky = mix(uSky0, uSky1, reflected.z * .5 + .5);
+    sky = mix(sky, uAmb * vec3(.10, .18, .10), canopy * .8);
+    vec3 c = mix(under, sky, fr * .85);
+    c += sky * pow(max(n.z, 0.), 8.) * .06;
     // the sun's pinpoint, and the soft window of the sky around it
     vec3 H = normalize(Ll + vec3(0., 0., 1.));
     float nh = max(dot(n, H), 0.);
-    c += uSunCol * (pow(nh, 600.) * 5. + pow(nh, 70.) * .35 + pow(nh, 12.) * .05);
+    // Finite highlight footprint stays stable when the drop is only a few pixels.
+    float rough = max(.0035, fwidth(nh) * 1.5);
+    c += uSunCol * canopyLight * (exp((nh - 1.) / rough) * 1.6 + pow(nh, 45.) * .12);
     // the lantern: its own pinpoint in every drop within reach, and a warm focus beneath
     vec2 tl = uLamp.xy - vW;
     vec3 Lp = normalize(vec3(rot(tl, -vAng), 32.));
@@ -1723,18 +1738,50 @@ uniform vec4 uView;
 uniform float uDpr;
 out vec4 vA;
 out vec4 vB;
+out vec2 vWorld;
 void main(){
+  vWorld = aPos;
   vA = iA; vB = iB;
   float par = iB.z > 0. ? iB.z : 1.;
   gl_PointSize = iA.x * uDpr * par;
   gl_Position = vec4((aPos - uView.xy) * uView.zw * par, 0., 1.);
 }`;
 
-export const MOTE_FS = /* glsl */ `${HEAD}
+export const MOTE_FS = /* glsl */ `${HEAD}${COMMON}
+in vec2 vWorld;
+uniform sampler2D uDewScene;
+uniform vec2 uDewSceneSize;
+uniform float uDpr;
 in vec4 vA;
 in vec4 vB;
 out vec4 o;
 void main(){
+  if (vB.w > .5) {
+    float seed = vB.w - 1.;
+    vec2 p = (gl_PointCoord - .5) * vec2(2., -2.);
+    float stretch = vB.y;
+    vec2 axes = vec2((.95 + seed * .10) * (1. - stretch * .18), (1.03 - seed * .06) * (1. + stretch * .20));
+    vec2 q = p * 1.28 / axes;
+    float r = length(q), aa = max(fwidth(r), .015);
+    if (r > 1. + aa) discard;
+    vec3 n = normalize(vec3(q / axes, sqrt(max(0., 1. - r*r)) / (.78 + seed*.35)));
+    vec2 uv = gl_FragCoord.xy / uDewSceneSize;
+    vec2 offset = -n.xy * vA.x * uDpr * .16 / uDewSceneSize;
+    vec3 under = texture(uDewScene, clamp(uv + offset, vec2(.001), vec2(.999))).rgb;
+    vec3 reflected = reflect(vec3(0., 0., -1.), n);
+    vec3 sky = mix(uSky0, uSky1, reflected.z * .5 + .5);
+    float canopy = smoothstep(.36, .68, texture(uNoise, (vWorld + reflected.xy * 140.) / 520.).g);
+    sky = mix(sky, uAmb * vec3(.10, .18, .10), canopy * .45);
+    float fresnel = .02 + .98 * pow(1. - n.z, 5.);
+    vec3 c = mix(under, sky, fresnel * .85);
+    float nh = max(dot(n, normalize(uSun + vec3(0.,0.,1.))), 0.);
+    c += uSunCol * exp((nh - 1.) / max(.004, fwidth(nh) * 1.5)) * 1.4;
+    // A contained ember, growing only after release. The edge remains water.
+    c += vec3(1., .80, .40) * vA.y * exp(-dot(q, q) * 3.5);
+    float cover = (1. - smoothstep(1. - aa, 1. + aa, r)) * vB.x;
+    o = vec4(c * cover, cover);
+    return;
+  }
   float r = length(gl_PointCoord - .5) * 2.;
   float glow = exp(-r * r * 4.) * (1. - smoothstep(.8, 1., r));
   float core = (1. - smoothstep(.0, .22, r)) * vB.y;
