@@ -1380,6 +1380,14 @@ export class Pond {
   }
 
   /** A world point in the boat's frame: across (right positive) and along (bow positive). */
+  /** The world position of a point given in the boat's frame (x across, y along, bow +). */
+  boatWorld(lx: number, ly: number): [number, number] {
+    const b = this.boat;
+    const c = Math.cos(b.heading);
+    const s = Math.sin(b.heading);
+    return [b.x + lx * c + ly * s, b.y - lx * s + ly * c];
+  }
+
   boatLocal(x: number, y: number): [number, number] {
     const b = this.boat;
     const c = Math.cos(b.heading);
@@ -1595,8 +1603,12 @@ export class Pond {
           p.vy += (tvy - hy * 6 * drive - p.vy) * hold;
           p.va += ((dx * (tvy - p.vy) - dy * (tvx - p.vx)) / (p.r * p.r)) * 0.5 * hold;
           p.wob = Math.min(1, p.wob + drive * dt);
-          // water pours over the flooded edge
+          // water pours over the flooded edge and froths there: the blade churns just as
+          // hard on a leaf as in open water, only the white shows at the rim, not under it
           if (Math.random() < dt * 10) this.impulses.push({ x: p.x + (dx / d) * p.r, y: p.y + (dy / d) * p.r, r: 5, s: 0.35, foam: true });
+          const rim = Math.atan2(dx, dy) + (Math.random() - 0.5) * 1.1;
+          const rr = p.r * (1.02 + Math.random() * 0.12);
+          this.impulses.push({ x: p.x + Math.sin(rim) * rr, y: p.y + Math.cos(rim) * rr, r: 7, s: 0.6 * k * drive * into * dt * 60, foam: true });
           if (!p.selected) {
             const c = Math.cos(p.ang);
             const sn = Math.sin(p.ang);
@@ -1609,16 +1621,17 @@ export class Pond {
           }
         }
         this.lastTip[side < 0 ? 0 : 1] = [tx, ty];
-        if (!this.padAt(tx, ty, near)) {
+        const onLeaf = this.padAt(tx, ty, near);
+        if (!onLeaf) {
           this.impulses.push({ x: tx, y: ty, r: 7, s: 0.7 * k * drive * dt * 60, foam: true });
           if (shedEddy) this.shedEddies(tx, ty, k * drive * 0.6, hx, hy);
-          if (shed) {
-            // pushed water leaves aft, a little outward, faster the harder the pull
-            const ox = hy * side;
-            const oy = -hx * side;
-            const v = 14 + b.power * 32;
-            this.puddles.push({ x: tx, y: ty, vx: -hx * v + ox * 7, vy: -hy * v + oy * 7, age: 0, life: 1.8, s: 0.55 * k * drive });
-          }
+        }
+        if (shed) {
+          // pushed water leaves aft, a little outward, faster the harder the pull
+          const ox = hy * side;
+          const oy = -hx * side;
+          const v = 14 + b.power * 32;
+          this.puddles.push({ x: tx, y: ty, vx: -hx * v + ox * 7, vy: -hy * v + oy * 7, age: 0, life: 1.8, s: 0.55 * k * drive });
         }
       }
     }

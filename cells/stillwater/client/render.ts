@@ -12,6 +12,7 @@
 import { ATTR, bindTarget, bindTex, dropTarget, GL, Instanced, noiseTexture, program, Program, quadBuffer, quadVao, renderTarget, Target } from './gl';
 import { SHADERS as S } from './shaders';
 import type { Fish } from './fish';
+import type { Critter } from './critters';
 import { DEPTH_K, type Sky } from './atmosphere';
 import { Pond, type Pad } from './world';
 
@@ -51,6 +52,8 @@ export interface FrameInput {
   pond: Pond;
   pads: Pad[];
   fish: Fish[];
+  /** Dragonflies and butterflies, above everything. */
+  critters?: Critter[];
   motes: Mote[];
   /** Specks suspended under the surface (drawn in the underwater pass). */
   under: Mote[];
@@ -77,6 +80,7 @@ export const PROGRAMS: Array<[string, string, string]> = [
   ['boat', S.BOAT_VS, S.BOAT_FS],
   ['ribbon', S.RIBBON_VS, S.RIBBON_FS],
   ['mote', S.MOTE_VS, S.MOTE_FS],
+  ['critter', S.CRITTER_VS, S.CRITTER_FS],
 ];
 
 const MAX_PADS = 900;
@@ -101,6 +105,7 @@ export class Renderer {
   private padInst: Instanced;
   private deepInst: Instanced;
   private fishInst: Instanced;
+  private critterInst: Instanced;
   private flowerInst: Instanced;
   private weedInst: Instanced;
   private floatInst: Instanced;
@@ -173,6 +178,7 @@ export class Renderer {
     this.padInst = new Instanced(gl, this.quad, MAX_PADS, 4);
     this.deepInst = new Instanced(gl, this.quad, 400, 3);
     this.fishInst = new Instanced(gl, this.quad, 220, 3);
+    this.critterInst = new Instanced(gl, this.quad, 24, 3);
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
     this.weedInst = new Instanced(gl, this.quad, 600, 2);
     this.floatInst = new Instanced(gl, this.quad, 4000, 2);
@@ -591,6 +597,9 @@ export class Renderer {
       this.ribbon(f, f.thread, 1.3, [1, 0.9, 0.62], 0.9, true);
     }
 
+    // dragonflies and butterflies, with their shadows on whatever is below them
+    this.critters(f);
+
     // motes, fireflies, gathered dew
     this.motes(f, f.motes);
 
@@ -873,6 +882,26 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.ribbonBuf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, d, 0, n * 12);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, n * 2);
+  }
+
+  private critters(f: FrameInput) {
+    const list = f.critters;
+    if (!list || !list.length) return;
+    const gl = this.gl;
+    let n = 0;
+    for (const c of list) {
+      if (n >= 24) break;
+      this.critterInst.set(n++, c.x, c.y, c.heading, c.size, c.kind, c.wing, c.h, c.alpha, c.seed, 0, 0, 0);
+    }
+    this.critterInst.count = n;
+    this.critterInst.upload();
+    const pr = this.p.critter;
+    this.common(pr, f);
+    gl.uniform1f(pr.u.uDepthK, DEPTH_K);
+    gl.uniform1f(pr.u.uShadow, 1);
+    this.critterInst.draw();
+    gl.uniform1f(pr.u.uShadow, 0);
+    this.critterInst.draw();
   }
 
   private motes(f: FrameInput, list: Mote[], res = 1) {

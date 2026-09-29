@@ -15,6 +15,7 @@ import { School } from './fish';
 import * as N from './numeracy';
 import * as L from './learning';
 import { drawOrder, Camera, Mote, Renderer } from './render';
+import { Critters, type Critter } from './critters';
 import { Atmosphere, DAY, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
@@ -997,6 +998,8 @@ document.addEventListener('visibilitychange', () => {
 // `?time=0.5` starts at that point of the day (0 afternoon · .3 golden · .5 dusk · .7 night · .9 dawn)
 const dayStart = Number.isFinite(Number(params.get('time'))) && params.get('time') !== null ? Number(params.get('time')) : 0.08;
 const atmosphere = new Atmosphere(reduced ? { flies: 14, pollen: 16, silt: 30 } : { flies: 56, pollen: 40, silt: 70 });
+let lastBugs: Critter[] = [];
+const critters = new Critters(reduced ? { dragonflies: 1, butterflies: 2 } : { dragonflies: 2, butterflies: 3 });
 
 function gathers(dt: number, dusk: number): Mote[] {
   const out: Mote[] = [];
@@ -1112,7 +1115,10 @@ function frame(now: number) {
     }
   }
   school.rises.length = 0;
-  if (shift) atmosphere.shift(shift);
+  if (shift) {
+    atmosphere.shift(shift);
+    critters.shift(shift);
+  }
   // a gentle breeze of the river's own, now and then: a soft patch of wind crossing the
   // water, ruffling it, nudging the leaves and the pollen (touch is no longer wind)
   breezeAt -= dt;
@@ -1211,14 +1217,19 @@ function frame(now: number) {
   // resolution steps BEFORE drawing: resizing the canvas clears it, and after the draw that blanked a frame
   adapt(ms, dt);
   const sky = skyAt(dayStart + pond.t / DAY);
-  const air = atmosphere.step(dt, pond.t, {
+  const field = {
     x: cam.x,
     y: cam.y,
     hw: cam.cssW / (2 * cam.zoom),
     hh,
-    flow: (x, y) => pond.flow(x, y),
-    wind: (x, y) => pond.wind(x, y),
-  }, sky);
+    flow: (x: number, y: number) => pond.flow(x, y),
+    wind: (x: number, y: number) => pond.wind(x, y),
+  };
+  const air = atmosphere.step(dt, pond.t, field, sky);
+  const bugs = started
+    ? critters.step(dt, pond.t, field, { pads: order, blooms: pond.blooms, boatAt: (lx, ly) => pond.boatWorld(lx, ly), boatHeading: pond.boat.heading }, sky)
+    : [];
+  lastBugs = bugs;
   renderer.render(
     {
       cam,
@@ -1227,6 +1238,7 @@ function frame(now: number) {
       pond,
       pads: bare ? [] : order,
       fish: school.fish,
+      critters: bugs,
       motes: [...air.above, ...gathers(dt, sky.dusk), ...drips(sky)],
       under: air.below,
       thread,
@@ -1288,6 +1300,10 @@ Object.defineProperty(window, '__stillwater', {
       const b = pond.boat;
       return { x: Math.round(x), y: Math.round(y), power: Math.round(b.power * 100) / 100, heading: Math.round(b.heading * 100) / 100, helm: !!b.helm, speed: Math.round(b.speed), stroke: Math.round(b.stroke * 100) / 100, owed: Math.round((b.strokeTo - b.stroke) * 100) / 100 };
     })(),
+    bugs: lastBugs.map((c) => {
+      const [x, y] = toScreen(c.x, c.y);
+      return { kind: c.kind, x: Math.round(x), y: Math.round(y), wing: Math.round(c.wing * 100) / 100, h: Math.round(c.h * 100) / 100, a: Math.round(c.alpha * 100) / 100 };
+    }),
     scale,
     frameMs: Math.round(frameMs * 10) / 10,
     sim: renderer.simOn,
