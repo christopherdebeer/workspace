@@ -14,9 +14,10 @@
 import { School } from './fish';
 import * as N from './numeracy';
 import * as L from './learning';
-import { drawOrder, Camera, Mote, Renderer } from './render';
+import { drawOrder, Camera, Mote, PageEntry, Renderer } from './render';
 import { Critters, type Critter } from './critters';
-import { Atmosphere, DAY, skyAt } from './atmosphere';
+import { butterflyId, dragonflyId, fishId, flowerId, Notebook, SPECIES } from './notebook';
+import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
 import { glInfo, probe, report } from './report';
@@ -56,6 +57,7 @@ let profiles: Profile[] = readJSON<Profile[]>(PROFILES) ?? [];
 let profile: Profile | null = null;
 const pKey = (id: string, what: string) => `stillwater.p.${id}.${what}`;
 
+let notebook = new Notebook();
 let mastery = 0.04;
 let totalSolves = 0;
 /** When this child last rowed (ms), for the welcome back. */
@@ -89,6 +91,7 @@ function loadProfile(name: string) {
     lastPlayed = saved.last ?? 0;
   }
   memory = startupParams.has('fresh') ? new L.Memory() : new L.Memory(readJSON(pKey(pr.id, 'facts.v1')));
+  notebook = startupParams.has('fresh') ? new Notebook() : new Notebook(readJSON(pKey(pr.id, 'notebook.v1')));
   const levelParam = Number(startupParams.get('level'));
   if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
   save();
@@ -750,10 +753,166 @@ function touchPad(p: Pad) {
   pond.impulses.push({ x: p.x - p.r * 0.8, y: p.y, r: 8, s: 0.5 });
 }
 
+// ─── the notebook: noticing ─────────────────────────────────────────────────
+/**
+ * Is a creature or an open flower under this fingertip? If so it is *sighted*:
+ * it reacts, its name is said, and the first time it gets a page. Above-water
+ * things are looked for at their parallax-shifted screen position; a fingertip
+ * is given a little slack. Returns true if something was noticed.
+ */
+function sight(sx: number, sy: number): boolean {
+  if (!started) return false;
+  const [wx, wy] = toWorld(sx, sy);
+  const cx = cam.cssW / 2;
+  const cy = cam.cssH / 2;
+  const slackPx = 12;
+  const screenOf = (x: number, y: number, par: number): [number, number] => {
+    const [px, py] = toScreen(x, y);
+    return [cx + (px - cx) * par, cy + (py - cy) * par];
+  };
+  let id: string | null = null;
+  let at: [number, number] | null = null;
+  // dragonflies and butterflies
+  const near = critters.nearest(wx, wy);
+  if (near) {
+    const c = near.critter;
+    const par = 1 / (1 - DEPTH_K * c.h * 0.8);
+    const [px, py] = screenOf(c.x, c.y, par);
+    if (Math.hypot(px - sx, py - sy) < c.size * cam.zoom * par * 1.5 + slackPx) {
+      id = c.kind === 0 ? dragonflyId(c.seed) : butterflyId(c.kind);
+      at = [c.x, c.y];
+      critters.startle(near.index);
+    }
+  }
+  // open flowers
+  if (!id) {
+    for (const b of pond.blooms) {
+      if (b.open < 0.6) continue;
+      if (Math.hypot(b.x - wx, b.y - wy) < b.size * 1.15 + slackPx / cam.zoom) {
+        id = flowerId(b.variant);
+        at = [b.x, b.y];
+        b.vx += (rand() - 0.5) * 4;
+        b.vy += (rand() - 0.5) * 4;
+        pond.impulses.push({ x: b.x, y: b.y, r: 8, s: 0.3 });
+        break;
+      }
+    }
+  }
+  // fireflies, after dusk
+  if (!id) {
+    const sky = skyAt(dayStart + pond.t / DAY);
+    const fly = atmosphere.nearestFly(wx, wy, 26 / cam.zoom, sky.dusk);
+    if (fly) {
+      id = 'firefly';
+      at = [fly.x, fly.y];
+      atmosphere.wink(fly.index, pond.t);
+    }
+  }
+  // fish, under the water (drawn smaller and nearer the centre the deeper they are)
+  if (!id) {
+    let best: (typeof school.fish)[number] | null = null;
+    let bd = Infinity;
+    for (const fsh of school.fish) {
+      const par = 1 / (1 + DEPTH_K * (0.15 + fsh.z));
+      const [px, py] = screenOf(fsh.x, fsh.y, par);
+      const d = Math.hypot(px - sx, py - sy);
+      if (d < fsh.size * cam.zoom * par * 0.9 + slackPx && d < bd) { bd = d; best = fsh; }
+    }
+    if (best) {
+      id = fishId(best.kind);
+      at = [best.x, best.y];
+      school.scare(best.x, best.y, 40);
+      pond.impulses.push({ x: best.x, y: best.y, r: 6, s: 0.25 });
+    }
+  }
+  if (!id || !at) return false;
+  const s = notebook.sight(id);
+  if (!s) return false;
+  if (profile) writeJSON(pKey(profile.id, 'notebook.v1'), notebook.toJSON());
+  ui.say(s.isNew ? `${s.species.name} — a new page` : s.species.name, s.isNew ? 5 : 3);
+  ui.announce(`${s.species.name}${s.isNew ? ', new in your notebook' : ''}.`);
+  if (s.isNew) {
+    notebookBtn.classList.add('new');
+    window.setTimeout(() => notebookBtn.classList.remove('new'), 6000);
+  }
+  return true;
+}
+
+// the notebook's tab, and its page (paper drawn by the renderer; names laid over it)
+const notebookBtn = document.getElementById('notebook') as HTMLButtonElement;
+const pageEl = document.getElementById('page') as HTMLDivElement;
+let pageOpen = false;
+let pageK = 0;
+const PAGE_COLS = 3;
+/** Each entry's place on the page, in CSS px, laid out for this screen. */
+function pageLayout(): Array<{ id: string; x: number; y: number }> {
+  const rows = Math.ceil(SPECIES.length / PAGE_COLS);
+  const top = cam.cssH * 0.14;
+  const bottom = cam.cssH * 0.9;
+  const left = cam.cssW * 0.08;
+  const right = cam.cssW * 0.92;
+  return SPECIES.map((sp, i) => ({
+    id: sp.id,
+    x: left + ((i % PAGE_COLS) + 0.5) * ((right - left) / PAGE_COLS),
+    y: top + (Math.floor(i / PAGE_COLS) + 0.5) * ((bottom - top) / rows),
+  }));
+}
+function buildPage() {
+  const seen = notebook.pages;
+  pageEl.innerHTML = '';
+  const h2 = document.createElement('h2');
+  h2.textContent = seen ? `${profile?.name ?? ''}'S NOTEBOOK`.toUpperCase() : 'NOTEBOOK';
+  pageEl.appendChild(h2);
+  const close = document.createElement('button');
+  close.className = 'close';
+  close.type = 'button';
+  close.textContent = 'close';
+  close.addEventListener('click', () => togglePage(false));
+  pageEl.appendChild(close);
+  const cellH = (cam.cssH * 0.76) / Math.ceil(SPECIES.length / PAGE_COLS);
+  for (const { id, x, y } of pageLayout()) {
+    const sp = SPECIES.find((s) => s.id === id)!;
+    const has = notebook.has(id);
+    const label = document.createElement('div');
+    label.className = 'label' + (has ? '' : ' unseen');
+    label.style.left = `${x}px`;
+    label.style.top = `${y + cellH * 0.22}px`;
+    const count = notebook.seen[id]?.count ?? 0;
+    label.innerHTML = has
+      ? `<b>${sp.name}</b>${count >= 10 ? `<small>seen ${count} times</small>` : ''}`
+      : `<b>?</b><small>${sp.where}</small>`;
+    pageEl.appendChild(label);
+  }
+  pageEl.addEventListener('click', (e) => { if (e.target === pageEl) togglePage(false); });
+}
+function togglePage(open = !pageOpen) {
+  pageOpen = open;
+  if (open) buildPage();
+  pageEl.classList.toggle('open', open);
+  document.body.classList.toggle('page', open);
+  pageEl.setAttribute('aria-hidden', open ? 'false' : 'true');
+  notebookBtn.setAttribute('aria-pressed', open ? 'true' : 'false');
+  notebookBtn.textContent = open ? 'river' : 'notebook';
+  if (open) ui.announce(`Notebook: ${notebook.pages} of ${SPECIES.length} pages.`);
+}
+notebookBtn.addEventListener('click', () => togglePage());
+/** What the renderer draws on the open page this frame. */
+function pageEntries(): PageEntry[] {
+  const cellH = (cam.cssH * 0.76) / Math.ceil(SPECIES.length / PAGE_COLS);
+  const scale = Math.min(1, cellH / 110);
+  return pageLayout().map(({ id, x, y }) => {
+    const sp = SPECIES.find((s) => s.id === id)!;
+    const [wx, wy] = toWorld(x, y - cellH * 0.1);
+    const size = (sp.group === 'dragonfly' ? 19 : sp.group === 'butterfly' ? 15 : sp.group === 'fish' ? (sp.kind === 3 ? 14 : 26) : sp.group === 'flower' ? 17 : 6) * scale / cam.zoom;
+    return { group: sp.group, kind: sp.kind, seed: sp.seed, x: wx, y: wy, size, seen: notebook.has(id) };
+  });
+}
+
 function begin() {
   if (started) return;
   started = true;
   ui.fadeTitle();
+  notebookBtn.classList.remove('hidden');
 }
 
 /** A name was chosen at the start: load that child's river and let the asks begin. */
@@ -887,6 +1046,11 @@ canvasEl.addEventListener('pointerdown', (e) => {
   // a leaf with dew is a choice; anywhere else — water or a dry leaf — the touch is wind
   const p = hitPad && liveCount(hitPad) ? hitPad : null;
   lastHit = p;
+  // …unless a creature or a flower is under the fingertip: then it is noticed (the notebook)
+  if (!p && sight(e.clientX, e.clientY)) {
+    lastHit = null;
+    return;
+  }
   if (hitPad && !p) touchPad(hitPad);
   if (p) {
     touchPad(p);
@@ -1266,6 +1430,7 @@ function frame(now: number) {
     ? critters.step(dt, pond.t, field, { pads: order, blooms: pond.blooms, boatAt: (lx, ly) => pond.boatWorld(lx, ly), boatHeading: pond.boat.heading }, sky)
     : [];
   lastBugs = bugs;
+  pageK += ((pageOpen ? 1 : 0) - pageK) * Math.min(1, dt * 6);
   renderer.render(
     {
       cam,
@@ -1280,6 +1445,7 @@ function frame(now: number) {
       thread,
       lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,
       names: nameSprites(),
+      page: pageK > 0.01 ? { open: pageK, entries: pageEntries() } : undefined,
     },
     dt,
   );
@@ -1344,6 +1510,7 @@ Object.defineProperty(window, '__stillwater', {
     frameMs: Math.round(frameMs * 10) / 10,
     sim: renderer.simOn,
     audio: sound.path(),
+    notebook: Object.keys(notebook.seen),
     muted: [...sound.muted],
     pads: visibleDewy().map((p) => {
       const [x, y] = toScreen(p.x, p.y);

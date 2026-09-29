@@ -107,6 +107,38 @@ export class Critters {
     }
   }
 
+  /** The visible critter nearest a world point, with its distance (screen-space parallax is the caller's). */
+  nearest(x: number, y: number): { index: number; d: number; critter: Critter } | null {
+    let best = -1;
+    let bd = Infinity;
+    this.bugs.forEach((b, i) => {
+      if (b.alpha < 0.15) return;
+      const d = Math.hypot(b.x - x, b.y - y);
+      if (d < bd) { bd = d; best = i; }
+    });
+    if (best < 0) return null;
+    const b = this.bugs[best];
+    return { index: best, d: bd, critter: { x: b.x, y: b.y, heading: b.heading, size: b.size, kind: b.kind, wing: b.wing, h: b.h, seed: b.seed, alpha: b.alpha, turn: b.turn } };
+  }
+
+  /** Noticed: it leaves — a dragonfly darts off and up, a butterfly lifts and flutters away. */
+  startle(index: number) {
+    const b = this.bugs[index];
+    if (!b) return;
+    const dragon = b.kind === 0;
+    const a = b.heading + (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 1.2);
+    b.mode = 'fly';
+    b.perch = null;
+    b.until = 0;
+    b.tx = b.x + Math.sin(a) * (dragon ? 160 : 70);
+    b.ty = b.y + Math.cos(a) * (dragon ? 160 : 70);
+    b.vx = Math.sin(a) * (dragon ? 90 : 26);
+    b.vy = Math.cos(a) * (dragon ? 90 : 26);
+    b.vh = dragon ? 3.5 : 2;
+    b.th = dragon ? 1.6 + Math.random() : 1.4 + Math.random() * 0.8;
+    b.until = Number.MAX_SAFE_INTEGER; // holds this dash until it arrives (arrival resets it)
+  }
+
   /** Somewhere to land near (x, y): a leaf's rim, an open flower, or nothing. */
   private perchNear(b: Bug, s: Scene, reach: number): Perch {
     let best: Perch = null;

@@ -61,6 +61,18 @@ export interface FrameInput {
   lantern: number;
   /** Names written on leaves at the start: which atlas entry, where, how tall (world), how faded. */
   names?: Array<{ i: number; x: number; y: number; h: number; a: number }>;
+  /** The notebook, when open: paper over the river, and each entry's sprite at rest (world coords). */
+  page?: { open: number; entries: PageEntry[] };
+}
+
+export interface PageEntry {
+  group: 'dragonfly' | 'butterfly' | 'fish' | 'flower' | 'light';
+  kind: number;
+  seed: number;
+  x: number;
+  y: number;
+  size: number;
+  seen: boolean;
 }
 
 /** Every program, in build order. The probe in report.ts compiles these one context at a time. */
@@ -81,6 +93,7 @@ export const PROGRAMS: Array<[string, string, string]> = [
   ['ribbon', S.RIBBON_VS, S.RIBBON_FS],
   ['mote', S.MOTE_VS, S.MOTE_FS],
   ['critter', S.CRITTER_VS, S.CRITTER_FS],
+  ['paper', S.FULLSCREEN_VS, S.PAPER_FS],
 ];
 
 const MAX_PADS = 900;
@@ -613,7 +626,81 @@ export class Renderer {
     const gr = this.p.grade;
     this.common(gr, f);
     this.fullscreen();
+
+    // the notebook: paper over everything, and the pages' creatures at rest on it
+    if (f.page && f.page.open > 0.01) this.notebook(f, f.page);
     gl.disable(gl.BLEND);
+  }
+
+  /**
+   * The notebook's pages are drawn by the river itself: paper, then each entry
+   * as its live sprite at rest, so the child sees again what they saw. Entries
+   * not yet seen are silhouettes.
+   */
+  private notebook(f: FrameInput, page: NonNullable<FrameInput['page']>) {
+    const gl = this.gl;
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    const pp = this.p.paper;
+    this.common(pp, f);
+    gl.uniform1f(pp.u.uPage, page.open);
+    gl.uniform1f(pp.u.uAspect, f.cam.cssW / f.cam.cssH);
+    this.fullscreen();
+    const k = page.open;
+    // fish, in still water
+    let fn = 0;
+    for (const e of page.entries) {
+      if (e.group !== 'fish' || fn >= 220) continue;
+      this.fishInst.set(fn++, e.x, e.y, 0.35, e.size, 0, e.kind, 0.8, 0, 0, e.seed, 0, 0);
+    }
+    if (fn) {
+      this.fishInst.count = fn;
+      this.fishInst.upload();
+      const fp = this.p.fish;
+      this.common(fp, f);
+      bindTex(gl, 1, this.occ!.tex);
+      gl.uniform1i(fp.u.uOcc, 1);
+      for (const seen of [false, true]) {
+        let n = 0;
+        for (const e of page.entries) if (e.group === 'fish' && e.seen === seen) this.fishInst.set(n++, e.x, e.y, 0.35, e.size, 0, e.kind, 0.8, 0, 0, e.seed, 0, 0);
+        this.fishInst.count = n;
+        this.fishInst.upload();
+        gl.uniform1f(fp.u.uShadow, seen ? 0 : 1);
+        this.fishInst.draw();
+      }
+    }
+    // flowers (only once seen: a flower has no silhouette form)
+    let fl = 0;
+    for (const e of page.entries) if (e.group === 'flower' && e.seen && fl < 120) this.flowerInst.set(fl++, e.x, e.y, e.size, 0.3, e.kind, 1, e.seed, 0);
+    this.flowerInst.count = fl;
+    this.flowerInst.upload();
+    this.common(this.p.flower, f);
+    this.flowerInst.draw();
+    // dragonflies and butterflies, wings at rest
+    const cp = this.p.critter;
+    this.common(cp, f);
+    gl.uniform1f(cp.u.uDepthK, 0);
+    for (const seen of [false, true]) {
+      let n = 0;
+      for (const e of page.entries) {
+        if ((e.group !== 'dragonfly' && e.group !== 'butterfly') || e.seen !== seen || n >= 24) continue;
+        this.critterInst.set(n++, e.x, e.y, 0.25, e.size, e.kind, e.group === 'dragonfly' ? 0 : 0.2, 0, k, e.seed, 0, 0, 0);
+      }
+      this.critterInst.count = n;
+      this.critterInst.upload();
+      gl.uniform1f(cp.u.uShadow, seen ? 0 : 1);
+      this.critterInst.draw();
+    }
+    // the firefly: a point of light, or a faint ring for one not yet seen
+    const lights: Mote[] = [];
+    for (const e of page.entries) {
+      if (e.group !== 'light') continue;
+      if (e.seen) {
+        lights.push({ x: e.x, y: e.y, size: 7, r: 1, g: 0.95, b: 0.55, a: 0.95 * k, core: 1, z: 1 });
+        lights.push({ x: e.x, y: e.y, size: 26, r: 0.9, g: 0.85, b: 0.45, a: 0.25 * k, core: 0, z: 1 });
+      } else lights.push({ x: e.x, y: e.y, size: 9, r: 0.3, g: 0.28, b: 0.2, a: 0.35 * k, core: 0.6, z: 1 });
+    }
+    if (lights.length) this.motes(f, lights);
   }
 
   /**

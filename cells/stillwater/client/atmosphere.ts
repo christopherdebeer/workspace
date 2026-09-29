@@ -138,6 +138,30 @@ export class Atmosphere {
     for (const list of [this.flies, this.pollen, this.silt]) for (const p of list) p.y -= dy;
   }
 
+  /** The firefly that is out and nearest a world point, if one is within `r`. */
+  nearestFly(x: number, y: number, r: number, dusk: number): { x: number; y: number; index: number } | null {
+    const out = 0.12 + 0.88 * dusk;
+    let best = -1;
+    let bd = r;
+    this.flies.forEach((fl, i) => {
+      if (i / this.flies.length > out) return;
+      const d = Math.hypot(fl.x - x, fl.y - y);
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best < 0 ? null : { x: this.flies[best].x, y: this.flies[best].y, index: best };
+  }
+
+  /** Noticed: it flashes once and darts. */
+  wink(index: number, t: number) {
+    const fl = this.flies[index];
+    if (!fl) return;
+    fl.phase = (2.2 - ((t * fl.rate) % 2.2)) % 2.2; // so the flash lands at cycle start
+    const a = Math.random() * Math.PI * 2;
+    fl.tx = Math.cos(a) * 70;
+    fl.ty = Math.sin(a) * 70;
+    fl.next = t + 0.5;
+  }
+
   /** Advance and emit: `above` for the final pass, `below` for the underwater pass. */
   step(dt: number, t: number, f: Field, sky: Sky): { above: Mote[]; below: Mote[] } {
     this.seed(f);

@@ -2028,6 +2028,24 @@ void main(){
   o = vec4(col, 1.) * cover * alpha;
 }`;
 
+// ─── the notebook's paper ──────────────────────────────────────────────────
+
+export const PAPER_FS = /* glsl */ `${HEAD}${COMMON}
+in vec2 vUv;
+in vec2 vWorld;
+out vec4 o;
+uniform float uPage; // 0 closed … 1 open
+uniform float uAspect;
+void main(){
+  // laid paper: a warm cream with a faint grain and a soft vignette; the river ghosts through at the edges
+  vec2 g = vec2(vUv.x * uAspect, vUv.y) * 90.;
+  float grain = (nz(g * .031) - .5) * .05 + (nz(g * .19) - .5) * .025;
+  vec3 paper = vec3(.93, .89, .78) + grain;
+  float edge = smoothstep(.0, .12, vUv.x) * smoothstep(1., .88, vUv.x) * smoothstep(.0, .09, vUv.y) * smoothstep(1., .91, vUv.y);
+  float a = uPage * mix(.9, .985, edge);
+  o = vec4(paper * a, a);
+}`;
+
 export const SHADERS = {
   FULLSCREEN_VS,
   SIM_FS,
@@ -2057,4 +2075,5 @@ export const SHADERS = {
   GRADE_FS,
   CRITTER_VS,
   CRITTER_FS,
+  PAPER_FS,
 };

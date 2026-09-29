@@ -42,6 +42,19 @@
     h1.hidden { opacity: 0; }
     #start { position: fixed; left: 0; right: 0; top: 38.2%; transform: translateY(-50%); text-align: center; pointer-events: none; transition: opacity 1.4s; }
     #start.away { opacity: 0; }
+    #notebook { right: auto; left: 12px; transition: opacity 1.4s; }
+    body.page header, body.page #hint { opacity: 0; transition: opacity .6s; }
+    #notebook.hidden { opacity: 0; pointer-events: none; }
+    #notebook.new { opacity: .9; color: #f6e9a8; }
+    /* the notebook's labels sit under the creatures the renderer draws on the paper */
+    #page { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .6s; }
+    #page.open { opacity: 1; pointer-events: auto; }
+    #page .label { position: absolute; transform: translate(-50%, 0); width: 96px; text-align: center; font-size: 11px; letter-spacing: .3px; color: #3a3324; line-height: 1.25; }
+    #page .label.unseen { color: #8d8570; font-style: italic; }
+    #page .label b { display: block; font-weight: normal; font-size: 12px; }
+    #page .label small { display: block; font-size: 10px; color: #7a725e; }
+    #page h2 { position: absolute; top: 5.5%; width: 100%; text-align: center; margin: 0; font-weight: normal; font-size: 12px; letter-spacing: 5px; color: #4a4331; }
+    #page .close { position: absolute; top: 4%; right: 14px; font: 12px Georgia, serif; color: #6a6250; padding: 10px; pointer-events: auto; background: transparent; border: 0; bottom: auto; opacity: .8; }
     #start .brand { font-size: 15px; letter-spacing: 10px; margin: 0 0 0 10px; opacity: .92; text-shadow: 0 2px 18px #001b19; }
     #newname { position: fixed; left: 0; right: 0; bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px)); display: flex; justify-content: center; pointer-events: none; transition: opacity 1.4s; }
     #newname.away { opacity: 0; }
@@ -59,6 +72,8 @@
     </header>
     <div id="hint"></div>
     <button id="sound" type="button" aria-pressed="false">sound off</button>
+    <button id="notebook" type="button" aria-pressed="false" aria-label="Open the notebook" class="hidden">notebook</button>
+    <div id="page" aria-hidden="true"></div>
     <div id="live" role="status" aria-live="polite"></div>
   </div>
   <div id="start"><p class="brand">STILLWATER</p></div>
