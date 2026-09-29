@@ -2048,6 +2048,142 @@ void main(){
   o = vec4(paper * a, a);
 }`;
 
+// ─── the residents: a heron, a frog, a turtle, each at their pier ──────────
+
+export const RESIDENT_VS = /* glsl */ `${HEAD}
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec4 iA; // x, y, heading, size
+layout(location=2) in vec4 iB; // kind, mood, look, seed
+layout(location=3) in vec4 iC; // -
+uniform vec4 uView;
+uniform vec3 uSun;
+uniform float uShadow;
+out vec2 vQ;
+out vec4 vB;
+void main(){
+  vQ = aPos;
+  vB = iB;
+  vec2 local = aPos * iA.w * (uShadow > .5 ? 1.04 : 1.);
+  float c = cos(iA.z), s = sin(iA.z);
+  vec2 pos = iA.xy + vec2(local.x * c + local.y * s, -local.x * s + local.y * c);
+  if (uShadow > .5) pos += -uSun.xy / max(uSun.z, .3) * 5.;
+  gl_Position = vec4((pos - uView.xy) * uView.zw, 0., 1.);
+}`;
+
+export const RESIDENT_FS = /* glsl */ `${HEAD}${COMMON}
+in vec2 vQ;
+in vec4 vB;
+out vec4 o;
+uniform float uShadow;
+float aa2(float d, float soft){ return 1. - smoothstep(-soft, soft, d); }
+float sdSeg3(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); return length(pa - ba * h); }
+float sdEll(vec2 p, vec2 r){ return (length(p / r) - 1.) * min(r.x, r.y); }
+/** A grey heron standing at the end of a pier, seen from above: a long slate back, folded wings, a neck curved forward to a yellow bill. */
+void heron(vec2 P, float t, float look, float content, out vec3 col, out float cover){
+  float soft = min(fwidth(P.x) * 1.2, .03);
+  float sdBody = sdEll(P - vec2(0., -.42), vec2(.2, .4));
+  float body = aa2(sdBody, soft);
+  float wing = 0.;
+  for (int k = -1; k <= 1; k += 2) {
+    float s = float(k);
+    vec2 w = P - vec2(s * (.1 + content * .12), -.44);
+    wing = max(wing, aa2(sdEll(rot(w, s * .16), vec2(.11, .36)), soft));
+  }
+  // the neck: an S from the shoulders forward, the head turned a little toward what it watches
+  vec2 n0 = vec2(0., -.06), n1 = vec2(.13 + look * .1, .24 + .012 * sin(t * .7)), n2 = vec2(.07 + look * .16, .46);
+  float neck = min(aa2(sdSeg3(P, n0, n1) - .075, soft), aa2(sdSeg3(P, n1, n2) - .065, soft));
+  vec2 hp = n2 + vec2(.01, .1);
+  float head = aa2(sdEll(P - hp, vec2(.15, .1)), soft);
+  vec2 bill0 = hp + vec2(.03, .06), bill1 = hp + vec2(.14 + look * .05, .4);
+  float along = clamp(dot(P - bill0, bill1 - bill0) / dot(bill1 - bill0, bill1 - bill0), 0., 1.);
+  float bill = aa2(sdSeg3(P, bill0, bill1) - mix(.055, .014, along), soft);
+  float eye = aa2(length(P - (hp + vec2(.05, .02))) - .024, soft);
+  cover = max(max(body, wing), max(max(neck, head), bill));
+  vec3 back = vec3(.44, .50, .56), slate = vec3(.24, .29, .36), pale = vec3(.93, .94, .93);
+  // the body's edge falls away into shadow; a dark ridge along the spine
+  float edge = 1. - smoothstep(-.09, .0, sdBody);
+  col = back * (1. - .3 * edge);
+  col = mix(col, slate, wing);
+  col = mix(col, slate * .7, wing * (1. - smoothstep(.0, .03, abs(P.x) - (.1 + content * .12) - .1)) * .4);
+  col = mix(col, pale, max(neck, head));
+  // the neck's front is streaked dark
+  col = mix(col, vec3(.35, .38, .4), neck * (1. - smoothstep(.0, .03 + soft, abs(P.x - mix(n0.x, n2.x, clamp((P.y - n0.y) / (n2.y - n0.y), 0., 1.))) - .012)) * .5);
+  col = mix(col, vec3(.90, .72, .22), bill);
+  col = mix(col, vec3(.06), eye);
+  // the black crest, back from the eye over the head
+  col = mix(col, vec3(.12, .13, .16), aa2(sdSeg3(P, hp + vec2(-.01, .03), hp + vec2(-.15, -.05)) - .02, soft) * head * .95);
+}
+/** A small frog sat at the pier's edge: a plump green body, two eye bumps, hind legs folded beside it, a throat that pulses. */
+void frog(vec2 P, float t, float look, float content, out vec3 col, out float cover){
+  float soft = min(fwidth(P.x) * 1.2, .03);
+  float pulse = 1. + .03 * sin(t * 3.1);
+  float body = aa2(sdEll(P - vec2(0., -.02), vec2(.36 * pulse, .5)), soft);
+  float legs = 0.;
+  float feet = 0.;
+  for (int k = -1; k <= 1; k += 2) {
+    float s = float(k);
+    legs = max(legs, aa2(sdEll(rot(P - vec2(s * .44, -.2), s * .5), vec2(.22, .14)), soft));
+    feet = max(feet, aa2(sdEll(P - vec2(s * .28, .34), vec2(.09, .06)), soft));
+  }
+  float eyes = 0., pupils = 0.;
+  for (int k = -1; k <= 1; k += 2) {
+    float s = float(k);
+    vec2 e = P - vec2(s * .18, .42);
+    eyes = max(eyes, aa2(length(e) - .11, soft));
+    pupils = max(pupils, aa2(length(e - vec2(look * .03, .03)) - .045, soft));
+  }
+  cover = max(max(body, legs), max(feet, eyes));
+  vec3 green = vec3(.38, .58, .26), dark = vec3(.20, .36, .14);
+  float blot = smoothstep(.55, .7, nz(P * .9 + vB.w * 3.));
+  col = mix(green, dark, blot * .8);
+  col = mix(col, green * 1.15, (1. - smoothstep(.0, .5, length((P - vec2(0., -.05)) / vec2(.36, .5)))) * .25);
+  col = mix(col, dark, max(legs, feet) * (1. - body) * .4);
+  col = mix(col, vec3(.82, .70, .30), eyes);
+  col = mix(col, vec3(.05), pupils);
+  // the throat, paler
+  col = mix(col, vec3(.86, .88, .62), aa2(sdEll(P - vec2(0., .22), vec2(.16, .1 * pulse)), soft) * .7);
+}
+/** An old turtle resting on the planks: a domed shell of scutes, a head out, four stubby legs, a tail. */
+void turtle(vec2 P, float t, float look, float content, out vec3 col, out float cover){
+  float soft = min(fwidth(P.x) * 1.2, .03);
+  float shell = aa2(sdEll(P, vec2(.5, .6)), soft);
+  float rim = aa2(sdEll(P, vec2(.5, .6)), soft) - aa2(sdEll(P, vec2(.42, .52)), soft);
+  float head = aa2(sdEll(P - vec2(look * .06, .72 + .02 * sin(t * .8)), vec2(.13, .16)), soft);
+  float legs = 0.;
+  for (int k = -1; k <= 1; k += 2) {
+    float s = float(k);
+    legs = max(legs, aa2(sdEll(rot(P - vec2(s * .5, .3), s * .6), vec2(.13, .09)), soft));
+    legs = max(legs, aa2(sdEll(rot(P - vec2(s * .48, -.36), -s * .6), vec2(.13, .09)), soft));
+  }
+  float tail = aa2(sdSeg3(P, vec2(0., -.55), vec2(.04, -.8)) - .03, soft);
+  cover = max(max(shell, head), max(legs, tail));
+  // scutes: a central row and two flanking rows, each a rounded cell
+  vec2 q = vec2(P.x / .5, P.y / .6);
+  float row = abs(q.x) < .33 ? 0. : 1.;
+  vec2 cell = row < .5 ? vec2(0., (floor(q.y * 2.5 + .5)) / 2.5) : vec2(sign(q.x) * .62, (floor(q.y * 2. + .25) - .25) / 2.);
+  float sc = length((q - cell) / (row < .5 ? vec2(.33, .2) : vec2(.32, .25)));
+  float seam = smoothstep(.78, .92, sc);
+  vec3 olive = vec3(.36, .40, .22), dark = vec3(.22, .25, .13), skin = vec3(.42, .46, .28);
+  float dome = 1. - smoothstep(.0, 1., length(q));
+  col = mix(olive, dark, seam * .9) * (.7 + .45 * dome);
+  col = mix(col, olive * 1.2, rim * .5);
+  col = mix(col, skin, max(head, max(legs, tail)) * (1. - shell));
+  col = mix(col, vec3(.06), aa2(length(P - vec2(look * .06 + .07, .78)) - .02, soft) * head);
+  col = mix(col, vec3(.06), aa2(length(P - vec2(look * .06 - .07, .78)) - .02, soft) * head);
+}
+void main(){
+  float kind = vB.x, mood = vB.y, look = vB.z, seed = vB.w;
+  float t = uTime + seed * 40.;
+  vec3 col; float cover;
+  if (kind < .5) heron(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
+  else if (kind < 1.5) frog(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
+  else turtle(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
+  if (cover < .003) discard;
+  if (uShadow > .5) { o = vec4(0., 0., 0., cover * .3); return; }
+  col *= uAmb * .9 + uSunCol * (.5 + .4 * max(uSun.z, 0.)) + LAMP * lampAt(vec2(0.)) * 0.;
+  o = vec4(col, 1.) * cover;
+}`;
+
 export const SHADERS = {
   FULLSCREEN_VS,
   SIM_FS,
@@ -2078,4 +2214,6 @@ export const SHADERS = {
   CRITTER_VS,
   CRITTER_FS,
   PAPER_FS,
+  RESIDENT_VS,
+  RESIDENT_FS,
 };

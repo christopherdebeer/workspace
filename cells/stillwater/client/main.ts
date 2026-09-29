@@ -19,6 +19,7 @@ import { Critters, type Critter } from './critters';
 import { butterflyId, dragonflyId, fishId, flowerId, Notebook, SPECIES } from './notebook';
 import { parseKey, recall } from './learning';
 import { Perf } from './perf';
+import { RESIDENTS, Story, type ResidentKind } from './story';
 import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
@@ -60,6 +61,7 @@ let profile: Profile | null = null;
 const pKey = (id: string, what: string) => `stillwater.p.${id}.${what}`;
 
 let notebook = new Notebook();
+let story = new Story();
 let mastery = 0.04;
 let totalSolves = 0;
 let firstPlayed = 0;
@@ -98,6 +100,7 @@ function loadProfile(name: string) {
   memory = startupParams.has('fresh') ? new L.Memory() : new L.Memory(readJSON(pKey(pr.id, 'facts.v1')));
   notebook = startupParams.has('fresh') ? new Notebook() : new Notebook(readJSON(pKey(pr.id, 'notebook.v1')));
   pond.plantings = startupParams.has('fresh') ? [] : (readJSON<Planting[]>(pKey(pr.id, 'plantings.v1')) ?? []);
+  story = startupParams.has('fresh') ? new Story() : new Story(readJSON(pKey(pr.id, 'story.v1')));
   pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
   const levelParam = Number(startupParams.get('level'));
   if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
@@ -911,6 +914,79 @@ function stepShare(dt: number) {
   }
 }
 
+// ─── the story: residents at the piers ─────────────────────────────────────
+/**
+ * Every pier has a resident (heron, frog, turtle, in turn down the river). They
+ * stand at the pier's tip, watch a boat that comes near, and when it has come
+ * in and rested a moment they speak — a few lines, one at a time, in the hint
+ * slot — asking for the one thing they want. See `story.ts`.
+ */
+const residentShift = Number(params.get('resident')) || 0;
+const residentKind = (id: number): ResidentKind => RESIDENTS[(id + residentShift) % RESIDENTS.length];
+interface Arrival { id: number; since: number }
+let arrival: Arrival | null = null;
+const visitedAt = new Map<number, number>();
+let lineQueue: Array<{ text: string; at: number }> = [];
+function pierTip(m: { x: number; y: number; ang: number; l: number }): [number, number, number] {
+  const d = m.l - 16;
+  return [m.x - Math.sin(m.ang) * d, m.y + Math.cos(m.ang) * d, -m.ang];
+}
+function residentsNow() {
+  const out: NonNullable<Parameters<typeof renderer.render>[0]['residents']> = [];
+  const b = pond.boat;
+  for (const m of pond.landmarks) {
+    const [x, y, heading] = pierTip(m);
+    const d = Math.hypot(b.x - x, b.y - y);
+    const kind = residentKind(m.id);
+    const ch = story.chapter(kind);
+    // it looks toward a boat that is near: which side the boat is, in its own frame
+    const s = Math.sin(heading);
+    const c = Math.cos(heading);
+    const across = ((b.x - x) * c - (b.y - y) * s) / Math.max(1, d);
+    const look = d < 220 ? Math.max(-1, Math.min(1, across * 1.5)) : 0;
+    out.push({ x, y, heading, size: kind === 'heron' ? 28 : kind === 'frog' ? 13 : 22, kind: RESIDENTS.indexOf(kind), mood: ch.done ? 2 : d < 220 ? 1 : 0, look, seed: m.seed });
+  }
+  return out;
+}
+function stepStory(dt: number) {
+  void dt;
+  if (!started || !profile) { arrival = null; return; }
+  const b = pond.boat;
+  let near: { id: number; Y: number } | null = null;
+  for (const m of pond.landmarks) {
+    const [x, y] = pierTip(m);
+    if (Math.hypot(b.x - x, b.y - y) < 150 && b.speed < 10) { near = { id: m.id, Y: m.y + pond.origin }; break; }
+  }
+  if (!near) { arrival = null; }
+  else if (!arrival || arrival.id !== near.id) arrival = { id: near.id, since: pond.t };
+  else if (pond.t - arrival.since > 1.2 && pond.t - (visitedAt.get(near.id) ?? -Infinity) > 90 && !target && !share) {
+    visitedAt.set(near.id, pond.t);
+    const kind = residentKind(near.id);
+    const sky = skyAt(dayStart + pond.t / DAY);
+    const river = {
+      seen: (id: string) => notebook.has(id),
+      plantingNear: (Y: number, within: number) => {
+        let best: number | null = null;
+        for (const pl of pond.plantings) if (Math.abs(pl.Y - Y) < within) best = Math.max(best ?? 0, pond.ageDays(pl));
+        return best;
+      },
+      lantern,
+      dusk: sky.dusk,
+    };
+    const lines = story.visit(kind, river, near.Y);
+    writeJSON(pKey(profile.id, 'story.v1'), story.toJSON());
+    lineQueue = lines.map((l, i) => ({ text: l.text, at: pond.t + i * 5.5 }));
+    if (lines.some((l) => l.done)) lantern = Math.min(1.5, lantern + 0.4);
+    // the asks wait while the resident speaks
+    nextTargetAt = Math.max(nextTargetAt, pond.t + lines.length * 5.5 + 2);
+  }
+  while (lineQueue.length && pond.t >= lineQueue[0].at) {
+    const l = lineQueue.shift()!;
+    ui.say(l.text, 5);
+    ui.announce(l.text);
+  }
+}
+
 // ─── the notebook: noticing ─────────────────────────────────────────────────
 /**
  * Is a creature or an open flower under this fingertip? If so it is *sighted*:
@@ -1105,6 +1181,7 @@ function buildNumbersPage() {
   };
   sec('on the river', `${days ? (days === 1 ? 'since today' : `since ${days} days ago`) : 'just begun'} · ${totalSolves} number${totalSolves === 1 ? '' : 's'} made · ${notebook.pages} of ${SPECIES.length} creatures seen`);
   sec('now', stageNames[stage().id] ?? stage().id);
+  if (story.told > 0 || Object.keys(story.chapters).length) sec('the piers', `${Object.values(story.chapters).filter((c) => c?.met).length} met · ${story.told} content`);
   if (pond.plantings.length) {
     const flowering = pond.plantings.filter((pl) => pond.ageDays(pl) >= 5).length;
     const leaves = pond.plantings.filter((pl) => pond.ageDays(pl) >= 0.5).length - flowering;
@@ -1602,6 +1679,7 @@ function frame(now: number) {
   school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw, hh }, shift, (x, y) => pond.flow(x, y), interest, pond.crumbs);
   perf.mark('fish');
   stepShare(dt);
+  stepStory(dt);
   // a big fish nosing at the surface: a small ring and a soft sound
   for (const r of school.rises) {
     pond.impulses.push({ x: r.x, y: r.y, r: 5, s: 0.35 });
@@ -1761,6 +1839,7 @@ function frame(now: number) {
       pads: bare ? [] : order,
       fish: school.fish,
       critters: bugs,
+      residents: residentsNow(),
       motes: moteList,
       under: air.below,
       thread,
@@ -1850,6 +1929,8 @@ Object.defineProperty(window, '__stillwater', {
     seed: seed ? { moved: seed.moved } : null,
     share: share ? { fish: share.fish.length, fed: share.fish.map((i, k) => (school.fish[i].fed ?? 0) - share!.base[k]) } : null,
     fishAtBoat: bigFishAtBoat().length,
+    story: story.chapters,
+    residents: residentsNow().map((r) => { const [x, y] = toScreen(r.x, r.y); return { kind: RESIDENTS[r.kind], x: Math.round(x), y: Math.round(y), mood: r.mood }; }),
     muted: [...sound.muted],
     pads: visibleDewy().map((p) => {
       const [x, y] = toScreen(p.x, p.y);
