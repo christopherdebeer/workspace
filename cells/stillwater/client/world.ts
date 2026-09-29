@@ -672,6 +672,20 @@ export class Pond {
    * The surface shader computes the same shape from the same channel samples,
    * so what the water shows and what the pads feel agree.
    */
+  /** `flow` sampled on a 32-unit grid, remembered for one step: the floaters ask it thousands of times. */
+  private flowCache = new Map<number, [number, number]>();
+  flowNear(x: number, y: number): [number, number] {
+    const gx = Math.round(x / 32);
+    const gy = Math.round(y / 32);
+    const key = gx * 65536 + gy + 32768 * 65536;
+    let v = this.flowCache.get(key);
+    if (!v) {
+      v = this.flow(gx * 32, gy * 32);
+      this.flowCache.set(key, v);
+    }
+    return v;
+  }
+
   flow(x: number, y: number): [number, number] {
     const arm = this.nearestArm(y, x);
     const cx = arm.x;
@@ -822,16 +836,16 @@ export class Pond {
       const x = cx + side * (half * (0.45 + rand() * 0.9));
       const pr = 22 + rand() * 60;
       // area-dense at the heart, a ragged fringe: a raft, not a sprinkle
-      const n = Math.round(pr * pr * 0.07);
+      const n = Math.min(240, Math.round(pr * pr * 0.035));
       const stretch = 1 + rand() * 0.8;
       for (let k = 0; k < n; k++) {
         const a = rand() * Math.PI * 2;
         const d = Math.pow(rand(), 0.55) * pr * (0.75 + 0.35 * Math.sin(a * 3 + i));
-        add(x + Math.cos(a) * d * stretch, y + Math.sin(a) * d, 0, 1.3 + rand() * 1.3);
+        add(x + Math.cos(a) * d * stretch, y + Math.sin(a) * d, 0, 1.6 + rand() * 1.5);
       }
     }
     // a sprinkle of loose fronds everywhere slack
-    const loose = Math.round(((y1 - y0) * span) / 14000);
+    const loose = Math.round(((y1 - y0) * span) / 22000);
     for (let i = 0; i < loose; i++) {
       const y = y0 + rand() * (y1 - y0);
       add(this.fieldCentre(y) + (rand() * 2 - 1) * (this.halfW + 60), y, 0, 1.4 + rand() * 1.4);
@@ -919,11 +933,12 @@ export class Pond {
     const tips = this.boat.rowing > 0.3 && Math.cos(b.stroke * Math.PI * 2) > 0.05 ? [this.oarTip(-1), this.oarTip(1)] : [];
     const drag = Math.exp(-1.4 * dt);
     const t = this.t;
+    const gusty = this.gusts.length > 0;
     for (const f of this.floaters) {
       if (f.y < active.y0 || f.y > active.y1) continue;
       const light = f.kind === 3 ? 0.35 : 1;
-      const [fx, fy] = this.flow(f.x, f.y);
-      const [wx, wy] = this.wind(f.x, f.y);
+      const [fx, fy] = this.flowNear(f.x, f.y);
+      const [wx, wy] = gusty ? this.wind(f.x, f.y) : [0, 0];
       f.vx += ((fx * 0.8 - f.vx) * 0.6 + wx * 1.1 * light) * dt;
       f.vy += ((fy * 0.8 - f.vy) * 0.6 + wy * 1.1 * light) * dt;
       // the hull parts them, and the boat's passage drags them along its sides
@@ -1381,6 +1396,7 @@ export class Pond {
 
   step(dt: number, active: { y0: number; y1: number }, reduced: boolean) {
     this.t += dt;
+    this.flowCache.clear();
     this.stepGusts(dt);
     this.stepBoat(dt, reduced);
     this.collidePiers(dt);
@@ -1647,7 +1663,7 @@ export class Pond {
       age: 0, life: 3.2 + Math.random() * 1.2, spin: sign,
       s: strength, phase: Math.random() * Math.PI * 2,
     });
-    if (this.eddies.length > 32) this.eddies.splice(0, this.eddies.length - 32);
+    if (this.eddies.length > 12) this.eddies.splice(0, this.eddies.length - 12);
   }
 
 /** The pad covering a world point, if any (nearest centre wins). */

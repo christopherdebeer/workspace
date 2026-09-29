@@ -1580,7 +1580,9 @@ function frame(now: number) {
   pond.cull(cam.y - hh - 600);
 
   // physics at a fixed step
-  const steps = Math.max(1, Math.round(dt * 60));
+  // at most two world substeps a frame: a slow frame must not double the world's work
+  // and make the next one slower still (the feedback the telemetry showed)
+  const steps = dt > 1 / 40 ? 2 : 1;
   for (let i = 0; i < steps; i++) pond.step(dt / steps, { y0: cam.y - hh - 200, y1: cam.y + hh + 300 }, reduced);
   perf.mark('world');
   const shift = pond.rebaseIfNeeded();
