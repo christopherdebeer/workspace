@@ -898,9 +898,11 @@ export class Pond {
       const oy = (-side * slope) / nn;
       // a plank jetty: long and narrow, reaching from beyond the grown field (so it comes
       // in from off screen) to a little way into the run
-      const w = 7 + rand() * 1.5;
-      const innerD = Math.max(18, half - (6 + rand() * 22));
-      const outerD = this.halfW + 80 + rand() * 40;
+      // a landing among the leaves: broad, and short — its tip stops just past the leaf line,
+      // its root just beyond the view (the field is grown 160 wider than the view)
+      const w = 13 + rand() * 3;
+      const innerD = half + 10 + rand() * 20;
+      const outerD = this.halfW - 60 + rand() * 40;
       const tipX = cx + ox * innerD;
       const tipY = y + oy * innerD;
       const rootX = cx + ox * outerD;
