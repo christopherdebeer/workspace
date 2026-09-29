@@ -17,6 +17,7 @@ import * as L from './learning';
 import { drawOrder, Camera, Mote, PageEntry, Renderer } from './render';
 import { Critters, type Critter } from './critters';
 import { butterflyId, dragonflyId, fishId, flowerId, Notebook, SPECIES } from './notebook';
+import { parseKey, recall } from './learning';
 import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
@@ -60,6 +61,7 @@ const pKey = (id: string, what: string) => `stillwater.p.${id}.${what}`;
 let notebook = new Notebook();
 let mastery = 0.04;
 let totalSolves = 0;
+let firstPlayed = 0;
 /** When this child last rowed (ms), for the welcome back. */
 let lastPlayed = 0;
 let activeStage: N.Stage = N.STAGES[0];
@@ -81,14 +83,16 @@ function loadProfile(name: string) {
     profiles.push(pr);
   }
   profile = pr;
-  const saved = readJSON<{ mastery?: number; solves?: number; last?: number }>(pKey(pr.id, 'v3'));
+  const saved = readJSON<{ mastery?: number; solves?: number; last?: number; first?: number }>(pKey(pr.id, 'v3'));
   mastery = 0.04;
   totalSolves = 0;
   lastPlayed = 0;
+  firstPlayed = Date.now();
   if (saved && typeof saved.mastery === 'number') {
     mastery = Math.max(0, Math.min(1, saved.mastery));
     totalSolves = saved.solves ?? 0;
     lastPlayed = saved.last ?? 0;
+    firstPlayed = saved.first ?? saved.last ?? firstPlayed;
   }
   memory = startupParams.has('fresh') ? new L.Memory() : new L.Memory(readJSON(pKey(pr.id, 'facts.v1')));
   notebook = startupParams.has('fresh') ? new Notebook() : new Notebook(readJSON(pKey(pr.id, 'notebook.v1')));
@@ -101,7 +105,7 @@ if (forcedStage) activeStage = forcedStage;
 const save = () => {
   if (!profile) return;
   profile.last = Date.now();
-  writeJSON(pKey(profile.id, 'v3'), { mastery, solves: totalSolves, last: profile.last });
+  writeJSON(pKey(profile.id, 'v3'), { mastery, solves: totalSolves, last: profile.last, first: firstPlayed });
   writeJSON(pKey(profile.id, 'facts.v1'), memory);
   writeJSON(PROFILES, profiles);
 };
@@ -843,6 +847,7 @@ const notebookBtn = document.getElementById('notebook') as HTMLButtonElement;
 const pageEl = document.getElementById('page') as HTMLDivElement;
 let pageOpen = false;
 let pageK = 0;
+let pageSide: 'creatures' | 'numbers' = 'creatures';
 const PAGE_COLS = 3;
 /** Each entry's place on the page, in CSS px, laid out for this screen. */
 function pageLayout(): Array<{ id: string; x: number; y: number }> {
@@ -858,6 +863,7 @@ function pageLayout(): Array<{ id: string; x: number; y: number }> {
   }));
 }
 function buildPage() {
+  if (pageSide === 'numbers') return buildNumbersPage();
   const seen = notebook.pages;
   pageEl.innerHTML = '';
   const h2 = document.createElement('h2');
@@ -880,9 +886,58 @@ function buildPage() {
     const count = notebook.seen[id]?.count ?? 0;
     label.innerHTML = has
       ? `<b>${sp.name}</b>${count >= 10 ? `<small>seen ${count} times</small>` : ''}`
-      : `<b>?</b><small>${sp.where}</small>`;
+      : `<small>${sp.where}</small>`;
     pageEl.appendChild(label);
   }
+  pageEl.appendChild(pageTurn('numbers'));
+  pageEl.addEventListener('click', (e) => { if (e.target === pageEl) togglePage(false); });
+}
+/** The corner of the page that turns to the other one. */
+function pageTurn(to: 'creatures' | 'numbers') {
+  const turn = document.createElement('button');
+  turn.className = 'turn';
+  turn.type = 'button';
+  turn.textContent = to === 'numbers' ? 'numbers ›' : '‹ creatures';
+  turn.addEventListener('click', () => { pageSide = to; buildPage(); });
+  return turn;
+}
+/**
+ * The second page, "so far": one administrative page for the grown-up and the
+ * child who wants one — where the rowing has got to, what is known by heart,
+ * what is being worked on. Facts are written the way they were made.
+ */
+function buildNumbersPage() {
+  pageEl.innerHTML = '';
+  const h2 = document.createElement('h2');
+  h2.textContent = 'SO FAR';
+  pageEl.appendChild(h2);
+  const close = document.createElement('button');
+  close.className = 'close';
+  close.type = 'button';
+  close.textContent = 'close';
+  close.addEventListener('click', () => togglePage(false));
+  pageEl.appendChild(close);
+  const now = Date.now();
+  const factText = (k: string) => {
+    const f = parseKey(k);
+    return f.rule === 'groups' ? `${f.parts[0]} × ${f.parts[1]} = ${f.value}` : `${f.parts.join(' + ')} = ${f.value}`;
+  };
+  const keys = Object.keys(memory.items);
+  const byHeart = keys.filter((k) => memory.fluent(k, now)).map(factText);
+  const working = keys.filter((k) => !memory.fluent(k, now)).sort((a, b) => recall(memory.items[a], now) - recall(memory.items[b], now)).slice(0, 8).map(factText);
+  const stageNames: Record<string, string> = { gather: 'gathering', add: 'adding', more: 'adding further', groups: 'making groups', times: 'times' };
+  const days = firstPlayed ? Math.max(1, Math.round((now - firstPlayed) / 86400_000)) : 0;
+  const sec = (title: string, body: string, cls = '') => {
+    const d = document.createElement('section');
+    d.className = cls;
+    d.innerHTML = `<h3>${title}</h3><p>${body}</p>`;
+    pageEl.appendChild(d);
+  };
+  sec('on the river', `${days ? (days === 1 ? 'since today' : `since ${days} days ago`) : 'just begun'} · ${totalSolves} number${totalSolves === 1 ? '' : 's'} made · ${notebook.pages} of ${SPECIES.length} creatures seen`);
+  sec('now', stageNames[stage().id] ?? stage().id);
+  sec('by heart', byHeart.length ? byHeart.join(' · ') : 'nothing yet — it comes with rowing', 'facts');
+  sec('working on', working.length ? working.join(' · ') : '—', 'facts');
+  pageEl.appendChild(pageTurn('creatures'));
   pageEl.addEventListener('click', (e) => { if (e.target === pageEl) togglePage(false); });
 }
 function togglePage(open = !pageOpen) {
@@ -1445,7 +1500,7 @@ function frame(now: number) {
       thread,
       lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,
       names: nameSprites(),
-      page: pageK > 0.01 ? { open: pageK, entries: pageEntries() } : undefined,
+      page: pageK > 0.01 ? { open: pageK, entries: pageSide === 'creatures' ? pageEntries() : [] } : undefined,
     },
     dt,
   );

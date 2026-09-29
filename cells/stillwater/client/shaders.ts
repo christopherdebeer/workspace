@@ -338,6 +338,7 @@ uniform vec4 uView;
 uniform vec3 uSun;
 uniform float uShadow;
 uniform float uDepthK;
+uniform float uPage; // 1: drawn on the notebook's paper — no sun throw, no parallax
 out vec2 vQ;
 out vec4 vB;
 out vec2 vUv;
@@ -352,14 +353,14 @@ void main(){
   float c = cos(iA.z), s = sin(iA.z);
   vec2 w = vec2(local.x * c + local.y * s, -local.x * s + local.y * c);
   vec2 pos = iA.xy + w;
-  if (uShadow > .5) pos += -uSun.xy / max(uSun.z, .3) * (1.1 - z) * 38.;
+  if (uShadow > .5 && uPage < .5) pos += -uSun.xy / max(uSun.z, .3) * (1.1 - z) * 38.;
   vQ = q;
   vB = iB;
   vFlash = iC.x;
   vSeed = iC.y;
   vTurn = iC.z;
   // deeper fish sit smaller and slide slower (and their shadows sit on the bed)
-  float d = uShadow > .5 ? 1.2 : .15 + z;
+  float d = uPage > .5 ? 0. : uShadow > .5 ? 1.2 : .15 + z;
   vec2 clip = (pos - uView.xy) * uView.zw / (1. + uDepthK * d);
   vUv = clip * .5 + .5;
   gl_Position = vec4(clip, 0., 1.);
@@ -374,6 +375,7 @@ in float vSeed;
 in float vTurn;
 out vec4 o;
 uniform float uShadow;
+uniform float uPage;
 uniform sampler2D uOcc;
 /**
  * A fish seen from ABOVE. The tail and dorsal fin stand vertical, so from up
@@ -423,7 +425,7 @@ void main(){
   }
   float cover = max(body, max(tail * .75, fin * .45));
   if (cover < .003) discard;
-  if (uShadow > .5) { o = vec4(0., 0., 0., cover * .22 * (1. - z * .6)); return; }
+  if (uShadow > .5) { o = vec4(0., 0., 0., cover * (uPage > .5 ? .3 : .22 * (1. - z * .6))); return; }
   float across = clamp(abs(x) / max(w, .01), 0., 1.);
   vec3 back, flank;
   if (kind > 2.5) { back = vec3(.20, .23, .16); flank = vec3(.55, .60, .54); }

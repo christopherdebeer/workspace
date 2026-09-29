@@ -461,6 +461,7 @@ export class Renderer {
     this.common(fishP, f);
     bindTex(gl, 1, this.occ!.tex);
     gl.uniform1i(fishP.u.uOcc, 1);
+    gl.uniform1f(fishP.u.uPage, 0);
     gl.uniform1f(fishP.u.uShadow, 1);
     this.fishInst.draw();
     this.common(this.p.pad, f);
@@ -660,6 +661,7 @@ export class Renderer {
       this.common(fp, f);
       bindTex(gl, 1, this.occ!.tex);
       gl.uniform1i(fp.u.uOcc, 1);
+      gl.uniform1f(fp.u.uPage, 1);
       for (const seen of [false, true]) {
         let n = 0;
         for (const e of page.entries) if (e.group === 'fish' && e.seen === seen) this.fishInst.set(n++, e.x, e.y, 0.35, e.size, 0, e.kind, 0.8, 0, 0, e.seed, 0, 0);
