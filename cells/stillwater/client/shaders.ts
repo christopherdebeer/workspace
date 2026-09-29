@@ -1805,12 +1805,13 @@ uniform float uShadow;
 uniform float uDepthK;
 out vec2 vQ;
 out vec4 vB;
-out float vSeed;
+out vec4 vC;
 void main(){
   vQ = aPos;
   vB = iB;
-  vSeed = iC.x;
-  vec2 local = aPos * iA.w;
+  vC = iC;
+  // the shadow spreads a little the higher the flier
+  vec2 local = aPos * iA.w * (uShadow > .5 ? 1. + iB.z * .12 : 1.);
   float c = cos(iA.z), s = sin(iA.z);
   vec2 pos = iA.xy + vec2(local.x * c + local.y * s, -local.x * s + local.y * c);
   // above the water: parallax lifts it; its shadow lies on whatever is below, thrown by the sun
@@ -1822,151 +1823,197 @@ void main(){
 export const CRITTER_FS = /* glsl */ `${HEAD}${COMMON}
 in vec2 vQ;
 in vec4 vB;
-in float vSeed;
+in vec4 vC;
 out vec4 o;
 uniform float uShadow;
 float sdSeg2(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); return length(pa - ba * h); }
+float aa(float d, float soft){ return 1. - smoothstep(-soft, soft, d); }
 /**
- * A DRAGONFLY from above: a slender segmented abdomen, a stout thorax, a head
- * that is mostly two great eyes, and four long clear wings held straight out.
- * In flight the wings are a blur; perched they lie flat and show their veins.
+ * A DRAGONFLY from above: a slender abdomen of ten segments narrowing to a
+ * waist behind the thorax, a stout thorax, a head that is mostly two great
+ * eyes, and four long clear wings held straight out. Perched, the wings lie
+ * flat and show their veins and the dark cell at each tip; in flight they are
+ * two soft fans of blur with the sun catching the membrane now and then.
  */
-void dragonfly(vec2 P, float blur, out vec3 col, out float body, out float wing){
-  // small on screen: the edge softening is capped so the slender body never fades to nothing
-  float soft = min(fwidth(P.x) * 1.2, .045);
-  float aw = .085 * (1. - smoothstep(-.5, -1., P.y) * .3) * (1. + smoothstep(-.3, .2, P.y) * .3);
-  float abd = (1. - smoothstep(aw - soft, aw + soft, abs(P.x))) * smoothstep(-1., -.96, P.y) * (1. - smoothstep(.2, .24, P.y));
-  float th = 1. - smoothstep(-soft, soft, length((P - vec2(0., .38)) / vec2(.16, .24)) - 1.);
-  float hd = 1. - smoothstep(.12 - soft, .12 + soft, length(P - vec2(0., .66)));
+void dragonfly(vec2 P, float blur, float seed, out vec3 col, out float body, out float wing){
+  float soft = min(fwidth(P.x) * 1.1, .04);
+  // abdomen: a rod from the tail to the waist, slightly clubbed toward the tip, pinched at the waist
+  float u = (P.y + 1.) / 1.22;                       // 0 tail tip … 1 waist
+  float aw = .062 * (1. - smoothstep(.15, 0., u) * .5) * (1. + .25 * sin(u * 3.14159)) * (1. - smoothstep(.85, 1., u) * .35);
+  float abd = aa(abs(P.x) - aw, soft) * aa(-P.y - 1., soft) * aa(P.y - .22, soft);
+  float th = aa(length((P - vec2(0., .40)) / vec2(.14, .21)) - 1., soft * 6.);
+  float hd = aa(length((P - vec2(0., .66)) / vec2(.115, .10)) - 1., soft * 6.);
   float eye = 0.;
-  for (int k = -1; k <= 1; k += 2) eye = max(eye, 1. - smoothstep(.085 - soft, .085 + soft, length(P - vec2(float(k) * .08, .68))));
+  for (int k = -1; k <= 1; k += 2) eye = max(eye, aa(length(P - vec2(float(k) * .075, .675)) - .08, soft));
   body = max(max(abd, th), max(hd, eye));
-  // the species, by seed: an emperor's sky blue, a darter's red, a metallic green
-  vec3 abdC, thC;
-  if (vSeed < .4) { abdC = vec3(.30, .58, .95); thC = vec3(.22, .48, .36); }
-  else if (vSeed < .7) { abdC = vec3(.86, .22, .12); thC = vec3(.42, .26, .16); }
-  else { abdC = vec3(.16, .62, .48); thC = vec3(.12, .38, .30); }
-  // segments: a dark ring between each
-  float seg = smoothstep(.36, .46, abs(fract((P.y + 1.) * 7.5) - .5));
-  vec3 c = abdC * (1. - .6 * seg * smoothstep(.2, -.9, P.y));
-  // a dark dorsal stripe down the abdomen, and a rounded highlight along it
-  c = mix(c, c * .35, (1. - smoothstep(.0, .022 + soft, abs(P.x))) * .8);
-  c += uSunCol * pow(max(0., 1. - abs(P.x) / aw), 3.) * .25;
-  c = mix(c, thC * (.8 + .4 * (1. - abs(P.x) / .16)), th * (1. - abd));
-  c = mix(c, vec3(.10, .12, .08), hd * (1. - th));
-  vec3 eyeC = vSeed < .4 ? vec3(.25, .55, .45) : vSeed < .7 ? vec3(.45, .25, .15) : vec3(.2, .5, .3);
-  c = mix(c, eyeC, eye);
-  for (int k = -1; k <= 1; k += 2) c += vec3(.9) * (1. - smoothstep(0., .03, length(P - vec2(float(k) * .08 - .02, .70)))) * eye * .8;
+  // the species, by seed: an emperor's dusty blue, a darter's brick red, a demoiselle's bottle green
+  vec3 abdC, thC, eyeC;
+  if (seed < .4) { abdC = vec3(.36, .55, .78); thC = vec3(.30, .48, .40); eyeC = vec3(.30, .52, .55); }
+  else if (seed < .7) { abdC = vec3(.72, .28, .18); thC = vec3(.44, .30, .22); eyeC = vec3(.48, .30, .22); }
+  else { abdC = vec3(.18, .48, .40); thC = vec3(.14, .34, .30); eyeC = vec3(.22, .44, .36); }
+  // segments: a fine dark ring at each joint, and a dark dorsal stripe that widens toward the tail
+  float seg = 1. - smoothstep(.0, .05 + soft, abs(fract(u * 10.) - .5) * .1);
+  float stripe = 1. - smoothstep(.0, .02 + soft, abs(P.x) - .018 * (1. - u * .5));
+  vec3 c = abdC * (1. - .45 * seg) ;
+  c = mix(c, c * .35, stripe * .75);
+  // a rounded body: the sun on its near side, the far side falling away
+  float nx = clamp(P.x / max(aw, .02), -1., 1.);
+  vec3 n = normalize(vec3(nx * 1.1, 0., 1.));
+  float lam = max(dot(n, normalize(uSun)), 0.);
+  c *= .55 + .55 * lam;
+  c += uSunCol * pow(max(0., 1. - abs(nx)), 5.) * .12;
+  // thorax with pale stripes, head dark, eyes glossy
+  float tstripe = 1. - smoothstep(.0, .02 + soft, abs(abs(P.x) - .07) - .012);
+  vec3 tc = mix(thC, thC * 1.5, tstripe * .5) * (.6 + .5 * lam);
+  c = mix(c, tc, th * (1. - abd * .5));
+  c = mix(c, vec3(.10, .11, .08), hd * (1. - th * .3));
+  c = mix(c, eyeC * (.7 + .5 * lam), eye);
+  for (int k = -1; k <= 1; k += 2) c += vec3(.8) * aa(length(P - vec2(float(k) * .075 - .025, .70)) - .022, soft) * eye * .7;
   // wings: hinged at the thorax, straight out to the sides; the hind pair broader at the base
   wing = 0.;
   float vein = 0.;
   float stig = 0.;
+  float glint = 0.;
   for (int k = -1; k <= 1; k += 2) {
     float s = float(k);
-    vec2 fw = rot(vec2(P.x * s - .56, P.y - .47), .10);
-    vec2 hw = rot(vec2(P.x * s - .54, P.y - .29), -.14);
-    float fr = length(fw / vec2(.43, .095 + blur * .05));
-    float hr = length(hw / vec2(.44, mix(.17, .09, smoothstep(-.44, .44, hw.x)) + blur * .06));
-    float wf = 1. - smoothstep(1. - soft * 3., 1. + soft * 3., fr);
-    float wh = 1. - smoothstep(1. - soft * 3., 1. + soft * 3., hr);
+    vec2 fw = rot(vec2(P.x * s - .55, P.y - .49), .09);
+    vec2 hw = rot(vec2(P.x * s - .53, P.y - .32), -.13);
+    float fy = .085 + blur * .07;
+    float hy = mix(.16, .085, smoothstep(-.43, .43, hw.x)) + blur * .08;
+    float fr = length(fw / vec2(.43, fy));
+    float hr = length(hw / vec2(.44, hy));
+    float wf = aa(fr - 1., soft * 3. / .43 + blur * .25);
+    float wh = aa(hr - 1., soft * 3. / .44 + blur * .25);
     wing = max(wing, max(wf, wh));
-    // veins: cross veins along the wing, and a leading vein
-    vein = max(vein, (1. - smoothstep(.0, .04 + soft * 6., abs(fract(fw.x * 8.) - .5) * .125)) * wf);
-    vein = max(vein, (1. - smoothstep(.0, .04 + soft * 6., abs(fract(hw.x * 8.) - .5) * .125)) * wh);
-    vein = max(vein, (1. - smoothstep(.0, .012 + soft * 3., abs(fw.y - .05))) * wf);
-    vein = max(vein, (1. - smoothstep(.0, .012 + soft * 3., abs(hw.y + .02))) * wh);
+    // venation: cross veins every so often, a costa along the leading edge, a curve of longitudinals
+    float cross = 1. - smoothstep(.0, .02 + soft * 4., abs(fract(fw.x * 9.) - .5) * .111);
+    float costa = 1. - smoothstep(.0, .012 + soft * 2., abs(fw.y - fy * .8 + fw.x * .02));
+    float longi = 1. - smoothstep(.0, .012 + soft * 2., abs(fract(fw.y * 14.) - .5) * .07);
+    vein = max(vein, max(cross * .5, max(costa, longi * .35)) * wf);
+    cross = 1. - smoothstep(.0, .02 + soft * 4., abs(fract(hw.x * 9.) - .5) * .111);
+    costa = 1. - smoothstep(.0, .012 + soft * 2., abs(hw.y - hy * .8));
+    longi = 1. - smoothstep(.0, .012 + soft * 2., abs(fract(hw.y * 14.) - .5) * .07);
+    vein = max(vein, max(cross * .5, max(costa, longi * .35)) * wh);
     // the pterostigma: a small dark cell near each tip
-    stig = max(stig, (1. - smoothstep(-soft * 4., soft * 4., length((fw - vec2(.30, .05)) / vec2(.055, .025)) - 1.)) * wf);
+    stig = max(stig, aa(length((fw - vec2(.30, fy * .45)) / vec2(.05, .02)) - 1., soft * 12.) * wf);
+    // the sun on the membrane: a soft band that walks along as the wing tilts
+    glint = max(glint, (.5 + .5 * sin(fw.x * 6. + uTime * 4. * (1. + blur * 6.) + seed * 9.)) * wf);
+    glint = max(glint, (.5 + .5 * sin(hw.x * 6. - uTime * 3.5 * (1. + blur * 6.) + seed * 4.)) * wh * .8);
   }
-  wing *= smoothstep(.10, .15, abs(P.x));
-  vein *= 1. - blur * .7;
-  // clear membrane, a warm rainbow sheen in the sun, veins brown
-  vec3 wc = mix(vec3(.92, .96, 1.), vec3(.42, .34, .22), vein * .7);
-  wc = mix(wc, vec3(.35, .22, .12), stig * .9);
-  float wa = mix(.5, .22, blur) * (.6 + .4 * vein) + stig * .6;
-  // where there is body, body; else wing
+  wing *= smoothstep(.09, .14, abs(P.x));
+  vein *= 1. - blur * .85;
+  // a clear membrane, faintly smoky, iridescent where the sun strikes; veins brown
+  vec3 wc = mix(vec3(.86, .90, .92), vec3(.40, .33, .24), vein * .75);
+  wc += uSunCol * glint * glint * .35 * (1. - vein);
+  wc += vec3(.15, .05, .2) * glint * (1. - glint) * .4;
+  wc = mix(wc, vec3(.32, .20, .12), stig * .9);
+  float wa = mix(.30, .11, blur) * (.7 + .3 * vein) + stig * .55 + glint * glint * .12 * (1. - blur * .5);
   col = mix(wc, c, body);
   wing = wing * (1. - body) * wa;
 }
 /**
- * A BUTTERFLY from above: a small dark body, two pairs of broad wings. The wings
- * lift about the body as they beat, so from above they narrow to a line when
- * closed and show their paler underside.
+ * A BUTTERFLY from above: a small furred body, antennae, two pairs of broad
+ * wings. The wings lift about the body as they beat, so from above they narrow
+ * as they close and the paler underside shows; in a turn one side lifts more.
+ * The species are the ones a child would know from a garden.
  */
-void butterfly(vec2 P, float kind, float close, out vec3 col, out float body, out float wing){
-  float soft = min(fwidth(P.x) * 1.2, .05);
-  float bw = .07;
-  float bd = (1. - smoothstep(bw - soft, bw + soft, abs(P.x))) * smoothstep(-.42, -.38, P.y) * (1. - smoothstep(.36, .40, P.y));
-  float hd = 1. - smoothstep(.07 - soft, .07 + soft, length(P - vec2(0., .42)));
+void butterfly(vec2 P, float kind, float close, float turn, float seed, out vec3 col, out float body, out float wing){
+  float soft = min(fwidth(P.x) * 1.1, .04);
+  float bw = .055 * (1. + .4 * (1. - smoothstep(.0, .3, abs(P.y - .1))));
+  float bd = aa(abs(P.x) - bw, soft) * aa(-.40 - P.y, soft) * aa(P.y - .36, soft);
+  float hd = aa(length(P - vec2(0., .41)) - .065, soft);
   float ant = 0.;
-  for (int k = -1; k <= 1; k += 2) ant = max(ant, 1. - smoothstep(.0, .012 + soft, sdSeg2(P, vec2(0., .46), vec2(float(k) * .22, .86))));
-  body = max(bd, max(hd, ant * .9));
-  // the wings fold up about the body axis: the flat shape, seen foreshortened
-  float open = max(cos(close * 1.5708), .06);
+  for (int k = -1; k <= 1; k += 2) {
+    float s = float(k);
+    ant = max(ant, aa(sdSeg2(P, vec2(0., .45), vec2(s * .20, .84)) - .009, soft));
+    ant = max(ant, aa(length(P - vec2(s * .20, .84)) - .018, soft));
+  }
+  body = max(bd, max(hd, ant));
+  // the wings fold up about the body axis; the side on the inside of a turn lifts more
+  float side = sign(P.x);
+  float cl = clamp(close + turn * side * .18, 0., 1.);
+  float open = max(cos(cl * 1.5708), .05);
   vec2 W = vec2(abs(P.x) / open, P.y);
-  // fore wing: a broad blade angled forward, squarer at the tip; hind wing: rounder, tucked behind
-  vec2 f = rot(W - vec2(.46, .24), -.32);
-  float fr = length(f / vec2(.50, .33));
-  fr = mix(fr, max(abs(f.x) / .50, abs(f.y) / .33), .35);
-  vec2 h = W - vec2(.38, -.24);
-  float hr = length(h / vec2(.40, .33));
-  float wf = 1. - smoothstep(1. - soft * 3., 1. + soft * 3., fr);
-  float wh = 1. - smoothstep(1. - soft * 3., 1. + soft * 3., hr);
-  wing = max(wf, wh) * smoothstep(.03, .07, W.x);
-  float u = W.x;                       // toward the tip
-  float edge = max(wf * fr, wh * hr);  // ~1 at the margin
+  // fore wing: a blade angled forward with a squarer tip and a gently concave trailing edge
+  vec2 f = rot(W - vec2(.47, .22), -.30);
+  float fr = length(f / vec2(.50, .31));
+  fr = mix(fr, max(abs(f.x) / .50, abs(f.y) / .31), .3);
+  fr += smoothstep(.2, .8, f.x / .5) * smoothstep(.0, -.4, f.y / .31) * .10; // the trailing edge sweeps in
+  // hind wing: rounder, tucked behind, a softly scalloped margin
+  vec2 h = W - vec2(.36, -.25);
+  float ha = atan(h.y, h.x);
+  float hr = length(h / vec2(.38, .33)) * (1. + .025 * sin(ha * 9. + seed * 7.));
+  float wf = aa(fr - 1., soft * 3.);
+  float wh = aa(hr - 1., soft * 3.);
+  float wings = max(wf, wh) * smoothstep(.02, .06, W.x);
+  float edge = max(wf * fr, wh * hr);
+  float u = W.x;
+  // veins radiating from the root
+  float av = atan(W.y - .05, W.x);
+  float vein = (1. - smoothstep(.0, .025 + soft * 3., abs(fract(av * 3.2 + seed) - .5) * .3)) * smoothstep(.15, .3, u);
+  vein = max(vein, (1. - smoothstep(.0, .02 + soft * 3., abs(fract((W.y + .25) * 6.) - .5) * .16)) * wh * smoothstep(.15, .3, u) * .6);
   vec3 base, mark = vec3(0.), under;
   float pat = 0.;
   if (kind < 1.5) {
-    // small tortoiseshell: orange, dark at the base and along the leading edge, blue crescents in a dark border
-    base = vec3(.92, .46, .10);
-    under = vec3(.32, .22, .12);
-    mark = vec3(.12, .08, .05);
-    pat = smoothstep(.34, .16, u) + smoothstep(.55, .62, W.y) * wf + smoothstep(.84, .9, edge);
-    float dots = 1. - smoothstep(.0, .05, abs(fract(atan(f.y, f.x) * 2.2) - .5) * .4 + abs(edge - .87) * 1.6);
-    base = mix(base, vec3(.35, .55, .95), dots * smoothstep(.8, .86, edge));
-    base = mix(base, vec3(.98, .92, .6), (1. - smoothstep(.0, .05, length(W - vec2(.62, .48)))) * wf);
+    // small tortoiseshell: tawny orange; the base and the fore wing's leading edge dark, a dark
+    // border set with blue crescents, two pale patches near the tip
+    base = vec3(.82, .46, .16);
+    under = vec3(.30, .22, .14);
+    mark = vec3(.14, .09, .06);
+    pat = smoothstep(.36, .16, u) * .9 + smoothstep(.50, .60, W.y + u * .15) * wf * .95 + smoothstep(.82, .9, edge);
+    float cres = 1. - smoothstep(.0, .06, abs(fract(av * 4.5) - .5) * .35 + abs(edge - .86) * 1.4);
+    base = mix(base, vec3(.42, .58, .88), cres * smoothstep(.78, .86, edge) * .85);
+    base = mix(base, vec3(.96, .90, .68), aa(length(W - vec2(.62, .44)) - .05, soft * 4.) * wf * .9);
+    base = mix(base, vec3(.14, .09, .06), aa(length(W - vec2(.42, .33)) - .04, soft * 4.) * wf * .8);
   } else if (kind < 2.5) {
-    // cabbage white: cream, a black tip and a spot on each fore wing
-    base = vec3(.96, .96, .90);
-    under = vec3(.88, .86, .62);
-    mark = vec3(.12);
-    pat = smoothstep(.78, .88, u + W.y * .35) * wf + (1. - smoothstep(.04, .08, length(W - vec2(.52, .30)))) * wf;
+    // cabbage white: chalk white warming toward the body, a smoky tip and a spot on each fore wing
+    base = vec3(.94, .94, .89) * (.9 + .1 * smoothstep(.5, .1, u));
+    under = vec3(.86, .84, .62);
+    mark = vec3(.22, .20, .18);
+    pat = smoothstep(.76, .92, u + W.y * .4) * wf * .85 + aa(length(W - vec2(.52, .30)) - .05, soft * 4.) * wf * .7;
   } else if (kind < 3.5) {
-    // common blue: violet-blue, a thin dark margin and a white fringe; grey and spotted beneath
-    base = vec3(.36, .42, .92);
-    under = vec3(.62, .58, .48);
-    mark = vec3(.08);
-    pat = smoothstep(.86, .92, edge) * (1. - smoothstep(.95, .99, edge));
-    base = mix(base, vec3(.95), smoothstep(.95, .99, edge));
-    float spots = 1. - smoothstep(.0, .04, abs(fract(u * 4.2 + W.y * 2.) - .5) * .25 - .02);
-    under = mix(under, vec3(.2, .15, .1), spots * .7);
+    // common blue: a lilac blue with a fine dark margin and a white fringe; grey-buff beneath, spotted
+    base = vec3(.46, .50, .80);
+    under = vec3(.60, .56, .46);
+    mark = vec3(.10, .09, .10);
+    pat = smoothstep(.87, .93, edge) * (1. - smoothstep(.95, .99, edge)) * .85;
+    base = mix(base, vec3(.92), smoothstep(.95, .99, edge));
+    float spots = aa(abs(fract(av * 3. + .2) - .5) * .35 + abs(edge - .6) * 1.2 - .04, soft * 3.);
+    under = mix(under, vec3(.24, .18, .12), spots * .7);
   } else {
-    // brimstone: lemon yellow, pointed wings, one orange spot apiece
-    base = vec3(.96, .90, .38);
-    under = vec3(.82, .84, .50);
-    mark = vec3(.7, .5, .1);
-    pat = (1. - smoothstep(.05, .08, length(W - vec2(.52, .28)))) * wf + (1. - smoothstep(.04, .07, length(W - vec2(.44, -.22)))) * wh;
+    // brimstone: a pale sulphur, leaf-veined, one small orange spot on each wing
+    base = vec3(.90, .87, .52);
+    under = vec3(.80, .82, .56);
+    mark = vec3(.82, .52, .18);
+    pat = aa(length(W - vec2(.52, .27)) - .045, soft * 4.) * wf + aa(length(W - vec2(.40, -.24)) - .035, soft * 4.) * wh;
   }
   vec3 wc = mix(base, mark, clamp(pat, 0., 1.));
-  // as the wings close, the underside shows and the light on them changes
-  wc = mix(wc, under, smoothstep(.55, .9, close));
-  wc *= .8 + .35 * open;
-  // the wing's own veins, faint
-  wc *= 1. - .1 * (1. - smoothstep(.0, .02 + soft * 3., abs(fract(u * 5.) - .5) * .2));
-  col = mix(wc, vec3(.16, .12, .08), body);
+  wc *= 1. - vein * .18;
+  // scales are darker where the wing meets the body, and the margin is a shade deeper everywhere
+  wc *= 1. - .25 * smoothstep(.22, .05, u) - .12 * smoothstep(.9, 1., edge);
+  // as the wings close the underside shows; a raised wing takes the sun on one face only
+  wc = mix(wc, under, smoothstep(.5, .9, cl));
+  float lit = .7 + .35 * open + .15 * side * sign(uSun.x) * (1. - open);
+  wc *= lit;
+  col = mix(wc, vec3(.17, .13, .09), body);
   col = mix(col, vec3(.10, .08, .05), hd * .5);
-  wing = wing * (1. - body) * .96;
+  wing = wings * (1. - body) * .97;
 }
 void main(){
-  float kind = vB.x, wingP = vB.y, alpha = vB.w;
+  float kind = vB.x, wingP = vB.y, h = vB.z, alpha = vB.w;
+  float seed = vC.x, turn = vC.y;
   vec3 col; float body, wing;
-  if (kind < .5) dragonfly(vQ, wingP, col, body, wing);
-  else butterfly(vQ, kind, wingP, col, body, wing);
+  if (kind < .5) dragonfly(vQ, wingP, seed, col, body, wing);
+  else butterfly(vQ, kind, wingP, turn, seed, col, body, wing);
   float cover = max(body, wing);
   if (cover < .003) discard;
-  if (uShadow > .5) { o = vec4(0., 0., 0., (body + wing * (kind < .5 ? .3 : .7)) * .22 * alpha); return; }
-  col *= uAmb * .9 + uSunCol * (.55 + .35 * max(uSun.z, 0.)) + LAMP * lampAt(vec2(0.)) * 0.;
+  if (uShadow > .5) {
+    // higher up, the shadow is fainter and softer
+    float k = .26 / (1. + h * .9);
+    o = vec4(0., 0., 0., (body + wing * (kind < .5 ? .25 : .75)) * k * alpha);
+    return;
+  }
+  col *= uAmb * .85 + uSunCol * (.5 + .35 * max(uSun.z, 0.));
   o = vec4(col, 1.) * cover * alpha;
 }`;
 

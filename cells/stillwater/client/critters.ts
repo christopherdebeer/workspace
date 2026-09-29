@@ -31,6 +31,8 @@ export interface Critter {
   h: number;
   seed: number;
   alpha: number;
+  /** Turn rate, for the wings to bank into (butterflies). */
+  turn: number;
 }
 
 type Perch = { kind: 'pad'; pad: Pad; a: number } | { kind: 'bloom'; bloom: Bloom } | { kind: 'boat'; lx: number; ly: number } | null;
@@ -54,6 +56,10 @@ interface Bug {
   phase: number;
   wing: number;
   h: number;
+  /** Where it means to be, height-wise, and how fast it is climbing or sinking. */
+  th: number;
+  vh: number;
+  turn: number;
   alpha: number;
 }
 
@@ -87,9 +93,9 @@ export class Critters {
         x, y, vx: 0, vy: 0, heading: rnd(0, Math.PI * 2),
         kind: dragon ? 0 : 1 + Math.floor(Math.random() * 4),
         seed: Math.random(),
-        size: dragon ? rnd(10, 12) : rnd(7.5, 9),
+        size: dragon ? rnd(8, 9.5) : rnd(6, 7.2),
         mode: 'fly', until: 0, tx: x, ty: y, perch: null,
-        phase: rnd(0, 20), wing: 0, h: dragon ? 1 : 0.9, alpha: 0,
+        phase: rnd(0, 20), wing: 0, h: dragon ? 1 : 0.9, th: 1, vh: 0, turn: 0, alpha: 0,
       });
     }
   }
@@ -168,11 +174,16 @@ export class Critters {
           const a = b.heading + rnd(-0.8, 0.8);
           b.vx = Math.sin(a) * (dragon ? 60 : 20);
           b.vy = Math.cos(a) * (dragon ? 60 : 20);
+          b.vh = dragon ? 3 : 1.6; // it springs up as it leaves
+          b.th = dragon ? rnd(1, 2.2) : rnd(1.2, 2.2);
         } else {
           // settled: it rides whatever it sits on
           b.x = at[0]; b.y = at[1];
           b.heading += wrapAngle(at[2] - b.heading) * Math.min(1, dt * 6);
-          b.h += ((dragon ? 0.12 : 0.15) - b.h) * Math.min(1, dt * 4);
+          b.th = dragon ? 0.1 : 0.14;
+          b.vh += (b.th - b.h) * 18 * dt - b.vh * 6 * dt;
+          b.h = Math.max(0.05, b.h + b.vh * dt);
+          b.turn *= Math.max(0, 1 - dt * 5);
           if (dragon) b.wing += (0 - b.wing) * Math.min(1, dt * 6);
           else {
             // a settled butterfly opens and closes its wings at leisure, then holds them up
@@ -189,7 +200,7 @@ export class Critters {
       }
 
       if (b.alpha < 0.02) continue;
-      out.push({ x: b.x, y: b.y, heading: b.heading, size: b.size, kind: b.kind, wing: b.wing, h: b.h, seed: b.seed, alpha: b.alpha });
+      out.push({ x: b.x, y: b.y, heading: b.heading, size: b.size, kind: b.kind, wing: b.wing, h: b.h, seed: b.seed, alpha: b.alpha, turn: b.turn });
     }
     return out;
   }
@@ -210,6 +221,8 @@ export class Critters {
         }
         b.mode = 'fly';
         b.until = t + 4; // a dash ends on arrival; this is only a backstop
+        // a dash climbs or drops: low over the water hunting, high over the leaves passing through
+        b.th = toBoat ? rnd(1.4, 2.2) : Math.random() < 0.4 ? rnd(0.35, 0.8) : rnd(1, 2.6);
       } else {
         // a stop: hover, or settle on something close
         const perch = Math.random() < 0.5 ? this.perchNear(b, s, 34) : null;
@@ -222,6 +235,7 @@ export class Critters {
         b.mode = 'hover';
         b.until = t + rnd(0.5, 2.2);
         b.tx = b.x; b.ty = b.y;
+        b.th = Math.max(0.3, b.h + rnd(-0.5, 0.5));
       }
     }
     const dx = b.tx - b.x;
@@ -257,7 +271,11 @@ export class Critters {
     const speed = Math.hypot(b.vx, b.vy);
     if (speed > 8) b.heading += wrapAngle(Math.atan2(b.vx, b.vy) - b.heading) * Math.min(1, dt * 12);
     b.wing += (1 - b.wing) * Math.min(1, dt * 8);
-    b.h += (1.05 + 0.15 * Math.sin(t * 2.1 + b.seed * 8) - b.h) * Math.min(1, dt * 2);
+    // height: a spring toward where it means to be, with a little hunting about it
+    const want = b.th + 0.12 * Math.sin(t * 2.1 + b.seed * 8);
+    b.vh += (want - b.h) * 6 * dt - b.vh * 3.5 * dt;
+    b.h = Math.max(0.15, Math.min(3, b.h + b.vh * dt));
+    b.turn *= Math.max(0, 1 - dt * 6);
   }
 
   private stepButterfly(b: Bug, dt: number, t: number, f: Field, s: Scene, wx: number, wy: number) {
@@ -290,6 +308,8 @@ export class Critters {
       b.ty = Math.max(f.y - f.hh, Math.min(f.y + f.hh, target[1]));
       b.mode = 'fly';
       b.until = t + rnd(1.5, 4);
+      // each leg floats at its own height; a leg toward a flower comes down to it
+      b.th = target && r < 0.4 ? rnd(0.5, 0.9) : rnd(0.8, 2.2);
     }
     const dx = b.tx - b.x;
     const dy = b.ty - b.y;
@@ -307,14 +327,19 @@ export class Critters {
     }
     // a wandering heading that keeps bending back toward where it is going
     const want = Math.atan2(dx, dy);
-    b.heading += wrapAngle(want - b.heading) * Math.min(1, dt * 1.6) + Math.sin(t * 2.3 + b.seed * 17) * 1.4 * dt;
+    const dh = wrapAngle(want - b.heading) * Math.min(1, dt * 1.6) + Math.sin(t * 2.3 + b.seed * 17) * 1.4 * dt;
+    b.heading += dh;
+    b.turn += (Math.max(-1, Math.min(1, dh / Math.max(dt, 1e-3) / 2.5)) - b.turn) * Math.min(1, dt * 5);
     const sp = (16 + b.seed * 10) * (0.55 + 0.7 * Math.max(0, beat));
     const k = 1 - Math.exp(-4 * dt);
     b.vx += (Math.sin(b.heading) * sp + wx * 0.9 - b.vx) * k;
     b.vy += (Math.cos(b.heading) * sp + wy * 0.9 - b.vy) * k;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
-    b.h += (0.85 + 0.3 * beat - b.h) * Math.min(1, dt * 10);
+    // it rises on each stroke and sinks between, about a height that itself drifts;
+    // a fresh climb off a perch carries it well up before it settles to its cruising height
+    b.vh += (b.th - b.h) * 3 * dt - b.vh * 2 * dt;
+    b.h = Math.max(0.2, Math.min(3, b.h + b.vh * dt + 0.35 * beat * dt * 6));
   }
 
   private boatPerch(b: Bug, s: Scene): Perch {

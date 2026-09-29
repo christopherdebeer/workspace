@@ -718,6 +718,27 @@ function hit(sx: number, sy: number): Pad | null {
   return null;
 }
 
+/**
+ * A fingertip is not a point: a tap that lands just off a small dewy leaf was
+ * meant for it. Off every leaf, the nearest leaf with dew within a fingertip's
+ * slack (about 14 CSS px) counts as touched — a miss on the water would
+ * otherwise clear the child's whole selection.
+ */
+function hitOrNear(sx: number, sy: number): Pad | null {
+  const direct = hit(sx, sy);
+  if (direct) return direct;
+  const [wx, wy] = toWorld(sx, sy);
+  const slack = 14 / cam.zoom;
+  let best: Pad | null = null;
+  let bestD = slack;
+  for (const p of pond.pads) {
+    if (!liveCount(p)) continue;
+    const d = Math.hypot(wx - p.x, wy - p.y) - p.r * 0.97;
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
 function touchPad(p: Pad) {
   p.bob = 1;
   p.vx += (rand() - 0.5) * 6;
@@ -825,8 +846,18 @@ function nameSprites() {
 let helm: { t: number; x: number; y: number; moved: boolean; steer: number; sign: number; bias: number } | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean; wx: number; wy: number; last: number } | null = null;
 
+let pointerAt = 0;
 canvasEl.addEventListener('pointerdown', (e) => {
-  if (pointerId !== null) return;
+  // a second finger while one is down is ignored — unless the first was lost without an
+  // up (it happens on phones); then the new touch takes over rather than every tap dying
+  if (pointerId !== null) {
+    if (performance.now() - pointerAt < 1500 || helm || drag?.moved) return;
+    pointerId = null;
+    helm = null;
+    drag = null;
+    lastHit = null;
+  }
+  pointerAt = performance.now();
   armSound();
   if (!started) {
     // a name on a leaf: that child begins. Anything else is just the river, touched
@@ -841,7 +872,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   pointerId = e.pointerId;
   canvasEl.setPointerCapture(e.pointerId);
   const [bwx, bwy] = toWorld(e.clientX, e.clientY);
-  const hitPad = hit(e.clientX, e.clientY);
+  const hitPad = hitOrNear(e.clientX, e.clientY);
   // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
   if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && liveCount(hitPad)))) {
     // where on the boat: across (a tap there leans on that oar) and fore or aft of the

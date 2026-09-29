@@ -891,7 +891,7 @@ export class Renderer {
     let n = 0;
     for (const c of list) {
       if (n >= 24) break;
-      this.critterInst.set(n++, c.x, c.y, c.heading, c.size, c.kind, c.wing, c.h, c.alpha, c.seed, 0, 0, 0);
+      this.critterInst.set(n++, c.x, c.y, c.heading, c.size, c.kind, c.wing, c.h, c.alpha, c.seed, c.turn, 0, 0);
     }
     this.critterInst.count = n;
     this.critterInst.upload();
