@@ -14,7 +14,13 @@
     h1 { font-size: 12px; font-weight: normal; letter-spacing: 7px; margin: 0 0 16px; opacity: .7; transition: opacity 4s, margin 4s, font-size 4s; }
     h1.quiet { opacity: .28; }
     .target { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 14px; transition: opacity 1.2s, transform 1.2s; }
-    .target.arrive { opacity: 0; transform: translateY(-6px); }
+    .target.arrive { opacity: 0; transform: translateY(12px) scale(.9); }
+    /* solved: the ask lifts away at once, so nothing is left to keep answering */
+    .target.done { opacity: 0; transform: translateY(-18px) scale(1.08); transition-duration: .55s, .55s; }
+    .target.done i { background: #fdf6cc; box-shadow: 0 0 14px #f9e9a3; }
+    /* a new ask arrives with a breath of light, so it reads as new even when the number is the same */
+    .target.numeral b.fresh { animation: fresh 1.6s ease-out; }
+    @keyframes fresh { 0% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } 25% { text-shadow: 0 0 22px rgba(253, 246, 204, .95), 0 0 6px rgba(253, 246, 204, .9); } 100% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } }
     .target i { width: 7px; height: 7px; border: 1px solid rgba(240, 236, 190, .8); border-radius: 50%; transition: background .6s, box-shadow .6s, transform .6s; }
     .target i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
     .target i.blank { border-color: rgba(240, 236, 190, .18); }

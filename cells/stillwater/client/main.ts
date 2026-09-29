@@ -382,7 +382,7 @@ function setTarget() {
   const support = 1 - smooth(st.difficulty - 0.02, st.difficulty + 0.3, mastery);
   ui.setTarget(t, st.display, st.id === 'times' ? support * 0.5 : support);
   const w = N.numberWord(t.value);
-  ui.say(bond ? `${w} · in two leaves` : again ? (st.rule === 'groups' ? `${w} · the other way round` : `${w} · another way`) : N.hintFor(st, t, firstTarget), firstTarget ? 9 : 5);
+  ui.say(bond ? `${w} · in two leaves` : again ? (st.rule === 'groups' ? `${w} again · the other way round` : `${w} again · another way`) : N.hintFor(st, t, firstTarget), firstTarget ? 9 : 5);
   firstTarget = false;
   plantDue();
 }
@@ -614,6 +614,7 @@ function solve() {
   const chosenPads = selection.slice();
   const others = counts(visibleDewy().filter((q) => !q.selected));
   sound.gathered();
+  ui.solved();
   let k = 0;
   for (const p of selection) {
     const c = Math.cos(p.ang);

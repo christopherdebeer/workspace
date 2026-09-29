@@ -40,8 +40,10 @@ export class Overlay {
     el.innerHTML = '';
     this.dots = [];
     this.bar = null;
+    el.classList.remove('done');
     const num = document.createElement('b');
     num.textContent = String(t.value);
+    num.className = 'fresh';
     el.appendChild(num);
     const dot = () => {
       const i = document.createElement('i');
@@ -85,6 +87,21 @@ export class Overlay {
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('arrive')));
     this.progress(0);
   }
+
+  /** Answered: the ask lifts away at once (a child kept answering a number that lingered). */
+  solved() {
+    const el = this.target;
+    this.dots.forEach((d) => d.classList.add('on'));
+    el.classList.add('done');
+    const gen = ++this.solvedGen;
+    window.setTimeout(() => {
+      if (gen !== this.solvedGen) return;
+      this.clearTarget();
+      el.classList.remove('done');
+    }, 600);
+    this.live.textContent = 'Yes.';
+  }
+  private solvedGen = 0;
 
   progress(n: number) {
     this.dots.forEach((d, i) => d.classList.toggle('on', i < n));
