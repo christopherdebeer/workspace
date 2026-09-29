@@ -99,8 +99,16 @@ void main(){
 const RIVER = /* glsl */ `
 uniform vec2 uChan[33];
 uniform vec2 uChan2[33];
+uniform vec4 uReach[33]; // open, shade, turbidity, maturity
 uniform vec2 uSpanY;
 uniform float uDepthK;
+// the character of the river here (see Reach in world.ts)
+vec4 reachAt(float y){
+  float f = clamp((y - uSpanY.x) / (uSpanY.y - uSpanY.x), 0., 1.) * 32.;
+  float fi = min(floor(f), 31.);
+  int i = int(fi);
+  return mix(uReach[i], uReach[i + 1], f - fi);
+}
 vec2 chanAt(float y){
   float f = clamp((y - uSpanY.x) / (uSpanY.y - uSpanY.x), 0., 1.) * 32.;
   float fi = min(floor(f), 31.);
@@ -161,13 +169,15 @@ const float CANOPY_H = 6.;
 float canopyAt(vec2 q){
   vec2 ch = armAt(q);
   float off = abs(q.x - ch.x);
-  // the trees overhang the banks; the run itself is open to the sky
-  float reach = smoothstep(ch.y * .55, ch.y + 150., off);
+  // the trees overhang the banks; how far they reach over the water is the reach's:
+  // in a shaded run they close over most of it, in an open pool they stay on the banks
+  float sh = reachAt(q.y).y;
+  float reach = smoothstep(ch.y * mix(1.05, .12, sh), ch.y + mix(260., 70., sh), off);
   float big = texture(uNoise, q / 760.).r;
   float mid = texture(uNoise, q / 170. + 3.1).g;
   float fine = texture(uNoise, q / 36. + uTime * vec2(.004, .002)).r;
   float leaf = texture(uNoise, q / 11. + uTime * vec2(.006, .003)).b;
-  float v = reach * 1.2 + (big - .5) * .8 + (mid - .5) * .55 + (fine - .5) * .35 + (leaf - .5) * .18 - .5;
+  float v = reach * 1.2 + (sh - .5) * .5 + (big - .5) * .8 + (mid - .5) * .55 + (fine - .5) * .35 + (leaf - .5) * .18 - .5;
   // crisp at the leaf edges: a silhouette, not a blur
   return smoothstep(0., .07, v);
 }
@@ -303,12 +313,14 @@ void main(){
   // caustics drift downstream with the surface that makes them, sharper in the shallows
   vec2 cu = (wp - fl * uTime * .6) / 256.;
   float c = caustic(cu, uTime * .35) * 1.9 + caustic(cu * 2. + .37, uTime * .27) * .8;
-  c = pow(c, mix(.8, 1.4, depth - .3)) * light * (1.35 - depth * .7);
+  float turb = reachAt(wp.y).z;
+  c = pow(c, mix(.8, 1.4, depth - .3)) * light * (1.35 - depth * .7) * mix(1.25, .45, turb);
   vec3 lit = col * (uAmb * .75 + uSunCol * (.42 + c * 1.15) * light + LAMP * lampAt(wp) * .8);
 
-  // the water column: red goes first, then blue — deep water turns to green-black
-  vec3 absorb = exp(-depth * vec3(1.6, .8, 1.0));
-  vec3 deep = uAmb * vec3(.05, .21, .19);
+  // the water column: red goes first, then blue — deep water turns to green-black;
+  // turbid water loses the bed much sooner, and old water is tea-dark with tannin
+  vec3 absorb = exp(-depth * mix(.7, 2.6, turb) * vec3(1.6, .8, 1.0));
+  vec3 deep = mix(uAmb * vec3(.05, .21, .19), uAmb * vec3(.17, .13, .05), turb * .8);
   o = vec4(lit * absorb + deep * (1. - absorb), 1.);
 }`;
 
@@ -555,9 +567,10 @@ float shapeD(vec2 p){
   float h = clamp(.5 + .5 * (slit - d) / k, 0., 1.);
   d = mix(d, slit, h) + k * h * (1. - h);
   // an insect's nibble or two out of the margin
-  for (int i = 0; i < 2; i++) {
+  float ageN = uMode < 1.5 ? vC.z : .5;
+  for (int i = 0; i < 3; i++) {
     float hi = fract(seed * (13.1 + float(i) * 7.7));
-    if (hi < .55) continue;
+    if (hi < .35 + .5 * (1. - ageN)) continue;
     float ba = (hi - .55) / .45 * TAU * .8 + .4;
     vec2 c0 = vec2(sin(ba), cos(ba)) * (.97 + .03 * hi);
     float rb = .04 + .07 * fract(hi * 9.1);
@@ -609,13 +622,21 @@ vec3 albedo(vec2 p, float len, float vein){
   float cellv = texture(uNoise, p * 1.3 + so * 1.7).b;
   // three families of green, from deep emerald to spring lime
   float tint = vC.w;
+  // the leaf's age (its plant's, so a cluster is a family) and the reach's shade
+  float age = uMode < 1.5 ? vC.z : fract(seed * 7.31);
+  vec4 rc = reachAt(vW.y);
   vec3 dark = mix(vec3(.05, .18, .09), vec3(.12, .33, .12), smoothstep(.25, .7, tint));
   vec3 lite = mix(vec3(.14, .36, .15), vec3(.50, .68, .22), smoothstep(.5, 1., tint));
   vec3 c = mix(dark, lite, .2 + .6 * n);
   c = mix(c, vec3(.62, .74, .30), smoothstep(.6, .95, n2) * .22);
+  // young growth is yellow-green and thin; old leaves go olive; leaves in shade cool
+  // toward blue-green; and none of it is as electric as it was — the bright leaf is an event
+  c = mix(c, vec3(.58, .68, .26), (1. - smoothstep(0., .3, age)) * .35);
+  c = mix(c, vec3(.31, .35, .14), smoothstep(.55, 1., age) * .4);
+  c = mix(c, vec3(.07, .26, .23), rc.y * .32);
+  c = mix(vec3(dot(c, vec3(.3, .59, .11))), c, .86 - .12 * rc.y);
   // soft areoles between the veinlets, not a pattern — just the surface breathing
   c *= .94 + .1 * smoothstep(.05, .35, cellv);
-  float age = fract(seed * 7.31);
   c = mix(c, vec3(.62, .57, .25), smoothstep(.6, .85, texture(uNoise, p * .2 + so * 4.).g) * max(0., age - .5) * 1.2);
   float spot = 1. - smoothstep(.02, .06, texture(uNoise, p * 1.2 + so * 6.).b);
   c = mix(c, vec3(.33, .25, .10), spot * step(.84, age) * .5);
@@ -926,7 +947,7 @@ void main(){
   gl_Position = vec4(clip, 0., 1.);
 }`;
 
-export const WEED_FS = /* glsl */ `${HEAD}${COMMON}
+export const WEED_FS = /* glsl */ `${HEAD}${COMMON}${RIVER}
 in vec2 vQ;
 in vec4 vB;
 in vec2 vUv;
@@ -955,8 +976,10 @@ void main(){
   float shade = 1. - texture(uOcc, vUv).r * .6;
   col *= (uAmb * .9 + uSunCol * .6) * shade;
   float d = depth * (1. - .35 * tipK);
-  vec3 absorb = exp(-d * vec3(1.6, .8, 1.0));
-  col = col * absorb + uAmb * vec3(.05, .21, .19) * (1. - absorb);
+  // the world y of this fragment, back from the screen (the weed program has no world varying)
+  float turbW = reachAt(uView.y + (vUv.y * 2. - 1.) / uView.w).z;
+  vec3 absorb = exp(-d * mix(.7, 2.6, turbW) * vec3(1.6, .8, 1.0));
+  col = col * absorb + mix(uAmb * vec3(.05, .21, .19), uAmb * vec3(.17, .13, .05), turbW * .8) * (1. - absorb);
   o = vec4(col, 1.) * cover * .92;
 }`;
 

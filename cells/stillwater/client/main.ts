@@ -114,6 +114,11 @@ const rand = seeded(urlSeed || (Date.now() % 100000) + 7);
 const pond = new Pond(Math.floor(rand() * 1e9));
 /** `?pier=1`: a jetty just ahead at the start (to look at it, and to bump it). */
 pond.forcePier = !!params.get('pier');
+/** `?at=Y`: start that far down the river (to see its reaches). */
+if (params.get('at')) {
+  pond.origin = Number(params.get('at')) || 0;
+  pond.boat.x = pond.channel(0);
+}
 /** `?fork=N`: the river forks N units ahead of the start (to look at a fork, and to choose). */
 if (params.get('fork')) pond.nextForkY = pond.boat.y + pond.origin + Math.max(-600, Number(params.get('fork')) || 400);
 /**
@@ -1232,6 +1237,7 @@ Object.defineProperty(window, '__stillwater', {
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
     profile: profile?.name ?? null,
     fork: pond.forkState(),
+    reach: Object.fromEntries(Object.entries(pond.reachHere(pond.boat.y)).map(([k, v]) => [k, Math.round(v * 100) / 100])),
     names: nameSlots
       .filter((s) => s.pad)
       .map((s) => {

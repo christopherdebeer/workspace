@@ -97,6 +97,8 @@ export interface Pad {
   /** The plant's rhizome on the bed this leaf's stem rises from. */
   rx: number;
   ry: number;
+  /** This leaf's age, 0 young (small, yellow-green) … 1 old (large, olive, torn). */
+  age: number;
   /** Draw order within a layer. */
   layer: number;
 }
@@ -143,6 +145,8 @@ export interface Plant {
   x: number;
   y: number;
   seed: number;
+  /** The plant's age, 0 young … 1 old: its leaves are a family, sized and coloured together. */
+  age: number;
   /** Rhizome segments on the bed (angle, length). */
   arms: Array<[number, number]>;
 }
@@ -175,6 +179,33 @@ export interface Weed {
   seed: number;
   /** 0 ribbon grass, 1 feathery milfoil */
   kind: number;
+}
+
+/**
+ * The character of a stretch of river, each 0..1. It is sampled everywhere and
+ * changes slowly with Y, so the river has REACHES: a tight shaded run becomes
+ * a bright lily pool becomes a silty margin. Never a biome, never a level: a
+ * stretch has a character for a while, then slowly becomes something else.
+ */
+export interface Reach {
+  /** How broad and open the water is. */
+  open: number;
+  /** Age of the plant community: small young leaves … enormous battered ones. */
+  maturity: number;
+  /** Canopy over the water: open sky … deep shade. */
+  shade: number;
+  /** How much grows: plants, flowers, duckweed. */
+  fertility: number;
+  /** How quickly the bed disappears with depth; tannin-dark at the top end. */
+  turbidity: number;
+  /** Current energy: slack … a clear faster channel. */
+  flow: number;
+  /** Human traces (piers). */
+  human: number;
+  /** Flowering. */
+  flowering: number;
+  /** How much of the water the leaves cover. */
+  cover: number;
 }
 
 /** One arm of open water at a given y: its centre and half width (0 = no water). */
@@ -274,6 +305,22 @@ export const BOAT_LEN = 112;
 /** How fast a ripple front travels (world units/s), matched by eye to the GPU wave sim. */
 const RING_SPEED = 62;
 export const BOAT_BEAM = 40;
+
+/** The reaches the river passes through (see Reach). Blended, never switched. */
+const REACHES: Reach[] = [
+  // a tight shaded run under old trees: darker water, dense overhang
+  { open: 0.35, maturity: 0.6, shade: 0.9, fertility: 0.4, turbidity: 0.5, flow: 0.5, human: 0.1, flowering: 0.1, cover: 0.55 },
+  // a bright lily pool: the canopy opens, the river broadens, a handful of enormous plants
+  { open: 0.8, maturity: 0.85, shade: 0.12, fertility: 0.75, turbidity: 0.25, flow: 0.2, human: 0.3, flowering: 0.8, cover: 0.3 },
+  // a shallow silty margin: small pads, reeds, the bed in view
+  { open: 0.5, maturity: 0.2, shade: 0.35, fertility: 0.6, turbidity: 0.8, flow: 0.3, human: 0.2, flowering: 0.3, cover: 0.6 },
+  // old water: enormous battered leaves, tannin-dark, a weathered pier
+  { open: 0.4, maturity: 1, shade: 0.6, fertility: 0.5, turbidity: 0.7, flow: 0.12, human: 0.7, flowering: 0.15, cover: 0.85 },
+  // a clear faster channel: fewer pads, weed and fish
+  { open: 0.85, maturity: 0.4, shade: 0.3, fertility: 0.3, turbidity: 0.08, flow: 0.9, human: 0.1, flowering: 0.2, cover: 0.12 },
+  // a quiet flowering basin
+  { open: 0.6, maturity: 0.7, shade: 0.2, fertility: 1, turbidity: 0.3, flow: 0.15, human: 0.2, flowering: 1, cover: 0.5 },
+];
 
 type Rand = () => number;
 
@@ -411,6 +458,7 @@ export class Pond {
 
   constructor(seed: number) {
     this.rand = seeded(seed);
+    this.reachSalt = (seed % 977) * 0.0137;
     this.landmarkRand = seeded((seed ^ 0x51f15e) >>> 0);
     this.boat.x = this.channel(0);
     // a painter line off the stern, long enough to stream out and show the water
@@ -441,6 +489,49 @@ export class Pond {
   /** Absolute Y of the next fork. */
   nextForkY = 2600;
 
+  // ── reaches ──
+  private reachTable: Array<{ y0: number; L: number; blend: number; kind: number }> = [];
+  private reachSalt = 0;
+
+  private hash(n: number, k: number): number {
+    const v = Math.sin(n * 127.1 + k * 311.7 + this.reachSalt) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
+  private reachIndex(Y: number): number {
+    if (!this.reachTable.length) this.reachTable.push({ y0: -3000, L: 2400, blend: 500, kind: 1 }); // the river begins in a lily pool
+    for (;;) {
+      const last = this.reachTable[this.reachTable.length - 1];
+      if (Y < last.y0 + last.L) break;
+      const i = this.reachTable.length;
+      // never the same reach twice running; old water and the clear channel are rarer
+      let kind = (last.kind + 1 + Math.floor(this.hash(i, 1) * 5)) % 6;
+      if ((kind === 3 || kind === 4) && this.hash(i, 4) < 0.4) kind = (kind + 1) % 6;
+      this.reachTable.push({ y0: last.y0 + last.L, L: 1000 + 1100 * this.hash(i, 2), blend: 450 + 650 * this.hash(i, 3), kind });
+    }
+    let lo = 0;
+    while (lo < this.reachTable.length - 1 && Y >= this.reachTable[lo].y0 + this.reachTable[lo].L) lo++;
+    return lo;
+  }
+
+  /** The character of the river at an absolute Y, blended over 450–1,100 units between reaches. */
+  reachAt(Y: number): Reach {
+    const i = this.reachIndex(Y);
+    const r = this.reachTable[i];
+    const a = REACHES[r.kind];
+    const t = smooth(r.y0 + r.L - r.blend, r.y0 + r.L, Y);
+    if (t <= 0) return a;
+    const b = REACHES[this.reachTable[this.reachIndex(r.y0 + r.L)].kind];
+    const out = {} as Reach;
+    for (const k of Object.keys(a) as Array<keyof Reach>) out[k] = a[k] + (b[k] - a[k]) * t;
+    return out;
+  }
+
+  /** The reach at a world y. */
+  reachHere(y: number): Reach {
+    return this.reachAt(y + this.origin);
+  }
+
   /** The river's own line, before any fork (absolute Y). */
   private meander(Y: number): number {
     return 95 * Math.sin(Y / 1150) + 42 * Math.sin(Y / 430 + 1.3) + 16 * Math.sin(Y / 170 + 4.1);
@@ -460,7 +551,8 @@ export class Pond {
   }
 
   private halfAt(Y: number): number {
-    return 84 + 28 * Math.sin(Y / 760 + 0.4) + 14 * Math.sin(Y / 290 + 2.2);
+    // the river breathes on its own, and broadens through the open reaches
+    return (84 + 28 * Math.sin(Y / 760 + 0.4) + 14 * Math.sin(Y / 290 + 2.2)) * (0.55 + 0.9 * this.reachAt(Y).open);
   }
 
   /** The arms of open water at this y: one, or two through a fork. */
@@ -530,6 +622,11 @@ export class Pond {
     for (const f of this.forks) {
       if (f.chosen !== null || Y < f.y0 + f.L * 0.3) continue;
       const a = this.arms(this.boat.y);
+      if (a.length < 2) {
+        // a fork the boat is already past (a jump downstream): the river kept straight on
+        f.chosen = 0;
+        continue;
+      }
       f.chosen = Math.abs(this.boat.x - a[0].x) <= Math.abs(this.boat.x - a[1].x) ? 0 : 1;
       const from = f.y0 + f.L * 0.72 - this.origin;
       if (from < this.genY) this.regrow(this.halfW, from);
@@ -583,7 +680,8 @@ export class Pond {
     const d = 15 + rand() * 35;
     const arms: Array<[number, number]> = [];
     for (let k = 0, n = 2 + Math.floor(rand() * 3); k < n; k++) arms.push([rand() * Math.PI * 2, 14 + rand() * 26]);
-    const pl: Plant = { x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, seed: rand(), arms };
+    const age = clamp(this.reachHere(y).maturity + (rand() - 0.5) * 0.7, 0, 1);
+    const pl: Plant = { x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, seed: rand(), age, arms };
     this.plants.push(pl);
     return pl;
   }
@@ -955,19 +1053,39 @@ export class Pond {
       this.nextForkY += 1700 + 3500 + rand() * 4500;
     }
     const span = this.halfW * 2 + 200;
-    const attempts = Math.round(((y1 - y0) * span) / 260);
+    const reachMid = this.reachHere((y0 + y1) / 2);
+    const attempts = Math.round((((y1 - y0) * span) / 260) * (0.65 + 0.7 * reachMid.fertility));
     const near = this.pads.filter((p) => p.y > y0 - 160);
     for (let i = 0; i < attempts; i++) {
       const y = y0 + rand() * (y1 - y0);
+      const Y = y + this.origin;
+      const reach = this.reachHere(y);
       const x = this.fieldCentre(y) + (rand() * 2 - 1) * (this.halfW + 100);
       const arm = this.nearestArm(y, x);
       const cx = arm.x;
       const off = Math.abs(x - cx);
       const half = arm.half;
       const bank = off > half;
-      if (!bank && rand() > 0.035) continue;
+      // leaves on the water: how much they cover it is the reach's
+      if (!bank && rand() > 0.008 + 0.06 * reach.cover) continue;
+      // where a rhizome has died back there is a gap in the carpet (more where it is poor)
+      const gapField = 0.5 + 0.5 * Math.sin(x / 150 + Y / 260) * Math.sin(Y / 190 - x / 330);
+      if (bank && gapField < 0.6 * (1 - reach.fertility)) continue;
+      // open reaches keep broad empty water: the carpet stands back from it
+      if (bank && off < half + 220 && rand() < (reach.open - 0.45) * 0.9) continue;
       const deepness = smooth(half, half + 260, off);
-      const r = bank ? 26 + rand() * 34 + deepness * 34 * rand() : 22 + rand() * 14;
+      // the leaf's age comes from its plant (a family), the plant's from the reach:
+      // a few tiny emergent leaves, mostly middle-aged, the odd giant in old water
+      const plant = this.plantFor(x, y);
+      let age = clamp(plant.age + (rand() - 0.5) * 0.3, 0, 1);
+      if (rand() < 0.08) age = rand() * 0.12;
+      const young = 12 + rand() * 18;
+      const mid = 26 + rand() * 28;
+      const giant = 58 + rand() * 50;
+      let r = young + (mid - young) * smooth(0, 0.45, age);
+      r += (giant - r) * smooth(0.66, 1, age) * (0.5 + 0.5 * reach.maturity);
+      r += deepness * 12 * rand();
+      if (!bank) r *= 0.75;
       const spacing = bank ? 0.72 : 1.05;
       let ok = true;
       for (const p of near) {
@@ -982,7 +1100,6 @@ export class Pond {
       if (!ok) continue;
       const flower = 0;
       const count = this.dewFor(rand);
-      const plant = this.plantFor(x, y);
       const pad: Pad = {
         id: this.nextId++,
         x,
@@ -1020,6 +1137,7 @@ export class Pond {
         soak: 0,
         rx: plant.x,
         ry: plant.y,
+        age,
         layer: rand(),
       };
       pad.drops = layDrops(count, r, rand, count > 0 && this.patternFor(count, rand));

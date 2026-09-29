@@ -111,6 +111,8 @@ export class Renderer {
   private atlasRows: Array<{ u0: number; v0: number; u1: number; v1: number; aspect: number }> = [];
   private chan = new Float32Array(66);
   private chan2 = new Float32Array(66);
+  /** The reach per row: open, shade, turbidity, maturity. */
+  private reach = new Float32Array(132);
   private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
   private dropData = new Float32Array(DROP_COLS * MAX_DROP_ROWS * 4);
@@ -286,6 +288,7 @@ export class Renderer {
     }
     if (u.uChan) gl.uniform2fv(u.uChan, this.chan);
     if (u.uChan2) gl.uniform2fv(u.uChan2, this.chan2);
+    if (u.uReach) gl.uniform4fv(u.uReach, this.reach);
     if (u.uSpanY) gl.uniform2f(u.uSpanY, this.span[0], this.span[1]);
   }
 
@@ -314,6 +317,8 @@ export class Renderer {
       // the second arm through a fork (half 0 = none); its x follows the first so the mix stays sane
       this.chan2[i * 2] = arms[1]?.x ?? arms[0].x;
       this.chan2[i * 2 + 1] = arms[1]?.half ?? 0;
+      const rc = pond.reachHere(y);
+      this.reach.set([rc.open, rc.shade, rc.turbidity, rc.maturity], i * 4);
     }
 
     // ── instance data ──
@@ -355,7 +360,9 @@ export class Renderer {
       }
       // soft body: where it's pressed (and how far it gives), and its flex after a knock
       const flex = p.wob * Math.sin(f.time * 7 + p.seed * 30);
-      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, 0, (p.seed * 13.1) % 1, p.dx, p.dy, flex, p.sink);
+      // the leaf's age sets its green: young leaves lighter and yellower, old ones olive
+      const tint = Math.max(0, Math.min(1, 0.92 - p.age * 0.75 + ((p.seed * 13.1) % 1 - 0.5) * 0.25));
+      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, p.age, tint, p.dx, p.dy, flex, p.sink);
     }
     this.padInst.count = n;
     this.padInst.upload();
