@@ -422,7 +422,7 @@ export class Pond {
    */
   rings: Array<{ x: number; y: number; t: number; s: number }> = [];
   /** Water drops falling from a lifted blade (drawn as glints, landing as tiny rings). */
-  drips: Array<{ x: number; y: number; age: number; life: number }> = [];
+  drips: Array<{ x: number; y: number; age: number; life: number; vx?: number; vy?: number; spray?: boolean }> = [];
   /** Things that startle fish (main.ts relays them to the school). */
   startles: Array<{ x: number; y: number; r: number }> = [];
   /** Sounds the water made this step (main.ts plays them). */
@@ -1248,6 +1248,8 @@ export class Pond {
     for (const g of this.gusts) g.y -= s;
     for (const p of this.trail) p.y -= s;
     for (const p of this.puddles) p.y -= s;
+    for (const e of this.eddies) e.y -= s;
+    this.lastTip = [null, null];
     for (const r of this.rings) r.y -= s;
     for (const d of this.drips) d.y -= s;
     for (let i = 1; i < this.rope.length; i += 2) {
@@ -1485,6 +1487,18 @@ export class Pond {
   private lastTip: Array<[number, number] | null> = [null, null];
   puddles: Array<{ x: number; y: number; vx: number; vy: number; age: number; life: number; s: number }> = [];
   private shedAcc = 0;
+  eddies: Array<{ x: number; y: number; vx: number; vy: number; age: number; life: number; spin: number; s: number; phase: number }> = [];
+  private eddyAcc = 0;
+
+  private shedEddies(x: number, y: number, strength: number, hx: number, hy: number) {
+    for (const sign of [-1, 1]) this.eddies.push({
+      x: x + hy * sign * 5, y: y - hx * sign * 5,
+      vx: -hx * (8 + strength * 14), vy: -hy * (8 + strength * 14),
+      age: 0, life: 3.2 + Math.random() * 1.2, spin: sign,
+      s: strength, phase: Math.random() * Math.PI * 2,
+    });
+    if (this.eddies.length > 32) this.eddies.splice(0, this.eddies.length - 32);
+  }
 
 /** The pad covering a world point, if any (nearest centre wins). */
   padAt(x: number, y: number, pads: Pad[] = this.pads): Pad | null {
@@ -1551,6 +1565,9 @@ export class Pond {
     // the drive: blades in the water shoulder leaves aside and throw water aft
     if (rowing && drive > 0.05) {
       this.shedAcc += dt;
+      this.eddyAcc += dt;
+      const shedEddy = this.eddyAcc > 0.32;
+      if (shedEddy) this.eddyAcc = 0;
       const shed = this.shedAcc > 0.12;
       if (shed) this.shedAcc = 0;
       for (const side of [-1, 1]) {
@@ -1592,7 +1609,8 @@ export class Pond {
         }
         this.lastTip[side < 0 ? 0 : 1] = [tx, ty];
         if (!this.padAt(tx, ty, near)) {
-          this.impulses.push({ x: tx, y: ty, r: 6, s: 0.35 * k * drive, foam: Math.random() < 0.3 * drive });
+          this.impulses.push({ x: tx, y: ty, r: 7, s: 0.7 * k * drive * dt * 60, foam: true });
+          if (shedEddy) this.shedEddies(tx, ty, k * drive * 0.6, hx, hy);
           if (shed) {
             // pushed water leaves aft, a little outward, faster the harder the pull
             const ox = hy * side;
@@ -1615,6 +1633,15 @@ export class Pond {
         const py = -hx * 5;
         this.splash(tx + px, ty + py, 6, 0.9 * k, true, near);
         this.splash(tx - px, ty - py, 6, 0.9 * k, true, near);
+        if (!this.padAt(tx, ty, near)) {
+          this.shedEddies(tx, ty, k, hx, hy);
+          for (let j = 0; j < 9; j++) this.drips.push({
+            x: tx + (Math.random() - 0.5) * 18 - hx * j,
+            y: ty + (Math.random() - 0.5) * 18 - hy * j,
+            age: 0, life: 0.18 + Math.random() * 0.3,
+            vx: -hx * 10 + (Math.random() - 0.5) * 20, vy: -hy * 10 + (Math.random() - 0.5) * 20, spray: true,
+          });
+        }
       }
     }
 
@@ -1629,12 +1656,36 @@ export class Pond {
     }
     for (const d of this.drips) {
       d.age += dt;
+      d.x += (d.vx ?? 0) * dt; d.y += (d.vy ?? 0) * dt;
       if (d.age >= d.life) {
         const hit = this.splash(d.x, d.y, 3, 0.35, false, near);
         if (!hit) this.sounds.push({ kind: 'drip', s: 0.5 + Math.random() * 0.5, x: d.x });
       }
     }
     this.drips = this.drips.filter((d) => d.age < d.life);
+
+    // Counter-rotating blade-tip wakes: expanding, slowing, advected by flow.
+    for (const e of this.eddies) {
+      e.age += dt;
+      const [fx, fy] = this.flow(e.x, e.y);
+      e.vx *= Math.exp(-1.1 * dt); e.vy *= Math.exp(-1.1 * dt);
+      e.x += (e.vx + fx) * dt; e.y += (e.vy + fy) * dt;
+      const fade = Math.max(0, 1 - e.age / e.life);
+      const radius = 5 + e.age * 5;
+      e.phase += e.spin * 2.8 * fade * dt;
+      if (Math.random() < dt * 18) {
+        const a = e.phase + Math.random() * 2.5;
+        this.impulses.push({ x: e.x + Math.sin(a) * radius, y: e.y + Math.cos(a) * radius,
+          r: 3.5, s: e.s * fade * 0.45, foam: e.age < 1.2 });
+      }
+      for (const fl of this.floaters) {
+        const dx = fl.x - e.x, dy = fl.y - e.y, d2 = dx * dx + dy * dy;
+        if (d2 > radius * radius * 4) continue;
+        const pull = e.s * fade * Math.exp(-d2 / (radius * radius)) * dt * 2;
+        fl.vx += dy * e.spin * pull; fl.vy -= dx * e.spin * pull;
+      }
+    }
+    this.eddies = this.eddies.filter(e => e.age < e.life);
 
     // the travelling packets stir the water along their way, slowing as they go
     for (const p of this.puddles) {
@@ -1653,7 +1704,7 @@ export class Pond {
         p.age = p.life;
         continue;
       }
-      if (Math.random() < 0.5) this.impulses.push({ x: p.x, y: p.y, r: 5 + p.age * 3, s: p.s * fade, foam: p.age < 0.5 && Math.random() < 0.3 });
+      if (Math.random() < dt * 24) this.impulses.push({ x: p.x, y: p.y, r: 5 + p.age * 3, s: p.s * fade, foam: p.age < 0.5 && Math.random() < 0.3 });
     }
     this.puddles = this.puddles.filter((p) => p.age < p.life);
   }
@@ -2136,3 +2187,4 @@ export class Pond {
   }
 
 }
+

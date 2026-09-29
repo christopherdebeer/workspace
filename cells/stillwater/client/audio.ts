@@ -1,28 +1,6 @@
-/**
- * The river's sound, synthesised — nothing is sampled.
- *
- * Water sounds wet because of BUBBLES: every drip, plop, splash, trickle and
- * burble is dozens of tiny air bubbles ringing as they form. A bubble rings
- * at a pitch set by its size (Minnaert: ~3.3 kHz·mm / radius) and the pitch
- * RISES as it decays near the surface — the "plink". So the water here is a
- * bubble synthesiser running on the audio thread (an AudioWorklet), after
- * van den Doel's physically based liquid sounds:
- *
- *   river bed   a sparse, steady scatter of small bubbles + soft low lapping
- *   motion      rowing and the wake raise the bubble rate; the drive burbles
- *   drip        one small bubble (high, fast)
- *   plop        one large bubble + a short splash (a tap on the water)
- *   dip         the oar catch: a splash burst and a cluster of mid bubbles
- *   gurgle      the release: a few low bubbles, staggered
- *   knock       the hull on a leaf: three damped wooden modes and a click
- *   wind        breathy band noise with fast leaf-rustle flutter
- *
- * Every event is panned by where it happened on screen, and a short, dark
- * synthetic reverb gives the air around the river. If AudioWorklet isn't
- * there, the simpler node-based sounds are used instead.
- *
- * Nothing starts until the first tap that turns sound on — iOS will not start
- * an AudioContext any other way.
+/** Quiet procedural foley: broadband water displacement, short irregular air
+ * pockets and separate leaf/wind texture. Collection voices retain their mix.
+ * Environmental sound is dry: open water should not sound like a tiled room.
  */
 const PENTA = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99, 880.0];
 
@@ -30,146 +8,84 @@ const PENTA = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783
 const WATER_WORKLET = `
 class Water extends AudioWorkletProcessor {
   constructor() {
-    super();
-    this.sr = sampleRate;
-    this.parts = [];      // ringing partials: bubbles and wood modes
-    this.bursts = [];     // noise bursts: splashes, clicks
-    this.rate = 8;        // ambient bubbles per second
-    this.lap = 0.5;       // lapping level
-    this.wind = 0;
-    this.seed = 1234567;
-    this.lp1 = 0; this.lp2 = 0;   // lapping filter state
-    this.lapEnv = 0; this.lapTarget = 0; this.lapNext = 0;
-    this.wl = 0; this.wb = 0; this.wh = 0; this.flutter = 0;
-    this.t = 0;
-    this.port.onmessage = (e) => this.msg(e.data);
+    super(); this.sr = sampleRate; this.seed = 918273;
+    this.grains = []; this.clock = 0; this.nextLap = 0;
+    this.motion = 0; this.motionTo = 0; this.wind = 0; this.windTo = 0;
+    this.low = [0,0]; this.mid = [0,0]; this.air = [0,0];
+    this.port.onmessage = e => this.msg(e.data);
   }
-  rnd() { this.seed = (this.seed * 1664525 + 1013904223) >>> 0; return this.seed / 4294967296; }
-  bubble(f, amp, dur, rise, pan, delay) {
-    if (this.parts.length > 160) return;
-    const n = Math.max(1, Math.floor(dur * this.sr));
-    this.parts.push({ ph: 0, w: 2 * Math.PI * f / this.sr, a: amp, dec: Math.pow(0.001, 1 / n), grow: Math.pow(rise, 1 / n), pan, wait: Math.floor((delay || 0) * this.sr), att: 0 });
-  }
-  /** Filtered noise; \`attack\` seconds of swell (0 = a crack — a snare, if it's bright). */
-  burst(amp, dur, bright, pan, delay, attack) {
-    const n = Math.max(1, Math.floor(dur * this.sr));
-    const atk = attack ? 1 / Math.max(1, attack * this.sr) : 1;
-    this.bursts.push({ a: amp, dec: Math.pow(0.001, 1 / n), bright, pan, wait: Math.floor((delay || 0) * this.sr), s1: 0, s2: 0, e: atk >= 1 ? 1 : 0, atk });
-  }
-  /** A rising cavity 'bloop': the air a blade drags under, collapsing. */
-  plunge(f0, f1, amp, dur, pan, delay) {
-    const n = Math.max(1, Math.floor(dur * this.sr));
-    this.parts.push({ ph: 0, w: 2 * Math.PI * f0 / this.sr, a: amp, dec: Math.pow(0.001, 1 / n), grow: Math.pow(f1 / f0, 1 / n), pan, wait: Math.floor((delay || 0) * this.sr), att: 0, attRate: 1 / (0.012 * this.sr) });
-  }
-  /** A bubble of radius r millimetres (Minnaert pitch, rising as it decays). */
-  bub(rmm, amp, pan, delay) {
-    const f = 3300 / rmm * (0.9 + this.rnd() * 0.2);
-    const dur = Math.min(0.25, 0.012 * rmm + 0.006);
-    this.bubble(f, amp, dur, 1 + 0.1 + this.rnd() * 0.25, pan, delay);
+  rnd() { this.seed = (Math.imul(this.seed, 1664525) + 1013904223) >>> 0; return this.seed / 4294967296; }
+  grain(amp, dur, cutoff, pan, delay = 0, tone = 0) {
+    if (this.grains.length >= 96) return;
+    this.grains.push({amp, n:0, len:Math.max(1,dur*this.sr), wait:delay*this.sr,
+      k:1-Math.exp(-6.283*cutoff/this.sr), lp:0, slow:0, pan:Math.max(-0.9,Math.min(0.9,pan)),
+      ph:0, w:6.283*tone/this.sr});
   }
   msg(m) {
-    const p = m.pan || 0;
-    if (m.type === 'params') { this.rate = m.rate; this.lap = m.lap; this.wind = m.wind; return; }
-    if (m.type === 'drip') { this.bub(1.1 + this.rnd() * 1.2, 0.09 * (m.s || 1), p); return; }
-    if (m.type === 'plop') {
-      const s = m.s || 1;
-      this.bub(4 + this.rnd() * 3, 0.28 * s, p);
-      this.burst(0.05 * s, 0.08, 0.3, p, 0, 0.006);
-      for (let i = 0; i < 4; i++) this.bub(1.2 + this.rnd() * 2, 0.05 * s, p + (this.rnd() - 0.5) * 0.2, 0.03 + this.rnd() * 0.12);
-      return;
-    }
+    if (m.type === 'params') { this.motionTo = m.motion; this.windTo = m.wind; return; }
+    const s = Math.max(0, Math.min(1.5, m.s ?? 1)), p = m.pan || 0;
     if (m.type === 'dip') {
-      // an oar going in is not a crack of noise (that's a snare) but: a low rising
-      // bloop of dragged-under air, a dark swell of displaced water, spray as many
-      // separate droplets thinning out, and bubbles rising after
-      const s = m.s || 1;
-      this.plunge(130 + this.rnd() * 40, 300 + this.rnd() * 80, 0.3 * s, 0.11, p, 0.005);
-      this.burst(0.2 * s, 0.32, 0.08, p, 0, 0.035);
-      for (let i = 0; i < 26; i++) {
-        const t = Math.pow(this.rnd(), 1.8) * 0.28;
-        this.bub(0.5 + this.rnd() * 1.1, (0.025 + this.rnd() * 0.03) * s * (1 - t * 2.5), p + (this.rnd() - 0.5) * 0.35, 0.01 + t);
-      }
-      for (let i = 0; i < 8; i++) this.bub(2 + this.rnd() * 5, 0.07 * s, p + (this.rnd() - 0.5) * 0.25, 0.04 + this.rnd() * 0.3);
-      return;
-    }
-    if (m.type === 'gurgle') {
-      const s = m.s || 1;
-      for (let i = 0; i < 6; i++) this.bub(3 + this.rnd() * 6, 0.07 * s, p + (this.rnd() - 0.5) * 0.2, this.rnd() * 0.35);
-      return;
-    }
-    if (m.type === 'knock') {
-      const s = m.s || 1;
-      const base = 170 + this.rnd() * 30;
-      this.bubble(base, 0.22 * s, 0.22, 1.0, p);
-      this.bubble(base * 2.62, 0.1 * s, 0.1, 1.0, p);
-      this.bubble(base * 4.9, 0.05 * s, 0.05, 1.0, p);
-      this.burst(0.05 * s, 0.015, 0.9, p);
-      for (let i = 0; i < 3; i++) this.bub(2 + this.rnd() * 3, 0.04 * s, p, 0.02 + this.rnd() * 0.1);
-      return;
+      // blade catches, loads, then draws a soft turbulent sheet behind it
+      this.grain(.24*s,.26,650,p);
+      this.grain(.13*s,.65,1300,p,.06);
+      for (let i=0;i<12;i++) this.grain((.012+this.rnd()*.022)*s,.025+this.rnd()*.065,
+        1100+this.rnd()*2600,p+(this.rnd()-.5)*.2,this.rnd()*.3);
+    } else if (m.type === 'gurgle') {
+      // water tears away from the blade, then drains in separate droplets
+      this.grain(.16*s,.24,1800,p);
+      for(let i=0;i<9;i++) this.grain(.022*s,.018+this.rnd()*.045,
+        800+this.rnd()*2200,p+(this.rnd()-.5)*.25,.04+this.rnd()*.42,
+        i<3 ? 350+this.rnd()*550 : 0);
+    } else if (m.type === 'plop') {
+      this.grain(.12*s,.14,900,p);
+      this.grain(.025*s,.035,1500,p,.012,450+this.rnd()*350);
+    } else if (m.type === 'drip') {
+      this.grain(.026*s,.018+this.rnd()*.025,2400,p,0,900+this.rnd()*700);
+    } else if (m.type === 'knock') {
+      // a wet flexible leaf against a hull, not a drum or a wooden mallet
+      this.grain(.075*s,.16,420,p);
+      this.grain(.026*s,.09,1400,p,.025);
     }
   }
   process(inputs, outputs) {
-    const out = outputs[0];
-    const L = out[0], R = out[1] || out[0];
-    const sr = this.sr;
-    const pRate = this.rate / sr;
-    for (let i = 0; i < L.length; i++) {
-      // ambient bubbles: mostly small and high, now and then a lower one
-      if (this.rnd() < pRate) {
-        const r = this.rnd() < 0.85 ? 0.8 + this.rnd() * 2 : 2.5 + this.rnd() * 4;
-        this.bub(r, 0.03 + this.rnd() * 0.05, (this.rnd() - 0.5) * 1.4);
+    const out=outputs[0], L=out[0], R=out[1] || out[0];
+    const smooth=1-Math.exp(-1/(this.sr*.22));
+    const lowK=1-Math.exp(-6.283*180/this.sr);
+    const midK=1-Math.exp(-6.283*1800/this.sr);
+    const airK=1-Math.exp(-6.283*4200/this.sr);
+    for(let i=0;i<L.length;i++) {
+      this.motion+=(this.motionTo-this.motion)*smooth;
+      this.wind+=(this.windTo-this.wind)*smooth;
+      if(this.clock>=this.nextLap) {
+        this.grain(.025+this.motion*.065,.35+this.rnd()*.65,450+this.rnd()*650,(this.rnd()-.5)*1.2);
+        this.nextLap=this.clock+this.sr*(.8+this.rnd()*2.8);
       }
-      // lapping: low noise swelling in slow, irregular laps against the hull
-      if (this.t >= this.lapNext) { this.lapTarget = 0.4 + this.rnd() * 0.6; this.lapNext = this.t + (0.6 + this.rnd() * 1.6) * sr; }
-      this.lapEnv += (this.lapTarget - this.lapEnv) * 0.00008;
-      this.lapTarget *= 0.99996;
-      const nz = this.rnd() * 2 - 1;
-      this.lp1 += (nz - this.lp1) * 0.025;
-      this.lp2 += (this.lp1 - this.lp2) * 0.025;
-      let l = this.lp2 * this.lapEnv * this.lap * 1.4;
-      let r = l;
-      // wind: breath (band noise) with leaf-rustle flutter
-      if (this.wind > 0.001) {
-        const wn = this.rnd() * 2 - 1;
-        this.wl += (wn - this.wl) * 0.08;
-        this.wb += (this.wl - this.wb) * 0.3;
-        this.wh = wn - this.wl;
-        if ((this.t & 255) === 0) this.flutter = this.rnd();
-        const rustle = this.wh * (0.3 + this.flutter * 0.7) * 0.25;
-        const breath = (this.wl - this.wb) * 1.6;
-        l += (breath + rustle) * this.wind * 0.25;
-        r += (breath * 0.9 - rustle) * this.wind * 0.25;
+      let l=0,r=0;
+      for(let ch=0;ch<2;ch++) {
+        const n=this.rnd()*2-1;
+        this.low[ch]+=(n-this.low[ch])*lowK;
+        this.mid[ch]+=(n-this.mid[ch])*midK;
+        this.air[ch]+=(n-this.air[ch])*airK;
+        const slow=.65+.2*Math.sin(this.clock/this.sr*.37+ch);
+        const v=this.low[ch]*(.045+this.motion*.11)
+          +(this.mid[ch]-this.low[ch])*this.motion*.023
+          +(this.air[ch]-this.mid[ch])*this.wind*.06*slow;
+        if(ch===0) l=v; else r=v;
       }
-      // partials
-      for (let k = this.parts.length - 1; k >= 0; k--) {
-        const b = this.parts[k];
-        if (b.wait > 0) { b.wait--; continue; }
-        b.att = b.att < 1 ? b.att + (b.attRate || 0.02) : 1;
-        const v = Math.sin(b.ph) * b.a * b.att;
-        b.ph += b.w;
-        b.w *= b.grow;
-        b.a *= b.dec;
-        l += v * (1 - b.pan) * 0.5;
-        r += v * (1 + b.pan) * 0.5;
-        if (b.a < 0.00005) this.parts.splice(k, 1);
+      for(let j=this.grains.length-1;j>=0;j--) {
+        const g=this.grains[j]; if(g.wait>0) {g.wait--;continue;}
+        const u=g.n/g.len;
+        if(u>=1) {this.grains.splice(j,1);continue;}
+        const n=this.rnd()*2-1;
+        g.lp+=(n-g.lp)*g.k; g.slow+=(g.lp-g.slow)*lowK;
+        // Rounded attack, irregular noise, no rising pitch chirps.
+        const env=Math.min(1,u*12)*Math.pow(1-u,2.4);
+        g.ph+=g.w;
+        const v=(g.lp-g.slow*.4+(g.w ? Math.sin(g.ph)*.15 : 0))*g.amp*env;
+        l+=v*Math.sqrt((1-g.pan)*.5); r+=v*Math.sqrt((1+g.pan)*.5);
+        g.n++;
       }
-      // bursts: filtered noise, bright ones hissier
-      for (let k = this.bursts.length - 1; k >= 0; k--) {
-        const s = this.bursts[k];
-        if (s.wait > 0) { s.wait--; continue; }
-        const n = this.rnd() * 2 - 1;
-        s.s1 += (n - s.s1) * (0.08 + s.bright * 0.6);
-        s.s2 += (s.s1 - s.s2) * 0.05;
-        if (s.e < 1) s.e = Math.min(1, s.e + s.atk);
-        const v = (s.s1 - s.s2 * (1 - s.bright)) * s.a * s.e;
-        if (s.e >= 1) s.a *= s.dec;
-        l += v * (1 - s.pan) * 0.5;
-        r += v * (1 + s.pan) * 0.5;
-        if (s.a < 0.00005) this.bursts.splice(k, 1);
-      }
-      L[i] = l;
-      R[i] = r;
-      this.t++;
+      L[i]=l; R[i]=r; this.clock++;
     }
     return true;
   }
@@ -198,6 +114,8 @@ export class Sound {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private water: AudioWorkletNode | null = null;
+  private environment: GainNode | null = null;
+  private bedGain: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private windGain: GainNode | null = null;
   private starting = false;
@@ -207,8 +125,10 @@ export class Sound {
     if (this.ctx || this.starting) return;
     this.starting = true;
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AC) return;
+    if (!AC) { this.starting = false; return; }
     const ctx = new AC();
+    // Resume inside the original gesture, before awaiting the worklet on iOS.
+    ctx.resume().catch(() => {});
     this.ctx = ctx;
     const master = ctx.createGain();
     master.gain.value = 0.0001;
@@ -223,6 +143,12 @@ export class Sound {
     wet.gain.value = 0.22;
     master.connect(verb).connect(wet).connect(comp);
     this.master = master;
+    const environment = ctx.createGain();
+    environment.gain.value = 0.0001;
+    const lowCut = ctx.createBiquadFilter();
+    lowCut.type = 'highpass'; lowCut.frequency.value = 75; lowCut.Q.value = 0.5;
+    environment.connect(lowCut).connect(comp);
+    this.environment = environment;
     // noise for the fallback voices
     const len = ctx.sampleRate * 2;
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -234,10 +160,11 @@ export class Sound {
       await ctx.audioWorklet.addModule(url);
       URL.revokeObjectURL(url);
       this.water = new AudioWorkletNode(ctx, 'stillwater-water', { numberOfInputs: 0, outputChannelCount: [2] });
-      this.water.connect(master);
+      this.water.connect(environment);
     } catch {
-      this.fallbackBed(ctx, master);
+      this.fallbackBed(ctx, environment);
     }
+    this.starting = false;
     this.fade();
   }
 
@@ -250,7 +177,8 @@ export class Sound {
     lp.type = 'lowpass';
     lp.frequency.value = 480;
     const g = ctx.createGain();
-    g.gain.value = 0.12;
+    g.gain.value = 0.025;
+    this.bedGain = g;
     src.connect(lp).connect(g).connect(master);
     src.start();
     const src2 = ctx.createBufferSource();
@@ -263,7 +191,7 @@ export class Sound {
     const wg = ctx.createGain();
     wg.gain.value = 0;
     src2.connect(bp).connect(wg).connect(master);
-    src2.start();
+    src2.start(0, 0.731);
     this.windGain = wg;
   }
 
@@ -273,6 +201,7 @@ export class Sound {
     ctx.resume().catch(() => {});
     this.master.gain.cancelScheduledValues(ctx.currentTime);
     this.master.gain.setTargetAtTime(this.on ? 0.9 : 0.0001, ctx.currentTime, 0.4);
+    this.environment?.gain.setTargetAtTime(this.on ? 0.9 : 0.0001, ctx.currentTime, 0.4);
   }
 
   /** The first touch turns the sound on (a user gesture is needed to start it at all). */
@@ -307,9 +236,12 @@ export class Sound {
     const now = performance.now();
     if (now - this.lastParams < 100) return;
     this.lastParams = now;
-    const rate = 5 + speed * 0.5 + effort * 10 + wind * 20;
-    this.send({ type: 'params', rate, lap: 0.35 + Math.min(1, speed / 30) * 0.5, wind });
-    if (!this.water && this.windGain && this.ctx) this.windGain.gain.setTargetAtTime(wind * 0.9, this.ctx.currentTime, 0.2);
+    const motion = Math.min(1, speed / 50) * 0.35 + Math.min(1, effort) * 0.65;
+    this.send({ type: 'params', motion, wind: Math.min(1, wind) });
+    if (!this.water && this.ctx) {
+      this.windGain?.gain.setTargetAtTime(wind * 0.05, this.ctx.currentTime, 0.4);
+      this.bedGain?.gain.setTargetAtTime(0.025 + motion * 0.09, this.ctx.currentTime, 0.3);
+    }
   }
 
   /** Wind level 0..1 (kept for callers; folded into `river`). */
@@ -382,19 +314,20 @@ export class Sound {
 
   /** The blade coming out: a gurgle. */
   gurgle(strength: number, pan = 0) {
-    this.send({ type: 'gurgle', s: strength, pan });
+    if (this.water) this.send({ type: 'gurgle', s: strength, pan });
+    else this.fallbackSplash(strength * 0.55, pan, 1700);
   }
 
   /** A drop falling back in. */
   drip(strength: number, pan = 0) {
     if (this.water) this.send({ type: 'drip', s: strength, pan });
-    else this.voice(1300 + Math.random() * 900, 0, 0.012 * strength, 0.09, 'sine', pan);
+    else this.fallbackSplash(strength * 0.12, pan, 2400);
   }
 
   /** The hull nudging a pad. */
   knock(strength: number, pan = 0) {
     if (this.water) this.send({ type: 'knock', s: strength, pan });
-    else this.voice(82 + Math.random() * 18, 0, 0.12 * strength, 0.35, 'triangle', pan);
+    else this.fallbackSplash(strength * 0.4, pan, 350);
   }
 
   /** Dew condensing on a leaf. */
@@ -404,24 +337,25 @@ export class Sound {
 
   private fallbackSplash(strength: number, pan: number, freq: number) {
     const ctx = this.ctx;
-    if (!ctx || !this.master || !this.on || !this.noise) return;
+    if (!ctx || !this.master || !this.on || !this.noise || !this.environment) return;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = freq;
-    bp.Q.value = 1.4;
+    bp.Q.value = 0.45;
     const g = ctx.createGain();
     const t = ctx.currentTime;
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.3 * strength, t + 0.015);
+    g.gain.linearRampToValueAtTime(0.12 * strength, t + 0.035);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
     const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
     if (p) {
       p.pan.value = pan;
-      src.connect(bp).connect(g).connect(p).connect(this.master);
-    } else src.connect(bp).connect(g).connect(this.master);
+      src.connect(bp).connect(g).connect(p).connect(this.environment);
+    } else src.connect(bp).connect(g).connect(this.environment);
     src.start(t, Math.random());
     src.stop(t + 0.35);
   }
 }
+

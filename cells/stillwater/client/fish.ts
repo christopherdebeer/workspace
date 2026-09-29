@@ -52,6 +52,9 @@ export interface Fish {
   orbit: number;
   /** Seconds before it will take an interest in the boat again. */
   cool: number;
+  homeZ?: number;
+  bite?: number;
+  feeding?: number;
 }
 
 /** A large fish nosing at something on the surface: a small ring. */
@@ -184,7 +187,10 @@ export class School {
     /** Things on the surface a big fish might nose at (petals, duckweed, a dewy leaf). */
     interest: Array<{ x: number; y: number }> = [],
   ) {
-    if (shift) for (const f of this.fish) f.y -= shift;
+    if (shift) {
+      for (const f of this.fish) { f.y -= shift; if (f.mood === 1) f.gy -= shift; }
+      for (const s of this.scares) s.y -= shift;
+    }
     for (const s of this.scares) s.t += dt;
     this.scares = this.scares.filter((s) => s.t < 1.4);
     const fish = this.fish;
@@ -294,6 +300,9 @@ export class School {
       // look at a boat that has gone quiet (circling it at a distance), and now and
       // then dart off for the joy of it
       let curious = false;
+      let feeding = false;
+      f.homeZ ??= f.z;
+      f.bite = Math.max(0, (f.bite ?? 0) - dt);
       if (!minnow) {
         f.until -= dt;
         f.cool -= dt;
@@ -304,17 +313,20 @@ export class School {
           const dx = gx - f.x;
           const dy = gy - f.y;
           const d = Math.hypot(dx, dy) || 1;
-          const keep = f.mood === 2 ? 70 : 10;
+          const keep = f.mood === 2 ? 90 : f.size * 0.9;
           const ax = dx / d;
           const ay = dy / d;
           // draw in until close, then circle it
           const toward = Math.max(-40, Math.min(40, (d - keep) * 0.9));
-          const ring = d < keep + 40 ? f.cruise * 1.3 : 0;
+          const ring = f.mood === 2 && d < keep + 50 ? f.cruise * 0.7 : 0;
           fx += ax * toward - ay * f.orbit * ring;
           fy += ay * toward + ax * f.orbit * ring;
-          if (f.mood === 1 && d < 12 && f.z < 0.55) {
-            this.rises.push({ x: f.x, y: f.y });
-            f.until = 0;
+          const noseX = f.x + Math.sin(f.heading) * f.size * 0.9;
+          const noseY = f.y + Math.cos(f.heading) * f.size * 0.9;
+          feeding = f.mood === 1 && Math.hypot(gx - noseX, gy - noseY) < 18;
+          if (feeding && f.z < 0.08 && f.bite <= 0) {
+            this.rises.push({ x: noseX, y: noseY });
+            f.bite = rnd(0.65, 1.3);
           }
           if (f.mood === 2) {
             curious = true;
@@ -334,31 +346,13 @@ export class School {
         fx += ((-cx0 / cs) * f.cruise - f.vx) * hold;
         fy += ((-cy0 / cs) * f.cruise - f.vy) * hold;
       }
-      // the tail beats with the work of swimming THROUGH the water: holding still
-      // against the current is a steady gentle swish, cruising a little quicker,
-      // a dart a flurry. Small fish beat faster than big ones.
-      const rel = Math.hypot(f.vx - cx0, f.vy - cy0);
-      f.effort += (Math.min(rel, 90) - f.effort) * (1 - Math.exp(-2.5 * dt));
-      f.tail += dt * (2.2 + f.effort * 0.11) * Math.sqrt(12 / f.size);
-      // it points the way it swims through the water (upstream when holding
-      // station), turning smoothly rather than snapping to every nudge
-      let turned = 0;
-      if (rel > 1.5) {
-        const want = Math.atan2(f.vx - cx0, f.vy - cy0);
-        let dh = want - f.heading;
-        dh = Math.atan2(Math.sin(dh), Math.cos(dh));
-        turned = dh * (1 - Math.exp(-(minnow ? 9 : 5) * dt));
-        f.heading += turned;
-      }
-      // the body bends into a turn (smoothed, so it flexes rather than snaps)
-      f.turn += (Math.max(-3, Math.min(3, turned / Math.max(dt, 1e-3))) - f.turn) * (1 - Math.exp(-6 * dt));
       // keep near the view; lone strays are re-seeded ahead
       const ox = f.x - view.x;
       const oy = f.y - view.y;
       if (Math.abs(ox) > view.hw + 60) fx -= Math.sign(ox) * 30;
       if (Math.abs(oy) > view.hh + 80) fy -= Math.sign(oy) * 30;
       if (!minnow && (oy < -view.hh - 70 || Math.abs(ox) > view.hw + 160 || oy > view.hh + 700)) {
-        Object.assign(f, this.loner(view.x + rnd(-view.hw, view.hw), view.y + view.hh + rnd(80, 240), i));
+        Object.assign(f, this.loner(view.x + rnd(-view.hw, view.hw), view.y + view.hh + rnd(80, 240), i), { homeZ: undefined, bite: 0, feeding: 0 });
         continue;
       }
       // shy of the hull (near-surface fish more so)
@@ -381,19 +375,28 @@ export class School {
           fy += (dy / d) * k;
         }
       }
-      const pvx = f.vx;
-      const pvy = f.vy;
-      f.vx += fx * dt;
-      f.vy += fy * dt;
-      const sp = Math.hypot(f.vx, f.vy) || 1;
-      const max = f.cruise * (minnow ? 4.5 : 3.2);
-      const min = f.cruise * 0.5;
-      const target = sp > max ? max : sp < min ? min : sp + (f.cruise - sp) * 0.4 * dt;
-      f.vx = (f.vx / sp) * target;
-      f.vy = (f.vy / sp) * target;
-      // a sharp turn shows the flank: the silver flash
-      const turn = Math.abs(pvx * f.vy - pvy * f.vx) / ((Math.hypot(pvx, pvy) || 1) * target);
-      f.flash = Math.min(1, f.flash * Math.exp(-4 * dt) + turn * (minnow ? 6 : 1.5));
+      // Velocity is THROUGH the water throughout. Turn and translate together;
+      // lateral steering bends the path, never rotates a stationary sprite.
+      const speed = Math.hypot(f.vx, f.vy);
+      const wantX = f.vx + fx * 0.65;
+      const wantY = f.vy + fy * 0.65;
+      const desired = Math.atan2(wantX, wantY);
+      const error = Math.atan2(Math.sin(desired - f.heading), Math.cos(desired - f.heading));
+      const maxTurn = Math.min(minnow ? 3.2 : 1.25, speed / Math.max(8, f.size * 1.7));
+      const turnTo = Math.max(-maxTurn, Math.min(maxTurn, error * 2.2));
+      f.turn += (turnTo - f.turn) * (1 - Math.exp(-4 * dt));
+      f.heading += f.turn * dt;
+      const desiredSpeed = feeding ? f.cruise * 0.12 : Math.max(f.cruise * 0.55,
+        Math.min(f.cruise * (minnow ? 4.5 : 3.2), speed + (fx * Math.sin(f.heading) + fy * Math.cos(f.heading) + (f.cruise - speed) * 0.6) * dt));
+      const nextSpeed = feeding ? speed + (desiredSpeed - speed) * (1 - Math.exp(-3 * dt)) : desiredSpeed;
+      f.vx = Math.sin(f.heading) * nextSpeed;
+      f.vy = Math.cos(f.heading) * nextSpeed;
+      f.effort += (nextSpeed - f.effort) * (1 - Math.exp(-2.5 * dt));
+      f.tail += dt * (1.6 + f.effort * 0.11) * Math.sqrt(12 / f.size);
+      f.flash += (Math.min(0.65, Math.abs(f.turn) * (minnow ? 0.35 : 0.06)) - f.flash) * (1 - Math.exp(-4 * dt));
+      f.feeding = (f.feeding ?? 0) + ((feeding ? 1 : 0) - (f.feeding ?? 0)) * (1 - Math.exp(-2 * dt));
+      const targetZ = feeding ? 0.015 : f.homeZ;
+      f.z += (targetZ - f.z) * (1 - Math.exp(-(feeding ? 1.3 : 0.45) * dt));
       // swimming is relative to the water, and the water is moving (less so near the bed)
       const drag = 1 - f.z * 0.5;
       f.x += (f.vx + cx0 * drag) * dt;
@@ -401,3 +404,4 @@ export class School {
     }
   }
 }
+

@@ -1025,7 +1025,7 @@ function gathers(dt: number, dusk: number): Mote[] {
 function drips(sky: { sunCol: [number, number, number] }): Mote[] {
   return pond.drips.map((d) => {
     const k = d.age / d.life;
-    return { x: d.x, y: d.y, size: 3.2 - k * 1.2, r: 0.8 + sky.sunCol[0] * 0.2, g: 0.9, b: 0.95, a: 0.7 * (1 - k * 0.5), core: 1, z: 1.05 - k * 0.05 };
+    return { x: d.x, y: d.y + (d.spray ? Math.sin(k * Math.PI) * 10 : (1 - k * k) * 6), size: 3.2 - k * 1.2, r: 0.8 + sky.sunCol[0] * 0.2, g: 0.9, b: 0.95, a: 0.7 * (1 - k * 0.5), core: 1, z: 1 };
   });
 }
 
@@ -1087,7 +1087,7 @@ function frame(now: number) {
   const interest: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < pond.floaters.length; i += 4) {
     const fl = pond.floaters[i];
-    if (Math.abs(fl.x - cam.x) < hw + 40 && Math.abs(fl.y - cam.y) < hh + 40) interest.push({ x: fl.x, y: fl.y });
+    if (Math.abs(fl.x - cam.x) < hw + 40 && Math.abs(fl.y - cam.y) < hh + 40) { if (fl.kind === 0) interest.push({ x: fl.x, y: fl.y }); }
   }
   for (const p of pond.pads) if (p.drops.length && Math.abs(p.x - cam.x) < hw && Math.abs(p.y - cam.y) < hh) interest.push({ x: p.x + p.r * 0.9, y: p.y });
   school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw, hh }, shift, (x, y) => pond.flow(x, y), interest);
@@ -1095,7 +1095,15 @@ function frame(now: number) {
   for (const r of school.rises) {
     pond.impulses.push({ x: r.x, y: r.y, r: 5, s: 0.35 });
     pond.rings.push({ x: r.x, y: r.y, t: pond.t, s: 0.3 });
-    sound.drip(0.5, panAt(r.x));
+    sound.drip(0.22, panAt(r.x));
+    for (const fl of pond.floaters) {
+      const dx = fl.x - r.x, dy = fl.y - r.y, d = Math.hypot(dx, dy);
+      if (fl.kind === 0 && d < 16) {
+        fl.vx += dx / Math.max(d, 1) * 3;
+        fl.vy += dy / Math.max(d, 1) * 3;
+        fl.va += (fl.seed - 0.5) * 0.8;
+      }
+    }
   }
   school.rises.length = 0;
   if (shift) atmosphere.shift(shift);
@@ -1122,7 +1130,7 @@ function frame(now: number) {
   }
   if (scareAcc > 0.25) scareAcc = 0;
   sound.breeze(breeze);
-  sound.river(pond.boat.speed, pond.boat.power * pond.boat.rowing, breeze);
+  sound.river(pond.boat.speed, pond.boat.power * pond.boat.rowing * Math.max(0, Math.cos(pond.boat.stroke * Math.PI * 2)), breeze);
 
   // the camera follows the boat, easing sideways toward the channel
   const b = pond.boat;
@@ -1288,3 +1296,4 @@ requestAnimationFrame((t) => {
   last = t;
   requestAnimationFrame(frame);
 });
+

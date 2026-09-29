@@ -344,7 +344,7 @@ out float vTurn;
 void main(){
   float z = iB.x;
   float len = iA.w * (1. - z * .18);
-  vec2 q = aPos * vec2(.55, 1.05);
+  vec2 q = aPos * vec2(.82, 1.05);
   vec2 local = q * vec2(len * .55, len);
   float c = cos(iA.z), s = sin(iA.z);
   vec2 w = vec2(local.x * c + local.y * s, -local.x * s + local.y * c);
@@ -1783,3 +1783,4 @@ export const SHADERS = {
   MOTE_FS,
   GRADE_FS,
 };
+

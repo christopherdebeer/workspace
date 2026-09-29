@@ -504,6 +504,26 @@ export class Renderer {
     this.ribbon(f, cork, [0.6, 2.4, 3.1, 3.1, 2.4, 0.6], [0.62, 0.47, 0.3], solid(6, 1), false);
     this.ribbon(f, [7.5, 9, 10.4].map(along), [2.2, 2, 0.5], [0.66, 0.2, 0.13], solid(3, 1), false);
 
+    // Broken filaments of entrained air follow each rotating eddy. Batched into
+    // one strip pass below the floating plants (no luminous rings on leaves).
+    const swirls: Array<{ pts: Array<[number, number]>; w: number[]; a: number[]; d: number[] }> = [];
+    for (const e of pond.eddies) {
+      const fade = Math.pow(Math.max(0, 1 - e.age / e.life), 1.5) * Math.min(1, e.age * 12);
+      for (let arm = 0; arm < 2; arm++) {
+        const pts: Array<[number, number]> = [], w: number[] = [], a: number[] = [], d: number[] = [];
+        for (let j = 0; j < 15; j++) {
+          const u = j / 14, angle = e.phase + arm * Math.PI + e.spin * u * 2.8;
+          const radius = (5 + e.age * 5) * (0.5 + u * 0.5);
+          pts.push([e.x + Math.sin(angle) * radius, e.y + Math.cos(angle) * radius]);
+          w.push(0.35 + 0.25 * Math.sin(u * Math.PI));
+          a.push(Math.sin(u * Math.PI) * fade * e.s * 0.5); d.push(0);
+        }
+        swirls.push({ pts, w, a, d });
+      }
+    }
+    const waterLight = f.light.amb;
+    this.strips(f, swirls, [waterLight[0] * 0.7, waterLight[1] * 0.82, waterLight[2] * 0.8], 0);
+
     // duckweed, petals, leaves and buds afloat — under the pads' edges
     this.common(this.p.floater, f);
     this.floatInst.draw();
@@ -876,4 +896,5 @@ export class Renderer {
 export function drawOrder(pads: Pad[]): Pad[] {
   return pads.slice().sort((a, b) => Number(a.drops.length > 0) - Number(b.drops.length > 0) || a.layer - b.layer);
 }
+
 
