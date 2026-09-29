@@ -1135,7 +1135,7 @@ function frame(now: number) {
   for (const r of school.rises) {
     pond.impulses.push({ x: r.x, y: r.y, r: 5, s: 0.35 });
     pond.rings.push({ x: r.x, y: r.y, t: pond.t, s: 0.3 });
-    sound.drip(0.22, panAt(r.x));
+    // (the same drip plink was used here; silent for now, see Round 52)
     for (const fl of pond.floaters) {
       const dx = fl.x - r.x, dy = fl.y - r.y, d = Math.hypot(dx, dy);
       if (fl.kind === 0 && d < 16) {
@@ -1187,7 +1187,8 @@ function frame(now: number) {
     const pan = panAt(snd.x);
     if (snd.kind === 'dip') sound.dip(snd.s, pan);
     else if (snd.kind === 'gurgle') sound.gurgle(snd.s, pan);
-    else sound.drip(snd.s, pan);
+    // 'drip' (water off the lifted blades, and the release's spray) is not voiced: the
+    // pitched plinks read as notes, not water. The ripples still land. See Round 52.
   }
   pond.sounds.length = 0;
   for (const bump of pond.bumps) {
