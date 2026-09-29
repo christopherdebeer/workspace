@@ -7,6 +7,7 @@ import type * as React from 'react';
 import FreeText from './freetext';
 import Program from './program';
 import ImageCS from './image-cs';
+import Playtest from './playtest';
 
 export interface Experiment {
   id: string;
@@ -80,6 +81,22 @@ export const EXPERIMENTS: Experiment[] = [
       'search mode (client:grok): population of grids + procedural operators (blob, recolor component, shift, stripe, flip). Jev only scores. Radius anneals explore→exploit. Diversity via Hamming. Added for less-templated iterative comparison.',
       'Measured, head-to-head (Jev judging both orders, 6 prompts): unseeded search LOST every prompt — judge preferred recognise 69–99%, best scores plateaued 39–65%. ~12 random-palette children × 7 sequential generations spends depth where Jev\'s width is free, in a space that ignores the prompt.',
       'Kept the operators, changed the economics: seeded with recognise\'s finalists, mutations restricted to the scene\'s colours, ≤96 children per generation, 3 generations. Refined beats recognise on 4/6 (cross 77%, heart 72→80%), one tie, one narrow loss (tree 44%); +~130k tokens, ~8 s wall for all six. search mode now runs this.',
+    ],
+  },
+  {
+    id: 'playtest',
+    n: '10',
+    title: 'Playtest',
+    blurb: 'A board-game definition in; the real playtest engine plays it with Jev choosing every move, then judges the session — the game log, per-turn metadata, and what the engine is missing or System One cannot play yet.',
+    exploits: ['code enumerates, the engine validates, Jev chooses', 'width over depth', 'recognition over generation'],
+    status: 'live',
+    component: Playtest,
+    findings: [
+      'The engine is christopherdebeer/playtest vendored unchanged (scripts/vendor-playtest.mjs) and run in the page over an in-memory fs — the lab imports the same mechanics the CLI runs.',
+      'Each move: code expands the engine\'s advertised actions (examples × cards × targets), the engine\'s own validateAction masks them, Jev picks one label (≤255). Forced moves never reach Jev. Validation was checked side-effect-free across all 18 catalogue games.',
+      'Classification is one call: the rules prose against all 209 catalogue mechanics as parallel nouls plus a few rule facts (≈12k tokens, <$0.001).',
+      'First run, markovs-chains (2026-09-29): Jev judged the session "degenerate: one move dominates" (0.53) — player-1 made 120 moves in turn 1. Root cause in the engine, not the player: board-state\'s move returns advanceTurn:false expecting game.ts to auto-advance, but game.ts reads false as "never advance"; and probability_movement is read by nothing, so every move succeeds. Random play wins in round 1 the same way.',
+      'Also surfaced on markovs-chains: 4 card effects with no handler (auto_success, force_retarget, swap_positions, reroll_failed) and 2 declared mechanics nothing reads (probability-movement, card-boosts).',
     ],
   },
   {
