@@ -669,11 +669,15 @@ export class Pond {
    * Sparse human traces at the bank. A separate RNG keeps their introduction
    * from perturbing the established flora / numeracy ecology.
    */
+  /** `?pier=1`: a jetty just ahead at the start (to look at it, and to bump it). */
+  forcePier = false;
+  private forcedPier = false;
+
   private growLandmarks(y0: number, y1: number) {
-    if (y1 < 300) return;
+    if (y1 < 300 && !this.forcePier) return;
     const rand = this.landmarkRand;
-    const place = (kind: 0 | 1) => {
-      const y = y0 + rand() * (y1 - y0);
+    const place = (yAt?: number) => {
+      const y = yAt ?? y0 + rand() * (y1 - y0);
       const side: -1 | 1 = rand() < 0.5 ? -1 : 1;
       const cx = this.channel(y);
       const half = this.channelHalf(y);
@@ -681,48 +685,140 @@ export class Pond {
       const nn = Math.hypot(1, slope);
       const ox = side / nn;
       const oy = (-side * slope) / nn;
-      const ix = -ox;
-      const iy = -oy;
-
-      if (kind === 0) {
-        // Broad, modest old landing rather than a long boardwalk. In the
-        // overhead composition width is what gives it mass; length only needs
-        // to bridge bank vegetation to the open-water edge.
-        const w = 18 + rand() * 6;
-
-        // Define the pier by its endpoints rather than dropping a rectangle near
-        // the shoreline. The waterward tip only reaches a little into the run;
-        // the root is unmistakably buried in the visible bank. Where the bank
-        // itself runs beyond the grown view, the root naturally clips off-screen.
-        const innerD = Math.max(18, half - (20 + rand() * 18));
-        // the root is always beyond the grown field, so the pier comes in from off screen
-        const outerD = this.halfW + 80 + rand() * 40;
-        const tipX = cx + ox * innerD;
-        const tipY = y + oy * innerD;
-        const rootX = cx + ox * outerD;
-        const rootY = y + oy * outerD;
-        const x = (tipX + rootX) * 0.5;
-        const py = (tipY + rootY) * 0.5;
-        const l = Math.hypot(tipX - rootX, tipY - rootY) * 0.5;
-        // Local +Y points from root toward the water.
-        const dirX = (tipX - rootX) / Math.max(1, l * 2);
-        const dirY = (tipY - rootY) / Math.max(1, l * 2);
-        const ang = Math.atan2(-dirX, dirY);
-        this.landmarks.push({ id: this.nextLandmarkId++, x, y: py, ang, w, l, seed: rand(), kind, side, state: 0 });
-      } else {
-        const w = 19 + rand() * 7;
-        const l = 14 + rand() * 4;
-        const x = cx + ox * (half + 42 + rand() * 22);
-        const py = y + oy * (half + 42 + rand() * 22);
-        const tx = slope / Math.hypot(slope, 1);
-        const ty = 1 / Math.hypot(slope, 1);
-        const ang = Math.atan2(-tx, ty) + (rand() - 0.5) * 0.18;
-        this.landmarks.push({ id: this.nextLandmarkId++, x, y: py, ang, w, l, seed: rand(), kind, side, state: 0 });
-      }
+      // a plank jetty: long and narrow, reaching from beyond the grown field (so it comes
+      // in from off screen) to a little way into the run
+      const w = 7 + rand() * 1.5;
+      const innerD = Math.max(18, half - (6 + rand() * 22));
+      const outerD = this.halfW + 80 + rand() * 40;
+      const tipX = cx + ox * innerD;
+      const tipY = y + oy * innerD;
+      const rootX = cx + ox * outerD;
+      const rootY = y + oy * outerD;
+      const x = (tipX + rootX) * 0.5;
+      const py = (tipY + rootY) * 0.5;
+      const l = Math.hypot(tipX - rootX, tipY - rootY) * 0.5;
+      // local +Y points from root toward the water
+      const dirX = (tipX - rootX) / Math.max(1, l * 2);
+      const dirY = (tipY - rootY) / Math.max(1, l * 2);
+      const ang = Math.atan2(-dirX, dirY);
+      this.landmarks.push({ id: this.nextLandmarkId++, x, y: py, ang, w, l, seed: rand(), kind: 0, side, state: 0 });
     };
+    if (this.forcePier && !this.forcedPier && y1 > this.boat.y + 260) {
+      this.forcedPier = true;
+      place(this.boat.y + 260);
+    }
+    // rare: one every few thousand units
+    if (y1 >= 300 && rand() < 0.035) place();
+  }
 
-    // rare, and never a sign (blank boards read as props from above)
-    if (rand() < 0.035) place(0);
+  /** A jetty's piles (world): pairs either side of the deck every 36 units. */
+  pierPiles(m: Landmark): Array<[number, number]> {
+    const out: Array<[number, number]> = [];
+    const c = Math.cos(m.ang);
+    const sn = Math.sin(m.ang);
+    for (let ly = -m.l + 14; ly < m.l - 6; ly += 36) {
+      for (const sx of [-1, 1]) {
+        const lx = sx * (m.w + 2.5);
+        out.push([m.x + lx * c - ly * sn, m.y + lx * sn + ly * c]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The boat cannot pass a jetty: the hull meets the deck's edge and stops,
+   * knocks, and is turned away by the corner it caught. Leaves drift under the
+   * deck between the piles, and bump off the piles themselves.
+   */
+  private collidePiers(dt: number) {
+    const b = this.boat;
+    const hullR = BOAT_BEAM * 0.5;
+    for (const m of this.landmarks) {
+      if (Math.abs(m.x - b.x) > m.l + 200 || Math.abs(m.y - b.y) > m.l + 200) continue;
+      const c = Math.cos(m.ang);
+      const sn = Math.sin(m.ang);
+      const toLocal = (x: number, y: number): [number, number] => [(x - m.x) * c + (y - m.y) * sn, -(x - m.x) * sn + (y - m.y) * c];
+      // the keel, sampled from stern to bow
+      const hx = Math.sin(b.heading);
+      const hy = Math.cos(b.heading);
+      let deepest = 0;
+      let nx = 0;
+      let ny = 0;
+      let at = 0;
+      for (let k = -2; k <= 2; k++) {
+        const along = (k / 2) * BOAT_LEN * 0.42;
+        const px = b.x + hx * along;
+        const py = b.y + hy * along;
+        const [lx, ly] = toLocal(px, py);
+        // signed distance to the deck rectangle, in its frame
+        const dx = Math.abs(lx) - m.w;
+        const dy = Math.abs(ly) - m.l;
+        const ox = Math.max(dx, 0);
+        const oy = Math.max(dy, 0);
+        const outside = Math.hypot(ox, oy);
+        const inside = Math.min(Math.max(dx, dy), 0);
+        const d = outside + inside;
+        const pen = hullR - d;
+        if (pen <= deepest) continue;
+        // the outward normal, in local then world
+        let gx: number;
+        let gy: number;
+        if (outside > 0) {
+          gx = (ox / outside) * Math.sign(lx || 1);
+          gy = (oy / outside) * Math.sign(ly || 1);
+        } else if (dx > dy) {
+          gx = Math.sign(lx || 1);
+          gy = 0;
+        } else {
+          gx = 0;
+          gy = Math.sign(ly || 1);
+        }
+        deepest = pen;
+        nx = gx * c - gy * sn;
+        ny = gx * sn + gy * c;
+        at = along;
+      }
+      if (deepest <= 0) {
+        if (m.state === 1) m.state = 0;
+        continue;
+      }
+      // push out, take the way off the boat, and turn it away by the point it caught
+      b.x += nx * deepest;
+      b.y += ny * deepest;
+      const into = Math.max(0, -(hx * nx + hy * ny)) * b.speed;
+      b.speed = Math.max(0, b.speed - into * 0.9 - deepest * 2 * dt);
+      const cross = hx * ny - hy * nx;
+      b.heading -= cross * Math.sign(at || 1) * deepest * 0.012;
+      if (m.state !== 1) {
+        m.state = 1;
+        const strength = clamp(into / 30 + deepest / 12, 0.15, 1);
+        this.bumps.push({ x: b.x + hx * at - nx * hullR, y: b.y + hy * at - ny * hullR, strength });
+        this.impulses.push({ x: b.x + hx * at - nx * hullR, y: b.y + hy * at - ny * hullR, r: 9, s: 0.5 + strength * 0.5, foam: true });
+      }
+      b.strokeTo = Math.min(b.strokeTo, b.stroke); // a jetty in the way ends the stroke in hand
+    }
+    // leaves bump off the piles (and slide under the deck between them)
+    for (const m of this.landmarks) {
+      const piles = this.pierPiles(m);
+      for (const p of this.pads) {
+        if (Math.abs(p.x - m.x) > m.l + p.r + 20 || Math.abs(p.y - m.y) > m.l + p.r + 20) continue;
+        for (const [px, py] of piles) {
+          const dx = p.x - px;
+          const dy = p.y - py;
+          const lim = p.r * 0.9 + 4;
+          if (Math.abs(dx) > lim || Math.abs(dy) > lim) continue;
+          const d = Math.hypot(dx, dy) || 1;
+          if (d >= lim) continue;
+          const push = lim - d;
+          p.x += (dx / d) * push * 0.5;
+          p.y += (dy / d) * push * 0.5;
+          p.vx += (dx / d) * push * 2;
+          p.vy += (dy / d) * push * 2;
+          p.cx -= (dx / d) * (push / p.r) * 0.8;
+          p.cy -= (dy / d) * (push / p.r) * 0.8;
+        }
+      }
+    }
   }
 
   /** Regrow everything around the boat (after a resize wider than the field was grown for). */
@@ -947,6 +1043,7 @@ export class Pond {
     this.t += dt;
     this.stepGusts(dt);
     this.stepBoat(dt, reduced);
+    this.collidePiers(dt);
     this.stepPads(dt, active);
     this.stepFloaters(dt, active);
     this.stepBlooms(dt, active);

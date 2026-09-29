@@ -112,6 +112,8 @@ const urlSeed = Number(params.get('seed'));
 const timeScale = Math.max(0.1, Math.min(8, Number(params.get('timescale')) || 1));
 const rand = seeded(urlSeed || (Date.now() % 100000) + 7);
 const pond = new Pond(Math.floor(rand() * 1e9));
+/** `?pier=1`: a jetty just ahead at the start (to look at it, and to bump it). */
+pond.forcePier = !!params.get('pier');
 /**
  * Spacing, planted as ecology (P1): when a fact is due, its parts are grown
  * into the dew of the leaves appearing ahead, so by the time they drift into

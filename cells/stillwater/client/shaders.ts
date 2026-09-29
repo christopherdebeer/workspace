@@ -1534,89 +1534,92 @@ float boxS(vec2 p, vec2 b){
   return length(max(d, 0.)) + min(max(d.x, d.y), 0.);
 }
 
+/**
+ * A plank jetty seen from above: four long boards laid along its length on
+ * cross bearers, standing on pairs of piles every 36 units, silvered by
+ * weather, dark and mossy toward the water. Local +y runs from the bank to
+ * the tip; q is in world units.
+ */
 void main(){
-  float kind = vB.y;
   float seed = vB.z;
-  vec2 p = vP;
-  float aa = max(fwidth(p.x), fwidth(p.y)) * 1.5;
+  vec2 q = vP * vA.zw;
+  float w = vA.z, l = vA.w;
+  float aa = max(fwidth(q.x), fwidth(q.y)) * 1.2;
 
-  vec2 shW = -uSun.xy / max(uSun.z, .28) * 7.;
-  vec2 shL = rot(shW, -vB.x) / max(vA.zw, vec2(1.));
-  float cover = 0.;
-  float shadow = 0.;
-  vec3 col = vec3(0.);
+  vec2 shW = -uSun.xy / max(uSun.z, .28) * 9.;
+  vec2 shL = rot(shW, -vB.x);
 
-  if (kind < .5) {
-    // Silvered, water-worn timber. The deck is deliberately broad and quiet;
-    // construction detail comes from many small boards rather than red colour.
-    float wob = (texture(uNoise, vec2(p.y * .21 + seed * 9., seed * 17.)).r - .5) * .045;
-    float deckD = boxS(vec2(p.x + wob, p.y), vec2(.84, .94));
-    float deck = 1. - smoothstep(-aa, aa, deckD);
+  // the deck, with a little wander to its edges (boards are not laser-cut)
+  float wob = (texture(uNoise, vec2(q.y * .02 + seed * 9., seed * 17.)).r - .5) * .6;
+  float deckD = boxS(vec2(q.x + wob, q.y), vec2(w, l));
+  float deck = 1. - smoothstep(-aa, aa, deckD);
+  float ds = boxS(vec2(q.x + wob, q.y) - shL, vec2(w + .4, l + .4));
+  float shadow = (1. - smoothstep(-aa * 2., aa * 2., ds)) * .3;
 
-    float ds = boxS(vec2(p.x + wob, p.y) - shL, vec2(.87, .98));
-    shadow = (1. - smoothstep(-aa * 2., aa * 2., ds)) * .27;
-
-    float grain = texture(uNoise, vec2(p.x * .22 + seed * 7., p.y * 2.4 + seed * 3.)).r;
-    float coarse = texture(uNoise, vW / 28. + seed).g;
-    float silver = texture(uNoise, vec2(p.x * .7 - seed * 4., p.y * 5.2)).b;
-    vec3 dry = mix(vec3(.245, .245, .215), vec3(.405, .395, .335), grain * .38 + coarse * .22);
-    dry = mix(dry, vec3(.46, .47, .42), smoothstep(.69, .93, silver) * .18);
-
-    // More, smaller transverse planks: a weathered landing, not a UI ladder.
-    float boards = 15. + floor(fract(seed * 13.) * 6.);
-    float by = fract((p.y + .94) / 1.88 * boards + seed * .37);
-    float seam = 1. - smoothstep(.014, .043, min(by, 1. - by));
-    dry *= 1. - seam * (.24 + .10 * coarse);
-
-    // Hairline longitudinal splits and occasional dark checks in old boards.
-    float splitN = texture(uNoise, vec2(p.x * 5.7 + seed * 15., floor((p.y + .94) * boards) * .31)).r;
-    float split = smoothstep(.955, .992, splitN) * smoothstep(.18, .78, abs(p.x));
-    dry *= 1. - split * .42;
-
-    // Waterward end: charcoal-grey with a restrained olive algae collar.
-    float wet = smoothstep(.30, .96, p.y);
-    dry = mix(dry, vec3(.135, .155, .14), wet * .54);
-    float algae = wet * smoothstep(.58, .88, coarse);
-    dry = mix(dry, vec3(.17, .225, .145), algae * .30);
-
-    float nx = abs(abs(p.x) - .61);
-    float ny = abs(by - .5);
-    float nail = (1. - smoothstep(.014, .036, nx)) * (1. - smoothstep(.045, .12, ny));
-    dry = mix(dry, vec3(.045, .05, .045), nail * .82);
-
-    float chipN = texture(uNoise, vec2(p.y * 3.1 + seed * 11., seed * 5.)).b;
-    float chip = smoothstep(.79, .95, abs(p.x)) * step(.76, chipN);
-    deck *= 1. - chip * .58;
-
-    // Round piles explain how the landing is held up. They sit just proud of
-    // both deck edges, darken toward the water and carry a mossy wet collar.
-    float pile = 0.;
-    float collar = 0.;
-    for (int yi = 0; yi < 3; yi++) {
-      float py = -.63 + float(yi) * .61;
-      for (int xi = -1; xi <= 1; xi += 2) {
-        vec2 q = (p - vec2(float(xi) * .84, py)) * vA.zw;
-        float r = yi == 2 ? 4.4 : 3.9;
-        float dd = length(q);
-        pile = max(pile, 1. - smoothstep(r - 1.0, r + 1.0, dd));
-        collar = max(collar, smoothstep(r * .62, r * .96, dd) * (1. - smoothstep(r, r + 1.2, dd)));
-      }
-    }
-    vec3 pileCol = mix(vec3(.115, .125, .115), vec3(.19, .205, .175), coarse * .25);
-    pileCol = mix(pileCol, vec3(.145, .205, .13), collar * (.28 + wet * .28));
-
-    cover = max(deck, pile);
-    // Deck lies over the piles where they overlap.
-    vec3 wood = mix(pileCol, dry, deck);
-    shadow *= (1. - cover * .15);
-    float light = .66 + .44 * max(uSun.z, 0.) * sunThrough(vW);
-    col = wood * (uAmb * 1.08 + uSunCol * light);
+  // four boards along the length, a narrow gap between them
+  float nb = 4.;
+  float bw = 2. * w / nb;
+  float bx = (q.x + w) / bw;
+  float bi = floor(bx);
+  float bf = fract(bx);
+  float gap = 1. - smoothstep(.055, .11, min(bf, 1. - bf));
+  // each board's own tone and grain, running along the jetty
+  float tone = hash12(vec2(bi, seed * 31.));
+  float grain = texture(uNoise, vec2(bf * .9 + bi * 3.1, q.y * .045 + seed * 5.)).r;
+  float fine = texture(uNoise, vec2(bf * 4. + bi, q.y * .3)).a;
+  vec3 wood = mix(vec3(.30, .29, .25), vec3(.47, .45, .38), tone * .45 + grain * .4 + fine * .15);
+  // silvered on top, warm where the weather has not reached
+  float silver = texture(uNoise, vec2(q.x * .06 + seed * 3., q.y * .02)).g;
+  wood = mix(wood, vec3(.52, .53, .48), smoothstep(.55, .9, silver) * .3);
+  // boards are not one length: joints across a board now and then, with a nail either side
+  float seg = 44. + 12. * hash12(vec2(bi, seed * 7.));
+  float jy = fract((q.y + l + bi * 17.) / seg);
+  float joint = 1. - smoothstep(.006, .02, min(jy, 1. - jy));
+  wood *= 1. - joint * .55;
+  float nail = 0.;
+  for (int k = -1; k <= 1; k += 2) {
+    float ny = abs(min(jy, 1. - jy) * seg - 2.2);
+    float nx = abs((bf - .5) * bw - float(k) * bw * .3);
+    nail = max(nail, (1. - smoothstep(.5, .9, length(vec2(nx, ny)))));
   }
+  // the cross bearers show as a darker band under the gaps, every 36 units
+  float bear = 1. - smoothstep(1.4, 2.4, abs(mod(q.y + l - 14., 36.)));
+  // wet and mossy toward the tip, dark end grain at the very end
+  float toWater = smoothstep(-l * .1, l, q.y);
+  wood = mix(wood, vec3(.16, .18, .15), toWater * .45);
+  float moss = texture(uNoise, vW / 19.).b;
+  wood = mix(wood, vec3(.18, .25, .14), toWater * smoothstep(.55, .85, moss) * .35);
+  float endg = 1. - smoothstep(1., 2.2, l - q.y);
+  wood = mix(wood, vec3(.2, .17, .13), endg * .6);
+  wood = mix(wood, vec3(.05, .05, .045), nail * .8);
+  wood *= 1. - gap * (.55 + .35 * bear);
+  float gapA = gap * .5;
+
+  // the piles: pairs either side of the deck every 36 units, dark, with a wet collar
+  float pile = 0.;
+  float collar = 0.;
+  for (int k = 0; k < 8; k++) {
+    float py = -l + 14. + float(k) * 36.;
+    if (py >= l - 6.) break;
+    for (int sx = -1; sx <= 1; sx += 2) {
+      vec2 d = q - vec2(float(sx) * (w + 2.5), py);
+      float r = 4.;
+      float dd = length(d);
+      pile = max(pile, 1. - smoothstep(r - aa, r + aa, dd));
+      collar = max(collar, smoothstep(r * .55, r * .95, dd) * (1. - smoothstep(r, r + 1., dd)));
+    }
+  }
+  vec3 pileCol = mix(vec3(.12, .13, .12), vec3(.2, .21, .18), texture(uNoise, q * .2).r * .3);
+  pileCol = mix(pileCol, vec3(.14, .21, .12), collar * .5);
+
+  float cover = max(deck * (1. - gapA), pile);
+  vec3 col = mix(pileCol, wood, deck * (1. - gapA) / max(cover, 1e-4));
+  float light = .5 + .36 * max(uSun.z, 0.) * sunThrough(vW);
+  col = col * (uAmb * .95 + uSunCol * light);
+  shadow *= 1. - cover * .2;
 
   if (cover < .003 && shadow < .003) discard;
-  vec3 outCol = col * cover;
-  float a = cover + shadow * (1. - cover);
-  o = vec4(outCol, a);
+  o = vec4(col * cover, cover + shadow * (1. - cover));
 }`;
 
 // ─── ribbons (rope, thread) ────────────────────────────────────────────────
