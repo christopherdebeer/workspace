@@ -108,6 +108,8 @@ const stage = () => activeStage;
 const params = startupParams;
 /** `?bare=1`: hide the pads (for looking at the water and the bed). */
 const bare = !!params.get('bare');
+// `?mute=dip,gurgle,knock,plop` silences named sounds, to tell them apart by ear
+for (const name of (params.get('mute') ?? '').split(',')) if (name) sound.muted.add(name.trim());
 const urlSeed = Number(params.get('seed'));
 /** Test harnesses on software GL run at a few fps; they can ask the river to hurry. */
 const timeScale = Math.max(0.1, Math.min(8, Number(params.get('timescale')) || 1));
@@ -1339,6 +1341,8 @@ Object.defineProperty(window, '__stillwater', {
     scale,
     frameMs: Math.round(frameMs * 10) / 10,
     sim: renderer.simOn,
+    audio: sound.path(),
+    muted: [...sound.muted],
     pads: visibleDewy().map((p) => {
       const [x, y] = toScreen(p.x, p.y);
       return { id: p.id, x: Math.round(x), y: Math.round(y), n: liveCount(p) };

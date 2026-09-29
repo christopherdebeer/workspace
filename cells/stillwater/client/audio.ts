@@ -111,6 +111,12 @@ function reverbImpulse(ctx: AudioContext, seconds = 1.6): AudioBuffer {
 }
 
 export class Sound {
+  /** Sound names to skip (`?mute=dip,gurgle`): for telling the stroke's sounds apart by ear. */
+  muted = new Set<string>();
+  /** Which synthesis is live: the worklet, the plain-node fallback, or nothing yet. */
+  path(): 'worklet' | 'fallback' | 'off' {
+    return !this.ctx || !this.on ? 'off' : this.water ? 'worklet' : 'fallback';
+  }
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private water: AudioWorkletNode | null = null;
@@ -302,30 +308,35 @@ export class Sound {
 
   /** A tap on open water. */
   plop(strength = 1, pan = 0) {
+    if (this.muted.has('plop')) return;
     if (this.water) this.send({ type: 'plop', s: strength, pan });
     else this.fallbackSplash(strength, pan, 700);
   }
 
   /** An oar blade going in. */
   dip(strength: number, pan = 0) {
+    if (this.muted.has('dip')) return;
     if (this.water) this.send({ type: 'dip', s: strength, pan });
     else this.fallbackSplash(strength, pan, 420);
   }
 
   /** The blade coming out: a gurgle. */
   gurgle(strength: number, pan = 0) {
+    if (this.muted.has('gurgle')) return;
     if (this.water) this.send({ type: 'gurgle', s: strength, pan });
     else this.fallbackSplash(strength * 0.55, pan, 1700);
   }
 
   /** A drop falling back in. */
   drip(strength: number, pan = 0) {
+    if (this.muted.has('drip')) return;
     if (this.water) this.send({ type: 'drip', s: strength, pan });
     else this.fallbackSplash(strength * 0.12, pan, 2400);
   }
 
   /** The hull nudging a pad. */
   knock(strength: number, pan = 0) {
+    if (this.muted.has('knock')) return;
     if (this.water) this.send({ type: 'knock', s: strength, pan });
     else this.fallbackSplash(strength * 0.4, pan, 350);
   }
