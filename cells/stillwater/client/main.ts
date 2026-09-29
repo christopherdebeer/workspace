@@ -894,7 +894,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
     // one plop: a single clean ring spreading out, like a raindrop or a fingertip
-    if (!pond.splash(wx, wy, 6, 2.6)) sound.plop(1, panAt(wx));
+    if (!pond.splash(wx, wy, 6, 2.6, !!params.get('foamtap'))) sound.plop(1, panAt(wx));
     school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
     // a finger left on the water may then be drawn through it (see pointermove)
@@ -1227,6 +1227,8 @@ function frame(now: number) {
       v.sink = 0.75;
       v.dx = 0.15;
       v.dy = 0.02;
+      // with `&foamtap=1` too: churn white water over its flooded side, to see it ride the film
+      if (params.get('foamtap') && Math.random() < dt * 12) pond.impulses.push({ x: v.x + v.r * 0.55, y: v.y + v.r * 0.1, r: 12, s: 0.5, foam: true });
     }
   }
   const order = drawOrder(pond.pads);

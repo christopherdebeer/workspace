@@ -510,6 +510,8 @@ out vec4 o;
 uniform float uMode;
 uniform sampler2D uDrops;
 uniform float uPx; // world units per device pixel
+uniform sampler2D uSim;   // the wave sim, for the white water that rides over a flooded leaf
+uniform float uSimOn;
 
 float seed;
 vec2 so; // seed offset into the noise tile
@@ -840,6 +842,15 @@ void main(){
     float glint = texture(uNoise, vW / 9. + uTime * vec2(.06, .03)).r * texture(uNoise, vW / 5. - uTime * .05).g;
     river += uSunCol * pow(glint, 3.) * .2;
     col = mix(col, river, under);
+    // white water rides on the film over the leaf (the surface pass drew its foam under us)
+    if (uSimOn > .5 && uMode < .5) {
+      vec2 sUv = (vW - uView.xy) * uView.zw * (.5 / 1.15) + .5;
+      float foam = texture(uSim, sUv).b;
+      vec4 foamN = texture(uNoise, vW / 9. + uTime * vec2(.03, -.02));
+      float bub = foamN.a * .65 + foamN.r * .55;
+      float fm = smoothstep(.25, .9, foam * bub * 1.4) * under;
+      col = mix(col, vec3(.86, .9, .86) * (uAmb * 1.3 + uSunCol * .75), fm * .8);
+    }
     // the meniscus: a soft, faint sheen where the film begins, not a drawn line
     col += vec3(.8, .95, .9) * exp(-wet * wet * 500.) * vSink * .16;
   }

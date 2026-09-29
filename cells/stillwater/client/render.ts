@@ -540,6 +540,12 @@ export class Renderer {
     gl.uniform1f(pad.u.uMode, 0);
     bindTex(gl, 1, this.dropTex);
     gl.uniform1i(pad.u.uDrops, 1);
+    const simLive = this.simOn && this.simA;
+    gl.uniform1f(pad.u.uSimOn, simLive ? 1 : 0);
+    if (simLive) {
+      bindTex(gl, 2, this.simA!.tex);
+      gl.uniform1i(pad.u.uSim, 2);
+    }
     this.padInst.draw();
 
     // names on the leaves, drawn with the pads so they move as one
