@@ -21,7 +21,7 @@ import { Overlay } from './ui';
 import { glInfo, probe, report } from './report';
 import { PROGRAMS } from './render';
 import { program } from './gl';
-import { Gust, layDrops, liveCount, Pad, Pond, seeded } from './world';
+import { layDrops, liveCount, Pad, Pond, seeded } from './world';
 
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
 const ui = new Overlay();
@@ -811,7 +811,7 @@ function nameSprites() {
  * fireflies and pollen. So is a touch on a dry leaf. Touch on a leaf holding
  * dew chooses it, and a drag from there traces across dewy leaves.
  */
-let gust: Gust | null = null;
+/** A finger drawn through the water: its path, for the ripples it leaves. */
 /**
  * The oars only pull when asked. A tap on the boat, or on the water behind
  * it, is one stroke: the arms push away, the blades go in and pull, and the
@@ -820,7 +820,7 @@ let gust: Gust | null = null;
  * behind the boat, off the water it's heading into.
  */
 let helm: { t: number; x: number; y: number; moved: boolean; steer: number; sign: number; bias: number } | null = null;
-let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean } | null = null;
+let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean; wx: number; wy: number; last: number } | null = null;
 
 canvasEl.addEventListener('pointerdown', (e) => {
   if (pointerId !== null) return;
@@ -861,8 +861,8 @@ canvasEl.addEventListener('pointerdown', (e) => {
     if (!pond.splash(wx, wy, 6, 2.6)) sound.plop(1, panAt(wx));
     school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
-    gust = pond.gust({ x: wx, y: wy, dx: 0, dy: 0, s: 0.6, r: 120, life: 1.8, radial: true, held: true });
-    drag = { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: false };
+    // a finger left on the water may then be drawn through it (see pointermove)
+    drag = { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: false, wx, wy, last: performance.now() };
   }
 });
 
@@ -877,7 +877,9 @@ canvasEl.addEventListener('pointermove', (e) => {
     if (Math.abs(dx) > 6 || Math.abs(dy) > 6) pond.boat.helm = { steer: helm.steer + dx * 0.007 * helm.sign };
     return;
   }
-  if (gust && drag) {
+  if (drag) {
+    // a finger drawn through the water: a line of small ripples along its path, closer
+    // and stronger the faster it moves, and the leaves it crosses feel it
     const now = performance.now();
     const dtm = Math.max(1, now - drag.t) / 1000;
     const vx = (e.clientX - drag.x) / dtm;
@@ -887,19 +889,29 @@ canvasEl.addEventListener('pointermove', (e) => {
     drag.x = e.clientX;
     drag.y = e.clientY;
     drag.t = now;
-    const sp = Math.hypot(drag.vx, drag.vy);
-    if (sp > 60) {
-      // screen y runs down, world y runs up
-      gust.radial = false;
-      gust.dx = drag.vx / sp;
-      gust.dy = -drag.vy / sp;
-      gust.s = Math.max(0.45, Math.min(1, sp / 900));
-      gust.r = 170;
-      gust.life = 3;
-    }
     const [wx, wy] = toWorld(e.clientX, e.clientY);
-    gust.x = wx;
-    gust.y = wy;
+    const dx = wx - drag.wx;
+    const dy = wy - drag.wy;
+    const d = Math.hypot(dx, dy);
+    if (d >= 5) {
+      drag.moved = true;
+      const sp = Math.hypot(drag.vx, drag.vy);
+      const strength = Math.max(0.12, Math.min(0.45, sp / 1400));
+      const step = 6;
+      for (let a = step; a <= d; a += step) {
+        const x = drag.wx + (dx / d) * a;
+        const y = drag.wy + (dy / d) * a;
+        pond.impulses.push({ x, y, r: 4.5 + strength * 4, s: strength });
+      }
+      if (now - drag.last > 220) {
+        drag.last = now;
+        pond.rings.push({ x: wx, y: wy, t: pond.t, s: 0.35 });
+        if (sp > 250) sound.gurgle(0.3 + strength * 0.6, panAt(wx));
+        school.scare(wx, wy, 70);
+      }
+      drag.wx = wx;
+      drag.wy = wy;
+    }
     return;
   }
   const p = hit(e.clientX, e.clientY);
@@ -925,8 +937,6 @@ const end = (e: PointerEvent) => {
     pond.boat.helm = null;
     helm = null;
   }
-  if (gust) gust.held = false; // let it run on and die away
-  gust = null;
   drag = null;
 };
 canvasEl.addEventListener('pointerup', end);
@@ -1049,6 +1059,8 @@ function adapt(ms: number, dt: number) {
 
 let perfSent = false;
 let scareAcc = 0;
+let breezeAt = 6;
+let breezeDir = Math.PI * 0.5 + (rand() - 0.5);
 function frame(now: number) {
   if (!perfSent && pond.t > 12) {
     perfSent = true;
@@ -1087,13 +1099,26 @@ function frame(now: number) {
   }
   school.rises.length = 0;
   if (shift) atmosphere.shift(shift);
+  // a gentle breeze of the river's own, now and then: a soft patch of wind crossing the
+  // water, ruffling it, nudging the leaves and the pollen (touch is no longer wind)
+  breezeAt -= dt;
+  if (breezeAt <= 0) {
+    breezeAt = 9 + rand() * 12;
+    breezeDir += (rand() - 0.5) * 1.2;
+    const bdx = Math.cos(breezeDir);
+    const bdy = Math.sin(breezeDir);
+    const hw2 = cam.cssW / (2 * cam.zoom);
+    pond.gust({ x: cam.x - bdx * hw2 * 0.8 + (rand() - 0.5) * 120, y: cam.y + (rand() - 0.5) * hh * 1.2, dx: bdx, dy: bdy, s: 0.2 + rand() * 0.16, r: 200 + rand() * 90, life: 4 + rand() * 2.5, radial: false, held: false });
+  }
   let breeze = 0;
   scareAcc += dt;
   for (const g of pond.gusts) {
     const lvl = Pond.gustLevel(g);
     breeze = Math.max(breeze, lvl);
-    // fish bolt from the wind's shadow on the water as it passes over them
-    if (scareAcc > 0.25 && lvl > 0.15) school.scare(g.x, g.y, g.r * (0.8 + lvl * 0.6));
+    // a breeze moves a gust along; only a strong one startles the fish
+    g.x += g.dx * 26 * dt;
+    g.y += g.dy * 26 * dt;
+    if (scareAcc > 0.25 && lvl > 0.34) school.scare(g.x, g.y, g.r * (0.8 + lvl * 0.6));
   }
   if (scareAcc > 0.25) scareAcc = 0;
   sound.breeze(breeze);
