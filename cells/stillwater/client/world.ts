@@ -1705,7 +1705,8 @@ export class Pond {
         p.age = p.life;
         continue;
       }
-      if (Math.random() < dt * 24) this.impulses.push({ x: p.x, y: p.y, r: 5 + p.age * 3, s: p.s * fade, foam: p.age < 0.5 && Math.random() < 0.3 });
+      // the thrown water carries its froth with it, so the white is laid down in a streak astern
+      if (Math.random() < dt * 24) this.impulses.push({ x: p.x, y: p.y, r: 5 + p.age * 3, s: p.s * fade, foam: p.age < 1.3 && Math.random() < 0.55 });
     }
     this.puddles = this.puddles.filter((p) => p.age < p.life);
   }

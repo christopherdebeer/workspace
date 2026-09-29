@@ -62,6 +62,7 @@ uniform vec4 uRect;
 uniform float uSimScale;
 uniform vec4 uImp[48];
 uniform int uImpN;
+uniform vec2 uFoamFlow; // how far the water moved this step, in sim uv
 float at(vec2 uv){
   if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) return 0.;
   return texture(uPrev, uv).r;
@@ -73,8 +74,10 @@ float foamAt(vec2 uv){
 void main(){
   vec2 uv = vUv + uShift;
   vec2 c = (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) ? vec2(0.) : texture(uPrev, uv).rg;
-  // white water: spreads a touch, fades over a few seconds
-  float foam = mix(foamAt(uv), (foamAt(uv - vec2(uTexel.x, 0.)) + foamAt(uv + vec2(uTexel.x, 0.)) + foamAt(uv - vec2(0., uTexel.y)) + foamAt(uv + vec2(0., uTexel.y))) * .25, .25) * .988;
+  // white water: it belongs to the water, not the place — carried along by the current
+  // (so it recedes astern of a boat under way), spreading a touch and fading over a few seconds
+  vec2 fuv = uv - uFoamFlow;
+  float foam = mix(foamAt(fuv), (foamAt(fuv - vec2(uTexel.x, 0.)) + foamAt(fuv + vec2(uTexel.x, 0.)) + foamAt(fuv - vec2(0., uTexel.y)) + foamAt(fuv + vec2(0., uTexel.y))) * .25, .16) * .9945;
   float l = at(uv - vec2(uTexel.x, 0.)), r = at(uv + vec2(uTexel.x, 0.));
   float d = at(uv - vec2(0., uTexel.y)), u = at(uv + vec2(0., uTexel.y));
   // slow waves: c^2 well under the 0.5 stability limit keeps ripples at a walking pace
@@ -1372,6 +1375,19 @@ float sdOars(vec2 p, out float blade){
 float rowLean(){ return sin(uOar.z * TAU); }            // -1 at the catch … +1 at the finish
 float rowSwing(){ return 4.5 * clamp(uOar.y, 0., 1.2); }
 vec2 rowerAt(){ return vec2(0., 16. + rowLean() * rowSwing()); }
+/**
+ * How much of the lantern's light reaches a point on the boat. The lamp hangs at the
+ * bow a little above the deck, so its light falls off along the hull, and the rower
+ * sits between it and the stern: everything aft of the figure is in their shadow.
+ */
+float lampOnDeck(vec2 p){
+  float d = length(p - vec2(0., 46.));
+  float near = 1.6 / (1. + d * d / 380.);
+  vec2 at = rowerAt();
+  float aft = smoothstep(4., -10., p.y - at.y);
+  float across = 1. - smoothstep(9., 17., abs(p.x) - max(0., at.y - p.y) * .12);
+  return near * (1. - .82 * aft * across);
+}
 vec2 figureQ(vec2 p){ vec2 q = p - rowerAt(); return vec2(q.x, -q.y); }
 /** The head leads: it travels further than the body through the stroke. */
 float headLead(){ return -rowLean() * rowSwing() * .4; }
@@ -1439,7 +1455,7 @@ void main(){
   // the lantern lights its own boat too, not just the cloak beside it
   // (sits in the scene's light, not a spotlight: the lantern is behind glass and hangs
   // over the bow, so its own boat gets a warm wash rather than the full glare)
-  vec3 light = uAmb * .85 + uSunCol * .55 * sunThrough(vBW) + LAMP * lampAt(vBW) * .4;
+  vec3 light = uAmb * .85 + uSunCol * .55 * sunThrough(vBW) + LAMP * lampAt(vBW) * .4 * lampOnDeck(p);
   float grain = texture(uNoise, vec2(p.x * .05, p.y * .006)).r;
 
   // hull
@@ -1516,7 +1532,7 @@ void main(){
     vec3 L3 = vec3(Lxy, uSun.z);
     // the figure's frame is mirrored: its light comes from the mirrored side too
     vec3 Lf = vec3(L3.x, -L3.y, L3.z);
-    vec3 lit = uAmb * .85 + uSunCol * .55 * sunThrough(vBW) + LAMP * lampAt(vBW) * .4;
+    vec3 lit = uAmb * .85 + uSunCol * .55 * sunThrough(vBW) + LAMP * lampAt(vBW) * .4 * lampOnDeck(p);
     float hands;
     float dArms = sdArms(p, at, hands) + fuzz(p) * .5;
     vec2 hfq = fq - vec2(0., headLead());

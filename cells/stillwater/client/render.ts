@@ -667,6 +667,7 @@ export class Renderer {
     const cap = 48 * Math.max(1, Math.floor(this.simAcc * 60));
     if (imps.length > cap) imps = imps.filter((_, i) => i % Math.ceil(imps.length / cap) === 0);
     let from = 0;
+    const flow = pond.flow(cam.x, cam.y);
     while (this.simAcc >= 1 / 60) {
       this.simAcc -= 1 / 60;
       const prev = this.simCam ?? [cam.x, cam.y];
@@ -681,6 +682,7 @@ export class Renderer {
       gl.uniform1i(sp.u.uOcc, 1);
       gl.uniform2f(sp.u.uTexel, 1 / this.simW, 1 / this.simH);
       gl.uniform2f(sp.u.uShift, shift[0], shift[1]);
+      gl.uniform2f(sp.u.uFoamFlow, (flow[0] / 60) / rw, (flow[1] / 60) / rh);
       gl.uniform4f(sp.u.uRect, cam.x - rw / 2, cam.y - rh / 2, rw, rh);
       gl.uniform1f(sp.u.uSimScale, 1.15);
       gl.uniform4f(sp.u.uView, cam.x, cam.y, (2 * cam.zoom) / cam.cssW, (2 * cam.zoom) / cam.cssH);
