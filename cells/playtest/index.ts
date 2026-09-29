@@ -31,6 +31,9 @@ import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
 import { evaluate, proposeRound, publicEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest } from './lib/evaluate';
 import * as db from './lib/store';
+import * as pub from './lib/public';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
 const JOB_BUDGET_MS = 270_000; // Lambda timeout 300 s; leave room to write the result
@@ -353,6 +356,37 @@ const TOOLS = [
   { name: 'set_token', kind: 'act', description: 'Owner-only, write-only: the gateway bearer this cell uses to call @c15r/jev (scope it to cell:c15r/jev:*).', inputSchema: S({ token: { type: 'string' } }, ['token']) },
 ];
 
+/* ── public read API ─────────────────────────────────────────────────── */
+
+const page = (statusCode: number, contentType: string, body: string) => ({ statusCode, headers: { 'content-type': contentType, 'cache-control': 'no-cache' }, body });
+
+async function publicApi(parts: string[]): Promise<unknown> {
+  const [head, a, b, c] = parts;
+  switch (head) {
+    case 'overview':
+      return pub.overview();
+    case 'games':
+      return pub.games();
+    case 'game':
+      if (!a) return undefined;
+      if (b === 'v' && c) return pub.definition(a, Number(c));
+      return pub.game(a);
+    case 'eval':
+      return a ? pub.evalView(a) : undefined;
+    case 'run':
+      return a ? pub.runView(a, b === 'turns' ? 'turns' : 'summary', Number(c ?? 0) || 0) : undefined;
+    case 'mechanics':
+      return pub.mechanics();
+    case 'changelog':
+      return pub.changelog(200);
+    case 'presets':
+      return a ? (PRESETS[a] ? { slug: a, rules: PRESETS[a], declared: pub.declared(PRESETS[a]) } : null) : Object.keys(PRESETS).map((slug) => ({ slug, ...pub.declared(PRESETS[slug]) }));
+    case 'tools':
+      return TOOLS.map((t) => ({ name: t.name, kind: t.kind, description: t.description }));
+  }
+  return undefined;
+}
+
 /* ── handler ────────────────────────────────────────────────────────── */
 
 export const handler = async (
@@ -392,6 +426,29 @@ export const handler = async (
       return json(200, await tool(path.slice('/_tools/'.length), args, caller));
     } catch (e) {
       return json(e instanceof ToolError ? e.status : 500, { error: (e as Error).message });
+    }
+  }
+  // Public read-only API behind the landing page (anonymous GETs: the cell is public).
+  if ((method === 'GET' || method === 'HEAD') && path.startsWith('/api/')) {
+    try {
+      const out = await publicApi(path.slice('/api/'.length).split('/').filter(Boolean).map(decodeURIComponent));
+      return out === undefined ? json(404, { error: `no route ${path}` }) : { ...json(out === null ? 404 : 200, out ?? { error: 'not found' }), headers: { 'content-type': 'application/json', 'cache-control': 'no-cache' } };
+    } catch (e) {
+      return json(500, { error: (e as Error).message });
+    }
+  }
+  if ((method === 'GET' || method === 'HEAD') && (path === '/' || path === '')) {
+    try {
+      return page(200, 'text/html; charset=utf-8', readFileSync(join(__dirname, 'static/index.html'), 'utf8'));
+    } catch {
+      /* no page bundled — fall through to the descriptor */
+    }
+  }
+  if ((method === 'GET' || method === 'HEAD') && path === '/app.js') {
+    try {
+      return page(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'));
+    } catch {
+      return json(404, { error: 'no client bundle' });
     }
   }
   if (method === 'GET' && (path === '/' || path === '' || path === '/_info')) {
