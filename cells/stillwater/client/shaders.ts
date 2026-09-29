@@ -1572,34 +1572,28 @@ void main(){
   float ds = boxS(vec2(q.x + wob, q.y) - shL, vec2(w + .4, l + .4));
   float shadow = (1. - smoothstep(-aa * 2., aa * 2., ds)) * .3;
 
-  // four boards along the length, a narrow gap between them
-  float nb = 4.;
-  float bw = 2. * w / nb;
-  float bx = (q.x + w) / bw;
-  float bi = floor(bx);
-  float bf = fract(bx);
-  float gap = 1. - smoothstep(.055, .11, min(bf, 1. - bf));
-  // each board's own tone and grain, running along the jetty
+  // planks laid across the jetty, each spanning its width, ~3.6 units along, a
+  // narrow gap between; two long bearers run beneath and show through the gaps
+  float pw = 3.6;
+  float by = (q.y + l) / pw;
+  float bi = floor(by);
+  float bf = fract(by);
+  float gap = 1. - smoothstep(.06, .13, min(bf, 1. - bf));
+  // each plank its own tone; the grain runs along the plank, across the deck
   float tone = hash12(vec2(bi, seed * 31.));
-  float grain = texture(uNoise, vec2(bf * .9 + bi * 3.1, q.y * .045 + seed * 5.)).r;
-  float fine = texture(uNoise, vec2(bf * 4. + bi, q.y * .3)).a;
+  float grain = texture(uNoise, vec2(q.x * .045 + seed * 5., bf * .9 + bi * 3.1)).r;
+  float fine = texture(uNoise, vec2(q.x * .3, bf * 4. + bi)).a;
   vec3 wood = mix(vec3(.30, .29, .25), vec3(.47, .45, .38), tone * .45 + grain * .4 + fine * .15);
   // silvered on top, warm where the weather has not reached
   float silver = texture(uNoise, vec2(q.x * .06 + seed * 3., q.y * .02)).g;
   wood = mix(wood, vec3(.52, .53, .48), smoothstep(.55, .9, silver) * .3);
-  // boards are not one length: joints across a board now and then, with a nail either side
-  float seg = 44. + 12. * hash12(vec2(bi, seed * 7.));
-  float jy = fract((q.y + l + bi * 17.) / seg);
-  float joint = 1. - smoothstep(.006, .02, min(jy, 1. - jy));
-  wood *= 1. - joint * .55;
-  float nail = 0.;
-  for (int k = -1; k <= 1; k += 2) {
-    float ny = abs(min(jy, 1. - jy) * seg - 2.2);
-    float nx = abs((bf - .5) * bw - float(k) * bw * .3);
-    nail = max(nail, (1. - smoothstep(.5, .9, length(vec2(nx, ny)))));
-  }
-  // the cross bearers show as a darker band under the gaps, every 36 units
-  float bear = 1. - smoothstep(1.4, 2.4, abs(mod(q.y + l - 14., 36.)));
+  // the bearers, at ±55% of the width: a nail into each per plank, and a darker
+  // band where they run beneath the gaps
+  float bear = 1. - smoothstep(1.2, 2.2, abs(abs(q.x) - w * .55));
+  float nail = 1. - smoothstep(.45, .85, length(vec2(abs(q.x) - w * .55, (bf - .5) * pw)));
+  // a plank now and then sits a shade darker, split or warped
+  float odd = step(.9, hash12(vec2(bi * 2.7, seed * 13.)));
+  wood *= 1. - odd * .18;
   // wet and mossy toward the tip, dark end grain at the very end
   float toWater = smoothstep(-l * .1, l, q.y);
   wood = mix(wood, vec3(.16, .18, .15), toWater * .45);
