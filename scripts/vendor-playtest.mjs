@@ -4,7 +4,12 @@
  * the jev · lab client so the Playtest experiment runs the SAME mechanics the
  * CLI runs, in the browser, with no agents.
  *
- *   node scripts/vendor-playtest.mjs <path-to-playtest-clone>
+ *   node scripts/vendor-playtest.mjs <path-to-playtest-clone> [out-dir]
+ *
+ * out-dir defaults to cells/jev/client/playtest/engine (the jev · lab demo).
+ * The @c15r/playtest cell's copy (cells/playtest/engine) is the git truth for
+ * the engine going forward: mechanics are added and fixed THERE, so re-vendoring
+ * over it would discard that work — it refuses unless --force.
  *
  * What changes on the way in (nothing else):
  *   - `./x.js` relative imports lose the `.js` (the cell bundler resolves
@@ -18,7 +23,7 @@
  * The source commit is pinned in engine/VENDOR.json.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 
 const src = process.argv[2];
@@ -26,7 +31,11 @@ if (!src) {
   console.error('usage: vendor-playtest.mjs <playtest-clone>');
   process.exit(2);
 }
-const OUT = join(process.cwd(), 'cells/jev/client/playtest/engine');
+const OUT = join(process.cwd(), process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : 'cells/jev/client/playtest/engine');
+if (OUT.includes('cells/playtest/') && existsSync(join(OUT, 'VENDOR.json')) && !process.argv.includes('--force')) {
+  console.error(`${OUT} already holds the engine and is its git truth (mechanics evolve there). Pass --force to overwrite.`);
+  process.exit(1);
+}
 const SKIP = new Set(['src/cli', 'src/core/cleanup.ts', 'src/core/turns.ts', 'src/index.ts']);
 
 function walk(dir, out = []) {

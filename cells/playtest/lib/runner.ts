@@ -1,5 +1,10 @@
 /* ---------------------------------------------------------------------------
- * Playtest runner — a game definition in, a played and judged session out.
+ * Playtest runner (@c15r/playtest) — a game definition in, a played and judged
+ * session out. Server-side sibling of the jev · lab demo runner, made safe for
+ * CONCURRENT games in one Lambda: each game owns a slot directory in the
+ * in-memory fs and its own seeded RNG, swapped in around every synchronous
+ * engine call (sync sections never interleave, so seeds stay reproducible
+ * while Jev calls from many games overlap).
  *
  *   classify(rules)  what the definition asks for vs what the engine has:
  *                    declared mechanics (implemented / partial / missing),
@@ -15,7 +20,7 @@
  * Jev never writes and never counts: every number it sees is computed here.
  * Pure over an injected `decide` so the node devtools and the page share it.
  * ------------------------------------------------------------------------- */
-import { writeFileSync, resetGames, filesUnder } from './engine/shims/fs';
+import { writeFileSync, resetPrefix, filesUnder } from '../engine/shims/fs';
 import {
   initGame,
   startGame,
@@ -23,17 +28,30 @@ import {
   getAvailableActions,
   validateAction,
   executeAction,
-} from './engine/core/game';
-import { parseRules, getPlayerCount, getMechanicImplementationStatus, loadMechanicsIndex } from './engine/core/rules';
-import { validateRules } from './engine/core/validate';
-import { mechanicRegistry } from './engine/mechanics/index';
-import { CONSUMED_KEYS } from './engine/consumed-keys';
-import type { Questions, Answers } from '../lib/types';
+} from '../engine/core/game';
+import { parseRules, getPlayerCount, getMechanicImplementationStatus, loadMechanicsIndex } from '../engine/core/rules';
+import { validateRules } from '../engine/core/validate';
+import { mechanicRegistry } from '../engine/mechanics/index';
+import { CONSUMED_KEYS } from '../engine/consumed-keys';
+import type { Questions, Answers } from './types';
 
 export type Decide = (state: unknown, questions: Questions, label: string) => Promise<{ answers: Answers; tokens: number; ms: number }>;
 
-const GAME = 'lab';
-const RULES_PATH = `/pt/games/${GAME}/RULES.md`;
+let slotSeq = 0;
+/** A fresh game directory name; games in flight never share one. */
+export const newSlot = () => `s${Date.now().toString(36)}${(slotSeq++).toString(36)}`;
+const rulesPath = (slot: string) => `/pt/games/${slot}/RULES.md`;
+
+/** Run a synchronous engine section with this game's RNG as Math.random. */
+function withRng<T>(rng: () => number, fn: () => T): T {
+  const real = Math.random;
+  Math.random = rng;
+  try {
+    return fn();
+  } finally {
+    Math.random = real;
+  }
+}
 
 /* Effect types some mechanic applies (effect-dispatcher direct types, the
  * three applyEffect implementers, take-that / lose-a-turn blocking). Read from
@@ -93,14 +111,15 @@ export function playerRange(v: unknown): { min: number; max: number } {
 
 /* ── classify ─────────────────────────────────────────────────────────── */
 
-function load(rules: string) {
-  resetGames();
-  writeFileSync(RULES_PATH, rules);
-  return parseRules(RULES_PATH);
+function load(rules: string, slot: string) {
+  resetPrefix(`/pt/games/${slot}/`);
+  writeFileSync(rulesPath(slot), rules);
+  return parseRules(rulesPath(slot));
 }
 
 export async function classify(rules: string, decide: Decide | null): Promise<Classification> {
-  const { config, markdown } = load(rules);
+  const slot = newSlot();
+  const { config, markdown } = load(rules, slot);
   const cfg = config as unknown as Record<string, unknown> & { mechanics?: string[]; players?: unknown; win_condition?: string; name?: string; deck?: Array<Record<string, unknown>>; engine_mechanics?: Record<string, unknown> };
   const findings: Finding[] = [];
 
@@ -138,7 +157,7 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
   // The engine's own schema validation.
   let schema = { errors: [] as string[], warnings: [] as string[] };
   try {
-    const v = validateRules(RULES_PATH) as unknown as { errors?: Array<{ message?: string } | string>; warnings?: Array<{ message?: string } | string> };
+    const v = validateRules(rulesPath(slot)) as unknown as { errors?: Array<{ message?: string } | string>; warnings?: Array<{ message?: string } | string> };
     const msg = (x: { message?: string } | string) => (typeof x === 'string' ? x : x.message ?? JSON.stringify(x));
     schema = { errors: (v.errors ?? []).map(msg), warnings: (v.warnings ?? []).map(msg) };
   } catch (e) {
@@ -179,6 +198,7 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
   }
 
   const multiActionEngine = !!(cfg.engine_mechanics && 'action_points' in cfg.engine_mechanics);
+  resetPrefix(`/pt/games/${slot}/`);
   return { name: String(cfg.name ?? 'untitled'), players, winCondition: String(cfg.win_condition ?? ''), declared, enabled, prose, ruleChecks, multiActionEngine, effects, schema, findings, tokens };
 }
 
@@ -214,7 +234,7 @@ export interface Session {
   turns: TurnRecord[];
   log: Array<Record<string, unknown>>;
   unsuitable: Array<{ type: string; fields: string[]; why: 'free-text' | 'numeric' | 'no-valid-candidate'; times: number }>;
-  stopped: 'finished' | 'max-steps' | 'stuck' | 'error';
+  stopped: 'finished' | 'max-steps' | 'deadline' | 'stuck' | 'error';
   error?: string;
   tokens: number;
   ms: number;
@@ -328,11 +348,12 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
   const t0 = Date.now();
   const seed = opts.seed ?? Math.floor(Math.random() * 1e9);
   const maxSteps = opts.maxSteps ?? 300;
-  const { config, markdown } = load(rules);
+  const slot = newSlot();
+  const { config, markdown } = load(rules, slot);
   const cfg = config as unknown as { win_condition?: string; max_turns?: number };
   const rulesDigest = digest(markdown, String(cfg.win_condition ?? ''));
-  const realRandom = Math.random;
-  Math.random = mulberry32(seed);
+  const rng = mulberry32(seed);
+  const E = <T,>(fn: () => T): T => withRng(rng, fn);
   const session: Session = { seed, players: opts.players, status: 'init', winner: null, endReason: null, turns: [], log: [], unsuitable: [], stopped: 'finished', tokens: 0, ms: 0 };
   const unsuitable = new Map<string, Session['unsuitable'][number]>();
   const note = (type: string, fields: string[], why: Session['unsuitable'][number]['why']) => {
@@ -344,14 +365,14 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
   const recent: string[] = [];
   let gameId = '';
   try {
-    let s = initGame(GAME, opts.players) as unknown as Record<string, any>;
+    let s = E(() => initGame(slot, opts.players)) as unknown as Record<string, any>;
     gameId = s.gameId;
-    startGame(gameId);
-    s = loadState(gameId) as unknown as Record<string, any>;
+    E(() => startGame(gameId));
+    s = E(() => loadState(gameId)) as unknown as Record<string, any>;
     for (let step = 1; s.status === 'in_progress' && step <= maxSteps; step++) {
       if (opts.signal?.aborted) throw Object.assign(new Error('stopped'), { name: 'AbortError' });
       const pid = s.currentPlayer as string;
-      const av = getAvailableActions(s as never, pid) as unknown as Record<string, any>;
+      const av = E(() => getAvailableActions(s as never, pid)) as unknown as Record<string, any>;
       const offered = (av.actions as Array<Record<string, any>>).filter((a) => a.enabled && a.type !== 'resign');
 
       // code enumerates, the engine's validator masks, Jev chooses
@@ -365,7 +386,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
             note(c.type, words, words.some((w) => FREE_TEXT.has(w)) ? 'free-text' : 'numeric');
             continue;
           }
-          if ((validateAction(s as never, pid, c as never) as { valid: boolean }).valid) {
+          if ((E(() => validateAction(s as never, pid, c as never)) as { valid: boolean }).valid) {
             valid.push(c);
             ok++;
           }
@@ -381,7 +402,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         session.error = `${pid} had no valid move at step ${step}`;
         break;
       } else if (picks.length === 1 || !decide) {
-        chosen = picks.length === 1 ? picks[0] : picks[Math.floor(Math.random() * picks.length)];
+        chosen = picks.length === 1 ? picks[0] : picks[Math.floor(rng() * picks.length)];
         if (!decide && picks.length > 1) rec.fallback = 'random (no Jev)';
       } else {
         const persona = opts.persona ? ` Play as a ${opts.persona} player.` : '';
@@ -405,14 +426,14 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
           session.tokens += r.tokens;
         } catch (e) {
           if ((e as Error).name === 'AbortError') throw e;
-          chosen = picks[Math.floor(Math.random() * picks.length)];
+          chosen = picks[Math.floor(rng() * picks.length)];
           rec.fallback = `Jev error: ${(e as Error).message}`;
         }
       }
 
-      executeAction(s as never, pid, chosen.action as never);
+      E(() => executeAction(s as never, pid, chosen.action as never));
       recent.push(`${pid}: ${chosen.label}`);
-      const next = loadState(gameId) as unknown as Record<string, any>;
+      const next = E(() => loadState(gameId)) as unknown as Record<string, any>;
       const t: TurnRecord = {
         step,
         round: s.round,
@@ -435,12 +456,10 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
     session.winner = (s.winner as string) ?? null;
     session.endReason = (s.endReason as string) ?? (s.shared?.endReason as string) ?? null;
   } catch (e) {
-    session.stopped = (e as Error).name === 'AbortError' ? 'stuck' : 'error';
+    session.stopped = (e as Error).name === 'AbortError' ? 'deadline' : 'error';
     session.error = (e as Error).message;
-  } finally {
-    Math.random = realRandom;
   }
-  const logs = filesUnder(`/pt/games/${GAME}/logs/`);
+  const logs = filesUnder(`/pt/games/${slot}/logs/`);
   session.log = Object.values(logs)
     .flatMap((txt) => txt.split('\n').filter(Boolean))
     .map((l) => {
@@ -453,6 +472,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
   const end = [...session.log].reverse().find((e) => /game_end|pending_analysis|game_over|win/i.test(String(e.event)));
   if (!session.endReason && end) session.endReason = String((end.data as Record<string, unknown> | undefined)?.reason ?? end.event);
   session.unsuitable = [...unsuitable.values()];
+  resetPrefix(`/pt/games/${slot}/`);
   session.ms = Date.now() - t0;
   return session;
 }
