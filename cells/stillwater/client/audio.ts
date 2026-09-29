@@ -37,8 +37,11 @@ class Water extends AudioWorkletProcessor {
         800+this.rnd()*2200,p+(this.rnd()-.5)*.25,.04+this.rnd()*.42,
         i<3 ? 350+this.rnd()*550 : 0);
     } else if (m.type === 'plop') {
-      this.grain(.12*s,.14,900,p);
-      this.grain(.025*s,.035,1500,p,.012,450+this.rnd()*350);
+      // a fingertip on still water: a soft, rounded push of water, a breath of spray, no pitch
+      this.grain(.09*s,.17,520,p);
+      this.grain(.035*s,.07,1600,p,.012);
+      for (let i=0;i<4;i++) this.grain((.006+this.rnd()*.01)*s,.02+this.rnd()*.03,
+        1400+this.rnd()*1800,p+(this.rnd()-.5)*.15,.03+this.rnd()*.14);
     } else if (m.type === 'drip') {
       this.grain(.026*s,.018+this.rnd()*.025,2400,p,0,900+this.rnd()*700);
     } else if (m.type === 'knock') {

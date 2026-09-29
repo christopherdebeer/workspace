@@ -942,7 +942,7 @@ canvasEl.addEventListener('pointermove', (e) => {
       if (now - drag.last > 220) {
         drag.last = now;
         pond.rings.push({ x: wx, y: wy, t: pond.t, s: 0.35 });
-        if (sp > 250) sound.gurgle(0.3 + strength * 0.6, panAt(wx));
+        if (sp > 250) sound.plop(0.25 + strength * 0.5, panAt(wx));
         school.scare(wx, wy, 70);
       }
       drag.wx = wx;
@@ -1188,7 +1188,7 @@ function frame(now: number) {
   for (const snd of pond.sounds) {
     const pan = panAt(snd.x);
     if (snd.kind === 'dip') sound.dip(snd.s, pan);
-    else if (snd.kind === 'gurgle') sound.gurgle(snd.s, pan);
+    // 'gurgle' (the release) is not voiced: it was the sound that jarred (Round 54)
     // 'drip' (water off the lifted blades, and the release's spray) is not voiced: the
     // pitched plinks read as notes, not water. The ripples still land. See Round 52.
   }
