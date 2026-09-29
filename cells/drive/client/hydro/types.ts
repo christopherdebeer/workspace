@@ -309,6 +309,18 @@ export interface HydroFrame {
    *  on one scale, so a bank seen through a shallow is the bank beside it
    *  and not three times brighter. */
   groundGain?: { r: number; g: number; b: number };
+  /** The moon as the water sees it: where it is (unit, toward the moon) and
+   *  its light (linear colour × a 0..1 strength, 0 when it is down, new or
+   *  clouded out). Only the look model's glitter path reads it. */
+  moon?: { x: number; y: number; z: number; r: number; g: number; b: number };
+  /** The rig's headlamp as the water sees it: world position and aim, its
+   *  colour × intensity as a RATIO to the clear-noon reference the scene
+   *  light is stated against (so 1 at one metre is noon), and three's own
+   *  spot law — cos of the outer and inner cone, the range and the decay —
+   *  so the river takes the same lamp the bank beside it does. Omit and the
+   *  water is lit by the sky alone, as it was. */
+  head?: { x: number; y: number; z: number; dx: number; dy: number; dz: number;
+    r: number; g: number; b: number; cosOuter: number; cosInner: number; range: number; decay: number };
   /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */
@@ -356,6 +368,18 @@ export interface HydroTuning {
   scatteringStrength: number;
   /** Broadening and dimming of reflected sky structure. */
   surfaceRoughness: number;
+  /** Optical model. 1 (the default since the hydro review) lets reflection
+   *  carry the scene's own sky on the full Fresnel curve, adds the moon path,
+   *  darkens the body at night, blends class steps and keeps water-only terms
+   *  off the waterline. 0 is the look before it, kept for `?hydrolook=0` A/B. */
+  lookModel: number;
+  /** INSTRUMENT, not a look. A bitmask over the sea's foam terms so a frame
+   *  can say which of them drew a given white: 1 lapping swash, 2 breakers,
+   *  4 spilling crests, 8 whitecaps, 16 the retained wash strip. 31 is every
+   *  term; `__hydrotune({ foamMask: 2 })` is the breakers alone. It exists
+   *  because `foamStrength` scales all five at once and an apron at the
+   *  coast could not be attributed to one of them. */
+  foamMask: number;
 }
 
 export const DEFAULT_HYDRO_TUNING: HydroTuning = {
@@ -372,6 +396,8 @@ export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   absorptionStrength: 1,
   scatteringStrength: 1,
   surfaceRoughness: 1,
+  lookModel: 1,
+  foamMask: 31,
 };
 
 export interface HydroBuildOptions {

@@ -1838,7 +1838,21 @@ const MARKS_CAP = 2000;        // marks accepted in one push, per kind
 interface StateRow { g: number; t: number; c?: number }
 interface MarkRows { m: Record<string, number>; s: Record<string, number> }
 interface PlayerState { roads: Record<string, StateRow>; marks: MarkRows; odo: number;
-  tapes: TapeMeta[] }
+  tapes: TapeMeta[]; spots?: Record<string, SpotRow> }
+/**
+ * ── SAVED SPOTS ARE PROGRESS TOO ──
+ *
+ * They lived in localStorage alone, and a device reset — the advice for a
+ * stuck service worker — took a player's Senqu, Nagato and Fife with it while
+ * the roads came back on sign-in. A spot is keyed by its place (lat,lon at
+ * 1e-4) and carries two moments: when it was saved and when it was deleted.
+ * Both merge by MAX, so the union converges from any order like everything
+ * else here, and a delete on one device is not undone by another that still
+ * holds the spot: the spot is live while saved-at is later than deleted-at.
+ */
+export interface SpotRow { at: number; gone: number; name: string; sub: string; lat: number; lon: number; h: number }
+const SPOT_SK = 'SPOT#';
+const SPOTS_CAP = 200;
 /** A banked tape's INDEX row — the blob itself lives in the public namespace
  *  (~/tape/v1/<user>/<id>), edge-served like any tile. Tens of bytes, which is
  *  the state table's whole design. */
@@ -1855,6 +1869,7 @@ export interface StateTable {
    *  career, not a campaign. */
   delRows(pk: string, sks: string[]): Promise<void>;
   setProfile(pk: string, p: { odo: number }): Promise<void>;
+  putSpots?(pk: string, rows: Record<string, SpotRow>): Promise<void>;
   putTape(pk: string, meta: TapeMeta): Promise<void>;
   /** The authored store's index — every tile that carries an authored entry,
    *  with the revision whose blob is current. One partition, read whole. */
@@ -1924,6 +1939,16 @@ function liveTable(): StateTable {
             out.roads[id] = c ? { g: num(it.g?.N), t: num(it.t?.N), c } : { g: num(it.g?.N), t: num(it.t?.N) };
             continue;
           }
+          if (sk.startsWith(SPOT_SK)) {
+            const id = sk.slice(SPOT_SK.length);
+            if (!id) continue;
+            try {
+              const v = JSON.parse(it.v?.S ?? '{}') as Partial<SpotRow>;
+              (out.spots ??= {})[id] = { at: num(it.c?.N), gone: num(it.g?.N), name: String(v.name ?? ''),
+                sub: String(v.sub ?? ''), lat: Number(v.lat ?? 0), lon: Number(v.lon ?? 0), h: Number(v.h ?? 0) };
+            } catch { /* a malformed row is skipped, not fatal */ }
+            continue;
+          }
           if (sk.startsWith(TAPE_SK)) {
             const id = sk.slice(TAPE_SK.length);
             if (id && out.tapes.length < 64) out.tapes.push({ id, at: num(it.c?.N),
@@ -1958,6 +1983,10 @@ function liveTable(): StateTable {
         }));
       }
     },
+    putSpots: (pk, rows) => batchPut(Object.entries(rows).map(([id, r]) => ({
+      pk: S(pk), sk: S(SPOT_SK + id), c: N(r.at), g: N(r.gone),
+      v: S(JSON.stringify({ name: r.name, sub: r.sub, lat: r.lat, lon: r.lon, h: r.h })),
+    }))),
     async putTape(pk, meta) {
       // Reuses the batch writer's item shape: g/t/c are the table's own three
       // numeric columns (secs/steps/banked-at here), lat/lon ride as extras.
@@ -2216,6 +2245,7 @@ export async function serveState(
       missions?: Record<string, unknown>;
       stations?: Record<string, unknown>;
       odo?: unknown;
+      spots?: Record<string, unknown>;
     } = {};
     try { sent = JSON.parse(body ?? '{}') as typeof sent; } catch { return no(400, 'unreadable'); }
 
@@ -2261,6 +2291,32 @@ export async function serveState(
       wrote += Object.keys(put).length;
     }
 
+    const sentSpots = sent.spots && typeof sent.spots === 'object' ? sent.spots : {};
+    const spotPut: Record<string, SpotRow> = {};
+    const spotsHad = (mine.spots ??= {});
+    let sk = 0;
+    for (const [id, raw] of Object.entries(sentSpots)) {
+      if (typeof id !== 'string' || !id || id.length > 40 || !raw || typeof raw !== 'object') continue;
+      if (++sk > SPOTS_CAP) break;
+      const r = raw as Record<string, unknown>;
+      const lat = Number(r.lat), lon = Number(r.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+      const had = spotsHad[id];
+      const at = Math.max(num(r.at), had?.at ?? 0), gone = Math.max(num(r.gone), had?.gone ?? 0);
+      const newer = !had || num(r.at) > had.at;
+      const row: SpotRow = {
+        at, gone,
+        name: String((newer ? r.name : had?.name) ?? '').slice(0, 60),
+        sub: String((newer ? r.sub : had?.sub) ?? '').slice(0, 60),
+        lat: newer ? lat : had!.lat, lon: newer ? lon : had!.lon,
+        h: Number.isFinite(Number(newer ? r.h : had?.h)) ? Number(newer ? r.h : had?.h) : 0,
+      };
+      if (had && had.at === row.at && had.gone === row.gone && had.name === row.name && had.sub === row.sub) continue;
+      spotPut[id] = row; spotsHad[id] = row;
+    }
+    if (Object.keys(spotPut).length && table.putSpots) await table.putSpots(pk, spotPut);
+    wrote += Object.keys(spotPut).length;
+
     const odo = Math.max(num(sent.odo), mine.odo);
     if (odo > mine.odo) { await table.setProfile(pk, { odo }); mine.odo = odo; }
   }
@@ -2272,6 +2328,7 @@ export async function serveState(
     stations: mine.marks.s,
     odo: mine.odo,
     tapes: (mine.tapes ?? []).sort((a, b) => b.at - a.at),
+    spots: mine.spots ?? {},
     ...(method === 'POST' ? { wrote } : {}),
     ...(method === 'DELETE' ? { reset } : {}),
   }), { 'cache-control': 'no-store' });

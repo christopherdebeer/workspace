@@ -1,4 +1,5 @@
 import { clamp } from './num';
+import { createBirdscape, type Birdscape, type BirdCohort } from './birdscape';
 
 /**
  * ── THE SOUNDSCAPE: EVERYTHING SYNTHESISED, NOTHING DOWNLOADED ──
@@ -34,6 +35,18 @@ export type ImpactKind = 'shell' | 'metal' | 'stone' | 'wood';
  * site fails to compile — which is the conversation that should happen.
  */
 export type AudioSurface = 'road' | 'track' | 'water' | 'ground';
+
+/** Audio-only axle slip: tyres saturate before the body slides.
+ * Fade out the solver's low-speed steering geometry. */
+export function tyreCornerSlip(front: number, rear: number, speed: number, stiffness = 9): number {
+  const use = Math.tanh(Math.max(Math.abs(front), Math.abs(rear)) * stiffness);
+  const x = clamp((use - 0.6) / 0.35, 0, 1);
+  return x * x * (3 - 2 * x) * clamp((Math.abs(speed) - 1) / 4, 0, 1);
+}
+/** Perceptual masking has a floor; it never turns the habitat off. */
+export function ambientBed(speed: number, engine: boolean): number {
+  return (0.45 + 0.55 / (1 + Math.pow(Math.abs(speed) / 12, 2))) * (engine ? 0.75 : 1);
+}
 
 export interface Impact { t: number; kind: ImpactKind; force: number }
 
@@ -276,6 +289,11 @@ export function createAudio() {
   let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
   let birdAt = 0;                 // next phrase, spaced by how alive the spot is
   let scrapeLast = 0;             // the scrape's live level, for the sidechain below
+  /** Sentinels-derived habitat layer. When enabled, replaces the thin phrase()
+   *  whistlers with a full cohort scheduler (uk-garden / nz-bush). Off by default
+   *  so existing mixes are unchanged; the lab and main can opt in. */
+  let birdscape: Birdscape | null = null;
+  let birdscapeOn = false;
   /**
    * ── TWO BUSES, BECAUSE ENCLOSURE IS NOT A VOLUME KNOB ──
    *
@@ -291,7 +309,9 @@ export function createAudio() {
    * bus at unity and the send at silence, so an open road sounds exactly as it
    * did and the whole mechanism costs three nodes nobody hears.
    */
-  let outBus: GainNode, outLP: BiquadFilterNode, nearBus: GainNode;
+  let outBus: GainNode, outLP: BiquadFilterNode, nearBus: GainNode, truckLP: BiquadFilterNode;
+  let truckPan: StereoPannerNode | null = null;
+  let listenerDistance = 0;
   let slapSend: GainNode, slapDelay: DelayNode, slapFb: GainNode;
   /** The river's bearing, panned. Null on a browser without a stereo panner —
    *  Safari has had one for years, but a missing node must not silence the
@@ -334,11 +354,16 @@ export function createAudio() {
     // road tunnel's own distance — long enough to hear as a separate return,
     // short enough not to read as a cathedral.
     nearBus = ctx.createGain(); nearBus.gain.value = 1;
-    nearBus.connect(master); tap('truck', nearBus);
+    truckLP = ctx.createBiquadFilter(); truckLP.type = 'lowpass'; truckLP.frequency.value = 20000;
+    nearBus.connect(truckLP);
+    try { truckPan = ctx.createStereoPanner(); } catch { /* mono fallback */ }
+    if (truckPan) { truckLP.connect(truckPan); truckPan.connect(master); }
+    else truckLP.connect(master);
+    tap('truck', truckLP);
     slapDelay = ctx.createDelay(0.4); slapDelay.delayTime.value = 0.055;
     slapFb = ctx.createGain(); slapFb.gain.value = 0.36;
     slapSend = ctx.createGain(); slapSend.gain.value = 0;
-    nearBus.connect(slapSend); slapSend.connect(slapDelay);
+    truckLP.connect(slapSend); slapSend.connect(slapDelay);
     slapDelay.connect(slapFb); slapFb.connect(slapDelay);
     slapDelay.connect(master);
     // Two seconds of white noise, looped — the source of tires and wind.
@@ -394,17 +419,16 @@ export function createAudio() {
     rattleGain = ctx.createGain(); rattleGain.gain.value = 0;
     rattleSrc.connect(rattleFilt); rattleFilt.connect(rattleGain); rattleGain.connect(nearBus); rattleSrc.start();
     tap('rattle', rattleGain);
-    // SQUEAL: a tyre that is sliding rather than rolling. Noise through a very
-    // narrow bandpass, plus a thin sawtooth at the same pitch so it has an edge
-    // — pure filtered noise reads as wind, not rubber.
+    // Rubber friction has a noisy band and a tonal component; both follow contact.
     const sqSrc = ctx.createBufferSource(); sqSrc.buffer = noiseBuf; sqSrc.loop = true;
     squealFilt = ctx.createBiquadFilter(); squealFilt.type = 'bandpass';
-    squealFilt.frequency.value = 1500; squealFilt.Q.value = 14;
+    squealFilt.frequency.value = 1500; squealFilt.Q.value = 4.5;
     squealGain = ctx.createGain(); squealGain.gain.value = 0;
     sqSrc.connect(squealFilt);
-    squealOsc = ctx.createOscillator(); squealOsc.type = 'sawtooth'; squealOsc.frequency.value = 1500;
-    const sqMix = ctx.createGain(); sqMix.gain.value = 0.09;   // the EDGE — noise alone reads as wind
-    squealOsc.connect(sqMix); sqMix.connect(squealFilt);
+    squealOsc = ctx.createOscillator(); squealOsc.type = 'triangle'; squealOsc.frequency.value = 1500;
+    // Rubber tone beside the friction band, not attenuated by that band again.
+    const sqMix = ctx.createGain(); sqMix.gain.value = 0.28;
+    squealOsc.connect(sqMix); sqMix.connect(squealGain);
     squealFilt.connect(squealGain); squealGain.connect(nearBus);
     sqSrc.start(); squealOsc.start(); tap('squeal', squealGain);
     // Wind: highpassed noise that climbs with the square of speed.
@@ -586,7 +610,7 @@ export function createAudio() {
   };
   /** A few whistled notes from one place in the world — allocated only when a
    *  bird speaks and released after its tail. */
-  const phrase = (birds: number): void => {
+  const phrase = (birds: number, presence = 1): void => {
     if (!ctx) return;
     const t = ctx.currentTime;
     const notes = 2 + Math.floor(Math.random() * 4);
@@ -604,7 +628,7 @@ export function createAudio() {
       g.gain.setValueAtTime(0.0001, at0);
       // −27 dBFS at the peak of a phrase where it was −35: the one thing a
       // parked driver could hear, and only just. TARGETS.birds scales it.
-      g.gain.exponentialRampToValueAtTime((0.02 + 0.09 * clamp(birds, 0, 1)) * TARGETS.birds, at0 + 0.015);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0001, (0.02 + 0.09 * clamp(birds, 0, 1)) * TARGETS.birds * clamp(presence, 0, 1)), at0 + 0.015);
       g.gain.exponentialRampToValueAtTime(0.0001, at0 + 0.05 + Math.random() * 0.07);
       osc.connect(g); g.connect(birdPan ?? outBus);
       const lastNote = i === notes - 1;
@@ -636,6 +660,8 @@ export function createAudio() {
         // unbuilt filter is not a shut one, and a mix read before the first
         // gesture should not say the truck is in a bore.
         out: outBus ? g(outBus) : 1, slap: g(slapSend),
+        truckDistance: +listenerDistance.toFixed(1), truckGain: nearBus ? g(nearBus) : 1,
+        truckAt: +(truckPan?.pan.value ?? 0).toFixed(2),
         muffle: Math.round(outLP?.frequency.value ?? 20000),
         riverAt: +(riverPan?.pan.value ?? 0).toFixed(2) };
     },
@@ -694,24 +720,18 @@ export function createAudio() {
      * surface being crossed.
      */
     update(speed: number, throttle: number, surf: AudioSurface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0,
-      q = 1, spin = 0, ambWind = 0, engF = 1, shake = 0, surfaceWet = rainAmt): void {
+      q = 1, spin = 0, ambWind = 0, engF = 1, shake = 0, surfaceWet = rainAmt,
+      airSpeed = Math.abs(speed), contactSpeed = Math.abs(speed)): void {
       if (!live() || !ctx || !master) return;
       const t = ctx.currentTime, v = Math.abs(speed);
-      // THE EVENT LEVELS FIRST, because the whole bed answers to them.
-      // A SEALED SURFACE SQUEALS; LOOSE GROUND JUST HISSES — the bite
-      // follows the quality rather than the tier. A SKID IS BOTH AXES, and
-      // THE LAMP AND THE EAR MUST AGREE: the HUD calls SLIP from 0.06 and
-      // the 0.55 curve opens the voice there rather than at a committed
-      // slide.
-      // …with a FLOOR under the sealed tiers. slip-sig caught the real
-      // silencer at last: q read 0.2 ON THE ROAD at Chapman's (worst-wheel
-      // sampling off the verge, thin surface data — either way), and
-      // 0.2^1.6 throttled a healthy skid signal to nothing. A worn road
-      // still screeches — only genuinely loose ground gets to not sing.
-      const bite = surf === 'road' ? Math.max(Math.pow(clamp(q, 0, 1), 1.6), 0.55)
-        : surf === 'track' ? Math.max(Math.pow(clamp(q, 0, 1), 1.6), 0.25) : 0.12;
-      const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.55);
-      const sqT = sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.6;
+      // Sealed surfaces sing; loose surfaces scrub through the grit voice.
+      // Water and airborne wheels have no rubber contact sound.
+      const bite = surf === 'road' ? Math.max(Math.pow(clamp(q, 0, 1), 1.6), 0.65)
+        : surf === 'track' ? 0.12 + Math.pow(clamp(q, 0, 1), 3) * 0.43 : 0;
+      const contactSlip = clamp(Math.max(slip, spin * 0.85), 0, 1);
+      const sq2 = Math.pow(contactSlip, 0.65);
+      const sqT = sq2 * bite * clamp(grounded, 0, 1)
+        * clamp((Math.abs(contactSpeed) + spin * 9) / 8, 0, 1) * 0.6;
       // THE SIDECHAIN. Measured at Chapman's Peak (mix-audit): scrape peaked
       // at 0.08 and squeal at 0.03 against an engine at 0.34 and grit at
       // 0.40 — no per-channel raise wins against that bed, which is why two
@@ -736,7 +756,8 @@ export function createAudio() {
       );
       // Rubber that has stopped rolling — the levels were derived up top;
       // here it just sings at its pitch.
-      const sf = 1250 + Math.min(v * 14, 620) + sq2 * 260;
+      const sf = 1150 + Math.min(Math.abs(contactSpeed) * 14, 620) + sq2 * 260
+        + sq2 * (18 * Math.sin(t * 31) + 11 * Math.sin(t * 47));
       squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
       squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
       squealGain.gain.setTargetAtTime(sqT * m('squeal'), t, 0.06);
@@ -773,7 +794,7 @@ export function createAudio() {
       // own speed adds −28 at a hundred. The old linear numbers put the
       // 12 km/h day at −44, which no phone can say.
       const windAmb = Math.pow(clamp(ambWind / 0.73, 0, 1.6), 0.55);
-      const windSpeed = Math.min((v * v) / 2600, 0.9) * 3.2;
+      const windSpeed = Math.min((airSpeed * airSpeed) / 2600, 0.9) * 3.2;
       windGain.gain.setTargetAtTime(
         lvl(UNIT.wind, TARGETS.wind) * (windAmb + windSpeed) * (0.55 + 0.45 * gust) * m('wind'), t, 0.15);
       // THE CHASSIS, SHAKEN. `shake` is the washboard's rate at the four
@@ -805,7 +826,9 @@ export function createAudio() {
       // IN DECIBELS: −29 dBFS at speed on open ground, a spinning wheel four
       // over that. The old 0.46 rendered at −42, under everything.
       gritGain.gain.setTargetAtTime(
-        lvl(UNIT.grit, TARGETS.grit) * (Math.min(v / 12, 1) * loose + spin * 0.65 * (0.25 + 0.75 * loose))
+        lvl(UNIT.grit, TARGETS.grit) * (Math.min(Math.abs(contactSpeed) / 12, 1) * loose
+          + (surf === 'water' ? 0 : contactSlip) * clamp((Math.abs(contactSpeed) + spin * 9) / 8, 0, 1)
+            * 0.65 * (0.25 + 0.75 * loose))
           * grounded * duck * m('grit'), t, 0.09);
     },
     /** The starter: four compressions through a low filter, dying if the
@@ -845,7 +868,7 @@ export function createAudio() {
      *  much as the truck lets them be. `gusty` shifts the rustle's colour;
      *  birds are PHRASES, not a loop: a few whistled notes, spaced by how
      *  alive the spot is. */
-    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0, riverAt = 0, grass = 0): void {
+    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0, riverAt = 0, grass = 0, birdMix = 1): void {
       if (!live() || !ctx || !master || !rustleGain) return;
       const t = ctx.currentTime;
       // IN DECIBELS. `rustle` arrives as wind × foliage × the bed's duck, so
@@ -881,19 +904,67 @@ export function createAudio() {
       riverFilt.frequency.setTargetAtTime(340 + froth * 520, t, 0.9);
       riverFilt.Q.setTargetAtTime(0.8 - froth * 0.3, t, 0.9);
       if (on && birds > 0.03 && m('birds') > 0) {
-        const nowP = performance.now();
-        if (nowP > birdAt) {
-          birdAt = nowP + 1500 + (Math.random() * 9000) / (0.15 + birds);
-          phrase(birds);
+        if (birdscapeOn && birdscape) {
+          // Full cohort: density tracks habitat activity; enclosure/cabin
+          // already live on the audio object from space().
+          birdscape.set({
+            density: birds * birdMix * TARGETS.birds,
+            enclosure,
+            cabin,
+            gain: m('birds'),
+          });
+        } else {
+          const nowP = performance.now();
+          if (nowP > birdAt) {
+            birdAt = nowP + 1500 + (Math.random() * 9000) / (0.15 + birds);
+            phrase(birds, birdMix);
+          }
         }
+      } else if (birdscapeOn && birdscape) {
+        birdscape.set({ density: 0 });
       }
     },
+    /**
+     * Truck-relative pose for the birdscape layer. Habitat is world-fixed;
+     * the truck moves through it. `radialSpeed` is the component of truck
+     * velocity toward a virtual chorus anchor ahead of the vehicle (m/s,
+     * positive = approaching → higher pitch). Call every frame from main
+     * alongside ambience when birdscape is enabled; no-ops when it is off.
+     */
+    birdscapeListener(distance = 0, bearing = 0, radialSpeed = 0): void {
+      if (!birdscapeOn || !birdscape) return;
+      birdscape.setListener({ distance, bearing, radialSpeed });
+    },
     /** One bird, now — for the lab. `strength` is the birds level the phrase
-     *  would have been spaced and pitched by. */
+     *  would have been spaced and pitched by. With birdscape on, bumps density
+     *  briefly so a strophe is likely. */
     bird(strength = 0.6): void {
       if (!live()) return;
+      if (birdscapeOn && birdscape) {
+        birdscape.set({ density: Math.max(0.4, strength), gain: TARGETS.birds });
+        return;
+      }
       phrase(strength);
     },
+    /** Opt into the Sentinels-derived cohort engine (client/birdscape.ts).
+     *  Connects to outBus, starts the scheduler. Pass a cohort to switch. */
+    enableBirdscape(cohort: BirdCohort = 'uk-garden'): void {
+      if (!ctx || !outBus) return;
+      if (!birdscape) {
+        birdscape = createBirdscape({ context: ctx, cohort });
+        birdscape.connect(outBus);
+      } else {
+        birdscape.set({ cohort });
+      }
+      birdscape.arm();
+      birdscape.start();
+      birdscapeOn = true;
+    },
+    disableBirdscape(): void {
+      birdscapeOn = false;
+      birdscape?.stop();
+    },
+    birdscapeEnabled(): boolean { return birdscapeOn; },
     /** Silence one voice, or give it back. A mute is not a volume and is not
      *  a target: it is how the lab isolates a sound, and it never leaves the
      *  lab because nothing in the game calls it. */
@@ -935,6 +1006,19 @@ export function createAudio() {
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
       src.connect(lp); lp.connect(g); g.connect(outBus);
       src.start(t); src.stop(t + dur + 0.1);
+    },
+    /** A small interface confirmation, independent of vehicle distance. */
+    ui(): void {
+      if (!live() || !ctx || !master) return;
+      const osc = ctx.createOscillator(), gain = ctx.createGain(), t = ctx.currentTime;
+      osc.type = 'sine'; osc.frequency.setValueAtTime(760, t);
+      osc.frequency.exponentialRampToValueAtTime(520, t + 0.045);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.055, t + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.055);
+      osc.connect(gain); gain.connect(master);
+      osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+      osc.start(t); osc.stop(t + 0.065);
     },
     // A stone spat out from under a tire — sharp, pitched, very short.
     stone(): void {
@@ -1206,6 +1290,16 @@ export function createAudio() {
      * a moment after you leave, and snapping the filter at the portal reads as
      * a bug rather than as an entrance.
      */
+    /** Distance to the truck from the active vehicle. Chart zoom never moves
+     * this listener. UI is connected directly to master, outside this bus. */
+    listener(distance = 0, bearing = 0): void {
+      listenerDistance = Math.max(0, distance);
+      if (!live() || !ctx || !nearBus) return;
+      const near = 1 / Math.sqrt(1 + Math.pow(listenerDistance / 20, 2));
+      nearBus.gain.setTargetAtTime(near, ctx.currentTime, 0.35);
+      truckLP.frequency.setTargetAtTime(1200 + 18800 * near, ctx.currentTime, 0.35);
+      truckPan?.pan.setTargetAtTime(clamp(bearing, -1, 1) * 0.75, ctx.currentTime, 0.35);
+    },
     space(enc: number, cab = 0, parked = 0): void {
       cabin = clamp(cab, 0, 1); enclosure = clamp(enc, 0, 1); parkedL = clamp(parked, 0, 1);
       if (!live() || !ctx || !outBus) return;

@@ -19,7 +19,7 @@ const out = mkdtempSync(join(tmpdir(), 'switches-'));
 const built = join(out, 'switches.mjs');
 execFileSync('npx', ['esbuild', join(HERE, '../client/switches.ts'),
   '--bundle', '--format=esm', `--outfile=${built}`, '--log-level=error'], { stdio: 'inherit' });
-const { SWITCHES, URL_OWNED, qs, qsOn, qsNum, switchRows, urlWithSwitches } = await import(pathToFileURL(built).href);
+const { SWITCHES, URL_OWNED, qs, qsOn, qsNum, switchRows, urlWithSwitches, carrySwitches } = await import(pathToFileURL(built).href);
 const CLIENT = join(HERE, '../client');
 const main = readFileSync(join(CLIENT, 'main.ts'), 'utf8');
 // ── "SOMEWHERE" MEANS THE CLIENT, NOT main.ts ──
@@ -154,6 +154,33 @@ ok('every row carries a kind the panel understands',
 const rawRow = switchRows('?ez=0').find((r) => r.id === 'ez');
 ok('a row carries the raw value, so an edit starts from what is set',
   rawRow.raw === '0' && switchRows('').find((r) => r.id === 'ez').raw === null, rawRow);
+
+// ── A SWITCH CLAIMED CHANGEABLE HAS SOMETHING LISTENING ──
+// `apply` other than `load` is a promise that setSwitch reaches it without a
+// reload: its reader subscribes (onSwitch) and rebuilds what it feeds. A row
+// that claims it and has no subscriber would change the URL and nothing else.
+const applies = new Set(['live', 'field', 'world', 'load']);
+ok('every declared apply is one the A/B understands',
+  SWITCHES.every((s) => s.apply === undefined || applies.has(s.apply)),
+  SWITCHES.filter((s) => s.apply !== undefined && !applies.has(s.apply)).map((s) => s.id));
+const changeable = SWITCHES.filter((s) => s.apply && s.apply !== 'load');
+const unheard = changeable.filter((s) => !CLIENT_SRC.includes(`onSwitch('${s.id}'`));
+ok(`every changeable switch (${changeable.length}) has an onSwitch subscriber`, unheard.length === 0, unheard.map((s) => s.id));
+
+// ── A HOP KEEPS THE SESSION'S LOOK ──
+// The seat reviewed a change for a while that had silently gone: every hop to
+// a saved spot wrote a bare `?lat=&lon=&h=&cam=` over the address bar.
+{
+  const from = '?lat=1&lon=2&h=3&cam=chase&hydrolook=1&banklook=1&fixture=at-yosemite&run=u/x&m=abc&wx=storm';
+  const to = carrySwitches('/drive?lat=9&lon=8&h=7&cam=chase', from);
+  const q = new URLSearchParams(to.split('?')[1] ?? '');
+  ok('a hop carries look switches onto the destination',
+    q.get('hydrolook') === '1' && q.get('banklook') === '1' && q.get('wx') === 'storm', to);
+  ok('…but not the address, a fixture, a run or a mission',
+    q.get('lat') === '9' && !q.has('fixture') && !q.has('run') && !q.has('m'), to);
+  ok('…and never over a value the destination sets itself',
+    new URLSearchParams(carrySwitches('/?lat=1&hydrolook=0', from).split('?')[1]).get('hydrolook') === '0');
+}
 
 const legacy = SWITCHES.filter((s) => s.marks.includes('legacy'));
 console.log(`\n${SWITCHES.length} switches · ${legacy.length} marked legacy:`);

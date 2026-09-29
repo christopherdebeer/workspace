@@ -545,7 +545,7 @@ export class RoadSolver {
  * interior vertex stays within its arc's sagitta (bounded by the shoulder
  * length) of where OSM put it.
  */
-export function densifyPts(pts: Array<[number, number]>): Array<[number, number]> {
+export function densifyPts(pts: Array<[number, number]>, step = 12): Array<[number, number]> {
   const rounded: Array<[number, number]> = [pts[0]];
   for (let i = 1; i < pts.length - 1; i++) {
     const [px, pz] = pts[i - 1], [vx, vz] = pts[i], [qx, qz] = pts[i + 1];
@@ -569,7 +569,7 @@ export function densifyPts(pts: Array<[number, number]>): Array<[number, number]
   const dense: Array<[number, number]> = [rounded[0]];
   for (let i = 1; i < rounded.length; i++) {
     const [ax, az] = rounded[i - 1], [bx, bz] = rounded[i];
-    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / step));
     for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
   }
   return dense;

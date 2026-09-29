@@ -140,7 +140,14 @@ export const EZ_MERGE_GROW = 2.2;
  * replaces would be fully merged, and the bake has to photograph it that way
  * or the handover is a crown opening back up at the swap.
  */
-export const EZ_MERGE_PX = [26, 58] as const;
+// MOVED OUT, 58/26 -> 36/16, on the seat's read that the merge "draws
+// attention to itself": for a 12 m tree the old band closed the crown between
+// 64 and 142 m from the truck, in the middle of the view; now it is open to
+// ~100 m and closed by ~230 m. The full/mid rung line follows [1] (EZ_FULL_PX),
+// so more trees are on the full rung — the allocator's budget still decides
+// how far out skeletons stand. The atlas bakes below [0], fully merged, so it
+// is unchanged by the move.
+export const EZ_MERGE_PX = [16, 36] as const;
 /**
  * ── THE MID RUNG: A REPRESENTATION FOR THIRTY TO SIXTY ART PIXELS ──
  *

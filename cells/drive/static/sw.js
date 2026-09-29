@@ -66,8 +66,21 @@ self.addEventListener('install', (event) => {
   // cache is named for the build it is meant to hold, which would then be a
   // name that lies. The one thing worse than an old bundle is an old bundle
   // filed under the new build's number.
-  event.waitUntil(caches.open(CACHE)
-    .then((cache) => cache.addAll(SHELL.map((path) => new Request(path, { cache: 'reload' }))))
+  //
+  // AND IF IT FAILS, ONCE MORE WITH THE OLD SHELLS GONE. A phone whose
+  // storage is full of world tiles can have no room for a second 3 MB bundle
+  // beside the first, and a failed install leaves the old worker serving the
+  // old build forever — reload after reload. The old shells are only an
+  // offline convenience; the new one is the build.
+  const take = () => caches.open(CACHE)
+    .then((cache) => cache.addAll(SHELL.map((path) => new Request(path, { cache: 'reload' }))));
+  event.waitUntil(take()
+    .catch(async () => {
+      for (const name of await caches.keys()) {
+        if (name.startsWith('drive-shell-') && name !== CACHE) await caches.delete(name);
+      }
+      return take();
+    })
     .then(() => self.skipWaiting()));
 });
 

@@ -1,4 +1,4 @@
-import { createAudio, TARGETS, type AudioSurface, type ImpactKind } from './audio';
+import { createAudio, TARGETS, tyreCornerSlip, ambientBed, type AudioSurface, type ImpactKind } from './audio';
 import { createDials, type DialValues } from './lab-dials';
 import { clamp } from './num';
 
@@ -36,7 +36,7 @@ const VOICES = ['eng', 'roar', 'squeal', 'grit', 'rattle', 'scrape', 'brush', 'w
 
 /** Every scene quiet — the base a preset writes over, targets untouched. */
 const QUIET: DialValues = {
-  wind: 12, veg: 0.5, grass: 0.5, river: 0, froth: 0, riverAt: 0, birds: 0.3, rain: 0,
+  wind: 12, veg: 0.5, grass: 0.5, river: 0, froth: 0, riverAt: 0, birds: 0.3, rain: 0, wet: 0, axle: 0, lateral: 0, air: 0,
   engine: 'off', throttle: 0, speed: 0, surf: 'ground', q: 0.5, slip: 0, spin: 0, grounded: 1,
   shake: 0, scrape: 0, metal: false, brush: 0, wash: 0,
   enc: 0, cab: false, spool: 0, load: 0, dist: 10, droneAt: 0, own: false,
@@ -52,10 +52,16 @@ const PRESETS: ReadonlyArray<[string, DialValues]> = [
   ['SKID', { engine: 'on', throttle: 1, speed: 50, surf: 'road', q: 0.9, slip: 0.8, spin: 0.6 }],
   ['TUNNEL 60', { engine: 'on', throttle: 0.5, speed: 60, surf: 'road', q: 0.9, enc: 1 }],
   ['CAB PARKED', { cab: true, river: 0.6, veg: 0.5, riverAt: 0.4 }],
-  ['RAIN AT 40', { rain: 1, wind: 25, cab: true, engine: 'on', throttle: 0.4, speed: 40, surf: 'road', q: 0.8 }],
+  ['RAIN AT 40', { rain: 1, wet: 1, wind: 25, cab: true, engine: 'on', throttle: 0.4, speed: 40, surf: 'road', q: 0.8 }],
   ['DRONE 10 m LEFT', { spool: 1, load: 0.3, dist: 10, droneAt: -0.7 }],
   ['DRONE ON BOARD', { spool: 1, load: 0.5, own: true }],
-  ['SILENCE', {}],
+  ['UNDERSTEER', { engine: 'on', throttle: 0.4, speed: 50, surf: 'road', q: 0.9, axle: 10 }],
+  ['GENTLE TURN', { engine: 'on', throttle: 0.3, speed: 50, surf: 'road', q: 0.9, axle: 3 }],
+  ['SIDEWAYS SLIDE', { speed: 0, lateral: 35, slip: 1, surf: 'road', q: 0.9 }],
+  ['LOOSE SCRUB', { speed: 40, slip: 0.8, surf: 'ground', q: 0.2 }],
+  ['WET AFTER RAIN', { engine: 'on', throttle: 0.4, speed: 60, surf: 'road', q: 0.9, wet: 1 }],
+  ['AIRBORNE TYRES', { engine: 'on', throttle: 1, speed: 50, surf: 'road', slip: 1, spin: 1, grounded: 0 }],
+  ['SILENCE', { wind: 0, veg: 0, grass: 0, birds: 0 }],
 ];
 
 export async function startSoundLab(): Promise<void> {
@@ -120,6 +126,7 @@ export async function startSoundLab(): Promise<void> {
       { id: 'riverAt', label: 'RIVER SIDE', kind: 'range', min: -1, max: 1, step: 0.1, value: 0 },
       { id: 'birds', label: 'BIRDS', kind: 'range', min: 0, max: 1, step: 0.05, value: 0.3 },
       { id: 'rain', label: 'RAIN', kind: 'range', min: 0, max: 1, step: 0.05, value: 0 },
+      { id: 'wet', label: 'SURFACE WET', kind: 'range', min: 0, max: 1, step: 0.05, value: 0 },
       { id: 'sTruck', label: 'THE TRUCK', kind: 'section' },
       { id: 'engine', label: 'ENGINE', kind: 'select', options: ['off', 'crank', 'on'], value: 'off' },
       { id: 'throttle', label: 'THROTTLE', kind: 'range', min: 0, max: 1, step: 0.05, value: 0 },
@@ -127,6 +134,8 @@ export async function startSoundLab(): Promise<void> {
       { id: 'surf', label: 'SURFACE', kind: 'select', options: ['road', 'track', 'ground', 'water'], value: 'ground' },
       { id: 'q', label: 'QUALITY', kind: 'range', min: 0, max: 1, step: 0.05, value: 0.5 },
       { id: 'slip', label: 'SLIP', kind: 'range', min: 0, max: 1, step: 0.05, value: 0 },
+      { id: 'axle', label: 'AXLE SLIP deg', kind: 'range', min: 0, max: 20, step: 0.5, value: 0 },
+      { id: 'lateral', label: 'SIDEWAYS km/h', kind: 'range', min: 0, max: 100, step: 1, value: 0 },
       { id: 'spin', label: 'SPIN', kind: 'range', min: 0, max: 1, step: 0.05, value: 0 },
       { id: 'grounded', label: 'GROUNDED', kind: 'range', min: 0, max: 1, step: 0.05, value: 1 },
       { id: 'shake', label: 'SHAKE', kind: 'range', min: 0, max: 1, step: 0.05, value: 0 },
@@ -142,6 +151,7 @@ export async function startSoundLab(): Promise<void> {
       { id: 'load', label: 'LOAD', kind: 'range', min: 0, max: 1, step: 0.05, value: 0 },
       { id: 'dist', label: 'DISTANCE m', kind: 'range', min: 0, max: 200, step: 1, value: 10 },
       { id: 'droneAt', label: 'SIDE', kind: 'range', min: -1, max: 1, step: 0.1, value: 0 },
+      { id: 'air', label: 'DRONE AIR km/h', kind: 'range', min: 0, max: 100, step: 1, value: 0 },
       { id: 'own', label: 'ON BOARD', kind: 'toggle', value: false },
       { id: 'sTargets', label: 'TARGETS dBFS', kind: 'section' },
       { id: 'tRiver', label: 'RIVER', kind: 'range', min: -50, max: -10, step: 1, value: TARGETS.river },
@@ -269,6 +279,33 @@ export async function startSoundLab(): Promise<void> {
   ab.append(gritBtn, rattleBtn);
   main.appendChild(ab);
 
+  // ── BIRDSCAPE: Sentinels cohort engine vs the thin phrase whistlers.
+  h('BIRDSCAPE · Sentinels cohorts');
+  const bs = document.createElement('div');
+  bs.className = 'row';
+  const bsState = { on: false, cohort: 'uk-garden' as 'uk-garden' | 'nz-bush' };
+  const bsBtn = btn('BIRDS: phrase (ships)', () => {
+    arm();
+    bsState.on = !bsState.on;
+    if (bsState.on) {
+      audio.enableBirdscape(bsState.cohort);
+      bsBtn.textContent = `BIRDS: ${bsState.cohort} (Sentinels)`;
+      bsBtn.classList.add('on');
+    } else {
+      audio.disableBirdscape();
+      bsBtn.textContent = 'BIRDS: phrase (ships)';
+      bsBtn.classList.remove('on');
+    }
+  }, 'ab');
+  const cohortBtn = btn('COHORT: uk-garden', () => {
+    arm();
+    bsState.cohort = bsState.cohort === 'uk-garden' ? 'nz-bush' : 'uk-garden';
+    cohortBtn.textContent = `COHORT: ${bsState.cohort}`;
+    if (bsState.on) audio.enableBirdscape(bsState.cohort);
+  });
+  bs.append(bsBtn, cohortBtn);
+  main.appendChild(bs);
+
   // ── VOICES: a mute per voice; in SOLO, a tap silences everything else.
   h('VOICES · tap to mute · SOLO makes a tap isolate');
   const voices = document.createElement('div');
@@ -324,16 +361,21 @@ export async function startSoundLab(): Promise<void> {
       const veg = dials.num('veg');
       // THE BED'S DUCK, as main.ts computes it: motion and the engine push
       // the world down, so a river at 60 km/h reads as it would in the game.
-      const bed = clamp(1 - speed / 7, 0, 1) * (engine === 'on' ? 0.4 : 1);
-      const rustle = ambWind * (0.25 + 0.75 * veg) * Math.max(bed, 0.2);
+      const own = dials.bool('own'), contactSpeed = Math.hypot(speed, dials.num('lateral') / 3.6);
+      const airSpeed = own ? dials.num('air') / 3.6 : contactSpeed;
+      const bed = ambientBed(airSpeed, !own && engine === 'on');
+      const rustle = ambWind * veg * bed;
       const river = dials.num('river') * (0.35 + 0.65 * bed);
-      const birds = dials.num('birds') * (1 - dials.num('rain')) * veg * bed;
+      const birds = dials.num('birds') * (1 - dials.num('rain')) * veg;
       const parked = engine !== 'on' && speed < 0.5 ? 1 : 0;
-      audio.update(speed, throttle, surf, dials.num('grounded'), dials.num('rain'), rev, gear, dials.num('slip'),
-        surf === 'water' ? 0 : dials.num('q'), dials.num('spin'), ambWind, engF, dials.num('shake'));
+      const slip = Math.max(dials.num('slip'), tyreCornerSlip(dials.num('axle') * Math.PI / 180, 0, contactSpeed));
+      audio.listener(own ? dials.num('dist') : 0, own ? -dials.num('droneAt') : 0);
+      audio.update(speed, throttle, surf, dials.num('grounded'), dials.num('rain'), rev, gear, slip,
+        surf === 'water' ? 0 : dials.num('q'), dials.num('spin'), ambWind, engF, dials.num('shake'),
+        dials.num('wet'), airSpeed, contactSpeed);
       audio.ambience(rustle, river, birds, ambWind, dials.num('froth'), dials.num('riverAt'),
-        dials.num('grass') * Math.max(bed, 0.2));
-      audio.space(dials.num('enc'), dials.bool('cab') ? 1 : 0, parked);
+        dials.num('grass') * bed, bed);
+      audio.space(dials.num('enc'), !own && dials.bool('cab') ? 1 : 0, parked);
       audio.drone(dials.num('spool'), dials.num('dist'), dials.num('load'), dials.num('droneAt'), dials.bool('own'));
       audio.scrape(dials.num('scrape'), dials.bool('metal') ? 1 : 0.35);
       audio.brush(dials.num('brush'));
@@ -341,9 +383,11 @@ export async function startSoundLab(): Promise<void> {
     }
     const lv = audio.levels();
     drawMeters(lv, now);
-    const mx = audio.mix() as { gust?: number; parked?: number; muffle?: number; muted?: string };
+    const mx = audio.mix() as { gust?: number; parked?: number; muffle?: number; muted?: string; truckDistance?: number; truckGain?: number };
     state.textContent = audio.state === 'running' ? 'running' : audio.state === 'none' ? 'tap ARM' : audio.state;
-    status.textContent = `gust ${mx.gust ?? 0}  window ${mx.parked ? 'down' : 'up'}  muffle ${mx.muffle ?? 20000} Hz`
+    status.textContent = `squeal ${lv.squeal ?? -120} dBFS  engine ${lv.eng ?? -120} dBFS  output ${lv.out ?? -120} dBFS\n`
+      + `truck ${mx.truckDistance ?? 0} m  gain ${mx.truckGain ?? 1}\n`
+      + `gust ${mx.gust ?? 0}  window ${mx.parked ? 'down' : 'up'}  muffle ${mx.muffle ?? 20000} Hz`
       + `${mx.muted ? `  muted: ${mx.muted}` : ''}\nH folds the dials · COPY writes the TARGETS literal for audio.ts`;
     requestAnimationFrame(frame);
   };

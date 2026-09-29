@@ -76,6 +76,9 @@ export interface SyncPorts {
   /** Total distance, the other monotonic number. */
   odo(): number;
   setOdo(m: number): void;
+  /** Saved spots, keyed by place, with their saved and deleted moments. */
+  spots?(): Record<string, unknown>;
+  mergeSpots?(rows: Record<string, { at?: number; gone?: number; name?: string; sub?: string; lat?: number; lon?: number; h?: number }>): number;
 }
 
 const rand = (n: number): string =>
@@ -393,6 +396,7 @@ export function openSync(ports: SyncPorts, opts: {
     user?: string; roads?: SyncRows; odo?: number; error?: string;
     missions?: Record<string, number>; stations?: Record<string, number>;
     tapes?: TapeShelfRow[];
+    spots?: Record<string, { at?: number; gone?: number; name?: string; sub?: string; lat?: number; lon?: number; h?: number }>;
   }> {
     const hit = (): Promise<Response> => fetch(`${base}/state`, {
       method,
@@ -410,7 +414,8 @@ export function openSync(ports: SyncPorts, opts: {
       if (r === 'soft') throw new Error('token refresh unavailable — will retry');
       if (r === 'ok') res = await hit();
     }
-    const j = (await res.json().catch(() => ({}))) as { user?: string; roads?: SyncRows; odo?: number; error?: string };
+    const j = (await res.json().catch(() => ({}))) as { user?: string; roads?: SyncRows; odo?: number; error?: string;
+      spots?: Record<string, { at?: number; gone?: number }> };
     if (res.status === 401) { throw Object.assign(new Error(j.error ?? 'signed out'), { stale: true }); }
     // A signed-in player who is not the cell's owner and holds no grant cannot
     // write here — that is the platform's own sharing model, not a rule this
@@ -427,11 +432,13 @@ export function openSync(ports: SyncPorts, opts: {
       // One round trip does both halves: everything this device has learned
       // since the last sync goes up, and the merged whole comes back — which is
       // how a second device's progress arrives.
-      const out = await call('POST', { roads: ports.dump(at), ...ports.marks(at), odo: ports.odo() });
+      const out = await call('POST', { roads: ports.dump(at), ...ports.marks(at), odo: ports.odo(),
+        ...(ports.spots ? { spots: ports.spots() } : {}) });
       user = out.user ?? user;
       if (out.roads) roads = Object.keys(out.roads).length;
       const changed = (out.roads ? ports.merge(out.roads) : 0)
-        + ports.mergeMarks({ missions: out.missions, stations: out.stations });
+        + ports.mergeMarks({ missions: out.missions, stations: out.stations })
+        + (out.spots && ports.mergeSpots ? ports.mergeSpots(out.spots) : 0);
       if (typeof out.odo === 'number') ports.setOdo(out.odo);
       // The banked-run shelf rides the same round trip. Kept whole — it is the
       // server's truth, not a merge.

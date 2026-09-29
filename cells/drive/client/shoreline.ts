@@ -16,6 +16,11 @@ import { sampleFieldSurface } from './hydro/field-sample';
 export interface BankWater {
   kind: string; restingLevelM: number; depthM: number; wet?: boolean;
   shoreDistanceM: number; flow: readonly [number, number];
+  /** Flowing water only: 1 on the OUTER bank of a bend, 0 on the inner, 0.5
+   *  on a straight reach — the water shader's own `outerBank`, read from the
+   *  same curvature × side the field packs, so the sward's shelf and the
+   *  water's shelf are on the same side of the same bend. */
+  outerBank?: number;
 }
 const unit = (v: number) => Math.max(0, Math.min(1, v));
 export function bankHabitat(cover: number | null, moisture: number, tempC: number,
@@ -73,12 +78,16 @@ export function bankWetMargin(distanceM: number, patch = 0.5): number {
 /** The mineral bank is the local ground, darkened and pulled slightly toward
  * neutral. Keeping this rule shared prevents terrain, sward and water from
  * inventing separate "river sand" colours at the same physical edge. */
-export function bankMineralColour(r: number, g: number, b: number): [number, number, number] {
+export function bankMineralColour(r: number, g: number, b: number, inner = 0.5): [number, number, number] {
   const l = (r + g + b) / 3;
+  // `inner` is the bend's inside (1) against its outside (0): a sediment
+  // shelf is the local ground bleached and warmed, a cut bank is it darkened
+  // and damp. 0.5 is the symmetric rule every straight reach had.
+  const k = 0.68 + 0.26 * inner, warm = (inner - 0.5) * 0.05;
   return [
-    (r + (l - r) * 0.22) * 0.78,
-    (g + (l - g) * 0.22) * 0.78,
-    (b + (l - b) * 0.22) * 0.78,
+    (r + (l - r) * 0.22) * k + warm,
+    (g + (l - g) * 0.22) * k + warm * 0.4,
+    (b + (l - b) * 0.22) * k - warm,
   ];
 }
 /** How strongly visible ground should become local bank mineral.
@@ -123,7 +132,7 @@ float bankPatch(vec2 p) {
  * Distance is approximate at field resolution, so rendered ground height remains
  * the final authority for emergent vegetation. */
 export function sampleBankField(f: HydroTileField, x: number, z: number,
-  radiusM: number): (HydroSample & { wet: boolean }) | undefined {
+  radiusM: number): (HydroSample & { wet: boolean; outerBank?: number }) | undefined {
   const dx = (f.bounds.maxX - f.bounds.minX) / f.resolution;
   const dz = (f.bounds.maxZ - f.bounds.minZ) / f.resolution;
   if (!(dx > 0 && dz > 0)) return undefined;
@@ -153,7 +162,12 @@ export function sampleBankField(f: HydroTileField, x: number, z: number,
   const flags = f.material[best+3];
   const bedMaterial = HYDRO_ID_BED[(flags & HYDRO_BED_MASK) >> HYDRO_BED_SHIFT] ?? 'silt';
   const bankMaterial = HYDRO_ID_BANK[(flags & HYDRO_BANK_MASK) >> HYDRO_BANK_SHIFT] ?? 'soil';
-  return { wet: false, kind: HYDRO_ID_KIND[f.material[best]], coverage: drawn?.coverage ?? 0,
+  // The bend's side: signs as build-tile packs them (n from cross(tangent,
+  // offset), curvature from cross(u1, u2)), the outer bank where their
+  // product is negative — the shader's `0.5 - curvature * n * 60`.
+  const st = f.structure;
+  const outerBank = st ? Math.max(0, Math.min(1, 0.5 - st[best + 2] * st[best + 1] * 60)) : undefined;
+  return { wet: false, kind: HYDRO_ID_KIND[f.material[best]], coverage: drawn?.coverage ?? 0, outerBank,
     restingLevelM: f.elevationBaseM+f.geometry[best+2],
     // `bankHabitat` consumes metres AWAY from the water on dry ground. The
     // signed field value here is negative, which previously collapsed every
