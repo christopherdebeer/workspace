@@ -13,6 +13,7 @@
 | `analyze.js` | pure selection statistics (runs under node and inside `@c15r/run.exec`) |
 | `sweep.js` | `run.exec` body: sample facts per type → `@c15r/jev.decide_many` → compact matrix shards |
 | `analyze-run.js` | `run.exec` body: read shards back → `analyze()` → report fact |
+| `run.mjs` | sandbox driver: `pool` · `judge <prefix> <caps>` · `report <key> <prefixes…>` over `parc.land/mcp` (auth as `scripts/cell-sync.mjs`; the same bearer is passed to `run.exec`, whose `parc.call` needs an explicit per-run token — ADR-0028) |
 
 Substrate facts (underscore keys: unindexed, never perceived):
 `_stems/pool/v0`, `_stems/v0/{A,B,C}/matrix/NN`, `_stems/v0/full/report`.
