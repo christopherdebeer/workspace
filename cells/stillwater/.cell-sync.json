@@ -1,12 +1,12 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:61bc61d9308eb489b0a78589266e2da5ea415c3d05b3c47c354668d1280ced77",
-  "syncedAt": "2026-09-29T08:45:01.004Z",
+  "treeVersion": "tree:c9696cf16e3fcada6d59bf6faa166ee0bb2aa2209333bf5339c6f50a84f22f96",
+  "syncedAt": "2026-09-29T08:45:57.212Z",
   "files": {
     "ENVIRONMENT-STATE.md": "sha256:f8fd9a3f3931d83488a6fc2612b7ef4c425f9d3b7a0c88c868c320421bcfdfe9",
     "LEARNING-DESIGN.md": "sha256:2c335e52d6128885e3a20d41a568fc25fa08ecb4f17e39cdbf48c9544480ec1c",
-    "REVIEW-2026-09-28.md": "sha256:e8939bdafb77516b0ecb52780495eeab8997c9579d72a92a21befec87bbf7fc9",
+    "REVIEW-2026-09-28.md": "sha256:8bf87bf8bef398ae908bf4bad269aa5da6eae77278b4bb9800fc94d1ebd76977",
     "client/atmosphere.ts": "sha256:77d6d08e10634177c66bfd287b9804c3234d21988cefc9a531b23ea882e39414",
     "client/audio.ts": "sha256:7e9e38e137adec0d98d6017a28a066c997df284e89076b026a1f622169457092",
     "client/fish.ts": "sha256:8bcf76a680254231605b492badff7770642583cc4e47a92f14a32db8afa35b40",
