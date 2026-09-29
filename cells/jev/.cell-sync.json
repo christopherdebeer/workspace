@@ -1,8 +1,8 @@
 {
   "cell": "c15r/jev",
   "cellId": "jev-30e878c9",
-  "treeVersion": "tree:373c63a3ab7210fcc56c67788aa07e3f870462f664a4c999c1eaf268e1e1aa47",
-  "syncedAt": "2026-09-29T22:59:59.850Z",
+  "treeVersion": "tree:e31436895bb659bd84fd9c6cf816d4c6b5faa6ad3672634c267b144453a4e8fb",
+  "syncedAt": "2026-09-29T23:31:15.369Z",
   "files": {
     "client/experiments/freetext.tsx": "sha256:2181dfddc928d52c4b28b2e04c32ab82b59c21e6bfb2c714bf604c9e3f897702",
     "client/experiments/image-cs.tsx": "sha256:458f97259c14f96030f47cb2c7bd3bab7c0da9c2ad531d418401dbf6b428bf35",
@@ -213,7 +213,7 @@
     "client/playtest/engine/types/index.ts": "sha256:6c7ac67faf110ba25d56ed96711ca41f11f541c64ca7a9146f4978949a21c20c",
     "client/playtest/engine/types/logs.ts": "sha256:9731ecee84746d2a1590841d74e04009f6780ff49514df100e008a6d4ed0453e",
     "client/playtest/engine/vendor-info.ts": "sha256:eeaadfb93fcec2e4acfbfffb01bee4a12d5bc5f2f2641dbe0cccd764556c487a",
-    "client/playtest/runner.ts": "sha256:a5fcc4a668095d77b6b66ada12766b3e4c642888a3b6f3883b4deed25f4e0191",
+    "client/playtest/runner.ts": "sha256:83989082cb49816d13ef344fb1595570fcc0eac3b35c3c10f904bdc42abe54b2",
     "client/ui.tsx": "sha256:34de28177d34da52fd1059a53347698cf997dcb1c44d120de7d743e147159f61",
     "index.ts": "sha256:7b0ae1bd71419b36e8f3ab8e0500ad5781e36dda6a507b81a12dca226fa7c68e",
     "static/index.html": "sha256:8e624c63cecd5d5f65467e0a64286715119528ea3b31fcab6312a3d33cdb59d8"
