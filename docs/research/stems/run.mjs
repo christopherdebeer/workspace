@@ -3,7 +3,8 @@
  * Drive the stem-question sweep from the repo, not by pasting code into MCP.
  *
  *   node docs/research/stems/run.mjs pool   [pool.json]              store the pool as _stems/pool/<v>
- *   node docs/research/stems/run.mjs judge  <prefix> <caps.json|type=n,…>  judge a corpus chunk → shards
+ *   node docs/research/stems/run.mjs judge  <prefix> <spec.json|type=n,…>  judge a corpus chunk → shards
+ *        spec.json: { seg, caps: {type: n}, sources: [{label, target, input, idField?}] }
  *   node docs/research/stems/run.mjs report <out-key> <shard-prefix…>      merge shards → analysis
  *
  * Auth as scripts/cell-sync.mjs: PARC_TOKEN env or /tmp/parc-token.json. The
@@ -65,9 +66,7 @@ async function exec(code, input) {
 }
 
 const parseCaps = (arg) =>
-  arg.endsWith('.json')
-    ? JSON.parse(readFileSync(arg, 'utf8'))
-    : Object.fromEntries(arg.split(',').map((kv) => { const [k, v] = kv.split('='); return [k, Number(v)]; }));
+  Object.fromEntries(arg.split(',').map((kv) => { const [k, v] = kv.split('='); return [k, Number(v)]; }));
 
 const [cmd, ...args] = process.argv.slice(2);
 const poolFile = process.env.STEMS_POOL ?? join(HERE, 'pool-v0.json');
@@ -79,8 +78,9 @@ let out;
 if (cmd === 'pool') {
   out = await exec(`await parc.emit(${JSON.stringify(poolKey)}, input.pool, { type: 'stems-pool', tags: ['stems'] }); return ${JSON.stringify(poolKey)};`, { pool });
 } else if (cmd === 'judge') {
-  const [prefix, caps] = args;
-  out = await exec(loadPool + body('sweep.js'), { judgeOnly: true, emitPrefix: prefix, caps: parseCaps(caps), batch: 100, concurrency: 20 });
+  const [prefix, specArg] = args;
+  const spec = specArg.endsWith('.json') ? JSON.parse(readFileSync(specArg, 'utf8')) : { caps: parseCaps(specArg) };
+  out = await exec(loadPool + body('sweep.js'), { judgeOnly: true, emitPrefix: prefix, seg: spec.seg ?? prefix, caps: spec.caps ?? {}, sources: spec.sources ?? [], batch: 100, concurrency: 20 });
 } else if (cmd === 'report') {
   const [emitKey, ...prefixes] = args;
   // Shard keys are probed server-side (…/matrix/00, 01, …): a prefix query

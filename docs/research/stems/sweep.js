@@ -3,7 +3,7 @@
 // Samples content-bearing facts per type, asks every pool question of every
 // item via @c15r/jev.decide_many, stores the compact answer matrix under
 // `_stems/…` (underscore keys: unindexed, no perception), returns the analysis.
-const { pool, caps, batch = 100, concurrency = 20, pilot = false, judgeOnly = false, emitPrefix = '_stems/v0' } = input;
+const { pool, caps = {}, sources = [], seg = null, batch = 100, concurrency = 20, pilot = false, judgeOnly = false, emitPrefix = '_stems/v0' } = input;
 
 const FIELDS = ['title', 'name', 'question', 'statement', 'claim', 'summary', 'content', 'text', 'body', 'detail', 'description', 'note'];
 function textOf(v) {
@@ -33,17 +33,30 @@ function toDist(q, a) {
 // 1. corpus
 const items = [];
 const corpus = {};
-for (const [type, cap] of Object.entries(caps)) {
-  // `whole`: server-side the 60KB read budget would otherwise turn a page of
-  // long facts into an {error} with no entries — silently shrinking the corpus.
-  const r = await parc.call('workspace.query', { type, limit: cap, rankBy: 'recency', whole: true });
-  if (r.error || !r.entries) console.log('query', type, r.error ?? 'no entries');
-  corpus[type] = (r.entries || []).length;
-  for (const e of r.entries || []) {
+function take(label, entries) {
+  corpus[label] = entries.length;
+  for (const e of entries) {
     const t = textOf(e.value).replace(/\s+/g, ' ').trim();
     if (t.length < 15) continue;
-    items.push({ key: e.key, type, state: t.slice(0, 1200) });
+    items.push({ key: e.key, type: label, state: t.slice(0, 1200) });
   }
+}
+// `whole`: server-side the 60KB read budget would otherwise turn a page of
+// long facts into an {error} with no entries — silently shrinking the corpus.
+for (const [type, cap] of Object.entries(caps)) {
+  const r = await parc.call('workspace.query', { type, limit: cap, rankBy: 'recency', whole: true });
+  if (r.error || !r.entries) console.log('query', type, r.error ?? 'no entries');
+  take(type, r.entries || []);
+}
+// sources: [{label, target, input, idField?}] — any capability returning
+// {entries:[{key,value}]} or a bare array of records.
+for (const src of sources) {
+  const r = await parc.call(src.target, { ...src.input, whole: true }); // every gateway read has the 60KB budget
+  if (r?.error || typeof r === 'string') console.log('source', src.label, r?.error ?? String(r).slice(0, 200));
+  const entries = Array.isArray(r)
+    ? r.map((x, i) => ({ key: `${src.label}/${x[src.idField ?? 'id'] ?? i}`, value: x }))
+    : r?.entries ?? [];
+  take(src.label, entries);
 }
 if (pilot) items.splice(1);
 
@@ -63,7 +76,7 @@ for (let i = 0; i < items.length; i += batch) {
     const row = {};
     for (const [id, q] of Object.entries(pool.questions)) row[id] = toDist(q, r.answers?.[id]);
     rows.push(row);
-    meta.push({ key: items[r.id].key, type: items[r.id].type, chars: items[r.id].state.length });
+    meta.push({ key: items[r.id].key, type: items[r.id].type, seg, chars: items[r.id].state.length });
   }
 }
 

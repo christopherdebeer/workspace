@@ -18,7 +18,7 @@
  * to already-chosen), i.e. keep informative, non-redundant questions.
  */
 const ESCAPE = /^(other|none|unclear|neither)$/i;
-const NA = /^(not about a piece of work|no physical place|nobody in particular|no particular time|no action|impersonal or no clear perspective)$/i;
+const NA = /^(not about a piece of work|no physical place|nobody in particular|no particular time|no action|impersonal or no clear perspective|no particular audience)$/i;
 
 const log2 = (x) => Math.log(x) / Math.LN2;
 function H(p) {
@@ -29,6 +29,40 @@ function H(p) {
 function labelsOf(q) {
   if (q.type === 'noul') return ['no', 'yes'];
   return q.type === 'choice' ? q.options : q.criteria;
+}
+
+/** I(item; answer) for one question over a subset of rows (per-segment bits). */
+function bitsOf(q, id, rows) {
+  const K = labelsOf(q).length;
+  const mean = new Array(K).fill(0);
+  let hSum = 0, m = 0;
+  for (const r of rows) {
+    const d = r[id];
+    if (!d) continue;
+    m++;
+    for (let k = 0; k < K; k++) mean[k] += d[k] ?? 0;
+    hSum += H(d);
+  }
+  if (!m) return null;
+  return H(mean.map((v) => v / m)) - hSum / m;
+}
+
+function greedy(live, per, nmi, score, maxK, minGain, tag) {
+  const chosen = [];
+  const remaining = new Set(live.filter((id) => per[id].tier !== 'guard'));
+  while (chosen.length < maxK && remaining.size) {
+    let best = null;
+    for (const id of remaining) {
+      const red = chosen.reduce((mx, c) => Math.max(mx, nmi[`${id}|${c}`] ?? 0), 0);
+      const gain = score(id) * (1 - red);
+      if (!best || gain > best.gain) best = { id, gain, red };
+    }
+    if (!best || best.gain < minGain) break;
+    chosen.push(best.id);
+    remaining.delete(best.id);
+    per[best.id][tag] = { rank: chosen.length, gain: +best.gain.toFixed(3), redundancy: +best.red.toFixed(2) };
+  }
+  return chosen;
 }
 
 function analyze(pool, rows, opts = {}) {
@@ -60,13 +94,14 @@ function analyze(pool, rows, opts = {}) {
       .map(([l, v]) => `${l} ${(v * 100).toFixed(0)}%`);
     const tokens = Math.ceil(JSON.stringify(q).length / 4);
     per[id] = {
-      facet: q.facet, type: q.type, n: m,
+      facet: q.facet, tier: q.tier, was: q.was, type: q.type, n: m,
       bits: +(hM - hC).toFixed(3),
       hMarg: +(hM / logK).toFixed(2),
       conf: +(1 - hC / logK).toFixed(2),
       escape: +esc.toFixed(3),
       na: +na.toFixed(3),
       tokens,
+      bitsPerKTok: +(((hM - hC) / tokens) * 1000).toFixed(1),
       top,
       _mean: mean,
     };
@@ -111,19 +146,22 @@ function analyze(pool, rows, opts = {}) {
   // Greedy selection.
   const minGain = opts.minGain ?? 0.08;
   const maxK = opts.maxK ?? 24;
-  const chosen = [];
-  const remaining = new Set(live);
-  while (chosen.length < maxK && remaining.size) {
-    let best = null;
-    for (const id of remaining) {
-      const red = chosen.reduce((mx, c) => Math.max(mx, nmi[`${id}|${c}`] ?? 0), 0);
-      const gain = per[id].bits * (1 - red);
-      if (!best || gain > best.gain) best = { id, gain, red };
+  const chosen = greedy(live, per, nmi, (id) => per[id].bits, maxK, minGain, 'pick');
+
+  // Universality: bits within each segment; a stem must discriminate in all of them.
+  let universal = null;
+  if (opts.segments) {
+    const segs = [...new Set(opts.segments)];
+    for (const id of live) {
+      per[id].bySeg = {};
+      for (const sg of segs) {
+        const b = bitsOf(pool.questions[id], id, rows.filter((_, i) => opts.segments[i] === sg));
+        per[id].bySeg[sg] = b == null ? null : +b.toFixed(3);
+      }
+      const vals = Object.values(per[id].bySeg).filter((v) => v != null);
+      per[id].minSeg = vals.length ? Math.min(...vals) : 0;
     }
-    if (!best || best.gain < minGain) break;
-    chosen.push(best.id);
-    remaining.delete(best.id);
-    per[best.id].pick = { rank: chosen.length, gain: +best.gain.toFixed(3), redundancy: +best.red.toFixed(2) };
+    universal = greedy(live, per, nmi, (id) => per[id].minSeg, maxK, minGain, 'upick');
   }
 
   for (const id of live) delete per[id]._mean;
@@ -138,6 +176,7 @@ function analyze(pool, rows, opts = {}) {
   return {
     items: n,
     selected: chosen,
+    selectedUniversal: universal,
     selectedTokens: chosen.reduce((s, id) => s + per[id].tokens, 0),
     poolTokens: live.reduce((s, id) => s + per[id].tokens, 0),
     facets,

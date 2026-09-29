@@ -169,3 +169,52 @@ cheap, aws-native fix is:
 
 None of that is needed to grow the stems: the stem pass is per-write (ADR-0098
 perceive-on-write), and calibration corpora are hundreds of items.
+
+## v1 (2026-09-29) — three segments, tiers, universality
+
+`pool-v1.json`: 52 questions in tiers (router · dial · detector · probe · guard),
+v0 gap options added, predictive nouls rewritten as observable `p_*` probes.
+Swept over **752 items in three segments**: `dev` (428 workspace facts), `clips`
+(174 archived web captures, `inbox/arch-*`), `external` (150 regwatch
+government/regulatory items). 0 errors, 2.22M tokens ≈ **$0.09**. Report:
+`_stems/v1/report`; driver specs in `specs/`.
+
+New in the analysis: `bySeg` (bits within each segment) and `minSeg`; a second
+greedy selection (`selectedUniversal`) ranks by `minSeg`, i.e. a stem must split
+items *inside every* corpus, not just tell corpora apart. Guards never enter
+selection.
+
+### What v1 shows
+
+1. **The escape fixes worked.** `form_speech_act` `other` 16% → 1% (the new
+   "describing or explaining" and "sharing or pointing to" options took 32% and
+   29%); `mod_modality` 16% → 10% ("as a rule, requirement or specification"
+   took 20%); `form_cognitive_role` 8% → 4%; `agent_audience` 10% → 7%.
+   `subj_domain_coarse` is still 15% `neither` — "public affairs" didn't absorb
+   it; that question is a candidate to retire (it is `subj_domain` coarsened).
+2. **The universal root is form + modality + time.** Ranked by `minSeg`:
+   `form_kind` (1.21), `form_genre` (1.00), `form_cognitive_role` (0.83),
+   `mod_modality` (0.83), `time_orientation` (0.69), `form_speech_act` (0.66),
+   `time_lifecycle` (0.65), `subj_domain` (0.63), `subj_abstraction` (0.63).
+   `mod_modality` was never picked in v0 — it only earns its place once the
+   corpus isn't all one register.
+3. **Universality filters out corpus detectors.** `form_has_link` scores 0.61
+   bits pooled but ~0.02 inside `external` and 0.16 in `clips`: it mostly tells
+   *which corpus*, not *which item*. `stakes_urgency` is 0.05 in `clips`
+   (bookmarks are never urgent), `act_type` 0.51 there (they are all "research
+   or learn"). Pooled selection would have kept all three.
+4. **Observable rewrites buy confidence, not bits.** Rewriting the v0 coin-flips
+   raised decisiveness — `p_first_person_todo` 0.19 → 0.73, `p_should` 0.13 →
+   0.48, `p_this_week` 0.19 → 0.58 — but they stay under 0.2 bits because the
+   properties are rare. They are detectors/guards by nature (valued by what a
+   hit triggers), not routers. `p_dangling` (0.25), `p_quote` (0.22) and
+   `p_generated` (0.23) are still near coin-flips: referential completeness and
+   provenance aren't visible in the text to Jev. Retire them.
+5. **Proposed stem v2 (≈ 20 questions, ≈ 1k tokens):** routers `form_kind`,
+   `form_genre`, `form_cognitive_role`, `form_speech_act`, `mod_modality`,
+   `time_orientation`, `time_lifecycle`, `subj_domain`, `use_function`; dials
+   `subj_abstraction`, `subj_technicality`, `dur_lifespan`, `dur_novelty`,
+   `stakes_importance`, `mod_sentiment`; detectors `agent_person`,
+   `form_has_number`, `time_deadline`; plus the six guards. `act_type`,
+   `agent_audience`, `agent_focus`, `stakes*` move one level down, gated on
+   `form_kind`/`form_genre` (they carry bits only where the content is work).

@@ -1,0 +1,1 @@
+{ "seg": "clips", "sources": [ { "label": "capture-archive", "target": "workspace.query", "input": { "prefix": "inbox/arch-", "limit": 175 } } ] }

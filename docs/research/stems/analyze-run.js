@@ -9,10 +9,10 @@ for (const key of shards) {
     const row = {};
     v.qids.forEach((id, i) => { row[id] = r.d[i]; });
     rows.push(row);
-    meta.push({ key: r.key, type: r.type });
+    meta.push({ key: r.key, type: r.type, seg: r.seg ?? key.split('/matrix/')[0] });
   }
 }
-const report = analyze(pool, rows, { maxK: 24, minGain: 0.08, topPairs: 30 });
+const report = analyze(pool, rows, { maxK: 24, minGain: 0.08, topPairs: 30, segments: meta.map((m) => m.seg) });
 const fk = pool.questions.form_kind.options;
 const byType = {};
 rows.forEach((r, i) => {
@@ -22,6 +22,8 @@ rows.forEach((r, i) => {
 });
 const types = {};
 meta.forEach((m) => { types[m.type] = (types[m.type] || 0) + 1; });
-const summary = { pool: pool.version, items: rows.length, types, shards, byType, ...report };
+const segs = {};
+meta.forEach((m) => { segs[m.seg] = (segs[m.seg] || 0) + 1; });
+const summary = { pool: pool.version, items: rows.length, segs, types, shards, byType, ...report };
 await parc.emit(emitKey, summary, { type: 'stems-report', tags: ['stems'] });
 return summary;
