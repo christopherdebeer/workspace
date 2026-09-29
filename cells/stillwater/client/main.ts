@@ -25,7 +25,7 @@ import { Overlay } from './ui';
 import { glInfo, probe, report } from './report';
 import { PROGRAMS } from './render';
 import { program } from './gl';
-import { layDrops, liveCount, Pad, Pond, seeded } from './world';
+import { layDrops, liveCount, Pad, Planting, Pond, seeded } from './world';
 
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
 const ui = new Overlay();
@@ -97,6 +97,8 @@ function loadProfile(name: string) {
   }
   memory = startupParams.has('fresh') ? new L.Memory() : new L.Memory(readJSON(pKey(pr.id, 'facts.v1')));
   notebook = startupParams.has('fresh') ? new Notebook() : new Notebook(readJSON(pKey(pr.id, 'notebook.v1')));
+  pond.plantings = startupParams.has('fresh') ? [] : (readJSON<Planting[]>(pKey(pr.id, 'plantings.v1')) ?? []);
+  pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
   const levelParam = Number(startupParams.get('level'));
   if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
   save();
@@ -122,7 +124,18 @@ const urlSeed = Number(params.get('seed'));
 /** Test harnesses on software GL run at a few fps; they can ask the river to hurry. */
 const timeScale = Math.max(0.1, Math.min(8, Number(params.get('timescale')) || 1));
 const rand = seeded(urlSeed || (Date.now() % 100000) + 7);
-const pond = new Pond(Math.floor(rand() * 1e9));
+// the river is the same one every visit (one seed per device, kept), so what a
+// child plants can be rowed back to; `?seed=` overrides it for a look at another
+const riverSeed = (() => {
+  if (urlSeed) return urlSeed;
+  const kept = readJSON<number>('stillwater.river.v1');
+  if (kept) return kept;
+  const fresh = Math.floor(Math.random() * 1e9) + 1;
+  writeJSON('stillwater.river.v1', fresh);
+  return fresh;
+})();
+const pond = new Pond(riverSeed);
+if (params.get('days')) pond.extraDays = Number(params.get('days')) || 0;
 /** `?pier=1`: a jetty just ahead at the start (to look at it, and to bump it). */
 pond.forcePier = !!params.get('pier');
 /** `?at=Y`: start that far down the river (to see its reaches). */
@@ -811,6 +824,7 @@ interface Share {
 }
 let share: Share | null = null;
 let shareTested = false;
+let plantTested = false;
 let shareHintAt = -Infinity;
 const bigFishAtBoat = () => {
   const out: number[] = [];
@@ -1091,6 +1105,11 @@ function buildNumbersPage() {
   };
   sec('on the river', `${days ? (days === 1 ? 'since today' : `since ${days} days ago`) : 'just begun'} · ${totalSolves} number${totalSolves === 1 ? '' : 's'} made · ${notebook.pages} of ${SPECIES.length} creatures seen`);
   sec('now', stageNames[stage().id] ?? stage().id);
+  if (pond.plantings.length) {
+    const flowering = pond.plantings.filter((pl) => pond.ageDays(pl) >= 5).length;
+    const leaves = pond.plantings.filter((pl) => pond.ageDays(pl) >= 0.5).length - flowering;
+    sec('planted', `${pond.plantings.length} seed${pond.plantings.length === 1 ? '' : 's'} · ${leaves} in leaf · ${flowering} in flower`);
+  }
   sec('by heart', byHeart.length ? byHeart.join(' · ') : 'nothing yet — it comes with rowing', 'facts');
   sec('working on', working.length ? working.join(' · ') : '—', 'facts');
   pageEl.appendChild(pageTurn('creatures'));
@@ -1134,6 +1153,15 @@ function startAs(name: string) {
   if (welcome) pond.bloomBoost = 2.2;
   ui.hideStart();
   startedAt = pond.t;
+  if (profile && !startNames.includes(profile.name)) {
+    startNames.push(profile.name);
+    renderer.setNames(startNames);
+  }
+  // something planted has grown while they were away: say so
+  if (pond.plantings.length && lastPlayed > 0) {
+    const grownSince = pond.plantings.some((pl) => Math.floor(pond.ageDays(pl)) > Math.floor(Math.max(0, (lastPlayed - pl.t) / 86400_000) + pond.extraDays));
+    if (grownSince) window.setTimeout(() => ui.say('something you planted has grown, down the river', 6), 2500);
+  }
   begin();
   nextTargetAt = pond.t + 1.2;
   canvasEl.focus({ preventScroll: true });
@@ -1149,7 +1177,7 @@ interface NameSlot {
   pad: Pad | null;
   a: number;
 }
-const startNames = profiles
+const startNames: string[] = profiles
   .slice()
   .sort((a, b) => b.last - a.last)
   .slice(0, 6)
@@ -1189,10 +1217,17 @@ function placeNames(dt: number) {
 /** The names for the renderer: on their leaves, sized to the leaf, fading once a child has begun. */
 function nameSprites() {
   const a = started ? Math.max(0, 1 - (pond.t - startedAt) / 0.9) : 1;
-  if (a <= 0) return [];
-  return nameSlots
+  const out = a <= 0 ? [] : nameSlots
     .filter((s) => s.pad && s.a > 0.01)
     .map((s) => ({ i: startNames.indexOf(s.name), x: s.pad!.x, y: s.pad!.y, h: Math.max(13, Math.min(20, s.pad!.r * cam.zoom * 0.42)) / cam.zoom, a: a * s.a }));
+  // a planted leaf carries its child's name, faintly, once it has grown into one
+  for (const p of pond.pads) {
+    if (!p.planted) continue;
+    const i = startNames.indexOf(p.planted);
+    if (i < 0 || out.length >= 8) continue;
+    out.push({ i, x: p.x, y: p.y, h: Math.max(11, Math.min(16, p.r * cam.zoom * 0.36)) / cam.zoom, a: 0.55 * (1 - p.sink) });
+  }
+  return out;
 }
 {
   const auto = startupParams.get('profile');
@@ -1216,6 +1251,8 @@ function nameSprites() {
  * behind the boat, off the water it's heading into.
  */
 let helm: { t: number; x: number; y: number; moved: boolean; steer: number; sign: number; bias: number } | null = null;
+/** A seed from a spent flower, carried on the fingertip until it is let go. */
+let seed: { x: number; y: number; wx: number; wy: number; from: [number, number]; moved: boolean } | null = null;
 let drag: { x: number; y: number; t: number; vx: number; vy: number; moved: boolean; wx: number; wy: number; last: number } | null = null;
 
 let pointerAt = 0;
@@ -1264,6 +1301,11 @@ canvasEl.addEventListener('pointerdown', (e) => {
   const p = hitPad && liveCount(hitPad) ? hitPad : null;
   lastHit = p;
   // …unless a creature or a flower is under the fingertip: then it is noticed (the notebook)
+  // — and a spent flower's seed head gives up a seed to carry (planting, NARRATIVE-DESIGN.md §3)
+  if (!p) {
+    const spent = pond.blooms.find((b) => b.variant === 6 && b.open >= 0.6 && Math.hypot(b.x - bwx, b.y - bwy) < b.size * 1.15 + 12 / cam.zoom);
+    if (spent && profile) seed = { x: e.clientX, y: e.clientY, wx: bwx, wy: bwy, from: [spent.x, spent.y], moved: false };
+  }
   if (!p && sight(e.clientX, e.clientY)) {
     lastHit = null;
     return;
@@ -1285,6 +1327,12 @@ canvasEl.addEventListener('pointerdown', (e) => {
 
 canvasEl.addEventListener('pointermove', (e) => {
   if (e.pointerId !== pointerId) return;
+  if (seed) {
+    const [wx, wy] = toWorld(e.clientX, e.clientY);
+    seed.x = e.clientX; seed.y = e.clientY; seed.wx = wx; seed.wy = wy;
+    if (Math.hypot(wx - seed.from[0], wy - seed.from[1]) > 14) seed.moved = true;
+    return;
+  }
   if (helm) {
     const dx = e.clientX - helm.x;
     const dy = e.clientY - helm.y;
@@ -1349,6 +1397,26 @@ const end = (e: PointerEvent) => {
   if (e.pointerId !== pointerId) return;
   pointerId = null;
   lastHit = null;
+  if (seed) {
+    const s = seed;
+    seed = null;
+    if (s.moved && profile) {
+      // planted, if it was let go on open water
+      const onLeaf = hit(s.x, s.y);
+      if (!onLeaf && !pond.onBoat(s.wx, s.wy)) {
+        pond.plant(s.wx, s.wy, profile.name);
+        writeJSON(pKey(profile.id, 'plantings.v1'), pond.plantings);
+        pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
+        sound.plop(0.4, panAt(s.wx));
+        ui.say('planted — it grows while you are away', 5);
+        ui.announce('Planted. It will grow while you are away.');
+      } else {
+        pond.impulses.push({ x: s.wx, y: s.wy, r: 3, s: 0.2 });
+        ui.say('a seed wants open water', 3);
+      }
+    }
+    return;
+  }
   if (helm) {
     if (!helm.moved && performance.now() - helm.t < 350) pond.stroke(helm.bias);
     pond.boat.helm = null;
@@ -1417,7 +1485,13 @@ const critters = new Critters(reduced ? { dragonflies: 1, butterflies: 2 } : { d
 
 /** Crumbs on the water: small, pale, a little warm; sitting on the surface. */
 function crumbMotes(): Mote[] {
-  return pond.crumbs.filter((c) => !c.eaten).map((c) => ({ x: c.x, y: c.y, size: 3.4, r: 0.95, g: 0.86, b: 0.62, a: 0.9, core: 0.75, z: 1 }));
+  const out: Mote[] = pond.crumbs.filter((c) => !c.eaten).map((c) => ({ x: c.x, y: c.y, size: 3.4, r: 0.95, g: 0.86, b: 0.62, a: 0.9, core: 0.75, z: 1 }));
+  // a carried seed: a small dark thing held above the water, with its shadow beneath
+  if (seed?.moved) {
+    out.push({ x: seed.wx + 6, y: seed.wy - 6, size: 7, r: 0.05, g: 0.06, b: 0.04, a: 0.28, core: 0.3, z: 1 });
+    out.push({ x: seed.wx, y: seed.wy, size: 5.5, r: 0.32, g: 0.22, b: 0.12, a: 1, core: 0.9, z: 1.12 });
+  }
+  return out;
 }
 
 function gathers(dt: number, dusk: number): Mote[] {
@@ -1613,6 +1687,13 @@ function frame(now: number) {
   }
 
   // `?sinktest=1`: hold the dewy leaf nearest the centre pushed under at one edge (to look at the flooding)
+  // `?plant=1` (with `&days=N`): a seed planted ahead of the boat as soon as the river starts, to look at growth
+  if (params.get('plant') && started && profile && !plantTested) {
+    plantTested = true;
+    const [px, py] = pond.boatWorld(24, 170);
+    pond.plant(px, py, profile.name);
+    pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
+  }
   // `?sharetest=1`: three big fish brought to the boat, to look at the sharing ask
   if (params.get('sharetest') && started && !shareTested) {
     shareTested = true;
@@ -1762,6 +1843,9 @@ Object.defineProperty(window, '__stillwater', {
     perf: perf.summary(),
     notebook: Object.keys(notebook.seen),
     crumbs: pond.crumbs.filter((c) => !c.eaten).length,
+    plantings: pond.plantings.map((pl) => ({ Y: Math.round(pl.Y), days: Math.round(pond.ageDays(pl) * 10) / 10 })),
+    planted: pond.pads.filter((p) => p.planted).length,
+    seed: seed ? { moved: seed.moved } : null,
     share: share ? { fish: share.fish.length, fed: share.fish.map((i, k) => (school.fish[i].fed ?? 0) - share!.base[k]) } : null,
     fishAtBoat: bigFishAtBoat().length,
     muted: [...sound.muted],

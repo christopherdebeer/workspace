@@ -51,6 +51,8 @@ export interface Pad {
   r: number;
   seed: number;
   bank: boolean;
+  /** Planted by a child: their name, faintly, once it is a leaf. */
+  planted?: string;
   drops: Drop[];
   /** Selected by the player (the thread passes through it). */
   selected: boolean;
@@ -110,6 +112,19 @@ export interface Pad {
  * with the current, blow with the wind, part around the hull and the oars and
  * rock outward on every ripple.
  */
+/**
+ * Something a child planted: where (true distance down the river, and across
+ * from the channel's centre there), when, and whose. The river grows it back
+ * each visit, older each time (NARRATIVE-DESIGN.md §3).
+ */
+export interface Planting {
+  Y: number;
+  dx: number;
+  t: number;
+  seed: number;
+  name: string;
+}
+
 /** A crumb from the basket, floating astern until a fish takes it. */
 export interface Crumb {
   x: number;
@@ -433,6 +448,9 @@ export class Pond {
    */
   rings: Array<{ x: number; y: number; t: number; s: number }> = [];
   crumbs: Crumb[] = [];
+  plantings: Planting[] = [];
+  /** Days pass this much faster (debug: `?days=` adds days; growth is by calendar time). */
+  extraDays = 0;
   /** Water drops falling from a lifted blade (drawn as glints, landing as tiny rings). */
   drips: Array<{ x: number; y: number; age: number; life: number; vx?: number; vy?: number; spray?: boolean }> = [];
   /** Things that startle fish (main.ts relays them to the school). */
@@ -462,6 +480,8 @@ export class Pond {
   halfW = 420;
   t = 0;
   /** Chooses drops for a freshly grown pad (the game's current stage decides). */
+  /** Dew has its own stream: how many drops a leaf gets depends on the stage, and must never move the leaves. */
+  private dewRand: Rand;
   dewFor: (rand: Rand) => number = () => 0;
   /** Whether a fresh leaf with this many drops lays them in a pattern (see PATTERNS). */
   patternFor: (count: number, rand: Rand) => boolean = () => false;
@@ -470,6 +490,7 @@ export class Pond {
 
   constructor(seed: number) {
     this.rand = seeded(seed);
+    this.dewRand = seeded((seed ^ 0x9e3779b9) >>> 0);
     this.reachSalt = (seed % 977) * 0.0137;
     this.landmarkRand = seeded((seed ^ 0x51f15e) >>> 0);
     this.boat.x = this.channel(0);
@@ -719,6 +740,69 @@ export class Pond {
       const y0 = this.genY;
       this.genY += 200;
       this.grow(y0, this.genY);
+    }
+  }
+
+  /** Plant a seed here: a planting the river will grow back, older each visit. */
+  plant(x: number, y: number, name: string, now = Date.now()): Planting {
+    const pl: Planting = { Y: y + this.origin, dx: x - this.fieldCentre(y), t: now, seed: Math.random(), name };
+    this.plantings.push(pl);
+    this.impulses.push({ x, y, r: 5, s: 0.5 });
+    this.rings.push({ x, y, t: this.t, s: 0.45 });
+    return pl;
+  }
+
+  /** How far a planting has come, in days (calendar time, plus any debug days). */
+  ageDays(pl: Planting, now = Date.now()): number {
+    return Math.max(0, (now - pl.t) / 86400_000) + this.extraDays;
+  }
+
+  /**
+   * What a planting has grown into by now: under water the first half day; a
+   * small leaf by the second; a proper leaf carrying the child's name by the
+   * third; and after five days, a flower of its own beside it.
+   */
+  sprout(pl: Planting, now = Date.now()) {
+    const y = pl.Y - this.origin;
+    const x = this.fieldCentre(y) + pl.dx;
+    const rand = seeded(Math.floor(pl.seed * 1e9));
+    const days = this.ageDays(pl, now);
+    // never on top of the boat's own start water
+    if (Math.abs(y - this.boat.y) < BOAT_LEN && Math.abs(x - this.boat.x) < BOAT_BEAM + 60) return;
+    if (days < 0.5) {
+      this.deep.push({ x, y, r: 9 + days * 8, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.55 - days * 0.3 });
+      return;
+    }
+    const grown = smooth(0.5, 5, days);
+    const r = 14 + 24 * grown;
+    // make room: a planted leaf pushes the wild ones aside a little
+    for (const p of this.pads) {
+      const d = Math.hypot(p.x - x, p.y - y);
+      const need = p.r + r + 4;
+      if (d < need && d > 1e-3) { p.x += ((p.x - x) / d) * (need - d); p.y += ((p.y - y) / d) * (need - d); p.ax = p.x; p.ay = p.y; }
+    }
+    const plant = this.plantFor(x, y);
+    const pad: Pad = {
+      id: this.nextId++, x, y, vx: 0, vy: 0, ang: rand() * Math.PI * 2, va: 0, ax: x, ay: y, r, seed: rand(), bank: false,
+      planted: days >= 2 ? pl.name : undefined, drops: [], selected: false, sel: 0, bob: 0, focus: false, flower: 0, touching: false,
+      dx: 0, dy: 0, wob: 0, cx: 0, cy: 0, sink: 0, caught: false, load: 0, sinkV: 0, support: 0.82 + Math.min(0.28, r / 260),
+      compliance: 0.85 + smooth(42, 96, r) * 0.55, wet: 0, soak: 0, rx: plant.x, ry: plant.y, age: Math.min(1, grown * 0.7), layer: 1,
+    };
+    this.pads.push(pad);
+    if (days >= 5) {
+      const a = rand() * Math.PI * 2;
+      const d = r + 12;
+      const bx = x + Math.cos(a) * d;
+      const by = y + Math.sin(a) * d;
+      this.blooms.push({ x: bx, y: by, vx: 0, vy: 0, ang: rand() * Math.PI * 2, size: 14 + 5 * smooth(5, 9, days), open: 1, variant: Pond.bloomKind(rand()), seed: rand(), ax: bx, ay: by, rx: plant.x, ry: plant.y });
+    }
+  }
+
+  /** Sprout every planting that lies in ground already grown (used when a child's plantings load). */
+  sproutGrown(yMin: number) {
+    for (const pl of this.plantings) {
+      const y = pl.Y - this.origin;
+      if (y > yMin && y < this.genY) this.sprout(pl);
     }
   }
 
@@ -1113,7 +1197,7 @@ export class Pond {
       if (ok && Math.abs(y - this.boat.y) < BOAT_LEN && Math.abs(x - this.boat.x) < BOAT_BEAM + r + 30) ok = false;
       if (!ok) continue;
       const flower = 0;
-      const count = this.dewFor(rand);
+      const count = this.dewFor(this.dewRand);
       const pad: Pad = {
         id: this.nextId++,
         x,
@@ -1154,7 +1238,7 @@ export class Pond {
         age,
         layer: rand(),
       };
-      pad.drops = layDrops(count, r, rand, count > 0 && this.patternFor(count, rand));
+      pad.drops = layDrops(count, r, this.dewRand, count > 0 && this.patternFor(count, this.dewRand));
       for (const d of pad.drops) d.a = 1;
       this.pads.push(pad);
       near.push(pad);
@@ -1188,6 +1272,10 @@ export class Pond {
     for (let i = 0; i < deepCount; i++) {
       const y = y0 + rand() * (y1 - y0);
       this.deep.push({ x: this.fieldCentre(y) + (rand() * 2 - 1) * (this.halfW + 80), y, r: 22 + rand() * 30, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.5 + rand() * 0.4 });
+    }
+    for (const pl of this.plantings) {
+      const y = pl.Y - this.origin;
+      if (y >= y0 && y < y1) this.sprout(pl);
     }
     this.growFloaters(y0, y1, span);
     this.growLandmarks(y0, y1);
