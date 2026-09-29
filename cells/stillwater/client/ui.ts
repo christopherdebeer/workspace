@@ -88,6 +88,46 @@ export class Overlay {
     this.progress(0);
   }
 
+  /**
+   * Sharing: one fish glyph per fish at the boat, each with the crumbs it has
+   * had beneath it. Fair when every fish has the same, and at least one.
+   */
+  setShare(fish: number) {
+    const el = this.target;
+    el.className = 'target share';
+    el.innerHTML = '';
+    this.dots = [];
+    this.bar = null;
+    this.value = fish;
+    el.classList.remove('done');
+    const word = document.createElement('b');
+    word.textContent = 'share';
+    word.className = 'fresh word';
+    el.appendChild(word);
+    const row = document.createElement('div');
+    row.className = 'fishes';
+    for (let i = 0; i < fish; i++) {
+      const s = document.createElement('span');
+      s.className = 'fish';
+      s.innerHTML = '<u></u><em></em>';
+      row.appendChild(s);
+    }
+    el.appendChild(row);
+    this.live.textContent = `${fish} fish at the boat. Tap the basket to share crumbs fairly.`;
+  }
+
+  shareProgress(fed: number[]) {
+    const fishes = this.target.querySelectorAll('.fish');
+    fishes.forEach((s, i) => {
+      const em = s.querySelector('em')!;
+      const n = fed[i] ?? 0;
+      while (em.childElementCount < n) em.appendChild(document.createElement('i')).className = 'on';
+      while (em.childElementCount > n) em.removeChild(em.lastChild!);
+    });
+    const fair = fed.length > 0 && fed.every((n) => n === fed[0]) && fed[0] > 0;
+    this.target.classList.toggle('fair', fair);
+  }
+
   /** Answered: the ask lifts away at once (a child kept answering a number that lingered). */
   solved() {
     const el = this.target;

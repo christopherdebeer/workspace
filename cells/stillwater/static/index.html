@@ -24,6 +24,12 @@
     .target i { width: 7px; height: 7px; border: 1px solid rgba(240, 236, 190, .8); border-radius: 50%; transition: background .6s, box-shadow .6s, transform .6s; }
     .target i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
     .target i.blank { border-color: rgba(240, 236, 190, .18); }
+    .target.share .word { font-size: 13px; letter-spacing: 5px; text-transform: uppercase; opacity: .75; margin-bottom: 8px; }
+    .target.share .fishes { display: flex; justify-content: center; gap: 14px; }
+    .target.share .fish { display: inline-flex; flex-direction: column; align-items: center; gap: 5px; }
+    .target.share .fish u { display: block; width: 22px; height: 9px; border-radius: 55% 45% 45% 55% / 50%; background: rgba(226, 232, 214, .75); box-shadow: 0 0 8px rgba(0, 27, 25, .5); }
+    .target.share .fish em { display: flex; gap: 4px; min-height: 9px; }
+    .target.share.fair .fish u { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; }
     .target .frame { display: grid; grid-template-columns: repeat(5, 7px); gap: 6px; padding: 6px 8px; border: 1px solid rgba(240, 236, 190, .16); border-radius: 6px; }
     .target .scaffold { display: flex; justify-content: center; align-items: center; gap: 8px; transition: opacity 1.2s; }
     .target .scaffold.array { display: grid; grid-template-columns: repeat(var(--cols), 7px); gap: 7px; justify-content: center; }

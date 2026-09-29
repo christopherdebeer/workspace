@@ -55,6 +55,17 @@ export interface Fish {
   homeZ?: number;
   bite?: number;
   feeding?: number;
+  /** Crumbs taken since the basket was last opened (for sharing fairly). */
+  fed?: number;
+  /** The crumb it is going for (mood 4). */
+  food?: Food | null;
+}
+
+/** Something to eat on the surface; `eaten` is set by the fish that takes it. */
+export interface Food {
+  x: number;
+  y: number;
+  eaten: boolean;
 }
 
 /** A large fish nosing at something on the surface: a small ring. */
@@ -126,10 +137,41 @@ export class School {
     };
   }
 
+  /** The crumb this fish should go for: the nearest, unless it has had more than its fair share. */
+  private crumbFor(f: Fish, food: Food[], boat: Boat): Food | null {
+    if (!food.length) return null;
+    // fairness is the fish's manners: one that is ahead of the others waits its turn
+    let least = Infinity;
+    for (const g of this.fish) if (g.kind !== 3 && Math.hypot(g.x - boat.x, g.y - boat.y) < 240) least = Math.min(least, g.fed ?? 0);
+    if ((f.fed ?? 0) > least) return null;
+    let best: Food | null = null;
+    let bd = 260;
+    for (const c of food) {
+      if (c.eaten) continue;
+      const d = Math.hypot(c.x - f.x, c.y - f.y);
+      if (d < bd) { bd = d; best = c; }
+    }
+    return best;
+  }
+
   /** A big fish thinks of something to do. */
-  private newMood(f: Fish, boat: Boat, interest: Array<{ x: number; y: number }>) {
+  private newMood(f: Fish, boat: Boat, interest: Array<{ x: number; y: number }>, food: Food[] = []) {
     const r = Math.random();
     f.orbit = Math.random() < 0.5 ? -1 : 1;
+    // crumbs on the water: nothing else matters
+    const crumb = this.crumbFor(f, food, boat);
+    if (crumb) {
+      f.mood = 4;
+      f.food = crumb;
+      f.until = 6;
+      return;
+    }
+    if (food.some((c) => !c.eaten) && Math.hypot(boat.x - f.x, boat.y - f.y) < 240) {
+      // its turn will come: hang near the crumbs
+      f.mood = 2;
+      f.until = 1.5;
+      return;
+    }
     if (r < 0.12) {
       // a dart: off it goes, then it settles
       const a = Math.random() * Math.PI * 2;
@@ -186,6 +228,8 @@ export class School {
     flow: (x: number, y: number) => [number, number],
     /** Things on the surface a big fish might nose at (petals, duckweed, a dewy leaf). */
     interest: Array<{ x: number; y: number }> = [],
+    /** Crumbs from the basket. A fish that reaches one marks it eaten. */
+    food: Food[] = [],
   ) {
     if (shift) {
       for (const f of this.fish) { f.y -= shift; if (f.mood === 1) f.gy -= shift; }
@@ -306,8 +350,40 @@ export class School {
       if (!minnow) {
         f.until -= dt;
         f.cool -= dt;
-        if (f.until <= 0) this.newMood(f, boat, interest);
-        if (f.mood === 1 || f.mood === 2) {
+        if (f.until <= 0) this.newMood(f, boat, interest, food);
+        // a crumb lands while it is idling or visiting: it notices at once (its manners permitting)
+        if (f.mood !== 4 && f.mood !== 3 && food.length && (f.bite ?? 0) <= 0) {
+          const crumb = this.crumbFor(f, food, boat);
+          if (crumb) { f.mood = 4; f.food = crumb; f.until = 6; }
+        }
+        if (f.mood === 4) {
+          // going for a crumb: straight at it, mouth to the surface, and a bite when it gets there
+          const target = f.food && !f.food.eaten ? f.food : null;
+          if (!target) { f.food = null; f.until = 0; }
+          else {
+            f.gx = target.x;
+            f.gy = target.y;
+            const dx = target.x - f.x;
+            const dy = target.y - f.y;
+            const d = Math.hypot(dx, dy) || 1;
+            fx += (dx / d) * Math.min(48, 14 + d * 1.4);
+            fy += (dy / d) * Math.min(48, 14 + d * 1.4);
+            const noseX = f.x + Math.sin(f.heading) * f.size * 0.9;
+            const noseY = f.y + Math.cos(f.heading) * f.size * 0.9;
+            feeding = d < 70; // comes in fast, slows and rises for the last stretch
+            // the mouth passes over the crumb (a fish cannot stop, so it takes it on the way through)
+            const reach = Math.max(9, f.size * 0.55);
+            if ((Math.hypot(target.x - noseX, target.y - noseY) < reach || d < reach) && f.z < 0.3) {
+              target.eaten = true;
+              f.food = null;
+              f.fed = (f.fed ?? 0) + 1;
+              f.bite = 1.1;
+              this.rises.push({ x: noseX, y: noseY });
+              f.until = 0.9; // a moment's pause, then it looks for another
+              f.mood = 2;
+            }
+          }
+        } else if (f.mood === 1 || f.mood === 2) {
           const gx = f.mood === 2 ? boat.x : f.gx;
           const gy = f.mood === 2 ? boat.y : f.gy;
           const dx = gx - f.x;
@@ -359,7 +435,8 @@ export class School {
       const bx = f.x - boat.x;
       const by = f.y - boat.y;
       const bd = Math.hypot(bx, by) || 1;
-      const shy = curious ? 42 : 95 * (1.2 - f.z);
+      // (a fish going for a crumb will come right up under the stern)
+      const shy = f.mood === 4 ? 26 : curious ? 42 : 95 * (1.2 - f.z);
       if (bd < shy) {
         fx += (bx / bd) * (shy - bd) * 3;
         fy += (by / bd) * (shy - bd) * 3;
@@ -382,11 +459,12 @@ export class School {
       const wantY = f.vy + fy * 0.65;
       const desired = Math.atan2(wantX, wantY);
       const error = Math.atan2(Math.sin(desired - f.heading), Math.cos(desired - f.heading));
-      const maxTurn = Math.min(minnow ? 3.2 : 1.25, speed / Math.max(8, f.size * 1.7));
+      // (a fish nosing for a crumb turns on the spot, as a feeding carp does)
+      const maxTurn = f.mood === 4 ? Math.max(1.1, Math.min(1.25, speed / Math.max(8, f.size * 1.7))) : Math.min(minnow ? 3.2 : 1.25, speed / Math.max(8, f.size * 1.7));
       const turnTo = Math.max(-maxTurn, Math.min(maxTurn, error * 2.2));
       f.turn += (turnTo - f.turn) * (1 - Math.exp(-4 * dt));
       f.heading += f.turn * dt;
-      const desiredSpeed = feeding ? f.cruise * 0.12 : Math.max(f.cruise * 0.55,
+      const desiredSpeed = feeding ? f.cruise * (f.mood === 4 ? 0.7 : 0.12) : Math.max(f.cruise * 0.55,
         Math.min(f.cruise * (minnow ? 4.5 : 3.2), speed + (fx * Math.sin(f.heading) + fy * Math.cos(f.heading) + (f.cruise - speed) * 0.6) * dt));
       const nextSpeed = feeding ? speed + (desiredSpeed - speed) * (1 - Math.exp(-3 * dt)) : desiredSpeed;
       f.vx = Math.sin(f.heading) * nextSpeed;

@@ -110,6 +110,16 @@ export interface Pad {
  * with the current, blow with the wind, part around the hull and the oars and
  * rock outward on every ripple.
  */
+/** A crumb from the basket, floating astern until a fish takes it. */
+export interface Crumb {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  age: number;
+  eaten: boolean;
+}
+
 export interface Floater {
   x: number;
   y: number;
@@ -422,6 +432,7 @@ export class Pond {
    * flexes as the front passes under it.
    */
   rings: Array<{ x: number; y: number; t: number; s: number }> = [];
+  crumbs: Crumb[] = [];
   /** Water drops falling from a lifted blade (drawn as glints, landing as tiny rings). */
   drips: Array<{ x: number; y: number; age: number; life: number; vx?: number; vy?: number; spray?: boolean }> = [];
   /** Things that startle fish (main.ts relays them to the school). */
@@ -1249,6 +1260,7 @@ export class Pond {
     for (const g of this.gusts) g.y -= s;
     for (const p of this.trail) p.y -= s;
     for (const p of this.puddles) p.y -= s;
+    for (const c of this.crumbs) c.y -= s;
     for (const e of this.eddies) e.y -= s;
     this.lastTip = [null, null];
     for (const r of this.rings) r.y -= s;
@@ -1287,6 +1299,7 @@ export class Pond {
     this.commitForks();
     this.stepPads(dt, active);
     this.stepFloaters(dt, active);
+    this.stepCrumbs(dt);
     this.stepBlooms(dt, active);
     this.stepRope(dt);
   }
@@ -1380,6 +1393,33 @@ export class Pond {
   }
 
   /** A world point in the boat's frame: across (right positive) and along (bow positive). */
+  /** A pinch from the basket: `n` crumbs tossed over the stern, drifting aft on the water. */
+  scatterCrumbs(n = 1) {
+    const b = this.boat;
+    const hx = Math.sin(b.heading);
+    const hy = Math.cos(b.heading);
+    for (let i = 0; i < n; i++) {
+      const across = (Math.random() - 0.5) * 22;
+      const [x, y] = this.boatWorld(across, -BOAT_LEN * 0.5 - 14 - Math.random() * 14);
+      this.crumbs.push({ x, y, vx: -hx * (20 + Math.random() * 12) + hy * across * 0.4, vy: -hy * (20 + Math.random() * 12) - hx * across * 0.4, age: 0, eaten: false });
+      this.impulses.push({ x, y, r: 3.5, s: 0.18 });
+    }
+  }
+
+  private stepCrumbs(dt: number) {
+    for (const c of this.crumbs) {
+      c.age += dt;
+      const [fx, fy] = this.flow(c.x, c.y);
+      const k = Math.exp(-1.6 * dt);
+      c.vx = c.vx * k + fx * (1 - k);
+      c.vy = c.vy * k + fy * (1 - k);
+      c.x += c.vx * dt;
+      c.y += c.vy * dt;
+    }
+    // a crumb the fish leave sinks after a while
+    this.crumbs = this.crumbs.filter((c) => !c.eaten && c.age < 50);
+  }
+
   /** The world position of a point given in the boat's frame (x across, y along, bow +). */
   boatWorld(lx: number, ly: number): [number, number] {
     const b = this.boat;
