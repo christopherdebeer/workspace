@@ -218,15 +218,20 @@ let firstTarget = true;
 let lastSolved: number | undefined;
 let checkAt = 0;
 
-/** Leaves with dew that the player can plainly see: ahead of the boat, clear of the header. */
+/**
+ * Leaves with dew that a child can plainly see: the WHOLE leaf on screen,
+ * below the number display and above the boat. A leaf half under the header
+ * or half off the side is not an answer anyone can find (playtest: an ask
+ * whose only answer lay there was maddening).
+ */
 function visibleDewy(): Pad[] {
   const out: Pad[] = [];
   for (const p of pond.pads) {
     if (!liveCount(p)) continue;
     const [sx, sy] = toScreen(p.x, p.y);
-    const m = Math.max(18, p.r * 0.5 * cam.zoom);
-    if (sx < m || sx > cam.cssW - m) continue;
-    if (sy < cam.cssH * 0.15 || sy > cam.cssH * (BOAT_AT - 0.06)) continue;
+    const inset = p.r * cam.zoom * 0.7;
+    if (sx - inset < 8 || sx + inset > cam.cssW - 8) continue;
+    if (sy - inset < cam.cssH * 0.2 || sy + inset > cam.cssH * (BOAT_AT - 0.05)) continue;
     out.push(p);
   }
   return out;
@@ -238,8 +243,9 @@ function visibleDry(): Pad[] {
     .filter((p) => {
       if (p.drops.length || p.flower) return false;
       const [sx, sy] = toScreen(p.x, p.y);
-      const m = Math.max(24, p.r * 0.6 * cam.zoom);
-      return sx > m && sx < cam.cssW - m && sy > cam.cssH * 0.18 && sy < cam.cssH * (BOAT_AT - 0.12);
+      // wholly in clear view, as visibleDewy asks, and a little further from the edges
+      const inset = p.r * cam.zoom * 0.7;
+      return sx - inset > 8 && sx + inset < cam.cssW - 8 && sy - inset > cam.cssH * 0.22 && sy + inset < cam.cssH * (BOAT_AT - 0.08);
     })
     .sort((a, b) => b.r - a.r);
 }
@@ -256,10 +262,11 @@ function counts(pads: Pad[]) {
 let unsolvableSince = 0;
 let targetFriction = 0;
 
+/** Leaves well inside the view: an ask drawn from these stays answerable a while as the river moves. */
 function targetDewy(): Pad[] {
   return visibleDewy().filter((p) => {
     const [, sy] = toScreen(p.x, p.y);
-    return sy > cam.cssH * 0.18 && sy < cam.cssH * (BOAT_AT - 0.16);
+    return sy > cam.cssH * 0.25 && sy < cam.cssH * (BOAT_AT - 0.16);
   });
 }
 
@@ -523,7 +530,8 @@ function keepSolvable() {
   }
   if (!unsolvableSince) unsolvableSince = pond.t;
   const lostFor = pond.t - unsolvableSince;
-  if (lostFor < 1.5) return;
+  // quickly: a child should never be left looking for an answer that is not there
+  if (lostFor < 0.5) return;
 
   if (!selection.length) {
     target = null;
@@ -534,7 +542,7 @@ function keepSolvable() {
     return;
   }
 
-  if (lostFor < 3.2) return;
+  if (lostFor < 1.2) return;
   const dry = visibleDry();
   const all = [...seen, ...dry];
   const fix = N.repair(st, counts(all), target.value);
@@ -1121,7 +1129,7 @@ function frame(now: number) {
   scaffold();
   if (pond.bloomBoost > 1 && pond.t > 90) pond.bloomBoost = 1;
   if (pond.t >= checkAt) {
-    checkAt = pond.t + 0.8;
+    checkAt = pond.t + 0.35;
     keepSolvable();
     // a dewy leaf drifting under another sheds the hidden drops rather than hiding them
     shedHidden();
