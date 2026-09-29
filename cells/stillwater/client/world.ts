@@ -177,6 +177,21 @@ export interface Weed {
   kind: number;
 }
 
+/** One arm of open water at a given y: its centre and half width (0 = no water). */
+export interface Arm {
+  x: number;
+  half: number;
+}
+
+/** A fork in the river (absolute Y): two arms from y0 for L units; `chosen` once the boat has taken one. */
+export interface Fork {
+  y0: number;
+  L: number;
+  side: -1 | 1;
+  sep: number;
+  chosen: 0 | 1 | null;
+}
+
 /**
  * Bank architecture that is scenery first. kind 0 = pier, 1 = blank sign.
  * `state` is reserved for future environmental use and intentionally ignored
@@ -415,15 +430,110 @@ export class Pond {
   }
 
   /** Channel centre line: a slow meander, in rebased world y. */
-  channel(y: number): number {
-    const Y = y + this.origin;
+  /**
+   * FORKS. Now and then the river splits into two arms around an island of
+   * leaves. Both are real water for a stretch; once the boat is clearly in one,
+   * the river commits to it: the meander carries on from that arm, and the
+   * other narrows into leaves off screen. A fork is a choice the child makes by
+   * steering (or by drifting), and the river remembers it.
+   */
+  forks: Fork[] = [];
+  /** Absolute Y of the next fork. */
+  nextForkY = 2600;
+
+  /** The river's own line, before any fork (absolute Y). */
+  private meander(Y: number): number {
     return 95 * Math.sin(Y / 1150) + 42 * Math.sin(Y / 430 + 1.3) + 16 * Math.sin(Y / 170 + 4.1);
   }
 
-  /** Open-water half width: breathes between a narrow run and a wide pool. */
-  channelHalf(y: number): number {
+  /** What the forks so far have added to the line (absolute Y). */
+  private forkOffset(Y: number): number {
+    let off = 0;
+    for (const f of this.forks) if (f.chosen !== null && Y >= f.y0 + f.L) off += f.chosen === 1 ? f.side * f.sep : -f.side * f.sep * 0.4;
+    return off;
+  }
+
+  /** The line the field is grown about (the midline of a fork). */
+  fieldCentre(y: number): number {
     const Y = y + this.origin;
+    return this.meander(Y) + this.forkOffset(Y);
+  }
+
+  private halfAt(Y: number): number {
     return 84 + 28 * Math.sin(Y / 760 + 0.4) + 14 * Math.sin(Y / 290 + 2.2);
+  }
+
+  /** The arms of open water at this y: one, or two through a fork. */
+  arms(y: number): Arm[] {
+    const Y = y + this.origin;
+    const base = this.meander(Y) + this.forkOffset(Y);
+    const h = this.halfAt(Y);
+    const f = this.forks.find((k) => Y >= k.y0 && Y < k.y0 + k.L);
+    if (!f) return [{ x: base, half: h }];
+    const t = (Y - f.y0) / f.L;
+    const sp = smooth(0, 0.4, t);
+    // the arms part over the first 40%: one keeps on, the other swings out to the side
+    const d0 = -f.side * f.sep * 0.4 * sp;
+    const d1 = f.side * f.sep * sp;
+    // each arm keeps most of the river's width (a narrow arm chokes under the leaves' overhang)
+    const narrow = h * (1 - 0.2 * sp);
+    const widen = (k: number) => (f.chosen === k ? h * smooth(0.7, 1, t) + narrow * (1 - smooth(0.7, 1, t)) : narrow);
+    const taper = (k: number) => (f.chosen !== null && f.chosen !== k ? 1 - smooth(0.74, 0.95, t) : 1);
+    return [
+      { x: base + d0, half: widen(0) * taper(0) },
+      { x: base + d1, half: widen(1) * taper(1) },
+    ];
+  }
+
+  /** The arm nearest an x at this y. */
+  nearestArm(y: number, x: number): Arm {
+    const a = this.arms(y);
+    if (a.length === 1) return a[0];
+    // a dead arm (tapered away) is no longer water: prefer the live one unless it is far off
+    const d0 = Math.abs(x - a[0].x) + (a[0].half < 6 ? 1e4 : 0);
+    const d1 = Math.abs(x - a[1].x) + (a[1].half < 6 ? 1e4 : 0);
+    return d0 <= d1 ? a[0] : a[1];
+  }
+
+  /** Channel centre line at this y: the arm nearest `nearX` (the boat, by default). */
+  channel(y: number, nearX = this.boat.x): number {
+    return this.nearestArm(y, nearX).x;
+  }
+
+  /** Open-water half width: breathes between a narrow run and a wide pool. */
+  channelHalf(y: number, nearX = this.boat.x): number {
+    return this.nearestArm(y, nearX).half;
+  }
+
+  /** How open the water is at a point (1 mid-run, 0 under the leaves), over every arm. */
+  openness(x: number, y: number): number {
+    let o = 0;
+    for (const a of this.arms(y)) if (a.half > 0.5) o = Math.max(o, 1 - smooth(a.half * 0.35, a.half + 120, Math.abs(x - a.x)));
+    return o;
+  }
+
+  /** The fork the boat is in, and how far through it (for the debug surface). */
+  forkState(): { t: number; chosen: number | null; arms: number } | null {
+    const Y = this.boat.y + this.origin;
+    const f = this.forks.find((k) => Y >= k.y0 - 400 && Y < k.y0 + k.L);
+    if (!f) return null;
+    return { t: Math.round(((Y - f.y0) / f.L) * 100) / 100, chosen: f.chosen, arms: this.arms(this.boat.y).length };
+  }
+
+  /**
+   * Committing to an arm: once the boat is 30% through a fork, the arm it is in
+   * becomes the river. The far end of the other arm (well beyond the view) is
+   * regrown so it narrows into leaves.
+   */
+  private commitForks() {
+    const Y = this.boat.y + this.origin;
+    for (const f of this.forks) {
+      if (f.chosen !== null || Y < f.y0 + f.L * 0.3) continue;
+      const a = this.arms(this.boat.y);
+      f.chosen = Math.abs(this.boat.x - a[0].x) <= Math.abs(this.boat.x - a[1].x) ? 0 : 1;
+      const from = f.y0 + f.L * 0.72 - this.origin;
+      if (from < this.genY) this.regrow(this.halfW, from);
+    }
   }
 
   /**
@@ -433,13 +543,14 @@ export class Pond {
    * so what the water shows and what the pads feel agree.
    */
   flow(x: number, y: number): [number, number] {
-    const cx = this.channel(y);
-    const slope = (this.channel(y + 20) - this.channel(y - 20)) / 40;
+    const arm = this.nearestArm(y, x);
+    const cx = arm.x;
+    const slope = (this.channel(y + 20, x) - this.channel(y - 20, x)) / 40;
     const n = Math.hypot(slope, 1);
     const tx = slope / n;
     const ty = 1 / n;
-    const half = this.channelHalf(y);
-    const open = 1 - smooth(half * 0.35, half + 120, Math.abs(x - cx));
+    const half = arm.half;
+    const open = half > 0.5 ? 1 - smooth(half * 0.35, half + 120, Math.abs(x - cx)) : 0;
     const speed = 2.5 + 11 * open;
     // eddies: a slow curl field, strongest where open water meets the banks
     const Y = y + this.origin;
@@ -451,9 +562,7 @@ export class Pond {
 
   /** Depth of the bed (the shader's depthAt, less its fine noise) — where stems end. */
   bedDepth(x: number, y: number): number {
-    const half = this.channelHalf(y);
-    const open = 1 - smooth(half * 0.35, half + 120, Math.abs(x - this.channel(y)));
-    return 0.22 + 0.78 * open;
+    return 0.22 + 0.78 * this.openness(x, y);
   }
 
   /** The plant a new leaf at (x, y) belongs to: a rhizome close by, or a new plant. */
@@ -511,8 +620,10 @@ export class Pond {
     const patches = Math.round(((y1 - y0) * span) / 70000 + rand());
     for (let i = 0; i < patches; i++) {
       const y = y0 + rand() * (y1 - y0);
-      const cx = this.channel(y);
-      const half = this.channelHalf(y);
+      const armsHere = this.arms(y);
+      const arm = armsHere[Math.floor(rand() * armsHere.length)];
+      const cx = arm.x;
+      const half = arm.half;
       const side = rand() < 0.5 ? -1 : 1;
       const x = cx + side * (half * (0.45 + rand() * 0.9));
       const pr = 22 + rand() * 60;
@@ -529,7 +640,7 @@ export class Pond {
     const loose = Math.round(((y1 - y0) * span) / 14000);
     for (let i = 0; i < loose; i++) {
       const y = y0 + rand() * (y1 - y0);
-      add(this.channel(y) + (rand() * 2 - 1) * (this.halfW + 60), y, 0, 1.4 + rand() * 1.4);
+      add(this.fieldCentre(y) + (rand() * 2 - 1) * (this.halfW + 60), y, 0, 1.4 + rand() * 1.4);
     }
     // petals shed around the open flowers
     for (const b of this.blooms) {
@@ -544,7 +655,7 @@ export class Pond {
     // the odd fallen willow leaf
     if (rand() < 0.7) {
       const y = y0 + rand() * (y1 - y0);
-      add(this.channel(y) + (rand() * 2 - 1) * this.halfW, y, 2, 11 + rand() * 7);
+      add(this.fieldCentre(y) + (rand() * 2 - 1) * this.halfW, y, 2, 11 + rand() * 7);
     }
   }
 
@@ -679,9 +790,11 @@ export class Pond {
     const place = (yAt?: number) => {
       const y = yAt ?? y0 + rand() * (y1 - y0);
       const side: -1 | 1 = rand() < 0.5 ? -1 : 1;
-      const cx = this.channel(y);
-      const half = this.channelHalf(y);
-      const slope = (this.channel(y + 12) - this.channel(y - 12)) / 24;
+      // the arm on this side of the river
+      const probe = this.fieldCentre(y) + side * 400;
+      const cx = this.channel(y, probe);
+      const half = this.channelHalf(y, probe);
+      const slope = (this.channel(y + 12, probe) - this.channel(y - 12, probe)) / 24;
       const nn = Math.hypot(1, slope);
       const ox = side / nn;
       const oy = (-side * slope) / nn;
@@ -836,15 +949,21 @@ export class Pond {
 
   private grow(y0: number, y1: number) {
     const rand = this.rand;
+    // a fork ahead? decide it before anything in this band is placed
+    if (y1 + this.origin >= this.nextForkY) {
+      this.forks.push({ y0: this.nextForkY, L: 1700, side: rand() < 0.5 ? -1 : 1, sep: 250 + rand() * 50, chosen: null });
+      this.nextForkY += 1700 + 3500 + rand() * 4500;
+    }
     const span = this.halfW * 2 + 200;
     const attempts = Math.round(((y1 - y0) * span) / 260);
     const near = this.pads.filter((p) => p.y > y0 - 160);
     for (let i = 0; i < attempts; i++) {
       const y = y0 + rand() * (y1 - y0);
-      const cx = this.channel(y);
-      const x = cx + (rand() * 2 - 1) * (this.halfW + 100);
+      const x = this.fieldCentre(y) + (rand() * 2 - 1) * (this.halfW + 100);
+      const arm = this.nearestArm(y, x);
+      const cx = arm.x;
       const off = Math.abs(x - cx);
-      const half = this.channelHalf(y);
+      const half = arm.half;
       const bank = off > half;
       if (!bank && rand() > 0.035) continue;
       const deepness = smooth(half, half + 260, off);
@@ -936,7 +1055,7 @@ export class Pond {
     const deepCount = Math.round(((y1 - y0) * span) / 90000);
     for (let i = 0; i < deepCount; i++) {
       const y = y0 + rand() * (y1 - y0);
-      this.deep.push({ x: this.channel(y) + (rand() * 2 - 1) * (this.halfW + 80), y, r: 22 + rand() * 30, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.5 + rand() * 0.4 });
+      this.deep.push({ x: this.fieldCentre(y) + (rand() * 2 - 1) * (this.halfW + 80), y, r: 22 + rand() * 30, ang: rand() * Math.PI * 2, seed: rand(), depth: 0.5 + rand() * 0.4 });
     }
     this.growFloaters(y0, y1, span);
     this.growLandmarks(y0, y1);
@@ -944,10 +1063,8 @@ export class Pond {
     const weedCount = Math.round(((y1 - y0) * span) / 2600);
     for (let i = 0; i < weedCount; i++) {
       const y = y0 + rand() * (y1 - y0);
-      const cx = this.channel(y);
-      const x = cx + (rand() * 2 - 1) * (this.halfW + 60);
-      const off = Math.abs(x - cx) / this.channelHalf(y);
-      if (off < 0.5 && rand() > 0.25) continue;
+      const x = this.fieldCentre(y) + (rand() * 2 - 1) * (this.halfW + 60);
+      if (this.openness(x, y) > 0.55 && rand() > 0.25) continue;
       this.weeds.push({ x, y, len: 30 + rand() * 60, depth: 0.45 + rand() * 0.6, seed: rand(), kind: rand() < 0.35 ? 1 : 0 });
     }
     this.pads.sort((a, b) => Number(b.bank) - Number(a.bank) || a.layer - b.layer);
@@ -1044,6 +1161,7 @@ export class Pond {
     this.stepGusts(dt);
     this.stepBoat(dt, reduced);
     this.collidePiers(dt);
+    this.commitForks();
     this.stepPads(dt, active);
     this.stepFloaters(dt, active);
     this.stepBlooms(dt, active);

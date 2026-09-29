@@ -114,6 +114,8 @@ const rand = seeded(urlSeed || (Date.now() % 100000) + 7);
 const pond = new Pond(Math.floor(rand() * 1e9));
 /** `?pier=1`: a jetty just ahead at the start (to look at it, and to bump it). */
 pond.forcePier = !!params.get('pier');
+/** `?fork=N`: the river forks N units ahead of the start (to look at a fork, and to choose). */
+if (params.get('fork')) pond.nextForkY = pond.boat.y + pond.origin + Math.max(-600, Number(params.get('fork')) || 400);
 /**
  * Spacing, planted as ecology (P1): when a fact is due, its parts are grown
  * into the dew of the leaves appearing ahead, so by the time they drift into
@@ -1221,6 +1223,7 @@ Object.defineProperty(window, '__stillwater', {
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
     profile: profile?.name ?? null,
+    fork: pond.forkState(),
     names: nameSlots
       .filter((s) => s.pad)
       .map((s) => {

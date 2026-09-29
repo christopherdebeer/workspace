@@ -110,6 +110,7 @@ export class Renderer {
   /** Atlas rows: each name's uv rect and aspect (width / height). */
   private atlasRows: Array<{ u0: number; v0: number; u1: number; v1: number; aspect: number }> = [];
   private chan = new Float32Array(66);
+  private chan2 = new Float32Array(66);
   private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
   private dropData = new Float32Array(DROP_COLS * MAX_DROP_ROWS * 4);
@@ -284,6 +285,7 @@ export class Renderer {
       gl.uniform4f(u.uLamp, lx, ly, 150, f.lantern);
     }
     if (u.uChan) gl.uniform2fv(u.uChan, this.chan);
+    if (u.uChan2) gl.uniform2fv(u.uChan2, this.chan2);
     if (u.uSpanY) gl.uniform2f(u.uSpanY, this.span[0], this.span[1]);
   }
 
@@ -306,8 +308,12 @@ export class Renderer {
     this.span = [y0, y1];
     for (let i = 0; i <= 32; i++) {
       const y = y0 + ((y1 - y0) * i) / 32;
-      this.chan[i * 2] = pond.channel(y);
-      this.chan[i * 2 + 1] = pond.channelHalf(y);
+      const arms = pond.arms(y);
+      this.chan[i * 2] = arms[0].x;
+      this.chan[i * 2 + 1] = arms[0].half;
+      // the second arm through a fork (half 0 = none); its x follows the first so the mix stays sane
+      this.chan2[i * 2] = arms[1]?.x ?? arms[0].x;
+      this.chan2[i * 2 + 1] = arms[1]?.half ?? 0;
     }
 
     // ── instance data ──

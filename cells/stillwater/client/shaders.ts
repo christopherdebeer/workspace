@@ -98,6 +98,7 @@ void main(){
 /** The river's shape, shared by bed, surface and mist: channel samples, depth, current. */
 const RIVER = /* glsl */ `
 uniform vec2 uChan[33];
+uniform vec2 uChan2[33];
 uniform vec2 uSpanY;
 uniform float uDepthK;
 vec2 chanAt(float y){
@@ -106,9 +107,22 @@ vec2 chanAt(float y){
   int i = int(fi);
   return mix(uChan[i], uChan[i + 1], f - fi);
 }
+vec2 chanAt2(float y){
+  float f = clamp((y - uSpanY.x) / (uSpanY.y - uSpanY.x), 0., 1.) * 32.;
+  float fi = min(floor(f), 31.);
+  int i = int(fi);
+  return mix(uChan2[i], uChan2[i + 1], f - fi);
+}
+float openOf(vec2 ch, vec2 wp){
+  return ch.y > .5 ? 1. - smoothstep(ch.y * .35, ch.y + 120., abs(wp.x - ch.x)) : 0.;
+}
+// the arm of the river this point belongs to (through a fork there are two)
+vec2 armAt(vec2 wp){
+  vec2 c1 = chanAt(wp.y), c2 = chanAt2(wp.y);
+  return openOf(c2, wp) > openOf(c1, wp) ? c2 : c1;
+}
 float openAt(vec2 wp){
-  vec2 ch = chanAt(wp.y);
-  return 1. - smoothstep(ch.y * .35, ch.y + 120., abs(wp.x - ch.x));
+  return max(openOf(chanAt(wp.y), wp), openOf(chanAt2(wp.y), wp));
 }
 float depthAt(vec2 wp){
   float n = texture(uNoise, wp / 1024.).r;
@@ -116,7 +130,9 @@ float depthAt(vec2 wp){
   return .22 + .78 * openAt(wp) + .3 * (n - .5) + .1 * (n2 - .5);
 }
 vec2 flowAt(vec2 wp){
-  vec2 a = chanAt(wp.y - 20.), b = chanAt(wp.y + 20.);
+  bool second = openOf(chanAt2(wp.y), wp) > openOf(chanAt(wp.y), wp);
+  vec2 a = second ? chanAt2(wp.y - 20.) : chanAt(wp.y - 20.);
+  vec2 b = second ? chanAt2(wp.y + 20.) : chanAt(wp.y + 20.);
   vec2 tng = normalize(vec2((b.x - a.x) / 40., 1.));
   float open = openAt(wp);
   vec2 f = tng * (2.5 + 11. * open);
@@ -143,7 +159,7 @@ const CANOPY = /* glsl */ `
 uniform float uDusk;
 const float CANOPY_H = 6.;
 float canopyAt(vec2 q){
-  vec2 ch = chanAt(q.y);
+  vec2 ch = armAt(q);
   float off = abs(q.x - ch.x);
   // the trees overhang the banks; the run itself is open to the sky
   float reach = smoothstep(ch.y * .55, ch.y + 150., off);
