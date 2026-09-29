@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0e2a25" />
+  <title>Stillwater</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0e2a25; color: #f0edce; font-family: Georgia, 'Iowan Old Style', serif; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; outline: none; }
+    #ui { position: fixed; inset: 0; pointer-events: none; }
+    header { position: absolute; top: max(24px, env(safe-area-inset-top)); width: 100%; text-align: center; text-shadow: 0 2px 18px #001b19; }
+    h1 { pointer-events: auto; cursor: default; font-size: 12px; font-weight: normal; letter-spacing: 7px; margin: 0 0 16px; opacity: .7; transition: opacity 4s, margin 4s, font-size 4s; }
+    h1.quiet { opacity: .28; }
+    .target { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 14px; transition: opacity 1.2s, transform 1.2s; }
+    .target.arrive { opacity: 0; transform: translateY(12px) scale(.9); }
+    /* solved: the ask lifts away at once, so nothing is left to keep answering */
+    .target.done { opacity: 0; transform: translateY(-18px) scale(1.08); transition-duration: .55s, .55s; }
+    .target.done i { background: #fdf6cc; box-shadow: 0 0 14px #f9e9a3; }
+    /* a new ask arrives with a breath of light, so it reads as new even when the number is the same */
+    .target.numeral b.fresh { animation: fresh 1.6s ease-out; }
+    @keyframes fresh { 0% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } 25% { text-shadow: 0 0 22px rgba(253, 246, 204, .95), 0 0 6px rgba(253, 246, 204, .9); } 100% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } }
+    .target i { width: 7px; height: 7px; border: 1px solid rgba(240, 236, 190, .8); border-radius: 50%; transition: background .6s, box-shadow .6s, transform .6s; }
+    .target i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
+    .target i.blank { border-color: rgba(240, 236, 190, .18); }
+    .target.share .word { font-size: 13px; letter-spacing: 5px; text-transform: uppercase; opacity: .75; margin-bottom: 8px; }
+    .target.share .fishes { display: flex; justify-content: center; gap: 14px; }
+    .target.share .fish { display: inline-flex; flex-direction: column; align-items: center; gap: 5px; }
+    .target.share .fish u { display: block; width: 22px; height: 9px; border-radius: 55% 45% 45% 55% / 50%; background: rgba(226, 232, 214, .75); box-shadow: 0 0 8px rgba(0, 27, 25, .5); }
+    .target.share .fish em { display: flex; gap: 4px; min-height: 9px; }
+    .target.share.fair .fish u { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; }
+    .target .frame { display: grid; grid-template-columns: repeat(5, 7px); gap: 6px; padding: 6px 8px; border: 1px solid rgba(240, 236, 190, .16); border-radius: 6px; }
+    .target .scaffold { display: flex; justify-content: center; align-items: center; gap: 8px; transition: opacity 1.2s; }
+    .target .scaffold.array { display: grid; grid-template-columns: repeat(var(--cols), 7px); gap: 7px; justify-content: center; }
+    .target.numeral { flex-direction: column; gap: 8px; }
+    .target.numeral b { font-weight: normal; font-size: 30px; letter-spacing: 2px; line-height: 1; }
+    .target .bar { width: 64px; height: 2px; background: rgba(240, 236, 190, .2); border-radius: 1px; overflow: hidden; }
+    .target .bar span { display: block; height: 100%; width: 0; background: #fdf6cc; box-shadow: 0 0 8px #f9e9a3; transition: width .6s; }
+    #hint { position: absolute; bottom: max(46px, calc(env(safe-area-inset-bottom) + 30px)); width: 100%; padding: 0 24px; text-align: center; font-size: 15px; font-style: italic; letter-spacing: .4px; text-shadow: 0 1px 12px #001b19; opacity: 0; transition: opacity 1.6s; }
+    #hint.show { opacity: .85; }
+    button { pointer-events: auto; position: absolute; bottom: max(10px, env(safe-area-inset-bottom)); right: 12px; border: 0; background: transparent; color: #ececc8; opacity: .5; font: 12px Georgia, serif; padding: 12px; cursor: pointer; }
+    button:focus-visible { outline: 1px solid #ddd; border-radius: 4px; }
+    #live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    body.nogl #hint { opacity: .9; }
+    /* the start: the title on the golden-ratio line, names written on leaves below it,
+       and a place for a new name in the hint's own slot */
+    h1.hidden { opacity: 0; }
+    #start { position: fixed; left: 0; right: 0; top: 38.2%; transform: translateY(-50%); text-align: center; pointer-events: none; transition: opacity 1.4s; }
+    #start.away { opacity: 0; }
+    #notebook { right: auto; left: 12px; transition: opacity 1.4s; }
+    body.page header, body.page #hint { opacity: 0; transition: opacity .6s; }
+    #notebook.hidden { opacity: 0; pointer-events: none; }
+    #notebook.new { opacity: .9; color: #f6e9a8; }
+    /* the notebook's labels sit under the creatures the renderer draws on the paper */
+    #page { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .6s; }
+    #page.open { opacity: 1; pointer-events: auto; }
+    #page .label { position: absolute; transform: translate(-50%, 0); width: 96px; text-align: center; font-size: 11px; letter-spacing: .3px; color: #3a3324; line-height: 1.25; }
+    #page .label.unseen { color: #8d8570; font-style: italic; }
+    #page .label b { display: block; font-weight: normal; font-size: 12px; }
+    #page .label small { display: block; font-size: 10px; color: #7a725e; }
+    #page h2 { position: absolute; top: 5.5%; width: 100%; text-align: center; margin: 0; font-weight: normal; font-size: 12px; letter-spacing: 5px; color: #4a4331; }
+    #page .turn { position: absolute; bottom: max(14px, calc(env(safe-area-inset-bottom) + 6px)); left: 50%; transform: translateX(-50%); right: auto; font: italic 12px Georgia, serif; color: #5a523e; background: transparent; border: 0; padding: 10px 16px; pointer-events: auto; opacity: .85; }
+    #page .turn.back { left: 22%; }
+    #page .turn:not(.back) { left: auto; right: 22%; transform: none; }
+    #page .folio { pointer-events: none; position: absolute; bottom: max(24px, calc(env(safe-area-inset-bottom) + 16px)); width: 100%; text-align: center; font-size: 10px; letter-spacing: 2px; color: #8d8570; }
+    #page section { position: relative; margin: 0 9%; padding: 10px 0; border-bottom: 1px solid rgba(74, 67, 49, .15); color: #3a3324; }
+    #page section:first-of-type { margin-top: 17%; }
+    #page section h3 { margin: 0 0 4px; font-weight: normal; font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #7a725e; }
+    #page section p { margin: 0; font-size: 14px; line-height: 1.5; }
+    #page section.facts p { font-size: 15px; letter-spacing: .5px; }
+    #page .close { position: absolute; top: 4%; right: 14px; font: 12px Georgia, serif; color: #6a6250; padding: 10px; pointer-events: auto; background: transparent; border: 0; bottom: auto; opacity: .8; }
+    #start .brand { font-size: 15px; letter-spacing: 10px; margin: 0 0 0 10px; opacity: .92; text-shadow: 0 2px 18px #001b19; }
+    #newname { position: fixed; left: 0; right: 0; bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px)); display: flex; justify-content: center; pointer-events: none; transition: opacity 1.4s; }
+    #newname.away { opacity: 0; }
+    #newname input { pointer-events: auto; font: 16px Georgia, serif; font-style: italic; letter-spacing: .4px; color: #f3f0d2; background: transparent; border: 0; border-bottom: 1px solid rgba(240, 236, 206, .38); padding: 8px 6px; width: 200px; outline: none; text-align: center; text-shadow: 0 1px 12px #001b19; }
+    #newname input:focus { border-bottom-color: rgba(240, 236, 206, .8); }
+    #newname input::placeholder { color: rgba(240, 236, 206, .72); }
+  </style>
+</head>
+<body>
+  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go."></canvas>
+  <div id="ui">
+    <header>
+      <h1 id="title" class="hidden">STILLWATER</h1>
+      <div id="target" class="target" aria-hidden="true"></div>
+    </header>
+    <div id="hint"></div>
+    <button id="sound" type="button" aria-pressed="false">sound off</button>
+    <button id="notebook" type="button" aria-pressed="false" aria-label="Open the notebook" class="hidden">notebook</button>
+    <div id="page" aria-hidden="true"></div>
+    <div id="live" role="status" aria-live="polite"></div>
+  </div>
+  <div id="start"><p class="brand">STILLWATER</p></div>
+  <form id="newname" autocomplete="off">
+    <input id="newname-input" type="text" maxlength="14" placeholder="who is rowing today?" aria-label="Who is rowing today? Type a new name" enterkeyhint="go" />
+  </form>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

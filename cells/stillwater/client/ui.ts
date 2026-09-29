@@ -1,0 +1,199 @@
+/**
+ * The only words and marks over the water: the title (which fades once the
+ * journey starts), the target drawn as dew-dots, a line of hint that comes and
+ * goes, the sound toggle, and a polite live region for screen readers.
+ *
+ * The target is always its numeral; under it a fading scaffold carries the maths:
+ *   line     • • • •            counting
+ *   frames   ten-frames         adding past five and ten
+ *   array    rows of equal dots equal groups — one row per leaf
+ *   numeral  (no dots)          the product alone
+ */
+import type { Display, Target } from './numeracy';
+import { numberWord } from './numeracy';
+
+export class Overlay {
+  private title = document.getElementById('title')!;
+  private target = document.getElementById('target')!;
+  private hint = document.getElementById('hint')!;
+  private live = document.getElementById('live')!;
+  private hintTimer = 0;
+  private dots: HTMLElement[] = [];
+  private bar: HTMLElement | null = null;
+  private value = 0;
+
+  fadeTitle() {
+    this.title.classList.add('quiet');
+  }
+
+  /**
+   * The ask is always the NUMERAL: reading "7" and gathering seven is the
+   * skill (numeral ↔ quantity), not matching dots to drops. Under it, the
+   * dots are a scaffold — a line, ten-frames, or an array of equal rows —
+   * whose strength is `support` (1 while a form is new, fading as the child
+   * grows past it). Once it has faded away a thin bar tracks the gathering.
+   */
+  setTarget(t: Target, display: Display, support = 1) {
+    this.value = t.value;
+    const el = this.target;
+    el.className = 'target numeral';
+    el.innerHTML = '';
+    this.dots = [];
+    this.bar = null;
+    el.classList.remove('done');
+    const num = document.createElement('b');
+    num.textContent = String(t.value);
+    num.className = 'fresh';
+    el.appendChild(num);
+    const dot = () => {
+      const i = document.createElement('i');
+      this.dots.push(i);
+      return i;
+    };
+    if (support >= 0.12 && display !== 'numeral') {
+      const sc = document.createElement('div');
+      sc.className = 'scaffold ' + display;
+      sc.style.opacity = String(Math.min(1, 0.25 + support * 0.75));
+      if (display === 'line') {
+        for (let k = 0; k < t.value; k++) sc.appendChild(dot());
+      } else if (display === 'frames') {
+        for (let f = 0; f < Math.ceil(t.value / 10); f++) {
+          const frame = document.createElement('span');
+          frame.className = 'frame';
+          for (let k = 0; k < 10; k++) {
+            const i = dot();
+            if (f * 10 + k >= t.value) i.className = 'blank';
+            frame.appendChild(i);
+          }
+          sc.appendChild(frame);
+        }
+        this.dots = this.dots.filter((d) => d.className !== 'blank');
+      } else {
+        const rows = t.rows ?? 1;
+        const cols = t.cols ?? t.value;
+        sc.style.setProperty('--cols', String(cols));
+        for (let k = 0; k < rows * cols; k++) sc.appendChild(dot());
+      }
+      el.appendChild(sc);
+    } else {
+      const bar = document.createElement('span');
+      bar.className = 'bar';
+      const fill = document.createElement('span');
+      bar.appendChild(fill);
+      el.appendChild(bar);
+      this.bar = fill;
+    }
+    el.classList.add('arrive');
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('arrive')));
+    this.progress(0);
+  }
+
+  /**
+   * Sharing: one fish glyph per fish at the boat, each with the crumbs it has
+   * had beneath it. Fair when every fish has the same, and at least one.
+   */
+  setShare(fish: number) {
+    const el = this.target;
+    el.className = 'target share';
+    el.innerHTML = '';
+    this.dots = [];
+    this.bar = null;
+    this.value = fish;
+    el.classList.remove('done');
+    const word = document.createElement('b');
+    word.textContent = 'share';
+    word.className = 'fresh word';
+    el.appendChild(word);
+    const row = document.createElement('div');
+    row.className = 'fishes';
+    for (let i = 0; i < fish; i++) {
+      const s = document.createElement('span');
+      s.className = 'fish';
+      s.innerHTML = '<u></u><em></em>';
+      row.appendChild(s);
+    }
+    el.appendChild(row);
+    this.live.textContent = `${fish} fish at the boat. Tap the basket to share crumbs fairly.`;
+  }
+
+  shareProgress(fed: number[]) {
+    const fishes = this.target.querySelectorAll('.fish');
+    fishes.forEach((s, i) => {
+      const em = s.querySelector('em')!;
+      const n = fed[i] ?? 0;
+      while (em.childElementCount < n) em.appendChild(document.createElement('i')).className = 'on';
+      while (em.childElementCount > n) em.removeChild(em.lastChild!);
+    });
+    const fair = fed.length > 0 && fed.every((n) => n === fed[0]) && fed[0] > 0;
+    this.target.classList.toggle('fair', fair);
+  }
+
+  /** Answered: the ask lifts away at once (a child kept answering a number that lingered). */
+  solved() {
+    const el = this.target;
+    this.dots.forEach((d) => d.classList.add('on'));
+    el.classList.add('done');
+    const gen = ++this.solvedGen;
+    window.setTimeout(() => {
+      if (gen !== this.solvedGen) return;
+      this.clearTarget();
+      el.classList.remove('done');
+    }, 600);
+    this.live.textContent = 'Yes.';
+  }
+  private solvedGen = 0;
+
+  progress(n: number) {
+    this.dots.forEach((d, i) => d.classList.toggle('on', i < n));
+    if (this.bar) this.bar.style.width = `${Math.min(100, (n / Math.max(1, this.value)) * 100)}%`;
+    this.live.textContent = `Gather ${numberWord(this.value)}. ${n} gathered.`;
+  }
+
+  /** Show a hint for `seconds` (0 = until replaced). */
+  say(text: string, seconds = 6) {
+    this.hint.textContent = text;
+    this.hint.classList.add('show');
+    window.clearTimeout(this.hintTimer);
+    if (seconds) this.hintTimer = window.setTimeout(() => this.hint.classList.remove('show'), seconds * 1000);
+  }
+
+  quiet() {
+    this.hint.classList.remove('show');
+  }
+
+  clearTarget() {
+    this.target.innerHTML = '';
+    this.dots = [];
+    this.bar = null;
+    this.value = 0;
+  }
+
+  announce(text: string) {
+    this.live.textContent = text;
+  }
+
+  /**
+   * The start: the title on the golden-ratio line, and a place for a new name
+   * in the hint's slot (the question is its placeholder). Returning children's
+   * names are drawn on leaves by the renderer. `pick` gets the chosen name.
+   */
+  start(hasNames: boolean, pick: (name: string) => void) {
+    const form = document.getElementById('newname') as HTMLFormElement | null;
+    const input = document.getElementById('newname-input') as HTMLInputElement | null;
+    if (form && input) {
+      input.placeholder = hasNames ? 'or a new name' : 'who is rowing today?';
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = input.value.trim().slice(0, 14);
+        if (name) pick(name);
+      });
+    }
+  }
+
+  hideStart() {
+    document.getElementById('start')?.classList.add('away');
+    document.getElementById('newname')?.classList.add('away');
+    this.title.classList.remove('hidden');
+    this.quiet();
+  }
+}
