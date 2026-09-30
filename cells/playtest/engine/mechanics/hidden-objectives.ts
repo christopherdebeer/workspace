@@ -17,6 +17,10 @@
  */
 
 import {
+  ValidationResult,
+  ActionExecutionContext,
+  ActionExecutionResult,
+  AvailableAction,
   MechanicHooks,
   VisibilityContext,
   VisibleState,
@@ -28,7 +32,7 @@ import {
   WinCheckResult,
   HookContext
 } from './types';
-import { PlayerState, GameConfig } from '../types/game';
+import { PlayerState, GameConfig, GameAction } from '../types/game';
 
 /**
  * Objective definition from game config
@@ -106,6 +110,12 @@ export interface HiddenObjectivesConfig {
   deal_at_start?: boolean;
   /** Reveal objective when completed */
   reveal_on_completion?: boolean;
+  /**
+   * Denounce: once per game, spend an action to name a player as the enemy/traitor.
+   *   correct: 'win' (the denouncer wins) | 'reveal' (the enemy is exposed to everyone)
+   *   wrong:   'reveal_self' (the denouncer's objective is exposed) | 'end_turn' | 'both'
+   */
+  denounce?: { correct?: 'win' | 'reveal'; wrong?: 'reveal_self' | 'end_turn' | 'both' };
 }
 
 /**
@@ -175,9 +185,58 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     };
   },
 
+  /** Denounce: name a player as the enemy (see HiddenObjectivesConfig.denounce). */
+  getAvailableActions(ctx: HookContext): AvailableAction[] {
+    const cfg = (ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined)?.denounce;
+    if (!cfg || (ctx.player as unknown as { denounced?: string }).denounced) return [];
+    const targets = ctx.state.turnOrder.filter((p) => p !== ctx.playerId);
+    return [{
+      action: { type: 'denounce', target: targets[0] } as unknown as GameAction,
+      priority: 20,
+      category: 'social',
+      description: 'Once per game: name a player as The Enemy',
+      required: { target: 'The player you accuse' },
+      examples: targets.map((target) => ({ type: 'denounce', target }) as unknown as GameAction),
+      targets,
+    }];
+  },
+
+  preValidateAction(ctx: HookContext, action: GameAction): ValidationResult | null {
+    if ((action.type as string) !== 'denounce') return null;
+    const cfg = (ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined)?.denounce;
+    if (!cfg) return { valid: false, error: 'Denouncing is not part of this game.' };
+    if ((ctx.player as unknown as { denounced?: string }).denounced) return { valid: false, error: 'You have already denounced someone this game.' };
+    const target = (action as unknown as { target?: string }).target;
+    if (!target || target === ctx.playerId || !ctx.state.players[target]) return { valid: false, error: 'Name another player.' };
+    return { valid: true };
+  },
+
+  onExecuteAction(ctx: ActionExecutionContext): ActionExecutionResult | null {
+    if ((ctx.action.type as string) !== 'denounce') return null;
+    const cfg = (ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig).denounce!;
+    const target = (ctx.action as unknown as { target: string }).target;
+    const me = ctx.player as unknown as P & { denounced?: string; denouncedEnemy?: boolean; revealedAs?: string; objective?: ObjectiveDefinition; actionPoints?: number };
+    const them = ctx.state.players[target] as unknown as { team?: string; revealedAs?: string; objective?: ObjectiveDefinition };
+    me.denounced = target;
+    const correct = them?.team === 'enemy';
+    if (correct) {
+      them.revealedAs = them.objective?.name ?? 'The Enemy';
+      if ((cfg.correct ?? 'win') === 'win') me.denouncedEnemy = true;
+      return { handled: true, advanceTurn: false, checkWin: true, logMessage: 'denounce_correct', logData: { target, revealed: them.revealedAs } };
+    }
+    const wrong = cfg.wrong ?? 'both';
+    if (wrong === 'reveal_self' || wrong === 'both') me.revealedAs = me.objective?.name ?? 'unknown';
+    const endTurn = wrong === 'end_turn' || wrong === 'both';
+    if (endTurn && me.actionPoints !== undefined) me.actionPoints = 0;
+    return { handled: true, advanceTurn: endTurn ? true : false, checkWin: false, logMessage: 'denounce_wrong', logData: { target, denouncerRevealed: me.revealedAs ?? null } };
+  },
+
   /** A structured `check` that passes wins the game for its holder, after any action. */
   onCheckWin(ctx: WinCheckContext): WinCheckResult | null {
     if (ctx.trigger === 'timeout') return null;
+    if ((ctx.player as unknown as { denouncedEnemy?: boolean }).denouncedEnemy) {
+      return { won: true, reason: `${ctx.playerId} denounced The Enemy (${(ctx.player as unknown as { denounced?: string }).denounced})` };
+    }
     const obj = (ctx.player as unknown as { objective?: ObjectiveDefinition }).objective;
     if (!obj?.check) return null;
     if (!checkObjective(obj.check, ctx.player as unknown as P)) return null;

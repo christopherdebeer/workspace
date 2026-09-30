@@ -57,6 +57,22 @@ export async function update(pk: string, sk: string, expr: string, values: Recor
   await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk, sk }, UpdateExpression: expr, ExpressionAttributeValues: values, ExpressionAttributeNames: names }));
 }
 
+/** Update and return the item as it is now (e.g. an atomic counter). */
+export async function updateReturning(pk: string, sk: string, expr: string, values: Record<string, unknown>, names?: Record<string, string>): Promise<Item> {
+  const r = await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk, sk }, UpdateExpression: expr, ExpressionAttributeValues: values, ExpressionAttributeNames: names, ReturnValues: 'ALL_NEW' }));
+  return ((r as { Attributes?: Item }).Attributes ?? {}) as Item;
+}
+/** Set `attr` once: true for the caller that set it, false if it was already set. */
+export async function claimOnce(pk: string, sk: string, attr: string): Promise<boolean> {
+  try {
+    await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk, sk }, UpdateExpression: 'SET #a = :t', ConditionExpression: 'attribute_not_exists(#a)', ExpressionAttributeNames: { '#a': attr }, ExpressionAttributeValues: { ':t': new Date().toISOString() } }));
+    return true;
+  } catch (e) {
+    if ((e as { name?: string }).name === 'ConditionalCheckFailedException') return false;
+    throw e;
+  }
+}
+
 /* ── large values: gzip → base64 → ≤300KB rows ─────────────────────── */
 
 export async function putBlob(pk: string, value: unknown): Promise<number> {

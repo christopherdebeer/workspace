@@ -4,7 +4,7 @@ import type { Scoring } from '../lib/types';
 
 /** Jev's qualitative critique: 16 dimensions on ordered five-level scales, plus the
  *  weakness, strength and kind of change it names most. One run, or a train-split mean. */
-export function CritiquePanel({ c, title, sub }: { c: { index: number | null; dims: Record<string, number | null>; weakest: Array<[string, number]>; strongest: Array<[string, number]>; fixes: Array<[string, number]>; n?: number }; title: string; sub: string }) {
+export function CritiquePanel({ c, title, sub }: { c: { index: number | null; dims: Record<string, number | null>; weakest: Array<[string, number]>; strongest: Array<[string, number]>; fixes: Array<[string, number]>; cause?: Array<[string, number]>; n?: number }; title: string; sub: string }) {
   const { data: scoring } = useApi<Scoring>('scoring');
   const dims = scoring?.critique ?? Object.keys(c.dims).map((key) => ({ key, name: key, ask: '', levels: [] as string[] }));
   const Named = ({ label, items }: { label: string; items: Array<[string, number]> }) => (
@@ -36,6 +36,7 @@ export function CritiquePanel({ c, title, sub }: { c: { index: number | null; di
           <Named label="Biggest weakness" items={c.weakest} />
           <Named label="Greatest strength" items={c.strongest} />
           <Named label="Change that would most improve it" items={c.fixes} />
+          {c.cause && c.cause.length > 0 && <Named label="Repetitive or aimless play came from…" items={c.cause} />}
         </div>
       </div>
     </Panel>

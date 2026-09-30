@@ -1,6 +1,7 @@
 // In-memory stand-ins for @aws-sdk/client-dynamodb + lib-dynamodb (devtools only):
 // Get / Put / Query (begins_with, ScanIndexForward, Limit) / Update (SET incl.
-// if_not_exists, ADD for numbers and string sets) — exactly what lib/store uses.
+// if_not_exists, ADD for numbers and string sets; ConditionExpression attribute_not_exists;
+// ReturnValues ALL_NEW) — exactly what lib/store uses.
 const table = new Map<string, Map<string, Record<string, unknown>>>();
 export const __table = table;
 const clone = <T,>(x: T): T => (x instanceof Set ? (new Set(x) as unknown as T) : x && typeof x === 'object' ? (Array.isArray(x) ? (x.map(clone) as unknown as T) : (Object.fromEntries(Object.entries(x).map(([k, v]) => [k, clone(v)])) as T)) : x);
@@ -28,6 +29,8 @@ export const DynamoDBDocumentClient = {
       if (c instanceof UpdateCommand) {
         const it = (table.get(i.Key.pk)?.get(i.Key.sk) as Record<string, any>) ?? { ...i.Key };
         const names = i.ExpressionAttributeNames ?? {};
+        const cond = /^attribute_not_exists\(([^)]+)\)$/.exec(String(i.ConditionExpression ?? '').trim());
+        if (cond && it[names[cond[1].trim()] ?? cond[1].trim()] !== undefined) throw Object.assign(new Error('The conditional request failed'), { name: 'ConditionalCheckFailedException' });
         const vals = i.ExpressionAttributeValues ?? {};
         const nm = (s: string) => names[s.trim()] ?? s.trim();
         const val = (s: string): any => {
@@ -42,7 +45,7 @@ export const DynamoDBDocumentClient = {
         if (set) for (const a of set.split(/,(?![^(]*\))/)) { const [l, r] = a.split('='); it[nm(l)] = val(r); }
         if (add) for (const a of add.split(',')) { const [l, r] = a.trim().split(/\s+/); const v = vals[r]; const k = nm(l); if (v instanceof Set) it[k] = new Set([...(it[k] ?? []), ...v]); else it[k] = (it[k] ?? 0) + v; }
         part(i.Key.pk).set(i.Key.sk, it);
-        return {};
+        return i.ReturnValues === 'ALL_NEW' ? { Attributes: clone(it) } : {};
       }
       throw new Error('fake ddb: unsupported command');
     },

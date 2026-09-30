@@ -29,7 +29,7 @@ import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIX
 import { scoreRun, SCORE_VERSION, WEIGHTS } from './lib/score';
 import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
-import { evaluate, proposeRound, publicEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest } from './lib/evaluate';
+import { evaluate, proposeRound, prepareProposal, decideRound, startPlan, runPlanned, finishPlan, getPlan, publicEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest, type Plan } from './lib/evaluate';
 import * as db from './lib/store';
 import * as pub from './lib/public';
 import { readFileSync } from 'node:fs';
@@ -37,6 +37,7 @@ import { join } from 'node:path';
 
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
 const JOB_BUDGET_MS = 270_000; // Lambda timeout 300 s; leave room to write the result
+const PLAN_WATCHDOG_MS = 330_000; // every run has its own ≤300 s invocation; past this, missing runs are dead
 let SELF_FUNCTION = '';
 const lambda = new LambdaClient({});
 
@@ -98,23 +99,72 @@ async function gameOrThrow(slug: string) {
 
 /* ── long work (runs inside the job invocation) ─────────────────────── */
 
-const LONG: Record<string, (a: Args, caller: string, deadlineAt: number) => Promise<unknown>> = {
-  async eval(a, _caller, deadlineAt) {
+/** Returned by a job that planned a fan-out: the handler records the plan on the job,
+ *  then starts the runs; the job stays running until the plan finishes. */
+type Planned = { __plan: Plan };
+const planned = (plan: Plan): Planned => ({ __plan: plan });
+const isPlanned = (x: unknown): x is Planned => !!x && typeof x === 'object' && '__plan' in (x as object);
+
+/** Start one invocation per run of a plan. */
+async function fanOut(plan: Plan) {
+  await Promise.all(plan.specs.map((_, idx) => lambda.send(new InvokeCommand({ FunctionName: SELF_FUNCTION, InvocationType: 'Event', Payload: Buffer.from(JSON.stringify({ __run: { plan: plan.id, idx } })) }))));
+}
+
+/** What a finished plan's job asked for: the eval, a noise measurement, or a climb decision. */
+async function completePlan(plan: Plan, rec: EvalRecord): Promise<unknown> {
+  const t = plan.then;
+  if (t.kind === 'noise') {
+    const base = (await db.get(`EVAL#${t.baselineId}`, 'meta')) as EvalRecord;
+    const suite = await db.getSuite(plan.game);
+    const noise = +Math.max(Math.abs(rec.train.score - base.train.score), Math.abs(rec.test.score - base.test.score)).toFixed(4);
+    // An incomplete rerun measures the deadline, not chance: report it, don't store it.
+    if (!rec.incomplete) await db.setSuite(plan.game, { ...suite, noise: Math.max(noise, suite.noise ?? 0) });
+    return { noise, stored: !rec.incomplete, previousNoise: suite.noise ?? null, epsilon: suite.epsilon, effectiveThreshold: Math.max(suite.epsilon, rec.incomplete ? 0 : noise, suite.noise ?? 0), baseline: { train: base.train.score, test: base.test.score }, rerun: { id: rec.id, train: rec.train.score, test: rec.test.score, incomplete: rec.incomplete } };
+  }
+  if (t.kind === 'propose') {
+    const base = (await db.get(`EVAL#${t.baselineId}`, 'meta')) as EvalRecord;
+    return decideRound({ game: plan.game, headVersion: t.headVersion, candVersion: plan.version, baseline: base, ev: rec, rationale: t.rationale, author: t.author, suite: plan.suite });
+  }
+  return { eval: publicEval(rec) };
+}
+
+async function finishAndComplete(planId: string) {
+  const done = await finishPlan(planId);
+  if (!done) return;
+  const job = (await jobs.getJob(done.plan.jobId)) as Record<string, unknown> | undefined;
+  try {
+    const out = await completePlan(done.plan, done.rec);
+    await jobs.putJob(done.plan.jobId, { tool: job?.tool, startedAt: job?.startedAt, plan: planId, status: 'done', out, finishedAt: new Date().toISOString() });
+  } catch (e) {
+    await jobs.putJob(done.plan.jobId, { tool: job?.tool, startedAt: job?.startedAt, plan: planId, status: 'error', error: (e as Error).message, finishedAt: new Date().toISOString() });
+  }
+}
+
+const LONG: Record<string, (a: Args, caller: string, deadlineAt: number, jobId?: string) => Promise<unknown>> = {
+  async eval(a, _caller, deadlineAt, jobId) {
     const game = need(a.game, 'game');
     await gameOrThrow(game);
     const def = await db.getDefinition(game, a.version !== undefined ? Number(a.version) : undefined);
     if (!def) throw new ToolError(`no version ${a.version} of ${game}`);
     const suite = await db.getSuite(game);
     const { decide, meter } = await decider();
+    if (jobId) {
+      return planned(await startPlan({ jobId, game, def, suite, decide, tag: String(a.tag ?? 'eval'), then: { kind: 'eval' } }));
+    }
     const ev = await evaluate({ game, def, suite, decide, deadlineAt, tag: String(a.tag ?? 'eval') });
     return { eval: publicEval(ev), jev: meter };
   },
 
-  async propose(a, caller, deadlineAt) {
+  async propose(a, caller, deadlineAt, jobId) {
     const game = need(a.game, 'game');
     await gameOrThrow(game);
     const { rules } = await resolveRules(a, game);
     const { decide, meter } = await decider();
+    if (jobId) {
+      const rationale = need(a.rationale, 'rationale');
+      const p = await prepareProposal({ game, rules, rationale, author: caller });
+      return planned(await startPlan({ jobId, game, def: p.cand, suite: p.suite, decide, tag: 'propose', then: { kind: 'propose', baselineId: p.baseline.id, headVersion: p.head.version, rationale, author: caller } }));
+    }
     const out = await proposeRound({ game, rules, rationale: need(a.rationale, 'rationale'), author: caller, decide, deadlineAt });
     return { ...out, jev: meter };
   },
@@ -122,7 +172,7 @@ const LONG: Record<string, (a: Args, caller: string, deadlineAt: number) => Prom
   /** The post's first step: how far does the score move by chance alone? Re-evaluates the head
    *  and compares with the baseline on the same engine + suite; the larger delta becomes the
    *  suite's noise floor (proposals must beat max(epsilon, noise)). */
-  async noise(a, _caller, deadlineAt) {
+  async noise(a, _caller, deadlineAt, jobId) {
     const game = need(a.game, 'game');
     const g = await gameOrThrow(game);
     const suite = await db.getSuite(game);
@@ -130,6 +180,9 @@ const LONG: Record<string, (a: Args, caller: string, deadlineAt: number) => Prom
     if (!base) throw new ToolError('no baseline yet — run eval first');
     const def = (await db.getDefinition(game)) as db.Definition;
     const { decide, meter } = await decider();
+    if (jobId) {
+      return planned(await startPlan({ jobId, game, def, suite, decide, tag: 'noise', then: { kind: 'noise', baselineId: base.id } }));
+    }
     const again = await evaluate({ game, def, suite, decide, deadlineAt, tag: 'noise' });
     const noise = +Math.max(Math.abs(again.train.score - base.train.score), Math.abs(again.test.score - base.test.score)).toFixed(4);
     await db.setSuite(game, { ...suite, noise: Math.max(noise, suite.noise ?? 0) });
@@ -289,9 +342,22 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
       return list.map((e, i) => ({ version: e.version, firstSeen: e.firstSeen, mechanics: Object.keys((e.mechanics as object) ?? {}).length, changedFromPrevious: i ? changedMechanics((list[i - 1].mechanics as Record<string, string>) ?? {}, (e.mechanics as Record<string, string>) ?? {}) : null }));
     }
     case 'job': {
-      const j = (await jobs.getJob(need(a.id, 'id'))) as { status?: string; out?: unknown; error?: string; tool?: string; startedAt?: string } | undefined;
+      const id = need(a.id, 'id');
+      let j = (await jobs.getJob(id)) as { status?: string; out?: unknown; error?: string; tool?: string; startedAt?: string; plan?: string } | undefined;
       if (!j) throw new ToolError('unknown job', 404);
-      return { status: j.status, tool: j.tool, startedAt: j.startedAt, out: j.out, error: j.error };
+      let progress: Record<string, unknown> | undefined;
+      if (j.status === 'running' && j.plan) {
+        const plan = await getPlan(j.plan);
+        if (plan) {
+          progress = { runs: plan.total, done: plan.done ?? 0 };
+          // Watchdog: a run invocation that was killed never reports; finish without it.
+          if (!plan.finalized && Date.now() - Date.parse(plan.startedAt) > PLAN_WATCHDOG_MS) {
+            await finishAndComplete(plan.id);
+            j = (await jobs.getJob(id)) as typeof j;
+          }
+        }
+      }
+      return { status: j!.status, tool: j!.tool, startedAt: j!.startedAt, progress, out: j!.out, error: j!.error };
     }
     case 'regress': {
       // Re-evaluate every game's head on the current engine: one job per game.
@@ -392,10 +458,22 @@ async function publicApi(parts: string[]): Promise<unknown> {
 /* ── handler ────────────────────────────────────────────────────────── */
 
 export const handler = async (
-  event: { rawPath?: string; requestContext?: { http?: { method?: string } }; headers?: Record<string, string | undefined>; body?: string; __job?: string },
+  event: { rawPath?: string; requestContext?: { http?: { method?: string } }; headers?: Record<string, string | undefined>; body?: string; __job?: string; __run?: { plan: string; idx: number } },
   context?: { functionName?: string },
 ) => {
   SELF_FUNCTION = context?.functionName ?? SELF_FUNCTION;
+
+  if (event.__run) {
+    // One run of a fanned-out eval; the run that completes the set finishes it.
+    const { plan, idx } = event.__run;
+    try {
+      const { decide } = await decider();
+      if (await runPlanned(plan, idx, decide, Date.now() + JOB_BUDGET_MS)) await finishAndComplete(plan);
+    } catch (e) {
+      console.error('run failed', plan, idx, (e as Error).message);
+    }
+    return;
+  }
 
   if (event.__job) {
     const id = event.__job;
@@ -403,7 +481,12 @@ export const handler = async (
     if (!job?.tool) return;
     await jobs.putJob(id, { ...job, status: 'running' });
     try {
-      const out = await LONG[job.tool](job.args ?? {}, job.caller ?? 'anonymous', Date.now() + JOB_BUDGET_MS);
+      const out = await LONG[job.tool](job.args ?? {}, job.caller ?? 'anonymous', Date.now() + JOB_BUDGET_MS, id);
+      if (isPlanned(out)) {
+        await jobs.putJob(id, { ...job, status: 'running', plan: out.__plan.id });
+        await fanOut(out.__plan);
+        return;
+      }
       let body = JSON.stringify(out);
       if (body.length > 350_000) body = JSON.stringify({ truncated: true, note: 'result too large for the job row; read it back through run / eval_detail', keys: Object.keys(out as object) });
       await jobs.putJob(id, { tool: job.tool, startedAt: job.startedAt, status: 'done', out: JSON.parse(body), finishedAt: new Date().toISOString() });

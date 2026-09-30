@@ -59,6 +59,15 @@ export function Eval({ id }: { id: string }) {
           <Bar key={k} label={`${k} ×${WEIGHTS[k]}`} value={mean(k)} />
         ))}
       </Panel>
+      {data.train.critique?.outcomes && (
+        <Panel title="Who won, as what" sub="Train games by the winner's secret role and how the game ended — the first place a balance problem shows.">
+          {Object.entries(data.train.critique.outcomes)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => (
+              <Bar key={k} label={k} value={v} max={data.train.runs.length} text={`${v} of ${data.train.runs.length}`} />
+            ))}
+        </Panel>
+      )}
       {data.train.critique && <CritiquePanel c={data.train.critique} title="Critique (train games)" sub="Jev's qualitative review, averaged over the train games; the named weakness / strength / change are probability shares across games." />}
       <Panel title="Train games" sub="Held-out test games are played and scored but never shown — that is what keeps the test honest.">
         <div className="scroll">
@@ -70,6 +79,7 @@ export function Eval({ id }: { id: string }) {
                 <th>how it ended</th>
                 <th className="num">steps</th>
                 <th className="num">rounds</th>
+                <th>winner (role)</th>
                 <th>Jev's verdict</th>
               </tr>
             </thead>
@@ -85,6 +95,7 @@ export function Eval({ id }: { id: string }) {
                   <td className="small">{r.endReason ?? r.stopped ?? '—'}</td>
                   <td className="num">{r.steps ?? '—'}</td>
                   <td className="num">{r.rounds ?? '—'}</td>
+                  <td className="small">{r.winnerRole ? `${r.winnerRole} · ${r.endKind}` : '—'}</td>
                   <td className="small">{r.verdict ?? '—'}</td>
                 </tr>
               ))}

@@ -64,11 +64,16 @@ function withRng<T>(rng: () => number, fn: () => T): T {
  * never reveals the next card or someone's items. Simulations use their own RNG
  * stream, and the game's files are restored after each one. */
 const SIM_MAX = 160;
+/** Moves whose outcome turns on hidden information are never simulated (a denunciation
+ *  would otherwise announce whether the target is the Enemy; a draw, the next card). */
+const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
 
 /** What the runner shows Jev and how it drives play. Part of an eval's identity: a harness
  *  change moves scores without touching engine code, so baselines must match it too.
- *  h1: labels only · h2: one-ply consequence facts on options, off-turn replies. */
-export const HARNESS_VERSION = 'h2';
+ *  h1: labels only · h2: one-ply consequence facts on options, off-turn replies ·
+ *  h3: the judge also sees each player's secret role at the end, and names the cause of
+ *  repetitive play (rules vs players). */
+export const HARNESS_VERSION = 'h3';
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
@@ -94,6 +99,7 @@ function consequences(s: Record<string, any>, pid: string, cands: Action[], slot
   const beforeHidden = hiddenFingerprint(s, pid);
   const beforeScore = Number(s.players[pid]?.score ?? 0);
   for (const c of cands) {
+    if (NO_SIM.test(c.type)) continue;
     const clone = structuredClone(s);
     try {
       withRng(rng, () => executeAction(clone as never, pid, c as never));
@@ -105,11 +111,11 @@ function consequences(s: Record<string, any>, pid: string, cands: Action[], slot
       for (const [k, v] of Object.entries(snap)) if (now[k] !== v) writeFileSync(k, v);
     }
     const facts: string[] = [];
-    const ended = clone.status !== 'in_progress';
-    const winner = clone.shared?.winner ?? clone.winner;
-    if (ended && winner === pid) facts.push('YOU WIN');
-    else if (ended && winner) facts.push(`${winner} wins`);
     if (hiddenFingerprint(clone, pid) === beforeHidden) {
+      const ended = clone.status !== 'in_progress';
+      const winner = clone.shared?.winner ?? clone.winner;
+      if (ended && winner === pid) facts.push('YOU WIN');
+      else if (ended && winner) facts.push(`${winner} wins`);
       const after = progressOf(clone, pid);
       const changed = after.filter((line) => !beforeProgress.includes(line));
       facts.push(...changed.map((l) => `→ ${l}`));
@@ -316,6 +322,8 @@ export interface Session {
   turns: TurnRecord[];
   log: Array<Record<string, unknown>>;
   unsuitable: Array<{ type: string; fields: string[]; why: 'free-text' | 'numeric' | 'no-valid-candidate'; times: number }>;
+  /** Each player's secret role/objective, read at the end (for balance: who wins as what). */
+  roles?: Record<string, string>;
   stopped: 'finished' | 'max-steps' | 'deadline' | 'stuck' | 'error';
   error?: string;
   tokens: number;
@@ -546,6 +554,11 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
     }
     session.status = s.status;
     session.winner = (s.winner as string) ?? (s.shared?.winner as string) ?? null;
+    session.roles = Object.fromEntries(
+      Object.entries(s.players as Record<string, { objective?: { name?: string }; hiddenRole?: string; role?: string }>)
+        .map(([p, pl]) => [p, String(pl.objective?.name ?? pl.hiddenRole ?? pl.role ?? '')])
+        .filter(([, r]) => r),
+    );
     session.endReason = (s.endReason as string) ?? (s.shared?.endReason as string) ?? null;
   } catch (e) {
     session.stopped = (e as Error).name === 'AbortError' ? 'deadline' : 'error';
@@ -656,6 +669,8 @@ export interface Critique {
   weakest: Array<[string, number]>;
   strongest: Array<[string, number]>;
   fixes: Array<[string, number]>;
+  /** Rules vs players: what the judge blames for repetitive or aimless play (top 3). */
+  cause?: Array<[string, number]>;
 }
 
 /** Five ordered levels per dimension, worst → best (Jev's score type: expected level 0–4). */
@@ -757,6 +772,7 @@ export async function judge(c: Classification, s: Session, decide: Decide): Prom
     how_it_stopped: m.stopped,
     end_reason: m.endReason,
     winner: m.winner,
+    secret_roles_revealed_at_end: s.roles,
     moves_played: m.steps,
     rounds: m.rounds,
     share_of_turns_with_only_one_legal_move: +m.forcedShare.toFixed(2),
@@ -791,6 +807,7 @@ export async function judge(c: Classification, s: Session, decide: Decide): Prom
       ...critiqueQs,
       c_weakest: { type: 'choice', instructions: 'As a game designer reviewing this playtest, which is the game\'s biggest weakness?', criteria: Object.fromEntries(CRITIQUE.map((d) => [d.name, null])) },
       c_strongest: { type: 'choice', instructions: 'As a game designer reviewing this playtest, which is the game\'s greatest strength?', criteria: Object.fromEntries(CRITIQUE.map((d) => [d.name, null])) },
+      c_cause: { type: 'choice', instructions: 'Where the play was repetitive, aimless or one-sided, what caused it most?', criteria: { 'the rules: they give players little worth doing': null, 'the players: better choices were available and ignored': null, 'both equally': null, 'play was not repetitive or aimless': null } },
       c_fix: { type: 'choice', instructions: 'As a game designer, which single kind of change would most improve this game?', criteria: Object.fromEntries(CRITIQUE_FIXES.map((f) => [f, null])) },
     },
     'judge: session',
@@ -818,6 +835,7 @@ function critiqueOf(a: Record<string, { score?: number; probabilities?: Record<s
     weakest: top3(a.c_weakest?.probabilities),
     strongest: top3(a.c_strongest?.probabilities),
     fixes: top3(a.c_fix?.probabilities),
+    cause: top3(a.c_cause?.probabilities),
   };
 }
 

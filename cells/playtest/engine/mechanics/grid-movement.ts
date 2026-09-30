@@ -7,6 +7,7 @@
  * entering reveals them), Roadblocks. Entering applies the tile's effect (draw_on_enter)
  * and is counted in player.visitedLocations (distinct tiles, for "visit N locations").
  * An effect with `once: true` fires only on a player's first entry to that tile.
+ * grid.discover_on_first_visit: N — your first entry to any tile draws N cards.
  *
  * Hooks used:
  * - preValidateAction: Validate move target is a placed location
@@ -34,6 +35,8 @@ interface GridConfig {
   type?: string;
   starting_tile?: string;
   adjacency?: string;
+  /** Draw this many cards the first time you enter any tile (exploring finds things). */
+  discover_on_first_visit?: number;
 }
 
 /** Neighbouring tiles this player may enter now. */
@@ -111,6 +114,19 @@ export const gridMovementMechanic: MechanicHooks = {
           break;
       }
     }
+    // Discovery: the first time you enter any tile you draw (grid.discover_on_first_visit).
+    const discover = Number((config.engine_mechanics?.grid as GridConfig).discover_on_first_visit ?? 0);
+    if (discover > 0 && firstEntry) {
+      const handLimit = (config.engine_mechanics?.hand_limit as number) ?? Infinity;
+      const playerHand = player.hand ?? (player.hand = []);
+      const cardsState = getCardsState(state);
+      const n = Math.min(discover, handLimit - playerHand.length, cardsState.deck.length);
+      if (n > 0) {
+        playerHand.push(...cardsState.deck.splice(0, n));
+        cardsDrawn += n;
+        effectsApplied.push(`discovered ${n} card${n !== 1 ? 's' : ''} exploring ${target}`);
+      }
+    }
     const visited = player.visitedLocations ?? (player.visitedLocations = []);
     if (!visited.includes(target)) visited.push(target);
     player.state = target;
@@ -154,12 +170,12 @@ export const gridMovementMechanic: MechanicHooks = {
       const hidden = tiles[at]?.effect?.type === 'hide' || !!(ctx.state.players[p] as unknown as { hiddenPosition?: boolean })?.hiddenPosition;
       positions[p] = hidden && !seeAll ? 'hidden' : at;
     }
-    const revealed = ctx.state.turnOrder.filter((p) => (ctx.state.players[p] as unknown as { revealedAs?: string })?.revealedAs);
+    const revealed = Object.fromEntries(ctx.state.turnOrder.map((p) => [p, (ctx.state.players[p] as unknown as { revealedAs?: string })?.revealedAs]).filter(([, r]) => r));
     return {
       yourLocation: here,
       map: describeMap(ctx.state, ctx.config),
       otherPlayersAt: positions,
-      ...(revealed.length ? { revealedEnemies: revealed } : {}),
+      ...(Object.keys(revealed).length ? { revealedRoles: revealed } : {}),
       blockedTiles: Object.values(tiles).filter((t) => isBlocked(ctx.state, t)).map((t) => t.id),
     };
   },

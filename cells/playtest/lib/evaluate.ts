@@ -35,11 +35,17 @@ export interface RunDigest {
   verdict?: string | null;
   findings?: string[];
   critique?: Critique | null;
+  /** The winner's secret role and how the game ended: 'objective' | 'time limit' | 'none'. */
+  winnerRole?: string | null;
+  endKind?: string;
 }
 
 /** Train runs' critique, averaged: per dimension (0–4), and what the judge most often named. */
 export interface CritiqueSummary {
   n: number;
+  /** "The Trader · objective": 3 — who won, as what, and how, across the train games */
+  outcomes?: Record<string, number>;
+  cause?: Array<[string, number]>;
   index: number | null;
   dims: Record<string, number>;
   weakest: Array<[string, number]>;
@@ -57,7 +63,12 @@ export function summarizeCritique(runs: RunDigest[]): CritiqueSummary | null {
     for (const c of cs) for (const [k, v] of pick(c)) t.set(k, (t.get(k) ?? 0) + v);
     return [...t].map(([k, v]) => [k, +(v / cs.length).toFixed(3)] as [string, number]).sort((a, b) => b[1] - a[1]).slice(0, 5);
   };
-  return { n: cs.length, index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes) };
+  const outcomes: Record<string, number> = {};
+  for (const r of runs) {
+    const k = r.winnerRole ? `${r.winnerRole} · ${r.endKind}` : `no winner · ${r.endKind ?? 'none'}`;
+    outcomes[k] = (outcomes[k] ?? 0) + 1;
+  }
+  return { n: cs.length, outcomes, cause: tally((c) => c.cause ?? []), index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes) };
 }
 
 export interface EvalRecord extends db.Item {
@@ -70,6 +81,8 @@ export interface EvalRecord extends db.Item {
   scoreVersion: string;
   /** runner harness version (HARNESS_VERSION); evals compare only within one */
   harness?: string;
+  /** runs cut off by the job deadline (their scores are not comparable; the eval is not a baseline) */
+  incomplete?: number;
   definitionHealth: number;
   classificationFindings: Finding[];
   train: { score: number; runs: RunDigest[]; critique?: CritiqueSummary | null };
@@ -109,6 +122,107 @@ async function recordBacklog(game: string, engine: string, findings: Finding[]) 
   }
 }
 
+type RunSpec = { split: 'train' | 'test'; seed: number; players: number };
+
+async function noteEngine() {
+  const engine = engineFingerprint();
+  // firstSeen is kept from the first eval on this engine (a plain put overwrote it every eval).
+  await db
+    .update('ENGINE', engine.version, 'SET #v = :v, #m = :m, #c = :c, #fm = :fm, #f = if_not_exists(#f, :now)', { ':v': engine.version, ':m': engine.mechanics, ':c': engine.core, ':fm': engine.method, ':now': new Date().toISOString() }, { '#v': 'version', '#m': 'mechanics', '#c': 'core', '#fm': 'method', '#f': 'firstSeen' })
+    .catch(() => undefined);
+  return engine;
+}
+
+function runSpecs(suite: db.Suite, cls: Classification): RunSpec[] {
+  const out: RunSpec[] = [];
+  for (const split of ['train', 'test'] as const) {
+    for (const seed of suite[split].seeds) {
+      for (const players of suite[split].players) {
+        if (players >= cls.players.min && players <= cls.players.max) out.push({ split, seed, players });
+      }
+    }
+  }
+  return out;
+}
+
+/** Play, judge, score and store one run of an eval. */
+async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; cls: Classification; decide: Decide; deadlineAt: number; spec: RunSpec; engine: string }): Promise<{ digest: RunDigest; tokens: number }> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), Math.max(1000, o.deadlineAt - 20_000 - Date.now()));
+  const session = await play(o.def.rules, o.decide, { players: o.spec.players, seed: o.spec.seed, maxSteps: o.suite.maxSteps, signal: abort.signal });
+  clearTimeout(timer);
+  let tokens = session.tokens;
+  let judgement: Judgement | null = null;
+  let findings: Finding[] = sessionFindings(session, metrics(session), o.cls);
+  if (session.turns.length && Date.now() < o.deadlineAt - 5000) {
+    try {
+      const r = await judge(o.cls, session, o.decide);
+      judgement = r.judgement;
+      findings = r.findings;
+      tokens += r.judgement.tokens;
+    } catch {
+      /* unjudged: the judged and critique terms score 0 */
+    }
+  }
+  const sc = scoreRun(session, findings, judgement);
+  const m = metrics(session);
+  const id = db.newId();
+  const digest: RunDigest = {
+    id,
+    split: o.spec.split,
+    seed: o.spec.seed,
+    players: o.spec.players,
+    score: sc.score,
+    parts: sc.parts,
+    stopped: session.stopped,
+    endReason: m.endReason,
+    steps: m.steps,
+    rounds: m.rounds,
+    verdict: judgement?.health.verdict ?? null,
+    findings: findings.map((f) => `${f.severity}: ${f.subject}`),
+    critique: judgement?.critique ?? null,
+    winnerRole: session.winner ? (session.roles?.[session.winner] ?? null) : null,
+    endKind: !m.finished ? 'none' : /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i.test(m.endReason ?? '') ? 'time limit' : 'objective',
+  };
+  const chunks = await db.putBlob(`RUN#${id}`, { session, judgement, findings });
+  await db.put({ pk: `RUN#${id}`, sk: 'meta', ...digest, game: o.game, version: o.def.version, engine: o.engine, metrics: m, judgement, chunks, createdAt: new Date().toISOString() });
+  await recordBacklog(o.game, o.engine, findings);
+  return { digest, tokens };
+}
+
+/** Assemble and store the eval record from its runs (`missing` runs never reported). */
+async function assemble(o: { game: string; def: { version: number; hash: string }; suite: db.Suite; cls: Classification; tag: string; engine: string; digests: RunDigest[]; missing: number; tokens: number; ms: number }): Promise<EvalRecord> {
+  await recordBacklog(o.game, o.engine, o.cls.findings);
+  const train = o.digests.filter((d) => d.split === 'train');
+  const test = o.digests.filter((d) => d.split === 'test');
+  const rec: EvalRecord = {
+    pk: '',
+    sk: 'meta',
+    id: db.newId(),
+    game: o.game,
+    version: o.def.version,
+    defHash: o.def.hash,
+    engine: o.engine,
+    suite: db.suiteHash(o.suite),
+    scoreVersion: SCORE_VERSION,
+    harness: HARNESS_VERSION,
+    incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline').length,
+    definitionHealth: definitionHealth(o.cls),
+    classificationFindings: o.cls.findings,
+    train: { score: scoreSuite(train.map((d) => d.score), o.cls), runs: train, critique: summarizeCritique(train) },
+    test: { score: scoreSuite(test.map((d) => d.score), o.cls), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
+    tokens: o.tokens,
+    ms: o.ms,
+    tag: o.tag,
+    createdAt: new Date().toISOString(),
+  };
+  rec.pk = `EVAL#${rec.id}`;
+  await db.put(rec);
+  await db.put({ pk: `GAME#${o.game}`, sk: `EVAL#${rec.createdAt}#${rec.id}`, id: rec.id, version: rec.version, engine: rec.engine, suite: rec.suite, scoreVersion: rec.scoreVersion, train: rec.train.score, test: rec.test.score, tag: rec.tag, harness: rec.harness, incomplete: rec.incomplete, createdAt: rec.createdAt });
+  return rec;
+}
+
+/** An eval inside one invocation (games concurrent, decisions batched) — local harness and small suites. */
 export async function evaluate(opts: {
   game: string;
   def: db.Definition;
@@ -119,90 +233,95 @@ export async function evaluate(opts: {
   cls?: Classification;
 }): Promise<EvalRecord> {
   const t0 = Date.now();
-  const engine = engineFingerprint();
-  // firstSeen is kept from the first eval on this engine (a plain put overwrote it every eval).
-  await db
-    .update('ENGINE', engine.version, 'SET #v = :v, #m = :m, #c = :c, #fm = :fm, #f = if_not_exists(#f, :now)', { ':v': engine.version, ':m': engine.mechanics, ':c': engine.core, ':fm': engine.method, ':now': new Date().toISOString() }, { '#v': 'version', '#m': 'mechanics', '#c': 'core', '#fm': 'method', '#f': 'firstSeen' })
-    .catch(() => undefined);
+  const engine = (await noteEngine()).version;
   const cls = opts.cls ?? (await classify(opts.def.rules, opts.decide));
-  const jobs: Array<{ split: 'train' | 'test'; seed: number; players: number }> = [];
-  for (const split of ['train', 'test'] as const) {
-    for (const seed of opts.suite[split].seeds) {
-      for (const players of opts.suite[split].players) {
-        if (players >= cls.players.min && players <= cls.players.max) jobs.push({ split, seed, players });
-      }
-    }
-  }
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), Math.max(1000, opts.deadlineAt - Date.now()));
   let tokens = cls.tokens;
-  const digests = await pool(jobs, CONCURRENCY, async (j) => {
-    const session = await play(opts.def.rules, opts.decide, { players: j.players, seed: j.seed, maxSteps: opts.suite.maxSteps, signal: abort.signal });
-    let judgement: Judgement | null = null;
-    let findings: Finding[] = sessionFindings(session, metrics(session), cls);
-    if (session.turns.length && Date.now() < opts.deadlineAt - 5000) {
-      try {
-        const r = await judge(cls, session, opts.decide);
-        judgement = r.judgement;
-        findings = r.findings;
-        tokens += r.judgement.tokens;
-      } catch {
-        /* unjudged: the judged term scores 0 */
-      }
-    }
-    tokens += session.tokens;
-    const sc = scoreRun(session, findings, judgement);
-    const m = metrics(session);
-    const id = db.newId();
-    const digest: RunDigest = {
-      id,
-      split: j.split,
-      seed: j.seed,
-      players: j.players,
-      score: sc.score,
-      parts: sc.parts,
-      stopped: session.stopped,
-      endReason: m.endReason,
-      steps: m.steps,
-      rounds: m.rounds,
-      verdict: judgement?.health.verdict ?? null,
-      findings: findings.map((f) => `${f.severity}: ${f.subject}`),
-      critique: judgement?.critique ?? null,
-    };
-    const chunks = await db.putBlob(`RUN#${id}`, { session, judgement, findings });
-    await db.put({ pk: `RUN#${id}`, sk: 'meta', ...digest, game: opts.game, version: opts.def.version, engine: engine.version, metrics: m, judgement, chunks, createdAt: new Date().toISOString() });
-    await recordBacklog(opts.game, engine.version, findings);
-    return digest;
+  const digests = await pool(runSpecs(opts.suite, cls), CONCURRENCY, async (spec) => {
+    const r = await playOne({ ...opts, cls, spec, engine });
+    tokens += r.tokens;
+    return r.digest;
   });
-  clearTimeout(timer);
-  await recordBacklog(opts.game, engine.version, cls.findings);
+  return assemble({ game: opts.game, def: opts.def, suite: opts.suite, cls, tag: opts.tag ?? 'eval', engine, digests, missing: 0, tokens, ms: Date.now() - t0 });
+}
 
-  const train = digests.filter((d) => d.split === 'train');
-  const test = digests.filter((d) => d.split === 'test');
-  const rec: EvalRecord = {
-    pk: '',
-    sk: 'meta',
-    id: db.newId(),
-    game: opts.game,
-    version: opts.def.version,
-    defHash: opts.def.hash,
-    engine: engine.version,
-    suite: db.suiteHash(opts.suite),
-    scoreVersion: SCORE_VERSION,
-    harness: HARNESS_VERSION,
-    definitionHealth: definitionHealth(cls),
-    classificationFindings: cls.findings,
-    train: { score: scoreSuite(train.map((d) => d.score), cls), runs: train, critique: summarizeCritique(train) },
-    test: { score: scoreSuite(test.map((d) => d.score), cls), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
-    tokens,
-    ms: Date.now() - t0,
-    tag: opts.tag ?? 'eval',
-    createdAt: new Date().toISOString(),
-  };
-  rec.pk = `EVAL#${rec.id}`;
-  await db.put(rec);
-  await db.put({ pk: `GAME#${opts.game}`, sk: `EVAL#${rec.createdAt}#${rec.id}`, id: rec.id, version: rec.version, engine: rec.engine, suite: rec.suite, scoreVersion: rec.scoreVersion, train: rec.train.score, test: rec.test.score, tag: rec.tag, harness: rec.harness, createdAt: rec.createdAt });
-  return rec;
+/* ── fan-out evals ──────────────────────────────────────────────────────
+ * A game can take minutes (a 14-round AAOTE game is ~150 sequential Jev steps), so
+ * one invocation can't play a whole suite inside its 300 s. A plan classifies once,
+ * then every run is its own invocation (parallel, each with the full budget); each
+ * run records its digest and bumps a counter, and the run that completes the set
+ * assembles the eval and carries out what the job asked for (`then`). The job poll
+ * finishes a plan whose runs went missing (a killed invocation) as incomplete.
+ * PLAN#<id> meta | r<idx> (digests) · PLANCLS#<id> c<i> (the classification). */
+
+export type PlanThen =
+  | { kind: 'eval' }
+  | { kind: 'noise'; baselineId: string }
+  | { kind: 'propose'; baselineId: string; headVersion: number; rationale: string; author: string };
+
+export interface Plan extends db.Item {
+  id: string;
+  jobId: string;
+  game: string;
+  version: number;
+  defHash: string;
+  tag: string;
+  engine: string;
+  suite: db.Suite;
+  specs: RunSpec[];
+  total: number;
+  done?: number;
+  tokens?: number;
+  clsChunks: number;
+  then: PlanThen;
+  startedAt: string;
+  finalized?: string;
+}
+
+/** Classify, store the plan; the caller fans out one invocation per run. */
+export async function startPlan(o: { jobId: string; game: string; def: db.Definition; suite: db.Suite; decide: Decide; tag: string; then: PlanThen }): Promise<Plan> {
+  const engine = (await noteEngine()).version;
+  const cls = await classify(o.def.rules, o.decide);
+  const id = db.newId();
+  const clsChunks = await db.putBlob(`PLANCLS#${id}`, cls);
+  const specs = runSpecs(o.suite, cls);
+  const plan: Plan = { pk: `PLAN#${id}`, sk: 'meta', id, jobId: o.jobId, game: o.game, version: o.def.version, defHash: o.def.hash, tag: o.tag, engine, suite: o.suite, specs, total: specs.length, done: 0, tokens: cls.tokens, clsChunks, then: o.then, startedAt: new Date().toISOString() };
+  await db.put(plan);
+  return plan;
+}
+
+export async function getPlan(id: string): Promise<Plan | undefined> {
+  return (await db.get(`PLAN#${id}`, 'meta')) as Plan | undefined;
+}
+
+/** One run of a plan. Returns true when this run completed the set (the caller finishes it). */
+export async function runPlanned(planId: string, idx: number, decide: Decide, deadlineAt: number): Promise<boolean> {
+  const plan = await getPlan(planId);
+  if (!plan || plan.finalized) return false;
+  const cls = (await db.getBlob<Classification>(`PLANCLS#${planId}`, plan.clsChunks))!;
+  const def = (await db.get(`GAME#${plan.game}`, `DEF#${db.pad(plan.version)}`)) as db.Definition;
+  const spec = plan.specs[idx];
+  let digest: RunDigest;
+  let tokens = 0;
+  try {
+    const r = await playOne({ game: plan.game, def, suite: plan.suite, cls, decide, deadlineAt, spec, engine: plan.engine });
+    digest = r.digest;
+    tokens = r.tokens;
+  } catch (e) {
+    digest = { id: `failed-${idx}`, split: spec.split, seed: spec.seed, players: spec.players, score: 0, stopped: 'deadline', endReason: `run failed: ${(e as Error).message}`.slice(0, 300), findings: [] };
+  }
+  await db.put({ pk: `PLAN#${planId}`, sk: `r${String(idx).padStart(3, '0')}`, digest });
+  const after = await db.updateReturning(`PLAN#${planId}`, 'meta', 'ADD #d :one, #t :tok', { ':one': 1, ':tok': tokens }, { '#d': 'done', '#t': 'tokens' });
+  return Number(after.done) >= plan.total;
+}
+
+/** Assemble the eval once (whoever gets here first); missing runs count as incomplete. */
+export async function finishPlan(planId: string): Promise<{ plan: Plan; rec: EvalRecord } | null> {
+  if (!(await db.claimOnce(`PLAN#${planId}`, 'meta', 'finalized'))) return null;
+  const plan = (await getPlan(planId))!;
+  const cls = (await db.getBlob<Classification>(`PLANCLS#${planId}`, plan.clsChunks))!;
+  const digests = (await db.query(`PLAN#${planId}`, 'r')).map((r) => r.digest as RunDigest);
+  const rec = await assemble({ game: plan.game, def: { version: plan.version, hash: plan.defHash }, suite: plan.suite, cls, tag: plan.tag, engine: plan.engine, digests, missing: plan.total - digests.length, tokens: Number(plan.tokens ?? 0), ms: Date.now() - Date.parse(plan.startedAt) });
+  return { plan, rec };
 }
 
 /** What the proposing agent may see of an eval: train in full, test as a number. */
@@ -215,6 +334,7 @@ export function publicEval(e: EvalRecord) {
     suite: e.suite,
     scoreVersion: e.scoreVersion,
     harness: e.harness ?? 'h1',
+    incomplete: e.incomplete ?? 0,
     train: e.train,
     test: { score: e.test.score, n: e.test.n },
     definitionHealth: e.definitionHealth,
@@ -230,7 +350,7 @@ export function publicEval(e: EvalRecord) {
 /** Latest eval of (game, version) on this engine, suite and score version. */
 export async function findEval(game: string, version: number, engine: string, suite: string): Promise<EvalRecord | null> {
   const list = await db.query(`GAME#${game}`, 'EVAL#', { newestFirst: true, limit: 50 });
-  const hit = list.find((e) => e.version === version && e.engine === engine && e.suite === suite && e.scoreVersion === SCORE_VERSION && (e.harness ?? 'h1') === HARNESS_VERSION);
+  const hit = list.find((e) => e.version === version && e.engine === engine && e.suite === suite && e.scoreVersion === SCORE_VERSION && (e.harness ?? 'h1') === HARNESS_VERSION && !e.incomplete);
   return hit ? ((await db.get(`EVAL#${hit.id}`, 'meta')) as EvalRecord) : null;
 }
 
@@ -250,70 +370,78 @@ export interface Round extends db.Item {
   createdAt: string;
 }
 
-export async function proposeRound(opts: {
-  game: string;
-  rules: string;
-  rationale: string;
-  author: string;
-  decide: Decide;
-  deadlineAt: number;
-}): Promise<{ round: Round; eval: ReturnType<typeof publicEval>; stalled: boolean; diagnosis?: unknown }> {
-  const g = await db.getGame(opts.game);
-  if (!g) throw new Error(`unknown game ${opts.game}`);
-  const head = (await db.getDefinition(opts.game)) as db.Definition;
-  const suite = await db.getSuite(opts.game);
+/** Check a proposal can be judged and store the candidate definition. */
+export async function prepareProposal(o: { game: string; rules: string; rationale: string; author: string }): Promise<{ head: db.Definition; cand: db.Definition; baseline: EvalRecord; suite: db.Suite }> {
+  const g = await db.getGame(o.game);
+  if (!g) throw new Error(`unknown game ${o.game}`);
+  const head = (await db.getDefinition(o.game)) as db.Definition;
+  const suite = await db.getSuite(o.game);
   const engine = engineFingerprint().version;
-  const baseline = await findEval(opts.game, head.version, engine, db.suiteHash(suite));
-  if (!baseline) throw new Error(`no baseline: eval ${opts.game} v${head.version} on engine ${engine} first (run the eval tool), then propose`);
-  if (db.hash(opts.rules) === head.hash) throw new Error('the candidate is identical to the head definition');
+  const baseline = await findEval(o.game, head.version, engine, db.suiteHash(suite));
+  if (!baseline) throw new Error(`no baseline: eval ${o.game} v${head.version} on engine ${engine} (harness ${HARNESS_VERSION}) first — run the eval tool — then propose`);
+  if (db.hash(o.rules) === head.hash) throw new Error('the candidate is identical to the head definition');
+  const cand = await db.putDefinition(o.game, g.name, o.rules, { rationale: o.rationale, author: o.author, parent: head.version, asHead: false, status: 'candidate' });
+  return { head, cand, baseline, suite };
+}
 
-  const cand = await db.putDefinition(opts.game, g.name, opts.rules, { rationale: opts.rationale, author: opts.author, parent: head.version, asHead: false, status: 'candidate' });
-  const ev = await evaluate({ game: opts.game, def: cand, suite, decide: opts.decide, deadlineAt: opts.deadlineAt, tag: 'propose' });
+/** Keep or revert a candidate against its baseline, and record the round. */
+export async function decideRound(o: { game: string; headVersion: number; candVersion: number; baseline: EvalRecord; ev: EvalRecord; rationale: string; author: string; suite: db.Suite }): Promise<{ round: Round; eval: ReturnType<typeof publicEval>; stalled: boolean; diagnosis?: unknown }> {
+  const { baseline, ev, suite } = o;
   const eps = Math.max(suite.epsilon, suite.noise ?? 0);
   const dTrain = +(ev.train.score - baseline.train.score).toFixed(4);
   const dTest = +(ev.test.score - baseline.test.score).toFixed(4);
   let decision: Round['decision'] = 'reverted';
   let reason: string;
-  if (dTrain >= eps && dTest > 0) {
+  const inconclusive = !!ev.incomplete;
+  if (inconclusive) {
+    reason = `inconclusive: ${ev.incomplete} run(s) hit the deadline or never reported, so the candidate's scores aren't comparable — reverted without counting toward a stall`;
+  } else if (dTrain >= eps && dTest > 0) {
     decision = 'kept';
     reason = `train +${dTrain} (≥ ε ${eps}) and test +${dTest}`;
   } else if (dTrain >= eps) reason = `train +${dTrain} but test ${dTest >= 0 ? '+' : ''}${dTest}: overfitting signal — reverted`;
   else reason = `train ${dTrain >= 0 ? '+' : ''}${dTrain} is below ε ${eps} — no real improvement`;
 
-  const fresh = (await db.getGame(opts.game)) as db.GameIndex;
+  const fresh = (await db.getGame(o.game)) as db.GameIndex;
   const climb = fresh.climb ?? { rounds: 0, stall: 0, status: 'idle' as const };
   climb.rounds += 1;
-  climb.stall = decision === 'kept' ? 0 : climb.stall + 1;
+  climb.stall = decision === 'kept' ? 0 : inconclusive ? climb.stall : climb.stall + 1;
   climb.status = climb.stall >= STALL_ROUNDS ? 'stalled' : 'climbing';
   if (decision === 'kept') {
-    await db.setDefinitionStatus(opts.game, head.version, 'kept');
-    await db.setDefinitionStatus(opts.game, cand.version, 'head');
-    fresh.head = cand.version;
-    fresh.best = cand.version;
-  } else await db.setDefinitionStatus(opts.game, cand.version, 'reverted');
+    await db.setDefinitionStatus(o.game, o.headVersion, 'kept');
+    await db.setDefinitionStatus(o.game, o.candVersion, 'head');
+    fresh.head = o.candVersion;
+    fresh.best = o.candVersion;
+  } else await db.setDefinitionStatus(o.game, o.candVersion, 'reverted');
   fresh.climb = climb;
   await db.setGame(fresh);
 
   const round: Round = {
-    pk: `GAME#${opts.game}`,
+    pk: `GAME#${o.game}`,
     sk: `ROUND#${db.pad(climb.rounds)}`,
     round: climb.rounds,
-    from: head.version,
-    to: cand.version,
-    rationale: opts.rationale,
-    author: opts.author,
+    from: o.headVersion,
+    to: o.candVersion,
+    rationale: o.rationale,
+    author: o.author,
     baseline: { evalId: baseline.id, train: baseline.train.score, test: baseline.test.score },
     candidate: { evalId: ev.id, train: ev.train.score, test: ev.test.score },
     delta: { train: dTrain, test: dTest },
     epsilon: eps,
     decision,
     reason,
-    engine,
+    engine: ev.engine,
     createdAt: new Date().toISOString(),
   };
   await db.put(round);
   const stalled = climb.status === 'stalled';
   return { round, eval: publicEval(ev), stalled, ...(stalled ? { diagnosis: diagnose(ev) } : {}) };
+}
+
+/** A whole round inside one invocation (local harness). */
+export async function proposeRound(opts: { game: string; rules: string; rationale: string; author: string; decide: Decide; deadlineAt: number }) {
+  const p = await prepareProposal(opts);
+  const ev = await evaluate({ game: opts.game, def: p.cand, suite: p.suite, decide: opts.decide, deadlineAt: opts.deadlineAt, tag: 'propose' });
+  return decideRound({ game: opts.game, headVersion: p.head.version, candVersion: p.cand.version, baseline: p.baseline, ev, rationale: opts.rationale, author: opts.author, suite: p.suite });
 }
 
 /** At a stall: where the train runs lose points, and what keeps showing up. */
@@ -329,7 +457,7 @@ export function diagnose(ev: EvalRecord) {
     note: 'Stalled: stop patching and diagnose. Weakest score parts first; recurring findings next — some are engine or mechanic gaps no definition edit can fix (see the backlog tool).',
     weakest,
     critique: ev.train.critique
-      ? { weakestDimensions: Object.entries(ev.train.critique.dims).sort((a, b) => a[1] - b[1]).slice(0, 5), namedWeakest: ev.train.critique.weakest, suggestedFixes: ev.train.critique.fixes }
+      ? { weakestDimensions: Object.entries(ev.train.critique.dims).sort((a, b) => a[1] - b[1]).slice(0, 5), namedWeakest: ev.train.critique.weakest, suggestedFixes: ev.train.critique.fixes, cause: ev.train.critique.cause, outcomes: ev.train.critique.outcomes }
       : null,
     recurring: [...counts].sort((a, b) => b[1] - a[1]).slice(0, 10),
     classification: ev.classificationFindings.map((f) => `${f.severity}: ${f.kind} ${f.subject}`),
