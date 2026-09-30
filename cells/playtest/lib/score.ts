@@ -28,7 +28,9 @@ import { metrics } from './runner';
 
 /** v2 (2026-09-30): adds Jev's qualitative critique (16 dimensions, 0–1 index) at .20,
  *  taken from ended (.30→.25), variety (.15→.10), agency (.15→.10) and judged (.20→.15). */
-export const SCORE_VERSION = 'score/v3';
+/** v3.1: v3 as designed — v3's first deploy never recorded who won by position, so its
+ *  evals fell back to the balance-free suite formula; they don't compare with v3.1. */
+export const SCORE_VERSION = 'score/v3.1';
 export const WEIGHTS = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, length: 0.1, clean: 0.1 } as const;
 
 export interface RunScore {
