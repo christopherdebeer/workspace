@@ -688,6 +688,8 @@ interface Lift {
   radius: number;
 }
 let lifts: Lift[] = [];
+/** The leaves of the last answer, held on the thread a moment after the solve. */
+let solvedThread: { pads: Pad[]; until: number } | null = null;
 let lantern = 0;
 
 function solve() {
@@ -713,6 +715,9 @@ function solve() {
   }
   const done = selection;
   selection = [];
+  // the thread stays through to the last leaf while they glow, so the leaf that
+  // finished the sum is seen to join the others before it all lets go
+  solvedThread = { pads: done, until: pond.t + 0.9 };
   window.setTimeout(() => done.forEach((p) => (p.selected = false)), 900);
   lock = 2.2;
   lastSolved = value;
@@ -1538,8 +1543,14 @@ canvasEl.addEventListener('pointerdown', (e) => {
     choose(p);
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
-    // one plop: a single clean ring spreading out, like a raindrop or a fingertip
-    if (!pond.splash(wx, wy, 6, 2.6, !!params.get('foamtap'))) sound.plop(1, panAt(wx));
+    if (hitPad) {
+      // a dry leaf: a tap only dips it; a finger left on it presses it slowly under (Pond.held)
+      pond.splash(wx, wy, 6, 0.4, false, [hitPad]);
+      pond.held = { pad: hitPad, ox: wx - hitPad.x, oy: wy - hitPad.y };
+    } else if (!pond.splash(wx, wy, 6, 2.6, !!params.get('foamtap'))) {
+      // one plop: a single clean ring spreading out, like a raindrop or a fingertip
+      sound.plop(1, panAt(wx));
+    }
     school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
     // a finger left on the water may then be drawn through it (see pointermove)
@@ -1583,6 +1594,7 @@ canvasEl.addEventListener('pointermove', (e) => {
     const d = Math.hypot(dx, dy);
     if (d >= 5) {
       drag.moved = true;
+      pond.held = null;
       const sp = Math.hypot(drag.vx, drag.vy);
       const strength = Math.max(0.12, Math.min(0.45, sp / 1400));
       const step = 6;
@@ -1620,6 +1632,7 @@ const end = (e: PointerEvent) => {
   if (e.pointerId !== pointerId) return;
   pointerId = null;
   lastHit = null;
+  pond.held = null;
   if (residentPress) {
     const press=residentPress; residentPress=null;
     const m=pond.landmarks.find(m=>residentKey(m)===press.key);
@@ -1954,10 +1967,12 @@ function frame(now: number) {
   }
   const order = drawOrder(pond.pads);
   const thread: Array<[number, number]> = [];
-  if (selection.length > 1) {
-    for (let i = 0; i < selection.length - 1; i++) {
-      const a = selection[i];
-      const c = selection[i + 1];
+  if (solvedThread && (selection.length || pond.t > solvedThread.until)) solvedThread = null;
+  const threaded = selection.length ? selection : solvedThread?.pads ?? [];
+  if (threaded.length > 1) {
+    for (let i = 0; i < threaded.length - 1; i++) {
+      const a = threaded[i];
+      const c = threaded[i + 1];
       for (let k = 0; k < 12; k++) {
         const u = k / 12;
         const sag = Math.sin(u * Math.PI) * 10;
@@ -1967,7 +1982,7 @@ function frame(now: number) {
         thread.push([a.x + dx * u - (dy / l) * sag, a.y + dy * u + (dx / l) * sag]);
       }
     }
-    const z = selection[selection.length - 1];
+    const z = threaded[threaded.length - 1];
     thread.push([z.x, z.y]);
   }
 
