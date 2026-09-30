@@ -134,3 +134,39 @@ playtests were mostly engine gaps, and it reshaped the harness:
   AP discounts; `timeout_winner` alias; `players: 3-5` parsing; denounce.
 - Round 1 (checks on every objective, Rope/Lantern requirements) was kept:
   train 0.503 → 0.730, test 0.528 → 0.748 on the 6 + 6 suite.
+
+### Later the same night — measurement fixes
+
+- **Noise needs context and more than one sample.** `set_suite` had carried a
+  0.20 noise (from a 6+6 suite with a deadline-truncated run) into a new
+  suite, and noise only ratcheted up, so no proposal could pass. Noise is now
+  stored per (engine, harness, suite) and a round must also clear the *paired*
+  standard error of its train games (same seeds × player counts on both
+  sides). On 24+24 games: noise 0.009–0.011, paired SE ≈ 0.009 — a round's
+  reason states all three.
+- **The 60 KB gateway read cap bit job results**: a 24+24 eval's job result
+  was 72 KB, the job read returned the gateway's "too large" string, and
+  pollers never saw `done` although the work had finished. Job and round
+  results now carry a compact eval; `plans` shows each fan-out's state, and
+  the job poll re-completes a plan that was assembled but never completed.
+- **score/v3.1** — a time-limit win counts as ended when the rules name the
+  timeout winner (AAOTE's Enemy wins that way by design; v2 paid 0.3 for it
+  and so rewarded quick Trader wins), and the suite score includes outcome
+  balance (normalised entropy of who won, by secret role else seat) at 10 %.
+  v3's first deploy silently never recorded positions (an edit matched
+  nothing), hence v3.1.
+- **Harness h4–h5**: a two-step lookahead within a turn labels moves that
+  open progress ("then …"), the move question states the player's objective,
+  and option labels are compact. The registry's enabled-mechanics lookup is
+  cached (it was ~60 % of engine CPU; simulation cost per decision fell from
+  ~0.57 s to ~0.04 s).
+- **`screen`** plays a design with a free greedy stand-in (no Jev) to preview
+  its structure — outcome spread, length, move mix, errors — before paying for
+  an eval.
+- Round 2 (Trader 4 → 6 trades) was reverted (train −0.003, test −0.030); the
+  Trader then won 16 of 24: the lever is how cheap and unconditional open
+  offers are, not the threshold. `trade.max_offers_per_turn` and
+  `trade.counts_for` now exist for the rules to use.
+- Jev spend: ~12 M input tokens per 48-game eval (~$0.50). The jev cell's
+  daily cap was raised 60 M → 300 M tokens (≈ $12.60/day) for the climb; the
+  TypeSafe account then returned HTTP 402 (payment required), pausing Jev work.
