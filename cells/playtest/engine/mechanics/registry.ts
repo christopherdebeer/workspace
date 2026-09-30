@@ -88,6 +88,8 @@ class MechanicRegistry {
       throw new Error(`Mechanic '${mechanic.slug}' is already registered`);
     }
     this.mechanics.set(mechanic.slug, mechanic);
+    this.enabledByConfig = new WeakMap();
+    this.enabledByKeys.clear();
   }
 
   /**
@@ -121,6 +123,28 @@ class MechanicRegistry {
    * are auto-enabled when all their requires are satisfied.
    */
   getEnabledMechanics(config: GameConfig): MechanicHooks[] {
+    // Hot path (every hook call). The result depends only on which engine_mechanics keys
+    // are set, so cache by that key set (configs are deep-copied per state, so identity
+    // alone would miss); registering a mechanic clears the cache.
+    const byIdentity = this.enabledByConfig.get(config);
+    if (byIdentity) return byIdentity;
+    const em = (config.engine_mechanics ?? {}) as Record<string, unknown>;
+    const key = Object.keys(em).filter((k) => em[k] !== undefined).sort().join('|');
+    const cached = this.enabledByKeys.get(key);
+    if (cached) {
+      this.enabledByConfig.set(config, cached);
+      return cached;
+    }
+    const result = this.computeEnabledMechanics(config);
+    this.enabledByKeys.set(key, result);
+    this.enabledByConfig.set(config, result);
+    return result;
+  }
+
+  private enabledByConfig = new WeakMap<object, MechanicHooks[]>();
+  private enabledByKeys = new Map<string, MechanicHooks[]>();
+
+  private computeEnabledMechanics(config: GameConfig): MechanicHooks[] {
     const all = Array.from(this.mechanics.values());
     const enabledSlugs = new Set<string>();
 

@@ -64,6 +64,9 @@ function withRng<T>(rng: () => number, fn: () => T): T {
  * never reveals the next card or someone's items. Simulations use their own RNG
  * stream, and the game's files are restored after each one. */
 const SIM_MAX = 160;
+/** Two-step lookahead bounds: first moves examined per decision, follow-ups per move. */
+const LOOKAHEAD_MAX = 40;
+const FOLLOW_MAX = 30;
 /** Moves whose outcome turns on hidden information are never simulated (a denunciation
  *  would otherwise announce whether the target is the Enemy; a draw, the next card). */
 const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
@@ -72,8 +75,9 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  change moves scores without touching engine code, so baselines must match it too.
  *  h1: labels only · h2: one-ply consequence facts on options, off-turn replies ·
  *  h3: the judge also sees each player's secret role at the end, and names the cause of
- *  repetitive play (rules vs players). */
-export const HARNESS_VERSION = 'h3';
+ *  repetitive play (rules vs players) ·
+ *  h4: two-step lookahead within a turn ("then …"), the objective stated in the question. */
+export const HARNESS_VERSION = 'h4';
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
@@ -90,6 +94,38 @@ function hiddenFingerprint(state: Record<string, any>, pid: string): string {
   return JSON.stringify([(state.shared?.deck ?? []).length, (state.shared?.deck ?? [])[0]?.name ?? null, others, Object.keys(me.knowledge?.revealed ?? {})]);
 }
 
+/** Play `c` on a copy of `s` (own RNG, the slot's files restored); null if it throws. */
+function simulate(s: Record<string, any>, pid: string, c: Action, prefix: string, snap: Record<string, string>, rng: () => number): Record<string, any> | null {
+  const clone = structuredClone(s);
+  try {
+    withRng(rng, () => executeAction(clone as never, pid, c as never));
+    return clone;
+  } catch {
+    return null;
+  } finally {
+    const now = filesUnder(prefix);
+    for (const k of Object.keys(now)) if (!(k in snap)) unlinkSync(k);
+    for (const [k, v] of Object.entries(snap)) if (now[k] !== v) writeFileSync(k, v);
+  }
+}
+
+/** Valid moves for `pid` in `s` (as the play loop builds them), capped. */
+function validMoves(s: Record<string, any>, pid: string, rng: () => number, cap: number): Action[] {
+  const out: Action[] = [];
+  try {
+    const av = withRng(rng, () => getAvailableActions(s as never, pid)) as unknown as { actions: Array<Record<string, any>> };
+    for (const a of av.actions.filter((x) => x.enabled && x.type !== 'resign' && x.type !== 'pass')) {
+      for (const c of expand(a as never).filter((c) => !c.declareVictory && !NO_SIM.test(c.type) && !fieldsNeedingWords(c).length)) {
+        if (out.length >= cap) return out;
+        if ((withRng(rng, () => validateAction(s as never, pid, c as never)) as { valid: boolean }).valid) out.push(c);
+      }
+    }
+  } catch {
+    /* no follow-ups */
+  }
+  return out;
+}
+
 function consequences(s: Record<string, any>, pid: string, cands: Action[], slot: string, rng: () => number): Map<Action, string> {
   const out = new Map<Action, string>();
   if (cands.length > SIM_MAX) return out;
@@ -98,31 +134,46 @@ function consequences(s: Record<string, any>, pid: string, cands: Action[], slot
   const beforeProgress = progressOf(s, pid);
   const beforeHidden = hiddenFingerprint(s, pid);
   const beforeScore = Number(s.players[pid]?.score ?? 0);
+  /** What visibly changed for the mover between `s` and `after` (nothing if hidden info moved). */
+  const factsOf = (after: Record<string, any>): string[] => {
+    if (hiddenFingerprint(after, pid) !== beforeHidden) return [];
+    const facts: string[] = [];
+    const ended = after.status !== 'in_progress';
+    const winner = after.shared?.winner ?? after.winner;
+    if (ended && winner === pid) facts.push('YOU WIN');
+    else if (ended && winner) facts.push(`${winner} wins`);
+    facts.push(...progressOf(after, pid).filter((line) => !beforeProgress.includes(line)).map((l) => `→ ${l}`));
+    const dScore = Number(after.players[pid]?.score ?? 0) - beforeScore;
+    if (dScore) facts.push(`score ${dScore > 0 ? '+' : ''}${dScore}`);
+    return facts;
+  };
+  let lookaheads = 0;
+  // A follow-up only counts if the first move is what makes it possible (it isn't a move
+  // you could make right now anyway) — otherwise every option would inherit its credit.
+  const now = new Set(cands.map((c) => JSON.stringify(c)));
   for (const c of cands) {
     if (NO_SIM.test(c.type)) continue;
-    const clone = structuredClone(s);
-    try {
-      withRng(rng, () => executeAction(clone as never, pid, c as never));
-    } catch {
+    const clone = simulate(s, pid, c, prefix, snap, rng);
+    if (!clone) continue;
+    const facts = factsOf(clone);
+    if (facts.length) {
+      out.set(c, facts.join('; '));
       continue;
-    } finally {
-      const now = filesUnder(prefix);
-      for (const k of Object.keys(now)) if (!(k in snap)) unlinkSync(k);
-      for (const [k, v] of Object.entries(snap)) if (now[k] !== v) writeFileSync(k, v);
     }
-    const facts: string[] = [];
-    if (hiddenFingerprint(clone, pid) === beforeHidden) {
-      const ended = clone.status !== 'in_progress';
-      const winner = clone.shared?.winner ?? clone.winner;
-      if (ended && winner === pid) facts.push('YOU WIN');
-      else if (ended && winner) facts.push(`${winner} wins`);
-      const after = progressOf(clone, pid);
-      const changed = after.filter((line) => !beforeProgress.includes(line));
-      facts.push(...changed.map((l) => `→ ${l}`));
-      const dScore = Number(clone.players[pid]?.score ?? 0) - beforeScore;
-      if (dScore) facts.push(`score ${dScore > 0 ? '+' : ''}${dScore}`);
+    // Two steps within the same turn: does this move open a follow-up that makes progress
+    // (place a tile, then enter it)? Only while it's still this player's turn, bounded.
+    if (lookaheads >= LOOKAHEAD_MAX || clone.status !== 'in_progress' || clone.currentPlayer !== pid || hiddenFingerprint(clone, pid) !== beforeHidden) continue;
+    lookaheads++;
+    const cloneSnap = filesUnder(prefix);
+    for (const f of validMoves(clone, pid, rng, FOLLOW_MAX)) {
+      if (now.has(JSON.stringify(f))) continue;
+      const after = simulate(clone, pid, f, prefix, cloneSnap, rng);
+      const ff = after ? factsOf(after) : [];
+      if (ff.length) {
+        out.set(c, `then ${labelOf(f).slice(0, 60)}: ${ff.join('; ')}`);
+        break;
+      }
     }
-    if (facts.length) out.set(c, facts.join('; '));
   }
   return out;
 }
@@ -505,8 +556,11 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         if (!decide && picks.length > 1) rec.fallback = 'random (no Jev)';
       } else {
         const persona = opts.persona ? ` Play as a ${opts.persona} player.` : '';
+        // Say the goal in the question itself: Jev reads the instruction literally, and a goal
+        // buried in the state lost to options that merely sound active.
+        const goal = av.yourObjective ? ` Your secret objective: ${av.yourObjective}${Array.isArray(av.objectiveProgress) && av.objectiveProgress.length ? ` (so far: ${av.objectiveProgress.join('; ')})` : ''}. Options marked [→ …] or [then …] advance it.` : '';
         const q: Questions = {
-          move: { type: 'choice', instructions: responder ? `You are ${pid}, answering off-turn. Which reply gives you the best chance of winning this game?${persona}` : `You are ${pid}. Which move gives you the best chance of winning this game?${persona}`, criteria: Object.fromEntries(picks.map((p) => [p.label, null])) },
+          move: { type: 'choice', instructions: responder ? `You are ${pid}, answering off-turn. Which reply gives you the best chance of winning this game?${goal}${persona}` : `You are ${pid}. Which move gives you the best chance of winning this game?${goal}${persona}`, criteria: Object.fromEntries(picks.map((p) => [p.label, null])) },
           ahead: { type: 'noul', instructions: `Is ${pid} currently ahead of every opponent?` },
         };
         try {
