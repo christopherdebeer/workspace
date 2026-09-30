@@ -97,3 +97,40 @@ cell code).
   session can mint that the gateway admits for the owner's own cell), one
   year; `cell:c15r/jev:*` would be tighter but is not mintable from a
   session today.
+
+## Addendum 2026-09-30 — climbing AAOTE: what the harness needed
+
+AAOTE (social deduction on an expanding tile map) was the first game whose
+playtests were mostly engine gaps, and it reshaped the harness:
+
+- **Judging is a critique now** (score/v2). Jev reads the rules, the whole
+  game round by round and the classifier's known gaps, and rates 16 design
+  dimensions (fun, engagement, dynamism, tension, meaningful decisions, depth,
+  diversity, interaction, pace, balance, theme, coherence, goal clarity,
+  comeback, replayability, elegance) on five-step scales, then names the
+  biggest weakness, strength, the kind of change that would help most, and
+  whether repetitive play came from the rules or the players. The index
+  (mean/4) is 20 % of a run's score. Evals tally who won *as what* (winner's
+  secret role · objective or time limit): the first place balance shows.
+- **Jev plays one-ply, so the harness shows consequences** (harness h2+):
+  every option is simulated on a throwaway state and labelled with what
+  visibly changes for the mover (objective progress, score, a win) unless
+  the simulation touched hidden information. Before this, players shuttled
+  between two tiles for whole games. The harness version is part of an
+  eval's identity, like engine, suite and score version.
+- **Evals fan out**: one invocation per run, the last to finish assembles
+  and carries out the job (eval / noise / propose decision); the job poll
+  finishes plans whose runs vanished. A 12-game AAOTE eval had reached the
+  270 s budget, cut a game off, and measured noise 0.20 — too noisy for any
+  proposal to be kept. Suites can now grow (12 + 12) without the wall clock.
+  Incomplete evals are never baselines; rounds judged on one are
+  inconclusive and don't count toward a stall.
+- **Engine work AAOTE forced** (all generic options): objectives dealt once
+  with a guaranteed Enemy and machine-checkable `check`s evaluated after
+  every action; a tile map with links, entry `requires`, enemy_only,
+  Roadblocks, discovery on first visit; open trade offers (no reading hidden
+  hands), off-turn replies, no repeats after a decline; targeted event
+  effects (peek, steal, block, sabotage, teleport, secret move, Evasion);
+  AP discounts; `timeout_winner` alias; `players: 3-5` parsing; denounce.
+- Round 1 (checks on every objective, Rope/Lantern requirements) was kept:
+  train 0.503 → 0.730, test 0.528 → 0.748 on the 6 + 6 suite.
