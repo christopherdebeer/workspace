@@ -51,6 +51,10 @@ function locationOk(ctx: HookContext, cfg: TradeConfig, other: string): boolean 
 
 interface TradeConfig {
   enabled?: boolean;
+  /** Offers a player may make per turn (default unlimited). */
+  max_offers_per_turn?: number;
+  /** Whose completed-trade count a trade raises: both sides (default), or only one. */
+  counts_for?: 'both' | 'offerer' | 'responder';
   require_same_location?: boolean;
   require_adjacent_location?: boolean;
   item_types_only?: boolean;
@@ -171,7 +175,8 @@ export const tradingMechanic: MechanicHooks = {
     // (request: [card]) still validate for MCP/agents, but aren't advertised.
     const mine = [...new Set((ctx.player.hand ?? []).filter((c) => !tradeConfig.item_types_only || c.type === 'item').map((c) => c.name))];
     const declined = ((ctx.state.shared.declinedTrades as string[] | undefined) ?? []);
-    const targets = ctx.state.turnOrder.filter((id) => id !== ctx.playerId && ctx.state.players[id] && !pendingTrades.some((t) => t.from === ctx.playerId && t.to === id) && locationOk(ctx, tradeConfig, id));
+    const offersLeft = tradeConfig.max_offers_per_turn === undefined ? Infinity : tradeConfig.max_offers_per_turn - Number((ctx.player as unknown as { offersThisTurn?: number }).offersThisTurn ?? 0);
+    const targets = offersLeft <= 0 ? [] : ctx.state.turnOrder.filter((id) => id !== ctx.playerId && ctx.state.players[id] && !pendingTrades.some((t) => t.from === ctx.playerId && t.to === id) && locationOk(ctx, tradeConfig, id));
     const examples: GameAction[] = [];
     for (const target of targets) for (const give of mine) if (!declined.includes(offerKey(ctx.playerId, target, [give], []))) examples.push({ type: 'trade_offer', target, offer: [give], request: [] } as GameAction);
     if (examples.length) {
@@ -216,6 +221,7 @@ export const tradingMechanic: MechanicHooks = {
   onTurnStart(ctx: TurnStartContext): StateChanges | null {
     const pending = (ctx.state.shared.pendingTrades as PendingTrade[] | undefined) ?? [];
     ctx.state.shared.pendingTrades = pending.filter((t) => t.from !== ctx.playerId);
+    (ctx.state.players[ctx.playerId] as unknown as { offersThisTurn?: number }).offersThisTurn = 0;
     // A declined offer can't be repeated in the same turn; next turn it may be tried again.
     const declined = (ctx.state.shared.declinedTrades as string[] | undefined) ?? [];
     ctx.state.shared.declinedTrades = declined.filter((k) => !k.startsWith(`${ctx.playerId}>`));
@@ -311,6 +317,9 @@ function validateTradeOffer(ctx: HookContext, action: TradeOfferAction): Validat
       return { valid: false, error: `"${cardName}" is not a tradeable card in this game.` };
     }
   }
+  if (tradeConfig.max_offers_per_turn !== undefined && Number((ctx.player as unknown as { offersThisTurn?: number }).offersThisTurn ?? 0) >= tradeConfig.max_offers_per_turn) {
+    return { valid: false, error: `You can make ${tradeConfig.max_offers_per_turn} trade offer(s) per turn.` };
+  }
   if (((ctx.state.shared.declinedTrades as string[] | undefined) ?? []).includes(offerKey(ctx.playerId, action.target, action.offer, action.request ?? []))) {
     return { valid: false, error: `${action.target} just declined that offer — try something else, or again next turn.` };
   }
@@ -390,6 +399,9 @@ function executeTradeOffer(ctx: ActionExecutionContext, action: TradeOfferAction
     expiresAtTurn: state.turnNumber + 8  // Expires in 2 full rounds (4 players * 2)
   };
 
+  const offerer = state.players[playerId] as unknown as { offersThisTurn?: number };
+  offerer.offersThisTurn = Number(offerer.offersThisTurn ?? 0) + 1;
+
   // Get current pending trades and add new one
   const currentPending = (state.shared.pendingTrades as PendingTrade[]) || [];
   const newPending = [...currentPending, pendingTrade];
@@ -433,9 +445,10 @@ function executeTradeRespond(ctx: ActionExecutionContext, action: TradeRespondAc
     const requestedCards = removeCardsFromHand(state, playerId, back);
     addToHand(state, trade.from, requestedCards);
 
-    // Calculate new completed trades counts
-    const responderTrades = (player.completedTrades ?? 0) + 1;
-    const offererTrades = (fromPlayer.completedTrades ?? 0) + 1;
+    // Calculate new completed trades counts (trade.counts_for: both | offerer | responder)
+    const countsFor = (ctx.config.engine_mechanics?.trade as TradeConfig | undefined)?.counts_for ?? 'both';
+    const responderTrades = (player.completedTrades ?? 0) + (countsFor === 'offerer' ? 0 : 1);
+    const offererTrades = (fromPlayer.completedTrades ?? 0) + (countsFor === 'responder' ? 0 : 1);
 
     return {
       handled: true,

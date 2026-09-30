@@ -76,8 +76,9 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  h1: labels only · h2: one-ply consequence facts on options, off-turn replies ·
  *  h3: the judge also sees each player's secret role at the end, and names the cause of
  *  repetitive play (rules vs players) ·
- *  h4: two-step lookahead within a turn ("then …"), the objective stated in the question. */
-export const HARNESS_VERSION = 'h4';
+ *  h4: two-step lookahead within a turn ("then …"), the objective stated in the question ·
+ *  h5: compact option labels (no internal ids, empty values or JSON brackets). */
+export const HARNESS_VERSION = 'h5';
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
@@ -404,9 +405,12 @@ function mulberry32(seed: number): () => number {
 
 /** A short human label for an action: its type plus its arguments. */
 export function labelOf(a: Action): string {
+  // Compact: most of a decision's prompt is its option list. Drop empty values and internal
+  // ids (offerId, …: labels only need to be unique, and dedupeLabels sees to that); arrays
+  // read as a+b rather than JSON.
   const args = Object.entries(a)
-    .filter(([k, v]) => k !== 'type' && v !== undefined && v !== null && v !== '' && k !== 'reasoning')
-    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`);
+    .filter(([k, v]) => k !== 'type' && k !== 'reasoning' && !/Id$/.test(k) && v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && v.length === 0))
+    .map(([k, v]) => `${k}=${Array.isArray(v) ? v.map(String).join('+') : typeof v === 'object' ? JSON.stringify(v) : String(v)}`);
   return [a.type.replace(/_/g, ' '), ...args].join(' · ').slice(0, 120);
 }
 
