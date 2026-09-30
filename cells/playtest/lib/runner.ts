@@ -78,8 +78,10 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  repetitive play (rules vs players) ·
  *  h4: two-step lookahead within a turn ("then …"), the objective stated in the question ·
  *  h5: compact option labels (no internal ids, empty values or JSON brackets) ·
- *  h6: player personas — odd seeds trusting, even seeds suspicious (PERSONAS). */
-export const HARNESS_VERSION = 'h6';
+ *  h6: player personas — odd seeds trusting, even seeds suspicious (PERSONAS) ·
+ *  h7: moves that touch hidden information say that they do, not what ("+1 card",
+ *  "learn player-2 objective") — discovery and evidence-gathering were invisible. */
+export const HARNESS_VERSION = 'h7';
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
@@ -137,8 +139,19 @@ function consequences(s: Record<string, any>, pid: string, cands: Action[], slot
   const beforeHidden = hiddenFingerprint(s, pid);
   const beforeScore = Number(s.players[pid]?.score ?? 0);
   /** What visibly changed for the mover between `s` and `after` (nothing if hidden info moved). */
+  const beforeHand = (s.players[pid]?.hand ?? []).length;
+  const beforeKnown = new Set(Object.keys(s.players[pid]?.knowledge?.revealed ?? {}));
   const factsOf = (after: Record<string, any>): string[] => {
-    if (hiddenFingerprint(after, pid) !== beforeHidden) return [];
+    // When hidden information moved, say only THAT something happens, never what: how many
+    // cards you gain, and what you get to learn about (h7) — not which cards, not the answer.
+    if (hiddenFingerprint(after, pid) !== beforeHidden) {
+      const quiet: string[] = [];
+      const dHand = (after.players[pid]?.hand ?? []).length - beforeHand;
+      if (dHand > 0) quiet.push(`+${dHand} card${dHand > 1 ? 's' : ''}`);
+      const learned = Object.keys(after.players[pid]?.knowledge?.revealed ?? {}).filter((k) => !beforeKnown.has(k)).map((k) => k.replace(/ \(round \d+\)$/, ''));
+      if (learned.length) quiet.push(`learn ${learned.join(', ')}`);
+      return quiet;
+    }
     const facts: string[] = [];
     const ended = after.status !== 'in_progress';
     const winner = after.shared?.winner ?? after.winner;

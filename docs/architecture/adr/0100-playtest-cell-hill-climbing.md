@@ -207,3 +207,17 @@ as one declared round → tune by climbing.**
 - **Judge check** before trusting further climbing: the quality ladder
   (v1 unwinnable → v2 → v0.4) must be ordered by the critique, and its 16
   dimensions checked for redundancy.
+- **Rounds on v0.4** (I1): *Temple needs the other two items* reverted
+  (−0.012); *a correct denunciation only exposes* reverted (−0.039: 12/24
+  games with no winner); *evidence to denounce + Temple* reverted (−0.060: the
+  Enemy won 16/24 at the limit). The v0.4 gain was partly a denunciation
+  lottery (most games ended by a round-3 guess, which the outcome table
+  hid — now reported as 'denounce'), and with the lottery gone the Jev players'
+  aimless movement (≈60 % of moves) leaves objectives unfinished. The judge
+  blames the players (74 %). The balance term also rewards the lottery (a
+  denunciation win counts as a win for the denouncer's role) — noted, not
+  yet changed.
+- **Instrument I2 (declared)**: harness h7 — moves that touch hidden
+  information say *that* they do, not what ("+1 card", "learn player-2
+  objective"); discovery and evidence-gathering had been invisible to the
+  one-ply player. Heads v2 and v4 are re-scored under I2 before any round.
