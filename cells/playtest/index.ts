@@ -29,7 +29,7 @@ import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIX
 import { scoreRun, SCORE_VERSION, WEIGHTS } from './lib/score';
 import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
-import { evaluate, proposeRound, prepareProposal, decideRound, startPlan, runPlanned, finishPlan, getPlan, resumePlan, recentPlans, publicEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest, type Plan } from './lib/evaluate';
+import { evaluate, proposeRound, prepareProposal, decideRound, startPlan, runPlanned, finishPlan, getPlan, resumePlan, recentPlans, publicEval, compactEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest, type Plan } from './lib/evaluate';
 import * as db from './lib/store';
 import * as pub from './lib/public';
 import { readFileSync } from 'node:fs';
@@ -129,7 +129,7 @@ async function completePlan(plan: Plan, rec: EvalRecord): Promise<unknown> {
     const base = (await db.get(`EVAL#${t.baselineId}`, 'meta')) as EvalRecord;
     return decideRound({ game: plan.game, headVersion: t.headVersion, candVersion: plan.version, baseline: base, ev: rec, rationale: t.rationale, author: t.author, suite: plan.suite });
   }
-  return { eval: publicEval(rec) };
+  return { eval: compactEval(rec) };
 }
 
 async function finishAndComplete(planId: string, resume = false) {
@@ -158,7 +158,7 @@ const LONG: Record<string, (a: Args, caller: string, deadlineAt: number, jobId?:
       return planned(await startPlan({ jobId, game, def, suite, decide, tag: String(a.tag ?? 'eval'), then: { kind: 'eval' } }));
     }
     const ev = await evaluate({ game, def, suite, decide, deadlineAt, tag: String(a.tag ?? 'eval') });
-    return { eval: publicEval(ev), jev: meter };
+    return { eval: compactEval(ev), jev: meter };
   },
 
   async propose(a, caller, deadlineAt, jobId) {

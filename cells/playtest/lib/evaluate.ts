@@ -374,6 +374,23 @@ export function publicEval(e: EvalRecord) {
   };
 }
 
+/** An eval small enough for a job result (the gateway caps a read at 60 KB; 24 train runs
+ *  with full critiques are ~70 KB): per-run scores, parts and outcomes, the train critique
+ *  summary; everything else via eval_detail / run. */
+export function compactEval(e: EvalRecord) {
+  const p = publicEval(e);
+  return {
+    ...p,
+    classificationFindings: p.classificationFindings.filter((f) => f.severity !== 'info').map((f) => `${f.severity}: ${f.kind} ${f.subject}`),
+    train: {
+      score: p.train.score,
+      critique: p.train.critique ?? null,
+      runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null })),
+    },
+    detail: `read @c15r/playtest.eval_detail {id:"${e.id}"} for findings and full critiques`,
+  };
+}
+
 /** Latest eval of (game, version) on this engine, suite and score version. */
 export async function findEval(game: string, version: number, engine: string, suite: string): Promise<EvalRecord | null> {
   const list = await db.query(`GAME#${game}`, 'EVAL#', { newestFirst: true, limit: 50 });
@@ -425,11 +442,11 @@ export async function prepareProposal(o: { game: string; rules: string; rational
 }
 
 /** Keep or revert a candidate against its baseline, and record the round. */
-export async function decideRound(o: { game: string; headVersion: number; candVersion: number; baseline: EvalRecord; ev: EvalRecord; rationale: string; author: string; suite: db.Suite }): Promise<{ round: Round; eval: ReturnType<typeof publicEval>; stalled: boolean; diagnosis?: unknown }> {
+export async function decideRound(o: { game: string; headVersion: number; candVersion: number; baseline: EvalRecord; ev: EvalRecord; rationale: string; author: string; suite: db.Suite }): Promise<{ round: Round; eval: ReturnType<typeof compactEval>; stalled: boolean; diagnosis?: unknown }> {
   const { baseline, ev, suite } = o;
   // Completing a plan can be retried (watchdog): never record the same round twice.
   const prior = (await db.query(`GAME#${o.game}`, 'ROUND#')).find((r) => (r as unknown as Round).candidate?.evalId === ev.id) as Round | undefined;
-  if (prior) return { round: prior, eval: publicEval(ev), stalled: false };
+  if (prior) return { round: prior, eval: compactEval(ev), stalled: false };
   const dTrain = +(ev.train.score - baseline.train.score).toFixed(4);
   const dTest = +(ev.test.score - baseline.test.score).toFixed(4);
   // Baseline and candidate play the same seeds × player counts, so the per-game
@@ -480,7 +497,7 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
   };
   await db.put(round);
   const stalled = climb.status === 'stalled';
-  return { round, eval: publicEval(ev), stalled, ...(stalled ? { diagnosis: diagnose(ev) } : {}) };
+  return { round, eval: compactEval(ev), stalled, ...(stalled ? { diagnosis: diagnose(ev) } : {}) };
 }
 
 /** A whole round inside one invocation (local harness). */
