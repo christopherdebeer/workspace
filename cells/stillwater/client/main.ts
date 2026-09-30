@@ -26,7 +26,7 @@ import { Overlay } from './ui';
 import { Curriculum, accepts, feedback, equation, padCompletion, BANDS, type Challenge } from './challenges';
 import { ChallengeUI } from './challenge-ui';
 import { glInfo, probe, report } from './report';
-import { glyphAtlas, GLYPHS } from './glyphs';
+import { glyphAtlas, glyphIndex, GLYPHS } from './glyphs';
 import { PROGRAMS } from './render';
 import { program } from './gl';
 import { layDrops, liveCount, Pad, Planting, Pond, seeded } from './world';
@@ -2106,7 +2106,8 @@ function frame(now: number) {
 // `?glyphs=1`: a dewy leaf shows how many drops it holds as a numeral drawn in water,
 // in place of the drops (1–9; more stays as drops); `?glyphs=half` only on every other
 // leaf, to see the two side by side. `?glyphs=sheet`: the sixteen glyphs
-// (0–9 + − × ÷ = ?) on the sixteen leaves nearest the middle of the view, in reading order.
+// (0–9 + − × ÷ = ?) on the sixteen leaves nearest the middle of the view, in reading order;
+// `?glyphs=repeat&chars=37`: those leaves repeating a few characters, to see the hand vary.
 const glyphMode = params.get('glyphs');
 let glyphsReady = false;
 let sheet: Map<Pad, number> | null = null;
@@ -2116,7 +2117,7 @@ function waterGlyphs() {
     renderer.enableGlyphs(glyphAtlas());
     glyphsReady = true;
   }
-  if (glyphMode === 'sheet') {
+  if (glyphMode === 'sheet' || glyphMode === 'repeat') {
     if (!sheet) {
       const near = pond.pads
         .filter((p) => p.r > 26 && Math.abs(p.x - cam.x) < cam.cssW / (2 * cam.zoom) - p.r && Math.abs(p.y - cam.y) < cam.cssH / (2 * cam.zoom) - p.r)
@@ -2124,7 +2125,8 @@ function waterGlyphs() {
         .slice(0, GLYPHS.length);
       if (near.length < GLYPHS.length) return;
       near.sort((a, b) => (Math.abs(a.y - b.y) > 45 ? b.y - a.y : a.x - b.x));
-      sheet = new Map(near.map((p, i) => [p, i]));
+      const chars = [...(params.get('chars') || '2357')].map(glyphIndex).filter((g) => g >= 0);
+      sheet = new Map(near.map((p, i) => [p, glyphMode === 'repeat' ? chars[i % chars.length] : i]));
     }
     for (const [p, i] of sheet) {
       p.glyph = i;

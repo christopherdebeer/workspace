@@ -823,40 +823,79 @@ void main(){
   }
 
 
-  // a numeral or sign drawn in water (glyphs.ts): a rivulet lying on the leaf, lit as the
-  // dew is — the leaf magnified through it, a dark contact line toward the sun and a thin
-  // bright one away from it, the sky only at the very edge, one sharp pinpoint (which on
-  // a rivulet runs along the stroke), light focused through it on the far side, and a
-  // small shadow. Upright on the screen whatever way the leaf has turned.
+  // a numeral or sign drawn in water (glyphs.ts). The atlas gives only the key shape (the
+  // distance to its path); the hand is this leaf's own: a lean, a turn and a squash, a
+  // waver in the line, water that swells and thins, blobs where it pooled, beaded ends
+  // and stray drops — so no two are alike. The water is then lit as the dew is: the leaf
+  // magnified through it, a dark contact line toward the sun and a thin bright one away
+  // from it, the sky only at the very edge, a sun streak along the stroke, the lantern's
+  // glint, light focused through it, and a small shadow. Upright on the screen.
   if (glyph.w > .01 && uGlyphOn > .5) {
     float S = glyph.x;
-    vec2 gp = rot(p + vDent.xy * .006, vAng) / S;
-    if (abs(gp.x) < .62 && abs(gp.y) < .62) {
+    float gs = fract(seed * 7.13 + glyph.y * .6180339);
+    vec2 wo = vec2(gs * 37.1, fract(gs * 5.3) * 91.7);
+    // the hand: how it leans and turns and squashes this one
+    float lean = (hash12(vec2(gs, 1.7)) - .6) * .26;
+    float turn = (hash12(vec2(gs, 3.1)) - .5) * .14;
+    vec2 squash = 1. + (vec2(hash12(vec2(gs, 5.9)), hash12(vec2(gs, 7.3))) - .5) * .16;
+    vec2 gp0 = rot(p + vDent.xy * .006, vAng) / S;
+    vec2 gp = rot(gp0, turn);
+    gp.x -= lean * gp.y;
+    gp /= squash;
+    // …and how the line wavers as it is drawn: slow bends, a little tremor
+    gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .085 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .03;
+    if (abs(gp.x) < .6 && abs(gp.y) < .6) {
       vec2 cell = vec2(mod(glyph.y, 4.), floor(glyph.y / 4. + .001));
       vec2 uv = (cell + gp / 1.28 + .5) / 4.;
-      float gh = texture(uGlyphs, uv).r;
+      float tx = 1. / 512.;
+      vec2 de = texture(uGlyphs, uv).rg; // distance to the path, distance along it to a free end
       float ga = glyph.w;
-      // as it gathers, the thin edges come last
-      float thr = .03 + (1. - ga) * .45;
+      // the water on the path: thinner and fuller along it, pooled here and there, beaded at the ends
+      float nW = texture(uNoise, gp * .8 + wo * 1.3).r;
+      float pool = smoothstep(.58, .86, texture(uNoise, gp * 1.25 + wo * 2.1).g);
+      float w = .082 * (.72 + .62 * nW) * (1. + .6 * pool) * (1. + .45 * exp(-pow(de.y / .07, 2.)));
+      w = min(w, .16);
+      // gathering: a thin thread first, then the full water
+      w *= mix(.35, 1., ga);
+      float d = de.x;
+      // the slope of the distance (which way is away from the path), in the hand's space
+      vec2 gd = vec2(texture(uGlyphs, uv + vec2(tx, 0.)).r - texture(uGlyphs, uv - vec2(tx, 0.)).r,
+                     texture(uGlyphs, uv + vec2(0., tx)).r - texture(uGlyphs, uv - vec2(0., tx)).r);
+      vec2 away = gd / max(length(gd), 1e-5);
+      // stray drops shaken off the finger: a few, near the strokes but clear of them
+      for (int k = 0; k < 10; k++) {
+        float fk = float(k);
+        if (hash12(vec2(gs * 13.7, fk)) > .7) continue;
+        vec2 c = (vec2(hash12(vec2(gs, fk * 1.7 + 11.)), hash12(vec2(gs, fk * 2.3 + 29.))) - .5) * vec2(.95, 1.05);
+        float r = (.018 + .04 * pow(hash12(vec2(gs, fk + 41.)), 1.4)) * mix(.4, 1., ga);
+        float dc = texture(uGlyphs, (cell + c / 1.28 + .5) / 4.).r;
+        if (dc < .12 + r || dc > .34) continue;
+        float dd = length(gp - c);
+        // where a drop stands higher than the stroke, the drop is what is seen
+        if (dd < r && r * r - dd * dd > w * w - d * d) {
+          d = dd;
+          w = r;
+          away = (gp - c) / max(dd, 1e-5);
+        }
+      }
       vec3 Lw = uSun;
       float canopyLight = sunThrough(vW);
       // its shadow on the leaf, a little away from the sun
-      float gs = texture(uGlyphs, uv + Lw.xy * (.035 / 1.28 / 4.)).r;
-      col *= 1. - smoothstep(thr, thr + .25, gs) * .13 * (1. - smoothstep(thr, thr + .05, gh));
-      if (gh > thr) {
-        // the slope was baked with the height (glyphs.ts); thinner while it gathers
-        vec2 grad = texture(uGlyphs, uv).gb * ga;
-        vec3 n = normalize(vec3(-grad, 1.));
-        vec2 nxy = n.xy / max(length(n.xy), 1e-4);
-        float slope = length(grad);
-        float rim = smoothstep(.9, 2.6, slope);
+      float dS = texture(uGlyphs, (cell + (gp + Lw.xy * .035) / 1.28 + .5) / 4.).r;
+      float aaG = uPx / (vR * S) * 1.3;
+      col *= 1. - (1. - smoothstep(w * .6, w * 1.05, dS)) * .13 * smoothstep(-aaG, aaG, d - w);
+      if (d < w + aaG) {
+        // a round bead: the normal's tilt is the offset from the path over the half-width
+        float t = clamp(d / w, 0., .985);
+        // back from the hand's space to the leaf's: the lean, squash and turn undone on the slope
+        vec2 a0 = away / squash;
+        a0 = rot(vec2(a0.x, a0.y - lean * a0.x), -turn);
+        vec2 nxy = a0 / max(length(a0), 1e-5);
+        vec3 n = normalize(vec3(nxy * t, sqrt(1. - t * t) * .9));
+        float rim = smoothstep(.62, .96, t);
         float enchant = sel * (.25 + .45 * (1. - clamp(uSun.z, 0., 1.)));
-        // the lens: the leaf beneath, magnified across the stroke. On a round bead the normal's
-        // tilt is the offset from the spine over the half-width (n.xy = d / w), so pulling each
-        // point in by half that offset maps the stroke's width onto half as much leaf, without
-        // folding the leaf over at the spine
-        vec2 nP = rot(n.xy, -vAng);
-        vec2 pr = p - nP * S * .041; // half the half-width (glyphs.ts W0 = .082)
+        // the lens: the leaf beneath, magnified across the stroke (pulled in toward the path)
+        vec2 pr = p - rot(nxy, -vAng) * t * w * S * .5;
         float prLen = length(pr);
         vec3 under = albedo(pr, prLen, veins(pr, prLen));
         under *= (uAmb + uSunCol * .72 * canopyLight + LAMP * lampAt(vW) * .8);
@@ -864,7 +903,7 @@ void main(){
         under = mix(vec3(lum), under, 1.3) * (.8 - .14 * rim);
         under += uSunCol * vec3(.9, 1., .9) * max(0., dot(nxy, Lw.xy)) * (1. - rim) * .05 * canopyLight;
         // light gathered through the water, falling on the leaf on the side away from the sun
-        under += uSunCol * vec3(.95, 1., .85) * smoothstep(.1, .9, dot(nxy, -Lw.xy) / max(length(Lw.xy), 1e-3)) * (1. - rim) * smoothstep(.2, .9, slope) * .16 * canopyLight;
+        under += uSunCol * vec3(.95, 1., .85) * smoothstep(.1, .9, dot(nxy, -Lw.xy) / max(length(Lw.xy), 1e-3)) * (1. - rim) * smoothstep(.2, .7, t) * .16 * canopyLight;
         under += vec3(1., .82, .42) * enchant * (1. - rim) * .6;
         float toSun = max(0., dot(nxy, Lw.xy) / max(length(Lw.xy), 1e-3));
         under *= 1. - rim * (.22 + .3 * toSun);
@@ -875,18 +914,18 @@ void main(){
         vec3 sky = mix(uSky0, uSky1, reflected.z * .5 + .5);
         sky = mix(sky, uAmb * vec3(.10, .18, .10), canopy * .8);
         vec3 c = mix(under, sky, fr * .3);
+        // the sun's pinpoint runs along the stroke as a streak: kept a little broad, with no
+        // screen derivatives (fwidth over a thin line breaks into a 2×2 hatch), and dimmer,
+        // as a line carries more light than a point
         vec3 H = normalize(Lw + vec3(0., 0., 1.));
         float nh = max(dot(n, H), 0.);
-        // on a rivulet the sun's pinpoint is a line along the stroke. Kept a little broad, with
-        // no screen derivatives (fwidth over a thin line breaks into a 2×2 hatch), and dimmer,
-        // as a line carries more light than a point
         c += uSunCol * canopyLight * (exp((nh - 1.) / .012) * .9 + pow(nh, 60.) * .14);
         vec3 Lp = normalize(vec3(uLamp.xy - vW, 32.));
         vec2 fall = (uLamp.xy - vW) / (uLamp.z * 2.4);
         float lampK = uLamp.w * exp(-dot(fall, fall) * 1.6);
         float nhp = max(dot(n, normalize(Lp + vec3(0., 0., 1.))), 0.);
         c += LAMP * lampK * (exp((nhp - 1.) / .012) * 1.2 + pow(nhp, 40.) * .12);
-        float edge = smoothstep(thr, thr + fwidth(gh) * 1.5 + .004, gh);
+        float edge = 1. - smoothstep(w - aaG, w + aaG, d);
         col = mix(col, c, edge);
       }
     }

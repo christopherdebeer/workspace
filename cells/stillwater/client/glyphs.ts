@@ -1,19 +1,19 @@
 /**
- * Numerals and signs drawn in water (an experiment: `?glyphs=1`, `?glyphs=sheet`).
+ * Numerals and signs drawn in water (an experiment: `?glyphs=1`, `?glyphs=half`,
+ * `?glyphs=sheet`, `?glyphs=repeat`).
  *
- * A glyph is not a font. Each is a few strokes — the path a wet fingertip would
- * take — and each stroke is a bead of water lying on the leaf: a rivulet whose
- * cross-section is a circular cap, swelling into round terminals where it ends
- * (surface tension pulls the ends into beads), wavering a little in width
- * along its length, and filling the corners where strokes meet with a meniscus
- * (the strokes are merged with a smooth minimum, not overlapped). A few stray
- * droplets lie about it, as if shaken from the finger.
+ * The atlas holds only each glyph's KEY SHAPE — the path a wet fingertip takes,
+ * as a few strokes — and nothing of how it is drawn. Per texel it stores how far
+ * the point is from that path (the strokes merged with a smooth minimum, so
+ * where they meet the distance dips and water will fill the corner) and how far
+ * along its stroke the nearest free end is (so the ends can bead).
  *
- * The result is baked once into a height field (an atlas, 4 × 4 cells) that
- * the pad shader lights with the same model as the dew: the leaf magnified
- * through the water, a dark contact line on the sun side, a thin bright rim on
- * the other, the sky only at the very edge, one sharp pinpoint — which on a
- * rivulet runs along the stroke as a streak — and a small shadow.
+ * Everything else is the hand, and belongs to the leaf (PAD_FS, seeded by the
+ * leaf): a lean, a slight turn and squash, a waver in the line, the water's
+ * width swelling and thinning, blobs where it pooled, beaded ends, stray drops
+ * shaken off nearby. So no two sevens on the river are the same, and the same
+ * leaf keeps its own. The shape moves only a little (legibility); the water on
+ * it is free to be messy.
  *
  * Glyph space: y up, the glyph ~1 tall and ~0.6 wide about the origin.
  */
@@ -21,8 +21,6 @@
 export const GLYPHS = '0123456789+−×÷=?';
 export const GLYPH_CELL = 128; // texels per cell
 export const GLYPH_SPAN = 1.28; // glyph units across a cell
-/** Height is stored as h / GLYPH_HMAX in 0..1. */
-export const GLYPH_HMAX = 0.16;
 
 type P = [number, number];
 interface Stroke {
@@ -92,130 +90,75 @@ const SHAPES: Record<string, Stroke[]> = {
   '?': [curve([-0.22, 0.28], [-0.1, 0.43], [0.08, 0.46], [0.23, 0.34], [0.2, 0.14], [0.02, 0.02], [0.0, -0.18]), dot(0, -0.42, 0.1)],
 };
 
-/** A small deterministic stream per glyph (the stray droplets, the waver). */
-function rng(seed: number) {
-  let s = seed >>> 0 || 1;
-  return () => {
-    s ^= s << 13;
-    s ^= s >>> 17;
-    s ^= s << 5;
-    return (s >>> 0) / 4294967296;
-  };
-}
-
-/** Smooth minimum: where two strokes meet, water fills the corner. */
+/** Smooth minimum: where two strokes meet, the distance dips and water fills the corner. */
 function smin(a: number, b: number, k: number) {
   const h = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
   return b * (1 - h) + a * h - k * h * (1 - h);
 }
 
-/** Half-width of a rivulet (glyph units). */
-const W0 = 0.082;
-
-interface Seg {
-  ax: number; ay: number; bx: number; by: number;
-  /** Half-width at a and at b. */
-  wa: number; wb: number;
-}
-
-/** A stroke as width-carrying segments: beaded terminals, a gentle waver. */
-function segments(st: Stroke, rand: () => number): Seg[] {
-  const pts = st.pts;
-  if (st.dot) return [{ ax: pts[0][0], ay: pts[0][1], bx: pts[0][0], by: pts[0][1], wa: st.dot, wb: st.dot }];
-  const len: number[] = [0];
-  for (let i = 1; i < pts.length; i++) len.push(len[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-  const total = len[len.length - 1] || 1;
-  const phase = rand() * 6.28;
-  // a whole number of wavers round a closed stroke, so it meets itself without a seam
-  const waves = Math.max(1, Math.round((total * (9 + rand() * 5)) / (Math.PI * 2)));
-  const freq = (waves * Math.PI * 2) / total;
-  const width = (s: number) => {
-    const waver = 1 + 0.07 * Math.sin(s * freq + phase) + 0.04 * Math.sin(s * 2 * freq + phase * 1.7);
-    // the ends gather into beads, a little fuller than the stroke
-    const end = st.closed ? 0 : Math.exp(-Math.pow(s / 0.07, 2)) + Math.exp(-Math.pow((total - s) / 0.07, 2));
-    return W0 * waver * (1 + 0.28 * end);
-  };
-  const out: Seg[] = [];
-  for (let i = 1; i < pts.length; i++) {
-    out.push({ ax: pts[i - 1][0], ay: pts[i - 1][1], bx: pts[i][0], by: pts[i][1], wa: width(len[i - 1]), wb: width(len[i]) });
-  }
-  return out;
-}
-
-/** Height of a rivulet segment at a point: a round bead swept along it (0 outside). */
-function segHeight(s: Seg, x: number, y: number): number {
-  const dx = s.bx - s.ax;
-  const dy = s.by - s.ay;
-  const l2 = dx * dx + dy * dy;
-  const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / l2)) : 0;
-  const w = s.wa + (s.wb - s.wa) * t;
-  const d = Math.hypot(x - (s.ax + dx * t), y - (s.ay + dy * t));
-  return d < w ? Math.sqrt(w * w - d * d) : 0;
-}
-
-/** Signed distance to a rivulet's outline (negative inside) and its half-width there. */
-function segDist(s: Seg, x: number, y: number): [number, number] {
-  const dx = s.bx - s.ax;
-  const dy = s.by - s.ay;
-  const l2 = dx * dx + dy * dy;
-  const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / l2)) : 0;
-  const w = s.wa + (s.wb - s.wa) * t;
-  return [Math.hypot(x - (s.ax + dx * t), y - (s.ay + dy * t)) - w, w];
-}
+/** The drawn half-width the shader starts from (glyph units); the hand varies it. */
+export const GLYPH_W0 = 0.082;
+/** Distances are stored up to this far (glyph units); beyond is just "far". */
+const FAR = 0.4;
+/** How far along a stroke an end is still "near" (the bead fades by then). */
+const END = 0.3;
 
 /**
- * The height field for one glyph, GLYPH_CELL² texels, y up (row 0 at the bottom
- * of the cell), normalised by GLYPH_HMAX.
+ * The key shape of one glyph, GLYPH_CELL² texels, y up (row 0 at the bottom):
+ * per texel [distance to the path, distance along the stroke to its nearest free end].
  */
 export function glyphField(ch: string): Float32Array {
-  const shapes = SHAPES[ch];
-  const rand = rng(0x9e3779b9 ^ (ch.charCodeAt(0) * 2654435761));
-  // each stroke's own outline, merged stroke with stroke
-  const strokes = shapes.map((st) => segments(st, rand));
-  // stray droplets shaken off the finger: a few, small, close to the strokes
-  const strays: Array<[number, number, number]> = [];
-  const all = strokes.flat();
-  for (let tries = 0; strays.length < 3 + Math.floor(rand() * 3) && tries < 200; tries++) {
-    const s = all[Math.floor(rand() * all.length)];
-    const u = rand();
-    const a = rand() * Math.PI * 2;
-    const off = W0 * (2.2 + rand() * 1.6);
-    const x = s.ax + (s.bx - s.ax) * u + Math.cos(a) * off;
-    const y = s.ay + (s.by - s.ay) * u + Math.sin(a) * off;
-    const r = 0.016 + rand() * 0.03;
-    // not touching any stroke, nor another stray
-    let clear = Math.abs(x) < 0.55 && Math.abs(y) < 0.58;
-    for (const t of all) if (clear && segDist(t, x, y)[0] < r + 0.025) clear = false;
-    for (const [sx, sy, sr] of strays) if (clear && Math.hypot(sx - x, sy - y) < sr + r + 0.03) clear = false;
-    if (clear) strays.push([x, y, r]);
-  }
-
+  const strokes = SHAPES[ch].map((st) => {
+    const pts = st.pts;
+    const len: number[] = [0];
+    for (let i = 1; i < pts.length; i++) len.push(len[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const total = len[len.length - 1];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of pts) {
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+    }
+    return { pts, len, total, closed: !!st.closed, box: [x0 - FAR, y0 - FAR, x1 + FAR, y1 + FAR] };
+  });
   const N = GLYPH_CELL;
-  const out = new Float32Array(N * N);
+  const out = new Float32Array(N * N * 2);
   for (let j = 0; j < N; j++) {
     const y = ((j + 0.5) / N - 0.5) * GLYPH_SPAN;
     for (let i = 0; i < N; i++) {
       const x = ((i + 0.5) / N - 0.5) * GLYPH_SPAN;
-      // the strokes themselves: the highest bead over this point (continuous everywhere)
-      let h = 0;
-      for (const segs of strokes) for (const sg of segs) h = Math.max(h, segHeight(sg, x, y));
-      // where strokes meet, water fills the corner: a meniscus from the smoothly merged
-      // outlines, lower than the strokes, only where they come together
-      if (strokes.length > 1) {
-        let f = Infinity;
-        for (const segs of strokes) {
-          let fs = Infinity;
-          for (const sg of segs) fs = Math.min(fs, segDist(sg, x, y)[0]);
-          f = f === Infinity ? fs : smin(f, fs, 0.05);
+      let d = FAR;
+      let e = END;
+      let nearest = Infinity;
+      let first = true;
+      for (const st of strokes) {
+        const [bx0, by0, bx1, by1] = st.box;
+        if (x < bx0 || x > bx1 || y < by0 || y > by1) continue;
+        // distance to this stroke's path, and where along it the nearest point lies
+        let ds = Infinity;
+        let at = 0;
+        const { pts, len } = st;
+        if (pts.length === 1) ds = Math.hypot(x - pts[0][0], y - pts[0][1]);
+        for (let k = 1; k < pts.length; k++) {
+          const [ax, ay] = pts[k - 1];
+          const dx = pts[k][0] - ax;
+          const dy = pts[k][1] - ay;
+          const l2 = dx * dx + dy * dy;
+          const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0;
+          const dd = Math.hypot(x - (ax + dx * t), y - (ay + dy * t));
+          if (dd < ds) {
+            ds = dd;
+            at = len[k - 1] + (len[k] - len[k - 1]) * t;
+          }
         }
-        const into = Math.max(0, -f);
-        if (into > 0) h = Math.max(h, Math.sqrt(Math.max(0, into * (2 * W0 - into))) * 0.85);
+        if (ds < nearest) {
+          nearest = ds;
+          e = st.closed ? END : Math.min(END, at, st.total - at);
+        }
+        d = first ? Math.min(FAR, ds) : smin(d, Math.min(FAR, ds), 0.035);
+        first = false;
       }
-      for (const [sx, sy, sr] of strays) {
-        const d = Math.hypot(x - sx, y - sy);
-        if (d < sr) h = Math.max(h, Math.sqrt(sr * sr - d * d) * 0.9);
-      }
-      out[j * N + i] = Math.min(1, h / GLYPH_HMAX);
+      const o = (j * N + i) * 2;
+      out[o] = d;
+      out[o + 1] = e;
     }
   }
   return out;
@@ -223,27 +166,22 @@ export function glyphField(ch: string): Float32Array {
 
 /**
  * The whole atlas, 4 × 4 cells, row 0 at v = 0, as RGBA floats (uploaded as half
- * floats, which filter linearly everywhere): R the height (normalised by
- * GLYPH_HMAX), G and B its slope across and up the glyph (height per glyph unit,
- * in true units), from the float field — so the light runs smoothly along a
- * stroke rather than stepping with an 8-bit height.
+ * floats, which filter linearly everywhere): R the distance to the path, G the
+ * distance along the stroke to its nearest free end, both in glyph units.
  */
 export function glyphAtlas(): { data: Float32Array; size: number } {
   const N = GLYPH_CELL;
   const size = N * 4;
   const data = new Float32Array(size * size * 4);
-  const step = GLYPH_SPAN / N;
   [...GLYPHS].forEach((ch, g) => {
     const field = glyphField(ch);
-    const at = (i: number, j: number) => field[Math.max(0, Math.min(N - 1, j)) * N + Math.max(0, Math.min(N - 1, i))];
     const cx = (g % 4) * N;
     const cy = Math.floor(g / 4) * N;
     for (let j = 0; j < N; j++) {
       for (let i = 0; i < N; i++) {
         const o = ((cy + j) * size + cx + i) * 4;
-        data[o] = at(i, j);
-        data[o + 1] = ((at(i + 1, j) - at(i - 1, j)) * GLYPH_HMAX) / (2 * step);
-        data[o + 2] = ((at(i, j + 1) - at(i, j - 1)) * GLYPH_HMAX) / (2 * step);
+        data[o] = field[(j * N + i) * 2];
+        data[o + 1] = field[(j * N + i) * 2 + 1];
         data[o + 3] = 1;
       }
     }
