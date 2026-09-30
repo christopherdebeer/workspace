@@ -424,6 +424,7 @@ function visibleDry(): Pad[] {
 
 function condense(p: Pad, count: number) {
   p.drops = layDrops(count, p.r, rand);
+  appearDew(p);
   sound.glint();
 }
 
@@ -477,6 +478,7 @@ function ensureRelationshipPads() {
       p.drops = [];
       return;
     }
+    appearDew(p);
     stock.push(p);
   };
   // once proved with dew, the question's leaves show their numerals (concrete, then abstract)
@@ -501,6 +503,7 @@ function ensureRelationshipPads() {
         if (numeralLeaves.includes(p) || p.drops.length) continue;
         p.drops = layDrops(n, p.r, rand, true);
         if (liveCount(p) === n) {
+          appearDew(p);
           numeralLeaves.push(p);
           seen.add(n);
           break;
@@ -2225,12 +2228,19 @@ function frame(now: number) {
     big.forEach((f, k) => { f.x = pond.boat.x + (k - 1) * 40; f.y = pond.boat.y - 90; f.mood = 2; f.until = 30; f.cool = 0; });
   }
   if (params.get('sinktest')) {
-    const v = visibleDewy().sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))[0];
+    // the same leaf throughout (once chosen), so what happens to its dew can be watched
+    if (!sinkLeaf || !pond.pads.includes(sinkLeaf)) sinkLeaf = visibleDewy().sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))[0] ?? null;
+    const v = sinkLeaf;
     if (v) {
       v.caught = true;
-      v.sink = 0.75;
+      v.sink = params.get('wash') ? 0.42 : 0.75;
       v.dx = 0.15;
       v.dy = 0.02;
+      // with `&wash=S` too: after S seconds (once its dew has settled), its dew runs off (to look at the emptying)
+      if (params.get('wash') && pond.t > (Number(params.get('wash')) || 2) && !sinkWashed && v.glyph === undefined) {
+        sinkWashed = true;
+        for (const d of v.drops) d.to = 0;
+      }
       // with `&foamtap=1` too: churn white water over its flooded side, to see it ride the film
       if (params.get('foamtap') && Math.random() < dt * 12) pond.impulses.push({ x: v.x + v.r * 0.55, y: v.y + v.r * 0.1, r: 12, s: 0.5, foam: true });
     }
@@ -2311,6 +2321,10 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 
+/** `?sinktest=1`: the leaf held under, and whether `&wash=1` has run its dew off yet. */
+let sinkLeaf: Pad | null = null;
+let sinkWashed = false;
+
 // ─── numerals drawn in water on the leaves (glyphs.ts) ─────────────────────
 // In play: a numeral question's leaves, and the leaves of any question whose skill the child
 // has proved with dew (challenges.ts NUMERALS_AFTER). Debug views below.
@@ -2325,7 +2339,9 @@ function frame(now: number) {
 const glyphMode = params.get('glyphs');
 const glyphCycle = !!params.get('cycle');
 /** How long water takes to flow from one state to the next (s). */
-const MORPH = 0.9;
+const MORPH = 1.8;
+/** …and from a bare leaf: beading, then running together. */
+const CONDENSE = 2.6;
 let glyphsReady = false;
 let sheet: Map<Pad, number> | null = null;
 
@@ -2334,6 +2350,21 @@ let sheet: Map<Pad, number> | null = null;
  * change starts a flow from what is there now (if a flow is barely begun, from where it
  * began), and a flow that ends back in the drops hands the leaf back to its dew.
  */
+/**
+ * New dew on a leaf in view condenses rather than appearing: the bare leaf beads with fine
+ * droplets that grow and then run together into the drops (or, for a numeral leaf, the
+ * numeral) — the water's field flowing from `condensing` (-3). Before the atlas is baked the
+ * drops simply grow in, as before.
+ */
+function appearDew(p: Pad) {
+  if (!glyphsReady || glyphMode) return;
+  p.glyph = -1;
+  p.glyphFrom = -3;
+  p.glyphT = 0;
+  p.glyphA = 1;
+  p.glyphSize = 1.05;
+}
+
 function flowToward(p: Pad, to: number, dt: number) {
   if (p.glyph === undefined) {
     if (to === -1) return;
@@ -2345,7 +2376,7 @@ function flowToward(p: Pad, to: number, dt: number) {
     p.glyph = to;
     p.glyphT = 0;
   }
-  p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / MORPH);
+  p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / (p.glyphFrom === -3 ? CONDENSE : MORPH));
   p.glyphA = 1;
   p.glyphSize = 1.05;
   if (p.glyphT >= 1 && p.glyph < 0) p.glyph = undefined;
@@ -2461,7 +2492,7 @@ Object.defineProperty(window, '__stillwater', {
     selected: selection.map((p) => p.id),
     dewy: pond.pads.filter((p) => liveCount(p) > 0).map((p) => {
       const [x, y] = toScreen(p.x, p.y);
-      return { id: p.id, x: Math.round(x), y: Math.round(y), r: Math.round(p.r * cam.zoom), n: liveCount(p) };
+      return { id: p.id, x: Math.round(x), y: Math.round(y), r: Math.round(p.r * cam.zoom), n: liveCount(p), glyph: p.glyph, from: p.glyphFrom, t: p.glyphT === undefined ? undefined : Math.round(p.glyphT * 100) / 100, sink: Math.round(p.sink * 100) / 100 };
     }),
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },

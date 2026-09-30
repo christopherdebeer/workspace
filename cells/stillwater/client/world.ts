@@ -1974,6 +1974,8 @@ export class Pond {
       p.load = Math.min(1.35, p.load + 0.55 * p.compliance * dt);
       p.cx += (held.ox / p.r) * 1.8;
       p.cy += (held.oy / p.r) * 1.8;
+      // pressed right under, a leaf's dew runs off into the river (as under the hull)
+      if (p.sink > 0.85 && !p.selected) for (const dr of p.drops) dr.to = 0;
     }
 
     for (const p of pads) {
@@ -2244,7 +2246,9 @@ export class Pond {
       }
       p.caught = false;
       p.sel += ((p.selected ? 1 : 0) - p.sel) * (1 - Math.exp(-6 * dt));
-      for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : 5) * dt));
+      // leaving dew goes quickly, except off a leaf going under: there it runs off (PAD_FS), slower
+      const out = p.sink > 0.15 ? 1.1 : 5;
+      for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : out) * dt));
       p.drops = p.drops.filter((d) => d.to > 0 || d.a > 0.01);
     }
   }

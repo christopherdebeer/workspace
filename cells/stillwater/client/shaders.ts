@@ -529,13 +529,29 @@ vec2 so; // seed offset into the noise tile
 // ── water glyphs (glyphs.ts): each state is a distance field — a glyph's key shape from the
 // atlas, the leaf's own drops as beads, or nothing — and a change of state is one field
 // flowing into the next. The hand (lean, turn, squash) is the leaf's, and stays through it.
-float gTo, gFrom, gT, gS, gTurn, gLean;
+float gTo, gFrom, gT, gS, gTurn, gLean, gSeed;
 vec2 gSquash;
 int gRow, gCount;
 vec2 gHand(vec2 v){ v = rot(v, gTurn); v.x -= gLean * v.y; return v / gSquash; }
 float gSmin(float a, float b, float k){ float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
 /** One state's field at gp: [distance to its path, distance along it to a free end]. */
 vec2 gState(float gi, vec2 gp){
+  if (gi < -2.5) {
+    // condensing: the bare leaf beading with fine droplets, which grow while this state is
+    // flowed from (gField holds it, then lets the beads run together into what follows)
+    float grow = smoothstep(0., .45, gT);
+    float d = .4;
+    for (int k = 0; k < 22; k++) {
+      float fk = float(k);
+      vec2 c = (vec2(hash12(vec2(gSeed, fk * 3.7 + 1.)), hash12(vec2(gSeed, fk * 5.3 + 7.))) - .5) * 1.6;
+      if (length(c) > .8) continue;
+      // the beads draw toward where the water will gather as they grow
+      float rk = (.008 + .026 * hash12(vec2(gSeed, fk + 19.))) * grow;
+      if (rk < .002) continue;
+      d = min(d, length(gp - c) - (rk - .082));
+    }
+    return vec2(d, 0.);
+  }
   if (gi < -1.5) return vec2(.4, .3); // nothing: no water here
   if (gi < -.5) {
     // the leaf's own drops, as beads to flow out of or gather into (they follow the glyph
@@ -560,7 +576,10 @@ vec2 gField(vec2 gp){
   vec2 b = gState(gTo, gp);
   if (gT >= 1.) return b;
   vec2 a = gState(gFrom, gp);
-  float t = smoothstep(0., 1., gT);
+  // eased gently in and out (smootherstep); from condensing, the beads first grow where they
+  // are, and only then run together into the dew or the numeral
+  float u = gFrom < -2.5 ? clamp((gT - .3) / .7, 0., 1.) : gT;
+  float t = u * u * u * (u * (u * 6. - 15.) + 10.);
   vec2 v = mix(a, b, t);
   // mid-flow the water runs heavier and its necks break into beads
   float mid = sin(3.14159 * t);
@@ -780,6 +799,7 @@ void main(){
   vec4 dd = vec4(0.);
   vec2 dropAxes = vec2(1.);
   float dropShape = 0.;
+  float dropWash = 0.; // the drop under this pixel is running off a leaf going under
   vec4 glyph = vec4(0.);  // water drawn as a glyph: size (pad radii), state to, -1, how gathered
   vec4 glyphM = vec4(0.); // …changing from: state from, how far through (0..1), -2, 1
   for (int i = 0; i < 10; i++) {
@@ -788,15 +808,27 @@ void main(){
     if (dr.w < .01) continue;
     if (dr.z < -1.5) { glyphM = dr; continue; }
     if (dr.z < 0.) { glyph = dr; continue; }
-    // while its water is drawn as a glyph, the leaf's drops are part of that field instead
-    if (glyph.w > .01 && uGlyphOn > .5) continue;
+    // while its water is drawn as a glyph, the leaf's drops are part of that field instead —
+    // except in the last of a flow into the drops, where the dew fades in under the water
+    if (glyph.w > .01 && uGlyphOn > .5 && !(glyph.y > -1.5 && glyph.y < -.5 && glyphM.w > .5 && glyphM.y > .8)) continue;
     // Contact line stays pinned; the cap lags and compresses as the leaf flexes.
     float form = fract(dr.x * 17. + dr.y * 31. + seed);
     float wobble = sin(uTime * (8. + form * 3.) + form * TAU) * min(.10, vDent.z * .10);
     vec2 axes = vec2(.95 + form * .10 + wobble, 1.03 - form * .06 - wobble);
     dr.xy -= vDent.xy * .006;
-    float rr = dr.z * (.35 + .65 * dr.w);
-    vec2 q = (p - dr.xy) / (rr * axes);
+    // emptying, not fading: on a leaf going under, a drop that is leaving runs downhill toward
+    // the flooded side, drawn out along its run and keeping its water, until the river's film
+    // (drawn over the flooded part below) takes it
+    float washing = smoothstep(.04, .3, vSink);
+    float wash = smoothstep(0., .7, 1. - dr.w) * washing;
+    vec2 runDir = length(vDent.xy) > 1e-3 ? normalize(vDent.xy) : vec2(0., -1.);
+    // gathering speed as it goes, as a drop does once it starts to run
+    dr.xy += runDir * wash * wash * 1.1;
+    float rr = dr.z * mix(.35 + .65 * dr.w, .85, smoothstep(0., .2, wash));
+    vec2 dp = p - dr.xy;
+    float along = dot(dp, runDir);
+    dp = runDir * along / (1. + wash * .9) + (dp - runDir * along) / (1. - wash * .2);
+    vec2 q = dp / (rr * axes);
     // a real drop's outline is not a circle: it bulges and pinches where drops have merged
     float qa = atan(q.y, q.x);
     float bulge = 1. + .11 * sin(3. * qa + form * 9.) + .06 * sin(5. * qa + form * 4.) + .04 * sin(2. * qa - form * 13.);
@@ -804,7 +836,7 @@ void main(){
     float sdist = length(q + Ll.xy * .62);
     shadow = max(shadow, (1. - smoothstep(.7, 1.2, sdist)) * dr.w);
     float dl = length(q);
-    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); dropAxes = axes; dropShape = form; }
+    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); dropAxes = axes; dropShape = form; dropWash = washing * step(.02, 1. - dr.w); }
     glowK = max(glowK, exp(-max(dl - 1., 0.) * 2.2) * dr.w);
   }
   // from above, with the sun high, a drop throws hardly any shadow
@@ -866,7 +898,8 @@ void main(){
     vec2 fl2 = q + Lp.xy * .45;
     c += LAMP * lampK * exp(-dot(fl2, fl2) * 9.) * .35;
     float edge = 1. - smoothstep(1. - aa / dd.z * 1.5, 1., dl);
-    col = mix(col, c, edge * smoothstep(0., .2, dd.w));
+    // a leaving drop fades; one running off a sinking leaf keeps its water until the river's film takes it
+    col = mix(col, c, edge * max(smoothstep(0., .2, dd.w), dropWash * smoothstep(0., .04, dd.w)));
   }
 
 
@@ -887,6 +920,7 @@ void main(){
     gCount = count;
     // the hand is the leaf's (not the glyph's), so it stays the same through a change
     float gs = fract(seed * 7.13 + .37);
+    gSeed = gs;
     vec2 wo = vec2(gs * 37.1, fract(gs * 5.3) * 91.7);
     // how it leans and turns and squashes
     gLean = (hash12(vec2(gs, 1.7)) - .6) * .34;
@@ -897,7 +931,7 @@ void main(){
     vec2 gp = gHand(rot(p + vDent.xy * .006, vAng) / S);
     // …and how the line wavers as it is drawn: slow bends, a tremor
     gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .11 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .045;
-    bool beads = gTo > -1.5 && gTo < -.5 || gT < 1. && gFrom > -1.5 && gFrom < -.5;
+    bool beads = gTo > -1.5 && gTo < -.5 || gT < 1. && (gFrom > -1.5 && gFrom < -.5 || gFrom < -2.5);
     float bound = beads ? 1.05 : .62;
     if (abs(gp.x) < bound && abs(gp.y) < bound) {
       vec2 de = gField(gp); // distance to the path, distance along it to a free end
@@ -907,6 +941,12 @@ void main(){
       float pool = smoothstep(.52, .84, texture(uNoise, gp * 1.25 + wo * 2.1).g);
       float w = .082 * (.62 + .8 * nW) * (1. + .8 * pool) * (1. + .5 * exp(-pow(de.y / .07, 2.)));
       w = min(w, .18);
+      // where the water is (or is becoming) the leaf's own drops, it is drops: plain round beads of
+      // their own size, so the hand-off to the dew drawn as dew is seamless
+      float uD = gFrom < -2.5 ? clamp((gT - .3) / .7, 0., 1.) : gT;
+      float tD = gT >= 1. ? 1. : uD * uD * uD * (uD * (uD * 6. - 15.) + 10.);
+      float dropK = (gTo > -1.5 && gTo < -.5 ? tD : 0.) + (gT < 1. && gFrom > -1.5 && gFrom < -.5 ? 1. - tD : 0.);
+      w = mix(w, .082, clamp(dropK, 0., 1.));
       // gathering: a thin thread first, then the full water
       w *= mix(.35, 1., ga);
       float d = de.x;
@@ -983,7 +1023,9 @@ void main(){
         float nhp = max(dot(n, normalize(Lp + vec3(0., 0., 1.))), 0.);
         c += LAMP * lampK * (exp((nhp - 1.) / .012) * 1.2 + pow(nhp, 40.) * .12);
         float edge = 1. - smoothstep(w - aaG, w + aaG, d);
-        col = mix(col, c, edge);
+        // flowing into the leaf's drops, the last of the flow hands over to the dew drawn as dew
+        float handoff = gTo > -1.5 && gTo < -.5 ? smoothstep(.8, 1., gT) : 0.;
+        col = mix(col, c, edge * (1. - handoff));
       }
     }
   }
