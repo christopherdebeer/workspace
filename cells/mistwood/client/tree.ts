@@ -237,7 +237,7 @@ export function growPatch(seed: number, width: number): Structure {
     }
   }
   // bramble: long arching stems with thorns
-  const brambles = Math.floor(r() * 3);
+  const brambles = r() < 0.45 ? 1 : 0;
   for (let b = 0; b < brambles; b++) {
     let x = (r() - 0.5) * width;
     let y = 0;
@@ -253,7 +253,8 @@ export function growPatch(seed: number, width: number): Structure {
       }
       x = nx;
       y = ny;
-      a += turn;
+      // arching, but never a clean circle: the stem wanders and droops more as it lengthens
+      a += turn * (0.4 + r() * 1.2) + (r() - 0.5) * 0.25;
     }
   }
   // dead bracken: a stem, then alternating fronds

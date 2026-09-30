@@ -151,6 +151,10 @@ setTimeout(() => !walkedOnce && hint.classList.add('show'), 3000);
 
 // ─── each frame ───────────────────────────────────────────────────────────────────
 let t = Number(params.get('time')) || 0;
+const shade = new Float32Array(40 * 4);
+const shadeOff = new Float32Array(40 * 2);
+let shadeN = 0;
+const sunAz = 0.25;
 let last = performance.now();
 const nextPow2 = (x: number) => Math.pow(2, Math.ceil(Math.log2(Math.max(1, x))));
 
@@ -212,8 +216,10 @@ function frame(now: number) {
     if (Math.abs(cx) - wM > (cz * W) / (2 * view.f) + 1) continue;
     // the pixels it needs: its size on screen, less as the fog takes it (detail it hides is not needed)
     const fogged = 1 - Math.exp(-cz * density * 1.4);
-    const px = ((Math.max(wM, hM) * view.f) / cz) * (1 - 0.75 * fogged) * bias;
-    const level = Math.max(64, Math.min(2048, nextPow2(px)));
+    const need = ((Math.max(wM, hM) * view.f) / cz) * (1 - 0.75 * fogged);
+    // under memory pressure the small, fogged cards give way first; the near trees keep their detail
+    const px = need * (need > 900 ? Math.max(bias, 0.8) : bias);
+    const level = Math.max(64, Math.min(p.kind === 'patch' ? 1024 : 2048, nextPow2(px)));
     const card = bestCard(p.kind, p.pool, level);
     if (!card || card.level < level) want.push({ kind: p.kind, pool: p.pool, level, px });
     if (!card) continue;
@@ -262,8 +268,19 @@ function frame(now: number) {
   if (texels > BUDGET * 1.05) bias = Math.max(0.3, bias * 0.7);
   else if (texels < BUDGET * 0.6) bias = Math.min(1, bias + dt * 0.02);
   draws.sort((a, b) => b.d - a.d);
+  // the nearest trees shade the ground (contact at the foot, a soft pool under the crown,
+  // set away from the brighter place where the sun is behind the fog)
+  shadeN = 0;
+  for (let k = draws.length - 1; k >= 0 && shadeN < 40; k--) {
+    const d = draws[k];
+    if (d.patch || d.d > 28) continue;
+    const crown = Math.abs(d.rect[2]) * 0.45;
+    shade.set([d.x, d.z, 0.35 + crown * 0.08, crown], shadeN * 4);
+    shadeOff.set([-Math.sin(sunAz) * d.rect[3] * 0.25, -Math.cos(sunAz) * d.rect[3] * 0.25], shadeN * 2);
+    shadeN++;
+  }
   const wind = 0.55 + 0.45 * Math.sin(t * 0.11) * Math.sin(t * 0.067 + 1);
-  renderer.draw(view, { seed, t, density, wind, path: wood.path, sun: [0.25, 0.35] }, draws);
+  renderer.draw(view, { shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, sun: [sunAz, 0.35] }, draws);
   sound.update(dt, t, speed, 0, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),

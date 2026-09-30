@@ -48,6 +48,10 @@ uniform vec4 uCam; // x, z, eye, yaw
 uniform vec3 uPathA, uPathB;
 uniform vec3 uGround, uStrawDark, uStraw;
 uniform vec2 uSun; // azimuth, elevation of the brighter place
+// trees near enough to shade the ground: x, z, contact radius, crown radius (crown centre offset away from the light)
+uniform vec4 uShade[40];
+uniform vec2 uShadeOff[40];
+uniform int uShadeN;
 ${NOISE}
 float pathX(float z) { return uPathA.x * sin(z * uPathA.y + uPathA.z) + uPathB.x * sin(z * uPathB.y + uPathB.z); }
 void main() {
@@ -76,6 +80,17 @@ void main() {
     g *= .8 + .35 * grain;
     float path = 1. - smoothstep(.35, .9, abs(p.x - pathX(p.z)) + (vnoise(p.xz * 1.3) - .5) * .5);
     g = mix(g, uStrawDark * .8, path * .45);
+    // shade: dark at each trunk's foot, a soft pool under each crown (the light is diffuse in fog)
+    float ao = 0.;
+    for (int i = 0; i < 40; i++) {
+      if (i >= uShadeN) break;
+      vec4 sh = uShade[i];
+      vec2 d0 = p.xz - sh.xy;
+      vec2 d1 = d0 - uShadeOff[i];
+      ao += .38 * exp(-dot(d0, d0) / (sh.z * sh.z)) + .13 * exp(-dot(d1, d1) / (sh.w * sh.w));
+    }
+    // broken up, as light through a crown and over tussocks is
+    g *= 1. - min(ao, .6) * (.55 + .7 * vnoise(p.xz * 1.9));
     float fogD = 1. - exp(-t * uDensity * (1. + 1.2 * smoothstep(2., 14., t)));
     float m = mist(vec3(p.x, .3, p.z));
     col = mix(g, fogAt(0.), 1. - (1. - fogD) * (1. - m));
@@ -94,7 +109,11 @@ out vec3 vWorld;
 out float vDist;
 void main() {
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-  vec3 w = vec3(uAnchor.x + uRect.x + c.x * uRect.z, uRect.y + c.y * uRect.w, uAnchor.y);
+  // the card turns about its trunk to face the eye, so the trunk stays planted where it stands
+  vec2 toEye = vec2(uCam.x, uCam.y) - uAnchor;
+  vec2 right = normalize(vec2(-toEye.y, toEye.x) + vec2(1e-5, 0.));
+  float along = uRect.x + c.x * uRect.z;
+  vec3 w = vec3(uAnchor.x + right.x * along, uRect.y + c.y * uRect.w, uAnchor.y + right.y * along);
   vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
   float cs = cos(uCam.w), sn = sin(uCam.w);
   float cx = rel.x * cs - rel.z * sn;
@@ -119,13 +138,16 @@ uniform vec4 uRect;
 uniform vec3 uBark, uBirch, uLeaf, uStraw, uStrawDark;
 ${NOISE}
 void main() {
-  // wind: the thin, high wood moves; the trunk and the ground do not
-  float hg = clamp(vWorld.y / (uKind > .5 ? 1. : 14.), 0., 1.);
-  float gust = sin(uT * .31 + uPhase) * .5 + .5;
-  float sway = (sin(uT * .9 + uPhase + vWorld.x * .08) * .7 + sin(uT * 2.1 + uPhase * 2.3) * .3) * uWind * (.5 + gust);
-  float flutter = (vnoise(vec2(vWorld.x * 2.5 + uT * 1.3, vWorld.y * 2.5)) - .5) * .05 * uWind;
-  float dx = (sway * (uKind > .5 ? .05 : .09) * hg * hg * uRect.w + flutter * hg) / abs(uRect.z);
-  vec4 t = texture(uTex, vec2(vUV.x + dx * uFlip, vUV.y));
+  // wind moves only what is flexible (the bake's flex: twigs 1, trunk 0). Flex is read from a
+  // blurred level of the card, so a twig's neighbourhood knows it may move there
+  vec4 near = textureLod(uTex, vUV, 3.5);
+  float flex = clamp(near.b / max(near.a, .002), 0., 1.);
+  float gust = .5 + .5 * sin(uT * .23 + uPhase);
+  float sway = sin(uT * 1.1 + uPhase + vWorld.x * .3) * .6 + sin(uT * 2.7 + uPhase * 1.7 + vWorld.y * .8) * .4;
+  float flutter = vnoise(vec2(vWorld.x * 4. + uT * 1.7, vWorld.y * 4. - uT * .9)) - .5;
+  // metres: a twig sways a few centimetres, trembles a little more
+  float m = (sway * .035 * (.4 + .6 * gust) + flutter * .02) * uWind * flex * flex;
+  vec4 t = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y));
   if (t.a < .003) discard;
   float cov = min(t.a, 1.);
   float tone = clamp(t.g / max(t.a, .002), 0., 1.);
@@ -180,6 +202,10 @@ export interface View {
 }
 
 export interface Look {
+  /** trees shading the ground: x, z, contact r, crown r, then crown offset x, z (per tree) */
+  shade: Float32Array;
+  shadeOff: Float32Array;
+  shadeN: number;
   seed: number;
   t: number;
   density: number;
@@ -305,6 +331,9 @@ export class Renderer {
     gl.uniform3fv(this.loc(this.world, 'uStrawDark'), PAL.strawDark);
     gl.uniform3fv(this.loc(this.world, 'uStraw'), PAL.straw);
     gl.uniform2f(this.loc(this.world, 'uSun'), look.sun[0], look.sun[1]);
+    gl.uniform4fv(this.loc(this.world, 'uShade'), look.shade);
+    gl.uniform2fv(this.loc(this.world, 'uShadeOff'), look.shadeOff);
+    gl.uniform1i(this.loc(this.world, 'uShadeN'), look.shadeN);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // 2. the cards, back to front
     gl.enable(gl.BLEND);

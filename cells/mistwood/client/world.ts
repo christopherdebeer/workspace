@@ -28,7 +28,7 @@ export interface Placed {
   phase: number;
 }
 
-const POOL: Record<Kind, number> = { leaner: 6, tall: 10, birch: 5, sapling: 6, shrub: 8, patch: 8 };
+const POOL: Record<Kind, number> = { leaner: 6, tall: 10, birch: 5, sapling: 6, shrub: 8, patch: 12 };
 
 export class Wood {
   readonly seed: number;
@@ -98,7 +98,7 @@ export class Wood {
     place('sapling', 1.6, 1.8, 22, 1.2);
     place('shrub', 3, 1.2, 18, 1.3);
     // ground cover: dry grass, bramble, bracken — on the path too
-    place('patch', 40, 0, 11, 1.25);
+    place('patch', 110, 0, 9, 1.3);
     this.cache.set(i, out);
     if (this.cache.size > 48) this.cache.delete(this.cache.keys().next().value!);
     return out;

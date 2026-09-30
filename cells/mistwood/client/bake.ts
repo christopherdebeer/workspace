@@ -9,7 +9,8 @@
  * sharpens into twigs as you come close. Overlapping twigs add up.
  *
  * Texture: R leaf (dry beech leaves), G tone (0 dark bark … 1 birch white /
- * straw lightness), A coverage. Row 0 is the base (y up), so v = height.
+ * straw lightness), B flex (how freely the wind moves it: twigs 1, trunk 0),
+ * A coverage. Row 0 is the base (y up), so v = height.
  */
 import { SEG, type Structure } from './tree';
 
@@ -24,8 +25,11 @@ flat out vec2 vA;
 flat out vec2 vB;
 flat out vec2 vW;
 flat out vec2 vTL;
+flat out float vFlex;
 void main() {
   int c = gl_VertexID;
+  // how far the wind can move it: twigs freely, limbs a little, the trunk not at all
+  vFlex = 1. - smoothstep(.004, .045, aInfo.x);
   vec2 a = (aSeg.xy - uOrigin) * uScale;
   vec2 b = (aSeg.zw - uOrigin) * uScale;
   vec2 d = b - a;
@@ -49,6 +53,7 @@ flat in vec2 vA;
 flat in vec2 vB;
 flat in vec2 vW;
 flat in vec2 vTL;
+flat in float vFlex;
 out vec4 o;
 void main() {
   vec2 pa = vP - vA, ba = vB - vA;
@@ -66,7 +71,7 @@ void main() {
     cov = w * clamp(1. - d, 0., 1.);
   }
   if (cov <= 0.) discard;
-  o = vec4(vTL.y * cov, vTL.x * cov, 0., cov);
+  o = vec4(vTL.y * cov, vTL.x * cov, vFlex * cov, cov);
 }`;
 
 export interface Card {
