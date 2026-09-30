@@ -221,3 +221,14 @@ as one declared round → tune by climbing.**
   information say *that* they do, not what ("+1 card", "learn player-2
   objective"); discovery and evidence-gathering had been invisible to the
   one-ply player. Heads v2 and v4 are re-scored under I2 before any round.
+- **Under I2**: v2 0.790 → v0.4 0.863 (train; test 0.772 → 0.865, critique
+  0.43 → 0.55) — the ladder v1 < v2 < v0.4 holds across both instruments.
+  The deduction round was reverted again (−0.035; the Enemy won 12/24 at the
+  limit). h7 did not cure aimless movement (move still ≈ 55 % of actions).
+  Conclusion: AAOTE's remaining flaw (denouncing is a lottery unless it needs
+  evidence, and with evidence the Enemy's default win dominates because
+  honest players don't finish in time) sits in the player, not the rules
+  the climb can reach: a one-ply chooser neither pursues an objective over
+  several turns nor gathers evidence. Next lever: a planning player (choose
+  a turn intent — explore, gather evidence on X, fetch an item — then act on
+  it), as instrument I3, before further design rounds.
