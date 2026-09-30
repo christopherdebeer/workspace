@@ -240,3 +240,44 @@ describe('stillwater challenges: the syllabus is data', () => {
     expect(cur.describe()).toBe('Facts within 10 · Grade 1');
   });
 });
+
+describe('stillwater challenges: dew first, then numerals', () => {
+  test("a skill's leaves stay dew until it is answered cleanly with dew, then show numerals", () => {
+    const cur = new Curriculum();
+    cur.setSyllabus('england');
+    cur.setLevel(1);
+    const rand = seeded(50);
+    const seen: Record<string, Array<'dew' | 'numerals'>> = {};
+    for (let i = 0; i < 60; i++) {
+      const c = cur.next(rand);
+      (seen[c.skill] ??= []).push(c.leaves);
+      cur.record(c, true, '2026-09-30');
+      if (cur.data.level !== 1) break;
+    }
+    const bond = seen.bond;
+    expect(bond.slice(0, 4)).toEqual(['dew', 'dew', 'dew', 'dew']);
+    expect(bond.slice(4).every((l) => l === 'numerals')).toBe(true);
+  });
+
+  test('help or a slip does not count as proof with dew', () => {
+    const cur = new Curriculum();
+    cur.setLevel(1);
+    const rand = seeded(51);
+    for (let i = 0; i < 20; i++) cur.record(cur.next(rand), false, '2026-09-30');
+    expect(cur.next(rand).leaves).toBe('dew');
+  });
+
+  test('as numerals, equal groups can be sevens, eights and nines (never more than six leaves)', () => {
+    const r = seeded(52);
+    const sizes = new Set<number>();
+    for (let i = 0; i < 400; i++) {
+      const c = makeChallenge(6, 'groups', r, 2, 1, undefined, 'england', true);
+      const { size, count } = groupsNeed(c);
+      expect(size).toBeLessThanOrEqual(9);
+      expect(count).toBeLessThanOrEqual(6);
+      expect(accepts(c, [count, size])).toBe(true);
+      sizes.add(size);
+    }
+    expect([7, 8, 9].every((n) => sizes.has(n))).toBe(true);
+  });
+});

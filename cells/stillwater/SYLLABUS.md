@@ -87,14 +87,19 @@ already writes `7 = □ − 9`).
    symbol-free questions: gather a number of drops, which numeral says how many,
    what comes before or after. Written `+ − =` begins with Facts within 10
    (Scotland P2, England Year 1, US Grade 1).
-4. **Numerals on the leaves only where the numeral is the question.** Water
-   numerals are shown on leaves only for numeral identity ("how many?" shown as
-   dots at the top, answered by touching the numeral) and order ("5 6 ?"). That
-   is the Early level / Reception / Kindergarten, and one more / one less at
-   Facts within 10. Everywhere else the leaves are dew, because counting and
-   grouping the drops *is* the maths there. The dew gathers into its numeral for
-   the question and back into dew after it, so the numeral and the quantity are
-   visibly the same water.
+4. **Dew first, then numerals (concrete → abstract).** Water numerals appear
+   on the leaves in two places. (a) Where the numeral is the question: numeral
+   identity ("how many?" shown as dots, answered by touching the numeral) and
+   order ("5 6 ?") at the Early level / Reception / Kindergarten, and one more /
+   one less at Facts within 10. (b) Once a skill has been answered cleanly with
+   dew (four times, without help), that skill's leaves show numerals instead of
+   drops: the child has shown the quantity is known, and as the numbers grow
+   dots become unwieldy — equal groups of seven, eight or nine cannot be read as
+   dots on a leaf, but can as numerals. The dew gathers into its numeral for the
+   question and back into dew after it, so the numeral and the quantity are
+   visibly the same water. Every syllabus teaches this same progression
+   (concrete, pictorial, abstract); only its pace differs, and here it is paced
+   by the child's own evidence.
 5. **The tables follow the syllabus.** 10 × 10 for Scotland and the US, 12 × 12
    for England; the grouping levels use each syllabus's tables in its order.
    Physical equal groups stay at six or fewer leaves of six or fewer drops;

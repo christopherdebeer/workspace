@@ -16,6 +16,10 @@
  *  - `groups` questions gather equal groups — leaves that match, as many as
  *    there are groups — so 3 × 4 is three leaves of four (or four of three),
  *    never "60 + □" or a remainder dressed up as multiplication;
+ *  - once a child has answered a skill cleanly with dew (NUMERALS_AFTER times),
+ *    that skill's leaves show their numerals in water instead of dots (concrete,
+ *    then abstract): the numbers stay legible as they grow, and equal groups can
+ *    be sevens, eights and nines, which dew cannot hold as dots;
  *  - `pick` questions are about the numeral itself (which numeral says how
  *    many; which comes before or after): a few leaves' dew gathers into its
  *    numeral in water, and the child touches the one that answers. Only the
@@ -53,7 +57,12 @@ export interface Challenge {
   seq?: Array<number | null>;
   /** `pick`: the numerals the leaves should show (the answer among them). */
   choices?: number[];
+  /** How the leaves show their dew: as drops, or (once proved with drops) as numerals. */
+  leaves: 'dew' | 'numerals';
 }
+
+/** Clean answers with dew before a skill's leaves show numerals instead. */
+export const NUMERALS_AFTER = 4;
 
 export interface Level {
   name: string;
@@ -230,7 +239,8 @@ export function overfull(c: Challenge, g: Gathered): boolean {
 export function groupsNeed(c: Challenge): { size: number; count: number } {
   if (c.skill === 'pairs') return { size: c.answers[1], count: c.answers[0] };
   // show the groups the question names first when they fit on a leaf
-  return c.b <= 6 ? { size: c.b, count: c.a } : { size: c.a, count: c.b };
+  const cap = c.leaves === 'numerals' ? 9 : 6;
+  return c.b <= cap && c.a <= 6 ? { size: c.b, count: c.a } : { size: c.a, count: c.b };
 }
 
 // ─── making questions ────────────────────────────────────────────────────────
@@ -243,7 +253,7 @@ const pick = <T>(r: () => number, xs: readonly T[]): T => xs[Math.floor(r() * xs
  * unknown where it is easiest, 1 anywhere, 2 turned round too. `reach` (0..1)
  * widens the numbers within the level. `fact` asks a particular fact (a due one).
  */
-export function makeChallenge(level: number, skill: Skill, r: () => number, form = 0, reach = 1, fact?: { a: number; b: number }, syllabus: SyllabusId = 'england'): Challenge {
+export function makeChallenge(level: number, skill: Skill, r: () => number, form = 0, reach = 1, fact?: { a: number; b: number }, syllabus: SyllabusId = 'england', numerals = false): Challenge {
   const syl = SYLLABI[syllabus];
   const TABLES = syl.tables;
   const SIZES = syl.sizes;
@@ -267,7 +277,7 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
       const near = [n - 1, n + 1, n + 2, n - 2, n === 6 ? 9 : n === 9 ? 6 : n + 3].filter((x) => x >= 1 && x <= 9 && x !== n);
       const k = level === 0 && form === 0 ? 2 : 3;
       const choices = [n, ...near.slice(0, k)].sort(() => r() - 0.5);
-      return { skill, level, mode: 'pick', left: 0, right: 0, answers: [n], a: n, b: 0, total: n, mult: false, support: 0, form, dots: n, choices };
+      return { skill, level, mode: 'pick', left: 0, right: 0, answers: [n], a: n, b: 0, total: n, mult: false, support: 0, form, dots: n, choices, leaves: 'numerals' };
     }
     case 'sequence': {
       // before, after and between: 3 4 ?  ·  5 ? 7  ·  ? 6 7 (the one after first; before last)
@@ -276,12 +286,12 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
       const start = int(r, kind === 'before' ? 0 : 1, 9 - 2);
       const run = [start, start + 1, start + 2];
       const n = run[at];
-      if (n < 1 || n > 9) return makeChallenge(level, skill, r, form, reach, fact, syllabus);
+      if (n < 1 || n > 9) return makeChallenge(level, skill, r, form, reach, fact, syllabus, numerals);
       const seq: Array<number | null> = run.map((x, i) => (i === at ? null : x));
       // neighbours to tell apart (a number already in the run is the commonest slip)
       const near = [n + 1, n - 1, n + 2, n - 2].filter((x) => x >= 1 && x <= 9);
       const choices = [n, ...near.slice(0, level === 0 ? 2 : 3)].sort(() => r() - 0.5);
-      return { skill, level, mode: 'pick', left: 0, right: 0, answers: [n], a: n, b: 0, total: n, mult: false, support: 0, form, seq, choices };
+      return { skill, level, mode: 'pick', left: 0, right: 0, answers: [n], a: n, b: 0, total: n, mult: false, support: 0, form, seq, choices, leaves: 'numerals' };
     }
     case 'bond': {
       // a + ? = t (a part missing from a whole)
@@ -369,7 +379,7 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
         right = op('×', z, slot());
         answers = [w];
         flip = false;
-        return { skill, level, mode, left, right, answers, a, b, total: x * y, mult: true, support: 0, form };
+        return { skill, level, mode, left, right, answers, a, b, total: x * y, mult: true, support: 0, form, leaves: numerals ? 'numerals' : 'dew' };
       }
       // partitioning: 34 + ? = 30 + 12
       a = int(r, 11, upto(40, 79));
@@ -383,11 +393,13 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
       break;
     }
     case 'groups': {
-      // equal groups made with the leaves: a groups of b
-      const sizes = SIZES[level] ?? [2, 3, 4, 5];
+      // equal groups made with the leaves: a groups of b. As dew, a group is at most six
+      // drops; as numerals (once proved with dew), any of the level's tables up to nine
+      const sizes = numerals ? [...new Set([...(SIZES[level] ?? []), ...(TABLES[level] ?? []).filter((t) => t <= 9)])] : SIZES[level] ?? [2, 3, 4, 5];
       b = pick(r, sizes);
       a = int(r, 2, upto(level === 3 ? 3 : 4, level === 3 ? 5 : 6));
-      if (fact && fact.a <= 6 && fact.b <= 6) [a, b] = [fact.a, fact.b];
+      const cap = numerals ? 9 : 6;
+      if (fact && fact.a <= 6 && fact.b <= cap) [a, b] = [fact.a, fact.b];
       mode = 'groups';
       left = op('×', a, b);
       right = slot();
@@ -439,7 +451,7 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
   // Equality is a relationship, not an instruction to put an answer on the right.
   if (flip) [left, right] = [right, left];
   const total = mult ? a * b : a + b;
-  return { skill, level, mode, left, right, answers, a, b, total, mult, support: 0, form };
+  return { skill, level, mode, left, right, answers, a, b, total, mult, support: 0, form, leaves: numerals ? 'numerals' : 'dew' };
 }
 
 // ─── the child's record ──────────────────────────────────────────────────────
@@ -452,6 +464,8 @@ export interface Evidence {
   next: number;
   /** Days (YYYY-MM-DD) with a clean answer, latest few. */
   days: string[];
+  /** Clean answers made with the leaves as dew (the concrete proof before numerals). */
+  dew?: number;
 }
 
 export interface CurriculumData {
@@ -476,6 +490,8 @@ const FROM_BAND = [0, 2, 4, 3, 6, 7];
 
 export class Curriculum {
   data: CurriculumData;
+  /** Debug (`?numerals=1`): treat every skill as proved with dew. */
+  forceNumerals = false;
 
   constructor(saved: Partial<CurriculumData> & { band?: number } | null = null, legacy = 0) {
     let level: number;
@@ -574,7 +590,7 @@ export class Curriculum {
       .sort((x, y) => y.score - x.score);
     let skill = ranked[0].skill;
     // a forced question type (debug: `?ask=`), asked at the level that holds it
-    const forced = opts.skill ? LEVELS.findIndex((l, i) => i >= Math.min(here, 1) && l.skills.includes(opts.skill!)) : -1;
+    const forced = !opts.skill ? -1 : LEVELS[here].skills.includes(opts.skill) ? here : LEVELS.findIndex((l, i) => i >= Math.min(here, 1) && l.skills.includes(opts.skill!));
     if (forced >= 0) return this.ask(forced, opts.skill!, rand);
     let fact: { a: number; b: number } | undefined;
     if (opts.due && !review) {
@@ -594,14 +610,16 @@ export class Curriculum {
     const clean = e?.clean ?? 0;
     const form = clean < 2 ? 0 : clean < 5 ? 1 : 2;
     const reach = Math.min(1, clean / 6);
+    // concrete, then abstract: numerals on the leaves once the skill is proved with dew
+    const numerals = ((e?.dew ?? clean) >= NUMERALS_AFTER || this.forceNumerals) && !LEVELS[0].skills.includes(skill);
     const key = (x: Challenge) => x.skill + '|' + (x.seq ? x.seq.join(',') : x.dots ?? equation(x));
     let c: Challenge;
     let tries = 0;
-    do c = makeChallenge(level, skill, rand, form, reach, tries ? undefined : fact, d.syllabus);
+    do c = makeChallenge(level, skill, rand, form, reach, tries ? undefined : fact, d.syllabus, numerals);
     while (d.recent.includes(key(c)) && ++tries < 16);
     // the picture under the equation: full while the skill is new, gone once it is known
     const small = c.mode === 'groups' ? c.total <= 36 : c.total <= 20;
-    c.support = small && c.mode !== 'pick' ? Math.max(0, 1 - clean / 5) : 0;
+    c.support = small && c.mode !== 'pick' && c.leaves === 'dew' ? Math.max(0, 1 - clean / 5) : 0;
     d.recent = [...d.recent, key(c)].slice(-12);
     return c;
   }
@@ -618,6 +636,7 @@ export class Curriculum {
     e.seen++;
     if (clean) {
       e.clean++;
+      if (c.leaves === 'dew') e.dew = (e.dew ?? 0) + 1;
       if (!e.days.includes(day)) e.days = [...e.days, day].slice(-5);
     }
     e.streak = clean ? e.streak + 1 : 0;

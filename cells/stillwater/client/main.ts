@@ -127,6 +127,8 @@ function loadProfile(name: string) {
   // `?year=N` places as a grown-up would (0 Reception … 5 Year 5+); `?maths=N` sets a level directly
   const year = Number(startupParams.get('year'));
   if (startupParams.has('year') && Number.isInteger(year)) curriculum.setYear(year);
+  // `?numerals=1`: every skill counts as proved with dew, so the leaves show numerals
+  curriculum.forceNumerals = startupParams.has('numerals');
   const level = Number(startupParams.get('maths'));
   if (startupParams.has('maths') && Number.isInteger(level)) curriculum.setLevel(level);
   save();
@@ -467,9 +469,19 @@ function ensureRelationshipPads() {
   if (overfull(c, g)) return;
   const stock = relationStock();
   const dry = relationStock(true).sort((a, b) => b.r - a.r);
+  const numerals = c.leaves === 'numerals' && c.mode !== 'pick';
   const lay = (p: Pad, n: number) => {
     p.drops = layDrops(n, p.r, rand, true);
+    // a leaf that will show its numeral must hold exactly that many (a small leaf can fall short)
+    if (numerals && liveCount(p) !== n) {
+      p.drops = [];
+      return;
+    }
     stock.push(p);
+  };
+  // once proved with dew, the question's leaves show their numerals (concrete, then abstract)
+  const showNumerals = () => {
+    if (numerals) numeralLeaves = [...new Set([...relationLeaves, ...stock])].filter((p) => liveCount(p) >= 1 && liveCount(p) <= 9);
   };
   if (c.mode === 'pick') {
     // the numerals to choose from, each on a leaf in clear view: its dew flows into the numeral
@@ -499,10 +511,13 @@ function ensureRelationshipPads() {
     return;
   }
   if (c.mode === 'sum') {
+    // as numerals the parts can be larger: fewer leaves for the same number
+    const cycle = numerals ? [7, 4, 9, 3, 8, 5, 6, 2] : [3, 5, 2, 6, 4, 1, 6];
     for (const p of dry) {
       if (completable(c, g, counts(stock)) && stock.length >= 3) break;
-      lay(p, [3, 5, 2, 6, 4, 1, 6][relationSupply++ % 7]);
+      lay(p, cycle[relationSupply++ % cycle.length]);
     }
+    showNumerals();
     return;
   }
   const need = groupsNeed(c);
@@ -515,10 +530,12 @@ function ensureRelationshipPads() {
     if (have >= want && decoys >= 2) break;
     if (have < want) lay(p, per);
     else {
-      lay(p, [1, 2, 3, 4, 5, 6].filter((x) => x !== per)[relationSupply++ % 5]);
+      const others = (numerals ? [2, 3, 4, 5, 6, 7, 8, 9] : [1, 2, 3, 4, 5, 6]).filter((x) => x !== per);
+      lay(p, others[relationSupply++ % others.length]);
       decoys++;
     }
   }
+  showNumerals();
 }
 
 // ─── the learning arc (LEARNING-DESIGN.md) ────────────────────────────────
@@ -2294,7 +2311,9 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 
-// ─── experiment: numerals drawn in water on the leaves (glyphs.ts) ─────────
+// ─── numerals drawn in water on the leaves (glyphs.ts) ─────────────────────
+// In play: a numeral question's leaves, and the leaves of any question whose skill the child
+// has proved with dew (challenges.ts NUMERALS_AFTER). Debug views below.
 // `?glyphs=1`: a dewy leaf's drops flow together into the numeral of how many it holds
 // (1–9; more stay as drops), and when that number changes the water flows into the new
 // one; `?glyphs=half` only on every other leaf, to see the two side by side;
@@ -2355,7 +2374,7 @@ function waterGlyphs(dt: number) {
   if (!glyphMode) {
     // in play: numerals only for a numeral question's leaves; everything else is dew
     if (!glyphsReady) {
-      if (numeralLeaves.length || (profile && curriculum.data.level <= 1)) bakeGlyphs();
+      if (numeralLeaves.length || profile) bakeGlyphs();
       return;
     }
     for (const p of numeralLeaves) {
