@@ -102,7 +102,7 @@ export const PROGRAMS: Array<[string, string, string]> = [
 
 const MAX_PADS = 900;
 const MAX_DROP_ROWS = 512;
-const DROP_COLS = 10;
+const DROP_COLS = 12;
 const SIM_W = 168;
 
 export class Renderer {
@@ -385,7 +385,7 @@ export class Renderer {
       let row = -1;
       const drops = p.drops.length;
       let shown = Math.min(drops, DROP_COLS);
-      if (p.glyph != null && this.glyphTex && rows < MAX_DROP_ROWS) {
+      if (p.glyph != null && rows < MAX_DROP_ROWS) {
         // its water drawn as a glyph (glyphs.ts): the state it is becoming (a glyph, -1 its
         // drops, -2 nothing), then the state it is changing from and how far through; then,
         // if either state is its drops, the drops themselves for the shader to flow from or into
@@ -591,11 +591,11 @@ export class Renderer {
       bindTex(gl, 2, this.simA!.tex);
       gl.uniform1i(pad.u.uSim, 2);
     }
-    gl.uniform1f(pad.u.uGlyphOn, this.glyphTex ? 1 : 0);
-    if (this.glyphTex) {
-      bindTex(gl, 3, this.glyphTex);
-      gl.uniform1i(pad.u.uGlyphs, 3);
-    }
+    // the water field is always on (dew rests as water); until the atlas is baked a stand-in
+    // reads as "no glyph here", so only the drops and condensing states can be drawn
+    gl.uniform1f(pad.u.uGlyphOn, 1);
+    bindTex(gl, 3, this.glyphTex ?? this.noGlyphs());
+    gl.uniform1i(pad.u.uGlyphs, 3);
     this.padInst.draw();
 
     // names on the leaves, drawn with the pads so they move as one
@@ -952,6 +952,20 @@ export class Renderer {
     }
     this.strips(f, rhiz, [0.52, 0.38, 0.22], 3);
     this.strips(f, stems, [0.50, 0.50, 0.24], 3);
+  }
+
+  private blankGlyphs: WebGLTexture | null = null;
+  /** A 1 × 1 stand-in atlas: far from every path. */
+  private noGlyphs(): WebGLTexture {
+    if (this.blankGlyphs) return this.blankGlyphs;
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array([0.4, 0.3, 0, 1]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    this.blankGlyphs = tex;
+    return tex;
   }
 
   /** The water-glyph atlas (glyphs.ts), baked on first use: height and slope, half floats, linear filtered. */

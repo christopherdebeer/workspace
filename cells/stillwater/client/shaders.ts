@@ -555,15 +555,23 @@ vec2 gState(float gi, vec2 gp){
   if (gi < -1.5) return vec2(.4, .3); // nothing: no water here
   if (gi < -.5) {
     // the leaf's own drops, as beads to flow out of or gather into (they follow the glyph
-    // entries in the leaf's row), merging where they come close
+    // entries in the leaf's row), merging where they come close. This is also how dew rests:
+    // water, not marbles. On a leaf going under, a drop that is leaving keeps its water and
+    // runs downhill toward the flooded side (gathering speed) until the river's film takes it
+    float washing = smoothstep(.04, .3, vSink);
+    vec2 runDir = length(vDent.xy) > 1e-3 ? normalize(vDent.xy) : vec2(0., -1.);
     float d = .4;
-    for (int i = 2; i < 12; i++) {
+    for (int i = 2; i < 14; i++) {
       if (i >= gCount) break;
       vec4 dr = texelFetch(uDrops, ivec2(i, gRow), 0);
       if (dr.w < .01) continue;
-      vec2 c = gHand(rot(dr.xy, vAng) / gS);
-      float rG = dr.z * (.35 + .65 * dr.w) / gS;
-      d = gSmin(d, length(gp - c) - (rG - .082), .05);
+      float wash = smoothstep(0., .7, 1. - dr.w) * washing;
+      vec2 at = dr.xy + runDir * wash * wash * 1.1;
+      vec2 c = gHand(rot(at, vAng) / gS);
+      float rG = dr.z * mix(.35 + .65 * dr.w, .85, smoothstep(0., .2, wash)) / gS;
+      // at rest, drops only join where they touch (every drop must stay countable); in a flow
+      // they reach for each other
+      d = gSmin(d, length(gp - c) - (rG - .082), gT >= 1. ? .008 : .05);
     }
     return vec2(d, 0.);
   }
@@ -574,7 +582,11 @@ vec2 gState(float gi, vec2 gp){
 /** The water's field, mid-change: one state flowing into the next, gathering and breaking as it goes. */
 vec2 gField(vec2 gp){
   vec2 b = gState(gTo, gp);
-  if (gT >= 1.) return b;
+  if (gT >= 1.) {
+    // dew at rest keeps a little of the flow's irregularity: soft, uneven edges, never marbles
+    if (gTo > -1.5 && gTo < -.5) b.x += (texture(uNoise, gp * 1.6 + gSeed * 3.1).r - .5) * .04 - .003;
+    return b;
+  }
   vec2 a = gState(gFrom, gp);
   // eased gently in and out (smootherstep); from condensing, the beads first grow where they
   // are, and only then run together into the dew or the numeral
@@ -802,15 +814,14 @@ void main(){
   float dropWash = 0.; // the drop under this pixel is running off a leaf going under
   vec4 glyph = vec4(0.);  // water drawn as a glyph: size (pad radii), state to, -1, how gathered
   vec4 glyphM = vec4(0.); // …changing from: state from, how far through (0..1), -2, 1
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 12; i++) {
     if (i >= count) break;
     vec4 dr = texelFetch(uDrops, ivec2(i, row), 0);
     if (dr.w < .01) continue;
     if (dr.z < -1.5) { glyphM = dr; continue; }
     if (dr.z < 0.) { glyph = dr; continue; }
-    // while its water is drawn as a glyph, the leaf's drops are part of that field instead —
-    // except in the last of a flow into the drops, where the dew fades in under the water
-    if (glyph.w > .01 && uGlyphOn > .5 && !(glyph.y > -1.5 && glyph.y < -.5 && glyphM.w > .5 && glyphM.y > .8)) continue;
+    // while its water is drawn as a field (dew at rest included), the drops are part of it instead
+    if (glyph.w > .01 && uGlyphOn > .5) continue;
     // Contact line stays pinned; the cap lags and compresses as the leaf flexes.
     float form = fract(dr.x * 17. + dr.y * 31. + seed);
     float wobble = sin(uTime * (8. + form * 3.) + form * TAU) * min(.10, vDent.z * .10);
@@ -946,7 +957,8 @@ void main(){
       float uD = gFrom < -2.5 ? clamp((gT - .3) / .7, 0., 1.) : gT;
       float tD = gT >= 1. ? 1. : uD * uD * uD * (uD * (uD * 6. - 15.) + 10.);
       float dropK = (gTo > -1.5 && gTo < -.5 ? tD : 0.) + (gT < 1. && gFrom > -1.5 && gFrom < -.5 ? 1. - tD : 0.);
-      w = mix(w, .082, clamp(dropK, 0., 1.));
+      // (keeping a quarter of the hand's swell, so no two drops are quite the same)
+      w = mix(w, .082, .75 * clamp(dropK, 0., 1.));
       // gathering: a thin thread first, then the full water
       w *= mix(.35, 1., ga);
       float d = de.x;
@@ -1023,9 +1035,7 @@ void main(){
         float nhp = max(dot(n, normalize(Lp + vec3(0., 0., 1.))), 0.);
         c += LAMP * lampK * (exp((nhp - 1.) / .012) * 1.2 + pow(nhp, 40.) * .12);
         float edge = 1. - smoothstep(w - aaG, w + aaG, d);
-        // flowing into the leaf's drops, the last of the flow hands over to the dew drawn as dew
-        float handoff = gTo > -1.5 && gTo < -.5 ? smoothstep(.8, 1., gT) : 0.;
-        col = mix(col, c, edge * (1. - handoff));
+        col = mix(col, c, edge);
       }
     }
   }

@@ -2357,7 +2357,7 @@ let sheet: Map<Pad, number> | null = null;
  * drops simply grow in, as before.
  */
 function appearDew(p: Pad) {
-  if (!glyphsReady || glyphMode) return;
+  if (glyphMode) return;
   p.glyph = -1;
   p.glyphFrom = -3;
   p.glyphT = 0;
@@ -2379,7 +2379,8 @@ function flowToward(p: Pad, to: number, dt: number) {
   p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / (p.glyphFrom === -3 ? CONDENSE : MORPH));
   p.glyphA = 1;
   p.glyphSize = 1.05;
-  if (p.glyphT >= 1 && p.glyph < 0) p.glyph = undefined;
+  // water that has flowed to nothing is done; dew stays drawn as water at rest (-1)
+  if (p.glyphT >= 1 && (p.glyph === -2 || (p.glyph === -1 && glyphMode))) p.glyph = undefined;
 }
 
 /** Bake the atlas a glyph at a time between frames, then hand it to the renderer. */
@@ -2403,18 +2404,28 @@ function bakeGlyphs() {
 function waterGlyphs(dt: number) {
   if (!renderer) return;
   if (!glyphMode) {
-    // in play: numerals only for a numeral question's leaves; everything else is dew
-    if (!glyphsReady) {
-      if (numeralLeaves.length || profile) bakeGlyphs();
-      return;
-    }
+    // in play: numerals only for a numeral question's leaves (once the atlas is baked);
+    // all other dew is drawn as water at rest, and flows when it changes
+    if (!glyphsReady && (numeralLeaves.length || profile)) bakeGlyphs();
     for (const p of numeralLeaves) {
+      if (!glyphsReady) break;
       const n = liveCount(p);
       flowToward(p, n >= 1 && n <= 9 ? n : n ? -1 : -2, dt);
     }
     for (const p of pond.pads) {
-      if (p.glyph === undefined || numeralLeaves.includes(p)) continue;
-      flowToward(p, p.drops.some((d) => d.to > 0) ? -1 : -2, dt);
+      if (glyphsReady && numeralLeaves.includes(p)) continue;
+      const wet = p.drops.some((d) => d.to > 0 || d.a > 0.01);
+      if (p.glyph === undefined) {
+        if (!wet) continue;
+        // dew already on the leaf (grown with the river, off screen): at rest, as water
+        p.glyph = -1;
+        p.glyphFrom = -1;
+        p.glyphT = 1;
+        p.glyphA = 1;
+        p.glyphSize = 1.05;
+        continue;
+      }
+      flowToward(p, wet ? -1 : -2, dt);
     }
     return;
   }
