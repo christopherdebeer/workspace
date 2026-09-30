@@ -540,6 +540,17 @@ vec2 gAtlas(float gi, vec2 gp){
   vec2 cell = vec2(mod(gi, 4.), floor(gi / 4. + .001));
   return texture(uGlyphs, (cell + gp / 1.28 + .5) / 4.).rg;
 }
+/**
+ * Where the river stands on a leaf going under (pad coordinates): > 0 flooded, 0 at the
+ * waterline, < 0 above it. The same line the film over the flooded part is drawn to.
+ */
+float gShore(vec2 pp){
+  float gv = length(vDent.xy);
+  if (vSink < .01 || gv < .001) return -9.;
+  vec2 dir = vDent.xy / gv;
+  float across = dot(pp, vec2(-dir.y, dir.x));
+  return dot(pp, dir) + across * across * .42 - (1. - vSink * 1.25);
+}
 /** Drops (-1) and fine dew (-3) are both beads of water. */
 bool gBeads(float st){ return (st > -1.5 && st < -.5) || st < -2.5; }
 /**
@@ -598,19 +609,22 @@ vec2 gState(float gi, vec2 gp){
   if (gi < -.5) {
     // the leaf's own drops, as beads to flow out of or gather into (they follow the glyph
     // entries in the leaf's row), merging where they come close. This is also how dew rests:
-    // water, not marbles. On a leaf going under, a drop that is leaving keeps its water and
-    // runs downhill toward the flooded side (gathering speed) until the river's film takes it
-    float washing = smoothstep(.04, .3, vSink);
+    // water, not marbles. On a leaf going under, the rising water meets the dew: a drop near
+    // the waterline leans toward it and is drawn into it, shrinking as it is taken
+    // (dew washed off a sinking leaf goes the same way: the water's edge sweeps across it,
+    // taking the drops nearest the flood first)
     vec2 runDir = length(vDent.xy) > 1e-3 ? normalize(vDent.xy) : vec2(0., -1.);
+    float washing = smoothstep(.04, .3, vSink);
     float d = .4;
     for (int i = 2; i < 14; i++) {
       if (i >= gCount) break;
       vec4 dr = texelFetch(uDrops, ivec2(i, gRow), 0);
       if (dr.w < .01) continue;
-      float wash = smoothstep(0., .7, 1. - dr.w) * washing;
-      vec2 at = dr.xy + runDir * wash * wash * 1.1;
+      float wl = gShore(dr.xy) + (1. - dr.w) * 1.6 * washing;
+      vec2 at = dr.xy + runDir * smoothstep(-.3, 0., wl) * .09;
       vec2 c = gHand(rot(at, vAng) / gS);
-      float rG = dr.z * mix(.35 + .65 * dr.w, .85, smoothstep(0., .2, wash)) / gS;
+      float rG = dr.z * mix(.35 + .65 * dr.w, 1., washing) * (1. - smoothstep(-.14, .03, wl)) / gS;
+      if (rG < .002) continue;
       // at rest, drops only join where they touch (every drop must stay countable); in a flow
       // they reach for each other
       d = gSmin(d, length(gp - c) - (rG - .082), gT >= 1. ? .008 : .05);
@@ -979,19 +993,11 @@ void main(){
     float lean = gLean, turn = gTurn;
     vec2 squash = gSquash;
     vec2 gp = gHand(rot(p + vDent.xy * .006, vAng) / S);
-    // a numeral on a leaf going under does not change what it is: its water runs downhill as it
-    // stands, gathering speed, into the flooded side, where the river's film takes it
+    // a numeral on a leaf going under does not change what it is: its water is taken into the
+    // river — where the waterline crosses a stroke the stroke dissolves into it (below), and once
+    // the leaf's dew is washed the whole numeral thins away into the flood ('gRun')
     float gRun = glyphM.w > .5 ? clamp(glyphM.w - 1., 0., 1.) : 0.;
-    if (gRun > 0.) {
-      vec2 runDir = length(vDent.xy) > 1e-3 ? normalize(vDent.xy) : vec2(0., -1.);
-      vec2 runG = gHand(rot(runDir, vAng));
-      float ahead = gRun * gRun * 1.2 / S;
-      vec2 rel = gp - runG / max(length(runG), 1e-4) * ahead;
-      // drawn out a little along its run
-      vec2 rn = runG / max(length(runG), 1e-4);
-      float along = dot(rel, rn);
-      gp = rel - rn * along * (gRun * .35) / (1. + gRun * .35);
-    }
+    float shore = gShore(p);
     // …and how the line wavers as it is drawn: slow bends, a tremor
     gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .11 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .045;
     bool beads = gBeads(gTo) || gT < 1. && gBeads(gFrom);
@@ -1015,6 +1021,9 @@ void main(){
       w = mix(w, .082, (gTo < -2.5 ? 1. : .75) * clamp(dropK, 0., 1.));
       // gathering: a thin thread first, then the full water
       w *= mix(.35, 1., ga);
+      // the rising river takes a numeral's strokes where it reaches them, and the rest as it drains
+      // (draining, the water's edge sweeps on across the numeral from the flooded side)
+      if (gTo > -.5 || (gT < 1. && gFrom > -.5)) w *= 1. - smoothstep(-.14, .03, shore + gRun * 1.8);
       float d = de.x;
       // the slope of the distance (which way is away from the path), in the hand's space
       vec2 away = mistAway;
