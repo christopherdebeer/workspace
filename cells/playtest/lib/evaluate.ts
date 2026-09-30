@@ -94,7 +94,10 @@ export async function evaluate(opts: {
 }): Promise<EvalRecord> {
   const t0 = Date.now();
   const engine = engineFingerprint();
-  await db.put({ pk: 'ENGINE', sk: engine.version, version: engine.version, mechanics: engine.mechanics, core: engine.core, firstSeen: new Date().toISOString() }).catch(() => undefined);
+  // firstSeen is kept from the first eval on this engine (a plain put overwrote it every eval).
+  await db
+    .update('ENGINE', engine.version, 'SET #v = :v, #m = :m, #c = :c, #fm = :fm, #f = if_not_exists(#f, :now)', { ':v': engine.version, ':m': engine.mechanics, ':c': engine.core, ':fm': engine.method, ':now': new Date().toISOString() }, { '#v': 'version', '#m': 'mechanics', '#c': 'core', '#fm': 'method', '#f': 'firstSeen' })
+    .catch(() => undefined);
   const cls = opts.cls ?? (await classify(opts.def.rules, opts.decide));
   const jobs: Array<{ split: 'train' | 'test'; seed: number; players: number }> = [];
   for (const split of ['train', 'test'] as const) {

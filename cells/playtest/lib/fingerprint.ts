@@ -11,8 +11,14 @@ import { createHash } from 'node:crypto';
 import { mechanicRegistry } from '../engine/mechanics/index';
 import { initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions } from '../engine/core/game';
 
+/** Bump when HOW the fingerprint is computed changes: every hash moves with no mechanic edited,
+ *  and the change log says so instead of listing every mechanic as changed.
+ *  1: raw bundled source · 2: bundler digit-suffix renames stripped. */
+export const FP_METHOD = 2;
+
 export interface EngineFingerprint {
   version: string;
+  method: number;
   mechanics: Record<string, string>;
   core: string;
 }
@@ -50,7 +56,7 @@ export function engineFingerprint(): EngineFingerprint {
   }
   const core = h([initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions].map((f) => f.toString()).join('\n'));
   const version = h(core + JSON.stringify(mechanics));
-  cached = { version, mechanics, core };
+  cached = { version, method: FP_METHOD, mechanics, core };
   return cached;
 }
 
