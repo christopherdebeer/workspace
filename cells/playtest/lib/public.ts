@@ -16,7 +16,7 @@ import VENDOR from '../engine/vendor-info';
 import { engineFingerprint, changedMechanics } from './fingerprint';
 import { publicEval, type EvalRecord } from './evaluate';
 import { SCORE_VERSION } from './score';
-import { HANDLED_EFFECTS, newSlot } from './runner';
+import { HANDLED_EFFECTS, HARNESS_VERSION, newSlot } from './runner';
 import * as db from './store';
 
 const OWNER = process.env.CELL_OWNER ?? 'c15r';
@@ -99,6 +99,7 @@ export async function game(slug: string) {
     rounds: rounds.map(strip),
     suite: { ...suite, hash: db.suiteHash(suite) },
     engine: engineFingerprint().version,
+    harness: HARNESS_VERSION,
   };
 }
 
@@ -297,6 +298,7 @@ export async function overview() {
     cell: '@c15r/playtest',
     engine: { version: fp.version, mechanics: Object.keys(fp.mechanics).length, vendoredFrom: VENDOR },
     scoreVersion: SCORE_VERSION,
+    harness: HARNESS_VERSION,
     totals: { games: gs.length, evals, runs, rounds: gs.reduce((a, g) => a + (g.climb?.rounds ?? 0), 0), kept: gs.reduce((a, g) => a + g.kept, 0), reverted: gs.reduce((a, g) => a + g.reverted, 0), jevTokens: tokens, usd: +(tokens * 0.042e-6).toFixed(3) },
     games: gs,
     presets: Object.keys(PRESETS),

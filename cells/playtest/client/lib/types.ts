@@ -14,7 +14,7 @@ export interface Overview {
   games: GameRow[]; presets: string[]; recent: Change[];
 }
 export interface Declared { mechanics: string[]; effects: string[]; unhandledEffects: string[]; name: string; error?: string }
-export interface EvalSummary { id: string; version: number; engine: string; suite: string; scoreVersion: string; train: number; test: number; tag: string; createdAt: string }
+export interface EvalSummary { id: string; version: number; engine: string; suite: string; scoreVersion: string; harness?: string; train: number; test: number; tag: string; createdAt: string }
 export interface Round {
   round: number; from: number; to: number; rationale: string; author: string;
   baseline: { evalId: string; train: number; test: number }; candidate: { evalId: string; train: number; test: number };
@@ -23,7 +23,7 @@ export interface Round {
 export interface Suite { train: { seeds: number[]; players: number[] }; test: { seeds: number[]; players: number[] }; maxSteps: number; epsilon: number; noise?: number; hash: string }
 export interface Version { version: number; parent: number | null; status: string; rationale: string; author: string; hash: string; createdAt: string }
 export interface GameView {
-  game: GameRow; engine: string; suite: Suite; versions: Version[]; evals: EvalSummary[]; rounds: Round[];
+  game: GameRow; engine: string; harness?: string; suite: Suite; versions: Version[]; evals: EvalSummary[]; rounds: Round[];
   head: { version: number; rules: string; rationale: string; status: string; hash: string; createdAt: string; declared: Declared } | null;
 }
 export interface Finding { kind: string; severity: 'info' | 'warn' | 'error'; subject: string; detail: string }

@@ -193,8 +193,8 @@ export const tradingMechanic: MechanicHooks = {
       const base = { type: 'trade_respond', offerId: t.id, from: t.from, youGet: t.offer.join('+') };
       if (t.request.length) replies.push({ ...base, accept: true, youGive: t.request.join('+') } as unknown as GameAction);
       else {
+        // An open offer asks for something back: accepting means giving one of your items.
         for (const give of myItems) replies.push({ ...base, accept: true, give: [give] } as unknown as GameAction);
-        if (tradeConfig.allow_gifts) replies.push({ ...base, accept: true, give: [] } as unknown as GameAction);
       }
       replies.push({ ...base, accept: false } as unknown as GameAction);
     }
@@ -319,8 +319,8 @@ function validateTradeOffer(ctx: HookContext, action: TradeOfferAction): Validat
     return { valid: false, error: `You already have an offer waiting with ${action.target}.` };
   }
 
-  // An empty request is an open offer (the responder chooses what to give back, or —
-  // where allow_gifts — nothing), not a gift, so it is always allowed.
+  // An empty request is an open offer (the responder chooses an item to give back), not a
+  // gift, so it is always allowed.
   if (action.offer.length === 0) {
     return { valid: false, error: 'You must offer at least one card to trade.' };
   }
@@ -355,7 +355,8 @@ function validateTradeRespond(ctx: HookContext, action: TradeRespondAction): Val
     const give = ((action as unknown as { give?: string[] }).give) ?? [];
     if (!trade.request.length) {
       const tradeConfig = ctx.config.engine_mechanics?.trade as TradeConfig | undefined;
-      if (!give.length && !tradeConfig?.allow_gifts) return { valid: false, error: 'Choose an item to give back.' };
+      // (allow_gifts lets an offerer give without asking; it never lets a responder take for free.)
+      if (!give.length) return { valid: false, error: 'Choose an item to give back — an open offer asks for something in return.' };
       for (const cardName of give) {
         const card = responderHand.find(c => c.name === cardName);
         if (!card) return { valid: false, error: `You don't have "${cardName}" to give.` };

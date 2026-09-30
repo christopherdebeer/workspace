@@ -20,7 +20,7 @@
  * Jev never writes and never counts: every number it sees is computed here.
  * Pure over an injected `decide` so the node devtools and the page share it.
  * ------------------------------------------------------------------------- */
-import { writeFileSync, resetPrefix, filesUnder } from '../engine/shims/fs';
+import { writeFileSync, resetPrefix, filesUnder, unlinkSync } from '../engine/shims/fs';
 import {
   initGame,
   startGame,
@@ -52,6 +52,73 @@ function withRng<T>(rng: () => number, fn: () => T): T {
   } finally {
     Math.random = real;
   }
+}
+
+/* ── one-ply consequences ────────────────────────────────────────────────
+ * Jev picks a move from its label alone, so without help it plays blind: it can't
+ * tell that entering a tile completes its objective, or that a move wins outright.
+ * For each valid candidate the runner plays it on a throwaway copy of the state
+ * and appends what visibly changes FOR THIS PLAYER: objective progress, score, a
+ * win. Nothing is annotated when the simulated move touched hidden information —
+ * the deck, another player's hand, or what the player gets to learn — so a label
+ * never reveals the next card or someone's items. Simulations use their own RNG
+ * stream, and the game's files are restored after each one. */
+const SIM_MAX = 160;
+
+/** What the runner shows Jev and how it drives play. Part of an eval's identity: a harness
+ *  change moves scores without touching engine code, so baselines must match it too.
+ *  h1: labels only · h2: one-ply consequence facts on options, off-turn replies. */
+export const HARNESS_VERSION = 'h2';
+
+function progressOf(state: Record<string, any>, pid: string): string[] {
+  try {
+    const v = mechanicRegistry.getPlayerView(state as never, pid) as Record<string, unknown>;
+    return Array.isArray(v?.objectiveProgress) ? (v.objectiveProgress as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function hiddenFingerprint(state: Record<string, any>, pid: string): string {
+  const others = Object.entries(state.players as Record<string, any>).filter(([p]) => p !== pid).map(([p, pl]) => `${p}:${(pl.hand ?? []).map((c: { name: string }) => c.name).sort().join(',')}`);
+  const me = state.players[pid] ?? {};
+  return JSON.stringify([(state.shared?.deck ?? []).length, (state.shared?.deck ?? [])[0]?.name ?? null, others, Object.keys(me.knowledge?.revealed ?? {})]);
+}
+
+function consequences(s: Record<string, any>, pid: string, cands: Action[], slot: string, rng: () => number): Map<Action, string> {
+  const out = new Map<Action, string>();
+  if (cands.length > SIM_MAX) return out;
+  const prefix = `/pt/games/${slot}/`;
+  const snap = filesUnder(prefix);
+  const beforeProgress = progressOf(s, pid);
+  const beforeHidden = hiddenFingerprint(s, pid);
+  const beforeScore = Number(s.players[pid]?.score ?? 0);
+  for (const c of cands) {
+    const clone = structuredClone(s);
+    try {
+      withRng(rng, () => executeAction(clone as never, pid, c as never));
+    } catch {
+      continue;
+    } finally {
+      const now = filesUnder(prefix);
+      for (const k of Object.keys(now)) if (!(k in snap)) unlinkSync(k);
+      for (const [k, v] of Object.entries(snap)) if (now[k] !== v) writeFileSync(k, v);
+    }
+    const facts: string[] = [];
+    const ended = clone.status !== 'in_progress';
+    const winner = clone.shared?.winner ?? clone.winner;
+    if (ended && winner === pid) facts.push('YOU WIN');
+    else if (ended && winner) facts.push(`${winner} wins`);
+    if (hiddenFingerprint(clone, pid) === beforeHidden) {
+      const after = progressOf(clone, pid);
+      const changed = after.filter((line) => !beforeProgress.includes(line));
+      facts.push(...changed.map((l) => `→ ${l}`));
+      const dScore = Number(clone.players[pid]?.score ?? 0) - beforeScore;
+      if (dScore) facts.push(`score ${dScore > 0 ? '+' : ''}${dScore}`);
+    }
+    if (facts.length) out.set(c, facts.join('; '));
+  }
+  return out;
 }
 
 /* Effect types some mechanic applies (effect-dispatcher direct types, the
@@ -371,6 +438,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
   const cfg = config as unknown as { win_condition?: string; max_turns?: number };
   const rulesDigest = digest(markdown, String(cfg.win_condition ?? ''));
   const rng = mulberry32(seed);
+  const simRng = mulberry32(seed ^ 0x5bd1e995); // simulations never touch the game's own stream
   const E = <T,>(fn: () => T): T => withRng(rng, fn);
   const session: Session = { seed, players: opts.players, status: 'init', winner: null, endReason: null, turns: [], log: [], unsuitable: [], stopped: 'finished', tokens: 0, ms: 0 };
   const unsuitable = new Map<string, Session['unsuitable'][number]>();
@@ -413,7 +481,10 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         }
         if (!ok && a.type !== 'pass' && cands.length) note(a.type, Object.keys(a.required ?? {}), 'no-valid-candidate');
       }
-      const picks = dedupeLabels(valid).slice(0, 255);
+      const facts = decide && valid.length > 1 ? consequences(s, pid, valid, slot, simRng) : new Map<Action, string>();
+      const picks = dedupeLabels(valid)
+        .slice(0, 255)
+        .map((p) => (facts.has(p.action) ? { ...p, label: `${p.label} [${facts.get(p.action)}]`.slice(0, 200) } : p));
 
       let chosen: { action: Action; label: string };
       let rec: Pick<TurnRecord, 'confidence' | 'top' | 'ahead' | 'ms' | 'tokens' | 'fallback'> = { confidence: null, top: [], ahead: null, ms: 0, tokens: 0 };

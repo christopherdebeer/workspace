@@ -11,8 +11,9 @@ export function Game({ slug }: { slug: string }) {
   const { game, evals, rounds, suite } = data;
   const noise = suite.noise ?? null;
   const threshold = Math.max(suite.epsilon, noise ?? 0);
-  const baseline = [...evals].reverse().find((e) => e.version === game.head && e.engine === data.engine && e.suite === suite.hash);
-  const points: ChartPoint[] = evals.map((e, i) => ({ key: e.id, label: `#${i + 1}`, train: e.train, test: e.test, note: `v${e.version} ${e.tag}${e.engine !== data.engine ? ' · older engine' : ''}`, href: `/eval/${e.id}` }));
+  const current = (e: GameView['evals'][number]) => e.engine === data.engine && e.suite === suite.hash && (e.harness ?? 'h1') === (data.harness ?? 'h1');
+  const baseline = [...evals].reverse().find((e) => e.version === game.head && current(e));
+  const points: ChartPoint[] = evals.map((e, i) => ({ key: e.id, label: `#${i + 1}`, train: e.train, test: e.test, note: `v${e.version} ${e.tag}${current(e) ? '' : ' · older engine/harness'}`, href: `/eval/${e.id}` }));
   return (
     <>
       <p className="small muted" style={{ margin: 0 }}>
@@ -35,7 +36,7 @@ export function Game({ slug }: { slug: string }) {
           <Stat v={`${game.climb?.stall ?? 0}/3`} l="rounds since a keep" />
           <Stat v={f3(threshold)} l="must beat (ε or noise)" title={`epsilon ${suite.epsilon}${noise !== null ? `, measured noise ${noise}` : ', noise not measured yet'}`} />
         </div>
-        {!baseline && <p className="small muted">No baseline for the current head on this engine and suite yet — run an evaluation.</p>}
+        {!baseline && <p className="small muted">No baseline for the current head on this engine, harness ({data.harness}) and suite yet — run an evaluation.</p>}
         {baseline && noise === null && <p className="small muted">Noise hasn't been measured — do that once before climbing, so chance improvements aren't kept.</p>}
       </Panel>
 

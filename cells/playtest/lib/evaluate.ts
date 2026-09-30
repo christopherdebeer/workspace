@@ -13,7 +13,7 @@
  *            test is flat is the overfitting signal → revert. Two or three
  *            rounds without a keep = stalled: diagnose, don't keep patching.
  * ------------------------------------------------------------------------- */
-import { classify, play, judge, metrics, sessionFindings, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
+import { classify, play, judge, metrics, sessionFindings, HARNESS_VERSION, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
 import { scoreRun, scoreSuite, definitionHealth, SCORE_VERSION, type RunScore } from './score';
 import { engineFingerprint } from './fingerprint';
 import * as db from './store';
@@ -68,6 +68,8 @@ export interface EvalRecord extends db.Item {
   engine: string;
   suite: string;
   scoreVersion: string;
+  /** runner harness version (HARNESS_VERSION); evals compare only within one */
+  harness?: string;
   definitionHealth: number;
   classificationFindings: Finding[];
   train: { score: number; runs: RunDigest[]; critique?: CritiqueSummary | null };
@@ -187,6 +189,7 @@ export async function evaluate(opts: {
     engine: engine.version,
     suite: db.suiteHash(opts.suite),
     scoreVersion: SCORE_VERSION,
+    harness: HARNESS_VERSION,
     definitionHealth: definitionHealth(cls),
     classificationFindings: cls.findings,
     train: { score: scoreSuite(train.map((d) => d.score), cls), runs: train, critique: summarizeCritique(train) },
@@ -198,7 +201,7 @@ export async function evaluate(opts: {
   };
   rec.pk = `EVAL#${rec.id}`;
   await db.put(rec);
-  await db.put({ pk: `GAME#${opts.game}`, sk: `EVAL#${rec.createdAt}#${rec.id}`, id: rec.id, version: rec.version, engine: rec.engine, suite: rec.suite, scoreVersion: rec.scoreVersion, train: rec.train.score, test: rec.test.score, tag: rec.tag, createdAt: rec.createdAt });
+  await db.put({ pk: `GAME#${opts.game}`, sk: `EVAL#${rec.createdAt}#${rec.id}`, id: rec.id, version: rec.version, engine: rec.engine, suite: rec.suite, scoreVersion: rec.scoreVersion, train: rec.train.score, test: rec.test.score, tag: rec.tag, harness: rec.harness, createdAt: rec.createdAt });
   return rec;
 }
 
@@ -211,6 +214,7 @@ export function publicEval(e: EvalRecord) {
     engine: e.engine,
     suite: e.suite,
     scoreVersion: e.scoreVersion,
+    harness: e.harness ?? 'h1',
     train: e.train,
     test: { score: e.test.score, n: e.test.n },
     definitionHealth: e.definitionHealth,
@@ -226,7 +230,7 @@ export function publicEval(e: EvalRecord) {
 /** Latest eval of (game, version) on this engine, suite and score version. */
 export async function findEval(game: string, version: number, engine: string, suite: string): Promise<EvalRecord | null> {
   const list = await db.query(`GAME#${game}`, 'EVAL#', { newestFirst: true, limit: 50 });
-  const hit = list.find((e) => e.version === version && e.engine === engine && e.suite === suite && e.scoreVersion === SCORE_VERSION);
+  const hit = list.find((e) => e.version === version && e.engine === engine && e.suite === suite && e.scoreVersion === SCORE_VERSION && (e.harness ?? 'h1') === HARNESS_VERSION);
   return hit ? ((await db.get(`EVAL#${hit.id}`, 'meta')) as EvalRecord) : null;
 }
 
