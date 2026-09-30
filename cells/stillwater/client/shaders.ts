@@ -526,6 +526,49 @@ uniform float uGlyphOn;
 float seed;
 vec2 so; // seed offset into the noise tile
 
+// ── water glyphs (glyphs.ts): each state is a distance field — a glyph's key shape from the
+// atlas, the leaf's own drops as beads, or nothing — and a change of state is one field
+// flowing into the next. The hand (lean, turn, squash) is the leaf's, and stays through it.
+float gTo, gFrom, gT, gS, gTurn, gLean;
+vec2 gSquash;
+int gRow, gCount;
+vec2 gHand(vec2 v){ v = rot(v, gTurn); v.x -= gLean * v.y; return v / gSquash; }
+float gSmin(float a, float b, float k){ float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
+/** One state's field at gp: [distance to its path, distance along it to a free end]. */
+vec2 gState(float gi, vec2 gp){
+  if (gi < -1.5) return vec2(.4, .3); // nothing: no water here
+  if (gi < -.5) {
+    // the leaf's own drops, as beads to flow out of or gather into (they follow the glyph
+    // entries in the leaf's row), merging where they come close
+    float d = .4;
+    for (int i = 2; i < 12; i++) {
+      if (i >= gCount) break;
+      vec4 dr = texelFetch(uDrops, ivec2(i, gRow), 0);
+      if (dr.w < .01) continue;
+      vec2 c = gHand(rot(dr.xy, vAng) / gS);
+      float rG = dr.z * (.35 + .65 * dr.w) / gS;
+      d = gSmin(d, length(gp - c) - (rG - .082), .05);
+    }
+    return vec2(d, 0.);
+  }
+  if (abs(gp.x) > .62 || abs(gp.y) > .62) return vec2(.4, .3);
+  vec2 cell = vec2(mod(gi, 4.), floor(gi / 4. + .001));
+  return texture(uGlyphs, (cell + gp / 1.28 + .5) / 4.).rg;
+}
+/** The water's field, mid-change: one state flowing into the next, gathering and breaking as it goes. */
+vec2 gField(vec2 gp){
+  vec2 b = gState(gTo, gp);
+  if (gT >= 1.) return b;
+  vec2 a = gState(gFrom, gp);
+  float t = smoothstep(0., 1., gT);
+  vec2 v = mix(a, b, t);
+  // mid-flow the water runs heavier and its necks break into beads
+  float mid = sin(3.14159 * t);
+  v.x += (texture(uNoise, gp * 1.6 + vec2(gT * .4, gT * .15)).r - .5) * .1 * mid - .014 * mid;
+  v.y = mix(v.y, 0., mid * .6);
+  return v;
+}
+
 /**
  * How far the edge is pushed in toward the pad's centre where it is pressed
  * (a neighbour or the hull), 0..1 across the pressed arc. The pad is a soft
@@ -737,12 +780,16 @@ void main(){
   vec4 dd = vec4(0.);
   vec2 dropAxes = vec2(1.);
   float dropShape = 0.;
-  vec4 glyph = vec4(0.); // a glyph drawn in water: size (pad radii), atlas cell, -1, how gathered
+  vec4 glyph = vec4(0.);  // water drawn as a glyph: size (pad radii), state to, -1, how gathered
+  vec4 glyphM = vec4(0.); // …changing from: state from, how far through (0..1), -2, 1
   for (int i = 0; i < 10; i++) {
     if (i >= count) break;
     vec4 dr = texelFetch(uDrops, ivec2(i, row), 0);
     if (dr.w < .01) continue;
+    if (dr.z < -1.5) { glyphM = dr; continue; }
     if (dr.z < 0.) { glyph = dr; continue; }
+    // while its water is drawn as a glyph, the leaf's drops are part of that field instead
+    if (glyph.w > .01 && uGlyphOn > .5) continue;
     // Contact line stays pinned; the cap lags and compresses as the leaf flexes.
     float form = fract(dr.x * 17. + dr.y * 31. + seed);
     float wobble = sin(uTime * (8. + form * 3.) + form * TAU) * min(.10, vDent.z * .10);
@@ -832,56 +879,66 @@ void main(){
   // glint, light focused through it, and a small shadow. Upright on the screen.
   if (glyph.w > .01 && uGlyphOn > .5) {
     float S = glyph.x;
-    float gs = fract(seed * 7.13 + glyph.y * .6180339);
+    gS = S;
+    gTo = glyph.y;
+    gFrom = glyphM.w > .5 ? glyphM.x : -2.;
+    gT = glyphM.w > .5 ? glyphM.y : 1.;
+    gRow = row;
+    gCount = count;
+    // the hand is the leaf's (not the glyph's), so it stays the same through a change
+    float gs = fract(seed * 7.13 + .37);
     vec2 wo = vec2(gs * 37.1, fract(gs * 5.3) * 91.7);
-    // the hand: how it leans and turns and squashes this one
-    float lean = (hash12(vec2(gs, 1.7)) - .6) * .26;
-    float turn = (hash12(vec2(gs, 3.1)) - .5) * .14;
-    vec2 squash = 1. + (vec2(hash12(vec2(gs, 5.9)), hash12(vec2(gs, 7.3))) - .5) * .16;
-    vec2 gp0 = rot(p + vDent.xy * .006, vAng) / S;
-    vec2 gp = rot(gp0, turn);
-    gp.x -= lean * gp.y;
-    gp /= squash;
-    // …and how the line wavers as it is drawn: slow bends, a little tremor
-    gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .085 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .03;
-    if (abs(gp.x) < .6 && abs(gp.y) < .6) {
-      vec2 cell = vec2(mod(glyph.y, 4.), floor(glyph.y / 4. + .001));
-      vec2 uv = (cell + gp / 1.28 + .5) / 4.;
-      float tx = 1. / 512.;
-      vec2 de = texture(uGlyphs, uv).rg; // distance to the path, distance along it to a free end
+    // how it leans and turns and squashes
+    gLean = (hash12(vec2(gs, 1.7)) - .6) * .34;
+    gTurn = (hash12(vec2(gs, 3.1)) - .5) * .2;
+    gSquash = 1. + (vec2(hash12(vec2(gs, 5.9)), hash12(vec2(gs, 7.3))) - .5) * .2;
+    float lean = gLean, turn = gTurn;
+    vec2 squash = gSquash;
+    vec2 gp = gHand(rot(p + vDent.xy * .006, vAng) / S);
+    // …and how the line wavers as it is drawn: slow bends, a tremor
+    gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .11 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .045;
+    bool beads = gTo > -1.5 && gTo < -.5 || gT < 1. && gFrom > -1.5 && gFrom < -.5;
+    float bound = beads ? 1.05 : .62;
+    if (abs(gp.x) < bound && abs(gp.y) < bound) {
+      vec2 de = gField(gp); // distance to the path, distance along it to a free end
       float ga = glyph.w;
       // the water on the path: thinner and fuller along it, pooled here and there, beaded at the ends
       float nW = texture(uNoise, gp * .8 + wo * 1.3).r;
-      float pool = smoothstep(.58, .86, texture(uNoise, gp * 1.25 + wo * 2.1).g);
-      float w = .082 * (.72 + .62 * nW) * (1. + .6 * pool) * (1. + .45 * exp(-pow(de.y / .07, 2.)));
-      w = min(w, .16);
+      float pool = smoothstep(.52, .84, texture(uNoise, gp * 1.25 + wo * 2.1).g);
+      float w = .082 * (.62 + .8 * nW) * (1. + .8 * pool) * (1. + .5 * exp(-pow(de.y / .07, 2.)));
+      w = min(w, .18);
       // gathering: a thin thread first, then the full water
       w *= mix(.35, 1., ga);
       float d = de.x;
       // the slope of the distance (which way is away from the path), in the hand's space
-      vec2 gd = vec2(texture(uGlyphs, uv + vec2(tx, 0.)).r - texture(uGlyphs, uv - vec2(tx, 0.)).r,
-                     texture(uGlyphs, uv + vec2(0., tx)).r - texture(uGlyphs, uv - vec2(0., tx)).r);
+      float eps = .01;
+      vec2 gd = vec2(gField(gp + vec2(eps, 0.)).x - gField(gp - vec2(eps, 0.)).x,
+                     gField(gp + vec2(0., eps)).x - gField(gp - vec2(0., eps)).x);
       vec2 away = gd / max(length(gd), 1e-5);
-      // stray drops shaken off the finger: a few, near the strokes but clear of them
-      for (int k = 0; k < 10; k++) {
-        float fk = float(k);
-        if (hash12(vec2(gs * 13.7, fk)) > .7) continue;
-        vec2 c = (vec2(hash12(vec2(gs, fk * 1.7 + 11.)), hash12(vec2(gs, fk * 2.3 + 29.))) - .5) * vec2(.95, 1.05);
-        float r = (.018 + .04 * pow(hash12(vec2(gs, fk + 41.)), 1.4)) * mix(.4, 1., ga);
-        float dc = texture(uGlyphs, (cell + c / 1.28 + .5) / 4.).r;
-        if (dc < .12 + r || dc > .34) continue;
-        float dd = length(gp - c);
-        // where a drop stands higher than the stroke, the drop is what is seen
-        if (dd < r && r * r - dd * dd > w * w - d * d) {
-          d = dd;
-          w = r;
-          away = (gp - c) / max(dd, 1e-5);
+      // stray drops shaken off the finger: a few, near the glyph's strokes but clear of them;
+      // they gather as the glyph does
+      if (gTo > -.5) {
+        float strayK = smoothstep(.45, 1., gT);
+        for (int k = 0; k < 10; k++) {
+          float fk = float(k);
+          if (hash12(vec2(gs * 13.7, fk)) > .75) continue;
+          vec2 c = (vec2(hash12(vec2(gs, fk * 1.7 + 11.)), hash12(vec2(gs, fk * 2.3 + 29.))) - .5) * vec2(.95, 1.05);
+          float r = (.018 + .045 * pow(hash12(vec2(gs, fk + 41.)), 1.4)) * mix(.4, 1., ga) * strayK;
+          float dc = gState(gTo, c).x;
+          if (r < .004 || dc < .12 + r || dc > .34) continue;
+          float dd = length(gp - c);
+          // where a drop stands higher than the stroke, the drop is what is seen
+          if (dd < r && r * r - dd * dd > w * w - d * d) {
+            d = dd;
+            w = r;
+            away = (gp - c) / max(dd, 1e-5);
+          }
         }
       }
       vec3 Lw = uSun;
       float canopyLight = sunThrough(vW);
       // its shadow on the leaf, a little away from the sun
-      float dS = texture(uGlyphs, (cell + (gp + Lw.xy * .035) / 1.28 + .5) / 4.).r;
+      float dS = gField(gp + Lw.xy * .035).x;
       float aaG = uPx / (vR * S) * 1.3;
       col *= 1. - (1. - smoothstep(w * .6, w * 1.05, dS)) * .13 * smoothstep(-aaG, aaG, d - w);
       if (d < w + aaG) {

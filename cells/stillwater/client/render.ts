@@ -385,11 +385,22 @@ export class Renderer {
       let row = -1;
       const drops = p.drops.length;
       let shown = Math.min(drops, DROP_COLS);
-      if (p.glyph != null && p.glyph >= 0 && this.glyphTex && rows < MAX_DROP_ROWS) {
-        // a numeral in water in place of the dew (glyphs.ts): one entry, flagged by z < 0
+      if (p.glyph != null && this.glyphTex && rows < MAX_DROP_ROWS) {
+        // its water drawn as a glyph (glyphs.ts): the state it is becoming (a glyph, -1 its
+        // drops, -2 nothing), then the state it is changing from and how far through; then,
+        // if either state is its drops, the drops themselves for the shader to flow from or into
         row = rows++;
-        this.dropData.set([p.glyphSize ?? 1.05, p.glyph, -1, Math.max(0, Math.min(1, p.glyphA ?? 1))], row * DROP_COLS * 4);
-        shown = 1;
+        const base = row * DROP_COLS * 4;
+        this.dropData.set([p.glyphSize ?? 1.05, p.glyph, -1, Math.max(0.02, Math.min(1, p.glyphA ?? 1))], base);
+        this.dropData.set([p.glyphFrom ?? -2, p.glyphT ?? 1, -2, 1], base + 4);
+        shown = 2;
+        if (p.glyph === -1 || (p.glyphFrom === -1 && (p.glyphT ?? 1) < 1)) {
+          for (let k = 0; k < Math.min(drops, DROP_COLS - 2); k++) {
+            const d = p.drops[k];
+            this.dropData.set([d.x, d.y, d.r, Math.max(0, Math.min(1, d.a))], base + (2 + k) * 4);
+            shown++;
+          }
+        }
       } else if (drops && rows < MAX_DROP_ROWS) {
         row = rows++;
         for (let k = 0; k < Math.min(drops, DROP_COLS); k++) {

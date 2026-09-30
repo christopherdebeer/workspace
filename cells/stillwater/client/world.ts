@@ -55,8 +55,14 @@ export interface Pad {
   planted?: string;
   plantingSeed?: number;
   drops: Drop[];
-  /** Experiment (glyphs.ts): a numeral or sign drawn in water in place of the dew — atlas cell. */
+  /**
+   * Experiment (glyphs.ts): the leaf's water drawn as a glyph — the state it is becoming
+   * (an atlas cell, -1 its own drops, -2 nothing); undefined draws its dew as dew.
+   */
   glyph?: number;
+  /** …the state it is changing from, and how far through the change (0..1). */
+  glyphFrom?: number;
+  glyphT?: number;
   /** …its height in pad radii, and how far it has gathered (0..1). */
   glyphSize?: number;
   glyphA?: number;

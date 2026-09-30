@@ -2026,7 +2026,7 @@ function frame(now: number) {
       if (params.get('foamtap') && Math.random() < dt * 12) pond.impulses.push({ x: v.x + v.r * 0.55, y: v.y + v.r * 0.1, r: 12, s: 0.5, foam: true });
     }
   }
-  waterGlyphs();
+  waterGlyphs(dt);
   const order = drawOrder(pond.pads);
   const thread: Array<[number, number]> = [];
   if (solvedThread && (selection.length || pond.t > solvedThread.until)) solvedThread = null;
@@ -2103,21 +2103,51 @@ function frame(now: number) {
 }
 
 // ─── experiment: numerals drawn in water on the leaves (glyphs.ts) ─────────
-// `?glyphs=1`: a dewy leaf shows how many drops it holds as a numeral drawn in water,
-// in place of the drops (1–9; more stays as drops); `?glyphs=half` only on every other
-// leaf, to see the two side by side. `?glyphs=sheet`: the sixteen glyphs
-// (0–9 + − × ÷ = ?) on the sixteen leaves nearest the middle of the view, in reading order;
-// `?glyphs=repeat&chars=37`: those leaves repeating a few characters, to see the hand vary.
+// `?glyphs=1`: a dewy leaf's drops flow together into the numeral of how many it holds
+// (1–9; more stay as drops), and when that number changes the water flows into the new
+// one; `?glyphs=half` only on every other leaf, to see the two side by side;
+// `?glyphs=morph`: each dewy leaf's water flows from its drops to its numeral and back,
+// every few seconds. `?glyphs=sheet`: the sixteen glyphs (0–9 + − × ÷ = ?) on the sixteen
+// leaves nearest the middle of the view, in reading order; `?glyphs=repeat&chars=37` those
+// leaves repeating a few characters, to see the hand vary; add `&cycle=1` to either and
+// each leaf's glyph flows into the next every few seconds.
 const glyphMode = params.get('glyphs');
+const glyphCycle = !!params.get('cycle');
+/** How long water takes to flow from one state to the next (s). */
+const MORPH = 0.9;
 let glyphsReady = false;
 let sheet: Map<Pad, number> | null = null;
-function waterGlyphs() {
+
+/**
+ * Move a leaf's water toward a state (an atlas cell, -1 its own drops, -2 nothing): a
+ * change starts a flow from what is there now (if a flow is barely begun, from where it
+ * began), and a flow that ends back in the drops hands the leaf back to its dew.
+ */
+function flowToward(p: Pad, to: number, dt: number) {
+  if (p.glyph === undefined) {
+    if (to === -1) return;
+    p.glyphFrom = p.drops.some((d) => d.to > 0) ? -1 : -2;
+    p.glyph = to;
+    p.glyphT = 0;
+  } else if (to !== p.glyph) {
+    if ((p.glyphT ?? 1) > 0.35) p.glyphFrom = p.glyph;
+    p.glyph = to;
+    p.glyphT = 0;
+  }
+  p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / MORPH);
+  p.glyphA = 1;
+  p.glyphSize = 1.05;
+  if (p.glyphT >= 1 && p.glyph < 0) p.glyph = undefined;
+}
+
+function waterGlyphs(dt: number) {
   if (!glyphMode || !renderer) return;
   if (!glyphsReady) {
     renderer.enableGlyphs(glyphAtlas());
     glyphsReady = true;
   }
   if (glyphMode === 'sheet' || glyphMode === 'repeat') {
+    const chars = [...(params.get('chars') || '2357')].map(glyphIndex).filter((g) => g >= 0);
     if (!sheet) {
       const near = pond.pads
         .filter((p) => p.r > 26 && Math.abs(p.x - cam.x) < cam.cssW / (2 * cam.zoom) - p.r && Math.abs(p.y - cam.y) < cam.cssH / (2 * cam.zoom) - p.r)
@@ -2125,28 +2155,26 @@ function waterGlyphs() {
         .slice(0, GLYPHS.length);
       if (near.length < GLYPHS.length) return;
       near.sort((a, b) => (Math.abs(a.y - b.y) > 45 ? b.y - a.y : a.x - b.x));
-      const chars = [...(params.get('chars') || '2357')].map(glyphIndex).filter((g) => g >= 0);
-      sheet = new Map(near.map((p, i) => [p, glyphMode === 'repeat' ? chars[i % chars.length] : i]));
+      sheet = new Map(near.map((p, i) => [p, i]));
     }
+    const step = glyphCycle ? Math.floor(pond.t / 2.6) : 0;
     for (const [p, i] of sheet) {
-      p.glyph = i;
-      p.glyphA = 1;
-      p.glyphSize = 1.05;
+      const g = glyphMode === 'repeat' ? chars[(i + step) % chars.length] : (i + step) % GLYPHS.length;
+      flowToward(p, g, dt);
     }
     return;
   }
   for (const p of pond.pads) {
     if (!p.drops.length || (glyphMode === 'half' && p.id % 2)) {
-      p.glyph = undefined;
+      if (p.glyph !== undefined) flowToward(p, -1, dt);
       continue;
     }
     const n = liveCount(p);
-    const a = p.drops.reduce((m, d) => Math.max(m, d.a), 0);
-    if (n >= 1 && n <= 9) p.glyph = n;
-    else if (n > 9 || a < 0.01) p.glyph = undefined;
-    // gathered as the drops would appear, fading as they go (keeping its numeral meanwhile)
-    p.glyphA = a;
-    p.glyphSize = 1.05;
+    let to = n >= 1 && n <= 9 ? n : n > 9 ? -1 : -2;
+    // `morph`: drops and numeral in turn, each leaf on its own beat
+    if (glyphMode === 'morph' && to >= 0 && Math.floor(pond.t / 3.2 + (p.id % 7) / 7) % 2 === 0) to = -1;
+    if (to === -2 && p.glyph === undefined) continue;
+    flowToward(p, to, dt);
   }
 }
 
@@ -2186,6 +2214,10 @@ Object.defineProperty(window, '__stillwater', {
     curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),
+    dewy: pond.pads.filter((p) => liveCount(p) > 0).map((p) => {
+      const [x, y] = toScreen(p.x, p.y);
+      return { id: p.id, x: Math.round(x), y: Math.round(y), r: Math.round(p.r * cam.zoom), n: liveCount(p) };
+    }),
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
     profile: profile?.name ?? null,
