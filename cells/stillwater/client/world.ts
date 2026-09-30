@@ -55,6 +55,11 @@ export interface Pad {
   planted?: string;
   plantingSeed?: number;
   drops: Drop[];
+  /** Experiment (glyphs.ts): a numeral or sign drawn in water in place of the dew — atlas cell. */
+  glyph?: number;
+  /** …its height in pad radii, and how far it has gathered (0..1). */
+  glyphSize?: number;
+  glyphA?: number;
   /** Selected by the player (the thread passes through it). */
   selected: boolean;
   /** Animated selection glow 0..1. */

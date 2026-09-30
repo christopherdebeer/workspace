@@ -26,6 +26,7 @@ import { Overlay } from './ui';
 import { Curriculum, accepts, feedback, equation, BANDS, type Challenge } from './challenges';
 import { ChallengeUI } from './challenge-ui';
 import { glInfo, probe, report } from './report';
+import { glyphAtlas, GLYPHS } from './glyphs';
 import { PROGRAMS } from './render';
 import { program } from './gl';
 import { layDrops, liveCount, Pad, Planting, Pond, seeded } from './world';
@@ -1965,6 +1966,7 @@ function frame(now: number) {
       if (params.get('foamtap') && Math.random() < dt * 12) pond.impulses.push({ x: v.x + v.r * 0.55, y: v.y + v.r * 0.1, r: 12, s: 0.5, foam: true });
     }
   }
+  waterGlyphs();
   const order = drawOrder(pond.pads);
   const thread: Array<[number, number]> = [];
   if (solvedThread && (selection.length || pond.t > solvedThread.until)) solvedThread = null;
@@ -2038,6 +2040,52 @@ function frame(now: number) {
     report('perf', { scale, dpr, ...perf.summary() });
   }
   requestAnimationFrame(frame);
+}
+
+// ─── experiment: numerals drawn in water on the leaves (glyphs.ts) ─────────
+// `?glyphs=1`: a dewy leaf shows how many drops it holds as a numeral drawn in water,
+// in place of the drops (1–9; more stays as drops); `?glyphs=half` only on every other
+// leaf, to see the two side by side. `?glyphs=sheet`: the sixteen glyphs
+// (0–9 + − × ÷ = ?) on the sixteen leaves nearest the middle of the view, in reading order.
+const glyphMode = params.get('glyphs');
+let glyphsReady = false;
+let sheet: Map<Pad, number> | null = null;
+function waterGlyphs() {
+  if (!glyphMode || !renderer) return;
+  if (!glyphsReady) {
+    renderer.enableGlyphs(glyphAtlas());
+    glyphsReady = true;
+  }
+  if (glyphMode === 'sheet') {
+    if (!sheet) {
+      const near = pond.pads
+        .filter((p) => p.r > 26 && Math.abs(p.x - cam.x) < cam.cssW / (2 * cam.zoom) - p.r && Math.abs(p.y - cam.y) < cam.cssH / (2 * cam.zoom) - p.r)
+        .sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))
+        .slice(0, GLYPHS.length);
+      if (near.length < GLYPHS.length) return;
+      near.sort((a, b) => (Math.abs(a.y - b.y) > 45 ? b.y - a.y : a.x - b.x));
+      sheet = new Map(near.map((p, i) => [p, i]));
+    }
+    for (const [p, i] of sheet) {
+      p.glyph = i;
+      p.glyphA = 1;
+      p.glyphSize = 1.05;
+    }
+    return;
+  }
+  for (const p of pond.pads) {
+    if (!p.drops.length || (glyphMode === 'half' && p.id % 2)) {
+      p.glyph = undefined;
+      continue;
+    }
+    const n = liveCount(p);
+    const a = p.drops.reduce((m, d) => Math.max(m, d.a), 0);
+    if (n >= 1 && n <= 9) p.glyph = n;
+    else if (n > 9 || a < 0.01) p.glyph = undefined;
+    // gathered as the drops would appear, fading as they go (keeping its numeral meanwhile)
+    p.glyphA = a;
+    p.glyphSize = 1.05;
+  }
 }
 
 function shedHidden() {

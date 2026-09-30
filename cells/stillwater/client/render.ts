@@ -138,6 +138,7 @@ export class Renderer {
   private reach = new Float32Array(132);
   private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
+  private glyphTex: WebGLTexture | null = null;
   private dropData = new Float32Array(DROP_COLS * MAX_DROP_ROWS * 4);
   private ribbonVao: WebGLVertexArrayObject;
   private ribbonBuf: WebGLBuffer;
@@ -383,7 +384,13 @@ export class Renderer {
       if (!inView(p.x, p.y, p.r * 1.4) || n >= MAX_PADS) continue;
       let row = -1;
       const drops = p.drops.length;
-      if (drops && rows < MAX_DROP_ROWS) {
+      let shown = Math.min(drops, DROP_COLS);
+      if (p.glyph != null && p.glyph >= 0 && this.glyphTex && rows < MAX_DROP_ROWS) {
+        // a numeral in water in place of the dew (glyphs.ts): one entry, flagged by z < 0
+        row = rows++;
+        this.dropData.set([p.glyphSize ?? 1.05, p.glyph, -1, Math.max(0, Math.min(1, p.glyphA ?? 1))], row * DROP_COLS * 4);
+        shown = 1;
+      } else if (drops && rows < MAX_DROP_ROWS) {
         row = rows++;
         for (let k = 0; k < Math.min(drops, DROP_COLS); k++) {
           const d = p.drops[k];
@@ -394,7 +401,7 @@ export class Renderer {
       const flex = p.wob * Math.sin(f.time * 7 + p.seed * 30);
       // the leaf's age sets its green: young leaves lighter and yellower, old ones olive
       const tint = Math.max(0, Math.min(1, 0.92 - p.age * 0.75 + ((p.seed * 13.1) % 1 - 0.5) * 0.25));
-      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, p.age, tint, p.dx, p.dy, flex, p.sink);
+      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : shown, p.focus ? 1 : 0, p.age, tint, p.dx, p.dy, flex, p.sink);
     }
     this.padInst.count = n;
     this.padInst.upload();
@@ -572,6 +579,11 @@ export class Renderer {
     if (simLive) {
       bindTex(gl, 2, this.simA!.tex);
       gl.uniform1i(pad.u.uSim, 2);
+    }
+    gl.uniform1f(pad.u.uGlyphOn, this.glyphTex ? 1 : 0);
+    if (this.glyphTex) {
+      bindTex(gl, 3, this.glyphTex);
+      gl.uniform1i(pad.u.uGlyphs, 3);
     }
     this.padInst.draw();
 
@@ -929,6 +941,19 @@ export class Renderer {
     }
     this.strips(f, rhiz, [0.52, 0.38, 0.22], 3);
     this.strips(f, stems, [0.50, 0.50, 0.24], 3);
+  }
+
+  /** The water-glyph atlas (glyphs.ts), baked on first use: height and slope, half floats, linear filtered. */
+  enableGlyphs(atlas: { data: Float32Array; size: number }) {
+    const gl = this.gl;
+    const tex = this.glyphTex ?? gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, atlas.size, atlas.size, 0, gl.RGBA, gl.FLOAT, atlas.data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.glyphTex = tex;
   }
 
   /**

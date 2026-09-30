@@ -520,6 +520,8 @@ uniform sampler2D uDrops;
 uniform float uPx; // world units per device pixel
 uniform sampler2D uSim;   // the wave sim, for the white water that rides over a flooded leaf
 uniform float uSimOn;
+uniform sampler2D uGlyphs; // numerals and signs drawn in water: a height field atlas (glyphs.ts)
+uniform float uGlyphOn;
 
 float seed;
 vec2 so; // seed offset into the noise tile
@@ -735,10 +737,12 @@ void main(){
   vec4 dd = vec4(0.);
   vec2 dropAxes = vec2(1.);
   float dropShape = 0.;
+  vec4 glyph = vec4(0.); // a glyph drawn in water: size (pad radii), atlas cell, -1, how gathered
   for (int i = 0; i < 10; i++) {
     if (i >= count) break;
     vec4 dr = texelFetch(uDrops, ivec2(i, row), 0);
     if (dr.w < .01) continue;
+    if (dr.z < 0.) { glyph = dr; continue; }
     // Contact line stays pinned; the cap lags and compresses as the leaf flexes.
     float form = fract(dr.x * 17. + dr.y * 31. + seed);
     float wobble = sin(uTime * (8. + form * 3.) + form * TAU) * min(.10, vDent.z * .10);
@@ -818,6 +822,75 @@ void main(){
     col = mix(col, c, edge * smoothstep(0., .2, dd.w));
   }
 
+
+  // a numeral or sign drawn in water (glyphs.ts): a rivulet lying on the leaf, lit as the
+  // dew is — the leaf magnified through it, a dark contact line toward the sun and a thin
+  // bright one away from it, the sky only at the very edge, one sharp pinpoint (which on
+  // a rivulet runs along the stroke), light focused through it on the far side, and a
+  // small shadow. Upright on the screen whatever way the leaf has turned.
+  if (glyph.w > .01 && uGlyphOn > .5) {
+    float S = glyph.x;
+    vec2 gp = rot(p + vDent.xy * .006, vAng) / S;
+    if (abs(gp.x) < .62 && abs(gp.y) < .62) {
+      vec2 cell = vec2(mod(glyph.y, 4.), floor(glyph.y / 4. + .001));
+      vec2 uv = (cell + gp / 1.28 + .5) / 4.;
+      float gh = texture(uGlyphs, uv).r;
+      float ga = glyph.w;
+      // as it gathers, the thin edges come last
+      float thr = .03 + (1. - ga) * .45;
+      vec3 Lw = uSun;
+      float canopyLight = sunThrough(vW);
+      // its shadow on the leaf, a little away from the sun
+      float gs = texture(uGlyphs, uv + Lw.xy * (.035 / 1.28 / 4.)).r;
+      col *= 1. - smoothstep(thr, thr + .25, gs) * .13 * (1. - smoothstep(thr, thr + .05, gh));
+      if (gh > thr) {
+        // the slope was baked with the height (glyphs.ts); thinner while it gathers
+        vec2 grad = texture(uGlyphs, uv).gb * ga;
+        vec3 n = normalize(vec3(-grad, 1.));
+        vec2 nxy = n.xy / max(length(n.xy), 1e-4);
+        float slope = length(grad);
+        float rim = smoothstep(.9, 2.6, slope);
+        float enchant = sel * (.25 + .45 * (1. - clamp(uSun.z, 0., 1.)));
+        // the lens: the leaf beneath, magnified across the stroke. On a round bead the normal's
+        // tilt is the offset from the spine over the half-width (n.xy = d / w), so pulling each
+        // point in by half that offset maps the stroke's width onto half as much leaf, without
+        // folding the leaf over at the spine
+        vec2 nP = rot(n.xy, -vAng);
+        vec2 pr = p - nP * S * .041; // half the half-width (glyphs.ts W0 = .082)
+        float prLen = length(pr);
+        vec3 under = albedo(pr, prLen, veins(pr, prLen));
+        under *= (uAmb + uSunCol * .72 * canopyLight + LAMP * lampAt(vW) * .8);
+        float lum = dot(under, vec3(.3, .59, .11));
+        under = mix(vec3(lum), under, 1.3) * (.8 - .14 * rim);
+        under += uSunCol * vec3(.9, 1., .9) * max(0., dot(nxy, Lw.xy)) * (1. - rim) * .05 * canopyLight;
+        // light gathered through the water, falling on the leaf on the side away from the sun
+        under += uSunCol * vec3(.95, 1., .85) * smoothstep(.1, .9, dot(nxy, -Lw.xy) / max(length(Lw.xy), 1e-3)) * (1. - rim) * smoothstep(.2, .9, slope) * .16 * canopyLight;
+        under += vec3(1., .82, .42) * enchant * (1. - rim) * .6;
+        float toSun = max(0., dot(nxy, Lw.xy) / max(length(Lw.xy), 1e-3));
+        under *= 1. - rim * (.22 + .3 * toSun);
+        under += vec3(.9, 1., .9) * rim * (1. - toSun) * smoothstep(.1, .9, dot(nxy, -Lw.xy)) * .85 * canopyLight;
+        float fr = .02 + .98 * pow(1. - n.z, 5.);
+        vec3 reflected = reflect(vec3(0., 0., -1.), n);
+        float canopy = smoothstep(.36, .68, texture(uNoise, (vW + reflected.xy * 140.) / 520.).g) * (1. - canopyLight * .65);
+        vec3 sky = mix(uSky0, uSky1, reflected.z * .5 + .5);
+        sky = mix(sky, uAmb * vec3(.10, .18, .10), canopy * .8);
+        vec3 c = mix(under, sky, fr * .3);
+        vec3 H = normalize(Lw + vec3(0., 0., 1.));
+        float nh = max(dot(n, H), 0.);
+        // on a rivulet the sun's pinpoint is a line along the stroke. Kept a little broad, with
+        // no screen derivatives (fwidth over a thin line breaks into a 2×2 hatch), and dimmer,
+        // as a line carries more light than a point
+        c += uSunCol * canopyLight * (exp((nh - 1.) / .012) * .9 + pow(nh, 60.) * .14);
+        vec3 Lp = normalize(vec3(uLamp.xy - vW, 32.));
+        vec2 fall = (uLamp.xy - vW) / (uLamp.z * 2.4);
+        float lampK = uLamp.w * exp(-dot(fall, fall) * 1.6);
+        float nhp = max(dot(n, normalize(Lp + vec3(0., 0., 1.))), 0.);
+        c += LAMP * lampK * (exp((nhp - 1.) / .012) * 1.2 + pow(nhp, 40.) * .12);
+        float edge = smoothstep(thr, thr + fwidth(gh) * 1.5 + .004, gh);
+        col = mix(col, c, edge);
+      }
+    }
+  }
 
   // keyboard focus: a thin bright ring
   col = mix(col, vec3(1., .95, .8), vC.y * (1. - smoothstep(0., aa * 2., abs(d + .03))) * .8);
