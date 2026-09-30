@@ -130,7 +130,7 @@ export async function runView(id: string, view: string, from = 0) {
 
 /* ── mechanics ──────────────────────────────────────────────────────── */
 
-/** Engine versions (by index) where every shared mechanic's hash changed at once: the
+/** Engine versions (by index) where (nearly) every shared mechanic's hash changed at once: the
  *  fingerprint method or the bundling changed, not the mechanics (no real edit touches all). */
 function rehashed(engines: db.Item[]): Set<number> {
   const out = new Set<number>();
@@ -138,7 +138,7 @@ function rehashed(engines: db.Item[]): Set<number> {
     const a = (engines[i - 1].mechanics as Record<string, string>) ?? {};
     const b = (engines[i].mechanics as Record<string, string>) ?? {};
     const shared = Object.keys(a).filter((k) => k in b);
-    if (shared.length > 20 && shared.every((k) => a[k] !== b[k])) out.add(i);
+    if (shared.length > 20 && shared.filter((k) => a[k] !== b[k]).length >= 0.9 * shared.length) out.add(i);
   }
   return out;
 }
@@ -249,7 +249,7 @@ export async function changelog(limit = 150): Promise<Change[]> {
   const rehash = rehashed(engines);
   engines.forEach((e, i) => {
     const changed = i ? changedMechanics((engines[i - 1].mechanics as Record<string, string>) ?? {}, (e.mechanics as Record<string, string>) ?? {}) : [];
-    out.push({ at: String(e.firstSeen), kind: 'engine', title: i ? `engine ${e.version}` : `engine ${e.version} (first seen)`, detail: rehash.has(i) ? 're-fingerprinted: every mechanic hash changed at once (fingerprint method or bundling), not the mechanics — earlier baselines no longer match' : i ? (changed.length ? `mechanics changed: ${changed.slice(0, 12).join(', ')}${changed.length > 12 ? ` +${changed.length - 12}` : ''}` : 'core changed (no mechanic code changed)') : `${Object.keys((e.mechanics as object) ?? {}).length} mechanics`, ref: String(e.version) });
+    out.push({ at: String(e.firstSeen), kind: 'engine', title: i ? `engine ${e.version}` : `engine ${e.version} (first seen)`, detail: rehash.has(i) ? 're-fingerprinted: nearly every mechanic hash changed at once (fingerprint method or bundling), not the mechanics — earlier baselines no longer match' : i ? (changed.length ? `mechanics changed: ${changed.slice(0, 12).join(', ')}${changed.length > 12 ? ` +${changed.length - 12}` : ''}` : 'core changed (no mechanic code changed)') : `${Object.keys((e.mechanics as object) ?? {}).length} mechanics`, ref: String(e.version) });
   });
   for (const g of await db.listGames()) {
     for (const d of await db.query(`GAME#${g.slug}`, 'DEF#')) {
