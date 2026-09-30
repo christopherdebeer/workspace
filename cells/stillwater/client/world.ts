@@ -53,6 +53,7 @@ export interface Pad {
   bank: boolean;
   /** Planted by a child: their name, faintly, once it is a leaf. */
   planted?: string;
+  plantingSeed?: number;
   drops: Drop[];
   /** Selected by the player (the thread passes through it). */
   selected: boolean;
@@ -255,6 +256,7 @@ export interface Fork {
  */
 export interface Landmark {
   id: number;
+  key: string;
   x: number;
   y: number;
   ang: number;
@@ -798,7 +800,7 @@ export class Pond {
     const plant = this.plantFor(x, y);
     const pad: Pad = {
       id: this.nextId++, x, y, vx: 0, vy: 0, ang: rand() * Math.PI * 2, va: 0, ax: x, ay: y, r, seed: rand(), bank: false,
-      planted: days >= 2 ? pl.name : undefined, drops: [], selected: false, sel: 0, bob: 0, focus: false, flower: 0, touching: false,
+      plantingSeed: pl.seed, planted: days >= 2 ? pl.name : undefined, drops: [], selected: false, sel: 0, bob: 0, focus: false, flower: 0, touching: false,
       dx: 0, dy: 0, wob: 0, cx: 0, cy: 0, sink: 0, caught: false, load: 0, sinkV: 0, support: 0.82 + Math.min(0.28, r / 260),
       compliance: 0.85 + smooth(42, 96, r) * 0.55, wet: 0, soak: 0, rx: plant.x, ry: plant.y, age: Math.min(1, grown * 0.7), layer: 1,
     };
@@ -995,9 +997,9 @@ export class Pond {
 
   private growLandmarks(y0: number, y1: number) {
     if (y1 < 300 && !this.forcePier) return;
-    const rand = this.landmarkRand;
-    const place = (yAt?: number) => {
-      const y = yAt ?? y0 + rand() * (y1 - y0);
+    const place = (Y: number, slot: number) => {
+      const rand = seeded(Math.floor(this.hash(slot, 82) * 1e9));
+      const y = Y - this.origin;
       const side: -1 | 1 = rand() < 0.5 ? -1 : 1;
       // the arm on this side of the river
       const probe = this.fieldCentre(y) + side * 400;
@@ -1025,14 +1027,18 @@ export class Pond {
       const dirX = (tipX - rootX) / Math.max(1, l * 2);
       const dirY = (tipY - rootY) / Math.max(1, l * 2);
       const ang = Math.atan2(-dirX, dirY);
-      this.landmarks.push({ id: this.nextLandmarkId++, x, y: py, ang, w, l, seed: rand(), kind: 0, side, state: 0 });
+      this.landmarks.push({ id: this.nextLandmarkId++, key: `pier:${slot}`, x, y: py, ang, w, l, seed: rand(), kind: 0, side, state: 0 });
     };
     if (this.forcePier && !this.forcedPier && y1 > this.boat.y + 260) {
       this.forcedPier = true;
-      place(this.boat.y + 260);
+      place(this.boat.y + this.origin + 260, -999);
     }
-    // rare: one every few thousand units
-    if (y1 >= 300 && rand() < 0.035) place();
+    // Absolute bands survive resizing, rebasing and visits on another screen size.
+    const a = y0 + this.origin, b = y1 + this.origin;
+    for (let slot = Math.floor(a / 200); slot <= Math.floor(b / 200); slot++) {
+      const Y = slot * 200 + 20 + this.hash(slot, 81) * 160;
+      if (Y >= 300 && Y >= a && Y < b && this.hash(slot, 80) < 0.035 && !this.landmarks.some(m => m.key === `pier:${slot}`)) place(Y, slot);
+    }
   }
 
   /** A jetty's piles (world): pairs either side of the deck every 36 units. */
@@ -2359,4 +2365,5 @@ export class Pond {
   }
 
 }
+
 

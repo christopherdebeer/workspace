@@ -120,3 +120,22 @@ Rewards that accumulate. Anything that makes the river a place to *finish*.
 
 *Status: §1 built in Round 56 (`client/notebook.ts`, the notebook pass in
 `render.ts`, the tab and page in `static/index.html`). §2–§4 proposed.*
+
+
+## Resident pass — 29 September 2026
+
+Residents now respond to an explicit tap (keyboard R), with one short line.
+Approaching only changes their attention; visits pause the learning prompt.
+Each deterministic landing has its own saved resident and pier lantern.
+A successful dew collection leaves a little carried light; touch an unlit
+lantern nearby (keyboard L) to transfer it in a visible arc. Lit lanterns
+persist per child, illuminate the pier and cast a broken water reflection.
+They do not drain on a timer. Turtle completion requires its own lit lantern.
+
+The procedural silhouettes now include heron feet and folded feathers, frog
+haunches/skin/blinking, and turtle shell growth marks. A content frog can hop
+to an actual nearby grown planting. Legacy species chapters are claimed by
+one landing only, preserving progress without completing every resident.
+
+This supersedes the automatic arrival trigger proposed in §4. It remains a
+lightweight layer within the river, rather than a separate story mode.

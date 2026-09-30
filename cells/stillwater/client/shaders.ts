@@ -32,7 +32,13 @@ uniform sampler2D uNoise;
 uniform vec4 uLamp; // the boat's lantern: world x, y, reach, intensity
 const float TAU = 6.28318530718;
 const vec3 LAMP = vec3(1., .72, .42);
-float lampAt(vec2 wp){ vec2 d = (wp - uLamp.xy) / uLamp.z; return uLamp.w * exp(-dot(d, d) * 2.5); }
+uniform vec4 uPierLamp[4];
+float pierLampAt(vec2 wp){
+  float light=0.;
+  for(int i=0;i<4;i++) { if(uPierLamp[i].w<=0.) continue; vec2 d=(wp-uPierLamp[i].xy)/max(uPierLamp[i].z,1.); light+=uPierLamp[i].w*exp(-dot(d,d)*2.5); }
+  return light;
+}
+float lampAt(vec2 wp){ vec2 d = (wp - uLamp.xy) / uLamp.z; return uLamp.w * exp(-dot(d, d) * 2.5) + pierLampAt(wp); }
 vec2 rot(vec2 p, float a){ float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }
 float nz(vec2 p){ return texture(uNoise, p).r; }
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -954,6 +960,13 @@ void main(){
   col = mix(col, vec3(.86, .9, .86) * (uAmb * 1.3 + uSunCol * .75), fm * .8);
   // the lantern: warm light on the water around the boat and its glints in the ripples
   float lamp = lampAt(wp);
+  // Each restored landing leaves a broken vertical reflection on the moving water.
+  for(int i=0;i<4;i++) {
+    if(uPierLamp[i].w<=0.) continue;
+    vec2 dl=wp-uPierLamp[i].xy;
+    float streak=exp(-pow((dl.x+sin(dl.y*.22+uTime*1.7)*3.)/7.,2.)-pow(dl.y/45.,2.));
+    col+=LAMP*streak*uPierLamp[i].w*(.1+.12*pow(.5+.5*sin(dl.y*.8+uTime*2.),3.));
+  }
   vec3 toLamp = normalize(vec3(uLamp.xy - wp, 26.));
   col += LAMP * (lamp * .12 + pow(max(dot(R, toLamp), 0.), 120.) * min(uLamp.w, 1.5) * .9 * smoothstep(uLamp.z * 2.5, 0., length(wp - uLamp.xy)));
   o = vec4(col, 1.);
@@ -1697,7 +1710,7 @@ void main(){
   float cover = max(deck * (1. - gapA), pile);
   vec3 col = mix(pileCol, wood, deck * (1. - gapA) / max(cover, 1e-4));
   float light = .5 + .36 * max(uSun.z, 0.) * sunThrough(vW);
-  col = col * (uAmb * .95 + uSunCol * light);
+  col = col * (uAmb * .95 + uSunCol * light + LAMP * lampAt(vW) * 1.45);
   shadow *= 1. - cover * .2;
 
   if (cover < .003 && shadow < .003) discard;
@@ -2060,19 +2073,28 @@ uniform vec3 uSun;
 uniform float uShadow;
 out vec2 vQ;
 out vec4 vB;
+out vec2 vWorld;
+out float vHeading;
+out float vHop;
 void main(){
   vQ = aPos;
   vB = iB;
+  vHeading=iA.z;
+  vHop=iC.x;
   vec2 local = aPos * iA.w * (uShadow > .5 ? 1.04 : 1.);
   float c = cos(iA.z), s = sin(iA.z);
   vec2 pos = iA.xy + vec2(local.x * c + local.y * s, -local.x * s + local.y * c);
   if (uShadow > .5) pos += -uSun.xy / max(uSun.z, .3) * 5.;
+  vWorld=pos;
   gl_Position = vec4((pos - uView.xy) * uView.zw, 0., 1.);
 }`;
 
 export const RESIDENT_FS = /* glsl */ `${HEAD}${COMMON}
 in vec2 vQ;
 in vec4 vB;
+in vec2 vWorld;
+in float vHeading;
+in float vHop;
 out vec4 o;
 uniform float uShadow;
 float aa2(float d, float soft){ return 1. - smoothstep(-soft, soft, d); }
@@ -2080,31 +2102,42 @@ float sdSeg3(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = cla
 float sdEll(vec2 p, vec2 r){ return (length(p / r) - 1.) * min(r.x, r.y); }
 /** A grey heron standing at the end of a pier, seen from above: a long slate back, folded wings, a neck curved forward to a yellow bill. */
 void heron(vec2 P, float t, float look, float content, out vec3 col, out float cover){
-  float soft = min(fwidth(P.x) * 1.2, .03);
+  float soft = max(fwidth(P.x) * 1.1, .006);
   float sdBody = sdEll(P - vec2(0., -.42), vec2(.2, .4));
   float body = aa2(sdBody, soft);
   float wing = 0.;
   for (int k = -1; k <= 1; k += 2) {
     float s = float(k);
-    vec2 w = P - vec2(s * (.1 + content * .12), -.44);
+    vec2 w = P - vec2(s * (.1 + content * .025), -.44);
     wing = max(wing, aa2(sdEll(rot(w, s * .16), vec2(.11, .36)), soft));
+  }
+  // Slender ankles and three toes grip the planks, distinct from folded wings.
+  float feet=0.;
+  for(int k=-1;k<=1;k+=2) {
+    vec2 ankle=vec2(float(k)*.16,-.63);
+    feet=max(feet,aa2(sdSeg3(P,ankle,ankle+vec2(float(k)*.07,-.17))-.018,soft));
+    for(int j=-1;j<=1;j++) feet=max(feet,aa2(sdSeg3(P,ankle+vec2(float(k)*.07,-.17),ankle+vec2(float(j)*.075,-.27))-.012,soft));
   }
   // the neck: an S from the shoulders forward, the head turned a little toward what it watches
   vec2 n0 = vec2(0., -.06), n1 = vec2(.13 + look * .1, .24 + .012 * sin(t * .7)), n2 = vec2(.07 + look * .16, .46);
-  float neck = min(aa2(sdSeg3(P, n0, n1) - .075, soft), aa2(sdSeg3(P, n1, n2) - .065, soft));
+  float neck = max(aa2(sdSeg3(P, n0, n1) - .075, soft), aa2(sdSeg3(P, n1, n2) - .065, soft));
   vec2 hp = n2 + vec2(.01, .1);
   float head = aa2(sdEll(P - hp, vec2(.15, .1)), soft);
-  vec2 bill0 = hp + vec2(.03, .06), bill1 = hp + vec2(.14 + look * .05, .4);
+  vec2 bill0 = hp + vec2(.03, .06), bill1 = hp + vec2(.10 + look * .08, .31);
   float along = clamp(dot(P - bill0, bill1 - bill0) / dot(bill1 - bill0, bill1 - bill0), 0., 1.);
   float bill = aa2(sdSeg3(P, bill0, bill1) - mix(.055, .014, along), soft);
   float eye = aa2(length(P - (hp + vec2(.05, .02))) - .024, soft);
-  cover = max(max(body, wing), max(max(neck, head), bill));
+  cover = max(feet,max(max(body, wing), max(max(neck, head), bill)));
   vec3 back = vec3(.44, .50, .56), slate = vec3(.24, .29, .36), pale = vec3(.93, .94, .93);
   // the body's edge falls away into shadow; a dark ridge along the spine
   float edge = 1. - smoothstep(-.09, .0, sdBody);
   col = back * (1. - .3 * edge);
   col = mix(col, slate, wing);
-  col = mix(col, slate * .7, wing * (1. - smoothstep(.0, .03, abs(P.x) - (.1 + content * .12) - .1)) * .4);
+  col = mix(col, slate * .7, wing * (1. - smoothstep(.0, .03, abs(P.x) - (.1 + content * .025) - .1)) * .4);
+  // Layered flight feathers follow the folded wings; no noisy outline.
+  float vane=sin((P.y+abs(P.x)*1.6)*93. + sin(P.y*11.)*.6);
+  col*=1.+vane*.075*wing;
+  col=mix(col,vec3(.38,.33,.21),feet*(1.-max(body,wing)));
   col = mix(col, pale, max(neck, head));
   // the neck's front is streaked dark
   col = mix(col, vec3(.35, .38, .4), neck * (1. - smoothstep(.0, .03 + soft, abs(P.x - mix(n0.x, n2.x, clamp((P.y - n0.y) / (n2.y - n0.y), 0., 1.))) - .012)) * .5);
@@ -2115,15 +2148,19 @@ void heron(vec2 P, float t, float look, float content, out vec3 col, out float c
 }
 /** A small frog sat at the pier's edge: a plump green body, two eye bumps, hind legs folded beside it, a throat that pulses. */
 void frog(vec2 P, float t, float look, float content, out vec3 col, out float cover){
-  float soft = min(fwidth(P.x) * 1.2, .03);
-  float pulse = 1. + .03 * sin(t * 3.1);
+  float soft = max(fwidth(P.x) * 1.1, .006);
+  P.y/=1.+vHop*.22;
+  float pulse = 1. + .012 * sin(t * 2.1);
   float body = aa2(sdEll(P - vec2(0., -.02), vec2(.36 * pulse, .5)), soft);
   float legs = 0.;
   float feet = 0.;
   for (int k = -1; k <= 1; k += 2) {
     float s = float(k);
     legs = max(legs, aa2(sdEll(rot(P - vec2(s * .44, -.2), s * .5), vec2(.22, .14)), soft));
-    feet = max(feet, aa2(sdEll(P - vec2(s * .28, .34), vec2(.09, .06)), soft));
+    // Bent forearms end in fine splayed toes rather than circular paws.
+    feet=max(feet,aa2(sdSeg3(P,vec2(s*.27,.14),vec2(s*.42,.3))-.036,soft));
+    for(int j=-1;j<=1;j++) feet=max(feet,aa2(sdSeg3(P,vec2(s*.42,.3),vec2(s*(.46+float(j)*.04),.39-abs(float(j))*.025))-.016,soft));
+    for(int j=-1;j<=1;j++) feet=max(feet,aa2(sdSeg3(P,vec2(s*.48,-.27),vec2(s*(.58+float(j)*.04),-.4+float(j)*.025))-.018,soft));
   }
   float eyes = 0., pupils = 0.;
   for (int k = -1; k <= 1; k += 2) {
@@ -2133,22 +2170,27 @@ void frog(vec2 P, float t, float look, float content, out vec3 col, out float co
     pupils = max(pupils, aa2(length(e - vec2(look * .03, .03)) - .045, soft));
   }
   cover = max(max(body, legs), max(feet, eyes));
-  vec3 green = vec3(.38, .58, .26), dark = vec3(.20, .36, .14);
+  vec3 green = vec3(.32, .43, .20), dark = vec3(.14, .24, .10);
   float blot = smoothstep(.55, .7, nz(P * .9 + vB.w * 3.));
   col = mix(green, dark, blot * .8);
   col = mix(col, green * 1.15, (1. - smoothstep(.0, .5, length((P - vec2(0., -.05)) / vec2(.36, .5)))) * .25);
   col = mix(col, dark, max(legs, feet) * (1. - body) * .4);
   col = mix(col, vec3(.82, .70, .30), eyes);
   col = mix(col, vec3(.05), pupils);
+  float ridge=exp(-pow((abs(P.x)-.23)/.025,2.))*body;
+  col+=vec3(.10,.10,.035)*ridge;
+  col*=.94+.12*nz(P*6.+vB.w*5.);
+  float blink=smoothstep(.97,1.,sin(t*.61));
+  col=mix(col,green,eyes*blink*.95);
   // the throat, paler
   col = mix(col, vec3(.86, .88, .62), aa2(sdEll(P - vec2(0., .22), vec2(.16, .1 * pulse)), soft) * .7);
 }
 /** An old turtle resting on the planks: a domed shell of scutes, a head out, four stubby legs, a tail. */
 void turtle(vec2 P, float t, float look, float content, out vec3 col, out float cover){
-  float soft = min(fwidth(P.x) * 1.2, .03);
+  float soft = max(fwidth(P.x) * 1.1, .006);
   float shell = aa2(sdEll(P, vec2(.5, .6)), soft);
   float rim = aa2(sdEll(P, vec2(.5, .6)), soft) - aa2(sdEll(P, vec2(.42, .52)), soft);
-  float head = aa2(sdEll(P - vec2(look * .06, .72 + .02 * sin(t * .8)), vec2(.13, .16)), soft);
+  float head = aa2(sdEll(P - vec2(look * .06, .66 + vB.y*.035 + .012 * sin(t * .8)), vec2(.13, .16)), soft);
   float legs = 0.;
   for (int k = -1; k <= 1; k += 2) {
     float s = float(k);
@@ -2166,21 +2208,53 @@ void turtle(vec2 P, float t, float look, float content, out vec3 col, out float 
   vec3 olive = vec3(.36, .40, .22), dark = vec3(.22, .25, .13), skin = vec3(.42, .46, .28);
   float dome = 1. - smoothstep(.0, 1., length(q));
   col = mix(olive, dark, seam * .9) * (.7 + .45 * dome);
+  // Worn growth rings within the scutes, irregular olive pigmentation.
+  float growth=sin(sc*54.+nz(P*3.+vB.w)*2.);
+  col*=.94+.055*growth+.10*nz(P*5.+vB.w);
   col = mix(col, olive * 1.2, rim * .5);
   col = mix(col, skin, max(head, max(legs, tail)) * (1. - shell));
   col = mix(col, vec3(.06), aa2(length(P - vec2(look * .06 + .07, .78)) - .02, soft) * head);
   col = mix(col, vec3(.06), aa2(length(P - vec2(look * .06 - .07, .78)) - .02, soft) * head);
 }
+void pierLantern(vec2 P, float lit, out vec3 col, out float cover) {
+  float soft=max(fwidth(P.x),.008);
+  float base=aa2(length(P/vec2(.48,.42))-1.,soft*2.);
+  float glass=aa2(length(P/vec2(.34,.29))-1.,soft*2.);
+  float rim=base-glass;
+  float post=aa2(sdEll(P-vec2(0.,-.49),vec2(.16,.24)),soft);
+  float handle=aa2(abs(length((P-vec2(0.,.24))/vec2(.25,.3))-1.)-.10,soft*3.);
+  float strut=aa2(abs(P.x)-.037,soft)*base;
+  cover=max(base,max(post,handle));
+  vec3 metal=mix(vec3(.13,.16,.15),vec3(.38,.35,.25),.5+.5*P.x);
+  col=mix(metal,vec3(.16,.23,.21),glass);
+  col=mix(col,vec3(.21,.18,.11),post*(1.-base));
+  col+=vec3(.13,.17,.16)*glass*exp(-pow((P.x+.17)/.03,2.));
+  col=mix(col,metal,strut);
+  col+=vec3(.25,.22,.14)*rim*max(0.,P.y);
+  float flame=exp(-dot(P/vec2(.12,.18),P/vec2(.12,.18))*2.);
+  col=col*(uAmb+uSunCol*.7)+LAMP*lit*glass*.55;
+  col+=vec3(1.,.78,.35)*lit*flame*2.8*(1.-strut*.7);
+}
 void main(){
   float kind = vB.x, mood = vB.y, look = vB.z, seed = vB.w;
   float t = uTime + seed * 40.;
   vec3 col; float cover;
-  if (kind < .5) heron(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
+  if(kind>2.5) pierLantern(vQ,mood,col,cover);
+  else if (kind < .5) heron(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
   else if (kind < 1.5) frog(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
   else turtle(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
   if (cover < .003) discard;
   if (uShadow > .5) { o = vec4(0., 0., 0., cover * .3); return; }
-  col *= uAmb * .9 + uSunCol * (.5 + .4 * max(uSun.z, 0.)) + LAMP * lampAt(vec2(0.)) * 0.;
+  if(kind<2.5) {
+    // A rounded back lit in world space; the boat and pier lamps share this light.
+    vec2 grad=vQ*vec2(kind<.5?1.7:1.2,.7);
+    vec2 ng=rot(grad,-vHeading);
+    vec3 normal=normalize(vec3(ng,1.));
+    float sun=max(dot(normal,normalize(uSun)),0.);
+    col*=uAmb*.85+uSunCol*(.25+.7*sun)+LAMP*lampAt(vWorld)*1.15;
+    float wet=kind>.5&&kind<1.5?.13:.025;
+    col+=uSunCol*pow(max(dot(normal,normalize(normalize(uSun)+vec3(0.,0.,1.))),0.),45.)*wet;
+  }
   o = vec4(col, 1.) * cover;
 }`;
 
@@ -2217,3 +2291,4 @@ export const SHADERS = {
   RESIDENT_VS,
   RESIDENT_FS,
 };
+

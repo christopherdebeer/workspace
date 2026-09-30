@@ -62,7 +62,8 @@ export interface FrameInput {
   /** Names written on leaves at the start: which atlas entry, where, how tall (world), how faded. */
   names?: Array<{ i: number; x: number; y: number; h: number; a: number }>;
   /** The residents at their piers (the story). */
-  residents?: Array<{ x: number; y: number; heading: number; size: number; kind: number; mood: number; look: number; seed: number }>;
+  residents?: Array<{ x: number; y: number; heading: number; size: number; kind: number; mood: number; look: number; seed: number; hop?: number }>;
+  pierLights?: Array<{ x: number; y: number; strength: number }>;
   /** The notebook, when open: paper over the river, and each entry's sprite at rest (world coords). */
   page?: { open: number; entries: PageEntry[] };
 }
@@ -198,7 +199,7 @@ export class Renderer {
     this.deepInst = new Instanced(gl, this.quad, 400, 3);
     this.fishInst = new Instanced(gl, this.quad, 220, 3);
     this.critterInst = new Instanced(gl, this.quad, 24, 3);
-    this.residentInst = new Instanced(gl, this.quad, 8, 3);
+    this.residentInst = new Instanced(gl, this.quad, 32, 3);
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
     this.weedInst = new Instanced(gl, this.quad, 600, 2);
     this.floatInst = new Instanced(gl, this.quad, 4000, 2);
@@ -311,6 +312,11 @@ export class Renderer {
     if (u.uLamp) {
       const [lx, ly] = f.pond.bow();
       gl.uniform4f(u.uLamp, lx, ly, 150, f.lantern);
+    }
+    if (u.uPierLamp) {
+      const lamps = new Float32Array(16);
+      (f.pierLights ?? []).slice(0,4).forEach((l,i)=>lamps.set([l.x,l.y,100,l.strength],i*4));
+      gl.uniform4fv(u.uPierLamp,lamps);
     }
     if (u.uChan) gl.uniform2fv(u.uChan, this.chan);
     if (u.uChan2) gl.uniform2fv(u.uChan2, this.chan2);
@@ -597,7 +603,7 @@ export class Renderer {
     // the residents, standing on their piers
     if (f.residents?.length) {
       let n = 0;
-      for (const rs of f.residents) if (n < 8) this.residentInst.set(n++, rs.x, rs.y, rs.heading, rs.size, rs.kind, rs.mood, rs.look, rs.seed, 0, 0, 0, 0);
+      for (const rs of f.residents) if (n < 32) this.residentInst.set(n++, rs.x, rs.y, rs.heading, rs.size, rs.kind, rs.mood, rs.look, rs.seed, rs.hop ?? 0, 0, 0, 0);
       this.residentInst.count = n;
       this.residentInst.upload();
       const rp = this.p.resident;
@@ -1045,5 +1051,6 @@ export class Renderer {
 export function drawOrder(pads: Pad[]): Pad[] {
   return pads.slice().sort((a, b) => Number(a.drops.length > 0) - Number(b.drops.length > 0) || a.layer - b.layer);
 }
+
 
 

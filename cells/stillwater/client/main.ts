@@ -23,6 +23,8 @@ import { RESIDENTS, Story, type ResidentKind } from './story';
 import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
+import { Curriculum, accepts, feedback, equation, BANDS, type Challenge } from './challenges';
+import { ChallengeUI } from './challenge-ui';
 import { glInfo, probe, report } from './report';
 import { PROGRAMS } from './render';
 import { program } from './gl';
@@ -30,6 +32,12 @@ import { layDrops, liveCount, Pad, Planting, Pond, seeded } from './world';
 
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
 const ui = new Overlay();
+const mathUI = new ChallengeUI();
+let curriculum = new Curriculum();
+let relationship: Challenge | null = null;
+let relationAssisted = false;
+let relationAttempts = 0;
+let relationClearAt = 0;
 const sound = new Sound();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
@@ -104,6 +112,10 @@ function loadProfile(name: string) {
   pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
   const levelParam = Number(startupParams.get('level'));
   if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
+  curriculum = new Curriculum(startupParams.has('fresh') ? null : readJSON(pKey(pr.id, 'curriculum.v1')), mastery);
+  const band = Number(startupParams.get('maths'));
+  if (startupParams.has('maths') && Number.isInteger(band)) curriculum.setBand(band);
+  mathUI.setBand(curriculum.data.band);
   save();
 }
 const forcedStage = N.stageForId(startupParams.get('stage'));
@@ -113,6 +125,7 @@ const save = () => {
   profile.last = Date.now();
   writeJSON(pKey(profile.id, 'v3'), { mastery, solves: totalSolves, last: profile.last, first: firstPlayed });
   writeJSON(pKey(profile.id, 'facts.v1'), memory);
+  writeJSON(pKey(profile.id, 'curriculum.v1'), curriculum.data);
   writeJSON(PROFILES, profiles);
 };
 const stage = () => activeStage;
@@ -250,6 +263,46 @@ let firstTarget = true;
 let lastSolved: number | undefined;
 let checkAt = 0;
 
+// Relationships use explicit submissions, never elapsed-time grading.
+mathUI.onHelp = () => { relationAssisted = true; };
+mathUI.onSubmit = values => {
+  if (!relationship || visit || pageOpen) return;
+  armSound();
+  if (!accepts(relationship, values)) {
+    relationAttempts++;
+    mathUI.message(feedback(relationship, values));
+    return;
+  }
+  const c = relationship;
+  curriculum.record(c, !relationAssisted && relationAttempts === 0);
+  mathUI.complete(values); mathUI.setBand(curriculum.data.band);
+  relationship = null;
+  relationClearAt = pond.t + 2.4;
+  nextTargetAt = pond.t + 4.2;
+  sound.gathered(); lantern = Math.min(1.5, lantern + 0.35);
+  pond.propel(190);
+  story.gather(); persistStory(); totalSolves++;
+  // A quiet response in the world, independent of numerical size or speed.
+  const nearby = visibleDewy()[0];
+  if (nearby) openBeside(nearby);
+  save();
+};
+mathUI.onSkip = () => {
+  if (!relationship || visit || pageOpen) return;
+  curriculum.record(relationship, false);
+  relationship = null; mathUI.hide(); nextTargetAt = pond.t + 0.5; save();
+};
+mathUI.onBand = band => {
+  if (!profile) return;
+  endVisit(); clearSelection(); target = null; ask = null; share = null;
+  relationship = null; relationClearAt = 0; releaseAt = 0; lock = 0;
+  chimes = []; ui.clearTarget(); mathUI.hide();
+  curriculum.setBand(band); mathUI.setBand(band);
+  stretch = new L.Stretch(null);
+  nextTargetAt = pond.t + 0.3;
+  ui.say(BANDS[band][1], 4); save();
+};
+
 /**
  * Leaves with dew that a child can plainly see: the WHOLE leaf on screen,
  * below the number display and above the boat. A leaf half under the header
@@ -365,6 +418,14 @@ function plantDue() {
 }
 
 function setTarget() {
+  if (!started || pageOpen) return;
+  if (!forcedStage && curriculum.data.band > 0) {
+    relationship = curriculum.next(rand);
+    relationAssisted = false; relationAttempts = 0;
+    ui.clearTarget(); ui.quiet();
+    mathUI.show(relationship); mathUI.setBand(curriculum.data.band);
+    return;
+  }
   const phase = stretch.phase;
   if (phase === 'finale') {
     startFinale();
@@ -376,9 +437,10 @@ function setTarget() {
   let again = false;
   let dueAsk = false;
   let activity: { stage: N.Stage; target: N.Target } | null = null;
-  if (forcedStage) {
-    const t = N.chooseTarget(forcedStage, counts(seen), rand, lastSolved);
-    activity = t ? { stage: forcedStage, target: t } : null;
+  if (forcedStage || curriculum.data.band === 0) {
+    const introStage = forcedStage ?? N.STAGES[0];
+    const t = N.chooseTarget(introStage, counts(seen), rand, lastSolved);
+    activity = t ? { stage: introStage, target: t } : null;
   } else {
     // a returning child's warm-up, and every reach, look first for what's due
     if (phase === 'reach' || (phase === 'warm' && welcome)) {
@@ -392,7 +454,7 @@ function setTarget() {
     activity ??= N.chooseActivity(m, counts(seen), rand, lastSolved);
   }
 
-  let st = activity?.stage ?? forcedStage ?? N.pickStage(m, rand);
+  let st = activity?.stage ?? forcedStage ?? (curriculum.data.band === 0 ? N.STAGES[0] : N.pickStage(m, rand));
   let t = activity?.target ?? N.chooseTarget(st, counts(visibleDewy()), rand, lastSolved);
 
   if (!t) {
@@ -485,31 +547,6 @@ function learnSummary() {
     fluent: facts.filter((k) => memory.fluent(k, now)).length,
     due: memory.due(now, () => true, 99).length,
   };
-}
-
-// ─── the river helps, it never tells (P7) ──────────────────────────────────
-const HELP_AT = [7, 14, 22];
-
-function scaffold() {
-  if (!target || !ask || lock > 0 || selection.length) return;
-  if (ask.scaffold >= HELP_AT.length || pond.t - ask.lastTouchAt < HELP_AT[ask.scaffold]) return;
-  const seen = visibleDewy();
-  const sol = L.solutionFor(ask.stage.rule, counts(seen), ask.value, ask.stage.maxParts, ask.bond ? 2 : undefined);
-  if (!sol) return;
-  ask.scaffold++;
-  const pads = sol.map((i) => seen[i]);
-  if (ask.scaffold === 2) {
-    // one leaf of an answer drifts gently toward the boat
-    const p = pads[0];
-    const [bx, by] = pond.bow();
-    const d = Math.hypot(bx - p.x, by - p.y) || 1;
-    p.vx += ((bx - p.x) / d) * 22;
-    p.vy += ((by - p.y) / d) * 22;
-    p.bob = Math.min(1, p.bob + 0.6);
-  } else {
-    for (const p of pads) p.bob = Math.min(1, p.bob + 0.7);
-  }
-  sound.glint();
 }
 
 // ─── elegance: the river notices a good answer (P4) ────────────────────────
@@ -722,6 +759,10 @@ function solve() {
   }
   if (e.fluent) lantern = Math.min(1.5, lantern + 0.35);
 
+  curriculum.counted(targetFriction === 0 && scaffolds === 0);
+  mathUI.setBand(curriculum.data.band);
+  story.gather();
+  persistStory();
   totalSolves++;
   save();
   nextTargetAt = pond.t + L.PHASE_PAUSE[phase];
@@ -841,7 +882,7 @@ function basketTap() {
   sound.plop(0.35, panAt(pond.boat.x));
   pond.boat.sway += 0.02;
   if (share) share.crumbs += 1;
-  else if (!target && lock <= 0) {
+  else if (!relationship && !relationClearAt && !target && lock <= 0) {
     const fish = bigFishAtBoat().slice(0, 5);
     if (fish.length >= 2) {
       // everyone starts hungry; the fish at the boat now are the ones being shared between
@@ -859,7 +900,7 @@ function stepShare(dt: number) {
   if (!share) {
     // the fish have come and nothing is asked: say so, once in a while
     const visiting = school.fish.filter((f) => f.mood === 2 && f.kind !== 3).length;
-    if (!target && lock <= 0 && visiting >= 2 && pond.t - shareHintAt > 45 && pond.t - startedAt > 20) {
+    if (!relationship && !relationClearAt && !target && lock <= 0 && visiting >= 2 && pond.t - shareHintAt > 45 && pond.t - startedAt > 20) {
       shareHintAt = pond.t;
       ui.say('the fish have come — tap the basket', 5);
     }
@@ -914,77 +955,171 @@ function stepShare(dt: number) {
   }
 }
 
-// ─── the story: residents at the piers ─────────────────────────────────────
-/**
- * Every pier has a resident (heron, frog, turtle, in turn down the river). They
- * stand at the pier's tip, watch a boat that comes near, and when it has come
- * in and rested a moment they speak — a few lines, one at a time, in the hint
- * slot — asking for the one thing they want. See `story.ts`.
- */
-const residentShift = Number(params.get('resident')) || 0;
-const residentKind = (id: number): ResidentKind => RESIDENTS[(id + residentShift) % RESIDENTS.length];
-interface Arrival { id: number; since: number }
-let arrival: Arrival | null = null;
-const visitedAt = new Map<number, number>();
-let lineQueue: Array<{ text: string; at: number }> = [];
-function pierTip(m: { x: number; y: number; ang: number; l: number }): [number, number, number] {
-  const d = m.l - 16;
-  return [m.x - Math.sin(m.ang) * d, m.y + Math.cos(m.ang) * d, -m.ang];
+// ─── deliberate visits: noticing is ambient; speaking and sharing are tapped ──
+const residentShift = Math.trunc(Number(params.get('resident')) || 0);
+type Pier = Pond['landmarks'][number];
+const residentKind = (m: Pier): ResidentKind => RESIDENTS[((Math.floor(m.seed * 997) + residentShift) % 3 + 3) % 3];
+const residentKey = (m: Pier) => `${riverSeed}:${m.key}:${residentKind(m)}`;
+const persistStory = () => { if (profile) writeJSON(pKey(profile.id, 'story.v1'), story.toJSON()); };
+let visit: { key: string; until: number } | null = null;
+let transfer: { key: string; t: number } | null = null;
+let residentPress: { key: string; lamp: boolean; x: number; y: number; moved: boolean } | null = null;
+const residentPose = new Map<string, { look: number; attention: number; hop: number; pad?: Pad }>();
+function pierPoint(m: Pier, across: number, inset: number): [number, number] {
+  const d = m.l - inset, c = Math.cos(m.ang), s = Math.sin(m.ang);
+  return [m.x + across * c - d * s, m.y + across * s + d * c];
+}
+function pierTip(m: Pier): [number, number, number] { return [...pierPoint(m, 0, 16), -m.ang]; }
+function lampPoint(m: Pier): [number, number] { return pierPoint(m, -m.w * 0.65, 53); }
+function residentPoint(m: Pier): [number, number] {
+  const kind = residentKind(m);
+  return pierPoint(m, kind === 'heron' ? m.w * 0.65 : kind === 'frog' ? m.w * 0.3 : 0, kind === 'heron' ? 18 : kind === 'frog' ? 8 : 29);
+}
+function endVisit() {
+  visit = null; transfer = null;
+  if (started) mathUI.suspend(pageOpen);
+  document.getElementById('target')!.style.visibility = '';
+  ui.quiet();
+}
+function visitRiver(m: Pier) {
+  return {
+    seen: (id: string) => notebook.has(id),
+    plantingNear: (Y: number, within: number) => {
+      let best: number | null = null;
+      for (const pl of pond.plantings) if (Math.abs(pl.Y - Y) < within) best = Math.max(best ?? 0, pond.ageDays(pl));
+      return best;
+    },
+    lantern: story.carried, pierLight: story.resident(residentKey(m), residentKind(m)).light,
+    dusk: skyAt(dayStart + pond.t / DAY).dusk,
+  };
+}
+function engage(m: Pier, lamp: boolean) {
+  if (!started || !profile || transfer) return;
+  const key = residentKey(m), kind = residentKind(m), [x, y] = pierTip(m);
+  if (Math.hypot(pond.boat.x - x, pond.boat.y - y) > 210) {
+    ui.say(lamp ? 'bring the boat alongside to share light' : 'row a little closer', 3);
+    return;
+  }
+  if (visit?.key === key && !lamp) { endVisit(); return; }
+  endVisit();
+  visit = { key, until: pond.t + 9 };
+  document.getElementById('target')!.style.visibility = 'hidden';
+  mathUI.suspend(true);
+  if (lamp) {
+    const state = story.resident(key, kind);
+    if (state.light >= 0.95) { ui.say('a light you left burning', 3); visit.until = pond.t + 3; }
+    else if (story.canLight(key, kind)) {
+      transfer = { key, t: 0 };
+      visit.until = pond.t + 7;
+      ui.quiet();
+    } else { ui.say('gather dew, then share its light here', 4); visit.until = pond.t + 4; }
+  } else {
+    const lines = story.visit(kind, visitRiver(m), m.y + pond.origin, key);
+    // One short invitation now; no automatic pages of narration.
+    const line = lines.find(l => l.done) ?? lines[Math.min(1, lines.length - 1)];
+    ui.say(line.text, 6); ui.announce(line.text);
+    visit.until = pond.t + 6;
+  }
+  persistStory();
+}
+function hitResident(sx: number, sy: number): { key: string; lamp: boolean } | null {
+  // Choose the closest of the overlapping generous touch targets.
+  let best: { key: string; lamp: boolean } | null = null, distance = Infinity;
+  for (const m of pond.landmarks) {
+    const key = residentKey(m), pose = residentPose.get(key);
+    const base = residentPoint(m);
+    const rp: [number, number] = pose?.pad && pose.hop >= 1 ? [pose.pad.x, pose.pad.y] : base;
+    for (const lamp of [false, true]) {
+      const [x, y] = toScreen(...(lamp ? lampPoint(m) : rp));
+      const d = Math.hypot(x - sx, y - sy);
+      const radius = Math.max(22, (lamp ? 14 : residentKind(m) === 'heron' ? 27 : 19) * cam.zoom);
+      if (d < radius && d < distance) { distance = d; best = { key, lamp }; }
+    }
+  }
+  return best;
 }
 function residentsNow() {
   const out: NonNullable<Parameters<typeof renderer.render>[0]['residents']> = [];
-  const b = pond.boat;
   for (const m of pond.landmarks) {
-    const [x, y, heading] = pierTip(m);
-    const d = Math.hypot(b.x - x, b.y - y);
-    const kind = residentKind(m.id);
-    const ch = story.chapter(kind);
-    // it looks toward a boat that is near: which side the boat is, in its own frame
-    const s = Math.sin(heading);
-    const c = Math.cos(heading);
-    const across = ((b.x - x) * c - (b.y - y) * s) / Math.max(1, d);
-    const look = d < 220 ? Math.max(-1, Math.min(1, across * 1.5)) : 0;
-    out.push({ x, y, heading, size: kind === 'heron' ? 28 : kind === 'frog' ? 13 : 22, kind: RESIDENTS.indexOf(kind), mood: ch.done ? 2 : d < 220 ? 1 : 0, look, seed: m.seed });
+    const key = residentKey(m), kind = residentKind(m), pose = residentPose.get(key);
+    let [x, y] = residentPoint(m);
+    const hop = pose?.hop ?? 0;
+    if (pose?.pad) {
+      const k = smooth(0, 1, hop);
+      x += (pose.pad.x - x) * k; y += (pose.pad.y - y) * k;
+      y += Math.sin(k * Math.PI) * 15;
+    }
+    const ch = story.residents[key];
+    out.push({ x, y, heading: -m.ang, size: kind === 'heron' ? 30 : kind === 'frog' ? 16 : 25,
+      kind: RESIDENTS.indexOf(kind), mood: ch?.done ? 2 : pose?.attention ?? 0,
+      look: pose?.look ?? 0, seed: m.seed, hop: Math.sin(hop * Math.PI) });
+    const [lx, ly] = lampPoint(m);
+    out.push({ x: lx, y: ly, heading: -m.ang, size: 15, kind: 3, mood: pierBrightness(m), look: 0, seed: m.seed, hop: 0 });
   }
   return out;
 }
+function pierBrightness(m: Pier) {
+  const key = residentKey(m);
+  return transfer?.key === key ? smooth(0.8, 2.8, transfer.t) : story.residents[key]?.light ?? 0;
+}
+function pierLights() {
+  return pond.landmarks.map(m => { const [x, y] = lampPoint(m); return { x, y, strength: pierBrightness(m) }; })
+    .filter(l => l.strength > 0 && Math.abs(l.y - cam.y) < cam.cssH / cam.zoom + 200)
+    .sort((a,b) => Math.hypot(a.x-cam.x,a.y-cam.y)-Math.hypot(b.x-cam.x,b.y-cam.y)).slice(0,4);
+}
 function stepStory(dt: number) {
-  void dt;
-  if (!started || !profile) { arrival = null; return; }
-  const b = pond.boat;
-  let near: { id: number; Y: number } | null = null;
+  if (!started || !profile) return;
   for (const m of pond.landmarks) {
-    const [x, y] = pierTip(m);
-    if (Math.hypot(b.x - x, b.y - y) < 150 && b.speed < 10) { near = { id: m.id, Y: m.y + pond.origin }; break; }
+    const key = residentKey(m), [x,y] = residentPoint(m), kind = residentKind(m);
+    let pose = residentPose.get(key);
+    if (!pose) { pose = {look:0, attention:0, hop:0}; residentPose.set(key,pose); }
+    const d = Math.hypot(pond.boat.x-x,pond.boat.y-y), h = -m.ang;
+    const want = d < 220 ? Math.max(-1,Math.min(1,((pond.boat.x-x)*Math.cos(h)-(pond.boat.y-y)*Math.sin(h))/Math.max(1,d))) : 0;
+    pose.look += (want-pose.look)*(1-Math.exp(-2*dt));
+    pose.attention += ((d < 220 ? 1 : 0)-pose.attention)*(1-Math.exp(-2*dt));
+    if (kind === 'frog' && story.residents[key]?.done) {
+      if (pose.pad && (!pond.pads.includes(pose.pad) || pose.pad.sink > 0.4)) { pose.pad=undefined; pose.hop=0; }
+      if (!pose.pad) pose.pad=pond.pads.find(p => p.plantingSeed !== undefined && p.sink < 0.1 && !p.selected && Math.hypot(p.x-x,p.y-y)<95);
+      if (pose.pad) { const was=pose.hop; pose.hop=Math.min(1,pose.hop+dt/0.8); if(was<1&&pose.hop===1) pose.pad.bob=0.5; }
+    }
   }
-  if (!near) { arrival = null; }
-  else if (!arrival || arrival.id !== near.id) arrival = { id: near.id, since: pond.t };
-  else if (pond.t - arrival.since > 1.2 && pond.t - (visitedAt.get(near.id) ?? -Infinity) > 90 && !target && !share) {
-    visitedAt.set(near.id, pond.t);
-    const kind = residentKind(near.id);
-    const sky = skyAt(dayStart + pond.t / DAY);
-    const river = {
-      seen: (id: string) => notebook.has(id),
-      plantingNear: (Y: number, within: number) => {
-        let best: number | null = null;
-        for (const pl of pond.plantings) if (Math.abs(pl.Y - Y) < within) best = Math.max(best ?? 0, pond.ageDays(pl));
-        return best;
-      },
-      lantern,
-      dusk: sky.dusk,
-    };
-    const lines = story.visit(kind, river, near.Y);
-    writeJSON(pKey(profile.id, 'story.v1'), story.toJSON());
-    lineQueue = lines.map((l, i) => ({ text: l.text, at: pond.t + i * 5.5 }));
-    if (lines.some((l) => l.done)) lantern = Math.min(1.5, lantern + 0.4);
-    // the asks wait while the resident speaks
-    nextTargetAt = Math.max(nextTargetAt, pond.t + lines.length * 5.5 + 2);
+  for (const key of residentPose.keys()) if (!pond.landmarks.some(m=>residentKey(m)===key)) residentPose.delete(key);
+  if (!visit) return;
+  const m = pond.landmarks.find(m=>residentKey(m)===visit!.key);
+  if (!m || Math.hypot(pond.boat.x-pierTip(m)[0],pond.boat.y-pierTip(m)[1])>250 || pond.t>visit.until) {endVisit();return;}
+  // Browsing/visiting supplies no evidence about mathematical hesitation.
+  if (ask) { ask.shownAt+=dt; ask.lastTouchAt+=dt; }
+  if (share) { share.shownAt+=dt; share.lastEat+=dt; }
+  if (releaseAt) releaseAt+=dt;
+  nextTargetAt+=dt;
+  if (transfer) {
+    transfer.t+=dt;
+    if (transfer.t>=2.8) {
+      if(story.light(transfer.key,residentKind(m))) {
+        sound.note(2,panAt(lampPoint(m)[0]));
+        story.visit(residentKind(m),visitRiver(m),m.y+pond.origin,residentKey(m));
+        persistStory(); ui.announce('The pier lantern is alight.');
+      }
+      transfer=null;
+    }
   }
-  while (lineQueue.length && pond.t >= lineQueue[0].at) {
-    const l = lineQueue.shift()!;
-    ui.say(l.text, 5);
-    ui.announce(l.text);
+}
+function storyMotes(): Mote[] {
+  const out:Mote[]=[];
+  if(transfer) {
+    const m=pond.landmarks.find(m=>residentKey(m)===transfer!.key);
+    if(m) {
+      const [bx,by]=pond.bow(),[lx,ly]=lampPoint(m);
+      for(let i=0;i<7;i++) {
+        const k=(transfer.t-i*0.16)/1.7;
+        if(k<=0||k>=1)continue;
+        const e=smooth(0,1,k);
+        out.push({x:bx+(lx-bx)*e,y:by+(ly-by)*e+Math.sin(e*Math.PI)*22,size:7+Math.sin(k*Math.PI)*4,r:1,g:.83,b:.42,a:.85,core:.65,z:1});
+      }
+    }
   }
+  for(const l of pierLights()) out.push({x:l.x,y:l.y,size:46,r:1,g:.73,b:.38,a:l.strength*.16,core:0,z:1});
+  return out;
 }
 
 // ─── the notebook: noticing ─────────────────────────────────────────────────
@@ -1180,8 +1315,9 @@ function buildNumbersPage() {
     pageEl.appendChild(d);
   };
   sec('on the river', `${days ? (days === 1 ? 'since today' : `since ${days} days ago`) : 'just begun'} · ${totalSolves} number${totalSolves === 1 ? '' : 's'} made · ${notebook.pages} of ${SPECIES.length} creatures seen`);
-  sec('now', stageNames[stage().id] ?? stage().id);
-  if (story.told > 0 || Object.keys(story.chapters).length) sec('the piers', `${Object.values(story.chapters).filter((c) => c?.met).length} met · ${story.told} content`);
+  sec('relationships', `${BANDS[curriculum.data.band][0]} · ${curriculum.data.serial} equation challenges explored`);
+  sec('now', curriculum.data.band ? 'equations · '+BANDS[curriculum.data.band][0] : stageNames[stage().id] ?? stage().id);
+  if (story.told > 0 || Object.keys(story.residents).length || Object.keys(story.chapters).length) sec('the piers', `${Object.values(story.residents).filter(c => c.met).length} met · ${story.told} content`);
   if (pond.plantings.length) {
     const flowering = pond.plantings.filter((pl) => pond.ageDays(pl) >= 5).length;
     const leaves = pond.plantings.filter((pl) => pond.ageDays(pl) >= 0.5).length - flowering;
@@ -1194,6 +1330,7 @@ function buildNumbersPage() {
 }
 function togglePage(open = !pageOpen) {
   pageOpen = open;
+  mathUI.suspend(open || !!visit);
   if (open) { pageSide = 'creatures'; pageLeaf = 0; buildPage(); }
   pageEl.classList.toggle('open', open);
   document.body.classList.toggle('page', open);
@@ -1218,6 +1355,7 @@ function pageEntries(): PageEntry[] {
 function begin() {
   if (started) return;
   started = true;
+  mathUI.started();
   ui.fadeTitle();
   notebookBtn.classList.remove('hidden');
 }
@@ -1339,6 +1477,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   if (pointerId !== null) {
     if (performance.now() - pointerAt < 1500 || helm || drag?.moved) return;
     pointerId = null;
+    residentPress = null;
     helm = null;
     drag = null;
     lastHit = null;
@@ -1358,6 +1497,12 @@ canvasEl.addEventListener('pointerdown', (e) => {
   pointerId = e.pointerId;
   canvasEl.setPointerCapture(e.pointerId);
   const [bwx, bwy] = toWorld(e.clientX, e.clientY);
+  const residentHit = started ? hitResident(e.clientX, e.clientY) : null;
+  if (residentHit && !pond.onBoat(bwx, bwy)) {
+    residentPress = {...residentHit, x:e.clientX, y:e.clientY, moved:false};
+    return;
+  }
+  if (visit) endVisit();
   const hitPad = hitOrNear(e.clientX, e.clientY);
   // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
   if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && liveCount(hitPad)))) {
@@ -1404,6 +1549,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
 
 canvasEl.addEventListener('pointermove', (e) => {
   if (e.pointerId !== pointerId) return;
+  if (residentPress) { residentPress.moved ||= Math.hypot(e.clientX-residentPress.x,e.clientY-residentPress.y)>10; return; }
   if (seed) {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
     seed.x = e.clientX; seed.y = e.clientY; seed.wx = wx; seed.wy = wy;
@@ -1474,6 +1620,12 @@ const end = (e: PointerEvent) => {
   if (e.pointerId !== pointerId) return;
   pointerId = null;
   lastHit = null;
+  if (residentPress) {
+    const press=residentPress; residentPress=null;
+    const m=pond.landmarks.find(m=>residentKey(m)===press.key);
+    if(m && !press.moved && e.type !== 'pointercancel') engage(m,press.lamp);
+    return;
+  }
   if (seed) {
     const s = seed;
     seed = null;
@@ -1508,8 +1660,16 @@ canvasEl.addEventListener('pointercancel', end);
 let focusIx = -1;
 canvasEl.addEventListener('keydown', (e) => {
   if (!started) return;
+  if(e.key.toLowerCase()==='r'||e.key.toLowerCase()==='l') {
+    const m=[...pond.landmarks].sort((a,b)=>Math.hypot(a.x-pond.boat.x,a.y-pond.boat.y)-Math.hypot(b.x-pond.boat.x,b.y-pond.boat.y))[0];
+    if(m) engage(m,e.key.toLowerCase()==='l');
+    e.preventDefault();return;
+  }
+  if(e.key === 'Escape' && visit) { endVisit(); return; }
+  if(visit)endVisit();
   const pads = visibleDewy().sort((a, b) => b.y - a.y || a.x - b.x);
   if (e.key === 'Escape') {
+    if(visit) { endVisit(); return; }
     clearSelection();
     return;
   }
@@ -1594,7 +1754,7 @@ function gathers(dt: number, dusk: number): Mote[] {
   }
   lantern = Math.min(1.5, lantern + arrived * 0.12) * Math.exp(-0.25 * dt);
   // the lantern: a small warmth by day, the brightest thing on the river at night
-  const glow = lantern + dusk * 0.8;
+  const glow = lantern + story.carried * 0.2 + dusk * 0.8;
   out.push({ x: bx, y: by, size: 26 + glow * 40, r: 1, g: 0.8, b: 0.45, a: 0.22 + glow * 0.35, core: 0.3, z: 1.02 });
   if (dusk > 0.2) out.push({ x: bx, y: by, size: 140 + glow * 80, r: 1, g: 0.72, b: 0.4, a: 0.05 * dusk + glow * 0.03, core: 0, z: 1 });
   return out;
@@ -1678,7 +1838,7 @@ function frame(now: number) {
   perf.mark('prep');
   school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw, hh }, shift, (x, y) => pond.flow(x, y), interest, pond.crumbs);
   perf.mark('fish');
-  stepShare(dt);
+  if (!visit) stepShare(dt);
   stepStory(dt);
   // a big fish nosing at the surface: a small ring and a soft sound
   for (const r of school.rises) {
@@ -1747,21 +1907,22 @@ function frame(now: number) {
   pond.bumps.length = 0;
 
   // the rules
-  lock = Math.max(0, lock - dt);
+  lock = Math.max(0, lock - (visit ? 0 : dt));
   if (releaseAt && pond.t >= releaseAt) {
     releaseAt = 0;
     clearSelection();
     sound.release();
   }
-  if (!target && !share && pond.t >= nextTargetAt) setTarget();
+  if (relationClearAt && pond.t >= relationClearAt) { mathUI.hide(); relationClearAt = 0; }
+  if (!visit && !relationship && !target && !share && pond.t >= nextTargetAt) setTarget();
   if (!started) placeNames(dt);
   stepChimes();
   stepOpenings(dt);
-  scaffold();
+  // No automatic answer-revealing hints: looking around is not evidence of difficulty.
   if (pond.bloomBoost > 1 && pond.t > 90) pond.bloomBoost = 1;
   if (pond.t >= checkAt) {
     checkAt = pond.t + 0.35;
-    keepSolvable();
+    if (!visit) keepSolvable();
     // a dewy leaf drifting under another sheds the hidden drops rather than hiding them
     shedHidden();
   }
@@ -1840,10 +2001,11 @@ function frame(now: number) {
       fish: school.fish,
       critters: bugs,
       residents: residentsNow(),
-      motes: moteList,
+      pierLights: pierLights(),
+      motes: [...moteList, ...storyMotes()],
       under: air.below,
       thread,
-      lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,
+      lantern: 0.15 + lantern * 0.6 + story.carried * 0.2 + sky.dusk * 1.1,
       names: nameSprites(),
       page: pageK > 0.01 ? { open: pageK, entries: pageSide === 'creatures' ? pageEntries() : [] } : undefined,
     },
@@ -1895,6 +2057,8 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
+    challenge: relationship ? {equation: equation(relationship), skill: relationship.skill, band: relationship.band, attempts: relationAttempts, assisted: relationAssisted} : null,
+    curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),
     boatY: pond.boat.y + pond.origin,
@@ -1929,8 +2093,11 @@ Object.defineProperty(window, '__stillwater', {
     seed: seed ? { moved: seed.moved } : null,
     share: share ? { fish: share.fish.length, fed: share.fish.map((i, k) => (school.fish[i].fed ?? 0) - share!.base[k]) } : null,
     fishAtBoat: bigFishAtBoat().length,
-    story: story.chapters,
-    residents: residentsNow().map((r) => { const [x, y] = toScreen(r.x, r.y); return { kind: RESIDENTS[r.kind], x: Math.round(x), y: Math.round(y), mood: r.mood }; }),
+    story: story.toJSON(),
+    visit: visit?.key ?? null,
+    carriedLight: story.carried,
+    piers: pond.landmarks.map(m=>{const [x,y]=toScreen(...lampPoint(m)); return {key:residentKey(m),kind:residentKind(m),lamp:{x,y,light:pierBrightness(m)}, distance:Math.hypot(pond.boat.x-pierTip(m)[0],pond.boat.y-pierTip(m)[1])};}),
+    residents: residentsNow().map((r) => { const [x, y] = toScreen(r.x, r.y); return { kind: r.kind===3 ? 'lantern' : RESIDENTS[r.kind], x: Math.round(x), y: Math.round(y), mood: r.mood }; }),
     muted: [...sound.muted],
     pads: visibleDewy().map((p) => {
       const [x, y] = toScreen(p.x, p.y);
@@ -1943,4 +2110,5 @@ requestAnimationFrame((t) => {
   last = t;
   requestAnimationFrame(frame);
 });
+
 

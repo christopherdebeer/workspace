@@ -1,5 +1,11 @@
 # Stillwater — making the learning land (and feel good)
 
+> **30 September 2026:** The normal challenge loop is now explicit relationships
+> with its own per-skill progression and optional models. See
+> [the current maths review](MATHS-REVIEW-2026-09-30.md) for the audit, research,
+> implementation and limitations. Sections below document the earlier dew-first
+> design; automatic hints and speed-based grading have been removed.
+
 2026-09-28 · **status: P1–P4, P6–P9 built; P5 partly (bonds, another way, both ways); see REVIEW Round 22** · the interface, environment and feel are locked; everything
 below works through the mechanics that already exist (dew on leaves, touching leaves
 to gather, the boat carried on by a solve, sound, light, blooms, fireflies), or adds
