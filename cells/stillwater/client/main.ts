@@ -647,6 +647,15 @@ function stepPlan() {
     askPlanned();
     return;
   }
+  // rowed past it (a leaf of the bed already behind the view, or gone): lay the next bed ahead now
+  const passed = (p: Pad) => !pond.pads.includes(p) || p.sink > 0.25 || toScreen(p.x, p.y)[1] > cam.cssH * 0.88;
+  if (c.mode === 'pick' && [...optionOf.keys()].some(passed)) {
+    optionOf.clear();
+    numeralLeaves = [];
+    plan.staged = false;
+    plan.at = pond.t;
+    return;
+  }
   // the bed did not come (the boat stopped short, or turned): lay another, a few times
   if (pond.t - plan.at > 14) {
     optionOf.clear();
