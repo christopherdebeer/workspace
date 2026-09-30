@@ -60,7 +60,7 @@ export class ChallengeUI {
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
       () => this.help(),
     );
-    icon('Another question', '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.5 12a6.5 6.5 0 1 1-2-4.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M17.5 3.8v4h-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>', () => this.onSkip());
+    // no skip: rowing on is how a question is left (it fades with its leaves)
     this.root.append(this.eq, this.model, this.tools);
     (document.querySelector('header') ?? document.getElementById('ui')!).append(this.root);
 

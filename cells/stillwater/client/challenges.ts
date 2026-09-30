@@ -436,7 +436,9 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
     case 'factor': {
       // a × ? = t: how many in each group (the unknown is a group size ≤ 12, gathered as drops)
       a = pick(r, TABLES[level] ?? [2, 5, 10]);
-      b = int(r, 2, upto(level === 3 ? 5 : 6, level === 6 ? syl.top : 10));
+      // while the skill is new, the unknown is not the factor on show (`? × 6 = 36` reads as "match the 6")
+      do b = int(r, 2, upto(level === 3 ? 5 : 6, level === 6 ? syl.top : 10));
+      while (b === a && form < 2);
       if (fact && fact.b <= syl.top) [a, b] = [fact.a, fact.b];
       left = any && r() < 0.5 ? op('×', slot(), a) : op('×', a, slot());
       right = a * b;
@@ -446,7 +448,8 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
     case 'divide': {
       // t ÷ a = ? (how many in each group, or how many groups): the quotient is gathered
       a = pick(r, TABLES[level] ?? [2, 5, 10]);
-      b = int(r, 2, upto(level === 3 ? 5 : 6, level >= 6 ? syl.top : 10));
+      do b = int(r, 2, upto(level === 3 ? 5 : 6, level >= 6 ? syl.top : 10));
+      while (b === a && form < 2);
       left = op('÷', a * b, a);
       right = slot();
       answers = [b];
@@ -513,9 +516,21 @@ export function options(c: Challenge, r: () => number, misses: number): number[]
     else if (c.mult) cand = [ans + 1, ans - 1, c.total - c.a, ans + 2, c.a, ans - 2];
     else cand = [ans + 1, ans - 1, c.total, c.a, ans + 2, ans - 2, ans + 10];
   }
+  // never the question's own numbers (a leaf showing one reads as "match what you see")
+  const seen = new Set<number>();
+  const walk = (e: Expr): void => {
+    if (typeof e === 'number') seen.add(e);
+    else if ('op' in e) {
+      walk(e.a);
+      walk(e.b);
+    }
+  };
+  walk(c.left);
+  walk(c.right);
+  const fresh = (v: number) => ok(v) && v > 0 && !out.includes(v) && !seen.has(v);
   const out = [...want];
-  for (const v of cand) if (out.length < want.length + misses && ok(v) && v > 0 && !out.includes(v)) out.push(v);
-  for (let v = c.skill === 'pairs' ? 2 : 1; out.length < want.length + misses && v < 99; v++) if (!out.includes(v)) out.push(v);
+  for (const v of cand) if (out.length < want.length + misses && fresh(v)) out.push(v);
+  for (let v = c.skill === 'pairs' ? 2 : 1; out.length < want.length + misses && v < 99; v++) if (fresh(v)) out.push(v);
   return out.sort(() => r() - 0.5);
 }
 

@@ -312,4 +312,31 @@ describe('stillwater challenges: dew first, then numerals', () => {
       }
     }
   });
+
+  test("choices never show the question's own numbers (other than an answer)", () => {
+    const r = seeded(61);
+    for (let level = 1; level <= TOP; level++) {
+      for (const skill of LEVELS[level].skills) {
+        if (skill === 'identify' || skill === 'sequence') continue;
+        for (let i = 0; i < 40; i++) {
+          const c = makeChallenge(level, skill, r, i % 3, 1, undefined, 'scotland', true);
+          const shownNums = new Set((equation(c).match(/\d+/g) ?? []).map(Number));
+          for (const v of c.choices!) if (!c.answers.includes(v)) expect(shownNums.has(v)).toBe(false);
+        }
+      }
+    }
+  });
+
+  test('while new, a missing factor or quotient is not the factor on show (no `? × 6 = 36`)', () => {
+    const r = seeded(62);
+    for (let level = 3; level <= TOP; level++) {
+      for (const skill of ['factor', 'divide'] as const) {
+        if (!LEVELS[level].skills.includes(skill)) continue;
+        for (let i = 0; i < 200; i++) {
+          const c = makeChallenge(level, skill, r, i % 2, 1, undefined, 'scotland', i % 4 < 2);
+          expect(c.answers[0]).not.toBe(c.a);
+        }
+      }
+    }
+  });
 });

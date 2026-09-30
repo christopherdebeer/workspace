@@ -52,7 +52,7 @@ let numeralLeaves: Pad[] = [];
 const optionOf = new Map<Pad, number>();
 /** For a choose question: the numerals put in its blanks so far, left to right. */
 let chosenValues: number[] = [];
-/** Debug: what the question's supply laid, and when (seconds after it was shown). */
+/** Debug: what the question's supply laid, and when (river time). */
 let supplyLog: Array<[number, number]> = [];
 /** A leaf's numeral as a water state: one numeral (0–9), or two side by side (100 + n). */
 const numeralCode = (n: number) => (n <= 9 ? n : 100 + n);
@@ -393,6 +393,8 @@ mathUI.onYear = (year) => {
   ask = null;
   share = null;
   relationship = null;
+  plan = null;
+  carry = null;
   relationClearAt = 0;
   releaseAt = 0;
   lock = 0;
@@ -460,94 +462,242 @@ function targetDewy(): Pad[] {
   });
 }
 
-/** Only frontmost, afloat leaves with their centres inside the working area.
- * The stock varies independently of the answer; two spare choices prevent the
- * answer from simply being all the visible dew. Selected leaves never change. */
-function relationStock(dry=false):Pad[] {
-  return pond.pads.filter(p=>{
-    if(p.selected||p.flower||p.sink>.25||p.r<22)return false;
-    const n=liveCount(p);if(dry?n>0:n===0)return false;
-    const [x,y]=toScreen(p.x,p.y),inset=p.r*cam.zoom*.7;
-    return x-inset>8&&x+inset<cam.cssW-8&&y-inset>Math.max(205,cam.cssH*.27)&&y+inset<cam.cssH*.88&&!pond.onBoat(p.x,p.y)&&!hitResident(x,y)&&hit(x,y)===p;
+// ─── planning: a question arrives with its leaves (PLANNING-REVIEW-2026-09-30.md) ───
+//
+// A question is shown only when it can be answered from water already settled in
+// view, and while it is up no water that bears on its answer changes. So it is
+// planned first: the question, then its bed (leaves in view if the boat rests,
+// leaves ahead by the boat's coming glide if it moves), whose water is laid in one
+// batch, the answer among spares — out of sight ahead, or in view before the
+// question, never after it. It is asked once the bed is in view and settled. If
+// the bed is lost while it is up, the question fades with it; it is never repaired.
+
+interface Plan {
+  c: Challenge;
+  at: number;
+  staged: boolean;
+  tries: number;
+}
+let plan: Plan | null = null;
+/** A question that faded unanswered comes back with the next water. */
+let carry: Challenge | null = null;
+let lostSince = 0;
+
+/** How far up the screen (CSS px) the view will have moved by the time the boat's way is spent. */
+function glideAhead(): number {
+  const b = pond.boat;
+  const owed = Math.max(0, b.strokeTo - b.stroke);
+  const travel = b.speed / 0.3 + owed * 150;
+  return Math.min(cam.cssH * 0.8, travel * cam.zoom);
+}
+
+/** In clear view — wholly on screen, under the question, off the boat — with the view `shift` px ahead. */
+function inBed(p: Pad, shift = 0): boolean {
+  if (p.selected || p.flower || p.sink > 0.25 || p.r < 22) return false;
+  const [x, y0] = toScreen(p.x, p.y);
+  const y = y0 + shift;
+  const inset = p.r * cam.zoom * 0.7;
+  return x - inset > 8 && x + inset < cam.cssW - 8 && y - inset > Math.max(205, cam.cssH * 0.27) && y + inset < cam.cssH * 0.88 && !pond.onBoat(p.x, p.y) && !hitResident(x, y0) && hit(x, y0) === p;
+}
+/** Still in view (looser than the bed, so a question does not flicker at the edge). */
+function stillSeen(p: Pad): boolean {
+  if (p.sink > 0.25 || !pond.pads.includes(p)) return false;
+  const [x, y] = toScreen(p.x, p.y);
+  return x > 0 && x < cam.cssW && y > cam.cssH * 0.2 && y < cam.cssH * 0.95;
+}
+/** Leaves with (or without, `dry`) counting dew that could be a bed, the view `shift` ahead. */
+function relationStock(dry = false, shift = 0): Pad[] {
+  return pond.pads.filter((p) => (dry ? liveCount(p) === 0 : liveCount(p) > 0) && inBed(p, shift));
+}
+
+/** A leaf's water at rest in the state wanted (-1 drops, or a numeral). */
+function settled(p: Pad, want: number): boolean {
+  if (!glyphsReady) return want === -1 && p.drops.every((d) => d.to <= 0 || d.a >= 0.95);
+  return p.glyph === want && (p.glyphT ?? 1) >= 1 && p.glyphQueue === undefined && p.drops.every((d) => d.to <= 0 || d.a >= 0.95);
+}
+/** Is any counting water in view still forming (drops or a numeral gathering)? Then nothing is asked yet. */
+function formingInView(): boolean {
+  return pond.pads.some((p) => {
+    if (!stillSeen(p) || p.glyphRun) return false;
+    if (p.drops.some((d) => d.to > 0 && d.a < 0.95)) return true;
+    const toward = p.glyphQueue ?? p.glyph;
+    return toward !== undefined && (toward === -1 || toward >= 0) && ((p.glyphT ?? 1) < 1 || p.glyphQueue !== undefined);
   });
 }
+
 /**
- * Keep the question answerable from leaves a child can plainly see: new dew
- * condenses on dry leaves in view as needed, with a couple of spare choices so
- * the answer is never simply all the dew there is. For times questions the dew
- * comes in equal groups — enough leaves of the size the question needs (or the
- * size the child has started with), and a leaf or two that does not match.
- * Chosen leaves are never changed.
+ * Lay a question's water on its bed, in one batch: for a choice, every candidate
+ * numeral at once (or none); for gathering, drops until it can be answered, with
+ * a spare that is not the answer — so no leaf stands out as the one that came for
+ * it. Returns false if the bed cannot hold it (then nothing is laid).
  */
-function ensureRelationshipPads() {
-  const c = relationship;
-  if (!c) return;
-  const g = relationGathered();
-  // a gathering that is too much is let go of, not repaired
-  if (overfull(c, g)) return;
-  const stock = relationStock();
-  const dry = relationStock(true).sort((a, b) => b.r - a.r);
-  const numerals = c.leaves === 'numerals' && c.mode !== 'pick';
+function stageRelationship(c: Challenge, shift: number): boolean {
+  if (c.mode === 'pick') {
+    // the candidates, closest to the middle of the bed first (so they sit together)
+    const mid = cam.cssH * 0.55 - shift;
+    const dry = relationStock(true, shift)
+      .filter((q) => !q.drops.length && q.r >= 26)
+      .sort((a, b) => Math.abs(toScreen(a.x, a.y)[1] - mid) - Math.abs(toScreen(b.x, b.y)[1] - mid));
+    const all = c.choices ?? [];
+    const least = c.answers.length + 2;
+    if (dry.length < Math.min(all.length, least)) return false;
+    // fewer leaves than choices: drop near misses, never an answer
+    let choices = all;
+    if (dry.length < all.length) {
+      const need = [...c.answers];
+      const keep: number[] = [];
+      for (const v of all) {
+        const i = need.indexOf(v);
+        if (i >= 0) need.splice(i, 1);
+        else if (keep.length >= dry.length - c.answers.length) continue;
+        keep.push(v);
+      }
+      choices = keep;
+    }
+    optionOf.clear();
+    choices.forEach((v, i) => {
+      optionOf.set(dry[i], v);
+      supplyLog.push([pond.t, v]);
+    });
+    numeralLeaves = [...optionOf.keys()];
+    return true;
+  }
+  const stock = relationStock(false, shift);
+  const dry = relationStock(true, shift).sort((a, b) => b.r - a.r);
+  const laid: number[] = [];
   const lay = (p: Pad, n: number) => {
     p.drops = layDrops(n, p.r, rand, true);
-    supplyLog.push([Math.round((pond.t - relationShownAt) * 10) / 10, n]);
-    // a leaf that will show its numeral must hold exactly that many (a small leaf can fall short)
-    if (numerals && liveCount(p) !== n) {
-      p.drops = [];
-      return;
-    }
+    if (liveCount(p) !== n) return;
     stock.push(p);
+    laid.push(n);
+    supplyLog.push([pond.t, n]);
   };
-  // once proved with dew, the question's leaves show their numerals (concrete, then abstract)
-  const showNumerals = () => {
-    if (numerals) numeralLeaves = [...new Set([...relationLeaves, ...stock])].filter((p) => liveCount(p) >= 1 && liveCount(p) <= 9);
-  };
-  if (c.mode === 'pick') {
-    // choose (INTERACTION.md): each candidate numeral on a leaf in clear view — a leaf without
-    // counting dew, its fine dew (or a bare leaf's first beads) gathering into the numeral. One
-    // numeral a leaf, never the same one twice; a leaf that drifts off or sinks is replaced
-    const inView = new Set([...relationStock(), ...relationStock(true)]);
-    for (const [p, v] of [...optionOf]) {
-      if (!(inView.has(p) || p.selected) || !(c.choices ?? []).includes(v) || !numeralLeaves.includes(p)) optionOf.delete(p);
-    }
-    const shown = new Set(optionOf.values());
-    for (const v of c.choices ?? []) {
-      if (shown.has(v)) continue;
-      const p = dry.find((q) => !optionOf.has(q) && !q.drops.length && q.r >= 26);
-      if (!p) break;
-      optionOf.set(p, v);
-      shown.add(v);
-      supplyLog.push([Math.round((pond.t - relationShownAt) * 10) / 10, v]);
-    }
-    numeralLeaves = [...optionOf.keys()];
-    return;
-  }
+  const free = () => dry.filter((p) => !stock.includes(p) && !p.drops.length);
   if (c.mode === 'sum') {
-    // as numerals the parts can be larger: fewer leaves for the same number
-    const cycle = numerals ? [7, 4, 9, 3, 8, 5, 6, 2] : [3, 5, 2, 6, 4, 1, 6];
-    for (const p of dry) {
-      if (completable(c, g, counts(stock)) && stock.length >= 3) break;
+    const cycle = [3, 5, 2, 6, 4, 1, 6];
+    for (const p of free()) {
+      if (completable(c, [0], counts(stock)) && stock.length >= 3) break;
       lay(p, cycle[relationSupply++ % cycle.length]);
     }
-    showNumerals();
-    return;
+    if (!completable(c, [0], counts(stock))) return false;
+    // never a lone new leaf: a spare that is not the answer comes with it
+    const spare = free()[0];
+    if (laid.length && spare) lay(spare, [2, 3, 4, 5, 6].filter((n) => n !== c.answers[0])[relationSupply++ % 4]);
+    return true;
   }
   const need = groupsNeed(c);
-  const per = g[1] || need.size;
-  const groups = g[0] ? c.total / per : need.count;
-  const want = groups - (g[0] ?? 0) + 1;
+  const per = need.size;
   let decoys = stock.filter((q) => liveCount(q) !== per).length;
-  for (const p of dry) {
+  for (const p of free()) {
     const have = stock.filter((q) => liveCount(q) === per).length;
-    if (have >= want && decoys >= 2) break;
-    if (have < want) lay(p, per);
+    if (have >= need.count + 1 && decoys >= 2) break;
+    if (have < need.count + 1) lay(p, per);
     else {
-      const others = (numerals ? [2, 3, 4, 5, 6, 7, 8, 9] : [1, 2, 3, 4, 5, 6]).filter((x) => x !== per);
-      lay(p, others[relationSupply++ % others.length]);
+      lay(p, [1, 2, 3, 4, 5, 6].filter((x) => x !== per)[relationSupply++ % 5]);
       decoys++;
     }
   }
-  showNumerals();
+  return completable(c, [0, 0], counts(stock));
+}
+
+/** Can the question (as far as it has been answered) still be finished from what is in view? */
+function answerableNow(c: Challenge): boolean {
+  if (c.mode === 'pick') {
+    const need = [...c.answers];
+    for (const v of chosenValues) {
+      const i = need.indexOf(v);
+      if (i >= 0) need.splice(i, 1);
+    }
+    // two factors: once one is in, only its partner will do
+    if (c.skill === 'pairs' && chosenValues.length === 1) need.splice(0, need.length, c.total / chosenValues[0]);
+    const seen = [...optionOf].filter(([p]) => stillSeen(p) && !relationLeaves.includes(p)).map(([, v]) => v);
+    return need.every((v) => seen.includes(v));
+  }
+  const seen = pond.pads.filter((p) => liveCount(p) > 0 && !p.selected && stillSeen(p));
+  return completable(c, relationGathered(), counts(seen));
+}
+
+/** Plan the next question: choose it, lay its bed, and ask it once the bed is in view and settled. */
+function stepPlan() {
+  if (!plan) return;
+  const c = plan.c;
+  if (!plan.staged) {
+    if (pond.t - plan.at > 0.2 && stageRelationship(c, glideAhead())) {
+      plan.staged = true;
+      plan.at = pond.t;
+    } else if (pond.t - plan.at > 10) {
+      // no bed for this one here: another question (unasked, so nothing is lost)
+      carry = null;
+      plan = null;
+      nextTargetAt = pond.t + 0.5;
+    }
+    return;
+  }
+  const ready =
+    c.mode === 'pick'
+      ? [...optionOf].every(([p, v]) => inBed(p) && settled(p, numeralCode(v)))
+      : completable(c, [0], counts(pond.pads.filter((p) => liveCount(p) > 0 && inBed(p) && settled(p, -1))));
+  if (ready && !formingInView()) {
+    askPlanned();
+    return;
+  }
+  // the bed did not come (the boat stopped short, or turned): lay another, a few times
+  if (pond.t - plan.at > 14) {
+    optionOf.clear();
+    numeralLeaves = [];
+    plan.staged = false;
+    plan.at = pond.t;
+    if (++plan.tries >= 3) {
+      carry = null;
+      plan = null;
+      nextTargetAt = pond.t + 0.5;
+    }
+  }
+}
+
+function askPlanned() {
+  relationship = plan!.c;
+  plan = null;
+  relationLeaves = [];
+  selection = relationLeaves;
+  chosenValues = [];
+  relationHelp = 0;
+  relationAttempts = 0;
+  relationShownAt = pond.t;
+  relationRelease = null;
+  lostSince = 0;
+  mathUI.show(relationship);
+}
+
+/**
+ * While a question is up its water is left alone. If what it needs leaves the
+ * view (rowed on, a leaf sank), the question fades with its leaves — anything
+ * chosen is let go — and comes back later with new water. Not a wrong answer.
+ */
+function keepAnswerable() {
+  const c = relationship;
+  if (!c || lock > 0 || overfull(c, relationGathered())) {
+    lostSince = 0;
+    return;
+  }
+  if (answerableNow(c)) {
+    lostSince = 0;
+    return;
+  }
+  if (!lostSince) lostSince = pond.t;
+  if (pond.t - lostSince < 0.8) return;
+  fadeRelation();
+}
+
+function fadeRelation() {
+  if (!relationship) return;
+  if (relationLeaves.length) sound.release();
+  carry = relationship;
+  clearRelation();
+  relationship = null;
+  lostSince = 0;
+  mathUI.hide();
+  nextTargetAt = pond.t + 0.8;
 }
 
 // ─── the learning arc (LEARNING-DESIGN.md) ────────────────────────────────
@@ -625,19 +775,20 @@ function setTarget() {
   if (!forcedStage && (curriculum.data.level > 0 || numeralTurn)) {
     // `?ask=identify` (or any skill) asks that type of question, for looking at it
     const askParam = (params.get('ask') ?? undefined) as Challenge['skill'] | undefined;
-    relationship = curriculum.next(rand, { phase, due: phase === 'reach' || phase === 'warm' ? dueFact() : null, skill: askParam });
+    // planned, not asked: it is shown once its leaves are in view and settled (stepPlan)
+    const c = carry ?? curriculum.next(rand, { phase, due: phase === 'reach' || phase === 'warm' ? dueFact() : null, skill: askParam });
+    carry = null;
     numeralLeaves = [];
-    relationLeaves = [];
-    selection = relationLeaves;
-    relationHelp = 0;
-    relationAttempts = 0;
-    relationShownAt = pond.t;
+    optionOf.clear();
     supplyLog = [];
-    relationRelease = null;
+    plan = { c, at: pond.t, staged: false, tries: 0 };
     ui.clearTarget();
     ui.quiet();
-    mathUI.show(relationship);
-    ensureRelationshipPads();
+    return;
+  }
+  // nothing is asked while dew in view is still forming: the ask comes with settled water
+  if (formingInView()) {
+    nextTargetAt = pond.t + 0.3;
     return;
   }
   const m = clamp01(mastery + L.PHASE_OFFSET[phase]);
@@ -673,13 +824,13 @@ function setTarget() {
     const all = [...broad, ...dry];
     const fix = N.repair(st, counts(all), value);
     if (fix) {
+      // dew condenses first, with a spare, and the ask comes once it has settled (next time round)
       fix.forEach((c, i) => condense(all[i], c));
-      const k = st.rule === 'groups' ? [...fix.values()][0] : undefined;
-      t = st.rule === 'groups' && k ? { value, rows: value / k, cols: k } : { value };
-    } else {
-      nextTargetAt = pond.t + 1;
-      return;
+      const spare = all.find((p, i) => !fix.has(i) && !p.drops.length);
+      if (spare) condense(spare, 1 + Math.floor(rand() * Math.min(5, st.max)));
     }
+    nextTargetAt = pond.t + (fix ? 0.4 : 1);
+    return;
   }
 
   // a reach at adding is sometimes a bond: this number in exactly two leaves (P5)
@@ -787,8 +938,8 @@ function stepOpenings(dt: number) {
 
 /**
  * Physics may carry a needed leaf away. An untouched ask quietly dissolves and
- * is redrawn from the new landscape. Exact condensation repair is reserved for
- * a child already midway through that answer.
+ * is redrawn from the new landscape; one the child is midway through lets go
+ * gently. Dew is never condensed to finish it (PLANNING-REVIEW-2026-09-30.md).
  */
 function keepSolvable() {
   if (!target || lock > 0) {
@@ -820,14 +971,15 @@ function keepSolvable() {
     return;
   }
 
+  // midway, and it can no longer be finished: let go gently (never condense the missing piece)
   if (lostFor < 1.2) return;
-  const dry = visibleDry();
-  const all = [...seen, ...dry];
-  const fix = N.repair(st, counts(all), target.value);
-  if (fix) {
-    fix.forEach((c, i) => condense(all[i], c));
-    unsolvableSince = 0;
-  }
+  clearSelection();
+  sound.release();
+  target = null;
+  ui.clearTarget();
+  ui.quiet();
+  nextTargetAt = pond.t + 0.8;
+  unsolvableSince = 0;
 }
 
 function gathered() {
@@ -2215,7 +2367,7 @@ function frame(now: number) {
       if (relationship) mathUI.progress(relationGathered());
     }
   }
-  if (!visit && !relationship && !target && !share && pond.t >= nextTargetAt) setTarget();
+  if (!visit && !relationship && !plan && !target && !share && pond.t >= nextTargetAt) setTarget();
   if (!started) placeNames(dt);
   stepChimes();
   stepOpenings(dt);
@@ -2223,7 +2375,7 @@ function frame(now: number) {
   if (pond.bloomBoost > 1 && pond.t > 90) pond.bloomBoost = 1;
   if (pond.t >= checkAt) {
     checkAt = pond.t + 0.35;
-    if (!visit) { if(relationship)ensureRelationshipPads();else keepSolvable(); }
+    if (!visit) { if (relationship) keepAnswerable(); else if (plan) stepPlan(); else keepSolvable(); }
     // a dewy leaf drifting under another sheds the hidden drops rather than hiding them
     shedHidden();
   }
@@ -2468,7 +2620,7 @@ function waterGlyphs(dt: number) {
     }
     // while a question is chosen, other dew on the river settles to fine dew, so the numerals
     // are the only numbers in view (its drops are kept, and gather again after)
-    const choosing = relationship?.mode === 'pick';
+    const choosing = (relationship ?? plan?.c)?.mode === 'pick';
     for (const p of pond.pads) {
       if (glyphsReady && numeralLeaves.includes(p)) continue;
       // a numeral no longer in the question (a sinking leaf leaves it) still runs off as a numeral
@@ -2557,7 +2709,8 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
-    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, choices: relationship.choices, supplied: supplyLog, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), options: [...optionOf].map(([p, v]) => { const [x, y] = toScreen(p.x, p.y); return { id: p.id, v, x: Math.round(x), y: Math.round(y), glyph: p.glyph, t: p.glyphT }; }), chosen: chosenValues, skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
+    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, choices: relationship.choices, supplied: supplyLog.map(([t, v]) => [Math.round((t - relationShownAt) * 10) / 10, v]), shownFor: Math.round((pond.t - relationShownAt) * 10) / 10, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), options: [...optionOf].map(([p, v]) => { const [x, y] = toScreen(p.x, p.y); return { id: p.id, v, x: Math.round(x), y: Math.round(y), glyph: p.glyph, t: p.glyphT }; }), chosen: chosenValues, skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
+    planned: plan ? { equation: equation(plan.c), staged: plan.staged, tries: plan.tries, for: Math.round((pond.t - plan.at) * 10) / 10 } : null,
     curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),
