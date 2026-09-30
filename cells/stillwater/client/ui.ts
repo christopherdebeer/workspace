@@ -152,7 +152,17 @@ export class Overlay {
 
   hideStart() {
     document.getElementById('start')?.classList.add('away');
-    document.getElementById('newname')?.classList.add('away');
+    // the name field fades, and is then gone: no invisible input catching taps (or the keyboard) in play
+    const form = document.getElementById('newname');
+    const input = document.getElementById('newname-input') as HTMLInputElement | null;
+    form?.classList.add('away');
+    input?.blur();
+    if (input) {
+      input.disabled = true;
+      input.tabIndex = -1;
+    }
+    form?.setAttribute('aria-hidden', 'true');
+    window.setTimeout(() => form && (form.hidden = true), 1500);
     this.title.classList.remove('hidden');
     this.quiet();
   }

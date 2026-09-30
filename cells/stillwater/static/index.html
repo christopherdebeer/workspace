@@ -67,6 +67,7 @@
     #start .brand { font-size: 15px; letter-spacing: 10px; margin: 0 0 0 10px; opacity: .92; text-shadow: 0 2px 18px #001b19; }
     #newname { position: fixed; left: 0; right: 0; bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px)); display: flex; justify-content: center; pointer-events: none; transition: opacity 1.4s; }
     #newname.away { opacity: 0; }
+    #newname.away input { pointer-events: none; }
     #newname input { pointer-events: auto; font: 16px Georgia, serif; font-style: italic; letter-spacing: .4px; color: #f3f0d2; background: transparent; border: 0; border-bottom: 1px solid rgba(240, 236, 206, .38); padding: 8px 6px; width: 200px; outline: none; text-align: center; text-shadow: 0 1px 12px #001b19; }
     #newname input:focus { border-bottom-color: rgba(240, 236, 206, .8); }
     #newname input::placeholder { color: rgba(240, 236, 206, .72); }
