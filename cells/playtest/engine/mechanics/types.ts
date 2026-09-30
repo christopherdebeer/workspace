@@ -942,6 +942,11 @@ export function hasExplicitConfig(config: GameConfig, slug: string): boolean {
     return config.engine_mechanics.trade !== undefined;
   }
 
+  // variable-player-powers is configured (and read) as variable_powers
+  if (slug === 'variable-player-powers') {
+    return (config.engine_mechanics as Record<string, unknown>).variable_powers !== undefined;
+  }
+
   return false;
 }
 

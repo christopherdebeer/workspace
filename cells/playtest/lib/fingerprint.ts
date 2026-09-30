@@ -10,6 +10,8 @@
 import { createHash } from 'node:crypto';
 import { mechanicRegistry } from '../engine/mechanics/index';
 import { initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions } from '../engine/core/game';
+import { parseRules, buildDeck } from '../engine/core/rules';
+import { hasExplicitConfig, isMechanicEnabled } from '../engine/mechanics/types';
 
 /** Bump when HOW the fingerprint is computed changes: every hash moves with no mechanic edited,
  *  and the change log says so instead of listing every mechanic as changed.
@@ -54,7 +56,11 @@ export function engineFingerprint(): EngineFingerprint {
     const m = mechanicRegistry.getMechanic(slug);
     if (m) mechanics[slug] = hashObject(m as unknown as Record<string, unknown>);
   }
-  const core = h([initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions].map((f) => f.toString()).join('\n'));
+  // Core: the game loop, plus what decides which mechanics run and how rules are read —
+  // a change there alters play as surely as a hook does.
+  const registry = mechanicRegistry as unknown as Record<string, unknown>;
+  const enabling = ['getEnabledMechanics', 'computeEnabledMechanics'].map((k) => String(registry[k] ?? (Object.getPrototypeOf(registry) as Record<string, unknown>)[k] ?? ''));
+  const core = h([initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions, parseRules, buildDeck, hasExplicitConfig, isMechanicEnabled].map((f) => f.toString()).concat(enabling).join('\n'));
   const version = h(core + JSON.stringify(mechanics));
   cached = { version, method: FP_METHOD, mechanics, core };
   return cached;
