@@ -3,8 +3,9 @@
 *30 September 2026. A review of how questions are planned, shown and supplied,
 prompted by a playtest screenshot: `36 = ? × 6` at the top, and nothing on any
 leaf in view that could answer it. Companion to `INTERACTION.md` (how a question
-is answered) and `MATHS-REVIEW-2026-09-30.md` (what is asked). Analysis and a
-proposal only; nothing here is built yet.*
+is answered) and `MATHS-REVIEW-2026-09-30.md` (what is asked). Sections 1–5
+are the analysis as written before any change; section 6 is what was decided
+and built.*
 
 ## 1. What the screenshot shows, and why
 
@@ -35,7 +36,7 @@ Two more paths lead to the same screen:
   narrow reach **the answer itself can be one of the choices never placed**. This
   is a plain bug, independent of the design questions below.
 
-## 2. How a question is planned today
+## 2. How a question was planned (before this review)
 
 ```
 solve → boat surges (propel 190) → 1.7 s + phase pause
@@ -181,7 +182,59 @@ The planning that follows from it:
 - Missing-factor questions avoid the answer equalling the shown factor while
   the skill is new, and the option list drops the question's own numbers.
 
-## 6. Decisions for you
+## 6. Decided, and built
+
+The decisions: **fade** (a question left behind fades with its leaves), **settled**
+(asked only once its water has formed), **both** (water laid ahead out of sight,
+or in view before the question while the boat rests), and **no skip button**
+(rowing on is how a question is left).
+
+What was built (`client/main.ts`, "planning"):
+
+- **Plan, then ask.** `setTarget` makes a plan, not a question. `stepPlan` lays
+  the bed in one batch (`stageRelationship`):
+  - **choose:** every candidate at once, or none, trimming near misses but never
+    an answer. Numerals prefer leaves that already hold fine dew, so they gather
+    at once rather than beading first.
+  - **gather:** drops until the question can be answered, always with a spare
+    that is not the answer.
+
+  The bed is the leaves in view when the boat rests, or leaves ahead by its
+  coming glide (`glideAhead`) when it moves. The question is asked when every
+  option (or enough settled dew) is in clear view and at rest, and nothing in
+  view is still forming.
+- **Planned during the pause.** After a solve the next plan starts at once, and
+  its water gathers while the lantern rises. It is asked no sooner than the
+  pause allowed before (`askNotBefore`).
+- **Rowed past, laid again.** A bed that falls behind the view is laid again
+  ahead at once. One that never arrives is re-laid after 14 s, and after three
+  tries another question is planned (unasked, so nothing is lost).
+- **Freeze, then fade.** While a question is up nothing is supplied.
+  `keepAnswerable` checks every 0.35 s that it can still be finished from what
+  is in view. If it cannot for 0.8 s, the question fades, letting go of anything
+  chosen, and nothing is recorded. It comes back once with new water. Faded a
+  second time, the river moves on to another question.
+- **Counting (level 0) too.** Nothing is asked while dew in view is still
+  forming. When no ask fits the dew, the missing dew condenses first, with a
+  spare, and the ask comes once it has settled. Midway and no longer finishable,
+  the ask lets go; the missing piece is never condensed.
+- **Questions.** Choices never show the question's own numbers (other than an
+  answer). While a skill is new, a missing factor or quotient is not the factor
+  on show (no `? × 6 = 36`). The "Another question" button is gone.
+
+**Regression probe** (headless, answering as a child would, and rowing):
+
+| run | asked | shown unanswerable | supplied after shown |
+|---|---|---|---|
+| choose, level 6 | 5 | 0 | 0 |
+| gather, level 2 | 6 | 0 | 0 |
+| gather, level 4 | 6 | 0 | 0 |
+| rowing, gather, level 2 | 4 (fading and returning) | 0 | 0 |
+| rowing, choose, level 6 | 1 before the re-lay fix | 0 | 0 |
+
+__PROBE2__
+
+## 7. The decisions as asked
 
 - **If the child rows away mid-question:** should the question fade with its
   leaves (proposed: it belonged to that place), or follow the boat and wait for

@@ -63,6 +63,13 @@ counting made visible (gather); everything else is the child's answer (choose).
 
 Numbers on leaves go up to 99 (two numerals, side by side, in the same water).
 
+## When a question is asked
+
+A question arrives with its leaves: it is shown only once the water that answers
+it has settled in view, nothing that bears on its answer changes while it is up,
+and if its leaves are left behind it fades with them. See
+`PLANNING-REVIEW-2026-09-30.md`.
+
 ## Not changed
 
 What is asked (levels, forms, ranges), how a child moves between levels, the
