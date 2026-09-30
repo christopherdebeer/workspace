@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:4d132811127b11c7679d39fdb339ecba4e72601c10b4c5d514ca0cbe0d97c187",
-  "syncedAt": "2026-09-30T02:01:03.116Z",
+  "treeVersion": "tree:73ea38949f65479a9f2fcc8a82a2939e5d3633d7a50c955ec8512e2973b094f5",
+  "syncedAt": "2026-09-30T02:04:29.195Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -183,7 +183,7 @@
     "engine/mechanics/turn-order-role.ts": "sha256:44a0576d927e818f6d943919aea17631e18ab7fee5bbc1e437557518cc63f5f5",
     "engine/mechanics/turn-order-stat-based.ts": "sha256:6d2fa8d63592ce9812b78566ff403b53599e14acf4e3254574432523a3641f53",
     "engine/mechanics/turn-order-time-track.ts": "sha256:a59ccae64a4a12f385430bdabcd7367082dcff341eae445ef7f5095ffba9b267",
-    "engine/mechanics/types.ts": "sha256:4662d8e07f8160c5f8d0bdace211fa3fc0312994aeda47f4770d32fe895af72f",
+    "engine/mechanics/types.ts": "sha256:157610cd4aa64eb6e5886bab420e3e9c11fe4528eeb23b7dabef8791f3e4f969",
     "engine/mechanics/variable-phase-order.ts": "sha256:62def3fe7bd5940d33510b3e2a775f262919fc9cc4427fcf9cea7e4babd4b955",
     "engine/mechanics/variable-player-powers.ts": "sha256:de369070e32c91195c7694b0de9e9ab77bad22db57b4c68757fc8c31a07147bc",
     "engine/mechanics/variable-set-up.ts": "sha256:15fd395a5f7c3c5b3737d3a2404d37b9bb6a7a7d24957f803c7cf00766990c27",
@@ -217,7 +217,7 @@
     "engine/vendor-info.ts": "sha256:eeaadfb93fcec2e4acfbfffb01bee4a12d5bc5f2f2641dbe0cccd764556c487a",
     "index.ts": "sha256:93d574919e039ae6949ec82bc0a88f9f288a5221dd465b58ec33fe539baefa90",
     "lib/evaluate.ts": "sha256:78d4f829dff6ad570df44e0fe0b0b086b733f4222bf595c90f1fdc8bfc87b462",
-    "lib/fingerprint.ts": "sha256:ed7fb060c74a7145b0dc3edc38f97f8725eddd991d50d0c08bda467974e014d7",
+    "lib/fingerprint.ts": "sha256:5a2169a04c0c5d4e06b0c47a3237c3970557a08835f65965f0d8c4599ad93699",
     "lib/jev.ts": "sha256:9b68102cd9e42be5942c4a029d8559ce43e37aa92115db6c5ed378742447629a",
     "lib/public.ts": "sha256:c7508569d537937f67902e129adda667810295c0868e30df6037eb6c23240bb0",
     "lib/runner.ts": "sha256:7d6fe27afed5d55da2cc7f21ff30229a28544c5ece54383afe2fc165e27d2053",
