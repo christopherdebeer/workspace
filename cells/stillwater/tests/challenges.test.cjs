@@ -6,7 +6,7 @@ let tested=0;
 for(let band=1;band<=5;band++)for(const skill of C.SKILLS[band])for(let i=0;i<400;i++){
  const c=C.makeChallenge(band,skill,rand);
  assert(C.accepts(c,c.answers),C.equation(c));
- assert(c.answers.every(n=>Number.isInteger(n)&&n>=0&&n<=144));
+ assert(c.answers.every(n=>Number.isInteger(n)&&n>=0&&n<=20));
  assert(!C.accepts(c,[]));assert(!C.accepts(c,[NaN]));assert(!C.accepts(c,c.answers.map(x=>x+.5)));
  if(skill==='pairs'){
   for(let a=2;a<=12;a++)for(let b=2;b<=12;b++)assert.equal(C.accepts(c,[a,b]),a*b===c.total);
@@ -31,3 +31,12 @@ const restored=new C.Curriculum(JSON.parse(JSON.stringify(learner.data)));assert
 assert.equal(new C.Curriculum(null,.8).data.band,3,'legacy proficiency supplies a starting point, not mastered skills');
 const forms=new Set();learner=new C.Curriculum({band:5});for(let i=0;i<50;i++){const c=learner.next(rand);forms.add(c.skill);learner.record(c,true);}for(const s of C.SKILLS[5])assert(forms.has(s),s);
 console.log(`PASS ${tested} generated equations; exhaustive factor alternatives; invalid answers; user examples; progression, support and save migration`);
+
+// Pads never need to represent a 144-drop answer; large equations retain small unknowns.
+const stock=[1,1,2,3,4,5,6,6];
+for(let n=1;n<=20;n++)assert(C.padWitness(stock,[n]));
+for(let a=2;a<=12;a++)for(let b=2;b<=12;b++){const w=C.padWitness(stock,[a,b]);assert(w);assert.equal(new Set(w.flat()).size,w.flat().length);assert.deepEqual(w.map(xs=>xs.reduce((s,i)=>s+stock[i],0)),[a,b]);}
+assert.equal(C.padWitness([6],[6,6]),null,'one leaf cannot fill both blanks');
+assert(C.padCompletion(pair,[7,0],[1,2,3,4,5,6]));
+assert.equal(C.padCompletion(pair,[8,0],stock),null,'invalid first factor cannot be completed');
+console.log('PASS bounded physical answers, disjoint pad plans, alternate-factor completion');

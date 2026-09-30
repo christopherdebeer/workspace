@@ -1405,10 +1405,6 @@ export class Pond {
     return [b.x + Math.sin(b.heading) * BOAT_LEN * 0.4, b.y + Math.cos(b.heading) * BOAT_LEN * 0.4];
   }
 
-  /**
-   * A fingertip resting on a dry leaf (set by the page while the finger stays down),
-   * as an offset from the leaf's centre so it rides along as the leaf drifts.
-   */
   held: { pad: Pad; ox: number; oy: number } | null = null;
 
   step(dt: number, active: { y0: number; y1: number }, reduced: boolean) {
@@ -1715,8 +1711,6 @@ export class Pond {
       p.wob = Math.min(1, p.wob + s * 0.2);
       p.vx -= (dx / p.r) * s * 2;
       p.vy -= (dy / p.r) * s * 2;
-      // a blade striking a leaf still throws white water: it churns where the leaf is pushed
-      // under, and the flooded film over the leaf shows it (PAD_FS samples the sim's foam)
       if (foam) this.impulses.push({ x, y, r, s: s * 0.6, foam: true });
       return p;
     }
@@ -1798,8 +1792,6 @@ export class Pond {
           }
         }
         this.lastTip[side < 0 ? 0 : 1] = [tx, ty];
-        // the blade churns white water whether it is in open water or pressing a leaf under:
-        // on a leaf the white shows on the flooded film over it, where the blade is
         const onLeaf = this.padAt(tx, ty, near);
         this.impulses.push({ x: tx, y: ty, r: 7, s: 0.7 * k * drive * dt * 60, foam: true });
         if (!onLeaf && shedEddy) this.shedEddies(tx, ty, k * drive * 0.6, hx, hy);
@@ -1969,9 +1961,6 @@ export class Pond {
     const spinDrag = Math.exp(-1.1 * dt);
     const t = this.t;
 
-    // a fingertip held on a leaf presses it down as the hull does, only gentler: a tap
-    // barely dips it, and the longer the finger stays the deeper it goes (about a second
-    // and a half to put a leaf under) — and the deeper it went, the longer it stays down
     const held = this.held;
     if (held) {
       const p = held.pad;

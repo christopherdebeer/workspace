@@ -23,7 +23,7 @@ import { RESIDENTS, Story, type ResidentKind } from './story';
 import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
-import { Curriculum, accepts, feedback, equation, BANDS, type Challenge } from './challenges';
+import { Curriculum, accepts, feedback, equation, padCompletion, BANDS, type Challenge } from './challenges';
 import { ChallengeUI } from './challenge-ui';
 import { glInfo, probe, report } from './report';
 import { glyphAtlas, GLYPHS } from './glyphs';
@@ -36,6 +36,9 @@ const ui = new Overlay();
 const mathUI = new ChallengeUI();
 let curriculum = new Curriculum();
 let relationship: Challenge | null = null;
+let relationLeaves: Pad[][] = [[]];
+let relationSlot = 0;
+let relationSupply = 0;
 let relationAssisted = false;
 let relationAttempts = 0;
 let relationClearAt = 0;
@@ -264,10 +267,20 @@ let firstTarget = true;
 let lastSolved: number | undefined;
 let checkAt = 0;
 
-// Relationships use explicit submissions, never elapsed-time grading.
+// The equation's quantities are physical selections of dew, never typed numbers.
+const relationValues = () => relationLeaves.map(ps => ps.reduce((n,p) => n + liveCount(p), 0));
+function clearRelation(all = true) {
+  if (all) { for(const ps of relationLeaves) for(const p of ps) p.selected=false; relationLeaves=relationship?.answers.map(()=>[])??[[]]; relationSlot=0; }
+  else { for(const p of relationLeaves[relationSlot])p.selected=false; relationLeaves[relationSlot]=[]; }
+  selection=relationLeaves[relationSlot];
+  if(relationship)mathUI.progress(relationValues(),relationSlot);
+}
+mathUI.onSlot = i => { if(!relationship||visit||pageOpen)return; relationSlot=i;selection=relationLeaves[i];mathUI.progress(relationValues(),i);canvas.focus({preventScroll:true}); };
+mathUI.onClear = () => { if(relationship)clearRelation(false); };
 mathUI.onHelp = () => { relationAssisted = true; };
-mathUI.onSubmit = values => {
+mathUI.onSubmit = () => {
   if (!relationship || visit || pageOpen) return;
+  const values=relationValues();
   armSound();
   if (!accepts(relationship, values)) {
     relationAttempts++;
@@ -275,6 +288,17 @@ mathUI.onSubmit = values => {
     return;
   }
   const c = relationship;
+  const chosen=relationLeaves.flat();
+  // Exactly the dew the player chose rises into the lantern.
+  let order=0;
+  for(const p of chosen){const cs=Math.cos(p.ang),sn=Math.sin(p.ang);
+    for(const d of p.drops){if(d.to<=0)continue;d.to=0;
+      lifts.push({x0:p.x+(cs*d.x-sn*d.y)*p.r,y0:p.y+(sn*d.x+cs*d.y)*p.r,t:0,dur:1.5+rand()*.6,delay:order++*.05,bend:(rand()*2-1)*60,radius:d.r*p.r});
+    }
+    pond.impulses.push({x:p.x,y:p.y,r:p.r*.6,s:.6});
+  }
+  window.setTimeout(()=>chosen.forEach(p=>p.selected=false),900);
+  relationLeaves=[[]];relationSlot=0;selection=[];
   curriculum.record(c, !relationAssisted && relationAttempts === 0);
   mathUI.complete(values); mathUI.setBand(curriculum.data.band);
   relationship = null;
@@ -291,11 +315,11 @@ mathUI.onSubmit = values => {
 mathUI.onSkip = () => {
   if (!relationship || visit || pageOpen) return;
   curriculum.record(relationship, false);
-  relationship = null; mathUI.hide(); nextTargetAt = pond.t + 0.5; save();
+  clearRelation(); relationship = null; mathUI.hide(); nextTargetAt = pond.t + 0.5; save();
 };
 mathUI.onBand = band => {
   if (!profile) return;
-  endVisit(); clearSelection(); target = null; ask = null; share = null;
+  endVisit(); clearSelection(); clearRelation(); target = null; ask = null; share = null;
   relationship = null; relationClearAt = 0; releaseAt = 0; lock = 0;
   chimes = []; ui.clearTarget(); mathUI.hide();
   curriculum.setBand(band); mathUI.setBand(band);
@@ -354,6 +378,34 @@ function targetDewy(): Pad[] {
     const [, sy] = toScreen(p.x, p.y);
     return sy > cam.cssH * 0.25 && sy < cam.cssH * (BOAT_AT - 0.16);
   });
+}
+
+/** Only frontmost, afloat leaves with their centres inside the working area.
+ * The stock varies independently of the answer; two spare choices prevent the
+ * answer from simply being all the visible dew. Selected leaves never change. */
+function relationStock(dry=false):Pad[] {
+  return pond.pads.filter(p=>{
+    if(p.selected||p.flower||p.sink>.25||p.r<22)return false;
+    const n=liveCount(p);if(dry?n>0:n===0)return false;
+    const [x,y]=toScreen(p.x,p.y),inset=p.r*cam.zoom*.7;
+    return x-inset>8&&x+inset<cam.cssW-8&&y-inset>Math.max(205,cam.cssH*.27)&&y+inset<cam.cssH*.88&&!pond.onBoat(p.x,p.y)&&!hitResident(x,y)&&hit(x,y)===p;
+  });
+}
+function ensureRelationshipPads(){
+  if(!relationship)return;
+  const values=relationValues();
+  // A deliberately overfull selection needs revision, not an impossible repair.
+  if(!padCompletion(relationship,values,[1,1,2,2,3,3,4,4,5,5,6,6]))return;
+  const stock=relationStock();
+  const dry=relationStock(true).sort((a,b)=>b.r-a.r);
+  let witness=padCompletion(relationship,values,counts(stock));
+  let spare=witness?stock.length-witness.flat().length:0;
+  for(const p of dry){
+    if(witness&&spare>=2)break;
+    const n=[3,5,2,6,4,1,6][relationSupply++%7];
+    p.drops=layDrops(n,p.r,rand,true);stock.push(p);
+    witness=padCompletion(relationship,values,counts(stock));spare=witness?stock.length-witness.flat().length:0;
+  }
 }
 
 // ─── the learning arc (LEARNING-DESIGN.md) ────────────────────────────────
@@ -422,9 +474,11 @@ function setTarget() {
   if (!started || pageOpen) return;
   if (!forcedStage && curriculum.data.band > 0) {
     relationship = curriculum.next(rand);
+    clearRelation();
     relationAssisted = false; relationAttempts = 0;
     ui.clearTarget(); ui.quiet();
     mathUI.show(relationship); mathUI.setBand(curriculum.data.band);
+    ensureRelationshipPads();
     return;
   }
   const phase = stretch.phase;
@@ -627,12 +681,22 @@ function gathered() {
 }
 
 function clearSelection() {
+  if(relationship){clearRelation(false);return;}
   for (const p of selection) p.selected = false;
   selection = [];
   ui.progress(0);
 }
 
 function choose(p: Pad) {
+  if(relationship){
+    if(visit||pageOpen||lock>0||!liveCount(p))return;
+    if(relationLeaves.some((ps,i)=>i!==relationSlot&&ps.includes(p))){mathUI.message('That pad fills the other blank. Touch that blank to change it.');return;}
+    const ps=relationLeaves[relationSlot],at=ps.indexOf(p);
+    if(at>=0){ps.splice(at,1);p.selected=false;}else{ps.push(p);p.selected=true;sound.note(Math.min(6,ps.length-1),panAt(p.x));}
+    selection=ps;const values=relationValues();mathUI.progress(values,relationSlot);
+    if(accepts(relationship,values))mathUI.onSubmit();
+    return;
+  }
   if (!target || lock > 0) return;
   const i = selection.indexOf(p);
   if (i >= 0) {
@@ -716,8 +780,6 @@ function solve() {
   }
   const done = selection;
   selection = [];
-  // the thread stays through to the last leaf while they glow, so the leaf that
-  // finished the sum is seen to join the others before it all lets go
   solvedThread = { pads: done, until: pond.t + 0.9 };
   window.setTimeout(() => done.forEach((p) => (p.selected = false)), 900);
   lock = 2.2;
@@ -1545,11 +1607,9 @@ canvasEl.addEventListener('pointerdown', (e) => {
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
     if (hitPad) {
-      // a dry leaf: a tap only dips it; a finger left on it presses it slowly under (Pond.held)
       pond.splash(wx, wy, 6, 0.4, false, [hitPad]);
       pond.held = { pad: hitPad, ox: wx - hitPad.x, oy: wy - hitPad.y };
     } else if (!pond.splash(wx, wy, 6, 2.6, !!params.get('foamtap'))) {
-      // one plop: a single clean ring spreading out, like a raindrop or a fingertip
       sound.plop(1, panAt(wx));
     }
     school.scare(wx, wy, 170);
@@ -1621,7 +1681,7 @@ canvasEl.addEventListener('pointermove', (e) => {
   if (selection.length > 1 && selection[selection.length - 2] === p) {
     const last = selection.pop()!;
     last.selected = false;
-    ui.progress(gathered());
+    if(relationship)mathUI.progress(relationValues(),relationSlot);else ui.progress(gathered());
   } else if (!selection.includes(p)) {
     touchPad(p);
     choose(p);
@@ -1936,7 +1996,7 @@ function frame(now: number) {
   if (pond.bloomBoost > 1 && pond.t > 90) pond.bloomBoost = 1;
   if (pond.t >= checkAt) {
     checkAt = pond.t + 0.35;
-    if (!visit) keepSolvable();
+    if (!visit) { if(relationship)ensureRelationshipPads();else keepSolvable(); }
     // a dewy leaf drifting under another sheds the hidden drops rather than hiding them
     shedHidden();
   }
@@ -2120,7 +2180,7 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
-    challenge: relationship ? {equation: equation(relationship), skill: relationship.skill, band: relationship.band, attempts: relationAttempts, assisted: relationAssisted} : null,
+    challenge: relationship ? {equation: equation(relationship), skill: relationship.skill, band: relationship.band, attempts: relationAttempts, assisted: relationAssisted, values:relationValues(), activeSlot:relationSlot, padIds:relationLeaves.map(ps=>ps.map(p=>p.id))} : null,
     curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),

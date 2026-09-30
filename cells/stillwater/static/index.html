@@ -80,17 +80,16 @@
     [hidden] { display: none !important; }
     #relationship { position: fixed; top: max(64px, calc(env(safe-area-inset-top) + 44px)); left: 50%; transform: translateX(-50%); width: min(440px, calc(100% - 24px)); text-align: center; pointer-events: none; color: #fff4d2; text-shadow: 0 2px 12px #001b19; }
     #relationship .equation { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; font-size: clamp(22px, 5.5vw, 30px); font-variant-numeric: tabular-nums; }
-    #relationship input { pointer-events: auto; width: 58px; height: 48px; text-align: center; font: inherit; color: #fff5cf; border: 1px solid #d1cca47a; border-radius: 12px; background: #122e28dc; outline-offset: 3px; caret-color: #f7dea0; }
-    #relationship input:focus { border-color: #f7dea0; outline: 2px solid #f7dea050; }
-    #relationship input::placeholder { color: #d8d7b0; }
+    #relationship .math-blank { pointer-events: auto; width: 58px; height: 48px; font-size: inherit; opacity: 1; text-align: center; font: inherit; color: #fff5cf; border: 1px solid #d1cca47a; border-radius: 12px; background: #122e28dc; outline-offset: 3px; caret-color: #f7dea0; }
+    #relationship .math-blank:focus { border-color: #f7dea0; outline: 2px solid #f7dea050; }
+    #relationship .math-blank[aria-pressed=true] { border-color: #f7dea0; box-shadow: 0 0 0 2px #f7dea033, 0 0 16px #ead89225; }
     #relationship button, .math-menu button { position: static; opacity: .95; min-width: 44px; min-height: 44px; padding: 9px 13px; font-size: 14px; border-radius: 10px; }
     #relationship button:disabled { opacity: .4; cursor: default; }
+    #relationship .equation .math-blank { font-size: inherit; }
+    #relationship .math-tools button { white-space: nowrap; padding: 8px; font-size: 13px; }
     #relationship .math-tools { display: flex; justify-content: center; gap: 6px; }
     #relationship .math-feedback { font-size: 13px; line-height: 1.4; margin: 9px 5px 0; }
-    #relationship .math-keypad, #relationship .math-support, .math-menu { pointer-events: auto; background: #142c25f5; border: 1px solid #b8b48b55; border-radius: 16px; box-shadow: 0 8px 28px #041e1899; }
-    #relationship .math-keypad { width: 228px; margin: 8px auto; padding: 9px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-    #relationship .math-keypad button { background: #e9e4b90b; font-size: 20px; }
-    #relationship .math-keypad .keypad-close { grid-column: 1 / -1; font-size: 12px; }
+    #relationship .math-support, .math-menu { pointer-events: auto; background: #142c25f5; border: 1px solid #b8b48b55; border-radius: 16px; box-shadow: 0 8px 28px #041e1899; }
     #relationship .math-support { margin: 8px auto; padding: 14px; font-size: 14px; line-height: 1.5; max-height: 42dvh; overflow-y: auto; }
     #relationship .math-support p { margin: 0 0 10px; }
     #relationship.answered .equation { color: #fff5ba; filter: drop-shadow(0 0 8px #ebd59188); }
@@ -107,11 +106,10 @@
     .math-menu button small { display: block; font-size: 11px; opacity: .7; margin-top: 4px; }
     .math-menu button[aria-pressed=true] { background: #e9e4b91a; outline: 1px solid #c1cca355; }
     body.page #relationship, body.page #math-range, body.page .math-menu { display: none; }
-    @media (max-height: 540px) { #relationship { top: 12px; } #relationship .math-keypad { width: 200px; position: fixed; right: 0; top: 70px; } #relationship .math-keypad button { min-height: 38px; padding: 5px; } }
   </style>
 </head>
 <body>
-  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go. R visits a nearby resident; L shares light with their pier lantern. Use the maths button to choose a starting range. Touch an equation blank to enter an answer."></canvas>
+  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go. R visits a nearby resident; L shares light with their pier lantern. Use the maths button to choose a starting range. Gather dew from pads to fill an equation blank. Touch a blank to choose which quantity to gather."></canvas>
   <div id="ui">
     <header>
       <h1 id="title" class="hidden">STILLWATER</h1>

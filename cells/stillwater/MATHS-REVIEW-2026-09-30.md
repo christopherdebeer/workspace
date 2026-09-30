@@ -82,9 +82,13 @@ transparent heuristic, not a psychometric model; it records practice, not a clai
 that the entire concept has been mastered. Review spacing is by challenges, not
 calendar time; long-term retention assessment is still future work.
 
-`client/challenge-ui.ts` displays the equation and editable blanks. Touching a
-blank opens a compact keypad; desktop numeric entry and Enter also work. Check
-is explicit, so the first digit of a two-digit answer is not treated as a failure.
+`client/challenge-ui.ts` displays the equation and selectable quantity slots.
+The player taps or traces real dewy pads to fill the active slot; tapping a chosen
+pad releases it. For two blanks, touch a slot to switch which collection is being
+built. A leaf cannot supply both slots. Correct relationships resolve through pad
+selection and those exact drops lift into the boat. There are no numeric fields
+or keypad. The optional check action gives feedback; let go clears the active
+collection. Existing arrow/Enter pad navigation remains an accessibility option.
 Factor pairs accept any two whole numbers 2–12 that satisfy the equation. A
 mismatch reports the amounts on each side and retains the entry for revision.
 
@@ -108,8 +112,9 @@ strategy are not yet assessed. Correct entry alone cannot demonstrate conceptual
 understanding. Next playtests should examine interpretation of the equals sign,
 transfer to unfamiliar forms, deliberate strategy use and retention across days.
 
-The new numeric interface should be judged in play: it solves the opaque-rule
-problem but makes the maths more explicit over the landscape. Future destination
+The equation is a description of the relationship being made with dew; it is
+not an independent answer-entry interface. The keypad introduced in the first
+30 September deployment broke this core interaction and has been removed. Future destination
 stories should give these same relationships a meaningful reason (partitioning
 supplies, equal shares, restoring quantities), without disguising the question or
 turning every encounter into a word problem.
@@ -131,3 +136,24 @@ unequal-side feedback, support, exclusion of assisted work from clean evidence,
 boat/light rewards, notebook/resident suspension, basket isolation, saved range
 and evidence restoration, and touch-keypad entry of 7 × 6 = 42. No page errors.
 Software WebGL validates shader/runtime compatibility, not iPhone Safari performance.
+
+## Pad-input correction, 30 September
+
+All generated unknown quantities are bounded to 20 drops (factor slots to 12).
+Large totals remain in the equations: for example `6 × □ = 42` or
+`6 × 7 = 40 + □`. This avoids asking for 144 individually counted droplets.
+Large products use a missing part beyond a multiple of ten; large dividend
+questions instead ask for the quotient. The relationship retains the arithmetic
+without demanding impractical physical collections.
+
+A polynomial-time disjoint-subset planner checks the physical supply. New dew
+condenses in varied small groups on frontmost, afloat dry leaves as needed,
+keeping spare choices. Selected leaves are protected and never repurposed.
+Physics/viewport changes trigger supply checks without replacing the challenge.
+A mathematically overfull selection must be revised, not repaired into validity.
+
+Verification extends the generator tests with bounded answers, disjoint pad
+plans, alternate-factor completion and no reuse of a leaf for both blanks.
+Browser checks use actual touchscreen taps on pads for a missing addend and both
+factor slots, verify exact dew consumption and rewards, absence of numeric entry,
+and supply at 320px width. Real-device Safari remains a separate performance check.

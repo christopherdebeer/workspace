@@ -44,7 +44,7 @@ export function feedback(c:Challenge,v:number[]):string {
 const integer=(r:()=>number,a:number,b:number)=>a+Math.floor(r()*(b-a+1));
 export function makeChallenge(band:number,skill:Skill,r:()=>number):Challenge {
   const small=band===1;
-  let a=integer(r,small?2:12,small?9:49),b=integer(r,small?1:3,small?10:49);
+  let a=integer(r,small?2:12,small?9:87),b=integer(r,small?1:3,small?10:12);
   if(small&&a+b>20)b=20-a;
   if(['product','factor','divide','pairs','derive'].includes(skill)) {
     a=band===3?[2,5,10][integer(r,0,2)]:integer(r,2,12);b=integer(r,2,band===3?10:12);
@@ -60,17 +60,20 @@ export function makeChallenge(band:number,skill:Skill,r:()=>number):Challenge {
       example='For example: 12 = □ + 7. From 7 to 10 is 3, then 2 more: the missing part is 5.';break;
     case 'subtract':
       if(r()<.5){left=op('−',total,slot());right=a;answers=[b];}
-      else {left=op('−',slot(),a);right=b;answers=[total];}
+      else if(total<=20){left=op('−',slot(),a);right=b;answers=[total];}
+      else {left=op('−',total,a);right=slot();answers=[b];}
       strategy='Subtraction and addition undo each other. Identify the whole and the two parts.';
       example='For example: □ − 7 = 5. The whole is 7 + 5, so it is 12.';break;
     case 'balance': {
       const c=integer(r,1,total-1);left=op('+',a,slot());right=op('+',c,total-c);
       strategy='The equals sign means the same amount on both sides. Find the right-hand total, then the missing left-hand part.';
       example='For example: 8 + □ = 6 + 7. The right side is 13; 8 needs 5 more.';break;}
-    case 'product':left=op('×',a,b);right=slot();answers=[total];strategy=`Think of ${a} equal groups of ${b}. Use a known table fact or split the groups into easier parts.`;example='For example: 6 × 7 = (5 × 7) + 7 = 42.';break;
+    case 'product':left=op('×',a,b);right=slot();answers=[total];
+      if(total>20){const rest=total%10||10;right=op('+',total-rest,slot());answers=[rest];}
+      strategy=`Think of ${a} equal groups of ${b}. Use a known table fact or split the groups into easier parts.`;example='For example: 6 × 7 = (5 × 7) + 7 = 42.';break;
     case 'factor':left=op('×',a,slot());right=total;strategy=`${total} altogether, in ${a} equal groups. How many in each? Multiplication and division undo each other.`;example='For example: 6 × □ = 42, so 42 ÷ 6 = 7.';break;
     case 'divide':
-      if(r()<.5){left=op('÷',total,a);right=slot();answers=[b];}
+      if(total>20||r()<.5){left=op('÷',total,a);right=slot();answers=[b];}
       else {left=op('÷',slot(),a);right=b;answers=[total];}
       strategy='Use the related multiplication: number of groups × amount in each = total.';example='For example: □ ÷ 6 = 7. Six groups of seven make 42.';break;
     case 'pairs':left=op('×',slot(0),slot(1));right=total;answers=[a,b];instruction='Find any factor pair · each number 2–12.';strategy='Try a factor you know. Divide the total by it to find its partner. More than one pair may work.';example='For example: □ × □ = 24 allows 2 × 12, 3 × 8 or 4 × 6 (and their reverses).';break;
@@ -111,4 +114,26 @@ export class Curriculum {
     // Broad evidence across forms, not a global speed score or one lucky answer.
     if(d.band>0&&d.band<5&&SKILLS[d.band].every(s=>(d.skills[`${d.band}:${s}`]?.streak??0)>=3))d.band++;
   }
+}
+
+/** One disjoint collection of physical leaves for each missing quantity.
+ * Dynamic programming: O(leaves × (a+1) × (b+1)), never exponential search. */
+export function padWitness(counts:readonly number[], amounts:readonly number[]):number[][]|null {
+  if(amounts.length<1||amounts.length>2||amounts.some(n=>!Number.isInteger(n)||n<0||n>20))return null;
+  const a=amounts[0],b=amounts[1]??0;
+  const paths=new Map<number,number[][]>([[0,[[],[]]]]);
+  for(let i=0;i<counts.length;i++){
+    const n=counts[i];if(n<=0||!Number.isInteger(n))continue;
+    for(const [key,p] of [...paths]){
+      const x=Math.floor(key/(b+1)),y=key%(b+1);
+      if(x+n<=a){const k=(x+n)*(b+1)+y;if(!paths.has(k))paths.set(k,[[...p[0],i],p[1]]);}
+      if(amounts.length>1&&y+n<=b){const k=x*(b+1)+y+n;if(!paths.has(k))paths.set(k,[p[0],[...p[1],i]]);}
+    }
+  }
+  return paths.get(a*(b+1)+b)?.slice(0,amounts.length)??null;
+}
+export function padCompletion(c:Challenge,values:readonly number[],counts:readonly number[]):number[][]|null {
+  const options=c.skill==='pairs'?Array.from({length:11},(_,i)=>[i+2,c.total/(i+2)]).filter(v=>accepts(c,v)):[c.answers];
+  for(const v of options){const rest=v.map((n,i)=>n-(values[i]??0));const witness=padWitness(counts,rest);if(witness)return witness;}
+  return null;
 }
