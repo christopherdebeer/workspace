@@ -26,6 +26,7 @@ import type { CardsHooks, CardPlayedPayload } from './core/cards';
 import type { GameAction, Card, PlayerState } from '../types/game';
 import { removeCardsFromHand, addToHand } from './core/hand';
 import { addToDiscard } from './core/card-piles';
+import { powerEffect } from './variable-player-powers';
 import { tilesOf, positionOf, neighbours, within, entryProblem, occupants, adjacentPlayers, removeTile, originId } from './core/tile-map';
 
 type TargetKind = 'player' | 'tile' | 'none';
@@ -63,6 +64,8 @@ function targetsFor(ctx: HookContext, card: Card): string[] {
   const needsAdjacency = requiresOf(card).includes('adjacency');
   if (kind === 'player') {
     return others.filter((p) => {
+      const power = powerEffect(state, config, p);
+      if (power?.type === 'immune' && power.to.includes(card.effect?.type ?? '')) return false;
       if (needsAdjacency && !adjacentPlayers(state, config, playerId, p)) return false;
       if (card.effect?.type === 'steal_item') return hand(state, p).some((c) => c.type === 'item');
       return true;

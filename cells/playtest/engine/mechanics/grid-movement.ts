@@ -29,7 +29,8 @@ import {
 } from './types';
 import { GameAction, Card } from '../types/game';
 import { getCardsState } from './core/index';
-import { tilesOf, positionOf, neighbours, entryProblem, describeMap, isBlocked } from './core/tile-map';
+import { tilesOf, positionOf, neighbours, entryProblem, describeMap, isBlocked, within } from './core/tile-map';
+import { powerEffect } from './variable-player-powers';
 
 interface GridConfig {
   type?: string;
@@ -39,11 +40,17 @@ interface GridConfig {
   discover_on_first_visit?: number;
 }
 
-/** Neighbouring tiles this player may enter now. */
+/** Tiles one move can reach: neighbours, or further with a move_range power. */
+function reach(ctx: HookContext): string[] {
+  const here = positionOf(ctx.state, ctx.config, ctx.playerId);
+  const power = powerEffect(ctx.state, ctx.config, ctx.playerId);
+  return power?.type === 'move_range' && power.range > 1 ? within(ctx.state, ctx.config, here, power.range) : neighbours(ctx.state, ctx.config, here);
+}
+
+/** Tiles this player may enter now. */
 function getValidMoveTargets(ctx: HookContext): string[] {
   if (!(ctx.config.engine_mechanics?.grid as GridConfig | undefined)) return [];
-  const here = positionOf(ctx.state, ctx.config, ctx.playerId);
-  return neighbours(ctx.state, ctx.config, here).filter((t) => !entryProblem(ctx.state, ctx.config, ctx.playerId, t));
+  return reach(ctx).filter((t) => !entryProblem(ctx.state, ctx.config, ctx.playerId, t));
 }
 
 export const gridMovementMechanic: MechanicHooks = {
@@ -62,7 +69,7 @@ export const gridMovementMechanic: MechanicHooks = {
     const target = (action as { target: string }).target;
     const here = positionOf(ctx.state, ctx.config, ctx.playerId);
     if (!tilesOf(ctx.state, ctx.config)[target]) return { valid: false, error: `No location "${target}" on the map` };
-    if (!neighbours(ctx.state, ctx.config, here).includes(target)) return { valid: false, error: `${target} is not next to ${here}: move one linked tile at a time (${neighbours(ctx.state, ctx.config, here).join(', ') || 'no links yet — place a location first'})` };
+    if (!reach(ctx).includes(target)) return { valid: false, error: `${target} is not next to ${here}: move one linked tile at a time (${neighbours(ctx.state, ctx.config, here).join(', ') || 'no links yet — place a location first'})` };
     const problem = entryProblem(ctx.state, ctx.config, ctx.playerId, target);
     if (problem) return { valid: false, error: problem };
     return { valid: true };

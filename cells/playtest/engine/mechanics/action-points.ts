@@ -15,6 +15,7 @@
 
 import { MechanicHooks, HookContext, TurnStartContext, ValidationResult, StateChanges, PlayerInitResult, PlayerInitContext, isMechanicEnabled } from './types';
 import { GameAction, DrawAction } from '../types/game';
+import { powerEffect } from './variable-player-powers';
 
 /**
  * Cost after discounts that cards and places grant:
@@ -26,6 +27,8 @@ import { GameAction, DrawAction } from '../types/game';
 function discountedCost(ctx: HookContext, action: GameAction, base: number): { cost: number; consume: () => void } {
   const p = ctx.player as unknown as { freeMoves?: number; usedMovementBonus?: boolean; hand?: Array<{ effect?: { type?: string } }>; state?: string };
   const none = { cost: base, consume: () => undefined };
+  const power = powerEffect(ctx.state, ctx.config, ctx.playerId);
+  if (power?.type === 'action_cost' && power.action === action.type) return { cost: Math.min(base, power.cost), consume: () => undefined };
   if (action.type === 'move') {
     if ((p.freeMoves ?? 0) > 0) return { cost: 0, consume: () => void (p.freeMoves = (p.freeMoves ?? 1) - 1) };
     if (!p.usedMovementBonus && (p.hand ?? []).some((c) => c.effect?.type === 'movement_bonus')) return { cost: 0, consume: () => void (p.usedMovementBonus = true) };
