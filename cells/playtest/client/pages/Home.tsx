@@ -133,7 +133,7 @@ export function Home() {
         </ul>
       </Panel>
 
-      <Panel title="What the score means" sub="score/v2 — each played game gets 0–1; a suite is 85% the average game and 15% how clean the definition is.">
+      <Panel title="What the score means" sub="score/v3 — each played game gets 0–1; a suite is 75% the average game, 15% how clean the definition is, and 10% outcome balance: how evenly wins spread across the secret roles (or seats).">
         <div className="scroll">
           <table className="t">
             <thead>
@@ -145,7 +145,7 @@ export function Home() {
             </thead>
             <tbody>
               {[
-                ['ended', 0.25, 'the game finished by its own rules: 1 · finished only by a turn/round limit: 0.3 · never finished: 0'],
+                ['ended', 0.25, 'the game finished by its own rules: 1 · finished only by a turn/round limit: 0.3 (1 if the rules say who wins at the limit) · never finished: 0'],
                 ['critique', 0.2, "Jev's qualitative review on 16 dimensions — fun, engagement, dynamism, tension, meaningful decisions, strategic depth, diversity, interaction, pace, balance, theme, rules coherence, goal clarity, comeback potential, replayability, elegance (mean of five-step scales)"],
                 ['judged', 0.15, "Jev's probability that the session “plays as designed”"],
                 ['variety', 0.1, 'full marks unless one kind of move is over half of all moves; 0 if it is every move'],

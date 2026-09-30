@@ -375,6 +375,8 @@ export interface Session {
   unsuitable: Array<{ type: string; fields: string[]; why: 'free-text' | 'numeric' | 'no-valid-candidate'; times: number }>;
   /** Each player's secret role/objective, read at the end (for balance: who wins as what). */
   roles?: Record<string, string>;
+  /** The rules name who wins at the time limit (win_timeout): a timeout is a designed ending. */
+  timeoutWinnerRule?: boolean;
   stopped: 'finished' | 'max-steps' | 'deadline' | 'stuck' | 'error';
   error?: string;
   tokens: number;
@@ -494,12 +496,12 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
   const maxSteps = opts.maxSteps ?? 300;
   const slot = newSlot();
   const { config, markdown } = load(rules, slot);
-  const cfg = config as unknown as { win_condition?: string; max_turns?: number };
+  const cfg = config as unknown as { win_condition?: string; max_turns?: number; engine_mechanics?: Record<string, unknown> };
   const rulesDigest = digest(markdown, String(cfg.win_condition ?? ''));
   const rng = mulberry32(seed);
   const simRng = mulberry32(seed ^ 0x5bd1e995); // simulations never touch the game's own stream
   const E = <T,>(fn: () => T): T => withRng(rng, fn);
-  const session: Session = { seed, players: opts.players, status: 'init', winner: null, endReason: null, turns: [], log: [], unsuitable: [], stopped: 'finished', tokens: 0, ms: 0 };
+  const session: Session = { seed, players: opts.players, status: 'init', winner: null, endReason: null, turns: [], log: [], unsuitable: [], stopped: 'finished', tokens: 0, ms: 0, timeoutWinnerRule: !!cfg.engine_mechanics?.win_timeout };
   const unsuitable = new Map<string, Session['unsuitable'][number]>();
   const note = (type: string, fields: string[], why: Session['unsuitable'][number]['why']) => {
     const k = `${type}:${why}`;

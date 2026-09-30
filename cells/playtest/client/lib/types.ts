@@ -34,7 +34,7 @@ export interface Scoring { version: string; weights: Record<string, number>; cri
 export interface RunDigest { id: string; split: 'train' | 'test'; seed: number; players: number; score: number; parts?: Parts; stopped?: string; endReason?: string | null; steps?: number; rounds?: number; verdict?: string | null; findings?: string[]; critique?: Critique | null; winnerRole?: string | null; endKind?: string }
 export interface EvalView {
   id: string; game: string; version: number; engine: string; suite: string; scoreVersion: string;
-  train: { score: number; runs: RunDigest[]; critique?: CritiqueSummary | null }; test: { score: number; n: number };
+  train: { score: number; balance?: number | null; runs: RunDigest[]; critique?: CritiqueSummary | null }; test: { score: number; n: number };
   definitionHealth: number; classificationFindings: Finding[]; tokens: number; usd: number; ms: number; tag: string; createdAt: string;
 }
 export interface Turn { step: number; round: number; turn: number; player: string; valid: number; forced: boolean; move: string; confidence: number | null; runnerUp: [string, number] | null; ahead: number | null; fallback?: string }

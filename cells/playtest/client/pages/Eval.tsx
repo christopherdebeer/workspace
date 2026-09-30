@@ -50,6 +50,7 @@ export function Eval({ id }: { id: string }) {
           <Stat v={runs.length} l="train games" />
           <Stat v={data.test.n} l="test games (hidden)" />
           <Stat v={f3(data.definitionHealth)} l="definition health" />
+          {data.train.balance !== undefined && data.train.balance !== null && <Stat v={f3(data.train.balance)} l="outcome balance (train)" title="Normalised entropy of who won, by secret role (or seat): 1 = every role wins equally often" />}
           <Stat v={`${Math.round(data.ms / 1000)}s`} l="took" />
           <Stat v={`$${data.usd.toFixed(3)}`} l="Jev cost" title={`${data.tokens.toLocaleString()} input tokens`} />
         </div>

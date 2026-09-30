@@ -14,7 +14,7 @@
  *            rounds without a keep = stalled: diagnose, don't keep patching.
  * ------------------------------------------------------------------------- */
 import { classify, play, judge, metrics, sessionFindings, HARNESS_VERSION, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
-import { scoreRun, scoreSuite, definitionHealth, SCORE_VERSION, type RunScore } from './score';
+import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, SCORE_VERSION, type RunScore } from './score';
 import { engineFingerprint } from './fingerprint';
 import * as db from './store';
 
@@ -37,6 +37,9 @@ export interface RunDigest {
   critique?: Critique | null;
   /** The winner's secret role and how the game ended: 'objective' | 'time limit' | 'none'. */
   winnerRole?: string | null;
+  /** Winning positions dealt this game (secret roles, else seats) — for outcome balance. */
+  positions?: string[];
+  winnerKey?: string | null;
   endKind?: string;
 }
 
@@ -85,7 +88,7 @@ export interface EvalRecord extends db.Item {
   incomplete?: number;
   definitionHealth: number;
   classificationFindings: Finding[];
-  train: { score: number; runs: RunDigest[]; critique?: CritiqueSummary | null };
+  train: { score: number; balance?: number | null; runs: RunDigest[]; critique?: CritiqueSummary | null };
   test: { score: number; n: number; runs: Array<{ id: string; score: number }> };
   tokens: number;
   ms: number;
@@ -209,8 +212,8 @@ async function assemble(o: { game: string; def: { version: number; hash: string 
     incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline').length,
     definitionHealth: definitionHealth(o.cls),
     classificationFindings: o.cls.findings,
-    train: { score: scoreSuite(train.map((d) => d.score), o.cls), runs: train, critique: summarizeCritique(train) },
-    test: { score: scoreSuite(test.map((d) => d.score), o.cls), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
+    train: { score: scoreSuite(train.map((d) => d.score), o.cls, outcomeBalance(train)), balance: outcomeBalance(train), runs: train, critique: summarizeCritique(train) },
+    test: { score: scoreSuite(test.map((d) => d.score), o.cls, outcomeBalance(test)), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
     tokens: o.tokens,
     ms: o.ms,
     tag: o.tag,
@@ -384,6 +387,7 @@ export function compactEval(e: EvalRecord) {
     classificationFindings: p.classificationFindings.filter((f) => f.severity !== 'info').map((f) => `${f.severity}: ${f.kind} ${f.subject}`),
     train: {
       score: p.train.score,
+      balance: p.train.balance ?? null,
       critique: p.train.critique ?? null,
       runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null })),
     },
