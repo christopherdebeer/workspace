@@ -25,7 +25,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { cellJobs } from './vendor/cell-jobs.js';
 import { PRESETS } from './engine/presets';
 import VENDOR from './engine/vendor-info';
-import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIXES } from './lib/runner';
+import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIXES, HARNESS_VERSION } from './lib/runner';
 import { scoreRun, SCORE_VERSION, WEIGHTS } from './lib/score';
 import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
@@ -117,9 +117,13 @@ async function completePlan(plan: Plan, rec: EvalRecord): Promise<unknown> {
     const base = (await db.get(`EVAL#${t.baselineId}`, 'meta')) as EvalRecord;
     const suite = await db.getSuite(plan.game);
     const noise = +Math.max(Math.abs(rec.train.score - base.train.score), Math.abs(rec.test.score - base.test.score)).toFixed(4);
-    // An incomplete rerun measures the deadline, not chance: report it, don't store it.
-    if (!rec.incomplete) await db.setSuite(plan.game, { ...suite, noise: Math.max(noise, suite.noise ?? 0) });
-    return { noise, stored: !rec.incomplete, previousNoise: suite.noise ?? null, epsilon: suite.epsilon, effectiveThreshold: Math.max(suite.epsilon, rec.incomplete ? 0 : noise, suite.noise ?? 0), baseline: { train: base.train.score, test: base.test.score }, rerun: { id: rec.id, train: rec.train.score, test: rec.test.score, incomplete: rec.incomplete } };
+    // Noise is a property of (engine, harness, suite): within one context the largest rerun
+    // gap stands; a new context replaces it. An incomplete rerun measures the deadline, not
+    // chance: report it, don't store it.
+    const context = `${plan.engine}/${HARNESS_VERSION}/${db.suiteHash(suite)}`;
+    const stored = suite.noiseContext === context ? Math.max(noise, suite.noise ?? 0) : noise;
+    if (!rec.incomplete) await db.setSuite(plan.game, { ...suite, noise: stored, noiseContext: context });
+    return { noise, stored: rec.incomplete ? null : stored, context, previousNoise: suite.noise ?? null, epsilon: suite.epsilon, effectiveThreshold: Math.max(suite.epsilon, rec.incomplete ? suite.noise ?? 0 : stored), baseline: { train: base.train.score, test: base.test.score }, rerun: { id: rec.id, train: rec.train.score, test: rec.test.score, incomplete: rec.incomplete } };
   }
   if (t.kind === 'propose') {
     const base = (await db.get(`EVAL#${t.baselineId}`, 'meta')) as EvalRecord;
@@ -289,11 +293,12 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
         test: { seeds: ints(a.test?.seeds, cur.test.seeds), players: ints(a.test?.players, cur.test.players) },
         maxSteps: num(a.maxSteps, cur.maxSteps, 10, 300),
         epsilon: num(a.epsilon, cur.epsilon, 0, 0.5),
-        noise: cur.noise,
       };
+      // Noise belongs to the suite it was measured on: a new suite starts unmeasured.
+      if (db.suiteHash(s) === db.suiteHash(cur)) Object.assign(s, { noise: cur.noise, noiseContext: cur.noiseContext });
       if (s.train.seeds.some((x) => s.test.seeds.includes(x))) throw new ToolError('train and test seeds must not overlap');
       const games = (s.train.seeds.length * s.train.players.length + s.test.seeds.length * s.test.players.length);
-      if (games > 24) throw new ToolError(`${games} games per eval is too many for one 300 s job (≤ 24)`);
+      if (games > 48) throw new ToolError(`${games} games per eval is too many (≤ 48; each is its own invocation)`);
       await db.setSuite(game, s);
       return { ...s, hash: db.suiteHash(s), note: 'a new suite hash — previous evals no longer count as baselines' };
     }

@@ -160,6 +160,8 @@ export interface Suite extends Item {
   /** Smallest score change acted on (the post's noise floor). */
   epsilon: number;
   noise?: number;
+  /** engine/harness/suite-hash the noise was measured under */
+  noiseContext?: string;
 }
 export const DEFAULT_SUITE: Suite = { train: { seeds: [1, 2, 3], players: [2, 3] }, test: { seeds: [101, 102, 103], players: [2, 3] }, maxSteps: 150, epsilon: 0.01 };
 /** Canonical JSON (sorted keys): DynamoDB returns map keys in any order, so a
@@ -173,7 +175,7 @@ export const suiteHash = (s: Suite) => hash(canonical({ train: s.train, test: s.
 
 export async function getSuite(slug: string): Promise<Suite> {
   const s = (await get(`GAME#${slug}`, 'SUITE')) as Suite | undefined;
-  return s ? { train: s.train, test: s.test, maxSteps: s.maxSteps, epsilon: s.epsilon, noise: s.noise } : DEFAULT_SUITE;
+  return s ? { train: s.train, test: s.test, maxSteps: s.maxSteps, epsilon: s.epsilon, noise: s.noise, noiseContext: s.noiseContext } : DEFAULT_SUITE;
 }
 export async function setSuite(slug: string, s: Suite): Promise<void> {
   await put({ pk: `GAME#${slug}`, sk: 'SUITE', ...s });
