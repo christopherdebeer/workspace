@@ -13,10 +13,12 @@
  * Debug: ?at=<metres> · ?walk=1 · ?look=<radians> · ?fixed · window.__mistwood
  */
 import { Sound } from './audio';
-import { Baker, cardExtent, type Card } from './bake';
+import { Baker, type Card } from './bake';
 import { Renderer, type Draw, type View } from './render';
+import { countWider, type Structure } from './tree';
 import { clamp01, randomSeed, seedFrom, seedName } from './rng';
-import { Wood, VIEW, type Kind } from './world';
+import { Wood, VIEW, type Kind, type Placed } from './world';
+import { smooth as smoothstep } from './rng';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('wood') as HTMLCanvasElement;
@@ -45,20 +47,22 @@ let texels = 0;
 let bias = 1;
 /** What a phone can hold: about 64 MB of cards. */
 const BUDGET = 16e6;
-const keyOf = (kind: Kind, pool: number, level: number) => `${kind}:${pool}:${level}`;
+/** A far tree's card is baked as seen from one of twelve sides (a patch of grass from one). */
+const SIDES = 12;
+const keyOf = (kind: Kind, pool: number, level: number, side = 0) => `${kind}:${pool}:${level}:${side}`;
 function forget() {
   for (const c of cards.values()) gl.deleteTexture(c.tex);
   cards.clear();
   texels = 0;
 }
-/** The sharpest card of this structure that is ready, at or below `level` if possible. */
-function bestCard(kind: Kind, pool: number, level: number): Card | null {
+/** The sharpest card of this structure (from this side) that is ready, at or below `level` if possible. */
+function bestCard(kind: Kind, pool: number, level: number, side: number): Card | null {
   for (let l = level; l >= 32; l /= 2) {
-    const c = cards.get(keyOf(kind, pool, l));
+    const c = cards.get(keyOf(kind, pool, l, side));
     if (c) return c;
   }
   for (let l = level * 2; l <= 2048; l *= 2) {
-    const c = cards.get(keyOf(kind, pool, l));
+    const c = cards.get(keyOf(kind, pool, l, side));
     if (c) return c;
   }
   return null;
@@ -67,7 +71,17 @@ function bestCard(kind: Kind, pool: number, level: number): Card | null {
 // ─── the wood ───────────────────────────────────────────────────────────────────
 let seed = seedFrom(params.get('seed')) ?? randomSeed();
 let wood!: Wood;
-let walked = Number(params.get('at')) || 0;
+let walked = 0;
+/** Where you stand, and which way you face (free: you walk the way you look). */
+const start = Number(params.get('at')) || 0;
+let posX = 0;
+let posZ = start;
+let heading = 0;
+function stand(z: number) {
+  posZ = z;
+  posX = wood.pathX(z);
+  heading = Math.atan(wood.pathSlope(z + 4)) + (Number(params.get('look')) || 0);
+}
 function plant(s: number) {
   seed = s;
   wood = new Wood(seed);
@@ -78,6 +92,7 @@ function plant(s: number) {
   history.replaceState(null, '', url);
 }
 plant(seed);
+stand(start);
 requestAnimationFrame(() => veil.classList.add('clear'));
 
 // ─── the view ───────────────────────────────────────────────────────────────────
@@ -93,25 +108,25 @@ addEventListener('resize', resize);
 
 const view: View = { x: 0, z: 0, eye: 1.6, yaw: 0, f: 1, horizon: 0 };
 let speed = 0;
-let look = Number(params.get('look')) || 0;
-let yaw = 0;
+let yaw = heading;
 let stride = 0;
 
 // ─── input: hold to walk, drag to look ────────────────────────────────────────────
 let holding = false;
-let dragFrom: { x: number; look: number } | null = null;
+let dragFrom: { x: number; heading: number } | null = null;
 let keys = new Set<string>();
 let walkedOnce = false;
 const autoWalk = !!params.get('walk');
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   holding = true;
-  dragFrom = { x: e.clientX, look };
+  dragFrom = { x: e.clientX, heading };
   sound.arm();
   soundBtn.textContent = sound.on ? 'sound on' : 'sound off';
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (dragFrom) look = Math.max(-1, Math.min(1, dragFrom.look - (e.clientX - dragFrom.x) * 0.0032));
+  // drag the view round (as if taking hold of the world); you walk the way you face
+  if (dragFrom) heading = dragFrom.heading - (e.clientX - dragFrom.x) * 0.0032;
 });
 const release = () => {
   holding = false;
@@ -138,7 +153,8 @@ seedBtn.addEventListener('click', () => {
     plant(randomSeed());
     walked = 0;
     speed = 0;
-    look = 0;
+    stand(0);
+    yaw = heading;
     veil.classList.add('clear');
     changing = false;
   }, 1300);
@@ -156,6 +172,9 @@ const shadeOff = new Float32Array(40 * 2);
 let shadeN = 0;
 const sunAz = 0.25;
 let last = performance.now();
+/** Near trees are drawn as live geometry within this distance (m), up to this many segments a frame. */
+const LIVE = 16;
+const LIVE_BUDGET = 400000;
 const nextPow2 = (x: number) => Math.pow(2, Math.ceil(Math.log2(Math.max(1, x))));
 
 function frame(now: number) {
@@ -170,8 +189,8 @@ function frame(now: number) {
     resize();
   }
   const forward = holding || autoWalk || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
-  if (keys.has('ArrowLeft')) look = Math.min(1, look + dt * 0.7);
-  if (keys.has('ArrowRight')) look = Math.max(-1, look - dt * 0.7);
+  if (keys.has('ArrowLeft')) heading -= dt * 0.8;
+  if (keys.has('ArrowRight')) heading += dt * 0.8;
   speed += ((forward ? 1.1 : 0) - speed) * (1 - Math.exp(-dt * (forward ? 1.4 : 2.2)));
   walked += speed * dt;
   if (speed > 0.3 && !walkedOnce) {
@@ -181,11 +200,13 @@ function frame(now: number) {
   stride += speed * dt * 1.8 * Math.PI;
   const W = canvas.width;
   const H = canvas.height;
-  // on the path, standing a little easy (a slow sway even when still)
-  view.z = walked;
-  view.x = wood.pathX(walked) + Math.sin(t * 0.037) * 0.2;
-  yaw += (Math.atan(wood.pathSlope(walked + 6)) * 0.8 + look + Math.sin(t * 0.05) * 0.02 - yaw) * (1 - Math.exp(-dt * 2.5));
-  view.yaw = yaw;
+  // you walk the way you face (the view turns a moment behind the hand, and sways a little)
+  yaw += (heading - yaw) * (1 - Math.exp(-dt * 6));
+  posX += Math.sin(yaw) * speed * dt;
+  posZ += Math.cos(yaw) * speed * dt;
+  view.z = posZ;
+  view.x = posX + Math.sin(t * 0.037) * 0.12;
+  view.yaw = yaw + Math.sin(t * 0.05) * 0.015;
   view.eye = 1.6 + Math.sin(stride) * 0.022 * clamp01(speed) + Math.sin(t * 0.06) * 0.03;
   view.f = H * 0.92;
   view.horizon = H * 0.4;
@@ -194,49 +215,84 @@ function frame(now: number) {
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
   const density = wood.densityAt(walked + 20);
-  const want: Array<{ kind: Kind; pool: number; level: number; px: number }> = [];
+  const want: Array<{ kind: Kind; pool: number; level: number; px: number; side: number; right: [number, number] }> = [];
   const draws: Array<Draw & { d: number }> = [];
   let grows = 0;
-  for (const p of wood.between(walked - 2, walked + VIEW)) {
+  // what stands in view (grown the first time it is wanted, a few a frame)
+  const seen: Array<{ p: Placed; st: Structure; hd: number; R: number; hM: number }> = [];
+  for (const p of wood.around(view.x, view.z, VIEW)) {
     const rx = p.x - view.x;
     const rz = p.z - view.z;
     const cz = rx * s + rz * c;
     const cx = rx * c - rz * s;
     const hd = Math.hypot(cx, cz);
-    if (cz < 0.3 || hd < 0.6) continue;
-    if (p.kind === 'patch' && cz > 26) continue;
-    // grow the structure the first time (a few a frame)
+    if (hd > VIEW || hd < 0.4 || cz < -4) continue;
+    if (p.kind === 'patch' && hd > 22) continue;
     if (!wood.grown(p.kind, p.pool)) {
       if (grows++ < 2) wood.structure(p.kind, p.pool);
       continue;
     }
     const st = wood.structure(p.kind, p.pool);
-    const wM = (st.maxX - st.minX) * p.scale;
+    const R = st.radius * p.scale;
     const hM = st.maxY * p.scale;
-    // off to the side, allowing for its width
-    // (cylindrical: across the screen is angle)
-    if (Math.abs(Math.atan2(cx, cz)) - wM / hd > W / (2 * view.f) + 0.05) continue;
-    // the pixels it needs: its size on screen, less as the fog takes it (detail it hides is not needed)
+    // off to the side (cylindrical: across the screen is angle), allowing for its reach
+    if (Math.abs(Math.atan2(cx, cz)) - Math.atan2(R, Math.max(hd, 0.1)) > W / (2 * view.f) + 0.05) continue;
+    seen.push({ p, st, hd, R, hM });
+  }
+  // the nearest first: they get the live geometry while there is budget for it
+  seen.sort((a, b) => a.hd - b.hd);
+  let liveLeft = LIVE_BUDGET * quality * quality;
+  for (const { p, st, hd, R, hM } of seen) {
+    let liveAlpha = 0;
+    if (p.kind !== 'patch' && hd < LIVE) {
+      // only the segments that would still be a tenth of a pixel wide or more
+      const n = countWider(st, (0.1 * hd) / (view.f * p.scale));
+      if (n <= liveLeft) {
+        liveLeft -= n;
+        liveAlpha = 1 - smoothstep(LIVE - 4, LIVE, hd);
+        draws.push({ live: true, buffer: baker.buffer(st), count: n, x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, d: hd });
+      }
+    }
+    if (liveAlpha >= 0.999) continue;
+    // a card, baked as the tree is seen from here (one of twelve sides)
+    const ex = view.x - p.x;
+    const ez = view.z - p.z;
+    const el = Math.hypot(ex, ez) || 1;
+    const rwx = -ez / el;
+    const rwz = ex / el;
+    let side = 0;
+    let right: [number, number] = [1, 0];
+    if (p.kind !== 'patch') {
+      const cr = Math.cos(p.rot);
+      const sr = Math.sin(p.rot);
+      const lx = rwx * cr + rwz * sr;
+      const lz = -rwx * sr + rwz * cr;
+      side = ((Math.round(Math.atan2(lz, lx) / ((2 * Math.PI) / SIDES)) % SIDES) + SIDES) % SIDES;
+      const a = (side * 2 * Math.PI) / SIDES;
+      right = [Math.cos(a), Math.sin(a)];
+    }
+    // the pixels it needs: its size on screen, less as the fog takes it
     const fogged = 1 - Math.exp(-hd * density * 1.4);
-    const need = ((Math.max(wM, hM) * view.f) / hd) * (1 - 0.75 * fogged);
-    // under memory pressure the small, fogged cards give way first; the near trees keep their detail
+    const need = ((Math.max(2 * R, hM) * view.f) / Math.max(hd, 0.5)) * (1 - 0.75 * fogged);
     const px = need * (need > 900 ? Math.max(bias, 0.8) : bias);
     const level = Math.max(64, Math.min(p.kind === 'patch' ? 1024 : 2048, nextPow2(px)));
-    const card = bestCard(p.kind, p.pool, level);
-    if (!card || card.level < level) want.push({ kind: p.kind, pool: p.pool, level, px });
+    const card = bestCard(p.kind, p.pool, level, side);
+    if (!card || card.level < level) want.push({ kind: p.kind, pool: p.pool, level, px, side, right });
     if (!card) continue;
     card.used = t;
-    const ext = cardExtent(st, card.level);
-    const left = ext.left * p.scale;
-    const width = ext.width * p.scale;
+    const left = card.left * p.scale;
+    const width = card.width * p.scale;
+    const flip = p.kind === 'patch' && p.flip;
     draws.push({
+      live: false,
       card,
       x: p.x,
       z: p.z,
-      rect: p.flip ? [-left, ext.bottom * p.scale, -width, ext.height * p.scale] : [left, ext.bottom * p.scale, width, ext.height * p.scale],
-      flip: p.flip,
+      rect: flip ? [-left, card.bottom * p.scale, -width, card.height * p.scale] : [left, card.bottom * p.scale, width, card.height * p.scale],
+      flip,
       phase: p.phase,
       patch: p.kind === 'patch',
+      alpha: 1 - liveAlpha,
       d: hd,
     });
   }
@@ -245,13 +301,13 @@ function frame(now: number) {
   let budget = 150000;
   const baked = new Set<string>();
   for (const w of want) {
-    const key = keyOf(w.kind, w.pool, w.level);
+    const key = keyOf(w.kind, w.pool, w.level, w.side);
     if (baked.has(key) || cards.has(key)) continue;
     const st = wood.structure(w.kind, w.pool);
     if (budget - st.count < 0 && baked.size) break;
     budget -= st.count;
     baked.add(key);
-    const card = baker.bake(st, w.level);
+    const card = baker.bake(st, w.level, w.right);
     card.used = t;
     cards.set(key, card);
     texels += card.texels;
@@ -275,10 +331,11 @@ function frame(now: number) {
   shadeN = 0;
   for (let k = draws.length - 1; k >= 0 && shadeN < 40; k--) {
     const d = draws[k];
-    if (d.patch || d.d > 28) continue;
-    const crown = Math.abs(d.rect[2]) * 0.45;
+    if (d.d > 28 || (!d.live && d.patch) || (!d.live && d.alpha < 0.5)) continue;
+    const crown = d.live ? d.radius * d.scale * 0.8 : Math.abs(d.rect[2]) * 0.45;
+    const tall = d.live ? d.height * d.scale : d.rect[3];
     shade.set([d.x, d.z, 0.35 + crown * 0.08, crown], shadeN * 4);
-    shadeOff.set([-Math.sin(sunAz) * d.rect[3] * 0.25, -Math.cos(sunAz) * d.rect[3] * 0.25], shadeN * 2);
+    shadeOff.set([-Math.sin(sunAz) * tall * 0.25, -Math.cos(sunAz) * tall * 0.25], shadeN * 2);
     shadeN++;
   }
   const wind = 0.55 + 0.45 * Math.sin(t * 0.11) * Math.sin(t * 0.067 + 1);
@@ -287,6 +344,9 @@ function frame(now: number) {
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
     walked: Math.round(walked * 10) / 10,
+    at: [Math.round(posX * 10) / 10, Math.round(posZ * 10) / 10],
+    live: draws.filter((d) => d.live).length,
+    segments: draws.reduce((n, d) => n + (d.live ? d.count : 0), 0),
     cards: draws.length,
     baked: cards.size,
     mb: Math.round((texels * 4) / 1e6),

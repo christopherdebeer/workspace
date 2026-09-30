@@ -14,6 +14,7 @@
  *    blacks, a vignette, grain.
  */
 import type { Card } from './bake';
+import { SEG } from './tree';
 
 const NOISE = `
 uniform uint uSeed;
@@ -144,7 +145,7 @@ in vec3 vWorld;
 in float vDist;
 out vec4 o;
 uniform sampler2D uTex;
-uniform float uDensity, uWind, uPhase, uKind, uFlip;
+uniform float uDensity, uWind, uPhase, uKind, uFlip, uAlpha;
 uniform vec4 uRect;
 uniform vec3 uBark, uBirch, uLeaf, uStraw, uStrawDark;
 ${NOISE}
@@ -178,7 +179,122 @@ void main() {
   // (the ground fog lies a few metres off: what is at your feet is clear)
   float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
-  o = vec4(mix(base, fogAt(vWorld.y), fog) * cov, cov);
+  o = vec4(mix(base, fogAt(vWorld.y), fog) * cov, cov) * uAlpha;
+}`;
+
+/**
+ * Near trees as live 3D geometry: every segment of the grown tree, each frame, as a screen-space
+ * anti-aliased line (as the bake draws them) — so a near tree is right from every side, has depth
+ * in its crown, and its bark is shaded by where it faces. Segments come thickest first, so drawing
+ * the first N is the tree as far as it can be seen at that distance.
+ */
+const LIVE_VS = `#version 300 es
+in vec3 aP0;
+in vec3 aP1;
+in vec4 aInfo; // w0, w1, tone, leaf
+uniform vec2 uRes;
+uniform float uF, uHz, uT, uWind;
+uniform vec4 uCam;
+uniform vec2 uAnchor;
+uniform float uRot, uScale, uPhase, uRadius, uHeight;
+out vec2 vP;
+flat out vec2 vA;
+flat out vec2 vB;
+flat out vec2 vW;
+flat out vec2 vTL;
+out vec3 vWorld;
+out float vDist;
+vec3 place(vec3 p) {
+  float c = cos(uRot), s = sin(uRot);
+  vec3 q = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c) * uScale;
+  // wind as a smooth field over the tree (so no joint ever cracks): nothing on the trunk's axis
+  // or low down; the outer, high twigs most
+  float radial = length(p.xz) / max(uRadius, .3);
+  float reach = smoothstep(.12, 1., radial) * smoothstep(.1, .6, p.y / max(uHeight, 1.));
+  float gust = .5 + .5 * sin(uT * .23 + uPhase);
+  vec3 wv = vec3(sin(uT * 1.1 + uPhase + p.y * .3) * .6 + sin(uT * 2.7 + uPhase * 1.7 + p.x * 2.) * .4, 0., cos(uT * .9 + uPhase * 1.3 + p.z * 2.) * .5);
+  float flutter = sin(uT * 6.3 + dot(p, vec3(9.1, 7.3, 8.7)));
+  q += (wv * .07 * (.4 + .6 * gust) + vec3(flutter, flutter * .4, -flutter) * .012) * uWind * reach * reach * uScale;
+  return q + vec3(uAnchor.x, 0., uAnchor.y);
+}
+vec3 project(vec3 w, out float hd) {
+  vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
+  float cs = cos(uCam.w), sn = sin(uCam.w);
+  float cx = rel.x * cs - rel.z * sn;
+  float cz = rel.x * sn + rel.z * cs;
+  hd = max(length(vec2(cx, cz)), .05);
+  return vec3(atan(cx, cz) * uF + .5 * uRes.x, rel.y / hd * uF + uHz, cz);
+}
+void main() {
+  vec3 wa = place(aP0), wb = place(aP1);
+  float ha, hb;
+  vec3 sa = project(wa, ha), sb = project(wb, hb);
+  if (sa.z < .15 || sb.z < .15) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  float pa = aInfo.x * uScale * uF / ha, pb = aInfo.y * uScale * uF / hb;
+  vec2 a = sa.xy, b = sb.xy, d = b - a;
+  float len = length(d);
+  vec2 dir = len > 1e-4 ? d / len : vec2(0., 1.);
+  vec2 n = vec2(-dir.y, dir.x);
+  float e = max(pa, pb) * .5 + 1.5;
+  int c = gl_VertexID;
+  bool first = c == 0 || c == 2;
+  vec2 p = (first ? a - dir * e : b + dir * e) + n * (c < 2 ? -e : e);
+  gl_Position = vec4(p / uRes * 2. - 1., 0., 1.);
+  vP = p;
+  vA = a;
+  vB = b;
+  vW = vec2(pa, pb);
+  vTL = aInfo.zw;
+  vWorld = first ? wa : wb;
+  vDist = first ? ha : hb;
+}`;
+
+const LIVE_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vP;
+flat in vec2 vA;
+flat in vec2 vB;
+flat in vec2 vW;
+flat in vec2 vTL;
+in vec3 vWorld;
+in float vDist;
+out vec4 o;
+uniform float uDensity, uAlpha, uPhase;
+uniform vec3 uBark, uBirch, uLeaf;
+${NOISE}
+void main() {
+  vec2 pa = vP - vA, ba = vB - vA;
+  float bb = max(dot(ba, ba), 1e-6);
+  float hRaw = dot(pa, ba) / bb;
+  float h = clamp(hRaw, 0., 1.);
+  vec2 off = pa - ba * h;
+  float d = length(off);
+  float w = mix(vW.x, vW.y, h);
+  float cov;
+  if (w >= 1.) cov = clamp(w * .5 - d + .5, 0., 1.);
+  else {
+    if (hRaw < 0. || hRaw > 1.) discard;
+    cov = w * clamp(1. - d, 0., 1.);
+  }
+  if (cov <= .002) discard;
+  // bark shaded round the branch: lit from above through the fog, dark underneath
+  vec2 n = normalize(vec2(-ba.y, ba.x) + 1e-6);
+  float across = clamp(dot(off, n) / max(w * .5, .5), -1., 1.);
+  float facing = across * sign(n.y + 1e-4);
+  float shade = w > 2. ? .82 + .3 * facing * .5 + .18 * (1. - abs(across)) : 1.;
+  vec3 birch = uBirch;
+  if (vTL.x > .3) {
+    float band = vnoise(vec2(vWorld.x * 9. + vWorld.z * 9., vWorld.y * 22.));
+    float patchy = vnoise(vec2(vWorld.x * 3. + vWorld.z * 3. + uPhase, vWorld.y * 2.6));
+    birch *= 1. - .75 * smoothstep(.72, .8, band) - .7 * smoothstep(.7, .78, patchy) - .5 * exp(-vWorld.y * 1.2);
+  }
+  vec3 base = mix(uBark, birch, vTL.x) * shade;
+  base = mix(base, uLeaf, vTL.y);
+  base = mix(base, uFogLow, (1. - cov) * .22);
+  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
+  o = vec4(mix(base, fogAt(vWorld.y), fog) * cov, cov) * uAlpha;
 }`;
 
 const POST_FS = `#version 300 es
@@ -225,7 +341,8 @@ export interface Look {
   sun: [number, number];
 }
 
-export interface Draw {
+export interface CardDraw {
+  live: false;
   card: Card;
   x: number;
   z: number;
@@ -233,7 +350,22 @@ export interface Draw {
   flip: boolean;
   phase: number;
   patch: boolean;
+  alpha: number;
 }
+export interface LiveDraw {
+  live: true;
+  buffer: WebGLBuffer;
+  count: number;
+  x: number;
+  z: number;
+  rot: number;
+  scale: number;
+  phase: number;
+  radius: number;
+  height: number;
+  alpha: number;
+}
+export type Draw = CardDraw | LiveDraw;
 
 /** The photograph's colours. */
 const PAL = {
@@ -252,7 +384,9 @@ export class Renderer {
   private world: WebGLProgram;
   private card: WebGLProgram;
   private post: WebGLProgram;
+  private liveProg: WebGLProgram;
   private vao: WebGLVertexArrayObject;
+  private liveVao: WebGLVertexArrayObject;
   private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number } | null = null;
   private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
 
@@ -263,7 +397,9 @@ export class Renderer {
     this.world = this.compile(QUAD_VS, WORLD_FS);
     this.card = this.compile(CARD_VS, CARD_FS);
     this.post = this.compile(QUAD_VS, POST_FS);
+    this.liveProg = this.compile(LIVE_VS, LIVE_FS);
     this.vao = gl.createVertexArray()!;
+    this.liveVao = gl.createVertexArray()!;
   }
 
   compile = (vs: string, fs: string): WebGLProgram => {
@@ -346,7 +482,7 @@ export class Renderer {
     gl.uniform2fv(this.loc(this.world, 'uShadeOff'), look.shadeOff);
     gl.uniform1i(this.loc(this.world, 'uShadeN'), look.shadeN);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    // 2. the cards, back to front
+    // 2. the cards and the live trees, back to front
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     const p = this.card;
@@ -359,21 +495,55 @@ export class Renderer {
     gl.uniform3fv(this.loc(p, 'uStrawDark'), PAL.strawDark);
     gl.uniform1f(this.loc(p, 'uWind'), look.wind);
     gl.uniform1i(this.loc(p, 'uTex'), 0);
+    const L = this.liveProg;
+    gl.useProgram(L);
+    this.common(L, v, look);
+    gl.uniform3fv(this.loc(L, 'uBark'), PAL.bark);
+    gl.uniform3fv(this.loc(L, 'uBirch'), PAL.birch);
+    gl.uniform3fv(this.loc(L, 'uLeaf'), PAL.leaf);
+    gl.uniform1f(this.loc(L, 'uWind'), look.wind);
     gl.activeTexture(gl.TEXTURE0);
-    const uAnchor = this.loc(p, 'uAnchor');
-    const uRect = this.loc(p, 'uRect');
-    const uPhase = this.loc(p, 'uPhase');
-    const uKind = this.loc(p, 'uKind');
-    const uFlip = this.loc(p, 'uFlip');
+    let current: WebGLProgram | null = null;
+    const use = (prog: WebGLProgram) => {
+      if (current === prog) return;
+      current = prog;
+      gl.useProgram(prog);
+      gl.bindVertexArray(prog === L ? this.liveVao : this.vao);
+    };
     for (const c of cards) {
+      if (c.live) {
+        use(L);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.buffer);
+        const attr = (name: string, size: number, offset: number) => {
+          const loc = gl.getAttribLocation(L, name);
+          gl.enableVertexAttribArray(loc);
+          gl.vertexAttribPointer(loc, size, gl.FLOAT, false, SEG * 4, offset * 4);
+          gl.vertexAttribDivisor(loc, 1);
+        };
+        attr('aP0', 3, 0);
+        attr('aP1', 3, 3);
+        attr('aInfo', 4, 6);
+        gl.uniform2f(this.loc(L, 'uAnchor'), c.x, c.z);
+        gl.uniform1f(this.loc(L, 'uRot'), c.rot);
+        gl.uniform1f(this.loc(L, 'uScale'), c.scale);
+        gl.uniform1f(this.loc(L, 'uPhase'), c.phase);
+        gl.uniform1f(this.loc(L, 'uRadius'), c.radius);
+        gl.uniform1f(this.loc(L, 'uHeight'), c.height);
+        gl.uniform1f(this.loc(L, 'uAlpha'), c.alpha);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.count);
+        continue;
+      }
+      use(p);
       gl.bindTexture(gl.TEXTURE_2D, c.card.tex);
-      gl.uniform2f(uAnchor, c.x, c.z);
-      gl.uniform4f(uRect, c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
-      gl.uniform1f(uPhase, c.phase);
-      gl.uniform1f(uKind, c.patch ? 1 : 0);
-      gl.uniform1f(uFlip, c.flip ? -1 : 1);
+      gl.uniform2f(this.loc(p, 'uAnchor'), c.x, c.z);
+      gl.uniform4f(this.loc(p, 'uRect'), c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
+      gl.uniform1f(this.loc(p, 'uPhase'), c.phase);
+      gl.uniform1f(this.loc(p, 'uKind'), c.patch ? 1 : 0);
+      gl.uniform1f(this.loc(p, 'uFlip'), c.flip ? -1 : 1);
+      gl.uniform1f(this.loc(p, 'uAlpha'), c.alpha);
       gl.drawArrays(gl.TRIANGLES, 0, COLS * ROWS * 6);
     }
+    gl.bindVertexArray(this.vao);
     // 3. the film
     gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);

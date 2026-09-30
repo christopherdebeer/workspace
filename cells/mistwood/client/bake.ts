@@ -15,9 +15,11 @@
 import { SEG, type Structure } from './tree';
 
 const VS = `#version 300 es
-in vec4 aSeg;  // x0, y0, x1, y1 (m)
+in vec3 aP0;
+in vec3 aP1;   // tree-local metres, y up
 in vec4 aInfo; // w0, w1, tone, leaf
-uniform vec2 uOrigin; // metres at the texture's left-bottom
+uniform vec2 uRight;  // the card's across direction in the tree's own x, z (seen from there)
+uniform vec2 uOrigin; // (across, up) metres at the texture's left-bottom
 uniform float uScale; // px per metre
 uniform vec2 uSize;   // texture px
 out vec2 vP;
@@ -30,8 +32,8 @@ void main() {
   int c = gl_VertexID;
   // how far the wind can move it: twigs freely, limbs a little, the trunk not at all
   vFlex = 1. - smoothstep(.004, .045, aInfo.x);
-  vec2 a = (aSeg.xy - uOrigin) * uScale;
-  vec2 b = (aSeg.zw - uOrigin) * uScale;
+  vec2 a = (vec2(dot(aP0.xz, uRight), aP0.y) - uOrigin) * uScale;
+  vec2 b = (vec2(dot(aP1.xz, uRight), aP1.y) - uOrigin) * uScale;
   vec2 d = b - a;
   float len = length(d);
   vec2 dir = len > 1e-5 ? d / len : vec2(0., 1.);
@@ -80,6 +82,11 @@ export interface Card {
   level: number;
   texels: number;
   used: number;
+  /** its extent in the tree's metres: across (from the axis) and up */
+  left: number;
+  bottom: number;
+  width: number;
+  height: number;
 }
 
 export class Baker {
@@ -93,10 +100,11 @@ export class Baker {
     this.prog = compile(VS, FS);
     this.vao = gl.createVertexArray()!;
     this.fbo = gl.createFramebuffer()!;
-    for (const n of ['uOrigin', 'uScale', 'uSize']) this.loc[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uOrigin', 'uScale', 'uSize', 'uRight']) this.loc[n] = gl.getUniformLocation(this.prog, n);
   }
 
-  private buffer(s: Structure): WebGLBuffer {
+  /** The structure's segments on the GPU (shared with the live renderer). */
+  buffer(s: Structure): WebGLBuffer {
     const hit = this.buffers.get(s);
     if (hit) return hit;
     const gl = this.gl;
@@ -107,15 +115,27 @@ export class Baker {
     return b;
   }
 
-  /** Bake `s` with its larger dimension `level` px. */
-  bake(s: Structure, level: number, into?: WebGLTexture): Card {
+  /** Bake `s` as seen with `right` as its across direction, its larger dimension `level` px. */
+  bake(s: Structure, level: number, right: [number, number]): Card {
     const gl = this.gl;
-    const wM = s.maxX - s.minX;
+    // its extent across, seen from here
+    let lo = Infinity;
+    let hi = -Infinity;
+    const g = s.segs;
+    for (let i = 0; i < s.count; i++) {
+      const o = i * SEG;
+      const w = Math.max(g[o + 6], g[o + 7]);
+      const a0 = g[o] * right[0] + g[o + 2] * right[1];
+      const a1 = g[o + 3] * right[0] + g[o + 5] * right[1];
+      lo = Math.min(lo, a0 - w, a1 - w);
+      hi = Math.max(hi, a0 + w, a1 + w);
+    }
+    const wM = Math.max(0.05, hi - lo);
     const hM = s.maxY;
     const scale = (level - 4) / Math.max(wM, hM);
     const W = Math.max(4, Math.ceil(wM * scale) + 4);
     const H = Math.max(4, Math.ceil(hM * scale) + 4);
-    const tex = into ?? gl.createTexture()!;
+    const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -126,24 +146,27 @@ export class Baker {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
-    // tone and leaf: the strongest wins; coverage adds up (overlapping twigs darken)
+    // tone, leaf and flex: the strongest wins; coverage adds up (overlapping twigs darken)
     gl.blendEquationSeparate(gl.MAX, gl.FUNC_ADD);
     gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ONE, gl.ONE);
     gl.useProgram(this.prog);
-    // origin: two pixels in from the left-bottom
-    gl.uniform2f(this.loc.uOrigin, s.minX - 2 / scale, -2 / scale);
+    const left = lo - 2 / scale;
+    const bottom = -2 / scale;
+    gl.uniform2f(this.loc.uOrigin, left, bottom);
     gl.uniform1f(this.loc.uScale, scale);
     gl.uniform2f(this.loc.uSize, W, H);
+    gl.uniform2f(this.loc.uRight, right[0], right[1]);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer(s));
-    const a0 = gl.getAttribLocation(this.prog, 'aSeg');
-    const a1 = gl.getAttribLocation(this.prog, 'aInfo');
-    gl.enableVertexAttribArray(a0);
-    gl.vertexAttribPointer(a0, 4, gl.FLOAT, false, SEG * 4, 0);
-    gl.vertexAttribDivisor(a0, 1);
-    gl.enableVertexAttribArray(a1);
-    gl.vertexAttribPointer(a1, 4, gl.FLOAT, false, SEG * 4, 16);
-    gl.vertexAttribDivisor(a1, 1);
+    const attr = (name: string, size: number, offset: number) => {
+      const loc = gl.getAttribLocation(this.prog, name);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, SEG * 4, offset * 4);
+      gl.vertexAttribDivisor(loc, 1);
+    };
+    attr('aP0', 3, 0);
+    attr('aP1', 3, 3);
+    attr('aInfo', 4, 6);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, s.count);
     gl.bindVertexArray(null);
     gl.blendEquation(gl.FUNC_ADD);
@@ -152,15 +175,6 @@ export class Baker {
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    return { tex, level, texels: W * H * 1.34, used: 0 };
+    return { tex, level, texels: W * H * 1.34, used: 0, left, bottom, width: W / scale, height: H / scale };
   }
-}
-
-/** The texture's extent in metres (matches the bake's two-pixel margin). */
-export function cardExtent(s: Structure, level: number) {
-  const wM = s.maxX - s.minX;
-  const scale = (level - 4) / Math.max(wM, s.maxY);
-  const W = Math.max(4, Math.ceil(wM * scale) + 4);
-  const H = Math.max(4, Math.ceil(s.maxY * scale) + 4);
-  return { left: s.minX - 2 / scale, bottom: -2 / scale, width: W / scale, height: H / scale };
 }

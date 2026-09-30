@@ -10,10 +10,10 @@
 import { hash, lerp, noise1, seeded } from './rng';
 import { grow, growPatch, type Species, type Structure } from './tree';
 
-/** Metres per chunk along the path. */
-export const CHUNK = 8;
-/** How far ahead the wood is drawn (metres); the fog has it all by then. */
-export const VIEW = 80;
+/** Metres per cell of the wood's grid (it goes on in every direction). */
+export const CELL = 10;
+/** How far the wood is drawn (metres); the fog has it all by then. */
+export const VIEW = 75;
 
 export type Kind = Species | 'patch';
 
@@ -24,6 +24,8 @@ export interface Placed {
   /** which of the pool's structures */
   pool: number;
   scale: number;
+  /** its turn about the vertical (a 3D tree seen from a different side) */
+  rot: number;
   flip: boolean;
   phase: number;
 }
@@ -73,40 +75,46 @@ export class Wood {
     return this.pool.has(`${kind}:${i}`);
   }
 
-  /** What stands in one chunk, placed the same every time. */
-  chunk(i: number): Placed[] {
-    const hit = this.cache.get(i);
+  /** What stands in one cell of the grid, placed the same every time. */
+  cell(i: number, j: number): Placed[] {
+    const key = i * 100003 + j;
+    const hit = this.cache.get(key);
     if (hit) return hit;
-    const r = seeded(hash(this.seed, 7, i));
-    const z0 = i * CHUNK;
+    const r = seeded(hash(this.seed, 7, i, j));
+    const x0 = i * CELL;
+    const z0 = j * CELL;
     const out: Placed[] = [];
-    const place = (kind: Kind, count: number, near: number, far: number, curve = 1) => {
+    // the trodden path: trees keep off it (and crowd a little along its sides)
+    const offPath = (x: number, z: number) => Math.abs(x - this.pathX(z));
+    const place = (kind: Kind, per: number, clear: number, nearPath = 0) => {
+      const count = per + (nearPath ? nearPath * Math.max(0, 1 - offPath(x0 + CELL / 2, z0 + CELL / 2) / 14) : 0);
       const whole = Math.floor(count) + (r() < count % 1 ? 1 : 0);
       for (let k = 0; k < whole; k++) {
-        const z = z0 + r() * CHUNK;
-        const side = r() < 0.5 ? -1 : 1;
-        const off = near + Math.pow(r(), curve) * (far - near);
-        out.push({ x: this.pathX(z) + side * off, z, kind, pool: Math.floor(r() * POOL[kind]), scale: lerp(0.8, 1.2, r()), flip: r() < 0.5, phase: r() * 6.28 });
+        const x = x0 + r() * CELL;
+        const z = z0 + r() * CELL;
+        const pr = r();
+        if (offPath(x, z) < clear) continue;
+        out.push({ x, z, kind, pool: Math.floor(pr * POOL[kind]), scale: lerp(0.8, 1.2, r()), rot: r() * 6.283, flip: r() < 0.5, phase: r() * 6.28 });
       }
     };
-    // tall trunks fade into the fog all round; a small leaning tree now and then near the
-    // path (the photograph's); a birch; beech saplings keeping their leaves; low scrub
-    place('tall', 6, 3, 45, 0.9);
-    place('tall', 2, 8, 22, 1);
-    place('leaner', 0.9, 2, 14, 1.3);
-    place('birch', 0.55, 3, 30, 1);
-    place('sapling', 1.6, 1.8, 22, 1.2);
-    place('shrub', 3, 1.2, 18, 1.3);
-    // ground cover: dry grass, bramble, bracken — on the path too
-    place('patch', 110, 0, 9, 1.3);
-    this.cache.set(i, out);
-    if (this.cache.size > 48) this.cache.delete(this.cache.keys().next().value!);
+    // tall trunks fading into the fog all round; the small leaning tree (the photograph's), often
+    // by the path; a birch; beech saplings keeping their leaves; low scrub; and the ground cover
+    place('tall', 1.3, 2.6);
+    place('leaner', 0.12, 2, 0.35);
+    place('birch', 0.1, 2.6);
+    place('sapling', 0.3, 1.8, 0.3);
+    place('shrub', 0.7, 1.2);
+    place('patch', 48, 0);
+    this.cache.set(key, out);
+    if (this.cache.size > 400) this.cache.delete(this.cache.keys().next().value!);
     return out;
   }
 
-  between(z0: number, z1: number): Placed[] {
+  /** Everything within `radius` of (x, z). */
+  around(x: number, z: number, radius: number): Placed[] {
     const out: Placed[] = [];
-    for (let i = Math.floor(z0 / CHUNK); i <= Math.floor(z1 / CHUNK); i++) for (const p of this.chunk(i)) if (p.z >= z0 && p.z <= z1) out.push(p);
+    for (let i = Math.floor((x - radius) / CELL); i <= Math.floor((x + radius) / CELL); i++)
+      for (let j = Math.floor((z - radius) / CELL); j <= Math.floor((z + radius) / CELL); j++) for (const p of this.cell(i, j)) out.push(p);
     return out;
   }
 }

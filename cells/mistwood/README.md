@@ -24,8 +24,21 @@ realism is carried by the fog and the light rather than by geometry.
   twigs is the grey haze it is in fog, and sharpens into twigs as you come
   close. A card is baked at the resolution it needs on screen now (less when
   the fog hides it), and baked again, sharper, as you walk up to it.
-- **Cards stand at their true places in the wood**, so walking and looking give
-  real parallax without real geometry (faux 3D).
+- **Near trees are real geometry** (the hybrid). Trees are grown in 3D. Within
+  about 16 m every segment is drawn live each frame as a screen-space
+  anti-aliased line: right from every side, with depth in the crown, bark
+  shaded by where it faces, and wind as a smooth field over the tree (so the
+  trunk and its kinks never bend and no joint cracks). Segments are stored
+  thickest first, so a tree further off draws only as many as are still a
+  tenth of a pixel wide; a per-frame budget gives the nearest trees first call.
+- **Far trees are cards**, baked as seen from where you are (one of twelve
+  sides), turning about their trunk to face you, and cross-fading with the live
+  tree over the last few metres of the handover.
+- **A cylindrical projection**: across the screen is angle, so looking round
+  only slides the picture; nothing stretches at the edges.
+- **You walk the way you face**, anywhere: the wood is a grid of cells placed
+  from the seed, going on in every direction; a trodden path winds through it
+  and the trees keep off it.
 - **The shaders do the rest** (`client/render.ts`): fog by distance, much
   thicker near the ground (but clear at your feet); banks of mist drifting
   through the wood that veil one tree and not the next; wind that moves the

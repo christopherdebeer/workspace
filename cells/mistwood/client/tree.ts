@@ -15,16 +15,68 @@ import { hash, seeded, type Rand } from './rng';
 
 export type Species = 'leaner' | 'tall' | 'birch' | 'sapling' | 'shrub';
 
-/** Per segment: x0, y0, x1, y1, w0, w1, tone (0 dark bark … 1 birch white), leaf (0/1). */
-export const SEG = 8;
+/** Per segment: x0, y0, z0, x1, y1, z1 (m, tree-local, y up), w0, w1, tone (0 dark bark … 1 birch white), leaf (0/1). */
+export const SEG = 10;
 
 export interface Structure {
+  /** Segments, thickest first (so the first N are the tree as far as it can be seen at a distance). */
   segs: Float32Array;
   count: number;
-  minX: number;
-  maxX: number;
+  /** each segment's greater width, in the same (descending) order */
+  widths: Float32Array;
+  /** how far the wood reaches from the trunk's axis (m), and how high */
+  radius: number;
   maxY: number;
   species: Species;
+}
+
+/** How many of a structure's segments are at least `w` metres wide (they are sorted, thickest first). */
+export function countWider(s: Structure, w: number): number {
+  let lo = 0;
+  let hi = s.count;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (s.widths[mid] >= w) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Sort segments thickest first, and note the reach. */
+function finish(raw: Float32Array, n: number, species: Species): Structure {
+  const order = Array.from({ length: n }, (_, i) => i);
+  const wOf = (i: number) => Math.max(raw[i * SEG + 6], raw[i * SEG + 7]);
+  order.sort((a, b) => wOf(b) - wOf(a));
+  const segs = new Float32Array(n * SEG);
+  const widths = new Float32Array(n);
+  let radius = 0.1;
+  let maxY = 0.1;
+  order.forEach((src, k) => {
+    segs.set(raw.subarray(src * SEG, src * SEG + SEG), k * SEG);
+    widths[k] = wOf(src);
+    const o = k * SEG;
+    radius = Math.max(radius, Math.hypot(segs[o + 3], segs[o + 5]) + segs[o + 7], Math.hypot(segs[o], segs[o + 2]) + segs[o + 6]);
+    maxY = Math.max(maxY, segs[o + 4] + segs[o + 7], segs[o + 1] + segs[o + 6]);
+  });
+  return { segs, count: n, widths, radius, maxY, species };
+}
+
+type V3 = [number, number, number];
+const norm = (v: V3): V3 => {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+};
+/** Turn `d` away from itself by `angle`, towards azimuth `phi` around it. */
+function turn(d: V3, angle: number, phi: number): V3 {
+  // a basis perpendicular to d
+  const ref: V3 = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const u = norm([d[1] * ref[2] - d[2] * ref[1], d[2] * ref[0] - d[0] * ref[2], d[0] * ref[1] - d[1] * ref[0]]);
+  const v: V3 = [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]];
+  const c = Math.cos(angle);
+  const sn = Math.sin(angle);
+  const cp = Math.cos(phi);
+  const sp = Math.sin(phi);
+  return norm([d[0] * c + (u[0] * cp + v[0] * sp) * sn, d[1] * c + (u[1] * cp + v[1] * sp) * sn, d[2] * c + (u[2] * cp + v[2] * sp) * sn]);
 }
 
 interface Params {
@@ -95,93 +147,81 @@ export function grow(seed: number, species: Species): Structure {
   const r: Rand = seeded(hash(seed, 0x7ee));
   let segs = new Float32Array(SEG * 4096);
   let n = 0;
-  let minX = 0;
-  let maxX = 0;
-  let maxY = 0;
-  const push = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf: number) => {
+  const push = (a: V3, b: V3, w0: number, w1: number, tone: number, leaf: number) => {
     if (n >= CAP) return;
     if ((n + 1) * SEG > segs.length) {
       const next = new Float32Array(segs.length * 2);
       next.set(segs);
       segs = next;
     }
-    const o = n * SEG;
-    segs[o] = x0;
-    segs[o + 1] = y0;
-    segs[o + 2] = x1;
-    segs[o + 3] = y1;
-    segs[o + 4] = w0;
-    segs[o + 5] = w1;
-    segs[o + 6] = tone;
-    segs[o + 7] = leaf;
+    segs.set([a[0], a[1], a[2], b[0], b[1], b[2], w0, w1, tone, leaf], n * SEG);
     n++;
-    minX = Math.min(minX, x1 - w1);
-    maxX = Math.max(maxX, x1 + w1);
-    maxY = Math.max(maxY, y1 + w1);
   };
-  const UP = Math.PI / 2;
+  const GOLDEN = 2.39996;
+  let spiral = r() * 6.28;
 
-  /** One branch: a kinked polyline that tapers, with side branches along it and a fork at its end. */
-  const branch = (x: number, y: number, a: number, len: number, w0: number, order: number, clear: number) => {
+  /** One branch in 3D: a kinked polyline that tapers, with side branches spiralling round it and a fork at its end. */
+  const branch = (at: V3, dir: V3, len: number, w0: number, order: number, clear: number) => {
     const wEnd = Math.max(p.minW, w0 * (order === 0 ? 0.5 : 0.36));
     const segLen = Math.max(0.02, p.seg * Math.pow(0.62, order));
     const steps = Math.max(2, Math.ceil(len / segLen));
     const step = len / steps;
     const white = p.white > 0;
+    let pos = at;
+    let d = dir;
     for (let i = 0; i < steps; i++) {
       const f0 = i / steps;
       const f1 = (i + 1) / steps;
       const wa = w0 + (wEnd - w0) * f0;
       const wb = w0 + (wEnd - w0) * f1;
       // the kink grows towards the twigs; thick wood bends to the light, thin long twigs hang
-      a += (r() - 0.5) * p.kink * (0.5 + order * 0.35);
-      a += (UP - a) * p.up * step * (wa > 0.02 ? 1 : 0.4);
-      if (wa < 0.015) a -= p.droop * step * (0.5 + order * 0.3) * Math.sign(Math.cos(a) || 1);
-      const nx = x + Math.cos(a) * step;
-      const ny = Math.max(0, y + Math.sin(a) * step);
-      push(x, y, nx, ny, wa, wb, white && wa > p.white ? 1 : 0, 0);
-      // side branches (none low on the trunk)
+      d = turn(d, (r() - 0.5) * p.kink * (0.5 + order * 0.35) * 1.2, r() * 6.28);
+      const up = p.up * step * (wa > 0.02 ? 1 : 0.4);
+      d = norm([d[0] * (1 - up), d[1] * (1 - up) + up, d[2] * (1 - up)]);
+      if (wa < 0.015) {
+        const dr = p.droop * step * (0.5 + order * 0.3);
+        d = norm([d[0], d[1] - dr, d[2]]);
+      }
+      const next: V3 = [pos[0] + d[0] * step, Math.max(0, pos[1] + d[1] * step), pos[2] + d[2] * step];
+      push(pos, next, wa, wb, white && wa > p.white ? 1 : 0, 0);
+      // side branches (none low on the trunk), spiralling round it
       if (order < p.maxOrder && wb > p.minW * 1.6 && f1 > clear && r() < (p.lateral[order] ?? 0.3)) {
-        const side = r() < 0.5 ? -1 : 1;
-        const ca = a + side * p.spread * (0.55 + r() * 0.7);
+        spiral += GOLDEN;
         const remain = len * (1 - f1);
         const cl = (remain * 0.7 + len * 0.3) * p.lenDecay * (0.55 + r() * 0.6);
-        branch(nx, ny, ca, cl, Math.max(p.minW, wb * p.wDecay * (0.7 + r() * 0.5)), order + 1, 0);
+        branch(next, turn(d, p.spread * (0.55 + r() * 0.7), spiral), cl, Math.max(p.minW, wb * p.wDecay * (0.7 + r() * 0.5)), order + 1, 0);
       }
       // the fine stuff: short kinked twiglets all along the thin wood (most of what the mist shows)
       if (order >= 2 && wa < 0.025 && r() < p.twigs) {
-        let tx = nx;
-        let ty = ny;
-        let ta = a + (r() < 0.5 ? -1 : 1) * (0.45 + r() * 0.6);
+        let tp = next;
+        let td = turn(d, 0.45 + r() * 0.6, r() * 6.28);
         const tl = 0.04 + r() * 0.2;
         const tw = Math.max(p.minW, Math.min(wb * 0.7, p.minW * 1.6));
         for (let k = 0; k < 3; k++) {
-          ta += (r() - 0.5) * 0.7 + (UP - ta) * 0.15;
-          const ex = tx + (Math.cos(ta) * tl) / 3;
-          const ey = ty + (Math.sin(ta) * tl) / 3;
-          push(tx, ty, ex, ey, tw, Math.max(p.minW * 0.7, tw * 0.8), 0, 0);
-          tx = ex;
-          ty = ey;
+          td = norm([td[0] + (r() - 0.5) * 0.5, td[1] + (r() - 0.5) * 0.5 + 0.12, td[2] + (r() - 0.5) * 0.5]);
+          const e: V3 = [tp[0] + (td[0] * tl) / 3, tp[1] + (td[1] * tl) / 3, tp[2] + (td[2] * tl) / 3];
+          push(tp, e, tw, Math.max(p.minW * 0.7, tw * 0.8), 0, 0);
+          tp = e;
         }
-        if (p.leaves && r() < p.leaves * 0.5) push(tx, ty, tx + (r() - 0.5) * 0.03, ty - 0.05, 0.022, 0.012, 0, 1);
+        if (p.leaves && r() < p.leaves * 0.5) push(tp, [tp[0] + (r() - 0.5) * 0.03, tp[1] - 0.05, tp[2] + (r() - 0.5) * 0.03], 0.022, 0.012, 0, 1);
       }
-      x = nx;
-      y = ny;
+      pos = next;
     }
     // the end: a fork (the leader goes on one way, the other shoot another), or a twig tip
     if (order < p.maxOrder && wEnd > p.minW * 1.3 && (order < 3 || r() < p.fork)) {
       const kids = order === 0 ? 2 + Math.floor(r() * 3) : r() < 0.3 ? 3 : 2;
+      const phi0 = r() * 6.28;
       for (let k = 0; k < kids; k++) {
-        const ca = a + (k / (kids - 1) - 0.5) * p.spread * (1 + r() * 0.5);
-        branch(x, y, ca, len * p.lenDecay * (0.7 + r() * 0.4), Math.max(p.minW, wEnd * 0.8), order + 1, 0);
+        const cd = turn(d, p.spread * 0.5 * (0.8 + r() * 0.6), phi0 + (k / kids) * 6.28 + (r() - 0.5) * 0.6);
+        branch(pos, cd, len * p.lenDecay * (0.7 + r() * 0.4), Math.max(p.minW, wEnd * 0.8), order + 1, 0);
       }
     } else if (p.leaves && r() < p.leaves) {
       // a few dry leaves on the last twig, hanging
       const count = 1 + Math.floor(r() * 3);
       for (let k = 0; k < count; k++) {
-        const la = -UP + (r() - 0.5) * 1.6;
         const ll = 0.035 + r() * 0.04;
-        push(x, y, x + Math.cos(la) * ll, y + Math.sin(la) * ll, 0.02 + r() * 0.012, 0.012, 0, 1);
+        const ld = norm([(r() - 0.5) * 1.2, -1, (r() - 0.5) * 1.2]);
+        push(pos, [pos[0] + ld[0] * ll, pos[1] + ld[1] * ll, pos[2] + ld[2] * ll], 0.02 + r() * 0.012, 0.012, 0, 1);
       }
     }
   };
@@ -190,10 +230,13 @@ export function grow(seed: number, species: Species): Structure {
   for (let s = 0; s < stems; s++) {
     const len = p.trunk[0] + r() * (p.trunk[1] - p.trunk[0]);
     const w = p.width[0] + r() * (p.width[1] - p.width[0]);
-    const lean = (r() - 0.5) * 2 * p.lean + (stems > 1 ? (s / (stems - 1) - 0.5) * 1.4 : 0);
-    branch((r() - 0.5) * 0.1 * (stems > 1 ? 3 : 0), 0, UP + lean, len, w, 0, p.clear);
+    // lean: any way round (shrubs splay their stems outwards)
+    const lean = (stems > 1 ? 0.3 + r() * 0.7 : r()) * p.lean * (stems > 1 ? 2.2 : 2);
+    const az = stems > 1 ? (s / stems) * 6.28 + r() : r() * 6.28;
+    const base: V3 = stems > 1 ? [(r() - 0.5) * 0.3, 0, (r() - 0.5) * 0.3] : [0, 0, 0];
+    branch(base, norm([Math.sin(lean) * Math.cos(az), Math.cos(lean), Math.sin(lean) * Math.sin(az)]), len, w, 0, p.clear);
   }
-  return { segs: segs.subarray(0, n * SEG), count: n, minX, maxX, maxY, species };
+  return finish(segs, n, species);
 }
 
 /**
@@ -205,7 +248,7 @@ export function grow(seed: number, species: Species): Structure {
 export function growPatch(seed: number, width: number): Structure {
   const r: Rand = seeded(hash(seed, 0x9a55));
   const out: number[] = [];
-  const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, x1, y1, w0, w1, tone, leaf);
+  const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, 0, x1, y1, 0, w0, w1, tone, leaf);
   // grass: curved blades, leaning with a shared breeze and their own
   const lean = (r() - 0.5) * 0.5;
   const blades = Math.round(width * 150);
@@ -246,7 +289,7 @@ export function growPatch(seed: number, width: number): Structure {
     let y = 0;
     let a = Math.PI / 2 - (r() < 0.5 ? -1 : 1) * (0.2 + r() * 0.3);
     const turn = (Math.cos(a) > 0 ? -1 : 1) * (0.09 + r() * 0.06);
-    for (let k = 0; k < 26 && y >= 0; k++) {
+    for (let k = 0; k < 11 + Math.floor(r() * 8) && y >= 0; k++) {
       const nx = x + Math.cos(a) * 0.06;
       const ny = y + Math.sin(a) * 0.06;
       seg(x, y, nx, ny, 0.007, 0.006, 0.1);
@@ -282,8 +325,7 @@ export function growPatch(seed: number, width: number): Structure {
       a -= 0.06;
     }
   }
-  const segs = new Float32Array(out);
-  let maxY = 0;
-  for (let i = 0; i < segs.length; i += SEG) maxY = Math.max(maxY, segs[i + 1], segs[i + 3]);
-  return { segs, count: segs.length / SEG, minX: -width / 2 - 0.1, maxX: width / 2 + 0.1, maxY: maxY + 0.02, species: 'shrub' };
+  const st = finish(new Float32Array(out), out.length / SEG, 'shrub');
+  st.radius = width / 2 + 0.1;
+  return st;
 }
