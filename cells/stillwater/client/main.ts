@@ -486,6 +486,8 @@ let carry: Challenge | null = null;
 let lostSince = 0;
 /** After a solve, the next question may be planned at once but not asked before the pause is over. */
 let askNotBefore = 0;
+/** The carried question has faded once already. */
+let carryFaded = false;
 
 /** How far up the screen (CSS px) the view will have moved by the time the boat's way is spent. */
 function glideAhead(): number {
@@ -707,7 +709,9 @@ function keepAnswerable() {
 function fadeRelation() {
   if (!relationship) return;
   if (relationLeaves.length) sound.release();
-  carry = relationship;
+  // it comes back once with new water; faded twice, the river moves on to another
+  carry = carryFaded ? null : relationship;
+  carryFaded = !!carry;
   clearRelation();
   relationship = null;
   lostSince = 0;
@@ -796,6 +800,7 @@ function setTarget() {
     const askParam = (params.get('ask') ?? undefined) as Challenge['skill'] | undefined;
     // planned, not asked: it is shown once its leaves are in view and settled (stepPlan)
     const c = carry ?? curriculum.next(rand, { phase, due: phase === 'reach' || phase === 'warm' ? dueFact() : null, skill: askParam });
+    if (!carry) carryFaded = false;
     carry = null;
     numeralLeaves = [];
     optionOf.clear();
