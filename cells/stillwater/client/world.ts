@@ -63,6 +63,8 @@ export interface Pad {
   /** …the state it is changing from, and how far through the change (0..1). */
   glyphFrom?: number;
   glyphT?: number;
+  /** …a numeral on a leaf going under: how far its water has run off into the river (0..1). */
+  glyphRun?: number;
   /** …its height in pad radii, and how far it has gathered (0..1). */
   glyphSize?: number;
   glyphA?: number;

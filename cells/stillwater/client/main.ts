@@ -2229,6 +2229,8 @@ function frame(now: number) {
   }
   if (params.get('sinktest')) {
     // the same leaf throughout (once chosen), so what happens to its dew can be watched
+    const numeralShown = numeralLeaves.find((q) => q.glyph !== undefined && q.glyph >= 0 && (q.glyphT ?? 0) >= 1);
+    if (numeralShown && sinkLeaf !== numeralShown && !sinkWashed && !(sinkLeaf && sinkLeaf.glyph !== undefined && sinkLeaf.glyph >= 0)) sinkLeaf = numeralShown;
     if (!sinkLeaf || !pond.pads.includes(sinkLeaf)) sinkLeaf = visibleDewy().sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))[0] ?? null;
     const v = sinkLeaf;
     if (v) {
@@ -2237,7 +2239,7 @@ function frame(now: number) {
       v.dx = 0.15;
       v.dy = 0.02;
       // with `&wash=S` too: after S seconds (once its dew has settled), its dew runs off (to look at the emptying)
-      if (params.get('wash') && pond.t > (Number(params.get('wash')) || 2) && !sinkWashed && v.glyph === undefined) {
+      if (params.get('wash') && pond.t > (Number(params.get('wash')) || 2) && !sinkWashed && (v.glyph === undefined || (v.glyphT ?? 1) >= 1)) {
         sinkWashed = true;
         for (const d of v.drops) d.to = 0;
       }
@@ -2401,6 +2403,31 @@ function bakeGlyphs() {
   step();
 }
 
+/**
+ * A numeral on a leaf going under keeps being that numeral: when the leaf's dew is washed off,
+ * the numeral's water runs off into the river as it stands (PAD_FS, `gRun`) rather than turning
+ * back into drops. Returns whether this leaf is running off (and handled).
+ */
+function runningOff(p: Pad, dt: number): boolean {
+  if (p.glyph === undefined || p.glyph < 0) return false;
+  if (!p.glyphRun) {
+    if (p.sink <= 0.15) return false;
+    // under water, a numeral holds as it is (no turning back into drops) until its dew is washed;
+    // one still forming finishes forming
+    if (p.drops.some((d) => d.to > 0)) {
+      p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / (p.glyphFrom === -3 ? CONDENSE : MORPH));
+      return true;
+    }
+  }
+  p.glyphRun = Math.min(1, (p.glyphRun ?? 0) + dt / 1.6);
+  if (p.glyphRun >= 1) {
+    p.glyph = undefined;
+    p.glyphRun = 0;
+    numeralLeaves = numeralLeaves.filter((q) => q !== p);
+  }
+  return true;
+}
+
 function waterGlyphs(dt: number) {
   if (!renderer) return;
   if (!glyphMode) {
@@ -2409,11 +2436,14 @@ function waterGlyphs(dt: number) {
     if (!glyphsReady && (numeralLeaves.length || profile)) bakeGlyphs();
     for (const p of numeralLeaves) {
       if (!glyphsReady) break;
+      if (runningOff(p, dt)) continue;
       const n = liveCount(p);
       flowToward(p, n >= 1 && n <= 9 ? n : n ? -1 : -2, dt);
     }
     for (const p of pond.pads) {
       if (glyphsReady && numeralLeaves.includes(p)) continue;
+      // a numeral no longer in the question (a sinking leaf leaves it) still runs off as a numeral
+      if (runningOff(p, dt)) continue;
       const wet = p.drops.some((d) => d.to > 0 || d.a > 0.01);
       if (p.glyph === undefined) {
         if (!wet) continue;
@@ -2503,7 +2533,7 @@ Object.defineProperty(window, '__stillwater', {
     selected: selection.map((p) => p.id),
     dewy: pond.pads.filter((p) => liveCount(p) > 0).map((p) => {
       const [x, y] = toScreen(p.x, p.y);
-      return { id: p.id, x: Math.round(x), y: Math.round(y), r: Math.round(p.r * cam.zoom), n: liveCount(p), glyph: p.glyph, from: p.glyphFrom, t: p.glyphT === undefined ? undefined : Math.round(p.glyphT * 100) / 100, sink: Math.round(p.sink * 100) / 100 };
+      return { id: p.id, x: Math.round(x), y: Math.round(y), r: Math.round(p.r * cam.zoom), n: liveCount(p), run: p.glyphRun, glyph: p.glyph, from: p.glyphFrom, t: p.glyphT === undefined ? undefined : Math.round(p.glyphT * 100) / 100, sink: Math.round(p.sink * 100) / 100 };
     }),
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },

@@ -392,7 +392,7 @@ export class Renderer {
         row = rows++;
         const base = row * DROP_COLS * 4;
         this.dropData.set([p.glyphSize ?? 1.05, p.glyph, -1, Math.max(0.02, Math.min(1, p.glyphA ?? 1))], base);
-        this.dropData.set([p.glyphFrom ?? -2, p.glyphT ?? 1, -2, 1], base + 4);
+        this.dropData.set([p.glyphFrom ?? -2, p.glyphT ?? 1, -2, 1 + (p.glyphRun ?? 0)], base + 4);
         shown = 2;
         if (p.glyph === -1 || (p.glyphFrom === -1 && (p.glyphT ?? 1) < 1)) {
           for (let k = 0; k < Math.min(drops, DROP_COLS - 2); k++) {

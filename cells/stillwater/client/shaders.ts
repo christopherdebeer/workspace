@@ -940,6 +940,19 @@ void main(){
     float lean = gLean, turn = gTurn;
     vec2 squash = gSquash;
     vec2 gp = gHand(rot(p + vDent.xy * .006, vAng) / S);
+    // a numeral on a leaf going under does not change what it is: its water runs downhill as it
+    // stands, gathering speed, into the flooded side, where the river's film takes it
+    float gRun = glyphM.w > .5 ? clamp(glyphM.w - 1., 0., 1.) : 0.;
+    if (gRun > 0.) {
+      vec2 runDir = length(vDent.xy) > 1e-3 ? normalize(vDent.xy) : vec2(0., -1.);
+      vec2 runG = gHand(rot(runDir, vAng));
+      float ahead = gRun * gRun * 1.2 / S;
+      vec2 rel = gp - runG / max(length(runG), 1e-4) * ahead;
+      // drawn out a little along its run
+      vec2 rn = runG / max(length(runG), 1e-4);
+      float along = dot(rel, rn);
+      gp = rel - rn * along * (gRun * .35) / (1. + gRun * .35);
+    }
     // …and how the line wavers as it is drawn: slow bends, a tremor
     gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .11 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .045;
     bool beads = gTo > -1.5 && gTo < -.5 || gT < 1. && (gFrom > -1.5 && gFrom < -.5 || gFrom < -2.5);
