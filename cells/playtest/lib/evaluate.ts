@@ -275,6 +275,10 @@ export interface Plan extends db.Item {
   then: PlanThen;
   startedAt: string;
   finalized?: string;
+  /** the assembled eval (set right after assembly) */
+  evalId?: string;
+  /** set once the job has its result */
+  completed?: string;
 }
 
 /** Classify, store the plan; the caller fans out one invocation per run. */
@@ -286,6 +290,8 @@ export async function startPlan(o: { jobId: string; game: string; def: db.Defini
   const specs = runSpecs(o.suite, cls);
   const plan: Plan = { pk: `PLAN#${id}`, sk: 'meta', id, jobId: o.jobId, game: o.game, version: o.def.version, defHash: o.def.hash, tag: o.tag, engine, suite: o.suite, specs, total: specs.length, done: 0, tokens: cls.tokens, clsChunks, then: o.then, startedAt: new Date().toISOString() };
   await db.put(plan);
+  // Index row, for the plans tool (recent fan-outs and where each one stands).
+  await db.put({ pk: 'PLANS', sk: `${plan.startedAt}#${id}`, id, jobId: o.jobId, game: o.game, tag: o.tag, total: plan.total });
   return plan;
 }
 
@@ -321,7 +327,28 @@ export async function finishPlan(planId: string): Promise<{ plan: Plan; rec: Eva
   const cls = (await db.getBlob<Classification>(`PLANCLS#${planId}`, plan.clsChunks))!;
   const digests = (await db.query(`PLAN#${planId}`, 'r')).map((r) => r.digest as RunDigest);
   const rec = await assemble({ game: plan.game, def: { version: plan.version, hash: plan.defHash }, suite: plan.suite, cls, tag: plan.tag, engine: plan.engine, digests, missing: plan.total - digests.length, tokens: Number(plan.tokens ?? 0), ms: Date.now() - Date.parse(plan.startedAt) });
-  return { plan, rec };
+  await db.update(`PLAN#${planId}`, 'meta', 'SET #e = :e', { ':e': rec.id }, { '#e': 'evalId' });
+  return { plan: { ...plan, evalId: rec.id }, rec };
+}
+
+/** A plan whose eval was assembled but whose job never got its result (the finishing
+ *  invocation died in between): hand back what's needed to complete it again. */
+export async function resumePlan(planId: string): Promise<{ plan: Plan; rec: EvalRecord } | null> {
+  const plan = await getPlan(planId);
+  if (!plan?.evalId || plan.completed) return null;
+  const rec = (await db.get(`EVAL#${plan.evalId}`, 'meta')) as EvalRecord | undefined;
+  return rec ? { plan, rec } : null;
+}
+
+/** Recent plans, newest first, with where each stands. */
+export async function recentPlans(limit = 10) {
+  const rows = await db.query('PLANS', '', { newestFirst: true, limit });
+  return Promise.all(
+    rows.map(async (r) => {
+      const p = await getPlan(String(r.id));
+      return { id: r.id, jobId: r.jobId, game: r.game, tag: r.tag, total: p?.total, done: p?.done ?? 0, startedAt: p?.startedAt, finalized: p?.finalized ?? null, evalId: p?.evalId ?? null, completed: p?.completed ?? null };
+    }),
+  );
 }
 
 /** What the proposing agent may see of an eval: train in full, test as a number. */
@@ -400,6 +427,9 @@ export async function prepareProposal(o: { game: string; rules: string; rational
 /** Keep or revert a candidate against its baseline, and record the round. */
 export async function decideRound(o: { game: string; headVersion: number; candVersion: number; baseline: EvalRecord; ev: EvalRecord; rationale: string; author: string; suite: db.Suite }): Promise<{ round: Round; eval: ReturnType<typeof publicEval>; stalled: boolean; diagnosis?: unknown }> {
   const { baseline, ev, suite } = o;
+  // Completing a plan can be retried (watchdog): never record the same round twice.
+  const prior = (await db.query(`GAME#${o.game}`, 'ROUND#')).find((r) => (r as unknown as Round).candidate?.evalId === ev.id) as Round | undefined;
+  if (prior) return { round: prior, eval: publicEval(ev), stalled: false };
   const dTrain = +(ev.train.score - baseline.train.score).toFixed(4);
   const dTest = +(ev.test.score - baseline.test.score).toFixed(4);
   // Baseline and candidate play the same seeds × player counts, so the per-game

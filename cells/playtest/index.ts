@@ -29,7 +29,7 @@ import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIX
 import { scoreRun, SCORE_VERSION, WEIGHTS } from './lib/score';
 import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
-import { evaluate, proposeRound, prepareProposal, decideRound, startPlan, runPlanned, finishPlan, getPlan, publicEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest, type Plan } from './lib/evaluate';
+import { evaluate, proposeRound, prepareProposal, decideRound, startPlan, runPlanned, finishPlan, getPlan, resumePlan, recentPlans, publicEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest, type Plan } from './lib/evaluate';
 import * as db from './lib/store';
 import * as pub from './lib/public';
 import { readFileSync } from 'node:fs';
@@ -132,14 +132,16 @@ async function completePlan(plan: Plan, rec: EvalRecord): Promise<unknown> {
   return { eval: publicEval(rec) };
 }
 
-async function finishAndComplete(planId: string) {
-  const done = await finishPlan(planId);
+async function finishAndComplete(planId: string, resume = false) {
+  const done = resume ? await resumePlan(planId) : await finishPlan(planId);
   if (!done) return;
   const job = (await jobs.getJob(done.plan.jobId)) as Record<string, unknown> | undefined;
   try {
     const out = await completePlan(done.plan, done.rec);
     await jobs.putJob(done.plan.jobId, { tool: job?.tool, startedAt: job?.startedAt, plan: planId, status: 'done', out, finishedAt: new Date().toISOString() });
+    await db.update(`PLAN#${planId}`, 'meta', 'SET #c = :c', { ':c': new Date().toISOString() }, { '#c': 'completed' });
   } catch (e) {
+    console.error('completing plan failed', planId, (e as Error).message);
     await jobs.putJob(done.plan.jobId, { tool: job?.tool, startedAt: job?.startedAt, plan: planId, status: 'error', error: (e as Error).message, finishedAt: new Date().toISOString() });
   }
 }
@@ -346,6 +348,8 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
       const list = (await db.query('ENGINE')).sort((x, y) => String(x.firstSeen).localeCompare(String(y.firstSeen)));
       return list.map((e, i) => ({ version: e.version, firstSeen: e.firstSeen, mechanics: Object.keys((e.mechanics as object) ?? {}).length, changedFromPrevious: i ? changedMechanics((list[i - 1].mechanics as Record<string, string>) ?? {}, (e.mechanics as Record<string, string>) ?? {}) : null }));
     }
+    case 'plans':
+      return recentPlans(num(a.limit, 10, 1, 50));
     case 'job': {
       const id = need(a.id, 'id');
       let j = (await jobs.getJob(id)) as { status?: string; out?: unknown; error?: string; tool?: string; startedAt?: string; plan?: string } | undefined;
@@ -356,8 +360,13 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
         if (plan) {
           progress = { runs: plan.total, done: plan.done ?? 0 };
           // Watchdog: a run invocation that was killed never reports; finish without it.
-          if (!plan.finalized && Date.now() - Date.parse(plan.startedAt) > PLAN_WATCHDOG_MS) {
+          const age = Date.now() - Date.parse(plan.startedAt);
+          if (!plan.finalized && age > PLAN_WATCHDOG_MS) {
             await finishAndComplete(plan.id);
+            j = (await jobs.getJob(id)) as typeof j;
+          } else if (plan.evalId && !plan.completed && Date.now() - Date.parse(plan.finalized ?? plan.startedAt) > 30_000) {
+            // Assembled, but the job never got its result: complete it from the stored eval.
+            await finishAndComplete(plan.id, true);
             j = (await jobs.getJob(id)) as typeof j;
           }
         }
@@ -423,6 +432,7 @@ const TOOLS = [
   { name: 'backlog', kind: 'read', description: 'The mechanic worklist: gaps evals keep hitting (missing/partial mechanics, unhandled card effects, engine faults, moves System One cannot play), ranked by hits × games. Fix these in engine/ and the next eval shows it.', inputSchema: S({ kind: { type: 'string' }, limit: { type: 'number' } }) },
   { name: 'engines', kind: 'read', description: 'Engine versions seen (code fingerprints) and which mechanics changed between consecutive versions.', inputSchema: S({}) },
   { name: 'regress', kind: 'act', description: 'After an engine change: re-evaluate every game\'s head on the current engine (one job per game).', inputSchema: S({ games: { type: 'array', items: { type: 'string' } } }) },
+  { name: 'plans', kind: 'read', description: 'Recent fanned-out evals (plans): runs done of total, when assembled, the eval id, whether the job got its result.', inputSchema: S({ limit: { type: 'number' } }) },
   { name: 'job', kind: 'read', description: 'Poll an async job: {status: pending|running|done|error, out?, error?}.', inputSchema: S({ id: { type: 'string' } }, ['id']) },
   { name: 'set_token', kind: 'act', description: 'Owner-only, write-only: the gateway bearer this cell uses to call @c15r/jev (scope it to cell:c15r/jev:*).', inputSchema: S({ token: { type: 'string' } }, ['token']) },
 ];
