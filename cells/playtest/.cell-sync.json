@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:0b69de4a8b911f78dd49ea60207f63c7f73beaee2d8187014b4526ccb606701a",
-  "syncedAt": "2026-09-30T08:50:19.674Z",
+  "treeVersion": "tree:b96fdebae74ee972fc8e32ce0622579980956bd5ce6a7706f7a7459d70b5f9a0",
+  "syncedAt": "2026-09-30T09:01:56.863Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -109,7 +109,7 @@
     "engine/mechanics/hand-management.ts": "sha256:769dad8dad6278eecb1e3a71e02ef1bca1b6c2cab676e6732622c24d0f2d5c96",
     "engine/mechanics/hexagon-grid.ts": "sha256:276bb16c5b6dceb701e0ace7548c1ad838d402e8680e7061b48e655511344257",
     "engine/mechanics/hidden-movement.ts": "sha256:3aadaff0b3e80b40074a1809e85b6ade22946854ba4b7e66f332fc8c0ce68e5e",
-    "engine/mechanics/hidden-objectives.ts": "sha256:692661ac6b62d14f406e20b8a624dfb8dea345f51f2313d05dfb554e9a8c6db9",
+    "engine/mechanics/hidden-objectives.ts": "sha256:618a3a596464efacecb48a76fe012bc5eba10739e1fb18d63c9537124f59e25e",
     "engine/mechanics/hidden-roles.ts": "sha256:e91a3621ac3fc0174f583bc14d91cb132eb45674fa699846c43a68bd0b76515f",
     "engine/mechanics/hidden-victory-points.ts": "sha256:e36760cee7156b81e31b6aeb34cc766a4ffd9312f96584060c7e0392ad078050",
     "engine/mechanics/i-cut-you-choose.ts": "sha256:d642365524472d6b7cdda447b489379bd81b5c0a872b533b7b33c59e480394d5",
