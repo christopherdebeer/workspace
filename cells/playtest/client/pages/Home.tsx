@@ -94,8 +94,10 @@ export function Home() {
           </li>
           <li>
             <div>
-              <strong>Judge the session.</strong> Once the game ends (or runs out of steps), Jev reads the record and answers: did it play as designed, end too early,
-              never end, get stuck, or collapse into one dominant move?
+              <strong>Judge the session.</strong> Once the game ends (or runs out of steps), Jev reads the rules and the whole
+              record, round by round, and answers as a designer would: did it play as designed or break? Then a critique on sixteen dimensions — fun,
+              engagement, dynamism, tension, meaningful decisions, depth, diversity, interaction, pace, balance, theme, coherence, goal clarity, comeback,
+              replayability, elegance — and which weakness, strength and kind of change stand out.
             </div>
           </li>
           <li>
@@ -131,7 +133,7 @@ export function Home() {
         </ul>
       </Panel>
 
-      <Panel title="What the score means" sub="score/v1 — each played game gets 0–1; a suite is 85% the average game and 15% how clean the definition is.">
+      <Panel title="What the score means" sub="score/v2 — each played game gets 0–1; a suite is 85% the average game and 15% how clean the definition is.">
         <div className="scroll">
           <table className="t">
             <thead>
@@ -143,10 +145,11 @@ export function Home() {
             </thead>
             <tbody>
               {[
-                ['ended', 0.3, 'the game finished by its own rules: 1 · finished only by a turn/round limit: 0.3 · never finished: 0'],
-                ['judged', 0.2, "Jev's probability that the session “plays as designed”"],
-                ['variety', 0.15, 'full marks unless one kind of move is over half of all moves; 0 if it is every move'],
-                ['agency', 0.15, 'how many legal moves players typically had (4+ is full) × share of turns that were not forced'],
+                ['ended', 0.25, 'the game finished by its own rules: 1 · finished only by a turn/round limit: 0.3 · never finished: 0'],
+                ['critique', 0.2, "Jev's qualitative review on 16 dimensions — fun, engagement, dynamism, tension, meaningful decisions, strategic depth, diversity, interaction, pace, balance, theme, rules coherence, goal clarity, comeback potential, replayability, elegance (mean of five-step scales)"],
+                ['judged', 0.15, "Jev's probability that the session “plays as designed”"],
+                ['variety', 0.1, 'full marks unless one kind of move is over half of all moves; 0 if it is every move'],
+                ['agency', 0.1, 'how many legal moves players typically had (4+ is full) × share of turns that were not forced'],
                 ['length', 0.1, 'rounds played, up to 3 (a game over in one round scores low); 0.5 if it never finished'],
                 ['clean', 0.1, 'no error-level findings during play'],
               ].map(([k, w, d]) => (

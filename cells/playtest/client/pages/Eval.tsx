@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { useApi, Loading, Panel, Stat, Status, A, Bar, f3, when, go } from '../ui';
 import type { EvalView, Parts, Finding } from '../lib/types';
+import { CritiquePanel } from './Critique';
 
-const WEIGHTS: Record<keyof Parts, number> = { ended: 0.3, judged: 0.2, variety: 0.15, agency: 0.15, length: 0.1, clean: 0.1 };
+const WEIGHTS_V1: Partial<Record<keyof Parts, number>> = { ended: 0.3, judged: 0.2, variety: 0.15, agency: 0.15, length: 0.1, clean: 0.1 };
+const WEIGHTS_V2: Partial<Record<keyof Parts, number>> = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, length: 0.1, clean: 0.1 };
 
 export function FindingList({ items }: { items: Finding[] }) {
   if (!items.length) return <p className="muted small">None.</p>;
@@ -28,6 +30,7 @@ export function Eval({ id }: { id: string }) {
   const { data, error } = useApi<EvalView>(`eval/${encodeURIComponent(id)}`);
   if (!data) return <Loading error={error} />;
   const runs = data.train.runs;
+  const WEIGHTS = data.scoreVersion === 'score/v1' ? WEIGHTS_V1 : WEIGHTS_V2;
   const mean = (k: keyof Parts) => (runs.length ? runs.reduce((a, r) => a + (r.parts?.[k] ?? 0), 0) / runs.length : 0);
   return (
     <>
@@ -56,6 +59,7 @@ export function Eval({ id }: { id: string }) {
           <Bar key={k} label={`${k} ×${WEIGHTS[k]}`} value={mean(k)} />
         ))}
       </Panel>
+      {data.train.critique && <CritiquePanel c={data.train.critique} title="Critique (train games)" sub="Jev's qualitative review, averaged over the train games; the named weakness / strength / change are probability shares across games." />}
       <Panel title="Train games" sub="Held-out test games are played and scored but never shown — that is what keeps the test honest.">
         <div className="scroll">
           <table className="t">

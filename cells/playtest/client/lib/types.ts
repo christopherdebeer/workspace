@@ -27,17 +27,20 @@ export interface GameView {
   head: { version: number; rules: string; rationale: string; status: string; hash: string; createdAt: string; declared: Declared } | null;
 }
 export interface Finding { kind: string; severity: 'info' | 'warn' | 'error'; subject: string; detail: string }
-export interface Parts { ended: number; variety: number; agency: number; length: number; clean: number; judged: number }
-export interface RunDigest { id: string; split: 'train' | 'test'; seed: number; players: number; score: number; parts?: Parts; stopped?: string; endReason?: string | null; steps?: number; rounds?: number; verdict?: string | null; findings?: string[] }
+export interface Parts { ended: number; variety: number; agency: number; length: number; clean: number; judged: number; critique?: number }
+export interface Critique { dims: Record<string, number | null>; index: number | null; weakest: Array<[string, number]>; strongest: Array<[string, number]>; fixes: Array<[string, number]> }
+export interface CritiqueSummary { n: number; index: number | null; dims: Record<string, number>; weakest: Array<[string, number]>; strongest: Array<[string, number]>; fixes: Array<[string, number]> }
+export interface Scoring { version: string; weights: Record<string, number>; critique: Array<{ key: string; name: string; ask: string; levels: string[] }>; fixes: string[] }
+export interface RunDigest { id: string; split: 'train' | 'test'; seed: number; players: number; score: number; parts?: Parts; stopped?: string; endReason?: string | null; steps?: number; rounds?: number; verdict?: string | null; findings?: string[]; critique?: Critique | null }
 export interface EvalView {
   id: string; game: string; version: number; engine: string; suite: string; scoreVersion: string;
-  train: { score: number; runs: RunDigest[] }; test: { score: number; n: number };
+  train: { score: number; runs: RunDigest[]; critique?: CritiqueSummary | null }; test: { score: number; n: number };
   definitionHealth: number; classificationFindings: Finding[]; tokens: number; usd: number; ms: number; tag: string; createdAt: string;
 }
 export interface Turn { step: number; round: number; turn: number; player: string; valid: number; forced: boolean; move: string; confidence: number | null; runnerUp: [string, number] | null; ahead: number | null; fallback?: string }
 export interface RunView extends Omit<RunDigest, 'findings'> {
   heldOut?: boolean; game?: string; version?: number; engine?: string; createdAt?: string;
-  metrics?: Record<string, any>; judgement?: { health: { verdict: string | null; confidence: number | null; probabilities: Record<string, number> }; decisive: number | null; agency: number | null; pacing: number | null; endedByRule: number | null; runaway: number | null };
+  metrics?: Record<string, any>; judgement?: { health: { verdict: string | null; confidence: number | null; probabilities: Record<string, number> }; decisive: number | null; agency: number | null; pacing: number | null; endedByRule: number | null; runaway: number | null; critique?: Critique };
   findings?: Finding[] | string[]; turns?: Turn[]; totalTurns?: number;
 }
 export interface Mechanic {

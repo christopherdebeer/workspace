@@ -92,6 +92,8 @@ export interface Classification {
   /** Rule facts read from the prose (P(yes)), checked against what the engine does in play. */
   ruleChecks: Record<string, number>;
   multiActionEngine: boolean;
+  /** The prose rules (markdown body), for the judge to critique play against. */
+  rulesText: string;
   effects: Array<{ type: string; cards: string[]; handled: boolean }>;
   schema: { errors: string[]; warnings: string[] };
   findings: Finding[];
@@ -199,7 +201,7 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
 
   const multiActionEngine = !!(cfg.engine_mechanics && 'action_points' in cfg.engine_mechanics);
   resetPrefix(`/pt/games/${slot}/`);
-  return { name: String(cfg.name ?? 'untitled'), players, winCondition: String(cfg.win_condition ?? ''), declared, enabled, prose, ruleChecks, multiActionEngine, effects, schema, findings, tokens };
+  return { name: String(cfg.name ?? 'untitled'), players, winCondition: String(cfg.win_condition ?? ''), declared, enabled, prose, ruleChecks, multiActionEngine, rulesText: String(markdown ?? '').slice(0, 8000), effects, schema, findings, tokens };
 }
 
 /* ── play ─────────────────────────────────────────────────────────────── */
@@ -551,7 +553,98 @@ export interface Judgement {
   pacing: number | null;
   endedByRule: number | null;
   runaway: number | null;
+  /** Qualitative critique: each dimension 0–4 (higher is better), plus what most hurts,
+   *  what works, and which kind of change would most improve it (top 3, with probability). */
+  critique?: Critique;
   tokens: number;
+}
+
+export interface Critique {
+  dims: Record<string, number | null>;
+  /** mean of dims / 4: the critique's 0–1 index */
+  index: number | null;
+  weakest: Array<[string, number]>;
+  strongest: Array<[string, number]>;
+  fixes: Array<[string, number]>;
+}
+
+/** Five ordered levels per dimension, worst → best (Jev's score type: expected level 0–4). */
+export const CRITIQUE: Array<{ key: string; name: string; ask: string; levels: [string, string, string, string, string] }> = [
+  { key: 'fun', name: 'fun', ask: 'How much fun would this session have been for the people playing it?', levels: ['a chore', 'dull', 'mildly fun', 'fun', 'a blast'] },
+  { key: 'engagement', name: 'engagement', ask: 'How engaged would players stay from start to finish — invested in every turn, including other players\' turns?', levels: ['checked out', 'mostly idle', 'on and off', 'engaged', 'gripped throughout'] },
+  { key: 'dynamism', name: 'dynamism', ask: 'How dynamic was the game — did the situation, board and standings keep changing, or was it static?', levels: ['static', 'sluggish', 'some movement', 'lively', 'constantly shifting'] },
+  { key: 'tension', name: 'tension', ask: 'How much tension and uncertainty about the outcome was there until the end?', levels: ['foregone', 'little doubt', 'some suspense', 'tense', 'nail-biting'] },
+  { key: 'decisions', name: 'meaningful decisions', ask: 'How meaningful and interesting were the decisions — real trade-offs with visible consequences?', levels: ['no real decisions', 'obvious choices', 'some trade-offs', 'interesting', 'agonising, rich choices'] },
+  { key: 'depth', name: 'strategic depth', ask: 'How much strategic depth was there — planning ahead, combining actions, reading opponents?', levels: ['none', 'shallow', 'moderate', 'deep', 'very deep'] },
+  { key: 'diversity', name: 'diversity', ask: 'How diverse was the play — different actions, paths to victory and ways each player played?', levels: ['one-note', 'repetitive', 'somewhat varied', 'varied', 'richly varied'] },
+  { key: 'interaction', name: 'player interaction', ask: 'How much did players meaningfully affect each other (trading, blocking, competing, cooperating)?', levels: ['multiplayer solitaire', 'slight', 'some', 'a lot', 'constant, meaningful'] },
+  { key: 'pace', name: 'pace', ask: 'How well paced was it — momentum, build-up and a climax, without stretches of nothing happening?', levels: ['stalled', 'dragging or rushed', 'uneven', 'well paced', 'excellent arc'] },
+  { key: 'balance', name: 'balance & fairness', ask: 'How fair and balanced did it look — roles, seats and powers giving everyone a real chance?', levels: ['badly lopsided', 'unfair', 'somewhat fair', 'fair', 'finely balanced'] },
+  { key: 'theme', name: 'theme', ask: 'How well did what happened in play express the game\'s theme and story?', levels: ['theme absent', 'pasted on', 'partly felt', 'thematic', 'immersive'] },
+  { key: 'coherence', name: 'rules coherence', ask: 'How coherently did the rules work in play — every mechanic doing its job, nothing broken, ignored or pointless?', levels: ['broken', 'many gaps', 'some gaps', 'mostly coherent', 'fully coherent'] },
+  { key: 'goals', name: 'goal clarity', ask: 'How clear and reachable were the players\' goals, and did play visibly move toward them?', levels: ['no visible progress', 'unclear', 'partly', 'clear', 'clear and compelling'] },
+  { key: 'comeback', name: 'comeback potential', ask: 'Could a player who fell behind still recover and win?', levels: ['never', 'rarely', 'sometimes', 'often', 'always in reach'] },
+  { key: 'replay', name: 'replayability', ask: 'How much would players want to play again — would another game play out differently?', levels: ['never again', 'unlikely', 'maybe', 'likely', 'eagerly'] },
+  { key: 'elegance', name: 'elegance', ask: 'How elegant was it — much interesting play from few, clear rules, no fiddly overhead?', levels: ['clunky', 'fiddly', 'acceptable', 'clean', 'elegant'] },
+];
+
+export const CRITIQUE_FIXES = [
+  'fix broken or missing mechanics',
+  'make the goals reachable within the game',
+  'shorten the game',
+  'lengthen the game',
+  'add more player interaction',
+  'curb a dominant move or strategy',
+  'give more meaningful choices each turn',
+  'add catch-up or comeback',
+  'add hidden information or uncertainty',
+  'rebalance roles or powers',
+  'strengthen the theme',
+  'simplify the rules',
+];
+
+const top3 = (p: Record<string, number> | undefined): Array<[string, number]> =>
+  Object.entries(p ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([k, v]) => [k, +v.toFixed(3)]);
+
+/** The whole game, one line per round: what each player did (runs of the same move collapsed). */
+function playByRound(s: Session, maxChars = 24000): string[] {
+  const rounds = new Map<number, Map<string, string[]>>();
+  for (const t of s.turns) {
+    const r = rounds.get(t.round) ?? (rounds.set(t.round, new Map()), rounds.get(t.round)!);
+    const moves = r.get(t.player) ?? (r.set(t.player, []), r.get(t.player)!);
+    moves.push(t.label.replace(/ \(\d+\)$/, '').slice(0, 70));
+  }
+  const lines = [...rounds].map(([n, per]) => `R${n}: ` + [...per].map(([p, ms]) => `${p}: ${collapse(ms).join('; ')}`).join(' | '));
+  let total = lines.reduce((a, l) => a + l.length, 0);
+  if (total <= maxChars) return lines;
+  // Too long: keep the opening and the ending, which carry the arc.
+  const head: string[] = [];
+  const tail: string[] = [];
+  total = 0;
+  for (let i = 0, j = lines.length - 1; i <= j; i++, j--) {
+    if (total + lines[i].length > maxChars / 2 + maxChars / 2) break;
+    head.push(lines[i]);
+    total += lines[i].length;
+    if (i !== j && total + lines[j].length <= maxChars) {
+      tail.unshift(lines[j]);
+      total += lines[j].length;
+    }
+  }
+  return [...head, `… ${lines.length - head.length - tail.length} rounds omitted …`, ...tail];
+}
+function collapse(ms: string[]): string[] {
+  const out: string[] = [];
+  for (const m of ms) {
+    const last = out.at(-1);
+    const hit = last && /^(.*) ×(\d+)$/.exec(last);
+    if (last === m) out[out.length - 1] = `${m} ×2`;
+    else if (hit && hit[1] === m) out[out.length - 1] = `${m} ×${Number(hit[2]) + 1}`;
+    else out.push(m);
+  }
+  return out;
 }
 
 const HEALTH = ['plays as designed', 'ends too early', 'never reaches an end', 'broken: moves missing or stuck', 'degenerate: one move dominates'];
@@ -583,7 +676,19 @@ export async function judge(c: Classification, s: Session, decide: Decide): Prom
     final_scores: m.finalScores,
     moves_the_engine_could_not_offer: s.unsuitable.map((u) => `${u.type} (${u.why})`),
     last_moves: s.turns.slice(-8).map((t) => `${t.player}: ${t.label}`),
+    engine_events: Object.entries(s.log.reduce<Record<string, number>>((c, e) => ((c[String(e.event ?? e.type ?? 'other')] = (c[String(e.event ?? e.type ?? 'other')] ?? 0) + 1), c), {}))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([k, v]) => `${k} ×${v}`),
+    rules: (c.rulesText ?? '').slice(0, 8000),
+    // What the classifier already knows the engine lacks for these rules (so the judge can
+    // tell rules that were played from rules that silently did nothing).
+    known_engine_gaps: c.findings.filter((f) => f.severity !== 'info').slice(0, 30).map((f) => `${f.kind}: ${f.subject} — ${f.detail.slice(0, 140)}`),
+    play_by_round: playByRound(s),
   };
+  const critiqueQs = Object.fromEntries(
+    CRITIQUE.map((d) => [`c_${d.key}`, { type: 'score' as const, instructions: `${d.ask} Judge the game as it actually played in this record.`, criteria: d.levels }]),
+  );
   const r = await decide(
     state,
     {
@@ -593,6 +698,10 @@ export async function judge(c: Classification, s: Session, decide: Decide): Prom
       pacing: { type: 'score', instructions: 'How was the length of the game for what happened in it?', criteria: ['far too short', 'short', 'about right', 'long', 'far too long'] },
       endedByRule: { type: 'noul', instructions: 'Did the game end because a player met the stated win condition (not a turn limit, a stall or an error)?' },
       runaway: { type: 'noul', instructions: 'Did one player take the lead early and keep it to the end?' },
+      ...critiqueQs,
+      c_weakest: { type: 'choice', instructions: 'As a game designer reviewing this playtest, which is the game\'s biggest weakness?', criteria: Object.fromEntries(CRITIQUE.map((d) => [d.name, null])) },
+      c_strongest: { type: 'choice', instructions: 'As a game designer reviewing this playtest, which is the game\'s greatest strength?', criteria: Object.fromEntries(CRITIQUE.map((d) => [d.name, null])) },
+      c_fix: { type: 'choice', instructions: 'As a game designer, which single kind of change would most improve this game?', criteria: Object.fromEntries(CRITIQUE_FIXES.map((f) => [f, null])) },
     },
     'judge: session',
   );
@@ -604,9 +713,22 @@ export async function judge(c: Classification, s: Session, decide: Decide): Prom
     pacing: a.pacing?.score ?? null,
     endedByRule: a.endedByRule?.noul ?? null,
     runaway: a.runaway?.noul ?? null,
+    critique: critiqueOf(a),
     tokens: r.tokens,
   };
   return { judgement, findings: sessionFindings(s, m, c) };
+}
+
+function critiqueOf(a: Record<string, { score?: number; probabilities?: Record<string, number> } | undefined>): Critique {
+  const dims = Object.fromEntries(CRITIQUE.map((d) => [d.key, typeof a[`c_${d.key}`]?.score === 'number' ? +(a[`c_${d.key}`]!.score as number).toFixed(3) : null]));
+  const vals = Object.values(dims).filter((v): v is number => v !== null);
+  return {
+    dims,
+    index: vals.length ? +(vals.reduce((x, y) => x + y, 0) / vals.length / 4).toFixed(4) : null,
+    weakest: top3(a.c_weakest?.probabilities),
+    strongest: top3(a.c_strongest?.probabilities),
+    fixes: top3(a.c_fix?.probabilities),
+  };
 }
 
 /** Engine- and balance-level findings from the computed record alone. */

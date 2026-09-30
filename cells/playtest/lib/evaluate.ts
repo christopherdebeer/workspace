@@ -13,7 +13,7 @@
  *            test is flat is the overfitting signal → revert. Two or three
  *            rounds without a keep = stalled: diagnose, don't keep patching.
  * ------------------------------------------------------------------------- */
-import { classify, play, judge, metrics, sessionFindings, type Classification, type Decide, type Finding, type Judgement } from './runner';
+import { classify, play, judge, metrics, sessionFindings, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
 import { scoreRun, scoreSuite, definitionHealth, SCORE_VERSION, type RunScore } from './score';
 import { engineFingerprint } from './fingerprint';
 import * as db from './store';
@@ -34,6 +34,30 @@ export interface RunDigest {
   rounds?: number;
   verdict?: string | null;
   findings?: string[];
+  critique?: Critique | null;
+}
+
+/** Train runs' critique, averaged: per dimension (0–4), and what the judge most often named. */
+export interface CritiqueSummary {
+  n: number;
+  index: number | null;
+  dims: Record<string, number>;
+  weakest: Array<[string, number]>;
+  strongest: Array<[string, number]>;
+  fixes: Array<[string, number]>;
+}
+export function summarizeCritique(runs: RunDigest[]): CritiqueSummary | null {
+  const cs = runs.map((r) => r.critique).filter((c): c is Critique => !!c);
+  if (!cs.length) return null;
+  const mean = (xs: number[]) => (xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3) : 0);
+  const dims = Object.fromEntries(CRITIQUE.map((d) => [d.key, mean(cs.map((c) => c.dims[d.key]).filter((v): v is number => typeof v === 'number'))]));
+  // Probability mass per label, summed over runs' top-3s, normalised by the number of runs.
+  const tally = (pick: (c: Critique) => Array<[string, number]>) => {
+    const t = new Map<string, number>();
+    for (const c of cs) for (const [k, v] of pick(c)) t.set(k, (t.get(k) ?? 0) + v);
+    return [...t].map(([k, v]) => [k, +(v / cs.length).toFixed(3)] as [string, number]).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  };
+  return { n: cs.length, index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes) };
 }
 
 export interface EvalRecord extends db.Item {
@@ -46,7 +70,7 @@ export interface EvalRecord extends db.Item {
   scoreVersion: string;
   definitionHealth: number;
   classificationFindings: Finding[];
-  train: { score: number; runs: RunDigest[] };
+  train: { score: number; runs: RunDigest[]; critique?: CritiqueSummary | null };
   test: { score: number; n: number; runs: Array<{ id: string; score: number }> };
   tokens: number;
   ms: number;
@@ -141,6 +165,7 @@ export async function evaluate(opts: {
       rounds: m.rounds,
       verdict: judgement?.health.verdict ?? null,
       findings: findings.map((f) => `${f.severity}: ${f.subject}`),
+      critique: judgement?.critique ?? null,
     };
     const chunks = await db.putBlob(`RUN#${id}`, { session, judgement, findings });
     await db.put({ pk: `RUN#${id}`, sk: 'meta', ...digest, game: opts.game, version: opts.def.version, engine: engine.version, metrics: m, judgement, chunks, createdAt: new Date().toISOString() });
@@ -164,7 +189,7 @@ export async function evaluate(opts: {
     scoreVersion: SCORE_VERSION,
     definitionHealth: definitionHealth(cls),
     classificationFindings: cls.findings,
-    train: { score: scoreSuite(train.map((d) => d.score), cls), runs: train },
+    train: { score: scoreSuite(train.map((d) => d.score), cls), runs: train, critique: summarizeCritique(train) },
     test: { score: scoreSuite(test.map((d) => d.score), cls), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
     tokens,
     ms: Date.now() - t0,
@@ -290,7 +315,7 @@ export async function proposeRound(opts: {
 /** At a stall: where the train runs lose points, and what keeps showing up. */
 export function diagnose(ev: EvalRecord) {
   const runs = ev.train.runs.filter((r) => r.parts);
-  const keys = ['ended', 'variety', 'agency', 'length', 'clean', 'judged'] as const;
+  const keys = ['ended', 'variety', 'agency', 'length', 'clean', 'judged', 'critique'] as const;
   const weakest = keys
     .map((k) => ({ part: k, mean: +(runs.reduce((a, r) => a + (r.parts?.[k] ?? 0), 0) / (runs.length || 1)).toFixed(3) }))
     .sort((a, b) => a.mean - b.mean);
@@ -299,6 +324,9 @@ export function diagnose(ev: EvalRecord) {
   return {
     note: 'Stalled: stop patching and diagnose. Weakest score parts first; recurring findings next — some are engine or mechanic gaps no definition edit can fix (see the backlog tool).',
     weakest,
+    critique: ev.train.critique
+      ? { weakestDimensions: Object.entries(ev.train.critique.dims).sort((a, b) => a[1] - b[1]).slice(0, 5), namedWeakest: ev.train.critique.weakest, suggestedFixes: ev.train.critique.fixes }
+      : null,
     recurring: [...counts].sort((a, b) => b[1] - a[1]).slice(0, 10),
     classification: ev.classificationFindings.map((f) => `${f.severity}: ${f.kind} ${f.subject}`),
   };

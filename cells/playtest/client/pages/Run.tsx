@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useApi, Loading, Panel, Stat, A, Bar, f3, pct, when } from '../ui';
 import type { RunView, Turn, Finding } from '../lib/types';
 import { FindingList } from './Eval';
+import { CritiquePanel } from './Critique';
 
 const { useState } = React;
 
@@ -84,6 +85,7 @@ export function Run({ id }: { id: string }) {
           )}
         </Panel>
       </div>
+      {j?.critique && <CritiquePanel c={j.critique} title="Critique" sub="Jev reviews the whole game as a designer would: the rules, the move-by-move record and the outcome." />}
       {m.actionMix && (
         <Panel title="Move mix" sub="Share of moves by kind — a single dominant kind costs variety.">
           {Object.entries(m.actionMix as Record<string, number>)

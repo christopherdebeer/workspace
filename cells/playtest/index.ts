@@ -10,7 +10,7 @@
  *   playtest     one game, Jev choosing every move (code enumerates, the
  *                engine's validator masks, Jev picks), judged and scored
  *   eval         a definition over its suite: train seeds (readable) and
- *                held-out test seeds (score only) — score/v1
+ *                held-out test seeds (score only) — score/v2
  *   propose      one hill-climb round: candidate → eval → keep only if train
  *                improves ≥ ε AND test improves; else revert; stall after 3
  *   backlog      what evals keep hitting: missing / partial mechanics, card
@@ -25,8 +25,8 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { cellJobs } from './vendor/cell-jobs.js';
 import { PRESETS } from './engine/presets';
 import VENDOR from './engine/vendor-info';
-import { classify, play, judge, metrics, sessionFindings } from './lib/runner';
-import { scoreRun, SCORE_VERSION } from './lib/score';
+import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIXES } from './lib/runner';
+import { scoreRun, SCORE_VERSION, WEIGHTS } from './lib/score';
 import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
 import { evaluate, proposeRound, publicEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest } from './lib/evaluate';
@@ -338,7 +338,7 @@ const TOOLS = [
   { name: 'definition', kind: 'read', description: 'A definition version (default head) with its RULES.md, and the version history with rationale and status (head/kept/reverted/candidate).', inputSchema: S({ game, version }, ['game']) },
   { name: 'put_definition', kind: 'act', description: 'Create a game or reset its head directly: from a catalogue preset, full rules, or exact edits. (Inside a climb use propose — a direct put is not evaluated.)', inputSchema: S({ game, preset: { type: 'string' }, rules, edits, rationale: { type: 'string' } }) },
   { name: 'classify', kind: 'act', description: 'What a definition asks for vs what the engine has: declared mechanics (implemented/partial/missing), Jev reading the prose against the 209-mechanic catalogue, card effects nothing handles, rule facts, schema errors. ~1 Jev call.', inputSchema: S({ game, version, preset: { type: 'string' }, rules }) },
-  { name: 'playtest', kind: 'act', description: 'One game played by Jev (async job): classification, per-move record, session judgement, score/v1, findings. Poll with job.', inputSchema: S({ game, version, preset: { type: 'string' }, rules, players: { type: 'number' }, seed: { type: 'number' }, maxSteps: { type: 'number' }, persona: { type: 'string' } }) },
+  { name: 'playtest', kind: 'act', description: 'One game played by Jev (async job): classification, per-move record, session judgement + qualitative critique, score/v2, findings. Poll with job.', inputSchema: S({ game, version, preset: { type: 'string' }, rules, players: { type: 'number' }, seed: { type: 'number' }, maxSteps: { type: 'number' }, persona: { type: 'string' } }) },
   { name: 'suite', kind: 'read', description: 'A game\'s eval suite: train and held-out test seeds × player counts, maxSteps, epsilon (smallest change acted on), measured noise.', inputSchema: S({ game }, ['game']) },
   { name: 'set_suite', kind: 'act', description: 'Owner-only: change a game\'s suite (≤24 games per eval; train/test seeds disjoint). Invalidates baselines.', inputSchema: S({ game, train: { type: 'object' }, test: { type: 'object' }, maxSteps: { type: 'number' }, epsilon: { type: 'number' } }, ['game']) },
   { name: 'eval', kind: 'act', description: 'Evaluate a definition version over its suite (async job, ≤300 s): every run judged and scored; returns train runs in full and the held-out test split as a score only. The first eval of the head is the climb baseline.', inputSchema: S({ game, version, tag: { type: 'string' } }, ['game']) },
@@ -381,6 +381,8 @@ async function publicApi(parts: string[]): Promise<unknown> {
       return pub.changelog(200);
     case 'presets':
       return a ? (PRESETS[a] ? { slug: a, rules: PRESETS[a], declared: pub.declared(PRESETS[a]) } : null) : Object.keys(PRESETS).map((slug) => ({ slug, ...pub.declared(PRESETS[slug]) }));
+    case 'scoring':
+      return { version: SCORE_VERSION, weights: WEIGHTS, critique: CRITIQUE, fixes: CRITIQUE_FIXES };
     case 'tools':
       return TOOLS.map((t) => ({ name: t.name, kind: t.kind, description: t.description }));
   }
