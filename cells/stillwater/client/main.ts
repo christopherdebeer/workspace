@@ -52,6 +52,8 @@ let numeralLeaves: Pad[] = [];
 const optionOf = new Map<Pad, number>();
 /** For a choose question: the numerals put in its blanks so far, left to right. */
 let chosenValues: number[] = [];
+/** Debug: what the question's supply laid, and when (seconds after it was shown). */
+let supplyLog: Array<[number, number]> = [];
 /** A leaf's numeral as a water state: one numeral (0–9), or two side by side (100 + n). */
 const numeralCode = (n: number) => (n <= 9 ? n : 100 + n);
 const sound = new Sound();
@@ -488,6 +490,7 @@ function ensureRelationshipPads() {
   const numerals = c.leaves === 'numerals' && c.mode !== 'pick';
   const lay = (p: Pad, n: number) => {
     p.drops = layDrops(n, p.r, rand, true);
+    supplyLog.push([Math.round((pond.t - relationShownAt) * 10) / 10, n]);
     // a leaf that will show its numeral must hold exactly that many (a small leaf can fall short)
     if (numerals && liveCount(p) !== n) {
       p.drops = [];
@@ -514,6 +517,7 @@ function ensureRelationshipPads() {
       if (!p) break;
       optionOf.set(p, v);
       shown.add(v);
+      supplyLog.push([Math.round((pond.t - relationShownAt) * 10) / 10, v]);
     }
     numeralLeaves = [...optionOf.keys()];
     return;
@@ -628,6 +632,7 @@ function setTarget() {
     relationHelp = 0;
     relationAttempts = 0;
     relationShownAt = pond.t;
+    supplyLog = [];
     relationRelease = null;
     ui.clearTarget();
     ui.quiet();
@@ -2552,7 +2557,7 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
-    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, choices: relationship.choices, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), options: [...optionOf].map(([p, v]) => { const [x, y] = toScreen(p.x, p.y); return { id: p.id, v, x: Math.round(x), y: Math.round(y), glyph: p.glyph, t: p.glyphT }; }), chosen: chosenValues, skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
+    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, choices: relationship.choices, supplied: supplyLog, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), options: [...optionOf].map(([p, v]) => { const [x, y] = toScreen(p.x, p.y); return { id: p.id, v, x: Math.round(x), y: Math.round(y), glyph: p.glyph, t: p.glyphT }; }), chosen: chosenValues, skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
     curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),
