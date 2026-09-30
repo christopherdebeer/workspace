@@ -1,0 +1,1 @@
+{ "seg": "dev", "caps": { "todo": 30, "question": 30, "project": 30, "bug": 20, "concept": 20, "proposal": 15, "pattern": 13, "mental-model": 20, "transcript": 10, "doc-block": 30 } }

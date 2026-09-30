@@ -1,0 +1,88 @@
+{
+  "version": "stems-pool/v0",
+  "note": "Over-complete candidate pool of domain-agnostic 'stem' questions. Deliberately redundant (several phrasings per facet) so selection has something to choose between. Every choice carries an escape option.",
+  "questions": {
+    "form_kind": { "facet": "form", "type": "choice", "instructions": "What kind of thing is this content, primarily?", "options": ["request", "question", "claim or assertion", "plan or proposal", "decision", "record or log of events", "idea or speculation", "reflection or feeling", "reference or pointer to an external source", "instruction or how-to", "specification or design", "list or collection", "code or technical artifact", "conversation or transcript", "configuration or metadata", "other"] },
+    "form_speech_act": { "facet": "form", "type": "choice", "instructions": "What is the author mainly doing with this content?", "options": ["asserting something is the case", "asking for information", "directing someone to do something", "committing to do something", "expressing a feeling or attitude", "declaring a change of status", "other"] },
+    "form_genre": { "facet": "form", "type": "choice", "instructions": "Which genre best fits this content?", "options": ["quick note", "essay or argument", "specification", "log entry", "message to someone", "documentation", "research summary", "data record", "other"] },
+    "form_cognitive_role": { "facet": "form", "type": "choice", "instructions": "What role does this content play in someone's thinking?", "options": ["observation", "question", "hypothesis", "conclusion", "plan", "instruction", "memory", "other"] },
+    "form_knowledge_type": { "facet": "form", "type": "choice", "instructions": "What type of knowledge does this content mainly carry?", "options": ["what is the case (facts, descriptions)", "how to do something (procedure)", "when or why to do something (conditions, rationale)", "about one's own thinking or learning", "none"] },
+    "form_is_question": { "facet": "form", "type": "noul", "instructions": "Does this content ask a question that it does not answer?" },
+    "form_is_instruction": { "facet": "form", "type": "noul", "instructions": "Does this content tell someone or something how to do a task?" },
+    "form_is_list": { "facet": "form", "type": "noul", "instructions": "Is this content mainly a list of items?" },
+    "form_has_code": { "facet": "form", "type": "noul", "instructions": "Does this content contain source code, commands, or structured data such as JSON?" },
+    "form_machine_made": { "facet": "form", "type": "noul", "instructions": "Was this content produced automatically by software rather than written by a person?" },
+
+    "subj_domain": { "facet": "subject", "type": "choice", "instructions": "Which broad domain is this content about?", "options": ["software and technology", "product and design", "business and work", "research and science", "personal life", "health and body", "money and finance", "relationships and people", "home and place", "learning and education", "creative work and arts", "admin and logistics", "society, politics and regulation", "nature and environment", "other"] },
+    "subj_domain_coarse": { "facet": "subject", "type": "choice", "instructions": "Which sphere of life is this content about?", "options": ["work or professional", "personal or private", "both", "neither"] },
+    "subj_meta_tool": { "facet": "subject", "type": "noul", "instructions": "Is this content about the software system or workspace in which it is stored?" },
+    "subj_abstraction": { "facet": "subject", "type": "score", "instructions": "How abstract is this content?", "criteria": ["one concrete specific instance", "a few related specifics", "a pattern across cases", "a general principle"] },
+    "subj_technicality": { "facet": "subject", "type": "score", "instructions": "How much specialist knowledge is needed to understand this content?", "criteria": ["none", "a little", "moderate", "expert"] },
+    "subj_breadth": { "facet": "subject", "type": "choice", "instructions": "How many distinct topics does this content cover?", "options": ["one topic", "a few related topics", "many unrelated topics"] },
+
+    "agent_focus": { "facet": "agent", "type": "choice", "instructions": "Who is this content mainly about or concerned with?", "options": ["the author themselves", "a specific other person", "a group or team", "an organisation", "a piece of software or a system", "nobody in particular"] },
+    "agent_person": { "facet": "agent", "type": "noul", "instructions": "Does this content mention a specific named person?" },
+    "agent_org": { "facet": "agent", "type": "noul", "instructions": "Does this content mention a specific company or organisation?" },
+    "agent_product": { "facet": "agent", "type": "noul", "instructions": "Does this content mention a specific named product, tool or service?" },
+    "agent_perspective": { "facet": "agent", "type": "choice", "instructions": "From what grammatical perspective is this content written?", "options": ["first person", "second person", "third person", "impersonal or no clear perspective"] },
+    "agent_audience": { "facet": "agent", "type": "choice", "instructions": "Who is the intended audience of this content?", "options": ["the author alone", "a specific person", "a team", "the public", "a computer program or AI", "unclear"] },
+
+    "time_orientation": { "facet": "time", "type": "choice", "instructions": "Which time does this content mainly concern?", "options": ["the past", "the present or ongoing", "the future", "no particular time"] },
+    "time_sensitive": { "facet": "time", "type": "noul", "instructions": "Will this content lose most of its value if not acted on within a few days?" },
+    "time_deadline": { "facet": "time", "type": "noul", "instructions": "Does this content mention a specific date, deadline or scheduled time?" },
+    "time_recurring": { "facet": "time", "type": "noul", "instructions": "Is this content about something that happens repeatedly or routinely?" },
+    "time_lifecycle": { "facet": "time", "type": "choice", "instructions": "If this content concerns a piece of work, what state is that work in?", "options": ["not started", "in progress", "finished", "abandoned", "not about a piece of work"] },
+
+    "place_material": { "facet": "place", "type": "noul", "instructions": "Is a physical location important to this content?" },
+    "place_scale": { "facet": "place", "type": "choice", "instructions": "At what geographic scale is this content set?", "options": ["no physical place", "a room or home", "a neighbourhood or local area", "a city or region", "a country", "the whole world", "online or virtual"] },
+
+    "mod_modality": { "facet": "modality", "type": "choice", "instructions": "How is the content presented?", "options": ["as established fact", "as belief or opinion", "as speculation", "as a hypothetical", "as fiction or play", "other"] },
+    "mod_evidence": { "facet": "modality", "type": "noul", "instructions": "Does this content cite evidence, data or sources for what it says?" },
+    "mod_evaluative": { "facet": "modality", "type": "noul", "instructions": "Does this content judge something as good or bad?" },
+    "mod_sentiment": { "facet": "modality", "type": "score", "instructions": "What is the emotional tone of this content?", "criteria": ["very negative", "somewhat negative", "neutral", "somewhat positive", "very positive"] },
+    "mod_uncertain": { "facet": "modality", "type": "noul", "instructions": "Does the author express uncertainty or doubt?" },
+    "mod_contestable": { "facet": "modality", "type": "noul", "instructions": "Does this content take a position that a reasonable person might dispute?" },
+
+    "act_calls_for": { "facet": "energy", "type": "noul", "instructions": "Does this content call for some action to be taken?" },
+    "act_by_author": { "facet": "energy", "type": "noul", "instructions": "Does this content imply the author needs to do something?" },
+    "act_by_other": { "facet": "energy", "type": "noul", "instructions": "Does this content ask someone other than the author to do something?" },
+    "act_blocking": { "facet": "energy", "type": "noul", "instructions": "Does this content describe something that is blocked or preventing progress?" },
+    "act_decision_needed": { "facet": "energy", "type": "noul", "instructions": "Does this content describe a decision that still needs to be made?" },
+    "act_commitment": { "facet": "energy", "type": "noul", "instructions": "Does this content record a promise or commitment?" },
+    "act_type": { "facet": "energy", "type": "choice", "instructions": "What kind of action, if any, does this content lead to?", "options": ["no action", "build or make something", "decide something", "research or learn", "communicate with someone", "buy or spend", "schedule something", "fix a problem", "review or check something", "other"] },
+    "act_effort": { "facet": "energy", "type": "score", "instructions": "How much effort would acting on this content take?", "criteria": ["none or trivial", "under an hour", "a day or so", "weeks", "a major project"] },
+
+    "stakes": { "facet": "stakes", "type": "score", "instructions": "How serious are the consequences if this content is ignored?", "criteria": ["negligible", "minor", "moderate", "significant", "critical"] },
+    "stakes_urgency": { "facet": "stakes", "type": "score", "instructions": "How urgent is this content?", "criteria": ["not urgent", "sometime", "soon", "now"] },
+    "stakes_importance": { "facet": "stakes", "type": "score", "instructions": "How important does this content seem to its author?", "criteria": ["trivial", "somewhat important", "important", "very important"] },
+
+    "dur_lifespan": { "facet": "durability", "type": "score", "instructions": "For how long will this content stay useful?", "criteria": ["hours", "days", "weeks", "months", "years"] },
+    "dur_reference": { "facet": "durability", "type": "noul", "instructions": "Would someone want to look this content up again months from now?" },
+    "dur_novelty": { "facet": "durability", "type": "score", "instructions": "How novel is the idea or information in this content?", "criteria": ["routine or obvious", "somewhat new", "new", "original insight"] },
+
+    "gran_shape": { "facet": "granularity", "type": "choice", "instructions": "What is the shape of this content?", "options": ["a fragment", "a single point", "a structured whole", "a collection or index of other things"] },
+    "gran_completeness": { "facet": "granularity", "type": "score", "instructions": "How complete is this content?", "criteria": ["a stub", "partial", "mostly complete", "complete"] },
+    "gran_self_contained": { "facet": "granularity", "type": "noul", "instructions": "Can this content be understood without any other context?" },
+    "gran_part_of_larger": { "facet": "granularity", "type": "noul", "instructions": "Does this content appear to be a section cut from a larger document?" },
+    "gran_references": { "facet": "granularity", "type": "noul", "instructions": "Does this content refer to other documents, notes or items by name or link?" },
+    "gran_summary": { "facet": "granularity", "type": "noul", "instructions": "Is this content a summary of other material?" },
+
+    "sens_private": { "facet": "sensitivity", "type": "noul", "instructions": "Does this content contain private personal information?" },
+    "sens_secret": { "facet": "sensitivity", "type": "noul", "instructions": "Does this content contain a password, API key, token or other secret?" },
+    "sens_ai_directed": { "facet": "sensitivity", "type": "noul", "instructions": "Does this content contain instructions addressed to an AI assistant or agent?" },
+    "sens_health": { "facet": "sensitivity", "type": "noul", "instructions": "Does this content contain information about someone's health?" },
+    "sens_financial": { "facet": "sensitivity", "type": "noul", "instructions": "Does this content contain information about someone's money or finances?" },
+
+    "fit_clear_purpose": { "facet": "fit", "type": "noul", "instructions": "Is the purpose of this content clear?" },
+    "fit_clarity": { "facet": "fit", "type": "score", "instructions": "How clearly written is this content?", "criteria": ["unintelligible", "hard to follow", "understandable", "very clear"] },
+    "fit_noise": { "facet": "fit", "type": "noul", "instructions": "Is this content accidental, empty or meaningless?" },
+    "fit_single_label": { "facet": "fit", "type": "noul", "instructions": "Could this content be described accurately with a single short category label?" },
+
+    "use_function": { "facet": "function", "type": "choice", "instructions": "What is the most useful thing to do with this content?", "options": ["keep it for reference", "act on it", "decide something from it", "share it with someone", "learn from it", "build on it", "discard it", "other"] },
+    "use_audience_value": { "facet": "function", "type": "noul", "instructions": "Would this content be useful to someone other than its author?" },
+    "use_teaches": { "facet": "function", "type": "noul", "instructions": "Does this content teach a reusable lesson?" },
+    "use_problem": { "facet": "function", "type": "noul", "instructions": "Does this content describe a problem?" },
+    "use_solution": { "facet": "function", "type": "noul", "instructions": "Does this content describe a solution or fix?" },
+    "use_goal": { "facet": "function", "type": "noul", "instructions": "Does this content state a goal or desired outcome?" }
+  }
+}
