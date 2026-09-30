@@ -47,6 +47,12 @@ let relationShownAt = 0;
 let relationClearAt = 0;
 /** After a gathering was too much: the leaf the river lets go, and when. */
 let relationRelease: { pad: Pad; at: number } | null = null;
+/** A second wrong try: the answer is shown (not answered) once the wrong one has left its blank. */
+let revealAt = 0;
+/** Wrong tries a question allows before its answer is shown. */
+const TRIES = 2;
+/** Facts that were shown, not answered: asked again a few questions later (then as memory decides). */
+let againFacts: Array<{ a: number; b: number; mult: boolean; at: number }> = [];
 /** For a choose question: the leaves carrying candidate numerals (glyphs.ts), and what each says. */
 let numeralLeaves: Pad[] = [];
 const optionOf = new Map<Pad, number>();
@@ -315,7 +321,38 @@ function dueFact(): { a: number; b: number; mult: boolean } | null {
 mathUI.onHelp = (step) => {
   relationHelp = Math.max(relationHelp, step);
   armSound();
+  // worked through: the answer has been given, so the question is shown, not answered
+  if (step >= 2) revealRelation();
 };
+
+/**
+ * Shown, not answered: after a second wrong try, or help worked through. The
+ * answer goes into the blanks in plain water and is heard; its leaf brightens.
+ * No lantern, no surge, no flower — it must never feel like a success. The fact
+ * is recorded as not known (so it comes back soon) and asked again a few
+ * questions later.
+ */
+function revealRelation() {
+  const c = relationship;
+  if (!c) return;
+  revealAt = 0;
+  mathUI.reveal();
+  sound.release();
+  // where the answer was: its leaf brightens (a numeral), or the leaves stay as they are (dew)
+  for (const [p, v] of optionOf) if (c.answers.includes(v)) { p.bob = 1; pond.impulses.push({ x: p.x, y: p.y, r: p.r * 0.5, s: 0.3 }); }
+  curriculum.record(c, false, today());
+  const fact = c.skill === 'identify' || c.skill === 'sequence' ? null : c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
+  if (fact) memory.record(fact, 0.1, Date.now());
+  stretch.answered({ q: 0.1, friction: relationAttempts });
+  if (fact && c.skill !== 'pairs') againFacts = [...againFacts.filter((f) => f.a !== c.a || f.b !== c.b), { a: c.a, b: c.b, mult: c.mult, at: curriculum.data.serial + 3 }].slice(-4);
+  for (const p of relationLeaves) p.selected = false;
+  relationship = null;
+  clearRelation();
+  relationClearAt = pond.t + 3.4;
+  askNotBefore = pond.t + 3.4 + 1.2;
+  nextTargetAt = pond.t + 0.8;
+  save();
+}
 function solveRelation() {
   const c = relationship!;
   const g = relationGathered();
@@ -643,7 +680,7 @@ function stepPlan() {
   }
   const ready =
     c.mode === 'pick'
-      ? [...optionOf].every(([p, v]) => inBed(p) && settled(p, numeralCode(v)))
+      ? [...optionOf].every(([p, v]) => stillSeen(p) && toScreen(p.x, p.y)[1] > Math.max(205, cam.cssH * 0.25) && settled(p, numeralCode(v)))
       : completable(c, [0], counts(pond.pads.filter((p) => liveCount(p) > 0 && inBed(p) && settled(p, -1))));
   if (ready && pond.t >= askNotBefore && !formingInView()) {
     askPlanned();
@@ -682,6 +719,7 @@ function askPlanned() {
   relationAttempts = 0;
   relationShownAt = pond.t;
   relationRelease = null;
+  revealAt = 0;
   lostSince = 0;
   mathUI.show(relationship);
 }
@@ -712,6 +750,7 @@ function fadeRelation() {
   // it comes back once with new water; faded twice, the river moves on to another
   carry = carryFaded ? null : relationship;
   carryFaded = !!carry;
+  revealAt = 0;
   clearRelation();
   relationship = null;
   lostSince = 0;
@@ -799,7 +838,10 @@ function setTarget() {
     // `?ask=identify` (or any skill) asks that type of question, for looking at it
     const askParam = (params.get('ask') ?? undefined) as Challenge['skill'] | undefined;
     // planned, not asked: it is shown once its leaves are in view and settled (stepPlan)
-    const c = carry ?? curriculum.next(rand, { phase, due: phase === 'reach' || phase === 'warm' ? dueFact() : null, skill: askParam });
+    // a fact that was shown comes back a few questions later, whatever the phase
+    const again = againFacts.find((f) => f.at <= curriculum.data.serial);
+    if (again) againFacts = againFacts.filter((f) => f !== again);
+    const c = carry ?? curriculum.next(rand, { phase, due: again ?? (phase === 'reach' || phase === 'warm' ? dueFact() : null), skill: askParam });
     if (!carry) carryFaded = false;
     carry = null;
     numeralLeaves = [];
@@ -1045,6 +1087,7 @@ function choose(p: Pad) {
       mathUI.over();
       lock = 0.6;
       relationRelease = { pad: p, at: pond.t + 0.55 };
+      if (relationAttempts >= TRIES) revealAt = pond.t + 0.75;
     } else sound.note(Math.min(6, chosenValues.length + 1), panAt(p.x));
     return;
   }
@@ -1076,6 +1119,7 @@ function choose(p: Pad) {
       mathUI.over();
       lock = 0.9;
       relationRelease = { pad: p, at: pond.t + 0.85 };
+      if (relationAttempts >= TRIES) revealAt = pond.t + 1.05;
     }
     return;
   }
@@ -2390,6 +2434,13 @@ function frame(now: number) {
       pad.bob = Math.min(1, pad.bob + 0.5);
       if (relationship) mathUI.progress(relationGathered());
     }
+  }
+  if (revealAt && pond.t >= revealAt) {
+    if (relationship) {
+      lock = Math.max(lock, 1.2);
+      revealRelation();
+    }
+    revealAt = 0;
   }
   if (!visit && !relationship && !plan && !target && !share && pond.t >= nextTargetAt) setTarget();
   if (!started) placeNames(dt);

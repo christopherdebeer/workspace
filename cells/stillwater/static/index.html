@@ -94,6 +94,10 @@
     #relationship.answered .blank { border-color: transparent; color: #fdf6cc; }
     @keyframes answered { 0% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } 30% { text-shadow: 0 0 26px rgba(253, 246, 204, .95), 0 0 6px rgba(253, 246, 204, .9); } 100% { text-shadow: 0 2px 16px #001b19; } }
     #relationship.over .blank { animation: over .5s ease-in-out; }
+    /* shown, not answered: plain water in the blank — no gold, no glow (never mistaken for a success) */
+    #relationship.revealed .blank { color: rgba(186, 220, 226, .85); border-color: rgba(186, 220, 226, .35); text-shadow: none; box-shadow: none; animation: revealed 1.4s ease-out; }
+    #relationship.revealed .math-tools { visibility: hidden; }
+    @keyframes revealed { 0% { color: rgba(186, 220, 226, 0); } 100% { color: rgba(186, 220, 226, .85); } }
     @keyframes over { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(2px); } }
     /* a numeral question: how many (dots, as large as a numeral), or numbers in order with one missing */
     #relationship .dots { position: relative; display: inline-block; font-size: clamp(30px, 9vw, 40px); }

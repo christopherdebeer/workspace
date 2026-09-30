@@ -63,6 +63,26 @@ counting made visible (gather); everything else is the child's answer (choose).
 
 Numbers on leaves go up to 99 (two numerals, side by side, in the same water).
 
+## Answered, or shown
+
+A question ends one of two ways, and they never look alike.
+
+- **Answered:** found on the first try, or after hearing the question (the first
+  help). The lantern, the surge and a flower follow. Only a first try without
+  help counts as known.
+- **Shown:** after a **second** wrong try, or when help works it through. The
+  answer goes into the blank in plain water (no gold, no glow), it is heard
+  ("six fours are twenty-four"), and its leaf brightens. There is no lantern,
+  no surge and no flower. It is recorded as not known: the skill's streak
+  resets, it counts against the level holding, the fact's memory shortens, and
+  the fact is asked again three questions later.
+
+Why two tries: a first miss is often a slip (a mis-tap, the leaf beside it). A
+second is evidence, and past it choosing becomes elimination. Endless guessing
+ended in a success that looked like knowing; a reveal that looked like a
+success would do the same. Rowing away is neither: unrecorded, the fact comes
+back as memory decides.
+
 ## When a question is asked
 
 A question arrives with its leaves: it is shown only once the water that answers

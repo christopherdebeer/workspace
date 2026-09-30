@@ -80,7 +80,7 @@ export class ChallengeUI {
     this.solved = false;
     this.visible = true;
     this.root.hidden = false;
-    this.root.classList.remove('answered', 'helped');
+    this.root.classList.remove('answered', 'helped', 'revealed');
     this.root.classList.add('arrive');
     requestAnimationFrame(() => requestAnimationFrame(() => this.root.classList.remove('arrive')));
     this.helpStep = 0;
@@ -286,6 +286,35 @@ export class ChallengeUI {
     this.dots.forEach((d) => d.classList.add('on'));
     this.root.classList.add('answered');
     this.live.textContent = `${equation(c, v)}. Yes.`;
+  }
+
+  /**
+   * Shown, not answered (after a second wrong try, or help worked through): the
+   * answer goes into the blanks in plain water — no gold, no glow — and is heard.
+   * It must never look like a success: a child shown the answer should not
+   * believe they found it.
+   */
+  reveal() {
+    const c = this.current;
+    if (!c || this.solved) return;
+    this.solved = true;
+    const g: Gathered = c.mode === 'pick' ? c.answers : c.mode === 'groups' ? [c.a, c.b] : [c.answers[0]];
+    const v = shown(c, g);
+    this.blanks.forEach((el, i) => {
+      el.textContent = String(v[i]);
+      el.classList.remove('filling', 'waiting', 'poured');
+    });
+    this.root.classList.add('revealed');
+    // gathering: the picture shows it counted out (as help worked through does)
+    if (c.mode !== 'pick' && this.dots.length) {
+      this.model.hidden = false;
+      this.model.style.opacity = '1';
+      this.model.classList.add('reveal');
+      this.dots.forEach((d, i) => d.style.setProperty('--i', String(i)));
+    }
+    // help worked through has already said it
+    if (this.helpStep < 2) this.speak(sayAnswer(c));
+    this.live.textContent = sayAnswer(c);
   }
 
   private speak(text: string) {
