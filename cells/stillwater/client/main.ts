@@ -23,13 +23,45 @@ import { RESIDENTS, Story, type ResidentKind } from './story';
 import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
+import { Curriculum, accepts, overfull, completable, groupsNeed, equation, type Challenge } from './challenges';
+import type { SyllabusId } from './challenges';
+import { ChallengeUI } from './challenge-ui';
 import { glInfo, probe, report } from './report';
+import { glyphAtlas, glyphAtlasSteps, glyphIndex, GLYPHS } from './glyphs';
 import { PROGRAMS } from './render';
 import { program } from './gl';
 import { layDrops, liveCount, Pad, Planting, Pond, seeded } from './world';
 
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
 const ui = new Overlay();
+const mathUI = new ChallengeUI();
+let curriculum = new Curriculum();
+let relationship: Challenge | null = null;
+/** The leaves gathered for it (one collection; for times questions, leaves that match). */
+let relationLeaves: Pad[] = [];
+let relationSupply = 0;
+/** Help asked (0 none, 1 heard and pictured, 2 worked through), and gatherings that were too much. */
+let relationHelp = 0;
+let relationAttempts = 0;
+let relationShownAt = 0;
+let relationClearAt = 0;
+/** After a gathering was too much: the leaf the river lets go, and when. */
+let relationRelease: { pad: Pad; at: number } | null = null;
+/** A second wrong try: the answer is shown (not answered) once the wrong one has left its blank. */
+let revealAt = 0;
+/** Wrong tries a question allows before its answer is shown. */
+const TRIES = 2;
+/** Facts that were shown, not answered: asked again a few questions later (then as memory decides). */
+let againFacts: Array<{ a: number; b: number; mult: boolean; at: number }> = [];
+/** For a choose question: the leaves carrying candidate numerals (glyphs.ts), and what each says. */
+let numeralLeaves: Pad[] = [];
+const optionOf = new Map<Pad, number>();
+/** For a choose question: the numerals put in its blanks so far, left to right. */
+let chosenValues: number[] = [];
+/** Debug: what the question's supply laid, and when (river time). */
+let supplyLog: Array<[number, number]> = [];
+/** A leaf's numeral as a water state: one numeral (0–9), or two side by side (100 + n). */
+const numeralCode = (n: number) => (n <= 9 ? n : 100 + n);
 const sound = new Sound();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
@@ -104,6 +136,14 @@ function loadProfile(name: string) {
   pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
   const levelParam = Number(startupParams.get('level'));
   if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
+  curriculum = new Curriculum(startupParams.has('fresh') ? null : readJSON(pKey(pr.id, 'curriculum.v1')), mastery);
+  // `?year=N` places as a grown-up would (0 Reception … 5 Year 5+); `?maths=N` sets a level directly
+  const year = Number(startupParams.get('year'));
+  if (startupParams.has('year') && Number.isInteger(year)) curriculum.setYear(year);
+  // `?numerals=1`: every skill counts as proved with dew, so the leaves show numerals
+  curriculum.forceNumerals = startupParams.has('numerals');
+  const level = Number(startupParams.get('maths'));
+  if (startupParams.has('maths') && Number.isInteger(level)) curriculum.setLevel(level);
   save();
 }
 const forcedStage = N.stageForId(startupParams.get('stage'));
@@ -113,6 +153,7 @@ const save = () => {
   profile.last = Date.now();
   writeJSON(pKey(profile.id, 'v3'), { mastery, solves: totalSolves, last: profile.last, first: firstPlayed });
   writeJSON(pKey(profile.id, 'facts.v1'), memory);
+  writeJSON(pKey(profile.id, 'curriculum.v1'), curriculum.data);
   writeJSON(PROFILES, profiles);
 };
 const stage = () => activeStage;
@@ -250,16 +291,173 @@ let firstTarget = true;
 let lastSolved: number | undefined;
 let checkAt = 0;
 
+// ─── relationships: the question at the top, answered with dew (challenges.ts) ──
+/** What the leaves hold: `sum` [drops]; `groups` [leaves, drops a leaf]. */
+function relationGathered(): number[] {
+  if (!relationship) return [];
+  if (relationship.mode === 'pick') return chosenValues.slice();
+  if (relationship.mode === 'sum') return [relationLeaves.reduce((n, p) => n + liveCount(p), 0)];
+  return relationLeaves.length ? [relationLeaves.length, liveCount(relationLeaves[0])] : [];
+}
+function clearRelation() {
+  for (const p of relationLeaves) p.selected = false;
+  relationLeaves = [];
+  numeralLeaves = [];
+  optionOf.clear();
+  chosenValues = [];
+  selection = relationLeaves;
+  relationRelease = null;
+  if (relationship) mathUI.progress(relationGathered());
+}
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+/** A fact the memory wants back (P1), for the curriculum to ask if a skill here can carry it. */
+function dueFact(): { a: number; b: number; mult: boolean } | null {
+  const f = memory.due(Date.now(), (x) => Math.max(...x.parts) <= 12, 3)[0];
+  return f ? { a: f.parts[0], b: f.parts[1], mult: f.rule === 'groups' } : null;
+}
+mathUI.onHelp = (step) => {
+  relationHelp = Math.max(relationHelp, step);
+  armSound();
+  // worked through: the answer has been given, so the question is shown, not answered
+  if (step >= 2) revealRelation();
+};
+
+/**
+ * Shown, not answered: after a second wrong try, or help worked through. The
+ * answer goes into the blanks in plain water and is heard; its leaf brightens.
+ * No lantern, no surge, no flower — it must never feel like a success. The fact
+ * is recorded as not known (so it comes back soon) and asked again a few
+ * questions later.
+ */
+function revealRelation() {
+  const c = relationship;
+  if (!c) return;
+  revealAt = 0;
+  mathUI.reveal();
+  sound.release();
+  // where the answer was: its leaf brightens (a numeral), or the leaves stay as they are (dew)
+  for (const [p, v] of optionOf) if (c.answers.includes(v)) { p.bob = 1; pond.impulses.push({ x: p.x, y: p.y, r: p.r * 0.5, s: 0.3 }); }
+  curriculum.record(c, false, today());
+  const fact = c.skill === 'identify' || c.skill === 'sequence' ? null : c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
+  if (fact) memory.record(fact, 0.1, Date.now());
+  stretch.answered({ q: 0.1, friction: relationAttempts });
+  if (fact && c.skill !== 'pairs') againFacts = [...againFacts.filter((f) => f.a !== c.a || f.b !== c.b), { a: c.a, b: c.b, mult: c.mult, at: curriculum.data.serial + 3 }].slice(-4);
+  for (const p of relationLeaves) p.selected = false;
+  relationship = null;
+  clearRelation();
+  relationClearAt = pond.t + 3.4;
+  askNotBefore = pond.t + 3.4 + 1.2;
+  nextTargetAt = pond.t + 0.8;
+  save();
+}
+function solveRelation() {
+  const c = relationship!;
+  const g = relationGathered();
+  const chosen = relationLeaves.slice();
+  // exactly the dew the child chose rises into the lantern
+  let order = 0;
+  for (const p of chosen) {
+    const cs = Math.cos(p.ang);
+    const sn = Math.sin(p.ang);
+    for (const d of p.drops) {
+      if (d.to <= 0) continue;
+      d.to = 0;
+      lifts.push({ x0: p.x + (cs * d.x - sn * d.y) * p.r, y0: p.y + (sn * d.x + cs * d.y) * p.r, t: 0, dur: 1.5 + rand() * 0.6, delay: order++ * 0.05, bend: (rand() * 2 - 1) * 60, radius: d.r * p.r });
+    }
+    pond.impulses.push({ x: p.x, y: p.y, r: p.r * 0.6, s: 0.6 });
+  }
+  window.setTimeout(() => chosen.forEach((p) => (p.selected = false)), 900);
+  solvedThread = { pads: chosen, until: pond.t + 0.9 };
+  // a chosen numeral goes up as light from its leaf, as dew would
+  if (c.mode === 'pick') {
+    for (const p of chosen) for (let k = 0; k < 3; k++) lifts.push({ x0: p.x + (rand() - 0.5) * p.r * 0.6, y0: p.y + (rand() - 0.5) * p.r * 0.6, t: 0, dur: 1.5 + rand() * 0.6, delay: order++ * 0.06, bend: (rand() * 2 - 1) * 60, radius: p.r * 0.12 });
+  }
+  relationLeaves = [];
+  selection = relationLeaves;
+  relationRelease = null;
+  numeralLeaves = [];
+  optionOf.clear();
+  chosenValues = [];
+  const clean = relationHelp === 0 && relationAttempts === 0;
+  curriculum.record(c, clean, today());
+  // what the river remembers (P1) and how the stretch goes (P3), as for the counting
+  const q = L.quality({ secs: pond.t - relationShownAt, leaves: chosen.length, value: c.total, friction: relationAttempts, scaffold: relationHelp, counting: false });
+  // a numeral question is about the numeral, not a fact to be remembered
+  const fact = c.skill === 'identify' || c.skill === 'sequence' ? null : c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
+  const newWay = fact ? memory.record(fact, q, Date.now()).newWay : false;
+  const phase = stretch.phase;
+  stretch.answered({ q, friction: relationAttempts });
+  mathUI.complete(g);
+  relationship = null;
+  relationClearAt = pond.t + 1.7;
+  // the next question is planned now (its water can gather during the pause) and asked after it
+  askNotBefore = pond.t + 1.7 + L.PHASE_PAUSE[phase];
+  nextTargetAt = pond.t + 0.6;
+  sound.gathered();
+  lantern = Math.min(1.5, lantern + (q >= 0.85 ? 0.45 : 0.3));
+  pond.propel(190);
+  story.gather();
+  persistStory();
+  totalSolves++;
+  // the river notices: a flower opens; a product made the other way round from before, two
+  if (chosen.length) openBeside(chosen[Math.floor(rand() * chosen.length)]);
+  if (newWay && chosen.length > 1) openBeside(chosen[0]);
+  save();
+}
+mathUI.onSkip = () => {
+  if (!relationship || visit || pageOpen) return;
+  curriculum.record(relationship, false, today());
+  clearRelation();
+  relationship = null;
+  mathUI.hide();
+  nextTargetAt = pond.t + 0.5;
+  save();
+};
+/** A grown-up's choice of school system: the years and tables that follow from it. */
+mathUI.onSyllabus = (id: SyllabusId) => {
+  if (!profile) return;
+  curriculum.setSyllabus(id);
+  save();
+};
+/** A grown-up's choice of school year (the panel under a long press on the title). */
+mathUI.onYear = (year) => {
+  if (!profile) return;
+  endVisit();
+  clearSelection();
+  clearRelation();
+  target = null;
+  ask = null;
+  relationship = null;
+  plan = null;
+  carry = null;
+  relationClearAt = 0;
+  releaseAt = 0;
+  lock = 0;
+  chimes = [];
+  ui.clearTarget();
+  mathUI.hide();
+  curriculum.setYear(year);
+  stretch = new L.Stretch(null);
+  nextTargetAt = pond.t + 0.3;
+  save();
+};
+
 /**
  * Leaves with dew that a child can plainly see: the WHOLE leaf on screen,
  * below the number display and above the boat. A leaf half under the header
  * or half off the side is not an answer anyone can find (playtest: an ask
  * whose only answer lay there was maddening).
  */
-function visibleDewy(): Pad[] {
+/** A leaf a touch answers with: dew to gather, or a numeral to choose (INTERACTION.md). */
+const answerable = (p: Pad) => liveCount(p) > 0 || (relationship?.mode === 'pick' && optionOf.has(p));
+
+function visibleDewy(answering = false): Pad[] {
   const out: Pad[] = [];
   for (const p of pond.pads) {
-    if (!liveCount(p)) continue;
+    if (!(answering ? answerable(p) : liveCount(p))) continue;
     const [sx, sy] = toScreen(p.x, p.y);
     const inset = p.r * cam.zoom * 0.7;
     if (sx - inset < 8 || sx + inset > cam.cssW - 8) continue;
@@ -300,6 +498,263 @@ function targetDewy(): Pad[] {
     const [, sy] = toScreen(p.x, p.y);
     return sy > cam.cssH * 0.25 && sy < cam.cssH * (BOAT_AT - 0.16);
   });
+}
+
+// ─── planning: a question arrives with its leaves (PLANNING-REVIEW-2026-09-30.md) ───
+//
+// A question is shown only when it can be answered from water already settled in
+// view, and while it is up no water that bears on its answer changes. So it is
+// planned first: the question, then its bed (leaves in view if the boat rests,
+// leaves ahead by the boat's coming glide if it moves), whose water is laid in one
+// batch, the answer among spares — out of sight ahead, or in view before the
+// question, never after it. It is asked once the bed is in view and settled. If
+// the bed is lost while it is up, the question fades with it; it is never repaired.
+
+interface Plan {
+  c: Challenge;
+  at: number;
+  staged: boolean;
+  tries: number;
+}
+let plan: Plan | null = null;
+/** A question that faded unanswered comes back with the next water. */
+let carry: Challenge | null = null;
+let lostSince = 0;
+/** After a solve, the next question may be planned at once but not asked before the pause is over. */
+let askNotBefore = 0;
+/** The carried question has faded once already. */
+let carryFaded = false;
+
+/** How far up the screen (CSS px) the view will have moved by the time the boat's way is spent. */
+function glideAhead(): number {
+  const b = pond.boat;
+  const owed = Math.max(0, b.strokeTo - b.stroke);
+  const travel = b.speed / 0.3 + owed * 150;
+  return Math.min(cam.cssH * 0.8, travel * cam.zoom);
+}
+
+/** In clear view — wholly on screen, under the question, off the boat — with the view `shift` px ahead. */
+function inBed(p: Pad, shift = 0): boolean {
+  if (p.selected || p.flower || p.sink > 0.25 || p.r < 22) return false;
+  const [x, y0] = toScreen(p.x, p.y);
+  const y = y0 + shift;
+  const inset = p.r * cam.zoom * 0.7;
+  return x - inset > 8 && x + inset < cam.cssW - 8 && y - inset > Math.max(205, cam.cssH * 0.27) && y + inset < cam.cssH * 0.88 && !pond.onBoat(p.x, p.y) && !hitResident(x, y0) && hit(x, y0) === p;
+}
+/** Still in view (looser than the bed, so a question does not flicker at the edge). */
+function stillSeen(p: Pad): boolean {
+  if (p.sink > 0.25 || !pond.pads.includes(p)) return false;
+  const [x, y] = toScreen(p.x, p.y);
+  return x > 0 && x < cam.cssW && y > cam.cssH * 0.2 && y < cam.cssH * 0.95;
+}
+/** Leaves with (or without, `dry`) counting dew that could be a bed, the view `shift` ahead. */
+function relationStock(dry = false, shift = 0): Pad[] {
+  return pond.pads.filter((p) => (dry ? liveCount(p) === 0 : liveCount(p) > 0) && inBed(p, shift));
+}
+
+/** A leaf's water at rest in the state wanted (-1 drops, or a numeral). */
+function settled(p: Pad, want: number): boolean {
+  if (!glyphsReady) return want === -1 && p.drops.every((d) => d.to <= 0 || d.a >= 0.95);
+  return p.glyph === want && (p.glyphT ?? 1) >= 1 && p.glyphQueue === undefined && p.drops.every((d) => d.to <= 0 || d.a >= 0.95);
+}
+/** Is any counting water in view still forming (drops or a numeral gathering)? Then nothing is asked yet. */
+function formingInView(): boolean {
+  return pond.pads.some((p) => {
+    if (!stillSeen(p) || p.glyphRun) return false;
+    if (p.drops.some((d) => d.to > 0 && d.a < 0.95)) return true;
+    const toward = p.glyphQueue ?? p.glyph;
+    return toward !== undefined && (toward === -1 || toward >= 0) && ((p.glyphT ?? 1) < 1 || p.glyphQueue !== undefined);
+  });
+}
+
+/**
+ * Lay a question's water on its bed, in one batch: for a choice, every candidate
+ * numeral at once (or none); for gathering, drops until it can be answered, with
+ * a spare that is not the answer — so no leaf stands out as the one that came for
+ * it. Returns false if the bed cannot hold it (then nothing is laid).
+ */
+function stageRelationship(c: Challenge, shift: number): boolean {
+  if (c.mode === 'pick') {
+    // the candidates, closest to the middle of the bed first (so they sit together), and
+    // leaves already holding fine dew before bare ones (they gather at once, a bare leaf beads first)
+    const mid = cam.cssH * 0.55 - shift;
+    const cost = (q: Pad) => Math.abs(toScreen(q.x, q.y)[1] - mid) + (q.glyph === -3 || keepsFineDew(q) ? 0 : cam.cssH * 0.3);
+    const dry = relationStock(true, shift)
+      .filter((q) => !q.drops.length && q.r >= 26)
+      .sort((a, b) => cost(a) - cost(b));
+    const all = c.choices ?? [];
+    const least = c.answers.length + 2;
+    if (dry.length < Math.min(all.length, least)) return false;
+    // fewer leaves than choices: drop near misses, never an answer
+    let choices = all;
+    if (dry.length < all.length) {
+      const need = [...c.answers];
+      const keep: number[] = [];
+      for (const v of all) {
+        const i = need.indexOf(v);
+        if (i >= 0) need.splice(i, 1);
+        else if (keep.length >= dry.length - c.answers.length) continue;
+        keep.push(v);
+      }
+      choices = keep;
+    }
+    optionOf.clear();
+    choices.forEach((v, i) => {
+      optionOf.set(dry[i], v);
+      supplyLog.push([pond.t, v]);
+    });
+    numeralLeaves = [...optionOf.keys()];
+    return true;
+  }
+  const stock = relationStock(false, shift);
+  const dry = relationStock(true, shift).sort((a, b) => b.r - a.r);
+  const laid: number[] = [];
+  const lay = (p: Pad, n: number) => {
+    p.drops = layDrops(n, p.r, rand, true);
+    if (liveCount(p) !== n) return;
+    stock.push(p);
+    laid.push(n);
+    supplyLog.push([pond.t, n]);
+  };
+  const free = () => dry.filter((p) => !stock.includes(p) && !p.drops.length);
+  if (c.mode === 'sum') {
+    const cycle = [3, 5, 2, 6, 4, 1, 6];
+    for (const p of free()) {
+      if (completable(c, [0], counts(stock)) && stock.length >= 3) break;
+      lay(p, cycle[relationSupply++ % cycle.length]);
+    }
+    if (!completable(c, [0], counts(stock))) return false;
+    // never a lone new leaf: a spare that is not the answer comes with it
+    const spare = free()[0];
+    if (laid.length && spare) lay(spare, [2, 3, 4, 5, 6].filter((n) => n !== c.answers[0])[relationSupply++ % 4]);
+    return true;
+  }
+  const need = groupsNeed(c);
+  const per = need.size;
+  let decoys = stock.filter((q) => liveCount(q) !== per).length;
+  for (const p of free()) {
+    const have = stock.filter((q) => liveCount(q) === per).length;
+    if (have >= need.count + 1 && decoys >= 2) break;
+    if (have < need.count + 1) lay(p, per);
+    else {
+      lay(p, [1, 2, 3, 4, 5, 6].filter((x) => x !== per)[relationSupply++ % 5]);
+      decoys++;
+    }
+  }
+  return completable(c, [0, 0], counts(stock));
+}
+
+/** Can the question (as far as it has been answered) still be finished from what is in view? */
+function answerableNow(c: Challenge): boolean {
+  if (c.mode === 'pick') {
+    const need = [...c.answers];
+    for (const v of chosenValues) {
+      const i = need.indexOf(v);
+      if (i >= 0) need.splice(i, 1);
+    }
+    // two factors: once one is in, only its partner will do
+    if (c.skill === 'pairs' && chosenValues.length === 1) need.splice(0, need.length, c.total / chosenValues[0]);
+    const seen = [...optionOf].filter(([p]) => stillSeen(p) && !relationLeaves.includes(p)).map(([, v]) => v);
+    return need.every((v) => seen.includes(v));
+  }
+  const seen = pond.pads.filter((p) => liveCount(p) > 0 && !p.selected && stillSeen(p));
+  return completable(c, relationGathered(), counts(seen));
+}
+
+/** Plan the next question: choose it, lay its bed, and ask it once the bed is in view and settled. */
+function stepPlan() {
+  if (!plan) return;
+  const c = plan.c;
+  if (!plan.staged) {
+    if (pond.t - plan.at > 0.2 && stageRelationship(c, glideAhead())) {
+      plan.staged = true;
+      plan.at = pond.t;
+    } else if (pond.t - plan.at > 10) {
+      // no bed for this one here: another question (unasked, so nothing is lost)
+      carry = null;
+      plan = null;
+      nextTargetAt = pond.t + 0.5;
+    }
+    return;
+  }
+  const ready =
+    c.mode === 'pick'
+      ? [...optionOf].every(([p, v]) => stillSeen(p) && toScreen(p.x, p.y)[1] > Math.max(205, cam.cssH * 0.25) && settled(p, numeralCode(v)))
+      : completable(c, [0], counts(pond.pads.filter((p) => liveCount(p) > 0 && inBed(p) && settled(p, -1))));
+  if (ready && pond.t >= askNotBefore && !formingInView()) {
+    askPlanned();
+    return;
+  }
+  // rowed past it (a leaf of the bed already behind the view, or gone): lay the next bed ahead now
+  const passed = (p: Pad) => !pond.pads.includes(p) || p.sink > 0.25 || toScreen(p.x, p.y)[1] > cam.cssH * 0.88;
+  if (c.mode === 'pick' && [...optionOf.keys()].some(passed)) {
+    optionOf.clear();
+    numeralLeaves = [];
+    plan.staged = false;
+    plan.at = pond.t;
+    return;
+  }
+  // the bed did not come (the boat stopped short, or turned): lay another, a few times
+  if (pond.t - plan.at > 14) {
+    optionOf.clear();
+    numeralLeaves = [];
+    plan.staged = false;
+    plan.at = pond.t;
+    if (++plan.tries >= 3) {
+      carry = null;
+      plan = null;
+      nextTargetAt = pond.t + 0.5;
+    }
+  }
+}
+
+function askPlanned() {
+  relationship = plan!.c;
+  plan = null;
+  relationLeaves = [];
+  selection = relationLeaves;
+  chosenValues = [];
+  relationHelp = 0;
+  relationAttempts = 0;
+  relationShownAt = pond.t;
+  relationRelease = null;
+  revealAt = 0;
+  lostSince = 0;
+  mathUI.show(relationship);
+}
+
+/**
+ * While a question is up its water is left alone. If what it needs leaves the
+ * view (rowed on, a leaf sank), the question fades with its leaves — anything
+ * chosen is let go — and comes back later with new water. Not a wrong answer.
+ */
+function keepAnswerable() {
+  const c = relationship;
+  if (!c || lock > 0 || overfull(c, relationGathered())) {
+    lostSince = 0;
+    return;
+  }
+  if (answerableNow(c)) {
+    lostSince = 0;
+    return;
+  }
+  if (!lostSince) lostSince = pond.t;
+  if (pond.t - lostSince < 0.8) return;
+  fadeRelation();
+}
+
+function fadeRelation() {
+  if (!relationship) return;
+  if (relationLeaves.length) sound.release();
+  // it comes back once with new water; faded twice, the river moves on to another
+  carry = carryFaded ? null : relationship;
+  carryFaded = !!carry;
+  revealAt = 0;
+  clearRelation();
+  relationship = null;
+  lostSince = 0;
+  mathUI.hide();
+  nextTargetAt = pond.t + 0.8;
 }
 
 // ─── the learning arc (LEARNING-DESIGN.md) ────────────────────────────────
@@ -365,9 +820,40 @@ function plantDue() {
 }
 
 function setTarget() {
+  if (!started || pageOpen) return;
   const phase = stretch.phase;
   if (phase === 'finale') {
+    if (pond.t < askNotBefore) {
+      nextTargetAt = askNotBefore;
+      return;
+    }
     startFinale();
+    return;
+  }
+  // numeral questions (which numeral says how many; which comes next) are mixed in with the
+  // counting once the child has gathered a first number; from Facts within 10 on, it is all questions
+  const numeralTurn = curriculum.data.level === 0 && ((curriculum.data.counting >= 1 && rand() < 0.45) || !!params.get('ask'));
+  if (!forcedStage && (curriculum.data.level > 0 || numeralTurn)) {
+    // `?ask=identify` (or any skill) asks that type of question, for looking at it
+    const askParam = (params.get('ask') ?? undefined) as Challenge['skill'] | undefined;
+    // planned, not asked: it is shown once its leaves are in view and settled (stepPlan)
+    // a fact that was shown comes back a few questions later, whatever the phase
+    const again = againFacts.find((f) => f.at <= curriculum.data.serial);
+    if (again) againFacts = againFacts.filter((f) => f !== again);
+    const c = carry ?? curriculum.next(rand, { phase, due: again ?? (phase === 'reach' || phase === 'warm' ? dueFact() : null), skill: askParam });
+    if (!carry) carryFaded = false;
+    carry = null;
+    numeralLeaves = [];
+    optionOf.clear();
+    supplyLog = [];
+    plan = { c, at: pond.t, staged: false, tries: 0 };
+    ui.clearTarget();
+    ui.quiet();
+    return;
+  }
+  // nothing is asked while dew in view is still forming: the ask comes with settled water
+  if (formingInView()) {
+    nextTargetAt = pond.t + 0.3;
     return;
   }
   const m = clamp01(mastery + L.PHASE_OFFSET[phase]);
@@ -376,9 +862,10 @@ function setTarget() {
   let again = false;
   let dueAsk = false;
   let activity: { stage: N.Stage; target: N.Target } | null = null;
-  if (forcedStage) {
-    const t = N.chooseTarget(forcedStage, counts(seen), rand, lastSolved);
-    activity = t ? { stage: forcedStage, target: t } : null;
+  if (forcedStage || curriculum.data.level === 0) {
+    const introStage = forcedStage ?? N.STAGES[0];
+    const t = N.chooseTarget(introStage, counts(seen), rand, lastSolved);
+    activity = t ? { stage: introStage, target: t } : null;
   } else {
     // a returning child's warm-up, and every reach, look first for what's due
     if (phase === 'reach' || (phase === 'warm' && welcome)) {
@@ -392,7 +879,7 @@ function setTarget() {
     activity ??= N.chooseActivity(m, counts(seen), rand, lastSolved);
   }
 
-  let st = activity?.stage ?? forcedStage ?? N.pickStage(m, rand);
+  let st = activity?.stage ?? forcedStage ?? (curriculum.data.level === 0 ? N.STAGES[0] : N.pickStage(m, rand));
   let t = activity?.target ?? N.chooseTarget(st, counts(visibleDewy()), rand, lastSolved);
 
   if (!t) {
@@ -402,13 +889,13 @@ function setTarget() {
     const all = [...broad, ...dry];
     const fix = N.repair(st, counts(all), value);
     if (fix) {
+      // dew condenses first, with a spare, and the ask comes once it has settled (next time round)
       fix.forEach((c, i) => condense(all[i], c));
-      const k = st.rule === 'groups' ? [...fix.values()][0] : undefined;
-      t = st.rule === 'groups' && k ? { value, rows: value / k, cols: k } : { value };
-    } else {
-      nextTargetAt = pond.t + 1;
-      return;
+      const spare = all.find((p, i) => !fix.has(i) && !p.drops.length);
+      if (spare) condense(spare, 1 + Math.floor(rand() * Math.min(5, st.max)));
     }
+    nextTargetAt = pond.t + (fix ? 0.4 : 1);
+    return;
   }
 
   // a reach at adding is sometimes a bond: this number in exactly two leaves (P5)
@@ -487,31 +974,6 @@ function learnSummary() {
   };
 }
 
-// ─── the river helps, it never tells (P7) ──────────────────────────────────
-const HELP_AT = [7, 14, 22];
-
-function scaffold() {
-  if (!target || !ask || lock > 0 || selection.length) return;
-  if (ask.scaffold >= HELP_AT.length || pond.t - ask.lastTouchAt < HELP_AT[ask.scaffold]) return;
-  const seen = visibleDewy();
-  const sol = L.solutionFor(ask.stage.rule, counts(seen), ask.value, ask.stage.maxParts, ask.bond ? 2 : undefined);
-  if (!sol) return;
-  ask.scaffold++;
-  const pads = sol.map((i) => seen[i]);
-  if (ask.scaffold === 2) {
-    // one leaf of an answer drifts gently toward the boat
-    const p = pads[0];
-    const [bx, by] = pond.bow();
-    const d = Math.hypot(bx - p.x, by - p.y) || 1;
-    p.vx += ((bx - p.x) / d) * 22;
-    p.vy += ((by - p.y) / d) * 22;
-    p.bob = Math.min(1, p.bob + 0.6);
-  } else {
-    for (const p of pads) p.bob = Math.min(1, p.bob + 0.7);
-  }
-  sound.glint();
-}
-
 // ─── elegance: the river notices a good answer (P4) ────────────────────────
 interface Opening {
   b: import('./world').Bloom;
@@ -541,8 +1003,8 @@ function stepOpenings(dt: number) {
 
 /**
  * Physics may carry a needed leaf away. An untouched ask quietly dissolves and
- * is redrawn from the new landscape. Exact condensation repair is reserved for
- * a child already midway through that answer.
+ * is redrawn from the new landscape; one the child is midway through lets go
+ * gently. Dew is never condensed to finish it (PLANNING-REVIEW-2026-09-30.md).
  */
 function keepSolvable() {
   if (!target || lock > 0) {
@@ -574,14 +1036,15 @@ function keepSolvable() {
     return;
   }
 
+  // midway, and it can no longer be finished: let go gently (never condense the missing piece)
   if (lostFor < 1.2) return;
-  const dry = visibleDry();
-  const all = [...seen, ...dry];
-  const fix = N.repair(st, counts(all), target.value);
-  if (fix) {
-    fix.forEach((c, i) => condense(all[i], c));
-    unsolvableSince = 0;
-  }
+  clearSelection();
+  sound.release();
+  target = null;
+  ui.clearTarget();
+  ui.quiet();
+  nextTargetAt = pond.t + 0.8;
+  unsolvableSince = 0;
 }
 
 function gathered() {
@@ -589,12 +1052,76 @@ function gathered() {
 }
 
 function clearSelection() {
+  if (relationship) {
+    clearRelation();
+    return;
+  }
   for (const p of selection) p.selected = false;
   selection = [];
   ui.progress(0);
 }
 
 function choose(p: Pad) {
+  if (relationship?.mode === 'pick') {
+    // choose: one touch puts that leaf's numeral in the waiting blank (INTERACTION.md)
+    if (visit || pageOpen || lock > 0) return;
+    const v = optionOf.get(p);
+    if (v === undefined) {
+      // only a numeral answers; any other leaf just bobs
+      p.bob = Math.min(1, p.bob + 0.5);
+      return;
+    }
+    chosenValues = [...chosenValues, v];
+    relationLeaves = [...relationLeaves, p];
+    selection = relationLeaves;
+    p.selected = true;
+    const g = relationGathered();
+    mathUI.progress(g);
+    if (accepts(relationship, g)) solveRelation();
+    else if (overfull(relationship, g)) {
+      // not that one: a low note, the leaf bobs, and the numeral leaves its blank (no words)
+      relationAttempts++;
+      sound.note(0, panAt(p.x));
+      p.bob = 1;
+      mathUI.over();
+      lock = 0.6;
+      relationRelease = { pad: p, at: pond.t + 0.55 };
+      if (relationAttempts >= TRIES) revealAt = pond.t + 0.75;
+    } else sound.note(Math.min(6, chosenValues.length + 1), panAt(p.x));
+    return;
+  }
+  if (relationship) {
+    if (visit || pageOpen || lock > 0 || !liveCount(p)) return;
+    const at = relationLeaves.indexOf(p);
+    if (at >= 0) {
+      // touching a chosen leaf lets it go
+      relationLeaves.splice(at, 1);
+      p.selected = false;
+    } else {
+      // equal groups: a leaf that does not match the first is not taken — it bobs, a low note
+      if (relationship.mode === 'groups' && relationLeaves.length && liveCount(p) !== liveCount(relationLeaves[0])) {
+        p.bob = 1;
+        sound.note(0, panAt(p.x));
+        return;
+      }
+      relationLeaves.push(p);
+      p.selected = true;
+      sound.note(Math.min(6, relationLeaves.length - 1), panAt(p.x));
+    }
+    selection = relationLeaves;
+    const g = relationGathered();
+    mathUI.progress(g);
+    if (accepts(relationship, g)) solveRelation();
+    else if (overfull(relationship, g)) {
+      // too much: the blank shakes and the river lets this leaf go again (no words)
+      relationAttempts++;
+      mathUI.over();
+      lock = 0.9;
+      relationRelease = { pad: p, at: pond.t + 0.85 };
+      if (relationAttempts >= TRIES) revealAt = pond.t + 1.05;
+    }
+    return;
+  }
   if (!target || lock > 0) return;
   const i = selection.indexOf(p);
   if (i >= 0) {
@@ -651,6 +1178,8 @@ interface Lift {
   radius: number;
 }
 let lifts: Lift[] = [];
+/** The leaves of the last answer, held on the thread a moment after the solve. */
+let solvedThread: { pads: Pad[]; until: number } | null = null;
 let lantern = 0;
 
 function solve() {
@@ -676,6 +1205,7 @@ function solve() {
   }
   const done = selection;
   selection = [];
+  solvedThread = { pads: done, until: pond.t + 0.9 };
   window.setTimeout(() => done.forEach((p) => (p.selected = false)), 900);
   lock = 2.2;
   lastSolved = value;
@@ -722,6 +1252,9 @@ function solve() {
   }
   if (e.fluent) lantern = Math.min(1.5, lantern + 0.35);
 
+  curriculum.counted(targetFriction === 0 && scaffolds === 0);
+  story.gather();
+  persistStory();
   totalSolves++;
   save();
   nextTargetAt = pond.t + L.PHASE_PAUSE[phase];
@@ -758,7 +1291,7 @@ function hitOrNear(sx: number, sy: number): Pad | null {
   let best: Pad | null = null;
   let bestD = slack;
   for (const p of pond.pads) {
-    if (!liveCount(p)) continue;
+    if (!answerable(p)) continue;
     const d = Math.hypot(wx - p.x, wy - p.y) - p.r * 0.97;
     if (d < bestD) { bestD = d; best = p; }
   }
@@ -796,7 +1329,17 @@ function telemetry() {
 {
   const titleEl = document.getElementById('title');
   let taps: number[] = [];
+  // press and hold the title: the grown-ups' panel (the school year)
+  let hold = 0;
+  const cancel = () => window.clearTimeout(hold);
+  titleEl?.addEventListener('pointerup', cancel);
+  titleEl?.addEventListener('pointerleave', cancel);
+  titleEl?.addEventListener('pointercancel', cancel);
   titleEl?.addEventListener('pointerdown', () => {
+    cancel();
+    hold = window.setTimeout(() => {
+      if (profile) mathUI.openGrownUps(curriculum.data.syllabus, curriculum.data.year, curriculum.describe());
+    }, 900);
     const now = performance.now();
     taps = taps.filter((t) => now - t < 1500);
     taps.push(now);
@@ -808,27 +1351,13 @@ function telemetry() {
   });
 }
 
-// ─── sharing: the basket ───────────────────────────────────────────────────
+// ─── the basket ────────────────────────────────────────────────────────────
 /**
  * Tap the basket and a crumb goes over the stern; the big fish nearby come for
- * it, and they have manners: one that is ahead waits its turn. When two or
- * more fish are at the boat and no number is being asked, the crumbs become an
- * ask — SHARE, one glyph per fish — answered when every fish has had the same.
- * Fair sharing is the first shape of division; a fair share of two or more
- * each is remembered as the matching groups fact (3 fish × 2 = 6).
+ * it, and they have manners: one that is ahead waits its turn. Just for the
+ * pleasure of it — nothing is asked (NARRATIVE-DESIGN.md §2).
  */
-interface Share {
-  fish: number[]; // indexes into school.fish
-  base: number[]; // what each had eaten when the ask began
-  shownAt: number;
-  lastEat: number;
-  crumbs: number;
-  hinted: boolean;
-}
-let share: Share | null = null;
-let shareTested = false;
 let plantTested = false;
-let shareHintAt = -Infinity;
 const bigFishAtBoat = () => {
   const out: number[] = [];
   school.fish.forEach((f, i) => {
@@ -840,151 +1369,172 @@ function basketTap() {
   pond.scatterCrumbs(1);
   sound.plop(0.35, panAt(pond.boat.x));
   pond.boat.sway += 0.02;
-  if (share) share.crumbs += 1;
-  else if (!target && lock <= 0) {
-    const fish = bigFishAtBoat().slice(0, 5);
-    if (fish.length >= 2) {
-      // everyone starts hungry; the fish at the boat now are the ones being shared between
-      for (const f of school.fish) f.fed = 0;
-      share = { fish, base: fish.map(() => 0), shownAt: pond.t, lastEat: pond.t, crumbs: 1, hinted: false };
-      ui.setShare(fish.length);
-      ui.shareProgress(fish.map(() => 0));
-      nextTargetAt = Infinity;
-    }
-  }
-}
-/** Each frame: the fish glyphs fill, and a fair share is answered. */
-function stepShare(dt: number) {
-  void dt;
-  if (!share) {
-    // the fish have come and nothing is asked: say so, once in a while
-    const visiting = school.fish.filter((f) => f.mood === 2 && f.kind !== 3).length;
-    if (!target && lock <= 0 && visiting >= 2 && pond.t - shareHintAt > 45 && pond.t - startedAt > 20) {
-      shareHintAt = pond.t;
-      ui.say('the fish have come — tap the basket', 5);
-    }
-    return;
-  }
-  // a fish that joins in and takes a crumb becomes one of those being shared between
-  if (share.fish.length < 5) {
-    school.fish.forEach((f, i) => {
-      if (share!.fish.length < 5 && f.kind !== 3 && (f.fed ?? 0) > 0 && !share!.fish.includes(i)) {
-        share!.fish.push(i);
-        share!.base.push(0);
-        ui.setShare(share!.fish.length);
-      }
-    });
-  }
-  const fed = share.fish.map((i, k) => Math.max(0, (school.fish[i].fed ?? 0) - share!.base[k]));
-  const total = fed.reduce((a, b) => a + b, 0);
-  if (total !== share.crumbs - pond.crumbs.filter((c) => !c.eaten).length) share.lastEat = pond.t;
-  ui.shareProgress(fed);
-  const floating = pond.crumbs.filter((c) => !c.eaten).length;
-  const fair = fed.every((n) => n === fed[0]) && fed[0] > 0;
-  const gone = share.fish.filter((i) => Math.hypot(school.fish[i].x - pond.boat.x, school.fish[i].y - pond.boat.y) < 320).length < 2;
-  if (fair && floating === 0 && pond.t - share.lastEat > 1.4) {
-    // fair: every fish has had the same
-    const each = fed[0];
-    const n = fed.length;
-    sound.gathered();
-    ui.solved();
-    ui.say(each === 1 ? 'one each — fair' : `${each} each — fair`, 3);
-    lantern = Math.min(1.5, lantern + 0.25);
-    if (each >= 2) {
-      const q = L.quality({ secs: pond.t - share.shownAt, leaves: n, value: n * each, friction: 0, scaffold: 0, counting: true });
-      memory.record(L.factOf('groups', Array(n).fill(each)), q, Date.now());
-    }
-    totalSolves += 1;
-    save();
-    share = null;
-    lock = 1.5;
-    nextTargetAt = pond.t + 4;
-    return;
-  }
-  if (!fair && floating === 0 && total > 0 && pond.t - share.lastEat > 2.5 && !share.hinted) {
-    share.hinted = true;
-    ui.say('not yet fair — a little more', 4);
-  }
-  if (gone || pond.t - share.shownAt > 75) {
-    // the fish have moved on; the ask goes quietly with them
-    ui.clearTarget();
-    ui.say('the fish have gone on', 3);
-    share = null;
-    nextTargetAt = pond.t + 3;
-  }
 }
 
-// ─── the story: residents at the piers ─────────────────────────────────────
-/**
- * Every pier has a resident (heron, frog, turtle, in turn down the river). They
- * stand at the pier's tip, watch a boat that comes near, and when it has come
- * in and rested a moment they speak — a few lines, one at a time, in the hint
- * slot — asking for the one thing they want. See `story.ts`.
- */
-const residentShift = Number(params.get('resident')) || 0;
-const residentKind = (id: number): ResidentKind => RESIDENTS[(id + residentShift) % RESIDENTS.length];
-interface Arrival { id: number; since: number }
-let arrival: Arrival | null = null;
-const visitedAt = new Map<number, number>();
-let lineQueue: Array<{ text: string; at: number }> = [];
-function pierTip(m: { x: number; y: number; ang: number; l: number }): [number, number, number] {
-  const d = m.l - 16;
-  return [m.x - Math.sin(m.ang) * d, m.y + Math.cos(m.ang) * d, -m.ang];
+// ─── deliberate visits: noticing is ambient; speaking and sharing are tapped ──
+const residentShift = Math.trunc(Number(params.get('resident')) || 0);
+type Pier = Pond['landmarks'][number];
+const residentKind = (m: Pier): ResidentKind => RESIDENTS[((Math.floor(m.seed * 997) + residentShift) % 3 + 3) % 3];
+const residentKey = (m: Pier) => `${riverSeed}:${m.key}:${residentKind(m)}`;
+const persistStory = () => { if (profile) writeJSON(pKey(profile.id, 'story.v1'), story.toJSON()); };
+let visit: { key: string; until: number } | null = null;
+let transfer: { key: string; t: number } | null = null;
+let residentPress: { key: string; lamp: boolean; x: number; y: number; moved: boolean } | null = null;
+const residentPose = new Map<string, { look: number; attention: number; hop: number; pad?: Pad }>();
+function pierPoint(m: Pier, across: number, inset: number): [number, number] {
+  const d = m.l - inset, c = Math.cos(m.ang), s = Math.sin(m.ang);
+  return [m.x + across * c - d * s, m.y + across * s + d * c];
+}
+function pierTip(m: Pier): [number, number, number] { return [...pierPoint(m, 0, 16), -m.ang]; }
+function lampPoint(m: Pier): [number, number] { return pierPoint(m, -m.w * 0.65, 53); }
+function residentPoint(m: Pier): [number, number] {
+  const kind = residentKind(m);
+  return pierPoint(m, kind === 'heron' ? m.w * 0.65 : kind === 'frog' ? m.w * 0.3 : 0, kind === 'heron' ? 18 : kind === 'frog' ? 8 : 29);
+}
+function endVisit() {
+  visit = null; transfer = null;
+  if (started) mathUI.suspend(pageOpen);
+  document.getElementById('target')!.style.visibility = '';
+  ui.quiet();
+}
+function visitRiver(m: Pier) {
+  return {
+    seen: (id: string) => notebook.has(id),
+    plantingNear: (Y: number, within: number) => {
+      let best: number | null = null;
+      for (const pl of pond.plantings) if (Math.abs(pl.Y - Y) < within) best = Math.max(best ?? 0, pond.ageDays(pl));
+      return best;
+    },
+    lantern: story.carried, pierLight: story.resident(residentKey(m), residentKind(m)).light,
+    dusk: skyAt(dayStart + pond.t / DAY).dusk,
+  };
+}
+function engage(m: Pier, lamp: boolean) {
+  if (!started || !profile || transfer) return;
+  const key = residentKey(m), kind = residentKind(m), [x, y] = pierTip(m);
+  if (Math.hypot(pond.boat.x - x, pond.boat.y - y) > 210) {
+    ui.say(lamp ? 'bring the boat alongside to share light' : 'row a little closer', 3);
+    return;
+  }
+  if (visit?.key === key && !lamp) { endVisit(); return; }
+  endVisit();
+  visit = { key, until: pond.t + 9 };
+  document.getElementById('target')!.style.visibility = 'hidden';
+  mathUI.suspend(true);
+  if (lamp) {
+    const state = story.resident(key, kind);
+    if (state.light >= 0.95) { ui.say('a light you left burning', 3); visit.until = pond.t + 3; }
+    else if (story.canLight(key, kind)) {
+      transfer = { key, t: 0 };
+      visit.until = pond.t + 7;
+      ui.quiet();
+    } else { ui.say('gather dew, then share its light here', 4); visit.until = pond.t + 4; }
+  } else {
+    const lines = story.visit(kind, visitRiver(m), m.y + pond.origin, key);
+    // One short invitation now; no automatic pages of narration.
+    const line = lines.find(l => l.done) ?? lines[Math.min(1, lines.length - 1)];
+    ui.say(line.text, 6); ui.announce(line.text);
+    visit.until = pond.t + 6;
+  }
+  persistStory();
+}
+function hitResident(sx: number, sy: number): { key: string; lamp: boolean } | null {
+  // Choose the closest of the overlapping generous touch targets.
+  let best: { key: string; lamp: boolean } | null = null, distance = Infinity;
+  for (const m of pond.landmarks) {
+    const key = residentKey(m), pose = residentPose.get(key);
+    const base = residentPoint(m);
+    const rp: [number, number] = pose?.pad && pose.hop >= 1 ? [pose.pad.x, pose.pad.y] : base;
+    for (const lamp of [false, true]) {
+      const [x, y] = toScreen(...(lamp ? lampPoint(m) : rp));
+      const d = Math.hypot(x - sx, y - sy);
+      const radius = Math.max(22, (lamp ? 14 : residentKind(m) === 'heron' ? 27 : 19) * cam.zoom);
+      if (d < radius && d < distance) { distance = d; best = { key, lamp }; }
+    }
+  }
+  return best;
 }
 function residentsNow() {
   const out: NonNullable<Parameters<typeof renderer.render>[0]['residents']> = [];
-  const b = pond.boat;
   for (const m of pond.landmarks) {
-    const [x, y, heading] = pierTip(m);
-    const d = Math.hypot(b.x - x, b.y - y);
-    const kind = residentKind(m.id);
-    const ch = story.chapter(kind);
-    // it looks toward a boat that is near: which side the boat is, in its own frame
-    const s = Math.sin(heading);
-    const c = Math.cos(heading);
-    const across = ((b.x - x) * c - (b.y - y) * s) / Math.max(1, d);
-    const look = d < 220 ? Math.max(-1, Math.min(1, across * 1.5)) : 0;
-    out.push({ x, y, heading, size: kind === 'heron' ? 28 : kind === 'frog' ? 13 : 22, kind: RESIDENTS.indexOf(kind), mood: ch.done ? 2 : d < 220 ? 1 : 0, look, seed: m.seed });
+    const key = residentKey(m), kind = residentKind(m), pose = residentPose.get(key);
+    let [x, y] = residentPoint(m);
+    const hop = pose?.hop ?? 0;
+    if (pose?.pad) {
+      const k = smooth(0, 1, hop);
+      x += (pose.pad.x - x) * k; y += (pose.pad.y - y) * k;
+      y += Math.sin(k * Math.PI) * 15;
+    }
+    const ch = story.residents[key];
+    out.push({ x, y, heading: -m.ang, size: kind === 'heron' ? 30 : kind === 'frog' ? 16 : 25,
+      kind: RESIDENTS.indexOf(kind), mood: ch?.done ? 2 : pose?.attention ?? 0,
+      look: pose?.look ?? 0, seed: m.seed, hop: Math.sin(hop * Math.PI) });
+    const [lx, ly] = lampPoint(m);
+    out.push({ x: lx, y: ly, heading: -m.ang, size: 15, kind: 3, mood: pierBrightness(m), look: 0, seed: m.seed, hop: 0 });
   }
   return out;
 }
+function pierBrightness(m: Pier) {
+  const key = residentKey(m);
+  return transfer?.key === key ? smooth(0.8, 2.8, transfer.t) : story.residents[key]?.light ?? 0;
+}
+function pierLights() {
+  return pond.landmarks.map(m => { const [x, y] = lampPoint(m); return { x, y, strength: pierBrightness(m) }; })
+    .filter(l => l.strength > 0 && Math.abs(l.y - cam.y) < cam.cssH / cam.zoom + 200)
+    .sort((a,b) => Math.hypot(a.x-cam.x,a.y-cam.y)-Math.hypot(b.x-cam.x,b.y-cam.y)).slice(0,4);
+}
 function stepStory(dt: number) {
-  void dt;
-  if (!started || !profile) { arrival = null; return; }
-  const b = pond.boat;
-  let near: { id: number; Y: number } | null = null;
+  if (!started || !profile) return;
   for (const m of pond.landmarks) {
-    const [x, y] = pierTip(m);
-    if (Math.hypot(b.x - x, b.y - y) < 150 && b.speed < 10) { near = { id: m.id, Y: m.y + pond.origin }; break; }
+    const key = residentKey(m), [x,y] = residentPoint(m), kind = residentKind(m);
+    let pose = residentPose.get(key);
+    if (!pose) { pose = {look:0, attention:0, hop:0}; residentPose.set(key,pose); }
+    const d = Math.hypot(pond.boat.x-x,pond.boat.y-y), h = -m.ang;
+    const want = d < 220 ? Math.max(-1,Math.min(1,((pond.boat.x-x)*Math.cos(h)-(pond.boat.y-y)*Math.sin(h))/Math.max(1,d))) : 0;
+    pose.look += (want-pose.look)*(1-Math.exp(-2*dt));
+    pose.attention += ((d < 220 ? 1 : 0)-pose.attention)*(1-Math.exp(-2*dt));
+    if (kind === 'frog' && story.residents[key]?.done) {
+      if (pose.pad && (!pond.pads.includes(pose.pad) || pose.pad.sink > 0.4)) { pose.pad=undefined; pose.hop=0; }
+      if (!pose.pad) pose.pad=pond.pads.find(p => p.plantingSeed !== undefined && p.sink < 0.1 && !p.selected && Math.hypot(p.x-x,p.y-y)<95);
+      if (pose.pad) { const was=pose.hop; pose.hop=Math.min(1,pose.hop+dt/0.8); if(was<1&&pose.hop===1) pose.pad.bob=0.5; }
+    }
   }
-  if (!near) { arrival = null; }
-  else if (!arrival || arrival.id !== near.id) arrival = { id: near.id, since: pond.t };
-  else if (pond.t - arrival.since > 1.2 && pond.t - (visitedAt.get(near.id) ?? -Infinity) > 90 && !target && !share) {
-    visitedAt.set(near.id, pond.t);
-    const kind = residentKind(near.id);
-    const sky = skyAt(dayStart + pond.t / DAY);
-    const river = {
-      seen: (id: string) => notebook.has(id),
-      plantingNear: (Y: number, within: number) => {
-        let best: number | null = null;
-        for (const pl of pond.plantings) if (Math.abs(pl.Y - Y) < within) best = Math.max(best ?? 0, pond.ageDays(pl));
-        return best;
-      },
-      lantern,
-      dusk: sky.dusk,
-    };
-    const lines = story.visit(kind, river, near.Y);
-    writeJSON(pKey(profile.id, 'story.v1'), story.toJSON());
-    lineQueue = lines.map((l, i) => ({ text: l.text, at: pond.t + i * 5.5 }));
-    if (lines.some((l) => l.done)) lantern = Math.min(1.5, lantern + 0.4);
-    // the asks wait while the resident speaks
-    nextTargetAt = Math.max(nextTargetAt, pond.t + lines.length * 5.5 + 2);
+  for (const key of residentPose.keys()) if (!pond.landmarks.some(m=>residentKey(m)===key)) residentPose.delete(key);
+  if (!visit) return;
+  const m = pond.landmarks.find(m=>residentKey(m)===visit!.key);
+  if (!m || Math.hypot(pond.boat.x-pierTip(m)[0],pond.boat.y-pierTip(m)[1])>250 || pond.t>visit.until) {endVisit();return;}
+  // Browsing/visiting supplies no evidence about mathematical hesitation.
+  if (ask) { ask.shownAt+=dt; ask.lastTouchAt+=dt; }
+  if (releaseAt) releaseAt+=dt;
+  nextTargetAt+=dt;
+  if (transfer) {
+    transfer.t+=dt;
+    if (transfer.t>=2.8) {
+      if(story.light(transfer.key,residentKind(m))) {
+        sound.note(2,panAt(lampPoint(m)[0]));
+        story.visit(residentKind(m),visitRiver(m),m.y+pond.origin,residentKey(m));
+        persistStory(); ui.announce('The pier lantern is alight.');
+      }
+      transfer=null;
+    }
   }
-  while (lineQueue.length && pond.t >= lineQueue[0].at) {
-    const l = lineQueue.shift()!;
-    ui.say(l.text, 5);
-    ui.announce(l.text);
+}
+function storyMotes(): Mote[] {
+  const out:Mote[]=[];
+  if(transfer) {
+    const m=pond.landmarks.find(m=>residentKey(m)===transfer!.key);
+    if(m) {
+      const [bx,by]=pond.bow(),[lx,ly]=lampPoint(m);
+      for(let i=0;i<7;i++) {
+        const k=(transfer.t-i*0.16)/1.7;
+        if(k<=0||k>=1)continue;
+        const e=smooth(0,1,k);
+        out.push({x:bx+(lx-bx)*e,y:by+(ly-by)*e+Math.sin(e*Math.PI)*22,size:7+Math.sin(k*Math.PI)*4,r:1,g:.83,b:.42,a:.85,core:.65,z:1});
+      }
+    }
   }
+  for(const l of pierLights()) out.push({x:l.x,y:l.y,size:46,r:1,g:.73,b:.38,a:l.strength*.16,core:0,z:1});
+  return out;
 }
 
 // ─── the notebook: noticing ─────────────────────────────────────────────────
@@ -1180,8 +1730,8 @@ function buildNumbersPage() {
     pageEl.appendChild(d);
   };
   sec('on the river', `${days ? (days === 1 ? 'since today' : `since ${days} days ago`) : 'just begun'} · ${totalSolves} number${totalSolves === 1 ? '' : 's'} made · ${notebook.pages} of ${SPECIES.length} creatures seen`);
-  sec('now', stageNames[stage().id] ?? stage().id);
-  if (story.told > 0 || Object.keys(story.chapters).length) sec('the piers', `${Object.values(story.chapters).filter((c) => c?.met).length} met · ${story.told} content`);
+  sec('now', curriculum.data.level ? curriculum.level.name.toLowerCase() : stageNames[stage().id] ?? stage().id);
+  if (story.told > 0 || Object.keys(story.residents).length || Object.keys(story.chapters).length) sec('the piers', `${Object.values(story.residents).filter(c => c.met).length} met · ${story.told} content`);
   if (pond.plantings.length) {
     const flowering = pond.plantings.filter((pl) => pond.ageDays(pl) >= 5).length;
     const leaves = pond.plantings.filter((pl) => pond.ageDays(pl) >= 0.5).length - flowering;
@@ -1194,6 +1744,7 @@ function buildNumbersPage() {
 }
 function togglePage(open = !pageOpen) {
   pageOpen = open;
+  mathUI.suspend(open || !!visit);
   if (open) { pageSide = 'creatures'; pageLeaf = 0; buildPage(); }
   pageEl.classList.toggle('open', open);
   document.body.classList.toggle('page', open);
@@ -1339,6 +1890,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   if (pointerId !== null) {
     if (performance.now() - pointerAt < 1500 || helm || drag?.moved) return;
     pointerId = null;
+    residentPress = null;
     helm = null;
     drag = null;
     lastHit = null;
@@ -1358,9 +1910,15 @@ canvasEl.addEventListener('pointerdown', (e) => {
   pointerId = e.pointerId;
   canvasEl.setPointerCapture(e.pointerId);
   const [bwx, bwy] = toWorld(e.clientX, e.clientY);
+  const residentHit = started ? hitResident(e.clientX, e.clientY) : null;
+  if (residentHit && !pond.onBoat(bwx, bwy)) {
+    residentPress = {...residentHit, x:e.clientX, y:e.clientY, moved:false};
+    return;
+  }
+  if (visit) endVisit();
   const hitPad = hitOrNear(e.clientX, e.clientY);
   // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
-  if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && liveCount(hitPad)))) {
+  if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && answerable(hitPad)))) {
     // where on the boat: across (a tap there leans on that oar) and fore or aft of the
     // centre (dragging the front half swings the bow, the back half swings the stern)
     const [lx, ly] = pond.boatLocal(bwx, bwy);
@@ -1375,7 +1933,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
     return;
   }
   // a leaf with dew is a choice; anywhere else — water or a dry leaf — the touch is wind
-  const p = hitPad && liveCount(hitPad) ? hitPad : null;
+  const p = hitPad && answerable(hitPad) ? hitPad : null;
   lastHit = p;
   // …unless a creature or a flower is under the fingertip: then it is noticed (the notebook)
   // — and a spent flower's seed head gives up a seed to carry (planting, NARRATIVE-DESIGN.md §3)
@@ -1393,8 +1951,12 @@ canvasEl.addEventListener('pointerdown', (e) => {
     choose(p);
   } else {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
-    // one plop: a single clean ring spreading out, like a raindrop or a fingertip
-    if (!pond.splash(wx, wy, 6, 2.6, !!params.get('foamtap'))) sound.plop(1, panAt(wx));
+    if (hitPad) {
+      pond.splash(wx, wy, 6, 0.4, false, [hitPad]);
+      pond.held = { pad: hitPad, ox: wx - hitPad.x, oy: wy - hitPad.y };
+    } else if (!pond.splash(wx, wy, 6, 2.6, !!params.get('foamtap'))) {
+      sound.plop(1, panAt(wx));
+    }
     school.scare(wx, wy, 170);
     if (selection.length && lock <= 0) clearSelection();
     // a finger left on the water may then be drawn through it (see pointermove)
@@ -1404,6 +1966,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
 
 canvasEl.addEventListener('pointermove', (e) => {
   if (e.pointerId !== pointerId) return;
+  if (residentPress) { residentPress.moved ||= Math.hypot(e.clientX-residentPress.x,e.clientY-residentPress.y)>10; return; }
   if (seed) {
     const [wx, wy] = toWorld(e.clientX, e.clientY);
     seed.x = e.clientX; seed.y = e.clientY; seed.wx = wx; seed.wy = wy;
@@ -1437,6 +2000,7 @@ canvasEl.addEventListener('pointermove', (e) => {
     const d = Math.hypot(dx, dy);
     if (d >= 5) {
       drag.moved = true;
+      pond.held = null;
       const sp = Math.hypot(drag.vx, drag.vy);
       const strength = Math.max(0.12, Math.min(0.45, sp / 1400));
       const step = 6;
@@ -1457,12 +2021,14 @@ canvasEl.addEventListener('pointermove', (e) => {
     return;
   }
   const p = hit(e.clientX, e.clientY);
-  if (!p || p === lastHit) return;
+  // choosing is one touch a numeral; a finger drawn across leaves does not fill blanks
+  if (!p || p === lastHit || relationship?.mode === 'pick') return;
   // tracing back onto the previous leaf lets the last one go
   if (selection.length > 1 && selection[selection.length - 2] === p) {
     const last = selection.pop()!;
     last.selected = false;
-    ui.progress(gathered());
+    if (relationship) mathUI.progress(relationGathered());
+    else ui.progress(gathered());
   } else if (!selection.includes(p)) {
     touchPad(p);
     choose(p);
@@ -1474,6 +2040,13 @@ const end = (e: PointerEvent) => {
   if (e.pointerId !== pointerId) return;
   pointerId = null;
   lastHit = null;
+  pond.held = null;
+  if (residentPress) {
+    const press=residentPress; residentPress=null;
+    const m=pond.landmarks.find(m=>residentKey(m)===press.key);
+    if(m && !press.moved && e.type !== 'pointercancel') engage(m,press.lamp);
+    return;
+  }
   if (seed) {
     const s = seed;
     seed = null;
@@ -1508,8 +2081,16 @@ canvasEl.addEventListener('pointercancel', end);
 let focusIx = -1;
 canvasEl.addEventListener('keydown', (e) => {
   if (!started) return;
-  const pads = visibleDewy().sort((a, b) => b.y - a.y || a.x - b.x);
+  if(e.key.toLowerCase()==='r'||e.key.toLowerCase()==='l') {
+    const m=[...pond.landmarks].sort((a,b)=>Math.hypot(a.x-pond.boat.x,a.y-pond.boat.y)-Math.hypot(b.x-pond.boat.x,b.y-pond.boat.y))[0];
+    if(m) engage(m,e.key.toLowerCase()==='l');
+    e.preventDefault();return;
+  }
+  if(e.key === 'Escape' && visit) { endVisit(); return; }
+  if(visit)endVisit();
+  const pads = visibleDewy(true).sort((a, b) => b.y - a.y || a.x - b.x);
   if (e.key === 'Escape') {
+    if(visit) { endVisit(); return; }
     clearSelection();
     return;
   }
@@ -1522,7 +2103,7 @@ canvasEl.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1;
     focusIx = ((cur < 0 ? (step > 0 ? -1 : 0) : cur) + step + pads.length) % pads.length;
     pads[focusIx].focus = true;
-    ui.announce(`Leaf with ${liveCount(pads[focusIx])} drops${pads[focusIx].selected ? ', chosen' : ''}.`);
+    ui.announce(optionOf.has(pads[focusIx]) ? `Leaf with ${optionOf.get(pads[focusIx])}.` : `Leaf with ${liveCount(pads[focusIx])} drops${pads[focusIx].selected ? ', chosen' : ''}.`);
   } else if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
     const p = pond.pads.find((q) => q.focus);
@@ -1594,7 +2175,7 @@ function gathers(dt: number, dusk: number): Mote[] {
   }
   lantern = Math.min(1.5, lantern + arrived * 0.12) * Math.exp(-0.25 * dt);
   // the lantern: a small warmth by day, the brightest thing on the river at night
-  const glow = lantern + dusk * 0.8;
+  const glow = lantern + story.carried * 0.2 + dusk * 0.8;
   out.push({ x: bx, y: by, size: 26 + glow * 40, r: 1, g: 0.8, b: 0.45, a: 0.22 + glow * 0.35, core: 0.3, z: 1.02 });
   if (dusk > 0.2) out.push({ x: bx, y: by, size: 140 + glow * 80, r: 1, g: 0.72, b: 0.4, a: 0.05 * dusk + glow * 0.03, core: 0, z: 1 });
   return out;
@@ -1678,7 +2259,6 @@ function frame(now: number) {
   perf.mark('prep');
   school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw, hh }, shift, (x, y) => pond.flow(x, y), interest, pond.crumbs);
   perf.mark('fish');
-  stepShare(dt);
   stepStory(dt);
   // a big fish nosing at the surface: a small ring and a soft sound
   for (const r of school.rises) {
@@ -1747,21 +2327,41 @@ function frame(now: number) {
   pond.bumps.length = 0;
 
   // the rules
-  lock = Math.max(0, lock - dt);
+  lock = Math.max(0, lock - (visit ? 0 : dt));
   if (releaseAt && pond.t >= releaseAt) {
     releaseAt = 0;
     clearSelection();
     sound.release();
   }
-  if (!target && !share && pond.t >= nextTargetAt) setTarget();
+  if (relationClearAt && pond.t >= relationClearAt) { mathUI.hide(); relationClearAt = 0; }
+  if (relationRelease && pond.t >= relationRelease.at) {
+    const { pad } = relationRelease;
+    relationRelease = null;
+    const i = relationLeaves.lastIndexOf(pad);
+    if (i >= 0) {
+      relationLeaves.splice(i, 1);
+      if (relationship?.mode === 'pick') chosenValues = chosenValues.slice(0, i);
+      pad.selected = relationLeaves.includes(pad);
+      pad.bob = Math.min(1, pad.bob + 0.5);
+      if (relationship) mathUI.progress(relationGathered());
+    }
+  }
+  if (revealAt && pond.t >= revealAt) {
+    if (relationship) {
+      lock = Math.max(lock, 1.2);
+      revealRelation();
+    }
+    revealAt = 0;
+  }
+  if (!visit && !relationship && !plan && !target && pond.t >= nextTargetAt) setTarget();
   if (!started) placeNames(dt);
   stepChimes();
   stepOpenings(dt);
-  scaffold();
+  // No automatic answer-revealing hints: looking around is not evidence of difficulty.
   if (pond.bloomBoost > 1 && pond.t > 90) pond.bloomBoost = 1;
   if (pond.t >= checkAt) {
     checkAt = pond.t + 0.35;
-    keepSolvable();
+    if (!visit) { if (relationship) keepAnswerable(); else if (plan) stepPlan(); else keepSolvable(); }
     // a dewy leaf drifting under another sheds the hidden drops rather than hiding them
     shedHidden();
   }
@@ -1774,29 +2374,35 @@ function frame(now: number) {
     pond.plant(px, py, profile.name);
     pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
   }
-  // `?sharetest=1`: three big fish brought to the boat, to look at the sharing ask
-  if (params.get('sharetest') && started && !shareTested) {
-    shareTested = true;
-    const big = school.fish.filter((f) => f.kind !== 3).slice(0, 3);
-    big.forEach((f, k) => { f.x = pond.boat.x + (k - 1) * 40; f.y = pond.boat.y - 90; f.mood = 2; f.until = 30; f.cool = 0; });
-  }
   if (params.get('sinktest')) {
-    const v = visibleDewy().sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))[0];
+    // the same leaf throughout (once chosen), so what happens to its dew can be watched
+    const numeralShown = numeralLeaves.find((q) => q.glyph !== undefined && q.glyph >= 0 && (q.glyphT ?? 0) >= 1);
+    if (numeralShown && sinkLeaf !== numeralShown && !sinkWashed && !(sinkLeaf && sinkLeaf.glyph !== undefined && sinkLeaf.glyph >= 0)) sinkLeaf = numeralShown;
+    if (!sinkLeaf || !pond.pads.includes(sinkLeaf)) sinkLeaf = visibleDewy().sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))[0] ?? null;
+    const v = sinkLeaf;
     if (v) {
       v.caught = true;
-      v.sink = 0.75;
+      v.sink = params.get('wash') ? 0.42 : 0.75;
       v.dx = 0.15;
       v.dy = 0.02;
+      // with `&wash=S` too: after S seconds (once its dew has settled), its dew runs off (to look at the emptying)
+      if (params.get('wash') && pond.t > (Number(params.get('wash')) || 2) && !sinkWashed && (v.glyph === undefined || (v.glyphT ?? 1) >= 1)) {
+        sinkWashed = true;
+        for (const d of v.drops) d.to = 0;
+      }
       // with `&foamtap=1` too: churn white water over its flooded side, to see it ride the film
       if (params.get('foamtap') && Math.random() < dt * 12) pond.impulses.push({ x: v.x + v.r * 0.55, y: v.y + v.r * 0.1, r: 12, s: 0.5, foam: true });
     }
   }
+  waterGlyphs(dt);
   const order = drawOrder(pond.pads);
   const thread: Array<[number, number]> = [];
-  if (selection.length > 1) {
-    for (let i = 0; i < selection.length - 1; i++) {
-      const a = selection[i];
-      const c = selection[i + 1];
+  if (solvedThread && (selection.length || pond.t > solvedThread.until)) solvedThread = null;
+  const threaded = selection.length ? selection : solvedThread?.pads ?? [];
+  if (threaded.length > 1) {
+    for (let i = 0; i < threaded.length - 1; i++) {
+      const a = threaded[i];
+      const c = threaded[i + 1];
       for (let k = 0; k < 12; k++) {
         const u = k / 12;
         const sag = Math.sin(u * Math.PI) * 10;
@@ -1806,7 +2412,7 @@ function frame(now: number) {
         thread.push([a.x + dx * u - (dy / l) * sag, a.y + dy * u + (dx / l) * sag]);
       }
     }
-    const z = selection[selection.length - 1];
+    const z = threaded[threaded.length - 1];
     thread.push([z.x, z.y]);
   }
 
@@ -1840,10 +2446,11 @@ function frame(now: number) {
       fish: school.fish,
       critters: bugs,
       residents: residentsNow(),
-      motes: moteList,
+      pierLights: pierLights(),
+      motes: [...moteList, ...storyMotes()],
       under: air.below,
       thread,
-      lantern: 0.15 + lantern * 0.6 + sky.dusk * 1.1,
+      lantern: 0.15 + lantern * 0.6 + story.carried * 0.2 + sky.dusk * 1.1,
       names: nameSprites(),
       page: pageK > 0.01 ? { open: pageK, entries: pageSide === 'creatures' ? pageEntries() : [] } : undefined,
     },
@@ -1861,6 +2468,193 @@ function frame(now: number) {
     report('perf', { scale, dpr, ...perf.summary() });
   }
   requestAnimationFrame(frame);
+}
+
+/** `?sinktest=1`: the leaf held under, and whether `&wash=1` has run its dew off yet. */
+let sinkLeaf: Pad | null = null;
+let sinkWashed = false;
+
+// ─── numerals drawn in water on the leaves (glyphs.ts) ─────────────────────
+// In play: a numeral question's leaves, and the leaves of any question whose skill the child
+// has proved with dew (challenges.ts NUMERALS_AFTER). Debug views below.
+// `?glyphs=1`: a dewy leaf's drops flow together into the numeral of how many it holds
+// (1–9; more stay as drops), and when that number changes the water flows into the new
+// one; `?glyphs=half` only on every other leaf, to see the two side by side;
+// `?glyphs=morph`: each dewy leaf's water flows from its drops to its numeral and back,
+// every few seconds. `?glyphs=sheet`: the sixteen glyphs (0–9 + − × ÷ = ?) on the sixteen
+// leaves nearest the middle of the view, in reading order; `?glyphs=repeat&chars=37` those
+// leaves repeating a few characters, to see the hand vary; add `&cycle=1` to either and
+// each leaf's glyph flows into the next every few seconds.
+const glyphMode = params.get('glyphs');
+const glyphCycle = !!params.get('cycle');
+/** How long water takes to flow from one state to the next (s). */
+const MORPH = 1.8;
+let glyphsReady = false;
+let sheet: Map<Pad, number> | null = null;
+
+/**
+ * Move a leaf's water toward a state (an atlas cell, -1 its own drops, -2 nothing): a
+ * change starts a flow from what is there now (if a flow is barely begun, from where it
+ * began), and a flow that ends back in the drops hands the leaf back to its dew.
+ */
+/**
+ * A leaf's water is always one of: nothing (-2), fine dew (-3: a sprinkle of tiny beads, too
+ * small to count), drops (-1: the dew that counts), or a numeral (0…). It moves between them
+ * only by flowing:
+ *   nothing → fine dew          a bare leaf beads up (BEAD)
+ *   fine dew → drops / numeral  the beads drift together and grow into it (GATHER)
+ *   anything else               one water into the next (MORPH)
+ * Nothing goes straight to drops or a numeral: it beads first, then gathers (a queued flow).
+ * Water leaving drops or a numeral goes back to fine dew on a leaf that keeps some, and to
+ * nothing on one that does not.
+ */
+const BEAD = 3.2;
+const GATHER = 2.8;
+/** About half the leaves keep a sprinkle of fine dew (by their seed), so dew is never far. */
+const keepsFineDew = (p: Pad) => ((p.seed * 7.31) % 1) < 0.55 && !p.flower;
+
+function flowToward(p: Pad, to: number, dt: number) {
+  const now = p.glyph ?? -2;
+  if (to !== now && to !== p.glyphQueue) {
+    // a new flow starts from what shows (or, if the last one has barely begun, from where it began)
+    if (p.glyph === undefined) p.glyphFrom = -2;
+    else if ((p.glyphT ?? 1) > 0.35) p.glyphFrom = now;
+    p.glyphQueue = undefined;
+    // nothing never jumps to drops or a numeral: it beads first, then gathers
+    if (p.glyphFrom === -2 && to !== -3 && to !== -2 && !glyphMode) {
+      p.glyphQueue = to;
+      to = -3;
+    }
+    p.glyph = to;
+    p.glyphT = 0;
+  }
+  const dur = p.glyphFrom === -2 && p.glyph === -3 ? BEAD : p.glyphFrom === -3 ? GATHER : MORPH;
+  p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / dur);
+  p.glyphA = 1;
+  p.glyphSize = 1.05;
+  if (p.glyphT < 1) return;
+  if (p.glyphQueue !== undefined) {
+    // beaded: now gather into what was wanted
+    p.glyphFrom = p.glyph;
+    p.glyph = p.glyphQueue;
+    p.glyphQueue = undefined;
+    p.glyphT = 0;
+  } else if (p.glyph === -2 || (p.glyph === -1 && glyphMode)) p.glyph = undefined;
+}
+
+/** Bake the atlas a glyph at a time between frames, then hand it to the renderer. */
+let baking = false;
+function bakeGlyphs() {
+  if (baking || glyphsReady || !renderer) return;
+  baking = true;
+  const steps = glyphAtlasSteps();
+  const step = () => {
+    const r = steps.next();
+    if (r.done) {
+      renderer.enableGlyphs(r.value);
+      glyphsReady = true;
+      return;
+    }
+    window.setTimeout(step, 16);
+  };
+  step();
+}
+
+/**
+ * A numeral on a leaf going under keeps being that numeral: when the leaf's dew is washed off,
+ * the numeral's water runs off into the river as it stands (PAD_FS, `gRun`) rather than turning
+ * back into drops. Returns whether this leaf is running off (and handled).
+ */
+function runningOff(p: Pad, dt: number): boolean {
+  if (p.glyph === undefined || p.glyph < 0) return false;
+  if (!p.glyphRun) {
+    if (p.sink <= 0.15) return false;
+    // under water, a numeral holds as it is (no turning back into drops) until its dew is washed;
+    // one still forming finishes forming
+    if (p.drops.some((d) => d.to > 0)) {
+      p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / (p.glyphFrom === -3 ? GATHER : p.glyphFrom === -2 ? BEAD : MORPH));
+      return true;
+    }
+  }
+  p.glyphRun = Math.min(1, (p.glyphRun ?? 0) + dt / 1.6);
+  if (p.glyphRun >= 1) {
+    // the river has it; the leaf is bare (fine dew beads up again in time)
+    p.glyph = undefined;
+    p.glyphRun = 0;
+    numeralLeaves = numeralLeaves.filter((q) => q !== p);
+  }
+  return true;
+}
+
+function waterGlyphs(dt: number) {
+  if (!renderer) return;
+  if (!glyphMode) {
+    // in play: numerals only for a numeral question's leaves (once the atlas is baked);
+    // all other dew is drawn as water at rest, and flows when it changes
+    if (!glyphsReady && (numeralLeaves.length || profile)) bakeGlyphs();
+    for (const p of numeralLeaves) {
+      if (!glyphsReady) break;
+      if (runningOff(p, dt)) continue;
+      const v = optionOf.get(p);
+      flowToward(p, v !== undefined ? numeralCode(v) : keepsFineDew(p) ? -3 : -2, dt);
+    }
+    // while a question is chosen, other dew on the river settles to fine dew, so the numerals
+    // are the only numbers in view (its drops are kept, and gather again after)
+    const choosing = (relationship ?? plan?.c)?.mode === 'pick';
+    for (const p of pond.pads) {
+      if (glyphsReady && numeralLeaves.includes(p)) continue;
+      // a numeral no longer in the question (a sinking leaf leaves it) still runs off as a numeral
+      if (runningOff(p, dt)) continue;
+      const wet = p.drops.some((d) => d.to > 0 || d.a > 0.01);
+      const rest = wet ? (choosing ? -3 : -1) : keepsFineDew(p) ? -3 : -2;
+      if (p.glyph === undefined) {
+        if (rest === -2) continue;
+        // water already on the leaf (grown with the river, off screen): simply there, at rest
+        p.glyph = rest;
+        p.glyphFrom = rest;
+        p.glyphT = 1;
+        p.glyphA = 1;
+        p.glyphSize = 1.05;
+        continue;
+      }
+      flowToward(p, rest, dt);
+    }
+    return;
+  }
+  if (!glyphsReady) {
+    renderer.enableGlyphs(glyphAtlas());
+    glyphsReady = true;
+  }
+  if (glyphMode === 'sheet' || glyphMode === 'repeat') {
+    const chars = [...(params.get('chars') || '2357')].map(glyphIndex).filter((g) => g >= 0);
+    if (!sheet) {
+      const near = pond.pads
+        .filter((p) => p.r > 26 && Math.abs(p.x - cam.x) < cam.cssW / (2 * cam.zoom) - p.r && Math.abs(p.y - cam.y) < cam.cssH / (2 * cam.zoom) - p.r)
+        .sort((a, b) => Math.hypot(a.x - cam.x, a.y - cam.y) - Math.hypot(b.x - cam.x, b.y - cam.y))
+        .slice(0, GLYPHS.length);
+      if (near.length < GLYPHS.length) return;
+      near.sort((a, b) => (Math.abs(a.y - b.y) > 45 ? b.y - a.y : a.x - b.x));
+      sheet = new Map(near.map((p, i) => [p, i]));
+    }
+    const step = glyphCycle ? Math.floor(pond.t / 2.6) : 0;
+    for (const [p, i] of sheet) {
+      const g = glyphMode === 'repeat' ? chars[(i + step) % chars.length] : (i + step) % GLYPHS.length;
+      flowToward(p, g, dt);
+    }
+    return;
+  }
+  for (const p of pond.pads) {
+    if (!p.drops.length || (glyphMode === 'half' && p.id % 2)) {
+      if (p.glyph !== undefined) flowToward(p, -1, dt);
+      continue;
+    }
+    const n = liveCount(p);
+    let to = n >= 1 && n <= 9 ? n : n > 9 ? -1 : -2;
+    // `morph`: drops and numeral in turn, each leaf on its own beat
+    if (glyphMode === 'morph' && to >= 0 && Math.floor(pond.t / 3.2 + (p.id % 7) / 7) % 2 === 0) to = -1;
+    if (to === -2 && p.glyph === undefined) continue;
+    flowToward(p, to, dt);
+  }
 }
 
 function shedHidden() {
@@ -1895,8 +2689,15 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
+    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, choices: relationship.choices, supplied: supplyLog.map(([t, v]) => [Math.round((t - relationShownAt) * 10) / 10, v]), shownFor: Math.round((pond.t - relationShownAt) * 10) / 10, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), options: [...optionOf].map(([p, v]) => { const [x, y] = toScreen(p.x, p.y); return { id: p.id, v, x: Math.round(x), y: Math.round(y), glyph: p.glyph, t: p.glyphT }; }), chosen: chosenValues, skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
+    planned: plan ? { equation: equation(plan.c), staged: plan.staged, tries: plan.tries, for: Math.round((pond.t - plan.at) * 10) / 10 } : null,
+    curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),
+    dewy: pond.pads.filter((p) => liveCount(p) > 0).map((p) => {
+      const [x, y] = toScreen(p.x, p.y);
+      return { id: p.id, x: Math.round(x), y: Math.round(y), r: Math.round(p.r * cam.zoom), n: liveCount(p), run: p.glyphRun, glyph: p.glyph, from: p.glyphFrom, t: p.glyphT === undefined ? undefined : Math.round(p.glyphT * 100) / 100, sink: Math.round(p.sink * 100) / 100 };
+    }),
     boatY: pond.boat.y + pond.origin,
     learning: { phase: stretch.phase, ask: ask ? { value: ask.value, stage: ask.stage.id, bond: ask.bond, again: ask.again, scaffold: ask.scaffold } : null, ...learnSummary() },
     profile: profile?.name ?? null,
@@ -1927,10 +2728,12 @@ Object.defineProperty(window, '__stillwater', {
     plantings: pond.plantings.map((pl) => ({ Y: Math.round(pl.Y), days: Math.round(pond.ageDays(pl) * 10) / 10 })),
     planted: pond.pads.filter((p) => p.planted).length,
     seed: seed ? { moved: seed.moved } : null,
-    share: share ? { fish: share.fish.length, fed: share.fish.map((i, k) => (school.fish[i].fed ?? 0) - share!.base[k]) } : null,
     fishAtBoat: bigFishAtBoat().length,
-    story: story.chapters,
-    residents: residentsNow().map((r) => { const [x, y] = toScreen(r.x, r.y); return { kind: RESIDENTS[r.kind], x: Math.round(x), y: Math.round(y), mood: r.mood }; }),
+    story: story.toJSON(),
+    visit: visit?.key ?? null,
+    carriedLight: story.carried,
+    piers: pond.landmarks.map(m=>{const [x,y]=toScreen(...lampPoint(m)); return {key:residentKey(m),kind:residentKind(m),lamp:{x,y,light:pierBrightness(m)}, distance:Math.hypot(pond.boat.x-pierTip(m)[0],pond.boat.y-pierTip(m)[1])};}),
+    residents: residentsNow().map((r) => { const [x, y] = toScreen(r.x, r.y); return { kind: r.kind===3 ? 'lantern' : RESIDENTS[r.kind], x: Math.round(x), y: Math.round(y), mood: r.mood }; }),
     muted: [...sound.muted],
     pads: visibleDewy().map((p) => {
       const [x, y] = toScreen(p.x, p.y);
@@ -1943,4 +2746,5 @@ requestAnimationFrame((t) => {
   last = t;
   requestAnimationFrame(frame);
 });
+
 

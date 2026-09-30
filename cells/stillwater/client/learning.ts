@@ -185,9 +185,7 @@ export function quality(o: Observation): number {
   let q = 1;
   q -= 0.3 * Math.max(0, o.friction);
   q -= 0.22 * Math.max(0, o.scaffold);
-  const e = expectedSecs(o);
-  if (o.secs > e * 2.2) q -= 0.3;
-  else if (o.secs > e * 1.4) q -= 0.14;
+  // Exploration and motor/search time are not a valid measure of mathematical fluency.
   return Math.max(0.1, Math.min(1, q));
 }
 

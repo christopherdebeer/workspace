@@ -22,6 +22,7 @@ export interface RiverNow {
   plantingNear: (Y: number, within: number) => number | null;
   /** The lantern's warmth, 0 … 1.5. */
   lantern: number;
+  pierLight: number;
   /** 0 day … 1 night. */
   dusk: number;
 }
@@ -37,6 +38,9 @@ export interface Chapter {
 
 export interface StoryData {
   chapters: Partial<Record<ResidentKind, Chapter>>;
+  residents?: Record<string, Chapter & { kind: ResidentKind; light: number }>;
+  carried?: number;
+  claimed?: Partial<Record<ResidentKind, string>>;
 }
 
 /** A line to say, and whether it closes the chapter. */
@@ -58,19 +62,19 @@ const BOOK: Record<ResidentKind, { greet: string[]; ask: (r: RiverNow, Y: number
     greet: ['a small frog sits at the end of the pier, hoping', '"oh! a boat," says the frog'],
     ask: (r, Y) => {
       const days = r.plantingNear(Y, 500);
-      if (days !== null && days >= 0.5) return { text: '"a leaf! my own leaf!" says the frog, and hops onto it', done: true };
+      if (days !== null && days >= 0.5) return { text: '"a leaf! my own leaf!" says the frog, and leans towards the water', done: true };
       if (days !== null) return { text: '"something is growing," says the frog. "I can wait. frogs are patient."' };
       return { text: '"I would so like a lily of my own," says the frog. "a spent flower has seeds…"' };
     },
-    content: ['the frog is sitting on her leaf, very pleased', '"mine," says the frog, to nobody'],
+    content: ['the frog watches her lily, very pleased', '"mine," says the frog, to nobody'],
     again: ['the frog is thinking about flies', '"still waiting," says the frog, cheerfully'],
   },
   turtle: {
     greet: ['an old turtle rests on the pier, half asleep', 'the turtle opens one eye. it has seen a great many boats.'],
     ask: (r) =>
-      r.lantern >= 0.85
+      r.pierLight >= 0.95
         ? { text: '"there," says the turtle. "that is the light I remember. before the piers."', done: true }
-        : { text: '"the lanterns were brighter once," says the turtle. "dew, gathered well, keeps one bright."' },
+        : { text: '"the lanterns were brighter once," says the turtle. "bring your light alongside, and touch my lantern."' },
     content: ['the turtle is asleep in the lantern light', '"go on, then," says the turtle. "the river is long."'],
     again: ['the turtle is asleep', 'the turtle is remembering something'],
   },
@@ -79,8 +83,26 @@ const BOOK: Record<ResidentKind, { greet: string[]; ask: (r: RiverNow, Y: number
 export class Story {
   chapters: Partial<Record<ResidentKind, Chapter>>;
 
+  residents: Record<string, Chapter & { kind: ResidentKind; light: number }>;
+  carried: number;
+  claimed: Partial<Record<ResidentKind, string>>;
   constructor(saved: StoryData | null = null) {
     this.chapters = saved?.chapters ?? {};
+    this.residents = saved?.residents ?? {};
+    this.carried = Math.max(0, Math.min(1.5, saved?.carried ?? 0));
+    this.claimed = saved?.claimed ?? {};
+  }
+
+  resident(id: string, kind: ResidentKind) {
+    return this.residents[id] ??= { kind, met: false, done: false, visits: 0, light: 0 };
+  }
+  gather() { this.carried = Math.min(1.5, this.carried + 0.3); }
+  canLight(id: string, kind: ResidentKind) { return this.carried >= 0.25 && this.resident(id, kind).light < 0.95; }
+  light(id: string, kind: ResidentKind): boolean {
+    if (!this.canLight(id, kind)) return false;
+    this.carried = Math.max(0, this.carried - 0.25);
+    this.resident(id, kind).light = 1;
+    return true;
   }
 
   chapter(kind: ResidentKind): Chapter {
@@ -92,8 +114,13 @@ export class Story {
    * seconds apart. A first visit greets and asks; a later one asks again (or,
    * once content, says so). Marks the chapter as the lines decide.
    */
-  visit(kind: ResidentKind, river: RiverNow, Y: number, pick: (n: number) => number = (n) => Math.floor(Math.random() * n)): Line[] {
-    const ch = this.chapter(kind);
+  visit(kind: ResidentKind, river: RiverNow, Y: number, id: string, pick: (n: number) => number = (n) => Math.floor(Math.random() * n)): Line[] {
+    const ch = this.resident(id, kind);
+    // Claim a legacy chapter once; never mark every new frog/turtle complete.
+    if (!this.claimed[kind] && this.chapters[kind]?.met) {
+      Object.assign(ch, this.chapters[kind]);
+      this.claimed[kind] = id;
+    }
     const book = BOOK[kind];
     const lines: Line[] = [];
     ch.visits += 1;
@@ -115,10 +142,11 @@ export class Story {
   }
 
   get told(): number {
-    return RESIDENTS.filter((k) => this.chapters[k]?.done).length;
+    return Object.values(this.residents).filter(r => r.done).length + RESIDENTS.filter(k => !this.claimed[k] && this.chapters[k]?.done).length;
   }
 
   toJSON(): StoryData {
-    return { chapters: this.chapters };
+    return { chapters: this.chapters, residents: this.residents, carried: this.carried, claimed: this.claimed };
   }
 }
+

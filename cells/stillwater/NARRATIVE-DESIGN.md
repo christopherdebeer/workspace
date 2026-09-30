@@ -62,18 +62,14 @@ faint silhouettes) with DOM labels. No new objects.
 after the tenth sighting ("you have seen the koi ten times"), which is the only
 number in the notebook and is there for the child who wants one.
 
-## 2. Sharing — the basket *(next)*
+## 2. The basket
 
 Tap the basket in the boat and crumbs scatter on the water astern. The fish
-already have curiosity and a feeding mood; they gather, and the child watches.
-It is small, and it is the natural home for **fair sharing**, the first shape of
-division: three fish and six crumbs, and the ask is *make it fair*. The
-learning design gains a rule (`share`) beside `sum` and `groups`, driven by
-the same memory and stretch machinery.
-
-Needs: a tappable basket (the boat's frame, `boatWorld`), crumb floaters (the
-petal floater path), a feeding mood in `fish.ts` that eats a crumb, and the
-`share` rule. No new species.
+already have curiosity and a feeding mood; they gather and eat, and the child
+watches. That is all it is: a pleasure, not an activity. *(A fair-sharing ask
+was built here — "make it fair" with one glyph per fish — and removed on 30
+September 2026: it was a second, different kind of question competing with the
+one at the top. Division is asked there, as equal groups.)*
 
 ## 3. Growing — seeds and a river that remembers
 
@@ -120,3 +116,22 @@ Rewards that accumulate. Anything that makes the river a place to *finish*.
 
 *Status: §1 built in Round 56 (`client/notebook.ts`, the notebook pass in
 `render.ts`, the tab and page in `static/index.html`). §2–§4 proposed.*
+
+
+## Resident pass — 29 September 2026
+
+Residents now respond to an explicit tap (keyboard R), with one short line.
+Approaching only changes their attention; visits pause the learning prompt.
+Each deterministic landing has its own saved resident and pier lantern.
+A successful dew collection leaves a little carried light; touch an unlit
+lantern nearby (keyboard L) to transfer it in a visible arc. Lit lanterns
+persist per child, illuminate the pier and cast a broken water reflection.
+They do not drain on a timer. Turtle completion requires its own lit lantern.
+
+The procedural silhouettes now include heron feet and folded feathers, frog
+haunches/skin/blinking, and turtle shell growth marks. A content frog can hop
+to an actual nearby grown planting. Legacy species chapters are claimed by
+one landing only, preserving progress without completing every resident.
+
+This supersedes the automatic arrival trigger proposed in §4. It remains a
+lightweight layer within the river, rather than a separate story mode.

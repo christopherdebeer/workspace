@@ -62,7 +62,8 @@ export interface FrameInput {
   /** Names written on leaves at the start: which atlas entry, where, how tall (world), how faded. */
   names?: Array<{ i: number; x: number; y: number; h: number; a: number }>;
   /** The residents at their piers (the story). */
-  residents?: Array<{ x: number; y: number; heading: number; size: number; kind: number; mood: number; look: number; seed: number }>;
+  residents?: Array<{ x: number; y: number; heading: number; size: number; kind: number; mood: number; look: number; seed: number; hop?: number }>;
+  pierLights?: Array<{ x: number; y: number; strength: number }>;
   /** The notebook, when open: paper over the river, and each entry's sprite at rest (world coords). */
   page?: { open: number; entries: PageEntry[] };
 }
@@ -101,7 +102,7 @@ export const PROGRAMS: Array<[string, string, string]> = [
 
 const MAX_PADS = 900;
 const MAX_DROP_ROWS = 512;
-const DROP_COLS = 10;
+const DROP_COLS = 12;
 const SIM_W = 168;
 
 export class Renderer {
@@ -137,6 +138,7 @@ export class Renderer {
   private reach = new Float32Array(132);
   private span: [number, number] = [0, 1];
   private dropTex: WebGLTexture;
+  private glyphTex: WebGLTexture | null = null;
   private dropData = new Float32Array(DROP_COLS * MAX_DROP_ROWS * 4);
   private ribbonVao: WebGLVertexArrayObject;
   private ribbonBuf: WebGLBuffer;
@@ -198,7 +200,7 @@ export class Renderer {
     this.deepInst = new Instanced(gl, this.quad, 400, 3);
     this.fishInst = new Instanced(gl, this.quad, 220, 3);
     this.critterInst = new Instanced(gl, this.quad, 24, 3);
-    this.residentInst = new Instanced(gl, this.quad, 8, 3);
+    this.residentInst = new Instanced(gl, this.quad, 32, 3);
     this.flowerInst = new Instanced(gl, this.quad, 120, 2);
     this.weedInst = new Instanced(gl, this.quad, 600, 2);
     this.floatInst = new Instanced(gl, this.quad, 4000, 2);
@@ -312,6 +314,11 @@ export class Renderer {
       const [lx, ly] = f.pond.bow();
       gl.uniform4f(u.uLamp, lx, ly, 150, f.lantern);
     }
+    if (u.uPierLamp) {
+      const lamps = new Float32Array(16);
+      (f.pierLights ?? []).slice(0,4).forEach((l,i)=>lamps.set([l.x,l.y,100,l.strength],i*4));
+      gl.uniform4fv(u.uPierLamp,lamps);
+    }
     if (u.uChan) gl.uniform2fv(u.uChan, this.chan);
     if (u.uChan2) gl.uniform2fv(u.uChan2, this.chan2);
     if (u.uReach) gl.uniform4fv(u.uReach, this.reach);
@@ -377,7 +384,24 @@ export class Renderer {
       if (!inView(p.x, p.y, p.r * 1.4) || n >= MAX_PADS) continue;
       let row = -1;
       const drops = p.drops.length;
-      if (drops && rows < MAX_DROP_ROWS) {
+      let shown = Math.min(drops, DROP_COLS);
+      if (p.glyph != null && rows < MAX_DROP_ROWS) {
+        // its water drawn as a glyph (glyphs.ts): the state it is becoming (a glyph, -1 its
+        // drops, -2 nothing), then the state it is changing from and how far through; then,
+        // if either state is its drops, the drops themselves for the shader to flow from or into
+        row = rows++;
+        const base = row * DROP_COLS * 4;
+        this.dropData.set([p.glyphSize ?? 1.05, p.glyph, -1, Math.max(0.02, Math.min(1, p.glyphA ?? 1))], base);
+        this.dropData.set([p.glyphFrom ?? -2, p.glyphT ?? 1, -2, 1 + (p.glyphRun ?? 0)], base + 4);
+        shown = 2;
+        if (p.glyph === -1 || (p.glyphFrom === -1 && (p.glyphT ?? 1) < 1)) {
+          for (let k = 0; k < Math.min(drops, DROP_COLS - 2); k++) {
+            const d = p.drops[k];
+            this.dropData.set([d.x, d.y, d.r, Math.max(0, Math.min(1, d.a))], base + (2 + k) * 4);
+            shown++;
+          }
+        }
+      } else if (drops && rows < MAX_DROP_ROWS) {
         row = rows++;
         for (let k = 0; k < Math.min(drops, DROP_COLS); k++) {
           const d = p.drops[k];
@@ -388,7 +412,7 @@ export class Renderer {
       const flex = p.wob * Math.sin(f.time * 7 + p.seed * 30);
       // the leaf's age sets its green: young leaves lighter and yellower, old ones olive
       const tint = Math.max(0, Math.min(1, 0.92 - p.age * 0.75 + ((p.seed * 13.1) % 1 - 0.5) * 0.25));
-      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : Math.min(drops, DROP_COLS), p.focus ? 1 : 0, p.age, tint, p.dx, p.dy, flex, p.sink);
+      this.padInst.set(n++, p.x, p.y, p.r, p.ang, p.seed, p.sel, p.bob, Math.max(0, row), row < 0 ? 0 : shown, p.focus ? 1 : 0, p.age, tint, p.dx, p.dy, flex, p.sink);
     }
     this.padInst.count = n;
     this.padInst.upload();
@@ -567,6 +591,11 @@ export class Renderer {
       bindTex(gl, 2, this.simA!.tex);
       gl.uniform1i(pad.u.uSim, 2);
     }
+    // the water field is always on (dew rests as water); until the atlas is baked a stand-in
+    // reads as "no glyph here", so only the drops and condensing states can be drawn
+    gl.uniform1f(pad.u.uGlyphOn, 1);
+    bindTex(gl, 3, this.glyphTex ?? this.noGlyphs());
+    gl.uniform1i(pad.u.uGlyphs, 3);
     this.padInst.draw();
 
     // names on the leaves, drawn with the pads so they move as one
@@ -597,7 +626,7 @@ export class Renderer {
     // the residents, standing on their piers
     if (f.residents?.length) {
       let n = 0;
-      for (const rs of f.residents) if (n < 8) this.residentInst.set(n++, rs.x, rs.y, rs.heading, rs.size, rs.kind, rs.mood, rs.look, rs.seed, 0, 0, 0, 0);
+      for (const rs of f.residents) if (n < 32) this.residentInst.set(n++, rs.x, rs.y, rs.heading, rs.size, rs.kind, rs.mood, rs.look, rs.seed, rs.hop ?? 0, 0, 0, 0);
       this.residentInst.count = n;
       this.residentInst.upload();
       const rp = this.p.resident;
@@ -925,6 +954,33 @@ export class Renderer {
     this.strips(f, stems, [0.50, 0.50, 0.24], 3);
   }
 
+  private blankGlyphs: WebGLTexture | null = null;
+  /** A 1 × 1 stand-in atlas: far from every path. */
+  private noGlyphs(): WebGLTexture {
+    if (this.blankGlyphs) return this.blankGlyphs;
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array([0.4, 0.3, 0, 1]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    this.blankGlyphs = tex;
+    return tex;
+  }
+
+  /** The water-glyph atlas (glyphs.ts), baked on first use: height and slope, half floats, linear filtered. */
+  enableGlyphs(atlas: { data: Float32Array; size: number }) {
+    const gl = this.gl;
+    const tex = this.glyphTex ?? gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, atlas.size, atlas.size, 0, gl.RGBA, gl.FLOAT, atlas.data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.glyphTex = tex;
+  }
+
   /**
    * Bake names into a small texture (a row each, cream serif with a dark
    * shadow) so they can be drawn on the leaves in the same pass as the leaves.
@@ -1045,5 +1101,6 @@ export class Renderer {
 export function drawOrder(pads: Pad[]): Pad[] {
   return pads.slice().sort((a, b) => Number(a.drops.length > 0) - Number(b.drops.length > 0) || a.layer - b.layer);
 }
+
 
 

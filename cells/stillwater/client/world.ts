@@ -53,7 +53,23 @@ export interface Pad {
   bank: boolean;
   /** Planted by a child: their name, faintly, once it is a leaf. */
   planted?: string;
+  plantingSeed?: number;
   drops: Drop[];
+  /**
+   * Experiment (glyphs.ts): the leaf's water drawn as a glyph — the state it is becoming
+   * (an atlas cell, -1 its own drops, -2 nothing); undefined draws its dew as dew.
+   */
+  glyph?: number;
+  /** …the state it is changing from, and how far through the change (0..1). */
+  glyphFrom?: number;
+  glyphT?: number;
+  /** …a flow waiting behind this one (a bare leaf beads first, then gathers into this). */
+  glyphQueue?: number;
+  /** …a numeral on a leaf going under: how far its water has run off into the river (0..1). */
+  glyphRun?: number;
+  /** …its height in pad radii, and how far it has gathered (0..1). */
+  glyphSize?: number;
+  glyphA?: number;
   /** Selected by the player (the thread passes through it). */
   selected: boolean;
   /** Animated selection glow 0..1. */
@@ -255,6 +271,7 @@ export interface Fork {
  */
 export interface Landmark {
   id: number;
+  key: string;
   x: number;
   y: number;
   ang: number;
@@ -798,7 +815,7 @@ export class Pond {
     const plant = this.plantFor(x, y);
     const pad: Pad = {
       id: this.nextId++, x, y, vx: 0, vy: 0, ang: rand() * Math.PI * 2, va: 0, ax: x, ay: y, r, seed: rand(), bank: false,
-      planted: days >= 2 ? pl.name : undefined, drops: [], selected: false, sel: 0, bob: 0, focus: false, flower: 0, touching: false,
+      plantingSeed: pl.seed, planted: days >= 2 ? pl.name : undefined, drops: [], selected: false, sel: 0, bob: 0, focus: false, flower: 0, touching: false,
       dx: 0, dy: 0, wob: 0, cx: 0, cy: 0, sink: 0, caught: false, load: 0, sinkV: 0, support: 0.82 + Math.min(0.28, r / 260),
       compliance: 0.85 + smooth(42, 96, r) * 0.55, wet: 0, soak: 0, rx: plant.x, ry: plant.y, age: Math.min(1, grown * 0.7), layer: 1,
     };
@@ -995,9 +1012,9 @@ export class Pond {
 
   private growLandmarks(y0: number, y1: number) {
     if (y1 < 300 && !this.forcePier) return;
-    const rand = this.landmarkRand;
-    const place = (yAt?: number) => {
-      const y = yAt ?? y0 + rand() * (y1 - y0);
+    const place = (Y: number, slot: number) => {
+      const rand = seeded(Math.floor(this.hash(slot, 82) * 1e9));
+      const y = Y - this.origin;
       const side: -1 | 1 = rand() < 0.5 ? -1 : 1;
       // the arm on this side of the river
       const probe = this.fieldCentre(y) + side * 400;
@@ -1025,14 +1042,18 @@ export class Pond {
       const dirX = (tipX - rootX) / Math.max(1, l * 2);
       const dirY = (tipY - rootY) / Math.max(1, l * 2);
       const ang = Math.atan2(-dirX, dirY);
-      this.landmarks.push({ id: this.nextLandmarkId++, x, y: py, ang, w, l, seed: rand(), kind: 0, side, state: 0 });
+      this.landmarks.push({ id: this.nextLandmarkId++, key: `pier:${slot}`, x, y: py, ang, w, l, seed: rand(), kind: 0, side, state: 0 });
     };
     if (this.forcePier && !this.forcedPier && y1 > this.boat.y + 260) {
       this.forcedPier = true;
-      place(this.boat.y + 260);
+      place(this.boat.y + this.origin + 260, -999);
     }
-    // rare: one every few thousand units
-    if (y1 >= 300 && rand() < 0.035) place();
+    // Absolute bands survive resizing, rebasing and visits on another screen size.
+    const a = y0 + this.origin, b = y1 + this.origin;
+    for (let slot = Math.floor(a / 200); slot <= Math.floor(b / 200); slot++) {
+      const Y = slot * 200 + 20 + this.hash(slot, 81) * 160;
+      if (Y >= 300 && Y >= a && Y < b && this.hash(slot, 80) < 0.035 && !this.landmarks.some(m => m.key === `pier:${slot}`)) place(Y, slot);
+    }
   }
 
   /** A jetty's piles (world): pairs either side of the deck every 36 units. */
@@ -1394,6 +1415,8 @@ export class Pond {
     return [b.x + Math.sin(b.heading) * BOAT_LEN * 0.4, b.y + Math.cos(b.heading) * BOAT_LEN * 0.4];
   }
 
+  held: { pad: Pad; ox: number; oy: number } | null = null;
+
   step(dt: number, active: { y0: number; y1: number }, reduced: boolean) {
     this.t += dt;
     this.flowCache.clear();
@@ -1698,6 +1721,7 @@ export class Pond {
       p.wob = Math.min(1, p.wob + s * 0.2);
       p.vx -= (dx / p.r) * s * 2;
       p.vy -= (dy / p.r) * s * 2;
+      if (foam) this.impulses.push({ x, y, r, s: s * 0.6, foam: true });
       return p;
     }
     this.impulses.push({ x, y, r, s, foam });
@@ -1779,10 +1803,8 @@ export class Pond {
         }
         this.lastTip[side < 0 ? 0 : 1] = [tx, ty];
         const onLeaf = this.padAt(tx, ty, near);
-        if (!onLeaf) {
-          this.impulses.push({ x: tx, y: ty, r: 7, s: 0.7 * k * drive * dt * 60, foam: true });
-          if (shedEddy) this.shedEddies(tx, ty, k * drive * 0.6, hx, hy);
-        }
+        this.impulses.push({ x: tx, y: ty, r: 7, s: 0.7 * k * drive * dt * 60, foam: true });
+        if (!onLeaf && shedEddy) this.shedEddies(tx, ty, k * drive * 0.6, hx, hy);
         if (shed) {
           // pushed water leaves aft, a little outward, faster the harder the pull
           const ox = hy * side;
@@ -1948,6 +1970,17 @@ export class Pond {
     const drag = Math.exp(-0.85 * dt);
     const spinDrag = Math.exp(-1.1 * dt);
     const t = this.t;
+
+    const held = this.held;
+    if (held) {
+      const p = held.pad;
+      p.caught = true;
+      p.load = Math.min(1.35, p.load + 0.55 * p.compliance * dt);
+      p.cx += (held.ox / p.r) * 1.8;
+      p.cy += (held.oy / p.r) * 1.8;
+      // pressed right under, a leaf's dew runs off into the river (as under the hull)
+      if (p.sink > 0.85 && !p.selected) for (const dr of p.drops) dr.to = 0;
+    }
 
     for (const p of pads) {
       // stem: slack tether, pulls back only past the slack
@@ -2217,7 +2250,9 @@ export class Pond {
       }
       p.caught = false;
       p.sel += ((p.selected ? 1 : 0) - p.sel) * (1 - Math.exp(-6 * dt));
-      for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : 5) * dt));
+      // leaving dew goes quickly, except off a leaf going under: there it runs off (PAD_FS), slower
+      const out = p.sink > 0.15 ? 1.1 : 5;
+      for (const d of p.drops) d.a += (d.to - d.a) * (1 - Math.exp(-(d.to > d.a ? 1.6 : out) * dt));
       p.drops = p.drops.filter((d) => d.to > 0 || d.a > 0.01);
     }
   }
@@ -2359,4 +2394,5 @@ export class Pond {
   }
 
 }
+
 

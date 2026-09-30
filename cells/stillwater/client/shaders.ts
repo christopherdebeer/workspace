@@ -32,7 +32,13 @@ uniform sampler2D uNoise;
 uniform vec4 uLamp; // the boat's lantern: world x, y, reach, intensity
 const float TAU = 6.28318530718;
 const vec3 LAMP = vec3(1., .72, .42);
-float lampAt(vec2 wp){ vec2 d = (wp - uLamp.xy) / uLamp.z; return uLamp.w * exp(-dot(d, d) * 2.5); }
+uniform vec4 uPierLamp[4];
+float pierLampAt(vec2 wp){
+  float light=0.;
+  for(int i=0;i<4;i++) { if(uPierLamp[i].w<=0.) continue; vec2 d=(wp-uPierLamp[i].xy)/max(uPierLamp[i].z,1.); light+=uPierLamp[i].w*exp(-dot(d,d)*2.5); }
+  return light;
+}
+float lampAt(vec2 wp){ vec2 d = (wp - uLamp.xy) / uLamp.z; return uLamp.w * exp(-dot(d, d) * 2.5) + pierLampAt(wp); }
 vec2 rot(vec2 p, float a){ float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }
 float nz(vec2 p){ return texture(uNoise, p).r; }
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -514,9 +520,150 @@ uniform sampler2D uDrops;
 uniform float uPx; // world units per device pixel
 uniform sampler2D uSim;   // the wave sim, for the white water that rides over a flooded leaf
 uniform float uSimOn;
+uniform sampler2D uGlyphs; // numerals and signs drawn in water: a height field atlas (glyphs.ts)
+uniform float uGlyphOn;
 
 float seed;
 vec2 so; // seed offset into the noise tile
+
+// ── water glyphs (glyphs.ts): each state is a distance field — a glyph's key shape from the
+// atlas, the leaf's own drops as beads, or nothing — and a change of state is one field
+// flowing into the next. The hand (lean, turn, squash) is the leaf's, and stays through it.
+float gTo, gFrom, gT, gS, gTurn, gLean, gSeed;
+vec2 gSquash;
+int gRow, gCount;
+vec2 gHand(vec2 v){ v = rot(v, gTurn); v.x -= gLean * v.y; return v / gSquash; }
+float gSmin(float a, float b, float k){ float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
+/** One glyph's key shape from the atlas (no flow). */
+vec2 gAtlas1(float gi, vec2 gp){
+  if (abs(gp.x) > .62 || abs(gp.y) > .62) return vec2(.4, .3);
+  vec2 cell = vec2(mod(gi, 4.), floor(gi / 4. + .001));
+  return texture(uGlyphs, (cell + gp / 1.28 + .5) / 4.).rg;
+}
+/** A glyph's key shape: one numeral or sign, or (100 + n) a number to 99 as two numerals side by side. */
+vec2 gAtlas(float gi, vec2 gp){
+  if (gi > 99.5) {
+    float n = gi - 100.;
+    float tens = floor(n / 10. + .001);
+    float ones = n - tens * 10.;
+    vec2 l = gAtlas1(tens, (gp + vec2(.3, 0.)) / .74) * .74;
+    vec2 r = gAtlas1(ones, (gp - vec2(.3, 0.)) / .74) * .74;
+    return l.x < r.x ? l : r;
+  }
+  return gAtlas1(gi, gp);
+}
+/**
+ * Where the river stands on a leaf going under (pad coordinates): > 0 flooded, 0 at the
+ * waterline, < 0 above it. The same line the film over the flooded part is drawn to.
+ */
+float gShore(vec2 pp){
+  float gv = length(vDent.xy);
+  if (vSink < .01 || gv < .001) return -9.;
+  vec2 dir = vDent.xy / gv;
+  float across = dot(pp, vec2(-dir.y, dir.x));
+  return dot(pp, dir) + across * across * .42 - (1. - vSink * 1.25);
+}
+/** Drops (-1) and fine dew (-3) are both beads of water. */
+bool gBeads(float st){ return (st > -1.5 && st < -.5) || st < -2.5; }
+/**
+ * Fine dew (-3): the leaf's own sprinkle of tiny beads, too small to count — few on some
+ * leaves, many on others. Flowing into drops or a numeral, the beads drift toward where the
+ * water is gathering (the nearest drop, or the numeral's path) and grow as they go, so the
+ * dew seems to collect itself. 'away': which way is off the nearest bead (for its light).
+ */
+vec2 gMist(vec2 gp, out vec2 away){
+  float pull = gT < 1. && gFrom < -2.5 && gTo > -1.5 ? smoothstep(.05, .9, gT) : 0.;
+  float n = floor(6. + 12. * hash12(vec2(gSeed, 91.)));
+  float d = .4;
+  away = vec2(0., 1.);
+  for (int k = 0; k < 22; k++) {
+    float fk = float(k);
+    if (fk >= n) break;
+    vec2 c = (vec2(hash12(vec2(gSeed, fk * 3.7 + 1.)), hash12(vec2(gSeed, fk * 5.3 + 7.))) - .5) * 1.6;
+    if (length(c) > .8) continue;
+    // tiny: plainly not the dew that counts
+    float rk = .007 + .011 * hash12(vec2(gSeed, fk + 19.));
+    if (pull > 0.) {
+      vec2 goal = c;
+      if (gTo > -.5) {
+        // toward the numeral's path, down the slope of its distance
+        float e = .02;
+        vec2 g = vec2(gAtlas(gTo, c + vec2(e, 0.)).x - gAtlas(gTo, c - vec2(e, 0.)).x, gAtlas(gTo, c + vec2(0., e)).x - gAtlas(gTo, c - vec2(0., e)).x);
+        goal = c - g / max(length(g), 1e-5) * gAtlas(gTo, c).x;
+      } else {
+        // toward the nearest of the leaf's drops
+        float best = 9.;
+        for (int i = 2; i < 14; i++) {
+          if (i >= gCount) break;
+          vec4 dr = texelFetch(uDrops, ivec2(i, gRow), 0);
+          if (dr.w < .01) continue;
+          vec2 dc = gHand(rot(dr.xy, vAng) / gS);
+          float l = length(dc - c);
+          if (l < best) { best = l; goal = dc; }
+        }
+      }
+      c = mix(c, goal, pull * .9);
+      rk *= 1. + pull * 1.2;
+    }
+    float l = length(gp - c);
+    float dk = l - (rk - .082);
+    if (dk < d) { d = dk; away = (gp - c) / max(l, 1e-5); }
+  }
+  return vec2(d, 0.);
+}
+/** One state's field at gp: [distance to its path, distance along it to a free end]. */
+vec2 gState(float gi, vec2 gp){
+  if (gi < -2.5) {
+    vec2 unused;
+    return gMist(gp, unused);
+  }
+  if (gi < -1.5) return vec2(.4, .3); // nothing: no water here
+  if (gi < -.5) {
+    // the leaf's own drops, as beads to flow out of or gather into (they follow the glyph
+    // entries in the leaf's row), merging where they come close. This is also how dew rests:
+    // water, not marbles. On a leaf going under, the rising water meets the dew: a drop near
+    // the waterline leans toward it and is drawn into it, shrinking as it is taken
+    // (dew washed off a sinking leaf goes the same way: the water's edge sweeps across it,
+    // taking the drops nearest the flood first)
+    vec2 runDir = length(vDent.xy) > 1e-3 ? normalize(vDent.xy) : vec2(0., -1.);
+    float washing = smoothstep(.04, .3, vSink);
+    float d = .4;
+    for (int i = 2; i < 14; i++) {
+      if (i >= gCount) break;
+      vec4 dr = texelFetch(uDrops, ivec2(i, gRow), 0);
+      if (dr.w < .01) continue;
+      float wl = gShore(dr.xy) + (1. - dr.w) * 1.6 * washing;
+      vec2 at = dr.xy + runDir * smoothstep(-.3, 0., wl) * .09;
+      vec2 c = gHand(rot(at, vAng) / gS);
+      float rG = dr.z * mix(.35 + .65 * dr.w, 1., washing) * (1. - smoothstep(-.14, .03, wl)) / gS;
+      if (rG < .002) continue;
+      // at rest, drops only join where they touch (every drop must stay countable); in a flow
+      // they reach for each other
+      d = gSmin(d, length(gp - c) - (rG - .082), gT >= 1. ? .008 : .05);
+    }
+    return vec2(d, 0.);
+  }
+  return gAtlas(gi, gp);
+}
+/** The water's field, mid-change: one state flowing into the next, gathering and breaking as it goes. */
+vec2 gField(vec2 gp){
+  vec2 b = gState(gTo, gp);
+  if (gT >= 1.) {
+    // dew at rest keeps a little of the flow's irregularity: soft, uneven edges, never marbles
+    if (gTo > -1.5 && gTo < -.5) b.x += (texture(uNoise, gp * 1.6 + gSeed * 3.1).r - .5) * .04 - .003;
+    return b;
+  }
+  vec2 a = gState(gFrom, gp);
+  // eased gently in and out (smootherstep)
+  float t = gT * gT * gT * (gT * (gT * 6. - 15.) + 10.);
+  vec2 v = mix(a, b, t);
+  // mid-flow the water runs heavier and its necks break into beads
+  // (fine dew gathering is quiet: the beads draw together rather than break)
+  float mid = sin(3.14159 * t) * (gBeads(gFrom) && gBeads(gTo) ? .3 : 1.);
+  v.x += (texture(uNoise, gp * 1.6 + vec2(gT * .4, gT * .15)).r - .5) * .1 * mid - .014 * mid;
+  v.y = mix(v.y, 0., mid * .6);
+  return v;
+}
 
 /**
  * How far the edge is pushed in toward the pad's centre where it is pressed
@@ -729,17 +876,35 @@ void main(){
   vec4 dd = vec4(0.);
   vec2 dropAxes = vec2(1.);
   float dropShape = 0.;
-  for (int i = 0; i < 10; i++) {
+  float dropWash = 0.; // the drop under this pixel is running off a leaf going under
+  vec4 glyph = vec4(0.);  // water drawn as a glyph: size (pad radii), state to, -1, how gathered
+  vec4 glyphM = vec4(0.); // …changing from: state from, how far through (0..1), -2, 1
+  for (int i = 0; i < 12; i++) {
     if (i >= count) break;
     vec4 dr = texelFetch(uDrops, ivec2(i, row), 0);
     if (dr.w < .01) continue;
+    if (dr.z < -1.5) { glyphM = dr; continue; }
+    if (dr.z < 0.) { glyph = dr; continue; }
+    // while its water is drawn as a field (dew at rest included), the drops are part of it instead
+    if (glyph.w > .01 && uGlyphOn > .5) continue;
     // Contact line stays pinned; the cap lags and compresses as the leaf flexes.
     float form = fract(dr.x * 17. + dr.y * 31. + seed);
     float wobble = sin(uTime * (8. + form * 3.) + form * TAU) * min(.10, vDent.z * .10);
     vec2 axes = vec2(.95 + form * .10 + wobble, 1.03 - form * .06 - wobble);
     dr.xy -= vDent.xy * .006;
-    float rr = dr.z * (.35 + .65 * dr.w);
-    vec2 q = (p - dr.xy) / (rr * axes);
+    // emptying, not fading: on a leaf going under, a drop that is leaving runs downhill toward
+    // the flooded side, drawn out along its run and keeping its water, until the river's film
+    // (drawn over the flooded part below) takes it
+    float washing = smoothstep(.04, .3, vSink);
+    float wash = smoothstep(0., .7, 1. - dr.w) * washing;
+    vec2 runDir = length(vDent.xy) > 1e-3 ? normalize(vDent.xy) : vec2(0., -1.);
+    // gathering speed as it goes, as a drop does once it starts to run
+    dr.xy += runDir * wash * wash * 1.1;
+    float rr = dr.z * mix(.35 + .65 * dr.w, .85, smoothstep(0., .2, wash));
+    vec2 dp = p - dr.xy;
+    float along = dot(dp, runDir);
+    dp = runDir * along / (1. + wash * .9) + (dp - runDir * along) / (1. - wash * .2);
+    vec2 q = dp / (rr * axes);
     // a real drop's outline is not a circle: it bulges and pinches where drops have merged
     float qa = atan(q.y, q.x);
     float bulge = 1. + .11 * sin(3. * qa + form * 9.) + .06 * sin(5. * qa + form * 4.) + .04 * sin(2. * qa - form * 13.);
@@ -747,7 +912,7 @@ void main(){
     float sdist = length(q + Ll.xy * .62);
     shadow = max(shadow, (1. - smoothstep(.7, 1.2, sdist)) * dr.w);
     float dl = length(q);
-    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); dropAxes = axes; dropShape = form; }
+    if (dl < 1.02 && inside == 0.) { inside = 1.; dq = q; dd = vec4(dr.xy, rr, dr.w); dropAxes = axes; dropShape = form; dropWash = washing * step(.02, 1. - dr.w); }
     glowK = max(glowK, exp(-max(dl - 1., 0.) * 2.2) * dr.w);
   }
   // from above, with the sun high, a drop throws hardly any shadow
@@ -809,9 +974,149 @@ void main(){
     vec2 fl2 = q + Lp.xy * .45;
     c += LAMP * lampK * exp(-dot(fl2, fl2) * 9.) * .35;
     float edge = 1. - smoothstep(1. - aa / dd.z * 1.5, 1., dl);
-    col = mix(col, c, edge * smoothstep(0., .2, dd.w));
+    // a leaving drop fades; one running off a sinking leaf keeps its water until the river's film takes it
+    col = mix(col, c, edge * max(smoothstep(0., .2, dd.w), dropWash * smoothstep(0., .04, dd.w)));
   }
 
+
+  // a numeral or sign drawn in water (glyphs.ts). The atlas gives only the key shape (the
+  // distance to its path); the hand is this leaf's own: a lean, a turn and a squash, a
+  // waver in the line, water that swells and thins, blobs where it pooled, beaded ends
+  // and stray drops — so no two are alike. The water is then lit as the dew is: the leaf
+  // magnified through it, a dark contact line toward the sun and a thin bright one away
+  // from it, the sky only at the very edge, a sun streak along the stroke, the lantern's
+  // glint, light focused through it, and a small shadow. Upright on the screen.
+  if (glyph.w > .01 && uGlyphOn > .5) {
+    float S = glyph.x;
+    gS = S;
+    gTo = glyph.y;
+    gFrom = glyphM.w > .5 ? glyphM.x : -2.;
+    gT = glyphM.w > .5 ? glyphM.y : 1.;
+    gRow = row;
+    gCount = count;
+    // the hand is the leaf's (not the glyph's), so it stays the same through a change
+    float gs = fract(seed * 7.13 + .37);
+    gSeed = gs;
+    vec2 wo = vec2(gs * 37.1, fract(gs * 5.3) * 91.7);
+    // how it leans and turns and squashes
+    gLean = (hash12(vec2(gs, 1.7)) - .6) * .34;
+    gTurn = (hash12(vec2(gs, 3.1)) - .5) * .2;
+    gSquash = 1. + (vec2(hash12(vec2(gs, 5.9)), hash12(vec2(gs, 7.3))) - .5) * .2;
+    float lean = gLean, turn = gTurn;
+    vec2 squash = gSquash;
+    vec2 gp = gHand(rot(p + vDent.xy * .006, vAng) / S);
+    // a numeral on a leaf going under does not change what it is: its water is taken into the
+    // river — where the waterline crosses a stroke the stroke dissolves into it (below), and once
+    // the leaf's dew is washed the whole numeral thins away into the flood ('gRun')
+    float gRun = glyphM.w > .5 ? clamp(glyphM.w - 1., 0., 1.) : 0.;
+    float shore = gShore(p);
+    // …and how the line wavers as it is drawn: slow bends, a tremor
+    gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .11 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .045;
+    bool beads = gBeads(gTo) || gT < 1. && gBeads(gFrom);
+    float bound = beads ? 1.05 : gTo > 99.5 || gFrom > 99.5 ? .8 : .62;
+    if (abs(gp.x) < bound && abs(gp.y) < bound) {
+      // fine dew at rest is many tiny beads: one pass finds the nearest, and its light is its own
+      bool restMist = gT >= 1. && gTo < -2.5;
+      vec2 mistAway = vec2(0., 1.);
+      vec2 de = restMist ? gMist(gp, mistAway) : gField(gp); // distance to the path, distance along it to a free end
+      float ga = glyph.w;
+      // the water on the path: thinner and fuller along it, pooled here and there, beaded at the ends
+      float nW = texture(uNoise, gp * .8 + wo * 1.3).r;
+      float pool = smoothstep(.52, .84, texture(uNoise, gp * 1.25 + wo * 2.1).g);
+      float w = .082 * (.62 + .8 * nW) * (1. + .8 * pool) * (1. + .5 * exp(-pow(de.y / .07, 2.)));
+      w = min(w, .18);
+      // where the water is (or is becoming) the leaf's own drops, it is drops: plain round beads of
+      // their own size, so the hand-off to the dew drawn as dew is seamless
+      float tD = gT >= 1. ? 1. : gT * gT * gT * (gT * (gT * 6. - 15.) + 10.);
+      float dropK = (gBeads(gTo) ? tD : 0.) + (gT < 1. && gBeads(gFrom) ? 1. - tD : 0.);
+      // (drops keep a quarter of the hand's swell, so no two are quite the same; fine dew none)
+      w = mix(w, .082, (gTo < -2.5 ? 1. : .75) * clamp(dropK, 0., 1.));
+      // gathering: a thin thread first, then the full water
+      w *= mix(.35, 1., ga);
+      // the rising river takes a numeral's strokes where it reaches them, and the rest as it drains
+      // (draining, the water's edge sweeps on across the numeral from the flooded side)
+      if (gTo > -.5 || (gT < 1. && gFrom > -.5)) w *= 1. - smoothstep(-.14, .03, shore + gRun * 1.8);
+      float d = de.x;
+      // the slope of the distance (which way is away from the path), in the hand's space
+      vec2 away = mistAway;
+      if (!restMist) {
+        float eps = .01;
+        vec2 gd = vec2(gField(gp + vec2(eps, 0.)).x - gField(gp - vec2(eps, 0.)).x,
+                       gField(gp + vec2(0., eps)).x - gField(gp - vec2(0., eps)).x);
+        away = gd / max(length(gd), 1e-5);
+      }
+      // stray drops shaken off the finger: a few, near the glyph's strokes but clear of them;
+      // they gather as the glyph does
+      if (gTo > -.5) {
+        float strayK = smoothstep(.45, 1., gT);
+        for (int k = 0; k < 10; k++) {
+          float fk = float(k);
+          if (hash12(vec2(gs * 13.7, fk)) > .75) continue;
+          vec2 c = (vec2(hash12(vec2(gs, fk * 1.7 + 11.)), hash12(vec2(gs, fk * 2.3 + 29.))) - .5) * vec2(.95, 1.05);
+          float r = (.018 + .045 * pow(hash12(vec2(gs, fk + 41.)), 1.4)) * mix(.4, 1., ga) * strayK;
+          float dc = gState(gTo, c).x;
+          if (r < .004 || dc < .12 + r || dc > .34) continue;
+          float dd = length(gp - c);
+          // where a drop stands higher than the stroke, the drop is what is seen
+          if (dd < r && r * r - dd * dd > w * w - d * d) {
+            d = dd;
+            w = r;
+            away = (gp - c) / max(dd, 1e-5);
+          }
+        }
+      }
+      vec3 Lw = uSun;
+      float canopyLight = sunThrough(vW);
+      // its shadow on the leaf, a little away from the sun
+      float dS = restMist ? .4 : gField(gp + Lw.xy * .035).x;
+      float aaG = uPx / (vR * S) * 1.3;
+      col *= 1. - (1. - smoothstep(w * .6, w * 1.05, dS)) * .13 * smoothstep(-aaG, aaG, d - w);
+      if (d < w + aaG) {
+        // a round bead: the normal's tilt is the offset from the path over the half-width
+        float t = clamp(d / w, 0., .985);
+        // back from the hand's space to the leaf's: the lean, squash and turn undone on the slope
+        vec2 a0 = away / squash;
+        a0 = rot(vec2(a0.x, a0.y - lean * a0.x), -turn);
+        vec2 nxy = a0 / max(length(a0), 1e-5);
+        vec3 n = normalize(vec3(nxy * t, sqrt(1. - t * t) * .9));
+        float rim = smoothstep(.62, .96, t);
+        float enchant = sel * (.25 + .45 * (1. - clamp(uSun.z, 0., 1.)));
+        // the lens: the leaf beneath, magnified across the stroke (pulled in toward the path)
+        vec2 pr = p - rot(nxy, -vAng) * t * w * S * .5;
+        float prLen = length(pr);
+        vec3 under = albedo(pr, prLen, veins(pr, prLen));
+        under *= (uAmb + uSunCol * .72 * canopyLight + LAMP * lampAt(vW) * .8);
+        float lum = dot(under, vec3(.3, .59, .11));
+        under = mix(vec3(lum), under, 1.3) * (.8 - .14 * rim);
+        under += uSunCol * vec3(.9, 1., .9) * max(0., dot(nxy, Lw.xy)) * (1. - rim) * .05 * canopyLight;
+        // light gathered through the water, falling on the leaf on the side away from the sun
+        under += uSunCol * vec3(.95, 1., .85) * smoothstep(.1, .9, dot(nxy, -Lw.xy) / max(length(Lw.xy), 1e-3)) * (1. - rim) * smoothstep(.2, .7, t) * .16 * canopyLight;
+        under += vec3(1., .82, .42) * enchant * (1. - rim) * .6;
+        float toSun = max(0., dot(nxy, Lw.xy) / max(length(Lw.xy), 1e-3));
+        under *= 1. - rim * (.22 + .3 * toSun);
+        under += vec3(.9, 1., .9) * rim * (1. - toSun) * smoothstep(.1, .9, dot(nxy, -Lw.xy)) * .85 * canopyLight;
+        float fr = .02 + .98 * pow(1. - n.z, 5.);
+        vec3 reflected = reflect(vec3(0., 0., -1.), n);
+        float canopy = smoothstep(.36, .68, texture(uNoise, (vW + reflected.xy * 140.) / 520.).g) * (1. - canopyLight * .65);
+        vec3 sky = mix(uSky0, uSky1, reflected.z * .5 + .5);
+        sky = mix(sky, uAmb * vec3(.10, .18, .10), canopy * .8);
+        vec3 c = mix(under, sky, fr * .3);
+        // the sun's pinpoint runs along the stroke as a streak: kept a little broad, with no
+        // screen derivatives (fwidth over a thin line breaks into a 2×2 hatch), and dimmer,
+        // as a line carries more light than a point
+        vec3 H = normalize(Lw + vec3(0., 0., 1.));
+        float nh = max(dot(n, H), 0.);
+        c += uSunCol * canopyLight * (exp((nh - 1.) / .012) * .9 + pow(nh, 60.) * .14);
+        vec3 Lp = normalize(vec3(uLamp.xy - vW, 32.));
+        vec2 fall = (uLamp.xy - vW) / (uLamp.z * 2.4);
+        float lampK = uLamp.w * exp(-dot(fall, fall) * 1.6);
+        float nhp = max(dot(n, normalize(Lp + vec3(0., 0., 1.))), 0.);
+        c += LAMP * lampK * (exp((nhp - 1.) / .012) * 1.2 + pow(nhp, 40.) * .12);
+        float edge = 1. - smoothstep(w - aaG, w + aaG, d);
+        col = mix(col, c, edge);
+      }
+    }
+  }
 
   // keyboard focus: a thin bright ring
   col = mix(col, vec3(1., .95, .8), vC.y * (1. - smoothstep(0., aa * 2., abs(d + .03))) * .8);
@@ -954,6 +1259,13 @@ void main(){
   col = mix(col, vec3(.86, .9, .86) * (uAmb * 1.3 + uSunCol * .75), fm * .8);
   // the lantern: warm light on the water around the boat and its glints in the ripples
   float lamp = lampAt(wp);
+  // Each restored landing leaves a broken vertical reflection on the moving water.
+  for(int i=0;i<4;i++) {
+    if(uPierLamp[i].w<=0.) continue;
+    vec2 dl=wp-uPierLamp[i].xy;
+    float streak=exp(-pow((dl.x+sin(dl.y*.22+uTime*1.7)*3.)/7.,2.)-pow(dl.y/45.,2.));
+    col+=LAMP*streak*uPierLamp[i].w*(.1+.12*pow(.5+.5*sin(dl.y*.8+uTime*2.),3.));
+  }
   vec3 toLamp = normalize(vec3(uLamp.xy - wp, 26.));
   col += LAMP * (lamp * .12 + pow(max(dot(R, toLamp), 0.), 120.) * min(uLamp.w, 1.5) * .9 * smoothstep(uLamp.z * 2.5, 0., length(wp - uLamp.xy)));
   o = vec4(col, 1.);
@@ -1697,7 +2009,7 @@ void main(){
   float cover = max(deck * (1. - gapA), pile);
   vec3 col = mix(pileCol, wood, deck * (1. - gapA) / max(cover, 1e-4));
   float light = .5 + .36 * max(uSun.z, 0.) * sunThrough(vW);
-  col = col * (uAmb * .95 + uSunCol * light);
+  col = col * (uAmb * .95 + uSunCol * light + LAMP * lampAt(vW) * 1.45);
   shadow *= 1. - cover * .2;
 
   if (cover < .003 && shadow < .003) discard;
@@ -2060,19 +2372,28 @@ uniform vec3 uSun;
 uniform float uShadow;
 out vec2 vQ;
 out vec4 vB;
+out vec2 vWorld;
+out float vHeading;
+out float vHop;
 void main(){
   vQ = aPos;
   vB = iB;
+  vHeading=iA.z;
+  vHop=iC.x;
   vec2 local = aPos * iA.w * (uShadow > .5 ? 1.04 : 1.);
   float c = cos(iA.z), s = sin(iA.z);
   vec2 pos = iA.xy + vec2(local.x * c + local.y * s, -local.x * s + local.y * c);
   if (uShadow > .5) pos += -uSun.xy / max(uSun.z, .3) * 5.;
+  vWorld=pos;
   gl_Position = vec4((pos - uView.xy) * uView.zw, 0., 1.);
 }`;
 
 export const RESIDENT_FS = /* glsl */ `${HEAD}${COMMON}
 in vec2 vQ;
 in vec4 vB;
+in vec2 vWorld;
+in float vHeading;
+in float vHop;
 out vec4 o;
 uniform float uShadow;
 float aa2(float d, float soft){ return 1. - smoothstep(-soft, soft, d); }
@@ -2080,31 +2401,42 @@ float sdSeg3(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = cla
 float sdEll(vec2 p, vec2 r){ return (length(p / r) - 1.) * min(r.x, r.y); }
 /** A grey heron standing at the end of a pier, seen from above: a long slate back, folded wings, a neck curved forward to a yellow bill. */
 void heron(vec2 P, float t, float look, float content, out vec3 col, out float cover){
-  float soft = min(fwidth(P.x) * 1.2, .03);
+  float soft = max(fwidth(P.x) * 1.1, .006);
   float sdBody = sdEll(P - vec2(0., -.42), vec2(.2, .4));
   float body = aa2(sdBody, soft);
   float wing = 0.;
   for (int k = -1; k <= 1; k += 2) {
     float s = float(k);
-    vec2 w = P - vec2(s * (.1 + content * .12), -.44);
+    vec2 w = P - vec2(s * (.1 + content * .025), -.44);
     wing = max(wing, aa2(sdEll(rot(w, s * .16), vec2(.11, .36)), soft));
+  }
+  // Slender ankles and three toes grip the planks, distinct from folded wings.
+  float feet=0.;
+  for(int k=-1;k<=1;k+=2) {
+    vec2 ankle=vec2(float(k)*.16,-.63);
+    feet=max(feet,aa2(sdSeg3(P,ankle,ankle+vec2(float(k)*.07,-.17))-.018,soft));
+    for(int j=-1;j<=1;j++) feet=max(feet,aa2(sdSeg3(P,ankle+vec2(float(k)*.07,-.17),ankle+vec2(float(j)*.075,-.27))-.012,soft));
   }
   // the neck: an S from the shoulders forward, the head turned a little toward what it watches
   vec2 n0 = vec2(0., -.06), n1 = vec2(.13 + look * .1, .24 + .012 * sin(t * .7)), n2 = vec2(.07 + look * .16, .46);
-  float neck = min(aa2(sdSeg3(P, n0, n1) - .075, soft), aa2(sdSeg3(P, n1, n2) - .065, soft));
+  float neck = max(aa2(sdSeg3(P, n0, n1) - .075, soft), aa2(sdSeg3(P, n1, n2) - .065, soft));
   vec2 hp = n2 + vec2(.01, .1);
   float head = aa2(sdEll(P - hp, vec2(.15, .1)), soft);
-  vec2 bill0 = hp + vec2(.03, .06), bill1 = hp + vec2(.14 + look * .05, .4);
+  vec2 bill0 = hp + vec2(.03, .06), bill1 = hp + vec2(.10 + look * .08, .31);
   float along = clamp(dot(P - bill0, bill1 - bill0) / dot(bill1 - bill0, bill1 - bill0), 0., 1.);
   float bill = aa2(sdSeg3(P, bill0, bill1) - mix(.055, .014, along), soft);
   float eye = aa2(length(P - (hp + vec2(.05, .02))) - .024, soft);
-  cover = max(max(body, wing), max(max(neck, head), bill));
+  cover = max(feet,max(max(body, wing), max(max(neck, head), bill)));
   vec3 back = vec3(.44, .50, .56), slate = vec3(.24, .29, .36), pale = vec3(.93, .94, .93);
   // the body's edge falls away into shadow; a dark ridge along the spine
   float edge = 1. - smoothstep(-.09, .0, sdBody);
   col = back * (1. - .3 * edge);
   col = mix(col, slate, wing);
-  col = mix(col, slate * .7, wing * (1. - smoothstep(.0, .03, abs(P.x) - (.1 + content * .12) - .1)) * .4);
+  col = mix(col, slate * .7, wing * (1. - smoothstep(.0, .03, abs(P.x) - (.1 + content * .025) - .1)) * .4);
+  // Layered flight feathers follow the folded wings; no noisy outline.
+  float vane=sin((P.y+abs(P.x)*1.6)*93. + sin(P.y*11.)*.6);
+  col*=1.+vane*.075*wing;
+  col=mix(col,vec3(.38,.33,.21),feet*(1.-max(body,wing)));
   col = mix(col, pale, max(neck, head));
   // the neck's front is streaked dark
   col = mix(col, vec3(.35, .38, .4), neck * (1. - smoothstep(.0, .03 + soft, abs(P.x - mix(n0.x, n2.x, clamp((P.y - n0.y) / (n2.y - n0.y), 0., 1.))) - .012)) * .5);
@@ -2115,15 +2447,19 @@ void heron(vec2 P, float t, float look, float content, out vec3 col, out float c
 }
 /** A small frog sat at the pier's edge: a plump green body, two eye bumps, hind legs folded beside it, a throat that pulses. */
 void frog(vec2 P, float t, float look, float content, out vec3 col, out float cover){
-  float soft = min(fwidth(P.x) * 1.2, .03);
-  float pulse = 1. + .03 * sin(t * 3.1);
+  float soft = max(fwidth(P.x) * 1.1, .006);
+  P.y/=1.+vHop*.22;
+  float pulse = 1. + .012 * sin(t * 2.1);
   float body = aa2(sdEll(P - vec2(0., -.02), vec2(.36 * pulse, .5)), soft);
   float legs = 0.;
   float feet = 0.;
   for (int k = -1; k <= 1; k += 2) {
     float s = float(k);
     legs = max(legs, aa2(sdEll(rot(P - vec2(s * .44, -.2), s * .5), vec2(.22, .14)), soft));
-    feet = max(feet, aa2(sdEll(P - vec2(s * .28, .34), vec2(.09, .06)), soft));
+    // Bent forearms end in fine splayed toes rather than circular paws.
+    feet=max(feet,aa2(sdSeg3(P,vec2(s*.27,.14),vec2(s*.42,.3))-.036,soft));
+    for(int j=-1;j<=1;j++) feet=max(feet,aa2(sdSeg3(P,vec2(s*.42,.3),vec2(s*(.46+float(j)*.04),.39-abs(float(j))*.025))-.016,soft));
+    for(int j=-1;j<=1;j++) feet=max(feet,aa2(sdSeg3(P,vec2(s*.48,-.27),vec2(s*(.58+float(j)*.04),-.4+float(j)*.025))-.018,soft));
   }
   float eyes = 0., pupils = 0.;
   for (int k = -1; k <= 1; k += 2) {
@@ -2133,22 +2469,27 @@ void frog(vec2 P, float t, float look, float content, out vec3 col, out float co
     pupils = max(pupils, aa2(length(e - vec2(look * .03, .03)) - .045, soft));
   }
   cover = max(max(body, legs), max(feet, eyes));
-  vec3 green = vec3(.38, .58, .26), dark = vec3(.20, .36, .14);
+  vec3 green = vec3(.32, .43, .20), dark = vec3(.14, .24, .10);
   float blot = smoothstep(.55, .7, nz(P * .9 + vB.w * 3.));
   col = mix(green, dark, blot * .8);
   col = mix(col, green * 1.15, (1. - smoothstep(.0, .5, length((P - vec2(0., -.05)) / vec2(.36, .5)))) * .25);
   col = mix(col, dark, max(legs, feet) * (1. - body) * .4);
   col = mix(col, vec3(.82, .70, .30), eyes);
   col = mix(col, vec3(.05), pupils);
+  float ridge=exp(-pow((abs(P.x)-.23)/.025,2.))*body;
+  col+=vec3(.10,.10,.035)*ridge;
+  col*=.94+.12*nz(P*6.+vB.w*5.);
+  float blink=smoothstep(.97,1.,sin(t*.61));
+  col=mix(col,green,eyes*blink*.95);
   // the throat, paler
   col = mix(col, vec3(.86, .88, .62), aa2(sdEll(P - vec2(0., .22), vec2(.16, .1 * pulse)), soft) * .7);
 }
 /** An old turtle resting on the planks: a domed shell of scutes, a head out, four stubby legs, a tail. */
 void turtle(vec2 P, float t, float look, float content, out vec3 col, out float cover){
-  float soft = min(fwidth(P.x) * 1.2, .03);
+  float soft = max(fwidth(P.x) * 1.1, .006);
   float shell = aa2(sdEll(P, vec2(.5, .6)), soft);
   float rim = aa2(sdEll(P, vec2(.5, .6)), soft) - aa2(sdEll(P, vec2(.42, .52)), soft);
-  float head = aa2(sdEll(P - vec2(look * .06, .72 + .02 * sin(t * .8)), vec2(.13, .16)), soft);
+  float head = aa2(sdEll(P - vec2(look * .06, .66 + vB.y*.035 + .012 * sin(t * .8)), vec2(.13, .16)), soft);
   float legs = 0.;
   for (int k = -1; k <= 1; k += 2) {
     float s = float(k);
@@ -2166,21 +2507,53 @@ void turtle(vec2 P, float t, float look, float content, out vec3 col, out float 
   vec3 olive = vec3(.36, .40, .22), dark = vec3(.22, .25, .13), skin = vec3(.42, .46, .28);
   float dome = 1. - smoothstep(.0, 1., length(q));
   col = mix(olive, dark, seam * .9) * (.7 + .45 * dome);
+  // Worn growth rings within the scutes, irregular olive pigmentation.
+  float growth=sin(sc*54.+nz(P*3.+vB.w)*2.);
+  col*=.94+.055*growth+.10*nz(P*5.+vB.w);
   col = mix(col, olive * 1.2, rim * .5);
   col = mix(col, skin, max(head, max(legs, tail)) * (1. - shell));
   col = mix(col, vec3(.06), aa2(length(P - vec2(look * .06 + .07, .78)) - .02, soft) * head);
   col = mix(col, vec3(.06), aa2(length(P - vec2(look * .06 - .07, .78)) - .02, soft) * head);
 }
+void pierLantern(vec2 P, float lit, out vec3 col, out float cover) {
+  float soft=max(fwidth(P.x),.008);
+  float base=aa2(length(P/vec2(.48,.42))-1.,soft*2.);
+  float glass=aa2(length(P/vec2(.34,.29))-1.,soft*2.);
+  float rim=base-glass;
+  float post=aa2(sdEll(P-vec2(0.,-.49),vec2(.16,.24)),soft);
+  float handle=aa2(abs(length((P-vec2(0.,.24))/vec2(.25,.3))-1.)-.10,soft*3.);
+  float strut=aa2(abs(P.x)-.037,soft)*base;
+  cover=max(base,max(post,handle));
+  vec3 metal=mix(vec3(.13,.16,.15),vec3(.38,.35,.25),.5+.5*P.x);
+  col=mix(metal,vec3(.16,.23,.21),glass);
+  col=mix(col,vec3(.21,.18,.11),post*(1.-base));
+  col+=vec3(.13,.17,.16)*glass*exp(-pow((P.x+.17)/.03,2.));
+  col=mix(col,metal,strut);
+  col+=vec3(.25,.22,.14)*rim*max(0.,P.y);
+  float flame=exp(-dot(P/vec2(.12,.18),P/vec2(.12,.18))*2.);
+  col=col*(uAmb+uSunCol*.7)+LAMP*lit*glass*.55;
+  col+=vec3(1.,.78,.35)*lit*flame*2.8*(1.-strut*.7);
+}
 void main(){
   float kind = vB.x, mood = vB.y, look = vB.z, seed = vB.w;
   float t = uTime + seed * 40.;
   vec3 col; float cover;
-  if (kind < .5) heron(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
+  if(kind>2.5) pierLantern(vQ,mood,col,cover);
+  else if (kind < .5) heron(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
   else if (kind < 1.5) frog(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
   else turtle(vQ, t, look, mood > 1.5 ? 1. : 0., col, cover);
   if (cover < .003) discard;
   if (uShadow > .5) { o = vec4(0., 0., 0., cover * .3); return; }
-  col *= uAmb * .9 + uSunCol * (.5 + .4 * max(uSun.z, 0.)) + LAMP * lampAt(vec2(0.)) * 0.;
+  if(kind<2.5) {
+    // A rounded back lit in world space; the boat and pier lamps share this light.
+    vec2 grad=vQ*vec2(kind<.5?1.7:1.2,.7);
+    vec2 ng=rot(grad,-vHeading);
+    vec3 normal=normalize(vec3(ng,1.));
+    float sun=max(dot(normal,normalize(uSun)),0.);
+    col*=uAmb*.85+uSunCol*(.25+.7*sun)+LAMP*lampAt(vWorld)*1.15;
+    float wet=kind>.5&&kind<1.5?.13:.025;
+    col+=uSunCol*pow(max(dot(normal,normalize(normalize(uSun)+vec3(0.,0.,1.))),0.),45.)*wet;
+  }
   o = vec4(col, 1.) * cover;
 }`;
 
@@ -2217,3 +2590,4 @@ export const SHADERS = {
   RESIDENT_VS,
   RESIDENT_FS,
 };
+

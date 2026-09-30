@@ -24,12 +24,6 @@
     .target i { width: 7px; height: 7px; border: 1px solid rgba(240, 236, 190, .8); border-radius: 50%; transition: background .6s, box-shadow .6s, transform .6s; }
     .target i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
     .target i.blank { border-color: rgba(240, 236, 190, .18); }
-    .target.share .word { font-size: 13px; letter-spacing: 5px; text-transform: uppercase; opacity: .75; margin-bottom: 8px; }
-    .target.share .fishes { display: flex; justify-content: center; gap: 14px; }
-    .target.share .fish { display: inline-flex; flex-direction: column; align-items: center; gap: 5px; }
-    .target.share .fish u { display: block; width: 22px; height: 9px; border-radius: 55% 45% 45% 55% / 50%; background: rgba(226, 232, 214, .75); box-shadow: 0 0 8px rgba(0, 27, 25, .5); }
-    .target.share .fish em { display: flex; gap: 4px; min-height: 9px; }
-    .target.share.fair .fish u { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; }
     .target .frame { display: grid; grid-template-columns: repeat(5, 7px); gap: 6px; padding: 6px 8px; border: 1px solid rgba(240, 236, 190, .16); border-radius: 6px; }
     .target .scaffold { display: flex; justify-content: center; align-items: center; gap: 8px; transition: opacity 1.2s; }
     .target .scaffold.array { display: grid; grid-template-columns: repeat(var(--cols), 7px); gap: 7px; justify-content: center; }
@@ -73,13 +67,70 @@
     #start .brand { font-size: 15px; letter-spacing: 10px; margin: 0 0 0 10px; opacity: .92; text-shadow: 0 2px 18px #001b19; }
     #newname { position: fixed; left: 0; right: 0; bottom: max(40px, calc(env(safe-area-inset-bottom) + 24px)); display: flex; justify-content: center; pointer-events: none; transition: opacity 1.4s; }
     #newname.away { opacity: 0; }
+    #newname.away input { pointer-events: none; }
     #newname input { pointer-events: auto; font: 16px Georgia, serif; font-style: italic; letter-spacing: .4px; color: #f3f0d2; background: transparent; border: 0; border-bottom: 1px solid rgba(240, 236, 206, .38); padding: 8px 6px; width: 200px; outline: none; text-align: center; text-shadow: 0 1px 12px #001b19; }
     #newname input:focus { border-bottom-color: rgba(240, 236, 206, .8); }
     #newname input::placeholder { color: rgba(240, 236, 206, .72); }
+    /* The question: one clear line at the top, as large as the counting numeral; its blanks
+       fill with the dew gathered. A picture in dots under it while the skill is new. */
+    [hidden] { display: none !important; }
+    #relationship { display: flex; flex-direction: column; align-items: center; gap: 10px; transition: opacity 1.2s, transform 1.2s; }
+    #relationship.arrive { opacity: 0; transform: translateY(12px) scale(.94); }
+    #relationship .equation { display: flex; align-items: baseline; justify-content: center; gap: .32em; font-size: clamp(30px, 9vw, 40px); line-height: 1; letter-spacing: 1px; font-variant-numeric: lining-nums tabular-nums; color: #fbf6d8; text-shadow: 0 2px 16px #001b19, 0 0 2px #001b19; }
+    #relationship .equation .sign { opacity: .82; }
+    #relationship .blank { display: inline-block; min-width: 1.15em; padding: .06em .14em .1em; text-align: center; border-bottom: 2px solid rgba(251, 246, 216, .75); color: rgba(251, 246, 216, .55); transition: color .3s, border-color .3s, text-shadow .3s; }
+    /* choose: a slot for one numeral — a small rounded frame; the one waiting glows */
+    #relationship .blank.slot { border: 1.5px solid rgba(251, 246, 216, .6); border-radius: .2em; min-width: 1.25em; padding: .04em .16em .08em; }
+    #relationship .blank.slot.waiting { border-color: #f9e9a3; box-shadow: 0 0 14px rgba(249, 233, 163, .45); }
+    #relationship .blank.poured { animation: poured .6s ease-out; }
+    @keyframes poured { 0% { transform: translateY(-.12em) scale(1.12); } 100% { transform: none; } }
+    #relationship .blank.filling { color: #fdf6cc; border-color: #f9e9a3; text-shadow: 0 0 14px rgba(249, 233, 163, .7), 0 2px 16px #001b19; }
+    #relationship.answered .equation { animation: answered 1.6s ease-out; }
+    #relationship.answered .blank { border-color: transparent; color: #fdf6cc; }
+    @keyframes answered { 0% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } 30% { text-shadow: 0 0 26px rgba(253, 246, 204, .95), 0 0 6px rgba(253, 246, 204, .9); } 100% { text-shadow: 0 2px 16px #001b19; } }
+    #relationship.over .blank { animation: over .5s ease-in-out; }
+    /* shown, not answered: plain water in the blank — no gold, no glow (never mistaken for a success) */
+    #relationship.revealed .blank { color: rgba(186, 220, 226, .85); border-color: rgba(186, 220, 226, .35); text-shadow: none; box-shadow: none; animation: revealed 1.4s ease-out; }
+    #relationship.revealed .math-tools { visibility: hidden; }
+    @keyframes revealed { 0% { color: rgba(186, 220, 226, 0); } 100% { color: rgba(186, 220, 226, .85); } }
+    @keyframes over { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(2px); } }
+    /* a numeral question: how many (dots, as large as a numeral), or numbers in order with one missing */
+    #relationship .dots { position: relative; display: inline-block; font-size: clamp(30px, 9vw, 40px); }
+    #relationship .dots i { position: absolute; width: .3em; height: .3em; border-radius: 50%; background: #fbf6d8; box-shadow: 0 0 10px rgba(249, 233, 163, .45), 0 2px 10px #001b19; }
+    #relationship .equation .gap { width: .35em; }
+    #relationship.over .dots { animation: over .5s ease-in-out; }
+    #relationship .model { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; max-width: 330px; transition: opacity 1.2s; }
+    #relationship .model i { width: 8px; height: 8px; border: 1px solid rgba(240, 236, 190, .75); border-radius: 50%; transition: background .5s, box-shadow .5s, transform .5s; }
+    #relationship .model i.known { background: rgba(240, 236, 190, .55); border-color: transparent; }
+    #relationship .model i.taken { border-color: rgba(240, 236, 190, .28); background: linear-gradient(135deg, transparent 45%, rgba(240, 236, 190, .5) 45% 55%, transparent 55%); }
+    #relationship .model i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
+    #relationship .model b { width: 6px; }
+    #relationship .model.array { display: grid; grid-template-columns: repeat(var(--cols), 8px); gap: 6px; }
+    #relationship .model.rings { gap: 8px; }
+    #relationship .model .ring { display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 2px; width: 30px; height: 30px; padding: 3px; border: 1px solid rgba(240, 236, 190, .5); border-radius: 50%; }
+    #relationship .model .ring i { width: 5px; height: 5px; border: 0; background: #fdf6cc; box-shadow: 0 0 6px #f9e9a3; }
+    #relationship .model.reveal i:not(.known):not(.taken) { animation: count .5s ease-out both; animation-delay: calc(var(--i, 0) * .32s); }
+    @keyframes count { 0% { background: transparent; } 60% { background: #fdf6cc; box-shadow: 0 0 12px #f9e9a3; transform: scale(1.35); } 100% { background: rgba(253, 246, 204, .8); transform: scale(1); } }
+    #relationship .math-tools { display: flex; gap: 18px; justify-content: center; }
+    #relationship .math-tools .icon { position: static; width: 44px; height: 44px; padding: 11px; opacity: .42; color: #f0edce; border-radius: 50%; }
+    #relationship .math-tools .icon:active { opacity: .9; }
+    #relationship .math-tools .icon svg { width: 22px; height: 22px; display: block; }
+    #relationship.answered .math-tools { visibility: hidden; }
+    #grownups { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(340px, calc(100% - 32px)); padding: 18px 18px 12px; pointer-events: auto; background: #142c25f5; border: 1px solid #b8b48b55; border-radius: 16px; box-shadow: 0 8px 28px #041e1899; font-size: 14px; line-height: 1.45; }
+    #grownups h2 { margin: 0 0 8px; font-weight: normal; font-size: 12px; letter-spacing: 4px; text-transform: uppercase; opacity: .8; }
+    #grownups p { margin: 0 0 12px; }
+    #grownups .now { font-size: 12px; opacity: .75; }
+    #grownups .systems { display: flex; gap: 6px; margin-bottom: 10px; }
+    #grownups .systems button { flex: 1; font-size: 13px; padding: 8px 4px; }
+    #grownups .years { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+    #grownups button { position: static; opacity: .9; font-size: 14px; padding: 10px; border-radius: 10px; border: 1px solid #c1cca344; }
+    #grownups button[aria-pressed=true] { background: #e9e4b91a; border-color: #e9e4b9aa; }
+    #grownups .close { display: block; margin: 0 auto; border: 0; opacity: .7; }
+    body.page #relationship, body.page #grownups { display: none; }
   </style>
 </head>
 <body>
-  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go."></canvas>
+  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go. R visits a nearby resident; L shares light with their pier lantern. When an equation is shown, gather dew to fill its blank; for times questions, gather leaves that match."></canvas>
   <div id="ui">
     <header>
       <h1 id="title" class="hidden">STILLWATER</h1>
@@ -98,3 +149,4 @@
   <script type="module" src="/app.js"></script>
 </body>
 </html>
+
