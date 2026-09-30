@@ -55,6 +55,8 @@ interface TimeoutWinnerConfig {
   reveal_role?: boolean;
   player_condition?: string;
   reason?: string;
+  /** role type: the role wins at the limit only if it was never revealed (e.g. denounced) */
+  unless_revealed?: boolean;
 }
 
 function findHighestScorePlayer(
@@ -190,6 +192,14 @@ export const timeoutWinnerMechanic: MechanicHooks = {
       }
 
       case 'role': {
+        if (config.unless_revealed) {
+          // An exposed role forfeits its time-limit win: nobody wins at the limit.
+          const exposed = Object.values(ctx.state.players).some((p) => {
+            const pl = p as unknown as { objective?: { type?: string }; team?: string; revealedAs?: string };
+            return !!pl.revealedAs && (pl.objective?.type === config.role || pl.team === config.role);
+          });
+          if (exposed) return null;
+        }
         const result = findRolePlayer(
           ctx.state.players,
           config.role,

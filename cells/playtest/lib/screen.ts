@@ -49,7 +49,7 @@ export async function screen(rules: string, o: { seeds: number[]; players: numbe
   }
   const outcomes: Record<string, number> = {};
   for (const g of games) {
-    const k = `${g.winner ?? 'no winner'} · ${g.stopped === 'finished' ? (/limit|timeout|max/i.test(String(g.end ?? '')) ? 'time limit' : 'objective') : g.stopped}`;
+    const k = `${g.winner ?? 'no winner'} · ${g.stopped === 'finished' ? (/limit|timeout|max/i.test(String(g.end ?? '')) ? 'time limit' : /denounc|accus/i.test(String(g.end ?? '')) ? 'denounce' : 'objective') : g.stopped}`;
     outcomes[k] = (outcomes[k] ?? 0) + 1;
   }
   const total = [...mix.values()].reduce((a, b) => a + b, 0) || 1;

@@ -930,9 +930,14 @@ function endGameOnTimeout(state: GameState, endType: string): void {
   let winner: string | null;
   let reason: string;
 
+  const wt = (state.config.engine_mechanics as Record<string, { type?: string; unless_revealed?: boolean } | undefined> | undefined)?.win_timeout;
   if (mechanicResult) {
     winner = mechanicResult.playerId;
     reason = mechanicResult.reason;
+  } else if (wt?.type === 'role' && wt.unless_revealed) {
+    // The role that wins at the limit was exposed: the rules give the limit to nobody.
+    winner = null;
+    reason = 'Time limit reached. The Enemy was exposed, so nobody wins.';
   } else {
     // Fallback: highest score
     let highestScore = -Infinity;

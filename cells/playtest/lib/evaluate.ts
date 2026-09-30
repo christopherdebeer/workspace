@@ -202,7 +202,7 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
     winnerRole: session.winner ? (session.roles?.[session.winner] ?? null) : null,
     positions: session.roles && Object.keys(session.roles).length ? [...new Set(Object.values(session.roles))] : Array.from({ length: o.spec.players }, (_, i) => `seat ${i + 1}`),
     winnerKey: session.winner ? (session.roles?.[session.winner] ?? `seat ${Number(String(session.winner).replace(/\D/g, '')) || '?'}`) : null,
-    endKind: !m.finished ? 'none' : /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i.test(m.endReason ?? '') ? 'time limit' : 'objective',
+    endKind: !m.finished ? 'none' : /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i.test(m.endReason ?? '') ? 'time limit' : /denounc|accus/i.test(m.endReason ?? '') ? 'denounce' : 'objective',
   };
   const chunks = await db.putBlob(`RUN#${id}`, { session, judgement, findings });
   await db.put({ pk: `RUN#${id}`, sk: 'meta', ...digest, game: o.game, version: o.def.version, engine: o.engine, metrics: m, judgement, chunks, createdAt: new Date().toISOString() });
