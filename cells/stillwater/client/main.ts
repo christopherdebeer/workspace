@@ -356,7 +356,9 @@ function solveRelation() {
   mathUI.complete(g);
   relationship = null;
   relationClearAt = pond.t + 1.7;
-  nextTargetAt = pond.t + 1.7 + L.PHASE_PAUSE[phase];
+  // the next question is planned now (its water can gather during the pause) and asked after it
+  askNotBefore = pond.t + 1.7 + L.PHASE_PAUSE[phase];
+  nextTargetAt = pond.t + 0.6;
   sound.gathered();
   lantern = Math.min(1.5, lantern + (q >= 0.85 ? 0.45 : 0.3));
   pond.propel(190);
@@ -482,6 +484,8 @@ let plan: Plan | null = null;
 /** A question that faded unanswered comes back with the next water. */
 let carry: Challenge | null = null;
 let lostSince = 0;
+/** After a solve, the next question may be planned at once but not asked before the pause is over. */
+let askNotBefore = 0;
 
 /** How far up the screen (CSS px) the view will have moved by the time the boat's way is spent. */
 function glideAhead(): number {
@@ -533,11 +537,13 @@ function formingInView(): boolean {
  */
 function stageRelationship(c: Challenge, shift: number): boolean {
   if (c.mode === 'pick') {
-    // the candidates, closest to the middle of the bed first (so they sit together)
+    // the candidates, closest to the middle of the bed first (so they sit together), and
+    // leaves already holding fine dew before bare ones (they gather at once, a bare leaf beads first)
     const mid = cam.cssH * 0.55 - shift;
+    const cost = (q: Pad) => Math.abs(toScreen(q.x, q.y)[1] - mid) + (q.glyph === -3 || keepsFineDew(q) ? 0 : cam.cssH * 0.3);
     const dry = relationStock(true, shift)
       .filter((q) => !q.drops.length && q.r >= 26)
-      .sort((a, b) => Math.abs(toScreen(a.x, a.y)[1] - mid) - Math.abs(toScreen(b.x, b.y)[1] - mid));
+      .sort((a, b) => cost(a) - cost(b));
     const all = c.choices ?? [];
     const least = c.answers.length + 2;
     if (dry.length < Math.min(all.length, least)) return false;
@@ -637,7 +643,7 @@ function stepPlan() {
     c.mode === 'pick'
       ? [...optionOf].every(([p, v]) => inBed(p) && settled(p, numeralCode(v)))
       : completable(c, [0], counts(pond.pads.filter((p) => liveCount(p) > 0 && inBed(p) && settled(p, -1))));
-  if (ready && !formingInView()) {
+  if (ready && pond.t >= askNotBefore && !formingInView()) {
     askPlanned();
     return;
   }
@@ -766,6 +772,10 @@ function setTarget() {
   if (!started || pageOpen) return;
   const phase = stretch.phase;
   if (phase === 'finale') {
+    if (pond.t < askNotBefore) {
+      nextTargetAt = askNotBefore;
+      return;
+    }
     startFinale();
     return;
   }
