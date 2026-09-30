@@ -5,7 +5,9 @@ import {
   equation,
   groupsNeed,
   LEVELS,
+  levelName,
   makeChallenge,
+  SYLLABI,
   overfull,
   padWitness,
   shown,
@@ -20,12 +22,12 @@ function seeded(seed: number) {
 }
 
 /** The gathering that answers a challenge with dew. */
-const answerOf = (c: Challenge): number[] => (c.mode === 'sum' ? [c.answers[0]] : c.skill === 'pairs' ? [c.answers[0], c.answers[1]] : [c.a, c.b]);
+const answerOf = (c: Challenge): number[] => (c.mode !== 'groups' ? [c.answers[0]] : c.skill === 'pairs' ? [c.answers[0], c.answers[1]] : [c.a, c.b]);
 
 describe('stillwater challenges: what is asked', () => {
   const rand = seeded(1234);
   const all: Challenge[] = [];
-  for (let level = 1; level <= TOP; level++) {
+  for (let level = 0; level <= TOP; level++) {
     for (const skill of LEVELS[level].skills) {
       for (let form = 0; form <= 2; form++) for (let i = 0; i < 60; i++) all.push(makeChallenge(level, skill, rand, form, i / 60));
     }
@@ -37,7 +39,7 @@ describe('stillwater challenges: what is asked', () => {
 
   test('the dew never has to count out more than twenty drops, nor more than six leaves of six', () => {
     for (const c of all) {
-      if (c.mode === 'sum') expect(c.answers[0]).toBeLessThanOrEqual(20);
+      if (c.mode !== 'groups') expect(c.answers[0]).toBeLessThanOrEqual(20);
       else {
         const { size, count } = groupsNeed(c);
         expect(size).toBeLessThanOrEqual(6);
@@ -66,7 +68,7 @@ describe('stillwater challenges: what is asked', () => {
       expect([3, 4, 8]).toContain(t5.a);
     }
     expect(YEARS.find(([y]) => y === 'Year 1')![1]).toBe(1);
-    expect(LEVELS[YEARS.find(([y]) => y === 'Year 4')![1]].name).toBe('Threes, fours and eights');
+    expect(levelName(YEARS.find(([y]) => y === 'Year 4')![1], 'england')).toBe('Threes, fours and eights');
   });
 
   test('a new skill starts in its simplest form; the unknown moves and the equation turns round with practice', () => {
@@ -128,6 +130,7 @@ describe('stillwater challenges: the child moves through the levels', () => {
 
   test('a level that is not holding steps back, but not below the placement', () => {
     const cur = new Curriculum();
+    cur.setSyllabus('england');
     cur.setYear(3); // Year 3 → tens and ones
     const rand = seeded(8);
     // review questions (the level before) never move the level; only this level's count
@@ -154,10 +157,86 @@ describe('stillwater challenges: the child moves through the levels', () => {
     const cur = new Curriculum();
     cur.counted(true);
     cur.counted(true);
-    expect(cur.data.level).toBe(0);
+    cur.counted(true);
+    expect(cur.data.level).toBe(0); // counting alone is not enough: the numerals too
+    const rand = seeded(6);
+    for (let i = 0, found = 0; i < 60 && found < 2; i++) {
+      const c = cur.next(rand);
+      cur.record(c, true, '2026-09-30');
+      if (c.skill === 'identify') found++;
+    }
     cur.counted(true);
     expect(cur.data.level).toBe(1);
     const round = new Curriculum(JSON.parse(JSON.stringify(cur.data)));
     expect(round.data).toEqual(cur.data);
+  });
+});
+
+describe('stillwater challenges: numerals on the leaves, only where the numeral is the question', () => {
+  test('numeral questions live at the early levels only', () => {
+    for (let level = 0; level <= TOP; level++) {
+      const picks = LEVELS[level].skills.filter((k) => k === 'identify' || k === 'sequence');
+      if (level <= 1) expect(picks.length).toBeGreaterThan(0);
+      else expect(picks).toEqual([]);
+    }
+  });
+
+  test('which numeral says how many: the answer among near neighbours, all single numerals', () => {
+    const r = seeded(31);
+    for (let i = 0; i < 200; i++) {
+      const c = makeChallenge(0, 'identify', r, i % 3, (i % 10) / 10);
+      expect(c.mode).toBe('pick');
+      expect(c.dots).toBe(c.answers[0]);
+      expect(c.choices).toContain(c.answers[0]);
+      expect(new Set(c.choices).size).toBe(c.choices!.length);
+      for (const n of c.choices!) expect(n >= 1 && n <= 9).toBe(true);
+      expect(accepts(c, [c.answers[0]])).toBe(true);
+      expect(accepts(c, [c.choices!.find((n) => n !== c.answers[0])!])).toBe(false);
+    }
+  });
+
+  test('before, after and between: the gap is the answer, and it is among the leaves', () => {
+    const r = seeded(32);
+    const kinds = new Set<number>();
+    for (let i = 0; i < 300; i++) {
+      const c = makeChallenge(1, 'sequence', r, 2);
+      const at = c.seq!.indexOf(null);
+      kinds.add(at);
+      const run = c.seq!.map((n, j) => n ?? (j === at ? c.answers[0] : NaN));
+      expect(run[1] - run[0]).toBe(1);
+      expect(run[2] - run[1]).toBe(1);
+      expect(c.choices).toContain(c.answers[0]);
+      for (const n of c.choices!) expect(n >= 1 && n <= 9).toBe(true);
+    }
+    expect(kinds).toEqual(new Set([0, 1, 2]));
+    // a new child starts with "what comes next"
+    for (let i = 0; i < 40; i++) expect(makeChallenge(0, 'sequence', r, 0).seq![2]).toBeNull();
+  });
+});
+
+describe('stillwater challenges: the syllabus is data', () => {
+  test('Scotland and the US go to 10 × 10; England to 12 × 12', () => {
+    expect(SYLLABI.scotland.top).toBe(10);
+    expect(SYLLABI.us.top).toBe(10);
+    expect(SYLLABI.england.top).toBe(12);
+    const r = seeded(40);
+    for (let i = 0; i < 300; i++) {
+      const c = makeChallenge(6, 'factor', r, 2, 1, undefined, 'scotland');
+      expect(c.a).toBeLessThanOrEqual(10);
+      expect(c.b).toBeLessThanOrEqual(10);
+    }
+    expect(levelName(6, 'scotland')).toBe('Tables to 10');
+    expect(levelName(6, 'england')).toBe('Tables to 12');
+  });
+
+  test('a Scottish P2 starts at facts within 10; the school system can change', () => {
+    const cur = new Curriculum();
+    expect(cur.data.syllabus).toBe('scotland');
+    cur.setYear(1);
+    expect(cur.syllabus.years[1][0]).toBe('P2');
+    expect(cur.data.level).toBe(1);
+    expect(cur.describe()).toBe('Facts within 10 · First level (P2)');
+    cur.setSyllabus('us');
+    expect(cur.describe()).toBe('Facts within 10 · Grade 1');
   });
 });

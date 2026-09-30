@@ -2,27 +2,32 @@
  * Relationships, asked with dew. A challenge is one question; a skill is the
  * relationship it practises; a level is a step of the syllabus.
  *
- * The levels follow England's national curriculum and the DfE's "ready to
- * progress" criteria (Mathematics guidance: key stages 1 and 2, 2020), in the
- * order a child meets them — facts within 10, within 20, the 2/5/10 tables,
- * across tens, the 3/4/8 tables, all tables to 12, then connections. A grown-up
- * sets the school year (a starting point); the river moves on from there only on
- * evidence gathered on more than one day, and steps back when a level is not yet
- * holding.
+ * The levels are one ladder in the order a child meets them — numerals and
+ * counting, facts within 10, within 20, the 2/5/10 tables, across tens, more
+ * tables, all tables, then connections. A syllabus (SYLLABI; see SYLLABUS.md)
+ * says which school years start where, what the levels are called there, and
+ * which tables it expects (Scotland and the US to 10 × 10, England to 12 × 12).
+ * A grown-up sets the school and year (a starting point); the river moves on
+ * from there only on evidence gathered on more than one day, and steps back
+ * when a level is not yet holding.
  *
  * The dew stays the thing being reasoned about:
  *  - `sum` questions gather one collection of drops (every unknown is ≤ 20);
  *  - `groups` questions gather equal groups — leaves that match, as many as
  *    there are groups — so 3 × 4 is three leaves of four (or four of three),
- *    never "60 + □" or a remainder dressed up as multiplication.
+ *    never "60 + □" or a remainder dressed up as multiplication;
+ *  - `pick` questions are about the numeral itself (which numeral says how
+ *    many; which comes before or after): a few leaves' dew gathers into its
+ *    numeral in water, and the child touches the one that answers. Only the
+ *    early levels ask these — elsewhere the leaves stay dew.
  *
  * Within a level the question grows with the child: first the unknown where it
  * is easiest (a + b = ?, the part at the end), then in either place, then the
  * equation turned round (? = a + b); the numbers widen as clean answers come.
  * No speed grading, no timers.
  */
-export type Skill = 'bond' | 'subtract' | 'double' | 'bridge' | 'balance' | 'groups' | 'factor' | 'divide' | 'pairs' | 'derive';
-export type Mode = 'sum' | 'groups';
+export type Skill = 'identify' | 'sequence' | 'bond' | 'subtract' | 'double' | 'bridge' | 'balance' | 'groups' | 'factor' | 'divide' | 'pairs' | 'derive';
+export type Mode = 'sum' | 'groups' | 'pick';
 export type Expr = number | { slot: number } | { op: '+' | '−' | '×' | '÷'; a: Expr; b: Expr };
 
 export interface Challenge {
@@ -42,41 +47,97 @@ export interface Challenge {
   support: number;
   /** 0 simplest form … 2 the equation turned round. */
   form: number;
+  /** `identify`: the quantity shown at the top, as dots (answered by a numeral leaf). */
+  dots?: number;
+  /** `sequence`: numbers in order with one missing (null), answered by a numeral leaf. */
+  seq?: Array<number | null>;
+  /** `pick`: the numerals the leaves should show (the answer among them). */
+  choices?: number[];
 }
 
 export interface Level {
   name: string;
-  year: string;
   skills: Skill[];
 }
 
 export const LEVELS: readonly Level[] = [
-  { name: 'Counting', year: 'Reception', skills: [] },
-  { name: 'Facts within 10', year: 'Year 1', skills: ['bond', 'subtract', 'double'] },
-  { name: 'Facts within 20', year: 'Year 1–2', skills: ['bond', 'subtract', 'bridge'] },
-  { name: 'Twos, fives and tens', year: 'Year 2', skills: ['groups', 'factor', 'divide'] },
-  { name: 'Tens and ones', year: 'Year 2–3', skills: ['bond', 'subtract', 'balance'] },
-  { name: 'Threes, fours and eights', year: 'Year 3', skills: ['groups', 'factor', 'divide'] },
-  { name: 'Tables to 12', year: 'Year 4', skills: ['groups', 'factor', 'divide', 'pairs'] },
-  { name: 'Connections', year: 'Year 4–5', skills: ['balance', 'derive', 'pairs', 'divide'] },
+  { name: 'Counting and numerals', skills: ['identify', 'sequence'] },
+  { name: 'Facts within 10', skills: ['bond', 'subtract', 'double', 'sequence'] },
+  { name: 'Facts within 20', skills: ['bond', 'subtract', 'bridge'] },
+  { name: 'Twos, fives and tens', skills: ['groups', 'factor', 'divide'] },
+  { name: 'Tens and ones', skills: ['bond', 'subtract', 'balance'] },
+  { name: 'More tables', skills: ['groups', 'factor', 'divide'] },
+  { name: 'All the tables', skills: ['groups', 'factor', 'divide', 'pairs'] },
+  { name: 'Connections', skills: ['balance', 'derive', 'pairs', 'divide'] },
 ];
 export const TOP = LEVELS.length - 1;
 
-/** School years a grown-up can choose, and the level each starts at. */
-export const YEARS: ReadonlyArray<readonly [string, number]> = [
-  ['Reception', 0],
-  ['Year 1', 1],
-  ['Year 2', 2],
-  ['Year 3', 4],
-  ['Year 4', 5],
-  ['Year 5 +', 6],
-];
+// ─── syllabi (SYLLABUS.md) ───────────────────────────────────────────────────
+
+export type SyllabusId = 'scotland' | 'england' | 'us';
+export interface Syllabus {
+  id: SyllabusId;
+  name: string;
+  /** School years a grown-up can choose, and the level each starts at. */
+  years: ReadonlyArray<readonly [string, number]>;
+  /** What each level is, in this syllabus's own terms. */
+  stage: readonly string[];
+  /** The tables each multiplicative level draws on. */
+  tables: Readonly<Record<number, number[]>>;
+  /** Group sizes the dew shows as matching leaves (≤ 6 drops a leaf). */
+  sizes: Readonly<Record<number, number[]>>;
+  /** The largest group count in `factor`/`divide` at the all-tables level. */
+  top: number;
+  /** Level names that differ in this syllabus (the tables it means). */
+  names: Readonly<Partial<Record<number, string>>>;
+}
+
+const TO10 = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+export const SYLLABI: Readonly<Record<SyllabusId, Syllabus>> = {
+  // Curriculum for Excellence: broad levels, numeracy benchmarks (Education Scotland, 2017)
+  scotland: {
+    id: 'scotland',
+    name: 'Scotland',
+    years: [['P1', 0], ['P2', 1], ['P3', 2], ['P4', 3], ['P5', 5], ['P6 +', 6]],
+    stage: ['Early level', 'First level (P2)', 'First level (P2–P3)', 'First level (P3–P4)', 'First level (P4)', 'First–Second level (P4–P5)', 'Second level (P5–P6)', 'Second level (P6–P7)'],
+    // First level benchmarks name the 2, 3, 5 and 10 facts; the rest to 10 × 10 by Second level
+    tables: { 3: [2, 3, 5, 10], 5: [4, 6], 6: TO10, 7: [3, 4, 6, 7, 8, 9] },
+    sizes: { 3: [2, 3, 5], 5: [4, 6], 6: [2, 3, 4, 5, 6], 7: [2, 3, 4, 5, 6] },
+    top: 10,
+    names: { 3: 'Twos, threes, fives and tens', 5: 'Fours and sixes', 6: 'Tables to 10' },
+  },
+  // National curriculum (2013) and DfE "ready to progress" (2020)
+  england: {
+    id: 'england',
+    name: 'England',
+    years: [['Reception', 0], ['Year 1', 1], ['Year 2', 2], ['Year 3', 4], ['Year 4', 5], ['Year 5 +', 6]],
+    stage: ['Reception', 'Year 1', 'Year 1–2', 'Year 2', 'Year 2–3', 'Year 3', 'Year 4', 'Year 4–5'],
+    tables: { 3: [2, 5, 10], 5: [3, 4, 8], 6: [...TO10, 11, 12], 7: [3, 4, 6, 7, 8, 9, 12] },
+    sizes: { 3: [2, 5], 5: [3, 4], 6: [2, 3, 4, 5, 6], 7: [2, 3, 4, 5, 6] },
+    top: 12,
+    names: { 5: 'Threes, fours and eights', 6: 'Tables to 12' },
+  },
+  // Common Core State Standards for Mathematics (2010)
+  us: {
+    id: 'us',
+    name: 'United States',
+    years: [['Kindergarten', 0], ['Grade 1', 1], ['Grade 2', 2], ['Grade 3', 3], ['Grade 4 +', 6]],
+    stage: ['Kindergarten', 'Grade 1', 'Grade 1–2', 'Grade 2–3', 'Grade 2', 'Grade 3', 'Grade 3', 'Grade 4'],
+    tables: { 3: [2, 5, 10], 5: [3, 4], 6: TO10, 7: [3, 4, 6, 7, 8, 9] },
+    sizes: { 3: [2, 5], 5: [3, 4], 6: [2, 3, 4, 5, 6], 7: [2, 3, 4, 5, 6] },
+    top: 10,
+    names: { 5: 'Threes and fours', 6: 'Tables to 10' },
+  },
+};
+export const DEFAULT_SYLLABUS: SyllabusId = 'scotland';
+/** England's years (kept for callers that do not choose a syllabus). */
+export const YEARS = SYLLABI.england.years;
+/** A level's name in a syllabus, with the tables it means there. */
+export function levelName(level: number, syl: SyllabusId = DEFAULT_SYLLABUS): string {
+  return SYLLABI[syl].names[level] ?? LEVELS[level].name;
+}
 
 const MULT: readonly Skill[] = ['groups', 'factor', 'divide', 'pairs', 'derive'];
-/** Tables each multiplicative level draws on. */
-const TABLES: Record<number, number[]> = { 3: [2, 5, 10], 5: [3, 4, 8], 6: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 7: [3, 4, 6, 7, 8, 9, 12] };
-/** Group sizes and counts the dew can show as leaves (≤ 6 drops a leaf, ≤ 6 leaves). */
-const SIZES: Record<number, number[]> = { 3: [2, 5], 5: [3, 4], 6: [2, 3, 4, 5, 6], 7: [2, 3, 4, 5, 6] };
 
 export const slot = (n = 0): Expr => ({ slot: n });
 export const op = (o: '+' | '−' | '×' | '÷', a: Expr, b: Expr): Expr => ({ op: o, a, b });
@@ -111,9 +172,15 @@ function spoken(e: Expr): string {
   return `${spoken(e.a)} ${o} ${spoken(e.b)}`;
 }
 /** The question read aloud (help for a child who does not read yet). */
-export const say = (c: Challenge) => `${spoken(c.left)} equals ${spoken(c.right)}?`;
+export function say(c: Challenge): string {
+  if (c.skill === 'identify') return 'How many? Find the number.';
+  if (c.seq) return c.seq.map((n) => (n === null ? 'what' : words(n))).join(', ') + '?';
+  return `${spoken(c.left)} equals ${spoken(c.right)}?`;
+}
 /** The answer read aloud, as a sentence about the fact. */
 export function sayAnswer(c: Challenge): string {
+  if (c.skill === 'identify') return `${words(c.answers[0])}. ${words(c.answers[0])} dots.`;
+  if (c.seq) return c.seq.map((n) => words(n ?? c.answers[0])).join(', ') + '.';
   if (c.mult) return `${words(c.a)} lots of ${words(c.b)} make ${words(c.total)}.`;
   return `${words(c.a)} and ${words(c.b)} make ${words(c.total)}.`;
 }
@@ -128,7 +195,7 @@ export type Gathered = readonly number[];
 
 /** The numbers to show in the equation's blanks for what has been gathered. */
 export function shown(c: Challenge, g: Gathered): number[] {
-  if (c.mode === 'sum') return [g[0] ?? 0];
+  if (c.mode === 'sum' || c.mode === 'pick') return [g[0] ?? 0];
   const [leaves = 0, per = 0] = g;
   if (c.skill === 'pairs') return [leaves, leaves ? per : 0];
   return [leaves * per];
@@ -136,6 +203,7 @@ export function shown(c: Challenge, g: Gathered): number[] {
 
 /** Is the relationship true with what has been gathered? */
 export function accepts(c: Challenge, g: Gathered): boolean {
+  if (c.mode === 'pick') return g[0] === c.answers[0];
   if (c.mode === 'sum') {
     const v = [g[0] ?? 0];
     return Number.isInteger(v[0]) && v[0] > 0 && evaluate(c.left, v) === evaluate(c.right, v);
@@ -149,6 +217,7 @@ export function accepts(c: Challenge, g: Gathered): boolean {
 
 /** More than the relationship can take: this gathering cannot become right by adding. */
 export function overfull(c: Challenge, g: Gathered): boolean {
+  if (c.mode === 'pick') return g.length > 0 && g[0] !== c.answers[0];
   if (c.mode === 'sum') return (g[0] ?? 0) > c.answers[0];
   const [leaves = 0, per = 0] = g;
   if (!leaves) return false;
@@ -174,7 +243,10 @@ const pick = <T>(r: () => number, xs: readonly T[]): T => xs[Math.floor(r() * xs
  * unknown where it is easiest, 1 anywhere, 2 turned round too. `reach` (0..1)
  * widens the numbers within the level. `fact` asks a particular fact (a due one).
  */
-export function makeChallenge(level: number, skill: Skill, r: () => number, form = 0, reach = 1, fact?: { a: number; b: number }): Challenge {
+export function makeChallenge(level: number, skill: Skill, r: () => number, form = 0, reach = 1, fact?: { a: number; b: number }, syllabus: SyllabusId = 'england'): Challenge {
+  const syl = SYLLABI[syllabus];
+  const TABLES = syl.tables;
+  const SIZES = syl.sizes;
   const mult = MULT.includes(skill);
   const k = 0.45 + 0.55 * Math.max(0, Math.min(1, reach));
   const upto = (lo: number, hi: number) => Math.max(lo, Math.round(lo + (hi - lo) * k));
@@ -188,6 +260,29 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
   const any = form >= 1 && r() < 0.5;
 
   switch (skill) {
+    case 'identify': {
+      // which numeral says how many: dots at the top (a dice pattern at first, loose later),
+      // a few leaves' dew gathered into numerals — the answer, and near neighbours to tell apart
+      const n = int(r, 1, upto(5, 9));
+      const near = [n - 1, n + 1, n + 2, n - 2, n === 6 ? 9 : n === 9 ? 6 : n + 3].filter((x) => x >= 1 && x <= 9 && x !== n);
+      const k = level === 0 && form === 0 ? 2 : 3;
+      const choices = [n, ...near.slice(0, k)].sort(() => r() - 0.5);
+      return { skill, level, mode: 'pick', left: 0, right: 0, answers: [n], a: n, b: 0, total: n, mult: false, support: 0, form, dots: n, choices };
+    }
+    case 'sequence': {
+      // before, after and between: 3 4 ?  ·  5 ? 7  ·  ? 6 7 (the one after first; before last)
+      const kind = form === 0 ? 'after' : form === 1 ? pick(r, ['after', 'between'] as const) : pick(r, ['after', 'between', 'before'] as const);
+      const at = kind === 'after' ? 2 : kind === 'between' ? 1 : 0;
+      const start = int(r, kind === 'before' ? 0 : 1, 9 - 2);
+      const run = [start, start + 1, start + 2];
+      const n = run[at];
+      if (n < 1 || n > 9) return makeChallenge(level, skill, r, form, reach, fact, syllabus);
+      const seq: Array<number | null> = run.map((x, i) => (i === at ? null : x));
+      // neighbours to tell apart (a number already in the run is the commonest slip)
+      const near = [n + 1, n - 1, n + 2, n - 2].filter((x) => x >= 1 && x <= 9);
+      const choices = [n, ...near.slice(0, level === 0 ? 2 : 3)].sort(() => r() - 0.5);
+      return { skill, level, mode: 'pick', left: 0, right: 0, answers: [n], a: n, b: 0, total: n, mult: false, support: 0, form, seq, choices };
+    }
     case 'bond': {
       // a + ? = t (a part missing from a whole)
       if (level <= 1) {
@@ -263,9 +358,9 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
       if (level >= 7) {
         // the same product two ways: 4 × 6 = 8 × ?
         const pairs: Array<[number, number, number, number]> = [];
-        for (let x = 2; x <= 12; x++) for (let y = 2; y <= 12; y++) for (let z = 2; z <= 12; z++) {
+        for (let x = 2; x <= syl.top; x++) for (let y = 2; y <= syl.top; y++) for (let z = 2; z <= syl.top; z++) {
           const w = (x * y) / z;
-          if (z !== x && z !== y && Number.isInteger(w) && w >= 2 && w <= 12) pairs.push([x, y, z, w]);
+          if (z !== x && z !== y && Number.isInteger(w) && w >= 2 && w <= syl.top) pairs.push([x, y, z, w]);
         }
         const [x, y, z, w] = pick(r, pairs);
         a = x;
@@ -302,8 +397,8 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
     case 'factor': {
       // a × ? = t: how many in each group (the unknown is a group size ≤ 12, gathered as drops)
       a = pick(r, TABLES[level] ?? [2, 5, 10]);
-      b = int(r, 2, upto(level === 3 ? 5 : 6, level === 6 ? 12 : 10));
-      if (fact && fact.b <= 12) [a, b] = [fact.a, fact.b];
+      b = int(r, 2, upto(level === 3 ? 5 : 6, level === 6 ? syl.top : 10));
+      if (fact && fact.b <= syl.top) [a, b] = [fact.a, fact.b];
       left = any && r() < 0.5 ? op('×', slot(), a) : op('×', a, slot());
       right = a * b;
       answers = [b];
@@ -312,7 +407,7 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
     case 'divide': {
       // t ÷ a = ? (how many in each group, or how many groups): the quotient is gathered
       a = pick(r, TABLES[level] ?? [2, 5, 10]);
-      b = int(r, 2, upto(level === 3 ? 5 : 6, level >= 6 ? 12 : 10));
+      b = int(r, 2, upto(level === 3 ? 5 : 6, level >= 6 ? syl.top : 10));
       left = op('÷', a * b, a);
       right = slot();
       answers = [b];
@@ -364,7 +459,9 @@ export interface CurriculumData {
   level: number;
   /** Where a grown-up placed the child (the floor a step back does not go below, less one). */
   placement: number;
-  /** The school year a grown-up chose (index into YEARS), if any. */
+  /** The school system a grown-up chose (default Scotland). */
+  syllabus: SyllabusId;
+  /** The school year a grown-up chose (index into its syllabus's years), if any. */
   year?: number;
   counting: number;
   skills: Record<string, Evidence>;
@@ -391,6 +488,7 @@ export class Curriculum {
       v: 2,
       level,
       placement: v2 && Number.isFinite(saved!.placement) ? saved!.placement! : level,
+      syllabus: v2 && saved!.syllabus && saved!.syllabus in SYLLABI ? saved!.syllabus : DEFAULT_SYLLABUS,
       year: v2 ? saved!.year : undefined,
       counting: saved?.counting ?? 0,
       skills: v2 ? saved!.skills ?? {} : {},
@@ -404,10 +502,27 @@ export class Curriculum {
     return LEVELS[this.data.level];
   }
 
+  get syllabus(): Syllabus {
+    return SYLLABI[this.data.syllabus];
+  }
+
+  /** The level's name and stage in this child's syllabus ("Facts within 10 · First level (P2)"). */
+  describe(level = this.data.level): string {
+    return `${levelName(level, this.data.syllabus)} · ${this.syllabus.stage[level]}`;
+  }
+
+  /** A grown-up's choice of school system (keeps the year if one was chosen). */
+  setSyllabus(id: SyllabusId) {
+    if (!(id in SYLLABI)) return;
+    this.data.syllabus = id;
+    if (this.data.year !== undefined) this.setYear(Math.min(this.data.year, this.syllabus.years.length - 1));
+  }
+
   /** A grown-up's choice of school year: the starting level, and the floor under it. */
   setYear(i: number) {
-    const y = YEARS[Math.max(0, Math.min(YEARS.length - 1, Math.trunc(i)))];
-    this.data.year = YEARS.indexOf(y);
+    const years = this.syllabus.years;
+    const y = years[Math.max(0, Math.min(years.length - 1, Math.trunc(i)))];
+    this.data.year = years.indexOf(y);
     this.setLevel(y[1]);
     this.data.placement = y[1];
   }
@@ -418,9 +533,15 @@ export class Curriculum {
     if (this.data.level === 0) this.data.counting = 0;
   }
 
-  /** A counting answer (level 0): three clean ones and the relationships begin. */
+  /**
+   * A counting answer (level 0). Three clean ones, and the numerals recognised
+   * (two clean in a row), and the relationships begin.
+   */
   counted(clean: boolean) {
-    if (clean && ++this.data.counting >= 3 && this.data.level === 0) this.setLevel(1);
+    if (!clean) return;
+    this.data.counting++;
+    const numerals = (this.evidence(0, 'identify')?.streak ?? 0) >= 2;
+    if (this.data.counting >= 3 && numerals && this.data.level === 0) this.setLevel(1);
   }
 
   private evidence(level: number, skill: Skill): Evidence | undefined {
@@ -432,9 +553,10 @@ export class Curriculum {
    * secure, a reach what is least, relief reviews the level before. `due` is a
    * fact the memory wants back (asked if a skill here can carry it).
    */
-  next(rand: () => number, opts: { phase?: string; due?: { a: number; b: number; mult: boolean } | null } = {}): Challenge {
+  next(rand: () => number, opts: { phase?: string; due?: { a: number; b: number; mult: boolean } | null; skill?: Skill } = {}): Challenge {
     const d = this.data;
-    const here = Math.max(1, d.level);
+    // level 0 asks only its numeral questions here (its counting is the dew-collecting loop)
+    const here = d.level;
     const review = here > 1 && (opts.phase === 'relief' || d.serial % 6 === 5);
     const level = review ? here - 1 : here;
     const pool = LEVELS[level].skills;
@@ -451,6 +573,9 @@ export class Curriculum {
       })
       .sort((x, y) => y.score - x.score);
     let skill = ranked[0].skill;
+    // a forced question type (debug: `?ask=`), asked at the level that holds it
+    const forced = opts.skill ? LEVELS.findIndex((l, i) => i >= Math.min(here, 1) && l.skills.includes(opts.skill!)) : -1;
+    if (forced >= 0) return this.ask(forced, opts.skill!, rand);
     let fact: { a: number; b: number } | undefined;
     if (opts.due && !review) {
       const fit = ranked.find((s) => MULT.includes(s.skill) === opts.due!.mult && (s.skill === 'bond' || s.skill === 'groups' || s.skill === 'factor'));
@@ -459,18 +584,25 @@ export class Curriculum {
         fact = { a: opts.due.a, b: opts.due.b };
       }
     }
+    return this.ask(level, skill, rand, fact);
+  }
+
+  /** One question of a skill at a level, shaped by the child's evidence in it. */
+  private ask(level: number, skill: Skill, rand: () => number, fact?: { a: number; b: number }): Challenge {
+    const d = this.data;
     const e = this.evidence(level, skill);
     const clean = e?.clean ?? 0;
     const form = clean < 2 ? 0 : clean < 5 ? 1 : 2;
     const reach = Math.min(1, clean / 6);
+    const key = (x: Challenge) => x.skill + '|' + (x.seq ? x.seq.join(',') : x.dots ?? equation(x));
     let c: Challenge;
     let tries = 0;
-    do c = makeChallenge(level, skill, rand, form, reach, tries ? undefined : fact);
-    while (d.recent.includes(c.skill + '|' + equation(c)) && ++tries < 16);
+    do c = makeChallenge(level, skill, rand, form, reach, tries ? undefined : fact, d.syllabus);
+    while (d.recent.includes(key(c)) && ++tries < 16);
     // the picture under the equation: full while the skill is new, gone once it is known
     const small = c.mode === 'groups' ? c.total <= 36 : c.total <= 20;
-    c.support = small ? Math.max(0, 1 - clean / 5) : 0;
-    d.recent = [...d.recent, c.skill + '|' + equation(c)].slice(-12);
+    c.support = small && c.mode !== 'pick' ? Math.max(0, 1 - clean / 5) : 0;
+    d.recent = [...d.recent, key(c)].slice(-12);
     return c;
   }
 

@@ -90,6 +90,11 @@
     @keyframes answered { 0% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } 30% { text-shadow: 0 0 26px rgba(253, 246, 204, .95), 0 0 6px rgba(253, 246, 204, .9); } 100% { text-shadow: 0 2px 16px #001b19; } }
     #relationship.over .blank { animation: over .5s ease-in-out; }
     @keyframes over { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(2px); } }
+    /* a numeral question: how many (dots, as large as a numeral), or numbers in order with one missing */
+    #relationship .dots { position: relative; display: inline-block; font-size: clamp(30px, 9vw, 40px); }
+    #relationship .dots i { position: absolute; width: .3em; height: .3em; border-radius: 50%; background: #fbf6d8; box-shadow: 0 0 10px rgba(249, 233, 163, .45), 0 2px 10px #001b19; }
+    #relationship .equation .gap { width: .35em; }
+    #relationship.over .dots { animation: over .5s ease-in-out; }
     #relationship .model { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; max-width: 330px; transition: opacity 1.2s; }
     #relationship .model i { width: 8px; height: 8px; border: 1px solid rgba(240, 236, 190, .75); border-radius: 50%; transition: background .5s, box-shadow .5s, transform .5s; }
     #relationship .model i.known { background: rgba(240, 236, 190, .55); border-color: transparent; }
@@ -111,6 +116,8 @@
     #grownups h2 { margin: 0 0 8px; font-weight: normal; font-size: 12px; letter-spacing: 4px; text-transform: uppercase; opacity: .8; }
     #grownups p { margin: 0 0 12px; }
     #grownups .now { font-size: 12px; opacity: .75; }
+    #grownups .systems { display: flex; gap: 6px; margin-bottom: 10px; }
+    #grownups .systems button { flex: 1; font-size: 13px; padding: 8px 4px; }
     #grownups .years { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
     #grownups button { position: static; opacity: .9; font-size: 14px; padding: 10px; border-radius: 10px; border: 1px solid #c1cca344; }
     #grownups button[aria-pressed=true] { background: #e9e4b91a; border-color: #e9e4b9aa; }

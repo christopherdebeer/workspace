@@ -1,6 +1,8 @@
 /**
- * Numerals and signs drawn in water (an experiment: `?glyphs=1`, `?glyphs=half`,
- * `?glyphs=sheet`, `?glyphs=repeat`).
+ * Numerals and signs drawn in water. In play, only where the numeral itself is
+ * the question (challenges.ts `pick`: which numeral says how many, which comes
+ * next) — the leaves' dew gathers into its numeral for the question and back
+ * into dew after. Debug views: `?glyphs=1 | half | morph | sheet | repeat`.
  *
  * The atlas holds only each glyph's KEY SHAPE — the path a wet fingertip takes,
  * as a few strokes — and nothing of how it is drawn. Per texel it stores how far
@@ -170,11 +172,23 @@ export function glyphField(ch: string): Float32Array {
  * distance along the stroke to its nearest free end, both in glyph units.
  */
 export function glyphAtlas(): { data: Float32Array; size: number } {
+  const bake = glyphAtlasSteps();
+  let r = bake.next();
+  while (!r.done) r = bake.next();
+  return r.value;
+}
+
+/**
+ * The same atlas, a glyph a step: the page bakes it between frames (setTimeout
+ * between steps) so a phone never stalls for the second it takes all at once.
+ */
+export function* glyphAtlasSteps(): Generator<void, { data: Float32Array; size: number }> {
   const N = GLYPH_CELL;
   const size = N * 4;
   const data = new Float32Array(size * size * 4);
-  [...GLYPHS].forEach((ch, g) => {
-    const field = glyphField(ch);
+  for (let g = 0; g < GLYPHS.length; g++) {
+    yield;
+    const field = glyphField(GLYPHS[g]);
     const cx = (g % 4) * N;
     const cy = Math.floor(g / 4) * N;
     for (let j = 0; j < N; j++) {
@@ -185,7 +199,7 @@ export function glyphAtlas(): { data: Float32Array; size: number } {
         data[o + 3] = 1;
       }
     }
-  });
+  }
   return { data, size };
 }
 

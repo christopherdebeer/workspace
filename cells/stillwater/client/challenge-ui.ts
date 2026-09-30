@@ -1,4 +1,4 @@
-import { equation, LEVELS, say, sayAnswer, shown, YEARS, type Challenge, type Expr, type Gathered } from './challenges';
+import { equation, slot, say, sayAnswer, shown, SYLLABI, type Challenge, type Expr, type Gathered, type SyllabusId } from './challenges';
 
 /**
  * The question at the top of the river: one clear equation, as large and
@@ -35,6 +35,7 @@ export class ChallengeUI {
   onHelp: (step: number) => void = () => {};
   onSkip: () => void = () => {};
   onYear: (year: number) => void = () => {};
+  onSyllabus: (id: SyllabusId) => void = () => {};
 
   constructor() {
     this.root.id = 'relationship';
@@ -107,12 +108,29 @@ export class ChallengeUI {
       parent.append(sign);
       render(e.b, parent);
     };
-    render(c.left, this.eq);
-    const is = document.createElement('span');
-    is.className = 'sign';
-    is.textContent = '=';
-    this.eq.append(is);
-    render(c.right, this.eq);
+    if (c.dots) {
+      // how many? — the quantity as dots, as large as a numeral: a dice pattern while the
+      // child is learning it, loose once it is known (the numeral is on the leaves)
+      this.eq.append(this.pattern(c.dots, c.form >= 2));
+    } else if (c.seq) {
+      // the numbers in order, one missing
+      c.seq.forEach((n, i) => {
+        if (i) {
+          const gap = document.createElement('span');
+          gap.className = 'gap';
+          this.eq.append(gap);
+        }
+        if (n === null) render(slot(), this.eq);
+        else render(n, this.eq);
+      });
+    } else {
+      render(c.left, this.eq);
+      const is = document.createElement('span');
+      is.className = 'sign';
+      is.textContent = '=';
+      this.eq.append(is);
+      render(c.right, this.eq);
+    }
     this.drawModel(c);
     this.progress([]);
     this.live.textContent = say(c);
@@ -128,12 +146,59 @@ export class ChallengeUI {
     this.root.hidden = value || !this.visible;
   }
 
+  /** A quantity as dots: dice patterns to six, five-and-some beyond, or a loose scatter. */
+  private pattern(n: number, loose: boolean): HTMLElement {
+    const box = document.createElement('span');
+    box.className = 'dots';
+    const dice: Record<number, Array<[number, number]>> = {
+      1: [[1, 1]],
+      2: [[0, 0], [2, 2]],
+      3: [[0, 0], [1, 1], [2, 2]],
+      4: [[0, 0], [2, 0], [0, 2], [2, 2]],
+      5: [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]],
+      6: [[0, 0], [2, 0], [0, 1], [2, 1], [0, 2], [2, 2]],
+    };
+    const place = (x: number, y: number) => {
+      const i = document.createElement('i');
+      i.style.left = `${x}em`;
+      i.style.top = `${y}em`;
+      box.append(i);
+    };
+    if (loose) {
+      // a loose scatter (seeded by n, so it holds still)
+      let s = n * 97 + 13;
+      const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+      const pts: Array<[number, number]> = [];
+      for (let tries = 0; pts.length < n && tries < 400; tries++) {
+        const p: [number, number] = [rnd() * 2.6, rnd() * 1.4];
+        if (pts.every(([x, y]) => Math.hypot(x - p[0], y - p[1]) > 0.52)) pts.push(p);
+      }
+      pts.forEach(([x, y]) => place(x, y));
+      box.style.width = '3em';
+      box.style.height = '1.8em';
+    } else if (n <= 6) {
+      dice[n].forEach(([x, y]) => place(x * 0.55, y * 0.55));
+      box.style.width = '1.5em';
+      box.style.height = '1.5em';
+    } else {
+      dice[5].forEach(([x, y]) => place(x * 0.55, y * 0.55));
+      dice[n - 5].forEach(([x, y]) => place(1.9 + x * 0.55, y * 0.55));
+      box.style.width = '3.4em';
+      box.style.height = '1.5em';
+    }
+    return box;
+  }
+
   /** The picture of the relationship, in dots. */
   private drawModel(c: Challenge) {
     this.model.replaceChildren();
     this.dots = [];
     this.rings = [];
     this.model.className = 'model';
+    if (c.mode === 'pick') {
+      this.model.style.opacity = '0';
+      return;
+    }
     const dot = (cls = '') => {
       const i = document.createElement('i');
       if (cls) i.className = cls;
@@ -253,16 +318,29 @@ export class ChallengeUI {
 
   // ─── for grown-ups ──────────────────────────────────────────────────────────
 
-  openGrownUps(year: number | undefined, level: number) {
+  openGrownUps(syllabus: SyllabusId, year: number | undefined, now: string) {
     const g = this.grown;
     g.replaceChildren();
     const h = document.createElement('h2');
     h.textContent = 'For grown-ups';
     const p = document.createElement('p');
-    p.textContent = 'Which school year is this child in? The river starts there, moves on when answers hold on more than one day, and steps back if a level is not holding yet.';
+    p.textContent = 'Where does this child go to school, and which year are they in? The river starts there, moves on when answers hold on more than one day, and steps back if a level is not holding yet.';
+    const systems = document.createElement('div');
+    systems.className = 'systems';
+    (Object.keys(SYLLABI) as SyllabusId[]).forEach((id) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = SYLLABI[id].name;
+      b.setAttribute('aria-pressed', String(id === syllabus));
+      b.onclick = () => {
+        this.onSyllabus(id);
+        this.openGrownUps(id, year, now);
+      };
+      systems.append(b);
+    });
     const row = document.createElement('div');
     row.className = 'years';
-    YEARS.forEach(([label], i) => {
+    SYLLABI[syllabus].years.forEach(([label], i) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = label;
@@ -273,17 +351,17 @@ export class ChallengeUI {
       };
       row.append(b);
     });
-    const now = document.createElement('p');
-    now.className = 'now';
-    now.textContent = `Now: ${LEVELS[level].name} (${LEVELS[level].year}).`;
+    const at = document.createElement('p');
+    at.className = 'now';
+    at.textContent = `Now: ${now}.`;
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'close';
     close.textContent = 'close';
     close.onclick = () => this.closeGrownUps();
-    g.append(h, p, row, now, close);
+    g.append(h, p, systems, row, at, close);
     g.hidden = false;
-    (row.querySelector('[aria-pressed=true]') as HTMLElement | null ?? row.firstElementChild as HTMLElement)?.focus();
+    ((row.querySelector('[aria-pressed=true]') as HTMLElement | null) ?? (row.firstElementChild as HTMLElement))?.focus();
   }
 
   closeGrownUps() {

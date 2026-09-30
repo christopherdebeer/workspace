@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const C = require('/tmp/stillwater-challenges.cjs');
 let seed = 67890;
 const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
-const answerOf = (c) => (c.mode === 'sum' ? [c.answers[0]] : c.skill === 'pairs' ? c.answers : [c.a, c.b]);
+const answerOf = (c) => (c.mode !== 'groups' ? [c.answers[0]] : c.skill === 'pairs' ? c.answers : [c.a, c.b]);
 let tested = 0;
 for (let level = 1; level <= C.TOP; level++)
   for (const skill of C.LEVELS[level].skills)
@@ -13,7 +13,7 @@ for (let level = 1; level <= C.TOP; level++)
       for (let i = 0; i < 100; i++) {
         const c = C.makeChallenge(level, skill, rand, form, i / 100);
         assert(C.accepts(c, answerOf(c)), C.equation(c));
-        if (c.mode === 'sum') assert(c.answers[0] <= 20 && !C.accepts(c, [c.answers[0] + 1]), C.equation(c));
+        if (c.mode !== 'groups') assert(c.answers[0] <= 20 && !C.accepts(c, [c.answers[0] + 1]), C.equation(c));
         else {
           const n = C.groupsNeed(c);
           assert(n.size <= 6 && n.count <= 6, C.equation(c));

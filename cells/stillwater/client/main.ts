@@ -24,9 +24,10 @@ import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
 import { Curriculum, accepts, overfull, completable, groupsNeed, equation, type Challenge } from './challenges';
+import type { SyllabusId } from './challenges';
 import { ChallengeUI } from './challenge-ui';
 import { glInfo, probe, report } from './report';
-import { glyphAtlas, glyphIndex, GLYPHS } from './glyphs';
+import { glyphAtlas, glyphAtlasSteps, glyphIndex, GLYPHS } from './glyphs';
 import { PROGRAMS } from './render';
 import { program } from './gl';
 import { layDrops, liveCount, Pad, Planting, Pond, seeded } from './world';
@@ -46,6 +47,8 @@ let relationShownAt = 0;
 let relationClearAt = 0;
 /** After a gathering was too much: the leaf the river lets go, and when. */
 let relationRelease: { pad: Pad; at: number } | null = null;
+/** For a numeral question: the leaves whose dew is gathered into its numeral (glyphs.ts). */
+let numeralLeaves: Pad[] = [];
 const sound = new Sound();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
@@ -277,12 +280,14 @@ let checkAt = 0;
 /** What the leaves hold: `sum` [drops]; `groups` [leaves, drops a leaf]. */
 function relationGathered(): number[] {
   if (!relationship) return [];
+  if (relationship.mode === 'pick') return relationLeaves.length ? [liveCount(relationLeaves[0])] : [];
   if (relationship.mode === 'sum') return [relationLeaves.reduce((n, p) => n + liveCount(p), 0)];
   return relationLeaves.length ? [relationLeaves.length, liveCount(relationLeaves[0])] : [];
 }
 function clearRelation() {
   for (const p of relationLeaves) p.selected = false;
   relationLeaves = [];
+  numeralLeaves = [];
   selection = relationLeaves;
   relationRelease = null;
   if (relationship) mathUI.progress(relationGathered());
@@ -321,12 +326,14 @@ function solveRelation() {
   relationLeaves = [];
   selection = relationLeaves;
   relationRelease = null;
+  numeralLeaves = [];
   const clean = relationHelp === 0 && relationAttempts === 0;
   curriculum.record(c, clean, today());
   // what the river remembers (P1) and how the stretch goes (P3), as for the counting
   const q = L.quality({ secs: pond.t - relationShownAt, leaves: chosen.length, value: c.total, friction: relationAttempts, scaffold: relationHelp, counting: false });
-  const fact = c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
-  const { newWay } = memory.record(fact, q, Date.now());
+  // a numeral question is about the numeral, not a fact to be remembered
+  const fact = c.mode === 'pick' ? null : c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
+  const newWay = fact ? memory.record(fact, q, Date.now()).newWay : false;
   const phase = stretch.phase;
   stretch.answered({ q, friction: relationAttempts });
   mathUI.complete(g);
@@ -351,6 +358,12 @@ mathUI.onSkip = () => {
   relationship = null;
   mathUI.hide();
   nextTargetAt = pond.t + 0.5;
+  save();
+};
+/** A grown-up's choice of school system: the years and tables that follow from it. */
+mathUI.onSyllabus = (id: SyllabusId) => {
+  if (!profile) return;
+  curriculum.setSyllabus(id);
   save();
 };
 /** A grown-up's choice of school year (the panel under a long press on the title). */
@@ -458,6 +471,33 @@ function ensureRelationshipPads() {
     p.drops = layDrops(n, p.r, rand, true);
     stock.push(p);
   };
+  if (c.mode === 'pick') {
+    // the numerals to choose from, each on a leaf in clear view: its dew flows into the numeral
+    const inView = new Set(relationStock());
+    // one leaf a numeral (never the same numeral twice), and only the numerals asked for
+    const seen = new Set<number>();
+    numeralLeaves = numeralLeaves.filter((p) => {
+      const n = liveCount(p);
+      const keep = (inView.has(p) || p.selected) && n > 0 && (c.choices ?? []).includes(n) && !seen.has(n);
+      if (keep) seen.add(n);
+      return keep;
+    });
+    for (const n of c.choices ?? []) {
+      if (seen.has(n)) continue;
+      // a small leaf cannot always hold many drops: lay, check, and try a bigger one if it fell short
+      for (const p of dry) {
+        if (numeralLeaves.includes(p) || p.drops.length) continue;
+        p.drops = layDrops(n, p.r, rand, true);
+        if (liveCount(p) === n) {
+          numeralLeaves.push(p);
+          seen.add(n);
+          break;
+        }
+        p.drops = [];
+      }
+    }
+    return;
+  }
   if (c.mode === 'sum') {
     for (const p of dry) {
       if (completable(c, g, counts(stock)) && stock.length >= 3) break;
@@ -550,8 +590,14 @@ function setTarget() {
     startFinale();
     return;
   }
-  if (!forcedStage && curriculum.data.level > 0) {
-    relationship = curriculum.next(rand, { phase, due: phase === 'reach' || phase === 'warm' ? dueFact() : null });
+  // numeral questions (which numeral says how many; which comes next) are mixed in with the
+  // counting once the child has gathered a first number; from Facts within 10 on, it is all questions
+  const numeralTurn = curriculum.data.level === 0 && ((curriculum.data.counting >= 1 && rand() < 0.45) || !!params.get('ask'));
+  if (!forcedStage && (curriculum.data.level > 0 || numeralTurn)) {
+    // `?ask=identify` (or any skill) asks that type of question, for looking at it
+    const askParam = (params.get('ask') ?? undefined) as Challenge['skill'] | undefined;
+    relationship = curriculum.next(rand, { phase, due: phase === 'reach' || phase === 'warm' ? dueFact() : null, skill: askParam });
+    numeralLeaves = [];
     relationLeaves = [];
     selection = relationLeaves;
     relationHelp = 0;
@@ -769,6 +815,30 @@ function clearSelection() {
 }
 
 function choose(p: Pad) {
+  if (relationship?.mode === 'pick') {
+    if (visit || pageOpen || lock > 0 || !liveCount(p)) return;
+    // only a numeral answers a numeral question; a leaf of plain dew just bobs
+    if (!numeralLeaves.includes(p)) {
+      p.bob = Math.min(1, p.bob + 0.5);
+      return;
+    }
+    relationLeaves = [p];
+    selection = relationLeaves;
+    p.selected = true;
+    const g = relationGathered();
+    mathUI.progress(g);
+    if (accepts(relationship, g)) solveRelation();
+    else {
+      // not that one: a low note, the leaf bobs and is let go again (no words)
+      relationAttempts++;
+      sound.note(0, panAt(p.x));
+      p.bob = 1;
+      mathUI.over();
+      lock = 0.6;
+      relationRelease = { pad: p, at: pond.t + 0.55 };
+    }
+    return;
+  }
   if (relationship) {
     if (visit || pageOpen || lock > 0 || !liveCount(p)) return;
     const at = relationLeaves.indexOf(p);
@@ -1016,7 +1086,7 @@ function telemetry() {
   titleEl?.addEventListener('pointerdown', () => {
     cancel();
     hold = window.setTimeout(() => {
-      if (profile) mathUI.openGrownUps(curriculum.data.year, curriculum.data.level);
+      if (profile) mathUI.openGrownUps(curriculum.data.syllabus, curriculum.data.year, curriculum.describe());
     }, 900);
     const now = performance.now();
     taps = taps.filter((t) => now - t < 1500);
@@ -2262,8 +2332,42 @@ function flowToward(p: Pad, to: number, dt: number) {
   if (p.glyphT >= 1 && p.glyph < 0) p.glyph = undefined;
 }
 
+/** Bake the atlas a glyph at a time between frames, then hand it to the renderer. */
+let baking = false;
+function bakeGlyphs() {
+  if (baking || glyphsReady || !renderer) return;
+  baking = true;
+  const steps = glyphAtlasSteps();
+  const step = () => {
+    const r = steps.next();
+    if (r.done) {
+      renderer.enableGlyphs(r.value);
+      glyphsReady = true;
+      return;
+    }
+    window.setTimeout(step, 16);
+  };
+  step();
+}
+
 function waterGlyphs(dt: number) {
-  if (!glyphMode || !renderer) return;
+  if (!renderer) return;
+  if (!glyphMode) {
+    // in play: numerals only for a numeral question's leaves; everything else is dew
+    if (!glyphsReady) {
+      if (numeralLeaves.length || (profile && curriculum.data.level <= 1)) bakeGlyphs();
+      return;
+    }
+    for (const p of numeralLeaves) {
+      const n = liveCount(p);
+      flowToward(p, n >= 1 && n <= 9 ? n : n ? -1 : -2, dt);
+    }
+    for (const p of pond.pads) {
+      if (p.glyph === undefined || numeralLeaves.includes(p)) continue;
+      flowToward(p, p.drops.some((d) => d.to > 0) ? -1 : -2, dt);
+    }
+    return;
+  }
   if (!glyphsReady) {
     renderer.enableGlyphs(glyphAtlas());
     glyphsReady = true;
@@ -2332,7 +2436,7 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
-    challenge: relationship ? { equation: equation(relationship), skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
+    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
     curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),
