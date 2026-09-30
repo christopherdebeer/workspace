@@ -47,8 +47,13 @@ let relationShownAt = 0;
 let relationClearAt = 0;
 /** After a gathering was too much: the leaf the river lets go, and when. */
 let relationRelease: { pad: Pad; at: number } | null = null;
-/** For a numeral question: the leaves whose dew is gathered into its numeral (glyphs.ts). */
+/** For a choose question: the leaves carrying candidate numerals (glyphs.ts), and what each says. */
 let numeralLeaves: Pad[] = [];
+const optionOf = new Map<Pad, number>();
+/** For a choose question: the numerals put in its blanks so far, left to right. */
+let chosenValues: number[] = [];
+/** A leaf's numeral as a water state: one numeral (0–9), or two side by side (100 + n). */
+const numeralCode = (n: number) => (n <= 9 ? n : 100 + n);
 const sound = new Sound();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
@@ -282,7 +287,7 @@ let checkAt = 0;
 /** What the leaves hold: `sum` [drops]; `groups` [leaves, drops a leaf]. */
 function relationGathered(): number[] {
   if (!relationship) return [];
-  if (relationship.mode === 'pick') return relationLeaves.length ? [liveCount(relationLeaves[0])] : [];
+  if (relationship.mode === 'pick') return chosenValues.slice();
   if (relationship.mode === 'sum') return [relationLeaves.reduce((n, p) => n + liveCount(p), 0)];
   return relationLeaves.length ? [relationLeaves.length, liveCount(relationLeaves[0])] : [];
 }
@@ -290,6 +295,8 @@ function clearRelation() {
   for (const p of relationLeaves) p.selected = false;
   relationLeaves = [];
   numeralLeaves = [];
+  optionOf.clear();
+  chosenValues = [];
   selection = relationLeaves;
   relationRelease = null;
   if (relationship) mathUI.progress(relationGathered());
@@ -325,16 +332,22 @@ function solveRelation() {
   }
   window.setTimeout(() => chosen.forEach((p) => (p.selected = false)), 900);
   solvedThread = { pads: chosen, until: pond.t + 0.9 };
+  // a chosen numeral goes up as light from its leaf, as dew would
+  if (c.mode === 'pick') {
+    for (const p of chosen) for (let k = 0; k < 3; k++) lifts.push({ x0: p.x + (rand() - 0.5) * p.r * 0.6, y0: p.y + (rand() - 0.5) * p.r * 0.6, t: 0, dur: 1.5 + rand() * 0.6, delay: order++ * 0.06, bend: (rand() * 2 - 1) * 60, radius: p.r * 0.12 });
+  }
   relationLeaves = [];
   selection = relationLeaves;
   relationRelease = null;
   numeralLeaves = [];
+  optionOf.clear();
+  chosenValues = [];
   const clean = relationHelp === 0 && relationAttempts === 0;
   curriculum.record(c, clean, today());
   // what the river remembers (P1) and how the stretch goes (P3), as for the counting
   const q = L.quality({ secs: pond.t - relationShownAt, leaves: chosen.length, value: c.total, friction: relationAttempts, scaffold: relationHelp, counting: false });
   // a numeral question is about the numeral, not a fact to be remembered
-  const fact = c.mode === 'pick' ? null : c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
+  const fact = c.skill === 'identify' || c.skill === 'sequence' ? null : c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
   const newWay = fact ? memory.record(fact, q, Date.now()).newWay : false;
   const phase = stretch.phase;
   stretch.answered({ q, friction: relationAttempts });
@@ -396,10 +409,13 @@ mathUI.onYear = (year) => {
  * or half off the side is not an answer anyone can find (playtest: an ask
  * whose only answer lay there was maddening).
  */
-function visibleDewy(): Pad[] {
+/** A leaf a touch answers with: dew to gather, or a numeral to choose (INTERACTION.md). */
+const answerable = (p: Pad) => liveCount(p) > 0 || (relationship?.mode === 'pick' && optionOf.has(p));
+
+function visibleDewy(answering = false): Pad[] {
   const out: Pad[] = [];
   for (const p of pond.pads) {
-    if (!liveCount(p)) continue;
+    if (!(answering ? answerable(p) : liveCount(p))) continue;
     const [sx, sy] = toScreen(p.x, p.y);
     const inset = p.r * cam.zoom * 0.7;
     if (sx - inset < 8 || sx + inset > cam.cssW - 8) continue;
@@ -484,30 +500,22 @@ function ensureRelationshipPads() {
     if (numerals) numeralLeaves = [...new Set([...relationLeaves, ...stock])].filter((p) => liveCount(p) >= 1 && liveCount(p) <= 9);
   };
   if (c.mode === 'pick') {
-    // the numerals to choose from, each on a leaf in clear view: its dew flows into the numeral
-    const inView = new Set(relationStock());
-    // one leaf a numeral (never the same numeral twice), and only the numerals asked for
-    const seen = new Set<number>();
-    numeralLeaves = numeralLeaves.filter((p) => {
-      const n = liveCount(p);
-      const keep = (inView.has(p) || p.selected) && n > 0 && (c.choices ?? []).includes(n) && !seen.has(n);
-      if (keep) seen.add(n);
-      return keep;
-    });
-    for (const n of c.choices ?? []) {
-      if (seen.has(n)) continue;
-      // a small leaf cannot always hold many drops: lay, check, and try a bigger one if it fell short
-      for (const p of dry) {
-        if (numeralLeaves.includes(p) || p.drops.length) continue;
-        p.drops = layDrops(n, p.r, rand, true);
-        if (liveCount(p) === n) {
-          numeralLeaves.push(p);
-          seen.add(n);
-          break;
-        }
-        p.drops = [];
-      }
+    // choose (INTERACTION.md): each candidate numeral on a leaf in clear view — a leaf without
+    // counting dew, its fine dew (or a bare leaf's first beads) gathering into the numeral. One
+    // numeral a leaf, never the same one twice; a leaf that drifts off or sinks is replaced
+    const inView = new Set([...relationStock(), ...relationStock(true)]);
+    for (const [p, v] of [...optionOf]) {
+      if (!(inView.has(p) || p.selected) || !(c.choices ?? []).includes(v) || !numeralLeaves.includes(p)) optionOf.delete(p);
     }
+    const shown = new Set(optionOf.values());
+    for (const v of c.choices ?? []) {
+      if (shown.has(v)) continue;
+      const p = dry.find((q) => !optionOf.has(q) && !q.drops.length && q.r >= 26);
+      if (!p) break;
+      optionOf.set(p, v);
+      shown.add(v);
+    }
+    numeralLeaves = [...optionOf.keys()];
     return;
   }
   if (c.mode === 'sum') {
@@ -833,27 +841,30 @@ function clearSelection() {
 
 function choose(p: Pad) {
   if (relationship?.mode === 'pick') {
-    if (visit || pageOpen || lock > 0 || !liveCount(p)) return;
-    // only a numeral answers a numeral question; a leaf of plain dew just bobs
-    if (!numeralLeaves.includes(p)) {
+    // choose: one touch puts that leaf's numeral in the waiting blank (INTERACTION.md)
+    if (visit || pageOpen || lock > 0) return;
+    const v = optionOf.get(p);
+    if (v === undefined) {
+      // only a numeral answers; any other leaf just bobs
       p.bob = Math.min(1, p.bob + 0.5);
       return;
     }
-    relationLeaves = [p];
+    chosenValues = [...chosenValues, v];
+    relationLeaves = [...relationLeaves, p];
     selection = relationLeaves;
     p.selected = true;
     const g = relationGathered();
     mathUI.progress(g);
     if (accepts(relationship, g)) solveRelation();
-    else {
-      // not that one: a low note, the leaf bobs and is let go again (no words)
+    else if (overfull(relationship, g)) {
+      // not that one: a low note, the leaf bobs, and the numeral leaves its blank (no words)
       relationAttempts++;
       sound.note(0, panAt(p.x));
       p.bob = 1;
       mathUI.over();
       lock = 0.6;
       relationRelease = { pad: p, at: pond.t + 0.55 };
-    }
+    } else sound.note(Math.min(6, chosenValues.length + 1), panAt(p.x));
     return;
   }
   if (relationship) {
@@ -1056,7 +1067,7 @@ function hitOrNear(sx: number, sy: number): Pad | null {
   let best: Pad | null = null;
   let bestD = slack;
   for (const p of pond.pads) {
-    if (!liveCount(p)) continue;
+    if (!answerable(p)) continue;
     const d = Math.hypot(wx - p.x, wy - p.y) - p.r * 0.97;
     if (d < bestD) { bestD = d; best = p; }
   }
@@ -1770,7 +1781,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
   if (visit) endVisit();
   const hitPad = hitOrNear(e.clientX, e.clientY);
   // the boat, or the water astern of it (unless that's a dewy leaf to gather): the helm
-  if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && liveCount(hitPad)))) {
+  if (pond.onBoat(bwx, bwy) || (pond.behindBoat(bwx, bwy) && !(hitPad && answerable(hitPad)))) {
     // where on the boat: across (a tap there leans on that oar) and fore or aft of the
     // centre (dragging the front half swings the bow, the back half swings the stern)
     const [lx, ly] = pond.boatLocal(bwx, bwy);
@@ -1785,7 +1796,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
     return;
   }
   // a leaf with dew is a choice; anywhere else — water or a dry leaf — the touch is wind
-  const p = hitPad && liveCount(hitPad) ? hitPad : null;
+  const p = hitPad && answerable(hitPad) ? hitPad : null;
   lastHit = p;
   // …unless a creature or a flower is under the fingertip: then it is noticed (the notebook)
   // — and a spent flower's seed head gives up a seed to carry (planting, NARRATIVE-DESIGN.md §3)
@@ -1873,7 +1884,8 @@ canvasEl.addEventListener('pointermove', (e) => {
     return;
   }
   const p = hit(e.clientX, e.clientY);
-  if (!p || p === lastHit) return;
+  // choosing is one touch a numeral; a finger drawn across leaves does not fill blanks
+  if (!p || p === lastHit || relationship?.mode === 'pick') return;
   // tracing back onto the previous leaf lets the last one go
   if (selection.length > 1 && selection[selection.length - 2] === p) {
     const last = selection.pop()!;
@@ -1939,7 +1951,7 @@ canvasEl.addEventListener('keydown', (e) => {
   }
   if(e.key === 'Escape' && visit) { endVisit(); return; }
   if(visit)endVisit();
-  const pads = visibleDewy().sort((a, b) => b.y - a.y || a.x - b.x);
+  const pads = visibleDewy(true).sort((a, b) => b.y - a.y || a.x - b.x);
   if (e.key === 'Escape') {
     if(visit) { endVisit(); return; }
     clearSelection();
@@ -1954,7 +1966,7 @@ canvasEl.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1;
     focusIx = ((cur < 0 ? (step > 0 ? -1 : 0) : cur) + step + pads.length) % pads.length;
     pads[focusIx].focus = true;
-    ui.announce(`Leaf with ${liveCount(pads[focusIx])} drops${pads[focusIx].selected ? ', chosen' : ''}.`);
+    ui.announce(optionOf.has(pads[focusIx]) ? `Leaf with ${optionOf.get(pads[focusIx])}.` : `Leaf with ${liveCount(pads[focusIx])} drops${pads[focusIx].selected ? ', chosen' : ''}.`);
   } else if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
     const p = pond.pads.find((q) => q.focus);
@@ -2189,10 +2201,11 @@ function frame(now: number) {
   if (relationRelease && pond.t >= relationRelease.at) {
     const { pad } = relationRelease;
     relationRelease = null;
-    const i = relationLeaves.indexOf(pad);
+    const i = relationLeaves.lastIndexOf(pad);
     if (i >= 0) {
       relationLeaves.splice(i, 1);
-      pad.selected = false;
+      if (relationship?.mode === 'pick') chosenValues = chosenValues.slice(0, i);
+      pad.selected = relationLeaves.includes(pad);
       pad.bob = Math.min(1, pad.bob + 0.5);
       if (relationship) mathUI.progress(relationGathered());
     }
@@ -2445,15 +2458,18 @@ function waterGlyphs(dt: number) {
     for (const p of numeralLeaves) {
       if (!glyphsReady) break;
       if (runningOff(p, dt)) continue;
-      const n = liveCount(p);
-      flowToward(p, n >= 1 && n <= 9 ? n : n ? -1 : keepsFineDew(p) ? -3 : -2, dt);
+      const v = optionOf.get(p);
+      flowToward(p, v !== undefined ? numeralCode(v) : keepsFineDew(p) ? -3 : -2, dt);
     }
+    // while a question is chosen, other dew on the river settles to fine dew, so the numerals
+    // are the only numbers in view (its drops are kept, and gather again after)
+    const choosing = relationship?.mode === 'pick';
     for (const p of pond.pads) {
       if (glyphsReady && numeralLeaves.includes(p)) continue;
       // a numeral no longer in the question (a sinking leaf leaves it) still runs off as a numeral
       if (runningOff(p, dt)) continue;
       const wet = p.drops.some((d) => d.to > 0 || d.a > 0.01);
-      const rest = wet ? -1 : keepsFineDew(p) ? -3 : -2;
+      const rest = wet ? (choosing ? -3 : -1) : keepsFineDew(p) ? -3 : -2;
       if (p.glyph === undefined) {
         if (rest === -2) continue;
         // water already on the leaf (grown with the river, off screen): simply there, at rest
@@ -2536,7 +2552,7 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
-    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
+    challenge: relationship ? { equation: equation(relationship), answers: relationship.answers, dots: relationship.dots, seq: relationship.seq, numerals: numeralLeaves.map((p) => p.id), options: [...optionOf].map(([p, v]) => { const [x, y] = toScreen(p.x, p.y); return { id: p.id, v, x: Math.round(x), y: Math.round(y), glyph: p.glyph, t: p.glyphT }; }), chosen: chosenValues, skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
     curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),

@@ -95,7 +95,8 @@ export class ChallengeUI {
       }
       if ('slot' in e) {
         const blank = document.createElement('span');
-        blank.className = 'blank';
+        // gather: a cup that fills with drops; choose: a slot that takes one numeral (INTERACTION.md)
+        blank.className = c.mode === 'pick' ? 'blank slot' : 'blank cup';
         blank.textContent = '?';
         this.blanks[e.slot] = blank;
         parent.append(blank);
@@ -197,6 +198,7 @@ export class ChallengeUI {
     this.model.className = 'model';
     if (c.mode === 'pick') {
       this.model.style.opacity = '0';
+      this.model.hidden = true;
       return;
     }
     const dot = (cls = '') => {
@@ -234,6 +236,8 @@ export class ChallengeUI {
       }
     }
     this.model.style.opacity = String(c.support > 0.05 ? 0.3 + 0.7 * c.support : 0);
+    // no picture takes no room (the help marks stay just under the equation)
+    this.model.hidden = c.support <= 0.05;
   }
 
   /** What is gathered so far: into the blanks, and into the picture. */
@@ -242,9 +246,19 @@ export class ChallengeUI {
     if (!c || this.solved) return;
     this.gathered = g;
     const v = shown(c, g);
+    const waiting = c.mode === 'pick' ? v.findIndex((x) => !x) : -1;
     this.blanks.forEach((el, i) => {
+      const before = el.textContent;
       el.textContent = v[i] ? String(v[i]) : '?';
       el.classList.toggle('filling', !!v[i]);
+      // choose: the blank waiting for a numeral glows (with two, the one on the left first)
+      el.classList.toggle('waiting', i === waiting && this.blanks.length > 1);
+      // each addition lands visibly in its blank
+      if (v[i] && el.textContent !== before) {
+        el.classList.remove('poured');
+        void el.offsetWidth;
+        el.classList.add('poured');
+      }
     });
     const lit = c.mode === 'groups' ? (g[0] ?? 0) * (g[1] ?? 0) : g[0] ?? 0;
     this.dots.forEach((d, i) => d.classList.toggle('on', i < lit));
@@ -296,6 +310,7 @@ export class ChallengeUI {
     this.onHelp(this.helpStep);
     this.root.classList.add('helped');
     this.model.style.opacity = '1';
+    this.model.hidden = c.mode === 'pick';
     if (this.helpStep === 1) {
       this.speak(say(c));
       this.live.textContent = say(c);

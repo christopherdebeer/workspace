@@ -99,11 +99,24 @@ describe('stillwater challenges: answering with dew', () => {
     expect(overfull(c, [2, 4])).toBe(false);
   });
 
-  test('pairs: any equal groups that make the total', () => {
-    const p = { ...makeChallenge(6, 'pairs', seeded(4)), total: 12, answers: [3, 4] };
+  test('pairs: chosen, one factor per blank; any two factors that make the total', () => {
+    const p = { ...makeChallenge(6, 'pairs', seeded(4), 0, 1, undefined, 'england', true), total: 12, answers: [3, 4] };
+    expect(p.mode).toBe('pick');
     for (const g of [[2, 6], [6, 2], [3, 4], [4, 3]]) expect(accepts(p, g)).toBe(true);
     expect(accepts(p, [1, 12])).toBe(false);
-    expect(overfull(p, [1, 5])).toBe(true);
+    expect(overfull(p, [5])).toBe(true); // 5 does not divide 12: it does not stay
+    expect(overfull(p, [3])).toBe(false);
+    expect(overfull(p, [3, 5])).toBe(true);
+    expect(shown(p, [3])).toEqual([3, 0]);
+  });
+
+  test('pairs are never gathered (the ambiguous case): while dew is the picture they are equal groups', () => {
+    const r = seeded(44);
+    for (let i = 0; i < 50; i++) {
+      const c = makeChallenge(6, 'pairs', r);
+      expect(c.skill).toBe('groups');
+      expect(c.mode).toBe('groups');
+    }
   });
 
   test('completable: the rest of the drops, or enough more leaves of the size begun', () => {
@@ -267,17 +280,36 @@ describe('stillwater challenges: dew first, then numerals', () => {
     expect(cur.next(rand).leaves).toBe('dew');
   });
 
-  test('as numerals, equal groups can be sevens, eights and nines (never more than six leaves)', () => {
+  test('proved, equal groups are chosen: the product among near misses, any of the tables (≤ 99)', () => {
     const r = seeded(52);
     const sizes = new Set<number>();
     for (let i = 0; i < 400; i++) {
       const c = makeChallenge(6, 'groups', r, 2, 1, undefined, 'england', true);
-      const { size, count } = groupsNeed(c);
-      expect(size).toBeLessThanOrEqual(9);
-      expect(count).toBeLessThanOrEqual(6);
-      expect(accepts(c, [count, size])).toBe(true);
-      sizes.add(size);
+      expect(c.mode).toBe('pick');
+      expect(c.answers[0]).toBe(c.a * c.b);
+      expect(c.answers[0]).toBeLessThanOrEqual(99);
+      expect(c.choices).toContain(c.answers[0]);
+      expect(new Set(c.choices).size).toBe(c.choices!.length);
+      // the options are candidate answers, not the question's own numbers alone
+      expect(c.choices!.filter((v) => v !== c.a && v !== c.b).length).toBeGreaterThanOrEqual(3);
+      expect(accepts(c, [c.answers[0]])).toBe(true);
+      sizes.add(c.b);
     }
     expect([7, 8, 9].every((n) => sizes.has(n))).toBe(true);
+  });
+
+  test('every proved question offers its answer among 3–4 near misses, all ≤ 99', () => {
+    const r = seeded(53);
+    for (let level = 1; level <= TOP; level++) {
+      for (const skill of LEVELS[level].skills) {
+        for (let i = 0; i < 40; i++) {
+          const c = makeChallenge(level, skill, r, 2, 1, undefined, 'england', true);
+          expect(c.mode).toBe('pick');
+          for (const v of c.answers) expect(c.choices).toContain(v);
+          expect(c.choices!.length).toBeGreaterThanOrEqual(skill === 'sequence' ? 3 : 4);
+          for (const v of c.choices!) expect(v >= 0 && v <= 99).toBe(true);
+        }
+      }
+    }
   });
 });

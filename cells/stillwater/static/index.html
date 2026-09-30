@@ -84,6 +84,11 @@
     #relationship .equation { display: flex; align-items: baseline; justify-content: center; gap: .32em; font-size: clamp(30px, 9vw, 40px); line-height: 1; letter-spacing: 1px; font-variant-numeric: lining-nums tabular-nums; color: #fbf6d8; text-shadow: 0 2px 16px #001b19, 0 0 2px #001b19; }
     #relationship .equation .sign { opacity: .82; }
     #relationship .blank { display: inline-block; min-width: 1.15em; padding: .06em .14em .1em; text-align: center; border-bottom: 2px solid rgba(251, 246, 216, .75); color: rgba(251, 246, 216, .55); transition: color .3s, border-color .3s, text-shadow .3s; }
+    /* choose: a slot for one numeral — a small rounded frame; the one waiting glows */
+    #relationship .blank.slot { border: 1.5px solid rgba(251, 246, 216, .6); border-radius: .2em; min-width: 1.25em; padding: .04em .16em .08em; }
+    #relationship .blank.slot.waiting { border-color: #f9e9a3; box-shadow: 0 0 14px rgba(249, 233, 163, .45); }
+    #relationship .blank.poured { animation: poured .6s ease-out; }
+    @keyframes poured { 0% { transform: translateY(-.12em) scale(1.12); } 100% { transform: none; } }
     #relationship .blank.filling { color: #fdf6cc; border-color: #f9e9a3; text-shadow: 0 0 14px rgba(249, 233, 163, .7), 0 2px 16px #001b19; }
     #relationship.answered .equation { animation: answered 1.6s ease-out; }
     #relationship.answered .blank { border-color: transparent; color: #fdf6cc; }

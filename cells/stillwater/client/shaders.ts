@@ -534,11 +534,23 @@ vec2 gSquash;
 int gRow, gCount;
 vec2 gHand(vec2 v){ v = rot(v, gTurn); v.x -= gLean * v.y; return v / gSquash; }
 float gSmin(float a, float b, float k){ float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
-/** A glyph's key shape from the atlas (no flow). */
-vec2 gAtlas(float gi, vec2 gp){
+/** One glyph's key shape from the atlas (no flow). */
+vec2 gAtlas1(float gi, vec2 gp){
   if (abs(gp.x) > .62 || abs(gp.y) > .62) return vec2(.4, .3);
   vec2 cell = vec2(mod(gi, 4.), floor(gi / 4. + .001));
   return texture(uGlyphs, (cell + gp / 1.28 + .5) / 4.).rg;
+}
+/** A glyph's key shape: one numeral or sign, or (100 + n) a number to 99 as two numerals side by side. */
+vec2 gAtlas(float gi, vec2 gp){
+  if (gi > 99.5) {
+    float n = gi - 100.;
+    float tens = floor(n / 10. + .001);
+    float ones = n - tens * 10.;
+    vec2 l = gAtlas1(tens, (gp + vec2(.3, 0.)) / .74) * .74;
+    vec2 r = gAtlas1(ones, (gp - vec2(.3, 0.)) / .74) * .74;
+    return l.x < r.x ? l : r;
+  }
+  return gAtlas1(gi, gp);
 }
 /**
  * Where the river stands on a leaf going under (pad coordinates): > 0 flooded, 0 at the
@@ -1001,7 +1013,7 @@ void main(){
     // …and how the line wavers as it is drawn: slow bends, a tremor
     gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .11 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .045;
     bool beads = gBeads(gTo) || gT < 1. && gBeads(gFrom);
-    float bound = beads ? 1.05 : .62;
+    float bound = beads ? 1.05 : gTo > 99.5 || gFrom > 99.5 ? .8 : .62;
     if (abs(gp.x) < bound && abs(gp.y) < bound) {
       // fine dew at rest is many tiny beads: one pass finds the nearest, and its light is its own
       bool restMist = gT >= 1. && gTo < -2.5;

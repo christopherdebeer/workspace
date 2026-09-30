@@ -20,6 +20,9 @@
  *    that skill's leaves show their numerals in water instead of dots (concrete,
  *    then abstract): the numbers stay legible as they grow, and equal groups can
  *    be sevens, eights and nines, which dew cannot hold as dots;
+ *  (See INTERACTION.md: every question is either GATHERED — dew poured into one
+ *  blank, while dots are the right picture — or CHOSEN — one numeral per blank,
+ *  one touch each, from candidate answers on the leaves. `mode: 'pick'` is choose.)
  *  - `pick` questions are about the numeral itself (which numeral says how
  *    many; which comes before or after): a few leaves' dew gathers into its
  *    numeral in water, and the child touches the one that answers. Only the
@@ -204,7 +207,9 @@ export type Gathered = readonly number[];
 
 /** The numbers to show in the equation's blanks for what has been gathered. */
 export function shown(c: Challenge, g: Gathered): number[] {
-  if (c.mode === 'sum' || c.mode === 'pick') return [g[0] ?? 0];
+  // choose: each blank shows the numeral put in it
+  if (c.mode === 'pick') return c.answers.map((_, i) => g[i] ?? 0);
+  if (c.mode === 'sum') return [g[0] ?? 0];
   const [leaves = 0, per = 0] = g;
   if (c.skill === 'pairs') return [leaves, leaves ? per : 0];
   return [leaves * per];
@@ -212,7 +217,11 @@ export function shown(c: Challenge, g: Gathered): number[] {
 
 /** Is the relationship true with what has been gathered? */
 export function accepts(c: Challenge, g: Gathered): boolean {
-  if (c.mode === 'pick') return g[0] === c.answers[0];
+  if (c.mode === 'pick') {
+    // two blanks: any two factors that make it (one touch each, left to right)
+    if (c.skill === 'pairs') return g.length === 2 && g[0] >= 2 && g[1] >= 2 && g[0] * g[1] === c.total;
+    return g[0] === c.answers[0];
+  }
   if (c.mode === 'sum') {
     const v = [g[0] ?? 0];
     return Number.isInteger(v[0]) && v[0] > 0 && evaluate(c.left, v) === evaluate(c.right, v);
@@ -226,7 +235,14 @@ export function accepts(c: Challenge, g: Gathered): boolean {
 
 /** More than the relationship can take: this gathering cannot become right by adding. */
 export function overfull(c: Challenge, g: Gathered): boolean {
-  if (c.mode === 'pick') return g.length > 0 && g[0] !== c.answers[0];
+  // choose: a numeral that cannot be right (it does not stay in its blank)
+  if (c.mode === 'pick') {
+    if (c.skill === 'pairs') {
+      if (g.length === 1) return g[0] < 2 || c.total % g[0] !== 0 || c.total / g[0] < 2 || c.total / g[0] > 12;
+      return g.length === 2 && g[0] * g[1] !== c.total;
+    }
+    return g.length > 0 && g[0] !== c.answers[0];
+  }
   if (c.mode === 'sum') return (g[0] ?? 0) > c.answers[0];
   const [leaves = 0, per = 0] = g;
   if (!leaves) return false;
@@ -379,7 +395,12 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
         right = op('×', z, slot());
         answers = [w];
         flip = false;
-        return { skill, level, mode, left, right, answers, a, b, total: x * y, mult: true, support: 0, form, leaves: numerals ? 'numerals' : 'dew' };
+        const c7: Challenge = { skill, level, mode, left, right, answers, a, b, total: x * y, mult: true, support: 0, form, leaves: numerals ? 'numerals' : 'dew' };
+        if (numerals) {
+          c7.mode = 'pick';
+          c7.choices = options(c7, r, 4);
+        }
+        return c7;
       }
       // partitioning: 34 + ? = 30 + 12
       a = int(r, 11, upto(40, 79));
@@ -393,14 +414,20 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
       break;
     }
     case 'groups': {
-      // equal groups made with the leaves: a groups of b. As dew, a group is at most six
-      // drops; as numerals (once proved with dew), any of the level's tables up to nine
-      const sizes = numerals ? [...new Set([...(SIZES[level] ?? []), ...(TABLES[level] ?? []).filter((t) => t <= 9)])] : SIZES[level] ?? [2, 3, 4, 5];
-      b = pick(r, sizes);
-      a = int(r, 2, upto(level === 3 ? 3 : 4, level === 3 ? 5 : 6));
-      const cap = numerals ? 9 : 6;
-      if (fact && fact.a <= 6 && fact.b <= cap) [a, b] = [fact.a, fact.b];
-      mode = 'groups';
+      // equal groups: gathered as matching leaves while new (a group at most six drops, at
+      // most six groups); once proved, the product is chosen — any of the level's tables
+      if (numerals) {
+        do {
+          b = pick(r, TABLES[level] ?? [2, 5, 10]);
+          a = int(r, 2, upto(5, syl.top));
+        } while (a * b > 99);
+        if (fact && fact.a * fact.b <= 99) [a, b] = [fact.a, fact.b];
+      } else {
+        b = pick(r, SIZES[level] ?? [2, 3, 4, 5]);
+        a = int(r, 2, upto(level === 3 ? 3 : 4, level === 3 ? 5 : 6));
+        if (fact && fact.a <= 6 && fact.b <= 6) [a, b] = [fact.a, fact.b];
+        mode = 'groups';
+      }
       left = op('×', a, b);
       right = slot();
       answers = [a * b];
@@ -426,12 +453,17 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
       break;
     }
     case 'pairs': {
-      // ? × ? = t: any equal groups of the leaves that make t
-      const g = int(r, 2, 6);
-      const s = int(r, 2, 6);
+      // ? × ? = t: two factors, one touch each. Only once proved (INTERACTION.md): gathered,
+      // it was ambiguous — so while dew is the picture it is asked as equal groups instead
+      if (!numerals) return makeChallenge(level, 'groups', r, form, reach, fact, syllabus, numerals);
+      let g: number;
+      let s: number;
+      do {
+        g = int(r, 2, 9);
+        s = int(r, 2, 9);
+      } while (g * s > 99);
       a = g;
       b = s;
-      mode = 'groups';
       left = op('×', slot(0), slot(1));
       right = g * s;
       answers = [g, s];
@@ -451,7 +483,40 @@ export function makeChallenge(level: number, skill: Skill, r: () => number, form
   // Equality is a relationship, not an instruction to put an answer on the right.
   if (flip) [left, right] = [right, left];
   const total = mult ? a * b : a + b;
-  return { skill, level, mode, left, right, answers, a, b, total, mult, support: 0, form, leaves: numerals ? 'numerals' : 'dew' };
+  const c: Challenge = { skill, level, mode, left, right, answers, a, b, total, mult, support: 0, form, leaves: numerals ? 'numerals' : 'dew' };
+  if (numerals) {
+    // proved with dew: the answer is chosen from candidate numerals on the leaves
+    c.mode = 'pick';
+    c.choices = options(c, r, level <= 2 ? 3 : 4);
+  }
+  return c;
+}
+
+/**
+ * The numerals a choose question offers: the answer(s) among near misses — the slips a
+ * child actually makes (one out; the neighbouring fact; the sum for the product; the whole
+ * for the part; the known part itself), never the question's own numbers alone. ≤ 99.
+ */
+export function options(c: Challenge, r: () => number, misses: number): number[] {
+  const ok = (v: number) => Number.isInteger(v) && v >= 0 && v <= 99;
+  let want: number[];
+  let cand: number[];
+  if (c.skill === 'pairs') {
+    // both factors of one pair, and near numbers that do not divide it
+    const [g, s] = c.answers;
+    want = [...new Set([g, s])];
+    cand = [g + 1, s - 1, s + 1, g - 1, g + 2, s + 2].filter((v) => v >= 2 && v <= 12 && c.total % v !== 0);
+  } else {
+    const ans = c.answers[0];
+    want = [ans];
+    if (c.mult && c.skill === 'groups') cand = [ans + c.b, ans - c.a, c.a + c.b, ans + 1, ans - c.b, ans + c.a, ans - 1, ans + 10];
+    else if (c.mult) cand = [ans + 1, ans - 1, c.total - c.a, ans + 2, c.a, ans - 2];
+    else cand = [ans + 1, ans - 1, c.total, c.a, ans + 2, ans - 2, ans + 10];
+  }
+  const out = [...want];
+  for (const v of cand) if (out.length < want.length + misses && ok(v) && v > 0 && !out.includes(v)) out.push(v);
+  for (let v = c.skill === 'pairs' ? 2 : 1; out.length < want.length + misses && v < 99; v++) if (!out.includes(v)) out.push(v);
+  return out.sort(() => r() - 0.5);
 }
 
 // ─── the child's record ──────────────────────────────────────────────────────
