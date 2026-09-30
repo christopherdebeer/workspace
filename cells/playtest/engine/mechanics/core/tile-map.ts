@@ -23,6 +23,8 @@ export interface Tile {
   placedBy?: string;
   /** Blocked (by a Roadblock) until the end of this round. */
   blockedThroughRound?: number;
+  /** Item cards lying here (from the card's `holds`), taken one at a time with search. */
+  stash?: string[];
 }
 
 export const MAX_LINKS = 4;
@@ -92,8 +94,8 @@ export function placeTile(state: GameState, config: GameConfig, card: Card, adja
   const tiles = tilesOf(state, config);
   let id = card.name;
   for (let k = 2; tiles[id]; k++) id = `${card.name} #${k}`;
-  const c = card as Card & { terrain?: string; requires?: string[] };
-  const tile: Tile = { id, name: card.name, terrain: c.terrain, effect: card.effect as Tile['effect'], requires: Array.isArray(c.requires) ? c.requires : undefined, links: [adjacentTo], placedBy: playerId };
+  const c = card as Card & { terrain?: string; requires?: string[]; holds?: string[] };
+  const tile: Tile = { id, name: card.name, terrain: c.terrain, effect: card.effect as Tile['effect'], requires: Array.isArray(c.requires) ? c.requires : undefined, links: [adjacentTo], placedBy: playerId, ...(Array.isArray(c.holds) && c.holds.length ? { stash: [...c.holds] } : {}) };
   tiles[id] = tile;
   tiles[adjacentTo].links.push(id);
   const shared = state.shared as Record<string, unknown>;
@@ -127,7 +129,7 @@ export function adjacentPlayers(state: GameState, config: GameConfig, playerId: 
 export function describeMap(state: GameState, config: GameConfig): string[] {
   const tiles = tilesOf(state, config);
   return Object.values(tiles).map((t) => {
-    const bits = [t.terrain, t.effect && t.effect.type !== 'safe' ? t.effect.type : null, t.requires?.length ? `needs ${t.requires.join('+')}` : null, isBlocked(state, t) ? 'BLOCKED' : null].filter(Boolean);
+    const bits = [t.terrain, t.effect && t.effect.type !== 'safe' ? t.effect.type : null, t.requires?.length ? `needs ${t.requires.join('+')}` : null, t.stash?.length ? `holds ${t.stash.join('+')}` : null, isBlocked(state, t) ? 'BLOCKED' : null].filter(Boolean);
     return `${t.id}${bits.length ? ` (${bits.join(', ')})` : ''} → ${t.links.join(', ') || '—'}${openSlots(t) > 0 ? ` [${openSlots(t)} open]` : ''}`;
   });
 }

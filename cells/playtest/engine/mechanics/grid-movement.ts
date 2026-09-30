@@ -8,6 +8,9 @@
  * and is counted in player.visitedLocations (distinct tiles, for "visit N locations").
  * An effect with `once: true` fires only on a player's first entry to that tile.
  * grid.discover_on_first_visit: N — your first entry to any tile draws N cards.
+ * A location card's `holds: [item names]` leaves those items on its tile; `search` (on the
+ * tile) takes one into your hand. The items' cards come from the deck definition (list them
+ * there with count: 0 so they are never drawn).
  *
  * Hooks used:
  * - preValidateAction: Validate move target is a placed location
@@ -29,6 +32,7 @@ import {
 } from './types';
 import { GameAction, Card } from '../types/game';
 import { getCardsState } from './core/index';
+import { getCardDefinition } from '../core/rules';
 import { tilesOf, positionOf, neighbours, entryProblem, describeMap, isBlocked, within } from './core/tile-map';
 import { powerEffect } from './variable-player-powers';
 
@@ -59,11 +63,21 @@ export const gridMovementMechanic: MechanicHooks = {
   requires: ['board'],
 
   getActionSchema(action: GameAction): ActionSchema | null {
+    if ((action.type as string) === 'search') return { required: ['item'], fields: { item: { type: 'string' } } };
     if (action.type !== 'move') return null;
     return { required: ['target'], fields: { target: { type: 'string' } } };
   },
 
   preValidateAction(ctx: HookContext, action: GameAction): ValidationResult | null {
+    if ((action.type as string) === 'search') {
+      const tile = tilesOf(ctx.state, ctx.config)[positionOf(ctx.state, ctx.config, ctx.playerId)];
+      const item = (action as unknown as { item?: string }).item;
+      if (!tile?.stash?.length) return { valid: false, error: 'Nothing lies here to take.' };
+      if (!item || !tile.stash.includes(item)) return { valid: false, error: `${item ?? 'That'} is not here (here: ${tile.stash.join(', ')}).` };
+      const limit = (ctx.config.engine_mechanics?.hand_limit as number) ?? Infinity;
+      if ((ctx.player.hand ?? []).length >= limit) return { valid: false, error: 'Your hand is full.' };
+      return { valid: true };
+    }
     if (action.type !== 'move') return null;
     if (!(ctx.config.engine_mechanics?.grid as GridConfig | undefined)) return null;
     const target = (action as { target: string }).target;
@@ -77,6 +91,16 @@ export const gridMovementMechanic: MechanicHooks = {
 
   onExecuteAction(ctx: ActionExecutionContext): ActionExecutionResult | null {
     const { action, player, playerId, state, config } = ctx;
+    if ((action.type as string) === 'search') {
+      const tile = tilesOf(state, config)[positionOf(state, config, playerId)];
+      const item = (action as unknown as { item: string }).item;
+      tile.stash = (tile.stash ?? []).filter((x, i, a) => i !== a.indexOf(item));
+      const def = getCardDefinition(config, item) as { name: string; type?: string; effect?: unknown } | null;
+      const card = { ...(def ?? { name: item, type: 'item' }), name: item, type: def?.type ?? 'item', effect: def?.effect ?? { type: 'none' } } as Card;
+      delete (card as unknown as { count?: number }).count;
+      (player.hand ?? (player.hand = [])).push(card);
+      return { handled: true, advanceTurn: false, checkWin: true, logMessage: 'searched', logData: { tile: tile.id, item } };
+    }
     if (action.type !== 'move') return null;
     if (!(config.engine_mechanics?.grid as GridConfig | undefined)) return null;
     const target = (action as { target: string }).target;
@@ -150,7 +174,11 @@ export const gridMovementMechanic: MechanicHooks = {
   getAvailableActions(ctx: HookContext): AvailableAction[] {
     if (!(ctx.config.engine_mechanics?.grid as GridConfig | undefined)) return [];
     const validTargets = getValidMoveTargets(ctx);
-    return [{
+    const here = tilesOf(ctx.state, ctx.config)[positionOf(ctx.state, ctx.config, ctx.playerId)];
+    const search: AvailableAction[] = here?.stash?.length
+      ? [{ action: { type: 'search', item: here.stash[0] } as unknown as GameAction, priority: 45, category: 'movement', description: `Take an item lying at ${here.id}`, required: { item: 'The item' }, examples: [...new Set(here.stash)].map((item) => ({ type: 'search', item }) as unknown as GameAction) }]
+      : [];
+    return [...search, {
       action: { type: 'move', target: validTargets[0] || '' } as unknown as GameAction,
       priority: 50,
       category: 'movement',

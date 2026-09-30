@@ -69,6 +69,32 @@ export function Eval({ id }: { id: string }) {
             ))}
         </Panel>
       )}
+      {data.train.critique?.byPersona && Object.keys(data.train.critique.byPersona).length > 1 && (
+        <Panel title="By player persona" sub="Odd seeds are played by trusting players, even seeds by suspicious ones. A rule change that helps only one kind of player is fitting the players, not improving the game.">
+          <div className="scroll">
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>persona</th>
+                  <th className="num">games</th>
+                  <th className="num">mean run score</th>
+                  <th>who won</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(data.train.critique.byPersona).map(([p, b]) => (
+                  <tr key={p}>
+                    <td>{p}</td>
+                    <td className="num">{b.n}</td>
+                    <td className="num">{f3(b.score)}</td>
+                    <td className="small">{Object.entries(b.outcomes).sort((a, c) => c[1] - a[1]).map(([k, v]) => `${k} ×${v}`).join(' · ')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
       {data.train.critique && <CritiquePanel c={data.train.critique} title="Critique (train games)" sub="Jev's qualitative review, averaged over the train games; the named weakness / strength / change are probability shares across games." />}
       <Panel title="Train games" sub="Held-out test games are played and scored but never shown — that is what keeps the test honest.">
         <div className="scroll">

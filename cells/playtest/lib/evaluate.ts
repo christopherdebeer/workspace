@@ -13,7 +13,7 @@
  *            test is flat is the overfitting signal → revert. Two or three
  *            rounds without a keep = stalled: diagnose, don't keep patching.
  * ------------------------------------------------------------------------- */
-import { classify, play, judge, metrics, sessionFindings, HARNESS_VERSION, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
+import { classify, play, judge, metrics, sessionFindings, HARNESS_VERSION, personaFor, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
 import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, SCORE_VERSION, type RunScore } from './score';
 import { engineFingerprint } from './fingerprint';
 import * as db from './store';
@@ -35,6 +35,7 @@ export interface RunDigest {
   verdict?: string | null;
   findings?: string[];
   critique?: Critique | null;
+  persona?: string;
   /** The winner's secret role and how the game ended: 'objective' | 'time limit' | 'none'. */
   winnerRole?: string | null;
   /** Winning positions dealt this game (secret roles, else seats) — for outcome balance. */
@@ -48,6 +49,8 @@ export interface CritiqueSummary {
   n: number;
   /** "The Trader · objective": 3 — who won, as what, and how, across the train games */
   outcomes?: Record<string, number>;
+  /** mean run score and outcomes per player persona (h6) */
+  byPersona?: Record<string, { n: number; score: number; outcomes: Record<string, number> }>;
   cause?: Array<[string, number]>;
   index: number | null;
   dims: Record<string, number>;
@@ -66,12 +69,22 @@ export function summarizeCritique(runs: RunDigest[]): CritiqueSummary | null {
     for (const c of cs) for (const [k, v] of pick(c)) t.set(k, (t.get(k) ?? 0) + v);
     return [...t].map(([k, v]) => [k, +(v / cs.length).toFixed(3)] as [string, number]).sort((a, b) => b[1] - a[1]).slice(0, 5);
   };
+  const byPersona: Record<string, { n: number; score: number; outcomes: Record<string, number> }> = {};
+  for (const r of runs) {
+    const p = r.persona ?? 'default';
+    const b = (byPersona[p] ??= { n: 0, score: 0, outcomes: {} });
+    b.n++;
+    b.score += r.score;
+    const k = r.winnerRole ? `${r.winnerRole} · ${r.endKind}` : 'no winner';
+    b.outcomes[k] = (b.outcomes[k] ?? 0) + 1;
+  }
+  for (const b of Object.values(byPersona)) b.score = +(b.score / b.n).toFixed(4);
   const outcomes: Record<string, number> = {};
   for (const r of runs) {
     const k = r.winnerRole ? `${r.winnerRole} · ${r.endKind}` : `no winner · ${r.endKind ?? 'none'}`;
     outcomes[k] = (outcomes[k] ?? 0) + 1;
   }
-  return { n: cs.length, outcomes, cause: tally((c) => c.cause ?? []), index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes) };
+  return { n: cs.length, outcomes, byPersona, cause: tally((c) => c.cause ?? []), index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes) };
 }
 
 export interface EvalRecord extends db.Item {
@@ -152,7 +165,8 @@ function runSpecs(suite: db.Suite, cls: Classification): RunSpec[] {
 async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; cls: Classification; decide: Decide; deadlineAt: number; spec: RunSpec; engine: string }): Promise<{ digest: RunDigest; tokens: number }> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), Math.max(1000, o.deadlineAt - 20_000 - Date.now()));
-  const session = await play(o.def.rules, o.decide, { players: o.spec.players, seed: o.spec.seed, maxSteps: o.suite.maxSteps, signal: abort.signal });
+  const persona = personaFor(o.spec.seed);
+  const session = await play(o.def.rules, o.decide, { players: o.spec.players, seed: o.spec.seed, maxSteps: o.suite.maxSteps, signal: abort.signal, persona });
   clearTimeout(timer);
   let tokens = session.tokens;
   let judgement: Judgement | null = null;
@@ -175,6 +189,7 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
     split: o.spec.split,
     seed: o.spec.seed,
     players: o.spec.players,
+    persona,
     score: sc.score,
     parts: sc.parts,
     stopped: session.stopped,
@@ -391,7 +406,7 @@ export function compactEval(e: EvalRecord) {
       score: p.train.score,
       balance: p.train.balance ?? null,
       critique: p.train.critique ?? null,
-      runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null })),
+      runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, persona: r.persona, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null })),
     },
     detail: `read @c15r/playtest.eval_detail {id:"${e.id}"} for findings and full critiques`,
   };

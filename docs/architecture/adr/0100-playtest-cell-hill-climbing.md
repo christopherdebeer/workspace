@@ -178,3 +178,32 @@ playtests were mostly engine gaps, and it reshaped the harness:
   after it: denounce, public powers, Collector 5 items, discovery. A small
   driver runs the queue (baseline + noise when missing, one proposal per
   round, noise re-measured after a keep) whenever Jev answers.
+
+## Addendum — design pass first; the instrument frozen (I1)
+
+A meta-review found the AAOTE climb had mostly been rebuilding its own
+instrument (four score versions, six harness versions, three suite sizes —
+each orphaning every baseline) while the game itself had changed once, by a
+fidelity fix. The one real design round made it worse. Structural problems
+(no deduction verb, a passive Enemy, a frictionless Trader goal, uneven
+pacing) are not reachable by one-edit rounds scored by a one-ply player, so
+the order is now: **design pass → faithful engine support → test the redesign
+as one declared round → tune by climbing.**
+
+- **Instrument I1, frozen**: score/v3.1, harness h6 (h5 + player personas:
+  odd seeds trusting, even seeds suspicious; evals report scores and outcomes
+  per persona), suite 24 + 24 (seeds 1–12 / 101–112 × 3–4 players, 300
+  steps). A later change to any part is its own declared step that re-scores
+  the prior heads, so the history stays continuous.
+- **AAOTE v0.4** (design pass): the Forbidden Items lie on the map (Ruins,
+  Hidden Cave behind a Lantern, the Enemy-only Temple) and are taken with
+  `search` — the Enemy has an active win and honest players can deny it;
+  denounce from round 3 (right: win; wrong: exposed and forfeit); the Trader
+  needs 4 trades with 3 different partners, one offer per turn; Collector 5
+  items; discovery on first visit; a 10-round clock; the player cards dealt
+  as working powers. Engine support added: location `holds` + `search`, the
+  `trade_partners` goal metric, denounce `from_round` / `forfeit`, and the
+  validator accepts count-0 cards (defined, never drawn).
+- **Judge check** before trusting further climbing: the quality ladder
+  (v1 unwinnable → v2 → v0.4) must be ordered by the critique, and its 16
+  dimensions checked for redundancy.

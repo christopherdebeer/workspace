@@ -53,15 +53,16 @@ export interface ObjectiveDefinition {
    *   visited: N          — N distinct locations entered (the origin excluded)
    *   placed: N           — N location cards placed by this player
    *   trades: N           — N trades completed (as offerer or responder)
+   *   trade_partners: N   — completed trades with N different players
    *   holds: [names]      — every named card in hand at once
    */
   check?: ObjectiveCheck;
 }
 
 export type ObjectiveCheck =
-  | { distinct_items?: number; visited?: number; placed?: number; trades?: number; holds?: string[]; any?: ObjectiveCheck[]; all?: ObjectiveCheck[] };
+  | { distinct_items?: number; visited?: number; placed?: number; trades?: number; trade_partners?: number; holds?: string[]; any?: ObjectiveCheck[]; all?: ObjectiveCheck[] };
 
-type P = Record<string, unknown> & { hand?: Array<{ name: string; type?: string }>; visitedLocations?: string[]; placedLocations?: number; completedTrades?: number };
+type P = Record<string, unknown> & { hand?: Array<{ name: string; type?: string }>; visitedLocations?: string[]; placedLocations?: number; completedTrades?: number; tradePartners?: string[] };
 
 /** Current value of each metric for a player (for checks, and to show progress). */
 export function objectiveMetrics(player: P): Record<string, number | string[]> {
@@ -71,6 +72,7 @@ export function objectiveMetrics(player: P): Record<string, number | string[]> {
     visited: new Set((player.visitedLocations ?? []).filter((l) => l !== 'origin' && l !== 'start')).size,
     placed: Number(player.placedLocations ?? 0),
     trades: Number(player.completedTrades ?? 0),
+    trade_partners: (player.tradePartners ?? []).length,
     holds: [...new Set(hand.map((c) => c.name))],
   };
 }
@@ -79,7 +81,7 @@ export function checkObjective(check: ObjectiveCheck | undefined, player: P): bo
   if (!check) return false;
   const m = objectiveMetrics(player);
   const parts: boolean[] = [];
-  for (const k of ['distinct_items', 'visited', 'placed', 'trades'] as const) {
+  for (const k of ['distinct_items', 'visited', 'placed', 'trades', 'trade_partners'] as const) {
     if (typeof check[k] === 'number') parts.push((m[k] as number) >= (check[k] as number));
   }
   if (check.holds) parts.push(check.holds.every((n) => (m.holds as string[]).includes(n)));
@@ -93,8 +95,8 @@ function progress(check: ObjectiveCheck | undefined, player: P): string[] {
   if (!check) return [];
   const m = objectiveMetrics(player);
   const out: string[] = [];
-  const LABEL = { distinct_items: 'different items held', visited: 'locations visited', placed: 'locations placed', trades: 'trades completed' } as const;
-  for (const k of ['distinct_items', 'visited', 'placed', 'trades'] as const) {
+  const LABEL = { distinct_items: 'different items held', visited: 'locations visited', placed: 'locations placed', trades: 'trades completed', trade_partners: 'different trade partners' } as const;
+  for (const k of ['distinct_items', 'visited', 'placed', 'trades', 'trade_partners'] as const) {
     if (typeof check[k] === 'number') out.push(`${m[k]}/${check[k]} ${LABEL[k]}`);
   }
   if (check.holds) out.push(`holding ${check.holds.filter((n) => (m.holds as string[]).includes(n)).length}/${check.holds.length} of ${check.holds.join(', ')}`);
@@ -113,9 +115,11 @@ export interface HiddenObjectivesConfig {
   /**
    * Denounce: once per game, spend an action to name a player as the enemy/traitor.
    *   correct: 'win' (the denouncer wins) | 'reveal' (the enemy is exposed to everyone)
-   *   wrong:   'reveal_self' (the denouncer's objective is exposed) | 'end_turn' | 'both'
+   *   wrong:   'reveal_self' (the denouncer's objective is exposed) | 'end_turn' | 'both' |
+   *            'forfeit' (exposed, turn ends, and their objective no longer counts)
+   *   from_round: N — not before round N (no blind round-1 guesses)
    */
-  denounce?: { correct?: 'win' | 'reveal'; wrong?: 'reveal_self' | 'end_turn' | 'both' };
+  denounce?: { correct?: 'win' | 'reveal'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit'; from_round?: number };
 }
 
 /**
@@ -188,7 +192,7 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
   /** Denounce: name a player as the enemy (see HiddenObjectivesConfig.denounce). */
   getAvailableActions(ctx: HookContext): AvailableAction[] {
     const cfg = (ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined)?.denounce;
-    if (!cfg || (ctx.player as unknown as { denounced?: string }).denounced) return [];
+    if (!cfg || (ctx.player as unknown as { denounced?: string }).denounced || ctx.state.round < (cfg.from_round ?? 1)) return [];
     const targets = ctx.state.turnOrder.filter((p) => p !== ctx.playerId);
     return [{
       action: { type: 'denounce', target: targets[0] } as unknown as GameAction,
@@ -206,6 +210,7 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     const cfg = (ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined)?.denounce;
     if (!cfg) return { valid: false, error: 'Denouncing is not part of this game.' };
     if ((ctx.player as unknown as { denounced?: string }).denounced) return { valid: false, error: 'You have already denounced someone this game.' };
+    if (ctx.state.round < (cfg.from_round ?? 1)) return { valid: false, error: `Denouncing opens in round ${cfg.from_round}.` };
     const target = (action as unknown as { target?: string }).target;
     if (!target || target === ctx.playerId || !ctx.state.players[target]) return { valid: false, error: 'Name another player.' };
     return { valid: true };
@@ -225,8 +230,9 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
       return { handled: true, advanceTurn: false, checkWin: true, logMessage: 'denounce_correct', logData: { target, revealed: them.revealedAs } };
     }
     const wrong = cfg.wrong ?? 'both';
-    if (wrong === 'reveal_self' || wrong === 'both') me.revealedAs = me.objective?.name ?? 'unknown';
-    const endTurn = wrong === 'end_turn' || wrong === 'both';
+    if (wrong === 'reveal_self' || wrong === 'both' || wrong === 'forfeit') me.revealedAs = me.objective?.name ?? 'unknown';
+    if (wrong === 'forfeit') (me as unknown as { forfeited?: boolean }).forfeited = true;
+    const endTurn = wrong === 'end_turn' || wrong === 'both' || wrong === 'forfeit';
     if (endTurn && me.actionPoints !== undefined) me.actionPoints = 0;
     return { handled: true, advanceTurn: endTurn ? true : false, checkWin: false, logMessage: 'denounce_wrong', logData: { target, denouncerRevealed: me.revealedAs ?? null } };
   },
@@ -238,7 +244,7 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
       return { won: true, reason: `${ctx.playerId} denounced The Enemy (${(ctx.player as unknown as { denounced?: string }).denounced})` };
     }
     const obj = (ctx.player as unknown as { objective?: ObjectiveDefinition }).objective;
-    if (!obj?.check) return null;
+    if (!obj?.check || (ctx.player as unknown as { forfeited?: boolean }).forfeited) return null;
     if (!checkObjective(obj.check, ctx.player as unknown as P)) return null;
     return { won: true, reason: `${ctx.playerId} completed ${obj.name}: ${obj.condition}` };
   },

@@ -178,7 +178,8 @@ function validateDeck(deck: unknown[], issues: ValidationIssue[]): void {
       issues.push(error('MISSING_CARD_NAME', `Card at index ${index} is missing "name"`, `${location}.name`));
     }
 
-    if (c.count === undefined || typeof c.count !== 'number' || c.count < 1) {
+    // count 0 is a defined-but-never-drawn card (e.g. an item that lies on a location's `holds`)
+    if (c.count === undefined || typeof c.count !== 'number' || c.count < 0) {
       issues.push(error('INVALID_CARD_COUNT', `Card "${c.name || index}" has invalid count`, `${location}.count`));
     }
 
@@ -477,7 +478,8 @@ function validateDeckInMechanics(deck: unknown[], issues: ValidationIssue[], pre
       issues.push(error('MISSING_CARD_NAME', `Card at index ${index} is missing "name"`, `${location}.name`));
     }
 
-    if (c.count === undefined || typeof c.count !== 'number' || c.count < 1) {
+    // count 0 is a defined-but-never-drawn card (e.g. an item that lies on a location's `holds`)
+    if (c.count === undefined || typeof c.count !== 'number' || c.count < 0) {
       issues.push(error('INVALID_CARD_COUNT', `Card "${c.name || index}" has invalid count`, `${location}.count`));
     }
 

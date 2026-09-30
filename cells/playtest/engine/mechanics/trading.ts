@@ -450,6 +450,10 @@ function executeTradeRespond(ctx: ActionExecutionContext, action: TradeRespondAc
     const responderTrades = (player.completedTrades ?? 0) + (countsFor === 'offerer' ? 0 : 1);
     const offererTrades = (fromPlayer.completedTrades ?? 0) + (countsFor === 'responder' ? 0 : 1);
 
+    // Distinct partners each side has completed a trade with (goal metric trade_partners).
+    const partners = (p: unknown, other: string) => [...new Set([...(((p as { tradePartners?: string[] }).tradePartners) ?? []), other])];
+    const responderPartners = countsFor === 'offerer' ? (player as unknown as { tradePartners?: string[] }).tradePartners ?? [] : partners(player, trade.from);
+    const offererPartners = countsFor === 'responder' ? (fromPlayer as unknown as { tradePartners?: string[] }).tradePartners ?? [] : partners(fromPlayer, playerId);
     return {
       handled: true,
       stateChanges: {
@@ -457,8 +461,8 @@ function executeTradeRespond(ctx: ActionExecutionContext, action: TradeRespondAc
           pendingTrades: newPending
         },
         playerStateChanges: {
-          [playerId]: { completedTrades: responderTrades },
-          [trade.from]: { completedTrades: offererTrades }
+          [playerId]: { completedTrades: responderTrades, tradePartners: responderPartners } as never,
+          [trade.from]: { completedTrades: offererTrades, tradePartners: offererPartners } as never
         }
       },
       advanceTurn: false, // Trade response doesn't use turn

@@ -77,8 +77,9 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  h3: the judge also sees each player's secret role at the end, and names the cause of
  *  repetitive play (rules vs players) ·
  *  h4: two-step lookahead within a turn ("then …"), the objective stated in the question ·
- *  h5: compact option labels (no internal ids, empty values or JSON brackets). */
-export const HARNESS_VERSION = 'h5';
+ *  h5: compact option labels (no internal ids, empty values or JSON brackets) ·
+ *  h6: player personas — odd seeds trusting, even seeds suspicious (PERSONAS). */
+export const HARNESS_VERSION = 'h6';
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
@@ -446,6 +447,14 @@ function fieldsNeedingWords(a: Action): string[] {
     .map(([k]) => k);
 }
 
+/** Player personas (harness h6): evals alternate them by seed, so a rule change that only
+ *  suits one kind of player shows up as a split instead of a gain. */
+export const PERSONAS: Record<string, string> = {
+  trusting: 'Play as a cooperative player: take deals that help you, and trust other players unless you have evidence against them.',
+  suspicious: 'Play as a wary player: assume one player is secretly working against everyone; do not help a player toward a goal you cannot see, and act on evidence about who the traitor is.',
+};
+export const personaFor = (seed: number) => (seed % 2 ? 'trusting' : 'suspicious');
+
 /** Action types a player may take when it isn't their turn (replies), served before the current player. */
 const OFF_TURN = /(^|_)respond$/;
 
@@ -561,7 +570,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         chosen = picks.length === 1 ? picks[0] : picks[Math.floor(rng() * picks.length)];
         if (!decide && picks.length > 1) rec.fallback = 'random (no Jev)';
       } else {
-        const persona = opts.persona ? ` Play as a ${opts.persona} player.` : '';
+        const persona = opts.persona ? ` ${PERSONAS[opts.persona] ?? `Play as a ${opts.persona} player.`}` : '';
         // Say the goal in the question itself: Jev reads the instruction literally, and a goal
         // buried in the state lost to options that merely sound active.
         const goal = av.yourObjective ? ` Your secret objective: ${av.yourObjective}${Array.isArray(av.objectiveProgress) && av.objectiveProgress.length ? ` (so far: ${av.objectiveProgress.join('; ')})` : ''}. Options marked [→ …] or [then …] advance it.` : '';
