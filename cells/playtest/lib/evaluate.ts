@@ -370,6 +370,19 @@ export interface Round extends db.Item {
   createdAt: string;
 }
 
+/** Standard error of the mean per-game difference, pairing runs by seed × players (the
+ *  run score, before the suite's definition-health term), or null with < 3 pairs. */
+export function pairedSE(base: RunDigest[], cand: RunDigest[]): number | null {
+  const key = (r: RunDigest) => `${r.seed}x${r.players}`;
+  const b = new Map(base.map((r) => [key(r), r.score]));
+  const d = cand.filter((r) => b.has(key(r))).map((r) => r.score - (b.get(key(r)) as number));
+  if (d.length < 3) return null;
+  const mean = d.reduce((x, y) => x + y, 0) / d.length;
+  const sd = Math.sqrt(d.reduce((x, y) => x + (y - mean) ** 2, 0) / (d.length - 1));
+  // Suite score = 0.85 × mean(run) + 0.15 × health, so the mean's SE scales by 0.85.
+  return +((0.85 * sd) / Math.sqrt(d.length)).toFixed(4);
+}
+
 /** Check a proposal can be judged and store the candidate definition. */
 export async function prepareProposal(o: { game: string; rules: string; rationale: string; author: string }): Promise<{ head: db.Definition; cand: db.Definition; baseline: EvalRecord; suite: db.Suite }> {
   const g = await db.getGame(o.game);
@@ -387,9 +400,12 @@ export async function prepareProposal(o: { game: string; rules: string; rational
 /** Keep or revert a candidate against its baseline, and record the round. */
 export async function decideRound(o: { game: string; headVersion: number; candVersion: number; baseline: EvalRecord; ev: EvalRecord; rationale: string; author: string; suite: db.Suite }): Promise<{ round: Round; eval: ReturnType<typeof publicEval>; stalled: boolean; diagnosis?: unknown }> {
   const { baseline, ev, suite } = o;
-  const eps = Math.max(suite.epsilon, suite.noise ?? 0);
   const dTrain = +(ev.train.score - baseline.train.score).toFixed(4);
   const dTest = +(ev.test.score - baseline.test.score).toFixed(4);
+  // Baseline and candidate play the same seeds × player counts, so the per-game
+  // differences give a paired standard error: a change must also clear that.
+  const se = pairedSE(baseline.train.runs, ev.train.runs);
+  const eps = +Math.max(suite.epsilon, suite.noise ?? 0, se ?? 0).toFixed(4);
   let decision: Round['decision'] = 'reverted';
   let reason: string;
   const inconclusive = !!ev.incomplete;
@@ -397,9 +413,9 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
     reason = `inconclusive: ${ev.incomplete} run(s) hit the deadline or never reported, so the candidate's scores aren't comparable — reverted without counting toward a stall`;
   } else if (dTrain >= eps && dTest > 0) {
     decision = 'kept';
-    reason = `train +${dTrain} (≥ ε ${eps}) and test +${dTest}`;
+    reason = `train +${dTrain} (≥ ε ${eps}: max of epsilon ${suite.epsilon}, noise ${suite.noise ?? '—'}, paired SE ${se ?? '—'}) and test +${dTest}`;
   } else if (dTrain >= eps) reason = `train +${dTrain} but test ${dTest >= 0 ? '+' : ''}${dTest}: overfitting signal — reverted`;
-  else reason = `train ${dTrain >= 0 ? '+' : ''}${dTrain} is below ε ${eps} — no real improvement`;
+  else reason = `train ${dTrain >= 0 ? '+' : ''}${dTrain} is below ε ${eps} (max of epsilon ${suite.epsilon}, noise ${suite.noise ?? '—'}, paired SE ${se ?? '—'}) — no real improvement`;
 
   const fresh = (await db.getGame(o.game)) as db.GameIndex;
   const climb = fresh.climb ?? { rounds: 0, stall: 0, status: 'idle' as const };
