@@ -90,6 +90,18 @@ export function checkObjective(check: ObjectiveCheck | undefined, player: P): bo
   return parts.length > 0 && parts.every(Boolean);
 }
 
+/** Can `me` denounce `target` under requires_evidence? */
+export function hasEvidence(state: { players: Record<string, unknown> }, config: GameConfig, me: string, target: string): boolean {
+  // Revealed counts only when what was revealed is the enemy (a wrong accuser is revealed too —
+  // as honest, which is evidence of innocence).
+  const t = state.players[target] as { revealedAs?: string; objective?: ObjectiveDefinition; team?: string } | undefined;
+  if (t?.revealedAs && (t.team === 'enemy' || t.objective?.type === 'enemy' || t.objective?.type === 'traitor')) return true;
+  const revealed = ((state.players[me] as { knowledge?: { revealed?: Record<string, unknown> } })?.knowledge?.revealed) ?? {};
+  if (`${target} objective` in revealed) return true;
+  const enemyItems = new Set(((config as { objectives?: ObjectiveDefinition[] }).objectives ?? []).filter((o) => o.type === 'enemy' || o.type === 'traitor').flatMap((o) => JSON.stringify(o.check ?? {}).match(/"[^"]+"/g) ?? []).map((q) => q.slice(1, -1)));
+  return Object.entries(revealed).some(([k, v]) => k.startsWith(`${target} hand`) && Array.isArray(v) && v.some((n) => enemyItems.has(String(n))));
+}
+
 /** "3/6 locations visited" style progress lines for the check's metrics. */
 function progress(check: ObjectiveCheck | undefined, player: P): string[] {
   if (!check) return [];
@@ -118,8 +130,11 @@ export interface HiddenObjectivesConfig {
    *   wrong:   'reveal_self' (the denouncer's objective is exposed) | 'end_turn' | 'both' |
    *            'forfeit' (exposed, turn ends, and their objective no longer counts)
    *   from_round: N — not before round N (no blind round-1 guesses)
+   *   requires_evidence: only a player you have evidence on — you have seen their objective,
+   *            they are revealed, or you have seen them holding an item the enemy objective
+   *            needs (uncertain: honest players take those items too, to deny them)
    */
-  denounce?: { correct?: 'win' | 'reveal'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit'; from_round?: number };
+  denounce?: { correct?: 'win' | 'reveal'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit'; from_round?: number; requires_evidence?: boolean };
 }
 
 /**
@@ -193,7 +208,8 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
   getAvailableActions(ctx: HookContext): AvailableAction[] {
     const cfg = (ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined)?.denounce;
     if (!cfg || (ctx.player as unknown as { denounced?: string }).denounced || ctx.state.round < (cfg.from_round ?? 1)) return [];
-    const targets = ctx.state.turnOrder.filter((p) => p !== ctx.playerId);
+    const targets = ctx.state.turnOrder.filter((p) => p !== ctx.playerId && (!cfg.requires_evidence || hasEvidence(ctx.state as never, ctx.config, ctx.playerId, p)));
+    if (!targets.length) return [];
     return [{
       action: { type: 'denounce', target: targets[0] } as unknown as GameAction,
       priority: 20,
@@ -213,6 +229,7 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     if (ctx.state.round < (cfg.from_round ?? 1)) return { valid: false, error: `Denouncing opens in round ${cfg.from_round}.` };
     const target = (action as unknown as { target?: string }).target;
     if (!target || target === ctx.playerId || !ctx.state.players[target]) return { valid: false, error: 'Name another player.' };
+    if (cfg.requires_evidence && !hasEvidence(ctx.state as never, ctx.config, ctx.playerId, target)) return { valid: false, error: `You have no evidence against ${target}: see their objective, see them revealed, or see a Forbidden Item in their hand.` };
     return { valid: true };
   },
 
