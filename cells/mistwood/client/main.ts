@@ -202,7 +202,8 @@ function frame(now: number) {
     const rz = p.z - view.z;
     const cz = rx * s + rz * c;
     const cx = rx * c - rz * s;
-    if (cz < 0.6) continue;
+    const hd = Math.hypot(cx, cz);
+    if (cz < 0.3 || hd < 0.6) continue;
     if (p.kind === 'patch' && cz > 26) continue;
     // grow the structure the first time (a few a frame)
     if (!wood.grown(p.kind, p.pool)) {
@@ -213,10 +214,11 @@ function frame(now: number) {
     const wM = (st.maxX - st.minX) * p.scale;
     const hM = st.maxY * p.scale;
     // off to the side, allowing for its width
-    if (Math.abs(cx) - wM > (cz * W) / (2 * view.f) + 1) continue;
+    // (cylindrical: across the screen is angle)
+    if (Math.abs(Math.atan2(cx, cz)) - wM / hd > W / (2 * view.f) + 0.05) continue;
     // the pixels it needs: its size on screen, less as the fog takes it (detail it hides is not needed)
-    const fogged = 1 - Math.exp(-cz * density * 1.4);
-    const need = ((Math.max(wM, hM) * view.f) / cz) * (1 - 0.75 * fogged);
+    const fogged = 1 - Math.exp(-hd * density * 1.4);
+    const need = ((Math.max(wM, hM) * view.f) / hd) * (1 - 0.75 * fogged);
     // under memory pressure the small, fogged cards give way first; the near trees keep their detail
     const px = need * (need > 900 ? Math.max(bias, 0.8) : bias);
     const level = Math.max(64, Math.min(p.kind === 'patch' ? 1024 : 2048, nextPow2(px)));
@@ -235,7 +237,7 @@ function frame(now: number) {
       flip: p.flip,
       phase: p.phase,
       patch: p.kind === 'patch',
-      d: cz,
+      d: hd,
     });
   }
   // bake what is wanted, biggest on screen first, a little each frame

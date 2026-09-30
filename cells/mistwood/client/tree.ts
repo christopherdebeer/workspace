@@ -212,13 +212,16 @@ export function growPatch(seed: number, width: number): Structure {
   for (let i = 0; i < blades; i++) {
     // denser in the middle, thinning to nothing at the ends (no straight card edges)
     let x = (r() + r() + r() - 1.5) * (width / 3);
-    let y = 0;
-    const h = 0.06 + Math.pow(r(), 1.2) * 0.62;
+    // fake depth: a blade further back in the tussock roots higher on the card, and is a little
+    // shorter and paler — so the foot of a patch is as ragged as its tips, never a straight edge
+    const back = Math.pow(r(), 1.4);
+    let y = back * 0.16;
+    const h = (0.06 + Math.pow(r(), 1.2) * 0.62) * (1 - back * 0.35);
     let a = Math.PI / 2 + lean + (r() - 0.5) * 0.7;
     const bend = (r() - 0.5) * 0.25 + lean * 0.3;
     const steps = 5;
-    const w = 0.0015 + r() * 0.003;
-    const tone = r();
+    const w = (0.0015 + r() * 0.003) * (1 - back * 0.3);
+    const tone = Math.min(1, r() * (1 - back * 0.3) + back * 0.35);
     for (let k = 0; k < steps; k++) {
       const nx = x + (Math.cos(a) * h) / steps;
       const ny = y + (Math.sin(a) * h) / steps;

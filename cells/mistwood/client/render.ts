@@ -56,7 +56,10 @@ ${NOISE}
 float pathX(float z) { return uPathA.x * sin(z * uPathA.y + uPathA.z) + uPathB.x * sin(z * uPathB.y + uPathB.z); }
 void main() {
   vec2 px = gl_FragCoord.xy;
-  vec3 dc = normalize(vec3((px.x - .5 * uRes.x) / uF, (px.y - uHz) / uF, 1.));
+  // cylindrical projection: across the screen is angle (so turning only slides the picture);
+  // up the screen is height over horizontal distance (so verticals stay vertical)
+  float th = (px.x - .5 * uRes.x) / uF;
+  vec3 dc = normalize(vec3(sin(th), (px.y - uHz) / uF, cos(th)));
   float cy = cos(uCam.w), sy = sin(uCam.w);
   vec3 d = vec3(dc.x * cy + dc.z * sy, dc.y, -dc.x * sy + dc.z * cy);
   float az = atan(d.x, d.z);
@@ -98,6 +101,10 @@ void main() {
   o = vec4(col, 1.);
 }`;
 
+/** Cells per card (the curved projection needs a few). */
+const COLS = 4;
+const ROWS = 8;
+
 const CARD_VS = `#version 300 es
 uniform vec2 uRes;
 uniform float uF, uHz;
@@ -108,7 +115,10 @@ out vec2 vUV;
 out vec3 vWorld;
 out float vDist;
 void main() {
-  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+  // a grid of cells, not one quad: the projection is curved, so the card must bend with it
+  int cell = gl_VertexID / 6, k = gl_VertexID % 6;
+  ivec2 corner = ivec2(k == 1 || k == 4 || k == 5 ? 1 : 0, k == 2 || k == 3 || k == 5 ? 1 : 0);
+  vec2 c = vec2(float(cell % ${COLS} + corner.x) / float(${COLS}), float(cell / ${COLS} + corner.y) / float(${ROWS}));
   // the card turns about its trunk to face the eye, so the trunk stays planted where it stands
   vec2 toEye = vec2(uCam.x, uCam.y) - uAnchor;
   vec2 right = normalize(vec2(-toEye.y, toEye.x) + vec2(1e-5, 0.));
@@ -117,8 +127,9 @@ void main() {
   vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
   float cs = cos(uCam.w), sn = sin(uCam.w);
   float cx = rel.x * cs - rel.z * sn;
-  float cz = max(rel.x * sn + rel.z * cs, .05);
-  vec2 scr = vec2(cx / cz * uF + .5 * uRes.x, rel.y / cz * uF + uHz);
+  float cz = rel.x * sn + rel.z * cs;
+  float hd = max(length(vec2(cx, cz)), .05);
+  vec2 scr = vec2(atan(cx, cz) * uF + .5 * uRes.x, rel.y / hd * uF + uHz);
   gl_Position = vec4(scr / uRes * 2. - 1., 0., 1.);
   vUV = c;
   vWorld = w;
@@ -361,7 +372,7 @@ export class Renderer {
       gl.uniform1f(uPhase, c.phase);
       gl.uniform1f(uKind, c.patch ? 1 : 0);
       gl.uniform1f(uFlip, c.flip ? -1 : 1);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.drawArrays(gl.TRIANGLES, 0, COLS * ROWS * 6);
     }
     // 3. the film
     gl.disable(gl.BLEND);
