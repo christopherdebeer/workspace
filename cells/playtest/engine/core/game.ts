@@ -1658,8 +1658,10 @@ export function executeAction(state: GameState, playerId: string, action: GameAc
       }
     });
 
-    // Check win condition if requested by a mechanic
-    if (mechanicResult.checkWin) {
+    // Check win condition if requested by a mechanic — or after every action when a
+    // mechanic declared machine-checkable goals (hidden-objectives `check`s): a goal can
+    // be met by a trade, a placement or a draw, not only by the actions that ask.
+    if (mechanicResult.checkWin || state.shared.alwaysCheckWin) {
       const winCheck = checkAllWinConditions(state);
       if (winCheck) {
         state.status = 'pending_analysis';
@@ -1685,7 +1687,9 @@ export function executeAction(state: GameState, playerId: string, action: GameAc
     //   advanceTurn: true  → always advance (pass, bank, bust)
     //   advanceTurn: false → never advance (play_card, roll — await pass or AP depletion)
     //   advanceTurn: undefined → auto-detect (non-AP: advance; AP: let AP handle it)
-    const shouldEnd = mechanicRegistry.shouldAutoEndTurn(state, playerId);
+    // Only the current player's spent AP ends the turn: an off-turn action (answering a
+    // trade) must not advance someone else's turn.
+    const shouldEnd = playerId === state.currentPlayer && mechanicRegistry.shouldAutoEndTurn(state, playerId);
     if (shouldEnd) {
       advanceTurn(state);
     } else if (mechanicResult.advanceTurn === false) {

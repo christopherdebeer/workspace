@@ -16,6 +16,27 @@
 import { MechanicHooks, HookContext, TurnStartContext, ValidationResult, StateChanges, PlayerInitResult, PlayerInitContext, isMechanicEnabled } from './types';
 import { GameAction, DrawAction } from '../types/game';
 
+/**
+ * Cost after discounts that cards and places grant:
+ *   free moves (player.freeMoves, e.g. Swift Journey) — spent one per move;
+ *   a held movement_bonus item (Compass) — your first move each turn is free;
+ *   standing on a trade_bonus tile (Village Square) — trade offers cost 0.
+ * `consume` records what the discount used up (call it once the action has happened).
+ */
+function discountedCost(ctx: HookContext, action: GameAction, base: number): { cost: number; consume: () => void } {
+  const p = ctx.player as unknown as { freeMoves?: number; usedMovementBonus?: boolean; hand?: Array<{ effect?: { type?: string } }>; state?: string };
+  const none = { cost: base, consume: () => undefined };
+  if (action.type === 'move') {
+    if ((p.freeMoves ?? 0) > 0) return { cost: 0, consume: () => void (p.freeMoves = (p.freeMoves ?? 1) - 1) };
+    if (!p.usedMovementBonus && (p.hand ?? []).some((c) => c.effect?.type === 'movement_bonus')) return { cost: 0, consume: () => void (p.usedMovementBonus = true) };
+  }
+  if (action.type === 'trade_offer') {
+    const tiles = (ctx.state.shared as { tiles?: Record<string, { effect?: { type?: string } }> }).tiles;
+    if (p.state && tiles?.[p.state]?.effect?.type === 'trade_bonus') return { cost: 0, consume: () => undefined };
+  }
+  return none;
+}
+
 export const actionPointsMechanic: MechanicHooks = {
   slug: 'action-points',
   name: 'Action Points',
@@ -58,6 +79,8 @@ export const actionPointsMechanic: MechanicHooks = {
 
     // Pass actions should always be allowed (let engine handle)
     if (action.type === 'pass') return null;
+    // Off-turn actions (answering a trade) spend nothing and need nothing.
+    if (ctx.playerId !== ctx.state.currentPlayer) return null;
 
     const remainingAP = ctx.player.actionPoints ?? 0;
     const usedAP = ctx.player.actionPointsUsed ?? 0;
@@ -72,7 +95,7 @@ export const actionPointsMechanic: MechanicHooks = {
     }
 
     // Determine the cost of this specific action
-    const baseCost = apConfig.action_costs?.[action.type] ?? 1;
+    const baseCost = discountedCost(ctx, action, apConfig.action_costs?.[action.type] ?? 1).cost;
     let actionCost = baseCost;
 
     // For draw actions, cost is per card drawn
@@ -101,10 +124,13 @@ export const actionPointsMechanic: MechanicHooks = {
     if (!apConfig) return null;
     if (ctx.player.actionPoints === undefined) return null;
 
-    // Skip for pass (end turn)
+    // Skip for pass (end turn) and for off-turn actions
     if (action.type === 'pass') return null;
+    if (ctx.playerId !== ctx.state.currentPlayer) return null;
 
-    const baseCost = apConfig.action_costs?.[action.type] ?? 1;
+    const discount = discountedCost(ctx, action, apConfig.action_costs?.[action.type] ?? 1);
+    discount.consume();
+    const baseCost = discount.cost;
     let cost = baseCost;
 
     // For draw actions, cost is per card drawn

@@ -19,6 +19,22 @@ export interface ParsedRules {
  * Unified format: root has only metadata; `mechanics:` maps slug → config.
  * All mechanics (including cards and board) are stored uniformly in engine_mechanics.
  */
+/** Config keys rules authors reach for that name an engine mechanic differently. */
+const CONFIG_KEY_ALIASES: Record<string, string> = {
+  timeout_winner: 'win_timeout',
+};
+
+/** `players: 3-5` arrives from YAML as the string "3-5"; the engine needs {min, max}. */
+function parsePlayers(v: unknown): number | { min: number; max: number } {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const m = /^\s*(\d+)\s*(?:-|–|to)\s*(\d+)\s*$/.exec(v);
+    if (m) return { min: Number(m[1]), max: Number(m[2]) };
+    if (/^\s*\d+\s*$/.test(v)) return Number(v);
+  }
+  return v as number | { min: number; max: number };
+}
+
 function normalizeUnifiedConfig(raw: Record<string, unknown>): GameConfig {
   const mechanicsObj = raw.mechanics as Record<string, unknown>;
   const engineMechanics: Record<string, unknown> = {};
@@ -27,14 +43,15 @@ function normalizeUnifiedConfig(raw: Record<string, unknown>): GameConfig {
   const config: Partial<GameConfig> & Record<string, unknown> = {
     name: raw.name as string,
     version: (raw.version as string) ?? '1.0',
-    players: raw.players as number | { min: number; max: number },
+    players: parsePlayers(raw.players),
     win_condition: raw.win_condition as string,
     max_rounds: raw.max_rounds as number ?? 50,
     max_turns: raw.max_turns as number | undefined,
   };
 
-  for (const [key, value] of Object.entries(mechanicsObj)) {
+  for (const [rawKey, value] of Object.entries(mechanicsObj)) {
     // All mechanics (including cards and board) are treated uniformly
+    const key = CONFIG_KEY_ALIASES[rawKey.replace(/-/g, '_')] ?? rawKey;
     const slug = key.replace(/_/g, '-');
     mechanicsList.push(slug);
     const configKey = key.replace(/-/g, '_');
@@ -107,11 +124,15 @@ export function buildDeck(deckConfig: DeckConfig[]): Card[] {
 
   for (const cardDef of deckConfig) {
     for (let i = 0; i < cardDef.count; i++) {
+      // Keep every declared field (terrain, subtype, requires, …): mechanics read them off
+      // the dealt card, and dropping them made rules like "Lantern for caves" unenforceable.
+      const { count: _count, ...fields } = cardDef as DeckConfig & Record<string, unknown>;
       const card: Card = {
+        ...(fields as Partial<Card>),
         name: cardDef.name,
         type: cardDef.type ?? 'standard',
         effect: cardDef.effect ?? { type: 'none' }
-      };
+      } as Card;
 
       // Add placeable card properties if defined
       if (cardDef.placeable) {

@@ -13,6 +13,7 @@
  * - onCardPlayed: Dispatch card effects to handlers or apply directly
  */
 
+import { EVENT_EFFECTS, PASSIVE_EFFECTS } from '../event-effects';
 import {
   MechanicHooks,
   HookContext,
@@ -50,6 +51,8 @@ export const effectDispatcherMechanic: MechanicHooks & CardsHooks = {
     if (!card.effect?.type) return null;
 
     const effectType = card.effect.type.toLowerCase();
+    // Resolved (or held) by the event-effects mechanic — not a status effect to park.
+    if (effectType in EVENT_EFFECTS || PASSIVE_EFFECTS.has(effectType)) return null;
 
     // Determine target player
     const actionTarget = playContext?.actionTarget as string | undefined;

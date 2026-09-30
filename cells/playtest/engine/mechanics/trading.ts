@@ -23,10 +23,31 @@ import {
   SharedStateInitContext,
   SharedStateInitResult,
   ActionSchema,
+  StateChanges,
+  TurnStartContext,
   isMechanicEnabled
 } from './types';
 import { GameAction, TradeOfferAction, TradeRespondAction } from '../types/game';
 import { removeCardsFromHand, addToHand } from './core/hand';
+import { adjacentPlayers } from './core/tile-map';
+
+/** Every tradeable card name in the game (from the deck definition). */
+function tradeableNames(ctx: HookContext): string[] {
+  const tradeConfig = ctx.config.engine_mechanics?.trade as TradeConfig | undefined;
+  const deck = ((ctx.config.engine_mechanics?.cards as { deck?: Array<{ name: string; type?: string }> } | undefined)?.deck ?? (ctx.config as { deck?: Array<{ name: string; type?: string }> }).deck ?? []);
+  return [...new Set(deck.filter((c) => !tradeConfig?.item_types_only || c.type === 'item').map((c) => c.name))];
+}
+
+/** Identity of an offer (who, to whom, what for what) — to refuse repeats after a decline. */
+function offerKey(from: string, to: string, offer: string[], request: string[]): string {
+  return `${from}>${to}:${[...offer].sort().join('+')}=${[...request].sort().join('+')}`;
+}
+
+function locationOk(ctx: HookContext, cfg: TradeConfig, other: string): boolean {
+  if (cfg.require_same_location && ctx.state.players[other]?.state !== ctx.player.state) return false;
+  if (cfg.require_adjacent_location && !adjacentPlayers(ctx.state, ctx.config, ctx.playerId, other)) return false;
+  return true;
+}
 
 interface TradeConfig {
   enabled?: boolean;
@@ -95,6 +116,7 @@ export const tradingMechanic: MechanicHooks = {
         fields: {
           offerId: { type: 'string' },
           accept: { type: 'boolean' },
+          give: { type: 'array' },
         },
       };
     }
@@ -141,61 +163,63 @@ export const tradingMechanic: MechanicHooks = {
   getAvailableActions(ctx: HookContext): AvailableAction[] {
     const tradeConfig = ctx.config.engine_mechanics?.trade as TradeConfig | undefined;
     if (!tradeConfig?.enabled) return [];
-
     const actions: AvailableAction[] = [];
-
-    // Get tradeable cards from player's hand
-    const tradeableCards = (ctx.player.hand ?? [])
-      .filter(c => !tradeConfig.item_types_only || c.type === 'item')
-      .map(c => c.name);
-
-    if (tradeableCards.length > 0) {
-      // Find valid trade targets
-      const validTargets = Object.entries(ctx.state.players)
-        .filter(([id, p]) => {
-          if (id === ctx.playerId) return false;
-          if (tradeConfig.require_same_location && p.state !== ctx.player.state) return false;
-          return true;
-        })
-        .map(([id]) => id);
-
-      if (validTargets.length > 0) {
-        const target = validTargets[0];
-        const targetPlayer = ctx.state.players[target];
-        const targetCards = (targetPlayer.hand ?? [])
-          .filter(c => !tradeConfig.item_types_only || c.type === 'item')
-          .map(c => c.name);
-
-        actions.push({
-          action: {
-            type: 'trade_offer',
-            target,
-            offer: tradeableCards.slice(0, 1),
-            request: targetCards.slice(0, 1)
-          } as GameAction,
-          priority: 30,
-          category: 'trading'
-        });
-      }
-    }
-
-    // Add trade_respond actions for pending trades directed at this player
     const pendingTrades = (ctx.state.shared.pendingTrades as PendingTrade[]) || [];
-    const myPendingTrades = pendingTrades.filter(t => t.to === ctx.playerId);
 
-    for (const trade of myPendingTrades) {
+    // Offers are open: you put one of your items on the table and they choose what to give
+    // back (or decline) — nobody can name what's in a hidden hand. Named requests
+    // (request: [card]) still validate for MCP/agents, but aren't advertised.
+    const mine = [...new Set((ctx.player.hand ?? []).filter((c) => !tradeConfig.item_types_only || c.type === 'item').map((c) => c.name))];
+    const declined = ((ctx.state.shared.declinedTrades as string[] | undefined) ?? []);
+    const targets = ctx.state.turnOrder.filter((id) => id !== ctx.playerId && ctx.state.players[id] && !pendingTrades.some((t) => t.from === ctx.playerId && t.to === id) && locationOk(ctx, tradeConfig, id));
+    const examples: GameAction[] = [];
+    for (const target of targets) for (const give of mine) if (!declined.includes(offerKey(ctx.playerId, target, [give], []))) examples.push({ type: 'trade_offer', target, offer: [give], request: [] } as GameAction);
+    if (examples.length) {
       actions.push({
-        action: {
-          type: 'trade_respond',
-          offerId: trade.id,
-          accept: true
-        } as GameAction,
-        priority: 60, // High priority - respond to pending trades
-        category: 'trading'
+        action: examples[0],
+        priority: 30,
+        category: 'trading',
+        description: 'Offer one of your items to a player; they pick an item to give back, or decline',
+        required: { target: 'Another player', offer: 'Items from your hand', request: '[] (open: they choose) or item names' },
+        examples,
       });
     }
 
+    // Replies to offers made to you: for an open offer, accept by choosing which of your
+    // items to give back; for a named request, accept (if you hold it); or decline.
+    const replies: GameAction[] = [];
+    const myItems = [...new Set((ctx.player.hand ?? []).filter((c) => !tradeConfig.item_types_only || c.type === 'item').map((c) => c.name))];
+    for (const t of pendingTrades.filter((t) => t.to === ctx.playerId)) {
+      const base = { type: 'trade_respond', offerId: t.id, from: t.from, youGet: t.offer.join('+') };
+      if (t.request.length) replies.push({ ...base, accept: true, youGive: t.request.join('+') } as unknown as GameAction);
+      else {
+        for (const give of myItems) replies.push({ ...base, accept: true, give: [give] } as unknown as GameAction);
+        if (tradeConfig.allow_gifts) replies.push({ ...base, accept: true, give: [] } as unknown as GameAction);
+      }
+      replies.push({ ...base, accept: false } as unknown as GameAction);
+    }
+    if (replies.length) {
+      actions.push({
+        action: replies[0],
+        priority: 60,
+        category: 'trading',
+        description: 'Accept (choosing what you give back) or decline a trade offered to you',
+        required: { offerId: 'The offer', accept: 'true or false' },
+        examples: replies,
+        enabled: true,
+      });
+    }
     return actions;
+  },
+
+  /** An offer lapses when its maker's next turn starts (no stale offers piling up). */
+  onTurnStart(ctx: TurnStartContext): StateChanges | null {
+    const pending = (ctx.state.shared.pendingTrades as PendingTrade[] | undefined) ?? [];
+    ctx.state.shared.pendingTrades = pending.filter((t) => t.from !== ctx.playerId);
+    // A declined offer can't be repeated in the same turn; next turn it may be tried again.
+    const declined = (ctx.state.shared.declinedTrades as string[] | undefined) ?? [];
+    ctx.state.shared.declinedTrades = declined.filter((k) => !k.startsWith(`${ctx.playerId}>`));
+    return null;
   },
 
   describeAction(action: GameAction): ActionDescription | null {
@@ -263,6 +287,10 @@ function validateTradeOffer(ctx: HookContext, action: TradeOfferAction): Validat
     }
   }
 
+  if (tradeConfig.require_adjacent_location && !adjacentPlayers(ctx.state, ctx.config, ctx.playerId, action.target)) {
+    return { valid: false, error: `Cannot trade with ${action.target}: you must be on the same or a neighbouring tile.` };
+  }
+
   // Validate offered cards exist in player's hand
   const playerHand = ctx.player.hand ?? [];
   for (const cardName of action.offer) {
@@ -275,24 +303,24 @@ function validateTradeOffer(ctx: HookContext, action: TradeOfferAction): Validat
     }
   }
 
-  // Validate requested cards exist in target's hand
-  const targetPlayer = ctx.state.players[action.target];
-  const targetHand = targetPlayer.hand ?? [];
+  // Requested cards are named, not looked up in the target's (hidden) hand: the target
+  // can only accept if they hold them. The name must be a tradeable card in this game.
+  const names = tradeableNames(ctx);
   for (const cardName of action.request) {
-    const card = targetHand.find(c => c.name === cardName);
-    if (!card) {
-      return { valid: false, error: `Card "${cardName}" not in ${action.target}'s hand. Cannot request it.` };
-    }
-    if (tradeConfig.item_types_only && card.type !== 'item') {
-      return { valid: false, error: `Card "${cardName}" is not an item. Only items can be traded.` };
+    if (names.length && !names.includes(cardName)) {
+      return { valid: false, error: `"${cardName}" is not a tradeable card in this game.` };
     }
   }
-
-  // Check if gifts are allowed
-  if (action.request.length === 0 && !tradeConfig.allow_gifts) {
-    return { valid: false, error: 'One-sided trades (gifts) are not allowed. You must request something in return.' };
+  if (((ctx.state.shared.declinedTrades as string[] | undefined) ?? []).includes(offerKey(ctx.playerId, action.target, action.offer, action.request ?? []))) {
+    return { valid: false, error: `${action.target} just declined that offer — try something else, or again next turn.` };
+  }
+  const pending = (ctx.state.shared.pendingTrades as PendingTrade[]) || [];
+  if (pending.some((t) => t.from === ctx.playerId && t.to === action.target)) {
+    return { valid: false, error: `You already have an offer waiting with ${action.target}.` };
   }
 
+  // An empty request is an open offer (the responder chooses what to give back, or —
+  // where allow_gifts — nothing), not a gift, so it is always allowed.
   if (action.offer.length === 0) {
     return { valid: false, error: 'You must offer at least one card to trade.' };
   }
@@ -312,7 +340,7 @@ function validateTradeRespond(ctx: HookContext, action: TradeRespondAction): Val
     return { valid: false, error: `This trade offer is not for you. It was sent to ${trade.to}.` };
   }
 
-  // If accepting, verify both players still have the cards
+  // If accepting, verify both players (still) have the cards — a decline is always allowed
   if (action.accept) {
     const fromPlayer = ctx.state.players[trade.from];
     const fromPlayerHand = fromPlayer.hand ?? [];
@@ -324,6 +352,16 @@ function validateTradeRespond(ctx: HookContext, action: TradeRespondAction): Val
     }
 
     const responderHand = ctx.player.hand ?? [];
+    const give = ((action as unknown as { give?: string[] }).give) ?? [];
+    if (!trade.request.length) {
+      const tradeConfig = ctx.config.engine_mechanics?.trade as TradeConfig | undefined;
+      if (!give.length && !tradeConfig?.allow_gifts) return { valid: false, error: 'Choose an item to give back.' };
+      for (const cardName of give) {
+        const card = responderHand.find(c => c.name === cardName);
+        if (!card) return { valid: false, error: `You don't have "${cardName}" to give.` };
+        if (tradeConfig?.item_types_only && card.type !== 'item') return { valid: false, error: `"${cardName}" is not an item.` };
+      }
+    }
     for (const cardName of trade.request) {
       if (!responderHand.find(c => c.name === cardName)) {
         return { valid: false, error: `You no longer have card "${cardName}". Trade cannot be completed.` };
@@ -337,8 +375,8 @@ function validateTradeRespond(ctx: HookContext, action: TradeRespondAction): Val
 function executeTradeOffer(ctx: ActionExecutionContext, action: TradeOfferAction): ActionExecutionResult {
   const { playerId, state } = ctx;
 
-  // Generate unique trade ID
-  const tradeId = `trade-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  // Deterministic, readable id (a replayed seed gives the same ids).
+  const tradeId = `t${state.turnNumber}-${playerId}-${action.target}`;
 
   // Create pending trade
   const pendingTrade: PendingTrade = {
@@ -390,7 +428,8 @@ function executeTradeRespond(ctx: ActionExecutionContext, action: TradeRespondAc
     const offeredCards = removeCardsFromHand(state, trade.from, trade.offer);
     addToHand(state, playerId, offeredCards);
 
-    const requestedCards = removeCardsFromHand(state, playerId, trade.request);
+    const back = trade.request.length ? trade.request : (((action as unknown as { give?: string[] }).give) ?? []);
+    const requestedCards = removeCardsFromHand(state, playerId, back);
     addToHand(state, trade.from, requestedCards);
 
     // Calculate new completed trades counts
@@ -416,11 +455,12 @@ function executeTradeRespond(ctx: ActionExecutionContext, action: TradeRespondAc
         from: trade.from,
         to: trade.to,
         offer: trade.offer,
-        request: trade.request
+        request: back
       }
     };
   } else {
-    // Trade declined
+    // Trade declined — the same offer can't be made again this turn
+    state.shared.declinedTrades = [...((state.shared.declinedTrades as string[] | undefined) ?? []), offerKey(trade.from, trade.to, trade.offer, trade.request)];
     return {
       handled: true,
       stateChanges: {

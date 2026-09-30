@@ -103,8 +103,8 @@ export const placeCardMechanic: MechanicHooks = {
       return { valid: true };
     }
 
-    // --- place_location validation ---
-    if (action.type === 'place_location') {
+    // --- place_location validation --- (the place-location mechanic owns it when configured)
+    if (action.type === 'place_location' && !(ctx.config.engine_mechanics as Record<string, unknown> | undefined)?.place_location) {
       const placeAction = action as PlaceLocationAction;
       const hand = ctx.player.hand || [];
 
@@ -219,8 +219,8 @@ export const placeCardMechanic: MechanicHooks = {
       };
     }
 
-    // --- place_location execution ---
-    if (action.type === 'place_location') {
+    // --- place_location execution --- (the place-location mechanic owns it when configured)
+    if (action.type === 'place_location' && !(ctx.config.engine_mechanics as Record<string, unknown> | undefined)?.place_location) {
       const placeAction = action as PlaceLocationAction;
 
       // Find card in hand
@@ -307,7 +307,7 @@ export const placeCardMechanic: MechanicHooks = {
     // === PLACE_LOCATION actions (for location cards on grid games) ===
     const gridConfig = ctx.config.engine_mechanics?.grid as
       { type?: string; starting_tile?: string; adjacency?: string } | undefined;
-    if (gridConfig) {
+    if (gridConfig && !(ctx.config.engine_mechanics as Record<string, unknown> | undefined)?.place_location) {
       const locationCards = hand.filter((c: Card) => c.type === 'location');
       if (locationCards.length > 0) {
         const startingTile = gridConfig.starting_tile || 'origin';

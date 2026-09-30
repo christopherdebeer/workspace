@@ -29,6 +29,7 @@ import {
   validateAction,
   executeAction,
 } from '../engine/core/game';
+import { EVENT_EFFECTS } from '../engine/mechanics/event-effects';
 import { parseRules, getPlayerCount, getMechanicImplementationStatus, loadMechanicsIndex } from '../engine/core/rules';
 import { validateRules } from '../engine/core/validate';
 import { mechanicRegistry } from '../engine/mechanics/index';
@@ -62,7 +63,14 @@ export const HANDLED_EFFECTS = new Set([
   'draw_on_enter', 'heal_on_enter', 'damage_on_enter',
   'move_forward', 'move_backward',
   'block_turn', 'block', 'skip', 'lose_turn', 'wild',
+  // event-effects mechanic (targeted events, reactions, collectibles, movement bonus)
+  ...Object.keys(EVENT_EFFECTS), 'counter', 'collectible', 'movement_bonus',
+  // tile effects on the tile map (grid-movement / action-points)
+  'safe', 'trade_bonus', 'hide', 'reveal', 'enemy_only',
 ]);
+/** Item effects that do nothing by themselves: handled only if a card's `requires` or an
+ *  objective's `holds` check names the item (otherwise they are dead weight in the deck). */
+const PASSIVE_IF_REFERENCED = new Set(['utility', 'currency', 'enemy_item']);
 
 /* Rule facts Jev reads off the prose, later checked against the played record. */
 export const RULE_CHECKS: Record<string, string> = {
@@ -153,8 +161,13 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
     const eff = c.effect as { type?: string } | undefined;
     if (eff?.type) byType.set(eff.type, [...(byType.get(eff.type) ?? []), String(c.name ?? '?')]);
   }
-  const effects = [...byType].map(([type, cards]) => ({ type, cards, handled: HANDLED_EFFECTS.has(type) }));
-  for (const e of effects) if (!e.handled) findings.push({ kind: 'unhandled-effect', severity: 'error', subject: e.type, detail: `no mechanic applies "${e.type}" — cards ${e.cards.slice(0, 4).join(', ')} will be played for nothing` });
+  const deckCards = (cfg.deck ?? em.cards?.deck ?? []) as Array<Record<string, unknown>>;
+  const referenced = new Set<string>([
+    ...deckCards.flatMap((c) => (Array.isArray(c.requires) ? (c.requires as string[]) : [])),
+    ...((cfg as { objectives?: Array<{ check?: unknown }> }).objectives ?? []).flatMap((o) => JSON.stringify(o.check ?? {}).match(/"[^"]+"/g) ?? []).map((q) => q.slice(1, -1)),
+  ]);
+  const effects = [...byType].map(([type, cards]) => ({ type, cards, handled: HANDLED_EFFECTS.has(type) || (PASSIVE_IF_REFERENCED.has(type) && cards.some((c) => referenced.has(c))) }));
+  for (const e of effects) if (!e.handled) findings.push({ kind: 'unhandled-effect', severity: 'error', subject: e.type, detail: PASSIVE_IF_REFERENCED.has(e.type) ? `"${e.type}" items (${e.cards.slice(0, 4).join(', ')}) do nothing unless a card's requires or an objective's check names them — none does` : `no mechanic applies "${e.type}" — cards ${e.cards.slice(0, 4).join(', ')} will be played for nothing` });
 
   // The engine's own schema validation.
   let schema = { errors: [] as string[], warnings: [] as string[] };
@@ -301,6 +314,9 @@ function fieldsNeedingWords(a: Action): string[] {
     .map(([k]) => k);
 }
 
+/** Action types a player may take when it isn't their turn (replies), served before the current player. */
+const OFF_TURN = /(^|_)respond$/;
+
 function scoresOf(state: { players: Record<string, { score?: number }> }): Record<string, number> {
   return Object.fromEntries(Object.entries(state.players).map(([p, s]) => [p, Number(s.score ?? 0)]));
 }
@@ -319,7 +335,7 @@ function turnState(state: Record<string, any>, pid: string, av: Record<string, a
   for (const [k, v] of Object.entries(av)) {
     if (['actions', 'playerId', 'isYourTurn', 'hand', 'currentState', 'placedCards', 'activeEffects'].includes(k)) continue;
     const s = JSON.stringify(v);
-    if (s && s.length < 600) extras[k] = v;
+    if (s && s.length < 2500) extras[k] = v;
   }
   return {
     you: pid,
@@ -373,9 +389,11 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
     s = E(() => loadState(gameId)) as unknown as Record<string, any>;
     for (let step = 1; s.status === 'in_progress' && step <= maxSteps; step++) {
       if (opts.signal?.aborted) throw Object.assign(new Error('stopped'), { name: 'AbortError' });
-      const pid = s.currentPlayer as string;
+      // A player who must answer something off-turn (a trade offered to them) goes first.
+      const responder = (s.turnOrder as string[]).find((p) => p !== s.currentPlayer && (E(() => getAvailableActions(s as never, p)) as unknown as { actions: Array<{ type: string; enabled: boolean }> }).actions.some((a) => a.enabled && OFF_TURN.test(a.type)));
+      const pid = responder ?? (s.currentPlayer as string);
       const av = E(() => getAvailableActions(s as never, pid)) as unknown as Record<string, any>;
-      const offered = (av.actions as Array<Record<string, any>>).filter((a) => a.enabled && a.type !== 'resign');
+      const offered = (av.actions as Array<Record<string, any>>).filter((a) => a.enabled && a.type !== 'resign' && (!responder || OFF_TURN.test(a.type)));
 
       // code enumerates, the engine's validator masks, Jev chooses
       const valid: Action[] = [];
@@ -409,7 +427,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       } else {
         const persona = opts.persona ? ` Play as a ${opts.persona} player.` : '';
         const q: Questions = {
-          move: { type: 'choice', instructions: `You are ${pid}. Which move gives you the best chance of winning this game?${persona}`, criteria: Object.fromEntries(picks.map((p) => [p.label, null])) },
+          move: { type: 'choice', instructions: responder ? `You are ${pid}, answering off-turn. Which reply gives you the best chance of winning this game?${persona}` : `You are ${pid}. Which move gives you the best chance of winning this game?${persona}`, criteria: Object.fromEntries(picks.map((p) => [p.label, null])) },
           ahead: { type: 'noul', instructions: `Is ${pid} currently ahead of every opponent?` },
         };
         try {
@@ -433,13 +451,14 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         }
       }
 
+      const at = { round: s.round, turn: s.turnNumber }; // before the action can end the turn
       E(() => executeAction(s as never, pid, chosen.action as never));
       recent.push(`${pid}: ${chosen.label}`);
       const next = E(() => loadState(gameId)) as unknown as Record<string, any>;
       const t: TurnRecord = {
         step,
-        round: s.round,
-        turn: s.turnNumber,
+        round: at.round,
+        turn: at.turn,
         player: pid,
         offered: offered.length,
         valid: picks.length,
@@ -455,7 +474,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       if (step === maxSteps && s.status === 'in_progress') session.stopped = 'max-steps';
     }
     session.status = s.status;
-    session.winner = (s.winner as string) ?? null;
+    session.winner = (s.winner as string) ?? (s.shared?.winner as string) ?? null;
     session.endReason = (s.endReason as string) ?? (s.shared?.endReason as string) ?? null;
   } catch (e) {
     session.stopped = (e as Error).name === 'AbortError' ? 'deadline' : 'error';

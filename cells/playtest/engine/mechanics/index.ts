@@ -134,6 +134,7 @@ import { socialMechanic } from './core/social-mechanic';
 import { locationEffectsMechanic } from './location-effects';
 import { placedCardEffectsMechanic } from './placed-card-effects';
 import { effectDispatcherMechanic } from './core/effect-dispatcher';
+import { eventEffectsMechanic } from './event-effects';
 
 // Phase 7: Worker Placement mechanics
 import { workersMechanic } from './core/workers-mechanic';
@@ -361,6 +362,8 @@ mechanicRegistry.register(passMechanic);
 // Register effect handling mechanics
 mechanicRegistry.register(locationEffectsMechanic);
 mechanicRegistry.register(placedCardEffectsMechanic);
+// Event effects: targeted events (peek, steal, block, sabotage, teleport…) and held reactions
+mechanicRegistry.register(eventEffectsMechanic);
 // Effect dispatcher: catch-all for card effects not handled by specialized mechanics
 mechanicRegistry.register(effectDispatcherMechanic);
 

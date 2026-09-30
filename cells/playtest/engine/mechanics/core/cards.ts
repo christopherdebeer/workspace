@@ -16,6 +16,7 @@
  * - onBeforeCardPlay: Before playing a card, can block (blocking)
  */
 
+import { EVENT_EFFECTS, PASSIVE_EFFECTS } from '../event-effects';
 import {
   MechanicHooks,
   HookContext,
@@ -301,7 +302,10 @@ export const cardsMechanic: MechanicHooks = {
     // === PLAY_CARD action (for regular cards in hand) ===
     const hand = getPlayerHand(state, playerId);
     // Filter out placeable/location cards (handled by place-card mechanic)
-    const basePlayable = hand.filter(c => !c.placeable && c.type !== 'location');
+    // Leave out: types the rules say can't be played (card_type_rules), and cards the
+    // event-effects mechanic advertises itself (targeted events) or that only work held.
+    const typeRules = (ctx.config.engine_mechanics?.card_type_rules ?? {}) as Record<string, { playable?: boolean }>;
+    const basePlayable = hand.filter(c => !c.placeable && c.type !== 'location' && typeRules[c.type]?.playable !== false && !((c.effect?.type ?? '') in EVENT_EFFECTS) && !PASSIVE_EFFECTS.has(c.effect?.type ?? ''));
     if (basePlayable.length > 0) {
       const playableNames = basePlayable.map(c => c.name);
       const opponents = state.turnOrder.filter(pid => pid !== playerId);
