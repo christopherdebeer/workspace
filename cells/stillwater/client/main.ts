@@ -23,7 +23,7 @@ import { RESIDENTS, Story, type ResidentKind } from './story';
 import { Atmosphere, DAY, DEPTH_K, skyAt } from './atmosphere';
 import { Sound } from './audio';
 import { Overlay } from './ui';
-import { Curriculum, accepts, feedback, equation, padCompletion, BANDS, type Challenge } from './challenges';
+import { Curriculum, accepts, overfull, completable, groupsNeed, equation, type Challenge } from './challenges';
 import { ChallengeUI } from './challenge-ui';
 import { glInfo, probe, report } from './report';
 import { glyphAtlas, glyphIndex, GLYPHS } from './glyphs';
@@ -36,12 +36,16 @@ const ui = new Overlay();
 const mathUI = new ChallengeUI();
 let curriculum = new Curriculum();
 let relationship: Challenge | null = null;
-let relationLeaves: Pad[][] = [[]];
-let relationSlot = 0;
+/** The leaves gathered for it (one collection; for times questions, leaves that match). */
+let relationLeaves: Pad[] = [];
 let relationSupply = 0;
-let relationAssisted = false;
+/** Help asked (0 none, 1 heard and pictured, 2 worked through), and gatherings that were too much. */
+let relationHelp = 0;
 let relationAttempts = 0;
+let relationShownAt = 0;
 let relationClearAt = 0;
+/** After a gathering was too much: the leaf the river lets go, and when. */
+let relationRelease: { pad: Pad; at: number } | null = null;
 const sound = new Sound();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
@@ -117,9 +121,11 @@ function loadProfile(name: string) {
   const levelParam = Number(startupParams.get('level'));
   if (Number.isFinite(levelParam) && startupParams.has('level')) mastery = Math.max(0, Math.min(1, levelParam));
   curriculum = new Curriculum(startupParams.has('fresh') ? null : readJSON(pKey(pr.id, 'curriculum.v1')), mastery);
-  const band = Number(startupParams.get('maths'));
-  if (startupParams.has('maths') && Number.isInteger(band)) curriculum.setBand(band);
-  mathUI.setBand(curriculum.data.band);
+  // `?year=N` places as a grown-up would (0 Reception … 5 Year 5+); `?maths=N` sets a level directly
+  const year = Number(startupParams.get('year'));
+  if (startupParams.has('year') && Number.isInteger(year)) curriculum.setYear(year);
+  const level = Number(startupParams.get('maths'));
+  if (startupParams.has('maths') && Number.isInteger(level)) curriculum.setLevel(level);
   save();
 }
 const forcedStage = N.stageForId(startupParams.get('stage'));
@@ -267,65 +273,106 @@ let firstTarget = true;
 let lastSolved: number | undefined;
 let checkAt = 0;
 
-// The equation's quantities are physical selections of dew, never typed numbers.
-const relationValues = () => relationLeaves.map(ps => ps.reduce((n,p) => n + liveCount(p), 0));
-function clearRelation(all = true) {
-  if (all) { for(const ps of relationLeaves) for(const p of ps) p.selected=false; relationLeaves=relationship?.answers.map(()=>[])??[[]]; relationSlot=0; }
-  else { for(const p of relationLeaves[relationSlot])p.selected=false; relationLeaves[relationSlot]=[]; }
-  selection=relationLeaves[relationSlot];
-  if(relationship)mathUI.progress(relationValues(),relationSlot);
+// ─── relationships: the question at the top, answered with dew (challenges.ts) ──
+/** What the leaves hold: `sum` [drops]; `groups` [leaves, drops a leaf]. */
+function relationGathered(): number[] {
+  if (!relationship) return [];
+  if (relationship.mode === 'sum') return [relationLeaves.reduce((n, p) => n + liveCount(p), 0)];
+  return relationLeaves.length ? [relationLeaves.length, liveCount(relationLeaves[0])] : [];
 }
-mathUI.onSlot = i => { if(!relationship||visit||pageOpen)return; relationSlot=i;selection=relationLeaves[i];mathUI.progress(relationValues(),i);canvas.focus({preventScroll:true}); };
-mathUI.onClear = () => { if(relationship)clearRelation(false); };
-mathUI.onHelp = () => { relationAssisted = true; };
-mathUI.onSubmit = () => {
-  if (!relationship || visit || pageOpen) return;
-  const values=relationValues();
-  armSound();
-  if (!accepts(relationship, values)) {
-    relationAttempts++;
-    mathUI.message(feedback(relationship, values));
-    return;
-  }
-  const c = relationship;
-  const chosen=relationLeaves.flat();
-  // Exactly the dew the player chose rises into the lantern.
-  let order=0;
-  for(const p of chosen){const cs=Math.cos(p.ang),sn=Math.sin(p.ang);
-    for(const d of p.drops){if(d.to<=0)continue;d.to=0;
-      lifts.push({x0:p.x+(cs*d.x-sn*d.y)*p.r,y0:p.y+(sn*d.x+cs*d.y)*p.r,t:0,dur:1.5+rand()*.6,delay:order++*.05,bend:(rand()*2-1)*60,radius:d.r*p.r});
-    }
-    pond.impulses.push({x:p.x,y:p.y,r:p.r*.6,s:.6});
-  }
-  window.setTimeout(()=>chosen.forEach(p=>p.selected=false),900);
-  relationLeaves=[[]];relationSlot=0;selection=[];
-  curriculum.record(c, !relationAssisted && relationAttempts === 0);
-  mathUI.complete(values); mathUI.setBand(curriculum.data.band);
-  relationship = null;
-  relationClearAt = pond.t + 2.4;
-  nextTargetAt = pond.t + 4.2;
-  sound.gathered(); lantern = Math.min(1.5, lantern + 0.35);
-  pond.propel(190);
-  story.gather(); persistStory(); totalSolves++;
-  // A quiet response in the world, independent of numerical size or speed.
-  const nearby = visibleDewy()[0];
-  if (nearby) openBeside(nearby);
-  save();
+function clearRelation() {
+  for (const p of relationLeaves) p.selected = false;
+  relationLeaves = [];
+  selection = relationLeaves;
+  relationRelease = null;
+  if (relationship) mathUI.progress(relationGathered());
+}
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+/** A fact the memory wants back (P1), for the curriculum to ask if a skill here can carry it. */
+function dueFact(): { a: number; b: number; mult: boolean } | null {
+  const f = memory.due(Date.now(), (x) => Math.max(...x.parts) <= 12, 3)[0];
+  return f ? { a: f.parts[0], b: f.parts[1], mult: f.rule === 'groups' } : null;
+}
+mathUI.onHelp = (step) => {
+  relationHelp = Math.max(relationHelp, step);
+  armSound();
+};
+function solveRelation() {
+  const c = relationship!;
+  const g = relationGathered();
+  const chosen = relationLeaves.slice();
+  // exactly the dew the child chose rises into the lantern
+  let order = 0;
+  for (const p of chosen) {
+    const cs = Math.cos(p.ang);
+    const sn = Math.sin(p.ang);
+    for (const d of p.drops) {
+      if (d.to <= 0) continue;
+      d.to = 0;
+      lifts.push({ x0: p.x + (cs * d.x - sn * d.y) * p.r, y0: p.y + (sn * d.x + cs * d.y) * p.r, t: 0, dur: 1.5 + rand() * 0.6, delay: order++ * 0.05, bend: (rand() * 2 - 1) * 60, radius: d.r * p.r });
+    }
+    pond.impulses.push({ x: p.x, y: p.y, r: p.r * 0.6, s: 0.6 });
+  }
+  window.setTimeout(() => chosen.forEach((p) => (p.selected = false)), 900);
+  solvedThread = { pads: chosen, until: pond.t + 0.9 };
+  relationLeaves = [];
+  selection = relationLeaves;
+  relationRelease = null;
+  const clean = relationHelp === 0 && relationAttempts === 0;
+  curriculum.record(c, clean, today());
+  // what the river remembers (P1) and how the stretch goes (P3), as for the counting
+  const q = L.quality({ secs: pond.t - relationShownAt, leaves: chosen.length, value: c.total, friction: relationAttempts, scaffold: relationHelp, counting: false });
+  const fact = c.mult ? L.factOf('groups', new Array(c.a).fill(c.b)) : L.factOf('sum', [c.a, c.b]);
+  const { newWay } = memory.record(fact, q, Date.now());
+  const phase = stretch.phase;
+  stretch.answered({ q, friction: relationAttempts });
+  mathUI.complete(g);
+  relationship = null;
+  relationClearAt = pond.t + 1.7;
+  nextTargetAt = pond.t + 1.7 + L.PHASE_PAUSE[phase];
+  sound.gathered();
+  lantern = Math.min(1.5, lantern + (q >= 0.85 ? 0.45 : 0.3));
+  pond.propel(190);
+  story.gather();
+  persistStory();
+  totalSolves++;
+  // the river notices: a flower opens; a product made the other way round from before, two
+  if (chosen.length) openBeside(chosen[Math.floor(rand() * chosen.length)]);
+  if (newWay && chosen.length > 1) openBeside(chosen[0]);
+  save();
+}
 mathUI.onSkip = () => {
   if (!relationship || visit || pageOpen) return;
-  curriculum.record(relationship, false);
-  clearRelation(); relationship = null; mathUI.hide(); nextTargetAt = pond.t + 0.5; save();
+  curriculum.record(relationship, false, today());
+  clearRelation();
+  relationship = null;
+  mathUI.hide();
+  nextTargetAt = pond.t + 0.5;
+  save();
 };
-mathUI.onBand = band => {
+/** A grown-up's choice of school year (the panel under a long press on the title). */
+mathUI.onYear = (year) => {
   if (!profile) return;
-  endVisit(); clearSelection(); clearRelation(); target = null; ask = null; share = null;
-  relationship = null; relationClearAt = 0; releaseAt = 0; lock = 0;
-  chimes = []; ui.clearTarget(); mathUI.hide();
-  curriculum.setBand(band); mathUI.setBand(band);
+  endVisit();
+  clearSelection();
+  clearRelation();
+  target = null;
+  ask = null;
+  share = null;
+  relationship = null;
+  relationClearAt = 0;
+  releaseAt = 0;
+  lock = 0;
+  chimes = [];
+  ui.clearTarget();
+  mathUI.hide();
+  curriculum.setYear(year);
   stretch = new L.Stretch(null);
   nextTargetAt = pond.t + 0.3;
-  ui.say(BANDS[band][1], 4); save();
+  save();
 };
 
 /**
@@ -391,20 +438,46 @@ function relationStock(dry=false):Pad[] {
     return x-inset>8&&x+inset<cam.cssW-8&&y-inset>Math.max(205,cam.cssH*.27)&&y+inset<cam.cssH*.88&&!pond.onBoat(p.x,p.y)&&!hitResident(x,y)&&hit(x,y)===p;
   });
 }
-function ensureRelationshipPads(){
-  if(!relationship)return;
-  const values=relationValues();
-  // A deliberately overfull selection needs revision, not an impossible repair.
-  if(!padCompletion(relationship,values,[1,1,2,2,3,3,4,4,5,5,6,6]))return;
-  const stock=relationStock();
-  const dry=relationStock(true).sort((a,b)=>b.r-a.r);
-  let witness=padCompletion(relationship,values,counts(stock));
-  let spare=witness?stock.length-witness.flat().length:0;
-  for(const p of dry){
-    if(witness&&spare>=2)break;
-    const n=[3,5,2,6,4,1,6][relationSupply++%7];
-    p.drops=layDrops(n,p.r,rand,true);stock.push(p);
-    witness=padCompletion(relationship,values,counts(stock));spare=witness?stock.length-witness.flat().length:0;
+/**
+ * Keep the question answerable from leaves a child can plainly see: new dew
+ * condenses on dry leaves in view as needed, with a couple of spare choices so
+ * the answer is never simply all the dew there is. For times questions the dew
+ * comes in equal groups — enough leaves of the size the question needs (or the
+ * size the child has started with), and a leaf or two that does not match.
+ * Chosen leaves are never changed.
+ */
+function ensureRelationshipPads() {
+  const c = relationship;
+  if (!c) return;
+  const g = relationGathered();
+  // a gathering that is too much is let go of, not repaired
+  if (overfull(c, g)) return;
+  const stock = relationStock();
+  const dry = relationStock(true).sort((a, b) => b.r - a.r);
+  const lay = (p: Pad, n: number) => {
+    p.drops = layDrops(n, p.r, rand, true);
+    stock.push(p);
+  };
+  if (c.mode === 'sum') {
+    for (const p of dry) {
+      if (completable(c, g, counts(stock)) && stock.length >= 3) break;
+      lay(p, [3, 5, 2, 6, 4, 1, 6][relationSupply++ % 7]);
+    }
+    return;
+  }
+  const need = groupsNeed(c);
+  const per = g[1] || need.size;
+  const groups = g[0] ? c.total / per : need.count;
+  const want = groups - (g[0] ?? 0) + 1;
+  let decoys = stock.filter((q) => liveCount(q) !== per).length;
+  for (const p of dry) {
+    const have = stock.filter((q) => liveCount(q) === per).length;
+    if (have >= want && decoys >= 2) break;
+    if (have < want) lay(p, per);
+    else {
+      lay(p, [1, 2, 3, 4, 5, 6].filter((x) => x !== per)[relationSupply++ % 5]);
+      decoys++;
+    }
   }
 }
 
@@ -472,18 +545,23 @@ function plantDue() {
 
 function setTarget() {
   if (!started || pageOpen) return;
-  if (!forcedStage && curriculum.data.band > 0) {
-    relationship = curriculum.next(rand);
-    clearRelation();
-    relationAssisted = false; relationAttempts = 0;
-    ui.clearTarget(); ui.quiet();
-    mathUI.show(relationship); mathUI.setBand(curriculum.data.band);
-    ensureRelationshipPads();
-    return;
-  }
   const phase = stretch.phase;
   if (phase === 'finale') {
     startFinale();
+    return;
+  }
+  if (!forcedStage && curriculum.data.level > 0) {
+    relationship = curriculum.next(rand, { phase, due: phase === 'reach' || phase === 'warm' ? dueFact() : null });
+    relationLeaves = [];
+    selection = relationLeaves;
+    relationHelp = 0;
+    relationAttempts = 0;
+    relationShownAt = pond.t;
+    relationRelease = null;
+    ui.clearTarget();
+    ui.quiet();
+    mathUI.show(relationship);
+    ensureRelationshipPads();
     return;
   }
   const m = clamp01(mastery + L.PHASE_OFFSET[phase]);
@@ -492,7 +570,7 @@ function setTarget() {
   let again = false;
   let dueAsk = false;
   let activity: { stage: N.Stage; target: N.Target } | null = null;
-  if (forcedStage || curriculum.data.band === 0) {
+  if (forcedStage || curriculum.data.level === 0) {
     const introStage = forcedStage ?? N.STAGES[0];
     const t = N.chooseTarget(introStage, counts(seen), rand, lastSolved);
     activity = t ? { stage: introStage, target: t } : null;
@@ -509,7 +587,7 @@ function setTarget() {
     activity ??= N.chooseActivity(m, counts(seen), rand, lastSolved);
   }
 
-  let st = activity?.stage ?? forcedStage ?? (curriculum.data.band === 0 ? N.STAGES[0] : N.pickStage(m, rand));
+  let st = activity?.stage ?? forcedStage ?? (curriculum.data.level === 0 ? N.STAGES[0] : N.pickStage(m, rand));
   let t = activity?.target ?? N.chooseTarget(st, counts(visibleDewy()), rand, lastSolved);
 
   if (!t) {
@@ -681,20 +759,45 @@ function gathered() {
 }
 
 function clearSelection() {
-  if(relationship){clearRelation(false);return;}
+  if (relationship) {
+    clearRelation();
+    return;
+  }
   for (const p of selection) p.selected = false;
   selection = [];
   ui.progress(0);
 }
 
 function choose(p: Pad) {
-  if(relationship){
-    if(visit||pageOpen||lock>0||!liveCount(p))return;
-    if(relationLeaves.some((ps,i)=>i!==relationSlot&&ps.includes(p))){mathUI.message('That pad fills the other blank. Touch that blank to change it.');return;}
-    const ps=relationLeaves[relationSlot],at=ps.indexOf(p);
-    if(at>=0){ps.splice(at,1);p.selected=false;}else{ps.push(p);p.selected=true;sound.note(Math.min(6,ps.length-1),panAt(p.x));}
-    selection=ps;const values=relationValues();mathUI.progress(values,relationSlot);
-    if(accepts(relationship,values))mathUI.onSubmit();
+  if (relationship) {
+    if (visit || pageOpen || lock > 0 || !liveCount(p)) return;
+    const at = relationLeaves.indexOf(p);
+    if (at >= 0) {
+      // touching a chosen leaf lets it go
+      relationLeaves.splice(at, 1);
+      p.selected = false;
+    } else {
+      // equal groups: a leaf that does not match the first is not taken — it bobs, a low note
+      if (relationship.mode === 'groups' && relationLeaves.length && liveCount(p) !== liveCount(relationLeaves[0])) {
+        p.bob = 1;
+        sound.note(0, panAt(p.x));
+        return;
+      }
+      relationLeaves.push(p);
+      p.selected = true;
+      sound.note(Math.min(6, relationLeaves.length - 1), panAt(p.x));
+    }
+    selection = relationLeaves;
+    const g = relationGathered();
+    mathUI.progress(g);
+    if (accepts(relationship, g)) solveRelation();
+    else if (overfull(relationship, g)) {
+      // too much: the blank shakes and the river lets this leaf go again (no words)
+      relationAttempts++;
+      mathUI.over();
+      lock = 0.9;
+      relationRelease = { pad: p, at: pond.t + 0.85 };
+    }
     return;
   }
   if (!target || lock > 0) return;
@@ -828,7 +931,6 @@ function solve() {
   if (e.fluent) lantern = Math.min(1.5, lantern + 0.35);
 
   curriculum.counted(targetFriction === 0 && scaffolds === 0);
-  mathUI.setBand(curriculum.data.band);
   story.gather();
   persistStory();
   totalSolves++;
@@ -905,7 +1007,17 @@ function telemetry() {
 {
   const titleEl = document.getElementById('title');
   let taps: number[] = [];
+  // press and hold the title: the grown-ups' panel (the school year)
+  let hold = 0;
+  const cancel = () => window.clearTimeout(hold);
+  titleEl?.addEventListener('pointerup', cancel);
+  titleEl?.addEventListener('pointerleave', cancel);
+  titleEl?.addEventListener('pointercancel', cancel);
   titleEl?.addEventListener('pointerdown', () => {
+    cancel();
+    hold = window.setTimeout(() => {
+      if (profile) mathUI.openGrownUps(curriculum.data.year, curriculum.data.level);
+    }, 900);
     const now = performance.now();
     taps = taps.filter((t) => now - t < 1500);
     taps.push(now);
@@ -1383,8 +1495,7 @@ function buildNumbersPage() {
     pageEl.appendChild(d);
   };
   sec('on the river', `${days ? (days === 1 ? 'since today' : `since ${days} days ago`) : 'just begun'} · ${totalSolves} number${totalSolves === 1 ? '' : 's'} made · ${notebook.pages} of ${SPECIES.length} creatures seen`);
-  sec('relationships', `${BANDS[curriculum.data.band][0]} · ${curriculum.data.serial} equation challenges explored`);
-  sec('now', curriculum.data.band ? 'equations · '+BANDS[curriculum.data.band][0] : stageNames[stage().id] ?? stage().id);
+  sec('now', curriculum.data.level ? curriculum.level.name.toLowerCase() : stageNames[stage().id] ?? stage().id);
   if (story.told > 0 || Object.keys(story.residents).length || Object.keys(story.chapters).length) sec('the piers', `${Object.values(story.residents).filter(c => c.met).length} met · ${story.told} content`);
   if (pond.plantings.length) {
     const flowering = pond.plantings.filter((pl) => pond.ageDays(pl) >= 5).length;
@@ -1423,7 +1534,6 @@ function pageEntries(): PageEntry[] {
 function begin() {
   if (started) return;
   started = true;
-  mathUI.started();
   ui.fadeTitle();
   notebookBtn.classList.remove('hidden');
 }
@@ -1681,7 +1791,8 @@ canvasEl.addEventListener('pointermove', (e) => {
   if (selection.length > 1 && selection[selection.length - 2] === p) {
     const last = selection.pop()!;
     last.selected = false;
-    if(relationship)mathUI.progress(relationValues(),relationSlot);else ui.progress(gathered());
+    if (relationship) mathUI.progress(relationGathered());
+    else ui.progress(gathered());
   } else if (!selection.includes(p)) {
     touchPad(p);
     choose(p);
@@ -1988,6 +2099,17 @@ function frame(now: number) {
     sound.release();
   }
   if (relationClearAt && pond.t >= relationClearAt) { mathUI.hide(); relationClearAt = 0; }
+  if (relationRelease && pond.t >= relationRelease.at) {
+    const { pad } = relationRelease;
+    relationRelease = null;
+    const i = relationLeaves.indexOf(pad);
+    if (i >= 0) {
+      relationLeaves.splice(i, 1);
+      pad.selected = false;
+      pad.bob = Math.min(1, pad.bob + 0.5);
+      if (relationship) mathUI.progress(relationGathered());
+    }
+  }
   if (!visit && !relationship && !target && !share && pond.t >= nextTargetAt) setTarget();
   if (!started) placeNames(dt);
   stepChimes();
@@ -2210,7 +2332,7 @@ Object.defineProperty(window, '__stillwater', {
     mastery: Math.round(mastery * 1000) / 1000,
     totalSolves,
     target: target?.value ?? null,
-    challenge: relationship ? {equation: equation(relationship), skill: relationship.skill, band: relationship.band, attempts: relationAttempts, assisted: relationAssisted, values:relationValues(), activeSlot:relationSlot, padIds:relationLeaves.map(ps=>ps.map(p=>p.id))} : null,
+    challenge: relationship ? { equation: equation(relationship), skill: relationship.skill, level: relationship.level, mode: relationship.mode, form: relationship.form, support: relationship.support, attempts: relationAttempts, help: relationHelp, gathered: relationGathered(), padIds: relationLeaves.map((p) => p.id) } : null,
     curriculum: curriculum.data,
     gathered: gathered(),
     selected: selection.map((p) => p.id),

@@ -78,11 +78,12 @@ describe('stillwater: spaced memory', () => {
 });
 
 describe('stillwater: fluency', () => {
-  test('a quick clean answer is fluent; slow, corrected or helped answers are not', () => {
+  test('a clean answer is fluent however long it took; corrected or helped answers are not', () => {
+    // time is not graded: it holds looking, reaching and watching the fish as much as thinking
     const base = { leaves: 2, value: 7, friction: 0, scaffold: 0, counting: false };
     const e = expectedSecs(base);
     expect(quality({ ...base, secs: e })).toBeGreaterThanOrEqual(0.85);
-    expect(quality({ ...base, secs: e * 3 })).toBeLessThan(0.85);
+    expect(quality({ ...base, secs: e * 3 })).toBeGreaterThanOrEqual(0.85);
     expect(quality({ ...base, secs: e, friction: 1 })).toBeLessThan(0.85);
     expect(quality({ ...base, secs: e, scaffold: 1 })).toBeLessThan(0.85);
   });

@@ -157,3 +157,80 @@ plans, alternate-factor completion and no reuse of a leaf for both blanks.
 Browser checks use actual touchscreen taps on pads for a missing addend and both
 factor slots, verify exact dew consumption and rewards, absence of numeric entry,
 and supply at 320px width. Real-device Safari remains a separate performance check.
+
+## Revision, 30 September (later): the right question, clearly, at the right time
+
+A review of the above against how it presents on a phone and against the year
+expectations it serves. The intent stands: relationships, not just totals;
+missing numbers, inverses and equality read both ways; answers the dew can
+hold; no timers. What changed, and why:
+
+**Placement is a grown-up's, not a child's.** The six-level menu at the foot of
+the screen ("Products to 144 · factors and inverses") was a menu of modes a
+six-year-old would choose from by excitement. It is gone. Press and hold the
+title for a small panel "for grown-ups": the child's school year, which sets a
+starting level and a floor (`?year=N` does the same; `?maths=N` sets a level).
+
+**Levels follow England's national curriculum and the DfE ready-to-progress
+criteria (2020), in order.** The earlier bands jumped from collecting 2–5 to
+written `□ − 7 = 5` after three answers, skipped facts within 10, and went from
+the 2/5/10 tables straight to all tables to 12 (Year 4) with factor pairs and
+derived facts (Years 4–6) beyond that.
+
+| level | content | year | starts here |
+|---|---|---|---|
+| Counting | gather 2–5 (numeral and dots) | Reception | Reception |
+| Facts within 10 | bonds, subtraction, doubles | Year 1 | Year 1 |
+| Facts within 20 | bonds, subtraction, bridging ten | Year 1–2 | Year 2 |
+| Twos, fives and tens | equal groups, missing factor, division | Year 2 | |
+| Tens and ones | 2-digit ± a part, difference, partitioning | Year 2–3 | Year 3 |
+| Threes, fours and eights | the same, 3/4/8 tables | Year 3 | Year 4 |
+| Tables to 12 | all tables, factor pairs | Year 4 | Year 5 + |
+| Connections | the same product two ways, one group more | Year 4–5 | |
+
+**Moving on needs evidence from more than one day; a level can step back.**
+Every skill in a level needs three clean answers running and clean answers on
+two different days. Six or more questions at a level with two or fewer clean
+steps back one level (never more than one below the placement). Review questions
+(every sixth, and the stretch's relief) never move the level.
+
+**Complexity grows with the child inside a level.** A new skill asks its
+simplest form (the unknown where it is easiest: `3 + ? = 7`); after two clean
+answers the unknown can be anywhere; after five the equation can be turned round
+(`7 = ? + 3`); the numbers widen as clean answers come.
+
+**The dew still means the maths for × and ÷.** Times questions are equal groups
+gathered as leaves that match — `3 × 5 = ?` is three leaves of five (or five of
+three), the blank counting 5, 10, 15 — never a large product turned into a
+remainder (`60 + □ = 9 × 7` asked for three drops that meant nothing). A leaf
+that does not match is not taken (it bobs, a low note). Larger facts are asked
+as a group size (`8 × ? = 56`, `48 ÷ 6 = ?`), which the dew can be. Factor pairs
+are equal groups too. Dew for a groups question condenses as enough matching
+leaves and one or two that do not.
+
+**The question is the one clear line at the top.** The equation is set as large
+as the counting numeral, its blank filling with the dew gathered. No instruction
+line, no toolbar of words, no error sentences. Under it, while a skill is new, a
+picture in dots (a whole in fives with the known part filled; an array for equal
+groups; rings that each hold the gathered group size for ÷) lights as the dew is
+gathered, fading as the skill is learned. Too much shakes the blank and the
+river lets the last leaf go.
+
+**Help is heard, then seen worked through.** Two small marks, no words: a
+speaker (the question read aloud, the picture shown; again, and the answer is
+worked through with these numbers — the unknown's dots count themselves in and
+the fact is said: "three lots of five make fifteen") and another question.
+Examples are no longer fixed sentences unrelated to the question.
+
+**One learning system.** Relationship answers now go into the same fact memory
+and stretch as the counting: each answer is a fact (`s:3+4`, `g:3x5`) with its
+own spaced review; due facts are asked back in warm-ups and reaches; the
+stretch's relief reviews the level before; its finale comes round as before; a
+product made the other way round opens a second flower. Quality is help and
+corrections only — no time.
+
+Verification: `tests/stillwater-challenges.test.ts` (jest, workspace) and
+`tests/challenges.test.cjs` (6,900 generated questions true with their own dew,
+bounded, year order, forms by proficiency, promotion across days, step back,
+migration); headless frames of `3 + 3 = ?`, `20 ÷ 5 = ?` with rings, and
+`3 × 5 = ?` answered with three matching leaves.

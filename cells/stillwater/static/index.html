@@ -76,40 +76,50 @@
     #newname input { pointer-events: auto; font: 16px Georgia, serif; font-style: italic; letter-spacing: .4px; color: #f3f0d2; background: transparent; border: 0; border-bottom: 1px solid rgba(240, 236, 206, .38); padding: 8px 6px; width: 200px; outline: none; text-align: center; text-shadow: 0 1px 12px #001b19; }
     #newname input:focus { border-bottom-color: rgba(240, 236, 206, .8); }
     #newname input::placeholder { color: rgba(240, 236, 206, .72); }
-    /* Relationship challenges: opt-in working space, never a full-screen quiz. */
+    /* The question: one clear line at the top, as large as the counting numeral; its blanks
+       fill with the dew gathered. A picture in dots under it while the skill is new. */
     [hidden] { display: none !important; }
-    #relationship { position: fixed; top: max(64px, calc(env(safe-area-inset-top) + 44px)); left: 50%; transform: translateX(-50%); width: min(440px, calc(100% - 24px)); text-align: center; pointer-events: none; color: #fff4d2; text-shadow: 0 2px 12px #001b19; }
-    #relationship .equation { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; font-size: clamp(22px, 5.5vw, 30px); font-variant-numeric: tabular-nums; }
-    #relationship .math-blank { pointer-events: auto; width: 58px; height: 48px; font-size: inherit; opacity: 1; text-align: center; font: inherit; color: #fff5cf; border: 1px solid #d1cca47a; border-radius: 12px; background: #122e28dc; outline-offset: 3px; caret-color: #f7dea0; }
-    #relationship .math-blank:focus { border-color: #f7dea0; outline: 2px solid #f7dea050; }
-    #relationship .math-blank[aria-pressed=true] { border-color: #f7dea0; box-shadow: 0 0 0 2px #f7dea033, 0 0 16px #ead89225; }
-    #relationship button, .math-menu button { position: static; opacity: .95; min-width: 44px; min-height: 44px; padding: 9px 13px; font-size: 14px; border-radius: 10px; }
-    #relationship button:disabled { opacity: .4; cursor: default; }
-    #relationship .equation .math-blank { font-size: inherit; }
-    #relationship .math-tools button { white-space: nowrap; padding: 8px; font-size: 13px; }
-    #relationship .math-tools { display: flex; justify-content: center; gap: 6px; }
-    #relationship .math-feedback { font-size: 13px; line-height: 1.4; margin: 9px 5px 0; }
-    #relationship .math-support, .math-menu { pointer-events: auto; background: #142c25f5; border: 1px solid #b8b48b55; border-radius: 16px; box-shadow: 0 8px 28px #041e1899; }
-    #relationship .math-support { margin: 8px auto; padding: 14px; font-size: 14px; line-height: 1.5; max-height: 42dvh; overflow-y: auto; }
-    #relationship .math-support p { margin: 0 0 10px; }
-    #relationship.answered .equation { color: #fff5ba; filter: drop-shadow(0 0 8px #ebd59188); }
-    .model-groups { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; margin: 10px 0; }
-    .model-groups span { padding: 5px 10px; border: 1px solid #c1cca3; border-radius: 50%; min-width: 30px; }
-    .model-whole, .model-parts { border: 1px solid #c1cca3; padding: 6px; }
-    .model-parts { display: flex; border-top: 0; padding: 0; }
-    .model-parts span { width: 50%; padding: 6px; }
-    .model-parts span + span { border-left: 1px solid #c1cca3; }
-    #math-range { left: 50%; right: auto; transform: translateX(-50%); min-height: 44px; opacity: .75; }
-    .math-menu { position: fixed; bottom: max(60px, calc(env(safe-area-inset-bottom) + 50px)); left: 50%; transform: translateX(-50%); width: min(350px, calc(100% - 28px)); padding: 14px; max-height: 75dvh; overflow: auto; text-align: left; }
-    .math-menu p { margin: 0 0 10px; font-size: 14px; line-height: 1.4; }
-    .math-menu button { display: block; text-align: left; width: 100%; }
-    .math-menu button small { display: block; font-size: 11px; opacity: .7; margin-top: 4px; }
-    .math-menu button[aria-pressed=true] { background: #e9e4b91a; outline: 1px solid #c1cca355; }
-    body.page #relationship, body.page #math-range, body.page .math-menu { display: none; }
+    #relationship { display: flex; flex-direction: column; align-items: center; gap: 10px; transition: opacity 1.2s, transform 1.2s; }
+    #relationship.arrive { opacity: 0; transform: translateY(12px) scale(.94); }
+    #relationship .equation { display: flex; align-items: baseline; justify-content: center; gap: .32em; font-size: clamp(30px, 9vw, 40px); line-height: 1; letter-spacing: 1px; font-variant-numeric: lining-nums tabular-nums; color: #fbf6d8; text-shadow: 0 2px 16px #001b19, 0 0 2px #001b19; }
+    #relationship .equation .sign { opacity: .82; }
+    #relationship .blank { display: inline-block; min-width: 1.15em; padding: .06em .14em .1em; text-align: center; border-bottom: 2px solid rgba(251, 246, 216, .75); color: rgba(251, 246, 216, .55); transition: color .3s, border-color .3s, text-shadow .3s; }
+    #relationship .blank.filling { color: #fdf6cc; border-color: #f9e9a3; text-shadow: 0 0 14px rgba(249, 233, 163, .7), 0 2px 16px #001b19; }
+    #relationship.answered .equation { animation: answered 1.6s ease-out; }
+    #relationship.answered .blank { border-color: transparent; color: #fdf6cc; }
+    @keyframes answered { 0% { text-shadow: 0 0 0 rgba(253, 246, 204, 0); } 30% { text-shadow: 0 0 26px rgba(253, 246, 204, .95), 0 0 6px rgba(253, 246, 204, .9); } 100% { text-shadow: 0 2px 16px #001b19; } }
+    #relationship.over .blank { animation: over .5s ease-in-out; }
+    @keyframes over { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(2px); } }
+    #relationship .model { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; max-width: 330px; transition: opacity 1.2s; }
+    #relationship .model i { width: 8px; height: 8px; border: 1px solid rgba(240, 236, 190, .75); border-radius: 50%; transition: background .5s, box-shadow .5s, transform .5s; }
+    #relationship .model i.known { background: rgba(240, 236, 190, .55); border-color: transparent; }
+    #relationship .model i.taken { border-color: rgba(240, 236, 190, .28); background: linear-gradient(135deg, transparent 45%, rgba(240, 236, 190, .5) 45% 55%, transparent 55%); }
+    #relationship .model i.on { background: #fdf6cc; box-shadow: 0 0 10px #f9e9a3; transform: scale(1.12); }
+    #relationship .model b { width: 6px; }
+    #relationship .model.array { display: grid; grid-template-columns: repeat(var(--cols), 8px); gap: 6px; }
+    #relationship .model.rings { gap: 8px; }
+    #relationship .model .ring { display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 2px; width: 30px; height: 30px; padding: 3px; border: 1px solid rgba(240, 236, 190, .5); border-radius: 50%; }
+    #relationship .model .ring i { width: 5px; height: 5px; border: 0; background: #fdf6cc; box-shadow: 0 0 6px #f9e9a3; }
+    #relationship .model.reveal i:not(.known):not(.taken) { animation: count .5s ease-out both; animation-delay: calc(var(--i, 0) * .32s); }
+    @keyframes count { 0% { background: transparent; } 60% { background: #fdf6cc; box-shadow: 0 0 12px #f9e9a3; transform: scale(1.35); } 100% { background: rgba(253, 246, 204, .8); transform: scale(1); } }
+    #relationship .math-tools { display: flex; gap: 18px; justify-content: center; }
+    #relationship .math-tools .icon { position: static; width: 44px; height: 44px; padding: 11px; opacity: .42; color: #f0edce; border-radius: 50%; }
+    #relationship .math-tools .icon:active { opacity: .9; }
+    #relationship .math-tools .icon svg { width: 22px; height: 22px; display: block; }
+    #relationship.answered .math-tools { visibility: hidden; }
+    #grownups { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(340px, calc(100% - 32px)); padding: 18px 18px 12px; pointer-events: auto; background: #142c25f5; border: 1px solid #b8b48b55; border-radius: 16px; box-shadow: 0 8px 28px #041e1899; font-size: 14px; line-height: 1.45; }
+    #grownups h2 { margin: 0 0 8px; font-weight: normal; font-size: 12px; letter-spacing: 4px; text-transform: uppercase; opacity: .8; }
+    #grownups p { margin: 0 0 12px; }
+    #grownups .now { font-size: 12px; opacity: .75; }
+    #grownups .years { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+    #grownups button { position: static; opacity: .9; font-size: 14px; padding: 10px; border-radius: 10px; border: 1px solid #c1cca344; }
+    #grownups button[aria-pressed=true] { background: #e9e4b91a; border-color: #e9e4b9aa; }
+    #grownups .close { display: block; margin: 0 auto; border: 0; opacity: .7; }
+    body.page #relationship, body.page #grownups { display: none; }
   </style>
 </head>
 <body>
-  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go. R visits a nearby resident; L shares light with their pier lantern. Use the maths button to choose a starting range. Gather dew from pads to fill an equation blank. Touch a blank to choose which quantity to gather."></canvas>
+  <canvas id="pond" tabindex="0" aria-label="Stillwater: a river of lily pads. Choose leaves whose dew drops make the number shown at the top. Arrow keys move between leaves, Enter chooses, Escape lets go. R visits a nearby resident; L shares light with their pier lantern. When an equation is shown, gather dew to fill its blank; for times questions, gather leaves that match."></canvas>
   <div id="ui">
     <header>
       <h1 id="title" class="hidden">STILLWATER</h1>
