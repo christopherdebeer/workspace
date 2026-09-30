@@ -114,7 +114,7 @@ These are all in every syllabus at these ages, and could be river-native in
 time:
 
 - place value beyond 100 (tens as bundles: a raft of ten leaves?);
-- halves and quarters (a leaf's dew shared between two fish: the basket);
+- halves and quarters;
 - money;
 - time (the river already has a day);
 - measurement and shape;

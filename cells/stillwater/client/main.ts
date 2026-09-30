@@ -430,7 +430,6 @@ mathUI.onYear = (year) => {
   clearRelation();
   target = null;
   ask = null;
-  share = null;
   relationship = null;
   plan = null;
   carry = null;
@@ -1352,27 +1351,13 @@ function telemetry() {
   });
 }
 
-// ─── sharing: the basket ───────────────────────────────────────────────────
+// ─── the basket ────────────────────────────────────────────────────────────
 /**
  * Tap the basket and a crumb goes over the stern; the big fish nearby come for
- * it, and they have manners: one that is ahead waits its turn. When two or
- * more fish are at the boat and no number is being asked, the crumbs become an
- * ask — SHARE, one glyph per fish — answered when every fish has had the same.
- * Fair sharing is the first shape of division; a fair share of two or more
- * each is remembered as the matching groups fact (3 fish × 2 = 6).
+ * it, and they have manners: one that is ahead waits its turn. Just for the
+ * pleasure of it — nothing is asked (NARRATIVE-DESIGN.md §2).
  */
-interface Share {
-  fish: number[]; // indexes into school.fish
-  base: number[]; // what each had eaten when the ask began
-  shownAt: number;
-  lastEat: number;
-  crumbs: number;
-  hinted: boolean;
-}
-let share: Share | null = null;
-let shareTested = false;
 let plantTested = false;
-let shareHintAt = -Infinity;
 const bigFishAtBoat = () => {
   const out: number[] = [];
   school.fish.forEach((f, i) => {
@@ -1384,78 +1369,6 @@ function basketTap() {
   pond.scatterCrumbs(1);
   sound.plop(0.35, panAt(pond.boat.x));
   pond.boat.sway += 0.02;
-  if (share) share.crumbs += 1;
-  else if (!relationship && !relationClearAt && !target && lock <= 0) {
-    const fish = bigFishAtBoat().slice(0, 5);
-    if (fish.length >= 2) {
-      // everyone starts hungry; the fish at the boat now are the ones being shared between
-      for (const f of school.fish) f.fed = 0;
-      share = { fish, base: fish.map(() => 0), shownAt: pond.t, lastEat: pond.t, crumbs: 1, hinted: false };
-      ui.setShare(fish.length);
-      ui.shareProgress(fish.map(() => 0));
-      nextTargetAt = Infinity;
-    }
-  }
-}
-/** Each frame: the fish glyphs fill, and a fair share is answered. */
-function stepShare(dt: number) {
-  void dt;
-  if (!share) {
-    // the fish have come and nothing is asked: say so, once in a while
-    const visiting = school.fish.filter((f) => f.mood === 2 && f.kind !== 3).length;
-    if (!relationship && !relationClearAt && !target && lock <= 0 && visiting >= 2 && pond.t - shareHintAt > 45 && pond.t - startedAt > 20) {
-      shareHintAt = pond.t;
-      ui.say('the fish have come — tap the basket', 5);
-    }
-    return;
-  }
-  // a fish that joins in and takes a crumb becomes one of those being shared between
-  if (share.fish.length < 5) {
-    school.fish.forEach((f, i) => {
-      if (share!.fish.length < 5 && f.kind !== 3 && (f.fed ?? 0) > 0 && !share!.fish.includes(i)) {
-        share!.fish.push(i);
-        share!.base.push(0);
-        ui.setShare(share!.fish.length);
-      }
-    });
-  }
-  const fed = share.fish.map((i, k) => Math.max(0, (school.fish[i].fed ?? 0) - share!.base[k]));
-  const total = fed.reduce((a, b) => a + b, 0);
-  if (total !== share.crumbs - pond.crumbs.filter((c) => !c.eaten).length) share.lastEat = pond.t;
-  ui.shareProgress(fed);
-  const floating = pond.crumbs.filter((c) => !c.eaten).length;
-  const fair = fed.every((n) => n === fed[0]) && fed[0] > 0;
-  const gone = share.fish.filter((i) => Math.hypot(school.fish[i].x - pond.boat.x, school.fish[i].y - pond.boat.y) < 320).length < 2;
-  if (fair && floating === 0 && pond.t - share.lastEat > 1.4) {
-    // fair: every fish has had the same
-    const each = fed[0];
-    const n = fed.length;
-    sound.gathered();
-    ui.solved();
-    ui.say(each === 1 ? 'one each — fair' : `${each} each — fair`, 3);
-    lantern = Math.min(1.5, lantern + 0.25);
-    if (each >= 2) {
-      const q = L.quality({ secs: pond.t - share.shownAt, leaves: n, value: n * each, friction: 0, scaffold: 0, counting: true });
-      memory.record(L.factOf('groups', Array(n).fill(each)), q, Date.now());
-    }
-    totalSolves += 1;
-    save();
-    share = null;
-    lock = 1.5;
-    nextTargetAt = pond.t + 4;
-    return;
-  }
-  if (!fair && floating === 0 && total > 0 && pond.t - share.lastEat > 2.5 && !share.hinted) {
-    share.hinted = true;
-    ui.say('not yet fair — a little more', 4);
-  }
-  if (gone || pond.t - share.shownAt > 75) {
-    // the fish have moved on; the ask goes quietly with them
-    ui.clearTarget();
-    ui.say('the fish have gone on', 3);
-    share = null;
-    nextTargetAt = pond.t + 3;
-  }
 }
 
 // ─── deliberate visits: noticing is ambient; speaking and sharing are tapped ──
@@ -1592,7 +1505,6 @@ function stepStory(dt: number) {
   if (!m || Math.hypot(pond.boat.x-pierTip(m)[0],pond.boat.y-pierTip(m)[1])>250 || pond.t>visit.until) {endVisit();return;}
   // Browsing/visiting supplies no evidence about mathematical hesitation.
   if (ask) { ask.shownAt+=dt; ask.lastTouchAt+=dt; }
-  if (share) { share.shownAt+=dt; share.lastEat+=dt; }
   if (releaseAt) releaseAt+=dt;
   nextTargetAt+=dt;
   if (transfer) {
@@ -2347,7 +2259,6 @@ function frame(now: number) {
   perf.mark('prep');
   school.step(dt, pond.boat, { x: cam.x, y: cam.y, hw, hh }, shift, (x, y) => pond.flow(x, y), interest, pond.crumbs);
   perf.mark('fish');
-  if (!visit) stepShare(dt);
   stepStory(dt);
   // a big fish nosing at the surface: a small ring and a soft sound
   for (const r of school.rises) {
@@ -2442,7 +2353,7 @@ function frame(now: number) {
     }
     revealAt = 0;
   }
-  if (!visit && !relationship && !plan && !target && !share && pond.t >= nextTargetAt) setTarget();
+  if (!visit && !relationship && !plan && !target && pond.t >= nextTargetAt) setTarget();
   if (!started) placeNames(dt);
   stepChimes();
   stepOpenings(dt);
@@ -2462,12 +2373,6 @@ function frame(now: number) {
     const [px, py] = pond.boatWorld(24, 170);
     pond.plant(px, py, profile.name);
     pond.sproutGrown(cam.y - cam.cssH / (2 * cam.zoom) - 600);
-  }
-  // `?sharetest=1`: three big fish brought to the boat, to look at the sharing ask
-  if (params.get('sharetest') && started && !shareTested) {
-    shareTested = true;
-    const big = school.fish.filter((f) => f.kind !== 3).slice(0, 3);
-    big.forEach((f, k) => { f.x = pond.boat.x + (k - 1) * 40; f.y = pond.boat.y - 90; f.mood = 2; f.until = 30; f.cool = 0; });
   }
   if (params.get('sinktest')) {
     // the same leaf throughout (once chosen), so what happens to its dew can be watched
@@ -2823,7 +2728,6 @@ Object.defineProperty(window, '__stillwater', {
     plantings: pond.plantings.map((pl) => ({ Y: Math.round(pl.Y), days: Math.round(pond.ageDays(pl) * 10) / 10 })),
     planted: pond.pads.filter((p) => p.planted).length,
     seed: seed ? { moved: seed.moved } : null,
-    share: share ? { fish: share.fish.length, fed: share.fish.map((i, k) => (school.fish[i].fed ?? 0) - share!.base[k]) } : null,
     fishAtBoat: bigFishAtBoat().length,
     story: story.toJSON(),
     visit: visit?.key ?? null,

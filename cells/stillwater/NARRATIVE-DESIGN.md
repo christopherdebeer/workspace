@@ -62,18 +62,14 @@ faint silhouettes) with DOM labels. No new objects.
 after the tenth sighting ("you have seen the koi ten times"), which is the only
 number in the notebook and is there for the child who wants one.
 
-## 2. Sharing — the basket *(next)*
+## 2. The basket
 
 Tap the basket in the boat and crumbs scatter on the water astern. The fish
-already have curiosity and a feeding mood; they gather, and the child watches.
-It is small, and it is the natural home for **fair sharing**, the first shape of
-division: three fish and six crumbs, and the ask is *make it fair*. The
-learning design gains a rule (`share`) beside `sum` and `groups`, driven by
-the same memory and stretch machinery.
-
-Needs: a tappable basket (the boat's frame, `boatWorld`), crumb floaters (the
-petal floater path), a feeding mood in `fish.ts` that eats a crumb, and the
-`share` rule. No new species.
+already have curiosity and a feeding mood; they gather and eat, and the child
+watches. That is all it is: a pleasure, not an activity. *(A fair-sharing ask
+was built here — "make it fair" with one glyph per fish — and removed on 30
+September 2026: it was a second, different kind of question competing with the
+one at the top. Division is asked there, as equal groups.)*
 
 ## 3. Growing — seeds and a river that remembers
 
