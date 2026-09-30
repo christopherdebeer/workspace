@@ -1,20 +1,19 @@
 /**
- * Two passes, WebGL2.
+ * The picture, WebGL2, three passes into and out of a scene buffer:
  *
- * 1. The world behind everything, one fragment shader: a ray from the eye per
- *    pixel. Above the horizon, the sky — haze low down, a glow of light ahead
- *    over the water, crags standing in it, leaves overhead with sky between.
- *    Below, the ground plane: grass in pools of sun or shade, the stream as
- *    broken puddles along its line that join into open water far ahead, each
- *    mirroring the sky. Fog by distance.
- * 2. The trees and tufts, back to front, as billboards from the painted atlas,
- *    fogged by distance and thicker near the ground (so trunks stand in mist).
+ * 1. Behind everything, one fragment shader: a ray per pixel. Above the
+ *    horizon only fog — lighter higher up, a brighter place where the sun is
+ *    behind it, slow banks moving through it. Below, dry ground and a trodden
+ *    path, fogged by distance and by the same banks.
+ * 2. The cards — every tree, shrub and patch of grass — back to front, each
+ *    at its true place in the wood (so walking and looking give real parallax),
+ *    each a baked silhouette (bake.ts). The shader does the rest: wind that
+ *    moves the thin high wood and not the trunk, fog by distance and much
+ *    thicker near the ground, mist banks that veil one tree and not the next.
+ * 3. A last pass for the film: a soft tone curve, the fog's lift in the
+ *    blacks, a vignette, grain.
  */
-import type { Palette } from './world';
-
-const QUAD = `#version 300 es
-in vec2 aP;
-void main() { gl_Position = vec4(aP, 0., 1.); }`;
+import type { Card } from './bake';
 
 const NOISE = `
 uniform uint uSeed;
@@ -22,220 +21,215 @@ uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >>
 float h2(ivec2 p) { return float(pcg(uint(p.x) * 1973u ^ pcg(uint(p.y) + uSeed))) / 4294967295.; }
 float vnoise(vec2 p) {
   ivec2 i = ivec2(floor(p)); vec2 f = fract(p); vec2 u = f * f * (3. - 2. * f);
-  float a = h2(i), b = h2(i + ivec2(1, 0)), c = h2(i + ivec2(0, 1)), d = h2(i + ivec2(1, 1));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  return mix(mix(h2(i), h2(i + ivec2(1, 0)), u.x), mix(h2(i + ivec2(0, 1)), h2(i + ivec2(1, 1)), u.x), u.y);
 }
-float fbm(vec2 p) { float s = 0., a = .5; for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= .5; } return s / .9375; }
+float fbm(vec2 p) { float s = 0., a = .5; for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.07 + 13.7; a *= .5; } return s / .9375; }
+uniform vec3 uFogLow, uFogHigh;
+uniform float uT;
+// banks of mist drifting through the wood (world space), heavier near the ground
+float mist(vec3 p) {
+  vec2 q = vec2(p.x * .05 + p.z * .021 + uT * .014, p.y * .1 - uT * .0025 + p.z * .008);
+  float n = fbm(q) * .75 + vnoise(q * 3.7 + vec2(uT * .02, 0.)) * .25;
+  return smoothstep(.4, .82, n) * .62 * exp(-max(p.y, 0.) * .045);
+}
+vec3 fogAt(float y) { return mix(uFogLow, uFogHigh, smoothstep(-1., 20., y)); }
 `;
+
+const QUAD_VS = `#version 300 es
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, 0., 1.); }`;
 
 const WORLD_FS = `#version 300 es
 precision highp float;
 precision highp int;
 out vec4 o;
 uniform vec2 uRes;
-uniform float uF, uHz, uT;
-uniform vec4 uCam; // x, z, eye height, yaw
-uniform vec3 uPathA, uPathB; // amplitude, wavenumber, phase (two sines)
-uniform vec3 uFog, uZen, uGrass, uGrassSun, uGrassShade, uCanopy;
-uniform float uDensity, uSun;
-uniform vec3 uCragA, uCragB; // azimuth, half-width, height (radians)
+uniform float uF, uHz, uDensity;
+uniform vec4 uCam; // x, z, eye, yaw
+uniform vec3 uPathA, uPathB;
+uniform vec3 uGround, uStrawDark, uStraw;
+uniform vec2 uSun; // azimuth, elevation of the brighter place
 ${NOISE}
 float pathX(float z) { return uPathA.x * sin(z * uPathA.y + uPathA.z) + uPathB.x * sin(z * uPathB.y + uPathB.z); }
-
-float crag1(float az, float el, vec3 C) {
-  // a tall mass of clipped green (the painting's crags): a column that swells and narrows in
-  // lumps as it rises, its top rounded and uneven. Returns >0 inside.
-  float k = el / C.z;
-  if (k > 1.25 || el < 0.) return -1.;
-  float lumps = .62 + .5 * vnoise(vec2(k * 5.5, C.x * 40.)) + .22 * vnoise(vec2(k * 14., C.z * 90.));
-  float w = C.y * lumps * (1. - .35 * k) * (1. + .15 * (vnoise(vec2(el * 60., C.x * 30.)) - .5));
-  float top = 1. + .12 * (vnoise(vec2(az * 45., C.z * 20.)) - .5);
-  return min(w - abs(az - C.x), (top - k) * C.z);
-}
-
-vec3 sky(vec3 d, bool mirror) {
-  float az = atan(d.x, d.z);
-  float el = max(d.y, 0.);
-  vec3 c = mix(uFog, uZen, smoothstep(0., .45, el));
-  // the light ahead: low over the far water, stronger in the light
-  float glow = exp(-az * az * 14.) * exp(-el * 7.);
-  c += glow * vec3(1., .97, .88) * (.12 + .3 * uSun);
-  // crags standing in the water, dark and mossy, lit on the sun side (lost in the mist)
-  float vis = smoothstep(.35, .75, uSun);
-  float inA = crag1(az, el, uCragA), inB = crag1(az, el, uCragB);
-  float h = max(uCragA.z, uCragB.z);
-  if (vis > 0. && max(inA, inB) > 0.) {
-    float edge = el / max(h, .001);
-    vec3 C = inA > inB ? uCragA : uCragB;
-    float lit = smoothstep(-.4, .6, (C.x - az) / C.y) * .6 + .4 * vnoise(vec2(az * 70., el * 70.));
-    vec3 moss = mix(vec3(.13, .21, .11), vec3(.4, .5, .27), lit);
-    moss *= .85 + .3 * vnoise(vec2(az * 200., el * 200.));
-    // atmosphere: far, so hazed, most at the foot
-    moss = mix(moss, uFog, .3 + .25 * (1. - edge));
-    c = mix(c, moss, vis);
-  }
-  // leaves overhead framing the view (a wood in leaf closes over; the mist is open)
-  if (!mirror && uSun > .3) {
-    float cn = fbm(vec2(az * 9., el * 12.) + 3.1) * .6 + vnoise(vec2(az * 60., el * 70.)) * .4;
-    float cover = smoothstep(.32, .9, el + .12 * abs(az)) * smoothstep(.4, .52, cn) * smoothstep(.3, .8, uSun);
-    c = mix(c, uCanopy * (.7 + .6 * vnoise(vec2(az * 140., el * 150.))), cover);
-  }
-  return c;
-}
-
 void main() {
   vec2 px = gl_FragCoord.xy;
   vec3 dc = normalize(vec3((px.x - .5 * uRes.x) / uF, (px.y - uHz) / uF, 1.));
   float cy = cos(uCam.w), sy = sin(uCam.w);
   vec3 d = vec3(dc.x * cy + dc.z * sy, dc.y, -dc.x * sy + dc.z * cy);
+  float az = atan(d.x, d.z);
   vec3 col;
   if (d.y >= 0.) {
-    col = sky(d, false);
+    // only fog: lighter higher, brighter where the sun is behind it
+    float el = d.y;
+    col = mix(fogAt(0.), uFogHigh, smoothstep(0., .6, el));
+    float s = exp(-pow(az - uSun.x, 2.) * 3. - pow(el - uSun.y, 2.) * 6.);
+    col += s * vec3(.07, .075, .06) * smoothstep(0., .15, el);
+    // the banks' slow unevenness, fading out at the horizon (where the ground's fog takes over)
+    col *= 1. + (.06 * fbm(vec2(az * 4. + uT * .006, el * 7.)) - .03) * smoothstep(0., .12, el);
   } else {
     float t = uCam.z / -d.y;
     vec3 p = vec3(uCam.x, 0., uCam.y) + d * t;
-    float far = smoothstep(30., 80., t);
-    // grass: shade and sun in pools, a fine grain (not streaks)
-    float n = fbm(p.xz * .32);
-    float grain = vnoise(p.xz * 3.1) * .6 + vnoise(p.xz * 9.7) * .4;
-    float pool = smoothstep(.52, .64, fbm(p.xz * .06 + 7.)) * uSun;
-    vec3 g = mix(uGrassShade, uGrass, smoothstep(.2, .75, n));
-    g = mix(g, uGrassSun, pool * .85);
-    g *= .84 + .3 * grain;
-    // the stream: broken puddles along its line (few in the mist), joining into open water far off
-    float dx = abs(p.x - pathX(p.z));
-    float wid = mix(mix(.9, 1.5, uSun), 9., far) + .7 * vnoise(vec2(p.z * .15, 2.));
-    float wet = 1. - smoothstep(wid * .5, wid, dx);
-    float pud = vnoise(p.xz * vec2(1.2, .6)) * .62 + vnoise(p.xz * 3.1) * .28 + vnoise(p.xz * 9.) * .1;
-    float th = mix(mix(.66, .58, uSun), .12, far);
-    float water = wet * smoothstep(th, th + .035, pud);
-    float rim = wet * smoothstep(th - .09, th, pud) * (1. - water);
-    water = max(water, smoothstep(58., 85., t) * mix(.55, 1., uSun));
-    // a puddle mirrors the sky (and the crags), a little darkened, a little rippled
-    vec3 dr = vec3(d.x + .004 * (vnoise(p.xz * 3. + uT * .3) - .5), -d.y, d.z);
-    vec3 refl = sky(normalize(dr), true) * .84;
-    vec3 bank = mix(g, uGrassShade * .75, wet * .35);
-    bank = mix(bank, uGrassShade * .45, rim * .8);
-    col = mix(bank, refl, water);
-    // fog: by distance
-    col = mix(col, uFog, 1. - exp(-t * uDensity));
+    // dry grass: straw and shadow, a trodden path darker
+    float n = fbm(p.xz * .5);
+    float grain = vnoise(p.xz * 6.) * .5 + vnoise(p.xz * 17.) * .5;
+    vec3 g = mix(uStrawDark, uGround, smoothstep(.2, .75, n));
+    g = mix(g, uStraw * .8, smoothstep(.6, .95, vnoise(p.xz * 2.2)) * .35);
+    g *= .8 + .35 * grain;
+    float path = 1. - smoothstep(.35, .9, abs(p.x - pathX(p.z)) + (vnoise(p.xz * 1.3) - .5) * .5);
+    g = mix(g, uStrawDark * .8, path * .45);
+    float fogD = 1. - exp(-t * uDensity * (1. + 1.2 * smoothstep(2., 14., t)));
+    float m = mist(vec3(p.x, .3, p.z));
+    col = mix(g, fogAt(0.), 1. - (1. - fogD) * (1. - m));
   }
-  // a breath of drifting mist, and dither against banding
-  float drift = vnoise(vec2(px.x / uRes.y * 2. + uT * .02, px.y / uRes.y * 3.)) - .5;
-  col = mix(col, uFog, clamp(drift * (1. - uSun) * .25, 0., 1.));
-  col += (h2(ivec2(px) + ivec2(int(uT * 60.) & 255)) - .5) / 255.;
   o = vec4(col, 1.);
 }`;
 
-const SPRITE_VS = `#version 300 es
-in vec2 aCorner;
-in vec4 aPos;  // x, z, w (negative: mirrored), h
-in vec4 aUV;   // u0, v0, u1, v1
-in vec2 aMisc; // phase, sway
+const CARD_VS = `#version 300 es
 uniform vec2 uRes;
-uniform float uF, uHz, uT, uWind;
+uniform float uF, uHz;
 uniform vec4 uCam;
+uniform vec2 uAnchor; // world x, z
+uniform vec4 uRect;   // left, bottom, width, height (m, already scaled; mirrored if flipped)
 out vec2 vUV;
+out vec3 vWorld;
 out float vDist;
-out float vY;
 void main() {
-  float s = aCorner.y;
-  float wx = aPos.x + (aCorner.x - .5) * abs(aPos.z) + sin(uT * .8 + aMisc.x) * uWind * aMisc.y * s * s * aPos.w * .018;
-  float wy = s * aPos.w;
-  vec3 rel = vec3(wx - uCam.x, wy - uCam.z, aPos.y - uCam.y);
-  float c = cos(uCam.w), sn = sin(uCam.w);
-  float cx = rel.x * c - rel.z * sn;
-  float cz = max(rel.x * sn + rel.z * c, .05);
+  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+  vec3 w = vec3(uAnchor.x + uRect.x + c.x * uRect.z, uRect.y + c.y * uRect.w, uAnchor.y);
+  vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
+  float cs = cos(uCam.w), sn = sin(uCam.w);
+  float cx = rel.x * cs - rel.z * sn;
+  float cz = max(rel.x * sn + rel.z * cs, .05);
   vec2 scr = vec2(cx / cz * uF + .5 * uRes.x, rel.y / cz * uF + uHz);
   gl_Position = vec4(scr / uRes * 2. - 1., 0., 1.);
-  float u = aPos.z < 0. ? 1. - aCorner.x : aCorner.x;
-  vUV = vec2(mix(aUV.x, aUV.z, u), mix(aUV.w, aUV.y, s));
+  vUV = c;
+  vWorld = w;
   vDist = length(rel.xz);
-  vY = wy;
 }`;
 
-const SPRITE_FS = `#version 300 es
+const CARD_FS = `#version 300 es
 precision highp float;
+precision highp int;
 in vec2 vUV;
+in vec3 vWorld;
 in float vDist;
-in float vY;
 out vec4 o;
 uniform sampler2D uTex;
-uniform vec3 uFog;
-uniform float uDensity, uSun;
+uniform float uDensity, uWind, uPhase, uKind, uFlip;
+uniform vec4 uRect;
+uniform vec3 uBark, uBirch, uLeaf, uStraw, uStrawDark;
+${NOISE}
 void main() {
-  vec4 c = texture(uTex, vUV); // premultiplied
-  if (c.a < .004) discard;
-  // mist flattens and cools; light warms
-  vec3 col = c.rgb * mix(vec3(.74, .8, .76), vec3(1.04, 1.02, .93), uSun);
-  // fog by distance, thicker near the ground: trunks stand in it
-  float fog = 1. - exp(-vDist * uDensity * (1. + 1.1 * exp(-vY * .3)));
-  o = vec4(mix(col, uFog * c.a, fog), c.a);
+  // wind: the thin, high wood moves; the trunk and the ground do not
+  float hg = clamp(vWorld.y / (uKind > .5 ? 1. : 14.), 0., 1.);
+  float gust = sin(uT * .31 + uPhase) * .5 + .5;
+  float sway = (sin(uT * .9 + uPhase + vWorld.x * .08) * .7 + sin(uT * 2.1 + uPhase * 2.3) * .3) * uWind * (.5 + gust);
+  float flutter = (vnoise(vec2(vWorld.x * 2.5 + uT * 1.3, vWorld.y * 2.5)) - .5) * .05 * uWind;
+  float dx = (sway * (uKind > .5 ? .05 : .09) * hg * hg * uRect.w + flutter * hg) / abs(uRect.z);
+  vec4 t = texture(uTex, vec2(vUV.x + dx * uFlip, vUV.y));
+  if (t.a < .003) discard;
+  float cov = min(t.a, 1.);
+  float tone = clamp(t.g / max(t.a, .002), 0., 1.);
+  float leaf = clamp(t.r / max(t.a, .002), 0., 1.);
+  vec3 birch = uBirch;
+  if (tone > .3 && uKind < .5) {
+    // birch bark: dark lenticels across the white, black patches, darker towards the foot
+    float band = vnoise(vec2(vWorld.x * 9., vWorld.y * 22.));
+    float patchy = vnoise(vec2(vWorld.x * 3. + uPhase, vWorld.y * 2.6));
+    birch *= 1. - .75 * smoothstep(.72, .8, band) - .7 * smoothstep(.7, .78, patchy) - .5 * exp(-vWorld.y * 1.2);
+  }
+  vec3 base = uKind > .5 ? mix(uStrawDark, uStraw, tone) : mix(uBark, birch, tone);
+  base = mix(base, uLeaf, leaf);
+  // thin wood is lit through by the fog behind it
+  base = mix(base, uFogLow, (1. - cov) * .22);
+  // fog: by distance, and much thicker near the ground; banks of mist drift through
+  // (the ground fog lies a few metres off: what is at your feet is clear)
+  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
+  o = vec4(mix(base, fogAt(vWorld.y), fog) * cov, cov);
 }`;
 
-/** Per instance: x, z, w, h, u0, v0, u1, v1, phase, sway. */
-export const STRIDE = 10;
+const POST_FS = `#version 300 es
+precision highp float;
+precision highp int;
+out vec4 o;
+uniform sampler2D uScene;
+uniform vec2 uRes;
+${NOISE}
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = texture(uScene, uv).rgb;
+  // a soft film curve, blacks lifted into the fog's green
+  c = mix(c, c * c * (3. - 2. * c), .3);
+  c = mix(c, uFogLow, .04);
+  // vignette
+  vec2 q = (uv - .5) * vec2(uRes.x / uRes.y, 1.);
+  c *= mix(1., .8, smoothstep(.35, 1.05, length(q) * 1.15));
+  // grain, moving
+  float g = h2(ivec2(gl_FragCoord.xy) + ivec2(int(uT * 97.) & 1023, int(uT * 61.) & 1023)) - .5;
+  c += g * .045 * (.6 + .4 * (1. - dot(c, vec3(.33))));
+  o = vec4(c, 1.);
+}`;
 
 export interface View {
   x: number;
   z: number;
   eye: number;
   yaw: number;
-  /** focal length (px), horizon (px from the bottom) */
   f: number;
   horizon: number;
 }
 
+export interface Look {
+  seed: number;
+  t: number;
+  density: number;
+  wind: number;
+  path: readonly number[];
+  sun: [number, number];
+}
+
+export interface Draw {
+  card: Card;
+  x: number;
+  z: number;
+  rect: [number, number, number, number];
+  flip: boolean;
+  phase: number;
+  patch: boolean;
+}
+
+/** The photograph's colours. */
+const PAL = {
+  fogLow: [0.44, 0.54, 0.48],
+  fogHigh: [0.53, 0.63, 0.57],
+  bark: [0.1, 0.095, 0.08],
+  birch: [0.7, 0.73, 0.68],
+  leaf: [0.4, 0.27, 0.18],
+  straw: [0.6, 0.48, 0.3],
+  strawDark: [0.19, 0.14, 0.085],
+  ground: [0.36, 0.28, 0.17],
+};
+
 export class Renderer {
   gl: WebGL2RenderingContext;
   private world: WebGLProgram;
-  private sprite: WebGLProgram;
-  private quad: WebGLVertexArrayObject;
-  private spriteVao: WebGLVertexArrayObject;
-  private inst: WebGLBuffer;
-  private tex: WebGLTexture | null = null;
-  private capacity = 0;
-  private u = new Map<string, WebGLUniformLocation | null>();
+  private card: WebGLProgram;
+  private post: WebGLProgram;
+  private vao: WebGLVertexArrayObject;
+  private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number } | null = null;
+  private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is needed to walk here');
     this.gl = gl;
-    this.world = this.program(QUAD, WORLD_FS);
-    this.sprite = this.program(SPRITE_VS, SPRITE_FS);
-    // full-screen triangle
-    this.quad = gl.createVertexArray()!;
-    gl.bindVertexArray(this.quad);
-    const qb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, qb);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const ap = gl.getAttribLocation(this.world, 'aP');
-    gl.enableVertexAttribArray(ap);
-    gl.vertexAttribPointer(ap, 2, gl.FLOAT, false, 0, 0);
-    // sprites: a unit quad, instanced
-    this.spriteVao = gl.createVertexArray()!;
-    gl.bindVertexArray(this.spriteVao);
-    const cb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, cb);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
-    const ac = gl.getAttribLocation(this.sprite, 'aCorner');
-    gl.enableVertexAttribArray(ac);
-    gl.vertexAttribPointer(ac, 2, gl.FLOAT, false, 0, 0);
-    this.inst = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.inst);
-    const attr = (name: string, size: number, offset: number) => {
-      const loc = gl.getAttribLocation(this.sprite, name);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, STRIDE * 4, offset * 4);
-      gl.vertexAttribDivisor(loc, 1);
-    };
-    attr('aPos', 4, 0);
-    attr('aUV', 4, 4);
-    attr('aMisc', 2, 8);
-    gl.bindVertexArray(null);
+    this.world = this.compile(QUAD_VS, WORLD_FS);
+    this.card = this.compile(CARD_VS, CARD_FS);
+    this.post = this.compile(QUAD_VS, POST_FS);
+    this.vao = gl.createVertexArray()!;
   }
 
-  private program(vs: string, fs: string): WebGLProgram {
+  compile = (vs: string, fs: string): WebGLProgram => {
     const gl = this.gl;
     const sh = (type: number, src: string) => {
       const s = gl.createShader(type)!;
@@ -250,94 +244,104 @@ export class Renderer {
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     return p;
-  }
+  };
 
   private loc(p: WebGLProgram, name: string) {
-    const key = (p === this.world ? 'w:' : 's:') + name;
-    if (!this.u.has(key)) this.u.set(key, this.gl.getUniformLocation(p, name));
-    return this.u.get(key)!;
+    let m = this.u.get(p);
+    if (!m) this.u.set(p, (m = new Map()));
+    if (!m.has(name)) m.set(name, this.gl.getUniformLocation(p, name));
+    return m.get(name)!;
   }
 
-  /** The painted atlas, premultiplied, with mipmaps (the far trees are small). */
-  setAtlas(canvas: HTMLCanvasElement) {
-    const gl = this.gl;
-    if (this.tex) gl.deleteTexture(this.tex);
-    this.tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  }
-
-  draw(
-    v: View,
-    pal: Palette,
-    t: number,
-    seed: number,
-    path: readonly number[],
-    crags: readonly number[],
-    instances: Float32Array,
-    count: number,
-    wind: number,
-  ) {
+  private target() {
     const gl = this.gl;
     const W = this.canvas.width;
     const H = this.canvas.height;
+    if (this.scene && this.scene.w === W && this.scene.h === H) return this.scene;
+    if (this.scene) {
+      gl.deleteFramebuffer(this.scene.fbo);
+      gl.deleteTexture(this.scene.tex);
+    }
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    this.scene = { fbo, tex, w: W, h: H };
+    return this.scene;
+  }
+
+  private common(p: WebGLProgram, v: View, look: Look) {
+    const gl = this.gl;
+    gl.uniform2f(this.loc(p, 'uRes'), this.canvas.width, this.canvas.height);
+    gl.uniform1f(this.loc(p, 'uF'), v.f);
+    gl.uniform1f(this.loc(p, 'uHz'), v.horizon);
+    gl.uniform4f(this.loc(p, 'uCam'), v.x, v.z, v.eye, v.yaw);
+    gl.uniform1f(this.loc(p, 'uT'), look.t);
+    gl.uniform1ui(this.loc(p, 'uSeed'), look.seed >>> 0);
+    gl.uniform3fv(this.loc(p, 'uFogLow'), PAL.fogLow);
+    gl.uniform3fv(this.loc(p, 'uFogHigh'), PAL.fogHigh);
+    gl.uniform1f(this.loc(p, 'uDensity'), look.density);
+  }
+
+  draw(v: View, look: Look, cards: Draw[]) {
+    const gl = this.gl;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const scene = this.target();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo);
     gl.viewport(0, 0, W, H);
-    // the world
+    gl.bindVertexArray(this.vao);
+    // 1. fog and ground
     gl.disable(gl.BLEND);
     gl.useProgram(this.world);
-    const w = this.world;
-    gl.uniform2f(this.loc(w, 'uRes'), W, H);
-    gl.uniform1f(this.loc(w, 'uF'), v.f);
-    gl.uniform1f(this.loc(w, 'uHz'), v.horizon);
-    gl.uniform1f(this.loc(w, 'uT'), t);
-    gl.uniform4f(this.loc(w, 'uCam'), v.x, v.z, v.eye, v.yaw);
-    gl.uniform3f(this.loc(w, 'uPathA'), path[0], path[1], path[2]);
-    gl.uniform3f(this.loc(w, 'uPathB'), path[3], path[4], path[5]);
-    gl.uniform3fv(this.loc(w, 'uFog'), pal.fog);
-    gl.uniform3fv(this.loc(w, 'uZen'), pal.zenith);
-    gl.uniform3fv(this.loc(w, 'uGrass'), pal.grass);
-    gl.uniform3fv(this.loc(w, 'uGrassSun'), pal.grassSun);
-    gl.uniform3fv(this.loc(w, 'uGrassShade'), pal.grassShade);
-    gl.uniform3fv(this.loc(w, 'uCanopy'), pal.canopy);
-    gl.uniform1f(this.loc(w, 'uDensity'), pal.density);
-    gl.uniform1f(this.loc(w, 'uSun'), pal.sun);
-    gl.uniform3f(this.loc(w, 'uCragA'), crags[0], crags[1], crags[2]);
-    gl.uniform3f(this.loc(w, 'uCragB'), crags[3], crags[4], crags[5]);
-    gl.uniform1ui(this.loc(w, 'uSeed'), seed >>> 0);
-    gl.bindVertexArray(this.quad);
+    this.common(this.world, v, look);
+    gl.uniform3f(this.loc(this.world, 'uPathA'), look.path[0], look.path[1], look.path[2]);
+    gl.uniform3f(this.loc(this.world, 'uPathB'), look.path[3], look.path[4], look.path[5]);
+    gl.uniform3fv(this.loc(this.world, 'uGround'), PAL.ground);
+    gl.uniform3fv(this.loc(this.world, 'uStrawDark'), PAL.strawDark);
+    gl.uniform3fv(this.loc(this.world, 'uStraw'), PAL.straw);
+    gl.uniform2f(this.loc(this.world, 'uSun'), look.sun[0], look.sun[1]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    // the trees, back to front
-    if (!count || !this.tex) return;
+    // 2. the cards, back to front
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.useProgram(this.sprite);
-    const s = this.sprite;
-    gl.uniform2f(this.loc(s, 'uRes'), W, H);
-    gl.uniform1f(this.loc(s, 'uF'), v.f);
-    gl.uniform1f(this.loc(s, 'uHz'), v.horizon);
-    gl.uniform1f(this.loc(s, 'uT'), t);
-    gl.uniform1f(this.loc(s, 'uWind'), wind);
-    gl.uniform4f(this.loc(s, 'uCam'), v.x, v.z, v.eye, v.yaw);
-    gl.uniform3fv(this.loc(s, 'uFog'), pal.fog);
-    gl.uniform1f(this.loc(s, 'uDensity'), pal.density);
-    gl.uniform1f(this.loc(s, 'uSun'), pal.sun);
+    const p = this.card;
+    gl.useProgram(p);
+    this.common(p, v, look);
+    gl.uniform3fv(this.loc(p, 'uBark'), PAL.bark);
+    gl.uniform3fv(this.loc(p, 'uBirch'), PAL.birch);
+    gl.uniform3fv(this.loc(p, 'uLeaf'), PAL.leaf);
+    gl.uniform3fv(this.loc(p, 'uStraw'), PAL.straw);
+    gl.uniform3fv(this.loc(p, 'uStrawDark'), PAL.strawDark);
+    gl.uniform1f(this.loc(p, 'uWind'), look.wind);
+    gl.uniform1i(this.loc(p, 'uTex'), 0);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.uniform1i(this.loc(s, 'uTex'), 0);
-    gl.bindVertexArray(this.spriteVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.inst);
-    if (instances.byteLength > this.capacity) {
-      this.capacity = instances.byteLength;
-      gl.bufferData(gl.ARRAY_BUFFER, this.capacity, gl.DYNAMIC_DRAW);
+    const uAnchor = this.loc(p, 'uAnchor');
+    const uRect = this.loc(p, 'uRect');
+    const uPhase = this.loc(p, 'uPhase');
+    const uKind = this.loc(p, 'uKind');
+    const uFlip = this.loc(p, 'uFlip');
+    for (const c of cards) {
+      gl.bindTexture(gl.TEXTURE_2D, c.card.tex);
+      gl.uniform2f(uAnchor, c.x, c.z);
+      gl.uniform4f(uRect, c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
+      gl.uniform1f(uPhase, c.phase);
+      gl.uniform1f(uKind, c.patch ? 1 : 0);
+      gl.uniform1f(uFlip, c.flip ? -1 : 1);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, instances, 0, count * STRIDE);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
-    gl.bindVertexArray(null);
+    // 3. the film
+    gl.disable(gl.BLEND);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(this.post);
+    this.common(this.post, v, look);
+    gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.uniform1i(this.loc(this.post, 'uScene'), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 }

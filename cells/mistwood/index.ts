@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * `@c15r/mistwood` — a walk through a seeded wood, beside a stream, towards the light.
+ * `@c15r/mistwood` — a walk through a seeded wood in fog.
  *
  * The server only serves the shell (`static/index.html`) and the client bundle
  * the platform builds from `client/main.ts` into `app.js` beside this file.
