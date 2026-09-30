@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#56695e" />
+  <title>Mistwood</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #56695e; color: #eef0e4; font-family: Georgia, 'Iowan Old Style', serif; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; outline: none; }
+    /* the mist that comes in between one wood and the next */
+    #veil { position: fixed; inset: 0; background: #7d9186; opacity: 1; pointer-events: none; transition: opacity 1.8s ease; }
+    #veil.in { opacity: 1; transition-duration: 1.2s; }
+    #veil.clear { opacity: 0; }
+    #title { position: fixed; top: 38%; width: 100%; text-align: center; font-size: 13px; letter-spacing: 9px; opacity: .8; text-shadow: 0 2px 20px rgba(20, 36, 28, .6); pointer-events: none; transition: opacity 3s; }
+    #title.away { opacity: 0; }
+    #hint { position: fixed; bottom: max(64px, calc(env(safe-area-inset-bottom) + 48px)); width: 100%; text-align: center; font-size: 14px; font-style: italic; opacity: 0; pointer-events: none; transition: opacity 2s; text-shadow: 0 1px 14px rgba(20, 36, 28, .7); }
+    #hint.show { opacity: .75; }
+    footer { position: fixed; left: 0; right: 0; bottom: max(16px, env(safe-area-inset-bottom)); display: flex; justify-content: space-between; padding: 0 16px; }
+    footer button { font: italic 12px Georgia, serif; letter-spacing: .5px; color: rgba(238, 240, 228, .55); background: none; border: 0; padding: 10px 4px; cursor: pointer; text-shadow: 0 1px 10px rgba(20, 36, 28, .7); }
+    footer button:focus-visible { outline: 1px solid rgba(238, 240, 228, .5); }
+  </style>
+</head>
+<body>
+  <canvas id="wood" tabindex="0" aria-label="Mistwood: a walk through a wood beside a stream. Hold to walk, drag to look about. Arrow keys walk and look."></canvas>
+  <div id="veil"></div>
+  <div id="title">MISTWOOD</div>
+  <div id="hint">hold to walk · drag to look</div>
+  <footer>
+    <button id="seed" type="button" aria-label="This wood's name. Touch for another wood."></button>
+    <button id="sound" type="button">sound off</button>
+  </footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
