@@ -1,8 +1,8 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:d20d281902a58ade0d61e018feece03c737dfc66c65902548b499fd56e2e152a",
-  "syncedAt": "2026-09-30T18:43:47.484Z",
+  "treeVersion": "tree:f3212290662615396919bf9040bc4b1e4e153f0cf8c29cb76876f5c16bc59b5d",
+  "syncedAt": "2026-09-30T18:44:58.402Z",
   "files": {
     "ENVIRONMENT-STATE.md": "sha256:f8fd9a3f3931d83488a6fc2612b7ef4c425f9d3b7a0c88c868c320421bcfdfe9",
     "INTERACTION.md": "sha256:9e662f8561006136cdabef65f19ece2f27164a517c16da04922db8a7cd77f792",
@@ -10,7 +10,7 @@
     "MATHS-REVIEW-2026-09-30.md": "sha256:c6bf5348ba0ae60b57dc5d198bc5b8de3857633c53201f5f7ccdd76d08bce55f",
     "NARRATIVE-DESIGN.md": "sha256:bbe80d8a0351457c462da1d75fd4fb882f5eddb13839c0317811c5ba06741c1a",
     "PLANNING-REVIEW-2026-09-30.md": "sha256:bc50945453ca760a65f23809245a81eb4b2804e9124f72a418050f51b4f5c454",
-    "REVIEW-2026-09-28.md": "sha256:58c7c88e2d580b2acb1bcd5b705cc0daa2bb956d24f5c2fc8183434573799467",
+    "REVIEW-2026-09-28.md": "sha256:27bca2768eaa3b16114528a507b39349eff637e560869b6d19ca786f77e16b0e",
     "SYLLABUS.md": "sha256:f0bb80c31abaea8b2dc63e56cdf573fc4c7533556f82f2745812e41a8d103f51",
     "client/atmosphere.ts": "sha256:9ca8eeddd3f6c390e53139aa351bcffb994fc20045e8934ed1f41a5b9c23f8df",
     "client/audio.ts": "sha256:d49e07267be0a000d2af02985ebe0b3e03e477fe4cee3cf533209170cdaa58eb",
@@ -29,10 +29,10 @@
     "client/report.ts": "sha256:efd02eea840a032358656ea168fb069158427aeba1f0242eb6e6b1e536ceaaf9",
     "client/shaders.ts": "sha256:2689ed5afc7f8ef1daadc8df711790941aee43f45cad9d068d23f3d32db48b76",
     "client/story.ts": "sha256:a3fec86875815095fb18d4fa8c7d85b9e7a5fa8eb5a11402e4714ee3f57ad789",
-    "client/ui.ts": "sha256:a90aced5c7ffd4bf8bae729bae7ab3add3072aafec366f5c05b456dd53123783",
+    "client/ui.ts": "sha256:ba3f3c57f08a3508fd3956ba7660228158fd4216e4447a46e81511f06185e8cb",
     "client/world.ts": "sha256:163158ccc8cb415819d64240c3162fc04e73939b5337c2d836b679c6494d7a45",
     "index.ts": "sha256:1ff0dd274bf7f3f9858290c144d6acac14646a6be45ebf5f6ddd31333a1abbdc",
-    "static/index.html": "sha256:4e6c3732a926e9ec413565ebe3afe3b553bda07c8c075ae3afc1fdf98e0b0f3b",
+    "static/index.html": "sha256:ac2e2e13df6c25fd13e7f5cd7a1c3143db864a4f5beb884e39fb82746d0e384e",
     "tests/challenges.test.cjs": "sha256:9b374dfde78def9c257d9eebfccf3d3a28701d79ade0e6a844e99f8cae967f71",
     "tsconfig.json": "sha256:7f810c55dd1ac18c2cee979d7b1e5cf5a6f3233b8029b80c00e15602e284f0d0"
   }
