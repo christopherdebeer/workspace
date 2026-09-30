@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:4f5a48f6789e6bff6548c1c6d6b32656cb12b3e43e5248e64476ae882db7ee51",
-  "syncedAt": "2026-09-30T01:45:00.857Z",
+  "treeVersion": "tree:96f5717e0c7c8ed129bae4ee5a5e21f4db90555defeb4697f4ea3972adae8bea",
+  "syncedAt": "2026-09-30T01:54:16.533Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -216,12 +216,12 @@
     "engine/types/logs.ts": "sha256:9731ecee84746d2a1590841d74e04009f6780ff49514df100e008a6d4ed0453e",
     "engine/vendor-info.ts": "sha256:eeaadfb93fcec2e4acfbfffb01bee4a12d5bc5f2f2641dbe0cccd764556c487a",
     "index.ts": "sha256:6f236b6f6bcc38b79861eda05da12c947160b0f1f7e325fa9286bf6428035437",
-    "lib/evaluate.ts": "sha256:42d5990a594d4968a49556e9f8fbf7cfab8a68c71690daf749e3e4977142e726",
+    "lib/evaluate.ts": "sha256:78d4f829dff6ad570df44e0fe0b0b086b733f4222bf595c90f1fdc8bfc87b462",
     "lib/fingerprint.ts": "sha256:ed7fb060c74a7145b0dc3edc38f97f8725eddd991d50d0c08bda467974e014d7",
     "lib/jev.ts": "sha256:9b68102cd9e42be5942c4a029d8559ce43e37aa92115db6c5ed378742447629a",
     "lib/public.ts": "sha256:c7508569d537937f67902e129adda667810295c0868e30df6037eb6c23240bb0",
     "lib/runner.ts": "sha256:5613b0bf217af7e56dd360f5ed9223d3ba8145c623fe961ad001845c00399e82",
-    "lib/score.ts": "sha256:67f218d1165eb94332fbac95306d8bbbad49ae60aa5d500fa8a914f4bce1a278",
+    "lib/score.ts": "sha256:1b14bf2919c76191332f5d0fc160c9c311cc3c4951c9d63370e3d675bc7c0777",
     "lib/store.ts": "sha256:d9372923bda094de3c0493c2f2dfb18f7c20b7ad77cef721149c30c0ac7b87eb",
     "lib/types.ts": "sha256:0b991f9c4ac96fe03850d37995a9135bbba312cf7472132b3a619320a4cc8d76",
     "static/index.html": "sha256:7954f6b368d41d856689eded545314a5f5602ab0bdf4e31a33bb3885867cc34e"
