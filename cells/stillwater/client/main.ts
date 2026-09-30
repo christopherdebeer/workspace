@@ -424,7 +424,6 @@ function visibleDry(): Pad[] {
 
 function condense(p: Pad, count: number) {
   p.drops = layDrops(count, p.r, rand);
-  appearDew(p);
   sound.glint();
 }
 
@@ -478,7 +477,6 @@ function ensureRelationshipPads() {
       p.drops = [];
       return;
     }
-    appearDew(p);
     stock.push(p);
   };
   // once proved with dew, the question's leaves show their numerals (concrete, then abstract)
@@ -503,7 +501,6 @@ function ensureRelationshipPads() {
         if (numeralLeaves.includes(p) || p.drops.length) continue;
         p.drops = layDrops(n, p.r, rand, true);
         if (liveCount(p) === n) {
-          appearDew(p);
           numeralLeaves.push(p);
           seen.add(n);
           break;
@@ -2342,8 +2339,6 @@ const glyphMode = params.get('glyphs');
 const glyphCycle = !!params.get('cycle');
 /** How long water takes to flow from one state to the next (s). */
 const MORPH = 1.8;
-/** …and from a bare leaf: beading, then running together. */
-const CONDENSE = 2.6;
 let glyphsReady = false;
 let sheet: Map<Pad, number> | null = null;
 
@@ -2353,36 +2348,48 @@ let sheet: Map<Pad, number> | null = null;
  * began), and a flow that ends back in the drops hands the leaf back to its dew.
  */
 /**
- * New dew on a leaf in view condenses rather than appearing: the bare leaf beads with fine
- * droplets that grow and then run together into the drops (or, for a numeral leaf, the
- * numeral) — the water's field flowing from `condensing` (-3). Before the atlas is baked the
- * drops simply grow in, as before.
+ * A leaf's water is always one of: nothing (-2), fine dew (-3: a sprinkle of tiny beads, too
+ * small to count), drops (-1: the dew that counts), or a numeral (0…). It moves between them
+ * only by flowing:
+ *   nothing → fine dew          a bare leaf beads up (BEAD)
+ *   fine dew → drops / numeral  the beads drift together and grow into it (GATHER)
+ *   anything else               one water into the next (MORPH)
+ * Nothing goes straight to drops or a numeral: it beads first, then gathers (a queued flow).
+ * Water leaving drops or a numeral goes back to fine dew on a leaf that keeps some, and to
+ * nothing on one that does not.
  */
-function appearDew(p: Pad) {
-  if (glyphMode) return;
-  p.glyph = -1;
-  p.glyphFrom = -3;
-  p.glyphT = 0;
-  p.glyphA = 1;
-  p.glyphSize = 1.05;
-}
+const BEAD = 3.2;
+const GATHER = 2.8;
+/** About half the leaves keep a sprinkle of fine dew (by their seed), so dew is never far. */
+const keepsFineDew = (p: Pad) => ((p.seed * 7.31) % 1) < 0.55 && !p.flower;
 
 function flowToward(p: Pad, to: number, dt: number) {
-  if (p.glyph === undefined) {
-    if (to === -1) return;
-    p.glyphFrom = p.drops.some((d) => d.to > 0) ? -1 : -2;
-    p.glyph = to;
-    p.glyphT = 0;
-  } else if (to !== p.glyph) {
-    if ((p.glyphT ?? 1) > 0.35) p.glyphFrom = p.glyph;
+  const now = p.glyph ?? -2;
+  if (to !== now && to !== p.glyphQueue) {
+    // a new flow starts from what shows (or, if the last one has barely begun, from where it began)
+    if (p.glyph === undefined) p.glyphFrom = -2;
+    else if ((p.glyphT ?? 1) > 0.35) p.glyphFrom = now;
+    p.glyphQueue = undefined;
+    // nothing never jumps to drops or a numeral: it beads first, then gathers
+    if (p.glyphFrom === -2 && to !== -3 && to !== -2 && !glyphMode) {
+      p.glyphQueue = to;
+      to = -3;
+    }
     p.glyph = to;
     p.glyphT = 0;
   }
-  p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / (p.glyphFrom === -3 ? CONDENSE : MORPH));
+  const dur = p.glyphFrom === -2 && p.glyph === -3 ? BEAD : p.glyphFrom === -3 ? GATHER : MORPH;
+  p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / dur);
   p.glyphA = 1;
   p.glyphSize = 1.05;
-  // water that has flowed to nothing is done; dew stays drawn as water at rest (-1)
-  if (p.glyphT >= 1 && (p.glyph === -2 || (p.glyph === -1 && glyphMode))) p.glyph = undefined;
+  if (p.glyphT < 1) return;
+  if (p.glyphQueue !== undefined) {
+    // beaded: now gather into what was wanted
+    p.glyphFrom = p.glyph;
+    p.glyph = p.glyphQueue;
+    p.glyphQueue = undefined;
+    p.glyphT = 0;
+  } else if (p.glyph === -2 || (p.glyph === -1 && glyphMode)) p.glyph = undefined;
 }
 
 /** Bake the atlas a glyph at a time between frames, then hand it to the renderer. */
@@ -2415,12 +2422,13 @@ function runningOff(p: Pad, dt: number): boolean {
     // under water, a numeral holds as it is (no turning back into drops) until its dew is washed;
     // one still forming finishes forming
     if (p.drops.some((d) => d.to > 0)) {
-      p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / (p.glyphFrom === -3 ? CONDENSE : MORPH));
+      p.glyphT = Math.min(1, (p.glyphT ?? 1) + dt / (p.glyphFrom === -3 ? GATHER : p.glyphFrom === -2 ? BEAD : MORPH));
       return true;
     }
   }
   p.glyphRun = Math.min(1, (p.glyphRun ?? 0) + dt / 1.6);
   if (p.glyphRun >= 1) {
+    // the river has it; the leaf is bare (fine dew beads up again in time)
     p.glyph = undefined;
     p.glyphRun = 0;
     numeralLeaves = numeralLeaves.filter((q) => q !== p);
@@ -2438,24 +2446,25 @@ function waterGlyphs(dt: number) {
       if (!glyphsReady) break;
       if (runningOff(p, dt)) continue;
       const n = liveCount(p);
-      flowToward(p, n >= 1 && n <= 9 ? n : n ? -1 : -2, dt);
+      flowToward(p, n >= 1 && n <= 9 ? n : n ? -1 : keepsFineDew(p) ? -3 : -2, dt);
     }
     for (const p of pond.pads) {
       if (glyphsReady && numeralLeaves.includes(p)) continue;
       // a numeral no longer in the question (a sinking leaf leaves it) still runs off as a numeral
       if (runningOff(p, dt)) continue;
       const wet = p.drops.some((d) => d.to > 0 || d.a > 0.01);
+      const rest = wet ? -1 : keepsFineDew(p) ? -3 : -2;
       if (p.glyph === undefined) {
-        if (!wet) continue;
-        // dew already on the leaf (grown with the river, off screen): at rest, as water
-        p.glyph = -1;
-        p.glyphFrom = -1;
+        if (rest === -2) continue;
+        // water already on the leaf (grown with the river, off screen): simply there, at rest
+        p.glyph = rest;
+        p.glyphFrom = rest;
         p.glyphT = 1;
         p.glyphA = 1;
         p.glyphSize = 1.05;
         continue;
       }
-      flowToward(p, wet ? -1 : -2, dt);
+      flowToward(p, rest, dt);
     }
     return;
   }

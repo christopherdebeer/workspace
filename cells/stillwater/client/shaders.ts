@@ -534,23 +534,65 @@ vec2 gSquash;
 int gRow, gCount;
 vec2 gHand(vec2 v){ v = rot(v, gTurn); v.x -= gLean * v.y; return v / gSquash; }
 float gSmin(float a, float b, float k){ float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
+/** A glyph's key shape from the atlas (no flow). */
+vec2 gAtlas(float gi, vec2 gp){
+  if (abs(gp.x) > .62 || abs(gp.y) > .62) return vec2(.4, .3);
+  vec2 cell = vec2(mod(gi, 4.), floor(gi / 4. + .001));
+  return texture(uGlyphs, (cell + gp / 1.28 + .5) / 4.).rg;
+}
+/** Drops (-1) and fine dew (-3) are both beads of water. */
+bool gBeads(float st){ return (st > -1.5 && st < -.5) || st < -2.5; }
+/**
+ * Fine dew (-3): the leaf's own sprinkle of tiny beads, too small to count — few on some
+ * leaves, many on others. Flowing into drops or a numeral, the beads drift toward where the
+ * water is gathering (the nearest drop, or the numeral's path) and grow as they go, so the
+ * dew seems to collect itself. 'away': which way is off the nearest bead (for its light).
+ */
+vec2 gMist(vec2 gp, out vec2 away){
+  float pull = gT < 1. && gFrom < -2.5 && gTo > -1.5 ? smoothstep(.05, .9, gT) : 0.;
+  float n = floor(6. + 12. * hash12(vec2(gSeed, 91.)));
+  float d = .4;
+  away = vec2(0., 1.);
+  for (int k = 0; k < 22; k++) {
+    float fk = float(k);
+    if (fk >= n) break;
+    vec2 c = (vec2(hash12(vec2(gSeed, fk * 3.7 + 1.)), hash12(vec2(gSeed, fk * 5.3 + 7.))) - .5) * 1.6;
+    if (length(c) > .8) continue;
+    // tiny: plainly not the dew that counts
+    float rk = .007 + .011 * hash12(vec2(gSeed, fk + 19.));
+    if (pull > 0.) {
+      vec2 goal = c;
+      if (gTo > -.5) {
+        // toward the numeral's path, down the slope of its distance
+        float e = .02;
+        vec2 g = vec2(gAtlas(gTo, c + vec2(e, 0.)).x - gAtlas(gTo, c - vec2(e, 0.)).x, gAtlas(gTo, c + vec2(0., e)).x - gAtlas(gTo, c - vec2(0., e)).x);
+        goal = c - g / max(length(g), 1e-5) * gAtlas(gTo, c).x;
+      } else {
+        // toward the nearest of the leaf's drops
+        float best = 9.;
+        for (int i = 2; i < 14; i++) {
+          if (i >= gCount) break;
+          vec4 dr = texelFetch(uDrops, ivec2(i, gRow), 0);
+          if (dr.w < .01) continue;
+          vec2 dc = gHand(rot(dr.xy, vAng) / gS);
+          float l = length(dc - c);
+          if (l < best) { best = l; goal = dc; }
+        }
+      }
+      c = mix(c, goal, pull * .9);
+      rk *= 1. + pull * 1.2;
+    }
+    float l = length(gp - c);
+    float dk = l - (rk - .082);
+    if (dk < d) { d = dk; away = (gp - c) / max(l, 1e-5); }
+  }
+  return vec2(d, 0.);
+}
 /** One state's field at gp: [distance to its path, distance along it to a free end]. */
 vec2 gState(float gi, vec2 gp){
   if (gi < -2.5) {
-    // condensing: the bare leaf beading with fine droplets, which grow while this state is
-    // flowed from (gField holds it, then lets the beads run together into what follows)
-    float grow = smoothstep(0., .45, gT);
-    float d = .4;
-    for (int k = 0; k < 22; k++) {
-      float fk = float(k);
-      vec2 c = (vec2(hash12(vec2(gSeed, fk * 3.7 + 1.)), hash12(vec2(gSeed, fk * 5.3 + 7.))) - .5) * 1.6;
-      if (length(c) > .8) continue;
-      // the beads draw toward where the water will gather as they grow
-      float rk = (.008 + .026 * hash12(vec2(gSeed, fk + 19.))) * grow;
-      if (rk < .002) continue;
-      d = min(d, length(gp - c) - (rk - .082));
-    }
-    return vec2(d, 0.);
+    vec2 unused;
+    return gMist(gp, unused);
   }
   if (gi < -1.5) return vec2(.4, .3); // nothing: no water here
   if (gi < -.5) {
@@ -575,9 +617,7 @@ vec2 gState(float gi, vec2 gp){
     }
     return vec2(d, 0.);
   }
-  if (abs(gp.x) > .62 || abs(gp.y) > .62) return vec2(.4, .3);
-  vec2 cell = vec2(mod(gi, 4.), floor(gi / 4. + .001));
-  return texture(uGlyphs, (cell + gp / 1.28 + .5) / 4.).rg;
+  return gAtlas(gi, gp);
 }
 /** The water's field, mid-change: one state flowing into the next, gathering and breaking as it goes. */
 vec2 gField(vec2 gp){
@@ -588,13 +628,12 @@ vec2 gField(vec2 gp){
     return b;
   }
   vec2 a = gState(gFrom, gp);
-  // eased gently in and out (smootherstep); from condensing, the beads first grow where they
-  // are, and only then run together into the dew or the numeral
-  float u = gFrom < -2.5 ? clamp((gT - .3) / .7, 0., 1.) : gT;
-  float t = u * u * u * (u * (u * 6. - 15.) + 10.);
+  // eased gently in and out (smootherstep)
+  float t = gT * gT * gT * (gT * (gT * 6. - 15.) + 10.);
   vec2 v = mix(a, b, t);
   // mid-flow the water runs heavier and its necks break into beads
-  float mid = sin(3.14159 * t);
+  // (fine dew gathering is quiet: the beads draw together rather than break)
+  float mid = sin(3.14159 * t) * (gBeads(gFrom) && gBeads(gTo) ? .3 : 1.);
   v.x += (texture(uNoise, gp * 1.6 + vec2(gT * .4, gT * .15)).r - .5) * .1 * mid - .014 * mid;
   v.y = mix(v.y, 0., mid * .6);
   return v;
@@ -955,10 +994,13 @@ void main(){
     }
     // …and how the line wavers as it is drawn: slow bends, a tremor
     gp += (texture(uNoise, gp * .55 + wo).rg - .5) * .11 + (texture(uNoise, gp * 1.7 + wo.yx).rg - .5) * .045;
-    bool beads = gTo > -1.5 && gTo < -.5 || gT < 1. && (gFrom > -1.5 && gFrom < -.5 || gFrom < -2.5);
+    bool beads = gBeads(gTo) || gT < 1. && gBeads(gFrom);
     float bound = beads ? 1.05 : .62;
     if (abs(gp.x) < bound && abs(gp.y) < bound) {
-      vec2 de = gField(gp); // distance to the path, distance along it to a free end
+      // fine dew at rest is many tiny beads: one pass finds the nearest, and its light is its own
+      bool restMist = gT >= 1. && gTo < -2.5;
+      vec2 mistAway = vec2(0., 1.);
+      vec2 de = restMist ? gMist(gp, mistAway) : gField(gp); // distance to the path, distance along it to a free end
       float ga = glyph.w;
       // the water on the path: thinner and fuller along it, pooled here and there, beaded at the ends
       float nW = texture(uNoise, gp * .8 + wo * 1.3).r;
@@ -967,19 +1009,21 @@ void main(){
       w = min(w, .18);
       // where the water is (or is becoming) the leaf's own drops, it is drops: plain round beads of
       // their own size, so the hand-off to the dew drawn as dew is seamless
-      float uD = gFrom < -2.5 ? clamp((gT - .3) / .7, 0., 1.) : gT;
-      float tD = gT >= 1. ? 1. : uD * uD * uD * (uD * (uD * 6. - 15.) + 10.);
-      float dropK = (gTo > -1.5 && gTo < -.5 ? tD : 0.) + (gT < 1. && gFrom > -1.5 && gFrom < -.5 ? 1. - tD : 0.);
-      // (keeping a quarter of the hand's swell, so no two drops are quite the same)
-      w = mix(w, .082, .75 * clamp(dropK, 0., 1.));
+      float tD = gT >= 1. ? 1. : gT * gT * gT * (gT * (gT * 6. - 15.) + 10.);
+      float dropK = (gBeads(gTo) ? tD : 0.) + (gT < 1. && gBeads(gFrom) ? 1. - tD : 0.);
+      // (drops keep a quarter of the hand's swell, so no two are quite the same; fine dew none)
+      w = mix(w, .082, (gTo < -2.5 ? 1. : .75) * clamp(dropK, 0., 1.));
       // gathering: a thin thread first, then the full water
       w *= mix(.35, 1., ga);
       float d = de.x;
       // the slope of the distance (which way is away from the path), in the hand's space
-      float eps = .01;
-      vec2 gd = vec2(gField(gp + vec2(eps, 0.)).x - gField(gp - vec2(eps, 0.)).x,
-                     gField(gp + vec2(0., eps)).x - gField(gp - vec2(0., eps)).x);
-      vec2 away = gd / max(length(gd), 1e-5);
+      vec2 away = mistAway;
+      if (!restMist) {
+        float eps = .01;
+        vec2 gd = vec2(gField(gp + vec2(eps, 0.)).x - gField(gp - vec2(eps, 0.)).x,
+                       gField(gp + vec2(0., eps)).x - gField(gp - vec2(0., eps)).x);
+        away = gd / max(length(gd), 1e-5);
+      }
       // stray drops shaken off the finger: a few, near the glyph's strokes but clear of them;
       // they gather as the glyph does
       if (gTo > -.5) {
@@ -1003,7 +1047,7 @@ void main(){
       vec3 Lw = uSun;
       float canopyLight = sunThrough(vW);
       // its shadow on the leaf, a little away from the sun
-      float dS = gField(gp + Lw.xy * .035).x;
+      float dS = restMist ? .4 : gField(gp + Lw.xy * .035).x;
       float aaG = uPx / (vR * S) * 1.3;
       col *= 1. - (1. - smoothstep(w * .6, w * 1.05, dS)) * .13 * smoothstep(-aaG, aaG, d - w);
       if (d < w + aaG) {
