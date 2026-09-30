@@ -10,7 +10,7 @@
  * and looking give real parallax; the fog, the mist banks and the wind are all
  * in the shaders (render.ts).
  *
- * Debug: ?at=<metres> · ?walk=1 · ?look=<radians> · ?fixed · window.__mistwood
+ * Debug: ?only=birch (every tree one species) · ?at=<metres> · ?walk=1 · ?look=<radians> · ?fixed · window.__mistwood
  */
 import { Sound } from './audio';
 import { Baker, type Card } from './bake';
@@ -85,6 +85,7 @@ function stand(z: number) {
 function plant(s: number) {
   seed = s;
   wood = new Wood(seed);
+  wood.only = (params.get('only') as Kind | null) ?? null;
   forget();
   seedBtn.textContent = seedName(seed).replace(/-/g, ' · ');
   const url = new URL(location.href);
@@ -339,7 +340,15 @@ function frame(now: number) {
     shadeN++;
   }
   const wind = 0.55 + 0.45 * Math.sin(t * 0.11) * Math.sin(t * 0.067 + 1);
-  renderer.draw(view, { shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, sun: [sunAz, 0.35] }, draws);
+  // the sun, behind the fog, in the view's terms (for shading the round wood)
+  const sx = Math.sin(sunAz) * 0.9;
+  const sy = 0.45;
+  const sz = Math.cos(sunAz) * 0.9;
+  const sl = Math.hypot(sx, sy, sz);
+  const cy = Math.cos(view.yaw);
+  const syw = Math.sin(view.yaw);
+  const light: [number, number, number] = [(sx * cy - sz * syw) / sl, sy / sl, -(sx * syw + sz * cy) / sl];
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, sun: [sunAz, 0.35] }, draws);
   sound.update(dt, t, speed, 0, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),

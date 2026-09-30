@@ -167,8 +167,8 @@ void main() {
   vec3 birch = uBirch;
   if (tone > .3 && uKind < .5) {
     // birch bark: dark lenticels across the white, black patches, darker towards the foot
-    float band = vnoise(vec2(vWorld.x * 9., vWorld.y * 22.));
-    float patchy = vnoise(vec2(vWorld.x * 3. + uPhase, vWorld.y * 2.6));
+    float band = vnoise(vec2(vWorld.x * 4., vWorld.y * 40.));
+    float patchy = vnoise(vec2(vWorld.x * 2. + uPhase, vWorld.y * 7.));
     birch *= 1. - .75 * smoothstep(.72, .8, band) - .7 * smoothstep(.7, .78, patchy) - .5 * exp(-vWorld.y * 1.2);
   }
   vec3 base = uKind > .5 ? mix(uStrawDark, uStraw, tone) : mix(uBark, birch, tone);
@@ -260,8 +260,10 @@ flat in vec2 vTL;
 in vec3 vWorld;
 in float vDist;
 out vec4 o;
-uniform float uDensity, uAlpha, uPhase;
+uniform float uDensity, uAlpha, uPhase, uRim;
 uniform vec3 uBark, uBirch, uLeaf;
+// the sun's direction in the view (screen right, screen up, towards the eye)
+uniform vec3 uLight;
 ${NOISE}
 void main() {
   vec2 pa = vP - vA, ba = vB - vA;
@@ -278,18 +280,31 @@ void main() {
     cov = w * clamp(1. - d, 0., 1.);
   }
   if (cov <= .002) discard;
-  // bark shaded round the branch: lit from above through the fog, dark underneath
-  vec2 n = normalize(vec2(-ba.y, ba.x) + 1e-6);
-  float across = clamp(dot(off, n) / max(w * .5, .5), -1., 1.);
-  float facing = across * sign(n.y + 1e-4);
-  float shade = w > 2. ? .82 + .3 * facing * .5 + .18 * (1. - abs(across)) : 1.;
+  // round wood: the normal across the branch (a is -1 … 1 from one edge to the other), lit by the
+  // sun where it is behind the fog, with the sky's soft light from above all round; backlit, the
+  // edges catch it
+  vec2 nn = normalize(vec2(-ba.y, ba.x) + 1e-6);
+  if (nn.x < 0.) nn = -nn;
+  float a = clamp(dot(off, nn) / max(w * .5, .5), -1., 1.);
+  vec3 N = vec3(nn * a, sqrt(max(0., 1. - a * a)));
+  float dif = max(0., dot(N, uLight));
+  float sky = .5 + .5 * N.y;
+  float round = w > 1.5 ? 1. : smoothstep(.5, 1.5, w);
+  float lit = mix(.85, .38 + .5 * dif + .22 * sky + .35 * pow(abs(a), 5.) * uRim, round);
   vec3 birch = uBirch;
   if (vTL.x > .3) {
-    float band = vnoise(vec2(vWorld.x * 9. + vWorld.z * 9., vWorld.y * 22.));
-    float patchy = vnoise(vec2(vWorld.x * 3. + vWorld.z * 3. + uPhase, vWorld.y * 2.6));
-    birch *= 1. - .75 * smoothstep(.72, .8, band) - .7 * smoothstep(.7, .78, patchy) - .5 * exp(-vWorld.y * 1.2);
-  }
-  vec3 base = mix(uBark, birch, vTL.x) * shade;
+    // birch bark: dark lenticels wrapping round (thinning to the edges), black patches, a darker foot
+    float wrap = sqrt(max(0., 1. - a * a));
+    // (marks are long across the trunk and short up it: lenticels as fine lines, patches as bands)
+    float band = vnoise(vec2(a * .9 + uPhase * 3.1, vWorld.y * 48.));
+    float patchy = vnoise(vec2(a * .7 + uPhase, vWorld.y * 7.)) * .7 + vnoise(vec2(a * 3., vWorld.y * 20.)) * .3;
+    birch *= 1. - .8 * smoothstep(.74, .8, band) * wrap - .8 * smoothstep(.7, .76, patchy) * wrap - .5 * exp(-vWorld.y * 1.2);
+    // white bark is pale even in shade (the fog lights it from everywhere); the shadow side goes
+    // cool and a little green (lichen, and the fog's own colour)
+    float blit = mix(.9, .62 + .32 * dif + .16 * sky + .3 * pow(abs(a), 5.) * uRim, round);
+    birch = mix(birch * blit, birch * vec3(.66, .74, .7) * (.7 + .2 * sky), (1. - dif) * .4 * round);
+  } else birch *= lit;
+  vec3 base = mix(uBark * lit, birch, vTL.x);
   base = mix(base, uLeaf, vTL.y);
   base = mix(base, uFogLow, (1. - cov) * .22);
   float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
@@ -329,6 +344,8 @@ export interface View {
 }
 
 export interface Look {
+  /** the sun's direction in view space: screen right, up, towards the eye */
+  light: [number, number, number];
   /** trees shading the ground: x, z, contact r, crown r, then crown offset x, z (per tree) */
   shade: Float32Array;
   shadeOff: Float32Array;
@@ -502,6 +519,8 @@ export class Renderer {
     gl.uniform3fv(this.loc(L, 'uBirch'), PAL.birch);
     gl.uniform3fv(this.loc(L, 'uLeaf'), PAL.leaf);
     gl.uniform1f(this.loc(L, 'uWind'), look.wind);
+    gl.uniform3fv(this.loc(L, 'uLight'), look.light);
+    gl.uniform1f(this.loc(L, 'uRim'), Math.max(0, -look.light[2]));
     gl.activeTexture(gl.TEXTURE0);
     let current: WebGLProgram | null = null;
     const use = (prog: WebGLProgram) => {

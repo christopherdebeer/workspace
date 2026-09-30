@@ -73,7 +73,17 @@ void main() {
     cov = w * clamp(1. - d, 0., 1.);
   }
   if (cov <= 0.) discard;
-  o = vec4(vTL.y * cov, vTL.x * cov, vFlex * cov, cov);
+  // round wood, shaded as it is baked (a far card cannot be lit later): light from the upper left
+  // through the fog and soft from above, so a birch reads as a trunk and not a stripe
+  float tone = vTL.x;
+  if (w > 1.5 && tone > .3) {
+    vec2 nn = normalize(vec2(-(vB - vA).y, (vB - vA).x) + 1e-6);
+    if (nn.x < 0.) nn = -nn;
+    float a = clamp(dot(vP - vA - (vB - vA) * h, nn) / (w * .5), -1., 1.);
+    vec3 N = vec3(nn * a, sqrt(max(0., 1. - a * a)));
+    tone *= .62 + .3 * max(0., dot(N, normalize(vec3(-.55, .45, .6)))) + .12 * (.5 + .5 * N.y);
+  }
+  o = vec4(vTL.y * cov, tone * cov, vFlex * cov, cov);
 }`;
 
 export interface Card {

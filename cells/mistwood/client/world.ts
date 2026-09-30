@@ -39,6 +39,8 @@ export class Wood {
   readonly density: number;
   private cache = new Map<number, Placed[]>();
   private pool = new Map<string, Structure>();
+  /** Debug (`?only=birch`): every tree one species, to look at it. */
+  only: Kind | null = null;
 
   constructor(seed: number) {
     this.seed = seed >>> 0;
@@ -94,7 +96,8 @@ export class Wood {
         const z = z0 + r() * CELL;
         const pr = r();
         if (offPath(x, z) < clear) continue;
-        out.push({ x, z, kind, pool: Math.floor(pr * POOL[kind]), scale: lerp(0.8, 1.2, r()), rot: r() * 6.283, flip: r() < 0.5, phase: r() * 6.28 });
+        const k = this.only && kind !== 'patch' ? this.only : kind;
+        out.push({ x, z, kind: k, pool: Math.floor(pr * POOL[k]), scale: lerp(0.8, 1.2, r()), rot: r() * 6.283, flip: r() < 0.5, phase: r() * 6.28 });
       }
     };
     // tall trunks fading into the fog all round; the small leaning tree (the photograph's), often
