@@ -170,3 +170,11 @@ playtests were mostly engine gaps, and it reshaped the harness:
 - Jev spend: ~12 M input tokens per 48-game eval (~$0.50). The jev cell's
   daily cap was raised 60 M → 300 M tokens (≈ $12.60/day) for the climb; the
   TypeSafe account then returned HTTP 402 (payment required), pausing Jev work.
+- **Screening before spending.** With Jev unavailable (402), candidate rule
+  changes were screened free (greedy stand-in, the 24 train games): trade
+  limits alone barely moved balance (0.48 → 0.57), counting trades only for
+  the offerer alone 0.59, both together 0.84 with games 4.4 → 6 rounds — so
+  that pair goes to Jev as one round ("trading becomes deliberate"). Queued
+  after it: denounce, public powers, Collector 5 items, discovery. A small
+  driver runs the queue (baseline + noise when missing, one proposal per
+  round, noise re-measured after a keep) whenever Jev answers.
