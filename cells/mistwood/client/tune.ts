@@ -80,7 +80,14 @@ export function mountTune(state: () => unknown) {
       out.className = 'v';
       let control: HTMLInputElement | HTMLSelectElement;
       const put = (v: unknown) => setFlag(name, v as never);
-      if (spec.kind === 'number') {
+      if (spec.kind === 'number' && (spec.max - spec.min) / spec.step > 5000) {
+        // too wide for a slider (a place in the wood): type it
+        const i = document.createElement('input');
+        i.type = 'text';
+        i.inputMode = 'decimal';
+        i.addEventListener('change', () => put(i.value === '' ? null : Number(i.value)));
+        control = i;
+      } else if (spec.kind === 'number') {
         const i = document.createElement('input');
         i.type = 'range';
         i.min = String(spec.min);
@@ -118,7 +125,7 @@ export function mountTune(state: () => unknown) {
         row.classList.toggle('set', set);
         if (control instanceof HTMLInputElement && control.type === 'checkbox') control.checked = v === true;
         else if (control instanceof HTMLInputElement && control.type === 'range') control.value = set ? String(v) : String((spec as { min: number }).min);
-        else control.value = set ? String(v) : '';
+        else if (document.activeElement !== control) control.value = set ? String(v) : '';
         out.textContent = set ? `${typeof v === 'number' ? Math.round(v * 100) / 100 : v === true ? 'on' : String(v).slice(0, 8)}${spec.kind === 'number' && spec.unit ? spec.unit : ''}` : '';
         out.append(clear);
         clear.hidden = !set;

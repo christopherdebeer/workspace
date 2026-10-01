@@ -139,6 +139,36 @@ are far, so they are there again when you come back.
 - **Drawn** by the shader from shapes: body, neck, head in profile or turned,
   ears, and jointed legs that walk, bound, or fold under when lying up.
 
+## The journey in the address
+
+The wood is fully seeded. Every tree, tuft, log, pond and herd's home comes
+from the seed and the place alone (`Math.random` only picks a fresh seed and
+voices the sounds). Where you are is kept in the address as you walk, about
+once a second when it changes:
+
+- `x` is metres east of the wood's origin;
+- `y` is metres north;
+- `heading` is degrees, 0 north and 90 east.
+
+So a reload, or a shared link, goes on from exactly there.
+
+The other way round works too, without reloading. Setting `x`, `y` or
+`heading` (from the overlay, or from a test in the same page through
+`window.__flags.setFlags({ x, y, heading })`) moves you there at once. Setting
+`seed` makes another wood. So a walk can be stepped through and photographed
+in one page session:
+
+1. Set the place.
+2. Wait for `__mistwood.settled`, which means everything in view is grown and
+   baked as sharp as it is wanted.
+3. Take the screenshot.
+
+Add `hour`, `time` and `fixed` for the same light, wind and resolution each
+time.
+
+What is not replayed: the deer's moment-to-moment wandering. Their herds and
+homes are seeded, but where they have got to depends on how you came.
+
 ## One seed, one wood
 
 The seed is in the address (`?seed=moss-ford-7`) and at the foot of the
@@ -194,7 +224,7 @@ compile, and an out-of-range or unknown value is refused with a warning.
 
 Current flags:
 - **wood:** `seed`, `only`
-- **stand:** `at`, `look`, `near`, `find`, `off`, `walk`
+- **stand:** `x`, `y`, `heading` (kept up to date), `at`, `look`, `near`, `find`, `off`, `walk`
 - **sky:** `hour`, `moon`, `fog`, `warm`
 - **deer:** `deer`, `deerAt`, `deerBed`, `deerCalm`
 - **render:** `fixed`, `time`

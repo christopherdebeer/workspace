@@ -19,7 +19,7 @@ import { Renderer, type Draw, type View } from './render';
 import { countWider, type Species, type Structure } from './tree';
 import { atmosphere, moonPhase } from './sky';
 import { Deerland } from './deer';
-import { flag, setFlag } from './flags';
+import { flag, onFlag, setFlag, setFlags } from './flags';
 import { mountTune } from './tune';
 import { hash, seeded } from './rng';
 import { clamp01, randomSeed, seedFrom, seedName } from './rng';
@@ -94,11 +94,22 @@ let posX = 0;
 let posZ = start;
 let heading = 0;
 /** Begin on a path, facing along it. */
-function stand(z: number) {
-  const at = wood.findPath(0, z);
-  posX = at.x;
-  posZ = at.z;
-  heading = at.heading + (flag('look') ?? 0);
+function stand(z: number, resume = false) {
+  // going on from where the address says you were (x, y, heading)
+  const fx = flag('x');
+  const fy = flag('y');
+  const fh = flag('heading');
+  if (resume && fx !== null && fy !== null) {
+    posX = fx;
+    posZ = fy;
+    heading = fh !== null ? (fh * Math.PI) / 180 : wood.findPath(fx, fy).heading;
+  } else {
+    const at = wood.findPath(0, z);
+    posX = at.x;
+    posZ = at.z;
+    heading = at.heading;
+  }
+  heading += flag('look') ?? 0;
   // debug `?find=pond|log|veteran|glade`: stand some metres off the nearest, facing it
   const find = flag('find');
   if (find) {
@@ -168,11 +179,11 @@ function plant(s: number) {
   baker.dispose();
   live.clear();
   seedBtn.textContent = seedName(seed).replace(/-/g, ' · ');
-  setFlag('seed', seedName(seed), { reload: false });
+  setFlag('seed', seedName(seed), { reload: false, by: 'app' });
 }
 plant(seed);
 (window as unknown as { __wood: () => Wood }).__wood = () => wood;
-stand(start);
+stand(start, true);
 requestAnimationFrame(() => veil.classList.add('clear'));
 
 // ─── the view ───────────────────────────────────────────────────────────────────
@@ -598,13 +609,62 @@ function frame(now: number) {
     mb: Math.round((texels * 4) / 1e6),
     bias: Math.round(bias * 100) / 100,
     waiting: want.length,
+    /** everything in view grown and baked as sharp as it is wanted (a screenshot now is the real one) */
+    settled: want.length === 0 && ungrown.length === 0,
+    heading: Math.round(((((heading * 180) / Math.PI) % 360) + 360) % 360),
     quality: Math.round(quality * 100) / 100,
     pace: Math.round(speed * 100) / 100,
     pressure,
     place: Object.fromEntries(Object.entries(wood.place(posX, posZ)).map(([k, v]) => [k, Math.round(v * 100) / 100])),
   };
+  keepAddress(now);
   requestAnimationFrame(frame);
 }
+
+// ─── the journey in the address: where you are and which way you face, kept up to date (about
+// once a second, when it changed) so a reload — or a link — goes on from there. And the other
+// way: a change to x, y or heading (the overlay, a test in the same page) moves you there now,
+// and a new seed is a new wood, without making the page again.
+let written = '';
+let writtenAt = 0;
+const round1 = (v: number) => Math.round(v * 10) / 10;
+function keepAddress(now: number) {
+  if (now - writtenAt < 1000) return;
+  const deg = Math.round(((((heading * 180) / Math.PI) % 360) + 360) % 360) % 360;
+  const key = `${round1(posX)},${round1(posZ)},${deg}`;
+  if (key === written) return;
+  writtenAt = now;
+  written = key;
+  setFlags({ x: round1(posX), y: round1(posZ), heading: deg }, { by: 'app' });
+}
+/** Stand here now (no walking there): the eye on the ground, facing `h` if given. */
+function moveTo(x: number, z: number, h?: number) {
+  posX = x;
+  posZ = z;
+  if (h !== undefined) {
+    heading = h;
+    yaw = h;
+  }
+  footY = wood.groundH(posX, posZ);
+  written = '';
+}
+onFlag((name, by) => {
+  if (by === 'app') return;
+  if (name === 'x' || name === 'y' || name === 'heading') {
+    const h = flag('heading');
+    moveTo(flag('x') ?? posX, flag('y') ?? posZ, name === 'heading' && h !== null ? (h * Math.PI) / 180 : undefined);
+  } else if (name === 'seed') {
+    // another wood: from its start, unless the address also says where
+    plant(seedFrom(flag('seed')) ?? randomSeed());
+    walked = 0;
+    speed = 0;
+    stand(0);
+    moveTo(posX, posZ, heading);
+    bringDeer();
+  }
+});
+// for a test in the same page: read and set the flags as the overlay does
+(window as unknown as { __flags: unknown }).__flags = { flag, setFlag, setFlags };
 requestAnimationFrame((n) => {
   last = n;
   requestAnimationFrame(frame);

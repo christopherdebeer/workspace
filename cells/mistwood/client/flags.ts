@@ -29,10 +29,13 @@ const SPECIES: readonly Species[] = ['tall', 'leaner', 'birch', 'sapling', 'shru
 
 export const FLAGS = {
   // the wood
-  seed: { kind: 'text', group: 'wood', doc: 'which wood (word-word-n); touch the name at the foot for another' },
+  seed: { kind: 'text', group: 'wood', live: true, doc: 'which wood (word-word-n); touch the name at the foot for another' },
   only: { kind: 'enum', values: SPECIES, group: 'wood', doc: 'every tree of one archetype (to study it)' },
-  // where you stand
-  at: { kind: 'number', min: -500, max: 500, step: 10, unit: 'm', group: 'stand', doc: 'start this far along (the nearest path there)' },
+  // where you stand: kept in the address as you walk, so a journey goes on from where it was
+  x: { kind: 'number', min: -100000, max: 100000, step: 0.1, unit: 'm', group: 'stand', live: true, doc: "where you stand: metres east of the wood's origin (kept up to date as you walk)" },
+  y: { kind: 'number', min: -100000, max: 100000, step: 0.1, unit: 'm', group: 'stand', live: true, doc: "where you stand: metres north of the wood's origin (kept up to date as you walk)" },
+  heading: { kind: 'number', min: 0, max: 360, step: 1, unit: '°', group: 'stand', live: true, doc: 'which way you face: 0 north, 90 east (kept up to date)' },
+  at: { kind: 'number', min: -500, max: 500, step: 10, unit: 'm', group: 'stand', doc: 'with no x, y: start this far north of the origin (on the nearest path there)' },
   look: { kind: 'number', min: -3.14, max: 3.14, step: 0.05, unit: 'rad', group: 'stand', doc: 'turn from the way you would face' },
   near: { kind: 'number', min: 0.5, max: 20, step: 0.5, unit: 'm', group: 'stand', doc: 'stand this far from the nearest tree, facing it' },
   find: { kind: 'enum', values: ['pond', 'log', 'veteran', 'glade'], group: 'stand', doc: 'stand by the nearest one, facing it' },
@@ -61,7 +64,7 @@ export type FlagValue<N extends FlagName> = ValueOf<(typeof FLAGS)[N]>;
 
 const query = new URLSearchParams(location.search);
 const values = new Map<FlagName, unknown>();
-const listeners = new Set<(name: FlagName) => void>();
+const listeners = new Set<(name: FlagName, by: 'app' | 'user') => void>();
 
 function parse(name: FlagName, raw: string | null): unknown {
   const spec: Spec = FLAGS[name];
@@ -95,23 +98,39 @@ export function flag<N extends FlagName>(name: N): (typeof FLAGS)[N] extends { k
   return values.get(name) as never;
 }
 
-/** Set a flag (null clears it), keeping the address in step. Not live: the page is made again with it. */
-export function setFlag<N extends FlagName>(name: N, value: FlagValue<N> | null, opts: { reload?: boolean } = {}) {
-  const spec: Spec = FLAGS[name];
+export type FlagSet = { [N in FlagName]?: FlagValue<N> | null };
+export interface SetOptions {
+  /** make the page again with the new values (default: if any of them is not live) */
+  reload?: boolean;
+  /** who is setting them: the app keeping the address up to date ('app'), or anyone else */
+  by?: 'app' | 'user';
+}
+
+/** Set flags (null clears one), keeping the address in step, in one history entry. */
+export function setFlags(set: FlagSet, opts: SetOptions = {}) {
   const url = new URL(location.href);
-  if (value === null || value === false) url.searchParams.delete(name);
-  else url.searchParams.set(name, value === true ? '1' : String(value));
-  values.set(name, parse(name, url.searchParams.get(name)));
-  if (opts.reload ?? !spec.live) {
+  const names = Object.keys(set) as FlagName[];
+  for (const name of names) {
+    const value = set[name];
+    if (value === null || value === undefined || value === false) url.searchParams.delete(name);
+    else url.searchParams.set(name, value === true ? '1' : String(value));
+    values.set(name, parse(name, url.searchParams.get(name)));
+  }
+  if (opts.reload ?? names.some((n) => !(FLAGS[n] as Spec).live)) {
     location.href = url.toString();
     return;
   }
   history.replaceState(null, '', url);
-  for (const l of listeners) l(name);
+  for (const name of names) for (const l of listeners) l(name, opts.by ?? 'user');
 }
 
-/** Hear of live changes (the overlay keeps itself in step). */
-export function onFlag(l: (name: FlagName) => void) {
+/** Set one flag. Not live: the page is made again with it. */
+export function setFlag<N extends FlagName>(name: N, value: FlagValue<N> | null, opts: SetOptions = {}) {
+  setFlags({ [name]: value } as FlagSet, opts);
+}
+
+/** Hear of live changes: by the app (keeping the address up to date) or by anyone else. */
+export function onFlag(l: (name: FlagName, by: 'app' | 'user') => void) {
   listeners.add(l);
 }
 
