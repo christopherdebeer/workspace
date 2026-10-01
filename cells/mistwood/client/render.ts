@@ -43,6 +43,11 @@ float fogAt(float dist, float above, float density) {
   float path = dist * .7 + dist * dist / 45.;
   return 1. - exp(-density * path * (1. + 1.5 * exp(-max(above, 0.) * .35) * smoothstep(2., 14., dist)));
 }
+// depth of field: the blur (circle of confusion, px) of something dist metres off — none at
+// the focus and beyond (the fog softens the far), growing fast as things come near: grass at your
+// feet papered over, a twig passing your face a faint smear
+uniform float uBlur, uFocus;
+float coc(float dist) { return uBlur * max(0., 1. / max(dist, .05) - 1. / uFocus); }
 // 0 dry … 1 a wet hollow (world.ts place)
 float wetAt(float h) { return 1. - smoothstep(uRelief.z, uRelief.z + uRelief.x * .8, h); }
 // banks of mist drifting through the wood (world space), heavier near the ground; and mist
@@ -315,7 +320,9 @@ void main() {
   float flutter = vnoise(vec2(vWorld.x * 4. + uT * 1.7, vWorld.y * 4. - uT * .9)) - .5;
   // metres: a twig sways a few centimetres, trembles a little more
   float m = (sway * .035 * (.4 + .6 * gust) + flutter * .02) * uWind * flex * flex;
-  vec4 t = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y));
+  // near, out of focus: a blurrier level of the card (its texels are about the size of pixels)
+  vec4 t = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y), log2(1. + coc(vDist)));
+  t *= smoothstep(.15, .6, vDist);
   if (t.a < .003) discard;
   float cov = min(t.a, 1.);
   float tone = clamp(t.g / max(t.a, .002), 0., 1.);
@@ -356,6 +363,7 @@ uniform float uF, uHz, uT, uWind;
 uniform vec4 uCam;
 uniform vec2 uAnchor;
 uniform float uRot, uScale, uPhase, uRadius, uHeight, uBase;
+uniform float uBlur, uFocus;
 out vec2 vP;
 flat out vec2 vA;
 flat out vec2 vB;
@@ -392,13 +400,15 @@ void main() {
   vec3 wa = place(aP0), wb = place(aP1);
   float ha, hb;
   vec3 sa = project(wa, ha), sb = project(wb, hb);
-  if (sa.z < .15 || sb.z < .15) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  if (sa.z < .08 || sb.z < .08) { gl_Position = vec4(2., 2., 2., 1.); return; }
   float pa = aInfo.x * uScale * uF / ha, pb = aInfo.y * uScale * uF / hb;
   vec2 a = sa.xy, b = sb.xy, d = b - a;
   float len = length(d);
   vec2 dir = len > 1e-4 ? d / len : vec2(0., 1.);
   vec2 n = vec2(-dir.y, dir.x);
-  float e = max(pa, pb) * .5 + 1.5;
+  // (room for the blur of what is near)
+  float blur = uBlur * max(0., 1. / max(min(ha, hb), .05) - 1. / uFocus);
+  float e = max(pa, pb) * .5 + 1.5 + blur;
   int c = gl_VertexID;
   bool first = c == 0 || c == 2;
   vec2 p = (first ? a - dir * e : b + dir * e) + n * (c < 2 ? -e : e);
@@ -467,9 +477,14 @@ void main() {
     cov = clamp(w * .5 - d + .5, 0., 1.);
   } else if (w >= 1.) cov = clamp(w * .5 - d + .5, 0., 1.);
   else {
-    if (hRaw < 0. || hRaw > 1.) discard;
+    if ((hRaw < 0. || hRaw > 1.) && coc(vDist) < .5) discard;
     cov = w * clamp(1. - d, 0., 1.);
   }
+  // out of focus: the line spread over its blur, as faint as it is spread (a thin twig near the
+  // eye a soft smear, a trunk's edges soft); and gone, not cut, as it comes to the eye
+  float B = coc(vDist);
+  if (B > .5) cov = min(1., (w + .5) / (2. * B + 1.)) * (1. - smoothstep(max(w * .5 - B, 0.), w * .5 + B + .5, d));
+  cov *= smoothstep(.1, .5, vDist);
   if (cov <= .002) discard;
   // round wood: the normal across the branch (a is -1 … 1 from one edge to the other), lit by the
   // sun where it is behind the fog, with the sky's soft light from above all round; backlit, the
@@ -696,6 +711,9 @@ export interface Look {
   /** the lie of the land (world.ts relief) and how open the wood is */
   relief: [number, number, number, number];
   openness: number;
+  /** depth of field: blur (px) of something 1 m off, focused at infinity; and the focus (m) */
+  blur: number;
+  focus: number;
 }
 
 export interface CardDraw {
@@ -862,6 +880,8 @@ export class Renderer {
     gl.uniform1f(this.loc(p, 'uDensity'), look.density);
     gl.uniform4fv(this.loc(p, 'uRelief'), look.relief);
     gl.uniform1f(this.loc(p, 'uOpen'), look.openness);
+    gl.uniform1f(this.loc(p, 'uBlur'), look.blur);
+    gl.uniform1f(this.loc(p, 'uFocus'), look.focus);
   }
 
   draw(v: View, look: Look, cards: Draw[]) {

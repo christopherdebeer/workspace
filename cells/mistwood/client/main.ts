@@ -330,6 +330,8 @@ const DARK: [number, number, number] = [0.1, 0.095, 0.08];
 /** Rushes: dark, olive. */
 const RUSH: [number, number, number] = [0.13, 0.14, 0.07];
 const LIVE_BUDGET = 400000;
+/** Depth of field: the lens's aperture (m) — what is near blurs (a twig at half a metre to a faint smear). */
+const APERTURE = 0.02;
 const nextPow2 = (x: number) => Math.pow(2, Math.ceil(Math.log2(Math.max(1, x))));
 
 function frame(now: number) {
@@ -414,7 +416,8 @@ function frame(now: number) {
     const cz = rx * s + rz * c;
     const cx = rx * c - rz * s;
     const hd = Math.hypot(cx, cz);
-    if (hd > VIEW || hd < 0.4 || cz < -4) continue;
+    // (what is very near is not cut away: it blurs out, in the shaders)
+    if (hd > VIEW || hd < 0.12 || cz < -4) continue;
     // low cover is drawn near (grass to 22 m, scrub further); beyond, the ground shader's scrub
     if (low(p.kind) && hd > (p.kind === 'scrub' ? 38 : 22)) continue;
     if (!wood.grown(p.kind, p.pool)) {
@@ -597,7 +600,7 @@ function frame(now: number) {
   const cy = Math.cos(view.yaw);
   const syw = Math.sin(view.yaw);
   const light: [number, number, number] = [(sx * cy - sz * syw) / sl, sy / sl, -(sx * syw + sz * cy) / sl];
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness }, draws);
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 9 }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),

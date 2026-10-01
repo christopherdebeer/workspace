@@ -53,6 +53,8 @@ export const FLAGS = {
   deerCalm: { kind: 'bool', group: 'deer', live: true, doc: 'deer never take alarm (to watch them)' },
   // the drawing
   fixed: { kind: 'bool', group: 'render', doc: 'keep the resolution (no adapting to the frame rate)' },
+  dof: { kind: 'number', min: 0, max: 3, step: 0.05, unit: '×', group: 'render', live: true, doc: 'depth of field: how much what is near blurs (0 none, 1 the default)' },
+  focus: { kind: 'number', min: 2, max: 40, step: 0.5, unit: 'm', group: 'render', live: true, doc: 'depth of field: the distance in focus (default 9 m); nearer blurs' },
   freeze: { kind: 'bool', group: 'render', live: true, doc: 'stop the clock: wind, mist and grain hold still (to compare pictures exactly)' },
   time: { kind: 'number', min: 0, max: 600, step: 1, unit: 's', group: 'render', doc: 'start the clock here (wind, mist, the deer)' },
   // development
