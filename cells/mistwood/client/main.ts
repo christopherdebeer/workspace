@@ -623,7 +623,7 @@ function frame(now: number) {
     bias: Math.round(bias * 100) / 100,
     waiting: want.length,
     /** everything in view grown and baked as sharp as it is wanted (a screenshot now is the real one) */
-    settled: want.length === 0 && ungrown.length === 0,
+    settled: want.length === 0 && ungrown.length === 0 && groundReady,
     heading: Math.round(((((heading * 180) / Math.PI) % 360) + 360) % 360),
     quality: Math.round(quality * 100) / 100,
     pace: Math.round(speed * 100) / 100,
@@ -638,6 +638,8 @@ function frame(now: number) {
 // once a second, when it changed) so a reload — or a link — goes on from there. And the other
 // way: a change to x, y or heading (the overlay, a test in the same page) moves you there now,
 // and a new seed is a new wood, without making the page again.
+/** The near ground's textures have come (or will not). */
+let groundReady = false;
 let written = '';
 let writtenAt = 0;
 const round1 = (v: number) => Math.round(v * 10) / 10;
@@ -682,5 +684,19 @@ requestAnimationFrame((n) => {
   last = n;
   requestAnimationFrame(frame);
 });
+// the near ground's textures (static/ground/: Poly Haven, CC0): drawn without them until they come
+{
+  const load = (src: string) =>
+    new Promise<HTMLImageElement>((ok, fail) => {
+      const img = new Image();
+      img.onload = () => ok(img);
+      img.onerror = fail;
+      img.src = src;
+    });
+  Promise.all([load('/ground/leaf_scattered_gravel_diff.webp'), load('/ground/leaf_scattered_gravel_nor.webp')])
+    .then(([c, n]) => renderer.setGround(c, n))
+    .catch(() => console.warn('mistwood: the ground textures did not load; the ground is painted'))
+    .finally(() => (groundReady = true));
+}
 // development: every flag in a panel (`?tune`)
 if (flag('tune')) mountTune(() => (window as unknown as { __mistwood: unknown }).__mistwood);

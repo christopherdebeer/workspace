@@ -128,6 +128,38 @@ float scrubTop(vec2 p, float gh, float t) {
   if (t < 30.) h *= smoothstep(uPathK.z * .7, uPathK.z * 1.5, pathDist(p));
   return h;
 }
+// the near ground: a photograph's worth of it (Poly Haven's Leaf Scattered Gravel, CC0, 1.8 m
+// across) — dry leaves and twigs over dark stones and damp earth — lit by its own normals
+uniform sampler2D uGroundC;
+uniform sampler2D uGroundN;
+uniform float uGroundOn;
+vec3 groundTex(vec2 xz, float t, vec3 d) {
+  vec2 uv = xz / 1.8;
+  // the pixel's footprint on the ground, worked out (not from derivatives: this is branching
+  // code) — narrow across, long along the view — and widened by the depth of field near you
+  float across = t / uF;
+  float along = across / max(-d.y, .03);
+  vec2 dirA = normalize(d.xz + 1e-5);
+  vec2 dirP = vec2(-dirA.y, dirA.x);
+  float blur = 1. + coc(t) * .6;
+  vec2 gx = dirP * across * blur / 1.8, gy = dirA * min(along, 40. * across) * blur / 1.8;
+  // never seen to repeat: two lookups at offsets picked by a slow noise, blended where it
+  // changes, and the blend follows the picture (Quilez's texture repetition)
+  float k = vnoise(uv * .35 + 7.) * 8.;
+  float ia = floor(k), f = fract(k);
+  vec2 oa = sin(vec2(3., 7.) * ia), ob = sin(vec2(3., 7.) * (ia + 1.));
+  vec3 ca = textureGrad(uGroundC, uv + oa, gx, gy).rgb;
+  vec3 cb = textureGrad(uGroundC, uv + ob, gx, gy).rgb;
+  float m = smoothstep(.2, .8, f - .1 * dot(ca - cb, vec3(1.)));
+  vec3 c = mix(ca, cb, m);
+  vec3 n = normalize(mix(textureGrad(uGroundN, uv + oa, gx, gy).rgb, textureGrad(uGroundN, uv + ob, gx, gy).rgb, m) * 2. - 1.);
+  vec3 N = vec3(n.x, n.z, n.y);
+  vec3 ld = vec3(sin(uSun.x) * cos(uSun.y), sin(uSun.y), cos(uSun.x) * cos(uSun.y));
+  // lit softly from the light behind the fog; the hollows between stones and leaves dark
+  float lit = (.62 + .5 * max(dot(N, ld), 0.)) * mix(.65, 1., n.z);
+  // graded to the wood: warmer and darker than the photograph's daylight
+  return c * vec3(.82, .72, .5) * lit;
+}
 void main() {
   vec2 px = gl_FragCoord.xy;
   // cylindrical projection: across the screen is angle (so turning only slides the picture);
@@ -259,6 +291,15 @@ void main() {
     earth = mix(earth, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .55, wet * .45);
     float regrow = smoothstep(.62, .8, vnoise(p.xz * 2.7)) * (1. - smoothstep(0., hw * .3, pd)) * .6;
     g = mix(g, mix(earth, g, regrow), path);
+    // near you, the ground itself: leaves and stones (on the path trodden darker and barer, in the
+    // wet mossier), giving way to the painted ground beyond a dozen metres
+    float nearT = uGroundOn * (1. - smoothstep(9., 15., t));
+    if (nearT > 0.) {
+      vec3 tg = groundTex(p.xz, t, d);
+      tg *= mix(vec3(1.), vec3(.72, .68, .64), path * (1. - regrow));
+      tg = mix(tg, tg * vec3(.7, .85, .55), damp * .6);
+      g = mix(g, tg, nearT * (.9 - .4 * damp));
+    }
     // shade: dark at each trunk's foot, a soft pool under each crown (the light is diffuse in fog)
     float ao = 0.;
     for (int i = 0; i < 40; i++) {
@@ -818,6 +859,29 @@ export class Renderer {
   private liveVao: WebGLVertexArrayObject;
   private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; depth: WebGLRenderbuffer; w: number; h: number } | null = null;
   private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
+  /** The near ground's textures (colour, normal), once loaded. */
+  private ground: { c: WebGLTexture; n: WebGLTexture } | null = null;
+
+  /** Take the near ground's textures (images): mipmapped, and filtered steeply (anisotropic), as ground at a grazing angle needs. */
+  setGround(colour: TexImageSource, normal: TexImageSource) {
+    const gl = this.gl;
+    const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
+    const make = (img: TexImageSource) => {
+      const t = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+      return t;
+    };
+    this.ground = { c: make(colour), n: make(normal) };
+  }
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
@@ -933,6 +997,16 @@ export class Renderer {
     gl.uniform4fv(this.loc(this.world, 'uShade'), look.shade);
     gl.uniform2fv(this.loc(this.world, 'uShadeOff'), look.shadeOff);
     gl.uniform1i(this.loc(this.world, 'uShadeN'), look.shadeN);
+    if (this.ground) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.ground.c);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.ground.n);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    gl.uniform1i(this.loc(this.world, 'uGroundC'), 1);
+    gl.uniform1i(this.loc(this.world, 'uGroundN'), 2);
+    gl.uniform1f(this.loc(this.world, 'uGroundOn'), this.ground ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // 2. the cards and the live trees, back to front
     gl.enable(gl.BLEND);
