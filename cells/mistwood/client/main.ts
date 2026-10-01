@@ -122,7 +122,9 @@ function stand(z: number, resume = false) {
         best = { x, z };
       }
     };
-    if (find === 'pond' || find === 'glade')
+    if (find === 'tower' || find === 'viaduct') {
+      for (let r = 100; r <= 1600 && !best; r += 250) for (const s of wood.structuresNear(posX, posZ, r)) if (s.kind === find) consider(s.x, s.z);
+    } else if (find === 'pond' || find === 'glade')
       for (let r = 0; r < 400 && !best; r += 4)
         for (let a = 0; a < 48; a++) {
           const x = posX + Math.cos((a / 48) * 6.283) * r;
@@ -135,7 +137,7 @@ function stand(z: number, resume = false) {
         for (const p of wood.around(posX, posZ, r)) if (find === 'log' ? p.kind === 'log' : p.scale > 1.6) consider(p.x, p.z);
     if (best) {
       const b = best as { x: number; z: number };
-      const off = flag('off') ?? (find === 'pond' ? 14 : find === 'glade' ? 0 : 9);
+      const off = flag('off') ?? (find === 'pond' ? 14 : find === 'glade' ? 0 : find === 'tower' ? 22 : find === 'viaduct' ? 30 : 9);
       const a = Math.atan2(posX - b.x, posZ - b.z);
       posX = b.x + Math.sin(a) * off;
       posZ = b.z + Math.cos(a) * off;
@@ -376,6 +378,8 @@ setTimeout(() => !walkedOnce && hint.classList.add('show'), 3000);
 // ─── each frame ───────────────────────────────────────────────────────────────────
 let t = flag('time') ?? 0;
 const shade = new Float32Array(40 * 4);
+const structA = new Float32Array(24);
+const structB = new Float32Array(24);
 const shadeOff = new Float32Array(40 * 2);
 let shadeN = 0;
 /** The time of day: your clock (or ?hour=), passing in real time. */
@@ -460,9 +464,28 @@ function frame(now: number) {
   // you walk to the water's edge, not into it
   const nx = posX + Math.sin(yaw) * speed * dt;
   const nz = posZ + Math.cos(yaw) * speed * dt;
-  if (wood.groundH(nx, nz) > wood.relief[2] - 0.15) {
-    posX = nx;
-    posZ = nz;
+  // and not through stone: along it instead (the move less its part into the wall)
+  let mx = nx;
+  let mz = nz;
+  const near = wood.structuresNear(nx, nz, 12);
+  if (near.length && wood.stoneDist(nx, nz, near) < 0.45) {
+    const e = 0.05;
+    const gx = wood.stoneDist(nx + e, nz, near) - wood.stoneDist(nx - e, nz, near);
+    const gz = wood.stoneDist(nx, nz + e, near) - wood.stoneDist(nx, nz - e, near);
+    const gl = Math.hypot(gx, gz) || 1;
+    const vx = nx - posX;
+    const vz = nz - posZ;
+    const into = Math.min(0, (vx * gx + vz * gz) / gl);
+    mx = posX + vx - (into * gx) / gl;
+    mz = posZ + vz - (into * gz) / gl;
+    if (wood.stoneDist(mx, mz, near) < 0.4) {
+      mx = posX;
+      mz = posZ;
+    }
+  }
+  if (wood.groundH(mx, mz) > wood.relief[2] - 0.15) {
+    posX = mx;
+    posZ = mz;
   }
   view.z = posZ;
   // standing still is still: the sway and the breath are the walk's
@@ -715,7 +738,13 @@ function frame(now: number) {
   const cy = Math.cos(view.yaw);
   const syw = Math.sin(view.yaw);
   const light: [number, number, number] = [(sx * cy - sz * syw) / sl, sy / sl, -(sx * syw + sz * cy) / sl];
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
+  // the stone near you, for the shader (the nearest six)
+  const stone = wood.structuresNear(view.x, view.z, 140).sort((a, b) => Math.hypot(a.x - view.x, a.z - view.z) - Math.hypot(b.x - view.x, b.z - view.z)).slice(0, 6);
+  stone.forEach((s, i) => {
+    structA.set([s.x, s.z, s.rot, s.kind === 'tower' ? 1 : 2], i * 4);
+    structB.set(s.kind === 'tower' ? [s.base, s.a, s.b, s.c] : [s.base, s.a, s.b, s.c], i * 4);
+  });
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, structA, structB, structN: stone.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),

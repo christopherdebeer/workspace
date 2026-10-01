@@ -17,6 +17,13 @@ import type { Card } from './bake';
 import type { Atmos } from './sky';
 import { SEG } from './tree';
 
+/**
+ * Depth, shared by everything drawn: horizontal distance (m) over this, so the stone structures
+ * (written by the world pass), the cards, the deer and the live trees all hide one another
+ * rightly. Nothing is drawn further than this.
+ */
+const DEPTH_RANGE = 100;
+
 const NOISE = `
 uniform uint uSeed;
 uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
@@ -101,6 +108,11 @@ uniform float uOpen; // how open the wood is (world.ts openness)
 uniform vec4 uShade[40];
 uniform vec2 uShadeOff[40];
 uniform int uShadeN;
+// the stone structures near you (world.ts structures): x, z, turn, kind (1 tower, 2 viaduct); and
+// for a tower: base height, height, radius, seed; for a viaduct: base height, deck height, span, piers
+uniform vec4 uStA[6];
+uniform vec4 uStB[6];
+uniform int uStN;
 ${NOISE}
 // paths: where two smooth fields cross their middle value. Each field's zero line winds by itself;
 // where the two families meet, paths join and fork. (world.ts has the same, so trees keep off)
@@ -352,6 +364,167 @@ vec3 forestFloor(vec2 xz, float t, vec3 d, float litter, float path, float damp)
   // wet leaves are darker and a little greener
   return col * mix(vec3(1.), vec3(.72, .78, .62), damp * .7);
 }
+// ─── stone: structures that stand in the wood (a ruined tower, the piers of a high viaduct) ─────────
+// Each a signed distance in its own frame (x along its axis, y up from its base), traced only where
+// a ray meets its box. Masonry is drawn on in the shading: courses, blocks, mortar, moss and ivy.
+vec3 toLocal(vec3 w, int i) {
+  vec4 a = uStA[i];
+  vec2 r = w.xz - a.xy;
+  float c = cos(a.z), s = sin(a.z);
+  return vec3(c * r.x + s * r.y, w.y - uStB[i].x, -s * r.x + c * r.y);
+}
+float sdBox(vec3 p, vec3 b) { vec3 q = abs(p) - b; return length(max(q, 0.)) + min(max(q.x, max(q.y, q.z)), 0.); }
+// a ruined round tower: a battered wall, its top broken away unevenly, a doorway, slit windows
+float sdTower(vec3 p, vec4 b) {
+  float H = b.y, R0 = b.z;
+  float r = length(p.xz);
+  float th = atan(p.z, p.x);
+  float R = R0 * (1. + .07 * (1. - clamp(p.y / H, 0., 1.)));
+  float wall = abs(r - R) - .48;
+  // the broken top: low on one side, high on the other, ragged
+  float top = H * (1. - .42 * vnoise(vec2(th * .9 + b.w * 7., b.w)) - .12 * vnoise(vec2(th * 3.1, b.w + 3.)));
+  float d = max(wall, p.y - top);
+  d = max(d, -p.y - 4.);
+  // the doorway (facing along x): a tall opening, round-headed
+  vec3 q = p - vec3(R, 0., 0.);
+  float door = max(sdBox(q - vec3(0., 1.1, 0.), vec3(1.4, 1.2, .62)), -1.);
+  door = min(door, length(vec2(q.z, max(q.y - 2.3, 0.))) - .62 + max(abs(q.x) - 1.4, 0.) * 9.);
+  d = max(d, -door);
+  // slit windows, four round, one above another
+  float a4 = mod(th + .785, 1.571) - .785;
+  float fl = mod(p.y - 4.2, 3.4) - 1.7;
+  float slit = max(max(abs(a4 * R) - .11, abs(fl) - .55), max(abs(r - R) - .8, 3.6 - p.y));
+  d = max(d, -slit);
+  return d;
+}
+// a viaduct: a row of tall piers carrying arches high overhead (the deck lost in the fog), the
+// piers battered (wider low down), standing in the ground whatever its height
+float sdViaduct(vec3 p, vec4 b) {
+  float D = b.y, S = b.z, N = b.w;
+  float half_ = (N - 1.) * .5 * S;
+  // the whole body, ground to deck, battered
+  float tap = clamp(p.y / D, 0., 1.);
+  float wz = 2.4 - .5 * tap + .35 * step(p.y, 1.5);
+  float body = sdBox(p - vec3(0., (D + 2.5 - 60.) * .5, 0.), vec3(half_ + 1.3, (D + 2.5 + 60.) * .5, wz));
+  // the spans between the piers: open below, arched above (the arch's crown a little under the deck)
+  float ra = S * .5 - 1.15 - .25 * (1. - tap);
+  float k = clamp(floor(p.x / S + (N - 1.) * .5), 0., N - 2.);
+  float xm = (k + .5 - (N - 1.) * .5) * S;
+  float cy = D - .9 - ra;
+  float arch = length(vec2(p.x - xm, max(p.y - cy, 0.))) - ra;
+  return max(body, -arch);
+}
+float sdStruct(vec3 w, out int id) {
+  float best = 1e3;
+  id = -1;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uStN) break;
+    vec3 p = toLocal(w, i);
+    float d = uStA[i].w < 1.5 ? sdTower(p, uStB[i]) : sdViaduct(p, uStB[i]);
+    if (d < best) { best = d; id = i; }
+  }
+  return best;
+}
+// where a ray meets a structure's box (in its frame): the span [t0, t1], or none
+vec2 boxSpan(vec3 ro, vec3 rd, int i) {
+  vec4 a = uStA[i], b = uStB[i];
+  vec3 o = toLocal(ro, i);
+  float c = cos(a.z), s = sin(a.z);
+  vec3 dl = vec3(c * rd.x + s * rd.z, rd.y, -s * rd.x + c * rd.z);
+  vec3 lo, hi;
+  if (a.w < 1.5) { float e = b.z * 1.1 + 1.; lo = vec3(-e, -4., -e); hi = vec3(e, b.y + .5, e); }
+  else { float e = (b.w - 1.) * .5 * b.z + 1.5; lo = vec3(-e, -60., -3.); hi = vec3(e, b.y + 3., 3.); }
+  vec3 inv = 1. / (dl + sign(dl) * 1e-6 + vec3(equal(dl, vec3(0.))) * 1e-6);
+  vec3 t0 = (lo - o) * inv, t1 = (hi - o) * inv;
+  vec3 tn = min(t0, t1), tf = max(t0, t1);
+  float n = max(max(tn.x, tn.y), tn.z), f = min(min(tf.x, tf.y), tf.z);
+  return f > max(n, 0.) ? vec2(max(n, 0.), f) : vec2(-1.);
+}
+// the nearest structure along the ray (distance, or -1), traced only within the boxes it meets
+float traceStructures(vec3 ro, vec3 rd, out int id) {
+  id = -1;
+  float t0 = 1e9, t1 = -1.;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uStN) break;
+    vec2 sp = boxSpan(ro, rd, i);
+    if (sp.y > 0.) { t0 = min(t0, sp.x); t1 = max(t1, sp.y); }
+  }
+  if (t1 < 0.) return -1.;
+  float t = max(t0, .05);
+  t1 = min(t1, ${DEPTH_RANGE.toFixed(1)});
+  for (int k = 0; k < 96; k++) {
+    if (t > t1) break;
+    int j;
+    float d = sdStruct(ro + rd * t, j);
+    if (d < .003 + .0015 * t) { id = j; return t; }
+    t += d * .9;
+  }
+  return -1.;
+}
+// masonry on a face: courses of blocks, each its own shade, mortar between (fading with distance)
+vec4 masonry(vec2 uv, float px, float seed) {
+  float hr = .34;
+  float row = floor(uv.y / hr);
+  float off = fract(sin(row * 12.9898 + seed) * 43758.5453);
+  float bl = .55 + .4 * fract(off * 7.13);
+  float bx = (uv.x + off * bl) / bl;
+  float col = floor(bx);
+  vec2 f = vec2(fract(bx) * bl, fract(uv.y / hr) * hr);
+  float edge = min(min(f.x, bl - f.x), min(f.y, hr - f.y));
+  float mortar = 1. - smoothstep(.012, .012 + max(px, .004), edge);
+  float detail = 1. - smoothstep(.05, .25, px);
+  float id = fract(sin(dot(vec2(col, row), vec2(127.1, 311.7)) + seed) * 43758.5453);
+  // each stone a little domed: its edges darker
+  float dome = smoothstep(0., .06, edge);
+  return vec4(mortar * detail, id, mix(1., .82 + .18 * dome, detail), detail);
+}
+vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
+  int j;
+  vec2 e = vec2(.012, -.012);
+  vec3 N = normalize(e.xyy * sdStruct(w + e.xyy, j) + e.yyx * sdStruct(w + e.yyx, j) + e.yxy * sdStruct(w + e.yxy, j) + e.xxx * sdStruct(w + e.xxx, j));
+  vec3 p = toLocal(w, i);
+  vec4 b = uStB[i];
+  bool tower = uStA[i].w < 1.5;
+  float px = t / uF;
+  // the face's own coordinates: round the tower; along or across the viaduct; up
+  float c = cos(uStA[i].z), s = sin(uStA[i].z);
+  vec3 Nl = vec3(c * N.x + s * N.z, N.y, -s * N.x + c * N.z);
+  vec2 uv = tower ? vec2(atan(p.z, p.x) * b.z, p.y) : (abs(Nl.x) > abs(Nl.z) ? vec2(p.z, p.y) : vec2(p.x, p.y));
+  if (!tower && Nl.y < -.3) uv = vec2(p.z, p.x);
+  vec4 m = masonry(uv, px, b.w);
+  vec3 stone = tower ? vec3(.4, .37, .32) : vec3(.35, .35, .33);
+  stone *= .78 + .4 * m.y;
+  stone *= m.z;
+  stone = mix(stone, vec3(.12, .11, .1), m.x * .8);
+  // weather: rain-streaks down the faces, lichen pale in patches
+  stone *= .85 + .3 * vnoise(vec2(uv.x * 2.5, uv.y * .25));
+  stone = mix(stone, vec3(.55, .56, .48), smoothstep(.62, .75, vnoise(uv * 1.7 + 5.)) * .35 * m.w);
+  // moss on what faces up and low down, and on the side away from the light; ivy climbing the tower
+  vec3 ld = normalize(vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .2), cos(uSun.x) * cos(uSun.y)));
+  float gh = groundH(w.xz);
+  float low = 1. - smoothstep(0., 2.5, w.y - gh);
+  float moss = max(smoothstep(.45, .8, N.y), low * .7) * smoothstep(.35, .6, vnoise(uv * 1.3 + 9.));
+  moss = max(moss, (1. - max(dot(N, ld), 0.)) * .35 * smoothstep(.5, .7, vnoise(uv * .9)));
+  stone = mix(stone, vec3(.13, .16, .07) * (.8 + .4 * vnoise(uv * 13.)), clamp(moss, 0., 1.) * .8);
+  if (tower) {
+    float ivy = smoothstep(.45, .62, vnoise(vec2(uv.x * .35, uv.y * .22) + b.w) + (1. - p.y / b.y) * .35 - .2);
+    float leaves = smoothstep(.35, .7, vnoise(uv * 9.));
+    stone = mix(stone, vec3(.06, .09, .04) * (.7 + .6 * leaves), ivy * .9);
+  }
+  // light: the sun behind the fog, the sky from above, the dark in hollows and openings (AO)
+  float ao = 0.;
+  for (int k = 1; k <= 4; k++) {
+    float h = .25 * float(k);
+    ao += (h - sdStruct(w + N * h, j)) / h;
+  }
+  ao = clamp(1. - ao * .22, .25, 1.);
+  float lit = (.5 + .55 * max(dot(N, ld), 0.) + .2 * (.5 + .5 * N.y)) * ao;
+  vec3 colr = stone * lit * uIllum;
+  // the fog and the mist between
+  float above = w.y - gh;
+  float fogD = fogAt(length(w.xz - uCam.xy), above, uDensity);
+  return mix(colr, fogDir(d), 1. - (1. - fogD) * exp(-tauIn));
+}
 void main() {
   vec2 px = gl_FragCoord.xy;
   // cylindrical projection: across the screen is angle (so turning only slides the picture);
@@ -374,12 +547,15 @@ void main() {
   vec3 sCol = vec3(0.);
   // the mist along the way (optical depth), summed as the march goes
   float tau = 0.;
+  // stone first: what the ground march need not go beyond
+  int sid;
+  float tS = traceStructures(eye, d, sid);
   if (d.y < L) {
     float t = .05;
     bool gone = false;
     for (int i = 0; i < 64; i++) {
       vec3 q = eye + d * t;
-      if (t > 95. || (q.y > top && d.y >= 0.)) { gone = true; break; }
+      if (t > 95. || (q.y > top && d.y >= 0.) || (tS > 0. && t > tS)) { gone = true; break; }
       float gh = groundH(q.xz);
       float gap = q.y - gh;
       if (gap < .004 + .002 * t) { tHit = t; break; }
@@ -415,7 +591,16 @@ void main() {
     vec3 pw = eye + d * tw;
     if ((tHit < 0. || tw < tHit) && tw < 95. && groundH(pw.xz) < uRelief.z) tWater = tw;
   }
-  if (tHit < 0. && tWater < 0.) {
+  bool stone = tS > 0. && (tHit < 0. || tS < tHit) && (tWater < 0. || tS < tWater);
+  if (stone) {
+    vec3 w = eye + d * tS;
+    // (rays looking up did not march: the mist to it summed here)
+    if (d.y >= L) {
+      float gh0 = groundH(eye.xz);
+      for (int i = 0; i < 6; i++) tau += mistDensity(eye + d * tS * (float(i) + .5) / 6., gh0) * tS / 6.;
+    }
+    col = shadeStructure(w, sid, tS, d, tau);
+  } else if (tHit < 0. && tWater < 0.) {
     // only fog: lighter higher, brighter where the light is behind it; and the mist you look
     // up through (looking up steeply, the march did not run: a few steps of it here)
     col = fogDir(d);
@@ -506,6 +691,8 @@ void main() {
   }
   col = sCol + sT * col;
   o = vec4(col, 1.);
+  // depth: the stone where it stands, all else at the far end
+  gl_FragDepth = stone ? clamp(length((eye + d * tS).xz - eye.xz) / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) : 1.;
 }`;
 
 /** Cells per card (the curved projection needs a few). */
@@ -538,7 +725,8 @@ void main() {
   float cz = rel.x * sn + rel.z * cs;
   float hd = max(length(vec2(cx, cz)), .05);
   vec2 scr = vec2(atan(cx, cz) * uF + .5 * uRes.x, rel.y / hd * uF + uHz);
-  gl_Position = vec4(scr / uRes * 2. - 1., 0., 1.);
+  // (depth: its distance, so stone in front hides it)
+  gl_Position = vec4(scr / uRes * 2. - 1., clamp(hd / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) * 2. - 1., 1.);
   vUV = c;
   vWorld = w;
   vDist = length(rel.xz);
@@ -597,8 +785,6 @@ void main() {
  * in its crown, and its bark is shaded by where it faces. Segments come thickest first, so drawing
  * the first N is the tree as far as it can be seen at that distance.
  */
-/** Metres over which the live trees' depth is kept (they are all nearer than this). */
-const DEPTH_RANGE = 32;
 
 const LIVE_VS = `#version 300 es
 in vec3 aP0;
@@ -954,6 +1140,10 @@ export interface Look {
   /** the two path fields' scales and the path's half-width */
   path: [number, number, number];
   atmos: Atmos;
+  /** the stone structures near you, packed for the shader (world.ts structures; up to 6) */
+  structA: Float32Array;
+  structB: Float32Array;
+  structN: number;
   /** the lie of the land (world.ts relief) and how open the wood is */
   relief: [number, number, number, number];
   openness: number;
@@ -1149,9 +1339,9 @@ export class Renderer {
     gl.depthMask(true);
     gl.clearDepth(1);
     gl.clear(gl.DEPTH_BUFFER_BIT);
-    gl.disable(gl.DEPTH_TEST);
-    gl.depthFunc(gl.LEQUAL);
-    // 1. fog and ground
+    // 1. fog and ground (and the stone: it writes its depth)
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.ALWAYS);
     gl.disable(gl.BLEND);
     gl.useProgram(this.world);
     this.common(this.world, v, look);
@@ -1163,7 +1353,14 @@ export class Renderer {
     gl.uniform4fv(this.loc(this.world, 'uShade'), look.shade);
     gl.uniform2fv(this.loc(this.world, 'uShadeOff'), look.shadeOff);
     gl.uniform1i(this.loc(this.world, 'uShadeN'), look.shadeN);
+    gl.uniform4fv(this.loc(this.world, 'uStA'), look.structA);
+    gl.uniform4fv(this.loc(this.world, 'uStB'), look.structB);
+    gl.uniform1i(this.loc(this.world, 'uStN'), look.structN);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    // everything after is hidden by what is nearer (the stone, the live trees' wood); the cards
+    // test against it but do not write (they blend)
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(false);
     // 2. the cards and the live trees, back to front
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -1221,7 +1418,6 @@ export class Renderer {
         gl.uniform4fv(this.loc(L, 'uBarkP'), c.barkP);
         gl.uniform1f(this.loc(L, 'uViewAz'), c.viewAz);
         // the solid wood first, depth only; then all of it, behind what is in front
-        gl.enable(gl.DEPTH_TEST);
         if (c.wide > 0) {
           gl.colorMask(false, false, false, false);
           gl.depthMask(true);
@@ -1232,7 +1428,6 @@ export class Renderer {
         gl.depthMask(false);
         gl.uniform1f(this.loc(L, 'uDepthPass'), 0);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.count);
-        gl.disable(gl.DEPTH_TEST);
         continue;
       }
       if ('pose' in c) {
@@ -1272,6 +1467,7 @@ export class Renderer {
     gl.bindVertexArray(this.vao);
     // 3. the film
     gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, W, H);
     gl.useProgram(this.post);

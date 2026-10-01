@@ -71,6 +71,28 @@ const CAP = 2.5;
 /** The veterans' grid (m): at most one old tree to each square. */
 const VET = 70;
 
+/**
+ * Stone that stands in the wood: a ruined round tower, now and then; rarer, a viaduct striding
+ * over a path on tall piers (render.ts traces them; these are the same shapes, for where you
+ * cannot walk and where nothing grows).
+ */
+export interface Structure3 {
+  kind: 'tower' | 'viaduct';
+  x: number;
+  z: number;
+  /** turn about the vertical (rad): a viaduct's axis runs along its local x */
+  rot: number;
+  /** the ground height it stands on (m) */
+  base: number;
+  /** tower: height, radius, seed · viaduct: deck height, span, piers */
+  a: number;
+  b: number;
+  c: number;
+}
+/** The grids structures are placed on (m): a tower to some squares, a viaduct to fewer, larger ones. */
+const TOWER_GRID = 220;
+const VIADUCT_GRID = 340;
+
 export interface SpeciesIn {
   id: Kind;
   genome: Genome;
@@ -288,7 +310,8 @@ export class Wood {
     // the old trees near here, and the clearing each keeps about it
     const vets = this.veterans(x0 - 8, z0 - 8, x0 + CELL + 8, z0 + CELL + 8);
     for (const v of vets) if (v.x >= x0 && v.x < x0 + CELL && v.z >= z0 && v.z < z0 + CELL) out.push(v);
-    const crowded = (x: number, z: number) => vets.some((v) => Math.hypot(v.x - x, v.z - z) < 5.5);
+    const stone = this.structuresNear(x0 + CELL / 2, z0 + CELL / 2, CELL);
+    const crowded = (x: number, z: number) => vets.some((v) => Math.hypot(v.x - x, v.z - z) < 5.5) || (stone.length > 0 && this.stoneDist(x, z, stone) < 2.5);
     /** Place up to `count` of a kind, each kept where `fits` (the same draws from `r` whatever is kept). */
     const place = (kind: Kind, count: number, clear: number, pool: number, fits: (f: Place, x: number, z: number) => number, grass = false) => {
       const whole = Math.floor(count) + (r() < count % 1 ? 1 : 0);
@@ -305,6 +328,7 @@ export class Wood {
         // keep off the paths (the grass thins on them; trees stand back)
         const pd = clear > 0 || grass ? this.pathDist(x, z) : 99;
         if (pd < clear || (grass && pd < this.path[2] * 0.8 + edge * 0.7)) continue;
+        if (stone.length && this.stoneDist(x, z, stone) < (grass ? 0.2 : 1.5)) continue;
         if (keep >= fits(this.place(x, z), x, z)) continue;
         out.push({ x, z, kind, pool: Math.floor(pr * pool), scale, rot, flip, phase });
       }
@@ -328,6 +352,99 @@ export class Wood {
     this.cache.set(key, out);
     if (this.cache.size > 400) this.cache.delete(this.cache.keys().next().value!);
     return out;
+  }
+
+  private built = new Map<string, Structure3 | null>();
+
+  /** The stone structures within `radius` of (x, z). */
+  structuresNear(x: number, z: number, radius: number): Structure3[] {
+    const out: Structure3[] = [];
+    const take = (grid: number, kind: 'tower' | 'viaduct') => {
+      for (let I = Math.floor((x - radius - 200) / grid); I <= Math.floor((x + radius + 200) / grid); I++)
+        for (let J = Math.floor((z - radius - 200) / grid); J <= Math.floor((z + radius + 200) / grid); J++) {
+          const key = `${kind}:${I},${J}`;
+          let s = this.built.get(key);
+          if (s === undefined) {
+            s = kind === 'tower' ? this.tower(I, J) : this.viaduct(I, J);
+            this.built.set(key, s);
+          }
+          if (!s) continue;
+          const reach = s.kind === 'viaduct' ? (s.c * s.b) / 2 + 5 : s.b + 2;
+          if (Math.hypot(s.x - x, s.z - z) < radius + reach) out.push(s);
+        }
+    };
+    if (!this.only) {
+      take(TOWER_GRID, 'tower');
+      take(VIADUCT_GRID, 'viaduct');
+    }
+    return out;
+  }
+
+  private tower(I: number, J: number): Structure3 | null {
+    const r = seeded(hash(this.seed, 91, I, J));
+    if (r() > 0.32) return null;
+    // somewhere open and dry, off the paths
+    let best: [number, number] | null = null;
+    let bs = -Infinity;
+    for (let k = 0; k < 10; k++) {
+      const x = (I + 0.15 + 0.7 * r()) * TOWER_GRID;
+      const z = (J + 0.15 + 0.7 * r()) * TOWER_GRID;
+      const f = this.place(x, z);
+      const pd = this.pathDist(x, z);
+      const score = f.open * 0.5 + (1 - f.wet) - (pd < 9 ? 5 : 0) - (f.water > 0 ? 9 : 0) + r() * 0.3;
+      if (score > bs) {
+        bs = score;
+        best = [x, z];
+      }
+    }
+    if (!best || bs < 0) return null;
+    const [x, z] = best;
+    return { kind: 'tower', x, z, rot: r() * 6.283, base: this.groundH(x, z) - 0.3, a: 9 + r() * 7, b: 3.1 + r() * 1.4, c: r() * 100 };
+  }
+
+  private viaduct(I: number, J: number): Structure3 | null {
+    const r = seeded(hash(this.seed, 93, I, J));
+    if (r() > 0.3) return null;
+    // across a path: its middle over the path, the path running under the middle of a span
+    const at = this.findPath((I + 0.3 + 0.4 * r()) * VIADUCT_GRID, (J + 0.3 + 0.4 * r()) * VIADUCT_GRID);
+    if (this.place(at.x, at.z).water > 0) return null;
+    const span = 14 + r() * 5;
+    const piers = 2 * (4 + Math.floor(r() * 3));
+    // its axis across the path's way (local x along the axis)
+    const rot = -at.heading;
+    return { kind: 'viaduct', x: at.x, z: at.z, rot, base: this.groundH(at.x, at.z), a: 20 + r() * 9, b: span, c: piers };
+  }
+
+  /** How far (m) from (x, z) to the nearest stone you cannot walk through (negative inside), at walking height. */
+  stoneDist(x: number, z: number, near?: Structure3[]): number {
+    let best = 1e3;
+    for (const s of near ?? this.structuresNear(x, z, 30)) {
+      const dx = x - s.x;
+      const dz = z - s.z;
+      const c = Math.cos(s.rot);
+      const sn = Math.sin(s.rot);
+      const lx = c * dx + sn * dz;
+      const lz = -sn * dx + c * dz;
+      if (s.kind === 'tower') {
+        const R = s.b * 1.05;
+        let d = Math.abs(Math.hypot(lx, lz) - R) - 0.5;
+        // (the doorway, along local x: a way in)
+        if (lx > 0 && Math.abs(lz) < 0.55) d = Math.max(d, 0.6);
+        best = Math.min(best, d);
+      } else {
+        // the piers: between the arches, a pier every span
+        const S = s.b;
+        const N = s.c;
+        const k = Math.max(0, Math.min(N - 1, Math.round(lx / S + (N - 1) / 2)));
+        const px = lx - (k - (N - 1) / 2) * S;
+        const hx = 1.25;
+        const hz = 2.75;
+        const qx = Math.abs(px) - hx;
+        const qz = Math.abs(lz) - hz;
+        best = Math.min(best, Math.hypot(Math.max(qx, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qz), 0));
+      }
+    }
+    return best;
   }
 
   /** The veteran trees whose squares overlap the box (x0, z0)–(x1, z1): old, huge, few. */
