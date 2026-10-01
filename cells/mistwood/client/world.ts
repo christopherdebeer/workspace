@@ -55,9 +55,33 @@ export interface Place {
   open: number;
   /** 0 … 1 windthrow (fallen trees, a gap filling again) */
   disturb: number;
-  /** depth of standing water here (m; 0 if none) */
+  /** depth of standing (or running) water here (m; 0 if none) */
   water: number;
 }
+
+/**
+ * The creek at a place: how far below the land its bed is cut (m), how far below the land its
+ * water lies (m: there is water where `cut` is the more), how wet its banks (0 … 1), how far from
+ * its middle (m), the way it runs (a unit vector along it), and whether here is a ford (0 … 1).
+ */
+export interface CreekAt {
+  cut: number;
+  lvl: number;
+  wet: number;
+  d: number;
+  fx: number;
+  fz: number;
+  ford: number;
+}
+/** A ford: where a path meets the creek; the way across it (a unit vector across the path). */
+export interface Ford {
+  x: number;
+  z: number;
+  nx: number;
+  nz: number;
+}
+const FORD_GRID = 24;
+const NO_CREEK: CreekAt = { cut: 0, lvl: 1e3, wet: 0, d: 1e3, fx: 1, fz: 0, ford: 0 };
 
 /** Where each archetype grows (its share of the species' rate, at most `CAP`). */
 const AFFINITY: Record<Species, (f: Place) => number> = {
@@ -139,6 +163,22 @@ function vnoise(x: number, y: number, seed: number): number {
   return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
 }
 
+/** Value noise and its slope (d/dx, d/dy), for the creek's line (render.ts vnoised is the same). */
+function vnoised(x: number, y: number, seed: number): [number, number, number] {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = h2(ix, iy, seed);
+  const b = h2(ix + 1, iy, seed);
+  const c = h2(ix, iy + 1, seed);
+  const d = h2(ix + 1, iy + 1, seed);
+  const k = a - b - c + d;
+  return [a + (b - a) * ux + (c - a) * uy + k * ux * uy, 6 * fx * (1 - fx) * (b - a + k * uy), 6 * fy * (1 - fy) * (c - a + k * ux)];
+}
+
 const smooth01 = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -154,6 +194,8 @@ export class Wood {
   readonly relief: [number, number, number, number];
   /** How open this wood is, overall (glades more or less common): a shift of the glades' field. */
   readonly openness: number;
+  /** The creek: its line's scale (1/m), how deep it is cut (m), its bed's half-width (m). */
+  readonly creekK: [number, number, number];
   readonly species: SpeciesIn[] = [];
   private cache = new Map<number, Placed[]>();
   private pool = new Map<string, Structure>();
@@ -169,6 +211,8 @@ export class Wood {
     // the water level: in some woods the deepest hollows hold ponds, in others never
     this.relief = [amp, 1 / (65 + 45 * r()), -amp * (0.5 + 0.35 * r()), 0.25 + 0.2 * r()];
     this.openness = (r() - 0.5) * 0.2;
+    const rc = seeded(hash(seed, 61));
+    this.creekK = [1 / (150 + 90 * rc()), 0.9 + 0.5 * rc(), 1.1 + 0.6 * rc()];
     // this wood's species: around the archetypes, a couple of wild cards further out
     const add = (id: string, archetype: Species, per: number, clear: number, nearPath: number, pool: number, wild = 1) =>
       this.species.push({ id, genome: sampleGenome(seeded(hash(seed, 41, this.species.length)), archetype, wild), per, clear, nearPath, pool });
@@ -234,34 +278,190 @@ export class Wood {
     return { x: bx, z: bz, heading };
   }
 
-  /** The ground's height (m). (render.ts `groundH` is the same.) */
+  /** The ground's height (m), the creek cut into it. (render.ts `groundH` is the same.) */
   groundH(x: number, z: number): number {
+    return this.landH(x, z) - this.creek(x, z).cut;
+  }
+
+  /** The lie of the land before the creek (m). (render.ts `landH`.) */
+  landH(x: number, z: number): number {
     const [a, k, , b] = this.relief;
     const s = this.seed;
     return a * ((vnoise(x * k + 71.3, z * k + 71.3, s) - 0.5) * 1.6 + (vnoise(x * k * 2.7 + 5.9, z * k * 2.7 + 5.9, s) - 0.5) * 0.4) + b * (vnoise(x / 22 + 33.3, z / 22 + 33.3, s) - 0.5) * 2;
   }
 
+  /**
+   * The creek: where a smooth field crosses its middle value it runs, winding (like the paths, at
+   * a larger scale), cut a metre or so into the land between sloping banks, with water a hand or
+   * two deep down the middle. Along its course it comes and goes (a spring, a stretch run dry into
+   * the leaves). Where a path meets it, a ford: the bed built up to just under the water, stepping
+   * stones across. (render.ts `creek` is the same.)
+   */
+  creek(x: number, z: number, ford = true): CreekAt {
+    const s = this.seed;
+    const pr = smooth01(0.38, 0.55, vnoise(x / 420 + 517.3, z / 420 + 517.3, s));
+    if (pr <= 0) return NO_CREEK;
+    const [k, depth, half] = this.creekK;
+    const a = vnoised(x * k + 401.7, z * k + 401.7, s);
+    const b = vnoised(x * k * 2.3 + 93.1, z * k * 2.3 + 93.1, s);
+    const n = a[0] * 0.75 + b[0] * 0.25 - 0.5;
+    const gx = (a[1] * 0.75 + b[1] * 0.25 * 2.3) * k;
+    const gz = (a[2] * 0.75 + b[2] * 0.25 * 2.3) * k;
+    const gl = Math.max(Math.hypot(gx, gz), 1e-5);
+    // (how far across from its middle line)
+    const d = Math.abs(n) / gl;
+    const w = half * (0.7 + 0.6 * vnoise(x / 35 + 61.7, z / 35 + 61.7, s)) * pr;
+    const B = w + 4;
+    if (d > B + 4) return { ...NO_CREEK, d };
+    const D = depth * (0.6 + 0.4 * pr) * pr;
+    const lvl = D - 0.35 * pr;
+    let cut = D * (1 - smooth01(w * 0.3, B, d));
+    let f = 0;
+    if (ford && d < B) {
+      // a ford where a path comes down to it: the bed up to a few centimetres under the water,
+      // and stepping stones across
+      const fords = this.fordsNear(x, z, 14);
+      f = fords.length ? this.fordAt(x, z, fords) : 0;
+      if (f > 0) {
+        cut += (Math.min(cut, lvl + 0.06) - cut) * f;
+        if (f > 0.3) cut -= this.steppingStone(x, z, fords) * f;
+      }
+    }
+    const wet = (1 - smooth01(B * 0.7, B + 3, d)) * pr;
+    return { cut: Math.max(cut, 0), lvl, wet, d, fx: -gz / gl, fz: gx / gl, ford: f };
+  }
+
+  private fords = new Map<string, Ford[]>();
+
+  /**
+   * The fords within `radius` of (x, z): each where a path meets the creek (found once for each
+   * square of a grid, scanning it). Passed to the shader, so it need not look for the paths.
+   */
+  fordsNear(x: number, z: number, radius: number): Ford[] {
+    const out: Ford[] = [];
+    for (let I = Math.floor((x - radius) / FORD_GRID); I <= Math.floor((x + radius) / FORD_GRID); I++)
+      for (let J = Math.floor((z - radius) / FORD_GRID); J <= Math.floor((z + radius) / FORD_GRID); J++) {
+        const key = `${I},${J}`;
+        let fs = this.fords.get(key);
+        if (!fs) {
+          fs = this.findFords(I, J);
+          this.fords.set(key, fs);
+          if (this.fords.size > 2000) this.fords.delete(this.fords.keys().next().value!);
+        }
+        for (const f of fs) if (Math.hypot(f.x - x, f.z - z) < radius) out.push(f);
+      }
+    return out;
+  }
+
+  private findFords(I: number, J: number): Ford[] {
+    // where the creek's middle and a path's meet, in this square: the best of each cluster
+    const hits: { x: number; z: number; score: number }[] = [];
+    for (let a = 0.75; a < FORD_GRID; a += 1.5)
+      for (let b = 0.75; b < FORD_GRID; b += 1.5) {
+        const x = I * FORD_GRID + a;
+        const z = J * FORD_GRID + b;
+        const c = this.creek(x, z, false);
+        if (c.d > 1.5 || c.cut - c.lvl <= 0) continue;
+        const pd = this.pathDist(x, z);
+        if (pd < this.path[2]) hits.push({ x, z, score: pd + c.d * 0.5 });
+      }
+    hits.sort((p, q) => p.score - q.score);
+    const out: Ford[] = [];
+    const skip: { x: number; z: number }[] = [];
+    for (const h of hits) {
+      if (out.some((f) => Math.hypot(f.x - h.x, f.z - h.z) < 10) || skip.some((f) => Math.hypot(f.x - h.x, f.z - h.z) < 10)) continue;
+      // the path's way here: across the path is along its distance's slope
+      const e = 0.5;
+      const gx = this.pathDist(h.x + e, h.z) - this.pathDist(h.x - e, h.z);
+      const gz = this.pathDist(h.x, h.z + e) - this.pathDist(h.x, h.z - e);
+      const gl = Math.hypot(gx, gz) || 1;
+      const nx = gx / gl;
+      const nz = gz / gl;
+      // a path that crosses the creek (not one that runs along beside it, or in it)
+      const c = this.creek(h.x, h.z, false);
+      if (Math.abs(-nz * c.fx + nx * c.fz) > 0.75) {
+        skip.push(h);
+        continue;
+      }
+      out.push({ x: h.x, z: h.z, nx, nz });
+    }
+    return out;
+  }
+
+  /** How much (x, z) is in a ford (0 … 1): on the path's line through one, near it. (render.ts `fordAt`.) */
+  fordAt(x: number, z: number, fords = this.fordsNear(x, z, 14)): number {
+    let f = 0;
+    for (const o of fords) {
+      const dx = x - o.x;
+      const dz = z - o.z;
+      const across = Math.abs(dx * o.nx + dz * o.nz);
+      const along = Math.abs(-dx * o.nz + dz * o.nx);
+      f = Math.max(f, (1 - smooth01(this.path[2] * 0.9, this.path[2] + 2.5, across)) * (1 - smooth01(8, 12, along)));
+    }
+    return f;
+  }
+
+  /** The stepping stones' height over a ford's bed at (x, z) (m; 0 between them): a line of them along the path's way across. (render.ts `steppingStone`.) */
+  steppingStone(x: number, z: number, fords = this.fordsNear(x, z, 14)): number {
+    const s = this.seed;
+    let st = 0;
+    for (const o of fords) {
+      const qx = x - o.x;
+      const qz = z - o.z;
+      const tx = -o.nz;
+      const tz = o.nx;
+      const along = qx * tx + qz * tz;
+      if (Math.abs(qx * o.nx + qz * o.nz) > 1 || Math.abs(along) > 10) continue;
+      // (float32, as the shader has it)
+      const who = Math.floor(Math.fround(o.x)) * 31 + Math.floor(Math.fround(o.z));
+      const k0 = Math.floor(along / 0.8 + 0.5);
+      for (let k = k0 - 1; k <= k0 + 1; k++) {
+        const i = k + 4111;
+        const off = k * 0.8 + (h2(i, who + 7, s) - 0.5) * 0.2;
+        const side = (h2(i, who, s) - 0.5) * 0.5;
+        const ax = tx * off + o.nx * side;
+        const az = tz * off + o.nz * side;
+        const ex = qx - ax;
+        const ez = qz - az;
+        const r = (0.2 + 0.1 * h2(i, who + 13, s)) * (0.8 + 0.4 * vnoise(ex * 9 + k * 3.7, ez * 9 + k * 3.7, s));
+        const q = 1 - (ex * ex + ez * ez) / (r * r);
+        if (q > 0) st = Math.max(st, (0.2 + 0.08 * h2(i, who + 29, s)) * Math.pow(q, 0.4));
+      }
+    }
+    return st;
+  }
+
+  /** How deep the creek's water is at (x, z) (m; 0 if dry or none). */
+  creekDepth(x: number, z: number): number {
+    const c = this.creek(x, z);
+    return Math.max(0, c.cut - c.lvl);
+  }
+
   /** What the place at (x, z) is like. (render.ts has the same wet and open.) */
   place(x: number, z: number): Place {
-    const h = this.groundH(x, z);
+    const c = this.creek(x, z);
+    const land = this.landH(x, z);
+    const h = land - c.cut;
     const [a, , wl] = this.relief;
-    const wet = 1 - smooth01(wl, wl + a * 0.8, h);
+    const wet = Math.max(1 - smooth01(wl, wl + a * 0.8, h), c.wet);
     const open = smooth01(0.55, 0.75, vnoise(x / 110 + 211.1, z / 110 + 211.1, this.seed) + this.openness);
     const disturb = smooth01(0.62, 0.8, vnoise(x / 65 + 151.7, z / 65 + 151.7, this.seed));
-    return { h, wet, open, disturb, water: Math.max(0, wl - h) };
+    return { h, wet, open, disturb, water: Math.max(0, wl - land, c.cut - c.lvl) };
   }
 
   /** The mist's density (per metre) at (x, y, z) at time t: drifting banks, and mist lying in the hollows. (render.ts mistDensity is the same.) */
   mistDensity(x: number, y: number, z: number, t: number): number {
     const s = this.seed;
-    const gh = this.groundH(x, z);
+    // (the creek's ford left out: the mist does not mind it)
+    const c = this.creek(x, z, false);
+    const gh = this.landH(x, z) - c.cut;
     const qx = x * 0.05 + z * 0.021 + t * 0.014;
     const qz = z * 0.05 - x * 0.017 + t * 0.004;
     const n = vnoise(qx, qz, s) * 0.65 + vnoise(qx * 2.7 + 5, qz * 2.7 + 5, s) * 0.35;
     const above = Math.max(y - gh, 0);
     const banks = smooth01(0.45, 0.8, n) * Math.exp(-above * 0.08);
     const [a, , wl] = this.relief;
-    const wet = 1 - smooth01(wl, wl + a * 0.8, gh);
+    const wet = Math.max(1 - smooth01(wl, wl + a * 0.8, gh), c.wet);
     const lying = wet > 0.01 ? smooth01(0.2, 1, wet) * Math.exp(-above * 1.1) * (0.4 + 0.6 * vnoise(x * 0.07 + t * 0.006, z * 0.07, s)) : 0;
     const low = smooth01(0.5, 0.78, vnoise(x * 0.09 + t * 0.01 + 31, z * 0.09 - t * 0.004 + 31, s)) * Math.exp(-above * 0.55);
     return banks * 0.05 + lying * 0.12 + low * 0.07;
@@ -515,7 +715,7 @@ export class Wood {
       const z = (J + 0.15 + 0.7 * r()) * TOWER_GRID;
       const f = this.place(x, z);
       const pd = this.pathDist(x, z);
-      const score = f.open * 0.5 + (1 - f.wet) - (pd < 9 ? 5 : 0) - (f.water > 0 ? 9 : 0) + r() * 0.3;
+      const score = f.open * 0.5 + (1 - f.wet) - (pd < 9 ? 5 : 0) - (f.water > 0 || this.creek(x, z, false).d < 14 ? 9 : 0) + r() * 0.3;
       if (score > bs) {
         bs = score;
         best = [x, z];

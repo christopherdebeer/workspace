@@ -105,6 +105,30 @@ stepping further than the slope allows. What the relief makes of each place:
 - **Veterans.** Here and there an old tree, nearly twice the size of the rest,
   with a clearing about it. There is at most one to each 70 m square.
 
+- **The creek** (`creek` in world.ts and render.ts, the same in both). It
+  runs where a smooth field crosses its middle value, like the paths but at a
+  larger scale (150–240 m), so it winds. It is cut into the land: about a metre
+  deep, banks sloping down over four metres, water a hand or two deep down the
+  middle. Along its course it comes and goes (a broad noise field fades it to
+  nothing), so it rises from a spring and runs dry into the leaves.
+  - Its water runs: the stir is carried down it, the bed shows through the
+    shallows, and white water streaks over the fords.
+  - Its banks are wet. Mist lies in it, rushes grow at its edges, the bed is
+    bare wet gravel, and no tree or scrub grows in the water.
+  - **Fords.** Where a path crosses it (not where one runs beside it), the bed
+    is built up to a few centimetres under the water, with a line of stepping
+    stones across along the path. Fords are found once for each 24 m square
+    (`fordsNear`). The nearest six go to the shader as uniforms, so the shader
+    never looks for paths.
+  - You cannot walk into its deep water; you slide along the bank. Over a ford
+    you cross. Flying, nothing holds you.
+  - Ponds come from the lie of the land (`landH`), not the creek's cut, so the
+    creek never fills with still water.
+  - Cost: the ground march looks for the creek only within 1.6 m of the land
+    (the creek only ever lowers it).
+  - `?find=creek` stands you on a bank looking across. `?find=ford` stands you
+    on the path before a ford, looking to the stones.
+
 Each species keeps to the places that suit it (`AFFINITY`). Tall trees keep to
 dry shelter. Leaners lean towards the wet. Birch takes the open and disturbed
 ground. The fog is a little thicker in the hollows. Slopes facing the light
@@ -226,6 +250,10 @@ All synthesised:
   the night.
 - **Crickets** chirp in trills of three or four, from all about, in the open at
   night.
+- **The creek** runs: a hiss of moving water from its nearest water within
+  40 m, panned toward it. It grows louder and brighter over a ford and muffled
+  with distance. Over it is the babble: small bubbles, each a quick rising
+  note, quicker over the stones.
 - **Cicadas** buzz, swelling and fading, only in the heat of a warm day
   (`?warm` above 0) in the open. A cool misty wood has none.
 
@@ -325,6 +353,7 @@ headless Chromium through the flags. The other tools are built on it:
 
 - `shots.mjs`: screenshots of any queries, each taken once settled.
 - `fly.test.mjs`: flying with twin sticks (moves, tilt stays, climbs).
+- `creek.test.mjs`: held at the creek's edge, across at a ford, over it flying.
 - `input.test.mjs`: real touches (Chrome's touch emulation). Ground walks, sky
   looks and tilts, the tilt eases back, and a pinch zooms then eases out.
 - `journey.test.mjs`: the address keeps the journey, a reload resumes it, and
@@ -379,7 +408,7 @@ compile, and an out-of-range or unknown value is refused with a warning.
 
 Current flags:
 - **wood:** `seed`, `only`
-- **stand:** `x`, `y`, `heading` (kept up to date), `at`, `look`, `near`, `find` (pond, log, veteran, glade, tower, viaduct), `off`, `walk`, `tilt`
+- **stand:** `x`, `y`, `heading` (kept up to date), `at`, `look`, `near`, `find` (pond, creek, ford, log, veteran, glade, tower, viaduct, wall), `off`, `walk`, `tilt`
 - **sky:** `hour`, `moon`, `fog`, `warm`
 - **deer:** `deer`, `deerAt`, `deerBed`, `deerCalm`
 - **render:** `fixed`, `time`

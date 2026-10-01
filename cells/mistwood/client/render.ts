@@ -39,7 +39,8 @@ uniform float uT;
 uniform vec4 uRelief;
 // the height of the ground under what is drawn (its foot)
 uniform float uBase;
-float groundH(vec2 p) {
+// the lie of the land, before the creek (world.ts landH; the world pass cuts the creek into it)
+float landH(vec2 p) {
   float k = uRelief.y;
   return uRelief.x * ((vnoise(p * k + 71.3) - .5) * 1.6 + (vnoise(p * k * 2.7 + 5.9) - .5) * .4) + uRelief.w * (vnoise(p / 22. + 33.3) - .5) * 2.;
 }
@@ -60,12 +61,12 @@ float wetAt(float h) { return 1. - smoothstep(uRelief.z, uRelief.z + uRelief.x *
 // the mist is a volume you walk through: its density (per metre) at p, over ground at gh —
 // banks drifting through the wood, and mist lying in the hollows a few metres deep. What is
 // seen through it is what lies along the way there (world.ts mistDensity is the same)
-float mistDensity(vec3 p, float gh) {
+float mistDensity(vec3 p, float gh, float wc) {
   vec2 q = vec2(p.x * .05 + p.z * .021 + uT * .014, p.z * .05 - p.x * .017 + uT * .004);
   float n = vnoise(q) * .65 + vnoise(q * 2.7 + 5.) * .35;
   float above = max(p.y - gh, 0.);
   float banks = smoothstep(.45, .8, n) * exp(-above * .08);
-  float wet = wetAt(gh);
+  float wet = max(wetAt(gh), wc);
   float lying = wet > .01 ? smoothstep(.2, 1., wet) * exp(-above * 1.1) * (.4 + .6 * vnoise(p.xz * .07 + vec2(uT * .006, 0.))) : 0.;
   // and low drifts, a metre or two deep, in patches (so the mist along the ground is never one even band)
   float low = smoothstep(.5, .78, vnoise(p.xz * .09 + vec2(uT * .01, -uT * .004) + 31.)) * exp(-above * .55);
@@ -134,6 +135,88 @@ float pathDist(vec2 p) {
   }
   return best;
 }
+// ─── the creek (world.ts creek): a winding line cut into the land, water down its middle ───────
+// its line's scale (1/m), how deep it is cut (m), its bed's half-width (m)
+uniform vec3 uCreek;
+// value noise and its slope
+vec3 vnoised(vec2 p) {
+  ivec2 i = ivec2(floor(p)); vec2 f = fract(p); vec2 u = f * f * (3. - 2. * f); vec2 du = 6. * f * (1. - f);
+  float a = h2(i), b = h2(i + ivec2(1, 0)), c = h2(i + ivec2(0, 1)), d = h2(i + ivec2(1, 1));
+  float k = a - b - c + d;
+  return vec3(a + (b - a) * u.x + (c - a) * u.y + k * u.x * u.y, du.x * (b - a + k * u.y), du.y * (c - a + k * u.x));
+}
+// the fords near you (world.ts fordsNear): where a path meets the creek, and the way across the path
+uniform vec4 uFord[6];
+uniform int uFordN;
+float fordAt(vec2 p) {
+  float f = 0.;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uFordN) break;
+    vec2 q = p - uFord[i].xy;
+    vec2 n = uFord[i].zw;
+    f = max(f, (1. - smoothstep(uPathK.z * .9, uPathK.z + 2.5, abs(dot(q, n)))) * (1. - smoothstep(8., 12., abs(dot(q, vec2(-n.y, n.x))))));
+  }
+  return f;
+}
+// the stepping stones over a ford's bed (m): a line of them along the path's way across, a long
+// stride apart, each a little off the line, rounded
+float steppingStone(vec2 p) {
+  float st = 0.;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uFordN) break;
+    vec2 q = p - uFord[i].xy;
+    vec2 n = uFord[i].zw;
+    vec2 tg = vec2(-n.y, n.x);
+    float along = dot(q, tg);
+    if (abs(dot(q, n)) > 1. || abs(along) > 10.) continue;
+    int who = int(floor(uFord[i].x)) * 31 + int(floor(uFord[i].y));
+    int k0 = int(floor(along / .8 + .5));
+    for (int k = k0 - 1; k <= k0 + 1; k++) {
+      ivec2 c = ivec2(k + 4111, who);
+      vec2 at = tg * (float(k) * .8 + (h2(c + ivec2(0, 7)) - .5) * .2) + n * (h2(c) - .5) * .5;
+      vec2 e = q - at;
+      // (each its own outline: not a disc)
+      float r = (.2 + .1 * h2(c + ivec2(0, 13))) * (.8 + .4 * vnoise(e * 9. + float(k) * 3.7));
+      float s = 1. - dot(e, e) / (r * r);
+      if (s > 0.) st = max(st, (.2 + .08 * h2(c + ivec2(0, 29))) * pow(s, .4));
+    }
+  }
+  return st;
+}
+// at p: x how far below the land the bed is cut, y how far below the land the water lies (there
+// is water where x is the more), z how wet the banks (0 … 1), w how far from the middle (m)
+vec4 creek(vec2 p, bool ford) {
+  float pr = smoothstep(.38, .55, vnoise(p / 420. + 517.3));
+  if (pr <= 0.) return vec4(0., 1e3, 0., 1e3);
+  float k = uCreek.x;
+  vec3 a = vnoised(p * k + 401.7), b = vnoised(p * k * 2.3 + 93.1);
+  float n = a.x * .75 + b.x * .25 - .5;
+  vec2 g = (a.yz * .75 + b.yz * .25 * 2.3) * k;
+  float d = abs(n) / max(length(g), 1e-5);
+  float w = uCreek.z * (.7 + .6 * vnoise(p / 35. + 61.7)) * pr;
+  float B = w + 4.;
+  if (d > B + 4.) return vec4(0., 1e3, 0., d);
+  float D = uCreek.y * (.6 + .4 * pr) * pr;
+  float lvl = D - .35 * pr;
+  float cut = D * (1. - smoothstep(w * .3, B, d));
+  if (ford && d < B) {
+    float f = fordAt(p);
+    if (f > 0.) {
+      cut = mix(cut, min(cut, lvl + .06), f);
+      if (f > .3) cut -= steppingStone(p) * f;
+    }
+  }
+  return vec4(max(cut, 0.), lvl, (1. - smoothstep(B * .7, B + 3., d)) * pr, d);
+}
+// the way the creek runs at p (a unit vector along it)
+vec2 creekFlow(vec2 p) {
+  float k = uCreek.x;
+  vec3 a = vnoised(p * k + 401.7), b = vnoised(p * k * 2.3 + 93.1);
+  vec2 g = a.yz * .75 + b.yz * .25 * 2.3;
+  return normalize(vec2(-g.y, g.x) + 1e-6);
+}
+// the ground's height: the land, the creek cut into it (world.ts groundH)
+float groundH(vec2 p) { return landH(p) - creek(p, true).x; }
 // the scrub beyond the near cards: the height of its tops over the ground here (m) — tall in the
 // glades and the gaps, thin under the canopy, none in the wet or on the paths — with its tops
 // ragged at every scale
@@ -680,8 +763,12 @@ void main() {
     for (int i = 0; i < 64; i++) {
       vec3 q = eye + d * t;
       if (t > 95. || (q.y > top && d.y >= 0.) || (tS > 0. && t > tS)) { gone = true; break; }
-      float gh = groundH(q.xz);
-      float gap = q.y - gh;
+      // (the creek only ever lowers the land: well above the land, it need not be looked for)
+      float land = landH(q.xz);
+      vec4 ck = q.y - land < 1.6 ? creek(q.xz, true) : vec4(0., 1e3, 0., 1e3);
+      float gh = land - ck.x;
+      // (the creek's water is a surface too)
+      float gap = q.y - max(gh, land - ck.y);
       if (gap < .004 + .002 * t) { tHit = t; break; }
       float step = max(gap / (L - d.y), .02 + .006 * t);
       step = min(step, 6. + .1 * t);
@@ -689,7 +776,7 @@ void main() {
       float fade = smoothstep(6., 16., t);
       if (fade > 0. && gap < 1.5) {
         step = min(step, max(.5, .035 * t));
-        float sh = scrubTop(q.xz, gh, t) * fade;
+        float sh = scrubTop(q.xz, gh, t) * fade * (1. - smoothstep(.3, .7, ck.z));
         if (gap < sh) {
           float fill = smoothstep(sh, sh * .5, gap);
           float a = 1. - exp(-fill * 4.5 * step);
@@ -702,7 +789,7 @@ void main() {
           if (sT < .02) { tHit = t; break; }
         }
       }
-      tau += mistDensity(q + d * step * .5, gh) * step;
+      tau += mistDensity(q + d * step * .5, gh, ck.z) * step;
       t += step;
     }
     // (out of steps on a grazing ray: the ground is about there, and deep in the fog)
@@ -713,15 +800,20 @@ void main() {
   if (d.y < 0. && eye.y > uRelief.z) {
     float tw = (uRelief.z - eye.y) / d.y;
     vec3 pw = eye + d * tw;
-    if ((tHit < 0. || tw < tHit) && tw < 95. && groundH(pw.xz) < uRelief.z) tWater = tw;
+    // (where the land lies low: the creek's cut makes no pond)
+    if ((tHit < 0. || tw < tHit) && tw < 95. && landH(pw.xz) < uRelief.z) tWater = tw;
   }
+  // what the march met: the creek's water, or its bed and banks
+  vec4 ckH = vec4(0., 1e3, 0., 1e3);
+  if (tHit > 0. && tWater < 0.) ckH = creek((eye + d * tHit).xz, true);
+  bool brook = ckH.x > ckH.y;
   bool stone = tS > 0. && (tHit < 0. || tS < tHit) && (tWater < 0. || tS < tWater);
   if (stone) {
     vec3 w = eye + d * tS;
     // (rays looking up did not march: the mist to it summed here)
     if (d.y >= L) {
       float gh0 = groundH(eye.xz);
-      for (int i = 0; i < 6; i++) tau += mistDensity(eye + d * tS * (float(i) + .5) / 6., gh0) * tS / 6.;
+      for (int i = 0; i < 6; i++) tau += mistDensity(eye + d * tS * (float(i) + .5) / 6., gh0, 0.) * tS / 6.;
     }
     col = shadeStructure(w, sid, tS, d, tau);
   } else if (tHit < 0. && tWater < 0.) {
@@ -745,11 +837,40 @@ void main() {
     w = mix(mud, w, smoothstep(0., .12, depth));
     float fogD = fogAt(t, 0., uDensity);
     col = mix(w, fogDir(d), 1. - (1. - fogD) * exp(-tau));
+  } else if (brook) {
+    // the creek: running water, the stir carried down it; the bed seen through the shallows,
+    // broken white over the ford and round the stones
+    float t = tHit;
+    vec3 p = eye + d * t;
+    float depth = ckH.x - ckH.y;
+    vec2 fl = creekFlow(p.xz);
+    vec2 across = vec2(-fl.y, fl.x);
+    vec2 rp = vec2(dot(p.xz, fl) - uT * .9, dot(p.xz, across));
+    float shallow = 1. - smoothstep(.03, .2, depth);
+    float r1 = vnoise(rp * vec2(1.3, 4.2)) - .5;
+    float r2 = vnoise(rp * vec2(3.4, 8.5) + 7.) - .5;
+    float amp = .18 + .35 * shallow;
+    vec2 tilt = (fl * r1 + across * r2) * amp;
+    vec3 n = normalize(vec3(tilt.x, 1., tilt.y));
+    vec3 r = reflect(d, n);
+    float fres = .3 + .7 * pow(1. - abs(d.y), 4.);
+    vec3 sky = fogDir(r);
+    // the bed: pebbles and silt, dark with water
+    vec3 bed = mix(vec3(.08, .07, .055), vec3(.19, .17, .13), smoothstep(.45, .7, vnoise(p.xz * 7.))) * (.7 + .5 * vnoise(p.xz * 21.)) * uIllum;
+    vec3 deep = vec3(.035, .04, .03) * uIllum;
+    vec3 below = mix(bed, deep, smoothstep(.04, .35, depth));
+    vec3 w = mix(below, sky * .85, fres * (.55 + .45 * smoothstep(0., .15, depth)));
+    // white water: streaks where it runs shallow and quick
+    // (over a ford mostly, thin streaks drawn out down the flow; a little along the edges)
+    float foam = smoothstep(.62, .95, vnoise(rp * vec2(1.2, 9.) + 3.) * .7 + vnoise(rp * vec2(3., 21.)) * .3 + r2 * .2) * shallow * (.15 + .85 * fordAt(p.xz));
+    w = mix(w, fogDir(vec3(0., 1., 0.)) * .9, foam * .4);
+    float fogD = fogAt(t, 0., uDensity);
+    col = mix(w, fogDir(d), 1. - (1. - fogD) * exp(-tau));
   } else {
     float t = tHit;
     vec3 p = eye + d * t;
     float gh = p.y;
-    float hollow = wetAt(gh);
+    float hollow = max(wetAt(gh), ckH.z);
     float open = smoothstep(.55, .75, vnoise(p.xz / 110. + 211.1) + uOpen);
     // dry grass: straw and shadow, a trodden path darker
     float n = fbm(p.xz * .5);
@@ -768,8 +889,11 @@ void main() {
     g = mix(g, moss, damp * .8);
     g = mix(g, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .4, damp * smoothstep(.55, .8, vnoise(p.xz * .7)) * .3);
     // and the slopes face the light or away from it (softly: the light is diffuse in fog)
-    float e = .4;
-    vec3 gn = normalize(vec3(groundH(p.xz - vec2(e, 0.)) - groundH(p.xz + vec2(e, 0.)), 2. * e, groundH(p.xz - vec2(0., e)) - groundH(p.xz + vec2(0., e))));
+    float e = t < 12. && ckH.x > 0. ? .06 : .4;
+    // (the creek's banks only where it is: elsewhere the land is the ground)
+    vec3 gn = ckH.z > 0. || ckH.x > 0.
+      ? normalize(vec3(groundH(p.xz - vec2(e, 0.)) - groundH(p.xz + vec2(e, 0.)), 2. * e, groundH(p.xz - vec2(0., e)) - groundH(p.xz + vec2(0., e))))
+      : normalize(vec3(landH(p.xz - vec2(e, 0.)) - landH(p.xz + vec2(e, 0.)), 2. * e, landH(p.xz - vec2(0., e)) - landH(p.xz + vec2(0., e))));
     vec3 ld = vec3(sin(uSun.x) * cos(uSun.y), sin(uSun.y), cos(uSun.x) * cos(uSun.y));
     g *= (.75 + .35 * max(dot(gn, ld), 0.)) / (.75 + .35 * max(ld.y, 0.));
     // the paths: bare, trodden earth, damp in the middle, crumbling at the edges into the grass,
@@ -791,6 +915,21 @@ void main() {
     if (nearT > 0.) {
       vec3 ff = forestFloor(p.xz, t, d, max(shelter, .25), path * (1. - regrow), damp);
       g = mix(g, ff, nearT * mix(.75, .95, shelter));
+    }
+    // the creek's bed where it lies bare (the banks running down to it): wet gravel and silt; over
+    // a ford, its stepping stones, grey, mossed on top
+    float bedness = smoothstep(.15, .5, ckH.x) * smoothstep(.4, .8, ckH.z);
+    if (bedness > 0.) {
+      vec3 gravel = mix(vec3(.09, .08, .065), vec3(.21, .2, .17), smoothstep(.5, .72, vnoise(p.xz * 9.))) * (.7 + .5 * vnoise(p.xz * 23.));
+      g = mix(g, gravel, bedness * .85);
+      float ford = fordAt(p.xz);
+      float st = ford > .3 ? steppingStone(p.xz) : 0.;
+      if (st > .01) {
+        // (dark and wet low down, where the water washes it)
+        vec3 rock = mix(vec3(.34, .32, .28), vec3(.27, .25, .21), vnoise(p.xz * 5.)) * (.75 + .4 * vnoise(p.xz * 13.)) * (.5 + .5 * smoothstep(.03, .12, st));
+        rock = mix(rock, vec3(.12, .15, .07), smoothstep(.1, .16, st) * smoothstep(.4, .7, vnoise(p.xz * 6.)) * .7);
+        g = mix(g, rock, smoothstep(.01, .04, st));
+      }
     }
     // shade: dark at each trunk's foot, a soft pool under each crown (the light is diffuse in fog)
     float ao = 0.;
@@ -1268,6 +1407,10 @@ export interface Look {
   /** the lie of the land (world.ts relief) and how open the wood is */
   relief: [number, number, number, number];
   openness: number;
+  /** the creek (world.ts creekK): its line's scale, depth, bed's half-width; the fords near you (x, z, across; up to 6) */
+  creek: [number, number, number];
+  ford: Float32Array;
+  fordN: number;
   /** depth of field: blur (px) of something 1 m off, focused at infinity; and the focus (m) */
   blur: number;
   focus: number;
@@ -1467,6 +1610,9 @@ export class Renderer {
     gl.useProgram(this.world);
     this.common(this.world, v, look);
     gl.uniform3fv(this.loc(this.world, 'uPathK'), look.path);
+    gl.uniform3fv(this.loc(this.world, 'uCreek'), look.creek);
+    gl.uniform4fv(this.loc(this.world, 'uFord'), look.ford);
+    gl.uniform1i(this.loc(this.world, 'uFordN'), look.fordN);
     gl.uniform3fv(this.loc(this.world, 'uEarth'), PAL.earth);
     gl.uniform3fv(this.loc(this.world, 'uGround'), PAL.ground);
     gl.uniform3fv(this.loc(this.world, 'uStrawDark'), PAL.strawDark);

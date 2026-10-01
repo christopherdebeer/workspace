@@ -135,6 +135,28 @@ function stand(z: number, resume = false) {
               side = [-(w.z1 - w.z0) / L, (w.x1 - w.x0) / L];
             }
           }
+    } else if (find === 'creek' || find === 'ford') {
+      // the creek: on its bank, looking across · a ford: on the path, looking along it to the stones
+      for (let r = 0; r < 900 && !best; r += 6)
+        for (let a = 0; a < 64; a++) {
+          const x = posX + Math.cos((a / 64) * 6.283) * r;
+          const z = posZ + Math.sin((a / 64) * 6.283) * r;
+          const c = wood.creek(x, z);
+          if (c.d > 0.8 || c.cut - c.lvl < 0.05) continue;
+          if (find === 'creek' ? c.ford === 0 && c.cut - c.lvl > 0.25 : c.ford > 0.9) {
+            const before: { x: number; z: number } | null = best;
+            consider(x, z);
+            if (best !== before) {
+              if (find === 'creek') {
+                const toward = Math.sign(-c.fz * (posX - x) + c.fx * (posZ - z)) || 1;
+                side = [-c.fz * toward, c.fx * toward];
+              } else {
+                const h = wood.findPath(x, z).heading;
+                side = [-Math.sin(h), -Math.cos(h)];
+              }
+            }
+          }
+        }
     } else if (find === 'tower' || find === 'viaduct') {
       for (let r = 100; r <= 1600 && !best; r += 250) for (const s of wood.structuresNear(posX, posZ, r)) if (s.kind === find) consider(s.x, s.z);
     } else if (find === 'pond' || find === 'glade')
@@ -150,7 +172,7 @@ function stand(z: number, resume = false) {
         for (const p of wood.around(posX, posZ, r)) if (find === 'log' ? p.kind === 'log' : p.scale > 1.6) consider(p.x, p.z);
     if (best) {
       const b = best as { x: number; z: number };
-      const off = flag('off') ?? (find === 'pond' ? 14 : find === 'glade' ? 0 : find === 'tower' ? 22 : find === 'viaduct' ? 30 : find === 'wall' ? 7 : 9);
+      const off = flag('off') ?? (find === 'pond' ? 14 : find === 'glade' ? 0 : find === 'tower' ? 22 : find === 'viaduct' ? 30 : find === 'wall' ? 7 : find === 'creek' ? 7 : find === 'ford' ? 9 : 9);
       const a = side ? Math.atan2(side[0], side[1]) : Math.atan2(posX - b.x, posZ - b.z);
       posX = b.x + Math.sin(a) * off;
       posZ = b.z + Math.cos(a) * off;
@@ -407,10 +429,11 @@ let t = flag('time') ?? 0;
 const shade = new Float32Array(40 * 4);
 /** The wood's small voices: the nearest wet ground (its way, its distance), and how open it is here. */
 let lookedAbout = -9;
-const voices = { wetPan: 0, wetDist: Infinity, open: 0 };
+const voices = { wetPan: 0, wetDist: Infinity, open: 0, creekDist: Infinity, creekAt: 0, creekFord: 0 };
 const structA = new Float32Array(24);
 const structB = new Float32Array(24);
 const wallA = new Float32Array(96);
+const ford = new Float32Array(24);
 const wallB = new Float32Array(96);
 const shadeOff = new Float32Array(40 * 2);
 let shadeN = 0;
@@ -533,7 +556,7 @@ function frame(now: number) {
   let mz = nz;
   const near = wood.structuresNear(nx, nz, 12);
   const nearWalls = wood.wallsNear(nx, nz, 6);
-  if ((near.length || nearWalls.length) && wood.stoneDist(nx, nz, near, nearWalls) < 0.45) {
+  if (!flying && (near.length || nearWalls.length) && wood.stoneDist(nx, nz, near, nearWalls) < 0.45) {
     const e = 0.05;
     const gx = wood.stoneDist(nx + e, nz, near, nearWalls) - wood.stoneDist(nx - e, nz, near, nearWalls);
     const gz = wood.stoneDist(nx, nz + e, near, nearWalls) - wood.stoneDist(nx, nz - e, near, nearWalls);
@@ -548,10 +571,16 @@ function frame(now: number) {
       mz = posZ;
     }
   }
-  if (wood.groundH(mx, mz) > wood.relief[2] - 0.15) {
+  // nor into water: a pond past its shallows, the creek where it runs deep (a ford takes you over);
+  // along the bank instead (and out of it, if you are somehow in it)
+  const deep = (x: number, z: number) => Math.max(wood.relief[2] - 0.15 - wood.landH(x, z), wood.creekDepth(x, z) - 0.2);
+  const here = flying ? 0 : deep(posX, posZ);
+  const can = (x: number, z: number) => { const d = deep(x, z); return d <= 0 || d < here; };
+  if (flying || can(mx, mz)) {
     posX = mx;
     posZ = mz;
-  }
+  } else if (can(mx, posZ)) posX = mx;
+  else if (can(posX, mz)) posZ = mz;
   view.z = posZ;
   // standing still is still: the sway and the breath are the walk's
   const going = clamp01(speed / 1.1);
@@ -822,7 +851,10 @@ function frame(now: number) {
     wallA.set([w.x0, w.z0, w.x1, w.z1], i * 4);
     wallB.set([w.y0, w.y1, w.h, w.caps * 1000 + w.seed], i * 4);
   });
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, structA, structB, structN: stone.length, wallA, wallB, wallN: wallsHere.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
+  // the fords in sight, for the shader
+  const fordsHere = wood.fordsNear(view.x, view.z, 60).sort((a, b) => Math.hypot(a.x - view.x, a.z - view.z) - Math.hypot(b.x - view.x, b.z - view.z)).slice(0, 6);
+  fordsHere.forEach((f, i) => ford.set([f.x, f.z, f.nx, f.nz], i * 4));
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, creek: wood.creekK, ford, fordN: fordsHere.length, structA, structB, structN: stone.length, wallA, wallB, wallN: wallsHere.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
   // the small voices: where the nearest wet ground is (looked for now and then), how open it is
   if (t - lookedAbout > 1) {
@@ -841,11 +873,28 @@ function frame(now: number) {
     voices.wetDist = bd;
     voices.wetPan = Math.sin(ba - view.yaw);
     voices.open = wood.place(posX, posZ).open;
+    // the creek: its nearest water, and whether it runs over a ford there
+    voices.creekDist = Infinity;
+    for (const r of [0, 3, 7, 12, 19, 28, 40])
+      for (let k = 0; k < (r ? 12 : 1); k++) {
+        const a = (k / 12) * Math.PI * 2;
+        const x = posX + Math.sin(a) * r;
+        const z = posZ + Math.cos(a) * r;
+        const c = wood.creek(x, z);
+        if (c.cut > c.lvl && r < voices.creekDist) {
+          voices.creekDist = r;
+          voices.creekAt = a;
+          voices.creekFord = c.ford;
+        }
+      }
   }
+  sound.water(dt, { near: Number.isFinite(voices.creekDist) ? Math.exp(-voices.creekDist / 14) : 0, pan: voices.creekDist > 0 ? Math.sin(voices.creekAt - view.yaw) : 0, ford: voices.creekFord });
   sound.creatures(dt, { night: 1 - atmos.day, wetPan: voices.wetPan, wetDist: voices.wetDist, open: voices.open, heat: atmos.day * Math.max(0, flag('warm') ?? 0) });
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
     walked: Math.round(walked * 10) / 10,
+    /** how far the creek's nearest water is (m; null if none within 40 m) */
+    creek: Number.isFinite(voices.creekDist) ? voices.creekDist : null,
     at: [Math.round(posX * 10) / 10, Math.round(posZ * 10) / 10],
     live: draws.filter((d) => d.live).length,
     segments: draws.reduce((n, d) => n + (d.live ? d.count : 0), 0),

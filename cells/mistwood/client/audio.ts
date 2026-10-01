@@ -1,7 +1,7 @@
 /**
  * The wood's sound, all synthesised: wind in the trees (filtered noise that
  * rises and falls), steps in the grass while walking, and birds — more in the
- * light, a single far call now and then in the mist. Starts on the first touch
+ * light, a single far call now and then in the mist; the creek running. Starts on the first touch
  * (browsers need one); the button turns it off.
  */
 export class Sound {
@@ -163,6 +163,86 @@ export class Sound {
       this.cicada.gain.gain.setTargetAtTime(want > 0.05 ? 0.12 * want * swell : 0, ctx.currentTime, 0.6);
       this.cicada.pan.pan.setTargetAtTime(Math.sin(ctx.currentTime * 0.05) * 0.6, ctx.currentTime, 2);
     }
+  }
+
+  // ─── the creek: running water ───────────────────────────────────────────────────────────────
+  private brook: { gain: GainNode; pan: StereoPannerNode; bright: BiquadFilterNode; far: BiquadFilterNode } | null = null;
+  private nextBubble = 0;
+  private stir = 0;
+
+  /**
+   * Each frame: the creek as near as it is (0 none … 1 at your feet), which way (pan), and how
+   * broken it runs there (0 deep and smooth … 1 over a ford). A hiss of moving water, brighter and
+   * louder over the stones, muffled with distance; and over it, the babble: small bubbles, each a
+   * quick rising note.
+   */
+  water(dt: number, env: { near: number; pan: number; ford: number }) {
+    const ctx = this.ctx;
+    if (!ctx || !this.on || !this.noise) return;
+    if (!this.brook && env.near > 0.01) {
+      // white noise (the brown is too low for water)
+      const n = ctx.sampleRate * 2;
+      const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      const low = ctx.createBiquadFilter();
+      low.type = 'highpass';
+      low.frequency.value = 280;
+      const bright = ctx.createBiquadFilter();
+      bright.type = 'peaking';
+      bright.frequency.value = 1400;
+      bright.Q.value = 0.8;
+      bright.gain.value = 6;
+      const far = ctx.createBiquadFilter();
+      far.type = 'lowpass';
+      far.frequency.value = 2000;
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      const pan = ctx.createStereoPanner();
+      src.connect(low).connect(bright).connect(far).connect(gain).connect(pan).connect(this.master!);
+      src.start();
+      this.brook = { gain, pan, bright, far };
+    }
+    if (!this.brook) return;
+    const now = ctx.currentTime;
+    // (it surges and eases a little, never still)
+    this.stir += (Math.random() - 0.5) * dt * 3;
+    this.stir *= Math.exp(-dt * 0.8);
+    const level = Math.pow(env.near, 1.6) * (0.05 + 0.07 * env.ford) * (1 + Math.max(-0.5, Math.min(0.5, this.stir)));
+    this.brook.gain.gain.setTargetAtTime(level, now, 0.4);
+    this.brook.pan.pan.setTargetAtTime(Math.max(-0.8, Math.min(0.8, env.pan * (1 - 0.6 * env.near))), now, 0.5);
+    this.brook.bright.frequency.setTargetAtTime(1100 + 1300 * env.ford, now, 0.5);
+    this.brook.far.frequency.setTargetAtTime(700 + 6500 * env.near * env.near, now, 0.5);
+    // the babble
+    this.nextBubble -= dt * env.near * (4 + 14 * env.ford);
+    if (this.nextBubble <= 0 && env.near > 0.05) {
+      this.nextBubble = Math.random() * 1.2;
+      this.bubble(env.pan + (Math.random() - 0.5) * 0.5, 0.02 * env.near * (0.5 + Math.random()), 1 - env.near);
+    }
+  }
+
+  /** One bubble at the surface: a quick sine, rising, a few hundredths of a second. */
+  private bubble(pan: number, level: number, far: number) {
+    const p = this.out(pan, far);
+    if (!p) return;
+    const ctx = this.ctx!;
+    const at = ctx.currentTime + 0.005;
+    const len = 0.02 + Math.random() * 0.05;
+    const f0 = 450 + Math.random() * 1100;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f0, at);
+    o.frequency.exponentialRampToValueAtTime(f0 * (1.5 + Math.random()), at + len);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(level, at + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0002, at + len);
+    o.connect(g).connect(p);
+    o.start(at);
+    o.stop(at + len + 0.02);
   }
 
   /** A frog's croak: a throaty pulsed rasp, a quarter second. */
