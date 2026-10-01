@@ -529,9 +529,10 @@ vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   if (tower) {
     // ivy: climbing from the foot in tongues, ragged at its edges, leaf by leaf (light and dark
     // leaves, shade between them)
-    float reach = vnoise(vec2(uv.x * .35, uv.y * .18) + b.w) * .7 + vnoise(uv * 1.3 + b.w) * .3 + (1. - p.y / b.y) * .4 - .25;
-    float leafN = vnoise(uv * 11.) * .55 + vnoise(uv * 27. + 3.) * .45;
-    float ivy = smoothstep(.45, .5, reach + (leafN - .5) * .25 * m.w);
+    float reach = vnoise(vec2(uv.x * .35, uv.y * .18) + b.w) * .7 + vnoise(uv * 1.3 + b.w) * .3 + (1. - smoothstep(0., .6, p.y / b.y)) * .45 - .5;
+    // (leaves from two turned layers of noise: no square cells)
+    float leafN = vnoise(mat2(.8, -.6, .6, .8) * uv * 11.) * .55 + vnoise(mat2(.28, .96, -.96, .28) * uv * 26. + 3.) * .45;
+    float ivy = smoothstep(.45, .5, reach + (leafN - .5) * .3 * m.w);
     vec3 ivyC = mix(vec3(.035, .05, .025), vec3(.11, .15, .06), smoothstep(.4, .75, leafN)) * (.8 + .4 * vnoise(uv * 53.));
     stone = mix(stone, ivyC, ivy * .95);
   }
