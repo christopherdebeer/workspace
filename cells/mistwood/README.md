@@ -138,7 +138,12 @@ horizon line ever shows.
   - Leaves: oak-lobed or beech-toothed, mottled, curled (and lit as they curl),
     with a midrib and side veins, darker at the edge, and shadowing what lies
     beneath. Colours run from fresh tan through rust to last year's near-black.
-  - Twigs (lit as round wood), pebbles (lit as domes), and dark earth beneath.
+  - Twigs (lit as round wood), pebbles (lit as domes), and the mould of older
+    leaves beneath.
+  - All of it lies on the floor's own relief (`floorRelief`): hummocks
+    (~0.6 m), clods (~20 cm) and grit (~7 cm), each fading out when too small
+    for the pixel. Its procedural normal lights everything lying on it, and
+    dark collects in its hollows.
   - It varies by place: full under the canopy, sparser in the open, trodden
     and stony on the paths, darker and mossy in the wet.
   - Each layer is antialiased by the pixel's true footprint and fades to its

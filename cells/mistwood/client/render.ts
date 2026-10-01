@@ -166,7 +166,7 @@ void leafLayer(vec2 p, float s, vec2 turn, int k, float amount, float depth, flo
   float alpha = meanCov;
   float edge = 1.;
   if (detail > 0. && present > 0.) {
-    float Wd = L * (.22 + .17 * h.y);
+    float Wd = L * (.26 + .18 * h.y);
     vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - L);
     vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
     vec2 u = q - ctr;
