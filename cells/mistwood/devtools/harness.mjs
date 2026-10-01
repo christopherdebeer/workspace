@@ -69,7 +69,7 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
     browser,
     /** A page on the wood with these flags (a query string, without the `?`). Errors are collected. */
     async open(query = '', size = {}) {
-      const page = await browser.newPage({ viewport: { width: size.width ?? width, height: size.height ?? height }, deviceScaleFactor: 1 });
+      const page = await browser.newPage({ viewport: { width: size.width ?? width, height: size.height ?? height }, deviceScaleFactor: 1, hasTouch: !!size.hasTouch });
       page.errors = [];
       page.on('pageerror', (e) => page.errors.push(String(e)));
       page.on('console', (m) => m.type() === 'error' && !m.text().includes('404') && page.errors.push(m.text()));

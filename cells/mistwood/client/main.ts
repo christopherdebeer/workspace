@@ -204,68 +204,119 @@ let yaw = heading;
 let stride = 0;
 let footY = wood.groundH(posX, posZ);
 
-// ─── input: a still hold walks; a drag looks (and steers, once walking) ───────────────
-// Across turns you (and stays turned); up and down tilts the view only while you hold it, and
-// it eases back level when you let go. Walking on, the pace builds. Where the device reports
-// real pressure (Apple Pencil, some styluses; not an iPhone's touch, which reports a fixed 0.5),
-// pressing harder walks faster.
+// ─── input: where you touch says what you mean ─────────────────────────────────────────
+// Touch the ground (below the horizon) and you walk, at once; drag across to steer. Touch the
+// sky (above it) and you look: across turns you, heavily, as a head turns; up and down cranes
+// your neck, harder the further it goes, and eases back level, slowly, when you let go. Two
+// fingers pinch to look closer (eases back too). Walking on, the pace builds from a walk to a
+// brisk one and, if you keep on, a run. Where the device reports real pressure (Apple Pencil;
+// not an iPhone's touch, which reports a fixed 0.5), pressing harder goes faster.
 let holding = false;
-/** The view's tilt (rad, up +) and where the hand holds it. */
+/** The view's tilt (rad, up +), where the hand would hold it, and how fast it is moving (a spring). */
 let pitch = 0;
 let pitchTo = 0;
+let pitchV = 0;
+/** Looking closer: 1 is the eye's own field; more narrows it (a spring too). */
+let zoom = 1;
+let zoomTo = 1;
+let zoomV = 0;
 /** How long you have been walking (s): the pace builds with it. */
 let walkTime = 0;
 /** Real pressure from the pointer, 0 … 1, or null where the device has none. */
 let pressure: number | null = null;
-const PITCH = 0.5;
-let dragFrom: { x: number; y: number; heading: number; moved: boolean } | null = null;
-let holdTimer = 0;
-/** How long a touch must stay still to mean "walk", and how far it may move and still be still. */
-const HOLD_MS = 220;
-const SLOP = 10;
+const PITCH = 0.55;
+const ZOOM = 4;
+/** How far a drag turns you (rad per CSS px): a head, not a camera. */
+const TURN = 0.0024;
+const SLOP = 6;
+/** The touches down now (CSS px). */
+const touches = new Map<number, { x: number; y: number }>();
+/** What the first touch is doing: walking (from the ground) or looking (from the sky). */
+let gesture: { kind: 'walk' | 'look'; id: number; x: number; y: number; heading: number; moved: boolean } | null = null;
+/** Two touches: the pinch, from its first spread and the zoom then. */
+let pinch: { d: number; zoom: number } | null = null;
 let keys = new Set<string>();
 let walkedOnce = false;
 
+/** Where the horizon is on the page (CSS px from the top). */
+const horizonY = () => innerHeight - view.horizon * (innerHeight / canvas.height);
+const spread = () => {
+  const [a, b] = [...touches.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+};
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
-  dragFrom = { x: e.clientX, y: e.clientY, heading, moved: false };
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
   readPressure(e);
-  clearTimeout(holdTimer);
-  // a touch that stays put is a step forward; one that moves first is a look
-  holdTimer = window.setTimeout(() => {
-    if (dragFrom && !dragFrom.moved) holding = true;
-  }, HOLD_MS);
   sound.arm();
   soundBtn.textContent = sound.on ? 'sound on' : 'sound off';
+  if (touches.size === 2) {
+    // a second finger: a pinch (and a pause: no walking while you look closer)
+    pinch = { d: Math.max(spread(), 1), zoom: zoomTo };
+    holding = false;
+    gesture = null;
+    return;
+  }
+  if (touches.size > 2 || pinch) return;
+  const kind = e.clientY > horizonY() ? 'walk' : 'look';
+  gesture = { kind, id: e.pointerId, x: e.clientX, y: e.clientY, heading, moved: false };
+  holding = kind === 'walk';
 });
 canvas.addEventListener('pointermove', (e) => {
-  // drag the view round (as if taking hold of the world); you walk the way you face
-  if (!dragFrom) return;
-  if (!dragFrom.moved && Math.hypot(e.clientX - dragFrom.x, e.clientY - dragFrom.y) > SLOP) {
-    dragFrom.moved = true;
-    // turn from here (no jump for the slop)
-    dragFrom.x = e.clientX;
-    dragFrom.y = e.clientY;
-  }
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  t.x = e.clientX;
+  t.y = e.clientY;
   readPressure(e);
-  if (!dragFrom.moved) return;
-  heading = dragFrom.heading - (e.clientX - dragFrom.x) * 0.0032;
-  // (taking hold of the world: drag it down and you look up)
-  pitchTo = Math.max(-PITCH, Math.min(PITCH, (e.clientY - dragFrom.y) * 0.0032));
+  if (pinch && touches.size >= 2) {
+    zoomTo = Math.max(1, Math.min(ZOOM, (pinch.zoom * spread()) / pinch.d));
+    return;
+  }
+  const g = gesture;
+  if (!g || g.id !== e.pointerId) return;
+  if (!g.moved && Math.hypot(e.clientX - g.x, e.clientY - g.y) > SLOP) {
+    g.moved = true;
+    // (no jump for the slop)
+    g.x = e.clientX;
+    g.y = e.clientY;
+  }
+  if (!g.moved) return;
+  // drag the world round (as if taking hold of it), heavier the closer you look
+  heading = g.heading - ((e.clientX - g.x) * TURN) / zoom;
+  if (g.kind === 'look') {
+    // drag it down and you look up; the neck resists more the further it cranes
+    const raw = ((e.clientY - g.y) * TURN * 1.1) / zoom;
+    pitchTo = PITCH * Math.tanh(raw / PITCH);
+  }
 });
 function readPressure(e: PointerEvent) {
   // a touch without pressure reports 0.5 while down (or 0); anything else is the real thing
   if (e.pressure > 0 && e.pressure !== 0.5) pressure = e.pressure;
 }
-const release = () => {
-  clearTimeout(holdTimer);
-  holding = false;
-  dragFrom = null;
-  pitchTo = 0;
-  pressure = null;
+const lift = (e: PointerEvent) => {
+  touches.delete(e.pointerId);
+  if (pinch) {
+    // the pinch ends when a finger lifts; the view eases back out
+    if (touches.size < 2) {
+      pinch = null;
+      zoomTo = 1;
+    }
+    if (touches.size === 0) release();
+    return;
+  }
+  if (gesture?.id === e.pointerId) release();
 };
-canvas.addEventListener('pointerup', release);
-canvas.addEventListener('pointercancel', release);
+const release = () => {
+  holding = false;
+  gesture = null;
+  pinch = null;
+  pitchTo = 0;
+  zoomTo = 1;
+  pressure = null;
+  touches.clear();
+};
+canvas.addEventListener('pointerup', lift);
+canvas.addEventListener('pointercancel', lift);
 addEventListener('keydown', (e) => {
   keys.add(e.key);
   if (['ArrowUp', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
@@ -367,18 +418,22 @@ function frame(now: number) {
   if (keys.has('ArrowRight')) heading += dt * 0.8;
   // the pace: a walk, building to a brisk one as you keep on (or as hard as you press)
   walkTime = forward ? walkTime + dt : 0;
-  const pace = 1.1 * (pressure !== null ? 0.6 + 1.4 * pressure : 1 + 0.8 * smoothstep(3, 10, walkTime));
+  // a walk (1.2 m/s), brisk after a few seconds (2), and on into a run if you keep on (3.8)
+  const pace = pressure !== null ? 0.7 + 3.1 * pressure : 1.2 + 0.8 * smoothstep(3, 9, walkTime) + 1.8 * smoothstep(12, 18, walkTime);
   speed += ((forward ? pace : 0) - speed) * (1 - Math.exp(-dt * (forward ? 1.4 : 2.2)));
   walked += speed * dt;
   if (speed > 0.3 && !walkedOnce) {
     walkedOnce = true;
     hint.classList.remove('show');
   }
-  stride += speed * dt * 1.8 * Math.PI;
+  // steps: about two a second at a walk; running, longer strides and quicker
+  const running = smoothstep(2.2, 3.6, speed);
+  stride += dt * Math.PI * 2 * (Math.min(speed, 2) * 0.9 + running * 0.9);
   const W = canvas.width;
   const H = canvas.height;
   // you walk the way you face (the view turns a moment behind the hand, and sways a little)
-  yaw += (heading - yaw) * (1 - Math.exp(-dt * 6));
+  // the head turns after the hand, with some weight
+  yaw += (heading - yaw) * (1 - Math.exp(-dt * 3.5));
   // you walk to the water's edge, not into it
   const nx = posX + Math.sin(yaw) * speed * dt;
   const nz = posZ + Math.cos(yaw) * speed * dt;
@@ -393,10 +448,19 @@ function frame(now: number) {
   view.yaw = yaw + Math.sin(t * 0.05) * 0.015 * going;
   // the eye rides the ground (a moment behind it, as legs take a slope)
   footY += (wood.groundH(posX, posZ) - footY) * (1 - Math.exp(-dt * 5));
-  view.eye = footY + 1.6 + Math.sin(stride) * 0.022 * going + Math.sin(t * 0.06) * 0.03 * going;
+  view.eye = footY + 1.6 + Math.sin(stride) * (0.022 + 0.04 * running) * going + Math.sin(t * 0.06) * 0.03 * going;
   view.f = H * 0.92;
   // the tilt follows the hand, and settles back level when let go
-  pitch += (pitchTo - pitch) * (1 - Math.exp(-dt * (dragFrom ? 10 : 2.5)));
+  // springs: stiff while held (the neck following the hand, a little behind), soft and slow when
+  // let go (the head settling back level, easing in and out)
+  const spring = (x: number, to: number, v: number, k: number) => {
+    const c = 2 * Math.sqrt(k);
+    v += (k * (to - x) - c * v) * dt;
+    return [x + v * dt, v];
+  };
+  [pitch, pitchV] = spring(pitch, pitchTo, pitchV, gesture?.kind === 'look' ? 30 : 3);
+  [zoom, zoomV] = spring(zoom, zoomTo, zoomV, pinch ? 40 : 4);
+  view.f *= zoom;
   view.horizon = H * 0.4 - Math.tan(pitch) * view.f;
 
   // what stands in view, and the card each needs
@@ -627,6 +691,8 @@ function frame(now: number) {
     heading: Math.round(((((heading * 180) / Math.PI) % 360) + 360) % 360),
     quality: Math.round(quality * 100) / 100,
     pace: Math.round(speed * 100) / 100,
+    pitch: Math.round(pitch * 1000) / 1000,
+    zoom: Math.round(zoom * 100) / 100,
     pressure,
     place: Object.fromEntries(Object.entries(wood.place(posX, posZ)).map(([k, v]) => [k, Math.round(v * 100) / 100])),
   };
