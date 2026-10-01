@@ -4,7 +4,7 @@
 photograph: a green-grey woodland fog, a small bare tree leaning over dry grass,
 tall trunks fading behind, a birch, a beech sapling keeping last year's leaves.
 
-Nothing to do and nothing to finish. Touch the ground (below the horizon) to walk, at once; the finger is a tiller (held right of the middle you keep bearing right, the further out the sharper; the middle goes straight), so you never need to lift and drag again; the pace builds from a walk to a brisk one and, if you keep on, a run (where the device reports real pressure, e.g. Apple Pencil, pressing harder goes faster). Touch the sky to look: across turns you, with a head's weight; up and down cranes your neck, harder the further it goes, and eases back level when you let go. Two fingers pinch to look closer (up to 4×), easing back out. Standing still is still.
+Nothing to do and nothing to finish. Touch the ground (below the horizon) to walk, at once; the finger is a tiller (held right of the middle you keep bearing right, the further out the sharper; the middle goes straight), so you never need to lift and drag again; the pace builds from a walk (2.4 m/s) to a brisk one (4) and, if you keep on, a run (7.6) (where the device reports real pressure, e.g. Apple Pencil, pressing harder goes faster). Touch the sky to look: across turns you, with a head's weight; up and down cranes your neck, harder the further it goes, and eases back level when you let go. Two fingers pinch to look closer (up to 4×), easing back out. Standing still is still.
 
 ## The approach: silhouettes, in extreme detail, on the GPU
 
@@ -358,6 +358,14 @@ compile, and an out-of-range or unknown value is refused with a warning.
   fails on a declared flag that nothing reads, and on any other file reading
   the address directly. At run time, parameters that are not flags are
   reported in the console and at the top of the overlay.
+- **The panel's bar:**
+  - **help** shows what each flag does.
+  - **reset** puts every flag back to its default, keeping the seed, where you
+    stand, and the panel.
+  - **copy** copies the link: this wood, where you stand, and every flag.
+- **Fly** (`?fly`, dev only, in the panel): free movement the way you look,
+  up and down too, through anything, three times faster. The tilt stays where
+  you leave it, Q/E sink and rise, and turning it off lands you.
 - **Also:** `window.__wood()` (the Wood itself, to query places).
 
 Current flags:
@@ -366,4 +374,4 @@ Current flags:
 - **sky:** `hour`, `moon`, `fog`, `warm`
 - **deer:** `deer`, `deerAt`, `deerBed`, `deerCalm`
 - **render:** `fixed`, `time`
-- **dev:** `tune`
+- **dev:** `tune`, `fly`

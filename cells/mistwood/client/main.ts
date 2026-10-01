@@ -224,6 +224,8 @@ let speed = 0;
 let yaw = heading;
 let stride = 0;
 let footY = wood.groundH(posX, posZ);
+/** Flying (dev, ?fly): the eye's height (m). */
+let flyY = footY + 1.6;
 
 // ─── input: where you touch says what you mean ─────────────────────────────────────────
 // Touch the ground (below the horizon) and you walk, at once, and the finger steers like a
@@ -255,7 +257,7 @@ const SLOP = 6;
 /** The touches down now (CSS px). */
 const touches = new Map<number, { x: number; y: number }>();
 /** What the first touch is doing: walking (from the ground) or looking (from the sky). */
-let gesture: { kind: 'walk' | 'look'; id: number; x: number; y: number; heading: number; moved: boolean; at: number } | null = null;
+let gesture: { kind: 'walk' | 'look'; id: number; x: number; y: number; heading: number; moved: boolean; at: number; pitch0: number } | null = null;
 /** Walking, how fast the finger's offset from the middle turns you (rad/s at the edge). */
 const STEER = 1.3;
 /** Two touches: the pinch, from its first spread and the zoom then. */
@@ -290,7 +292,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (touches.size > 2 || pinch) return;
   const kind = e.clientY > horizonY() ? 'walk' : 'look';
-  gesture = { kind, id: e.pointerId, x: e.clientX, y: e.clientY, heading, moved: false, at: e.clientX };
+  gesture = { kind, id: e.pointerId, x: e.clientX, y: e.clientY, heading, moved: false, at: e.clientX, pitch0: pitchTo };
   holding = kind === 'walk';
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -320,7 +322,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (g.kind === 'look') {
     // drag it down and you look up; the neck resists more the further it cranes
     const raw = ((e.clientY - g.y) * TURN * 1.1) / zoom;
-    pitchTo = PITCH * Math.tanh(raw / PITCH);
+    const lim = flag('fly') ? 1.3 : PITCH;
+    pitchTo = flag('fly') ? Math.max(-lim, Math.min(lim, g.pitch0 + raw)) : PITCH * Math.tanh(raw / PITCH);
   }
 });
 function readPressure(e: PointerEvent) {
@@ -345,7 +348,7 @@ const release = () => {
   holding = false;
   gesture = null;
   pinch = null;
-  pitchTo = 0;
+  if (!flag('fly')) pitchTo = 0;
   zoomTo = 1;
   // (from rest: the head settles back, easing in and out, not flung on past where it was)
   pitchV = 0;
@@ -458,6 +461,7 @@ function frame(now: number) {
       resize();
     }
   }
+  const flying = flag('fly');
   const forward = holding || flag('walk') || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
   if (gesture?.kind === 'walk') {
     // the tiller: offset from the middle (−1 … 1), a still band in the middle, sharper outwards
@@ -470,7 +474,8 @@ function frame(now: number) {
   // the pace: a walk, building to a brisk one as you keep on (or as hard as you press)
   walkTime = forward ? walkTime + dt : 0;
   // a walk (1.2 m/s), brisk after a few seconds (2), and on into a run if you keep on (3.8)
-  const pace = pressure !== null ? 0.7 + 3.1 * pressure : 1.2 + 0.8 * smoothstep(3, 9, walkTime) + 1.8 * smoothstep(12, 18, walkTime);
+  // (a walk 2.4 m/s, brisk 4, a run 7.6 — and flying, three times that)
+  const pace = (pressure !== null ? 1.4 + 6.2 * pressure : 2.4 + 1.6 * smoothstep(3, 9, walkTime) + 3.6 * smoothstep(12, 18, walkTime)) * (flying ? 3 : 1);
   speed += ((forward ? pace : 0) - speed) * (1 - Math.exp(-dt * (forward ? 1.4 : 2.2)));
   walked += speed * dt;
   if (speed > 0.3 && !walkedOnce) {
@@ -485,9 +490,17 @@ function frame(now: number) {
   // you walk the way you face (the view turns a moment behind the hand, and sways a little)
   // the head turns after the hand, with some weight
   yaw += (heading - yaw) * (1 - Math.exp(-dt * 3.5));
+  // flying (dev): the way you look, up and down too, through anything
+  if (flying) {
+    const cp = Math.cos(pitch);
+    posX += Math.sin(yaw) * cp * speed * dt;
+    posZ += Math.cos(yaw) * cp * speed * dt;
+    flyY += Math.sin(pitch) * speed * dt + ((keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0)) * 6 * dt;
+    flyY = Math.max(flyY, wood.groundH(posX, posZ) + 0.4);
+  }
   // you walk to the water's edge, not into it
-  const nx = posX + Math.sin(yaw) * speed * dt;
-  const nz = posZ + Math.cos(yaw) * speed * dt;
+  const nx = flying ? posX : posX + Math.sin(yaw) * speed * dt;
+  const nz = flying ? posZ : posZ + Math.cos(yaw) * speed * dt;
   // and not through stone: along it instead (the move less its part into the wall)
   let mx = nx;
   let mz = nz;
@@ -521,7 +534,7 @@ function frame(now: number) {
   view.yaw = yaw + Math.sin(t * 0.05) * 0.015 * going + zoomAt.across * toward;
   // the eye rides the ground (a moment behind it, as legs take a slope)
   footY += (wood.groundH(posX, posZ) - footY) * (1 - Math.exp(-dt * 5));
-  view.eye = footY + 1.6 + Math.sin(stride) * (0.022 + 0.04 * running) * going + Math.sin(t * 0.06) * 0.03 * going;
+  view.eye = flying ? flyY : footY + 1.6 + Math.sin(stride) * (0.022 + 0.04 * running) * going + Math.sin(t * 0.06) * 0.03 * going;
   view.f = H * 0.92;
   // the tilt follows the hand, and settles back level when let go
   // springs: stiff while held (the neck following the hand, a little behind), soft and slow when
@@ -532,7 +545,8 @@ function frame(now: number) {
     return [x + v * dt, v];
   };
   // (at rest the head is level — or as ?tilt holds it, to look at the ground in a picture)
-  [pitch, pitchV] = spring(pitch, gesture?.kind === 'look' ? pitchTo : (flag('tilt') ?? 0), pitchV, gesture?.kind === 'look' ? 30 : 3);
+  // (flying, the tilt stays where you leave it)
+  [pitch, pitchV] = spring(pitch, gesture?.kind === 'look' || flying ? pitchTo : (flag('tilt') ?? 0), pitchV, gesture?.kind === 'look' ? 30 : 3);
   [zoom, zoomV] = spring(zoom, zoomTo, zoomV, pinch ? 40 : 4);
   view.f *= zoom;
   view.horizon = H * 0.4 - Math.tan(pitch + zoomAt.up * toward) * view.f;
@@ -858,6 +872,11 @@ function moveTo(x: number, z: number, h?: number) {
   written = '';
 }
 onFlag((name, by) => {
+  // flying: up from where the eye is now; landing: the head level again
+  if (name === 'fly') {
+    flyY = view.eye;
+    if (!flag('fly')) pitchTo = 0;
+  }
   if (by === 'app') return;
   if (name === 'x' || name === 'y' || name === 'heading') {
     const h = flag('heading');

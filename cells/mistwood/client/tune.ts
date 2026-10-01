@@ -6,7 +6,7 @@
  *
  * Nothing here knows any flag by name: declare one in flags.ts and it is here.
  */
-import { FLAGS, flag, onFlag, setFlag, unknownFlags, type FlagName, type Spec } from './flags';
+import { FLAGS, flag, onFlag, setFlag, setFlags, unknownFlags, type FlagName, type FlagSet, type Spec } from './flags';
 
 const CSS = `
 #tune { position: fixed; top: max(8px, env(safe-area-inset-top)); right: 8px; width: min(320px, calc(100vw - 16px)); max-height: 70vh; overflow: auto;
@@ -47,7 +47,35 @@ export function mountTune(state: () => unknown) {
   const docs = document.createElement('button');
   docs.textContent = 'help';
   docs.addEventListener('click', () => root.classList.toggle('nodocs'));
-  bar.append(docs);
+  // reset: every flag back to its default — but this wood, where you stand, and this panel kept
+  const reset = document.createElement('button');
+  reset.textContent = 'reset';
+  reset.title = 'every flag to its default (keeps the seed, where you stand, and this panel)';
+  reset.addEventListener('click', () => {
+    const keep = new Set<FlagName>(['seed', 'x', 'y', 'heading', 'tune']);
+    const clear: FlagSet = {};
+    for (const n of Object.keys(FLAGS) as FlagName[]) {
+      const v = flag(n) as unknown;
+      if (!keep.has(n) && v !== null && v !== false) (clear as Record<string, null>)[n] = null;
+    }
+    if (Object.keys(clear).length) setFlags(clear);
+  });
+  // copy: the address as it stands (the wood, where you are, every flag) — to share or come back to
+  const copy = document.createElement('button');
+  copy.textContent = 'copy';
+  copy.title = 'copy the link: this wood, where you stand, and every flag';
+  copy.addEventListener('click', async () => {
+    const text = location.href;
+    try {
+      await navigator.clipboard.writeText(text);
+      copy.textContent = 'copied';
+    } catch {
+      // (no clipboard: show it, selected, to copy by hand)
+      window.prompt('copy this link', text);
+    }
+    setTimeout(() => (copy.textContent = 'copy'), 1500);
+  });
+  bar.append(docs, reset, copy);
   root.append(bar);
   // nothing in the panel reaches the wood (walking, looking, the keys)
   for (const ev of ['pointerdown', 'keydown', 'keyup', 'wheel'] as const) root.addEventListener(ev, (e) => e.stopPropagation());
