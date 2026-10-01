@@ -216,7 +216,7 @@ void main() {
     vec3 litter = mix(vec3(.2, .12, .06), vec3(.4, .25, .12), smoothstep(.45, .75, lv)) * (.75 + .4 * vnoise(p.xz * 3.1));
     g = mix(g, litter, shelter * (.45 + .4 * smoothstep(.35, .7, vnoise(p.xz * .5))));
     // in the hollows the ground is wet: dark, mossy, holding the fog's light
-    vec3 moss = mix(vec3(.07, .1, .045), vec3(.15, .19, .07), vnoise(p.xz * 5.));
+    vec3 moss = mix(vec3(.07, .075, .04), vec3(.15, .15, .075), vnoise(p.xz * 5.));
     float damp = smoothstep(.3, .85, hollow);
     g = mix(g, moss, damp * .8);
     g = mix(g, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .4, damp * smoothstep(.55, .8, vnoise(p.xz * .7)) * .3);
