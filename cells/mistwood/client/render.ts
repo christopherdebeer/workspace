@@ -379,15 +379,26 @@ vec3 toLocal(vec3 w, int i) {
   return vec3(c * r.x + s * r.y, w.y - uStB[i].x, -s * r.x + c * r.y);
 }
 float sdBox(vec3 p, vec3 b) { vec3 q = abs(p) - b; return length(max(q, 0.)) + min(max(q.x, max(q.y, q.z)), 0.); }
-// a ruined round tower: a battered wall, its top broken away unevenly, a doorway, slit windows
+// stone by stone: a hash for a stone (its column along the face, its course up it)
+float stoneHash(float col, float row, float seed) { return fract(sin(col * 127.1 + row * 311.7 + seed * 17.3) * 43758.5453); }
+// a ruined round tower: a battered wall, its top broken away unevenly — stone by stone, in steps
+// of whole courses — a doorway, slit windows; each stone a little proud of the wall or sunk
 float sdTower(vec3 p, vec4 b) {
   float H = b.y, R0 = b.z;
   float r = length(p.xz);
   float th = atan(p.z, p.x);
-  float R = R0 * (1. + .07 * (1. - clamp(p.y / H, 0., 1.)));
+  float along = th * R0;
+  float hr = .31;
+  float row = floor(p.y / hr);
+  float colW = .5;
+  float col = floor((along + row * .23) / colW);
+  float R = R0 * (1. + .07 * (1. - clamp(p.y / H, 0., 1.))) + (stoneHash(col, row, b.w) - .5) * .05;
   float wall = abs(r - R) - .48;
-  // the broken top: low on one side, high on the other, ragged
-  float top = H * (1. - .42 * vnoise(vec2(th * .9 + b.w * 7., b.w)) - .12 * vnoise(vec2(th * 3.1, b.w + 3.)));
+  // the broken top: low on one side, high on the other; each column of stones ending at a whole
+  // course, its own
+  float tc = (floor(along / colW) + .5) * colW / R0;
+  float topS = H * (1. - .42 * vnoise(vec2(tc * .9 + b.w * 7., b.w)) - .12 * vnoise(vec2(tc * 3.1, b.w + 3.)));
+  float top = floor((topS + (stoneHash(floor(along / colW), 99., b.w) - .5) * .5) / hr) * hr;
   float d = max(wall, p.y - top);
   d = max(d, -p.y - 4.);
   // the doorway (facing along x): a tall opening, round-headed
@@ -433,13 +444,18 @@ float sdWall(vec3 w, int i, out vec3 tsy) {
   float y = w.y - (mix(b.x, b.y, tc / max(L, 1e-3)) - .12);
   float caps = floor(b.w / 1000.);
   float seed = mod(b.w, 1000.);
-  float H = b.z * (.86 + .26 * vnoise(vec2(tc * .3, seed)));
-  if (mod(caps, 2.) > .5) H *= .25 + .75 * smoothstep(0., 1.8, tc);
-  if (caps > 1.5) H *= .25 + .75 * smoothstep(0., 1.8, L - tc);
-  float hw = mix(.36, .22, clamp(y / max(H, .1), 0., 1.));
-  // a rounded top (the coping stones)
-  float top = y - H + .12;
-  float d = top > 0. ? length(vec2(max(abs(s) - hw + .12, 0.), top)) - .12 : max(abs(s) - hw, y - H);
+  // stone by stone: the courses (13 cm), the stones along them (30 cm, staggered)
+  float hr = .13, colW = .3;
+  float row = floor(y / hr);
+  float colT = floor(tc / colW);
+  float cc = (colT + .5) * colW;
+  float H = b.z * (.86 + .26 * vnoise(vec2(cc * .3, seed)));
+  if (mod(caps, 2.) > .5) H *= .25 + .75 * smoothstep(0., 1.8, cc);
+  if (caps > 1.5) H *= .25 + .75 * smoothstep(0., 1.8, L - cc);
+  // the top: each column of stones ending at a whole course (the coping stones stand up unevenly)
+  H = floor((H + (stoneHash(colT, 77., seed) - .5) * .16) / hr) * hr;
+  float hw = mix(.36, .22, clamp(y / max(H, .1), 0., 1.)) + (stoneHash(floor((tc + row * .15) / colW), row, seed) - .5) * .045;
+  float d = max(abs(s) - hw, y - H);
   d = max(d, -y - 1.2);
   d = max(d, max(-t - .25, t - L - .25));
   tsy = vec3(t, s, y);
@@ -515,7 +531,8 @@ float traceStructures(vec3 ro, vec3 rd, out int id) {
     int j;
     float d = sdStruct(ro + rd * t, j);
     if (d < .003 + .0015 * t) { id = j; return t; }
-    t += d * .9;
+    // (stone by stone the shape steps: go carefully near it)
+    t += d < .6 ? d * .55 : d * .9;
   }
   return -1.;
 }
@@ -703,17 +720,10 @@ void main() {
     }
     col = shadeStructure(w, sid, tS, d, tau);
   } else if (tHit < 0. && tWater < 0.) {
-    // only fog: lighter higher, brighter where the light is behind it; and the mist you look
-    // up through (looking up steeply, the march did not run: a few steps of it here)
+    // only fog: lighter higher, brighter where the light is behind it. (The mist is the fog's own
+    // colour, so the sky is the fog exactly: the far ground, fogged away, meets it without a line;
+    // the mist shows where it veils something)
     col = fogDir(d);
-    if (d.y >= L) {
-      float gh = groundH(eye.xz);
-      for (int i = 0; i < 6; i++) {
-        float t = 3. + float(i) * 8.;
-        tau += mistDensity(eye + d * t, gh) * 8.;
-      }
-    }
-    col = mix(col, col * 1.04 + .01, 1. - exp(-tau));
   } else if (tWater > 0.) {
     float t = tWater;
     vec3 p = eye + d * t;

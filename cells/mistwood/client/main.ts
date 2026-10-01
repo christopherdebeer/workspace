@@ -397,6 +397,9 @@ setTimeout(() => !walkedOnce && hint.classList.add('show'), 3000);
 // ─── each frame ───────────────────────────────────────────────────────────────────
 let t = flag('time') ?? 0;
 const shade = new Float32Array(40 * 4);
+/** The wood's small voices: the nearest wet ground (its way, its distance), and how open it is here. */
+let lookedAbout = -9;
+const voices = { wetPan: 0, wetDist: Infinity, open: 0 };
 const structA = new Float32Array(24);
 const structB = new Float32Array(24);
 const wallA = new Float32Array(96);
@@ -780,6 +783,25 @@ function frame(now: number) {
   });
   renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, structA, structB, structN: stone.length, wallA, wallB, wallN: wallsHere.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
+  // the small voices: where the nearest wet ground is (looked for now and then), how open it is
+  if (t - lookedAbout > 1) {
+    lookedAbout = t;
+    let bd = Infinity;
+    let ba = 0;
+    for (const r of [6, 15, 28, 42])
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const f = wood.place(posX + Math.sin(a) * r, posZ + Math.cos(a) * r);
+        if ((f.wet > 0.75 || f.water > 0) && r < bd) {
+          bd = r;
+          ba = a;
+        }
+      }
+    voices.wetDist = bd;
+    voices.wetPan = Math.sin(ba - view.yaw);
+    voices.open = wood.place(posX, posZ).open;
+  }
+  sound.creatures(dt, { night: 1 - atmos.day, wetPan: voices.wetPan, wetDist: voices.wetDist, open: voices.open, heat: atmos.day * Math.max(0, flag('warm') ?? 0) });
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
     walked: Math.round(walked * 10) / 10,

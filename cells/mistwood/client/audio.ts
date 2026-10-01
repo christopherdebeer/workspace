@@ -97,6 +97,137 @@ export class Sound {
     return p;
   }
 
+  // ─── the wood's small voices: frogs in the wet, crickets in the open at night, cicadas in the heat
+  private nextFrog = 3;
+  private frogBout = 0;
+  private nextCricket = 2;
+  private cicada: { src: AudioBufferSourceNode; gain: GainNode; pan: StereoPannerNode } | null = null;
+
+  /**
+   * Each frame, from where you are: night (0 day … 1 night), the nearest wet ground (its pan and
+   * distance, or none), how open it is about you, how warm the day (0 … 1).
+   */
+  creatures(dt: number, env: { night: number; wetPan: number; wetDist: number; open: number; heat: number }) {
+    const ctx = this.ctx;
+    if (!ctx || !this.on || !this.noise) return;
+    // frogs: bouts of croaking from the wet, more at dusk and night, from its way, muffled by distance
+    this.nextFrog -= dt;
+    if (env.wetDist < 45 && this.nextFrog <= 0) {
+      const active = 0.25 + 0.75 * env.night;
+      if (this.frogBout > 0) {
+        this.frogBout--;
+        this.nextFrog = 0.35 + Math.random() * 0.6;
+      } else {
+        this.frogBout = Math.random() < active ? 2 + Math.floor(Math.random() * 6) : 0;
+        this.nextFrog = this.frogBout ? 0.2 : 2 + Math.random() * 6 / active;
+      }
+      if (this.frogBout) {
+        const near = 1 / (1 + env.wetDist / 10);
+        this.croak(env.wetPan + (Math.random() - 0.5) * 0.4, 0.22 * near * active, env.wetDist / 60);
+      }
+    }
+    // crickets: at night, in the open: chirps from all about, each a trill of three or four
+    this.nextCricket -= dt;
+    if (this.nextCricket <= 0) {
+      const n = env.night * (0.2 + 0.8 * env.open);
+      this.nextCricket = 0.12 + Math.random() * 0.5 / Math.max(n, 0.05);
+      if (Math.random() < n) this.chirp(Math.random() * 1.8 - 0.9, 0.02 + 0.03 * Math.random());
+    }
+    // cicadas: in the heat of a warm day, in the open: a buzz that swells and fades
+    const want = env.heat * (1 - env.night) * (0.4 + 0.6 * env.open);
+    if (want > 0.05 && !this.cicada) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.loop = true;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 5600;
+      bp.Q.value = 6;
+      const am = ctx.createGain();
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 110;
+      const depth = ctx.createGain();
+      depth.gain.value = 0.5;
+      lfo.connect(depth).connect(am.gain);
+      am.gain.value = 0.5;
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      const pan = ctx.createStereoPanner();
+      src.connect(bp).connect(am).connect(gain).connect(pan).connect(this.master!);
+      src.start();
+      lfo.start();
+      this.cicada = { src, gain, pan };
+    }
+    if (this.cicada) {
+      const swell = 0.5 + 0.5 * Math.sin(ctx.currentTime * 0.4) * Math.sin(ctx.currentTime * 0.13 + 1);
+      this.cicada.gain.gain.setTargetAtTime(want > 0.05 ? 0.12 * want * swell : 0, ctx.currentTime, 0.6);
+      this.cicada.pan.pan.setTargetAtTime(Math.sin(ctx.currentTime * 0.05) * 0.6, ctx.currentTime, 2);
+    }
+  }
+
+  /** A frog's croak: a throaty pulsed rasp, a quarter second. */
+  private croak(pan: number, level: number, far: number) {
+    const p = this.out(pan, far);
+    if (!p) return;
+    const ctx = this.ctx!;
+    const at = ctx.currentTime + 0.01;
+    const len = 0.18 + Math.random() * 0.2;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    const f0 = 150 + Math.random() * 90;
+    o.frequency.setValueAtTime(f0, at);
+    o.frequency.linearRampToValueAtTime(f0 * 0.85, at + len);
+    // the throat (a formant) and the rasp (pulses, 25–40 a second)
+    const throat = ctx.createBiquadFilter();
+    throat.type = 'bandpass';
+    throat.frequency.value = 520 + Math.random() * 300;
+    throat.Q.value = 3;
+    const pulse = ctx.createGain();
+    pulse.gain.value = 0;
+    const lfo = ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 25 + Math.random() * 15;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.5;
+    const bias = ctx.createConstantSource();
+    bias.offset.value = 0.5;
+    lfo.connect(lfoGain).connect(pulse.gain);
+    bias.connect(pulse.gain);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(level, at + 0.03);
+    g.gain.setValueAtTime(level, at + len * 0.7);
+    g.gain.exponentialRampToValueAtTime(0.0005, at + len);
+    o.connect(throat).connect(pulse).connect(g).connect(p);
+    for (const s of [o, lfo, bias]) {
+      s.start(at);
+      s.stop(at + len + 0.05);
+    }
+  }
+
+  /** A cricket's chirp: three or four tiny pulses of a high, pure note. */
+  private chirp(pan: number, level: number) {
+    const p = this.out(pan, 0.15);
+    if (!p) return;
+    const ctx = this.ctx!;
+    const f = 4300 + Math.random() * 600;
+    let at = ctx.currentTime + 0.01;
+    const n = 3 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < n; i++) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(level, at + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0003, at + 0.018);
+      o.connect(g).connect(p);
+      o.start(at);
+      o.stop(at + 0.03);
+      at += 0.034;
+    }
+  }
+
   /** A deer's step in the leaves: a short dry rustle. */
   rustle(pan: number, level: number, far: number) {
     const p = this.out(pan, far);
