@@ -210,6 +210,94 @@ export function sampleGenome(r: Rand, archetype: Species, wild = 1): Genome {
 /** No tree grows past this many segments (a phone must be able to bake it). */
 const CAP = 60000;
 
+/**
+ * A fallen tree, lying along x through the origin: a trunk gone grey and mossy (the moss is the
+ * live shader's, low on the wood), the stubs of its branches snapped short and pointing every way,
+ * a few still with twigs; at one end either the root plate it tore out of the ground, standing up
+ * on edge, or the jagged break where it snapped.
+ */
+export function growLog(seed: number): Structure {
+  const r: Rand = seeded(hash(seed, 0x10c));
+  const out: number[] = [];
+  const push = (a: V3, b: V3, w0: number, w1: number, tone = 0.02) => out.push(a[0], a[1], a[2], b[0], b[1], b[2], w0, w1, tone, 0);
+  const len = 5 + r() * 8;
+  const rad = 0.13 + r() * 0.17;
+  const steps = 24;
+  // it lies a little sunk, bending as the ground and its own weight let it
+  const bendY = (r() - 0.5) * 0.25;
+  const bendZ = (r() - 0.5) * 0.8;
+  const at = (u: number): V3 => {
+    const radius = rad * (1 - 0.55 * u);
+    return [(u - 0.5) * len, radius * 0.75 + Math.sin(u * Math.PI) * bendY, Math.sin(u * Math.PI) * bendZ];
+  };
+  for (let k = 0; k < steps; k++) {
+    const u0 = k / steps;
+    const u1 = (k + 1) / steps;
+    push(at(u0), at(u1), 2 * rad * (1 - 0.55 * u0), 2 * rad * (1 - 0.55 * u1));
+  }
+  // the branches: stubs, snapped short, pointing up and out (those underneath are under it)
+  const stubs = 6 + Math.floor(r() * 10);
+  for (let i = 0; i < stubs; i++) {
+    const u = 0.25 + r() * 0.75;
+    const base = at(u);
+    const ang = (r() - 0.3) * Math.PI;
+    const dir = norm([0.35 + r() * 0.4, Math.sin(ang), Math.cos(ang) * (r() < 0.5 ? -1 : 1)]);
+    if (dir[1] < -0.2) continue;
+    const l = 0.15 + Math.pow(r(), 2) * (u > 0.7 ? 2.4 : 1.2);
+    const w = rad * (0.35 + r() * 0.3) * (1 - 0.5 * u);
+    let p = base;
+    let d = dir;
+    const parts = 3;
+    for (let k = 0; k < parts; k++) {
+      const q: V3 = [p[0] + (d[0] * l) / parts, Math.max(0.02, p[1] + (d[1] * l) / parts), p[2] + (d[2] * l) / parts];
+      push(p, q, w * (1 - k / parts), w * (1 - (k + 1) / parts) + 0.004);
+      p = q;
+      d = turn(d, (r() - 0.5) * 0.5, r() * 6.28);
+    }
+    // a few still carry dead twigs
+    if (l > 0.8 && r() < 0.5)
+      for (let t = 0; t < 8; t++) {
+        const tw = turn(d, 0.6 + r() * 0.8, r() * 6.28);
+        const tl = 0.1 + r() * 0.3;
+        push(p, [p[0] + tw[0] * tl, Math.max(0.02, p[1] + tw[1] * tl), p[2] + tw[2] * tl], 0.006, 0.002);
+      }
+  }
+  const e = at(0);
+  if (r() < 0.55) {
+    // the root plate: torn up, on edge, earth still in it — a ragged disc of roots across the log
+    const R = 0.8 + r() * 0.9;
+    const roots = 26 + Math.floor(r() * 16);
+    for (let i = 0; i < roots; i++) {
+      const a = (i / roots) * Math.PI * 2 + (r() - 0.5) * 0.3;
+      const l = R * (0.55 + r() * 0.6);
+      let p: V3 = [e[0] - 0.1, e[1], e[2]];
+      let d: V3 = norm([-0.15 - r() * 0.2, Math.sin(a), Math.cos(a)]);
+      const w0 = rad * (0.5 + r() * 0.5);
+      for (let k = 0; k < 4; k++) {
+        const q: V3 = [p[0] + (d[0] * l) / 4, Math.max(-0.05, p[1] + (d[1] * l) / 4), p[2] + (d[2] * l) / 4];
+        push(p, q, w0 * (1 - k / 4) + 0.01, w0 * (1 - (k + 1) / 4) + 0.008, 0);
+        p = q;
+        d = turn(d, (r() - 0.5) * 0.6, r() * 6.28);
+      }
+    }
+    // the earth caught in the plate: a few broad, dark, short strokes about its middle
+    for (let i = 0; i < 10; i++) {
+      const a = r() * 6.28;
+      const l = R * 0.5 * r();
+      push([e[0] - 0.12, e[1] + Math.sin(a) * l * 0.3, e[2] + Math.cos(a) * l * 0.3], [e[0] - 0.12, Math.max(0, e[1] + Math.sin(a) * l), e[2] + Math.cos(a) * l], R * 0.35, R * 0.2, 0);
+    }
+  } else {
+    // snapped: splinters standing out of the break
+    for (let i = 0; i < 9; i++) {
+      const a = r() * 6.28;
+      const off: V3 = [e[0], e[1] + Math.sin(a) * rad * 0.6, e[2] + Math.cos(a) * rad * 0.6];
+      const l = 0.1 + r() * 0.45;
+      push(off, [off[0] - l, off[1] + (r() - 0.3) * l * 0.4, off[2] + (r() - 0.5) * l * 0.4], rad * (0.2 + r() * 0.2), 0.004, 0.12);
+    }
+  }
+  return finish(new Float32Array(out), out.length / SEG, 'leaner');
+}
+
 export function grow(seed: number, genome: Genome): Structure {
   const p = genome;
   const species = genome.archetype;
@@ -367,10 +455,62 @@ export function grow(seed: number, genome: Genome): Structure {
  * across, a little under a metre tall. Same segment format; tone is the straw's
  * lightness.
  */
-export function growPatch(seed: number, width: number): Structure {
+export function growPatch(seed: number, width: number, rush = false): Structure {
   const r: Rand = seeded(hash(seed, 0x9a55));
   const out: number[] = [];
   const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, 0, x1, y1, 0, w0, w1, tone, leaf);
+  if (rush) {
+    // rushes in the wet: clumps of tall, stiff, dark stems, nearly straight, a brown tuft of
+    // flower near the top of some, the old ones broken over
+    const clumps = 1 + Math.floor(r() * 3);
+    for (let c = 0; c < clumps; c++) {
+      const cx = (r() + r() - 1) * width * 0.4;
+      const spread = 0.2 + r() * 0.35;
+      const stems = 12 + Math.floor(r() * 22);
+      for (let i = 0; i < stems; i++) {
+        let x = cx + (r() + r() - 1) * spread;
+        const back = r();
+        let y = back * 0.12;
+        const h = (0.35 + Math.pow(r(), 0.7) * 0.8) * (1 - back * 0.25);
+        const broken = r() < 0.15;
+        // splayed: the outer stems lean out, each its own way
+        let a = Math.PI / 2 + ((x - cx) / spread) * 0.45 + (r() - 0.5) * 0.5;
+        const w = 0.0025 + r() * 0.003;
+        // (tone near 0: the dark, greenish wood colour the draw is given)
+        const tone = r() * 0.08;
+        const steps = 4;
+        for (let k = 0; k < steps; k++) {
+          const len = h / steps;
+          const nx = x + Math.cos(a) * len;
+          const ny = y + Math.sin(a) * len;
+          seg(x, y, nx, ny, w * (1 - k * 0.15), w * (1 - (k + 1) * 0.15), tone);
+          x = nx;
+          y = ny;
+          if (broken && k === 1) a -= 2.2 * Math.sign(Math.cos(a) || 1);
+          else a += (Math.cos(a) > 0 ? -1 : 1) * 0.03;
+        }
+        if (!broken && r() < 0.25) {
+          // the flower: a little brown spray from the side, a hand below the tip
+          const fx = x - Math.cos(a) * h * 0.2;
+          const fy = y - Math.sin(a) * h * 0.2;
+          for (let k = 0; k < 6; k++) {
+            const fa = a - 0.6 + r() * 1.2 + (r() < 0.5 ? 0.6 : -0.6);
+            seg(fx, fy, fx + Math.cos(fa) * 0.03, fy + Math.sin(fa) * 0.03, 0.004, 0.003, 0.15);
+          }
+        }
+      }
+    }
+    // and a few blades of grass between
+    for (let i = 0; i < width * 30; i++) {
+      const x = (r() + r() - 1) * width * 0.5;
+      const h = 0.1 + r() * 0.3;
+      const a = Math.PI / 2 + (r() - 0.5) * 1.2;
+      seg(x, r() * 0.08, x + Math.cos(a) * h, Math.max(0.01, Math.sin(a) * h), 0.004, 0.0006, r() * 0.1);
+    }
+    const st = finish(new Float32Array(out), out.length / SEG, 'shrub');
+    st.radius = width / 2 + 0.1;
+    return st;
+  }
   // grass: curved blades, leaning with a shared breeze and their own
   const lean = (r() - 0.5) * 0.5;
   const blades = Math.round(width * 150);

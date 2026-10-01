@@ -52,6 +52,8 @@ let bias = 1;
 const BUDGET = 16e6;
 /** A far tree's card is baked as seen from one of twelve sides (a patch of grass from one). */
 const SIDES = 12;
+/** Grass and rushes: low cover, one card side, mirrored, straw-coloured. */
+const low = (kind: Kind) => kind === 'patch' || kind === 'rush';
 const keyOf = (kind: Kind, pool: number, level: number, side = 0) => `${kind}:${pool}:${level}:${side}`;
 function forget() {
   for (const c of cards.values()) gl.deleteTexture(c.tex);
@@ -95,13 +97,49 @@ function stand(z: number) {
   posX = at.x;
   posZ = at.z;
   heading = at.heading + (Number(params.get('look')) || 0);
+  // debug `?find=pond|log|veteran|glade`: stand some metres off the nearest, facing it
+  const find = params.get('find');
+  if (find) {
+    let best: { x: number; z: number } | null = null;
+    let bd = Infinity;
+    const consider = (x: number, z: number) => {
+      const d = Math.hypot(x - posX, z - posZ);
+      if (d < bd) {
+        bd = d;
+        best = { x, z };
+      }
+    };
+    if (find === 'pond' || find === 'glade')
+      for (let r = 0; r < 400 && !best; r += 4)
+        for (let a = 0; a < 48; a++) {
+          const x = posX + Math.cos((a / 48) * 6.283) * r;
+          const z = posZ + Math.sin((a / 48) * 6.283) * r;
+          const f = wood.place(x, z);
+          if (find === 'pond' ? f.water > 0.3 : f.open > 0.9) consider(x, z);
+        }
+    else
+      for (let r = 20; r <= 300 && !best; r += 40)
+        for (const p of wood.around(posX, posZ, r)) if (find === 'log' ? p.kind === 'log' : p.scale > 1.6) consider(p.x, p.z);
+    if (best) {
+      const b = best as { x: number; z: number };
+      const off = Number(params.get('off')) || (find === 'pond' ? 14 : find === 'glade' ? 0 : 9);
+      const a = Math.atan2(posX - b.x, posZ - b.z);
+      posX = b.x + Math.sin(a) * off;
+      posZ = b.z + Math.cos(a) * off;
+      heading = Math.atan2(b.x - posX, b.z - posZ) + (Number(params.get('look')) || 0);
+      if (wood.place(posX, posZ).water > 0) {
+        posX = b.x + Math.sin(a) * off * 1.6;
+        posZ = b.z + Math.cos(a) * off * 1.6;
+      }
+    }
+  }
   // debug `?near=2`: stand that far from the nearest tree, facing it (to look at bark)
   const near = Number(params.get('near'));
   if (near) {
     let best: { x: number; z: number } | null = null;
     let bd = Infinity;
     for (const p of wood.around(posX, posZ, 25)) {
-      if (p.kind === 'patch' || p.kind.startsWith('h') || p.kind.startsWith('s')) continue;
+      if (low(p.kind) || p.kind === 'log' || p.kind.startsWith('h') || p.kind.startsWith('s')) continue;
       const d = Math.hypot(p.x - posX, p.z - posZ);
       if (d < bd) {
         bd = d;
@@ -133,6 +171,7 @@ function plant(s: number) {
   history.replaceState(null, '', url);
 }
 plant(seed);
+(window as unknown as { __wood: () => Wood }).__wood = () => wood;
 stand(start);
 requestAnimationFrame(() => veil.classList.add('clear'));
 
@@ -152,6 +191,7 @@ const view: View = { x: 0, z: 0, eye: 1.6, yaw: 0, f: 1, horizon: 0 };
 let speed = 0;
 let yaw = heading;
 let stride = 0;
+let footY = wood.groundH(posX, posZ);
 
 // ─── input: a still hold walks; a drag looks (and steers, once walking) ───────────────
 let holding = false;
@@ -218,6 +258,7 @@ seedBtn.addEventListener('click', () => {
     walked = 0;
     speed = 0;
     stand(0);
+    footY = wood.groundH(posX, posZ);
     yaw = heading;
     veil.classList.add('clear');
     changing = false;
@@ -248,6 +289,8 @@ let last = performance.now();
 /** Near trees are drawn as live geometry within this distance (m), up to this many segments a frame. */
 const LIVE = 16;
 const DARK: [number, number, number] = [0.1, 0.095, 0.08];
+/** Rushes: dark, olive. */
+const RUSH: [number, number, number] = [0.13, 0.14, 0.07];
 const LIVE_BUDGET = 400000;
 const nextPow2 = (x: number) => Math.pow(2, Math.ceil(Math.log2(Math.max(1, x))));
 
@@ -292,14 +335,21 @@ function frame(now: number) {
   const H = canvas.height;
   // you walk the way you face (the view turns a moment behind the hand, and sways a little)
   yaw += (heading - yaw) * (1 - Math.exp(-dt * 6));
-  posX += Math.sin(yaw) * speed * dt;
-  posZ += Math.cos(yaw) * speed * dt;
+  // you walk to the water's edge, not into it
+  const nx = posX + Math.sin(yaw) * speed * dt;
+  const nz = posZ + Math.cos(yaw) * speed * dt;
+  if (wood.groundH(nx, nz) > wood.relief[2] - 0.15) {
+    posX = nx;
+    posZ = nz;
+  }
   view.z = posZ;
   // standing still is still: the sway and the breath are the walk's
   const going = clamp01(speed / 1.1);
   view.x = posX + Math.sin(t * 0.037) * 0.12 * going;
   view.yaw = yaw + Math.sin(t * 0.05) * 0.015 * going;
-  view.eye = 1.6 + Math.sin(stride) * 0.022 * going + Math.sin(t * 0.06) * 0.03 * going;
+  // the eye rides the ground (a moment behind it, as legs take a slope)
+  footY += (wood.groundH(posX, posZ) - footY) * (1 - Math.exp(-dt * 5));
+  view.eye = footY + 1.6 + Math.sin(stride) * 0.022 * going + Math.sin(t * 0.06) * 0.03 * going;
   view.f = H * 0.92;
   view.horizon = H * 0.4;
 
@@ -311,9 +361,9 @@ function frame(now: number) {
   const sunAz = atmos.at[0];
   const want: Array<{ kind: Kind; pool: number; level: number; px: number; side: number; right: [number, number] }> = [];
   const draws: Array<Draw & { d: number }> = [];
-  let grows = 0;
+  const ungrown: Array<{ p: Placed; hd: number }> = [];
   // what stands in view (grown the first time it is wanted, a few a frame)
-  const seen: Array<{ p: Placed; st: Structure; hd: number; R: number; hM: number }> = [];
+  const seen: Array<{ p: Placed; st: Structure; hd: number; R: number; hM: number; base: number }> = [];
   for (const p of wood.around(view.x, view.z, VIEW)) {
     const rx = p.x - view.x;
     const rz = p.z - view.z;
@@ -321,9 +371,9 @@ function frame(now: number) {
     const cx = rx * c - rz * s;
     const hd = Math.hypot(cx, cz);
     if (hd > VIEW || hd < 0.4 || cz < -4) continue;
-    if (p.kind === 'patch' && hd > 22) continue;
+    if (low(p.kind) && hd > 22) continue;
     if (!wood.grown(p.kind, p.pool)) {
-      if (grows++ < 2) wood.structure(p.kind, p.pool);
+      ungrown.push({ p, hd });
       continue;
     }
     const st = wood.structure(p.kind, p.pool);
@@ -331,19 +381,29 @@ function frame(now: number) {
     const hM = st.maxY * p.scale;
     // off to the side (cylindrical: across the screen is angle), allowing for its reach
     if (Math.abs(Math.atan2(cx, cz)) - Math.atan2(R, Math.max(hd, 0.1)) > W / (2 * view.f) + 0.05) continue;
-    seen.push({ p, st, hd, R, hM });
+    // its foot on the ground (grass a little into it, so a slope does not lift its edge)
+    const base = wood.groundH(p.x, p.z) - (low(p.kind) ? 0.03 : p.kind === 'log' ? 0.1 : 0.05);
+    seen.push({ p, st, hd, R, hM, base });
+  }
+  // grow a few of what is wanted and not yet grown, the nearest first
+  ungrown.sort((a, b) => a.hd - b.hd);
+  for (let k = 0, grows = 0; k < ungrown.length && grows < 2; k++) {
+    const { p } = ungrown[k];
+    if (wood.grown(p.kind, p.pool)) continue;
+    wood.structure(p.kind, p.pool);
+    grows++;
   }
   // the nearest first get the live geometry while there is budget — and those already live keep
   // their place ahead of newcomers, so a tree does not flicker between live and card
   seen.sort((a, b) => a.hd - (live.has(a.p) ? 3 : 0) - (b.hd - (live.has(b.p) ? 3 : 0)));
   let liveLeft = LIVE_BUDGET * quality * quality;
   const nowLive = new Set<Placed>();
-  for (const { p, st, hd, R, hM } of seen) {
+  for (const { p, st, hd, R, hM, base } of seen) {
     // the handover: coming near, the live tree fades in over its card (LIVE → LIVE − 2.5 m),
     // then the card fades out from under it (→ LIVE − 5 m); coverage never dips between them
     let liveAlpha = 0;
     let cardAlpha = 1;
-    if (p.kind !== 'patch' && hd < LIVE) {
+    if (!low(p.kind) && hd < LIVE) {
       // the segments that would still be a tenth of a pixel wide or more; short of budget, fewer
       // (they come thickest first), down to those over half a pixel; less than that, a card
       const px = hd / (view.f * p.scale);
@@ -355,7 +415,7 @@ function frame(now: number) {
         const g = wood.genomeOf(p.kind);
         liveAlpha = 1 - smoothstep(LIVE - 2.5, LIVE, hd);
         cardAlpha = smoothstep(LIVE - 5, LIVE - 2.5, hd);
-        draws.push({ live: true, buffer: baker.buffer(st), count: n, wide: Math.min(n, countWider(st, 3 * px)), x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd - 1e-3 });
+        draws.push({ live: true, buffer: baker.buffer(st), count: n, wide: Math.min(n, countWider(st, 3 * px)), x: p.x, z: p.z, base, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd - 1e-3 });
       }
     }
     if (cardAlpha <= 0.001) continue;
@@ -367,7 +427,7 @@ function frame(now: number) {
     const rwz = ex / el;
     let side = 0;
     let right: [number, number] = [1, 0];
-    if (p.kind !== 'patch') {
+    if (!low(p.kind)) {
       const cr = Math.cos(p.rot);
       const sr = Math.sin(p.rot);
       const lx = rwx * cr + rwz * sr;
@@ -380,14 +440,14 @@ function frame(now: number) {
     const fogged = 1 - Math.exp(-hd * density * 1.4);
     const need = ((Math.max(2 * R, hM) * view.f) / Math.max(hd, 0.5)) * (1 - 0.75 * fogged);
     const px = need * (need > 900 ? Math.max(bias, 0.8) : bias);
-    const level = Math.max(64, Math.min(p.kind === 'patch' ? 1024 : 2048, nextPow2(px)));
+    const level = Math.max(64, Math.min(low(p.kind) ? 1024 : 2048, nextPow2(px)));
     const card = bestCard(p.kind, p.pool, level, side);
     if (!card || card.level < level) want.push({ kind: p.kind, pool: p.pool, level, px, side, right });
     if (!card) continue;
     card.used = t;
     const left = card.left * p.scale;
     const width = card.width * p.scale;
-    const flip = p.kind === 'patch' && p.flip;
+    const flip = low(p.kind) && p.flip;
     draws.push({
       live: false,
       card,
@@ -397,7 +457,8 @@ function frame(now: number) {
       flip,
       phase: p.phase,
       patch: p.kind === 'patch',
-      bark: wood.genomeOf(p.kind)?.bark ?? DARK,
+      base,
+      bark: p.kind === 'rush' ? RUSH : wood.genomeOf(p.kind)?.bark ?? DARK,
       alpha: cardAlpha,
       d: hd,
     });
@@ -451,18 +512,18 @@ function frame(now: number) {
     const rel = Math.sin(d.heading - toward);
     const face = (rel >= 0 ? 1 : -1) / Math.max(0.45, Math.abs(rel));
     const run = Math.min(1, d.speed / 5);
-    draws.push({ live: false, pose: [d.headUp, d.headTurn, d.gait, run], x: d.x, z: d.z, size: d.size, face, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
+    draws.push({ live: false, pose: [d.headUp, d.headTurn, d.gait, run], x: d.x, z: d.z, base: wood.groundH(d.x, d.z), size: d.size, face, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
   }
   draws.sort((a, b) => b.d - a.d);
   // the nearest trees shade the ground (contact at the foot, a soft pool under the crown,
   // set away from the brighter place where the sun is behind the fog)
   shadeN = 0;
-  for (let k = draws.length - 1; k >= 0 && shadeN < 40; k--) {
-    const d = draws[k];
-    if ('pose' in d || d.d > 28 || (!d.live && d.patch) || (!d.live && d.alpha < 0.5)) continue;
-    const crown = d.live ? d.radius * d.scale * 0.8 : Math.abs(d.rect[2]) * 0.45;
-    const tall = d.live ? d.height * d.scale : d.rect[3];
-    shade.set([d.x, d.z, 0.35 + crown * 0.08, crown], shadeN * 4);
+  for (const { p, st, hd } of seen) {
+    if (shadeN >= 40 || hd > 28) break;
+    if (low(p.kind) || p.kind === 'log') continue;
+    const crown = st.radius * p.scale * 0.8;
+    const tall = st.maxY * p.scale;
+    shade.set([p.x, p.z, 0.35 + crown * 0.08, crown], shadeN * 4);
     shadeOff.set([-Math.sin(sunAz) * tall * 0.25, -Math.cos(sunAz) * tall * 0.25], shadeN * 2);
     shadeN++;
   }
@@ -473,7 +534,7 @@ function frame(now: number) {
   const cy = Math.cos(view.yaw);
   const syw = Math.sin(view.yaw);
   const light: [number, number, number] = [(sx * cy - sz * syw) / sl, sy / sl, -(sx * syw + sz * cy) / sl];
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos }, draws);
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
@@ -488,6 +549,7 @@ function frame(now: number) {
     bias: Math.round(bias * 100) / 100,
     waiting: want.length,
     quality: Math.round(quality * 100) / 100,
+    place: Object.fromEntries(Object.entries(wood.place(posX, posZ)).map(([k, v]) => [k, Math.round(v * 100) / 100])),
   };
   requestAnimationFrame(frame);
 }

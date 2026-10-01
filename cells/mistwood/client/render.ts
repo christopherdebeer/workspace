@@ -28,11 +28,25 @@ float vnoise(vec2 p) {
 float fbm(vec2 p) { float s = 0., a = .5; for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.07 + 13.7; a *= .5; } return s / .9375; }
 uniform vec3 uFogLow, uFogHigh;
 uniform float uT;
-// banks of mist drifting through the wood (world space), heavier near the ground
+// the lie of the land (world.ts groundH): amplitude, scale, water level, small swells
+uniform vec4 uRelief;
+// the height of the ground under what is drawn (its foot)
+uniform float uBase;
+float groundH(vec2 p) {
+  float k = uRelief.y;
+  return uRelief.x * ((vnoise(p * k + 71.3) - .5) * 1.6 + (vnoise(p * k * 2.7 + 5.9) - .5) * .4) + uRelief.w * (vnoise(p / 22. + 33.3) - .5) * 2.;
+}
+// 0 dry … 1 a wet hollow (world.ts place)
+float wetAt(float h) { return 1. - smoothstep(uRelief.z, uRelief.z + uRelief.x * .8, h); }
+// banks of mist drifting through the wood (world space), heavier near the ground; and mist
+// lying in the hollows, a few metres deep, still
 float mist(vec3 p) {
   vec2 q = vec2(p.x * .05 + p.z * .021 + uT * .014, p.y * .1 - uT * .0025 + p.z * .008);
   float n = fbm(q) * .75 + vnoise(q * 3.7 + vec2(uT * .02, 0.)) * .25;
-  return smoothstep(.4, .82, n) * .62 * exp(-max(p.y, 0.) * .045);
+  float banks = smoothstep(.4, .82, n) * .62 * exp(-max(p.y, 0.) * .045);
+  float gh = groundH(p.xz);
+  float lying = smoothstep(.2, 1., wetAt(gh)) * exp(-max(p.y - gh, 0.) * 1.1) * (.4 + .6 * vnoise(p.xz * .07 + vec2(uT * .006, 0.))) * .3;
+  return 1. - (1. - banks) * (1. - lying);
 }
 uniform vec4 uCam; // x, z, eye, yaw
 uniform vec2 uSun; // the key light's azimuth, elevation (sun by day, moon by night)
@@ -61,6 +75,7 @@ uniform vec2 uRes;
 uniform float uF, uHz, uDensity;
 uniform vec3 uPathK; // the two path fields' scales, the path's half-width
 uniform vec3 uGround, uStrawDark, uStraw, uEarth;
+uniform float uOpen; // how open the wood is (world.ts openness)
 // trees near enough to shade the ground: x, z, contact radius, crown radius (crown centre offset away from the light)
 uniform vec4 uShade[40];
 uniform vec2 uShadeOff[40];
@@ -91,21 +106,82 @@ void main() {
   vec3 d = vec3(dc.x * cy + dc.z * sy, dc.y, -dc.x * sy + dc.z * cy);
   float az = atan(d.x, d.z);
   vec3 col;
-  if (d.y >= 0.) {
+  vec3 eye = vec3(uCam.x, uCam.z, uCam.y);
+  // the ground rises and falls: march to it, each step no longer than the slope allows
+  // (the ground can climb at most L for each metre across)
+  const float L = .35;
+  float tHit = -1.;
+  float top = uRelief.x + uRelief.w + .2;
+  if (d.y < L) {
+    float t = .05;
+    bool gone = false;
+    for (int i = 0; i < 56; i++) {
+      vec3 q = eye + d * t;
+      if (t > 95. || (q.y > top && d.y >= 0.)) { gone = true; break; }
+      float gap = q.y - groundH(q.xz);
+      if (gap < .004 + .002 * t) { tHit = t; break; }
+      t += max(gap / (L - d.y), .02 + .006 * t);
+    }
+    // (out of steps on a grazing ray: the ground is about there, and deep in the fog)
+    if (tHit < 0. && !gone && d.y < 0.) tHit = t;
+  }
+  // still water in the deepest hollows: a level surface
+  float tWater = -1.;
+  if (d.y < 0. && eye.y > uRelief.z) {
+    float tw = (uRelief.z - eye.y) / d.y;
+    vec3 pw = eye + d * tw;
+    if ((tHit < 0. || tw < tHit) && tw < 95. && groundH(pw.xz) < uRelief.z) tWater = tw;
+  }
+  if (tHit < 0. && tWater < 0.) {
     // only fog: lighter higher, brighter where the light is behind it
     float el = d.y;
     col = fogDir(d);
     // the banks' slow unevenness, fading out at the horizon (where the ground's fog takes over)
     col *= 1. + (.06 * fbm(vec2(az * 4. + uT * .006, el * 7.)) - .03) * smoothstep(0., .12, el);
+  } else if (tWater > 0.) {
+    float t = tWater;
+    vec3 p = eye + d * t;
+    float depth = uRelief.z - groundH(p.xz);
+    // still, dark water: the fog above in it, a faint stir across it, the shallows going to mud
+    vec2 st = vec2(vnoise(p.xz * 2.3 + vec2(uT * .25, 0.)), vnoise(p.xz * 2.3 + vec2(17., -uT * .2))) - .5;
+    vec3 n = normalize(vec3(st.x * .05, 1., st.y * .05));
+    vec3 r = reflect(d, n);
+    float fres = .35 + .65 * pow(1. - abs(d.y), 4.);
+    vec3 sky = fogDir(r);
+    vec3 deep = vec3(.03, .04, .035) * uIllum;
+    vec3 w = mix(deep, sky * .85, fres);
+    vec3 mud = uEarth * .55 * uIllum;
+    w = mix(mud, w, smoothstep(0., .12, depth));
+    float fogD = 1. - exp(-t * uDensity * (1. + 1.2 * smoothstep(2., 14., t)));
+    float m = mist(vec3(p.x, p.y + .3, p.z));
+    col = mix(w, fogDir(d), 1. - (1. - fogD) * (1. - m));
   } else {
-    float t = uCam.z / -d.y;
-    vec3 p = vec3(uCam.x, 0., uCam.y) + d * t;
+    float t = tHit;
+    vec3 p = eye + d * t;
+    float gh = p.y;
+    float hollow = wetAt(gh);
+    float open = smoothstep(.55, .75, vnoise(p.xz / 110. + 211.1) + uOpen);
     // dry grass: straw and shadow, a trodden path darker
     float n = fbm(p.xz * .5);
     float grain = vnoise(p.xz * 6.) * .5 + vnoise(p.xz * 17.) * .5;
     vec3 g = mix(uStrawDark, uGround, smoothstep(.2, .75, n));
     g = mix(g, uStraw * .8, smoothstep(.6, .95, vnoise(p.xz * 2.2)) * .35);
     g *= .8 + .35 * grain;
+    // under the trees, last year's leaves: brown, speckled leaf by leaf, drifted
+    float shelter = (1. - open) * (1. - hollow);
+    float lv = vnoise(p.xz * 11.) * .6 + vnoise(p.xz * 29.) * .4;
+    vec3 litter = mix(vec3(.2, .12, .06), vec3(.4, .25, .12), smoothstep(.45, .75, lv)) * (.75 + .4 * vnoise(p.xz * 3.1));
+    g = mix(g, litter, shelter * (.45 + .4 * smoothstep(.35, .7, vnoise(p.xz * .5))));
+    // in the hollows the ground is wet: dark, mossy, holding the fog's light
+    vec3 moss = mix(vec3(.07, .1, .045), vec3(.15, .19, .07), vnoise(p.xz * 5.));
+    float damp = smoothstep(.3, .85, hollow);
+    g = mix(g, moss, damp * .8);
+    g = mix(g, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .4, damp * smoothstep(.55, .8, vnoise(p.xz * .7)) * .3);
+    // and the slopes face the light or away from it (softly: the light is diffuse in fog)
+    float e = .4;
+    vec3 gn = normalize(vec3(groundH(p.xz - vec2(e, 0.)) - groundH(p.xz + vec2(e, 0.)), 2. * e, groundH(p.xz - vec2(0., e)) - groundH(p.xz + vec2(0., e))));
+    vec3 ld = vec3(sin(uSun.x) * cos(uSun.y), sin(uSun.y), cos(uSun.x) * cos(uSun.y));
+    g *= (.75 + .35 * max(dot(gn, ld), 0.)) / (.75 + .35 * max(ld.y, 0.));
     // the paths: bare, trodden earth, damp in the middle, crumbling at the edges into the grass,
     // a little grass coming back here and there down the middle
     float pd = pathDist(p.xz) + (vnoise(p.xz * 1.1) - .5) * .35;
@@ -131,7 +207,7 @@ void main() {
     // broken up, as light through a crown and over tussocks is
     g *= 1. - min(ao, .6) * (.55 + .7 * vnoise(p.xz * 1.9));
     float fogD = 1. - exp(-t * uDensity * (1. + 1.2 * smoothstep(2., 14., t)));
-    float m = mist(vec3(p.x, .3, p.z));
+    float m = mist(vec3(p.x, p.y + .3, p.z));
     col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * (1. - m));
   }
   o = vec4(col, 1.);
@@ -147,6 +223,7 @@ uniform float uF, uHz;
 uniform vec4 uCam;
 uniform vec2 uAnchor; // world x, z
 uniform vec4 uRect;   // left, bottom, width, height (m, already scaled; mirrored if flipped)
+uniform float uBase;  // the ground's height at its foot
 out vec2 vUV;
 out vec3 vWorld;
 out float vDist;
@@ -159,7 +236,7 @@ void main() {
   vec2 toEye = vec2(uCam.x, uCam.y) - uAnchor;
   vec2 right = normalize(vec2(-toEye.y, toEye.x) + vec2(1e-5, 0.));
   float along = uRect.x + c.x * uRect.z;
-  vec3 w = vec3(uAnchor.x + right.x * along, uRect.y + c.y * uRect.w, uAnchor.y + right.y * along);
+  vec3 w = vec3(uAnchor.x + right.x * along, uBase + uRect.y + c.y * uRect.w, uAnchor.y + right.y * along);
   vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
   float cs = cos(uCam.w), sn = sin(uCam.w);
   float cx = rel.x * cs - rel.z * sn;
@@ -204,7 +281,7 @@ void main() {
     // birch bark: dark lenticels across the white, black patches, darker towards the foot
     float band = vnoise(vec2(vWorld.x * 4., vWorld.y * 40.));
     float patchy = vnoise(vec2(vWorld.x * 2. + uPhase, vWorld.y * 7.));
-    birch *= 1. - .75 * smoothstep(.72, .8, band) - .7 * smoothstep(.7, .78, patchy) - .5 * exp(-vWorld.y * 1.2);
+    birch *= 1. - .75 * smoothstep(.72, .8, band) - .7 * smoothstep(.7, .78, patchy) - .5 * exp(-(vWorld.y - uBase) * 1.2);
   }
   vec3 base = uKind > .5 ? mix(uStrawDark, uStraw, tone) : mix(uBark, birch, tone);
   base = mix(base, uLeaf, leaf);
@@ -212,7 +289,7 @@ void main() {
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
   // fog: by distance, and much thicker near the ground; banks of mist drift through
   // (the ground fog lies a few metres off: what is at your feet is clear)
-  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y - uBase, 0.) * .35) * smoothstep(2., 14., vDist)));
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
@@ -234,7 +311,7 @@ uniform vec2 uRes;
 uniform float uF, uHz, uT, uWind;
 uniform vec4 uCam;
 uniform vec2 uAnchor;
-uniform float uRot, uScale, uPhase, uRadius, uHeight;
+uniform float uRot, uScale, uPhase, uRadius, uHeight, uBase;
 out vec2 vP;
 flat out vec2 vA;
 flat out vec2 vB;
@@ -254,7 +331,7 @@ vec3 place(vec3 p) {
   vec3 wv = vec3(sin(uT * 1.1 + uPhase + p.y * .3) * .6 + sin(uT * 2.7 + uPhase * 1.7 + p.x * 2.) * .4, 0., cos(uT * .9 + uPhase * 1.3 + p.z * 2.) * .5);
   float flutter = sin(uT * 6.3 + dot(p, vec3(9.1, 7.3, 8.7)));
   q += (wv * .07 * (.4 + .6 * gust) + vec3(flutter, flutter * .4, -flutter) * .012) * uWind * reach * reach * uScale;
-  return q + vec3(uAnchor.x, 0., uAnchor.y);
+  return q + vec3(uAnchor.x, uBase, uAnchor.y);
 }
 vec3 project(vec3 w, out float hd) {
   vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
@@ -366,7 +443,7 @@ void main() {
   float near = smoothstep(5., 24., w) * (1. - vTL.y);
   float wm = mix(vWm.x, vWm.y, h);
   float u = (asin(a) + uViewAz) * wm * .5;
-  float v = vWorld.y;
+  float v = vWorld.y - uBase;
   float wrap = sqrt(max(0., 1. - a * a));
   vec3 birch = uBirch;
   vec3 bark = uBark;
@@ -432,7 +509,7 @@ void main() {
   vec3 base = mix(bark * lit, birch, vTL.x);
   base = mix(base, uLeaf, vTL.y);
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
-  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y - uBase, 0.) * .35) * smoothstep(2., 14., vDist)));
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
@@ -501,7 +578,7 @@ void main() {
   float rump = sdEll(q, vec2(-.54, 1.), vec2(.075, .11));
   float white = (1. - smoothstep(-fw, fw, rump)) * (.3 + .7 * run);
   vec3 base = mix(uBark * 1.3, vec3(.62, .6, .55), white);
-  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y - uBase, 0.) * .35) * smoothstep(2., 14., vDist)));
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
@@ -552,7 +629,9 @@ export interface Look {
   /** the two path fields' scales and the path's half-width */
   path: [number, number, number];
   atmos: Atmos;
-  /** per-draw bark colour is on the draw; this is the default */
+  /** the lie of the land (world.ts relief) and how open the wood is */
+  relief: [number, number, number, number];
+  openness: number;
 }
 
 export interface CardDraw {
@@ -560,6 +639,8 @@ export interface CardDraw {
   card: Card;
   x: number;
   z: number;
+  /** the ground's height at its foot (m) */
+  base: number;
   rect: [number, number, number, number];
   flip: boolean;
   phase: number;
@@ -575,6 +656,8 @@ export interface LiveDraw {
   wide: number;
   x: number;
   z: number;
+  /** the ground's height at its foot (m) */
+  base: number;
   rot: number;
   scale: number;
   phase: number;
@@ -592,6 +675,8 @@ export interface DeerDraw {
   pose: [number, number, number, number];
   x: number;
   z: number;
+  /** the ground's height at its foot (m) */
+  base: number;
   size: number;
   /** ±1 for which way it faces on screen, over how side-on it is seen */
   face: number;
@@ -708,6 +793,8 @@ export class Renderer {
     gl.uniform3fv(this.loc(p, 'uGlow'), look.atmos.glow);
     gl.uniform3fv(this.loc(p, 'uIllum'), look.atmos.illum);
     gl.uniform1f(this.loc(p, 'uDensity'), look.density);
+    gl.uniform4fv(this.loc(p, 'uRelief'), look.relief);
+    gl.uniform1f(this.loc(p, 'uOpen'), look.openness);
   }
 
   draw(v: View, look: Look, cards: Draw[]) {
@@ -780,6 +867,7 @@ export class Renderer {
         attr('aP1', 3, 3);
         attr('aInfo', 4, 6);
         gl.uniform2f(this.loc(L, 'uAnchor'), c.x, c.z);
+        gl.uniform1f(this.loc(L, 'uBase'), c.base);
         gl.uniform1f(this.loc(L, 'uRot'), c.rot);
         gl.uniform1f(this.loc(L, 'uScale'), c.scale);
         gl.uniform1f(this.loc(L, 'uPhase'), c.phase);
@@ -811,6 +899,7 @@ export class Renderer {
           this.common(D, v, look);
         }
         gl.uniform2f(this.loc(D, 'uAnchor'), c.x, c.z);
+        gl.uniform1f(this.loc(D, 'uBase'), c.base);
         gl.uniform4f(this.loc(D, 'uRect'), -1.3 * c.size, 0, 2.6 * c.size, 2.1 * c.size);
         gl.uniform4fv(this.loc(D, 'uPose'), c.pose);
         gl.uniform1f(this.loc(D, 'uSize'), c.size);
@@ -823,6 +912,7 @@ export class Renderer {
       use(p);
       gl.bindTexture(gl.TEXTURE_2D, c.card.tex);
       gl.uniform2f(this.loc(p, 'uAnchor'), c.x, c.z);
+      gl.uniform1f(this.loc(p, 'uBase'), c.base);
       gl.uniform4f(this.loc(p, 'uRect'), c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
       gl.uniform1f(this.loc(p, 'uPhase'), c.phase);
       gl.uniform1f(this.loc(p, 'uKind'), c.patch ? 1 : 0);

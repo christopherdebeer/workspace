@@ -89,6 +89,32 @@ realism is carried by the fog and the light rather than by geometry.
   shader from shapes (body, neck, head in profile or turned, ears, jointed
   legs), fogged like everything else. `?deer=1` brings them at once.
 
+## Places (`client/world.ts` `place`)
+
+The wood is not the same everywhere. The ground rises and falls: gentle relief,
+computed identically in JS (`groundH`) and in the shaders, so trees, deer and
+your eye stand on it. The world shader marches each ray to the ground, never
+stepping further than the slope allows. What the relief makes of each place:
+
+- **Wet hollows.** The low ground is dark and mossy, and holds the fog's light.
+  Mist lies in it, a few metres deep. Rushes grow there, standing out into the
+  shallows. In some woods the deepest hollows hold still water, which reflects
+  the fog and turns to mud at the edges. You walk to the water's edge, not
+  into it.
+- **Glades.** Open ground, grass thick, few tall trees. Birch and saplings come
+  in from the edges.
+- **Shelter.** Under the canopy, the grass thins to last year's leaf litter.
+- **Windthrow.** Fallen trees (`growLog`) lie mossy on the ground: either the
+  root plate torn up on edge, or the jagged break, with snapped branch stubs.
+  Birch, saplings and scrub fill the gap.
+- **Veterans.** Here and there an old tree, nearly twice the size of the rest,
+  with a clearing about it. There is at most one to each 70 m square.
+
+Each species keeps to the places that suit it (`AFFINITY`). Tall trees keep to
+dry shelter. Leaners lean towards the wet. Birch takes the open and disturbed
+ground. The fog is a little thicker in the hollows. Slopes facing the light
+are a little brighter.
+
 ## One seed, one wood
 
 The seed is in the address (`?seed=moss-ford-7`) and at the foot of the
@@ -121,5 +147,5 @@ call now and then.
 
 ## Debug
 
-`?seed=` · `?near=<m>` (stand by the nearest tree, facing it) · `?only=birch` (one archetype) · `?deer=1` · `?deerAt=<m>` · `?walk=1` · `?look=<radians>` · `?fixed` ·
+`?seed=` · `?find=pond|log|veteran|glade` (stand by the nearest, facing it; `?off=<m>` how far) · `window.__wood()` · `?near=<m>` (stand by the nearest tree, facing it) · `?only=birch` (one archetype) · `?deer=1` · `?deerAt=<m>` · `?walk=1` · `?look=<radians>` · `?fixed` ·
 `window.__mistwood` (cards drawn and baked, MB, the resolution bias).
