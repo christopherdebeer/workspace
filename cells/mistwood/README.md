@@ -216,7 +216,7 @@ compile, and an out-of-range or unknown value is refused with a warning.
   controls, `window.__mistwood` shows what the wood reports of itself: cards,
   MB, quality, the place you stand in, and each herd's mode, alarm and
   distance.
-- **Guards.** `node cells/mistwood/check-flags.mjs` (run before every deploy)
+- **Guards.** `node cells/mistwood/devtools/check-flags.mjs` (run before every deploy)
   fails on a declared flag that nothing reads, and on any other file reading
   the address directly. At run time, parameters that are not flags are
   reported in the console and at the top of the overlay.

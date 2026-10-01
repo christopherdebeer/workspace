@@ -7,7 +7,7 @@
  * outside its range or values is refused (with a warning) rather than half-used.
  *
  * The tuning overlay (`?tune`, tune.ts) is built from this list, so a new flag is in it as soon as
- * it is declared. `node cells/mistwood/check-flags.mjs` fails on a declared flag that nothing
+ * it is declared. `node cells/mistwood/devtools/check-flags.mjs` fails on a declared flag that nothing
  * reads, and on any other code reading the address directly; at run time, a parameter in the
  * address that is not declared is reported (console and overlay).
  */

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Guards the flags (client/flags.ts): run before a deploy — `node cells/mistwood/check-flags.mjs`.
+ * Guards the flags (client/flags.ts): run before a deploy — `node cells/mistwood/devtools/check-flags.mjs`.
  *
  * Fails when
  *   - a declared flag is read nowhere (an orphan: remove it, or use it);
@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const dir = join(dirname(fileURLToPath(import.meta.url)), 'client');
+const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'client');
 const files = readdirSync(dir).filter((f) => f.endsWith('.ts'));
 const src = Object.fromEntries(files.map((f) => [f, readFileSync(join(dir, f), 'utf8')]));
 
