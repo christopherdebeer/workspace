@@ -50,16 +50,23 @@ uniform float uBlur, uFocus;
 float coc(float dist) { return uBlur * max(0., 1. / max(dist, .05) - 1. / uFocus); }
 // 0 dry … 1 a wet hollow (world.ts place)
 float wetAt(float h) { return 1. - smoothstep(uRelief.z, uRelief.z + uRelief.x * .8, h); }
-// banks of mist drifting through the wood (world space), heavier near the ground; and mist
-// lying in the hollows, a few metres deep, still
-float mist(vec3 p) {
-  vec2 q = vec2(p.x * .05 + p.z * .021 + uT * .014, p.y * .1 - uT * .0025 + p.z * .008);
-  float n = fbm(q) * .75 + vnoise(q * 3.7 + vec2(uT * .02, 0.)) * .25;
-  float banks = smoothstep(.4, .82, n) * .62 * exp(-max(p.y, 0.) * .045);
-  float gh = groundH(p.xz);
-  float lying = smoothstep(.2, 1., wetAt(gh)) * exp(-max(p.y - gh, 0.) * 1.1) * (.4 + .6 * vnoise(p.xz * .07 + vec2(uT * .006, 0.))) * .3;
-  return 1. - (1. - banks) * (1. - lying);
+// the mist is a volume you walk through: its density (per metre) at p, over ground at gh —
+// banks drifting through the wood, and mist lying in the hollows a few metres deep. What is
+// seen through it is what lies along the way there (world.ts mistDensity is the same)
+float mistDensity(vec3 p, float gh) {
+  vec2 q = vec2(p.x * .05 + p.z * .021 + uT * .014, p.z * .05 - p.x * .017 + uT * .004);
+  float n = vnoise(q) * .65 + vnoise(q * 2.7 + 5.) * .35;
+  float above = max(p.y - gh, 0.);
+  float banks = smoothstep(.45, .8, n) * exp(-above * .08);
+  float wet = wetAt(gh);
+  float lying = wet > .01 ? smoothstep(.2, 1., wet) * exp(-above * 1.1) * (.4 + .6 * vnoise(p.xz * .07 + vec2(uT * .006, 0.))) : 0.;
+  return banks * .05 + lying * .12;
 }
+// for what is drawn on its own (a tree, a card, a deer): the mist along the way to its foot and
+// to its top, summed on the CPU for each (world.ts mistAlong), between them by height
+uniform vec2 uMistT;
+uniform float uTopH;
+float mistTo(vec3 w) { return 1. - exp(-mix(uMistT.x, uMistT.y, clamp((w.y - uBase) / max(uTopH, .1), 0., 1.))); }
 uniform vec4 uCam; // x, z, eye, yaw
 uniform vec2 uSun; // the key light's azimuth, elevation (sun by day, moon by night)
 uniform vec3 uGlow; // its glow in the fog
@@ -141,6 +148,8 @@ void main() {
   // lost in (what it lets through, and what it gives)
   float sT = 1.;
   vec3 sCol = vec3(0.);
+  // the mist along the way (optical depth), summed as the march goes
+  float tau = 0.;
   if (d.y < L) {
     float t = .05;
     bool gone = false;
@@ -151,6 +160,7 @@ void main() {
       float gap = q.y - gh;
       if (gap < .004 + .002 * t) { tHit = t; break; }
       float step = max(gap / (L - d.y), .02 + .006 * t);
+      step = min(step, 6. + .1 * t);
       // (the near scrub is cards; this takes over beyond them)
       float fade = smoothstep(6., 16., t);
       if (fade > 0. && gap < 1.5) {
@@ -162,12 +172,13 @@ void main() {
           // dark and warm in the mass, bleached tawny at the tops, some stems paler
           float tip = smoothstep(.35, 1., gap / max(sh, .01));
           vec3 c = mix(vec3(.07, .05, .03), vec3(.46, .32, .16) * (.7 + .5 * vnoise(q.xz * 3.1)), tip * tip * .85) * uIllum;
-          float f = 1. - (1. - fogAt(t, gap, uDensity)) * (1. - mist(q));
+          float f = 1. - (1. - fogAt(t, gap, uDensity)) * exp(-tau);
           sCol += sT * a * mix(c, fogDir(d), f);
           sT *= 1. - a;
           if (sT < .02) { tHit = t; break; }
         }
       }
+      tau += mistDensity(q + d * step * .5, gh) * step;
       t += step;
     }
     // (out of steps on a grazing ray: the ground is about there, and deep in the fog)
@@ -181,11 +192,17 @@ void main() {
     if ((tHit < 0. || tw < tHit) && tw < 95. && groundH(pw.xz) < uRelief.z) tWater = tw;
   }
   if (tHit < 0. && tWater < 0.) {
-    // only fog: lighter higher, brighter where the light is behind it
-    float el = d.y;
+    // only fog: lighter higher, brighter where the light is behind it; and the mist you look
+    // up through (looking up steeply, the march did not run: a few steps of it here)
     col = fogDir(d);
-    // the banks' slow unevenness, fading out at the horizon (where the ground's fog takes over)
-    col *= 1. + (.06 * fbm(vec2(az * 4. + uT * .006, el * 7.)) - .03) * smoothstep(0., .12, el);
+    if (d.y >= L) {
+      float gh = groundH(eye.xz);
+      for (int i = 0; i < 6; i++) {
+        float t = 3. + float(i) * 8.;
+        tau += mistDensity(eye + d * t, gh) * 8.;
+      }
+    }
+    col = mix(col, col * 1.04 + .01, 1. - exp(-tau));
   } else if (tWater > 0.) {
     float t = tWater;
     vec3 p = eye + d * t;
@@ -201,8 +218,7 @@ void main() {
     vec3 mud = uEarth * .55 * uIllum;
     w = mix(mud, w, smoothstep(0., .12, depth));
     float fogD = fogAt(t, 0., uDensity);
-    float m = mist(vec3(p.x, p.y + .3, p.z));
-    col = mix(w, fogDir(d), 1. - (1. - fogD) * (1. - m));
+    col = mix(w, fogDir(d), 1. - (1. - fogD) * exp(-tau));
   } else {
     float t = tHit;
     vec3 p = eye + d * t;
@@ -255,8 +271,7 @@ void main() {
     // broken up, as light through a crown and over tussocks is
     g *= 1. - min(ao, .6) * (.55 + .7 * vnoise(p.xz * 1.9));
     float fogD = fogAt(t, 0., uDensity);
-    float m = mist(vec3(p.x, p.y + .3, p.z));
-    col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * (1. - m));
+    col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * exp(-tau));
   }
   col = sCol + sT * col;
   o = vec4(col, 1.);
@@ -341,7 +356,7 @@ void main() {
   // fog: by distance, and much thicker near the ground; banks of mist drift through
   // (the ground fog lies a few metres off: what is at your feet is clear)
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
-  float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
+  float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
@@ -584,7 +599,7 @@ void main() {
   base = mix(base, uLeaf, vTL.y);
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
-  float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
+  float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
@@ -658,7 +673,7 @@ void main() {
   float white = (1. - smoothstep(-fw, fw, rump)) * (.3 + .7 * run);
   vec3 base = mix(uBark * 1.3, vec3(.62, .6, .55), white);
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
-  float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
+  float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
@@ -723,6 +738,9 @@ export interface CardDraw {
   z: number;
   /** the ground's height at its foot (m) */
   base: number;
+  /** the mist along the way to its foot and to its top (optical depth), and how tall it is (m) */
+  mist: [number, number];
+  top: number;
   rect: [number, number, number, number];
   flip: boolean;
   phase: number;
@@ -740,6 +758,9 @@ export interface LiveDraw {
   z: number;
   /** the ground's height at its foot (m) */
   base: number;
+  /** the mist along the way to its foot and to its top (optical depth), and how tall it is (m) */
+  mist: [number, number];
+  top: number;
   rot: number;
   scale: number;
   phase: number;
@@ -761,6 +782,9 @@ export interface DeerDraw {
   z: number;
   /** the ground's height at its foot (m) */
   base: number;
+  /** the mist along the way to its foot and to its top (optical depth), and how tall it is (m) */
+  mist: [number, number];
+  top: number;
   size: number;
   /** ±1 for which way it faces on screen, over how side-on it is seen */
   face: number;
@@ -955,6 +979,8 @@ export class Renderer {
         attr('aInfo', 4, 6);
         gl.uniform2f(this.loc(L, 'uAnchor'), c.x, c.z);
         gl.uniform1f(this.loc(L, 'uBase'), c.base);
+        gl.uniform2fv(this.loc(L, 'uMistT'), c.mist);
+        gl.uniform1f(this.loc(L, 'uTopH'), c.top);
         gl.uniform1f(this.loc(L, 'uRot'), c.rot);
         gl.uniform1f(this.loc(L, 'uScale'), c.scale);
         gl.uniform1f(this.loc(L, 'uPhase'), c.phase);
@@ -987,6 +1013,8 @@ export class Renderer {
         }
         gl.uniform2f(this.loc(D, 'uAnchor'), c.x, c.z);
         gl.uniform1f(this.loc(D, 'uBase'), c.base);
+        gl.uniform2fv(this.loc(D, 'uMistT'), c.mist);
+        gl.uniform1f(this.loc(D, 'uTopH'), c.top);
         gl.uniform4f(this.loc(D, 'uRect'), -1.3 * c.size, 0, 2.6 * c.size, 2.1 * c.size);
         gl.uniform4fv(this.loc(D, 'uPose'), c.pose);
         gl.uniform1f(this.loc(D, 'uBed'), c.bed);
@@ -1001,6 +1029,8 @@ export class Renderer {
       gl.bindTexture(gl.TEXTURE_2D, c.card.tex);
       gl.uniform2f(this.loc(p, 'uAnchor'), c.x, c.z);
       gl.uniform1f(this.loc(p, 'uBase'), c.base);
+      gl.uniform2fv(this.loc(p, 'uMistT'), c.mist);
+      gl.uniform1f(this.loc(p, 'uTopH'), c.top);
       gl.uniform4f(this.loc(p, 'uRect'), c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
       gl.uniform1f(this.loc(p, 'uPhase'), c.phase);
       gl.uniform1f(this.loc(p, 'uKind'), c.patch ? 1 : 0);

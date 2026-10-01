@@ -463,7 +463,7 @@ function frame(now: number) {
         const g = wood.genomeOf(p.kind);
         liveAlpha = 1 - smoothstep(LIVE - 2.5, LIVE, hd);
         cardAlpha = smoothstep(LIVE - 5, LIVE - 2.5, hd);
-        draws.push({ live: true, buffer: baker.buffer(st), count: n, wide: Math.min(n, countWider(st, 3 * px)), x: p.x, z: p.z, base, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd - 1e-3 });
+        draws.push({ live: true, buffer: baker.buffer(st), count: n, wide: Math.min(n, countWider(st, 3 * px)), x: p.x, z: p.z, base, mist: [0, 0], top: st.maxY * p.scale, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd - 1e-3 });
       }
     }
     if (cardAlpha <= 0.001) continue;
@@ -506,6 +506,8 @@ function frame(now: number) {
       phase: p.phase,
       patch: p.kind === 'patch' || p.kind === 'scrub',
       base,
+      mist: [0, 0],
+      top: low(p.kind) ? 0 : (card.bottom + card.height) * p.scale,
       bark: p.kind === 'rush' ? RUSH : wood.genomeOf(p.kind)?.bark ?? DARK,
       alpha: cardAlpha,
       d: hd,
@@ -578,7 +580,13 @@ function frame(now: number) {
     const face = (rel >= 0 ? 1 : -1) / Math.max(0.45, Math.abs(rel));
     // the legs: a walk is a small stride, a run the full bound
     const run = Math.min(1, d.speed / 5 + Math.min(d.speed, 0.6) * 0.25);
-    draws.push({ live: false, pose: [d.headUp, d.headTurn, d.gait, run], bed: d.bed, x: d.x, z: d.z, base: wood.groundH(d.x, d.z), size: d.size, face, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
+    draws.push({ live: false, pose: [d.headUp, d.headTurn, d.gait, run], bed: d.bed, x: d.x, z: d.z, base: wood.groundH(d.x, d.z), mist: [0, 0], top: 2.1 * d.size, size: d.size, face, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
+  }
+  // the mist along the way to each (to its foot, and to its top): it lies between you and it, so
+  // walking, the banks pass in front of things and you walk into and through them
+  for (const dr of draws) {
+    const foot = wood.mistAlong(view.x, view.eye, view.z, dr.x, dr.base + 0.3, dr.z, t, dr.top > 0.5 ? 6 : 3);
+    dr.mist = [foot, dr.top > 0.5 ? wood.mistAlong(view.x, view.eye, view.z, dr.x, dr.base + dr.top, dr.z, t, 6) : foot];
   }
   draws.sort((a, b) => b.d - a.d);
   // the nearest trees shade the ground (contact at the foot, a soft pool under the crown,

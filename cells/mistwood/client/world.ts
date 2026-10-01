@@ -216,6 +216,32 @@ export class Wood {
     return { h, wet, open, disturb, water: Math.max(0, wl - h) };
   }
 
+  /** The mist's density (per metre) at (x, y, z) at time t: drifting banks, and mist lying in the hollows. (render.ts mistDensity is the same.) */
+  mistDensity(x: number, y: number, z: number, t: number): number {
+    const s = this.seed;
+    const gh = this.groundH(x, z);
+    const qx = x * 0.05 + z * 0.021 + t * 0.014;
+    const qz = z * 0.05 - x * 0.017 + t * 0.004;
+    const n = vnoise(qx, qz, s) * 0.65 + vnoise(qx * 2.7 + 5, qz * 2.7 + 5, s) * 0.35;
+    const above = Math.max(y - gh, 0);
+    const banks = smooth01(0.45, 0.8, n) * Math.exp(-above * 0.08);
+    const [a, , wl] = this.relief;
+    const wet = 1 - smooth01(wl, wl + a * 0.8, gh);
+    const lying = wet > 0.01 ? smooth01(0.2, 1, wet) * Math.exp(-above * 1.1) * (0.4 + 0.6 * vnoise(x * 0.07 + t * 0.006, z * 0.07, s)) : 0;
+    return banks * 0.05 + lying * 0.12;
+  }
+
+  /** The mist along the way from (ex, ey, ez) to (x, y, z): its optical depth (a few steps of it). */
+  mistAlong(ex: number, ey: number, ez: number, x: number, y: number, z: number, t: number, steps = 6): number {
+    const len = Math.hypot(x - ex, y - ey, z - ez);
+    let tau = 0;
+    for (let i = 0; i < steps; i++) {
+      const f = (i + 0.5) / steps;
+      tau += this.mistDensity(ex + (x - ex) * f, ey + (y - ey) * f, ez + (z - ez) * f, t);
+    }
+    return (tau * len) / steps;
+  }
+
   /** Fog density here: thick in the hollows, thinner on the rises — a property of the place, the same each time you come by. */
   densityAt(x: number, z: number): number {
     const n = vnoise(x / 70, z / 70, hash(this.seed, 5)) * 0.7 + vnoise(x / 23 + 11.3, z / 23 + 4.1, hash(this.seed, 6)) * 0.3;

@@ -6,7 +6,9 @@
  * Twigs thinner than a pixel are drawn as faint lines of the right weight
  * (coverage = width in pixels) rather than dropped or fattened — so a crown of
  * ten thousand three-millimetre twigs becomes the grey haze it is in fog, and
- * sharpens into twigs as you come close. Overlapping twigs add up.
+ * sharpens into twigs as you come close. Overlapping twigs add up (premultiplied
+ * "over"), and tone is their coverage-weighted mean, so a card keeps its light
+ * at every resolution it is baked at.
  *
  * Texture: R leaf (dry beech leaves), G tone (0 dark bark … 1 birch white /
  * straw lightness), B flex (how freely the wind moves it: twigs 1, trunk 0),
@@ -162,9 +164,11 @@ export class Baker {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
-    // tone, leaf and flex: the strongest wins; coverage adds up (overlapping twigs darken)
-    gl.blendEquationSeparate(gl.MAX, gl.FUNC_ADD);
-    gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ONE, gl.ONE);
+    // premultiplied "over": coverage builds as 1 − Π(1 − c) (overlapping twigs darken, never
+    // overflow), and tone, leaf and flex are coverage-weighted means — the same at every resolution,
+    // so a card does not change its light when it is baked again sharper as you come near
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.prog);
     const left = lo - 2 / scale;
     const bottom = -2 / scale;
