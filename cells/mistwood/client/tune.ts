@@ -10,8 +10,15 @@ import { FLAGS, flag, onFlag, setFlag, setFlags, unknownFlags, type FlagName, ty
 
 const CSS = `
 #tune { position: fixed; top: max(8px, env(safe-area-inset-top)); right: 8px; width: min(320px, calc(100vw - 16px)); max-height: 70vh; overflow: auto;
-  font: 11px/1.35 ui-monospace, Menlo, monospace; color: #e9eee4; background: rgba(16, 24, 20, .82); border: 1px solid rgba(233, 238, 228, .18);
-  border-radius: 6px; z-index: 10; -webkit-user-select: text; user-select: text; touch-action: pan-y; }
+  font: 11px/1.35 ui-monospace, Menlo, monospace; color: #f2f5ee; text-shadow: 0 1px 2px rgba(0, 0, 0, .55);
+  /* glass: the wood shows through, softened just enough to read over */
+  background: rgba(20, 28, 24, .22); -webkit-backdrop-filter: blur(3px) saturate(1.2); backdrop-filter: blur(3px) saturate(1.2);
+  border: 1px solid rgba(233, 238, 228, .22); border-radius: 8px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+  z-index: 10; -webkit-user-select: text; user-select: text; touch-action: pan-y; }
+/* while a control is held: only its row stays, on clear glass, so you see what it does */
+#tune.adjusting { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; border-color: transparent; box-shadow: none; }
+#tune.adjusting > *:not(:has(.held)), #tune.adjusting details > *:not(.held) { opacity: 0; }
+#tune .row.held { background: rgba(20, 28, 24, .35); border-radius: 4px; }
 #tune summary { cursor: pointer; padding: 6px 8px; letter-spacing: 1px; }
 #tune h4 { margin: 8px 8px 2px; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; opacity: .6; font-weight: normal; }
 #tune .row { display: grid; grid-template-columns: 64px 1fr 52px; gap: 6px; align-items: center; padding: 2px 8px; }
@@ -21,7 +28,7 @@ const CSS = `
 #tune .row .x { all: unset; cursor: pointer; opacity: .5; padding: 0 2px; }
 #tune .row .x[hidden] { display: none; }
 #tune input[type=range] { width: 100%; }
-#tune select, #tune input[type=text] { width: 100%; font: inherit; background: #1f2b25; color: inherit; border: 1px solid #3b4a42; }
+#tune select, #tune input[type=text] { width: 100%; font: inherit; background: rgba(20, 28, 24, .45); color: inherit; border: 1px solid rgba(233, 238, 228, .25); border-radius: 3px; }
 #tune .doc { padding: 0 8px 4px 78px; opacity: .5; font-size: 10px; }
 #tune.nodocs .doc { display: none; }
 #tune .bar { display: flex; gap: 8px; padding: 0 8px 4px; }
@@ -141,6 +148,12 @@ export function mountTune(state: () => unknown) {
         control = i;
       }
       control.setAttribute('aria-label', `${name}: ${spec.doc}`);
+      if (control instanceof HTMLInputElement && control.type === 'range') {
+        // holding a slider: the rest of the panel steps aside
+        const hold = (on: boolean) => { row.classList.toggle('held', on); root.classList.toggle('adjusting', on); };
+        control.addEventListener('pointerdown', () => hold(true));
+        for (const ev of ['pointerup', 'pointercancel', 'change', 'blur'] as const) control.addEventListener(ev, () => hold(false));
+      }
       // clear: back to the default
       const clear = document.createElement('button');
       clear.className = 'x';

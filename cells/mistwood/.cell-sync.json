@@ -1,10 +1,10 @@
 {
   "cell": "c15r/mistwood",
   "cellId": "mistwood-1508ec6e",
-  "treeVersion": "tree:c465aaa4ac829f85fceb57e8fce3e65884f3312a4a7adbee9f1f12e02cbd4f15",
-  "syncedAt": "2026-10-01T17:47:42.607Z",
+  "treeVersion": "tree:077867c9130dc1f304f9ac16d940ecb57dbf88044920e36a422d5189127a4504",
+  "syncedAt": "2026-10-01T21:29:34.492Z",
   "files": {
-    "README.md": "sha256:45385d011934fd01dad23875b5a912d145415d577daa338ba1d3935ee4c11f5e",
+    "README.md": "sha256:4305a1ac20f9194daf634552447ebe7be8549a163fbc9015e4c8215739fa64f4",
     "client/audio.ts": "sha256:51df0a7f79ff5ae48d3b385b65dbd9bedf2d03f09813079f030fae092dfeedbf",
     "client/bake.ts": "sha256:d7aade44f6c1ed90bc8bfb1fdc97211b8486715651c07aceb70c72b5bf27e548",
     "client/deer.ts": "sha256:edcbcb6f3b171a22a9e40e6b8545cdd942a12e589d89751c485e4e78c2579f18",
@@ -14,7 +14,7 @@
     "client/rng.ts": "sha256:59fee1f6bb92795d9505951a5813c70878b8664a4fe73c31ff311eb29bb8db2b",
     "client/sky.ts": "sha256:3b1e814d973601f39c6fa0acafada9acb35aa6ee0966cfbb68d70e59f47a0aa1",
     "client/tree.ts": "sha256:fe90a5a16066d0bc094dc8b6863ed6a028c397c6a81da4c613f395028bad9cb0",
-    "client/tune.ts": "sha256:b029f3ba74334dca1e0ddcad878d34b9506c346c09c240dae3b6e6bec64aec4e",
+    "client/tune.ts": "sha256:77dbd68d431462dd5dabfe304f92ffc5f954c51bc69999b69a392c1a5ca1d4f3",
     "client/world.ts": "sha256:f2b82f79f7d2a0406b001dffecc5311166fa7e4605601786f173c73e807fa148",
     "index.ts": "sha256:945b77401f0882d905c7448f9ef4512e5cccd77e80ac30345f48410c288097ad",
     "static/index.html": "sha256:45040c0162e339d140e1e81024ca24c7505302680d19abc46a49df60e0f06fdd",
