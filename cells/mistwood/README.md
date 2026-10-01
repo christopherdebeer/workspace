@@ -46,6 +46,35 @@ realism is carried by the fog and the light rather than by geometry.
   where the sun is behind it; dry ground and a trodden path; then a film pass
   (a soft curve, the fog's lift in the blacks, vignette, grain).
 
+## Paths, light, species, deer
+
+- **Paths** wind and fork through the wood: they are where two smooth noise
+  fields cross their middle value — each field's zero line winds by itself, and
+  where the two families meet, paths join and fork. The ground shader and
+  `world.ts` compute exactly the same noise, so trees stand back from what is
+  drawn and the grass thins on it. Drawn as bare, trodden earth, damp in the
+  middle with a little of the fog's light on it, grass coming back here and
+  there. You start on one, facing along it.
+- **Sun and moon** (`client/sky.ts`): the fog's colour low and high, the light
+  on the wood, the brighter place in the sky and the direction that shades the
+  round wood all follow the key light — the sun by day (warmer when low), the
+  moon by night (by its phase). Your clock by default; the eye adapts a little
+  at night (it stays night). Everything fogged takes its fog from the direction
+  it is seen in, so a far tree fades into exactly the fog behind it.
+  `?hour=0–24` · `?moon=0–1` · `?fog=` (× the wood's) · `?warm=-1–1`.
+- **Species** are points in the space of growth parameters (`tree.ts`
+  `sampleGenome`): each wood draws its own set around the archetypes — taller
+  or squatter, steeper or flatter branching, straighter or more kinked, weeping
+  or reaching, sparse or dense in twig, some holding dead leaves, a few
+  pale-barked, now and then a coppiced one of several stems — each with its
+  own bark colour, and a couple of wild cards further out.
+- **Deer** (`client/deer.ts`): now and then a few come into the edge of the
+  fog, grazing side-on. Come near, or walk towards them, and one lifts its
+  head and turns it to look at you; keep still and they may settle; come closer
+  and a twig snaps and they bound away, rumps flashing white. Drawn by the
+  shader from shapes (body, neck, head in profile or turned, ears, jointed
+  legs), fogged like everything else. `?deer=1` brings them at once.
+
 ## One seed, one wood
 
 The seed is in the address (`?seed=moss-ford-7`) and at the foot of the
@@ -66,5 +95,5 @@ call now and then.
 
 ## Debug
 
-`?seed=` · `?at=<metres>` · `?walk=1` · `?look=<radians>` · `?fixed` ·
+`?seed=` · `?only=birch` (one archetype) · `?deer=1` · `?deerAt=<m>` · `?walk=1` · `?look=<radians>` · `?fixed` ·
 `window.__mistwood` (cards drawn and baked, MB, the resolution bias).

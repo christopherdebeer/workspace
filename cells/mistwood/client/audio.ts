@@ -84,6 +84,33 @@ export class Sound {
     }
   }
 
+  /** A twig snapping under a hoof, somewhere off in the fog: a crack, and a splinter or two after. */
+  snap(pan: number, level: number) {
+    const ctx = this.ctx;
+    if (!ctx || !this.on || !this.noise) return;
+    const p = ctx.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, pan));
+    p.connect(this.master!);
+    let at = ctx.currentTime + 0.01;
+    const cracks = 1 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < cracks; i++) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'bandpass';
+      hp.frequency.value = 1800 + Math.random() * 2400;
+      hp.Q.value = 1.4;
+      const g = ctx.createGain();
+      const peak = level * (i === 0 ? 0.9 : 0.35 + Math.random() * 0.3);
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(peak, at + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0004, at + 0.03 + Math.random() * 0.04);
+      src.connect(hp).connect(g).connect(p);
+      src.start(at, Math.random() * 1.5, 0.1);
+      at += 0.02 + Math.random() * 0.07;
+    }
+  }
+
   private swish(level: number) {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();

@@ -14,6 +14,7 @@
  *    blacks, a vignette, grain.
  */
 import type { Card } from './bake';
+import type { Atmos } from './sky';
 import { SEG } from './tree';
 
 const NOISE = `
@@ -33,7 +34,20 @@ float mist(vec3 p) {
   float n = fbm(q) * .75 + vnoise(q * 3.7 + vec2(uT * .02, 0.)) * .25;
   return smoothstep(.4, .82, n) * .62 * exp(-max(p.y, 0.) * .045);
 }
-vec3 fogAt(float y) { return mix(uFogLow, uFogHigh, smoothstep(-1., 20., y)); }
+uniform vec4 uCam; // x, z, eye, yaw
+uniform vec2 uSun; // the key light's azimuth, elevation (sun by day, moon by night)
+uniform vec3 uGlow; // its glow in the fog
+uniform vec3 uIllum; // what lights the wood
+// the fog's colour looking in a (world) direction: lighter higher, brighter towards the light.
+// Everything fogged takes its fog from the direction it is seen in, so a far tree fades into
+// exactly the fog behind it
+vec3 fogDir(vec3 d) {
+  float el = d.y;
+  vec3 c = mix(uFogLow, uFogHigh, smoothstep(0., .6, max(el, 0.)));
+  float da = mod(atan(d.x, d.z) - uSun.x + 3.14159, 6.28318) - 3.14159;
+  return c + exp(-da * da * 3. - (el - uSun.y) * (el - uSun.y) * 6.) * uGlow;
+}
+vec3 fogToward(vec3 w) { return fogDir(normalize(w - vec3(uCam.x, uCam.z, uCam.y))); }
 `;
 
 const QUAD_VS = `#version 300 es
@@ -45,16 +59,28 @@ precision highp int;
 out vec4 o;
 uniform vec2 uRes;
 uniform float uF, uHz, uDensity;
-uniform vec4 uCam; // x, z, eye, yaw
-uniform vec3 uPathA, uPathB;
-uniform vec3 uGround, uStrawDark, uStraw;
-uniform vec2 uSun; // azimuth, elevation of the brighter place
+uniform vec3 uPathK; // the two path fields' scales, the path's half-width
+uniform vec3 uGround, uStrawDark, uStraw, uEarth;
 // trees near enough to shade the ground: x, z, contact radius, crown radius (crown centre offset away from the light)
 uniform vec4 uShade[40];
 uniform vec2 uShadeOff[40];
 uniform int uShadeN;
 ${NOISE}
-float pathX(float z) { return uPathA.x * sin(z * uPathA.y + uPathA.z) + uPathB.x * sin(z * uPathB.y + uPathB.z); }
+// paths: where two smooth fields cross their middle value. Each field's zero line winds by itself;
+// where the two families meet, paths join and fork. (world.ts has the same, so trees keep off)
+float pfield(vec2 p, float k, float off) { return vnoise(p * k + off) * .7 + vnoise(p * k * 2.3 + off * 1.7) * .3; }
+float pathDist(vec2 p) {
+  float best = 1e3;
+  for (int i = 0; i < 2; i++) {
+    float k = i == 0 ? uPathK.x : uPathK.y;
+    float off = float(i) * 37.1;
+    float e = .25;
+    float n = pfield(p, k, off) - .5;
+    vec2 g = vec2(pfield(p + vec2(e, 0.), k, off) - pfield(p - vec2(e, 0.), k, off), pfield(p + vec2(0., e), k, off) - pfield(p - vec2(0., e), k, off)) / (2. * e);
+    best = min(best, abs(n) / max(length(g), 1e-4));
+  }
+  return best;
+}
 void main() {
   vec2 px = gl_FragCoord.xy;
   // cylindrical projection: across the screen is angle (so turning only slides the picture);
@@ -66,11 +92,9 @@ void main() {
   float az = atan(d.x, d.z);
   vec3 col;
   if (d.y >= 0.) {
-    // only fog: lighter higher, brighter where the sun is behind it
+    // only fog: lighter higher, brighter where the light is behind it
     float el = d.y;
-    col = mix(fogAt(0.), uFogHigh, smoothstep(0., .6, el));
-    float s = exp(-pow(az - uSun.x, 2.) * 3. - pow(el - uSun.y, 2.) * 6.);
-    col += s * vec3(.07, .075, .06) * smoothstep(0., .15, el);
+    col = fogDir(d);
     // the banks' slow unevenness, fading out at the horizon (where the ground's fog takes over)
     col *= 1. + (.06 * fbm(vec2(az * 4. + uT * .006, el * 7.)) - .03) * smoothstep(0., .12, el);
   } else {
@@ -82,8 +106,19 @@ void main() {
     vec3 g = mix(uStrawDark, uGround, smoothstep(.2, .75, n));
     g = mix(g, uStraw * .8, smoothstep(.6, .95, vnoise(p.xz * 2.2)) * .35);
     g *= .8 + .35 * grain;
-    float path = 1. - smoothstep(.35, .9, abs(p.x - pathX(p.z)) + (vnoise(p.xz * 1.3) - .5) * .5);
-    g = mix(g, uStrawDark * .8, path * .45);
+    // the paths: bare, trodden earth, damp in the middle, crumbling at the edges into the grass,
+    // a little grass coming back here and there down the middle
+    float pd = pathDist(p.xz) + (vnoise(p.xz * 1.1) - .5) * .35;
+    float hw = uPathK.z * (.8 + .4 * vnoise(p.xz * .13));
+    float path = 1. - smoothstep(hw * .55, hw, pd);
+    float edge = smoothstep(hw * .35, hw * .8, pd) * path;
+    vec3 earth = uEarth * (.75 + .5 * vnoise(p.xz * 7.)) * (1. - .25 * (1. - smoothstep(0., hw * .4, pd)));
+    earth = mix(earth, uStrawDark, edge * .5);
+    // damp, trodden earth holds a little of the fog's light (so the way reads ahead in the mist)
+    float wet = (1. - smoothstep(0., hw * .6, pd)) * smoothstep(.35, .7, vnoise(p.xz * .9));
+    earth = mix(earth, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .55, wet * .45);
+    float regrow = smoothstep(.62, .8, vnoise(p.xz * 2.7)) * (1. - smoothstep(0., hw * .3, pd)) * .6;
+    g = mix(g, mix(earth, g, regrow), path);
     // shade: dark at each trunk's foot, a soft pool under each crown (the light is diffuse in fog)
     float ao = 0.;
     for (int i = 0; i < 40; i++) {
@@ -97,7 +132,7 @@ void main() {
     g *= 1. - min(ao, .6) * (.55 + .7 * vnoise(p.xz * 1.9));
     float fogD = 1. - exp(-t * uDensity * (1. + 1.2 * smoothstep(2., 14., t)));
     float m = mist(vec3(p.x, .3, p.z));
-    col = mix(g, fogAt(0.), 1. - (1. - fogD) * (1. - m));
+    col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * (1. - m));
   }
   o = vec4(col, 1.);
 }`;
@@ -174,12 +209,12 @@ void main() {
   vec3 base = uKind > .5 ? mix(uStrawDark, uStraw, tone) : mix(uBark, birch, tone);
   base = mix(base, uLeaf, leaf);
   // thin wood is lit through by the fog behind it
-  base = mix(base, uFogLow, (1. - cov) * .22);
+  base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
   // fog: by distance, and much thicker near the ground; banks of mist drift through
   // (the ground fog lies a few metres off: what is at your feet is clear)
   float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
-  o = vec4(mix(base, fogAt(vWorld.y), fog) * cov, cov) * uAlpha;
+  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
 /**
@@ -306,10 +341,79 @@ void main() {
   } else birch *= lit;
   vec3 base = mix(uBark * lit, birch, vTL.x);
   base = mix(base, uLeaf, vTL.y);
-  base = mix(base, uFogLow, (1. - cov) * .22);
+  base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
   float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
-  o = vec4(mix(base, fogAt(vWorld.y), fog) * cov, cov) * uAlpha;
+  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+}`;
+
+/**
+ * A deer, from shapes: body (with chest and haunch), neck, head (in profile, or turned to look
+ * at you), ears, four jointed legs (standing, or bounding), and the rump that flashes white as
+ * it runs. Drawn on a card at its place in the wood, side-on, fogged like everything else.
+ */
+const DEER_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vUV;
+in vec3 vWorld;
+in float vDist;
+out vec4 o;
+uniform float uDensity, uAlpha, uSize, uFace;
+uniform vec4 uPose; // head up, head turned to you, gait phase, running
+uniform vec3 uBark;
+${NOISE}
+float sdCap(vec2 p, vec2 a, vec2 b, float ra, float rb) { vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); return length(pa - ba * h) - mix(ra, rb, h); }
+float sdEll(vec2 p, vec2 c, vec2 r) { vec2 q = (p - c) / r; return (length(q) - 1.) * min(r.x, r.y); }
+float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
+void main() {
+  vec2 p = vec2((vUV.x - .5) * 2.6, vUV.y * 2.1) / uSize;
+  p.x *= uFace;
+  float run = uPose.w, g = uPose.z;
+  // bounding: the body rises and pitches with each leap
+  float bob = run * .22 * max(0., sin(g));
+  float pitch = run * .14 * sin(g + 1.2);
+  vec2 q = p - vec2(0., bob);
+  q = vec2(q.x, q.y - .95) * mat2(cos(pitch), -sin(pitch), sin(pitch), cos(pitch)) + vec2(0., .95);
+  float body = sdEll(q, vec2(0., .95), vec2(.5, .2));
+  body = smin(body, sdEll(q, vec2(-.36, .99), vec2(.2, .22)), .08);
+  body = smin(body, sdEll(q, vec2(.34, .96), vec2(.18, .22)), .08);
+  // neck and head: down grazing, up alert; the head in profile, or turned to look at you
+  vec2 nb = vec2(.42, 1.03);
+  vec2 nt = mix(vec2(.7, .48), vec2(.57, 1.46), uPose.x);
+  float neck = sdCap(q, nb, nt, .1, .062);
+  vec2 hp = nt + mix(vec2(.12, -.03 + .05 * uPose.x), vec2(.025, .05), uPose.y);
+  vec2 hr = mix(vec2(.15, .062), vec2(.072, .1), uPose.y);
+  float head = sdEll(q, hp, hr);
+  vec2 e1 = hp + mix(vec2(-.08, .07), vec2(-.06, .09), uPose.y);
+  vec2 e2 = hp + mix(vec2(-.05, .09), vec2(.06, .09), uPose.y);
+  float ears = min(sdCap(q, e1, e1 + mix(vec2(-.07, .09), vec2(-.09, .07), uPose.y), .028, .012), sdCap(q, e2, e2 + mix(vec2(-.03, .11), vec2(.09, .07), uPose.y), .028, .012));
+  float d = smin(body, neck, .06);
+  d = smin(d, head, .04);
+  d = min(d, ears);
+  // legs: hip, knee, hoof; the front pair and the hind pair alternate in the bound
+  for (int i = 0; i < 4; i++) {
+    bool front = i < 2;
+    float off = (front ? 0. : 3.14159) + (i % 2 == 0 ? 0. : .35);
+    vec2 hip = front ? vec2(.3 + float(i) * .05, .86) : vec2(-.4 + float(i - 2) * .06, .9);
+    float a = g + off;
+    vec2 stand = vec2(hip.x + (front ? .03 : -.02), 0.);
+    vec2 leap = hip + vec2(sin(a) * .42, -.8 + .3 * max(0., cos(a)));
+    vec2 hoof = mix(stand, leap, run);
+    vec2 knee = mix(hip, hoof, .5) + vec2(front ? -.05 : .09, .02);
+    d = min(d, sdCap(q, hip, knee, .06, .034));
+    d = min(d, sdCap(q, knee, hoof, .03, .018));
+  }
+  float fw = max(fwidth(d), 1e-4);
+  float cov = 1. - smoothstep(-fw, fw, d);
+  if (cov < .003) discard;
+  // the rump patch, white, flashing as it runs
+  float rump = sdEll(q, vec2(-.54, 1.), vec2(.075, .11));
+  float white = (1. - smoothstep(-fw, fw, rump)) * (.3 + .7 * run);
+  vec3 base = mix(uBark * 1.3, vec3(.62, .6, .55), white);
+  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
+  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
 const POST_FS = `#version 300 es
@@ -318,10 +422,11 @@ precision highp int;
 out vec4 o;
 uniform sampler2D uScene;
 uniform vec2 uRes;
+uniform float uExposure;
 ${NOISE}
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
-  vec3 c = texture(uScene, uv).rgb;
+  vec3 c = texture(uScene, uv).rgb * uExposure;
   // a soft film curve, blacks lifted into the fog's green
   c = mix(c, c * c * (3. - 2. * c), .3);
   c = mix(c, uFogLow, .04);
@@ -354,8 +459,10 @@ export interface Look {
   t: number;
   density: number;
   wind: number;
-  path: readonly number[];
-  sun: [number, number];
+  /** the two path fields' scales and the path's half-width */
+  path: [number, number, number];
+  atmos: Atmos;
+  /** per-draw bark colour is on the draw; this is the default */
 }
 
 export interface CardDraw {
@@ -368,6 +475,7 @@ export interface CardDraw {
   phase: number;
   patch: boolean;
   alpha: number;
+  bark: [number, number, number];
 }
 export interface LiveDraw {
   live: true;
@@ -381,8 +489,20 @@ export interface LiveDraw {
   radius: number;
   height: number;
   alpha: number;
+  bark: [number, number, number];
 }
-export type Draw = CardDraw | LiveDraw;
+export interface DeerDraw {
+  live: false;
+  pose: [number, number, number, number];
+  x: number;
+  z: number;
+  size: number;
+  /** ±1 for which way it faces on screen, over how side-on it is seen */
+  face: number;
+  alpha: number;
+  bark: [number, number, number];
+}
+export type Draw = CardDraw | LiveDraw | DeerDraw;
 
 /** The photograph's colours. */
 const PAL = {
@@ -394,6 +514,7 @@ const PAL = {
   straw: [0.6, 0.48, 0.3],
   strawDark: [0.19, 0.14, 0.085],
   ground: [0.36, 0.28, 0.17],
+  earth: [0.15, 0.12, 0.09],
 };
 
 export class Renderer {
@@ -402,6 +523,7 @@ export class Renderer {
   private card: WebGLProgram;
   private post: WebGLProgram;
   private liveProg: WebGLProgram;
+  private deerProg: WebGLProgram;
   private vao: WebGLVertexArrayObject;
   private liveVao: WebGLVertexArrayObject;
   private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number } | null = null;
@@ -415,6 +537,7 @@ export class Renderer {
     this.card = this.compile(CARD_VS, CARD_FS);
     this.post = this.compile(QUAD_VS, POST_FS);
     this.liveProg = this.compile(LIVE_VS, LIVE_FS);
+    this.deerProg = this.compile(CARD_VS, DEER_FS);
     this.vao = gl.createVertexArray()!;
     this.liveVao = gl.createVertexArray()!;
   }
@@ -472,8 +595,11 @@ export class Renderer {
     gl.uniform4f(this.loc(p, 'uCam'), v.x, v.z, v.eye, v.yaw);
     gl.uniform1f(this.loc(p, 'uT'), look.t);
     gl.uniform1ui(this.loc(p, 'uSeed'), look.seed >>> 0);
-    gl.uniform3fv(this.loc(p, 'uFogLow'), PAL.fogLow);
-    gl.uniform3fv(this.loc(p, 'uFogHigh'), PAL.fogHigh);
+    gl.uniform3fv(this.loc(p, 'uFogLow'), look.atmos.fogLow);
+    gl.uniform3fv(this.loc(p, 'uFogHigh'), look.atmos.fogHigh);
+    gl.uniform2fv(this.loc(p, 'uSun'), look.atmos.at);
+    gl.uniform3fv(this.loc(p, 'uGlow'), look.atmos.glow);
+    gl.uniform3fv(this.loc(p, 'uIllum'), look.atmos.illum);
     gl.uniform1f(this.loc(p, 'uDensity'), look.density);
   }
 
@@ -489,12 +615,11 @@ export class Renderer {
     gl.disable(gl.BLEND);
     gl.useProgram(this.world);
     this.common(this.world, v, look);
-    gl.uniform3f(this.loc(this.world, 'uPathA'), look.path[0], look.path[1], look.path[2]);
-    gl.uniform3f(this.loc(this.world, 'uPathB'), look.path[3], look.path[4], look.path[5]);
+    gl.uniform3fv(this.loc(this.world, 'uPathK'), look.path);
+    gl.uniform3fv(this.loc(this.world, 'uEarth'), PAL.earth);
     gl.uniform3fv(this.loc(this.world, 'uGround'), PAL.ground);
     gl.uniform3fv(this.loc(this.world, 'uStrawDark'), PAL.strawDark);
     gl.uniform3fv(this.loc(this.world, 'uStraw'), PAL.straw);
-    gl.uniform2f(this.loc(this.world, 'uSun'), look.sun[0], look.sun[1]);
     gl.uniform4fv(this.loc(this.world, 'uShade'), look.shade);
     gl.uniform2fv(this.loc(this.world, 'uShadeOff'), look.shadeOff);
     gl.uniform1i(this.loc(this.world, 'uShadeN'), look.shadeN);
@@ -549,7 +674,24 @@ export class Renderer {
         gl.uniform1f(this.loc(L, 'uRadius'), c.radius);
         gl.uniform1f(this.loc(L, 'uHeight'), c.height);
         gl.uniform1f(this.loc(L, 'uAlpha'), c.alpha);
+        gl.uniform3fv(this.loc(L, 'uBark'), c.bark);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.count);
+        continue;
+      }
+      if ('pose' in c) {
+        const D = this.deerProg;
+        if (current !== D) {
+          use(D);
+          this.common(D, v, look);
+        }
+        gl.uniform2f(this.loc(D, 'uAnchor'), c.x, c.z);
+        gl.uniform4f(this.loc(D, 'uRect'), -1.3 * c.size, 0, 2.6 * c.size, 2.1 * c.size);
+        gl.uniform4fv(this.loc(D, 'uPose'), c.pose);
+        gl.uniform1f(this.loc(D, 'uSize'), c.size);
+        gl.uniform1f(this.loc(D, 'uFace'), c.face);
+        gl.uniform1f(this.loc(D, 'uAlpha'), c.alpha);
+        gl.uniform3fv(this.loc(D, 'uBark'), c.bark);
+        gl.drawArrays(gl.TRIANGLES, 0, COLS * ROWS * 6);
         continue;
       }
       use(p);
@@ -560,6 +702,7 @@ export class Renderer {
       gl.uniform1f(this.loc(p, 'uKind'), c.patch ? 1 : 0);
       gl.uniform1f(this.loc(p, 'uFlip'), c.flip ? -1 : 1);
       gl.uniform1f(this.loc(p, 'uAlpha'), c.alpha);
+      gl.uniform3fv(this.loc(p, 'uBark'), c.bark);
       gl.drawArrays(gl.TRIANGLES, 0, COLS * ROWS * 6);
     }
     gl.bindVertexArray(this.vao);
@@ -571,6 +714,7 @@ export class Renderer {
     this.common(this.post, v, look);
     gl.bindTexture(gl.TEXTURE_2D, scene.tex);
     gl.uniform1i(this.loc(this.post, 'uScene'), 0);
+    gl.uniform1f(this.loc(this.post, 'uExposure'), look.atmos.exposure);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 }

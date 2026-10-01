@@ -10,12 +10,15 @@
  * and looking give real parallax; the fog, the mist banks and the wind are all
  * in the shaders (render.ts).
  *
- * Debug: ?only=birch (every tree one species) · ?at=<metres> · ?walk=1 · ?look=<radians> · ?fixed · window.__mistwood
+ * Debug: ?deer=1 (deer come at once) · ?hour= ?moon= ?fog= ?warm= (sky.ts) · ?only=birch (every tree one species) · ?at=<metres> · ?walk=1 · ?look=<radians> · ?fixed · window.__mistwood
  */
 import { Sound } from './audio';
 import { Baker, type Card } from './bake';
 import { Renderer, type Draw, type View } from './render';
-import { countWider, type Structure } from './tree';
+import { countWider, type Species, type Structure } from './tree';
+import { atmosphere, moonPhase } from './sky';
+import { Herd } from './deer';
+import { hash, seeded } from './rng';
 import { clamp01, randomSeed, seedFrom, seedName } from './rng';
 import { Wood, VIEW, type Kind, type Placed } from './world';
 import { smooth as smoothstep } from './rng';
@@ -77,15 +80,19 @@ const start = Number(params.get('at')) || 0;
 let posX = 0;
 let posZ = start;
 let heading = 0;
+/** Begin on a path, facing along it. */
 function stand(z: number) {
-  posZ = z;
-  posX = wood.pathX(z);
-  heading = Math.atan(wood.pathSlope(z + 4)) + (Number(params.get('look')) || 0);
+  const at = wood.findPath(0, z);
+  posX = at.x;
+  posZ = at.z;
+  heading = at.heading + (Number(params.get('look')) || 0);
 }
+let herd!: Herd;
 function plant(s: number) {
   seed = s;
   wood = new Wood(seed);
-  wood.only = (params.get('only') as Kind | null) ?? null;
+  herd = new Herd(seeded(hash(seed, 99)), params.has('deer') ? 1 : 14, Number(params.get('deerAt')) || 0);
+  wood.only = (params.get('only') as Species | null) ?? null;
   forget();
   seedBtn.textContent = seedName(seed).replace(/-/g, ' · ');
   const url = new URL(location.href);
@@ -171,10 +178,20 @@ let t = Number(params.get('time')) || 0;
 const shade = new Float32Array(40 * 4);
 const shadeOff = new Float32Array(40 * 2);
 let shadeN = 0;
-const sunAz = 0.25;
+/** The time of day: your clock (or ?hour=), passing in real time. */
+const hourAt = () => {
+  const p = params.get('hour');
+  const now = new Date();
+  const clock = now.getHours() + now.getMinutes() / 60;
+  return p !== null && p !== '' ? Number(p) + t / 3600 : clock;
+};
+const phase = params.has('moon') ? Number(params.get('moon')) : moonPhase(new Date());
+const fogK = Number(params.get('fog')) || 1;
+const warm = Number(params.get('warm')) || 0;
 let last = performance.now();
 /** Near trees are drawn as live geometry within this distance (m), up to this many segments a frame. */
 const LIVE = 16;
+const DARK: [number, number, number] = [0.1, 0.095, 0.08];
 const LIVE_BUDGET = 400000;
 const nextPow2 = (x: number) => Math.pow(2, Math.ceil(Math.log2(Math.max(1, x))));
 
@@ -215,7 +232,9 @@ function frame(now: number) {
   // what stands in view, and the card each needs
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
-  const density = wood.densityAt(walked + 20);
+  const density = wood.densityAt(walked + 20) * fogK;
+  const atmos = atmosphere(hourAt(), phase, warm);
+  const sunAz = atmos.at[0];
   const want: Array<{ kind: Kind; pool: number; level: number; px: number; side: number; right: [number, number] }> = [];
   const draws: Array<Draw & { d: number }> = [];
   let grows = 0;
@@ -251,7 +270,7 @@ function frame(now: number) {
       if (n <= liveLeft) {
         liveLeft -= n;
         liveAlpha = 1 - smoothstep(LIVE - 4, LIVE, hd);
-        draws.push({ live: true, buffer: baker.buffer(st), count: n, x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, d: hd });
+        draws.push({ live: true, buffer: baker.buffer(st), count: n, x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: wood.genomeOf(p.kind)?.bark ?? DARK, d: hd });
       }
     }
     if (liveAlpha >= 0.999) continue;
@@ -293,6 +312,7 @@ function frame(now: number) {
       flip,
       phase: p.phase,
       patch: p.kind === 'patch',
+      bark: wood.genomeOf(p.kind)?.bark ?? DARK,
       alpha: 1 - liveAlpha,
       d: hd,
     });
@@ -326,13 +346,33 @@ function frame(now: number) {
   // still over (everything in view is in use): ask for less everywhere, and recover slowly
   if (texels > BUDGET * 1.05) bias = Math.max(0.3, bias * 0.7);
   else if (texels < BUDGET * 0.6) bias = Math.min(1, bias + dt * 0.02);
+  // deer: a glimpse at the edge of the fog
+  herd.watch(view.x, view.z);
+  herd.step(dt, t, { x: view.x, z: view.z, yaw: view.yaw, speed }, (x, z) => wood.pathDist(x, z), {
+    snap: (x, z, loud) => {
+      const a = Math.atan2(x - view.x, z - view.z) - view.yaw;
+      sound.snap(Math.sin(a), 0.5 * loud);
+    },
+  });
+  for (const d of herd.deer) {
+    const rx = d.x - view.x;
+    const rz = d.z - view.z;
+    const hd = Math.hypot(rx, rz);
+    if (hd > VIEW || hd < 1) continue;
+    // side-on as seen from here: which way it faces on screen, and how foreshortened
+    const toward = Math.atan2(rx, rz);
+    const rel = Math.sin(d.heading - toward);
+    const face = (rel >= 0 ? 1 : -1) / Math.max(0.45, Math.abs(rel));
+    const run = Math.min(1, d.speed / 5);
+    draws.push({ live: false, pose: [d.headUp, d.headTurn, d.gait, run], x: d.x, z: d.z, size: d.size, face, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
+  }
   draws.sort((a, b) => b.d - a.d);
   // the nearest trees shade the ground (contact at the foot, a soft pool under the crown,
   // set away from the brighter place where the sun is behind the fog)
   shadeN = 0;
   for (let k = draws.length - 1; k >= 0 && shadeN < 40; k--) {
     const d = draws[k];
-    if (d.d > 28 || (!d.live && d.patch) || (!d.live && d.alpha < 0.5)) continue;
+    if ('pose' in d || d.d > 28 || (!d.live && d.patch) || (!d.live && d.alpha < 0.5)) continue;
     const crown = d.live ? d.radius * d.scale * 0.8 : Math.abs(d.rect[2]) * 0.45;
     const tall = d.live ? d.height * d.scale : d.rect[3];
     shade.set([d.x, d.z, 0.35 + crown * 0.08, crown], shadeN * 4);
@@ -341,14 +381,12 @@ function frame(now: number) {
   }
   const wind = 0.55 + 0.45 * Math.sin(t * 0.11) * Math.sin(t * 0.067 + 1);
   // the sun, behind the fog, in the view's terms (for shading the round wood)
-  const sx = Math.sin(sunAz) * 0.9;
-  const sy = 0.45;
-  const sz = Math.cos(sunAz) * 0.9;
+  const [sx, sy, sz] = atmos.dir;
   const sl = Math.hypot(sx, sy, sz);
   const cy = Math.cos(view.yaw);
   const syw = Math.sin(view.yaw);
   const light: [number, number, number] = [(sx * cy - sz * syw) / sl, sy / sl, -(sx * syw + sz * cy) / sl];
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, sun: [sunAz, 0.35] }, draws);
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos }, draws);
   sound.update(dt, t, speed, 0, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
@@ -356,6 +394,7 @@ function frame(now: number) {
     at: [Math.round(posX * 10) / 10, Math.round(posZ * 10) / 10],
     live: draws.filter((d) => d.live).length,
     segments: draws.reduce((n, d) => n + (d.live ? d.count : 0), 0),
+    deer: herd.deer.map((d) => `${d.state} ${Math.round(Math.hypot(d.x - view.x, d.z - view.z))}m`),
     cards: draws.length,
     baked: cards.size,
     mb: Math.round((texels * 4) / 1e6),

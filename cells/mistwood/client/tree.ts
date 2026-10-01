@@ -79,7 +79,7 @@ function turn(d: V3, angle: number, phi: number): V3 {
   return norm([d[0] * c + (u[0] * cp + v[0] * sp) * sn, d[1] * c + (u[1] * cp + v[1] * sp) * sn, d[2] * c + (u[2] * cp + v[2] * sp) * sn]);
 }
 
-interface Params {
+export interface Params {
   /** trunk: length (m), base width (m), angle from vertical (rad) */
   trunk: [number, number];
   width: [number, number];
@@ -139,11 +139,59 @@ const P: Record<Species, Params> = {
   },
 };
 
+/**
+ * A species is a point in the space of these parameters, with a bark colour: an archetype
+ * (the five above) shifted along every axis — taller or squatter, steeper or flatter branching,
+ * straighter or more kinked, weeping or reaching, sparse or dense in twig, some holding their
+ * dead leaves, a few pale-barked, now and then a coppiced one of several stems. Each wood
+ * draws its own set, so no two woods have the same trees.
+ */
+export interface Genome extends Params {
+  archetype: Species;
+  /** bark colour (dark wood; birch white is separate) */
+  bark: [number, number, number];
+}
+
+export function sampleGenome(r: Rand, archetype: Species, wild = 1): Genome {
+  const b = P[archetype];
+  const j = (lo: number, hi: number) => 1 + ((lo - 1) + ((hi - 1) - (lo - 1)) * r()) * wild;
+  const c01 = (x: number) => Math.max(0, Math.min(1, x));
+  const g: Genome = {
+    ...b,
+    archetype,
+    trunk: [b.trunk[0] * j(0.75, 1.3), b.trunk[1] * j(0.75, 1.3)],
+    width: [b.width[0] * j(0.8, 1.25), b.width[1] * j(0.8, 1.25)],
+    lean: b.lean * j(0.4, 1.8),
+    clear: c01(b.clear + (r() - 0.5) * 0.3 * wild),
+    spread: b.spread * j(0.7, 1.35),
+    kink: b.kink * j(0.5, 1.7),
+    up: b.up * j(0.4, 1.8),
+    droop: b.droop * j(0.3, 2.6),
+    lateral: b.lateral.map((x) => Math.min(0.85, x * j(0.75, 1.25))),
+    lenDecay: Math.max(0.4, Math.min(0.9, b.lenDecay + (r() - 0.5) * 0.2 * wild)),
+    wDecay: Math.max(0.4, Math.min(0.75, b.wDecay + (r() - 0.5) * 0.12 * wild)),
+    maxOrder: Math.max(3, Math.min(8, b.maxOrder + (r() < 0.25 ? -1 : r() > 0.8 ? 1 : 0))),
+    fork: Math.min(1, b.fork * j(0.7, 1.3)),
+    twigs: Math.min(0.95, b.twigs * j(0.6, 1.2)),
+    leaves: b.leaves || (r() < 0.15 ? 0.2 + r() * 0.4 : 0),
+    white: b.white || (r() < 0.06 ? 0.06 : 0),
+    stems: archetype === 'tall' && r() < 0.12 ? [2, 4] : b.stems,
+    bark: [0, 0, 0],
+  };
+  // bark: dark, a little greener (moss) or warmer (brown), lighter or darker
+  const light = 0.75 + r() * 0.7;
+  const hue = r();
+  const base: [number, number, number] = hue < 0.4 ? [0.09, 0.105, 0.08] : hue < 0.75 ? [0.1, 0.095, 0.08] : [0.13, 0.1, 0.075];
+  g.bark = [base[0] * light, base[1] * light, base[2] * light];
+  return g;
+}
+
 /** No tree grows past this many segments (a phone must be able to bake it). */
 const CAP = 60000;
 
-export function grow(seed: number, species: Species): Structure {
-  const p = P[species];
+export function grow(seed: number, genome: Genome): Structure {
+  const p = genome;
+  const species = genome.archetype;
   const r: Rand = seeded(hash(seed, 0x7ee));
   let segs = new Float32Array(SEG * 4096);
   let n = 0;
