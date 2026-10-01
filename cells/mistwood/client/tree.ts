@@ -205,6 +205,19 @@ export function grow(seed: number, genome: Genome): Structure {
     segs.set([a[0], a[1], a[2], b[0], b[1], b[2], w0, w1, tone, leaf], n * SEG);
     n++;
   };
+  // Folded dry leaves: narrow attachment, broad shoulder, curled tapered tip.
+  // Separate stream preserves the seeded tree architecture when detail changes.
+  const detail = seeded(hash(seed, 0x1eaf));
+  const dryLeaf = (at: V3, length = 0.055) => {
+    const az = detail() * 6.283;
+    const span = length * (0.22 + detail() * 0.48);
+    const tilt = 0.3 + detail() * 0.7;
+    const a: V3 = [Math.cos(az) * tilt, -0.65, Math.sin(az) * tilt];
+    const mid: V3 = [at[0] + a[0] * length * .48, at[1] + a[1] * length * .48, at[2] + a[2] * length * .48];
+    const tip: V3 = [at[0] + a[0] * length + Math.sin(az) * length * .2, at[1] - length * .62, at[2] + a[2] * length - Math.cos(az) * length * .2];
+    push(at, mid, .002, span, 0, 1);
+    push(mid, tip, span, .001, 0, 1);
+  };
   const GOLDEN = 2.39996;
   let spiral = r() * 6.28;
 
@@ -220,8 +233,8 @@ export function grow(seed: number, genome: Genome): Structure {
     for (let i = 0; i < steps; i++) {
       const f0 = i / steps;
       const f1 = (i + 1) / steps;
-      const wa = w0 + (wEnd - w0) * f0;
-      const wb = w0 + (wEnd - w0) * f1;
+      const wa = (w0 + (wEnd - w0) * f0) * (order === 0 ? 1 + .55 * Math.exp(-f0 * len * 6) : 1);
+      const wb = (w0 + (wEnd - w0) * f1) * (order === 0 ? 1 + .55 * Math.exp(-f1 * len * 6) : 1);
       // the kink grows towards the twigs; thick wood bends to the light, thin long twigs hang
       d = turn(d, (r() - 0.5) * p.kink * (0.5 + order * 0.35) * 1.2, r() * 6.28);
       const up = p.up * step * (wa > 0.02 ? 1 : 0.4);
@@ -251,7 +264,7 @@ export function grow(seed: number, genome: Genome): Structure {
           push(tp, e, tw, Math.max(p.minW * 0.7, tw * 0.8), 0, 0);
           tp = e;
         }
-        if (p.leaves && r() < p.leaves * 0.5) push(tp, [tp[0] + (r() - 0.5) * 0.03, tp[1] - 0.05, tp[2] + (r() - 0.5) * 0.03], 0.022, 0.012, 0, 1);
+        if (p.leaves && r() < p.leaves * 0.5) { r(); r(); dryLeaf(tp); }
       }
       pos = next;
     }
@@ -269,7 +282,7 @@ export function grow(seed: number, genome: Genome): Structure {
       for (let k = 0; k < count; k++) {
         const ll = 0.035 + r() * 0.04;
         const ld = norm([(r() - 0.5) * 1.2, -1, (r() - 0.5) * 1.2]);
-        push(pos, [pos[0] + ld[0] * ll, pos[1] + ld[1] * ll, pos[2] + ld[2] * ll], 0.02 + r() * 0.012, 0.012, 0, 1);
+        r(); void ld; dryLeaf(pos, ll * 1.3);
       }
     }
   };
@@ -282,6 +295,14 @@ export function grow(seed: number, genome: Genome): Structure {
     const lean = (stems > 1 ? 0.3 + r() * 0.7 : r()) * p.lean * (stems > 1 ? 2.2 : 2);
     const az = stems > 1 ? (s / stems) * 6.28 + r() : r() * 6.28;
     const base: V3 = stems > 1 ? [(r() - 0.5) * 0.3, 0, (r() - 0.5) * 0.3] : [0, 0, 0];
+    // Low, tapering roots disappear into litter; generated before the crown budget.
+    for (let k = 0; k < 4; k++) {
+      const ra = az + k * 1.5708 + detail() * .7;
+      const reach = w * (1.8 + detail() * 2.7);
+      const mid: V3 = [base[0] + Math.cos(ra) * reach * .42, w * .18, base[2] + Math.sin(ra) * reach * .42];
+      push([base[0], w * .3, base[2]], mid, w * .42, w * .18, 0, 0);
+      push(mid, [base[0] + Math.cos(ra) * reach, .006, base[2] + Math.sin(ra) * reach], w * .18, .004, 0, 0);
+    }
     branch(base, norm([Math.sin(lean) * Math.cos(az), Math.cos(lean), Math.sin(lean) * Math.sin(az)]), len, w, 0, p.clear);
   }
   return finish(segs, n, species);
@@ -308,14 +329,15 @@ export function growPatch(seed: number, width: number): Structure {
     const back = Math.pow(r(), 1.4);
     let y = back * 0.16;
     const h = (0.06 + Math.pow(r(), 1.2) * 0.62) * (1 - back * 0.35);
-    let a = Math.PI / 2 + lean + (r() - 0.5) * 0.7;
+    const fallen = r() < .24;
+    let a = fallen ? (r() < .5 ? .16 : Math.PI - .16) : Math.PI / 2 + lean + (r() - .5) * 1.25;
     const bend = (r() - 0.5) * 0.25 + lean * 0.3;
     const steps = 5;
-    const w = (0.0015 + r() * 0.003) * (1 - back * 0.3);
+    const w = (0.0015 + Math.pow(r(), 3) * 0.011) * (1 - back * 0.3);
     const tone = Math.min(1, r() * (1 - back * 0.3) + back * 0.35);
     for (let k = 0; k < steps; k++) {
       const nx = x + (Math.cos(a) * h) / steps;
-      const ny = y + (Math.sin(a) * h) / steps;
+      const ny = Math.max(.008, y + (Math.sin(a) * h) / steps);
       seg(x, y, nx, ny, w * (1 - k / steps), w * (1 - (k + 1) / steps) + 0.0005, tone);
       x = nx;
       y = ny;
@@ -351,29 +373,38 @@ export function growPatch(seed: number, width: number): Structure {
       a += turn * (0.4 + r() * 1.2) + (r() - 0.5) * 0.25;
     }
   }
-  // dead bracken: a stem, then alternating fronds
-  if (r() < 0.5) {
-    const bx = (r() - 0.5) * width;
-    const h = 0.35 + r() * 0.4;
-    let a = Math.PI / 2 + (r() - 0.5) * 0.4;
-    let x = bx;
-    let y = 0;
-    for (let k = 0; k < 14; k++) {
-      const nx = x + Math.cos(a) * (h / 14);
-      const ny = y + Math.sin(a) * (h / 14);
-      seg(x, y, nx, ny, 0.004, 0.0035, 0.55);
-      if (k > 4)
-        for (const side of [-1, 1]) {
-          const fa = a + side * 1.25;
-          const fl = 0.09 * (1 - k / 16);
-          seg(nx, ny, nx + Math.cos(fa) * fl, ny + Math.sin(fa) * fl - 0.02, 0.006, 0.002, 0.65);
+  // Bracken crowns: several arching fronds, broken pinnae and fine leaflets.
+  if (r() < .5) {
+    const bx = (r() - .5) * width * .65;
+    const fronds = 3 + Math.floor(r() * 3);
+    for (let f = 0; f < fronds; f++) {
+      const h = .25 + r() * .48;
+      let a = Math.PI / 2 + (f / (fronds - 1) - .5) * 1.8;
+      const bend = (a > Math.PI / 2 ? 1 : -1) * (.025 + r() * .05);
+      let x = bx, y = .015;
+      for (let k = 0; k < 12; k++) {
+        const nx = x + Math.cos(a) * h / 12, ny = Math.max(.015, y + Math.sin(a) * h / 12);
+        seg(x, y, nx, ny, .004 * (1-k/14), .002, .38);
+        if (k > 2) for (const side of [-1, 1]) {
+          if (r() < .17) continue;
+          const fa = a + side * 1.04;
+          const fl = h * .27 * Math.sin((k-2)/10*Math.PI) * (.65+r()*.35);
+          const ex = nx + Math.cos(fa)*fl, ey = ny + Math.sin(fa)*fl - .02;
+          seg(nx, ny, ex, ey, .003, .001, .48);
+          for (let j = 1; j < 5; j++) {
+            const u=j/5, lx=nx+(ex-nx)*u, ly=ny+(ey-ny)*u;
+            for (const wing of [-1,1]) {
+              const la=fa+wing*.85, ll=fl*.24*(1-u*.65);
+              seg(lx,ly,lx+Math.cos(la)*ll,ly+Math.sin(la)*ll-.008,.005,.0007,.4+r()*.25);
+            }
+          }
         }
-      x = nx;
-      y = ny;
-      a -= 0.06;
+        x=nx; y=ny; a+=bend;
+      }
     }
   }
   const st = finish(new Float32Array(out), out.length / SEG, 'shrub');
   st.radius = width / 2 + 0.1;
   return st;
 }
+
