@@ -464,7 +464,7 @@ float traceStructures(vec3 ro, vec3 rd, out int id) {
 // rubble masonry on a face: rough courses of stones, each its own size, tone and roughness, the
 // mortar thin, dark and sunk between; every stone a little proud of the wall (light on its top,
 // shadow under). Returns: mortar, stone id, shading, detail (all fade with distance)
-vec4 masonry(vec2 uv, float px, float seed) {
+vec4 masonry(vec2 uv, float px, float seed, out vec2 tilt) {
   // the courses: each its own height (.2 – .42 m), found by a noisy cumulative height
   float row = floor(uv.y / .31 + .35 * vnoise(vec2(uv.x * .12, seed)));
   float rh = fract(sin(row * 12.9898 + seed) * 43758.5453);
@@ -476,15 +476,25 @@ vec4 masonry(vec2 uv, float px, float seed) {
   float bx = (uv.x + rh * 3.7) / bl + .25 * (vnoise(vec2(uv.y * 3., row)) - .5);
   float col = floor(bx);
   float id = fract(sin(dot(vec2(col, row), vec2(127.1, 311.7)) + seed) * 43758.5453);
-  // each stone's own outline: rounded, its corners knocked off
   float fx = fract(bx) * bl;
-  float edge = min(min(fx, bl - fx), min(fy, hr - fy)) - .012 * (vnoise(uv * 14. + id * 9.) - .3);
+  float sh = hr;
+  // some stones are two, one on another
+  if (id < .3) {
+    float split = hr * (.4 + .2 * fract(id * 31.));
+    if (fy > split) { fy -= split; sh = hr - split; id = fract(id * 17.3); } else sh = split;
+  }
+  // each stone's own outline: rounded, its edges chipped and wandering
+  float chip = .035 * (vnoise(uv * 5. + id * 9.) - .4) + .012 * (vnoise(uv * 19. + id * 3.) - .5);
+  float edge = min(min(fx, bl - fx), min(fy, sh - fy)) - chip;
   float mortar = 1. - smoothstep(.0, .006 + max(px * .8, .003), edge);
   float detail = 1. - smoothstep(.04, .2, px);
-  // proud of the wall: lit above, in shadow below; rough within
-  float bulge = smoothstep(0., .07, edge);
-  float face = (fy / hr - .5) * .35 * bulge + (vnoise(uv * 23. + id * 5.) - .5) * .25;
-  return vec4(mortar * detail, id, mix(1., .78 + .25 * bulge + face, detail), detail);
+  // proud of the wall: its face rounded towards its edges (the tilt packed for the light, in the
+  // face's across and up), pitted and mottled within
+  float bulge = smoothstep(0., .09, edge);
+  tilt = vec2((fx / bl - .5), (fy / sh - .5)) * 2. * (1. - bulge) * detail;
+  float rough = (vnoise(uv * 23. + id * 5.) - .5) * .22 + (vnoise(uv * 61. + id) - .5) * .12;
+  float pits = -smoothstep(.72, .8, vnoise(uv * 37. + id * 7.)) * .18;
+  return vec4(mortar * detail, id, mix(1., .82 + rough + pits, detail), detail);
 }
 vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   int j;
@@ -499,7 +509,8 @@ vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   vec3 Nl = vec3(c * N.x + s * N.z, N.y, -s * N.x + c * N.z);
   vec2 uv = tower ? vec2(atan(p.z, p.x) * b.z, p.y) : (abs(Nl.x) > abs(Nl.z) ? vec2(p.z, p.y) : vec2(p.x, p.y));
   if (!tower && Nl.y < -.3) uv = vec2(p.z, p.x);
-  vec4 m = masonry(uv, px, b.w);
+  vec2 tilt;
+  vec4 m = masonry(uv, px, b.w, tilt);
   // each stone its own: grey sandstone, some warmer, some darker
   vec3 stone = (tower ? vec3(.31, .29, .26) : vec3(.29, .29, .28)) * (.72 + .5 * m.y);
   stone = mix(stone, vec3(.36, .29, .21), step(.78, m.y) * .6);
@@ -516,10 +527,17 @@ vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   moss = max(moss, (1. - max(dot(N, ld), 0.)) * .35 * smoothstep(.5, .7, vnoise(uv * .9)));
   stone = mix(stone, vec3(.13, .16, .07) * (.8 + .4 * vnoise(uv * 13.)), clamp(moss, 0., 1.) * .8);
   if (tower) {
-    float ivy = smoothstep(.45, .62, vnoise(vec2(uv.x * .35, uv.y * .22) + b.w) + (1. - p.y / b.y) * .35 - .2);
-    float leaves = smoothstep(.35, .7, vnoise(uv * 9.));
-    stone = mix(stone, vec3(.06, .09, .04) * (.7 + .6 * leaves), ivy * .9);
+    // ivy: climbing from the foot in tongues, ragged at its edges, leaf by leaf (light and dark
+    // leaves, shade between them)
+    float reach = vnoise(vec2(uv.x * .35, uv.y * .18) + b.w) * .7 + vnoise(uv * 1.3 + b.w) * .3 + (1. - p.y / b.y) * .4 - .25;
+    float leafN = vnoise(uv * 11.) * .55 + vnoise(uv * 27. + 3.) * .45;
+    float ivy = smoothstep(.45, .5, reach + (leafN - .5) * .25 * m.w);
+    vec3 ivyC = mix(vec3(.035, .05, .025), vec3(.11, .15, .06), smoothstep(.4, .75, leafN)) * (.8 + .4 * vnoise(uv * 53.));
+    stone = mix(stone, ivyC, ivy * .95);
   }
+  // each stone rounded: its normal tilted toward its edges (across the face, and up it)
+  vec3 tanU = normalize(vec3(-N.z, 0., N.x) + 1e-5);
+  if (abs(N.y) < .7) N = normalize(N + tanU * tilt.x * .45 + vec3(0., 1., 0.) * tilt.y * .45);
   // light: the sun behind the fog, the sky from above, the dark in hollows and openings (AO)
   float ao = 0.;
   for (int k = 1; k <= 4; k++) {
