@@ -113,6 +113,11 @@ uniform int uShadeN;
 uniform vec4 uStA[6];
 uniform vec4 uStB[6];
 uniform int uStN;
+// the dry-stone walls near you, stretch by stretch: from (x, z) to (x, z); the ground at either end,
+// the height, and (caps × 1000 + seed): which ends taper down to a gap (1 the start, 2 the end)
+uniform vec4 uWallA[24];
+uniform vec4 uWallB[24];
+uniform int uWallN;
 ${NOISE}
 // paths: where two smooth fields cross their middle value. Each field's zero line winds by itself;
 // where the two families meet, paths join and fork. (world.ts has the same, so trees keep off)
@@ -414,6 +419,35 @@ float sdViaduct(vec3 p, vec4 b) {
   float arch = length(vec2(p.x - xm, max(p.y - cy, 0.))) - ra;
   return max(body, -arch);
 }
+// a stretch of dry-stone wall: battered (wider at the foot), sagging along its length, tapering
+// down at a gap; its ends overlap the next stretch's a little, so the wall runs on unbroken.
+// Gives along (t), across (s) and up from its foot (y) too, for the shading
+float sdWall(vec3 w, int i, out vec3 tsy) {
+  vec4 a = uWallA[i], b = uWallB[i];
+  vec2 dv = a.zw - a.xy;
+  float L = length(dv);
+  vec2 u = dv / max(L, 1e-3);
+  vec2 r = w.xz - a.xy;
+  float t = dot(r, u), s = dot(r, vec2(-u.y, u.x));
+  float tc = clamp(t, 0., L);
+  float y = w.y - (mix(b.x, b.y, tc / max(L, 1e-3)) - .12);
+  float caps = floor(b.w / 1000.);
+  float seed = mod(b.w, 1000.);
+  float H = b.z * (.86 + .26 * vnoise(vec2(tc * .3, seed)));
+  if (mod(caps, 2.) > .5) H *= .25 + .75 * smoothstep(0., 1.8, tc);
+  if (caps > 1.5) H *= .25 + .75 * smoothstep(0., 1.8, L - tc);
+  float hw = mix(.36, .22, clamp(y / max(H, .1), 0., 1.));
+  // a rounded top (the coping stones)
+  float top = y - H + .12;
+  float d = top > 0. ? length(vec2(max(abs(s) - hw + .12, 0.), top)) - .12 : max(abs(s) - hw, y - H);
+  d = max(d, -y - 1.2);
+  d = max(d, max(-t - .25, t - L - .25));
+  tsy = vec3(t, s, y);
+  return d;
+}
+// the walls a ray meets (found once per pixel), so the march looks only at those
+int wHit[8];
+int wN = 0;
 float sdStruct(vec3 w, out int id) {
   float best = 1e3;
   id = -1;
@@ -422,6 +456,12 @@ float sdStruct(vec3 w, out int id) {
     vec3 p = toLocal(w, i);
     float d = uStA[i].w < 1.5 ? sdTower(p, uStB[i]) : sdViaduct(p, uStB[i]);
     if (d < best) { best = d; id = i; }
+  }
+  for (int k = 0; k < 8; k++) {
+    if (k >= wN) break;
+    vec3 tsy;
+    float d = sdWall(w, wHit[k], tsy);
+    if (d < best) { best = d; id = 100 + wHit[k]; }
   }
   return best;
 }
@@ -448,6 +488,24 @@ float traceStructures(vec3 ro, vec3 rd, out int id) {
     if (i >= uStN) break;
     vec2 sp = boxSpan(ro, rd, i);
     if (sp.y > 0.) { t0 = min(t0, sp.x); t1 = max(t1, sp.y); }
+  }
+  // and the walls' stretches: their boxes (from end to end, foot to top)
+  wN = 0;
+  for (int i = 0; i < 24; i++) {
+    if (i >= uWallN || wN >= 8) break;
+    vec4 a = uWallA[i], b = uWallB[i];
+    vec3 lo = vec3(min(a.x, a.z) - .7, min(b.x, b.y) - 1.3, min(a.y, a.w) - .7);
+    vec3 hi = vec3(max(a.x, a.z) + .7, max(b.x, b.y) + b.z * 1.15 + .1, max(a.y, a.w) + .7);
+    vec3 inv = 1. / (rd + vec3(equal(rd, vec3(0.))) * 1e-6);
+    vec3 q0 = (lo - ro) * inv, q1 = (hi - ro) * inv;
+    vec3 tn = min(q0, q1), tf = max(q0, q1);
+    float n = max(max(tn.x, tn.y), tn.z), f = min(min(tf.x, tf.y), tf.z);
+    if (f > max(n, 0.) && n < 90.) {
+      wHit[wN] = i;
+      wN++;
+      t0 = min(t0, max(n, 0.));
+      t1 = max(t1, f);
+    }
   }
   if (t1 < 0.) return -1.;
   float t = max(t0, .05);
@@ -500,22 +558,38 @@ vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   int j;
   vec2 e = vec2(.012, -.012);
   vec3 N = normalize(e.xyy * sdStruct(w + e.xyy, j) + e.yyx * sdStruct(w + e.yyx, j) + e.yxy * sdStruct(w + e.yxy, j) + e.xxx * sdStruct(w + e.xxx, j));
-  vec3 p = toLocal(w, i);
-  vec4 b = uStB[i];
-  bool tower = uStA[i].w < 1.5;
+  bool wall = i >= 100;
+  bool tower = !wall && uStA[i].w < 1.5;
+  vec3 p;
+  vec4 b;
+  vec2 uv;
   float px = t / uF;
-  // the face's own coordinates: round the tower; along or across the viaduct; up
-  float c = cos(uStA[i].z), s = sin(uStA[i].z);
-  vec3 Nl = vec3(c * N.x + s * N.z, N.y, -s * N.x + c * N.z);
-  vec2 uv = tower ? vec2(atan(p.z, p.x) * b.z, p.y) : (abs(Nl.x) > abs(Nl.z) ? vec2(p.z, p.y) : vec2(p.x, p.y));
-  if (!tower && Nl.y < -.3) uv = vec2(p.z, p.x);
+  if (wall) {
+    // a wall: along it and up it; its top seen from above
+    vec3 tsy;
+    sdWall(w, i - 100, tsy);
+    p = vec3(tsy.x, tsy.z, tsy.y);
+    b = vec4(0., uWallB[i - 100].z, 0., mod(uWallB[i - 100].w, 1000.));
+    uv = abs(N.y) > .6 ? vec2(tsy.x, tsy.y) : vec2(tsy.x + tsy.y * .0, tsy.z);
+  } else {
+    p = toLocal(w, i);
+    b = uStB[i];
+    // the face's own coordinates: round the tower; along or across the viaduct; up
+    float c = cos(uStA[i].z), s = sin(uStA[i].z);
+    vec3 Nl = vec3(c * N.x + s * N.z, N.y, -s * N.x + c * N.z);
+    uv = tower ? vec2(atan(p.z, p.x) * b.z, p.y) : (abs(Nl.x) > abs(Nl.z) ? vec2(p.z, p.y) : vec2(p.x, p.y));
+    if (!tower && Nl.y < -.3) uv = vec2(p.z, p.x);
+  }
   vec2 tilt;
-  vec4 m = masonry(uv, px, b.w, tilt);
+  // (a wall's stones are smaller, laid dry: no mortar, deep dark gaps)
+  vec4 m = wall ? masonry(uv * 2.4, px * 2.4, b.w, tilt) : masonry(uv, px, b.w, tilt);
   // each stone its own: grey sandstone, some warmer, some darker
-  vec3 stone = (tower ? vec3(.31, .29, .26) : vec3(.29, .29, .28)) * (.72 + .5 * m.y);
+  vec3 stone = (tower ? vec3(.31, .29, .26) : wall ? vec3(.33, .32, .29) : vec3(.29, .29, .28)) * (.72 + .5 * m.y);
   stone = mix(stone, vec3(.36, .29, .21), step(.78, m.y) * .6);
   stone *= m.z;
-  stone = mix(stone, vec3(.05, .05, .045), m.x * .85);
+  stone = mix(stone, vec3(.05, .05, .045), m.x * (wall ? 1. : .85));
+  // walls carry lichen: pale crusts in spots and patches
+  if (wall) stone = mix(stone, vec3(.6, .61, .53), smoothstep(.66, .74, vnoise(uv * 6.3 + b.w)) * .55 * m.w);
   // weather: rain-streaks down the faces, lichen pale in patches
   stone *= .85 + .3 * vnoise(vec2(uv.x * 2.5, uv.y * .25));
   stone = mix(stone, vec3(.55, .56, .48), smoothstep(.62, .75, vnoise(uv * 1.7 + 5.)) * .35 * m.w);
@@ -1172,6 +1246,10 @@ export interface Look {
   structA: Float32Array;
   structB: Float32Array;
   structN: number;
+  /** the dry-stone walls near you, stretch by stretch (world.ts wallsNear; up to 24) */
+  wallA: Float32Array;
+  wallB: Float32Array;
+  wallN: number;
   /** the lie of the land (world.ts relief) and how open the wood is */
   relief: [number, number, number, number];
   openness: number;
@@ -1384,6 +1462,9 @@ export class Renderer {
     gl.uniform4fv(this.loc(this.world, 'uStA'), look.structA);
     gl.uniform4fv(this.loc(this.world, 'uStB'), look.structB);
     gl.uniform1i(this.loc(this.world, 'uStN'), look.structN);
+    gl.uniform4fv(this.loc(this.world, 'uWallA'), look.wallA);
+    gl.uniform4fv(this.loc(this.world, 'uWallB'), look.wallB);
+    gl.uniform1i(this.loc(this.world, 'uWallN'), look.wallN);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // everything after is hidden by what is nearer (the stone, the live trees' wood); the cards
     // test against it but do not write (they blend)

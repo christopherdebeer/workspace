@@ -89,6 +89,19 @@ export interface Structure3 {
   b: number;
   c: number;
 }
+/** A stretch of dry-stone wall: from (x0, z0) to (x1, z1), the ground at either end, its height, which ends taper to a gap (1 start, 2 end), and a seed. */
+export interface WallStretch {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+  y0: number;
+  y1: number;
+  h: number;
+  caps: number;
+  seed: number;
+}
+const WALL_GRID = 150;
 /** The grids structures are placed on (m): a tower to some squares, a viaduct to fewer, larger ones. */
 const TOWER_GRID = 220;
 const VIADUCT_GRID = 340;
@@ -311,7 +324,9 @@ export class Wood {
     const vets = this.veterans(x0 - 8, z0 - 8, x0 + CELL + 8, z0 + CELL + 8);
     for (const v of vets) if (v.x >= x0 && v.x < x0 + CELL && v.z >= z0 && v.z < z0 + CELL) out.push(v);
     const stone = this.structuresNear(x0 + CELL / 2, z0 + CELL / 2, CELL);
-    const crowded = (x: number, z: number) => vets.some((v) => Math.hypot(v.x - x, v.z - z) < 5.5) || (stone.length > 0 && this.stoneDist(x, z, stone) < 2.5);
+    const cellWalls = this.wallsNear(x0 + CELL / 2, z0 + CELL / 2, CELL);
+    const hasStone = stone.length > 0 || cellWalls.length > 0;
+    const crowded = (x: number, z: number) => vets.some((v) => Math.hypot(v.x - x, v.z - z) < 5.5) || (hasStone && this.stoneDist(x, z, stone, cellWalls) < 2.5);
     /** Place up to `count` of a kind, each kept where `fits` (the same draws from `r` whatever is kept). */
     const place = (kind: Kind, count: number, clear: number, pool: number, fits: (f: Place, x: number, z: number) => number, grass = false) => {
       const whole = Math.floor(count) + (r() < count % 1 ? 1 : 0);
@@ -328,7 +343,7 @@ export class Wood {
         // keep off the paths (the grass thins on them; trees stand back)
         const pd = clear > 0 || grass ? this.pathDist(x, z) : 99;
         if (pd < clear || (grass && pd < this.path[2] * 0.8 + edge * 0.7)) continue;
-        if (stone.length && this.stoneDist(x, z, stone) < (grass ? 0.2 : 1.5)) continue;
+        if (hasStone && this.stoneDist(x, z, stone, cellWalls) < (grass ? 0.15 : 1.5)) continue;
         if (keep >= fits(this.place(x, z), x, z)) continue;
         out.push({ x, z, kind, pool: Math.floor(pr * pool), scale, rot, flip, phase });
       }
@@ -355,6 +370,95 @@ export class Wood {
   }
 
   private built = new Map<string, Structure3 | null>();
+  private walls = new Map<string, WallStretch[]>();
+
+  /** The stretches of dry-stone wall within `radius` of (x, z). */
+  wallsNear(x: number, z: number, radius: number): WallStretch[] {
+    const out: WallStretch[] = [];
+    if (this.only) return out;
+    for (let I = Math.floor((x - radius - 180) / WALL_GRID); I <= Math.floor((x + radius + 180) / WALL_GRID); I++)
+      for (let J = Math.floor((z - radius - 180) / WALL_GRID); J <= Math.floor((z + radius + 180) / WALL_GRID); J++) {
+        const key = `${I},${J}`;
+        let ws = this.walls.get(key);
+        if (!ws) {
+          ws = this.wall(I, J);
+          this.walls.set(key, ws);
+        }
+        for (const w of ws) {
+          // (distance to the stretch)
+          const dx = w.x1 - w.x0;
+          const dz = w.z1 - w.z0;
+          const L2 = dx * dx + dz * dz || 1;
+          const f = Math.max(0, Math.min(1, ((x - w.x0) * dx + (z - w.z0) * dz) / L2));
+          if (Math.hypot(x - w.x0 - dx * f, z - w.z0 - dz * f) < radius) out.push(w);
+        }
+      }
+    return out;
+  }
+
+  /**
+   * One wall to some squares: an old field boundary, 80–170 m, wandering a little in 10 m
+   * stretches; a gap where a path crosses it (its ends tapering down), here and there a stretch
+   * fallen low enough to step over; it stops at water.
+   */
+  private wall(I: number, J: number): WallStretch[] {
+    const r = seeded(hash(this.seed, 97, I, J));
+    if (r() > 0.5) return [];
+    const out: WallStretch[] = [];
+    let x = (I + r()) * WALL_GRID;
+    let z = (J + r()) * WALL_GRID;
+    let a = r() * 6.283;
+    const H = 1.05 + r() * 0.45;
+    const steps = 8 + Math.floor(r() * 9);
+    let gapBefore = true;
+    for (let k = 0; k < steps; k++) {
+      a += (r() - 0.5) * 0.35;
+      const nx = x + Math.sin(a) * 10;
+      const nz = z + Math.cos(a) * 10;
+      if (this.place(nx, nz).water > 0 || this.place(x, z).water > 0) break;
+      const fallen = r() < 0.1;
+      const seed = Math.floor(r() * 999);
+      // where a path crosses this stretch: leave a gap there (3 m), the wall tapering into it
+      let cut = -1;
+      for (let s = 0; s <= 10; s += 0.5) {
+        const px = x + Math.sin(a) * s;
+        const pz = z + Math.cos(a) * s;
+        if (this.pathDist(px, pz) < this.path[2] + 0.4) {
+          cut = s;
+          break;
+        }
+      }
+      const piece = (s0: number, s1: number, capStart: boolean, capEnd: boolean) => {
+        if (s1 - s0 < 0.6) return;
+        const ax = x + Math.sin(a) * s0;
+        const az = z + Math.cos(a) * s0;
+        const bx = x + Math.sin(a) * s1;
+        const bz = z + Math.cos(a) * s1;
+        out.push({ x0: ax, z0: az, x1: bx, z1: bz, y0: this.groundH(ax, az), y1: this.groundH(bx, bz), h: fallen ? 0.45 : H, caps: (capStart ? 1 : 0) + (capEnd ? 2 : 0), seed });
+      };
+      if (cut < 0) {
+        piece(0, 10, gapBefore, false);
+        gapBefore = false;
+      } else {
+        piece(0, cut - 1.6, gapBefore, true);
+        // past the path (it may cross again further on: then the rest of this stretch is left out)
+        let back = 10;
+        for (let s = cut; s <= 10; s += 0.5) {
+          if (this.pathDist(x + Math.sin(a) * s, z + Math.cos(a) * s) >= this.path[2] + 0.4) {
+            back = s;
+            break;
+          }
+        }
+        piece(back + 1.6, 10, true, false);
+        gapBefore = back + 1.6 >= 10;
+      }
+      x = nx;
+      z = nz;
+    }
+    // (the last stretch's end tapers)
+    if (out.length) out[out.length - 1].caps |= 2;
+    return out;
+  }
 
   /** The stone structures within `radius` of (x, z). */
   structuresNear(x: number, z: number, radius: number): Structure3[] {
@@ -416,8 +520,21 @@ export class Wood {
   }
 
   /** How far (m) from (x, z) to the nearest stone you cannot walk through (negative inside), at walking height. */
-  stoneDist(x: number, z: number, near?: Structure3[]): number {
+  stoneDist(x: number, z: number, near?: Structure3[], walls?: WallStretch[]): number {
     let best = 1e3;
+    for (const w of walls ?? this.wallsNear(x, z, 12)) {
+      // a fallen stretch you step over
+      if (w.h < 0.7) continue;
+      const dx = w.x1 - w.x0;
+      const dz = w.z1 - w.z0;
+      const L2 = dx * dx + dz * dz || 1;
+      const f = Math.max(0, Math.min(1, ((x - w.x0) * dx + (z - w.z0) * dz) / L2));
+      let d = Math.hypot(x - w.x0 - dx * f, z - w.z0 - dz * f) - 0.4;
+      // (the tapered ends: low enough to pass at the very end)
+      const along = f * Math.sqrt(L2);
+      if (((w.caps & 1) && along < 0.6) || ((w.caps & 2) && Math.sqrt(L2) - along < 0.6)) d = Math.max(d, 0.5);
+      best = Math.min(best, d);
+    }
     for (const s of near ?? this.structuresNear(x, z, 30)) {
       const dx = x - s.x;
       const dz = z - s.z;

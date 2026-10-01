@@ -38,7 +38,7 @@ export const FLAGS = {
   at: { kind: 'number', min: -500, max: 500, step: 10, unit: 'm', group: 'stand', doc: 'with no x, y: start this far north of the origin (on the nearest path there)' },
   look: { kind: 'number', min: -3.14, max: 3.14, step: 0.05, unit: 'rad', group: 'stand', doc: 'turn from the way you would face' },
   near: { kind: 'number', min: 0.5, max: 20, step: 0.5, unit: 'm', group: 'stand', doc: 'stand this far from the nearest tree, facing it' },
-  find: { kind: 'enum', values: ['pond', 'log', 'veteran', 'glade', 'tower', 'viaduct'], group: 'stand', doc: 'stand by the nearest one, facing it' },
+  find: { kind: 'enum', values: ['pond', 'log', 'veteran', 'glade', 'tower', 'viaduct', 'wall'], group: 'stand', doc: 'stand by the nearest one, facing it' },
   off: { kind: 'number', min: 0, max: 40, step: 1, unit: 'm', group: 'stand', doc: 'how far off `find` stands you' },
   walk: { kind: 'bool', group: 'stand', live: true, doc: 'walk on by yourself' },
   tilt: { kind: 'number', min: -0.55, max: 0.55, step: 0.01, unit: 'rad', group: 'stand', live: true, doc: 'the head at rest tilted (− down at the ground): for pictures' },

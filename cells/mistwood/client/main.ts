@@ -122,7 +122,9 @@ function stand(z: number, resume = false) {
         best = { x, z };
       }
     };
-    if (find === 'tower' || find === 'viaduct') {
+    if (find === 'wall') {
+      for (let r = 40; r <= 600 && !best; r += 80) for (const w of wood.wallsNear(posX, posZ, r)) if (w.h > 0.7) consider((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
+    } else if (find === 'tower' || find === 'viaduct') {
       for (let r = 100; r <= 1600 && !best; r += 250) for (const s of wood.structuresNear(posX, posZ, r)) if (s.kind === find) consider(s.x, s.z);
     } else if (find === 'pond' || find === 'glade')
       for (let r = 0; r < 400 && !best; r += 4)
@@ -137,7 +139,7 @@ function stand(z: number, resume = false) {
         for (const p of wood.around(posX, posZ, r)) if (find === 'log' ? p.kind === 'log' : p.scale > 1.6) consider(p.x, p.z);
     if (best) {
       const b = best as { x: number; z: number };
-      const off = flag('off') ?? (find === 'pond' ? 14 : find === 'glade' ? 0 : find === 'tower' ? 22 : find === 'viaduct' ? 30 : 9);
+      const off = flag('off') ?? (find === 'pond' ? 14 : find === 'glade' ? 0 : find === 'tower' ? 22 : find === 'viaduct' ? 30 : find === 'wall' ? 7 : 9);
       const a = Math.atan2(posX - b.x, posZ - b.z);
       posX = b.x + Math.sin(a) * off;
       posZ = b.z + Math.cos(a) * off;
@@ -386,6 +388,8 @@ let t = flag('time') ?? 0;
 const shade = new Float32Array(40 * 4);
 const structA = new Float32Array(24);
 const structB = new Float32Array(24);
+const wallA = new Float32Array(96);
+const wallB = new Float32Array(96);
 const shadeOff = new Float32Array(40 * 2);
 let shadeN = 0;
 /** The time of day: your clock (or ?hour=), passing in real time. */
@@ -474,17 +478,18 @@ function frame(now: number) {
   let mx = nx;
   let mz = nz;
   const near = wood.structuresNear(nx, nz, 12);
-  if (near.length && wood.stoneDist(nx, nz, near) < 0.45) {
+  const nearWalls = wood.wallsNear(nx, nz, 6);
+  if ((near.length || nearWalls.length) && wood.stoneDist(nx, nz, near, nearWalls) < 0.45) {
     const e = 0.05;
-    const gx = wood.stoneDist(nx + e, nz, near) - wood.stoneDist(nx - e, nz, near);
-    const gz = wood.stoneDist(nx, nz + e, near) - wood.stoneDist(nx, nz - e, near);
+    const gx = wood.stoneDist(nx + e, nz, near, nearWalls) - wood.stoneDist(nx - e, nz, near, nearWalls);
+    const gz = wood.stoneDist(nx, nz + e, near, nearWalls) - wood.stoneDist(nx, nz - e, near, nearWalls);
     const gl = Math.hypot(gx, gz) || 1;
     const vx = nx - posX;
     const vz = nz - posZ;
     const into = Math.min(0, (vx * gx + vz * gz) / gl);
     mx = posX + vx - (into * gx) / gl;
     mz = posZ + vz - (into * gz) / gl;
-    if (wood.stoneDist(mx, mz, near) < 0.4) {
+    if (wood.stoneDist(mx, mz, near, nearWalls) < 0.4) {
       mx = posX;
       mz = posZ;
     }
@@ -752,7 +757,17 @@ function frame(now: number) {
     structA.set([s.x, s.z, s.rot, s.kind === 'tower' ? 1 : 2], i * 4);
     structB.set(s.kind === 'tower' ? [s.base, s.a, s.b, s.c] : [s.base, s.a, s.b, s.c], i * 4);
   });
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, structA, structB, structN: stone.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
+  // the walls near you, nearest first (24 stretches: walls further off are lost in the fog)
+  const wallsHere = wood
+    .wallsNear(view.x, view.z, 70)
+    .map((w) => ({ w, d: Math.hypot((w.x0 + w.x1) / 2 - view.x, (w.z0 + w.z1) / 2 - view.z) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 24);
+  wallsHere.forEach(({ w }, i) => {
+    wallA.set([w.x0, w.z0, w.x1, w.z1], i * 4);
+    wallB.set([w.y0, w.y1, w.h, w.caps * 1000 + w.seed], i * 4);
+  });
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, structA, structB, structN: stone.length, wallA, wallB, wallN: wallsHere.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
