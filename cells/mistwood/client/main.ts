@@ -128,7 +128,7 @@ function stand(z: number, resume = false) {
       for (let r = 40; r <= 600 && !best; r += 80)
         for (const w of wood.wallsNear(posX, posZ, r))
           if (w.h > 0.7 && Math.hypot(w.x1 - w.x0, w.z1 - w.z0) > 8) {
-            const before = best;
+            const before: { x: number; z: number } | null = best;
             consider((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
             if (best !== before) {
               const L = Math.hypot(w.x1 - w.x0, w.z1 - w.z0);
