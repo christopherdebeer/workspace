@@ -132,9 +132,14 @@ horizon line ever shows.
   light through the deeper it goes: dark and warm in the mass, tawny at the
   tops, ragged at every scale. It takes over from the cards between 6 and 16 m,
   and where the old ground met the fog in a hard line it now goes soft.
-- **The forest floor near you is built leaf by leaf** (`forestFloor` in
-  render.ts): eight scattered layers composited top-down, each on its own turned
-  grid, one thing to a cell (kept inside it, so it costs one lookup a layer).
+- **The forest floor near you is built stone by stone and leaf by leaf**
+  (`forestFloor` in render.ts): scattered layers composited top-down, each on
+  its own turned grid, one thing to a cell (kept inside it, so it costs one
+  lookup a layer). The grids are bent by a slow warp about a cell deep, so no
+  row ever lines up.
+  - Stones in four sizes (1–5 cm), with irregular outlines (three random
+    harmonics), dome-lit, in warm greys and browns, darker and with a sheen in
+    the wet; fine grit over dark soil beneath. Leaves are scattered over them.
   - Leaves: oak-lobed or beech-toothed, mottled, curled (and lit as they curl),
     with a midrib and side veins, darker at the edge, and shadowing what lies
     beneath. Colours run from fresh tan through rust to last year's near-black.
