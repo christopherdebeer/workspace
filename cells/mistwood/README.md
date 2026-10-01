@@ -68,6 +68,20 @@ realism is carried by the fog and the light rather than by geometry.
   or reaching, sparse or dense in twig, some holding dead leaves, a few
   pale-barked, now and then a coppiced one of several stems — each with its
   own bark colour, and a couple of wild cards further out.
+- **Roots are the tree inverted**: the same growth — spiralling round the trunk,
+  kinking, tapering — pulled down instead of up. Only what is above the ground
+  is drawn: the ridge where each root leaves the trunk and dives into the soil
+  (shallow-rooted species run further). The trunk's own first 90 cm flare out
+  towards the ground in short steps.
+- **Bark up close** (near trees, only where the wood is wide on screen): placed
+  by where it is round the trunk and up it, so it stays on the wood as you walk
+  round. Each species has its own: fissured plates of a few centimetres (deep
+  in some, none in others) with relief that catches the light, a fine grain;
+  lichen as speckled grey-green crusts (a yellow one now and then) at mid
+  height; moss as velvet green low down and on the shaded side. Birch: fine
+  lenticels in loose rows, dark patches long across the trunk, papery cream,
+  a dark fissured foot with a ragged edge. Wide wood is drawn as a continuous
+  cylinder so the pattern runs across segment joints without a seam.
 - **Deer** (`client/deer.ts`): now and then a few come into the edge of the
   fog, grazing side-on. Come near, or walk towards them, and one lifts its
   head and turns it to look at you; keep still and they may settle; come closer
@@ -95,5 +109,5 @@ call now and then.
 
 ## Debug
 
-`?seed=` · `?only=birch` (one archetype) · `?deer=1` · `?deerAt=<m>` · `?walk=1` · `?look=<radians>` · `?fixed` ·
+`?seed=` · `?near=<m>` (stand by the nearest tree, facing it) · `?only=birch` (one archetype) · `?deer=1` · `?deerAt=<m>` · `?walk=1` · `?look=<radians>` · `?fixed` ·
 `window.__mistwood` (cards drawn and baked, MB, the resolution bias).

@@ -237,6 +237,7 @@ flat out vec2 vA;
 flat out vec2 vB;
 flat out vec2 vW;
 flat out vec2 vTL;
+flat out vec2 vWm;
 out vec3 vWorld;
 out float vDist;
 vec3 place(vec3 p) {
@@ -280,6 +281,7 @@ void main() {
   vB = b;
   vW = vec2(pa, pb);
   vTL = aInfo.zw;
+  vWm = aInfo.xy * uScale;
   vWorld = first ? wa : wb;
   vDist = first ? ha : hb;
 }`;
@@ -292,14 +294,24 @@ flat in vec2 vA;
 flat in vec2 vB;
 flat in vec2 vW;
 flat in vec2 vTL;
+flat in vec2 vWm;
 in vec3 vWorld;
 in float vDist;
 out vec4 o;
-uniform float uDensity, uAlpha, uPhase, uRim;
+uniform float uDensity, uAlpha, uPhase, uRim, uViewAz;
 uniform vec3 uBark, uBirch, uLeaf;
+// bark up close: fissure depth, pattern scale, lichen, moss (the species')
+uniform vec4 uBarkP;
 // the sun's direction in the view (screen right, screen up, towards the eye)
 uniform vec3 uLight;
 ${NOISE}
+float hc(float a, float b) { return h2(ivec2(int(floor(a)), int(floor(b)) + int(uPhase * 1000.))); }
+// organic patches: noise warped by noise and turned off the grid (plain value noise, thresholded,
+// shows its square cells as straight-edged blocks)
+float organic(vec2 p) {
+  vec2 q = p + vec2(vnoise(p * .7 + 3.1), vnoise(p * .7 + 7.7)) * 1.4;
+  return fbm(mat2(.8, -.6, .6, .8) * q);
+}
 void main() {
   vec2 pa = vP - vA, ba = vB - vA;
   float bb = max(dot(ba, ba), 1e-6);
@@ -309,7 +321,15 @@ void main() {
   float d = length(off);
   float w = mix(vW.x, vW.y, h);
   float cov;
-  if (w >= 1.) cov = clamp(w * .5 - d + .5, 0., 1.);
+  if (w >= 4.) {
+    // wide wood is a continuous cylinder: no round ends (where one segment meets the next they
+    // overlap a little, computing the same surface, so the bark runs on without a seam)
+    float over = w * .4 / sqrt(bb);
+    if (hRaw < -over || hRaw > 1. + over) discard;
+    off = pa - ba * hRaw;
+    d = length(off);
+    cov = clamp(w * .5 - d + .5, 0., 1.);
+  } else if (w >= 1.) cov = clamp(w * .5 - d + .5, 0., 1.);
   else {
     if (hRaw < 0. || hRaw > 1.) discard;
     cov = w * clamp(1. - d, 0., 1.);
@@ -326,20 +346,75 @@ void main() {
   float sky = .5 + .5 * N.y;
   float round = w > 1.5 ? 1. : smoothstep(.5, 1.5, w);
   float lit = mix(.85, .38 + .5 * dif + .22 * sky + .35 * pow(abs(a), 5.) * uRim, round);
+  // up close the surface itself: where on the wood this is — round the trunk (metres, from the
+  // side facing you, turned by where you stand) and up it — so the pattern stays on the wood
+  float near = smoothstep(5., 24., w) * (1. - vTL.y);
+  float wm = mix(vWm.x, vWm.y, h);
+  float u = (asin(a) + uViewAz) * wm * .5;
+  float v = vWorld.y;
+  float wrap = sqrt(max(0., 1. - a * a));
   vec3 birch = uBirch;
+  vec3 bark = uBark;
   if (vTL.x > .3) {
-    // birch bark: dark lenticels wrapping round (thinning to the edges), black patches, a darker foot
-    float wrap = sqrt(max(0., 1. - a * a));
-    // (marks are long across the trunk and short up it: lenticels as fine lines, patches as bands)
-    float band = vnoise(vec2(a * .9 + uPhase * 3.1, vWorld.y * 48.));
-    float patchy = vnoise(vec2(a * .7 + uPhase, vWorld.y * 7.)) * .7 + vnoise(vec2(a * 3., vWorld.y * 20.)) * .3;
-    birch *= 1. - .8 * smoothstep(.74, .8, band) * wrap - .8 * smoothstep(.7, .76, patchy) * wrap - .5 * exp(-vWorld.y * 1.2);
-    // white bark is pale even in shade (the fog lights it from everywhere); the shadow side goes
-    // cool and a little green (lichen, and the fog's own colour)
+    // birch: papery, creamy and a little uneven; fine lenticels in rows across it; dark
+    // patches long across and short up; and a dark, fissured foot with a ragged edge
+    birch *= .9 + .14 * vnoise(vec2(u * 7., v * 1.4)) * near;
+    birch = mix(birch, birch * vec3(1.04, .98, .95), vnoise(vec2(u * 3., v * .7) + 9.) * .5 * near);
+    // lenticels: thin dark dashes across the bark, in loose rows — some long, many short, gaps,
+    // each a little above or below its row
+    float row = v / .016;
+    float rowJ = hc(row, 7.);
+    float uu = u + rowJ * 3.;
+    float cell = uu / (.035 + .03 * rowJ);
+    float r = hc(row, cell);
+    float r2 = hc(row + 31., cell);
+    float len = (.004 + r * r * .04) / (.035 + .03 * rowJ);
+    float cx = abs(fract(cell) - .5);
+    float cy = abs(fract(row) - .5 - (r2 - .5) * .35);
+    float dash = step(.5, r) * (1. - smoothstep(len * .5, len * .5 + .05, cx)) * (1. - smoothstep(.06 + r2 * .1, .12 + r2 * .12, cy));
+    // and the pale bark itself in bands: a little greyer here, creamier there
+    birch *= .93 + .1 * vnoise(vec2(u * 2., v * 9.)) * near;
+    float patchy = smoothstep(.62, .7, organic(vec2(u * 6., v * 14.) + uPhase * 7.));
+    float foot = 1. - smoothstep(0., .12, v - (.35 + .6 * vnoise(vec2(u * 4., uPhase * 9.))));
+    float marks = max(dash * .85 * near, patchy * .8) * wrap;
+    birch *= 1. - marks;
+    // far, the marks blur into bands (as before)
+    float band = vnoise(vec2(a * .9 + uPhase * 3.1, v * 48.));
+    birch *= 1. - .7 * smoothstep(.74, .8, band) * wrap * (1. - near);
     float blit = mix(.9, .62 + .32 * dif + .16 * sky + .3 * pow(abs(a), 5.) * uRim, round);
     birch = mix(birch * blit, birch * vec3(.66, .74, .7) * (.7 + .2 * sky), (1. - dif) * .4 * round);
+    // the foot: dark rough bark
+    float plates = fbm(vec2(u * 9., v * 2.));
+    vec3 rough = uBark * (.6 + .6 * smoothstep(.4, .6, plates)) * lit;
+    birch = mix(birch, rough, max(foot, exp(-v * 3.) * .6));
   } else birch *= lit;
-  vec3 base = mix(uBark * lit, birch, vTL.x);
+  if (near > 0.) {
+    // dark bark: long plates split by fissures (deep in some species, none in others), a fine grain,
+    // its relief catching the light
+    float sc = uBarkP.y;
+    // (plates a few centimetres across and a hand or two long; fissures between)
+    float plates = organic(vec2(u * 28. / sc, v * 6. / sc));
+    float cracks = vnoise(vec2(u * 80. / sc, v * 14. / sc));
+    float ridge = smoothstep(.38, .6, plates * .7 + cracks * .3);
+    float relief = mix(1., ridge, uBarkP.x * near);
+    float grain = vnoise(vec2(u * 220., v * 70.));
+    bark *= (.35 + .9 * relief) * (.85 + .3 * grain * near);
+    float bump = clamp((dFdx(relief) * uLight.x + dFdy(relief) * uLight.y) * 5., -.4, .4);
+    lit *= 1. + bump * uBarkP.x * near;
+    // lichen: pale grey-green crusts with speckled edges, a yellow one now and then, at mid height
+    float lm = smoothstep(.52, .62, organic(vec2(u * 20., v * 13.) + 17.)) * uBarkP.z * smoothstep(.2, 1.2, v) * (1. - smoothstep(9., 16., v));
+    // a crust, not paint: speckled, and the bark showing through
+    lm *= (.45 + .55 * smoothstep(.35, .6, vnoise(vec2(u * 170., v * 170.)))) * .7;
+    vec3 lichenC = mix(vec3(.5, .57, .48), vec3(.6, .58, .36), step(.88, organic(vec2(u * 10., v * 10.) + 3.)));
+    // moss: velvet green, low on the trunk and on its shaded side; the foot always a little mossy
+    float mm = smoothstep(.45, .56, organic(vec2(u * 12., v * 7.) + 5.)) * uBarkP.w * (1. - smoothstep(.2, .6 + 2.4 * uBarkP.w, v)) * (.35 + .65 * (1. - dif));
+    mm = max(mm, uBarkP.w * (1. - smoothstep(0., .4, v)) * .75);
+    vec3 mossC = mix(vec3(.12, .19, .06), vec3(.27, .35, .1), vnoise(vec2(u * 130., v * 130.)));
+    bark = mix(bark, lichenC / max(lit, .3), lm * near * (1. - vTL.x));
+    bark = mix(bark, mossC / max(lit, .3) * (.8 + .4 * dif), mm * near);
+    birch = mix(birch, lichenC * lit, lm * near * vTL.x * .5);
+  }
+  vec3 base = mix(bark * lit, birch, vTL.x);
   base = mix(base, uLeaf, vTL.y);
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
   float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y, 0.) * .35) * smoothstep(2., 14., vDist)));
@@ -490,6 +565,10 @@ export interface LiveDraw {
   height: number;
   alpha: number;
   bark: [number, number, number];
+  /** fissure depth, pattern scale, lichen, moss */
+  barkP: [number, number, number, number];
+  /** where you stand, seen from the tree (its own turn taken off), so the bark stays on the wood */
+  viewAz: number;
 }
 export interface DeerDraw {
   live: false;
@@ -510,7 +589,7 @@ const PAL = {
   fogHigh: [0.53, 0.63, 0.57],
   bark: [0.1, 0.095, 0.08],
   birch: [0.7, 0.73, 0.68],
-  leaf: [0.4, 0.27, 0.18],
+  leaf: [0.26, 0.15, 0.09],
   straw: [0.6, 0.48, 0.3],
   strawDark: [0.19, 0.14, 0.085],
   ground: [0.36, 0.28, 0.17],
@@ -675,6 +754,8 @@ export class Renderer {
         gl.uniform1f(this.loc(L, 'uHeight'), c.height);
         gl.uniform1f(this.loc(L, 'uAlpha'), c.alpha);
         gl.uniform3fv(this.loc(L, 'uBark'), c.bark);
+        gl.uniform4fv(this.loc(L, 'uBarkP'), c.barkP);
+        gl.uniform1f(this.loc(L, 'uViewAz'), c.viewAz);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.count);
         continue;
       }

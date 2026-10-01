@@ -150,6 +150,14 @@ export interface Genome extends Params {
   archetype: Species;
   /** bark colour (dark wood; birch white is separate) */
   bark: [number, number, number];
+  /** bark up close: how deeply fissured (0 smooth … 1 deep plates), the scale of its pattern,
+   * how much lichen and moss it carries */
+  barkRough: number;
+  barkScale: number;
+  lichen: number;
+  moss: number;
+  /** roots: how widely and shallowly they run (shallow ones show further from the trunk) */
+  rootSpread: number;
 }
 
 export function sampleGenome(r: Rand, archetype: Species, wild = 1): Genome {
@@ -177,12 +185,25 @@ export function sampleGenome(r: Rand, archetype: Species, wild = 1): Genome {
     white: b.white || (r() < 0.06 ? 0.06 : 0),
     stems: archetype === 'tall' && r() < 0.12 ? [2, 4] : b.stems,
     bark: [0, 0, 0],
+    barkRough: 0,
+    barkScale: 1,
+    lichen: 0,
+    moss: 0,
+    rootSpread: 1,
   };
-  // bark: dark, a little greener (moss) or warmer (brown), lighter or darker
-  const light = 0.75 + r() * 0.7;
+  // bark: dark, a little greener (moss) or warmer (brown), lighter or darker; beech-like
+  // saplings smooth and grey, the big trees deeply fissured
+  const light = 0.8 + r() * 0.6;
   const hue = r();
-  const base: [number, number, number] = hue < 0.4 ? [0.09, 0.105, 0.08] : hue < 0.75 ? [0.1, 0.095, 0.08] : [0.13, 0.1, 0.075];
+  const smooth = archetype === 'sapling' || (archetype === 'leaner' && r() < 0.3);
+  const base: [number, number, number] = smooth ? [0.2, 0.2, 0.185] : hue < 0.4 ? [0.13, 0.14, 0.11] : hue < 0.75 ? [0.15, 0.135, 0.115] : [0.17, 0.13, 0.1];
   g.bark = [base[0] * light, base[1] * light, base[2] * light];
+  const range = (lo: number, hi: number) => lo + (hi - lo) * r();
+  g.barkRough = smooth ? range(0, 0.15) : archetype === 'tall' ? range(0.55, 1) : archetype === 'shrub' ? range(0.1, 0.35) : range(0.3, 0.75);
+  g.barkScale = range(0.6, 1.6);
+  g.lichen = range(0.15, archetype === 'birch' ? 0.5 : 0.85);
+  g.moss = range(0.1, archetype === 'shrub' ? 0.3 : 0.9);
+  g.rootSpread = range(0.6, archetype === 'birch' || smooth ? 1.7 : 1.2);
   return g;
 }
 
@@ -230,11 +251,22 @@ export function grow(seed: number, genome: Genome): Structure {
     const white = p.white > 0;
     let pos = at;
     let d = dir;
+    // a trunk's foot: its first 90 cm in short steps, flaring out towards the ground and easing
+    // into the trunk (part of the trunk, so its bark runs on without a seam)
+    if (order === 0 && len > 1.5 && w0 > 0.03) {
+      const fw = (hh: number) => w0 * (1 + 0.75 * Math.exp(-hh * 4.5));
+      for (let k = 0; k < 6; k++) {
+        const next: V3 = [pos[0] + d[0] * 0.15, pos[1] + d[1] * 0.15, pos[2] + d[2] * 0.15];
+        push(pos, next, fw(k * 0.15), fw((k + 1) * 0.15), white && w0 > p.white ? 1 : 0, 0);
+        pos = next;
+      }
+      len -= 0.9;
+    }
     for (let i = 0; i < steps; i++) {
       const f0 = i / steps;
       const f1 = (i + 1) / steps;
-      const wa = (w0 + (wEnd - w0) * f0) * (order === 0 ? 1 + .55 * Math.exp(-f0 * len * 6) : 1);
-      const wb = (w0 + (wEnd - w0) * f1) * (order === 0 ? 1 + .55 * Math.exp(-f1 * len * 6) : 1);
+      const wa = w0 + (wEnd - w0) * f0;
+      const wb = w0 + (wEnd - w0) * f1;
       // the kink grows towards the twigs; thick wood bends to the light, thin long twigs hang
       d = turn(d, (r() - 0.5) * p.kink * (0.5 + order * 0.35) * 1.2, r() * 6.28);
       const up = p.up * step * (wa > 0.02 ? 1 : 0.4);
@@ -295,13 +327,34 @@ export function grow(seed: number, genome: Genome): Structure {
     const lean = (stems > 1 ? 0.3 + r() * 0.7 : r()) * p.lean * (stems > 1 ? 2.2 : 2);
     const az = stems > 1 ? (s / stems) * 6.28 + r() : r() * 6.28;
     const base: V3 = stems > 1 ? [(r() - 0.5) * 0.3, 0, (r() - 0.5) * 0.3] : [0, 0, 0];
-    // Low, tapering roots disappear into litter; generated before the crown budget.
-    for (let k = 0; k < 4; k++) {
-      const ra = az + k * 1.5708 + detail() * .7;
-      const reach = w * (1.8 + detail() * 2.7);
-      const mid: V3 = [base[0] + Math.cos(ra) * reach * .42, w * .18, base[2] + Math.sin(ra) * reach * .42];
-      push([base[0], w * .3, base[2]], mid, w * .42, w * .18, 0, 0);
-      push(mid, [base[0] + Math.cos(ra) * reach, .006, base[2] + Math.sin(ra) * reach], w * .18, .004, 0, 0);
+    // the roots — the tree inverted: the same growth, spiralling round, kinking, tapering, but
+    // pulled down instead of up. Only what is above the ground is drawn (each root's ridge as it
+    // leaves the trunk and dives into the soil); the rest is underground. Generated first, from
+    // their own random stream, so the crown is unchanged.
+    if (w > 0.03) {
+      const count = 5 + Math.floor(detail() * 4);
+      for (let k = 0; k < count; k++) {
+        const ra = az + k * GOLDEN + detail() * 0.4;
+        let dir: V3 = norm([Math.cos(ra), -0.1 - detail() * 0.22, Math.sin(ra)]);
+        let pos: V3 = [base[0] + Math.cos(ra) * w * 0.3, w * 0.5, base[2] + Math.sin(ra) * w * 0.3];
+        let rw = w * (0.45 + detail() * 0.3);
+        for (let i = 0; i < 30; i++) {
+          const step = Math.max(0.025, rw * 0.8);
+          // meandering, and pulled down (the inverse of reaching for the light); shallow-rooted
+          // trees' roots run further before they dive
+          dir = turn(dir, (detail() - 0.5) * 0.55, detail() * 6.28);
+          dir = norm([dir[0], dir[1] - (0.3 * step) / genome.rootSpread, dir[2]]);
+          const next: V3 = [pos[0] + dir[0] * step, pos[1] + dir[1] * step, pos[2] + dir[2] * step];
+          const nw = rw * 0.86;
+          // what shows is the ridge above the ground: its top, resting on the ground
+          const top0 = pos[1] + rw / 2;
+          const top1 = next[1] + nw / 2;
+          if (top1 <= 0.002) break;
+          push([pos[0], top0 / 2, pos[2]], [next[0], top1 / 2, next[2]], Math.min(rw, top0), Math.min(nw, top1), 0, 0);
+          pos = next;
+          rw = nw;
+        }
+      }
     }
     branch(base, norm([Math.sin(lean) * Math.cos(az), Math.cos(lean), Math.sin(lean) * Math.sin(az)]), len, w, 0, p.clear);
   }
@@ -329,15 +382,16 @@ export function growPatch(seed: number, width: number): Structure {
     const back = Math.pow(r(), 1.4);
     let y = back * 0.16;
     const h = (0.06 + Math.pow(r(), 1.2) * 0.62) * (1 - back * 0.35);
-    const fallen = r() < .24;
-    let a = fallen ? (r() < .5 ? .16 : Math.PI - .16) : Math.PI / 2 + lean + (r() - .5) * 1.25;
+    const fallen = r() < .08;
+    let a = fallen ? (r() < .5 ? .55 : Math.PI - .55) : Math.PI / 2 + lean + (r() - .5) * 1.25;
     const bend = (r() - 0.5) * 0.25 + lean * 0.3;
     const steps = 5;
-    const w = (0.0015 + Math.pow(r(), 3) * 0.011) * (1 - back * 0.3);
+    const w = (0.0015 + Math.pow(r(), 3) * 0.006) * (1 - back * 0.3);
     const tone = Math.min(1, r() * (1 - back * 0.3) + back * 0.35);
     for (let k = 0; k < steps; k++) {
-      const nx = x + (Math.cos(a) * h) / steps;
-      const ny = Math.max(.008, y + (Math.sin(a) * h) / steps);
+      const len = fallen ? h * 0.45 : h;
+      const nx = x + (Math.cos(a) * len) / steps;
+      const ny = Math.max(.008, y + (Math.sin(a) * len) / steps);
       seg(x, y, nx, ny, w * (1 - k / steps), w * (1 - (k + 1) / steps) + 0.0005, tone);
       x = nx;
       y = ny;

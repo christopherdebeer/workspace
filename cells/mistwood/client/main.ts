@@ -10,7 +10,7 @@
  * and looking give real parallax; the fog, the mist banks and the wind are all
  * in the shaders (render.ts).
  *
- * Debug: ?deer=1 (deer come at once) · ?hour= ?moon= ?fog= ?warm= (sky.ts) · ?only=birch (every tree one species) · ?at=<metres> · ?walk=1 · ?look=<radians> · ?fixed · window.__mistwood
+ * Debug: ?near=<m> (stand by the nearest tree, facing it) · ?deer=1 (deer come at once) · ?hour= ?moon= ?fog= ?warm= (sky.ts) · ?only=birch (every tree one species) · ?at=<metres> · ?walk=1 · ?look=<radians> · ?fixed · window.__mistwood
  */
 import { Sound } from './audio';
 import { Baker, type Card } from './bake';
@@ -86,6 +86,26 @@ function stand(z: number) {
   posX = at.x;
   posZ = at.z;
   heading = at.heading + (Number(params.get('look')) || 0);
+  // debug `?near=2`: stand that far from the nearest tree, facing it (to look at bark)
+  const near = Number(params.get('near'));
+  if (near) {
+    let best: { x: number; z: number } | null = null;
+    let bd = Infinity;
+    for (const p of wood.around(posX, posZ, 25)) {
+      if (p.kind === 'patch' || p.kind.startsWith('h') || p.kind.startsWith('s')) continue;
+      const d = Math.hypot(p.x - posX, p.z - posZ);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    if (best) {
+      const a = Math.atan2(posX - best.x, posZ - best.z);
+      posX = best.x + Math.sin(a) * near;
+      posZ = best.z + Math.cos(a) * near;
+      heading = Math.atan2(best.x - posX, best.z - posZ) + (Number(params.get('look')) || 0);
+    }
+  }
 }
 let herd!: Herd;
 function plant(s: number) {
@@ -269,8 +289,9 @@ function frame(now: number) {
       const n = countWider(st, (0.1 * hd) / (view.f * p.scale));
       if (n <= liveLeft) {
         liveLeft -= n;
+        const g = wood.genomeOf(p.kind);
         liveAlpha = 1 - smoothstep(LIVE - 4, LIVE, hd);
-        draws.push({ live: true, buffer: baker.buffer(st), count: n, x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: wood.genomeOf(p.kind)?.bark ?? DARK, d: hd });
+        draws.push({ live: true, buffer: baker.buffer(st), count: n, x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd });
       }
     }
     if (liveAlpha >= 0.999) continue;
