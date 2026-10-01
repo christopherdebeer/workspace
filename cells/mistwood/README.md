@@ -4,7 +4,7 @@
 photograph: a green-grey woodland fog, a small bare tree leaning over dry grass,
 tall trunks fading behind, a birch, a beech sapling keeping last year's leaves.
 
-Nothing to do and nothing to finish. Touch the ground (below the horizon) to walk, at once, and drag across to steer; the pace builds from a walk to a brisk one and, if you keep on, a run (where the device reports real pressure, e.g. Apple Pencil, pressing harder goes faster). Touch the sky to look: across turns you, with a head's weight; up and down cranes your neck, harder the further it goes, and eases back level when you let go. Two fingers pinch to look closer (up to 4×), easing back out. Standing still is still.
+Nothing to do and nothing to finish. Touch the ground (below the horizon) to walk, at once; the finger is a tiller (held right of the middle you keep bearing right, the further out the sharper; the middle goes straight), so you never need to lift and drag again; the pace builds from a walk to a brisk one and, if you keep on, a run (where the device reports real pressure, e.g. Apple Pencil, pressing harder goes faster). Touch the sky to look: across turns you, with a head's weight; up and down cranes your neck, harder the further it goes, and eases back level when you let go. Two fingers pinch to look closer (up to 4×), easing back out. Standing still is still.
 
 ## The approach: silhouettes, in extreme detail, on the GPU
 

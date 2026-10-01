@@ -3,7 +3,8 @@
  *
  *   node cells/mistwood/devtools/input.test.mjs
  *
- * 1. A touch on the ground (below the horizon) walks, at once.
+ * 1. A touch on the ground (below the horizon) walks, at once; held right of the middle, it
+ *    keeps bearing right (a tiller), held in the middle, straight on.
  * 2. A touch on the sky (above it) does not walk; dragging it across turns you, up tilts.
  * 3. Letting go, the tilt eases back level (not at once).
  * 4. Two fingers spreading look closer; letting go eases back out.
@@ -29,6 +30,20 @@ await withWood(async (wood) => {
   await touch('touchStart', [[W / 2, H * 0.85]]);
   await page.waitForFunction(() => window.__mistwood.pace > 0.05, null, { timeout: 30000 }).catch(() => {});
   c.ok('a touch on the ground walks', (await s()).pace > 0.05, await s());
+  const straight = (await s()).heading;
+  await game(1.5);
+  c.ok('… held in the middle, straight on', Math.abs((await s()).heading - straight) <= 1, { from: straight, to: (await s()).heading });
+  await touch('touchEnd', []);
+  await game(3);
+  // held right of the middle, without moving: it keeps bearing right
+  await touch('touchStart', [[W * 0.9, H * 0.85]]);
+  const h1 = (await s()).heading;
+  await game(2);
+  const h2 = (await s()).heading;
+  await game(2);
+  const h3 = (await s()).heading;
+  const turn = (a, b) => ((b - a + 540) % 360) - 180;
+  c.ok('… held right of the middle, it keeps bearing right', turn(h1, h2) > 5 && turn(h2, h3) > 5, { h1, h2, h3 });
   await touch('touchEnd', []);
   await game(5);
 

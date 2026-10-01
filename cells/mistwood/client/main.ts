@@ -205,7 +205,9 @@ let stride = 0;
 let footY = wood.groundH(posX, posZ);
 
 // ─── input: where you touch says what you mean ─────────────────────────────────────────
-// Touch the ground (below the horizon) and you walk, at once; drag across to steer. Touch the
+// Touch the ground (below the horizon) and you walk, at once, and the finger steers like a
+// tiller: held right of the middle you keep bearing right, left of it left, the further out the
+// sharper (a still middle band goes straight) — no need to lift and drag again. Touch the
 // sky (above it) and you look: across turns you, heavily, as a head turns; up and down cranes
 // your neck, harder the further it goes, and eases back level, slowly, when you let go. Two
 // fingers pinch to look closer (eases back too). Walking on, the pace builds from a walk to a
@@ -232,7 +234,9 @@ const SLOP = 6;
 /** The touches down now (CSS px). */
 const touches = new Map<number, { x: number; y: number }>();
 /** What the first touch is doing: walking (from the ground) or looking (from the sky). */
-let gesture: { kind: 'walk' | 'look'; id: number; x: number; y: number; heading: number; moved: boolean } | null = null;
+let gesture: { kind: 'walk' | 'look'; id: number; x: number; y: number; heading: number; moved: boolean; at: number } | null = null;
+/** Walking, how fast the finger's offset from the middle turns you (rad/s at the edge). */
+const STEER = 1.3;
 /** Two touches: the pinch, from its first spread and the zoom then. */
 let pinch: { d: number; zoom: number } | null = null;
 let keys = new Set<string>();
@@ -259,7 +263,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (touches.size > 2 || pinch) return;
   const kind = e.clientY > horizonY() ? 'walk' : 'look';
-  gesture = { kind, id: e.pointerId, x: e.clientX, y: e.clientY, heading, moved: false };
+  gesture = { kind, id: e.pointerId, x: e.clientX, y: e.clientY, heading, moved: false, at: e.clientX };
   holding = kind === 'walk';
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -274,6 +278,9 @@ canvas.addEventListener('pointermove', (e) => {
   }
   const g = gesture;
   if (!g || g.id !== e.pointerId) return;
+  // walking: the finger is a tiller (read each frame), not a grip on the world
+  g.at = e.clientX;
+  if (g.kind === 'walk') return;
   if (!g.moved && Math.hypot(e.clientX - g.x, e.clientY - g.y) > SLOP) {
     g.moved = true;
     // (no jump for the slop)
@@ -418,6 +425,12 @@ function frame(now: number) {
     }
   }
   const forward = holding || flag('walk') || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
+  if (gesture?.kind === 'walk') {
+    // the tiller: offset from the middle (−1 … 1), a still band in the middle, sharper outwards
+    const off = (gesture.at - innerWidth / 2) / (innerWidth / 2);
+    const bear = Math.sign(off) * Math.pow(smoothstep(0.12, 1, Math.abs(off)), 1.4);
+    heading += dt * STEER * bear;
+  }
   if (keys.has('ArrowLeft')) heading -= dt * 0.8;
   if (keys.has('ArrowRight')) heading += dt * 0.8;
   // the pace: a walk, building to a brisk one as you keep on (or as hard as you press)
