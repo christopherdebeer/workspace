@@ -53,6 +53,7 @@ export const FLAGS = {
   deerCalm: { kind: 'bool', group: 'deer', live: true, doc: 'deer never take alarm (to watch them)' },
   // the drawing
   fixed: { kind: 'bool', group: 'render', doc: 'keep the resolution (no adapting to the frame rate)' },
+  freeze: { kind: 'bool', group: 'render', live: true, doc: 'stop the clock: wind, mist and grain hold still (to compare pictures exactly)' },
   time: { kind: 'number', min: 0, max: 600, step: 1, unit: 's', group: 'render', doc: 'start the clock here (wind, mist, the deer)' },
   // development
   tune: { kind: 'bool', group: 'dev', doc: 'this panel' },

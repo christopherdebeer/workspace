@@ -4,12 +4,13 @@
  *   node cells/mistwood/devtools/determinism.test.mjs [query]
  *
  * Two fresh pages (one after the other) at the same seed, place, hour and clock; each settled
- * and photographed; compared in the browser. Film grain and the wind's moment differ frame to
- * frame, so the comparison is of the picture blurred (10× smaller): the wood itself must match.
+ * and photographed (with the clock frozen, so wind, mist and grain hold still); compared in the
+ * browser, full size and blurred (10× smaller).
  */
 import { withWood, checks } from './harness.mjs';
 
-const query = process.argv[2] ?? 'seed=moss-ford-7&fixed&hour=11&x=120&y=-40&heading=90&time=5';
+// (frozen: the clock stands at `time`, so wind, mist and grain are the same in both)
+const query = process.argv[2] ?? 'seed=moss-ford-7&fixed&freeze&hour=11&x=120&y=-40&heading=90&time=5';
 const c = checks();
 await withWood(async (wood) => {
   const shots = [];
@@ -40,6 +41,6 @@ await withWood(async (wood) => {
     [a, b],
   );
   console.log('mean difference', diff);
-  c.ok('the same address shows the same wood (blurred difference < 1/255)', diff.blurred < 1, diff);
+  c.ok('the same address shows the same wood (difference < 0.5/255)', diff.full < 0.5 && diff.blurred < 0.5, diff);
 });
 c.done();

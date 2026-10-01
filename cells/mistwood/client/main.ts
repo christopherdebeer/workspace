@@ -336,7 +336,8 @@ function frame(now: number) {
   const raw = (now - last) / 1000;
   const dt = Math.min(0.05, raw);
   last = now;
-  t += dt;
+  // (frozen, the wind, the mist and the grain hold still; you can still walk and look)
+  if (!flag('freeze')) t += dt;
   if (hidden) {
     requestAnimationFrame(frame);
     return;
@@ -545,7 +546,7 @@ function frame(now: number) {
     const dist = Math.hypot(x - view.x, z - view.z);
     return { pan: Math.sin(a) * 0.9, at: 1 / (1 + dist / 14), far: dist / 70 };
   };
-  deer.step(dt, t, { x: view.x, z: view.z, yaw: view.yaw, speed, vis: 2.3 / Math.max(density, 1e-3), hour: hourAt() }, {
+  deer.step(flag('freeze') ? 0 : dt, t, { x: view.x, z: view.z, yaw: view.yaw, speed, vis: 2.3 / Math.max(density, 1e-3), hour: hourAt() }, {
     snap: (x, z, loud) => {
       const h = heard(x, z);
       sound.snap(h.pan, 0.6 * loud * h.at, h.far);

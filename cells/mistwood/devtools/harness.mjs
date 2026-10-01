@@ -76,7 +76,7 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
     /** Set flags in the page (live ones apply at once: x, y, heading, seed, hour, fog …). */
     go: (page, flags) => page.evaluate((f) => window.__flags.setFlags(f), flags),
     /** Wait until everything in view is grown and baked (or the time runs out). */
-    async settle(page, ms = 120000) {
+    async settle(page, ms = 240000) {
       const t0 = Date.now();
       // (a frame or two for a change to be seen, then until it says so)
       await page.waitForTimeout(1500);
