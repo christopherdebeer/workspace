@@ -24,6 +24,9 @@ await withWood(async (wood) => {
   c.ok('the address is where you are (within a step)', Math.hypot(x - s1.at[0], y - s1.at[1]) < 1.5, { url: [x, y], at: s1.at });
 
   url.searchParams.delete('walk');
+  // (one page at a time: software GL is slow enough without two drawing at once)
+  const firstErrors = page.errors;
+  await page.close();
   const back = await wood.open(url.search.slice(1));
   const s2 = await wood.state(back);
   c.ok('a reload goes on from there', Math.hypot(s2.at[0] - x, s2.at[1] - y) < 0.11 && s2.heading === Number(url.searchParams.get('heading')), { at: s2.at, heading: s2.heading, url: url.search });
@@ -45,6 +48,6 @@ await withWood(async (wood) => {
   c.ok('setting the seed makes another wood, still without a reload', await same());
   c.ok('… and it settles', await wood.settle(back));
   await wood.shot(back, 'journey-other-wood');
-  c.ok('no errors in the page', back.errors.length === 0 && page.errors.length === 0, [...page.errors, ...back.errors]);
+  c.ok('no errors in the page', back.errors.length === 0 && firstErrors.length === 0, [...firstErrors, ...back.errors]);
 });
 c.done();
