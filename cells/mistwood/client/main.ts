@@ -123,7 +123,7 @@ function stand(z: number, resume = false) {
       }
     };
     if (find === 'wall') {
-      for (let r = 40; r <= 600 && !best; r += 80) for (const w of wood.wallsNear(posX, posZ, r)) if (w.h > 0.7) consider((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
+      for (let r = 40; r <= 600 && !best; r += 80) for (const w of wood.wallsNear(posX, posZ, r)) if (w.h > 0.7 && Math.hypot(w.x1 - w.x0, w.z1 - w.z0) > 8) consider((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
     } else if (find === 'tower' || find === 'viaduct') {
       for (let r = 100; r <= 1600 && !best; r += 250) for (const s of wood.structuresNear(posX, posZ, r)) if (s.kind === find) consider(s.x, s.z);
     } else if (find === 'pond' || find === 'glade')

@@ -411,8 +411,28 @@ export class Wood {
     const H = 1.05 + r() * 0.45;
     const steps = 8 + Math.floor(r() * 9);
     let gapBefore = true;
+    // how much of a 10 m stretch at heading h lies on a path (m)
+    const onPath = (h: number) => {
+      let n = 0;
+      for (let s = 0; s <= 10; s += 1) if (this.pathDist(x + Math.sin(h) * s, z + Math.cos(h) * s) < this.path[2] + 0.4) n++;
+      return n;
+    };
     for (let k = 0; k < steps; k++) {
       a += (r() - 0.5) * 0.35;
+      // a wall crosses a path, it does not follow one: of a few headings, the one least on a path
+      // (and if all run along one, the wall ends here)
+      let bestA = a;
+      let bestN = onPath(a);
+      for (const turn of [0.4, -0.4, 0.8, -0.8]) {
+        if (bestN <= 3) break;
+        const n = onPath(a + turn);
+        if (n < bestN) {
+          bestN = n;
+          bestA = a + turn;
+        }
+      }
+      if (bestN > 4) break;
+      a = bestA;
       const nx = x + Math.sin(a) * 10;
       const nz = z + Math.cos(a) * 10;
       if (this.place(nx, nz).water > 0 || this.place(x, z).water > 0) break;
