@@ -36,6 +36,13 @@ float groundH(vec2 p) {
   float k = uRelief.y;
   return uRelief.x * ((vnoise(p * k + 71.3) - .5) * 1.6 + (vnoise(p * k * 2.7 + 5.9) - .5) * .4) + uRelief.w * (vnoise(p / 22. + 33.3) - .5) * 2.;
 }
+// how much fog lies between the eye and something dist metres off, above metres over the
+// ground: clear for the first few metres, then closing fast (the square term) — near things sharp
+// and dark, the middle distance soft, the far gone — and thicker low down, a few metres out
+float fogAt(float dist, float above, float density) {
+  float path = dist * .7 + dist * dist / 45.;
+  return 1. - exp(-density * path * (1. + 1.5 * exp(-max(above, 0.) * .35) * smoothstep(2., 14., dist)));
+}
 // 0 dry … 1 a wet hollow (world.ts place)
 float wetAt(float h) { return 1. - smoothstep(uRelief.z, uRelief.z + uRelief.x * .8, h); }
 // banks of mist drifting through the wood (world space), heavier near the ground; and mist
@@ -96,6 +103,19 @@ float pathDist(vec2 p) {
   }
   return best;
 }
+// the scrub beyond the near cards: the height of its tops over the ground here (m) — tall in the
+// glades and the gaps, thin under the canopy, none in the wet or on the paths — with its tops
+// ragged at every scale
+float scrubTop(vec2 p, float gh, float t) {
+  float open = smoothstep(.55, .75, vnoise(p / 110. + 211.1) + uOpen);
+  float amt = (.3 + .7 * open) * smoothstep(.2, .55, vnoise(p * .08 + 17.));
+  amt *= 1. - smoothstep(.45, .7, wetAt(gh));
+  if (amt < .01) return 0.;
+  float h = amt * (.45 + .55 * vnoise(p * .55 + 3.)) * (.7 + .6 * vnoise(p * 2.3 + 9.)) * 1.15;
+  // (the paths, near enough to matter)
+  if (t < 30.) h *= smoothstep(uPathK.z * .7, uPathK.z * 1.5, pathDist(p));
+  return h;
+}
 void main() {
   vec2 px = gl_FragCoord.xy;
   // cylindrical projection: across the screen is angle (so turning only slides the picture);
@@ -111,16 +131,39 @@ void main() {
   // (the ground can climb at most L for each metre across)
   const float L = .35;
   float tHit = -1.;
-  float top = uRelief.x + uRelief.w + .2;
+  float top = uRelief.x + uRelief.w + 1.5;
+  // the scrub, met on the way: a dense, dark, tawny-topped mass the ray passes into and is
+  // lost in (what it lets through, and what it gives)
+  float sT = 1.;
+  vec3 sCol = vec3(0.);
   if (d.y < L) {
     float t = .05;
     bool gone = false;
-    for (int i = 0; i < 56; i++) {
+    for (int i = 0; i < 64; i++) {
       vec3 q = eye + d * t;
       if (t > 95. || (q.y > top && d.y >= 0.)) { gone = true; break; }
-      float gap = q.y - groundH(q.xz);
+      float gh = groundH(q.xz);
+      float gap = q.y - gh;
       if (gap < .004 + .002 * t) { tHit = t; break; }
-      t += max(gap / (L - d.y), .02 + .006 * t);
+      float step = max(gap / (L - d.y), .02 + .006 * t);
+      // (the near scrub is cards; this takes over beyond them)
+      float fade = smoothstep(8., 22., t);
+      if (fade > 0. && gap < 1.5) {
+        step = min(step, max(.5, .035 * t));
+        float sh = scrubTop(q.xz, gh, t) * fade;
+        if (gap < sh) {
+          float fill = smoothstep(sh, sh * .5, gap);
+          float a = 1. - exp(-fill * 2.2 * step);
+          // dark and warm in the mass, bleached tawny at the tops, some stems paler
+          float tip = smoothstep(.35, 1., gap / max(sh, .01));
+          vec3 c = mix(vec3(.09, .068, .042), vec3(.42, .3, .16) * (.7 + .5 * vnoise(q.xz * 3.1)), tip * .8) * uIllum;
+          float f = 1. - (1. - fogAt(t, gap, uDensity)) * (1. - mist(q));
+          sCol += sT * a * mix(c, fogDir(d), f);
+          sT *= 1. - a;
+          if (sT < .02) { tHit = t; break; }
+        }
+      }
+      t += step;
     }
     // (out of steps on a grazing ray: the ground is about there, and deep in the fog)
     if (tHit < 0. && !gone && d.y < 0.) tHit = t;
@@ -152,7 +195,7 @@ void main() {
     vec3 w = mix(deep, sky * .85, fres);
     vec3 mud = uEarth * .55 * uIllum;
     w = mix(mud, w, smoothstep(0., .12, depth));
-    float fogD = 1. - exp(-t * uDensity * (1. + 1.2 * smoothstep(2., 14., t)));
+    float fogD = fogAt(t, 0., uDensity);
     float m = mist(vec3(p.x, p.y + .3, p.z));
     col = mix(w, fogDir(d), 1. - (1. - fogD) * (1. - m));
   } else {
@@ -206,10 +249,11 @@ void main() {
     }
     // broken up, as light through a crown and over tussocks is
     g *= 1. - min(ao, .6) * (.55 + .7 * vnoise(p.xz * 1.9));
-    float fogD = 1. - exp(-t * uDensity * (1. + 1.2 * smoothstep(2., 14., t)));
+    float fogD = fogAt(t, 0., uDensity);
     float m = mist(vec3(p.x, p.y + .3, p.z));
     col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * (1. - m));
   }
+  col = sCol + sT * col;
   o = vec4(col, 1.);
 }`;
 
@@ -289,7 +333,7 @@ void main() {
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
   // fog: by distance, and much thicker near the ground; banks of mist drift through
   // (the ground fog lies a few metres off: what is at your feet is clear)
-  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y - uBase, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
@@ -524,7 +568,7 @@ void main() {
   vec3 base = mix(bark * lit, birch, vTL.x);
   base = mix(base, uLeaf, vTL.y);
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
-  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y - uBase, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
@@ -598,7 +642,7 @@ void main() {
   float rump = sdEll(q, vec2(-.54, 1.), vec2(.075, .11));
   float white = (1. - smoothstep(-fw, fw, rump)) * (.3 + .7 * run);
   vec3 base = mix(uBark * 1.3, vec3(.62, .6, .55), white);
-  float fogD = 1. - exp(-vDist * uDensity * (1. + 1.5 * exp(-max(vWorld.y - uBase, 0.) * .35) * smoothstep(2., 14., vDist)));
+  float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mist(vWorld));
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;

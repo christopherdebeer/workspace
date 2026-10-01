@@ -22,7 +22,7 @@
  * of grown trees, placed again and again at different sizes and turns.
  */
 import { hash, lerp, seeded } from './rng';
-import { grow, growLog, growPatch, sampleGenome, type Genome, type Species, type Structure } from './tree';
+import { grow, growLog, growPatch, growScrub, sampleGenome, type Genome, type Species, type Structure } from './tree';
 
 /** Metres per cell of the wood's grid (it goes on in every direction). */
 export const CELL = 10;
@@ -237,6 +237,8 @@ export class Wood {
           ? growPatch(sub, 2.5 + (i % 3) * 0.8, kind === 'rush')
           : kind === 'log'
             ? growLog(sub)
+            : kind === 'scrub'
+              ? growScrub(sub, 2.2 + (i % 3) * 0.7)
             : grow(sub, this.genomeOf(kind)!);
       this.pool.set(key, s);
     }
@@ -292,6 +294,9 @@ export class Wood {
     // grass, thick in the glades, thin under the trees (leaf litter there); rushes in the wet,
     // standing out into the shallows
     place('patch', 48, 0, 12, (f) => (f.water > 0 || f.wet > 0.55 ? 0 : (0.62 + 0.38 * f.open) * (1 - 0.5 * f.wet)), true);
+    // scrub: the waist-high mass of the open wood — tussocks, bramble, heather, seedlings — thick
+    // in the glades and the gaps, thinner under the canopy, none in the wet
+    place('scrub', 40, 0, 10, (f) => (f.water > 0 || f.wet > 0.6 ? 0 : (0.3 + 0.7 * Math.max(f.open, f.disturb)) * (1 - 0.6 * f.wet)), true);
     place('rush', 12, 0, 6, (f) => (f.water > 0.3 ? 0 : smooth01(0.4, 0.8, f.wet)), true);
     this.cache.set(key, out);
     if (this.cache.size > 400) this.cache.delete(this.cache.keys().next().value!);

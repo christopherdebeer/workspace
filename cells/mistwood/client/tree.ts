@@ -211,6 +211,134 @@ export function sampleGenome(r: Rand, archetype: Species, wild = 1): Genome {
 const CAP = 60000;
 
 /**
+ * Scrub: the knee-to-waist-high mass the open wood stands in — a card's width of it, flat like the
+ * grass (drawn as a card, with fake depth: what is further back roots higher and paler).
+ *  - moor-grass tussocks: dense clumps of long arching blades, tawny in winter, paler at the tips;
+ *  - bramble: thick dark stems arching over and rooting again, side shoots, a few dead leaves;
+ *  - heather / bilberry: low domes of fine, dark, zigzag twigs;
+ *  - seedlings: thin whips a metre or more, a few zigzag side twigs, some holding dry leaves.
+ * Tone runs 0 (dark stems, the straw palette's dark) to 1 (pale straw); leaf marks dry leaves.
+ */
+export function growScrub(seed: number, width: number): Structure {
+  const r: Rand = seeded(hash(seed, 0x5c2b));
+  const out: number[] = [];
+  const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, 0, x1, y1, 0, w0, w1, tone, leaf);
+  const across = () => (r() + r() + r() - 1.5) * (width / 3);
+  // a wandering zigzag twig from (x, y) at angle a: short internodes, turning at each node
+  const twig = (x: number, y: number, a: number, len: number, w: number, tone: number, depth: number) => {
+    const nodes = Math.max(2, Math.round(len / 0.05));
+    for (let k = 0; k < nodes; k++) {
+      const l = len / nodes;
+      const zig = (k % 2 ? 1 : -1) * (0.25 + r() * 0.2);
+      const nx = x + Math.cos(a + zig) * l;
+      const ny = Math.max(0.005, y + Math.sin(a + zig) * l);
+      const ww = w * (1 - k / nodes) + 0.0008;
+      seg(x, y, nx, ny, ww, w * (1 - (k + 1) / nodes) + 0.0008, tone);
+      if (depth > 0 && r() < 0.35) twig(nx, ny, a + (r() < 0.5 ? 1 : -1) * (0.5 + r() * 0.5), len * (0.3 + r() * 0.3), ww * 0.6, tone, depth - 1);
+      x = nx;
+      y = ny;
+      a += (r() - 0.5) * 0.2;
+    }
+    return [x, y];
+  };
+  const parts = 3 + Math.floor(r() * 4);
+  for (let p = 0; p < parts; p++) {
+    const kind = r();
+    const cx = across();
+    const back = Math.pow(r(), 1.3);
+    const y0 = back * 0.2;
+    const fade = 1 - back * 0.3;
+    if (kind < 0.5) {
+      // a tussock: blades from a tight base, arching out every way, some broken over
+      const h = (0.4 + r() * 0.6) * fade;
+      const base = 0.12 + r() * 0.16;
+      const blades = 130 + Math.floor(r() * 110);
+      for (let i = 0; i < blades; i++) {
+        let x = cx + (r() - 0.5) * base;
+        let y = y0 + r() * 0.04;
+        const out0 = (x - cx) / (base / 2);
+        let a = Math.PI / 2 + out0 * 0.4 + (r() - 0.5) * 0.8;
+        const len = h * (0.45 + r() * 0.75);
+        const bend = (Math.cos(a) >= 0 ? -1 : 1) * (0.08 + r() * 0.14);
+        const w = 0.005 + r() * 0.007;
+        // dark and dense at the base (last year's dead growth, in shadow), bleaching to tawny tips
+        const top = Math.min(1, 0.6 + r() * 0.4);
+        const steps = 6;
+        for (let k = 0; k < steps; k++) {
+          const nx = x + (Math.cos(a) * len) / steps;
+          const ny = Math.max(0.01, y + (Math.sin(a) * len) / steps);
+          const tone = 0.08 + (top - 0.08) * Math.pow((k + 1) / steps, 0.8) * (1 - back * 0.2) + back * 0.12;
+          seg(x, y, nx, ny, w * (1 - k / steps) + 0.0008, w * (1 - (k + 1) / steps) + 0.0008, Math.min(1, tone));
+          x = nx;
+          y = ny;
+          a += bend * (1 + k * 0.4);
+        }
+      }
+    } else if (kind < 0.7) {
+      // bramble: two or three stems arching over, rooting again at the tip
+      const stems = 2 + Math.floor(r() * 2);
+      for (let s = 0; s < stems; s++) {
+        let x = cx + (r() - 0.5) * 0.3;
+        let y = y0;
+        const dir = r() < 0.5 ? 1 : -1;
+        let a = Math.PI / 2 - dir * (0.15 + r() * 0.3);
+        const span = 0.6 + r() * 1.1;
+        const steps = 16;
+        for (let k = 0; k < steps && y >= 0; k++) {
+          const l = (span * 1.5) / steps;
+          const nx = x + Math.cos(a) * l;
+          const ny = y + Math.sin(a) * l;
+          if (ny < 0) break;
+          seg(x, y, nx, ny, 0.009 * fade, 0.008 * fade, 0.05);
+          if (r() < 0.3) {
+            // a side shoot, and now and then a dead leaf hanging on
+            const sa = a + dir * (0.8 + r() * 0.6);
+            const [ex, ey] = twig(nx, ny, sa, 0.08 + r() * 0.15, 0.004, 0.06, 0);
+            if (r() < 0.4) seg(ex, ey, ex + (r() - 0.5) * 0.04, ey - 0.03, 0.002, 0.02 + r() * 0.015, 0, 1);
+          }
+          x = nx;
+          y = ny;
+          a -= dir * (0.12 + r() * 0.08);
+        }
+      }
+    } else if (kind < 0.88) {
+      // heather / bilberry: a low dome of fine dark twigs
+      const h = (0.18 + r() * 0.3) * fade;
+      const stems = 14 + Math.floor(r() * 16);
+      for (let s = 0; s < stems; s++) {
+        const x = cx + (r() - 0.5) * 0.25;
+        const a = Math.PI / 2 + (x - cx) * 5 + (r() - 0.5) * 0.6;
+        twig(x, y0, a, h * (0.6 + r() * 0.6), 0.004, 0.08 + r() * 0.1, 2);
+      }
+    } else {
+      // a seedling: a thin whip, a few side twigs, some keeping their dry leaves
+      const h = (0.6 + r() * 0.9) * fade;
+      const leafy = r() < 0.45;
+      let x = cx;
+      let y = y0;
+      let a = Math.PI / 2 + (r() - 0.5) * 0.25;
+      const nodes = Math.round(h / 0.09);
+      for (let k = 0; k < nodes; k++) {
+        const nx = x + Math.cos(a) * 0.09;
+        const ny = y + Math.sin(a) * 0.09;
+        seg(x, y, nx, ny, 0.007 * (1 - k / nodes) + 0.0015, 0.007 * (1 - (k + 1) / nodes) + 0.0015, 0.1);
+        if (k > 2 && r() < 0.45) {
+          const sa = a + (k % 2 ? 1 : -1) * (0.6 + r() * 0.5);
+          const [ex, ey] = twig(nx, ny, sa, 0.08 + r() * 0.2 * (1 - k / nodes), 0.003, 0.1, 1);
+          if (leafy) for (let l = 0; l < 3; l++) seg(ex, ey, ex + (r() - 0.5) * 0.05, ey - 0.02 - r() * 0.03, 0.002, 0.018 + r() * 0.012, 0, 1);
+        }
+        x = nx;
+        y = ny;
+        a += (k % 2 ? 1 : -1) * 0.12 + (r() - 0.5) * 0.1;
+      }
+    }
+  }
+  const st = finish(new Float32Array(out), out.length / SEG, 'shrub');
+  st.radius = width / 2 + 0.3;
+  return st;
+}
+
+/**
  * A fallen tree, lying along x through the origin: a trunk gone grey and mossy (the moss is the
  * live shader's, low on the wood), the stubs of its branches snapped short and pointing every way,
  * a few still with twigs; at one end either the root plate it tore out of the ground, standing up

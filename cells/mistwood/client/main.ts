@@ -55,7 +55,7 @@ const BUDGET = 16e6;
 /** A far tree's card is baked as seen from one of twelve sides (a patch of grass from one). */
 const SIDES = 12;
 /** Grass and rushes: low cover, one card side, mirrored, straw-coloured. */
-const low = (kind: Kind) => kind === 'patch' || kind === 'rush';
+const low = (kind: Kind) => kind === 'patch' || kind === 'rush' || kind === 'scrub';
 const keyOf = (kind: Kind, pool: number, level: number, side = 0) => `${kind}:${pool}:${level}:${side}`;
 function forget() {
   for (const c of cards.values()) gl.deleteTexture(c.tex);
@@ -414,7 +414,8 @@ function frame(now: number) {
     const cx = rx * c - rz * s;
     const hd = Math.hypot(cx, cz);
     if (hd > VIEW || hd < 0.4 || cz < -4) continue;
-    if (low(p.kind) && hd > 22) continue;
+    // low cover is drawn near (grass to 22 m, scrub further); beyond, the ground shader's scrub
+    if (low(p.kind) && hd > (p.kind === 'scrub' ? 38 : 22)) continue;
     if (!wood.grown(p.kind, p.pool)) {
       ungrown.push({ p, hd });
       continue;
@@ -499,7 +500,7 @@ function frame(now: number) {
       rect: flip ? [-left, card.bottom * p.scale, -width, card.height * p.scale] : [left, card.bottom * p.scale, width, card.height * p.scale],
       flip,
       phase: p.phase,
-      patch: p.kind === 'patch',
+      patch: p.kind === 'patch' || p.kind === 'scrub',
       base,
       bark: p.kind === 'rush' ? RUSH : wood.genomeOf(p.kind)?.bark ?? DARK,
       alpha: cardAlpha,
