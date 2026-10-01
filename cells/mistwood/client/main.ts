@@ -300,6 +300,7 @@ const lift = (e: PointerEvent) => {
     if (touches.size < 2) {
       pinch = null;
       zoomTo = 1;
+      zoomV = 0;
     }
     if (touches.size === 0) release();
     return;
@@ -312,6 +313,9 @@ const release = () => {
   pinch = null;
   pitchTo = 0;
   zoomTo = 1;
+  // (from rest: the head settles back, easing in and out, not flung on past where it was)
+  pitchV = 0;
+  zoomV = 0;
   pressure = null;
   touches.clear();
 };
@@ -690,6 +694,8 @@ function frame(now: number) {
     settled: want.length === 0 && ungrown.length === 0 && groundReady,
     heading: Math.round(((((heading * 180) / Math.PI) % 360) + 360) % 360),
     quality: Math.round(quality * 100) / 100,
+    /** the game clock (s): headless frames are slow, so tests wait on this, not on the wall clock */
+    clock: Math.round(t * 100) / 100,
     pace: Math.round(speed * 100) / 100,
     pitch: Math.round(pitch * 1000) / 1000,
     zoom: Math.round(zoom * 100) / 100,
