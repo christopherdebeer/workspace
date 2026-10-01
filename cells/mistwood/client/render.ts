@@ -144,8 +144,8 @@ vec4 hash4(ivec2 c, int k) {
 }
 vec3 leafColour(float h, float depth) {
   // fresh tan, ochre, rust, brown, grey-brown decay; deeper layers older and darker
-  vec3 c = h < .25 ? vec3(.56, .41, .23) : h < .45 ? vec3(.6, .44, .19) : h < .62 ? vec3(.5, .26, .12) : h < .85 ? vec3(.33, .21, .11) : vec3(.36, .31, .25);
-  return c * mix(1., .45, depth);
+  vec3 c = h < .25 ? vec3(.5, .39, .25) : h < .45 ? vec3(.5, .38, .2) : h < .62 ? vec3(.43, .26, .15) : h < .85 ? vec3(.31, .22, .14) : vec3(.35, .31, .26);
+  return c * mix(1., .5, depth);
 }
 // one layer of leaves: cell size s (m), the grid turned by (cs, sn), how full (amount), how old
 void leafLayer(vec2 p, float s, vec2 turn, int k, float amount, float depth, float px, vec3 ld, inout vec3 col, inout float cov, inout float shade) {
@@ -155,18 +155,18 @@ void leafLayer(vec2 p, float s, vec2 turn, int k, float amount, float depth, flo
   ivec2 c = ivec2(floor(q));
   vec4 h = hash4(c, k);
   vec4 g = hash4(c, k + 101);
-  float L = .5 + .4 * h.x;                       // length, in cells
+  float L = .7 + .26 * h.x;                      // length, in cells
   float present = step(h.w, amount);
   float Lm = L * s;
   // too small to see: the layer's average (how much it covers, and its mean colour)
   float detail = 1. - smoothstep(Lm * .1, Lm * .4, px);
-  vec3 mean = mix(vec3(.44, .3, .16), vec3(.5, .4, .3), .15) * mix(1., .45, depth);
+  vec3 mean = vec3(.42, .31, .19) * mix(1., .5, depth);
   float meanCov = amount * .3;
   vec3 lc = mean;
   float alpha = meanCov;
   float edge = 1.;
   if (detail > 0. && present > 0.) {
-    float Wd = L * (.26 + .2 * h.y);
+    float Wd = L * (.3 + .2 * h.y);
     vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - L);
     vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
     vec2 u = q - ctr;
@@ -276,20 +276,27 @@ vec3 forestFloor(vec2 xz, float t, vec3 d, float litter, float path, float damp)
   vec3 col = vec3(0.);
   float cov = 0.;
   float shade = 0.;
-  float leaves = mix(.35, .95, litter) * (1. - .6 * path);
-  leafLayer(xz, .13, vec2(1., 0.), 1, leaves, 0., px, ld, col, cov, shade);
-  twigLayer(xz, .45, vec2(.8, .6), 2, .5 * leaves + .2 * path, px, ld, col, cov, shade);
-  leafLayer(xz, .11, vec2(.28, .96), 3, leaves, .2, px, ld, col, cov, shade);
-  leafLayer(xz, .15, vec2(-.6, .8), 4, leaves, .35, px, ld, col, cov, shade);
-  twigLayer(xz, .3, vec2(-.96, .28), 5, .4 * leaves, px, ld, col, cov, shade);
-  leafLayer(xz, .09, vec2(.92, -.38), 6, leaves * .9, .55, px, ld, col, cov, shade);
-  pebbleLayer(xz, .06, 7, .15 + .55 * path, px, ld, col, cov);
-  leafLayer(xz, .1, vec2(-.2, -.98), 8, leaves * .8, .75, px, ld, col, cov, shade);
-  pebbleLayer(xz, .045, 9, .1 + .4 * path, px, ld, col, cov);
-  // the earth beneath: dark, damp, fine-grained; mossy in the wet
-  vec3 earth = vec3(.1, .075, .05) * (.75 + .5 * vnoise(xz * 37.)) * (1. - shade * .6);
-  earth = mix(earth, vec3(.09, .1, .05) * (.8 + .4 * vnoise(xz * 23.)), damp * .7);
-  col += (1. - cov) * earth;
+  float leaves = mix(.45, .97, litter) * (1. - .55 * path);
+  // ten layers of leaves, each on its own turned grid and size, older and darker going down;
+  // twigs among the upper ones, pebbles low (more on the paths)
+  for (int i = 0; i < 10; i++) {
+    float fi = float(i);
+    float a = fi * 2.39996;
+    float s = .085 + .075 * fract(fi * .618 + .3);
+    leafLayer(xz, s, vec2(cos(a), sin(a)), 1 + i * 3, leaves * (1. - fi * .03), fi / 10., px, ld, col, cov, shade);
+    if (i == 1) twigLayer(xz, .45, vec2(.8, .6), 40, .5 * leaves + .2 * path, px, ld, col, cov, shade);
+    if (i == 4) twigLayer(xz, .3, vec2(-.96, .28), 41, .4 * leaves, px, ld, col, cov, shade);
+    if (i == 6) pebbleLayer(xz, .06, 42, .12 + .55 * path, px, ld, col, cov);
+    if (i == 8) pebbleLayer(xz, .045, 43, .08 + .4 * path, px, ld, col, cov);
+    if (cov > .995) break;
+  }
+  // beneath: the mould of older leaves (more of the same, rotted dark and soft), and on the paths
+  // and in the wet, the earth showing; mossy in the wet
+  float mould = vnoise(xz * 23.) * .6 + vnoise(xz * 61.) * .4;
+  vec3 under = mix(vec3(.13, .09, .055), vec3(.22, .15, .09), smoothstep(.3, .75, mould));
+  under = mix(under, vec3(.1, .075, .05) * (.8 + .4 * vnoise(xz * 37.)), path * .7);
+  under = mix(under, vec3(.09, .1, .05) * (.8 + .4 * vnoise(xz * 23.)), damp * .7);
+  col += (1. - cov) * under * (1. - shade * .6);
   // wet leaves are darker and a little greener
   return col * mix(vec3(1.), vec3(.72, .78, .62), damp * .7);
 }
