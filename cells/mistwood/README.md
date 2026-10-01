@@ -132,15 +132,18 @@ horizon line ever shows.
   light through the deeper it goes: dark and warm in the mass, tawny at the
   tops, ragged at every scale. It takes over from the cards between 6 and 16 m,
   and where the old ground met the fog in a hard line it now goes soft.
-- **The near ground** within about 12 m is Poly Haven's *Leaf Scattered
-  Gravel* (CC0, `static/ground/`): dry leaves and twigs over dark stones and
-  damp earth.
-  - Lookups: two offset lookups chosen by a slow noise, so it never visibly
-    repeats, with each pixel's footprint worked out analytically (anisotropic
-    filtering, widened by the depth of field).
-  - Shading: lit by its own normal map and graded warm and dark. On the paths
-    it is trodden darker, in the wet it is mossier, and beyond about 15 m it
-    gives way to the painted ground.
+- **The forest floor near you is built leaf by leaf** (`forestFloor` in
+  render.ts): eight scattered layers composited top-down, each on its own turned
+  grid, one thing to a cell (kept inside it, so it costs one lookup a layer).
+  - Leaves: oak-lobed or beech-toothed, mottled, curled (and lit as they curl),
+    with a midrib and side veins, darker at the edge, and shadowing what lies
+    beneath. Colours run from fresh tan through rust to last year's near-black.
+  - Twigs (lit as round wood), pebbles (lit as domes), and dark earth beneath.
+  - It varies by place: full under the canopy, sparser in the open, trodden
+    and stony on the paths, darker and mossy in the wet.
+  - Each layer is antialiased by the pixel's true footprint and fades to its
+    own average once its things are too small to see, so nothing shimmers and
+    it meets the painted ground beyond (16–26 m) without a seam.
 - **Mist is a volume** (`mistDensity`, the same in JS and GLSL): drifting banks,
   and mist lying a few metres deep in the hollows.
   - What you see through it is what lies along the way: the ground march and

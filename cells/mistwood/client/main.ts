@@ -393,7 +393,7 @@ const DARK: [number, number, number] = [0.1, 0.095, 0.08];
 const RUSH: [number, number, number] = [0.13, 0.14, 0.07];
 const LIVE_BUDGET = 400000;
 /** Depth of field: the lens's aperture (m) — what is near blurs (a twig at half a metre to a faint smear). */
-const APERTURE = 0.02;
+const APERTURE = 0.012;
 const nextPow2 = (x: number) => Math.pow(2, Math.ceil(Math.log2(Math.max(1, x))));
 
 function frame(now: number) {
@@ -475,7 +475,8 @@ function frame(now: number) {
     v += (k * (to - x) - c * v) * dt;
     return [x + v * dt, v];
   };
-  [pitch, pitchV] = spring(pitch, pitchTo, pitchV, gesture?.kind === 'look' ? 30 : 3);
+  // (at rest the head is level — or as ?tilt holds it, to look at the ground in a picture)
+  [pitch, pitchV] = spring(pitch, gesture?.kind === 'look' ? pitchTo : (flag('tilt') ?? 0), pitchV, gesture?.kind === 'look' ? 30 : 3);
   [zoom, zoomV] = spring(zoom, zoomTo, zoomV, pinch ? 40 : 4);
   view.f *= zoom;
   view.horizon = H * 0.4 - Math.tan(pitch) * view.f;
@@ -689,7 +690,7 @@ function frame(now: number) {
   const cy = Math.cos(view.yaw);
   const syw = Math.sin(view.yaw);
   const light: [number, number, number] = [(sx * cy - sz * syw) / sl, sy / sl, -(sx * syw + sz * cy) / sl];
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 9 }, draws);
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5 }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
@@ -704,7 +705,7 @@ function frame(now: number) {
     bias: Math.round(bias * 100) / 100,
     waiting: want.length,
     /** everything in view grown and baked as sharp as it is wanted (a screenshot now is the real one) */
-    settled: want.length === 0 && ungrown.length === 0 && groundReady,
+    settled: want.length === 0 && ungrown.length === 0,
     heading: Math.round(((((heading * 180) / Math.PI) % 360) + 360) % 360),
     quality: Math.round(quality * 100) / 100,
     /** the game clock (s): headless frames are slow, so tests wait on this, not on the wall clock */
@@ -723,8 +724,6 @@ function frame(now: number) {
 // once a second, when it changed) so a reload — or a link — goes on from there. And the other
 // way: a change to x, y or heading (the overlay, a test in the same page) moves you there now,
 // and a new seed is a new wood, without making the page again.
-/** The near ground's textures have come (or will not). */
-let groundReady = false;
 let written = '';
 let writtenAt = 0;
 const round1 = (v: number) => Math.round(v * 10) / 10;
@@ -769,19 +768,5 @@ requestAnimationFrame((n) => {
   last = n;
   requestAnimationFrame(frame);
 });
-// the near ground's textures (static/ground/: Poly Haven, CC0): drawn without them until they come
-{
-  const load = (src: string) =>
-    new Promise<HTMLImageElement>((ok, fail) => {
-      const img = new Image();
-      img.onload = () => ok(img);
-      img.onerror = fail;
-      img.src = src;
-    });
-  Promise.all([load('/ground/leaf_scattered_gravel_diff.webp'), load('/ground/leaf_scattered_gravel_nor.webp')])
-    .then(([c, n]) => renderer.setGround(c, n))
-    .catch(() => console.warn('mistwood: the ground textures did not load; the ground is painted'))
-    .finally(() => (groundReady = true));
-}
 // development: every flag in a panel (`?tune`)
 if (flag('tune')) mountTune(() => (window as unknown as { __mistwood: unknown }).__mistwood);

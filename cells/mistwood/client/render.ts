@@ -130,37 +130,168 @@ float scrubTop(vec2 p, float gh, float t) {
   if (t < 30.) h *= smoothstep(uPathK.z * .7, uPathK.z * 1.5, pathDist(p));
   return h;
 }
-// the near ground: a photograph's worth of it (Poly Haven's Leaf Scattered Gravel, CC0, 1.8 m
-// across) — dry leaves and twigs over dark stones and damp earth — lit by its own normals
-uniform sampler2D uGroundC;
-uniform sampler2D uGroundN;
-uniform float uGroundOn;
-vec3 groundTex(vec2 xz, float t, vec3 d) {
-  vec2 uv = xz / 1.8;
-  // the pixel's footprint on the ground, worked out (not from derivatives: this is branching
-  // code) — narrow across, long along the view — and widened by the depth of field near you
+// ─── the forest floor, near: built leaf by leaf ────────────────────────────────────────────
+// Layers scattered top-down, each on its own turned grid, one thing to a cell (kept inside it, so
+// one lookup a layer): leaves — lobed like oak or toothed like beech, curled, veined, in every
+// shade from fresh tan to the near-black of last year's — twigs, pebbles, and the dark earth.
+// What is above hides what is below and shadows it at its edges. Each layer is antialiased by
+// the pixel's true footprint, and fades to its average once its things are too small to see, so
+// it never shimmers and meets the painted ground beyond without a seam.
+vec4 hash4(ivec2 c, int k) {
+  uint a = pcg(uint(c.x) * 1973u ^ pcg(uint(c.y) + uSeed + uint(k) * 7919u));
+  uint b = pcg(a), cc = pcg(b), dd = pcg(cc);
+  return vec4(float(a), float(b), float(cc), float(dd)) / 4294967295.;
+}
+vec3 leafColour(float h, float depth) {
+  // fresh tan, ochre, rust, brown, grey-brown decay; deeper layers older and darker
+  vec3 c = h < .25 ? vec3(.56, .41, .23) : h < .45 ? vec3(.6, .44, .19) : h < .62 ? vec3(.5, .26, .12) : h < .85 ? vec3(.33, .21, .11) : vec3(.36, .31, .25);
+  return c * mix(1., .45, depth);
+}
+// one layer of leaves: cell size s (m), the grid turned by (cs, sn), how full (amount), how old
+void leafLayer(vec2 p, float s, vec2 turn, int k, float amount, float depth, float px, vec3 ld, inout vec3 col, inout float cov, inout float shade) {
+  if (cov > .995) return;
+  mat2 R = mat2(turn.x, -turn.y, turn.y, turn.x);
+  vec2 q = R * p / s + float(k) * 17.31;
+  ivec2 c = ivec2(floor(q));
+  vec4 h = hash4(c, k);
+  vec4 g = hash4(c, k + 101);
+  float L = .5 + .4 * h.x;                       // length, in cells
+  float present = step(h.w, amount);
+  float Lm = L * s;
+  // too small to see: the layer's average (how much it covers, and its mean colour)
+  float detail = 1. - smoothstep(Lm * .1, Lm * .4, px);
+  vec3 mean = mix(vec3(.44, .3, .16), vec3(.5, .4, .3), .15) * mix(1., .45, depth);
+  float meanCov = amount * .3;
+  vec3 lc = mean;
+  float alpha = meanCov;
+  float edge = 1.;
+  if (detail > 0. && present > 0.) {
+    float Wd = L * (.26 + .2 * h.y);
+    vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - L);
+    vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
+    vec2 u = q - ctr;
+    u = vec2(dot(u, dir), dot(u, vec2(-dir.y, dir.x)));
+    float x = u.x / (L * .5);
+    // the outline: pointed at the tip, rounded at the base; oak lobes or beech teeth
+    float oak = step(g.z, .38);
+    float lob = oak * .22 * sin((x + 1.) * 3.14159 * 3.5) + (1. - oak) * .05 * sin((x + 1.) * 26.);
+    float w = Wd * pow(max(1. - x * x, 0.), .7) * (1. + lob) * (x > 0. ? 1. - x * .25 : 1.);
+    float dIn = (abs(u.y) - w) * s;
+    float d = max(dIn, (abs(x) - 1.) * L * .5 * s);
+    // the stalk
+    float stalk = max(abs(u.y) * s - .0008, max(-x - 1.3, x + .95) * L * .5 * s);
+    d = min(d, stalk);
+    float aa = 1. - smoothstep(-px * .5, px * .5, d);
+    float yn = clamp(u.y / max(w, 1e-3), -1., 1.);
+    // colour, mottled; darker toward the curled edges
+    vec3 c0 = leafColour(g.w, depth) * (.82 + .36 * vnoise(u * 9. + float(k)));
+    c0 *= mix(1., .72, smoothstep(.55, 1., abs(yn)));
+    // curled: the edges up (or the leaf cupped down), lit as it curls
+    float curl = (h.y - .35) * 1.6;
+    vec2 sl = vec2(0., curl * 1.3 * yn);
+    sl = vec2(dot(sl, vec2(dir.x, -dir.y)), dot(sl, dir.yx));
+    sl = transpose(R) * sl;
+    vec3 N = normalize(vec3(-sl.x, 1., -sl.y));
+    c0 *= .62 + .55 * max(dot(N, ld), 0.);
+    // the midrib, and side veins running out to the edge
+    float vein = (1. - smoothstep(.0, .05, abs(yn))) * step(abs(x), .92);
+    vein = max(vein, (1. - smoothstep(0., .08, abs(fract(x * 3.5 - abs(yn) * 1.2) - .5) * 2.)) * .5 * step(.15, abs(yn)) * step(abs(yn), .85));
+    c0 *= 1. - .22 * vein * smoothstep(px * 3., px, .004);
+    lc = mix(mean, c0, detail);
+    alpha = mix(meanCov, aa, detail);
+    edge = d;
+  }
+  lc *= 1. - shade;
+  col += (1. - cov) * alpha * lc;
+  cov += (1. - cov) * alpha;
+  // what lies under it is in its shadow near its edge
+  shade = max(shade * .7, .42 * detail * present * exp(-max(edge, 0.) / .006));
+}
+// a layer of twigs: thin dark sticks, lit as round wood
+void twigLayer(vec2 p, float s, vec2 turn, int k, float amount, float px, vec3 ld, inout vec3 col, inout float cov, inout float shade) {
+  if (cov > .995) return;
+  mat2 R = mat2(turn.x, -turn.y, turn.y, turn.x);
+  vec2 q = R * p / s + float(k) * 9.7;
+  ivec2 c = ivec2(floor(q));
+  vec4 h = hash4(c, k);
+  vec4 g = hash4(c, k + 101);
+  float r = .0015 + .003 * h.y;
+  float detail = 1. - smoothstep(r * .5, r * 3., px);
+  float alpha = amount * .06;
+  vec3 tc = vec3(.2, .15, .1) * (.7 + .5 * g.w);
+  float edge = 1.;
+  if (detail > 0. && h.w < amount) {
+    float L = .5 + .45 * h.x;
+    vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - L);
+    vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
+    vec2 u = q - ctr;
+    float along = clamp(dot(u, dir), -L * .5, L * .5);
+    vec2 off = (u - dir * along) * s;
+    float d = length(off) - r * (1. - .4 * (along / L + .5));
+    float aa = 1. - smoothstep(-px * .5, px * .5, d);
+    float a = clamp(dot(off, vec2(-dir.y, dir.x)) / r, -1., 1.);
+    vec2 nn = transpose(R) * vec2(-dir.y, dir.x);
+    vec3 N = normalize(vec3(nn.x * a, sqrt(max(0., 1. - a * a)), nn.y * a));
+    vec3 c0 = tc * (.55 + .6 * max(dot(N, ld), 0.));
+    tc = mix(tc, c0, detail);
+    alpha = mix(alpha, aa, detail);
+    edge = d;
+  }
+  tc *= 1. - shade;
+  col += (1. - cov) * alpha * tc;
+  cov += (1. - cov) * alpha;
+  shade = max(shade * .7, .4 * detail * exp(-max(edge, 0.) / .004));
+}
+// a layer of pebbles: dark, rounded, catching a little light on top
+void pebbleLayer(vec2 p, float s, int k, float amount, float px, vec3 ld, inout vec3 col, inout float cov) {
+  if (cov > .995) return;
+  vec2 q = p / s + float(k) * 5.3;
+  ivec2 c = ivec2(floor(q));
+  vec4 h = hash4(c, k);
+  float rad = (.22 + .2 * h.x) * s;
+  float detail = 1. - smoothstep(rad * .2, rad * .8, px);
+  vec3 pc = mix(vec3(.16, .15, .14), vec3(.3, .28, .25), h.y);
+  float alpha = amount * .3;
+  if (detail > 0. && h.w < amount) {
+    vec2 ctr = (vec2(c) + .5 + (h.zw - .5) * (1. - 2. * rad / s)) * s;
+    vec2 u = (q * s - ctr) / vec2(rad, rad * (.7 + .3 * h.z));
+    float d = (length(u) - 1.) * rad;
+    float aa = 1. - smoothstep(-px * .5, px * .5, d);
+    vec2 uu = clamp(u, -1., 1.);
+    vec3 N = normalize(vec3(uu.x, sqrt(max(0., 1. - dot(uu, uu))) + .3, uu.y));
+    vec3 c0 = pc * (.5 + .7 * max(dot(N, ld), 0.));
+    pc = mix(pc, c0, detail);
+    alpha = mix(alpha, aa, detail);
+  }
+  col += (1. - cov) * alpha * pc;
+  cov += (1. - cov) * alpha;
+}
+// the floor here: how much litter (shelter), the path (trodden: fewer leaves, more stones), the wet
+vec3 forestFloor(vec2 xz, float t, vec3 d, float litter, float path, float damp) {
+  // the pixel's footprint (m): across, and drawn out along the view at a grazing angle; widened
+  // by the depth of field near you
   float across = t / uF;
-  float along = across / max(-d.y, .03);
-  vec2 dirA = normalize(d.xz + 1e-5);
-  vec2 dirP = vec2(-dirA.y, dirA.x);
-  float blur = 1. + coc(t) * .6;
-  vec2 gx = dirP * across * blur / 1.8, gy = dirA * min(along, 40. * across) * blur / 1.8;
-  // never seen to repeat: two lookups at offsets picked by a slow noise, blended where it
-  // changes, and the blend follows the picture (Quilez's texture repetition)
-  float k = vnoise(uv * .35 + 7.) * 8.;
-  float ia = floor(k), f = fract(k);
-  vec2 oa = sin(vec2(3., 7.) * ia), ob = sin(vec2(3., 7.) * (ia + 1.));
-  vec3 ca = textureGrad(uGroundC, uv + oa, gx, gy).rgb;
-  vec3 cb = textureGrad(uGroundC, uv + ob, gx, gy).rgb;
-  float m = smoothstep(.2, .8, f - .1 * dot(ca - cb, vec3(1.)));
-  vec3 c = mix(ca, cb, m);
-  vec3 n = normalize(mix(textureGrad(uGroundN, uv + oa, gx, gy).rgb, textureGrad(uGroundN, uv + ob, gx, gy).rgb, m) * 2. - 1.);
-  vec3 N = vec3(n.x, n.z, n.y);
-  vec3 ld = vec3(sin(uSun.x) * cos(uSun.y), sin(uSun.y), cos(uSun.x) * cos(uSun.y));
-  // lit softly from the light behind the fog; the hollows between stones and leaves dark
-  float lit = (.62 + .5 * max(dot(N, ld), 0.)) * mix(.65, 1., n.z);
-  // graded to the wood: warmer and darker than the photograph's daylight
-  return c * vec3(.82, .72, .5) * lit;
+  float px = sqrt(across * across / max(-d.y, .04)) * (1. + coc(t) * .5);
+  vec3 ld = normalize(vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .25), cos(uSun.x) * cos(uSun.y)));
+  vec3 col = vec3(0.);
+  float cov = 0.;
+  float shade = 0.;
+  float leaves = mix(.35, .95, litter) * (1. - .6 * path);
+  leafLayer(xz, .13, vec2(1., 0.), 1, leaves, 0., px, ld, col, cov, shade);
+  twigLayer(xz, .45, vec2(.8, .6), 2, .5 * leaves + .2 * path, px, ld, col, cov, shade);
+  leafLayer(xz, .11, vec2(.28, .96), 3, leaves, .2, px, ld, col, cov, shade);
+  leafLayer(xz, .15, vec2(-.6, .8), 4, leaves, .35, px, ld, col, cov, shade);
+  twigLayer(xz, .3, vec2(-.96, .28), 5, .4 * leaves, px, ld, col, cov, shade);
+  leafLayer(xz, .09, vec2(.92, -.38), 6, leaves * .9, .55, px, ld, col, cov, shade);
+  pebbleLayer(xz, .06, 7, .15 + .55 * path, px, ld, col, cov);
+  leafLayer(xz, .1, vec2(-.2, -.98), 8, leaves * .8, .75, px, ld, col, cov, shade);
+  pebbleLayer(xz, .045, 9, .1 + .4 * path, px, ld, col, cov);
+  // the earth beneath: dark, damp, fine-grained; mossy in the wet
+  vec3 earth = vec3(.1, .075, .05) * (.75 + .5 * vnoise(xz * 37.)) * (1. - shade * .6);
+  earth = mix(earth, vec3(.09, .1, .05) * (.8 + .4 * vnoise(xz * 23.)), damp * .7);
+  col += (1. - cov) * earth;
+  // wet leaves are darker and a little greener
+  return col * mix(vec3(1.), vec3(.72, .78, .62), damp * .7);
 }
 void main() {
   vec2 px = gl_FragCoord.xy;
@@ -293,14 +424,12 @@ void main() {
     earth = mix(earth, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .55, wet * .45);
     float regrow = smoothstep(.62, .8, vnoise(p.xz * 2.7)) * (1. - smoothstep(0., hw * .3, pd)) * .6;
     g = mix(g, mix(earth, g, regrow), path);
-    // near you, the ground itself: leaves and stones (on the path trodden darker and barer, in the
-    // wet mossier), giving way to the painted ground beyond a dozen metres
-    float nearT = uGroundOn * (1. - smoothstep(9., 15., t));
+    // near you, the floor itself, leaf by leaf (it fades to its own average with distance, and
+    // that into the painted ground beyond)
+    float nearT = 1. - smoothstep(16., 26., t);
     if (nearT > 0.) {
-      vec3 tg = groundTex(p.xz, t, d);
-      tg *= mix(vec3(1.), vec3(.72, .68, .64), path * (1. - regrow));
-      tg = mix(tg, tg * vec3(.7, .85, .55), damp * .6);
-      g = mix(g, tg, nearT * (.9 - .4 * damp));
+      vec3 ff = forestFloor(p.xz, t, d, max(shelter, .25), path * (1. - regrow), damp);
+      g = mix(g, ff, nearT * mix(.75, .95, shelter));
     }
     // shade: dark at each trunk's foot, a soft pool under each crown (the light is diffuse in fog)
     float ao = 0.;
@@ -861,30 +990,6 @@ export class Renderer {
   private liveVao: WebGLVertexArrayObject;
   private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; depth: WebGLRenderbuffer; w: number; h: number } | null = null;
   private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
-  /** The near ground's textures (colour, normal), once loaded. */
-  private ground: { c: WebGLTexture; n: WebGLTexture } | null = null;
-
-  /** Take the near ground's textures (images): mipmapped, and filtered steeply (anisotropic), as ground at a grazing angle needs. */
-  setGround(colour: TexImageSource, normal: TexImageSource) {
-    const gl = this.gl;
-    const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
-    const make = (img: TexImageSource) => {
-      const t = gl.createTexture()!;
-      gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-      gl.generateMipmap(gl.TEXTURE_2D);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
-      return t;
-    };
-    this.ground = { c: make(colour), n: make(normal) };
-  }
-
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is needed to walk here');
@@ -999,16 +1104,6 @@ export class Renderer {
     gl.uniform4fv(this.loc(this.world, 'uShade'), look.shade);
     gl.uniform2fv(this.loc(this.world, 'uShadeOff'), look.shadeOff);
     gl.uniform1i(this.loc(this.world, 'uShadeN'), look.shadeN);
-    if (this.ground) {
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, this.ground.c);
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, this.ground.n);
-      gl.activeTexture(gl.TEXTURE0);
-    }
-    gl.uniform1i(this.loc(this.world, 'uGroundC'), 1);
-    gl.uniform1i(this.loc(this.world, 'uGroundN'), 2);
-    gl.uniform1f(this.loc(this.world, 'uGroundOn'), this.ground ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // 2. the cards and the live trees, back to front
     gl.enable(gl.BLEND);

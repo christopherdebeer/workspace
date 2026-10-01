@@ -41,6 +41,7 @@ export const FLAGS = {
   find: { kind: 'enum', values: ['pond', 'log', 'veteran', 'glade'], group: 'stand', doc: 'stand by the nearest one, facing it' },
   off: { kind: 'number', min: 0, max: 40, step: 1, unit: 'm', group: 'stand', doc: 'how far off `find` stands you' },
   walk: { kind: 'bool', group: 'stand', live: true, doc: 'walk on by yourself' },
+  tilt: { kind: 'number', min: -0.55, max: 0.55, step: 0.01, unit: 'rad', group: 'stand', live: true, doc: 'the head at rest tilted (− down at the ground): for pictures' },
   // the light and the fog
   hour: { kind: 'number', min: 0, max: 24, step: 0.25, unit: 'h', group: 'sky', live: true, doc: 'time of day (default: your clock); it passes in real time' },
   moon: { kind: 'number', min: 0, max: 1, step: 0.01, group: 'sky', live: true, doc: "the moon's phase: 0 new, 0.5 full (default: tonight's)" },
@@ -54,7 +55,7 @@ export const FLAGS = {
   // the drawing
   fixed: { kind: 'bool', group: 'render', doc: 'keep the resolution (no adapting to the frame rate)' },
   dof: { kind: 'number', min: 0, max: 3, step: 0.05, unit: '×', group: 'render', live: true, doc: 'depth of field: how much what is near blurs (0 none, 1 the default)' },
-  focus: { kind: 'number', min: 2, max: 40, step: 0.5, unit: 'm', group: 'render', live: true, doc: 'depth of field: the distance in focus (default 9 m); nearer blurs' },
+  focus: { kind: 'number', min: 2, max: 40, step: 0.5, unit: 'm', group: 'render', live: true, doc: 'depth of field: the distance in focus (default 5 m); nearer blurs' },
   freeze: { kind: 'bool', group: 'render', live: true, doc: 'stop the clock: wind, mist and grain hold still (to compare pictures exactly)' },
   time: { kind: 'number', min: 0, max: 600, step: 1, unit: 's', group: 'render', doc: 'start the clock here (wind, mist, the deer)' },
   // development

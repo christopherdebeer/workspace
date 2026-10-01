@@ -46,11 +46,6 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
       res.writeHead(200, { 'content-type': 'application/javascript' });
       return res.end(app);
     }
-    const g = /^\/ground\/([a-z_]+\.webp)$/.exec(u.pathname);
-    if (g && existsSync(join(CELL, 'static/ground', g[1]))) {
-      res.writeHead(200, { 'content-type': 'image/webp' });
-      return res.end(readFileSync(join(CELL, 'static/ground', g[1])));
-    }
     if (u.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(html);

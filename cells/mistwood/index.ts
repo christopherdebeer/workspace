@@ -5,9 +5,8 @@ import { join } from 'node:path';
 /**
  * `@c15r/mistwood` — a walk through a seeded wood in fog.
  *
- * The server only serves the shell (`static/index.html`), the client bundle
- * the platform builds from `client/main.ts` into `app.js` beside this file,
- * and the near ground's textures (`static/ground/`, CC0 from Poly Haven).
+ * The server only serves the shell (`static/index.html`) and the client bundle
+ * the platform builds from `client/main.ts` into `app.js` beside this file.
  * Everything else happens in the browser (WebGL2), from the seed in the address.
  *
  * git truth: cells/mistwood/ (README.md).
@@ -29,18 +28,6 @@ function shell(): string {
   return page;
 }
 
-/** Ground textures (static/ground/: CC0, Poly Haven), as bytes. Names are checked: only these. */
-const GROUND = /^\/ground\/([a-z_]+\.webp)$/;
-const bytes = new Map<string, string>();
-function ground(name: string) {
-  let b64 = bytes.get(name);
-  if (!b64) {
-    b64 = readFileSync(join(__dirname, 'static', 'ground', name)).toString('base64');
-    bytes.set(name, b64);
-  }
-  return { statusCode: 200, headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=604800' }, body: b64, isBase64Encoded: true };
-}
-
 export const handler = async (event: { rawPath?: string; rawQueryString?: string }) => {
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/mistwood/, '') || '/';
   try {
@@ -49,14 +36,6 @@ export const handler = async (event: { rawPath?: string; rawQueryString?: string
       return respond(200, 'application/javascript; charset=utf-8', read('app.js'), versioned ? 'public, max-age=31536000, immutable' : 'no-cache');
     }
     if (path === '/' || path === '/index.html') return respond(200, 'text/html; charset=utf-8', shell(), 'no-cache, no-store');
-    const g = GROUND.exec(path);
-    if (g) {
-      try {
-        return ground(g[1]);
-      } catch {
-        return respond(404, 'text/plain; charset=utf-8', 'no such ground');
-      }
-    }
   } catch (err) {
     return respond(500, 'text/plain; charset=utf-8', `mistwood: ${(err as Error).message}`);
   }
