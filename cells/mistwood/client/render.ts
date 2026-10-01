@@ -111,7 +111,7 @@ float scrubTop(vec2 p, float gh, float t) {
   float amt = (.3 + .7 * open) * smoothstep(.2, .55, vnoise(p * .08 + 17.));
   amt *= 1. - smoothstep(.45, .7, wetAt(gh));
   if (amt < .01) return 0.;
-  float h = amt * (.45 + .55 * vnoise(p * .55 + 3.)) * (.7 + .6 * vnoise(p * 2.3 + 9.)) * 1.15;
+  float h = amt * (.5 + .5 * vnoise(p * .55 + 3.)) * (.7 + .6 * vnoise(p * 2.3 + 9.)) * 1.4;
   // (the paths, near enough to matter)
   if (t < 30.) h *= smoothstep(uPathK.z * .7, uPathK.z * 1.5, pathDist(p));
   return h;
@@ -147,16 +147,16 @@ void main() {
       if (gap < .004 + .002 * t) { tHit = t; break; }
       float step = max(gap / (L - d.y), .02 + .006 * t);
       // (the near scrub is cards; this takes over beyond them)
-      float fade = smoothstep(8., 22., t);
+      float fade = smoothstep(6., 16., t);
       if (fade > 0. && gap < 1.5) {
         step = min(step, max(.5, .035 * t));
         float sh = scrubTop(q.xz, gh, t) * fade;
         if (gap < sh) {
           float fill = smoothstep(sh, sh * .5, gap);
-          float a = 1. - exp(-fill * 2.2 * step);
+          float a = 1. - exp(-fill * 4.5 * step);
           // dark and warm in the mass, bleached tawny at the tops, some stems paler
           float tip = smoothstep(.35, 1., gap / max(sh, .01));
-          vec3 c = mix(vec3(.09, .068, .042), vec3(.42, .3, .16) * (.7 + .5 * vnoise(q.xz * 3.1)), tip * .8) * uIllum;
+          vec3 c = mix(vec3(.07, .05, .03), vec3(.46, .32, .16) * (.7 + .5 * vnoise(q.xz * 3.1)), tip * tip * .85) * uIllum;
           float f = 1. - (1. - fogAt(t, gap, uDensity)) * (1. - mist(q));
           sCol += sT * a * mix(c, fogDir(d), f);
           sT *= 1. - a;
@@ -659,8 +659,8 @@ void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   vec3 c = texture(uScene, uv).rgb * uExposure;
   // a soft film curve, blacks lifted into the fog's green
-  c = mix(c, c * c * (3. - 2. * c), .3);
-  c = mix(c, uFogLow, .04);
+  c = mix(c, c * c * (3. - 2. * c), .42);
+  c = mix(c, uFogLow, .025);
   // vignette
   vec2 q = (uv - .5) * vec2(uRes.x / uRes.y, 1.);
   c *= mix(1., .8, smoothstep(.35, 1.05, length(q) * 1.15));
@@ -758,9 +758,10 @@ const PAL = {
   bark: [0.1, 0.095, 0.08],
   birch: [0.7, 0.73, 0.68],
   leaf: [0.26, 0.15, 0.09],
-  straw: [0.6, 0.48, 0.3],
-  strawDark: [0.19, 0.14, 0.085],
-  ground: [0.36, 0.28, 0.17],
+  // (from the reference: tawny moor-grass tips over dark, warm dead growth)
+  straw: [0.56, 0.4, 0.21],
+  strawDark: [0.11, 0.08, 0.045],
+  ground: [0.24, 0.17, 0.095],
   earth: [0.15, 0.12, 0.09],
 };
 

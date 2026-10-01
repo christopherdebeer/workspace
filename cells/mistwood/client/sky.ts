@@ -59,10 +59,11 @@ export function atmosphere(hour: number, phase: number, warm = 0): Atmos {
   const day = smooth(-0.12, 0.08, sunEl);
   const low = 1 - smooth(0.05, 0.35, sunEl); // a low sun warms the fog
   // the fog by day (darker than glare: the light held in it), low sun, twilight, moonlit night
-  const dayLow: V3 = [0.36, 0.45, 0.4];
-  const dayHigh: V3 = [0.43, 0.53, 0.47];
-  const warmLow: V3 = [0.36, 0.34, 0.27];
-  const warmHigh: V3 = [0.44, 0.4, 0.32];
+  // (graded against a photograph of a misty wood: grey-green, not teal; the low fog a little warmer)
+  const dayLow: V3 = [0.45, 0.5, 0.42];
+  const dayHigh: V3 = [0.5, 0.58, 0.5];
+  const warmLow: V3 = [0.45, 0.42, 0.33];
+  const warmHigh: V3 = [0.51, 0.47, 0.37];
   const duskLow: V3 = [0.16, 0.17, 0.2];
   const duskHigh: V3 = [0.21, 0.22, 0.26];
   const nightLow: V3 = scale([0.065, 0.075, 0.088], 0.6 + 0.8 * moonLight);
@@ -77,7 +78,7 @@ export function atmosphere(hour: number, phase: number, warm = 0): Atmos {
   fogLow = [fogLow[0] * tint[0], fogLow[1] * tint[1], fogLow[2] * tint[2]];
   fogHigh = [fogHigh[0] * tint[0], fogHigh[1] * tint[1], fogHigh[2] * tint[2]];
   // the wood is lit as the fog is (the fog is that light, scattered)
-  const lum = (fogLow[0] + fogLow[1] + fogLow[2]) / 3 / 0.35;
+  const lum = (fogLow[0] + fogLow[1] + fogLow[2]) / 3 / 0.4;
   const illum = scale(mix([0.9, 0.95, 1.05], [1.05, 1, 0.92], low * day), lum);
   // the key light: the sun while it is up, else the moon
   const useSun = sunEl > -0.06;
@@ -85,6 +86,6 @@ export function atmosphere(hour: number, phase: number, warm = 0): Atmos {
   const az = useSun ? sunAz : moonAz;
   const dir: V3 = [Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)];
   const glow: V3 = useSun ? scale(mix([1, 0.98, 0.9], [1, 0.82, 0.55], low), 0.1 + 0.06 * day) : scale([0.75, 0.85, 1], 0.05 * moonLight * (moonEl > 0 ? 1 : 0));
-  const exposure = Math.min(2.6, Math.pow(0.4 / Math.max(0.02, (fogLow[0] + fogLow[1] + fogLow[2]) / 3), 0.6));
+  const exposure = Math.min(2.6, Math.pow(0.46 / Math.max(0.02, (fogLow[0] + fogLow[1] + fogLow[2]) / 3), 0.6));
   return { fogLow, fogHigh, illum, dir, glow, at: [az, el], day, exposure };
 }

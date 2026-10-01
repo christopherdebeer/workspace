@@ -110,6 +110,38 @@ dry shelter. Leaners lean towards the wet. Birch takes the open and disturbed
 ground. The fog is a little thicker in the hollows. Slopes facing the light
 are a little brighter.
 
+## Undergrowth, and the grade
+
+The open wood stands in a knee- to waist-high mass of dead growth. In the
+reference photograph (`devtools/reference/misty-woodland-edge.jpg`) it fills
+the bottom third, and its ragged top melts into the mist, so no ground plane or
+horizon line ever shows.
+
+- **Near: scrub cards** (`growScrub`), drawn to 38 m. Each card mixes:
+  - moor-grass tussocks: dense clumps of arching blades, dark at the base and
+    bleached tawny at the tips;
+  - bramble: thick dark stems arching over, a dead leaf hanging on;
+  - heather or bilberry: low domes of fine zigzag twigs;
+  - seedlings: thin whips, some keeping their dry leaves.
+
+  The scrub is thick in the glades and gaps, thinner under the canopy, and
+  absent in the wet and on the paths.
+- **Beyond: a scrub volume in the ground shader.** The ground march, which
+  already steps along each ray, passes through a layer of scrub whose height
+  follows the same openness, wetness and path fields (`scrubTop`). It lets less
+  light through the deeper it goes: dark and warm in the mass, tawny at the
+  tops, ragged at every scale. It takes over from the cards between 6 and 16 m,
+  and where the old ground met the fog in a hard line it now goes soft.
+- **Fog** (`fogAt`, shared by every shader) is clear for the first few metres
+  and then closes fast, with a squared distance term. Near things stay sharp
+  and dark, the middle distance is soft, and the far is gone.
+- **The grade** is measured against the photograph, region by region, with
+  `devtools/palette.mjs`:
+  - grey-green fog, not teal;
+  - the low fog a little warmer;
+  - tawny straw over dark, warm dead growth;
+  - a firmer film curve for deeper darks.
+
 ## Deer (`client/deer.ts`)
 
 Each wood has its herds of two to five deer. About half of the 120 m squares
@@ -198,6 +230,23 @@ frees every GPU buffer of the old wood.
 
 Synthesised: wind in the trees, steps in the grass while walking, a far bird
 call now and then.
+
+## Devtools (`devtools/`, not synced to the cell)
+
+`harness.mjs` builds the client, serves it the way the cell does, and drives
+headless Chromium through the flags. The other tools are built on it:
+
+- `shots.mjs`: screenshots of any queries, each taken once settled.
+- `journey.test.mjs`: the address keeps the journey, a reload resumes it, and
+  moving or changing seed works in the same page.
+- `determinism.test.mjs`: one address gives one wood, across fresh pages.
+- `compare.mjs`: renders beside a reference photograph, at its shape.
+- `palette.mjs`: region-by-region colour and luma against a reference.
+- `deer-sim.mjs`: a deer encounter, without drawing.
+- `species.mjs`: a seed's species and what stands near its start.
+- `check-flags.mjs`: guards the flags.
+
+Output goes to `devtools/out/`, which git ignores.
 
 ## Flags and the tuning overlay
 
