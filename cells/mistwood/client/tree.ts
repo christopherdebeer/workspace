@@ -255,10 +255,16 @@ export function growScrub(seed: number, width: number): Structure {
       const blades = 130 + Math.floor(r() * 110);
       for (let i = 0; i < blades; i++) {
         let x = cx + (r() - 0.5) * base;
-        let y = y0 + r() * 0.04;
+        // each blade roots somewhere in the clump's depth: the far side higher on the card, the
+        // near side at the foot — so the clump's foot is ragged, never a straight edge
+        const deep = Math.pow(r(), 0.8);
+        let y = y0 + deep * (0.05 + base * 0.45);
         const out0 = (x - cx) / (base / 2);
-        let a = Math.PI / 2 + out0 * 0.4 + (r() - 0.5) * 0.8;
-        const len = h * (0.45 + r() * 0.75);
+        // some outer blades flop low and outward over the foot
+        const flop = Math.abs(out0) > 0.4 && r() < 0.3;
+        let a = flop ? (out0 > 0 ? 0.35 : Math.PI - 0.35) + (r() - 0.5) * 0.4 : Math.PI / 2 + out0 * 0.4 + (r() - 0.5) * 0.8;
+        if (flop) y = y0 + r() * 0.03;
+        const len = h * (flop ? 0.35 + r() * 0.35 : 0.45 + r() * 0.75);
         const bend = (Math.cos(a) >= 0 ? -1 : 1) * (0.08 + r() * 0.14);
         const w = 0.005 + r() * 0.007;
         // dark and dense at the base (last year's dead growth, in shadow), bleaching to tawny tips
