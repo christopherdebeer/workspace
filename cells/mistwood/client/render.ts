@@ -242,29 +242,49 @@ void twigLayer(vec2 p, float s, vec2 turn, int k, float amount, float px, vec3 l
   cov += (1. - cov) * alpha;
   shade = max(shade * .7, .4 * detail * exp(-max(edge, 0.) / .004));
 }
-// a layer of pebbles: dark, rounded, catching a little light on top
-void pebbleLayer(vec2 p, float s, int k, float amount, float px, vec3 ld, inout vec3 col, inout float cov) {
+// a layer of stones: irregular (an outline wandering with three harmonics), rounded on top, in
+// warm greys and browns, darker where the wet has them
+void stoneLayer(vec2 p, float s, vec2 turn, int k, float amount, float px, vec3 ld, float damp, inout vec3 col, inout float cov, inout float shade) {
   if (cov > .995) return;
-  vec2 q = p / s + float(k) * 5.3;
+  mat2 R = mat2(turn.x, -turn.y, turn.y, turn.x);
+  vec2 q = R * p / s + float(k) * 5.3;
   ivec2 c = ivec2(floor(q));
   vec4 h = hash4(c, k);
-  float rad = (.22 + .2 * h.x) * s;
-  float detail = 1. - smoothstep(rad * .2, rad * .8, px);
-  vec3 pc = mix(vec3(.17, .145, .115), vec3(.32, .28, .22), h.y);
-  float alpha = amount * .3;
+  vec4 g = hash4(c, k + 101);
+  float rad = .26 + .2 * h.x;                    // in cells
+  float radm = rad * s;
+  float detail = 1. - smoothstep(radm * .2, radm * .8, px);
+  vec3 sc = g.w < .7 ? mix(vec3(.17, .155, .13), vec3(.34, .31, .26), g.z) : mix(vec3(.24, .17, .12), vec3(.36, .27, .2), g.z);
+  sc *= mix(1., .62, damp);
+  float alpha = amount * .42;
+  float edge = 1.;
   if (detail > 0. && h.w < amount) {
-    vec2 ctr = (vec2(c) + .5 + (h.zw - .5) * (1. - 2. * rad / s)) * s;
-    vec2 u = (q * s - ctr) / vec2(rad, rad * (.7 + .3 * h.z));
-    float d = (length(u) - 1.) * rad;
+    vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - 2.4 * rad);
+    vec2 u = q - ctr;
+    vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
+    u = vec2(dot(u, dir), dot(u, vec2(-dir.y, dir.x))) / vec2(rad, rad * (.65 + .35 * h.y));
+    float th = atan(u.y, u.x);
+    float outline = 1. + .1 * sin(2. * th + g.x * 6.28) + .07 * sin(3. * th + g.y * 6.28) + .04 * sin(5. * th + g.z * 6.28);
+    float r = length(u);
+    float d = (r - outline) * radm;
     float aa = 1. - smoothstep(-px * .5, px * .5, d);
-    vec2 uu = clamp(u, -1., 1.);
-    vec3 N = normalize(vec3(uu.x, sqrt(max(0., 1. - dot(uu, uu))) + .3, uu.y));
-    vec3 c0 = pc * (.5 + .7 * max(dot(N, ld), 0.));
-    pc = mix(pc, c0, detail);
+    // rounded on top, flatter in the middle; the light on its upper side
+    vec2 uu = u / outline;
+    float z = sqrt(max(0., 1. - dot(uu, uu)));
+    vec2 nu = vec2(dot(vec2(uu.x, uu.y), vec2(dir.x, -dir.y)), dot(vec2(uu.x, uu.y), dir.yx));
+    nu = transpose(R) * nu;
+    vec3 N = normalize(vec3(nu.x, z * 1.6 + .2, nu.y));
+    vec3 c0 = sc * (.45 + .75 * max(dot(N, ld), 0.)) * (.85 + .3 * vnoise(u * 5. + float(k)));
+    // a damp sheen of the fog's light on the wettest
+    c0 += fogDir(reflect(-ld, N)) * .06 * damp * pow(max(N.y, 0.), 8.);
+    sc = mix(sc, c0, detail);
     alpha = mix(alpha, aa, detail);
+    edge = d;
   }
-  col += (1. - cov) * alpha * pc;
+  sc *= 1. - shade;
+  col += (1. - cov) * alpha * sc;
   cov += (1. - cov) * alpha;
+  shade = max(shade * .7, .5 * detail * exp(-max(edge, 0.) / .005));
 }
 // the floor's own relief, under everything that lies on it: hummocks (~0.6 m), clods (~20 cm) and
 // grit (~7 cm), each fading out when it is too small for the pixel (no shimmer). Returns the
@@ -297,26 +317,32 @@ vec3 forestFloor(vec2 xz, float t, vec3 d, float litter, float path, float damp)
   vec3 col = vec3(0.);
   float cov = 0.;
   float shade = 0.;
-  float leaves = mix(.45, .97, litter) * (1. - .55 * path);
-  // ten layers of leaves, each on its own turned grid and size, older and darker going down;
-  // twigs among the upper ones, pebbles low (more on the paths)
-  for (int i = 0; i < 10; i++) {
+  // (the grids the layers are scattered on, bent by a slow warp a cell or so deep, so no row of
+  // them ever lines up)
+  vec2 wxz = xz + (vec2(vnoise(xz * 2.3), vnoise(xz * 2.3 + 7.31)) - .5) * .14;
+  float leaves = mix(.3, .62, litter) * (1. - .5 * path);
+  float stones = mix(.55, .8, path) * (1. - .4 * damp);
+  // leaves over stones: six layers of leaves, older and darker going down, with stones of four
+  // sizes among the lower ones and twigs among the upper
+  for (int i = 0; i < 6; i++) {
     float fi = float(i);
     float a = fi * 2.39996;
-    float s = .085 + .075 * fract(fi * .618 + .3);
-    leafLayer(xz, s, vec2(cos(a), sin(a)), 1 + i * 3, leaves * (1. - fi * .03), fi / 10., px, ld, col, cov, shade);
-    if (i == 1) twigLayer(xz, .45, vec2(.8, .6), 40, .5 * leaves + .2 * path, px, ld, col, cov, shade);
-    if (i == 4) twigLayer(xz, .3, vec2(-.96, .28), 41, .4 * leaves, px, ld, col, cov, shade);
-    if (i == 6) pebbleLayer(xz, .06, 42, .12 + .55 * path, px, ld, col, cov);
-    if (i == 8) pebbleLayer(xz, .045, 43, .08 + .4 * path, px, ld, col, cov);
+    float s = .09 + .07 * fract(fi * .618 + .3);
+    leafLayer(wxz, s, vec2(cos(a), sin(a)), 1 + i * 3, leaves * (1. - fi * .05), fi / 7., px, ld, col, cov, shade);
+    if (i == 1) twigLayer(wxz, .45, vec2(.8, .6), 40, .45 * leaves + .2 * path, px, ld, col, cov, shade);
+    if (i == 2) stoneLayer(wxz, .13, vec2(.6, -.8), 42, stones * .8, px, ld, damp, col, cov, shade);
+    if (i == 3) twigLayer(wxz, .3, vec2(-.96, .28), 41, .35 * leaves, px, ld, col, cov, shade);
+    if (i == 4) stoneLayer(wxz, .085, vec2(-.3, .95), 43, stones, px, ld, damp, col, cov, shade);
     if (cov > .995) break;
   }
-  // beneath: the mould of older leaves (more of the same, rotted dark and soft), and on the paths
-  // and in the wet, the earth showing; mossy in the wet
-  float mould = vnoise(xz * 23.) * .6 + vnoise(xz * 61.) * .4;
-  vec3 under = mix(vec3(.13, .09, .055), vec3(.22, .15, .09), smoothstep(.3, .75, mould));
-  under = mix(under, vec3(.1, .075, .05) * (.8 + .4 * vnoise(xz * 37.)), path * .7);
-  under = mix(under, vec3(.09, .1, .05) * (.8 + .4 * vnoise(xz * 23.)), damp * .7);
+  stoneLayer(wxz, .06, vec2(.95, .3), 44, stones, px, ld, damp, col, cov, shade);
+  stoneLayer(wxz, .04, vec2(-.7, -.7), 45, stones, px, ld, damp, col, cov, shade);
+  // beneath: grit and earth — tiny stones over dark soil (fading to their average when too fine
+  // to see), mossy in the wet
+  float gl = 1. - smoothstep(.003, .012, px);
+  float grit = mix(.5, smoothstep(.45, .65, vnoise(xz * 140.)) * .7 + vnoise(xz * 47.) * .3, gl);
+  vec3 under = mix(vec3(.1, .08, .06), vec3(.26, .23, .19), grit * .8);
+  under = mix(under, vec3(.09, .1, .05) * (.8 + .4 * vnoise(xz * 23.)), damp * .6);
   col += (1. - cov) * under * (1. - shade * .6);
   // the relief it all lies on: lit as it faces the light behind the fog (leaves on a hummock catch
   // it together), and dark collecting in the hollows
