@@ -187,11 +187,24 @@ Monolithic structures stand in the wood, seeded like everything else:
   20–30 m up. In the fog you see the piers rise and the arches, if at all, as
   shapes overhead.
 
+- **Dry-stone walls.** About half of the 150 m squares have one: an old field
+  boundary 80–170 m long, wandering in 10 m stretches that follow the ground.
+  - A wall crosses paths and never follows one. Where a path crosses, there is
+    a gap and the wall's ends step down into it.
+  - Here and there a stretch has fallen low enough to step over.
+  - Walls stop at water.
+  - Small dry-laid stones with deep dark gaps between them, coping stones
+    standing up unevenly on top, lichen crusts and mossy tops.
+
 How they are made and drawn:
 
 - **Shapes.** Each is a signed-distance shape in its own frame, traced in the
-  world pass only where a ray meets its box. JS passes the nearest six as
-  uniforms.
+  world pass only where a ray meets its box. JS passes the nearest six
+  structures and the nearest 24 wall stretches as uniforms. The march looks
+  only at the stretches whose boxes the ray meets.
+- **Stone by stone.** Broken tops and wall tops end at whole courses, column by
+  column, and each stone stands a little proud of the face or sunk into it.
+  Silhouettes are blocky, as the stones are.
 - **Shading:** rubble masonry drawn on (rough courses, each stone its own size,
   tone and roughness, proud of the wall, with thin dark mortar). Rain streaks,
   lichen, moss on what faces up, low down and away from the light. Occlusion
@@ -200,9 +213,21 @@ How they are made and drawn:
   100 m). The world pass writes the stone's, and the cards, deer and live trees
   test against it (live trees also write their solid wood). A tree behind a
   pier is hidden; one in front crosses it.
-- **In the world:** you cannot walk through stone (you slide along it), and
-  nothing grows in it. `?find=tower` or `?find=viaduct` takes you to the
-  nearest.
+- **In the world:** you cannot walk through stone (you slide along it) except
+  at a wall's gaps and fallen stretches, and nothing grows in it.
+  `?find=tower`, `?find=viaduct` or `?find=wall` takes you to the nearest
+  (beside a wall, square to it).
+
+## The small voices (`client/audio.ts` `creatures`)
+
+All synthesised:
+- **Frogs** croak in bouts from the nearest wet hollow or pond within about
+  45 m, from its direction and muffled by distance, mostly at dusk and through
+  the night.
+- **Crickets** chirp in trills of three or four, from all about, in the open at
+  night.
+- **Cicadas** buzz, swelling and fading, only in the heat of a warm day
+  (`?warm` above 0) in the open. A cool misty wood has none.
 
 ## Deer (`client/deer.ts`)
 

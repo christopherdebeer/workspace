@@ -606,7 +606,12 @@ vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   stone *= m.z;
   stone = mix(stone, vec3(.05, .05, .045), m.x * (wall ? 1. : .85));
   // walls carry lichen: pale crusts in spots and patches
-  if (wall) stone = mix(stone, vec3(.6, .61, .53), smoothstep(.66, .74, vnoise(uv * 6.3 + b.w)) * .55 * m.w);
+  if (wall) {
+    // crusts a hand across, clustered, speckled (the stone showing through)
+    float where = smoothstep(.45, .7, vnoise(uv * 1.7 + b.w));
+    float crust = smoothstep(.62, .72, vnoise(mat2(.8, -.6, .6, .8) * uv * 14. + b.w)) * (.55 + .45 * smoothstep(.4, .6, vnoise(uv * 61.)));
+    stone = mix(stone, vec3(.5, .52, .45), crust * where * .4 * m.w);
+  }
   // weather: rain-streaks down the faces, lichen pale in patches
   stone *= .85 + .3 * vnoise(vec2(uv.x * 2.5, uv.y * .25));
   stone = mix(stone, vec3(.55, .56, .48), smoothstep(.62, .75, vnoise(uv * 1.7 + 5.)) * .35 * m.w);
