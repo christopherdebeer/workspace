@@ -174,6 +174,36 @@ horizon line ever shows.
   - tawny straw over dark, warm dead growth;
   - a firmer film curve for deeper darks.
 
+## Stone (`structuresNear` in world.ts, `traceStructures` in render.ts)
+
+Monolithic structures stand in the wood, seeded like everything else:
+
+- **Ruined round towers.** About one in three 220 m squares has one, on open,
+  dry ground off the paths. Each has a battered wall with its top broken away
+  unevenly, a round-headed doorway (you can walk in) and slit windows; ivy
+  climbs it.
+- **Viaducts.** About one in three 340 m squares has one, set across a path so
+  the path runs under the middle of a span. Tall battered piers carry arches
+  20–30 m up. In the fog you see the piers rise and the arches, if at all, as
+  shapes overhead.
+
+How they are made and drawn:
+
+- **Shapes.** Each is a signed-distance shape in its own frame, traced in the
+  world pass only where a ray meets its box. JS passes the nearest six as
+  uniforms.
+- **Shading:** rubble masonry drawn on (rough courses, each stone its own size,
+  tone and roughness, proud of the wall, with thin dark mortar). Rain streaks,
+  lichen, moss on what faces up, low down and away from the light. Occlusion
+  from the shape itself, then fogged and misted like everything else.
+- **Depth.** Everything drawn now shares one depth (horizontal distance over
+  100 m). The world pass writes the stone's, and the cards, deer and live trees
+  test against it (live trees also write their solid wood). A tree behind a
+  pier is hidden; one in front crosses it.
+- **In the world:** you cannot walk through stone (you slide along it), and
+  nothing grows in it. `?find=tower` or `?find=viaduct` takes you to the
+  nearest.
+
 ## Deer (`client/deer.ts`)
 
 Each wood has its herds of two to five deer. About half of the 120 m squares
@@ -307,7 +337,7 @@ compile, and an out-of-range or unknown value is refused with a warning.
 
 Current flags:
 - **wood:** `seed`, `only`
-- **stand:** `x`, `y`, `heading` (kept up to date), `at`, `look`, `near`, `find`, `off`, `walk`
+- **stand:** `x`, `y`, `heading` (kept up to date), `at`, `look`, `near`, `find` (pond, log, veteran, glade, tower, viaduct), `off`, `walk`, `tilt`
 - **sky:** `hour`, `moon`, `fog`, `warm`
 - **deer:** `deer`, `deerAt`, `deerBed`, `deerCalm`
 - **render:** `fixed`, `time`
