@@ -4,7 +4,7 @@
 photograph: a green-grey woodland fog, a small bare tree leaning over dry grass,
 tall trunks fading behind, a birch, a beech sapling keeping last year's leaves.
 
-Nothing to do and nothing to finish. Hold still to walk; drag to look about (and, once walking, to steer). Standing still is still: no sway, no drift.
+Nothing to do and nothing to finish. Hold still to walk — the pace builds as you keep on (and where the device reports real pressure, e.g. Apple Pencil, pressing harder walks faster; an iPhone touch reports none). Drag across to look about and, once walking, to steer; drag up or down to tilt the view, which eases back level when you let go. Standing still is still: no sway, no drift.
 
 ## The approach: silhouettes, in extreme detail, on the GPU
 

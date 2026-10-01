@@ -194,7 +194,19 @@ let stride = 0;
 let footY = wood.groundH(posX, posZ);
 
 // ─── input: a still hold walks; a drag looks (and steers, once walking) ───────────────
+// Across turns you (and stays turned); up and down tilts the view only while you hold it, and
+// it eases back level when you let go. Walking on, the pace builds. Where the device reports
+// real pressure (Apple Pencil, some styluses; not an iPhone's touch, which reports a fixed 0.5),
+// pressing harder walks faster.
 let holding = false;
+/** The view's tilt (rad, up +) and where the hand holds it. */
+let pitch = 0;
+let pitchTo = 0;
+/** How long you have been walking (s): the pace builds with it. */
+let walkTime = 0;
+/** Real pressure from the pointer, 0 … 1, or null where the device has none. */
+let pressure: number | null = null;
+const PITCH = 0.5;
 let dragFrom: { x: number; y: number; heading: number; moved: boolean } | null = null;
 let holdTimer = 0;
 /** How long a touch must stay still to mean "walk", and how far it may move and still be still. */
@@ -206,6 +218,7 @@ let walkedOnce = false;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   dragFrom = { x: e.clientX, y: e.clientY, heading, moved: false };
+  readPressure(e);
   clearTimeout(holdTimer);
   // a touch that stays put is a step forward; one that moves first is a look
   holdTimer = window.setTimeout(() => {
@@ -221,13 +234,24 @@ canvas.addEventListener('pointermove', (e) => {
     dragFrom.moved = true;
     // turn from here (no jump for the slop)
     dragFrom.x = e.clientX;
+    dragFrom.y = e.clientY;
   }
-  if (dragFrom.moved) heading = dragFrom.heading - (e.clientX - dragFrom.x) * 0.0032;
+  readPressure(e);
+  if (!dragFrom.moved) return;
+  heading = dragFrom.heading - (e.clientX - dragFrom.x) * 0.0032;
+  // (taking hold of the world: drag it down and you look up)
+  pitchTo = Math.max(-PITCH, Math.min(PITCH, (e.clientY - dragFrom.y) * 0.0032));
 });
+function readPressure(e: PointerEvent) {
+  // a touch without pressure reports 0.5 while down (or 0); anything else is the real thing
+  if (e.pressure > 0 && e.pressure !== 0.5) pressure = e.pressure;
+}
 const release = () => {
   clearTimeout(holdTimer);
   holding = false;
   dragFrom = null;
+  pitchTo = 0;
+  pressure = null;
 };
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
@@ -327,7 +351,10 @@ function frame(now: number) {
   const forward = holding || flag('walk') || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
   if (keys.has('ArrowLeft')) heading -= dt * 0.8;
   if (keys.has('ArrowRight')) heading += dt * 0.8;
-  speed += ((forward ? 1.1 : 0) - speed) * (1 - Math.exp(-dt * (forward ? 1.4 : 2.2)));
+  // the pace: a walk, building to a brisk one as you keep on (or as hard as you press)
+  walkTime = forward ? walkTime + dt : 0;
+  const pace = 1.1 * (pressure !== null ? 0.6 + 1.4 * pressure : 1 + 0.8 * smoothstep(3, 10, walkTime));
+  speed += ((forward ? pace : 0) - speed) * (1 - Math.exp(-dt * (forward ? 1.4 : 2.2)));
   walked += speed * dt;
   if (speed > 0.3 && !walkedOnce) {
     walkedOnce = true;
@@ -354,7 +381,9 @@ function frame(now: number) {
   footY += (wood.groundH(posX, posZ) - footY) * (1 - Math.exp(-dt * 5));
   view.eye = footY + 1.6 + Math.sin(stride) * 0.022 * going + Math.sin(t * 0.06) * 0.03 * going;
   view.f = H * 0.92;
-  view.horizon = H * 0.4;
+  // the tilt follows the hand, and settles back level when let go
+  pitch += (pitchTo - pitch) * (1 - Math.exp(-dt * (dragFrom ? 10 : 2.5)));
+  view.horizon = H * 0.4 - Math.tan(pitch) * view.f;
 
   // what stands in view, and the card each needs
   const c = Math.cos(yaw);
@@ -570,6 +599,8 @@ function frame(now: number) {
     bias: Math.round(bias * 100) / 100,
     waiting: want.length,
     quality: Math.round(quality * 100) / 100,
+    pace: Math.round(speed * 100) / 100,
+    pressure,
     place: Object.fromEntries(Object.entries(wood.place(posX, posZ)).map(([k, v]) => [k, Math.round(v * 100) / 100])),
   };
   requestAnimationFrame(frame);

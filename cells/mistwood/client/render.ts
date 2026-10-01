@@ -318,8 +318,11 @@ flat out vec2 vB;
 flat out vec2 vW;
 flat out vec2 vTL;
 flat out vec2 vWm;
-out vec3 vWorld;
-out float vDist;
+// each end's world place and distance: the fragment finds its own along the segment (a quad's
+// corners stand beyond its ends, so interpolating these across the quad would be wrong there)
+flat out vec3 vWa;
+flat out vec3 vWb;
+flat out vec2 vDab;
 vec3 place(vec3 p) {
   float c = cos(uRot), s = sin(uRot);
   vec3 q = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c) * uScale;
@@ -362,8 +365,9 @@ void main() {
   vW = vec2(pa, pb);
   vTL = aInfo.zw;
   vWm = aInfo.xy * uScale;
-  vWorld = first ? wa : wb;
-  vDist = first ? ha : hb;
+  vWa = wa;
+  vWb = wb;
+  vDab = vec2(ha, hb);
 }`;
 
 const LIVE_FS = `#version 300 es
@@ -375,8 +379,9 @@ flat in vec2 vB;
 flat in vec2 vW;
 flat in vec2 vTL;
 flat in vec2 vWm;
-in vec3 vWorld;
-in float vDist;
+flat in vec3 vWa;
+flat in vec3 vWb;
+flat in vec2 vDab;
 out vec4 o;
 uniform float uDensity, uAlpha, uPhase, uRim, uViewAz;
 // 1: only lay down depth (the solid middle of the wide wood), so what is behind a trunk is hidden
@@ -402,12 +407,17 @@ void main() {
   vec2 off = pa - ba * h;
   float d = length(off);
   float w = mix(vW.x, vW.y, h);
+  // where on the wood this is (world), and how far
+  vec3 vWorld = mix(vWa, vWb, hRaw);
+  float vDist = mix(vDab.x, vDab.y, hRaw);
   float cov;
   if (w >= 4.) {
     // wide wood is a continuous cylinder: no round ends (where one segment meets the next they
     // overlap a little, computing the same surface, so the bark runs on without a seam)
     float over = w * .4 / sqrt(bb);
     if (hRaw < -over || hRaw > 1. + over) discard;
+    // past its ends it goes on tapering as it was (not stepping: a flare's segments are short)
+    w = max(mix(vW.x, vW.y, hRaw), .5);
     off = pa - ba * hRaw;
     d = length(off);
     cov = clamp(w * .5 - d + .5, 0., 1.);
@@ -441,7 +451,7 @@ void main() {
   // up close the surface itself: where on the wood this is — round the trunk (metres, from the
   // side facing you, turned by where you stand) and up it — so the pattern stays on the wood
   float near = smoothstep(5., 24., w) * (1. - vTL.y);
-  float wm = mix(vWm.x, vWm.y, h);
+  float wm = max(mix(vWm.x, vWm.y, hRaw), .001);
   float u = (asin(a) + uViewAz) * wm * .5;
   float v = vWorld.y - uBase;
   float wrap = sqrt(max(0., 1. - a * a));
@@ -494,9 +504,14 @@ void main() {
     float bump = clamp((dFdx(relief) * uLight.x + dFdy(relief) * uLight.y) * 5., -.4, .4);
     lit *= 1. + bump * uBarkP.x * near;
     // lichen: pale grey-green crusts with speckled edges, a yellow one now and then, at mid height
-    float lm = smoothstep(.52, .62, organic(vec2(u * 20., v * 13.) + 17.)) * uBarkP.z * smoothstep(.2, 1.2, v) * (1. - smoothstep(9., 16., v));
-    // a crust, not paint: speckled, and the bark showing through
-    lm *= (.45 + .55 * smoothstep(.35, .6, vnoise(vec2(u * 170., v * 170.)))) * .7;
+    // (rosettes a few centimetres across, clustered where the bark suits them, absent elsewhere)
+    float where = smoothstep(.25, .6, vnoise(vec2(u * 3., v * 1.3) + 41.));
+    float lm = smoothstep(.5, .62, organic(vec2(u * 38., v * 26.) + 17.)) * where * uBarkP.z * smoothstep(.2, 1.2, v) * (1. - smoothstep(9., 16., v));
+    // a crust, not paint: finely speckled (two turned layers of noise, so no square cells), the
+    // bark showing through
+    vec2 sp = vec2(u, v) * 160.;
+    float speck = vnoise(mat2(.8, -.6, .6, .8) * sp) * .5 + vnoise(mat2(.28, .96, -.96, .28) * sp * 1.37 + 5.) * .5;
+    lm *= (.4 + .6 * smoothstep(.3, .65, speck)) * .7;
     vec3 lichenC = mix(vec3(.5, .57, .48), vec3(.6, .58, .36), step(.88, organic(vec2(u * 10., v * 10.) + 3.)));
     // moss: velvet green, low on the trunk and on its shaded side; the foot always a little mossy
     float mm = smoothstep(.45, .56, organic(vec2(u * 12., v * 7.) + 5.)) * uBarkP.w * (1. - smoothstep(.2, .6 + 2.4 * uBarkP.w, v)) * (.35 + .65 * (1. - dif));
