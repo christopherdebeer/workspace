@@ -247,6 +247,8 @@ let gesture: { kind: 'walk' | 'look'; id: number; x: number; y: number; heading:
 const STEER = 1.3;
 /** Two touches: the pinch, from its first spread and the zoom then. */
 let pinch: { d: number; zoom: number } | null = null;
+/** Where the pinch looks closer (rad from the view's middle: across, up): kept under the fingers. */
+let zoomAt = { across: 0, up: 0 };
 let keys = new Set<string>();
 let walkedOnce = false;
 
@@ -265,6 +267,10 @@ canvas.addEventListener('pointerdown', (e) => {
   if (touches.size === 2) {
     // a second finger: a pinch (and a pause: no walking while you look closer)
     pinch = { d: Math.max(spread(), 1), zoom: zoomTo };
+    // what lies between the fingers (as angles from the middle of the eye's own field)
+    const [a, b] = [...touches.values()];
+    const f = innerHeight * 0.92;
+    zoomAt = { across: ((a.x + b.x) / 2 - innerWidth / 2) / f, up: Math.atan((horizonY() - (a.y + b.y) / 2) / f) };
     holding = false;
     gesture = null;
     return;
@@ -491,7 +497,9 @@ function frame(now: number) {
   // standing still is still: the sway and the breath are the walk's
   const going = clamp01(speed / 1.1);
   view.x = posX + Math.sin(t * 0.037) * 0.12 * going;
-  view.yaw = yaw + Math.sin(t * 0.05) * 0.015 * going;
+  // looking closer, turned toward what is between the fingers (the more, the closer)
+  const toward = 1 - 1 / zoom;
+  view.yaw = yaw + Math.sin(t * 0.05) * 0.015 * going + zoomAt.across * toward;
   // the eye rides the ground (a moment behind it, as legs take a slope)
   footY += (wood.groundH(posX, posZ) - footY) * (1 - Math.exp(-dt * 5));
   view.eye = footY + 1.6 + Math.sin(stride) * (0.022 + 0.04 * running) * going + Math.sin(t * 0.06) * 0.03 * going;
@@ -508,11 +516,11 @@ function frame(now: number) {
   [pitch, pitchV] = spring(pitch, gesture?.kind === 'look' ? pitchTo : (flag('tilt') ?? 0), pitchV, gesture?.kind === 'look' ? 30 : 3);
   [zoom, zoomV] = spring(zoom, zoomTo, zoomV, pinch ? 40 : 4);
   view.f *= zoom;
-  view.horizon = H * 0.4 - Math.tan(pitch) * view.f;
+  view.horizon = H * 0.4 - Math.tan(pitch + zoomAt.up * toward) * view.f;
 
   // what stands in view, and the card each needs
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
+  const c = Math.cos(view.yaw);
+  const s = Math.sin(view.yaw);
   const density = wood.densityAt(posX, posZ) * (flag('fog') ?? 1);
   const atmos = atmosphere(hourAt(), flag('moon') ?? moonPhase(new Date()), flag('warm') ?? 0);
   const sunAz = atmos.at[0];
