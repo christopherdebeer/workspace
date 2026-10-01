@@ -170,6 +170,10 @@ function stand(z: number, resume = false) {
 let deer!: Deerland;
 /** The trees drawn live last frame (they keep their place in the budget). */
 const live = new Set<Placed>();
+/** A live tree's extra turn (rad): the side its card showed when it came alive (see the frame). */
+const liveTurn = new Map<Placed, number>();
+/** The side each tree's card is seen from (kept, with some hysteresis). */
+let sideOf = new WeakMap<Placed, number>();
 function plant(s: number) {
   seed = s;
   wood = new Wood(seed);
@@ -178,6 +182,8 @@ function plant(s: number) {
   forget();
   baker.dispose();
   live.clear();
+  liveTurn.clear();
+  sideOf = new WeakMap();
   seedBtn.textContent = seedName(seed).replace(/-/g, ' · ');
   setFlag('seed', seedName(seed), { reload: false, by: 'app' });
 }
@@ -529,6 +535,39 @@ function frame(now: number) {
   let liveLeft = LIVE_BUDGET * quality * quality;
   const nowLive = new Set<Placed>();
   for (const { p, st, hd, R, hM, base } of seen) {
+    // which side of it you see: its card is baked from the nearest of twelve, kept until you are
+    // well past the halfway to the next (no flicker at the boundary). A live tree is drawn turned
+    // by the difference between where you truly see it from and the side its card showed when it
+    // came alive — so card and tree coincide at the handover, and only true parallax remains
+    // (the tree's turn is arbitrary: it keeps that turn while it stays live)
+    const ex = view.x - p.x;
+    const ez = view.z - p.z;
+    const el = Math.hypot(ex, ez) || 1;
+    const rwx = -ez / el;
+    const rwz = ex / el;
+    let rotUse = p.rot + (liveTurn.get(p) ?? 0);
+    let side = 0;
+    let right: [number, number] = [1, 0];
+    let aExact = 0;
+    const STEP = (2 * Math.PI) / SIDES;
+    if (!low(p.kind)) {
+      const cr = Math.cos(rotUse);
+      const sr = Math.sin(rotUse);
+      aExact = Math.atan2(-rwx * sr + rwz * cr, rwx * cr + rwz * sr);
+      const at = aExact / STEP;
+      const prev = sideOf.get(p);
+      const off = prev === undefined ? 1 : Math.abs((((at - prev) % SIDES) + SIDES * 1.5) % SIDES - SIDES / 2);
+      side = off < 0.75 ? prev! : ((Math.round(at) % SIDES) + SIDES) % SIDES;
+      sideOf.set(p, side);
+      const a = side * STEP;
+      right = [Math.cos(a), Math.sin(a)];
+    }
+    // the pixels it needs: its size on screen, less as the fog takes it
+    const fogged = 1 - Math.exp(-hd * density * 1.4);
+    const need = ((Math.max(2 * R, hM) * view.f) / Math.max(hd, 0.5)) * (1 - 0.75 * fogged);
+    const pxNeed = need * (need > 900 ? Math.max(bias, 0.8) : bias);
+    const level = Math.max(64, Math.min(low(p.kind) ? 1024 : 2048, nextPow2(pxNeed)));
+    const card = bestCard(p.kind, p.pool, level, side);
     // the handover: coming near, the live tree fades in over its card (LIVE → LIVE − 2.5 m),
     // then the card fades out from under it (→ LIVE − 5 m); coverage never dips between them
     let liveAlpha = 0;
@@ -542,37 +581,20 @@ function frame(now: number) {
       if (n <= liveLeft && n > 0) {
         liveLeft -= n;
         nowLive.add(p);
+        if (!liveTurn.has(p)) {
+          // coming alive: turned to the side its card shows (the wrapped difference)
+          const turn = card ? Math.atan2(Math.sin(aExact - card.side * STEP), Math.cos(aExact - card.side * STEP)) : 0;
+          liveTurn.set(p, turn);
+          rotUse += turn;
+        }
         const g = wood.genomeOf(p.kind);
         liveAlpha = 1 - smoothstep(LIVE - 2.5, LIVE, hd);
         cardAlpha = smoothstep(LIVE - 5, LIVE - 2.5, hd);
-        draws.push({ live: true, buffer: baker.buffer(st), count: n, wide: Math.min(n, countWider(st, 3 * px)), x: p.x, z: p.z, base, mist: [0, 0], top: st.maxY * p.scale, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd - 1e-3 });
+        draws.push({ live: true, buffer: baker.buffer(st), count: n, wide: Math.min(n, countWider(st, 3 * px)), x: p.x, z: p.z, base, mist: [0, 0], top: st.maxY * p.scale, rot: rotUse, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + rotUse, d: hd - 1e-3 });
       }
     }
     if (cardAlpha <= 0.001) continue;
-    // a card, baked as the tree is seen from here (one of twelve sides)
-    const ex = view.x - p.x;
-    const ez = view.z - p.z;
-    const el = Math.hypot(ex, ez) || 1;
-    const rwx = -ez / el;
-    const rwz = ex / el;
-    let side = 0;
-    let right: [number, number] = [1, 0];
-    if (!low(p.kind)) {
-      const cr = Math.cos(p.rot);
-      const sr = Math.sin(p.rot);
-      const lx = rwx * cr + rwz * sr;
-      const lz = -rwx * sr + rwz * cr;
-      side = ((Math.round(Math.atan2(lz, lx) / ((2 * Math.PI) / SIDES)) % SIDES) + SIDES) % SIDES;
-      const a = (side * 2 * Math.PI) / SIDES;
-      right = [Math.cos(a), Math.sin(a)];
-    }
-    // the pixels it needs: its size on screen, less as the fog takes it
-    const fogged = 1 - Math.exp(-hd * density * 1.4);
-    const need = ((Math.max(2 * R, hM) * view.f) / Math.max(hd, 0.5)) * (1 - 0.75 * fogged);
-    const px = need * (need > 900 ? Math.max(bias, 0.8) : bias);
-    const level = Math.max(64, Math.min(low(p.kind) ? 1024 : 2048, nextPow2(px)));
-    const card = bestCard(p.kind, p.pool, level, side);
-    if (!card || card.level < level) want.push({ kind: p.kind, pool: p.pool, level, px, side, right });
+    if (!card || card.level < level) want.push({ kind: p.kind, pool: p.pool, level, px: pxNeed, side, right });
     if (!card) continue;
     card.used = t;
     const left = card.left * p.scale;
@@ -597,6 +619,8 @@ function frame(now: number) {
   }
   live.clear();
   for (const p of nowLive) live.add(p);
+  // a tree no longer live goes back to its own turn
+  for (const p of liveTurn.keys()) if (!nowLive.has(p)) liveTurn.delete(p);
   // bake what is wanted, biggest on screen first, a little each frame
   want.sort((a, b) => b.px - a.px);
   let budget = 150000;
@@ -610,6 +634,7 @@ function frame(now: number) {
     baked.add(key);
     const card = baker.bake(st, w.level, w.right);
     card.used = t;
+    card.side = w.side;
     cards.set(key, card);
     texels += card.texels;
   }

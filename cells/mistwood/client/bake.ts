@@ -99,6 +99,8 @@ export interface Card {
   bottom: number;
   width: number;
   height: number;
+  /** which of the sides it was baked from (main.ts SIDES) */
+  side: number;
 }
 
 export class Baker {
@@ -195,6 +197,6 @@ export class Baker {
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    return { tex, level, texels: W * H * 1.34, used: 0, left, bottom, width: W / scale, height: H / scale };
+    return { tex, level, texels: W * H * 1.34, used: 0, left, bottom, width: W / scale, height: H / scale, side: 0 };
   }
 }
