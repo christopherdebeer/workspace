@@ -291,7 +291,7 @@ export class Wood {
     place('log', 0.06 + 0.7 * fd, 2.2, 4, (f) => (f.water > 0 ? 0 : 1));
     // grass, thick in the glades, thin under the trees (leaf litter there); rushes in the wet,
     // standing out into the shallows
-    place('patch', 48, 0, 12, (f) => (f.water > 0 || f.wet > 0.55 ? 0 : (0.45 + 0.55 * f.open) * (1 - 0.5 * f.wet)), true);
+    place('patch', 48, 0, 12, (f) => (f.water > 0 || f.wet > 0.55 ? 0 : (0.62 + 0.38 * f.open) * (1 - 0.5 * f.wet)), true);
     place('rush', 12, 0, 6, (f) => (f.water > 0.3 ? 0 : smooth01(0.4, 0.8, f.wet)), true);
     this.cache.set(key, out);
     if (this.cache.size > 400) this.cache.delete(this.cache.keys().next().value!);
