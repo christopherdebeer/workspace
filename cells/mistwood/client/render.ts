@@ -144,7 +144,7 @@ vec4 hash4(ivec2 c, int k) {
 }
 vec3 leafColour(float h, float depth) {
   // fresh tan, ochre, rust, brown, grey-brown decay; deeper layers older and darker
-  vec3 c = h < .25 ? vec3(.5, .39, .25) : h < .45 ? vec3(.5, .38, .2) : h < .62 ? vec3(.43, .26, .15) : h < .85 ? vec3(.31, .22, .14) : vec3(.35, .31, .26);
+  vec3 c = h < .25 ? vec3(.5, .39, .25) : h < .45 ? vec3(.5, .38, .2) : h < .62 ? vec3(.43, .26, .15) : h < .85 ? vec3(.31, .22, .14) : vec3(.37, .31, .22);
   return c * mix(1., .5, depth);
 }
 // one layer of leaves: cell size s (m), the grid turned by (cs, sn), how full (amount), how old
@@ -166,7 +166,7 @@ void leafLayer(vec2 p, float s, vec2 turn, int k, float amount, float depth, flo
   float alpha = meanCov;
   float edge = 1.;
   if (detail > 0. && present > 0.) {
-    float Wd = L * (.3 + .2 * h.y);
+    float Wd = L * (.22 + .17 * h.y);
     vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - L);
     vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
     vec2 u = q - ctr;
@@ -250,7 +250,7 @@ void pebbleLayer(vec2 p, float s, int k, float amount, float px, vec3 ld, inout 
   vec4 h = hash4(c, k);
   float rad = (.22 + .2 * h.x) * s;
   float detail = 1. - smoothstep(rad * .2, rad * .8, px);
-  vec3 pc = mix(vec3(.16, .15, .14), vec3(.3, .28, .25), h.y);
+  vec3 pc = mix(vec3(.17, .145, .115), vec3(.32, .28, .22), h.y);
   float alpha = amount * .3;
   if (detail > 0. && h.w < amount) {
     vec2 ctr = (vec2(c) + .5 + (h.zw - .5) * (1. - 2. * rad / s)) * s;
