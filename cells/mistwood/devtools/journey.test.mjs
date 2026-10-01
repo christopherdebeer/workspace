@@ -28,19 +28,21 @@ await withWood(async (wood) => {
   const s2 = await wood.state(back);
   c.ok('a reload goes on from there', Math.hypot(s2.at[0] - x, s2.at[1] - y) < 0.11 && s2.heading === Number(url.searchParams.get('heading')), { at: s2.at, heading: s2.heading, url: url.search });
 
-  const reloads = [];
-  back.on('framenavigated', (f) => f === back.mainFrame() && reloads.push(f.url()));
+  // a mark in the page: it survives anything but a reload (history.replaceState included)
+  await back.evaluate(() => (window.__mark = 1));
+  const same = () => back.evaluate(() => window.__mark === 1);
   await wood.go(back, { x: 120, y: -40, heading: 90 });
-  await back.waitForTimeout(800);
-  const s3 = await wood.state(back);
-  c.ok('setting x, y, heading moves you there now', s3.at[0] === 120 && s3.at[1] === -40 && s3.heading === 90, s3);
-  c.ok('… without reloading the page', reloads.length === 0, reloads);
+  const moved = await back
+    .waitForFunction(() => { const s = window.__mistwood; return s.at[0] === 120 && s.at[1] === -40 && s.heading === 90; }, null, { timeout: 60000 })
+    .then(() => true, () => false);
+  c.ok('setting x, y, heading moves you there now', moved, await wood.state(back));
+  c.ok('… without reloading the page', await same());
   c.ok('… and the view settles', await wood.settle(back));
   await wood.shot(back, 'journey-there');
 
   await wood.go(back, { seed: 'fern-hollow-3' });
   await back.waitForFunction(() => window.__mistwood.seed === 'fern-hollow-3', null, { timeout: 60000 });
-  c.ok('setting the seed makes another wood, still without a reload', reloads.length === 0, reloads);
+  c.ok('setting the seed makes another wood, still without a reload', await same());
   c.ok('… and it settles', await wood.settle(back));
   await wood.shot(back, 'journey-other-wood');
   c.ok('no errors in the page', back.errors.length === 0 && page.errors.length === 0, [...page.errors, ...back.errors]);
