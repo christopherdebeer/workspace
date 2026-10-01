@@ -528,6 +528,7 @@ in float vDist;
 out vec4 o;
 uniform float uDensity, uAlpha, uSize, uFace;
 uniform vec4 uPose; // head up, head turned to you, gait phase, running
+uniform float uBed; // 0 standing … 1 lying up (legs folded under, the body on the ground, head up)
 uniform vec3 uBark;
 ${NOISE}
 float sdCap(vec2 p, vec2 a, vec2 b, float ra, float rb) { vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); return length(pa - ba * h) - mix(ra, rb, h); }
@@ -540,7 +541,7 @@ void main() {
   // bounding: the body rises and pitches with each leap
   float bob = run * .22 * max(0., sin(g));
   float pitch = run * .14 * sin(g + 1.2);
-  vec2 q = p - vec2(0., bob);
+  vec2 q = p - vec2(0., bob - uBed * .68);
   q = vec2(q.x, q.y - .95) * mat2(cos(pitch), -sin(pitch), sin(pitch), cos(pitch)) + vec2(0., .95);
   float body = sdEll(q, vec2(0., .95), vec2(.5, .2));
   body = smin(body, sdEll(q, vec2(-.36, .99), vec2(.2, .22)), .08);
@@ -568,6 +569,10 @@ void main() {
     vec2 leap = hip + vec2(sin(a) * .42, -.8 + .3 * max(0., cos(a)));
     vec2 hoof = mix(stand, leap, run);
     vec2 knee = mix(hip, hoof, .5) + vec2(front ? -.05 : .09, .02);
+    // lying up: the legs folded under the body, a foreleg tucked forward
+    vec2 fold = hip + vec2(front ? .3 : .26, -.17);
+    knee = mix(knee, hip + vec2(front ? -.04 : .02, -.14), uBed);
+    hoof = mix(hoof, fold, uBed);
     d = min(d, sdCap(q, hip, knee, .06, .034));
     d = min(d, sdCap(q, knee, hoof, .03, .018));
   }
@@ -673,6 +678,8 @@ export interface LiveDraw {
 export interface DeerDraw {
   live: false;
   pose: [number, number, number, number];
+  /** 0 standing … 1 lying up */
+  bed: number;
   x: number;
   z: number;
   /** the ground's height at its foot (m) */
@@ -902,6 +909,7 @@ export class Renderer {
         gl.uniform1f(this.loc(D, 'uBase'), c.base);
         gl.uniform4f(this.loc(D, 'uRect'), -1.3 * c.size, 0, 2.6 * c.size, 2.1 * c.size);
         gl.uniform4fv(this.loc(D, 'uPose'), c.pose);
+        gl.uniform1f(this.loc(D, 'uBed'), c.bed);
         gl.uniform1f(this.loc(D, 'uSize'), c.size);
         gl.uniform1f(this.loc(D, 'uFace'), c.face);
         gl.uniform1f(this.loc(D, 'uAlpha'), c.alpha);

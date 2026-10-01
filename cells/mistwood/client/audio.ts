@@ -84,13 +84,103 @@ export class Sound {
     }
   }
 
-  /** A twig snapping under a hoof, somewhere off in the fog: a crack, and a splinter or two after. */
-  snap(pan: number, level: number) {
+  /** Somewhere off in the fog: panned, and the further the more muffled (the fog and the trees take the highs). */
+  private out(pan: number, far: number): AudioNode | null {
     const ctx = this.ctx;
-    if (!ctx || !this.on || !this.noise) return;
+    if (!ctx || !this.on || !this.noise) return null;
     const p = ctx.createStereoPanner();
     p.pan.value = Math.max(-1, Math.min(1, pan));
-    p.connect(this.master!);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 9000 * Math.pow(0.12, Math.max(0, Math.min(1, far)));
+    p.connect(lp).connect(this.master!);
+    return p;
+  }
+
+  /** A deer's step in the leaves: a short dry rustle. */
+  rustle(pan: number, level: number, far: number) {
+    const p = this.out(pan, far);
+    if (!p) return;
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 1400 + Math.random() * 1600;
+    f.Q.value = 0.7;
+    const g = ctx.createGain();
+    const now = ctx.currentTime + 0.01;
+    const len = 0.08 + Math.random() * 0.12;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(level, now + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0004, now + len);
+    src.connect(f).connect(g).connect(p);
+    src.start(now, Math.random() * 1.5, len + 0.05);
+  }
+
+  /** A forefoot stamped on the ground: a dull thud. */
+  stamp(pan: number, level: number, far: number) {
+    const p = this.out(pan, far);
+    if (!p) return;
+    const ctx = this.ctx!;
+    let at = ctx.currentTime + 0.01;
+    for (let i = 0; i < 2; i++) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(95, at);
+      o.frequency.exponentialRampToValueAtTime(48, at + 0.09);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(level, at + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0005, at + 0.14);
+      o.connect(g).connect(p);
+      o.start(at);
+      o.stop(at + 0.16);
+      at += 0.32 + Math.random() * 0.1;
+    }
+  }
+
+  /** The alarm bark: a hoarse, gruff "bōh", once. */
+  bark(pan: number, level: number, far: number) {
+    const p = this.out(pan, far);
+    if (!p) return;
+    const ctx = this.ctx!;
+    const at = ctx.currentTime + 0.02;
+    const len = 0.22 + Math.random() * 0.08;
+    const f0 = 210 + Math.random() * 60;
+    // the voice: a sawtooth falling, through a throat (a formant), roughened with breath
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(f0 * 1.15, at);
+    o.frequency.exponentialRampToValueAtTime(f0 * 0.8, at + len);
+    const throat = ctx.createBiquadFilter();
+    throat.type = 'bandpass';
+    throat.frequency.value = 850 + Math.random() * 200;
+    throat.Q.value = 2.2;
+    const breath = ctx.createBufferSource();
+    breath.buffer = this.noise;
+    const bf = ctx.createBiquadFilter();
+    bf.type = 'bandpass';
+    bf.frequency.value = 1300;
+    bf.Q.value = 0.8;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(level, at + 0.025);
+    g.gain.setValueAtTime(level * 0.8, at + len * 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0005, at + len);
+    o.connect(throat).connect(g);
+    breath.connect(bf).connect(g);
+    g.connect(p);
+    o.start(at);
+    o.stop(at + len + 0.02);
+    breath.start(at, Math.random() * 1.5, len + 0.02);
+  }
+
+  /** A twig snapping under a hoof, somewhere off in the fog: a crack, and a splinter or two after. */
+  snap(pan: number, level: number, far = 0) {
+    const p = this.out(pan, far);
+    if (!p) return;
+    const ctx = this.ctx!;
     let at = ctx.currentTime + 0.01;
     const cracks = 1 + Math.floor(Math.random() * 3);
     for (let i = 0; i < cracks; i++) {

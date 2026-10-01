@@ -82,12 +82,7 @@ realism is carried by the fog and the light rather than by geometry.
   lenticels in loose rows, dark patches long across the trunk, papery cream,
   a dark fissured foot with a ragged edge. Wide wood is drawn as a continuous
   cylinder so the pattern runs across segment joints without a seam.
-- **Deer** (`client/deer.ts`): now and then a few come into the edge of the
-  fog, grazing side-on. Come near, or walk towards them, and one lifts its
-  head and turns it to look at you; keep still and they may settle; come closer
-  and a twig snaps and they bound away, rumps flashing white. Drawn by the
-  shader from shapes (body, neck, head in profile or turned, ears, jointed
-  legs), fogged like everything else. `?deer=1` brings them at once.
+- **Deer** (`client/deer.ts`): they live here. See *Deer* below.
 
 ## Places (`client/world.ts` `place`)
 
@@ -114,6 +109,35 @@ Each species keeps to the places that suit it (`AFFINITY`). Tall trees keep to
 dry shelter. Leaners lean towards the wet. Birch takes the open and disturbed
 ground. The fog is a little thicker in the hollows. Slopes facing the light
 are a little brighter.
+
+## Deer (`client/deer.ts`)
+
+Each wood has its herds of two to five deer. About half of the 120 m squares
+hold one, with a home range around a lying-up place in cover, off the paths.
+Herds come into being as you come near their range and are let go when you
+are far, so they are there again when you come back.
+
+- **Their hours.** They are out grazing at dawn and dusk and lying up in the
+  middle of the day, with some about at night. They graze on the grass near
+  home (glades, the wet edges), wander a few steps at a time, and heads come
+  up now and then.
+- **What they make of you.** Alarm builds from what they hear and see:
+  - Your steps are loud in dry leaves and soft on the path.
+  - They see you only within the fog's reach, mostly when you move.
+  - Too near (about 10 m) alarms them whatever you do.
+  - Lying up, they hold tight.
+  - Keep still and the alarm falls away.
+- **How it goes.** As alarm rises:
+  1. Heads come up and they stand side-on.
+  2. One turns to look at you, stamps, and barks.
+  3. They go: away from you and into cover, snapping twigs as they run.
+  4. Once there, they stop and look back.
+  5. When the alarm has passed, they drift home and graze or lie up again.
+- **Heard before seen.** Their steps rustle in the leaves off in the fog, along
+  with the stamp, the bark (a hoarse "bōh") and twig snaps. Each sound is
+  panned to where it came from, and the further off, the more muffled.
+- **Drawn** by the shader from shapes: body, neck, head in profile or turned,
+  ears, and jointed legs that walk, bound, or fold under when lying up.
 
 ## One seed, one wood
 
@@ -145,7 +169,33 @@ frees every GPU buffer of the old wood.
 Synthesised: wind in the trees, steps in the grass while walking, a far bird
 call now and then.
 
-## Debug
+## Flags and the tuning overlay
 
-`?seed=` · `?find=pond|log|veteran|glade` (stand by the nearest, facing it; `?off=<m>` how far) · `window.__wood()` · `?near=<m>` (stand by the nearest tree, facing it) · `?only=birch` (one archetype) · `?deer=1` · `?deerAt=<m>` · `?walk=1` · `?look=<radians>` · `?fixed` ·
-`window.__mistwood` (cards drawn and baked, MB, the resolution bias).
+Every flag in the address is declared once, in `client/flags.ts`, with:
+
+- its kind (number with range and step, choice, switch, text);
+- what it does, and its group;
+- whether a change applies at once (`live`) or needs a reload.
+
+Code reads flags only through `flag('name')`. An undeclared name does not
+compile, and an out-of-range or unknown value is refused with a warning.
+
+- **`?tune`** opens the development overlay. It is built entirely from the
+  declarations, so a new flag appears there as soon as it is declared. Live
+  flags change as you drag; the rest reload with the new value. Below the
+  controls, `window.__mistwood` shows what the wood reports of itself: cards,
+  MB, quality, the place you stand in, and each herd's mode, alarm and
+  distance.
+- **Guards.** `node cells/mistwood/check-flags.mjs` (run before every deploy)
+  fails on a declared flag that nothing reads, and on any other file reading
+  the address directly. At run time, parameters that are not flags are
+  reported in the console and at the top of the overlay.
+- **Also:** `window.__wood()` (the Wood itself, to query places).
+
+Current flags:
+- **wood:** `seed`, `only`
+- **stand:** `at`, `look`, `near`, `find`, `off`, `walk`
+- **sky:** `hour`, `moon`, `fog`, `warm`
+- **deer:** `deer`, `deerAt`, `deerBed`, `deerCalm`
+- **render:** `fixed`, `time`
+- **dev:** `tune`
