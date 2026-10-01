@@ -266,6 +266,27 @@ void pebbleLayer(vec2 p, float s, int k, float amount, float px, vec3 ld, inout 
   col += (1. - cov) * alpha * pc;
   cov += (1. - cov) * alpha;
 }
+// the floor's own relief, under everything that lies on it: hummocks (~0.6 m), clods (~20 cm) and
+// grit (~7 cm), each fading out when it is too small for the pixel (no shimmer). Returns the
+// surface's normal, and how far down in a hollow this is (for the dark that collects there)
+vec4 floorRelief(vec2 xz, float px) {
+  vec2 grad = vec2(0.);
+  float hollow = 0.;
+  float scale = .6, amp = .045;
+  for (int i = 0; i < 3; i++) {
+    float lod = 1. - smoothstep(scale * .08, scale * .3, px);
+    if (lod <= 0.) break;
+    vec2 q = xz / scale + float(i) * 13.7;
+    float e = .15;
+    float h0 = vnoise(q);
+    // the slope of this octave (rise per metre), by small steps across and along
+    grad += vec2(vnoise(q + vec2(e, 0.)) - h0, vnoise(q + vec2(0., e)) - h0) / (e * scale) * amp * lod;
+    hollow += (.5 - h0) * lod * (i == 0 ? .5 : 1.);
+    scale *= .33;
+    amp *= .4;
+  }
+  return vec4(normalize(vec3(-grad.x, 1., -grad.y)), hollow);
+}
 // the floor here: how much litter (shelter), the path (trodden: fewer leaves, more stones), the wet
 vec3 forestFloor(vec2 xz, float t, vec3 d, float litter, float path, float damp) {
   // the pixel's footprint (m): across, and drawn out along the view at a grazing angle; widened
@@ -297,6 +318,11 @@ vec3 forestFloor(vec2 xz, float t, vec3 d, float litter, float path, float damp)
   under = mix(under, vec3(.1, .075, .05) * (.8 + .4 * vnoise(xz * 37.)), path * .7);
   under = mix(under, vec3(.09, .1, .05) * (.8 + .4 * vnoise(xz * 23.)), damp * .7);
   col += (1. - cov) * under * (1. - shade * .6);
+  // the relief it all lies on: lit as it faces the light behind the fog (leaves on a hummock catch
+  // it together), and dark collecting in the hollows
+  vec4 rel = floorRelief(xz, px);
+  float lit = (.68 + .5 * max(dot(rel.xyz, ld), 0.)) / (.68 + .5 * ld.y);
+  col *= lit * (1. - .5 * clamp(rel.w, 0., .6));
   // wet leaves are darker and a little greener
   return col * mix(vec3(1.), vec3(.72, .78, .62), damp * .7);
 }
