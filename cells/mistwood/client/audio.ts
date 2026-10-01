@@ -11,7 +11,6 @@ export class Sound {
   private windGain: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private nextBird = 4;
-  private nextStep = 0;
   on = false;
 
   arm() {
@@ -60,7 +59,7 @@ export class Sound {
     return this.on;
   }
 
-  /** Each frame: the wind's breath, footsteps at walking pace, birds by the light. */
+  /** Each frame: the wind's breath, birds by the light. (The steps come from the stride: `step`.) */
   update(dt: number, t: number, walking: number, sun: number, wind: number) {
     const ctx = this.ctx;
     if (!ctx || !this.on) return;
@@ -68,14 +67,6 @@ export class Sound {
     const breath = 0.5 + 0.5 * Math.sin(t * 0.13) * Math.sin(t * 0.071 + 1);
     this.windFilter!.frequency.setTargetAtTime(260 + 700 * breath * wind, now, 0.5);
     this.windGain!.gain.setTargetAtTime(0.18 + 0.4 * breath * wind, now, 0.5);
-    // steps: a soft swish in the grass, about two a second at a walk
-    if (walking > 0.2) {
-      this.nextStep -= dt * walking * 1.9;
-      if (this.nextStep <= 0) {
-        this.nextStep = 1 + (Math.random() - 0.5) * 0.12;
-        this.swish(0.12 * walking);
-      }
-    } else this.nextStep = 0.3;
     this.nextBird -= dt;
     if (this.nextBird <= 0) {
       // the light is full of birds; the mist has one, far off, now and then
@@ -412,7 +403,34 @@ export class Sound {
     }
   }
 
-  private swish(level: number) {
+  /**
+   * A footfall, when the walk's stride says (main.ts): a swish through the grass and leaves; at a
+   * run, a long bound, so a heavier landing — a soft thud under the swish — each foot a little to
+   * its side.
+   */
+  step(level: number, run: number, side: number) {
+    const ctx = this.ctx;
+    if (!ctx || !this.on || !this.noise) return;
+    this.swish(0.12 * level * (1 + 0.4 * run), 0.28 + 0.12 * run, side * 0.15);
+    if (run > 0.05) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 160 + Math.random() * 60;
+      const g = ctx.createGain();
+      const now = ctx.currentTime;
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(0.5 * run * level, now + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0005, now + 0.16);
+      const p = ctx.createStereoPanner();
+      p.pan.value = side * 0.12;
+      src.connect(lp).connect(g).connect(p).connect(this.master!);
+      src.start(now, Math.random() * 1.5, 0.2);
+    }
+  }
+
+  private swish(level: number, len = 0.28, pan = 0) {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
@@ -424,9 +442,11 @@ export class Sound {
     const now = ctx.currentTime;
     g.gain.setValueAtTime(0, now);
     g.gain.linearRampToValueAtTime(level, now + 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0005, now + 0.28);
-    src.connect(f).connect(g).connect(this.master!);
-    src.start(now, Math.random() * 1.5, 0.35);
+    g.gain.exponentialRampToValueAtTime(0.0005, now + len);
+    const p = ctx.createStereoPanner();
+    p.pan.value = pan;
+    src.connect(f).connect(g).connect(p).connect(this.master!);
+    src.start(now, Math.random() * 1.5, len + 0.07);
   }
 
   /** A short phrase: a few rising or falling notes (a warbler), or one far, low call (the mist). */

@@ -510,9 +510,13 @@ function frame(now: number) {
     walkedOnce = true;
     hint.classList.remove('show');
   }
-  // steps: about two a second at a walk; running, longer strides and quicker
-  const running = smoothstep(2.2, 3.6, speed);
-  stride += dt * Math.PI * 2 * (Math.min(speed, 2) * 0.9 + running * 0.9);
+  // footfalls: a step is half a stride (π of its phase). The step lengthens far more than it
+  // quickens: two a second at a walk, a little under three at a run, where each is a long bound
+  const running = smoothstep(4.2, 7, speed);
+  const cadence = Math.min(speed / 1.2, 2 + 0.8 * running);
+  const foot = Math.floor(stride / Math.PI);
+  stride += dt * Math.PI * cadence;
+  if (Math.floor(stride / Math.PI) !== foot && speed > 0.4 && !flying) sound.step(clamp01(speed / 2.4), running, foot % 2 ? 1 : -1);
   const W = canvas.width;
   const H = canvas.height;
   // you walk the way you face (the view turns a moment behind the hand, and sways a little)
@@ -584,13 +588,18 @@ function frame(now: number) {
   view.z = posZ;
   // standing still is still: the sway and the breath are the walk's
   const going = clamp01(speed / 1.1);
-  view.x = posX + Math.sin(t * 0.037) * 0.12 * going;
+  // (the body over each foot in turn: a sway to the side, one way and back each stride)
+  const sway = Math.sin(stride) * (0.025 + 0.03 * running) * going;
+  view.x = posX + Math.sin(t * 0.037) * 0.12 * going + Math.cos(yaw) * sway;
+  view.z = posZ - Math.sin(yaw) * sway;
   // looking closer, turned toward what is between the fingers (the more, the closer)
   const toward = 1 - 1 / zoom;
   view.yaw = yaw + Math.sin(t * 0.05) * 0.015 * going + zoomAt.across * toward;
   // the eye rides the ground (a moment behind it, as legs take a slope)
   footY += (wood.groundH(posX, posZ) - footY) * (1 - Math.exp(-dt * 5));
-  view.eye = flying ? flyY : footY + 1.6 + Math.sin(stride) * (0.022 + 0.04 * running) * going + Math.sin(t * 0.06) * 0.03 * going;
+  // the bob: lowest as each foot comes down, highest between; at a run, a bound (the drop sharper)
+  const lift = Math.pow(Math.abs(Math.sin(stride)), 1 - 0.4 * running) - 0.6;
+  view.eye = flying ? flyY : footY + 1.6 + lift * (0.03 + 0.06 * running) * going + Math.sin(t * 0.06) * 0.03 * going;
   view.f = H * 0.92;
   // the tilt follows the hand, and settles back level when let go
   // springs: stiff while held (the neck following the hand, a little behind), soft and slow when

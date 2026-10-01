@@ -343,8 +343,15 @@ frees every GPU buffer of the old wood.
 
 ## Sound (`client/audio.ts`)
 
-Synthesised: wind in the trees, steps in the grass while walking, a far bird
-call now and then.
+Synthesised: wind in the trees, a far bird call now and then, and your steps.
+
+- **Steps** come from the stride, which also drives the bob and the sway, so
+  you hear a foot land as the eye drops onto it.
+  - The step lengthens far more than it quickens: about two a second at a
+    walk, a little under three at a run, where each is a long bound.
+  - At a run, each landing has a soft thud under the swish of grass and
+    leaves. Each foot sounds a little to its own side, and the body sways over
+    it.
 
 ## Devtools (`devtools/`, not synced to the cell)
 
