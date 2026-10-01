@@ -122,8 +122,19 @@ function stand(z: number, resume = false) {
         best = { x, z };
       }
     };
+    // (a wall: stand off to its side, square to it — not on its line, end-on)
+    let side: [number, number] | null = null;
     if (find === 'wall') {
-      for (let r = 40; r <= 600 && !best; r += 80) for (const w of wood.wallsNear(posX, posZ, r)) if (w.h > 0.7 && Math.hypot(w.x1 - w.x0, w.z1 - w.z0) > 8) consider((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
+      for (let r = 40; r <= 600 && !best; r += 80)
+        for (const w of wood.wallsNear(posX, posZ, r))
+          if (w.h > 0.7 && Math.hypot(w.x1 - w.x0, w.z1 - w.z0) > 8) {
+            const before = best;
+            consider((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
+            if (best !== before) {
+              const L = Math.hypot(w.x1 - w.x0, w.z1 - w.z0);
+              side = [-(w.z1 - w.z0) / L, (w.x1 - w.x0) / L];
+            }
+          }
     } else if (find === 'tower' || find === 'viaduct') {
       for (let r = 100; r <= 1600 && !best; r += 250) for (const s of wood.structuresNear(posX, posZ, r)) if (s.kind === find) consider(s.x, s.z);
     } else if (find === 'pond' || find === 'glade')
@@ -140,7 +151,7 @@ function stand(z: number, resume = false) {
     if (best) {
       const b = best as { x: number; z: number };
       const off = flag('off') ?? (find === 'pond' ? 14 : find === 'glade' ? 0 : find === 'tower' ? 22 : find === 'viaduct' ? 30 : find === 'wall' ? 7 : 9);
-      const a = Math.atan2(posX - b.x, posZ - b.z);
+      const a = side ? Math.atan2(side[0], side[1]) : Math.atan2(posX - b.x, posZ - b.z);
       posX = b.x + Math.sin(a) * off;
       posZ = b.z + Math.cos(a) * off;
       heading = Math.atan2(b.x - posX, b.z - posZ) + (flag('look') ?? 0);
