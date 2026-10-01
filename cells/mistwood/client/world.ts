@@ -228,7 +228,8 @@ export class Wood {
     const [a, , wl] = this.relief;
     const wet = 1 - smooth01(wl, wl + a * 0.8, gh);
     const lying = wet > 0.01 ? smooth01(0.2, 1, wet) * Math.exp(-above * 1.1) * (0.4 + 0.6 * vnoise(x * 0.07 + t * 0.006, z * 0.07, s)) : 0;
-    return banks * 0.05 + lying * 0.12;
+    const low = smooth01(0.5, 0.78, vnoise(x * 0.09 + t * 0.01 + 31, z * 0.09 - t * 0.004 + 31, s)) * Math.exp(-above * 0.55);
+    return banks * 0.05 + lying * 0.12 + low * 0.07;
   }
 
   /** The mist along the way from (ex, ey, ez) to (x, y, z): its optical depth (a few steps of it). */

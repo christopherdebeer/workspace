@@ -1,26 +1,26 @@
 {
   "cell": "c15r/mistwood",
   "cellId": "mistwood-1508ec6e",
-  "treeVersion": "tree:02ee2fa7830afbf37aa761806997abbde95d836a41e07ae985046c01ba19b071",
-  "syncedAt": "2026-10-01T12:23:27.289Z",
+  "treeVersion": "tree:4f54c8dc7cee94c2d7c82b7f70f6a865a3bdd5edbea76ccac510888681c523e3",
+  "syncedAt": "2026-10-01T12:29:30.301Z",
   "files": {
-    "README.md": "sha256:5f9576d17935ef26d3987f356a2d65155e2fa0a61b6b3225e0d6e0f43dbbb0d5",
+    "README.md": "sha256:353708acc26c15ee5f94b9738342c22aa953c02fa187d41a1de5cb3f0d3b0d70",
     "client/audio.ts": "sha256:425599c02a26687964151373ea16f0679454e8cc7fc16972c516e2071f903c5f",
     "client/bake.ts": "sha256:a453ab538583cc2e599f3538c1bcba52b050c9d2fa7288acf04a77a1c610bf62",
     "client/deer.ts": "sha256:edcbcb6f3b171a22a9e40e6b8545cdd942a12e589d89751c485e4e78c2579f18",
     "client/flags.ts": "sha256:ef5515b919c3fbadcf07f8d0356c7a71f9cc6be43b616ca68d8e222a207b51b4",
-    "client/main.ts": "sha256:82812e906551949d9f623c74bead43ba87aa3b33b44d983d3ba67f73d780a3e3",
-    "client/render.ts": "sha256:97c8b3ed5da0a2842ddc8ce60c18f217f0a1b895b46c0e50f21bf8e6e903b8c1",
+    "client/main.ts": "sha256:eadd26156947c30649e367d379781ebb0195d4d1dc7e5fec3fbe68236604c5a9",
+    "client/render.ts": "sha256:d09381882feda626d8d810f5b3e91231bf56b490f124a278334d147d016a44a9",
     "client/rng.ts": "sha256:59fee1f6bb92795d9505951a5813c70878b8664a4fe73c31ff311eb29bb8db2b",
     "client/sky.ts": "sha256:3b1e814d973601f39c6fa0acafada9acb35aa6ee0966cfbb68d70e59f47a0aa1",
     "client/tree.ts": "sha256:fe90a5a16066d0bc094dc8b6863ed6a028c397c6a81da4c613f395028bad9cb0",
     "client/tune.ts": "sha256:72bd5b89ae646f5662955f12a83fb55762149fb915ab7b1544f83c483c9d701d",
-    "client/world.ts": "sha256:1a3d204118e2295206af0ebde320a680ecfc26626f3b5070cf707ea26dba0d99",
+    "client/world.ts": "sha256:dcc57c7d6813c8984c0aecb20e76a428afbc7edd145313909448534cdd7bf68b",
     "index.ts": "sha256:b4489fda6cf07438e71a0ebead6907a0211c94e048c9fb9050a8b0720e8570f4",
     "static/ground/README.md": "sha256:77853e83b5f22aedae16ea1e7dbc80075d253d3497d822404c10040422ef0b6d",
     "static/ground/leaf_scattered_gravel_diff.webp": "sha256:6e6cf3c01071e8ff0dc5f2c65b433cec1563ac48a136de1e1db67a87d1fae632",
     "static/ground/leaf_scattered_gravel_nor.webp": "sha256:0a66416c73d55a0460a193674793a16bbcd06050627f7c33f3c648459b7d386f",
-    "static/index.html": "sha256:a944282febec6dc989a08ef4495b1bb66742f8d16d323155a0a0b3896f040e08",
+    "static/index.html": "sha256:45040c0162e339d140e1e81024ca24c7505302680d19abc46a49df60e0f06fdd",
     "tsconfig.json": "sha256:6fa14395375b4f597121574f857a79410acdcb92025bfde82fe8087538f37293"
   }
 }

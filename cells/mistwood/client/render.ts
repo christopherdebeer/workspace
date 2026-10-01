@@ -40,8 +40,8 @@ float groundH(vec2 p) {
 // ground: clear for the first few metres, then closing fast (the square term) — near things sharp
 // and dark, the middle distance soft, the far gone — and thicker low down, a few metres out
 float fogAt(float dist, float above, float density) {
-  float path = dist * .7 + dist * dist / 45.;
-  return 1. - exp(-density * path * (1. + 1.5 * exp(-max(above, 0.) * .35) * smoothstep(2., 14., dist)));
+  float path = dist * .55 + dist * dist / 40.;
+  return 1. - exp(-density * path * (1. + 1.1 * exp(-max(above, 0.) * .35) * smoothstep(5., 20., dist)));
 }
 // depth of field: the blur (circle of confusion, px) of something dist metres off — none at
 // the focus and beyond (the fog softens the far), growing fast as things come near: grass at your
@@ -60,7 +60,9 @@ float mistDensity(vec3 p, float gh) {
   float banks = smoothstep(.45, .8, n) * exp(-above * .08);
   float wet = wetAt(gh);
   float lying = wet > .01 ? smoothstep(.2, 1., wet) * exp(-above * 1.1) * (.4 + .6 * vnoise(p.xz * .07 + vec2(uT * .006, 0.))) : 0.;
-  return banks * .05 + lying * .12;
+  // and low drifts, a metre or two deep, in patches (so the mist along the ground is never one even band)
+  float low = smoothstep(.5, .78, vnoise(p.xz * .09 + vec2(uT * .01, -uT * .004) + 31.)) * exp(-above * .55);
+  return banks * .05 + lying * .12 + low * .07;
 }
 // for what is drawn on its own (a tree, a card, a deer): the mist along the way to its foot and
 // to its top, summed on the CPU for each (world.ts mistAlong), between them by height

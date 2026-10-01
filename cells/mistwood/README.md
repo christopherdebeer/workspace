@@ -4,7 +4,7 @@
 photograph: a green-grey woodland fog, a small bare tree leaning over dry grass,
 tall trunks fading behind, a birch, a beech sapling keeping last year's leaves.
 
-Nothing to do and nothing to finish. Hold still to walk — the pace builds as you keep on (and where the device reports real pressure, e.g. Apple Pencil, pressing harder walks faster; an iPhone touch reports none). Drag across to look about and, once walking, to steer; drag up or down to tilt the view, which eases back level when you let go. Standing still is still: no sway, no drift.
+Nothing to do and nothing to finish. Touch the ground (below the horizon) to walk, at once, and drag across to steer; the pace builds from a walk to a brisk one and, if you keep on, a run (where the device reports real pressure, e.g. Apple Pencil, pressing harder goes faster). Touch the sky to look: across turns you, with a head's weight; up and down cranes your neck, harder the further it goes, and eases back level when you let go. Two fingers pinch to look closer (up to 4×), easing back out. Standing still is still.
 
 ## The approach: silhouettes, in extreme detail, on the GPU
 
@@ -256,6 +256,8 @@ call now and then.
 headless Chromium through the flags. The other tools are built on it:
 
 - `shots.mjs`: screenshots of any queries, each taken once settled.
+- `input.test.mjs`: real touches (Chrome's touch emulation). Ground walks, sky
+  looks and tilts, the tilt eases back, and a pinch zooms then eases out.
 - `journey.test.mjs`: the address keeps the journey, a reload resumes it, and
   moving or changing seed works in the same page.
 - `determinism.test.mjs`: one address gives one wood, across fresh pages.
