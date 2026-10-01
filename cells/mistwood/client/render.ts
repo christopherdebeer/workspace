@@ -223,6 +223,9 @@ void main() {
  * in its crown, and its bark is shaded by where it faces. Segments come thickest first, so drawing
  * the first N is the tree as far as it can be seen at that distance.
  */
+/** Metres over which the live trees' depth is kept (they are all nearer than this). */
+const DEPTH_RANGE = 32;
+
 const LIVE_VS = `#version 300 es
 in vec3 aP0;
 in vec3 aP1;
@@ -299,6 +302,8 @@ in vec3 vWorld;
 in float vDist;
 out vec4 o;
 uniform float uDensity, uAlpha, uPhase, uRim, uViewAz;
+// 1: only lay down depth (the solid middle of the wide wood), so what is behind a trunk is hidden
+uniform float uDepthPass;
 uniform vec3 uBark, uBirch, uLeaf;
 // bark up close: fissure depth, pattern scale, lichen, moss (the species')
 uniform vec4 uBarkP;
@@ -342,6 +347,16 @@ void main() {
   if (nn.x < 0.) nn = -nn;
   float a = clamp(dot(off, nn) / max(w * .5, .5), -1., 1.);
   vec3 N = vec3(nn * a, sqrt(max(0., 1. - a * a)));
+  // depth: the round surface, nearer than the axis by the radius where it faces you
+  float zf = clamp((vDist - mix(vWm.x, vWm.y, h) * .5 * N.z) / ${DEPTH_RANGE.toFixed(1)}, 0., 1.);
+  if (uDepthPass > .5) {
+    if (cov < .5) discard;
+    gl_FragDepth = zf;
+    o = vec4(0.);
+    return;
+  }
+  // (drawn a hand's breadth nearer than it is, so a twig only hides when truly behind)
+  gl_FragDepth = max(zf - .1 / ${DEPTH_RANGE.toFixed(1)}, 0.);
   float dif = max(0., dot(N, uLight));
   float sky = .5 + .5 * N.y;
   float round = w > 1.5 ? 1. : smoothstep(.5, 1.5, w);
@@ -556,6 +571,8 @@ export interface LiveDraw {
   live: true;
   buffer: WebGLBuffer;
   count: number;
+  /** how many of those (the thickest) are solid enough to hide what is behind them */
+  wide: number;
   x: number;
   z: number;
   rot: number;
@@ -605,7 +622,7 @@ export class Renderer {
   private deerProg: WebGLProgram;
   private vao: WebGLVertexArrayObject;
   private liveVao: WebGLVertexArrayObject;
-  private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number } | null = null;
+  private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; depth: WebGLRenderbuffer; w: number; h: number } | null = null;
   private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
 
   constructor(readonly canvas: HTMLCanvasElement) {
@@ -650,10 +667,7 @@ export class Renderer {
     const W = this.canvas.width;
     const H = this.canvas.height;
     if (this.scene && this.scene.w === W && this.scene.h === H) return this.scene;
-    if (this.scene) {
-      gl.deleteFramebuffer(this.scene.fbo);
-      gl.deleteTexture(this.scene.tex);
-    }
+    this.release();
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
@@ -662,8 +676,22 @@ export class Renderer {
     const fbo = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-    this.scene = { fbo, tex, w: W, h: H };
+    const depth = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    this.scene = { fbo, tex, depth, w: W, h: H };
     return this.scene;
+  }
+
+  /** Let go of the scene's render target (it is made again, at the canvas's size, when next drawn). */
+  release() {
+    const gl = this.gl;
+    if (!this.scene) return;
+    gl.deleteFramebuffer(this.scene.fbo);
+    gl.deleteTexture(this.scene.tex);
+    gl.deleteRenderbuffer(this.scene.depth);
+    this.scene = null;
   }
 
   private common(p: WebGLProgram, v: View, look: Look) {
@@ -690,6 +718,11 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo);
     gl.viewport(0, 0, W, H);
     gl.bindVertexArray(this.vao);
+    gl.depthMask(true);
+    gl.clearDepth(1);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
     // 1. fog and ground
     gl.disable(gl.BLEND);
     gl.useProgram(this.world);
@@ -756,7 +789,19 @@ export class Renderer {
         gl.uniform3fv(this.loc(L, 'uBark'), c.bark);
         gl.uniform4fv(this.loc(L, 'uBarkP'), c.barkP);
         gl.uniform1f(this.loc(L, 'uViewAz'), c.viewAz);
+        // the solid wood first, depth only; then all of it, behind what is in front
+        gl.enable(gl.DEPTH_TEST);
+        if (c.wide > 0) {
+          gl.colorMask(false, false, false, false);
+          gl.depthMask(true);
+          gl.uniform1f(this.loc(L, 'uDepthPass'), 1);
+          gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.wide);
+          gl.colorMask(true, true, true, true);
+        }
+        gl.depthMask(false);
+        gl.uniform1f(this.loc(L, 'uDepthPass'), 0);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.count);
+        gl.disable(gl.DEPTH_TEST);
         continue;
       }
       if ('pose' in c) {

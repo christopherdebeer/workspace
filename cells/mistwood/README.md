@@ -4,7 +4,7 @@
 photograph: a green-grey woodland fog, a small bare tree leaning over dry grass,
 tall trunks fading behind, a birch, a beech sapling keeping last year's leaves.
 
-Nothing to do and nothing to finish. Hold to walk; drag to look about.
+Nothing to do and nothing to finish. Hold still to walk; drag to look about (and, once walking, to steer). Standing still is still: no sway, no drift.
 
 ## The approach: silhouettes, in extreme detail, on the GPU
 
@@ -100,7 +100,19 @@ is placed the same again from (seed, chunk). Trees come from a pool per seed
 
 Cards are kept within about 64 MB (least recently used go first; if everything
 in view is in use, every card asks for fewer pixels until it fits). Resolution
-drops by itself if frames are slow (`?fixed` keeps it).
+drops by itself if frames are slow, and climbs back after a few seconds of
+quick ones; time spent on another tab is not counted as a slow frame
+(`?fixed` keeps it). A card that isn't baked yet from this side borrows the
+nearest side that is, so no tree is ever missing.
+
+Near trees go live within 16 m, nearest first, and those already live keep
+their place ahead of newcomers. Short of budget, a tree draws fewer of its
+segments (thickest first) rather than dropping to a card. In the handover the
+live tree fades in over its card, then the card fades out beneath it, so
+coverage never dips. Live trees lay down depth for their solid wood first, so
+twigs behind a trunk are hidden. The fog's thickness belongs to the place
+(hollows where it lies thick), not to how far you have walked. A new seed
+frees every GPU buffer of the old wood.
 
 ## Sound (`client/audio.ts`)
 

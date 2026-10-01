@@ -13,7 +13,7 @@
  * the archetypes (tree.ts `sampleGenome`), and each species has a small pool
  * of grown trees, placed again and again at different sizes and turns.
  */
-import { hash, lerp, noise1, seeded } from './rng';
+import { hash, lerp, seeded } from './rng';
 import { grow, growPatch, sampleGenome, type Genome, type Species, type Structure } from './tree';
 
 /** Metres per cell of the wood's grid (it goes on in every direction). */
@@ -152,9 +152,10 @@ export class Wood {
     return { x: bx, z: bz, heading };
   }
 
-  /** Fog density here: thicker and thinner stretches as you walk. */
-  densityAt(s: number): number {
-    return this.density * (0.75 + 0.45 * noise1(hash(this.seed, 5), s / 70));
+  /** Fog density here: hollows where it lies thick and rises where it thins — a property of the place, the same each time you come by. */
+  densityAt(x: number, z: number): number {
+    const n = vnoise(x / 70, z / 70, hash(this.seed, 5)) * 0.7 + vnoise(x / 23 + 11.3, z / 23 + 4.1, hash(this.seed, 6)) * 0.3;
+    return this.density * (0.75 + 0.45 * n);
   }
 
   genomeOf(kind: Kind): Genome | null {

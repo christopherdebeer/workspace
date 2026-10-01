@@ -103,7 +103,7 @@ export class Baker {
   private prog: WebGLProgram;
   private vao: WebGLVertexArrayObject;
   private fbo: WebGLFramebuffer;
-  private buffers = new WeakMap<Structure, WebGLBuffer>();
+  private buffers = new Map<Structure, WebGLBuffer>();
   private loc: Record<string, WebGLUniformLocation | null> = {};
 
   constructor(private gl: WebGL2RenderingContext, compile: (vs: string, fs: string) => WebGLProgram) {
@@ -123,6 +123,12 @@ export class Baker {
     gl.bufferData(gl.ARRAY_BUFFER, s.segs, gl.STATIC_DRAW);
     this.buffers.set(s, b);
     return b;
+  }
+
+  /** Free every structure's GPU buffer (a new wood grows new structures). */
+  dispose() {
+    for (const b of this.buffers.values()) this.gl.deleteBuffer(b);
+    this.buffers.clear();
   }
 
   /** Bake `s` as seen with `right` as its across direction, its larger dimension `level` px. */

@@ -1,7 +1,7 @@
 /**
  * Mistwood — a walk through a seeded wood in fog.
  *
- * Hold to walk; drag to look about. The seed is in the address
+ * Hold still to walk; drag to look about (and, while walking, to steer). The seed is in the address
  * (?seed=moss-ford-7) and at the foot of the screen; touch it for another wood.
  *
  * The work is on the GPU: every tree, shrub and patch of grass is a card baked
@@ -58,8 +58,8 @@ function forget() {
   cards.clear();
   texels = 0;
 }
-/** The sharpest card of this structure (from this side) that is ready, at or below `level` if possible. */
-function bestCard(kind: Kind, pool: number, level: number, side: number): Card | null {
+/** The sharpest card of this structure from this side that is ready, at or below `level` if possible. */
+function cardFrom(kind: Kind, pool: number, level: number, side: number): Card | null {
   for (let l = level; l >= 32; l /= 2) {
     const c = cards.get(keyOf(kind, pool, l, side));
     if (c) return c;
@@ -68,6 +68,15 @@ function bestCard(kind: Kind, pool: number, level: number, side: number): Card |
     const c = cards.get(keyOf(kind, pool, l, side));
     if (c) return c;
   }
+  return null;
+}
+/** This side's card, or else the nearest side that is ready (a tree is never missing while its side bakes). */
+function bestCard(kind: Kind, pool: number, level: number, side: number): Card | null {
+  for (let k = 0; k <= SIDES / 2; k++)
+    for (const sd of k ? [side + k, side - k] : [side]) {
+      const c = cardFrom(kind, pool, level, ((sd % SIDES) + SIDES) % SIDES);
+      if (c) return c;
+    }
   return null;
 }
 
@@ -108,12 +117,16 @@ function stand(z: number) {
   }
 }
 let herd!: Herd;
+/** The trees drawn live last frame (they keep their place in the budget). */
+const live = new Set<Placed>();
 function plant(s: number) {
   seed = s;
   wood = new Wood(seed);
   herd = new Herd(seeded(hash(seed, 99)), params.has('deer') ? 1 : 14, Number(params.get('deerAt')) || 0);
   wood.only = (params.get('only') as Species | null) ?? null;
   forget();
+  baker.dispose();
+  live.clear();
   seedBtn.textContent = seedName(seed).replace(/-/g, ' · ');
   const url = new URL(location.href);
   url.searchParams.set('seed', seedName(seed));
@@ -126,6 +139,7 @@ requestAnimationFrame(() => veil.classList.add('clear'));
 // ─── the view ───────────────────────────────────────────────────────────────────
 let quality = 1;
 let slow = 0;
+let quick = 0;
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2) * quality;
   canvas.width = Math.round(innerWidth * dpr);
@@ -139,24 +153,39 @@ let speed = 0;
 let yaw = heading;
 let stride = 0;
 
-// ─── input: hold to walk, drag to look ────────────────────────────────────────────
+// ─── input: a still hold walks; a drag looks (and steers, once walking) ───────────────
 let holding = false;
-let dragFrom: { x: number; heading: number } | null = null;
+let dragFrom: { x: number; y: number; heading: number; moved: boolean } | null = null;
+let holdTimer = 0;
+/** How long a touch must stay still to mean "walk", and how far it may move and still be still. */
+const HOLD_MS = 220;
+const SLOP = 10;
 let keys = new Set<string>();
 let walkedOnce = false;
 const autoWalk = !!params.get('walk');
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
-  holding = true;
-  dragFrom = { x: e.clientX, heading };
+  dragFrom = { x: e.clientX, y: e.clientY, heading, moved: false };
+  clearTimeout(holdTimer);
+  // a touch that stays put is a step forward; one that moves first is a look
+  holdTimer = window.setTimeout(() => {
+    if (dragFrom && !dragFrom.moved) holding = true;
+  }, HOLD_MS);
   sound.arm();
   soundBtn.textContent = sound.on ? 'sound on' : 'sound off';
 });
 canvas.addEventListener('pointermove', (e) => {
   // drag the view round (as if taking hold of the world); you walk the way you face
-  if (dragFrom) heading = dragFrom.heading - (e.clientX - dragFrom.x) * 0.0032;
+  if (!dragFrom) return;
+  if (!dragFrom.moved && Math.hypot(e.clientX - dragFrom.x, e.clientY - dragFrom.y) > SLOP) {
+    dragFrom.moved = true;
+    // turn from here (no jump for the slop)
+    dragFrom.x = e.clientX;
+  }
+  if (dragFrom.moved) heading = dragFrom.heading - (e.clientX - dragFrom.x) * 0.0032;
 });
 const release = () => {
+  clearTimeout(holdTimer);
   holding = false;
   dragFrom = null;
 };
@@ -171,6 +200,13 @@ addEventListener('keyup', (e) => keys.delete(e.key));
 addEventListener('blur', () => {
   keys = new Set();
   release();
+});
+// away from the page: nothing to draw, and the time away is not a slow frame
+let hidden = false;
+document.addEventListener('visibilitychange', () => {
+  hidden = document.hidden;
+  if (hidden) release();
+  else last = performance.now();
 });
 let changing = false;
 seedBtn.addEventListener('click', () => {
@@ -220,11 +256,27 @@ function frame(now: number) {
   const dt = Math.min(0.05, raw);
   last = now;
   t += dt;
-  slow = raw > 0.028 ? slow + raw : Math.max(0, slow - raw * 0.5);
-  if (slow > 3 && quality > 0.5 && !params.has('fixed')) {
-    quality = Math.max(0.5, quality * 0.82);
-    slow = 0;
-    resize();
+  if (hidden) {
+    requestAnimationFrame(frame);
+    return;
+  }
+  // the resolution follows the frame rate, down when slow, and back up when there is room
+  // (a long gap — a stall, a tab coming back — says nothing about the drawing)
+  if (raw < 0.25) {
+    slow = raw > 0.028 ? slow + raw : Math.max(0, slow - raw * 0.5);
+    quick = raw < 0.019 ? quick + raw : 0;
+  }
+  if (!params.has('fixed')) {
+    if (slow > 3 && quality > 0.5) {
+      quality = Math.max(0.5, quality * 0.82);
+      slow = 0;
+      quick = -10; // (a while before trying higher again)
+      resize();
+    } else if (quick > 6 && quality < 1) {
+      quality = Math.min(1, quality / 0.9);
+      quick = 0;
+      resize();
+    }
   }
   const forward = holding || autoWalk || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
   if (keys.has('ArrowLeft')) heading -= dt * 0.8;
@@ -243,16 +295,18 @@ function frame(now: number) {
   posX += Math.sin(yaw) * speed * dt;
   posZ += Math.cos(yaw) * speed * dt;
   view.z = posZ;
-  view.x = posX + Math.sin(t * 0.037) * 0.12;
-  view.yaw = yaw + Math.sin(t * 0.05) * 0.015;
-  view.eye = 1.6 + Math.sin(stride) * 0.022 * clamp01(speed) + Math.sin(t * 0.06) * 0.03;
+  // standing still is still: the sway and the breath are the walk's
+  const going = clamp01(speed / 1.1);
+  view.x = posX + Math.sin(t * 0.037) * 0.12 * going;
+  view.yaw = yaw + Math.sin(t * 0.05) * 0.015 * going;
+  view.eye = 1.6 + Math.sin(stride) * 0.022 * going + Math.sin(t * 0.06) * 0.03 * going;
   view.f = H * 0.92;
   view.horizon = H * 0.4;
 
   // what stands in view, and the card each needs
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
-  const density = wood.densityAt(walked + 20) * fogK;
+  const density = wood.densityAt(posX, posZ) * fogK;
   const atmos = atmosphere(hourAt(), phase, warm);
   const sunAz = atmos.at[0];
   const want: Array<{ kind: Kind; pool: number; level: number; px: number; side: number; right: [number, number] }> = [];
@@ -279,22 +333,32 @@ function frame(now: number) {
     if (Math.abs(Math.atan2(cx, cz)) - Math.atan2(R, Math.max(hd, 0.1)) > W / (2 * view.f) + 0.05) continue;
     seen.push({ p, st, hd, R, hM });
   }
-  // the nearest first: they get the live geometry while there is budget for it
-  seen.sort((a, b) => a.hd - b.hd);
+  // the nearest first get the live geometry while there is budget — and those already live keep
+  // their place ahead of newcomers, so a tree does not flicker between live and card
+  seen.sort((a, b) => a.hd - (live.has(a.p) ? 3 : 0) - (b.hd - (live.has(b.p) ? 3 : 0)));
   let liveLeft = LIVE_BUDGET * quality * quality;
+  const nowLive = new Set<Placed>();
   for (const { p, st, hd, R, hM } of seen) {
+    // the handover: coming near, the live tree fades in over its card (LIVE → LIVE − 2.5 m),
+    // then the card fades out from under it (→ LIVE − 5 m); coverage never dips between them
     let liveAlpha = 0;
+    let cardAlpha = 1;
     if (p.kind !== 'patch' && hd < LIVE) {
-      // only the segments that would still be a tenth of a pixel wide or more
-      const n = countWider(st, (0.1 * hd) / (view.f * p.scale));
-      if (n <= liveLeft) {
+      // the segments that would still be a tenth of a pixel wide or more; short of budget, fewer
+      // (they come thickest first), down to those over half a pixel; less than that, a card
+      const px = hd / (view.f * p.scale);
+      let n = countWider(st, 0.1 * px);
+      if (n > liveLeft && countWider(st, 0.5 * px) <= liveLeft) n = Math.floor(liveLeft);
+      if (n <= liveLeft && n > 0) {
         liveLeft -= n;
+        nowLive.add(p);
         const g = wood.genomeOf(p.kind);
-        liveAlpha = 1 - smoothstep(LIVE - 4, LIVE, hd);
-        draws.push({ live: true, buffer: baker.buffer(st), count: n, x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd });
+        liveAlpha = 1 - smoothstep(LIVE - 2.5, LIVE, hd);
+        cardAlpha = smoothstep(LIVE - 5, LIVE - 2.5, hd);
+        draws.push({ live: true, buffer: baker.buffer(st), count: n, wide: Math.min(n, countWider(st, 3 * px)), x: p.x, z: p.z, rot: p.rot, scale: p.scale, phase: p.phase, radius: st.radius, height: st.maxY, alpha: liveAlpha, bark: g?.bark ?? DARK, barkP: g ? [g.barkRough, g.barkScale, g.lichen, g.moss] : [0.5, 1, 0.3, 0.3], viewAz: Math.atan2(view.x - p.x, view.z - p.z) + p.rot, d: hd - 1e-3 });
       }
     }
-    if (liveAlpha >= 0.999) continue;
+    if (cardAlpha <= 0.001) continue;
     // a card, baked as the tree is seen from here (one of twelve sides)
     const ex = view.x - p.x;
     const ez = view.z - p.z;
@@ -334,10 +398,12 @@ function frame(now: number) {
       phase: p.phase,
       patch: p.kind === 'patch',
       bark: wood.genomeOf(p.kind)?.bark ?? DARK,
-      alpha: 1 - liveAlpha,
+      alpha: cardAlpha,
       d: hd,
     });
   }
+  live.clear();
+  for (const p of nowLive) live.add(p);
   // bake what is wanted, biggest on screen first, a little each frame
   want.sort((a, b) => b.px - a.px);
   let budget = 150000;
@@ -408,7 +474,7 @@ function frame(now: number) {
   const syw = Math.sin(view.yaw);
   const light: [number, number, number] = [(sx * cy - sz * syw) / sl, sy / sl, -(sx * syw + sz * cy) / sl];
   renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos }, draws);
-  sound.update(dt, t, speed, 0, wind);
+  sound.update(dt, t, speed, atmos.day, wind);
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
     walked: Math.round(walked * 10) / 10,
