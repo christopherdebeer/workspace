@@ -60,7 +60,7 @@ export const FLAGS = {
   time: { kind: 'number', min: 0, max: 600, step: 1, unit: 's', group: 'render', doc: 'start the clock here (wind, mist, the deer)' },
   // development
   tune: { kind: 'bool', group: 'dev', doc: 'this panel' },
-  fly: { kind: 'bool', group: 'dev', live: true, doc: 'fly: free movement the way you look (up and down too), through anything, faster; the tilt stays; Q/E sink/rise' },
+  fly: { kind: 'bool', group: 'dev', live: true, doc: 'fly: twin sticks — left half of the screen pushes you (the way you look, up and down too), right half looks (the tilt stays); through anything; keys WASD, Q/E' },
 } as const satisfies Record<string, Spec>;
 
 export type FlagName = keyof typeof FLAGS;

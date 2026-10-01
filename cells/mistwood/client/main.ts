@@ -257,7 +257,9 @@ const SLOP = 6;
 /** The touches down now (CSS px). */
 const touches = new Map<number, { x: number; y: number }>();
 /** What the first touch is doing: walking (from the ground) or looking (from the sky). */
-let gesture: { kind: 'walk' | 'look'; id: number; x: number; y: number; heading: number; moved: boolean; at: number; pitch0: number } | null = null;
+let gesture: { kind: 'walk' | 'look' | 'stick'; id: number; x: number; y: number; heading: number; moved: boolean; at: number; atY: number; pitch0: number } | null = null;
+/** Flying: how fast you are going (m/s, world x, up, z), easing toward what the stick asks. */
+const flyV = [0, 0, 0];
 /** Walking, how fast the finger's offset from the middle turns you (rad/s at the edge). */
 const STEER = 1.3;
 /** Two touches: the pinch, from its first spread and the zoom then. */
@@ -291,8 +293,10 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (touches.size > 2 || pinch) return;
-  const kind = e.clientY > horizonY() ? 'walk' : 'look';
-  gesture = { kind, id: e.pointerId, x: e.clientX, y: e.clientY, heading, moved: false, at: e.clientX, pitch0: pitchTo };
+  // flying (dev): twin sticks — the left half moves you (push from where you touched: up is on,
+  // down is back, aside is aside), the right half looks (and the tilt stays)
+  const kind = flag('fly') ? (e.clientX < innerWidth / 2 ? 'stick' : 'look') : e.clientY > horizonY() ? 'walk' : 'look';
+  gesture = { kind, id: e.pointerId, x: e.clientX, y: e.clientY, heading, moved: false, at: e.clientX, atY: e.clientY, pitch0: pitchTo };
   holding = kind === 'walk';
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -307,9 +311,10 @@ canvas.addEventListener('pointermove', (e) => {
   }
   const g = gesture;
   if (!g || g.id !== e.pointerId) return;
-  // walking: the finger is a tiller (read each frame), not a grip on the world
+  // walking: the finger is a tiller (read each frame), not a grip on the world; flying, a stick
   g.at = e.clientX;
-  if (g.kind === 'walk') return;
+  g.atY = e.clientY;
+  if (g.kind === 'walk' || g.kind === 'stick') return;
   if (!g.moved && Math.hypot(e.clientX - g.x, e.clientY - g.y) > SLOP) {
     g.moved = true;
     // (no jump for the slop)
@@ -475,7 +480,7 @@ function frame(now: number) {
   walkTime = forward ? walkTime + dt : 0;
   // a walk (1.2 m/s), brisk after a few seconds (2), and on into a run if you keep on (3.8)
   // (a walk 2.4 m/s, brisk 4, a run 7.6 — and flying, three times that)
-  const pace = (pressure !== null ? 1.4 + 6.2 * pressure : 2.4 + 1.6 * smoothstep(3, 9, walkTime) + 3.6 * smoothstep(12, 18, walkTime)) * (flying ? 3 : 1);
+  const pace = flying ? 0 : pressure !== null ? 1.4 + 6.2 * pressure : 2.4 + 1.6 * smoothstep(3, 9, walkTime) + 3.6 * smoothstep(12, 18, walkTime);
   speed += ((forward ? pace : 0) - speed) * (1 - Math.exp(-dt * (forward ? 1.4 : 2.2)));
   walked += speed * dt;
   if (speed > 0.3 && !walkedOnce) {
@@ -492,11 +497,33 @@ function frame(now: number) {
   yaw += (heading - yaw) * (1 - Math.exp(-dt * 3.5));
   // flying (dev): the way you look, up and down too, through anything
   if (flying) {
+    // the stick (left thumb): how far it is pushed from where it touched, up to 70 px; the keys too
+    let on = 0;
+    let aside = 0;
+    if (gesture?.kind === 'stick') {
+      const sx = (gesture.at - gesture.x) / 70;
+      const sy = (gesture.atY - gesture.y) / 70;
+      const m = Math.hypot(sx, sy);
+      const k = m > 1 ? 1 / m : 1;
+      on = -sy * k;
+      aside = sx * k;
+    }
+    on += (keys.has('ArrowUp') || keys.has('w') ? 1 : 0) - (keys.has('ArrowDown') || keys.has('s') ? 1 : 0);
+    aside += (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
+    const shape = (v: number) => Math.sign(v) * Math.pow(Math.min(Math.abs(v), 1), 1.5);
+    const top = 14;
+    // the way you look (up and down too), and across it
     const cp = Math.cos(pitch);
-    posX += Math.sin(yaw) * cp * speed * dt;
-    posZ += Math.cos(yaw) * cp * speed * dt;
-    flyY += Math.sin(pitch) * speed * dt + ((keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0)) * 6 * dt;
-    flyY = Math.max(flyY, wood.groundH(posX, posZ) + 0.4);
+    const look = [Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp];
+    const right = [Math.cos(yaw), 0, -Math.sin(yaw)];
+    const lift = ((keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0)) * 0.6;
+    for (let i = 0; i < 3; i++) {
+      const want = (look[i] * shape(on) + right[i] * shape(aside) + (i === 1 ? lift : 0)) * top;
+      flyV[i] += (want - flyV[i]) * (1 - Math.exp(-dt * 3));
+    }
+    posX += flyV[0] * dt;
+    posZ += flyV[2] * dt;
+    flyY = Math.max(flyY + flyV[1] * dt, wood.groundH(posX, posZ) + 0.4);
   }
   // you walk to the water's edge, not into it
   const nx = flying ? posX : posX + Math.sin(yaw) * speed * dt;
@@ -834,6 +861,7 @@ function frame(now: number) {
     quality: Math.round(quality * 100) / 100,
     /** the game clock (s): headless frames are slow, so tests wait on this, not on the wall clock */
     clock: Math.round(t * 100) / 100,
+    eye: Math.round(view.eye * 100) / 100,
     pace: Math.round(speed * 100) / 100,
     pitch: Math.round(pitch * 1000) / 1000,
     zoom: Math.round(zoom * 100) / 100,

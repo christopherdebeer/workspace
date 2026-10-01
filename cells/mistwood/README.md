@@ -324,6 +324,7 @@ call now and then.
 headless Chromium through the flags. The other tools are built on it:
 
 - `shots.mjs`: screenshots of any queries, each taken once settled.
+- `fly.test.mjs`: flying with twin sticks (moves, tilt stays, climbs).
 - `input.test.mjs`: real touches (Chrome's touch emulation). Ground walks, sky
   looks and tilts, the tilt eases back, and a pinch zooms then eases out.
 - `journey.test.mjs`: the address keeps the journey, a reload resumes it, and
@@ -363,9 +364,14 @@ compile, and an out-of-range or unknown value is refused with a warning.
   - **reset** puts every flag back to its default, keeping the seed, where you
     stand, and the panel.
   - **copy** copies the link: this wood, where you stand, and every flag.
-- **Fly** (`?fly`, dev only, in the panel): free movement the way you look,
-  up and down too, through anything, three times faster. The tilt stays where
-  you leave it, Q/E sink and rise, and turning it off lands you.
+- **Fly** (`?fly`, dev only, in the panel) uses twin sticks:
+  - The left half of the screen moves you: push from where you touched (up is
+    on, down is back, aside is aside), up to 14 m/s, the way you look. Tilt up
+    and push on to climb.
+  - The right half looks, and the tilt stays where you leave it.
+  - Pinch still looks closer. Keys: WASD, with Q/E to sink and rise.
+  - You go through anything but never below the ground. Turning it off lands
+    you. `devtools/fly.test.mjs` checks it with real touches.
 - **Also:** `window.__wood()` (the Wood itself, to query places).
 
 Current flags:
