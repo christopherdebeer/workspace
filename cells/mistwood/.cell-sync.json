@@ -1,10 +1,10 @@
 {
   "cell": "c15r/mistwood",
   "cellId": "mistwood-1508ec6e",
-  "treeVersion": "tree:cc324e5c8bfa8c3975d8e01734a7ce3311170f4ff6db24988c2e7080e694544f",
-  "syncedAt": "2026-10-01T12:17:16.301Z",
+  "treeVersion": "tree:02ee2fa7830afbf37aa761806997abbde95d836a41e07ae985046c01ba19b071",
+  "syncedAt": "2026-10-01T12:23:27.289Z",
   "files": {
-    "README.md": "sha256:5290c2505de0feba2b2b7585a089f89fe48503c2f914e76cc613875746985f8c",
+    "README.md": "sha256:5f9576d17935ef26d3987f356a2d65155e2fa0a61b6b3225e0d6e0f43dbbb0d5",
     "client/audio.ts": "sha256:425599c02a26687964151373ea16f0679454e8cc7fc16972c516e2071f903c5f",
     "client/bake.ts": "sha256:a453ab538583cc2e599f3538c1bcba52b050c9d2fa7288acf04a77a1c610bf62",
     "client/deer.ts": "sha256:edcbcb6f3b171a22a9e40e6b8545cdd942a12e589d89751c485e4e78c2579f18",

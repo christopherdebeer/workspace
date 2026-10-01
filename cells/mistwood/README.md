@@ -132,6 +132,25 @@ horizon line ever shows.
   light through the deeper it goes: dark and warm in the mass, tawny at the
   tops, ragged at every scale. It takes over from the cards between 6 and 16 m,
   and where the old ground met the fog in a hard line it now goes soft.
+- **The near ground** within about 12 m is Poly Haven's *Leaf Scattered
+  Gravel* (CC0, `static/ground/`): dry leaves and twigs over dark stones and
+  damp earth.
+  - Lookups: two offset lookups chosen by a slow noise, so it never visibly
+    repeats, with each pixel's footprint worked out analytically (anisotropic
+    filtering, widened by the depth of field).
+  - Shading: lit by its own normal map and graded warm and dark. On the paths
+    it is trodden darker, in the wet it is mossier, and beyond about 15 m it
+    gives way to the painted ground.
+- **Mist is a volume** (`mistDensity`, the same in JS and GLSL): drifting banks,
+  and mist lying a few metres deep in the hollows.
+  - What you see through it is what lies along the way: the ground march and
+    the sky sum it along each ray, and each tree, card and deer gets the sum to
+    its foot and to its top (`mistAlong`, on the CPU).
+  - So as you walk, banks pass in front of things, and you walk into and
+    through them.
+- **Cards keep their light at every resolution.** They are baked with
+  premultiplied "over", so tone is a coverage-weighted mean and does not change
+  when a card is baked again sharper as you come near.
 - **Fog** (`fogAt`, shared by every shader) is clear for the first few metres
   and then closes fast, with a squared distance term. Near things stay sharp
   and dark, the middle distance is soft, and the far is gone.
