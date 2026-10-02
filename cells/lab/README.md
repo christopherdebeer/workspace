@@ -7,7 +7,7 @@
 It answers three things:
 
 - `/` is the index. Every experiment, grouped, runs live in its card (only those in view; each
-  opens with its `preview` query: small, pixelated, moving by itself), with its README and its
+  opens with its `preview` query: small, pixelated, quiet), with its README and its
   presets.
 - `/<id>` is a redirect to that experiment's page as it is now, with the query kept, so a shared
   `/mistwood?seed=…` opens where it was left. `/<id>/readme` redirects to its README.

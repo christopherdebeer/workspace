@@ -231,8 +231,8 @@ requestAnimationFrame(() => veil.classList.add('clear'));
 
 // ─── the view ───────────────────────────────────────────────────────────────────
 let quality = 1;
-// a preview (?preview, the lab's index): drawn small and pixelated, walking on by itself, quiet,
-// without its hints or buttons — one of several on a page, so it costs little
+// a preview (?preview, the lab's index): drawn small and pixelated, standing still (the wind, the
+// mist and the deer still move), quiet, without its hints or buttons — one of several on a page, so it costs little
 const preview = flag('preview');
 if (preview) {
   quality = 0.3;
@@ -500,7 +500,7 @@ function frame(now: number) {
     }
   }
   const flying = flag('fly');
-  const forward = holding || flag('walk') || preview || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
+  const forward = holding || flag('walk') || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
   if (gesture?.kind === 'walk') {
     // the tiller: offset from the middle (−1 … 1), a still band in the middle, sharper outwards
     const off = (gesture.at - innerWidth / 2) / (innerWidth / 2);

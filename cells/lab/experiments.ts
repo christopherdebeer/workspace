@@ -17,7 +17,7 @@ export interface Experiment {
   group: string;
   blurb: string;
   page: string;
-  /** the query its live preview in the index opens with: small, quiet, moving by itself */
+  /** the query its live preview in the index opens with: small and quiet */
   preview: string;
   readme: string;
   presets: Preset[];
