@@ -240,3 +240,23 @@ as one declared round → tune by climbing.**
   plan never continues past a step that touched hidden information, and a
   plan is offered only if no single action reaches the same outcome. Heads v2
   and v4 re-scored under I3 before the deduction round is retried.
+- **Under I3** (turn plans): v2 0.797 < v0.4 0.858 (the ladder holds under
+  all three instruments). Rounds on v0.4, all reverted: evidence + Temple
+  (−0.045), pacing alone (+0.0005, neutral), evidence alone again (−0.033 —
+  a queueing slip: the "with pacing" proposal carried only the evidence
+  edits), pacing + evidence + Temple (−0.043). The last is the real
+  hypothesis: objectives now decide 11/24 games (about double), but the Enemy
+  still wins 11/24 at the limit, games run 7.9 rounds instead of 4.7, and the
+  judge prefers v0.4 on *every* dimension (tension 1.63 vs 0.95, fun 2.32 vs
+  1.73, "plays as designed" 20 vs 8 of 24).
+- Turn plans were rarely chosen (~10 planned steps per 12 games); a probe
+  (devtools/choices.ts) showed Jev takes a consequence-marked option about 60 %
+  of the time when one exists, at low confidence (0.1–0.3): the player is
+  noisy, not blind.
+- **Where this leaves AAOTE**: v0.4 is the best version this instrument can
+  identify. Whether evidence-based deduction is better *with purposeful
+  players* is a question these players can't answer — more rounds would tune
+  the rules to the judge's and Jev's habits. Next: calibrate the instrument
+  against stronger players (a few games played turn-by-turn by a deliberative
+  model, or people) on v0.4 vs the paced-deduction variant
+  (scratchpad prop-paced-deduction), before more design rounds.
