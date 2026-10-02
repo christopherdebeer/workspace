@@ -1,7 +1,7 @@
 /**
  * THE JOURNEY IN THE ADDRESS — kept as you walk, resumed on reload, changed without one.
  *
- *   node cells/mistwood/devtools/journey.test.mjs
+ *   node cells/lab/devtools/journey.test.mjs
  *
  * 1. Walking (?walk=1) writes x, y and heading into the address.
  * 2. Reloading that address stands you exactly there.

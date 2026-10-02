@@ -1,24 +1,10 @@
 {
   "cell": "c15r/mistwood",
   "cellId": "mistwood-1508ec6e",
-  "treeVersion": "tree:671374195b875de29eb190a0abe89a60fcf2d04ab91e76849fe34406f0fc185d",
-  "syncedAt": "2026-10-02T16:00:09.438Z",
+  "treeVersion": "tree:3b63af672e83702990ee62c455889a2d03d8fdf79e78ea9f1662e306e661a1ca",
+  "syncedAt": "2026-10-02T23:20:08.170Z",
   "files": {
-    "README.md": "sha256:27a4513da52afcfcfd61e878b61f831427b3a8cd62e26da328afaf3344577717",
-    "client/audio.ts": "sha256:7b1f67fc1716e5b054ec8ffc0c46986f0ad9bb14a86dbb89eaab93cb24ee2781",
-    "client/bake.ts": "sha256:7b6ad73d399b6b69a6546f868f16a1a1f683ef1c23821833c9d8f6f2c522fa47",
-    "client/deer.ts": "sha256:edcbcb6f3b171a22a9e40e6b8545cdd942a12e589d89751c485e4e78c2579f18",
-    "client/flags.ts": "sha256:83c5e3bf3ad9b87b7805d39285db791bb98cfe0063e8a674bc1e03c6d7c16a16",
-    "client/main.ts": "sha256:bd1762baadeadade8e16d9aced885612a1d03d6b904ac77a4bc9b732aa4a1d91",
-    "client/pencil.ts": "sha256:51afe003d548d09f136469d9a9caeb0da79e319c8101a9913e34982a0cca2336",
-    "client/render.ts": "sha256:48cc4600653ae3c425ae33caae45ebf74728dc7498cf9f610bc777cf5834e9ce",
-    "client/rng.ts": "sha256:59fee1f6bb92795d9505951a5813c70878b8664a4fe73c31ff311eb29bb8db2b",
-    "client/sky.ts": "sha256:3b1e814d973601f39c6fa0acafada9acb35aa6ee0966cfbb68d70e59f47a0aa1",
-    "client/tree.ts": "sha256:c39e4d95b51507a54489b7f871b9403372b77e63dd051ddaa66b570e522e2066",
-    "client/tune.ts": "sha256:77dbd68d431462dd5dabfe304f92ffc5f954c51bc69999b69a392c1a5ca1d4f3",
-    "client/world.ts": "sha256:e22a4c1dd27432a4e42904493cd115bbfc2536defc8cfb2bd200b994b33f8f75",
-    "index.ts": "sha256:945b77401f0882d905c7448f9ef4512e5cccd77e80ac30345f48410c288097ad",
-    "static/index.html": "sha256:45040c0162e339d140e1e81024ca24c7505302680d19abc46a49df60e0f06fdd",
-    "tsconfig.json": "sha256:6fa14395375b4f597121574f857a79410acdcb92025bfde82fe8087538f37293"
+    "index.ts": "sha256:660b0120070b5ffb7e388126974c0fd7932a9476732d9a0559249214c781c9f4",
+    "tsconfig.json": "sha256:9947bf89f0648879ce8f534236efbdb49a9550e13da9ec0322c114892709bc8f"
   }
 }

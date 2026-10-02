@@ -1,7 +1,7 @@
 /**
  * FLYING (dev, ?fly) — twin sticks, real touches.
  *
- *   node cells/mistwood/devtools/fly.test.mjs
+ *   node cells/lab/devtools/fly.test.mjs
  *
  * 1. The left thumb pushed up moves you on, the way you look — without touching the ground.
  * 2. The right thumb dragged down tilts you up, and the tilt stays when let go.

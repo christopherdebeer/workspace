@@ -394,7 +394,7 @@ compile, and an out-of-range or unknown value is refused with a warning.
 - **The panel is glass:** the wood shows through it, lightly blurred, so you
   can see what a change does while tuning on a phone. While you hold a
   slider, everything but that row vanishes, so the whole view is clear.
-- **Guards.** `node cells/mistwood/devtools/check-flags.mjs` (run before every deploy)
+- **Guards.** `node cells/lab/devtools/check-flags.mjs` (run before every deploy)
   fails on a declared flag that nothing reads, and on any other file reading
   the address directly. At run time, parameters that are not flags are
   reported in the console and at the top of the overlay.

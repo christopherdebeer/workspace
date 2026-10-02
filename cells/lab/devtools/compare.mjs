@@ -1,7 +1,7 @@
 /**
  * A render beside a reference photograph, at the photograph's shape.
  *
- *   node cells/mistwood/devtools/compare.mjs reference/misty-woodland-edge.jpg 'seed=moss-ford-7&find=glade&fixed&hour=11' [more queries…]
+ *   node cells/lab/devtools/compare.mjs reference/misty-woodland-edge.jpg 'seed=moss-ford-7&find=glade&fixed&hour=11' [more queries…]
  *
  * Each query is rendered at the reference's aspect (its width × height, scaled to 1000 px wide),
  * settled, and put beside it in devtools/out/compare-<reference>.png.

@@ -1,7 +1,7 @@
 /**
  * ONE SEED, ONE WOOD — the same address shows the same wood, page after page.
  *
- *   node cells/mistwood/devtools/determinism.test.mjs [query]
+ *   node cells/lab/devtools/determinism.test.mjs [query]
  *
  * Two fresh pages (one after the other) at the same seed, place, hour and clock; each settled
  * and photographed (with the clock frozen, so wind, mist and grain hold still); compared in the

@@ -1,5 +1,6 @@
 /**
- * The Mistwood headless harness: build the client, serve it as the cell would, open it in
+ * The lab's headless harness (Mistwood by default; EXPERIMENT=<id> for another): build the
+ * client, serve the experiment's page as the cell would, open it in
  * Chromium (software GL — slow, but the same shaders), and drive it through its flags.
  *
  *   import { withWood } from './harness.mjs';
@@ -39,7 +40,8 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
   mkdirSync(OUT, { recursive: true });
   const built = await build({ entryPoints: [join(CELL, 'client/main.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
   const app = built.outputFiles[0].text;
-  const html = readFileSync(join(CELL, 'static/index.html'), 'utf8');
+  // (the lab's page for the experiment, its bundle served from here)
+  const html = readFileSync(join(CELL, `static/${process.env.EXPERIMENT ?? 'mistwood'}.html`), 'utf8').replace('{{app}}', '/app.js');
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/app.js') {

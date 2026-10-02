@@ -1,7 +1,7 @@
 /**
  * Screenshots of the wood, each once it has settled.
  *
- *   node cells/mistwood/devtools/shots.mjs 'seed=moss-ford-7&fixed&hour=11' near 'seed=moss-ford-7&find=pond&fixed'
+ *   node cells/lab/devtools/shots.mjs 'seed=moss-ford-7&fixed&hour=11' near 'seed=moss-ford-7&find=pond&fixed'
  *
  * Arguments are query strings (one page each), or a name for the one before it (a word with no
  * `=`); output in devtools/out/ (MISTWOOD_OUT to change). `--width=` `--height=` set the

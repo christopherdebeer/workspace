@@ -1,7 +1,7 @@
 /**
  * The picture's tones against a reference photograph's, region by region.
  *
- *   node cells/mistwood/devtools/palette.mjs reference/misty-woodland-edge.jpg 'seed=moss-ford-7&find=glade&fixed&hour=11&time=5'
+ *   node cells/lab/devtools/palette.mjs reference/misty-woodland-edge.jpg 'seed=moss-ford-7&find=glade&fixed&hour=11&time=5'
  *
  * Renders the query at the reference's shape, then for each region (upper fog, mid fog, the
  * ground band, the near ground) prints the mean colour of both and the difference, and the

@@ -7,7 +7,7 @@
  * outside its range or values is refused (with a warning) rather than half-used.
  *
  * The tuning overlay (`?tune`, tune.ts) is built from this list, so a new flag is in it as soon as
- * it is declared. `node cells/mistwood/devtools/check-flags.mjs` fails on a declared flag that nothing
+ * it is declared. `node cells/lab/devtools/check-flags.mjs` fails on a declared flag that nothing
  * reads, and on any other code reading the address directly; at run time, a parameter in the
  * address that is not declared is reported (console and overlay).
  */
@@ -70,6 +70,7 @@ export const FLAGS = {
   spare: { kind: 'number', min: 0, max: 1, step: 0.05, group: 'sketch', live: true, doc: 'sketch: how much is left unsaid: the faintest marks dropped (default 0.3)' },
   // development
   tune: { kind: 'bool', group: 'dev', doc: 'this panel' },
+  preview: { kind: 'bool', group: 'dev', doc: "drawn as a preview (the lab's index): small and pixelated, walking on by itself, quiet, no hints or buttons" },
   fly: { kind: 'bool', group: 'dev', live: true, doc: 'fly: twin sticks — left half of the screen pushes you (the way you look, up and down too), right half looks (the tilt stays); through anything; keys WASD, Q/E' },
 } as const satisfies Record<string, Spec>;
 

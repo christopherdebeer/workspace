@@ -231,6 +231,16 @@ requestAnimationFrame(() => veil.classList.add('clear'));
 
 // ─── the view ───────────────────────────────────────────────────────────────────
 let quality = 1;
+// a preview (?preview, the lab's index): drawn small and pixelated, walking on by itself, quiet,
+// without its hints or buttons — one of several on a page, so it costs little
+const preview = flag('preview');
+if (preview) {
+  quality = 0.3;
+  canvas.style.imageRendering = 'pixelated';
+  const quiet = document.createElement('style');
+  quiet.textContent = '#hint, #title, #seed, #sound { display: none !important; }';
+  document.head.append(quiet);
+}
 let slow = 0;
 let quick = 0;
 function resize() {
@@ -477,7 +487,7 @@ function frame(now: number) {
     slow = raw > 0.028 ? slow + raw : Math.max(0, slow - raw * 0.5);
     quick = raw < 0.019 ? quick + raw : 0;
   }
-  if (!flag('fixed')) {
+  if (!flag('fixed') && !preview) {
     if (slow > 3 && quality > 0.5) {
       quality = Math.max(0.5, quality * 0.82);
       slow = 0;
@@ -490,7 +500,7 @@ function frame(now: number) {
     }
   }
   const flying = flag('fly');
-  const forward = holding || flag('walk') || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
+  const forward = holding || flag('walk') || preview || keys.has('ArrowUp') || keys.has('w') || keys.has(' ');
   if (gesture?.kind === 'walk') {
     // the tiller: offset from the middle (−1 … 1), a still band in the middle, sharper outwards
     const off = (gesture.at - innerWidth / 2) / (innerWidth / 2);

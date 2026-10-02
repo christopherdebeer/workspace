@@ -1,7 +1,7 @@
 /**
  * WHERE YOU TOUCH SAYS WHAT YOU MEAN — real touches (Chrome's touch emulation), not clicks.
  *
- *   node cells/mistwood/devtools/input.test.mjs
+ *   node cells/lab/devtools/input.test.mjs
  *
  * 1. A touch on the ground (below the horizon) walks, at once; held right of the middle, it
  *    keeps bearing right (a tiller), held in the middle, straight on.

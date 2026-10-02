@@ -2,11 +2,11 @@
  * The deer, without drawing them: one herd 40 m ahead, you walking towards it for some seconds,
  * then standing still; the herd's mode, alarm, distance and what was heard, as the game clock runs.
  *
- *   node cells/mistwood/devtools/deer-sim.mjs [walk seconds = 12] [seed = moss-ford-7] [hour = 18]
+ *   node cells/lab/devtools/deer-sim.mjs [walk seconds = 12] [seed = moss-ford-7] [hour = 18]
  */
-import { Wood } from '../client/world';
-import { Deerland } from '../client/deer';
-import { seedFrom } from '../client/rng';
+import { Wood } from '../client/mistwood/world';
+import { Deerland } from '../client/mistwood/deer';
+import { seedFrom } from '../client/mistwood/rng';
 
 const [walkFor = '12', seedArg = 'moss-ford-7', hourArg = '18'] = process.argv.slice(2);
 const wood = new Wood(seedFrom(seedArg)!);

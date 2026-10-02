@@ -2,10 +2,10 @@
  * A wood's species and its places: each species' genome (archetype, bark, lichen, moss …), the
  * relief, and what stands within 80 m of the start, by kind.
  *
- *   node cells/mistwood/devtools/species.mjs [seed = moss-ford-7]
+ *   node cells/lab/devtools/species.mjs [seed = moss-ford-7]
  */
-import { Wood } from '../client/world';
-import { seedFrom } from '../client/rng';
+import { Wood } from '../client/mistwood/world';
+import { seedFrom } from '../client/mistwood/rng';
 
 const name = process.argv[2] ?? 'moss-ford-7';
 const wood = new Wood(seedFrom(name)!);

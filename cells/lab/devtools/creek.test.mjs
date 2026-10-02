@@ -1,7 +1,7 @@
 /**
  * THE CREEK — you come to its edge and no further; a ford takes you over.
  *
- *   node cells/mistwood/devtools/creek.test.mjs
+ *   node cells/lab/devtools/creek.test.mjs
  *
  * 1. On its bank (`find=creek`), facing it, walking on: you never stand in its deep water (you are
  *    held at the edge, and slide along it), and the creek is heard (it is near).
