@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:db403d02ca17d09bf3c5b710f827a6feceeccb5c07b778871f30dcfe21146f31",
-  "syncedAt": "2026-10-02T23:35:41.895Z",
+  "treeVersion": "tree:5e948566a9a12fd783c04c646ffa2e9ab9ad5da4b24a0639fc78fa633b5b7bc5",
+  "syncedAt": "2026-10-02T23:47:37.752Z",
   "files": {
     "README.md": "sha256:c1f8beeb692e688966fa31fe8f550cf3e4862b178efe098471be29416be8b5c8",
     "client/kit/pencil.ts": "sha256:51afe003d548d09f136469d9a9caeb0da79e319c8101a9913e34982a0cca2336",
@@ -19,14 +19,14 @@
     "client/mistwood/tree.ts": "sha256:979c153ce9d99ab3fbac0c329c859f3669accd8083c1122358887ad18e793a78",
     "client/mistwood/tune.ts": "sha256:77dbd68d431462dd5dabfe304f92ffc5f954c51bc69999b69a392c1a5ca1d4f3",
     "client/mistwood/world.ts": "sha256:8d203cea1012869a734a45c6f0ef0cb91631447ebd75967c3ade97105e9dad82",
-    "client/plate/README.md": "sha256:734d8c927b7be47c090e8d36c7143f4b549c714d9b9e14409f711e0aed1059ee",
-    "client/plate/main.ts": "sha256:b0562af4ec1dc2e054d4df97bcea658aef751b001cc01b420b1f002482ed0d84",
+    "client/plate/README.md": "sha256:2fc81efce1fc880be474977f223346db76e75029cf7bf42486d86f709581b0ca",
+    "client/plate/main.ts": "sha256:00d494dd346f718d0eca76d61b2448af0dd2e9dcd3fbe4265a547be0143f6dfa",
     "client/plate/plant.ts": "sha256:72c99c1da2e86604af9c8362568dbacf634016192c1e08ec736911cd0ae59cc7",
-    "experiments.ts": "sha256:28d8741115c864b5e8e9ece2f0529200c70467baa382614232153b68f020f619",
+    "experiments.ts": "sha256:f56351f6d8c11f228c811ab3140d2ac1bc58b73c008d8b49d74f8a12fa5b4184",
     "index.ts": "sha256:83dfbbd8ecf83453fd93d1f6cf409b28fde9950506dd800f3a6230489bfa2b2b",
     "md.ts": "sha256:67f154204a60b874e30eb1e5724120168ae8c98b00dfc9b0a844ff9d3bb7379e",
     "static/mistwood.html": "sha256:52b1a2f349b749be0f6d6dc22168f729eb66f4241dd0c9e5f10527d96f824b8a",
-    "static/plate.html": "sha256:f721424d400ed93dec6c944a7b6d3ec402cc57528b3bced7a0d72ca2c612b748",
+    "static/plate.html": "sha256:ab44958a8f7c50a7c95932eb16306e2a10c555db436564869389486324b19a7d",
     "tsconfig.json": "sha256:aa5d5858c9ae1e731fcb88d91b3a59c88e2ef4b249b3e5802baf7c9fae241a30"
   }
 }

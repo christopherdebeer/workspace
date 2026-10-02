@@ -1,7 +1,8 @@
 # Botanical plate
 
 One plant from a seed, grown before your eyes and drawn as an engraving you can turn in your
-hand. Drag to turn it, pinch (or the wheel) to come closer; left alone it turns slowly.
+hand, hand-coloured in watercolour. Drag to turn it, pinch (or the wheel) to come closer; left
+alone it turns slowly.
 `another` draws a new specimen; `grow again` grows this one again. The seed is in the address
 (`?seed=412`), so a plate can be shared; `?preview` draws it small and quiet (the lab's index).
 
@@ -42,6 +43,30 @@ Not a shaded model translated into pencil, but what an engraver puts down:
   pressure and drift run along each stroke, so a stem or an outline is one gesture.
 - **The light** is fixed in the world, so as the plant turns its leaves darken and pale.
 - **The paper's tooth** breaks up the graphite where it is laid down; the blank sheet is quiet.
+
+## The colour: a watercolour wash
+
+Hand-coloured, as plates were: a wash under the engraving (`ink only` turns it off; `?wash=0`
+starts without it).
+
+1. **The pigments** are drawn first, into a buffer of their own at half size (watercolour has no
+   fine edges):
+   - leaves in a sap green, each a little different, laid on more heavily where a leaf turns from
+     the light and on its underside;
+   - petals in the specimen's own colour (rose madder, cobalt violet, gamboge, ultramarine,
+     vermilion, pale pink, or a white that is barely a wash), thinning toward the tip;
+   - stems green; roots a pale umber.
+2. **They are laid on the paper as a wash:**
+   - a little off the drawing, as hand colouring always is;
+   - soft-edged;
+   - pooled darker at the rims where it dried;
+   - uneven as the brush was wetter or drier;
+   - granulating in the paper's tooth;
+   - mixed as pigment mixes: multiplied onto the paper, so overlapping washes glaze.
+3. **The engraving goes on top.** Its blades and stems keep hiding what is behind them, but their
+   paper is clear, so the colour shows through the hatching.
+
+`?washonly` leaves the engraving off, to see the wash alone.
 
 ## Next
 

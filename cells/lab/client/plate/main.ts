@@ -13,10 +13,13 @@
  * the address (`?seed=412`); `?preview` draws it small and quiet (the lab's index).
  */
 import { PENCIL } from '../kit/pencil';
+import { hash, seeded } from '../kit/rng';
 import { grow, grownAt, lineAt, type Specimen, type V3 } from './plant';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
+/** the watercolour under the engraving (`?wash=0`: ink only) */
+let wash = params.get('wash') !== '0';
 let seed = Number(params.get('seed')) || Math.floor(Math.random() * 9000) + 1;
 
 const canvas = document.getElementById('plate') as HTMLCanvasElement;
@@ -37,17 +40,23 @@ float tooth() { vec2 p = gl_FragCoord.xy; return .55 + .45 * smoothstep(.2, .8, 
 const BLADE_VS = `#version 300 es
 in vec3 aPos;
 in vec4 aUV; // along (m), across (m, signed), kind (0 leaf, 1 petal), u (0 base … 1 tip)
+in vec3 aCol; // its pigment (the watercolour)
 uniform mat4 uVP;
 out vec3 vWorld;
 out vec4 vUV;
-void main() { vWorld = aPos; vUV = aUV; gl_Position = uVP * vec4(aPos, 1.); }`;
+out vec3 vCol;
+void main() { vWorld = aPos; vUV = aUV; vCol = aCol; gl_Position = uVP * vec4(aPos, 1.); }`;
 
 const BLADE_FS = `#version 300 es
 precision highp float;
 in vec3 vWorld;
 in vec4 vUV;
+in vec3 vCol;
 out vec4 o;
 uniform vec3 uLight, uEye;
+// 0 engraved on opaque paper; 1 engraved, its paper clear (a wash beneath shows through); 2 the wash
+// itself: the pigment, as dense as the blade is shaded
+uniform float uMode;
 ${COMMON}
 // one family of hatching in the blade's own space: lines q/sp apart, broken here and there
 float hatchLines(float q, float sp, float seed) {
@@ -60,6 +69,14 @@ void main() {
   vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
   if (dot(N, uEye - vWorld) < 0.) N = -N;
   float lit = max(0., dot(N, uLight));
+  if (uMode > 1.5) {
+    // the wash: laid on more heavily where the blade turns from the light and on its underside;
+    // a petal's thinner, paling toward its tip
+    float dens = .5 + .35 * (1. - lit) + (gl_FrontFacing ? 0. : .15);
+    if (vUV.z > .5) dens *= .55 + .4 * smoothstep(1., .2, vUV.w);
+    o = vec4(vCol * dens, dens);
+    return;
+  }
   // how dark: turned from the light, the underside (seen from below the blade), towards the base
   float dark = .75 * (1. - lit) + (gl_FrontFacing ? 0. : .25) + .12 * (1. - vUV.w);
   if (vUV.z > .5) dark = (.15 + .5 * (1. - lit)) * smoothstep(.55, .05, vUV.w);
@@ -72,7 +89,9 @@ void main() {
   // (too fine to draw as lines at this size: a light tone instead)
   float px = sp / max(fwidth(a), 1e-6);
   m = mix(dark * .45, m * (.55 + .45 * dark), smoothstep(1.6, 3., px));
-  o = vec4(mix(PAPER, GRAPHITE, clamp(m * .85, 0., 1.) * tooth()), 1.);
+  float mk = clamp(m * .85, 0., 1.) * tooth();
+  // (with a wash beneath: only the graphite, the paper clear; it still hides the lines behind it)
+  o = uMode > .5 ? vec4(GRAPHITE * mk, mk) : vec4(mix(PAPER, GRAPHITE, mk), 1.);
 }`;
 
 const LINE_VS = `#version 300 es
@@ -122,6 +141,9 @@ flat in vec2 vWpx;
 flat in vec3 vS;
 flat in float vLen;
 out vec4 o;
+// as the blades: 0 opaque paper bodies, 1 clear, 2 the wash (stems and roots only)
+uniform float uMode;
+uniform vec3 uStem, uRoot;
 ${COMMON}
 ${PENCIL}
 void main() {
@@ -135,6 +157,16 @@ void main() {
   float s = (vS.y + h * vLen) * 10.;
   float id = vS.x;
   float kind = vS.z;
+  if (uMode > 1.5) {
+    // the wash: stems green, warming at the foot; roots a pale umber; nothing finer
+    if (kind > 1.5) discard;
+    float dl = length(pa - ba * h);
+    float body = clamp(max(w, 1.5) * .5 - dl + .5, 0., 1.);
+    if (body <= 0.) discard;
+    float dens = (kind < .5 ? .7 : .45) * body;
+    o = vec4((kind < .5 ? uStem : uRoot) * dens, dens);
+    return;
+  }
   if (w >= 3. && kind < .5) {
     // a stem: its body paper (it hides what is behind it), its two contours (each side its own
     // hand), and a few strokes along its shaded side
@@ -150,7 +182,7 @@ void main() {
     float lane = side * w * .5 / 2.2;
     float lanes = (1. - smoothstep(.12, .3, abs(fract(lane) - .5))) * smoothstep(.4, .6, pN(s * 3., floor(lane) + id)) * smoothstep(.1, .6, side) * smoothstep(.97, .8, abs(side));
     float mk = max(edge * .85, lanes * .4) * tooth();
-    o = vec4(mix(PAPER, GRAPHITE, mk) * body, body);
+    o = uMode > .5 ? vec4(GRAPHITE * mk, mk) : vec4(mix(PAPER, GRAPHITE, mk) * body, body);
     return;
   }
   // everything finer: one line, as heavy as it is thick (a hairline a tenth of a pixel wide is a
@@ -163,6 +195,44 @@ void main() {
   o = vec4(GRAPHITE * mk, mk);
 }`;
 
+// the watercolour, laid on the paper from the pigments drawn (half size) into their own buffer:
+// a little off the drawing (hand colouring always is), soft-edged, pooling darker at its rims where
+// it dried, uneven as the brush was wetter or drier, granulating in the paper's tooth, and mixed
+// as pigment mixes (multiplied onto the paper, so overlapping washes glaze)
+const QUAD_VS = `#version 300 es
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, 0., 1.); }`;
+const WASH_FS = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D uWash;
+uniform vec2 uRes;
+uniform float uSeed;
+${COMMON}
+vec4 around(vec2 uv, float r) {
+  vec4 s = vec4(0.);
+  for (int i = 0; i < 8; i++) {
+    float a = float(i) * .785398 + .3;
+    s += texture(uWash, uv + vec2(cos(a), sin(a)) * r / uRes);
+  }
+  return s / 8.;
+}
+void main() {
+  vec2 px = gl_FragCoord.xy;
+  vec2 uv = px / uRes;
+  vec2 q = px / min(uRes.x, uRes.y);
+  vec2 off = (vec2(tn(q * 4. + uSeed), tn(q * 4. + 9. + uSeed)) - .5) * 9.;
+  vec2 at = uv + off / uRes;
+  vec4 c = (texture(uWash, at) * 2. + around(at, 2.5)) / 3.;
+  vec4 wide = around(at, 8.);
+  if (c.a < .003) { o = vec4(PAPER, 1.); return; }
+  vec3 pig = c.rgb / c.a;
+  // (dried rims: the pigment carried to the edge of the wet shape)
+  float rim = clamp((c.a - wide.a) * 2.2, 0., 1.);
+  float wet = .72 + .5 * tn(q * 7. + 3. + uSeed);
+  float grain = .82 + .36 * tn(px * .65 + 11.);
+  float dens = clamp(c.a * wet * grain * (1. + 1.3 * rim), 0., 1.);
+  o = vec4(PAPER * mix(vec3(1.), pig, dens * .85), 1.);
+}`;
 function program(vs: string, fs: string): WebGLProgram {
   const sh = (type: number, src: string) => {
     const s = gl.createShader(type)!;
@@ -180,6 +250,8 @@ function program(vs: string, fs: string): WebGLProgram {
 }
 const bladeProg = program(BLADE_VS, BLADE_FS);
 const lineProg = program(LINE_VS, LINE_FS);
+const washProg = program(QUAD_VS, WASH_FS);
+const quadVao = gl.createVertexArray()!;
 const u = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n);
 
 // ─── geometry: the specimen at growth T, into buffers ────────────────────────────────────────────
@@ -192,10 +264,11 @@ let lineCount = 0;
 
 gl.bindVertexArray(bladeVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, bladeBuf);
-for (const [name, size, off] of [['aPos', 3, 0], ['aUV', 4, 3]] as const) {
+for (const [name, size, off] of [['aPos', 3, 0], ['aUV', 4, 3], ['aCol', 3, 7]] as const) {
   const loc = gl.getAttribLocation(bladeProg, name);
+  if (loc < 0) continue;
   gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 7 * 4, off * 4);
+  gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 10 * 4, off * 4);
 }
 gl.bindVertexArray(lineVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
@@ -208,19 +281,53 @@ for (const [name, size, off] of [['aA', 3, 0], ['aB', 3, 3], ['aW', 2, 6], ['aS'
 }
 gl.bindVertexArray(null);
 
+// ─── the colourist's box: a specimen's pigments, from its seed ───────────────────────────────────
+type RGB = [number, number, number];
+const GREENS: RGB[] = [[0.42, 0.55, 0.26], [0.34, 0.49, 0.24], [0.47, 0.56, 0.3], [0.3, 0.44, 0.28], [0.5, 0.58, 0.25]];
+const PETALS: RGB[] = [
+  [0.86, 0.4, 0.5], // rose madder
+  [0.6, 0.46, 0.8], // cobalt violet
+  [0.96, 0.76, 0.22], // gamboge
+  [0.38, 0.5, 0.86], // ultramarine
+  [0.92, 0.38, 0.26], // vermilion
+  [0.96, 0.94, 0.88], // white: barely a wash
+  [0.9, 0.6, 0.72], // pale pink
+];
+function palette(seed: number) {
+  const r = seeded(hash(seed, 0xc01));
+  const green = GREENS[Math.floor(r() * GREENS.length)];
+  const petal = PETALS[Math.floor(r() * PETALS.length)];
+  const jitter = (c: RGB, k: number, amt: number): RGB => {
+    const q = seeded(hash(seed, 0xc02, k));
+    const d = (q() - 0.5) * amt;
+    const y = (q() - 0.5) * amt * 0.6;
+    return [c[0] + d + y, c[1] + d * 0.6, c[2] + d * 0.4 - y];
+  };
+  return {
+    petal,
+    leafOf: (i: number) => jitter(green, i, 0.12),
+    stem: [green[0] * 0.95 + 0.05, green[1] * 0.92, green[2] * 0.85] as RGB,
+    root: [0.62, 0.52, 0.4] as RGB,
+  };
+}
+let paint = palette(seed);
+
 const scaleAbout = (o: V3, p: V3, k: number): V3 => [o[0] + (p[0] - o[0]) * k, o[1] + (p[1] - o[1]) * k, o[2] + (p[2] - o[2]) * k];
 
 function upload(sp: Specimen, T: number) {
   // blades: two quads a row (left to middle, middle to right), scaled about the base as it unfolds
   const bv: number[] = [];
+  let bi = 0;
   for (const b of sp.blades) {
+    bi++;
     const g = grownAt(b.t0, b.t1, T);
     if (g <= 0.01) continue;
+    const col = b.kind ? paint.petal : paint.leafOf(bi);
     const K = b.rows.length - 1;
     let along = 0;
     const vert = (p: V3, a: number, across: number, k: number) => {
       const q = scaleAbout(b.base, p, g);
-      bv.push(q[0], q[1], q[2], a, across, b.kind, k / K);
+      bv.push(q[0], q[1], q[2], a, across, b.kind, k / K, col[0], col[1], col[2]);
     };
     for (let k = 0; k < K; k++) {
       const r0 = b.rows[k];
@@ -239,7 +346,7 @@ function upload(sp: Specimen, T: number) {
       along = a1;
     }
   }
-  bladeCount = bv.length / 7;
+  bladeCount = bv.length / 10;
   gl.bindBuffer(gl.ARRAY_BUFFER, bladeBuf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(bv), gl.DYNAMIC_DRAW);
   // lines
@@ -333,6 +440,7 @@ caption();
 function specimen(next: number) {
   seed = next;
   sp = grow(seed);
+  paint = palette(seed);
   T = 0;
   uploadedT = -1;
   const url = new URL(location.href);
@@ -341,10 +449,49 @@ function specimen(next: number) {
   caption();
 }
 document.getElementById('another')?.addEventListener('click', () => specimen(Math.floor(Math.random() * 9000) + 1));
+const washBtn = document.getElementById('wash');
+const washLabel = () => {
+  if (washBtn) washBtn.textContent = wash ? 'ink only' : 'colour';
+};
+washLabel();
+washBtn?.addEventListener('click', () => {
+  wash = !wash;
+  washLabel();
+  const url = new URL(location.href);
+  if (wash) url.searchParams.delete('wash');
+  else url.searchParams.set('wash', '0');
+  history.replaceState(null, '', url);
+});
 document.getElementById('again')?.addEventListener('click', () => {
   T = 0;
   uploadedT = -1;
 });
+
+// the wash's own buffer (half size: watercolour has no fine edges), with its own depth
+const washTex = gl.createTexture()!;
+const washDepth = gl.createRenderbuffer()!;
+const washFbo = gl.createFramebuffer()!;
+let washW = 0;
+let washH = 0;
+function washTarget(W: number, H: number) {
+  const w = Math.max(1, Math.ceil(W / 2));
+  const h = Math.max(1, Math.ceil(H / 2));
+  if (w === washW && h === washH) return;
+  washW = w;
+  washH = h;
+  gl.bindTexture(gl.TEXTURE_2D, washTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindRenderbuffer(gl.RENDERBUFFER, washDepth);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, washFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, washTex, 0);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, washDepth);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
 
 function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2) * (preview ? 0.6 : 1);
@@ -376,6 +523,8 @@ function frame(now: number) {
   const H = canvas.height;
   gl.viewport(0, 0, W, H);
   gl.clearColor(0.945, 0.935, 0.905, 1);
+  // (a clear leaves the depth alone unless depth writes are on — the lines turned them off)
+  gl.depthMask(true);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   // the frame: the whole specimen, roots to flowers, with a margin (closer as you pinch)
   const aspect = W / H;
@@ -399,23 +548,59 @@ function frame(now: number) {
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  // blades: opaque paper, both sides, laying down depth
-  gl.useProgram(bladeProg);
-  gl.uniformMatrix4fv(u(bladeProg, 'uVP'), false, vp);
-  gl.uniform3fv(u(bladeProg, 'uLight'), LIGHT);
-  gl.uniform3fv(u(bladeProg, 'uEye'), eye);
-  gl.depthMask(true);
-  gl.bindVertexArray(bladeVao);
-  gl.drawArrays(gl.TRIANGLES, 0, bladeCount);
-  // lines: over them, tested against them, not hiding one another
-  gl.useProgram(lineProg);
-  gl.uniformMatrix4fv(u(lineProg, 'uVP'), false, vp);
-  gl.uniform2f(u(lineProg, 'uRes'), W, H);
-  gl.uniform1f(u(lineProg, 'uFocal'), (H / 2) / Math.tan(fov / 2));
-  gl.depthMask(false);
-  gl.bindVertexArray(lineVao);
-  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, lineCount);
-  gl.bindVertexArray(null);
+  const draw = (mode: number, w: number, h: number) => {
+    // blades: both sides, laying down depth
+    gl.useProgram(bladeProg);
+    gl.uniformMatrix4fv(u(bladeProg, 'uVP'), false, vp);
+    gl.uniform3fv(u(bladeProg, 'uLight'), LIGHT);
+    gl.uniform3fv(u(bladeProg, 'uEye'), eye);
+    gl.uniform1f(u(bladeProg, 'uMode'), mode);
+    gl.depthMask(true);
+    gl.bindVertexArray(bladeVao);
+    gl.drawArrays(gl.TRIANGLES, 0, bladeCount);
+    // lines: over them, tested against them, not hiding one another
+    gl.useProgram(lineProg);
+    gl.uniformMatrix4fv(u(lineProg, 'uVP'), false, vp);
+    gl.uniform2f(u(lineProg, 'uRes'), w, h);
+    gl.uniform1f(u(lineProg, 'uFocal'), (h / 2) / Math.tan(fov / 2));
+    gl.uniform1f(u(lineProg, 'uMode'), mode);
+    gl.uniform3fv(u(lineProg, 'uStem'), paint.stem);
+    gl.uniform3fv(u(lineProg, 'uRoot'), paint.root);
+    gl.depthMask(false);
+    gl.bindVertexArray(lineVao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, lineCount);
+    gl.bindVertexArray(null);
+  };
+  if (wash) {
+    // 1. the pigments, into their own buffer
+    washTarget(W, H);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, washFbo);
+    gl.viewport(0, 0, washW, washH);
+    gl.clearColor(0, 0, 0, 0);
+    gl.depthMask(true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    draw(2, washW, washH);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    // 2. laid on the paper as a wash
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.useProgram(washProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, washTex);
+    gl.uniform1i(u(washProg, 'uWash'), 0);
+    gl.uniform2f(u(washProg, 'uRes'), W, H);
+    gl.uniform1f(u(washProg, 'uSeed'), (seed % 97) * 1.37);
+    gl.bindVertexArray(quadVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.depthMask(true);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+  }
+  // 3. the engraving (over the wash: its paper clear; `?washonly` leaves it off, to see the wash)
+  if (!params.has('washonly')) draw(wash ? 1 : 0, W, H);
   (window as unknown as { __plate: unknown }).__plate = { seed, T: Math.round(T * 100) / 100, name: sp.name, blades: bladeCount / 12, lines: lineCount };
   requestAnimationFrame(frame);
 }

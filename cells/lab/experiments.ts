@@ -44,7 +44,7 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'plate',
     title: 'Botanical plate',
     group: 'Drawings',
-    blurb: 'One plant from a seed, grown before your eyes and drawn as an engraving you can turn in your hand: roots, stem, leaves hatched as they turn from the light, flowers opening.',
+    blurb: 'One plant from a seed, grown before your eyes and drawn as an engraving you can turn in your hand and hand-coloured in watercolour: roots, stem, leaves hatched as they turn from the light, flowers opening.',
     page: 'static/plate.html',
     preview: 'preview&seed=412',
     readme: 'client/plate/README.md',
@@ -53,6 +53,7 @@ export const EXPERIMENTS: Experiment[] = [
       { label: 'pl. 412', query: 'seed=412' },
       { label: 'pl. 77', query: 'seed=77' },
       { label: 'pl. 2051', query: 'seed=2051' },
+      { label: 'ink only', query: 'wash=0' },
     ],
   },
 ];
