@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-exp="plate">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f1efe7">
+  <title>Botanical plate</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #f1efe7; overflow: hidden; touch-action: none; }
+    body { color: #2a2724; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    /* the plate's printed matter: its number, its name and a note, its two small commands */
+    #no { position: fixed; top: max(14px, env(safe-area-inset-top)); right: 18px; font-size: 13px; letter-spacing: .12em; font-variant: small-caps; opacity: .7; }
+    #label { position: fixed; left: 0; right: 0; bottom: max(22px, env(safe-area-inset-bottom)); text-align: center; pointer-events: none; padding: 0 16px; }
+    #label i { display: block; font-size: 21px; letter-spacing: .01em; }
+    #label span { display: block; font-size: 12px; letter-spacing: .08em; font-variant: small-caps; opacity: .62; margin-top: 4px; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; display: flex; gap: 14px; }
+    nav button { all: unset; cursor: pointer; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .7; padding: 4px 2px; }
+    nav button:hover { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
+    .preview #label, .preview nav, .preview #no { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="plate"></canvas>
+  <nav><button id="another">another</button><button id="again">grow again</button></nav>
+  <div id="no"></div>
+  <div id="label"></div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

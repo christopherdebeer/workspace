@@ -11,7 +11,7 @@
  * (the hero); tall trunks fading into the fog; birch (a white trunk); beech
  * saplings with russet leaves; low twiggy shrubs and bramble.
  */
-import { hash, seeded, type Rand } from './rng';
+import { hash, seeded, type Rand } from '../kit/rng';
 
 export type Species = 'leaner' | 'tall' | 'birch' | 'sapling' | 'shrub';
 

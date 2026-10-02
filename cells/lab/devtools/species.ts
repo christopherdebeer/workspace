@@ -5,7 +5,7 @@
  *   node cells/lab/devtools/species.mjs [seed = moss-ford-7]
  */
 import { Wood } from '../client/mistwood/world';
-import { seedFrom } from '../client/mistwood/rng';
+import { seedFrom } from '../client/kit/rng';
 
 const name = process.argv[2] ?? 'moss-ford-7';
 const wood = new Wood(seedFrom(name)!);

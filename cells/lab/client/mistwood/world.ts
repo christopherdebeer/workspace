@@ -21,7 +21,7 @@
  * the archetypes (tree.ts `sampleGenome`), and each species has a small pool
  * of grown trees, placed again and again at different sizes and turns.
  */
-import { hash, lerp, seeded } from './rng';
+import { hash, lerp, seeded } from '../kit/rng';
 import { grow, growLog, growPatch, growScrub, sampleGenome, type Genome, type Species, type Structure } from './tree';
 
 /** Metres per cell of the wood's grid (it goes on in every direction). */

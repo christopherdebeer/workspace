@@ -6,7 +6,7 @@
  */
 import { Wood } from '../client/mistwood/world';
 import { Deerland } from '../client/mistwood/deer';
-import { seedFrom } from '../client/mistwood/rng';
+import { seedFrom } from '../client/kit/rng';
 
 const [walkFor = '12', seedArg = 'moss-ford-7', hourArg = '18'] = process.argv.slice(2);
 const wood = new Wood(seedFrom(seedArg)!);

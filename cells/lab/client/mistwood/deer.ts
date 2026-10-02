@@ -13,7 +13,7 @@
  * And you hear them before you see them: a rustle of steps in the leaves somewhere off in the
  * fog, a stamp, a bark, twigs snapping as they run.
  */
-import { hash, seeded, type Rand } from './rng';
+import { hash, seeded, type Rand } from '../kit/rng';
 import type { Place } from './world';
 
 export type Mode = 'bedded' | 'graze' | 'alert' | 'flee' | 'return';

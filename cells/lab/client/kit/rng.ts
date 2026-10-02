@@ -1,4 +1,6 @@
 /**
+ * (The lab kit: shared by every experiment.)
+ *
  * Seeded randomness. Everything in the wood comes from one seed: the same
  * seed is the same walk, tree for tree, wherever you stop and start.
  */

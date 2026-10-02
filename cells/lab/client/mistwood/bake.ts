@@ -14,7 +14,7 @@
  * straw lightness), B flex (how freely the wind moves it: twigs 1, trunk 0),
  * A coverage. Row 0 is the base (y up), so v = height.
  */
-import { PENCIL } from './pencil';
+import { PENCIL } from '../kit/pencil';
 import { SEG, type Structure } from './tree';
 
 const VS = `#version 300 es

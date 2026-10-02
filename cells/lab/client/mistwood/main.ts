@@ -21,10 +21,10 @@ import { atmosphere, moonPhase } from './sky';
 import { Deerland } from './deer';
 import { flag, onFlag, setFlag, setFlags } from './flags';
 import { mountTune } from './tune';
-import { hash, seeded } from './rng';
-import { clamp01, randomSeed, seedFrom, seedName } from './rng';
+import { hash, seeded } from '../kit/rng';
+import { clamp01, randomSeed, seedFrom, seedName } from '../kit/rng';
 import { Wood, VIEW, type Kind, type Placed } from './world';
-import { smooth as smoothstep } from './rng';
+import { smooth as smoothstep } from '../kit/rng';
 
 const canvas = document.getElementById('wood') as HTMLCanvasElement;
 const veil = document.getElementById('veil')!;

@@ -15,7 +15,7 @@
  */
 import type { Card } from './bake';
 import type { Atmos } from './sky';
-import { PENCIL } from './pencil';
+import { PENCIL } from '../kit/pencil';
 import { SEG } from './tree';
 
 /**

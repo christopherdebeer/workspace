@@ -8,6 +8,7 @@
  */
 const experiments: Record<string, () => Promise<unknown>> = {
   mistwood: () => import('./mistwood/main'),
+  plate: () => import('./plate/main'),
 };
 
 const id = document.documentElement.dataset.exp ?? '';
