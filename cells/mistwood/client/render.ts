@@ -183,10 +183,10 @@ float dashRows(vec2 xz, vec2 u, float s, float v, float fam, float len) {
   float r1 = h2(ivec2(int(row) + 7919, int(fam) + int(boilSeed()) * 17));
   float r2 = h2(ivec2(int(row) + 104729, int(fam)));
   float along = dot(xz, u) / s * 3.;
-  float on = smoothstep(.42, .56, vnoise(vec2(along / (len * (1. + 2. * r1)), row * 1.7 + fam * 13.)));
+  float on = smoothstep(.5, .62, vnoise(vec2(along / (len * (1. + 2. * r1)), row * 1.7 + fam * 13.)));
   float keep = smoothstep(r2 * .85, r2 * .85 + .18, v);
   float mid = .5 + (r1 - .5) * .45 * uSkA.w + (vnoise(vec2(along * .3, row)) - .5) * .25 * uSkA.w;
-  float line = 1. - smoothstep(.09, .19, abs(fract(w) - mid));
+  float line = 1. - smoothstep(.07, .15, abs(fract(w) - mid));
   return line * on * keep * (.5 + .5 * vnoise(vec2(along * .5, row * 3.1 + fam)));
 }
 // the ground's strokes at xz, t metres off, seen along d, as dark as v: rows a few pixels apart on
@@ -729,6 +729,8 @@ vec4 masonry(vec2 uv, float px, float seed, out vec2 tilt) {
   float pits = -smoothstep(.72, .8, vnoise(uv * 37. + id * 7.)) * .18;
   return vec4(mortar * detail, id, mix(1., .82 + rough + pits, detail), detail);
 }
+// the sketch's stone: how much pencil (set by shadeStructure for the world pass to draw)
+float gStoneMark = 0.;
 vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   int j;
   vec2 e = vec2(.012, -.012);
@@ -805,6 +807,22 @@ vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
   // the fog and the mist between
   float above = w.y - gh;
   float fogD = fogAt(length(w.xz - uCam.xy), above, uDensity);
+  if (uSketch > .5) {
+    // drawn as a mason's drawing is: each stone's outline (the joints), and strokes along the
+    // courses where the face is turned from the light, crossed where darkest; fixed to the face,
+    // as fine as the pencil wherever it is; the fog takes it to haze
+    float sp = max(px * uSkA.z * (800. / uRes.y), 1e-3) * (wall ? 2.4 : 1.);
+    float joints = smoothstep(.3, .75, m.x);
+    float shade = smoothstep(.95, .45, lit);
+    float lane = uv.y / sp;
+    float run = smoothstep(.4, .58, vnoise(vec2(uv.x / (sp * 7.), floor(lane) * 1.7 + b.w)));
+    float along = (1. - smoothstep(.12, .28, abs(fract(lane) - .5))) * run * smoothstep(.05, .5, shade);
+    vec2 sl = vec2(uv.x + uv.y * .6, uv.y - uv.x * .6) / sp;
+    float across = (1. - smoothstep(.12, .28, abs(fract(sl.x * .8) - .5))) * smoothstep(.45, .6, vnoise(vec2(sl.y / 6., floor(sl.x * .8)))) * smoothstep(.55, .95, shade);
+    // (moss and ivy: a darker scribble of tone)
+    float green = smoothstep(.1, .2, lum(stone) < .12 ? 1. : 0.) * .3;
+    gStoneMark = max(max(joints * .75, along * .6), max(across * .5, green)) * (1. - fogD) * exp(-tauIn);
+  }
   return mix(colr, fogDir(d), 1. - (1. - fogD) * exp(-tauIn));
 }
 void main() {
@@ -1030,17 +1048,14 @@ void main() {
     float v = 1. - exp(-3. * ink * uSkA.y);
     float m = 0.;
     if (stone) {
-      // stone: hatched on the slant, fixed to the wood's directions, crossed where it is dark
-      vec2 a = vec2(atan(d.x, d.z) * uF, d.y / length(d.xz) * uF) * (800. / uRes.y);
-      m = hatch(a, normalize(vec2(.5, 1.)), uSkA.z, 5., uSkA.w) * smoothstep(.05, .3, v);
-      m = max(m, hatch(a, normalize(vec2(1., -.35)), uSkA.z * 1.1, 6., uSkA.w) * smoothstep(.4, .7, v));
-      m *= .4 + .6 * v;
+      // stone draws itself (shadeStructure: its joints, strokes along its courses)
+      m = gStoneMark * uSkA.y;
     } else if (tHit > 0.) {
       vec3 hp = eye + d * tHit;
       bool wet = tWater > 0. || brook;
       // water: long level strokes, few; the ground: short ones, as many as it is dark
       // (the ground itself nearly blank: its tufts are the grass's own; water a few level strokes)
-      m = groundStrokes(hp.xz, tHit, d, wet ? v * .7 : v * .4, wet ? 4. : 1.) * (.3 + .5 * v);
+      m = groundStrokes(hp.xz, tHit, d, wet ? v * .45 : v * .25, wet ? 4. : 1.) * (.3 + .45 * v);
       if (!wet) {
         // the path: its two edges drawn, running off into the distance
         float mpp = tHit / uF * (800. / uRes.y);
@@ -1157,11 +1172,13 @@ void main() {
     // over each other)
     // (deeper in the fog, softer: the marks read from a blurrier level of the card, a smudge of tone
     // rather than lines, as the middle distance is drawn)
-    vec4 ts = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y), log2(1. + coc(vDist)) + 2.5 * fog);
+    // (grass and scrub keep their strokes further: the undergrowth is strokes on paper, not a grey shape)
+    bool low = uKind > .5;
+    vec4 ts = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y), log2(1. + coc(vDist)) + (low ? 1. : 2.5) * fog);
     float lf = clamp(ts.r / max(ts.a, .002), 0., 1.);
     float mk = min(lf * uSkA.y * (uKind > .5 ? .5 : 1.), 1.) * (1. - fog);
     float a = cov * uAlpha;
-    o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
+    o = vec4(sketchInk(mk, fog * (low ? .6 : 1.), vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
     return;
   }
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
@@ -1343,12 +1360,12 @@ void main() {
       float lane = floor(laneW);
       float rr = h2(ivec2(int(lane) + 333, int(uPhase * 1000.) + int(boilSeed()) * 17));
       float dark = (1. - vTL.x * .9) * (.25 + .75 * (1. - max(0., dot(N, uLight))));
-      float run = smoothstep(.35, .55, vnoise(vec2(vv / (sp * (4. + 6. * rr)), lane * 1.7 + uPhase * 9.)));
+      float run = smoothstep(.42, .6, vnoise(vec2(vv / (sp * (2. + 3. * rr)), lane * 1.7 + uPhase * 9.)));
       float lanes = (1. - smoothstep(.12, .3, abs(fract(laneW) - .5))) * run * step(rr, dark * uSkA.y) * smoothstep(.97, .8, abs(a));
       // a birch: white, with dark dashes across it in loose rows
       float rowL = vv / (sp * 1.3);
       float lent = vTL.x > .3 ? step(h2(ivec2(int(floor(rowL)) + 71, int(floor(a * 3.)) + int(uPhase * 1000.))), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(a)) : 0.;
-      mark = max(edge, max(lanes * .65, lent * .8));
+      mark = max(edge, max(lanes * .45, lent * .8));
     } else {
       // a twig: one line, its weight its width
       float press = .6 + .4 * vnoise(vec2(hRaw * 3., uPhase * 5.));

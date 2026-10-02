@@ -62,6 +62,8 @@ out vec4 o;
 // 1: baked in pencil strokes (?style=sketch): wide wood as its two edges and strokes round it where
 // dark, a twig as one line whose weight is its width
 uniform float uSketch;
+// 1: grass and scrub (of their hundreds of finest blades only some drawn); trees keep every twig
+uniform float uSparse;
 float hh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vn(vec2 p) {
   vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
@@ -85,16 +87,16 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
     float lane = floor(laneW);
     float r = hh(vec2(lane, floor(vA.x * .1) + floor(vA.y * .1) * 7.));
     float dark = (1. - tone * .9) * (.25 + .6 * smoothstep(-.4, .9, side));
-    float run = smoothstep(.35, .55, vn(vec2(along / (10. + 14. * r), lane * 1.7)));
+    float run = smoothstep(.42, .6, vn(vec2(along / (5. + 8. * r), lane * 1.7)));
     float lanes = (1. - smoothstep(.12, .3, abs(fract(laneW) - .5))) * run * step(r, dark * 1.3) * smoothstep(.97, .8, abs(side));
     // a birch: white, with dark dashes across it in loose rows
     float rowL = along / 5.;
     float lent = tone > .3 ? step(hh(vec2(floor(rowL), floor(side * 3.) + 17.)), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(side)) : 0.;
-    return max(edge * press, max(lanes * .6, lent * .8));
+    return max(edge * press, max(lanes * .45, lent * .8));
   }
   // a twig: one line (never finer than the pencil's point), faint as it is thin; of the finest, only
   // some drawn (a tussock's hundreds of blades are a few strokes, not a smudge)
-  if (w < 1. && hh(floor(vA * 3.) + floor(vB * 3.)) > .25 + .5 * w) discard;
+  if (uSparse > .5 && w < 1. && hh(floor(vA * 3.) + floor(vB * 3.)) > .25 + .5 * w) discard;
   return (1. - smoothstep(max(w * .5, .4), max(w * .5, .4) + .9, abs(d + wob * .4))) * clamp(w * 1.6, .18, 1.) * press;
 }
 void main() {
@@ -169,7 +171,7 @@ export class Baker {
     this.prog = compile(VS, FS);
     this.vao = gl.createVertexArray()!;
     this.fbo = gl.createFramebuffer()!;
-    for (const n of ['uOrigin', 'uScale', 'uSize', 'uRight']) this.loc[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uOrigin', 'uScale', 'uSize', 'uRight', 'uSparse']) this.loc[n] = gl.getUniformLocation(this.prog, n);
   }
 
   /** The structure's segments on the GPU (shared with the live renderer). */
@@ -190,8 +192,8 @@ export class Baker {
     this.buffers.clear();
   }
 
-  /** Bake `s` as seen with `right` as its across direction, its larger dimension `level` px. */
-  bake(s: Structure, level: number, right: [number, number]): Card {
+  /** Bake `s` as seen with `right` as its across direction, its larger dimension `level` px; `sparse`: grass or scrub (in the sketch, only some of its finest blades drawn). */
+  bake(s: Structure, level: number, right: [number, number], sparse = false): Card {
     const gl = this.gl;
     // its extent across, seen from here
     let lo = Infinity;
@@ -233,6 +235,7 @@ export class Baker {
     gl.uniform1f(this.loc.uScale, scale);
     gl.uniform2f(this.loc.uSize, W, H);
     gl.uniform2f(this.loc.uRight, right[0], right[1]);
+    gl.uniform1f(this.loc.uSparse, sparse ? 1 : 0);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer(s));
     const attr = (name: string, size: number, offset: number) => {

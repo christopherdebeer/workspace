@@ -761,7 +761,7 @@ function frame(now: number) {
     if (budget - st.count < 0 && baked.size) break;
     budget -= st.count;
     baked.add(key);
-    const card = baker.bake(st, w.level, w.right);
+    const card = baker.bake(st, w.level, w.right, low(w.kind));
     card.used = t;
     card.side = w.side;
     cards.set(key, card);
