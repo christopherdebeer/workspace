@@ -59,6 +59,35 @@ flat in vec2 vW;
 flat in vec2 vTL;
 flat in float vFlex;
 out vec4 o;
+// 1: baked in pencil strokes (?style=sketch): wide wood as its two edges and strokes round it where
+// dark, a twig as one line whose weight is its width
+uniform float uSketch;
+float hh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vn(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
+  return mix(mix(hh(i), hh(i + vec2(1., 0.)), u.x), mix(hh(i + vec2(0., 1.)), hh(i + vec2(1., 1.)), u.x), u.y);
+}
+float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
+  // (where along the wood: the hand's wobble and pressure follow it, so a line runs on unbroken
+  // from one segment into the next)
+  float along = dot(vP, dir);
+  float wob = (vn(vP * .045 + 3.) - .5) * 1.6;
+  float press = .55 + .45 * vn(vP * .03 + 11.);
+  if (w >= 2.5) {
+    if (hRaw < 0. || hRaw > 1.) discard;
+    float edge = 1. - smoothstep(.5, 1.4, abs(w * .5 - d - .7 + wob));
+    // strokes across, a few px apart, kept where the bark is dark (none on birch), the shaded side
+    // (the right: the light is from the upper left) more
+    float side = dot(vP - vA - (vB - vA) * clamp(hRaw, 0., 1.), nn) / max(w * .5, .5);
+    float row = dot(vP, dir) / 4.5;
+    float r = hh(vec2(floor(row), floor(vA.x * .1)));
+    float dark = (1. - tone * .9) * (.3 + .5 * smoothstep(-.6, .9, side));
+    float ring = (1. - smoothstep(.12, .26, abs(fract(row) - .5))) * step(r, dark) * smoothstep(.95, .65, abs(side));
+    return max(edge * press, ring * .6);
+  }
+  // a twig: one line (never finer than the pencil's point), faint as it is thin
+  return (1. - smoothstep(max(w * .5, .4), max(w * .5, .4) + .9, abs(d + wob * .4))) * clamp(w * 1.6, .18, 1.) * press;
+}
 void main() {
   vec2 pa = vP - vA, ba = vB - vA;
   float bb = max(dot(ba, ba), 1e-6);
@@ -73,6 +102,12 @@ void main() {
     // thinner than a pixel: a faint line of the right weight, and no end caps (so joints do not bead)
     if (hRaw < 0. || hRaw > 1.) discard;
     cov = w * clamp(1. - d, 0., 1.);
+  }
+  if (uSketch > .5) {
+    vec2 dir = normalize(vB - vA + 1e-6);
+    vec2 nn = vec2(-dir.y, dir.x);
+    if (nn.x < 0.) nn = -nn;
+    cov = sketchCov(hRaw, length(vP - vA - (vB - vA) * h), w, dir, nn, vTL.x);
   }
   if (cov <= 0.) discard;
   // round wood, shaded as it is baked (a far card cannot be lit later): light from the upper left
@@ -110,11 +145,16 @@ export class Baker {
   private buffers = new Map<Structure, WebGLBuffer>();
   private loc: Record<string, WebGLUniformLocation | null> = {};
 
-  constructor(private gl: WebGL2RenderingContext, compile: (vs: string, fs: string) => WebGLProgram) {
+  constructor(
+    private gl: WebGL2RenderingContext,
+    compile: (vs: string, fs: string) => WebGLProgram,
+    /** bake in pencil strokes (the sketch) */
+    private sketch = false,
+  ) {
     this.prog = compile(VS, FS);
     this.vao = gl.createVertexArray()!;
     this.fbo = gl.createFramebuffer()!;
-    for (const n of ['uOrigin', 'uScale', 'uSize', 'uRight']) this.loc[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uOrigin', 'uScale', 'uSize', 'uRight', 'uSketch']) this.loc[n] = gl.getUniformLocation(this.prog, n);
   }
 
   /** The structure's segments on the GPU (shared with the live renderer). */
@@ -178,6 +218,7 @@ export class Baker {
     gl.uniform1f(this.loc.uScale, scale);
     gl.uniform2f(this.loc.uSize, W, H);
     gl.uniform2f(this.loc.uRight, right[0], right[1]);
+    gl.uniform1f(this.loc.uSketch, this.sketch ? 1 : 0);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer(s));
     const attr = (name: string, size: number, offset: number) => {

@@ -35,6 +35,37 @@ float vnoise(vec2 p) {
 float fbm(vec2 p) { float s = 0., a = .5; for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.07 + 13.7; a *= .5; } return s / .9375; }
 uniform vec3 uFogLow, uFogHigh;
 uniform float uT;
+// ─── the sketch (?style=sketch): each thing draws itself in pencil on paper ────────────────────
+// on; how dark the pencil, stroke spacing (px at 800 px tall), how loose the hand
+uniform float uSketch;
+uniform vec4 uSkA;
+// outlines, boil (redrawn this often a second), the paper's tooth, how much is left unsaid
+uniform vec4 uSkB;
+const vec3 PAPER = vec3(.935, .925, .895);
+const vec3 GRAPHITE = vec3(.2, .2, .22);
+float lum(vec3 c) { return dot(c, vec3(.3, .55, .15)); }
+// how far the hand is off this time (the boil: redrawn now and then, a little differently)
+float boilSeed() { return uSkB.y > 0. ? floor(uT * uSkB.y) : 0.; }
+// a pencil line along a stroke: px across from its middle, its half-width (px); soft-edged, never
+// thinner than the pencil's point
+float pencilLine(float across, float half) { float h = max(half, .45); return 1. - smoothstep(h, h + .9, abs(across)); }
+vec2 turn(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+// one layer of hatching along dir: strokes spaced sp apart, each its own — set a little off its
+// line, broken into lengths, its pressure rising and falling along it
+float hatch(vec2 a, vec2 dir, float sp, float seed, float loose) {
+  vec2 n = vec2(-dir.y, dir.x);
+  float u = dot(a, dir), w = dot(a, n) / sp;
+  float row = floor(w);
+  float r1 = h2(ivec2(int(row) + 7919, int(seed) + int(boilSeed()) * 17));
+  float r2 = h2(ivec2(int(row) + 104729, int(seed)));
+  float along = u / sp;
+  // (where each stroke runs and where it stops: lengths of 4–14 spacings, gaps between)
+  float on = smoothstep(.38 + .1 * r2, .5 + .1 * r2, vnoise(vec2(along / (4. + 10. * r1), row * 1.7 + seed * 13.)));
+  float mid = .5 + (r1 - .5) * .5 * loose + (vnoise(vec2(along / 9., row + seed)) - .5) * .5 * loose;
+  float width = .22 + .12 * r2;
+  float line = 1. - smoothstep(width * .45, width, abs(fract(w) - mid));
+  return line * on * (.55 + .45 * vnoise(vec2(along / 3., row * 3.1 + seed)));
+}
 // the lie of the land (world.ts groundH): amplitude, scale, water level, small swells
 uniform vec4 uRelief;
 // the height of the ground under what is drawn (its foot)
@@ -134,6 +165,43 @@ float pathDist(vec2 p) {
     best = min(best, abs(n) / max(length(g), 1e-4));
   }
   return best;
+}
+// ─── the sketch's ground: strokes lying on the ground, in rows fixed to it ────────────────────
+// one family of rows along u, s metres apart: dashes of their own lengths, each row drawn only as
+// dark as the ground there asks (each has its own threshold), a little off its line
+float dashRows(vec2 xz, vec2 u, float s, float v, float fam, float len) {
+  vec2 n = vec2(-u.y, u.x);
+  float w = dot(xz, n) / s;
+  float row = floor(w);
+  float r1 = h2(ivec2(int(row) + 7919, int(fam) + int(boilSeed()) * 17));
+  float r2 = h2(ivec2(int(row) + 104729, int(fam)));
+  float along = dot(xz, u) / s * 3.;
+  float on = smoothstep(.42, .56, vnoise(vec2(along / (len * (1. + 2. * r1)), row * 1.7 + fam * 13.)));
+  float keep = smoothstep(r2 * .85, r2 * .85 + .18, v);
+  float mid = .5 + (r1 - .5) * .45 * uSkA.w + (vnoise(vec2(along * .3, row)) - .5) * .25 * uSkA.w;
+  float line = 1. - smoothstep(.09, .19, abs(fract(w) - mid));
+  return line * on * keep * (.5 + .5 * vnoise(vec2(along * .5, row * 3.1 + fam)));
+}
+// the ground's strokes at xz, t metres off, seen along d, as dark as v: rows a few pixels apart on
+// the screen (a finer set and a coarser, blended with distance), from four families at different
+// headings, each counting as much as its strokes lie across the way you look (they read level)
+float groundStrokes(vec2 xz, float t, vec3 d, float v, float len) {
+  float mpp = t / uF;
+  float L = log2(max(mpp * uSkA.z * (800. / uRes.y) * max(t / 1.6, 1.), 1e-4));
+  float l0 = floor(L), fr = L - l0;
+  vec2 to = normalize(d.xz + 1e-6);
+  vec2 across = vec2(to.y, -to.x);
+  float m = 0.;
+  for (int k = 0; k < 4; k++) {
+    float ang = float(k) * .785398;
+    vec2 u = vec2(cos(ang), sin(ang));
+    float wgt = smoothstep(.75, .98, abs(dot(u, across)));
+    if (wgt < .01) continue;
+    float a0 = dashRows(xz, u, exp2(l0), v, float(k), len);
+    float a1 = dashRows(xz, u, exp2(l0 + 1.), v, float(k) + 4., len);
+    m = max(m, mix(a0, a1, fr) * wgt);
+  }
+  return m;
 }
 // ─── the creek (world.ts creek): a winding line cut into the land, water down its middle ───────
 // its line's scale (1/m), how deep it is cut (m), its bed's half-width (m)
@@ -947,6 +1015,37 @@ void main() {
     col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * exp(-tau));
   }
   col = sCol + sT * col;
+  if (uSketch > .5) {
+    // drawn: how dark it is against the fog seen that way is how much pencil it gets (so what the
+    // fog has taken is paper), laid down the way each thing would be drawn
+    float ink = clamp(1. - lum(col) / max(lum(fogDir(d)), .02), 0., 1.);
+    float v = 1. - exp(-3. * ink * uSkA.y);
+    float m = 0.;
+    if (stone) {
+      // stone: hatched on the slant, fixed to the wood's directions, crossed where it is dark
+      vec2 a = vec2(atan(d.x, d.z) * uF, d.y / length(d.xz) * uF) * (800. / uRes.y);
+      m = hatch(a, normalize(vec2(.5, 1.)), uSkA.z, 5., uSkA.w) * smoothstep(.05, .3, v);
+      m = max(m, hatch(a, normalize(vec2(1., -.35)), uSkA.z * 1.1, 6., uSkA.w) * smoothstep(.4, .7, v));
+      m *= .4 + .6 * v;
+    } else if (tHit > 0.) {
+      vec3 hp = eye + d * tHit;
+      bool wet = tWater > 0. || brook;
+      // water: long level strokes, few; the ground: short ones, as many as it is dark
+      m = groundStrokes(hp.xz, tHit, d, wet ? v * .7 : v, wet ? 4. : 1.) * (.4 + .6 * v);
+      if (!wet) {
+        // the path: its two edges drawn, running off into the distance
+        float mpp = tHit / uF * (800. / uRes.y);
+        float pd = pathDist(hp.xz) + (vnoise(hp.xz * 1.1) - .5) * .35 * uSkA.w;
+        float hw = uPathK.z * (.8 + .4 * vnoise(hp.xz * .13));
+        float edge = pencilLine((pd - hw * .8) / mpp, .5) * smoothstep(.3, .5, vnoise(hp.xz * .4 + 41.));
+        float fogF = 1. - (1. - fogAt(tHit, 0., uDensity)) * exp(-tau);
+        m = max(m, edge * (1. - fogF) * .8 * uSkB.x);
+      }
+    }
+    // what is left unsaid: the faintest marks dropped
+    m *= smoothstep(uSkB.w * .2, uSkB.w * .2 + .08, m);
+    col = mix(PAPER, GRAPHITE, clamp(m, 0., 1.));
+  }
   o = vec4(col, 1.);
   // depth: the stone where it stands, all else at the far end
   gl_FragDepth = stone ? clamp(length((eye + d * tS).xz - eye.xz) / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) : 1.;
@@ -1033,6 +1132,12 @@ void main() {
   // (the ground fog lies a few metres off: what is at your feet is clear)
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
+  if (uSketch > .5) {
+    // (the card was baked in strokes: its coverage is the pencil; the fog takes it to paper)
+    float a = min(cov * uSkA.y, 1.) * (1. - fog) * uAlpha;
+    o = vec4(GRAPHITE * a, a);
+    return;
+  }
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
@@ -1127,6 +1232,8 @@ flat in vec3 vWb;
 flat in vec2 vDab;
 out vec4 o;
 uniform float uDensity, uAlpha, uPhase, uRim, uViewAz;
+uniform vec2 uRes;
+uniform float uF;
 // 1: only lay down depth (the solid middle of the wide wood), so what is behind a trunk is hidden
 uniform float uDepthPass;
 uniform vec3 uBark, uBirch, uLeaf;
@@ -1192,6 +1299,36 @@ void main() {
   }
   // (drawn a hand's breadth nearer than it is, so a twig only hides when truly behind)
   gl_FragDepth = max(zf - .1 / ${DEPTH_RANGE.toFixed(1)}, 0.);
+  if (uSketch > .5) {
+    float fog = 1. - (1. - fogAt(vDist, vWorld.y - uBase, uDensity)) * (1. - mistTo(vWorld));
+    float mark;
+    if (w >= 2.5 && B < 1.) {
+      // wide wood: its two edges drawn (wobbling a little, pressing and lifting), and inside, strokes
+      // round the trunk where it is dark and turned from the light — none on a birch's white
+      float len = sqrt(bb);
+      float wob = (vnoise(vec2(hRaw * len / 40., uPhase * 7.)) - .5) * 1.4 * uSkA.w;
+      float press = .55 + .45 * vnoise(vec2(hRaw * len / 25., uPhase * 3.));
+      float edge = pencilLine(w * .5 - d - .7 + wob, .45) * press * uSkB.x;
+      float vv = vWorld.y - uBase;
+      float sp = exp2(floor(log2(max(uSkA.z * vDist / uF * (800. / uRes.y), 1e-3))));
+      float rowW = vv / sp;
+      float row = floor(rowW);
+      float rr = h2(ivec2(int(row) + 333, int(uPhase * 1000.) + int(boilSeed()) * 17));
+      float dark = (1. - vTL.x * .85) * (.35 + .65 * (1. - max(0., dot(N, uLight))));
+      float ring = (1. - smoothstep(.1, .22, abs(fract(rowW) - .5 - (rr - .5) * .3))) * step(rr, dark * uSkA.y);
+      // (a stroke round the trunk stops short of its edges, as a hand's does)
+      ring *= smoothstep(.95, .7, abs(a)) * (.5 + .5 * vnoise(vec2(a * 3., row)));
+      mark = max(edge, ring * .7);
+    } else {
+      // a twig: one line, its weight its width
+      float press = .6 + .4 * vnoise(vec2(hRaw * 3., uPhase * 5.));
+      mark = cov * press * (.7 + .3 * uSkB.x);
+    }
+    float am = clamp(mark, 0., 1.) * (1. - fog) * uAlpha;
+    if (am < .003) discard;
+    o = vec4(GRAPHITE * am, am);
+    return;
+  }
   float dif = max(0., dot(N, uLight));
   float sky = .5 + .5 * N.y;
   float round = w > 1.5 ? 1. : smoothstep(.5, 1.5, w);
@@ -1290,6 +1427,7 @@ in vec3 vWorld;
 in float vDist;
 out vec4 o;
 uniform float uDensity, uAlpha, uSize, uFace;
+uniform vec2 uRes;
 uniform vec4 uPose; // head up, head turned to you, gait phase, running
 uniform float uBed; // 0 standing … 1 lying up (legs folded under, the body on the ground, head up)
 uniform vec3 uBark;
@@ -1348,6 +1486,15 @@ void main() {
   vec3 base = mix(uBark * 1.3, vec3(.62, .6, .55), white);
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
+  if (uSketch > .5) {
+    // its outline, and a light shading (none on the white rump)
+    float edge = 1. - smoothstep(fw * .6, fw * 1.8, abs(d + fw * .6));
+    float shade = hatch(gl_FragCoord.xy * (800. / uRes.y), normalize(vec2(.5, 1.)), uSkA.z, 9., uSkA.w) * .45 * (1. - white);
+    float am = clamp(max(edge * uSkB.x, shade * cov), 0., 1.) * (1. - fog) * uAlpha;
+    if (am < .003) discard;
+    o = vec4(GRAPHITE * am, am);
+    return;
+  }
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
@@ -1358,103 +1505,22 @@ out vec4 o;
 uniform sampler2D uScene;
 uniform vec2 uRes;
 uniform float uExposure;
-uniform float uF, uHz;
 ${NOISE}
-// ─── the sketch (?style=sketch): the same picture, drawn in pencil on paper ────────────────────
-// on, how dark the pencil, stroke spacing (px at 800 px tall), how loose the hand
-uniform vec4 uSkA;
-// outlines, boil (redrawn this often a second; 0 still), the paper's tooth, how much is left unsaid
-uniform vec4 uSkB;
-float lum(vec3 c) { return dot(c, vec3(.3, .55, .15)); }
-// the way into the wood at a pixel (as the world pass casts it)
-vec3 viewDir(vec2 px) {
-  float th = (px.x - .5 * uRes.x) / uF;
-  vec3 dc = normalize(vec3(sin(th), (px.y - uHz) / uF, cos(th)));
-  float cy = cos(uCam.w), sy = sin(uCam.w);
-  return vec3(dc.x * cy + dc.z * sy, dc.y, -dc.x * sy + dc.z * cy);
-}
-// how much pencil a pixel wants: how much darker it is than the fog seen that way. The fog is the
-// paper: what it has taken is left undrawn, and the far is a few faint marks
-float inkAt(vec2 px) {
-  vec3 c = texture(uScene, clamp(px / uRes, .5 / uRes, 1. - .5 / uRes)).rgb;
-  return clamp(1. - lum(c) / max(lum(fogDir(viewDir(px))), .02), 0., 1.);
-}
-vec2 turn(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
-// one layer of hatching along dir: strokes spaced sp apart, each its own — set a little off its
-// line, broken into lengths, its pressure rising and falling along it
-float hatch(vec2 a, vec2 dir, float sp, float seed, float loose) {
-  vec2 n = vec2(-dir.y, dir.x);
-  float u = dot(a, dir), w = dot(a, n) / sp;
-  float row = floor(w);
-  float r1 = h2(ivec2(int(row) + 7919, int(seed)));
-  float r2 = h2(ivec2(int(row) + 104729, int(seed)));
-  float along = u / sp;
-  // (where each stroke runs and where it stops: lengths of 4–14 spacings, gaps between)
-  float on = smoothstep(.38 + .1 * r2, .5 + .1 * r2, vnoise(vec2(along / (4. + 10. * r1), row * 1.7 + seed * 13.)));
-  float mid = .5 + (r1 - .5) * .5 * loose + (vnoise(vec2(along / 9., row + seed)) - .5) * .5 * loose;
-  float width = .22 + .12 * r2;
-  float line = 1. - smoothstep(width * .45, width, abs(fract(w) - mid));
-  return line * on * (.55 + .45 * vnoise(vec2(along / 3., row * 3.1 + seed)));
-}
-vec3 sketch() {
+// the paper: the scene is already drawn in graphite on it; the paper's tooth breaks the graphite
+// (fixed to the paper, not the world), and the sheet is a touch darker at its edges
+vec3 paper(vec3 c) {
   vec2 px = gl_FragCoord.xy;
-  float k = uRes.y / 800.;
-  float loose = uSkA.w;
-  // the boil: now and then (as often as asked) the hand draws it again, a little differently
-  float again = uSkB.y > 0. ? floor(uT * uSkB.y) : 0.;
-  vec2 jit = (vec2(h2(ivec2(int(again), 3)), h2(ivec2(int(again), 11))) - .5) * 40.;
-  // the strokes are held to the wood's directions (azimuth, elevation), not to the screen: turning
-  // and tilting carry them with the world
-  vec2 a = vec2(((px.x - .5 * uRes.x) / uF + uCam.w) * uF, px.y - uHz) / k + jit;
-  // the hand's wobble: everything drawn a little off where it is
-  vec2 wob = (vec2(vnoise(a / 45. + 3.), vnoise(a / 45. + 17.)) - .5) * 5. * loose * k;
-  vec2 p = px + wob;
-  float ink = inkAt(p);
-  float e = 2.5 * k;
-  float il = inkAt(p - vec2(e, 0.)), ir = inkAt(p + vec2(e, 0.)), idn = inkAt(p - vec2(0., e)), iu = inkAt(p + vec2(0., e));
-  float avg = (il + ir + idn + iu) * .25;
-  vec2 g = vec2(ir - il, iu - idn);
-  float gl = length(g);
-  // tone: the pencil light over the middle values (delicate), darker only where it is dark
-  // (rising fast from the paper: a tree only a little darker than the mist still gets its marks)
-  float v = 1. - exp(-3. * ink * uSkA.y);
-  // strokes run along the forms (along the edges: up a trunk, across a bank); where there is no
-  // edge, across the ground and the water, slanting in the air
-  vec2 def = px.y < uHz ? normalize(vec2(1., .06)) : normalize(vec2(.45, 1.));
-  vec2 ed = gl > 1e-4 ? vec2(-g.y, g.x) / gl : def;
-  if (dot(ed, def) < 0.) ed = -ed;
-  vec2 dir = normalize(mix(def, ed, smoothstep(.03, .2, gl)) + 1e-5);
-  float sp = uSkA.z;
-  float m = 0.;
-  m = max(m, hatch(a, dir, sp, 1., loose) * smoothstep(.06, .3, v));
-  m = max(m, hatch(a, turn(dir, .75), sp * 1.15, 2., loose) * smoothstep(.35, .62, v));
-  m = max(m, hatch(a, turn(dir, -.6), sp * .9, 3., loose) * smoothstep(.62, .88, v));
-  // (lighter tones, lighter strokes: the hand barely touching)
-  m *= .35 + .65 * v;
-  // a faint smudge of graphite under the dark
-  m = max(m, v * .18);
-  // outlines: where the tone breaks, a line, broken here and there, fainter into the fog
-  // (from the tone a little smoothed: the forms' edges, not every leaf on the ground)
-  float brk = smoothstep(.3, .5, vnoise(a / (14. + 10. * loose) + 41.));
-  float edge = smoothstep(.1, .35, gl) * brk * (.35 + .65 * max(ink, avg));
-  // thin dark things (a twig, a blade of grass): drawn as one line
-  float thin = smoothstep(.012, .07, ink - avg) * (.45 + .55 * sqrt(ink));
-  m = max(m, max(edge, thin) * uSkB.x);
-  // what is left unsaid: the faintest marks dropped
-  m *= smoothstep(uSkB.w * .25, uSkB.w * .25 + .08, m);
-  // the paper's tooth: graphite catches on its high points (fixed to the paper, not the world)
+  float m = clamp((lum(PAPER) - lum(c)) / (lum(PAPER) - lum(GRAPHITE)), 0., 1.);
   float tooth = vnoise(px * .55) * .6 + vnoise(px * 1.7 + 5.) * .4;
   m *= mix(1., .4 + .6 * smoothstep(.15, .75, tooth + m * .45), uSkB.z);
-  vec3 paper = vec3(.935, .925, .895) * (.97 + .03 * vnoise(px / 160.));
-  vec3 graphite = vec3(.2, .2, .22);
-  vec3 c = mix(paper, graphite, clamp(m, 0., 1.) * .92);
-  // the sheet a touch darker at its edges
-  vec2 q = (gl_FragCoord.xy / uRes - .5) * vec2(uRes.x / uRes.y, 1.);
-  return c * mix(1., .93, smoothstep(.45, 1.1, length(q) * 1.15));
+  vec3 sheet = PAPER * (.97 + .03 * vnoise(px / 160.));
+  vec3 o = mix(sheet, GRAPHITE, m * .95);
+  vec2 q = (px / uRes - .5) * vec2(uRes.x / uRes.y, 1.);
+  return o * mix(1., .93, smoothstep(.45, 1.1, length(q) * 1.15));
 }
 void main() {
-  if (uSkA.x > .5) {
-    o = vec4(sketch(), 1.);
+  if (uSketch > .5) {
+    o = vec4(paper(texture(uScene, gl_FragCoord.xy / uRes).rgb), 1.);
     return;
   }
   vec2 uv = gl_FragCoord.xy / uRes;
@@ -1690,6 +1756,10 @@ export class Renderer {
     gl.uniform1f(this.loc(p, 'uOpen'), look.openness);
     gl.uniform1f(this.loc(p, 'uBlur'), look.blur);
     gl.uniform1f(this.loc(p, 'uFocus'), look.focus);
+    const sk = look.sketch;
+    gl.uniform1f(this.loc(p, 'uSketch'), sk ? 1 : 0);
+    gl.uniform4f(this.loc(p, 'uSkA'), sk ? 1 : 0, sk?.pencil ?? 1, sk?.hatch ?? 5, sk?.loose ?? 1);
+    gl.uniform4f(this.loc(p, 'uSkB'), sk?.lines ?? 1, sk?.boil ?? 0, sk?.tooth ?? 0.6, sk?.spare ?? 0.3);
   }
 
   draw(v: View, look: Look, cards: Draw[]) {
@@ -1845,9 +1915,7 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, scene.tex);
     gl.uniform1i(this.loc(this.post, 'uScene'), 0);
     gl.uniform1f(this.loc(this.post, 'uExposure'), look.atmos.exposure);
-    const sk = look.sketch;
-    gl.uniform4f(this.loc(this.post, 'uSkA'), sk ? 1 : 0, sk?.pencil ?? 1, sk?.hatch ?? 5, sk?.loose ?? 1);
-    gl.uniform4f(this.loc(this.post, 'uSkB'), sk?.lines ?? 1, sk?.boil ?? 0, sk?.tooth ?? 0.6, sk?.spare ?? 0.3);
+
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 }

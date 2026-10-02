@@ -42,7 +42,7 @@ try {
   throw e;
 }
 const gl = renderer.gl;
-const baker = new Baker(gl, renderer.compile);
+const baker = new Baker(gl, renderer.compile, flag('style') === 'sketch');
 const sound = new Sound();
 
 // ─── the cards: baked per structure and resolution, kept while there is room ────────

@@ -59,7 +59,7 @@ export const FLAGS = {
   freeze: { kind: 'bool', group: 'render', live: true, doc: 'stop the clock: wind, mist and grain hold still (to compare pictures exactly)' },
   time: { kind: 'number', min: 0, max: 600, step: 1, unit: 's', group: 'render', doc: 'start the clock here (wind, mist, the deer)' },
   // the sketch: the same wood, drawn in pencil (the rest tune it)
-  style: { kind: 'enum', values: ['sketch'], group: 'sketch', live: true, doc: 'how the wood is drawn: as film (the default) or a pencil sketch on paper' },
+  style: { kind: 'enum', values: ['sketch'], group: 'sketch', doc: 'how the wood is drawn: as film (the default) or in pencil on paper — each thing drawing itself in strokes, the fog taking them to paper' },
   pencil: { kind: 'number', min: 0.2, max: 3, step: 0.05, unit: '×', group: 'sketch', live: true, doc: 'sketch: how dark the pencil (1 the default)' },
   hatch: { kind: 'number', min: 2, max: 14, step: 0.5, unit: 'px', group: 'sketch', live: true, doc: 'sketch: the spacing of the hatching strokes (default 5)' },
   loose: { kind: 'number', min: 0, max: 3, step: 0.05, group: 'sketch', live: true, doc: 'sketch: how loose the hand: strokes off their line, wobbling (0 ruled, 1 the default)' },
