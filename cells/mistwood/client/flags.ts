@@ -15,7 +15,7 @@ import type { Species } from './tree';
 
 interface Base {
   doc: string;
-  group: 'wood' | 'stand' | 'sky' | 'deer' | 'render' | 'dev';
+  group: 'wood' | 'stand' | 'sky' | 'deer' | 'render' | 'sketch' | 'dev';
   /** read every frame: a change shows at once (otherwise the page reloads with it) */
   live?: boolean;
 }
@@ -58,6 +58,15 @@ export const FLAGS = {
   focus: { kind: 'number', min: 2, max: 40, step: 0.5, unit: 'm', group: 'render', live: true, doc: 'depth of field: the distance in focus (default 5 m); nearer blurs' },
   freeze: { kind: 'bool', group: 'render', live: true, doc: 'stop the clock: wind, mist and grain hold still (to compare pictures exactly)' },
   time: { kind: 'number', min: 0, max: 600, step: 1, unit: 's', group: 'render', doc: 'start the clock here (wind, mist, the deer)' },
+  // the sketch: the same wood, drawn in pencil (the rest tune it)
+  style: { kind: 'enum', values: ['sketch'], group: 'sketch', live: true, doc: 'how the wood is drawn: as film (the default) or a pencil sketch on paper' },
+  pencil: { kind: 'number', min: 0.2, max: 3, step: 0.05, unit: '×', group: 'sketch', live: true, doc: 'sketch: how dark the pencil (1 the default)' },
+  hatch: { kind: 'number', min: 2, max: 14, step: 0.5, unit: 'px', group: 'sketch', live: true, doc: 'sketch: the spacing of the hatching strokes (default 5)' },
+  loose: { kind: 'number', min: 0, max: 3, step: 0.05, group: 'sketch', live: true, doc: 'sketch: how loose the hand: strokes off their line, wobbling (0 ruled, 1 the default)' },
+  lines: { kind: 'number', min: 0, max: 3, step: 0.05, unit: '×', group: 'sketch', live: true, doc: 'sketch: outlines and single-line twigs (0 none, 1 the default)' },
+  boil: { kind: 'number', min: 0, max: 12, step: 0.5, unit: '/s', group: 'sketch', live: true, doc: 'sketch: redrawn this often a second, each time a little differently (0 still, the default)' },
+  tooth: { kind: 'number', min: 0, max: 1, step: 0.05, group: 'sketch', live: true, doc: "sketch: the paper's tooth breaking up the graphite (default 0.6)" },
+  spare: { kind: 'number', min: 0, max: 1, step: 0.05, group: 'sketch', live: true, doc: 'sketch: how much is left unsaid: the faintest marks dropped (default 0.3)' },
   // development
   tune: { kind: 'bool', group: 'dev', doc: 'this panel' },
   fly: { kind: 'bool', group: 'dev', live: true, doc: 'fly: twin sticks — left half of the screen pushes you (the way you look, up and down too), right half looks (the tilt stays); through anything; keys WASD, Q/E' },

@@ -1358,8 +1358,104 @@ out vec4 o;
 uniform sampler2D uScene;
 uniform vec2 uRes;
 uniform float uExposure;
+uniform float uF, uHz;
 ${NOISE}
+// ─── the sketch (?style=sketch): the same picture, drawn in pencil on paper ────────────────────
+// on, how dark the pencil, stroke spacing (px at 800 px tall), how loose the hand
+uniform vec4 uSkA;
+// outlines, boil (redrawn this often a second; 0 still), the paper's tooth, how much is left unsaid
+uniform vec4 uSkB;
+float lum(vec3 c) { return dot(c, vec3(.3, .55, .15)); }
+// the way into the wood at a pixel (as the world pass casts it)
+vec3 viewDir(vec2 px) {
+  float th = (px.x - .5 * uRes.x) / uF;
+  vec3 dc = normalize(vec3(sin(th), (px.y - uHz) / uF, cos(th)));
+  float cy = cos(uCam.w), sy = sin(uCam.w);
+  return vec3(dc.x * cy + dc.z * sy, dc.y, -dc.x * sy + dc.z * cy);
+}
+// how much pencil a pixel wants: how much darker it is than the fog seen that way. The fog is the
+// paper: what it has taken is left undrawn, and the far is a few faint marks
+float inkAt(vec2 px) {
+  vec3 c = texture(uScene, px / uRes).rgb;
+  return clamp(1. - lum(c) / max(lum(fogDir(viewDir(px))), .02), 0., 1.);
+}
+vec2 turn(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+// one layer of hatching along dir: strokes spaced sp apart, each its own — set a little off its
+// line, broken into lengths, its pressure rising and falling along it
+float hatch(vec2 a, vec2 dir, float sp, float seed, float loose) {
+  vec2 n = vec2(-dir.y, dir.x);
+  float u = dot(a, dir), w = dot(a, n) / sp;
+  float row = floor(w);
+  float r1 = h2(ivec2(int(row) + 7919, int(seed)));
+  float r2 = h2(ivec2(int(row) + 104729, int(seed)));
+  float along = u / sp;
+  // (where each stroke runs and where it stops: lengths of 4–14 spacings, gaps between)
+  float on = smoothstep(.38 + .1 * r2, .5 + .1 * r2, vnoise(vec2(along / (4. + 10. * r1), row * 1.7 + seed * 13.)));
+  float mid = .5 + (r1 - .5) * .5 * loose + (vnoise(vec2(along / 9., row + seed)) - .5) * .5 * loose;
+  float width = .16 + .1 * r2;
+  float line = 1. - smoothstep(width * .45, width, abs(fract(w) - mid));
+  return line * on * (.55 + .45 * vnoise(vec2(along / 3., row * 3.1 + seed)));
+}
+vec3 sketch() {
+  vec2 px = gl_FragCoord.xy;
+  float k = uRes.y / 800.;
+  float loose = uSkA.w;
+  // the boil: now and then (as often as asked) the hand draws it again, a little differently
+  float again = uSkB.y > 0. ? floor(uT * uSkB.y) : 0.;
+  vec2 jit = (vec2(h2(ivec2(int(again), 3)), h2(ivec2(int(again), 11))) - .5) * 40.;
+  // the strokes are held to the wood's directions (azimuth, elevation), not to the screen: turning
+  // and tilting carry them with the world
+  vec2 a = vec2(((px.x - .5 * uRes.x) / uF + uCam.w) * uF, px.y - uHz) / k + jit;
+  // the hand's wobble: everything drawn a little off where it is
+  vec2 wob = (vec2(vnoise(a / 45. + 3.), vnoise(a / 45. + 17.)) - .5) * 5. * loose * k;
+  vec2 p = px + wob;
+  float ink = inkAt(p);
+  float e = 2.5 * k;
+  float il = inkAt(p - vec2(e, 0.)), ir = inkAt(p + vec2(e, 0.)), idn = inkAt(p - vec2(0., e)), iu = inkAt(p + vec2(0., e));
+  float avg = (il + ir + idn + iu) * .25;
+  vec2 g = vec2(ir - il, iu - idn);
+  float gl = length(g);
+  // tone: the pencil light over the middle values (delicate), darker only where it is dark
+  float v = clamp(pow(ink, 1.5) * uSkA.y, 0., 1.);
+  // strokes run along the forms (along the edges: up a trunk, across a bank); where there is no
+  // edge, across the ground and the water, slanting in the air
+  vec2 def = px.y < uHz ? normalize(vec2(1., .06)) : normalize(vec2(.45, 1.));
+  vec2 ed = gl > 1e-4 ? vec2(-g.y, g.x) / gl : def;
+  if (dot(ed, def) < 0.) ed = -ed;
+  vec2 dir = normalize(mix(def, ed, smoothstep(.03, .2, gl)) + 1e-5);
+  float sp = uSkA.z;
+  float m = 0.;
+  m = max(m, hatch(a, dir, sp, 1., loose) * smoothstep(.06, .3, v));
+  m = max(m, hatch(a, turn(dir, .75), sp * 1.15, 2., loose) * smoothstep(.35, .62, v));
+  m = max(m, hatch(a, turn(dir, -.6), sp * .9, 3., loose) * smoothstep(.62, .88, v));
+  // (lighter tones, lighter strokes: the hand barely touching)
+  m *= .35 + .65 * v;
+  // a faint smudge of graphite under the dark
+  m = max(m, v * .18);
+  // outlines: where the tone breaks, a line, broken here and there, fainter into the fog
+  float g1 = length(vec2(inkAt(p + vec2(1., 0.) * k) - inkAt(p - vec2(1., 0.) * k), inkAt(p + vec2(0., 1.) * k) - inkAt(p - vec2(0., 1.) * k)));
+  float brk = smoothstep(.3, .5, vnoise(a / (14. + 10. * loose) + 41.));
+  float edge = smoothstep(.05, .3, g1) * brk * (.35 + .65 * max(ink, avg));
+  // thin dark things (a twig, a blade of grass): drawn as one line
+  float thin = smoothstep(.04, .2, ink - avg) * (.4 + .6 * ink);
+  m = max(m, max(edge, thin) * uSkB.x);
+  // what is left unsaid: the faintest marks dropped
+  m *= smoothstep(uSkB.w * .25, uSkB.w * .25 + .08, m);
+  // the paper's tooth: graphite catches on its high points (fixed to the paper, not the world)
+  float tooth = vnoise(px * .55) * .6 + vnoise(px * 1.7 + 5.) * .4;
+  m *= mix(1., smoothstep(.15, .75, tooth + m * .45), uSkB.z);
+  vec3 paper = vec3(.935, .925, .895) * (.97 + .03 * vnoise(px / 160.));
+  vec3 graphite = vec3(.2, .2, .22);
+  vec3 c = mix(paper, graphite, clamp(m, 0., 1.) * .92);
+  // the sheet a touch darker at its edges
+  vec2 q = (gl_FragCoord.xy / uRes - .5) * vec2(uRes.x / uRes.y, 1.);
+  return c * mix(1., .93, smoothstep(.45, 1.1, length(q) * 1.15));
+}
 void main() {
+  if (uSkA.x > .5) {
+    o = vec4(sketch(), 1.);
+    return;
+  }
   vec2 uv = gl_FragCoord.xy / uRes;
   vec3 c = texture(uScene, uv).rgb * uExposure;
   // a soft film curve, blacks lifted into the fog's green
@@ -1415,6 +1511,8 @@ export interface Look {
   /** depth of field: blur (px) of something 1 m off, focused at infinity; and the focus (m) */
   blur: number;
   focus: number;
+  /** drawn in pencil (null: as film): darkness, stroke spacing, looseness, outlines, boil, tooth, how much is left unsaid */
+  sketch: { pencil: number; hatch: number; loose: number; lines: number; boil: number; tooth: number; spare: number } | null;
 }
 
 export interface CardDraw {
@@ -1746,6 +1844,9 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, scene.tex);
     gl.uniform1i(this.loc(this.post, 'uScene'), 0);
     gl.uniform1f(this.loc(this.post, 'uExposure'), look.atmos.exposure);
+    const sk = look.sketch;
+    gl.uniform4f(this.loc(this.post, 'uSkA'), sk ? 1 : 0, sk?.pencil ?? 1, sk?.hatch ?? 5, sk?.loose ?? 1);
+    gl.uniform4f(this.loc(this.post, 'uSkB'), sk?.lines ?? 1, sk?.boil ?? 0, sk?.tooth ?? 0.6, sk?.spare ?? 0.3);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 }
