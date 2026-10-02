@@ -232,3 +232,11 @@ as one declared round → tune by climbing.**
   several turns nor gathers evidence. Next lever: a planning player (choose
   a turn intent — explore, gather evidence on X, fetch an item — then act on
   it), as instrument I3, before further design rounds.
+- **Instrument I3 (declared)**: harness h8 — turn plans. Before a decision the
+  runner searches the player's own next actions (to the end of the turn,
+  depth ≤ 3, beam 10) on throwaway states and offers the best multi-step
+  plans next to single actions ("plan: place B → move B [→ 3/6 visited]");
+  a chosen plan's later steps run without asking again, each re-validated. A
+  plan never continues past a step that touched hidden information, and a
+  plan is offered only if no single action reaches the same outcome. Heads v2
+  and v4 re-scored under I3 before the deduction round is retried.

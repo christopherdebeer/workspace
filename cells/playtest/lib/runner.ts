@@ -80,8 +80,10 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  h5: compact option labels (no internal ids, empty values or JSON brackets) ·
  *  h6: player personas — odd seeds trusting, even seeds suspicious (PERSONAS) ·
  *  h7: moves that touch hidden information say that they do, not what ("+1 card",
- *  "learn player-2 objective") — discovery and evidence-gathering were invisible. */
-export const HARNESS_VERSION = 'h7';
+ *  "learn player-2 objective") — discovery and evidence-gathering were invisible ·
+ *  h8: turn plans — multi-step options found by a bounded search over the player's own
+ *  next actions; a chosen plan's later steps run without asking again. */
+export const HARNESS_VERSION = 'h8';
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
@@ -189,6 +191,114 @@ function consequences(s: Record<string, any>, pid: string, cands: Action[], slot
         break;
       }
     }
+  }
+  return out;
+}
+
+/* ── turn plans (harness h8) ────────────────────────────────────────────
+ * A one-ply chooser can't hold a goal across actions: it shuttled between tiles for most
+ * of the game. Before a decision the runner searches the player's own next actions (up to
+ * the rest of the turn, depth ≤ PLAN_DEPTH, beam PLAN_BEAM) on throwaway states and offers
+ * the best multi-step plans as options — "move A → place B → move B [→ 3/6 visited]" —
+ * next to the single actions. A chosen plan's later steps run without asking again (each
+ * re-validated; if one no longer holds, the player decides afresh). A plan never continues
+ * past a step that touched hidden information: that step can only end it. */
+const PLAN_DEPTH = 3;
+const PLAN_BEAM = 10;
+const PLAN_MAX = 40;
+
+function scoreFacts(f: string[]): number {
+  let n = 0;
+  for (const x of f) {
+    if (x === 'YOU WIN') n += 1000;
+    else if (x.startsWith('→')) n += 10;
+    else if (x.startsWith('learn')) n += 3;
+    else if (/^\+\d+ card/.test(x)) n += Number(/^\+(\d+)/.exec(x)![1]);
+    else if (x.startsWith('score')) n += 5;
+    else if (/ wins$/.test(x)) n -= 1000;
+  }
+  return n;
+}
+
+function planOptions(s: Record<string, any>, pid: string, valid: Action[], slot: string, rng: () => number): Array<{ actions: Action[]; label: string }> {
+  if (valid.length > SIM_MAX) return [];
+  const prefix = `/pt/games/${slot}/`;
+  const snap = filesUnder(prefix);
+  const beforeProgress = progressOf(s, pid);
+  const beforeHidden = hiddenFingerprint(s, pid);
+  const beforeScore = Number(s.players[pid]?.score ?? 0);
+  const beforeHand = (s.players[pid]?.hand ?? []).length;
+  const beforeKnown = new Set(Object.keys(s.players[pid]?.knowledge?.revealed ?? {}));
+  // Cumulative facts of a state relative to the decision point (same rules as consequences()).
+  const factsOf = (after: Record<string, any>): { facts: string[]; open: boolean } => {
+    const hiddenMoved = hiddenFingerprint(after, pid) !== beforeHidden;
+    const facts: string[] = [];
+    if (!hiddenMoved) {
+      const ended = after.status !== 'in_progress';
+      const winner = after.shared?.winner ?? after.winner;
+      if (ended && winner === pid) facts.push('YOU WIN');
+      else if (ended && winner) facts.push(`${winner} wins`);
+      facts.push(...progressOf(after, pid).filter((l) => !beforeProgress.includes(l)).map((l) => `→ ${l}`));
+      const dScore = Number(after.players[pid]?.score ?? 0) - beforeScore;
+      if (dScore) facts.push(`score ${dScore > 0 ? '+' : ''}${dScore}`);
+    } else {
+      const dHand = (after.players[pid]?.hand ?? []).length - beforeHand;
+      if (dHand > 0) facts.push(`+${dHand} card${dHand > 1 ? 's' : ''}`);
+      const learned = Object.keys(after.players[pid]?.knowledge?.revealed ?? {}).filter((k) => !beforeKnown.has(k)).map((k) => k.replace(/ \(round \d+\)$/, ''));
+      if (learned.length) facts.push(`learn ${learned.join(', ')}`);
+    }
+    // Only keep planning from a state that is still this player's turn and hides nothing new.
+    return { facts, open: !hiddenMoved && after.status === 'in_progress' && after.currentPlayer === pid };
+  };
+  type Node = { actions: Action[]; state: Record<string, any>; facts: string[]; score: number; open: boolean };
+  const plans: Node[] = [];
+  let frontier: Node[] = [];
+  const firstScore = new Map<Action, number>();
+  // Outcomes one action already gets: a plan that only matches one of them is filler.
+  const rootOutcomes = new Set<string>();
+  for (const c of valid) {
+    if (NO_SIM.test(c.type)) continue;
+    const st = simulate(s, pid, c, prefix, snap, rng);
+    if (!st) continue;
+    const f = factsOf(st);
+    const sc = scoreFacts(f.facts);
+    firstScore.set(c, sc);
+    rootOutcomes.add(f.facts.join('; '));
+    if (f.open) frontier.push({ actions: [c], state: st, facts: f.facts, score: sc, open: true });
+  }
+  for (let depth = 2; depth <= PLAN_DEPTH && frontier.length; depth++) {
+    // Expand the most promising states, plus a few others so plans aren't all one opening.
+    frontier.sort((a, b) => b.score - a.score || rng() - 0.5);
+    const expand = frontier.slice(0, PLAN_BEAM);
+    const next: Node[] = [];
+    for (const n of expand) {
+      const nsnap = filesUnder(prefix);
+      for (const f of validMoves(n.state, pid, rng, 30)) {
+        const st = simulate(n.state, pid, f, prefix, nsnap, rng);
+        if (!st) continue;
+        const ff = factsOf(st);
+        const node: Node = { actions: [...n.actions, f], state: st, facts: ff.facts, score: scoreFacts(ff.facts), open: ff.open };
+        // A plan is worth offering only if it gets more than its first step alone does.
+        if (node.score > (firstScore.get(node.actions[0]) ?? 0) && node.score > n.score) plans.push(node);
+        if (ff.open) next.push(node);
+      }
+    }
+    frontier = next;
+  }
+  // Best first; one plan per distinct outcome, at most two per opening move.
+  // Best first, and for one outcome the shortest plan (fewest padding steps).
+  plans.sort((a, b) => b.score - a.score || a.actions.length - b.actions.length);
+  const seen = new Set<string>();
+  const perOpening = new Map<string, number>();
+  const out: Array<{ actions: Action[]; label: string }> = [];
+  for (const p of plans) {
+    const outcome = p.facts.join('; ');
+    const opening = JSON.stringify(p.actions[0]);
+    if (seen.has(outcome) || rootOutcomes.has(outcome) || (perOpening.get(opening) ?? 0) >= 2) continue;
+    seen.add(outcome);
+    perOpening.set(opening, (perOpening.get(opening) ?? 0) + 1);
+    out.push({ actions: p.actions, label: `plan: ${p.actions.map((a) => labelOf(a).slice(0, 48)).join(' → ')} [${outcome}]`.slice(0, 220) });
+    if (out.length >= PLAN_MAX) break;
   }
   return out;
 }
@@ -542,8 +652,10 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
     gameId = s.gameId;
     E(() => startGame(gameId));
     s = E(() => loadState(gameId)) as unknown as Record<string, any>;
+    let plan: { pid: string; actions: Action[] } | null = null;
     for (let step = 1; s.status === 'in_progress' && step <= maxSteps; step++) {
       if (opts.signal?.aborted) throw Object.assign(new Error('stopped'), { name: 'AbortError' });
+      // (plan: the remaining steps of a multi-step option the current player chose)
       // A player who must answer something off-turn (a trade offered to them) goes first.
       const responder = (s.turnOrder as string[]).find((p) => p !== s.currentPlayer && (E(() => getAvailableActions(s as never, p)) as unknown as { actions: Array<{ type: string; enabled: boolean }> }).actions.some((a) => a.enabled && OFF_TURN.test(a.type)));
       const pid = responder ?? (s.currentPlayer as string);
@@ -568,10 +680,26 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         }
         if (!ok && a.type !== 'pass' && cands.length) note(a.type, Object.keys(a.required ?? {}), 'no-valid-candidate');
       }
-      const facts = decide && valid.length > 1 ? consequences(s, pid, valid, slot, simRng) : new Map<Action, string>();
-      const picks = dedupeLabels(valid)
+      // A chosen plan's next step runs without asking again, if it is still valid.
+      let planned: Action | null = null;
+      if (plan && (responder || plan.pid !== pid)) {
+        if (!responder) plan = null;
+      } else if (plan && plan.actions.length) {
+        const want = JSON.stringify(plan.actions[0]);
+        planned = valid.find((v) => JSON.stringify(v) === want) ?? null;
+        if (planned) plan.actions.shift();
+        else plan = null;
+        if (plan && !plan.actions.length) plan = null;
+      }
+      const facts = !planned && decide && valid.length > 1 ? consequences(s, pid, valid, slot, simRng) : new Map<Action, string>();
+      let picks: Array<{ action: Action; label: string; rest?: Action[] }> = dedupeLabels(valid)
         .slice(0, 255)
         .map((p) => (facts.has(p.action) ? { ...p, label: `${p.label} [${facts.get(p.action)}]`.slice(0, 200) } : p));
+      if (!planned && !responder && decide && valid.length > 1) {
+        const plans = planOptions(s, pid, valid, slot, simRng);
+        picks = [...plans.map((p) => ({ action: p.actions[0], label: p.label, rest: p.actions.slice(1) })), ...picks].slice(0, 255);
+      }
+      if (planned) picks = [{ action: planned, label: `${labelOf(planned)} (planned)` }];
 
       let chosen: { action: Action; label: string };
       let rec: Pick<TurnRecord, 'confidence' | 'top' | 'ahead' | 'ms' | 'tokens' | 'fallback'> = { confidence: null, top: [], ahead: null, ms: 0, tokens: 0 };
@@ -586,7 +714,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         const persona = opts.persona ? ` ${PERSONAS[opts.persona] ?? `Play as a ${opts.persona} player.`}` : '';
         // Say the goal in the question itself: Jev reads the instruction literally, and a goal
         // buried in the state lost to options that merely sound active.
-        const goal = av.yourObjective ? ` Your secret objective: ${av.yourObjective}${Array.isArray(av.objectiveProgress) && av.objectiveProgress.length ? ` (so far: ${av.objectiveProgress.join('; ')})` : ''}. Options marked [→ …] or [then …] advance it.` : '';
+        const goal = av.yourObjective ? ` Your secret objective: ${av.yourObjective}${Array.isArray(av.objectiveProgress) && av.objectiveProgress.length ? ` (so far: ${av.objectiveProgress.join('; ')})` : ''}. Options marked [→ …] or [then …] advance it; a "plan:" option commits you to that sequence of moves this turn.` : '';
         const q: Questions = {
           move: { type: 'choice', instructions: responder ? `You are ${pid}, answering off-turn. Which reply gives you the best chance of winning this game?${goal}${persona}` : `You are ${pid}. Which move gives you the best chance of winning this game?${goal}${persona}`, criteria: Object.fromEntries(picks.map((p) => [p.label, null])) },
           ahead: { type: 'noul', instructions: `Is ${pid} currently ahead of every opponent?` },
@@ -612,6 +740,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         }
       }
 
+      if (!planned && (chosen as { rest?: Action[] }).rest?.length) plan = { pid, actions: [...(chosen as { rest?: Action[] }).rest!] };
       const at = { round: s.round, turn: s.turnNumber }; // before the action can end the turn
       E(() => executeAction(s as never, pid, chosen.action as never));
       recent.push(`${pid}: ${chosen.label}`);
@@ -623,7 +752,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         player: pid,
         offered: offered.length,
         valid: picks.length,
-        forced: picks.length === 1,
+        forced: picks.length === 1 && !planned,
         label: chosen.label,
         action: chosen.action,
         ...rec,
