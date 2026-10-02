@@ -1416,7 +1416,8 @@ vec3 sketch() {
   vec2 g = vec2(ir - il, iu - idn);
   float gl = length(g);
   // tone: the pencil light over the middle values (delicate), darker only where it is dark
-  float v = clamp(pow(ink, .85) * 1.1 * uSkA.y, 0., 1.);
+  // (rising fast from the paper: a tree only a little darker than the mist still gets its marks)
+  float v = 1. - exp(-3. * ink * uSkA.y);
   // strokes run along the forms (along the edges: up a trunk, across a bank); where there is no
   // edge, across the ground and the water, slanting in the air
   vec2 def = px.y < uHz ? normalize(vec2(1., .06)) : normalize(vec2(.45, 1.));
@@ -1437,7 +1438,7 @@ vec3 sketch() {
   float brk = smoothstep(.3, .5, vnoise(a / (14. + 10. * loose) + 41.));
   float edge = smoothstep(.1, .35, gl) * brk * (.35 + .65 * max(ink, avg));
   // thin dark things (a twig, a blade of grass): drawn as one line
-  float thin = smoothstep(.03, .14, ink - avg) * (.4 + .6 * ink);
+  float thin = smoothstep(.012, .07, ink - avg) * (.45 + .55 * sqrt(ink));
   m = max(m, max(edge, thin) * uSkB.x);
   // what is left unsaid: the faintest marks dropped
   m *= smoothstep(uSkB.w * .25, uSkB.w * .25 + .08, m);
