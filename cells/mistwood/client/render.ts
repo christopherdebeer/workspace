@@ -1014,11 +1014,12 @@ void main() {
     float fogD = fogAt(t, 0., uDensity);
     col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * exp(-tau));
   }
+  vec3 under = col;
   col = sCol + sT * col;
   if (uSketch > .5) {
     // drawn: how dark it is against the fog seen that way is how much pencil it gets (so what the
     // fog has taken is paper), laid down the way each thing would be drawn
-    float ink = clamp(1. - lum(col) / max(lum(fogDir(d)), .02), 0., 1.);
+    float ink = clamp(1. - lum(under) / max(lum(fogDir(d)), .02), 0., 1.);
     float v = 1. - exp(-3. * ink * uSkA.y);
     float m = 0.;
     if (stone) {
@@ -1041,6 +1042,13 @@ void main() {
         float fogF = 1. - (1. - fogAt(tHit, 0., uDensity)) * exp(-tau);
         m = max(m, edge * (1. - fogF) * .8 * uSkB.x);
       }
+    }
+    // the scrub beyond the near cards: light upright ticks, as many as it is thick (not a mass)
+    if (sT < .98 && tHit > 0.) {
+      vec2 a = vec2(atan(d.x, d.z) * uF, d.y / length(d.xz) * uF) * (800. / uRes.y);
+      float fogF = 1. - (1. - fogAt(tHit, .5, uDensity)) * exp(-tau);
+      float tick = hatch(a, normalize(vec2(.18, 1.)), uSkA.z * 1.4, 7., uSkA.w);
+      m = max(m * sT, tick * smoothstep(.05, .7, 1. - sT) * (1. - fogF) * .55);
     }
     // what is left unsaid: the faintest marks dropped
     m *= smoothstep(uSkB.w * .2, uSkB.w * .2 + .08, m);
@@ -1134,7 +1142,8 @@ void main() {
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
   if (uSketch > .5) {
     // (the card was baked in strokes: its coverage is the pencil; the fog takes it to paper)
-    float a = min(cov * uSkA.y, 1.) * (1. - fog) * uAlpha;
+    // (grass and scrub lighter than wood: many strokes over each other)
+    float a = min(cov * uSkA.y * (uKind > .5 ? .5 : 1.), 1.) * (1. - fog) * uAlpha;
     o = vec4(GRAPHITE * a, a);
     return;
   }
