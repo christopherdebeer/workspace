@@ -1141,10 +1141,12 @@ void main() {
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
   if (uSketch > .5) {
-    // (the card was baked in strokes: its coverage is the pencil; the fog takes it to paper)
-    // (grass and scrub lighter than wood: many strokes over each other)
-    float a = min(cov * uSkA.y * (uKind > .5 ? .5 : 1.), 1.) * (1. - fog) * uAlpha;
-    o = vec4(GRAPHITE * a, a);
+    // the card was baked in strokes: its body is paper (hiding what is behind it), its marks
+    // graphite, which the fog takes back to paper. (Grass and scrub lighter than wood: many strokes
+    // over each other)
+    float mk = min(leaf * uSkA.y * (uKind > .5 ? .5 : 1.), 1.) * (1. - fog);
+    float a = cov * uAlpha;
+    o = vec4(mix(PAPER, GRAPHITE, mk) * a, a);
     return;
   }
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
@@ -1333,9 +1335,10 @@ void main() {
       float press = .6 + .4 * vnoise(vec2(hRaw * 3., uPhase * 5.));
       mark = cov * press * (.7 + .3 * uSkB.x);
     }
-    float am = clamp(mark, 0., 1.) * (1. - fog) * uAlpha;
-    if (am < .003) discard;
-    o = vec4(GRAPHITE * am, am);
+    // its body paper (hiding what is behind), its marks graphite, which the fog takes to paper
+    float mk = clamp(mark / max(cov, .05), 0., 1.) * (1. - fog);
+    float am = cov * uAlpha;
+    o = vec4(mix(PAPER, GRAPHITE, mk) * am, am);
     return;
   }
   float dif = max(0., dot(N, uLight));
@@ -1499,9 +1502,9 @@ void main() {
     // its outline, and a light shading (none on the white rump)
     float edge = 1. - smoothstep(fw * .6, fw * 1.8, abs(d + fw * .6));
     float shade = hatch(gl_FragCoord.xy * (800. / uRes.y), normalize(vec2(.5, 1.)), uSkA.z, 9., uSkA.w) * .45 * (1. - white);
-    float am = clamp(max(edge * uSkB.x, shade * cov), 0., 1.) * (1. - fog) * uAlpha;
-    if (am < .003) discard;
-    o = vec4(GRAPHITE * am, am);
+    float mk = clamp(max(edge * uSkB.x, shade), 0., 1.) * (1. - fog);
+    float am = cov * uAlpha;
+    o = vec4(mix(PAPER, GRAPHITE, mk) * am, am);
     return;
   }
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;

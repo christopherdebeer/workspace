@@ -10,7 +10,7 @@
  * "over"), and tone is their coverage-weighted mean, so a card keeps its light
  * at every resolution it is baked at.
  *
- * Texture: R leaf (dry beech leaves), G tone (0 dark bark … 1 birch white /
+ * Texture: R leaf (dry beech leaves; in the sketch, how much is pencil), G tone (0 dark bark … 1 birch white /
  * straw lightness), B flex (how freely the wind moves it: twigs 1, trunk 0),
  * A coverage. Row 0 is the base (y up), so v = height.
  */
@@ -74,7 +74,8 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
   float wob = (vn(vP * .045 + 3.) - .5) * 1.6;
   float press = .55 + .45 * vn(vP * .03 + 11.);
   if (w >= 2.5) {
-    if (hRaw < 0. || hRaw > 1.) discard;
+    // (no marks on the round ends: the body is there, its paper, but the lines run on unbroken)
+    if (hRaw < 0. || hRaw > 1.) return 0.;
     float edge = 1. - smoothstep(.5, 1.4, abs(w * .5 - d - .7 + wob));
     // strokes across, a few px apart, kept where the bark is dark (none on birch), the shaded side
     // (the right: the light is from the upper left) more
@@ -105,11 +106,16 @@ void main() {
     if (hRaw < 0. || hRaw > 1.) discard;
     cov = w * clamp(1. - d, 0., 1.);
   }
+  // the sketch: the body is still all there (its coverage: it is paper, hiding what is behind), and R
+  // carries how much of it is pencil (premultiplied like the rest)
+  float mark = 0.;
   if (uSketch > .5) {
     vec2 dir = normalize(vB - vA + 1e-6);
     vec2 nn = vec2(-dir.y, dir.x);
     if (nn.x < 0.) nn = -nn;
-    cov = sketchCov(hRaw, length(vP - vA - (vB - vA) * h), w, dir, nn, vTL.x);
+    mark = sketchCov(hRaw, length(vP - vA - (vB - vA) * h), w, dir, nn, vTL.x);
+    // (a line is never wider than the body it is drawn on: a twig's line is its body)
+    if (w < 2.5) cov = max(cov, mark);
   }
   if (cov <= 0.) discard;
   // round wood, shaded as it is baked (a far card cannot be lit later): light from the upper left
@@ -122,7 +128,7 @@ void main() {
     vec3 N = vec3(nn * a, sqrt(max(0., 1. - a * a)));
     tone *= .62 + .3 * max(0., dot(N, normalize(vec3(-.55, .45, .6)))) + .12 * (.5 + .5 * N.y);
   }
-  o = vec4(vTL.y * cov, tone * cov, vFlex * cov, cov);
+  o = vec4((uSketch > .5 ? min(mark / max(cov, 1e-3), 1.) : vTL.y) * cov, tone * cov, vFlex * cov, cov);
 }`;
 
 export interface Card {
