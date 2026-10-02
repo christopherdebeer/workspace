@@ -211,6 +211,39 @@ float groundStrokes(vec2 xz, float t, vec3 d, float v, float len) {
   }
   return m;
 }
+// last year's leaves on the ground at xz, t metres off, the eye eyeH above: short marks lying every
+// which way, each fixed to its place on the ground (cells a few pixels across, a finer set and a
+// coarser, blended with distance), as many as dens asks; drawn foreshortened as they lie
+float litterLevel(vec2 xz, vec2 to, float c, float mpp, float t, float eyeH, float dens, float fam) {
+  vec2 g = xz / c;
+  ivec2 i0 = ivec2(floor(g));
+  float m = 0.;
+  for (int dx = 0; dx <= 1; dx++)
+    for (int dz = 0; dz <= 1; dz++) {
+      ivec2 i = i0 + ivec2(dx, dz) - ivec2(1, 1) + ivec2(step(.5, fract(g)));
+      float r0 = h2(i + ivec2(int(fam), 9001));
+      if (r0 > dens) continue;
+      vec2 at = (vec2(i) + vec2(h2(i + ivec2(int(fam), 9101)), h2(i + ivec2(int(fam), 9201)))) * c;
+      float an = h2(i + ivec2(int(fam), 9301)) * 6.283;
+      vec2 u = vec2(cos(an), sin(an));
+      float len = c * (.25 + .3 * h2(i + ivec2(int(fam), 9401)));
+      vec2 q = xz - at;
+      float al = clamp(dot(q, u), -len, len);
+      vec2 off = q - u * al;
+      // (in pixels as seen: across the way you look at full width, along it foreshortened)
+      vec2 px = vec2(dot(off, vec2(to.y, -to.x)), dot(off, to) * eyeH / max(t, .5)) / mpp;
+      m = max(m, (1. - smoothstep(.35, 1.1, length(px))) * (.6 + .4 * r0 / max(dens, .01)));
+    }
+  return m;
+}
+float litter(vec2 xz, float t, vec3 d, float eyeH, float dens) {
+  if (dens < .01) return 0.;
+  float mpp = t / uF * (800. / uRes.y);
+  float L = log2(max(mpp * 9. * max(t / 1.6, 1.), 1e-3));
+  float l0 = floor(L), fr = L - l0;
+  vec2 to = normalize(d.xz + 1e-6);
+  return mix(litterLevel(xz, to, exp2(l0), mpp, t, eyeH, dens, 1.), litterLevel(xz, to, exp2(l0 + 1.), mpp, t, eyeH, dens, 2.), fr);
+}
 // ─── the creek (world.ts creek): a winding line cut into the land, water down its middle ───────
 // its line's scale (1/m), how deep it is cut (m), its bed's half-width (m)
 uniform vec3 uCreek;
@@ -1057,17 +1090,50 @@ void main() {
     } else if (tHit > 0.) {
       vec3 hp = eye + d * tHit;
       bool wet = tWater > 0. || brook;
-      // water: long level strokes, few; the ground: short ones, as many as it is dark
-      // (the ground itself nearly blank: its tufts are the grass's own; water a few level strokes)
-      m = groundStrokes(hp.xz, tHit, d, wet ? v * .45 : v * .25, wet ? 4. : 1.) * (.3 + .45 * v);
-      if (!wet) {
-        // the path: its two edges drawn, running off into the distance
-        float mpp = tHit / uF * (800. / uRes.y);
+      // not the ground's tone translated, but what a draughtsman would put down for what is there —
+      // each kind of mark as likely as the place calls for it, and fewer the deeper in the fog
+      float fogF = 1. - (1. - fogAt(tHit, 0., uDensity)) * exp(-tau);
+      float clear = (1. - fogF) * (1. - fogF);
+      float mpp = tHit / uF * (800. / uRes.y);
+      if (wet) {
+        // water: a few long level strokes, and no more
+        m = groundStrokes(hp.xz, tHit, d, .35 * (.4 + .6 * v), 4.) * .5 * clear;
+      } else {
+        float open = smoothstep(.55, .75, vnoise(hp.xz / 110. + 211.1) + uOpen);
+        float hollow = max(wetAt(hp.y), ckH.z);
+        float shelter = (1. - open) * (1. - hollow);
+        // last year's leaves: short marks lying every which way, sparse, more under the trees
+        m = max(m, litter(hp.xz, tHit, d, eye.y - hp.y, (.06 + .3 * shelter + .15 * v) * clear) * .55);
+        // a slope turned from the light: a few strokes along its level lines
+        float e = .5;
+        vec2 gr = vec2(landH(hp.xz + vec2(e, 0.)) - landH(hp.xz - vec2(e, 0.)), landH(hp.xz + vec2(0., e)) - landH(hp.xz - vec2(0., e))) / (2. * e);
+        float slope = length(gr);
+        if (slope > .04) {
+          vec3 ln = normalize(vec3(-gr.x, 1., -gr.y));
+          vec3 ld = vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .15), cos(uSun.x) * cos(uSun.y));
+          float turned = smoothstep(.95, .6, dot(ln, normalize(ld)));
+          vec2 level = vec2(-gr.y, gr.x) / slope;
+          m = max(m, dashRows(hp.xz, level, max(mpp * uSkA.z * 2.5, .05), smoothstep(.04, .25, slope) * turned, 21., 2.) * .45 * clear);
+        }
+        // the path: its two edges, running off into the distance, and a few scratches along it
         float pd = pathDist(hp.xz) + (vnoise(hp.xz * 1.1) - .5) * .35 * uSkA.w;
         float hw = uPathK.z * (.8 + .4 * vnoise(hp.xz * .13));
         float edge = pencilLine((pd - hw * .8) / mpp, .5) * smoothstep(.3, .5, vnoise(hp.xz * .4 + 41.));
-        float fogF = 1. - (1. - fogAt(tHit, 0., uDensity)) * exp(-tau);
         m = max(m, edge * (1. - fogF) * .8 * uSkB.x);
+        if (pd < hw * .7) {
+          float ep = .3;
+          vec2 pg = vec2(pathDist(hp.xz + vec2(ep, 0.)) - pathDist(hp.xz - vec2(ep, 0.)), pathDist(hp.xz + vec2(0., ep)) - pathDist(hp.xz - vec2(0., ep)));
+          vec2 along = normalize(vec2(-pg.y, pg.x) + 1e-5);
+          m = max(m, dashRows(hp.xz, along, max(mpp * uSkA.z * 1.6, .03), .3, 23., 1.5) * .4 * clear);
+        }
+        // a pond's edge: the line where the water meets the ground
+        float above = landH(hp.xz) - uRelief.z;
+        if (above > 0. && above < .5) {
+          float ex = .4;
+          float gl = max(length(vec2(landH(hp.xz + vec2(ex, 0.)) - landH(hp.xz - vec2(ex, 0.)), landH(hp.xz + vec2(0., ex)) - landH(hp.xz - vec2(0., ex))) / (2. * ex)), .02);
+          float toEdge = above / gl / (mpp * max(tHit / 1.6, 1.));
+          m = max(m, pencilLine(toEdge - .6, .5) * smoothstep(.3, .5, vnoise(hp.xz * .5 + 7.)) * .7 * (1. - fogF));
+        }
       }
     }
     // the scrub beyond the near cards: light upright ticks, as many as it is thick (not a mass)
@@ -1183,11 +1249,12 @@ void main() {
     float fine = clamp(t.b / max(t.a, .002), 0., 1.);
     // (fog builds fast: ~.27 at 10 m, ~.57 at 20 m — twigs held to about 10 m and gone by 20, the
     // lesser branches next, the trunk last)
-    float survive = 1. - smoothstep(-.05, .2, fine - (1.75 - 1.6 * fog));
+    float survive = 1. - smoothstep(-.05, .2, fine - (1.75 - 1.9 * fog));
     float lf = clamp(t.r / max(t.a, .002), 0., 1.);
     // graphite builds as it does on paper: a little, then more slowly (never to black)
-    // (what survives the fog stays legible: paler, not gone)
-    float mk = min((1. - exp(-1.8 * lf)) / (1. - exp(-1.8)) * uSkA.y * (low ? .5 : 1.), 1.) * (1. - .8 * fog);
+    // (what survives the fog stays legible a while, paler, then goes as the film's does: the far
+    // trees nearly absent, as they are in the mist)
+    float mk = min((1. - exp(-1.8 * lf)) / (1. - exp(-1.8)) * uSkA.y * (low ? .5 : 1.), 1.) * pow(1. - fog, .75);
     float a = cov * uAlpha * survive;
     if (a < .003) discard;
     o = vec4(sketchInk(mk, fog * (low ? .6 : 1.), vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
