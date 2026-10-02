@@ -49,7 +49,15 @@ function build(): Built {
   const pageOf = new Map<string, string>();
   const readmeOf = new Map<string, string>();
   for (const e of EXPERIMENTS) {
-    const page = html(readFileSync(here(e.page), 'utf8').replace('{{app}}', appPath));
+    // (its address shown as the stable `/<id>?…`, not the hashed path it was served from: a reload
+    // then asks for the experiment as it is now, not this deploy's copy forever)
+    const stable = `<script>history.replaceState(null, '', '/${e.id}' + location.search + location.hash)</script>`;
+    const page = html(
+      readFileSync(here(e.page), 'utf8')
+        .replace('{{app}}', appPath)
+        .replace('{{readme}}', `/${e.id}/readme`)
+        .replace('<head>', `<head>\n${stable}`),
+    );
     const p = `/~/e/${e.id}/${hash(page)}/`;
     objects.set(p, { body: page, type: 'text/html; charset=utf-8' });
     pageOf.set(e.id, p);
@@ -95,7 +103,7 @@ const HEAD = (title: string) => `<!doctype html>
 function card(e: Experiment, b: Built): string {
   const page = b.pageOf.get(e.id)!;
   const readme = b.readmeOf.get(e.id);
-  const presets = e.presets.map((s) => `<a href="${page}${s.query ? `?${esc(s.query)}` : ''}">[${esc(s.label)}]</a>`).join(' ');
+  const presets = e.presets.map((s) => `<a href="${page}${s.query ? `?${esc(s.query)}` : ''}">[${esc(s.label)}]</a>`).join(' ') + (readme ? ` <a href="${readme}">[readme]</a>` : '');
   return `<article class="card">
   <a class="live" href="${page}" aria-label="${esc(e.title)}"><iframe data-src="${page}?${esc(e.preview)}" title="${esc(e.title)} (preview)" tabindex="-1" aria-hidden="true"></iframe><span class="idle px">${esc(e.title)}</span></a>
   <div class="meta">
@@ -182,7 +190,7 @@ function readmePage(e: Experiment, src: string, page: string): string {
 </style>
 </head>
 <body>
-<header class="bar"><a class="px" href="/">&larr; lab</a><a href="${page}">open ${esc(e.title.toLowerCase())} &rarr;</a></header>
+<header class="bar"><a class="px" href="/">&larr; lab</a><a href="/${e.id}">open ${esc(e.title.toLowerCase())} &rarr;</a></header>
 <main>
 ${toc ? `<nav class="toc">${toc}</nav>` : ''}
 ${doc.html}

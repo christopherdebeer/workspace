@@ -23,6 +23,20 @@ A seeded genome, then growth. The genome chooses:
 - **Roots.** A taproot and fibrous side roots, drawn below the ground (a light broken ellipse
   marks where the soil was), as a plate shows the whole specimen.
 
+**No two parts alike.** The plan (habit, nodes, branching, flowers) comes from one seeded stream;
+how each part departs from it comes from another, so the architecture holds and the life is laid
+over the top:
+
+- **Leaves.** Size, angle and droop vary leaf to leaf. The halves are unequal, the blade twists a
+  little about its midrib, and the tip curls to one side. Now and then a bite is taken out of the
+  edge.
+- **The lowest leaves** are often going: withered (shrunk, ragged, curled in, washed brown), or
+  already fallen, a stub left at the node.
+- **The stem** sways slowly along its length and zigzags slightly at each node. No internode is
+  the same length.
+- **Flowers.** Each petal has its own length, width and set. A flower nods or turns a little.
+  The lowest flowers in a spike are sometimes gone over, their petals dropped.
+
 Every part has a time of birth and of full size: the stem grows up node by node, each leaf
 unfolds from its node (its outline and veins drawn on as it opens), flowers last. The plant is
 given a Latin binomial: a genus made from the seed, an epithet from what it is like (*ovata*,

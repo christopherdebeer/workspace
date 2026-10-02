@@ -238,7 +238,7 @@ if (preview) {
   quality = 0.3;
   canvas.style.imageRendering = 'pixelated';
   const quiet = document.createElement('style');
-  quiet.textContent = '#hint, #title, #seed, #sound { display: none !important; }';
+  quiet.textContent = '#hint, #title, #seed, #sound, #readme { display: none !important; }';
   document.head.append(quiet);
 }
 let slow = 0;

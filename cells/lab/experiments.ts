@@ -31,7 +31,7 @@ export const EXPERIMENTS: Experiment[] = [
     blurb: 'A walk through a seeded wood in fog: trees grown branch by branch, deer, ponds, a creek, ruins. Touch the ground to walk, the sky to look.',
     page: 'static/mistwood.html',
     preview: 'preview&hour=11',
-    readme: 'client/mistwood/README.md',
+    readme: 'static/mistwood.md',
     presets: [
       { label: 'walk', query: '' },
       { label: 'pencil', query: 'style=sketch' },
@@ -47,7 +47,7 @@ export const EXPERIMENTS: Experiment[] = [
     blurb: 'One plant from a seed, grown before your eyes and drawn as an engraving you can turn in your hand and hand-coloured in watercolour: roots, stem, leaves hatched as they turn from the light, flowers opening.',
     page: 'static/plate.html',
     preview: 'preview&seed=412',
-    readme: 'client/plate/README.md',
+    readme: 'static/plate.md',
     presets: [
       { label: 'a specimen', query: '' },
       { label: 'pl. 412', query: 'seed=412' },

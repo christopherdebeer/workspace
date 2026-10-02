@@ -308,6 +308,7 @@ function palette(seed: number) {
     leafOf: (i: number) => jitter(green, i, 0.12),
     stem: [green[0] * 0.95 + 0.05, green[1] * 0.92, green[2] * 0.85] as RGB,
     root: [0.62, 0.52, 0.4] as RGB,
+    dead: [0.66, 0.5, 0.3] as RGB,
   };
 }
 let paint = palette(seed);
@@ -322,7 +323,9 @@ function upload(sp: Specimen, T: number) {
     bi++;
     const g = grownAt(b.t0, b.t1, T);
     if (g <= 0.01) continue;
-    const col = b.kind ? paint.petal : paint.leafOf(bi);
+    // (a withered leaf washed brown)
+    const fresh = b.kind ? paint.petal : paint.leafOf(bi);
+    const col: RGB = [0, 1, 2].map((c) => fresh[c] + (paint.dead[c] - fresh[c]) * b.wither) as RGB;
     const K = b.rows.length - 1;
     let along = 0;
     const vert = (p: V3, a: number, across: number, k: number) => {
@@ -433,8 +436,8 @@ let uploadedT = -1;
 const label = document.getElementById('label');
 const plateNo = document.getElementById('no');
 function caption() {
-  if (label) label.innerHTML = `<i>${sp.name}</i><span>${sp.note}</span>`;
-  if (plateNo) plateNo.textContent = `Pl. ${seed}`;
+  if (label) label.innerHTML = `<b>Pl. ${seed}</b><i>${sp.name}</i><span>${sp.note}</span>`;
+  if (plateNo) plateNo.textContent = '';
 }
 caption();
 function specimen(next: number) {
@@ -451,7 +454,7 @@ function specimen(next: number) {
 document.getElementById('another')?.addEventListener('click', () => specimen(Math.floor(Math.random() * 9000) + 1));
 const washBtn = document.getElementById('wash');
 const washLabel = () => {
-  if (washBtn) washBtn.textContent = wash ? 'ink only' : 'colour';
+  if (washBtn) washBtn.textContent = wash ? 'colour · on' : 'colour · off';
 };
 washLabel();
 washBtn?.addEventListener('click', () => {

@@ -19,6 +19,7 @@
     #hint.show { opacity: .75; }
     footer { position: fixed; left: 0; right: 0; bottom: max(16px, env(safe-area-inset-bottom)); display: flex; justify-content: space-between; padding: 0 16px; }
     footer button { font: italic 12px Georgia, serif; letter-spacing: .5px; color: rgba(238, 240, 228, .55); background: none; border: 0; padding: 10px 4px; cursor: pointer; text-shadow: 0 1px 10px rgba(20, 36, 28, .7); }
+    footer a { font: italic 12px Georgia, serif; letter-spacing: .5px; color: rgba(238, 240, 228, .45); text-decoration: none; padding: 10px 4px; text-shadow: 0 1px 10px rgba(20, 36, 28, .7); }
     footer button:focus-visible { outline: 1px solid rgba(238, 240, 228, .5); }
   </style>
 </head>
@@ -29,6 +30,7 @@
   <div id="hint">touch the ground to walk · the sky to look · pinch to look closer</div>
   <footer>
     <button id="seed" type="button" aria-label="This wood's name. Touch for another wood."></button>
+    <a id="readme" href="{{readme}}">about</a>
     <button id="sound" type="button">sound off</button>
   </footer>
   <script type="module" src="{{app}}"></script>

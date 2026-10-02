@@ -23,7 +23,8 @@ Everything under `/~/` is named by its content's hash:
 | `/~/r/<id>/<hash>/` | its README, rendered |
 
 So it is all immutable. A deploy makes new names, old pages keep working, and nothing ever
-needs invalidating. Once a file has been asked for once, opening an experiment costs no compute
+needs invalidating. Each page shows itself at its stable address (`/<id>?…`, rewritten as it
+loads), so a reload asks for the experiment as it is now rather than keeping one deploy's copy. Once a file has been asked for once, opening an experiment costs no compute
 at all: CloudFront and S3, never the Lambda.
 
 ## Layout
@@ -33,14 +34,17 @@ index.ts          the Lambda: the index, the redirects, the namespace's misses
 experiments.ts    the registry: id, title, group, blurb, page, preview query, README, presets
 md.ts             markdown to HTML (the READMEs)
 client/main.ts    the one bundle: picks the experiment its page names, imports it lazily
-client/<id>/      an experiment's source, and its README.md
-static/<id>.html  its page (`data-exp="<id>"`; its script `{{app}}`, filled with the hashed bundle)
+client/<id>/      an experiment's source
+client/kit/       what experiments share: seeded randomness (rng.ts), the pencil (pencil.ts)
+static/<id>.html  its page (`data-exp="<id>"`; its script `{{app}}`, filled with the hashed bundle;
+                  `{{readme}}`, a link to its README)
+static/<id>.md    its README (static/: the only files a deploy ships verbatim)
 devtools/         the headless harness and tests (not synced to the cell)
 ```
 
 ## A new experiment
 
-1. Put its source in `client/<id>/` (its entry, its README.md).
+1. Put its source in `client/<id>/`, and its README as `static/<id>.md`.
 2. Add a line to `client/main.ts`: `<id>: () => import('./<id>/main')`.
 3. Add its page as `static/<id>.html`, with `<html data-exp="<id>">` and `<script type="module" src="{{app}}">`.
 4. Add its entry to `experiments.ts`.

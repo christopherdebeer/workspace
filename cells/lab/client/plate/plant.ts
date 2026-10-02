@@ -46,6 +46,18 @@ export interface Blade {
   t1: number;
   /** 0 a leaf (hatched as it turns from the light), 1 a petal (left pale) */
   kind: 0 | 1;
+  /** how withered (0 fresh … 1 brown and curled): the wash browns with it */
+  wither: number;
+}
+
+/** How one blade differs from the plan (no two leaves alike): its halves unequal, a twist about the
+ * midrib, a sideways curl at the tip, bites out of the edge, withering. */
+interface Quirks {
+  asym?: number;
+  twist?: number;
+  curl?: number;
+  bites?: Array<{ u: number; side: number; depth: number; w: number }>;
+  wither?: number;
 }
 
 export interface Specimen {
@@ -158,6 +170,10 @@ function widthAt(g: Genome, u: number, shape: Shape = g.shape): number {
 export function grow(seed: number): Specimen {
   const r = seeded(hash(seed, 0x61a7));
   const g = genome(r);
+  // (the plan comes from r; how each part departs from it, from its own stream — so the plant's
+  // architecture stays what it was, and the life in it is laid over the top)
+  const v = seeded(hash(seed, 0x0a9));
+  const jit = (amt: number) => (v() - 0.5) * 2 * amt;
   const lines: Line[] = [];
   const blades: Blade[] = [];
   let strokes = 1;
@@ -179,23 +195,39 @@ export function grow(seed: number): Specimen {
   };
 
   /** A blade (leaf, leaflet, petal, sepal) from base along d, its side s: its surface, outline, midrib and veins. */
-  const blade = (base: V3, d: V3, L: number, W: number, t0: number, t1: number, kind: 0 | 1, shape: Shape, droop: number, veins: boolean) => {
-    let side = cross(UP, d);
-    if (len(side) < 1e-4) side = [1, 0, 0];
-    side = norm(side);
-    const n = norm(cross(d, side));
+  const blade = (base: V3, d: V3, L: number, W: number, t0: number, t1: number, kind: 0 | 1, shape: Shape, droop: number, veins: boolean, q: Quirks = {}) => {
+    let side0 = cross(UP, d);
+    if (len(side0) < 1e-4) side0 = [1, 0, 0];
+    side0 = norm(side0);
+    const n0 = norm(cross(d, side0));
+    const asym = q.asym ?? 0;
+    const twist = q.twist ?? 0;
+    const curl = q.curl ?? 0;
+    const wither = q.wither ?? 0;
+    const bite = (u: number, sideSign: number) => {
+      let f = 1;
+      for (const b of q.bites ?? []) if (b.side === sideSign) f *= 1 - b.depth * Math.exp(-(((u - b.u) / b.w) ** 2));
+      return f;
+    };
     const K = 14;
     const rows: Blade['rows'] = [];
     for (let k = 0; k <= K; k++) {
       const u = k / K;
-      // the midrib: out along d, bending down as it goes (and its tip curling a little)
-      const m = add(add(base, mul(d, u * L)), mul(UP, -droop * L * u * u));
-      const hw = widthAt(g, u, shape) * W * L * 0.5;
-      // a little folded along the midrib (a shallow V)
-      const fold = mul(n, hw * 0.22);
-      rows.push({ l: add(add(m, mul(side, -hw)), fold), m, r: add(add(m, mul(side, hw)), fold) });
+      // the blade turns about its midrib as it goes
+      const a = twist * u;
+      const side = add(mul(side0, Math.cos(a)), mul(n0, Math.sin(a)));
+      const n = add(mul(n0, Math.cos(a)), mul(side0, -Math.sin(a)));
+      // the midrib: out along d, bending down as it goes, and its tip curling to one side
+      const m = add(add(add(base, mul(d, u * L)), mul(UP, -droop * L * u * u)), mul(side, curl * L * u * u));
+      // (a withered leaf shrunk and ragged)
+      const hw = widthAt(g, u, shape) * W * L * 0.5 * (1 - wither * 0.3 * (0.6 + 0.4 * Math.sin(u * 23 + t0 * 50)));
+      const hl = hw * (1 + asym) * bite(u, -1);
+      const hr = hw * (1 - asym) * bite(u, 1);
+      // folded along the midrib (a shallow V; a withered one curled in)
+      const fold = 0.22 + wither * 0.6;
+      rows.push({ l: add(add(m, mul(side, -hl)), mul(n, hl * fold)), m, r: add(add(m, mul(side, hr)), mul(n, hr * fold)) });
     }
-    blades.push({ rows, base, t0, t1, kind });
+    blades.push({ rows, base, t0, t1, kind, wither });
     const ol = rows.map((x) => x.l);
     const orr = rows.map((x) => x.r);
     const ow = kind ? 0.0004 : 0.0005;
@@ -219,17 +251,36 @@ export function grow(seed: number): Specimen {
   };
 
   /** A leaf at a node: its petiole, then its blade (or, pinnate, a rachis with pairs of leaflets). */
-  const leaf = (node: V3, az: number, el: number, size: number, t0: number) => {
+  const leaf = (node: V3, az0: number, el0: number, size0: number, t0: number, low = 0) => {
     const t1 = t0 + 0.2;
+    // no two alike: its size, its angle round and up the stem, how far it droops
+    const az = az0 + jit(0.3);
+    const el = el0 + jit(0.18);
+    // the lowest leaves, often, are going: withered and curled, or already fallen (a stub left)
+    const wither = low > 0.6 && v() < 0.5 ? 0.5 + v() * 0.5 : 0;
+    const fallen = low > 0.75 && v() < 0.22;
+    const size = size0 * (0.82 + v() * 0.36) * (1 - wither * 0.2);
+    const droopK = 0.65 + v() * 0.7 + wither * 0.8;
+    const quirks = (): Quirks => ({
+      asym: jit(0.16),
+      twist: jit(0.7),
+      curl: jit(0.22),
+      bites: v() < 0.16 ? [{ u: 0.3 + v() * 0.55, side: v() < 0.5 ? -1 : 1, depth: 0.3 + v() * 0.45, w: 0.04 + v() * 0.07 }] : [],
+      wither,
+    });
     const L = g.leafL * size;
     let d = dirOf(az, el);
+    if (fallen) {
+      polyline([node, add(node, mul(d, Math.max(0.003, L * g.petiole * 0.3)))], 0.0014, 0.001, t0, t0 + 0.05, LineKind.Stem);
+      return;
+    }
     let base = node;
     const pl = L * g.petiole;
     if (pl > 0.004) {
       const tip = add(node, mul(d, pl));
       polyline([node, tip], 0.0016, 0.001, t0, t0 + 0.06, LineKind.Stem);
       base = tip;
-      d = norm(add(d, mul(UP, -0.25 * g.droop)));
+      d = norm(add(d, mul(UP, -0.25 * g.droop * droopK)));
     }
     if (g.shape === 'pinnate') {
       const pairs = 3 + Math.floor(L / 0.025);
@@ -243,18 +294,21 @@ export function grow(seed: number): Specimen {
         for (const sg of [-1, 1]) {
           if (k === pairs && sg > 0) continue;
           const ld = k === pairs ? d : norm(add(mul(side, sg), mul(d, 0.5)));
-          blade(at, ld, lL, 0.42, t0 + 0.04 * k, t1 + 0.04 * k, 0, 'lanceolate', g.droop * 0.4, true);
+          blade(at, norm(add(ld, [jit(0.15), jit(0.1), jit(0.15)])), lL * (0.85 + v() * 0.3), 0.42, t0 + 0.04 * k, t1 + 0.04 * k, 0, 'lanceolate', g.droop * 0.4 * droopK, true, quirks());
         }
         side = norm(cross(UP, d));
       }
       return;
     }
-    blade(base, d, L, g.leafW, t0, t1, 0, g.shape, g.droop, true);
+    blade(base, d, L, g.leafW, t0, t1, 0, g.shape, g.droop * droopK, true, quirks());
   };
 
   /** A flower at the end of p along d: sepals, petals opening from a bud, stamens. */
-  const flower = (p: V3, d: V3, size: number, t0: number) => {
+  const flower = (p: V3, d0: V3, size: number, t0: number, over = false) => {
     const t1 = t0 + 0.22;
+    // (it nods, or turns a little toward somewhere)
+    const d = norm(add(d0, [jit(0.35), -Math.abs(jit(0.25)), jit(0.35)]));
+    const spin = v() * 6.283;
     let side = cross(UP, d);
     if (len(side) < 1e-4) side = [1, 0, 0];
     side = norm(side);
@@ -262,10 +316,12 @@ export function grow(seed: number): Specimen {
     const P = g.petals;
     const pL = g.petalL * size;
     for (let k = 0; k < P; k++) {
-      const a = (k / P) * Math.PI * 2;
+      const a = spin + (k / P) * Math.PI * 2 + jit(0.14);
       const out = norm(add(mul(side, Math.cos(a)), mul(up2, Math.sin(a))));
-      // a petal: out from the centre and forward (a cup, open)
-      blade(p, norm(add(mul(out, 0.85), mul(d, 0.55))), pL, g.petalW, t0 + 0.04, t1, 1, 'ovate', -0.15, false);
+      // a petal: out from the centre and forward (a cup, open), each its own length, width and set;
+      // gone over, it has fallen
+      if (!over || v() < 0.15)
+        blade(p, norm(add(mul(out, 0.85 + jit(0.15)), mul(d, 0.55 + jit(0.2)))), pL * (0.85 + v() * 0.3), g.petalW * (0.85 + v() * 0.3), t0 + 0.04, t1, 1, 'ovate', -0.15 + jit(0.12), false, { asym: jit(0.12), twist: jit(0.5), curl: jit(0.2) });
       // a sepal behind it, small and narrow
       const outS = norm(add(mul(side, Math.cos(a + Math.PI / P)), mul(up2, Math.sin(a + Math.PI / P))));
       blade(p, norm(add(mul(outS, 0.8), mul(d, -0.2))), pL * 0.45, 0.35, t0, t0 + 0.12, 0, 'lanceolate', 0.1, false);
@@ -289,15 +345,21 @@ export function grow(seed: number): Specimen {
     const tEnd = t0 + 0.55 * (height / g.height);
     const nodePts: Array<{ p: V3; t: number; i: number }> = [];
     const per = 3;
+    // (a stem is never ruled: a slow sway along it, and a slight zigzag at each node)
+    const swayA = 0.04 + v() * 0.07;
+    const swayF = 0.6 + v() * 0.9;
+    const swayP = v() * 6.283;
     for (let i = 1; i <= nodes; i++) {
-      // internodes longer lower down, shorter towards the top
+      // internodes longer lower down, shorter towards the top, each its own
       const f = i / nodes;
-      const seg = (height / nodes) * (1.25 - 0.5 * f);
+      const seg = (height / nodes) * (1.25 - 0.5 * f) * (0.85 + v() * 0.3);
       for (let k = 1; k <= per; k++) {
-        d = norm(add(d, [(r() - 0.5) * 0.06 + g.curve * 0.04, 0.03, (r() - 0.5) * 0.06]));
+        const ph = (i + k / per) * swayF + swayP;
+        d = norm(add(d, [(r() - 0.5) * 0.06 + g.curve * 0.04 + Math.sin(ph) * swayA * 0.3, 0.03, (r() - 0.5) * 0.06 + Math.cos(ph * 0.7) * swayA * 0.3]));
         p = add(p, mul(d, seg / per));
         pts.push(p);
       }
+      d = norm(add(d, [jit(0.07), 0, jit(0.07)]));
       nodePts.push({ p, t: t0 + (tEnd - t0) * f, i });
     }
     polyline(pts, w, w * 0.45, t0, tEnd, LineKind.Stem);
@@ -307,7 +369,7 @@ export function grow(seed: number): Specimen {
       if (f < 0.92) {
         for (let q = 0; q < g.perNode; q++) {
           const az = firstPhase + nd.i * g.divergence + (q / g.perNode) * Math.PI * 2;
-          leaf(nd.p, az, 0.35 + 0.6 * f, (1 - 0.55 * f) * (depth ? 0.7 : 1), nd.t + 0.02);
+          leaf(nd.p, az, 0.35 + 0.6 * f, (1 - 0.55 * f) * (depth ? 0.7 : 1), nd.t + 0.02, depth ? 0 : 1 - f * 2.5);
         }
       }
       // a side shoot here and there (branching plants; none on side shoots themselves)
@@ -350,7 +412,8 @@ export function grow(seed: number): Specimen {
       const tip = add(q, mul(sd, 0.006));
       polyline([q, tip], 0.0008, 0.0006, t0 + (0.2 * k) / n, t0 + (0.2 * k) / n + 0.04, LineKind.Stem);
       // (the top ones never open: still buds when the plant is grown)
-      flower(tip, sd, size * (0.75 - 0.35 * (k / n)), t0 + (0.25 * k) / n + (k > n * 0.7 ? 0.5 : 0));
+      // (the lowest, the oldest, sometimes gone over)
+      flower(tip, sd, size * (0.75 - 0.35 * (k / n)), t0 + (0.25 * k) / n + (k > n * 0.7 ? 0.5 : 0), k <= n * 0.3 && v() < 0.45);
     }
     polyline(pts, w, w * 0.4, t0, t0 + 0.2, LineKind.Stem);
   };
@@ -361,7 +424,7 @@ export function grow(seed: number): Specimen {
     // a rosette of leaves at the ground, and a flowering stalk from its middle
     for (let i = 0; i < g.nodes; i++) {
       const az = phase + i * 2.39996;
-      leaf([0, 0.004, 0], az, 0.12 + 0.25 * (i / g.nodes), 1.25 - 0.35 * (i / g.nodes), 0.03 + 0.25 * (i / g.nodes));
+      leaf([0, 0.004, 0], az, 0.12 + 0.25 * (i / g.nodes), 1.25 - 0.35 * (i / g.nodes), 0.03 + 0.25 * (i / g.nodes), 1 - (i / g.nodes) * 3);
     }
     stem([0, 0, 0], norm([g.curve, 1, 0]), g.height * 0.8, g.stemW * 0.7, 0.25, 0, 3, phase);
   } else {
