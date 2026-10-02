@@ -1669,7 +1669,11 @@ export class Renderer {
   private liveVao: WebGLVertexArrayObject;
   private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; depth: WebGLRenderbuffer; w: number; h: number } | null = null;
   private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
-  constructor(readonly canvas: HTMLCanvasElement) {
+  constructor(
+    readonly canvas: HTMLCanvasElement,
+    /** drawn in pencil (?style=sketch): fixed when the shaders are made, so the other way costs nothing */
+    readonly sketch = false,
+  ) {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is needed to walk here');
     this.gl = gl;
@@ -1693,7 +1697,8 @@ export class Renderer {
     };
     const p = gl.createProgram()!;
     gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
-    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+    // (the sketch is a constant in every shader, not a uniform: the compiler drops what is not drawn)
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs.replace('uniform float uSketch;', `const float uSketch = ${this.sketch ? '1.' : '0.'};`)));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     return p;
@@ -1757,7 +1762,6 @@ export class Renderer {
     gl.uniform1f(this.loc(p, 'uBlur'), look.blur);
     gl.uniform1f(this.loc(p, 'uFocus'), look.focus);
     const sk = look.sketch;
-    gl.uniform1f(this.loc(p, 'uSketch'), sk ? 1 : 0);
     gl.uniform4f(this.loc(p, 'uSkA'), sk ? 1 : 0, sk?.pencil ?? 1, sk?.hatch ?? 5, sk?.loose ?? 1);
     gl.uniform4f(this.loc(p, 'uSkB'), sk?.lines ?? 1, sk?.boil ?? 0, sk?.tooth ?? 0.6, sk?.spare ?? 0.3);
   }

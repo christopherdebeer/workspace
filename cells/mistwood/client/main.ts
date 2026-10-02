@@ -35,14 +35,14 @@ const soundBtn = document.getElementById('sound') as HTMLButtonElement;
 
 let renderer: Renderer;
 try {
-  renderer = new Renderer(canvas);
+  renderer = new Renderer(canvas, flag('style') === 'sketch');
 } catch (e) {
   hint.textContent = (e as Error).message;
   hint.classList.add('show');
   throw e;
 }
 const gl = renderer.gl;
-const baker = new Baker(gl, renderer.compile, flag('style') === 'sketch');
+const baker = new Baker(gl, renderer.compile, renderer.sketch);
 const sound = new Sound();
 
 // ─── the cards: baked per structure and resolution, kept while there is room ────────

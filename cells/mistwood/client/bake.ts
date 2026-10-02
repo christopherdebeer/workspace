@@ -147,14 +147,15 @@ export class Baker {
 
   constructor(
     private gl: WebGL2RenderingContext,
+    /** (the renderer's: it fixes the sketch, on or off, in the shader) */
     compile: (vs: string, fs: string) => WebGLProgram,
     /** bake in pencil strokes (the sketch) */
-    private sketch = false,
+    readonly sketch = false,
   ) {
     this.prog = compile(VS, FS);
     this.vao = gl.createVertexArray()!;
     this.fbo = gl.createFramebuffer()!;
-    for (const n of ['uOrigin', 'uScale', 'uSize', 'uRight', 'uSketch']) this.loc[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uOrigin', 'uScale', 'uSize', 'uRight']) this.loc[n] = gl.getUniformLocation(this.prog, n);
   }
 
   /** The structure's segments on the GPU (shared with the live renderer). */
@@ -218,7 +219,6 @@ export class Baker {
     gl.uniform1f(this.loc.uScale, scale);
     gl.uniform2f(this.loc.uSize, W, H);
     gl.uniform2f(this.loc.uRight, right[0], right[1]);
-    gl.uniform1f(this.loc.uSketch, this.sketch ? 1 : 0);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer(s));
     const attr = (name: string, size: number, offset: number) => {
