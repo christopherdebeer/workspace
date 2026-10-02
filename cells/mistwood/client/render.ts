@@ -767,8 +767,10 @@ void main() {
       float land = landH(q.xz);
       vec4 ck = q.y - land < 1.6 ? creek(q.xz, true) : vec4(0., 1e3, 0., 1e3);
       float gh = land - ck.x;
-      // (the creek's water is a surface too)
-      float gap = q.y - max(gh, land - ck.y);
+      // (the creek's water is a surface too, and a pond's: met in the same march as the ground, so
+      // where the ground lies a hair under the water the two cannot disagree in steps)
+      float pond = land < uRelief.z ? uRelief.z : -1e3;
+      float gap = q.y - max(max(gh, land - ck.y), pond);
       if (gap < .004 + .002 * t) { tHit = t; break; }
       float step = max(gap / (L - d.y), .02 + .006 * t);
       step = min(step, 6. + .1 * t);
@@ -796,12 +798,11 @@ void main() {
     if (tHit < 0. && !gone && d.y < 0.) tHit = t;
   }
   // still water in the deepest hollows: a level surface
+  // (where the land lies low: the creek's cut makes no pond)
   float tWater = -1.;
-  if (d.y < 0. && eye.y > uRelief.z) {
-    float tw = (uRelief.z - eye.y) / d.y;
-    vec3 pw = eye + d * tw;
-    // (where the land lies low: the creek's cut makes no pond)
-    if ((tHit < 0. || tw < tHit) && tw < 95. && landH(pw.xz) < uRelief.z) tWater = tw;
+  if (tHit > 0.) {
+    vec3 ph = eye + d * tHit;
+    if (landH(ph.xz) < uRelief.z && groundH(ph.xz) < uRelief.z) tWater = tHit;
   }
   // what the march met: the creek's water, or its bed and banks
   vec4 ckH = vec4(0., 1e3, 0., 1e3);
