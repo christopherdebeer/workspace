@@ -85,7 +85,9 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
     float ring = (1. - smoothstep(.12, .26, abs(fract(row) - .5))) * step(r, dark) * smoothstep(.95, .65, abs(side));
     return max(edge * press, ring * .6);
   }
-  // a twig: one line (never finer than the pencil's point), faint as it is thin
+  // a twig: one line (never finer than the pencil's point), faint as it is thin; of the finest, only
+  // some drawn (a tussock's hundreds of blades are a few strokes, not a smudge)
+  if (w < 1. && hh(floor(vA * 3.) + floor(vB * 3.)) > .25 + .5 * w) discard;
   return (1. - smoothstep(max(w * .5, .4), max(w * .5, .4) + .9, abs(d + wob * .4))) * clamp(w * 1.6, .18, 1.) * press;
 }
 void main() {
