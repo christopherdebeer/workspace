@@ -54,9 +54,11 @@ in vec4 vUV;
 in vec3 vCol;
 out vec4 o;
 uniform vec3 uLight, uEye;
-// 0 engraved on opaque paper; 1 engraved, its paper clear (a wash beneath shows through); 2 the wash
-// itself: the pigment, as dense as the blade is shaded
+// 0 engraved on paper; 1 engraved on the finished wash (still opaque: it hides what is behind it,
+// carrying its own colour); 2 the wash itself: the pigment, as dense as the blade is shaded
 uniform float uMode;
+uniform sampler2D uComp;
+uniform vec2 uScreen;
 ${COMMON}
 // one family of hatching in the blade's own space: lines q/sp apart, broken here and there
 float hatchLines(float q, float sp, float seed) {
@@ -90,8 +92,8 @@ void main() {
   float px = sp / max(fwidth(a), 1e-6);
   m = mix(dark * .45, m * (.55 + .45 * dark), smoothstep(1.6, 3., px));
   float mk = clamp(m * .85, 0., 1.) * tooth();
-  // (with a wash beneath: only the graphite, the paper clear; it still hides the lines behind it)
-  o = uMode > .5 ? vec4(GRAPHITE * mk, mk) : vec4(mix(PAPER, GRAPHITE, mk), 1.);
+  vec3 under = uMode > .5 ? texture(uComp, gl_FragCoord.xy / uScreen).rgb : PAPER;
+  o = vec4(mix(under, GRAPHITE, mk), 1.);
 }`;
 
 const LINE_VS = `#version 300 es
@@ -102,6 +104,7 @@ in vec3 aS; // its stroke, how far along it (m), its kind
 uniform mat4 uVP;
 uniform vec2 uRes;
 uniform float uFocal;
+uniform vec3 uEye;
 out vec2 vP;
 flat out vec2 vA2;
 flat out vec2 vB2;
@@ -109,7 +112,11 @@ flat out vec2 vWpx;
 flat out vec3 vS;
 flat out float vLen;
 void main() {
-  vec4 ca = uVP * vec4(aA, 1.), cb = uVP * vec4(aB, 1.);
+  // (a millimetre and a half toward the eye: a leaf's own outline and veins lie on it, not under
+  // it — and what is behind a leaf stays behind it)
+  vec3 A = aA + normalize(uEye - aA) * .0015;
+  vec3 B = aB + normalize(uEye - aB) * .0015;
+  vec4 ca = uVP * vec4(A, 1.), cb = uVP * vec4(B, 1.);
   if (ca.w < .01 || cb.w < .01) { gl_Position = vec4(2., 2., 2., 1.); return; }
   vec2 sa = (ca.xy / ca.w * .5 + .5) * uRes, sb = (cb.xy / cb.w * .5 + .5) * uRes;
   float pa = aW.x * uFocal / ca.w, pb = aW.y * uFocal / cb.w;
@@ -121,8 +128,7 @@ void main() {
   int c = gl_VertexID;
   bool first = c == 0 || c == 2;
   vec2 p = (first ? sa - dir * e : sb + dir * e) + n * (c < 2 ? -e : e);
-  // (a hair nearer than it is: a leaf's own outline and veins lie on it, not under it)
-  float z = (first ? ca.z / ca.w : cb.z / cb.w) - .0015;
+  float z = first ? ca.z / ca.w : cb.z / cb.w;
   gl_Position = vec4(p / uRes * 2. - 1., z, 1.);
   vP = p;
   vA2 = sa;
@@ -144,6 +150,8 @@ out vec4 o;
 // as the blades: 0 opaque paper bodies, 1 clear, 2 the wash (stems and roots only)
 uniform float uMode;
 uniform vec3 uStem, uRoot;
+uniform sampler2D uComp;
+uniform vec2 uScreen;
 ${COMMON}
 ${PENCIL}
 void main() {
@@ -182,7 +190,8 @@ void main() {
     float lane = side * w * .5 / 2.2;
     float lanes = (1. - smoothstep(.12, .3, abs(fract(lane) - .5))) * smoothstep(.4, .6, pN(s * 3., floor(lane) + id)) * smoothstep(.1, .6, side) * smoothstep(.97, .8, abs(side));
     float mk = max(edge * .85, lanes * .4) * tooth();
-    o = uMode > .5 ? vec4(GRAPHITE * mk, mk) : vec4(mix(PAPER, GRAPHITE, mk) * body, body);
+    vec3 under = uMode > .5 ? texture(uComp, gl_FragCoord.xy / uScreen).rgb : PAPER;
+    o = vec4(mix(under, GRAPHITE, mk) * body, body);
     return;
   }
   // everything finer: one line, as heavy as it is thick (a hairline a tenth of a pixel wide is a
@@ -216,23 +225,48 @@ vec4 around(vec2 uv, float r) {
   }
   return s / 8.;
 }
+float fbm2(vec2 p) { return tn(p) * .5 + tn(p * 2.03 + 5.) * .3 + tn(p * 4.1 + 11.) * .2; }
 void main() {
   vec2 px = gl_FragCoord.xy;
   vec2 uv = px / uRes;
-  vec2 q = px / min(uRes.x, uRes.y);
-  vec2 off = (vec2(tn(q * 4. + uSeed), tn(q * 4. + 9. + uSeed)) - .5) * 9.;
+  // (sizes in the page's own pixels, the same on any screen)
+  float S = uRes.y / 800.;
+  vec2 q = px / (S * 90.);
+  // off the drawing (the colourist's hand), and its edge wandering as wet paint does
+  vec2 off = (vec2(fbm2(q * .6 + uSeed), fbm2(q * .6 + 17. + uSeed)) - .5) * 14. * S
+    + (vec2(tn(px / (S * 9.) + 3.), tn(px / (S * 9.) + 31.)) - .5) * 5. * S;
   vec2 at = uv + off / uRes;
-  vec4 c = (texture(uWash, at) * 2. + around(at, 2.5)) / 3.;
-  vec4 wide = around(at, 8.);
-  if (c.a < .003) { o = vec4(PAPER, 1.); return; }
-  vec3 pig = c.rgb / c.a;
-  // (dried rims: the pigment carried to the edge of the wet shape)
-  float rim = clamp((c.a - wide.a) * 2.2, 0., 1.);
-  float wet = .72 + .5 * tn(q * 7. + 3. + uSeed);
-  float grain = .82 + .36 * tn(px * .65 + 11.);
-  float dens = clamp(c.a * wet * grain * (1. + 1.3 * rim), 0., 1.);
-  o = vec4(PAPER * mix(vec3(1.), pig, dens * .85), 1.);
+  vec4 sharp = texture(uWash, at);
+  vec4 soft = around(at, 3. * S);
+  vec4 bleed = around(at, 9. * S);
+  // (the wet edge feathers out a little beyond the drawn shape)
+  float a = max(max(sharp.a, soft.a * .95), bleed.a * .5);
+  if (a < .004) { o = vec4(PAPER, 1.); return; }
+  vec3 pig = (sharp.rgb + soft.rgb + bleed.rgb * .5) / max(sharp.a + soft.a + bleed.a * .5, 1e-3);
+  // pigments mixing in the wet: the hue wanders within a shape
+  vec3 shift = vec3(fbm2(q * 1.3 + 2.), fbm2(q * 1.3 + 8.), fbm2(q * 1.3 + 14.)) - .5;
+  pig = clamp(pig + shift * vec3(.18, .12, .2), 0., 1.);
+  // wetter here, drier there; a bloom (a backrun): a pale middle, a frilled darker edge
+  float wet = .55 + .7 * fbm2(q * 1.7 + uSeed * .3);
+  float bl = fbm2(q * 2.6 + 40. + uSeed);
+  float bloom = smoothstep(.56, .6, bl) * (1. - smoothstep(.6, .66, bl));
+  float inside = smoothstep(.6, .7, bl);
+  // the dried rim: a thin darker line where the wet edge stopped
+  float rim = clamp((sharp.a - soft.a) * 2.5, 0., 1.) + clamp((soft.a - bleed.a) * 1.2, 0., 1.) * .4;
+  // the brush running dry: the paper showing through here and there; and granulation
+  float dry = smoothstep(.25, .5, tn(px / (S * 4.) + 9.) * .5 + fbm2(q * 3. + 60.) * .5);
+  float grain = .8 + .4 * tn(px * .7 + 11.);
+  float dens = a * wet * (1. - .45 * inside) * (1. + .6 * bloom) * (1. + 1.4 * rim) * grain * mix(.55, 1., dry);
+  dens = clamp(dens * .55, 0., .9);
+  o = vec4(PAPER * mix(vec3(1.), pig, dens), 1.);
 }`;
+// (the finished wash, copied to the page)
+const COPY_FS = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D uComp;
+uniform vec2 uRes;
+void main() { o = texture(uComp, gl_FragCoord.xy / uRes); }`;
 function program(vs: string, fs: string): WebGLProgram {
   const sh = (type: number, src: string) => {
     const s = gl.createShader(type)!;
@@ -251,6 +285,7 @@ function program(vs: string, fs: string): WebGLProgram {
 const bladeProg = program(BLADE_VS, BLADE_FS);
 const lineProg = program(LINE_VS, LINE_FS);
 const washProg = program(QUAD_VS, WASH_FS);
+const copyProg = program(QUAD_VS, COPY_FS);
 const quadVao = gl.createVertexArray()!;
 const u = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n);
 
@@ -496,6 +531,23 @@ function washTarget(W: number, H: number) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
+// the finished wash, full size: copied to the page, and read by the engraving's opaque parts
+const compTex = gl.createTexture()!;
+const compFbo = gl.createFramebuffer()!;
+let compW = 0;
+let compH = 0;
+function compTarget(W: number, H: number) {
+  if (W === compW && H === compH) return;
+  compW = W;
+  compH = H;
+  gl.bindTexture(gl.TEXTURE_2D, compTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, compFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, compTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
 function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2) * (preview ? 0.6 : 1);
   canvas.width = Math.round(innerWidth * dpr);
@@ -558,6 +610,8 @@ function frame(now: number) {
     gl.uniform3fv(u(bladeProg, 'uLight'), LIGHT);
     gl.uniform3fv(u(bladeProg, 'uEye'), eye);
     gl.uniform1f(u(bladeProg, 'uMode'), mode);
+    gl.uniform1i(u(bladeProg, 'uComp'), 1);
+    gl.uniform2f(u(bladeProg, 'uScreen'), W, H);
     gl.depthMask(true);
     gl.bindVertexArray(bladeVao);
     gl.drawArrays(gl.TRIANGLES, 0, bladeCount);
@@ -567,6 +621,9 @@ function frame(now: number) {
     gl.uniform2f(u(lineProg, 'uRes'), w, h);
     gl.uniform1f(u(lineProg, 'uFocal'), (h / 2) / Math.tan(fov / 2));
     gl.uniform1f(u(lineProg, 'uMode'), mode);
+    gl.uniform3fv(u(lineProg, 'uEye'), eye);
+    gl.uniform1i(u(lineProg, 'uComp'), 1);
+    gl.uniform2f(u(lineProg, 'uScreen'), W, H);
     gl.uniform3fv(u(lineProg, 'uStem'), paint.stem);
     gl.uniform3fv(u(lineProg, 'uRoot'), paint.root);
     gl.depthMask(false);
@@ -582,10 +639,14 @@ function frame(now: number) {
     gl.clearColor(0, 0, 0, 0);
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    // (the strongest pass of the brush, not the sum: pieces of a stem overlap at their ends)
+    gl.blendEquation(gl.MAX);
     draw(2, washW, washH);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.blendEquation(gl.FUNC_ADD);
+    // 2. laid on the paper as a wash — into its own buffer, then onto the page
+    compTarget(W, H);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, compFbo);
     gl.viewport(0, 0, W, H);
-    // 2. laid on the paper as a wash
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.BLEND);
     gl.useProgram(washProg);
@@ -596,13 +657,23 @@ function frame(now: number) {
     gl.uniform1f(u(washProg, 'uSeed'), (seed % 97) * 1.37);
     gl.bindVertexArray(quadVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.useProgram(copyProg);
+    gl.bindTexture(gl.TEXTURE_2D, compTex);
+    gl.uniform1i(u(copyProg, 'uComp'), 0);
+    gl.uniform2f(u(copyProg, 'uRes'), W, H);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
+    // (the engraving's opaque parts read the finished wash from unit 1)
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, compTex);
+    gl.activeTexture(gl.TEXTURE0);
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.depthMask(true);
     gl.clear(gl.DEPTH_BUFFER_BIT);
   }
-  // 3. the engraving (over the wash: its paper clear; `?washonly` leaves it off, to see the wash)
+  // 3. the engraving (each leaf and stem opaque, on the finished wash; `?washonly` leaves it off)
   if (!params.has('washonly')) draw(wash ? 1 : 0, W, H);
   (window as unknown as { __plate: unknown }).__plate = { seed, T: Math.round(T * 100) / 100, name: sp.name, blades: bladeCount / 12, lines: lineCount };
   requestAnimationFrame(frame);
