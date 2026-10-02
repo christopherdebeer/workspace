@@ -487,6 +487,8 @@ export interface TurnRecord {
   ms: number;
   tokens: number;
   scores: Record<string, number>;
+  /** options carrying a visible consequence ([→ …], [then …], plans, [+…], [learn …]) */
+  marked?: number;
 }
 
 export interface Session {
@@ -753,6 +755,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         offered: offered.length,
         valid: picks.length,
         forced: picks.length === 1 && !planned,
+        marked: picks.filter((p) => /\[(→|then|\+\d|learn|YOU WIN)|^plan:/.test(p.label)).length,
         label: chosen.label,
         action: chosen.action,
         ...rec,
