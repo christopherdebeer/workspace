@@ -97,7 +97,9 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
   // a twig: one line (never finer than the pencil's point), faint as it is thin; of the finest, only
   // some drawn (a tussock's hundreds of blades are a few strokes, not a smudge)
   if (uSparse > .5 && w < 1. && hh(floor(vA * 3.) + floor(vB * 3.)) > .25 + .5 * w) discard;
-  return (1. - smoothstep(max(w * .5, .4), max(w * .5, .4) + .9, abs(d + wob * .4))) * clamp(w * 1.6, .18, 1.) * press;
+  // its weight is its optical mass: a tenth of a pixel of twig a tenth as dark as a pixel of
+  // branch, no floor (overlapping twigs build up into a darker knot, as graphite does)
+  return (1. - smoothstep(max(w * .5, .3), max(w * .5, .3) + .8, abs(d + wob * .4))) * pow(clamp(w, 0., 1.), .9) * press;
 }
 void main() {
   vec2 pa = vP - vA, ba = vB - vA;

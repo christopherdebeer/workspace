@@ -1170,14 +1170,19 @@ void main() {
     // the card was baked in strokes: its body is paper (hiding what is behind it), its marks
     // graphite, which the fog takes back to paper. (Grass and scrub lighter than wood: many strokes
     // over each other)
-    // (deeper in the fog, softer: the marks read from a blurrier level of the card, a smudge of tone
-    // rather than lines, as the middle distance is drawn)
-    // (grass and scrub keep their strokes further: the undergrowth is strokes on paper, not a grey shape)
+    // the fog takes detail, not sharpness: the finest marks go first (twigs, then the lesser
+    // branches; the bake's flex is how fine the wood is), body and all, until a far tree is its trunk
+    // and a few limbs in pale, still-sharp lines, and then nothing. (No blur: what survives is drawn.)
     bool low = uKind > .5;
-    vec4 ts = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y), log2(1. + coc(vDist)) + (low ? 1. : 2.5) * fog);
-    float lf = clamp(ts.r / max(ts.a, .002), 0., 1.);
-    float mk = min(lf * uSkA.y * (uKind > .5 ? .5 : 1.), 1.) * (1. - fog);
-    float a = cov * uAlpha;
+    float fine = clamp(t.b / max(t.a, .002), 0., 1.);
+    // (fog builds fast: ~.27 at 10 m, ~.57 at 20 m — twigs held to about 10 m and gone by 20, the
+    // lesser branches next, the trunk last)
+    float survive = 1. - smoothstep(-.05, .2, fine - (1.5 - 1.6 * fog));
+    float lf = clamp(t.r / max(t.a, .002), 0., 1.);
+    // graphite builds as it does on paper: a little, then more slowly (never to black)
+    float mk = min((1. - exp(-1.8 * lf)) / (1. - exp(-1.8)) * uSkA.y * (low ? .5 : 1.), 1.) * (1. - fog);
+    float a = cov * uAlpha * survive;
+    if (a < .003) discard;
     o = vec4(sketchInk(mk, fog * (low ? .6 : 1.), vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
     return;
   }
@@ -1555,16 +1560,14 @@ uniform vec2 uRes;
 uniform float uExposure;
 ${NOISE}
 // the paper: the scene is already drawn in graphite on it; the paper's tooth breaks the graphite
-// (fixed to the paper, not the world), and the sheet is a touch darker at its edges
+// (fixed to the paper, not the world); the blank sheet stays quiet
 vec3 paper(vec3 c) {
   vec2 px = gl_FragCoord.xy;
   float m = clamp((lum(PAPER) - lum(c)) / (lum(PAPER) - lum(GRAPHITE)), 0., 1.);
   float tooth = vnoise(px * .55) * .6 + vnoise(px * 1.7 + 5.) * .4;
   m *= mix(1., .4 + .6 * smoothstep(.15, .75, tooth + m * .45), uSkB.z);
   vec3 sheet = PAPER * (.97 + .03 * vnoise(px / 160.));
-  vec3 o = mix(sheet, GRAPHITE, m * .95);
-  vec2 q = (px / uRes - .5) * vec2(uRes.x / uRes.y, 1.);
-  return o * mix(1., .93, smoothstep(.45, 1.1, length(q) * 1.15));
+  return mix(sheet, GRAPHITE, m * .95);
 }
 void main() {
   if (uSketch > .5) {
@@ -1812,7 +1815,7 @@ export class Renderer {
     const sk = look.sketch;
     gl.uniform4f(this.loc(p, 'uSkA'), sk ? 1 : 0, sk?.pencil ?? 1, sk?.hatch ?? 5, sk?.loose ?? 1);
     gl.uniform4f(this.loc(p, 'uSkB'), sk?.lines ?? 1, sk?.boil ?? 0, sk?.tooth ?? 0.6, sk?.spare ?? 0.3);
-    gl.uniform4f(this.loc(p, 'uSkC'), sk?.haze ?? 0.14, 0, 0, 0);
+    gl.uniform4f(this.loc(p, 'uSkC'), sk?.haze ?? 0.05, 0, 0, 0);
   }
 
   draw(v: View, look: Look, cards: Draw[]) {
