@@ -1376,7 +1376,7 @@ vec3 viewDir(vec2 px) {
 // how much pencil a pixel wants: how much darker it is than the fog seen that way. The fog is the
 // paper: what it has taken is left undrawn, and the far is a few faint marks
 float inkAt(vec2 px) {
-  vec3 c = texture(uScene, px / uRes).rgb;
+  vec3 c = texture(uScene, clamp(px / uRes, .5 / uRes, 1. - .5 / uRes)).rgb;
   return clamp(1. - lum(c) / max(lum(fogDir(viewDir(px))), .02), 0., 1.);
 }
 vec2 turn(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
@@ -1392,7 +1392,7 @@ float hatch(vec2 a, vec2 dir, float sp, float seed, float loose) {
   // (where each stroke runs and where it stops: lengths of 4–14 spacings, gaps between)
   float on = smoothstep(.38 + .1 * r2, .5 + .1 * r2, vnoise(vec2(along / (4. + 10. * r1), row * 1.7 + seed * 13.)));
   float mid = .5 + (r1 - .5) * .5 * loose + (vnoise(vec2(along / 9., row + seed)) - .5) * .5 * loose;
-  float width = .16 + .1 * r2;
+  float width = .22 + .12 * r2;
   float line = 1. - smoothstep(width * .45, width, abs(fract(w) - mid));
   return line * on * (.55 + .45 * vnoise(vec2(along / 3., row * 3.1 + seed)));
 }
@@ -1416,7 +1416,7 @@ vec3 sketch() {
   vec2 g = vec2(ir - il, iu - idn);
   float gl = length(g);
   // tone: the pencil light over the middle values (delicate), darker only where it is dark
-  float v = clamp(pow(ink, 1.5) * uSkA.y, 0., 1.);
+  float v = clamp(pow(ink, .85) * 1.1 * uSkA.y, 0., 1.);
   // strokes run along the forms (along the edges: up a trunk, across a bank); where there is no
   // edge, across the ground and the water, slanting in the air
   vec2 def = px.y < uHz ? normalize(vec2(1., .06)) : normalize(vec2(.45, 1.));
@@ -1433,17 +1433,17 @@ vec3 sketch() {
   // a faint smudge of graphite under the dark
   m = max(m, v * .18);
   // outlines: where the tone breaks, a line, broken here and there, fainter into the fog
-  float g1 = length(vec2(inkAt(p + vec2(1., 0.) * k) - inkAt(p - vec2(1., 0.) * k), inkAt(p + vec2(0., 1.) * k) - inkAt(p - vec2(0., 1.) * k)));
+  // (from the tone a little smoothed: the forms' edges, not every leaf on the ground)
   float brk = smoothstep(.3, .5, vnoise(a / (14. + 10. * loose) + 41.));
-  float edge = smoothstep(.05, .3, g1) * brk * (.35 + .65 * max(ink, avg));
+  float edge = smoothstep(.1, .35, gl) * brk * (.35 + .65 * max(ink, avg));
   // thin dark things (a twig, a blade of grass): drawn as one line
-  float thin = smoothstep(.04, .2, ink - avg) * (.4 + .6 * ink);
+  float thin = smoothstep(.03, .14, ink - avg) * (.4 + .6 * ink);
   m = max(m, max(edge, thin) * uSkB.x);
   // what is left unsaid: the faintest marks dropped
   m *= smoothstep(uSkB.w * .25, uSkB.w * .25 + .08, m);
   // the paper's tooth: graphite catches on its high points (fixed to the paper, not the world)
   float tooth = vnoise(px * .55) * .6 + vnoise(px * 1.7 + 5.) * .4;
-  m *= mix(1., smoothstep(.15, .75, tooth + m * .45), uSkB.z);
+  m *= mix(1., .4 + .6 * smoothstep(.15, .75, tooth + m * .45), uSkB.z);
   vec3 paper = vec3(.935, .925, .895) * (.97 + .03 * vnoise(px / 160.));
   vec3 graphite = vec3(.2, .2, .22);
   vec3 c = mix(paper, graphite, clamp(m, 0., 1.) * .92);
