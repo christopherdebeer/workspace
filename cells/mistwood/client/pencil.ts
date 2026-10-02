@@ -25,8 +25,8 @@ float strokeAgain(float s, float id) { return smoothstep(.7, .8, pN(s * .6 + 57.
 float strokeWeight(float c) {
   if (c < .5) return .85;
   if (c < 1.5) return .65;
-  if (c < 2.5) return .5;
-  if (c < 3.5) return .38;
+  if (c < 2.5) return .55;
+  if (c < 3.5) return .45;
   if (c < 8.5) return .3;
   if (c < 9.5) return .45;
   return .32;

@@ -1178,10 +1178,11 @@ void main() {
     float fine = clamp(t.b / max(t.a, .002), 0., 1.);
     // (fog builds fast: ~.27 at 10 m, ~.57 at 20 m — twigs held to about 10 m and gone by 20, the
     // lesser branches next, the trunk last)
-    float survive = 1. - smoothstep(-.05, .2, fine - (1.5 - 1.6 * fog));
+    float survive = 1. - smoothstep(-.05, .2, fine - (1.75 - 1.6 * fog));
     float lf = clamp(t.r / max(t.a, .002), 0., 1.);
     // graphite builds as it does on paper: a little, then more slowly (never to black)
-    float mk = min((1. - exp(-1.8 * lf)) / (1. - exp(-1.8)) * uSkA.y * (low ? .5 : 1.), 1.) * (1. - fog);
+    // (what survives the fog stays legible: paler, not gone)
+    float mk = min((1. - exp(-1.8 * lf)) / (1. - exp(-1.8)) * uSkA.y * (low ? .5 : 1.), 1.) * (1. - .8 * fog);
     float a = cov * uAlpha * survive;
     if (a < .003) discard;
     o = vec4(sketchInk(mk, fog * (low ? .6 : 1.), vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
