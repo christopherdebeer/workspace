@@ -48,7 +48,7 @@ float lum(vec3 c) { return dot(c, vec3(.3, .55, .15)); }
 float boilSeed() { return uSkB.y > 0. ? floor(uT * uSkB.y) : 0.; }
 // a pencil line along a stroke: px across from its middle, its half-width (px); soft-edged, never
 // thinner than the pencil's point
-float pencilLine(float across, float half) { float h = max(half, .45); return 1. - smoothstep(h, h + .9, abs(across)); }
+float pencilLine(float across, float hw) { float h = max(hw, .45); return 1. - smoothstep(h, h + .9, abs(across)); }
 vec2 turn(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
 // one layer of hatching along dir: strokes spaced sp apart, each its own — set a little off its
 // line, broken into lengths, its pressure rising and falling along it
