@@ -813,16 +813,19 @@ vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
     // courses where the face is turned from the light, crossed where darkest; fixed to the face,
     // as fine as the pencil wherever it is; the fog takes it to haze
     float sp = max(px * uSkA.z * (800. / uRes.y), 1e-3) * (wall ? 2.4 : 1.);
-    float joints = smoothstep(.3, .75, m.x);
+    // (each stone outlined only while it is big enough to draw: a few px across, the joints go; the
+    // courses' strokes carry it)
+    float joints = smoothstep(.3, .75, m.x) * smoothstep(4., 9., (wall ? .15 : .4) / max(px, 1e-4));
     float shade = smoothstep(.95, .45, lit);
     float lane = uv.y / sp;
-    float run = smoothstep(.4, .58, vnoise(vec2(uv.x / (sp * 7.), floor(lane) * 1.7 + b.w)));
+    float run = smoothstep(.45, .6, vnoise(vec2(uv.x / (sp * 3.), floor(lane) * 1.7 + b.w)));
     float along = (1. - smoothstep(.12, .28, abs(fract(lane) - .5))) * run * smoothstep(.05, .5, shade);
     vec2 sl = vec2(uv.x + uv.y * .6, uv.y - uv.x * .6) / sp;
     float across = (1. - smoothstep(.12, .28, abs(fract(sl.x * .8) - .5))) * smoothstep(.45, .6, vnoise(vec2(sl.y / 6., floor(sl.x * .8)))) * smoothstep(.55, .95, shade);
     // (moss and ivy: a darker scribble of tone)
     float green = smoothstep(.1, .2, lum(stone) < .12 ? 1. : 0.) * .3;
-    gStoneMark = max(max(joints * .75, along * .6), max(across * .5, green)) * (1. - fogD) * exp(-tauIn);
+    if (wall) across = 0.;
+    gStoneMark = max(max(joints * .75, along * .5), max(across * .45, green)) * (1. - fogD) * exp(-tauIn);
   }
   return mix(colr, fogDir(d), 1. - (1. - fogD) * exp(-tauIn));
 }
@@ -1071,8 +1074,10 @@ void main() {
     if (sT < .98 && tHit > 0.) {
       vec2 a = vec2(atan(d.x, d.z) * uF, d.y / length(d.xz) * uF) * (800. / uRes.y);
       float fogF = 1. - (1. - fogAt(tHit, .5, uDensity)) * exp(-tau);
-      float tick = hatch(a, normalize(vec2(.18, 1.)), uSkA.z * 1.4, 7., uSkA.w);
-      m = max(m * sT, tick * smoothstep(.05, .7, 1. - sT) * (1. - fogF) * .55);
+      // (in clumps, not a fence: ticks gathered where the scrub is, gaps between)
+      float clump = smoothstep(.5, .75, vnoise(a / 18. + 3.)) * (.6 + .4 * vnoise(a / 5.));
+      float tick = hatch(a, normalize(vec2(.18 + (vnoise(a / 9.) - .5) * .5, 1.)), uSkA.z * 1.7, 7., uSkA.w * 1.5);
+      m = max(m * sT, tick * clump * smoothstep(.05, .7, 1. - sT) * (1. - fogF) * .35);
     }
     // what is left unsaid: the faintest marks dropped
     m *= smoothstep(uSkB.w * .2, uSkB.w * .2 + .08, m);
@@ -1360,7 +1365,7 @@ void main() {
   if (uSketch > .5) {
     float fog = 1. - (1. - fogAt(vDist, vWorld.y - uBase, uDensity)) * (1. - mistTo(vWorld));
     float mark;
-    if (w >= 2.5 && B < 1.) {
+    if (w >= 2.5) {
       // wide wood: its two contours, the same hand as its card's (pencil.ts: pressure and drift along
       // the whole branch, a faint second pass here and there, firm as its class), and inside only a
       // few indications of bark
@@ -1368,8 +1373,11 @@ void main() {
       float sideId = a > 0. ? vStroke.x : vStroke.x + 101.;
       float drift = strokeDrift(sk, sideId) * 1.4 * uSkA.w;
       float wgt = strokeWeight(vStroke.z);
-      float edge = strokeLine(w * .5 - d - .7 + drift, .45) * strokePress(sk, sideId) * wgt * uSkB.x;
-      edge = max(edge, strokeAgain(sk, sideId) * .35 * wgt * strokeLine(w * .5 - d - 1.9 - drift * .5, .35) * uSkB.x);
+      // (out of focus, near the eye: the same contours, spread and softened by the blur — never a
+      // filled shape)
+      float soft = 1. / (1. + B * .6);
+      float edge = strokeLine(w * .5 - d - .7 + drift, .45 + B) * strokePress(sk, sideId) * wgt * uSkB.x * soft;
+      edge = max(edge, strokeAgain(sk, sideId) * .35 * wgt * strokeLine(w * .5 - d - 1.9 - drift * .5, .35 + B) * uSkB.x * soft);
       float vv = vWorld.y - uBase;
       float sp = exp2(floor(log2(max(uSkA.z * vDist / uF * (800. / uRes.y), 1e-3))));
       // shading: fine strokes running up the trunk, in lanes a couple of px apart across it, more on
@@ -1383,7 +1391,7 @@ void main() {
       // a birch: white, with dark dashes across it in loose rows
       float rowL = vv / (sp * 1.3);
       float lent = vTL.x > .3 ? step(h2(ivec2(int(floor(rowL)) + 71, int(floor(a * 3.)) + int(uPhase * 1000.))), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(a)) : 0.;
-      mark = max(edge, max(lanes * .3, lent * .7));
+      mark = max(edge, max(lanes * .3, lent * .7) * soft);
     } else {
       // a twig: one line, its weight its optical mass (its coverage), pressed as the hand goes
       float sk = vStroke.y + clamp(hRaw, 0., 1.) * vLen;

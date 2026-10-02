@@ -89,11 +89,9 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
   float press = strokePress(s, id);
   float weight = strokeWeight(vStroke.z);
   if (w >= 2.5) {
-    // (no marks on the round ends: the body is there, its paper, but the lines run on unbroken)
-    if (hRaw < 0. || hRaw > 1.) return 0.;
     // its two contours, each its own drift (the hand goes up one side and down the other); a faint
     // second pass along some stretches; firm as its class is
-    float sd = dot(vP - vA - (vB - vA) * h_(hRaw), nn);
+    float sd = dot(vP - vA - (vB - vA) * hRaw, nn);
     float sideId = sd > 0. ? id : id + 101.;
     float drift = strokeDrift(s, sideId) * 1.4;
     float edge = strokeLine(w * .5 - d - .7 + drift, .45) * strokePress(s, sideId) * weight;
@@ -116,7 +114,8 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
   }
   // a twig: one line (never finer than the pencil's point), faint as it is thin; of the finest, only
   // some drawn (a tussock's hundreds of blades are a few strokes, not a smudge)
-  if (uSparse > .5 && w < 1. && hh(floor(vA * 3.) + floor(vB * 3.)) > .25 + .5 * w) discard;
+  // (whole blades: each is a stroke, kept or not as one)
+  if (uSparse > .5 && pH(vec2(vStroke.x * .37, 3.1)) > .4) discard;
   // its weight is its optical mass: a tenth of a pixel of twig a tenth as dark as a pixel of
   // branch, no floor (overlapping twigs build up into a darker knot, as graphite does)
   return strokeLine(d + strokeDrift(s, id) * .5, w * .5) * pow(clamp(w, 0., 1.), .9) * press * min(weight * 2.2, 1.);
@@ -143,7 +142,17 @@ void main() {
     vec2 dir = normalize(vB - vA + 1e-6);
     vec2 nn = vec2(-dir.y, dir.x);
     if (nn.x < 0.) nn = -nn;
-    mark = sketchCov(hRaw, length(vP - vA - (vB - vA) * h), w, dir, nn, vTL.x);
+    if (w >= 2.5) {
+      // wide wood as a continuous tube: no round ends (whose paper would cut the contour of the
+      // segment before at every joint), each segment running a little past its ends to overlap the
+      // next, its edges straight on
+      float over = w * .4 / sqrt(bb);
+      if (hRaw < -over || hRaw > 1. + over) discard;
+      float dl = length(pa - ba * hRaw);
+      float wl = max(mix(vW.x, vW.y, hRaw), .5);
+      cov = clamp(wl * .5 - dl + .5, 0., 1.);
+      mark = sketchCov(hRaw, dl, wl, dir, nn, vTL.x);
+    } else mark = sketchCov(hRaw, length(vP - vA - (vB - vA) * h), w, dir, nn, vTL.x);
     // (a line is never wider than the body it is drawn on: a twig's line is its body)
     if (w < 2.5) cov = max(cov, mark);
   }
