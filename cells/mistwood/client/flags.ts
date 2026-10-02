@@ -66,6 +66,7 @@ export const FLAGS = {
   lines: { kind: 'number', min: 0, max: 3, step: 0.05, unit: '×', group: 'sketch', live: true, doc: 'sketch: outlines and single-line twigs (0 none, 1 the default)' },
   boil: { kind: 'number', min: 0, max: 12, step: 0.5, unit: '/s', group: 'sketch', live: true, doc: 'sketch: redrawn this often a second, each time a little differently (0 still, the default)' },
   tooth: { kind: 'number', min: 0, max: 1, step: 0.05, group: 'sketch', live: true, doc: "sketch: the paper's tooth breaking up the graphite (default 0.6)" },
+  haze: { kind: 'number', min: 0, max: 0.4, step: 0.01, group: 'sketch', live: true, doc: "sketch: the fog's own tone, a light graphite haze (0 white paper; default 0.14); near things stay lighter than it" },
   spare: { kind: 'number', min: 0, max: 1, step: 0.05, group: 'sketch', live: true, doc: 'sketch: how much is left unsaid: the faintest marks dropped (default 0.3)' },
   // development
   tune: { kind: 'bool', group: 'dev', doc: 'this panel' },

@@ -864,7 +864,7 @@ function frame(now: number) {
   const fordsHere = wood.fordsNear(view.x, view.z, 60).sort((a, b) => Math.hypot(a.x - view.x, a.z - view.z) - Math.hypot(b.x - view.x, b.z - view.z)).slice(0, 6);
   fordsHere.forEach((f, i) => ford.set([f.x, f.z, f.nx, f.nz], i * 4));
   const sketch = flag('style') === 'sketch'
-    ? { pencil: flag('pencil') ?? 1, hatch: flag('hatch') ?? 5, loose: flag('loose') ?? 1, lines: flag('lines') ?? 1, boil: flag('boil') ?? 0, tooth: flag('tooth') ?? 0.6, spare: flag('spare') ?? 0.3 }
+    ? { pencil: flag('pencil') ?? 1, hatch: flag('hatch') ?? 5, loose: flag('loose') ?? 1, lines: flag('lines') ?? 1, boil: flag('boil') ?? 0, tooth: flag('tooth') ?? 0.6, spare: flag('spare') ?? 0.3, haze: flag('haze') ?? 0.14 }
     : null;
   renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, creek: wood.creekK, ford, fordN: fordsHere.length, structA, structB, structN: stone.length, wallA, wallB, wallN: wallsHere.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5, sketch }, draws);
   sound.update(dt, t, speed, atmos.day, wind);

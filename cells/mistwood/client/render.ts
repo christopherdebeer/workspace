@@ -44,6 +44,13 @@ uniform vec4 uSkB;
 const vec3 PAPER = vec3(.935, .925, .895);
 const vec3 GRAPHITE = vec3(.2, .2, .22);
 float lum(vec3 c) { return dot(c, vec3(.3, .55, .15)); }
+// the fog's own tone: not white paper but a light haze of graphite, a little deeper low, lighter
+// high (x: how much; the rest spare)
+uniform vec4 uSkC;
+float hazeDir(vec3 d) { float el = d.y / max(length(d.xz), 1e-3); return uSkC.x * (1. - .55 * smoothstep(-.05, .45, el)); }
+// a body drawn f of the way into the fog, seen along d: on paper near (lighter than the fog, as near
+// things are in a drawing of mist), on the haze far; its marks (mk) graphite, never black
+vec3 sketchInk(float mk, float f, vec3 d) { return mix(mix(PAPER, GRAPHITE, hazeDir(d) * f), GRAPHITE, clamp(mk, 0., 1.) * .78); }
 // how far the hand is off this time (the boil: redrawn now and then, a little differently)
 float boilSeed() { return uSkB.y > 0. ? floor(uT * uSkB.y) : 0.; }
 // a pencil line along a stroke: px across from its middle, its half-width (px); soft-edged, never
@@ -1032,7 +1039,8 @@ void main() {
       vec3 hp = eye + d * tHit;
       bool wet = tWater > 0. || brook;
       // water: long level strokes, few; the ground: short ones, as many as it is dark
-      m = groundStrokes(hp.xz, tHit, d, wet ? v * .7 : v, wet ? 4. : 1.) * (.4 + .6 * v);
+      // (the ground itself nearly blank: its tufts are the grass's own; water a few level strokes)
+      m = groundStrokes(hp.xz, tHit, d, wet ? v * .7 : v * .4, wet ? 4. : 1.) * (.3 + .5 * v);
       if (!wet) {
         // the path: its two edges drawn, running off into the distance
         float mpp = tHit / uF * (800. / uRes.y);
@@ -1052,7 +1060,10 @@ void main() {
     }
     // what is left unsaid: the faintest marks dropped
     m *= smoothstep(uSkB.w * .2, uSkB.w * .2 + .08, m);
-    col = mix(PAPER, GRAPHITE, clamp(m, 0., 1.));
+    // drawn on paper near, on the fog's haze far (the sky is all haze)
+    float th = stone ? tS : tHit;
+    float fogAll = th < 0. ? 1. : 1. - (1. - fogAt(th, 0., uDensity)) * exp(-tau);
+    col = sketchInk(m, fogAll, d);
   }
   o = vec4(col, 1.);
   // depth: the stone where it stands, all else at the far end
@@ -1144,9 +1155,13 @@ void main() {
     // the card was baked in strokes: its body is paper (hiding what is behind it), its marks
     // graphite, which the fog takes back to paper. (Grass and scrub lighter than wood: many strokes
     // over each other)
-    float mk = min(leaf * uSkA.y * (uKind > .5 ? .5 : 1.), 1.) * (1. - fog);
+    // (deeper in the fog, softer: the marks read from a blurrier level of the card, a smudge of tone
+    // rather than lines, as the middle distance is drawn)
+    vec4 ts = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y), log2(1. + coc(vDist)) + 2.5 * fog);
+    float lf = clamp(ts.r / max(ts.a, .002), 0., 1.);
+    float mk = min(lf * uSkA.y * (uKind > .5 ? .5 : 1.), 1.) * (1. - fog);
     float a = cov * uAlpha;
-    o = vec4(mix(PAPER, GRAPHITE, mk) * a, a);
+    o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
     return;
   }
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
@@ -1322,14 +1337,18 @@ void main() {
       float edge = pencilLine(w * .5 - d - .7 + wob, .45) * press * uSkB.x;
       float vv = vWorld.y - uBase;
       float sp = exp2(floor(log2(max(uSkA.z * vDist / uF * (800. / uRes.y), 1e-3))));
-      float rowW = vv / sp;
-      float row = floor(rowW);
-      float rr = h2(ivec2(int(row) + 333, int(uPhase * 1000.) + int(boilSeed()) * 17));
-      float dark = (1. - vTL.x * .85) * (.35 + .65 * (1. - max(0., dot(N, uLight))));
-      float ring = (1. - smoothstep(.1, .22, abs(fract(rowW) - .5 - (rr - .5) * .3))) * step(rr, dark * uSkA.y);
-      // (a stroke round the trunk stops short of its edges, as a hand's does)
-      ring *= smoothstep(.95, .7, abs(a)) * (.5 + .5 * vnoise(vec2(a * 3., row)));
-      mark = max(edge, ring * .7);
+      // shading: fine strokes running up the trunk, in lanes a couple of px apart across it, more on
+      // the side turned from the light, broken into lengths; none on a birch's white
+      float laneW = a * w * .5 / 2.4;
+      float lane = floor(laneW);
+      float rr = h2(ivec2(int(lane) + 333, int(uPhase * 1000.) + int(boilSeed()) * 17));
+      float dark = (1. - vTL.x * .9) * (.25 + .75 * (1. - max(0., dot(N, uLight))));
+      float run = smoothstep(.35, .55, vnoise(vec2(vv / (sp * (4. + 6. * rr)), lane * 1.7 + uPhase * 9.)));
+      float lanes = (1. - smoothstep(.12, .3, abs(fract(laneW) - .5))) * run * step(rr, dark * uSkA.y) * smoothstep(.97, .8, abs(a));
+      // a birch: white, with dark dashes across it in loose rows
+      float rowL = vv / (sp * 1.3);
+      float lent = vTL.x > .3 ? step(h2(ivec2(int(floor(rowL)) + 71, int(floor(a * 3.)) + int(uPhase * 1000.))), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(a)) : 0.;
+      mark = max(edge, max(lanes * .65, lent * .8));
     } else {
       // a twig: one line, its weight its width
       float press = .6 + .4 * vnoise(vec2(hRaw * 3., uPhase * 5.));
@@ -1338,7 +1357,7 @@ void main() {
     // its body paper (hiding what is behind), its marks graphite, which the fog takes to paper
     float mk = clamp(mark / max(cov, .05), 0., 1.) * (1. - fog);
     float am = cov * uAlpha;
-    o = vec4(mix(PAPER, GRAPHITE, mk) * am, am);
+    o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * am, am);
     return;
   }
   float dif = max(0., dot(N, uLight));
@@ -1504,7 +1523,7 @@ void main() {
     float shade = hatch(gl_FragCoord.xy * (800. / uRes.y), normalize(vec2(.5, 1.)), uSkA.z, 9., uSkA.w) * .45 * (1. - white);
     float mk = clamp(max(edge * uSkB.x, shade), 0., 1.) * (1. - fog);
     float am = cov * uAlpha;
-    o = vec4(mix(PAPER, GRAPHITE, mk) * am, am);
+    o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * am, am);
     return;
   }
   o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
@@ -1591,7 +1610,7 @@ export interface Look {
   blur: number;
   focus: number;
   /** drawn in pencil (null: as film): darkness, stroke spacing, looseness, outlines, boil, tooth, how much is left unsaid */
-  sketch: { pencil: number; hatch: number; loose: number; lines: number; boil: number; tooth: number; spare: number } | null;
+  sketch: { pencil: number; hatch: number; loose: number; lines: number; boil: number; tooth: number; spare: number; haze: number } | null;
 }
 
 export interface CardDraw {
@@ -1776,6 +1795,7 @@ export class Renderer {
     const sk = look.sketch;
     gl.uniform4f(this.loc(p, 'uSkA'), sk ? 1 : 0, sk?.pencil ?? 1, sk?.hatch ?? 5, sk?.loose ?? 1);
     gl.uniform4f(this.loc(p, 'uSkB'), sk?.lines ?? 1, sk?.boil ?? 0, sk?.tooth ?? 0.6, sk?.spare ?? 0.3);
+    gl.uniform4f(this.loc(p, 'uSkC'), sk?.haze ?? 0.14, 0, 0, 0);
   }
 
   draw(v: View, look: Look, cards: Draw[]) {

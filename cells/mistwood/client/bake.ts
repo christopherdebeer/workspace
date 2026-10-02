@@ -77,14 +77,20 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
     // (no marks on the round ends: the body is there, its paper, but the lines run on unbroken)
     if (hRaw < 0. || hRaw > 1.) return 0.;
     float edge = 1. - smoothstep(.5, 1.4, abs(w * .5 - d - .7 + wob));
-    // strokes across, a few px apart, kept where the bark is dark (none on birch), the shaded side
-    // (the right: the light is from the upper left) more
+    // shading: fine strokes running along the wood, in lanes a couple of px apart across it, kept
+    // where the bark is dark (none on birch), the shaded side (the right: the light is from the upper
+    // left) more, broken into lengths
     float side = dot(vP - vA - (vB - vA) * clamp(hRaw, 0., 1.), nn) / max(w * .5, .5);
-    float row = dot(vP, dir) / 4.5;
-    float r = hh(vec2(floor(row), floor(vA.x * .1)));
-    float dark = (1. - tone * .9) * (.3 + .5 * smoothstep(-.6, .9, side));
-    float ring = (1. - smoothstep(.12, .26, abs(fract(row) - .5))) * step(r, dark) * smoothstep(.95, .65, abs(side));
-    return max(edge * press, ring * .6);
+    float laneW = side * w * .5 / 2.4;
+    float lane = floor(laneW);
+    float r = hh(vec2(lane, floor(vA.x * .1) + floor(vA.y * .1) * 7.));
+    float dark = (1. - tone * .9) * (.25 + .6 * smoothstep(-.4, .9, side));
+    float run = smoothstep(.35, .55, vn(vec2(along / (10. + 14. * r), lane * 1.7)));
+    float lanes = (1. - smoothstep(.12, .3, abs(fract(laneW) - .5))) * run * step(r, dark * 1.3) * smoothstep(.97, .8, abs(side));
+    // a birch: white, with dark dashes across it in loose rows
+    float rowL = along / 5.;
+    float lent = tone > .3 ? step(hh(vec2(floor(rowL), floor(side * 3.) + 17.)), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(side)) : 0.;
+    return max(edge * press, max(lanes * .6, lent * .8));
   }
   // a twig: one line (never finer than the pencil's point), faint as it is thin; of the finest, only
   // some drawn (a tussock's hundreds of blades are a few strokes, not a smudge)
