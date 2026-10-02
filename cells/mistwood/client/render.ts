@@ -15,6 +15,7 @@
  */
 import type { Card } from './bake';
 import type { Atmos } from './sky';
+import { PENCIL } from './pencil';
 import { SEG } from './tree';
 
 /**
@@ -1200,6 +1201,7 @@ const LIVE_VS = `#version 300 es
 in vec3 aP0;
 in vec3 aP1;
 in vec4 aInfo; // w0, w1, tone, leaf
+in vec3 aStroke; // the sketch: its stroke, how far along it (m), its class (tree.ts SEG)
 uniform vec2 uRes;
 uniform float uF, uHz, uT, uWind;
 uniform vec4 uCam;
@@ -1217,6 +1219,8 @@ flat out vec2 vWm;
 flat out vec3 vWa;
 flat out vec3 vWb;
 flat out vec2 vDab;
+flat out vec3 vStroke;
+flat out float vLen;
 vec3 place(vec3 p) {
   float c = cos(uRot), s = sin(uRot);
   vec3 q = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c) * uScale;
@@ -1239,6 +1243,8 @@ vec3 project(vec3 w, out float hd) {
   return vec3(atan(cx, cz) * uF + .5 * uRes.x, rel.y / hd * uF + uHz, cz);
 }
 void main() {
+  vStroke = aStroke;
+  vLen = length(aP1 - aP0);
   vec3 wa = place(aP0), wb = place(aP1);
   float ha, hb;
   vec3 sa = project(wa, ha), sb = project(wb, hb);
@@ -1278,6 +1284,8 @@ flat in vec2 vWm;
 flat in vec3 vWa;
 flat in vec3 vWb;
 flat in vec2 vDab;
+flat in vec3 vStroke;
+flat in float vLen;
 out vec4 o;
 uniform float uDensity, uAlpha, uPhase, uRim, uViewAz;
 uniform vec2 uRes;
@@ -1290,6 +1298,7 @@ uniform vec4 uBarkP;
 // the sun's direction in the view (screen right, screen up, towards the eye)
 uniform vec3 uLight;
 ${NOISE}
+${PENCIL}
 float hc(float a, float b) { return h2(ivec2(int(floor(a)), int(floor(b)) + int(uPhase * 1000.))); }
 // organic patches: noise warped by noise and turned off the grid (plain value noise, thresholded,
 // shows its square cells as straight-edged blocks)
@@ -1351,12 +1360,15 @@ void main() {
     float fog = 1. - (1. - fogAt(vDist, vWorld.y - uBase, uDensity)) * (1. - mistTo(vWorld));
     float mark;
     if (w >= 2.5 && B < 1.) {
-      // wide wood: its two edges drawn (wobbling a little, pressing and lifting), and inside, strokes
-      // round the trunk where it is dark and turned from the light — none on a birch's white
-      float len = sqrt(bb);
-      float wob = (vnoise(vec2(hRaw * len / 40., uPhase * 7.)) - .5) * 1.4 * uSkA.w;
-      float press = .55 + .45 * vnoise(vec2(hRaw * len / 25., uPhase * 3.));
-      float edge = pencilLine(w * .5 - d - .7 + wob, .45) * press * uSkB.x;
+      // wide wood: its two contours, the same hand as its card's (pencil.ts: pressure and drift along
+      // the whole branch, a faint second pass here and there, firm as its class), and inside only a
+      // few indications of bark
+      float sk = vStroke.y + clamp(hRaw, 0., 1.) * vLen;
+      float sideId = a > 0. ? vStroke.x : vStroke.x + 101.;
+      float drift = strokeDrift(sk, sideId) * 1.4 * uSkA.w;
+      float wgt = strokeWeight(vStroke.z);
+      float edge = strokeLine(w * .5 - d - .7 + drift, .45) * strokePress(sk, sideId) * wgt * uSkB.x;
+      edge = max(edge, strokeAgain(sk, sideId) * .35 * wgt * strokeLine(w * .5 - d - 1.9 - drift * .5, .35) * uSkB.x);
       float vv = vWorld.y - uBase;
       float sp = exp2(floor(log2(max(uSkA.z * vDist / uF * (800. / uRes.y), 1e-3))));
       // shading: fine strokes running up the trunk, in lanes a couple of px apart across it, more on
@@ -1364,17 +1376,17 @@ void main() {
       float laneW = a * w * .5 / 2.4;
       float lane = floor(laneW);
       float rr = h2(ivec2(int(lane) + 333, int(uPhase * 1000.) + int(boilSeed()) * 17));
-      float dark = (1. - vTL.x * .9) * (.25 + .75 * (1. - max(0., dot(N, uLight))));
+      float dark = (1. - vTL.x * .9) * (.15 + .55 * (1. - max(0., dot(N, uLight))));
       float run = smoothstep(.42, .6, vnoise(vec2(vv / (sp * (2. + 3. * rr)), lane * 1.7 + uPhase * 9.)));
       float lanes = (1. - smoothstep(.12, .3, abs(fract(laneW) - .5))) * run * step(rr, dark * uSkA.y) * smoothstep(.97, .8, abs(a));
       // a birch: white, with dark dashes across it in loose rows
       float rowL = vv / (sp * 1.3);
       float lent = vTL.x > .3 ? step(h2(ivec2(int(floor(rowL)) + 71, int(floor(a * 3.)) + int(uPhase * 1000.))), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(a)) : 0.;
-      mark = max(edge, max(lanes * .45, lent * .8));
+      mark = max(edge, max(lanes * .3, lent * .7));
     } else {
-      // a twig: one line, its weight its width
-      float press = .6 + .4 * vnoise(vec2(hRaw * 3., uPhase * 5.));
-      mark = cov * press * (.7 + .3 * uSkB.x);
+      // a twig: one line, its weight its optical mass (its coverage), pressed as the hand goes
+      float sk = vStroke.y + clamp(hRaw, 0., 1.) * vLen;
+      mark = cov * strokePress(sk, vStroke.x) * min(strokeWeight(vStroke.z) * 2.2, 1.) * (.7 + .3 * uSkB.x);
     }
     // its body paper (hiding what is behind), its marks graphite, which the fog takes to paper
     float mk = clamp(mark / max(cov, .05), 0., 1.) * (1. - fog);
@@ -1893,6 +1905,8 @@ export class Renderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, c.buffer);
         const attr = (name: string, size: number, offset: number) => {
           const loc = gl.getAttribLocation(L, name);
+          // (an attribute the compiler dropped — the sketch's, when drawing film)
+          if (loc < 0) return;
           gl.enableVertexAttribArray(loc);
           gl.vertexAttribPointer(loc, size, gl.FLOAT, false, SEG * 4, offset * 4);
           gl.vertexAttribDivisor(loc, 1);
@@ -1900,6 +1914,7 @@ export class Renderer {
         attr('aP0', 3, 0);
         attr('aP1', 3, 3);
         attr('aInfo', 4, 6);
+        attr('aStroke', 3, 10);
         gl.uniform2f(this.loc(L, 'uAnchor'), c.x, c.z);
         gl.uniform1f(this.loc(L, 'uBase'), c.base);
         gl.uniform2fv(this.loc(L, 'uMistT'), c.mist);

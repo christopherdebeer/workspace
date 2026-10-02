@@ -14,12 +14,14 @@
  * straw lightness), B flex (how freely the wind moves it: twigs 1, trunk 0),
  * A coverage. Row 0 is the base (y up), so v = height.
  */
+import { PENCIL } from './pencil';
 import { SEG, type Structure } from './tree';
 
 const VS = `#version 300 es
 in vec3 aP0;
 in vec3 aP1;   // tree-local metres, y up
 in vec4 aInfo; // w0, w1, tone, leaf
+in vec3 aStroke; // the sketch: its stroke, how far along it (m), its class
 uniform vec2 uRight;  // the card's across direction in the tree's own x, z (seen from there)
 uniform vec2 uOrigin; // (across, up) metres at the texture's left-bottom
 uniform float uScale; // px per metre
@@ -30,8 +32,12 @@ flat out vec2 vB;
 flat out vec2 vW;
 flat out vec2 vTL;
 flat out float vFlex;
+flat out vec3 vStroke;
+flat out float vLen;
 void main() {
   int c = gl_VertexID;
+  vStroke = aStroke;
+  vLen = length(aP1 - aP0);
   // how far the wind can move it: twigs freely, limbs a little, the trunk not at all
   vFlex = 1. - smoothstep(.004, .045, aInfo.x);
   vec2 a = (vec2(dot(aP0.xz, uRight), aP0.y) - uOrigin) * uScale;
@@ -58,6 +64,8 @@ flat in vec2 vB;
 flat in vec2 vW;
 flat in vec2 vTL;
 flat in float vFlex;
+flat in vec3 vStroke;
+flat in float vLen;
 out vec4 o;
 // 1: baked in pencil strokes (?style=sketch): wide wood as its two edges and strokes round it where
 // dark, a twig as one line whose weight is its width
@@ -69,16 +77,27 @@ float vn(vec2 p) {
   vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
   return mix(mix(hh(i), hh(i + vec2(1., 0.)), u.x), mix(hh(i + vec2(0., 1.)), hh(i + vec2(1., 1.)), u.x), u.y);
 }
+${PENCIL}
+float h_(float x) { return clamp(x, 0., 1.); }
 float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
-  // (where along the wood: the hand's wobble and pressure follow it, so a line runs on unbroken
-  // from one segment into the next)
+  // the hand along the whole stroke (a branch from its foot to its tip): its pressure and drift are
+  // functions of how far along it this is, so a line runs on unbroken from one segment into the
+  // next, as one gesture
   float along = dot(vP, dir);
-  float wob = (vn(vP * .045 + 3.) - .5) * 1.6;
-  float press = .55 + .45 * vn(vP * .03 + 11.);
+  float s = vStroke.y + clamp(hRaw, 0., 1.) * vLen;
+  float id = vStroke.x;
+  float press = strokePress(s, id);
+  float weight = strokeWeight(vStroke.z);
   if (w >= 2.5) {
     // (no marks on the round ends: the body is there, its paper, but the lines run on unbroken)
     if (hRaw < 0. || hRaw > 1.) return 0.;
-    float edge = 1. - smoothstep(.5, 1.4, abs(w * .5 - d - .7 + wob));
+    // its two contours, each its own drift (the hand goes up one side and down the other); a faint
+    // second pass along some stretches; firm as its class is
+    float sd = dot(vP - vA - (vB - vA) * h_(hRaw), nn);
+    float sideId = sd > 0. ? id : id + 101.;
+    float drift = strokeDrift(s, sideId) * 1.4;
+    float edge = strokeLine(w * .5 - d - .7 + drift, .45) * strokePress(s, sideId) * weight;
+    edge = max(edge, strokeAgain(s, sideId) * .35 * weight * strokeLine(w * .5 - d - 1.9 - drift * .5, .35));
     // shading: fine strokes running along the wood, in lanes a couple of px apart across it, kept
     // where the bark is dark (none on birch), the shaded side (the right: the light is from the upper
     // left) more, broken into lengths
@@ -86,20 +105,21 @@ float sketchCov(float hRaw, float d, float w, vec2 dir, vec2 nn, float tone) {
     float laneW = side * w * .5 / 2.4;
     float lane = floor(laneW);
     float r = hh(vec2(lane, floor(vA.x * .1) + floor(vA.y * .1) * 7.));
-    float dark = (1. - tone * .9) * (.25 + .6 * smoothstep(-.4, .9, side));
+    // (bark only indicated: a few short strokes, on the shaded side)
+    float dark = (1. - tone * .9) * (.15 + .5 * smoothstep(-.2, .9, side));
     float run = smoothstep(.42, .6, vn(vec2(along / (5. + 8. * r), lane * 1.7)));
     float lanes = (1. - smoothstep(.12, .3, abs(fract(laneW) - .5))) * run * step(r, dark * 1.3) * smoothstep(.97, .8, abs(side));
     // a birch: white, with dark dashes across it in loose rows
     float rowL = along / 5.;
     float lent = tone > .3 ? step(hh(vec2(floor(rowL), floor(side * 3.) + 17.)), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(side)) : 0.;
-    return max(edge * press, max(lanes * .45, lent * .8));
+    return max(edge, max(lanes * .3, lent * .7));
   }
   // a twig: one line (never finer than the pencil's point), faint as it is thin; of the finest, only
   // some drawn (a tussock's hundreds of blades are a few strokes, not a smudge)
   if (uSparse > .5 && w < 1. && hh(floor(vA * 3.) + floor(vB * 3.)) > .25 + .5 * w) discard;
   // its weight is its optical mass: a tenth of a pixel of twig a tenth as dark as a pixel of
   // branch, no floor (overlapping twigs build up into a darker knot, as graphite does)
-  return (1. - smoothstep(max(w * .5, .3), max(w * .5, .3) + .8, abs(d + wob * .4))) * pow(clamp(w, 0., 1.), .9) * press;
+  return strokeLine(d + strokeDrift(s, id) * .5, w * .5) * pow(clamp(w, 0., 1.), .9) * press * min(weight * 2.2, 1.);
 }
 void main() {
   vec2 pa = vP - vA, ba = vB - vA;
@@ -242,6 +262,8 @@ export class Baker {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer(s));
     const attr = (name: string, size: number, offset: number) => {
       const loc = gl.getAttribLocation(this.prog, name);
+      // (an attribute the compiler dropped — the sketch's, when drawing film)
+      if (loc < 0) return;
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, size, gl.FLOAT, false, SEG * 4, offset * 4);
       gl.vertexAttribDivisor(loc, 1);
@@ -249,6 +271,7 @@ export class Baker {
     attr('aP0', 3, 0);
     attr('aP1', 3, 3);
     attr('aInfo', 4, 6);
+    attr('aStroke', 3, 10);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, s.count);
     gl.bindVertexArray(null);
     gl.blendEquation(gl.FUNC_ADD);

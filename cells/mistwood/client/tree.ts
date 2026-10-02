@@ -15,8 +15,18 @@ import { hash, seeded, type Rand } from './rng';
 
 export type Species = 'leaner' | 'tall' | 'birch' | 'sapling' | 'shrub';
 
-/** Per segment: x0, y0, z0, x1, y1, z1 (m, tree-local, y up), w0, w1, tone (0 dark bark … 1 birch white), leaf (0/1). */
-export const SEG = 10;
+/**
+ * Per segment: x0, y0, z0, x1, y1, z1 (m, tree-local, y up), w0, w1, tone (0 dark bark … 1 birch
+ * white), leaf (0/1); and how it is drawn (the sketch): which stroke it is part of (one hand's line:
+ * a whole branch, a root, a blade), how far along that stroke it starts (m), and its class
+ * (`STROKE`: how firmly it is drawn). An emitter may leave the stroke and class to be found (-1):
+ * `finish` chains a segment onto the one before when it starts where that one ended.
+ */
+export const SEG = 13;
+/** Classes of stroke, firmest first (pencil.ts weighs them). */
+export const STROKE = { trunk: 0, limb: 1, branch: 2, twig: 3, leaf: 8, root: 9, grass: 10 } as const;
+/** (a class by width, where an emitter leaves it to be found) */
+const classOf = (w: number) => (w > 0.08 ? STROKE.trunk : w > 0.025 ? STROKE.limb : w > 0.008 ? STROKE.branch : STROKE.twig);
 
 export interface Structure {
   /** Segments, thickest first (so the first N are the tree as far as it can be seen at a distance). */
@@ -42,8 +52,25 @@ export function countWider(s: Structure, w: number): number {
   return lo;
 }
 
-/** Sort segments thickest first, and note the reach. */
+/** Sort segments thickest first, and note the reach (finding the strokes an emitter left to be found). */
 function finish(raw: Float32Array, n: number, species: Species): Structure {
+  // chain: a segment starting where the one before ended is the same stroke, further along it
+  let next = 1;
+  for (let i = 0; i < n; i++) if (raw[i * SEG + 10] >= next) next = raw[i * SEG + 10] + 1;
+  for (let i = 0; i < n; i++) {
+    const o = i * SEG;
+    if (raw[o + 12] < 0) raw[o + 12] = raw[o + 9] > 0.5 ? STROKE.leaf : classOf(Math.max(raw[o + 6], raw[o + 7]));
+    if (raw[o + 10] >= 0) continue;
+    const q = o - SEG;
+    const joined = i > 0 && Math.abs(raw[q + 3] - raw[o]) < 1e-5 && Math.abs(raw[q + 4] - raw[o + 1]) < 1e-5 && Math.abs(raw[q + 5] - raw[o + 2]) < 1e-5;
+    if (joined) {
+      raw[o + 10] = raw[q + 10];
+      raw[o + 11] = raw[q + 11] + Math.hypot(raw[q + 3] - raw[q], raw[q + 4] - raw[q + 1], raw[q + 5] - raw[q + 2]);
+    } else {
+      raw[o + 10] = next++;
+      raw[o + 11] = 0;
+    }
+  }
   const order = Array.from({ length: n }, (_, i) => i);
   const wOf = (i: number) => Math.max(raw[i * SEG + 6], raw[i * SEG + 7]);
   order.sort((a, b) => wOf(b) - wOf(a));
@@ -222,7 +249,7 @@ const CAP = 60000;
 export function growScrub(seed: number, width: number): Structure {
   const r: Rand = seeded(hash(seed, 0x5c2b));
   const out: number[] = [];
-  const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, 0, x1, y1, 0, w0, w1, tone, leaf);
+  const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, 0, x1, y1, 0, w0, w1, tone, leaf, -1, 0, leaf ? STROKE.leaf : STROKE.grass);
   const across = () => (r() + r() + r() - 1.5) * (width / 3);
   // a wandering zigzag twig from (x, y) at angle a: short internodes, turning at each node
   const twig = (x: number, y: number, a: number, len: number, w: number, tone: number, depth: number) => {
@@ -353,7 +380,7 @@ export function growScrub(seed: number, width: number): Structure {
 export function growLog(seed: number): Structure {
   const r: Rand = seeded(hash(seed, 0x10c));
   const out: number[] = [];
-  const push = (a: V3, b: V3, w0: number, w1: number, tone = 0.02) => out.push(a[0], a[1], a[2], b[0], b[1], b[2], w0, w1, tone, 0);
+  const push = (a: V3, b: V3, w0: number, w1: number, tone = 0.02) => out.push(a[0], a[1], a[2], b[0], b[1], b[2], w0, w1, tone, 0, -1, 0, -1);
   const len = 5 + r() * 8;
   const rad = 0.13 + r() * 0.17;
   const steps = 24;
@@ -438,6 +465,17 @@ export function grow(seed: number, genome: Genome): Structure {
   const r: Rand = seeded(hash(seed, 0x7ee));
   let segs = new Float32Array(SEG * 4096);
   let n = 0;
+  // the stroke being drawn: one to each branch (its length running on along it), each twiglet,
+  // root and leaf its own
+  let strokeN = 1;
+  let sid = 0;
+  let sArc = 0;
+  let sClass: number = STROKE.trunk;
+  const stroke = (cls: number) => {
+    sid = strokeN++;
+    sArc = 0;
+    sClass = cls;
+  };
   const push = (a: V3, b: V3, w0: number, w1: number, tone: number, leaf: number) => {
     if (n >= CAP) return;
     if ((n + 1) * SEG > segs.length) {
@@ -445,7 +483,8 @@ export function grow(seed: number, genome: Genome): Structure {
       next.set(segs);
       segs = next;
     }
-    segs.set([a[0], a[1], a[2], b[0], b[1], b[2], w0, w1, tone, leaf], n * SEG);
+    segs.set([a[0], a[1], a[2], b[0], b[1], b[2], w0, w1, tone, leaf, sid, sArc, leaf ? STROKE.leaf : sClass], n * SEG);
+    sArc += Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
     n++;
   };
   // Folded dry leaves: narrow attachment, broad shoulder, curled tapered tip.
@@ -458,8 +497,11 @@ export function grow(seed: number, genome: Genome): Structure {
     const a: V3 = [Math.cos(az) * tilt, -0.65, Math.sin(az) * tilt];
     const mid: V3 = [at[0] + a[0] * length * .48, at[1] + a[1] * length * .48, at[2] + a[2] * length * .48];
     const tip: V3 = [at[0] + a[0] * length + Math.sin(az) * length * .2, at[1] - length * .62, at[2] + a[2] * length - Math.cos(az) * length * .2];
+    const keep: [number, number, number] = [sid, sArc, sClass];
+    stroke(STROKE.leaf);
     push(at, mid, .002, span, 0, 1);
     push(mid, tip, span, .001, 0, 1);
+    [sid, sArc, sClass] = keep;
   };
   const GOLDEN = 2.39996;
   let spiral = r() * 6.28;
@@ -473,6 +515,9 @@ export function grow(seed: number, genome: Genome): Structure {
     const white = p.white > 0;
     let pos = at;
     let d = dir;
+    // (this branch is one stroke, from its foot to its tip; its class by its order)
+    stroke(Math.min(order, STROKE.twig));
+    const mine = (): [number, number, number] => [sid, sArc, sClass];
     // a trunk's foot: its first 90 cm in short steps, flaring out towards the ground and easing
     // into the trunk (part of the trunk, so its bark runs on without a seam)
     if (order === 0 && len > 1.5 && w0 > 0.03) {
@@ -504,7 +549,9 @@ export function grow(seed: number, genome: Genome): Structure {
         spiral += GOLDEN;
         const remain = len * (1 - f1);
         const cl = (remain * 0.7 + len * 0.3) * p.lenDecay * (0.55 + r() * 0.6);
+        const back = mine();
         branch(next, turn(d, p.spread * (0.55 + r() * 0.7), spiral), cl, Math.max(p.minW, wb * p.wDecay * (0.7 + r() * 0.5)), order + 1, 0);
+        [sid, sArc, sClass] = back;
       }
       // the fine stuff: short kinked twiglets all along the thin wood (most of what the mist shows)
       if (order >= 2 && wa < 0.025 && r() < p.twigs) {
@@ -512,6 +559,8 @@ export function grow(seed: number, genome: Genome): Structure {
         let td = turn(d, 0.45 + r() * 0.6, r() * 6.28);
         const tl = 0.04 + r() * 0.2;
         const tw = Math.max(p.minW, Math.min(wb * 0.7, p.minW * 1.6));
+        const back = mine();
+        stroke(STROKE.twig);
         for (let k = 0; k < 3; k++) {
           td = norm([td[0] + (r() - 0.5) * 0.5, td[1] + (r() - 0.5) * 0.5 + 0.12, td[2] + (r() - 0.5) * 0.5]);
           const e: V3 = [tp[0] + (td[0] * tl) / 3, tp[1] + (td[1] * tl) / 3, tp[2] + (td[2] * tl) / 3];
@@ -519,6 +568,7 @@ export function grow(seed: number, genome: Genome): Structure {
           tp = e;
         }
         if (p.leaves && r() < p.leaves * 0.5) { r(); r(); dryLeaf(tp); }
+        [sid, sArc, sClass] = back;
       }
       pos = next;
     }
@@ -560,6 +610,7 @@ export function grow(seed: number, genome: Genome): Structure {
         let dir: V3 = norm([Math.cos(ra), -0.1 - detail() * 0.22, Math.sin(ra)]);
         let pos: V3 = [base[0] + Math.cos(ra) * w * 0.3, w * 0.5, base[2] + Math.sin(ra) * w * 0.3];
         let rw = w * (0.45 + detail() * 0.3);
+        stroke(STROKE.root);
         for (let i = 0; i < 30; i++) {
           const step = Math.max(0.025, rw * 0.8);
           // meandering, and pulled down (the inverse of reaching for the light); shallow-rooted
@@ -592,7 +643,7 @@ export function grow(seed: number, genome: Genome): Structure {
 export function growPatch(seed: number, width: number, rush = false): Structure {
   const r: Rand = seeded(hash(seed, 0x9a55));
   const out: number[] = [];
-  const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, 0, x1, y1, 0, w0, w1, tone, leaf);
+  const seg = (x0: number, y0: number, x1: number, y1: number, w0: number, w1: number, tone: number, leaf = 0) => out.push(x0, y0, 0, x1, y1, 0, w0, w1, tone, leaf, -1, 0, leaf ? STROKE.leaf : STROKE.grass);
   if (rush) {
     // rushes in the wet: clumps of tall, stiff, dark stems, nearly straight, a brown tuft of
     // flower near the top of some, the old ones broken over
