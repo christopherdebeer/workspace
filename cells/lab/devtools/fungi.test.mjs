@@ -48,3 +48,23 @@ for (const f of ['thrower', 'pin', 'inkcap', 'cup']) {
   assert.ok(forms[f].length > 20, f);
 }
 console.log('ok');
+
+// the terrarium: the succession runs in order, and the early ones give out before the end
+{
+  const out2 = await build({ entryPoints: [new URL('../client/fungi/terrarium.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
+  const { terrarium, DAYS } = await import('data:text/javascript;base64,' + Buffer.from(out2.outputFiles[0].text).toString('base64'));
+  const order = { pin: 0, thrower: 0, cup: 1, inkcap: 2 };
+  for (const seed of [1, 2, 3, 5, 8]) {
+    const t = terrarium(seed);
+    assert.ok(t.species.length >= 2, `seed ${seed}: a cast`);
+    const first = (s) => Math.min(...(s.g.form === 'cup' ? s.cups : s.stalks).map((x) => x.t0), Infinity);
+    const last = (s) => Math.max(...(s.g.form === 'cup' ? s.cups : s.stalks).map((x) => x.t0), -Infinity);
+    for (const s of t.species) assert.ok(first(s) < DAYS * 24, `seed ${seed}: ${s.g.form} fruits`);
+    for (const a of t.species) for (const b of t.species) {
+      if (order[a.g.form] < order[b.g.form]) assert.ok(first(a) < first(b), `seed ${seed}: ${a.g.form} before ${b.g.form}`);
+    }
+    for (const s of t.species) if (s.g.form === 'thrower' || s.g.form === 'pin') assert.ok(last(s) < (DAYS - 3) * 24, `seed ${seed}: ${s.g.form} gives out`);
+    assert.ok(t.moments.length > 10);
+  }
+  console.log('terrarium ok');
+}

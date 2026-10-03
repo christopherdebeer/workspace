@@ -80,10 +80,11 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const pick = <T>(r: Rand, a: T[]) => a[Math.floor(r() * a.length)];
 const jitter = (r: Rand, c: V3, k: number): V3 => c.map((v) => Math.max(0, Math.min(1, v + (r() - 0.5) * k))) as V3;
 
-export function species(seed: number): Genome {
+/** A species from a seed (of a given kind, if asked: a terrarium asks for what it needs). */
+export function species(seed: number, kind?: Form): Genome {
   const r = seeded(hash(seed, 0xf09));
   const roll = r();
-  const form: Form = roll < 0.34 ? 'thrower' : roll < 0.48 ? 'pin' : roll < 0.76 ? 'inkcap' : 'cup';
+  const form: Form = kind ?? (roll < 0.34 ? 'thrower' : roll < 0.48 ? 'pin' : roll < 0.76 ? 'inkcap' : 'cup');
   const a = r() * Math.PI * 2;
   const yellows: V3[] = [[1, 0.82, 0.12], [0.98, 0.7, 0.08], [0.93, 0.88, 0.25], [1, 0.62, 0.1], [0.9, 0.95, 0.35]];
   const caps: V3[] = [[0.03, 0.03, 0.035], [0.06, 0.07, 0.05], [0.12, 0.09, 0.06], [0.04, 0.05, 0.08]];
@@ -183,6 +184,8 @@ export interface Stalk {
   t1: number;
   tv: number;
   tl: number;
+  /** when it's gone: collapsed, rotted, eaten (a terrarium's things don't stay) */
+  tEnd: number;
   dew: Array<{ s: number; a: number; r: number; t: number }>;
   fly: V3;
 }
@@ -195,6 +198,7 @@ export interface Cushion {
   Hc: number;
   seed: number;
   t0: number;
+  tEnd: number;
   asci: Ascus[];
   /** water beading on it */
   dew: Array<{ th: number; ph: number; r: number; t: number }>;
@@ -217,7 +221,6 @@ export function patch(seed: number, g: Genome): Stalk[] {
   if (g.form === 'cup') return [];
   const r = seeded(hash(seed, 0x9a7));
   const out: Stalk[] = [];
-  const toward = Math.atan2(g.light[2], g.light[0]);
   const ink = g.form === 'inkcap';
   for (let i = 0; i < g.count; i++) {
     // (in clumps, as on a real pellet of dung or a crumb of wood)
@@ -227,50 +230,62 @@ export function patch(seed: number, g: Genome): Stalk[] {
     const cz = (cr() - 0.5) * g.patch * 0.8;
     const d = Math.sqrt(r()) * g.patch * (ink ? 0.28 : 0.35);
     const th = r() * Math.PI * 2;
-    const base: V3 = [cx + Math.cos(th) * d, 0, cz + Math.sin(th) * d];
-    const len = lerp(g.height[0], g.height[1], r());
-    const t0 = r() * g.spread * (ink ? 1.6 : 1);
-    const grow = ink ? lerp(5, 8, r()) : lerp(3, 4.5, r());
-    const t1 = t0 + grow;
-    const tv = t1 + lerp(0.5, 1.5, r());
-    const tl = g.throws ? tv + lerp(2.5, 4, r()) + r() * g.spread * 0.6 : 1e9;
-    const aim = ink ? r() * Math.PI * 2 : toward + (r() - 0.5) * 0.9;
-    const dew: Stalk['dew'] = [];
-    const n = Math.round(g.dew * len * (ink ? 1.2 : 4) * lerp(0.5, 1.5, r()));
-    for (let k = 0; k < n; k++) {
-      const s = 0.04 + r() * 0.9;
-      dew.push({ s, a: r() * Math.PI * 2, r: g.dewSize * lerp(0.25, 1, r() * r()), t: t0 + grow * s + lerp(0.2, 3, r()) });
-    }
-    if (g.throws) for (let k = 0; k < Math.round(g.dew * 10); k++) {
-      dew.push({ s: 0.9 + r() * 0.1, a: r() * Math.PI * 2, r: g.dewSize * lerp(0.3, 1.1, r()), t: tv + r() * 1.5 });
-    }
-    const up = lerp(0.8, 1.6, r());
-    const sr = g.radius * lerp(0.75, 1.25, r());
-    // (a vesicle is always a balloon on its stalk: never thinner than twice it)
-    const ves = g.throws ? Math.max(g.vesicle * lerp(0.45, 0.75, r()) * (0.6 + len / 20), sr * 2.2) : 0;
-    out.push({
-      base,
-      len,
-      r: sr,
-      ves,
-      long: g.vesicleLong,
-      knob: g.form === 'pin' ? 1 : 0,
-      cap: g.cap * lerp(0.85, 1.15, r()),
-      bell: ink ? g.bell * lerp(0.55, 1.2, r()) * (0.6 + (len / g.height[1]) * 0.5) : 0,
-      bellTall: g.bellTall * lerp(0.85, 1.15, r()),
-      dir: [Math.cos(aim), Math.sin(aim)],
-      lean: g.lean * lerp(0.3, 1.3, r()),
-      wave: g.wave * lerp(0.5, 1.5, r()),
-      phase: r() * 10,
-      t0,
-      t1,
-      tv,
-      tl,
-      dew,
-      fly: norm([Math.cos(aim) * 0.7, up, Math.sin(aim) * 0.7]),
-    });
+    const st = makeStalk(r, g, [cx + Math.cos(th) * d, 0, cz + Math.sin(th) * d], 0);
+    st.tEnd = 1e9;
+    out.push(st);
   }
   return out;
+}
+
+/** One stalk of this species, standing at `base`, its day starting at hour `start`. */
+export function makeStalk(r: Rand, g: Genome, base: V3, start: number): Stalk {
+  const toward = Math.atan2(g.light[2], g.light[0]);
+  const ink = g.form === 'inkcap';
+  const len = lerp(g.height[0], g.height[1], r());
+  const t0 = start + r() * g.spread * (ink ? 1.6 : 1);
+  const grow = ink ? lerp(5, 8, r()) : lerp(3, 4.5, r());
+  const t1 = t0 + grow;
+  const tv = t1 + lerp(0.5, 1.5, r());
+  const tl = g.throws ? tv + lerp(2.5, 4, r()) + r() * g.spread * 0.6 : 1e9;
+  // (thrown, it lies a few hours, then it's gone; a pin mould's lasts a day or so; an inkcap
+  // inks and dissolves the same day)
+  const tEnd = g.throws ? tl + lerp(5, 9, r()) : ink ? t1 + lerp(16, 26, r()) : t1 + lerp(20, 30, r());
+  const aim = ink ? r() * Math.PI * 2 : toward + (r() - 0.5) * 0.9;
+  const dew: Stalk['dew'] = [];
+  const n = Math.round(g.dew * len * (ink ? 1.2 : 4) * lerp(0.5, 1.5, r()));
+  for (let k = 0; k < n; k++) {
+    const s = 0.04 + r() * 0.9;
+    dew.push({ s, a: r() * Math.PI * 2, r: g.dewSize * lerp(0.25, 1, r() * r()), t: t0 + grow * s + lerp(0.2, 3, r()) });
+  }
+  if (g.throws) for (let k = 0; k < Math.round(g.dew * 10); k++) {
+    dew.push({ s: 0.9 + r() * 0.1, a: r() * Math.PI * 2, r: g.dewSize * lerp(0.3, 1.1, r()), t: tv + r() * 1.5 });
+  }
+  const up = lerp(0.8, 1.6, r());
+  const sr = g.radius * lerp(0.75, 1.25, r());
+  // (a vesicle is always a balloon on its stalk: never thinner than twice it)
+  const ves = g.throws ? Math.max(g.vesicle * lerp(0.45, 0.75, r()) * (0.6 + len / 20), sr * 2.2) : 0;
+  return {
+    base,
+    len,
+    r: sr,
+    ves,
+    long: g.vesicleLong,
+    knob: g.form === 'pin' ? 1 : 0,
+    cap: g.cap * lerp(0.85, 1.15, r()),
+    bell: ink ? g.bell * lerp(0.55, 1.2, r()) * (0.6 + (len / g.height[1]) * 0.5) : 0,
+    bellTall: g.bellTall * lerp(0.85, 1.15, r()),
+    dir: [Math.cos(aim), Math.sin(aim)],
+    lean: g.lean * lerp(0.3, 1.3, r()),
+    wave: g.wave * lerp(0.5, 1.5, r()),
+    phase: r() * 10,
+    t0,
+    t1,
+    tv,
+    tl,
+    tEnd,
+    dew,
+    fly: norm([Math.cos(aim) * 0.7, up, Math.sin(aim) * 0.7]),
+  };
 }
 
 /** The cups' cushions (only a cup has them). */
@@ -287,21 +302,27 @@ export function cushions(seed: number, g: Genome): Cushion[] {
       c = [Math.cos(a) * d, 0, Math.sin(a) * d];
       if (out.every((o) => Math.hypot(o.c[0] - c[0], o.c[2] - c[2]) > (o.R + g.cushion) * 0.9)) break;
     }
-    const R = g.cushion * lerp(0.6, 1.25, r());
-    const Hc = R * lerp(1.4, 2.3, r());
-    const t0 = r() * g.spread;
-    const asci: Ascus[] = [];
-    const n = Math.round(g.asci * lerp(0.6, 1.3, r()) * (R / g.cushion));
-    for (let k = 0; k < n; k++) {
-      // asci come up in waves through the night and morning, each ripening, then firing
-      const at = t0 + lerp(2, 11, r());
-      asci.push({ th: r() * Math.PI * 2, ph: Math.pow(r(), 1.3) * 0.55, len: R * lerp(0.14, 0.3, r()), r: R * lerp(0.05, 0.075, r()), t0: at, tr: at + lerp(1, 2.5, r()), tl: at + lerp(2.6, 4.5, r()) });
-    }
-    const dew: Cushion['dew'] = [];
-    for (let k = 0; k < Math.round(g.dew * 30 * R); k++) dew.push({ th: r() * Math.PI * 2, ph: r() * 0.95, r: g.dewSize * lerp(0.4, 1.6, r() * r()) * R, t: t0 + r() * 6 });
-    out.push({ c, R, Hc, seed: r() * 100, t0, asci, dew });
+    const cu = makeCushion(r, g, c, r() * g.spread, 14);
+    cu.tEnd = 1e9;
+    out.push(cu);
   }
   return out;
+}
+
+/** One cushion of this species at `c`, swelling from hour `t0`, firing asci for `life` hours. */
+export function makeCushion(r: Rand, g: Genome, c: V3, t0: number, life: number): Cushion {
+  const R = g.cushion * lerp(0.6, 1.25, r());
+  const Hc = R * lerp(1.4, 2.3, r());
+  const asci: Ascus[] = [];
+  const n = Math.round(g.asci * lerp(0.6, 1.3, r()) * (R / g.cushion) * Math.max(1, life / 14));
+  for (let k = 0; k < n; k++) {
+    // asci come up in waves through its life, each ripening, then firing
+    const at = t0 + lerp(2, Math.max(4, life - 3), r());
+    asci.push({ th: r() * Math.PI * 2, ph: Math.pow(r(), 1.3) * 0.38, len: R * lerp(0.14, 0.3, r()), r: R * lerp(0.05, 0.075, r()), t0: at, tr: at + lerp(1, 2.5, r()), tl: at + lerp(2.6, 4.5, r()) });
+  }
+  const dew: Cushion['dew'] = [];
+  for (let k = 0; k < Math.round(g.dew * 30 * R); k++) dew.push({ th: r() * Math.PI * 2, ph: r() * 0.95, r: g.dewSize * lerp(0.4, 1.6, r() * r()) * R, t: t0 + r() * 6 });
+  return { c, R, Hc, seed: r() * 100, t0, tEnd: t0 + life + 8, asci, dew };
 }
 
 /** The ground's bits: orange beads, crumbs, and water standing on it. */
@@ -351,8 +372,11 @@ export function state(st: Stalk, T: number): State {
   const thrown = T >= st.tl ? T - st.tl : -1;
   const slump = thrown >= 0 ? ease(thrown / 2.5) : 0;
   const open = ease((T - st.t0 - (st.t1 - st.t0) * 0.5) / ((st.t1 - st.t0) * 2.2));
-  const inked = ease((T - st.t1 - 3) / 5);
-  return { grown, swell, ripe, thrown, slump, open, inked };
+  const inked = st.knob || st.cap ? 0 : ease((T - st.t1 - 3) / 5);
+  // its end: it slumps over the last hours, and in the last hour sinks away
+  const end = ease((T - (st.tEnd - 6)) / 6);
+  const gone = ease((T - (st.tEnd - 1)) / 1);
+  return { grown: grown * (1 - gone), swell, ripe, thrown, slump: Math.max(slump, end), open, inked: Math.max(inked, st.bell ? end : 0) };
 }
 /** An ascus at hour T: how far up through the skin, how ripe its spores, when it fired. */
 export function ascusState(a: Ascus, T: number): { up: number; ripe: number; fired: number } {
@@ -360,17 +384,19 @@ export function ascusState(a: Ascus, T: number): { up: number; ripe: number; fir
 }
 /** The cushion's swell at hour T. */
 export function cushionGrown(c: Cushion, T: number) {
-  return 0.25 + 0.75 * ease((T - c.t0) / 3);
+  // (it swells over hours; at its end it shrivels, then it's gone)
+  return (0.25 + 0.75 * ease((T - c.t0) / 3)) * (1 - 0.6 * ease((T - (c.tEnd - 8)) / 8)) * (1 - ease((T - (c.tEnd - 0.5)) / 0.5));
 }
 /** A point on a cushion's skin: round th, down ph (0 top … 1 the foot), and its outward normal.
  * (The same shape as the jelly's vertex shader, before its lumps.) */
 export function onCushion(c: Cushion, grown: number, th: number, ph: number): { p: V3; n: V3 } {
-  const a = ph * Math.PI * 0.5;
+  // a cushion: domed, widest halfway up, its foot tucked under and sunk a little in the dung
+  const a = ph * Math.PI * 0.75;
   const R = c.R * grown;
   const H = c.Hc * grown;
   const x = Math.sin(a) * R;
-  const y = (Math.cos(a) * 0.55 + 0.45) * H;
-  return { p: [c.c[0] + Math.cos(th) * x, y, c.c[2] + Math.sin(th) * x], n: norm([Math.cos(th) * Math.sin(a) * H, Math.cos(a) * R * 0.55, Math.sin(th) * Math.sin(a) * H]) };
+  const y = c.c[1] + (0.5 + 0.5 * Math.cos(a)) * H;
+  return { p: [c.c[0] + Math.cos(th) * x, y, c.c[2] + Math.sin(th) * x], n: norm([Math.cos(th) * Math.sin(a) * 0.5 * H, Math.cos(a) * R + 1e-4, Math.sin(th) * Math.sin(a) * 0.5 * H]) };
 }
 
 /** The stalk's centreline and its radius, at s (0 foot … 1 top). The same sums are in the vertex

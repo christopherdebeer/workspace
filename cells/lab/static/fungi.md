@@ -1,8 +1,53 @@
 # Hat-throwers
 
-A macro timelapse of a small fungus's night and morning, from a seed: a patch of dung or litter,
-a few centimetres across (a few millimetres, for the cups), and sixteen hours in under a minute.
-The seed picks one of four kinds, then everything about it.
+A macro timelapse of a terrarium of dung fungi over three weeks, from a seed. Or, with `?one`,
+of a single species' night and morning.
+
+## The terrarium
+
+On dung the fungi come in an order. It's a succession, and a real one:
+
+1. **First, within days:** the pin moulds and the hat-throwers.
+2. **After a week or so:** the jelly cups.
+3. **Last, at two or three weeks:** the inkcaps.
+
+Each lives in the dung as mycelium before it fruits, eating it and taking ground from the others.
+Where it's thickest and the dung still has food and water in it, it fruits. As the dung is eaten,
+the early ones give out and the later ones take their ground.
+
+A terrarium has two to four species, in that order, each arriving on its own day
+(`client/fungi/terrarium.ts`). Under them is a grid of the dung, about a millimetre to a cell,
+stepped every six hours through the three weeks. Each cell has:
+
+- **Two foods.** Sugars are quick and soon gone; other microbes take them too. Fibre is tough
+  and lasting. The pin moulds and throwers live on the sugars, so they're done when the sugars
+  are. The cups take some of each. The inkcaps live on the fibre and come into their own late.
+- **Water.** The dung dries by day and takes up dew by night, a little drier each day.
+- **Each species' mycelium.** It spreads into the cells around it as fast as there's food and
+  water, more slowly where another holds the ground more strongly. Starved, it dies back.
+
+From the grid come the fruit. Each species flushes at nine in the evening, once it's settled in,
+in clumps where its mycelium is thickest: as many as it can feed. Every stalk and cushion has a
+lifespan; it slumps, inks, shrivels and goes.
+
+The ground shows the grid as it goes:
+
+- white mycelium where it has spread;
+- dung paling and drying where it's been eaten;
+- wet where it's wet;
+- bare grey earth beyond the pellet's edge.
+
+**The camera follows what's about to happen.** The grid's run keeps a list of moments worth
+watching: a flush coming up, a thrower about to fire, inkcaps opening or inking, a cushion's
+asci firing. A director picks the next one, a few hours ahead and not the same sort as the last.
+The camera travels there, unhurried: in close, low, the lens wide open. Between moments it pulls
+back above whatever is up, stopped down so more is sharp. The caption names the species it's
+on, or the terrarium's cast. Touch the view and the director waits; tap to pull focus.
+
+The light runs on a full day too: night, a warm dawn from five, day, a warm evening, night by
+nine. Three weeks take about eight minutes; the clock counts the days.
+
+## The kinds
 
 | Kind | What happens in its day |
 |---|---|
@@ -17,8 +62,9 @@ The seed picks one of four kinds, then everything about it.
   subject again, moving slowly from stalk to stalk as a cameraman would: one near the middle of
   the picture, ripening, and nearer rather than further.
 - **Drag** to move round; **pinch** (or the wheel) to come closer.
-- **The scrubber** is the day, and the clock is its time: it starts at nine in the evening.
-  `pause` stops the day. `another` gives a new species and a new patch. `?t=` starts at an hour.
+- **The scrubber** is the run (three weeks, or one species' day), and the clock is its time: it
+  starts at nine in the evening. `pause` stops it. `another` gives a new terrarium (or species).
+  `?t=` starts at an hour.
 
 ## The species
 

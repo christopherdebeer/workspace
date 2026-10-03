@@ -14,9 +14,12 @@
  * field (a scatter-as-gather disc, from depth) → tone.
  */
 import { DAY, along, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Genome, type Stalk, type V3 } from './genome';
+import { DAYS, GRID, SPAN, STEP, terrarium, type Moment, type Terrarium } from './terrarium';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
+/** one species on its own (`?one`), or — the default — a terrarium of them, over three weeks */
+const one = params.has('one');
 let seed = Number(params.get('seed')) || Math.floor(Math.random() * 9000) + 1;
 
 const canvas = document.getElementById('macro') as HTMLCanvasElement;
@@ -77,6 +80,9 @@ out vec4 o;
 uniform vec3 uGround;
 uniform float uWet, uMyc;
 uniform vec4 uFeet[${MYC}];
+// (a terrarium's ground: per cell, its mycelium, water, food left, and whether it's dung)
+uniform sampler2D uMap;
+uniform float uHasMap, uSpan;
 ${COMMON}
 float fine(vec2 p) { return fbm(p * 3.) * .6 + n2(p * 14.) * .25 + n2(p * 37.) * .15; }
 void main() {
@@ -96,9 +102,19 @@ void main() {
   c = mix(c, c * vec3(1.25, 1., .7), smoothstep(.5, .8, n2(p * .4 + 20.)) * .6);
   // wet in its hollows: darker, glossier
   float wet = smoothstep(.3, .7, n2(p * .35 + 11.) * .7 + (1. - crumb) * .4) * uWet;
-  c *= 1. - wet * .35;
   // mycelium: white threads in patches, and round the feet of the stalks
   float myc = uMyc * smoothstep(.62, .8, fbm(p * .45 + 30.));
+  if (uHasMap > .5) {
+    // a terrarium's: the dung's edge (beyond it, bare grey earth); eaten dung pales and dries;
+    // its water; its mycelium, where the grid says it has spread
+    vec4 m = texture(uMap, vW.xz / uSpan + .5);
+    float dung = smoothstep(.2, .8, m.a);
+    c = mix(vec3(.16, .14, .12) * (.6 + .8 * crumb), c, dung);
+    c = mix(c, c * vec3(1.5, 1.4, 1.2) + vec3(.05), (1. - m.b) * dung * .6);
+    wet = smoothstep(.3, .7, n2(p * .35 + 11.) * .5 + m.g * .6) * m.g;
+    myc = max(myc, smoothstep(.2, .95, m.r) * .55 * (.3 + .7 * fbm(p * 1.3 + 40.)));
+  }
+  c *= 1. - wet * .35;
   for (int i = 0; i < ${MYC}; i++) {
     vec4 f = uFeet[i];
     if (f.w <= 0.) continue;
@@ -395,12 +411,12 @@ float n2(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
   return mix(mix(h(i), h(i + vec2(1, 0)), u.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), u.x), u.y); }
 out vec3 vN;
 vec3 at(vec2 pt) {
-  float a = pt.x * 1.5708;
+  float a = pt.x * 2.3562;
   float th = pt.y;
   float R = aShape.x * aShape.z, H = aShape.y * aShape.z;
   vec3 ring = vec3(cos(th), 0., sin(th));
-  vec3 p = aC + ring * sin(a) * R + vec3(0., (cos(a) * .55 + .45) * H, 0.);
-  vec3 n = normalize(ring * sin(a) * H + vec3(0., cos(a) * R * .55, 0.) + vec3(0., 1e-4, 0.));
+  vec3 p = aC + ring * sin(a) * R + vec3(0., (.5 + .5 * cos(a)) * H, 0.);
+  vec3 n = normalize(ring * sin(a) * .5 * H + vec3(0., cos(a) * R, 0.) + vec3(0., 1e-4, 0.));
   // its lumps, and the wrinkles of its skin (round in th, so no seam)
   vec2 q = vec2(sin(th) * 2.5 + 3., cos(th) * 2.5 + pt.x * 4.) + aShape.w;
   float lump = (n2(q) - .5) * .16 + (n2(q * 3.1 + 5.) - .5) * .06 + (n2(q * 9. + 9.) - .5) * .02;
@@ -414,7 +430,7 @@ void main() {
   vec3 da = at(aPT + vec2(e, 0.)) - at(aPT - vec2(max(0., min(e, aPT.x)), 0.));
   vec3 n = cross(dt, da);
   if (aPT.x < .002) n = vec3(0., 1., 0.);
-  if (dot(n, p - aC - vec3(0., aShape.y * aShape.z * .3, 0.)) < 0.) n = -n;
+  if (dot(n, p - aC - vec3(0., aShape.y * aShape.z * .5, 0.)) < 0.) n = -n;
   vN = normalize(n);
   vW = p;
   vO = vec3(aPT.x, aPT.y, aShape.w);
@@ -693,48 +709,119 @@ function copyScene() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
 }
 
-// ─── the specimen ───────────────────────────────────────────────────────────────────────────────
+// ─── the specimen: one species, or a terrarium of them ─────────────────────────────────────────
+/** one of the species in view: its genome, its stalks and its cups, its scale */
+interface Sp {
+  g: Genome;
+  stalks: Stalk[];
+  cups: Cushion[];
+  S: number;
+}
+let world: Sp[] = [];
+let terr: Terrarium | null = null;
+/** the lead species: its light, its warmth, its ground */
 let g: Genome;
-let stalks: Stalk[];
-let cups: Cushion[];
 let bits: ReturnType<typeof litter>;
 /** the scale of things: the noise and the ground go by it (1: a thrower 8 mm tall) */
 let S = 1;
+/** The ground's height at (x, z) (mm): the ground's vertex shader's sums, so things stand on it. */
+function groundY(x: number, z: number): number {
+  const fr = (v: number) => v - Math.floor(v);
+  const h = (a: number, b: number) => fr(Math.sin(a * 12.9898 + b * 78.233) * 43758.5453);
+  const n2 = (a: number, b: number) => {
+    const ix = Math.floor(a);
+    const iz = Math.floor(b);
+    const fx = a - ix;
+    const fz = b - iz;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uz = fz * fz * (3 - 2 * fz);
+    const lo = h(ix, iz) + (h(ix + 1, iz) - h(ix, iz)) * ux;
+    const hi = h(ix, iz + 1) + (h(ix + 1, iz + 1) - h(ix, iz + 1)) * ux;
+    return lo + (hi - lo) * uz;
+  };
+  const px = x / S;
+  const pz = z / S;
+  const hgt = (n2(px * 0.18, pz * 0.18) - 0.5) * 1.4 + (n2(px * 0.6 + 7, pz * 0.6 + 7) - 0.5) * 0.55 + (n2(px * 1.9 + 3, pz * 1.9 + 3) - 0.5) * 0.18;
+  const l = Math.hypot(px, pz);
+  const t = Math.max(0, Math.min(1, (l - 20) / 50));
+  return (hgt - t * t * (3 - 2 * t) * 3) * S;
+}
+/** Stand everything on the ground. */
+function settle() {
+  for (const sp of world) {
+    for (const st of sp.stalks) st.base[1] = groundY(st.base[0], st.base[2]) - st.r * 0.5;
+    for (const c of sp.cups) c.c[1] = groundY(c.c[0], c.c[2]) - c.Hc * 0.15;
+  }
+  for (const b of bits.beads) b.p[1] = groundY(b.p[0], b.p[2]) + b.r * 0.2;
+  for (const c of bits.crumbs) c.p[1] = groundY(c.p[0], c.p[2]) + c.r[1] * 0.2;
+  for (const p of bits.pools) p.p[1] = groundY(p.p[0], p.p[2]);
+}
+const scaleOf = (x: Genome) => (x.form === 'cup' ? x.cushion / 4 : x.scale / 8);
 function grow(s: number) {
   seed = s;
-  g = species(seed);
-  stalks = patch(seed, g);
-  cups = cushions(seed, g);
-  bits = litter(seed, g);
-  S = g.form === 'cup' ? g.cushion / 4 : g.scale / 8;
+  if (one) {
+    g = species(seed);
+    world = [{ g, stalks: patch(seed, g), cups: cushions(seed, g), S: scaleOf(g) }];
+    terr = null;
+    bits = litter(seed, g);
+    S = scaleOf(g);
+  } else {
+    terr = terrarium(seed);
+    world = terr.species.map((x) => ({ g: x.g, stalks: x.stalks, cups: x.cups, S: scaleOf(x.g) }));
+    g = world[0].g;
+    bits = litter(seed, { ...g, patch: 22, scale: 8, beads: Math.max(g.beads, 60) });
+    S = 1;
+  }
+  settle();
   T = 0;
   focusAt = null;
   subject = -1;
+  shot = null;
   focus = 30 * S;
+  setView();
+  cur.look = [...view.look] as V3;
+  cur.dist = view.dist;
   const url = new URL(location.href);
   url.searchParams.set('seed', String(seed));
   if (!preview) history.replaceState(null, '', url);
   label();
 }
+/** a species, in a few words */
+function kindOf(x: Genome) {
+  return {
+    thrower: `throws its sporangia · ${x.vesicle > 0.8 ? 'a great vesicle' : 'a vesicle'} · ${x.height[1].toFixed(0)} mm`,
+    pin: `a pin mould · yellow-headed · ${x.height[1].toFixed(0)} mm`,
+    inkcap: `an inkcap · ${x.pleats} pleats · ${x.height[1].toFixed(0)} mm`,
+    cup: `a jelly cup · fires its asci · ${(x.cushion * 2).toFixed(1)} mm`,
+  }[x.form];
+}
+let labelled = -2;
 function label() {
   const el = document.getElementById('label');
   if (!el) return;
-  const what = {
-    thrower: `throws its sporangia · ${g.vesicle > 0.8 ? 'a great vesicle' : 'a vesicle'} · ${g.height[1].toFixed(0)} mm`,
-    pin: `a pin mould · yellow-headed · ${g.height[1].toFixed(0)} mm`,
-    inkcap: `an inkcap · ${g.pleats} pleats · ${g.height[1].toFixed(0)} mm`,
-    cup: `a jelly cup · fires its asci · ${(g.cushion * 2).toFixed(1)} mm`,
-  }[g.form];
-  el.innerHTML = `<i>${g.name}</i><span>${what}</span>`;
+  if (!terr) {
+    el.innerHTML = `<i>${g.name}</i><span>${kindOf(g)}</span>`;
+    return;
+  }
+  // a terrarium: the species the lens is on (or, between, the terrarium's cast)
+  const who = shot?.who ?? -1;
+  if (who === labelled) return;
+  labelled = who;
+  if (who < 0) el.innerHTML = `<i>a terrarium</i><span>${world.map((x) => x.g.name).join(' · ')}</span>`;
+  else el.innerHTML = `<i>${world[who].g.name}</i><span>${kindOf(world[who].g)} · one of ${world.length} here</span>`;
 }
 
 // ─── the day ────────────────────────────────────────────────────────────────────────────────────
 let T = 0;
 let playing = true;
-const RATE = DAY / (preview ? 40 : 55);
+/** how long it runs (h): a day for one species, three weeks for a terrarium */
+const span = () => (terr ? DAYS * 24 : DAY);
+/** hours a second: a day in under a minute; a terrarium's three weeks in about eight */
+const rate = () => (terr ? (preview ? 4 : 1.05) : DAY / (preview ? 40 : 55));
 const scrub = document.getElementById('scrub') as HTMLInputElement | null;
 scrub?.addEventListener('input', () => {
-  T = (Number(scrub.value) / 1000) * DAY;
+  T = (Number(scrub.value) / 1000) * span();
+  shot = null;
 });
 
 // ─── the view ───────────────────────────────────────────────────────────────────────────────────
@@ -746,11 +833,23 @@ let focusAt: { at: () => V3; until: number } | null = null;
 let autoFocus = 0;
 let subject = -1;
 const FOV = 0.55;
+/** where the camera wants to look, and from how far; and where it is now, on its way there */
+const view = { look: [0, 0, 0] as V3, dist: 30, pitch: 0.36, aperture: 1 };
+const cur = { look: [0, 0, 0] as V3, dist: 30, aperture: 1 };
+function setView() {
+  if (terr) {
+    view.look = [0, 4, 0];
+    view.dist = 62;
+    return;
+  }
+  const mid = g.form === 'cup' ? g.cushion * 2.6 : (g.height[0] + g.height[1]) / 2;
+  view.look = [0, mid * (g.form === 'cup' ? 0.45 : 0.55), 0];
+  view.dist = mid * 2.3 + 4 * S;
+}
 function camera(t: number) {
   const aspect = W / Hh;
-  const mid = g.form === 'cup' ? g.cushion * 2.6 : (g.height[0] + g.height[1]) / 2;
-  const look: V3 = [0, mid * (g.form === 'cup' ? 0.45 : 0.55), 0];
-  const d = (mid * 2.3 + 4 * S) / zoom / Math.min(1.2, Math.max(0.75, aspect * 1.4));
+  const look = cur.look;
+  const d = cur.dist / zoom / Math.min(1.2, Math.max(0.75, aspect * 1.4));
   const y = yaw + Math.sin(t * 0.05) * 0.15 + shake * 0.012 * Math.sin(t * 57);
   const pt = pitch + shake * 0.01 * Math.cos(t * 49);
   const eye: V3 = [look[0] + Math.cos(pt) * Math.cos(y) * d, look[1] + Math.sin(pt) * d, look[2] + Math.cos(pt) * Math.sin(y) * d];
@@ -765,6 +864,96 @@ function camera(t: number) {
   return { eye, f, r, up, view, vp: mul(proj, view), near, far, aspect, focal: (Hh / 2) * tt, d };
 }
 
+// ─── the director: in a terrarium, the camera goes to what's about to happen ────────────────────
+/** the shot: what it's on (whose), where to look and from how far, until when */
+let shot: { look: V3; dist: number; until: number; who: number; kind: string } | null = null;
+/** a hand on the view: the director waits */
+let handsOn = -1e9;
+let lastKind = '';
+function direct(dt: number) {
+  if (!terr) return;
+  if (time < handsOn + 20) return;
+  if (!shot || T > shot.until) {
+    // the next moment worth seeing: soon, and not the same sort of thing as the last
+    let best: Moment | null = null;
+    let score = -1e9;
+    for (const m of terr.moments) {
+      const lead = m.T - T;
+      if (lead < 0.6 || lead > 7) continue;
+      const sc = -lead * 0.3 + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' || m.kind === 'fire' ? 0.4 : 0) + Math.random() * 0.5;
+      if (sc > score) {
+        score = sc;
+        best = m;
+      }
+    }
+    // (`?moment`: always a moment, never a breath — for looking at them)
+    if (best && (params.has('moment') || Math.random() < 0.85)) {
+      shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + 1.2, who: best.who, kind: best.kind };
+      view.pitch = 0.22 + Math.random() * 0.2;
+      view.aperture = 1;
+      lastKind = best.kind;
+    } else {
+      // (nothing coming, or a breath between: what's up now, from a little above)
+      const live = livePlaces();
+      const c: V3 = live.length ? [live.reduce((s, p) => s + p[0], 0) / live.length, 3, live.reduce((s, p) => s + p[2], 0) / live.length] : [0, 2, 0];
+      const spread = live.length ? Math.max(...live.map((p) => Math.hypot(p[0] - c[0], p[2] - c[2]))) : 18;
+      shot = { look: c, dist: Math.min(60, Math.max(22, spread * 2.2 + 12)), until: T + 4, who: -1, kind: 'wide' };
+      view.pitch = 0.55 + Math.random() * 0.2;
+      // (stopped down: a wide shot wants more of it sharp)
+      view.aperture = 0.3;
+      lastKind = 'wide';
+    }
+    view.look = shot.look;
+    view.dist = shot.dist;
+    label();
+  }
+}
+/** Where things are up now (their feet): for a wide shot to frame. */
+function livePlaces(): V3[] {
+  const out: V3[] = [];
+  for (const sp of world) {
+    for (const st of sp.stalks) if (T > st.t0 && T < st.tEnd) out.push(st.base);
+    for (const c of sp.cups) if (T > c.t0 && T < c.tEnd) out.push(c.c);
+  }
+  return out;
+}
+/** The camera on its way to the shot: unhurried, as a slider and a focus puller would. */
+function travel(dt: number) {
+  if (!terr && time < 0.1) {
+    cur.look = [...view.look] as V3;
+    cur.dist = view.dist;
+  }
+  // (paused: straight there)
+  const k = playing ? 1 - Math.exp(-dt * (terr ? 0.9 : 4)) : 1;
+  for (let i = 0; i < 3; i++) cur.look[i] += (view.look[i] - cur.look[i]) * k;
+  // (distance in log: a move from 60 mm to 4 mm shouldn't rush its last stretch)
+  cur.dist = Math.exp(Math.log(cur.dist) + (Math.log(view.dist) - Math.log(cur.dist)) * k);
+  if (terr && time > handsOn + 20) pitch += (view.pitch - pitch) * k;
+  cur.aperture += (view.aperture - cur.aperture) * k;
+}
+
+// ─── the ground's map (a terrarium's): mycelium, water, food, dung, interpolated through time ──
+const mapTex = gl.createTexture()!;
+gl.bindTexture(gl.TEXTURE_2D, mapTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, GRID, GRID, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+const mapNow = new Uint8Array(GRID * GRID * 4);
+function updateMap() {
+  if (!terr) return;
+  const k = Math.max(0, T) / STEP;
+  const i0 = Math.min(terr.ground.length - 1, Math.floor(k));
+  const i1 = Math.min(terr.ground.length - 1, i0 + 1);
+  const f = k - Math.floor(k);
+  const a = terr.ground[i0];
+  const b = terr.ground[i1];
+  for (let i = 0; i < mapNow.length; i++) mapNow[i] = a[i] + (b[i] - a[i]) * f;
+  gl.bindTexture(gl.TEXTURE_2D, mapTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, GRID, GRID, gl.RGBA, gl.UNSIGNED_BYTE, mapNow);
+}
+
 // ─── the frame's things ─────────────────────────────────────────────────────────────────────────
 /** A point along a tube that isn't a stalk (an ascus): the tube shader's sums, with no wave. */
 function tubeAt(base: V3, dir: [number, number], lean: number, L: number, u: number): V3 {
@@ -773,16 +962,21 @@ function tubeAt(base: V3, dir: [number, number], lean: number, L: number, u: num
 function things() {
   const solid: number[] = [];
   const dew: number[] = [];
+  const feet: number[] = [];
+  const per: Array<{ sp: Sp; tube: number[]; bell: number[]; jelly: number[]; hair: number[] }> = [];
+  for (const b of bits.beads) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...g.bead, 1);
+  for (const c of bits.crumbs) solid.push(...c.p, ...c.r, ...c.c, 2);
+  for (const p of bits.pools) dew.push(p.p[0], p.p[1] + p.r * 0.12, p.p[2], p.r, p.r * 0.35, p.r, 1, 1, 1, 1);
+  for (const sp of world) {
+  const g = sp.g;
   const tube: number[] = [];
   const bell: number[] = [];
   const jelly: number[] = [];
-  const feet: number[] = [];
   const hair: number[] = [];
-  for (const b of bits.beads) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...g.bead, 1);
-  for (const c of bits.crumbs) solid.push(...c.p, ...c.r, ...c.c, 2);
-  for (const p of bits.pools) dew.push(p.p[0], p.r * 0.12, p.p[2], p.r, p.r * 0.35, p.r, 1, 1, 1, 1);
+  per.push({ sp, tube, bell, jelly, hair });
   const velvet = g.form === 'inkcap';
-  for (const st of stalks) {
+  for (const st of sp.stalks) {
+    if (T < st.t0 || T > st.tEnd) continue;
     const s = state(st, T);
     if (s.grown <= 0.001) continue;
     const Lnow = st.len * s.grown;
@@ -795,7 +989,7 @@ function things() {
       const k = 0.35 + 0.65 * s.grown;
       bell.push(...top.p, ...top.t, st.bell * k, st.bell * st.bellTall * k, s.open, g.pleats, g.pleatDepth, s.inked * g.ink, st.phase, 0);
       const fr = st.r * 1.8;
-      solid.push(st.base[0], 0, st.base[2], fr, fr * 0.6, fr, 0.9, 0.9, 0.87, 3);
+      solid.push(st.base[0], st.base[1] + st.r * 0.5, st.base[2], fr, fr * 0.6, fr, 0.9, 0.9, 0.87, 3);
       // the mycelium round its foot: threads out over the ground and up its base, curling
       let q = Math.floor(st.phase * 9973) >>> 0;
       const rnd = () => ((q = (Math.imul(q, 1664525) + 1013904223) >>> 0) / 4294967296);
@@ -803,7 +997,7 @@ function things() {
       for (let k = 0; k < n; k++) {
         const a = rnd() * Math.PI * 2;
         const d = st.r * (0.6 + rnd() * 2.2);
-        const b: V3 = [st.base[0] + Math.cos(a) * d, 0, st.base[2] + Math.sin(a) * d];
+        const b: V3 = [st.base[0] + Math.cos(a) * d, groundY(st.base[0] + Math.cos(a) * d, st.base[2] + Math.sin(a) * d), st.base[2] + Math.sin(a) * d];
         const L = st.r * (1.5 + rnd() * 4) * (0.4 + 0.6 * s.grown);
         hair.push(...b, Math.cos(a), Math.sin(a), 2 + rnd() * 5, 0, L, st.r * 0.08, 0, 1, 0, 0.6, rnd() * 9, 0, 0, 0, 0.25, 0.2);
       }
@@ -851,7 +1045,8 @@ function things() {
     }
   }
   // the cups: a cushion of jelly; its asci, clear tubes up through its skin, eight spores in each
-  for (const c of cups) {
+  for (const c of sp.cups) {
+    if (T < c.t0 || T > c.tEnd) continue;
     const gr = cushionGrown(c, T);
     jelly.push(...c.c, c.R, c.Hc, gr, c.seed);
     for (const a of c.asci) {
@@ -891,8 +1086,9 @@ function things() {
       dew.push(sk.p[0] + sk.n[0] * rr * 0.5, sk.p[1] + sk.n[1] * rr * 0.5, sk.p[2] + sk.n[2] * rr * 0.5, rr, rr * 0.85, rr, 1, 1, 1, 1);
     }
   }
+  }
   while (feet.length < MYC * 4) feet.push(0, 0, 1, 0);
-  return { solid, dew, tube, bell, jelly, feet, hair };
+  return { solid, dew, per, feet };
 }
 
 // ─── the light through the day: a cool lamp-lit night, a low warm dawn behind them, the morning ─
@@ -904,10 +1100,11 @@ function daylight(T: number) {
     const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
     return t * t * (3 - 2 * t);
   };
-  // dawn comes in from five, full morning by nine
-  const t = hour < 12 ? hour : hour - 24;
-  const dawn = ss(4.5, 6.5, t) * (1 - ss(7, 9, t));
-  const day = ss(5.5, 9, t);
+  // dawn comes in from five, full morning by nine; the light goes warm again toward evening, and
+  // it's night by nine
+  const h = hour;
+  const day = ss(5.5, 9, h) * (1 - ss(17.5, 20.5, h));
+  const dawn = Math.max(ss(4.5, 6.5, h) * (1 - ss(7, 9, h)), ss(16.5, 18.5, h) * (1 - ss(19.5, 21, h)));
   const warm = g.warmth;
   const night: V3 = [0.42, 0.52, 0.72];
   const sun: V3 = [1, 0.62 + 0.1 * (1 - warm), 0.36 + 0.1 * (1 - warm)];
@@ -964,11 +1161,18 @@ function frame(now: number) {
     canvas.height = h;
   }
   targets(w, h);
-  if (playing) T += dt * RATE;
-  if (T > DAY + 1.5) T = 0;
-  fade = Math.min(1, T < 0.6 ? T / 0.6 : T > DAY + 0.8 ? Math.max(0, (DAY + 1.5 - T) / 0.7) : 1);
-  if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round((Math.min(T, DAY) / DAY) * 1000));
+  if (playing) T += dt * rate();
+  const end = span();
+  if (T > end + 1.5) {
+    T = 0;
+    shot = null;
+  }
+  fade = Math.min(1, T < 0.6 ? T / 0.6 : T > end + 0.8 ? Math.max(0, (end + 1.5 - T) / 0.7) : 1);
+  if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round((Math.min(T, end) / end) * 1000));
   clock();
+  direct(dt);
+  travel(dt);
+  updateMap();
 
   // (a new day: everything can fire again)
   if (T < lastT) jolted = new WeakSet();
@@ -1013,40 +1217,56 @@ function frame(now: number) {
   gl.uniform1f(u(groundProg, 'uWet'), g.wet);
   gl.uniform1f(u(groundProg, 'uMyc'), g.mycelium * (g.form === 'inkcap' ? 0.6 : 0.3));
   gl.uniform4fv(u(groundProg, 'uFeet'), th.feet);
+  gl.uniform1f(u(groundProg, 'uHasMap'), terr ? 1 : 0);
+  gl.uniform1f(u(groundProg, 'uSpan'), SPAN);
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, mapTex);
+  gl.uniform1i(u(groundProg, 'uMap'), 2);
+  gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(groundVao);
   gl.drawArrays(gl.TRIANGLES, 0, groundCount);
   common(solidProg);
   gl.uniform1f(u(solidProg, 'uFocal'), cam.focal);
   draw(solids, th.solid);
-  if (th.bell.length) {
+  // (each species with its own colours and its own scale)
+  for (const q of th.per) {
+    if (!q.bell.length) continue;
+    const x = q.sp.g;
     common(bellProg);
-    gl.uniform3fv(u(bellProg, 'uBell'), g.bellColour);
-    gl.uniform3fv(u(bellProg, 'uBellTop'), g.bellTop);
-    draw(bells, th.bell);
+    gl.uniform1f(u(bellProg, 'uS'), q.sp.S);
+    gl.uniform3fv(u(bellProg, 'uBell'), x.bellColour);
+    gl.uniform3fv(u(bellProg, 'uBellTop'), x.bellTop);
+    draw(bells, q.bell);
   }
   // 2. the glass: jelly and tubes, seeing through to it
   copyScene();
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, copyTex);
-  if (th.jelly.length) {
-    common(jellyProg);
-    gl.uniformMatrix4fv(u(jellyProg, 'uView'), false, cam.view);
-    gl.uniform2f(u(jellyProg, 'uRes'), W, Hh);
-    gl.uniform3fv(u(jellyProg, 'uJelly'), g.jelly);
-    gl.uniform3fv(u(jellyProg, 'uDeep'), g.jellyDeep);
-    gl.uniform1i(u(jellyProg, 'uBehind'), 0);
-    draw(jellies, th.jelly);
+  for (const q of th.per) {
+    const x = q.sp.g;
+    if (q.jelly.length) {
+      common(jellyProg);
+      gl.uniform1f(u(jellyProg, 'uS'), q.sp.S);
+      gl.uniformMatrix4fv(u(jellyProg, 'uView'), false, cam.view);
+      gl.uniform2f(u(jellyProg, 'uRes'), W, Hh);
+      gl.uniform3fv(u(jellyProg, 'uJelly'), x.jelly);
+      gl.uniform3fv(u(jellyProg, 'uDeep'), x.jellyDeep);
+      gl.uniform1i(u(jellyProg, 'uBehind'), 0);
+      draw(jellies, q.jelly);
+    }
+    if (!q.tube.length && !q.hair.length) continue;
+    common(stalkProg);
+    gl.uniform1f(u(stalkProg, 'uS'), q.sp.S);
+    gl.uniformMatrix4fv(u(stalkProg, 'uView'), false, cam.view);
+    gl.uniform2f(u(stalkProg, 'uRes'), W, Hh);
+    gl.uniform3fv(u(stalkProg, 'uGlass'), x.form === 'cup' ? mixV([0.95, 0.97, 0.92], x.jelly, 0.3) : x.glass);
+    gl.uniform3fv(u(stalkProg, 'uTip'), x.tip);
+    gl.uniform3fv(u(stalkProg, 'uVelvet'), mixV(x.bellColour, [1, 1, 1], 0.55));
+    gl.uniform1f(u(stalkProg, 'uThrows'), x.throws ? 1 : 0);
+    gl.uniform1i(u(stalkProg, 'uBehind'), 0);
+    draw(tubes, q.tube);
+    draw(hairs, q.hair);
   }
-  common(stalkProg);
-  gl.uniformMatrix4fv(u(stalkProg, 'uView'), false, cam.view);
-  gl.uniform2f(u(stalkProg, 'uRes'), W, Hh);
-  gl.uniform3fv(u(stalkProg, 'uGlass'), g.form === 'cup' ? mixV([0.95, 0.97, 0.92], g.jelly, 0.3) : g.glass);
-  gl.uniform3fv(u(stalkProg, 'uTip'), g.tip);
-  gl.uniform3fv(u(stalkProg, 'uVelvet'), mixV(g.bellColour, [1, 1, 1], 0.55));
-  gl.uniform1f(u(stalkProg, 'uThrows'), g.throws ? 1 : 0);
-  gl.uniform1i(u(stalkProg, 'uBehind'), 0);
-  draw(tubes, th.tube);
-  draw(hairs, th.hair);
   // 3. the droplets, seeing through to all of that
   copyScene();
   common(dropProg);
@@ -1071,7 +1291,7 @@ function frame(now: number) {
   gl.uniform2f(u(dofProg, 'uRes'), W, Hh);
   gl.uniform1f(u(dofProg, 'uFocus'), focus);
   const maxBlur = Math.round(Hh * 0.022);
-  gl.uniform1f(u(dofProg, 'uK'), maxBlur * 2.2);
+  gl.uniform1f(u(dofProg, 'uK'), maxBlur * 2.2 * cur.aperture);
   gl.uniform1f(u(dofProg, 'uMax'), maxBlur);
   gl.uniform1f(u(dofProg, 'uNear'), cam.near);
   gl.uniform1f(u(dofProg, 'uFar'), cam.far);
@@ -1081,7 +1301,7 @@ function frame(now: number) {
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
-  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.tube.length / tubes.stride, drops: th.dew.length / drops.stride, bells: th.bell.length / bells.stride, focus: Math.round(focus * 100) / 100 };
+  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100 };
   requestAnimationFrame(frame);
 }
 function ringAt(t: V3, dir: [number, number], a: number): V3 {
@@ -1094,15 +1314,21 @@ function ringAt(t: V3, dir: [number, number], a: number): V3 {
 // ─── focus: pulled slowly from subject to subject, as a cameraman would; a tap pulls it there ────
 /** The things worth focusing on: each stalk's top, each cushion's crown. */
 function subjects(): Array<{ at: () => V3; weight: number }> {
-  if (cups.length) return cups.map((c) => ({ at: () => onCushion(c, cushionGrown(c, T), 0, 0.2).p, weight: cushionGrown(c, T) }));
-  return stalks.map((st) => {
-    const s = state(st, T);
-    return { at: () => along(st, state(st, T), 0.92).p, weight: s.grown < 0.3 ? -1 : s.swell * 0.4 + s.ripe * 0.2 + s.open * 0.3 };
-  });
+  const out: Array<{ at: () => V3; weight: number }> = [];
+  for (const sp of world) {
+    for (const c of sp.cups) if (T > c.t0 && T < c.tEnd) out.push({ at: () => onCushion(c, cushionGrown(c, T), 0, 0.2).p, weight: cushionGrown(c, T) });
+    for (const st of sp.stalks) {
+      if (T < st.t0 || T > st.tEnd) continue;
+      const s = state(st, T);
+      out.push({ at: () => along(st, state(st, T), 0.92).p, weight: s.grown < 0.3 ? -1 : s.swell * 0.4 + s.ripe * 0.2 + s.open * 0.3 });
+    }
+  }
+  return out;
 }
 function pullFocus(cam: ReturnType<typeof camera>, dt: number) {
   let target: number;
   if (focusAt && time < focusAt.until) target = depthOf(cam, focusAt.at());
+  else if (terr && time > handsOn + 20) target = depthOf(cam, cur.look);
   else {
     focusAt = null;
     autoFocus -= dt;
@@ -1113,7 +1339,7 @@ function pullFocus(cam: ReturnType<typeof camera>, dt: number) {
     }
     target = subject >= 0 ? depthOf(cam, list[subject].at()) : cam.d;
   }
-  focus += (target - focus) * Math.min(1, dt * 1.6);
+  focus += (target - focus) * (playing ? Math.min(1, dt * 1.6) : 1);
 }
 function depthOf(cam: ReturnType<typeof camera>, p: V3) {
   return Math.max(cam.near * 2, dot3(sub3(p, cam.eye), cam.f));
@@ -1156,8 +1382,10 @@ function tapFocus(px: number, py: number) {
       best = at;
     }
   };
-  for (const st of stalks) for (const uu of [0.3, 0.6, 0.9, 1]) probe(() => along(st, state(st, T), uu).p);
-  for (const c of cups) for (const ph of [0, 0.3, 0.6, 0.9]) for (const a of [0, 1.6, 3.1, 4.7]) probe(() => onCushion(c, cushionGrown(c, T), a, ph).p);
+  for (const sp of world) {
+    for (const st of sp.stalks) if (T > st.t0 && T < st.tEnd) for (const uu of [0.3, 0.6, 0.9, 1]) probe(() => along(st, state(st, T), uu).p);
+    for (const c of sp.cups) if (T > c.t0 && T < c.tEnd) for (const ph of [0, 0.3, 0.6, 0.9]) for (const a of [0, 1.6, 3.1, 4.7]) probe(() => onCushion(c, cushionGrown(c, T), a, ph).p);
+  }
   if (best && bd < 0.08) focusAt = { at: best, until: time + 12 };
   else if (dir[1] < 0) {
     const t = -cam.eye[1] / dir[1];
@@ -1186,10 +1414,12 @@ canvas.addEventListener('pointermove', (e) => {
     const [a, b] = [...pts.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
     if (pinch) zoom = Math.max(0.7, Math.min(4, zoom * (d / pinch)));
+    handsOn = time;
     pinch = d;
     return;
   }
   yaw += dx * 0.006;
+  handsOn = time;
   pitch = Math.max(0.04, Math.min(0.9, pitch + dy * 0.004));
 });
 canvas.addEventListener('pointerup', (e) => {
@@ -1202,6 +1432,7 @@ canvas.addEventListener('pointercancel', (e) => pts.delete(e.pointerId));
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   zoom = Math.max(0.7, Math.min(4, zoom * Math.exp(-e.deltaY * 0.0012)));
+  handsOn = time;
 }, { passive: false });
 document.getElementById('another')?.addEventListener('click', () => grow(Math.floor(Math.random() * 9000) + 1));
 document.getElementById('play')?.addEventListener('click', (e) => {
@@ -1211,8 +1442,11 @@ document.getElementById('play')?.addEventListener('click', (e) => {
 function clock() {
   const el = document.getElementById('clock');
   if (!el) return;
-  const hour = (21 + Math.min(T, DAY)) % 24;
-  el.textContent = `${String(Math.floor(hour)).padStart(2, '0')}:${String(Math.floor((hour % 1) * 60)).padStart(2, '0')}`;
+  const t = Math.min(T, span());
+  const hour = (21 + t) % 24;
+  const hm = `${String(Math.floor(hour)).padStart(2, '0')}:${String(Math.floor((hour % 1) * 60)).padStart(2, '0')}`;
+  // (a terrarium counts its days: the first begins at nine in the evening)
+  el.textContent = terr ? `day ${Math.floor((t + 21) / 24) + 1} · ${hm}` : hm;
 }
 
 // ─── small maths ────────────────────────────────────────────────────────────────────────────────
