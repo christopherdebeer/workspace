@@ -440,6 +440,32 @@ void main() {
   o = vec4(col, 1.);
 }`;
 
+// the far distance: a haze of green and warm light, with soft glows (leaves, light, far away)
+const BACK_VS = `#version 300 es
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, .99999, 1.); }`;
+const BACK_FS = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform vec2 uRes;
+uniform vec3 uLightCol, uSky, uWarm;
+uniform float uSeed, uYaw;
+float h(float x) { return fract(sin(x * 12.9898 + 78.233) * 43758.5453); }
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float aspect = uRes.x / uRes.y;
+  vec3 c = mix(uSky * .12, uSky * .28 + uWarm * .07, smoothstep(.15, 1., uv.y));
+  // (they drift a little as the view turns: they're far, not painted on the lens)
+  for (int i = 0; i < 9; i++) {
+    float f = float(i) + uSeed;
+    vec2 at = vec2(fract(h(f) - uYaw * .12), .35 + .7 * h(f + 3.));
+    float r = .12 + .25 * h(f + 7.);
+    float d = length((uv - at) * vec2(aspect, 1.));
+    vec3 tint = mix(uSky * 1.3, uWarm, h(f + 11.));
+    c += tint * smoothstep(r, r * .2, d) * (.04 + .09 * h(f + 13.));
+  }
+  o = vec4(c, 1.);
+}`;
+
 const DOF_FS = `#version 300 es
 precision highp float;
 out vec4 o;
@@ -507,6 +533,7 @@ const stalkProg = program(STALK_VS, STALK_FS);
 const bellProg = program(BELL_VS, BELL_FS);
 const jellyProg = program(JELLY_VS, JELLY_FS);
 const dofProg = program(QUAD_VS, DOF_FS);
+const backProg = program(BACK_VS, BACK_FS);
 const U = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
 const u = (p: WebGLProgram, n: string) => {
   let m = U.get(p);
@@ -599,6 +626,8 @@ const SPH: Array<[string, number]> = [['aC', 3], ['aR', 3], ['aCol', 4]];
 const solids = instanced(solidProg, sphereVerts, [['aP', 3]], SPH);
 const drops = instanced(dropProg, sphereVerts, [['aP', 3]], SPH);
 const tubes = instanced(stalkProg, grid(48, 16, (k) => 1 - Math.pow(1 - k, 1.5)), [['aUA', 2]], [['aBase', 3], ['aDir', 4], ['aShape', 4], ['aMore', 4], ['aLook', 4]]);
+// (fine hairs: the same tube, far fewer rings)
+const hairs = instanced(stalkProg, grid(5, 4), [['aUA', 2]], [['aBase', 3], ['aDir', 4], ['aShape', 4], ['aMore', 4], ['aLook', 4]]);
 const bells = instanced(bellProg, grid(40, 112), [['aTA', 2]], [['aAt', 3], ['aAxis', 3], ['aB', 4], ['aC', 4]]);
 const jellies = instanced(jellyProg, grid(36, 72), [['aPT', 2]], [['aC', 3], ['aShape', 4]]);
 const quadVao = gl.createVertexArray()!;
@@ -709,8 +738,9 @@ function camera(t: number) {
   const mid = g.form === 'cup' ? g.cushion * 2.6 : (g.height[0] + g.height[1]) / 2;
   const look: V3 = [0, mid * (g.form === 'cup' ? 0.45 : 0.55), 0];
   const d = (mid * 2.3 + 4 * S) / zoom / Math.min(1.2, Math.max(0.75, aspect * 1.4));
-  const y = yaw + Math.sin(t * 0.05) * 0.15;
-  const eye: V3 = [look[0] + Math.cos(pitch) * Math.cos(y) * d, look[1] + Math.sin(pitch) * d, look[2] + Math.cos(pitch) * Math.sin(y) * d];
+  const y = yaw + Math.sin(t * 0.05) * 0.15 + shake * 0.012 * Math.sin(t * 57);
+  const pt = pitch + shake * 0.01 * Math.cos(t * 49);
+  const eye: V3 = [look[0] + Math.cos(pt) * Math.cos(y) * d, look[1] + Math.sin(pt) * d, look[2] + Math.cos(pt) * Math.sin(y) * d];
   const f = norm3(sub3(look, eye));
   const r = norm3(cross3(f, [0, 1, 0]));
   const up = cross3(r, f);
@@ -734,6 +764,7 @@ function things() {
   const bell: number[] = [];
   const jelly: number[] = [];
   const feet: number[] = [];
+  const hair: number[] = [];
   for (const b of bits.beads) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...g.bead, 1);
   for (const c of bits.crumbs) solid.push(...c.p, ...c.r, ...c.c, 2);
   for (const p of bits.pools) dew.push(p.p[0], p.r * 0.12, p.p[2], p.r, p.r * 0.35, p.r, 1, 1, 1, 1);
@@ -750,8 +781,19 @@ function things() {
       // an inkcap: its bell on top, a white tuft of mycelium at its foot
       const k = 0.35 + 0.65 * s.grown;
       bell.push(...top.p, ...top.t, st.bell * k, st.bell * st.bellTall * k, s.open, g.pleats, g.pleatDepth, s.inked * g.ink, st.phase, 0);
-      const fr = st.r * 3.2;
-      solid.push(st.base[0], 0, st.base[2], fr, fr * 0.7, fr, 0.9, 0.9, 0.87, 3);
+      const fr = st.r * 1.8;
+      solid.push(st.base[0], 0, st.base[2], fr, fr * 0.6, fr, 0.9, 0.9, 0.87, 3);
+      // the mycelium round its foot: threads out over the ground and up its base, curling
+      let q = Math.floor(st.phase * 9973) >>> 0;
+      const rnd = () => ((q = (Math.imul(q, 1664525) + 1013904223) >>> 0) / 4294967296);
+      const n = Math.round(26 * g.mycelium);
+      for (let k = 0; k < n; k++) {
+        const a = rnd() * Math.PI * 2;
+        const d = st.r * (0.6 + rnd() * 2.2);
+        const b: V3 = [st.base[0] + Math.cos(a) * d, 0, st.base[2] + Math.sin(a) * d];
+        const L = st.r * (1.5 + rnd() * 4) * (0.4 + 0.6 * s.grown);
+        hair.push(...b, Math.cos(a), Math.sin(a), 2 + rnd() * 5, 0, L, st.r * 0.08, 0, 1, 0, 0.6, rnd() * 9, 0, 0, 0, 0.25, 0.2);
+      }
       if (feet.length < MYC * 4) feet.push(st.base[0], st.base[2], st.r * 9, g.mycelium);
     }
     if (st.cap > 0 && s.ripe > 0) {
@@ -764,6 +806,17 @@ function things() {
         else c = [c[0] + st.fly[0] * f * f * 60, c[1] + st.fly[1] * f * f * 60, c[2] + st.fly[2] * f * f * 60];
       }
       if (show) solid.push(...c, cr, cr * g.capFlat, cr, ...mixV(g.tip, g.capColour, s.ripe), 0);
+      if (show && s.thrown >= 0) {
+        // (a streak: where it was a moment ago, fainter and smaller, as a shutter would smear it)
+        const f = s.thrown / 0.08;
+        for (let j = 1; j <= 5; j++) {
+          const fj = Math.max(0, f - j * 0.05);
+          const k = 1 - j * 0.15;
+          const cj: V3 = [top.p[0] + st.fly[0] * fj * fj * 60, top.p[1] + st.fly[1] * fj * fj * 60, top.p[2] + st.fly[2] * fj * fj * 60];
+          solid.push(...cj, cr * k, cr * g.capFlat * k, cr * k, ...g.capColour, 0);
+        }
+        jolt(top.p, st, 1);
+      }
     }
     for (const d of st.dew) {
       if (T < d.t || d.s > s.grown + 0.02) continue;
@@ -803,6 +856,7 @@ function things() {
       tube.push(...base, dir[0], dir[1], lean, 0, L, a.r, 0, 1, a.r, 0, 0, spent, 0, st.ripe, 1, 0);
       // its spores: a column of eight in its top, greenish, ripening black; fired, they fly off
       // together as one, too fast for the eye
+      if (st.fired >= 0) jolt(sk.p, a, 0.35);
       if (st.fired < 0.05) {
         const fl = st.fired >= 0 ? st.fired / 0.05 : 0;
         const tip = tubeAt(base, dir, lean, L, 1);
@@ -825,8 +879,27 @@ function things() {
     }
   }
   while (feet.length < MYC * 4) feet.push(0, 0, 1, 0);
-  return { solid, dew, tube, bell, jelly, feet };
+  return { solid, dew, tube, bell, jelly, feet, hair };
 }
+
+// ─── the jolt: when something fires near where the lens is looking, the camera feels it ────────
+let shake = 0;
+let jolted = new WeakSet<object>();
+let lastT = 0;
+function jolt(p: V3, who: object, k: number) {
+  if (jolted.has(who)) return;
+  jolted.add(who);
+  const cam = lastCam;
+  if (!cam) return;
+  // (more the nearer it is to the plane of focus, and to the middle of the picture)
+  const d = sub3(p, cam.eye);
+  const z = dot3(d, cam.f);
+  if (z <= 0) return;
+  const off = Math.hypot(dot3(d, cam.r), dot3(d, cam.up)) / z;
+  const near = Math.exp(-Math.abs(z - focus) / (focus * 0.25)) * Math.max(0, 1 - off * 1.5);
+  shake = Math.min(1.5, shake + k * near);
+}
+let lastCam: ReturnType<typeof camera> | null = null;
 
 // ─── drawing ────────────────────────────────────────────────────────────────────────────────────
 let last = performance.now();
@@ -857,7 +930,12 @@ function frame(now: number) {
   if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round((Math.min(T, DAY) / DAY) * 1000));
   clock();
 
+  // (a new day: everything can fire again)
+  if (T < lastT) jolted = new WeakSet();
+  lastT = T;
+  shake *= Math.exp(-dt * 5);
   const cam = camera(time);
+  lastCam = cam;
   pullFocus(cam, dt);
   const warm = g.warmth;
   const lightCol: V3 = [1, 0.9 + 0.08 * (1 - warm), 0.75 + 0.2 * (1 - warm)];
@@ -883,6 +961,15 @@ function frame(now: number) {
     gl.uniform3fv(u(p, 'uSky'), sky);
     gl.uniform1f(u(p, 'uS'), S);
   };
+  gl.useProgram(backProg);
+  gl.uniform2f(u(backProg, 'uRes'), W, Hh);
+  gl.uniform3fv(u(backProg, 'uLightCol'), lightCol);
+  gl.uniform3fv(u(backProg, 'uSky'), sky);
+  gl.uniform3fv(u(backProg, 'uWarm'), [0.9, 0.75, 0.35]);
+  gl.uniform1f(u(backProg, 'uSeed'), seed % 97);
+  gl.uniform1f(u(backProg, 'uYaw'), yaw);
+  gl.bindVertexArray(quadVao);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
   common(groundProg);
   gl.uniform3fv(u(groundProg, 'uGround'), g.ground);
   gl.uniform1f(u(groundProg, 'uWet'), g.wet);
@@ -921,6 +1008,7 @@ function frame(now: number) {
   gl.uniform1f(u(stalkProg, 'uThrows'), g.throws ? 1 : 0);
   gl.uniform1i(u(stalkProg, 'uBehind'), 0);
   draw(tubes, th.tube);
+  draw(hairs, th.hair);
   // 3. the droplets, seeing through to all of that
   copyScene();
   common(dropProg);
@@ -1002,7 +1090,8 @@ function chooseSubject(cam: ReturnType<typeof camera>, list: ReturnType<typeof s
     if (z <= 0) return;
     const x = dot3(d, cam.r) / z;
     const y = dot3(d, cam.up) / z;
-    const sc = -Math.hypot(x * 2, y * 2.5) + s.weight + Math.random() * 0.35;
+    // (the middle of the picture, ripening, and nearer rather than further)
+    const sc = -Math.hypot(x * 2, y * 2.5) + s.weight + Math.random() * 0.35 - Math.max(0, z / cam.d - 0.9) * 2.5;
     if (sc > score) {
       score = sc;
       best = i;

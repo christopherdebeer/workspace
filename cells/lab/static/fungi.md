@@ -14,7 +14,8 @@ The seed picks one of four kinds, then everything about it.
 ## Hands
 
 - **Tap a stalk** to pull focus to it. It holds there for a while, then the camera finds its own
-  subject again, moving slowly from stalk to stalk as a cameraman would.
+  subject again, moving slowly from stalk to stalk as a cameraman would: one near the middle of
+  the picture, ripening, and nearer rather than further.
 - **Drag** to move round; **pinch** (or the wheel) to come closer.
 - **The scrubber** is the day, and the clock is its time: it starts at nine in the evening.
   `pause` stops the day. `another` gives a new species and a new patch. `?t=` starts at an hour.
@@ -54,7 +55,11 @@ jelly is lit from inside, and the depth of field is a few millimetres.
    - **The inkcaps' bells:** surfaces of revolution, pleated, opening from egg to bell, glowing
      where the light is behind their thin flesh, with fine dark gills beneath. They ink, wet and
      shining, at the margin.
-   - **Spores and mycelium:** the asci's spores, and tufts of mycelium (hairs, not a skin).
+   - **Spores and mycelium:** the asci's spores, and tufts of mycelium (hairs, not a skin). Round
+     each inkcap's foot, threads of mycelium fan out over the ground and curl: the same tube as
+     the stalks, at a fraction of the detail, a few dozen to a foot.
+   - **The far distance:** a haze, warm toward the top, with soft discs of far-off light that
+     drift a little as the view turns. It's always behind everything, so always at full blur.
 2. **The glass.**
    - **The jelly** is a cushion, lumpy and wrinkled, refracting what's in it, its colour mostly
      in the light that comes through. Its skin glistens.
@@ -64,7 +69,10 @@ jelly is lit from inside, and the depth of field is a few millimetres.
 3. **The droplets.** Each is a ball lens: on the stalks, on the jelly, and standing in pools on
    the ground. The picture behind it is flipped into it, with a dark rim and a glint that
    blooms.
-4. **The depth of field.** Each pixel gathers from a disc as wide as its own blur. It takes a
+4. **The throw.** A thrown sporangium leaves a streak of itself along its flight, as a shutter
+   would smear it. When something fires near where the lens is looking (a sporangium, or a cup's
+   ascus), the camera jolts, more the nearer it is to the plane of focus.
+5. **The depth of field.** Each pixel gathers from a disc as wide as its own blur. It takes a
    sample only if that sample's own blur reaches it, so blur in front spreads over what's sharp
    but blur behind doesn't. A filmic tone, a little green in the shadows, a vignette, grain.
 
