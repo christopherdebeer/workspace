@@ -8,12 +8,15 @@ no clock. You build.
 
 | | Touch | Mouse and keys |
 |---|---|---|
-| move the brick | one finger on the build (it rides a little above it, so you can see it) | it follows the pointer |
-| press it on | tap it, or `set` | click; space |
-| send it somewhere | tap there | — |
+| move the brick | drag it: the stud you took it by stays under your finger, and it rests on whatever is beneath | the same, with the mouse |
+| press it on | tap it, or `set` | click it; space |
+| send it somewhere | tap there (on top, under or beside what's there) | click there |
 | turn it | `turn` | R |
 | step back | `undo`: the last brick comes back into your hand | Z |
-| look around | one finger on the sky; two fingers pinch, twist and slide | drag; right-drag (or shift) slides; the wheel |
+| look around | drag the plate or the sky; two fingers pinch, twist and slide | drag; right-drag (or shift) slides; the wheel |
+
+After you press a brick on, the next one waits over the same studs, on top of it, ready to
+stack.
 
 ## The bag
 

@@ -1,21 +1,22 @@
 /**
  * Bricks: a baseplate, and bricks that come one at a time — you don't choose them, you place
- * what comes, Tetris-fashion, with the next one shown in its corner. Move it with a finger (it
- * rides a little above, so you can see it), turn it, tap it to press it on. Bricks connect as the
- * real ones do — on studs, or under something — and stay: nothing falls, nothing clears, you
- * build. `undo` lifts the last one back into your hand. Each bag has its own few colours that
- * sit together; what you build is kept in this browser.
+ * what comes, Tetris-fashion, with the next one shown in its corner. Drag the brick itself to move
+ * it — the stud you took it by stays under your finger, and it rests on whatever is beneath —
+ * turn it, tap it to press it on. Bricks connect as the real ones do — on studs, or under
+ * something — and stay: nothing falls, nothing clears, you build. `undo` lifts the last one back
+ * into your hand. Each bag has its own few colours that sit together; what you build is kept in
+ * this browser.
  *
- * Touch: one finger on the build moves the brick, on the sky turns the view; two fingers pinch
- * closer, twist to turn, drag to slide. Mouse: the brick follows the pointer, click to press it
- * on, drag to turn the view, right-drag (or shift-drag) to slide, the wheel to come closer.
+ * Touch: drag the brick to move it; drag anywhere else to turn the view; tap the brick to press
+ * it on, tap elsewhere to send it there; two fingers pinch closer, twist to turn, drag to slide.
+ * Mouse: the same, with the right button (or shift) to slide and the wheel to come closer.
  * Keys: R turns the brick, space presses it on, Z undoes.
  *
  * Drawn in WebGL2: instanced boxes and studs, glossy, lit by a sun whose shadows are found by
  * walking the grid toward it (the build's cells in a small 3D texture), with ambient occlusion
  * from the same cells. `?preview` builds a little town by itself, slowly (the lab's index).
  */
-import { Bag, COLOURS, H, N, PLATE, World, placeFor, raycast, town, type Brick, type C3, type Hit, type Spec } from './build';
+import { Bag, COLOURS, H, N, PLATE, World, placeFor, raycast, restIn, town, type Brick, type C3, type Hit, type Spec } from './build';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -346,8 +347,17 @@ function aimHit(hit: Hit | null) {
 }
 function reaim() {
   const [w, d, h] = dims();
-  ghostAt = lastHit ? placeFor(world, w, d, h, lastHit) : null;
+  if (lastHit) ghostAt = placeFor(world, w, d, h, lastHit);
+  // (dragged there: it stays over the same studs, resting on whatever is under it now)
+  else if (ghostAt) ghostAt = restAt(ghostAt[0], ghostAt[2]);
   if (!ghostAt) aimHit(raycast(world, [N / 2, H * PLATE + 2, N / 2], [0, -1, 0]));
+}
+/** The brick in hand over these studs (its corner), resting on what's below. */
+function restAt(x: number, z: number): C3 | null {
+  const [w, d, h] = dims();
+  x = clamp(x, 0, N - w);
+  z = clamp(z, 0, N - d);
+  return restIn(world, w, d, h, x, z);
 }
 function press() {
   if (!ghostAt) reaim();
@@ -428,18 +438,19 @@ function hitAt(px: number, py: number): Hit | null {
 function aimAt(px: number, py: number) {
   aimHit(hitAt(px, py));
 }
-/** Whether a point on the screen is on the brick in hand. */
-function onGhost(px: number, py: number): boolean {
-  if (!ghostAt) return false;
+/** Where a point on the screen meets the brick in hand (a little generously: fingers are wide). */
+function onGhost(px: number, py: number): C3 | null {
+  if (!ghostAt) return null;
   const [w, d, h] = dims();
   const { o, d: dir } = ray(px, py);
-  const lo = [ghostAt[0] - 0.2, ghostAt[1] * PLATE - 0.2, ghostAt[2] - 0.2];
-  const hi = [ghostAt[0] + w + 0.2, (ghostAt[1] + h) * PLATE + 0.4, ghostAt[2] + d + 0.2];
+  const m = Math.max(0.2, camera().d * 0.012);
+  const lo = [ghostAt[0] - m, ghostAt[1] * PLATE - m, ghostAt[2] - m];
+  const hi = [ghostAt[0] + w + m, (ghostAt[1] + h) * PLATE + STUD_H + m, ghostAt[2] + d + m];
   let t0 = 0;
   let t1 = 1e9;
   for (let a = 0; a < 3; a++) {
     if (Math.abs(dir[a]) < 1e-9) {
-      if (o[a] < lo[a] || o[a] > hi[a]) return false;
+      if (o[a] < lo[a] || o[a] > hi[a]) return null;
       continue;
     }
     let ta = (lo[a] - o[a]) / dir[a];
@@ -448,32 +459,35 @@ function onGhost(px: number, py: number): boolean {
     t0 = Math.max(t0, ta);
     t1 = Math.min(t1, tb);
   }
-  return t0 <= t1;
+  return t0 <= t1 ? [o[0] + dir[0] * t0, o[1] + dir[1] * t0, o[2] + dir[2] * t0] : null;
 }
 
 // ─── hands ──────────────────────────────────────────────────────────────────────────────────────
-const RIDE = 64; // a finger's brick rides this far above it (CSS px)
-type Ptr = { x: number; y: number; x0: number; y0: number; t0: number; type: string; moved: boolean; orbit: boolean; button: number; shift: boolean };
+/** A hand on the glass: what it came down on decides what it does. */
+type Ptr = {
+  x: number; y: number; x0: number; y0: number; t0: number; type: string; moved: boolean; button: number; shift: boolean;
+  /** holding the brick: where on it (from its corner), and the level it slides at */
+  grab: { dx: number; dz: number; y: number } | null;
+};
 const pointers = new Map<number, Ptr>();
 let two: { d: number; a: number; x: number; y: number } | null = null;
 canvas.addEventListener('pointerdown', (e) => {
   wake();
   canvas.setPointerCapture(e.pointerId);
-  // (a finger that comes down on the sky turns the view; on the build, it moves the brick)
-  const orbit = e.pointerType !== 'mouse' && !hitAt(e.clientX, e.clientY);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), type: e.pointerType, moved: false, orbit, button: e.button, shift: e.shiftKey });
+  // (on the brick in hand, it takes hold of it; anywhere else, it turns the view)
+  const g = e.button === 0 && !e.shiftKey ? onGhost(e.clientX, e.clientY) : null;
+  const grab = g && ghostAt ? { dx: g[0] - ghostAt[0], dz: g[2] - ghostAt[2], y: g[1] } : null;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), type: e.pointerType, moved: false, button: e.button, shift: e.shiftKey, grab });
+  if (pointers.size >= 2) for (const q of pointers.values()) q.grab = null;
   two = null;
   document.getElementById('hint')?.classList.remove('on');
 });
 canvas.addEventListener('pointermove', (e) => {
   const p = pointers.get(e.pointerId);
-  if (!p) {
-    if (e.pointerType === 'mouse') aimAt(e.clientX, e.clientY);
-    return;
-  }
+  if (!p) return;
   const dx = e.clientX - p.x;
   const dy = e.clientY - p.y;
-  if (Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > 8) p.moved = true;
+  if (Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > (p.grab ? 3 : 8)) p.moved = true;
   p.x = e.clientX;
   p.y = e.clientY;
   if (pointers.size >= 2) {
@@ -484,23 +498,33 @@ canvas.addEventListener('pointermove', (e) => {
       let da = now.a - two.a;
       if (da > Math.PI) da -= Math.PI * 2;
       if (da < -Math.PI) da += Math.PI * 2;
-      yaw += da;
+      // (the plate turns with the fingers, as a sheet of paper would)
+      yaw -= da;
       slide(now.x - two.x, now.y - two.y);
     }
     two = now;
     for (const q of pointers.values()) q.moved = true;
     return;
   }
-  if (p.type === 'mouse') {
-    if (!p.moved) return;
-    if (p.button === 2 || p.shift) slide(dx, dy);
-    else orbit(dx, dy);
-  } else if (p.orbit) {
-    if (p.moved) orbit(dx, dy);
-  } else if (p.moved) {
-    aimAt(e.clientX, e.clientY - RIDE);
-  }
+  if (!p.moved) return;
+  if (p.grab) drag(p.grab, e.clientX, e.clientY);
+  else if (p.button === 2 || p.shift) slide(dx, dy);
+  else orbit(dx, dy);
 });
+/** Slide the held brick with the hand: the stud it was taken by stays under the finger. */
+function drag(g: { dx: number; dz: number; y: number }, px: number, py: number) {
+  const { o, d } = ray(px, py);
+  if (Math.abs(d[1]) < 1e-4) return;
+  const t = (g.y - o[1]) / d[1];
+  if (t <= 0) return;
+  const at = restAt(Math.round(o[0] + d[0] * t - g.dx), Math.round(o[2] + d[2] * t - g.dz));
+  if (!at) return;
+  lastHit = null;
+  if (!ghostAt || at.some((v, i) => v !== ghostAt![i])) {
+    ghostAt = at;
+    tick();
+  }
+}
 function orbit(dx: number, dy: number) {
   yaw += dx * 0.008;
   pitch = clamp(pitch + dy * 0.006, 0.08, 1.45);
@@ -517,12 +541,10 @@ canvas.addEventListener('pointerup', (e) => {
   const p = pointers.get(e.pointerId);
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
-  if (!p || p.moved || p.orbit || performance.now() - p.t0 > 600 || p.button === 2) return;
+  if (p?.grab && p.moved) save();
+  if (!p || p.moved || performance.now() - p.t0 > 600 || p.button === 2) return;
   // a tap: on the brick in hand, press it on; elsewhere, send it there
-  if (p.type === 'mouse') {
-    aimAt(e.clientX, e.clientY);
-    press();
-  } else if (onGhost(e.clientX, e.clientY)) press();
+  if (p.grab) press();
   else aimAt(e.clientX, e.clientY);
 });
 canvas.addEventListener('pointercancel', (e) => { pointers.delete(e.pointerId); two = null; });
@@ -889,6 +911,7 @@ function frame(now: number) {
   gl.depthMask(true);
   if (!auto) drawNext(W, Hh);
   gl.bindVertexArray(null);
+  (window as unknown as { __bricksOn: unknown }).__bricksOn = (x: number, y: number) => !!onGhost(x, y);
   (window as unknown as { __bricks: unknown }).__bricks = { bricks: world.count(), height: world.height(), ghost: ghostAt, hand, next, scheme: bag.scheme.name };
   requestAnimationFrame(frame);
 }
