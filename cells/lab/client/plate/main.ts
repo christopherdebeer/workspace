@@ -34,6 +34,34 @@ const vec3 GRAPHITE = vec3(.17, .165, .16);
 float th(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 float tn(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
   return mix(mix(th(i), th(i + vec2(1., 0.)), u.x), mix(th(i + vec2(0., 1.)), th(i + vec2(1., 1.)), u.x), u.y); }
+float fbm2(vec2 p) { return tn(p) * .5 + tn(p * 2.03 + 5.) * .3 + tn(p * 4.1 + 11.) * .2; }
+// the watercolour as it lies on one part of the plant, in that part's own place: q is where on it
+// (metres along, metres across), edge how far in from its rim (0 at the rim … 1 well inside), id
+// which part. Wet and dry, blooms, the hue wandering, the brush running dry, the edge the paint
+// stopped short of: all fixed to the leaf, the stem, the petal, so they turn with it.
+vec4 pigment(vec3 col, float dens, vec2 q, float edge, float id) {
+  vec2 o = vec2(id * 7.31, id * 3.17);
+  vec2 c = q * 28. + o; // a few centimetres: pools, not speckle
+  // the edge the brush stopped at: short of the drawn rim, wandering, now and then over it
+  float reach = (fbm2(vec2(q.x * 90., id) + o) - .45) * .7;
+  float body = smoothstep(reach - .05, reach + .12, edge);
+  if (body <= 0.) return vec4(0.);
+  // the dried rim: a thin darker line just inside where the wet edge stopped
+  float rim = 1. - smoothstep(0., .18, edge - reach);
+  // wetter here, drier there; a bloom (a backrun): a pale middle, a frilled darker ring
+  float wet = .6 + .6 * fbm2(c * .6);
+  float bl = fbm2(c * 1.1 + 40.);
+  float bloom = smoothstep(.55, .59, bl) * (1. - smoothstep(.59, .65, bl));
+  float inside = smoothstep(.59, .7, bl);
+  // pigments mixing in the wet: the hue wanders within a shape
+  vec3 shift = vec3(fbm2(c * .35 + 2.), fbm2(c * .35 + 8.), fbm2(c * .35 + 14.)) - .5;
+  col = clamp(col + shift * vec3(.18, .12, .2), 0., 1.);
+  // the brush running dry, streaked along its stroke
+  float dry = smoothstep(.22, .5, tn(vec2(q.x * 60., q.y * 500.) + o) * .5 + fbm2(c * 1.4 + 60.) * .5);
+  float d = dens * body * wet * (1. - .4 * inside) * (1. + .5 * bloom) * (1. + .8 * rim) * mix(.6, 1., dry);
+  d = clamp(d, 0., 1.);
+  return vec4(col * d, d);
+}
 // the paper's tooth: graphite catches on its high points (fixed to the sheet)
 float tooth() { vec2 p = gl_FragCoord.xy; return .55 + .45 * smoothstep(.2, .8, tn(p * .6) * .6 + tn(p * 1.8 + 7.) * .4); }
 `;
@@ -42,17 +70,20 @@ const BLADE_VS = `#version 300 es
 in vec3 aPos;
 in vec4 aUV; // along (m), across (m, signed), kind (0 leaf, 1 petal), u (0 base … 1 tip)
 in vec3 aCol; // its pigment (the watercolour)
+in vec2 aWash; // across, as a share of its half-width (-1 … 1); which blade
 uniform mat4 uVP;
 out vec3 vWorld;
 out vec4 vUV;
 out vec3 vCol;
-void main() { vWorld = aPos; vUV = aUV; vCol = aCol; gl_Position = uVP * vec4(aPos, 1.); }`;
+out vec2 vWash;
+void main() { vWorld = aPos; vUV = aUV; vCol = aCol; vWash = aWash; gl_Position = uVP * vec4(aPos, 1.); }`;
 
 const BLADE_FS = `#version 300 es
 precision highp float;
 in vec3 vWorld;
 in vec4 vUV;
 in vec3 vCol;
+in vec2 vWash;
 out vec4 o;
 uniform vec3 uLight, uEye;
 // 0 engraved on paper; 1 engraved on the finished wash (still opaque: it hides what is behind it,
@@ -77,7 +108,11 @@ void main() {
     // a petal's thinner, paling toward its tip
     float dens = .5 + .35 * (1. - lit) + (gl_FrontFacing ? 0. : .15);
     if (vUV.z > .5) dens *= .55 + .4 * smoothstep(1., .2, vUV.w);
-    o = vec4(vCol * dens, dens);
+    // (in from its rim, across the blade and toward its tip; the colour slid a little to one side
+    // of the drawing, as hand colouring always is, and by its own amount on each leaf)
+    float slide = (fbm2(vec2(vUV.x * 25., vWash.y * 3.1)) - .5) * .6;
+    float edge = min(1. - abs(vWash.x + slide), (1. - vUV.w) * 4.);
+    o = pigment(vCol, dens, vUV.xy, edge, vWash.y);
     return;
   }
   // how dark: turned from the light, the underside (seen from below the blade), towards the base
@@ -173,7 +208,9 @@ void main() {
     float body = clamp(max(w, 1.5) * .5 - dl + .5, 0., 1.);
     if (body <= 0.) discard;
     float dens = (kind < .5 ? .7 : .45) * body;
-    o = vec4((kind < .5 ? uStem : uRoot) * dens, dens);
+    // (where on the stem: along it, and across it as a share of its half-width)
+    float across = dl / max(w * .5, .75);
+    o = pigment(kind < .5 ? uStem : uRoot, dens, vec2(s * .1, across * .002), 1. - across, id + 500.);
     return;
   }
   if (w >= 3. && kind < .5) {
@@ -205,10 +242,10 @@ void main() {
   o = vec4(GRAPHITE * mk, mk);
 }`;
 
-// the watercolour, laid on the paper from the pigments drawn (half size) into their own buffer:
-// a little off the drawing (hand colouring always is), soft-edged, pooling darker at its rims where
-// it dried, uneven as the brush was wetter or drier, granulating in the paper's tooth, and mixed
-// as pigment mixes (multiplied onto the paper, so overlapping washes glaze)
+// the watercolour, laid on the paper from the pigments drawn (half size) into their own buffer —
+// each already painted where it lies on its leaf or stem (pigment() above) — here only feathered,
+// rimmed and grained on the sheet, and mixed as pigment mixes (multiplied onto the paper, so
+// overlapping washes glaze)
 const QUAD_VS = `#version 300 es
 void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, 0., 1.); }`;
 const WASH_FS = `#version 300 es
@@ -216,7 +253,6 @@ precision highp float;
 out vec4 o;
 uniform sampler2D uWash;
 uniform vec2 uRes;
-uniform float uSeed;
 ${COMMON}
 vec4 around(vec2 uv, float r) {
   vec4 s = vec4(0.);
@@ -226,39 +262,22 @@ vec4 around(vec2 uv, float r) {
   }
   return s / 8.;
 }
-float fbm2(vec2 p) { return tn(p) * .5 + tn(p * 2.03 + 5.) * .3 + tn(p * 4.1 + 11.) * .2; }
 void main() {
+  // (everything that belongs to the paint on the plant — blooms, hue, wet and dry, its stopped
+  // edge — was laid on with it, in its own place; here only what happens on the sheet: the wet
+  // edge feathering out past the shape, a dried line where it stopped, the paper's grain)
   vec2 px = gl_FragCoord.xy;
   vec2 uv = px / uRes;
-  // (sizes in the page's own pixels, the same on any screen)
   float S = uRes.y / 800.;
-  vec2 q = px / (S * 90.);
-  // off the drawing (the colourist's hand), and its edge wandering as wet paint does
-  vec2 off = (vec2(fbm2(q * .6 + uSeed), fbm2(q * .6 + 17. + uSeed)) - .5) * 14. * S
-    + (vec2(tn(px / (S * 9.) + 3.), tn(px / (S * 9.) + 31.)) - .5) * 5. * S;
-  vec2 at = uv + off / uRes;
-  vec4 sharp = texture(uWash, at);
-  vec4 soft = around(at, 3. * S);
-  vec4 bleed = around(at, 9. * S);
-  // (the wet edge feathers out a little beyond the drawn shape)
-  float a = max(max(sharp.a, soft.a * .95), bleed.a * .5);
+  vec4 sharp = texture(uWash, uv);
+  vec4 soft = around(uv, 2.5 * S);
+  vec4 bleed = around(uv, 9. * S);
+  float a = max(max(sharp.a, soft.a * .9), bleed.a * .5);
   if (a < .004) { o = vec4(PAPER, 1.); return; }
   vec3 pig = (sharp.rgb + soft.rgb + bleed.rgb * .5) / max(sharp.a + soft.a + bleed.a * .5, 1e-3);
-  // pigments mixing in the wet: the hue wanders within a shape
-  vec3 shift = vec3(fbm2(q * 1.3 + 2.), fbm2(q * 1.3 + 8.), fbm2(q * 1.3 + 14.)) - .5;
-  pig = clamp(pig + shift * vec3(.18, .12, .2), 0., 1.);
-  // wetter here, drier there; a bloom (a backrun): a pale middle, a frilled darker edge
-  float wet = .55 + .7 * fbm2(q * 1.7 + uSeed * .3);
-  float bl = fbm2(q * 2.6 + 40. + uSeed);
-  float bloom = smoothstep(.56, .6, bl) * (1. - smoothstep(.6, .66, bl));
-  float inside = smoothstep(.6, .7, bl);
-  // the dried rim: a thin darker line where the wet edge stopped
-  float rim = clamp((sharp.a - soft.a) * 2.5, 0., 1.) + clamp((soft.a - bleed.a) * 1.2, 0., 1.) * .4;
-  // the brush running dry: the paper showing through here and there; and granulation
-  float dry = smoothstep(.25, .5, tn(px / (S * 4.) + 9.) * .5 + fbm2(q * 3. + 60.) * .5);
-  float grain = .8 + .4 * tn(px * .7 + 11.);
-  float dens = a * wet * (1. - .45 * inside) * (1. + .6 * bloom) * (1. + 1.4 * rim) * grain * mix(.55, 1., dry);
-  dens = clamp(dens * .55, 0., .9);
+  float rim = clamp((sharp.a - soft.a) * 1.8, 0., 1.);
+  float grain = .82 + .36 * tn(px * .7 + 11.);
+  float dens = clamp(a * (1. + .8 * rim) * grain * .6, 0., .9);
   o = vec4(PAPER * mix(vec3(1.), pig, dens), 1.);
 }`;
 // (the finished wash, copied to the page)
@@ -300,11 +319,11 @@ let lineCount = 0;
 
 gl.bindVertexArray(bladeVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, bladeBuf);
-for (const [name, size, off] of [['aPos', 3, 0], ['aUV', 4, 3], ['aCol', 3, 7]] as const) {
+for (const [name, size, off] of [['aPos', 3, 0], ['aUV', 4, 3], ['aCol', 3, 7], ['aWash', 2, 10]] as const) {
   const loc = gl.getAttribLocation(bladeProg, name);
   if (loc < 0) continue;
   gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 10 * 4, off * 4);
+  gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 12 * 4, off * 4);
 }
 gl.bindVertexArray(lineVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
@@ -364,9 +383,9 @@ function upload(sp: Specimen, T: number) {
     const col: RGB = [0, 1, 2].map((c) => fresh[c] + (paint.dead[c] - fresh[c]) * b.wither) as RGB;
     const K = b.rows.length - 1;
     let along = 0;
-    const vert = (p: V3, a: number, across: number, k: number) => {
+    const vert = (p: V3, a: number, across: number, side: number, k: number) => {
       const q = scaleAbout(b.base, p, g);
-      bv.push(q[0], q[1], q[2], a, across, b.kind, k / K, col[0], col[1], col[2]);
+      bv.push(q[0], q[1], q[2], a, across, b.kind, k / K, col[0], col[1], col[2], side, bi);
     };
     for (let k = 0; k < K; k++) {
       const r0 = b.rows[k];
@@ -375,17 +394,17 @@ function upload(sp: Specimen, T: number) {
       const a0 = along;
       const a1 = along + step;
       const w = (r: typeof r0) => Math.hypot(r.r[0] - r.m[0], r.r[1] - r.m[1], r.r[2] - r.m[2]);
-      const q: Array<[V3, number, number, number]> = [
-        [r0.l, a0, -w(r0), k], [r0.m, a0, 0, k], [r1.l, a1, -w(r1), k + 1],
-        [r0.m, a0, 0, k], [r1.m, a1, 0, k + 1], [r1.l, a1, -w(r1), k + 1],
-        [r0.m, a0, 0, k], [r0.r, a0, w(r0), k], [r1.m, a1, 0, k + 1],
-        [r0.r, a0, w(r0), k], [r1.r, a1, w(r1), k + 1], [r1.m, a1, 0, k + 1],
+      const q: Array<[V3, number, number, number, number]> = [
+        [r0.l, a0, -w(r0), -1, k], [r0.m, a0, 0, 0, k], [r1.l, a1, -w(r1), -1, k + 1],
+        [r0.m, a0, 0, 0, k], [r1.m, a1, 0, 0, k + 1], [r1.l, a1, -w(r1), -1, k + 1],
+        [r0.m, a0, 0, 0, k], [r0.r, a0, w(r0), 1, k], [r1.m, a1, 0, 0, k + 1],
+        [r0.r, a0, w(r0), 1, k], [r1.r, a1, w(r1), 1, k + 1], [r1.m, a1, 0, 0, k + 1],
       ];
-      for (const [p, a, c, kk] of q) vert(p, a, c, kk);
+      for (const [p, a, c, sd, kk] of q) vert(p, a, c, sd, kk);
       along = a1;
     }
   }
-  bladeCount = bv.length / 10;
+  bladeCount = bv.length / 12;
   gl.bindBuffer(gl.ARRAY_BUFFER, bladeBuf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(bv), gl.DYNAMIC_DRAW);
   // lines
@@ -699,7 +718,6 @@ function frame(now: number) {
     gl.bindTexture(gl.TEXTURE_2D, washTex);
     gl.uniform1i(u(washProg, 'uWash'), 0);
     gl.uniform2f(u(washProg, 'uRes'), W, H);
-    gl.uniform1f(u(washProg, 'uSeed'), (seed % 97) * 1.37);
     gl.bindVertexArray(quadVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
