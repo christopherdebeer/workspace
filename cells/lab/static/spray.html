@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-exp="spray">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#111">
+  <title>Spray</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; overflow: hidden; touch-action: none; overscroll-behavior: none; }
+    body { color: #f2f2f0; font-family: ui-monospace, "SF Mono", Menlo, monospace; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    button { all: unset; cursor: pointer; box-sizing: border-box; }
+    #cam, #paint { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    #cam { object-fit: cover; }
+    #overlay { position: fixed; inset: 0; pointer-events: none; }
+    #overlay > * { pointer-events: auto; }
+    /* the aim: where the can points (the middle of the phone) */
+    #reticle { --r: 18px; position: fixed; left: 50%; top: 50%; width: calc(var(--r) * 2); height: calc(var(--r) * 2); margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1); border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,.85); box-shadow: 0 0 0 1px rgba(0,0,0,.35); pointer-events: none !important; display: none; transition: width .15s, height .15s, margin .15s; }
+    #reticle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: #fff; }
+    [data-mode="camera"] #reticle, [data-mode="ar"] #reticle { display: block; }
+    #bar { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; gap: 8px; justify-content: flex-end; }
+    #bar a, #bar button { font-size: 12px; letter-spacing: .08em; text-transform: lowercase; padding: 8px 12px; border-radius: 16px; background: rgba(0,0,0,.42); color: #fff; text-decoration: none; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+    #bar a { margin-right: auto; }
+    [data-mode="wall"] #rewall { display: none; }
+    /* the caps: one per colour */
+    #caps { position: fixed; left: 0; right: 0; bottom: max(14px, env(safe-area-inset-bottom)); display: flex; gap: 10px; overflow-x: auto; padding: 8px 14px; scrollbar-width: none; justify-content: safe center; }
+    #caps::-webkit-scrollbar { display: none; }
+    .cap { flex: none; width: 38px; height: 38px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 42%), var(--c);
+      box-shadow: inset 0 -4px 6px rgba(0,0,0,.35), 0 2px 8px rgba(0,0,0,.4); transition: transform .15s; }
+    .cap.on { transform: translateY(-6px) scale(1.12); outline: 2px solid #fff; outline-offset: 3px; }
+    /* how near the can is held (where that can't be measured): a slider under the right thumb */
+    #nearbox { position: fixed; right: 10px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .1em; opacity: .9; }
+    #near { writing-mode: vertical-lr; direction: rtl; width: 34px; height: 200px; accent-color: #fff; }
+    [data-mode="ar"] #nearbox { display: none; }
+    #note { position: fixed; left: 0; right: 0; top: 40%; text-align: center; font-size: 13px; letter-spacing: .1em; opacity: 0; transition: opacity .4s; pointer-events: none !important; text-shadow: 0 1px 4px #000; }
+    #note.on { opacity: 1; }
+    /* the start: which can */
+    #start { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 28px; gap: 14px; background: #111;
+      background-image: radial-gradient(circle at 80% 20%, rgba(255, 60, 120, .28), transparent 40%), radial-gradient(circle at 15% 85%, rgba(30, 200, 255, .22), transparent 45%); }
+    #start h1 { font-size: 44px; margin: 0; letter-spacing: -.02em; font-weight: 800; font-family: "Arial Black", Impact, ui-sans-serif, sans-serif; transform: rotate(-4deg); }
+    #start p { margin: 0 0 8px; max-width: 30em; font-size: 13px; line-height: 1.55; opacity: .82; }
+    #start button { font-size: 15px; padding: 14px 20px; border-radius: 26px; background: #f2f2f0; color: #111; min-width: 210px; }
+    #start button.alt { background: transparent; color: #f2f2f0; border: 1px solid rgba(255,255,255,.4); }
+    #start small { font-size: 11px; opacity: .55; margin-top: 6px; }
+    #start a { color: inherit; }
+    .gone { display: none !important; }
+    .preview #overlay, .preview #start { display: none !important; }
+  </style>
+</head>
+<body data-mode="start">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="paint"></canvas>
+  <div id="overlay">
+    <div id="reticle"></div>
+    <div id="bar"><a href="{{readme}}">notes</a><button id="rewall">new wall</button><button id="clear">clear</button><button id="photo">photo</button></div>
+    <div id="nearbox"><span>far</span><input id="near" type="range" min="6" max="90" value="30"><span>near</span></div>
+    <div id="caps"></div>
+    <div id="note"></div>
+  </div>
+  <div id="start">
+    <h1>spray</h1>
+    <p>The phone is the can. Hold it like one, aim with the middle of the screen, and keep your thumb on the glass to spray. Close is a thin line that runs if you linger; far is a soft mist. Shake it to rattle the can.</p>
+    <button id="go-ar" class="gone">spray in AR</button>
+    <button id="go-camera">spray through the camera</button>
+    <button id="go-wall" class="alt">a brick wall instead</button>
+    <small>Camera and motion stay on this phone · <a href="{{readme}}">notes</a></small>
+  </div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

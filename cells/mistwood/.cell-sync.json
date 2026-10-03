@@ -1,0 +1,10 @@
+{
+  "cell": "c15r/mistwood",
+  "cellId": "mistwood-1508ec6e",
+  "treeVersion": "tree:3b63af672e83702990ee62c455889a2d03d8fdf79e78ea9f1662e306e661a1ca",
+  "syncedAt": "2026-10-02T23:20:08.170Z",
+  "files": {
+    "index.ts": "sha256:660b0120070b5ffb7e388126974c0fd7932a9476732d9a0559249214c781c9f4",
+    "tsconfig.json": "sha256:9947bf89f0648879ce8f534236efbdb49a9550e13da9ec0322c114892709bc8f"
+  }
+}

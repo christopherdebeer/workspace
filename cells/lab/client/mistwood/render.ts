@@ -1,0 +1,2068 @@
+/**
+ * The picture, WebGL2, three passes into and out of a scene buffer:
+ *
+ * 1. Behind everything, one fragment shader: a ray per pixel. Above the
+ *    horizon only fog — lighter higher up, a brighter place where the sun is
+ *    behind it, slow banks moving through it. Below, dry ground and a trodden
+ *    path, fogged by distance and by the same banks.
+ * 2. The cards — every tree, shrub and patch of grass — back to front, each
+ *    at its true place in the wood (so walking and looking give real parallax),
+ *    each a baked silhouette (bake.ts). The shader does the rest: wind that
+ *    moves the thin high wood and not the trunk, fog by distance and much
+ *    thicker near the ground, mist banks that veil one tree and not the next.
+ * 3. A last pass for the film: a soft tone curve, the fog's lift in the
+ *    blacks, a vignette, grain.
+ */
+import type { Card } from './bake';
+import type { Atmos } from './sky';
+import { PENCIL } from '../kit/pencil';
+import { SEG } from './tree';
+
+/**
+ * Depth, shared by everything drawn: horizontal distance (m) over this, so the stone structures
+ * (written by the world pass), the cards, the deer and the live trees all hide one another
+ * rightly. Nothing is drawn further than this.
+ */
+const DEPTH_RANGE = 100;
+
+const NOISE = `
+uniform uint uSeed;
+uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+float h2(ivec2 p) { return float(pcg(uint(p.x) * 1973u ^ pcg(uint(p.y) + uSeed))) / 4294967295.; }
+float vnoise(vec2 p) {
+  ivec2 i = ivec2(floor(p)); vec2 f = fract(p); vec2 u = f * f * (3. - 2. * f);
+  return mix(mix(h2(i), h2(i + ivec2(1, 0)), u.x), mix(h2(i + ivec2(0, 1)), h2(i + ivec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) { float s = 0., a = .5; for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.07 + 13.7; a *= .5; } return s / .9375; }
+uniform vec3 uFogLow, uFogHigh;
+uniform float uT;
+// ─── the sketch (?style=sketch): each thing draws itself in pencil on paper ────────────────────
+// on; how dark the pencil, stroke spacing (px at 800 px tall), how loose the hand
+uniform float uSketch;
+uniform vec4 uSkA;
+// outlines, boil (redrawn this often a second), the paper's tooth, how much is left unsaid
+uniform vec4 uSkB;
+const vec3 PAPER = vec3(.935, .925, .895);
+const vec3 GRAPHITE = vec3(.2, .2, .22);
+float lum(vec3 c) { return dot(c, vec3(.3, .55, .15)); }
+// the fog's own tone: not white paper but a light haze of graphite, a little deeper low, lighter
+// high (x: how much; the rest spare)
+uniform vec4 uSkC;
+float hazeDir(vec3 d) { float el = d.y / max(length(d.xz), 1e-3); return uSkC.x * (1. - .55 * smoothstep(-.05, .45, el)); }
+// a body drawn f of the way into the fog, seen along d: on paper near (lighter than the fog, as near
+// things are in a drawing of mist), on the haze far; its marks (mk) graphite, never black
+vec3 sketchInk(float mk, float f, vec3 d) { return mix(mix(PAPER, GRAPHITE, hazeDir(d) * f), GRAPHITE, clamp(mk, 0., 1.) * .78); }
+// how far the hand is off this time (the boil: redrawn now and then, a little differently)
+float boilSeed() { return uSkB.y > 0. ? floor(uT * uSkB.y) : 0.; }
+// a pencil line along a stroke: px across from its middle, its half-width (px); soft-edged, never
+// thinner than the pencil's point
+float pencilLine(float across, float hw) { float h = max(hw, .45); return 1. - smoothstep(h, h + .9, abs(across)); }
+vec2 turn(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+// one layer of hatching along dir: strokes spaced sp apart, each its own — set a little off its
+// line, broken into lengths, its pressure rising and falling along it
+float hatch(vec2 a, vec2 dir, float sp, float seed, float loose) {
+  vec2 n = vec2(-dir.y, dir.x);
+  float u = dot(a, dir), w = dot(a, n) / sp;
+  float row = floor(w);
+  float r1 = h2(ivec2(int(row) + 7919, int(seed) + int(boilSeed()) * 17));
+  float r2 = h2(ivec2(int(row) + 104729, int(seed)));
+  float along = u / sp;
+  // (where each stroke runs and where it stops: lengths of 4–14 spacings, gaps between)
+  float on = smoothstep(.38 + .1 * r2, .5 + .1 * r2, vnoise(vec2(along / (4. + 10. * r1), row * 1.7 + seed * 13.)));
+  float mid = .5 + (r1 - .5) * .5 * loose + (vnoise(vec2(along / 9., row + seed)) - .5) * .5 * loose;
+  float width = .22 + .12 * r2;
+  float line = 1. - smoothstep(width * .45, width, abs(fract(w) - mid));
+  return line * on * (.55 + .45 * vnoise(vec2(along / 3., row * 3.1 + seed)));
+}
+// the lie of the land (world.ts groundH): amplitude, scale, water level, small swells
+uniform vec4 uRelief;
+// the height of the ground under what is drawn (its foot)
+uniform float uBase;
+// the lie of the land, before the creek (world.ts landH; the world pass cuts the creek into it)
+float landH(vec2 p) {
+  float k = uRelief.y;
+  return uRelief.x * ((vnoise(p * k + 71.3) - .5) * 1.6 + (vnoise(p * k * 2.7 + 5.9) - .5) * .4) + uRelief.w * (vnoise(p / 22. + 33.3) - .5) * 2.;
+}
+// how much fog lies between the eye and something dist metres off, above metres over the
+// ground: clear for the first few metres, then closing fast (the square term) — near things sharp
+// and dark, the middle distance soft, the far gone — and thicker low down, a few metres out
+float fogAt(float dist, float above, float density) {
+  float path = dist * .55 + dist * dist / 40.;
+  return 1. - exp(-density * path * (1. + 1.1 * exp(-max(above, 0.) * .35) * smoothstep(5., 20., dist)));
+}
+// depth of field: the blur (circle of confusion, px) of something dist metres off — none at
+// the focus and beyond (the fog softens the far), growing fast as things come near: grass at your
+// feet papered over, a twig passing your face a faint smear
+uniform float uBlur, uFocus;
+float coc(float dist) { return uBlur * max(0., 1. / max(dist, .05) - 1. / uFocus); }
+// 0 dry … 1 a wet hollow (world.ts place)
+float wetAt(float h) { return 1. - smoothstep(uRelief.z, uRelief.z + uRelief.x * .8, h); }
+// the mist is a volume you walk through: its density (per metre) at p, over ground at gh —
+// banks drifting through the wood, and mist lying in the hollows a few metres deep. What is
+// seen through it is what lies along the way there (world.ts mistDensity is the same)
+float mistDensity(vec3 p, float gh, float wc) {
+  vec2 q = vec2(p.x * .05 + p.z * .021 + uT * .014, p.z * .05 - p.x * .017 + uT * .004);
+  float n = vnoise(q) * .65 + vnoise(q * 2.7 + 5.) * .35;
+  float above = max(p.y - gh, 0.);
+  float banks = smoothstep(.45, .8, n) * exp(-above * .08);
+  float wet = max(wetAt(gh), wc);
+  float lying = wet > .01 ? smoothstep(.2, 1., wet) * exp(-above * 1.1) * (.4 + .6 * vnoise(p.xz * .07 + vec2(uT * .006, 0.))) : 0.;
+  // and low drifts, a metre or two deep, in patches (so the mist along the ground is never one even band)
+  float low = smoothstep(.5, .78, vnoise(p.xz * .09 + vec2(uT * .01, -uT * .004) + 31.)) * exp(-above * .55);
+  return banks * .05 + lying * .12 + low * .07;
+}
+// for what is drawn on its own (a tree, a card, a deer): the mist along the way to its foot and
+// to its top, summed on the CPU for each (world.ts mistAlong), between them by height
+uniform vec2 uMistT;
+uniform float uTopH;
+float mistTo(vec3 w) { return 1. - exp(-mix(uMistT.x, uMistT.y, clamp((w.y - uBase) / max(uTopH, .1), 0., 1.))); }
+uniform vec4 uCam; // x, z, eye, yaw
+uniform vec2 uSun; // the key light's azimuth, elevation (sun by day, moon by night)
+uniform vec3 uGlow; // its glow in the fog
+uniform vec3 uIllum; // what lights the wood
+// the fog's colour looking in a (world) direction: lighter higher, brighter towards the light.
+// Everything fogged takes its fog from the direction it is seen in, so a far tree fades into
+// exactly the fog behind it
+vec3 fogDir(vec3 d) {
+  float el = d.y;
+  vec3 c = mix(uFogLow, uFogHigh, smoothstep(0., .6, max(el, 0.)));
+  float da = mod(atan(d.x, d.z) - uSun.x + 3.14159, 6.28318) - 3.14159;
+  return c + exp(-da * da * 3. - (el - uSun.y) * (el - uSun.y) * 6.) * uGlow;
+}
+vec3 fogToward(vec3 w) { return fogDir(normalize(w - vec3(uCam.x, uCam.z, uCam.y))); }
+`;
+
+const QUAD_VS = `#version 300 es
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, 0., 1.); }`;
+
+const WORLD_FS = `#version 300 es
+precision highp float;
+precision highp int;
+out vec4 o;
+uniform vec2 uRes;
+uniform float uF, uHz, uDensity;
+uniform vec3 uPathK; // the two path fields' scales, the path's half-width
+uniform vec3 uGround, uStrawDark, uStraw, uEarth;
+uniform float uOpen; // how open the wood is (world.ts openness)
+// trees near enough to shade the ground: x, z, contact radius, crown radius (crown centre offset away from the light)
+uniform vec4 uShade[40];
+uniform vec2 uShadeOff[40];
+uniform int uShadeN;
+// the stone structures near you (world.ts structures): x, z, turn, kind (1 tower, 2 viaduct); and
+// for a tower: base height, height, radius, seed; for a viaduct: base height, deck height, span, piers
+uniform vec4 uStA[6];
+uniform vec4 uStB[6];
+uniform int uStN;
+// the dry-stone walls near you, stretch by stretch: from (x, z) to (x, z); the ground at either end,
+// the height, and (caps × 1000 + seed): which ends taper down to a gap (1 the start, 2 the end)
+uniform vec4 uWallA[24];
+uniform vec4 uWallB[24];
+uniform int uWallN;
+${NOISE}
+// paths: where two smooth fields cross their middle value. Each field's zero line winds by itself;
+// where the two families meet, paths join and fork. (world.ts has the same, so trees keep off)
+float pfield(vec2 p, float k, float off) { return vnoise(p * k + off) * .7 + vnoise(p * k * 2.3 + off * 1.7) * .3; }
+float pathDist(vec2 p) {
+  float best = 1e3;
+  for (int i = 0; i < 2; i++) {
+    float k = i == 0 ? uPathK.x : uPathK.y;
+    float off = float(i) * 37.1;
+    float e = .25;
+    float n = pfield(p, k, off) - .5;
+    vec2 g = vec2(pfield(p + vec2(e, 0.), k, off) - pfield(p - vec2(e, 0.), k, off), pfield(p + vec2(0., e), k, off) - pfield(p - vec2(0., e), k, off)) / (2. * e);
+    best = min(best, abs(n) / max(length(g), 1e-4));
+  }
+  return best;
+}
+// ─── the sketch's ground: strokes lying on the ground, in rows fixed to it ────────────────────
+// one family of rows along u, s metres apart: dashes of their own lengths, each row drawn only as
+// dark as the ground there asks (each has its own threshold), a little off its line
+float dashRows(vec2 xz, vec2 u, float s, float v, float fam, float len) {
+  vec2 n = vec2(-u.y, u.x);
+  float w = dot(xz, n) / s;
+  float row = floor(w);
+  float r1 = h2(ivec2(int(row) + 7919, int(fam) + int(boilSeed()) * 17));
+  float r2 = h2(ivec2(int(row) + 104729, int(fam)));
+  float along = dot(xz, u) / s * 3.;
+  float on = smoothstep(.5, .62, vnoise(vec2(along / (len * (1. + 2. * r1)), row * 1.7 + fam * 13.)));
+  float keep = smoothstep(r2 * .85, r2 * .85 + .18, v);
+  float mid = .5 + (r1 - .5) * .45 * uSkA.w + (vnoise(vec2(along * .3, row)) - .5) * .25 * uSkA.w;
+  float line = 1. - smoothstep(.07, .15, abs(fract(w) - mid));
+  return line * on * keep * (.5 + .5 * vnoise(vec2(along * .5, row * 3.1 + fam)));
+}
+// the ground's strokes at xz, t metres off, seen along d, as dark as v: rows a few pixels apart on
+// the screen (a finer set and a coarser, blended with distance), from four families at different
+// headings, each counting as much as its strokes lie across the way you look (they read level)
+float groundStrokes(vec2 xz, float t, vec3 d, float v, float len) {
+  float mpp = t / uF;
+  float L = log2(max(mpp * uSkA.z * (800. / uRes.y) * max(t / 1.6, 1.), 1e-4));
+  float l0 = floor(L), fr = L - l0;
+  vec2 to = normalize(d.xz + 1e-6);
+  vec2 across = vec2(to.y, -to.x);
+  float m = 0.;
+  for (int k = 0; k < 4; k++) {
+    float ang = float(k) * .785398;
+    vec2 u = vec2(cos(ang), sin(ang));
+    float wgt = smoothstep(.75, .98, abs(dot(u, across)));
+    if (wgt < .01) continue;
+    float a0 = dashRows(xz, u, exp2(l0), v, float(k), len);
+    float a1 = dashRows(xz, u, exp2(l0 + 1.), v, float(k) + 4., len);
+    m = max(m, mix(a0, a1, fr) * wgt);
+  }
+  return m;
+}
+// last year's leaves on the ground at xz, t metres off, the eye eyeH above: short marks lying every
+// which way, each fixed to its place on the ground (cells a few pixels across, a finer set and a
+// coarser, blended with distance), as many as dens asks; drawn foreshortened as they lie
+float litterLevel(vec2 xz, vec2 to, float c, float mpp, float t, float eyeH, float dens, float fam) {
+  vec2 g = xz / c;
+  ivec2 i0 = ivec2(floor(g));
+  float m = 0.;
+  for (int dx = 0; dx <= 1; dx++)
+    for (int dz = 0; dz <= 1; dz++) {
+      ivec2 i = i0 + ivec2(dx, dz) - ivec2(1, 1) + ivec2(step(.5, fract(g)));
+      float r0 = h2(i + ivec2(int(fam), 9001));
+      if (r0 > dens) continue;
+      vec2 at = (vec2(i) + vec2(h2(i + ivec2(int(fam), 9101)), h2(i + ivec2(int(fam), 9201)))) * c;
+      float an = h2(i + ivec2(int(fam), 9301)) * 6.283;
+      vec2 u = vec2(cos(an), sin(an));
+      float len = c * (.25 + .3 * h2(i + ivec2(int(fam), 9401)));
+      vec2 q = xz - at;
+      float al = clamp(dot(q, u), -len, len);
+      vec2 off = q - u * al;
+      // (in pixels as seen: across the way you look at full width, along it foreshortened)
+      vec2 px = vec2(dot(off, vec2(to.y, -to.x)), dot(off, to) * eyeH / max(t, .5)) / mpp;
+      m = max(m, (1. - smoothstep(.35, 1.1, length(px))) * (.6 + .4 * r0 / max(dens, .01)));
+    }
+  return m;
+}
+float litter(vec2 xz, float t, vec3 d, float eyeH, float dens) {
+  if (dens < .01) return 0.;
+  float mpp = t / uF * (800. / uRes.y);
+  float L = log2(max(mpp * 9. * max(t / 1.6, 1.), 1e-3));
+  float l0 = floor(L), fr = L - l0;
+  vec2 to = normalize(d.xz + 1e-6);
+  return mix(litterLevel(xz, to, exp2(l0), mpp, t, eyeH, dens, 1.), litterLevel(xz, to, exp2(l0 + 1.), mpp, t, eyeH, dens, 2.), fr);
+}
+// ─── the creek (world.ts creek): a winding line cut into the land, water down its middle ───────
+// its line's scale (1/m), how deep it is cut (m), its bed's half-width (m)
+uniform vec3 uCreek;
+// value noise and its slope
+vec3 vnoised(vec2 p) {
+  ivec2 i = ivec2(floor(p)); vec2 f = fract(p); vec2 u = f * f * (3. - 2. * f); vec2 du = 6. * f * (1. - f);
+  float a = h2(i), b = h2(i + ivec2(1, 0)), c = h2(i + ivec2(0, 1)), d = h2(i + ivec2(1, 1));
+  float k = a - b - c + d;
+  return vec3(a + (b - a) * u.x + (c - a) * u.y + k * u.x * u.y, du.x * (b - a + k * u.y), du.y * (c - a + k * u.x));
+}
+// the fords near you (world.ts fordsNear): where a path meets the creek, and the way across the path
+uniform vec4 uFord[6];
+uniform int uFordN;
+float fordAt(vec2 p) {
+  float f = 0.;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uFordN) break;
+    vec2 q = p - uFord[i].xy;
+    vec2 n = uFord[i].zw;
+    f = max(f, (1. - smoothstep(uPathK.z * .9, uPathK.z + 2.5, abs(dot(q, n)))) * (1. - smoothstep(8., 12., abs(dot(q, vec2(-n.y, n.x))))));
+  }
+  return f;
+}
+// the stepping stones over a ford's bed (m): a line of them along the path's way across, a long
+// stride apart, each a little off the line, rounded
+float steppingStone(vec2 p) {
+  float st = 0.;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uFordN) break;
+    vec2 q = p - uFord[i].xy;
+    vec2 n = uFord[i].zw;
+    vec2 tg = vec2(-n.y, n.x);
+    float along = dot(q, tg);
+    if (abs(dot(q, n)) > 1. || abs(along) > 10.) continue;
+    int who = int(floor(uFord[i].x)) * 31 + int(floor(uFord[i].y));
+    int k0 = int(floor(along / .8 + .5));
+    for (int k = k0 - 1; k <= k0 + 1; k++) {
+      ivec2 c = ivec2(k + 4111, who);
+      vec2 at = tg * (float(k) * .8 + (h2(c + ivec2(0, 7)) - .5) * .2) + n * (h2(c) - .5) * .5;
+      vec2 e = q - at;
+      // (each its own outline: not a disc)
+      float r = (.2 + .1 * h2(c + ivec2(0, 13))) * (.8 + .4 * vnoise(e * 9. + float(k) * 3.7));
+      float s = 1. - dot(e, e) / (r * r);
+      if (s > 0.) st = max(st, (.2 + .08 * h2(c + ivec2(0, 29))) * pow(s, .4));
+    }
+  }
+  return st;
+}
+// at p: x how far below the land the bed is cut, y how far below the land the water lies (there
+// is water where x is the more), z how wet the banks (0 … 1), w how far from the middle (m)
+vec4 creek(vec2 p, bool ford) {
+  float pr = smoothstep(.38, .55, vnoise(p / 420. + 517.3));
+  if (pr <= 0.) return vec4(0., 1e3, 0., 1e3);
+  float k = uCreek.x;
+  vec3 a = vnoised(p * k + 401.7), b = vnoised(p * k * 2.3 + 93.1);
+  float n = a.x * .75 + b.x * .25 - .5;
+  vec2 g = (a.yz * .75 + b.yz * .25 * 2.3) * k;
+  float d = abs(n) / max(length(g), 1e-5);
+  float w = uCreek.z * (.7 + .6 * vnoise(p / 35. + 61.7)) * pr;
+  float B = w + 4.;
+  if (d > B + 4.) return vec4(0., 1e3, 0., d);
+  float D = uCreek.y * (.6 + .4 * pr) * pr;
+  float lvl = D - .35 * pr;
+  float cut = D * (1. - smoothstep(w * .3, B, d));
+  if (ford && d < B) {
+    float f = fordAt(p);
+    if (f > 0.) {
+      cut = mix(cut, min(cut, lvl + .06), f);
+      if (f > .3) cut -= steppingStone(p) * f;
+    }
+  }
+  return vec4(max(cut, 0.), lvl, (1. - smoothstep(B * .7, B + 3., d)) * pr, d);
+}
+// the way the creek runs at p (a unit vector along it)
+vec2 creekFlow(vec2 p) {
+  float k = uCreek.x;
+  vec3 a = vnoised(p * k + 401.7), b = vnoised(p * k * 2.3 + 93.1);
+  vec2 g = a.yz * .75 + b.yz * .25 * 2.3;
+  return normalize(vec2(-g.y, g.x) + 1e-6);
+}
+// the ground's height: the land, the creek cut into it (world.ts groundH)
+float groundH(vec2 p) { return landH(p) - creek(p, true).x; }
+// the scrub beyond the near cards: the height of its tops over the ground here (m) — tall in the
+// glades and the gaps, thin under the canopy, none in the wet or on the paths — with its tops
+// ragged at every scale
+float scrubTop(vec2 p, float gh, float t) {
+  float open = smoothstep(.55, .75, vnoise(p / 110. + 211.1) + uOpen);
+  float amt = (.3 + .7 * open) * smoothstep(.2, .55, vnoise(p * .08 + 17.));
+  amt *= 1. - smoothstep(.45, .7, wetAt(gh));
+  if (amt < .01) return 0.;
+  float h = amt * (.5 + .5 * vnoise(p * .55 + 3.)) * (.7 + .6 * vnoise(p * 2.3 + 9.)) * 1.4;
+  // (the paths, near enough to matter)
+  if (t < 30.) h *= smoothstep(uPathK.z * .7, uPathK.z * 1.5, pathDist(p));
+  return h;
+}
+// ─── the forest floor, near: built leaf by leaf ────────────────────────────────────────────
+// Layers scattered top-down, each on its own turned grid, one thing to a cell (kept inside it, so
+// one lookup a layer): leaves — lobed like oak or toothed like beech, curled, veined, in every
+// shade from fresh tan to the near-black of last year's — twigs, pebbles, and the dark earth.
+// What is above hides what is below and shadows it at its edges. Each layer is antialiased by
+// the pixel's true footprint, and fades to its average once its things are too small to see, so
+// it never shimmers and meets the painted ground beyond without a seam.
+vec4 hash4(ivec2 c, int k) {
+  uint a = pcg(uint(c.x) * 1973u ^ pcg(uint(c.y) + uSeed + uint(k) * 7919u));
+  uint b = pcg(a), cc = pcg(b), dd = pcg(cc);
+  return vec4(float(a), float(b), float(cc), float(dd)) / 4294967295.;
+}
+vec3 leafColour(float h, float depth) {
+  // fresh tan, ochre, rust, brown, grey-brown decay; deeper layers older and darker
+  vec3 c = h < .25 ? vec3(.5, .39, .25) : h < .45 ? vec3(.5, .38, .2) : h < .62 ? vec3(.43, .26, .15) : h < .85 ? vec3(.31, .22, .14) : vec3(.37, .31, .22);
+  return c * mix(1., .5, depth);
+}
+// one layer of leaves: cell size s (m), the grid turned by (cs, sn), how full (amount), how old
+void leafLayer(vec2 p, float s, vec2 turn, int k, float amount, float depth, float px, vec3 ld, inout vec3 col, inout float cov, inout float shade) {
+  if (cov > .995) return;
+  mat2 R = mat2(turn.x, -turn.y, turn.y, turn.x);
+  vec2 q = R * p / s + float(k) * 17.31;
+  ivec2 c = ivec2(floor(q));
+  vec4 h = hash4(c, k);
+  vec4 g = hash4(c, k + 101);
+  float L = .7 + .26 * h.x;                      // length, in cells
+  float present = step(h.w, amount);
+  float Lm = L * s;
+  // too small to see: the layer's average (how much it covers, and its mean colour)
+  float detail = 1. - smoothstep(Lm * .1, Lm * .4, px);
+  vec3 mean = vec3(.42, .31, .19) * mix(1., .5, depth);
+  float meanCov = amount * .3;
+  vec3 lc = mean;
+  float alpha = meanCov;
+  float edge = 1.;
+  if (detail > 0. && present > 0.) {
+    float Wd = L * (.26 + .18 * h.y);
+    vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - L);
+    vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
+    vec2 u = q - ctr;
+    u = vec2(dot(u, dir), dot(u, vec2(-dir.y, dir.x)));
+    float x = u.x / (L * .5);
+    // the outline: pointed at the tip, rounded at the base; oak lobes or beech teeth
+    float oak = step(g.z, .38);
+    float lob = oak * .22 * sin((x + 1.) * 3.14159 * 3.5) + (1. - oak) * .05 * sin((x + 1.) * 26.);
+    float w = Wd * pow(max(1. - x * x, 0.), .7) * (1. + lob) * (x > 0. ? 1. - x * .25 : 1.);
+    float dIn = (abs(u.y) - w) * s;
+    float d = max(dIn, (abs(x) - 1.) * L * .5 * s);
+    // the stalk
+    float stalk = max(abs(u.y) * s - .0008, max(-x - 1.3, x + .95) * L * .5 * s);
+    d = min(d, stalk);
+    float aa = 1. - smoothstep(-px * .5, px * .5, d);
+    float yn = clamp(u.y / max(w, 1e-3), -1., 1.);
+    // colour, mottled; darker toward the curled edges
+    vec3 c0 = leafColour(g.w, depth) * (.82 + .36 * vnoise(u * 9. + float(k)));
+    c0 *= mix(1., .72, smoothstep(.55, 1., abs(yn)));
+    // curled: the edges up (or the leaf cupped down), lit as it curls
+    float curl = (h.y - .35) * 1.6;
+    vec2 sl = vec2(0., curl * 1.3 * yn);
+    sl = vec2(dot(sl, vec2(dir.x, -dir.y)), dot(sl, dir.yx));
+    sl = transpose(R) * sl;
+    vec3 N = normalize(vec3(-sl.x, 1., -sl.y));
+    c0 *= .62 + .55 * max(dot(N, ld), 0.);
+    // the midrib, and side veins running out to the edge
+    float vein = (1. - smoothstep(.0, .05, abs(yn))) * step(abs(x), .92);
+    vein = max(vein, (1. - smoothstep(0., .08, abs(fract(x * 3.5 - abs(yn) * 1.2) - .5) * 2.)) * .5 * step(.15, abs(yn)) * step(abs(yn), .85));
+    c0 *= 1. - .22 * vein * smoothstep(px * 3., px, .004);
+    lc = mix(mean, c0, detail);
+    alpha = mix(meanCov, aa, detail);
+    edge = d;
+  }
+  lc *= 1. - shade;
+  col += (1. - cov) * alpha * lc;
+  cov += (1. - cov) * alpha;
+  // what lies under it is in its shadow near its edge
+  shade = max(shade * .7, .42 * detail * present * exp(-max(edge, 0.) / .006));
+}
+// a layer of twigs: thin dark sticks, lit as round wood
+void twigLayer(vec2 p, float s, vec2 turn, int k, float amount, float px, vec3 ld, inout vec3 col, inout float cov, inout float shade) {
+  if (cov > .995) return;
+  mat2 R = mat2(turn.x, -turn.y, turn.y, turn.x);
+  vec2 q = R * p / s + float(k) * 9.7;
+  ivec2 c = ivec2(floor(q));
+  vec4 h = hash4(c, k);
+  vec4 g = hash4(c, k + 101);
+  float r = .0015 + .003 * h.y;
+  float detail = 1. - smoothstep(r * .5, r * 3., px);
+  float alpha = amount * .06;
+  vec3 tc = vec3(.2, .15, .1) * (.7 + .5 * g.w);
+  float edge = 1.;
+  if (detail > 0. && h.w < amount) {
+    float L = .5 + .45 * h.x;
+    vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - L);
+    vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
+    vec2 u = q - ctr;
+    float along = clamp(dot(u, dir), -L * .5, L * .5);
+    vec2 off = (u - dir * along) * s;
+    float d = length(off) - r * (1. - .4 * (along / L + .5));
+    float aa = 1. - smoothstep(-px * .5, px * .5, d);
+    float a = clamp(dot(off, vec2(-dir.y, dir.x)) / r, -1., 1.);
+    vec2 nn = transpose(R) * vec2(-dir.y, dir.x);
+    vec3 N = normalize(vec3(nn.x * a, sqrt(max(0., 1. - a * a)), nn.y * a));
+    vec3 c0 = tc * (.55 + .6 * max(dot(N, ld), 0.));
+    tc = mix(tc, c0, detail);
+    alpha = mix(alpha, aa, detail);
+    edge = d;
+  }
+  tc *= 1. - shade;
+  col += (1. - cov) * alpha * tc;
+  cov += (1. - cov) * alpha;
+  shade = max(shade * .7, .4 * detail * exp(-max(edge, 0.) / .004));
+}
+// a layer of stones: irregular (an outline wandering with three harmonics), rounded on top, in
+// warm greys and browns, darker where the wet has them
+void stoneLayer(vec2 p, float s, vec2 turn, int k, float amount, float px, vec3 ld, float damp, inout vec3 col, inout float cov, inout float shade) {
+  if (cov > .995) return;
+  mat2 R = mat2(turn.x, -turn.y, turn.y, turn.x);
+  vec2 q = R * p / s + float(k) * 5.3;
+  ivec2 c = ivec2(floor(q));
+  vec4 h = hash4(c, k);
+  vec4 g = hash4(c, k + 101);
+  float rad = .26 + .2 * h.x;                    // in cells
+  float radm = rad * s;
+  float detail = 1. - smoothstep(radm * .2, radm * .8, px);
+  vec3 sc = g.w < .7 ? mix(vec3(.17, .155, .13), vec3(.34, .31, .26), g.z) : mix(vec3(.24, .17, .12), vec3(.36, .27, .2), g.z);
+  sc *= mix(1., .62, damp);
+  float alpha = amount * .42;
+  float edge = 1.;
+  if (detail > 0. && h.w < amount) {
+    vec2 ctr = vec2(c) + .5 + (h.zw - .5) * (1. - 2.4 * rad);
+    vec2 u = q - ctr;
+    vec2 dir = normalize(g.xy * 2. - 1. + 1e-4);
+    u = vec2(dot(u, dir), dot(u, vec2(-dir.y, dir.x))) / vec2(rad, rad * (.65 + .35 * h.y));
+    float th = atan(u.y, u.x);
+    float outline = 1. + .1 * sin(2. * th + g.x * 6.28) + .07 * sin(3. * th + g.y * 6.28) + .04 * sin(5. * th + g.z * 6.28);
+    float r = length(u);
+    float d = (r - outline) * radm;
+    float aa = 1. - smoothstep(-px * .5, px * .5, d);
+    // rounded on top, flatter in the middle; the light on its upper side
+    vec2 uu = u / outline;
+    float z = sqrt(max(0., 1. - dot(uu, uu)));
+    vec2 nu = vec2(dot(vec2(uu.x, uu.y), vec2(dir.x, -dir.y)), dot(vec2(uu.x, uu.y), dir.yx));
+    nu = transpose(R) * nu;
+    vec3 N = normalize(vec3(nu.x, z * 1.6 + .2, nu.y));
+    vec3 c0 = sc * (.45 + .75 * max(dot(N, ld), 0.)) * (.85 + .3 * vnoise(u * 5. + float(k)));
+    // a damp sheen of the fog's light on the wettest
+    c0 += fogDir(reflect(-ld, N)) * .06 * damp * pow(max(N.y, 0.), 8.);
+    sc = mix(sc, c0, detail);
+    alpha = mix(alpha, aa, detail);
+    edge = d;
+  }
+  sc *= 1. - shade;
+  col += (1. - cov) * alpha * sc;
+  cov += (1. - cov) * alpha;
+  shade = max(shade * .7, .5 * detail * exp(-max(edge, 0.) / .005));
+}
+// the floor's own relief, under everything that lies on it: hummocks (~0.6 m), clods (~20 cm) and
+// grit (~7 cm), each fading out when it is too small for the pixel (no shimmer). Returns the
+// surface's normal, and how far down in a hollow this is (for the dark that collects there)
+vec4 floorRelief(vec2 xz, float px) {
+  vec2 grad = vec2(0.);
+  float hollow = 0.;
+  float scale = .6, amp = .045;
+  for (int i = 0; i < 3; i++) {
+    float lod = 1. - smoothstep(scale * .08, scale * .3, px);
+    if (lod <= 0.) break;
+    vec2 q = xz / scale + float(i) * 13.7;
+    float e = .15;
+    float h0 = vnoise(q);
+    // the slope of this octave (rise per metre), by small steps across and along
+    grad += vec2(vnoise(q + vec2(e, 0.)) - h0, vnoise(q + vec2(0., e)) - h0) / (e * scale) * amp * lod;
+    hollow += (.5 - h0) * lod * (i == 0 ? .5 : 1.);
+    scale *= .33;
+    amp *= .4;
+  }
+  return vec4(normalize(vec3(-grad.x, 1., -grad.y)), hollow);
+}
+// the floor here: how much litter (shelter), the path (trodden: fewer leaves, more stones), the wet
+vec3 forestFloor(vec2 xz, float t, vec3 d, float litter, float path, float damp) {
+  // the pixel's footprint (m): across, and drawn out along the view at a grazing angle; widened
+  // by the depth of field near you
+  float across = t / uF;
+  float px = sqrt(across * across / max(-d.y, .04)) * (1. + coc(t) * .5);
+  vec3 ld = normalize(vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .25), cos(uSun.x) * cos(uSun.y)));
+  vec3 col = vec3(0.);
+  float cov = 0.;
+  float shade = 0.;
+  // (the grids the layers are scattered on, bent by a slow warp a cell or so deep, so no row of
+  // them ever lines up)
+  vec2 wxz = xz + (vec2(vnoise(xz * 2.3), vnoise(xz * 2.3 + 7.31)) - .5) * .14;
+  float leaves = mix(.3, .62, litter) * (1. - .5 * path);
+  float stones = mix(.55, .8, path) * (1. - .4 * damp);
+  // leaves over stones: six layers of leaves, older and darker going down, with stones of four
+  // sizes among the lower ones and twigs among the upper
+  for (int i = 0; i < 6; i++) {
+    float fi = float(i);
+    float a = fi * 2.39996;
+    float s = .09 + .07 * fract(fi * .618 + .3);
+    leafLayer(wxz, s, vec2(cos(a), sin(a)), 1 + i * 3, leaves * (1. - fi * .05), fi / 7., px, ld, col, cov, shade);
+    if (i == 1) twigLayer(wxz, .45, vec2(.8, .6), 40, .45 * leaves + .2 * path, px, ld, col, cov, shade);
+    if (i == 2) stoneLayer(wxz, .13, vec2(.6, -.8), 42, stones * .8, px, ld, damp, col, cov, shade);
+    if (i == 3) twigLayer(wxz, .3, vec2(-.96, .28), 41, .35 * leaves, px, ld, col, cov, shade);
+    if (i == 4) stoneLayer(wxz, .085, vec2(-.3, .95), 43, stones, px, ld, damp, col, cov, shade);
+    if (cov > .995) break;
+  }
+  stoneLayer(wxz, .06, vec2(.95, .3), 44, stones, px, ld, damp, col, cov, shade);
+  stoneLayer(wxz, .04, vec2(-.7, -.7), 45, stones, px, ld, damp, col, cov, shade);
+  // beneath: grit and earth — tiny stones over dark soil (fading to their average when too fine
+  // to see), mossy in the wet
+  float gl = 1. - smoothstep(.003, .012, px);
+  float grit = mix(.5, smoothstep(.45, .65, vnoise(xz * 140.)) * .7 + vnoise(xz * 47.) * .3, gl);
+  vec3 under = mix(vec3(.1, .08, .06), vec3(.26, .23, .19), grit * .8);
+  under = mix(under, vec3(.09, .1, .05) * (.8 + .4 * vnoise(xz * 23.)), damp * .6);
+  col += (1. - cov) * under * (1. - shade * .6);
+  // the relief it all lies on: lit as it faces the light behind the fog (leaves on a hummock catch
+  // it together), and dark collecting in the hollows
+  vec4 rel = floorRelief(xz, px);
+  float lit = (.68 + .5 * max(dot(rel.xyz, ld), 0.)) / (.68 + .5 * ld.y);
+  col *= lit * (1. - .5 * clamp(rel.w, 0., .6));
+  // wet leaves are darker and a little greener
+  return col * mix(vec3(1.), vec3(.72, .78, .62), damp * .7);
+}
+// ─── stone: structures that stand in the wood (a ruined tower, the piers of a high viaduct) ─────────
+// Each a signed distance in its own frame (x along its axis, y up from its base), traced only where
+// a ray meets its box. Masonry is drawn on in the shading: courses, blocks, mortar, moss and ivy.
+vec3 toLocal(vec3 w, int i) {
+  vec4 a = uStA[i];
+  vec2 r = w.xz - a.xy;
+  float c = cos(a.z), s = sin(a.z);
+  return vec3(c * r.x + s * r.y, w.y - uStB[i].x, -s * r.x + c * r.y);
+}
+float sdBox(vec3 p, vec3 b) { vec3 q = abs(p) - b; return length(max(q, 0.)) + min(max(q.x, max(q.y, q.z)), 0.); }
+// stone by stone: a hash for a stone (its column along the face, its course up it)
+float stoneHash(float col, float row, float seed) { return fract(sin(col * 127.1 + row * 311.7 + seed * 17.3) * 43758.5453); }
+// a ruined round tower: a battered wall, its top broken away unevenly — stone by stone, in steps
+// of whole courses — a doorway, slit windows; each stone a little proud of the wall or sunk
+float sdTower(vec3 p, vec4 b) {
+  float H = b.y, R0 = b.z;
+  float r = length(p.xz);
+  float th = atan(p.z, p.x);
+  float along = th * R0;
+  float hr = .31;
+  float row = floor(p.y / hr);
+  float colW = .5;
+  float col = floor((along + row * .23) / colW);
+  float R = R0 * (1. + .07 * (1. - clamp(p.y / H, 0., 1.))) + (stoneHash(col, row, b.w) - .5) * .05;
+  float wall = abs(r - R) - .48;
+  // the broken top: low on one side, high on the other; each column of stones ending at a whole
+  // course, its own
+  float tc = (floor(along / colW) + .5) * colW / R0;
+  float topS = H * (1. - .42 * vnoise(vec2(tc * .9 + b.w * 7., b.w)) - .12 * vnoise(vec2(tc * 3.1, b.w + 3.)));
+  float top = floor((topS + (stoneHash(floor(along / colW), 99., b.w) - .5) * .5) / hr) * hr;
+  float d = max(wall, p.y - top);
+  d = max(d, -p.y - 4.);
+  // the doorway (facing along x): a tall opening, round-headed
+  vec3 q = p - vec3(R, 0., 0.);
+  float door = max(sdBox(q - vec3(0., 1.1, 0.), vec3(1.4, 1.2, .62)), -1.);
+  door = min(door, length(vec2(q.z, max(q.y - 2.3, 0.))) - .62 + max(abs(q.x) - 1.4, 0.) * 9.);
+  d = max(d, -door);
+  // slit windows, four round, one above another
+  float a4 = mod(th + .785, 1.571) - .785;
+  float fl = mod(p.y - 4.2, 3.4) - 1.7;
+  float slit = max(max(abs(a4 * R) - .11, abs(fl) - .55), max(abs(r - R) - .8, 3.6 - p.y));
+  d = max(d, -slit);
+  return d;
+}
+// a viaduct: a row of tall piers carrying arches high overhead (the deck lost in the fog), the
+// piers battered (wider low down), standing in the ground whatever its height
+float sdViaduct(vec3 p, vec4 b) {
+  float D = b.y, S = b.z, N = b.w;
+  float half_ = (N - 1.) * .5 * S;
+  // the whole body, ground to deck, battered
+  float tap = clamp(p.y / D, 0., 1.);
+  float wz = 2.4 - .5 * tap + .35 * step(p.y, 1.5);
+  float body = sdBox(p - vec3(0., (D + 2.5 - 60.) * .5, 0.), vec3(half_ + 1.3, (D + 2.5 + 60.) * .5, wz));
+  // the spans between the piers: open below, arched above (the arch's crown a little under the deck)
+  float ra = S * .5 - 1.15 - .25 * (1. - tap);
+  float k = clamp(floor(p.x / S + (N - 1.) * .5), 0., N - 2.);
+  float xm = (k + .5 - (N - 1.) * .5) * S;
+  float cy = D - .9 - ra;
+  float arch = length(vec2(p.x - xm, max(p.y - cy, 0.))) - ra;
+  return max(body, -arch);
+}
+// a stretch of dry-stone wall: battered (wider at the foot), sagging along its length, tapering
+// down at a gap; its ends overlap the next stretch's a little, so the wall runs on unbroken.
+// Gives along (t), across (s) and up from its foot (y) too, for the shading
+float sdWall(vec3 w, int i, out vec3 tsy) {
+  vec4 a = uWallA[i], b = uWallB[i];
+  vec2 dv = a.zw - a.xy;
+  float L = length(dv);
+  vec2 u = dv / max(L, 1e-3);
+  vec2 r = w.xz - a.xy;
+  float t = dot(r, u), s = dot(r, vec2(-u.y, u.x));
+  float tc = clamp(t, 0., L);
+  float y = w.y - (mix(b.x, b.y, tc / max(L, 1e-3)) - .12);
+  float caps = floor(b.w / 1000.);
+  float seed = mod(b.w, 1000.);
+  // stone by stone: the courses (13 cm), the stones along them (30 cm, staggered)
+  float hr = .13, colW = .3;
+  float row = floor(y / hr);
+  float colT = floor(tc / colW);
+  float cc = (colT + .5) * colW;
+  float H = b.z * (.86 + .26 * vnoise(vec2(cc * .3, seed)));
+  if (mod(caps, 2.) > .5) H *= .25 + .75 * smoothstep(0., 1.8, cc);
+  if (caps > 1.5) H *= .25 + .75 * smoothstep(0., 1.8, L - cc);
+  // the top: each column of stones ending at a whole course (the coping stones stand up unevenly)
+  H = floor((H + (stoneHash(colT, 77., seed) - .5) * .16) / hr) * hr;
+  float hw = mix(.36, .22, clamp(y / max(H, .1), 0., 1.)) + (stoneHash(floor((tc + row * .15) / colW), row, seed) - .5) * .045;
+  float d = max(abs(s) - hw, y - H);
+  d = max(d, -y - 1.2);
+  d = max(d, max(-t - .25, t - L - .25));
+  tsy = vec3(t, s, y);
+  return d;
+}
+// the walls a ray meets (found once per pixel), so the march looks only at those
+int wHit[8];
+int wN = 0;
+float sdStruct(vec3 w, out int id) {
+  float best = 1e3;
+  id = -1;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uStN) break;
+    vec3 p = toLocal(w, i);
+    float d = uStA[i].w < 1.5 ? sdTower(p, uStB[i]) : sdViaduct(p, uStB[i]);
+    if (d < best) { best = d; id = i; }
+  }
+  for (int k = 0; k < 8; k++) {
+    if (k >= wN) break;
+    vec3 tsy;
+    float d = sdWall(w, wHit[k], tsy);
+    if (d < best) { best = d; id = 100 + wHit[k]; }
+  }
+  return best;
+}
+// where a ray meets a structure's box (in its frame): the span [t0, t1], or none
+vec2 boxSpan(vec3 ro, vec3 rd, int i) {
+  vec4 a = uStA[i], b = uStB[i];
+  vec3 o = toLocal(ro, i);
+  float c = cos(a.z), s = sin(a.z);
+  vec3 dl = vec3(c * rd.x + s * rd.z, rd.y, -s * rd.x + c * rd.z);
+  vec3 lo, hi;
+  if (a.w < 1.5) { float e = b.z * 1.1 + 1.; lo = vec3(-e, -4., -e); hi = vec3(e, b.y + .5, e); }
+  else { float e = (b.w - 1.) * .5 * b.z + 1.5; lo = vec3(-e, -60., -3.); hi = vec3(e, b.y + 3., 3.); }
+  vec3 inv = 1. / (dl + sign(dl) * 1e-6 + vec3(equal(dl, vec3(0.))) * 1e-6);
+  vec3 t0 = (lo - o) * inv, t1 = (hi - o) * inv;
+  vec3 tn = min(t0, t1), tf = max(t0, t1);
+  float n = max(max(tn.x, tn.y), tn.z), f = min(min(tf.x, tf.y), tf.z);
+  return f > max(n, 0.) ? vec2(max(n, 0.), f) : vec2(-1.);
+}
+// the nearest structure along the ray (distance, or -1), traced only within the boxes it meets
+float traceStructures(vec3 ro, vec3 rd, out int id) {
+  id = -1;
+  float t0 = 1e9, t1 = -1.;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uStN) break;
+    vec2 sp = boxSpan(ro, rd, i);
+    if (sp.y > 0.) { t0 = min(t0, sp.x); t1 = max(t1, sp.y); }
+  }
+  // and the walls' stretches: their boxes (from end to end, foot to top)
+  wN = 0;
+  for (int i = 0; i < 24; i++) {
+    if (i >= uWallN || wN >= 8) break;
+    vec4 a = uWallA[i], b = uWallB[i];
+    vec3 lo = vec3(min(a.x, a.z) - .7, min(b.x, b.y) - 1.3, min(a.y, a.w) - .7);
+    vec3 hi = vec3(max(a.x, a.z) + .7, max(b.x, b.y) + b.z * 1.15 + .1, max(a.y, a.w) + .7);
+    vec3 inv = 1. / (rd + vec3(equal(rd, vec3(0.))) * 1e-6);
+    vec3 q0 = (lo - ro) * inv, q1 = (hi - ro) * inv;
+    vec3 tn = min(q0, q1), tf = max(q0, q1);
+    float n = max(max(tn.x, tn.y), tn.z), f = min(min(tf.x, tf.y), tf.z);
+    if (f > max(n, 0.) && n < 90.) {
+      wHit[wN] = i;
+      wN++;
+      t0 = min(t0, max(n, 0.));
+      t1 = max(t1, f);
+    }
+  }
+  if (t1 < 0.) return -1.;
+  float t = max(t0, .05);
+  t1 = min(t1, ${DEPTH_RANGE.toFixed(1)});
+  for (int k = 0; k < 96; k++) {
+    if (t > t1) break;
+    int j;
+    float d = sdStruct(ro + rd * t, j);
+    if (d < .003 + .0015 * t) { id = j; return t; }
+    // (stone by stone the shape steps: go carefully near it)
+    t += d < .6 ? d * .55 : d * .9;
+  }
+  return -1.;
+}
+// rubble masonry on a face: rough courses of stones, each its own size, tone and roughness, the
+// mortar thin, dark and sunk between; every stone a little proud of the wall (light on its top,
+// shadow under). Returns: mortar, stone id, shading, detail (all fade with distance)
+vec4 masonry(vec2 uv, float px, float seed, out vec2 tilt) {
+  // the courses: each its own height (.2 – .42 m), found by a noisy cumulative height
+  float row = floor(uv.y / .31 + .35 * vnoise(vec2(uv.x * .12, seed)));
+  float rh = fract(sin(row * 12.9898 + seed) * 43758.5453);
+  float hr = .31;
+  float y0 = (row - .35 * vnoise(vec2(uv.x * .12, seed))) * hr;
+  float fy = uv.y - y0;
+  // the stones along the course: lengths .3 – 1 m, their joints wandering
+  float bl = .32 + .65 * fract(rh * 7.13);
+  float bx = (uv.x + rh * 3.7) / bl + .25 * (vnoise(vec2(uv.y * 3., row)) - .5);
+  float col = floor(bx);
+  float id = fract(sin(dot(vec2(col, row), vec2(127.1, 311.7)) + seed) * 43758.5453);
+  float fx = fract(bx) * bl;
+  float sh = hr;
+  // some stones are two, one on another
+  if (id < .3) {
+    float split = hr * (.4 + .2 * fract(id * 31.));
+    if (fy > split) { fy -= split; sh = hr - split; id = fract(id * 17.3); } else sh = split;
+  }
+  // each stone's own outline: rounded, its edges chipped and wandering
+  float chip = .035 * (vnoise(uv * 5. + id * 9.) - .4) + .012 * (vnoise(uv * 19. + id * 3.) - .5);
+  float edge = min(min(fx, bl - fx), min(fy, sh - fy)) - chip;
+  float mortar = 1. - smoothstep(.0, .006 + max(px * .8, .003), edge);
+  float detail = 1. - smoothstep(.04, .2, px);
+  // proud of the wall: its face rounded towards its edges (the tilt packed for the light, in the
+  // face's across and up), pitted and mottled within
+  float bulge = smoothstep(0., .09, edge);
+  tilt = vec2((fx / bl - .5), (fy / sh - .5)) * 2. * (1. - bulge) * detail;
+  float rough = (vnoise(uv * 23. + id * 5.) - .5) * .22 + (vnoise(uv * 61. + id) - .5) * .12;
+  float pits = -smoothstep(.72, .8, vnoise(uv * 37. + id * 7.)) * .18;
+  return vec4(mortar * detail, id, mix(1., .82 + rough + pits, detail), detail);
+}
+// the sketch's stone: how much pencil (set by shadeStructure for the world pass to draw)
+float gStoneMark = 0.;
+vec3 shadeStructure(vec3 w, int i, float t, vec3 d, float tauIn) {
+  int j;
+  vec2 e = vec2(.012, -.012);
+  vec3 N = normalize(e.xyy * sdStruct(w + e.xyy, j) + e.yyx * sdStruct(w + e.yyx, j) + e.yxy * sdStruct(w + e.yxy, j) + e.xxx * sdStruct(w + e.xxx, j));
+  bool wall = i >= 100;
+  bool tower = !wall && uStA[i].w < 1.5;
+  vec3 p;
+  vec4 b;
+  vec2 uv;
+  float px = t / uF;
+  if (wall) {
+    // a wall: along it and up it; its top seen from above
+    vec3 tsy;
+    sdWall(w, i - 100, tsy);
+    p = vec3(tsy.x, tsy.z, tsy.y);
+    b = vec4(0., uWallB[i - 100].z, 0., mod(uWallB[i - 100].w, 1000.));
+    uv = abs(N.y) > .6 ? vec2(tsy.x, tsy.y) : vec2(tsy.x + tsy.y * .0, tsy.z);
+  } else {
+    p = toLocal(w, i);
+    b = uStB[i];
+    // the face's own coordinates: round the tower; along or across the viaduct; up
+    float c = cos(uStA[i].z), s = sin(uStA[i].z);
+    vec3 Nl = vec3(c * N.x + s * N.z, N.y, -s * N.x + c * N.z);
+    uv = tower ? vec2(atan(p.z, p.x) * b.z, p.y) : (abs(Nl.x) > abs(Nl.z) ? vec2(p.z, p.y) : vec2(p.x, p.y));
+    if (!tower && Nl.y < -.3) uv = vec2(p.z, p.x);
+  }
+  vec2 tilt;
+  // (a wall's stones are smaller, laid dry: no mortar, deep dark gaps)
+  vec4 m = wall ? masonry(uv * 2.4, px * 2.4, b.w, tilt) : masonry(uv, px, b.w, tilt);
+  // each stone its own: grey sandstone, some warmer, some darker
+  vec3 stone = (tower ? vec3(.31, .29, .26) : wall ? vec3(.33, .32, .29) : vec3(.29, .29, .28)) * (.72 + .5 * m.y);
+  stone = mix(stone, vec3(.36, .29, .21), step(.78, m.y) * .6);
+  stone *= m.z;
+  stone = mix(stone, vec3(.05, .05, .045), m.x * (wall ? 1. : .85));
+  // walls carry lichen: pale crusts in spots and patches
+  if (wall) {
+    // crusts a hand across, clustered, speckled (the stone showing through)
+    float where = smoothstep(.45, .7, vnoise(uv * 1.7 + b.w));
+    float crust = smoothstep(.62, .72, vnoise(mat2(.8, -.6, .6, .8) * uv * 14. + b.w)) * (.55 + .45 * smoothstep(.4, .6, vnoise(uv * 61.)));
+    stone = mix(stone, vec3(.5, .52, .45), crust * where * .4 * m.w);
+  }
+  // weather: rain-streaks down the faces, lichen pale in patches
+  stone *= .85 + .3 * vnoise(vec2(uv.x * 2.5, uv.y * .25));
+  stone = mix(stone, vec3(.55, .56, .48), smoothstep(.62, .75, vnoise(uv * 1.7 + 5.)) * .35 * m.w);
+  // moss on what faces up and low down, and on the side away from the light; ivy climbing the tower
+  vec3 ld = normalize(vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .2), cos(uSun.x) * cos(uSun.y)));
+  float gh = groundH(w.xz);
+  float low = 1. - smoothstep(0., 3.5, w.y - gh);
+  float moss = max(smoothstep(.45, .8, N.y), low * .7) * smoothstep(.35, .6, vnoise(uv * 1.3 + 9.));
+  moss = max(moss, (1. - max(dot(N, ld), 0.)) * .35 * smoothstep(.5, .7, vnoise(uv * .9)));
+  stone = mix(stone, vec3(.13, .16, .07) * (.8 + .4 * vnoise(uv * 13.)), clamp(moss, 0., 1.) * .8);
+  if (tower) {
+    // ivy: climbing from the foot in tongues, ragged at its edges, leaf by leaf (light and dark
+    // leaves, shade between them)
+    float reach = vnoise(vec2(uv.x * .35, uv.y * .18) + b.w) * .7 + vnoise(uv * 1.3 + b.w) * .3 + (1. - smoothstep(0., .6, p.y / b.y)) * .45 - .5;
+    // (leaves from two turned layers of noise: no square cells)
+    float leafN = vnoise(mat2(.8, -.6, .6, .8) * uv * 11.) * .55 + vnoise(mat2(.28, .96, -.96, .28) * uv * 26. + 3.) * .45;
+    float ivy = smoothstep(.45, .5, reach + (leafN - .5) * .3 * m.w);
+    vec3 ivyC = mix(vec3(.035, .05, .025), vec3(.11, .15, .06), smoothstep(.4, .75, leafN)) * (.8 + .4 * vnoise(uv * 53.));
+    stone = mix(stone, ivyC, ivy * .95);
+  }
+  // each stone rounded: its normal tilted toward its edges (across the face, and up it)
+  vec3 tanU = normalize(vec3(-N.z, 0., N.x) + 1e-5);
+  if (abs(N.y) < .7) N = normalize(N + tanU * tilt.x * .45 + vec3(0., 1., 0.) * tilt.y * .45);
+  // light: the sun behind the fog, the sky from above, the dark in hollows and openings (AO)
+  float ao = 0.;
+  for (int k = 1; k <= 4; k++) {
+    float h = .25 * float(k);
+    ao += (h - sdStruct(w + N * h, j)) / h;
+  }
+  ao = clamp(1. - ao * .22, .25, 1.);
+  float lit = (.5 + .55 * max(dot(N, ld), 0.) + .2 * (.5 + .5 * N.y)) * ao;
+  vec3 colr = stone * lit * uIllum;
+  // the fog and the mist between
+  float above = w.y - gh;
+  float fogD = fogAt(length(w.xz - uCam.xy), above, uDensity);
+  if (uSketch > .5) {
+    // drawn as a mason's drawing is: each stone's outline (the joints), and strokes along the
+    // courses where the face is turned from the light, crossed where darkest; fixed to the face,
+    // as fine as the pencil wherever it is; the fog takes it to haze
+    float sp = max(px * uSkA.z * (800. / uRes.y), 1e-3) * (wall ? 2.4 : 1.);
+    // (each stone outlined only while it is big enough to draw: a few px across, the joints go; the
+    // courses' strokes carry it)
+    float joints = smoothstep(.3, .75, m.x) * smoothstep(4., 9., (wall ? .15 : .4) / max(px, 1e-4));
+    float shade = smoothstep(.95, .45, lit);
+    float lane = uv.y / sp;
+    float run = smoothstep(.45, .6, vnoise(vec2(uv.x / (sp * 3.), floor(lane) * 1.7 + b.w)));
+    float along = (1. - smoothstep(.12, .28, abs(fract(lane) - .5))) * run * smoothstep(.05, .5, shade);
+    vec2 sl = vec2(uv.x + uv.y * .6, uv.y - uv.x * .6) / sp;
+    float across = (1. - smoothstep(.12, .28, abs(fract(sl.x * .8) - .5))) * smoothstep(.45, .6, vnoise(vec2(sl.y / 6., floor(sl.x * .8)))) * smoothstep(.55, .95, shade);
+    // (moss and ivy: a darker scribble of tone)
+    float green = smoothstep(.1, .2, lum(stone) < .12 ? 1. : 0.) * .3;
+    if (wall) across = 0.;
+    gStoneMark = max(max(joints * .75, along * .5), max(across * .45, green)) * (1. - fogD) * exp(-tauIn);
+  }
+  return mix(colr, fogDir(d), 1. - (1. - fogD) * exp(-tauIn));
+}
+void main() {
+  vec2 px = gl_FragCoord.xy;
+  // cylindrical projection: across the screen is angle (so turning only slides the picture);
+  // up the screen is height over horizontal distance (so verticals stay vertical)
+  float th = (px.x - .5 * uRes.x) / uF;
+  vec3 dc = normalize(vec3(sin(th), (px.y - uHz) / uF, cos(th)));
+  float cy = cos(uCam.w), sy = sin(uCam.w);
+  vec3 d = vec3(dc.x * cy + dc.z * sy, dc.y, -dc.x * sy + dc.z * cy);
+  float az = atan(d.x, d.z);
+  vec3 col;
+  vec3 eye = vec3(uCam.x, uCam.z, uCam.y);
+  // the ground rises and falls: march to it, each step no longer than the slope allows
+  // (the ground can climb at most L for each metre across)
+  const float L = .35;
+  float tHit = -1.;
+  float top = uRelief.x + uRelief.w + 1.5;
+  // the scrub, met on the way: a dense, dark, tawny-topped mass the ray passes into and is
+  // lost in (what it lets through, and what it gives)
+  float sT = 1.;
+  vec3 sCol = vec3(0.);
+  // the mist along the way (optical depth), summed as the march goes
+  float tau = 0.;
+  // stone first: what the ground march need not go beyond
+  int sid;
+  float tS = traceStructures(eye, d, sid);
+  if (d.y < L) {
+    float t = .05;
+    bool gone = false;
+    for (int i = 0; i < 64; i++) {
+      vec3 q = eye + d * t;
+      if (t > 95. || (q.y > top && d.y >= 0.) || (tS > 0. && t > tS)) { gone = true; break; }
+      // (the creek only ever lowers the land: well above the land, it need not be looked for)
+      float land = landH(q.xz);
+      vec4 ck = q.y - land < 1.6 ? creek(q.xz, true) : vec4(0., 1e3, 0., 1e3);
+      float gh = land - ck.x;
+      // (the creek's water is a surface too, and a pond's: met in the same march as the ground, so
+      // where the ground lies a hair under the water the two cannot disagree in steps)
+      float pond = land < uRelief.z ? uRelief.z : -1e3;
+      float gap = q.y - max(max(gh, land - ck.y), pond);
+      if (gap < .004 + .002 * t) { tHit = t; break; }
+      float step = max(gap / (L - d.y), .02 + .006 * t);
+      step = min(step, 6. + .1 * t);
+      // (the near scrub is cards; this takes over beyond them)
+      float fade = smoothstep(6., 16., t);
+      if (fade > 0. && gap < 1.5) {
+        step = min(step, max(.5, .035 * t));
+        float sh = scrubTop(q.xz, gh, t) * fade * (1. - smoothstep(.3, .7, ck.z));
+        if (gap < sh) {
+          float fill = smoothstep(sh, sh * .5, gap);
+          float a = 1. - exp(-fill * 4.5 * step);
+          // dark and warm in the mass, bleached tawny at the tops, some stems paler
+          float tip = smoothstep(.35, 1., gap / max(sh, .01));
+          vec3 c = mix(vec3(.07, .05, .03), vec3(.46, .32, .16) * (.7 + .5 * vnoise(q.xz * 3.1)), tip * tip * .85) * uIllum;
+          float f = 1. - (1. - fogAt(t, gap, uDensity)) * exp(-tau);
+          sCol += sT * a * mix(c, fogDir(d), f);
+          sT *= 1. - a;
+          if (sT < .02) { tHit = t; break; }
+        }
+      }
+      tau += mistDensity(q + d * step * .5, gh, ck.z) * step;
+      t += step;
+    }
+    // (out of steps on a grazing ray: the ground is about there, and deep in the fog)
+    if (tHit < 0. && !gone && d.y < 0.) tHit = t;
+  }
+  // still water in the deepest hollows: a level surface
+  // (where the land lies low: the creek's cut makes no pond)
+  float tWater = -1.;
+  if (tHit > 0.) {
+    vec3 ph = eye + d * tHit;
+    if (landH(ph.xz) < uRelief.z && groundH(ph.xz) < uRelief.z) tWater = tHit;
+  }
+  // what the march met: the creek's water, or its bed and banks
+  vec4 ckH = vec4(0., 1e3, 0., 1e3);
+  if (tHit > 0. && tWater < 0.) ckH = creek((eye + d * tHit).xz, true);
+  bool brook = ckH.x > ckH.y;
+  bool stone = tS > 0. && (tHit < 0. || tS < tHit) && (tWater < 0. || tS < tWater);
+  if (stone) {
+    vec3 w = eye + d * tS;
+    // (rays looking up did not march: the mist to it summed here)
+    if (d.y >= L) {
+      float gh0 = groundH(eye.xz);
+      for (int i = 0; i < 6; i++) tau += mistDensity(eye + d * tS * (float(i) + .5) / 6., gh0, 0.) * tS / 6.;
+    }
+    col = shadeStructure(w, sid, tS, d, tau);
+  } else if (tHit < 0. && tWater < 0.) {
+    // only fog: lighter higher, brighter where the light is behind it. (The mist is the fog's own
+    // colour, so the sky is the fog exactly: the far ground, fogged away, meets it without a line;
+    // the mist shows where it veils something)
+    col = fogDir(d);
+  } else if (tWater > 0.) {
+    float t = tWater;
+    vec3 p = eye + d * t;
+    float depth = uRelief.z - groundH(p.xz);
+    // still, dark water: the fog above in it, a faint stir across it, the shallows going to mud
+    vec2 st = vec2(vnoise(p.xz * 2.3 + vec2(uT * .25, 0.)), vnoise(p.xz * 2.3 + vec2(17., -uT * .2))) - .5;
+    vec3 n = normalize(vec3(st.x * .05, 1., st.y * .05));
+    vec3 r = reflect(d, n);
+    float fres = .35 + .65 * pow(1. - abs(d.y), 4.);
+    vec3 sky = fogDir(r);
+    vec3 deep = vec3(.03, .04, .035) * uIllum;
+    vec3 w = mix(deep, sky * .85, fres);
+    vec3 mud = uEarth * .55 * uIllum;
+    w = mix(mud, w, smoothstep(0., .12, depth));
+    float fogD = fogAt(t, 0., uDensity);
+    col = mix(w, fogDir(d), 1. - (1. - fogD) * exp(-tau));
+  } else if (brook) {
+    // the creek: running water, the stir carried down it; the bed seen through the shallows,
+    // broken white over the ford and round the stones
+    float t = tHit;
+    vec3 p = eye + d * t;
+    float depth = ckH.x - ckH.y;
+    vec2 fl = creekFlow(p.xz);
+    vec2 across = vec2(-fl.y, fl.x);
+    vec2 rp = vec2(dot(p.xz, fl) - uT * .9, dot(p.xz, across));
+    float shallow = 1. - smoothstep(.03, .2, depth);
+    float r1 = vnoise(rp * vec2(1.3, 4.2)) - .5;
+    float r2 = vnoise(rp * vec2(3.4, 8.5) + 7.) - .5;
+    float amp = .18 + .35 * shallow;
+    vec2 tilt = (fl * r1 + across * r2) * amp;
+    vec3 n = normalize(vec3(tilt.x, 1., tilt.y));
+    vec3 r = reflect(d, n);
+    float fres = .3 + .7 * pow(1. - abs(d.y), 4.);
+    vec3 sky = fogDir(r);
+    // the bed: pebbles and silt, dark with water
+    vec3 bed = mix(vec3(.08, .07, .055), vec3(.19, .17, .13), smoothstep(.45, .7, vnoise(p.xz * 7.))) * (.7 + .5 * vnoise(p.xz * 21.)) * uIllum;
+    vec3 deep = vec3(.035, .04, .03) * uIllum;
+    vec3 below = mix(bed, deep, smoothstep(.04, .35, depth));
+    vec3 w = mix(below, sky * .85, fres * (.55 + .45 * smoothstep(0., .15, depth)));
+    // white water: streaks where it runs shallow and quick
+    // (over a ford mostly, thin streaks drawn out down the flow; a little along the edges)
+    float foam = smoothstep(.62, .95, vnoise(rp * vec2(1.2, 9.) + 3.) * .7 + vnoise(rp * vec2(3., 21.)) * .3 + r2 * .2) * shallow * (.15 + .85 * fordAt(p.xz));
+    w = mix(w, fogDir(vec3(0., 1., 0.)) * .9, foam * .4);
+    float fogD = fogAt(t, 0., uDensity);
+    col = mix(w, fogDir(d), 1. - (1. - fogD) * exp(-tau));
+  } else {
+    float t = tHit;
+    vec3 p = eye + d * t;
+    float gh = p.y;
+    float hollow = max(wetAt(gh), ckH.z);
+    float open = smoothstep(.55, .75, vnoise(p.xz / 110. + 211.1) + uOpen);
+    // dry grass: straw and shadow, a trodden path darker
+    float n = fbm(p.xz * .5);
+    float grain = vnoise(p.xz * 6.) * .5 + vnoise(p.xz * 17.) * .5;
+    vec3 g = mix(uStrawDark, uGround, smoothstep(.2, .75, n));
+    g = mix(g, uStraw * .8, smoothstep(.6, .95, vnoise(p.xz * 2.2)) * .35);
+    g *= .8 + .35 * grain;
+    // under the trees, last year's leaves: brown, speckled leaf by leaf, drifted
+    float shelter = (1. - open) * (1. - hollow);
+    float lv = vnoise(p.xz * 11.) * .6 + vnoise(p.xz * 29.) * .4;
+    vec3 litter = mix(vec3(.2, .12, .06), vec3(.4, .25, .12), smoothstep(.45, .75, lv)) * (.75 + .4 * vnoise(p.xz * 3.1));
+    g = mix(g, litter, shelter * (.45 + .4 * smoothstep(.35, .7, vnoise(p.xz * .5))));
+    // in the hollows the ground is wet: dark, mossy, holding the fog's light
+    vec3 moss = mix(vec3(.07, .075, .04), vec3(.15, .15, .075), vnoise(p.xz * 5.));
+    float damp = smoothstep(.3, .85, hollow);
+    g = mix(g, moss, damp * .8);
+    g = mix(g, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .4, damp * smoothstep(.55, .8, vnoise(p.xz * .7)) * .3);
+    // and the slopes face the light or away from it (softly: the light is diffuse in fog)
+    float e = t < 12. && ckH.x > 0. ? .06 : .4;
+    // (the creek's banks only where it is: elsewhere the land is the ground)
+    vec3 gn = ckH.z > 0. || ckH.x > 0.
+      ? normalize(vec3(groundH(p.xz - vec2(e, 0.)) - groundH(p.xz + vec2(e, 0.)), 2. * e, groundH(p.xz - vec2(0., e)) - groundH(p.xz + vec2(0., e))))
+      : normalize(vec3(landH(p.xz - vec2(e, 0.)) - landH(p.xz + vec2(e, 0.)), 2. * e, landH(p.xz - vec2(0., e)) - landH(p.xz + vec2(0., e))));
+    vec3 ld = vec3(sin(uSun.x) * cos(uSun.y), sin(uSun.y), cos(uSun.x) * cos(uSun.y));
+    g *= (.75 + .35 * max(dot(gn, ld), 0.)) / (.75 + .35 * max(ld.y, 0.));
+    // the paths: bare, trodden earth, damp in the middle, crumbling at the edges into the grass,
+    // a little grass coming back here and there down the middle
+    float pd = pathDist(p.xz) + (vnoise(p.xz * 1.1) - .5) * .35;
+    float hw = uPathK.z * (.8 + .4 * vnoise(p.xz * .13));
+    float path = 1. - smoothstep(hw * .55, hw, pd);
+    float edge = smoothstep(hw * .35, hw * .8, pd) * path;
+    vec3 earth = uEarth * (.75 + .5 * vnoise(p.xz * 7.)) * (1. - .25 * (1. - smoothstep(0., hw * .4, pd)));
+    earth = mix(earth, uStrawDark, edge * .5);
+    // damp, trodden earth holds a little of the fog's light (so the way reads ahead in the mist)
+    float wet = (1. - smoothstep(0., hw * .6, pd)) * smoothstep(.35, .7, vnoise(p.xz * .9));
+    earth = mix(earth, fogDir(vec3(d.x, -d.y, d.z)) / max(uIllum, vec3(.05)) * .55, wet * .45);
+    float regrow = smoothstep(.62, .8, vnoise(p.xz * 2.7)) * (1. - smoothstep(0., hw * .3, pd)) * .6;
+    g = mix(g, mix(earth, g, regrow), path);
+    // near you, the floor itself, leaf by leaf (it fades to its own average with distance, and
+    // that into the painted ground beyond)
+    float nearT = 1. - smoothstep(16., 26., t);
+    if (nearT > 0.) {
+      vec3 ff = forestFloor(p.xz, t, d, max(shelter, .25), path * (1. - regrow), damp);
+      g = mix(g, ff, nearT * mix(.75, .95, shelter));
+    }
+    // the creek's bed where it lies bare (the banks running down to it): wet gravel and silt; over
+    // a ford, its stepping stones, grey, mossed on top
+    float bedness = smoothstep(.15, .5, ckH.x) * smoothstep(.4, .8, ckH.z);
+    if (bedness > 0.) {
+      vec3 gravel = mix(vec3(.09, .08, .065), vec3(.21, .2, .17), smoothstep(.5, .72, vnoise(p.xz * 9.))) * (.7 + .5 * vnoise(p.xz * 23.));
+      g = mix(g, gravel, bedness * .85);
+      float ford = fordAt(p.xz);
+      float st = ford > .3 ? steppingStone(p.xz) : 0.;
+      if (st > .01) {
+        // (dark and wet low down, where the water washes it)
+        vec3 rock = mix(vec3(.34, .32, .28), vec3(.27, .25, .21), vnoise(p.xz * 5.)) * (.75 + .4 * vnoise(p.xz * 13.)) * (.5 + .5 * smoothstep(.03, .12, st));
+        rock = mix(rock, vec3(.12, .15, .07), smoothstep(.1, .16, st) * smoothstep(.4, .7, vnoise(p.xz * 6.)) * .7);
+        g = mix(g, rock, smoothstep(.01, .04, st));
+      }
+    }
+    // shade: dark at each trunk's foot, a soft pool under each crown (the light is diffuse in fog)
+    float ao = 0.;
+    for (int i = 0; i < 40; i++) {
+      if (i >= uShadeN) break;
+      vec4 sh = uShade[i];
+      vec2 d0 = p.xz - sh.xy;
+      vec2 d1 = d0 - uShadeOff[i];
+      ao += .38 * exp(-dot(d0, d0) / (sh.z * sh.z)) + .13 * exp(-dot(d1, d1) / (sh.w * sh.w));
+    }
+    // broken up, as light through a crown and over tussocks is
+    g *= 1. - min(ao, .6) * (.55 + .7 * vnoise(p.xz * 1.9));
+    float fogD = fogAt(t, 0., uDensity);
+    col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * exp(-tau));
+  }
+  vec3 under = col;
+  col = sCol + sT * col;
+  if (uSketch > .5) {
+    // drawn: how dark it is against the fog seen that way is how much pencil it gets (so what the
+    // fog has taken is paper), laid down the way each thing would be drawn
+    float ink = clamp(1. - lum(under) / max(lum(fogDir(d)), .02), 0., 1.);
+    float v = 1. - exp(-3. * ink * uSkA.y);
+    float m = 0.;
+    if (stone) {
+      // stone draws itself (shadeStructure: its joints, strokes along its courses)
+      m = gStoneMark * uSkA.y;
+    } else if (tHit > 0.) {
+      vec3 hp = eye + d * tHit;
+      bool wet = tWater > 0. || brook;
+      // not the ground's tone translated, but what a draughtsman would put down for what is there —
+      // each kind of mark as likely as the place calls for it, and fewer the deeper in the fog
+      float fogF = 1. - (1. - fogAt(tHit, 0., uDensity)) * exp(-tau);
+      float clear = (1. - fogF) * (1. - fogF);
+      float mpp = tHit / uF * (800. / uRes.y);
+      if (wet) {
+        // water: a few long level strokes, and no more
+        m = groundStrokes(hp.xz, tHit, d, .35 * (.4 + .6 * v), 4.) * .5 * clear;
+      } else {
+        float open = smoothstep(.55, .75, vnoise(hp.xz / 110. + 211.1) + uOpen);
+        float hollow = max(wetAt(hp.y), ckH.z);
+        float shelter = (1. - open) * (1. - hollow);
+        // last year's leaves: short marks lying every which way, sparse, more under the trees
+        m = max(m, litter(hp.xz, tHit, d, eye.y - hp.y, (.06 + .3 * shelter + .15 * v) * clear) * .55);
+        // a slope turned from the light: a few strokes along its level lines
+        float e = .5;
+        vec2 gr = vec2(landH(hp.xz + vec2(e, 0.)) - landH(hp.xz - vec2(e, 0.)), landH(hp.xz + vec2(0., e)) - landH(hp.xz - vec2(0., e))) / (2. * e);
+        float slope = length(gr);
+        if (slope > .04) {
+          vec3 ln = normalize(vec3(-gr.x, 1., -gr.y));
+          vec3 ld = vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .15), cos(uSun.x) * cos(uSun.y));
+          float turned = smoothstep(.95, .6, dot(ln, normalize(ld)));
+          vec2 level = vec2(-gr.y, gr.x) / slope;
+          m = max(m, dashRows(hp.xz, level, max(mpp * uSkA.z * 2.5, .05), smoothstep(.04, .25, slope) * turned, 21., 2.) * .45 * clear);
+        }
+        // the path: its two edges, running off into the distance, and a few scratches along it
+        float pd = pathDist(hp.xz) + (vnoise(hp.xz * 1.1) - .5) * .35 * uSkA.w;
+        float hw = uPathK.z * (.8 + .4 * vnoise(hp.xz * .13));
+        float edge = pencilLine((pd - hw * .8) / mpp, .5) * smoothstep(.3, .5, vnoise(hp.xz * .4 + 41.));
+        m = max(m, edge * (1. - fogF) * .8 * uSkB.x);
+        if (pd < hw * .7) {
+          float ep = .3;
+          vec2 pg = vec2(pathDist(hp.xz + vec2(ep, 0.)) - pathDist(hp.xz - vec2(ep, 0.)), pathDist(hp.xz + vec2(0., ep)) - pathDist(hp.xz - vec2(0., ep)));
+          vec2 along = normalize(vec2(-pg.y, pg.x) + 1e-5);
+          m = max(m, dashRows(hp.xz, along, max(mpp * uSkA.z * 1.6, .03), .3, 23., 1.5) * .4 * clear);
+        }
+        // a pond's edge: the line where the water meets the ground
+        float above = landH(hp.xz) - uRelief.z;
+        if (above > 0. && above < .5) {
+          float ex = .4;
+          float gl = max(length(vec2(landH(hp.xz + vec2(ex, 0.)) - landH(hp.xz - vec2(ex, 0.)), landH(hp.xz + vec2(0., ex)) - landH(hp.xz - vec2(0., ex))) / (2. * ex)), .02);
+          float toEdge = above / gl / (mpp * max(tHit / 1.6, 1.));
+          m = max(m, pencilLine(toEdge - .6, .5) * smoothstep(.3, .5, vnoise(hp.xz * .5 + 7.)) * .7 * (1. - fogF));
+        }
+      }
+    }
+    // the scrub beyond the near cards: light upright ticks, as many as it is thick (not a mass)
+    if (sT < .98 && tHit > 0.) {
+      vec2 a = vec2(atan(d.x, d.z) * uF, d.y / length(d.xz) * uF) * (800. / uRes.y);
+      float fogF = 1. - (1. - fogAt(tHit, .5, uDensity)) * exp(-tau);
+      // (in clumps, not a fence: ticks gathered where the scrub is, gaps between)
+      float clump = smoothstep(.5, .75, vnoise(a / 18. + 3.)) * (.6 + .4 * vnoise(a / 5.));
+      float tick = hatch(a, normalize(vec2(.18 + (vnoise(a / 9.) - .5) * .5, 1.)), uSkA.z * 1.7, 7., uSkA.w * 1.5);
+      m = max(m * sT, tick * clump * smoothstep(.05, .7, 1. - sT) * (1. - fogF) * .35);
+    }
+    // what is left unsaid: the faintest marks dropped
+    m *= smoothstep(uSkB.w * .2, uSkB.w * .2 + .08, m);
+    // drawn on paper near, on the fog's haze far (the sky is all haze)
+    float th = stone ? tS : tHit;
+    float fogAll = th < 0. ? 1. : 1. - (1. - fogAt(th, 0., uDensity)) * exp(-tau);
+    col = sketchInk(m, fogAll, d);
+  }
+  o = vec4(col, 1.);
+  // depth: the stone where it stands, all else at the far end
+  gl_FragDepth = stone ? clamp(length((eye + d * tS).xz - eye.xz) / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) : 1.;
+}`;
+
+/** Cells per card (the curved projection needs a few). */
+const COLS = 4;
+const ROWS = 8;
+
+const CARD_VS = `#version 300 es
+uniform vec2 uRes;
+uniform float uF, uHz;
+uniform vec4 uCam;
+uniform vec2 uAnchor; // world x, z
+uniform vec4 uRect;   // left, bottom, width, height (m, already scaled; mirrored if flipped)
+uniform float uBase;  // the ground's height at its foot
+out vec2 vUV;
+out vec3 vWorld;
+out float vDist;
+void main() {
+  // a grid of cells, not one quad: the projection is curved, so the card must bend with it
+  int cell = gl_VertexID / 6, k = gl_VertexID % 6;
+  ivec2 corner = ivec2(k == 1 || k == 4 || k == 5 ? 1 : 0, k == 2 || k == 3 || k == 5 ? 1 : 0);
+  vec2 c = vec2(float(cell % ${COLS} + corner.x) / float(${COLS}), float(cell / ${COLS} + corner.y) / float(${ROWS}));
+  // the card turns about its trunk to face the eye, so the trunk stays planted where it stands
+  vec2 toEye = vec2(uCam.x, uCam.y) - uAnchor;
+  vec2 right = normalize(vec2(-toEye.y, toEye.x) + vec2(1e-5, 0.));
+  float along = uRect.x + c.x * uRect.z;
+  vec3 w = vec3(uAnchor.x + right.x * along, uBase + uRect.y + c.y * uRect.w, uAnchor.y + right.y * along);
+  vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
+  float cs = cos(uCam.w), sn = sin(uCam.w);
+  float cx = rel.x * cs - rel.z * sn;
+  float cz = rel.x * sn + rel.z * cs;
+  float hd = max(length(vec2(cx, cz)), .05);
+  vec2 scr = vec2(atan(cx, cz) * uF + .5 * uRes.x, rel.y / hd * uF + uHz);
+  // (depth: its distance, so stone in front hides it)
+  gl_Position = vec4(scr / uRes * 2. - 1., clamp(hd / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) * 2. - 1., 1.);
+  vUV = c;
+  vWorld = w;
+  vDist = length(rel.xz);
+}`;
+
+const CARD_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vUV;
+in vec3 vWorld;
+in float vDist;
+out vec4 o;
+uniform sampler2D uTex;
+uniform float uDensity, uWind, uPhase, uKind, uFlip, uAlpha;
+uniform vec4 uRect;
+uniform vec3 uBark, uBirch, uLeaf, uStraw, uStrawDark;
+${NOISE}
+void main() {
+  // wind moves only what is flexible (the bake's flex: twigs 1, trunk 0). Flex is read from a
+  // blurred level of the card, so a twig's neighbourhood knows it may move there
+  vec4 near = textureLod(uTex, vUV, 3.5);
+  float flex = clamp(near.b / max(near.a, .002), 0., 1.);
+  float gust = .5 + .5 * sin(uT * .23 + uPhase);
+  float sway = sin(uT * 1.1 + uPhase + vWorld.x * .3) * .6 + sin(uT * 2.7 + uPhase * 1.7 + vWorld.y * .8) * .4;
+  float flutter = vnoise(vec2(vWorld.x * 4. + uT * 1.7, vWorld.y * 4. - uT * .9)) - .5;
+  // metres: a twig sways a few centimetres, trembles a little more
+  float m = (sway * .035 * (.4 + .6 * gust) + flutter * .02) * uWind * flex * flex;
+  // near, out of focus: a blurrier level of the card (its texels are about the size of pixels)
+  vec4 t = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y), log2(1. + coc(vDist)));
+  t *= smoothstep(.15, .6, vDist);
+  if (t.a < .003) discard;
+  float cov = min(t.a, 1.);
+  float tone = clamp(t.g / max(t.a, .002), 0., 1.);
+  float leaf = clamp(t.r / max(t.a, .002), 0., 1.);
+  vec3 birch = uBirch;
+  if (tone > .3 && uKind < .5) {
+    // birch bark: dark lenticels across the white, black patches, darker towards the foot
+    float band = vnoise(vec2(vWorld.x * 4., vWorld.y * 40.));
+    float patchy = vnoise(vec2(vWorld.x * 2. + uPhase, vWorld.y * 7.));
+    birch *= 1. - .75 * smoothstep(.72, .8, band) - .7 * smoothstep(.7, .78, patchy) - .5 * exp(-(vWorld.y - uBase) * 1.2);
+  }
+  vec3 base = uKind > .5 ? mix(uStrawDark, uStraw, tone) : mix(uBark, birch, tone);
+  base = mix(base, uLeaf, leaf);
+  // thin wood is lit through by the fog behind it
+  base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
+  // fog: by distance, and much thicker near the ground; banks of mist drift through
+  // (the ground fog lies a few metres off: what is at your feet is clear)
+  float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
+  float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
+  if (uSketch > .5) {
+    // the card was baked in strokes: its body is paper (hiding what is behind it), its marks
+    // graphite, which the fog takes back to paper. (Grass and scrub lighter than wood: many strokes
+    // over each other)
+    // the fog takes detail, not sharpness: the finest marks go first (twigs, then the lesser
+    // branches; the bake's flex is how fine the wood is), body and all, until a far tree is its trunk
+    // and a few limbs in pale, still-sharp lines, and then nothing. (No blur: what survives is drawn.)
+    bool low = uKind > .5;
+    float fine = clamp(t.b / max(t.a, .002), 0., 1.);
+    // (fog builds fast: ~.27 at 10 m, ~.57 at 20 m — twigs held to about 10 m and gone by 20, the
+    // lesser branches next, the trunk last)
+    float survive = 1. - smoothstep(-.05, .2, fine - (1.75 - 1.9 * fog));
+    float lf = clamp(t.r / max(t.a, .002), 0., 1.);
+    // graphite builds as it does on paper: a little, then more slowly (never to black)
+    // (what survives the fog stays legible a while, paler, then goes as the film's does: the far
+    // trees nearly absent, as they are in the mist)
+    float mk = min((1. - exp(-1.8 * lf)) / (1. - exp(-1.8)) * uSkA.y * (low ? .5 : 1.), 1.) * pow(1. - fog, .75);
+    float a = cov * uAlpha * survive;
+    if (a < .003) discard;
+    o = vec4(sketchInk(mk, fog * (low ? .6 : 1.), vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
+    return;
+  }
+  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+}`;
+
+/**
+ * Near trees as live 3D geometry: every segment of the grown tree, each frame, as a screen-space
+ * anti-aliased line (as the bake draws them) — so a near tree is right from every side, has depth
+ * in its crown, and its bark is shaded by where it faces. Segments come thickest first, so drawing
+ * the first N is the tree as far as it can be seen at that distance.
+ */
+
+const LIVE_VS = `#version 300 es
+in vec3 aP0;
+in vec3 aP1;
+in vec4 aInfo; // w0, w1, tone, leaf
+in vec3 aStroke; // the sketch: its stroke, how far along it (m), its class (tree.ts SEG)
+uniform vec2 uRes;
+uniform float uF, uHz, uT, uWind;
+uniform vec4 uCam;
+uniform vec2 uAnchor;
+uniform float uRot, uScale, uPhase, uRadius, uHeight, uBase;
+uniform float uBlur, uFocus;
+out vec2 vP;
+flat out vec2 vA;
+flat out vec2 vB;
+flat out vec2 vW;
+flat out vec2 vTL;
+flat out vec2 vWm;
+// each end's world place and distance: the fragment finds its own along the segment (a quad's
+// corners stand beyond its ends, so interpolating these across the quad would be wrong there)
+flat out vec3 vWa;
+flat out vec3 vWb;
+flat out vec2 vDab;
+flat out vec3 vStroke;
+flat out float vLen;
+vec3 place(vec3 p) {
+  float c = cos(uRot), s = sin(uRot);
+  vec3 q = vec3(p.x * c - p.z * s, p.y, p.x * s + p.z * c) * uScale;
+  // wind as a smooth field over the tree (so no joint ever cracks): nothing on the trunk's axis
+  // or low down; the outer, high twigs most
+  float radial = length(p.xz) / max(uRadius, .3);
+  float reach = smoothstep(.12, 1., radial) * smoothstep(.1, .6, p.y / max(uHeight, 1.));
+  float gust = .5 + .5 * sin(uT * .23 + uPhase);
+  vec3 wv = vec3(sin(uT * 1.1 + uPhase + p.y * .3) * .6 + sin(uT * 2.7 + uPhase * 1.7 + p.x * 2.) * .4, 0., cos(uT * .9 + uPhase * 1.3 + p.z * 2.) * .5);
+  float flutter = sin(uT * 6.3 + dot(p, vec3(9.1, 7.3, 8.7)));
+  q += (wv * .07 * (.4 + .6 * gust) + vec3(flutter, flutter * .4, -flutter) * .012) * uWind * reach * reach * uScale;
+  return q + vec3(uAnchor.x, uBase, uAnchor.y);
+}
+vec3 project(vec3 w, out float hd) {
+  vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
+  float cs = cos(uCam.w), sn = sin(uCam.w);
+  float cx = rel.x * cs - rel.z * sn;
+  float cz = rel.x * sn + rel.z * cs;
+  hd = max(length(vec2(cx, cz)), .05);
+  return vec3(atan(cx, cz) * uF + .5 * uRes.x, rel.y / hd * uF + uHz, cz);
+}
+void main() {
+  vStroke = aStroke;
+  vLen = length(aP1 - aP0);
+  vec3 wa = place(aP0), wb = place(aP1);
+  float ha, hb;
+  vec3 sa = project(wa, ha), sb = project(wb, hb);
+  if (sa.z < .08 || sb.z < .08) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  float pa = aInfo.x * uScale * uF / ha, pb = aInfo.y * uScale * uF / hb;
+  vec2 a = sa.xy, b = sb.xy, d = b - a;
+  float len = length(d);
+  vec2 dir = len > 1e-4 ? d / len : vec2(0., 1.);
+  vec2 n = vec2(-dir.y, dir.x);
+  // (room for the blur of what is near)
+  float blur = uBlur * max(0., 1. / max(min(ha, hb), .05) - 1. / uFocus);
+  float e = max(pa, pb) * .5 + 1.5 + blur;
+  int c = gl_VertexID;
+  bool first = c == 0 || c == 2;
+  vec2 p = (first ? a - dir * e : b + dir * e) + n * (c < 2 ? -e : e);
+  gl_Position = vec4(p / uRes * 2. - 1., 0., 1.);
+  vP = p;
+  vA = a;
+  vB = b;
+  vW = vec2(pa, pb);
+  vTL = aInfo.zw;
+  vWm = aInfo.xy * uScale;
+  vWa = wa;
+  vWb = wb;
+  vDab = vec2(ha, hb);
+}`;
+
+const LIVE_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vP;
+flat in vec2 vA;
+flat in vec2 vB;
+flat in vec2 vW;
+flat in vec2 vTL;
+flat in vec2 vWm;
+flat in vec3 vWa;
+flat in vec3 vWb;
+flat in vec2 vDab;
+flat in vec3 vStroke;
+flat in float vLen;
+out vec4 o;
+uniform float uDensity, uAlpha, uPhase, uRim, uViewAz;
+uniform vec2 uRes;
+uniform float uF;
+// 1: only lay down depth (the solid middle of the wide wood), so what is behind a trunk is hidden
+uniform float uDepthPass;
+uniform vec3 uBark, uBirch, uLeaf;
+// bark up close: fissure depth, pattern scale, lichen, moss (the species')
+uniform vec4 uBarkP;
+// the sun's direction in the view (screen right, screen up, towards the eye)
+uniform vec3 uLight;
+${NOISE}
+${PENCIL}
+float hc(float a, float b) { return h2(ivec2(int(floor(a)), int(floor(b)) + int(uPhase * 1000.))); }
+// organic patches: noise warped by noise and turned off the grid (plain value noise, thresholded,
+// shows its square cells as straight-edged blocks)
+float organic(vec2 p) {
+  vec2 q = p + vec2(vnoise(p * .7 + 3.1), vnoise(p * .7 + 7.7)) * 1.4;
+  return fbm(mat2(.8, -.6, .6, .8) * q);
+}
+void main() {
+  vec2 pa = vP - vA, ba = vB - vA;
+  float bb = max(dot(ba, ba), 1e-6);
+  float hRaw = dot(pa, ba) / bb;
+  float h = clamp(hRaw, 0., 1.);
+  vec2 off = pa - ba * h;
+  float d = length(off);
+  float w = mix(vW.x, vW.y, h);
+  // where on the wood this is (world), and how far
+  vec3 vWorld = mix(vWa, vWb, hRaw);
+  float vDist = mix(vDab.x, vDab.y, hRaw);
+  float cov;
+  if (w >= 4.) {
+    // wide wood is a continuous cylinder: no round ends (where one segment meets the next they
+    // overlap a little, computing the same surface, so the bark runs on without a seam)
+    float over = w * .4 / sqrt(bb);
+    if (hRaw < -over || hRaw > 1. + over) discard;
+    // past its ends it goes on tapering as it was (not stepping: a flare's segments are short)
+    w = max(mix(vW.x, vW.y, hRaw), .5);
+    off = pa - ba * hRaw;
+    d = length(off);
+    cov = clamp(w * .5 - d + .5, 0., 1.);
+  } else if (w >= 1.) cov = clamp(w * .5 - d + .5, 0., 1.);
+  else {
+    if ((hRaw < 0. || hRaw > 1.) && coc(vDist) < .5) discard;
+    cov = w * clamp(1. - d, 0., 1.);
+  }
+  // out of focus: the line spread over its blur, as faint as it is spread (a thin twig near the
+  // eye a soft smear, a trunk's edges soft); and gone, not cut, as it comes to the eye
+  float B = coc(vDist);
+  if (B > .5) cov = min(1., (w + .5) / (2. * B + 1.)) * (1. - smoothstep(max(w * .5 - B, 0.), w * .5 + B + .5, d));
+  cov *= smoothstep(.1, .5, vDist);
+  if (cov <= .002) discard;
+  // round wood: the normal across the branch (a is -1 … 1 from one edge to the other), lit by the
+  // sun where it is behind the fog, with the sky's soft light from above all round; backlit, the
+  // edges catch it
+  vec2 nn = normalize(vec2(-ba.y, ba.x) + 1e-6);
+  if (nn.x < 0.) nn = -nn;
+  float a = clamp(dot(off, nn) / max(w * .5, .5), -1., 1.);
+  vec3 N = vec3(nn * a, sqrt(max(0., 1. - a * a)));
+  // depth: the round surface, nearer than the axis by the radius where it faces you
+  float zf = clamp((vDist - mix(vWm.x, vWm.y, h) * .5 * N.z) / ${DEPTH_RANGE.toFixed(1)}, 0., 1.);
+  if (uDepthPass > .5) {
+    if (cov < .5) discard;
+    gl_FragDepth = zf;
+    o = vec4(0.);
+    return;
+  }
+  // (drawn a hand's breadth nearer than it is, so a twig only hides when truly behind)
+  gl_FragDepth = max(zf - .1 / ${DEPTH_RANGE.toFixed(1)}, 0.);
+  if (uSketch > .5) {
+    float fog = 1. - (1. - fogAt(vDist, vWorld.y - uBase, uDensity)) * (1. - mistTo(vWorld));
+    float mark;
+    if (w >= 2.5) {
+      // wide wood: its two contours, the same hand as its card's (pencil.ts: pressure and drift along
+      // the whole branch, a faint second pass here and there, firm as its class), and inside only a
+      // few indications of bark
+      float sk = vStroke.y + clamp(hRaw, 0., 1.) * vLen;
+      float sideId = a > 0. ? vStroke.x : vStroke.x + 101.;
+      float drift = strokeDrift(sk, sideId) * 1.4 * uSkA.w;
+      float wgt = strokeWeight(vStroke.z);
+      // (out of focus, near the eye: the same contours, spread and softened by the blur — never a
+      // filled shape)
+      float soft = 1. / (1. + B * .6);
+      float edge = strokeLine(w * .5 - d - .7 + drift, .45 + B) * strokePress(sk, sideId) * wgt * uSkB.x * soft;
+      edge = max(edge, strokeAgain(sk, sideId) * .35 * wgt * strokeLine(w * .5 - d - 1.9 - drift * .5, .35 + B) * uSkB.x * soft);
+      float vv = vWorld.y - uBase;
+      float sp = exp2(floor(log2(max(uSkA.z * vDist / uF * (800. / uRes.y), 1e-3))));
+      // shading: fine strokes running up the trunk, in lanes a couple of px apart across it, more on
+      // the side turned from the light, broken into lengths; none on a birch's white
+      float laneW = a * w * .5 / 2.4;
+      float lane = floor(laneW);
+      float rr = h2(ivec2(int(lane) + 333, int(uPhase * 1000.) + int(boilSeed()) * 17));
+      float dark = (1. - vTL.x * .9) * (.15 + .55 * (1. - max(0., dot(N, uLight))));
+      float run = smoothstep(.42, .6, vnoise(vec2(vv / (sp * (2. + 3. * rr)), lane * 1.7 + uPhase * 9.)));
+      float lanes = (1. - smoothstep(.12, .3, abs(fract(laneW) - .5))) * run * step(rr, dark * uSkA.y) * smoothstep(.97, .8, abs(a));
+      // a birch: white, with dark dashes across it in loose rows
+      float rowL = vv / (sp * 1.3);
+      float lent = vTL.x > .3 ? step(h2(ivec2(int(floor(rowL)) + 71, int(floor(a * 3.)) + int(uPhase * 1000.))), .35) * (1. - smoothstep(.1, .28, abs(fract(rowL) - .5))) * smoothstep(.95, .45, abs(a)) : 0.;
+      mark = max(edge, max(lanes * .3, lent * .7) * soft);
+    } else {
+      // a twig: one line, its weight its optical mass (its coverage), pressed as the hand goes
+      float sk = vStroke.y + clamp(hRaw, 0., 1.) * vLen;
+      mark = cov * strokePress(sk, vStroke.x) * min(strokeWeight(vStroke.z) * 2.2, 1.) * (.7 + .3 * uSkB.x);
+    }
+    // its body paper (hiding what is behind), its marks graphite, which the fog takes to paper
+    float mk = clamp(mark / max(cov, .05), 0., 1.) * (1. - fog);
+    float am = cov * uAlpha;
+    o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * am, am);
+    return;
+  }
+  float dif = max(0., dot(N, uLight));
+  float sky = .5 + .5 * N.y;
+  float round = w > 1.5 ? 1. : smoothstep(.5, 1.5, w);
+  float lit = mix(.85, .38 + .5 * dif + .22 * sky + .35 * pow(abs(a), 5.) * uRim, round);
+  // up close the surface itself: where on the wood this is — round the trunk (metres, from the
+  // side facing you, turned by where you stand) and up it — so the pattern stays on the wood
+  float near = smoothstep(5., 24., w) * (1. - vTL.y);
+  float wm = max(mix(vWm.x, vWm.y, hRaw), .001);
+  float u = (asin(a) + uViewAz) * wm * .5;
+  float v = vWorld.y - uBase;
+  float wrap = sqrt(max(0., 1. - a * a));
+  vec3 birch = uBirch;
+  vec3 bark = uBark;
+  if (vTL.x > .3) {
+    // birch: papery, creamy and a little uneven; fine lenticels in rows across it; dark
+    // patches long across and short up; and a dark, fissured foot with a ragged edge
+    birch *= .9 + .14 * vnoise(vec2(u * 7., v * 1.4)) * near;
+    birch = mix(birch, birch * vec3(1.04, .98, .95), vnoise(vec2(u * 3., v * .7) + 9.) * .5 * near);
+    // lenticels: thin dark dashes across the bark, in loose rows — some long, many short, gaps,
+    // each a little above or below its row
+    float row = v / .016;
+    float rowJ = hc(row, 7.);
+    float uu = u + rowJ * 3.;
+    float cell = uu / (.035 + .03 * rowJ);
+    float r = hc(row, cell);
+    float r2 = hc(row + 31., cell);
+    float len = (.004 + r * r * .04) / (.035 + .03 * rowJ);
+    float cx = abs(fract(cell) - .5);
+    float cy = abs(fract(row) - .5 - (r2 - .5) * .35);
+    float dash = step(.5, r) * (1. - smoothstep(len * .5, len * .5 + .05, cx)) * (1. - smoothstep(.06 + r2 * .1, .12 + r2 * .12, cy));
+    // and the pale bark itself in bands: a little greyer here, creamier there
+    birch *= .93 + .1 * vnoise(vec2(u * 2., v * 9.)) * near;
+    float patchy = smoothstep(.62, .7, organic(vec2(u * 6., v * 14.) + uPhase * 7.));
+    float foot = 1. - smoothstep(0., .12, v - (.35 + .6 * vnoise(vec2(u * 4., uPhase * 9.))));
+    float marks = max(dash * .85 * near, patchy * .8) * wrap;
+    birch *= 1. - marks;
+    // far, the marks blur into bands (as before)
+    float band = vnoise(vec2(a * .9 + uPhase * 3.1, v * 48.));
+    birch *= 1. - .7 * smoothstep(.74, .8, band) * wrap * (1. - near);
+    float blit = mix(.9, .62 + .32 * dif + .16 * sky + .3 * pow(abs(a), 5.) * uRim, round);
+    birch = mix(birch * blit, birch * vec3(.66, .74, .7) * (.7 + .2 * sky), (1. - dif) * .4 * round);
+    // the foot: dark rough bark
+    float plates = fbm(vec2(u * 9., v * 2.));
+    vec3 rough = uBark * (.6 + .6 * smoothstep(.4, .6, plates)) * lit;
+    birch = mix(birch, rough, max(foot, exp(-v * 3.) * .6));
+  } else birch *= lit;
+  if (near > 0.) {
+    // dark bark: long plates split by fissures (deep in some species, none in others), a fine grain,
+    // its relief catching the light
+    float sc = uBarkP.y;
+    // (plates a few centimetres across and a hand or two long; fissures between)
+    float plates = organic(vec2(u * 28. / sc, v * 6. / sc));
+    float cracks = vnoise(vec2(u * 80. / sc, v * 14. / sc));
+    float ridge = smoothstep(.38, .6, plates * .7 + cracks * .3);
+    float relief = mix(1., ridge, uBarkP.x * near);
+    float grain = vnoise(vec2(u * 220., v * 70.));
+    bark *= (.35 + .9 * relief) * (.85 + .3 * grain * near);
+    float bump = clamp((dFdx(relief) * uLight.x + dFdy(relief) * uLight.y) * 5., -.4, .4);
+    lit *= 1. + bump * uBarkP.x * near;
+    // lichen: pale grey-green crusts with speckled edges, a yellow one now and then, at mid height
+    // (rosettes a few centimetres across, clustered where the bark suits them, absent elsewhere)
+    float where = smoothstep(.25, .6, vnoise(vec2(u * 3., v * 1.3) + 41.));
+    float lm = smoothstep(.5, .62, organic(vec2(u * 38., v * 26.) + 17.)) * where * uBarkP.z * smoothstep(.2, 1.2, v) * (1. - smoothstep(9., 16., v));
+    // a crust, not paint: finely speckled (two turned layers of noise, so no square cells), the
+    // bark showing through
+    vec2 sp = vec2(u, v) * 160.;
+    float speck = vnoise(mat2(.8, -.6, .6, .8) * sp) * .5 + vnoise(mat2(.28, .96, -.96, .28) * sp * 1.37 + 5.) * .5;
+    lm *= (.4 + .6 * smoothstep(.3, .65, speck)) * .7;
+    vec3 lichenC = mix(vec3(.5, .57, .48), vec3(.6, .58, .36), step(.88, organic(vec2(u * 10., v * 10.) + 3.)));
+    // moss: velvet green, low on the trunk and on its shaded side; the foot always a little mossy
+    float mm = smoothstep(.45, .56, organic(vec2(u * 12., v * 7.) + 5.)) * uBarkP.w * (1. - smoothstep(.2, .6 + 2.4 * uBarkP.w, v)) * (.35 + .65 * (1. - dif));
+    mm = max(mm, uBarkP.w * (1. - smoothstep(0., .4, v)) * .75);
+    vec3 mossC = mix(vec3(.12, .19, .06), vec3(.27, .35, .1), vnoise(vec2(u * 130., v * 130.)));
+    bark = mix(bark, lichenC / max(lit, .3), lm * near * (1. - vTL.x));
+    bark = mix(bark, mossC / max(lit, .3) * (.8 + .4 * dif), mm * near);
+    birch = mix(birch, lichenC * lit, lm * near * vTL.x * .5);
+  }
+  vec3 base = mix(bark * lit, birch, vTL.x);
+  base = mix(base, uLeaf, vTL.y);
+  base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
+  float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
+  float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
+  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+}`;
+
+/**
+ * A deer, from shapes: body (with chest and haunch), neck, head (in profile, or turned to look
+ * at you), ears, four jointed legs (standing, or bounding), and the rump that flashes white as
+ * it runs. Drawn on a card at its place in the wood, side-on, fogged like everything else.
+ */
+const DEER_FS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vUV;
+in vec3 vWorld;
+in float vDist;
+out vec4 o;
+uniform float uDensity, uAlpha, uSize, uFace;
+uniform vec2 uRes;
+uniform vec4 uPose; // head up, head turned to you, gait phase, running
+uniform float uBed; // 0 standing … 1 lying up (legs folded under, the body on the ground, head up)
+uniform vec3 uBark;
+${NOISE}
+float sdCap(vec2 p, vec2 a, vec2 b, float ra, float rb) { vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); return length(pa - ba * h) - mix(ra, rb, h); }
+float sdEll(vec2 p, vec2 c, vec2 r) { vec2 q = (p - c) / r; return (length(q) - 1.) * min(r.x, r.y); }
+float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
+void main() {
+  vec2 p = vec2((vUV.x - .5) * 2.6, vUV.y * 2.1) / uSize;
+  p.x *= uFace;
+  float run = uPose.w, g = uPose.z;
+  // bounding: the body rises and pitches with each leap
+  float bob = run * .22 * max(0., sin(g));
+  float pitch = run * .14 * sin(g + 1.2);
+  vec2 q = p - vec2(0., bob - uBed * .68);
+  q = vec2(q.x, q.y - .95) * mat2(cos(pitch), -sin(pitch), sin(pitch), cos(pitch)) + vec2(0., .95);
+  float body = sdEll(q, vec2(0., .95), vec2(.5, .2));
+  body = smin(body, sdEll(q, vec2(-.36, .99), vec2(.2, .22)), .08);
+  body = smin(body, sdEll(q, vec2(.34, .96), vec2(.18, .22)), .08);
+  // neck and head: down grazing, up alert; the head in profile, or turned to look at you
+  vec2 nb = vec2(.42, 1.03);
+  vec2 nt = mix(vec2(.7, .48), vec2(.57, 1.46), uPose.x);
+  float neck = sdCap(q, nb, nt, .1, .062);
+  vec2 hp = nt + mix(vec2(.12, -.03 + .05 * uPose.x), vec2(.025, .05), uPose.y);
+  vec2 hr = mix(vec2(.15, .062), vec2(.072, .1), uPose.y);
+  float head = sdEll(q, hp, hr);
+  vec2 e1 = hp + mix(vec2(-.08, .07), vec2(-.06, .09), uPose.y);
+  vec2 e2 = hp + mix(vec2(-.05, .09), vec2(.06, .09), uPose.y);
+  float ears = min(sdCap(q, e1, e1 + mix(vec2(-.07, .09), vec2(-.09, .07), uPose.y), .028, .012), sdCap(q, e2, e2 + mix(vec2(-.03, .11), vec2(.09, .07), uPose.y), .028, .012));
+  float d = smin(body, neck, .06);
+  d = smin(d, head, .04);
+  d = min(d, ears);
+  // legs: hip, knee, hoof; the front pair and the hind pair alternate in the bound
+  for (int i = 0; i < 4; i++) {
+    bool front = i < 2;
+    float off = (front ? 0. : 3.14159) + (i % 2 == 0 ? 0. : .35);
+    vec2 hip = front ? vec2(.3 + float(i) * .05, .86) : vec2(-.4 + float(i - 2) * .06, .9);
+    float a = g + off;
+    vec2 stand = vec2(hip.x + (front ? .03 : -.02), 0.);
+    vec2 leap = hip + vec2(sin(a) * .42, -.8 + .3 * max(0., cos(a)));
+    vec2 hoof = mix(stand, leap, run);
+    vec2 knee = mix(hip, hoof, .5) + vec2(front ? -.05 : .09, .02);
+    // lying up: the legs folded under the body, a foreleg tucked forward
+    vec2 fold = hip + vec2(front ? .3 : .26, -.17);
+    knee = mix(knee, hip + vec2(front ? -.04 : .02, -.14), uBed);
+    hoof = mix(hoof, fold, uBed);
+    d = min(d, sdCap(q, hip, knee, .06, .034));
+    d = min(d, sdCap(q, knee, hoof, .03, .018));
+  }
+  float fw = max(fwidth(d), 1e-4);
+  float cov = 1. - smoothstep(-fw, fw, d);
+  if (cov < .003) discard;
+  // the rump patch, white, flashing as it runs
+  float rump = sdEll(q, vec2(-.54, 1.), vec2(.075, .11));
+  float white = (1. - smoothstep(-fw, fw, rump)) * (.3 + .7 * run);
+  vec3 base = mix(uBark * 1.3, vec3(.62, .6, .55), white);
+  float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
+  float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
+  if (uSketch > .5) {
+    // its outline, and a light shading (none on the white rump)
+    float edge = 1. - smoothstep(fw * .6, fw * 1.8, abs(d + fw * .6));
+    float shade = hatch(gl_FragCoord.xy * (800. / uRes.y), normalize(vec2(.5, 1.)), uSkA.z, 9., uSkA.w) * .45 * (1. - white);
+    float mk = clamp(max(edge * uSkB.x, shade), 0., 1.) * (1. - fog);
+    float am = cov * uAlpha;
+    o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * am, am);
+    return;
+  }
+  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+}`;
+
+const POST_FS = `#version 300 es
+precision highp float;
+precision highp int;
+out vec4 o;
+uniform sampler2D uScene;
+uniform vec2 uRes;
+uniform float uExposure;
+${NOISE}
+// the paper: the scene is already drawn in graphite on it; the paper's tooth breaks the graphite
+// (fixed to the paper, not the world); the blank sheet stays quiet
+vec3 paper(vec3 c) {
+  vec2 px = gl_FragCoord.xy;
+  float m = clamp((lum(PAPER) - lum(c)) / (lum(PAPER) - lum(GRAPHITE)), 0., 1.);
+  float tooth = vnoise(px * .55) * .6 + vnoise(px * 1.7 + 5.) * .4;
+  m *= mix(1., .4 + .6 * smoothstep(.15, .75, tooth + m * .45), uSkB.z);
+  vec3 sheet = PAPER * (.97 + .03 * vnoise(px / 160.));
+  return mix(sheet, GRAPHITE, m * .95);
+}
+void main() {
+  if (uSketch > .5) {
+    o = vec4(paper(texture(uScene, gl_FragCoord.xy / uRes).rgb), 1.);
+    return;
+  }
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = texture(uScene, uv).rgb * uExposure;
+  // a soft film curve, blacks lifted into the fog's green
+  c = mix(c, c * c * (3. - 2. * c), .42);
+  c = mix(c, uFogLow, .025);
+  // vignette
+  vec2 q = (uv - .5) * vec2(uRes.x / uRes.y, 1.);
+  c *= mix(1., .8, smoothstep(.35, 1.05, length(q) * 1.15));
+  // grain, moving
+  float g = h2(ivec2(gl_FragCoord.xy) + ivec2(int(uT * 97.) & 1023, int(uT * 61.) & 1023)) - .5;
+  c += g * .045 * (.6 + .4 * (1. - dot(c, vec3(.33))));
+  o = vec4(c, 1.);
+}`;
+
+export interface View {
+  x: number;
+  z: number;
+  eye: number;
+  yaw: number;
+  f: number;
+  horizon: number;
+}
+
+export interface Look {
+  /** the sun's direction in view space: screen right, up, towards the eye */
+  light: [number, number, number];
+  /** trees shading the ground: x, z, contact r, crown r, then crown offset x, z (per tree) */
+  shade: Float32Array;
+  shadeOff: Float32Array;
+  shadeN: number;
+  seed: number;
+  t: number;
+  density: number;
+  wind: number;
+  /** the two path fields' scales and the path's half-width */
+  path: [number, number, number];
+  atmos: Atmos;
+  /** the stone structures near you, packed for the shader (world.ts structures; up to 6) */
+  structA: Float32Array;
+  structB: Float32Array;
+  structN: number;
+  /** the dry-stone walls near you, stretch by stretch (world.ts wallsNear; up to 24) */
+  wallA: Float32Array;
+  wallB: Float32Array;
+  wallN: number;
+  /** the lie of the land (world.ts relief) and how open the wood is */
+  relief: [number, number, number, number];
+  openness: number;
+  /** the creek (world.ts creekK): its line's scale, depth, bed's half-width; the fords near you (x, z, across; up to 6) */
+  creek: [number, number, number];
+  ford: Float32Array;
+  fordN: number;
+  /** depth of field: blur (px) of something 1 m off, focused at infinity; and the focus (m) */
+  blur: number;
+  focus: number;
+  /** drawn in pencil (null: as film): darkness, stroke spacing, looseness, outlines, boil, tooth, how much is left unsaid */
+  sketch: { pencil: number; hatch: number; loose: number; lines: number; boil: number; tooth: number; spare: number; haze: number } | null;
+}
+
+export interface CardDraw {
+  live: false;
+  card: Card;
+  x: number;
+  z: number;
+  /** the ground's height at its foot (m) */
+  base: number;
+  /** the mist along the way to its foot and to its top (optical depth), and how tall it is (m) */
+  mist: [number, number];
+  top: number;
+  rect: [number, number, number, number];
+  flip: boolean;
+  phase: number;
+  patch: boolean;
+  alpha: number;
+  bark: [number, number, number];
+}
+export interface LiveDraw {
+  live: true;
+  buffer: WebGLBuffer;
+  count: number;
+  /** how many of those (the thickest) are solid enough to hide what is behind them */
+  wide: number;
+  x: number;
+  z: number;
+  /** the ground's height at its foot (m) */
+  base: number;
+  /** the mist along the way to its foot and to its top (optical depth), and how tall it is (m) */
+  mist: [number, number];
+  top: number;
+  rot: number;
+  scale: number;
+  phase: number;
+  radius: number;
+  height: number;
+  alpha: number;
+  bark: [number, number, number];
+  /** fissure depth, pattern scale, lichen, moss */
+  barkP: [number, number, number, number];
+  /** where you stand, seen from the tree (its own turn taken off), so the bark stays on the wood */
+  viewAz: number;
+}
+export interface DeerDraw {
+  live: false;
+  pose: [number, number, number, number];
+  /** 0 standing … 1 lying up */
+  bed: number;
+  x: number;
+  z: number;
+  /** the ground's height at its foot (m) */
+  base: number;
+  /** the mist along the way to its foot and to its top (optical depth), and how tall it is (m) */
+  mist: [number, number];
+  top: number;
+  size: number;
+  /** ±1 for which way it faces on screen, over how side-on it is seen */
+  face: number;
+  alpha: number;
+  bark: [number, number, number];
+}
+export type Draw = CardDraw | LiveDraw | DeerDraw;
+
+/** The photograph's colours. */
+const PAL = {
+  fogLow: [0.44, 0.54, 0.48],
+  fogHigh: [0.53, 0.63, 0.57],
+  bark: [0.1, 0.095, 0.08],
+  birch: [0.7, 0.73, 0.68],
+  leaf: [0.26, 0.15, 0.09],
+  // (from the reference: tawny moor-grass tips over dark, warm dead growth)
+  straw: [0.56, 0.4, 0.21],
+  strawDark: [0.11, 0.08, 0.045],
+  ground: [0.24, 0.17, 0.095],
+  earth: [0.15, 0.12, 0.09],
+};
+
+export class Renderer {
+  gl: WebGL2RenderingContext;
+  private world: WebGLProgram;
+  private card: WebGLProgram;
+  private post: WebGLProgram;
+  private liveProg: WebGLProgram;
+  private deerProg: WebGLProgram;
+  private vao: WebGLVertexArrayObject;
+  private liveVao: WebGLVertexArrayObject;
+  private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; depth: WebGLRenderbuffer; w: number; h: number } | null = null;
+  private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
+  constructor(
+    readonly canvas: HTMLCanvasElement,
+    /** drawn in pencil (?style=sketch): fixed when the shaders are made, so the other way costs nothing */
+    readonly sketch = false,
+  ) {
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: true, powerPreference: 'high-performance' });
+    if (!gl) throw new Error('WebGL2 is needed to walk here');
+    this.gl = gl;
+    this.world = this.compile(QUAD_VS, WORLD_FS);
+    this.card = this.compile(CARD_VS, CARD_FS);
+    this.post = this.compile(QUAD_VS, POST_FS);
+    this.liveProg = this.compile(LIVE_VS, LIVE_FS);
+    this.deerProg = this.compile(CARD_VS, DEER_FS);
+    this.vao = gl.createVertexArray()!;
+    this.liveVao = gl.createVertexArray()!;
+  }
+
+  compile = (vs: string, fs: string): WebGLProgram => {
+    const gl = this.gl;
+    const sh = (type: number, src: string) => {
+      const s = gl.createShader(type)!;
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
+      return s;
+    };
+    const p = gl.createProgram()!;
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+    // (the sketch is a constant in every shader, not a uniform: the compiler drops what is not drawn)
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs.replace('uniform float uSketch;', `const float uSketch = ${this.sketch ? '1.' : '0.'};`)));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
+    return p;
+  };
+
+  private loc(p: WebGLProgram, name: string) {
+    let m = this.u.get(p);
+    if (!m) this.u.set(p, (m = new Map()));
+    if (!m.has(name)) m.set(name, this.gl.getUniformLocation(p, name));
+    return m.get(name)!;
+  }
+
+  private target() {
+    const gl = this.gl;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    if (this.scene && this.scene.w === W && this.scene.h === H) return this.scene;
+    this.release();
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const depth = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    this.scene = { fbo, tex, depth, w: W, h: H };
+    return this.scene;
+  }
+
+  /** Let go of the scene's render target (it is made again, at the canvas's size, when next drawn). */
+  release() {
+    const gl = this.gl;
+    if (!this.scene) return;
+    gl.deleteFramebuffer(this.scene.fbo);
+    gl.deleteTexture(this.scene.tex);
+    gl.deleteRenderbuffer(this.scene.depth);
+    this.scene = null;
+  }
+
+  private common(p: WebGLProgram, v: View, look: Look) {
+    const gl = this.gl;
+    gl.uniform2f(this.loc(p, 'uRes'), this.canvas.width, this.canvas.height);
+    gl.uniform1f(this.loc(p, 'uF'), v.f);
+    gl.uniform1f(this.loc(p, 'uHz'), v.horizon);
+    gl.uniform4f(this.loc(p, 'uCam'), v.x, v.z, v.eye, v.yaw);
+    gl.uniform1f(this.loc(p, 'uT'), look.t);
+    gl.uniform1ui(this.loc(p, 'uSeed'), look.seed >>> 0);
+    gl.uniform3fv(this.loc(p, 'uFogLow'), look.atmos.fogLow);
+    gl.uniform3fv(this.loc(p, 'uFogHigh'), look.atmos.fogHigh);
+    gl.uniform2fv(this.loc(p, 'uSun'), look.atmos.at);
+    gl.uniform3fv(this.loc(p, 'uGlow'), look.atmos.glow);
+    gl.uniform3fv(this.loc(p, 'uIllum'), look.atmos.illum);
+    gl.uniform1f(this.loc(p, 'uDensity'), look.density);
+    gl.uniform4fv(this.loc(p, 'uRelief'), look.relief);
+    gl.uniform1f(this.loc(p, 'uOpen'), look.openness);
+    gl.uniform1f(this.loc(p, 'uBlur'), look.blur);
+    gl.uniform1f(this.loc(p, 'uFocus'), look.focus);
+    const sk = look.sketch;
+    gl.uniform4f(this.loc(p, 'uSkA'), sk ? 1 : 0, sk?.pencil ?? 1, sk?.hatch ?? 5, sk?.loose ?? 1);
+    gl.uniform4f(this.loc(p, 'uSkB'), sk?.lines ?? 1, sk?.boil ?? 0, sk?.tooth ?? 0.6, sk?.spare ?? 0.3);
+    gl.uniform4f(this.loc(p, 'uSkC'), sk?.haze ?? 0.05, 0, 0, 0);
+  }
+
+  draw(v: View, look: Look, cards: Draw[]) {
+    const gl = this.gl;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const scene = this.target();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.bindVertexArray(this.vao);
+    gl.depthMask(true);
+    gl.clearDepth(1);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    // 1. fog and ground (and the stone: it writes its depth)
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.ALWAYS);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.world);
+    this.common(this.world, v, look);
+    gl.uniform3fv(this.loc(this.world, 'uPathK'), look.path);
+    gl.uniform3fv(this.loc(this.world, 'uCreek'), look.creek);
+    gl.uniform4fv(this.loc(this.world, 'uFord'), look.ford);
+    gl.uniform1i(this.loc(this.world, 'uFordN'), look.fordN);
+    gl.uniform3fv(this.loc(this.world, 'uEarth'), PAL.earth);
+    gl.uniform3fv(this.loc(this.world, 'uGround'), PAL.ground);
+    gl.uniform3fv(this.loc(this.world, 'uStrawDark'), PAL.strawDark);
+    gl.uniform3fv(this.loc(this.world, 'uStraw'), PAL.straw);
+    gl.uniform4fv(this.loc(this.world, 'uShade'), look.shade);
+    gl.uniform2fv(this.loc(this.world, 'uShadeOff'), look.shadeOff);
+    gl.uniform1i(this.loc(this.world, 'uShadeN'), look.shadeN);
+    gl.uniform4fv(this.loc(this.world, 'uStA'), look.structA);
+    gl.uniform4fv(this.loc(this.world, 'uStB'), look.structB);
+    gl.uniform1i(this.loc(this.world, 'uStN'), look.structN);
+    gl.uniform4fv(this.loc(this.world, 'uWallA'), look.wallA);
+    gl.uniform4fv(this.loc(this.world, 'uWallB'), look.wallB);
+    gl.uniform1i(this.loc(this.world, 'uWallN'), look.wallN);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    // everything after is hidden by what is nearer (the stone, the live trees' wood); the cards
+    // test against it but do not write (they blend)
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(false);
+    // 2. the cards and the live trees, back to front
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    const p = this.card;
+    gl.useProgram(p);
+    this.common(p, v, look);
+    gl.uniform3fv(this.loc(p, 'uBark'), PAL.bark);
+    gl.uniform3fv(this.loc(p, 'uBirch'), PAL.birch);
+    gl.uniform3fv(this.loc(p, 'uLeaf'), PAL.leaf);
+    gl.uniform3fv(this.loc(p, 'uStraw'), PAL.straw);
+    gl.uniform3fv(this.loc(p, 'uStrawDark'), PAL.strawDark);
+    gl.uniform1f(this.loc(p, 'uWind'), look.wind);
+    gl.uniform1i(this.loc(p, 'uTex'), 0);
+    const L = this.liveProg;
+    gl.useProgram(L);
+    this.common(L, v, look);
+    gl.uniform3fv(this.loc(L, 'uBark'), PAL.bark);
+    gl.uniform3fv(this.loc(L, 'uBirch'), PAL.birch);
+    gl.uniform3fv(this.loc(L, 'uLeaf'), PAL.leaf);
+    gl.uniform1f(this.loc(L, 'uWind'), look.wind);
+    gl.uniform3fv(this.loc(L, 'uLight'), look.light);
+    gl.uniform1f(this.loc(L, 'uRim'), Math.max(0, -look.light[2]));
+    gl.activeTexture(gl.TEXTURE0);
+    let current: WebGLProgram | null = null;
+    const use = (prog: WebGLProgram) => {
+      if (current === prog) return;
+      current = prog;
+      gl.useProgram(prog);
+      gl.bindVertexArray(prog === L ? this.liveVao : this.vao);
+    };
+    for (const c of cards) {
+      if (c.live) {
+        use(L);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.buffer);
+        const attr = (name: string, size: number, offset: number) => {
+          const loc = gl.getAttribLocation(L, name);
+          // (an attribute the compiler dropped — the sketch's, when drawing film)
+          if (loc < 0) return;
+          gl.enableVertexAttribArray(loc);
+          gl.vertexAttribPointer(loc, size, gl.FLOAT, false, SEG * 4, offset * 4);
+          gl.vertexAttribDivisor(loc, 1);
+        };
+        attr('aP0', 3, 0);
+        attr('aP1', 3, 3);
+        attr('aInfo', 4, 6);
+        attr('aStroke', 3, 10);
+        gl.uniform2f(this.loc(L, 'uAnchor'), c.x, c.z);
+        gl.uniform1f(this.loc(L, 'uBase'), c.base);
+        gl.uniform2fv(this.loc(L, 'uMistT'), c.mist);
+        gl.uniform1f(this.loc(L, 'uTopH'), c.top);
+        gl.uniform1f(this.loc(L, 'uRot'), c.rot);
+        gl.uniform1f(this.loc(L, 'uScale'), c.scale);
+        gl.uniform1f(this.loc(L, 'uPhase'), c.phase);
+        gl.uniform1f(this.loc(L, 'uRadius'), c.radius);
+        gl.uniform1f(this.loc(L, 'uHeight'), c.height);
+        gl.uniform1f(this.loc(L, 'uAlpha'), c.alpha);
+        gl.uniform3fv(this.loc(L, 'uBark'), c.bark);
+        gl.uniform4fv(this.loc(L, 'uBarkP'), c.barkP);
+        gl.uniform1f(this.loc(L, 'uViewAz'), c.viewAz);
+        // the solid wood first, depth only; then all of it, behind what is in front
+        if (c.wide > 0) {
+          gl.colorMask(false, false, false, false);
+          gl.depthMask(true);
+          gl.uniform1f(this.loc(L, 'uDepthPass'), 1);
+          gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.wide);
+          gl.colorMask(true, true, true, true);
+        }
+        gl.depthMask(false);
+        gl.uniform1f(this.loc(L, 'uDepthPass'), 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.count);
+        continue;
+      }
+      if ('pose' in c) {
+        const D = this.deerProg;
+        if (current !== D) {
+          use(D);
+          this.common(D, v, look);
+        }
+        gl.uniform2f(this.loc(D, 'uAnchor'), c.x, c.z);
+        gl.uniform1f(this.loc(D, 'uBase'), c.base);
+        gl.uniform2fv(this.loc(D, 'uMistT'), c.mist);
+        gl.uniform1f(this.loc(D, 'uTopH'), c.top);
+        gl.uniform4f(this.loc(D, 'uRect'), -1.3 * c.size, 0, 2.6 * c.size, 2.1 * c.size);
+        gl.uniform4fv(this.loc(D, 'uPose'), c.pose);
+        gl.uniform1f(this.loc(D, 'uBed'), c.bed);
+        gl.uniform1f(this.loc(D, 'uSize'), c.size);
+        gl.uniform1f(this.loc(D, 'uFace'), c.face);
+        gl.uniform1f(this.loc(D, 'uAlpha'), c.alpha);
+        gl.uniform3fv(this.loc(D, 'uBark'), c.bark);
+        gl.drawArrays(gl.TRIANGLES, 0, COLS * ROWS * 6);
+        continue;
+      }
+      use(p);
+      gl.bindTexture(gl.TEXTURE_2D, c.card.tex);
+      gl.uniform2f(this.loc(p, 'uAnchor'), c.x, c.z);
+      gl.uniform1f(this.loc(p, 'uBase'), c.base);
+      gl.uniform2fv(this.loc(p, 'uMistT'), c.mist);
+      gl.uniform1f(this.loc(p, 'uTopH'), c.top);
+      gl.uniform4f(this.loc(p, 'uRect'), c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
+      gl.uniform1f(this.loc(p, 'uPhase'), c.phase);
+      gl.uniform1f(this.loc(p, 'uKind'), c.patch ? 1 : 0);
+      gl.uniform1f(this.loc(p, 'uFlip'), c.flip ? -1 : 1);
+      gl.uniform1f(this.loc(p, 'uAlpha'), c.alpha);
+      gl.uniform3fv(this.loc(p, 'uBark'), c.bark);
+      gl.drawArrays(gl.TRIANGLES, 0, COLS * ROWS * 6);
+    }
+    gl.bindVertexArray(this.vao);
+    // 3. the film
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(this.post);
+    this.common(this.post, v, look);
+    gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.uniform1i(this.loc(this.post, 'uScene'), 0);
+    gl.uniform1f(this.loc(this.post, 'uExposure'), look.atmos.exposure);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+}
