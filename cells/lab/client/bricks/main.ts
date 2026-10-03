@@ -1,19 +1,21 @@
 /**
- * Bricks: a baseplate and a tray of bricks, and nothing to do but build. Choose a size, brick or
- * plate, a colour; move it with a finger (it rides a little above, so you can see it), tap it to
- * press it on. Bricks connect as the real ones do — on studs, or under something — and stay.
- * `take` lifts bricks off again; `undo` steps back. What you build is kept in this browser.
+ * Bricks: a baseplate, and bricks that come one at a time — you don't choose them, you place
+ * what comes, Tetris-fashion, with the next one shown in its corner. Move it with a finger (it
+ * rides a little above, so you can see it), turn it, tap it to press it on. Bricks connect as the
+ * real ones do — on studs, or under something — and stay: nothing falls, nothing clears, you
+ * build. `undo` lifts the last one back into your hand. Each bag has its own few colours that
+ * sit together; what you build is kept in this browser.
  *
  * Touch: one finger on the build moves the brick, on the sky turns the view; two fingers pinch
  * closer, twist to turn, drag to slide. Mouse: the brick follows the pointer, click to press it
  * on, drag to turn the view, right-drag (or shift-drag) to slide, the wheel to come closer.
- * Keys: R turns the brick, space presses it on, T takes, Z undoes.
+ * Keys: R turns the brick, space presses it on, Z undoes.
  *
  * Drawn in WebGL2: instanced boxes and studs, glossy, lit by a sun whose shadows are found by
  * walking the grid toward it (the build's cells in a small 3D texture), with ambient occlusion
  * from the same cells. `?preview` builds a little town by itself, slowly (the lab's index).
  */
-import { COLOURS, H, N, PLATE, SIZES, World, placeFor, raycast, town, type Brick, type C3, type Hit } from './build';
+import { Bag, COLOURS, H, N, PLATE, World, placeFor, raycast, town, type Brick, type C3, type Hit, type Spec } from './build';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -28,7 +30,6 @@ if (auto) document.body.classList.add('preview');
 
 const STUD_R = 0.3; // 4.8 mm across, on an 8 mm pitch
 const STUD_H = 0.21; // 1.7 mm
-const BASE: C3 = [0.25, 0.52, 0.27]; // the baseplate's green
 const GAP = 0.012; // between neighbours: the line where two bricks meet
 
 // ─── shaders ────────────────────────────────────────────────────────────────────────────────────
@@ -82,6 +83,7 @@ uniform sampler3D uOcc;
 uniform vec3 uSun, uEye, uFog;
 uniform float uTime, uNear, uTop;
 uniform float uStud; // 1: drawing studs
+uniform float uPlain; // 1: the next brick, in its corner (out of the world: lit simply)
 const ivec3 DIM = ivec3(${N}, ${H}, ${N});
 const float CH = ${PLATE.toFixed(3)};
 float occ(ivec3 c) {
@@ -121,8 +123,9 @@ void main() {
       float e = min(min(f.x, s.x - f.x), min(f.y, s.y - f.y));
       line = 1. - smoothstep(.03, .07, e);
     }
-    vec3 c = mix(mix(vCol.rgb, vec3(1.), .25 + .15 * breathe), vCol.rgb * .5, line);
-    float al = mix(.32 + .1 * breathe, .95, line);
+    // (its own colour, lit a little: it reads as the brick it is, on any ground)
+    vec3 c = mix(vCol.rgb * (.9 + .25 * max(0., dot(n, uSun))) + .06 * breathe, vCol.rgb * .45, line);
+    float al = mix(.5 + .12 * breathe, .95, line);
     o = vec4(c * al, al);
     return;
   }
@@ -163,7 +166,8 @@ void main() {
     ao = mix(.75, 1., smoothstep(0., .08, vLocal.y));
   }
   // (from just outside its own face: past the hairline gap, into the next cell)
-  float sun = dot(n, uSun) > 0. ? sunlight(vWorld + n * .03) : 0.;
+  float sun = uPlain > .5 ? 1. : dot(n, uSun) > 0. ? sunlight(vWorld + n * .03) : 0.;
+  if (uPlain > .5) ao = 1.;
   float diff = max(0., dot(n, uSun)) * sun;
   // sky from above, a little warm bounce from below, the sun; and the plastic's shine
   vec3 light = vec3(.62, .65, .7) * (.72 + .28 * n.y) * ao + vec3(.08, .07, .06) * max(0., -n.y);
@@ -275,28 +279,30 @@ gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, H, N, 0, gl.RED, gl.UNSIGNED_BYTE, new
 
 // ─── the build ──────────────────────────────────────────────────────────────────────────────────
 let world = new World();
-type Act = { add: number } | { take: number; brick: Brick };
+/** what's been pressed on, and as what it came (for undo: it goes back into your hand) */
+type Act = { add: number; spec: Spec };
 let history: Act[] = [];
 /** how far a brick still has to come down (it presses on visibly) */
 const lift = new Map<number, number>();
 let dirty = true;
 
-let size = 7; // 2×4
+let bag = new Bag(Math.floor(Math.random() * 90000) + 1);
+/** the brick in hand, the next, and any put back by undo (they come again before the bag's) */
+let hand: Spec = bag.next();
+let next: Spec = bag.next();
+let queue: Spec[] = [];
 let turned = false;
-let plate = false;
-let colour = 4; // red
-let taking = false;
+const draw = () => queue.shift() ?? bag.next();
 
 function dims(): [number, number, number] {
-  const [a, b] = SIZES[size];
-  return turned ? [b, a, plate ? 1 : 3] : [a, b, plate ? 1 : 3];
+  return turned ? [hand.d, hand.w, hand.h] : [hand.w, hand.d, hand.h];
 }
 
-interface Saved { bricks: Brick[]; size: number; turned: boolean; plate: boolean; colour: number }
+interface Saved { bricks: Brick[]; seed: number; drawn: number; hand: Spec; next: Spec; queue: Spec[]; turned: boolean }
 function save() {
   if (auto) return;
   try {
-    const s: Saved = { bricks: world.list(), size, turned, plate, colour };
+    const s: Saved = { bricks: world.list(), seed: bag.seed, drawn: bag.drawn, hand, next, queue, turned };
     localStorage.setItem(STORE, JSON.stringify(s));
   } catch { /* (a private window: it still builds, it just won't remember) */ }
 }
@@ -304,15 +310,16 @@ function load() {
   if (auto) return;
   try {
     const s = JSON.parse(localStorage.getItem(STORE) ?? 'null') as Saved | null;
-    if (!s) {
+    if (!s || !s.seed) {
       document.getElementById('hint')?.classList.add('on');
       return;
     }
     for (const b of s.bricks ?? []) if (world.fits(b.w, b.d, b.h, b.at)) world.add(b);
-    size = s.size ?? size;
+    bag = new Bag(s.seed, s.drawn);
+    hand = s.hand;
+    next = s.next;
+    queue = s.queue ?? [];
     turned = !!s.turned;
-    plate = !!s.plate;
-    colour = s.colour ?? colour;
   } catch { /* */ }
 }
 function changed() {
@@ -326,17 +333,7 @@ function changed() {
 // ─── the brick in hand ──────────────────────────────────────────────────────────────────────────
 let lastHit: Hit | null = null;
 let ghostAt: C3 | null = null;
-/** in `take`: the brick under the finger */
-let marked = -1;
 function aimHit(hit: Hit | null) {
-  if (taking) {
-    const m = hit && hit.brick >= 0 ? hit.brick : -1;
-    if (m !== marked) {
-      marked = m;
-      if (m >= 0) tick();
-    }
-    return;
-  }
   if (!hit) return;
   const [w, d, h] = dims();
   const at = placeFor(world, w, d, h, hit);
@@ -353,36 +350,35 @@ function reaim() {
   if (!ghostAt) aimHit(raycast(world, [N / 2, H * PLATE + 2, N / 2], [0, -1, 0]));
 }
 function press() {
-  if (taking) return take(marked);
   if (!ghostAt) reaim();
   const [w, d, h] = dims();
   if (!ghostAt || !world.fits(w, d, h, ghostAt) || !world.connects(w, d, h, ghostAt)) return;
-  const id = world.add({ w, d, h, colour, at: ghostAt });
-  history.push({ add: id });
+  const id = world.add({ w, d, h, colour: hand.colour, at: ghostAt });
+  history.push({ add: id, spec: hand });
   lift.set(id, 0.35);
-  clickSound(ghostAt[1]);
+  clickSound(ghostAt[1], hand.colour);
+  // the next comes to hand
+  hand = next;
+  next = draw();
+  turned = false;
   changed();
   reaim();
-  save();
-}
-function take(id: number) {
-  if (id < 0) return;
-  const b = world.remove(id);
-  if (!b) return;
-  history.push({ take: id, brick: b });
-  popSound();
-  marked = -1;
-  changed();
+  showNext();
   save();
 }
 function undo() {
   const a = history.pop();
   if (!a) return;
-  if ('add' in a) world.remove(a.add);
-  else world.restore(a.take, a.brick);
-  popSound();
+  world.remove(a.add);
+  // (it goes back into your hand; what was in hand is next again, and what was next waits)
+  queue.unshift(next);
+  next = hand;
+  hand = a.spec;
+  turned = false;
+  popSound(hand.colour);
   changed();
   reaim();
+  showNext();
   save();
 }
 
@@ -502,7 +498,7 @@ canvas.addEventListener('pointermove', (e) => {
   } else if (p.orbit) {
     if (p.moved) orbit(dx, dy);
   } else if (p.moved) {
-    aimAt(e.clientX, e.clientY - (taking ? 0 : RIDE));
+    aimAt(e.clientX, e.clientY - RIDE);
   }
 });
 function orbit(dx: number, dy: number) {
@@ -522,11 +518,8 @@ canvas.addEventListener('pointerup', (e) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
   if (!p || p.moved || p.orbit || performance.now() - p.t0 > 600 || p.button === 2) return;
-  // a tap: in `take`, take what's under it; else on the brick in hand, press it on; else send it there
-  if (taking) {
-    aimAt(e.clientX, e.clientY);
-    take(marked);
-  } else if (p.type === 'mouse') {
+  // a tap: on the brick in hand, press it on; elsewhere, send it there
+  if (p.type === 'mouse') {
     aimAt(e.clientX, e.clientY);
     press();
   } else if (onGhost(e.clientX, e.clientY)) press();
@@ -542,12 +535,10 @@ addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (k === 'r') turn();
   else if (k === ' ' || k === 'enter') { e.preventDefault(); press(); }
-  else if (k === 't') setTaking(!taking);
   else if (k === 'z') undo();
-  else if (k === 'p') { plate = !plate; tray(); reaim(); }
 });
 
-// ─── the tray ───────────────────────────────────────────────────────────────────────────────────
+// ─── the hands ─────────────────────────────────────────────────────────────────────────────────
 const $ = (id: string) => document.getElementById(id)!;
 function turn() {
   turned = !turned;
@@ -555,53 +546,14 @@ function turn() {
   tick(1.5);
   save();
 }
-function setTaking(on: boolean) {
-  taking = on;
-  marked = -1;
-  document.body.classList.toggle('taking', on);
-  tray();
+function showNext() {
+  const el = document.getElementById('next');
+  if (el) el.textContent = `next · ${bag.scheme.name}`;
 }
-function studsSvg(w: number, d: number): string {
-  // a little top view of a brick: its studs
-  const s = 7;
-  const pad = 2;
-  let c = '';
-  for (let j = 0; j < w; j++) for (let i = 0; i < d; i++) c += `<circle cx="${pad + i * s + s / 2}" cy="${pad + j * s + s / 2}" r="2.3"/>`;
-  return `<svg width="${d * s + pad * 2}" height="${w * s + pad * 2}" viewBox="0 0 ${d * s + pad * 2} ${w * s + pad * 2}"><rect x="1" y="1" width="${d * s + pad * 2 - 2}" height="${w * s + pad * 2 - 2}" rx="2"/>${c}</svg>`;
-}
-function tray() {
-  const sizes = $('sizes');
-  if (!sizes.childElementCount) {
-    SIZES.forEach(([a, b], i) => {
-      const el = document.createElement('button');
-      el.className = 'size';
-      el.innerHTML = `${studsSvg(a, b)}<span>${a}×${b}</span>`;
-      el.addEventListener('click', () => { size = i; turned = false; setTaking(false); reaim(); save(); });
-      sizes.appendChild(el);
-    });
-    COLOURS.forEach((c, i) => {
-      const el = document.createElement('button');
-      el.className = 'swatch';
-      el.title = c.name;
-      el.style.background = `rgb(${c.rgb.map((v) => Math.round(v * 255)).join(',')})`;
-      el.addEventListener('click', () => { colour = i; setTaking(false); save(); });
-      $('colours').appendChild(el);
-    });
-  }
-  [...sizes.children].forEach((el, i) => el.classList.toggle('on', i === size));
-  [...$('colours').children].forEach((el, i) => el.classList.toggle('on', i === colour));
-  $('brick').classList.toggle('on', !plate);
-  $('plate').classList.toggle('on', plate);
-  $('take').classList.toggle('on', taking);
-  $('take').textContent = taking ? 'taking' : 'take';
-}
-const btn = (id: string, f: () => void) => $(id).addEventListener('click', (e) => { e.stopPropagation(); wake(); f(); tray(); });
-btn('brick', () => { plate = false; setTaking(false); reaim(); save(); });
-btn('plate', () => { plate = true; setTaking(false); reaim(); save(); });
+const btn = (id: string, f: () => void) => $(id).addEventListener('click', (e) => { e.stopPropagation(); wake(); f(); });
 btn('turn', turn);
 btn('set', press);
 btn('undo', undo);
-btn('take', () => setTaking(!taking));
 let clearArmed = 0;
 btn('again', () => {
   // (twice, to be sure: a build is a lot to lose)
@@ -617,8 +569,15 @@ btn('again', () => {
   world = new World();
   history = [];
   lift.clear();
+  // (a new bag, and with it new colours)
+  bag = new Bag(Math.floor(Math.random() * 90000) + 1);
+  hand = bag.next();
+  next = bag.next();
+  queue = [];
+  turned = false;
   changed();
   reaim();
+  showNext();
   save();
 });
 btn('sound', () => {
@@ -722,12 +681,12 @@ function tick(k = 1) {
   lastTick = now;
   snap(5200, 0.05 * k);
 }
-function clickSound(y: number) {
+function clickSound(y: number, colour: number) {
   snap(2600, 0.5);
   setTimeout(() => snap(3400, 0.3), 28);
   tone(note(colour + Math.floor(y / 3)), 0.02, 1.4, 0.07);
 }
-function popSound() {
+function popSound(colour: number) {
   snap(1500, 0.35);
   tone(note(colour) / 2, 0, 0.8, 0.04);
 }
@@ -753,8 +712,9 @@ function rebuild() {
   const bi: number[] = [];
   const si: number[] = [];
   // the baseplate, and its studs where nothing stands
-  bi.push(-0.02, -0.32, -0.02, N + 0.04, 0.32, N + 0.04, ...BASE, 1, 3);
-  for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (!world.at(x, 0, z)) si.push(x, 0, z, 1, 1, 1, ...BASE, 1, 3);
+  const base = auto ? ([0.25, 0.52, 0.27] as C3) : bag.scheme.base;
+  bi.push(-0.02, -0.32, -0.02, N + 0.04, 0.32, N + 0.04, ...base, 1, 3);
+  for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (!world.at(x, 0, z)) si.push(x, 0, z, 1, 1, 1, ...base, 1, 3);
   world.bricks.forEach((b, id) => {
     if (!b) return;
     const l = (lift.get(id) ?? 0) * PLATE * 3;
@@ -776,15 +736,9 @@ function rebuild() {
 function ghost(): [number, number] {
   const bi: number[] = [];
   const si: number[] = [];
-  if (taking && marked >= 0) {
-    const b = world.bricks[marked];
-    if (b) {
-      // the brick about to be taken: a pale veil over it
-      bi.push(b.at[0] - 0.03, b.at[1] * PLATE - 0.03, b.at[2] - 0.03, b.w + 0.06, b.h * PLATE + 0.06, b.d + 0.06, 1, 1, 1, 1, 1);
-    }
-  } else if (ghostAt && !taking) {
+  if (ghostAt) {
     const [w, d, h] = dims();
-    const c = COLOURS[colour].rgb;
+    const c = COLOURS[hand.colour].rgb;
     const y0 = ghostAt[1] * PLATE;
     bi.push(ghostAt[0] + GAP, y0, ghostAt[2] + GAP, w - GAP * 2, h * PLATE, d - GAP * 2, ...c, 1, 1);
     for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) si.push(ghostAt[0] + x, y0 + h * PLATE, ghostAt[2] + z, 1, 1, 1, ...c, 1, 1);
@@ -796,6 +750,47 @@ function ghost(): [number, number] {
   return [bi.length / STRIDE, si.length / STRIDE];
 }
 
+/** The next brick, turning slowly in its corner under the word. */
+function drawNext(W: number, Hh: number) {
+  // (in the box the page keeps for it, top right, above its word)
+  const box = document.getElementById('next')?.getBoundingClientRect();
+  if (!box) return;
+  const s = Math.round(box.width * dpr);
+  const x0 = Math.round(box.left * dpr);
+  const y0 = Hh - Math.round(box.top * dpr) - s;
+  gl.enable(gl.SCISSOR_TEST);
+  gl.scissor(x0, y0, s, s);
+  gl.viewport(x0, y0, s, s);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+  const c = COLOURS[next.colour].rgb;
+  const h = next.h * PLATE;
+  const bi = [-next.w / 2 + GAP, -h / 2, -next.d / 2 + GAP, next.w - GAP * 2, h, next.d - GAP * 2, ...c, 1, 0];
+  const si: number[] = [];
+  for (let z = 0; z < next.d; z++) for (let x = 0; x < next.w; x++) si.push(-next.w / 2 + x, h / 2, -next.d / 2 + z, 1, 1, 1, ...c, 1, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, ghostBoxInst);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(bi), gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, ghostStudInst);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(si), gl.DYNAMIC_DRAW);
+  const a = time * 0.45;
+  const r = Math.max(next.w, next.d) * 1.25 + 2.2;
+  const eye: C3 = [Math.cos(a) * r, r * 0.62, Math.sin(a) * r];
+  const fwd = normalize(sub([0, 0, 0], eye));
+  const right = normalize(cross(fwd, [0, 1, 0]));
+  gl.uniformMatrix4fv(u(prog, 'uVP'), false, viewProj(eye, fwd, right, cross(right, fwd), 0.62, 1));
+  gl.uniform3fv(u(prog, 'uEye'), eye);
+  gl.uniform1f(u(prog, 'uNear'), 1000);
+  gl.uniform1f(u(prog, 'uPlain'), 1);
+  gl.disable(gl.BLEND);
+  gl.uniform1f(u(prog, 'uStud'), 0);
+  gl.bindVertexArray(ghostBox.vao);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, ghostBox.count, 1);
+  gl.uniform1f(u(prog, 'uStud'), 1);
+  gl.bindVertexArray(ghostStud.vao);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, ghostStud.count, si.length / STRIDE);
+  gl.uniform1f(u(prog, 'uPlain'), 0);
+  gl.disable(gl.SCISSOR_TEST);
+  gl.viewport(0, 0, W, Hh);
+}
 // the quiet builder (preview)
 let builder = town(Number(params.get('seed')) || 21);
 let townSeed = Number(params.get('seed')) || 21;
@@ -892,8 +887,9 @@ function frame(now: number) {
   gl.bindVertexArray(ghostStud.vao);
   gl.drawArraysInstanced(gl.TRIANGLES, 0, ghostStud.count, gs);
   gl.depthMask(true);
+  if (!auto) drawNext(W, Hh);
   gl.bindVertexArray(null);
-  (window as unknown as { __bricks: unknown }).__bricks = { bricks: world.count(), height: world.height(), ghost: ghostAt, taking, marked };
+  (window as unknown as { __bricks: unknown }).__bricks = { bricks: world.count(), height: world.height(), ghost: ghostAt, hand, next, scheme: bag.scheme.name };
   requestAnimationFrame(frame);
 }
 
@@ -924,7 +920,7 @@ addEventListener('resize', measureTray);
 resize();
 load();
 changed();
-if (!auto) tray();
 measureTray();
+showNext();
 reaim();
 requestAnimationFrame(frame);

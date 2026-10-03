@@ -293,3 +293,56 @@ export function* town(seed: number): Generator<Brick> {
     yield { w: 2, d: 2, h: 3, colour: r() < 0.5 ? 10 : 9, at: [x - (r() < 0.5 ? 1 : 0), 6, z - (r() < 0.5 ? 1 : 0)] };
   }
 }
+
+/** A brick before it's set: its size and colour, not yet anywhere. */
+export interface Spec {
+  w: number;
+  d: number;
+  h: number;
+  colour: number;
+}
+
+/** The bag's colour schemes: a few that sit together, so a build looks like one place. */
+export const SCHEMES: Array<{ name: string; colours: number[]; base: C3 }> = [
+  // (and a baseplate each, one the colours stand out on)
+  { name: 'harbour', colours: [0, 11, 12, 13, 1], base: [0.8, 0.79, 0.74] },
+  { name: 'village', colours: [4, 7, 0, 8, 10], base: [0.25, 0.52, 0.27] },
+  { name: 'garden', colours: [10, 9, 6, 7, 0], base: [0.82, 0.74, 0.58] },
+  { name: 'stone', colours: [1, 2, 7, 0, 3], base: [0.25, 0.52, 0.27] },
+  { name: 'sunset', colours: [5, 6, 4, 7, 8], base: [0.62, 0.64, 0.64] },
+];
+
+/** How often each size comes (by SIZES index): the everyday bricks most. */
+const SIZE_WEIGHT = [0.6, 1.3, 0.8, 1.1, 0.5, 1.2, 0.8, 1.4, 0.5];
+
+/**
+ * The bag: bricks one at a time from a seed, Tetris-fashion — you don't choose, you place what
+ * comes. A plate now and then; colours from the bag's scheme, rarely the same twice running.
+ */
+export class Bag {
+  private r: () => number;
+  private last = -1;
+  readonly scheme: (typeof SCHEMES)[number];
+  constructor(public seed: number, public drawn = 0) {
+    this.r = seeded(hash(seed, 0xba9));
+    this.scheme = SCHEMES[hash(seed, 0x5c4) % SCHEMES.length];
+    const n = drawn;
+    this.drawn = 0;
+    for (let i = 0; i < n; i++) this.next();
+  }
+  next(): Spec {
+    this.drawn++;
+    const total = SIZE_WEIGHT.reduce((s, x) => s + x, 0);
+    let t = this.r() * total;
+    let i = 0;
+    while (i < SIZES.length - 1 && (t -= SIZE_WEIGHT[i]) > 0) i++;
+    const [a, b] = SIZES[i];
+    const plate = this.r() < 0.22;
+    const cs = this.scheme.colours;
+    let c = Math.floor(this.r() * cs.length);
+    if (c === this.last && this.r() < 0.8) c = (c + 1) % cs.length;
+    this.last = c;
+    const turned = this.r() < 0.5;
+    return { w: turned ? b : a, d: turned ? a : b, h: plate ? 1 : 3, colour: cs[c] };
+  }
+}

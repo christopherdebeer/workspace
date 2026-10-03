@@ -51,3 +51,18 @@ for (const b of town(21)) {
 console.log(`town 21: ${set} bricks set, ${skipped} skipped, ${t.height()} plates high`);
 assert.ok(set > 60 && skipped < set / 5);
 console.log('ok');
+
+// the bag: same seed, same bricks; resuming partway gives the same next; a scheme's colours only
+{
+  const { Bag, SCHEMES } = g;
+  const a = new Bag(5); for (let i = 0; i < 7; i++) a.next();
+  const b = new Bag(5, 7);
+  assert.deepEqual(a.next(), b.next());
+  const bag = new Bag(9);
+  const cs = new Set(bag.scheme.colours);
+  let plates = 0;
+  for (let i = 0; i < 400; i++) { const s = bag.next(); assert.ok(cs.has(s.colour)); if (s.h === 1) plates++; }
+  assert.ok(plates > 40 && plates < 140, `plates ${plates}`);
+  assert.ok(SCHEMES.length >= 4);
+  console.log('bag ok');
+}

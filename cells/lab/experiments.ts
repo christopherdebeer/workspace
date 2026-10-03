@@ -60,7 +60,7 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'bricks',
     title: 'Bricks',
     group: 'Play',
-    blurb: 'A baseplate and a tray of bricks, and nothing to do but build: choose a size and a colour, move it with a finger, press it on. Studs, shadows, the click.',
+    blurb: 'Lego, Tetris-fashion: bricks come one at a time, the next in its corner, and you press each on wherever it fits. Nothing falls, nothing clears; you build. Studs, shadows, the click.',
     page: 'static/bricks.html',
     preview: 'preview&seed=21',
     readme: 'static/bricks.md',
