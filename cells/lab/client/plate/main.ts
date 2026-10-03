@@ -9,8 +9,9 @@
  * on its shaded side, everything finer a single line as heavy as it is thick. The light is fixed
  * in the world, so as the plant turns its leaves darken and pale.
  *
- * Drag to turn it, pinch (or the wheel) to come closer; left alone it turns slowly. The seed is in
- * the address (`?seed=412`); `?preview` draws it small and quiet (the lab's index).
+ * Drag to turn it; pinch (or the wheel) to come closer to what is under your fingers, two fingers to
+ * slide it; left alone it turns slowly. The seed is in the address (`?seed=412`); `?preview` draws
+ * it small and quiet (the lab's index).
  */
 import { PENCIL } from '../kit/pencil';
 import { hash, seeded } from '../kit/rng';
@@ -412,8 +413,37 @@ let yaw = 0.6;
 let pitch = 0.12;
 let zoom = 1;
 let idle = 0;
+// where the view looks, off the plant's middle: a pinch or the wheel holds the point under the
+// fingers (or the cursor) still, so you come closer to what you're looking at; two fingers drag it
+const center: V3 = [0, 0, 0];
+// the last frame's camera, to turn the screen back into the world: its distance, its right and up,
+// the half-height of its view per unit distance, and how far the sheet's room sits above the middle
+const cam = { r: 1, x: [1, 0, 0] as V3, y: [0, 1, 0] as V3, tanH: 0.25, aspect: 1, lift: 0 };
+const ZMIN = 0.6;
+const ZMAX = 8;
+function shift(dx: number, dy: number) {
+  for (let i = 0; i < 3; i++) center[i] += cam.x[i] * dx + cam.y[i] * dy;
+}
+/** Zoom by `f`, keeping the point under (px, py) — CSS pixels on the canvas — where it is. */
+function zoomAt(f: number, px: number, py: number) {
+  const z1 = Math.max(ZMIN, Math.min(ZMAX, zoom * f));
+  const nx = (px / innerWidth) * 2 - 1;
+  const ny = 1 - (py / innerHeight) * 2;
+  const d = cam.r - (cam.r * zoom) / z1;
+  shift(nx * cam.aspect * cam.tanH * d, (ny * cam.tanH - cam.lift) * d);
+  // (and coming back out drifts home: whole plant in view again by the time it's at its frame)
+  if (z1 < zoom && zoom > 1) {
+    const k = Math.max(0, (z1 - 1) / (zoom - 1));
+    for (let i = 0; i < 3; i++) center[i] *= k;
+  }
+  zoom = z1;
+}
+/** Slide the view with the fingers: (dx, dy) in CSS pixels. */
+function pan(dx: number, dy: number) {
+  const s = (2 * cam.tanH * cam.r) / innerHeight;
+  shift(-dx * s, dy * s);
+}
 const pointers = new Map<number, { x: number; y: number }>();
-let pinch = 0;
 canvas.addEventListener('pointerdown', (e) => {
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   canvas.setPointerCapture(e.pointerId);
@@ -427,22 +457,27 @@ canvas.addEventListener('pointermove', (e) => {
     pitch = Math.max(-0.7, Math.min(0.9, pitch + (e.clientY - p.y) * 0.006));
   } else if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
+    const before = { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    p.x = e.clientX;
+    p.y = e.clientY;
     const d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (pinch) zoom = Math.max(0.6, Math.min(5, zoom * (d / pinch)));
-    pinch = d;
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    pan(mx - before.x, my - before.y);
+    if (before.d > 0) zoomAt(d / before.d, mx, my);
   }
   p.x = e.clientX;
   p.y = e.clientY;
 });
 const up = (e: PointerEvent) => {
   pointers.delete(e.pointerId);
-  pinch = 0;
 };
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  zoom = Math.max(0.6, Math.min(5, zoom * Math.exp(-e.deltaY * 0.0015)));
+  idle = 0;
+  zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
 }, { passive: false });
 
 function mat(eye: V3, target: V3, fovY: number, aspect: number): Float32Array {
@@ -481,6 +516,8 @@ function specimen(next: number) {
   paint = palette(seed);
   T = 0;
   uploadedT = -1;
+  zoom = 1;
+  center.fill(0);
   const url = new URL(location.href);
   url.searchParams.set('seed', String(seed));
   history.replaceState(null, '', url);
@@ -596,9 +633,17 @@ function frame(now: number) {
   const wide = sp.reach * 1.12;
   const fit = Math.max(tall, wide / aspect) / Math.tan(fov / 2);
   const r = fit / zoom;
-  // (and lifted so it sits in that room, not behind the caption)
-  target[1] -= ((mBot - mTop) / 2 / H) * 2 * r * Math.tan(fov / 2);
-  const eye: V3 = [target[0] + Math.cos(yaw) * Math.cos(pitch) * r, target[1] + Math.sin(pitch) * r, target[2] + Math.sin(yaw) * Math.cos(pitch) * r];
+  // the camera's own right and up (as mat() makes them), to lift and slide the view in its plane
+  const zc: V3 = [Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch), Math.sin(yaw) * Math.cos(pitch)];
+  const xl = Math.hypot(zc[2], zc[0]) || 1;
+  const xc: V3 = [zc[2] / xl, 0, -zc[0] / xl];
+  const yc: V3 = [zc[1] * xc[2] - zc[2] * xc[1], zc[2] * xc[0] - zc[0] * xc[2], zc[0] * xc[1] - zc[1] * xc[0]];
+  // (lifted so it sits in that room, not behind the caption)
+  const tanH = Math.tan(fov / 2);
+  const lift = (tanH * (mBot - mTop)) / H;
+  for (let i = 0; i < 3; i++) target[i] += center[i] - yc[i] * lift * r;
+  Object.assign(cam, { r, x: xc, y: yc, tanH, aspect, lift });
+  const eye: V3 = [target[0] + zc[0] * r, target[1] + zc[1] * r, target[2] + zc[2] * r];
   const vp = mat(eye, target, fov, aspect);
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
