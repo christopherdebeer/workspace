@@ -56,6 +56,19 @@ export const EXPERIMENTS: Experiment[] = [
       { label: 'ink only', query: 'wash=0' },
     ],
   },
+  {
+    id: 'settle',
+    title: 'Settle',
+    group: 'Play',
+    blurb: 'Blocks, slowly: pieces come one at a time and you set each wherever it fits, in three dimensions, with no clock. A full layer dissolves with a chime.',
+    page: 'static/settle.html',
+    preview: 'preview&seed=21',
+    readme: 'static/settle.md',
+    presets: [
+      { label: 'play', query: '' },
+      { label: 'bag 21', query: 'seed=21' },
+    ],
+  },
 ];
 
 /** The groups, in the order they first appear. */
