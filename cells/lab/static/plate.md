@@ -1,7 +1,7 @@
 # Botanical plate
 
 One plant from a seed, grown before your eyes and drawn as an engraving you can turn in your
-hand, hand-coloured in watercolour. Drag to turn it, pinch (or the wheel) to come closer; left
+hand, hand-coloured in watercolour. Drag to turn it, pinch (or the wheel) to come closer to whatever is under your fingers, two fingers to slide; left
 alone it turns slowly.
 `another` draws a new specimen; `grow again` grows this one again. The seed is in the address
 (`?seed=412`), so a plate can be shared; `?preview` draws it small and quiet (the lab's index).
