@@ -1,15 +1,15 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:33f52556311f920d1f58439aaa8a62a7ebbaa451d94f84ace96ba556094142ac",
-  "syncedAt": "2026-10-03T10:05:18.711Z",
+  "treeVersion": "tree:a7b049fcd74bcb25af64c8b1779e94e69044afc9cc6245262032028e96b65ec4",
+  "syncedAt": "2026-10-03T17:48:12.897Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
     "client/bricks/main.ts": "sha256:58f3f7e65cd13aa55d8b6f1e0eecfa27f7641c3109ea1b7cc7975efa9a51fce2",
     "client/kit/pencil.ts": "sha256:51afe003d548d09f136469d9a9caeb0da79e319c8101a9913e34982a0cca2336",
     "client/kit/rng.ts": "sha256:cf8f19fc9ec1217284aed5c5ee99cd9194fb0799b7c947c604445dde9c417cfa",
-    "client/main.ts": "sha256:9d6d10067061285fcdf2e02b64bb908aead1a36a4c2bdcee30b155f3f2f2b56c",
+    "client/main.ts": "sha256:ba45880ac3f64a97b3fa8900e7cb4912cac22f5e1462054f67003e07b5f5cd73",
     "client/mistwood/audio.ts": "sha256:7b1f67fc1716e5b054ec8ffc0c46986f0ad9bb14a86dbb89eaab93cb24ee2781",
     "client/mistwood/bake.ts": "sha256:61138e610fadeb6dc25c5c62586254b3a58f3952c3045dc0c316fe413fc37d58",
     "client/mistwood/deer.ts": "sha256:cd99dddba3d585c045c528431e01c1f929604a0c8455531b1bf856fb1b508a7e",
@@ -22,7 +22,9 @@
     "client/mistwood/world.ts": "sha256:8d203cea1012869a734a45c6f0ef0cb91631447ebd75967c3ade97105e9dad82",
     "client/plate/main.ts": "sha256:b82204e53b0c00046cdb886a8f2702441a4ae48905d00ac28bb565d8975c98da",
     "client/plate/plant.ts": "sha256:7dc5a91441bbdda51968efedfcb27649e7bfa439a5faaf36d1c18289be1926fc",
-    "experiments.ts": "sha256:687706a016d35f61eae0f6f07953527e3a265d5c8a1d3ce8f122aff9f636e925",
+    "client/spray/main.ts": "sha256:9c028f3af19648cc3ec9d338543d133813def00eedd58111f25d32bc6b7d6cb5",
+    "client/spray/paint.ts": "sha256:a043543903a91211c538f0cb97bae1f0af7c6d90887bcbf0b3b6a070de156355",
+    "experiments.ts": "sha256:b12b7c35066bd944650067d4b034c2bc47974ecff6c56eda802af902be0efdb7",
     "index.ts": "sha256:a43c2163857a4bd19da4a0d989caee314174df797d3773fc79d2ce9bbeaf112a",
     "md.ts": "sha256:67f154204a60b874e30eb1e5724120168ae8c98b00dfc9b0a844ff9d3bb7379e",
     "static/bricks.html": "sha256:6f65df89f999cd96433cb69e49667f83e592d0836c3a1ca26d016d0201285618",
@@ -31,6 +33,8 @@
     "static/mistwood.md": "sha256:f27e361c3595eb0d59c6db92f17b08816ba9b02e668ad9ab498380ba52784d4b",
     "static/plate.html": "sha256:d9487ca6106921855e14644def18f7135a6ccb86601d54ab0a7d480686f3ef2f",
     "static/plate.md": "sha256:13e54834de8032549f53f49b16af2f5a56b1829b482a4d70d562b55d73cad1f6",
+    "static/spray.html": "sha256:151d36d245a154dc16db4dfb93b93a70396b136955058901c10a1bfd27dcce08",
+    "static/spray.md": "sha256:2aeac4ecc392bb1048a9a41d065a728131baa4dab4701ed8a770b226f4c6ab6b",
     "tsconfig.json": "sha256:aa5d5858c9ae1e731fcb88d91b3a59c88e2ef4b249b3e5802baf7c9fae241a30"
   }
 }

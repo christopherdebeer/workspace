@@ -10,6 +10,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   mistwood: () => import('./mistwood/main'),
   plate: () => import('./plate/main'),
   bricks: () => import('./bricks/main'),
+  spray: () => import('./spray/main'),
 };
 
 const id = document.documentElement.dataset.exp ?? '';

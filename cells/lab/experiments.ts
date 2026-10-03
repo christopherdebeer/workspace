@@ -69,6 +69,20 @@ export const EXPERIMENTS: Experiment[] = [
       { label: 'watch a town', query: 'town&seed=21' },
     ],
   },
+  {
+    id: 'spray',
+    title: 'Spray',
+    group: 'Play',
+    blurb: 'The phone is the can: aim it, thumb on the glass, and graffiti the real world through the camera (in AR where the browser has it). Overspray, drips, the rattle.',
+    page: 'static/spray.html',
+    preview: 'preview&seed=7',
+    readme: 'static/spray.md',
+    presets: [
+      { label: 'spray', query: '' },
+      { label: 'a brick wall', query: 'wall' },
+      { label: 'watch a tag', query: 'tag&seed=7' },
+    ],
+  },
 ];
 
 /** The groups, in the order they first appear. */
