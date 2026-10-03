@@ -147,6 +147,7 @@ flat out vec2 vB2;
 flat out vec2 vWpx;
 flat out vec3 vS;
 flat out float vLen;
+flat out vec4 vDepth; // how far each end is from the eye, and how thick it is there (m)
 void main() {
   // (a millimetre and a half toward the eye: a leaf's own outline and veins lie on it, not under
   // it — and what is behind a leaf stays behind it)
@@ -172,6 +173,7 @@ void main() {
   vWpx = vec2(pa, pb);
   vS = aS;
   vLen = length(aB - aA);
+  vDepth = vec4(ca.w, cb.w, aW);
 }`;
 
 const LINE_FS = `#version 300 es
@@ -182,9 +184,22 @@ flat in vec2 vB2;
 flat in vec2 vWpx;
 flat in vec3 vS;
 flat in float vLen;
+flat in vec4 vDepth;
 out vec4 o;
-// as the blades: 0 opaque paper bodies, 1 clear, 2 the wash (stems and roots only)
+// as the blades: 0 engraved on paper, 1 on the finished wash, 2 the wash (stems and roots only)
 uniform float uMode;
+// which of them: 0 the stems' bodies (solid: they hide what is behind them), 1 every finer line
+uniform float uPart;
+// (the projection's near and far)
+const float NEAR = .01, FAR = 20.;
+// a stem is round: where across it a fragment lies (0 its axis … 1 its edge), how near the eye
+// its surface comes there — so a leaf at a node goes into the stem, and what passes behind it
+// is hidden by it
+float roundDepth(float h, float across) {
+  float d = mix(vDepth.x, vDepth.y, h) - mix(vDepth.z, vDepth.w, h) * .5 * sqrt(max(0., 1. - across * across));
+  d = max(d, NEAR * 1.01);
+  return .5 + .5 * ((FAR + NEAR) / (FAR - NEAR) - 2. * FAR * NEAR / ((FAR - NEAR) * d));
+}
 uniform vec3 uStem, uRoot;
 uniform sampler2D uComp;
 uniform vec2 uScreen;
@@ -201,15 +216,23 @@ void main() {
   float s = (vS.y + h * vLen) * 10.;
   float id = vS.x;
   float kind = vS.z;
+  bool solid = uMode > 1.5 ? kind < 1.5 : w >= 3. && kind < .5;
+  if (solid != (uPart < .5)) discard;
+  gl_FragDepth = gl_FragCoord.z;
   if (uMode > 1.5) {
     // the wash: stems green, warming at the foot; roots a pale umber; nothing finer
     if (kind > 1.5) discard;
+    // (each piece only its own length: the next one carries on from its end, and an overhang
+    // would lie over it as a ring)
+    if (hRaw < -.01 || hRaw > 1.01) discard;
     float dl = length(pa - ba * h);
     float body = clamp(max(w, 1.5) * .5 - dl + .5, 0., 1.);
     if (body <= 0.) discard;
     float dens = (kind < .5 ? .7 : .45) * body;
-    // (where on the stem: along it, and across it as a share of its half-width)
-    float across = dl / max(w * .5, .75);
+    // (where on the stem: along it, and straight across it as a share of its half-width — not
+    // round its ends, or every joint between its pieces shows as a ring)
+    float across = length(pa - ba * hRaw) / max(w * .5, .75);
+    gl_FragDepth = roundDepth(h, min(across, 1.));
     o = pigment(kind < .5 ? uStem : uRoot, dens, vec2(s * .1, across * .002), 1. - across, id + 500.);
     return;
   }
@@ -220,6 +243,7 @@ void main() {
     float dl = length(pa - ba * hRaw);
     float body = clamp(w * .5 - dl + .5, 0., 1.);
     if (body <= 0.) discard;
+    gl_FragDepth = roundDepth(clamp(hRaw, 0., 1.), min(dl / (w * .5), 1.));
     vec2 nn = normalize(vec2(-ba.y, ba.x) + 1e-6);
     if (nn.x < 0.) nn = -nn;
     float side = dot(pa - ba * hRaw, nn) / max(w * .5, .5);
@@ -668,31 +692,50 @@ function frame(now: number) {
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   const draw = (mode: number, w: number, h: number) => {
-    // blades: both sides, laying down depth
-    gl.useProgram(bladeProg);
-    gl.uniformMatrix4fv(u(bladeProg, 'uVP'), false, vp);
-    gl.uniform3fv(u(bladeProg, 'uLight'), LIGHT);
-    gl.uniform3fv(u(bladeProg, 'uEye'), eye);
-    gl.uniform1f(u(bladeProg, 'uMode'), mode);
-    gl.uniform1i(u(bladeProg, 'uComp'), 1);
-    gl.uniform2f(u(bladeProg, 'uScreen'), W, H);
-    gl.depthMask(true);
-    gl.bindVertexArray(bladeVao);
-    gl.drawArrays(gl.TRIANGLES, 0, bladeCount);
-    // lines: over them, tested against them, not hiding one another
-    gl.useProgram(lineProg);
-    gl.uniformMatrix4fv(u(lineProg, 'uVP'), false, vp);
-    gl.uniform2f(u(lineProg, 'uRes'), w, h);
-    gl.uniform1f(u(lineProg, 'uFocal'), (h / 2) / Math.tan(fov / 2));
-    gl.uniform1f(u(lineProg, 'uMode'), mode);
-    gl.uniform3fv(u(lineProg, 'uEye'), eye);
-    gl.uniform1i(u(lineProg, 'uComp'), 1);
-    gl.uniform2f(u(lineProg, 'uScreen'), W, H);
-    gl.uniform3fv(u(lineProg, 'uStem'), paint.stem);
-    gl.uniform3fv(u(lineProg, 'uRoot'), paint.root);
-    gl.depthMask(false);
-    gl.bindVertexArray(lineVao);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, lineCount);
+    const blades = () => {
+      gl.useProgram(bladeProg);
+      gl.uniformMatrix4fv(u(bladeProg, 'uVP'), false, vp);
+      gl.uniform3fv(u(bladeProg, 'uLight'), LIGHT);
+      gl.uniform3fv(u(bladeProg, 'uEye'), eye);
+      gl.uniform1f(u(bladeProg, 'uMode'), mode);
+      gl.uniform1i(u(bladeProg, 'uComp'), 1);
+      gl.uniform2f(u(bladeProg, 'uScreen'), W, H);
+      gl.depthMask(true);
+      gl.bindVertexArray(bladeVao);
+      gl.drawArrays(gl.TRIANGLES, 0, bladeCount);
+    };
+    const lines = (part: number) => {
+      gl.useProgram(lineProg);
+      gl.uniformMatrix4fv(u(lineProg, 'uVP'), false, vp);
+      gl.uniform2f(u(lineProg, 'uRes'), w, h);
+      gl.uniform1f(u(lineProg, 'uFocal'), (h / 2) / Math.tan(fov / 2));
+      gl.uniform1f(u(lineProg, 'uMode'), mode);
+      gl.uniform1f(u(lineProg, 'uPart'), part);
+      gl.uniform3fv(u(lineProg, 'uEye'), eye);
+      gl.uniform1i(u(lineProg, 'uComp'), 1);
+      gl.uniform2f(u(lineProg, 'uScreen'), W, H);
+      gl.uniform3fv(u(lineProg, 'uStem'), paint.stem);
+      gl.uniform3fv(u(lineProg, 'uRoot'), paint.root);
+      // (stems are solid and lay down depth; finer lines are tested against everything, hiding nothing)
+      gl.depthMask(part === 0);
+      gl.bindVertexArray(lineVao);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, lineCount);
+    };
+    if (mode > 1.5) {
+      // the wash: the stems' (the strongest pass of the brush where their pieces overlap), then the
+      // blades' laid over them where they are nearer — each hides the paint behind it
+      gl.blendEquation(gl.MAX);
+      lines(0);
+      gl.blendEquation(gl.FUNC_ADD);
+      gl.disable(gl.BLEND);
+      blades();
+      gl.enable(gl.BLEND);
+    } else {
+      // the engraving: blades and stems solid, hiding one another; then every finer line over them
+      blades();
+      lines(0);
+      lines(1);
+    }
     gl.bindVertexArray(null);
   };
   if (wash) {
@@ -703,10 +746,7 @@ function frame(now: number) {
     gl.clearColor(0, 0, 0, 0);
     gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    // (the strongest pass of the brush, not the sum: pieces of a stem overlap at their ends)
-    gl.blendEquation(gl.MAX);
     draw(2, washW, washH);
-    gl.blendEquation(gl.FUNC_ADD);
     // 2. laid on the paper as a wash — into its own buffer, then onto the page
     compTarget(W, H);
     gl.bindFramebuffer(gl.FRAMEBUFFER, compFbo);
