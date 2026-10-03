@@ -1,14 +1,14 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:6c0b6606901cb86119af19a264ceda768a39f93c829a2db720918d8d0e5c0b70",
-  "syncedAt": "2026-10-03T23:27:39.602Z",
+  "treeVersion": "tree:bea764c2430c5b9fcb7d941cf498e7c7944b8939a2c652720f090b266e3b893f",
+  "syncedAt": "2026-10-03T23:43:38.595Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
     "client/bricks/main.ts": "sha256:58f3f7e65cd13aa55d8b6f1e0eecfa27f7641c3109ea1b7cc7975efa9a51fce2",
     "client/fungi/genome.ts": "sha256:73b299ec1e6d193c0b7ed40b0624e182bcf9023fbf7b26ea026cf997f72d2ead",
-    "client/fungi/main.ts": "sha256:898e1d51ef21854f85c309384797062098488858066fff5b1c5c5e0b270fb7c0",
+    "client/fungi/main.ts": "sha256:21d84fde534ee2d488760c22112c50683b3abf72aa99c86e8d029b83277a4641",
     "client/fungi/terrarium.ts": "sha256:0c33c2ad888260c5b2c166b8a8e198b9a9bf2e2948f900744af8b91fbf0ae799",
     "client/kit/pencil.ts": "sha256:51afe003d548d09f136469d9a9caeb0da79e319c8101a9913e34982a0cca2336",
     "client/kit/rng.ts": "sha256:cf8f19fc9ec1217284aed5c5ee99cd9194fb0799b7c947c604445dde9c417cfa",

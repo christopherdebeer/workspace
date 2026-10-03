@@ -43,6 +43,16 @@ vec3 env(vec3 r) {
   float w = smoothstep(.55, .97, dot(r, uLight));
   return mix(uSky * (.25 + .35 * max(r.y, 0.)), uLightCol * 3., w);
 }
+// what's behind something thick and clear, seen through it: softened (the ground's fine grain
+// doesn't come through a stalk sharp — through glass that close, what's behind is out of focus)
+vec3 through(sampler2D t, vec2 uv, vec2 px, float r) {
+  vec3 c = texture(t, uv).rgb * .2;
+  for (int i = 0; i < 8; i++) {
+    float a = float(i) * .785 + .39;
+    c += texture(t, clamp(uv + vec2(cos(a), sin(a)) * px * r, 0., 1.)).rgb * .1;
+  }
+  return c;
+}
 // wet: the sheen and the glints of a wet surface
 vec3 wetness(vec3 n, vec3 v, vec3 p, float wet, float k) {
   vec3 r = reflect(-v, n);
@@ -51,7 +61,7 @@ vec3 wetness(vec3 n, vec3 v, vec3 p, float wet, float k) {
   float s = pow(max(dot(r, uLight), 0.), 60. + 300. * wet);
   // (sparkle: the tiny facets of a wet skin catching the light, here and there)
   float sp = smoothstep(.82, .97, n2(p.xz * k + p.y * k * .7)) * smoothstep(.85, .99, dot(r, uLight));
-  return c + uLightCol * (s * (1. + 5. * wet) + sp * 12. * wet);
+  return c + uLightCol * (s * (1. + 5. * wet) + sp * 5. * wet);
 }
 `;
 const QUAD_VS = `#version 300 es
@@ -122,7 +132,7 @@ void main() {
     myc = max(myc, f.w * smoothstep(1., .2, d));
   }
   float threads = smoothstep(.45, .8, n2(p * vec2(40., 9.) + n2(p * 6.) * 6.)) + smoothstep(.55, .85, n2(p * vec2(9., 40.) + 17.));
-  c = mix(c, vec3(.88, .88, .84), clamp(myc * (.35 + .5 * threads), 0., .9));
+  c = mix(c, vec3(.82, .82, .78), clamp(myc * (.2 + .45 * threads), 0., .75));
   float diff = .3 + .7 * max(dot(n, uLight), 0.);
   vec3 col = c * diff * uLightCol;
   col += wetness(n, v, vec3(p.x, 0., p.y), wet, 9.);
@@ -293,8 +303,8 @@ void main() {
   float nv = max(dot(n, v), 0.);
   float fuzz = vLook.w;
   // (fine lengthwise fibres, and hairs: the surface's own grain)
-  float fibre = n2(vec2(vA * 7., vU * vL * 6. / uS));
-  float hairs = smoothstep(.7, .92, n2(vec2(vA * 22., vU * vL * 38. / uS)));
+  float fibre = n2(vec2(vA * 9., vU * vL * .5 / uS));
+  float hairs = smoothstep(.7, .92, n2(vec2(vA * 26., vU * vL * 3. / uS)));
   float top = smoothstep(1. - vLook.x - .03, 1. - vLook.x + .02, vU);
   float yellow = vLook.x <= 0. ? 0. : uThrows > .5 ? top * (1. - smoothstep(.0, .06, vU - (1. - vLook.x * .55))) + top * .12 : top;
   vec3 tint = mix(uGlass, uTip, clamp(yellow, 0., 1.));
@@ -302,7 +312,7 @@ void main() {
   // glass: what's behind, bent toward its edges; the light through it
   vec3 nvw = (uView * vec4(n, 0.)).xyz;
   vec2 uv = gl_FragCoord.xy / uRes;
-  vec3 behind = texture(uBehind, clamp(uv - nvw.xy * (1. - nv) * 18. / uRes, 0., 1.)).rgb;
+  vec3 behind = through(uBehind, clamp(uv - nvw.xy * (1. - nv) * 18. / uRes, 0., 1.), 1. / uRes, 4.);
   vec3 glass = behind * tint * (.75 + .3 * nv);
   float through = pow(max(dot(-v, uLight), 0.), 2.);
   glass += tint * uLightCol * (.1 + 1.1 * through) * (.2 + .8 * pow(1. - nv, 1.5)) * (.5 + yellow * .9);
@@ -458,7 +468,7 @@ void main() {
   vec3 nvw = (uView * vec4(n, 0.)).xyz;
   vec2 uv = gl_FragCoord.xy / uRes;
   // through it: what's inside it (the asci, their spores), bent and drowned in its colour
-  vec3 behind = texture(uBehind, clamp(uv - nvw.xy * (1. - nv) * 22. / uRes, 0., 1.)).rgb;
+  vec3 behind = through(uBehind, clamp(uv - nvw.xy * (1. - nv) * 22. / uRes, 0., 1.), 1. / uRes, 3.);
   vec3 tint = mix(uJelly, uDeep, smoothstep(.45, 1., vO.x));
   vec3 col = behind * mix(vec3(1.), tint, .75) * .95;
   // lit from inside: the light that gets in glows through it, and its body scatters it
@@ -722,6 +732,8 @@ let terr: Terrarium | null = null;
 /** the lead species: its light, its warmth, its ground */
 let g: Genome;
 let bits: ReturnType<typeof litter>;
+/** the beads' colour: the lead species' orange, browned in the dung */
+let beadColour: V3 = [0.5, 0.3, 0.1];
 /** the scale of things: the noise and the ground go by it (1: a thrower 8 mm tall) */
 let S = 1;
 /** The ground's height at (x, z) (mm): the ground's vertex shader's sums, so things stand on it. */
@@ -752,7 +764,7 @@ function settle() {
     for (const st of sp.stalks) st.base[1] = groundY(st.base[0], st.base[2]) - st.r * 0.5;
     for (const c of sp.cups) c.c[1] = groundY(c.c[0], c.c[2]) - c.Hc * 0.15;
   }
-  for (const b of bits.beads) b.p[1] = groundY(b.p[0], b.p[2]) + b.r * 0.2;
+  for (const b of bits.beads) b.p[1] = groundY(b.p[0], b.p[2]) - b.r * b.flat * 0.35;
   for (const c of bits.crumbs) c.p[1] = groundY(c.p[0], c.p[2]) + c.r[1] * 0.2;
   for (const p of bits.pools) p.p[1] = groundY(p.p[0], p.p[2]);
 }
@@ -769,9 +781,10 @@ function grow(s: number) {
     terr = terrarium(seed);
     world = terr.species.map((x) => ({ g: x.g, stalks: x.stalks, cups: x.cups, S: scaleOf(x.g) }));
     g = world[0].g;
-    bits = litter(seed, { ...g, patch: 22, scale: 8, beads: Math.max(g.beads, 60) });
+    bits = litter(seed, { ...g, patch: 20, scale: 5, beads: Math.min(g.beads, 50) });
     S = 1;
   }
+  beadColour = mixV(g.bead, [0.22, 0.14, 0.07], 0.45);
   settle();
   T = 0;
   focusAt = null;
@@ -879,8 +892,9 @@ function direct(dt: number) {
     let score = -1e9;
     for (const m of terr.moments) {
       const lead = m.T - T;
-      if (lead < 0.6 || lead > 7) continue;
-      const sc = -lead * 0.3 + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' || m.kind === 'fire' ? 0.4 : 0) + Math.random() * 0.5;
+      if (lead < 0.4 || lead > 3.5) continue;
+      // (an emergence is better caught under way than waited for)
+      const sc = -lead * 0.5 + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' || m.kind === 'fire' ? 0.4 : 0) + (m.kind === 'emerge' && lead > 1.5 ? -0.6 : 0) + Math.random() * 0.5;
       if (sc > score) {
         score = sc;
         best = m;
@@ -964,7 +978,7 @@ function things() {
   const dew: number[] = [];
   const feet: number[] = [];
   const per: Array<{ sp: Sp; tube: number[]; bell: number[]; jelly: number[]; hair: number[] }> = [];
-  for (const b of bits.beads) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...g.bead, 1);
+  for (const b of bits.beads) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...beadColour, 1);
   for (const c of bits.crumbs) solid.push(...c.p, ...c.r, ...c.c, 2);
   for (const p of bits.pools) dew.push(p.p[0], p.p[1] + p.r * 0.12, p.p[2], p.r, p.r * 0.35, p.r, 1, 1, 1, 1);
   for (const sp of world) {
@@ -1106,11 +1120,11 @@ function daylight(T: number) {
   const day = ss(5.5, 9, h) * (1 - ss(17.5, 20.5, h));
   const dawn = Math.max(ss(4.5, 6.5, h) * (1 - ss(7, 9, h)), ss(16.5, 18.5, h) * (1 - ss(19.5, 21, h)));
   const warm = g.warmth;
-  const night: V3 = [0.42, 0.52, 0.72];
+  const night: V3 = [0.58, 0.62, 0.72];
   const sun: V3 = [1, 0.62 + 0.1 * (1 - warm), 0.36 + 0.1 * (1 - warm)];
   const noon: V3 = [1, 0.9 + 0.08 * (1 - warm), 0.75 + 0.2 * (1 - warm)];
-  const lightCol = mixV(mixV(night, noon, day), sun, dawn).map((v) => v * (0.55 + 0.45 * day + 0.25 * dawn)) as V3;
-  const sky = mixV([0.3, 0.38, 0.5], [0.5, 0.6, 0.42], day).map((v) => v * (0.7 + 0.3 * day)) as V3;
+  const lightCol = mixV(mixV(night, noon, day), sun, dawn).map((v) => v * (0.72 + 0.28 * day + 0.2 * dawn)) as V3;
+  const sky = mixV([0.36, 0.4, 0.46], [0.5, 0.6, 0.42], day).map((v) => v * (0.8 + 0.2 * day)) as V3;
   // the light rises: low behind them at dawn, higher through the morning; from the same side
   const el = 0.25 + 0.95 * day - 0.1 * dawn;
   const hz = Math.hypot(g.light[0], g.light[2]) || 1;
