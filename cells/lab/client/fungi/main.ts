@@ -393,25 +393,38 @@ out vec3 vO;
 float h(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 float n2(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
   return mix(mix(h(i), h(i + vec2(1, 0)), u.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), u.x), u.y); }
-void main() {
-  float a = aPT.x * 1.5708;
-  float th = aPT.y;
+out vec3 vN;
+vec3 at(vec2 pt) {
+  float a = pt.x * 1.5708;
+  float th = pt.y;
   float R = aShape.x * aShape.z, H = aShape.y * aShape.z;
   vec3 ring = vec3(cos(th), 0., sin(th));
   vec3 p = aC + ring * sin(a) * R + vec3(0., (cos(a) * .55 + .45) * H, 0.);
-  vec3 n = normalize(ring * sin(a) * H + vec3(0., cos(a) * R * .55, 0.));
-  // its lumps, and the wrinkles of its skin (the seam at th = 2π is matched by the noise's period)
-  vec2 q = vec2(sin(th) * 2.5 + 3., cos(th) * 2.5 + aPT.x * 4.) + aShape.w;
+  vec3 n = normalize(ring * sin(a) * H + vec3(0., cos(a) * R * .55, 0.) + vec3(0., 1e-4, 0.));
+  // its lumps, and the wrinkles of its skin (round in th, so no seam)
+  vec2 q = vec2(sin(th) * 2.5 + 3., cos(th) * 2.5 + pt.x * 4.) + aShape.w;
   float lump = (n2(q) - .5) * .16 + (n2(q * 3.1 + 5.) - .5) * .06 + (n2(q * 9. + 9.) - .5) * .02;
-  p += n * lump * R * (1. - aPT.x * aPT.x * .6);
+  return p + n * lump * R * (1. - pt.x * pt.x * .6);
+}
+void main() {
+  vec3 p = at(aPT);
+  // (its normal from the shape itself, so it's smooth however close the lens comes)
+  float e = .004;
+  vec3 dt = at(aPT + vec2(0., e)) - at(aPT - vec2(0., e));
+  vec3 da = at(aPT + vec2(e, 0.)) - at(aPT - vec2(max(0., min(e, aPT.x)), 0.));
+  vec3 n = cross(dt, da);
+  if (aPT.x < .002) n = vec3(0., 1., 0.);
+  if (dot(n, p - aC - vec3(0., aShape.y * aShape.z * .3, 0.)) < 0.) n = -n;
+  vN = normalize(n);
   vW = p;
-  vO = vec3(aPT.x, th, aShape.w);
+  vO = vec3(aPT.x, aPT.y, aShape.w);
   gl_Position = uVP * vec4(p, 1.);
 }`;
 const JELLY_FS = `#version 300 es
 precision highp float;
 in vec3 vW;
 in vec3 vO;
+in vec3 vN;
 out vec4 o;
 uniform sampler2D uBehind;
 uniform vec2 uRes;
@@ -419,7 +432,7 @@ uniform mat4 uView;
 uniform vec3 uJelly, uDeep;
 ${COMMON}
 void main() {
-  vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
+  vec3 n = normalize(vN);
   vec3 v = normalize(uEye - vW);
   if (dot(n, v) < 0.) n = -n;
   // (its skin's fine wrinkles, for the light)
@@ -629,7 +642,7 @@ const tubes = instanced(stalkProg, grid(48, 16, (k) => 1 - Math.pow(1 - k, 1.5))
 // (fine hairs: the same tube, far fewer rings)
 const hairs = instanced(stalkProg, grid(5, 4), [['aUA', 2]], [['aBase', 3], ['aDir', 4], ['aShape', 4], ['aMore', 4], ['aLook', 4]]);
 const bells = instanced(bellProg, grid(40, 112), [['aTA', 2]], [['aAt', 3], ['aAxis', 3], ['aB', 4], ['aC', 4]]);
-const jellies = instanced(jellyProg, grid(36, 72), [['aPT', 2]], [['aC', 3], ['aShape', 4]]);
+const jellies = instanced(jellyProg, grid(48, 96), [['aPT', 2]], [['aC', 3], ['aShape', 4]]);
 const quadVao = gl.createVertexArray()!;
 
 // ─── targets: the scene (colour + depth), and a copy of its colour to see through ───────────────
@@ -882,6 +895,33 @@ function things() {
   return { solid, dew, tube, bell, jelly, feet, hair };
 }
 
+// ─── the light through the day: a cool lamp-lit night, a low warm dawn behind them, the morning ─
+/** At hour T (from nine in the evening): the light's colour and direction, the room's, and how
+ * the camera exposes for it (it opens up in the night, but never all the way: night stays night). */
+function daylight(T: number) {
+  const hour = (21 + T) % 24;
+  const ss = (a: number, b: number, x: number) => {
+    const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  // dawn comes in from five, full morning by nine
+  const t = hour < 12 ? hour : hour - 24;
+  const dawn = ss(4.5, 6.5, t) * (1 - ss(7, 9, t));
+  const day = ss(5.5, 9, t);
+  const warm = g.warmth;
+  const night: V3 = [0.42, 0.52, 0.72];
+  const sun: V3 = [1, 0.62 + 0.1 * (1 - warm), 0.36 + 0.1 * (1 - warm)];
+  const noon: V3 = [1, 0.9 + 0.08 * (1 - warm), 0.75 + 0.2 * (1 - warm)];
+  const lightCol = mixV(mixV(night, noon, day), sun, dawn).map((v) => v * (0.55 + 0.45 * day + 0.25 * dawn)) as V3;
+  const sky = mixV([0.3, 0.38, 0.5], [0.5, 0.6, 0.42], day).map((v) => v * (0.7 + 0.3 * day)) as V3;
+  // the light rises: low behind them at dawn, higher through the morning; from the same side
+  const el = 0.25 + 0.95 * day - 0.1 * dawn;
+  const hz = Math.hypot(g.light[0], g.light[2]) || 1;
+  const light = norm3([(g.light[0] / hz) * Math.cos(el), Math.sin(el) + 0.15, (g.light[2] / hz) * Math.cos(el)]);
+  const exposure = 1.35 * (1.35 - 0.35 * day);
+  return { lightCol, sky, light, exposure };
+}
+
 // ─── the jolt: when something fires near where the lens is looking, the camera feels it ────────
 let shake = 0;
 let jolted = new WeakSet<object>();
@@ -937,9 +977,7 @@ function frame(now: number) {
   const cam = camera(time);
   lastCam = cam;
   pullFocus(cam, dt);
-  const warm = g.warmth;
-  const lightCol: V3 = [1, 0.9 + 0.08 * (1 - warm), 0.75 + 0.2 * (1 - warm)];
-  const sky: V3 = [0.5, 0.6, 0.42];
+  const { lightCol, sky, light, exposure } = daylight(T);
   const th = things();
 
   // 1. the opaque patch
@@ -955,7 +993,7 @@ function frame(now: number) {
   const common = (p: WebGLProgram) => {
     gl.useProgram(p);
     gl.uniformMatrix4fv(u(p, 'uVP'), false, cam.vp);
-    gl.uniform3fv(u(p, 'uLight'), g.light);
+    gl.uniform3fv(u(p, 'uLight'), light);
     gl.uniform3fv(u(p, 'uEye'), cam.eye);
     gl.uniform3fv(u(p, 'uLightCol'), lightCol);
     gl.uniform3fv(u(p, 'uSky'), sky);
@@ -1039,7 +1077,7 @@ function frame(now: number) {
   gl.uniform1f(u(dofProg, 'uFar'), cam.far);
   gl.uniform1f(u(dofProg, 'uTime'), time % 100);
   gl.uniform1f(u(dofProg, 'uFade'), fade);
-  gl.uniform1f(u(dofProg, 'uExposure'), 1.35);
+  gl.uniform1f(u(dofProg, 'uExposure'), exposure);
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);

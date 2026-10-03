@@ -62,7 +62,8 @@ jelly is lit from inside, and the depth of field is a few millimetres.
      drift a little as the view turns. It's always behind everything, so always at full blur.
 2. **The glass.**
    - **The jelly** is a cushion, lumpy and wrinkled, refracting what's in it, its colour mostly
-     in the light that comes through. Its skin glistens.
+     in the light that comes through. Its skin glistens. Its normal comes from its shape itself,
+     not its mesh's facets, so it stays smooth however close the lens comes.
    - **The stalks and asci** are tubes along their curves (built in the vertex shader from the
      same sums as `along()`). They're glass that bends what's behind and glows with the light
      through it, or velvet: pale, opaque, a sheen of hairs at the edge.
@@ -72,7 +73,14 @@ jelly is lit from inside, and the depth of field is a few millimetres.
 4. **The throw.** A thrown sporangium leaves a streak of itself along its flight, as a shutter
    would smear it. When something fires near where the lens is looking (a sporangium, or a cup's
    ascus), the camera jolts, more the nearer it is to the plane of focus.
-5. **The depth of field.** Each pixel gathers from a disc as wide as its own blur. It takes a
+5. **The light through the day.** It follows the clock:
+   - **Night:** cool and dim, as if lamp-lit.
+   - **Dawn (from five):** low and warm, coming from behind them.
+   - **Morning (by nine):** brighter and higher.
+
+   It always comes from the same side, the side they lean to. The camera opens up a little in
+   the night, but never all the way: night stays night.
+6. **The depth of field.** Each pixel gathers from a disc as wide as its own blur. It takes a
    sample only if that sample's own blur reaches it, so blur in front spreads over what's sharp
    but blur behind doesn't. A filmic tone, a little green in the shadows, a vignette, grain.
 
