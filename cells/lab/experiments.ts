@@ -57,16 +57,16 @@ export const EXPERIMENTS: Experiment[] = [
     ],
   },
   {
-    id: 'settle',
-    title: 'Settle',
+    id: 'bricks',
+    title: 'Bricks',
     group: 'Play',
-    blurb: 'Blocks, slowly: pieces come one at a time and you set each wherever it fits, in three dimensions, with no clock. A full layer dissolves with a chime.',
-    page: 'static/settle.html',
+    blurb: 'A baseplate and a tray of bricks, and nothing to do but build: choose a size and a colour, move it with a finger, press it on. Studs, shadows, the click.',
+    page: 'static/bricks.html',
     preview: 'preview&seed=21',
-    readme: 'static/settle.md',
+    readme: 'static/bricks.md',
     presets: [
-      { label: 'play', query: '' },
-      { label: 'bag 21', query: 'seed=21' },
+      { label: 'build', query: '' },
+      { label: 'watch a town', query: 'town&seed=21' },
     ],
   },
 ];

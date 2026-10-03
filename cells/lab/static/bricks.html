@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-exp="bricks">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#e8e8e6">
+  <title>Bricks</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #e8e8e6; overflow: hidden; touch-action: none; }
+    body { color: #34383b; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    button { all: unset; cursor: pointer; box-sizing: border-box; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; right: 14px; display: flex; gap: 14px; }
+    nav button, nav a { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .66; padding: 4px 2px; color: inherit; text-decoration: none; }
+    nav button:hover, nav a:hover { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
+    /* the tray: sizes, brick or plate, colours, and the four things a hand does */
+    #tray { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 0 max(12px, env(safe-area-inset-bottom));
+      background: rgba(250, 250, 248, .55); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-top: 1px solid rgba(255,255,255,.7); }
+    .row { display: flex; gap: 8px; overflow-x: auto; padding: 4px 14px; scrollbar-width: none; align-items: center; }
+    .row::-webkit-scrollbar { display: none; }
+    .size { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: 48px; height: 50px; padding: 4px 6px; border-radius: 10px; font-size: 11px; letter-spacing: .06em; opacity: .62; }
+    .size svg rect { fill: none; stroke: currentColor; stroke-width: 1.2; }
+    .size svg circle { fill: currentColor; opacity: .55; }
+    .size.on { opacity: 1; background: rgba(255,255,255,.75); box-shadow: 0 2px 8px rgba(40,40,40,.08); }
+    .kind { flex: none; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; padding: 6px 10px; border-radius: 16px; opacity: .6; }
+    .kind.on { opacity: 1; background: rgba(255,255,255,.75); }
+    .sep { flex: none; width: 1px; height: 26px; background: rgba(0,0,0,.12); margin: 0 4px; }
+    .swatch { flex: none; width: 32px; height: 32px; border-radius: 9px; box-shadow: inset 0 -3px 0 rgba(0,0,0,.18), inset 0 2px 0 rgba(255,255,255,.25); position: relative; }
+    .swatch.on { outline: 2px solid #34383b; outline-offset: 2px; }
+    #hands { display: flex; justify-content: center; gap: 10px; padding: 8px 14px 0; }
+    #hands button { min-width: 66px; height: 46px; border-radius: 23px; text-align: center; line-height: 46px; font-size: 15px; letter-spacing: .1em; font-variant: small-caps; background: rgba(255,255,255,.7); box-shadow: 0 4px 14px rgba(40,40,40,.07); }
+    #hands button:active { background: #fff; }
+    #hands #set { min-width: 92px; background: rgba(52, 56, 59, .86); color: #f4f4f2; }
+    #hands #take.on { background: #b3261e; color: #fff; }
+    .taking #set { opacity: .9; }
+    #hint { position: fixed; left: 0; right: 0; top: calc(max(12px, env(safe-area-inset-top)) + 34px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity 2s; pointer-events: none; padding: 0 24px; }
+    #hint.on { opacity: .62; }
+    .preview nav, .preview #tray, .preview #hint { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="build"></canvas>
+  <nav><button id="again">begin again</button><button id="sound">sound · on</button><a href="{{readme}}">notes</a></nav>
+  <div id="hint">move the brick with a finger · tap it to press it on · two fingers to pinch, twist and slide</div>
+  <div id="tray">
+    <div class="row" id="sizes"></div>
+    <div class="row"><button class="kind" id="brick">brick</button><button class="kind" id="plate">plate</button><span class="sep"></span><span class="row" id="colours" style="padding:0"></span></div>
+    <div id="hands"><button id="undo">undo</button><button id="take">take</button><button id="turn">turn</button><button id="set">set</button></div>
+  </div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>
