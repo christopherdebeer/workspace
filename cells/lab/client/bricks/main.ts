@@ -1,22 +1,24 @@
 /**
- * Bricks: a baseplate, and bricks that come one at a time — you don't choose them, you place
- * what comes, Tetris-fashion, with the next one shown in its corner. Drag the brick itself to move
- * it — the stud you took it by stays under your finger, and it rests on whatever is beneath —
- * turn it, tap it to press it on. Bricks connect as the real ones do — on studs, or under
- * something — and stay: nothing falls, nothing clears, you build. `undo` lifts the last one back
- * into your hand. Each bag has its own few colours that sit together; what you build is kept in
- * this browser.
+ * Bricks: a baseplate, and bricks offered one at a time, Tetris-fashion: the next one turns in
+ * its corner. Tap it for another; drag it out onto the build and let go to press it on — the
+ * cell under your finger is where it goes, on top of what's there, under it or beside it. Bricks
+ * connect as the real ones do (on studs, or under something) and stay: nothing falls, nothing
+ * clears, you build.
  *
- * Touch: drag the brick to move it; drag anywhere else to turn the view; tap the brick to press
- * it on, tap elsewhere to send it there; two fingers pinch closer, twist to turn, drag to slide.
- * Mouse: the same, with the right button (or shift) to slide and the wheel to come closer.
- * Keys: R turns the brick, space presses it on, Z undoes.
+ * A brick just pressed on is selected, and any brick can be by a tap: drag it to move it (the
+ * stud you take it by stays under your finger), `turn` it, change its `colour` within the bag's
+ * few, or `remove` it. Tap nothing to let it go. `undo` steps back through all of it. Each bag
+ * has its own colours, and a baseplate to suit them; what you build is kept in this browser.
+ *
+ * Touch: drag anything but the selected brick to turn the view; two fingers pinch closer, twist
+ * to turn, drag to slide. Mouse: the same, with the right button (or shift) to slide and the
+ * wheel to come closer. Keys: N another, R turn, C colour, Delete remove, Z undo, Esc let go.
  *
  * Drawn in WebGL2: instanced boxes and studs, glossy, lit by a sun whose shadows are found by
  * walking the grid toward it (the build's cells in a small 3D texture), with ambient occlusion
  * from the same cells. `?preview` builds a little town by itself, slowly (the lab's index).
  */
-import { Bag, COLOURS, H, N, PLATE, World, placeFor, raycast, restIn, town, type Brick, type C3, type Hit, type Spec } from './build';
+import { Bag, COLOURS, H, N, PLATE, World, placeFor, raycast, town, type Brick, type C3, type Hit, type Spec } from './build';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -78,7 +80,7 @@ in vec3 vLocal;
 in vec3 vNor;
 flat in vec3 vScale;
 in vec4 vCol;
-flat in float vKind; // 0 a brick, 1 see-through (the brick in hand, or one about to be taken), 3 the baseplate
+flat in float vKind; // 0 a brick, 1 see-through (a brick on its way), 2 a selection's outline, 3 the baseplate
 out vec4 o;
 uniform sampler3D uOcc;
 uniform vec3 uSun, uEye, uFog;
@@ -112,7 +114,7 @@ float sunlight(vec3 pw) {
 void main() {
   vec3 n = normalize(vNor);
   vec3 V = normalize(uEye - vWorld);
-  if (vKind > .5 && vKind < 1.5) {
+  if (vKind > .5 && vKind < 2.5) {
     // see-through: its colour, breathing; its edges drawn
     float breathe = .5 + .5 * sin(uTime * 2.4);
     float line = 0.;
@@ -123,6 +125,12 @@ void main() {
       vec2 s = a.x > .5 ? vScale.yz : a.y > .5 ? vScale.xz : vScale.xy;
       float e = min(min(f.x, s.x - f.x), min(f.y, s.y - f.y));
       line = 1. - smoothstep(.03, .07, e);
+    }
+    if (vKind > 1.5) {
+      // a selection: bright edges, breathing, and the faintest veil
+      float al = mix(.06 + .04 * breathe, .75 + .25 * breathe, line);
+      o = vec4(vec3(1.) * al, al);
+      return;
     }
     // (its own colour, lit a little: it reads as the brick it is, on any ground)
     vec3 c = mix(vCol.rgb * (.9 + .25 * max(0., dot(n, uSun))) + .06 * breathe, vCol.rgb * .45, line);
@@ -278,47 +286,50 @@ gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, H, N, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array(N * H * N));
 
-// ─── the build ──────────────────────────────────────────────────────────────────────────────────
+// ─── the build ─────────────────────────────────────────────────────────────────────────────────
 let world = new World();
-/** what's been pressed on, and as what it came (for undo: it goes back into your hand) */
-type Act = { add: number; spec: Spec };
+/** what's been done, to undo: pressed on from the corner (it's offered again), changed
+ * (moved, turned, recoloured), or removed */
+type Act = { add: number; spec: Spec } | { change: number; from: Brick; to: Brick } | { remove: number; brick: Brick };
 let history: Act[] = [];
 /** how far a brick still has to come down (it presses on visibly) */
 const lift = new Map<number, number>();
 let dirty = true;
 
 let bag = new Bag(Math.floor(Math.random() * 90000) + 1);
-/** the brick in hand, the next, and any put back by undo (they come again before the bag's) */
-let hand: Spec = bag.next();
-let next: Spec = bag.next();
+/** the brick on offer in its corner, and any put back by undo (offered again before the bag's) */
+let offer: Spec = bag.next();
 let queue: Spec[] = [];
 let turned = false;
 const draw = () => queue.shift() ?? bag.next();
+const offerDims = (): [number, number, number] => (turned ? [offer.d, offer.w, offer.h] : [offer.w, offer.d, offer.h]);
 
-function dims(): [number, number, number] {
-  return turned ? [hand.d, hand.w, hand.h] : [hand.w, hand.d, hand.h];
-}
+/** the placed brick that's selected (-1: none) */
+let selected = -1;
+/** a brick on its way: out of the corner (`from` -1), or lifted off the build to move */
+let carry: { w: number; d: number; h: number; colour: number; from: number; original: Brick | null; anchor?: [number, number] } | null = null;
+/** where the carried brick would go */
+let ghostAt: C3 | null = null;
 
-interface Saved { bricks: Brick[]; seed: number; drawn: number; hand: Spec; next: Spec; queue: Spec[]; turned: boolean }
+interface Saved { bricks: Brick[]; seed: number; drawn: number; offer: Spec; queue: Spec[]; turned: boolean }
 function save() {
   if (auto) return;
   try {
-    const s: Saved = { bricks: world.list(), seed: bag.seed, drawn: bag.drawn, hand, next, queue, turned };
+    const s: Saved = { bricks: world.list(), seed: bag.seed, drawn: bag.drawn, offer, queue, turned };
     localStorage.setItem(STORE, JSON.stringify(s));
   } catch { /* (a private window: it still builds, it just won't remember) */ }
 }
 function load() {
   if (auto) return;
   try {
-    const s = JSON.parse(localStorage.getItem(STORE) ?? 'null') as Saved | null;
+    const s = JSON.parse(localStorage.getItem(STORE) ?? 'null') as (Saved & { hand?: Spec }) | null;
     if (!s || !s.seed) {
       document.getElementById('hint')?.classList.add('on');
       return;
     }
     for (const b of s.bricks ?? []) if (world.fits(b.w, b.d, b.h, b.at)) world.add(b);
     bag = new Bag(s.seed, s.drawn);
-    hand = s.hand;
-    next = s.next;
+    offer = s.offer ?? s.hand ?? bag.next();
     queue = s.queue ?? [];
     turned = !!s.turned;
   } catch { /* */ }
@@ -331,63 +342,148 @@ function changed() {
   gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, 0, N, H, N, gl.RED, gl.UNSIGNED_BYTE, d);
 }
 
-// ─── the brick in hand ──────────────────────────────────────────────────────────────────────────
-let lastHit: Hit | null = null;
-let ghostAt: C3 | null = null;
-function aimHit(hit: Hit | null) {
+// ─── what a hand does ───────────────────────────────────────────────────────────────────────────
+function select(id: number) {
+  if (id !== selected && id >= 0) tick(1.5);
+  selected = id;
+  document.body.classList.toggle('has-sel', id >= 0);
+}
+/** Take the offered brick out of its corner. */
+function pickUp() {
+  const [w, d, h] = offerDims();
+  carry = { w, d, h, colour: offer.colour, from: -1, original: null };
+  ghostAt = null;
+}
+/** Lift a placed brick off the build, by the stud under the finger, to move it. */
+function lift_(id: number, anchor: [number, number]) {
+  const b = world.bricks[id];
+  if (!b) return;
+  world.remove(id);
+  carry = { w: b.w, d: b.d, h: b.h, colour: b.colour, from: id, original: b, anchor };
+  ghostAt = [...b.at] as C3;
+  changed();
+}
+/** The carried brick follows the finger: the stud it's held by lands in the cell under it. */
+function carryTo(px: number, py: number) {
+  if (!carry) return;
+  const hit = hitAt(px, py);
   if (!hit) return;
-  const [w, d, h] = dims();
-  const at = placeFor(world, w, d, h, hit);
+  const at = placeFor(world, carry.w, carry.d, carry.h, hit, carry.anchor);
   if (!at) return;
-  lastHit = hit;
   if (!ghostAt || at.some((v, i) => v !== ghostAt![i])) {
     ghostAt = at;
     tick();
   }
 }
-function reaim() {
-  const [w, d, h] = dims();
-  if (lastHit) ghostAt = placeFor(world, w, d, h, lastHit);
-  // (dragged there: it stays over the same studs, resting on whatever is under it now)
-  else if (ghostAt) ghostAt = restAt(ghostAt[0], ghostAt[2]);
-  if (!ghostAt) aimHit(raycast(world, [N / 2, H * PLATE + 2, N / 2], [0, -1, 0]));
-}
-/** The brick in hand over these studs (its corner), resting on what's below. */
-function restAt(x: number, z: number): C3 | null {
-  const [w, d, h] = dims();
-  x = clamp(x, 0, N - w);
-  z = clamp(z, 0, N - d);
-  return restIn(world, w, d, h, x, z);
-}
-function press() {
-  if (!ghostAt) reaim();
-  const [w, d, h] = dims();
-  if (!ghostAt || !world.fits(w, d, h, ghostAt) || !world.connects(w, d, h, ghostAt)) return;
-  const id = world.add({ w, d, h, colour: hand.colour, at: ghostAt });
-  history.push({ add: id, spec: hand });
-  lift.set(id, 0.35);
-  clickSound(ghostAt[1], hand.colour);
-  // the next comes to hand
-  hand = next;
-  next = draw();
-  turned = false;
+/** Let go: a new brick presses on (and is selected); a moved one stays where it was put. */
+function letGo() {
+  if (!carry) return;
+  const c = carry;
+  const at = ghostAt;
+  carry = null;
+  ghostAt = null;
+  if (c.from < 0) {
+    if (!at) return;
+    const id = world.add({ w: c.w, d: c.d, h: c.h, colour: c.colour, at });
+    history.push({ add: id, spec: offer });
+    offer = draw();
+    turned = false;
+    lift.set(id, 0.35);
+    clickSound(at[1], c.colour);
+    select(id);
+  } else {
+    const from = c.original!;
+    if (at && at.some((v, i) => v !== from.at[i])) {
+      const to = { ...from, at };
+      world.restore(c.from, to);
+      history.push({ change: c.from, from, to });
+      lift.set(c.from, 0.25);
+      clickSound(at[1], c.colour);
+    } else world.restore(c.from, from);
+  }
   changed();
-  reaim();
+  showNext();
+  save();
+}
+/** Swap a placed brick for a changed one, if the change fits; remembered for undo. */
+function change(id: number, to: Brick): boolean {
+  const from = world.bricks[id];
+  if (!from) return false;
+  world.remove(id);
+  if (!world.fits(to.w, to.d, to.h, to.at) || !world.connects(to.w, to.d, to.h, to.at)) {
+    world.restore(id, from);
+    return false;
+  }
+  world.restore(id, to);
+  history.push({ change: id, from, to });
+  changed();
+  save();
+  return true;
+}
+function turn() {
+  if (selected < 0) {
+    // (the offered brick turns in its corner)
+    turned = !turned;
+    tick(1.5);
+    save();
+    return;
+  }
+  const b = world.bricks[selected]!;
+  const t = { ...b, w: b.d, d: b.w };
+  // where it turns about: its corner, or failing that the nearest place a turned one fits
+  world.remove(selected);
+  const at = world.fits(t.w, t.d, t.h, b.at) && world.connects(t.w, t.d, t.h, b.at)
+    ? b.at : placeFor(world, t.w, t.d, t.h, { cell: b.at, normal: [0, 1, 0], brick: -1 }, [0, 0]);
+  world.restore(selected, b);
+  if (at && change(selected, { ...t, at })) {
+    lift.set(selected, 0.15);
+    clickSound(at[1], b.colour);
+  }
+}
+function recolour() {
+  const b = world.bricks[selected];
+  if (!b) return;
+  const cs = bag.scheme.colours;
+  const colour = cs[(cs.indexOf(b.colour) + 1) % cs.length];
+  if (change(selected, { ...b, colour })) tone(note(colour), 0, 0.9, 0.05);
+}
+function removeSelected() {
+  const b = world.remove(selected);
+  if (!b) return;
+  history.push({ remove: selected, brick: b });
+  popSound(b.colour);
+  select(-1);
+  changed();
+  save();
+}
+/** Another brick, please: the offered one goes back in the bag. */
+function skip() {
+  offer = draw();
+  turned = false;
+  tick(1.5);
   showNext();
   save();
 }
 function undo() {
   const a = history.pop();
   if (!a) return;
-  world.remove(a.add);
-  // (it goes back into your hand; what was in hand is next again, and what was next waits)
-  queue.unshift(next);
-  next = hand;
-  hand = a.spec;
-  turned = false;
-  popSound(hand.colour);
+  if ('add' in a) {
+    // (pressed on from the corner: it's offered again)
+    world.remove(a.add);
+    queue.unshift(offer);
+    offer = a.spec;
+    turned = false;
+    if (selected === a.add) select(-1);
+    popSound(a.spec.colour);
+  } else if ('change' in a) {
+    world.remove(a.change);
+    world.restore(a.change, a.from);
+    popSound(a.from.colour);
+  } else {
+    world.restore(a.remove, a.brick);
+    popSound(a.brick.colour);
+  }
   changed();
-  reaim();
   showNext();
   save();
 }
@@ -435,50 +531,33 @@ function hitAt(px: number, py: number): Hit | null {
   const { o, d } = ray(px, py);
   return raycast(world, o, d);
 }
-function aimAt(px: number, py: number) {
-  aimHit(hitAt(px, py));
-}
-/** Where a point on the screen meets the brick in hand (a little generously: fingers are wide). */
-function onGhost(px: number, py: number): C3 | null {
-  if (!ghostAt) return null;
-  const [w, d, h] = dims();
-  const { o, d: dir } = ray(px, py);
-  const m = Math.max(0.2, camera().d * 0.012);
-  const lo = [ghostAt[0] - m, ghostAt[1] * PLATE - m, ghostAt[2] - m];
-  const hi = [ghostAt[0] + w + m, (ghostAt[1] + h) * PLATE + STUD_H + m, ghostAt[2] + d + m];
-  let t0 = 0;
-  let t1 = 1e9;
-  for (let a = 0; a < 3; a++) {
-    if (Math.abs(dir[a]) < 1e-9) {
-      if (o[a] < lo[a] || o[a] > hi[a]) return null;
-      continue;
-    }
-    let ta = (lo[a] - o[a]) / dir[a];
-    let tb = (hi[a] - o[a]) / dir[a];
-    if (ta > tb) [ta, tb] = [tb, ta];
-    t0 = Math.max(t0, ta);
-    t1 = Math.min(t1, tb);
-  }
-  return t0 <= t1 ? [o[0] + dir[0] * t0, o[1] + dir[1] * t0, o[2] + dir[2] * t0] : null;
+/** The placed brick under a point on the screen, and which of its studs. */
+function brickAt(px: number, py: number): { id: number; anchor: [number, number] } | null {
+  const hit = hitAt(px, py);
+  if (!hit || hit.brick < 0) return null;
+  const b = world.bricks[hit.brick];
+  if (!b) return null;
+  return { id: hit.brick, anchor: [clamp(hit.cell[0] - b.at[0], 0, b.w - 1), clamp(hit.cell[2] - b.at[2], 0, b.d - 1)] };
 }
 
 // ─── hands ──────────────────────────────────────────────────────────────────────────────────────
 /** A hand on the glass: what it came down on decides what it does. */
 type Ptr = {
-  x: number; y: number; x0: number; y0: number; t0: number; type: string; moved: boolean; button: number; shift: boolean;
-  /** holding the brick: where on it (from its corner), and the level it slides at */
-  grab: { dx: number; dz: number; y: number } | null;
+  x: number; y: number; x0: number; y0: number; t0: number; moved: boolean; button: number; shift: boolean;
+  /** the placed brick it came down on (-1: none), and the stud */
+  on: { id: number; anchor: [number, number] } | null;
 };
 const pointers = new Map<number, Ptr>();
 let two: { d: number; a: number; x: number; y: number } | null = null;
 canvas.addEventListener('pointerdown', (e) => {
   wake();
   canvas.setPointerCapture(e.pointerId);
-  // (on the brick in hand, it takes hold of it; anywhere else, it turns the view)
-  const g = e.button === 0 && !e.shiftKey ? onGhost(e.clientX, e.clientY) : null;
-  const grab = g && ghostAt ? { dx: g[0] - ghostAt[0], dz: g[2] - ghostAt[2], y: g[1] } : null;
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), type: e.pointerType, moved: false, button: e.button, shift: e.shiftKey, grab });
-  if (pointers.size >= 2) for (const q of pointers.values()) q.grab = null;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, button: e.button, shift: e.shiftKey, on: e.button === 0 && !e.shiftKey ? brickAt(e.clientX, e.clientY) : null });
+  // (a second finger: the view, not the brick — a move under way goes back where it was)
+  if (pointers.size >= 2 && carry && carry.from >= 0) {
+    ghostAt = null;
+    letGo();
+  }
   two = null;
   document.getElementById('hint')?.classList.remove('on');
 });
@@ -487,7 +566,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (!p) return;
   const dx = e.clientX - p.x;
   const dy = e.clientY - p.y;
-  if (Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > (p.grab ? 3 : 8)) p.moved = true;
+  if (Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > 6) p.moved = true;
   p.x = e.clientX;
   p.y = e.clientY;
   if (pointers.size >= 2) {
@@ -507,24 +586,12 @@ canvas.addEventListener('pointermove', (e) => {
     return;
   }
   if (!p.moved) return;
-  if (p.grab) drag(p.grab, e.clientX, e.clientY);
+  // on the selected brick: it moves, by the stud it was taken by; anywhere else: the view turns
+  if (p.on && p.on.id === selected && !carry) lift_(selected, p.on.anchor);
+  if (carry && carry.from >= 0) carryTo(e.clientX, e.clientY);
   else if (p.button === 2 || p.shift) slide(dx, dy);
   else orbit(dx, dy);
 });
-/** Slide the held brick with the hand: the stud it was taken by stays under the finger. */
-function drag(g: { dx: number; dz: number; y: number }, px: number, py: number) {
-  const { o, d } = ray(px, py);
-  if (Math.abs(d[1]) < 1e-4) return;
-  const t = (g.y - o[1]) / d[1];
-  if (t <= 0) return;
-  const at = restAt(Math.round(o[0] + d[0] * t - g.dx), Math.round(o[2] + d[2] * t - g.dz));
-  if (!at) return;
-  lastHit = null;
-  if (!ghostAt || at.some((v, i) => v !== ghostAt![i])) {
-    ghostAt = at;
-    tick();
-  }
-}
 function orbit(dx: number, dy: number) {
   yaw += dx * 0.008;
   pitch = clamp(pitch + dy * 0.006, 0.08, 1.45);
@@ -541,41 +608,75 @@ canvas.addEventListener('pointerup', (e) => {
   const p = pointers.get(e.pointerId);
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
-  if (p?.grab && p.moved) save();
+  if (carry && carry.from >= 0) return letGo();
   if (!p || p.moved || performance.now() - p.t0 > 600 || p.button === 2) return;
-  // a tap: on the brick in hand, press it on; elsewhere, send it there
-  if (p.grab) press();
-  else aimAt(e.clientX, e.clientY);
+  // a tap: on a brick, select it (or let it go); on nothing, let go of the selection
+  select(p.on && p.on.id !== selected ? p.on.id : -1);
 });
-canvas.addEventListener('pointercancel', (e) => { pointers.delete(e.pointerId); two = null; });
+canvas.addEventListener('pointercancel', (e) => {
+  pointers.delete(e.pointerId);
+  two = null;
+  if (carry && carry.from >= 0) { ghostAt = null; letGo(); }
+});
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   zoom = clamp(zoom * Math.exp(-e.deltaY * 0.0012), 0.6, 6);
 }, { passive: false });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// the offered brick, in its corner: tap for another, drag it out onto the build to use it
+const corner = document.getElementById('next')!;
+let cornerPtr: { id: number; x0: number; y0: number; moved: boolean } | null = null;
+corner.addEventListener('pointerdown', (e) => {
+  wake();
+  if (carry) return;
+  corner.setPointerCapture(e.pointerId);
+  cornerPtr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false };
+  document.getElementById('hint')?.classList.remove('on');
+});
+corner.addEventListener('pointermove', (e) => {
+  if (!cornerPtr || cornerPtr.id !== e.pointerId) return;
+  if (Math.hypot(e.clientX - cornerPtr.x0, e.clientY - cornerPtr.y0) > 6) cornerPtr.moved = true;
+  if (!cornerPtr.moved) return;
+  if (!carry) {
+    pickUp();
+    select(-1);
+  }
+  // (back over its corner: it would go nowhere)
+  const r = corner.getBoundingClientRect();
+  if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) ghostAt = null;
+  else carryTo(e.clientX, e.clientY);
+});
+const cornerUp = (e: PointerEvent) => {
+  if (!cornerPtr || cornerPtr.id !== e.pointerId) return;
+  const moved = cornerPtr.moved;
+  cornerPtr = null;
+  if (!moved && e.type === 'pointerup') skip();
+  else letGo();
+};
+corner.addEventListener('pointerup', cornerUp);
+corner.addEventListener('pointercancel', cornerUp);
+
 addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (k === 'r') turn();
-  else if (k === ' ' || k === 'enter') { e.preventDefault(); press(); }
   else if (k === 'z') undo();
+  else if (k === 'n') skip();
+  else if (k === 'c') recolour();
+  else if (k === 'delete' || k === 'backspace') removeSelected();
+  else if (k === 'escape') select(-1);
 });
 
-// ─── the hands ─────────────────────────────────────────────────────────────────────────────────
+// ─── the buttons ────────────────────────────────────────────────────────────────────────────────
 const $ = (id: string) => document.getElementById(id)!;
-function turn() {
-  turned = !turned;
-  reaim();
-  tick(1.5);
-  save();
-}
 function showNext() {
-  const el = document.getElementById('next');
-  if (el) el.textContent = `next · ${bag.scheme.name}`;
+  $('next').textContent = `next · ${bag.scheme.name}`;
 }
 const btn = (id: string, f: () => void) => $(id).addEventListener('click', (e) => { e.stopPropagation(); wake(); f(); });
 btn('turn', turn);
-btn('set', press);
 btn('undo', undo);
+btn('colour', recolour);
+btn('remove', removeSelected);
 let clearArmed = 0;
 btn('again', () => {
   // (twice, to be sure: a build is a lot to lose)
@@ -591,14 +692,13 @@ btn('again', () => {
   world = new World();
   history = [];
   lift.clear();
+  select(-1);
   // (a new bag, and with it new colours)
   bag = new Bag(Math.floor(Math.random() * 90000) + 1);
-  hand = bag.next();
-  next = bag.next();
+  offer = bag.next();
   queue = [];
   turned = false;
   changed();
-  reaim();
   showNext();
   save();
 });
@@ -758,12 +858,17 @@ function rebuild() {
 function ghost(): [number, number] {
   const bi: number[] = [];
   const si: number[] = [];
-  if (ghostAt) {
-    const [w, d, h] = dims();
-    const c = COLOURS[hand.colour].rgb;
+  if (carry && ghostAt) {
+    // the brick on its way: see-through, where it would go
+    const c = COLOURS[carry.colour].rgb;
     const y0 = ghostAt[1] * PLATE;
-    bi.push(ghostAt[0] + GAP, y0, ghostAt[2] + GAP, w - GAP * 2, h * PLATE, d - GAP * 2, ...c, 1, 1);
-    for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) si.push(ghostAt[0] + x, y0 + h * PLATE, ghostAt[2] + z, 1, 1, 1, ...c, 1, 1);
+    bi.push(ghostAt[0] + GAP, y0, ghostAt[2] + GAP, carry.w - GAP * 2, carry.h * PLATE, carry.d - GAP * 2, ...c, 1, 1);
+    for (let z = 0; z < carry.d; z++) for (let x = 0; x < carry.w; x++) si.push(ghostAt[0] + x, y0 + carry.h * PLATE, ghostAt[2] + z, 1, 1, 1, ...c, 1, 1);
+  } else if (selected >= 0 && world.bricks[selected]) {
+    // the selected brick: its edges drawn bright over it
+    const b = world.bricks[selected]!;
+    const m = 0.035;
+    bi.push(b.at[0] - m, b.at[1] * PLATE - m, b.at[2] - m, b.w + m * 2, b.h * PLATE + m * 2, b.d + m * 2, 1, 1, 1, 1, 2);
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, ghostBoxInst);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(bi), gl.DYNAMIC_DRAW);
@@ -772,7 +877,7 @@ function ghost(): [number, number] {
   return [bi.length / STRIDE, si.length / STRIDE];
 }
 
-/** The next brick, turning slowly in its corner under the word. */
+/** The offered brick, turning slowly in its corner above its word. */
 function drawNext(W: number, Hh: number) {
   // (in the box the page keeps for it, top right, above its word)
   const box = document.getElementById('next')?.getBoundingClientRect();
@@ -784,17 +889,19 @@ function drawNext(W: number, Hh: number) {
   gl.scissor(x0, y0, s, s);
   gl.viewport(x0, y0, s, s);
   gl.clear(gl.DEPTH_BUFFER_BIT);
-  const c = COLOURS[next.colour].rgb;
-  const h = next.h * PLATE;
-  const bi = [-next.w / 2 + GAP, -h / 2, -next.d / 2 + GAP, next.w - GAP * 2, h, next.d - GAP * 2, ...c, 1, 0];
+  // (as it will come out: turned, if you've turned it)
+  const [nw, nd, nh] = offerDims();
+  const c = COLOURS[offer.colour].rgb;
+  const h = nh * PLATE;
+  const bi = [-nw / 2 + GAP, -h / 2, -nd / 2 + GAP, nw - GAP * 2, h, nd - GAP * 2, ...c, 1, 0];
   const si: number[] = [];
-  for (let z = 0; z < next.d; z++) for (let x = 0; x < next.w; x++) si.push(-next.w / 2 + x, h / 2, -next.d / 2 + z, 1, 1, 1, ...c, 1, 0);
+  for (let z = 0; z < nd; z++) for (let x = 0; x < nw; x++) si.push(-nw / 2 + x, h / 2, -nd / 2 + z, 1, 1, 1, ...c, 1, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, ghostBoxInst);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(bi), gl.DYNAMIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, ghostStudInst);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(si), gl.DYNAMIC_DRAW);
   const a = time * 0.45;
-  const r = Math.max(next.w, next.d) * 1.25 + 2.2;
+  const r = Math.max(nw, nd) * 1.25 + 2.2;
   const eye: C3 = [Math.cos(a) * r, r * 0.62, Math.sin(a) * r];
   const fwd = normalize(sub([0, 0, 0], eye));
   const right = normalize(cross(fwd, [0, 1, 0]));
@@ -911,8 +1018,7 @@ function frame(now: number) {
   gl.depthMask(true);
   if (!auto) drawNext(W, Hh);
   gl.bindVertexArray(null);
-  (window as unknown as { __bricksOn: unknown }).__bricksOn = (x: number, y: number) => !!onGhost(x, y);
-  (window as unknown as { __bricks: unknown }).__bricks = { bricks: world.count(), height: world.height(), ghost: ghostAt, hand, next, scheme: bag.scheme.name };
+  (window as unknown as { __bricks: unknown }).__bricks = { bricks: world.count(), height: world.height(), ghost: ghostAt, offer, selected, sel: world.bricks[selected] ?? null, carrying: !!carry, scheme: bag.scheme.name, undo: history.length };
   requestAnimationFrame(frame);
 }
 
@@ -945,5 +1051,4 @@ load();
 changed();
 measureTray();
 showNext();
-reaim();
 requestAnimationFrame(frame);

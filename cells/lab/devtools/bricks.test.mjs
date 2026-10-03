@@ -66,3 +66,11 @@ console.log('ok');
   assert.ok(SCHEMES.length >= 4);
   console.log('bag ok');
 }
+
+// an anchor: the stud taken hold of lands under the finger
+{
+  const w2 = new World();
+  const at = placeFor(w2, 2, 4, 3, { cell: [10, 0, 10], normal: [0, 1, 0], brick: -1 }, [1, 3]);
+  assert.deepEqual(at, [9, 0, 7]);
+  console.log('anchor ok');
+}

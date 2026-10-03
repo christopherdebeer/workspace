@@ -179,15 +179,16 @@ export function raycast(world: World, o: C3, d: C3): Hit | null {
 
 /**
  * Where a w×d brick, h plates high, goes for a hit: on top of what it met, under it, or beside
- * it at the same level — the cell under the finger as near its middle as its studs allow — and,
+ * it at the same level — the cell under the finger at its `anchor` stud (by default, its middle) — and,
  * if that doesn't fit or connect, the nearest place that does.
  */
-export function placeFor(world: World, w: number, d: number, h: number, hit: Hit): C3 | null {
+export function placeFor(world: World, w: number, d: number, h: number, hit: Hit, anchor?: [number, number]): C3 | null {
   const n = hit.normal;
   const c = hit.cell;
-  // which of its studs is under the finger: the middle, or (beside a brick) its near edge
-  let ox = Math.floor((w - 1) / 2);
-  let oz = Math.floor((d - 1) / 2);
+  // which of its studs is under the finger: the one it was taken by, or its middle — or (beside
+  // a brick) its near edge
+  let ox = anchor ? Math.min(w - 1, Math.max(0, anchor[0])) : Math.floor((w - 1) / 2);
+  let oz = anchor ? Math.min(d - 1, Math.max(0, anchor[1])) : Math.floor((d - 1) / 2);
   if (n[0] > 0) ox = 0;
   if (n[0] < 0) ox = w - 1;
   if (n[2] > 0) oz = 0;

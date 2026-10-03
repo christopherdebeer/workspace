@@ -1,22 +1,26 @@
 # Bricks
 
-A baseplate, and bricks that come one at a time. You don't choose them; you place what comes,
-as in Tetris, with the next one turning in the corner. Nothing falls, nothing clears and there's
-no clock. You build.
+A baseplate, and bricks offered one at a time, as in Tetris: the next one turns in its corner.
+Tap it for another, or drag it out onto the build and let go to press it on. Nothing falls,
+nothing clears and there's no clock. You build, and you can change your mind.
 
 ## Hands
 
 | | Touch | Mouse and keys |
 |---|---|---|
-| move the brick | drag it: the stud you took it by stays under your finger, and it rests on whatever is beneath | the same, with the mouse |
-| press it on | tap it, or `set` | click it; space |
-| send it somewhere | tap there (on top, under or beside what's there) | click there |
-| turn it | `turn` | R |
-| step back | `undo`: the last brick comes back into your hand | Z |
-| look around | drag the plate or the sky; two fingers pinch, twist and slide | drag; right-drag (or shift) slides; the wheel |
+| another brick | tap the one in the corner | click it; N |
+| use it | drag it out of its corner; let go where it should go | the same |
+| select a placed brick | tap it (the one you just pressed on already is) | click it |
+| move it | drag the selected brick: the stud you take it by stays under your finger | the same |
+| turn it | `turn` (with nothing selected, it turns the one on offer) | R |
+| change its colour | `colour`: the next of the bag's colours | C |
+| take it away | `remove` | Delete |
+| let it go | tap nothing | Esc |
+| step back | `undo`: through all of it; a brick pressed on goes back to its corner | Z |
+| look around | drag anything else; two fingers pinch, twist and slide | drag; right-drag (or shift) slides; the wheel |
 
-After you press a brick on, the next one waits over the same studs, on top of it, ready to
-stack.
+Where a brick goes is the cell under your finger: on top of what's there, under an overhang, or
+beside a brick (level with it, if something holds it there).
 
 ## The bag
 
@@ -24,7 +28,7 @@ The bricks come from a seeded bag. The everyday sizes come most often (2×4, 1×
 long and the tiny ones less. About one in five is a plate. Each bag has a colour scheme of a few
 colours that sit together, so a build looks like one place: harbour, village, garden, stone or
 sunset. Each scheme has its own baseplate. `begin again` (it asks twice) starts a new bag.
-Your build, the bag, and the bricks in hand and next are kept in this browser.
+Your build, the bag and the brick on offer are kept in this browser.
 
 ## How bricks go together
 
@@ -44,7 +48,7 @@ two bricks meet is a real gap. Shadows are found by walking the grid toward the 
 cell; the build's cells sit in a small 3D texture. Each face's ambient occlusion comes from the
 same cells, and each stud's foot darkens where it meets its brick.
 
-Pressing a brick on makes a double click (filtered noise) and a soft tone from a pentatonic
+Pressing a brick on (or putting it down after a move) makes a double click (filtered noise) and a soft tone from a pentatonic
 scale, chosen by colour and height. Undoing makes a softer pop. Underneath
 is a low drone. `sound` turns it off.
 

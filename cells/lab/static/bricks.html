@@ -13,13 +13,18 @@
     nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; right: 14px; display: flex; gap: 14px; }
     nav button, nav a { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .66; padding: 4px 2px; color: inherit; text-decoration: none; }
     nav button:hover, nav a:hover { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
-    /* the next brick is drawn in the canvas, in this box, above its word */
-    #next { position: fixed; top: max(10px, env(safe-area-inset-top)); right: 12px; width: 86px; height: 104px; display: flex; align-items: flex-end; justify-content: center; font-size: 12px; letter-spacing: .12em; font-variant: small-caps; opacity: .6; pointer-events: none; white-space: nowrap; }
+    /* the offered brick is drawn in the canvas, in this box, above its word: tap it for another,
+       drag it out to use it */
+    #next { position: fixed; top: max(10px, env(safe-area-inset-top)); right: 12px; width: 86px; height: 104px; display: flex; align-items: flex-end; justify-content: center; font-size: 12px; letter-spacing: .12em; font-variant: small-caps; color: rgba(52, 56, 59, .62); white-space: nowrap; cursor: grab; touch-action: none; border-radius: 14px; }
+    #next:active { cursor: grabbing; background: rgba(255,255,255,.18); }
+    /* what a selected brick can do */
+    #hands .sel { display: none; }
+    .has-sel #hands .sel { display: inline-block; }
     #tray { position: fixed; left: 0; right: 0; bottom: 0; padding: 4px 0 max(14px, env(safe-area-inset-bottom)); }
     #hands { display: flex; justify-content: center; gap: 12px; padding: 8px 14px 0; }
     #hands button { min-width: 76px; height: 52px; border-radius: 26px; text-align: center; line-height: 52px; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 15px; letter-spacing: .1em; font-variant: small-caps; background: rgba(255,255,255,.7); box-shadow: 0 4px 14px rgba(40,40,40,.07); }
     #hands button:active { background: #fff; }
-    #hands #set { min-width: 100px; background: rgba(52, 56, 59, .86); color: #f4f4f2; }
+    #hands #remove { color: #9c2a1f; }
     #hint { position: fixed; left: 0; right: 0; top: calc(max(12px, env(safe-area-inset-top)) + 120px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity 2s; pointer-events: none; padding: 0 24px; }
     #hint.on { opacity: .62; }
     .preview nav, .preview #tray, .preview #hint, .preview #next { display: none; }
@@ -28,9 +33,9 @@
 <body>
   <canvas id="build"></canvas>
   <nav><button id="again">begin again</button><button id="sound">sound · on</button><a href="{{readme}}">notes</a></nav>
-  <div id="hint">place each brick as it comes · drag it to move it, tap it to press it on · drag the plate to look around</div>
+  <div id="hint">drag the next brick out of its corner · tap it for another · tap a brick to select it, then drag to move it</div>
   <div id="next">next</div>
-  <div id="tray"><div id="hands"><button id="undo">undo</button><button id="turn">turn</button><button id="set">set</button></div></div>
+  <div id="tray"><div id="hands"><button id="undo">undo</button><button id="turn">turn</button><button id="colour" class="sel">colour</button><button id="remove" class="sel">remove</button></div></div>
   <script type="module" src="{{app}}"></script>
 </body>
 </html>

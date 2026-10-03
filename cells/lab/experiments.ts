@@ -60,7 +60,7 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'bricks',
     title: 'Bricks',
     group: 'Play',
-    blurb: 'Lego, Tetris-fashion: bricks come one at a time, the next in its corner, and you press each on wherever it fits. Nothing falls, nothing clears; you build. Studs, shadows, the click.',
+    blurb: 'Lego, Tetris-fashion: bricks are offered one at a time — tap for another, drag it out to use it — and any placed brick can be picked up, moved, turned or recoloured. Nothing falls, nothing clears; you build.',
     page: 'static/bricks.html',
     preview: 'preview&seed=21',
     readme: 'static/bricks.md',
