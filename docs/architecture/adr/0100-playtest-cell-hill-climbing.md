@@ -343,3 +343,19 @@ as one declared round → tune by climbing.**
   round. First proposals, in order: expose only a hidden project with ≥ 2 tokens (engine
   option `expose_min_tokens`), accusations from round 4 at a cost of 3, accusations only with
   evidence.
+- **v0.5 baseline** (head v15, h10, score/v4, 24 + 24): train 0.734 / test 0.703, band 0.49.
+  The judge: "plays as designed" 23/24 (v0.4: 17/24), critique 0.70 (0.53), lead changes
+  2.2 a game, 58 % of seats interacting; weakest "comeback potential", top fix "add
+  catch-up". The band: agent exposed 92 % (83 % on evidence), agent wins 4 %, wrong
+  accusations 24 %, 3.8 rounds. Noise 0.049 — short games decided by one accusation swing.
+- **Rounds on v0.5.** 14, expose only at ≥ 2 tokens: +0.010, reverted (the agent pushes
+  Kompromat to 2 tokens in its first turn; one run had no Expose at all and still ended in a
+  round-3 accusation — a hidden project at 3 tokens is a public signal, and three honest
+  players each get a shot). 15, accusations from round 4 at a cost of 3: +0.044, reverted
+  under the 0.049 floor (paired SE 0.014; the floor comes from unpaired re-evals of swingy
+  games — the suite moves to 48 + 24 before the next rounds; cap raised to 96). **16,
+  accusations only with evidence: +0.079 train, +0.072 test, kept** — the first keep since
+  v0.4 and a design change, not a parameter: the agent wins 6/24 at the limit (was 1), 13/24
+  end in a correct accusation, band 0.69.
+- Next, with the larger suite: exposure as a card (Leak) instead of a standing action;
+  Kompromat at 2 tokens (no public signal); a wrong accusation hands the agent the game.
