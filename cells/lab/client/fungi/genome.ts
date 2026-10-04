@@ -18,6 +18,7 @@
  * patch (where each thing stands, when it starts, how it leans) and every droplet.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
+import type { Launch } from './launch';
 
 export type V3 = [number, number, number];
 export type Form = 'thrower' | 'pin' | 'inkcap' | 'cup' | 'eyelash' | 'flask' | 'mottlegill' | 'fieldcap';
@@ -301,6 +302,8 @@ export interface Stalk {
   tEnd: number;
   /** an inkcap's: it inks */
   ink: number;
+  /** a thrower's: its throw (from release to where the sporangium ends up) */
+  launch?: Launch;
   dew: Array<{ s: number; a: number; r: number; t: number }>;
   fly: V3;
 }

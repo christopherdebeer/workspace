@@ -1,8 +1,9 @@
 /**
  * A pasture: the terrariums out in a field, and the field's own time.
  *
- * Time doesn't start from zero. The world's hour is the real one: arrive in the evening and
- * it's evening in the field. The pats are of every age: one dropped last night, one a week in
+ * Time doesn't start from zero. The field is somewhere (a pasture in England) and keeps its
+ * time: you arrive at its now — evening there, if it's evening there — and from then it runs as
+ * a timelapse. The pats are of every age: one dropped last night, one a week in
  * with its cups firing, one at three weeks inking, old ones crusted and going back to grass.
  * Cows keep coming. The field is tiled, and each tile has a few spots where, on a cycle of its
  * own, a pat is dropped (always at nine in the evening: the terrarium's hour nought). So which
@@ -27,9 +28,21 @@ const EPOCH_H = Date.UTC(2026, 0, 1) / 3.6e6;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-/** The world's hour now: from the real clock, so that (T + 21) % 24 is the local hour. */
+/** where the field is: its clock is that place's (so it's the same field, at the same hour, for
+ *  anyone, wherever they are) */
+export const FIELD_ZONE = 'Europe/London';
+/** The world's hour now: the field's own wall-clock time, so that (T + 21) % 24 is the hour there.
+ *  (You arrive at the field's now; from there it runs as a timelapse.) */
 export function worldNow(now = new Date()): number {
-  const local = now.getTime() - now.getTimezoneOffset() * 60000;
+  let local: number;
+  try {
+    const f = new Intl.DateTimeFormat('en-GB', { timeZone: FIELD_ZONE, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hourCycle: 'h23' });
+    const q: Record<string, number> = {};
+    for (const p of f.formatToParts(now)) if (p.type !== 'literal') q[p.type] = Number(p.value);
+    local = Date.UTC(q.year, q.month - 1, q.day, q.hour, q.minute, q.second);
+  } catch {
+    local = now.getTime();
+  }
   return local / 3.6e6 - EPOCH_H - 21;
 }
 /** The world's date at hour T (read it with getUTC…: it's already local). */

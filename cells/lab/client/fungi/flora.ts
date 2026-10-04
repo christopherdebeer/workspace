@@ -18,7 +18,7 @@
 import { hash, seeded } from '../kit/rng';
 import type { V3 } from './genome';
 import { MAT, MAT_GRASS, tubeOf, type Limbs } from './critters';
-import { sightline, type Field } from './grass';
+import { sightline, viewOf, type Field } from './grass';
 
 export const MAT_MOSS = 7;
 export const MAT_LEAF = 8;
@@ -187,6 +187,7 @@ export function drawFlora(world: number, f: Field, old: OldPat[], look: V3, eye:
   const wet = ss(1.5, 5, hour) * (1 - ss(8.5, 10.5, hour));
   // (the tall ones — clover, plantain — never between the lens and what it's on)
   const blocks = sightline(eye, look);
+  const { inTheWay } = viewOf(eye, look);
   for (let ix = Math.floor((look[0] - R) / CELL); ix <= Math.floor((look[0] + R) / CELL); ix++) {
     for (let iz = Math.floor((look[2] - R) / CELL); iz <= Math.floor((look[2] + R) / CELL); iz++) {
       const c = cached(world, ix, iz, f, old, epoch);
@@ -209,13 +210,13 @@ export function drawFlora(world: number, f: Field, old: OldPat[], look: V3, eye:
         const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
         if (de > 200) continue;
         if (blocks(p.x, p.z, 18) || blocks(p.x + Math.cos(p.a) * 15, p.z + Math.sin(p.a) * 15, 18) || blocks(p.x + Math.cos(p.a) * 30, p.z + Math.sin(p.a) * 30, 18)) continue;
-        clover(p, f, time, out, de);
+        clover(p, f, time, out, de, inTheWay);
       }
       for (const p of c.rosettes) {
         const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
         if (de > 260) continue;
         if (blocks(p.x, p.z, 10)) continue;
-        rosette(p, f, time, out, de, blocks);
+        rosette(p, f, time, out, de, blocks, inTheWay);
       }
       for (const p of c.casts) {
         const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
@@ -322,7 +323,7 @@ function feather(p: Feather, f: Field, out: Limbs) {
   }
 }
 /** white clover: a stolon, and leaves on long stalks — three broad leaflets with a pale chevron */
-function clover(p: Clover, f: Field, time: number, out: Limbs, de: number) {
+function clover(p: Clover, f: Field, time: number, out: Limbs, de: number, inTheWay: (pts: V3[], w: number) => boolean) {
   const n = 6;
   const st: V3[] = [];
   for (let k = 0; k < n; k++) {
@@ -353,13 +354,14 @@ function clover(p: Clover, f: Field, time: number, out: Limbs, de: number) {
         // (obovate: narrow at its base, broad, a little notched at its end)
         rad.push(L * 0.42 * Math.pow(Math.sin(Math.PI * Math.min(0.97, 0.06 + t * 0.62)), 0.9) * (t > 0.92 ? 0.85 : 1) + 0.15);
       }
+      if (inTheWay(pts, L * 0.8)) continue;
       tubeOf(de < 60 ? out.mid : out.lo, pts, rad, [0.13, 0.32, 0.12], MAT_LEAF, { flat: 0.04, seed: p.seed + j, across, bands: 1 });
     }
   }
 }
 /** ribwort plantain: a rosette of long ribbed leaves, rising; some with a spike on a tall stalk — a
  *  dark head, ringed with pale stamens where it's flowering */
-function rosette(p: Rosette, f: Field, time: number, out: Limbs, de: number, blocks: (x: number, z: number, w: number) => boolean) {
+function rosette(p: Rosette, f: Field, time: number, out: Limbs, de: number, blocks: (x: number, z: number, w: number) => boolean, inTheWay: (pts: V3[], w: number) => boolean) {
   const y0 = f.groundY(p.x, p.z);
   let q = Math.floor(p.seed * 4241) >>> 0;
   const rnd = () => ((q = (Math.imul(q, 1664525) + 1013904223) >>> 0) / 4294967296);
@@ -380,6 +382,7 @@ function rosette(p: Rosette, f: Field, time: number, out: Limbs, de: number, blo
       pts.push([p.x + dir[0] * L * t * Math.cos(th), y0 + L * t * Math.sin(th) * (1 - t * 0.35) + 0.5, p.z + dir[2] * L * t * Math.cos(th)]);
       rad.push((W / 2) * Math.pow(Math.sin(Math.PI * Math.min(0.97, 0.1 + t * 0.85)), 0.6));
     }
+    if (inTheWay(pts, W)) continue;
     tubeOf(de < 80 ? out.bladeHi : out.bladeLo, pts, rad, [0.16, 0.3, 0.1], MAT_GRASS, { flat: 0.08, seed: p.seed + k, across, eyes: 0.15 });
   }
   for (let k = 0; k < p.spikes; k++) {

@@ -122,6 +122,35 @@ export function sightline(eye: V3, look: V3) {
     return d < 5 + w + Math.max(0, t) * ll * 0.2;
   };
 }
+/** The view from `eye` to `look`: where a point is in it (across and up as tangents, and how far
+ * in front), and whether a plant drawn along `pts` comes between the lens and what it's on (seen
+ * in 3D: a tall one beside the line of sight can arch over into it). */
+export function viewOf(eye: V3, look: V3) {
+  const fw = [look[0] - eye[0], look[1] - eye[1], look[2] - eye[2]];
+  const fl = Math.hypot(fw[0], fw[1], fw[2]) || 1;
+  const fd = [fw[0] / fl, fw[1] / fl, fw[2] / fl];
+  const rh = Math.hypot(fd[0], fd[2]) || 1;
+  const rt = [-fd[2] / rh, 0, fd[0] / rh];
+  const up = [rt[1] * fd[2] - rt[2] * fd[1], rt[2] * fd[0] - rt[0] * fd[2], rt[0] * fd[1] - rt[1] * fd[0]];
+  // where a point is in the view: across and up (as tangents), and how far in front of the lens
+  const inView = (q: V3) => {
+    const d = [q[0] - eye[0], q[1] - eye[1], q[2] - eye[2]];
+    const zz = d[0] * fd[0] + d[1] * fd[1] + d[2] * fd[2];
+    return { zz, x: (d[0] * rt[0] + d[2] * rt[2]) / Math.max(zz, 1e-3), y: (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / Math.max(zz, 1e-3) };
+  };
+  /** whether a blade, drawn along `pts`, comes between the lens and what it's on (seen in 3D: a
+   * tall one beside the line of sight can arch over into it) */
+  const inTheWay = (pts: V3[], w: number) => {
+    for (const q of pts) {
+      const v = inView(q);
+      if (v.zz < 0.3 || v.zz > fl * 0.88) continue;
+      const m = w / 2 / v.zz;
+      if (Math.abs(v.x) < 0.22 + m && Math.abs(v.y) < 0.3 + m) return true;
+    }
+    return false;
+  };
+  return { inTheWay, inView };
+}
 /** A tall blade about `r` from (x, z) — a point a third of the way up it (for the lens). */
 export function bladeNear(world: number, f: Field, x: number, z: number, r: number, epoch: number): V3 | null {
   for (let k = 0; k < 24; k++) {
@@ -142,6 +171,13 @@ export function drawGrass(world: number, f: Field, look: V3, eye: V3, time: numb
   const ss = (a: number, b: number, x: number) => Math.max(0, Math.min(1, (x - a) / (b - a)));
   const wet = ss(1.5, 5, hour) * (1 - ss(8.5, 10.5, hour));
   const blocks = sightline(eye, look);
+  const { inTheWay, inView } = viewOf(eye, look);
+  /** whether it stays in the bottom of the frame (below a quarter of the way up), all of it in
+   * front of the lens */
+  const along = (pts: V3[]) => pts.every((q) => {
+    const v = inView(q);
+    return v.zz > 4 && v.y < -0.16;
+  });
   for (let ix = Math.floor((look[0] - R) / CELL); ix <= Math.floor((look[0] + R) / CELL); ix++) {
     for (let iz = Math.floor((look[2] - R) / CELL); iz <= Math.floor((look[2] + R) / CELL); iz++) {
       const cx = (ix + 0.5) * CELL - look[0];
@@ -152,12 +188,15 @@ export function drawGrass(world: number, f: Field, look: V3, eye: V3, time: numb
       for (const b of c.blades) {
         // (thinner further out)
         if (dl > 80 && (b.seed % 1) * 2 > (R - dl) / (R - 80) + 0.4) continue;
-        if (blocks(b.x, b.z, b.w)) continue;
-        // (and nor does a tall one arching into it)
-        const reach = b.h * Math.sin(Math.min(1.5, b.lean + b.droop * 0.5));
-        let blocked = false;
-        for (const k of [0.25, 0.5, 0.75, 1]) if (blocks(b.x + Math.cos(b.az) * reach * k, b.z + Math.sin(b.az) * reach * k, b.w)) blocked = true;
-        if (blocked) continue;
+        // (one whose root is in the way, or a tall one arching into it, isn't drawn)
+        const fore = (b.seed * 7.13) % 1 < 0.3 && Math.hypot(b.x - eye[0], b.z - eye[2]) < 45;
+        if (!fore) {
+          if (blocks(b.x, b.z, b.w)) continue;
+          const reach = b.h * Math.sin(Math.min(1.5, b.lean + b.droop * 0.5));
+          let blocked = false;
+          for (const k of [0.25, 0.5, 0.75, 1]) if (blocks(b.x + Math.cos(b.az) * reach * k, b.z + Math.sin(b.az) * reach * k, b.w)) blocked = true;
+          if (blocked) continue;
+        }
         const de = Math.hypot(b.x - eye[0], b.z - eye[2], eye[1]);
         const near = de < 70;
         const N = near ? 10 : 6;
@@ -179,6 +218,9 @@ export function drawGrass(world: number, f: Field, look: V3, eye: V3, time: numb
           const taper = b.torn ? 1 - 0.15 * s : s < 0.55 ? 1 : 1 - Math.pow((s - 0.55) / 0.45, 1.3) * 0.95;
           rad.push((b.w / 2) * taper * (k === 0 ? 0.8 : 1));
         }
+        // (and nothing comes across the view, but a few just by the lens: soft, out of focus along
+        // the bottom of the frame, the camera in among them)
+        if (fore ? !along(pts) && (blocks(b.x, b.z, b.w) || inTheWay(pts, b.w)) : inTheWay(pts, b.w)) continue;
         blade(near ? out.bladeHi : out.bladeLo, pts, rad, b.col, b.seed, across, b.torn, b.brown);
         // dew: beads along it, on its upper side, the more for a lower, wetter blade
         if (wet > 0.05 && near) {

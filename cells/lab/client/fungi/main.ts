@@ -20,6 +20,7 @@ import { drawFlora, floraNear, type FloraKind } from './flora';
 import { drawVisitors, visitorNear, type PatInfo } from './visitors';
 import { PAT_GONE, PAT_LIFE, dateOf, dropsNear, patHeight, place, worldNow, type Drop, type Placed } from './pasture';
 import { MAXP, ROWW, critters, drawCritters, limbs, whereIs, zoo, type Critters, type Limbs } from './critters';
+import { capAlong } from './launch';
 import { DAYS, GRID, SPAN, STEP, patEdge, type Moment, type Terrarium } from './terrarium';
 
 const params = new URLSearchParams(location.search);
@@ -284,8 +285,9 @@ void main() {
   c = mix(c, vec3(.82, .82, .78), clamp(myc * (.2 + .45 * threads), 0., .75));
   float diff = .3 + .7 * max(dot(n, uLight), 0.);
   vec3 col = c * diff * uLightCol;
-  // (fresh dung's wet is a smooth gloss; the sparkle's for the dew-wet ground)
-  col += wetness(n, v, vec3(p.x, 0., p.y), wet * (1. - dung * .5), mix(9., 2., dung));
+  // (fresh dung's wet is a smooth gloss; the sparkle's for the dew-wet ground. Held down: the
+  // substrate stays dull, the brilliance kept for drops, jelly, slime and the vesicle)
+  col += wetness(n, v, vec3(p.x, 0., p.y), wet * (1. - dung * .5), mix(9., 2., dung)) * .6;
   float ao = 1.;
   for (int i = 0; i < ${SHADE}; i++) {
     vec4 f = uShade[i];
@@ -994,7 +996,7 @@ void main() {
   float tot = 1.;
   float rad = 1.;
   float ang = h(gl_FragCoord.xy) * 6.28;
-  for (int i = 0; i < 180; i++) {
+  for (int i = 0; i < 120; i++) {
     if (rad >= uMax) break;
     vec2 tc = uv + vec2(cos(ang), sin(ang)) * px * rad;
     vec3 sc = texture(uCol, tc).rgb;
@@ -1484,7 +1486,7 @@ function combine() {
     for (const m of p.terr.moments) moments.push({ ...m, who: m.who >= 0 ? m.who + off : -1 });
     offs.push({ mites: all.mites.length, springs: all.springs.length, nm: p.crit.mites.length });
     for (const m of p.crit.moments) {
-      const c = { ...m };
+      const c = { ...m, who: m.who >= 0 ? m.who + off : -1 };
       moments.push(c);
       if (m.follow !== undefined) follows.push({ m: c, pat: i, q: m.follow });
     }
@@ -1504,7 +1506,7 @@ function combine() {
     f.m.follow = f.q < o.nm ? o.mites + f.q : all.mites.length + o.springs + (f.q - o.nm);
   }
   crit = all;
-  terr = { species: [], ground: [], moments, dung: new Float32Array(0), marks, lumps: [] };
+  terr = { species: [], ground: [], moments, dung: new Float32Array(0), marks, lumps: [], grazers: [] };
   if (!world.length) world = [{ g: species(seed, 'thrower'), stalks: [], cups: [], S: 1 }];
   g = world[0].g;
   if (pasture) for (const sp of world) sp.g.light = sun;
@@ -1576,7 +1578,9 @@ function grow(s: number) {
 }
 /** a species, in a few words */
 function kindOf(x: Genome) {
-  return {
+  // (the names are invented, one to a seed: procedural specimens, after a real genus)
+  const after = { thrower: 'Pilobolus', pin: 'Mucor', inkcap: 'Coprinopsis', cup: 'Ascobolus', eyelash: 'Cheilymenia', flask: 'Sordaria', mottlegill: 'Panaeolus', fieldcap: 'Bolbitius' }[x.form];
+  return `after <i>${after}</i> · ` + {
     thrower: `throws its sporangia · ${x.vesicle > 0.8 ? 'a great vesicle' : 'a vesicle'} · ${x.height[1].toFixed(0)} mm`,
     pin: `a pin mould · yellow-headed · ${x.height[1].toFixed(0)} mm`,
     inkcap: `an inkcap · ${x.pleats} pleats · ${x.height[1].toFixed(0)} mm`,
@@ -1585,7 +1589,7 @@ function kindOf(x: Genome) {
     flask: `flask fungi · shoot their spores · ${x.height[1].toFixed(1)} mm`,
     mottlegill: `a mottlegill · black-spored · its cap ${(x.bell * 2).toFixed(0)} mm`,
     fieldcap: `a yellow fieldcap · slimy, a day's · its cap ${(x.bell * 2).toFixed(0)} mm`,
-  }[x.form];
+  }[x.form]!;
 }
 let labelled = '';
 /** an age in days, in words */
@@ -1700,7 +1704,14 @@ function camera(t: number) {
 
 // ─── the director: in a terrarium, the camera goes to what's about to happen ────────────────────
 /** the shot: what it's on (whose), where to look and from how far, until when */
-let shot: { look: V3; dist: number; until: number; who: number; kind: string; follow?: number; track?: (time: number) => V3 } | null = null;
+let shot: { look: V3; dist: number; until: number; who: number; kind: string; follow?: number; track?: (time: number) => V3; subject?: () => V3 | null; Te?: number; st?: Stalk } | null = null;
+/** the pace: quiet stretches go faster (1 … 4); and a watched discharge, slowed right down */
+let pace = 1;
+let slowmo: { Te: number; hold: number; phase: 'in' | 'hold' | 'out'; at: number } | null = null;
+/** how fast the film's hours are going now (h/s) */
+let effRate = 1;
+/** how much real time a move of the camera needs, arriving and settling (s) */
+const ARRIVE = 3.5;
 /** a hand on the view: the director waits */
 let handsOn = -1e9;
 let lastKind = '';
@@ -1709,35 +1720,45 @@ const only = params.get('moment') ?? '';
 function direct(dt: number) {
   if (!terr && crit) {
     // (the zoo: the lens on the animal, focused on it)
-    const p = whereIs(crit, 0, T, time, groundY);
+    const p = whereIs(crit, 0, T, atime, groundY);
     if (p) {
       view.look = p;
       view.aperture = 0.6;
-      focusAt = { at: () => whereIs(crit!, 0, T, time, groundY) ?? p, until: time + 5 };
+      focusAt = { at: () => whereIs(crit!, 0, T, atime, groundY) ?? p, until: time + 5 };
     }
     return;
   }
   if (!terr) return;
+  // (on a fungus: the lens on it as it is now — its tip, its cap, its cushion)
+  if (shot?.subject && time >= handsOn + 20) {
+    const p = shot.subject();
+    if (p) view.look = p;
+  }
   // (on a visitor: the lens goes with it)
-  if (shot?.track && time >= handsOn + 20) view.look = shot.track(time);
+  if (shot?.track && time >= handsOn + 20) view.look = shot.track(atime);
   // (on an animal: the lens goes with it)
   if (shot?.follow !== undefined && crit && time >= handsOn + 20) {
-    const p = whereIs(crit, shot.follow, T, time, groundY);
+    const p = whereIs(crit, shot.follow, T, atime, groundY);
     if (p) view.look = p;
   }
   if (time < handsOn + 20) return;
+  // (a breather gives way as soon as there's something it can get to in time)
+  if (shot && ['wide', 'field', 'dew', 'moss', 'dungmoss', 'clover', 'web', 'plantain', 'flies', 'beetle'].includes(shot.kind) && terr.moments.some((m) => m.T - T >= ARRIVE * rate() * pace && m.T - T <= ARRIVE * rate() * pace + 4 && (!only || m.kind === only))) shot.until = T - 1;
   if (!shot || T > shot.until) {
     // the next moment worth seeing: soon, and not the same sort of thing as the last
     let best: Moment | null = null;
     let score = -1e9;
     for (const m of terr.moments) {
+      // (only what it can get to — travel and settle — before it happens, at the pace it's going)
       const lead = m.T - T;
-      if (lead < 0.4 || lead > 3.5) continue;
+      // (`?moment=`, for looking: anything at all not yet past)
+      const need = only ? 0.3 : ARRIVE * rate() * pace;
+      if (lead < need || lead > need + 4) continue;
       if (only && m.kind !== only) continue;
       // (an emergence is better caught under way than waited for)
       // (in the field: nearer is better — a long way to go for a moment loses it)
       const far = pasture ? Math.hypot(m.at[0] - cur.look[0], m.at[2] - cur.look[2]) / 90 : 0;
-      const sc = -lead * 0.5 - far + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' || m.kind === 'fire' ? 0.4 : 0) + (m.kind === 'emerge' && lead > 1.5 ? -0.6 : 0) + Math.random() * 0.5;
+      const sc = -(lead - need) * 0.5 - far + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' ? 0.9 : m.kind === 'fire' ? 0.4 : 0) + Math.random() * 0.5;
       if (sc > score) {
         score = sc;
         best = m;
@@ -1748,7 +1769,9 @@ function direct(dt: number) {
     const force = params.get('shot');
     if (force) best = null;
     if (best && (params.has('moment') || Math.random() < 0.85)) {
-      shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + (best.kind === 'ink' || best.kind === 'stuck' || best.kind === 'graze' || best.kind === 'trap' ? 3 : 1.2), who: best.who, kind: best.kind, follow: best.follow };
+      // (and it stays for what comes of it: the emptied stalk, the stuck sporangium, the ink)
+      const after = { throw: 0.8, fire: 0.6, emerge: 1.5, open: 1.5, ink: 3, stuck: 2, graze: 3, trap: 3, ride: 1.5, squirt: 0.8 }[best.kind as string] ?? 1.2;
+      shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + after, who: best.who, kind: best.kind, follow: best.follow, subject: subjectOf(best), Te: best.T, st: best.st };
       // (an animal: from above, over what's in the way; else low, in among them)
       view.pitch = best.kind === 'graze' || best.kind === 'trap' ? 0.6 + Math.random() * 0.25 : 0.22 + Math.random() * 0.2;
       view.aperture = best.kind === 'graze' ? 0.7 : 1;
@@ -1793,12 +1816,62 @@ function direct(dt: number) {
 }
 /** the pats, for their visitors */
 const patInfos = (): PatInfo[] => pats.map((p) => ({ x: p.x, z: p.z, drop: p.drop, seed: p.seed, lumps: p.terr.lumps }));
+/** Slow motion, round a watched discharge: the hours ease down (geometrically, over a couple of
+ *  seconds) to arrive as it bursts, hold while it flies, then ease back. */
+const SLOW = 3e-7;
+const RAMP = 2.5;
+function slowFactor(): number {
+  const base = rate() * pace;
+  // (paused: it stays where it is, slow motion and all)
+  if (!playing) return slowmo ? (slowmo.phase === 'hold' ? SLOW / base : 1) : 1;
+  if (!shot || shot.kind !== 'throw' || shot.Te === undefined || time < handsOn + 20) {
+    slowmo = null;
+    return 1;
+  }
+  // (in: the rate the time left over a quarter-second, never under the slowest — so it glides
+  // in, and always arrives; it starts where that rate is the ordinary one)
+  const C = 0.25;
+  if (!slowmo && shot.Te - T <= base * C && shot.Te - T > -0.01) slowmo = { Te: shot.Te, hold: Math.min(shot.st?.launch?.end.t ?? 0.004, 0.004) / 3600, phase: 'in', at: time };
+  if (!slowmo) return 1;
+  const k = Math.min(1, (time - slowmo.at) / RAMP);
+  if (slowmo.phase === 'in') return Math.min(1, (Math.max(0, slowmo.Te - T) / C + SLOW) / base);
+  if (slowmo.phase === 'hold') {
+    if (T >= slowmo.Te + slowmo.hold) slowmo = { ...slowmo, phase: 'out', at: time };
+    return SLOW / base;
+  }
+  if (k >= 1) return 1;
+  return Math.pow(SLOW / base, 1 - k);
+}
+/** Just before the first fruit comes up: where a terrarium's film starts. */
+function firstFruit() {
+  const em = terr?.moments.filter((m) => m.kind === 'emerge' || m.kind === 'open').map((m) => m.T) ?? [];
+  return em.length ? Math.max(0, Math.min(...em) - 3) : 0;
+}
+/** The live position of what a moment's about. */
+function subjectOf(m: Moment): (() => V3 | null) | undefined {
+  if (m.cup) {
+    const c = m.cup;
+    return () => onCushion(c, cushionGrown(c, T), 0, 0.1).p;
+  }
+  if (m.st) {
+    const st = m.st;
+    return () => {
+      if (T < st.t0 || T > st.tEnd) return null;
+      const s = state(st, T);
+      if (s.grown < 0.02) return [st.base[0], st.base[1] + 0.5, st.base[2]];
+      // (a capped one: a little down from its top, into the cap)
+      const top = along(st, s, st.bell ? 0.97 : 1);
+      return top.p;
+    };
+  }
+  return undefined;
+}
 /** A shot of a visitor near here — flies (on a fresh pat, by day), a beetle: set it, or say no. */
 function visitorShot(want: 'flies' | 'beetle' | null): boolean {
   const kind = want ?? (Math.random() < 0.55 ? 'flies' : 'beetle');
   const track = visitorNear(patInfos(), kind, T, cur.look, groundY);
   if (!track) return false;
-  shot = { look: track(time), dist: kind === 'flies' ? 28 : 20, until: T + 2.5, who: -1, kind, track };
+  shot = { look: track(atime), dist: kind === 'flies' ? 28 : 20, until: T + 2.5, who: -1, kind, track };
   view.pitch = 0.35 + Math.random() * 0.3;
   view.aperture = 0.7;
   lastKind = kind;
@@ -1927,6 +2000,32 @@ function tubeAt(base: V3, dir: [number, number], lean: number, L: number, u: num
   return [base[0] + dir[0] * lean * 0.5 * u * u * L, base[1] + u * L, base[2] + dir[1] * lean * 0.5 * u * u * L];
 }
 const INK: V3 = [0.025, 0.022, 0.028];
+/** Where a thrower's sporangium is now, thrown (flying, or where it stuck), and how big — for its
+ *  passenger. Null once it's out of the scene. */
+function capAt(st: Stalk): { p: V3; r: number } | null {
+  const l = st.launch;
+  if (!l) return null;
+  const tau = (T - st.tl) * 3600;
+  if (tau < 0) return null;
+  const at = capAlong(l, tau);
+  if (!at.done) return { p: [st.base[0] + at.p[0], st.base[1] + at.p[1], st.base[2] + at.p[2]], r: l.r };
+  if (l.end.kind === 'away') return null;
+  const m = terr?.marks.find((k) => k.kind === 'cap' && Math.abs(k.t0 - (st.tl + l.end.t / 3600)) < 1e-9 && (l.end.host ? k.on?.st === l.end.host : !k.on));
+  if (!m || T > m.t1) return null;
+  return { p: markPos(m) ?? m.p, r: m.r };
+}
+/** Where a mark is drawn now (one stuck to something standing rides it). */
+function markPos(m: Terrarium['marks'][number]): V3 | null {
+  if (!m.on) return m.p;
+  const h = m.on.st;
+  const hs = state(h, T);
+  if (hs.grown <= 0.01) return null;
+  const at = along(h, hs, m.on.s);
+  const ring = ringAt(at.t, h.dir, m.on.a);
+  const off = h.bell ? h.bell * (0.55 + 0.3 * hs.open) : at.r;
+  const down = h.bell ? h.bell * h.bellTall * 0.35 : 0;
+  return [at.p[0] + ring[0] * (off + m.r * 0.6) - at.t[0] * down, at.p[1] + ring[1] * (off + m.r * 0.6) - at.t[1] * down, at.p[2] + ring[2] * (off + m.r * 0.6) - at.t[2] * down];
+}
 /** What the terrarium leaves about: thrown caps where they landed (on the ground, or stuck to
  *  something standing), the cups' spores in dark smudges. */
 function marks(solid: number[]) {
@@ -2147,7 +2246,9 @@ function things() {
       solid.push(st.base[0], st.base[1] - st.r * 0.1, st.base[2], tr, tr * 0.55, tr * 0.85, ...mixV(g.tip, [0.62, 0.4, 0.14], 0.6), 1);
     }
     const Lnow = st.len * s.grown;
-    const v = st.ves * s.swell * (1 - s.slump * 0.85);
+    // (the vesicle bursts: in a few milliseconds most of it's gone, then the stalk slumps)
+    const burst = s.thrown >= 0 ? Math.min(1, (s.thrown * 3600) / 0.004) : 0;
+    const v = st.ves * s.swell * (1 - s.slump * 0.85) * (1 - 0.65 * burst);
     const knob = st.knob ? st.r * 2.1 * Math.min(1, s.grown * 1.5) : 0;
     tube.push(...st.base, st.dir[0], st.dir[1], st.lean + s.slump * 1.6, s.slump * 0.9, Lnow, st.r, v, st.long, knob, st.wave, st.phase, s.slump, velvet ? 0 : g.tipLength, s.ripe, g.glassy, g.fuzz);
     const top = along(st, s, 1);
@@ -2175,23 +2276,39 @@ function things() {
       const cr = st.cap * (0.35 + 0.65 * s.ripe);
       let c: V3 = [top.p[0] + top.t[0] * cr * g.capFlat * 0.7, top.p[1] + top.t[1] * cr * g.capFlat * 0.7, top.p[2] + top.t[2] * cr * g.capFlat * 0.7];
       let show = true;
-      if (s.thrown >= 0) {
-        const f = s.thrown / 0.08;
-        if (f > 1) show = false;
-        else c = [c[0] + st.fly[0] * f * f * 60, c[1] + st.fly[1] * f * f * 60, c[2] + st.fly[2] * f * f * 60];
-      }
-      if (show) solid.push(...c, cr, cr * g.capFlat, cr, ...mixV(g.tip, g.capColour, s.ripe), 0);
-      if (show && s.thrown >= 0) {
-        // (a streak: where it was a moment ago, fainter and smaller, as a shutter would smear it)
-        const f = s.thrown / 0.08;
-        for (let j = 1; j <= 5; j++) {
-          const fj = Math.max(0, f - j * 0.05);
-          const k = 1 - j * 0.15;
-          const cj: V3 = [top.p[0] + st.fly[0] * fj * fj * 60, top.p[1] + st.fly[1] * fj * fj * 60, top.p[2] + st.fly[2] * fj * fj * 60];
-          solid.push(...cj, cr * k, cr * g.capFlat * k, cr * k, ...g.capColour, 0);
+      if (s.thrown >= 0 && st.launch) {
+        // thrown: where its throw has it now (one record: the same path the residue and the
+        // passenger read), smeared over as much of its flight as this frame's exposure saw
+        const l = st.launch;
+        const tau = s.thrown * 3600;
+        const at = capAlong(l, tau);
+        const base = st.base;
+        const abs = (q: V3): V3 => [base[0] + q[0], base[1] + q[1], base[2] + q[2]];
+        if (at.done) show = false;
+        else {
+          c = abs(at.p);
+          const shutter = Math.min(l.end.t, Math.max(0, frameDt * effRate * 3600));
+          for (let j = 1; j <= 6 && shutter > 1e-5; j++) {
+            const q = capAlong(l, Math.max(0, tau - (shutter * j) / 6));
+            const k = 1 - j * 0.12;
+            solid.push(...abs(q.p), cr * k, cr * g.capFlat * k, cr * k, ...g.capColour, 0);
+          }
+          // the jet: the vesicle's sap, out after it, breaking into drops that lag and fall
+          if (tau < 0.03) {
+            const tip = top.p;
+            for (let k = 0; k < 10; k++) {
+              const lag = 0.25 + 0.07 * k;
+              const q = capAlong(l, tau * lag);
+              const fall = 4905 * tau * tau * 0.3;
+              const rr = st.r * (0.55 - 0.04 * k) * (1 - Math.min(1, tau / 0.03));
+              const pk = abs(q.p);
+              const f = Math.min(1, tau / 0.0015);
+              dew.push(tip[0] + (pk[0] - tip[0]) * f, tip[1] + (pk[1] - tip[1]) * f - fall, tip[2] + (pk[2] - tip[2]) * f, rr, rr * 1.15, rr, 1, 1, 1, 1);
+            }
+          }
         }
-        jolt(top.p, st, 1);
-      }
+      } else if (s.thrown >= 0) show = false;
+      if (show) solid.push(...c, cr, cr * g.capFlat, cr, ...mixV(g.tip, g.capColour, s.ripe), 0);
     }
     for (const d of st.dew) {
       if (T < d.t || d.s > s.grown + 0.02) continue;
@@ -2201,15 +2318,6 @@ function things() {
       const a = ringAt(at.t, st.dir, d.a);
       const off = at.r + rr * 0.55;
       dew.push(at.p[0] + a[0] * off, at.p[1] + a[1] * off, at.p[2] + a[2] * off, rr, rr * 0.92, rr, 1, 1, 1, 1);
-    }
-    if (s.thrown >= 0 && s.thrown < 0.15) {
-      const f = s.thrown / 0.15;
-      for (let k = 0; k < 7; k++) {
-        const a = (k / 7) * Math.PI * 2 + st.phase;
-        const dir: V3 = [Math.cos(a) * 0.8 + st.fly[0], 0.6 + st.fly[1] * 0.5, Math.sin(a) * 0.8 + st.fly[2]];
-        const rr = g.dewSize * 0.6 * (1 - f);
-        dew.push(top.p[0] + dir[0] * f * 9, top.p[1] + dir[1] * f * 9 - f * f * 6, top.p[2] + dir[2] * f * 9, rr, rr, rr, 1, 1, 1, 1);
-      }
     }
   }
   // the cups: a cushion of jelly; its asci, clear tubes up through its skin, eight spores in each
@@ -2258,13 +2366,13 @@ function things() {
   while (feet.length < MYC * 4) feet.push(0, 0, 1, 0);
   stains(solid);
   const lim = limbs();
-  if (crit && lastCam) drawCritters(crit, T, time, groundY, lastCam.eye as V3, lim);
+  if (crit && lastCam) drawCritters(crit, T, atime, groundY, lastCam.eye as V3, lim, capAt);
   if (lastCam) drawStraw(blades, groundY, lastCam.eye as V3, lim);
-  if (pasture && lastCam) drawGrass(seed, field, cur.look, lastCam.eye as V3, time, (21 + T) % 24, Math.floor(T / 6), lim, dew);
+  if (pasture && lastCam) drawGrass(seed, field, cur.look, lastCam.eye as V3, atime, (21 + T) % 24, Math.floor(T / 6), lim, dew);
   if (pasture && lastCam) {
     const old = pats.map((p) => ({ x: p.x, z: p.z, age: (T - p.drop) / 24, seed: p.seed }));
-    drawFlora(seed, field, old, cur.look, lastCam.eye as V3, time, (21 + T) % 24, Math.floor(T / 6), lim, solid, dew);
-    drawVisitors(patInfos(), T, time, groundY, lastCam.eye as V3, lim, solid);
+    drawFlora(seed, field, old, cur.look, lastCam.eye as V3, atime, (21 + T) % 24, Math.floor(T / 6), lim, solid, dew);
+    drawVisitors(patInfos(), T, atime, groundY, lastCam.eye as V3, lim, solid);
   }
   return { solid, dew, per, feet, lim };
 }
@@ -2312,27 +2420,48 @@ function jolt(p: V3, who: object, k: number) {
   if (z <= 0) return;
   const off = Math.hypot(dot3(d, cam.r), dot3(d, cam.up)) / z;
   const near = Math.exp(-Math.abs(z - focus) / (focus * 0.25)) * Math.max(0, 1 - off * 1.5);
-  shake = Math.min(1.5, shake + k * near);
+  // (a steady, observing camera: a discharge a millimetre across doesn't shake the lens)
+  void near;
+  void k;
 }
 let lastCam: ReturnType<typeof camera> | null = null;
 
 // ─── drawing ────────────────────────────────────────────────────────────────────────────────────
 let last = performance.now();
 let time = 0;
+/** this frame's length (s): its exposure */
+let frameDt = 1 / 60;
+/** the animals' and plants' own time: it stops when the film's paused (pause is a still) */
+let atime = 0;
 let fade = 0;
 let slow = 1 / 60;
-let budget = 520000;
+/** the pixel budget's steps; where it is; when it last moved */
+const LEVELS = [150000, 220000, 320000, 450000, 580000, 700000];
+let level = 4;
+let lastStep = 0;
+let budget = LEVELS[level];
 function frame(now: number) {
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = now;
   time += dt;
+  frameDt = dt;
+  if (playing) atime += dt;
   const css = [innerWidth, innerHeight];
   // (about half a megapixel, less if the frames come slowly: the depth of field is the costly part)
   slow = slow * 0.95 + dt * 0.05;
-  if (time > 2 && slow > 1 / 28) budget = Math.max(150000, budget * 0.98);
+  // (in steps, and not too often: changing size means new render targets)
+  if (time > 2 && time - lastStep > 3) {
+    if (slow > 1 / 28 && level > 0) {
+      level--;
+      lastStep = time;
+    } else if (slow < 1 / 50 && level < LEVELS.length - 1) {
+      level++;
+      lastStep = time;
+    }
+  }
+  budget = LEVELS[level];
   // (still slow at the smallest: the shadows go)
-  if (shadows && time > 6 && budget <= 150000 && slow > 1 / 24 && !params.has('shadow')) shadows = false;
-  else if (time > 2 && slow < 1 / 50) budget = Math.min(700000, budget * 1.005);
+  if (shadows && time > 6 && level === 0 && slow > 1 / 24 && !params.has('shadow')) shadows = false;
   const k = Math.min(Math.min(devicePixelRatio || 1, 2), Math.sqrt((preview ? 160000 : budget) / (css[0] * css[1])));
   const w = Math.max(64, Math.round(css[0] * k));
   const h = Math.max(64, Math.round(css[1] * k));
@@ -2341,7 +2470,19 @@ function frame(now: number) {
     canvas.height = h;
   }
   targets(w, h);
-  if (playing) T += dt * rate();
+  effRate = rate() * pace * slowFactor();
+  if (playing) T += dt * effRate;
+  // (easing in, it never overshoots the moment: it arrives, and holds)
+  if (slowmo && slowmo.phase === 'in' && T >= slowmo.Te) {
+    T = slowmo.Te;
+    slowmo = { ...slowmo, phase: 'hold', at: time };
+  }
+  // (quiet: nothing worth going to in the next while — the hours go faster; something coming,
+  // they ease back)
+  if (terr && time >= handsOn + 20) {
+    const busy = (shot && shot.kind !== 'wide' && shot.kind !== 'field') || terr.moments.some((m) => m.T > T && m.T - T < ARRIVE * rate() + 4);
+    pace += ((busy ? 1 : 4) - pace) * Math.min(1, dt * 0.8);
+  } else pace = 1;
   const end = span();
   if (pasture) {
     // (the field doesn't end: the scrubber's window moves on; the pats in reach come and go)
@@ -2356,8 +2497,9 @@ function frame(now: number) {
       }
     }
   } else {
+    // (the three weeks are a window on it: at their end, back to just before the first fruit)
     if (T > end + 1.5) {
-      T = 0;
+      T = firstFruit();
       shot = null;
     }
     fade = Math.min(1, T < 0.6 ? T / 0.6 : T > end + 0.8 ? Math.max(0, (end + 1.5 - T) / 0.7) : 1);
@@ -2602,7 +2744,7 @@ function frame(now: number) {
   gl.activeTexture(gl.TEXTURE0);
   gl.uniform2f(u(dofProg, 'uRes'), W, Hh);
   gl.uniform1f(u(dofProg, 'uFocus'), focus);
-  const maxBlur = Math.round(Hh * 0.022);
+  const maxBlur = Math.round(Hh * 0.019);
   gl.uniform1f(u(dofProg, 'uK'), maxBlur * 2.2 * cur.aperture);
   gl.uniform1f(u(dofProg, 'uMax'), maxBlur);
   gl.uniform1f(u(dofProg, 'uNear'), cam.near);
@@ -2613,7 +2755,7 @@ function frame(now: number) {
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
-  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, limbs: [th.lim.hi, th.lim.mid, th.lim.lo, th.lim.bladeHi, th.lim.bladeLo, th.lim.glassHi, th.lim.glassMid].map((x) => x.length / (ROWW * 4)), bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100, camD: Math.round((lastCam?.d ?? 0) * 100) / 100, near: lastCam?.near };
+  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, limbs: [th.lim.hi, th.lim.mid, th.lim.lo, th.lim.bladeHi, th.lim.bladeLo, th.lim.glassHi, th.lim.glassMid].map((x) => x.length / (ROWW * 4)), bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100, rate: effRate, Tx: T, Te: shot?.Te ?? null, slow: slowmo?.phase ?? null, camD: Math.round((lastCam?.d ?? 0) * 100) / 100, near: lastCam?.near };
   requestAnimationFrame(frame);
 }
 function ringAt(t: V3, dir: [number, number], a: number): V3 {
@@ -2677,6 +2819,8 @@ function chooseSubject(cam: ReturnType<typeof camera>, list: ReturnType<typeof s
 }
 /** A tap: the subject nearest the ray through it gets the focus (or, on bare ground, the ground). */
 function tapFocus(px: number, py: number) {
+  // (a tap is a hand on the view too: the director waits)
+  handsOn = time;
   const cam = camera(time);
   const nx = (px / innerWidth) * 2 - 1;
   const ny = 1 - (py / innerHeight) * 2;
@@ -2783,4 +2927,5 @@ function mul(a: ArrayLike<number>, b: ArrayLike<number>): Float32Array {
 
 grow(seed);
 if (params.get('t') && !pasture) T = Number(params.get('t'));
+else if (terr && !pasture && !preview) T = firstFruit();
 requestAnimationFrame(frame);

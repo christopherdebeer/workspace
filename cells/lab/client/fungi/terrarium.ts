@@ -14,6 +14,7 @@
  * is thickest — and the moments worth watching, for the camera.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
+import { launch } from './launch';
 import { makeCushion, makeStalk, species, type Cushion, type Form, type Genome, type Stalk, type V3 } from './genome';
 
 /** the ground's grid: cells a side, over a square this wide (mm) */
@@ -40,6 +41,9 @@ export interface Moment {
   who: number;
   /** an animal to keep the lens on (its index among the mites, then the springtails) */
   follow?: number;
+  /** the thing it's about, to keep the lens on as it is now */
+  st?: Stalk;
+  cup?: Cushion;
 }
 export interface Terrarium {
   species: Species[];
@@ -53,6 +57,8 @@ export interface Terrarium {
   marks: Mark[];
   /** the pellet's lumps (for its edge: patEdge) */
   lumps: number[];
+  /** the grazers' density through time (a grid a step): where the mites and springtails are */
+  grazers: Float32Array[];
 }
 /** Something small left lying (or stuck): where, how big (mm), its colour, from when, until when;
  * on the ground (its height to be found there) or held up on something. */
@@ -88,7 +94,7 @@ function cast(r: Rand, r2: Rand): Array<{ form: Form; arrive: number }> {
   if (r2() < 0.55) out.push({ form: 'flask', arrive: lerp(4.5, 7.5, r2()) });
   // (and, late, the tall ones: a yellow fieldcap, the mottlegills)
   if (r2() < 0.4) out.push({ form: 'fieldcap', arrive: lerp(6, 10, r2()) });
-  if (r2() < 0.5) out.push({ form: 'mottlegill', arrive: lerp(10, 14, r2()) });
+  if (r2() < 0.5) out.push({ form: 'mottlegill', arrive: lerp(8.5, 12, r2()) });
   return out;
 }
 
@@ -139,6 +145,9 @@ export function terrarium(seed: number, light?: V3): Terrarium {
   const moments: Moment[] = [];
   const steps = Math.ceil((DAYS * 24) / STEP) + 1;
   const fruited = sp.map(() => -1);
+  /** the grazers' density, per cell; and through time, a snapshot a step */
+  const graze = new Float32Array(n);
+  const grazers: Float32Array[] = [];
   const marks: Mark[] = [];
   /** spores fired and landing: where they'll start new mycelium, and when */
   const pending: Array<{ i: number; t: number; j: number }> = [];
@@ -153,13 +162,40 @@ export function terrarium(seed: number, light?: V3): Terrarium {
       sugar[i] *= 0.985;
       water[i] = Math.max(0.1, Math.min(1, water[i] + (night ? 0.05 : -0.05) * (0.4 + dung[i]) - 0.004 * dung[i]));
     }
-    // spores that have landed since the last step germinate where they fell, if it's dung
+    // spores that have landed germinate where they fell — if it's dung, and only once it's wet
+    // there; they'll wait three days for it, then they're dead
     for (let q = pending.length - 1; q >= 0; q--) {
       const pd = pending[q];
       if (pd.t > T) continue;
-      if (dung[pd.i] > 0.4) myc[pd.j][pd.i] = Math.max(myc[pd.j][pd.i], 0.22);
-      pending.splice(q, 1);
+      if (dung[pd.i] > 0.4 && water[pd.i] > 0.5) {
+        myc[pd.j][pd.i] = Math.max(myc[pd.j][pd.i], 0.22);
+        pending.splice(q, 1);
+      } else if (T - pd.t > 72) pending.splice(q, 1);
     }
+    // the grazers (mites, springtails): they come to the mycelium, multiply where there's plenty,
+    // wander, and eat it back
+    {
+      const nextG = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        let total = 0;
+        for (const m of myc) total += m[i];
+        const x = i % GRID;
+        const z = Math.floor(i / GRID);
+        let around = 0;
+        let c = 0;
+        if (x > 0) { around += graze[i - 1]; c++; }
+        if (x < GRID - 1) { around += graze[i + 1]; c++; }
+        if (z > 0) { around += graze[i - GRID]; c++; }
+        if (z < GRID - 1) { around += graze[i + GRID]; c++; }
+        around /= c;
+        const g0 = graze[i] + 0.25 * (around - graze[i]);
+        nextG[i] = Math.max(0, Math.min(1, g0 + (0.35 * Math.min(1, total) - 0.12) * g0 * (1 - g0) + 0.004 * total * dung[i]));
+      }
+      graze.set(nextG);
+      for (const m of myc) for (let i = 0; i < n; i++) m[i] = Math.max(0, m[i] - 0.08 * graze[i] * m[i]);
+    }
+    // (every species grows from the same state: none gets to go first)
+    const prev = myc.map((m) => Float32Array.from(m));
     sp.forEach((s, j) => {
       const m = myc[j];
       const life = LIFE[s.g.form];
@@ -171,6 +207,7 @@ export function terrarium(seed: number, light?: V3): Terrarium {
             const i = Math.floor(rr() * n);
             if (dung[i] > 0.6) {
               m[i] = Math.max(m[i], 0.3);
+              prev[j][i] = m[i];
               break;
             }
           }
@@ -179,22 +216,23 @@ export function terrarium(seed: number, light?: V3): Terrarium {
       if (day < s.arrive) return;
       // spread and grow: into the cells round it, as fast as there's food and water; where
       // another holds the ground more strongly, slower
-      const next = Float32Array.from(m);
+      const pm = prev[j];
+      const next = Float32Array.from(pm);
       for (let i = 0; i < n; i++) {
         const x = i % GRID;
         const z = Math.floor(i / GRID);
         let around = 0;
         let c = 0;
-        if (x > 0) { around += m[i - 1]; c++; }
-        if (x < GRID - 1) { around += m[i + 1]; c++; }
-        if (z > 0) { around += m[i - GRID]; c++; }
-        if (z < GRID - 1) { around += m[i + GRID]; c++; }
+        if (x > 0) { around += pm[i - 1]; c++; }
+        if (x < GRID - 1) { around += pm[i + 1]; c++; }
+        if (z > 0) { around += pm[i - GRID]; c++; }
+        if (z < GRID - 1) { around += pm[i + GRID]; c++; }
         around /= c;
         let rival = 0;
-        sp.forEach((o, jj) => { if (jj !== j) rival = Math.max(rival, myc[jj][i] * LIFE[o.g.form].hold); });
+        sp.forEach((o, jj) => { if (jj !== j) rival = Math.max(rival, prev[jj][i] * LIFE[o.g.form].hold); });
         const room = Math.max(0, 1 - rival / (life.hold + rival + 1e-3) * 1.4);
         const ok = food(i, j) * water[i];
-        next[i] += (life.spread * Math.max(0, around - m[i]) * dung[i] + life.grow * m[i] * (1 - m[i]) * ok) * room;
+        next[i] += (life.spread * Math.max(0, around - pm[i]) * dung[i] + life.grow * pm[i] * (1 - pm[i]) * ok) * room;
         // starved: it dies back
         if (food(i, j) < 0.12) next[i] *= 0.82;
         next[i] = Math.max(0, Math.min(1, next[i]));
@@ -224,6 +262,7 @@ export function terrarium(seed: number, light?: V3): Terrarium {
       snap[i * 4 + 3] = Math.round(dung[i] * 255);
     }
     ground.push(snap);
+    grazers.push(Float32Array.from(graze));
   }
   // the throwers' sporangia: each flies off toward the light and lands — mostly out on the
   // ground, now and then on something standing in the way, stuck to it (as they stick to grass
@@ -233,31 +272,20 @@ export function terrarium(seed: number, light?: V3): Terrarium {
     if (!s.g.throws) return;
     s.stalks.forEach((st, q) => {
       const rr = seeded(hash(seed, 0x1a9, j, q));
-      const h = Math.hypot(st.fly[0], st.fly[2]) || 1;
-      const d = lerp(4, 26, rr());
-      const at: V3 = [st.base[0] + (st.fly[0] / h) * d, 0, st.base[2] + (st.fly[2] / h) * d];
-      let host: Stalk | null = null;
-      for (const o of standing) {
-        if (o === st || o.t1 > st.tl || o.tEnd < st.tl) continue;
-        // (anything standing near its line of flight, short of where it would land, and tall enough)
-        const ox = o.base[0] - st.base[0];
-        const oz = o.base[2] - st.base[2];
-        const along = (ox * st.fly[0] + oz * st.fly[2]) / h;
-        const off = Math.abs(ox * st.fly[2] - oz * st.fly[0]) / h;
-        const reach = (o.bell ? o.bell * 1.1 : o.r * 3) + st.cap;
-        if (along > 0 && along < d && off < reach && o.len > st.len * 0.5 && rr() < 0.55) {
-          host = o;
-          break;
-        }
-      }
+      const l = launch(st, s.g.capFlat, standing, hash(seed, 0x1aa, j, q));
+      st.launch = l;
       const r = st.cap * 0.9;
-      if (host) {
-        if (q % 5 === 0) moments.push({ T: st.tl + 1, at: [host.base[0], host.len * 0.8, host.base[2]], size: host.len * 0.8 + (host.bell || 0) * 2, kind: 'stuck', who: sp.indexOf(sp.find((x) => x.stalks.includes(host!))!) });
-        marks.push({ p: at, r, c: s.g.capColour, t0: st.tl + 0.08, t1: host.tEnd - 1, ground: false, kind: 'cap', on: { st: host, s: host.bell ? 1 : lerp(0.5, 0.95, rr()), a: rr() * Math.PI * 2 } });
-      } else marks.push({ p: at, r, c: s.g.capColour, t0: st.tl + 0.08, t1: st.tl + lerp(48, 120, rr()), ground: true, kind: 'cap' });
+      const t0 = st.tl + l.end.t / 3600;
+      const at: V3 = [st.base[0] + l.end.at[0], 0, st.base[2] + l.end.at[2]];
+      const host = l.end.host;
+      if (host && (l.end.kind === 'stalk' || l.end.kind === 'bell')) {
+        if (q % 5 === 0) moments.push({ T: t0, at: [host.base[0], host.len * 0.8, host.base[2]], size: host.len * 0.8 + (host.bell || 0) * 2, kind: 'stuck', who: sp.findIndex((x) => x.stalks.includes(host)), st: host });
+        marks.push({ p: at, r, c: s.g.capColour, t0, t1: host.tEnd - 1, ground: false, kind: 'cap', on: { st: host, s: l.end.s ?? 1, a: l.end.a ?? 0 } });
+      } else if (l.end.kind === 'ground') marks.push({ p: at, r, c: s.g.capColour, t0, t1: st.tl + lerp(48, 120, rr()), ground: true, kind: 'cap' });
+      // (most fly out of the scene: a metre or two off into the grass)
     });
   });
-  return { species: sp, ground, moments, dung, marks, lumps };
+  return { species: sp, ground, moments, dung, marks, lumps, grazers };
 
   /** A flush of one species' fruit: as many as its mycelium can feed, where it's thickest. */
   function flush(s: Species, j: number, m: Float32Array, T: number, rr: Rand) {
@@ -268,10 +296,29 @@ export function terrarium(seed: number, light?: V3): Terrarium {
       weight += w[i];
     }
     if (weight <= 0) return;
+    const used: number[] = [];
     const pick = () => {
       let t = rr() * weight;
-      for (let i = 0; i < n; i++) if ((t -= w[i]) <= 0) return i;
+      for (let i = 0; i < n; i++) if ((t -= w[i]) <= 0) return (used.push(i), i);
       return n - 1;
+    };
+    // (fruit costs: what goes into it comes out of the mycelium, and the food round it)
+    const cost = { thrower: 0.03, pin: 0.03, cup: 0.12, inkcap: 0.2, eyelash: 0.12, flask: 0.02, fieldcap: 0.3, mottlegill: 0.32 }[s.g.form];
+    const pay = () => {
+      for (const i of used) {
+        const x = i % GRID;
+        const z = Math.floor(i / GRID);
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          const zz = z + dz;
+          if (xx < 0 || zz < 0 || xx >= GRID || zz >= GRID) continue;
+          const c = zz * GRID + xx;
+          const k = dx || dz ? 0.5 : 1;
+          sugar[c] = Math.max(0, sugar[c] - cost * k * LIFE[s.g.form].sugar);
+          fibre[c] = Math.max(0, fibre[c] - cost * k * (1 - LIFE[s.g.form].sugar) * 0.7);
+          m[c] *= 1 - Math.min(0.5, cost * k * 1.5);
+        }
+      }
     };
     const place = (i: number): V3 => {
       const [x, z] = at(i);
@@ -298,8 +345,9 @@ export function terrarium(seed: number, light?: V3): Terrarium {
         }
         // (its asci fire in waves: watch the busiest stretch)
         const fires = cu.asci.map((a) => a.tl).sort((a, b) => a - b);
-        moments.push({ T: fires[Math.floor(fires.length / 2)] ?? cu.t0 + 8, at: [c[0], cu.Hc * 0.8, c[2]], size: cu.R * 4, kind: 'fire', who: j });
+        moments.push({ T: fires[Math.floor(fires.length / 2)] ?? cu.t0 + 8, at: [c[0], cu.Hc * 0.8, c[2]], size: cu.R * 4, kind: 'fire', who: j, cup: cu });
       }
+      pay();
       return;
     }
     const tall = g.form === 'mottlegill' || g.form === 'fieldcap';
@@ -308,20 +356,23 @@ export function terrarium(seed: number, light?: V3): Terrarium {
     // (in clumps: a flush comes up from a few places where the mycelium has gathered)
     const per = g.form === 'inkcap' ? 6 : g.form === 'eyelash' || tall ? 3 : 14;
     const clumps = Array.from({ length: Math.max(1, Math.round(count / per)) }, () => place(pick()));
+    const clumpCells = used.splice(0);
     let first: Stalk | null = null;
     for (let q = 0; q < count; q++) {
       const cl = clumps[q % clumps.length];
+      used.push(clumpCells[q % clumpCells.length]);
       const d = Math.sqrt(rr()) * (g.form === 'inkcap' || g.form === 'eyelash' ? 4 : tall ? 6 : g.form === 'flask' ? 2 : 3);
       const a = rr() * Math.PI * 2;
       const st = makeStalk(rr, g, [cl[0] + Math.cos(a) * d, 0, cl[2] + Math.sin(a) * d], T);
       s.stalks.push(st);
       first = first ?? st;
-      if (g.throws && q % 6 === 0) moments.push({ T: st.tl, at: [st.base[0], st.len * 0.9, st.base[2]], size: st.len * 1.2, kind: 'throw', who: j });
+      if (g.throws && q % 6 === 0) moments.push({ T: st.tl, at: [st.base[0], st.len * 0.9, st.base[2]], size: st.len * 0.9, kind: 'throw', who: j, st });
     }
     if (first) {
       const k = g.form === 'inkcap' ? (rr() < 0.5 ? 'open' : 'ink') : g.form === 'flask' ? 'squirt' : tall ? 'open' : 'emerge';
       const t = k === 'open' ? first.t1 : k === 'ink' ? first.t1 + 6.5 : k === 'squirt' ? first.t1 + 4 : first.t1 - 0.4;
-      moments.push({ T: t, at: [first.base[0], first.len * 0.6, first.base[2]], size: first.len * 1.4 + (first.bell || 0) * 2, kind: k, who: j });
+      moments.push({ T: t, at: [first.base[0], first.len * 0.6, first.base[2]], size: first.len * 1.4 + (first.bell || 0) * 2, kind: k, who: j, st: first });
     }
+    pay();
   }
 }

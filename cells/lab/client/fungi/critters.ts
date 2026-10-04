@@ -111,44 +111,44 @@ export function critters(seed: number, terr: Terrarium): Critters {
           // a climber: up the stalk as it ripens, onto the sporangium, and off with it
           const from = lerp(st.t1, st.tv || st.t1 + 2, r());
           const len = lerp(0.35, 0.5, r());
-          worms.push({ at: st.base, t0: from - 2, t1: st.tl, len, r: len / lerp(22, 28, r()), seed: r() * 100, on: { st, from, capFlat: sp.g.capFlat } });
+          // (it goes where the sporangium goes: out of the scene with it, or a day where it sticks)
+          const l = st.launch;
+          const t1 = l ? st.tl + (l.end.kind === 'away' ? l.end.t / 3600 : 24) : st.tl;
+          worms.push({ at: st.base, t0: from - 2, t1, len, r: len / lerp(22, 28, r()), seed: r() * 100, on: { st, from, capFlat: sp.g.capFlat } });
           if (q % 21 === 3) moments.push({ T: st.tl - 0.8, at: [st.base[0], st.len * 0.95, st.base[2]], size: st.len * 0.32, kind: 'ride', who: j });
         }
       });
     }
-    // mites and springtails come to graze where something is fruiting (and stay a while after)
-    const clumps: Stalk[] = [];
-    for (const st of live) if (!clumps.some((o) => Math.hypot(o.base[0] - st.base[0], o.base[2] - st.base[2]) < 6 && Math.abs(o.t1 - st.t1) < 30)) clumps.push(st);
-    const cupClumps = sp.cups.filter((c, q) => q % 3 === 0);
-    for (const st of clumps) {
-      const n = 1 + Math.floor(r() * 2.4);
-      for (let k = 0; k < n; k++) {
-        const a = r() * Math.PI * 2;
-        const d = lerp(0.5, 3, r());
-        const home: V3 = [st.base[0] + Math.cos(a) * d, 0, st.base[2] + Math.sin(a) * d];
-        const t0 = st.t1 + lerp(-4, 10, r());
-        const t1 = Math.min(end, st.tEnd + lerp(4, 30, r()));
-        if (r() < 0.6) {
-          const macro = r() < 0.65;
-          mites.push(
-            macro
-              ? { kind: 'macro', home, roam: lerp(1, 2.2, r()), t0, t1, size: lerp(0.55, 0.9, r()), colour: [lerp(0.38, 0.5, r()), lerp(0.15, 0.22, r()), lerp(0.05, 0.09, r())], seed: r() * 100 }
-              : { kind: 'ori', home, roam: lerp(0.5, 1, r()), t0, t1, size: lerp(0.4, 0.6, r()), colour: [lerp(0.1, 0.18, r()), lerp(0.05, 0.09, r()), lerp(0.02, 0.04, r())], seed: r() * 100 },
-          );
-        } else {
-          const roll = r();
-          const kind: Spring['kind'] = roll < 0.45 ? 'hypo' : roll < 0.75 ? 'iso' : 'ento';
-          const colour: V3 = kind === 'hypo' ? [0.1, 0.11, 0.17] : kind === 'iso' ? [0.62, 0.62, 0.6] : [0.66, 0.52, 0.26];
-          springs.push({ kind, home, roam: lerp(2, 4, r()), t0, t1, size: kind === 'hypo' ? lerp(0.9, 1.3, r()) : lerp(1, 1.6, r()), colour, seed: r() * 100 });
-        }
+  });
+  // mites and springtails: where the grazers are thick (the grid's own: they eat the mycelium
+  // back), a few a day, staying a day or two
+  const cellAt = (i: number): V3 => [((i % GRID) + 0.5) * cell - SPAN / 2, 0, (Math.floor(i / GRID) + 0.5) * cell - SPAN / 2];
+  for (let k = 0; k < terr.grazers.length; k += 4) {
+    const gz = terr.grazers[k];
+    const top: number[] = [];
+    for (let i = 0; i < gz.length; i++) if (gz[i] > 0.25) top.push(i);
+    top.sort((a, b) => gz[b] - gz[a]);
+    for (const i of top.slice(0, 5)) {
+      if (r() > gz[i]) continue;
+      const c = cellAt(i);
+      const home: V3 = [c[0] + (r() - 0.5) * cell, 0, c[2] + (r() - 0.5) * cell];
+      const t0 = k * 6 + r() * 12;
+      const t1 = Math.min(end, t0 + lerp(18, 48, r()));
+      if (r() < 0.6) {
+        const macro = r() < 0.65;
+        mites.push(
+          macro
+            ? { kind: 'macro', home, roam: lerp(1, 2.2, r()), t0, t1, size: lerp(0.55, 0.9, r()), colour: [lerp(0.38, 0.5, r()), lerp(0.15, 0.22, r()), lerp(0.05, 0.09, r())], seed: r() * 100 }
+            : { kind: 'ori', home, roam: lerp(0.5, 1, r()), t0, t1, size: lerp(0.4, 0.6, r()), colour: [lerp(0.1, 0.18, r()), lerp(0.05, 0.09, r()), lerp(0.02, 0.04, r())], seed: r() * 100 },
+        );
+      } else {
+        const roll = r();
+        const kind: Spring['kind'] = roll < 0.45 ? 'hypo' : roll < 0.75 ? 'iso' : 'ento';
+        const colour: V3 = kind === 'hypo' ? [0.1, 0.11, 0.17] : kind === 'iso' ? [0.62, 0.62, 0.6] : [0.66, 0.52, 0.26];
+        springs.push({ kind, home, roam: lerp(2, 4, r()), t0, t1, size: kind === 'hypo' ? lerp(0.9, 1.3, r()) : lerp(1, 1.6, r()), colour, seed: r() * 100 });
       }
     }
-    for (const c of cupClumps) {
-      const a = r() * Math.PI * 2;
-      const home: V3 = [c.c[0] + Math.cos(a) * c.R * 2, 0, c.c[2] + Math.sin(a) * c.R * 2];
-      mites.push({ kind: 'macro', home, roam: 1.5, t0: c.t0 + 8, t1: Math.min(end, c.tEnd + 12), size: lerp(0.5, 0.75, r()), colour: [0.42, 0.18, 0.07], seed: r() * 100 });
-    }
-  });
+  }
   // (now and then the camera goes down to them)
   [...mites, ...springs].forEach((m, q) => {
     if (q % 4 === 0 && m.t1 - m.t0 > 8) moments.push({ T: m.t0 + 4, at: [m.home[0], 0.3, m.home[2]], size: m.size * 1.3, kind: 'graze', who: -1, follow: q });
@@ -361,12 +361,14 @@ export function whereIs(c: Critters, q: number, T: number, time: number, groundY
 }
 
 /** The frame's animals, as limbs (and their shadows). */
-export function drawCritters(c: Critters, T: number, time: number, groundY: Ground, eye: V3, out: Limbs) {
+/** where a thrower's sporangium is, thrown (for its passenger) */
+type CapAt = (st: Stalk) => { p: V3; r: number } | null;
+export function drawCritters(c: Critters, T: number, time: number, groundY: Ground, eye: V3, out: Limbs, capAt?: CapAt) {
   for (const w of c.worms) {
     if (T < w.t0 || T > w.t1) continue;
     const come = ease((T - w.t0) / 1.5) * ease((w.t1 - T) / 1.5);
     if (come <= 0.01) continue;
-    if (w.on) climber(w, T, time, eye, out);
+    if (w.on) climber(w, T, time, eye, out, capAt);
     else if (w.caught && T > w.caught.T) caught(w, T, time, groundY, eye, out);
     else crawler(w, come, time, groundY, eye, out);
   }
@@ -519,11 +521,31 @@ function trap(t: Trap, T: number, time: number, groundY: Ground, eye: V3, out: L
   }
 }
 
-function climber(w: Worm, T: number, time: number, eye: V3, out: Limbs) {
+function climber(w: Worm, T: number, time: number, eye: V3, out: Limbs, capAt?: CapAt) {
   const on = w.on!;
   const st = on.st;
   const s = state(st, T);
-  if (s.thrown >= 0 || s.grown < 0.3) return;
+  if (s.thrown >= 0) {
+    // thrown with it: holding on, curled round it in flight; where it lands, searching again
+    const c = capAt?.(st);
+    if (!c) return;
+    const N = 12;
+    const pts: V3[] = [];
+    const rad: number[] = [];
+    const a0 = w.seed * 2.1;
+    const flying = (T - st.tl) * 3600 < (st.launch?.end.t ?? 0);
+    for (let k = 0; k < N; k++) {
+      const x = k / (N - 1);
+      const a = a0 + x * (flying ? 3.6 : 2.2) + (flying ? 0 : Math.sin(time * 1.6 + w.seed) * 0.4 * x);
+      const up = flying ? 0 : x * x * w.len * 0.6;
+      const rr0 = c.r + w.r * 0.8;
+      pts.push([c.p[0] + Math.cos(a) * rr0, c.p[1] + c.r * 0.4 + up + Math.sin(x * 3) * w.r, c.p[2] + Math.sin(a) * rr0]);
+      rad.push(w.r * wormR(x));
+    }
+    tube(detail(eye, c.p, w.len) === 0 ? out.glassHi : out.glassMid, pts, rad, WORM, MAT.worm, { seed: w.seed });
+    return;
+  }
+  if (s.grown < 0.3) return;
   const lod = detail(eye, st.base, w.len);
   if (lod > 2) return;
   const Ls = st.len * s.grown;

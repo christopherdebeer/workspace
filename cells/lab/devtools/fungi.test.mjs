@@ -74,9 +74,10 @@ console.log('ok');
     assert.ok(t.species.length >= 2, `seed ${seed}: a cast`);
     const first = (s) => Math.min(...(s.g.form === 'cup' ? s.cups : s.stalks).map((x) => x.t0), Infinity);
     const last = (s) => Math.max(...(s.g.form === 'cup' ? s.cups : s.stalks).map((x) => x.t0), -Infinity);
-    for (const s of t.species) assert.ok(first(s) < DAYS * 24, `seed ${seed}: ${s.g.form} fruits`);
+    // (the early and middle ones always fruit; a late one, costly, on worn-out dung, may not)
+    for (const s of t.species) if (!['fieldcap', 'mottlegill'].includes(s.g.form)) assert.ok(first(s) < DAYS * 24, `seed ${seed}: ${s.g.form} fruits`);
     for (const a of t.species) for (const b of t.species) {
-      if (order[a.g.form] < order[b.g.form]) assert.ok(first(a) < first(b), `seed ${seed}: ${a.g.form} before ${b.g.form}`);
+      if (order[a.g.form] < order[b.g.form] && first(b) < Infinity) assert.ok(first(a) < first(b), `seed ${seed}: ${a.g.form} before ${b.g.form}`);
     }
     for (const s of t.species) if (s.g.form === 'thrower' || s.g.form === 'pin') assert.ok(last(s) < (DAYS - 3) * 24, `seed ${seed}: ${s.g.form} gives out`);
     assert.ok(t.moments.length > 10);
@@ -87,6 +88,11 @@ console.log('ok');
     }
   }
   // the second wave turns up in some, after the first
+  // the loops: fruiting draws down its reserves; the grazers are where the animals are
+  {
+    const t = terrarium(3);
+    assert.ok(t.grazers.length === t.ground.length && t.grazers.some((g) => g.some((v) => v > 0.25)), 'grazers come');
+  }
   const lates = new Set();
   for (let seed = 1; seed <= 12; seed++) for (const s of terrarium(seed).species) lates.add(s.g.form);
   assert.ok(lates.has('eyelash') && lates.has('flask'), 'eyelash cups and flasks come');
@@ -97,7 +103,24 @@ console.log('ok');
   const c = critters(2, t2);
   assert.ok(c.worms.length > 10 && c.mites.length > 3 && c.springs.length > 3, 'nematodes, mites, springtails');
   assert.ok(c.mites.some((m) => m.kind === 'macro') && c.springs.length > 0, 'kinds');
-  for (const w of c.worms) if (w.on) assert.equal(w.t1, w.on.st.tl);
+  // (a passenger goes where its sporangium goes)
+  for (const w of c.worms) if (w.on) assert.ok(w.t1 >= w.on.st.tl && (w.on.st.launch.end.kind !== 'away' || w.t1 - w.on.st.tl < 0.01));
+  // the throw: one record — released from the tip, slowed by the air, and where it ends is where
+  // its residue is
+  for (const sp of t2.species) for (const st of sp.stalks) {
+    const l = st.launch;
+    if (!sp.g.throws) continue;
+    assert.ok(l && l.path.length >= 8, 'a path');
+    const n = l.path.length / 4;
+    const v1 = Math.hypot(l.path[5] - l.path[1], l.path[6] - l.path[2], l.path[7] - l.path[3]) / (l.path[4] - l.path[0] || 1);
+    assert.ok(Math.hypot(...l.v0) > 6000, 'fast off');
+    assert.ok(l.path[(n - 1) * 4] > 0, 'it flies');
+    if (l.end.kind === 'stalk' || l.end.kind === 'bell') {
+      const m = t2.marks.find((k) => k.on && k.on.st === l.end.host && Math.abs(k.t0 - (st.tl + l.end.t / 3600)) < 1e-9);
+      assert.ok(m, 'its residue where it stuck');
+    }
+    void v1;
+  }
   // drawn as limbs: whole rows, finite, each with 2..MAXP points; up close, all their parts
   const near = (list) => [list.hi, list.mid, list.lo, list.glassHi, list.glassMid];
   for (const kind of ['macro', 'ori', 'hypo', 'iso', 'ento', 'worm']) {
@@ -131,7 +154,8 @@ console.log('ok');
 {
   const out4 = await build({ entryPoints: [new URL('../client/fungi/pasture.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
   const { worldNow, dateOf, dropsNear, place, patHeight, PAT_LIFE, PAT_GONE } = await import('data:text/javascript;base64,' + Buffer.from(out4.outputFiles[0].text).toString('base64'));
-  const now = new Date(2026, 9, 4, 7, 30);
+  // (06:30 UTC on 4 October is 07:30 in the field, which keeps British Summer Time)
+  const now = new Date(Date.UTC(2026, 9, 4, 6, 30));
   const T = worldNow(now);
   assert.ok(Math.abs(((T + 21) % 24) - 7.5) < 1e-6, 'local hour');
   assert.equal(dateOf(T).getUTCHours(), 7);
