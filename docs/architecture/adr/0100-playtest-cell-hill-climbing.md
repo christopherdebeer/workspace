@@ -285,3 +285,26 @@ as one declared round → tune by climbing.**
 - Next for the instrument: the cost of a move in its label (`[reveals you]`);
   an Enemy persona (the "suspicious" persona currently tells the Enemy to hunt
   a traitor); reveal/peek events in the judge's record.
+
+### Addendum — harness h10: costs on labels, Enemy persona, knowledge events (2026-10-04)
+
+- **h10** (instrument I5): a move that exposes your role is labelled
+  `cost: everyone learns you are X — any player can then denounce you and win`;
+  accusations carry `if right: … · if wrong: …` (for the Enemy: "you are The
+  Enemy, so this is wrong"); a player on the enemy team gets a traitor persona
+  instead of the traitor-hunting one; the judge receives `knowledge_events`
+  (public reveals and private peeks, by round and cause). The first wording,
+  "REVEALS YOU as The Enemy", was still chosen (0.32): it read as an event,
+  not a cost.
+- **v0.4 under I5** vs I4 (24 train games): games ending by denunciation 16 →
+  10, of which after a Temple self-reveal 7 → 3; Enemy wins at the limit 4 →
+  7; average 4.3 → 6.7 rounds. Score 0.872 → 0.851, critique 0.587 → 0.527
+  (tension 1.57 → 1.35), noise 0.0055 → 0.019. The judge now blames the players
+  ("better choices were available and ignored", 0.69).
+- Reading: much of v0.4's measured tension came from the Enemy giving itself
+  away. With an Enemy that hides, honest players rarely find it (7 of 10
+  correct denunciations had no Temple reveal before them, and 4 were wrong),
+  and the game drifts to the time limit. Scores across instruments are not
+  comparable; the behaviour counts are.
+- Paced deduction, round 13: reverted again (−0.041; Enemy 11/24 at the limit,
+  2 denunciations, 7.8 rounds). Its loss holds under I3, I4 and I5.
