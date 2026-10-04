@@ -11,6 +11,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   plate: () => import('./plate/main'),
   bricks: () => import('./bricks/main'),
   fungi: () => import('./fungi/main'),
+  markovs: () => import('./markovs/main'),
 };
 
 const id = document.documentElement.dataset.exp ?? '';

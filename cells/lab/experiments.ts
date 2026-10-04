@@ -25,6 +25,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'markovs', title: 'Markovs Chains', group: 'Play',
+    blurb: 'A game of finite probabilities: spend cards to reroute a token through a coloured network. Construct the odds, then release the journey. A playable first rules hypothesis, with a free workshop.',
+    page: 'static/markovs.html', preview: 'preview&seed=1941', readme: 'static/markovs.md',
+    presets: [{ label: 'a finite journey', query: 'seed=1941' }, { label: 'workshop', query: 'mode=workshop' }],
+  },
+  {
     id: 'mistwood',
     title: 'Mistwood',
     group: 'Woods',
