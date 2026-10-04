@@ -402,3 +402,12 @@ as one declared round → tune by climbing.**
   every baseline — unchanged. Fingerprint method 3 folds a build-time hash of `engine/**`
   (devtools/hash-engine.mjs → lib/engine-src.ts) into the core hash; it must be regenerated
   before each push (devtools/README). `set_suite` was also silently cutting seed lists to 12.
+- **Head v26 as evaluated** (round 25's eval, 48 train games): train 0.841 / test 0.825,
+  band 0.85; the judge "plays as designed" 48/48, critique 0.71 (engagement 3.4, goals 3.7,
+  dynamism 3.2, tension 2.0; weakest comeback 1.6, top fix "add catch-up"); 2.9 lead changes
+  a game, 70 % of seats interacting, 5.4 rounds; agent exposed 67 % (all on evidence), agent
+  wins 19 %, wrong accusations 20 %. Against v0.4 under the same instrument: 0.749, 20/24,
+  0.57, tension 1.4, no lead changes.
+- The day's Jev budget (300 M tokens) ran out before the re-baseline under fingerprint
+  method 3 and the re-run of table-only evidence (round 24: +0.043 train, test flat). Those
+  are the first two items when the budget resets, then the judge's own ask: a catch-up rule.
