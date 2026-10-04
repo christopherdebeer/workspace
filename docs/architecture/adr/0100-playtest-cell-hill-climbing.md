@@ -381,3 +381,11 @@ as one declared round → tune by climbing.**
   39–54 % of the time, because a Kompromat card seen in a hand counts and honest players
   draw Kompromat too. Next proposal: evidence is the table (face up, Gossip, Leak) or a seen
   ambition — never a hand (`denounce.evidence_from`).
+- **Rounds 21–23** (head v22, the real 48 + 24 suite; baseline 0.786 / 0.765, band 0.68;
+  noise 0.026 / 0.029 — doubling the suite barely moved the floor, so the variance is mostly
+  the judge's and the players' stochastic choices, not game sampling; paired SEs run
+  0.009–0.017, so the floor rule max(ε, noise, paired SE) is conservative by about 2×, to
+  revisit). 21, a wrong accusation hands the agent the game: −0.010, reverted — with hand
+  "evidence" still producing wrong accusations, the agent won 23/48 that way. **22, exposure
+  as a Leak card instead of a standing action: +0.036 train, +0.058 test, kept** (head v24).
+  23, Kompromat at 2 tokens: +0.025 under the 0.029 floor (paired SE 0.009), reverted.
