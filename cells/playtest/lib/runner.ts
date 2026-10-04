@@ -82,8 +82,10 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  h7: moves that touch hidden information say that they do, not what ("+1 card",
  *  "learn player-2 objective") — discovery and evidence-gathering were invisible ·
  *  h8: turn plans — multi-step options found by a bounded search over the player's own
- *  next actions; a chosen plan's later steps run without asking again. */
-export const HARNESS_VERSION = 'h8';
+ *  next actions; a chosen plan's later steps run without asking again ·
+ *  h9: players get the whole rules prose (up to RULES_MAX), not just the win/turn/action
+ *  sections — the map, denouncing, trading, powers and events were invisible to them. */
+export const HARNESS_VERSION = 'h9';
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
@@ -620,12 +622,18 @@ function turnState(state: Record<string, any>, pid: string, av: Record<string, a
   };
 }
 
-/** The winning/gameplay parts of the prose, capped — accuracy falls with irrelevant state. */
+/** The rules prose a player reads: all of it up to RULES_MAX. Over the cap, the win/turn/
+ *  action sections come first and the rest follow in order until it is full. */
+const RULES_MAX = 8000;
 function digest(markdown: string, winCondition: string): string {
-  const sections = markdown.split(/\n(?=#{1,3} )/);
-  const pick = sections.filter((s) => /win|victory|goal|objective|gameplay|turn|actions?/i.test(s.split('\n')[0] ?? ''));
-  const text = (pick.length ? pick : sections).join('\n').replace(/\n{3,}/g, '\n\n');
-  return `Win condition: ${winCondition}\n${text}`.slice(0, 2400);
+  const head = `Win condition: ${winCondition}\n`;
+  const all = markdown.replace(/\n{3,}/g, '\n\n').trim();
+  if (head.length + all.length <= RULES_MAX) return head + all;
+  const sections = all.split(/\n(?=#{1,3} )/);
+  const key = (s: string) => /win|victory|goal|objective|gameplay|turn|actions?/i.test(s.split('\n')[0] ?? '');
+  let out = head;
+  for (const s of [...sections.filter(key), ...sections.filter((s) => !key(s))]) if (out.length + s.length + 1 <= RULES_MAX) out += s + '\n';
+  return out;
 }
 
 export async function play(rules: string, decide: Decide | null, opts: PlayOptions): Promise<Session> {
