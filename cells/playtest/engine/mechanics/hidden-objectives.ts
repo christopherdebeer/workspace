@@ -96,21 +96,22 @@ export function checkObjective(check: ObjectiveCheck | undefined, player: P): bo
 
 /** Can `me` denounce `target` under requires_evidence? */
 export function hasEvidence(state: { players: Record<string, unknown> }, config: GameConfig, me: string, target: string): boolean {
+  const from = new Set((config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined)?.denounce?.evidence_from ?? ['revealed', 'objective', 'table', 'project', 'hand']);
   // Revealed counts only when what was revealed is the enemy (a wrong accuser is revealed too —
   // as honest, which is evidence of innocence).
   const t = state.players[target] as { revealedAs?: string; objective?: ObjectiveDefinition; team?: string } | undefined;
-  if (t?.revealedAs && (t.team === 'enemy' || t.objective?.type === 'enemy' || t.objective?.type === 'traitor')) return true;
+  if (from.has('revealed') && t?.revealedAs && (t.team === 'enemy' || t.objective?.type === 'enemy' || t.objective?.type === 'traitor')) return true;
   const revealed = ((state.players[me] as { knowledge?: { revealed?: Record<string, unknown> } })?.knowledge?.revealed) ?? {};
-  if (`${target} objective` in revealed) return true;
+  if (from.has('objective') && `${target} objective` in revealed) return true;
   const enemyItems = new Set(((config as { objectives?: ObjectiveDefinition[] }).objectives ?? []).filter((o) => o.type === 'enemy' || o.type === 'traitor').flatMap((o) => JSON.stringify(o.check ?? {}).match(/"[^"]+"/g) ?? []).map((q) => q.slice(1, -1)));
   // Enemy-only project cards (projects mechanic: only_role) count like enemy items: seen on the
   // target's table face up, or seen by Gossip/Expose.
   const deck = ((config as { engine_mechanics?: { cards?: { deck?: Array<{ name: string; only_role?: string }> } } }).engine_mechanics?.cards?.deck ?? []);
   for (const c of deck) if (c.only_role) enemyItems.add(c.name);
   const table = ((state.players[target] as { projects?: Array<{ name: string; stealth: boolean }> })?.projects ?? []);
-  if (table.some((p) => !p.stealth && enemyItems.has(p.name))) return true;
-  if (Object.entries(revealed).some(([k, v]) => k === `${target} project` && enemyItems.has(String(v).replace(/ \(.*$/, '')))) return true;
-  return Object.entries(revealed).some(([k, v]) => k.startsWith(`${target} hand`) && Array.isArray(v) && v.some((n) => enemyItems.has(String(n))));
+  if (from.has('table') && table.some((p) => !p.stealth && enemyItems.has(p.name))) return true;
+  if (from.has('project') && Object.entries(revealed).some(([k, v]) => k === `${target} project` && enemyItems.has(String(v).replace(/ \(.*$/, '')))) return true;
+  return from.has('hand') && Object.entries(revealed).some(([k, v]) => k.startsWith(`${target} hand`) && Array.isArray(v) && v.some((n) => enemyItems.has(String(n))));
 }
 
 /** "3/6 locations visited" style progress lines for the check's metrics. */
@@ -146,7 +147,11 @@ export interface HiddenObjectivesConfig {
    *            they are revealed, or you have seen them holding an item the enemy objective
    *            needs (uncertain: honest players take those items too, to deny them)
    */
-  denounce?: { correct?: 'win' | 'reveal' | 'score'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit' | 'enemy_wins'; from_round?: number; requires_evidence?: boolean; points?: { accuser?: number; others?: number; wrong?: number }; ends_game?: boolean };
+  denounce?: { correct?: 'win' | 'reveal' | 'score'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit' | 'enemy_wins'; from_round?: number; requires_evidence?: boolean; points?: { accuser?: number; others?: number; wrong?: number }; ends_game?: boolean;
+    /** What counts as evidence under requires_evidence (default: all): 'revealed' (the target is
+     *  revealed), 'objective' (you saw their objective), 'table' (an enemy-only project face up on
+     *  their table), 'project' (one you saw by Gossip/Expose), 'hand' (an enemy item/card in their hand). */
+    evidence_from?: Array<'revealed' | 'objective' | 'table' | 'project' | 'hand'> };
   /**
    * What completing your objective does: 'win' (default) ends the game in your favour;
    * 'bonus' scores completion_points (once) and the game goes on — for games decided on points.
