@@ -201,7 +201,7 @@ export function blade(list: number[], pts: V3[], rad: number[], col: V3, seed: n
 export function ribbon(list: number[], pts: V3[], rad: number[], col: V3, mat: number, seed: number) {
   tube(list, pts, rad, col, mat, { flat: 0.18, seed });
 }
-interface TubeOpts {
+export interface TubeOpts {
   flat?: number;
   seed?: number;
   smooth?: boolean;
@@ -210,6 +210,9 @@ interface TubeOpts {
   groove?: number;
   /** which way its width goes (a blade's) */
   across?: V3;
+}
+export function tubeOf(list: number[], pts: V3[], rad: number[], col: V3, mat: number, o: TubeOpts = {}) {
+  tube(list, pts, rad, col, mat, o);
 }
 function tube(list: number[], pts: V3[], rad: number[], col: V3, mat: number, o: TubeOpts = {}) {
   const n = Math.min(MAXP, pts.length);

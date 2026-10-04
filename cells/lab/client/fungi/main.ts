@@ -16,6 +16,7 @@
 import { FORMS, DAY, along, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Form, type Genome, type Stalk, type State, type V3 } from './genome';
 import { straw, drawStraw, type Blade } from './straw';
 import { bladeNear, drawGrass, type Field } from './grass';
+import { drawFlora, floraNear, type FloraKind } from './flora';
 import { PAT_GONE, PAT_LIFE, dateOf, dropsNear, patHeight, place, worldNow, type Drop, type Placed } from './pasture';
 import { MAXP, ROWW, critters, drawCritters, limbs, whereIs, zoo, type Critters, type Limbs } from './critters';
 import { DAYS, GRID, SPAN, STEP, patEdge, type Moment, type Terrarium } from './terrarium';
@@ -360,6 +361,32 @@ void main() {
     col = c * (.25 + .65 * max(dot(nb, uLight), 0.)) * uLightCol;
     col += mix(vec3(.45, .5, .9), base, .4) * pow(1. - nv, 2.2) * .55 * uLightCol;
     col += uLightCol * pow(max(dot(reflect(-v, nb), uLight), 0.), 25.) * .18;
+  } else if (mat > 7.5) {
+    // a leaf (clover's): its midrib and veins; a pale chevron across it; paler beneath; a waxy
+    // sheen; the light through it
+    float across = cos(vUA.y);
+    float x = vUA.x;
+    float mid = exp(-across * across * 120.);
+    float veins = smoothstep(.6, 1., sin((x * 9. - abs(across) * 3.) * 6.2832));
+    float chev = vMore.y * smoothstep(.07, .0, abs(x - (.42 + abs(across) * .22))) * smoothstep(.95, .4, abs(across));
+    vec3 c = base * (1. + mid * .35 + veins * .12);
+    c = mix(c, vec3(.62, .7, .5), chev * .7);
+    if (vUp < 0.) c = c * 1.25 + .03;
+    col = c * (.22 + .62 * lam) * uLightCol + c * vec3(.8, 1.2, .5) * backlit * 1.2 * uLightCol;
+    float fr = .04 + .96 * pow(1. - nv, 5.);
+    col += env(r) * (.05 + fr * .6) + uLightCol * pow(max(dot(r, uLight), 0.), 30.) * .35;
+  } else if (mat > 6.5) {
+    // a moss shoot: small pointed leaves in a close, irregular spiral, each catching the light
+    // toward its tip, shadow between; ragged at its edge (the leaves stand off it); its new
+    // growth at the top paler
+    float jit = n2(vec2(q.x * 30., vUA.y * 3.) + sd) * .6;
+    float spiral = fract(q.x * 22. + vUA.y / 6.2832 * 3.7 + jit + sd);
+    float round_ = fract(vUA.y / 6.2832 * 7. + q.x * 5. + jit);
+    if (nv < .45 && (spiral < .45 || round_ < .35)) discard;
+    vec3 c = base * (.3 + .9 * spiral * (.8 + .4 * n2(q * vec2(60., 4.) + sd)));
+    c = mix(c, base * 1.5 + vec3(.06, .06, 0.), smoothstep(.7, 1., vUA.x) * .6);
+    col = c * (.25 + .6 * lam) * uLightCol + c * vec3(.9, 1.15, .5) * backlit * 1.3 * uLightCol;
+    col += uLightCol * pow(max(dot(r, uLight), 0.), 40.) * .4 * spiral;
   } else if (mat > 5.5) {
     // a living blade of grass: a keel down its middle, fine veins either side, paler at its
     // sheath, a waxy sheen; the light through it green-gold; a grazed tip torn and browning
@@ -975,7 +1002,7 @@ const solids = instanced(solidProg, sphereVerts, [['aP', 3]], SPH);
 const solidsLo = instanced(solidProg, sphere(6, 8), [['aP', 3]], SPH);
 const SMALL = 0.06;
 // the limbs: their rows in a float texture; three meshes, by how near
-const MAXROWS = 2048;
+const MAXROWS = Math.min(8192, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
 const rowsTex = gl.createTexture()!;
 gl.bindTexture(gl.TEXTURE_2D, rowsTex);
 gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, ROWW, MAXROWS);
@@ -1031,6 +1058,7 @@ function drawLimbs(m: { vao: WebGLVertexArrayObject; count: number }, start: num
 }
 void MAXP;
 const drops = instanced(dropProg, sphereVerts, [['aP', 3]], SPH);
+const dropsLo = instanced(dropProg, sphere(5, 8), [['aP', 3]], SPH);
 const tubes = instanced(stalkProg, grid(48, 16, (k) => 1 - Math.pow(1 - k, 1.5)), [['aUA', 2]], [['aBase', 3], ['aDir', 4], ['aShape', 4], ['aMore', 4], ['aLook', 4]]);
 // (fine hairs: the same tube, far fewer rings)
 const hairs = instanced(stalkProg, grid(5, 4), [['aUA', 2]], [['aBase', 3], ['aDir', 4], ['aShape', 4], ['aMore', 4], ['aLook', 4]]);
@@ -1389,10 +1417,14 @@ function label() {
   // a terrarium: the species the lens is on (or, between, the terrarium's cast)
   const who = shot?.who ?? -1;
   const kind = shot?.kind ?? '';
-  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' || kind === 'trap' || kind === 'field' || kind === 'dew' ? kind : ''}:${pasture && who < 0 ? patNear(view.look)?.seed : ''}`;
+  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' || kind === 'trap' || kind === 'field' || kind === 'dew' || ['moss', 'dungmoss', 'clover', 'web'].includes(kind) ? kind : ''}:${pasture && who < 0 ? patNear(view.look)?.seed : ''}`;
   if (key === labelled) return;
   labelled = key;
   if (kind === 'graze') el.innerHTML = `<i>mites and springtails</i><span>grazing the mycelium</span>`;
+  else if (kind === 'moss') el.innerHTML = `<i>a moss</i><span>a cushion of shoots, its capsules nodding on red setae</span>`;
+  else if (kind === 'dungmoss') el.innerHTML = `<i>a dung moss</i><span>on an old pat · its umbrellas, the colour and the smell to bring flies</span>`;
+  else if (kind === 'clover') el.innerHTML = `<i>white clover</i><span>its leaves on long stalks, a pale chevron on each leaflet</span>`;
+  else if (kind === 'web') el.innerHTML = `<i>a money spider's sheet</i><span>low in the grass, silver with dew</span>`;
   else if (kind === 'dew') el.innerHTML = `<i>dew</i><span>on the grass at the pat's edge, before the sun's on it</span>`;
   else if (kind === 'trap') el.innerHTML = `<i>a nematode-trapping fungus</i><span>its sticky loops, and a nematode, caught</span>`;
   else if (kind === 'field') {
@@ -1529,6 +1561,8 @@ function direct(dt: number) {
       view.pitch = best.kind === 'graze' || best.kind === 'trap' ? 0.6 + Math.random() * 0.25 : 0.22 + Math.random() * 0.2;
       view.aperture = best.kind === 'graze' ? 0.7 : 1;
       lastKind = best.kind;
+    } else if (pasture && (force ? ['moss', 'dungmoss', 'clover', 'web'].includes(force) : Math.random() < 0.18) && floraShot(force as FloraKind | null)) {
+      // (the pasture's other life, now and then: moss, dung moss on an old pat, clover, a web)
     } else if (pasture && force !== 'wide' && force !== 'field' && (force === 'dew' || Math.random() < 0.35) && dewy() > 0.5 && dewBlade()) {
       // (at dawn, now and then: the dew on a blade at the pat's edge)
       const at = dewBlade()!;
@@ -1557,10 +1591,24 @@ function direct(dt: number) {
       view.aperture = 0.3;
       lastKind = 'wide';
     }
+    if (!shot) return;
     view.look = shot.look;
     view.dist = shot.dist;
     label();
   }
+}
+/** A shot of the pasture's other life near here (a web only when it's dewy): set it, or say no. */
+function floraShot(want: FloraKind | null): boolean {
+  const kinds: FloraKind[] = want ? [want] : dewy() > 0.5 ? ['web', 'moss', 'clover', 'dungmoss'] : ['moss', 'dungmoss', 'clover'];
+  const kind = kinds[Math.floor(Math.random() * kinds.length)];
+  const old = pats.map((p) => ({ x: p.x, z: p.z, age: (T - p.drop) / 24, seed: p.seed }));
+  const near = floraNear(seed, field, old, cur.look[0], cur.look[2], kind, Math.floor(T / 6));
+  if (!near || Math.hypot(near.at[0] - cur.look[0], near.at[2] - cur.look[2]) > 140) return false;
+  shot = { look: near.at, dist: near.size * 2.2 + 6, until: T + 2, who: -1, kind: kind };
+  view.pitch = kind === 'web' ? 0.5 : kind === 'clover' ? 0.75 + Math.random() * 0.2 : 0.25 + Math.random() * 0.25;
+  view.aperture = 0.8;
+  lastKind = kind;
+  return true;
 }
 /** How wet the grass is with dew at this hour (0..1). */
 function dewy() {
@@ -2006,6 +2054,10 @@ function things() {
   if (crit && lastCam) drawCritters(crit, T, time, groundY, lastCam.eye as V3, lim);
   if (lastCam) drawStraw(blades, groundY, lastCam.eye as V3, lim);
   if (pasture && lastCam) drawGrass(seed, field, cur.look, lastCam.eye as V3, time, (21 + T) % 24, Math.floor(T / 6), lim, dew);
+  if (pasture && lastCam) {
+    const old = pats.map((p) => ({ x: p.x, z: p.z, age: (T - p.drop) / 24, seed: p.seed }));
+    drawFlora(seed, field, old, cur.look, lastCam.eye as V3, time, (21 + T) % 24, Math.floor(T / 6), lim, solid, dew);
+  }
   return { solid, dew, per, feet, lim };
 }
 
@@ -2249,7 +2301,15 @@ function frame(now: number) {
   gl.uniform2f(u(dropProg, 'uRes'), W, Hh);
   gl.bindTexture(gl.TEXTURE_2D, copyTex);
   gl.uniform1i(u(dropProg, 'uBehind'), 0);
-  draw(drops, th.dew);
+  // (the many tiny drops — a web's — coarser)
+  const dBig: number[] = [];
+  const dSmall: number[] = [];
+  for (let i = 0; i < th.dew.length; i += 10) {
+    const to = th.dew[i + 3] < 0.2 ? dSmall : dBig;
+    for (let k = 0; k < 10; k++) to.push(th.dew[i + k]);
+  }
+  draw(drops, dBig);
+  draw(dropsLo, dSmall);
   // 4. through the lens
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, W, Hh);

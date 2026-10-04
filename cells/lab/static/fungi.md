@@ -33,15 +33,30 @@ and goes back to grass over the next five. All the pats lean their fungi to the 
 - **Dew:** from the small hours to mid-morning the blades bead with it, a heavy drop hanging at
   each tip.
 
-Every blade comes from the field's seed and its place, so the grass is the same wherever you
-look from. It's drawn only near the camera, finer nearer, and never between the camera and what
+**Among the grass** (`client/fungi/flora.ts`):
+- **Mosses** grow in patches where the sward is open:
+  - cushions of upright shoots, small pointed leaves in a close spiral, the new growth paler;
+  - from them, sporophytes: fine red setae, a capsule nodding at each top, green then brown;
+  - feather moss creeping over soil and thatch, its stems branched either side.
+- **Dung moss** (*Splachnum*) grows on some pats after three weeks. Pale shoots carry long setae,
+  and under each capsule is a swollen umbrella, magenta or yellow. Its colour and smell draw
+  flies, which carry its sticky spores to the next pat.
+- **White clover** grows in patches: stolons along the ground, leaves on long stalks, three broad
+  leaflets each with a pale chevron and herringbone veins.
+- **Money spiders' sheet webs** sit low in the grass: hammocks of silk you hardly see by day.
+  From the small hours to mid-morning they're silver with dew.
+
+Every blade (and moss, clover, web) comes from the field's seed and its place, so the grass is
+the same wherever you look from. It's drawn only near the camera, finer nearer, and never between the camera and what
 it's looking at.
 
 **The director** works across the field. It prefers moments near where it is: a long way to go
 for a moment loses it. Between moments it looks at the pat with most going on nearby. Now and
-then it takes two other shots:
+then it takes other shots:
 - **The lie of the field:** pats in their clearings in the grass, from up and back.
 - **Dew at dawn:** a blade at a pat's edge.
+- **The other life near it:** a moss's capsules, dung moss on an old pat, clover, a dewed
+  web.
 
 The caption names the pat's age. The clock shows the field's date and hour. The scrubber covers
 four weeks, two either side of when you came, and moves on as time does. `another` gives
@@ -221,6 +236,12 @@ jelly is lit from inside, and the depth of field is a few millimetres.
      dung, and each pat's map is a layer of a texture array. Old, the ground crusts: greyer,
      cracked, then the field's floor coming back over it. Between pats lies the field's floor:
      dead leaf, roots, soil, green in it. The ground's mesh follows the camera.
+   - **Moss shoots, clover leaves, setae and the dung moss's umbrellas** are limbs as well:
+     - A moss shoot's leaves are a spiral pattern in its own coordinates. Where its edge would
+       be smooth, it's broken off between the leaves, so it's ragged.
+     - A clover leaflet is a broad, flattened limb whose width follows a leaf's outline.
+     - Further off, a moss cushion is a velvet tuft.
+     - A web is its dew: a few hundred tiny drops along its threads, drawn with a coarse mesh.
    - **Grass blades** are limbs too: flat ribbons whose width keeps across their bend, however
      far over they bend. Each has a keel and veins, is paler at the sheath, and has a waxy sheen;
      the light through it is green-gold. Grazed tips are torn and browning.
