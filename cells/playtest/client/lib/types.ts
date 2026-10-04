@@ -27,9 +27,10 @@ export interface GameView {
   head: { version: number; rules: string; rationale: string; status: string; hash: string; createdAt: string; declared: Declared } | null;
 }
 export interface Finding { kind: string; severity: 'info' | 'warn' | 'error'; subject: string; detail: string }
-export interface Parts { ended: number; variety: number; agency: number; length: number; clean: number; judged: number; critique?: number }
+export type Parts = Record<string, number>;
+export interface DeductionSummary { n: number; exposed: number; exposedWithEvidence: number; enemyWon: number; wrongAccusationShare: number; accusationsPerGame: number; interaction: number; leadChanges: number }
 export interface Critique { dims: Record<string, number | null>; index: number | null; weakest: Array<[string, number]>; strongest: Array<[string, number]>; fixes: Array<[string, number]>; cause?: Array<[string, number]> }
-export interface CritiqueSummary { n: number; outcomes?: Record<string, number>; byPersona?: Record<string, { n: number; score: number; outcomes: Record<string, number> }>; cause?: Array<[string, number]>; index: number | null; dims: Record<string, number>; weakest: Array<[string, number]>; strongest: Array<[string, number]>; fixes: Array<[string, number]> }
+export interface CritiqueSummary { n: number; outcomes?: Record<string, number>; byPersona?: Record<string, { n: number; score: number; outcomes: Record<string, number> }>; cause?: Array<[string, number]>; index: number | null; dims: Record<string, number>; weakest: Array<[string, number]>; strongest: Array<[string, number]>; fixes: Array<[string, number]>; deduction?: DeductionSummary }
 export interface Scoring { version: string; weights: Record<string, number>; critique: Array<{ key: string; name: string; ask: string; levels: string[] }>; fixes: string[] }
 export interface RunDigest { id: string; split: 'train' | 'test'; seed: number; players: number; score: number; parts?: Parts; stopped?: string; endReason?: string | null; steps?: number; rounds?: number; verdict?: string | null; findings?: string[]; critique?: Critique | null; winnerRole?: string | null; endKind?: string; persona?: string }
 export interface EvalView {

@@ -44,7 +44,9 @@ import { deduction, type DeductionReport } from './deduction';
  *  enemy winning 30–45 %, wrong accusations under 20 % of all (each 1 inside, falling to 0 at
  *  0.4 away), weighted .25 (runs .65, definition health .10).
  *  Games without a hidden enemy keep the v3.1 run formula and outcome balance (.75/.15/.10). */
-export const SCORE_VERSION = 'score/v4';
+/** v4.1: evidence excludes what the enemy gave away by its own move (v4's first deploy counted a
+ *  self-reveal as evidence, which would have flattered v0.4 in the calibration ladder). */
+export const SCORE_VERSION = 'score/v4.1';
 export const WEIGHTS = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, length: 0.1, clean: 0.1 } as const;
 export const WEIGHTS_HIDDEN_ROLE = { ended: 0.15, critique: 0.2, judged: 0.1, clean: 0.1, deduction: 0.2, interaction: 0.15, tension: 0.1 } as const;
 

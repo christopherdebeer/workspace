@@ -31,8 +31,12 @@ export interface DeductionReport {
 const ACCUSE = /^(denounce|accuse)$/;
 const INTERACTIVE = /^(cooperate|sabotage|expose|denounce|accuse|trade_offer|use_power|steal|bribe|vote)$/;
 
-/** Does a knowledge line (lib/runner knowledgeEvents) tell `viewer` something about `enemy`? */
+/** Does a knowledge line (lib/runner knowledgeEvents) tell `viewer` something about `enemy`?
+ *  What the enemy gives away by its own move (walking into a revealing place, completing a
+ *  project in the open) is not deduction: lines caused by the enemy's own move never count. */
 export function namesEnemy(line: string, enemy: string, viewer: string): boolean {
+  const mover = /\((\S+): [^)]*\)\s*$/.exec(line)?.[1];
+  if (mover === enemy) return false;
   const priv = /^R\d+ (\S+) privately learned (.+?) \(/.exec(line);
   if (priv) return priv[1] === viewer && (priv[2].startsWith(`${enemy} `) || priv[2].endsWith(` ${enemy}`));
   const pub = /^R\d+ everyone learned: (.+?) \(/.exec(line);
