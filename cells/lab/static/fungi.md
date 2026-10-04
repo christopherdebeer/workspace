@@ -217,6 +217,29 @@ from what it's like.
 
 ## How it's drawn
 
+**Light.** The sun (or the lamp at night) casts soft shadows. Each frame first draws a depth map
+from the light, fitted to what the camera is on and snapped to its texels so the shadows don't
+crawl. Into it go the ground and the pats' mounds, the fungi's caps and opaque stems, the grass,
+the animals and the litter. Clear things (*Pilobolus* stalks, nematodes, wings) cast next to
+nothing. Everything opaque then looks it up softly: grass stripes the pats with shade, a cap
+shades the dung under it. The shade keeps some of the sky. On a device too slow to keep up even
+at its smallest size, the shadows switch themselves off; `?noshadow` turns them off.
+
+**Surfaces.** The ground's relief comes from cellular noise and a height turned into a normal
+across each pixel. No detail is drawn finer than a pixel can hold.
+- **Fresh dung:** dark, wet with a smooth gloss, straw fibres in it at every angle, air pits.
+- **Drying dung:** a crust that splits into irregular plates, the cracks widening with age, each
+  plate its own shade.
+- **The field's floor:** soil crumbs with pale grains among them, flakes of dead leaf with
+  their veins, fine roots.
+- **Mushroom caps:** radial fibrils; a mottlegill's cap water-soaked toward its margin, drying
+  in patches; gills granular with spores.
+- **Grass blades:** rows of stomata along them, soil splashed up their bases, tiny teeth on
+  their edges catching the light.
+
+**The lens** adds a faint bloom round the brightest light (glints, dew), lateral colour fringing
+toward the frame's edges, grain and vignetting.
+
 A macro lens wide open: wet things glisten, stalks are glass or velvet, droplets are lenses, the
 jelly is lit from inside, and the depth of field is a few millimetres.
 

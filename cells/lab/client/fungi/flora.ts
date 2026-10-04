@@ -214,8 +214,8 @@ export function drawFlora(world: number, f: Field, old: OldPat[], look: V3, eye:
       for (const p of c.rosettes) {
         const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
         if (de > 260) continue;
-        if (blocks(p.x, p.z, p.L * 0.6)) continue;
-        rosette(p, f, time, out, de);
+        if (blocks(p.x, p.z, 10)) continue;
+        rosette(p, f, time, out, de, blocks);
       }
       for (const p of c.casts) {
         const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
@@ -359,7 +359,7 @@ function clover(p: Clover, f: Field, time: number, out: Limbs, de: number) {
 }
 /** ribwort plantain: a rosette of long ribbed leaves, rising; some with a spike on a tall stalk — a
  *  dark head, ringed with pale stamens where it's flowering */
-function rosette(p: Rosette, f: Field, time: number, out: Limbs, de: number) {
+function rosette(p: Rosette, f: Field, time: number, out: Limbs, de: number, blocks: (x: number, z: number, w: number) => boolean) {
   const y0 = f.groundY(p.x, p.z);
   let q = Math.floor(p.seed * 4241) >>> 0;
   const rnd = () => ((q = (Math.imul(q, 1664525) + 1013904223) >>> 0) / 4294967296);
@@ -370,6 +370,8 @@ function rosette(p: Rosette, f: Field, time: number, out: Limbs, de: number) {
     const rise = lerp(0.35, 0.75, rnd());
     const dir: V3 = [Math.cos(a), 0, Math.sin(a)];
     const across: V3 = [-dir[2], 0, dir[0]];
+    // (a leaf reaching into the lens's way: not drawn)
+    if (blocks(p.x + dir[0] * L * 0.45, p.z + dir[2] * L * 0.45, W) || blocks(p.x + dir[0] * L * 0.85, p.z + dir[2] * L * 0.85, W)) continue;
     const pts: V3[] = [];
     const rad: number[] = [];
     for (let i = 0; i < 8; i++) {

@@ -155,7 +155,9 @@ export function drawGrass(world: number, f: Field, look: V3, eye: V3, time: numb
         if (blocks(b.x, b.z, b.w)) continue;
         // (and nor does a tall one arching into it)
         const reach = b.h * Math.sin(Math.min(1.5, b.lean + b.droop * 0.5));
-        if (blocks(b.x + Math.cos(b.az) * reach * 0.5, b.z + Math.sin(b.az) * reach * 0.5, b.w) || blocks(b.x + Math.cos(b.az) * reach, b.z + Math.sin(b.az) * reach, b.w)) continue;
+        let blocked = false;
+        for (const k of [0.25, 0.5, 0.75, 1]) if (blocks(b.x + Math.cos(b.az) * reach * k, b.z + Math.sin(b.az) * reach * k, b.w)) blocked = true;
+        if (blocked) continue;
         const de = Math.hypot(b.x - eye[0], b.z - eye[2], eye[1]);
         const near = de < 70;
         const N = near ? 10 : 6;

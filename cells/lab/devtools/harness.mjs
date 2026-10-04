@@ -91,7 +91,8 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
     /** A screenshot to devtools/out/<name>.png; returns the path. */
     async shot(page, name) {
       const path = join(OUT, `${name}.png`);
-      await page.screenshot({ path });
+      // (software rendering can take a while over a heavy frame)
+      await page.screenshot({ path, timeout: 300000 });
       return path;
     },
     /** Images side by side (each `height` px tall) in one PNG — for looking, or for a reference beside a render. */
@@ -103,7 +104,8 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
       const width = await page.evaluate(() => document.body.scrollWidth);
       await page.setViewportSize({ width, height: h + 24 });
       const path = join(OUT, `${name}.png`);
-      await page.screenshot({ path });
+      // (software rendering can take a while over a heavy frame)
+      await page.screenshot({ path, timeout: 300000 });
       await page.close();
       return path;
     },

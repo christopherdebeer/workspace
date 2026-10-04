@@ -44,6 +44,25 @@ const SHADE = 24;
 // ─── shaders ────────────────────────────────────────────────────────────────────────────────────
 const COMMON = `
 uniform vec3 uLight, uEye, uLightCol, uSky;
+// the sun's shadows: its depth map, its view, how dark a shadow is, a texel; and the pass that
+// draws the depth map (everything early-outs)
+uniform highp sampler2DShadow uSh;
+uniform mat4 uLVP;
+uniform float uShK, uShTexel, uSP;
+float sunVis(vec3 w) {
+  vec4 c = uLVP * vec4(w, 1.);
+  vec3 p = c.xyz / c.w * .5 + .5;
+  if (p.x < 0. || p.y < 0. || p.x > 1. || p.y > 1. || p.z > 1.) return 1.;
+  float s = 0.;
+  for (int i = 0; i < 8; i++) {
+    float a = float(i) * 2.39996;
+    float r = sqrt((float(i) + .5) / 8.) * uShTexel * 2.5;
+    s += texture(uSh, vec3(p.xy + vec2(cos(a), sin(a)) * r, p.z - .0003));
+  }
+  return s / 8.;
+}
+// (how lit, in the sun's shadows: the shade still has the sky)
+float lit(vec3 w) { return uShK > 0. ? mix(1. - uShK, 1., sunVis(w)) : 1.; }
 uniform float uS; // the patch's scale: noise is in the things' own size
 float h(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 float n2(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
@@ -137,27 +156,38 @@ uniform float uSpan, uField;
 ${COMMON}
 ${PATS}
 float fine(vec2 p) { return fbm(p * 3.) * .6 + n2(p * 14.) * .25 + n2(p * 37.) * .15; }
+// cellular noise: the distances to the nearest feature point and the next, and the nearest's id
+vec3 cell(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  float d1 = 9., d2 = 9., id = 0.;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(x, y);
+    vec2 r = g + vec2(h(i + g), h(i + g + 17.3)) - f;
+    float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; id = h(i + g + 3.1); } else if (d < d2) d2 = d;
+  }
+  return vec3(sqrt(d1), sqrt(d2), id);
+}
+// a surface's relief, as a height, turned into its normal by how the height changes across the
+// pixel (no extra samples)
+vec3 bump(vec3 n, vec3 pos, float ht) {
+  vec3 dx = dFdx(pos), dy = dFdy(pos);
+  vec3 r1 = cross(dy, n), r2 = cross(n, dx);
+  float det = dot(dx, r1);
+  vec3 grad = sign(det) * (dFdx(ht) * r1 + dFdy(ht) * r2);
+  return normalize(abs(det) * n - grad);
+}
 void main() {
+  if (uSP > .5) { o = vec4(1.); return; }
   vec2 p = vW.xz / uS;
-  // the surface's own fine relief, for the light (finer than the mesh)
-  float e = .03;
   vec3 ng = normalize(cross(dFdx(vW), dFdy(vW)));
   if (ng.y < 0.) ng = -ng;
-  vec3 nd = vec3(fine(p - vec2(e, 0.)) - fine(p + vec2(e, 0.)), 0., fine(p - vec2(0., e)) - fine(p + vec2(0., e))) / (2. * e) * .22;
-  vec3 n = normalize(ng + nd * 1.6);
   vec3 v = normalize(uEye - vW);
-  // dung: dark, fibrous (the grass it was), crumbly, flecked
-  float fib = n2(p * vec2(2.2, .5) + n2(p * .3) * 4.) * .6 + n2(p * vec2(9., 1.8) + 5.) * .4;
-  float crumb = fine(p * 1.3);
-  float fleck = smoothstep(.75, .9, n2(p * 1.7 + 3.));
-  vec3 c = uGround * (.45 + .7 * fib) * (.7 + .6 * crumb) + vec3(.13, .08, .03) * fleck;
-  c = mix(c, c * vec3(1.25, 1., .7), smoothstep(.5, .8, n2(p * .4 + 20.)) * .6);
-  // wet in its hollows: darker, glossier
-  float wet = smoothstep(.3, .7, n2(p * .35 + 11.) * .7 + (1. - crumb) * .4) * uWet;
-  // mycelium: white threads in patches, and round the feet of the stalks
-  float myc = uMyc * smoothstep(.62, .8, fbm(p * .45 + 30.));
-  // the pats: the dung's edge; eaten dung pales and dries; its water; its mycelium, where the
-  // grid says it has spread. Old, it crusts: greyer, cracked, the grass coming back over it
+  // (how much finer detail a pixel can hold here: none of it smaller than a pixel)
+  float px = fwidth(p.x) + fwidth(p.y);
+  float fineK = 1. - smoothstep(.08, .5, px);
+  float coarseK = 1. - smoothstep(.6, 3., px);
+  // the pats first: where there's dung, how far gone it is, how old
   float dung = 0.;
   vec4 m = vec4(0.);
   float age = 0.;
@@ -169,19 +199,79 @@ void main() {
     float di = smoothstep(.2, .8, mi.a);
     if (di > dung) { dung = di; m = mi; age = uPat[i].w; }
   }
-  // (between them: bare grey earth in the studio; in the field, the sward's floor — dead
-  // leaf, roots, soil, green in it)
+  if (uField < .5 && uSpan > 0. && dung == 0.) age = 0.;
+  float crumb = fine(p * 1.3);
+  float fresh = 1. - smoothstep(.5, 5., age);
+  float crust = smoothstep(4., 30., age);
+
+  // ── dung: dark and fibrous (the grass it was), with air pits while it's fresh; drying, a crust
+  //    forms on it and splits into plates
+  float fib = n2(p * vec2(2.2, .5) + n2(p * .3) * 4.) * .6 + n2(p * vec2(9., 1.8) + 5.) * .4;
+  vec3 cd = uGround * (.45 + .7 * fib) * (.7 + .6 * crumb);
+  float hd = 0.;
+  float pit = 0.;
+  if (dung > 0.) {
+    float strand = 0.;
+    if (fineK > 0.) {
+      vec3 fc = cell(p * .9);
+      vec2 fd = vec2(cos(fc.z * 6.2832), sin(fc.z * 6.2832));
+      strand = smoothstep(.55, .95, sin(dot(p, fd) * 26. + fc.z * 40.)) * smoothstep(.75, .3, fc.x) * smoothstep(.3, .6, n2(vec2(dot(p, fd.yx * vec2(-1., 1.)) * 3., fc.z * 9.))) * fineK;
+      vec3 pc = cell(p * 3.2 + 9.);
+      pit = smoothstep(.2, .12, pc.x) * step(.55, pc.z) * (.3 + fresh * .7) * fineK;
+    }
+    float crack = 0.;
+    float plate = 0.;
+    float plateId = .5;
+    if (crust > .05 && coarseK > 0.) {
+      // (the plates irregular: the crack net bent by a slow warp; some cracks hairline)
+      vec2 wp = p * .22 + 3. + (vec2(n2(p * .3), n2(p * .3 + 7.)) - .5) * .9;
+      vec3 cc = cell(wp);
+      float crackW = (.015 + .06 * crust) * (.4 + 1.2 * n2(p * .7 + 3.));
+      crack = (1. - smoothstep(crackW * .5, crackW, cc.y - cc.x)) * smoothstep(.15, .5, crust) * coarseK;
+      plate = (cc.y - cc.x) * crust;
+      plateId = cc.z;
+    }
+    float lump = fbm(p * .9) + (crumb - .5) * .5;
+    hd = lump * .35 + strand * .12 - pit * .25 - crack * .6 + plate * .15;
+    cd = mix(cd, cd * vec3(1.25, 1., .7), smoothstep(.5, .8, n2(p * .4 + 20.)) * .6);
+    cd = mix(cd, vec3(.42, .33, .18) * (.75 + .4 * n2(p * 20.)), strand * .55);
+    cd = mix(cd, cd * .35, pit);
+    // (drying: lighter, greyer, its plates each a shade of their own; the cracks dark)
+    cd = mix(cd, vec3(.24, .2, .15) * (.75 + .5 * crumb) * (.85 + .3 * plateId), crust * .7);
+    cd *= 1. - crack * .7;
+  }
+
+  // ── the field's floor: soil crumbs (pale grains among them), flakes of dead leaf, fine roots;
+  //    the studio's: bare grey earth
+  vec3 floor_ = vec3(.09, .07, .045) * (.6 + .8 * crumb);
+  float hf = crumb * .3;
+  if (dung < 1. && uField > .5) {
+    vec3 cellF = fineK > 0. ? cell(p * 1.4) : vec3(.5, .8, .5);
+    float crumbs = (1. - smoothstep(.0, .55, cellF.x)) * fineK;
+    vec3 soil = mix(vec3(.1, .075, .05), vec3(.07, .055, .04), cellF.z) * (.65 + .7 * crumbs) * (.8 + .4 * crumb);
+    soil = mix(soil, vec3(.42, .38, .3), step(.94, cellF.z) * crumbs);
+    vec3 lc = coarseK > 0. ? cell(p * .28 + 11.) : vec3(.5, .8, 0.);
+    float leaf = step(.62, lc.z) * smoothstep(.05, .12, lc.y - lc.x) * coarseK;
+    float veins = smoothstep(.85, 1., abs(sin((p.x * cos(lc.z * 9.) + p.y * sin(lc.z * 9.)) * 9.))) * leaf * fineK;
+    vec3 litter = mix(vec3(.3, .24, .14), vec3(.2, .17, .13), fract(lc.z * 7.)) * (.8 + .3 * n2(p * 6.)) * (1. - veins * .3);
+    floor_ = mix(soil, litter, leaf);
+    floor_ = mix(floor_, floor_ * vec3(.9, 1.15, .75), smoothstep(.4, .7, fbm(p * .08 + 5.)) * .6);
+    float roots = smoothstep(.6, .9, n2(p * vec2(30., 3.) + n2(p * 2.) * 8.)) * fineK * (1. - leaf);
+    floor_ = mix(floor_, vec3(.5, .42, .3), roots * .35);
+    hf = crumbs * .3 + leaf * .15 - veins * .04 + roots * .05;
+  }
   vec3 earth = vec3(.16, .14, .12) * (.6 + .8 * crumb);
-  vec3 floor_ = mix(vec3(.09, .075, .045), vec3(.1, .13, .05), smoothstep(.35, .7, fbm(p * .08 + 5.))) * (.55 + .9 * crumb);
-  floor_ = mix(floor_, vec3(.32, .27, .16) * (.7 + .5 * fib), smoothstep(.55, .8, n2(p * vec2(1.6, .35) + n2(p * .2) * 5.)) * .55);
   vec3 around = mix(earth, floor_, uField);
-  float crust = smoothstep(18., 32., age);
-  float cracks = 1. - smoothstep(.0, .06, abs(n2(p * .9 + 7.) - .5)) * crust;
-  vec3 cd = mix(c, vec3(.2, .18, .15) * (.7 + .5 * crumb), crust * .75) * (.55 + .45 * cracks);
   cd = mix(cd, floor_, smoothstep(30., 52., age) * smoothstep(.3, .6, fbm(p * .3 + 2.)) * uField);
-  c = mix(around, cd, dung);
+
+  vec3 c = mix(around, cd, dung);
+  float ht = mix(mix(crumb * .3, hf, uField), hd, dung);
+  vec3 n = bump(ng, vW, ht * .25 / max(uS, .2));
+  // eaten dung pales and dries; the dung's water (fresh: wetter all over, glossy)
   c = mix(c, c * vec3(1.5, 1.4, 1.2) + vec3(.05), (1. - m.b) * dung * .6 * (1. - crust));
-  wet = mix(wet * uField * .6, smoothstep(.3, .7, n2(p * .35 + 11.) * .5 + m.g * .6) * m.g, dung) * (1. - crust);
+  float wet = smoothstep(.3, .7, n2(p * .35 + 11.) * .7 + (1. - crumb) * .4) * uWet;
+  wet = mix(wet * uField * .5, max(smoothstep(.3, .7, n2(p * .35 + 11.) * .5 + m.g * .6) * m.g, fresh * .8), dung) * (1. - crust * .9) * (1. - pit * .5);
+  float myc = uMyc * smoothstep(.62, .8, fbm(p * .45 + 30.));
   myc = max(myc * (1. - uField), smoothstep(.2, .95, m.r) * .55 * (.3 + .7 * fbm(p * 1.3 + 40.)) * dung);
   c *= 1. - wet * .35;
   for (int i = 0; i < ${MYC}; i++) {
@@ -194,7 +284,8 @@ void main() {
   c = mix(c, vec3(.82, .82, .78), clamp(myc * (.2 + .45 * threads), 0., .75));
   float diff = .3 + .7 * max(dot(n, uLight), 0.);
   vec3 col = c * diff * uLightCol;
-  col += wetness(n, v, vec3(p.x, 0., p.y), wet, 9.);
+  // (fresh dung's wet is a smooth gloss; the sparkle's for the dew-wet ground)
+  col += wetness(n, v, vec3(p.x, 0., p.y), wet * (1. - dung * .5), mix(9., 2., dung));
   float ao = 1.;
   for (int i = 0; i < ${SHADE}; i++) {
     vec4 f = uShade[i];
@@ -202,7 +293,7 @@ void main() {
     vec2 d = (vW.xz - f.xy) / f.z;
     ao *= 1. - f.w * exp(-dot(d, d) * 2.2);
   }
-  o = vec4(col * ao, 1.);
+  o = vec4(col * ao * lit(vW), 1.);
 }`;
 
 // ─── limbs: swept tubes along a short polyline (up to 24 points, each with its radius), one row
@@ -213,6 +304,7 @@ precision highp float;
 precision highp sampler2D;
 in vec2 aUA;
 uniform mat4 uVP;
+uniform float uSP;
 uniform sampler2D uRows;
 uniform int uOffset;
 out vec3 vW;
@@ -287,6 +379,7 @@ void main() {
   vInfo = info;
   vMore = more;
   gl_Position = uVP * vec4(vW, 1.);
+  if (uSP > .5 && abs(col.a - 4.) < .5) gl_Position = vec4(2., 2., 2., 1.);
 }`;
 const LIMB_FS = `#version 300 es
 precision highp float;
@@ -305,6 +398,7 @@ uniform mat4 uView;
 uniform float uGlass;
 ${COMMON}
 void main() {
+  if (uSP > .5) { o = vec4(1.); return; }
   vec3 n = normalize(vN);
   vec3 v = normalize(uEye - vW);
   if (dot(n, v) < 0.) n = -n;
@@ -398,6 +492,11 @@ void main() {
     float veins = .5 + .5 * cos(across * 34. + sd);
     float x = vUA.x;
     vec3 c = base * (.86 + .12 * veins) * mix(1., 1.25, keel * .5);
+    // (the epidermis: rows of stomata along it, its cells long; soil splashed up its base)
+    float stom = .5 + .5 * sin(across * 95. + sd);
+    stom = mix(stom, .5, smoothstep(.3, .9, fwidth(across * 95.)));
+    c *= .94 + .1 * stom * (.7 + .3 * n2(vec2(q.x * 60., across * 20.)));
+    c = mix(c, vec3(.16, .12, .08), smoothstep(.12, .0, x) * smoothstep(.4, .8, n2(vec2(q.x * 4., across * 3.) + sd)) * .6);
     c = mix(c * vec3(1.15, 1.18, .9) + .04, c, smoothstep(.0, .25, x));
     float torn = vMore.y * smoothstep(.86, 1., x);
     float brown = max(torn, vMore.z * smoothstep(.55, 1., x)) * (.6 + .4 * n2(vec2(q.x * 40., vUA.y * 3.)));
@@ -406,6 +505,8 @@ void main() {
     col += c * vec3(.9, 1.2, .45) * backlit * 1.4 * uLightCol;
     float fr = .04 + .96 * pow(1. - nv, 5.);
     col += env(r) * (.06 + fr * .7) + uLightCol * (pow(max(dot(r, uLight), 0.), 24.) * .3 + pow(max(dot(r, uLight), 0.), 200.) * 1.5);
+    // (its edges serrated: tiny teeth catching the light)
+    col += uLightCol * smoothstep(.93, 1., abs(across)) * step(.75, fract(q.x * 14. + sd)) * pow(max(dot(r, uLight), 0.), 8.) * .8;
   } else if (mat > 4.5) {
     // a fragment of grass: veined lengthwise, its cells in rows, rotting in patches; thin enough
     // to glow with the light behind it; dull, a faint sheen where it's wet
@@ -448,6 +549,8 @@ void main() {
     c += uLightCol * (pow(max(dot(r, uLight), 0.), 160.) * 8. + pow(max(dot(r, uLight), 0.), 20.) * .3) * ann;
     col = c;
   }
+  // (opaque things in the sun's shadows; glass lets most through)
+  if (mat < 3.5 || mat > 4.5) col *= lit(vW);
   o = vec4(col, 1.);
 }`;
 
@@ -484,6 +587,7 @@ in vec4 vCol;
 out vec4 o;
 ${COMMON}
 void main() {
+  if (uSP > .5) { o = vec4(1.); return; }
   float kind = vCol.a;
   vec3 n = normalize(vN);
   vec3 v = normalize(uEye - vW);
@@ -492,7 +596,7 @@ void main() {
     float hair = n2(vO.xz * 28. + vO.y * 9.) * .6 + n2(vec2(atan(vO.z, vO.x) * 9., vO.y * 40.)) * .4;
     if (hair < .5 + .35 * (1. - vO.y)) discard;
     float sheen = pow(1. - max(dot(n, v), 0.), 2.);
-    o = vec4(vCol.rgb * (.55 + .45 * max(dot(n, uLight), 0.) + sheen * .6) * uLightCol, 1.);
+    o = vec4((vCol.rgb * (.55 + .45 * max(dot(n, uLight), 0.) + sheen * .6) * uLightCol) * lit(vW), 1.);
     return;
   }
   // (a crumb's surface is rough: its normal wanders)
@@ -502,10 +606,10 @@ void main() {
   float diff = .3 + .7 * max(dot(n, uLight), 0.);
   float through = pow(max(dot(-v, uLight), 0.), 2.) * step(.5, kind) * step(kind, 1.5);
   vec3 col = vCol.rgb * (diff + through * 1.5) * uLightCol;
-  if (kind > 1.5) { o = vec4(col * (.8 + .4 * n3(vO * 20.)), 1.); return; }
+  if (kind > 1.5) { o = vec4((col * (.8 + .4 * n3(vO * 20.))) * lit(vW), 1.); return; }
   col += env(r) * f;
   col += uLightCol * pow(max(dot(r, uLight), 0.), 120.) * 6.;
-  o = vec4(col, 1.);
+  o = vec4((col) * lit(vW), 1.);
 }`;
 // see-through: droplets — a ball lens (the patch behind, upside down), a glint, a dark rim
 const DROP_FS = `#version 300 es
@@ -546,6 +650,7 @@ in vec4 aShape;   // length now, foot radius, vesicle radius now, its length to 
 in vec4 aMore;    // knob radius, wave, phase, slump
 in vec4 aLook;    // yellow length, ripe, glassy, fuzz
 uniform mat4 uVP;
+uniform float uSP;
 out vec3 vW;
 out vec3 vN;
 out float vU;
@@ -593,6 +698,8 @@ void main() {
   vLook = aLook;
   vSlump = aMore.w;
   gl_Position = uVP * vec4(vW, 1.);
+  // (glass casts next to no shadow)
+  if (uSP > .5 && aLook.z > .5) gl_Position = vec4(2., 2., 2., 1.);
 }`;
 const STALK_FS = `#version 300 es
 precision highp float;
@@ -611,6 +718,7 @@ uniform vec3 uGlass, uTip, uVelvet;
 uniform float uThrows;
 ${COMMON}
 void main() {
+  if (uSP > .5) { o = vec4(1.); return; }
   vec3 n = normalize(vN);
   vec3 v = normalize(uEye - vW);
   if (dot(n, v) < 0.) n = -n;
@@ -644,6 +752,7 @@ void main() {
   float f = .03 + .97 * pow(1. - nv, 4.);
   col += env(r) * f * mix(.15, .9, vLook.z);
   col += uLightCol * pow(max(dot(r, uLight), 0.), 160.) * 6. * vLook.z;
+  col *= mix(1., lit(vW), 1. - vLook.z * .75);
   o = vec4(col, 1.);
 }`;
 
@@ -698,6 +807,7 @@ uniform vec3 uGill;
 uniform float uMottle;
 ${COMMON}
 void main() {
+  if (uSP > .5) { o = vec4(1.); return; }
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   vec3 v = normalize(uEye - vW);
   if (dot(n, v) < 0.) n = -n;
@@ -719,12 +829,14 @@ void main() {
     }
     // (dying: it darkens and dries from the rim in)
     col *= 1. - vC.y * .75 * smoothstep(1. - vC.y, 1., t);
-    o = vec4(col, 1.);
+    o = vec4(col * lit(vW), 1.);
     return;
   }
   if (!gl_FrontFacing) {
     // its gills, seen from under it: fine and dark, darker as it ripens
     float gill = .5 + .5 * sin(vTA.y * max(vB.w, 30.) * 3.);
+    // (each gill's edge paler, its face finely granular with spores)
+    gill = gill * (.85 + .3 * n2(vec2(vTA.y * 300., t * 40.)));
     c = mix(uBell * .55, uGill, .4 + .4 * vC.y) * (.7 + .3 * gill);
     // (a mottlegill's: patchy, where its black spores ripen unevenly)
     c = mix(c, c * (.45 + .9 * n2(vec2(vTA.y * 14., t * 9.))), uMottle);
@@ -734,6 +846,11 @@ void main() {
     float g = pow(abs(sin(vB.w * vTA.y * .5)), .6);
     c *= .82 + .18 * g;
     c *= .92 + .12 * n2(vec2(vTA.y * vB.w * 1.5, t * 30.));
+    // (radial fibrils in its cuticle; a mottlegill's cap water-soaked toward its margin, drying
+    // from its top in patches)
+    float fibr = n2(vec2(vTA.y * 160. + vC.z, t * 5.)) * .6 + n2(vec2(vTA.y * 420., t * 9.)) * .4;
+    c *= .9 + .16 * fibr * smoothstep(.05, .3, t);
+    c = mix(c, c * vec3(.72, .68, .64), uMottle * smoothstep(.4, .8, t) * smoothstep(.35, .65, n2(vec2(vTA.y * 3. + vC.z, t * 4.))) * .8);
     // its veil: white, woolly, in patches and fibrils, thick on the young egg, pulled apart as
     // the cap opens, washed off toward the margin
     float open = vB.z;
@@ -752,7 +869,7 @@ void main() {
   col += wetness(n, v, vW / uS, ink * .8, 30.) * (.15 + ink);
   // (a slimy cap: wet-glossy all over)
   if (gl_FrontFacing) col += wetness(n, v, vW / uS, uSlime, 30.) * uSlime * .8;
-  o = vec4(col, 1.);
+  o = vec4(col * lit(vW), 1.);
 }`;
 
 // the jelly: a cushion, lumpy and wrinkled, lit from inside; what's in it shows through it
@@ -870,7 +987,10 @@ void main() {
   vec2 uv = gl_FragCoord.xy * px;
   float cd = dist(uv);
   float cs = coc(cd);
-  vec3 col = texture(uCol, uv).rgb;
+  // (the lens's lateral colour: red and blue a hair apart, more toward the edges)
+  vec2 q0 = uv - .5;
+  vec2 ca = q0 * .0035;
+  vec3 col = vec3(texture(uCol, uv + ca).r, texture(uCol, uv).g, texture(uCol, uv - ca).b);
   float tot = 1.;
   float rad = 1.;
   float ang = h(gl_FragCoord.xy) * 6.28;
@@ -888,6 +1008,17 @@ void main() {
     ang += 2.39996;
   }
   col /= tot;
+  // bloom: the brightest light (glints, dew, the lit edges of wet things) spreading a little
+  vec3 glow = vec3(0.);
+  float gr = uRes.y * .028;
+  for (int i = 0; i < 16; i++) {
+    float t = (float(i) + .5) / 16.;
+    float a = float(i) * 2.39996 + ang;
+    vec3 sc = texture(uCol, uv + vec2(cos(a), sin(a)) * px * gr * sqrt(t)).rgb;
+    float l = dot(sc, vec3(.3, .5, .2));
+    glow += sc * max(0., l - 1.1) / max(l, 1e-3) * (1. - t);
+  }
+  col += glow / 16. * .9;
   col *= uExposure;
   col = col * (2.51 * col + .03) / (col * (2.43 * col + .59) + .14);
   col = mix(vec3(.03, .04, .025), vec3(1.), col);
@@ -1120,6 +1251,46 @@ function targets(w: number, h: number) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, copyFbo);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, copyTex, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+// the sun's depth map: what it sees, from where it is
+/** shadows (`?noshadow`: none — and none on a device that can't keep up even at its smallest) */
+let shadows = !params.has('noshadow');
+const SH = Math.min(1536, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
+const shadowTex = gl.createTexture()!;
+gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, SH, SH);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+gl.bindTexture(gl.TEXTURE_2D, null);
+const shadowFbo = gl.createFramebuffer()!;
+gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFbo);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shadowTex, 0);
+gl.drawBuffers([gl.NONE]);
+gl.readBuffer(gl.NONE);
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+/** The sun's view: square on what the camera's looking at, wide as it needs to be, its middle
+ *  snapped to the map's texels (so the shadows don't crawl as the camera moves). */
+function lightView(light: V3) {
+  const E = Math.max(14, Math.min(220, cur.dist * 1.3));
+  const L = norm3(light);
+  const up: V3 = Math.abs(L[1]) > 0.95 ? [1, 0, 0] : [0, 1, 0];
+  const r = norm3(cross3(up, L));
+  const u2 = cross3(L, r);
+  const texel = (2 * E) / SH;
+  const c = cur.look;
+  const cx = Math.round(dot3(c, r) / texel) * texel;
+  const cy = Math.round(dot3(c, u2) / texel) * texel;
+  // (deep enough for the tallest grass round it; no deeper, so the depths are fine)
+  const D = Math.max(80, E * 2.2);
+  const view = new Float32Array([r[0], u2[0], L[0], 0, r[1], u2[1], L[1], 0, r[2], u2[2], L[2], 0, -cx, -cy, -(dot3(c, L) + D), 1]);
+  const n = 1;
+  const f = D * 2;
+  const proj = [1 / E, 0, 0, 0, 0, 1 / E, 0, 0, 0, 0, -2 / (f - n), 0, 0, 0, -(f + n) / (f - n), 1];
+  return mul(proj, view);
 }
 function copyScene() {
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sceneFbo);
@@ -2159,6 +2330,8 @@ function frame(now: number) {
   // (about half a megapixel, less if the frames come slowly: the depth of field is the costly part)
   slow = slow * 0.95 + dt * 0.05;
   if (time > 2 && slow > 1 / 28) budget = Math.max(150000, budget * 0.98);
+  // (still slow at the smallest: the shadows go)
+  if (shadows && time > 6 && budget <= 150000 && slow > 1 / 24 && !params.has('shadow')) shadows = false;
   else if (time > 2 && slow < 1 / 50) budget = Math.min(700000, budget * 1.005);
   const k = Math.min(Math.min(devicePixelRatio || 1, 2), Math.sqrt((preview ? 160000 : budget) / (css[0] * css[1])));
   const w = Math.max(64, Math.round(css[0] * k));
@@ -2204,6 +2377,80 @@ function frame(now: number) {
   pullFocus(cam, dt);
   const { lightCol, sky, light, exposure } = daylight(T);
   const th = things();
+  const big: number[] = [];
+  const small: number[] = [];
+  for (let i = 0; i < th.solid.length; i += 10) {
+    const to = Math.max(th.solid[i + 3], th.solid[i + 4], th.solid[i + 5]) < SMALL * S ? small : big;
+    for (let k = 0; k < 10; k++) to.push(th.solid[i + k]);
+  }
+  const lm = uploadLimbs(th.lim);
+  const lvp = lightView(light);
+  // (the sun's shadows: strong by day, softer by the lamp at night, none at all in the studio's
+  // one-species views — there, the light is a soft box)
+  const shK = shadows ? (pasture || terr ? 0.55 : 0.35) : 0;
+  const groundUniforms = () => {
+    gl.uniform1f(u(groundProg, 'uSpan'), SPAN);
+    gl.uniform1f(u(groundProg, 'uField'), pasture ? 1 : 0);
+    gl.uniform1f(u(groundProg, 'uStudio'), pasture ? 0 : 1);
+    gl.uniform1f(u(groundProg, 'uExt'), pasture ? 5 : 1);
+    gl.uniform2f(u(groundProg, 'uCentre'), groundCentre[0], groundCentre[1]);
+    gl.uniform4fv(u(groundProg, 'uPat'), patU);
+    gl.uniform4fv(u(groundProg, 'uLump'), lumpU);
+  };
+
+  // 0. the sun's depth map: everything opaque, from the sun
+  if (shadows) {
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFbo);
+  gl.viewport(0, 0, SH, SH);
+  gl.clearDepth(1);
+  gl.depthMask(true);
+  gl.enable(gl.DEPTH_TEST);
+  gl.disable(gl.BLEND);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.POLYGON_OFFSET_FILL);
+  gl.polygonOffset(1.5, 3);
+  const caster = (p: WebGLProgram) => {
+    gl.useProgram(p);
+    gl.uniformMatrix4fv(u(p, 'uVP'), false, lvp);
+    gl.uniform1f(u(p, 'uSP'), 1);
+    gl.uniform1f(u(p, 'uS'), S);
+    gl.uniform1f(u(p, 'uShK'), 0);
+    gl.uniform1i(u(p, 'uSh'), 4);
+  };
+  caster(groundProg);
+  groundUniforms();
+  gl.bindVertexArray(groundVao);
+  gl.drawArrays(gl.TRIANGLES, 0, groundCount);
+  caster(solidProg);
+  draw(solids, big);
+  draw(solidsLo, small);
+  caster(limbProg);
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_2D, rowsTex);
+  gl.uniform1i(u(limbProg, 'uRows'), 3);
+  gl.activeTexture(gl.TEXTURE0);
+  // (the tiny ones — setae, moss shoots — cast nothing worth the drawing)
+  drawLimbs(limbLo, lm.starts[0], lm.counts[0] + lm.counts[1]);
+  drawLimbs(bladeLoMesh, lm.starts[3], lm.counts[3] + lm.counts[4]);
+  caster(bellProg);
+  for (const q of th.per) if (q.bell.length) draw(bells, q.bell);
+  caster(stalkProg);
+  for (const q of th.per) {
+    draw(tubes, q.tube);
+    draw(hairs, q.hair);
+  }
+  gl.disable(gl.POLYGON_OFFSET_FILL);
+  for (const p of [groundProg, solidProg, limbProg, bellProg, stalkProg]) {
+    gl.useProgram(p);
+    gl.uniform1f(u(p, 'uSP'), 0);
+  }
+  }
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+  gl.activeTexture(gl.TEXTURE0);
 
   // 1. the opaque patch
   gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
@@ -2223,6 +2470,10 @@ function frame(now: number) {
     gl.uniform3fv(u(p, 'uLightCol'), lightCol);
     gl.uniform3fv(u(p, 'uSky'), sky);
     gl.uniform1f(u(p, 'uS'), S);
+    gl.uniformMatrix4fv(u(p, 'uLVP'), false, lvp);
+    gl.uniform1i(u(p, 'uSh'), 4);
+    gl.uniform1f(u(p, 'uShK'), shK);
+    gl.uniform1f(u(p, 'uShTexel'), 1 / SH);
   };
   gl.useProgram(backProg);
   gl.uniform2f(u(backProg, 'uRes'), W, Hh);
@@ -2239,13 +2490,7 @@ function frame(now: number) {
   gl.uniform1f(u(groundProg, 'uMyc'), g.mycelium * (g.form === 'inkcap' ? 0.6 : 0.3));
   gl.uniform4fv(u(groundProg, 'uFeet'), th.feet);
   gl.uniform4fv(u(groundProg, 'uShade'), shades(th.lim.shade, cam.eye as V3));
-  gl.uniform1f(u(groundProg, 'uSpan'), SPAN);
-  gl.uniform1f(u(groundProg, 'uField'), pasture ? 1 : 0);
-  gl.uniform1f(u(groundProg, 'uStudio'), pasture ? 0 : 1);
-  gl.uniform1f(u(groundProg, 'uExt'), pasture ? 5 : 1);
-  gl.uniform2f(u(groundProg, 'uCentre'), groundCentre[0], groundCentre[1]);
-  gl.uniform4fv(u(groundProg, 'uPat'), patU);
-  gl.uniform4fv(u(groundProg, 'uLump'), lumpU);
+  groundUniforms();
   gl.activeTexture(gl.TEXTURE2);
   gl.bindTexture(gl.TEXTURE_2D_ARRAY, mapTex);
   gl.uniform1i(u(groundProg, 'uMaps'), 2);
@@ -2254,16 +2499,9 @@ function frame(now: number) {
   gl.drawArrays(gl.TRIANGLES, 0, groundCount);
   common(solidProg);
   gl.uniform1f(u(solidProg, 'uFocal'), cam.focal);
-  const big: number[] = [];
-  const small: number[] = [];
-  for (let i = 0; i < th.solid.length; i += 10) {
-    const to = Math.max(th.solid[i + 3], th.solid[i + 4], th.solid[i + 5]) < SMALL * S ? small : big;
-    for (let k = 0; k < 10; k++) to.push(th.solid[i + k]);
-  }
   draw(solids, big);
   draw(solidsLo, small);
   // the animals' bodies and legs
-  const lm = uploadLimbs(th.lim);
   common(limbProg);
   gl.activeTexture(gl.TEXTURE3);
   gl.bindTexture(gl.TEXTURE_2D, rowsTex);
