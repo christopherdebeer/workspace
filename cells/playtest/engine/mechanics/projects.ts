@@ -19,6 +19,7 @@
  *   cooperate_reward: 1      # points to the helper
  *   completion_reveals: true # a completing stealth project turns face up
  *   max_open: 6              # table size
+ *   expose_min_tokens: 0     # a hidden project can be exposed only once it carries this many tokens
  *
  * Actions: play_project {card, stealth?} · progress {project} · cooperate {target, project}
  *          · sabotage {target, project} · expose {target, project: "hidden #k"}
@@ -51,6 +52,7 @@ interface ProjectsConfig {
   cooperate_reward?: number;
   completion_reveals?: boolean;
   max_open?: number;
+  expose_min_tokens?: number;
 }
 
 type ProjectCard = Card & { kind?: string; needs?: number; value?: number; stealth_only?: boolean; only_role?: string };
@@ -114,6 +116,7 @@ export const projectsMechanic: MechanicHooks = {
       cooperate_reward: { type: 'number', description: 'Points to a player who adds a token to another player’s open project', default: 1 },
       completion_reveals: { type: 'boolean', default: true },
       max_open: { type: 'number', default: 6 },
+      expose_min_tokens: { type: 'number', description: 'A hidden project can be exposed only once it carries this many tokens', default: 0 },
     },
   },
 
@@ -160,7 +163,7 @@ export const projectsMechanic: MechanicHooks = {
         if (!p.stealth) {
           coop.push({ type: 'cooperate', target: other, project: p.id } as unknown as GameAction);
           if (p.tokens > 0) sab.push({ type: 'sabotage', target: other, project: p.id } as unknown as GameAction);
-        } else exp.push({ type: 'expose', target: other, project: projectRef(them, p, playerId, other) } as unknown as GameAction);
+        } else if (p.tokens >= (cfg.expose_min_tokens ?? 0)) exp.push({ type: 'expose', target: other, project: projectRef(them, p, playerId, other) } as unknown as GameAction);
       }
     }
     if (coop.length) out.push({ action: coop[0], priority: 20, category: 'projects', description: `Add a token to another player's open project (you score ${cfg.cooperate_reward ?? 1})`, required: { target: 'Player', project: 'Their open project' }, examples: coop });
@@ -203,6 +206,7 @@ export const projectsMechanic: MechanicHooks = {
     if (t === 'sabotage' && p.stealth) return { valid: false, error: 'A hidden project cannot be sabotaged until it is exposed.' };
     if (t === 'sabotage' && p.tokens === 0) return { valid: false, error: `${target}'s ${p.id} has no tokens to clear.` };
     if (t === 'expose' && !p.stealth) return { valid: false, error: `${target}'s ${p.id} is already face up.` };
+    if (t === 'expose' && p.tokens < (cfg.expose_min_tokens ?? 0)) return { valid: false, error: `A hidden project can be exposed only once it carries ${cfg.expose_min_tokens} tokens (this one has ${p.tokens}).` };
     return { valid: true };
   },
 
