@@ -1,5 +1,5 @@
-import bootPhysical from './physical';
 // @ts-nocheck
+import bootPhysical from './physical';
 import {MOTIFS,rng,row,advance,odds,step,raceOdds,botMove} from './rules';
 
 const entryMode=new URLSearchParams(location.search).get('mode');
