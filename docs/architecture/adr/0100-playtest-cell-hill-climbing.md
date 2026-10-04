@@ -370,3 +370,14 @@ as one declared round → tune by climbing.**
   cost of 3: +0.043 train, +0.019 test, kept** (it had missed the 0.049 floor by 0.005 in
   round 15). Head v22 = v0.5 + evidence + round 4 / cost 3: both keeps are on the
   accusation rule — the dilemma the board put at the centre.
+- **Calibration ladder** (score/v4.1, h10, the same 24 + 24 suite, 2026-10-04): v1 0.517
+  (judge "plays as designed" 1/24, critique 0.30) < v2 0.626 (16/24, 0.49) < v0.4 0.749
+  (20/24, 0.57, tension 1.4, no lead changes, agent exposed 46 %, wins 29 %) < v0.5 head
+  v22 0.805 (23/24, 0.72, tension 2.0, 2.6 lead changes a game, exposed 67 %, wins 21 %).
+  The instrument, the judge and the design history agree for the first time. v0.5 as first
+  written scored 0.734 — below v0.4 — because the agent never won (band 0.49) although the
+  judge preferred it outright; the two keeps on the accusation rule closed that gap. The
+  remaining defect is in the last column: under requires_evidence, accusations are wrong
+  39–54 % of the time, because a Kompromat card seen in a hand counts and honest players
+  draw Kompromat too. Next proposal: evidence is the table (face up, Gossip, Leak) or a seen
+  ambition — never a hand (`denounce.evidence_from`).
