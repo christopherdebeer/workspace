@@ -36,7 +36,7 @@ export interface Moment {
   T: number;
   at: V3;
   size: number;
-  kind: 'emerge' | 'throw' | 'open' | 'ink' | 'fire';
+  kind: 'emerge' | 'throw' | 'open' | 'ink' | 'fire' | 'stuck' | 'ride' | 'graze' | 'squirt';
   who: number;
 }
 export interface Terrarium {
@@ -46,18 +46,37 @@ export interface Terrarium {
   moments: Moment[];
   /** the pellet: where there's dung (1) and where there's not */
   dung: Float32Array;
+  /** what's been thrown and landed: sporangia stuck where they hit (the ground, or something
+   * standing there), and packets of spores the cups have fired, each from when to when */
+  marks: Mark[];
+}
+/** Something small left lying (or stuck): where, how big (mm), its colour, from when, until when;
+ * on the ground (its height to be found there) or held up on something. */
+export interface Mark {
+  p: V3;
+  r: number;
+  c: V3;
+  t0: number;
+  t1: number;
+  ground: boolean;
+  kind: 'cap' | 'spores';
+  /** stuck to something standing: how far up it (0–1) and round it */
+  on?: { st: Stalk; s: number; a: number };
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 /** Who comes, and when: the succession, from the seed. */
-function cast(r: Rand): Array<{ form: Form; arrive: number }> {
+function cast(r: Rand, r2: Rand): Array<{ form: Form; arrive: number }> {
   const out: Array<{ form: Form; arrive: number }> = [];
   const early: Form = r() < 0.65 ? 'thrower' : 'pin';
   out.push({ form: early, arrive: lerp(0, 0.8, r()) });
   if (r() < 0.4) out.push({ form: early === 'thrower' ? 'pin' : 'thrower', arrive: lerp(0.5, 2, r()) });
   if (r() < 0.8) out.push({ form: 'cup', arrive: lerp(3.5, 6, r()) });
   if (r() < 0.85 || out.length < 2) out.push({ form: 'inkcap', arrive: lerp(7.5, 11, r()) });
+  // (and, in some, the second wave's others: an eyelash cup, the flask fungi)
+  if (r2() < 0.5) out.push({ form: 'eyelash', arrive: lerp(3, 5.5, r2()) });
+  if (r2() < 0.55) out.push({ form: 'flask', arrive: lerp(4.5, 7.5, r2()) });
   return out;
 }
 
@@ -70,11 +89,13 @@ const LIFE: Record<Form, { spread: number; grow: number; eat: number; sugar: num
   thrower: { spread: 0.18, grow: 0.45, eat: 0.05, sugar: 1, hold: 0.7, lag: 1.2, every: 1, yield: 6 },
   cup: { spread: 0.12, grow: 0.32, eat: 0.03, sugar: 0.4, hold: 1, lag: 2, every: 2, yield: 0.6 },
   inkcap: { spread: 0.12, grow: 0.34, eat: 0.025, sugar: 0, hold: 1.8, lag: 2.5, every: 1, yield: 1 },
+  eyelash: { spread: 0.1, grow: 0.3, eat: 0.03, sugar: 0.5, hold: 0.9, lag: 1.8, every: 3, yield: 0.5 },
+  flask: { spread: 0.14, grow: 0.3, eat: 0.03, sugar: 0.3, hold: 1.1, lag: 2.2, every: 2, yield: 3 },
 };
 
 export function terrarium(seed: number): Terrarium {
   const r = seeded(hash(seed, 0x7e2));
-  const who = cast(r);
+  const who = cast(r, seeded(hash(seed, 0x7e3)));
   const n = GRID * GRID;
   const cell = SPAN / GRID;
   const at = (i: number): [number, number] => [((i % GRID) + 0.5) * cell - SPAN / 2, (Math.floor(i / GRID) + 0.5) * cell - SPAN / 2];
@@ -103,6 +124,9 @@ export function terrarium(seed: number): Terrarium {
   const moments: Moment[] = [];
   const steps = Math.ceil((DAYS * 24) / STEP) + 1;
   const fruited = sp.map(() => -1);
+  const marks: Mark[] = [];
+  /** spores fired and landing: where they'll start new mycelium, and when */
+  const pending: Array<{ i: number; t: number; j: number }> = [];
   for (let k = 0; k < steps; k++) {
     const T = k * STEP;
     const day = T / 24;
@@ -113,6 +137,13 @@ export function terrarium(seed: number): Terrarium {
     for (let i = 0; i < n; i++) {
       sugar[i] *= 0.985;
       water[i] = Math.max(0.1, Math.min(1, water[i] + (night ? 0.05 : -0.05) * (0.4 + dung[i]) - 0.004 * dung[i]));
+    }
+    // spores that have landed since the last step germinate where they fell, if it's dung
+    for (let q = pending.length - 1; q >= 0; q--) {
+      const pd = pending[q];
+      if (pd.t > T) continue;
+      if (dung[pd.i] > 0.4) myc[pd.j][pd.i] = Math.max(myc[pd.j][pd.i], 0.22);
+      pending.splice(q, 1);
     }
     sp.forEach((s, j) => {
       const m = myc[j];
@@ -179,7 +210,39 @@ export function terrarium(seed: number): Terrarium {
     }
     ground.push(snap);
   }
-  return { species: sp, ground, moments, dung };
+  // the throwers' sporangia: each flies off toward the light and lands — mostly out on the
+  // ground, now and then on something standing in the way, stuck to it (as they stick to grass
+  // in a field, to be eaten with it)
+  const standing = sp.flatMap((s) => s.stalks);
+  sp.forEach((s, j) => {
+    if (!s.g.throws) return;
+    s.stalks.forEach((st, q) => {
+      const rr = seeded(hash(seed, 0x1a9, j, q));
+      const h = Math.hypot(st.fly[0], st.fly[2]) || 1;
+      const d = lerp(4, 26, rr());
+      const at: V3 = [st.base[0] + (st.fly[0] / h) * d, 0, st.base[2] + (st.fly[2] / h) * d];
+      let host: Stalk | null = null;
+      for (const o of standing) {
+        if (o === st || o.t1 > st.tl || o.tEnd < st.tl) continue;
+        // (anything standing near its line of flight, short of where it would land, and tall enough)
+        const ox = o.base[0] - st.base[0];
+        const oz = o.base[2] - st.base[2];
+        const along = (ox * st.fly[0] + oz * st.fly[2]) / h;
+        const off = Math.abs(ox * st.fly[2] - oz * st.fly[0]) / h;
+        const reach = (o.bell ? o.bell * 1.1 : o.r * 3) + st.cap;
+        if (along > 0 && along < d && off < reach && o.len > st.len * 0.5 && rr() < 0.55) {
+          host = o;
+          break;
+        }
+      }
+      const r = st.cap * 0.9;
+      if (host) {
+        if (q % 5 === 0) moments.push({ T: st.tl + 1, at: [host.base[0], host.len * 0.8, host.base[2]], size: host.len * 0.8 + (host.bell || 0) * 2, kind: 'stuck', who: sp.indexOf(sp.find((x) => x.stalks.includes(host!))!) });
+        marks.push({ p: at, r, c: s.g.capColour, t0: st.tl + 0.08, t1: host.tEnd - 1, ground: false, kind: 'cap', on: { st: host, s: host.bell ? 1 : lerp(0.5, 0.95, rr()), a: rr() * Math.PI * 2 } });
+      } else marks.push({ p: at, r, c: s.g.capColour, t0: st.tl + 0.08, t1: st.tl + lerp(48, 120, rr()), ground: true, kind: 'cap' });
+    });
+  });
+  return { species: sp, ground, moments, dung, marks };
 
   /** A flush of one species' fruit: as many as its mycelium can feed, where it's thickest. */
   function flush(s: Species, j: number, m: Float32Array, T: number, rr: Rand) {
@@ -207,20 +270,32 @@ export function terrarium(seed: number): Terrarium {
         if (s.cups.some((o) => o.tEnd > T && Math.hypot(o.c[0] - c[0], o.c[2] - c[2]) < (o.R + g.cushion) * 1.1)) continue;
         const cu = makeCushion(rr, g, c, T + rr() * 6, lerp(40, 80, rr()));
         s.cups.push(cu);
+        // each ascus's spores fly off as one and land a little way off, where (if it's dung, and
+        // not too dry) they start the species again
+        for (const a of cu.asci) {
+          const ang = rr() * Math.PI * 2;
+          const d = lerp(2, 16, Math.sqrt(rr()));
+          const pt: V3 = [c[0] + Math.cos(ang) * d, 0, c[2] + Math.sin(ang) * d];
+          marks.push({ p: pt, r: a.r * 1.5, c: g.spore, t0: a.tl + 0.05, t1: a.tl + 40 + rr() * 30, ground: true, kind: 'spores' });
+          const gx = Math.floor((pt[0] + SPAN / 2) / cell);
+          const gz = Math.floor((pt[2] + SPAN / 2) / cell);
+          if (gx >= 0 && gz >= 0 && gx < GRID && gz < GRID && rr() < 0.35) pending.push({ i: gz * GRID + gx, t: a.tl + 18, j });
+        }
         // (its asci fire in waves: watch the busiest stretch)
         const fires = cu.asci.map((a) => a.tl).sort((a, b) => a - b);
         moments.push({ T: fires[Math.floor(fires.length / 2)] ?? cu.t0 + 8, at: [c[0], cu.Hc * 0.8, c[2]], size: cu.R * 4, kind: 'fire', who: j });
       }
       return;
     }
-    const max = g.form === 'inkcap' ? 22 : 70;
+    const max = g.form === 'inkcap' ? 22 : g.form === 'eyelash' ? 8 : 70;
     const count = Math.min(max, Math.round(weight * LIFE[g.form].yield));
     // (in clumps: a flush comes up from a few places where the mycelium has gathered)
-    const clumps = Array.from({ length: Math.max(1, Math.round(count / (g.form === 'inkcap' ? 6 : 14))) }, () => place(pick()));
+    const per = g.form === 'inkcap' ? 6 : g.form === 'eyelash' ? 3 : 14;
+    const clumps = Array.from({ length: Math.max(1, Math.round(count / per)) }, () => place(pick()));
     let first: Stalk | null = null;
     for (let q = 0; q < count; q++) {
       const cl = clumps[q % clumps.length];
-      const d = Math.sqrt(rr()) * (g.form === 'inkcap' ? 4 : 3);
+      const d = Math.sqrt(rr()) * (g.form === 'inkcap' || g.form === 'eyelash' ? 4 : g.form === 'flask' ? 2 : 3);
       const a = rr() * Math.PI * 2;
       const st = makeStalk(rr, g, [cl[0] + Math.cos(a) * d, 0, cl[2] + Math.sin(a) * d], T);
       s.stalks.push(st);
@@ -228,8 +303,8 @@ export function terrarium(seed: number): Terrarium {
       if (g.throws && q % 6 === 0) moments.push({ T: st.tl, at: [st.base[0], st.len * 0.9, st.base[2]], size: st.len * 1.2, kind: 'throw', who: j });
     }
     if (first) {
-      const k = g.form === 'inkcap' ? (rr() < 0.5 ? 'open' : 'ink') : 'emerge';
-      const t = k === 'open' ? first.t1 : k === 'ink' ? first.t1 + 5 : first.t1 - 0.4;
+      const k = g.form === 'inkcap' ? (rr() < 0.5 ? 'open' : 'ink') : g.form === 'flask' ? 'squirt' : 'emerge';
+      const t = k === 'open' ? first.t1 : k === 'ink' ? first.t1 + 6.5 : k === 'squirt' ? first.t1 + 4 : first.t1 - 0.4;
       moments.push({ T: t, at: [first.base[0], first.len * 0.6, first.base[2]], size: first.len * 1.4 + (first.bell || 0) * 2, kind: k, who: j });
     }
   }

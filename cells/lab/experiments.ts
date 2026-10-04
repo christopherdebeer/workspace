@@ -73,7 +73,7 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'fungi',
     title: 'Hat-throwers',
     group: 'Drawings',
-    blurb: 'A macro timelapse of a terrarium of dung fungi over three weeks, from a seed: hat-throwers and pin moulds first, jelly cups next, inkcaps last, each spreading through the dung and eating it out from under the others. The camera goes where something is about to happen.',
+    blurb: 'A macro timelapse of a terrarium of dung fungi over three weeks, from a seed: hat-throwers and pin moulds first, then jelly cups, eyelash cups and flask fungi, inkcaps last. Each spreads through the dung and eats it out from under the others. Nematodes ride the thrown sporangia, and mites and springtails graze. The camera goes where something is about to happen.',
     page: 'static/fungi.html',
     preview: 'preview&seed=2&t=250',
     readme: 'static/fungi.md',
@@ -84,6 +84,8 @@ export const EXPERIMENTS: Experiment[] = [
       { label: 'a pin mould', query: 'one&seed=4&t=8' },
       { label: 'inkcaps', query: 'one&seed=10&t=9' },
       { label: 'jelly cups', query: 'one&seed=9&t=8' },
+      { label: 'eyelash cups', query: 'one&form=eyelash&seed=5&t=16' },
+      { label: 'flask fungi', query: 'one&form=flask&seed=3&t=15' },
     ],
   },
 ];

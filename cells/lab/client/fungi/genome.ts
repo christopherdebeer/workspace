@@ -20,7 +20,8 @@
 import { hash, seeded, type Rand } from '../kit/rng';
 
 export type V3 = [number, number, number];
-export type Form = 'thrower' | 'pin' | 'inkcap' | 'cup';
+export type Form = 'thrower' | 'pin' | 'inkcap' | 'cup' | 'eyelash' | 'flask';
+export const FORMS: Form[] = ['thrower', 'pin', 'inkcap', 'cup', 'eyelash', 'flask'];
 
 export interface Genome {
   name: string;
@@ -57,6 +58,10 @@ export interface Genome {
   cushion: number;
   asci: number;
   spore: V3;
+  // an eyelash cup's hairs, round its rim: how many, how long (mm); a flask's body (mm)
+  hairs: number;
+  hairLen: number;
+  flask: number;
   // water
   dew: number;
   dewSize: number;
@@ -78,6 +83,7 @@ export interface Genome {
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const pick = <T>(r: Rand, a: T[]) => a[Math.floor(r() * a.length)];
+const mixC = (a: V3, b: V3, t: number): V3 => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 const jitter = (r: Rand, c: V3, k: number): V3 => c.map((v) => Math.max(0, Math.min(1, v + (r() - 0.5) * k))) as V3;
 
 /** A species from a seed (of a given kind, if asked: a terrarium asks for what it needs). */
@@ -137,7 +143,50 @@ export function species(seed: number, kind?: Form): Genome {
     wet: lerp(0.4, 1, r()),
     light: norm([Math.cos(a) * 0.8, 1, Math.sin(a) * 0.8]),
     warmth: r(),
+    hairs: Math.round(lerp(28, 60, r())),
+    hairLen: lerp(0.25, 0.7, r()),
+    flask: lerp(0.12, 0.22, r()),
   };
+  if (form === 'eyelash') {
+    // a saucer, orange to scarlet inside, paler and browner out, its rim fringed with dark hairs
+    const oranges: V3[] = [[0.95, 0.36, 0.06], [0.98, 0.5, 0.08], [0.88, 0.22, 0.07], [1, 0.58, 0.14]];
+    g.bell = lerp(0.7, 1.8, r());
+    g.bellTall = lerp(0.36, 0.55, r());
+    g.bellColour = jitter(r, pick(r, oranges), 0.05);
+    g.bellTop = mixC(g.bellColour, [0.55, 0.4, 0.28], 0.55);
+    g.glass = jitter(r, [0.13, 0.08, 0.05], 0.04);
+    g.tip = g.glass;
+    g.tipLength = 0;
+    g.glassy = 0;
+    g.fuzz = 0;
+    g.pleats = 0;
+    g.pleatDepth = 0;
+    g.height = [0.05, 0.05];
+    g.scale = g.bell * 2.2;
+    g.count = Math.round(lerp(5, 12, r()));
+    g.patch = lerp(7, 11, r());
+    g.spread = lerp(3, 8, r());
+    g.dew = lerp(0, 0.3, r());
+    g.mycelium = lerp(0.1, 0.4, r());
+  } else if (form === 'flask') {
+    // flasks: black, pear-shaped, half sunk, their necks to the light; their spores shot out of them
+    g.height = [lerp(0.2, 0.35, r()), lerp(0.4, 0.75, r())];
+    g.radius = lerp(0.035, 0.06, r());
+    g.lean = lerp(0.25, 0.7, r());
+    g.wave = lerp(0, 0.2, r());
+    g.glass = jitter(r, [0.06, 0.055, 0.05], 0.02);
+    g.tip = [0.14, 0.12, 0.1];
+    g.tipLength = 0.12;
+    g.glassy = 0;
+    g.fuzz = lerp(0.2, 0.6, r());
+    g.capColour = g.glass;
+    g.spore = jitter(r, [0.06, 0.05, 0.05], 0.02);
+    g.scale = 1.6;
+    g.count = Math.round(lerp(30, 90, r()));
+    g.patch = lerp(4, 7, r());
+    g.spread = lerp(2, 6, r());
+    g.dew = lerp(0, 0.4, r());
+  }
   g.name = binomial(seed, g);
   return g;
 }
@@ -151,6 +200,8 @@ function binomial(seed: number, g: Genome): string {
     pin: ['mucor', 'cella', 'myces', 'phora'],
     inkcap: ['inellus', 'inopsis', 'athyrella', 'ocybe'],
     cup: ['obolus', 'opeziza', 'odesmis', 'ascus'],
+    eyelash: ['ymenia', 'utellinia', 'opeziza'],
+    flask: ['daria', 'ospora', 'iella'],
   };
   const syl = () => pick(r, on) + pick(r, vo);
   let genus = syl() + syl() + pick(r, ends[g.form]);
@@ -160,6 +211,8 @@ function binomial(seed: number, g: Genome): string {
     pin: g.tipLength > 0.4 ? 'flavicapitatus' : g.wave > 0.3 ? 'flexuosus' : 'erectus',
     inkcap: g.pleats > 26 ? 'plicatilis' : g.ink > 0.7 ? 'atramentarius' : g.fuzz > 0.7 ? 'velutinus' : g.bellTall > 1.35 ? 'elongatus' : 'disseminatus',
     cup: g.asci > 20 ? 'immersus' : g.cushion > 0.9 ? 'magnus' : 'furfuraceus',
+    eyelash: g.hairLen > 0.55 ? 'ciliata' : g.bell > 1.4 ? 'stercorea' : 'fimicola',
+    flask: g.height[1] > 0.6 ? 'curvula' : g.fuzz > 0.45 ? 'anserina' : 'fimicola',
   };
   return `${genus} ${epithets[g.form]}`;
 }
@@ -241,16 +294,19 @@ export function patch(seed: number, g: Genome): Stalk[] {
 export function makeStalk(r: Rand, g: Genome, base: V3, start: number): Stalk {
   const toward = Math.atan2(g.light[2], g.light[0]);
   const ink = g.form === 'inkcap';
+  const lash = g.form === 'eyelash';
+  const flask = g.form === 'flask';
   const len = lerp(g.height[0], g.height[1], r());
   const t0 = start + r() * g.spread * (ink ? 1.6 : 1);
-  const grow = ink ? lerp(5, 8, r()) : lerp(3, 4.5, r());
+  const grow = ink ? lerp(5, 8, r()) : lash ? lerp(8, 14, r()) : flask ? lerp(6, 10, r()) : lerp(3, 4.5, r());
   const t1 = t0 + grow;
   const tv = t1 + lerp(0.5, 1.5, r());
   const tl = g.throws ? tv + lerp(2.5, 4, r()) + r() * g.spread * 0.6 : 1e9;
   // (thrown, it lies a few hours, then it's gone; a pin mould's lasts a day or so; an inkcap
   // inks and dissolves the same day)
-  const tEnd = g.throws ? tl + lerp(5, 9, r()) : ink ? t1 + lerp(16, 26, r()) : t1 + lerp(20, 30, r());
-  const aim = ink ? r() * Math.PI * 2 : toward + (r() - 0.5) * 0.9;
+  // (an eyelash cup and the flasks last days)
+  const tEnd = g.throws ? tl + lerp(5, 9, r()) : ink ? t1 + lerp(16, 26, r()) : lash ? t1 + lerp(50, 90, r()) : flask ? t1 + lerp(60, 110, r()) : t1 + lerp(20, 30, r());
+  const aim = ink || lash ? r() * Math.PI * 2 : toward + (r() - 0.5) * 0.9;
   const dew: Stalk['dew'] = [];
   const n = Math.round(g.dew * len * (ink ? 1.2 : 4) * lerp(0.5, 1.5, r()));
   for (let k = 0; k < n; k++) {
@@ -272,10 +328,10 @@ export function makeStalk(r: Rand, g: Genome, base: V3, start: number): Stalk {
     long: g.vesicleLong,
     knob: g.form === 'pin' ? 1 : 0,
     cap: g.cap * lerp(0.85, 1.15, r()),
-    bell: ink ? g.bell * lerp(0.55, 1.2, r()) * (0.6 + (len / g.height[1]) * 0.5) : 0,
+    bell: ink ? g.bell * lerp(0.55, 1.2, r()) * (0.6 + (len / g.height[1]) * 0.5) : lash ? g.bell * lerp(0.6, 1.25, r()) : 0,
     bellTall: g.bellTall * lerp(0.85, 1.15, r()),
     dir: [Math.cos(aim), Math.sin(aim)],
-    lean: g.lean * lerp(0.3, 1.3, r()),
+    lean: lash ? lerp(0, 0.2, r()) : g.lean * lerp(0.3, 1.3, r()),
     wave: g.wave * lerp(0.5, 1.5, r()),
     phase: r() * 10,
     t0,

@@ -7,6 +7,12 @@ const out = await build({ entryPoints: [new URL('../client/fungi/genome.ts', imp
 const { species, patch, cushions, litter, state, ascusState, along, radius, DAY } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 assert.deepEqual(species(31), species(31));
+// the second wave's kinds, asked for: an eyelash cup's saucers, the flasks
+for (const kind of ['eyelash', 'flask']) for (let seed = 1; seed <= 20; seed++) {
+  const g = species(seed, kind);
+  assert.equal(g.form, kind);
+  for (const st of patch(seed, g)) assert.ok(st.t0 < st.t1 && st.tl > 1e8 && (kind === 'eyelash' ? st.bell > 0 : st.bell === 0));
+}
 assert.deepEqual(patch(31, species(31)), patch(31, species(31)));
 const forms = {};
 for (let seed = 1; seed <= 300; seed++) {
@@ -53,7 +59,7 @@ console.log('ok');
 {
   const out2 = await build({ entryPoints: [new URL('../client/fungi/terrarium.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
   const { terrarium, DAYS } = await import('data:text/javascript;base64,' + Buffer.from(out2.outputFiles[0].text).toString('base64'));
-  const order = { pin: 0, thrower: 0, cup: 1, inkcap: 2 };
+  const order = { pin: 0, thrower: 0, cup: 1, eyelash: 1, flask: 1, inkcap: 2 };
   for (const seed of [1, 2, 3, 5, 8]) {
     const t = terrarium(seed);
     assert.ok(t.species.length >= 2, `seed ${seed}: a cast`);
@@ -65,6 +71,28 @@ console.log('ok');
     }
     for (const s of t.species) if (s.g.form === 'thrower' || s.g.form === 'pin') assert.ok(last(s) < (DAYS - 3) * 24, `seed ${seed}: ${s.g.form} gives out`);
     assert.ok(t.moments.length > 10);
+    // what it leaves: thrown caps and spores, each for a while; a cap held only by what's standing
+    for (const m of t.marks) {
+      assert.ok(m.t0 < m.t1, `seed ${seed}: a mark lasts`);
+      if (m.on) assert.ok(m.t1 <= m.on.st.tEnd, `seed ${seed}: a cap held no longer than its host`);
+    }
+  }
+  // the second wave turns up in some, after the first
+  const lates = new Set();
+  for (let seed = 1; seed <= 12; seed++) for (const s of terrarium(seed).species) lates.add(s.g.form);
+  assert.ok(lates.has('eyelash') && lates.has('flask'), 'eyelash cups and flasks come');
+  // the animals: some of each, in the dung, while there's dung; climbers gone with the sporangium
+  const out3 = await build({ entryPoints: [new URL('../client/fungi/critters.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
+  const { critters, drawCritters } = await import('data:text/javascript;base64,' + Buffer.from(out3.outputFiles[0].text).toString('base64'));
+  const t2 = terrarium(2);
+  const c = critters(2, t2);
+  assert.ok(c.worms.length > 10 && c.mites.length > 3 && c.springs.length > 3, 'nematodes, mites, springtails');
+  for (const w of c.worms) if (w.on) assert.equal(w.t1, w.on.st.tl);
+  for (const T of [60, 200, 400]) {
+    const solid = [];
+    drawCritters(c, T, 3.3, () => 0, solid);
+    assert.equal(solid.length % 10, 0);
+    assert.ok(solid.every(Number.isFinite), `T ${T}: drawn finite`);
   }
   console.log('terrarium ok');
 }

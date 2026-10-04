@@ -8,14 +8,15 @@ of a single species' night and morning.
 On dung the fungi come in an order. It's a succession, and a real one:
 
 1. **First, within days:** the pin moulds and the hat-throwers.
-2. **After a week or so:** the jelly cups.
+2. **After a week or so:** the jelly cups, and in some terrariums an eyelash cup and the flask
+   fungi.
 3. **Last, at two or three weeks:** the inkcaps.
 
 Each lives in the dung as mycelium before it fruits, eating it and taking ground from the others.
 Where it's thickest and the dung still has food and water in it, it fruits. As the dung is eaten,
 the early ones give out and the later ones take their ground.
 
-A terrarium has two to four species, in that order, each arriving on its own day
+A terrarium has two to six species, in that order, each arriving on its own day
 (`client/fungi/terrarium.ts`). Under them is a grid of the dung, about a millimetre to a cell,
 stepped every six hours through the three weeks. Each cell has:
 
@@ -30,6 +31,27 @@ From the grid come the fruit. Each species flushes at nine in the evening, once 
 in clumps where its mycelium is thickest: as many as it can feed. Every stalk and cushion has a
 lifespan; it slumps, inks, shrivels and goes.
 
+**They leave things about.** Each thrown sporangium lands somewhere: mostly out on the dung,
+where it dries and is gone in a few days. Now and then it hits something standing in its line of
+flight and sticks to it, as they stick to grass in a field. A cup's spores land in dark smudges
+round it. Where those land on wet dung, some of them start the species again: new mycelium,
+another flush later. Inkcaps drip ink from their margins as they dissolve, and leave black stains
+on the ground that outlast them.
+
+**Animals live with them** (`client/fungi/critters.ts`):
+
+- **Nematodes:** milky, less than a millimetre long. They writhe in the wet dung around the
+  throwers. Some climb a thrower's stalk as it ripens and wait on the sporangium, to be thrown
+  with it. Lungworm larvae do this on *Pilobolus*: thrown out into the grass, they're eaten with
+  it by the next cow.
+- **Mites:** glossy, brown, eight-legged. They graze round whatever's fruiting, walking and
+  stopping.
+- **Springtails:** soft and blue-grey, with antennae. They sit, then spring.
+
+When they're there, and roughly where, comes from the seed and the hour, so a scrub lands on the
+same animals. How they move (gait, wriggle, spring) runs in real time, as it would under a lens
+while the hours went by.
+
 The ground shows the grid as it goes:
 
 - white mycelium where it has spread;
@@ -39,7 +61,8 @@ The ground shows the grid as it goes:
 
 **The camera follows what's about to happen.** The grid's run keeps a list of moments worth
 watching: a flush coming up, a thrower about to fire, inkcaps opening or inking, a cushion's
-asci firing. A director picks the next one, a few hours ahead and not the same sort as the last.
+asci firing, a sporangium stuck to a neighbour, a nematode riding one, mites grazing, flasks
+shooting. A director picks the next one, a few hours ahead and not the same sort as the last.
 The camera travels there, unhurried: in close, low, the lens wide open. Between moments it pulls
 back above whatever is up, stopped down so more is sharp. The caption names the species it's
 on, or the terrarium's cast. Touch the view and the director waits; tap to pull focus.
@@ -54,6 +77,8 @@ nine. Three weeks take about eight minutes; the clock counts the days.
 | **thrower** (*Pilobolus*) | Sporangiophores push up, clear as glass and yellow at the top, beading with water they sweat out. Under each tip a vesicle swells: a balloon that's also a lens, turning the stalk toward the light. The black sporangium on top darkens. By late morning the vesicle bursts and shoots the sporangium off toward the light; the stalk slumps. |
 | **pin** (*Mucor* and kin) | Glass stalks with yellow heads, beading with water. They never throw. |
 | **inkcap** (*Coprinellus*) | Pale, pleated caps on velvety, hairy stalks, rising out of tufts of white mycelium. Each cap starts as an egg and opens to a bell. Late on, its margin splits and inks, grey to wet black. |
+| **eyelash cup** (*Cheilymenia*, *Scutellinia*) | Saucers a few millimetres across, orange to scarlet and wet inside, paler outside. Their rim is fringed with dark, stiff hairs, curling outward like eyelashes. They open slowly and last days, darkening and drying from the rim as they go. |
+| **flask** (*Sordaria*, *Podospora*) | Hundreds of tiny flasks, half sunk in the dung: soft and pale at first, then black and glossy. Each has a neck that turns to the light. Every so often one shoots a puff of spores off the tip of its neck. |
 | **cup** (*Ascobolus*) | Lumps of yellow-green to amber jelly, glistening, deeper orange at their foot. Through their skin the asci push up one by one: clear tubes, each with a column of eight spores, greenish, ripening black. A ripe ascus fires its spores off together, the fastest launch in the living world, and shrinks back. The spores still below the skin show through the jelly as dark streaks. |
 
 ## Hands
@@ -64,11 +89,12 @@ nine. Three weeks take about eight minutes; the clock counts the days.
 - **Drag** to move round; **pinch** (or the wheel) to come closer.
 - **The scrubber** is the run (three weeks, or one species' day), and the clock is its time: it
   starts at nine in the evening. `pause` stops it. `another` gives a new terrarium (or species).
-  `?t=` starts at an hour.
+  `?t=` starts at an hour. `?one&form=eyelash` (or `thrower`, `pin`, `inkcap`, `cup`, `flask`)
+  asks for a kind.
 
 ## The species
 
-Everything comes from the seed (`client/fungi/genome.ts`): which of the four kinds it is, then
+Everything comes from the seed (`client/fungi/genome.ts`): which of the kinds it is, then
 its own range of everything:
 
 - **Stalks:** how tall and thick, glass or velvet, how hairy, how much they lean toward the light
@@ -77,6 +103,8 @@ its own range of everything:
 - **Pin moulds:** the yellow of the head, and how much of the stalk it takes.
 - **Inkcaps:** the bell (size, height, 14 to 34 pleats and how deep, its cream and the browner
   apex), how much it inks.
+- **Eyelash cups:** the saucer (size, depth, its orange), how many hairs and how long.
+- **Flasks:** the body, the neck (how long, how hairy, how far it leans).
 - **Cups:** the jelly's colours, the cushions (how many, how big, how tall), how many asci, the
   spores' colour.
 - **The patch:** water (how much beads and how big), how many things in clumps, how spread out
@@ -104,6 +132,13 @@ jelly is lit from inside, and the depth of field is a few millimetres.
    - **Spores and mycelium:** the asci's spores, and tufts of mycelium (hairs, not a skin). Round
      each inkcap's foot, threads of mycelium fan out over the ground and curl: the same tube as
      the stalks, at a fraction of the detail, a few dozen to a foot.
+   - **The eyelash cups** are the inkcap's bell turned over: a saucer, wet and bright inside,
+     downy outside. It sits as the ground slopes, and is raised where a lump of dung would come
+     through its floor. Its hairs are the stalk's tube, dark, leaving the rim already tipped out.
+   - **The flasks:** a glossy black body and a dark tube of a neck.
+   - **The animals:** beads. A mite is a body, a head and eight legs of beads stepping in two
+     sets. A springtail is four soft segments, a head and two antennae. A nematode is a string of
+     milky beads that light comes through. The many small spheres use a coarser mesh.
    - **The far distance:** a haze, warm toward the top, with soft discs of far-off light that
      drift a little as the view turns. It's always behind everything, so always at full blur.
 2. **The glass.**

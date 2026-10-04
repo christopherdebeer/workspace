@@ -13,7 +13,8 @@
  * glass (jelly, stalks, asci), refracting it → a copy → the droplets, refracting that → depth of
  * field (a scatter-as-gather disc, from depth) → tone.
  */
-import { DAY, along, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Genome, type Stalk, type V3 } from './genome';
+import { FORMS, DAY, along, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Form, type Genome, type Stalk, type State, type V3 } from './genome';
+import { critters, drawCritters, type Critters } from './critters';
 import { DAYS, GRID, SPAN, STEP, terrarium, type Moment, type Terrarium } from './terrarium';
 
 const params = new URLSearchParams(location.search);
@@ -73,7 +74,8 @@ in vec2 aXZ;
 uniform mat4 uVP;
 uniform float uS;
 out vec3 vW;
-float h(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+// (a hash without sin(), so the page can work out the same heights to stand things on)
+float h(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float n2(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
   return mix(mix(h(i), h(i + vec2(1, 0)), u.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), u.x), u.y); }
 float hgt(vec2 p) { return (n2(p * .18) - .5) * 1.4 + (n2(p * .6 + 7.) - .5) * .55 + (n2(p * 1.9 + 3.) - .5) * .18; }
@@ -263,8 +265,10 @@ void main() {
   vec2 dir = aDir.xy;
   vec2 side = vec2(-dir.y, dir.x);
   float w = aMore.y * sin(u * 3. + aMore.z) * u;
-  vec3 p = aBase + vec3(dir.x * lean * .5 * u * u + side.x * w * .12, u - sag * u * u, dir.y * lean * .5 * u * u + side.y * w * .12) * L;
-  vec3 t = normalize(vec3(dir.x * lean * u, 1. - 2. * sag * u, dir.y * lean * u));
+  // (a negative length-to-width: no vesicle, but a start tipped that much toward dir — a hair)
+  float tilt = aShape.w < 0. ? -aShape.w : 0.;
+  vec3 p = aBase + vec3(dir.x * (lean * .5 * u * u + tilt * u) + side.x * w * .12, u - sag * u * u, dir.y * (lean * .5 * u * u + tilt * u) + side.y * w * .12) * L;
+  vec3 t = normalize(vec3(dir.x * (lean * u + tilt), 1. - 2. * sag * u, dir.y * (lean * u + tilt)));
   vec3 s3 = vec3(side.x, 0., side.y);
   vec3 a = normalize(cross(t, s3));
   vec3 b = cross(t, a);
@@ -323,7 +327,7 @@ void main() {
   vel = mix(vel, behind * uVelvet, .25);
   vel += uVelvet * pow(1. - nv, 2.) * (.2 + .35 * fuzz);
   vel += uVelvet * through * .25;
-  vel += vec3(1.) * hairs * fuzz * .22 * (.4 + pow(1. - nv, 1.5));
+  vel += mix(vec3(.35), vec3(1.), min(1., dot(uVelvet, vec3(1.)))) * hairs * fuzz * .22 * (.4 + pow(1. - nv, 1.5));
   vel *= uLightCol;
   vec3 col = mix(vel, glass, vLook.z);
   vec3 r = reflect(-v, n);
@@ -378,6 +382,7 @@ flat in vec4 vB;
 flat in vec4 vC;
 out vec4 o;
 uniform vec3 uBell, uBellTop;
+uniform float uSaucer;
 ${COMMON}
 void main() {
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
@@ -387,6 +392,23 @@ void main() {
   float nv = max(dot(n, v), 0.);
   float ink = vC.y * smoothstep(1. - vC.y * .6, 1., t);
   vec3 c;
+  if (uSaucer > .5) {
+    // an eyelash cup, a saucer: inside, the hymenium, smooth, wet, bright; outside paler, downy
+    vec3 col;
+    if (!gl_FrontFacing) {
+      c = uBell * (.85 + .15 * n2(vec2(vTA.y * 7., t * 12.))) * mix(.8, 1.1, t);
+      float through = pow(max(dot(-v, uLight), 0.), 2.);
+      col = c * (.35 + .55 * max(dot(n, uLight), 0.) + through * .4) * uLightCol;
+      col += wetness(n, v, vW / uS, .7, 40.) * .6;
+    } else {
+      c = uBellTop * (.8 + .25 * n2(vec2(vTA.y * 30., t * 40.)));
+      col = c * (.3 + .55 * max(dot(n, uLight), 0.)) * uLightCol + uBellTop * pow(1. - nv, 2.) * .3;
+    }
+    // (dying: it darkens and dries from the rim in)
+    col *= 1. - vC.y * .75 * smoothstep(1. - vC.y, 1., t);
+    o = vec4(col, 1.);
+    return;
+  }
   if (!gl_FrontFacing) {
     // its gills, seen from under it: fine and dark, darker as it ripens
     float gill = .5 + .5 * sin(vTA.y * vB.w * 3.);
@@ -648,21 +670,25 @@ let groundCount = 0;
   attribs(groundProg, [['aXZ', 2]], 2, 0);
   groundCount = v.length / 2;
 }
-const sphereVerts: number[] = [];
-{
-  const la = 16;
-  const lo = 24;
+/** a sphere's triangles, so many rings by so many segments */
+function sphere(la: number, lo: number): number[] {
+  const out: number[] = [];
   const p = (i: number, j: number) => {
     const t = (i / la) * Math.PI;
     const f = (j / lo) * Math.PI * 2;
     return [Math.sin(t) * Math.cos(f), Math.cos(t), Math.sin(t) * Math.sin(f)];
   };
   for (let i = 0; i < la; i++) for (let j = 0; j < lo; j++) {
-    sphereVerts.push(...p(i, j), ...p(i + 1, j), ...p(i + 1, j + 1), ...p(i, j), ...p(i + 1, j + 1), ...p(i, j + 1));
+    out.push(...p(i, j), ...p(i + 1, j), ...p(i + 1, j + 1), ...p(i, j), ...p(i + 1, j + 1), ...p(i, j + 1));
   }
+  return out;
 }
+const sphereVerts = sphere(16, 24);
 const SPH: Array<[string, number]> = [['aC', 3], ['aR', 3], ['aCol', 4]];
 const solids = instanced(solidProg, sphereVerts, [['aP', 3]], SPH);
+// (the many small ones — legs, spores, nematodes — coarser: they're a few pixels)
+const solidsLo = instanced(solidProg, sphere(6, 8), [['aP', 3]], SPH);
+const SMALL = 0.06;
 const drops = instanced(dropProg, sphereVerts, [['aP', 3]], SPH);
 const tubes = instanced(stalkProg, grid(48, 16, (k) => 1 - Math.pow(1 - k, 1.5)), [['aUA', 2]], [['aBase', 3], ['aDir', 4], ['aShape', 4], ['aMore', 4], ['aLook', 4]]);
 // (fine hairs: the same tube, far fewer rings)
@@ -729,6 +755,7 @@ interface Sp {
 }
 let world: Sp[] = [];
 let terr: Terrarium | null = null;
+let crit: Critters | null = null;
 /** the lead species: its light, its warmth, its ground */
 let g: Genome;
 let bits: ReturnType<typeof litter>;
@@ -739,7 +766,18 @@ let S = 1;
 /** The ground's height at (x, z) (mm): the ground's vertex shader's sums, so things stand on it. */
 function groundY(x: number, z: number): number {
   const fr = (v: number) => v - Math.floor(v);
-  const h = (a: number, b: number) => fr(Math.sin(a * 12.9898 + b * 78.233) * 43758.5453);
+  // (the shader's hash, step by step in its precision: a hash of sin() isn't the same in both)
+  const f = Math.fround;
+  const h = (a: number, b: number) => {
+    const x = fr(f(a * f(0.1031)));
+    const y = fr(f(b * f(0.1031)));
+    const z = x;
+    const d = f(f(f(x * f(y + f(33.33))) + f(y * f(z + f(33.33)))) + f(z * f(x + f(33.33))));
+    const X = f(x + d);
+    const Y = f(y + d);
+    const Z = f(z + d);
+    return fr(f(f(X + Y) * Z));
+  };
   const n2 = (a: number, b: number) => {
     const ix = Math.floor(a);
     const iz = Math.floor(b);
@@ -767,18 +805,22 @@ function settle() {
   for (const b of bits.beads) b.p[1] = groundY(b.p[0], b.p[2]) - b.r * b.flat * 0.35;
   for (const c of bits.crumbs) c.p[1] = groundY(c.p[0], c.p[2]) + c.r[1] * 0.2;
   for (const p of bits.pools) p.p[1] = groundY(p.p[0], p.p[2]);
+  for (const m of terr?.marks ?? []) if (m.ground) m.p[1] = groundY(m.p[0], m.p[2]) + (m.kind === 'cap' ? m.r * 0.25 : 0);
 }
-const scaleOf = (x: Genome) => (x.form === 'cup' ? x.cushion / 4 : x.scale / 8);
+const scaleOf = (x: Genome) => (x.form === 'cup' ? x.cushion / 4 : x.form === 'eyelash' ? x.bell / 4 : x.form === 'flask' ? 0.3 : x.scale / 8);
 function grow(s: number) {
   seed = s;
   if (one) {
-    g = species(seed);
+    g = species(seed, (FORMS as string[]).includes(params.get('form') ?? '') ? (params.get('form') as Form) : undefined);
     world = [{ g, stalks: patch(seed, g), cups: cushions(seed, g), S: scaleOf(g) }];
     terr = null;
+    crit = null;
     bits = litter(seed, g);
     S = scaleOf(g);
   } else {
     terr = terrarium(seed);
+    crit = critters(seed, terr);
+    terr.moments.push(...crit.moments);
     world = terr.species.map((x) => ({ g: x.g, stalks: x.stalks, cups: x.cups, S: scaleOf(x.g) }));
     g = world[0].g;
     bits = litter(seed, { ...g, patch: 20, scale: 5, beads: Math.min(g.beads, 50) });
@@ -797,6 +839,7 @@ function grow(s: number) {
   const url = new URL(location.href);
   url.searchParams.set('seed', String(seed));
   if (!preview) history.replaceState(null, '', url);
+  labelled = '';
   label();
 }
 /** a species, in a few words */
@@ -806,9 +849,11 @@ function kindOf(x: Genome) {
     pin: `a pin mould · yellow-headed · ${x.height[1].toFixed(0)} mm`,
     inkcap: `an inkcap · ${x.pleats} pleats · ${x.height[1].toFixed(0)} mm`,
     cup: `a jelly cup · fires its asci · ${(x.cushion * 2).toFixed(1)} mm`,
+    eyelash: `an eyelash cup · ${x.hairs} hairs · ${(x.bell * 2).toFixed(1)} mm`,
+    flask: `flask fungi · shoot their spores · ${x.height[1].toFixed(1)} mm`,
   }[x.form];
 }
-let labelled = -2;
+let labelled = '';
 function label() {
   const el = document.getElementById('label');
   if (!el) return;
@@ -818,9 +863,14 @@ function label() {
   }
   // a terrarium: the species the lens is on (or, between, the terrarium's cast)
   const who = shot?.who ?? -1;
-  if (who === labelled) return;
-  labelled = who;
-  if (who < 0) el.innerHTML = `<i>a terrarium</i><span>${world.map((x) => x.g.name).join(' · ')}</span>`;
+  const kind = shot?.kind ?? '';
+  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' ? kind : ''}`;
+  if (key === labelled) return;
+  labelled = key;
+  if (kind === 'graze') el.innerHTML = `<i>mites and springtails</i><span>grazing the mycelium</span>`;
+  else if (who < 0) el.innerHTML = `<i>a terrarium</i><span>${world.map((x) => x.g.name).join(' · ')}</span>`;
+  else if (kind === 'ride') el.innerHTML = `<i>${world[who].g.name}</i><span>and a nematode, climbing, to be thrown with it</span>`;
+  else if (kind === 'stuck') el.innerHTML = `<i>${world[who].g.name}</i><span>and a sporangium, thrown, stuck to it</span>`;
   else el.innerHTML = `<i>${world[who].g.name}</i><span>${kindOf(world[who].g)} · one of ${world.length} here</span>`;
 }
 
@@ -855,7 +905,7 @@ function setView() {
     view.dist = 62;
     return;
   }
-  const mid = g.form === 'cup' ? g.cushion * 2.6 : (g.height[0] + g.height[1]) / 2;
+  const mid = g.form === 'cup' ? g.cushion * 2.6 : g.form === 'eyelash' ? g.bell * 1.6 : g.form === 'flask' ? 1.4 : (g.height[0] + g.height[1]) / 2;
   view.look = [0, mid * (g.form === 'cup' ? 0.45 : 0.55), 0];
   view.dist = mid * 2.3 + 4 * S;
 }
@@ -883,6 +933,8 @@ let shot: { look: V3; dist: number; until: number; who: number; kind: string } |
 /** a hand on the view: the director waits */
 let handsOn = -1e9;
 let lastKind = '';
+/** (`?moment=ink`: only that sort) */
+const only = params.get('moment') ?? '';
 function direct(dt: number) {
   if (!terr) return;
   if (time < handsOn + 20) return;
@@ -893,6 +945,7 @@ function direct(dt: number) {
     for (const m of terr.moments) {
       const lead = m.T - T;
       if (lead < 0.4 || lead > 3.5) continue;
+      if (only && m.kind !== only) continue;
       // (an emergence is better caught under way than waited for)
       const sc = -lead * 0.5 + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' || m.kind === 'fire' ? 0.4 : 0) + (m.kind === 'emerge' && lead > 1.5 ? -0.6 : 0) + Math.random() * 0.5;
       if (sc > score) {
@@ -902,7 +955,7 @@ function direct(dt: number) {
     }
     // (`?moment`: always a moment, never a breath — for looking at them)
     if (best && (params.has('moment') || Math.random() < 0.85)) {
-      shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + 1.2, who: best.who, kind: best.kind };
+      shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + (best.kind === 'ink' || best.kind === 'stuck' || best.kind === 'graze' ? 3 : 1.2), who: best.who, kind: best.kind };
       view.pitch = 0.22 + Math.random() * 0.2;
       view.aperture = 1;
       lastKind = best.kind;
@@ -973,6 +1026,170 @@ function updateMap() {
 function tubeAt(base: V3, dir: [number, number], lean: number, L: number, u: number): V3 {
   return [base[0] + dir[0] * lean * 0.5 * u * u * L, base[1] + u * L, base[2] + dir[1] * lean * 0.5 * u * u * L];
 }
+const INK: V3 = [0.025, 0.022, 0.028];
+/** What the terrarium leaves about: thrown caps where they landed (on the ground, or stuck to
+ *  something standing), the cups' spores in dark smudges. */
+function marks(solid: number[]) {
+  for (const m of terr?.marks ?? []) {
+    if (T < m.t0 || T > m.t1) continue;
+    if (m.kind === 'spores') {
+      // a smudge of eight, settling in; fading as they're grazed and washed in
+      const k = Math.min(1, (T - m.t0) / 0.3) * (1 - Math.max(0, (T - m.t1 + 8) / 8));
+      solid.push(m.p[0], m.p[1], m.p[2], m.r * k, m.r * 0.35 * k, m.r * 0.8 * k, ...m.c, 0);
+      continue;
+    }
+    let p: V3 = m.p;
+    if (m.on) {
+      const h = m.on.st;
+      const hs = state(h, T);
+      if (hs.grown <= 0.01) continue;
+      const at = along(h, hs, m.on.s);
+      const ring = ringAt(at.t, h.dir, m.on.a);
+      const off = h.bell ? h.bell * (0.55 + 0.3 * hs.open) : at.r;
+      const down = h.bell ? h.bell * h.bellTall * 0.35 : 0;
+      p = [at.p[0] + ring[0] * (off + m.r * 0.6) - at.t[0] * down, at.p[1] + ring[1] * (off + m.r * 0.6) - at.t[1] * down, at.p[2] + ring[2] * (off + m.r * 0.6) - at.t[2] * down];
+    }
+    // landed: drying from glossy black to a dull, flattened brown
+    const dry = Math.min(1, (T - m.t0) / 30);
+    // (and at the last, eaten, washed in: smaller till it's gone)
+    const k = m.ground ? Math.min(1, (m.t1 - T) / 8) : 1;
+    solid.push(...p, m.r * k, m.r * (0.75 - 0.25 * dry) * k, m.r * k, ...mixV(m.c, [0.16, 0.12, 0.08], dry * 0.6), 0);
+  }
+}
+/** An inkcap dissolving: black drops gather at its margin, swell and fall. */
+function inkDrips(st: Stalk, s: State, top: { p: V3; t: V3 }, k: number, g: Genome, solid: number[], dew: number[]) {
+  const R = st.bell * k * (0.6 + 0.35 * s.open);
+  const H = st.bell * st.bellTall * k * (1.1 - 0.2 * s.open);
+  const amax = 2.25 + (1.6 - 2.25) * s.open;
+  const n = Math.round(4 + s.inked * 8);
+  for (let q = 0; q < n; q++) {
+    const a = q * 2.399 + st.phase * 7;
+    const ring = ringAt(top.t, st.dir, a);
+    const x = Math.sin(amax) * R;
+    const y = (Math.cos(amax) - 0.25) * H;
+    const rim: V3 = [top.p[0] + ring[0] * x + top.t[0] * y, top.p[1] + ring[1] * x + top.t[1] * y, top.p[2] + ring[2] * x + top.t[2] * y];
+    // each drop on its own beat: gathering, then let go
+    const per = 0.5 + ((q * 0.37 + st.phase) % 1) * 0.6;
+    const c = ((T + q * 0.29) / per) % 1;
+    const rr = st.bell * 0.09 * (0.5 + 0.5 * s.inked);
+    if (c < 0.85) {
+      const sz = rr * Math.sqrt(c / 0.85);
+      solid.push(rim[0], rim[1] - sz * 0.9, rim[2], sz, sz * 1.25, sz, ...INK, 0);
+    } else {
+      const f = (c - 0.85) / 0.15;
+      const yg = groundY(rim[0], rim[2]);
+      const y = rim[1] - rr - f * f * (rim[1] - yg);
+      if (y > yg) solid.push(rim[0], y, rim[2], rr * 0.8, rr * 1.6, rr * 0.8, ...INK, 0);
+    }
+  }
+  void g;
+  void dew;
+}
+/** Where the inkcaps dripped: black stains on the ground, spreading, staying after they've gone. */
+function stains(solid: number[]) {
+  for (const sp of world) {
+    if (sp.g.form !== 'inkcap') continue;
+    for (const st of sp.stalks) {
+      const t = T - st.t1 - 4;
+      if (t <= 0 || T < st.t0) continue;
+      const Tq = Math.min(T, st.tEnd - 1.5);
+      const s = state(st, Tq);
+      const top = along(st, s, 1);
+      const k = Math.min(1, t / 14);
+      const r = st.bell * (0.4 + 0.9 * k) * sp.g.ink;
+      if (r < 0.05) continue;
+      // (drying at its edges over days: browner, then fainter)
+      const age = Math.max(0, (T - st.tEnd) / 72);
+      const y = groundY(top.p[0], top.p[2]);
+      solid.push(top.p[0], y + r * 0.02, top.p[2], r, r * 0.06, r * 0.85, ...mixV(INK, [0.2, 0.15, 0.1], Math.min(0.7, age)), 0);
+    }
+  }
+}
+/** An eyelash cup: a saucer (an inkcap's bell, the other way up), its rim fringed with dark hairs. */
+function saucer(st: Stalk, s: State, g: Genome, bell: number[], tube: number[]) {
+  const k = 0.25 + 0.75 * s.grown;
+  // (it sits as the ground slopes, tipped a little more its own way)
+  const e = st.bell * 0.6;
+  const gx = (groundY(st.base[0] + e, st.base[2]) - groundY(st.base[0] - e, st.base[2])) / (2 * e);
+  const gz = (groundY(st.base[0], st.base[2] + e) - groundY(st.base[0], st.base[2] - e)) / (2 * e);
+  const up = norm3([-gx + Math.sin(st.lean) * st.dir[0], 1, -gz + Math.sin(st.lean) * st.dir[1]]);
+  const axis: V3 = [-up[0], -up[1], -up[2]];
+  const R = st.bell * k;
+  const H = st.bell * st.bellTall * k;
+  // (as the shader has it, open: the rim's angle, its width and depth)
+  const Rs = R * 0.95;
+  const Hs = H * 0.9;
+  // (sitting on the dung, a little into it — but never with the dung through it: where the ground
+  // under it is higher than its floor there, it sits up)
+  let apex = st.base[1] + st.r * 0.5 - 0.1 * Hs;
+  for (let q = 0; q < 6; q++) {
+    const a = (q / 6) * Math.PI * 2 + st.phase;
+    for (const f of [0.35, 0.65, 0.9]) {
+      const gy = groundY(st.base[0] + Math.cos(a) * Rs * f, st.base[2] + Math.sin(a) * Rs * f);
+      // (its floor there: up the curve, and down the side it tips to)
+      const dip = Rs * f * (Math.cos(a) * up[0] + Math.sin(a) * up[2]);
+      apex = Math.max(apex, gy - up[1] * (1 - Math.cos(Math.asin(f))) * Hs + dip + R * 0.03);
+    }
+  }
+  apex = Math.max(apex, groundY(st.base[0], st.base[2]) - 0.05 * Hs);
+  const lift = 0.75 * Hs;
+  const at: V3 = [st.base[0] + up[0] * lift, apex + up[1] * lift, st.base[2] + up[2] * lift];
+  bell.push(...at, ...axis, R, H, 1, 0, 0, s.slump, st.phase, 0);
+  const side = norm3(cross3(axis, Math.abs(axis[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0]));
+  const side2 = cross3(axis, side);
+  const amax = 1.6;
+  let q = Math.floor(st.phase * 7919) >>> 0;
+  const rnd = () => ((q = (Math.imul(q, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const grow = 0.3 + 0.7 * s.grown;
+  for (let h = 0; h < g.hairs; h++) {
+    // most on the rim, a few lower down its outside, shorter
+    const low = h % 6 === 5;
+    const th = ((h + rnd() * 0.6) / g.hairs) * Math.PI * 2;
+    const al = amax * (low ? 0.6 + rnd() * 0.3 : 0.98);
+    const ring: V3 = [side[0] * Math.cos(th) + side2[0] * Math.sin(th), side[1] * Math.cos(th) + side2[1] * Math.sin(th), side[2] * Math.cos(th) + side2[2] * Math.sin(th)];
+    const x = Math.sin(al) * Rs;
+    const y = (Math.cos(al) - 0.25) * Hs;
+    const p: V3 = [at[0] + ring[0] * x + axis[0] * y, at[1] + ring[1] * x + axis[1] * y, at[2] + ring[2] * x + axis[2] * y];
+    const hz = Math.hypot(ring[0], ring[2]) || 1;
+    const L = g.hairLen * (low ? 0.3 : 1) * (0.6 + rnd() * 0.6) * grow * Math.min(1, st.bell);
+    // (out from the rim, rising, curling a little over: lashes)
+    tube.push(...p, ring[0] / hz, ring[2] / hz, 0.2 + rnd() * 0.3 + s.slump * 0.5, 0.1 + rnd() * 0.15, L, 0.011 + rnd() * 0.006, 0, -((low ? 3 : 1.7) + rnd() * 0.8), 0, 0.15, rnd() * 9, 0, 0, 0, 0, 0.1);
+  }
+}
+/** A flask fungus: a black pear, half sunk, its neck to the light; now and then it shoots. */
+function flask(st: Stalk, s: State, g: Genome, tube: number[], solid: number[]) {
+  const span = st.t1 - st.t0;
+  const body = ease01((T - st.t0) / (span * 0.6)) * (1 - ease01((T - (st.tEnd - 1)) / 1));
+  if (body <= 0.01) return;
+  const neck = ease01((T - st.t0 - span * 0.45) / (span * 0.7));
+  const fr = g.flask * (st.r / g.radius) * body;
+  // (pale and soft when young; black when ripe)
+  const dark = ease01((T - st.t0) / (span + 3));
+  const col = mixV([0.82, 0.76, 0.6], g.capColour, dark);
+  const c: V3 = [st.base[0], st.base[1] + st.r * 0.5 + fr * 0.35, st.base[2]];
+  solid.push(...c, fr, fr * 1.3, fr, ...col, dark > 0.6 ? 0 : 2);
+  if (neck <= 0.01) return;
+  const base: V3 = [c[0], c[1] + fr * 1.05, c[2]];
+  const L = st.len * neck * (1 - s.slump * 0.3);
+  const lean = st.lean + s.slump * 0.8;
+  tube.push(...base, st.dir[0], st.dir[1], lean, 0.1, L, st.r, 0, 1, 0, st.wave, st.phase, 0, g.tipLength, 1, 0, g.fuzz);
+  // shooting: its asci, one by one, up the neck and out — a puff of spores off its tip
+  const ripe = st.t1 + 2;
+  if (T < ripe || s.slump > 0.5) return;
+  const per = 1.2 + (st.phase % 1) * 2.5;
+  const since = (T - ripe + st.phase) % per;
+  if (since > 0.08) return;
+  const f = since / 0.08;
+  const tip = tubeAt(base, st.dir, lean, L, 1);
+  const a = norm3(sub3(tip, tubeAt(base, st.dir, lean, L, 0.85)));
+  for (let k = 0; k < 8; k++) {
+    const d = f * L * 6 - k * st.r * 0.9;
+    if (d < 0) continue;
+    const sr = st.r * 0.45;
+    solid.push(tip[0] + a[0] * d, tip[1] + a[1] * d - f * f * L, tip[2] + a[2] * d, sr, sr * 1.5, sr, ...g.spore, 0);
+  }
+}
+const ease01 = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 function things() {
   const solid: number[] = [];
   const dew: number[] = [];
@@ -981,6 +1198,7 @@ function things() {
   for (const b of bits.beads) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...beadColour, 1);
   for (const c of bits.crumbs) solid.push(...c.p, ...c.r, ...c.c, 2);
   for (const p of bits.pools) dew.push(p.p[0], p.p[1] + p.r * 0.12, p.p[2], p.r, p.r * 0.35, p.r, 1, 1, 1, 1);
+  marks(solid);
   for (const sp of world) {
   const g = sp.g;
   const tube: number[] = [];
@@ -993,6 +1211,14 @@ function things() {
     if (T < st.t0 || T > st.tEnd) continue;
     const s = state(st, T);
     if (s.grown <= 0.001) continue;
+    if (g.form === 'eyelash') {
+      saucer(st, s, g, bell, tube);
+      continue;
+    }
+    if (g.form === 'flask') {
+      flask(st, s, g, tube, solid);
+      continue;
+    }
     const Lnow = st.len * s.grown;
     const v = st.ves * s.swell * (1 - s.slump * 0.85);
     const knob = st.knob ? st.r * 2.1 * Math.min(1, s.grown * 1.5) : 0;
@@ -1016,6 +1242,7 @@ function things() {
         hair.push(...b, Math.cos(a), Math.sin(a), 2 + rnd() * 5, 0, L, st.r * 0.08, 0, 1, 0, 0.6, rnd() * 9, 0, 0, 0, 0.25, 0.2);
       }
       if (feet.length < MYC * 4) feet.push(st.base[0], st.base[2], st.r * 9, g.mycelium);
+      if (s.inked > 0.05) inkDrips(st, s, top, k, g, solid, dew);
     }
     if (st.cap > 0 && s.ripe > 0) {
       const cr = st.cap * (0.35 + 0.65 * s.ripe);
@@ -1102,6 +1329,8 @@ function things() {
   }
   }
   while (feet.length < MYC * 4) feet.push(0, 0, 1, 0);
+  stains(solid);
+  if (crit) drawCritters(crit, T, time, groundY, solid);
   return { solid, dew, per, feet };
 }
 
@@ -1241,7 +1470,14 @@ function frame(now: number) {
   gl.drawArrays(gl.TRIANGLES, 0, groundCount);
   common(solidProg);
   gl.uniform1f(u(solidProg, 'uFocal'), cam.focal);
-  draw(solids, th.solid);
+  const big: number[] = [];
+  const small: number[] = [];
+  for (let i = 0; i < th.solid.length; i += 10) {
+    const to = Math.max(th.solid[i + 3], th.solid[i + 4], th.solid[i + 5]) < SMALL * S ? small : big;
+    for (let k = 0; k < 10; k++) to.push(th.solid[i + k]);
+  }
+  draw(solids, big);
+  draw(solidsLo, small);
   // (each species with its own colours and its own scale)
   for (const q of th.per) {
     if (!q.bell.length) continue;
@@ -1250,6 +1486,7 @@ function frame(now: number) {
     gl.uniform1f(u(bellProg, 'uS'), q.sp.S);
     gl.uniform3fv(u(bellProg, 'uBell'), x.bellColour);
     gl.uniform3fv(u(bellProg, 'uBellTop'), x.bellTop);
+    gl.uniform1f(u(bellProg, 'uSaucer'), x.form === 'eyelash' ? 1 : 0);
     draw(bells, q.bell);
   }
   // 2. the glass: jelly and tubes, seeing through to it
@@ -1275,7 +1512,7 @@ function frame(now: number) {
     gl.uniform2f(u(stalkProg, 'uRes'), W, Hh);
     gl.uniform3fv(u(stalkProg, 'uGlass'), x.form === 'cup' ? mixV([0.95, 0.97, 0.92], x.jelly, 0.3) : x.glass);
     gl.uniform3fv(u(stalkProg, 'uTip'), x.tip);
-    gl.uniform3fv(u(stalkProg, 'uVelvet'), mixV(x.bellColour, [1, 1, 1], 0.55));
+    gl.uniform3fv(u(stalkProg, 'uVelvet'), x.form === 'eyelash' || x.form === 'flask' ? x.glass : mixV(x.bellColour, [1, 1, 1], 0.55));
     gl.uniform1f(u(stalkProg, 'uThrows'), x.throws ? 1 : 0);
     gl.uniform1i(u(stalkProg, 'uBehind'), 0);
     draw(tubes, q.tube);
@@ -1315,7 +1552,7 @@ function frame(now: number) {
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
-  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100 };
+  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100 };
   requestAnimationFrame(frame);
 }
 function ringAt(t: V3, dir: [number, number], a: number): V3 {
