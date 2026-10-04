@@ -12,11 +12,14 @@ import { mechanicRegistry } from '../engine/mechanics/index';
 import { initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions } from '../engine/core/game';
 import { parseRules, buildDeck } from '../engine/core/rules';
 import { hasExplicitConfig, isMechanicEnabled } from '../engine/mechanics/types';
+import { ENGINE_SRC_HASH } from './engine-src';
 
 /** Bump when HOW the fingerprint is computed changes: every hash moves with no mechanic edited,
  *  and the change log says so instead of listing every mechanic as changed.
- *  1: raw bundled source · 2: bundler digit-suffix renames stripped. */
-export const FP_METHOD = 2;
+ *  1: raw bundled source · 2: bundler digit-suffix renames stripped · 3: the core also carries a
+ *  build-time hash of every engine source file (lib/engine-src.ts, from devtools/hash-engine.mjs):
+ *  hook functions alone missed the module-level helpers they call (hasEvidence, addTokens…). */
+export const FP_METHOD = 3;
 
 export interface EngineFingerprint {
   version: string;
@@ -60,7 +63,7 @@ export function engineFingerprint(): EngineFingerprint {
   // a change there alters play as surely as a hook does.
   const registry = mechanicRegistry as unknown as Record<string, unknown>;
   const enabling = ['getEnabledMechanics', 'computeEnabledMechanics'].map((k) => String(registry[k] ?? (Object.getPrototypeOf(registry) as Record<string, unknown>)[k] ?? ''));
-  const core = h([initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions, parseRules, buildDeck, hasExplicitConfig, isMechanicEnabled].map((f) => f.toString()).concat(enabling).join('\n'));
+  const core = h([initGame, startGame, getAvailableActions, validateAction, executeAction, advanceTurn, checkAllWinConditions, parseRules, buildDeck, hasExplicitConfig, isMechanicEnabled].map((f) => f.toString()).concat(enabling, [`engine-src=${ENGINE_SRC_HASH}`]).join('\n'));
   const version = h(core + JSON.stringify(mechanics));
   cached = { version, method: FP_METHOD, mechanics, core };
   return cached;
