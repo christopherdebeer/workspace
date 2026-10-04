@@ -389,3 +389,16 @@ as one declared round → tune by climbing.**
   "evidence" still producing wrong accusations, the agent won 23/48 that way. **22, exposure
   as a Leak card instead of a standing action: +0.036 train, +0.058 test, kept** (head v24).
   23, Kompromat at 2 tokens: +0.025 under the 0.029 floor (paired SE 0.009), reverted.
+- **Rounds 24–26** (head v24). 24, evidence from the table only (never a hand): train
+  +0.043, test −0.001, reverted as overfitting — a test delta of −0.001 on 24 games is noise;
+  re-run on the next head. **25, a wrong accusation hands the agent the game: +0.032 train,
+  +0.024 test, kept** (head v26) — on top of Leak and round-4 accusations wrong accusations
+  are rare (2/48), so the rule adds tension where in round 21 it handed the agent 23/48.
+  26, Kompromat at 2 tokens on that head: −0.041, reverted — without the public token
+  signal honest players guess, and under one-shot a guess is fatal (12/48 agent wins by wrong
+  accusation): the two are incompatible.
+- **Instrument gap found and closed**: the engine fingerprint stringified hook functions
+  only, so a change to a module-level helper (`hasEvidence`) left the engine version — and
+  every baseline — unchanged. Fingerprint method 3 folds a build-time hash of `engine/**`
+  (devtools/hash-engine.mjs → lib/engine-src.ts) into the core hash; it must be regenerated
+  before each push (devtools/README). `set_suite` was also silently cutting seed lists to 12.
