@@ -136,6 +136,68 @@ M('suits pay (own a suit), 2', ['greedy', 'greedy'], { commission: false, target
 M('secret, 4, first to 1', ['greedy', 'greedy', 'greedy', 'greedy'], { target: 1 });
 }
 
+
+// ─── HYBRID: grid + secret targets; build the whole board first, then race ──────────────────────
+// Four target cards (one per suit) on the board — corners, or the middles of the edges. Each
+// player is dealt one suit in secret (at 2–3 players the rest are decoys). Phase 1: in turns,
+// place junction cards (on top of existing ones too) until every space is covered; no rolling.
+// Phase 2: each turn place one card (optional, on top) then roll a d6. First arrival at your own
+// target wins. Someone else's target is just a card the token passes over.
+const EDGES = [[2, 0], [4, 2], [2, 4], [0, 2]];
+function hybridUtility(board, at, me, P) {
+  const f = gridForecast(board, at, 4);
+  // (secret: everyone else's suit is a possible target — don't feed any of them)
+  let v = f.wins[me] - (f.wins.reduce((a, b) => a + b, 0) - f.wins[me]) / 3;
+  const [gx, gy] = (board.__spots)[me];
+  for (const [k, m] of Object.entries(f.mass)) if (board[k]?.goal === undefined) { const [x, y] = k.split(',').map(Number); v -= m * (Math.abs(x - gx) + Math.abs(y - gy)) * 0.025; }
+  return v;
+}
+function hybridGreedy(board, hand, at, me, P, cover) {
+  let best = null;
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) { const k = key(x, y); if (board[k]?.goal !== undefined) continue; if (board[k] && !cover) continue; if (!board[k] && !canPlace(board, k, 0)) continue;
+    for (let card = 0; card < hand.length; card++) for (let rotation = 0; rotation < 4; rotation++) {
+      const v = hybridUtility({ ...board, __spots: board.__spots, [k]: { card: hand[card], rotation, start: board[k]?.start } }, at, me, P) - (board[k] ? 0.01 : 0);
+      if (!best || v > best.v + 1e-9) best = { k, card, rotation, v };
+    } }
+  return best;
+}
+function playHybrid(seed, strats, { edges = false, cover = true } = {}) {
+  const P = strats.length; const r = rng(seed); const spots = edges ? EDGES : CORNERS;
+  const board = { '2,2': { card: 0, rotation: 0, start: true } }; spots.forEach(([x, y], g) => (board[key(x, y)] = { goal: g }));
+  board.__spots = spots;
+  // (secret suits: a permutation of the four, one each)
+  const suits = [0, 1, 2, 3]; for (let i = 3; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [suits[i], suits[j]] = [suits[j], suits[i]]; }
+  const mine = strats.map((_, p) => suits[p]);
+  const pile = Array.from({ length: 48 }, (_, i) => i % 8); for (let i = 47; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pile[i], pile[j]] = [pile[j], pile[i]]; }
+  const hands = strats.map(() => pile.splice(0, 3));
+  let token = '2,2'; let turn = 0; let stalls = 0;
+  const empty = () => { for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) if (!board[key(x, y)]) return true; return false; };
+  const place = (p, allowCover) => {
+    const s = strats[p]; let pick = null;
+    if (s === 'greedy') pick = hybridGreedy(board, hands[p], token, mine[p], P, allowCover);
+    else { const opts = []; for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) { const k = key(x, y); if (board[k]?.goal !== undefined) continue; if (board[k] ? allowCover : canPlace(board, k, 0)) opts.push(k); } if (opts.length && hands[p].length) pick = { k: opts[Math.floor(r() * opts.length)], card: Math.floor(r() * hands[p].length), rotation: Math.floor(r() * 4) }; }
+    if (pick) { board[pick.k] = { card: hands[p][pick.card], rotation: pick.rotation, start: board[pick.k]?.start }; hands[p].splice(pick.card, 1); }
+    if (pile.length && hands[p].length < 3) hands[p].push(pile.shift());
+  };
+  // phase 1: cover the board (empties first; covering allowed once nothing's empty)
+  for (let i = 0; i < 60 && empty(); i++) place(i % P, false);
+  // phase 2: place, roll
+  for (let roll = 0; roll < CAP; roll++) {
+    const p = (turn++) % P; place(p, cover);
+    const res = destination(board, token, 1 + Math.floor(r() * 6)); token = res.at; if (res.reason !== 'move') stalls++;
+    const g = board[token]?.goal; if (g !== undefined) { const who = mine.indexOf(g); if (who >= 0) return { winner: who, rolls: roll + 1, stalls }; }
+  }
+  return { winner: -1, rolls: CAP, stalls };
+}
+if (process.env.HYBRID) {
+  const H = (n, s, o) => run(n, playHybrid, s, o);
+  console.log('\nHYBRID (secret targets, build then race)');
+  H('corners, 2', ['greedy', 'greedy']); H('  skill', ['greedy', 'random']); H('  skill (random first)', ['random', 'greedy']);
+  H('corners, 3', ['greedy', 'greedy', 'greedy']); H('corners, 4', ['greedy', 'greedy', 'greedy', 'greedy']); H('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy']);
+  H('edge-middles, 2', ['greedy', 'greedy'], { edges: true }); H('edge-middles, 4', ['greedy', 'greedy', 'greedy', 'greedy'], { edges: true }); H('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy'], { edges: true });
+  H('corners, 4, no covering in race', ['greedy', 'greedy', 'greedy', 'greedy'], { cover: false });
+}
+
 if (process.env.ROUND2) {
   console.log('\nMATS round 2');
   M('suits pay, 2, random start', ['greedy', 'greedy'], { commission: false, target: 3, start: -1 });
