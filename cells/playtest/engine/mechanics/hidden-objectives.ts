@@ -146,7 +146,7 @@ export interface HiddenObjectivesConfig {
    *            they are revealed, or you have seen them holding an item the enemy objective
    *            needs (uncertain: honest players take those items too, to deny them)
    */
-  denounce?: { correct?: 'win' | 'reveal' | 'score'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit'; from_round?: number; requires_evidence?: boolean; points?: { accuser?: number; others?: number; wrong?: number }; ends_game?: boolean };
+  denounce?: { correct?: 'win' | 'reveal' | 'score'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit' | 'enemy_wins'; from_round?: number; requires_evidence?: boolean; points?: { accuser?: number; others?: number; wrong?: number }; ends_game?: boolean };
   /**
    * What completing your objective does: 'win' (default) ends the game in your favour;
    * 'bonus' scores completion_points (once) and the game goes on — for games decided on points.
@@ -280,6 +280,12 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     }
     const wrong = cfg.wrong ?? 'both';
     if (cfg.correct === 'score' && cfg.points?.wrong) me.score = (me.score ?? 0) + cfg.points.wrong;
+    if (wrong === 'enemy_wins') {
+      // One wrong accusation ends the game in the enemy's favour.
+      me.revealedAs = me.objective?.name ?? 'unknown';
+      (ctx.state.shared as Record<string, unknown>).wrongAccusationBy = ctx.playerId;
+      return { handled: true, advanceTurn: false, checkWin: true, logMessage: 'denounce_wrong', logData: { target, denouncerRevealed: me.revealedAs, enemyWins: true } };
+    }
     if (wrong === 'reveal_self' || wrong === 'both' || wrong === 'forfeit') me.revealedAs = me.objective?.name ?? 'unknown';
     if (wrong === 'forfeit') (me as unknown as { forfeited?: boolean }).forfeited = true;
     const endTurn = wrong === 'end_turn' || wrong === 'both' || wrong === 'forfeit';
@@ -294,6 +300,12 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
       return { won: true, reason: `${ctx.playerId} denounced The Enemy (${(ctx.player as unknown as { denounced?: string }).denounced})` };
     }
     const hcfg = ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined;
+    const wrongBy = (ctx.state.shared as Record<string, unknown>).wrongAccusationBy as string | undefined;
+    if (wrongBy) {
+      const enemy = ctx.state.turnOrder.find((p) => (ctx.state.players[p] as P).team === 'enemy');
+      if (enemy !== ctx.playerId) return null;
+      return { won: true, reason: `${wrongBy} accused the wrong player; The Enemy (${enemy}) wins` };
+    }
     // A scoring denunciation that ends the game: the highest score wins, ties to the accuser.
     const exposedBy = (ctx.state.shared as Record<string, unknown>).enemyExposedBy as string | undefined;
     if (exposedBy) {

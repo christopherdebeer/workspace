@@ -20,6 +20,8 @@
  *   completion_reveals: true # a completing stealth project turns face up
  *   max_open: 6              # table size
  *   expose_min_tokens: 0     # a hidden project can be exposed only once it carries this many tokens
+ *   expose: "action"         # or "card": no standing expose action — only an event card with
+ *                            # effect expose_project (event-effects) turns a hidden project face up
  *
  * Actions: play_project {card, stealth?} · progress {project} · cooperate {target, project}
  *          · sabotage {target, project} · expose {target, project: "hidden #k"}
@@ -53,6 +55,7 @@ interface ProjectsConfig {
   completion_reveals?: boolean;
   max_open?: number;
   expose_min_tokens?: number;
+  expose?: 'action' | 'card';
 }
 
 type ProjectCard = Card & { kind?: string; needs?: number; value?: number; stealth_only?: boolean; only_role?: string };
@@ -86,6 +89,21 @@ function publish(state: GameState, line: string) {
   ((shared.publicKnowledge ??= []) as string[]).push(line);
 }
 
+/** Turn `target`'s most advanced hidden project (≥ expose_min_tokens) face up for everyone, by `by`
+ *  (the expose action, or an event card with effect expose_project). Returns what was exposed. */
+export function exposeProject(state: GameState, config: { engine_mechanics?: Record<string, unknown> }, by: string, target: string): Project | null {
+  const cfg = config.engine_mechanics?.projects as ProjectsConfig | undefined;
+  const hidden = projectsOf(state.players[target] as P).filter((p) => p.stealth && p.tokens >= (cfg?.expose_min_tokens ?? 0)).sort((a, b) => b.tokens - a.tokens);
+  const p = hidden[0];
+  if (!p) return null;
+  p.stealth = false;
+  const me = state.players[by] as P;
+  const k = (me.knowledge ??= {});
+  (k.revealed ??= {})[`${target} project`] = p.name;
+  publish(state, `${target}'s hidden project is ${p.name} (${p.tokens}/${p.needs}), exposed by ${by}`);
+  return p;
+}
+
 /** Add tokens; complete and score at `needs`. Returns what happened, for the log. */
 function addTokens(state: GameState, ownerId: string, project: Project, n: number, cfg: ProjectsConfig | undefined): string {
   project.tokens += n;
@@ -117,6 +135,7 @@ export const projectsMechanic: MechanicHooks = {
       completion_reveals: { type: 'boolean', default: true },
       max_open: { type: 'number', default: 6 },
       expose_min_tokens: { type: 'number', description: 'A hidden project can be exposed only once it carries this many tokens', default: 0 },
+      expose: { type: 'string', enum: ['action', 'card'], description: '"card": exposing needs an event card (effect expose_project), there is no standing action', default: 'action' },
     },
   },
 
@@ -168,7 +187,7 @@ export const projectsMechanic: MechanicHooks = {
     }
     if (coop.length) out.push({ action: coop[0], priority: 20, category: 'projects', description: `Add a token to another player's open project (you score ${cfg.cooperate_reward ?? 1})`, required: { target: 'Player', project: 'Their open project' }, examples: coop });
     if (sab.length) out.push({ action: sab[0], priority: 15, category: 'projects', description: "Clear every token from another player's open project", required: { target: 'Player', project: 'Their open project with tokens' }, examples: sab });
-    if (exp.length) out.push({ action: exp[0], priority: 18, category: 'projects', description: "Turn another player's hidden project face up for everyone", required: { target: 'Player', project: 'hidden #k' }, examples: exp });
+    if (exp.length && cfg.expose !== 'card') out.push({ action: exp[0], priority: 18, category: 'projects', description: "Turn another player's hidden project face up for everyone", required: { target: 'Player', project: 'hidden #k' }, examples: exp });
     // Only what the player can pay for now (sabotage and expose usually cost more than one action).
     return out.filter((a) => canAfford(ctx, a.action));
   },
@@ -205,6 +224,7 @@ export const projectsMechanic: MechanicHooks = {
     if (t === 'cooperate' && p.stealth) return { valid: false, error: 'You cannot help with a project you cannot see.' };
     if (t === 'sabotage' && p.stealth) return { valid: false, error: 'A hidden project cannot be sabotaged until it is exposed.' };
     if (t === 'sabotage' && p.tokens === 0) return { valid: false, error: `${target}'s ${p.id} has no tokens to clear.` };
+    if (t === 'expose' && cfg.expose === 'card') return { valid: false, error: 'Exposing a hidden project takes a card in this game.' };
     if (t === 'expose' && !p.stealth) return { valid: false, error: `${target}'s ${p.id} is already face up.` };
     if (t === 'expose' && p.tokens < (cfg.expose_min_tokens ?? 0)) return { valid: false, error: `A hidden project can be exposed only once it carries ${cfg.expose_min_tokens} tokens (this one has ${p.tokens}).` };
     return { valid: true };

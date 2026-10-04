@@ -301,7 +301,7 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
       if (db.suiteHash(s) === db.suiteHash(cur)) Object.assign(s, { noise: cur.noise, noiseContext: cur.noiseContext });
       if (s.train.seeds.some((x) => s.test.seeds.includes(x))) throw new ToolError('train and test seeds must not overlap');
       const games = (s.train.seeds.length * s.train.players.length + s.test.seeds.length * s.test.players.length);
-      if (games > 48) throw new ToolError(`${games} games per eval is too many (≤ 48; each is its own invocation)`);
+      if (games > 96) throw new ToolError(`${games} games per eval is too many (≤ 96; each is its own invocation)`);
       await db.setSuite(game, s);
       return { ...s, hash: db.suiteHash(s), note: 'a new suite hash — previous evals no longer count as baselines' };
     }
@@ -429,7 +429,7 @@ const TOOLS = [
   { name: 'classify', kind: 'act', description: 'What a definition asks for vs what the engine has: declared mechanics (implemented/partial/missing), Jev reading the prose against the 209-mechanic catalogue, card effects nothing handles, rule facts, schema errors. ~1 Jev call.', inputSchema: S({ game, version, preset: { type: 'string' }, rules }) },
   { name: 'playtest', kind: 'act', description: 'One game played by Jev (async job): classification, per-move record, session judgement + qualitative critique, score/v2, findings. Poll with job.', inputSchema: S({ game, version, preset: { type: 'string' }, rules, players: { type: 'number' }, seed: { type: 'number' }, maxSteps: { type: 'number' }, persona: { type: 'string' } }) },
   { name: 'suite', kind: 'read', description: 'A game\'s eval suite: train and held-out test seeds × player counts, maxSteps, epsilon (smallest change acted on), measured noise.', inputSchema: S({ game }, ['game']) },
-  { name: 'set_suite', kind: 'act', description: 'Owner-only: change a game\'s suite (≤24 games per eval; train/test seeds disjoint). Invalidates baselines.', inputSchema: S({ game, train: { type: 'object' }, test: { type: 'object' }, maxSteps: { type: 'number' }, epsilon: { type: 'number' } }, ['game']) },
+  { name: 'set_suite', kind: 'act', description: 'Owner-only: change a game\'s suite (≤96 games per eval; train/test seeds disjoint). Invalidates baselines.', inputSchema: S({ game, train: { type: 'object' }, test: { type: 'object' }, maxSteps: { type: 'number' }, epsilon: { type: 'number' } }, ['game']) },
   { name: 'eval', kind: 'act', description: 'Evaluate a definition version over its suite (async job, ≤300 s): every run judged and scored; returns train runs in full and the held-out test split as a score only. The first eval of the head is the climb baseline.', inputSchema: S({ game, version, tag: { type: 'string' } }, ['game']) },
   { name: 'noise', kind: 'act', description: 'Measure eval noise (async job): re-evaluate the head and compare with its baseline; the larger delta becomes the suite noise floor that proposals must beat. Run once before climbing.', inputSchema: S({ game }, ['game']) },
   { name: 'propose', kind: 'act', description: 'One hill-climb round (async job): apply ONE change (rules or exact edits vs head) with a rationale, eval it, keep only if train improves by ≥ epsilon AND test improves; otherwise revert. After 3 rounds without a keep the climb is stalled and a diagnosis is returned.', inputSchema: S({ game, rules, edits, rationale: { type: 'string', description: 'the root cause this change addresses, from train runs only' } }, ['game', 'rationale']) },
