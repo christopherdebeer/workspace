@@ -308,3 +308,38 @@ as one declared round → tune by climbing.**
   comparable; the behaviour counts are.
 - Paced deduction, round 13: reverted again (−0.041; Enemy 11/24 at the limit,
   2 denunciations, 7.8 rounds). Its loss holds under I3, I4 and I5.
+
+### Addendum — the step back: AAOTE v0.5 from the design board, score/v4 (2026-10-04)
+
+- **Why.** The design board for AAOTE (cover 敵の代理人, twenty characters with professions
+  and cities, noir items and scenes, the Nine Cuts, a mechanics sketch — Project → Stealth,
+  Progress, Sabotage, Reveal, Expose, Cooperate — the verbs Kompromat / Gossip / Quid pro quo /
+  Hostile takeover / Research / Corrupt / Investigate / Scoop / Blackmail, a prisoner's-dilemma
+  note, and *Deception: Murder in Hong Kong*, *Coup* and *The Resistance* as references) had
+  never been in the loop. The v0.3 the climb started from was a fantasy adventure produced by an
+  earlier automated climb. Rounds 4–13 were parameter edits on a design whose core loop —
+  evidence generated structurally, every round — did not exist: under h10 (an agent that hides)
+  honest players could not find it. Four of five seats were playing solitaire. And score/v3.1
+  gave 0.85 to a three-round game decided by the agent exposing itself, because 65 % of its
+  weight was mechanical and v0.4 maxed every mechanical term. See devtools/aaote/DESIGN-BRIEF.md.
+- **v0.5** (devtools/aaote/v0.5-RULES.md): projects on a personal table, open or in stealth;
+  progress, cooperate (pays the helper), sabotage (open projects), expose (hidden ones); Gossip
+  and Investigate as cards; Kompromat only in stealth and only usable by the agent; points over
+  8 rounds; a correct accusation ends the game (accuser +3, others +1, agent → 0, highest score
+  wins, agent wins ties); the Nine Cuts as powers. Engine: `projects` mechanic, objective
+  checks on completed projects by kind, completion as a bonus, scoring denunciation,
+  `peek_project`, `ties_to_role`. Harness: a move on a hidden project reaches the other players
+  without its card or facts; public exposures reach the judge; the accusation label states the
+  scoring outcome.
+- **score/v4**: a game with a hidden enemy is scored on its deduction loop (ended .15,
+  critique .20, judged .10, clean .10, deduction .20, interaction .15, tension .10) and the
+  suite's balance term is the genre band from the brief (exposed 40–60 %, agent wins 30–45 %,
+  wrong accusations < 20 %), weighted .25. Games without a hidden enemy keep v3.1. Not
+  comparable with earlier scores; the behaviour counts are.
+- **First six Jev games of v0.5** (local, h10): every one ended in round 3 with the agent
+  exposed — on evidence in all six (public exposure of Kompromat in four, elimination after
+  two wrong accusers revealed themselves honest in one, a peeked objective in one). The loop
+  works; Expose is too cheap: three honest players turn over every hidden project within a
+  round. First proposals, in order: expose only a hidden project with ≥ 2 tokens (engine
+  option `expose_min_tokens`), accusations from round 4 at a cost of 3, accusations only with
+  evidence.
