@@ -100,7 +100,8 @@ function exposure(before: Record<string, any>, after: Record<string, any>, pid: 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
     const v = mechanicRegistry.getPlayerView(state as never, pid) as Record<string, unknown>;
-    return Array.isArray(v?.objectiveProgress) ? (v.objectiveProgress as string[]) : [];
+    // objectiveProgress: how far along the goal; progress: any other per-step movement a mechanic reports.
+    return [...(Array.isArray(v?.objectiveProgress) ? (v.objectiveProgress as string[]) : []), ...(Array.isArray(v?.progress) ? (v.progress as string[]) : [])];
   } catch {
     return [];
   }
@@ -587,15 +588,19 @@ function fieldsNeedingWords(a: Action): string[] {
 }
 
 /** Who knows what before a move (executeAction mutates the state in place). */
-function knowledgeSnapshot(s: Record<string, any>): Record<string, { revealedAs?: string; knows: string[] }> {
-  return Object.fromEntries(Object.entries(s.players as Record<string, any>).map(([p, pl]) => [p, { revealedAs: pl.revealedAs, knows: Object.keys(pl.knowledge?.revealed ?? {}) }]));
+function knowledgeSnapshot(s: Record<string, any>): Record<string, { revealedAs?: string; knows: string[] }> & { __public?: number } {
+  const snap = Object.fromEntries(Object.entries(s.players as Record<string, any>).map(([p, pl]) => [p, { revealedAs: pl.revealedAs, knows: Object.keys(pl.knowledge?.revealed ?? {}) }]));
+  return Object.assign(snap, { __public: ((s.shared?.publicKnowledge as string[] | undefined) ?? []).length });
 }
 
 /** Public role reveals and private peeks caused by one move (h10): "R2 player-1 revealed to all as The Enemy". */
 function knowledgeEvents(before: ReturnType<typeof knowledgeSnapshot>, after: Record<string, any>, round: number, mover: string, label: string): string[] {
   const out: string[] = [];
   const by = `(${mover}: ${label.replace(/ \[.*$/, '').slice(0, 60)})`;
+  // Things a mechanic made public for everyone (shared.publicKnowledge): exposures, completions.
+  for (const line of ((after.shared?.publicKnowledge as string[] | undefined) ?? []).slice(before.__public ?? 0)) out.push(`R${round} everyone learned: ${line} ${by}`);
   for (const [p, pl] of Object.entries(after.players as Record<string, any>)) {
+    if (p === '__public') continue;
     const b = before[p] ?? { knows: [] };
     if (pl.revealedAs && !b.revealedAs) out.push(`R${round} ${p} revealed to all as ${pl.revealedAs} ${by}`);
     const was = new Set(b.knows);
@@ -797,7 +802,9 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       const at = { round: s.round, turn: s.turnNumber }; // before the action can end the turn
       const known = knowledgeSnapshot(s);
       E(() => executeAction(s as never, pid, chosen.action as never));
-      recent.push(`${pid}: ${chosen.label}`);
+      // What the other players see of this move: a move on a hidden project (stealth / hidden) shows
+      // neither the card nor its consequences.
+      recent.push(`${pid}: ${(chosen.action as { stealth?: boolean; hidden?: boolean }).stealth || (chosen.action as { hidden?: boolean }).hidden ? `${chosen.action.type.replace(/_/g, ' ')} · (a hidden project)` : chosen.label}`);
       const next = E(() => loadState(gameId)) as unknown as Record<string, any>;
       for (const ev of knowledgeEvents(known, next, at.round, pid, chosen.label)) session.knowledge.push(ev);
       const t: TurnRecord = {

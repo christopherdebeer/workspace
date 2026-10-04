@@ -35,6 +35,7 @@ type TargetKind = 'player' | 'tile' | 'none';
 export const EVENT_EFFECTS: Record<string, TargetKind> = {
   peek_hand: 'player',
   peek_objective: 'player',
+  peek_project: 'player',
   steal_item: 'player',
   block_tile: 'tile',
   destroy_location: 'tile',
@@ -68,6 +69,7 @@ function targetsFor(ctx: HookContext, card: Card): string[] {
       if (power?.type === 'immune' && power.to.includes(card.effect?.type ?? '')) return false;
       if (needsAdjacency && !adjacentPlayers(state, config, playerId, p)) return false;
       if (card.effect?.type === 'steal_item') return hand(state, p).some((c) => c.type === 'item');
+      if (card.effect?.type === 'peek_project') return ((state.players[p] as { projects?: Array<{ stealth: boolean }> }).projects ?? []).some((pr) => pr.stealth);
       return true;
     });
   }
@@ -172,6 +174,12 @@ export const eventEffectsMechanic: MechanicHooks & CardsHooks = {
       case 'peek_hand':
         if (target) learn(ctx, `${target} hand (round ${state.round})`, hand(state, target).map((c) => c.name));
         break;
+      case 'peek_project': {
+        // Gossip: see one of a player's hidden projects (the one with most tokens), privately.
+        const hidden = (target ? ((state.players[target] as { projects?: Array<{ name: string; stealth: boolean; tokens: number; needs: number }> }).projects ?? []) : []).filter((p) => p.stealth).sort((a, b) => b.tokens - a.tokens);
+        if (target && hidden.length) learn(ctx, `${target} project`, `${hidden[0].name} (${hidden[0].tokens}/${hidden[0].needs})`);
+        break;
+      }
       case 'peek_objective': {
         const obj = target ? (state.players[target] as Knowing).objective : undefined;
         if (target) learn(ctx, `${target} objective`, obj ? `${obj.name}: ${obj.condition}` : 'none');

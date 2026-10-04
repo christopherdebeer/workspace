@@ -24,6 +24,14 @@ import { powerEffect } from './variable-player-powers';
  *   standing on a trade_bonus tile (Village Square) — trade offers cost 0.
  * `consume` records what the discount used up (call it once the action has happened).
  */
+/** Can this player pay for `action` right now? (true when action points are not in play) */
+export function canAfford(ctx: HookContext, action: GameAction): boolean {
+  const ap = (ctx.config.engine_mechanics?.action_points as { action_costs?: Record<string, number> } | undefined);
+  const left = (ctx.player as { actionPoints?: number }).actionPoints;
+  if (!ap || left === undefined) return true;
+  return discountedCost(ctx, action, ap.action_costs?.[action.type] ?? 1).cost <= left;
+}
+
 function discountedCost(ctx: HookContext, action: GameAction, base: number): { cost: number; consume: () => void } {
   const p = ctx.player as unknown as { freeMoves?: number; usedMovementBonus?: boolean; hand?: Array<{ effect?: { type?: string } }>; state?: string };
   const none = { cost: base, consume: () => undefined };
