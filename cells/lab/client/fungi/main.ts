@@ -1659,7 +1659,8 @@ scrub?.addEventListener('input', () => {
 // ─── the view ───────────────────────────────────────────────────────────────────────────────────
 let yaw = 0.4;
 let pitch = 0.36;
-let zoom = 1;
+/** the slow turn the camera makes on its own (it stops while a hand's on it) */
+let drift = 0;
 let focus = 30;
 let focusAt: { at: () => V3; until: number } | null = null;
 let autoFocus = 0;
@@ -1692,8 +1693,8 @@ function setView() {
 function camera(t: number) {
   const aspect = W / Hh;
   const look = cur.look;
-  const d = cur.dist / zoom / Math.min(1.2, Math.max(0.75, aspect * 1.4));
-  const y = yaw + Math.sin(t * 0.05) * 0.15 + shake * 0.012 * Math.sin(t * 57);
+  const d = cur.dist / Math.min(1.2, Math.max(0.75, aspect * 1.4));
+  const y = yaw + Math.sin(drift * 0.05) * 0.15 + shake * 0.012 * Math.sin(t * 57);
   const pt = pitch + shake * 0.01 * Math.cos(t * 49);
   const eye: V3 = [look[0] + Math.cos(pt) * Math.cos(y) * d, look[1] + Math.sin(pt) * d, look[2] + Math.cos(pt) * Math.sin(y) * d];
   const f = norm3(sub3(look, eye));
@@ -1724,8 +1725,8 @@ let lastKind = '';
 const only = params.get('moment') ?? '';
 function direct(dt: number) {
   if (!terr && crit) {
-    // (the zoo: the lens on the animal, focused on it)
-    const p = whereIs(crit, 0, T, atime, groundY);
+    // (the zoo: the lens on the animal, focused on it — unless a hand has the camera)
+    const p = time >= handsOn + 20 ? whereIs(crit, 0, T, atime, groundY) : null;
     if (p) {
       view.look = p;
       view.aperture = 0.6;
@@ -2525,6 +2526,7 @@ function frame(now: number) {
   time += dt;
   frameDt = dt;
   if (playing) atime += dt;
+  if (playing && time >= handsOn + 20) drift += dt;
   const css = [innerWidth, innerHeight];
   // (about half a megapixel, less if the frames come slowly: the depth of field is the costly part)
   slow = slow * 0.95 + dt * 0.05;
@@ -2835,7 +2837,7 @@ function frame(now: number) {
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
-  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, limbs: [th.lim.hi, th.lim.mid, th.lim.lo, th.lim.bladeHi, th.lim.bladeLo, th.lim.glassHi, th.lim.glassMid].map((x) => x.length / (ROWW * 4)), bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100, rate: effRate, Tx: T, Te: shot?.Te ?? null, slow: slowmo?.phase ?? null, camD: Math.round((lastCam?.d ?? 0) * 100) / 100, near: lastCam?.near };
+  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, limbs: [th.lim.hi, th.lim.mid, th.lim.lo, th.lim.bladeHi, th.lim.bladeLo, th.lim.glassHi, th.lim.glassMid].map((x) => x.length / (ROWW * 4)), bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100, rate: effRate, Tx: T, Te: shot?.Te ?? null, slow: slowmo?.phase ?? null, camD: Math.round((lastCam?.d ?? 0) * 100) / 100, near: lastCam?.near, look: cur.look.map((v) => Math.round(v * 100) / 100), hands: time < handsOn + 20 };
   requestAnimationFrame(frame);
 }
 function ringAt(t: V3, dir: [number, number], a: number): V3 {
@@ -2899,8 +2901,8 @@ function chooseSubject(cam: ReturnType<typeof camera>, list: ReturnType<typeof s
 }
 /** A tap: the subject nearest the ray through it gets the focus (or, on bare ground, the ground). */
 function tapFocus(px: number, py: number) {
-  // (a tap is a hand on the view too: the director waits)
-  handsOn = time;
+  // (a tap is a hand on the view too: the director waits, the camera stays where it is)
+  takeOver();
   const cam = camera(time);
   const nx = (px / innerWidth) * 2 - 1;
   const ny = 1 - (py / innerHeight) * 2;
@@ -2931,12 +2933,43 @@ function tapFocus(px: number, py: number) {
 }
 
 // ─── hands ──────────────────────────────────────────────────────────────────────────────────────
+/** A hand on the camera: it's yours from where it is now. The director stops where it was going
+ *  (no gliding on under your fingers), and comes back only when you've let it be a while. */
+function takeOver() {
+  if (time >= handsOn + 20) {
+    view.look = [...cur.look] as V3;
+    view.dist = cur.dist;
+    view.pitch = pitch;
+  }
+  handsOn = time;
+}
+/** closer or further, by a factor: where the camera is, and where it's going, alike */
+function dolly(k: number) {
+  takeOver();
+  const d = Math.max(0.6, Math.min(pasture ? 400 : 160, cur.dist * k));
+  cur.dist = view.dist = d;
+}
+/** slide what it's looking at across the ground (screen pixels) */
+function pan(dx: number, dy: number) {
+  takeOver();
+  const cam = lastCam ?? camera(time);
+  const h = Math.hypot(cam.f[0], cam.f[2]) || 1;
+  const fw: V3 = [cam.f[0] / h, 0, cam.f[2] / h];
+  const k = (cam.d * Math.tan(FOV / 2) * 2) / innerHeight;
+  for (let i = 0; i < 3; i++) {
+    const m = (-cam.r[i] * dx + fw[i] * dy) * k;
+    cur.look[i] += m;
+    view.look[i] += m;
+  }
+}
 const pts = new Map<number, { x: number; y: number; x0: number; y0: number; moved: boolean }>();
 let pinch = 0;
+let mid: [number, number] | null = null;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   pts.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false });
   pinch = 0;
+  mid = null;
 });
 canvas.addEventListener('pointermove', (e) => {
   const p = pts.get(e.pointerId);
@@ -2947,28 +2980,43 @@ canvas.addEventListener('pointermove', (e) => {
   p.y = e.clientY;
   if (Math.hypot(p.x - p.x0, p.y - p.y0) > 6) p.moved = true;
   if (pts.size === 2) {
+    // two fingers: pinch to come closer, move together to slide across
     const [a, b] = [...pts.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (pinch) zoom = Math.max(0.7, Math.min(4, zoom * (d / pinch)));
-    handsOn = time;
+    const m: [number, number] = [(a.x + b.x) / 2, (a.y + b.y) / 2];
+    if (pinch) dolly(pinch / d);
+    if (mid) pan(m[0] - mid[0], m[1] - mid[1]);
     pinch = d;
+    mid = m;
     return;
   }
+  if (!p.moved) return;
+  // (a mouse's right button, or shift: slide; else round)
+  if (e.shiftKey || (e.buttons & 2) !== 0) {
+    pan(dx, dy);
+    return;
+  }
+  takeOver();
   yaw += dx * 0.006;
-  handsOn = time;
   pitch = Math.max(0.04, Math.min(0.9, pitch + dy * 0.004));
+  view.pitch = pitch;
 });
-canvas.addEventListener('pointerup', (e) => {
+const lift = (e: PointerEvent) => {
   const p = pts.get(e.pointerId);
   pts.delete(e.pointerId);
   pinch = 0;
-  if (p && !p.moved) tapFocus(e.clientX, e.clientY);
+  mid = null;
+  return p;
+};
+canvas.addEventListener('pointerup', (e) => {
+  const p = lift(e);
+  if (p && !p.moved && pts.size === 0) tapFocus(e.clientX, e.clientY);
 });
-canvas.addEventListener('pointercancel', (e) => pts.delete(e.pointerId));
+canvas.addEventListener('pointercancel', (e) => void lift(e));
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  zoom = Math.max(0.7, Math.min(4, zoom * Math.exp(-e.deltaY * 0.0012)));
-  handsOn = time;
+  dolly(Math.exp(e.deltaY * 0.0012));
 }, { passive: false });
 document.getElementById('another')?.addEventListener('click', () => grow(Math.floor(Math.random() * 9000) + 1));
 document.getElementById('play')?.addEventListener('click', (e) => {

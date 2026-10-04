@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:e2252c28e2ade54d7ab39a433a74ec365fbe4b79fadf32520cf6a5d45234b1ed",
-  "syncedAt": "2026-10-04T13:27:31.445Z",
+  "treeVersion": "tree:b0de72b457562a6cb0518eefd9bcfbd2732eb08d76bf5489503539a86a564b04",
+  "syncedAt": "2026-10-04T13:30:18.559Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -12,7 +12,7 @@
     "client/fungi/genome.ts": "sha256:efaadf8aa6d53e537f0fc4210c7b6b49b7cdc5be3e8395b8e0501ee1f91a0ff5",
     "client/fungi/grass.ts": "sha256:0215cb196f26714b1349f5078d013006a10fdcff3c1b77b6645c0fd4cb7a3b30",
     "client/fungi/launch.ts": "sha256:af544c4573671073fd5348dfbd718d75bcd6b922492ba380c86c4ad02089049c",
-    "client/fungi/main.ts": "sha256:6a418ec58aa10a3e129295ede30a5c3021f486edbe268b2c982fa3fcf2e9efeb",
+    "client/fungi/main.ts": "sha256:1bfaeb30c747269a0ff8396b4dd8b65a232b46126a37c057aba71c6e6be2ee9d",
     "client/fungi/pasture.ts": "sha256:9e99c4cfa69a861434d0b5831448e47c3d3107df6978b8298acab678c8d60d52",
     "client/fungi/soft.ts": "sha256:72838066ace998ba6c3f216d0221a3717dad8cf834fefd5e049ae540bd5b9b48",
     "client/fungi/straw.ts": "sha256:646110556d5d42bce84944aaf0ecfb35edccedd678967744d22fb98583b84dd1",
@@ -39,7 +39,7 @@
     "static/bricks.html": "sha256:6f65df89f999cd96433cb69e49667f83e592d0836c3a1ca26d016d0201285618",
     "static/bricks.md": "sha256:c14590220920b1f605b7104423224bf8f397acdcbc7a4b3c83fa65068583a933",
     "static/fungi.html": "sha256:c0d21a01ffcc7711efb251a3c238d6e4cd0ccf529256a268cc4434603a0765df",
-    "static/fungi.md": "sha256:7d6b5e5d8f20952bc68027284eb2f28ebf5ee5d38e2afc37bee5593b4bf91c74",
+    "static/fungi.md": "sha256:342a0ab1181a2e4064f83f89535ab21bdcb193d4f82de266eb731cf4434f492a",
     "static/mistwood.html": "sha256:088a83dcc06e6636c89cffe785e91126ff455e1924cbf3dd62950d6d17acd9db",
     "static/mistwood.md": "sha256:f27e361c3595eb0d59c6db92f17b08816ba9b02e668ad9ab498380ba52784d4b",
     "static/plate.html": "sha256:d9487ca6106921855e14644def18f7135a6ccb86601d54ab0a7d480686f3ef2f",

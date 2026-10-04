@@ -224,7 +224,10 @@ it starts again. In the field the clock shows the date; in a terrarium it counts
   there for a while, then the camera finds its own
   subject again, moving slowly from stalk to stalk as a cameraman would: one near the middle of
   the picture, ripening, and nearer rather than further.
-- **Drag** to move round; **pinch** (or the wheel) to come closer.
+- **Drag** to move round; **pinch** (or the wheel) to come closer or go back; **two fingers
+  together** (or shift-drag, or the right button) to slide across. The camera is yours from where
+  it is the moment you touch it: the director stops where it was going, and its slow turn stops.
+  Let it be for twenty seconds and the director comes back, at the distances it chooses.
 - **The scrubber** is the run (three weeks, or one species' day), and the clock is its time: it
   starts at nine in the evening. `pause` stops it: a still (nothing moves, the animals included), to look round. `another` gives a new terrarium (or species).
   `?t=` starts at an hour. `?one&form=eyelash` (or `thrower`, `pin`, `inkcap`, `cup`, `flask`)
