@@ -359,3 +359,14 @@ as one declared round → tune by climbing.**
   end in a correct accusation, band 0.69.
 - Next, with the larger suite: exposure as a card (Leak) instead of a standing action;
   Kompromat at 2 tokens (no public signal); a wrong accusation hands the agent the game.
+- **Rounds 17–20** (head v18, score/v4.1; the suite enlargement had been silently cut back to
+  12 seeds per split by `set_suite` — fixed, so these ran on 24 + 24 with new test seeds;
+  noise 0.028). Baseline 0.789 / 0.759, band 0.71. 17, Leak card instead of a standing
+  Expose: +0.016, reverted. 18, Kompromat at 2 tokens (no public signal): +0.008, reverted —
+  the agent won 8/24 but nothing else moved. 19, a wrong accusation hands the agent the game:
+  train +0.072, test −0.022, reverted as overfitting — band 0.89, the agent winning 9/24,
+  squarely in the target; a 24-game test split carries ±0.03 of its own, so it is re-run on
+  the 48 + 24 suite before either number is believed. **20, accusations from round 4 at a
+  cost of 3: +0.043 train, +0.019 test, kept** (it had missed the 0.049 floor by 0.005 in
+  round 15). Head v22 = v0.5 + evidence + round 4 / cost 3: both keeps are on the
+  accusation rule — the dilemma the board put at the centre.
