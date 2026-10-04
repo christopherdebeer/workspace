@@ -260,3 +260,28 @@ as one declared round → tune by climbing.**
   against stronger players (a few games played turn-by-turn by a deliberative
   model, or people) on v0.4 vs the paced-deduction variant
   (scratchpad prop-paced-deduction), before more design rounds.
+
+### Addendum — harness h9: players read the whole rules (2026-10-04)
+
+- **Found by walkthrough** (devtools/walkthrough.ts captures every Jev call of
+  one game verbatim). h1–h8 gave players a rules digest of only the sections
+  headed win/goal/objective/gameplay/turn/actions: AAOTE players never saw
+  the map, denouncing, trading, powers or events sections — e.g. that
+  entering the Forbidden Temple reveals The Enemy, or that a wrong
+  denunciation forfeits your objective. In the captured game the Enemy took
+  `Hidden Path → Temple [then search Shadow Key: → holding 1/3]` at 0.74 in
+  round 2 and lost to a denunciation in round 3.
+- **h9**: players get the whole prose up to 8000 chars (over the cap, the
+  win/turn/action sections first, the rest in order). Instrument I4 = I3 + h9.
+- **Under I4**: v0.4 baseline train 0.872 / test 0.850 (I3 0.858 / 0.854),
+  outcome balance 0.99 (0.88), noise 0.0055 (0.019). Paced deduction, round 12:
+  reverted again, train −0.057; the Enemy wins 11/24 at the limit, denunciations
+  fall to 2/24, games run 8.3 rounds, critique 0.47 vs 0.59.
+- **What changed in play** (24 train games of v0.4): wrong denunciations
+  halved (8 → 4); games ending by denunciation unchanged (16); denunciations
+  that followed the Enemy entering the Temple 8 → 7. Reading the rule barely
+  stops the self-reveal: the option label still advertises the objective step
+  and not its cost. Jev weighs option labels far above prose.
+- Next for the instrument: the cost of a move in its label (`[reveals you]`);
+  an Enemy persona (the "suspicious" persona currently tells the Enemy to hunt
+  a traitor); reveal/peek events in the judge's record.
