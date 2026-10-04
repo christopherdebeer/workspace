@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:e7f58350d75874bb63c4e15dd38ffad4c7f369aa7055afd1710f3843c1015d9a",
-  "syncedAt": "2026-10-04T16:40:51.487Z",
+  "treeVersion": "tree:7c73183251f77b04ca66f96d528325951b8c06c1be5e19389cffe7c47a4c6fab",
+  "syncedAt": "2026-10-04T16:50:26.838Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -216,9 +216,9 @@
     "engine/types/index.ts": "sha256:6c7ac67faf110ba25d56ed96711ca41f11f541c64ca7a9146f4978949a21c20c",
     "engine/types/logs.ts": "sha256:9731ecee84746d2a1590841d74e04009f6780ff49514df100e008a6d4ed0453e",
     "engine/vendor-info.ts": "sha256:eeaadfb93fcec2e4acfbfffb01bee4a12d5bc5f2f2641dbe0cccd764556c487a",
-    "index.ts": "sha256:bb3a8aa25705e78f63ae65c7395608baf11101eca8e36040c7ae6dc64872d754",
+    "index.ts": "sha256:b1c62f20601014eca259fce68bc620f42a66380e42ed08543d83d352fa3f076d",
     "lib/deduction.ts": "sha256:cd832da72427fa97ac0476acc0810071f8b78e1eeea83f0b1dd4139084a5c95d",
-    "lib/evaluate.ts": "sha256:9e0630164d0efac9ca482fb793e981ab81c9860012681bbf2570bc7cd0c1f480",
+    "lib/evaluate.ts": "sha256:2ae7d66d4da861f30b3388e2dbdd52d9bc8dc79bd9130ad4b4ed2ebbcbbed2a2",
     "lib/fingerprint.ts": "sha256:5a2169a04c0c5d4e06b0c47a3237c3970557a08835f65965f0d8c4599ad93699",
     "lib/jev.ts": "sha256:9b68102cd9e42be5942c4a029d8559ce43e37aa92115db6c5ed378742447629a",
     "lib/public.ts": "sha256:c7508569d537937f67902e129adda667810295c0868e30df6037eb6c23240bb0",
