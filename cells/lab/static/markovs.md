@@ -1,33 +1,25 @@
-# Markovs Chains
+# Markovs Chains — physical card playtest
 
-A game of finite probabilities. A first playable rules hypothesis inspired by Auxiliary Field's card sketches: diagrams as cards, stamped colour on warm stock, spare arrows, and a token caught between intention and chance.
+The default is now a physical-first junction card game, separate from the archived four-state probability interface. Twenty-four square junction cards (three copies of eight designs), START, two destination cards, one counter, a d6, four reroute coins, and a thirty-turn tally reproduce every rule on a real table.
 
-## The first game: a finite journey
+## Rules
 
-Four states sit clockwise: hearts, diamonds, clubs, spades. Start at hearts; visit clubs, then diamonds, within eight transitions. Diamonds before clubs does not finish the commission.
+Imagine a 5×5 grid: clubs at column 1 row 1, START at 3,3, diamonds at 5,5. Put the counter on START. Player 1 seeks clubs; player 2 diamonds. Shuffle, deal three cards each and give each player two reroute markers. For the guided first deal, player 1 receives ELBOW, STRAIGHT, LOOP, removed from the deck before dealing the opponent. Subsequent ordinary deals shuffle all 24 cards.
 
-Five cards are offered. Choose one and then a state: its outgoing probabilities are replaced. Each card describes relative routes (stay, clockwise, across, anticlockwise) in four equal parts. Draw a replacement. You have four placements, or may release early. Undo is free during planning. After release, the sampled journey is final for that deal. Reset repeats the seeded deal and journey; next deal supplies a new seed.
+Choose and rotate one card, then place it adjacent to an existing junction, not an isolated destination. Every card has four inlet sockets; numbered outgoing arrows specify a direction for each die face. Numbers rotate with the card. Alternatively spend one reroute marker to replace any junction, including under the counter; destinations stay fixed. Discard replaced cards. Draw if the deck is not empty. Passing placement is legal.
 
-The percentage is the exact finite-horizon probability of completing the ordered commission, calculated by propagating mass over state × commission progress. Progress is part of the state: it is a Markov process on this augmented state space. Successful arrivals are absorbing for the forecast and stop the animation. The simulation samples the same transition rows that the forecast and arrows show. A self-loop consumes a transition.
+Roll a d6. Read its face on the counter's current card and move one card in that direction. A loop or missing neighbour means stay and still uses a turn. Arrival wins for the destination owner, regardless of who rolled. Thirty rolls without arrival is a draw. Empty hands pass and roll. Digital undo restores the pre-roll board, hand, deck and reroute coins.
 
-## Workshop
+## Modes
 
-Free placement and repeat journeys. This is for discovering card combinations, not a scored mode. Share table copies a link containing the routing cards, hand, seed and placement count; it preserves a planning position, not an in-flight replay or complete undo/deck history.
+/markovs and ?mode=physical use this game. ?play=bot offers a local opponent; ?play=two is pass-and-play; ?play=workshop supplies all eight reusable designs and unlimited placements and reroutes. Manual die-face buttons permit using a real die. Workshop has a counter-to-start button. An inline guide teaches a first turn on the actual table. Card inspection explains printed routes in readable text.
 
-## Art direction
+Print cards + rules invokes native printing: one A4 rule sheet plus three sheets of nine 60mm square cards. No odds calculation, concealed transition or digital state is needed to resolve movement.
 
-Cream stock, dotted paper, serif title, monospaced registration text, red/gold/green/blue states, a card hand and curved arrows. The diagrams are generated natively as SVG, remaining crisp and interactive on phones. No reference image is copied into the game. The first iteration concentrates on the diagram/card language; the architectural/isometric card reference remains a possible direction for state scenes. Elaborate distressed printing is also future work.
+The bot follows the same full turn, reroute budget, deck and die rules. It evaluates visible hand placements and rotations with a fixed-board route forecast and distance heuristic. It cannot inspect future draws or die rolls. Balance is untested: watch for blocked exits, remote placements, and the strength of rerouting under the counter.
 
-## What remains undecided
+## Archive and implementation
 
-- Solitaire versus a competitive shared chain, where each player owns destinations.
-- A fixed commission versus drafted private objectives.
-- Replacing routes versus adding cards as composable layers.
-- Whether exact odds are always visible, earned by inspection, or reserved for workshop.
-- The cost of certainty: deterministic cards, limited interventions, and risk/reward scoring.
+Earlier experiments remain at ?mode=challenge, ?mode=duel and ?mode=workshop with their original tutorial. These are different rule hypotheses, not physical game modes.
 
-This version deliberately tests one question: is placing a card into a probabilistic network satisfying? It has no AI opponent, balance certification, persistent campaign or multiplayer. It does not reuse the existing Playtest preset called markovs-chains; the user's visual references are the starting point for this separate design.
-
-## Implementation
-
-client/markovs/rules.ts contains pure transition, probability and seeded-random functions. client/markovs/main.ts owns the table and controls. static/markovs.html is the mobile-friendly page. Use ?seed=1941 or ?mode=workshop. The experiment is registered in Lab and uses its immutable deployment assets.
+physical-rules.ts contains pure card exits, placement legality, movement and bot evaluation. physical.ts contains UI, turn state, guide, manual rolls, deck and printable sheets. main.ts selects the default physical game or archive. rules.ts continues to power the old probability experiment.
