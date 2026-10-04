@@ -36,8 +36,10 @@ export interface Moment {
   T: number;
   at: V3;
   size: number;
-  kind: 'emerge' | 'throw' | 'open' | 'ink' | 'fire' | 'stuck' | 'ride' | 'graze' | 'squirt';
+  kind: 'emerge' | 'throw' | 'open' | 'ink' | 'fire' | 'stuck' | 'ride' | 'graze' | 'squirt' | 'trap';
   who: number;
+  /** an animal to keep the lens on (its index among the mites, then the springtails) */
+  follow?: number;
 }
 export interface Terrarium {
   species: Species[];

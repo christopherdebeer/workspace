@@ -14,7 +14,8 @@
  * field (a scatter-as-gather disc, from depth) → tone.
  */
 import { FORMS, DAY, along, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Form, type Genome, type Stalk, type State, type V3 } from './genome';
-import { critters, drawCritters, type Critters } from './critters';
+import { straw, drawStraw, type Blade } from './straw';
+import { MAXP, ROWW, critters, drawCritters, limbs, whereIs, zoo, type Critters, type Limbs } from './critters';
 import { DAYS, GRID, SPAN, STEP, terrarium, type Moment, type Terrarium } from './terrarium';
 
 const params = new URLSearchParams(location.search);
@@ -29,6 +30,7 @@ if (!gl) throw new Error('WebGL2 is needed');
 if (preview) document.body.classList.add('preview');
 const hdr = !!gl.getExtension('EXT_color_buffer_float');
 const MYC = 48;
+const SHADE = 24;
 
 // ─── shaders ────────────────────────────────────────────────────────────────────────────────────
 const COMMON = `
@@ -92,6 +94,8 @@ out vec4 o;
 uniform vec3 uGround;
 uniform float uWet, uMyc;
 uniform vec4 uFeet[${MYC}];
+// (where the small animals are: the ground under them in their shadow — x, z, radius, depth)
+uniform vec4 uShade[${SHADE}];
 // (a terrarium's ground: per cell, its mycelium, water, food left, and whether it's dung)
 uniform sampler2D uMap;
 uniform float uHasMap, uSpan;
@@ -138,6 +142,205 @@ void main() {
   float diff = .3 + .7 * max(dot(n, uLight), 0.);
   vec3 col = c * diff * uLightCol;
   col += wetness(n, v, vec3(p.x, 0., p.y), wet, 9.);
+  float ao = 1.;
+  for (int i = 0; i < ${SHADE}; i++) {
+    vec4 f = uShade[i];
+    if (f.w <= 0.) continue;
+    vec2 d = (vW.xz - f.xy) / f.z;
+    ao *= 1. - f.w * exp(-dot(d, d) * 2.2);
+  }
+  o = vec4(col * ao, 1.);
+}`;
+
+// ─── limbs: swept tubes along a short polyline (up to 24 points, each with its radius), one row
+// of a float texture each — the small animals are built of them: bodies, legs, palps, setae,
+// antennae, a furca; a nematode is one ────────────────────────────────────────────────────────
+const LIMB_VS = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 aUA;
+uniform mat4 uVP;
+uniform sampler2D uRows;
+uniform int uOffset;
+out vec3 vW;
+out vec3 vN;
+out vec2 vUA;
+out float vSeg;
+out float vUp;
+flat out vec4 vCol;
+flat out vec4 vInfo;
+flat out vec4 vMore;
+int row;
+vec4 P(int i) { return texelFetch(uRows, ivec2(i, row), 0); }
+// the spine at f (0..n-1): smooth (Catmull-Rom) or jointed (straight between points)
+vec4 spine(float f, int n, bool smooth_) {
+  f = clamp(f, 0., float(n - 1));
+  int i = min(int(floor(f)), n - 2);
+  float t = f - float(i);
+  vec4 p1 = P(i), p2 = P(i + 1);
+  if (!smooth_) return mix(p1, p2, t);
+  vec4 p0 = P(max(i - 1, 0)), p3 = P(min(i + 2, n - 1));
+  vec4 a = 2. * p1, b = p2 - p0, c = 2. * p0 - 5. * p1 + 4. * p2 - p3, d = -p0 + 3. * p1 - 3. * p2 + p3;
+  vec4 q = .5 * (a + b * t + c * t * t + d * t * t * t);
+  q.w = max(q.w, min(p1.w, p2.w) * .5);
+  return q;
+}
+void main() {
+  row = gl_InstanceID + uOffset;
+  vec4 col = P(24), info = P(25), more = P(26);
+  int n = int(info.x);
+  bool sm = info.w > .5;
+  float flat_ = info.y;
+  // (the mesh's ends are hemispherical caps: the first and last few rows)
+  float cap = .1;
+  float u = aUA.x;
+  float f, e = 0.;
+  if (u < cap) { f = 0.; e = -(1. - u / cap); }
+  else if (u > 1. - cap) { f = float(n - 1); e = (u - (1. - cap)) / cap; }
+  else f = (u - cap) / (1. - 2. * cap) * float(n - 1);
+  float df = .02 * float(n - 1);
+  vec4 c = spine(f, n, sm);
+  vec4 ca = spine(f - df, n, sm), cb = spine(f + df, n, sm);
+  vec3 tv = cb.xyz - ca.xyz;
+  float ds = max(length(tv), 1e-6);
+  vec3 t = tv / ds;
+  float dr = (cb.w - ca.w) / ds;
+  vec3 ref = abs(t.y) > .92 ? vec3(1., 0., 0.) : vec3(0., 1., 0.);
+  vec3 a = normalize(cross(t, ref));
+  vec3 b = cross(a, t);
+  // (b is the side of the ring toward the sky: a flattened tube is flattened along it)
+  vec3 ring = a * cos(aUA.y) + b * sin(aUA.y);
+  float r = c.w;
+  vec3 off = (a * cos(aUA.y) + b * sin(aUA.y) * flat_) * r;
+  vec3 nr = normalize(a * cos(aUA.y) + b * sin(aUA.y) / max(flat_, .05));
+  vec3 p = c.xyz;
+  vec3 nn = normalize(nr - t * dr);
+  if (e != 0.) {
+    // a cap: round the end over
+    float ph = abs(e) * 1.5708;
+    p += t * sign(e) * r * sin(ph) * (flat_ * .5 + .5);
+    off *= cos(ph);
+    nn = normalize(nr * cos(ph) + t * sign(e) * sin(ph));
+  }
+  vW = p + off;
+  vN = nn;
+  vUA = vec2(u, aUA.y);
+  vSeg = f;
+  vUp = sin(aUA.y);
+  vCol = col;
+  vInfo = info;
+  vMore = more;
+  gl_Position = uVP * vec4(vW, 1.);
+}`;
+const LIMB_FS = `#version 300 es
+precision highp float;
+in vec3 vW;
+in vec3 vN;
+in vec2 vUA;
+in float vSeg;
+in float vUp;
+flat in vec4 vCol;
+flat in vec4 vInfo;
+flat in vec4 vMore;
+out vec4 o;
+uniform sampler2D uBehind;
+uniform vec2 uRes;
+uniform mat4 uView;
+uniform float uGlass;
+${COMMON}
+void main() {
+  vec3 n = normalize(vN);
+  vec3 v = normalize(uEye - vW);
+  if (dot(n, v) < 0.) n = -n;
+  float nv = max(dot(n, v), 0.);
+  vec3 r = reflect(-v, n);
+  float L = vMore.x;
+  float mat = vCol.a;
+  // (patterns are in the thing's own coordinates — along it in mm, round it — so they don't swim)
+  vec2 q = vec2(vUA.x * L, vUA.y);
+  float sd = vInfo.z;
+  float backlit = pow(max(dot(-v, uLight), 0.), 2.);
+  float lam = max(dot(n, uLight), 0.);
+  vec3 base = vCol.rgb;
+  vec3 col;
+  if (mat < .5) {
+    // chitin: a mite's shell — hard, polished, finely pitted; its dorsal shield darker, ringed by
+    // a groove in from the margin; the margin thin enough to glow; the setae's sockets pale
+    float pit = smoothstep(.62, .82, n2(q * vec2(180., 9.) + sd));
+    float socket = smoothstep(.9, .97, n2(q * vec2(55., 3.) + sd * 3.));
+    float shield = smoothstep(.0, .5, vUp);
+    float groove = exp(-pow((vUp - .18) / .05, 2.)) * vMore.w;
+    vec3 c = base * mix(1.1, .72, shield) * (1. - pit * .25) * (1. - groove * .5) + socket * .08;
+    vec3 nb = normalize(n + (vec3(n2(q * 140. + 3.), n2(q * 140. + 9.), n2(q * 140.)) - .5) * .1);
+    float rim = pow(1. - nv, 3.);
+    col = c * (.16 + .62 * max(dot(nb, uLight), 0.)) * uLightCol;
+    col += base * vec3(1.5, 1.05, .7) * rim * (.12 + backlit * 1.2) * uLightCol;
+    vec3 rb = reflect(-v, nb);
+    float fr = .04 + .96 * pow(1. - nv, 5.);
+    col += env(rb) * (.05 + fr * .55) * .6;
+    col += uLightCol * pow(max(dot(rb, uLight), 0.), 600.) * 7. + uLightCol * pow(max(dot(rb, uLight), 0.), 40.) * .12;
+  } else if (mat < 1.5) {
+    // a leg (or palp): paler, a little clear; dark at its joints; fine rings
+    float j = abs(fract(vSeg + .5) - .5);
+    float joint = 1. - smoothstep(.02, .12, j);
+    vec3 c = base * (1. - joint * .45) * (.95 + .05 * sin(q.x * 300.));
+    col = c * (.25 + .65 * lam + backlit * .6) * uLightCol;
+    col += base * pow(1. - nv, 2.) * .35 * uLightCol;
+    float fr = .04 + .96 * pow(1. - nv, 5.);
+    col += env(r) * fr * .6 + uLightCol * pow(max(dot(r, uLight), 0.), 120.) * 4.;
+  } else if (mat < 2.5) {
+    // a seta: a fine hair, a glint along it
+    col = base * (.35 + .55 * lam + backlit * .8) * uLightCol;
+    col += uLightCol * pow(max(dot(r, uLight), 0.), 40.) * 1.5;
+  } else if (mat < 3.5) {
+    // a springtail: soft, granular (tubercles), velvety; paler between its segments; a violet
+    // sheen where the light grazes it; a black patch of eyes each side of its head
+    float gran = n2(q * vec2(260., 26.) + sd);
+    vec3 nb = normalize(n + (vec3(n2(q * 300.), n2(q * 300. + 5.), n2(q * 300. + 9.)) - .5) * .5);
+    float seg = 1. - smoothstep(.06, .25, abs(fract(vSeg * .5 + .5) - .5) * 2.);
+    float mott = smoothstep(.35, .75, n2(q * vec2(30., 2.) + sd * 7.));
+    vec3 c = base * (.75 + .5 * mott) * (.85 + .3 * gran);
+    c = mix(c, base * 1.8 + .08, seg * vMore.y);
+    float eye = vMore.z * smoothstep(.025, .0, abs(vUA.x - .145)) * smoothstep(.12, .0, abs(abs(cos(vUA.y)) - .93) - .02) * step(0., sin(vUA.y) + .3);
+    c = mix(c, vec3(.02), eye);
+    col = c * (.25 + .65 * max(dot(nb, uLight), 0.)) * uLightCol;
+    col += mix(vec3(.45, .5, .9), base, .4) * pow(1. - nv, 2.2) * .55 * uLightCol;
+    col += uLightCol * pow(max(dot(reflect(-v, nb), uLight), 0.), 25.) * .18;
+  } else if (mat > 4.5) {
+    // a fragment of grass: veined lengthwise, its cells in rows, rotting in patches; thin enough
+    // to glow with the light behind it; dull, a faint sheen where it's wet
+    float vein = smoothstep(.55, 1., abs(sin(vUA.y * 7. + sd)));
+    float cells = n2(vec2(q.x * 140., vUA.y * 16.) + sd);
+    float rot = smoothstep(.45, .8, n2(q * vec2(5., 1.) + sd * 2.));
+    vec3 c = base * (.82 + .25 * vein) * (.85 + .3 * cells) * (1. - rot * .5);
+    col = c * (.22 + .6 * lam + backlit * .9) * uLightCol;
+    col += env(r) * (.03 + .5 * pow(1. - nv, 5.)) + uLightCol * pow(max(dot(r, uLight), 0.), 40.) * .12;
+  } else {
+    // a nematode: clear as glass, lit through; its gut a granular streak down its middle; a
+    // clear bulb behind its head; light caught along its edges
+    vec3 nvw = (uView * vec4(n, 0.)).xyz;
+    vec2 uv = gl_FragCoord.xy / uRes;
+    vec3 behind = through(uBehind, clamp(uv - nvw.xy * (1. - nv) * 10. / uRes, 0., 1.), 1. / uRes, 2.);
+    float x = vUA.x;
+    // (caught and killed: the fungus fills it — the gut fades, it goes milky, threaded inside)
+    float filled = vMore.w;
+    float gutz = smoothstep(.2, .3, x) * (1. - smoothstep(.82, .9, x)) * (1. - filled);
+    float core = smoothstep(.3, .9, nv);
+    float gran = n2(vec2(q.x * 160., vUA.y * 2.) + sd) * .6 + n2(vec2(q.x * 420., vUA.y * 4.)) * .4;
+    vec3 gut = base * vec3(.62, .52, .36) * (.45 + .8 * gran);
+    float bulb = exp(-pow((x - .17) / .025, 2.)) * core;
+    vec3 c = behind * mix(vec3(.9, .91, .87), gut, gutz * core * .8);
+    // (milky: its cuticle and body scatter some light back)
+    float threads = smoothstep(.45, .8, n2(vec2(q.x * 90., vUA.y * 5.) + sd)) * filled;
+    c = mix(c, base * uLightCol * (.35 + .4 * max(dot(n, uLight), 0.)) * (1. - threads * .25), mix(.2, .75, filled) * (.5 + .5 * core));
+    c = mix(c, c * .7 + vec3(.04, .035, .03), bulb * .6);
+    c += base * uLightCol * (.06 + .45 * backlit) * (.3 + .7 * pow(1. - nv, 1.5));
+    float ann = .93 + .07 * sin(q.x * 320.);
+    float fr = .04 + .96 * pow(1. - nv, 4.);
+    c += env(r) * (.06 + fr) * .9 * ann;
+    c += uLightCol * (pow(max(dot(r, uLight), 0.), 160.) * 8. + pow(max(dot(r, uLight), 0.), 20.) * .3) * ann;
+    col = c;
+  }
   o = vec4(col, 1.);
 }`;
 
@@ -382,7 +585,7 @@ flat in vec4 vB;
 flat in vec4 vC;
 out vec4 o;
 uniform vec3 uBell, uBellTop;
-uniform float uSaucer;
+uniform float uSaucer, uVeil;
 ${COMMON}
 void main() {
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
@@ -419,6 +622,14 @@ void main() {
     float g = pow(abs(sin(vB.w * vTA.y * .5)), .6);
     c *= .82 + .18 * g;
     c *= .92 + .12 * n2(vec2(vTA.y * vB.w * 1.5, t * 30.));
+    // its veil: white, woolly, in patches and fibrils, thick on the young egg, pulled apart as
+    // the cap opens, washed off toward the margin
+    float open = vB.z;
+    float patch_ = smoothstep(.36 + .2 * open, .5 + .2 * open, fbm(vec2(vTA.y * 5. + vC.z * 7., t * 9. * (1. + open))));
+    float fib = smoothstep(.55, .9, n2(vec2(vTA.y * 70. + vC.z, t * 6.)));
+    float veil = uVeil * (patch_ * .9 + fib * .4 * (1. - open) + (1. - open) * .35) * (1. - smoothstep(.6, .97, t));
+    c *= mix(1., .62, uVeil * .7);
+    c = mix(c, vec3(1.12, 1.1, 1.04) * (.8 + .3 * n2(vec2(vTA.y * 60., t * 50.))), clamp(veil, 0., 1.));
   }
   c = mix(c, vec3(.08, .07, .07), ink);
   // its flesh is thin: it glows when the light is behind it; a velvety sheen at its edges
@@ -595,6 +806,7 @@ const bellProg = program(BELL_VS, BELL_FS);
 const jellyProg = program(JELLY_VS, JELLY_FS);
 const dofProg = program(QUAD_VS, DOF_FS);
 const backProg = program(BACK_VS, BACK_FS);
+const limbProg = program(LIMB_VS, LIMB_FS);
 const U = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
 const u = (p: WebGLProgram, n: string) => {
   let m = U.get(p);
@@ -689,6 +901,59 @@ const solids = instanced(solidProg, sphereVerts, [['aP', 3]], SPH);
 // (the many small ones — legs, spores, nematodes — coarser: they're a few pixels)
 const solidsLo = instanced(solidProg, sphere(6, 8), [['aP', 3]], SPH);
 const SMALL = 0.06;
+// the limbs: their rows in a float texture; three meshes, by how near
+const MAXROWS = 2048;
+const rowsTex = gl.createTexture()!;
+gl.bindTexture(gl.TEXTURE_2D, rowsTex);
+gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, ROWW, MAXROWS);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.bindTexture(gl.TEXTURE_2D, null);
+function limbMesh(n: number, m: number) {
+  const vao = gl.createVertexArray()!;
+  gl.bindVertexArray(vao);
+  const b = gl.createBuffer()!;
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  const v = grid(n, m);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW);
+  attribs(limbProg, [['aUA', 2]], 2, 0);
+  gl.bindVertexArray(null);
+  return { vao, count: v.length / 2 };
+}
+const limbHi = limbMesh(44, 14);
+const limbMid = limbMesh(16, 7);
+const limbLo = limbMesh(6, 4);
+const ROWF = ROWW * 4;
+/** Put the frame's limbs in the texture, in the order they're drawn; where each list starts. */
+function uploadLimbs(l: Limbs) {
+  const lists = [l.hi, l.mid, l.lo, l.glassHi, l.glassMid];
+  const starts: number[] = [];
+  let rows = 0;
+  for (const x of lists) {
+    starts.push(rows);
+    rows += x.length / ROWF;
+  }
+  rows = Math.min(rows, MAXROWS);
+  if (rows) {
+    const data = new Float32Array(rows * ROWF);
+    let o = 0;
+    for (const x of lists) {
+      const k = Math.min(x.length, data.length - o);
+      data.set(x.length > k ? x.slice(0, k) : x, o);
+      o += k;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, rowsTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, ROWW, rows, gl.RGBA, gl.FLOAT, data);
+  }
+  return { starts, counts: lists.map((x, i) => Math.max(0, Math.min(x.length / ROWF, MAXROWS - starts[i]))) };
+}
+function drawLimbs(m: { vao: WebGLVertexArrayObject; count: number }, start: number, count: number) {
+  if (count <= 0) return;
+  gl.uniform1i(u(limbProg, 'uOffset'), start);
+  gl.bindVertexArray(m.vao);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, m.count, count);
+}
+void MAXP;
 const drops = instanced(dropProg, sphereVerts, [['aP', 3]], SPH);
 const tubes = instanced(stalkProg, grid(48, 16, (k) => 1 - Math.pow(1 - k, 1.5)), [['aUA', 2]], [['aBase', 3], ['aDir', 4], ['aShape', 4], ['aMore', 4], ['aLook', 4]]);
 // (fine hairs: the same tube, far fewer rings)
@@ -759,6 +1024,7 @@ let crit: Critters | null = null;
 /** the lead species: its light, its warmth, its ground */
 let g: Genome;
 let bits: ReturnType<typeof litter>;
+let blades: Blade[] = [];
 /** the beads' colour: the lead species' orange, browned in the dung */
 let beadColour: V3 = [0.5, 0.3, 0.1];
 /** the scale of things: the noise and the ground go by it (1: a thrower 8 mm tall) */
@@ -814,8 +1080,11 @@ function grow(s: number) {
     g = species(seed, (FORMS as string[]).includes(params.get('form') ?? '') ? (params.get('form') as Form) : undefined);
     world = [{ g, stalks: patch(seed, g), cups: cushions(seed, g), S: scaleOf(g) }];
     terr = null;
-    crit = null;
+    // (`&critter=`: an animal on its own, under the lens)
+    crit = params.get('critter') ? zoo(params.get('critter')!, seed) : null;
+    if (crit) world[0].stalks = world[0].cups = [];
     bits = litter(seed, g);
+    blades = straw(seed, g.patch * 1.5, Math.round(g.patch * 12));
     S = scaleOf(g);
   } else {
     terr = terrarium(seed);
@@ -824,6 +1093,7 @@ function grow(s: number) {
     world = terr.species.map((x) => ({ g: x.g, stalks: x.stalks, cups: x.cups, S: scaleOf(x.g) }));
     g = world[0].g;
     bits = litter(seed, { ...g, patch: 20, scale: 5, beads: Math.min(g.beads, 50) });
+    blades = straw(seed, 30, 420);
     S = 1;
   }
   beadColour = mixV(g.bead, [0.22, 0.14, 0.07], 0.45);
@@ -832,7 +1102,7 @@ function grow(s: number) {
   focusAt = null;
   subject = -1;
   shot = null;
-  focus = 30 * S;
+  focus = crit && !terr ? 3.4 : 30 * S;
   setView();
   cur.look = [...view.look] as V3;
   cur.dist = view.dist;
@@ -864,10 +1134,11 @@ function label() {
   // a terrarium: the species the lens is on (or, between, the terrarium's cast)
   const who = shot?.who ?? -1;
   const kind = shot?.kind ?? '';
-  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' ? kind : ''}`;
+  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' || kind === 'trap' ? kind : ''}`;
   if (key === labelled) return;
   labelled = key;
   if (kind === 'graze') el.innerHTML = `<i>mites and springtails</i><span>grazing the mycelium</span>`;
+  else if (kind === 'trap') el.innerHTML = `<i>a nematode-trapping fungus</i><span>its sticky loops, and a nematode, caught</span>`;
   else if (who < 0) el.innerHTML = `<i>a terrarium</i><span>${world.map((x) => x.g.name).join(' · ')}</span>`;
   else if (kind === 'ride') el.innerHTML = `<i>${world[who].g.name}</i><span>and a nematode, climbing, to be thrown with it</span>`;
   else if (kind === 'stuck') el.innerHTML = `<i>${world[who].g.name}</i><span>and a sporangium, thrown, stuck to it</span>`;
@@ -905,6 +1176,11 @@ function setView() {
     view.dist = 62;
     return;
   }
+  if (crit) {
+    view.look = [0, 0.3, 0];
+    view.dist = 3.2;
+    return;
+  }
   const mid = g.form === 'cup' ? g.cushion * 2.6 : g.form === 'eyelash' ? g.bell * 1.6 : g.form === 'flask' ? 1.4 : (g.height[0] + g.height[1]) / 2;
   view.look = [0, mid * (g.form === 'cup' ? 0.45 : 0.55), 0];
   view.dist = mid * 2.3 + 4 * S;
@@ -929,14 +1205,29 @@ function camera(t: number) {
 
 // ─── the director: in a terrarium, the camera goes to what's about to happen ────────────────────
 /** the shot: what it's on (whose), where to look and from how far, until when */
-let shot: { look: V3; dist: number; until: number; who: number; kind: string } | null = null;
+let shot: { look: V3; dist: number; until: number; who: number; kind: string; follow?: number } | null = null;
 /** a hand on the view: the director waits */
 let handsOn = -1e9;
 let lastKind = '';
 /** (`?moment=ink`: only that sort) */
 const only = params.get('moment') ?? '';
 function direct(dt: number) {
+  if (!terr && crit) {
+    // (the zoo: the lens on the animal, focused on it)
+    const p = whereIs(crit, 0, T, time, groundY);
+    if (p) {
+      view.look = p;
+      view.aperture = 0.6;
+      focusAt = { at: () => whereIs(crit!, 0, T, time, groundY) ?? p, until: time + 5 };
+    }
+    return;
+  }
   if (!terr) return;
+  // (on an animal: the lens goes with it)
+  if (shot?.follow !== undefined && crit && time >= handsOn + 20) {
+    const p = whereIs(crit, shot.follow, T, time, groundY);
+    if (p) view.look = p;
+  }
   if (time < handsOn + 20) return;
   if (!shot || T > shot.until) {
     // the next moment worth seeing: soon, and not the same sort of thing as the last
@@ -955,9 +1246,10 @@ function direct(dt: number) {
     }
     // (`?moment`: always a moment, never a breath — for looking at them)
     if (best && (params.has('moment') || Math.random() < 0.85)) {
-      shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + (best.kind === 'ink' || best.kind === 'stuck' || best.kind === 'graze' ? 3 : 1.2), who: best.who, kind: best.kind };
-      view.pitch = 0.22 + Math.random() * 0.2;
-      view.aperture = 1;
+      shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + (best.kind === 'ink' || best.kind === 'stuck' || best.kind === 'graze' || best.kind === 'trap' ? 3 : 1.2), who: best.who, kind: best.kind, follow: best.follow };
+      // (an animal: from above, over what's in the way; else low, in among them)
+      view.pitch = best.kind === 'graze' || best.kind === 'trap' ? 0.6 + Math.random() * 0.25 : 0.22 + Math.random() * 0.2;
+      view.aperture = best.kind === 'graze' ? 0.7 : 1;
       lastKind = best.kind;
     } else {
       // (nothing coming, or a breath between: what's up now, from a little above)
@@ -1190,6 +1482,16 @@ function flask(st: Stalk, s: State, g: Genome, tube: number[], solid: number[]) 
   }
 }
 const ease01 = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+/** the contact shadows nearest the eye, as many as the ground takes */
+function shades(list: number[], eye: V3): number[] {
+  const all: Array<[number, number]> = [];
+  for (let i = 0; i < list.length; i += 4) all.push([Math.hypot(list[i] - eye[0], list[i + 1] - eye[2]), i]);
+  all.sort((a, b) => a[0] - b[0]);
+  const out: number[] = [];
+  for (const [, i] of all.slice(0, SHADE)) out.push(list[i], list[i + 1], list[i + 2], list[i + 3]);
+  while (out.length < SHADE * 4) out.push(0, 0, 1, 0);
+  return out;
+}
 function things() {
   const solid: number[] = [];
   const dew: number[] = [];
@@ -1218,6 +1520,11 @@ function things() {
     if (g.form === 'flask') {
       flask(st, s, g, tube, solid);
       continue;
+    }
+    // (a thrower's trophocyst: the swollen foot it grows from, orange-yellow, half in the dung)
+    if (g.throws && s.grown > 0.05) {
+      const tr = st.r * (1.2 + 0.5 * Math.min(1, s.grown * 2));
+      solid.push(st.base[0], st.base[1] - st.r * 0.1, st.base[2], tr, tr * 0.55, tr * 0.85, ...mixV(g.tip, [0.62, 0.4, 0.14], 0.6), 1);
     }
     const Lnow = st.len * s.grown;
     const v = st.ves * s.swell * (1 - s.slump * 0.85);
@@ -1330,8 +1637,10 @@ function things() {
   }
   while (feet.length < MYC * 4) feet.push(0, 0, 1, 0);
   stains(solid);
-  if (crit) drawCritters(crit, T, time, groundY, solid);
-  return { solid, dew, per, feet };
+  const lim = limbs();
+  if (crit && lastCam) drawCritters(crit, T, time, groundY, lastCam.eye as V3, lim);
+  if (lastCam) drawStraw(blades, groundY, lastCam.eye as V3, lim);
+  return { solid, dew, per, feet, lim };
 }
 
 // ─── the light through the day: a cool lamp-lit night, a low warm dawn behind them, the morning ─
@@ -1460,6 +1769,7 @@ function frame(now: number) {
   gl.uniform1f(u(groundProg, 'uWet'), g.wet);
   gl.uniform1f(u(groundProg, 'uMyc'), g.mycelium * (g.form === 'inkcap' ? 0.6 : 0.3));
   gl.uniform4fv(u(groundProg, 'uFeet'), th.feet);
+  gl.uniform4fv(u(groundProg, 'uShade'), shades(th.lim.shade, cam.eye as V3));
   gl.uniform1f(u(groundProg, 'uHasMap'), terr ? 1 : 0);
   gl.uniform1f(u(groundProg, 'uSpan'), SPAN);
   gl.activeTexture(gl.TEXTURE2);
@@ -1478,6 +1788,17 @@ function frame(now: number) {
   }
   draw(solids, big);
   draw(solidsLo, small);
+  // the animals' bodies and legs
+  const lm = uploadLimbs(th.lim);
+  common(limbProg);
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_2D, rowsTex);
+  gl.uniform1i(u(limbProg, 'uRows'), 3);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.uniform1i(u(limbProg, 'uBehind'), 0);
+  drawLimbs(limbHi, lm.starts[0], lm.counts[0]);
+  drawLimbs(limbMid, lm.starts[1], lm.counts[1]);
+  drawLimbs(limbLo, lm.starts[2], lm.counts[2]);
   // (each species with its own colours and its own scale)
   for (const q of th.per) {
     if (!q.bell.length) continue;
@@ -1487,6 +1808,7 @@ function frame(now: number) {
     gl.uniform3fv(u(bellProg, 'uBell'), x.bellColour);
     gl.uniform3fv(u(bellProg, 'uBellTop'), x.bellTop);
     gl.uniform1f(u(bellProg, 'uSaucer'), x.form === 'eyelash' ? 1 : 0);
+    gl.uniform1f(u(bellProg, 'uVeil'), x.form === 'inkcap' ? 0.3 + 0.7 * x.fuzz : 0);
     draw(bells, q.bell);
   }
   // 2. the glass: jelly and tubes, seeing through to it
@@ -1517,6 +1839,20 @@ function frame(now: number) {
     gl.uniform1i(u(stalkProg, 'uBehind'), 0);
     draw(tubes, q.tube);
     draw(hairs, q.hair);
+  }
+  // the nematodes, clear: seeing through to it too
+  if (lm.counts[3] + lm.counts[4] > 0) {
+    common(limbProg);
+    gl.uniformMatrix4fv(u(limbProg, 'uView'), false, cam.view);
+    gl.uniform2f(u(limbProg, 'uRes'), W, Hh);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, rowsTex);
+    gl.uniform1i(u(limbProg, 'uRows'), 3);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, copyTex);
+    gl.uniform1i(u(limbProg, 'uBehind'), 0);
+    drawLimbs(limbHi, lm.starts[3], lm.counts[3]);
+    drawLimbs(limbMid, lm.starts[4], lm.counts[4]);
   }
   // 3. the droplets, seeing through to all of that
   copyScene();
@@ -1552,7 +1888,7 @@ function frame(now: number) {
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
-  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100 };
+  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, limbs: [th.lim.hi, th.lim.mid, th.lim.lo, th.lim.glassHi, th.lim.glassMid].map((x) => x.length / (ROWW * 4)), bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100, camD: Math.round((lastCam?.d ?? 0) * 100) / 100, near: lastCam?.near };
   requestAnimationFrame(frame);
 }
 function ringAt(t: V3, dir: [number, number], a: number): V3 {

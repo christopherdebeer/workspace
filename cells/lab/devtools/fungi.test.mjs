@@ -83,16 +83,36 @@ console.log('ok');
   assert.ok(lates.has('eyelash') && lates.has('flask'), 'eyelash cups and flasks come');
   // the animals: some of each, in the dung, while there's dung; climbers gone with the sporangium
   const out3 = await build({ entryPoints: [new URL('../client/fungi/critters.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
-  const { critters, drawCritters } = await import('data:text/javascript;base64,' + Buffer.from(out3.outputFiles[0].text).toString('base64'));
+  const { critters, drawCritters, limbs, zoo, whereIs, ROWW, MAXP } = await import('data:text/javascript;base64,' + Buffer.from(out3.outputFiles[0].text).toString('base64'));
   const t2 = terrarium(2);
   const c = critters(2, t2);
   assert.ok(c.worms.length > 10 && c.mites.length > 3 && c.springs.length > 3, 'nematodes, mites, springtails');
+  assert.ok(c.mites.some((m) => m.kind === 'macro') && c.springs.length > 0, 'kinds');
   for (const w of c.worms) if (w.on) assert.equal(w.t1, w.on.st.tl);
+  // drawn as limbs: whole rows, finite, each with 2..MAXP points; up close, all their parts
+  const near = (list) => [list.hi, list.mid, list.lo, list.glassHi, list.glassMid];
+  for (const kind of ['macro', 'ori', 'hypo', 'iso', 'ento', 'worm']) {
+    const z = zoo(kind, 3);
+    for (const time of [0, 1.7, 33.3]) {
+      const out = limbs();
+      drawCritters(z, 10, time, () => 0, [0, 1.5, 2.5], out);
+      const rows = near(out).reduce((n, l) => (assert.equal(l.length % (ROWW * 4), 0), n + l.length / (ROWW * 4)), 0);
+      assert.ok(rows >= (kind === 'worm' ? 1 : 8), `${kind}: built of limbs (${rows})`);
+      for (const l of near(out)) {
+        assert.ok(l.every(Number.isFinite), `${kind}: finite`);
+        for (let i = 0; i < l.length; i += ROWW * 4) {
+          const n = l[i + MAXP * 4 + 4];
+          assert.ok(n >= 2 && n <= MAXP, `${kind}: points ${n}`);
+        }
+      }
+      const p = whereIs(z, 0, 10, time, () => 0);
+      assert.ok(p && p.every(Number.isFinite));
+    }
+  }
   for (const T of [60, 200, 400]) {
-    const solid = [];
-    drawCritters(c, T, 3.3, () => 0, solid);
-    assert.equal(solid.length % 10, 0);
-    assert.ok(solid.every(Number.isFinite), `T ${T}: drawn finite`);
+    const out = limbs();
+    drawCritters(c, T, 3.3, () => 0, [0, 20, 30], out);
+    assert.ok(near(out).every((l) => l.every(Number.isFinite)), `T ${T}: drawn finite`);
   }
   console.log('terrarium ok');
 }

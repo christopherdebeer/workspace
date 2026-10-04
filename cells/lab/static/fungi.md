@@ -40,17 +40,34 @@ on the ground that outlast them.
 
 **Animals live with them** (`client/fungi/critters.ts`):
 
-- **Nematodes:** milky, less than a millimetre long. They writhe in the wet dung around the
-  throwers. Some climb a thrower's stalk as it ripens and wait on the sporangium, to be thrown
-  with it. Lungworm larvae do this on *Pilobolus*: thrown out into the grass, they're eaten with
-  it by the next cow.
-- **Mites:** glossy, brown, eight-legged. They graze round whatever's fruiting, walking and
-  stopping.
-- **Springtails:** soft and blue-grey, with antennae. They sit, then spring.
+- **Nematodes:** glassy, under a millimetre long, a granular gut down their middle and a clear
+  bulb behind the head. Each crawls in the wet film over the dung. Its body slides along its own
+  sinuous track, the wave running back down it, now and then backing up, its head lifting and
+  swinging as it searches. Some climb a thrower's stalk as it ripens and stand on the sporangium,
+  waving (nictating), to be thrown with it. Lungworm larvae do this on *Pilobolus*: thrown out
+  into the grass, they're eaten with it by the next cow.
+- **Mites**, two families:
+  - *Macrochelids:* flat, chestnut, glossy, with a dorsal shield ringed by a groove and setae
+    in pairs. They dash and stop, the first legs held up as feelers, tapping, the palps working.
+  - *Oribatids* (beetle mites): round, nearly black, slow, with two club-headed sensilla.
+  - Their legs are jointed (coxa to claw), hairy, and step in two alternating sets. The gait's
+    phase is how far the body has gone, so feet stay planted while it moves and stand still when
+    it stops.
+- **Springtails** (three kinds: plump dark blue, pale grey, banded yellow): soft, granular,
+  segmented, with a black patch of eyes each side and four-jointed antennae feeling about. They
+  sit; then the furca folded under them snaps down and they're gone, tumbling, to land a few
+  body-lengths off.
+- **Nematode-trapping fungi** (*Arthrobotrys*): where nematodes are thick, a trapping fungus
+  sets little nets of sticky hyphal loops in the wet, with upright conidiophores, each topped by
+  a head of two-celled spores. Now and then a nematode is caught. It thrashes, weakens, is
+  still; the fungus fills it (it goes milky, its gut gone) and it slackens and is gone in a day.
 
-When they're there, and roughly where, comes from the seed and the hour, so a scrub lands on the
-same animals. How they move (gait, wriggle, spring) runs in real time, as it would under a lens
-while the hours went by.
+When and roughly where comes from the seed and the hour, so a scrub lands on the same animals.
+How they move runs in real time, as it would under a lens while the hours went by. When the
+camera goes down to a mite or a springtail, it follows it.
+
+**The dung itself** is full of grass, chewed and digested: fragments of leaf and stem lying every
+way, straw-coloured to dark brown, veined, half sunk.
 
 The ground shows the grid as it goes:
 
@@ -62,7 +79,7 @@ The ground shows the grid as it goes:
 **The camera follows what's about to happen.** The grid's run keeps a list of moments worth
 watching: a flush coming up, a thrower about to fire, inkcaps opening or inking, a cushion's
 asci firing, a sporangium stuck to a neighbour, a nematode riding one, mites grazing, flasks
-shooting. A director picks the next one, a few hours ahead and not the same sort as the last.
+shooting, a nematode caught. A director picks the next one, a few hours ahead and not the same sort as the last.
 The camera travels there, unhurried: in close, low, the lens wide open. Between moments it pulls
 back above whatever is up, stopped down so more is sharp. The caption names the species it's
 on, or the terrarium's cast. Touch the view and the director waits; tap to pull focus.
@@ -90,7 +107,8 @@ nine. Three weeks take about eight minutes; the clock counts the days.
 - **The scrubber** is the run (three weeks, or one species' day), and the clock is its time: it
   starts at nine in the evening. `pause` stops it. `another` gives a new terrarium (or species).
   `?t=` starts at an hour. `?one&form=eyelash` (or `thrower`, `pin`, `inkcap`, `cup`, `flask`)
-  asks for a kind.
+  asks for a kind. `?one&critter=macro` (or `ori`, `hypo`, `iso`, `ento`, `worm`, `trap`) puts one
+  animal under the lens.
 
 ## The species
 
@@ -136,9 +154,23 @@ jelly is lit from inside, and the depth of field is a few millimetres.
      downy outside. It sits as the ground slopes, and is raised where a lump of dung would come
      through its floor. Its hairs are the stalk's tube, dark, leaving the rim already tipped out.
    - **The flasks:** a glossy black body and a dark tube of a neck.
-   - **The animals:** beads. A mite is a body, a head and eight legs of beads stepping in two
-     sets. A springtail is four soft segments, a head and two antennae. A nematode is a string of
-     milky beads that light comes through. The many small spheres use a coarser mesh.
+   - **The animals are limbs:** swept tubes along a polyline of up to 24 points, each with its
+     radius, kept in a float texture (a row each). Each is smooth (Catmull-Rom) or jointed, round
+     or flattened, with rounded ends. A mite's body is one, flattened; each leg is another,
+     jointed at its seven points; palps, chelicerae and every seta are more. Their materials:
+     - polished, pitted chitin with a darker shield and margins that glow with the light behind;
+     - paler legs, dark at the joints;
+     - a springtail's velvety granular skin, pale between segments, with a violet sheen;
+     - a grass fragment's veins and cells.
+
+     Patterns are in the limb's own coordinates (along it in millimetres, round it), so they
+     move with the animal. Near limbs get a fine mesh, far ones coarser, the farthest none. The
+     ground darkens softly under the nearest animals.
+   - **Nematodes** are limbs in the glass pass. They're seen through (refracting what's behind),
+     milky, with the gut and the pharynx's bulb inside and light caught along their edges.
+   - **The inkcaps' veil:** woolly white patches and fibrils over a greyer cap, thick on the
+     egg, pulled apart as it opens.
+   - **A thrower's trophocyst:** the swollen orange-yellow foot it grows from, half in the dung.
    - **The far distance:** a haze, warm toward the top, with soft discs of far-off light that
      drift a little as the view turns. It's always behind everything, so always at full blur.
 2. **The glass.**
