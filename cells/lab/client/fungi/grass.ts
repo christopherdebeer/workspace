@@ -105,6 +105,23 @@ function cached(world: number, ix: number, iz: number, f: Field, epoch: number) 
   cache.set(key, { epoch, c });
   return c;
 }
+/** The line from the eye to what it's looking at, and a cone round it (the lens's view, a little
+ *  narrowed) kept clear up to near the subject: does something this wide at (x, z) stand in it? */
+export function sightline(eye: V3, look: V3) {
+  const ex = eye[0];
+  const ez = eye[2];
+  const lx = look[0] - ex;
+  const lz = look[2] - ez;
+  const ll = Math.hypot(lx, lz) || 1;
+  return (x: number, z: number, w: number) => {
+    const t = ((x - ex) * lx + (z - ez) * lz) / (ll * ll);
+    if (t < -0.05 || t > 0.86) return false;
+    const d = Math.abs((x - ex) * lz - (z - ez) * lx) / ll;
+    // (and right round the lens, as if it had pushed in through the grass)
+    if (Math.hypot(x - ex, z - ez) < 30 + w) return true;
+    return d < 5 + w + Math.max(0, t) * ll * 0.2;
+  };
+}
 /** A tall blade about `r` from (x, z) — a point a third of the way up it (for the lens). */
 export function bladeNear(world: number, f: Field, x: number, z: number, r: number, epoch: number): V3 | null {
   for (let k = 0; k < 24; k++) {
@@ -124,19 +141,7 @@ export function drawGrass(world: number, f: Field, look: V3, eye: V3, time: numb
   // (dew: from the small hours to mid-morning)
   const ss = (a: number, b: number, x: number) => Math.max(0, Math.min(1, (x - a) / (b - a)));
   const wet = ss(1.5, 5, hour) * (1 - ss(8.5, 10.5, hour));
-  // (the line from the eye to what it's looking at: nothing stands in it)
-  const ex = eye[0];
-  const ez = eye[2];
-  const lx = look[0] - ex;
-  const lz = look[2] - ez;
-  const ll = Math.hypot(lx, lz) || 1;
-  // (a cone from the eye, the lens's view a little narrowed, kept clear up to near the subject)
-  const blocks = (x: number, z: number, w: number) => {
-    const t = ((x - ex) * lx + (z - ez) * lz) / (ll * ll);
-    if (t < -0.05 || t > 0.86) return false;
-    const d = Math.abs((x - ex) * lz - (z - ez) * lx) / ll;
-    return d < 5 + w + Math.max(0, t) * ll * 0.2;
-  };
+  const blocks = sightline(eye, look);
   for (let ix = Math.floor((look[0] - R) / CELL); ix <= Math.floor((look[0] + R) / CELL); ix++) {
     for (let iz = Math.floor((look[2] - R) / CELL); iz <= Math.floor((look[2] + R) / CELL); iz++) {
       const cx = (ix + 0.5) * CELL - look[0];

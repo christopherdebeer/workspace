@@ -17,8 +17,8 @@
  */
 import { hash, seeded } from '../kit/rng';
 import type { V3 } from './genome';
-import { MAT, tubeOf, type Limbs } from './critters';
-import type { Field } from './grass';
+import { MAT, MAT_GRASS, tubeOf, type Limbs } from './critters';
+import { sightline, type Field } from './grass';
 
 export const MAT_MOSS = 7;
 export const MAT_LEAF = 8;
@@ -65,6 +65,21 @@ interface Clover {
   a: number;
   seed: number;
 }
+interface Rosette {
+  x: number;
+  z: number;
+  n: number;
+  L: number;
+  spikes: number;
+  seed: number;
+}
+interface Cast {
+  x: number;
+  z: number;
+  R: number;
+  fresh: number;
+  seed: number;
+}
 interface Web {
   x: number;
   z: number;
@@ -84,6 +99,8 @@ function cell(world: number, ix: number, iz: number, f: Field, old: OldPat[]) {
   const feathers: Feather[] = [];
   const clovers: Clover[] = [];
   const webs: Web[] = [];
+  const rosettes: Rosette[] = [];
+  const casts: Cast[] = [];
   const open = f.under(cx, cz);
   const mossy = ss(0.5, 0.72, patchy(world, 1, cx, cz, 70));
   if (open > 0.95 && r() < mossy * 0.9) {
@@ -108,9 +125,12 @@ function cell(world: number, ix: number, iz: number, f: Field, old: OldPat[]) {
     }
   }
   const clovery = ss(0.6, 0.78, patchy(world, 2, cx, cz, 90));
-  if (open > 0.95 && r() < clovery) clovers.push({ x: (ix + r()) * CELL, z: (iz + r()) * CELL, a: r() * Math.PI * 2, seed: r() * 100 });
+  if (open > 0.95 && r() < clovery * 0.55) clovers.push({ x: (ix + r()) * CELL, z: (iz + r()) * CELL, a: r() * Math.PI * 2, seed: r() * 100 });
+  // ribwort plantain, here and there; worm casts, here and there
+  if (open > 0.95 && r() < 0.05 + 0.15 * ss(0.55, 0.8, patchy(world, 3, cx, cz, 120))) rosettes.push({ x: (ix + r()) * CELL, z: (iz + r()) * CELL, n: 6 + Math.floor(r() * 7), L: lerp(50, 130, r()), spikes: r() < 0.5 ? 1 + Math.floor(r() * 3) : 0, seed: r() * 100 });
+  if (open > 0.95 && r() < 0.035) casts.push({ x: (ix + r()) * CELL, z: (iz + r()) * CELL, R: lerp(4, 9, r()), fresh: r(), seed: r() * 100 });
   if (open > 0.95 && r() < 0.05) webs.push({ x: (ix + r()) * CELL, z: (iz + r()) * CELL, R: lerp(15, 30, r()), h: lerp(5, 18, r()), seed: r() * 100 });
-  return { cushions, feathers, clovers, webs };
+  return { cushions, feathers, clovers, webs, rosettes, casts };
 }
 
 const cache = new Map<string, { epoch: number; c: ReturnType<typeof cell> }>();
@@ -126,7 +146,7 @@ function cached(world: number, ix: number, iz: number, f: Field, old: OldPat[], 
 
 /** The nearest of a kind to (x, z), for the lens: a moss cushion with capsules, dung moss, clover,
  *  a web — where to look, and how big it is. */
-export type FloraKind = 'moss' | 'dungmoss' | 'clover' | 'web';
+export type FloraKind = 'moss' | 'dungmoss' | 'clover' | 'web' | 'plantain';
 export function floraNear(world: number, f: Field, old: OldPat[], x: number, z: number, kind: FloraKind, epoch: number): { at: V3; size: number } | null {
   let best: { at: V3; size: number } | null = null;
   let bd = 1e9;
@@ -142,6 +162,8 @@ export function floraNear(world: number, f: Field, old: OldPat[], x: number, z: 
               const H = 25 + ((p.seed * 2 * 3.1) % 1) * 45;
               return { x: p.x + Math.cos(a) * 6, z: p.z + Math.sin(a) * 6, y: H / 0.6, size: 18 };
             })
+          : kind === 'plantain'
+            ? c.rosettes.filter((p) => p.spikes > 0).map((p) => ({ x: p.x, z: p.z, y: p.L * 0.4, size: p.L * 0.45 }))
           : kind === 'web'
             ? c.webs.map((w) => ({ x: w.x, z: w.z, y: w.h, size: w.R * 0.8 }))
             : c.cushions.filter((m) => m.dung === (kind === 'dungmoss') && m.sporo > 2).map((m) => ({ x: m.x, z: m.z, y: m.dung ? 42 : 5, size: m.dung ? 14 : 7 }));
@@ -163,6 +185,8 @@ const add = (a: V3, b: V3, k = 1): V3 => [a[0] + b[0] * k, a[1] + b[1] * k, a[2]
 export function drawFlora(world: number, f: Field, old: OldPat[], look: V3, eye: V3, time: number, hour: number, epoch: number, out: Limbs, solid: number[], dew: number[]) {
   const R = 110;
   const wet = ss(1.5, 5, hour) * (1 - ss(8.5, 10.5, hour));
+  // (the tall ones — clover, plantain — never between the lens and what it's on)
+  const blocks = sightline(eye, look);
   for (let ix = Math.floor((look[0] - R) / CELL); ix <= Math.floor((look[0] + R) / CELL); ix++) {
     for (let iz = Math.floor((look[2] - R) / CELL); iz <= Math.floor((look[2] + R) / CELL); iz++) {
       const c = cached(world, ix, iz, f, old, epoch);
@@ -172,7 +196,7 @@ export function drawFlora(world: number, f: Field, old: OldPat[], look: V3, eye:
         const y0 = f.groundY(m.x, m.z);
         if (de > 30) {
           // (further off: a tuft)
-          solid.push(m.x, y0 + m.H * 0.3, m.z, m.R, m.H * 0.7, m.R, ...m.col, 3);
+          solid.push(m.x, y0 + m.H * 0.1, m.z, m.R * 1.1, m.H * 0.45, m.R * 1.1, m.col[0] * 0.6, m.col[1] * 0.6, m.col[2] * 0.6, 3);
         } else cushion(m, y0, f, time, out, de);
         sporophytes(m, y0, time, out, de);
       }
@@ -184,7 +208,19 @@ export function drawFlora(world: number, f: Field, old: OldPat[], look: V3, eye:
       for (const p of c.clovers) {
         const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
         if (de > 200) continue;
+        if (blocks(p.x, p.z, 18) || blocks(p.x + Math.cos(p.a) * 15, p.z + Math.sin(p.a) * 15, 18) || blocks(p.x + Math.cos(p.a) * 30, p.z + Math.sin(p.a) * 30, 18)) continue;
         clover(p, f, time, out, de);
+      }
+      for (const p of c.rosettes) {
+        const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
+        if (de > 260) continue;
+        if (blocks(p.x, p.z, p.L * 0.6)) continue;
+        rosette(p, f, time, out, de);
+      }
+      for (const p of c.casts) {
+        const de = Math.hypot(p.x - eye[0], p.z - eye[2], eye[1]);
+        if (de > 150) continue;
+        cast(p, f, solid);
       }
       for (const w of c.webs) {
         if (wet < 0.2) continue;
@@ -319,6 +355,67 @@ function clover(p: Clover, f: Field, time: number, out: Limbs, de: number) {
       }
       tubeOf(de < 60 ? out.mid : out.lo, pts, rad, [0.13, 0.32, 0.12], MAT_LEAF, { flat: 0.04, seed: p.seed + j, across, bands: 1 });
     }
+  }
+}
+/** ribwort plantain: a rosette of long ribbed leaves, rising; some with a spike on a tall stalk — a
+ *  dark head, ringed with pale stamens where it's flowering */
+function rosette(p: Rosette, f: Field, time: number, out: Limbs, de: number) {
+  const y0 = f.groundY(p.x, p.z);
+  let q = Math.floor(p.seed * 4241) >>> 0;
+  const rnd = () => ((q = (Math.imul(q, 1664525) + 1013904223) >>> 0) / 4294967296);
+  for (let k = 0; k < p.n; k++) {
+    const a = (k / p.n) * Math.PI * 2 + rnd() * 0.5;
+    const L = p.L * lerp(0.6, 1.1, rnd());
+    const W = L * lerp(0.1, 0.16, rnd());
+    const rise = lerp(0.35, 0.75, rnd());
+    const dir: V3 = [Math.cos(a), 0, Math.sin(a)];
+    const across: V3 = [-dir[2], 0, dir[0]];
+    const pts: V3[] = [];
+    const rad: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const t = i / 7;
+      const th = rise * (1 - t * 0.7) + Math.sin(time * 0.8 + p.seed + k) * 0.02 * t;
+      pts.push([p.x + dir[0] * L * t * Math.cos(th), y0 + L * t * Math.sin(th) * (1 - t * 0.35) + 0.5, p.z + dir[2] * L * t * Math.cos(th)]);
+      rad.push((W / 2) * Math.pow(Math.sin(Math.PI * Math.min(0.97, 0.1 + t * 0.85)), 0.6));
+    }
+    tubeOf(de < 80 ? out.bladeHi : out.bladeLo, pts, rad, [0.16, 0.3, 0.1], MAT_GRASS, { flat: 0.08, seed: p.seed + k, across, eyes: 0.15 });
+  }
+  for (let k = 0; k < p.spikes; k++) {
+    const a = rnd() * Math.PI * 2;
+    const H = p.L * lerp(1.5, 2.6, rnd());
+    const lean = lerp(0.05, 0.2, rnd());
+    const sway = Math.sin(time * 0.7 + p.seed + k) * 2;
+    const top: V3 = [p.x + Math.cos(a) * H * lean + sway, y0 + H, p.z + Math.sin(a) * H * lean];
+    const mid: V3 = [p.x + Math.cos(a) * H * lean * 0.3, y0 + H * 0.5, p.z + Math.sin(a) * H * lean * 0.3];
+    tubeOf(de < 100 ? out.mid : out.lo, [[p.x, y0, p.z], mid, top], [0.9, 0.7, 0.6], [0.3, 0.38, 0.18], MAT_GRASS, { seed: p.seed + k, eyes: 0.3 });
+    const hl = lerp(10, 22, rnd());
+    const h0: V3 = top;
+    const h2: V3 = [top[0], top[1] + hl, top[2]];
+    tubeOf(de < 100 ? out.hi : out.mid, [h0, [top[0], top[1] + hl * 0.3, top[2]], [top[0], top[1] + hl * 0.7, top[2]], h2], [1.5, 3.4, 3, 1.2], [0.2, 0.13, 0.07], MAT.chitin, { seed: p.seed + k + 9, flat: 1 });
+    // (the ring of stamens, where it's flowering)
+    if (de < 120) {
+      const ry = top[1] + hl * lerp(0.3, 0.6, rnd());
+      for (let j = 0; j < 14; j++) {
+        const b = (j / 14) * Math.PI * 2;
+        const base: V3 = [top[0] + Math.cos(b) * 3, ry, top[2] + Math.sin(b) * 3];
+        const tip: V3 = [base[0] + Math.cos(b) * 4, ry - 1.5, base[2] + Math.sin(b) * 4];
+        tubeOf(out.lo, [base, tip, [tip[0], tip[1] - 0.6, tip[2]]], [0.08, 0.06, 0.35], [0.92, 0.9, 0.78], MAT.seta, { seed: j });
+      }
+    }
+  }
+}
+/** a worm cast: a coiled heap of soil pellets, darker and glistening when fresh */
+function cast(p: Cast, f: Field, solid: number[]) {
+  const y0 = f.groundY(p.x, p.z);
+  const col: V3 = p.fresh > 0.6 ? [0.1, 0.08, 0.06] : [0.24, 0.2, 0.15];
+  const n = 36;
+  for (let k = 0; k < n; k++) {
+    const t = k / n;
+    const a = t * Math.PI * 2 * 3 + p.seed;
+    const rr = p.R * (1 - t * 0.8);
+    const h = t * p.R * 0.9;
+    const s = p.R * lerp(0.14, 0.2, ((p.seed * (k + 1) * 3.3) % 1));
+    solid.push(p.x + Math.cos(a) * rr * 0.6, y0 + h + s * 0.6, p.z + Math.sin(a) * rr * 0.6, s * 1.3, s, s * 1.1, ...col, p.fresh > 0.6 ? 0 : 2);
   }
 }
 /** a money spider's sheet: a hammock of crossing threads, low between the blades; at dawn, dewed */

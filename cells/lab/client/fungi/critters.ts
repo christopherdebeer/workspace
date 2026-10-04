@@ -238,15 +238,15 @@ const mix = (a: V3, b: V3, t: number): V3 => [lerp(a[0], b[0], t), lerp(a[1], b[
 
 type Ground = (x: number, z: number) => number;
 /** a body's frame: where, and its forward, its side and its up */
-interface Frame {
+export interface Frame {
   o: V3;
   f: V3;
   s: V3;
   u: V3;
 }
-const at = (F: Frame, x: number, y: number, z: number): V3 => [F.o[0] + F.f[0] * x + F.s[0] * y + F.u[0] * z, F.o[1] + F.f[1] * x + F.s[1] * y + F.u[1] * z, F.o[2] + F.f[2] * x + F.s[2] * y + F.u[2] * z];
+export const at = (F: Frame, x: number, y: number, z: number): V3 => [F.o[0] + F.f[0] * x + F.s[0] * y + F.u[0] * z, F.o[1] + F.f[1] * x + F.s[1] * y + F.u[1] * z, F.o[2] + F.f[2] * x + F.s[2] * y + F.u[2] * z];
 /** a frame standing on the ground at (x, z), facing `heading`, its up the ground's (tipped `pitch` about its side) */
-function frameOn(groundY: Ground, x: number, z: number, heading: number, lift: number, pitch = 0): Frame {
+export function frameOn(groundY: Ground, x: number, z: number, heading: number, lift: number, pitch = 0): Frame {
   const e = 0.15;
   const gx = (groundY(x + e, z) - groundY(x - e, z)) / (2 * e);
   const gz = (groundY(x, z + e) - groundY(x, z - e)) / (2 * e);
@@ -274,14 +274,14 @@ function track(home: V3, R: number, sd: number, xi: number): { x: number; z: num
   return { x: p[0], z: p[1], h: Math.atan2(q[1] - p[1], q[0] - p[0]) };
 }
 /** ∫ max(0, sin) from 0 to x: how far something has gone that goes, and stops, and goes */
-function goes(x: number) {
+export function goes(x: number) {
   const P = Math.PI * 2;
   const k = Math.floor(x / P);
   const m = x - k * P;
   return 2 * k + (m < Math.PI ? 1 - Math.cos(m) : 2);
 }
 /** (a seeded number from a few others, 0..1) */
-const hr = (a: number, b: number) => {
+export const hr = (a: number, b: number) => {
   const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
   return x - Math.floor(x);
 };
@@ -290,7 +290,7 @@ const hr = (a: number, b: number) => {
  * A leg, from its hip to its foot (on the ground, or held up), arched over at its knee: seven
  * points — coxa, trochanter, femur, genu, tibia, tarsus, claw — jointed, thinning.
  */
-function leg(list: number[], H: V3, foot: V3, up: V3, len: number, r0: number, col: V3, arch: number, mat: number = MAT.leg) {
+export function leg(list: number[], H: V3, foot: V3, up: V3, len: number, r0: number, col: V3, arch: number, mat: number = MAT.leg) {
   const ts = [0, 0.1, 0.2, 0.38, 0.56, 0.8, 1];
   const pts = ts.map((t) => add(mix(H, foot, t), up, arch * len * Math.pow(Math.sin(Math.PI * Math.pow(t, 0.75)), 0.9)));
   const rad = [1, 0.92, 0.82, 0.72, 0.62, 0.48, 0.22].map((k) => r0 * k);
@@ -298,14 +298,14 @@ function leg(list: number[], H: V3, foot: V3, up: V3, len: number, r0: number, c
   return pts;
 }
 /** a seta: a fine hair from `base`, out along `dir`, curving with `bend` */
-function seta(list: number[], base: V3, dir: V3, bend: V3, len: number, r: number, col: V3) {
+export function seta(list: number[], base: V3, dir: V3, bend: V3, len: number, r: number, col: V3) {
   const a = add(base, dir, len * 0.5);
   const b = add(add(base, dir, len), bend, len * 0.25);
   tube(list, [base, add(a, bend, len * 0.06), b], [r, r * 0.7, r * 0.25], col, MAT.seta);
 }
 
 /** How finely to draw something this big this far away: 0 fine, 1 middling, 2 coarse, 3 not. */
-function detail(eye: V3, p: V3, size: number) {
+export function detail(eye: V3, p: V3, size: number) {
   const d = Math.hypot(eye[0] - p[0], eye[1] - p[1], eye[2] - p[2]) / size;
   return d < 25 ? 0 : d < 70 ? 1 : d < 200 ? 2 : 3;
 }
@@ -577,7 +577,7 @@ function climber(w: Worm, T: number, time: number, eye: V3, out: Limbs) {
   tube(lod === 0 ? out.glassHi : out.glassMid, pts, rad, WORM, MAT.worm, { seed: w.seed });
 }
 /** (a direction round a tangent) */
-function round(t: V3, a: number): V3 {
+export function round(t: V3, a: number): V3 {
   const ref: V3 = Math.abs(t[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
   const x = nrm(crs(t, ref));
   const y = crs(t, x);

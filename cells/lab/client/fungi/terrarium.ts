@@ -86,6 +86,9 @@ function cast(r: Rand, r2: Rand): Array<{ form: Form; arrive: number }> {
   // (and, in some, the second wave's others: an eyelash cup, the flask fungi)
   if (r2() < 0.5) out.push({ form: 'eyelash', arrive: lerp(3, 5.5, r2()) });
   if (r2() < 0.55) out.push({ form: 'flask', arrive: lerp(4.5, 7.5, r2()) });
+  // (and, late, the tall ones: a yellow fieldcap, the mottlegills)
+  if (r2() < 0.4) out.push({ form: 'fieldcap', arrive: lerp(6, 10, r2()) });
+  if (r2() < 0.5) out.push({ form: 'mottlegill', arrive: lerp(10, 14, r2()) });
   return out;
 }
 
@@ -100,6 +103,8 @@ const LIFE: Record<Form, { spread: number; grow: number; eat: number; sugar: num
   inkcap: { spread: 0.12, grow: 0.34, eat: 0.025, sugar: 0, hold: 1.8, lag: 2.5, every: 1, yield: 1 },
   eyelash: { spread: 0.1, grow: 0.3, eat: 0.03, sugar: 0.5, hold: 0.9, lag: 1.8, every: 3, yield: 0.5 },
   flask: { spread: 0.14, grow: 0.3, eat: 0.03, sugar: 0.3, hold: 1.1, lag: 2.2, every: 2, yield: 3 },
+  fieldcap: { spread: 0.12, grow: 0.3, eat: 0.025, sugar: 0.25, hold: 1.1, lag: 2, every: 2, yield: 0.3 },
+  mottlegill: { spread: 0.11, grow: 0.3, eat: 0.02, sugar: 0.1, hold: 1.5, lag: 3, every: 3, yield: 0.22 },
 };
 
 /** A terrarium from its seed; under the given light (a field's sun), or its own. */
@@ -297,15 +302,16 @@ export function terrarium(seed: number, light?: V3): Terrarium {
       }
       return;
     }
-    const max = g.form === 'inkcap' ? 22 : g.form === 'eyelash' ? 8 : 70;
+    const tall = g.form === 'mottlegill' || g.form === 'fieldcap';
+    const max = g.form === 'inkcap' ? 22 : g.form === 'eyelash' ? 8 : tall ? 5 : 70;
     const count = Math.min(max, Math.round(weight * LIFE[g.form].yield));
     // (in clumps: a flush comes up from a few places where the mycelium has gathered)
-    const per = g.form === 'inkcap' ? 6 : g.form === 'eyelash' ? 3 : 14;
+    const per = g.form === 'inkcap' ? 6 : g.form === 'eyelash' || tall ? 3 : 14;
     const clumps = Array.from({ length: Math.max(1, Math.round(count / per)) }, () => place(pick()));
     let first: Stalk | null = null;
     for (let q = 0; q < count; q++) {
       const cl = clumps[q % clumps.length];
-      const d = Math.sqrt(rr()) * (g.form === 'inkcap' || g.form === 'eyelash' ? 4 : g.form === 'flask' ? 2 : 3);
+      const d = Math.sqrt(rr()) * (g.form === 'inkcap' || g.form === 'eyelash' ? 4 : tall ? 6 : g.form === 'flask' ? 2 : 3);
       const a = rr() * Math.PI * 2;
       const st = makeStalk(rr, g, [cl[0] + Math.cos(a) * d, 0, cl[2] + Math.sin(a) * d], T);
       s.stalks.push(st);
@@ -313,7 +319,7 @@ export function terrarium(seed: number, light?: V3): Terrarium {
       if (g.throws && q % 6 === 0) moments.push({ T: st.tl, at: [st.base[0], st.len * 0.9, st.base[2]], size: st.len * 1.2, kind: 'throw', who: j });
     }
     if (first) {
-      const k = g.form === 'inkcap' ? (rr() < 0.5 ? 'open' : 'ink') : g.form === 'flask' ? 'squirt' : 'emerge';
+      const k = g.form === 'inkcap' ? (rr() < 0.5 ? 'open' : 'ink') : g.form === 'flask' ? 'squirt' : tall ? 'open' : 'emerge';
       const t = k === 'open' ? first.t1 : k === 'ink' ? first.t1 + 6.5 : k === 'squirt' ? first.t1 + 4 : first.t1 - 0.4;
       moments.push({ T: t, at: [first.base[0], first.len * 0.6, first.base[2]], size: first.len * 1.4 + (first.bell || 0) * 2, kind: k, who: j });
     }

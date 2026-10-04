@@ -13,10 +13,11 @@
  * glass (jelly, stalks, asci), refracting it → a copy → the droplets, refracting that → depth of
  * field (a scatter-as-gather disc, from depth) → tone.
  */
-import { FORMS, DAY, along, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Form, type Genome, type Stalk, type State, type V3 } from './genome';
+import { FORMS, DAY, along, capped, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Form, type Genome, type Stalk, type State, type V3 } from './genome';
 import { straw, drawStraw, type Blade } from './straw';
 import { bladeNear, drawGrass, type Field } from './grass';
 import { drawFlora, floraNear, type FloraKind } from './flora';
+import { drawVisitors, visitorNear, type PatInfo } from './visitors';
 import { PAT_GONE, PAT_LIFE, dateOf, dropsNear, patHeight, place, worldNow, type Drop, type Placed } from './pasture';
 import { MAXP, ROWW, critters, drawCritters, limbs, whereIs, zoo, type Critters, type Limbs } from './critters';
 import { DAYS, GRID, SPAN, STEP, patEdge, type Moment, type Terrarium } from './terrarium';
@@ -326,6 +327,8 @@ void main() {
     float shield = smoothstep(.0, .5, vUp);
     float groove = exp(-pow((vUp - .18) / .05, 2.)) * vMore.w;
     vec3 c = base * mix(1.1, .72, shield) * (1. - pit * .25) * (1. - groove * .5) + socket * .08;
+    // (a beetle's wing cases: ridged lengthwise, the suture down its back)
+    c *= 1. - vMore.y * (smoothstep(.75, 1., abs(sin(vUA.y * 9.))) * .35 + exp(-pow((vUp - 1.) / .03, 2.)) * .6);
     vec3 nb = normalize(n + (vec3(n2(q * 140. + 3.), n2(q * 140. + 9.), n2(q * 140.)) - .5) * .1);
     float rim = pow(1. - nv, 3.);
     col = c * (.16 + .62 * max(dot(nb, uLight), 0.)) * uLightCol;
@@ -424,14 +427,18 @@ void main() {
     float x = vUA.x;
     // (caught and killed: the fungus fills it — the gut fades, it goes milky, threaded inside)
     float filled = vMore.w;
-    float gutz = smoothstep(.2, .3, x) * (1. - smoothstep(.82, .9, x)) * (1. - filled);
+    float wing = step(.5, vMore.y);
+    float gutz = smoothstep(.2, .3, x) * (1. - smoothstep(.82, .9, x)) * (1. - filled) * (1. - wing);
     float core = smoothstep(.3, .9, nv);
     float gran = n2(vec2(q.x * 160., vUA.y * 2.) + sd) * .6 + n2(vec2(q.x * 420., vUA.y * 4.)) * .4;
     vec3 gut = base * vec3(.62, .52, .36) * (.45 + .8 * gran);
-    float bulb = exp(-pow((x - .17) / .025, 2.)) * core;
+    float bulb = exp(-pow((x - .17) / .025, 2.)) * core * (1. - wing);
     vec3 c = behind * mix(vec3(.9, .91, .87), gut, gutz * core * .8);
     // (milky: its cuticle and body scatter some light back)
     float threads = smoothstep(.45, .8, n2(vec2(q.x * 90., vUA.y * 5.) + sd)) * filled;
+    // (a wing: veins along it, its leading edge smoky)
+    float veins = wing * smoothstep(.9, 1., abs(sin(vUA.y * 3.2 + x * 1.5)));
+    c = mix(c, vec3(.2, .15, .08), veins * .6 + wing * smoothstep(.2, .9, cos(vUA.y)) * .25);
     c = mix(c, base * uLightCol * (.35 + .4 * max(dot(n, uLight), 0.)) * (1. - threads * .25), mix(.2, .75, filled) * (.5 + .5 * core));
     c = mix(c, c * .7 + vec3(.04, .035, .03), bulb * .6);
     c += base * uLightCol * (.06 + .45 * backlit) * (.3 + .7 * pow(1. - nv, 1.5));
@@ -657,10 +664,11 @@ void main() {
   float t = aTA.x, th = aTA.y;
   float open = aB.z;
   // an egg, a bell, then flatter: its margin, as an angle from the apex, opens out
-  float amax = mix(2.25, 1.6, open);
+  // (a flaring cap opens on past a bell, flat: its margin up toward level)
+  float amax = mix(2.25, 1.6, open) - aC.w * open * .6;
   float al = t * amax;
-  float R = aB.x * (.6 + .35 * open);
-  float H = aB.y * (1.1 - .2 * open);
+  float R = aB.x * (.6 + .35 * open) * (1. + aC.w * open * .25);
+  float H = aB.y * (1.1 - .2 * open) * (1. - aC.w * open * .55);
   // pleats: grooves from near the apex to the margin; the inked margin splits and curls
   float g = pow(abs(sin(aB.w * th * .5)), .6);
   float rr = 1. - aC.x * (1. - g) * smoothstep(.1, .55, t) * 6.;
@@ -685,7 +693,9 @@ flat in vec4 vB;
 flat in vec4 vC;
 out vec4 o;
 uniform vec3 uBell, uBellTop;
-uniform float uSaucer, uVeil;
+uniform float uSaucer, uVeil, uSlime;
+uniform vec3 uGill;
+uniform float uMottle;
 ${COMMON}
 void main() {
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
@@ -714,8 +724,10 @@ void main() {
   }
   if (!gl_FrontFacing) {
     // its gills, seen from under it: fine and dark, darker as it ripens
-    float gill = .5 + .5 * sin(vTA.y * vB.w * 3.);
-    c = mix(uBell * .55, vec3(.25, .2, .17), .4 + .4 * vC.y) * (.7 + .3 * gill);
+    float gill = .5 + .5 * sin(vTA.y * max(vB.w, 30.) * 3.);
+    c = mix(uBell * .55, uGill, .4 + .4 * vC.y) * (.7 + .3 * gill);
+    // (a mottlegill's: patchy, where its black spores ripen unevenly)
+    c = mix(c, c * (.45 + .9 * n2(vec2(vTA.y * 14., t * 9.))), uMottle);
   } else {
     // pale, browner at the apex; the grooves a shade darker; fine grain along them
     c = mix(uBellTop, uBell, smoothstep(.0, .35, t));
@@ -738,6 +750,8 @@ void main() {
   col += uBell * pow(1. - nv, 2.5) * .2 * (1. - ink);
   // (the ink is wet: it shines)
   col += wetness(n, v, vW / uS, ink * .8, 30.) * (.15 + ink);
+  // (a slimy cap: wet-glossy all over)
+  if (gl_FrontFacing) col += wetness(n, v, vW / uS, uSlime, 30.) * uSlime * .8;
   o = vec4(col, 1.);
 }`;
 
@@ -1398,6 +1412,8 @@ function kindOf(x: Genome) {
     cup: `a jelly cup · fires its asci · ${(x.cushion * 2).toFixed(1)} mm`,
     eyelash: `an eyelash cup · ${x.hairs} hairs · ${(x.bell * 2).toFixed(1)} mm`,
     flask: `flask fungi · shoot their spores · ${x.height[1].toFixed(1)} mm`,
+    mottlegill: `a mottlegill · black-spored · its cap ${(x.bell * 2).toFixed(0)} mm`,
+    fieldcap: `a yellow fieldcap · slimy, a day's · its cap ${(x.bell * 2).toFixed(0)} mm`,
   }[x.form];
 }
 let labelled = '';
@@ -1417,13 +1433,16 @@ function label() {
   // a terrarium: the species the lens is on (or, between, the terrarium's cast)
   const who = shot?.who ?? -1;
   const kind = shot?.kind ?? '';
-  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' || kind === 'trap' || kind === 'field' || kind === 'dew' || ['moss', 'dungmoss', 'clover', 'web'].includes(kind) ? kind : ''}:${pasture && who < 0 ? patNear(view.look)?.seed : ''}`;
+  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' || kind === 'trap' || kind === 'field' || kind === 'dew' || ['moss', 'dungmoss', 'clover', 'web', 'flies', 'beetle', 'plantain'].includes(kind) ? kind : ''}:${pasture && who < 0 ? patNear(view.look)?.seed : ''}`;
   if (key === labelled) return;
   labelled = key;
   if (kind === 'graze') el.innerHTML = `<i>mites and springtails</i><span>grazing the mycelium</span>`;
+  else if (kind === 'flies') el.innerHTML = `<i>yellow dung flies</i><span>the males on a fresh pat, each on its patch, waiting for the females</span>`;
+  else if (kind === 'beetle') el.innerHTML = `<i>a dung beetle</i><span>out of one hole, about the pat, and down another</span>`;
   else if (kind === 'moss') el.innerHTML = `<i>a moss</i><span>a cushion of shoots, its capsules nodding on red setae</span>`;
   else if (kind === 'dungmoss') el.innerHTML = `<i>a dung moss</i><span>on an old pat · its umbrellas, the colour and the smell to bring flies</span>`;
   else if (kind === 'clover') el.innerHTML = `<i>white clover</i><span>its leaves on long stalks, a pale chevron on each leaflet</span>`;
+  else if (kind === 'plantain') el.innerHTML = `<i>ribwort plantain</i><span>its ribbed leaves, its spike on a tall stalk, ringed with stamens</span>`;
   else if (kind === 'web') el.innerHTML = `<i>a money spider's sheet</i><span>low in the grass, silver with dew</span>`;
   else if (kind === 'dew') el.innerHTML = `<i>dew</i><span>on the grass at the pat's edge, before the sun's on it</span>`;
   else if (kind === 'trap') el.innerHTML = `<i>a nematode-trapping fungus</i><span>its sticky loops, and a nematode, caught</span>`;
@@ -1510,7 +1529,7 @@ function camera(t: number) {
 
 // ─── the director: in a terrarium, the camera goes to what's about to happen ────────────────────
 /** the shot: what it's on (whose), where to look and from how far, until when */
-let shot: { look: V3; dist: number; until: number; who: number; kind: string; follow?: number } | null = null;
+let shot: { look: V3; dist: number; until: number; who: number; kind: string; follow?: number; track?: (time: number) => V3 } | null = null;
 /** a hand on the view: the director waits */
 let handsOn = -1e9;
 let lastKind = '';
@@ -1528,6 +1547,8 @@ function direct(dt: number) {
     return;
   }
   if (!terr) return;
+  // (on a visitor: the lens goes with it)
+  if (shot?.track && time >= handsOn + 20) view.look = shot.track(time);
   // (on an animal: the lens goes with it)
   if (shot?.follow !== undefined && crit && time >= handsOn + 20) {
     const p = whereIs(crit, shot.follow, T, time, groundY);
@@ -1561,7 +1582,9 @@ function direct(dt: number) {
       view.pitch = best.kind === 'graze' || best.kind === 'trap' ? 0.6 + Math.random() * 0.25 : 0.22 + Math.random() * 0.2;
       view.aperture = best.kind === 'graze' ? 0.7 : 1;
       lastKind = best.kind;
-    } else if (pasture && (force ? ['moss', 'dungmoss', 'clover', 'web'].includes(force) : Math.random() < 0.18) && floraShot(force as FloraKind | null)) {
+    } else if (pasture && (force ? force === 'flies' || force === 'beetle' : Math.random() < 0.3) && visitorShot(force as 'flies' | 'beetle' | null)) {
+      // (a visitor to a pat: a dung fly on its patch, a beetle going about)
+    } else if (pasture && (force ? ['moss', 'dungmoss', 'clover', 'web', 'plantain'].includes(force) : Math.random() < 0.18) && floraShot(force as FloraKind | null)) {
       // (the pasture's other life, now and then: moss, dung moss on an old pat, clover, a web)
     } else if (pasture && force !== 'wide' && force !== 'field' && (force === 'dew' || Math.random() < 0.35) && dewy() > 0.5 && dewBlade()) {
       // (at dawn, now and then: the dew on a blade at the pat's edge)
@@ -1574,7 +1597,7 @@ function direct(dt: number) {
       // (in the field, now and then: the lie of it — pats in the grass, from up and back)
       const p = patNear(cur.look);
       const at: V3 = p ? [p.x, groundY(p.x, p.z) + 6, p.z] : [...cur.look];
-      shot = { look: at, dist: 110 + Math.random() * 50, until: T + 3, who: -1, kind: 'field' };
+      shot = { look: at, dist: 180 + Math.random() * 60, until: T + 3, who: -1, kind: 'field' };
       view.pitch = 0.78 + Math.random() * 0.2;
       view.aperture = 0.15;
       lastKind = 'field';
@@ -1596,6 +1619,19 @@ function direct(dt: number) {
     view.dist = shot.dist;
     label();
   }
+}
+/** the pats, for their visitors */
+const patInfos = (): PatInfo[] => pats.map((p) => ({ x: p.x, z: p.z, drop: p.drop, seed: p.seed, lumps: p.terr.lumps }));
+/** A shot of a visitor near here — flies (on a fresh pat, by day), a beetle: set it, or say no. */
+function visitorShot(want: 'flies' | 'beetle' | null): boolean {
+  const kind = want ?? (Math.random() < 0.55 ? 'flies' : 'beetle');
+  const track = visitorNear(patInfos(), kind, T, cur.look, groundY);
+  if (!track) return false;
+  shot = { look: track(time), dist: kind === 'flies' ? 28 : 20, until: T + 2.5, who: -1, kind, track };
+  view.pitch = 0.35 + Math.random() * 0.3;
+  view.aperture = 0.7;
+  lastKind = kind;
+  return true;
 }
 /** A shot of the pasture's other life near here (a web only when it's dewy): set it, or say no. */
 function floraShot(want: FloraKind | null): boolean {
@@ -1921,7 +1957,7 @@ function things() {
   const jelly: number[] = [];
   const hair: number[] = [];
   per.push({ sp, tube, bell, jelly, hair });
-  const velvet = g.form === 'inkcap';
+  const velvet = capped(g.form);
   for (const st of sp.stalks) {
     if (T < st.t0 || T > st.tEnd) continue;
     const s = state(st, T);
@@ -1947,7 +1983,7 @@ function things() {
     if (velvet) {
       // an inkcap: its bell on top, a white tuft of mycelium at its foot
       const k = 0.35 + 0.65 * s.grown;
-      bell.push(...top.p, ...top.t, st.bell * k, st.bell * st.bellTall * k, s.open, g.pleats, g.pleatDepth, s.inked * g.ink, st.phase, 0);
+      bell.push(...top.p, ...top.t, st.bell * k, st.bell * st.bellTall * k, s.open, g.pleats, g.pleatDepth, s.inked * g.ink, st.phase, g.flare);
       const fr = st.r * 1.8;
       solid.push(st.base[0], st.base[1] + st.r * 0.5, st.base[2], fr, fr * 0.6, fr, 0.9, 0.9, 0.87, 3);
       // the mycelium round its foot: threads out over the ground and up its base, curling
@@ -1962,7 +1998,7 @@ function things() {
         hair.push(...b, Math.cos(a), Math.sin(a), 2 + rnd() * 5, 0, L, st.r * 0.08, 0, 1, 0, 0.6, rnd() * 9, 0, 0, 0, 0.25, 0.2);
       }
       if (feet.length < MYC * 4) feet.push(st.base[0], st.base[2], st.r * 9, g.mycelium);
-      if (s.inked > 0.05) inkDrips(st, s, top, k, g, solid, dew);
+      if (st.ink && s.inked > 0.05) inkDrips(st, s, top, k, g, solid, dew);
     }
     if (st.cap > 0 && s.ripe > 0) {
       const cr = st.cap * (0.35 + 0.65 * s.ripe);
@@ -2057,6 +2093,7 @@ function things() {
   if (pasture && lastCam) {
     const old = pats.map((p) => ({ x: p.x, z: p.z, age: (T - p.drop) / 24, seed: p.seed }));
     drawFlora(seed, field, old, cur.look, lastCam.eye as V3, time, (21 + T) % 24, Math.floor(T / 6), lim, solid, dew);
+    drawVisitors(patInfos(), T, time, groundY, lastCam.eye as V3, lim, solid);
   }
   return { solid, dew, per, feet, lim };
 }
@@ -2248,6 +2285,9 @@ function frame(now: number) {
     gl.uniform3fv(u(bellProg, 'uBellTop'), x.bellTop);
     gl.uniform1f(u(bellProg, 'uSaucer'), x.form === 'eyelash' ? 1 : 0);
     gl.uniform1f(u(bellProg, 'uVeil'), x.form === 'inkcap' ? 0.3 + 0.7 * x.fuzz : 0);
+    gl.uniform3fv(u(bellProg, 'uGill'), x.gill);
+    gl.uniform1f(u(bellProg, 'uSlime'), x.slime);
+    gl.uniform1f(u(bellProg, 'uMottle'), x.form === 'mottlegill' ? 1 : 0);
     draw(bells, q.bell);
   }
   // 2. the glass: jelly and tubes, seeing through to it

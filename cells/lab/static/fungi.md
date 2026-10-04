@@ -43,12 +43,29 @@ and goes back to grass over the next five. All the pats lean their fungi to the 
   flies, which carry its sticky spores to the next pat.
 - **White clover** grows in patches: stolons along the ground, leaves on long stalks, three broad
   leaflets each with a pale chevron and herringbone veins.
+- **Ribwort plantain:** rosettes of long ribbed leaves, rising. Some have tall stalks, each
+  with a dark spike ringed in pale stamens where it's flowering.
+- **Earthworm casts:** coiled heaps of soil pellets, dark and glistening when fresh.
 - **Money spiders' sheet webs** sit low in the grass: hammocks of silk you hardly see by day.
   From the small hours to mid-morning they're silver with dew.
 
 Every blade (and moss, clover, web) comes from the field's seed and its place, so the grass is
 the same wherever you look from. It's drawn only near the camera, finer nearer, and never between the camera and what
 it's looking at.
+
+**Visitors to the pats** (`client/fungi/visitors.ts`), as long as the fungi are tall:
+- **Yellow dung flies** (*Scathophaga*) come to a pat within minutes of its falling:
+  - the males are furry and golden, about a centimetre long, each on its own patch facing much
+    the same way;
+  - they wait for the females, fewer and greyer;
+  - they sit, groom with their front legs, and dart to another spot;
+  - they're there by day, for the pat's first few days.
+- **Dung beetles** (*Aphodius*):
+  - small and domed: a black shield, ridged chestnut or black wing cases, a shovel of a head,
+    clubbed antennae, front legs broad and toothed for digging;
+  - they walk the pat on alternating sets of three legs, dig in, and come up out of another
+    hole;
+  - over the pat's first week and more it's pitted with their holes.
 
 **The director** works across the field. It prefers moments near where it is: a long way to go
 for a moment loses it. Between moments it looks at the pat with most going on nearby. Now and
@@ -57,6 +74,7 @@ then it takes other shots:
 - **Dew at dawn:** a blade at a pat's edge.
 - **The other life near it:** a moss's capsules, dung moss on an old pat, clover, a dewed
   web.
+- **A visitor:** a dung fly on its patch, or a beetle going about. The lens goes with it.
 
 The caption names the pat's age. The clock shows the field's date and hour. The scrubber covers
 four weeks, two either side of when you came, and moves on as time does. `another` gives
@@ -70,7 +88,8 @@ On dung the fungi come in an order. It's a succession, and a real one:
 1. **First, within days:** the pin moulds and the hat-throwers.
 2. **After a week or so:** the jelly cups, and in some terrariums an eyelash cup and the flask
    fungi.
-3. **Last, at two or three weeks:** the inkcaps.
+3. **Last, at two or three weeks:** the inkcaps, in some pats a yellow fieldcap or two, and the
+   tall mottlegills.
 
 Each lives in the dung as mycelium before it fruits, eating it and taking ground from the others.
 Where it's thickest and the dung still has food and water in it, it fruits. As the dung is eaten,
@@ -157,6 +176,8 @@ it counts the days.
 | **inkcap** (*Coprinellus*) | Pale, pleated caps on velvety, hairy stalks, rising out of tufts of white mycelium. Each cap starts as an egg and opens to a bell. Late on, its margin splits and inks, grey to wet black. |
 | **eyelash cup** (*Cheilymenia*, *Scutellinia*) | Saucers a few millimetres across, orange to scarlet and wet inside, paler outside. Their rim is fringed with dark, stiff hairs, curling outward like eyelashes. They open slowly and last days, darkening and drying from the rim as they go. |
 | **flask** (*Sordaria*, *Podospora*) | Hundreds of tiny flasks, half sunk in the dung: soft and pale at first, then black and glossy. Each has a neck that turns to the light. Every so often one shoots a puff of spores off the tip of its neck. |
+| **fieldcap** (*Bolbitius*) | Late, a few to a pat. A yellow cone on a fragile pale stem, egg-yolk at its middle, slimy, its margin finely striate. It opens out flat within the day and is gone by the next. |
+| **mottlegill** (*Panaeolus*) | Last, a few to a pat, on stems several centimetres tall. Its cap is an egg, then a bell, never flat; cream, clay at its top. Its gills mottle black as its spores ripen unevenly. It lasts a few days. |
 | **cup** (*Ascobolus*) | Lumps of yellow-green to amber jelly, glistening, deeper orange at their foot. Through their skin the asci push up one by one: clear tubes, each with a column of eight spores, greenish, ripening black. A ripe ascus fires its spores off together, the fastest launch in the living world, and shrinks back. The spores still below the skin show through the jelly as dark streaks. |
 
 ## Hands

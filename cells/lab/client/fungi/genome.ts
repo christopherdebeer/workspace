@@ -20,8 +20,10 @@
 import { hash, seeded, type Rand } from '../kit/rng';
 
 export type V3 = [number, number, number];
-export type Form = 'thrower' | 'pin' | 'inkcap' | 'cup' | 'eyelash' | 'flask';
-export const FORMS: Form[] = ['thrower', 'pin', 'inkcap', 'cup', 'eyelash', 'flask'];
+export type Form = 'thrower' | 'pin' | 'inkcap' | 'cup' | 'eyelash' | 'flask' | 'mottlegill' | 'fieldcap';
+export const FORMS: Form[] = ['thrower', 'pin', 'inkcap', 'cup', 'eyelash', 'flask', 'mottlegill', 'fieldcap'];
+/** the capped ones: a bell on a velvet stalk */
+export const capped = (f: Form) => f === 'inkcap' || f === 'mottlegill' || f === 'fieldcap';
 
 export interface Genome {
   name: string;
@@ -62,6 +64,10 @@ export interface Genome {
   hairs: number;
   hairLen: number;
   flask: number;
+  // a mushroom's cap: how far past a bell it opens out (flat), its gills' colour, how slimy
+  flare: number;
+  gill: V3;
+  slime: number;
   // water
   dew: number;
   dewSize: number;
@@ -146,8 +152,58 @@ export function species(seed: number, kind?: Form): Genome {
     hairs: Math.round(lerp(28, 60, r())),
     hairLen: lerp(0.25, 0.7, r()),
     flask: lerp(0.12, 0.22, r()),
+    flare: 0,
+    gill: [0.25, 0.2, 0.17],
+    slime: 0,
   };
-  if (form === 'eyelash') {
+  if (form === 'mottlegill') {
+    // Panaeolus: an egg, then a bell, never flat; cream to clay, its gills mottled black with its
+    // spores; on a tall pale stem, a few centimetres up out of old dung
+    g.height = [lerp(45, 60, r()), lerp(75, 115, r())];
+    g.scale = g.height[1] * 0.5;
+    g.radius = lerp(1.1, 2.1, r());
+    g.bell = lerp(8, 15, r());
+    g.bellTall = lerp(1.15, 1.5, r());
+    g.pleats = Math.round(lerp(0, 6, r()));
+    g.pleatDepth = 0.004;
+    g.bellColour = jitter(r, [0.86, 0.82, 0.72], 0.06);
+    g.bellTop = jitter(r, [0.66, 0.55, 0.4], 0.08);
+    g.gill = [0.12, 0.11, 0.1];
+    g.slime = lerp(0.1, 0.35, r());
+    g.ink = 0;
+    g.glassy = 0;
+    g.fuzz = lerp(0.1, 0.4, r());
+    g.lean = lerp(0.03, 0.18, r());
+    g.wave = lerp(0, 0.15, r());
+    g.dew = lerp(0, 0.2, r());
+    g.count = Math.round(lerp(2, 6, r()));
+    g.patch = lerp(25, 40, r());
+    g.spread = lerp(6, 14, r());
+  } else if (form === 'fieldcap') {
+    // Bolbitius: a yellow cone that opens out flat within the day, slimy, its margin striate and
+    // thin enough to see the gills through; on a fragile pale stem; gone by the next
+    g.height = [lerp(30, 45, r()), lerp(55, 85, r())];
+    g.scale = g.height[1] * 0.5;
+    g.radius = lerp(0.8, 1.5, r());
+    g.bell = lerp(8, 16, r());
+    g.bellTall = lerp(0.75, 1, r());
+    g.flare = lerp(0.6, 0.95, r());
+    g.pleats = Math.round(lerp(28, 44, r()));
+    g.pleatDepth = lerp(0.005, 0.011, r());
+    g.bellColour = jitter(r, [0.98, 0.84, 0.32], 0.05);
+    g.bellTop = jitter(r, [0.98, 0.58, 0.04], 0.05);
+    g.gill = [0.62, 0.45, 0.25];
+    g.slime = lerp(0.6, 1, r());
+    g.ink = 0;
+    g.glassy = lerp(0, 0.15, r());
+    g.fuzz = lerp(0.05, 0.2, r());
+    g.lean = lerp(0.03, 0.25, r());
+    g.wave = lerp(0, 0.25, r());
+    g.dew = lerp(0, 0.2, r());
+    g.count = Math.round(lerp(2, 7, r()));
+    g.patch = lerp(25, 40, r());
+    g.spread = lerp(6, 14, r());
+  } else if (form === 'eyelash') {
     // a saucer, orange to scarlet inside, paler and browner out, its rim fringed with dark hairs
     const oranges: V3[] = [[0.95, 0.36, 0.06], [0.98, 0.5, 0.08], [0.88, 0.22, 0.07], [1, 0.58, 0.14]];
     g.bell = lerp(0.7, 1.8, r());
@@ -202,6 +258,8 @@ function binomial(seed: number, g: Genome): string {
     cup: ['obolus', 'opeziza', 'odesmis', 'ascus'],
     eyelash: ['ymenia', 'utellinia', 'opeziza'],
     flask: ['daria', 'ospora', 'iella'],
+    mottlegill: ['aeolus', 'aeolina', 'ocybe'],
+    fieldcap: ['bitius', 'itius', 'ella'],
   };
   const syl = () => pick(r, on) + pick(r, vo);
   let genus = syl() + syl() + pick(r, ends[g.form]);
@@ -213,6 +271,8 @@ function binomial(seed: number, g: Genome): string {
     cup: g.asci > 20 ? 'immersus' : g.cushion > 0.9 ? 'magnus' : 'furfuraceus',
     eyelash: g.hairLen > 0.55 ? 'ciliata' : g.bell > 1.4 ? 'stercorea' : 'fimicola',
     flask: g.height[1] > 0.6 ? 'curvula' : g.fuzz > 0.45 ? 'anserina' : 'fimicola',
+    mottlegill: g.bellTall > 1.3 ? 'semiovatus' : g.bell > 12 ? 'fimiputris' : 'papilionaceus',
+    fieldcap: g.flare > 0.8 ? 'titubans' : 'vitellinus',
   };
   return `${genus} ${epithets[g.form]}`;
 }
@@ -239,6 +299,8 @@ export interface Stalk {
   tl: number;
   /** when it's gone: collapsed, rotted, eaten (a terrarium's things don't stay) */
   tEnd: number;
+  /** an inkcap's: it inks */
+  ink: number;
   dew: Array<{ s: number; a: number; r: number; t: number }>;
   fly: V3;
 }
@@ -285,6 +347,14 @@ export function patch(seed: number, g: Genome): Stalk[] {
     const th = r() * Math.PI * 2;
     const st = makeStalk(r, g, [cx + Math.cos(th) * d, 0, cz + Math.sin(th) * d], 0);
     st.tEnd = 1e9;
+    // (the tall ones take a day and more to come up: on their own, they're well on by dusk)
+    if (g.form === 'mottlegill' || g.form === 'fieldcap') {
+      const back = st.t1 - 10;
+      st.t0 -= back;
+      st.t1 -= back;
+      st.tv -= back;
+      for (const d of st.dew) d.t -= back;
+    }
     out.push(st);
   }
   return out;
@@ -296,17 +366,19 @@ export function makeStalk(r: Rand, g: Genome, base: V3, start: number): Stalk {
   const ink = g.form === 'inkcap';
   const lash = g.form === 'eyelash';
   const flask = g.form === 'flask';
+  const mush = g.form === 'mottlegill' || g.form === 'fieldcap';
   const len = lerp(g.height[0], g.height[1], r());
   const t0 = start + r() * g.spread * (ink ? 1.6 : 1);
-  const grow = ink ? lerp(5, 8, r()) : lash ? lerp(8, 14, r()) : flask ? lerp(6, 10, r()) : lerp(3, 4.5, r());
+  const grow = ink ? lerp(5, 8, r()) : mush ? lerp(16, 26, r()) : lash ? lerp(8, 14, r()) : flask ? lerp(6, 10, r()) : lerp(3, 4.5, r());
   const t1 = t0 + grow;
   const tv = t1 + lerp(0.5, 1.5, r());
   const tl = g.throws ? tv + lerp(2.5, 4, r()) + r() * g.spread * 0.6 : 1e9;
   // (thrown, it lies a few hours, then it's gone; a pin mould's lasts a day or so; an inkcap
   // inks and dissolves the same day)
   // (an eyelash cup and the flasks last days)
-  const tEnd = g.throws ? tl + lerp(5, 9, r()) : ink ? t1 + lerp(16, 26, r()) : lash ? t1 + lerp(50, 90, r()) : flask ? t1 + lerp(60, 110, r()) : t1 + lerp(20, 30, r());
-  const aim = ink || lash ? r() * Math.PI * 2 : toward + (r() - 0.5) * 0.9;
+  // (a fieldcap's gone the next day; a mottlegill lasts a few)
+  const tEnd = g.throws ? tl + lerp(5, 9, r()) : ink ? t1 + lerp(16, 26, r()) : mush ? t1 + (g.form === 'fieldcap' ? lerp(14, 22, r()) : lerp(40, 70, r())) : lash ? t1 + lerp(50, 90, r()) : flask ? t1 + lerp(60, 110, r()) : t1 + lerp(20, 30, r());
+  const aim = ink || lash || mush ? r() * Math.PI * 2 : toward + (r() - 0.5) * 0.9;
   const dew: Stalk['dew'] = [];
   const n = Math.round(g.dew * len * (ink ? 1.2 : 4) * lerp(0.5, 1.5, r()));
   for (let k = 0; k < n; k++) {
@@ -328,7 +400,7 @@ export function makeStalk(r: Rand, g: Genome, base: V3, start: number): Stalk {
     long: g.vesicleLong,
     knob: g.form === 'pin' ? 1 : 0,
     cap: g.cap * lerp(0.85, 1.15, r()),
-    bell: ink ? g.bell * lerp(0.55, 1.2, r()) * (0.6 + (len / g.height[1]) * 0.5) : lash ? g.bell * lerp(0.6, 1.25, r()) : 0,
+    bell: ink || mush ? g.bell * lerp(0.55, 1.2, r()) * (0.6 + (len / g.height[1]) * 0.5) : lash ? g.bell * lerp(0.6, 1.25, r()) : 0,
     bellTall: g.bellTall * lerp(0.85, 1.15, r()),
     dir: [Math.cos(aim), Math.sin(aim)],
     lean: lash ? lerp(0, 0.2, r()) : g.lean * lerp(0.3, 1.3, r()),
@@ -339,6 +411,7 @@ export function makeStalk(r: Rand, g: Genome, base: V3, start: number): Stalk {
     tv,
     tl,
     tEnd,
+    ink: ink ? 1 : 0,
     dew,
     fly: norm([Math.cos(aim) * 0.7, up, Math.sin(aim) * 0.7]),
   };
@@ -428,11 +501,11 @@ export function state(st: Stalk, T: number): State {
   const thrown = T >= st.tl ? T - st.tl : -1;
   const slump = thrown >= 0 ? ease(thrown / 2.5) : 0;
   const open = ease((T - st.t0 - (st.t1 - st.t0) * 0.5) / ((st.t1 - st.t0) * 2.2));
-  const inked = st.knob || st.cap ? 0 : ease((T - st.t1 - 3) / 5);
+  const inked = st.ink ? ease((T - st.t1 - 3) / 5) : 0;
   // its end: it slumps over the last hours, and in the last hour sinks away
   const end = ease((T - (st.tEnd - 6)) / 6);
   const gone = ease((T - (st.tEnd - 1)) / 1);
-  return { grown: grown * (1 - gone), swell, ripe, thrown, slump: Math.max(slump, end), open, inked: Math.max(inked, st.bell ? end : 0) };
+  return { grown: grown * (1 - gone), swell, ripe, thrown, slump: Math.max(slump, end), open, inked: Math.max(inked, st.bell && st.ink ? end : 0) };
 }
 /** An ascus at hour T: how far up through the skin, how ripe its spores, when it fired. */
 export function ascusState(a: Ascus, T: number): { up: number; ripe: number; fired: number } {

@@ -7,6 +7,15 @@ const out = await build({ entryPoints: [new URL('../client/fungi/genome.ts', imp
 const { species, patch, cushions, litter, state, ascusState, along, radius, DAY } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 assert.deepEqual(species(31), species(31));
+// the tall ones: a bell on a stem, and they never ink
+for (const kind of ['mottlegill', 'fieldcap']) for (let seed = 1; seed <= 12; seed++) {
+  const g = species(seed, kind);
+  assert.equal(g.form, kind);
+  for (const st of patch(seed, g)) {
+    assert.ok(st.bell > 0 && st.ink === 0 && st.len > 25, `${kind}: a capped stem`);
+    assert.equal(state(st, st.t1 + 10).inked, 0, `${kind}: doesn't ink`);
+  }
+}
 // the second wave's kinds, asked for: an eyelash cup's saucers, the flasks
 for (const kind of ['eyelash', 'flask']) for (let seed = 1; seed <= 20; seed++) {
   const g = species(seed, kind);
@@ -59,7 +68,7 @@ console.log('ok');
 {
   const out2 = await build({ entryPoints: [new URL('../client/fungi/terrarium.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
   const { terrarium, DAYS } = await import('data:text/javascript;base64,' + Buffer.from(out2.outputFiles[0].text).toString('base64'));
-  const order = { pin: 0, thrower: 0, cup: 1, eyelash: 1, flask: 1, inkcap: 2 };
+  const order = { pin: 0, thrower: 0, cup: 1, eyelash: 1, flask: 1, fieldcap: 2, inkcap: 2, mottlegill: 2 };
   for (const seed of [1, 2, 3, 5, 8]) {
     const t = terrarium(seed);
     assert.ok(t.species.length >= 2, `seed ${seed}: a cast`);
