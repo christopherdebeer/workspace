@@ -290,7 +290,7 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
       const game = need(a.game, 'game');
       await gameOrThrow(game);
       const cur = await db.getSuite(game);
-      const ints = (v: unknown, d: number[]) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite).slice(0, 12) : d);
+      const ints = (v: unknown, d: number[]) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite).slice(0, 48) : d);
       const s: db.Suite = {
         train: { seeds: ints(a.train?.seeds, cur.train.seeds), players: ints(a.train?.players, cur.train.players) },
         test: { seeds: ints(a.test?.seeds, cur.test.seeds), players: ints(a.test?.players, cur.test.players) },
