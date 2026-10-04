@@ -103,6 +103,13 @@ export function hasEvidence(state: { players: Record<string, unknown> }, config:
   const revealed = ((state.players[me] as { knowledge?: { revealed?: Record<string, unknown> } })?.knowledge?.revealed) ?? {};
   if (`${target} objective` in revealed) return true;
   const enemyItems = new Set(((config as { objectives?: ObjectiveDefinition[] }).objectives ?? []).filter((o) => o.type === 'enemy' || o.type === 'traitor').flatMap((o) => JSON.stringify(o.check ?? {}).match(/"[^"]+"/g) ?? []).map((q) => q.slice(1, -1)));
+  // Enemy-only project cards (projects mechanic: only_role) count like enemy items: seen on the
+  // target's table face up, or seen by Gossip/Expose.
+  const deck = ((config as { engine_mechanics?: { cards?: { deck?: Array<{ name: string; only_role?: string }> } } }).engine_mechanics?.cards?.deck ?? []);
+  for (const c of deck) if (c.only_role) enemyItems.add(c.name);
+  const table = ((state.players[target] as { projects?: Array<{ name: string; stealth: boolean }> })?.projects ?? []);
+  if (table.some((p) => !p.stealth && enemyItems.has(p.name))) return true;
+  if (Object.entries(revealed).some(([k, v]) => k === `${target} project` && enemyItems.has(String(v).replace(/ \(.*$/, '')))) return true;
   return Object.entries(revealed).some(([k, v]) => k.startsWith(`${target} hand`) && Array.isArray(v) && v.some((n) => enemyItems.has(String(n))));
 }
 
@@ -250,7 +257,7 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     if (ctx.state.round < (cfg.from_round ?? 1)) return { valid: false, error: `Denouncing opens in round ${cfg.from_round}.` };
     const target = (action as unknown as { target?: string }).target;
     if (!target || target === ctx.playerId || !ctx.state.players[target]) return { valid: false, error: 'Name another player.' };
-    if (cfg.requires_evidence && !hasEvidence(ctx.state as never, ctx.config, ctx.playerId, target)) return { valid: false, error: `You have no evidence against ${target}: see their objective, see them revealed, or see a Forbidden Item in their hand.` };
+    if (cfg.requires_evidence && !hasEvidence(ctx.state as never, ctx.config, ctx.playerId, target)) return { valid: false, error: `You have no evidence against ${target}: see their objective, see them revealed, or see something only the enemy would hold.` };
     return { valid: true };
   },
 

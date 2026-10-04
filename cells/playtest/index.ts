@@ -26,7 +26,7 @@ import { cellJobs } from './vendor/cell-jobs.js';
 import { PRESETS } from './engine/presets';
 import VENDOR from './engine/vendor-info';
 import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIXES, HARNESS_VERSION } from './lib/runner';
-import { scoreRun, SCORE_VERSION, WEIGHTS } from './lib/score';
+import { scoreRun, SCORE_VERSION, WEIGHTS, WEIGHTS_HIDDEN_ROLE } from './lib/score';
 import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
 import { evaluate, proposeRound, prepareProposal, decideRound, startPlan, runPlanned, finishPlan, getPlan, resumePlan, recentPlans, publicEval, compactEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest, type Plan } from './lib/evaluate';
@@ -473,7 +473,7 @@ async function publicApi(parts: string[]): Promise<unknown> {
     case 'presets':
       return a ? (PRESETS[a] ? { slug: a, rules: PRESETS[a], declared: pub.declared(PRESETS[a]) } : null) : Object.keys(PRESETS).map((slug) => ({ slug, ...pub.declared(PRESETS[slug]) }));
     case 'scoring':
-      return { version: SCORE_VERSION, weights: WEIGHTS, critique: CRITIQUE, fixes: CRITIQUE_FIXES };
+      return { version: SCORE_VERSION, weights: WEIGHTS, weightsHiddenRole: WEIGHTS_HIDDEN_ROLE, critique: CRITIQUE, fixes: CRITIQUE_FIXES };
     case 'tools':
       return TOOLS.map((t) => ({ name: t.name, kind: t.kind, description: t.description }));
   }

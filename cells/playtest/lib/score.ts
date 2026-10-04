@@ -25,17 +25,33 @@
  * ------------------------------------------------------------------------- */
 import type { Classification, Finding, Judgement, Session } from './runner';
 import { metrics } from './runner';
+import { deduction, type DeductionReport } from './deduction';
 
 /** v2 (2026-09-30): adds Jev's qualitative critique (16 dimensions, 0–1 index) at .20,
  *  taken from ended (.30→.25), variety (.15→.10), agency (.15→.10) and judged (.20→.15). */
 /** v3.1: v3 as designed — v3's first deploy never recorded who won by position, so its
  *  evals fell back to the balance-free suite formula; they don't compare with v3.1. */
-export const SCORE_VERSION = 'score/v3.1';
+/** v4 (2026-10-04): a game with a hidden enemy is scored on its deduction loop — v3.1 gave 0.85 to
+ *  a three-round AAOTE game decided by the enemy exposing itself, because 65 % of its weight was
+ *  mechanical (ended, variety, agency, length, clean) and every such term was at its maximum.
+ *  For those games:
+ *    ended .15 · critique .20 · judged .10 · clean .10 ·
+ *    deduction .20  accusations were earned: 1, −0.3 per wrong accusation; an exposure without
+ *                   evidence 0.3; the enemy never accused 0.6 (the band below judges how often)
+ *    interaction .15  share of seats taking an interactive move at least once per two rounds
+ *    tension .10   lead changes (½, full at 2) and a close finish (½: margin ≤ 3, ¼: ≤ 6)
+ *  and the suite's balance term is the genre band: the enemy exposed in 40–60 % of games, the
+ *  enemy winning 30–45 %, wrong accusations under 20 % of all (each 1 inside, falling to 0 at
+ *  0.4 away), weighted .25 (runs .65, definition health .10).
+ *  Games without a hidden enemy keep the v3.1 run formula and outcome balance (.75/.15/.10). */
+export const SCORE_VERSION = 'score/v4';
 export const WEIGHTS = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, length: 0.1, clean: 0.1 } as const;
+export const WEIGHTS_HIDDEN_ROLE = { ended: 0.15, critique: 0.2, judged: 0.1, clean: 0.1, deduction: 0.2, interaction: 0.15, tension: 0.1 } as const;
 
 export interface RunScore {
   score: number;
-  parts: { ended: number; variety: number; agency: number; length: number; clean: number; judged: number; critique: number };
+  parts: Record<string, number>;
+  deduction?: DeductionReport;
 }
 
 const clamp = (x: number) => Math.max(0, Math.min(1, x));
@@ -55,9 +71,17 @@ export function scoreRun(s: Session, findings: Finding[], j: Judgement | null): 
   const clean = findings.some((f) => f.severity === 'error') ? 0 : 1;
   const judged = j?.health.probabilities['plays as designed'] ?? 0;
   const critique = j?.critique?.index ?? 0;
+  const d = deduction(s);
+  if (d.enemy) {
+    const ded = clamp(d.exposed ? (d.evidenceBeforeExposure ? 1 : 0.3) - 0.3 * d.wrong : 0.6 - 0.3 * d.wrong);
+    const tension = 0.5 * clamp(d.leadChanges / 2) + (d.margin === null ? 0 : d.margin <= 3 ? 0.5 : d.margin <= 6 ? 0.25 : 0);
+    const parts = { ended, critique, judged, clean, deduction: ded, interaction: d.interactiveShare, tension };
+    const score = (Object.keys(WEIGHTS_HIDDEN_ROLE) as Array<keyof typeof WEIGHTS_HIDDEN_ROLE>).reduce((a, k) => a + WEIGHTS_HIDDEN_ROLE[k] * parts[k], 0);
+    return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])), deduction: d };
+  }
   const parts = { ended, variety, agency, length, clean, judged, critique };
   const score = (Object.keys(WEIGHTS) as Array<keyof typeof WEIGHTS>).reduce((a, k) => a + WEIGHTS[k] * parts[k], 0);
-  return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])) as RunScore['parts'] };
+  return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])) };
 }
 
 export function definitionHealth(c: Classification): number {
@@ -87,9 +111,22 @@ export function outcomeBalance(runs: Array<{ winnerKey?: string | null; position
   return +(h / Math.log(Math.min(k, won.length))).toFixed(4);
 }
 
-export function scoreSuite(runScores: number[], c: Classification, balance: number | null = null): number {
+/** The genre band for hidden-role games (v4): null unless 4+ runs carry a deduction report. */
+export function genreBalance(runs: Array<{ deduction?: DeductionReport | null }>): number | null {
+  const ds = runs.map((r) => r.deduction).filter((d): d is DeductionReport => !!d && !!d.enemy);
+  if (ds.length < 4) return null;
+  const band = (x: number, lo: number, hi: number) => (x >= lo && x <= hi ? 1 : clamp(1 - (x < lo ? lo - x : x - hi) / 0.4));
+  const exposure = ds.filter((d) => d.exposed).length / ds.length;
+  const enemyWins = ds.filter((d) => d.enemyWon).length / ds.length;
+  const accusations = ds.reduce((a, d) => a + d.accusations, 0);
+  const wrongShare = accusations ? ds.reduce((a, d) => a + d.wrong, 0) / accusations : 0;
+  return +((band(exposure, 0.4, 0.6) + band(enemyWins, 0.3, 0.45) + band(wrongShare, 0, 0.2)) / 3).toFixed(4);
+}
+
+export function scoreSuite(runScores: number[], c: Classification, balance: number | null = null, genre = false): number {
   const mean = runScores.length ? runScores.reduce((a, b) => a + b, 0) / runScores.length : 0;
   // Without a balance reading (too few decided games), its weight goes back to the runs.
   if (balance === null) return +(0.85 * mean + 0.15 * definitionHealth(c)).toFixed(4);
+  if (genre) return +(0.65 * mean + 0.1 * definitionHealth(c) + 0.25 * balance).toFixed(4);
   return +(0.75 * mean + 0.15 * definitionHealth(c) + 0.1 * balance).toFixed(4);
 }

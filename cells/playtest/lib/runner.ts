@@ -502,6 +502,8 @@ export interface TurnRecord {
   scores: Record<string, number>;
   /** options carrying a visible consequence ([→ …], [then …], plans, [+…], [learn …]) */
   marked?: number;
+  /** knowledge events this move caused (h10): reveals, private peeks, public exposures */
+  learned?: string[];
 }
 
 export interface Session {
@@ -623,8 +625,10 @@ export const ENEMY_PERSONA = 'You are the hidden traitor: the others win by nami
 function accusationStakes(cfg: Record<string, any>): string | null {
   const d = cfg.engine_mechanics?.hidden_objectives?.denounce;
   if (!d) return null;
-  const right = (d.correct ?? 'win') === 'win' ? 'YOU WIN' : 'they are revealed';
-  const wrong = ({ forfeit: 'your objective is revealed and you can no longer win', reveal_self: 'your role is revealed', end_turn: 'your turn ends', both: 'your role is revealed and your turn ends' } as Record<string, string>)[d.wrong ?? 'both'] ?? String(d.wrong);
+  const pts = d.points ?? {};
+  const right = (d.correct ?? 'win') === 'win' ? 'YOU WIN' : d.correct === 'score' ? `${d.ends_game ? 'the game ends, ' : ''}you score +${pts.accuser ?? 3} and they drop to 0` : 'they are revealed';
+  const penalty = d.correct === 'score' && pts.wrong ? `you lose ${Math.abs(pts.wrong)} points, ` : '';
+  const wrong = penalty + (({ forfeit: 'your objective is revealed and no longer counts', reveal_self: 'your role is revealed', end_turn: 'your turn ends', both: 'your role is revealed and your turn ends' } as Record<string, string>)[d.wrong ?? 'both'] ?? String(d.wrong));
   return `if right: ${right} · if wrong: ${wrong}`;
 }
 
@@ -806,8 +810,10 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       // neither the card nor its consequences.
       recent.push(`${pid}: ${(chosen.action as { stealth?: boolean; hidden?: boolean }).stealth || (chosen.action as { hidden?: boolean }).hidden ? `${chosen.action.type.replace(/_/g, ' ')} · (a hidden project)` : chosen.label}`);
       const next = E(() => loadState(gameId)) as unknown as Record<string, any>;
-      for (const ev of knowledgeEvents(known, next, at.round, pid, chosen.label)) session.knowledge.push(ev);
+      const learned = knowledgeEvents(known, next, at.round, pid, chosen.label);
+      session.knowledge.push(...learned);
       const t: TurnRecord = {
+        ...(learned.length ? { learned } : {}),
         step,
         round: at.round,
         turn: at.turn,
