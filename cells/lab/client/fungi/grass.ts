@@ -208,11 +208,20 @@ export function drawGrass(world: number, f: Field, look: V3, eye: V3, time: numb
         const rad: number[] = [];
         let p: V3 = [b.x, y0 - 1, b.z];
         const ds = b.h / (N - 1);
+        // (dew weighs it down: a tall blade bows further under its beads)
+        const droop = b.droop + wet * 0.35 * Math.min(1, b.h / 70);
+        let lying = false;
         for (let k = 0; k < N; k++) {
           const s = k / (N - 1);
           if (k > 0) {
-            const th = b.lean + b.droop * s * s + sway * s;
+            // (bowed over to the ground, it lies along it: never into it)
+            const th = lying ? Math.PI / 2 : b.lean + droop * s * s + sway * s;
             p = [p[0] + dir[0] * Math.sin(th) * ds, p[1] + Math.cos(th) * ds, p[2] + dir[2] * Math.sin(th) * ds];
+            const floor = f.groundY(p[0], p[2]) + b.w * 0.1;
+            if (p[1] < floor) {
+              p[1] = floor;
+              lying = true;
+            }
           }
           pts.push(p);
           const taper = b.torn ? 1 - 0.15 * s : s < 0.55 ? 1 : 1 - Math.pow((s - 0.55) / 0.45, 1.3) * 0.95;

@@ -363,7 +363,13 @@ export function whereIs(c: Critters, q: number, T: number, time: number, groundY
 /** The frame's animals, as limbs (and their shadows). */
 /** where a thrower's sporangium is, thrown (for its passenger) */
 type CapAt = (st: Stalk) => { p: V3; r: number } | null;
-export function drawCritters(c: Critters, T: number, time: number, groundY: Ground, eye: V3, out: Limbs, capAt?: CapAt) {
+/** What stands in an animal's way on the ground (a stalk's foot): where a point a radius `r`
+ *  across would go to be clear of it, or null if it's clear already. */
+export type Push = (x: number, z: number, r: number) => [number, number] | null;
+let pushOut: Push | null = null;
+const clear = (x: number, z: number, r: number): [number, number] => pushOut?.(x, z, r) ?? [x, z];
+export function drawCritters(c: Critters, T: number, time: number, groundY: Ground, eye: V3, out: Limbs, capAt?: CapAt, push?: Push) {
+  pushOut = push ?? null;
   for (const w of c.worms) {
     if (T < w.t0 || T > w.t1) continue;
     const come = ease((T - w.t0) / 1.5) * ease((w.t1 - T) / 1.5);
@@ -414,10 +420,10 @@ function crawler(w: Worm, come: number, time: number, groundY: Ground, eye: V3, 
     // (its head, searching: lifted and swinging as it goes)
     const head = Math.max(0, 1 - x / 0.16);
     const swing = head * head * 0.07 * L * Math.sin(time * 2.6 + w.seed);
-    const px = t.x - Math.sin(t.h) * (side + swing);
-    const pz = t.z + Math.cos(t.h) * (side + swing);
-    const lift = head * head * L * 0.08 * Math.max(0, Math.sin(time * 0.9 + w.seed * 2));
     const rr = w.r * wormR(x);
+    // (where a stalk's foot is in its way, its body bends round it)
+    const [px, pz] = clear(t.x - Math.sin(t.h) * (side + swing), t.z + Math.cos(t.h) * (side + swing), rr);
+    const lift = head * head * L * 0.08 * Math.max(0, Math.sin(time * 0.9 + w.seed * 2));
     pts.push([px, groundY(px, pz) + rr * 0.75 + lift, pz]);
     rad.push(rr);
   }
@@ -619,10 +625,12 @@ function mite(m: Mite, come: number, T: number, time: number, groundY: Ground, e
   const w = macro ? 0.55 : 0.25;
   const xi = (v * goes(time * w + sd)) / w + T * 0.2;
   const tr = track(m.home, m.roam, sd, xi);
-  const clear = L * (macro ? 0.13 : 0.18);
+  // (round a stalk's foot, not through it)
+  [tr.x, tr.z] = clear(tr.x, tr.z, W * 0.5);
+  const lift = L * (macro ? 0.13 : 0.18);
   const stride = L * (macro ? 0.36 : 0.22);
   const ph = xi / stride;
-  const F = frameOn(groundY, tr.x, tr.z, tr.h, clear + H / 2 + Math.sin(ph * Math.PI * 4) * L * 0.006);
+  const F = frameOn(groundY, tr.x, tr.z, tr.h, lift + H / 2 + Math.sin(ph * Math.PI * 4) * L * 0.006);
   const list = lod === 0 ? out.hi : lod === 1 ? out.mid : out.lo;
   // its body: an egg, flattened (a macrochelid's) or domed (a beetle mite's), front narrower
   const pts: V3[] = [];
@@ -755,8 +763,8 @@ function springtail(sp: Spring, come: number, time: number, groundY: Ground, eye
   const jump = f > 0.9 ? (f - 0.9) / 0.1 : -1;
   const flying = jump >= 0;
   const tau = flying ? jump : 0;
-  const x = lerp(A.x, B.x, tau);
-  const z = lerp(A.z, B.z, tau);
+  // (landed by a stalk's foot: beside it, not in it)
+  const [x, z] = flying ? [lerp(A.x, B.x, tau), lerp(A.z, B.z, tau)] : clear(A.x, A.z, L * 0.4);
   const dist = Math.hypot(B.x - A.x, B.z - A.z);
   const h = flying ? lerp(A.h, B.h, tau) : A.h;
   const H = L * (plump ? 0.42 : 0.3);

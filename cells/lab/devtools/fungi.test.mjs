@@ -87,6 +87,54 @@ console.log('ok');
       if (m.on) assert.ok(m.t1 <= m.on.st.tEnd, `seed ${seed}: a cap held no longer than its host`);
     }
   }
+  // soft: the stalks bend; where two would pass through each other, they're pushed apart
+  {
+    const out5 = await build({ entryPoints: [new URL('../client/fungi/soft.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
+    const { soften, hitsOf } = await import('data:text/javascript;base64,' + Buffer.from(out5.outputFiles[0].text).toString('base64'));
+    const into = (list, T) => {
+      // (how deep, summed, everything standing goes into everything else)
+      let sum = 0;
+      const live = list.filter(({ st }) => T > st.t0 && T < st.tEnd && state(st, T).grown > 0.05);
+      const pts = live.map(({ st }) => [0.3, 0.55, 0.8, 1].map((u) => along(st, state(st, T), u)));
+      const topOf = (k, n) => (n === 3 ? Math.max(pts[k][n].r, live[k].top(state(live[k].st, T))) : pts[k][n].r);
+      for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
+        let deep = 0;
+        for (let a = 0; a < 4; a++) for (let b = 0; b < 4; b++) deep = Math.max(deep, topOf(i, a) + topOf(j, b) - Math.hypot(pts[i][a].p[0] - pts[j][b].p[0], pts[i][a].p[1] - pts[j][b].p[1], pts[i][a].p[2] - pts[j][b].p[2]));
+        sum += deep;
+      }
+      return sum;
+    };
+    let before = 0;
+    let after = 0;
+    for (const seed of [1, 2, 3, 5]) {
+      const t = terrarium(seed);
+      const list = t.species.filter((x) => !['eyelash', 'flask', 'cup'].includes(x.g.form)).flatMap((x) => x.stalks.map((st) => ({ st, top: st.bell ? (s) => st.bell * (0.35 + 0.65 * s.grown) * (0.6 + 0.35 * s.open) : st.cap ? (s) => (s.thrown >= 0 ? 0 : st.cap * (0.35 + 0.65 * s.ripe)) : () => 0 })));
+      const hits = hitsOf(list);
+      for (const T of [60, 90, 150, 250, 400]) {
+        for (const e of list) e.st.bend = undefined;
+        before += into(list, T);
+        soften(list, hits, T, 0, 0, () => true);
+        const once = list.map((e) => e.st.bend && [...e.st.bend]);
+        after += into(list, T);
+        soften(list, hits, T, 0, 0, () => true);
+        assert.deepEqual(list.map((e) => e.st.bend && [...e.st.bend]), once, 'soft: the same hour, the same bends');
+      }
+      // a throw kicks its stalk back; a hit pushes its host
+      const th = list.find((e) => e.st.launch);
+      if (th) {
+        soften(list, hits, th.st.tl + 0.006 / 3600, 0, 0, () => false);
+        assert.ok(Math.hypot(...th.st.bend) > 1e-3, 'soft: recoil');
+      }
+      const [host, hs] = [...hits.entries()][0] ?? [];
+      if (host) {
+        soften(list, hits, hs[0].t + 0.01 / 3600, 0, 0, () => false);
+        assert.ok(Math.hypot(...host.bend) > 1e-4, 'soft: a hit host rings');
+      }
+      for (const e of list) e.st.bend = undefined;
+    }
+    console.log(`soft: into each other ${before.toFixed(1)} → ${after.toFixed(1)} mm`);
+    assert.ok(after < before * 0.4, 'soft: pushed apart');
+  }
   // the second wave turns up in some, after the first
   // the loops: fruiting draws down its reserves; the grazers are where the animals are
   {

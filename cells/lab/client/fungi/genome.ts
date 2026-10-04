@@ -304,6 +304,9 @@ export interface Stalk {
   ink: number;
   /** a thrower's: its throw (from release to where the sporangium ends up) */
   launch?: Launch;
+  /** how far its top is pushed, now (mm): by its neighbours, its throw's recoil, a sporangium
+   * hitting it, the air (set each frame by soft.ts; none while a terrarium is being worked out) */
+  bend?: V3;
   dew: Array<{ s: number; a: number; r: number; t: number }>;
   fly: V3;
 }
@@ -544,8 +547,18 @@ export function along(st: Stalk, s: State, u: number): { p: V3; t: V3; r: number
     st.base[1] + (u - sag * u * u) * L,
     st.base[2] + (st.dir[1] * lean * 0.5 * u * u + side[1] * w * 0.12) * L,
   ];
-  const t = norm([st.dir[0] * lean * u, 1 - 2 * sag * u, st.dir[1] * lean * u]);
-  return { p, t, r: radius(st, s, u) };
+  const t: V3 = [st.dir[0] * lean * u, 1 - 2 * sag * u, st.dir[1] * lean * u];
+  // (bent: as a stalk held at its foot and pushed at its top bends, u²(3 - u)/2)
+  const b = st.bend;
+  if (b && L > 0) {
+    const f = (u * u * (3 - u)) / 2;
+    const df = (3 * u - 1.5 * u * u) / L;
+    for (let k = 0; k < 3; k++) {
+      p[k] += b[k] * f;
+      t[k] += b[k] * df;
+    }
+  }
+  return { p, t: norm(t), r: radius(st, s, u) };
 }
 export function radius(st: Stalk, s: State, u: number): number {
   const L = Math.max(st.len * s.grown, 1e-3);

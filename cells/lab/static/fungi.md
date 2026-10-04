@@ -32,7 +32,8 @@ and goes back to grass over the next five. All the pats lean their fungi to the 
 - **Under a pat** the grass is smothered; on an old pat it comes back through.
 - **Thatch:** last year's leaves lie bleached between the blades.
 - **Dew:** from the small hours to mid-morning the blades bead with it, a heavy drop hanging at
-  each tip.
+  each tip. Its weight bows the tall ones further over. A blade bowed down to the ground lies along
+  it, never into it.
 - **The foreground:** a few blades right by the lens are left in, out of focus, soft shapes along
   the bottom of the frame. Nothing else comes between the lens and what it's on: every blade and
   leaf is tested against the view in 3D, so a tall one beside the line of sight can't arch over
@@ -134,7 +135,9 @@ and everything about it reads the same record:
   comes down on the dung, or (mostly) flies out of the scene;
 - the vesicle collapses; the stalk, emptied, slumps.
 
-What it stuck to carries it from then on, black on the stalk. A nematode riding it goes with it,
+The stalk it left kicks back, and rings. What it hit is pushed the way it was going, and rings
+too; the sporangium squashes on it, wobbles, and stays a little flattened against it (one
+landing on the dung, likewise). What it stuck to carries it from then on, black on the stalk. A nematode riding it goes with it,
 curled on it in flight and where it lands, or out of sight with it. A cup's spores land in dark
 smudges round it. Where spores land on dung wet enough, some of them start the species again:
 new mycelium, another flush later. On dry dung they wait, for a few days at most. Inkcaps drip ink from their margins as they dissolve, and leave black stains
@@ -165,7 +168,8 @@ on the ground that outlast them.
   still; the fungus fills it (it goes milky, its gut gone) and it slackens and is gone in a day.
 
 The mites and springtails come where the grid's grazers are thick, when they are. When and
-where comes from the seed and the hour, so a scrub lands on the same animals.
+where comes from the seed and the hour, so a scrub lands on the same animals. Where a stalk's foot
+is in its way, a nematode's body bends round it, and a mite or a springtail goes round it.
 How they move runs in real time, as it would under a lens while the hours went by. When the
 camera goes down to a mite or a springtail, it follows it.
 
@@ -275,6 +279,20 @@ across each pixel. No detail is drawn finer than a pixel can hold.
 
 **What shines.** The substrate is dull: the brilliance is kept for what's wet (drops, jelly,
 slime, the vesicle).
+
+**Soft, and solid** (`client/fungi/soft.ts`). A stalk is a turgid tube held at its foot: push it
+at the top and it bends as a cantilever does, slender ones easily, stout ones hardly. Each frame:
+- the air moves them a little, neighbours together (more in the field's breeze than in a
+  terrarium);
+- a thrower kicks back from its own throw and rings, damped;
+- a sporangium hitting a stalk pushes it and it rings;
+- where two would pass through each other (a stem through a cap, two sporangiophores in a
+  clump, a bell against a bell) they're pushed apart, the softer giving more, a few rounds till
+  the clump settles.
+
+It all follows from the hour and the clock (nothing carried over from frame to frame), so a scrub
+lands on the same bends. The bend is in the stalk's own sums (`along()`) and its vertex shader
+alike, so what's stuck to a stalk or riding it goes where it's bent to. `?stiff` turns it off.
 
 **The lens** adds a faint bloom round the brightest light (glints, dew), lateral colour fringing
 toward the frame's edges, grain and vignetting.
