@@ -116,3 +116,35 @@ console.log('ok');
   }
   console.log('terrarium ok');
 }
+
+// the field: the world's hour is the local one; which pat is where, and when it fell, is the
+// same however and whenever you ask; a pat is moved whole into place and time
+{
+  const out4 = await build({ entryPoints: [new URL('../client/fungi/pasture.ts', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' });
+  const { worldNow, dateOf, dropsNear, place, patHeight, PAT_LIFE, PAT_GONE } = await import('data:text/javascript;base64,' + Buffer.from(out4.outputFiles[0].text).toString('base64'));
+  const now = new Date(2026, 9, 4, 7, 30);
+  const T = worldNow(now);
+  assert.ok(Math.abs(((T + 21) % 24) - 7.5) < 1e-6, 'local hour');
+  assert.equal(dateOf(T).getUTCHours(), 7);
+  const a = dropsNear(1, 0, 0, T, 300);
+  assert.ok(a.length > 5, 'pats about');
+  assert.equal(new Set(a.map((d) => d.seed)).size, a.length, 'no pat twice');
+  for (const d of a) {
+    assert.ok(T - d.drop <= PAT_GONE && d.drop <= T + 24);
+    assert.equal(((d.drop % 24) + 24) % 24, 0, 'dropped at nine in the evening');
+    // (asked from elsewhere, or a few days on while it's still there: the same pat)
+    const b = dropsNear(1, d.x + 40, d.z - 30, T + 50, 120).find((e) => e.seed === d.seed);
+    if (T + 50 - d.drop < PAT_GONE) assert.ok(b && b.x === d.x && b.drop === d.drop, 'the same pat');
+  }
+  const ages = a.map((d) => (T - d.drop) / 24);
+  assert.ok(Math.min(...ages) < 21 && Math.max(...ages) > 21, 'young and old');
+  assert.equal(patHeight(-1), 0);
+  assert.ok(patHeight(PAT_LIFE - 1) > 3 && patHeight(PAT_GONE + 1) === 0);
+  const d = a[0];
+  const p = place(d);
+  const st = p.terr.species[0].stalks[0];
+  if (st) assert.ok(st.t0 > d.drop && Math.hypot(st.base[0] - d.x, st.base[2] - d.z) < 40, 'moved into place and time');
+  for (const m of p.terr.moments) assert.ok(m.T > d.drop);
+  for (const w of p.crit.worms) assert.ok(w.t1 > d.drop);
+  console.log('pasture ok');
+}

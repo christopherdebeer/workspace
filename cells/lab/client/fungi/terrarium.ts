@@ -51,6 +51,8 @@ export interface Terrarium {
   /** what's been thrown and landed: sporangia stuck where they hit (the ground, or something
    * standing there), and packets of spores the cups have fired, each from when to when */
   marks: Mark[];
+  /** the pellet's lumps (for its edge: patEdge) */
+  lumps: number[];
 }
 /** Something small left lying (or stuck): where, how big (mm), its colour, from when, until when;
  * on the ground (its height to be found there) or held up on something. */
@@ -67,6 +69,11 @@ export interface Mark {
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** the pellet's edge (mm from its middle) at angle `a`: round, lumpy */
+export function patEdge(lumps: number[], a: number) {
+  return 21 * (1 + 0.12 * Math.sin(a * 2 + lumps[0]) + 0.08 * Math.sin(a * 3 + lumps[1]) + 0.05 * Math.sin(a * 5 + lumps[2]));
+}
 
 /** Who comes, and when: the succession, from the seed. */
 function cast(r: Rand, r2: Rand): Array<{ form: Form; arrive: number }> {
@@ -95,7 +102,8 @@ const LIFE: Record<Form, { spread: number; grow: number; eat: number; sugar: num
   flask: { spread: 0.14, grow: 0.3, eat: 0.03, sugar: 0.3, hold: 1.1, lag: 2.2, every: 2, yield: 3 },
 };
 
-export function terrarium(seed: number): Terrarium {
+/** A terrarium from its seed; under the given light (a field's sun), or its own. */
+export function terrarium(seed: number, light?: V3): Terrarium {
   const r = seeded(hash(seed, 0x7e2));
   const who = cast(r, seeded(hash(seed, 0x7e3)));
   const n = GRID * GRID;
@@ -107,7 +115,7 @@ export function terrarium(seed: number): Terrarium {
   for (let i = 0; i < n; i++) {
     const [x, z] = at(i);
     const a = Math.atan2(z, x);
-    const edge = 21 * (1 + 0.12 * Math.sin(a * 2 + lumps[0]) + 0.08 * Math.sin(a * 3 + lumps[1]) + 0.05 * Math.sin(a * 5 + lumps[2]));
+    const edge = patEdge(lumps, a);
     dung[i] = Math.max(0, Math.min(1, (edge - Math.hypot(x, z)) / 3));
   }
   const sugar = Float32Array.from(dung, (d) => d * (0.8 + 0.2 * r()));
@@ -120,7 +128,7 @@ export function terrarium(seed: number): Terrarium {
   const water = Float32Array.from(dung, (d) => 0.35 + 0.55 * d);
   const sp: Species[] = who.map((w, i) => ({ g: species(hash(seed, 0x51, i), w.form), arrive: w.arrive, stalks: [], cups: [] }));
   // (they all lean to the one light: the terrarium's)
-  for (const s of sp) s.g.light = sp[0].g.light;
+  for (const s of sp) s.g.light = light ?? sp[0].g.light;
   const myc = sp.map(() => new Float32Array(n));
   const ground: Uint8Array[] = [];
   const moments: Moment[] = [];
@@ -244,7 +252,7 @@ export function terrarium(seed: number): Terrarium {
       } else marks.push({ p: at, r, c: s.g.capColour, t0: st.tl + 0.08, t1: st.tl + lerp(48, 120, rr()), ground: true, kind: 'cap' });
     });
   });
-  return { species: sp, ground, moments, dung, marks };
+  return { species: sp, ground, moments, dung, marks, lumps };
 
   /** A flush of one species' fruit: as many as its mycelium can feed, where it's thickest. */
   function flush(s: Species, j: number, m: Float32Array, T: number, rr: Rand) {

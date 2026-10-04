@@ -181,14 +181,22 @@ export interface Limbs {
   hi: number[];
   mid: number[];
   lo: number[];
+  /** grass: near, far */
+  bladeHi: number[];
+  bladeLo: number[];
   glassHi: number[];
   glassMid: number[];
   shade: number[];
 }
-export const limbs = (): Limbs => ({ hi: [], mid: [], lo: [], glassHi: [], glassMid: [], shade: [] });
+export const limbs = (): Limbs => ({ hi: [], mid: [], lo: [], bladeHi: [], bladeLo: [], glassHi: [], glassMid: [], shade: [] });
 
 export const MAT = { chitin: 0, leg: 1, seta: 2, soft: 3, worm: 4 } as const;
 export const MAT_PLANT = 5;
+export const MAT_GRASS = 6;
+/** a blade: a ribbon, its width across `across`; torn (grazed) or browning at its tip */
+export function blade(list: number[], pts: V3[], rad: number[], col: V3, seed: number, across: V3, torn: number, brown: number) {
+  tube(list, pts, rad, col, MAT_GRASS, { flat: 0.1, seed, bands: torn, eyes: brown, across });
+}
 /** a flat limb: a ribbon (a blade of grass) */
 export function ribbon(list: number[], pts: V3[], rad: number[], col: V3, mat: number, seed: number) {
   tube(list, pts, rad, col, mat, { flat: 0.18, seed });
@@ -200,6 +208,8 @@ interface TubeOpts {
   bands?: number;
   eyes?: number;
   groove?: number;
+  /** which way its width goes (a blade's) */
+  across?: V3;
 }
 function tube(list: number[], pts: V3[], rad: number[], col: V3, mat: number, o: TubeOpts = {}) {
   const n = Math.min(MAXP, pts.length);
@@ -209,7 +219,7 @@ function tube(list: number[], pts: V3[], rad: number[], col: V3, mat: number, o:
     if (i < n) list.push(pts[i][0], pts[i][1], pts[i][2], rad[i]);
     else list.push(0, 0, 0, 0);
   }
-  list.push(col[0], col[1], col[2], mat, n, o.flat ?? 1, o.seed ?? 0, o.smooth === false ? 0 : 1, L, o.bands ?? 0, o.eyes ?? 0, o.groove ?? 0, 0, 0, 0, 0);
+  list.push(col[0], col[1], col[2], mat, n, o.flat ?? 1, o.seed ?? 0, o.smooth === false ? 0 : 1, L, o.bands ?? 0, o.eyes ?? 0, o.groove ?? 0, ...(o.across ?? [0, 0, 0]), 0);
 }
 
 // (small vector sums, inline)

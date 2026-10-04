@@ -15,14 +15,21 @@
  */
 import { FORMS, DAY, along, ascusState, cushionGrown, cushions, litter, onCushion, patch, species, state, type Cushion, type Form, type Genome, type Stalk, type State, type V3 } from './genome';
 import { straw, drawStraw, type Blade } from './straw';
+import { bladeNear, drawGrass, type Field } from './grass';
+import { PAT_GONE, PAT_LIFE, dateOf, dropsNear, patHeight, place, worldNow, type Drop, type Placed } from './pasture';
 import { MAXP, ROWW, critters, drawCritters, limbs, whereIs, zoo, type Critters, type Limbs } from './critters';
-import { DAYS, GRID, SPAN, STEP, terrarium, type Moment, type Terrarium } from './terrarium';
+import { DAYS, GRID, SPAN, STEP, patEdge, type Moment, type Terrarium } from './terrarium';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
 /** one species on its own (`?one`), or — the default — a terrarium of them, over three weeks */
 const one = params.has('one');
-let seed = Number(params.get('seed')) || Math.floor(Math.random() * 9000) + 1;
+/** the field (the default): pats of every age, in the grass, on the real clock; or (`?terrarium`,
+ *  and the gallery's preview) one pat on its own, its three weeks from the start */
+const pasture = !one && !preview && !params.has('terrarium');
+// (the field is one field — the same for anyone, at the same hour — unless asked for another)
+let seed = Number(params.get('seed')) || (pasture ? 1 : Math.floor(Math.random() * 9000) + 1);
+
 
 const canvas = document.getElementById('macro') as HTMLCanvasElement;
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false })!;
@@ -70,20 +77,45 @@ vec3 wetness(vec3 n, vec3 v, vec3 p, float wet, float k) {
 const QUAD_VS = `#version 300 es
 void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, 0., 1.); }`;
 
+// the pats near: each where it lies, how high it stands, its age (days); its lumps, its map's layer
+const NP = 6;
+const PATS = `
+uniform vec4 uPat[${NP}];
+uniform vec4 uLump[${NP}];
+float edgeOf(vec4 L, float a) { return 21. * (1. + .12 * sin(a * 2. + L.x) + .08 * sin(a * 3. + L.y) + .05 * sin(a * 5. + L.z)); }
+float mound(vec2 w) {
+  float h = 0.;
+  for (int i = 0; i < ${NP}; i++) {
+    vec4 P = uPat[i];
+    if (P.z <= 0.) continue;
+    vec2 d = w - P.xy;
+    float r = length(d);
+    if (r > 34.) continue;
+    float e = edgeOf(uLump[i], atan(d.y, d.x));
+    h += P.z * smoothstep(-.08, .4, (e - r) / e);
+  }
+  return h;
+}`;
 // the ground: dung or litter, lumpy, crumbly, fibrous, wet in its hollows, white with mycelium
 const GROUND_VS = `#version 300 es
 in vec2 aXZ;
 uniform mat4 uVP;
 uniform float uS;
+uniform vec2 uCentre;
+uniform float uExt, uStudio;
 out vec3 vW;
 // (a hash without sin(), so the page can work out the same heights to stand things on)
 float h(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float n2(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
   return mix(mix(h(i), h(i + vec2(1, 0)), u.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), u.x), u.y); }
 float hgt(vec2 p) { return (n2(p * .18) - .5) * 1.4 + (n2(p * .6 + 7.) - .5) * .55 + (n2(p * 1.9 + 3.) - .5) * .18; }
+${PATS}
 void main() {
-  vec2 p = aXZ * uS;
-  float y = (hgt(aXZ) - smoothstep(20., 70., length(aXZ)) * 3.) * uS;
+  // (the mesh goes where the camera is: its middle, how far it reaches; the studio's ground falls
+  // away at its edge, the field's goes on)
+  vec2 q = uCentre / uS + aXZ * uExt;
+  vec2 p = q * uS;
+  float y = (hgt(q) - uStudio * smoothstep(20., 70., length(q)) * 3.) * uS + mound(p);
   vW = vec3(p.x, y, p.y);
   gl_Position = uVP * vec4(vW, 1.);
 }`;
@@ -96,10 +128,12 @@ uniform float uWet, uMyc;
 uniform vec4 uFeet[${MYC}];
 // (where the small animals are: the ground under them in their shadow — x, z, radius, depth)
 uniform vec4 uShade[${SHADE}];
-// (a terrarium's ground: per cell, its mycelium, water, food left, and whether it's dung)
-uniform sampler2D uMap;
-uniform float uHasMap, uSpan;
+// (the pats' ground: per cell, its mycelium, water, food left, and whether it's dung — a layer
+// each; and between them, the field's)
+uniform highp sampler2DArray uMaps;
+uniform float uSpan, uField;
 ${COMMON}
+${PATS}
 float fine(vec2 p) { return fbm(p * 3.) * .6 + n2(p * 14.) * .25 + n2(p * 37.) * .15; }
 void main() {
   vec2 p = vW.xz / uS;
@@ -120,16 +154,33 @@ void main() {
   float wet = smoothstep(.3, .7, n2(p * .35 + 11.) * .7 + (1. - crumb) * .4) * uWet;
   // mycelium: white threads in patches, and round the feet of the stalks
   float myc = uMyc * smoothstep(.62, .8, fbm(p * .45 + 30.));
-  if (uHasMap > .5) {
-    // a terrarium's: the dung's edge (beyond it, bare grey earth); eaten dung pales and dries;
-    // its water; its mycelium, where the grid says it has spread
-    vec4 m = texture(uMap, vW.xz / uSpan + .5);
-    float dung = smoothstep(.2, .8, m.a);
-    c = mix(vec3(.16, .14, .12) * (.6 + .8 * crumb), c, dung);
-    c = mix(c, c * vec3(1.5, 1.4, 1.2) + vec3(.05), (1. - m.b) * dung * .6);
-    wet = smoothstep(.3, .7, n2(p * .35 + 11.) * .5 + m.g * .6) * m.g;
-    myc = max(myc, smoothstep(.2, .95, m.r) * .55 * (.3 + .7 * fbm(p * 1.3 + 40.)));
+  // the pats: the dung's edge; eaten dung pales and dries; its water; its mycelium, where the
+  // grid says it has spread. Old, it crusts: greyer, cracked, the grass coming back over it
+  float dung = 0.;
+  vec4 m = vec4(0.);
+  float age = 0.;
+  for (int i = 0; i < ${NP}; i++) {
+    if (uPat[i].z <= 0. || uLump[i].w < 0.) continue;
+    vec2 uv = (vW.xz - uPat[i].xy) / uSpan + .5;
+    if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) continue;
+    vec4 mi = texture(uMaps, vec3(uv, uLump[i].w));
+    float di = smoothstep(.2, .8, mi.a);
+    if (di > dung) { dung = di; m = mi; age = uPat[i].w; }
   }
+  // (between them: bare grey earth in the studio; in the field, the sward's floor — dead
+  // leaf, roots, soil, green in it)
+  vec3 earth = vec3(.16, .14, .12) * (.6 + .8 * crumb);
+  vec3 floor_ = mix(vec3(.09, .075, .045), vec3(.1, .13, .05), smoothstep(.35, .7, fbm(p * .08 + 5.))) * (.55 + .9 * crumb);
+  floor_ = mix(floor_, vec3(.32, .27, .16) * (.7 + .5 * fib), smoothstep(.55, .8, n2(p * vec2(1.6, .35) + n2(p * .2) * 5.)) * .55);
+  vec3 around = mix(earth, floor_, uField);
+  float crust = smoothstep(18., 32., age);
+  float cracks = 1. - smoothstep(.0, .06, abs(n2(p * .9 + 7.) - .5)) * crust;
+  vec3 cd = mix(c, vec3(.2, .18, .15) * (.7 + .5 * crumb), crust * .75) * (.55 + .45 * cracks);
+  cd = mix(cd, floor_, smoothstep(30., 52., age) * smoothstep(.3, .6, fbm(p * .3 + 2.)) * uField);
+  c = mix(around, cd, dung);
+  c = mix(c, c * vec3(1.5, 1.4, 1.2) + vec3(.05), (1. - m.b) * dung * .6 * (1. - crust));
+  wet = mix(wet * uField * .6, smoothstep(.3, .7, n2(p * .35 + 11.) * .5 + m.g * .6) * m.g, dung) * (1. - crust);
+  myc = max(myc * (1. - uField), smoothstep(.2, .95, m.r) * .55 * (.3 + .7 * fbm(p * 1.3 + 40.)) * dung);
   c *= 1. - wet * .35;
   for (int i = 0; i < ${MYC}; i++) {
     vec4 f = uFeet[i];
@@ -207,6 +258,9 @@ void main() {
   float dr = (cb.w - ca.w) / ds;
   vec3 ref = abs(t.y) > .92 ? vec3(1., 0., 0.) : vec3(0., 1., 0.);
   vec3 a = normalize(cross(t, ref));
+  // (a blade's width goes the way it's told: across its bend, however far over it bends)
+  vec3 wa = P(27).xyz;
+  if (dot(wa, wa) > 0.) a = normalize(wa - t * dot(wa, t));
   vec3 b = cross(a, t);
   // (b is the side of the ring toward the sky: a flattened tube is flattened along it)
   vec3 ring = a * cos(aUA.y) + b * sin(aUA.y);
@@ -306,12 +360,31 @@ void main() {
     col = c * (.25 + .65 * max(dot(nb, uLight), 0.)) * uLightCol;
     col += mix(vec3(.45, .5, .9), base, .4) * pow(1. - nv, 2.2) * .55 * uLightCol;
     col += uLightCol * pow(max(dot(reflect(-v, nb), uLight), 0.), 25.) * .18;
+  } else if (mat > 5.5) {
+    // a living blade of grass: a keel down its middle, fine veins either side, paler at its
+    // sheath, a waxy sheen; the light through it green-gold; a grazed tip torn and browning
+    float across = cos(vUA.y);
+    float keel = exp(-across * across * 60.);
+    float veins = .5 + .5 * cos(across * 34. + sd);
+    float x = vUA.x;
+    vec3 c = base * (.86 + .12 * veins) * mix(1., 1.25, keel * .5);
+    c = mix(c * vec3(1.15, 1.18, .9) + .04, c, smoothstep(.0, .25, x));
+    float torn = vMore.y * smoothstep(.86, 1., x);
+    float brown = max(torn, vMore.z * smoothstep(.55, 1., x)) * (.6 + .4 * n2(vec2(q.x * 40., vUA.y * 3.)));
+    c = mix(c, vec3(.55, .45, .22), brown);
+    col = c * (.2 + .62 * lam) * uLightCol;
+    col += c * vec3(.9, 1.2, .45) * backlit * 1.4 * uLightCol;
+    float fr = .04 + .96 * pow(1. - nv, 5.);
+    col += env(r) * (.06 + fr * .7) + uLightCol * (pow(max(dot(r, uLight), 0.), 24.) * .3 + pow(max(dot(r, uLight), 0.), 200.) * 1.5);
   } else if (mat > 4.5) {
     // a fragment of grass: veined lengthwise, its cells in rows, rotting in patches; thin enough
     // to glow with the light behind it; dull, a faint sheen where it's wet
     float vein = smoothstep(.55, 1., abs(sin(vUA.y * 7. + sd)));
     float cells = n2(vec2(q.x * 140., vUA.y * 16.) + sd);
-    float rot = smoothstep(.45, .8, n2(q * vec2(5., 1.) + sd * 2.));
+    // (finer than a pixel: smoothed away, not aliased into bands)
+    cells = mix(cells, .5, smoothstep(.25, .8, fwidth(q.x * 140.)));
+    vein = mix(vein, .5, smoothstep(.25, .8, fwidth(vUA.y * 7.)));
+    float rot = smoothstep(.5, .8, n2(vec2(q.x * 1.3, vUA.y * .6) + sd * 2.)) * .8;
     vec3 c = base * (.82 + .25 * vein) * (.85 + .3 * cells) * (1. - rot * .5);
     col = c * (.22 + .6 * lam + backlit * .9) * uLightCol;
     col += env(r) * (.03 + .5 * pow(1. - nv, 5.)) + uLightCol * pow(max(dot(r, uLight), 0.), 40.) * .12;
@@ -923,10 +996,13 @@ function limbMesh(n: number, m: number) {
 const limbHi = limbMesh(44, 14);
 const limbMid = limbMesh(16, 7);
 const limbLo = limbMesh(6, 4);
+// (grass blades: long, flat — many rows along, few round)
+const bladeHiMesh = limbMesh(22, 4);
+const bladeLoMesh = limbMesh(9, 4);
 const ROWF = ROWW * 4;
 /** Put the frame's limbs in the texture, in the order they're drawn; where each list starts. */
 function uploadLimbs(l: Limbs) {
-  const lists = [l.hi, l.mid, l.lo, l.glassHi, l.glassMid];
+  const lists = [l.hi, l.mid, l.lo, l.bladeHi, l.bladeLo, l.glassHi, l.glassMid];
   const starts: number[] = [];
   let rows = 0;
   for (const x of lists) {
@@ -1017,10 +1093,21 @@ interface Sp {
   stalks: Stalk[];
   cups: Cushion[];
   S: number;
+  pat?: Pat;
 }
 let world: Sp[] = [];
+/** the pats, all together: their moments and marks (`species` and the grid aren't used) */
 let terr: Terrarium | null = null;
+/** the animals, all together */
 let crit: Critters | null = null;
+/** a pat in play: simulated, in place; its litter and its straw */
+interface Pat extends Placed {
+  bits: ReturnType<typeof litter>;
+  blades: Blade[];
+}
+let pats: Pat[] = [];
+/** the field's sun (every pat's stalks lean to it) */
+let sun: V3 = [0.5, 0.8, 0.3];
 /** the lead species: its light, its warmth, its ground */
 let g: Genome;
 let bits: ReturnType<typeof litter>;
@@ -1060,7 +1147,59 @@ function groundY(x: number, z: number): number {
   const hgt = (n2(px * 0.18, pz * 0.18) - 0.5) * 1.4 + (n2(px * 0.6 + 7, pz * 0.6 + 7) - 0.5) * 0.55 + (n2(px * 1.9 + 3, pz * 1.9 + 3) - 0.5) * 0.18;
   const l = Math.hypot(px, pz);
   const t = Math.max(0, Math.min(1, (l - 20) / 50));
-  return (hgt - t * t * (3 - 2 * t) * 3) * S;
+  return (hgt - (pasture ? 0 : t * t * (3 - 2 * t) * 3)) * S + mound(x, z);
+}
+/** The grass's view of the pats: rank grass in a ring round each (cattle won't graze by their
+ *  dung), smothered under one, back over an old one. */
+const field: Field = {
+  groundY,
+  rank(x, z) {
+    let k = 0.06;
+    for (const p of pats) {
+      const age = T - p.drop;
+      if (age < -1) continue;
+      const dx = x - p.x;
+      const dz = z - p.z;
+      const r = Math.hypot(dx, dz);
+      if (r > 110) continue;
+      const d = r - patEdge(p.terr.lumps, Math.atan2(dz, dx));
+      const ring = Math.max(0, Math.min(1, (d + 2) / 8)) * (1 - Math.max(0, Math.min(1, (d - 35) / 40)));
+      k = Math.max(k, ring * 0.85);
+    }
+    return k;
+  },
+  under(x, z) {
+    let k = 1;
+    for (const p of pats) {
+      const age = T - p.drop;
+      if (age < 0) continue;
+      const dx = x - p.x;
+      const dz = z - p.z;
+      const r = Math.hypot(dx, dz);
+      if (r > 30) continue;
+      const d = r - patEdge(p.terr.lumps, Math.atan2(dz, dx));
+      if (d > 0.5) continue;
+      const back = Math.max(0, Math.min(1, (age - 30 * 24) / (25 * 24)));
+      k = Math.min(k, Math.max(back, Math.max(0, Math.min(1, d / 0.5 + 1)) * 0.3));
+    }
+    return k;
+  },
+};
+/** The pats' mounds at (x, z): the ground shader's sums. */
+function mound(x: number, z: number) {
+  let h = 0;
+  for (const p of pats) {
+    const H = patHeight(T - p.drop);
+    if (H <= 0) continue;
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const r = Math.hypot(dx, dz);
+    if (r > 34) continue;
+    const e = patEdge(p.terr.lumps, Math.atan2(dz, dx));
+    const k = Math.max(0, Math.min(1, ((e - r) / e + 0.08) / 0.48));
+    h += H * k * k * (3 - 2 * k);
+  }
+  return h;
 }
 /** Stand everything on the ground. */
 function settle() {
@@ -1072,6 +1211,104 @@ function settle() {
   for (const c of bits.crumbs) c.p[1] = groundY(c.p[0], c.p[2]) + c.r[1] * 0.2;
   for (const p of bits.pools) p.p[1] = groundY(p.p[0], p.p[2]);
   for (const m of terr?.marks ?? []) if (m.ground) m.p[1] = groundY(m.p[0], m.p[2]) + (m.kind === 'cap' ? m.r * 0.25 : 0);
+}
+/** where the field's camera started: the pat it came to */
+let home: Drop = { seed: 1, x: 0, z: 0, drop: 0 };
+let tArrive = 0;
+/** how much a pat has going on now: its fungi up (a few days in) beats new or old */
+function interest(d: Drop) {
+  const age = (T - d.drop) / 24;
+  return (age > 2 && age < 20 ? 2 : age > 0 && age < 21 ? 1 : 0) - Math.hypot(d.x, d.z) / 300;
+}
+function loadPat(d: Drop): Pat {
+  const p = place(d, pasture ? sun : undefined);
+  const g0 = p.terr.species[0].g;
+  const bits = litter(d.seed, { ...g0, patch: 20, scale: 5, beads: Math.min(g0.beads, 50) });
+  for (const b of [...bits.beads, ...bits.crumbs, ...bits.pools]) {
+    b.p[0] += d.x;
+    b.p[2] += d.z;
+  }
+  const blades = straw(d.seed, pasture ? 22 : 30, pasture ? 300 : 420);
+  for (const b of blades) for (const q of b.pts) {
+    q[0] += d.x;
+    q[1] += d.z;
+  }
+  return { ...p, bits, blades };
+}
+/** The pats within reach of where the camera is: keep those still there, load what's come into
+ *  reach (one a call, but for the first), let go of the rest. True if the set changed. */
+let lastRefresh = 0;
+function refreshPats(all = false): boolean {
+  const at = pats.length ? cur.look : [home.x, 0, home.z];
+  // (at first only the near ones, so it starts quickly; the rest come in a second at a time)
+  const want = dropsNear(seed, at[0], at[2], T, all ? 90 : 190).filter((d) => T - d.drop < PAT_GONE);
+  const keep = all ? [] : pats.filter((p) => want.some((d) => d.seed === p.seed));
+  let changed = keep.length !== pats.length;
+  const missing = want.filter((d) => !keep.some((p) => p.seed === d.seed)).sort((a, b) => Math.hypot(a.x - at[0], a.z - at[2]) - Math.hypot(b.x - at[0], b.z - at[2]));
+  for (const d of all ? missing : missing.slice(0, 1)) {
+    keep.push(loadPat(d));
+    changed = true;
+  }
+  pats = keep;
+  return changed;
+}
+/** All the pats' things together: the species (with their moments' indices moved to suit), the
+ *  animals, the marks, the litter and the straw. */
+function combine() {
+  const prevWorld = world;
+  const prevCrit = crit;
+  world = [];
+  const moments: Moment[] = [];
+  const marks: Terrarium['marks'] = [];
+  const all: Critters = { worms: [], mites: [], springs: [], traps: [], moments: [] };
+  bits = { beads: [], crumbs: [], pools: [] };
+  blades = [];
+  const follows: Array<{ m: Moment; pat: number; q: number }> = [];
+  const offs: Array<{ mites: number; springs: number; nm: number }> = [];
+  pats.forEach((p, i) => {
+    const off = world.length;
+    world.push(...p.terr.species.map((x) => ({ g: x.g, stalks: x.stalks, cups: x.cups, S: scaleOf(x.g), pat: p })));
+    for (const m of p.terr.moments) moments.push({ ...m, who: m.who >= 0 ? m.who + off : -1 });
+    offs.push({ mites: all.mites.length, springs: all.springs.length, nm: p.crit.mites.length });
+    for (const m of p.crit.moments) {
+      const c = { ...m };
+      moments.push(c);
+      if (m.follow !== undefined) follows.push({ m: c, pat: i, q: m.follow });
+    }
+    all.worms.push(...p.crit.worms);
+    all.mites.push(...p.crit.mites);
+    all.springs.push(...p.crit.springs);
+    all.traps.push(...p.crit.traps);
+    marks.push(...p.terr.marks);
+    bits.beads.push(...p.bits.beads);
+    bits.crumbs.push(...p.bits.crumbs);
+    bits.pools.push(...p.bits.pools);
+    blades.push(...p.blades);
+  });
+  // (an animal to follow: its index among all the mites, then all the springtails)
+  for (const f of follows) {
+    const o = offs[f.pat];
+    f.m.follow = f.q < o.nm ? o.mites + f.q : all.mites.length + o.springs + (f.q - o.nm);
+  }
+  crit = all;
+  terr = { species: [], ground: [], moments, dung: new Float32Array(0), marks, lumps: [] };
+  if (!world.length) world = [{ g: species(seed, 'thrower'), stalks: [], cups: [], S: 1 }];
+  g = world[0].g;
+  if (pasture) for (const sp of world) sp.g.light = sun;
+  // (the shot carries on, if what it's on is still here)
+  if (shot && shot.who >= 0) {
+    const was = prevWorld[shot.who];
+    shot.who = world.findIndex((x) => x.g === was?.g);
+    if (shot.who < 0) shot = null;
+  }
+  if (shot && shot.follow !== undefined && prevCrit) {
+    const pm = prevCrit.mites.length;
+    const obj = shot.follow < pm ? prevCrit.mites[shot.follow] : prevCrit.springs[shot.follow - pm];
+    const i = all.mites.indexOf(obj as Critters['mites'][number]);
+    const j = all.springs.indexOf(obj as Critters['springs'][number]);
+    shot.follow = i >= 0 ? i : j >= 0 ? all.mites.length + j : undefined;
+  }
+  labelled = '';
 }
 const scaleOf = (x: Genome) => (x.form === 'cup' ? x.cushion / 4 : x.form === 'eyelash' ? x.bell / 4 : x.form === 'flask' ? 0.3 : x.scale / 8);
 function grow(s: number) {
@@ -1087,18 +1324,30 @@ function grow(s: number) {
     blades = straw(seed, g.patch * 1.5, Math.round(g.patch * 12));
     S = scaleOf(g);
   } else {
-    terr = terrarium(seed);
-    crit = critters(seed, terr);
-    terr.moments.push(...crit.moments);
-    world = terr.species.map((x) => ({ g: x.g, stalks: x.stalks, cups: x.cups, S: scaleOf(x.g) }));
-    g = world[0].g;
-    bits = litter(seed, { ...g, patch: 20, scale: 5, beads: Math.min(g.beads, 50) });
-    blades = straw(seed, 30, 420);
     S = 1;
+    pats = [];
+    if (pasture) {
+      // the field at the world's hour now (`?now=` an hour of its own; `?t=` hours from now)
+      T = (Number(params.get('now')) || worldNow()) + (Number(params.get('t')) || 0);
+      // (`?hour=6.5`: the last time it was that hour)
+      if (params.get('hour')) T -= ((((21 + T) % 24) - Number(params.get('hour'))) % 24 + 24) % 24;
+      tArrive = T;
+      sun = norm3([Math.cos(seed * 1.7) * 0.8, 1, Math.sin(seed * 1.7) * 0.8]);
+      // (start on a pat with something going on: the nearest whose fungi are up)
+      // (`?age=`: start on the pat nearest that many days old)
+      const want = Number(params.get('age'));
+      const near = dropsNear(seed, 0, 0, T, 260).sort((a, b) => (want ? Math.abs((T - a.drop) / 24 - want) - Math.abs((T - b.drop) / 24 - want) : interest(b) - interest(a)));
+      home = near[0] ?? { seed: 1, x: 0, z: 0, drop: T - 100, };
+      refreshPats(true);
+    } else {
+      T = 0;
+      pats = [loadPat({ seed, x: 0, z: 0, drop: 0 })];
+    }
+    combine();
   }
   beadColour = mixV(g.bead, [0.22, 0.14, 0.07], 0.45);
   settle();
-  T = 0;
+  if (!terr) T = 0;
   focusAt = null;
   subject = -1;
   shot = null;
@@ -1124,6 +1373,12 @@ function kindOf(x: Genome) {
   }[x.form];
 }
 let labelled = '';
+/** an age in days, in words */
+function ageWords(d: number) {
+  if (d < 1) return 'less than a day';
+  if (d < 14) return `${Math.floor(d)} day${Math.floor(d) === 1 ? '' : 's'}`;
+  return `${Math.floor(d / 7)} weeks`;
+}
 function label() {
   const el = document.getElementById('label');
   if (!el) return;
@@ -1134,15 +1389,24 @@ function label() {
   // a terrarium: the species the lens is on (or, between, the terrarium's cast)
   const who = shot?.who ?? -1;
   const kind = shot?.kind ?? '';
-  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' || kind === 'trap' ? kind : ''}`;
+  const key = `${who}:${kind === 'graze' || kind === 'ride' || kind === 'stuck' || kind === 'trap' || kind === 'field' || kind === 'dew' ? kind : ''}:${pasture && who < 0 ? patNear(view.look)?.seed : ''}`;
   if (key === labelled) return;
   labelled = key;
   if (kind === 'graze') el.innerHTML = `<i>mites and springtails</i><span>grazing the mycelium</span>`;
+  else if (kind === 'dew') el.innerHTML = `<i>dew</i><span>on the grass at the pat's edge, before the sun's on it</span>`;
   else if (kind === 'trap') el.innerHTML = `<i>a nematode-trapping fungus</i><span>its sticky loops, and a nematode, caught</span>`;
-  else if (who < 0) el.innerHTML = `<i>a terrarium</i><span>${world.map((x) => x.g.name).join(' · ')}</span>`;
+  else if (kind === 'field') {
+    const ages = pats.filter((p) => T >= p.drop).map((p) => (T - p.drop) / 24);
+    el.innerHTML = `<i>a pasture</i><span>${ages.length} pats in reach · ${ageWords(Math.min(...ages))} to ${ageWords(Math.max(...ages))} old</span>`;
+  } else if (who < 0 && pasture) {
+    const p = patNear(view.look);
+    const here = p ? world.filter((x) => x.pat === p) : [];
+    const done = p && T - p.drop > PAT_LIFE;
+    el.innerHTML = `<i>a pat, ${p ? ageWords((T - p.drop) / 24) : ''} old</i><span>${done ? 'its fungi done; crusted, the grass coming back over it' : here.map((x) => x.g.name).join(' · ')}</span>`;
+  } else if (who < 0) el.innerHTML = `<i>a terrarium</i><span>${world.map((x) => x.g.name).join(' · ')}</span>`;
   else if (kind === 'ride') el.innerHTML = `<i>${world[who].g.name}</i><span>and a nematode, climbing, to be thrown with it</span>`;
   else if (kind === 'stuck') el.innerHTML = `<i>${world[who].g.name}</i><span>and a sporangium, thrown, stuck to it</span>`;
-  else el.innerHTML = `<i>${world[who].g.name}</i><span>${kindOf(world[who].g)} · one of ${world.length} here</span>`;
+  else el.innerHTML = `<i>${world[who].g.name}</i><span>${kindOf(world[who].g)} · one of ${world.filter((x) => x.pat === world[who].pat).length} here</span>`;
 }
 
 // ─── the day ────────────────────────────────────────────────────────────────────────────────────
@@ -1152,9 +1416,12 @@ let playing = true;
 const span = () => (terr ? DAYS * 24 : DAY);
 /** hours a second: a day in under a minute; a terrarium's three weeks in about eight */
 const rate = () => (terr ? (preview ? 4 : 1.05) : DAY / (preview ? 40 : 55));
+/** the field's scrubber: four weeks, two either side of when you came (moving on as time does) */
+const WINDOW = 28 * 24;
+const windowStart = () => tArrive - WINDOW / 2;
 const scrub = document.getElementById('scrub') as HTMLInputElement | null;
 scrub?.addEventListener('input', () => {
-  T = (Number(scrub.value) / 1000) * span();
+  T = pasture ? windowStart() + (Number(scrub.value) / 1000) * WINDOW : (Number(scrub.value) / 1000) * span();
   shot = null;
 });
 
@@ -1171,6 +1438,12 @@ const FOV = 0.55;
 const view = { look: [0, 0, 0] as V3, dist: 30, pitch: 0.36, aperture: 1 };
 const cur = { look: [0, 0, 0] as V3, dist: 30, aperture: 1 };
 function setView() {
+  if (pasture) {
+    view.look = [home.x, 4, home.z];
+    view.dist = 62;
+    groundCentre = [home.x, home.z];
+    return;
+  }
   if (terr) {
     view.look = [0, 4, 0];
     view.dist = 62;
@@ -1238,23 +1511,45 @@ function direct(dt: number) {
       if (lead < 0.4 || lead > 3.5) continue;
       if (only && m.kind !== only) continue;
       // (an emergence is better caught under way than waited for)
-      const sc = -lead * 0.5 + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' || m.kind === 'fire' ? 0.4 : 0) + (m.kind === 'emerge' && lead > 1.5 ? -0.6 : 0) + Math.random() * 0.5;
+      // (in the field: nearer is better — a long way to go for a moment loses it)
+      const far = pasture ? Math.hypot(m.at[0] - cur.look[0], m.at[2] - cur.look[2]) / 90 : 0;
+      const sc = -lead * 0.5 - far + (m.kind === lastKind ? -0.8 : 0) + (m.kind === 'throw' || m.kind === 'fire' ? 0.4 : 0) + (m.kind === 'emerge' && lead > 1.5 ? -0.6 : 0) + Math.random() * 0.5;
       if (sc > score) {
         score = sc;
         best = m;
       }
     }
     // (`?moment`: always a moment, never a breath — for looking at them)
+    // (`?shot=field` or `wide`: only that, for looking at it)
+    const force = params.get('shot');
+    if (force) best = null;
     if (best && (params.has('moment') || Math.random() < 0.85)) {
       shot = { look: best.at, dist: best.size * 2.6 + 3, until: best.T + (best.kind === 'ink' || best.kind === 'stuck' || best.kind === 'graze' || best.kind === 'trap' ? 3 : 1.2), who: best.who, kind: best.kind, follow: best.follow };
       // (an animal: from above, over what's in the way; else low, in among them)
       view.pitch = best.kind === 'graze' || best.kind === 'trap' ? 0.6 + Math.random() * 0.25 : 0.22 + Math.random() * 0.2;
       view.aperture = best.kind === 'graze' ? 0.7 : 1;
       lastKind = best.kind;
+    } else if (pasture && force !== 'wide' && force !== 'field' && (force === 'dew' || Math.random() < 0.35) && dewy() > 0.5 && dewBlade()) {
+      // (at dawn, now and then: the dew on a blade at the pat's edge)
+      const at = dewBlade()!;
+      shot = { look: at, dist: 16 + Math.random() * 8, until: T + 1.5, who: -1, kind: 'dew' };
+      view.pitch = 0.1 + Math.random() * 0.15;
+      view.aperture = 1;
+      lastKind = 'dew';
+    } else if (pasture && force !== 'wide' && (force === 'field' || Math.random() < 0.3)) {
+      // (in the field, now and then: the lie of it — pats in the grass, from up and back)
+      const p = patNear(cur.look);
+      const at: V3 = p ? [p.x, groundY(p.x, p.z) + 6, p.z] : [...cur.look];
+      shot = { look: at, dist: 110 + Math.random() * 50, until: T + 3, who: -1, kind: 'field' };
+      view.pitch = 0.78 + Math.random() * 0.2;
+      view.aperture = 0.15;
+      lastKind = 'field';
     } else {
-      // (nothing coming, or a breath between: what's up now, from a little above)
-      const live = livePlaces();
-      const c: V3 = live.length ? [live.reduce((s, p) => s + p[0], 0) / live.length, 3, live.reduce((s, p) => s + p[2], 0) / live.length] : [0, 2, 0];
+      // (nothing coming, or a breath between: what's up now, from a little above — in the field,
+      // on the pat with most going on near here)
+      const p = pasture ? livelyPat() : null;
+      const live = livePlaces().filter((q) => !p || Math.hypot(q[0] - p.x, q[2] - p.z) < 40);
+      const c: V3 = live.length ? [live.reduce((s, q) => s + q[0], 0) / live.length, 3, live.reduce((s, q) => s + q[2], 0) / live.length] : p ? [p.x, groundY(p.x, p.z) + 2, p.z] : [0, 2, 0];
       const spread = live.length ? Math.max(...live.map((p) => Math.hypot(p[0] - c[0], p[2] - c[2]))) : 18;
       shot = { look: c, dist: Math.min(60, Math.max(22, spread * 2.2 + 12)), until: T + 4, who: -1, kind: 'wide' };
       view.pitch = 0.55 + Math.random() * 0.2;
@@ -1266,6 +1561,45 @@ function direct(dt: number) {
     view.dist = shot.dist;
     label();
   }
+}
+/** How wet the grass is with dew at this hour (0..1). */
+function dewy() {
+  const h = (21 + T) % 24;
+  const ss = (a: number, b: number, x: number) => Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return ss(1.5, 5, h) * (1 - ss(8.5, 10.5, h));
+}
+/** A blade near the pat with most going on, a way up it: for the lens, at dawn. */
+function dewBlade(): V3 | null {
+  const p = livelyPat();
+  if (!p) return null;
+  const b = bladeNear(seed, field, p.x, p.z, 26, Math.floor(T / 6));
+  return b;
+}
+/** The pat nearest a point. */
+function patNear(at: V3 | number[]): Pat | null {
+  let best: Pat | null = null;
+  let d = 1e9;
+  for (const p of pats) {
+    const e = Math.hypot(p.x - at[0], p.z - at[2]);
+    if (e < d && T >= p.drop) {
+      d = e;
+      best = p;
+    }
+  }
+  return best;
+}
+/** The pat to look at between moments: one with its fungi up, near here. */
+function livelyPat(): Pat | null {
+  let best: Pat | null = null;
+  let sc = -1e9;
+  for (const p of pats) {
+    const v = interest(p) - Math.hypot(p.x - cur.look[0], p.z - cur.look[2]) / 120 + Math.hypot(p.x, p.z) / 300;
+    if (v > sc) {
+      sc = v;
+      best = p;
+    }
+  }
+  return best;
 }
 /** Where things are up now (their feet): for a wide shot to frame. */
 function livePlaces(): V3[] {
@@ -1293,24 +1627,43 @@ function travel(dt: number) {
 
 // ─── the ground's map (a terrarium's): mycelium, water, food, dung, interpolated through time ──
 const mapTex = gl.createTexture()!;
-gl.bindTexture(gl.TEXTURE_2D, mapTex);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, GRID, GRID, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.bindTexture(gl.TEXTURE_2D_ARRAY, mapTex);
+gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, GRID, GRID, NP);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
 const mapNow = new Uint8Array(GRID * GRID * 4);
+/** the pats the ground draws (the nearest few), as its uniforms: where, how high, how old; lumps, layer */
+const patU = new Float32Array(NP * 4);
+const lumpU = new Float32Array(NP * 4);
+/** where the ground's mesh is centred (it moves when the camera's gone far enough) */
+let groundCentre: [number, number] = [0, 0];
 function updateMap() {
-  if (!terr) return;
-  const k = Math.max(0, T) / STEP;
-  const i0 = Math.min(terr.ground.length - 1, Math.floor(k));
-  const i1 = Math.min(terr.ground.length - 1, i0 + 1);
-  const f = k - Math.floor(k);
-  const a = terr.ground[i0];
-  const b = terr.ground[i1];
-  for (let i = 0; i < mapNow.length; i++) mapNow[i] = a[i] + (b[i] - a[i]) * f;
-  gl.bindTexture(gl.TEXTURE_2D, mapTex);
-  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, GRID, GRID, gl.RGBA, gl.UNSIGNED_BYTE, mapNow);
+  const near = pats
+    .filter((p) => T - p.drop >= 0 && T - p.drop < PAT_GONE)
+    .sort((a, b) => Math.hypot(a.x - cur.look[0], a.z - cur.look[2]) - Math.hypot(b.x - cur.look[0], b.z - cur.look[2]))
+    .slice(0, NP);
+  patU.fill(0);
+  lumpU.fill(-1);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, mapTex);
+  near.forEach((p, i) => {
+    const age = T - p.drop;
+    patU.set([p.x, p.z, patHeight(age), age / 24], i * 4);
+    lumpU.set([p.terr.lumps[0], p.terr.lumps[1], p.terr.lumps[2], i], i * 4);
+    const gr = p.terr.ground;
+    const k = Math.max(0, age) / STEP;
+    const i0 = Math.min(gr.length - 1, Math.floor(k));
+    const i1 = Math.min(gr.length - 1, i0 + 1);
+    const f = i0 === i1 ? 0 : k - Math.floor(k);
+    const a = gr[i0];
+    const b = gr[i1];
+    for (let j = 0; j < mapNow.length; j++) mapNow[j] = a[j] + (b[j] - a[j]) * f;
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, GRID, GRID, 1, gl.RGBA, gl.UNSIGNED_BYTE, mapNow);
+  });
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+  if (pasture && Math.hypot(cur.look[0] - groundCentre[0], cur.look[2] - groundCentre[1]) > 25) groundCentre = [Math.round(cur.look[0] / 5) * 5, Math.round(cur.look[2] / 5) * 5];
 }
 
 // ─── the frame's things ─────────────────────────────────────────────────────────────────────────
@@ -1388,12 +1741,21 @@ function stains(solid: number[]) {
       const s = state(st, Tq);
       const top = along(st, s, 1);
       const k = Math.min(1, t / 14);
-      const r = st.bell * (0.4 + 0.9 * k) * sp.g.ink;
+      const r = st.bell * (0.25 + 0.45 * k) * sp.g.ink;
       if (r < 0.05) continue;
-      // (drying at its edges over days: browner, then fainter)
+      // (drying over days: browner, smaller, then gone into the dung; a few drops about it)
       const age = Math.max(0, (T - st.tEnd) / 72);
+      if (age > 1.5) continue;
       const y = groundY(top.p[0], top.p[2]);
-      solid.push(top.p[0], y + r * 0.02, top.p[2], r, r * 0.06, r * 0.85, ...mixV(INK, [0.2, 0.15, 0.1], Math.min(0.7, age)), 0);
+      const col = mixV(INK, [0.16, 0.12, 0.08], Math.min(0.8, age));
+      const kk = 1 - Math.max(0, age - 0.8) / 0.7;
+      solid.push(top.p[0], y + r * 0.02, top.p[2], r * kk, r * 0.05, r * 0.8 * kk, ...col, 0);
+      for (let q = 0; q < 3; q++) {
+        const a = st.phase * 5 + q * 2.1;
+        const d = r * (1.1 + 0.4 * q);
+        const rr = r * (0.18 + 0.08 * q) * kk;
+        solid.push(top.p[0] + Math.cos(a) * d, y + rr * 0.05, top.p[2] + Math.sin(a) * d, rr, rr * 0.08, rr, ...col, 0);
+      }
     }
   }
 }
@@ -1497,9 +1859,12 @@ function things() {
   const dew: number[] = [];
   const feet: number[] = [];
   const per: Array<{ sp: Sp; tube: number[]; bell: number[]; jelly: number[]; hair: number[] }> = [];
-  for (const b of bits.beads) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...beadColour, 1);
-  for (const c of bits.crumbs) solid.push(...c.p, ...c.r, ...c.c, 2);
-  for (const p of bits.pools) dew.push(p.p[0], p.p[1] + p.r * 0.12, p.p[2], p.r, p.r * 0.35, p.r, 1, 1, 1, 1);
+  // (the litter near the eye only: far off, it's a few pixels and a lot of spheres)
+  const eye = lastCam?.eye ?? cur.look;
+  const near = (p: V3, r: number) => !pasture || Math.hypot(p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]) < r * 260;
+  for (const b of bits.beads) if (near(b.p, b.r)) solid.push(...b.p, b.r, b.r * b.flat, b.r, ...beadColour, 1);
+  for (const c of bits.crumbs) if (near(c.p, c.r[0])) solid.push(...c.p, ...c.r, ...c.c, 2);
+  for (const p of bits.pools) if (near(p.p, p.r)) dew.push(p.p[0], p.p[1] + p.r * 0.12, p.p[2], p.r, p.r * 0.35, p.r, 1, 1, 1, 1);
   marks(solid);
   for (const sp of world) {
   const g = sp.g;
@@ -1640,6 +2005,7 @@ function things() {
   const lim = limbs();
   if (crit && lastCam) drawCritters(crit, T, time, groundY, lastCam.eye as V3, lim);
   if (lastCam) drawStraw(blades, groundY, lastCam.eye as V3, lim);
+  if (pasture && lastCam) drawGrass(seed, field, cur.look, lastCam.eye as V3, time, (21 + T) % 24, Math.floor(T / 6), lim, dew);
   return { solid, dew, per, feet, lim };
 }
 
@@ -1715,12 +2081,26 @@ function frame(now: number) {
   targets(w, h);
   if (playing) T += dt * rate();
   const end = span();
-  if (T > end + 1.5) {
-    T = 0;
-    shot = null;
+  if (pasture) {
+    // (the field doesn't end: the scrubber's window moves on; the pats in reach come and go)
+    if (T > windowStart() + WINDOW) tArrive += WINDOW / 2;
+    fade = Math.min(1, time / 0.6);
+    if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round(((T - windowStart()) / WINDOW) * 1000));
+    if (time - lastRefresh > 1) {
+      lastRefresh = time;
+      if (refreshPats()) {
+        combine();
+        settle();
+      }
+    }
+  } else {
+    if (T > end + 1.5) {
+      T = 0;
+      shot = null;
+    }
+    fade = Math.min(1, T < 0.6 ? T / 0.6 : T > end + 0.8 ? Math.max(0, (end + 1.5 - T) / 0.7) : 1);
+    if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round((Math.min(T, end) / end) * 1000));
   }
-  fade = Math.min(1, T < 0.6 ? T / 0.6 : T > end + 0.8 ? Math.max(0, (end + 1.5 - T) / 0.7) : 1);
-  if (scrub && document.activeElement !== scrub) scrub.value = String(Math.round((Math.min(T, end) / end) * 1000));
   clock();
   direct(dt);
   travel(dt);
@@ -1770,11 +2150,16 @@ function frame(now: number) {
   gl.uniform1f(u(groundProg, 'uMyc'), g.mycelium * (g.form === 'inkcap' ? 0.6 : 0.3));
   gl.uniform4fv(u(groundProg, 'uFeet'), th.feet);
   gl.uniform4fv(u(groundProg, 'uShade'), shades(th.lim.shade, cam.eye as V3));
-  gl.uniform1f(u(groundProg, 'uHasMap'), terr ? 1 : 0);
   gl.uniform1f(u(groundProg, 'uSpan'), SPAN);
+  gl.uniform1f(u(groundProg, 'uField'), pasture ? 1 : 0);
+  gl.uniform1f(u(groundProg, 'uStudio'), pasture ? 0 : 1);
+  gl.uniform1f(u(groundProg, 'uExt'), pasture ? 5 : 1);
+  gl.uniform2f(u(groundProg, 'uCentre'), groundCentre[0], groundCentre[1]);
+  gl.uniform4fv(u(groundProg, 'uPat'), patU);
+  gl.uniform4fv(u(groundProg, 'uLump'), lumpU);
   gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, mapTex);
-  gl.uniform1i(u(groundProg, 'uMap'), 2);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, mapTex);
+  gl.uniform1i(u(groundProg, 'uMaps'), 2);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(groundVao);
   gl.drawArrays(gl.TRIANGLES, 0, groundCount);
@@ -1799,6 +2184,8 @@ function frame(now: number) {
   drawLimbs(limbHi, lm.starts[0], lm.counts[0]);
   drawLimbs(limbMid, lm.starts[1], lm.counts[1]);
   drawLimbs(limbLo, lm.starts[2], lm.counts[2]);
+  drawLimbs(bladeHiMesh, lm.starts[3], lm.counts[3]);
+  drawLimbs(bladeLoMesh, lm.starts[4], lm.counts[4]);
   // (each species with its own colours and its own scale)
   for (const q of th.per) {
     if (!q.bell.length) continue;
@@ -1841,7 +2228,7 @@ function frame(now: number) {
     draw(hairs, q.hair);
   }
   // the nematodes, clear: seeing through to it too
-  if (lm.counts[3] + lm.counts[4] > 0) {
+  if (lm.counts[5] + lm.counts[6] > 0) {
     common(limbProg);
     gl.uniformMatrix4fv(u(limbProg, 'uView'), false, cam.view);
     gl.uniform2f(u(limbProg, 'uRes'), W, Hh);
@@ -1851,8 +2238,8 @@ function frame(now: number) {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, copyTex);
     gl.uniform1i(u(limbProg, 'uBehind'), 0);
-    drawLimbs(limbHi, lm.starts[3], lm.counts[3]);
-    drawLimbs(limbMid, lm.starts[4], lm.counts[4]);
+    drawLimbs(limbHi, lm.starts[5], lm.counts[5]);
+    drawLimbs(limbMid, lm.starts[6], lm.counts[6]);
   }
   // 3. the droplets, seeing through to all of that
   copyScene();
@@ -1888,7 +2275,7 @@ function frame(now: number) {
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindVertexArray(null);
-  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, limbs: [th.lim.hi, th.lim.mid, th.lim.lo, th.lim.glassHi, th.lim.glassMid].map((x) => x.length / (ROWW * 4)), bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100, camD: Math.round((lastCam?.d ?? 0) * 100) / 100, near: lastCam?.near };
+  (window as unknown as { __fungi: unknown }).__fungi = { seed, form: g.form, name: g.name, T: Math.round(T * 100) / 100, tubes: th.per.reduce((n, q) => n + q.tube.length, 0) / tubes.stride, drops: th.dew.length / drops.stride, solids: th.solid.length / 10, limbs: [th.lim.hi, th.lim.mid, th.lim.lo, th.lim.bladeHi, th.lim.bladeLo, th.lim.glassHi, th.lim.glassMid].map((x) => x.length / (ROWW * 4)), bells: th.per.reduce((n, q) => n + q.bell.length, 0) / bells.stride, day: Math.floor(T / 24) + 1, shot: shot?.kind ?? null, who: shot?.who ?? null, species: world.map((x) => x.g.form), focus: Math.round(focus * 100) / 100, camD: Math.round((lastCam?.d ?? 0) * 100) / 100, near: lastCam?.near };
   requestAnimationFrame(frame);
 }
 function ringAt(t: V3, dir: [number, number], a: number): V3 {
@@ -2033,6 +2420,14 @@ function clock() {
   const hour = (21 + t) % 24;
   const hm = `${String(Math.floor(hour)).padStart(2, '0')}:${String(Math.floor((hour % 1) * 60)).padStart(2, '0')}`;
   // (a terrarium counts its days: the first begins at nine in the evening)
+  if (pasture) {
+    // (the field's: the date and the hour)
+    const d = dateOf(T);
+    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+    const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+    el.textContent = `${day} ${d.getUTCDate()} ${mon} · ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+    return;
+  }
   el.textContent = terr ? `day ${Math.floor((t + 21) / 24) + 1} · ${hm}` : hm;
 }
 
@@ -2049,5 +2444,5 @@ function mul(a: ArrayLike<number>, b: ArrayLike<number>): Float32Array {
 }
 
 grow(seed);
-if (params.get('t')) T = Number(params.get('t'));
+if (params.get('t') && !pasture) T = Number(params.get('t'));
 requestAnimationFrame(frame);

@@ -1,9 +1,54 @@
 # Hat-throwers
 
-A macro timelapse of a terrarium of dung fungi over three weeks, from a seed. Or, with `?one`,
-of a single species' night and morning.
+A macro timelapse of dung fungi out in a pasture, on the real clock. Or, with `?terrarium`, one
+pat on its own over its three weeks from the start; or, with `?one`, a single species' night and
+morning.
 
-## The terrarium
+## The field
+
+Time doesn't start from zero. The field's hour is the real one: come in the evening and it's
+evening there, on today's date. The camera comes down into a pasture where pats lie at every
+age (`client/fungi/pasture.ts`):
+
+- one dropped last night, wet and dark;
+- one a week in, its cups firing;
+- one at three weeks, its inkcaps inking;
+- old ones, crusted and cracked, the grass coming back over them.
+
+Cows keep coming. The field is tiled, and each tile has a few spots where, each on a cycle of
+its own (two to three months), a pat is dropped, always at nine in the evening. So which pat is
+where, and how old, follows from the field's seed and the hour alone. It's the same field for
+anyone looking at the same moment, and nothing has to have been simulated before it. Each pat
+near the camera is a terrarium (below), simulated from its own seed when it comes into reach
+and moved into place and time. Each stands as a mound for its three weeks, then dries, flattens
+and goes back to grass over the next five. All the pats lean their fungi to the field's one sun.
+
+**The grass** (`client/fungi/grass.ts`) is, at this scale, a forest:
+- **The grazed sward** is a few centimetres high, its blades bitten off, the tips torn square and
+  browning.
+- **Rank grass:** cattle won't graze near their own dung, so round each pat the grass grows on,
+  rank and darker. Its blades are up to 17 cm long, arching over and leaning in.
+- **Under a pat** the grass is smothered; on an old pat it comes back through.
+- **Thatch:** last year's leaves lie bleached between the blades.
+- **Dew:** from the small hours to mid-morning the blades bead with it, a heavy drop hanging at
+  each tip.
+
+Every blade comes from the field's seed and its place, so the grass is the same wherever you
+look from. It's drawn only near the camera, finer nearer, and never between the camera and what
+it's looking at.
+
+**The director** works across the field. It prefers moments near where it is: a long way to go
+for a moment loses it. Between moments it looks at the pat with most going on nearby. Now and
+then it takes two other shots:
+- **The lie of the field:** pats in their clearings in the grass, from up and back.
+- **Dew at dawn:** a blade at a pat's edge.
+
+The caption names the pat's age. The clock shows the field's date and hour. The scrubber covers
+four weeks, two either side of when you came, and moves on as time does. `another` gives
+another field. `?hour=6.5` starts at the last time it was that hour; `?age=40` starts at the
+pat nearest that many days old.
+
+## A pat (the terrarium)
 
 On dung the fungi come in an order. It's a succession, and a real one:
 
@@ -85,7 +130,8 @@ back above whatever is up, stopped down so more is sharp. The caption names the 
 on, or the terrarium's cast. Touch the view and the director waits; tap to pull focus.
 
 The light runs on a full day too: night, a warm dawn from five, day, a warm evening, night by
-nine. Three weeks take about eight minutes; the clock counts the days.
+nine. Three weeks take about eight minutes. In the field the clock shows the date; in a terrarium
+it counts the days.
 
 ## The kinds
 
@@ -170,6 +216,14 @@ jelly is lit from inside, and the depth of field is a few millimetres.
      milky, with the gut and the pharynx's bulb inside and light caught along their edges.
    - **The inkcaps' veil:** woolly white patches and fibrils over a greyer cap, thick on the
      egg, pulled apart as it opens.
+   - **The pats** are mounds in the ground, in both the ground's vertex shader and the page's sums
+     (so what stands on them stands on them). Their outline is the same lumpy round as their
+     dung, and each pat's map is a layer of a texture array. Old, the ground crusts: greyer,
+     cracked, then the field's floor coming back over it. Between pats lies the field's floor:
+     dead leaf, roots, soil, green in it. The ground's mesh follows the camera.
+   - **Grass blades** are limbs too: flat ribbons whose width keeps across their bend, however
+     far over they bend. Each has a keel and veins, is paler at the sheath, and has a waxy sheen;
+     the light through it is green-gold. Grazed tips are torn and browning.
    - **A thrower's trophocyst:** the swollen orange-yellow foot it grows from, half in the dung.
    - **The far distance:** a haze, warm toward the top, with soft discs of far-off light that
      drift a little as the view turns. It's always behind everything, so always at full blur.
