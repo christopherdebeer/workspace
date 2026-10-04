@@ -78,15 +78,16 @@ function matsUtility(board, at, goals, me, pub) {
   if (pub) for (let o = 0; o < goals.length; o++) if (o !== me) v -= reach(board, at, goals[o]) / (goals.length - 1);
   return v;
 }
-function playMats(seed, strats, { commission = true, pub = false, target = 2 } = {}) {
+function playMats(seed, strats, { commission = true, pub = false, target = 2, steps = 2, start = 0, suits = 1 } = {}) {
   const P = strats.length; const r = rng(seed);
   const pile = Array.from({ length: 40 }, (_, i) => i % 8); for (let i = 39; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pile[i], pile[j]] = [pile[j], pile[i]]; }
-  const board = [4, 0, 5, 1]; let token = 0;
+  const board = [4, 0, 5, 1]; let token = start < 0 ? Math.floor(r() * 4) : start;
   const hands = strats.map(() => pile.splice(0, 3)); const score = strats.map(() => 0);
   // a commission: X then Y (X ≠ Y); or the suit you own (player p owns suit p)
-  const draw = (p) => { if (!commission) return [p, p]; const x = Math.floor(r() * 4); let y = Math.floor(r() * 3); if (y >= x) y++; return [x, y]; };
+  // (owning: suit p, or with `suits` 2 each at 2 players, p and p+2 — opposite mats)
+  const draw = (p) => { if (!commission) return suits === 2 ? [p, p + 2] : [p, p]; const c = [Math.floor(r() * 4)]; while (c.length < steps) { const y = Math.floor(r() * 4); if (y !== c[c.length - 1]) c.push(y); } return c; };
   const com = strats.map((_, p) => draw(p)); const step = strats.map(() => 0);
-  const goals = () => com.map((c, p) => c[step[p]]);
+  const goals = () => com.map((c, p) => (commission ? c[step[p]] : c[0]));
   for (let turn = 0; turn < CAP; turn++) {
     const p = turn % P; const s = strats[p]; const g = goals();
     let best = null;
@@ -98,8 +99,8 @@ function playMats(seed, strats, { commission = true, pub = false, target = 2 } =
     const pr = row(board[token], token); let x = r(), d = 3; for (let k = 0; k < 4; k++) { x -= pr[k]; if (x < 0) { d = k; break; } }
     const arrived = d !== token; token = d;
     if (arrived) for (let q = 0; q < P; q++) {
-      if (com[q][step[q]] !== token) continue;
-      if (commission) { step[q]++; if (step[q] === 2) { score[q]++; step[q] = 0; com[q] = draw(q); } } else score[q]++;
+      if (commission ? com[q][step[q]] !== token : !com[q].includes(token)) continue;
+      if (commission) { step[q]++; if (step[q] === steps) { score[q]++; step[q] = 0; com[q] = draw(q); } } else score[q]++;
       if (score[q] >= target) return { winner: q, rolls: turn + 1, stalls: 0 };
     }
   }
@@ -119,14 +120,32 @@ function run(name, play, strats, opts) {
 const G = (n, s, o) => run(n, playGrid, s, o);
 const M = (n, s, o) => run(n, playMats, s, o);
 console.log(`${N} games per line · draw = hit the ${CAP}-roll cap · fair = what each player would win if equal · rolls = median of decided games\n`);
+if (!process.env.ROUND2) {
 console.log('GRID (the other agent\'s race)');
 G('as shipped, 2 corners', ['greedy', 'greedy']); G('  skill: greedy v random', ['greedy', 'random']); G('  skill: random v greedy', ['random', 'greedy']);
 G('bounce (no stalls), 2', ['greedy', 'greedy'], { bounce: true }); G('  skill', ['greedy', 'random'], { bounce: true });
 G('4 corners, 3 players', ['greedy', 'greedy', 'greedy']); G('4 corners, 4 players', ['greedy', 'greedy', 'greedy', 'greedy']); G('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy']);
 G('4 corners + bounce, 4', ['greedy', 'greedy', 'greedy', 'greedy'], { bounce: true });
+}
+if (!process.env.ROUND2) {
 console.log('\nMATS (the four-mat Commission)');
 M('secret commissions, 2', ['greedy', 'greedy']); M('  skill', ['greedy', 'random']); M('  skill (random first)', ['random', 'greedy']);
 M('secret commissions, 4', ['greedy', 'greedy', 'greedy', 'greedy']); M('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy']);
 M('public commissions, 2', ['greedy', 'greedy'], { pub: true }); M('public commissions, 4', ['greedy', 'greedy', 'greedy', 'greedy'], { pub: true });
 M('suits pay (own a suit), 2', ['greedy', 'greedy'], { commission: false, target: 3 }); M('suits pay, 4', ['greedy', 'greedy', 'greedy', 'greedy'], { commission: false, target: 3 }); M('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy'], { commission: false, target: 3 });
 M('secret, 4, first to 1', ['greedy', 'greedy', 'greedy', 'greedy'], { target: 1 });
+}
+
+if (process.env.ROUND2) {
+  console.log('\nMATS round 2');
+  M('suits pay, 2, random start', ['greedy', 'greedy'], { commission: false, target: 3, start: -1 });
+  M('suits pay, 2, two suits each', ['greedy', 'greedy'], { commission: false, target: 3, suits: 2, start: -1 });
+  M('  skill', ['greedy', 'random'], { commission: false, target: 3, suits: 2, start: -1 });
+  M('suits pay, 4, random start', ['greedy', 'greedy', 'greedy', 'greedy'], { commission: false, target: 3, start: -1 });
+  M('  skill (one random)', ['random', 'greedy', 'greedy', 'greedy'], { commission: false, target: 3, start: -1 });
+  M('suits pay, 3, random start', ['greedy', 'greedy', 'greedy'], { commission: false, target: 3, start: -1 });
+  M('secret 3-step commissions, 2', ['greedy', 'greedy'], { steps: 3, target: 1 });
+  M('  skill', ['greedy', 'random'], { steps: 3, target: 1 });
+  M('secret 3-step, 4', ['greedy', 'greedy', 'greedy', 'greedy'], { steps: 3, target: 1 });
+  M('  skill (one random)', ['random', 'greedy', 'greedy', 'greedy'], { steps: 3, target: 1 });
+}
