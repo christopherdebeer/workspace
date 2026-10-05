@@ -54,23 +54,49 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
   const ink = card.rank === JOKER ? '#24231f' : INK[card.suit];
   const cx = 31.5, cy = ASSETS ? 31.5 : 42, R = ASSETS ? 16 : 20;
   let mid = '';
-  const hair = (d: string, w = 0.3, extra = '') => `<path d="${d}" fill="none" stroke="${ink}" stroke-width="${w}" stroke-linecap="round" ${extra}/>`;
-  /** a rod from the node out to the station in direction d (0 north … 3 west), with its head */
+  const hair = (d: string, w = 0.3, extra = '') => `<path d="${d}" fill="none" stroke="${ink}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" ${extra}/>`;
+  /** a rod from the hub out to the station in direction d (0 north … 3 west): a tapered engraved
+   *  shaft with a shade line, and an open head */
   const rod = (d: number, dashed = false) => {
     const ux = [0, 1, 0, -1][d], uy = [-1, 0, 1, 0][d], px = -uy, py = ux;
-    const a = 5, b = R - 3.2;
-    let out = hair(`M${cx + ux * a} ${cy + uy * a}L${cx + ux * b} ${cy + uy * b}`, 0.6, dashed ? 'stroke-dasharray="1.4 .9"' : '');
-    const tx = cx + ux * (b + 0.6), ty = cy + uy * (b + 0.6);
-    out += hair(`M${tx - ux * 2.6 + px * 1.7} ${ty - uy * 2.6 + py * 1.7}L${tx} ${ty}L${tx - ux * 2.6 - px * 1.7} ${ty - uy * 2.6 - py * 1.7}`, 0.6);
+    const a = 5.2, b = R - 3.4;
+    const P = (t: number, o: number) => `${(cx + ux * t + px * o).toFixed(2)} ${(cy + uy * t + py * o).toFixed(2)}`;
+    let out = '';
+    if (dashed) out += hair(`M${P(a, 0)}L${P(b, 0)}`, 0.55, 'stroke-dasharray="1.3 .9"');
+    else {
+      // (the shaft, drawn as a sliver: wide at the hub, a point at the head)
+      out += `<path d="M${P(a, 0.42)}L${P(b - 0.4, 0.08)}L${P(b - 0.4, -0.08)}L${P(a, -0.42)}Z" fill="${ink}"/>`;
+      // (the engraver's shade line beside it)
+      out += hair(`M${P(a + 0.6, 0.95)}L${P(b - 2.2, 0.5)}`, 0.14);
+    }
+    out += hair(`M${P(b - 2.3, 1.75)}L${P(b + 0.5, 0)}L${P(b - 2.3, -1.75)}`, 0.6);
     return out;
   };
+  /** a station on the orbit: a compass mark — a ring with four ticks; live ones carry a dot */
   const station = (d: number, live: boolean) => {
     const x = cx + [0, R, 0, -R][d], y = cy + [-R, 0, R, 0][d];
-    return `<circle cx="${x}" cy="${y}" r="1.7" fill="${PAPER}" stroke="${ink}" stroke-width="${live ? 0.4 : 0.2}" ${live ? '' : 'opacity=".6"'}/>${live ? `<circle cx="${x}" cy="${y}" r=".6" fill="${ink}"/>` : ''}`;
+    const ticks = [0, 90, 180, 270].map((a) => { const r = (a * Math.PI) / 180; return hair(`M${x + Math.cos(r) * 1.9} ${y + Math.sin(r) * 1.9}L${x + Math.cos(r) * 2.7} ${y + Math.sin(r) * 2.7}`, live ? 0.28 : 0.16); }).join('');
+    return `<circle cx="${x}" cy="${y}" r="1.8" fill="${PAPER}" stroke="${ink}" stroke-width="${live ? 0.42 : 0.2}" ${live ? '' : 'opacity=".55"'}/>${live ? `<circle cx="${x}" cy="${y}" r=".62" fill="${ink}"/>` : ''}<g ${live ? '' : 'opacity=".55"'}>${ticks}</g>`;
   };
-  const node = `<circle cx="${cx}" cy="${cy}" r="4.6" fill="${PAPER}" stroke="${ink}" stroke-width=".5"/><circle cx="${cx}" cy="${cy}" r="3.1" fill="none" stroke="${ink}" stroke-width=".22"/>${Array.from({ length: 18 }, (_, k) => { const a = (k * 20 * Math.PI) / 180; return hair(`M${cx + Math.cos(a) * 3.3} ${cy + Math.sin(a) * 3.3}L${cx + Math.cos(a) * 4.3} ${cy + Math.sin(a) * 4.3}`, 0.16); }).join('')}<circle cx="${cx}" cy="${cy}" r=".8" fill="${ink}"/>`;
-  const orbit = `<circle cx="${cx}" cy="${cy}" r="${R + 3}" fill="none" stroke="${ink}" stroke-width=".22" stroke-dasharray=".5 1.1"/><circle cx="${cx}" cy="${cy}" r="${R + 4.6}" fill="none" stroke="${ink}" stroke-width=".12" opacity=".7"/>${[45, 135, 225, 315].map((a) => `<circle cx="${cx + Math.cos((a * Math.PI) / 180) * (R + 3)}" cy="${cy + Math.sin((a * Math.PI) / 180) * (R + 3)}" r=".45" fill="${ink}"/>`).join('')}`;
+  /** the hub: two rings, the six faces as pips round the inner one, a dot */
+  const node = `<circle cx="${cx}" cy="${cy}" r="4.7" fill="${PAPER}" stroke="${ink}" stroke-width=".5"/><circle cx="${cx}" cy="${cy}" r="3.4" fill="none" stroke="${ink}" stroke-width=".2"/>${Array.from({ length: 24 }, (_, k) => { const a = (k * 15 * Math.PI) / 180; const l = k % 6 === 0 ? 1.1 : 0.55; return hair(`M${cx + Math.cos(a) * 3.5} ${cy + Math.sin(a) * 3.5}L${cx + Math.cos(a) * (3.5 + l)} ${cy + Math.sin(a) * (3.5 + l)}`, k % 6 === 0 ? 0.26 : 0.14); }).join('')}${Array.from({ length: 6 }, (_, k) => { const a = ((k * 60 - 90) * Math.PI) / 180; return `<circle cx="${cx + Math.cos(a) * 2.2}" cy="${cy + Math.sin(a) * 2.2}" r=".38" fill="${ink}"/>`; }).join('')}<circle cx="${cx}" cy="${cy}" r=".7" fill="${ink}"/>`;
+  /** the orbit: a dial — a dotted ring, a hairline outside it, a tick every 10°, longer at 30°,
+   *  and a mark at the four half-way points */
+  const orbit = (() => {
+    const r1 = R + 3, r2 = R + 4.8;
+    let o = `<circle cx="${cx}" cy="${cy}" r="${r1}" fill="none" stroke="${ink}" stroke-width=".22" stroke-dasharray=".45 1.05"/><circle cx="${cx}" cy="${cy}" r="${r2}" fill="none" stroke="${ink}" stroke-width=".12"/>`;
+    for (let k = 0; k < 36; k++) {
+      if (k % 9 === 0) continue; // (the stations sit there)
+      const a = (k * 10 * Math.PI) / 180, l = k % 3 === 0 ? 1.1 : 0.55;
+      o += hair(`M${cx + Math.cos(a) * r1} ${cy + Math.sin(a) * r1}L${cx + Math.cos(a) * (r1 + l)} ${cy + Math.sin(a) * (r1 + l)}`, k % 3 === 0 ? 0.2 : 0.12);
+    }
+    o += [45, 135, 225, 315].map((a) => `<circle cx="${cx + Math.cos((a * Math.PI) / 180) * r1}" cy="${cy + Math.sin((a * Math.PI) / 180) * r1}" r=".5" fill="${ink}"/>`).join('');
+    return o;
+  })();
   const fig = (x: number, y: number, t: string, anchor = 'middle') => `<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="4.4" font-family="Georgia,serif" fill="${ink}">${t}</text>`;
+  /** the stays: an eddy — a curl out of the hub's west side and back, engraved as a dashed
+   *  hairline over a faint solid one, with its own head */
+  const eddy = `${hair(`M${cx - 4.4} ${cy - 2.6}C${cx - R - 1.5} ${cy - R + 2.5} ${cx - R - 1.5} ${cy + 12.5} ${cx - 5.4} ${cy + 3.2}`, 0.2, 'opacity=".45"')}${hair(`M${cx - 4.4} ${cy - 2.6}C${cx - R - 1.5} ${cy - R + 2.5} ${cx - R - 1.5} ${cy + 12.5} ${cx - 5.4} ${cy + 3.2}`, 0.55, 'stroke-dasharray="1.3 1"')}${hair(`M${cx - 7.9} ${cy + 1.6}L${cx - 5.4} ${cy + 3.2}L${cx - 8.2} ${cy + 3.9}`, 0.6)}`;
   if (card.rank === KING) mid = `${orbit}<circle cx="${cx}" cy="${cy}" r="13" fill="none" stroke="${ink}" stroke-width=".4"/><circle cx="${cx}" cy="${cy}" r="10" fill="${ink}"/><text x="${cx}" y="${cy + 4.6}" text-anchor="middle" fill="${PAPER}" font-size="13">${suit}</text>`;
   else if (card.rank === JACK) mid = `${orbit}${hair(`M${cx - 15} ${cy + 4}Q${cx} ${cy - 20} ${cx + 15} ${cy + 4}`, 0.55, 'stroke-dasharray="1.6 1.1"')}${hair(`M${cx - 15} ${cy + 6}H${cx + 13}`, 0.55)}${station(3, true)}${station(1, true)}`;
   else if (card.rank === QUEEN) mid = `${orbit}${hair(`M${cx - 12} ${cy - 10}L${cx + 10} ${cy + 8}M${cx + 12} ${cy - 10}L${cx - 10} ${cy + 8}`, 0.55)}${[[-13, -11], [13, -11], [-13, 11], [13, 11]].map(([x, y]) => `<circle cx="${cx + x}" cy="${cy + y}" r="2.4" fill="${PAPER}" stroke="${ink}" stroke-width=".4"/>`).join('')}`;
@@ -89,7 +115,7 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
     if (rg.has(1)) mid += fig(cx + F - 1, cy - 2.4, rg.get(1)!, 'middle');
     if (rg.has(2)) mid += fig(cx + 3.2, cy + F + 3.4, rg.get(2)!, 'start');
     if (rg.has(3)) mid += fig(cx - F + 1, cy - 2.4, rg.get(3)!, 'middle');
-    if (rg.has(-1)) mid += hair(`M${cx - 4.2} ${cy - 3}C${cx - R - 2} ${cy - R + 1} ${cx - R - 2} ${cy + 13} ${cx - 5.2} ${cy + 3.2}`, 0.55, 'stroke-dasharray="1.4 1"') + hair(`M${cx - 7.6} ${cy + 1.4}L${cx - 5.2} ${cy + 3.2}L${cx - 8} ${cy + 3.8}`, 0.6) + fig(cx - R + 5.5, cy + 9.4, rg.get(-1)!, 'middle');
+    if (rg.has(-1)) mid += eddy + fig(cx - R + 5.5, cy + 9.6, rg.get(-1)!, 'middle');
     mid += node;
   }
   const under = card.rank >= 2 && card.rank <= 10 ? TEMPER[card.suit].toUpperCase() : '';
@@ -98,7 +124,8 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
     // the junction above, the suit's riverbank in fine ink across the lower third, the name on a rule
     const img = (f: string, x: number, y: number, w: number, h: number, extra = '') => `<image href="${ASSETS}${f}" x="${x}" y="${y}" width="${w}" height="${h}" ${extra}/>`;
     const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x + 2.6} ${y - 2.6})"` : ''}><text x="${x}" y="${y}" font-size="9.5" font-family="Georgia,serif" fill="${ink}">${rank}</text>${img(`${sk}-glyph.png`, x - 0.1, y + 1.4, 5.4, 5.2, 'preserveAspectRatio="xMidYMid meet"')}</g>`;
-    const flourish = [[3.2, 3.2, 0], [59.8, 3.2, 90], [59.8, 84.8, 180], [3.2, 84.8, 270]].map(([x, y, a]) => `<g transform="translate(${x} ${y}) rotate(${a})">${img(`${sk}-cornerS.png`, 0, 0, 6.5, 7.4, 'opacity=".85"')}</g>`).join('');
+    // (the flourish is drawn for a bottom-left corner: its corner at the origin, reaching up and right)
+    const flourish = [[3.2, 84.8, 0], [3.2, 3.2, 90], [59.8, 3.2, 180], [59.8, 84.8, 270]].map(([x, y, a]) => `<g transform="translate(${x} ${y}) rotate(${a})">${img(`${sk}-cornerS.png`, 0, -7.4, 6.5, 7.4, 'opacity=".85"')}</g>`).join('');
     const name = card.rank === ACE ? 'THE WILD' : role;
     return `${open}<defs>${arrow}</defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/><rect x="1.8" y="1.8" width="59.4" height="84.4" rx="3.2" fill="none" stroke="${ink}" stroke-width=".45"/><rect x="2.9" y="2.9" width="57.2" height="82.2" rx="2.6" fill="none" stroke="${ink}" stroke-width=".2"/>${flourish}${corner(5, 12.5, false)}${corner(58, 76.5, true)}${mid}${img(`${sk}-bank.png`, 3.2, 53, 56.6, 17.5, 'preserveAspectRatio="xMidYMax slice"')}<path d="M13 72.2H50" stroke="${ink}" stroke-width=".25"/><text x="31.5" y="76.6" text-anchor="middle" font-size="4.6" font-family="Georgia,serif" letter-spacing="1" fill="#2a2420">${name}</text><path d="M13 78.3H50" stroke="${ink}" stroke-width=".25"/><text x="31.5" y="81.6" text-anchor="middle" font-size="2.3" font-family="Georgia,serif" letter-spacing=".35" fill="${ink}">${note.toUpperCase().replace(/\.$/, '')}</text></g></svg>`;
   }
