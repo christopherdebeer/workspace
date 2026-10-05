@@ -10,19 +10,35 @@ Every card has a job on the table (`client/markovs/deck.ts`):
 
 | cards | job |
 |---|---|
-| **2–10**, four suits | nine junction designs, four of each. A junction's six die faces each name an exit (north, east, south, west) or a stay; the faces turn with the card. |
+| **2–10**, four suits | thirty-six junctions, every one different. The rank is the shape, the suit its temperament. A junction's six die faces each name an exit (north, east, south, west) or a stay; the faces turn with the card. |
 | **Kings** | the four destinations, one a suit, laid at the middle of each edge |
 | **Aces** | wild junctions: a cross, laid anywhere. The Ace of spades is START, in the centre |
 | **Jacks** | reroute: instead of rolling, walk the counter one step your way |
 | **Queens** | swap: exchange two junctions on the table |
 | **Jokers** | chaos: instead of rolling, the counter takes one of its card's exits at random |
 
-The nine junctions, as printed (face: exit): **2 STRAIGHT** 1–3 up, 4–6 down · **3 HOOK** 1–4
-up, 5–6 right · **4 CROSS** 1 up, 2–3 right, 4 down, 5–6 left · **5 SPLIT** 1–2 up, 3–4 down,
-5–6 stay · **6 ELBOW** 1–3 up, 4–6 right · **7 LOOP** 1–4 stay, 5–6 up · **8 BRIDGE** 1–4 up,
-5–6 down · **9 FORK** 1–2 up, 3–4 right, 5–6 left · **10 T** 1–3 up, 4–5 right, 6 left. No two
-are the same design turned. The suit on a junction is for the poker player; the game doesn't
-read it (yet).
+**The temperaments:** ♥ *the current* leans one way (four faces on its main exit); ♦ *the mirror*
+is even-handed; ♣ *the thicket* grows one more branch than the shape has; ♠ *the well* holds a
+while (three or four faces stay). **The shapes**, by rank, with each suit's faces as
+up / right / down / left / stay:
+
+| rank | shape | ♥ current | ♦ mirror | ♣ thicket | ♠ well |
+|---|---|---|---|---|---|
+| 2 | THROUGH | ↑4 ↓2 | ↑3 ↓3 | ↑3 →1 ↓2 | ↑2 ↓1 ·3 |
+| 3 | TURN | ↑4 →2 | ↑3 →3 | ↑3 →2 ←1 | ↑2 →1 ·3 |
+| 4 | TEE | ↑4 →1 ←1 | ↑2 →2 ←2 | ↑2 →2 ↓1 ←1 | ↑1 →1 ←1 ·3 |
+| 5 | CROSS | ↑3 →1 ↓1 ←1 | ↑2 →1 ↓2 ←1 | ↑2 →1 ↓1 ←1 ·1 | ↑1 →1 ↓1 ←1 ·2 |
+| 6 | EDDY | ↑5 ·1 | ↑3 ·3 | ↑3 →1 ·2 | ↑2 ·4 |
+| 7 | SWITCH | ↑4 →1 ·1 | ↑2 →2 ·2 | ↑2 →2 ←1 ·1 | ↑1 →1 ·4 |
+| 8 | WEIR | ↑4 ↓1 ·1 | ↑2 ↓2 ·2 | ↑2 →1 ↓2 ·1 | ↑1 ↓1 ·4 |
+| 9 | FORK | ↑3 →1 ←1 ·1 | ↑2 →1 ←1 ·2 | ↑1 →3 ←1 ·1 | ↑1 →2 ←1 ·2 |
+| 10 | BACKTURN | ↑2 →4 | ↑3 ←2 ·1 | ↑2 →1 ←3 | ↑2 ←1 ·3 |
+
+No two are the same card turned (the test checks all thirty-six). Nobody memorises them: the
+faces are printed, and read off the card under the counter at the moment of the roll. What the
+thirty-six buy is depth in planning — what might still come out of the pile — and a table
+whose character you can read from across the room: a line of hearts is a chute, a corner of
+spades a bog.
 
 ## The rules
 

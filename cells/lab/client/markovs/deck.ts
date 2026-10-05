@@ -2,9 +2,10 @@
  * Markovs Chains on a standard poker deck.
  *
  * Fifty-two cards and two jokers, every one with a job on the table:
- * - **2–10, four suits:** nine junction designs, four of each. A junction's six die faces each
- *   name an exit (north, east, south, west) or a stay; the faces turn with the card. The suit on
- *   a junction is for the poker player; the game doesn't read it (yet).
+ * - **2–10, four suits:** thirty-six junctions. The rank is the shape (through, a turn, a tee…)
+ *   and the suit its temperament: hearts lean one way, diamonds are even-handed, clubs grow one
+ *   more branch, spades hold a while. A junction's six die faces each name an exit (north,
+ *   east, south, west) or a stay; the faces turn with the card.
  * - **Kings:** the four destinations, one a suit, laid at the middle of each edge of a 5×5 table.
  * - **Aces:** wild junctions — a cross that can be laid anywhere, touching the chain or not. One
  *   Ace is START, in the middle.
@@ -26,25 +27,29 @@ export const SUITS = ['♥', '♦', '♣', '♠'];
 export const SUIT_NAMES = ['hearts', 'diamonds', 'clubs', 'spades'];
 export const SIZE = 5;
 
-export interface Design {
-  rank: number;
-  name: string;
-  /** die faces 1..6: an exit (0 N, 1 E, 2 S, 3 W, before rotation) or -1 to stay */
-  faces: number[];
-  note: string;
+/** The four temperaments: how a suit spreads its six faces over a shape. */
+export const TEMPER = ['the current', 'the mirror', 'the thicket', 'the well'];
+export const TEMPER_NOTE = ['leans one way', 'even-handed', 'one more branch', 'holds a while'];
+/** The nine shapes, by rank; for each, the four suits' weights over [north, east, south, west,
+ *  stay]. Thirty-six junctions, no two the same under rotation (the test checks). */
+export const SHAPES: Record<number, { name: string; note: string; faces: number[][] }> = {
+  2: { name: 'THROUGH', note: 'Through, on or back.', faces: [[4, 0, 2, 0, 0], [3, 0, 3, 0, 0], [3, 1, 2, 0, 0], [2, 0, 1, 0, 3]] },
+  3: { name: 'TURN', note: 'A turn to the right.', faces: [[4, 2, 0, 0, 0], [3, 3, 0, 0, 0], [3, 2, 0, 1, 0], [2, 1, 0, 0, 3]] },
+  4: { name: 'TEE', note: 'On, left or right.', faces: [[4, 1, 0, 1, 0], [2, 2, 0, 2, 0], [2, 2, 1, 1, 0], [1, 1, 0, 1, 3]] },
+  5: { name: 'CROSS', note: 'Four ways from here.', faces: [[3, 1, 1, 1, 0], [2, 1, 2, 1, 0], [2, 1, 1, 1, 1], [1, 1, 1, 1, 2]] },
+  6: { name: 'EDDY', note: 'On, or held a while.', faces: [[5, 0, 0, 0, 1], [3, 0, 0, 0, 3], [3, 1, 0, 0, 2], [2, 0, 0, 0, 4]] },
+  7: { name: 'SWITCH', note: 'On, right, or held.', faces: [[4, 1, 0, 0, 1], [2, 2, 0, 0, 2], [2, 2, 0, 1, 1], [1, 1, 0, 0, 4]] },
+  8: { name: 'WEIR', note: 'On, back, or held.', faces: [[4, 0, 1, 0, 1], [2, 0, 2, 0, 2], [2, 1, 2, 0, 1], [1, 0, 1, 0, 4]] },
+  9: { name: 'FORK', note: 'Three ways, or a pause.', faces: [[3, 1, 0, 1, 1], [2, 1, 0, 1, 2], [1, 3, 0, 1, 1], [1, 2, 0, 1, 2]] },
+  10: { name: 'BACKTURN', note: 'A turn, leaning in.', faces: [[2, 4, 0, 0, 0], [3, 0, 0, 2, 1], [2, 1, 0, 3, 0], [2, 0, 0, 1, 3]] },
+};
+/** a junction's six die faces (an exit 0..3, or -1 to stay), before turning */
+export function facesOf(card: Card): number[] {
+  const w = card.rank === ACE ? [1, 2, 1, 2, 0] : SHAPES[card.rank].faces[card.suit];
+  const out: number[] = [];
+  for (let d = 0; d < 5; d++) for (let i = 0; i < w[d]; i++) out.push(d === 4 ? -1 : d);
+  return out;
 }
-/** the nine junctions; no two the same under rotation */
-export const DESIGNS: Design[] = [
-  { rank: 2, name: 'STRAIGHT', faces: [0, 0, 0, 2, 2, 2], note: 'Through, either way.' },
-  { rank: 3, name: 'HOOK', faces: [0, 0, 0, 0, 1, 1], note: 'Mostly on; sometimes a turn.' },
-  { rank: 4, name: 'CROSS', faces: [0, 1, 1, 2, 3, 3], note: 'Four ways from here.' },
-  { rank: 5, name: 'SPLIT', faces: [0, 0, 2, 2, -1, -1], note: 'Through, or held.' },
-  { rank: 6, name: 'ELBOW', faces: [0, 0, 0, 1, 1, 1], note: 'A right-angle turn.' },
-  { rank: 7, name: 'LOOP', faces: [-1, -1, -1, -1, 0, 0], note: 'Stay, or move on.' },
-  { rank: 8, name: 'BRIDGE', faces: [0, 0, 0, 0, 2, 2], note: 'Through, leaning one way.' },
-  { rank: 9, name: 'FORK', faces: [0, 0, 1, 1, 3, 3], note: 'One in, three out.' },
-  { rank: 10, name: 'T', faces: [0, 0, 0, 1, 1, 3], note: 'Three directions, one favoured.' },
-];
 export const ACE = 1;
 export const JACK = 11;
 export const QUEEN = 12;
@@ -57,7 +62,7 @@ export interface Card {
   rank: number;
 }
 export const cardName = (c: Card) => (c.rank === JOKER ? 'Joker' : `${['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][c.rank]}${SUITS[c.suit]}`);
-export const roleOf = (c: Card) => (c.rank === JOKER ? 'CHAOS' : c.rank === ACE ? 'WILD' : c.rank === JACK ? 'REROUTE' : c.rank === QUEEN ? 'SWAP' : c.rank === KING ? 'DESTINATION' : DESIGNS[c.rank - 2].name);
+export const roleOf = (c: Card) => (c.rank === JOKER ? 'CHAOS' : c.rank === ACE ? 'WILD' : c.rank === JACK ? 'REROUTE' : c.rank === QUEEN ? 'SWAP' : c.rank === KING ? 'DESTINATION' : SHAPES[c.rank].name);
 /** a fresh pack: 52 and two jokers */
 export function pack(): Card[] {
   const out: Card[] = [];
@@ -86,8 +91,7 @@ export const isKing = (t: Tile | undefined) => !!t && t.card.rank === KING;
 /** a junction's six exits as laid (turned); an ace is a cross */
 export function exits(t: Tile): number[] {
   if (t.card.rank === KING) return [-1, -1, -1, -1, -1, -1];
-  const faces = t.card.rank === ACE ? DESIGNS[2].faces : DESIGNS[t.card.rank - 2].faces;
-  return faces.map((d) => (d < 0 ? -1 : (d + t.rotation) % 4));
+  return facesOf(t.card).map((d) => (d < 0 ? -1 : (d + t.rotation) % 4));
 }
 /** the Kings' places: the middle of each edge, hearts north then clockwise */
 export const KING_AT = [key(2, 0), key(4, 2), key(2, 4), key(0, 2)];

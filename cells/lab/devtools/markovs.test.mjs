@@ -10,11 +10,14 @@ const T = await load('table.ts');
 assert.equal(D.pack().length, 54);
 assert.equal(D.pack().filter((c) => c.rank === D.KING).length, 4);
 const canon = (faces) => { let best = null; for (let rot = 0; rot < 4; rot++) { const s = faces.map((d) => (d < 0 ? 'x' : (d + rot) % 4)).join(''); if (!best || s < best) best = s; } return best; };
-assert.equal(new Set(D.DESIGNS.map((d) => canon(d.faces))).size, D.DESIGNS.length, 'no design is another turned');
-for (const d of D.DESIGNS) assert.equal(d.faces.length, 6);
+const junctions = D.pack().filter((c) => c.rank >= 2 && c.rank <= 10);
+assert.equal(junctions.length, 36);
+assert.equal(new Set(junctions.map((c) => canon(D.facesOf(c)))).size, 36, 'no junction is another turned');
+for (const c of junctions) assert.equal(D.facesOf(c).length, 6);
+assert.equal(D.facesOf({ suit: 0, rank: 1 }).length, 6, 'an ace is a cross');
 // turning: a card's exits turn with it
-const t = { card: { suit: 0, rank: 6 }, rotation: 1 };
-assert.deepEqual(D.exits(t), [1, 1, 1, 2, 2, 2], 'an elbow turned once: east, then south');
+const t = { card: { suit: 1, rank: 3 }, rotation: 1 };
+assert.deepEqual(D.exits(t), [1, 1, 1, 2, 2, 2], 'the mirror\'s turn, turned once: east, then south');
 // the counter: an open exit stays, unless the table wraps
 const b = D.setup();
 b.set(D.key(2, 1), { card: { suit: 0, rank: 2 }, rotation: 0 });

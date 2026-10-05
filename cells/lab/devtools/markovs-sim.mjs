@@ -204,7 +204,7 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
   if (!specials) pile = pile.filter((c) => c.rank >= 2 && c.rank <= 10);
   const hands = strats.map(() => pile.splice(0, hand));
   const beliefs = strats.map(() => strats.map(() => [0.25, 0.25, 0.25, 0.25]));
-  let token = '2,2', stalls = 0, played = 0;
+  let token = '2,2', stalls = 0, played = 0; const laid = [];
   const value = (b, at, p, tok = token) => {
     const f = D.forecast(b, tok, rules); let v = f.wins[mine[p]];
     for (let o = 0; o < P; o++) { if (o === p) continue; const w = strats[p] === 'reader' ? beliefs[p][o] : [0.25, 0.25, 0.25, 0.25]; for (let su = 0; su < 4; su++) if (su !== mine[p]) v -= (f.wins[su] * w[su]) / (P - 1) / (strats[p] === 'reader' ? 1 : 0.75); }
@@ -233,7 +233,7 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
       if (qi >= 0 && phase === 'race') { const ks = [...board.keys()].filter((k) => !D.isKing(board.get(k))); for (let a = 0; a < ks.length; a++) for (let b = a + 1; b < ks.length; b++) { const nb = new Map(board); const ta = board.get(ks[a]), tb = board.get(ks[b]); nb.set(ks[a], { ...tb, start: ta.start }); nb.set(ks[b], { ...ta, start: tb.start }); const v = value(nb, token, p); if (!best || v > best.v + 1e-9) best = { kind: 'swap', a: ks[a], b: ks[b], i: qi, v }; } }
     }
     if (!best) { if (hands[p].length && phase === 'race') hands[p].splice(Math.floor(r() * hands[p].length), 1); }
-    else if (best.kind === 'lay') { const before = board; board.set(best.k, { card: hands[p][best.i], rotation: best.rot, start: board.get(best.k)?.start }); noteWatch(p, before === board ? lay(before, best.k, { suit: 0, rank: 2 }, 0) : before, board); hands[p].splice(best.i, 1); }
+    else if (best.kind === 'lay') { laid.push([p, hands[p][best.i].suit, hands[p][best.i].rank]); const before = board; board.set(best.k, { card: hands[p][best.i], rotation: best.rot, start: board.get(best.k)?.start }); noteWatch(p, before === board ? lay(before, best.k, { suit: 0, rank: 2 }, 0) : before, board); hands[p].splice(best.i, 1); }
     else { const ta = board.get(best.a), tb = board.get(best.b); board.set(best.a, { ...tb, start: ta.start }); board.set(best.b, { ...ta, start: tb.start }); hands[p].splice(best.i, 1); played++; }
     while (pile.length && hands[p].length < hand) hands[p].push(pile.shift());
   };
@@ -256,10 +256,17 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
       while (pile.length && hands[p].length < hand) hands[p].push(pile.shift());
     }
     if (!moved) { const res = D.destination(board, token, 1 + Math.floor(r() * 6), rules); token = res.at; if (res.reason !== 'move') stalls++; }
-    const t = board.get(token); if (D.isKing(t)) { const who = mine.indexOf(t.card.suit); if (who >= 0) return { winner: who, rolls: roll + 1, stalls, played }; }
+    const t = board.get(token); if (D.isKing(t)) { const who = mine.indexOf(t.card.suit); if (who >= 0) return { winner: who, rolls: roll + 1, stalls, played, laid }; }
     if (D.isKing(t)) token = D.START; // (a decoy: back to the start)
   }
-  return { winner: -1, rolls: CAP, stalls, played };
+  return { winner: -1, rolls: CAP, stalls, played, laid };
+}
+if (process.env.CARDS) {
+  // which junctions get laid, and whether laying them wins: the quiet and the busy cards
+  const n = Number(process.env.N ?? 200); const use = new Map(); const win = new Map();
+  for (let seed = 1; seed <= n; seed++) { const g = pokerPlay(seed, ['greedy', 'greedy', 'greedy', 'greedy'], { rules: { ...D.RULES, wrap: true, rim: true } }); for (const [p, su, rk] of g.laid) { const k = `${rk}${D.SUITS[su]}`; use.set(k, (use.get(k) ?? 0) + 1); if (g.winner === p) win.set(k, (win.get(k) ?? 0) + 1); } }
+  const rows = [...use.entries()].map(([k, u]) => [k, u, (win.get(k) ?? 0) / u]).sort((a, b) => a[1] - b[1]);
+  console.log('laid per game (36 junctions, 4 of each in play):'); console.log(rows.map(([k, u, w]) => `${k.padEnd(4)} ${(u / n).toFixed(2)} laid/game, wins ${(w * 100).toFixed(0)}%`).join('\n'));
 }
 if (process.env.POKER) {
   const K = (n, s, o) => run(n, pokerPlay, s, o);

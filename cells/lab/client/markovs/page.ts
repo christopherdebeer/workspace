@@ -3,7 +3,7 @@
  * round; a curtain hides the hand between turns) or against bots. Everything the page does goes
  * through table.ts' `legal()` and `act()`, so what you can tap is exactly what the rules allow.
  */
-import { ACE, DESIGNS, JACK, JOKER, KING, KING_AT, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, isKing, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
+import { ACE, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, KING_AT, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, isKing, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
 import { ROLL_CAP, act, botAction, clone, current, legal, newGame, type Action, type Game } from './table';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -26,7 +26,7 @@ export function cardSvg(card: Card, rotation = 0, id = 'c'): string {
   const suit = card.rank === JOKER ? '★' : SUITS[card.suit];
   const rank = card.rank === JOKER ? 'JOKER' : RANK[card.rank];
   const role = roleOf(card);
-  const note = card.rank === JOKER ? 'A random exit. No dice.' : card.rank === ACE ? 'Lay anywhere. A cross.' : card.rank === JACK ? 'Walk one step your way.' : card.rank === QUEEN ? 'Exchange two junctions.' : card.rank === KING ? 'Reach this suit to finish.' : DESIGNS[card.rank - 2].note;
+  const note = card.rank === JOKER ? 'A random exit. No dice.' : card.rank === ACE ? 'Lay anywhere. A cross.' : card.rank === JACK ? 'Walk one step your way.' : card.rank === QUEEN ? 'Exchange two junctions.' : card.rank === KING ? 'Reach this suit to finish.' : SHAPES[card.rank].note;
   let mid = '';
   const cx = 31.5, cy = 42;
   const arrow = `<marker id="${id}a" markerWidth="4" markerHeight="4" refX="3" refY="2" orient="auto"><path d="M0 0L4 2L0 4" fill="#34312c"/></marker>`;
@@ -48,8 +48,13 @@ export function cardSvg(card: Card, rotation = 0, id = 'c'): string {
     if (rg.has(-1)) mid += `<path d="M${cx - 4} ${cy - 3}C${cx - 24} ${cy - 22} ${cx - 24} ${cy + 14} ${cx - 5} ${cy + 3}" fill="none" stroke="#34312c" stroke-width=".9" stroke-dasharray="1.5 1.2" marker-end="url(#${id}a)"/><text x="${cx - 17}" y="${cy + 10}" font-size="4.6" font-family="ui-monospace,monospace" fill="#27379b">${rg.get(-1)}</text>`;
     mid += `<circle cx="${cx}" cy="${cy}" r="4" fill="#eee8d3" stroke="#50452f" stroke-width=".6"/>`;
   }
+  // (the dress: an orbit with its four stations, a sigil column in the margin — the suit's
+  // temperament — and the temperament named under the shape)
+  const sig = { 0: `<path d="M3.5 30c1.5-1.2 3-1.2 4.5 0M3.5 33c1.5-1.2 3-1.2 4.5 0" fill="none" stroke="${col}" stroke-width=".5"/>`, 1: `<path d="M5.75 29l2.2 2.2-2.2 2.2-2.2-2.2z" fill="none" stroke="${col}" stroke-width=".5"/>`, 2: `<path d="M5.75 34v-3m0 0l-2-2m2 2l2-2" fill="none" stroke="${col}" stroke-width=".5"/>`, 3: `<circle cx="5.75" cy="31.5" r="2.2" fill="none" stroke="${col}" stroke-width=".5"/><circle cx="5.75" cy="31.5" r=".8" fill="${col}"/>` }[card.rank === JOKER ? 3 : card.suit];
+  const dress = card.rank === KING || card.rank === JOKER ? '' : `<circle cx="${cx}" cy="${cy}" r="24" fill="none" stroke="#8e826b" stroke-width=".35" stroke-dasharray="1 1.6"/>${[0, 1, 2, 3].map((d) => `<circle cx="${cx + [0, 24, 0, -24][d]}" cy="${cy + [-24, 0, 24, 0][d]}" r=".9" fill="#8e826b"/>`).join('')}<path d="M5.75 22v4m0 14v18" stroke="#8e826b" stroke-width=".3" stroke-dasharray=".8 1.4"/>${sig}<path d="M57.25 28v30" stroke="#8e826b" stroke-width=".3" stroke-dasharray=".8 1.4"/><circle cx="57.25" cy="43" r=".9" fill="none" stroke="#8e826b" stroke-width=".4"/>`;
+  const under = card.rank >= 2 && card.rank <= 10 ? TEMPER[card.suit].toUpperCase() : '';
   const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x} ${y})"` : ''}><text x="${x}" y="${y}" font-size="${card.rank === JOKER ? 4 : 8}" font-family="Georgia" fill="${col}">${rank}</text><text x="${x}" y="${y + 7}" font-size="6" fill="${col}">${suit}</text></g>`;
-  return `<svg viewBox="0 0 63 88" aria-hidden="true"><defs>${arrow}</defs><g transform="rotate(${rotation * 90} 31.5 44)"><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/><rect x="3" y="3" width="57" height="82" rx="2.5" fill="none" stroke="#514d3b" stroke-width=".3" opacity=".5"/>${corner(5, 11, false)}${corner(58, 77, true)}${mid}<path d="M12 68H51" stroke="#8e826b" stroke-width=".3"/><text x="31.5" y="74.5" text-anchor="middle" font-size="5.2" font-family="ui-monospace,monospace" letter-spacing=".5">${role}</text><text x="31.5" y="80.5" text-anchor="middle" font-size="3.5" font-family="ui-monospace,monospace" fill="#5b5443">${note}</text></g></svg>`;
+  return `<svg viewBox="0 0 63 88" aria-hidden="true"><defs>${arrow}</defs><g transform="rotate(${rotation * 90} 31.5 44)"><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/><rect x="3" y="3" width="57" height="82" rx="2.5" fill="none" stroke="#514d3b" stroke-width=".3" opacity=".5"/>${dress}${corner(5, 11, false)}${corner(58, 77, true)}${mid}<path d="M12 68H51" stroke="#8e826b" stroke-width=".3"/><text x="31.5" y="73.5" text-anchor="middle" font-size="5" font-family="ui-monospace,monospace" letter-spacing=".5">${role}</text>${under ? `<text x="31.5" y="77.5" text-anchor="middle" font-size="3.2" font-family="ui-monospace,monospace" letter-spacing=".6" fill="${col}">${under}</text>` : ''}<text x="31.5" y="82" text-anchor="middle" font-size="3.3" font-family="ui-monospace,monospace" fill="#5b5443">${note}</text></g></svg>`;
 }
 
 // ─── the page ─────────────────────────────────────────────────────────────────────────────────
@@ -166,7 +171,7 @@ export default function bootTable() {
       if (c.rank === QUEEN) detail = needLay ? (swapFirst ? 'Now the second junction to swap with it.' : 'A Queen: tap two junctions to swap them.') : 'A Queen is played instead of laying a card.';
       else if (c.rank === JACK) detail = g.laid ? 'A Jack: tap a neighbouring card to walk the counter there instead of rolling.' : 'A Jack is played instead of the roll: lay or pass first.';
       else if (c.rank === JOKER) detail = g.laid ? 'A Joker: chaos instead of the roll — the counter takes one of its exits at random.' : 'A Joker is played instead of the roll: lay or pass first.';
-      else detail = `${roleOf(c)} / ${DESIGNS[Math.max(0, c.rank - 2)]?.note ?? ''} Turn it, then tap a space.${g.laid ? ' (You have laid this turn.)' : ''}`;
+      else detail = `${roleOf(c)} of ${TEMPER[c.suit]} / ${SHAPES[c.rank]?.note ?? ''} ${TEMPER_NOTE[c.suit]}. Turn it, then tap a space.${g.laid ? ' (You have laid this turn.)' : ''}`;
     } else detail = needLay ? (g.phase === 'build' ? 'Choose a card, turn it, lay it touching the chain.' : 'Lay a card on any junction, play a Queen, or pass; then roll.') : 'Roll the die — or play a Jack or a Joker instead.';
     $('detail').textContent = detail;
     const status = g.phase === 'over' ? '' : curtain ? `Pass the table to ${p.name}.` : g.phase === 'build' ? `${p.name} to lay a card. ${g.pile.length} in the pile.` : `${p.name} to ${needLay ? 'lay, then roll' : 'roll'}. Counter at ${g.token.split(',').map((v) => Number(v) + 1).join(',')}.`;
@@ -258,6 +263,6 @@ function printSheet() {
 <p><b>Build.</b> In turns, lay one card from your hand, turned any way you like, on an empty space touching a laid card (or anywhere on the outer ring; an Ace anywhere). Draw back to three. If you can't lay, throw a card in and draw. No rolling. Build until no space is empty.</p>
 <p><b>Race.</b> On your turn: lay one card on top of any junction (not a King), or play a Queen to swap two junctions, or pass. Then roll the d6. Find that face's arrow on the card under the counter and move one space that way; off the edge, come in on the far side. A loop face stays. Instead of rolling you may play a Jack (walk the counter one space, your choice) or a Joker (the counter takes one of its card's exits at random). Draw back to three.</p>
 <p><b>Winning.</b> The first time the counter arrives at your King, show your face-down card: you win. Arriving at a King nobody holds sends the counter back to the Ace. Thirty rolls without an arrival is a draw.</p>
-<p><b>The junctions.</b> ${DESIGNS.map((d) => `<b>${RANK[d.rank]} ${d.name}</b> ${d.faces.map((f, i) => `${i + 1}${f < 0 ? ' stay' : ['↑', '→', '↓', '←'][f]}`).join(' ')}`).join(' · ')}. Faces turn with the card.</p>
+<p><b>The junctions.</b> The rank is the shape, the suit its temperament: ♥ the current leans one way, ♦ the mirror is even-handed, ♣ the thicket grows one more branch, ♠ the well holds a while. ${Object.entries(SHAPES).map(([r, d]) => `<b>${RANK[Number(r)]} ${d.name}</b>: ${d.note}`).join(' · ')} Every face is printed on its card, and turns with it.</p>
 <p>Don't say which King is yours. Every card you lay says a little.</p></section>${pages.join('')}`;
 }
