@@ -14,3 +14,11 @@ $0.013, 52 batched decide_many calls for 323 decisions; train 0.737 / test
 0.718. Proposal "points → score" (the treasure cards' effect had no handler)
 lifted definition health but moved train −0.011: reverted. The judged term
 swings 0.27–0.69 across similar games — measure `noise` before climbing.
+
+## Deploying
+
+The engine fingerprint (lib/fingerprint.ts) carries a build-time hash of `engine/**`
+(lib/engine-src.ts). Regenerate it before every push, or an engine edit that only touches a
+helper function keeps the old fingerprint and old baselines stay "current":
+
+    node devtools/hash-engine.mjs && node ../../scripts/cell-sync.mjs push playtest --deploy

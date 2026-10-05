@@ -57,18 +57,23 @@ interface TimeoutWinnerConfig {
   reason?: string;
   /** role type: the role wins at the limit only if it was never revealed (e.g. denounced) */
   unless_revealed?: boolean;
+  /** highest_score type: a tie for the top score goes to a player of this team (e.g. "enemy") */
+  ties_to_role?: string;
 }
 
 function findHighestScorePlayer(
   players: Record<string, PlayerState>,
-  maxRounds: number | undefined
+  maxRounds: number | undefined,
+  tiesToRole?: string
 ): WinCheckResult & { winnerId?: string } {
   let highestScore = -Infinity;
   let winnerId: string | null = null;
 
   for (const [playerId, player] of Object.entries(players)) {
     const score = player.score ?? 0;
-    if (score > highestScore) {
+    const role = (player as unknown as { team?: string; objective?: { type?: string } });
+    const preferred = !!tiesToRole && (role.team === tiesToRole || role.objective?.type === tiesToRole);
+    if (score > highestScore || (score === highestScore && preferred)) {
       highestScore = score;
       winnerId = playerId;
     }
@@ -184,7 +189,7 @@ export const timeoutWinnerMechanic: MechanicHooks = {
 
     switch (configType) {
       case 'highest_score': {
-        const result = findHighestScorePlayer(ctx.state.players, maxRounds);
+        const result = findHighestScorePlayer(ctx.state.players, maxRounds, config.ties_to_role);
         if (result.won && result.winnerId === ctx.playerId) {
           return { won: true, reason: result.reason };
         }
