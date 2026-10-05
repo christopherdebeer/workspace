@@ -52,7 +52,8 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
   // the junction, engraved: a ring of four stations on a dotted orbit, the exits as hatched rods
   // with open heads, the stays as a dashed loop, the faces in serif figures of the suit's ink
   const ink = card.rank === JOKER ? '#24231f' : INK[card.suit];
-  const cx = 31.5, cy = ASSETS ? 31.5 : 42, R = ASSETS ? 16 : 20;
+  const cx = 31.5, cy = ASSETS ? 30.5 : 42, R = ASSETS ? 16 : 20;
+  const su = card.rank === JOKER ? -1 : card.suit; // (0 the River, 1 the Mirror, 2 the Thicket, 3 the Well)
   let mid = '';
   const hair = (d: string, w = 0.3, extra = '') => `<path d="${d}" fill="none" stroke="${ink}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" ${extra}/>`;
   /** a rod from the hub out to the station in direction d (0 north … 3 west): a tapered engraved
@@ -66,8 +67,13 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
     else {
       // (the shaft, drawn as a sliver: wide at the hub, a point at the head)
       out += `<path d="M${P(a, 0.42)}L${P(b - 0.4, 0.08)}L${P(b - 0.4, -0.08)}L${P(a, -0.42)}Z" fill="${ink}"/>`;
-      // (the engraver's shade line beside it)
-      out += hair(`M${P(a + 0.6, 0.95)}L${P(b - 2.2, 0.5)}`, 0.14);
+      // (the suit's character beside it: the River's current ripples along the shaft, the Mirror
+      // shades both sides alike, the Thicket sprouts twigs, the Well's shade is a row of drops)
+      if (su === 0) { let w = `M${P(a + 0.6, 0.9)}`; for (let t = a + 0.6; t < b - 2.2; t += 1.2) w += `Q${P(t + 0.6, 1.35)} ${P(t + 1.2, 0.9)}`; out += hair(w, 0.14); }
+      else if (su === 1) out += hair(`M${P(a + 0.6, 0.95)}L${P(b - 2.2, 0.5)}M${P(a + 0.6, -0.95)}L${P(b - 2.2, -0.5)}`, 0.14);
+      else if (su === 2) { for (let t = a + 1.2, k = 0; t < b - 2.6; t += 1.7, k++) { const o = k % 2 ? 1 : -1; out += hair(`M${P(t, 0.3 * o)}L${P(t + 0.9, 1.5 * o)}`, 0.18); } }
+      else if (su === 3) { for (let t = a + 1; t < b - 2.2; t += 1.3) out += `<circle cx="${(cx + ux * t + px * 0.95).toFixed(2)}" cy="${(cy + uy * t + py * 0.95).toFixed(2)}" r=".17" fill="${ink}"/>`; }
+      else out += hair(`M${P(a + 0.6, 0.95)}L${P(b - 2.2, 0.5)}`, 0.14);
     }
     out += hair(`M${P(b - 2.3, 1.75)}L${P(b + 0.5, 0)}L${P(b - 2.3, -1.75)}`, 0.6);
     return out;
@@ -75,11 +81,19 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
   /** a station on the orbit: a compass mark — a ring with four ticks; live ones carry a dot */
   const station = (d: number, live: boolean) => {
     const x = cx + [0, R, 0, -R][d], y = cy + [-R, 0, R, 0][d];
+    const w = live ? 0.42 : 0.2, dim = live ? '' : 'opacity=".55"';
+    const dot = live ? `<circle cx="${x}" cy="${y}" r=".62" fill="${ink}"/>` : '';
+    // (the River: a ripple of three rings; the Mirror: a lozenge; the Thicket: a ring with six
+    // sprouts; the Well: rings within rings; the Joker: a compass mark)
+    if (su === 0) return `<g ${dim}><circle cx="${x}" cy="${y}" r="1.8" fill="${PAPER}" stroke="${ink}" stroke-width="${w}"/><path d="M${x - 2.9} ${y + 0.2}a2.9 2.9 0 0 1 5.8 0M${x - 2.4} ${y - 1.4}a2.6 2.6 0 0 0 4.8 0" fill="none" stroke="${ink}" stroke-width=".16"/>${dot}</g>`;
+    if (su === 1) return `<g ${dim}><path d="M${x} ${y - 2.4}L${x + 2.4} ${y}L${x} ${y + 2.4}L${x - 2.4} ${y}Z" fill="${PAPER}" stroke="${ink}" stroke-width="${w}"/><path d="M${x - 2.4} ${y}H${x + 2.4}" stroke="${ink}" stroke-width=".14"/>${dot}</g>`;
+    if (su === 2) { const sp = [30, 90, 150, 210, 270, 330].map((a) => { const r = (a * Math.PI) / 180; return hair(`M${x + Math.cos(r) * 1.8} ${y + Math.sin(r) * 1.8}L${x + Math.cos(r) * 2.9} ${y + Math.sin(r) * 2.9}l${Math.cos(r + 0.9) * 0.6} ${Math.sin(r + 0.9) * 0.6}`, live ? 0.26 : 0.16); }).join(''); return `<g ${dim}><circle cx="${x}" cy="${y}" r="1.8" fill="${PAPER}" stroke="${ink}" stroke-width="${w}"/>${sp}${dot}</g>`; }
+    if (su === 3) return `<g ${dim}><circle cx="${x}" cy="${y}" r="2.6" fill="${PAPER}" stroke="${ink}" stroke-width=".14"/><circle cx="${x}" cy="${y}" r="1.8" fill="none" stroke="${ink}" stroke-width="${w}"/><circle cx="${x}" cy="${y}" r="1.1" fill="none" stroke="${ink}" stroke-width=".14"/>${dot}</g>`;
     const ticks = [0, 90, 180, 270].map((a) => { const r = (a * Math.PI) / 180; return hair(`M${x + Math.cos(r) * 1.9} ${y + Math.sin(r) * 1.9}L${x + Math.cos(r) * 2.7} ${y + Math.sin(r) * 2.7}`, live ? 0.28 : 0.16); }).join('');
-    return `<circle cx="${x}" cy="${y}" r="1.8" fill="${PAPER}" stroke="${ink}" stroke-width="${live ? 0.42 : 0.2}" ${live ? '' : 'opacity=".55"'}/>${live ? `<circle cx="${x}" cy="${y}" r=".62" fill="${ink}"/>` : ''}<g ${live ? '' : 'opacity=".55"'}>${ticks}</g>`;
+    return `<g ${dim}><circle cx="${x}" cy="${y}" r="1.8" fill="${PAPER}" stroke="${ink}" stroke-width="${w}"/>${dot}${ticks}</g>`;
   };
   /** the hub: two rings, the six faces as pips round the inner one, a dot */
-  const node = `<circle cx="${cx}" cy="${cy}" r="4.7" fill="${PAPER}" stroke="${ink}" stroke-width=".5"/><circle cx="${cx}" cy="${cy}" r="3.4" fill="none" stroke="${ink}" stroke-width=".2"/>${Array.from({ length: 24 }, (_, k) => { const a = (k * 15 * Math.PI) / 180; const l = k % 6 === 0 ? 1.1 : 0.55; return hair(`M${cx + Math.cos(a) * 3.5} ${cy + Math.sin(a) * 3.5}L${cx + Math.cos(a) * (3.5 + l)} ${cy + Math.sin(a) * (3.5 + l)}`, k % 6 === 0 ? 0.26 : 0.14); }).join('')}${Array.from({ length: 6 }, (_, k) => { const a = ((k * 60 - 90) * Math.PI) / 180; return `<circle cx="${cx + Math.cos(a) * 2.2}" cy="${cy + Math.sin(a) * 2.2}" r=".38" fill="${ink}"/>`; }).join('')}<circle cx="${cx}" cy="${cy}" r=".7" fill="${ink}"/>`;
+  const node = `<circle cx="${cx}" cy="${cy}" r="4.7" fill="${PAPER}" stroke="${ink}" stroke-width=".5"/><circle cx="${cx}" cy="${cy}" r="3.4" fill="none" stroke="${ink}" stroke-width=".2"/>${Array.from({ length: 24 }, (_, k) => { const a = (k * 15 * Math.PI) / 180; const l = k % 6 === 0 ? 1.1 : 0.55; return hair(`M${cx + Math.cos(a) * 3.5} ${cy + Math.sin(a) * 3.5}L${cx + Math.cos(a) * (3.5 + l)} ${cy + Math.sin(a) * (3.5 + l)}`, k % 6 === 0 ? 0.26 : 0.14); }).join('')}${(() => { const n = card.rank >= 1 && card.rank <= 10 ? card.rank : 6; return Array.from({ length: n }, (_, k) => { const a = ((k * 360 / n - 90) * Math.PI) / 180; return `<circle cx="${(cx + Math.cos(a) * 2.25).toFixed(2)}" cy="${(cy + Math.sin(a) * 2.25).toFixed(2)}" r="${n > 8 ? 0.32 : 0.38}" fill="${ink}"/>`; }).join(''); })()}<circle cx="${cx}" cy="${cy}" r=".7" fill="${ink}"/>`;
   /** the orbit: a dial — a dotted ring, a hairline outside it, a tick every 10°, longer at 30°,
    *  and a mark at the four half-way points */
   const orbit = (() => {
@@ -90,13 +104,16 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
       const a = (k * 10 * Math.PI) / 180, l = k % 3 === 0 ? 1.1 : 0.55;
       o += hair(`M${cx + Math.cos(a) * r1} ${cy + Math.sin(a) * r1}L${cx + Math.cos(a) * (r1 + l)} ${cy + Math.sin(a) * (r1 + l)}`, k % 3 === 0 ? 0.2 : 0.12);
     }
-    o += [45, 135, 225, 315].map((a) => `<circle cx="${cx + Math.cos((a * Math.PI) / 180) * r1}" cy="${cy + Math.sin((a * Math.PI) / 180) * r1}" r=".5" fill="${ink}"/>`).join('');
+    // (the card's number, once more, as marks round the dial: an Ace one, a ten ten)
+    const n = card.rank >= 1 && card.rank <= 10 ? card.rank : 4;
+    for (let k = 0; k < n; k++) { const a = ((k * 360) / n + 45) * (Math.PI / 180); o += `<circle cx="${(cx + Math.cos(a) * r1).toFixed(2)}" cy="${(cy + Math.sin(a) * r1).toFixed(2)}" r=".5" fill="${ink}"/>`; }
     return o;
   })();
   const fig = (x: number, y: number, t: string, anchor = 'middle') => `<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="4.4" font-family="Georgia,serif" fill="${ink}">${t}</text>`;
   /** the stays: an eddy — a curl out of the hub's west side and back, engraved as a dashed
    *  hairline over a faint solid one, with its own head */
-  const eddy = `${hair(`M${cx - 4.4} ${cy - 2.6}C${cx - R - 1.5} ${cy - R + 2.5} ${cx - R - 1.5} ${cy + 12.5} ${cx - 5.4} ${cy + 3.2}`, 0.2, 'opacity=".45"')}${hair(`M${cx - 4.4} ${cy - 2.6}C${cx - R - 1.5} ${cy - R + 2.5} ${cx - R - 1.5} ${cy + 12.5} ${cx - 5.4} ${cy + 3.2}`, 0.55, 'stroke-dasharray="1.3 1"')}${hair(`M${cx - 7.9} ${cy + 1.6}L${cx - 5.4} ${cy + 3.2}L${cx - 8.2} ${cy + 3.9}`, 0.6)}`;
+  const whirl = `M${cx - 4.4} ${cy - 2.6}C${cx - R - 1.5} ${cy - R + 2.5} ${cx - R - 1.5} ${cy + 12.5} ${cx - 5.4} ${cy + 3.2}`;
+  const eddy = su === 3 ? `${hair(whirl, 0.55, 'stroke-dasharray="1.3 1"')}${hair(`M${cx - 6.2} ${cy - 1.2}C${cx - 12.5} ${cy - 7.5} ${cx - 13} ${cy + 6.5} ${cx - 7.2} ${cy + 1.8}`, 0.2, 'opacity=".6"')}${hair(`M${cx - 7.9} ${cy + 1.6}L${cx - 5.4} ${cy + 3.2}L${cx - 8.2} ${cy + 3.9}`, 0.6)}` : `${hair(`M${cx - 4.4} ${cy - 2.6}C${cx - R - 1.5} ${cy - R + 2.5} ${cx - R - 1.5} ${cy + 12.5} ${cx - 5.4} ${cy + 3.2}`, 0.2, 'opacity=".45"')}${hair(`M${cx - 4.4} ${cy - 2.6}C${cx - R - 1.5} ${cy - R + 2.5} ${cx - R - 1.5} ${cy + 12.5} ${cx - 5.4} ${cy + 3.2}`, 0.55, 'stroke-dasharray="1.3 1"')}${hair(`M${cx - 7.9} ${cy + 1.6}L${cx - 5.4} ${cy + 3.2}L${cx - 8.2} ${cy + 3.9}`, 0.6)}`;
   if (card.rank === KING) mid = `${orbit}<circle cx="${cx}" cy="${cy}" r="13" fill="none" stroke="${ink}" stroke-width=".4"/><circle cx="${cx}" cy="${cy}" r="10" fill="${ink}"/><text x="${cx}" y="${cy + 4.6}" text-anchor="middle" fill="${PAPER}" font-size="13">${suit}</text>`;
   else if (card.rank === JACK) mid = `${orbit}${hair(`M${cx - 15} ${cy + 4}Q${cx} ${cy - 20} ${cx + 15} ${cy + 4}`, 0.55, 'stroke-dasharray="1.6 1.1"')}${hair(`M${cx - 15} ${cy + 6}H${cx + 13}`, 0.55)}${station(3, true)}${station(1, true)}`;
   else if (card.rank === QUEEN) mid = `${orbit}${hair(`M${cx - 12} ${cy - 10}L${cx + 10} ${cy + 8}M${cx + 12} ${cy - 10}L${cx - 10} ${cy + 8}`, 0.55)}${[[-13, -11], [13, -11], [-13, 11], [13, 11]].map(([x, y]) => `<circle cx="${cx + x}" cy="${cy + y}" r="2.4" fill="${PAPER}" stroke="${ink}" stroke-width=".4"/>`).join('')}`;
@@ -119,15 +136,20 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
     mid += node;
   }
   const under = card.rank >= 2 && card.rank <= 10 ? TEMPER[card.suit].toUpperCase() : '';
-  if (ASSETS && card.rank !== JOKER) {
+  if (ASSETS) {
     // the etched dress: a double hairline border with the suit's small flourish in each corner,
     // the junction above, one of the suit's six vignettes, by rank, in fine ink across the lower third, the name on a rule
     const img = (f: string, x: number, y: number, w: number, h: number, extra = '') => `<image href="${ASSETS}${f}" x="${x}" y="${y}" width="${w}" height="${h}" ${extra}/>`;
-    const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x + 2.6} ${y - 2.6})"` : ''}><text x="${x}" y="${y}" font-size="9.5" font-family="Georgia,serif" fill="${ink}">${rank}</text>${img(`${sk}-glyph.png`, x - 0.1, y + 1.4, 5.4, 5.2, 'preserveAspectRatio="xMidYMid meet"')}</g>`;
+    // (the index: rank over glyph in a block 7 × 14 mm at the top-left, 5 mm in from the edges,
+    // and the same turned about the centre at the bottom-right; the vignette and the rules stop
+    // short of both)
+    const joker = card.rank === JOKER;
+    const index = (flip: boolean) => `<g ${flip ? 'transform="rotate(180 31.5 44)"' : ''}>${joker ? `<text x="5" y="10.5" font-size="3.4" font-family="Georgia,serif" letter-spacing=".4" fill="${ink}">JOKER</text><text x="5.6" y="17.5" font-size="6" fill="${ink}">★</text>` : `<text x="${rank === '10' ? 4.6 : 5.4}" y="12.3" font-size="${rank === '10' ? 8.2 : 9.2}" font-family="Georgia,serif" fill="${ink}" ${rank === '10' ? 'letter-spacing="-.6"' : ''}>${rank}</text>${img(`${sk}-glyph.png`, 5.2, 13.4, 5.2, 5, 'preserveAspectRatio="xMidYMid meet"')}`}</g>`;
+    const corner = (_x: number, _y: number, flip: boolean) => index(flip);
     // (the flourish is drawn for a bottom-left corner: its corner at the origin, reaching up and right)
-    const flourish = [[3.2, 84.8, 0], [3.2, 3.2, 90], [59.8, 3.2, 180], [59.8, 84.8, 270]].map(([x, y, a]) => `<g transform="translate(${x} ${y}) rotate(${a})">${img(`${sk}-cornerS.png`, 0, -7.4, 6.5, 7.4, 'opacity=".85"')}</g>`).join('');
+    const flourish = joker ? '' : [[3.2, 84.8, 0], [3.2, 3.2, 90], [59.8, 3.2, 180], [59.8, 84.8, 270]].map(([x, y, a]) => `<g transform="translate(${x} ${y}) rotate(${a})">${img(`${sk}-cornerS.png`, 0, -7.4, 6.5, 7.4, 'opacity=".85"')}</g>`).join('');
     const name = card.rank === ACE ? 'THE WILD' : role;
-    return `${open}<defs>${arrow}</defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/><rect x="1.8" y="1.8" width="59.4" height="84.4" rx="3.2" fill="none" stroke="${ink}" stroke-width=".45"/><rect x="2.9" y="2.9" width="57.2" height="82.2" rx="2.6" fill="none" stroke="${ink}" stroke-width=".2"/>${flourish}${corner(5, 12.5, false)}${corner(58, 76.5, true)}${mid}${img(`${sk}-vig${(card.rank + 4) % 6}.png`, 4, 51, 55, 19.5, 'preserveAspectRatio="xMidYMax meet"')}<path d="M13 72.2H50" stroke="${ink}" stroke-width=".25"/><text x="31.5" y="76.6" text-anchor="middle" font-size="4.6" font-family="Georgia,serif" letter-spacing="1" fill="#2a2420">${name}</text><path d="M13 78.3H50" stroke="${ink}" stroke-width=".25"/><text x="31.5" y="81.6" text-anchor="middle" font-size="2.3" font-family="Georgia,serif" letter-spacing=".35" fill="${ink}">${note.toUpperCase().replace(/\.$/, '')}</text></g></svg>`;
+    return `${open}<defs>${arrow}</defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/><rect x="1.8" y="1.8" width="59.4" height="84.4" rx="3.2" fill="none" stroke="${ink}" stroke-width=".45"/><rect x="2.9" y="2.9" width="57.2" height="82.2" rx="2.6" fill="none" stroke="${ink}" stroke-width=".2"/>${flourish}${corner(0, 0, false)}${corner(0, 0, true)}${mid}${joker ? '' : img(`${sk}-vig${(card.rank + 4) % 6}.png`, 6, 51.5, 46, 17.5, 'preserveAspectRatio="xMidYMax meet"')}<path d="M14 72.2H47.5" stroke="${ink}" stroke-width=".25"/><text x="30.75" y="76.6" text-anchor="middle" font-size="4.4" font-family="Georgia,serif" letter-spacing=".9" fill="#2a2420">${name}</text><path d="M14 78.3H47.5" stroke="${ink}" stroke-width=".25"/><text x="30.75" y="81.6" text-anchor="middle" font-size="2.2" font-family="Georgia,serif" letter-spacing=".3" fill="${ink}">${note.toUpperCase().replace(/\.$/, '')}</text></g></svg>`;
   }
   // (the plain dress: an orbit with its four stations, a sigil column in the margin — the suit's
   // temperament — and the temperament named under the shape)
