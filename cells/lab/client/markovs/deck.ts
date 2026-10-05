@@ -13,7 +13,8 @@
  * - **Jokers:** chaos — instead of rolling, the counter takes one of its card's exits at random.
  *
  * Each player is dealt one card face down: its suit is their secret destination. (At two or
- * three players the other Kings are decoys.) Build the table first, in turns, until no space is
+ * three players the other Kings are decoys: a counter arriving at one goes back to START.)
+ * Build the table first, in turns, until no space is
  * empty; then race: place or play, roll, move. First arrival at your own King wins.
  *
  * Everything here is pure, so the page, the bots and the simulation read the same rules.
@@ -84,11 +85,13 @@ export const xy = (k: string) => k.split(',').map(Number) as [number, number];
 export const isKing = (t: Tile | undefined) => !!t && t.card.rank === KING;
 /** a junction's six exits as laid (turned); an ace is a cross */
 export function exits(t: Tile): number[] {
+  if (t.card.rank === KING) return [-1, -1, -1, -1, -1, -1];
   const faces = t.card.rank === ACE ? DESIGNS[2].faces : DESIGNS[t.card.rank - 2].faces;
   return faces.map((d) => (d < 0 ? -1 : (d + t.rotation) % 4));
 }
 /** the Kings' places: the middle of each edge, hearts north then clockwise */
 export const KING_AT = [key(2, 0), key(4, 2), key(2, 4), key(0, 2)];
+export const START = key(2, 2);
 export function setup(): Board {
   const b: Board = new Map();
   b.set(key(2, 2), { card: { suit: 3, rank: ACE }, rotation: 0, start: true });

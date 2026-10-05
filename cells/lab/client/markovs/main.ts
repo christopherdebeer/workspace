@@ -1,9 +1,11 @@
 // @ts-nocheck
 import bootPhysical from './physical';
+import bootTable from './page';
+import archiveMarkup from './archive';
 import {MOTIFS,rng,row,advance,odds,step,raceOdds,botMove} from './rules';
 
 const entryMode=new URLSearchParams(location.search).get('mode');
-if(!entryMode||entryMode==='physical'){bootPhysical();}else{
+if(!entryMode){bootTable();}else if(entryMode==='physical'){bootPhysical();}else{archiveMarkup();
 const $=(id)=>document.getElementById(id),qs=new URLSearchParams(location.search);const preview=qs.has('preview');if(preview)document.body.classList.add('preview');
 const symbols=['♥','♦','♣','♠'],colours=['#ca4438','#d6ad35','#4e8164','#3c559f'],pos=[[110,105],[330,105],[330,310],[110,310]];
 let seed=Number(qs.get('seed'))||1941,board=[4,0,5,1],hand=[],pile=[],selected=-1,moves=0,current=0,stage=0,history=[],undo=[],running=false,finished=false,runNo=0,timer=0;let duel=qs.get('mode')==='duel',round=0,botHand=[],pending=false,botNote='',duelResult='';let workshop=qs.get('mode')==='workshop';$('mode').value=duel?'duel':workshop?'workshop':'challenge';

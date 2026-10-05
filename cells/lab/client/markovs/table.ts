@@ -10,7 +10,7 @@
  * King wins; thirty rolls without one is a draw.
  */
 import { seeded as rng } from '../kit/rng';
-import { ACE, DIRS, JACK, JOKER, KING, KING_AT, QUEEN, RULES, SIZE, canPlace, cardName, destination, exits, forecast, hasEmpty, isKing, key, neighbour, pack, setup, shuffle, xy, type Board, type Card, type Rules, type Tile } from './deck';
+import { ACE, DIRS, JACK, JOKER, KING, KING_AT, QUEEN, RULES, SIZE, START, canPlace, cardName, destination, exits, forecast, hasEmpty, isKing, key, neighbour, pack, setup, shuffle, xy, type Board, type Card, type Rules, type Tile } from './deck';
 
 export interface Player {
   name: string;
@@ -170,6 +170,9 @@ function arrive(g: Game, at: string) {
   if (isKing(t)) {
     const who = g.players.findIndex((p) => p.suit === t!.card.suit);
     if (who >= 0) { g.phase = 'over'; g.winner = who; g.log.push(`${g.players[who].name} arrives at the King of ${['hearts', 'diamonds', 'clubs', 'spades'][t!.card.suit]}: the chain carried them through.`); return; }
+    // (nobody's King: the wrong door — back to the start)
+    g.token = START;
+    g.log.push(`The King of ${['hearts', 'diamonds', 'clubs', 'spades'][t!.card.suit]} is nobody's: back to the start.`);
   }
   if (g.rolls >= ROLL_CAP) { g.phase = 'over'; g.winner = -1; g.log.push('Thirty rolls, and nobody home: a draw.'); return; }
   endTurn(g);

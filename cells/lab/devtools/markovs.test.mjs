@@ -52,6 +52,18 @@ for (const [seed, n] of [[1, 2], [2, 3], [3, 4], [4, 4]]) {
   if (g.winner >= 0) assert.equal(g.board.get(g.token).card.suit, g.players[g.winner].suit, 'the winner is at their own King');
   assert.ok(!D.hasEmpty(g.board), 'the table was built');
 }
+// a decoy King sends the counter back to the start
+{
+  const g = T.newGame(5, ['a', 'b'], [true, true]);
+  const decoy = [0, 1, 2, 3].find((s) => !g.players.some((p) => p.suit === s));
+  g.phase = 'race'; g.laid = true; g.token = D.key(2, 1);
+  g.board.set(D.key(2, 1), { card: { suit: 0, rank: 2 }, rotation: 0 });
+  // (put the decoy King north of it)
+  const was = g.board.get(D.KING_AT[0]); g.board.set(D.KING_AT[0], { card: { suit: decoy, rank: D.KING }, rotation: 0 }); g.board.set(D.KING_AT[decoy], was);
+  T.act(g, { kind: 'roll', face: 1 });
+  assert.equal(g.token, D.START, 'nobody\'s King: back to the start');
+  assert.equal(g.phase, 'race');
+}
 // same seed, same game
 const a = T.newGame(7, ['x', 'y'], [true, true]), c = T.newGame(7, ['x', 'y'], [true, true]);
 for (let i = 0; i < 60 && a.phase !== 'over'; i++) { T.act(a, T.botAction(a)); T.act(c, T.botAction(c)); }

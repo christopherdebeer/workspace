@@ -257,6 +257,7 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
     }
     if (!moved) { const res = D.destination(board, token, 1 + Math.floor(r() * 6), rules); token = res.at; if (res.reason !== 'move') stalls++; }
     const t = board.get(token); if (D.isKing(t)) { const who = mine.indexOf(t.card.suit); if (who >= 0) return { winner: who, rolls: roll + 1, stalls, played }; }
+    if (D.isKing(t)) token = D.START; // (a decoy: back to the start)
   }
   return { winner: -1, rolls: CAP, stalls, played };
 }
