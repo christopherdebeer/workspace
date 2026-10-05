@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { EXPERIMENTS, groups, type Experiment } from './experiments';
 import { markdown } from './md';
@@ -17,7 +17,9 @@ import { markdown } from './md';
  *                written to the namespace and returned — and never asked of this Lambda again
  *
  * Everything under `/~/` is named by its content's hash — the bundle (`/~/a/<hash>.js`), each
- * experiment's page (`/~/e/<id>/<hash>/`), each README (`/~/r/<id>/<hash>/`) — so it is immutable:
+ * experiment's page (`/~/e/<id>/<hash>/`), each README (`/~/r/<id>/<hash>/`), an experiment's
+ * assets (`static/<id>/*`, at `/~/a/<id>/<hash>/<file>`; the page gets the folder as
+ * `{{assets}}`) — so it is immutable:
  * a deploy makes new names, old pages keep working, and nothing ever needs invalidating. Opening
  * an experiment costs no compute at all once its files have been asked for once.
  *
@@ -48,13 +50,23 @@ function build(): Built {
   objects.set(appPath, { body: app, type: 'application/javascript; charset=utf-8' });
   const pageOf = new Map<string, string>();
   const readmeOf = new Map<string, string>();
+  const TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', woff2: 'font/woff2', json: 'application/json' };
   for (const e of EXPERIMENTS) {
+    // (the experiment's assets, if it has a folder of them: one hash for the set)
+    let assets = '';
+    const dir = here(`static/${e.id}`);
+    if (existsSync(dir)) {
+      const files = readdirSync(dir).filter((f) => TYPES[f.split('.').pop() ?? '']).sort().map((f) => [f, readFileSync(join(dir, f))] as const);
+      assets = `/~/a/${e.id}/${hash(Buffer.concat(files.map(([, b]) => b)))}/`;
+      for (const [f, b] of files) objects.set(assets + f, { body: b, type: TYPES[f.split('.').pop()!] });
+    }
     // (its address shown as the stable `/<id>?…`, not the hashed path it was served from: a reload
     // then asks for the experiment as it is now, not this deploy's copy forever)
     const stable = `<script>history.replaceState(null, '', '/${e.id}' + location.search + location.hash)</script>`;
     const page = html(
       readFileSync(here(e.page), 'utf8')
         .replace('{{app}}', appPath)
+        .replace(/\{\{assets\}\}/g, assets)
         .replace('{{readme}}', `/${e.id}/readme`)
         .replace('<head>', `<head>\n${stable}`),
     );

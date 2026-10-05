@@ -18,12 +18,12 @@ Every card has a job on the table (`client/markovs/deck.ts`):
 | **Queens** | swap: exchange two junctions on the table; the counter stays on its square |
 | **Jokers** | chaos: instead of rolling, ignore the faces — the counter takes one of its card's outward exits at random (north, east, south, west; two exits 1–3/4–6, three 1–2/3–4/5–6, four 1–4 and reroll 5–6) |
 
-**The temperaments:** ♥ *the current* leans one way (four faces on its main exit); ♦ *the mirror*
+**The temperaments:** ♥ *the River* leans one way (four faces on its main exit); ♦ *the mirror*
 is even-handed; ♣ *the thicket* grows one more branch than the shape has; ♠ *the well* holds a
 while (three or four faces stay). **The shapes**, by rank, with each suit's faces as
 up / right / down / left / stay:
 
-| rank | shape | ♥ current | ♦ mirror | ♣ thicket | ♠ well |
+| rank | shape | ♥ River | ♦ mirror | ♣ thicket | ♠ well |
 |---|---|---|---|---|---|
 | 2 | THROUGH | ↑4 ↓2 | ↑3 ↓3 | ↑3 →1 ↓2 | ↑2 ↓1 ·3 |
 | 3 | TURN | ↑4 →2 | ↑3 →3 | ↑3 →2 ←1 | ↑2 →1 ·3 |
@@ -34,6 +34,12 @@ up / right / down / left / stay:
 | 8 | WEIR | ↑4 ↓1 ·1 | ↑2 ↓2 ·2 | ↑2 →1 ↓2 ·1 | ↑1 ↓1 ·4 |
 | 9 | FORK | ↑3 →1 ←1 ·1 | ↑2 →1 ←1 ·2 | ↑1 →3 ←1 ·1 | ↑1 →2 ←1 ·2 |
 | 10 | BACKTURN | ↑2 →4 | ↑3 ←2 ·1 | ↑2 →1 ←3 | ↑2 ←1 ·3 |
+
+**The dress** (`static/markovs/`, served by the cell as the page's assets): the four suits are
+painted places — the River, the Mirror, the Thicket, the Well — and each junction wears its
+suit's scene above the arrows, the frame, a sigil in the margin, a divider, and the suit's plate
+with the shape's name. The court is painted whole: the Jacks are the Wayfinders, the Queens the
+Exchange, the Kings the four places. Jokers and the plain fallback (no assets) stay drawn.
 
 No two are the same card turned (the test checks all thirty-six; the Twos, the simplest, are
 the ones dealt as commissions). Nobody memorises them: the
@@ -113,7 +119,7 @@ rules; the tuck box as a die-line (65 × 90 × 19 mm inside, for card stock: cut
 fold the dashed, glue the flap); the rules as a folded insert for the box (six panels of
 60 × 85 mm on one 180 × 170 mm sheet — fold in half so the lower row, printed upside down,
 turns up behind, then in three); and six sheets of nine cards at 63 × 88 mm.
-`devtools/out/markovs-print.mjs <dir>` renders it to PDF and PNGs and measures every page.
+`devtools/markovs-print.mjs <dir>` renders it to PDF and PNGs and measures every page.
 
 ## After the review
 

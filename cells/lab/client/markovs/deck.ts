@@ -3,7 +3,7 @@
  *
  * Fifty-two cards and two jokers, every one with a job on the table:
  * - **2–10, four suits:** thirty-six junctions. The rank is the shape (through, a turn, a tee…)
- *   and the suit its temperament: hearts lean one way, diamonds are even-handed, clubs grow one
+ *   and the suit its temperament: hearts (the river) lean one way, diamonds (the mirror) are even-handed, clubs grow one
  *   more branch, spades hold a while. A junction's six die faces each name an exit (north,
  *   east, south, west) or a stay; the faces turn with the card.
  * - **Kings:** the four destinations, one a suit, laid at the middle of each edge of a 5×5 table.
@@ -30,7 +30,9 @@ export const SUIT_NAMES = ['hearts', 'diamonds', 'clubs', 'spades'];
 export const SIZE = 5;
 
 /** The four temperaments: how a suit spreads its six faces over a shape. */
-export const TEMPER = ['the current', 'the mirror', 'the thicket', 'the well'];
+export const TEMPER = ['the river', 'the mirror', 'the thicket', 'the well'];
+/** the four places, as the Kings name them */
+export const PLACES = ['The River', 'The Mirror', 'The Thicket', 'The Well'];
 export const TEMPER_NOTE = ['leans one way', 'even-handed', 'one more branch', 'holds a while'];
 /** The nine shapes, by rank; for each, the four suits' weights over [north, east, south, west,
  *  stay]. Thirty-six junctions, no two the same under rotation (the test checks). */

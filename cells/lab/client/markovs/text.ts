@@ -33,7 +33,7 @@ export const RULES_TEXT: Section[] = [
   ] },
   { title: 'Reading a card', body: [
     'Six die faces, each an exit or a stay, printed as ranges beside the arrows: 7♠ SWITCH reads 1 north, 2 east, 3–6 stay. Turn the card and the arrows turn with it: a quarter turn clockwise makes that 1 east, 2 south, 3–6 stay.',
-    'The rank is the shape — 2 THROUGH, 3 TURN, 4 TEE, 5 CROSS, 6 EDDY, 7 SWITCH, 8 WEIR, 9 FORK, 10 BACKTURN — and the suit its temperament: ♥ the current leans one way, ♦ the mirror is even-handed, ♣ the thicket grows one more branch, ♠ the well holds a while. No two junctions are the same card turned.',
+    'The rank is the shape — 2 THROUGH, 3 TURN, 4 TEE, 5 CROSS, 6 EDDY, 7 SWITCH, 8 WEIR, 9 FORK, 10 BACKTURN — and the suit its temperament, a place: ♥ the River leans one way, ♦ the Mirror is even-handed, ♣ the Thicket grows one more branch, ♠ the Well holds a while. The Kings are those places; the Jacks are Wayfinders, the Queens the Exchange. No two junctions are the same card turned.',
   ] },
   { title: 'The first lesson', body: [
     'Before a first game: put the counter on any junction and say where each die face sends it. Turn the card a quarter and say it again. Lay a second card beside it and resolve two rolls. Now add a King — and a secret about who wants it. That is the whole game.',

@@ -28,41 +28,58 @@ export function literal(t: Tile): string {
   const rg = ranges(t);
   return [0, 1, 2, 3, -1].filter((d) => rg.has(d)).map((d) => `${rg.get(d)} ${d < 0 ? (rg.get(d)!.length > 1 ? 'stay' : 'stays') : DIR_NAMES[d]}`).join(' · ');
 }
+/** where the experiment's assets are served from ('' when there are none: the plain design) */
+const ASSETS = (() => { const m = typeof document !== 'undefined' ? document.querySelector<HTMLMetaElement>('meta[name=assets]') : null; return m?.content && !m.content.includes('{{') ? m.content : ''; })();
+const SUIT_KEY = ['h', 'd', 'c', 's'];
+const COURT = { [JACK]: ['THE WAYFINDER', 'REROUTE', 'Walk one step your way.'], [QUEEN]: ['THE EXCHANGE', 'SWAP', 'Exchange two junctions.'], [KING]: ['DESTINATION', 'DESTINATION', 'Reach this suit to win.'] } as Record<number, string[]>;
 /** `square`: a square viewport the card fits either way up (the table's parking spaces) */
 export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): string {
   const col = card.rank === JOKER ? '#24231f' : COL[card.suit];
   const suit = card.rank === JOKER ? '★' : SUITS[card.suit];
   const rank = card.rank === JOKER ? 'JOKER' : RANK[card.rank];
   const role = roleOf(card);
-  const note = card.rank === JOKER ? 'A random exit. No dice.' : card.rank === ACE ? 'Lay anywhere. A cross.' : card.rank === JACK ? 'Walk one step your way.' : card.rank === QUEEN ? 'Exchange two junctions.' : card.rank === KING ? 'Reach this suit to finish.' : SHAPES[card.rank].note;
-  let mid = '';
-  const cx = 31.5, cy = 42;
+  const sk = SUIT_KEY[card.suit];
+  const open = `<svg viewBox="${square ? '-12.5 0 88 88' : '0 0 63 88'}" aria-hidden="true"><g transform="rotate(${rotation * 90} 31.5 44)">`;
+  // the court, painted: the Wayfinders, the Exchange, the four places
+  if (ASSETS && (card.rank === JACK || card.rank === QUEEN || card.rank === KING)) {
+    return `${open}<rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/><clipPath id="${id}cp"><rect x=".6" y=".6" width="61.8" height="86.8" rx="4"/></clipPath><image href="${ASSETS}${RANK[card.rank]}${card.suit}.jpg" x=".6" y=".6" width="61.8" height="86.8" preserveAspectRatio="none" clip-path="url(#${id}cp)"/></g></svg>`;
+  }
   const arrow = `<marker id="${id}a" markerWidth="4" markerHeight="4" refX="3" refY="2" orient="auto"><path d="M0 0L4 2L0 4" fill="#34312c"/></marker>`;
+  const note = card.rank === JOKER ? 'A random exit. No dice.' : card.rank === ACE ? 'Lay anywhere. A cross.' : card.rank === JACK || card.rank === QUEEN || card.rank === KING ? COURT[card.rank][2] : SHAPES[card.rank].note;
+  // the junction: the arrows, the faces that take them, a loop for the stays
+  const cx = 31.5, cy = ASSETS ? 47 : 42, R = ASSETS ? 15 : 20;
+  let mid = '';
   if (card.rank === KING) mid = `<circle cx="${cx}" cy="${cy}" r="19" fill="none" stroke="${col}" stroke-width=".4" stroke-dasharray="1 1.5"/><circle cx="${cx}" cy="${cy}" r="15" fill="none" stroke="${col}" stroke-width=".4"/><circle cx="${cx}" cy="${cy}" r="11" fill="${col}"/><text x="${cx}" y="${cy + 5}" text-anchor="middle" fill="#fff" font-size="14">${suit}</text>`;
   else if (card.rank === JACK) mid = `<path d="M${cx - 16} ${cy + 4}Q${cx} ${cy - 22} ${cx + 16} ${cy + 4}" fill="none" stroke="#34312c" stroke-width=".9" stroke-dasharray="2 1.5" marker-end="url(#${id}a)"/><path d="M${cx - 16} ${cy + 6}H${cx + 14}" stroke="#34312c" stroke-width=".9" marker-end="url(#${id}a)"/><circle cx="${cx - 16}" cy="${cy + 5}" r="3.5" fill="${col}"/><circle cx="${cx + 17}" cy="${cy + 5}" r="3.5" fill="${col}"/>`;
   else if (card.rank === QUEEN) mid = `<path d="M${cx - 13} ${cy - 11}L${cx + 11} ${cy + 9}" stroke="#34312c" stroke-width=".9" marker-end="url(#${id}a)"/><path d="M${cx + 13} ${cy - 11}L${cx - 11} ${cy + 9}" stroke="#34312c" stroke-width=".9" marker-end="url(#${id}a)"/><circle cx="${cx - 14}" cy="${cy - 12}" r="3.5" fill="${col}"/><circle cx="${cx + 14}" cy="${cy - 12}" r="3.5" fill="${col}"/><circle cx="${cx - 14}" cy="${cy + 12}" r="3.5" fill="${col}"/><circle cx="${cx + 14}" cy="${cy + 12}" r="3.5" fill="${col}"/>`;
-  else if (card.rank === JOKER) mid = [0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<path d="M${cx} ${cy}L${cx + Math.cos((a * Math.PI) / 180) * 17} ${cy + Math.sin((a * Math.PI) / 180) * 17}" stroke="#34312c" stroke-width=".7" stroke-dasharray="1.5 1" marker-end="url(#${id}a)"/>`).join('') + `<circle cx="${cx}" cy="${cy}" r="4" fill="#eee8d3" stroke="#50452f" stroke-width=".6"/>`;
+  else if (card.rank === JOKER) mid = [0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<path d="M${cx} ${cy}L${cx + Math.cos((a * Math.PI) / 180) * (R - 3)} ${cy + Math.sin((a * Math.PI) / 180) * (R - 3)}" stroke="#34312c" stroke-width=".7" stroke-dasharray="1.5 1" marker-end="url(#${id}a)"/>`).join('') + `<circle cx="${cx}" cy="${cy}" r="4" fill="#eee8d3" stroke="#50452f" stroke-width=".6"/>`;
   else {
     const t: Tile = { card, rotation: 0 };
     const rg = ranges(t);
-    const pts = [[cx, cy - 20], [cx + 20, cy], [cx, cy + 20], [cx - 20, cy]];
-    const lab = [[cx + 6, cy - 13], [cx + 12, cy - 4], [cx + 6, cy + 15], [cx - 12, cy - 4]];
+    const pts = [[cx, cy - R], [cx + R, cy], [cx, cy + R], [cx - R, cy]];
+    const lab = [[cx + 6, cy - R + 7], [cx + R - 8, cy - 4], [cx + 6, cy + R - 5], [cx - R + 8, cy - 4]];
     for (let d = 0; d < 4; d++) {
       const [x, y] = pts[d];
       const dotted = card.rank === ACE;
       mid += `<circle cx="${x}" cy="${y}" r="${dotted ? 3.5 : 1.3}" fill="${dotted ? 'none' : '#f9f6ea'}" stroke="#8e826b" stroke-width=".5" ${dotted ? 'stroke-dasharray="1 1"' : ''}/>`;
       if (rg.has(d) || dotted) mid += `<path d="M${cx} ${cy}L${cx + (x - cx) * 0.82} ${cy + (y - cy) * 0.82}" stroke="#34312c" stroke-width="1" ${dotted ? 'stroke-dasharray="1.5 1"' : ''} marker-end="url(#${id}a)"/>` + (rg.has(d) ? `<text x="${lab[d][0]}" y="${lab[d][1]}" text-anchor="middle" font-size="4.6" font-family="ui-monospace,monospace" fill="#27379b">${rg.get(d)}</text>` : '');
     }
-    if (rg.has(-1)) mid += `<path d="M${cx - 4} ${cy - 3}C${cx - 24} ${cy - 22} ${cx - 24} ${cy + 14} ${cx - 5} ${cy + 3}" fill="none" stroke="#34312c" stroke-width=".9" stroke-dasharray="1.5 1.2" marker-end="url(#${id}a)"/><text x="${cx - 17}" y="${cy + 10}" font-size="4.6" font-family="ui-monospace,monospace" fill="#27379b">${rg.get(-1)}</text>`;
+    if (rg.has(-1)) mid += `<path d="M${cx - 4} ${cy - 3}C${cx - R - 4} ${cy - R - 2} ${cx - R - 4} ${cy + 14} ${cx - 5} ${cy + 3}" fill="none" stroke="#34312c" stroke-width=".9" stroke-dasharray="1.5 1.2" marker-end="url(#${id}a)"/><text x="${cx - R + 3}" y="${cy + 10}" font-size="4.6" font-family="ui-monospace,monospace" fill="#27379b">${rg.get(-1)}</text>`;
     mid += `<circle cx="${cx}" cy="${cy}" r="4" fill="#eee8d3" stroke="#50452f" stroke-width=".6"/>`;
   }
-  // (the dress: an orbit with its four stations, a sigil column in the margin — the suit's
+  const under = card.rank >= 2 && card.rank <= 10 ? TEMPER[card.suit].toUpperCase() : '';
+  if (ASSETS && card.rank !== JOKER) {
+    // the painted dress: the frame, the suit's place above the junction, its plate below, a corner
+    const img = (f: string, x: number, y: number, w: number, h: number, extra = '') => `<image href="${ASSETS}${f}" x="${x}" y="${y}" width="${w}" height="${h}" ${extra}/>`;
+    const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x + 2.2} ${y - 2})"` : ''}><text x="${x}" y="${y}" font-size="8" font-family="Georgia" fill="${col}">${rank}</text>${img(`${sk}-glyph.png`, x - 0.2, y + 1.6, 4.6, 4.4, 'preserveAspectRatio="xMidYMid meet"')}</g>`;
+    return `${open}<defs>${arrow}</defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/>${img('frame.png', 1.2, 1.2, 60.6, 85.6, 'preserveAspectRatio="none"')}${img(`${sk}-scene.png`, 11.5, 7, 41.5, 22, 'preserveAspectRatio="xMidYMid slice"')}${img(`${sk}-sigil.png`, 5.2, 31, 3.4, 8.8)}${img(`${sk}-sigil.png`, 54.4, 51, 3.4, 8.8, 'transform="rotate(180 56.1 55.4)"')}${corner(6, 12.5, false)}${corner(57, 75.5, true)}${mid}${img(`${sk}-divider.png`, 21.5, 63.2, 20, 6.8, 'preserveAspectRatio="xMidYMid meet"')}${img(`${sk}-plate.png`, 12.5, 69.4, 38, 12, 'preserveAspectRatio="none"')}<text x="31.5" y="74.9" text-anchor="middle" font-size="4" font-family="Georgia" letter-spacing=".6" fill="#24231f">${card.rank === ACE ? 'THE WILD' : role}</text><text x="31.5" y="78.1" text-anchor="middle" font-size="1.9" font-family="ui-monospace,monospace" letter-spacing=".2" fill="${under ? col : '#5b5443'}">${note.toUpperCase().replace(/\.$/, '')}</text></g></svg>`;
+  }
+  // (the plain dress: an orbit with its four stations, a sigil column in the margin — the suit's
   // temperament — and the temperament named under the shape)
   const sig = { 0: `<path d="M3.5 30c1.5-1.2 3-1.2 4.5 0M3.5 33c1.5-1.2 3-1.2 4.5 0" fill="none" stroke="${col}" stroke-width=".5"/>`, 1: `<path d="M5.75 29l2.2 2.2-2.2 2.2-2.2-2.2z" fill="none" stroke="${col}" stroke-width=".5"/>`, 2: `<path d="M5.75 34v-3m0 0l-2-2m2 2l2-2" fill="none" stroke="${col}" stroke-width=".5"/>`, 3: `<circle cx="5.75" cy="31.5" r="2.2" fill="none" stroke="${col}" stroke-width=".5"/><circle cx="5.75" cy="31.5" r=".8" fill="${col}"/>` }[card.rank === JOKER ? 3 : card.suit];
   const dress = card.rank === KING || card.rank === JOKER ? '' : `<circle cx="${cx}" cy="${cy}" r="24" fill="none" stroke="#8e826b" stroke-width=".35" stroke-dasharray="1 1.6"/>${[0, 1, 2, 3].map((d) => `<circle cx="${cx + [0, 24, 0, -24][d]}" cy="${cy + [-24, 0, 24, 0][d]}" r=".9" fill="#8e826b"/>`).join('')}<path d="M5.75 22v4m0 14v18" stroke="#8e826b" stroke-width=".3" stroke-dasharray=".8 1.4"/>${sig}<path d="M57.25 28v30" stroke="#8e826b" stroke-width=".3" stroke-dasharray=".8 1.4"/><circle cx="57.25" cy="43" r=".9" fill="none" stroke="#8e826b" stroke-width=".4"/>`;
-  const under = card.rank >= 2 && card.rank <= 10 ? TEMPER[card.suit].toUpperCase() : '';
   const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x} ${y})"` : ''}><text x="${x}" y="${y}" font-size="${card.rank === JOKER ? 4 : 8}" font-family="Georgia" fill="${col}">${rank}</text><text x="${x}" y="${y + 7}" font-size="6" fill="${col}">${suit}</text></g>`;
-  return `<svg viewBox="${square ? '-12.5 0 88 88' : '0 0 63 88'}" aria-hidden="true"><defs>${arrow}</defs><g transform="rotate(${rotation * 90} 31.5 44)"><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/><rect x="3" y="3" width="57" height="82" rx="2.5" fill="none" stroke="#514d3b" stroke-width=".3" opacity=".5"/>${dress}${corner(5, 11, false)}${corner(58, 77, true)}${mid}<path d="M12 68H51" stroke="#8e826b" stroke-width=".3"/><text x="31.5" y="73.5" text-anchor="middle" font-size="5" font-family="ui-monospace,monospace" letter-spacing=".5">${role}</text>${under ? `<text x="31.5" y="77.5" text-anchor="middle" font-size="3.2" font-family="ui-monospace,monospace" letter-spacing=".6" fill="${col}">${under}</text>` : ''}<text x="31.5" y="82" text-anchor="middle" font-size="3.3" font-family="ui-monospace,monospace" fill="#5b5443">${note}</text></g></svg>`;
+  return `${open}<defs>${arrow}</defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/><rect x="3" y="3" width="57" height="82" rx="2.5" fill="none" stroke="#514d3b" stroke-width=".3" opacity=".5"/>${dress}${corner(5, 11, false)}${corner(58, 77, true)}${mid}<path d="M12 68H51" stroke="#8e826b" stroke-width=".3"/><text x="31.5" y="73.5" text-anchor="middle" font-size="5" font-family="ui-monospace,monospace" letter-spacing=".5">${role}</text>${under ? `<text x="31.5" y="77.5" text-anchor="middle" font-size="3.2" font-family="ui-monospace,monospace" letter-spacing=".6" fill="${col}">${under}</text>` : ''}<text x="31.5" y="82" text-anchor="middle" font-size="3.3" font-family="ui-monospace,monospace" fill="#5b5443">${note}</text></g></svg>`;
 }
 
 // ─── the page ─────────────────────────────────────────────────────────────────────────────────

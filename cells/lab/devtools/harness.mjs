@@ -41,12 +41,19 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
   const built = await build({ entryPoints: [join(CELL, 'client/main.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
   const app = built.outputFiles[0].text;
   // (the lab's page for the experiment, its bundle served from here)
-  const html = readFileSync(join(CELL, `static/${process.env.EXPERIMENT ?? 'mistwood'}.html`), 'utf8').replace('{{app}}', '/app.js');
+  const exp = process.env.EXPERIMENT ?? 'mistwood';
+  const html = readFileSync(join(CELL, `static/${exp}.html`), 'utf8').replace('{{app}}', '/app.js').replace(/\{\{assets\}\}/g, '/assets/');
+  const TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml' };
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/app.js') {
       res.writeHead(200, { 'content-type': 'application/javascript' });
       return res.end(app);
+    }
+    if (u.pathname.startsWith('/assets/')) {
+      // (the experiment's assets, as the cell serves them from static/<id>/)
+      const f = join(CELL, `static/${exp}`, u.pathname.slice(8));
+      if (existsSync(f)) { res.writeHead(200, { 'content-type': TYPES[f.split('.').pop()] ?? 'application/octet-stream' }); return res.end(readFileSync(f)); }
     }
     if (u.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html' });
