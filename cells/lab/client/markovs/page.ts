@@ -3,8 +3,9 @@
  * round; a curtain hides the hand between turns) or against bots. Everything the page does goes
  * through table.ts' `legal()` and `act()`, so what you can tap is exactly what the rules allow.
  */
-import { ACE, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, KING_AT, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, isKing, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
+import { ACE, DIR_NAMES, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
 import { ROLL_CAP, act, botAction, clone, current, legal, newGame, type Action, type Game } from './table';
+import { RULES_TEXT } from './text';
 
 const $ = (id: string) => document.getElementById(id)!;
 const qs = new URLSearchParams(location.search);
@@ -21,7 +22,14 @@ function ranges(t: Tile): Map<number, string> {
   for (const [d, fs] of by) out.set(d, fs.length > 1 && fs.every((f, i) => !i || f === fs[i - 1] + 1) ? `${fs[0]}–${fs[fs.length - 1]}` : fs.join(','));
   return out;
 }
-export function cardSvg(card: Card, rotation = 0, id = 'c'): string {
+/** a card's faces in plain words, as it lies: "1–4 north · 5 east · 6 stays" */
+export function literal(t: Tile): string {
+  if (t.card.rank === KING) return 'a destination: the counter stops here';
+  const rg = ranges(t);
+  return [0, 1, 2, 3, -1].filter((d) => rg.has(d)).map((d) => `${rg.get(d)} ${d < 0 ? (rg.get(d)!.length > 1 ? 'stay' : 'stays') : DIR_NAMES[d]}`).join(' · ');
+}
+/** `square`: a square viewport the card fits either way up (the table's parking spaces) */
+export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): string {
   const col = card.rank === JOKER ? '#24231f' : COL[card.suit];
   const suit = card.rank === JOKER ? '★' : SUITS[card.suit];
   const rank = card.rank === JOKER ? 'JOKER' : RANK[card.rank];
@@ -54,7 +62,7 @@ export function cardSvg(card: Card, rotation = 0, id = 'c'): string {
   const dress = card.rank === KING || card.rank === JOKER ? '' : `<circle cx="${cx}" cy="${cy}" r="24" fill="none" stroke="#8e826b" stroke-width=".35" stroke-dasharray="1 1.6"/>${[0, 1, 2, 3].map((d) => `<circle cx="${cx + [0, 24, 0, -24][d]}" cy="${cy + [-24, 0, 24, 0][d]}" r=".9" fill="#8e826b"/>`).join('')}<path d="M5.75 22v4m0 14v18" stroke="#8e826b" stroke-width=".3" stroke-dasharray=".8 1.4"/>${sig}<path d="M57.25 28v30" stroke="#8e826b" stroke-width=".3" stroke-dasharray=".8 1.4"/><circle cx="57.25" cy="43" r=".9" fill="none" stroke="#8e826b" stroke-width=".4"/>`;
   const under = card.rank >= 2 && card.rank <= 10 ? TEMPER[card.suit].toUpperCase() : '';
   const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x} ${y})"` : ''}><text x="${x}" y="${y}" font-size="${card.rank === JOKER ? 4 : 8}" font-family="Georgia" fill="${col}">${rank}</text><text x="${x}" y="${y + 7}" font-size="6" fill="${col}">${suit}</text></g>`;
-  return `<svg viewBox="0 0 63 88" aria-hidden="true"><defs>${arrow}</defs><g transform="rotate(${rotation * 90} 31.5 44)"><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/><rect x="3" y="3" width="57" height="82" rx="2.5" fill="none" stroke="#514d3b" stroke-width=".3" opacity=".5"/>${dress}${corner(5, 11, false)}${corner(58, 77, true)}${mid}<path d="M12 68H51" stroke="#8e826b" stroke-width=".3"/><text x="31.5" y="73.5" text-anchor="middle" font-size="5" font-family="ui-monospace,monospace" letter-spacing=".5">${role}</text>${under ? `<text x="31.5" y="77.5" text-anchor="middle" font-size="3.2" font-family="ui-monospace,monospace" letter-spacing=".6" fill="${col}">${under}</text>` : ''}<text x="31.5" y="82" text-anchor="middle" font-size="3.3" font-family="ui-monospace,monospace" fill="#5b5443">${note}</text></g></svg>`;
+  return `<svg viewBox="${square ? '-12.5 0 88 88' : '0 0 63 88'}" aria-hidden="true"><defs>${arrow}</defs><g transform="rotate(${rotation * 90} 31.5 44)"><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="#f9f6ea" stroke="#655b44" stroke-width=".8"/><rect x="3" y="3" width="57" height="82" rx="2.5" fill="none" stroke="#514d3b" stroke-width=".3" opacity=".5"/>${dress}${corner(5, 11, false)}${corner(58, 77, true)}${mid}<path d="M12 68H51" stroke="#8e826b" stroke-width=".3"/><text x="31.5" y="73.5" text-anchor="middle" font-size="5" font-family="ui-monospace,monospace" letter-spacing=".5">${role}</text>${under ? `<text x="31.5" y="77.5" text-anchor="middle" font-size="3.2" font-family="ui-monospace,monospace" letter-spacing=".6" fill="${col}">${under}</text>` : ''}<text x="31.5" y="82" text-anchor="middle" font-size="3.3" font-family="ui-monospace,monospace" fill="#5b5443">${note}</text></g></svg>`;
 }
 
 // ─── the page ─────────────────────────────────────────────────────────────────────────────────
@@ -111,7 +119,7 @@ export default function bootTable() {
       return opts.find((a) => a.kind === 'swap' && ((a.a === swapFirst && a.b === k) || (a.b === swapFirst && a.a === k))) ?? null;
     }
     if (c.rank === JACK && g.laid) return opts.find((a) => a.kind === 'jack' && a.i === selected && neighbour(g.token, a.dir, g.rules) === k) ?? null;
-    return opts.find((a) => a.kind === 'lay' && a.k === k && a.i === selected && a.rotation === (c.rank === ACE ? 0 : rotation)) ?? null;
+    return opts.find((a) => a.kind === 'lay' && a.k === k && a.i === selected && a.rotation === rotation) ?? null;
   }
   function doAct(a: Action) {
     undoStack.push(clone(g));
@@ -151,7 +159,7 @@ export default function bootTable() {
       const legalHere = !!a || (c?.rank === QUEEN && !g.laid && !swapFirst && opts.some((o) => o.kind === 'swap' && (o.a === k || o.b === k)));
       const cls = ['slot', legalHere ? 'legal' : '', swapFirst === k ? 'swap' : '', g.token === k ? 'here' : ''].join(' ');
       const label = t ? `${cardName(t.card)} ${roleOf(t.card)}${t.start ? ', the start' : ''} at ${x + 1},${y + 1}${g.token === k ? ', the counter' : ''}` : `empty space at ${x + 1},${y + 1}`;
-      html += `<button class="${cls}" data-k="${k}" aria-label="${label}${legalHere ? '; tap to play here' : ''}">${t ? cardSvg(t.card, t.rotation, `t${x}${y}`) : ''}${g.token === k ? '<span class="counter"></span>' : ''}</button>`;
+      html += `<button class="${cls}" data-k="${k}" aria-label="${label}${legalHere ? '; tap to play here' : ''}">${t ? cardSvg(t.card, t.rotation, `t${x}${y}`, true) : ''}${g.token === k ? '<span class="counter"></span>' : ''}</button>`;
     }
     $('table').innerHTML = html;
     $('table').querySelectorAll<HTMLButtonElement>('[data-k]').forEach((el) => (el.onclick = () => tapSlot(el.dataset.k!)));
@@ -161,19 +169,21 @@ export default function bootTable() {
     ($('peeked') as HTMLElement).style.color = peeked && !p.bot ? COL[p.suit] : '';
     ($('peek') as HTMLButtonElement).disabled = p.bot;
     const show = !p.bot && !curtain;
-    $('hand').innerHTML = show ? p.hand.map((cd, i) => `<button class="card" data-i="${i}" aria-pressed="${selected === i}" aria-label="${cardName(cd)}, ${roleOf(cd)}">${cardSvg(cd, selected === i && cd.rank >= 2 && cd.rank <= 10 ? rotation : 0, `h${i}`)}</button>`).join('') : p.bot ? `<div class="mono">${p.name} is thinking…</div>` : '';
+    $('hand').innerHTML = show ? p.hand.map((cd, i) => `<button class="card" data-i="${i}" aria-pressed="${selected === i}" aria-label="${cardName(cd)}, ${roleOf(cd)}">${cardSvg(cd, selected === i && (cd.rank === ACE || (cd.rank >= 2 && cd.rank <= 10)) ? rotation : 0, `h${i}`, true)}</button>`).join('') : p.bot ? `<div class="mono">${p.name} is thinking…</div>` : '';
     $('hand').querySelectorAll<HTMLButtonElement>('[data-i]').forEach((el) => (el.onclick = () => { const i = Number(el.dataset.i); selected = selected === i ? -1 : i; rotation = 0; swapFirst = null; render(); }));
     // words
     const needLay = !g.laid && g.phase !== 'over';
     let detail = '';
-    if (g.phase === 'over') detail = g.winner >= 0 ? `${g.players[g.winner].name} arrived at the King of ${SUIT_NAMES[g.players[g.winner].suit]}.` : 'A draw: thirty rolls, and nobody home.';
+    if (g.phase === 'over') detail = g.winner >= 0 ? `${g.players[g.winner].name} arrived at the King of ${SUIT_NAMES[g.players[g.winner].suit]}.` : 'A draw: thirty moves, and nobody home.';
     else if (c) {
       if (c.rank === QUEEN) detail = needLay ? (swapFirst ? 'Now the second junction to swap with it.' : 'A Queen: tap two junctions to swap them.') : 'A Queen is played instead of laying a card.';
       else if (c.rank === JACK) detail = g.laid ? 'A Jack: tap a neighbouring card to walk the counter there instead of rolling.' : 'A Jack is played instead of the roll: lay or pass first.';
       else if (c.rank === JOKER) detail = g.laid ? 'A Joker: chaos instead of the roll — the counter takes one of its exits at random.' : 'A Joker is played instead of the roll: lay or pass first.';
-      else detail = `${roleOf(c)} of ${TEMPER[c.suit]} / ${SHAPES[c.rank]?.note ?? ''} ${TEMPER_NOTE[c.suit]}. Turn it, then tap a space.${g.laid ? ' (You have laid this turn.)' : ''}`;
+      else detail = `${roleOf(c)} of ${TEMPER[c.suit]} / ${SHAPES[c.rank]?.note ?? 'A cross.'} ${TEMPER_NOTE[c.suit]}. As turned: ${literal({ card: c, rotation })}. Tap a space.${g.laid ? ' (You have laid this turn.)' : ''}`;
     } else detail = needLay ? (g.phase === 'build' ? 'Choose a card, turn it, lay it touching the chain.' : 'Lay a card on any junction, play a Queen, or pass; then roll.') : 'Roll the die — or play a Jack or a Joker instead.';
     $('detail').textContent = detail;
+    const under = g.board.get(g.token)!;
+    $('under').textContent = g.phase === 'build' ? '' : `Under the counter: ${cardName(under.card)} ${roleOf(under.card)}${under.rotation ? `, turned ${under.rotation === 1 ? 'once' : under.rotation === 2 ? 'twice' : 'three times'}` : ''} — ${literal(under)}.`;
     const status = g.phase === 'over' ? '' : curtain ? `Pass the table to ${p.name}.` : g.phase === 'build' ? `${p.name} to lay a card. ${g.pile.length} in the pile.` : `${p.name} to ${needLay ? 'lay, then roll' : 'roll'}. Counter at ${g.token.split(',').map((v) => Number(v) + 1).join(',')}.`;
     $('status').textContent = status;
     $('die').textContent = g.die ? String(g.die) : '—';
@@ -187,7 +197,7 @@ export default function bootTable() {
     ($('pass') as HTMLButtonElement).disabled = !show || !opts.some((a) => a.kind === 'pass' || a.kind === 'discard') || g.laid;
     ($('pass') as HTMLButtonElement).textContent = g.phase === 'build' ? 'throw a card in' : 'pass';
     ($('undo') as HTMLButtonElement).disabled = !undoStack.length || !show;
-    ($('left') as HTMLButtonElement).disabled = ($('right') as HTMLButtonElement).disabled = !c || c.rank < 2 || c.rank > 10 || g.laid;
+    ($('left') as HTMLButtonElement).disabled = ($('right') as HTMLButtonElement).disabled = !c || c.rank > 10 || g.laid;
     $('faces').querySelectorAll<HTMLButtonElement>('button').forEach((b) => (b.disabled = !canRoll || c?.rank === JOKER));
     // the curtain
     document.querySelector('.curtain')?.remove();
@@ -253,16 +263,45 @@ export default function bootTable() {
   };
 }
 
-/** the print sheet: one page of rules, then the 54 cards at poker size */
+// ─── print: the rules, the box, the insert, the cards ─────────────────────────────────────────
+const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+/** the tuck box for 54 poker cards (65 × 90 × 19 mm inside), flat: cut the solid line, fold the
+ *  dashed ones, glue the narrow flap inside the far side */
+export function boxSvg(): string {
+  const G = 12, W = 65, D = 19, H = 90, T = 14;
+  const x1 = G, x2 = x1 + W, x3 = x2 + D, x4 = x3 + W, x5 = x4 + D;
+  const y1 = T, y2 = y1 + D, y3 = y2 + H, y4 = y3 + D, y5 = y4 + T;
+  const ink = '#24231f';
+  const cut = `M0 ${y2 + 4}L4 ${y2}H${x2}L${x2 + 1} ${y2}L${x2 + 3} ${y1 + 4}H${x3 - 3}L${x3 - 1} ${y2}H${x3}V${y1}H${x3 + 4}Q${x3 + 4} 0 ${x3 + 9} 0H${x4 - 9}Q${x4 - 4} 0 ${x4 - 4} ${y1}H${x4}V${y2}L${x4 + 1} ${y2}L${x4 + 3} ${y1 + 4}H${x5 - 3}L${x5 - 1} ${y2}H${x5}V${y3}H${x5 - 1}L${x5 - 3} ${y4 - 4}H${x4 + 3}L${x4 + 1} ${y3}H${x4}V${y4}H${x4 - 4}Q${x4 - 4} ${y5} ${x4 - 9} ${y5}H${x3 + 9}Q${x3 + 4} ${y5} ${x3 + 4} ${y4}H${x3}V${y3}H${x3 - 1}L${x3 - 3} ${y4 - 4}H${x2 + 3}L${x2 + 1} ${y3}H4L0 ${y3 - 4}Z`;
+  const folds = [[x1, y2, x1, y3], [x2, y2, x2, y3], [x3, y2, x3, y3], [x4, y2, x4, y3], [x2, y2, x5, y2], [x2, y3, x5, y3], [x3, y1, x4, y1], [x3, y4, x4, y4]].map(([a, b, c, d]) => `<path d="M${a} ${b}L${c} ${d}" stroke="${ink}" stroke-width=".25" stroke-dasharray="1.5 1.2"/>`).join('');
+  const side = (x: number) => `<g transform="translate(${x + D / 2} ${y2 + H / 2}) rotate(-90)"><text text-anchor="middle" y="1.5" font-size="3.8" font-family="ui-monospace,monospace" letter-spacing=".9" fill="${ink}">MARKOVS CHAINS · 2–4 PLAYERS</text></g>`;
+  const front = `<g transform="translate(${x1} ${y2})"><rect x="3" y="3" width="${W - 6}" height="${H - 6}" fill="none" stroke="${ink}" stroke-width=".3"/><text x="${W / 2}" y="13" text-anchor="middle" font-size="7.5" font-family="Georgia" letter-spacing="-.3" fill="${ink}">Markovs Chains</text><text x="${W / 2}" y="18" text-anchor="middle" font-size="2.2" font-family="ui-monospace,monospace" letter-spacing=".6" fill="#27379b">A GAME OF FINITE PROBABILITIES</text><svg x="${(W - 34) / 2}" y="24" width="34" height="47.5" viewBox="0 0 63 88">${cardSvg({ suit: 0, rank: 5 }, 0, 'bx').replace(/^<svg[^>]*>|<\/svg>$/g, '')}</svg><text x="${W / 2}" y="79" text-anchor="middle" font-size="2.8" font-family="Georgia" fill="${ink}">Build the table together.</text><text x="${W / 2}" y="83" text-anchor="middle" font-size="2.8" font-family="Georgia" fill="${ink}">Race one counter to your secret King.</text></g>`;
+  const lines = ['One counter, one die, this deck.', 'Kings at the edges, the Ace of spades in', 'the centre. Each player draws a Two face', 'down: its suit is their King, their secret.', '', 'BUILD: lay junctions, turned as you like,', 'until the 5 × 5 table is full.', 'RACE: lay or swap, then roll — the card', 'under the counter says where it goes.', 'Jacks steer, Jokers gamble, Queens swap.', '', 'First to bring the counter to their own', 'King wins — whoever moved it.', '', '2–4 players · 20 minutes · 54 cards'];
+  const back = `<g transform="translate(${x3} ${y2})"><rect x="3" y="3" width="${W - 6}" height="${H - 6}" fill="none" stroke="${ink}" stroke-width=".3"/><text x="${W / 2}" y="11" text-anchor="middle" font-size="4.5" font-family="Georgia" fill="${ink}">Markovs Chains</text>${lines.map((l, i) => `<text x="6" y="${18 + i * 4.3}" font-size="2.7" font-family="Georgia" fill="${ink}">${esc(l)}</text>`).join('')}<text x="${W / 2}" y="${H - 6}" text-anchor="middle" font-size="2.2" font-family="ui-monospace,monospace" fill="#8e826b">AUXILIARY FIELD · LAB · EXPERIMENT 05</text></g>`;
+  const lid = `<g transform="translate(${x3} ${y1})"><text x="${W / 2}" y="${D / 2 + 1.5}" text-anchor="middle" font-size="3.6" font-family="Georgia" fill="${ink}">♥ ♦ ♣ ♠</text></g>`;
+  const glue = `<text transform="translate(${G / 2} ${y2 + H / 2}) rotate(-90)" text-anchor="middle" font-size="2.4" font-family="ui-monospace,monospace" fill="#8e826b">GLUE</text>`;
+  return `<svg viewBox="-5 -5 ${x5 + 10} ${y5 + 10}" width="${x5 + 10}mm" height="${y5 + 10}mm" aria-hidden="true"><path d="${cut}" fill="#f9f6ea" stroke="${ink}" stroke-width=".35"/>${folds}${front}${back}${side(x2)}${side(x4)}${lid}${glue}</svg>`;
+}
+/** the rules as a folded insert for the box: six panels of 60 × 85 mm on one sheet, 180 × 170 mm
+ *  — fold the sheet in half (the bottom row is printed upside down, so it reads once folded
+ *  behind), then in three; it fits in the box */
+export function insertHtml(): string {
+  const panel = (title: string, inner: string, cls = '') => `<div class="ins-panel ${cls}"><div class="ins-title">${title}</div>${inner}</div>`;
+  const sec = (name: string) => { const x = RULES_TEXT.find((r) => r.title === name)!; return x.body.map((b) => `<p>${esc(b)}</p>`).join(''); };
+  const cover = `<div class="ins-cover"><div class="ins-h1">Markovs<br>Chains</div><div class="ins-sub">A GAME OF FINITE PROBABILITIES<br>ON A POKER DECK</div><svg viewBox="0 0 63 88" style="width:26mm;margin:3mm auto;display:block">${cardSvg({ suit: 3, rank: 7 }, 0, 'ins').replace(/^<svg[^>]*>|<\/svg>$/g, '')}</svg><p style="text-align:center">2–4 players · 20 minutes</p>${sec('What you need')}</div>`;
+  const top = [panel('', cover, 'cover'), panel('Setup', sec('Setup')), panel('Build', sec('Build'))];
+  const bottom = [panel('Race', sec('Race')), panel('Winning · The Joker', sec('Winning') + '<div class="ins-sub2">The Joker</div>' + sec('The Joker')), panel('Reading a card · The first lesson', sec('Reading a card') + '<div class="ins-sub2">The first lesson</div>' + sec('The first lesson'))];
+  return `<div class="ins-sheet"><div class="ins-row">${top.join('')}</div><div class="ins-row ins-flip">${bottom.join('')}</div><div class="ins-fold ins-fold-h"></div><div class="ins-fold ins-fold-v" style="left:60mm"></div><div class="ins-fold ins-fold-v" style="left:120mm"></div></div>`;
+}
+/** the print set: a page of rules, the box, the insert, then the 54 cards at poker size, nine
+ *  a sheet (A4, cut on the card borders) */
 function printSheet() {
   const cards = pack();
+  const sheets = Math.ceil(cards.length / 9);
   const pages: string[] = [];
-  for (let i = 0; i < cards.length; i += 9) pages.push(`<section class="print-page"><div class="cap">MARKOVS CHAINS · 63 × 88 mm · SHEET ${i / 9 + 1} OF ${Math.ceil(cards.length / 9)}</div><div class="print-grid">${cards.slice(i, i + 9).map((c, j) => `<div class="print-card">${cardSvg(c, 0, `p${i + j}`)}</div>`).join('')}</div></section>`);
-  $('print-sheet').innerHTML = `<section class="print-page"><h1>Markovs Chains</h1><p><b>A game of finite probabilities on a standard poker deck.</b> Two to four players, one counter, one d6, and the 54 cards here (or any deck: the number cards are junctions, as the table below has them).</p>
-<p><b>Deal.</b> Lay the four Kings face up at the middle of each edge of an imaginary 5 × 5 table, the Ace of spades in the centre, the counter on it. Shuffle the rest. Each player takes one card face down: its suit is their King, and their secret. Deal three cards each.</p>
-<p><b>Build.</b> In turns, lay one card from your hand, turned any way you like, on an empty space touching a laid card (or anywhere on the outer ring; an Ace anywhere). Draw back to three. If you can't lay, throw a card in and draw. No rolling. Build until no space is empty.</p>
-<p><b>Race.</b> On your turn: lay one card on top of any junction (not a King), or play a Queen to swap two junctions, or pass. Then roll the d6. Find that face's arrow on the card under the counter and move one space that way; off the edge, come in on the far side. A loop face stays. Instead of rolling you may play a Jack (walk the counter one space, your choice) or a Joker (the counter takes one of its card's exits at random). Draw back to three.</p>
-<p><b>Winning.</b> The first time the counter arrives at your King, show your face-down card: you win. Arriving at a King nobody holds sends the counter back to the Ace. Thirty rolls without an arrival is a draw.</p>
-<p><b>The junctions.</b> The rank is the shape, the suit its temperament: ♥ the current leans one way, ♦ the mirror is even-handed, ♣ the thicket grows one more branch, ♠ the well holds a while. ${Object.entries(SHAPES).map(([r, d]) => `<b>${RANK[Number(r)]} ${d.name}</b>: ${d.note}`).join(' · ')} Every face is printed on its card, and turns with it.</p>
-<p>Don't say which King is yours. Every card you lay says a little.</p></section>${pages.join('')}`;
+  for (let i = 0; i < cards.length; i += 9) pages.push(`<section class="print-page"><div class="cap">MARKOVS CHAINS · CARDS 63 × 88 mm · SHEET ${i / 9 + 1} OF ${sheets} · cut on the borders</div><div class="print-grid">${cards.slice(i, i + 9).map((c, j) => `<div class="print-card">${cardSvg(c, 0, `p${i + j}`)}</div>`).join('')}</div></section>`);
+  const rules = RULES_TEXT.map((r) => `<h2>${r.title}</h2>${r.body.map((b) => `<p>${esc(b)}</p>`).join('')}`).join('');
+  $('print-sheet').innerHTML = `<section class="print-page rules-page"><h1>Markovs Chains</h1><p class="lede">A game of finite probabilities on a standard poker deck. Two to four players, one counter, one d6, 54 cards. Build a table of junction cards together; then race the one shared counter to your secret King.</p><div class="rules-cols">${rules}</div></section>
+<section class="print-page"><div class="cap">MARKOVS CHAINS · THE BOX · 65 × 90 × 19 mm inside · card stock · cut the solid line, fold the dashed, glue the flap</div>${boxSvg()}</section>
+<section class="print-page"><div class="cap">MARKOVS CHAINS · THE RULES, FOLDED · 180 × 170 mm · cut the outline; fold in half so the lower row turns up behind; then fold in three</div>${insertHtml()}</section>${pages.join('')}`;
 }

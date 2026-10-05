@@ -116,7 +116,8 @@ function run(name, play, strats, opts) {
   for (const x of rows) { if (x.winner < 0) draws++; else wins[x.winner]++; rolls += x.rolls; stalls += x.stalls; }
   const dec = rows.filter((x) => x.winner >= 0).map((x) => x.rolls).sort((a, b) => a - b);
   const played = rows[0].played !== undefined ? `  specials/game ${(rows.reduce((a, x) => a + x.played, 0) / N).toFixed(1)}` : '';
-  console.log(`${name.padEnd(34)} ${strats.map((s) => (s === 'reader' ? 'R' : s[0])).join('')}  draw ${pct(draws / N)}  P1 ${pct(wins[0] / N)}${P > 2 ? '' : ` P2 ${pct(wins[1] / N)}`}  fair ${pct((1 - draws / N) / P)}  rolls ${dec.length ? dec[Math.floor(dec.length / 2)] : '-'}  stalls ${pct(stalls / rolls)}${played}`);
+  const extra = rows[0].extra ? '  ' + Object.keys(rows[0].extra).map((k) => `${k} ${pct(rows.reduce((a, x) => a + x.extra[k], 0) / N)}`).join(' ') : '';
+  console.log(`${name.padEnd(34)} ${strats.map((s) => (s === 'reader' ? 'R' : s[0])).join('')}  draw ${pct(draws / N)}  P1 ${pct(wins[0] / N)}${P > 2 ? '' : ` P2 ${pct(wins[1] / N)}`}  fair ${pct((1 - draws / N) / P)}  rolls ${dec.length ? dec[Math.floor(dec.length / 2)] : '-'}  stalls ${pct(stalls / rolls)}${played}${extra}`);
   return { wins, draws };
 }
 const G = (n, s, o) => run(n, playGrid, s, o);
@@ -196,26 +197,30 @@ function playHybrid(seed, strats, { edges = false, cover = true } = {}) {
 // Bots: random (lays a card somewhere legal, never plays a special); greedy (one action ahead,
 // its own King's chances minus the average of the other three); reader (greedy, but weighs the
 // other Kings by what each opponent's placements have been helping — a guess at their suit).
+// The Twos are the commissions (shuffled, one each, the rest out of play). `coverUnder: false`
+// is the variant where the card under the counter may not be covered. Each game also reports
+// how much of the race rewrote the build: `under` = race lays that covered the counter's own
+// card, of all race lays; `onBuilt` = moves that landed on a card laid in the build and never
+// covered, of all moves.
 function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } = {}) {
   const P = strats.length; const r = rng(seed); const board = D.setup();
-  const suits = D.shuffle([0, 1, 2, 3], r); const mine = strats.map((_, p) => suits[p]);
-  let pile = D.shuffle(D.pack().filter((c) => c.rank !== D.KING && !(c.rank === D.ACE && c.suit === 3)), r);
-  for (const su of mine) { const i = pile.findIndex((c) => c.suit === su && c.rank !== D.JOKER); pile.splice(i, 1); }
+  const twos = D.shuffle(D.pack().filter((c) => c.rank === D.COMMISSION), r); const mine = strats.map((_, p) => twos[p].suit);
+  let pile = D.shuffle(D.pack().filter((c) => c.rank !== D.KING && c.rank !== D.COMMISSION && !(c.rank === D.ACE && c.suit === 3)), r);
   if (!specials) pile = pile.filter((c) => c.rank >= 2 && c.rank <= 10);
   const hands = strats.map(() => pile.splice(0, hand));
   const beliefs = strats.map(() => strats.map(() => [0.25, 0.25, 0.25, 0.25]));
-  let token = '2,2', stalls = 0, played = 0; const laid = [];
+  let token = '2,2', stalls = 0, played = 0; const laid = []; let raceLays = 0, under = 0, moves = 0, onBuilt = 0;
   const value = (b, at, p, tok = token) => {
-    const f = D.forecast(b, tok, rules); let v = f.wins[mine[p]];
+    const f = D.forecast(b, tok, rules, 4, mine[p], P); let v = f.wins[mine[p]];
     for (let o = 0; o < P; o++) { if (o === p) continue; const w = strats[p] === 'reader' ? beliefs[p][o] : [0.25, 0.25, 0.25, 0.25]; for (let su = 0; su < 4; su++) if (su !== mine[p]) v -= (f.wins[su] * w[su]) / (P - 1) / (strats[p] === 'reader' ? 1 : 0.75); }
     const [gx, gy] = D.xy(D.KING_AT[mine[p]]);
-    for (const [k, m] of f.mass) { const [x, y] = D.xy(k); v -= m * (Math.abs(x - gx) + Math.abs(y - gy)) * 0.02; }
+    for (const [k, m] of f.mass) v -= m * D.distance(k, D.KING_AT[mine[p]], rules) * 0.02;
     return v;
   };
   const lay = (b, k, card, rotation) => { const nb = new Map(b); nb.set(k, { card, rotation, start: b.get(k)?.start }); return nb; };
   const placements = (p, phase) => {
     const out = [];
-    for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) { const k = D.key(x, y); for (let i = 0; i < hands[p].length; i++) { const c = hands[p][i]; if (!D.canPlace(board, k, c, rules, phase)) continue; for (let rot = 0; rot < (c.rank === D.ACE ? 1 : 4); rot++) out.push({ k, i, rot }); } }
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) { const k = D.key(x, y); for (let i = 0; i < hands[p].length; i++) { const c = hands[p][i]; if (!D.canPlace(board, k, c, rules, phase, token)) continue; for (let rot = 0; rot < 4; rot++) out.push({ k, i, rot }); } }
     return out;
   };
   const noteWatch = (p, before, after) => { // the others read what a placement helped
@@ -233,7 +238,7 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
       if (qi >= 0 && phase === 'race') { const ks = [...board.keys()].filter((k) => !D.isKing(board.get(k))); for (let a = 0; a < ks.length; a++) for (let b = a + 1; b < ks.length; b++) { const nb = new Map(board); const ta = board.get(ks[a]), tb = board.get(ks[b]); nb.set(ks[a], { ...tb, start: ta.start }); nb.set(ks[b], { ...ta, start: tb.start }); const v = value(nb, token, p); if (!best || v > best.v + 1e-9) best = { kind: 'swap', a: ks[a], b: ks[b], i: qi, v }; } }
     }
     if (!best) { if (hands[p].length && phase === 'race') hands[p].splice(Math.floor(r() * hands[p].length), 1); }
-    else if (best.kind === 'lay') { laid.push([p, hands[p][best.i].suit, hands[p][best.i].rank]); const before = board; board.set(best.k, { card: hands[p][best.i], rotation: best.rot, start: board.get(best.k)?.start }); noteWatch(p, before === board ? lay(before, best.k, { suit: 0, rank: 2 }, 0) : before, board); hands[p].splice(best.i, 1); }
+    else if (best.kind === 'lay') { laid.push([p, hands[p][best.i].suit, hands[p][best.i].rank]); if (phase === 'race') { raceLays++; if (best.k === token) under++; } const before = board; board.set(best.k, { card: hands[p][best.i], rotation: best.rot, start: board.get(best.k)?.start, built: phase === 'build' }); noteWatch(p, before === board ? lay(before, best.k, { suit: 0, rank: 2 }, 0) : before, board); hands[p].splice(best.i, 1); }
     else { const ta = board.get(best.a), tb = board.get(best.b); board.set(best.a, { ...tb, start: ta.start }); board.set(best.b, { ...ta, start: tb.start }); hands[p].splice(best.i, 1); played++; }
     while (pile.length && hands[p].length < hand) hands[p].push(pile.shift());
   };
@@ -252,21 +257,23 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
       const ji = hands[p].findIndex((c) => c.rank === D.JACK), ki = hands[p].findIndex((c) => c.rank === D.JOKER);
       const base = (() => { let v = 0; for (let f = 1; f <= 6; f++) v += value(board, token, p, D.destination(board, token, f, rules).at) / 6; return v; })();
       if (ji >= 0) { let bd = null; for (let d = 0; d < 4; d++) { const n = D.neighbour(token, d, rules); if (!n || !board.has(n)) continue; const v = value(board, token, p, n); if (!bd || v > bd.v) bd = { n, v }; } if (bd && bd.v > base + 0.08) { token = bd.n; hands[p].splice(ji, 1); played++; moved = true; } }
-      if (!moved && ki >= 0) { const ex = [...new Set(D.exits(board.get(token)).filter((d) => d >= 0))]; const dests = ex.map((d) => D.neighbour(token, d, rules)).filter((n) => n && board.has(n)); if (dests.length) { const v = dests.reduce((a, n) => a + value(board, token, p, n), 0) / dests.length; if (v > base + 0.08) { token = dests[Math.floor(r() * dests.length)]; hands[p].splice(ki, 1); played++; moved = true; } } }
+      if (!moved && ki >= 0) { const dests = D.chaosExits(board, token, rules); if (dests.length) { const v = dests.reduce((a, n) => a + value(board, token, p, n), 0) / dests.length; if (v > base + 0.08) { token = dests[Math.floor(r() * dests.length)]; hands[p].splice(ki, 1); played++; moved = true; } } }
       while (pile.length && hands[p].length < hand) hands[p].push(pile.shift());
     }
     if (!moved) { const res = D.destination(board, token, 1 + Math.floor(r() * 6), rules); token = res.at; if (res.reason !== 'move') stalls++; }
-    const t = board.get(token); if (D.isKing(t)) { const who = mine.indexOf(t.card.suit); if (who >= 0) return { winner: who, rolls: roll + 1, stalls, played, laid }; }
+    moves++; const t = board.get(token); if (t?.built) onBuilt++;
+    const extra = { under: raceLays ? under / raceLays : 0, onBuilt: onBuilt / moves };
+    if (D.isKing(t)) { const who = mine.indexOf(t.card.suit); if (who >= 0) return { winner: who, rolls: roll + 1, stalls, played, laid, extra }; }
     if (D.isKing(t)) token = D.START; // (a decoy: back to the start)
   }
-  return { winner: -1, rolls: CAP, stalls, played, laid };
+  return { winner: -1, rolls: CAP, stalls, played, laid, extra: { under: raceLays ? under / raceLays : 0, onBuilt: onBuilt / moves } };
 }
 if (process.env.CARDS) {
   // which junctions get laid, and whether laying them wins: the quiet and the busy cards
   const n = Number(process.env.N ?? 200); const use = new Map(); const win = new Map();
   for (let seed = 1; seed <= n; seed++) { const g = pokerPlay(seed, ['greedy', 'greedy', 'greedy', 'greedy'], { rules: { ...D.RULES, wrap: true, rim: true } }); for (const [p, su, rk] of g.laid) { const k = `${rk}${D.SUITS[su]}`; use.set(k, (use.get(k) ?? 0) + 1); if (g.winner === p) win.set(k, (win.get(k) ?? 0) + 1); } }
   const rows = [...use.entries()].map(([k, u]) => [k, u, (win.get(k) ?? 0) / u]).sort((a, b) => a[1] - b[1]);
-  console.log('laid per game (36 junctions, 4 of each in play):'); console.log(rows.map(([k, u, w]) => `${k.padEnd(4)} ${(u / n).toFixed(2)} laid/game, wins ${(w * 100).toFixed(0)}%`).join('\n'));
+  console.log('laid per game (32 junctions in play; the Twos are the commissions):'); console.log(rows.map(([k, u, w]) => `${k.padEnd(4)} ${(u / n).toFixed(2)} laid/game, wins ${(w * 100).toFixed(0)}%`).join('\n'));
 }
 if (process.env.POKER) {
   const K = (n, s, o) => run(n, pokerPlay, s, o);
@@ -278,6 +285,10 @@ if (process.env.POKER) {
   K('wrap + rim, 4, hand of 4', ['greedy', 'greedy', 'greedy', 'greedy'], { rules: WR, hand: 4 });
   K('wrap + rim, 4, no specials', ['greedy', 'greedy', 'greedy', 'greedy'], { rules: WR, specials: false });
   K('reader v 3 greedy (wrap+rim)', ['reader', 'greedy', 'greedy', 'greedy'], { rules: WR }); K('reader v greedy, 2 (wrap+rim)', ['reader', 'greedy'], { rules: WR }); K('greedy v reader, 2 (wrap+rim)', ['greedy', 'reader'], { rules: WR });
+  // does building matter? the variant: the card under the counter may not be covered
+  const NU = { ...WR, coverUnder: false };
+  console.log('\nthe variant: not the card under the counter (under = race lays on the counter\'s card; onBuilt = moves landing on an uncovered build card)');
+  K('wrap + rim, 2, no cover under', ['greedy', 'greedy'], { rules: NU }); K('wrap + rim, 3, no cover under', ['greedy', 'greedy', 'greedy'], { rules: NU }); K('wrap + rim, 4, no cover under', ['greedy', 'greedy', 'greedy', 'greedy'], { rules: NU }); K('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy'], { rules: NU });
 }
 
 if (process.env.HYBRID) {

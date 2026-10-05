@@ -13,8 +13,10 @@
  * - **Queens:** swap — exchange two junctions on the table, counter and all.
  * - **Jokers:** chaos — instead of rolling, the counter takes one of its card's exits at random.
  *
- * Each player is dealt one card face down: its suit is their secret destination. (At two or
- * three players the other Kings are decoys: a counter arriving at one goes back to START.)
+ * The four Twos are the commissions: shuffled face down, one dealt to each player (its suit is
+ * their secret destination), the rest back in the box unseen. So thirty-two junctions are in
+ * play. (At two or three players the undealt Kings are decoys: a counter arriving at one goes
+ * back to START.)
  * Build the table first, in turns, until no space is
  * empty; then race: place or play, roll, move. First arrival at your own King wins.
  *
@@ -51,6 +53,8 @@ export function facesOf(card: Card): number[] {
   return out;
 }
 export const ACE = 1;
+/** the rank dealt as commissions: one card of each suit, shuffled, one per player */
+export const COMMISSION = 2;
 export const JACK = 11;
 export const QUEEN = 12;
 export const KING = 13;
@@ -83,12 +87,21 @@ export interface Tile {
   card: Card;
   rotation: number;
   start?: boolean;
+  /** laid while the table was being built (and not covered since) */
+  built?: boolean;
+}
+/** the Joker's exits: the card's distinct outward exits that lead to a card, north, east, south,
+ *  west in that order — with a die: two exits 1–3/4–6, three 1–2/3–4/5–6, four 1–4 (reroll 5–6) */
+export function chaosExits(board: Board, at: string, rules: Rules): string[] {
+  const t = board.get(at);
+  if (!t) return [];
+  return [...new Set(exits(t).filter((d) => d >= 0))].sort().map((d) => neighbour(at, d, rules)).filter((n): n is string => !!n && board.has(n));
 }
 export type Board = Map<string, Tile>;
 export const key = (x: number, y: number) => `${x},${y}`;
 export const xy = (k: string) => k.split(',').map(Number) as [number, number];
 export const isKing = (t: Tile | undefined) => !!t && t.card.rank === KING;
-/** a junction's six exits as laid (turned); an ace is a cross */
+/** a junction's six exits as laid (turned); an ace is a cross, and turns like any card */
 export function exits(t: Tile): number[] {
   if (t.card.rank === KING) return [-1, -1, -1, -1, -1, -1];
   return facesOf(t.card).map((d) => (d < 0 ? -1 : (d + t.rotation) % 4));
@@ -109,8 +122,17 @@ export interface Rules {
   rim: boolean;
   /** in the race, a card may be laid on top of a junction */
   cover: boolean;
+  /** in the race, the junction under the counter may be covered too (default yes; the variant
+   *  to test if building turns out not to matter) */
+  coverUnder?: boolean;
 }
-export const RULES: Rules = { wrap: false, rim: false, cover: true };
+export const RULES: Rules = { wrap: false, rim: false, cover: true, coverUnder: true };
+/** steps from a to b on the table, round the edge if it wraps */
+export function distance(a: string, b: string, rules: Rules): number {
+  const [ax, ay] = xy(a), [bx, by] = xy(b);
+  const d = (u: number, v: number) => { const m = Math.abs(u - v); return rules.wrap ? Math.min(m, SIZE - m) : m; };
+  return d(ax, bx) + d(ay, by);
+}
 
 /** one step from `at` in direction d, as the rules have it (null: off the table) */
 export function neighbour(at: string, d: number, rules: Rules): string | null {
@@ -133,13 +155,13 @@ export function destination(board: Board, at: string, face: number, rules: Rules
   const next = neighbour(at, d, rules);
   return next && board.has(next) ? { at: next, reason: 'move', dir: d } : { at, reason: 'open', dir: d };
 }
-/** may this card be laid here? (`phase`: building, or racing) */
-export function canPlace(board: Board, k: string, card: Card, rules: Rules, phase: 'build' | 'race'): boolean {
+/** may this card be laid here? (`phase`: building, or racing; `token`: where the counter is) */
+export function canPlace(board: Board, k: string, card: Card, rules: Rules, phase: 'build' | 'race', token?: string): boolean {
   const [x, y] = xy(k);
   if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return false;
   if (card.rank === KING || card.rank === JACK || card.rank === QUEEN || card.rank === JOKER) return false;
   const here = board.get(k);
-  if (here) return !isKing(here) && (phase === 'race' ? rules.cover : !hasEmpty(board));
+  if (here) return !isKing(here) && (phase === 'race' ? rules.cover && (rules.coverUnder !== false || k !== token) : !hasEmpty(board));
   if (card.rank === ACE) return true;
   if (rules.rim && (x === 0 || y === 0 || x === SIZE - 1 || y === SIZE - 1)) return true;
   return DIRS.some(([dx, dy]) => {
@@ -153,16 +175,22 @@ export function hasEmpty(board: Board): boolean {
 }
 
 /** The counter's chances: from `at`, over `hops` rolls, the mass arriving at each King (by suit),
- *  and where the rest is. Routes as they stand. */
-export function forecast(board: Board, at: string, rules: Rules, hops = 4): { wins: number[]; mass: Map<string, number> } {
+ *  and where the rest is. Routes as they stand. A King nobody holds sends the counter back to
+ *  START: a player knows only their own suit (`own`), so of the other three Kings, `players - 1`
+ *  are held — each absorbs that share of what arrives, and the rest returns to the start. With
+ *  no `own`, every King absorbs (the table's eye view). */
+export function forecast(board: Board, at: string, rules: Rules, hops = 4, own?: number, players = 4): { wins: number[]; mass: Map<string, number> } {
   let mass = new Map<string, number>([[at, 1]]);
   const wins = [0, 0, 0, 0];
+  const held = (suit: number) => (own === undefined || suit === own ? 1 : (players - 1) / 3);
   for (let h = 0; h < hops; h++) {
     const next = new Map<string, number>();
     for (const [k, m] of mass) {
       const t = board.get(k);
       if (isKing(t)) {
-        wins[t!.card.suit] += m;
+        const share = held(t!.card.suit);
+        wins[t!.card.suit] += m * share;
+        if (share < 1) next.set(START, (next.get(START) ?? 0) + m * (1 - share));
         continue;
       }
       for (let face = 1; face <= 6; face++) {
@@ -175,8 +203,10 @@ export function forecast(board: Board, at: string, rules: Rules, hops = 4): { wi
   for (const [k, m] of mass) {
     const t = board.get(k);
     if (isKing(t)) {
-      wins[t!.card.suit] += m;
+      const share = held(t!.card.suit);
+      wins[t!.card.suit] += m * share;
       mass.delete(k);
+      if (share < 1) mass.set(START, (mass.get(START) ?? 0) + m * (1 - share));
     }
   }
   return { wins, mass };

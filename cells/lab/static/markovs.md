@@ -10,12 +10,13 @@ Every card has a job on the table (`client/markovs/deck.ts`):
 
 | cards | job |
 |---|---|
-| **2–10**, four suits | thirty-six junctions, every one different. The rank is the shape, the suit its temperament. A junction's six die faces each name an exit (north, east, south, west) or a stay; the faces turn with the card. |
+| **3–10**, four suits | thirty-two junctions in play, every one different. The rank is the shape, the suit its temperament. A junction's six die faces each name an exit (north, east, south, west) or a stay; the faces turn with the card. |
+| **Twos** | the commissions: shuffled face down, one dealt to each player — its suit is their King, their secret; the rest back in the box unseen |
 | **Kings** | the four destinations, one a suit, laid at the middle of each edge |
-| **Aces** | wild junctions: a cross, laid anywhere. The Ace of spades is START, in the centre |
-| **Jacks** | reroute: instead of rolling, walk the counter one step your way |
-| **Queens** | swap: exchange two junctions on the table |
-| **Jokers** | chaos: instead of rolling, the counter takes one of its card's exits at random |
+| **Aces** | wild junctions: a cross (1 north, 2–3 east, 4 south, 5–6 west), laid on any empty square and turned like any card. The Ace of spades is START, in the centre |
+| **Jacks** | reroute: instead of rolling, walk the counter one square your way |
+| **Queens** | swap: exchange two junctions on the table; the counter stays on its square |
+| **Jokers** | chaos: instead of rolling, ignore the faces — the counter takes one of its card's outward exits at random (north, east, south, west; two exits 1–3/4–6, three 1–2/3–4/5–6, four 1–4 and reroll 5–6) |
 
 **The temperaments:** ♥ *the current* leans one way (four faces on its main exit); ♦ *the mirror*
 is even-handed; ♣ *the thicket* grows one more branch than the shape has; ♠ *the well* holds a
@@ -34,7 +35,8 @@ up / right / down / left / stay:
 | 9 | FORK | ↑3 →1 ←1 ·1 | ↑2 →1 ←1 ·2 | ↑1 →3 ←1 ·1 | ↑1 →2 ←1 ·2 |
 | 10 | BACKTURN | ↑2 →4 | ↑3 ←2 ·1 | ↑2 →1 ←3 | ↑2 ←1 ·3 |
 
-No two are the same card turned (the test checks all thirty-six). Nobody memorises them: the
+No two are the same card turned (the test checks all thirty-six; the Twos, the simplest, are
+the ones dealt as commissions). Nobody memorises them: the
 faces are printed, and read off the card under the counter at the moment of the roll. What the
 thirty-six buy is depth in planning — what might still come out of the pile — and a table
 whose character you can read from across the room: a line of hearts is a chute, a corner of
@@ -42,19 +44,25 @@ spades a bog.
 
 ## The rules
 
-1. **Deal.** The four Kings face up at the middle of each edge of a 5 × 5 table, the Ace of
-   spades in the centre, the counter on it. Shuffle the rest. Each player takes one card face
-   down: its suit is their King, and their secret (at two or three players the other Kings are
-   decoys). Three cards each.
-2. **Build.** In turns, lay one card from your hand, turned any way, on an empty space touching a
-   laid card — or anywhere on the outer ring; an Ace anywhere. Draw back to three. If you can't
-   lay, throw a card in and draw. No rolling. Build until no space is empty.
+The full text is `client/markovs/text.ts` (the print sheet, the insert in the box and the page
+all read it). In short:
+
+1. **Deal.** The four Kings face up at the middle of each edge of a 5 × 5 table of squares (about
+   9 cm each, so a card fits either way up), the Ace of spades in the centre, the counter on it.
+   The four Twos shuffled face down, one each: its suit is your King, your secret; the rest back
+   in the box (at two or three players the undealt Kings are decoys). Three cards each.
+2. **Build.** In turns, lay one card from your hand, turned any way, on an empty square touching a
+   laid card — or anywhere on the outer ring; an Ace on any empty square. Arrows needn't line
+   up. Draw back to three. If you can't lay, throw a card in and draw. No rolling. Build until
+   no square is empty.
 3. **Race.** On your turn: lay one card on top of any junction (not a King), or play a Queen to
-   swap two junctions, or pass. Then roll. Find that face's arrow on the card under the counter
-   and move one space that way; off the edge, come in on the far side; a loop face stays.
-   Instead of rolling you may play a Jack or a Joker. Draw back to three.
-4. **Winning.** The first time the counter arrives at your King, show your face-down card. A
-   King nobody holds sends the counter back to the Ace. Thirty rolls without an arrival is a draw.
+   swap two junctions, or pass. Then roll. Only the card under the counter decides the move:
+   that face's arrow, one square; off the edge, in on the far side; a stay face stays. Instead
+   of rolling you may play a Jack or a Joker. Draw back to three; an empty pile means play on
+   with what you hold.
+4. **Winning.** When the counter reaches a King someone holds, that player shows their Two and
+   wins — whoever moved the counter. A King nobody holds sends the counter back to the centre.
+   Thirty movement turns without an arrival is a draw.
 
 Don't say which King is yours. Every card you lay says a little.
 

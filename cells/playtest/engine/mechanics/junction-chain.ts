@@ -26,7 +26,7 @@
  *
  * Config (engine_mechanics.junction_chain):
  *   size: 5 · start: "2,2" · kings: { hearts: "2,0", diamonds: "4,2", clubs: "2,4", spades: "0,2" }
- *   wrap: true · rim: true · cover: true · hand: 3 · forecast: 4 (rolls ahead)
+ *   wrap: true · rim: true · cover: true · hand: 3 · forecast: 4 (rolls ahead) · moves: 30 (a draw)
  * Cards (engine_mechanics.cards.deck): junctions carry `exits: "N4 E2 stay1"` (faces per
  * direction, six in all), `suit`, and optionally `role: "wild"` (lay anywhere) or
  * `role: "destination"`; the start card is the deck entry named by `start_card` (default
@@ -35,6 +35,7 @@
 import type { MechanicHooks, HookContext, ValidationResult, ActionExecutionContext, ActionExecutionResult, AvailableAction, ActionDescription, ActionSchema, WinCheckContext, WinCheckResult, SharedStateInitContext, SharedStateInitResult, StateChanges } from './types';
 import type { GameAction, GameState, GameConfig, Card } from '../types/game';
 import { getCardsState, drawCards } from './core/cards';
+import { logEvent } from '../core/game';
 
 const DIRS: Array<[number, number]> = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 const DIR_NAMES = ['north', 'east', 'south', 'west'];
@@ -54,6 +55,8 @@ export interface JunctionChainConfig {
   cover?: boolean;
   hand?: number;
   forecast?: number;
+  /** movement turns the race may last; reaching it with no arrival is a draw */
+  moves?: number;
 }
 interface ChainCard {
   name: string;
@@ -205,7 +208,6 @@ function refill(state: GameState, playerId: string, hand: number): void {
   if (n > 0) drawCards(state, playerId, n);
 }
 function distinctTurns(card: ChainCard): number[] {
-  if (card.role === 'wild') return [0];
   const seen = new Set<string>();
   const out: number[] = [];
   for (let turn = 0; turn < 4; turn++) {
@@ -238,6 +240,7 @@ export const junctionChainMechanic: MechanicHooks = {
       rim: { type: 'boolean', description: 'A card may be laid anywhere on the outer ring' },
       cover: { type: 'boolean', description: 'In the race, a card may be laid on top of a junction' },
       hand: { type: 'number', description: 'Hand size, refilled after every turn (default 3)' },
+      moves: { type: 'number', description: 'Movement turns (rolls, Jacks and Jokers) the race may last; reaching it with no arrival is a draw (default: no cap)' },
       forecast: { type: 'number', description: 'Rolls ahead in the chance forecast players see (default 4)' },
     },
   },
@@ -342,6 +345,16 @@ export const junctionChainMechanic: MechanicHooks = {
     /** the end of a race turn: the counter has moved (or stayed); draw back up */
     const done = (message: string, extra: Record<string, unknown> = {}): ActionExecutionResult => {
       ch.laid = false;
+      // (the cap on movement turns: no arrival by then is a draw — unless this very move arrived)
+      const t = ch.tiles[ch.counter];
+      if (c.moves && ch.rolls >= c.moves && !(t?.king && heldSuits(state).has(t.king))) {
+        const reason = `${c.moves} movement turns and nobody home: a draw.`;
+        log.push(reason);
+        state.status = 'pending_analysis';
+        state.shared.winner = null;
+        state.shared.endReason = reason;
+        logEvent(state, { event: 'game_end', round: state.round, turnNumber: state.turnNumber, data: { winner: null, reason, endType: 'moves' } });
+      }
       return { handled: true, advanceTurn: true, checkWin: true, logMessage: message, logData: { ...extra, phase: ch.phase, counter: ch.counter, notes: log } };
     };
     if (type === 'lay') {
@@ -361,8 +374,9 @@ export const junctionChainMechanic: MechanicHooks = {
     if (type === 'chaos') {
       takeRole('chaos');
       const t = ch.tiles[ch.counter];
-      const ds = [...new Set(exitsOf(t).filter((d) => d >= 0))].map((d) => neighbour(ch, ch.counter, d, c.wrap !== false)).filter((n): n is string => !!n && !!ch.tiles[n]);
-      if (ds.length) { const n = ds[Math.floor(Math.random() * ds.length)]; log.push(`${playerId} played a Joker: chaos takes the counter to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; }
+      // (the card's distinct outward exits that lead to a card, north, east, south, west; one at random)
+      const ds = [...new Set(exitsOf(t).filter((d) => d >= 0))].sort().map((d) => neighbour(ch, ch.counter, d, c.wrap !== false)).filter((n): n is string => !!n && !!ch.tiles[n]);
+      if (ds.length) { const n = ds[Math.floor(Math.random() * ds.length)]; log.push(`${playerId} played a Joker: ${ds.length} exit${ds.length > 1 ? 's' : ''}, chaos takes the counter to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; }
       else log.push(`${playerId} played a Joker: no exit leads anywhere; the counter stays`);
       return done('chaos', {});
     }
