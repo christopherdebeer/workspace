@@ -59,10 +59,17 @@ let spec: Specimen;
 let born = 0;
 const C0 = new Float32Array(MAXC * 4), C1 = new Float32Array(MAXC * 4), C2 = new Float32Array(MAXC * 4);
 const CENTRE: [number, number, number] = [0, 1.0, 0];
+/** the camera's reach: how tall and wide the specimen will be when grown */
+let reach = 1;
 function grow(newSeed: number) {
   seed = newSeed;
   spec = specimen(seed, qs.get('mineral') ?? undefined);
   born = performance.now() / 1000;
+  // (frame the grown specimen: its height sets the eye's target and distance)
+  const tops = spec.crystals.map((c) => bound(c, spec.species, 1)).map((b) => b[1] + b[3]);
+  const top = Math.max(...tops, 0.8);
+  CENTRE[1] = 0.1 + top * 0.42;
+  reach = Math.max(0.9, Math.min(1.4, top / 2.2));
   const u = new URL(location.href); u.searchParams.set('seed', seedName(seed)); if (!preview) history.replaceState(null, '', u);
   const label = document.getElementById('label');
   if (label) label.innerHTML = `<b>${spec.species.kind}</b><i>${spec.species.name}</i><span>${seedName(seed)} · ${spec.crystals.length} crystals · n ${spec.species.ior.toFixed(2)}</span>`;
@@ -96,7 +103,8 @@ let az = 0.6, el = 0.48, dist = 12.5, spin = 0, dragging = false, lastX = 0, las
 const cam = { eye: [0, 0, 0] as number[], m: new Float32Array(9) };
 function camera(t: number) {
   const a = az + spin, e = Math.max(0.08, Math.min(1.2, el));
-  const eye = [CENTRE[0] + Math.cos(e) * Math.sin(a) * dist, CENTRE[1] + Math.sin(e) * dist, CENTRE[2] + Math.cos(e) * Math.cos(a) * dist];
+  const D = dist * reach;
+  const eye = [CENTRE[0] + Math.cos(e) * Math.sin(a) * D, CENTRE[1] + Math.sin(e) * D, CENTRE[2] + Math.cos(e) * Math.cos(a) * D];
   const f = norm([CENTRE[0] - eye[0], CENTRE[1] - eye[1] + 0.15, CENTRE[2] - eye[2]]);
   const r = norm(cross([0, 1, 0], f).map((v) => -v)); // right
   const u = cross(f, r).map((v) => -v);

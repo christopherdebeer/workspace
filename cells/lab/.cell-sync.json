@@ -1,14 +1,14 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:f70c6cdb3ea1ca820f5fa7411d1310a23c141222e70eb117ee023d20f8a92324",
-  "syncedAt": "2026-10-05T23:12:05.388Z",
+  "treeVersion": "tree:9f95da66cf66f0c9609ea4e1dfb3d17ee750a121a6eb716c9f519eddb7f8ea5c",
+  "syncedAt": "2026-10-05T23:21:57.089Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
     "client/bricks/main.ts": "sha256:58f3f7e65cd13aa55d8b6f1e0eecfa27f7641c3109ea1b7cc7975efa9a51fce2",
-    "client/crystals/main.ts": "sha256:b33e9805105295263e0de4e4cc9de18560d933120f74084e8f16a97c7088e598",
-    "client/crystals/mineral.ts": "sha256:c5c96dcceb1fe60fdd0df3500aa6613be3271240fc4039fd345ef8202aadf96f",
+    "client/crystals/main.ts": "sha256:c26f029ffb7627a70dc555d1170dea9d74b8a11b553ee06a5c00fb494a624823",
+    "client/crystals/mineral.ts": "sha256:bdc3fa80515ff2f4a3d79fd2a8cb0f828dd97b814d200e7ce03f28c983381c51",
     "client/crystals/shaders.ts": "sha256:f01039171221a8b8087835e94d8985ca949e87ae1188f43fc1a5f7980ba65889",
     "client/fungi/critters.ts": "sha256:072002ff89ba191be7bee09ae0d64578979e34ebd351f4309a2297a02e7fbb12",
     "client/fungi/flora.ts": "sha256:5c1497a124af607dd5de920453c2e0da4fbfb2beda8e8585fe37e5bbd4c8b662",
