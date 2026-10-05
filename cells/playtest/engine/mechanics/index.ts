@@ -149,6 +149,7 @@ import { auctionDutchMechanic } from './auction-dutch';
 import { simultaneousActionSelectionMechanic } from './simultaneous-action-selection';
 import { marketMechanic } from './market';
 import { tableauBuildingMechanic } from './tableau-building';
+import { projectsMechanic } from './projects';
 import { actionProgrammingMechanic } from './action-programming';
 import { cooperativeActionsMechanic } from './cooperative-actions';
 
@@ -380,6 +381,7 @@ mechanicRegistry.register(auctionDutchMechanic);
 mechanicRegistry.register(simultaneousActionSelectionMechanic);
 mechanicRegistry.register(marketMechanic);
 mechanicRegistry.register(tableauBuildingMechanic);
+mechanicRegistry.register(projectsMechanic);
 mechanicRegistry.register(actionProgrammingMechanic);
 mechanicRegistry.register(cooperativeActionsMechanic);
 

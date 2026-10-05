@@ -55,14 +55,17 @@ export interface ObjectiveDefinition {
    *   trades: N           — N trades completed (as offerer or responder)
    *   trade_partners: N   — completed trades with N different players
    *   holds: [names]      — every named card in hand at once
+   *   projects: N (+ kind) — N completed projects (of that kind, if given; projects mechanic)
    */
   check?: ObjectiveCheck;
 }
 
 export type ObjectiveCheck =
-  | { distinct_items?: number; visited?: number; placed?: number; trades?: number; trade_partners?: number; holds?: string[]; any?: ObjectiveCheck[]; all?: ObjectiveCheck[] };
+  | { distinct_items?: number; visited?: number; placed?: number; trades?: number; trade_partners?: number; holds?: string[]; projects?: number; kind?: string; any?: ObjectiveCheck[]; all?: ObjectiveCheck[] };
 
-type P = Record<string, unknown> & { hand?: Array<{ name: string; type?: string }>; visitedLocations?: string[]; placedLocations?: number; completedTrades?: number; tradePartners?: string[] };
+type P = Record<string, unknown> & { hand?: Array<{ name: string; type?: string }>; visitedLocations?: string[]; placedLocations?: number; completedTrades?: number; tradePartners?: string[]; projects?: Array<{ kind?: string; done: boolean }>; score?: number; objectiveDone?: boolean; revealedAs?: string };
+
+const projectsDone = (player: P, kind?: string) => (player.projects ?? []).filter((p) => p.done && (!kind || p.kind === kind)).length;
 
 /** Current value of each metric for a player (for checks, and to show progress). */
 export function objectiveMetrics(player: P): Record<string, number | string[]> {
@@ -85,6 +88,7 @@ export function checkObjective(check: ObjectiveCheck | undefined, player: P): bo
     if (typeof check[k] === 'number') parts.push((m[k] as number) >= (check[k] as number));
   }
   if (check.holds) parts.push(check.holds.every((n) => (m.holds as string[]).includes(n)));
+  if (typeof check.projects === 'number') parts.push(projectsDone(player, check.kind) >= check.projects);
   if (check.any) parts.push(check.any.some((c) => checkObjective(c, player)));
   if (check.all) parts.push(check.all.every((c) => checkObjective(c, player)));
   return parts.length > 0 && parts.every(Boolean);
@@ -92,14 +96,22 @@ export function checkObjective(check: ObjectiveCheck | undefined, player: P): bo
 
 /** Can `me` denounce `target` under requires_evidence? */
 export function hasEvidence(state: { players: Record<string, unknown> }, config: GameConfig, me: string, target: string): boolean {
+  const from = new Set((config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined)?.denounce?.evidence_from ?? ['revealed', 'objective', 'table', 'project', 'hand']);
   // Revealed counts only when what was revealed is the enemy (a wrong accuser is revealed too —
   // as honest, which is evidence of innocence).
   const t = state.players[target] as { revealedAs?: string; objective?: ObjectiveDefinition; team?: string } | undefined;
-  if (t?.revealedAs && (t.team === 'enemy' || t.objective?.type === 'enemy' || t.objective?.type === 'traitor')) return true;
+  if (from.has('revealed') && t?.revealedAs && (t.team === 'enemy' || t.objective?.type === 'enemy' || t.objective?.type === 'traitor')) return true;
   const revealed = ((state.players[me] as { knowledge?: { revealed?: Record<string, unknown> } })?.knowledge?.revealed) ?? {};
-  if (`${target} objective` in revealed) return true;
+  if (from.has('objective') && `${target} objective` in revealed) return true;
   const enemyItems = new Set(((config as { objectives?: ObjectiveDefinition[] }).objectives ?? []).filter((o) => o.type === 'enemy' || o.type === 'traitor').flatMap((o) => JSON.stringify(o.check ?? {}).match(/"[^"]+"/g) ?? []).map((q) => q.slice(1, -1)));
-  return Object.entries(revealed).some(([k, v]) => k.startsWith(`${target} hand`) && Array.isArray(v) && v.some((n) => enemyItems.has(String(n))));
+  // Enemy-only project cards (projects mechanic: only_role) count like enemy items: seen on the
+  // target's table face up, or seen by Gossip/Expose.
+  const deck = ((config as { engine_mechanics?: { cards?: { deck?: Array<{ name: string; only_role?: string }> } } }).engine_mechanics?.cards?.deck ?? []);
+  for (const c of deck) if (c.only_role) enemyItems.add(c.name);
+  const table = ((state.players[target] as { projects?: Array<{ name: string; stealth: boolean }> })?.projects ?? []);
+  if (from.has('table') && table.some((p) => !p.stealth && enemyItems.has(p.name))) return true;
+  if (from.has('project') && Object.entries(revealed).some(([k, v]) => k === `${target} project` && enemyItems.has(String(v).replace(/ \(.*$/, '')))) return true;
+  return from.has('hand') && Object.entries(revealed).some(([k, v]) => k.startsWith(`${target} hand`) && Array.isArray(v) && v.some((n) => enemyItems.has(String(n))));
 }
 
 /** "3/6 locations visited" style progress lines for the check's metrics. */
@@ -112,6 +124,7 @@ function progress(check: ObjectiveCheck | undefined, player: P): string[] {
     if (typeof check[k] === 'number') out.push(`${m[k]}/${check[k]} ${LABEL[k]}`);
   }
   if (check.holds) out.push(`holding ${check.holds.filter((n) => (m.holds as string[]).includes(n)).length}/${check.holds.length} of ${check.holds.join(', ')}`);
+  if (typeof check.projects === 'number') out.push(`${projectsDone(player, check.kind)}/${check.projects} ${check.kind ? `${check.kind} ` : ''}projects completed`);
   for (const c of [...(check.any ?? []), ...(check.all ?? [])]) out.push(...progress(c, player));
   return out;
 }
@@ -134,7 +147,27 @@ export interface HiddenObjectivesConfig {
    *            they are revealed, or you have seen them holding an item the enemy objective
    *            needs (uncertain: honest players take those items too, to deny them)
    */
-  denounce?: { correct?: 'win' | 'reveal'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit'; from_round?: number; requires_evidence?: boolean };
+  denounce?: { correct?: 'win' | 'reveal' | 'score'; wrong?: 'reveal_self' | 'end_turn' | 'both' | 'forfeit' | 'enemy_wins'; from_round?: number; requires_evidence?: boolean; points?: { accuser?: number; others?: number; wrong?: number }; ends_game?: boolean;
+    /** What counts as evidence under requires_evidence (default: all): 'revealed' (the target is
+     *  revealed), 'objective' (you saw their objective), 'table' (an enemy-only project face up on
+     *  their table), 'project' (one you saw by Gossip/Expose), 'hand' (an enemy item/card in their hand). */
+    evidence_from?: Array<'revealed' | 'objective' | 'table' | 'project' | 'hand'> };
+  /**
+   * What completing your objective does: 'win' (default) ends the game in your favour;
+   * 'bonus' scores completion_points (once) and the game goes on — for games decided on points.
+   */
+  completion?: 'win' | 'bonus';
+  completion_points?: number;
+}
+
+/** `correct: 'score'` — the accuser and every other honest player score, the enemy drops to 0 (and
+ *  with ends_game the game ends: highest score wins, ties to the accuser). */
+function scoreDenounce(state: { players: Record<string, unknown>; turnOrder: string[] }, me: string, enemy: string, points: { accuser?: number; others?: number } = {}) {
+  for (const p of state.turnOrder) {
+    const pl = state.players[p] as P;
+    if (p === enemy) pl.score = 0;
+    else pl.score = (pl.score ?? 0) + (p === me ? (points.accuser ?? 3) : (points.others ?? 1));
+  }
 }
 
 /**
@@ -229,7 +262,7 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     if (ctx.state.round < (cfg.from_round ?? 1)) return { valid: false, error: `Denouncing opens in round ${cfg.from_round}.` };
     const target = (action as unknown as { target?: string }).target;
     if (!target || target === ctx.playerId || !ctx.state.players[target]) return { valid: false, error: 'Name another player.' };
-    if (cfg.requires_evidence && !hasEvidence(ctx.state as never, ctx.config, ctx.playerId, target)) return { valid: false, error: `You have no evidence against ${target}: see their objective, see them revealed, or see a Forbidden Item in their hand.` };
+    if (cfg.requires_evidence && !hasEvidence(ctx.state as never, ctx.config, ctx.playerId, target)) return { valid: false, error: `You have no evidence against ${target}: see their objective, see them revealed, or see something only the enemy would hold.` };
     return { valid: true };
   },
 
@@ -244,9 +277,20 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     if (correct) {
       them.revealedAs = them.objective?.name ?? 'The Enemy';
       if ((cfg.correct ?? 'win') === 'win') me.denouncedEnemy = true;
+      if (cfg.correct === 'score') {
+        scoreDenounce(ctx.state as never, ctx.playerId, target, cfg.points);
+        if (cfg.ends_game) (ctx.state.shared as Record<string, unknown>).enemyExposedBy = ctx.playerId;
+      }
       return { handled: true, advanceTurn: false, checkWin: true, logMessage: 'denounce_correct', logData: { target, revealed: them.revealedAs } };
     }
     const wrong = cfg.wrong ?? 'both';
+    if (cfg.correct === 'score' && cfg.points?.wrong) me.score = (me.score ?? 0) + cfg.points.wrong;
+    if (wrong === 'enemy_wins') {
+      // One wrong accusation ends the game in the enemy's favour.
+      me.revealedAs = me.objective?.name ?? 'unknown';
+      (ctx.state.shared as Record<string, unknown>).wrongAccusationBy = ctx.playerId;
+      return { handled: true, advanceTurn: false, checkWin: true, logMessage: 'denounce_wrong', logData: { target, denouncerRevealed: me.revealedAs, enemyWins: true } };
+    }
     if (wrong === 'reveal_self' || wrong === 'both' || wrong === 'forfeit') me.revealedAs = me.objective?.name ?? 'unknown';
     if (wrong === 'forfeit') (me as unknown as { forfeited?: boolean }).forfeited = true;
     const endTurn = wrong === 'end_turn' || wrong === 'both' || wrong === 'forfeit';
@@ -260,9 +304,38 @@ export const hiddenObjectivesMechanic: MechanicHooks = {
     if ((ctx.player as unknown as { denouncedEnemy?: boolean }).denouncedEnemy) {
       return { won: true, reason: `${ctx.playerId} denounced The Enemy (${(ctx.player as unknown as { denounced?: string }).denounced})` };
     }
+    const hcfg = ctx.config.engine_mechanics?.hidden_objectives as HiddenObjectivesConfig | undefined;
+    const wrongBy = (ctx.state.shared as Record<string, unknown>).wrongAccusationBy as string | undefined;
+    if (wrongBy) {
+      const enemy = ctx.state.turnOrder.find((p) => (ctx.state.players[p] as P).team === 'enemy');
+      if (enemy !== ctx.playerId) return null;
+      return { won: true, reason: `${wrongBy} accused the wrong player; The Enemy (${enemy}) wins` };
+    }
+    // A scoring denunciation that ends the game: the highest score wins, ties to the accuser.
+    const exposedBy = (ctx.state.shared as Record<string, unknown>).enemyExposedBy as string | undefined;
+    if (exposedBy) {
+      const scores = ctx.state.turnOrder.map((p) => [p, Number((ctx.state.players[p] as P).score ?? 0)] as const);
+      const top = Math.max(...scores.map(([, s]) => s));
+      const leaders = scores.filter(([, s]) => s === top).map(([p]) => p);
+      const winner = leaders.includes(exposedBy) ? exposedBy : leaders[0];
+      if (winner !== ctx.playerId) return null;
+      const enemy = ctx.state.turnOrder.find((p) => (ctx.state.players[p] as P).team === 'enemy');
+      return { won: true, reason: `${exposedBy} denounced The Enemy (${enemy}); ${winner} wins with ${top} points` };
+    }
     const obj = (ctx.player as unknown as { objective?: ObjectiveDefinition }).objective;
     if (!obj?.check || (ctx.player as unknown as { forfeited?: boolean }).forfeited) return null;
     if (!checkObjective(obj.check, ctx.player as unknown as P)) return null;
+    if (hcfg?.completion === 'bonus') {
+      const me = ctx.player as unknown as P;
+      if (!me.objectiveDone) {
+        me.objectiveDone = true;
+        me.score = (me.score ?? 0) + (hcfg.completion_points ?? 0);
+        if (hcfg.reveal_on_completion) me.revealedAs = obj.name;
+        const shared = ctx.state.shared as Record<string, unknown>;
+        ((shared.publicKnowledge ??= []) as string[]).push(`${ctx.playerId} completed their ambition${hcfg.reveal_on_completion ? ` as ${obj.name}` : ''} (+${hcfg.completion_points ?? 0})`);
+      }
+      return null;
+    }
     return { won: true, reason: `${ctx.playerId} completed ${obj.name}: ${obj.condition}` };
   },
 

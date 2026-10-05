@@ -14,7 +14,8 @@
  *            rounds without a keep = stalled: diagnose, don't keep patching.
  * ------------------------------------------------------------------------- */
 import { classify, play, judge, metrics, sessionFindings, HARNESS_VERSION, personaFor, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
-import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, SCORE_VERSION, type RunScore } from './score';
+import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, genreBalance, SCORE_VERSION, type RunScore } from './score';
+import type { DeductionReport } from './deduction';
 import { engineFingerprint } from './fingerprint';
 import * as db from './store';
 
@@ -42,6 +43,14 @@ export interface RunDigest {
   positions?: string[];
   winnerKey?: string | null;
   endKind?: string;
+  /** v4: the deduction loop as played (hidden-role games) */
+  deduction?: DeductionReport | null;
+}
+
+/** The suite balance: the genre band when the runs carry deduction reports, else outcome balance. */
+export function suiteBalance(runs: RunDigest[]): { balance: number | null; genre: boolean } {
+  const g = genreBalance(runs);
+  return g === null ? { balance: outcomeBalance(runs), genre: false } : { balance: g, genre: true };
 }
 
 /** Train runs' critique, averaged: per dimension (0–4), and what the judge most often named. */
@@ -57,6 +66,8 @@ export interface CritiqueSummary {
   weakest: Array<[string, number]>;
   strongest: Array<[string, number]>;
   fixes: Array<[string, number]>;
+  /** v4: the deduction loop across the train games of a hidden-role game, as rates */
+  deduction?: { n: number; exposed: number; exposedWithEvidence: number; enemyWon: number; wrongAccusationShare: number; accusationsPerGame: number; interaction: number; leadChanges: number };
 }
 export function summarizeCritique(runs: RunDigest[]): CritiqueSummary | null {
   const cs = runs.map((r) => r.critique).filter((c): c is Critique => !!c);
@@ -84,7 +95,14 @@ export function summarizeCritique(runs: RunDigest[]): CritiqueSummary | null {
     const k = r.winnerRole ? `${r.winnerRole} · ${r.endKind}` : `no winner · ${r.endKind ?? 'none'}`;
     outcomes[k] = (outcomes[k] ?? 0) + 1;
   }
-  return { n: cs.length, outcomes, byPersona, cause: tally((c) => c.cause ?? []), index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes) };
+  // v4: the deduction loop over the suite (hidden-role games), as rates.
+  const ds = runs.map((r) => r.deduction).filter((d): d is DeductionReport => !!d && !!d.enemy);
+  const rate = (f: (d: DeductionReport) => boolean) => (ds.length ? +(ds.filter(f).length / ds.length).toFixed(3) : 0);
+  const accusations = ds.reduce((a, d) => a + d.accusations, 0);
+  const deductionSummary = ds.length
+    ? { n: ds.length, exposed: rate((d) => d.exposed), exposedWithEvidence: rate((d) => d.exposed && d.evidenceBeforeExposure === true), enemyWon: rate((d) => d.enemyWon), wrongAccusationShare: accusations ? +(ds.reduce((a, d) => a + d.wrong, 0) / accusations).toFixed(3) : 0, accusationsPerGame: +(accusations / ds.length).toFixed(2), interaction: +(ds.reduce((a, d) => a + d.interactiveShare, 0) / ds.length).toFixed(3), leadChanges: +(ds.reduce((a, d) => a + d.leadChanges, 0) / ds.length).toFixed(2) }
+    : null;
+  return { n: cs.length, outcomes, byPersona, cause: tally((c) => c.cause ?? []), index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes), ...(deductionSummary ? { deduction: deductionSummary } : {}) };
 }
 
 export interface EvalRecord extends db.Item {
@@ -192,6 +210,7 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
     persona,
     score: sc.score,
     parts: sc.parts,
+    deduction: sc.deduction ?? null,
     stopped: session.stopped,
     endReason: m.endReason,
     steps: m.steps,
@@ -202,7 +221,7 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
     winnerRole: session.winner ? (session.roles?.[session.winner] ?? null) : null,
     positions: session.roles && Object.keys(session.roles).length ? [...new Set(Object.values(session.roles))] : Array.from({ length: o.spec.players }, (_, i) => `seat ${i + 1}`),
     winnerKey: session.winner ? (session.roles?.[session.winner] ?? `seat ${Number(String(session.winner).replace(/\D/g, '')) || '?'}`) : null,
-    endKind: !m.finished ? 'none' : /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i.test(m.endReason ?? '') ? 'time limit' : /denounc|accus/i.test(m.endReason ?? '') ? 'denounce' : 'objective',
+    endKind: !m.finished ? 'none' : /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i.test(m.endReason ?? '') ? 'time limit' : /wrong player/i.test(m.endReason ?? '') ? 'wrong accusation' : /denounc|accus/i.test(m.endReason ?? '') ? 'denounce' : 'objective',
   };
   const chunks = await db.putBlob(`RUN#${id}`, { session, judgement, findings });
   await db.put({ pk: `RUN#${id}`, sk: 'meta', ...digest, game: o.game, version: o.def.version, engine: o.engine, metrics: m, judgement, chunks, createdAt: new Date().toISOString() });
@@ -229,8 +248,8 @@ async function assemble(o: { game: string; def: { version: number; hash: string 
     incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline').length,
     definitionHealth: definitionHealth(o.cls),
     classificationFindings: o.cls.findings,
-    train: { score: scoreSuite(train.map((d) => d.score), o.cls, outcomeBalance(train)), balance: outcomeBalance(train), runs: train, critique: summarizeCritique(train) },
-    test: { score: scoreSuite(test.map((d) => d.score), o.cls, outcomeBalance(test)), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
+    train: { score: scoreSuite(train.map((d) => d.score), o.cls, suiteBalance(train).balance, suiteBalance(train).genre), balance: suiteBalance(train).balance, runs: train, critique: summarizeCritique(train) },
+    test: { score: scoreSuite(test.map((d) => d.score), o.cls, suiteBalance(test).balance, suiteBalance(test).genre), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
     tokens: o.tokens,
     ms: o.ms,
     tag: o.tag,
@@ -406,7 +425,7 @@ export function compactEval(e: EvalRecord) {
       score: p.train.score,
       balance: p.train.balance ?? null,
       critique: p.train.critique ?? null,
-      runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, persona: r.persona, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null })),
+      runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, persona: r.persona, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null, deduction: r.deduction ?? null })),
     },
     detail: `read @c15r/playtest.eval_detail {id:"${e.id}"} for findings and full critiques`,
   };
