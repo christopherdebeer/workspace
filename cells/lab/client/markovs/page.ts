@@ -3,7 +3,7 @@
  * round; a curtain hides the hand between turns) or against bots. Everything the page does goes
  * through table.ts' `legal()` and `act()`, so what you can tap is exactly what the rules allow.
  */
-import { ACE, DIR_NAMES, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
+import { ACE, DIR_NAMES, PLACES, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
 import { ROLL_CAP, act, botAction, clone, current, legal, newGame, type Action, type Game } from './table';
 import { RULES_TEXT } from './text';
 
@@ -43,9 +43,16 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
   const role = roleOf(card);
   const sk = SUIT_KEY[card.suit];
   const open = `<svg viewBox="${square ? '-12.5 0 88 88' : '0 0 63 88'}" aria-hidden="true"><g transform="rotate(${rotation * 90} 31.5 44)">`;
-  // the court, painted: the Wayfinders, the Exchange, the four places
+  // the court, painted: the Wayfinders, the Exchange, the four places — the illustration alone,
+  // set in the same dress as the junctions: hairline border, flourishes, index, the suit's seal
+  // over the foot of the picture, the name on a rule
   if (ASSETS && (card.rank === JACK || card.rank === QUEEN || card.rank === KING)) {
-    return `${open}<rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/><clipPath id="${id}cp"><rect x=".6" y=".6" width="61.8" height="86.8" rx="4"/></clipPath><image href="${ASSETS}${RANK[card.rank]}${card.suit}.jpg" x=".6" y=".6" width="61.8" height="86.8" preserveAspectRatio="none" clip-path="url(#${id}cp)"/></g></svg>`;
+    const sk = SUIT_KEY[card.suit], ink = INK[card.suit];
+    const img = (f: string, x: number, y: number, w: number, h: number, extra = '') => `<image href="${ASSETS}${f}" x="${x}" y="${y}" width="${w}" height="${h}" ${extra}/>`;
+    const flourish = [[3.2, 84.8, 0], [3.2, 3.2, 90], [59.8, 3.2, 180], [59.8, 84.8, 270]].map(([x, y, a]) => `<g transform="translate(${x} ${y}) rotate(${a})">${img(`${sk}-cornerS.png`, 0, -7.4, 6.5, 7.4, 'opacity=".85"')}</g>`).join('');
+    const index = (flip: boolean) => `<g ${flip ? 'transform="rotate(180 31.5 44)"' : ''}><rect x="3.4" y="3.4" width="9.2" height="16.4" rx="1.6" fill="${PAPER}" filter="url(#${id}f)" opacity=".94"/><text x="5.4" y="12.3" font-size="9.2" font-family="Georgia,serif" fill="${ink}">${rank}</text>${img(`${sk}-glyph.png`, 5.2, 13.4, 5.2, 5, 'preserveAspectRatio="xMidYMid meet"')}</g>`;
+    const [name, sub, note] = card.rank === KING ? [PLACES[card.suit].toUpperCase(), 'DESTINATION', 'Reach it to win.'] : COURT[card.rank];
+    return `${open}<defs><filter id="${id}f" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation=".7"/></filter><clipPath id="${id}c"><rect x="8.5" y="6.4" width="46" height="55.4" rx="1.2"/></clipPath></defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/><rect x="1.8" y="1.8" width="59.4" height="84.4" rx="3.2" fill="none" stroke="${ink}" stroke-width=".45"/><rect x="2.9" y="2.9" width="57.2" height="82.2" rx="2.6" fill="none" stroke="${ink}" stroke-width=".2"/>${flourish}${img(`${RANK[card.rank]}${card.suit}.jpg`, 8.5, 6.4, 46, 55.4, `preserveAspectRatio="xMidYMid slice" clip-path="url(#${id}c)"`)}<rect x="8.5" y="6.4" width="46" height="55.4" rx="1.2" fill="none" stroke="${ink}" stroke-width=".2"/>${img(`${sk}-seal.png`, 27, 57.5, 9, 9)}${index(false)}${index(true)}<path d="M14 72.2H47.5" stroke="${ink}" stroke-width=".25"/><text x="30.75" y="76.6" text-anchor="middle" font-size="${name.length > 11 ? 4 : 4.4}" font-family="Georgia,serif" letter-spacing=".9" fill="#2a2420">${name}</text><path d="M14 78.3H47.5" stroke="${ink}" stroke-width=".25"/><text x="30.75" y="81.6" text-anchor="middle" font-size="2" font-family="Georgia,serif" letter-spacing=".25" fill="${ink}">${sub} · ${note.toUpperCase().replace(/\.$/, '')}</text></g></svg>`;
   }
   const arrow = `<marker id="${id}a" markerWidth="4" markerHeight="4" refX="3" refY="2" orient="auto"><path d="M0 0L4 2L0 4" fill="#34312c"/></marker>`;
   const note = card.rank === JOKER ? 'A random exit. No dice.' : card.rank === ACE ? 'Lay anywhere. A cross.' : card.rank === JACK || card.rank === QUEEN || card.rank === KING ? COURT[card.rank][2] : SHAPES[card.rank].note;
@@ -374,7 +381,7 @@ export function boxSvg(): string {
   const back = `<g transform="translate(${x3} ${y2})"><rect x="3" y="3" width="${W - 6}" height="${H - 6}" fill="none" stroke="${ink}" stroke-width=".3"/><text x="${W / 2}" y="11" text-anchor="middle" font-size="4.5" font-family="Georgia" fill="${ink}">Markovs Chains</text>${lines.map((l, i) => `<text x="6" y="${18 + i * 4.3}" font-size="2.7" font-family="Georgia" fill="${ink}">${esc(l)}</text>`).join('')}<text x="${W / 2}" y="${H - 6}" text-anchor="middle" font-size="2.2" font-family="ui-monospace,monospace" fill="#8e826b">AUXILIARY FIELD · LAB · EXPERIMENT 05</text></g>`;
   const lid = `<g transform="translate(${x3} ${y1})"><text x="${W / 2}" y="${D / 2 + 1.5}" text-anchor="middle" font-size="3.6" font-family="Georgia" fill="${ink}">♥ ♦ ♣ ♠</text></g>`;
   const glue = `<text transform="translate(${G / 2} ${y2 + H / 2}) rotate(-90)" text-anchor="middle" font-size="2.4" font-family="ui-monospace,monospace" fill="#8e826b">GLUE</text>`;
-  return `<svg viewBox="-5 -5 ${x5 + 10} ${y5 + 10}" width="${x5 + 10}mm" height="${y5 + 10}mm" aria-hidden="true"><path d="${cut}" fill="${PAPER}" stroke="${ink}" stroke-width=".35"/>${folds}${front}${back}${side(x2)}${side(x4)}${lid}${glue}</svg>`;
+  return `<svg viewBox="-5 -5 ${x5 + 10} ${y5 + 10}" width="${x5 + 10}mm" height="${y5 + 10}mm" aria-hidden="true"><path d="${cut}" fill="${PAPER}" stroke="${ink}" stroke-width=".35"/>${folds}${ASSETS ? `<image href="${ASSETS}box-front.jpg" x="${x1}" y="${y2}" width="${W}" height="${H}" preserveAspectRatio="none"/><image href="${ASSETS}box-back.jpg" x="${x3}" y="${y2}" width="${W}" height="${H}" preserveAspectRatio="none"/>` : front + back}${side(x2)}${side(x4)}${lid}${glue}</svg>`;
 }
 /** the rules as a folded insert for the box: six panels of 60 × 85 mm on one sheet, 180 × 170 mm
  *  — fold the sheet in half (the bottom row is printed upside down, so it reads once folded
