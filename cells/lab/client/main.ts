@@ -12,6 +12,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   bricks: () => import('./bricks/main'),
   fungi: () => import('./fungi/main'),
   markovs: () => import('./markovs/main'),
+  crystals: () => import('./crystals/main'),
 };
 
 const id = document.documentElement.dataset.exp ?? '';

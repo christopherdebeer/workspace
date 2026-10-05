@@ -31,6 +31,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'you v three bots', query: 'seed=1941&players=4&bots=0111' }, { label: 'two at the table', query: 'seed=1941&players=2&bots=00' }, { label: 'four at the table', query: 'seed=1941&players=4&bots=0000' }, { label: 'the grid prototype', query: 'mode=physical' }, { label: 'the four-state chain', query: 'mode=challenge' }],
   },
   {
+    id: 'crystals', title: 'Crystals', group: 'Drawings',
+    blurb: 'A mineral specimen from a seed, ray-traced: a cluster of crystals grows out of its matrix, and the key light goes through them — refracted, dispersed into colour at the edges, reflected inside, and thrown onto the slate as caustics. Drag to turn it; pinch to come close.',
+    page: 'static/crystals.html', preview: 'preview&seed=1947&still', readme: 'static/crystals.md',
+    presets: [{ label: 'a specimen', query: '' }, { label: 'amethyst', query: 'mineral=amethyst&seed=12' }, { label: 'fluorite', query: 'mineral=fluorite&seed=5' }, { label: 'zircon', query: 'mineral=zircon&seed=8' }, { label: 'emerald', query: 'mineral=emerald&seed=3' }, { label: 'rhodochrosite', query: 'mineral=rhodochrosite&seed=4' }],
+  },
+  {
     id: 'mistwood',
     title: 'Mistwood',
     group: 'Woods',
