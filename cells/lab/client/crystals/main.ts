@@ -58,6 +58,7 @@ let seed = seedFrom(qs.get('seed')) ?? (preview ? 1947 : randomSeed());
 let spec: Specimen;
 let born = 0;
 const C0 = new Float32Array(MAXC * 4), C1 = new Float32Array(MAXC * 4), C2 = new Float32Array(MAXC * 4);
+const C3 = new Float32Array(MAXC * 4), C4 = new Float32Array(MAXC * 4), C5 = new Float32Array(MAXC * 4), C6 = new Float32Array(MAXC * 4), C7 = new Float32Array(MAXC * 4), C8 = new Float32Array(MAXC * 4);
 const CENTRE: [number, number, number] = [0, 1.0, 0];
 /** the camera's reach: how tall and wide the specimen will be when grown */
 let reach = 1;
@@ -79,6 +80,14 @@ function grow(newSeed: number) {
     C1[i * 4 + 2] = sp.ior; C1[i * 4 + 3] = sp.disp * 2.2;
     for (let k = 0; k < 3; k++) C2[i * 4 + k] = -Math.log(Math.max(0.02, sp.tint[k])) * sp.absorb;
     C2[i * 4 + 3] = sp.milk;
+    const c = spec.crystals[i];
+    C3.set([c.at[0], c.at[1], c.at[2], sp.striate], i * 4);
+    C4.set([c.R[3], c.R[4], c.R[5], 0], i * 4);
+    C5.set([c.R[0], c.R[1], c.R[2], 0], i * 4);
+    for (let k = 0; k < 3; k++) C6[i * 4 + k] = -Math.log(Math.max(0.02, sp.tint2[k])) * sp.absorb;
+    C6[i * 4 + 3] = ['none', 'tip', 'core', 'band'].indexOf(sp.zoning);
+    C7.set([sp.veils, sp.needles, sp.cracks, sp.phantom], i * 4);
+    C8.set([sp.needle[0], sp.needle[1], sp.needle[2], sp.along ? -1 : sp.bubbles], i * 4);
   }
 }
 /** the hulls as they are now: growth applied; planes and bounds uploaded */
@@ -93,6 +102,8 @@ function upload(t: number) {
     for (const p of pl) { planeData.set([p.n[0], p.n[1], p.n[2], p.d], n * 4); n++; }
     const b = bound(c, sp, g);
     C0.set(b, i * 4);
+    C4[i * 4 + 3] = sp.habit === 'prism' ? c.len * (0.001 + g) : c.r * (0.001 + g) * 1.6;
+    C5[i * 4 + 3] = sp.habit === 'prism' ? c.r * (0.3 + 0.7 * g) : c.r * (0.001 + g);
   }
   gl!.bindTexture(gl!.TEXTURE_2D, planesTex);
   gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA32F, 64, 4, 0, gl!.RGBA, gl!.FLOAT, planeData);
@@ -143,6 +154,8 @@ function setCommon(p: WebGLProgram, L: number[], gain: number) {
   gl!.useProgram(p);
   gl!.uniform1i(U(p, 'uN'), spec.crystals.length);
   gl!.uniform4fv(U(p, 'uC0'), C0); gl!.uniform4fv(U(p, 'uC1'), C1); gl!.uniform4fv(U(p, 'uC2'), C2);
+  gl!.uniform4fv(U(p, 'uC3'), C3); gl!.uniform4fv(U(p, 'uC4'), C4); gl!.uniform4fv(U(p, 'uC5'), C5); gl!.uniform4fv(U(p, 'uC6'), C6); gl!.uniform4fv(U(p, 'uC7'), C7); gl!.uniform4fv(U(p, 'uC8'), C8);
+  gl!.uniform1f(U(p, 'uSeed'), (seed % 1000) * 0.37);
   gl!.uniform3fv(U(p, 'uMat'), spec.matrix);
   gl!.uniform3fv(U(p, 'uLight'), L); gl!.uniform3fv(U(p, 'uLightCol'), LIGHT_COL);
   gl!.uniform1f(U(p, 'uTime'), performance.now() / 1000 - born);

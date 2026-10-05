@@ -17,6 +17,13 @@ uniform int uN;
 uniform vec4 uC0[${MAXC}]; // bounding centre, radius
 uniform vec4 uC1[${MAXC}]; // plane start, count, ior, dispersion
 uniform vec4 uC2[${MAXC}]; // absorption rgb, milk
+uniform vec4 uC3[${MAXC}]; // base point, striation
+uniform vec4 uC4[${MAXC}]; // the axis, length as grown
+uniform vec4 uC5[${MAXC}]; // the x column, radius as grown
+uniform vec4 uC6[${MAXC}]; // the second absorption rgb, zoning mode (0 none, 1 tip, 2 core, 3 band)
+uniform vec4 uC7[${MAXC}]; // veils, needles, cracks, phantom
+uniform vec4 uC8[${MAXC}]; // needle colour rgb, bubbles
+uniform float uSeed;
 uniform vec3 uMat;         // the matrix: an ellipsoid at the origin
 uniform vec3 uLight;       // toward the key light
 uniform vec3 uLightCol;
@@ -110,7 +117,7 @@ vec3 matrixShade(vec3 p, vec3 d) {
   vec3 g = vec3(fbm(p * 6.0 + 1.0), fbm(p * 6.0 + 7.0), fbm(p * 6.0 + 13.0)) - 0.5;
   n = normalize(n + g * 0.7);
   float m = fbm(p * 5.0);
-  vec3 alb = mix(vec3(0.014, 0.014, 0.015), vec3(0.034, 0.032, 0.031), m);
+  vec3 alb = mix(vec3(0.008, 0.008, 0.009), vec3(0.022, 0.021, 0.02), m);
   float sh = shadow(p + n * 0.01);
   float lam = max(dot(n, uLight), 0.0);
   vec3 col = alb * (uLightCol * lam * sh + vec3(0.05, 0.055, 0.07) * (0.5 + 0.5 * n.y));
@@ -163,6 +170,83 @@ export const MAIN_FS = /* glsl */ `#version 300 es
 ${COMMON}
 uniform vec3 uEye; uniform mat3 uCam; uniform vec2 uRes; uniform float uFov; uniform int uDisp; uniform int uDebug;
 out vec4 oColor;
+/** the crystal's own coordinates: across, along the axis, across */
+vec3 local(int id, vec3 p) {
+  vec3 q = p - uC3[id].xyz; vec3 ax = uC4[id].xyz, xc = uC5[id].xyz, zc = cross(ax, xc);
+  return vec3(dot(q, xc), dot(q, ax), dot(q, zc));
+}
+float h1(float x) { return fract(sin(x * 127.1 + uSeed) * 43758.5453); }
+vec3 h3(float x) { return vec3(h1(x), h1(x + 7.3), h1(x + 19.1)); }
+/** striations: the prism faces ripple across their width, in lines along the axis */
+vec3 striate(int id, vec3 p, vec3 n) {
+  float k = uC3[id].w; if (k < 0.01) return n;
+  vec3 ax = uC4[id].xyz;
+  if (abs(dot(n, ax)) > 0.35) return n; // (only the prism faces)
+  vec3 t = normalize(cross(ax, n));
+  float u = dot(p, t) * 140.0 + h1(float(id)) * 50.0;
+  float w = sin(u) * 0.6 + sin(u * 2.7 + 1.0) * 0.3 + sin(u * 0.31) * 0.4;
+  return normalize(n + t * w * 0.02 * k);
+}
+struct Inner { vec3 absorb; vec3 scatter; vec3 glint; vec3 solid; float hit; };
+/** the inside, along the first segment of the ray: zoning, phantoms, veils, bubbles sampled on
+ *  the way; needles and cracks met exactly */
+Inner interior(int id, vec3 q, vec3 rd, float len) {
+  Inner r; r.absorb = uC2[id].xyz; r.scatter = vec3(0.0); r.glint = vec3(0.0); r.solid = vec3(0.0); r.hit = 1e9;
+  float L = max(uC4[id].w, 0.02), R = max(uC5[id].w, 0.02);
+  float mode = uC6[id].w, veils = uC7[id].x, cracks = uC7[id].z, phantom = uC7[id].w, bubbles = uC8[id].w;
+  float fid = float(id) * 3.7;
+  // zoning and the sampled features
+  float zone = 0.0, veil = 0.0, bub = 0.0, ghost = 0.0;
+  const int N = 10;
+  for (int i = 0; i < N; i++) {
+    float t = (float(i) + 0.5) / float(N) * len;
+    vec3 lp = local(id, q + rd * t);
+    float rad = length(lp.xz), y = lp.y / L, rr = rad / R;
+    if (mode > 0.5 && mode < 1.5) zone += smoothstep(0.45, 0.95, y + 0.15 * sin(lp.x * 9.0 + lp.z * 7.0));
+    else if (mode < 2.5 && mode > 1.5) zone += 1.0 - smoothstep(0.45, 0.85, rr);
+    else if (mode > 2.5) zone += 0.5 + 0.5 * sin(y * 11.0 + 2.5 * fbm(lp * 3.0 + fid));
+    // (a phantom: one or two ghost tips, where the crystal's outline once was)
+    if (phantom > 0.0) { float g = y + rr * 0.55; ghost += smoothstep(0.02, 0.0, abs(fract(g * 1.15 + h1(fid)) - 0.5) - 0.47) * step(0.3, y) * (0.6 + 0.4 * fbm(lp * 6.0)); }
+    if (veils > 0.0) { vec3 vn = normalize(h3(fid + 1.0) - 0.5); float dv = abs(dot(lp, vn) - (h1(fid + 2.0) - 0.5) * R); float mask = smoothstep(0.52, 0.7, fbm(lp * 5.0 + fid)); veil += smoothstep(0.03, 0.0, dv) * mask; }
+    if (bubbles > 0.0) { vec3 c = floor(lp * 14.0); vec3 jit = h3(dot(c, vec3(1.0, 57.0, 113.0)) + fid); float db = length(fract(lp * 14.0) - 0.5 - (jit - 0.5) * 0.6); bub += step(jit.x, bubbles * 0.5) * smoothstep(0.16, 0.0, db); }
+  }
+  zone /= float(N);
+  r.absorb = mix(uC2[id].xyz, uC6[id].xyz, zone);
+  r.scatter = (veil * veils * 0.35 + ghost * phantom * 0.07 + bub * 0.8) / float(N) * uLightCol;
+  // needles: thin rods, met exactly
+  int nn = int(uC7[id].y);
+  vec3 lq = local(id, q), lrd = local(id, q + rd) - lq;
+  for (int k = 0; k < 4; k++) {
+    if (k >= nn) break;
+    float fk = fid + 11.0 + float(k) * 5.1;
+    vec3 c = (h3(fk) - 0.5) * vec3(R * 1.6, L * 0.9, R * 1.6) + vec3(0.0, L * 0.5, 0.0);
+    vec3 dn = uC7[id].y > 0.0 && uC8[id].w < -0.5 ? vec3(0.0, 1.0, 0.0) : normalize(h3(fk + 2.0) - 0.5);
+    // (a ray against a cylinder of radius rn about the line c + s*dn)
+    float rn = 0.012;
+    vec3 oc = lq - c; vec3 dd = lrd - dn * dot(lrd, dn); vec3 oo = oc - dn * dot(oc, dn);
+    float a = dot(dd, dd), b = dot(oo, dd), cc = dot(oo, oo) - rn * rn; float h = b * b - a * cc;
+    if (h < 0.0 || a < 1e-6) continue;
+    float t = (-b - sqrt(h)) / a;
+    if (t > 0.0 && t < len && t < r.hit) { float along = dot(oc + lrd * t, dn); if (abs(along) < L * 0.5) { r.hit = t; vec3 pn = normalize(oo + dd * t); r.solid = uC8[id].xyz * (0.3 + 0.7 * max(dot(pn, local(id, q + uLight) - lq), 0.0)) * uLightCol; } }
+  }
+  // cracks: planes within, patchy, glinting with a thin film's colours
+  if (cracks > 0.0) for (int k = 0; k < 2; k++) {
+    float fk = fid + 31.0 + float(k) * 7.7;
+    vec3 cn = normalize(h3(fk) - 0.5); float cd = (h1(fk + 1.0) - 0.5) * R * 0.8 + cn.y * L * 0.5;
+    float dn = dot(lrd, cn); if (abs(dn) < 1e-5) continue;
+    float t = (cd - dot(lq, cn)) / dn;
+    if (t < 0.0 || t > len) continue;
+    vec3 lp = lq + lrd * t;
+    float mask = smoothstep(0.5, 0.62, fbm(lp * 4.0 + fk)) * cracks * step(0.0, lp.y) * step(lp.y, L);
+    if (mask <= 0.0) continue;
+    vec3 wn = normalize(uC5[id].xyz * cn.x + uC4[id].xyz * cn.y + cross(uC4[id].xyz, uC5[id].xyz) * cn.z);
+    float c = abs(dot(rd, wn));
+    vec3 film = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + c * 9.0 + h1(fk) * 6.0);
+    r.glint += env(reflect(rd, wn)) * film * mask * (0.25 + 0.75 * pow(1.0 - c, 2.0)) * 0.7;
+    r.scatter += mask * 0.03 * uLightCol;
+  }
+  return r;
+}
 vec3 ground(vec3 p, vec3 d) {
   vec3 g = groundLit(p);
   float F = schlick(max(-d.y, 0.0), 1.5) * 0.45 * exp(-length(p.xz) * 0.1);
@@ -194,9 +278,14 @@ float through(int id, vec3 p, vec3 d, vec3 nn, float ior, int ch, out float path
 }
 vec3 crystalShade(int id, vec3 p, vec3 d, vec3 nn) {
   float ior = uC1[id].z, disp = uC1[id].w;
+  nn = striate(id, p, nn);
   float cosi = max(dot(-d, nn), 0.0);
   float F = schlick(cosi, ior);
   vec3 refl = scene1(p + nn * 1e-3, reflect(d, nn));
+  // the inside, once, along the green ray's first segment
+  vec3 rd0 = refract(d, nn, 1.0 / ior); vec3 q0 = p - nn * 1e-3;
+  float a0, b0; vec3 na0, nb0; hull(int(uC1[id].x), int(uC1[id].y), q0, rd0, a0, b0, na0, nb0);
+  Inner in_ = interior(id, q0, rd0, b0);
   vec3 tr; float path;
   if (uDisp > 0) {
     tr.r = through(id, p, d, nn, ior - disp, 0, path);
@@ -207,10 +296,15 @@ vec3 crystalShade(int id, vec3 p, vec3 d, vec3 nn) {
     tr.g = through(id, p, d, nn, ior, 1, path);
     tr.r = tr.g; tr.b = tr.g;
   }
-  vec3 T = exp(-uC2[id].xyz * path);
+  vec3 T = exp(-in_.absorb * path);
   float milk = 1.0 - exp(-uC2[id].w * path);
-  vec3 body = exp(-uC2[id].xyz * 0.7) * (uLightCol * 0.22 * (0.5 + 0.5 * max(dot(nn, uLight), 0.0)) + vec3(0.03, 0.035, 0.045));
+  vec3 body = exp(-in_.absorb * 0.7) * (uLightCol * 0.22 * (0.5 + 0.5 * max(dot(nn, uLight), 0.0)) + vec3(0.03, 0.035, 0.045));
   vec3 inner = mix(T * tr, body, milk);
+  // what the inside adds: scattered light from veils, phantoms and bubbles, the cracks' glints;
+  // a needle met stops the ray there
+  if (in_.hit < 1e8) inner = in_.solid * exp(-in_.absorb * in_.hit) + in_.scatter * exp(-in_.absorb * 0.5);
+  else inner += in_.scatter * exp(-in_.absorb * 0.5) * 2.0;
+  inner += in_.glint;
   // a touch of the key light scattered at the face, and a glint along grazing edges
   float glint = pow(1.0 - cosi, 6.0) * 0.15;
   return F * refl + (1.0 - F) * inner + glint * uLightCol * 0.2;

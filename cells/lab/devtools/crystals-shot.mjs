@@ -5,7 +5,7 @@ import { withWood } from './harness.mjs';
 process.env.EXPERIMENT = 'crystals';
 const out = process.argv[2] ?? new URL('./out', import.meta.url).pathname;
 await withWood(async (wood) => {
-  for (const [name, q] of [['amethyst', 'mineral=amethyst&seed=12&still&q=high'], ['fluorite', 'mineral=fluorite&seed=5&still&q=high'], ['zircon', 'mineral=zircon&seed=8&still&q=high'], ['any', 'seed=1947&still&q=mid'], ['map', 'mineral=amethyst&seed=12&still&q=high&debug=caustic'], ['id', 'mineral=amethyst&seed=12&still&q=low&debug=id']]) {
+  for (const [name, q] of [['amethyst', 'mineral=amethyst&seed=12&still&q=high'], ['fluorite', 'mineral=fluorite&seed=5&still&q=high'], ['rutile', 'mineral=rutilated&seed=8&still&q=high'], ['emerald', 'mineral=emerald&seed=3&still&q=high'], ['map', 'mineral=amethyst&seed=12&still&q=high&debug=caustic'], ['id', 'mineral=amethyst&seed=12&still&q=low&debug=id']]) {
     const page = await wood.browser.newPage({ viewport: { width: 720, height: 900 } });
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
