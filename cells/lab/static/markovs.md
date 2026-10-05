@@ -89,6 +89,16 @@ rules). `?players=2..4&bots=0111&seed=1941&wrap=1&rim=1`. "Peek at my King" show
 "use your own die" takes a real roll. `?mode=physical` is the earlier grid prototype;
 `?mode=challenge|duel|workshop` the four-state chain. Tests: `node cells/lab/devtools/markovs.test.mjs`.
 
+## The judge
+
+The same rules are a definition in the playtest cell (`static/markovs-rules.md`, game
+`markovs-chains`), played by Jev through the `junction_chain` engine mechanic
+(`cells/playtest/engine/mechanics/junction-chain.ts`): the table, the counter, the build and the
+race, the court cards and the decoy rule. A race turn is two steps there (lay, swap or hold; then
+roll, Jack or Joker) so that the judge sees the consequences of a lay as a forecast of each King's
+chances and never a simulated roll (harness h11). Hands refill at the start of a turn, so the
+deck never moves during an action. Suite: seeds 1–6 and 101–106 at three and four players.
+
 ## Open
 
 - Whether the junctions' suits should matter (a Queen swaps only within a suit? a King's own
