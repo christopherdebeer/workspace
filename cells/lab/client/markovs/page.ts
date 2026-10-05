@@ -52,16 +52,14 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
   // the junction, engraved: a ring of four stations on a dotted orbit, the exits as hatched rods
   // with open heads, the stays as a dashed loop, the faces in serif figures of the suit's ink
   const ink = card.rank === JOKER ? '#24231f' : INK[card.suit];
-  const cx = 31.5, cy = ASSETS ? 40 : 42, R = ASSETS ? 19 : 20;
+  const cx = 31.5, cy = ASSETS ? 31.5 : 42, R = ASSETS ? 16 : 20;
   let mid = '';
   const hair = (d: string, w = 0.3, extra = '') => `<path d="${d}" fill="none" stroke="${ink}" stroke-width="${w}" stroke-linecap="round" ${extra}/>`;
   /** a rod from the node out to the station in direction d (0 north … 3 west), with its head */
   const rod = (d: number, dashed = false) => {
     const ux = [0, 1, 0, -1][d], uy = [-1, 0, 1, 0][d], px = -uy, py = ux;
     const a = 5, b = R - 3.2;
-    let out = hair(`M${cx + ux * a} ${cy + uy * a}L${cx + ux * b} ${cy + uy * b}`, 0.55, dashed ? 'stroke-dasharray="1.4 .9"' : '');
-    out += hair(`M${cx + ux * a + px * 0.7} ${cy + uy * a + py * 0.7}L${cx + ux * (b - 2) + px * 0.7} ${cy + uy * (b - 2) + py * 0.7}M${cx + ux * a - px * 0.7} ${cy + uy * a - py * 0.7}L${cx + ux * (b - 2) - px * 0.7} ${cy + uy * (b - 2) - py * 0.7}`, 0.18, dashed ? 'stroke-dasharray="1.4 .9"' : '');
-    for (let t = a + 1.5; t < b - 2.5; t += 1.6) out += hair(`M${cx + ux * t + px * 1.1} ${cy + uy * t + py * 1.1}L${cx + ux * t - px * 1.1} ${cy + uy * t - py * 1.1}`, 0.16);
+    let out = hair(`M${cx + ux * a} ${cy + uy * a}L${cx + ux * b} ${cy + uy * b}`, 0.6, dashed ? 'stroke-dasharray="1.4 .9"' : '');
     const tx = cx + ux * (b + 0.6), ty = cy + uy * (b + 0.6);
     out += hair(`M${tx - ux * 2.6 + px * 1.7} ${ty - uy * 2.6 + py * 1.7}L${tx} ${ty}L${tx - ux * 2.6 - px * 1.7} ${ty - uy * 2.6 - py * 1.7}`, 0.6);
     return out;
@@ -96,10 +94,13 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
   }
   const under = card.rank >= 2 && card.rank <= 10 ? TEMPER[card.suit].toUpperCase() : '';
   if (ASSETS && card.rank !== JOKER) {
-    // the painted dress: the frame, the suit's place above the junction, its plate below, a corner
+    // the etched dress: a double hairline border with the suit's small flourish in each corner,
+    // the junction above, the suit's riverbank in fine ink across the lower third, the name on a rule
     const img = (f: string, x: number, y: number, w: number, h: number, extra = '') => `<image href="${ASSETS}${f}" x="${x}" y="${y}" width="${w}" height="${h}" ${extra}/>`;
-    const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x + 2.2} ${y - 2})"` : ''}><text x="${x}" y="${y}" font-size="8" font-family="Georgia" fill="${col}">${rank}</text>${img(`${sk}-glyph.png`, x - 0.2, y + 1.6, 4.6, 4.4, 'preserveAspectRatio="xMidYMid meet"')}</g>`;
-    return `${open}<defs>${arrow}</defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/>${img('frame.png', 1.2, 1.2, 60.6, 85.6, 'preserveAspectRatio="none"')}${img(`${sk}-sigil.png`, 5, 21, 3.6, 9.4)}${img(`${sk}-sigil.png`, 54.4, 50, 3.6, 9.4, 'transform="rotate(180 56.2 54.7)"')}${corner(6, 12.5, false)}${corner(57, 75.5, true)}${mid}${img(`${sk}-divider.png`, 21.5, 63.2, 20, 6.8, 'preserveAspectRatio="xMidYMid meet"')}${img(`${sk}-plate.png`, 12.5, 69.4, 38, 12, 'preserveAspectRatio="none"')}<text x="31.5" y="74.9" text-anchor="middle" font-size="4" font-family="Georgia" letter-spacing=".6" fill="#24231f">${card.rank === ACE ? 'THE WILD' : role}</text><text x="31.5" y="78.1" text-anchor="middle" font-size="1.9" font-family="ui-monospace,monospace" letter-spacing=".2" fill="${under ? col : '#5b5443'}">${note.toUpperCase().replace(/\.$/, '')}</text></g></svg>`;
+    const corner = (x: number, y: number, flip: boolean) => `<g ${flip ? `transform="rotate(180 ${x + 2.6} ${y - 2.6})"` : ''}><text x="${x}" y="${y}" font-size="9.5" font-family="Georgia,serif" fill="${ink}">${rank}</text>${img(`${sk}-glyph.png`, x - 0.1, y + 1.4, 5.4, 5.2, 'preserveAspectRatio="xMidYMid meet"')}</g>`;
+    const flourish = [[3.2, 3.2, 0], [59.8, 3.2, 90], [59.8, 84.8, 180], [3.2, 84.8, 270]].map(([x, y, a]) => `<g transform="translate(${x} ${y}) rotate(${a})">${img(`${sk}-cornerS.png`, 0, 0, 6.5, 7.4, 'opacity=".85"')}</g>`).join('');
+    const name = card.rank === ACE ? 'THE WILD' : role;
+    return `${open}<defs>${arrow}</defs><rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/><rect x="1.8" y="1.8" width="59.4" height="84.4" rx="3.2" fill="none" stroke="${ink}" stroke-width=".45"/><rect x="2.9" y="2.9" width="57.2" height="82.2" rx="2.6" fill="none" stroke="${ink}" stroke-width=".2"/>${flourish}${corner(5, 12.5, false)}${corner(58, 76.5, true)}${mid}${img(`${sk}-bank.png`, 3.2, 53, 56.6, 17.5, 'preserveAspectRatio="xMidYMax slice"')}<path d="M13 72.2H50" stroke="${ink}" stroke-width=".25"/><text x="31.5" y="76.6" text-anchor="middle" font-size="4.6" font-family="Georgia,serif" letter-spacing="1" fill="#2a2420">${name}</text><path d="M13 78.3H50" stroke="${ink}" stroke-width=".25"/><text x="31.5" y="81.6" text-anchor="middle" font-size="2.3" font-family="Georgia,serif" letter-spacing=".35" fill="${ink}">${note.toUpperCase().replace(/\.$/, '')}</text></g></svg>`;
   }
   // (the plain dress: an orbit with its four stations, a sigil column in the margin — the suit's
   // temperament — and the temperament named under the shape)
