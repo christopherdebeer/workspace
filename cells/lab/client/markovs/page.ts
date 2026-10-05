@@ -3,7 +3,7 @@
  * round; a curtain hides the hand between turns) or against bots. Everything the page does goes
  * through table.ts' `legal()` and `act()`, so what you can tap is exactly what the rules allow.
  */
-import { ACE, DIR_NAMES, PLACES, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
+import { ACE, COMMISSION, DIR_NAMES, PLACES, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
 import { ROLL_CAP, act, botAction, clone, current, legal, newGame, type Action, type Game } from './table';
 import { RULES_TEXT } from './text';
 
@@ -46,15 +46,18 @@ export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): str
   // the court, painted: the Wayfinders, the Exchange, the four places, and the two Jokers — the
   // scene floating on the paper; the index large with its glyph beneath; dotted sigil columns
   // with stars in the margins; the suit's seal at the foot of the scene; the name on a rule
-  if (ASSETS && (card.rank === JACK || card.rank === QUEEN || card.rank === KING || card.rank === JOKER)) {
+  // (and the Twos, the commissions: dealt face down as the secret suits, never on the table, so
+  // they carry their place as a scene)
+  const two = card.rank === COMMISSION;
+  if (ASSETS && (card.rank === JACK || card.rank === QUEEN || card.rank === KING || card.rank === JOKER || two)) {
     const jk = card.rank === JOKER, jsuit = jk ? (card.suit === 0 ? 0 : 3) : card.suit;
     const sk = SUIT_KEY[jsuit], ink = INK[jsuit];
     const img = (f: string, x: number, y: number, w: number, h: number, extra = '') => `<image href="${ASSETS}${f}" x="${x}" y="${y}" width="${w}" height="${h}" ${extra}/>`;
-    const index = (flip: boolean) => `<g ${flip ? 'transform="rotate(180 31.5 44)"' : ''}>${jk ? `<text x="4.8" y="10.2" font-size="3.6" font-family="Georgia,serif" letter-spacing=".5" fill="${ink}">JOKER</text><text x="5.8" y="17.8" font-size="6.5" fill="${ink}">★</text>` : `<text x="${rank === '10' ? 4.4 : 5}" y="13.2" font-size="10.5" font-family="Georgia,serif" font-weight="bold" fill="${ink}">${rank}</text>${img(`${sk}-glyph.png`, 5, 14.4, 6.2, 6, 'preserveAspectRatio="xMidYMid meet"')}`}</g>`;
+    const index = (flip: boolean) => `<g ${flip ? 'transform="rotate(180 31.5 44)"' : ''}>${jk ? `<text x="4.6" y="13" font-size="10" fill="${ink}">★</text><text x="4.9" y="18.6" font-size="2.7" font-family="Georgia,serif" letter-spacing=".45" fill="${ink}">JOKER</text>` : `<text x="${rank === '10' ? 4.4 : 5}" y="13.2" font-size="10.5" font-family="Georgia,serif" font-weight="bold" fill="${ink}">${rank}</text>${img(`${sk}-glyph.png`, 5, 14.4, 6.2, 6, 'preserveAspectRatio="xMidYMid meet"')}`}</g>`;
     const star = (x: number, y: number, r: number) => `<path d="M${x} ${y - r}Q${x} ${y} ${x + r} ${y}Q${x} ${y} ${x} ${y + r}Q${x} ${y} ${x - r} ${y}Q${x} ${y} ${x} ${y - r}Z" fill="${ink}"/>`;
     const column = (x: number) => `<path d="M${x} 24V66" stroke="${ink}" stroke-width=".22" stroke-dasharray=".4 1.1"/>${star(x, 30, 1.5)}${star(x, 45, 0.9)}${star(x, 60, 1.5)}<circle cx="${x}" cy="37.5" r=".45" fill="${ink}"/><circle cx="${x}" cy="52.5" r=".45" fill="${ink}"/>`;
-    const [name, sub, note] = card.rank === KING ? [PLACES[card.suit].toUpperCase(), 'DESTINATION', 'Reach this suit to win.'] : jk ? ['CHAOS', 'INSTEAD OF THE ROLL', 'A random exit. No dice.'] : COURT[card.rank];
-    const big = name.length > 11;
+    const [name, sub, note] = card.rank === KING ? [PLACES[card.suit].toUpperCase(), 'DESTINATION', 'Reach this suit to win.'] : two ? [PLACES[card.suit].toUpperCase(), 'COMMISSION', 'Your King. Your secret.'] : jk ? ['THE TRICKSTER', 'CHAOS', 'A random exit. No dice.'] : COURT[card.rank];
+    const big = name.length >= 10;
     return `${open}<rect x=".6" y=".6" width="61.8" height="86.8" rx="4" fill="${PAPER}" stroke="#655b44" stroke-width=".8"/><rect x="1.8" y="1.8" width="59.4" height="84.4" rx="3.2" fill="none" stroke="${ink}" stroke-width=".45"/><rect x="2.9" y="2.9" width="57.2" height="82.2" rx="2.6" fill="none" stroke="${ink}" stroke-width=".2"/>${img(`${jk ? 'JOKER' : RANK[card.rank]}${card.suit}.webp`, 8, 5.5, 47, 55, 'preserveAspectRatio="xMidYMax meet"')}${jk ? '' : column(4.6) + column(58.4)}${jk ? '' : img(`${sk}-seal.png`, 26.5, 56.5, 10, 10)}${index(false)}${index(true)}<text x="${big ? 29.5 : 31.5}" y="74.6" text-anchor="middle" font-size="${big ? 3.9 : 5}" font-family="Georgia,serif" letter-spacing="${big ? 0.5 : 1.1}" fill="#2a2420">${name}</text><path d="M15 77.2H${31.5 - sub.length * 0.95 - 1.5}M${31.5 + sub.length * 0.95 + 1.5} 77.2H48" stroke="${ink}" stroke-width=".25"/><text x="31.5" y="78.1" text-anchor="middle" font-size="2.4" font-family="Georgia,serif" letter-spacing=".5" fill="${ink}">${sub}</text><text x="31.5" y="82" text-anchor="middle" font-size="2.3" font-family="Georgia,serif" letter-spacing=".3" fill="#2a2420">${note.toUpperCase()}</text></g></svg>`;
   }
   const arrow = `<marker id="${id}a" markerWidth="4" markerHeight="4" refX="3" refY="2" orient="auto"><path d="M0 0L4 2L0 4" fill="#34312c"/></marker>`;

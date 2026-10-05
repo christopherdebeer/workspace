@@ -31,6 +31,6 @@ await withWood(async (wood) => {
   // each page section as a PNG, for looking
   await page.setViewportSize({ width: 800, height: 1150 });
   const sections = await page.$$('.print-page');
-  for (const [i, s] of sections.entries()) if (i < 5 || i === sections.length - 1) await s.screenshot({ path: join(out, `markovs-print-${i + 1}.png`) });
+  for (const [i, s] of sections.entries()) await s.screenshot({ path: join(out, `markovs-print-${i + 1}.png`) });
   console.log('errors', errors);
 });
