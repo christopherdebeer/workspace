@@ -69,7 +69,7 @@ const LOOKAHEAD_MAX = 40;
 const FOLLOW_MAX = 30;
 /** Moves whose outcome turns on hidden information are never simulated (a denunciation
  *  would otherwise announce whether the target is the Enemy; a draw, the next card). */
-const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
+const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll/;
 
 /** What the runner shows Jev and how it drives play. Part of an eval's identity: a harness
  *  change moves scores without touching engine code, so baselines must match it too.
@@ -87,8 +87,11 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  sections — the map, denouncing, trading, powers and events were invisible to them ·
  *  h10: costs on labels — a move that exposes your role says so ("cost: everyone learns you are …"), and an
  *  accusation states what being right and wrong do; a player on the enemy team plays as the
- *  hidden traitor (ENEMY_PERSONA); the judge sees who learned what, and when (knowledge_events). */
-export const HARNESS_VERSION = 'h10';
+ *  hidden traitor (ENEMY_PERSONA); the judge sees who learned what, and when (knowledge_events) ·
+ *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
+ *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
+ *  two-step race turn). */
+export const HARNESS_VERSION = 'h11';
 
 /** "cost: everyone learns you are X" when `after` exposes the mover's role (public reveal, e.g. the Temple). */
 function exposure(before: Record<string, any>, after: Record<string, any>, pid: string): string[] {

@@ -1,9 +1,9 @@
 ---
 name: "Markovs Chains"
-version: "3.0"
+version: "3.1"
 players: 2-4
 win_condition: "The shared counter arrives at the King of your secret suit"
-max_rounds: 30
+max_turns: 60
 
 # Each player is dealt one objective face down: a suit. Their King is their destination.
 # (At two or three players the undealt Kings are decoys.)
@@ -17,116 +17,80 @@ mechanics:
   hidden_objectives:
     deal_at_start: true
     reveal_on_completion: true
-  victory_declaration: true
 
-  # The table: a 5×5 grid of card spaces. The Ace of spades (origin) is laid in the centre,
-  # the four Kings at the middle of each edge. New cards go on empty spaces touching a laid
-  # card, or anywhere on the outer ring; an Ace anywhere; a card may be laid on top of a
-  # junction once no space is empty (build) or at any time in the race.
-  grid:
-    type: "bounded"
-    bounds: { width: 5, height: 5 }
-    starting_tile: "origin"
-    adjacency: "orthogonal"
-    fixed_tiles:
-      - { card: "K♥ DESTINATION", at: [2, 0] }
-      - { card: "K♦ DESTINATION", at: [4, 2] }
-      - { card: "K♣ DESTINATION", at: [2, 4] }
-      - { card: "K♠ DESTINATION", at: [0, 2] }
-    placement: { touching: true, rim_anywhere: true, cover: true, rotate: true }
+  # The table: a 5×5 grid of card spaces, the Kings at the middle of each edge, the start
+  # card (the Ace of spades) in the centre with the one shared counter on it. Build it, then
+  # race: the counter follows the die faces printed on the card it stands on.
+  junction_chain:
+    size: 5
+    start: "2,2"
+    start_card: "origin"
+    kings: { hearts: "2,0", diamonds: "4,2", clubs: "2,4", spades: "0,2" }
     wrap: true
-  place_location: true
+    rim: true
+    cover: true
+    hand: 3
+    forecast: 4
 
-  # ONE counter, shared by everyone, starts on the origin. Movement is not chosen: on a
-  # roll, the counter follows the exit printed for that die face on the card it stands on,
-  # as that card is turned. A stay face holds it. An exit off the edge comes in on the far
-  # side. Arriving at a King nobody holds returns the counter to the origin.
-  shared_counter:
-    start: "origin"
-    resolve: "junction_faces"
-    off_edge: "wrap"
-    decoy_destination: "return_to_start"
-  junction_routing:
-    faces: 6
-    directions: ["N", "E", "S", "W", "stay"]
-    rotate_with_card: true
-
-  # Two phases: build (lay a card each turn, no rolling, until no space is empty) then race
-  # (lay or play or pass, then roll — or play a Jack / Joker instead of the roll).
-  phases:
-    - { name: "build", until: "no_empty_space", turn: ["place_location | discard"] }
-    - { name: "race", turn: ["place_location | play_card | pass", "roll | play_card(instead_of_roll)"] }
-
-  dice_rolling:
-    dice_count: 1
-    dice_sides: 6
-    roll_action: true
-    roll_purposes: ["move_counter"]
-
-  hand_limit: 3
-  hand_limit_policy: "cannot_draw"
   card_type_rules:
-    location: { playable: false, placeable: true, holdable: true, tradeable: false }
-    event: { playable: true, placeable: false, holdable: true, tradeable: false }
+    junction: { playable: false, placeable: false, holdable: true, tradeable: false }
+    court: { playable: false, placeable: false, holdable: true, tradeable: false }
 
   cards:
     starting_hand: 3
+    draw_action: false   # hands refill by rule; drawing is not a move
     deck:
-      # === DESTINATIONS (fixed on the table; never drawn) ===
-      - { name: "K♥ DESTINATION", count: 0, type: "location", suit: "hearts", role: "destination" }
-      - { name: "K♦ DESTINATION", count: 0, type: "location", suit: "diamonds", role: "destination" }
-      - { name: "K♣ DESTINATION", count: 0, type: "location", suit: "clubs", role: "destination" }
-      - { name: "K♠ DESTINATION", count: 0, type: "location", suit: "spades", role: "destination" }
       # === START (the Ace of spades, fixed in the centre) and the WILD aces ===
-      - { name: "origin", count: 0, type: "location", role: "start", exits: "N1 E2 S1 W2" }
-      - { name: "A♥ WILD", count: 1, type: "location", suit: "hearts", role: "wild", anywhere: true, exits: "N1 E2 S1 W2" }
-      - { name: "A♦ WILD", count: 1, type: "location", suit: "diamonds", role: "wild", anywhere: true, exits: "N1 E2 S1 W2" }
-      - { name: "A♣ WILD", count: 1, type: "location", suit: "clubs", role: "wild", anywhere: true, exits: "N1 E2 S1 W2" }
+      - { name: "origin", count: 0, type: "junction", role: "start", exits: "N1 E2 S1 W2" }
+      - { name: "A♥ WILD", count: 1, type: "junction", suit: "hearts", role: "wild", exits: "N1 E2 S1 W2" }
+      - { name: "A♦ WILD", count: 1, type: "junction", suit: "diamonds", role: "wild", exits: "N1 E2 S1 W2" }
+      - { name: "A♣ WILD", count: 1, type: "junction", suit: "clubs", role: "wild", exits: "N1 E2 S1 W2" }
       # === JUNCTIONS: rank is the shape, suit the temperament; exits = faces per direction ===
       # hearts — the current (leans one way)
-      - { name: "2♥ THROUGH", count: 1, type: "location", suit: "hearts", exits: "N4 S2" }
-      - { name: "3♥ TURN", count: 1, type: "location", suit: "hearts", exits: "N4 E2" }
-      - { name: "4♥ TEE", count: 1, type: "location", suit: "hearts", exits: "N4 E1 W1" }
-      - { name: "5♥ CROSS", count: 1, type: "location", suit: "hearts", exits: "N3 E1 S1 W1" }
-      - { name: "6♥ EDDY", count: 1, type: "location", suit: "hearts", exits: "N5 stay1" }
-      - { name: "7♥ SWITCH", count: 1, type: "location", suit: "hearts", exits: "N4 E1 stay1" }
-      - { name: "8♥ WEIR", count: 1, type: "location", suit: "hearts", exits: "N4 S1 stay1" }
-      - { name: "9♥ FORK", count: 1, type: "location", suit: "hearts", exits: "N3 E1 W1 stay1" }
-      - { name: "10♥ BACKTURN", count: 1, type: "location", suit: "hearts", exits: "N2 E4" }
+      - { name: "2♥ THROUGH", count: 1, type: "junction", suit: "hearts", exits: "N4 S2" }
+      - { name: "3♥ TURN", count: 1, type: "junction", suit: "hearts", exits: "N4 E2" }
+      - { name: "4♥ TEE", count: 1, type: "junction", suit: "hearts", exits: "N4 E1 W1" }
+      - { name: "5♥ CROSS", count: 1, type: "junction", suit: "hearts", exits: "N3 E1 S1 W1" }
+      - { name: "6♥ EDDY", count: 1, type: "junction", suit: "hearts", exits: "N5 stay1" }
+      - { name: "7♥ SWITCH", count: 1, type: "junction", suit: "hearts", exits: "N4 E1 stay1" }
+      - { name: "8♥ WEIR", count: 1, type: "junction", suit: "hearts", exits: "N4 S1 stay1" }
+      - { name: "9♥ FORK", count: 1, type: "junction", suit: "hearts", exits: "N3 E1 W1 stay1" }
+      - { name: "10♥ BACKTURN", count: 1, type: "junction", suit: "hearts", exits: "N2 E4" }
       # diamonds — the mirror (even-handed)
-      - { name: "2♦ THROUGH", count: 1, type: "location", suit: "diamonds", exits: "N3 S3" }
-      - { name: "3♦ TURN", count: 1, type: "location", suit: "diamonds", exits: "N3 E3" }
-      - { name: "4♦ TEE", count: 1, type: "location", suit: "diamonds", exits: "N2 E2 W2" }
-      - { name: "5♦ CROSS", count: 1, type: "location", suit: "diamonds", exits: "N2 E1 S2 W1" }
-      - { name: "6♦ EDDY", count: 1, type: "location", suit: "diamonds", exits: "N3 stay3" }
-      - { name: "7♦ SWITCH", count: 1, type: "location", suit: "diamonds", exits: "N2 E2 stay2" }
-      - { name: "8♦ WEIR", count: 1, type: "location", suit: "diamonds", exits: "N2 S2 stay2" }
-      - { name: "9♦ FORK", count: 1, type: "location", suit: "diamonds", exits: "N2 E1 W1 stay2" }
-      - { name: "10♦ BACKTURN", count: 1, type: "location", suit: "diamonds", exits: "N3 W2 stay1" }
+      - { name: "2♦ THROUGH", count: 1, type: "junction", suit: "diamonds", exits: "N3 S3" }
+      - { name: "3♦ TURN", count: 1, type: "junction", suit: "diamonds", exits: "N3 E3" }
+      - { name: "4♦ TEE", count: 1, type: "junction", suit: "diamonds", exits: "N2 E2 W2" }
+      - { name: "5♦ CROSS", count: 1, type: "junction", suit: "diamonds", exits: "N2 E1 S2 W1" }
+      - { name: "6♦ EDDY", count: 1, type: "junction", suit: "diamonds", exits: "N3 stay3" }
+      - { name: "7♦ SWITCH", count: 1, type: "junction", suit: "diamonds", exits: "N2 E2 stay2" }
+      - { name: "8♦ WEIR", count: 1, type: "junction", suit: "diamonds", exits: "N2 S2 stay2" }
+      - { name: "9♦ FORK", count: 1, type: "junction", suit: "diamonds", exits: "N2 E1 W1 stay2" }
+      - { name: "10♦ BACKTURN", count: 1, type: "junction", suit: "diamonds", exits: "N3 W2 stay1" }
       # clubs — the thicket (one more branch)
-      - { name: "2♣ THROUGH", count: 1, type: "location", suit: "clubs", exits: "N3 E1 S2" }
-      - { name: "3♣ TURN", count: 1, type: "location", suit: "clubs", exits: "N3 E2 W1" }
-      - { name: "4♣ TEE", count: 1, type: "location", suit: "clubs", exits: "N2 E2 S1 W1" }
-      - { name: "5♣ CROSS", count: 1, type: "location", suit: "clubs", exits: "N2 E1 S1 W1 stay1" }
-      - { name: "6♣ EDDY", count: 1, type: "location", suit: "clubs", exits: "N3 E1 stay2" }
-      - { name: "7♣ SWITCH", count: 1, type: "location", suit: "clubs", exits: "N2 E2 W1 stay1" }
-      - { name: "8♣ WEIR", count: 1, type: "location", suit: "clubs", exits: "N2 E1 S2 stay1" }
-      - { name: "9♣ FORK", count: 1, type: "location", suit: "clubs", exits: "N1 E3 W1 stay1" }
-      - { name: "10♣ BACKTURN", count: 1, type: "location", suit: "clubs", exits: "N2 E1 W3" }
+      - { name: "2♣ THROUGH", count: 1, type: "junction", suit: "clubs", exits: "N3 E1 S2" }
+      - { name: "3♣ TURN", count: 1, type: "junction", suit: "clubs", exits: "N3 E2 W1" }
+      - { name: "4♣ TEE", count: 1, type: "junction", suit: "clubs", exits: "N2 E2 S1 W1" }
+      - { name: "5♣ CROSS", count: 1, type: "junction", suit: "clubs", exits: "N2 E1 S1 W1 stay1" }
+      - { name: "6♣ EDDY", count: 1, type: "junction", suit: "clubs", exits: "N3 E1 stay2" }
+      - { name: "7♣ SWITCH", count: 1, type: "junction", suit: "clubs", exits: "N2 E2 W1 stay1" }
+      - { name: "8♣ WEIR", count: 1, type: "junction", suit: "clubs", exits: "N2 E1 S2 stay1" }
+      - { name: "9♣ FORK", count: 1, type: "junction", suit: "clubs", exits: "N1 E3 W1 stay1" }
+      - { name: "10♣ BACKTURN", count: 1, type: "junction", suit: "clubs", exits: "N2 E1 W3" }
       # spades — the well (holds a while)
-      - { name: "2♠ THROUGH", count: 1, type: "location", suit: "spades", exits: "N2 S1 stay3" }
-      - { name: "3♠ TURN", count: 1, type: "location", suit: "spades", exits: "N2 E1 stay3" }
-      - { name: "4♠ TEE", count: 1, type: "location", suit: "spades", exits: "N1 E1 W1 stay3" }
-      - { name: "5♠ CROSS", count: 1, type: "location", suit: "spades", exits: "N1 E1 S1 W1 stay2" }
-      - { name: "6♠ EDDY", count: 1, type: "location", suit: "spades", exits: "N2 stay4" }
-      - { name: "7♠ SWITCH", count: 1, type: "location", suit: "spades", exits: "N1 E1 stay4" }
-      - { name: "8♠ WEIR", count: 1, type: "location", suit: "spades", exits: "N1 S1 stay4" }
-      - { name: "9♠ FORK", count: 1, type: "location", suit: "spades", exits: "N1 E2 W1 stay2" }
-      - { name: "10♠ BACKTURN", count: 1, type: "location", suit: "spades", exits: "N2 W1 stay3" }
+      - { name: "2♠ THROUGH", count: 1, type: "junction", suit: "spades", exits: "N2 S1 stay3" }
+      - { name: "3♠ TURN", count: 1, type: "junction", suit: "spades", exits: "N2 E1 stay3" }
+      - { name: "4♠ TEE", count: 1, type: "junction", suit: "spades", exits: "N1 E1 W1 stay3" }
+      - { name: "5♠ CROSS", count: 1, type: "junction", suit: "spades", exits: "N1 E1 S1 W1 stay2" }
+      - { name: "6♠ EDDY", count: 1, type: "junction", suit: "spades", exits: "N2 stay4" }
+      - { name: "7♠ SWITCH", count: 1, type: "junction", suit: "spades", exits: "N1 E1 stay4" }
+      - { name: "8♠ WEIR", count: 1, type: "junction", suit: "spades", exits: "N1 S1 stay4" }
+      - { name: "9♠ FORK", count: 1, type: "junction", suit: "spades", exits: "N1 E2 W1 stay2" }
+      - { name: "10♠ BACKTURN", count: 1, type: "junction", suit: "spades", exits: "N2 W1 stay3" }
       # === THE COURT and the JOKERS (events) ===
-      - { name: "J REROUTE", count: 4, type: "event", effect: { type: "walk_counter", value: 1, description: "Instead of rolling, move the counter one space in a direction of your choice (onto a card)" } }
-      - { name: "Q SWAP", count: 4, type: "event", effect: { type: "swap_tiles", description: "Instead of laying a card, exchange two junctions on the table (not Kings); the counter stays where it is" } }
-      - { name: "JOKER CHAOS", count: 2, type: "event", effect: { type: "random_exit", description: "Instead of rolling, the counter takes one of its card's exits at random" } }
+      - { name: "J REROUTE", count: 4, type: "court", role: "reroute", effect: { type: "none", description: "Instead of rolling, walk the counter one space in a direction of your choice" } }
+      - { name: "Q SWAP", count: 4, type: "court", role: "swap", effect: { type: "none", description: "Instead of laying a card, exchange two junctions on the table" } }
+      - { name: "JOKER CHAOS", count: 2, type: "court", role: "chaos", effect: { type: "none", description: "Instead of rolling, the counter takes one of its exits at random" } }
+
 ---
 
 # Markovs Chains
@@ -172,34 +136,25 @@ lay, throw a card in and draw. No rolling. Build until no space is empty.
 On your turn: lay one card on top of any junction (not a King), or play a Queen to swap two
 junctions, or pass. Then roll the d6. Find that face's arrow on the card under the counter and
 move the counter one space that way; off the edge, it comes in on the far side; a loop face
-stays. Instead of rolling you may play a Jack or a Joker. Draw back to three.
+stays. Instead of the roll you may play a Jack (walk the counter one space your way) or a Joker (a random exit). Draw back to three.
 
 ## Winning
 
 The first time the counter arrives at the King of your suit, show your face-down card: you win.
-Arriving at a King nobody holds sends the counter back to the Ace of spades. Thirty rolls
+Arriving at a King nobody holds sends the counter back to the Ace of spades. Sixty turns
 without an arrival is a draw.
 
 Don't say which King is yours. Every card you lay says a little.
 
-## What the engine needs (declared, not yet implemented)
+## Strategy
 
-This definition declares mechanics the engine does not have; until it does, a playtest plays
-a different game. They are, in the order they matter:
+- A lay is the decision: where, which card, which way up — and what it tells the others.
+- Hearts run, spades hold: a line of hearts toward a King is a chute; a well of spades in front of one is a bog. Clubs scatter the counter; diamonds are fair.
+- In the race, covering the card under the counter changes its very next move; covering further off is a promise the others may undo.
 
-1. `shared_counter` — one counter for all players (not an avatar each), moved by the table.
-2. `junction_routing` — a laid card's exits by die face, turned with the card; a stay face.
-3. `grid.placement` — rotation on laying, laying on the outer ring, covering a junction;
-   `grid.wrap` — an exit off the edge comes in opposite; `grid.fixed_tiles` for the Kings.
-4. `phases` — build (no rolling, until the table is full) then race.
-5. `objectives[].check.counter_at` — a destination check on the shared counter, with the
-   decoy rule (nobody's King returns the counter to the origin).
-6. Event effects `walk_counter`, `swap_tiles`, `random_exit` for the court and the jokers.
+## Engine (implemented)
 
-A free reference implementation of all six is `cells/lab/client/markovs/{deck,table}.ts`
-(pure TypeScript: the deal, every legal action, movement, a one-action-ahead bot), with a
-simulation harness (`cells/lab/devtools/markovs-sim.mjs`) that plays rule variants against
-each other and reports draws, length, first-player edge and skill gap.
+The `junction_chain` mechanic (cells/playtest/engine/mechanics/junction-chain.ts) owns the table, the counter, the two phases, the roll at the end of a race turn, the court cards and the decoy rule; hidden_objectives holds the secret suits and `counter_at` is read by the chain. A free simulation harness of the same rules is `cells/lab/devtools/markovs-sim.mjs`.
 
 ## Design notes for the judge
 
