@@ -7,8 +7,9 @@ max_turns: 90
 
 # What the design is for, measured by the engine every game (the eval's targets term):
 # brisk but not over in a flash, decided by the table rather than the roller, rarely a draw.
+# (rolls = movement turns after the court; the court takes a round of its own, so rounds flatter the pace)
 targets:
-  rounds: [4, 10]
+  rolls: [6, 24]
   offTurnWin: [0.25, 0.6]
   draw: [0, 0.1]
   leadChanges: [2, 6]
