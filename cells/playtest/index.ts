@@ -331,6 +331,7 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
         return { ...summary, turns: blob.session.turns.slice(from, from + num(a.limit, 200, 1, 400)).map((t) => ({ step: t.step, round: t.round, turn: t.turn, player: t.player, valid: t.valid, move: t.label, confidence: t.confidence, runnerUp: t.top?.[1] ?? null, ahead: t.ahead, fallback: t.fallback })) };
       }
       if (view === 'log') return { ...summary, log: blob.session.log.slice(num(a.from, 0, 0, 1e6), num(a.from, 0, 0, 1e6) + num(a.limit, 300, 1, 1000)) };
+      if (view === 'probes') return { ...summary, probes: (blob.session as { probes?: unknown[] }).probes ?? [] };
       return { ...summary, findings: blob.findings, judgement: blob.judgement };
     }
     case 'climb_log': {
@@ -438,7 +439,7 @@ const TOOLS = [
   { name: 'baseline', kind: 'read', description: 'The eval of the current head on this engine + suite (the number a proposal must beat), or none.', inputSchema: S({ game }, ['game']) },
   { name: 'evals', kind: 'read', description: 'Eval history for a game (train/test scores by version and engine).', inputSchema: S({ game, limit: { type: 'number' } }, ['game']) },
   { name: 'eval_detail', kind: 'read', description: 'One eval (train runs with score parts and findings; test as a score). diagnose:true adds the stall diagnosis.', inputSchema: S({ id: { type: 'string' }, diagnose: { type: 'boolean' } }, ['id']) },
-  { name: 'run', kind: 'read', description: 'One run: view summary | turns | log | findings. Held-out (test) runs show only their score.', inputSchema: S({ id: { type: 'string' }, view: { type: 'string', enum: ['summary', 'turns', 'log', 'findings'] }, from: { type: 'number' }, limit: { type: 'number' } }, ['id']) },
+  { name: 'run', kind: 'read', description: 'One run: view summary | turns | log | findings | probes (the questionnaire\'s answers per probed turn). Held-out (test) runs show only their score.', inputSchema: S({ id: { type: 'string' }, view: { type: 'string', enum: ['summary', 'turns', 'log', 'findings', 'probes'] }, from: { type: 'number' }, limit: { type: 'number' } }, ['id']) },
   { name: 'climb_log', kind: 'read', description: 'Every round of a game\'s climb: change, rationale, baseline vs candidate train/test, delta, decision and reason.', inputSchema: S({ game }, ['game']) },
   { name: 'backlog', kind: 'read', description: 'The mechanic worklist: gaps evals keep hitting (missing/partial mechanics, unhandled card effects, engine faults, moves System One cannot play), ranked by hits × games. Fix these in engine/ and the next eval shows it.', inputSchema: S({ kind: { type: 'string' }, limit: { type: 'number' } }) },
   { name: 'engines', kind: 'read', description: 'Engine versions seen (code fingerprints) and which mechanics changed between consecutive versions.', inputSchema: S({}) },
