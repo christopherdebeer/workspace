@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:e90d83d83f530d9114f066a56670db6e601ef8cea0eb1f3159f7bc726ef17bae",
-  "syncedAt": "2026-10-06T11:06:38.393Z",
+  "treeVersion": "tree:aba057d89237da1c6f0b679382dd4f5d92bbe2a8d2d73c7206b27d886fd7adfc",
+  "syncedAt": "2026-10-06T11:11:05.637Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -118,7 +118,7 @@
     "engine/mechanics/induction.ts": "sha256:eb1b8f2561f32f5daa7df01b2ad6cb16906fdfab7dfa1b914e286268e49d588b",
     "engine/mechanics/interrupts.ts": "sha256:be246877d6ecaeb03966df49e05acc1a1d7d3ee83f1641f38ef1b2ebb88a3856",
     "engine/mechanics/investment.ts": "sha256:5f50c998148b6cf06bab555a760c6493de2740fab0721be83d4dace44ce3e037",
-    "engine/mechanics/junction-chain.ts": "sha256:ab7eba2b183362b0ef4663e5fd710a90dfb465ffc770b3ce8ecb7d929bc86dbb",
+    "engine/mechanics/junction-chain.ts": "sha256:c9c43881ac41d2e17f5cec285c8eb71f5f17322c3946a1b6b0131c0089f6e044",
     "engine/mechanics/kill-steal.ts": "sha256:0a0efc50f8863adc80f76cb6e64974600a8561c673c2dd2806521d0c695f7ce9",
     "engine/mechanics/ladder-climbing.ts": "sha256:61e42f23c50d254e5359898bf7d50a582fdc977be1f191c284e7fae10ece47ad",
     "engine/mechanics/loans.ts": "sha256:45e832e6105702ed6335e19ce3b519c8f95f877385b4d9308a7069e9bfc85056",
