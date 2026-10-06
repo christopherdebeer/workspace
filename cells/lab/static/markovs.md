@@ -53,24 +53,30 @@ spades a bog.
 The full text is `client/markovs/text.ts` (the print sheet, the insert in the box and the page
 all read it). In short:
 
-1. **Deal.** The four Kings face up at the middle of each edge of a 5 × 5 table of squares (about
-   9 cm each, so a card fits either way up), the Ace of spades in the centre, the counter on it.
-   The four Twos shuffled face down, one each: its suit is your King, your secret; the rest back
-   in the box (at two or three players the undealt Kings are decoys). Three cards each.
-2. **Build.** In turns, lay one card from your hand, turned any way, on an empty square touching a
-   laid card — or anywhere on the outer ring; an Ace on any empty square. Arrows needn't line
-   up. Draw back to three. If you can't lay, throw a card in and draw. No rolling. Build until
-   no square is empty.
-3. **Race.** On your turn: lay one card on top of any junction (not a King), or play a Queen to
-   swap two junctions, or pass. Then roll. Only the card under the counter decides the move:
-   that face's arrow, one square; off the edge, in on the far side; a stay face stays. Instead
-   of rolling you may play a Jack or a Joker. Draw back to three; an empty pile means play on
-   with what you hold.
+1. **Deal.** The Ace of spades in the centre of a 5 × 5 table of squares (about 9 cm each, so a
+   card fits either way up), the counter on it. The four Twos shuffled face down, one each: its
+   suit is your King, your secret; the rest back in the box. The four Kings shuffled and dealt
+   one each face up: the King you will place, not necessarily the one you want (with fewer than
+   four players the undealt King stands one square clockwise of its edge's middle, a destination
+   nobody holds). Three cards each.
+2. **The court.** In turns, place your dealt King on an empty square of the outer ring: never the
+   middle of an edge, not beside the counter, not beside another King — so every King is at
+   least three steps from the centre. Nothing else happens until every King is placed; the last
+   to place one takes the first turn.
+3. **Race.** A turn is one landscape action and one movement, in either order. The landscape
+   action: lay one card, turned any way, on an empty square touching a laid card or anywhere on
+   the outer ring (an Ace on any empty square) or on top of a junction (not a King); or play a
+   Queen to swap two junctions; or hold. The movement: roll; only the card under the counter
+   decides the move: that face's arrow, one square; off the edge, in on the far side; a stay
+   face stays. Instead of rolling you may play a Jack or a Joker. Draw back to three; an empty
+   pile means play on with what you hold.
 4. **Winning.** When the counter reaches a King someone holds, that player shows their Two and
    wins — whoever moved the counter. A King nobody holds sends the counter back to the centre.
    Thirty movement turns without an arrival is a draw.
 
-Don't say which King is yours. Every card you lay says a little.
+Don't say which King is yours. Every card you lay says a little — and so does where you put a King.
+
+(This is v4.2, the playtest head. The build-then-race game of v3.2 — Kings fixed at the edge middles, the table built full before any roll — is what the simulation below plays; `devtools/markovs-sim.mjs` keeps it for the sweeps.)
 
 ## Why these rules (the simulation)
 

@@ -9,24 +9,26 @@ export const RULES_TEXT: Section[] = [
     'A standard poker deck with both Jokers (this one, or any), one counter, one six-sided die, and a table big enough for a 5 × 5 grid of squares about 9 cm wide — a card has to fit each square either way up. Two to four players; twenty minutes.',
   ] },
   { title: 'Setup', body: [
-    'Lay the four Kings face up at the middle of each edge of the grid: hearts north, diamonds east, clubs south, spades west. Put the Ace of spades in the centre square and the counter on it.',
+    'Put the Ace of spades in the centre square of the grid and the counter on it.',
     'Take the four Twos. Shuffle them face down and deal one to each player: its suit is your King, and your secret. Put the undealt Twos back in the box without looking.',
+    'Shuffle the four Kings and deal one to each player face up: that is the King you will place, not necessarily the one you want. With fewer than four players, stand the undealt King on the outer ring one square clockwise of the middle of its edge (hearts north, diamonds east, clubs south, spades west): a destination nobody holds.',
     'Shuffle the rest face down as the pile. Deal three cards each.',
   ] },
-  { title: 'Build', body: [
-    'In turns, lay one card from your hand, turned any way you like, on an empty square that touches a laid card — or on any empty square of the outer ring. An Ace may go on any empty square. Arrows need not line up with the neighbours’: only the card under the counter will ever decide a move.',
-    'Draw back to three. If you cannot lay (a hand of court cards), throw one in face up and draw. No rolling. Build until no square is empty.',
+  { title: 'The court', body: [
+    'In turns, place your dealt King face up on an empty square of the outer ring — never the middle square of an edge, not beside the counter’s square, and not beside another King. So every King stands at least three steps from the centre; a corner is four.',
+    'Nothing else happens until every King is placed. The player who places the last King takes the first turn of the race.',
   ] },
   { title: 'Race', body: [
-    'On your turn, first one of: lay a card on top of any junction (never a King); play a Queen to swap two junctions (the counter stays on its square); or pass.',
-    'Then move the counter. Roll the die, find that face on the card under the counter, and move one square the way its arrow points. Off the edge, the counter comes in on the far side. A stay face, or an arrow with no card beyond it, leaves the counter where it is.',
+    'A turn is one landscape action and one movement, in either order.',
+    'The landscape action: lay one card from your hand, turned any way you like, on an empty square that touches a laid card or on any empty square of the outer ring (an Ace on any empty square), or on top of a junction already laid (never a King); or play a Queen to swap two junctions (the counter stays on its square); or hold. If you cannot lay, you may throw a card in face up.',
+    'The movement: roll the die, find that face on the card under the counter, and move one square the way its arrow points. Off the edge, the counter comes in on the far side. A stay face, or an arrow with no card beyond it, leaves the counter where it is. Arrows need not line up with the neighbours’: only the card under the counter ever decides a move.',
     'Instead of rolling you may play a Jack — walk the counter one square, your choice — or a Joker: ignore the printed faces, the counter takes one of the card’s outward exits at random (see The Joker).',
     'Draw back to three. When the pile is empty, play on with what you hold.',
   ] },
   { title: 'Winning', body: [
     'When the counter reaches a King that someone holds, that player shows their Two and wins — whoever moved the counter.',
     'A King nobody holds sends the counter back to the centre square. Thirty movement turns without an arrival is a draw.',
-    'Don’t say which King is yours. Every card you lay says a little.',
+    'Don’t say which King is yours. Every card you lay says a little — and so does where you put a King.',
   ] },
   { title: 'The Joker', body: [
     'Count the card’s distinct outward exits that lead to a card, in the order north, east, south, west. Two exits: 1–3 takes the first, 4–6 the second. Three: 1–2, 3–4, 5–6. Four: 1 to 4, and roll again on a 5 or 6. One exit: take it. None: the counter stays.',

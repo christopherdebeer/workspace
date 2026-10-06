@@ -224,13 +224,14 @@ export default function bootTable() {
   /** what a tap on a space would do now, for the chosen card (or null) */
   function tapAction(k: string): Action | null {
     const opts = legal(g);
+    if (g.phase === 'court') return opts.find((a) => a.kind === 'crown' && a.k === k) ?? null;
     const c = selected >= 0 ? me().hand[selected] : null;
     if (!c) return null;
     if (c.rank === QUEEN && !g.laid) {
       if (!swapFirst) return opts.some((a) => a.kind === 'swap' && (a.a === k || a.b === k)) ? { kind: 'pass' } : null; // (a first pick: handled by the caller)
       return opts.find((a) => a.kind === 'swap' && ((a.a === swapFirst && a.b === k) || (a.b === swapFirst && a.a === k))) ?? null;
     }
-    if (c.rank === JACK && g.laid) return opts.find((a) => a.kind === 'jack' && a.i === selected && neighbour(g.token, a.dir, g.rules) === k) ?? null;
+    if (c.rank === JACK && !g.moved) return opts.find((a) => a.kind === 'jack' && a.i === selected && neighbour(g.token, a.dir, g.rules) === k) ?? null;
     return opts.find((a) => a.kind === 'lay' && a.k === k && a.i === selected && a.rotation === rotation) ?? null;
   }
   function doAct(a: Action) {
@@ -261,7 +262,7 @@ export default function bootTable() {
     const p = me();
     const opts = legal(g);
     const c = selected >= 0 ? p.hand[selected] : null;
-    $('deal').textContent = `DEAL ${seed} / ${g.phase === 'build' ? 'BUILDING THE TABLE' : g.phase === 'race' ? `THE RACE · ROLL ${g.rolls + 1} OF ${ROLL_CAP}` : 'OVER'}`;
+    $('deal').textContent = `DEAL ${seed} / ${g.phase === 'court' ? 'THE COURT' : g.phase === 'race' ? `THE RACE · ROLL ${g.rolls + 1} OF ${ROLL_CAP}` : 'OVER'}`;
     // the table
     let html = '';
     for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
@@ -281,22 +282,24 @@ export default function bootTable() {
     ($('peeked') as HTMLElement).style.color = peeked && !p.bot ? COL[p.suit] : '';
     ($('peek') as HTMLButtonElement).disabled = p.bot;
     const show = !p.bot && !curtain;
-    $('hand').innerHTML = show ? p.hand.map((cd, i) => `<button class="card" data-i="${i}" aria-pressed="${selected === i}" aria-label="${cardName(cd)}, ${roleOf(cd)}">${cardSvg(cd, selected === i && (cd.rank === ACE || (cd.rank >= 2 && cd.rank <= 10)) ? rotation : 0, `h${i}`, true)}</button>`).join('') : p.bot ? `<div class="mono">${p.name} is thinking…</div>` : '';
+    $('hand').innerHTML = show && g.phase === 'court' ? `<div class="card" aria-label="the King of ${SUIT_NAMES[p.king]}, to place">${cardSvg({ suit: p.king, rank: KING }, 0, 'hk', true)}</div>` : show ? p.hand.map((cd, i) => `<button class="card" data-i="${i}" aria-pressed="${selected === i}" aria-label="${cardName(cd)}, ${roleOf(cd)}">${cardSvg(cd, selected === i && (cd.rank === ACE || (cd.rank >= 2 && cd.rank <= 10)) ? rotation : 0, `h${i}`, true)}</button>`).join('') : p.bot ? `<div class="mono">${p.name} is thinking…</div>` : '';
     $('hand').querySelectorAll<HTMLButtonElement>('[data-i]').forEach((el) => (el.onclick = () => { const i = Number(el.dataset.i); selected = selected === i ? -1 : i; rotation = 0; swapFirst = null; render(); }));
     // words
-    const needLay = !g.laid && g.phase !== 'over';
+    const needLay = !g.laid && g.phase === 'race';
+    const needMove = !g.moved && g.phase === 'race';
     let detail = '';
     if (g.phase === 'over') detail = g.winner >= 0 ? `${g.players[g.winner].name} arrived at the King of ${SUIT_NAMES[g.players[g.winner].suit]}.` : 'A draw: thirty moves, and nobody home.';
+    else if (g.phase === 'court') detail = `Place the King of ${SUIT_NAMES[p.king]} you were dealt: tap an empty rim square that is not the middle of an edge, not beside the counter, not beside another King.`;
     else if (c) {
-      if (c.rank === QUEEN) detail = needLay ? (swapFirst ? 'Now the second junction to swap with it.' : 'A Queen: tap two junctions to swap them.') : 'A Queen is played instead of laying a card.';
-      else if (c.rank === JACK) detail = g.laid ? 'A Jack: tap a neighbouring card to walk the counter there instead of rolling.' : 'A Jack is played instead of the roll: lay or pass first.';
-      else if (c.rank === JOKER) detail = g.laid ? 'A Joker: chaos instead of the roll — the counter takes one of its exits at random.' : 'A Joker is played instead of the roll: lay or pass first.';
+      if (c.rank === QUEEN) detail = needLay ? (swapFirst ? 'Now the second junction to swap with it.' : 'A Queen: tap two junctions to swap them.') : 'A Queen is played as the landscape action; this turn\'s is taken.';
+      else if (c.rank === JACK) detail = needMove ? 'A Jack: tap a neighbouring card to walk the counter there instead of rolling.' : 'A Jack is played instead of the roll; the counter has moved this turn.';
+      else if (c.rank === JOKER) detail = needMove ? 'A Joker: chaos instead of the roll — the counter takes one of its exits at random.' : 'A Joker is played instead of the roll; the counter has moved this turn.';
       else detail = `${roleOf(c)} of ${TEMPER[c.suit]} / ${SHAPES[c.rank]?.note ?? 'A cross.'} ${TEMPER_NOTE[c.suit]}. As turned: ${literal({ card: c, rotation })}. Tap a space.${g.laid ? ' (You have laid this turn.)' : ''}`;
-    } else detail = needLay ? (g.phase === 'build' ? 'Choose a card, turn it, lay it touching the chain.' : 'Lay a card on any junction, play a Queen, or pass; then roll.') : 'Roll the die — or play a Jack or a Joker instead.';
+    } else detail = needLay && needMove ? 'Lay a card (touching the chain, on the rim, or on a junction), play a Queen, or hold — and roll; either first.' : needLay ? 'Now the landscape: lay a card, play a Queen, or hold.' : 'Now move: roll the die — or play a Jack or a Joker instead.';
     $('detail').textContent = detail;
     const under = g.board.get(g.token)!;
-    $('under').textContent = g.phase === 'build' ? '' : `Under the counter: ${cardName(under.card)} ${roleOf(under.card)}${under.rotation ? `, turned ${under.rotation === 1 ? 'once' : under.rotation === 2 ? 'twice' : 'three times'}` : ''} — ${literal(under)}.`;
-    const status = g.phase === 'over' ? '' : curtain ? `Pass the table to ${p.name}.` : g.phase === 'build' ? `${p.name} to lay a card. ${g.pile.length} in the pile.` : `${p.name} to ${needLay ? 'lay, then roll' : 'roll'}. Counter at ${g.token.split(',').map((v) => Number(v) + 1).join(',')}.`;
+    $('under').textContent = g.phase === 'court' ? '' : `Under the counter: ${cardName(under.card)} ${roleOf(under.card)}${under.rotation ? `, turned ${under.rotation === 1 ? 'once' : under.rotation === 2 ? 'twice' : 'three times'}` : ''} — ${literal(under)}.`;
+    const status = g.phase === 'over' ? '' : curtain ? `Pass the table to ${p.name}.` : g.phase === 'court' ? `${p.name} to place a King.` : `${p.name} to ${needLay && needMove ? 'lay and roll' : needLay ? 'lay or hold' : 'roll'}. Counter at ${g.token.split(',').map((v) => Number(v) + 1).join(',')}.`;
     $('status').textContent = status;
     $('die').textContent = g.die ? String(g.die) : '—';
     $('roll-note').textContent = g.log[g.log.length - 1] ?? 'A d6; or enter your own die below.';
@@ -307,7 +310,7 @@ export default function bootTable() {
     rollBtn.disabled = !canRoll;
     rollBtn.textContent = c?.rank === JOKER && canRoll && opts.some((a) => a.kind === 'joker') ? 'chaos →' : 'roll →';
     ($('pass') as HTMLButtonElement).disabled = !show || !opts.some((a) => a.kind === 'pass' || a.kind === 'discard') || g.laid;
-    ($('pass') as HTMLButtonElement).textContent = g.phase === 'build' ? 'throw a card in' : 'pass';
+    ($('pass') as HTMLButtonElement).textContent = opts.some((a) => a.kind === 'pass') ? 'hold' : 'throw a card in';
     ($('undo') as HTMLButtonElement).disabled = !undoStack.length || !show;
     ($('left') as HTMLButtonElement).disabled = ($('right') as HTMLButtonElement).disabled = !c || c.rank > 10 || g.laid;
     $('faces').querySelectorAll<HTMLButtonElement>('button').forEach((b) => (b.disabled = !canRoll || c?.rank === JOKER));
@@ -363,7 +366,7 @@ export default function bootTable() {
   if (preview) {
     // (a built table, mid-race, for the gallery)
     document.body.classList.add('preview');
-    for (let i = 0; i < 40 && g.phase === 'build'; i++) { const a = botAction(g); if (!a) break; act(g, a); }
+    for (let i = 0; i < 80 && (g.phase === 'court' || (g.phase === 'race' && g.rolls < 5)); i++) { const a = botAction(g); if (!a) break; act(g, a); }
     curtain = false;
     render();
   }
@@ -391,7 +394,7 @@ export function boxSvg(): string {
   const folds = [[x1, y2, x1, y3], [x2, y2, x2, y3], [x3, y2, x3, y3], [x4, y2, x4, y3], [x2, y2, x5, y2], [x2, y3, x5, y3], [x3, y1, x4, y1], [x3, y4, x4, y4]].map(([a, b, c, d]) => `<path d="M${a} ${b}L${c} ${d}" stroke="${ink}" stroke-width=".25" stroke-dasharray="1.5 1.2"/>`).join('');
   const side = (x: number) => `<g transform="translate(${x + D / 2} ${y2 + H / 2}) rotate(-90)"><text text-anchor="middle" y="1.5" font-size="3.8" font-family="ui-monospace,monospace" letter-spacing=".9" fill="${ink}">MARKOVS CHAINS · 2–4 PLAYERS</text></g>`;
   const front = `<g transform="translate(${x1} ${y2})"><rect x="3" y="3" width="${W - 6}" height="${H - 6}" fill="none" stroke="${ink}" stroke-width=".3"/><text x="${W / 2}" y="13" text-anchor="middle" font-size="7.5" font-family="Georgia" letter-spacing="-.3" fill="${ink}">Markovs Chains</text><text x="${W / 2}" y="18" text-anchor="middle" font-size="2.2" font-family="ui-monospace,monospace" letter-spacing=".6" fill="#27379b">A GAME OF FINITE PROBABILITIES</text><svg x="${(W - 34) / 2}" y="24" width="34" height="47.5" viewBox="0 0 63 88">${cardSvg({ suit: 0, rank: 5 }, 0, 'bx').replace(/^<svg[^>]*>|<\/svg>$/g, '')}</svg><text x="${W / 2}" y="79" text-anchor="middle" font-size="2.8" font-family="Georgia" fill="${ink}">Build the table together.</text><text x="${W / 2}" y="83" text-anchor="middle" font-size="2.8" font-family="Georgia" fill="${ink}">Race one counter to your secret King.</text></g>`;
-  const lines = ['One counter, one die, this deck.', 'Kings at the edges, the Ace of spades in', 'the centre. Each player draws a Two face', 'down: its suit is their King, their secret.', '', 'BUILD: lay junctions, turned as you like,', 'until the 5 × 5 table is full.', 'RACE: lay or swap, then roll — the card', 'under the counter says where it goes.', 'Jacks steer, Jokers gamble, Queens swap.', '', 'First to bring the counter to their own', 'King wins — whoever moved it.', '', '2–4 players · 20 minutes · 54 cards'];
+  const lines = ['One counter, one die, this deck.', 'The Ace of spades in the centre. Each', 'player draws a Two face down: its suit is', 'their King, their secret.', '', 'THE COURT: each player is dealt a King and', 'places it on the rim, off the edge middles.', 'RACE: lay a card and roll, either order —', 'the card under the counter says where it goes.', 'Jacks steer, Jokers gamble, Queens swap.', '', 'First to bring the counter to their own', 'King wins — whoever moved it.', '', '2–4 players · 20 minutes · 54 cards'];
   const back = `<g transform="translate(${x3} ${y2})"><rect x="3" y="3" width="${W - 6}" height="${H - 6}" fill="none" stroke="${ink}" stroke-width=".3"/><text x="${W / 2}" y="11" text-anchor="middle" font-size="4.5" font-family="Georgia" fill="${ink}">Markovs Chains</text>${lines.map((l, i) => `<text x="6" y="${18 + i * 4.3}" font-size="2.7" font-family="Georgia" fill="${ink}">${esc(l)}</text>`).join('')}<text x="${W / 2}" y="${H - 6}" text-anchor="middle" font-size="2.2" font-family="ui-monospace,monospace" fill="#8e826b">AUXILIARY FIELD · LAB · EXPERIMENT 05</text></g>`;
   const lid = `<g transform="translate(${x3} ${y1})"><text x="${W / 2}" y="${D / 2 + 1.5}" text-anchor="middle" font-size="3.6" font-family="Georgia" fill="${ink}">♥ ♦ ♣ ♠</text></g>`;
   const glue = `<text transform="translate(${G / 2} ${y2 + H / 2}) rotate(-90)" text-anchor="middle" font-size="2.4" font-family="ui-monospace,monospace" fill="#8e826b">GLUE</text>`;
@@ -402,9 +405,11 @@ export function boxSvg(): string {
  *  behind), then in three; it fits in the box */
 export function insertHtml(): string {
   const panel = (title: string, inner: string, cls = '') => `<div class="ins-panel ${cls}"><div class="ins-title">${title}</div>${inner}</div>`;
-  const sec = (name: string) => { const x = RULES_TEXT.find((r) => r.title === name)!; return x.body.map((b) => `<p>${esc(b)}</p>`).join(''); };
+  // (the insert is the rules condensed: a few parenthetical sentences the full page keeps are left out)
+  const TRIM = [' (this one, or any)', ' — a card has to fit each square either way up', ' Arrows need not line up with the neighbours’: only the card under the counter ever decides a move.', ' If you cannot lay, you may throw a card in face up.', ' (hearts north, diamonds east, clubs south, spades west)'];
+  const sec = (name: string) => { const x = RULES_TEXT.find((r) => r.title === name)!; return x.body.map((b) => `<p>${esc(TRIM.reduce((t, cut) => t.replace(cut, ''), b))}</p>`).join(''); };
   const cover = `<div class="ins-cover"><div class="ins-h1">Markovs<br>Chains</div><div class="ins-sub">A GAME OF FINITE PROBABILITIES<br>ON A POKER DECK</div><svg viewBox="0 0 63 88" style="width:26mm;margin:3mm auto;display:block">${cardSvg({ suit: 3, rank: 7 }, 0, 'ins').replace(/^<svg[^>]*>|<\/svg>$/g, '')}</svg><p style="text-align:center">2–4 players · 20 minutes</p>${sec('What you need')}</div>`;
-  const top = [panel('', cover, 'cover'), panel('Setup', sec('Setup')), panel('Build', sec('Build'))];
+  const top = [panel('', cover, 'cover'), panel('Setup', sec('Setup')), panel('The court', sec('The court'))];
   const bottom = [panel('Race', sec('Race')), panel('Winning · The Joker', sec('Winning') + '<div class="ins-sub2">The Joker</div>' + sec('The Joker')), panel('Reading a card · The first lesson', sec('Reading a card') + '<div class="ins-sub2">The first lesson</div>' + sec('The first lesson'))];
   return `<div class="ins-sheet"><div class="ins-row">${top.join('')}</div><div class="ins-row ins-flip">${bottom.join('')}</div><div class="ins-fold ins-fold-h"></div><div class="ins-fold ins-fold-v" style="left:60mm"></div><div class="ins-fold ins-fold-v" style="left:120mm"></div></div>`;
 }
@@ -475,7 +480,7 @@ function printSheet() {
   const pages: string[] = [];
   for (let i = 0; i < cards.length; i += 9) pages.push(`<section class="print-page"><div class="cap">MARKOVS CHAINS · CARDS 63 × 88 mm · SHEET ${i / 9 + 1} OF ${sheets} · cut on the borders</div><div class="print-grid">${cards.slice(i, i + 9).map((c, j) => `<div class="print-card">${cardSvg(c, 0, `p${i + j}`)}</div>`).join('')}</div></section>`);
   const rules = RULES_TEXT.map((r) => `<h2>${r.title}</h2>${r.body.map((b) => `<p>${esc(b)}</p>`).join('')}`).join('');
-  $('print-sheet').innerHTML = `<section class="print-page rules-page"><h1>Markovs Chains</h1><p class="lede">A game of finite probabilities on a standard poker deck. Two to four players, one counter, one d6, 54 cards. Build a table of junction cards together; then race the one shared counter to your secret King.</p><div class="rules-cols">${rules}</div></section>
+  $('print-sheet').innerHTML = `<section class="print-page rules-page"><h1>Markovs Chains</h1><p class="lede">A game of finite probabilities on a standard poker deck. Two to four players, one counter, one d6, 54 cards. Place the Kings in a court; then lay junction cards and race the one shared counter to your secret King.</p><div class="rules-cols">${rules}</div></section>
 <section class="print-page"><div class="cap">MARKOVS CHAINS · THE BOX · 65 × 90 × 19 mm inside · card stock · cut the solid line, fold the dashed, glue the flap</div>${boxSvg()}</section>
 <section class="print-page"><div class="cap">MARKOVS CHAINS · THE RULES, FOLDED · 180 × 170 mm · cut the outline; fold in half so the lower row turns up behind; then fold in three</div>${insertHtml()}</section>${pages.join('')}${playtestHtml()}${methodHtml()}`;
 }

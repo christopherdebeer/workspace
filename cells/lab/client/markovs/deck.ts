@@ -108,14 +108,39 @@ export function exits(t: Tile): number[] {
   if (t.card.rank === KING) return [-1, -1, -1, -1, -1, -1];
   return facesOf(t.card).map((d) => (d < 0 ? -1 : (d + t.rotation) % 4));
 }
-/** the Kings' places: the middle of each edge, hearts north then clockwise */
+/** the Kings' places in the build-then-race game (v3.2, the simulation's): the middle of each
+ *  edge, hearts north then clockwise. In the court game (v4.2, the table's) the Kings are dealt
+ *  and placed by the players — anywhere on the rim but these four squares. */
 export const KING_AT = [key(2, 0), key(4, 2), key(2, 4), key(0, 2)];
 export const START = key(2, 2);
-export function setup(): Board {
+/** the Ace of spades in the centre; the Kings where `kings` says (by suit), or, with no court,
+ *  at the edge middles */
+export function setup(kings: Array<string | null> | 'none' = KING_AT): Board {
   const b: Board = new Map();
   b.set(key(2, 2), { card: { suit: 3, rank: ACE }, rotation: 0, start: true });
-  KING_AT.forEach((k, suit) => b.set(k, { card: { suit, rank: KING }, rotation: 0 }));
+  if (kings !== 'none') kings.forEach((k, suit) => { if (k) b.set(k, { card: { suit, rank: KING }, rotation: 0 }); });
   return b;
+}
+/** where a King stands, if it has been placed */
+export function kingAt(board: Board, suit: number): string | null {
+  for (const [k, t] of board) if (t.card.rank === KING && t.card.suit === suit) return k;
+  return null;
+}
+/** the court: a dealt King may go on any empty square of the outer ring that is not the middle
+ *  of an edge, not beside the counter's square, and not beside another King */
+export function canCrown(board: Board, k: string, counter: string = START): boolean {
+  const [x, y] = xy(k);
+  if (board.has(k)) return false;
+  if (!(x === 0 || y === 0 || x === SIZE - 1 || y === SIZE - 1)) return false;
+  const mid = (SIZE - 1) / 2;
+  if (x === mid || y === mid) return false;
+  return !DIRS.some(([dx, dy]) => key(x + dx, y + dy) === counter || isKing(board.get(key(x + dx, y + dy))));
+}
+/** with fewer than four players, the undealt King stands one square clockwise of its edge's middle */
+export function neutralKingAt(suit: number): string {
+  const [x, y] = xy(KING_AT[suit]);
+  const last = SIZE - 1;
+  return y === 0 ? key(x + 1, 0) : x === last ? key(last, y + 1) : y === last ? key(x - 1, last) : key(0, y - 1);
 }
 export interface Rules {
   /** an exit off the edge comes in on the far side */

@@ -54,28 +54,49 @@ assert.deepEqual(D.chaosExits(b, D.key(1, 2), D.RULES), [D.key(2, 2), D.key(0, 2
 const f = D.forecast(b, D.key(2, 2), D.RULES, 6);
 assert.ok(Math.abs(f.wins.reduce((a, c) => a + c, 0) + [...f.mass.values()].reduce((a, c) => a + c, 0) - 1) < 1e-9);
 
-// a table: the deal, the secret suits, the build, then the race; bots play it out
+// a table (v4.2): the deal, the secret suits, the dealt Kings, the court, then the race; bots play it out
+const cardinal = (k) => { const [x, y] = D.xy(k); return x === 2 || y === 2; };
 for (const [seed, n] of [[1, 2], [2, 3], [3, 4], [4, 4]]) {
   const g = T.newGame(seed, ['a', 'b', 'c', 'd'].slice(0, n), Array(n).fill(true));
   assert.equal(new Set(g.players.map((p) => p.suit)).size, n, 'suits all different');
+  assert.equal(new Set(g.players.map((p) => p.king)).size, n, 'dealt Kings all different');
   assert.ok(g.players.every((p) => p.hand.length === 3));
   assert.equal(g.pile.length + 3 * n + 4 + 1 + 4, 54, 'every card accounted for: the pile, the hands, the Kings, the start, the four Twos');
   assert.ok(!g.pile.some((c) => c.rank === D.COMMISSION) && g.players.every((p) => !p.hand.some((c) => c.rank === D.COMMISSION)), 'the Twos are the commissions, out of play');
+  assert.equal(g.phase, 'court');
+  assert.equal([...g.board.values()].filter((t) => D.isKing(t)).length, 4 - n, 'the undealt Kings stand as neutral destinations');
   let steps = 0;
+  while (g.phase === 'court' && steps++ < 8) { const a = T.botAction(g); assert.equal(a.kind, 'crown'); T.act(g, a); }
+  assert.equal(g.phase, 'race', 'the court is placed');
+  const kings = [...g.board.entries()].filter(([, t]) => D.isKing(t)).map(([k]) => k);
+  assert.equal(kings.length, 4);
+  for (const k of kings) { const [x, y] = D.xy(k); assert.ok(x === 0 || y === 0 || x === 4 || y === 4, 'on the rim'); assert.ok(!cardinal(k), 'never the middle of an edge'); assert.ok(D.distance(k, D.START, D.RULES) >= 3, 'three or more from the centre'); }
+  for (const a of kings) for (const b of kings) if (a !== b) assert.ok(D.distance(a, b, D.RULES) >= 2, 'no two Kings touching');
   while (g.phase !== 'over' && steps++ < 400) { const a = T.botAction(g); assert.ok(a, 'the bot always has a move'); T.act(g, a); }
   assert.ok(g.phase === 'over', `seed ${seed}: the game ends`);
   assert.ok(g.rolls <= T.ROLL_CAP);
   if (g.winner >= 0) assert.equal(g.board.get(g.token).card.suit, g.players[g.winner].suit, 'the winner is at their own King');
-  assert.ok(!D.hasEmpty(g.board), 'the table was built');
+}
+// a race turn is a landscape action and a movement in either order
+{
+  const g = T.newGame(7, ['a', 'b', 'c'], [true, true, true]);
+  while (g.phase === 'court') T.act(g, T.botAction(g));
+  const kinds = new Set(T.legal(g).map((a) => a.kind));
+  assert.ok(kinds.has('roll') && (kinds.has('lay') || kinds.has('pass')), 'both halves of the turn are open');
+  const who = g.turn;
+  T.act(g, { kind: 'roll', face: 3 });
+  if (g.phase === 'race') { assert.equal(g.turn, who, 'moving first: the landscape action remains'); assert.ok(!T.legal(g).some((a) => a.kind === 'roll'), 'no second movement'); T.act(g, { kind: 'pass' }); if (g.phase === 'race') assert.notEqual(g.turn, who, 'both taken: next player'); }
 }
 // a decoy King sends the counter back to the start
 {
   const g = T.newGame(5, ['a', 'b'], [true, true]);
   const decoy = [0, 1, 2, 3].find((s) => !g.players.some((p) => p.suit === s));
-  g.phase = 'race'; g.laid = true; g.token = D.key(2, 1);
+  while (g.phase === 'court') T.act(g, T.botAction(g));
+  g.laid = true; g.token = D.key(2, 1);
   g.board.set(D.key(2, 1), { card: { suit: 0, rank: 2 }, rotation: 0 });
-  // (put the decoy King north of it)
-  const was = g.board.get(D.KING_AT[0]); g.board.set(D.KING_AT[0], { card: { suit: decoy, rank: D.KING }, rotation: 0 }); g.board.set(D.KING_AT[decoy], was);
+  // (put the decoy King north of it, wherever it stood)
+  for (const [k, t] of [...g.board.entries()]) if (D.isKing(t) && t.card.suit === decoy) g.board.delete(k);
+  g.board.set(D.key(2, 0), { card: { suit: decoy, rank: D.KING }, rotation: 0 });
   T.act(g, { kind: 'roll', face: 1 });
   assert.equal(g.token, D.START, 'nobody\'s King: back to the start');
   assert.equal(g.phase, 'race');
