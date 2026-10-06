@@ -193,6 +193,18 @@ the bot split measured the rule as if it did not exist. That last is the finding
 instrument: a rule that adds an action needs a stand-in that values it before the bot split can
 speak to it.
 
+Round 8 ran the concealed court again with a stand-in that reveals: the bot split now saw it
+(four reveals a game, draws 5% → 13%, two more movement turns, Jack wins down a third), the
+judged players again named hindering as an intention, and the climb stalled at three reverts.
+The meta-evaluation read the instrument rather than the game: one judged run came back without
+a judgement and was scored as a bad game (now counted as incomplete, harness h22); five of six
+target bands were met by every version, so the gate was blind; reveals were constant on the bot
+split. The targets gained two bands on what the critique and the measures still call wrong —
+preparation that pays (prepPayoff ≥ 0.4, head 0.33) and wins not cashed in with a Jack
+(jackWin ≤ 0.2, head 0.33). A cheap screen then chose between two Jack rules before paying for a
+round: a Jack along the card's own exits changed nothing (Jack wins 37% either way); a Jack that
+may not step onto a King took them to zero.
+
 The questionnaire (h18–h19): on every second judged decision the acting player is asked, after
 choosing and before the move resolves, what they were trying to do, whether anyone is close to
 winning (checked against the engine's own forecast), how much better the move was than the next
