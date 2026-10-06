@@ -248,6 +248,9 @@ diagonals, if at all, only on the Aces.
 
 ## Open
 
+- The queued proposals, their exact edits and the resume steps for the playtest climb are in
+  `devtools/markovs-backlog.md` (repo only; not on the cell).
+
 - The cover-under variant, with people: how often they cover the counter's card, how many build
   cards the counter uses, whether anyone can say how an early lay helped or hurt.
 - Whether the junctions' suits should matter (a Queen swaps only within a suit? a King's own

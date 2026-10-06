@@ -1,0 +1,26 @@
+{
+ "game": "markovs-chains",
+ "rationale": "Train runs of the head (v4.2 with prepPayoff/jackWin targets, definition #20): a third of wins are cashed in with a Jack (jackWin 0.33-0.35 on the bot split against the 0.2 ceiling), so a player adjacent to their King with a Jack in hand wins regardless of the table; the reviewer's distinction between 'I manoeuvred into position' and 'the counter happened to come near while I held a Jack' is lost. This round changes one rule: a Jack may not walk the counter onto a King (it steers; the die or a Joker arrives). Free screen, 63-75 bot games each: jackWin 35% -> 0, lead changes 4.3 -> 5.4, movement turns 13.9 -> 16.0, draws 5% -> 13% (the cost), prepPayoff unchanged (~0.31). Watch draw (band 0-0.1) and prepPayoff; a Jack restricted to the card's own exits was screened and changed nothing.",
+ "edits": [
+  {
+   "find": "version: \"4.2\"",
+   "replace": "version: \"4.3\""
+  },
+  {
+   "find": "    no_cardinals: true\n",
+   "replace": "    no_cardinals: true\n    jack_no_king: true\n"
+  },
+  {
+   "find": "\"Instead of rolling, walk the counter one space in a direction of your choice\"",
+   "replace": "\"Instead of rolling, walk the counter one space in a direction of your choice — never onto a King\""
+  },
+  {
+   "find": "- **Jacks:** reroute — instead of rolling, walk the counter one square the way you choose.",
+   "replace": "- **Jacks:** reroute — instead of rolling, walk the counter one square the way you choose, but never onto a King: a Jack steers, the die (or a Joker) arrives."
+  },
+  {
+   "find": "the opening court (`king_mode: dealt`, `no_cardinals`), the turn",
+   "replace": "the opening court (`king_mode: dealt`, `no_cardinals`), the Jack that never enters a King (`jack_no_king`), the turn"
+  }
+ ]
+}
