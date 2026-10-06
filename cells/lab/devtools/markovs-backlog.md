@@ -107,5 +107,6 @@ so re-baseline after any deploy.
 
 - **The stay loop on the dials** (Eddy, Switch): it reaches toward the western port and reads as an
   exit. Make stays unmistakably internal to the hub; test at card size with a counter on the card.
-- **Box back** (`static/markovs/box-back.jpg`): supplied art; check it no longer describes building
-  the table, since the game is now the court game.
+- **Box art** (`static/markovs/box-*.jpg`): the supplied art with its lettering erased; every
+  word on the box (title, tagline, player count, card count from the deck) is set in `BOX` in
+  `client/markovs/page.ts`, so a rules change only needs that text edited.
