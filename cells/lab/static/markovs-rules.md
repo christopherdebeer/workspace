@@ -5,6 +5,15 @@ players: 2-4
 win_condition: "The shared counter arrives at the King of your secret suit"
 max_turns: 90
 
+# What the design is for, measured by the engine every game (the eval's targets term):
+# brisk but not over in a flash, decided by the table rather than the roller, rarely a draw.
+targets:
+  rounds: [4, 10]
+  offTurnWin: [0.25, 0.6]
+  draw: [0, 0.1]
+  leadChanges: [2, 6]
+  contenders: [1.5, 3]
+
 # Each player is dealt one hidden commission (a suit: physically a Two) and, separately, one
 # King to place in the opening court. The King in your hand is not necessarily your destination.
 # With fewer than four players the undealt suit's King is a neutral destination on the rim.

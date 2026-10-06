@@ -144,6 +144,18 @@ roll, Jack or Joker) so that the judge sees the consequences of a lay as a forec
 chances and never a simulated roll (harness h11). Hands refill at the start of a turn, so the
 deck never moves during an action. Suite: seeds 1–6 and 101–106 at three and four players.
 
+The judge's score turned out too coarse for the changes a rules edit makes: sixteen rated
+dimensions averaged into a 0.55–0.66 band, mechanical terms saturated at 1, twelve paired games
+with a standard error near 0.01 and a 0.02 gate — so a court moved off the cardinals, which the
+sim and the pace numbers both liked, was reverted twice for +0.004. Since score v4.3 the mechanic
+measures each game itself (off-turn win, forecast lead changes, whether the halfway favourite
+won, contenders with a live route at the end, lays, covers, court plays, draw, rounds), the
+rules declare `targets` bands on those measures, their suite means score a targets term (a
+quarter of the suite score), every climb round reports each measure's paired delta with its
+standard error, and the free `screen` plays hundreds of bot games through the same engine and
+reports the same measures with standard errors — the fine instrument, with the judge suite kept
+for health and critique.
+
 ## The transition sweep
 
 `devtools/markovs-sweep.mjs` rewrites the suits' die faces along four axes and plays the poker
