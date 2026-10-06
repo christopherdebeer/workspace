@@ -91,7 +91,7 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h15'; // h14: 'over in two rounds' is a finding; h15: sessions carry the mechanic's measures.
+export const HARNESS_VERSION = 'h16'; // h15: sessions carry the mechanic's measures; h16: every eval plays a bot split (greedy stand-in, no judge) for the targets.
 
 /** "cost: everyone learns you are X" when `after` exposes the mover's role (public reveal, e.g. the Temple). */
 function exposure(before: Record<string, any>, after: Record<string, any>, pid: string): string[] {

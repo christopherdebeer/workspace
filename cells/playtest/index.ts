@@ -283,7 +283,7 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
       const game = need(a.game, 'game');
       await gameOrThrow(game);
       const s = await db.getSuite(game);
-      return { ...s, hash: db.suiteHash(s) };
+      return { ...s, bot: db.botSplit(s), hash: db.suiteHash(s) };
     }
     case 'set_suite': {
       if (!owner) throw new ToolError('set_suite is owner-only (it moves the goalposts)', 403);
@@ -296,6 +296,7 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
         test: { seeds: ints(a.test?.seeds, cur.test.seeds), players: ints(a.test?.players, cur.test.players) },
         maxSteps: num(a.maxSteps, cur.maxSteps, 10, 300),
         epsilon: num(a.epsilon, cur.epsilon, 0, 0.5),
+        ...(a.bot && typeof a.bot === 'object' ? { bot: { seeds: ints((a.bot as Record<string, unknown>).seeds, db.botSplit(cur).seeds).slice(0, 60), players: ints((a.bot as Record<string, unknown>).players, db.botSplit(cur).players) } } : cur.bot ? { bot: cur.bot } : {}),
       };
       // Noise belongs to the suite it was measured on: a new suite starts unmeasured.
       if (db.suiteHash(s) === db.suiteHash(cur)) Object.assign(s, { noise: cur.noise, noiseContext: cur.noiseContext });
@@ -429,10 +430,10 @@ const TOOLS = [
   { name: 'classify', kind: 'act', description: 'What a definition asks for vs what the engine has: declared mechanics (implemented/partial/missing), Jev reading the prose against the 209-mechanic catalogue, card effects nothing handles, rule facts, schema errors. ~1 Jev call.', inputSchema: S({ game, version, preset: { type: 'string' }, rules }) },
   { name: 'playtest', kind: 'act', description: 'One game played by Jev (async job): classification, per-move record, session judgement + qualitative critique, score/v2, findings. Poll with job.', inputSchema: S({ game, version, preset: { type: 'string' }, rules, players: { type: 'number' }, seed: { type: 'number' }, maxSteps: { type: 'number' }, persona: { type: 'string' } }) },
   { name: 'suite', kind: 'read', description: 'A game\'s eval suite: train and held-out test seeds × player counts, maxSteps, epsilon (smallest change acted on), measured noise.', inputSchema: S({ game }, ['game']) },
-  { name: 'set_suite', kind: 'act', description: 'Owner-only: change a game\'s suite (≤96 games per eval; train/test seeds disjoint). Invalidates baselines.', inputSchema: S({ game, train: { type: 'object' }, test: { type: 'object' }, maxSteps: { type: 'number' }, epsilon: { type: 'number' } }, ['game']) },
-  { name: 'eval', kind: 'act', description: 'Evaluate a definition version over its suite (async job, ≤300 s): every run judged and scored; returns train runs in full and the held-out test split as a score only. The first eval of the head is the climb baseline.', inputSchema: S({ game, version, tag: { type: 'string' } }, ['game']) },
+  { name: 'set_suite', kind: 'act', description: 'Owner-only: change a game\'s suite (≤96 judged games per eval; train/test seeds disjoint; bot: {seeds, players} for the greedy stand-in split, default 30 seeds × the train player counts). Invalidates baselines.', inputSchema: S({ game, train: { type: 'object' }, test: { type: 'object' }, bot: { type: 'object' }, maxSteps: { type: 'number' }, epsilon: { type: 'number' } }, ['game']) },
+  { name: 'eval', kind: 'act', description: 'Evaluate a definition version over its suite (async job): every judged run scored, train runs in full, the held-out test split as a score only, and the bot split (greedy stand-in, no judge, in volume) as each measure\'s mean ± SE and the targets term the rules declare. The first eval of the head is the climb baseline.', inputSchema: S({ game, version, tag: { type: 'string' } }, ['game']) },
   { name: 'noise', kind: 'act', description: 'Measure eval noise (async job): re-evaluate the head and compare with its baseline; the larger delta becomes the suite noise floor that proposals must beat. Run once before climbing.', inputSchema: S({ game }, ['game']) },
-  { name: 'propose', kind: 'act', description: 'One hill-climb round (async job): apply ONE change (rules or exact edits vs head) with a rationale, eval it, keep only if train improves by ≥ epsilon AND test improves; otherwise revert. After 3 rounds without a keep the climb is stalled and a diagnosis is returned.', inputSchema: S({ game, rules, edits, rationale: { type: 'string', description: 'the root cause this change addresses, from train runs only' } }, ['game', 'rationale']) },
+  { name: 'propose', kind: 'act', description: 'One hill-climb round (async job): apply ONE change (rules or exact edits vs head) with a rationale, eval it, keep if train improves by ≥ epsilon AND test improves, or if the targets term on the bot split improves by ≥ max(0.02, 2 × its jackknife SE) with the judge suite within its noise floor; otherwise revert. The round reports every measure\'s paired delta with its SE. After 3 rounds without a keep the climb is stalled and a diagnosis is returned.', inputSchema: S({ game, rules, edits, rationale: { type: 'string', description: 'the root cause this change addresses, from train runs only' } }, ['game', 'rationale']) },
   { name: 'baseline', kind: 'read', description: 'The eval of the current head on this engine + suite (the number a proposal must beat), or none.', inputSchema: S({ game }, ['game']) },
   { name: 'evals', kind: 'read', description: 'Eval history for a game (train/test scores by version and engine).', inputSchema: S({ game, limit: { type: 'number' } }, ['game']) },
   { name: 'eval_detail', kind: 'read', description: 'One eval (train runs with score parts and findings; test as a score). diagnose:true adds the stall diagnosis.', inputSchema: S({ id: { type: 'string' }, diagnose: { type: 'boolean' } }, ['id']) },
