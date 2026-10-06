@@ -4,6 +4,7 @@
 //   AXIS=stay|lean|back|contrast|suit  node …             (one axis only; AXIS=none: the head line)
 //   KINGS=corners node …                                  (Kings in the corners, not the edge middles)
 //   BUILD=0|10 node …                                     (court game: no build, or a short build of that many lays)
+//   SPECIALS=0 node …                                     (no Jacks, Queens or Jokers in the pile)
 //   KINGS=rim node …                                      (per game: any rim square but a cardinal, no two touching)
 // Axes (d in -2..+2 faces, applied to every junction of every suit unless noted):
 //   stay      d more stay faces, taken from (or given to) the card's biggest outward exit
@@ -19,7 +20,7 @@ process.env.LIB = '1';
 const { pokerPlay, D } = await import('./markovs-sim.mjs');
 const N = Number(process.env.N ?? 120);
 const WR = { ...D.RULES, wrap: true, rim: true };
-const OPT = { rules: WR, ...(process.env.BUILD !== undefined ? { buildTo: Number(process.env.BUILD) } : {}) };
+const OPT = { rules: WR, ...(process.env.BUILD !== undefined ? { buildTo: Number(process.env.BUILD) } : {}), ...(process.env.SPECIALS === '0' ? { specials: false } : {}) };
 if (process.env.KINGS === 'corners') [D.key(0, 0), D.key(4, 0), D.key(4, 4), D.key(0, 4)].forEach((k, i) => (D.KING_AT[i] = k));
 const RANKS = [3, 4, 5, 6, 7, 8, 9, 10];
 const BASE = Object.fromEntries(RANKS.map((r) => [r, D.SHAPES[r].faces.map((f) => [...f])]));
