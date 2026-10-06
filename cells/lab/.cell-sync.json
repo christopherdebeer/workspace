@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:4adaa04440f3d629532b370a27e4bbaab664678742f49476f969494bd59e4825",
-  "syncedAt": "2026-10-06T00:01:51.031Z",
+  "treeVersion": "tree:b090efc22e4cda1c1c3a0c91dc36ff1e11733b3a236a454684fe4f2fe103c9e0",
+  "syncedAt": "2026-10-06T09:14:52.469Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -54,9 +54,9 @@
     "static/crystals.md": "sha256:8e65118b75dbc04959d15e5830ced15357e10bf6b4a361380630ff5fd0cb8a36",
     "static/fungi.html": "sha256:c0d21a01ffcc7711efb251a3c238d6e4cd0ccf529256a268cc4434603a0765df",
     "static/fungi.md": "sha256:342a0ab1181a2e4064f83f89535ab21bdcb193d4f82de266eb731cf4434f492a",
-    "static/markovs-rules.md": "sha256:e5e6bb92ca697d26a699a1a837ecacac6960a7842fad8cba3436c6411ff50e0e",
+    "static/markovs-rules.md": "sha256:4a7b89693df21a1f433b7789b12c1cdf8915fb87a6ee399262104232e594ec82",
     "static/markovs.html": "sha256:321c19f8df74a3c44b9f3672bd27a3e019ba97185fdecf219b58af362b0ebf48",
-    "static/markovs.md": "sha256:63c500ef83ca8ba82b80798070673a8a71228d3aa1745c8fd8f2f92cfd800739",
+    "static/markovs.md": "sha256:2f45d1e2945afbe1df1487ac8c21d2adda0a2aa12d63dffbb9ed4190f234cbfa",
     "static/markovs/20.webp": "sha256:23baff40055b410dc7f2a8f98a5d74054a4fd20d9e3f595587fe79c821d9dc57",
     "static/markovs/21.webp": "sha256:d35882ca0dadb26f64c76c8013c735ca8343c91fc4ba42888911bcd64feea4df",
     "static/markovs/22.webp": "sha256:5cd779f8f1a37621e6f94445eb5a3d7b99b2320c71e1b9e9f6c59dcb36054751",
