@@ -7,7 +7,7 @@
 <title>Seals · Markovs Chains</title>
 <style>
 :root{--ink:#1f2c6c;--paper:#efe7d8;--muted:#6f6656;font-family:Georgia,'Times New Roman',serif;color:#2a2620;background:var(--paper)}
-*{box-sizing:border-box}body{margin:0;background:var(--paper)}
+*{box-sizing:border-box}body{margin:0;background:var(--paper)}[hidden]{display:none!important}
 button{font:inherit;min-height:44px;min-width:44px;padding:8px 12px;border:1px solid #cfc3ad;border-radius:22px;background:#f8f2e6;color:#2a2620;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 button[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:#fbf6ec}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
@@ -47,6 +47,12 @@ output{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted
 .preview header,.preview .bar,.preview details,.preview .note{display:none}
 .preview main{padding:8px}.preview .cards.grid4{grid-template-columns:repeat(2,1fr);gap:8px;margin:0}
 .cards.grid4{grid-template-columns:repeat(2,1fr)}
+.cards.tiles{grid-template-columns:repeat(2,1fr)}@media(min-width:720px){.cards.tiles{grid-template-columns:repeat(3,1fr)}}
+.lbl{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-right:2px}
+#modes button,#views button{font-size:14px}
+label.inline{display:flex;gap:8px;align-items:center;font-size:13px;min-height:44px}
+label.inline input{font:inherit;font-size:16px;padding:8px 10px;border:1px solid #cfc3ad;border-radius:8px;background:#f8f2e6;min-width:0;width:14em}
+#stats{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);white-space:pre-wrap;text-align:center;margin:0}
 </style>
 </head>
 <body>
@@ -56,7 +62,10 @@ output{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted
 <div class="bar scroll" id="ranks" role="group" aria-label="Card"></div>
 <div class="bar"><button id="prev" aria-label="Previous seed">‹</button><span id="seed" aria-live="polite"></span><button id="next" aria-label="Next seed">›</button><button id="dice" aria-label="New seed">⚄</button></div>
 <div class="bar" id="views" role="group" aria-label="View"></div>
+<div class="bar" id="modes" role="group" aria-label="Faces"></div>
+<div class="bar" id="labelrow" hidden><label class="inline" for="label"><span>Label</span><input id="label" maxlength="40" autocomplete="off"></label></div>
 <div id="cards" class="cards one"></div>
+<pre id="stats" aria-live="polite"></pre>
 <details><summary>Hyperparameters</summary>
 <p class="note">The suit's style: its family. A seed picks one seal from it — the numbers marked ~ wander with the seed, by up to a quarter of their range times the seed variance. Changes stay with the suit and in the address.</p>
 <div class="bar"><button id="reset">Reset suit</button><button id="copy">Copy style</button><button id="svg">Download SVG</button><span id="status" role="status"></span></div>

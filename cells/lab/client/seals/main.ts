@@ -3,12 +3,15 @@
  * family move. Every drawing comes from seal.ts (pure), so what is tuned here ports to the game
  * as a style object: "Copy style" gives the JSON.
  *
- * Query: suit=0..3 · rank=0 (bare) | 1..10 · seed=<name or number> · view=one|suit|suits|seeds ·
+ * Query: suit=0..3 · rank=0 (bare) | 1..10 · seed=<name or number> · view=one|suit|suits|seeds|shapes ·
+ * faces=shown|hidden|zones · overlay (the fill's discs) · label=<text> (the shapes' label) ·
  * <h|d|c|s>.<key>=<value> for a style override · preview (four suits, no controls).
  */
 import { SHAPES, facesOf } from '../markovs/deck';
 import { randomSeed, seedFrom, seedName } from '../kit/rng';
-import { sealCard } from './seal';
+import { card as drawCard, type FacesMode } from './seal';
+import { SHAPE_KINDS, shapeTile } from './shapes';
+import type { Evenness } from './pack';
 import { SCHEMA, SUIT_STYLES, type Control, type Style } from './styles';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -16,13 +19,18 @@ const qs = new URLSearchParams(location.search);
 const SUIT_KEYS = ['h', 'd', 'c', 's'];
 const SUIT_GLYPHS = ['♥', '♦', '♣', '♠'];
 const ROMAN = ['', 'A', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
-type View = 'one' | 'suit' | 'suits' | 'seeds';
+type View = 'one' | 'suit' | 'suits' | 'seeds' | 'shapes';
+const VIEWS: View[] = ['one', 'suit', 'suits', 'seeds', 'shapes'];
+const MODES: FacesMode[] = ['shown', 'hidden', 'zones'];
 
 const state = {
   suit: clampInt(qs.get('suit'), 0, 3, 3),
   rank: clampInt(qs.get('rank'), 0, 10, 3),
   seed: seedFrom(qs.get('seed')) ?? 1,
-  view: (['one', 'suit', 'suits', 'seeds'].includes(qs.get('view') ?? '') ? qs.get('view') : 'one') as View,
+  view: (VIEWS.includes(qs.get('view') as View) ? qs.get('view') : 'one') as View,
+  mode: (MODES.includes(qs.get('faces') as FacesMode) ? qs.get('faces') : 'shown') as FacesMode,
+  overlay: qs.has('overlay'),
+  label: qs.get('label') ?? 'Markovs',
   over: [{}, {}, {}, {}] as Array<Partial<Style>>,
 };
 function clampInt(v: string | null, lo: number, hi: number, d: number) {
@@ -45,7 +53,13 @@ const styleOf = (suit: number): Style => ({ ...SUIT_STYLES[suit], ...state.over[
 const facesFor = (suit: number, rank: number) => (rank ? facesOf({ suit, rank }) : null);
 const titleFor = (suit: number, rank: number) => (rank ? `${ROMAN[rank]} · ${rank === 1 ? 'WILD' : SHAPES[rank].name}` : `${SUIT_STYLES[suit].name.toUpperCase()}`);
 let uid = 0;
-const card = (suit: number, rank: number, seed: number, label = '') => `<figure class="card">${sealCard({ style: styleOf(suit), seed, faces: facesFor(suit, rank), title: titleFor(suit, rank), id: `k${uid++}` })}${label ? `<figcaption>${label}</figcaption>` : ''}</figure>`;
+let lastStats: string[] = [];
+const fmtStats = (name: string, e: Evenness) => `${name}: ${e.n} discs · coverage ${Math.round(e.coverage * 100)}% · gap mean ${e.meanGap} · p95 ${e.p95Gap} · max ${e.maxGap}`;
+const card = (suit: number, rank: number, seed: number, label = '') => {
+  const c = drawCard({ stats: state.view === 'one', style: styleOf(suit), seed, faces: facesFor(suit, rank), title: titleFor(suit, rank), id: `k${uid++}`, mode: state.mode, overlay: state.overlay });
+  lastStats = [fmtStats('seal', c.seal.stats), ...(c.border ? [fmtStats('border', c.border.stats)] : [])];
+  return `<figure class="card">${c.svg}${label ? `<figcaption>${label}</figcaption>` : ''}</figure>`;
+};
 
 if (qs.has('preview')) {
   document.documentElement.classList.add('preview');
@@ -57,13 +71,19 @@ function start() {
   // suits and ranks
   $('suits').innerHTML = SUIT_GLYPHS.map((g, i) => `<button data-suit="${i}" aria-label="${SUIT_STYLES[i].name}">${g}</button>`).join('');
   $('ranks').innerHTML = ['—', ...ROMAN.slice(1)].map((r, i) => `<button data-rank="${i}" aria-label="${i ? `rank ${r}` : 'bare seal'}">${i === 0 ? 'seal' : r}</button>`).join('');
-  $('views').innerHTML = (['one', 'suit', 'suits', 'seeds'] as View[]).map((v) => `<button data-view="${v}">${{ one: 'One', suit: 'The suit', suits: 'Four suits', seeds: 'Six seeds' }[v]}</button>`).join('');
+  $('views').innerHTML = VIEWS.map((v) => `<button data-view="${v}">${{ one: 'One', suit: 'The suit', suits: 'Four suits', seeds: 'Six seeds', shapes: 'Shapes' }[v]}</button>`).join('');
+  $('modes').innerHTML = `<span class="lbl">Faces</span>${MODES.map((m) => `<button data-mode="${m}">${m}</button>`).join('')}<button id="overlay" aria-pressed="${state.overlay}">discs</button>`;
+  const lab = $('label') as HTMLInputElement;
+  lab.value = state.label;
+  lab.addEventListener('input', () => { state.label = lab.value.slice(0, 40); schedule(); });
   document.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest('button');
     if (!b) return;
     if (b.dataset.suit) { state.suit = Number(b.dataset.suit); buildControls(); }
     else if (b.dataset.rank) state.rank = Number(b.dataset.rank);
     else if (b.dataset.view) state.view = b.dataset.view as View;
+    else if (b.dataset.mode) state.mode = b.dataset.mode as FacesMode;
+    else if (b.id === 'overlay') state.overlay = !state.overlay;
     else if (b.id === 'prev') state.seed = Math.max(0, state.seed - 1);
     else if (b.id === 'next') state.seed += 1;
     else if (b.id === 'dice') state.seed = randomSeed();
@@ -110,19 +130,29 @@ function render() {
   if (view === 'one') { box.className = 'cards one'; box.innerHTML = card(suit, rank, seed); }
   else if (view === 'suit') { box.className = 'cards many'; box.innerHTML = Array.from({ length: 10 }, (_, i) => card(suit, i + 1, seed)).join(''); }
   else if (view === 'suits') { box.className = 'cards many'; box.innerHTML = [0, 1, 2, 3].map((s) => card(s, rank, seed)).join(''); }
-  else { box.className = 'cards many'; box.innerHTML = Array.from({ length: 6 }, (_, i) => card(suit, rank, seed + i, seedName(seed + i))).join(''); }
+  else if (view === 'seeds') { box.className = 'cards many'; box.innerHTML = Array.from({ length: 6 }, (_, i) => card(suit, rank, seed + i, seedName(seed + i))).join(''); }
+  else {
+    box.className = 'cards tiles';
+    box.innerHTML = SHAPE_KINDS.map((k) => { const t = shapeTile({ kind: k, style: styleOf(suit), seed, label: state.label, overlay: state.overlay, zones: state.mode === 'zones' }); lastStats = [fmtStats(k, t.fill.stats)]; return `<figure class="card">${t.svg}<figcaption>${k} · ${t.fill.stats.n} discs · coverage ${Math.round(t.fill.stats.coverage * 100)}% · gap p95 ${t.fill.stats.p95Gap}</figcaption></figure>`; }).join('');
+  }
+  $('stats').textContent = view === 'one' ? lastStats.join('\n') : '';
+  $('labelrow').hidden = view !== 'shapes';
   $('seed').textContent = seedName(seed);
   document.querySelectorAll<HTMLElement>('[data-suit]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.suit) === suit)));
   document.querySelectorAll<HTMLElement>('[data-rank]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.rank) === rank)));
   document.querySelectorAll<HTMLElement>('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+  document.querySelectorAll<HTMLElement>('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
+  $('overlay').setAttribute('aria-pressed', String(state.overlay));
   document.documentElement.style.setProperty('--ink', styleOf(suit).ink);
   // the address keeps the state, so a seal can be shared
-  const q = new URLSearchParams({ suit: String(suit), rank: String(rank), seed: seedName(seed), view });
+  const q = new URLSearchParams({ suit: String(suit), rank: String(rank), seed: seedName(seed), view, faces: state.mode });
+  if (state.overlay) q.set('overlay', '');
+  if (view === 'shapes') q.set('label', state.label);
   state.over.forEach((o, i) => Object.entries(o).forEach(([k, v]) => q.set(`${SUIT_KEYS[i]}.${k}`, typeof v === 'boolean' ? (v ? '1' : '0') : String(v))));
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 function download() {
-  const svg = sealCard({ style: styleOf(state.suit), seed: state.seed, faces: facesFor(state.suit, state.rank), title: titleFor(state.suit, state.rank), id: 'k' });
+  const svg = drawCard({ style: styleOf(state.suit), seed: state.seed, faces: facesFor(state.suit, state.rank), title: titleFor(state.suit, state.rank), id: 'k', mode: state.mode }).svg;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
   a.download = `seal-${SUIT_STYLES[state.suit].name}-${state.rank || 'bare'}-${seedName(state.seed)}.svg`;

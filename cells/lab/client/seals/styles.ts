@@ -14,6 +14,8 @@
 export type Motif = 'heart' | 'diamond' | 'trefoil' | 'spade' | 'star';
 export type Band = 'none' | 'scale' | 'rays';
 export type Where = 'axes' | 'diagonals' | 'both';
+export type Orient = 'radial' | 'tangent' | 'up' | 'free';
+export type Border = 'none' | 'frame' | 'corners' | 'both';
 
 export interface Style {
   name: string;
@@ -59,6 +61,9 @@ export interface Style {
   starExtend: number;
   /** a second, smaller star turned half a step, as a fraction of the first (0 none) */
   star2R: number;
+  /** draw the lines inside the band (spokes, star, orbit, arcs, petals): off leaves the fill
+   *  the whole interior */
+  lines: boolean;
   /** spokes from the hub to the band: 0, 4 (the axes) or 8 (and the diagonals) */
   spokes: number;
   // petals: circles round the hub, overlapping into lenses
@@ -80,16 +85,52 @@ export interface Style {
   /** the motif in a ring of its own */
   motifRoundel: boolean;
   motifFill: boolean;
-  /** curled scrolls flanking the diagonal motifs: 0 none … 1 nested */
-  scrolls: number;
   /** crescents: 0 none, 1 east and west, 2 all four axes */
   crescents: number;
   crescentR: number;
-  /** four-pointed sparkles per half-sector */
-  sparkles: number;
   /** beads strung along the spokes: 0 … 1 */
   dots: number;
   hubR: number;
+  // the fill: discs packed evenly into the free space, one ornament each
+  /** largest and smallest disc, and the space kept between discs */
+  packMax: number;
+  packMin: number;
+  packGap: number;
+  /** the space kept off the seal's lines */
+  packEdge: number;
+  /** candidates per disc: 1 random (clumps and holes) … 40 largest-first (even) */
+  packTries: number;
+  /** discs smaller than their space by up to this share (variety) */
+  packJitter: number;
+  /** a disc this close to a mirror (as a share of packMax) goes on it */
+  snap: number;
+  /** tiny dots in what is left: 0 none … 1 dense */
+  stipple: number;
+  /** the vocabulary's weights */
+  oDot: number;
+  oSparkle: number;
+  oMotif: number;
+  oRosette: number;
+  oRoundel: number;
+  oScroll: number;
+  oStar: number;
+  oEye: number;
+  oCrescent: number;
+  /** ornaments point out from the centre, along it, upright, or each its own way */
+  orient: Orient;
+  /** lace between neighbours: the share linked, and how much each link bows */
+  links: number;
+  linkBend: number;
+  // safe zones
+  /** space kept round the faces and the labels */
+  zoneMargin: number;
+  /** close the zones' gaps with a pass of smaller, unsymmetric discs */
+  refill: boolean;
+  // the card's border
+  border: Border;
+  /** the frame's width, and the corner pieces' reach (mm) */
+  borderW: number;
+  cornerR: number;
   // the junction, drawn over the ground
   jWeight: number;
   roundelR: number;
@@ -103,29 +144,33 @@ const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | '
   paper: '#f7f0e3', weight: 0.5, faint: 0.9,
   fold: 4, rings: 3, ringGap: 1.5, beads: 0.6, beadR: 0.42, nodeOut: 0, nodeDots: 0, diagNodes: true,
   band: 'rays', bandDensity: 1.6, bandLen: 11, bandRough: 0.6, bandSpan: 0.7,
-  star: 6, starSkip: 2, starR: 31, starRot: 0, starExtend: 0.35, star2R: 0, spokes: 4,
-  petals: 4, petalR: 24, petalOffset: 0.85, lenses: 2, lensR: 40, lensOffset: 0.72,
+  lines: true, star: 6, starSkip: 2, starR: 31, starRot: 0, starExtend: 0.35, star2R: 0, spokes: 4,
+  petals: 0, petalR: 24, petalOffset: 0.85, lenses: 2, lensR: 40, lensOffset: 0.72,
   motifR: 29, motifSize: 3.4, motifRoundel: false, motifFill: false,
-  scrolls: 0.5, crescents: 1, crescentR: 19, sparkles: 3, dots: 0.6, hubR: 11.5,
+  crescents: 1, crescentR: 19, dots: 0.3, hubR: 11.5,
+  packMax: 5, packMin: 0.55, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, borderW: 4.6, cornerR: 13, stipple: 0.25,
+  oDot: 0.35, oSparkle: 0.5, oMotif: 0.35, oRosette: 0.3, oRoundel: 0.1, oScroll: 0.9, oStar: 0.1, oEye: 0.25, oCrescent: 0.1, orient: 'radial', links: 0.5, linkBend: 0.6, border: 'corners',
   jWeight: 1.2, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'motifAt'> = {
   paper: '#f7f0e3', weight: 0.5, faint: 0.9,
   fold: 4, rings: 2, ringGap: 1.6, beads: 0.85, beadR: 0.34, nodeOut: 4, nodeDots: 2, diagNodes: true,
   band: 'scale', bandDensity: 2, bandLen: 7, bandRough: 0.8, bandSpan: 0.85,
-  star: 4, starSkip: 1, starR: 33, starRot: 45, starExtend: 0.8, star2R: 0.7, spokes: 8,
+  lines: true, star: 4, starSkip: 1, starR: 33, starRot: 45, starExtend: 0.8, star2R: 0, spokes: 8,
   petals: 4, petalR: 16, petalOffset: 1.1, lenses: 0, lensR: 40, lensOffset: 0.72,
   motifR: 26, motifSize: 3.2, motifRoundel: true, motifFill: false,
-  scrolls: 0, crescents: 0, crescentR: 19, sparkles: 0, dots: 0.8, hubR: 12,
+  crescents: 0, crescentR: 19, dots: 0.4, hubR: 12,
+  packMax: 5.5, packMin: 0.6, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, borderW: 4.6, cornerR: 13, stipple: 0.15,
+  oDot: 0.5, oSparkle: 0.3, oMotif: 0.5, oRosette: 0.6, oRoundel: 0.7, oScroll: 0, oStar: 0.35, oEye: 0.1, oCrescent: 0, orient: 'up', links: 0.2, linkBend: 0.2, border: 'frame',
   jWeight: 1.2, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 
 /** by suit: hearts, diamonds, clubs, spades (the game's order) */
 export const SUIT_STYLES: Style[] = [
   { ...filigree, name: 'hearts', ink: '#7a1b16', wash: '#d8301f', washAmount: 0.5, motif: 'heart', motifAt: 'diagonals' },
-  { ...lattice, name: 'diamonds', ink: '#3e2715', wash: '#b8742c', washAmount: 0, motif: 'diamond', motifAt: 'both', sparkles: 1, bandDensity: 1.5, petalR: 18 },
+  { ...lattice, name: 'diamonds', ink: '#3e2715', wash: '#b8742c', washAmount: 0, motif: 'diamond', motifAt: 'both', bandDensity: 1.5, petalR: 18, oStar: 0.8, oSparkle: 0.7, oRosette: 0.2, orient: 'radial', stipple: 0.35 },
   { ...lattice, name: 'clubs', ink: '#46461a', wash: '#7c8a2a', washAmount: 0, motif: 'trefoil', motifAt: 'diagonals' },
-  { ...filigree, name: 'spades', ink: '#1f2c6c', wash: '#3550b0', washAmount: 0, motif: 'spade', motifAt: 'axes', rings: 4, beads: 0.8, bandLen: 12, bandDensity: 2, starR: 33, petalR: 28, lenses: 4, lensR: 42, motifR: 40, motifSize: 2.6, scrolls: 0.8, crescents: 2, sparkles: 4, dots: 0.8 },
+  { ...filigree, name: 'spades', ink: '#1f2c6c', wash: '#3550b0', washAmount: 0, motif: 'spade', motifAt: 'axes', rings: 4, beads: 0.8, bandLen: 12, bandDensity: 2, starR: 33, petalR: 28, lenses: 4, lensR: 42, motifR: 40, motifSize: 2.6, crescents: 2, dots: 0.4, packMax: 4.5, oScroll: 1, oCrescent: 0.25, oEye: 0.35, links: 0.65, stipple: 0.35, border: 'both' },
 ];
 
 export interface Control {
@@ -154,13 +199,22 @@ export const SCHEMA: Control[] = [
   n('nodeOut', 'nodes out', 'Rim', 0, 8, 0.5), n('nodeDots', 'node dots', 'Rim', 0, 4, 1), b('diagNodes', 'diagonal nodes', 'Rim'),
   e('band', 'band', 'Band', ['none', 'scale', 'rays']), n('bandDensity', 'density', 'Band', 0.3, 2.5, 0.05, true), n('bandLen', 'length', 'Band', 2, 12, 0.5, true),
   n('bandRough', 'roughness', 'Band', 0, 1, 0.05, true), n('bandSpan', 'span', 'Band', 0.15, 1, 0.05, true),
-  e('star', 'star points', 'Lattice', [0, 4, 5, 6, 8, 12]), n('starSkip', 'star skip', 'Lattice', 1, 5, 1), n('starR', 'star radius', 'Lattice', 15, 40, 0.5, true),
+  b('lines', 'inner lines', 'Lattice'), e('star', 'star points', 'Lattice', [0, 4, 5, 6, 8, 12]), n('starSkip', 'star skip', 'Lattice', 1, 5, 1), n('starR', 'star radius', 'Lattice', 15, 40, 0.5, true),
   n('starRot', 'star turn', 'Lattice', 0, 90, 7.5), n('starExtend', 'edges run on', 'Lattice', 0, 1.5, 0.05, true), n('star2R', 'inner star', 'Lattice', 0, 0.95, 0.05, true),
   e('spokes', 'spokes', 'Lattice', [0, 4, 8]),
   e('petals', 'petals', 'Petals', [0, 3, 4, 6, 8]), n('petalR', 'petal radius', 'Petals', 6, 36, 0.5, true), n('petalOffset', 'petal offset', 'Petals', 0.3, 1.4, 0.05, true),
   e('motif', 'motif', 'Ornament', ['heart', 'diamond', 'trefoil', 'spade', 'star']), e('motifAt', 'motif at', 'Ornament', ['axes', 'diagonals', 'both']),
   n('motifR', 'motif radius', 'Ornament', 14, 44, 0.5, true), n('motifSize', 'motif size', 'Ornament', 1, 5, 0.1, true), b('motifRoundel', 'motif ringed', 'Ornament'), b('motifFill', 'motif filled', 'Ornament'),
-  n('scrolls', 'scrolls', 'Ornament', 0, 1, 0.05, true), e('crescents', 'crescents', 'Ornament', [0, 1, 2]), n('crescentR', 'crescent radius', 'Ornament', 10, 40, 0.5, true),
-  n('sparkles', 'sparkles', 'Ornament', 0, 8, 1), n('dots', 'spoke beads', 'Ornament', 0, 1, 0.05, true), n('hubR', 'hub radius', 'Ornament', 7, 16, 0.25),
+  e('crescents', 'crescents', 'Ornament', [0, 1, 2]), n('crescentR', 'crescent radius', 'Ornament', 10, 40, 0.5, true),
+  n('dots', 'spoke beads', 'Ornament', 0, 1, 0.05, true), n('hubR', 'hub radius', 'Ornament', 7, 16, 0.25),
+  n('packMax', 'largest', 'Fill', 1.5, 12, 0.25, true), n('packMin', 'smallest', 'Fill', 0.3, 4, 0.05, true), n('packGap', 'gap', 'Fill', 0, 3, 0.05, true),
+  n('packEdge', 'off the lines', 'Fill', 0, 3, 0.05), n('packTries', 'evenness (tries)', 'Fill', 1, 60, 1), n('packJitter', 'size variety', 'Fill', 0, 0.9, 0.05, true),
+  n('snap', 'snap to mirrors', 'Fill', 0, 1, 0.05), n('stipple', 'stipple', 'Fill', 0, 1, 0.05, true),
+  n('oDot', 'dots', 'Vocabulary', 0, 1, 0.05), n('oSparkle', 'sparkles', 'Vocabulary', 0, 1, 0.05), n('oMotif', 'suit motif', 'Vocabulary', 0, 1, 0.05),
+  n('oRosette', 'rosettes', 'Vocabulary', 0, 1, 0.05), n('oRoundel', 'roundels', 'Vocabulary', 0, 1, 0.05), n('oScroll', 'scrolls', 'Vocabulary', 0, 1, 0.05),
+  n('oStar', 'star polygons', 'Vocabulary', 0, 1, 0.05), n('oEye', 'eyes', 'Vocabulary', 0, 1, 0.05), n('oCrescent', 'crescents', 'Vocabulary', 0, 1, 0.05),
+  e('orient', 'orientation', 'Vocabulary', ['radial', 'tangent', 'up', 'free']), n('links', 'lace', 'Vocabulary', 0, 1, 0.05, true), n('linkBend', 'lace bow', 'Vocabulary', 0, 1, 0.05),
+  n('zoneMargin', 'zone margin', 'Zones', 0, 5, 0.1), b('refill', 'refill round zones', 'Zones'),
+  e('border', 'card border', 'Zones', ['none', 'frame', 'corners', 'both']), n('borderW', 'frame width (mm)', 'Zones', 2.5, 8, 0.1), n('cornerR', 'corner reach (mm)', 'Zones', 6, 22, 0.5),
   n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
 ];

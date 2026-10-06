@@ -38,9 +38,9 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'seals', title: 'Seals', group: 'Play',
-    blurb: 'The junction cards of Markovs Chains, engraved as seals: one family per suit, a seed for each card, every line from hyperparameters you can turn. Pure drawing functions, to be ported to the game.',
+    blurb: 'The junction cards of Markovs Chains, engraved as seals: one family per suit, a seed for each card, every line from hyperparameters you can turn. Ornament packs evenly into any shape (seals, frames, corners) and keeps clear of the labels. Pure drawing functions, to be ported to the game.',
     page: 'static/seals.html', preview: 'preview&seed=1', readme: 'static/seals.md',
-    presets: [{ label: 'the spade turn', query: 'suit=3&rank=3' }, { label: 'all four suits', query: 'view=suits&rank=5' }, { label: 'hearts, the suit', query: 'suit=0&view=suit' }, { label: 'six seeds', query: 'suit=2&rank=9&view=seeds' }, { label: 'bare seals', query: 'rank=0&view=suits' }],
+    presets: [{ label: 'the spade turn', query: 'suit=3&rank=3' }, { label: 'all four suits', query: 'view=suits&rank=5' }, { label: 'the bases, faces hidden', query: 'view=suit&suit=0&faces=hidden' }, { label: 'safe zones', query: 'suit=3&rank=6&faces=zones&overlay' }, { label: 'shapes: borders, corners', query: 'view=shapes&suit=2&label=The%20Thicket' }, { label: 'six seeds', query: 'suit=2&rank=9&view=seeds' }],
   },
   {
     id: 'crystals', title: 'Crystals', group: 'Drawings',

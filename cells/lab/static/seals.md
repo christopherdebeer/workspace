@@ -29,6 +29,51 @@ Each suit has a style: a set of hyperparameters, read off the reference seals.
 | Clubs | lattice, olive | the same lattice, ragged scales, trefoils in roundels on the diagonals |
 | Spades | filigree, navy | denser: four great arcs, more rings, spades on the axes, crescents on all four |
 
+## Even filling
+
+A seal has a few lines (rings, the band, optionally a star, spokes, arcs), and then a **fill**:
+the space the lines leave is packed with discs, each as large as the space at its centre allows,
+and each disc carries one ornament from the suit's vocabulary (dots, sparkles, the suit's motif,
+rosettes, roundels, scrolls, star polygons, eyes, crescents), chosen by the suit's weights.
+**Evenness (tries)** is the dial: at 1 the discs go in at random and leave clumps and holes; at
+30 or more the largest space is always filled first, and the fill comes out even. Optional lace
+links neighbours with curved hairlines, and a stipple pass dots what is left.
+
+The fill repeats under the seal's symmetry: a fourfold seal fills one sixteenth and turns and
+mirrors it. A disc close to a mirror line snaps onto it, so the axes carry ornament instead of
+a seam.
+
+**Inner lines** off leaves the fill the whole interior, the clearest way to judge the fill.
+
+## Safe zones
+
+Anything that has to stay legible (the faces' roundels, shafts and loop, the title, the face
+line, the summary) has a **safe zone** sized to its geometry or its words, grown by **zone
+margin**. A fill packs symmetrically first, then every disc a zone touches shrinks to fit or goes,
+then a pass of smaller discs (not symmetric) closes the gaps round the zone. So the ornament
+gives way locally and stays symmetric everywhere else.
+
+**Faces**: *shown* draws the probabilities; *hidden* shows the bare base, as if there were none;
+*zones* hides them but keeps their space and shows the zones in pink. **discs** overlays the
+packing: teal for the symmetric pass, orange for the refill.
+
+## Shapes, borders and corners
+
+Regions are signed distance fields (`client/seals/field.ts`): circles, rings, rounded boxes,
+polygons, capsules, circle strokes, and their unions, intersections, differences and offsets.
+So the same fill makes a card's **frame** (a box minus a smaller box), its **corner pieces** (a
+disc at each inner corner, cut by the frame), a ring or a lens. **Card border** puts a frame,
+corners or both round each card, clear of the seal and of every line of text. The **Shapes**
+view fills six shapes around a label you type, its zone sized to the words.
+
+## Measuring evenness
+
+Under a single card, and under each shape, the fill is measured on a grid of samples over its
+free area (the region, less the lines and the zones): **coverage** (the share inside a disc) and
+the **gap**, the radius of the empty circle at a free point (its mean, its 95th percentile, and
+its largest). An even fill has a low p95 gap and a max close to it; a clumpy one has holes, so
+its max runs away. The tests check that largest-first leaves smaller gaps than random addition.
+
 ## How a seal is made
 
 Three pure stages (`client/seals/seal.ts`):
@@ -36,10 +81,11 @@ Three pure stages (`client/seals/seal.ts`):
 1. **`sample(style, seed)`**: the seed moves every number marked `~` by up to a quarter of its
    range times `variance`. Same style and seed, same seal.
 2. **`draw(params, faces, seed)`**: the marks (circles, paths, figures) in seal units, with the rim
-   at radius 50. Each layer of the ground draws from its own stream (`hash(seed, layer)`), so
-   turning one control redraws one layer only. The ground draws one half-sector and repeats it
-   round the fold, mirrored.
-3. **`sealSvg` / `sealCard`**: the marks as SVG, on their own or on a 63 × 88 mm card.
+   at radius 50: the lines, then the fill (`ornament.ts` `fill`, built on `pack.ts`), then the
+   faces. Each layer draws from its own stream (`hash(seed, layer)`), so turning one control
+   redraws one layer only.
+3. **`sealSvg` / `card`**: the marks as SVG, on their own or on a 63 × 88 mm card with its
+   border (`card` also returns the seal and border fills, with their numbers).
 
 The styles and the schema the controls are built from are in `client/seals/styles.ts`.
 
