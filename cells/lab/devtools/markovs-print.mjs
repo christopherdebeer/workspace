@@ -11,6 +11,18 @@ await withWood(async (wood) => {
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(wood.base + '?players=4&bots=0111&seed=1941');
   await page.waitForFunction(() => window.__markovs);
+  // the playtest pages: the cell's public numbers, fetched here (the page tries too, but a dev
+  // origin may not be allowed to) and handed to the page
+  try {
+    const base = 'https://parc.land/@c15r/playtest';
+    const game = await (await fetch(`${base}/api/game/markovs-chains`, { headers: { accept: 'application/json' } })).json();
+    const head = game?.head?.version;
+    const evals = game?.evals ?? [];
+    const baseline = [...evals].reverse().find((e) => e.version === head && /baseline/.test(e.tag)) ?? [...evals].reverse().find((e) => e.version === head);
+    const ev = baseline ? await (await fetch(`${base}/api/eval/${baseline.id}`, { headers: { accept: 'application/json' } })).json() : null;
+    await page.evaluate((d) => window.__markovs.playtest(d), { game, eval: ev });
+    console.log('playtest: head', head, 'baseline', baseline?.id ?? 'none');
+  } catch (e) { console.log('playtest numbers unavailable:', String(e).slice(0, 120)); }
   // the screen: the table with square parking spaces, a card turned
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => window.__markovs.lift());

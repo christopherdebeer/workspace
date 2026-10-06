@@ -5,7 +5,7 @@
  */
 import { ACE, COMMISSION, DIR_NAMES, PLACES, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
 import { ROLL_CAP, act, botAction, clone, current, legal, newGame, type Action, type Game } from './table';
-import { RULES_TEXT } from './text';
+import { METHOD_TEXT, RULES_TEXT } from './text';
 
 const $ = (id: string) => document.getElementById(id)!;
 const qs = new URLSearchParams(location.search);
@@ -372,7 +372,10 @@ export default function bootTable() {
     act: (a: Action) => { if (legal(g).some((o) => JSON.stringify(o) === JSON.stringify(a))) { doAct(a); return true; } return false; },
     legal: () => legal(g),
     lift: () => { curtain = false; render(); },
+    playtest: (d: PlaytestData) => setPlaytest(d),
+    playtestLoaded: () => !!playtestData,
   };
+  void loadPlaytest();
 }
 
 // ─── print: the rules, the box, the insert, the cards ─────────────────────────────────────────
@@ -405,8 +408,67 @@ export function insertHtml(): string {
   const bottom = [panel('Race', sec('Race')), panel('Winning · The Joker', sec('Winning') + '<div class="ins-sub2">The Joker</div>' + sec('The Joker')), panel('Reading a card · The first lesson', sec('Reading a card') + '<div class="ins-sub2">The first lesson</div>' + sec('The first lesson'))];
   return `<div class="ins-sheet"><div class="ins-row">${top.join('')}</div><div class="ins-row ins-flip">${bottom.join('')}</div><div class="ins-fold ins-fold-h"></div><div class="ins-fold ins-fold-v" style="left:60mm"></div><div class="ins-fold ins-fold-v" style="left:120mm"></div></div>`;
 }
+/* ─── the playtest pages: version, changelog, evaluation, and the method ────────────────────── */
+const PLAYTEST = 'https://parc.land/@c15r/playtest';
+const PLAYTEST_GAME = 'markovs-chains';
+interface PlaytestData {
+  game: { game?: { name?: string; climb?: { rounds?: number; status?: string } }; head: { version: number; hash: string; createdAt: string; rules: string } | null; versions: Array<{ version: number; status: string; rationale?: string; createdAt: string }>; evals: Array<{ id: string; version: number; train: number; test: number; tag: string; harness?: string; createdAt: string; engine: string }>; rounds: Array<{ round: number; from: number; to: number; decision: string; delta: { train: number; test: number }; reason: string; createdAt: string; bot?: { n: number; targets?: { base: number; cand: number; delta: number; se: number | null } | null; measures?: Record<string, { base: number; cand: number; delta: number; se: number | null }> } }>; suite: { train: { seeds: number[]; players: number[] }; test: { seeds: number[]; players: number[] }; epsilon: number; noise?: number; probe?: number }; engine: string; harness?: string };
+  eval?: { train: { score: number; targets?: { score: number; bands: Record<string, { mean: number; lo: number; hi: number; band: number }> } | null; critique?: { index: number; dims: Record<string, number>; n: number } | null }; test: { score: number; n: number }; bot?: { n: number; measures: Record<string, { mean: number; se: number }>; targets?: { score: number } | null } | null; tag: string; createdAt: string } | null;
+}
+let playtestData: PlaytestData | null = null;
+const fmt = (x: number | null | undefined, d = 3) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(d));
+const versionOf = (rules?: string) => /^version:\s*"?([\d.]+)"?/m.exec(rules ?? '')?.[1] ?? '?';
+function playtestHtml(): string {
+  const d = playtestData;
+  const link = `${PLAYTEST}/#/g/${PLAYTEST_GAME}`;
+  if (!d) return `<section class="print-page rules-page pt-page"><h1>Playtest</h1><p class="lede">The definition under evaluation lives at <span class="mono">${link}</span>. The live numbers could not be fetched when this set was printed.</p></section>`;
+  const g = d.game;
+  const head = g.head;
+  const headVersion = versionOf(head?.rules);
+  const baseline = [...g.evals].reverse().find((e) => e.version === head?.version && /baseline/.test(e.tag)) ?? [...g.evals].reverse().find((e) => e.version === head?.version);
+  const ev = d.eval;
+  const kept = g.versions.filter((v) => v.status === 'head' || v.status === 'kept');
+  const changelog = kept.slice(-5).reverse().map((v) => `<tr><td class="mono">#${v.version}</td><td class="mono">${v.createdAt.slice(5, 10)}</td><td>${esc((v.rationale ?? '').replace(/\s+/g, ' ').slice(0, 170))}${(v.rationale ?? '').length > 170 ? '…' : ''}</td></tr>`).join('');
+  const rounds = g.rounds.slice(-6).reverse().map((r) => `<tr><td class="mono">${r.round}</td><td class="mono">#${r.from}→#${r.to}</td><td class="mono">${r.decision}</td><td class="mono">${r.delta.train >= 0 ? '+' : ''}${fmt(r.delta.train)} / ${r.delta.test >= 0 ? '+' : ''}${fmt(r.delta.test)}</td><td class="mono">${r.bot?.targets ? `${r.bot.targets.delta >= 0 ? '+' : ''}${fmt(r.bot.targets.delta)} ±${fmt(r.bot.targets.se, 3)}` : '—'}</td></tr>`).join('');
+  const bands = ev?.train.targets?.bands ?? {};
+  const targetsRows = Object.entries(bands).map(([k, b]) => `<tr><td class="mono">${k}</td><td class="mono">${fmt(b.mean, 2)}</td><td class="mono">${b.lo}–${b.hi}</td><td class="mono">${fmt(b.band, 2)}</td></tr>`).join('');
+  const bot = ev?.bot?.measures ?? {};
+  const measureRows = ['rolls', 'rounds', 'lays', 'covers', 'courtPlays', 'leadChanges', 'heldLead', 'offTurnWin', 'contenders', 'draw'].filter((k) => bot[k]).map((k) => `<tr><td class="mono">${k}</td><td class="mono">${fmt(bot[k].mean, 2)} ± ${fmt(bot[k].se, 2)}</td></tr>`).join('');
+  const dims = ev?.train.critique?.dims ?? {};
+  const dimRows = Object.entries(dims).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td class="mono">${k}</td><td class="mono">${fmt(v, 2)}</td></tr>`).join('');
+  return `<section class="print-page rules-page pt-page"><h1>Playtest</h1>
+<p class="lede">The rules printed here are the lab's physical game. The same design is evaluated as a definition in the playtest cell, where the head is <b>v${esc(headVersion)}</b> (definition #${head?.version ?? '?'}, ${head?.createdAt.slice(0, 10) ?? ''}), climbed over ${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}. Live: <span class="mono">${link}</span></p>
+<div class="pt-cols">
+<div><h2>Evaluation of the head</h2>
+<p>${baseline ? `Baseline eval <span class="mono">${baseline.id}</span> (${baseline.createdAt.slice(0, 16).replace('T', ' ')}, harness ${baseline.harness ?? '?'}, engine ${baseline.engine.slice(0, 8)}): train <b>${fmt(baseline.train)}</b>, held-out test <b>${fmt(baseline.test)}</b>.` : 'No baseline yet.'} Suite: seeds ${g.suite.train.seeds.join(', ')} (train) and ${g.suite.test.seeds.join(', ')} (test) at ${g.suite.train.players.join(' and ')} players; gate ε ${g.suite.epsilon}, noise ${fmt(g.suite.noise ?? null, 4)}; questionnaire every ${g.suite.probe ?? 2}nd decision; ${ev?.bot?.n ?? 60} bot games.</p>
+${targetsRows ? `<h2>Targets (the rules' bands, measured on the bot games)</h2><table class="pt-table"><tr><th>measure</th><th>mean</th><th>band</th><th>score</th></tr>${targetsRows}</table><p>Targets term ${fmt(ev?.train.targets?.score ?? null, 3)}.</p>` : ''}
+${measureRows ? `<h2>Measures (bot games, mean ± SE)</h2><table class="pt-table"><tr><th>measure</th><th>value</th></tr>${measureRows}</table>` : ''}
+</div>
+<div>${dimRows ? `<h2>The judge's critique (0–4, mean over ${ev?.train.critique?.n ?? 12} games)</h2><table class="pt-table">${dimRows}</table><p>Index ${fmt(ev?.train.critique?.index ?? null, 3)}.</p>` : ''}
+<h2>Rounds</h2><table class="pt-table"><tr><th>#</th><th>versions</th><th>decision</th><th>Δ train / test</th><th>Δ targets</th></tr>${rounds || '<tr><td colspan="5">none yet</td></tr>'}</table>
+<h2>Changelog (kept definitions)</h2><table class="pt-table">${changelog}</table>
+</div></div></section>`;
+}
+function methodHtml(): string {
+  const text = METHOD_TEXT.map((r) => `<h2>${r.title}</h2>${r.body.map((b) => `<p>${esc(b)}</p>`).join('')}`).join('');
+  return `<section class="print-page rules-page pt-page"><h1>Method</h1><p class="lede">How this game is tested and iterated: a lab of seeded simulations, and a playtest cell where a model plays, a model judges, the engine measures, and one change at a time is kept or reverted on the numbers.</p><div class="rules-cols">${text}</div></section>`;
+}
+/** fetch the live playtest numbers (the cell's public API; same origin on parc.land) and re-render */
+async function loadPlaytest(): Promise<void> {
+  try {
+    const base = location.hostname === 'parc.land' ? '/@c15r/playtest' : PLAYTEST;
+    const game = await (await fetch(`${base}/api/game/${PLAYTEST_GAME}`, { headers: { accept: 'application/json' } })).json();
+    const head = game?.head?.version;
+    const evals = (game?.evals ?? []) as PlaytestData['game']['evals'];
+    const base_ = [...evals].reverse().find((e) => e.version === head && /baseline/.test(e.tag)) ?? [...evals].reverse().find((e) => e.version === head);
+    const ev = base_ ? await (await fetch(`${base}/api/eval/${base_.id}`, { headers: { accept: 'application/json' } })).json() : null;
+    setPlaytest({ game, eval: ev });
+  } catch { /* the print set says so */ }
+}
+function setPlaytest(d: PlaytestData): void { playtestData = d; printSheet(); }
+
 /** the print set: a page of rules, the box, the insert, then the 54 cards at poker size, nine
- *  a sheet (A4, cut on the card borders) */
+ *  a sheet (A4, cut on the card borders), then the playtest and method pages */
 function printSheet() {
   const cards = pack();
   const sheets = Math.ceil(cards.length / 9);
@@ -415,5 +477,5 @@ function printSheet() {
   const rules = RULES_TEXT.map((r) => `<h2>${r.title}</h2>${r.body.map((b) => `<p>${esc(b)}</p>`).join('')}`).join('');
   $('print-sheet').innerHTML = `<section class="print-page rules-page"><h1>Markovs Chains</h1><p class="lede">A game of finite probabilities on a standard poker deck. Two to four players, one counter, one d6, 54 cards. Build a table of junction cards together; then race the one shared counter to your secret King.</p><div class="rules-cols">${rules}</div></section>
 <section class="print-page"><div class="cap">MARKOVS CHAINS · THE BOX · 65 × 90 × 19 mm inside · card stock · cut the solid line, fold the dashed, glue the flap</div>${boxSvg()}</section>
-<section class="print-page"><div class="cap">MARKOVS CHAINS · THE RULES, FOLDED · 180 × 170 mm · cut the outline; fold in half so the lower row turns up behind; then fold in three</div>${insertHtml()}</section>${pages.join('')}`;
+<section class="print-page"><div class="cap">MARKOVS CHAINS · THE RULES, FOLDED · 180 × 170 mm · cut the outline; fold in half so the lower row turns up behind; then fold in three</div>${insertHtml()}</section>${pages.join('')}${playtestHtml()}${methodHtml()}`;
 }

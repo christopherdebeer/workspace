@@ -39,3 +39,22 @@ export const RULES_TEXT: Section[] = [
     'Before a first game: put the counter on any junction and say where each die face sends it. Turn the card a quarter and say it again. Lay a second card beside it and resolve two rolls. Now add a King — and a secret about who wants it. That is the whole game.',
   ] },
 ];
+
+/** The method: how the design is tested and iterated, for the print set's method page. */
+export const METHOD_TEXT: Section[] = [
+  { title: 'Two tables', body: [
+    'The game is developed on two tables. The lab table is this page and its simulation: seeded bots play the physical rules hundreds of times a line, and sweeps rewrite the die faces, the Kings\' places and the build to see what each lever does to draws, length, first-player edge and the skill gap. The playtest table is the @c15r/playtest cell: the same rules as a definition (YAML frontmatter and prose) played by a language-model player through a rules engine, judged by a model, scored, and climbed one change at a time.',
+  ] },
+  { title: 'The loop', body: [
+    'A definition is classified (what it asks of the engine, what is missing), then evaluated over a fixed suite: six training seeds and six held-out seeds at three and four players, each game judged and scored; sixty bot games by a greedy stand-in for the measures; and, on every second decision of a judged game, the questionnaire. The first evaluation of a head is the baseline; a re-run of the head measures the noise floor. A proposal is one change with a rationale drawn from the training runs only. It is kept when the training score improves by at least the gate (epsilon, noise and the paired standard error, whichever is largest) and the held-out score improves too, or when the targets the rules declare improve on the bot games by more than their jackknife error with the judged suite inside its noise floor. Otherwise it is reverted. Three rounds without a keep is a stall, and the climb stops to diagnose.',
+  ] },
+  { title: 'What is measured', body: [
+    'A run\'s score is a weighted sum: finished by its own rules; the judge\'s critique over sixteen dimensions; the judge\'s confidence that the game plays as designed; variety of moves; real choice per turn; pace (movement turns in the band the rules ask for); and no engine faults. The suite adds definition health, outcome balance across the secret suits, and the targets term. The engine measures each game directly: movement turns, lays and covers, court cards played, forecast lead changes, whether the halfway favourite won, games decided by someone else\'s roll, contenders with a live route at the end, draws. The rules declare target bands on those measures; that is the designer\'s own definition of better, measured in volume rather than inferred from a rating.',
+  ] },
+  { title: 'The questionnaire', body: [
+    'Fun is not one number. After a player has chosen and before the move resolves, they are asked what they were trying to do, whether anyone is close to winning (checked against the engine\'s forecast), how much better their move was than the next best, and how likely someone wins before their next turn; and, about their last probed turn, whether the table went their way, whether the counter\'s movement was expected, surprising or confusing, how much of it was the cards rather than the die, and whether they changed their plan. Answers are private, predictions come before outcomes, and the wording always allows "nothing happened". They become measures beside the engine\'s, so a change can be seen to raise anticipation or authorship, not just a score.',
+  ] },
+  { title: 'Reading the numbers', body: [
+    'A score near 0.9 is a game that plays as designed; differences of a few hundredths are inside the noise of twelve judged games, which is why the measures and the bot split exist. A round\'s record lists every measure\'s paired delta with its standard error, so the reason for a keep or a revert is a number with an error bar, not a verdict. Model judgements are evidence about legibility and structure, not about human enjoyment; the table of people decides that.',
+  ] },
+];
