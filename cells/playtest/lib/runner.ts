@@ -1154,7 +1154,9 @@ export function sessionFindings(s: Session, m = metrics(s), c?: Classification):
   if (s.stopped === 'error') out.push({ kind: 'engine', severity: 'error', subject: 'engine error', detail: s.error ?? 'unknown' });
   if (s.stopped === 'stuck') out.push({ kind: 'engine', severity: 'error', subject: 'no legal move', detail: s.error ?? 'a player had no valid move' });
   if (s.stopped === 'max-steps') out.push({ kind: 'balance', severity: 'warn', subject: 'never ended', detail: `still in progress after ${m.steps} moves (round ${m.rounds})` });
-  if (m.finished && m.rounds <= 1) out.push({ kind: 'balance', severity: 'warn', subject: 'instant end', detail: `ended in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? 'no reason logged'} — inspect whether legal early wins leave enough decisions` });
+  // (an end in the first round is an engine fault — a win check firing too early — unless the
+  // game can legally be won from the first turn: the junction chain's dynamic race can)
+  if (m.finished && m.rounds <= 1) { const early = !!c?.enabled.includes('junction-chain'); out.push({ kind: early ? 'balance' : 'engine', severity: early ? 'warn' : 'error', subject: 'instant end', detail: `ended in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? 'no reason logged'} — ${early ? 'inspect whether legal early wins leave enough decisions' : 'a win check is firing too early'}` }); }
   if (m.dominantAction && m.dominantAction[1] > 0.7 && m.steps > 10) out.push({ kind: 'balance', severity: 'warn', subject: `${m.dominantAction[0]} dominates`, detail: `${Math.round(m.dominantAction[1] * 100)}% of all moves` });
   if (m.forcedShare > 0.6 && m.steps > 10) out.push({ kind: 'balance', severity: 'info', subject: 'few real choices', detail: `${Math.round(m.forcedShare * 100)}% of turns had exactly one legal move` });
   for (const u of s.unsuitable) {

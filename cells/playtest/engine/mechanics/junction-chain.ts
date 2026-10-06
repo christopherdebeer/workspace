@@ -182,6 +182,8 @@ function canKing(ch: ChainState, c: JunctionChainConfig, k: string, suit: string
   }
   return DIRS.some(([dx, dy]) => { const t = ch.tiles[key(x + dx, y + dy)]; return t && !t.king; });
 }
+/** a fair shuffle (Math.random is the game's seeded stream under the runner) */
+function shuffled<T>(a: T[]): T[] { const o = [...a]; for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; } return o; }
 function count(ch: ChainState, name: string, n = 1): void { const a = ch.audit ??= {}; a[name] = (a[name] ?? 0) + n; }
 /** The counter's chances: from `at`, over `hops` rolls, the mass arriving at each King */
 export function forecast(ch: ChainState, at: string, wrap: boolean, hops: number): Record<string, number> {
@@ -304,7 +306,7 @@ export const junctionChainMechanic: MechanicHooks = {
     const kingHeld: Record<string, string> = {};
     const kingOpened: Record<string, boolean> = {};
     if (c.king_mode === 'dealt') {
-      const suits = [...SUITS].sort(() => Math.random() - 0.5);
+      const suits = shuffled(SUITS);
       for (let i = 0; i < ctx.playerIds.length; i++) {
         kingHeld[ctx.playerIds[i]] = suits[i];
         kingOpened[ctx.playerIds[i]] = false;
@@ -503,17 +505,7 @@ export const junctionChainMechanic: MechanicHooks = {
     if (!ch || !c) return null;
     ch.laid = false;
     ch.moved = false;
-    if (c.king_mode === 'dealt' && !ch.kingsDealt) {
-      const order = [...ctx.state.turnOrder];
-      const suits = [...SUITS].sort(() => Math.random() - 0.5).slice(0, order.length);
-      for (let i = 0; i < order.length; i++) {
-        const p = ctx.state.players[order[i]];
-        (p.hand ??= []).push({ name: `K${SUIT_GLYPH[suits[i]]} DESTINATION`, type: 'court', suit: suits[i], role: 'destination' } as unknown as Card);
-        ch.kingOpened![order[i]] = false;
-      }
-      ch.kingsDealt = true;
-      count(ch, 'kingsDealt', suits.length);
-    }
+    // (the Kings were dealt at setup: ch.kingHeld; the crown action reads it)
     if (c.dynamic && c.seed_cross && !ch.seeded) {
       const deck = getCardsState(ctx.state).deck;
       for (let d = 0; d < 4; d++) {

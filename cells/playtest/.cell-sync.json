@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:c6c698fd2b1181a9b578793497498ed4c6d98f0beaba9408d286fbea7fca60ec",
-  "syncedAt": "2026-10-06T08:03:55.873Z",
+  "treeVersion": "tree:e4a0a87521b33ef7396763a42d623932e7deb83c687972ea07a45083871d7889",
+  "syncedAt": "2026-10-06T08:16:14.230Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -118,7 +118,7 @@
     "engine/mechanics/induction.ts": "sha256:eb1b8f2561f32f5daa7df01b2ad6cb16906fdfab7dfa1b914e286268e49d588b",
     "engine/mechanics/interrupts.ts": "sha256:be246877d6ecaeb03966df49e05acc1a1d7d3ee83f1641f38ef1b2ebb88a3856",
     "engine/mechanics/investment.ts": "sha256:5f50c998148b6cf06bab555a760c6493de2740fab0721be83d4dace44ce3e037",
-    "engine/mechanics/junction-chain.ts": "sha256:1cec4aa224d7a2212b48b3e3f8b4931cf06a06d81a9cc37302ee699cb068cb7f",
+    "engine/mechanics/junction-chain.ts": "sha256:377f989353c58cf79e88c9ef5fa636cae845b786b288f3c4807659a8c0c39c25",
     "engine/mechanics/kill-steal.ts": "sha256:0a0efc50f8863adc80f76cb6e64974600a8561c673c2dd2806521d0c695f7ce9",
     "engine/mechanics/ladder-climbing.ts": "sha256:61e42f23c50d254e5359898bf7d50a582fdc977be1f191c284e7fae10ece47ad",
     "engine/mechanics/loans.ts": "sha256:45e832e6105702ed6335e19ce3b519c8f95f877385b4d9308a7069e9bfc85056",
@@ -224,7 +224,7 @@
     "lib/fingerprint.ts": "sha256:14fb2faea86e20e7dd2ed472d564d7dbbb64b45d3b8307043063c84a0574d5a5",
     "lib/jev.ts": "sha256:9b68102cd9e42be5942c4a029d8559ce43e37aa92115db6c5ed378742447629a",
     "lib/public.ts": "sha256:c7508569d537937f67902e129adda667810295c0868e30df6037eb6c23240bb0",
-    "lib/runner.ts": "sha256:94f98f59c5b6f74fec1fb0a62bd3f87b34e661bfbc222b86003a6b9e96758167",
+    "lib/runner.ts": "sha256:892e8a75b6434b79d0dd42f3e3a9c328853879cfcb9ed643a520d127dba71039",
     "lib/score.ts": "sha256:ec24f5fdb23c66c51b06d78381249716c4cb21539aef2a566c94672dde43fa89",
     "lib/screen.ts": "sha256:36dbe9a264f3af773dcf6988f76e115684610369ce44477ceba64a6b1d64c718",
     "lib/store.ts": "sha256:d9372923bda094de3c0493c2f2dfb18f7c20b7ad77cef721149c30c0ac7b87eb",

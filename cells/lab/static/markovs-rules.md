@@ -1,13 +1,13 @@
 ---
 name: "Markovs Chains"
-version: "3.2"
+version: "4.1"
 players: 2-4
 win_condition: "The shared counter arrives at the King of your secret suit"
 max_turns: 90
 
-# Each player is dealt one objective face down: a suit. Their King is their destination.
-# (Physically: the four Twos, shuffled, one each, the rest back in the box. At two or three
-# players the undealt Kings are decoys.)
+# Each player is dealt one hidden commission (a suit: physically a Two) and, separately, one
+# King to place in the opening court. The King in your hand is not necessarily your destination.
+# With fewer than four players the undealt suit's King is a neutral destination on the rim.
 objectives:
   - { name: "Hearts", count: 1, type: "regular", condition: "The counter arrives at the King of hearts (north edge)", check: { counter_at: "K♥" } }
   - { name: "Diamonds", count: 1, type: "regular", condition: "The counter arrives at the King of diamonds (east edge)", check: { counter_at: "K♦" } }
@@ -19,10 +19,13 @@ mechanics:
     deal_at_start: true
     reveal_on_completion: true
 
-  # The table: a 5×5 grid of card spaces, the Kings at the middle of each edge, the start
-  # card (the Ace of spades) in the centre with the one shared counter on it. Build it, then
-  # race: the counter follows the die faces printed on the card it stands on.
+  # The table: a 5×5 grid of card spaces, the Ace of spades in the centre with the one shared
+  # counter on it. The Kings are dealt and placed in an opening court; then, from the first
+  # turn, lay and move: the counter follows the die faces printed on the card it stands on.
   junction_chain:
+    dynamic: true
+    flexible_order: true
+    king_mode: dealt
     size: 5
     start: "2,2"
     start_card: "origin"
@@ -97,19 +100,22 @@ mechanics:
 ## Overview
 
 A game of finite probabilities on a standard poker deck. Two to four players, one counter, one
-d6, 54 cards. Build a table of junction cards together; then race the one shared counter to
-your secret King. Only the card under the counter ever decides a move.
+d6, 54 cards. The Kings are placed first, in an opening court; then, from the first turn, lay
+junction cards and move the one shared counter toward the King of your secret commission. Only
+the card under the counter ever decides a move.
 
 ## The deck
 
 - **3–10, four suits (32 junctions).** The rank is the shape, the suit its temperament: hearts
-  (*the current*) lean one way, diamonds (*the mirror*) are even-handed, clubs (*the thicket*)
-  grow one more branch, spades (*the well*) hold a while. A junction's six die faces each name
+  (*the River*) lean one way, diamonds (*the Mirror*) are even-handed, clubs (*the Thicket*)
+  grow one more branch, spades (*the Well*) hold a while. A junction's six die faces each name
   an exit (north, east, south, west) or a stay; `exits: "N4 E2"` means faces 1–4 go north and
   5–6 east. The faces turn with the card. No two junctions are the same card turned.
-- **Twos:** the commissions. Shuffled face down, one dealt to each player: its suit is their
-  King, and their secret. The rest go back in the box unseen.
-- **Kings:** the four destinations, one a suit, laid face up at the middle of each edge.
+- **Twos:** the commissions. Shuffled face down, one dealt to each player: its suit is the King
+  you want the counter to reach, and your secret. The rest go back in the box unseen.
+- **Kings:** the four destinations. Dealt one to each player, separately from the commission:
+  the King you hold may be someone else's destination. Each is placed in the opening court. With
+  fewer than four players the undealt King is a neutral destination on the rim.
 - **Aces:** wild junctions (a cross: 1 north, 2–3 east, 4 south, 5–6 west; turned like any
   card), laid on any empty square. The Ace of spades is START, in the centre.
 - **Jacks:** reroute — instead of rolling, walk the counter one square the way you choose.
@@ -121,54 +127,49 @@ your secret King. Only the card under the counter ever decides a move.
 
 ## Setup
 
-Lay the four Kings at the middles of the edges of an imaginary 5 × 5 table of squares, the Ace
-of spades in the centre, the counter on it. Deal the Twos as above. Shuffle the rest; three
-cards each.
+Put the Ace of spades in the centre of an imaginary 5 × 5 table of squares, the counter on it.
+Deal each player one Two face down (the commission) and one King face up. Shuffle the rest;
+three cards each.
 
 ## Gameplay
 
-Two phases.
+### The opening court
 
-### Build
+In turn order, each player places their dealt King on an empty square of the outer ring, not
+beside the counter and not beside another King. Nothing else happens until every King is placed:
+no junction, no movement, no win. Placing a King costs nothing else. The player who places the
+last King takes the first full turn.
 
-In turns, lay one card from your hand, turned any way you like, on an empty square touching a
-laid card, or anywhere on the outer ring; an Ace on any empty square. Arrows need not line up
-with the neighbours'. Draw back to three. If you cannot lay, throw a card in and draw. No
-rolling. Build until no square is empty.
+### The race
 
-### Race
-
-On your turn, first one of: lay one card on top of any junction (not a King), play a Queen to
-swap two junctions, or hold. Then move the counter: roll the d6, find that face on the card
-under the counter and move one square the way its arrow points; off the edge, it comes in on
-the far side; a stay face, or an arrow with no card beyond, leaves it where it is. Instead of
-the roll you may play a Jack or a Joker. Draw back to three; when the pile is empty, play on
-with what you hold.
+From then on, each turn is one landscape action and one movement, in either order. A landscape
+action is laying one junction from your hand on an empty square touching a laid card or on the
+outer ring (an Ace anywhere), covering a junction already laid, playing a Queen to swap two
+junctions, or holding. Movement is a roll of the d6, a Jack, or a Joker: the counter follows the
+face printed on the card under it; off the edge, it comes in on the far side; a stay face, or an
+arrow with no card beyond, leaves it where it is. Draw back to three.
 
 ## Winning
 
-When the counter reaches a King that someone holds, that player shows their Two and wins —
-whoever moved the counter. A King nobody holds sends the counter back to the centre square.
-Thirty movement turns without an arrival is a draw.
+When the counter reaches a King whose suit matches a player's commission, that player shows
+their Two and wins — whoever moved the counter. A King nobody's commission names sends the
+counter back to the centre square. Thirty movement turns without an arrival is a draw.
 
-Don't say which King is yours. Every card you lay says a little.
+Don't say which King is yours. Every card you lay says a little — and so does where you put a
+King.
 
 ## Strategy
 
 - A lay is the decision: where, which card, which way up — and what it tells the others.
 - Hearts run, spades hold: a line of hearts toward a King is a chute; a well of spades in front of one is a bog. Clubs scatter the counter; diamonds are fair.
-- In the race, covering the card under the counter changes its very next move; covering further off is a promise the others may undo.
+- Covering the card under the counter changes its very next move; covering further off is a promise the others may undo.
 
 ## Engine (implemented)
 
-The `junction_chain` mechanic (cells/playtest/engine/mechanics/junction-chain.ts) owns the table, the counter, the two phases, the roll at the end of a race turn, the court cards, the decoy rule and the draw at thirty moves; hidden_objectives holds the secret suits and `counter_at` is read by the chain. A free simulation harness of the same rules is `cells/lab/devtools/markovs-sim.mjs`.
+The `junction_chain` mechanic (cells/playtest/engine/mechanics/junction-chain.ts) owns the table, the counter, the opening court (`king_mode: dealt`), the turn of one landscape action and one movement in either order (`dynamic`, `flexible_order`), the court cards, the decoy rule and the draw at thirty moves; hidden_objectives holds the secret commissions and `counter_at` is read by the chain. The build-then-race game of v3.2 is the same mechanic with those three flags off; the lab's simulation harness (`cells/lab/devtools/markovs-sim.mjs`) plays that one.
 
 ## Design notes for the judge
 
-- The decision is the lay: where, which card, which way up, and what it tells the others.
-- Hidden information is real: a bot that reads which King each opponent's placements have
-  been helping beats one that doesn't.
-- The open question for human playtests: does the race rewrite the build? The simulation
-  reports how often a race lay covers the card under the counter, and how many moves land on
-  cards laid in the build; the variant where the card under the counter may not be covered is
-  in the lab's simulation for comparison.
+- The decision is the lay: where, which card, which way up, and what it tells the others; and in the court, where you put a King that may not be yours.
+- Hidden information is real: the commission is never shown until it wins.
+- The open question: with no build phase, is the table rich enough? The free screen reports how many squares are laid when the game ends and how many moves a game lasts.
