@@ -1,7 +1,8 @@
 // Markovs Chains: the transition sweep. Rewrites the suits' die faces (deck.ts SHAPES) along
 // four axes and plays the poker game (build then race, wrap + rim) under the sim's bots.
 //   node cells/lab/devtools/markovs-sweep.mjs            (N=120 games per line; N=… to change)
-//   AXIS=stay|lean|back|contrast|suit  node …             (one axis only)
+//   AXIS=stay|lean|back|contrast|suit  node …             (one axis only; AXIS=none: the head line)
+//   KINGS=corners node …                                  (Kings in the corners, not the edge middles)
 // Axes (d in -2..+2 faces, applied to every junction of every suit unless noted):
 //   stay      d more stay faces, taken from (or given to) the card's biggest outward exit
 //   lean      d more faces on the biggest exit, taken from the smallest other outward exits
@@ -16,6 +17,7 @@ process.env.LIB = '1';
 const { pokerPlay, D } = await import('./markovs-sim.mjs');
 const N = Number(process.env.N ?? 120);
 const WR = { ...D.RULES, wrap: true, rim: true };
+if (process.env.KINGS === 'corners') [D.key(0, 0), D.key(4, 0), D.key(4, 4), D.key(0, 4)].forEach((k, i) => (D.KING_AT[i] = k));
 const RANKS = [3, 4, 5, 6, 7, 8, 9, 10];
 const BASE = Object.fromEntries(RANKS.map((r) => [r, D.SHAPES[r].faces.map((f) => [...f])]));
 const reset = () => { for (const r of RANKS) D.SHAPES[r].faces = BASE[r].map((f) => [...f]); };
@@ -46,8 +48,9 @@ function card(name) {
   console.log(`${name.padEnd(22)} draw ${pct(draws)}  rolls ${String(rolls.length ? rolls[rolls.length >> 1] : '-').padStart(2)}  P1 ${pct(p1)}  skill ${(skill * 100).toFixed(0).padStart(3)}pt  stalls ${pct(stalls)}  lead ${lead.toFixed(1)}  held ${pct(held)}  off ${pct(off)}  stay ${meanStay().toFixed(2)}`);
 }
 console.log(`${N} games per line (4 greedy; skill line 1 random + 3 greedy) · wrap + rim · build then race\n`);
-reset(); card('head (as printed)');
+reset(); card(process.env.KINGS === 'corners' ? 'head, corner Kings' : 'head (as printed)');
 const only = process.env.AXIS;
 for (const ax of Object.keys(AX)) { if (only && only !== ax) continue; console.log(`\n${ax}`); for (const d of [-2, -1, 1, 2]) { AX[ax](d); card(`  ${ax} ${d > 0 ? '+' : ''}${d}`); } }
+if (only === 'none') process.exit(0);
 if (!only || only === 'suit') { console.log('\nsuit (its stays ± 1)'); for (let su = 0; su < 4; su++) for (const d of [-1, 1]) { edit((f) => (d > 0 ? move(f, big(f), 4, 1) : move(f, 4, big(f), 1)), [su]); card(`  ${D.SUIT_NAMES[su]} stay ${d > 0 ? '+' : ''}${d}`); } }
 reset();
