@@ -12,7 +12,7 @@
 //   contrast  the temperaments pulled apart (+) or together (−): stays and leans scaled per suit
 //   suit      one suit at a time: its stays ± d (which suit's brake matters?)
 // Scorecard per line: draw = hit the 30-roll cap · rolls = median of decided games · P1 = first
-// player's share · skill = greedy's share minus random's in a 1-random/3-greedy table · stalls =
+// player's share (p10: the shortest tenth of decided games) · skill = greedy's share minus random's in a 1-random/3-greedy table · stalls =
 // rolls that didn't move · lead = forecast lead changes per game · held = the halfway leader won ·
 // off = decided by someone else's roll · stay = mean stay faces per junction after the rewrite.
 process.env.LIB = '1';
@@ -56,7 +56,7 @@ function card(name) {
   const skd = sk.filter((x) => x.winner >= 0); const skill = (skd.filter((x) => x.winner > 0).length / 3 - skd.filter((x) => x.winner === 0).length) / N;
   const stalls = g4.reduce((a, x) => a + x.stalls, 0) / g4.reduce((a, x) => a + x.rolls, 0);
   const lead = g4.reduce((a, x) => a + x.extra.leadChanges, 0) / N; const held = dec.length ? dec.reduce((a, x) => a + x.extra.heldLead, 0) / dec.length : 0; const off = dec.length ? dec.reduce((a, x) => a + x.extra.offTurn, 0) / dec.length : 0;
-  console.log(`${name.padEnd(22)} draw ${pct(draws)}  rolls ${String(rolls.length ? rolls[rolls.length >> 1] : '-').padStart(2)}  P1 ${pct(p1)}  skill ${(skill * 100).toFixed(0).padStart(3)}pt  stalls ${pct(stalls)}  lead ${lead.toFixed(1)}  held ${pct(held)}  off ${pct(off)}  stay ${meanStay().toFixed(2)}`);
+  console.log(`${name.padEnd(30)} draw ${pct(draws)}  rolls ${String(rolls.length ? rolls[rolls.length >> 1] : '-').padStart(2)} (p10 ${String(rolls.length ? rolls[Math.floor(rolls.length / 10)] : '-').padStart(2)})  P1 ${pct(p1)}  skill ${(skill * 100).toFixed(0).padStart(3)}pt  stalls ${pct(stalls)}  lead ${lead.toFixed(1)}  held ${pct(held)}  off ${pct(off)}  stay ${meanStay().toFixed(2)}`);
 }
 console.log(`${N} games per line (4 greedy; skill line 1 random + 3 greedy) · wrap + rim · ${process.env.BUILD === undefined ? 'full build then race' : Number(process.env.BUILD) ? `short build (${process.env.BUILD} lays) then race` : 'court game, no build'}\n`);
 reset(); card(process.env.KINGS === 'corners' ? 'head, corner Kings' : process.env.KINGS === 'rim' ? 'head, rim Kings (no cardinals)' : 'head (as printed)');
