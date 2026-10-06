@@ -17,7 +17,7 @@
  */
 import { hash, seeded, type Rand } from '../kit/rng';
 import { shapeOutline, type Pt, type Shape } from './field';
-import { add, f, fill, glyph, pol, pt, type Fill, type FillResult, type Mark } from './ornament';
+import { accentW, add, f, fill, glyph, pol, pt, type Fill, type FillResult, type Mark } from './ornament';
 import type { Disc, Evenness } from './pack';
 import { SCHEMA, type Style } from './styles';
 import { ornate } from './structure';
@@ -115,7 +115,7 @@ export function draw(p: Style, faces: number[] | null, seed: number, o: { show?:
   }
 
   // the rim: rings, then a ring of beads, then the band's edge
-  for (let i = 0; i < p.rings; i++) circle([0, 0], R - i * p.ringGap, W * (i === 0 ? 1.6 : i % 2 ? 0.55 : 0.9));
+  for (let i = 0; i < p.rings; i++) circle([0, 0], R - i * p.ringGap, i % 2 ? W * 0.55 : accentW(W, i === 0 ? 1.6 : 0.9, p.accent));
   let rIn = R - (p.rings - 1) * p.ringGap;
   if (p.beads > 0.02) {
     const rb = rIn - 1.3 - p.beadR;
@@ -123,15 +123,15 @@ export function draw(p: Style, faces: number[] | null, seed: number, o: { show?:
     let d = '';
     for (let i = 0; i < n; i++) { const c = pol(rb, (i * 360) / n + 180 / n); d += `M${pt([c[0] - p.beadR, c[1]])}a${f(p.beadR)} ${f(p.beadR)} 0 1 0 ${f(2 * p.beadR)} 0a${f(p.beadR)} ${f(p.beadR)} 0 1 0 ${f(-2 * p.beadR)} 0`; }
     path(d, 0, { fill: 'ink' });
-    if (p.diagNodes) for (const a of DIAGS) { circle(pol(rb, a), 1.5, W * 0.9, { fill: 'paper' }); circle(pol(rb, a), 0.55, 0, { fill: 'ink' }); }
+    if (p.diagNodes) for (const a of DIAGS) { circle(pol(rb, a), 1.5, accentW(W, 0.9, p.accent), { fill: 'paper' }); circle(pol(rb, a), 0.55, 0, { fill: 'ink' }); }
     rIn = rb - p.beadR - 1.3;
-  } else if (p.diagNodes) for (const a of DIAGS) { circle(pol(rIn, a), 1.5, W * 0.9, { fill: 'paper' }); circle(pol(rIn, a), 0.55, 0, { fill: 'ink' }); }
+  } else if (p.diagNodes) for (const a of DIAGS) { circle(pol(rIn, a), 1.5, accentW(W, 0.9, p.accent), { fill: 'paper' }); circle(pol(rIn, a), 0.55, 0, { fill: 'ink' }); }
   circle([0, 0], rIn, W * 0.6);
   // the four cardinal nodes, standing out past the rim, with dots running on
   for (const a of AXES) {
     const at = R + p.nodeOut;
     if (p.nodeOut > 2.6) path(seg(pol(R, a), pol(at - 2.4, a)), W * 0.9);
-    circle(pol(at, a), p.nodeOut > 0 ? 2.4 : 1.9, W * 1.3, { fill: 'paper' });
+    circle(pol(at, a), p.nodeOut > 0 ? 2.4 : 1.9, accentW(W, 1.3, p.accent), { fill: 'paper' });
     circle(pol(at, a), p.nodeOut > 0 ? 1.25 : 0.9, W * 0.6);
     for (let i = 0; i < p.nodeDots; i++) circle(pol(at + 4.2 + i * 2.5, a), Math.max(0.3, 0.75 - i * 0.13), 0, { fill: 'ink' });
   }
@@ -217,14 +217,14 @@ export function draw(p: Style, faces: number[] | null, seed: number, o: { show?:
     }
   }
   // the hub's ring (the paper inside it clears the lattice)
-  circle([0, 0], p.hubR, W * 1.1, { fill: 'paper' });
+  circle([0, 0], p.hubR, accentW(W, 1.1, p.accent), { fill: 'paper' });
   circle([0, 0], p.hubR + 1.4, W * 0.45);
 
   // the anchored ornament: the suit's motifs, the crescents
   const at = p.motifAt === 'axes' ? AXES : p.motifAt === 'diagonals' ? DIAGS : [...AXES, ...DIAGS];
   for (const a of at) {
     const c = pol(p.motifR, a);
-    if (p.motifRoundel) { circle(c, p.motifSize * 1.6, W * 1.1, { fill: 'paper' }); circle(c, p.motifSize * 1.32, W * 0.4); }
+    if (p.motifRoundel) { circle(c, p.motifSize * 1.6, accentW(W, 1.1, p.accent), { fill: 'paper' }); circle(c, p.motifSize * 1.32, W * 0.4); }
     path(glyph(p.motif, c, p.motifSize, a), W * 0.9, { fill: p.motifFill ? 'ink' : 'paper' });
     avoid.push({ k: 'circle', c, r: p.motifSize * (p.motifRoundel ? 1.6 : 1.1) + edge });
   }

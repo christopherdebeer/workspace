@@ -29,6 +29,9 @@ export interface Style {
   weight: number;
   /** the ground's opacity under the junction */
   faint: number;
+  /** how much heavier the emphasised strokes are (rims, outer rules, node and medallion rings,
+   *  the hub): 0 hairline like the detail, 1 bold */
+  accent: number;
   // the rim
   /** rotational symmetry of the ground: 4, 8 or 12 (always keeps the four axes) */
   fold: number;
@@ -143,7 +146,7 @@ export interface Style {
 }
 
 const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'motifAt'> = {
-  paper: '#f7f0e3', weight: 0.5, faint: 0.9,
+  paper: '#f7f0e3', weight: 0.5, faint: 0.9, accent: 0.2,
   fold: 4, rings: 3, ringGap: 1.5, beads: 0.6, beadR: 0.42, nodeOut: 0, nodeDots: 0, diagNodes: true,
   band: 'rays', bandDensity: 1.6, bandLen: 11, bandRough: 0.6, bandSpan: 0.7,
   lines: true, star: 6, starSkip: 2, starR: 31, starRot: 0, starExtend: 0.35, star2R: 0, spokes: 4,
@@ -155,7 +158,7 @@ const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | '
   jWeight: 1.2, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'motifAt'> = {
-  paper: '#f7f0e3', weight: 0.5, faint: 0.9,
+  paper: '#f7f0e3', weight: 0.5, faint: 0.9, accent: 0.2,
   fold: 4, rings: 2, ringGap: 1.6, beads: 0.85, beadR: 0.34, nodeOut: 4, nodeDots: 2, diagNodes: true,
   band: 'scale', bandDensity: 2, bandLen: 7, bandRough: 0.8, bandSpan: 0.85,
   lines: true, star: 4, starSkip: 1, starR: 33, starRot: 45, starExtend: 0.8, star2R: 0, spokes: 8,
@@ -194,7 +197,7 @@ const c = (key: keyof Style, label: string, group: string): Control => ({ key, l
 
 export const SCHEMA: Control[] = [
   c('ink', 'ink', 'Ink'), c('paper', 'paper', 'Ink'), c('wash', 'wash', 'Ink'),
-  n('washAmount', 'wash amount', 'Ink', 0, 1, 0.05), n('weight', 'line weight', 'Ink', 0.15, 1, 0.01), n('faint', 'ground opacity', 'Ink', 0.2, 1, 0.05),
+  n('washAmount', 'wash amount', 'Ink', 0, 1, 0.05), n('weight', 'line weight', 'Ink', 0.15, 1, 0.01), n('faint', 'ground opacity', 'Ink', 0.2, 1, 0.05), n('accent', 'bold accents', 'Ink', 0, 1, 0.05),
   n('variance', 'seed variance', 'Ink', 0, 1, 0.05),
   e('fold', 'symmetry', 'Rim', [4, 8, 12]), n('rings', 'rings', 'Rim', 1, 6, 1), n('ringGap', 'ring gap', 'Rim', 0.8, 3, 0.1, true),
   n('beads', 'beads', 'Rim', 0, 1, 0.05, true), n('beadR', 'bead size', 'Rim', 0.2, 0.9, 0.02),

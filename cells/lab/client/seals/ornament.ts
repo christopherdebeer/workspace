@@ -16,6 +16,8 @@ export type Mark =
   | { k: 'text'; x: number; y: number; size: number; text: string; layer: Layer };
 
 const sq = (x: number) => x * x;
+/** an emphasised stroke: `factor` times the line weight when accent is 1, a hairline (0.6×) at 0 */
+export const accentW = (W: number, factor: number, accent: number) => W * (0.6 + (factor - 0.6) * accent);
 export const f = (n: number) => Math.round(n * 100) / 100;
 const rad = (a: number) => (a * Math.PI) / 180;
 /** a point at radius r, angle a in degrees: 0 north, clockwise (as the card lies) */
@@ -88,7 +90,7 @@ export function ornament(kind: Kind, d: Disc, s: Style, W: number, rMax: number,
       break;
     }
     case 'roundel': {
-      circle(c, rr, w * 0.85, 'paper');
+      circle(c, rr, accentW(w, 0.85, s.accent), 'paper');
       circle(c, rr * 0.64, w * 0.4);
       circle(c, rr * 0.2, 0, 'ink');
       if (rr > 0.6 * rMax) { const n = 8 + 2 * Math.floor(q() * 3); for (let k = 0; k < n; k++) circle(at(rr * 0.82, a + (k * 360) / n), rr * 0.055, 0, 'ink'); }

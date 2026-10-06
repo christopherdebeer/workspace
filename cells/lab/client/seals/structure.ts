@@ -18,7 +18,7 @@
  */
 import { hash } from '../kit/rng';
 import { bounds, sdf, type Pt, type Shape, type Sym } from './field';
-import { add, f, fill, glyph, pol, pt, type FillResult, type Mark } from './ornament';
+import { accentW, add, f, fill, glyph, pol, pt, type FillResult, type Mark } from './ornament';
 import type { Style } from './styles';
 
 const sq = (x: number) => x * x;
@@ -171,7 +171,7 @@ function canonical(sym: Sym, p: Pt): Pt {
 function medallion(c: Pt, r: number, s: Style, W: number, a: number): Mark[] {
   const out: Mark[] = [];
   const circ = (rr: number, w: number, fill: 'none' | 'ink' | 'paper' = 'none', at: Pt = c) => out.push({ k: 'circle', x: f(at[0]), y: f(at[1]), r: f(rr), w, fill, layer: 'ground' });
-  circ(r, W * 1.2, 'paper');
+  circ(r, accentW(W, 1.2, s.accent), 'paper');
   circ(r * 0.88, W * 0.45);
   if (s.beads > 0.05 && r > 2.2) { const n = Math.max(8, Math.round((r * 6) / 4) * 4); let d = ''; const br = Math.min(0.45, r * 0.035); for (let i = 0; i < n; i++) { const q = add(c, pol(r * 0.94, a + (i * 360) / n)); d += `M${pt([q[0] - br, q[1]])}a${f(br)} ${f(br)} 0 1 0 ${f(2 * br)} 0a${f(br)} ${f(br)} 0 1 0 ${f(-2 * br)} 0`; } out.push({ k: 'path', d, w: 0, fill: 'ink', layer: 'ground' }); }
   const n = s.star >= 4 ? s.star : 8, k = Math.max(1, Math.min(Math.floor((n - 1) / 2), s.star >= 4 ? Math.round(s.starSkip) : 3));
@@ -235,7 +235,7 @@ export function structure(o: { region: Shape; zones: Shape[]; sym: Sym; style: S
   let level = 0;
   const rules: number[] = [];
   for (let i = 0; i < s.rings; i++) { rules.push(level + 0.35 * k); level += s.ringGap * k * scale; }
-  for (const [i, L] of rules.entries()) for (const ln of isolines(g, -L)) out.push({ k: 'path', d: linePath(smooth(ln)), w: W * (i === 0 ? 1.4 : i % 2 ? 0.5 : 0.85), fill: 'none', layer: 'ground' });
+  for (const [i, L] of rules.entries()) for (const ln of isolines(g, -L)) out.push({ k: 'path', d: linePath(smooth(ln)), w: i % 2 ? W * 0.5 : accentW(W, i === 0 ? 1.4 : 0.85, s.accent), fill: 'none', layer: 'ground' });
   // a bead rule
   if (s.beads > 0.02 && scale > 0.25) {
     const L = level + (1.1 + s.beadR) * k * scale, sp = (2.2 - s.beads * 1.2) * k, br = s.beadR * k * Math.max(0.6, scale);
