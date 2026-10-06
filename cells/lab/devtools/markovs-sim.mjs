@@ -116,21 +116,21 @@ function run(name, play, strats, opts) {
   for (const x of rows) { if (x.winner < 0) draws++; else wins[x.winner]++; rolls += x.rolls; stalls += x.stalls; }
   const dec = rows.filter((x) => x.winner >= 0).map((x) => x.rolls).sort((a, b) => a - b);
   const played = rows[0].played !== undefined ? `  specials/game ${(rows.reduce((a, x) => a + x.played, 0) / N).toFixed(1)}` : '';
-  const extra = rows[0].extra ? '  ' + Object.keys(rows[0].extra).map((k) => `${k} ${pct(rows.reduce((a, x) => a + x.extra[k], 0) / N)}`).join(' ') : '';
+  const extra = rows[0].extra ? '  ' + Object.keys(rows[0].extra).map((k) => { const m = rows.reduce((a, x) => a + x.extra[k], 0) / N; return `${k} ${k === 'leadChanges' ? m.toFixed(1) : pct(m)}`; }).join(' ') : '';
   console.log(`${name.padEnd(34)} ${strats.map((s) => (s === 'reader' ? 'R' : s[0])).join('')}  draw ${pct(draws / N)}  P1 ${pct(wins[0] / N)}${P > 2 ? '' : ` P2 ${pct(wins[1] / N)}`}  fair ${pct((1 - draws / N) / P)}  rolls ${dec.length ? dec[Math.floor(dec.length / 2)] : '-'}  stalls ${pct(stalls / rolls)}${played}${extra}`);
   return { wins, draws };
 }
 const G = (n, s, o) => run(n, playGrid, s, o);
 const M = (n, s, o) => run(n, playMats, s, o);
-console.log(`${N} games per line · draw = hit the ${CAP}-roll cap · fair = what each player would win if equal · rolls = median of decided games\n`);
-if (!process.env.ROUND2) {
+if (!process.env.LIB) console.log(`${N} games per line · draw = hit the ${CAP}-roll cap · fair = what each player would win if equal · rolls = median of decided games\n`);
+if (!process.env.ROUND2 && !process.env.LIB) {
 console.log('GRID (the other agent\'s race)');
 G('as shipped, 2 corners', ['greedy', 'greedy']); G('  skill: greedy v random', ['greedy', 'random']); G('  skill: random v greedy', ['random', 'greedy']);
 G('bounce (no stalls), 2', ['greedy', 'greedy'], { bounce: true }); G('  skill', ['greedy', 'random'], { bounce: true });
 G('4 corners, 3 players', ['greedy', 'greedy', 'greedy']); G('4 corners, 4 players', ['greedy', 'greedy', 'greedy', 'greedy']); G('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy']);
 G('4 corners + bounce, 4', ['greedy', 'greedy', 'greedy', 'greedy'], { bounce: true });
 }
-if (!process.env.ROUND2) {
+if (!process.env.ROUND2 && !process.env.LIB) {
 console.log('\nMATS (the four-mat Commission)');
 M('secret commissions, 2', ['greedy', 'greedy']); M('  skill', ['greedy', 'random']); M('  skill (random first)', ['random', 'greedy']);
 M('secret commissions, 4', ['greedy', 'greedy', 'greedy', 'greedy']); M('  skill, 4 (one random)', ['random', 'greedy', 'greedy', 'greedy']);
@@ -210,6 +210,10 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
   const hands = strats.map(() => pile.splice(0, hand));
   const beliefs = strats.map(() => strats.map(() => [0.25, 0.25, 0.25, 0.25]));
   let token = '2,2', stalls = 0, played = 0; const laid = []; let raceLays = 0, under = 0, moves = 0, onBuilt = 0;
+  // comeback: who the 4-hop forecast favours after each move; how often that changes, and whether
+  // the leader at the halfway point of the race is the one who wins
+  let leader = -1, leadChanges = 0; const leaders = [];
+  const noteLead = () => { const w = D.forecast(board, token, rules, 4).wins; let b = -1, bv = 0; for (let su = 0; su < 4; su++) if (w[su] > bv + 1e-9) { b = su; bv = w[su]; } if (b >= 0 && leader >= 0 && b !== leader) leadChanges++; if (b >= 0) leader = b; leaders.push(leader); };
   const value = (b, at, p, tok = token) => {
     const f = D.forecast(b, tok, rules, 4, mine[p], P); let v = f.wins[mine[p]];
     for (let o = 0; o < P; o++) { if (o === p) continue; const w = strats[p] === 'reader' ? beliefs[p][o] : [0.25, 0.25, 0.25, 0.25]; for (let su = 0; su < 4; su++) if (su !== mine[p]) v -= (f.wins[su] * w[su]) / (P - 1) / (strats[p] === 'reader' ? 1 : 0.75); }
@@ -262,12 +266,13 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
     }
     if (!moved) { const res = D.destination(board, token, 1 + Math.floor(r() * 6), rules); token = res.at; if (res.reason !== 'move') stalls++; }
     moves++; const t = board.get(token); if (t?.built) onBuilt++;
-    const extra = { under: raceLays ? under / raceLays : 0, onBuilt: onBuilt / moves };
-    if (D.isKing(t)) { const who = mine.indexOf(t.card.suit); if (who >= 0) return { winner: who, rolls: roll + 1, stalls, played, laid, extra }; }
+    if (!D.isKing(t)) noteLead();
+    if (D.isKing(t)) { const who = mine.indexOf(t.card.suit); if (who >= 0) { const half = leaders[Math.floor(leaders.length / 2)]; const extra = { under: raceLays ? under / raceLays : 0, onBuilt: onBuilt / moves, leadChanges, heldLead: half === t.card.suit ? 1 : 0, offTurn: who === p ? 0 : 1 }; return { winner: who, rolls: roll + 1, stalls, played, laid, extra }; } }
     if (D.isKing(t)) token = D.START; // (a decoy: back to the start)
   }
-  return { winner: -1, rolls: CAP, stalls, played, laid, extra: { under: raceLays ? under / raceLays : 0, onBuilt: onBuilt / moves } };
+  return { winner: -1, rolls: CAP, stalls, played, laid, extra: { under: raceLays ? under / raceLays : 0, onBuilt: onBuilt / moves, leadChanges, heldLead: 0, offTurn: 0 } };
 }
+export { pokerPlay, run, D, N, CAP };
 if (process.env.CARDS) {
   // which junctions get laid, and whether laying them wins: the quiet and the busy cards
   const n = Number(process.env.N ?? 200); const use = new Map(); const win = new Map();
