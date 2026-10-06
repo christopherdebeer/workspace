@@ -478,7 +478,7 @@ function printSheet() {
   const cards = pack();
   const sheets = Math.ceil(cards.length / 9);
   const pages: string[] = [];
-  for (let i = 0; i < cards.length; i += 9) pages.push(`<section class="print-page"><div class="cap">MARKOVS CHAINS · CARDS 63 × 88 mm · SHEET ${i / 9 + 1} OF ${sheets} · cut on the borders</div><div class="print-grid">${cards.slice(i, i + 9).map((c, j) => `<div class="print-card">${cardSvg(c, 0, `p${i + j}`)}</div>`).join('')}</div></section>`);
+  for (let i = 0; i < cards.length; i += 9) { const sheet = cards.slice(i, i + 9); const rows: string[] = []; for (let r = 0; r < sheet.length; r += 3) rows.push(`<div class="print-row">${sheet.slice(r, r + 3).map((c, j) => `<div class="print-card">${cardSvg(c, 0, `p${i + r + j}`)}</div>`).join('')}</div>`); pages.push(`<section class="print-page"><div class="cap">MARKOVS CHAINS · CARDS 63 × 88 mm · SHEET ${i / 9 + 1} OF ${sheets} · cut on the borders · print at 100%, headers off</div><div class="print-grid">${rows.join('')}</div></section>`); }
   const rules = RULES_TEXT.map((r) => `<h2>${r.title}</h2>${r.body.map((b) => `<p>${esc(b)}</p>`).join('')}`).join('');
   $('print-sheet').innerHTML = `<section class="print-page rules-page"><h1>Markovs Chains</h1><p class="lede">A game of finite probabilities on a standard poker deck. Two to four players, one counter, one d6, 54 cards. Place the Kings in a court; then lay junction cards and race the one shared counter to your secret King.</p><div class="rules-cols">${rules}</div></section>
 <section class="print-page"><div class="cap">MARKOVS CHAINS · THE BOX · 65 × 90 × 19 mm inside · card stock · cut the solid line, fold the dashed, glue the flap</div>${boxSvg()}</section>

@@ -545,7 +545,7 @@ export const handler = async (
   if ((method === 'GET' || method === 'HEAD') && path.startsWith('/api/')) {
     try {
       const out = await publicApi(path.slice('/api/'.length).split('/').filter(Boolean).map(decodeURIComponent));
-      return out === undefined ? json(404, { error: `no route ${path}` }) : { ...json(out === null ? 404 : 200, out ?? { error: 'not found' }), headers: { 'content-type': 'application/json', 'cache-control': 'no-cache' } };
+      return out === undefined ? json(404, { error: `no route ${path}` }) : { ...json(out === null ? 404 : 200, out ?? { error: 'not found' }), headers: { 'content-type': 'application/json', 'cache-control': 'no-cache', 'access-control-allow-origin': '*' } };
     } catch (e) {
       return json(500, { error: (e as Error).message });
     }
