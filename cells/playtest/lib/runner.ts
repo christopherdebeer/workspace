@@ -69,7 +69,7 @@ const LOOKAHEAD_MAX = 40;
 const FOLLOW_MAX = 30;
 /** Moves whose outcome turns on hidden information are never simulated (a denunciation
  *  would otherwise announce whether the target is the Enemy; a draw, the next card). */
-const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
+const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$|^reveal$/;
 
 /** What the runner shows Jev and how it drives play. Part of an eval's identity: a harness
  *  change moves scores without touching engine code, so baselines must match it too.
@@ -91,7 +91,8 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h19'; // h19: questionnaire v2 — margin and authorship as scores, 'went my way' against the named move, the urgency scale fixed.
+export const HARNESS_VERSION = 'h20'; // h20: a reveal's outcome is never previewed (it would name the face-down King).
+// h19: // h19: questionnaire v2 — margin and authorship as scores, 'went my way' against the named move, the urgency scale fixed.
 // h18: // h18: the questionnaire (probe): sampled turns answer intention/threat/alternatives/urgency and, later, achieved/outcome/authorship/revised, as q_* measures.
 // h17: // h17: the greedy stand-in values its options (own forecast, route) instead of picking any marked one.
 // h16: // h15: sessions carry the mechanic's measures; h16: every eval plays a bot split (greedy stand-in, no judge) for the targets.

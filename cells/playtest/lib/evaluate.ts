@@ -481,6 +481,33 @@ export interface Round extends db.Item {
   targets?: { base: number | null; cand: number | null };
   /** v4.3: the bot split — each measure's paired delta and the targets term's delta with its jackknife SE */
   bot?: { n: number; measures: Round['measures']; targets: ReturnType<typeof targetsDelta> };
+  /** the measures' own health this round: which moved beyond two standard errors, which are silent
+   *  (no variance over the games) or pinned at a bound, and which target bands both sides already
+   *  satisfy (so the gate cannot see a difference there) — a stuck instrument reported as such */
+  meta?: { moved: string[]; silent: string[]; pinned: string[]; saturatedTargets: string[]; note: string };
+}
+
+/** The measures' meta-evaluation for a round (see Round.meta). */
+export function measureMeta(botDeltas: Round['measures'], trainDeltas: Round['measures'], botRuns: RunDigest[], targets: Targets | null, baseBands?: Record<string, { band: number }>, candBands?: Record<string, { band: number }>): NonNullable<Round['meta']> {
+  const moved: string[] = [];
+  const silent: string[] = [];
+  const pinned: string[] = [];
+  const all = { ...(trainDeltas ?? {}), ...(botDeltas ?? {}) };
+  for (const [k, d] of Object.entries(all)) if (d.se !== null && d.se > 0 && Math.abs(d.delta) >= 2 * d.se) moved.push(`${k} ${d.delta >= 0 ? '+' : ''}${d.delta} (±${d.se})`);
+  const stats = measureStats(botRuns);
+  for (const [k, s] of Object.entries(stats)) {
+    const xs = botRuns.map((r) => r.measures?.[k]).filter((v): v is number => typeof v === 'number');
+    const sd = Math.sqrt(xs.reduce((a, x) => a + (x - s.mean) ** 2, 0) / Math.max(1, xs.length - 1));
+    if (xs.length >= 8 && sd < 1e-6) silent.push(k);
+    else if (xs.length >= 8 && xs.every((x) => x >= 0 && x <= 1) && (s.mean <= 0.02 || s.mean >= 0.98)) pinned.push(`${k} ≈ ${s.mean.toFixed(2)}`);
+  }
+  const saturatedTargets = targets ? Object.keys(targets).filter((k) => (baseBands?.[k]?.band ?? 0) >= 0.999 && (candBands?.[k]?.band ?? 0) >= 0.999) : [];
+  const parts: string[] = [];
+  parts.push(moved.length ? `moved beyond 2 SE: ${moved.join('; ')}` : 'no measure moved beyond two standard errors');
+  if (silent.length) parts.push(`silent (no variance): ${silent.join(', ')}`);
+  if (pinned.length) parts.push(`pinned at a bound: ${pinned.join(', ')}`);
+  if (saturatedTargets.length) parts.push(`targets both sides already meet (blind here): ${saturatedTargets.join(', ')}${targets && saturatedTargets.length === Object.keys(targets).length ? ' — every band; the targets term cannot prefer either side until a band is tightened' : ''}`);
+  return { moved, silent, pinned, saturatedTargets, note: parts.join('. ') };
 }
 
 /** Each measure's mean and standard error over the runs that carry it. */
@@ -575,6 +602,7 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
   const def = (await db.get(`GAME#${o.game}`, `DEF#${db.pad(o.candVersion)}`)) as db.Definition | undefined;
   const tg = def?.rules ? targetsOf(def.rules) : null;
   const bot = baseline.bot && ev.bot && tg ? { n: ev.bot.n, measures: measureDeltas(baseline.bot.runs, ev.bot.runs), targets: targetsDelta(baseline.bot.runs, ev.bot.runs, tg) } : undefined;
+  const meta = measureMeta(bot?.measures ?? {}, measures, ev.bot?.runs ?? [], tg, baseline.bot?.targets?.bands, ev.bot?.targets?.bands);
   const floor = Math.max(suite.epsilon, suite.noise ?? 0);
   let decision: Round['decision'] = 'reverted';
   let reason: string;
@@ -621,6 +649,7 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
     measures,
     targets,
     ...(bot ? { bot } : {}),
+    meta,
     delta: { train: dTrain, test: dTest },
     epsilon: eps,
     decision,

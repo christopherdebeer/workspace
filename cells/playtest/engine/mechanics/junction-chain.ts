@@ -55,6 +55,10 @@ export interface JunctionChainConfig {
   /** the card under the counter may never be covered or swapped (the lab's coverUnder: false): a
    *  route entered is a commitment; protect_current is the weaker form, before movement only */
   no_cover_under?: boolean;
+  /** the court is concealed: dealt Kings are placed face down (the placer knows which); once a turn,
+   *  before anything else, a player may turn any one King face up for free; the counter entering a
+   *  face-down King turns it up and resolves as usual; the undealt Kings stand face down too */
+  concealed?: boolean;
   optional_move?: boolean;
   seed_cross?: boolean;
   king_mode?: 'fixed' | 'reserve' | 'deck' | 'dealt';
@@ -90,6 +94,9 @@ interface Tile {
   turn: number;
   king?: string;
   start?: boolean;
+  /** a King face down (concealed court); `placedBy` knows which it is */
+  hidden?: boolean;
+  placedBy?: string;
 }
 export interface ChainState {
   size: number;
@@ -115,6 +122,8 @@ export interface ChainState {
   /** true after every dealt King has been placed; normal play is locked before this */
   courtOpen?: boolean;
   kingsDealt?: boolean;
+  /** concealed court: a reveal has been taken this turn */
+  revealed?: boolean;
   audit?: Record<string, number>;
   /** the forecast's favourite among the held suits after each movement (measures: lead changes, held lead) */
   leaders?: string[];
@@ -217,6 +226,9 @@ export function measuresOf(ch: ChainState, state: GameState, won = false): Recor
   return {
     offTurnWin: won ? Number((a.offTurnWins ?? 0) > 0) : 0,
     jackWin: won ? Number((a.jackWins ?? 0) > 0) : 0,
+    reveals: a.reveals ?? 0,
+    entryReveals: a.entryReveals ?? 0,
+    revealOwn: (a.reveals ?? 0) ? +((a.revealOwn ?? 0) / (a.reveals ?? 1)).toFixed(3) : 0,
     coverUnder: (a.covers ?? 0) ? +(((a.coverCurrentBefore ?? 0) + (a.coverCurrentAfter ?? 0)) / (a.covers ?? 1)).toFixed(3) : 0,
     prepPayoff: (a.lays ?? 0) ? +((ch.usedLays ?? 0) / (a.lays ?? 1)).toFixed(3) : 0,
     draw: state.status !== 'in_progress' && !won ? 1 : 0,
@@ -290,7 +302,8 @@ function heldSuits(state: GameState): Set<string> {
   for (const p of state.turnOrder) { const s = mySuit({ player: state.players[p] }); if (s) out.add(s); }
   return out;
 }
-function tileLabel(k: string, t: Tile): string {
+function tileLabel(k: string, t: Tile, viewer?: string): string {
+  if (t.king && t.hidden) return t.placedBy && t.placedBy === viewer ? `${k} K${SUIT_GLYPH[t.king]} (face down; you placed it)` : `${k} K? (a King, face down)`;
   if (t.king) return `${k} K${SUIT_GLYPH[t.king]}`;
   const ex = exitsOf(t);
   const by = new Map<number, number[]>();
@@ -302,6 +315,7 @@ function tileLabel(k: string, t: Tile): string {
 function arrive(ch: ChainState, state: GameState, at: string, log: string[]): void {
   ch.counter = at;
   const t = ch.tiles[at];
+  if (t?.king && t.hidden) { t.hidden = false; count(ch, 'entryReveals'); log.push(`the face-down King at ${at} is turned up: the King of ${t.king}`); }
   if (t?.king && !heldSuits(state).has(t.king)) {
     log.push(`the King of ${t.king} has no matching commission: back to the start`);
     ch.counter = ch.start;
@@ -355,6 +369,7 @@ export const junctionChainMechanic: MechanicHooks = {
       flexible_order: { type: 'boolean', description: 'One landscape action and one movement in either order' },
       protect_current: { type: 'boolean', description: 'Cannot cover or swap the occupied junction before movement' },
       no_cover_under: { type: 'boolean', description: 'The card under the counter is never covered or swapped' },
+      concealed: { type: 'boolean', description: 'Kings are placed face down; one free reveal a turn; entering a face-down King turns it up' },
       optional_move: { type: 'boolean', description: 'May skip movement, but never on consecutive player turns' },
       seed_cross: { type: 'boolean', description: 'Seed four actual deck junctions around the start before the first turn' },
       king_mode: { type: 'string', enum: ['fixed', 'reserve', 'deck', 'dealt'], description: 'Fixed setup, public placement reserve, or one King dealt to each player for a mandatory opening placement' },
@@ -402,7 +417,7 @@ export const junctionChainMechanic: MechanicHooks = {
           const [nx, ny] = neutralAt.split(',').map(Number); const last = size - 1;
           neutralAt = ny === 0 ? key(nx + 1, 0) : nx === last ? key(last, ny + 1) : ny === last ? key(nx - 1, last) : key(0, ny - 1);
         }
-        if (neutralAt && !tiles[neutralAt]) tiles[neutralAt] = { card: { name: `K${SUIT_GLYPH[neutralSuit]} NEUTRAL DESTINATION`, suit: neutralSuit, role: 'destination', faces: [-1, -1, -1, -1, -1, -1] }, turn: 0, king: neutralSuit };
+        if (neutralAt && !tiles[neutralAt]) tiles[neutralAt] = { card: { name: `K${SUIT_GLYPH[neutralSuit]} NEUTRAL DESTINATION`, suit: neutralSuit, role: 'destination', faces: [-1, -1, -1, -1, -1, -1] }, turn: 0, king: neutralSuit, ...(c.concealed ? { hidden: true } : {}) };
       }
     }
     const chain: ChainState = { size, tiles, counter: start, start, phase: c.dynamic ? 'race' : 'build', rolls: 0, kingOpened, kingHeld, courtOpen: c.king_mode !== 'dealt', kingsDealt: c.king_mode === 'dealt', audit: {} };
@@ -416,6 +431,7 @@ export const junctionChainMechanic: MechanicHooks = {
       case 'reroute': return { required: ['dir'], fields: { dir: { type: 'string' } } };
       case 'throw_in': return { required: ['card'], fields: { card: { type: 'string' } } };
       case 'crown': return { required: ['suit', 'at'], fields: { suit: { type: 'string' }, at: { type: 'string' } } };
+      case 'reveal': return { required: ['at'], fields: { at: { type: 'string' } } };
       case 'skip_move': case 'hold': case 'chaos': case 'roll': return { required: [], fields: {} };
       default: return null;
     }
@@ -465,6 +481,16 @@ export const junctionChainMechanic: MechanicHooks = {
       return card ? { valid: true } : { valid: false, error: 'Not in your hand' };
     }
     if (ch.phase !== 'race') return ['swap', 'hold', 'reroute', 'chaos'].includes(type) ? { valid: false, error: 'Not until the table is built' } : null;
+    if (type === 'reveal') {
+      const a = action as unknown as { at: string };
+      if (!c.concealed) return { valid: false, error: 'No concealed court in this game' };
+      if (ch.phase !== 'race') return { valid: false, error: 'Reveals begin with the race' };
+      if (ch.revealed) return { valid: false, error: 'One reveal a turn' };
+      if (ch.laid || ch.moved) return { valid: false, error: 'A reveal comes before the turn\'s actions' };
+      const t = ch.tiles[a.at];
+      if (!t?.king || !t.hidden) return { valid: false, error: 'Not a face-down King' };
+      return { valid: true };
+    }
     if (type === 'hold') return { valid: true };
     if (type === 'swap') {
       const a = action as unknown as Swap;
@@ -554,9 +580,9 @@ export const junctionChainMechanic: MechanicHooks = {
       const card = hand.find((h) => h.role === 'destination' && (h.suit === a.suit || suitOf(h.name) === a.suit));
       if (card) take(card.name);
       // Keep the dealt suit in state after placement so the completed Court can be verified and the UI can show it.
-      ch.tiles[a.at] = { card: { name: `K${SUIT_GLYPH[a.suit]}`, suit: a.suit, role: 'destination', faces: [-1,-1,-1,-1,-1,-1] }, turn: 0, king: a.suit };
+      ch.tiles[a.at] = { card: { name: `K${SUIT_GLYPH[a.suit]}`, suit: a.suit, role: 'destination', faces: [-1,-1,-1,-1,-1,-1] }, turn: 0, king: a.suit, ...(c.concealed ? { hidden: true, placedBy: playerId } : {}) };
       (ch.kingOpened ??= {})[playerId] = true;
-      count(ch, 'kingsPlaced'); count(ch, 'kingOpenings'); log.push(`${playerId} placed dealt King of ${a.suit} at ${a.at}`);
+      count(ch, 'kingsPlaced'); count(ch, 'kingOpenings'); log.push(c.concealed ? `${playerId} placed a King face down at ${a.at}` : `${playerId} placed dealt King of ${a.suit} at ${a.at}`);
       const allOpen = Object.keys(ch.kingHeld ?? {}).length > 0 && Object.keys(ch.kingHeld ?? {}).every((pid) => ch.kingOpened?.[pid]);
       if (allOpen) {
         ch.courtOpen = true;
@@ -592,6 +618,13 @@ export const junctionChainMechanic: MechanicHooks = {
     }
     if (type === 'throw_in') { const a = action as unknown as { card: string }; take(a.card); log.push(`${playerId} threw in ${a.card}`); return laid('threw_in', { card: a.card }); }
     if (type === 'swap') { const a = action as unknown as Swap; takeRole('swap'); count(ch, 'courtPlays'); const ta = ch.tiles[a.a]; const tb = ch.tiles[a.b]; ch.tiles[a.a] = { ...tb, start: ta.start }; ch.tiles[a.b] = { ...ta, start: tb.start }; log.push(`${playerId} swapped ${ta.card.name} (${a.a}) and ${tb.card.name} (${a.b})`); return laid('swapped', { a: a.a, b: a.b }); }
+    if (type === 'reveal') {
+      const a = action as unknown as { at: string };
+      const t = ch.tiles[a.at]!;
+      t.hidden = false; ch.revealed = true; count(ch, 'reveals'); if (t.king === mySuit(ctx)) count(ch, 'revealOwn');
+      log.push(`${playerId} turns up the King at ${a.at}: the King of ${t.king}`);
+      return { handled: true, advanceTurn: false, checkWin: false, logMessage: 'revealed', logData: { at: a.at, suit: t.king, phase: ch.phase, counter: ch.counter, notes: log } };
+    }
     if (type === 'hold') { log.push(`${playerId} lays nothing`); return laid('held'); }
     if (type === 'roll') { moveCounter(ch, state, wrap, 1 + Math.floor(Math.random() * 6), log); return done('rolled', { face: ch.lastRoll, to: ch.counter }); }
     if (type === 'reroute') { const a = action as unknown as Reroute; takeRole('reroute'); count(ch, 'courtPlays'); const n = neighbour(ch, ch.counter, DIR_NAMES.indexOf(a.dir), c.wrap !== false)!; log.push(`${playerId} played a Jack: the counter walks ${a.dir} to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; remember(ch, ch.lastMove); return done('rerouted', { dir: a.dir, to: n }); }
@@ -615,6 +648,7 @@ export const junctionChainMechanic: MechanicHooks = {
     if (!ch || !c) return null;
     ch.laid = false;
     ch.moved = false;
+    ch.revealed = false;
     ch.buildLaid = 0;
     // (the Kings were dealt at setup: ch.kingHeld; the crown action reads it)
     if (c.dynamic && c.seed_cross && !ch.seeded) {
@@ -696,6 +730,10 @@ export const junctionChainMechanic: MechanicHooks = {
       if (ch.laid) return step2;
       movement = step2;
     }
+    if (ch.phase === 'race' && c.concealed && !ch.revealed && !ch.laid && !ch.moved) {
+      const down = Object.entries(ch.tiles).filter(([, t]) => t.king && t.hidden).map(([k]) => k);
+      if (down.length) out.push({ action: { type: 'reveal', at: down[0] } as unknown as GameAction, priority: 12, category: 'information', description: 'Before anything else this turn, turn one face-down King face up for everyone (free; it need not be yours)', required: { at: 'A face-down King "x,y"' }, examples: down.map((at) => ({ type: 'reveal', at }) as unknown as GameAction) });
+    }
     if (ch.phase === 'race') {
       out.push({ action: { type: 'hold' } as unknown as GameAction, priority: 10, category: 'turn', description: 'Lay nothing this turn (then roll)' });
       if (c.king_mode === 'reserve') {
@@ -720,23 +758,31 @@ export const junctionChainMechanic: MechanicHooks = {
     const c = cfg(ctx.config);
     if (!ch || !c) return null;
     const near = c.forecast ?? 4;
-    const f = forecast(ch, ch.counter, c.wrap !== false, near);
-    const g = forecast(ch, ch.counter, c.wrap !== false, near * 3);
     const suit = mySuit(ctx);
+    // what this player knows of the Kings: face-up ones, and the one they placed face down
+    const knows = (t: Tile) => !t.hidden || t.placedBy === ctx.playerId;
+    const unknownKings = Object.values(ch.tiles).filter((t) => t.king && !knows(t)).length;
+    const f0 = forecast(ch, ch.counter, c.wrap !== false, near);
+    const g0 = forecast(ch, ch.counter, c.wrap !== false, near * 3);
+    // (concealed: the mass at Kings this player cannot identify is pooled as 'unknown')
+    const pool = (w: Record<string, number>) => { if (!unknownKings) return w; const out: Record<string, number> = {}; let unknown = 0; for (const [k, t] of Object.entries(ch.tiles)) if (t.king) { if (knows(t)) out[t.king] = (out[t.king] ?? 0) + (w[t.king] ?? 0); else unknown += w[t.king] ?? 0; } out.unknown = unknown; return out; };
+    const f = pool(f0), g = pool(g0);
     const rest = (w: Record<string, number>) => SUITS.filter((s) => s !== suit).reduce((a, s) => a + (w[s] ?? 0), 0);
     // (progress, not objectiveProgress: hidden-objectives' view is merged after this one)
     const gp = gaps(ch, ch.counter, c.wrap !== false);
     const gapLine = (s: string) => { const n = gp[s]; return n === undefined ? 'no route' : n === 0 ? 'cards all the way' : `${n} more card${n === 1 ? '' : 's'} to lay`; };
     const nearestOther = SUITS.filter((s) => s !== suit && gp[s] !== undefined).sort((a, b) => gp[a] - gp[b])[0];
-    const progress = suit ? [`your King ${SUIT_GLYPH[suit]}: ${pct5(f[suit] ?? 0)} within ${near} rolls, ${pct5(g[suit] ?? 0)} within ${near * 3}`, `the other Kings together: ${pct5(rest(f))} within ${near}, ${pct5(rest(g))} within ${near * 3}`, `route to your King ${SUIT_GLYPH[suit]}: ${gapLine(suit)}`, `nearest other King${nearestOther ? ` ${SUIT_GLYPH[nearestOther]}` : ''}: ${nearestOther ? gapLine(nearestOther) : 'no route'}`] : [];
+    const myKingKnown = !suit || Object.values(ch.tiles).some((t) => t.king === suit && knows(t));
+    const progress = suit ? (myKingKnown ? [`your King ${SUIT_GLYPH[suit]}: ${pct5(f[suit] ?? 0)} within ${near} rolls, ${pct5(g[suit] ?? 0)} within ${near * 3}`, `the other Kings together: ${pct5(rest(f))} within ${near}, ${pct5(rest(g))} within ${near * 3}`, `route to your King ${SUIT_GLYPH[suit]}: ${gapLine(suit)}`, `nearest other King${nearestOther ? ` ${SUIT_GLYPH[nearestOther]}` : ''}: ${nearestOther ? gapLine(nearestOther) : 'no route'}`] : [`your King ${SUIT_GLYPH[suit]} is one of the ${unknownKings} face-down Kings you did not place`, `the face-down Kings together: ${pct5(f.unknown ?? 0)} within ${near} rolls, ${pct5(g.unknown ?? 0)} within ${near * 3}`, `the Kings you can name: ${SUITS.filter((s) => f[s] !== undefined).map((s) => `${SUIT_GLYPH[s]} ${pct5(f[s] ?? 0)}`).join(', ') || 'none yet'} within ${near}`]) : [];
     const under = ch.tiles[ch.counter];
     return {
       phase: ch.phase === 'build' ? `building the table (${Object.values(ch.tiles).length - 1 - Object.keys(c.kings ?? {}).length || 0} laid; ${hasEmpty(ch) ? 'spaces still empty' : 'full'})` : `the race: ${ch.rolls} rolls so far`,
-      counter: `${ch.counter}, on ${under ? tileLabel(ch.counter, under).replace(/^\S+ /, '') : '?'}`,
-      yourKing: suit ? `${SUIT_GLYPH[suit]} at ${Object.entries(ch.tiles).find(([, t]) => t.king === suit)?.[0] ?? 'not placed'} (commission, secret)` : undefined,
+      counter: `${ch.counter}, on ${under ? tileLabel(ch.counter, under, ctx.playerId).replace(/^\S+ /, '') : '?'}`,
+      yourKing: suit ? `${SUIT_GLYPH[suit]} at ${Object.entries(ch.tiles).find(([, t]) => t.king === suit && knows(t))?.[0] ?? (myKingKnown ? 'not placed' : 'a face-down King (which one, you do not know)')} (commission, secret)` : undefined,
       dealtKing: c.king_mode === 'dealt' ? (ch.kingHeld?.[ctx.playerId] ? `${SUIT_GLYPH[ch.kingHeld[ctx.playerId]]} (${ch.kingOpened?.[ctx.playerId] ? 'placed' : 'opening placement required'})` : 'placed') : undefined,
       court: c.king_mode === 'dealt' ? (ch.courtOpen ? 'complete' : 'opening: Kings only') : undefined,
-      table: Object.entries(ch.tiles).sort(([a], [b]) => (xy(a)[1] - xy(b)[1]) || (xy(a)[0] - xy(b)[0])).map(([k, t]) => tileLabel(k, t)),
+      table: Object.entries(ch.tiles).sort(([a], [b]) => (xy(a)[1] - xy(b)[1]) || (xy(a)[0] - xy(b)[0])).map(([k, t]) => tileLabel(k, t, ctx.playerId)),
+      reveal: c.concealed ? (ch.revealed ? 'taken this turn' : ch.laid || ch.moved ? 'too late this turn' : 'available: one face-down King, free, before anything else') : undefined,
       turnStep: ch.moved ? 'movement used; landscape action or hold remaining' : ch.laid ? 'landscape used; movement remaining' : c.flexible_order ? 'landscape and movement available in either order' : 'landscape first, movement second',
       kingsInReserve: c.king_mode === 'reserve' ? SUITS.filter(s => !Object.values(ch.tiles).some(t => t.king === s)) : undefined,
       mustMove: !c.optional_move || !!ch.skippedLast,
@@ -753,6 +799,7 @@ export const junctionChainMechanic: MechanicHooks = {
       throw_in: ['Throw in', 'Discard a card and draw another', 'throw_in card:"Q♠ SWAP"'],
       swap: ['Swap', 'Play a Queen: exchange two junctions', 'swap a:"2,1" b:"3,3"'],
       hold: ['Hold', 'Lay nothing this turn; the die is rolled', 'hold'],
+      reveal: ['Reveal', 'Turn one face-down King face up for everyone (free, before anything else this turn)', 'reveal at:"0,1"'],
       reroute: ['Reroute', 'Play a Jack: walk the counter one space your way instead of rolling', 'reroute dir:"north"'],
       chaos: ['Chaos', 'Play a Joker: the counter takes a random exit instead of the roll', 'chaos'],
     };
