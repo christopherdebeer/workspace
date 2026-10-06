@@ -9,10 +9,11 @@ max_turns: 90
 # brisk but not over in a flash, decided by the table rather than the roller, rarely a draw.
 # (rolls = movement turns after the court; the court takes a round of its own, so rounds flatter the pace)
 targets:
-  rolls: [6, 24]
+  rolls: [10, 24]
   offTurnWin: [0.25, 0.6]
   draw: [0, 0.1]
-  leadChanges: [2, 6]
+  leadChanges: [3, 6]
+  heldLead: [0, 0.6]
   contenders: [1.5, 3]
 
 # Each player is dealt one hidden commission (a suit: physically a Two) and, separately, one
