@@ -4,7 +4,7 @@
  * the lace between neighbours. `fill` runs the passes (pack.ts) and draws the result.
  */
 import { hash, seeded } from '../kit/rng';
-import { sdf, ShapeIndex, type Pt, type Shape, type Sym } from './field';
+import { bounds, sdf, ShapeIndex, type Pt, type Shape, type Sym } from './field';
 import { evenness, fillPasses, type Disc, type Evenness } from './pack';
 import type { Style } from './styles';
 
@@ -136,7 +136,12 @@ export interface FillResult { marks: Mark[]; discs: Disc[]; stats: Evenness }
 export function fill(o: { region: Shape; avoid: Shape[]; zones: Shape[]; sym: Sym; style: Style; seed: number; k: number; centre: Pt; stats?: boolean }): FillResult {
   const s = o.style, k = o.k;
   const rMax = s.packMax * k, rMin = Math.min(rMax, s.packMin * k), gap = s.packGap * k;
-  const discs = fillPasses({ region: o.region, avoid: o.avoid, zones: o.zones, sym: o.sym, rMax, rMin, gap, tries: Math.round(s.packTries), jitter: s.packJitter, snapTol: s.snap * rMax, refill: s.refill, stipple: s.stipple, seed: o.seed });
+  const t = s.fade > 0.02 ? fadeField(o.region, o.centre, s.fadeFrom) : null;
+  const extra = rMax * 1.5 * s.fade;
+  const discs = fillPasses({
+    region: o.region, avoid: o.avoid, zones: o.zones, sym: o.sym, rMax, rMin, gap, tries: Math.round(s.packTries), jitter: s.packJitter, snapTol: s.snap * rMax, refill: s.refill, stipple: s.stipple, seed: o.seed,
+    ...(t ? { gapAt: (p: Pt) => extra * Math.pow(t(p), 1.3), gapExtraMax: extra, rMaxAt: (p: Pt) => rMax * (1 - 0.45 * s.fade * t(p)) } : {}),
+  });
   const marks: Mark[] = [];
   const W = s.weight * k;
   for (const d of discs) {
@@ -147,6 +152,25 @@ export function fill(o: { region: Shape; avoid: Shape[]; zones: Shape[]; sym: Sy
   }
   if (s.links > 0.02) marks.push(...links(discs.filter((d) => d.pass < 2), o, gap, rMax, W));
   return { marks, discs, stats: o.stats ? evenness(o.region, [...o.avoid, ...o.zones], discs) : { n: discs.filter((d) => d.pass < 2).length, coverage: NaN, meanGap: NaN, p95Gap: NaN, maxGap: NaN } };
+}
+
+/** where a fill thins: 0 where it is densest, 1 where it is sparest — by distance from the
+ *  centre (outer: dense far out; inner: dense near) or by depth inside the region (edge: dense
+ *  along every edge; deep: dense in the middle of it) */
+export function fadeField(region: Shape, centre: Pt, from: string): (p: Pt) => number {
+  const b = bounds(region);
+  let dMin = Infinity, dMax = 0, depthMax = 0;
+  for (let i = 0; i <= 40; i++) for (let j = 0; j <= 40; j++) {
+    const p: Pt = [b[0] + ((b[2] - b[0]) * i) / 40, b[1] + ((b[3] - b[1]) * j) / 40];
+    const depth = -sdf(region, p);
+    if (depth <= 0) continue;
+    const d = Math.sqrt(sq(p[0] - centre[0]) + sq(p[1] - centre[1]));
+    dMin = Math.min(dMin, d); dMax = Math.max(dMax, d); depthMax = Math.max(depthMax, depth);
+  }
+  const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+  const u = (p: Pt) => clamp01((Math.sqrt(sq(p[0] - centre[0]) + sq(p[1] - centre[1])) - dMin) / Math.max(1e-6, dMax - dMin));
+  const v = (p: Pt) => clamp01(-sdf(region, p) / Math.max(1e-6, depthMax));
+  return from === 'inner' ? u : from === 'edge' ? v : from === 'deep' ? (p) => 1 - v(p) : (p) => 1 - u(p);
 }
 
 /** lace: a curved hairline between near neighbours, where it crosses nothing */

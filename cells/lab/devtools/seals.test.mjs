@@ -3,7 +3,7 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(`../client/${f}`, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
-const St = await load('seals/structure.ts'), S = await load('seals/seal.ts'), T = await load('seals/styles.ts'), D = await load('markovs/deck.ts'), F = await load('seals/field.ts'), P = await load('seals/pack.ts'), H = await load('seals/shapes.ts');
+const O = await load('seals/ornament.ts'), St = await load('seals/structure.ts'), S = await load('seals/seal.ts'), T = await load('seals/styles.ts'), D = await load('markovs/deck.ts'), F = await load('seals/field.ts'), P = await load('seals/pack.ts'), H = await load('seals/shapes.ts');
 
 // every junction of every suit, a few seeds: no NaN, the same twice
 for (let suit = 0; suit < 4; suit++) for (let rank = 1; rank <= 10; rank++) for (const seed of [1, 4096]) {
@@ -14,13 +14,18 @@ for (let suit = 0; suit < 4; suit++) for (let rank = 1; rank <= 10; rank++) for 
   // the junction: one shaft per distinct exit, a roundel per face numbered 1–6, a loop iff stays
   const p = S.sample(T.SUIT_STYLES[suit], seed);
   const j = S.junction(p, faces).marks;
-  const nums = j.filter((m) => m.k === 'text').map((m) => Number(m.text)).sort();
-  assert.deepEqual(nums, [1, 2, 3, 4, 5, 6], 'six numbered faces');
-  const heads = j.filter((m) => m.k === 'path' && m.fill === 'ink').length;
+  const expand = (t) => t.split(',').flatMap((x) => { const [a, b] = x.split('–').map(Number); return b ? Array.from({ length: b - a + 1 }, (_, i) => a + i) : [a]; });
+  const nums = j.filter((m) => m.k === 'text').flatMap((m) => expand(m.text)).sort((a, b) => a - b);
+  assert.deepEqual(nums, [1, 2, 3, 4, 5, 6], 'all six faces labelled, once');
+  const groups = new Set(faces).size;
+  assert.equal(j.filter((m) => m.k === 'text').length, groups, 'one label per direction');
+  const jUngrouped = S.junction({ ...p, faceGroups: false }, faces).marks;
+  assert.equal(jUngrouped.filter((m) => m.k === 'text').length, 6, 'ungrouped: a roundel per face');
+  const heads = jUngrouped.filter((m) => m.k === 'path' && m.fill === 'ink').length;
   const exits = new Set(faces.filter((d) => d >= 0)).size, stays = faces.includes(-1) ? 1 : 0;
   assert.equal(heads, exits + stays, 'a head per exit, one for the loop');
   // roundels stay inside the rim, and none overlaps another
-  const rs = j.filter((m) => m.k === 'circle' && m.fill === 'paper' && m.r > 2);
+  const rs = jUngrouped.filter((m) => m.k === 'circle' && m.fill === 'paper' && m.r > 2);
   for (const r of rs) assert.ok(Math.hypot(r.x, r.y) + r.r < S.R, `roundel inside the rim ${suit}/${rank}`);
   const faceRs = rs.filter((r) => Math.hypot(r.x, r.y) > 1);
   for (let i = 0; i < faceRs.length; i++) for (let k = i + 1; k < faceRs.length; k++) {
@@ -53,7 +58,7 @@ for (let suit = 0; suit < 4; suit++) for (const rank of [3, 5, 6]) {
 // the shapes: every kind fills, keeps its label clear
 for (const kind of H.SHAPE_KINDS) {
   const t = H.shapeTile({ kind, style: T.SUIT_STYLES[1], seed: 2, label: 'Markovs' });
-  assert.ok(t.fill.discs.length > 10 && !/NaN/.test(t.svg), `${kind} fills`);
+  assert.ok(t.fill.discs.length > 4 && !/NaN/.test(t.svg), `${kind} fills (${t.fill.discs.length})`);
   assert.ok(/clip-path/.test(t.svg) && t.svg.length > 20000, `${kind} is constructed`);
 }
 // the evenness dial: largest-first fills more evenly than random sequential addition
@@ -69,6 +74,15 @@ for (const kind of H.SHAPE_KINDS) {
   const lines = St.isolines(St.sampleGridFor({ k: 'circle', c: [0, 0], r: 10 }, 0.25), -3);
   assert.equal(lines.length, 1, 'one closed line');
   for (const p of lines[0]) assert.ok(Math.abs(Math.hypot(p[0], p[1]) - 7) < 0.05, 'at radius 7');
+}
+// the fade: a corner fill is denser toward the card's corner than toward its centre
+{
+  const region = { k: 'box', c: [0, 0], hw: 50, hh: 50 };
+  const o = { region, avoid: [], zones: [], sym: { kind: 'd2', c: [0, 0] }, centre: [0, 0], k: 1, seed: 4, stats: false };
+  const st = { ...T.SUIT_STYLES[2], stipple: 0, links: 0 };
+  const count = (r, inner) => r.discs.filter((d) => (Math.max(Math.abs(d.c[0]), Math.abs(d.c[1])) < 25) === inner).length;
+  const even = O.fill({ ...o, style: { ...st, fade: 0 } }), faded = O.fill({ ...o, style: { ...st, fade: 1, fadeFrom: 'outer' } });
+  assert.ok(count(faded, true) / count(faded, false) < count(even, true) / count(even, false), 'thinner toward the centre');
 }
 // sdf: a frame is inside between its boxes, outside in the middle
 {

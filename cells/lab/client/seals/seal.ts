@@ -251,6 +251,20 @@ export function junction(p: Style, faces: number[]): { marks: Mark[]; zones: Sha
   faces.forEach((d, i) => by.set(d, [...(by.get(d) ?? []), i + 1]));
   const exitsTo = [0, 1, 2, 3].filter((d) => by.has(d));
   const path = (d: string, w: number, fill: Fill = 'none') => out.push({ k: 'path', d, w, fill, layer: 'junction' });
+  /** a group of faces as a label: "4–6", or "1,3" when they don't run on */
+  const groupText = (fs: number[]) => (fs.length > 1 && fs.every((x, i) => !i || x === fs[i - 1] + 1) ? `${fs[0]}–${fs[fs.length - 1]}` : fs.join(','));
+  /** a label in a roundel, or a pill as wide as its words */
+  const pill = (c: Pt, r: number, label: string) => {
+    const size = r * 1.25;
+    const hw = Math.max(r, textWidth(label, size) / 2 + r * 0.42), hh = r;
+    zones.push({ k: 'box', c, hw, hh, rx: hh });
+    const stadium = (w: number, h: number) => w <= h + 1e-6
+      ? `M${f(c[0] - h)} ${f(c[1])}a${f(h)} ${f(h)} 0 1 0 ${f(2 * h)} 0a${f(h)} ${f(h)} 0 1 0 ${f(-2 * h)} 0Z`
+      : `M${f(c[0] - w + h)} ${f(c[1] - h)}H${f(c[0] + w - h)}A${f(h)} ${f(h)} 0 0 1 ${f(c[0] + w - h)} ${f(c[1] + h)}H${f(c[0] - w + h)}A${f(h)} ${f(h)} 0 0 1 ${f(c[0] - w + h)} ${f(c[1] - h)}Z`;
+    out.push({ k: 'path', d: stadium(hw, hh), w: 0.8 * J, fill: 'paper', layer: 'junction' });
+    out.push({ k: 'path', d: stadium(hw - hh * 0.2, hh * 0.8), w: 0.28 * J, fill: 'none', layer: 'junction' });
+    out.push({ k: 'text', x: f(c[0]), y: f(c[1] + size * 0.36), size: f(size), text: label, layer: 'junction' });
+  };
   /** numbers onto places so they read as print does: left to right, or top to bottom */
   const inOrder = (ps: Pt[]): Pt[] => {
     const xs = ps.map((q) => q[0]), ys = ps.map((q) => q[1]);
@@ -290,8 +304,8 @@ export function junction(p: Style, faces: number[]): { marks: Mark[]; zones: Sha
     if (free.length) {
       phi = 90 * free.reduce((best, d) => (exitsTo.reduce((s, e) => s + dist(d * 90, e * 90), 0) > exitsTo.reduce((s, e) => s + dist(best * 90, e * 90), 0) ? d : best), free[0]);
       // (big enough that its faces spread over no more than 130° of it)
-      small = stays.length >= 4 ? 0.88 : 1;
-      rho = Math.max(9.5, ((stays.length - 1) * 2 * rr * small * 1.12) / rad(130));
+      small = stays.length >= 4 && !p.faceGroups ? 0.88 : 1;
+      rho = p.faceGroups ? 9.5 : Math.max(9.5, ((stays.length - 1) * 2 * rr * small * 1.12) / rad(130));
     } else {
       // (four exits: the loop sits on the diagonal between the two thinnest)
       const weight = (a: number) => (by.get(Math.floor(a / 90))!.length + by.get((Math.floor(a / 90) + 1) % 4)!.length);
@@ -314,11 +328,15 @@ export function junction(p: Style, faces: number[]): { marks: Mark[]; zones: Sha
     zones.push({ k: 'stroke', c: C, r: rho, w: 0.5 * J });
     head(P2, t, s);
     const r = rr * small, dpsi = ((2 * r * 1.12) / rho) * (180 / Math.PI);
-    const at = inOrder(stays.map((_, i) => add(C, pol(rho, phi + (i - (stays.length - 1) / 2) * dpsi))));
-    stays.forEach((n, i) => roundel(at[i], r, n));
+    if (p.faceGroups) pill(add(C, pol(rho, phi)), r, groupText(stays));
+    else {
+      const at = inOrder(stays.map((_, i) => add(C, pol(rho, phi + (i - (stays.length - 1) / 2) * dpsi))));
+      stays.forEach((n, i) => roundel(at[i], r, n));
+    }
   }
   for (const d of exitsTo) {
     const fs = by.get(d)!, dpsi = ((2 * rr * 1.12) / p.faceR) * (180 / Math.PI);
+    if (p.faceGroups) { pill(pol(p.faceR, d * 90), rr, groupText(fs)); continue; }
     const at = inOrder(fs.map((_, i) => pol(p.faceR, d * 90 + (i - (fs.length - 1) / 2) * dpsi)));
     fs.forEach((n, i) => roundel(at[i], rr, n));
   }

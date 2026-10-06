@@ -45,6 +45,11 @@ export interface PackOpts {
   symmetricScene?: boolean;
   pass?: number;
   idBase?: number;
+  /** extra spacing at a point (a density gradient), and its largest value */
+  gapAt?: (p: Pt) => number;
+  gapExtraMax?: number;
+  /** the largest disc at a point, if less than rMax */
+  rMaxAt?: (p: Pt) => number;
   maxOrbits?: number;
 }
 
@@ -53,7 +58,7 @@ export function pack(o: PackOpts): Disc[] {
   const r = seeded(hash(o.seed, 0x9ac4, o.pass ?? 0));
   const discs: Disc[] = [...(o.existing ?? [])];
   const big = discs.reduce((m, d) => Math.max(m, d.r), o.rMax);
-  const cell = big + o.rMax + o.gap + 1e-6;
+  const cell = big + o.rMax + o.gap + (o.gapExtraMax ?? 0) + 1e-6;
   const grid = new Map<number, number[]>();
   const key = (x: number, y: number) => Math.floor(x / cell) * 92821 + Math.floor(y / cell);
   const insert = (i: number) => { const k = key(discs[i].c[0], discs[i].c[1]); (grid.get(k) ?? grid.set(k, []).get(k)!).push(i); };
@@ -62,14 +67,16 @@ export function pack(o: PackOpts): Disc[] {
   const avoid = new ShapeIndex(o.avoid, o.rMax + o.gap);
   /** the radius a disc centred at p could have */
   const free = (p: Pt): number => {
-    let f = Math.min(o.rMax, -sdf(o.region, p));
+    let f = Math.min(o.rMaxAt ? Math.max(o.rMin, Math.min(o.rMax, o.rMaxAt(p))) : o.rMax, -sdf(o.region, p));
     if (f < o.rMin) return f;
+    // (the fade spaces discs from each other, not from the lines)
     f = Math.min(f, avoid.dist(p) - o.gap);
+    const gap = o.gap + (o.gapAt ? o.gapAt(p) : 0);
     if (f < o.rMin) return f;
     const ix = Math.floor(p[0] / cell), iy = Math.floor(p[1] / cell);
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const i of grid.get((ix + dx) * 92821 + iy + dy) ?? []) {
       const d = discs[i];
-      f = Math.min(f, Math.sqrt(sq(p[0] - d.c[0]) + sq(p[1] - d.c[1])) - d.r - o.gap);
+      f = Math.min(f, Math.sqrt(sq(p[0] - d.c[0]) + sq(p[1] - d.c[1])) - d.r - gap);
       if (f < o.rMin) return f;
     }
     return f;
@@ -130,15 +137,18 @@ export interface FillOpts {
   /** 0 none … 1 dense: tiny dots in what is left */
   stipple: number;
   seed: number;
+  gapAt?: (p: Pt) => number;
+  gapExtraMax?: number;
+  rMaxAt?: (p: Pt) => number;
 }
 /** the passes: symmetric, cleared of the zones, refilled, stippled */
 export function fillPasses(o: FillOpts): Disc[] {
   let discs = pack({ ...o, existing: [], pass: 0 });
   discs = clear(discs, o.zones, o.gap, o.rMin);
-  if (o.refill && o.zones.length) discs = pack({ ...o, avoid: [...o.avoid, ...o.zones], sym: { kind: 'none' }, rMax: Math.max(o.rMin, o.rMax * 0.6), existing: discs, pass: 1 });
+  if (o.refill && o.zones.length) discs = pack({ ...o, avoid: [...o.avoid, ...o.zones], sym: { kind: 'none' }, rMax: Math.max(o.rMin, o.rMax * 0.6), rMaxAt: undefined, existing: discs, pass: 1 });
   if (o.stipple > 0.02) {
     const s = Math.max(0.12, o.rMin * 0.28);
-    discs = pack({ ...o, avoid: [...o.avoid, ...o.zones], sym: { kind: 'none' }, rMax: s, rMin: s, jitter: 0, tries: 1, gap: s * (2 + (1 - o.stipple) * 9), existing: discs, pass: 2 });
+    discs = pack({ ...o, avoid: [...o.avoid, ...o.zones], sym: { kind: 'none' }, rMax: s, rMin: s, rMaxAt: undefined, jitter: 0, tries: 1, gap: s * (2 + (1 - o.stipple) * 9), existing: discs, pass: 2 });
   }
   return discs;
 }

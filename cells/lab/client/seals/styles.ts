@@ -16,6 +16,7 @@ export type Band = 'none' | 'scale' | 'rays';
 export type Where = 'axes' | 'diagonals' | 'both';
 export type Orient = 'radial' | 'tangent' | 'up' | 'free';
 export type Border = 'none' | 'frame' | 'corners' | 'both';
+export type Fade = 'outer' | 'inner' | 'edge' | 'deep';
 export type Arrow = 'barb' | 'dart' | 'open' | 'fleur';
 
 export interface Style {
@@ -110,6 +111,10 @@ export interface Style {
   snap: number;
   /** tiny dots in what is left: 0 none … 1 dense */
   stipple: number;
+  /** the fill thins out (wider spacing, smaller ornament) away from where it is densest: the
+   *  outer side (rims, a card's corners), the inner, every edge, or the deepest part; 0 even */
+  fade: number;
+  fadeFrom: Fade;
   /** the vocabulary's weights */
   oDot: number;
   oSparkle: number;
@@ -143,6 +148,8 @@ export interface Style {
    *  with a lozenge behind; and their size */
   arrow: Arrow;
   arrowSize: number;
+  /** each direction's faces as one label ("4–6"), not a roundel apiece */
+  faceGroups: boolean;
   roundelR: number;
   /** where the face roundels sit, from the centre */
   faceR: number;
@@ -158,9 +165,9 @@ const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | '
   petals: 0, petalR: 24, petalOffset: 0.85, lenses: 2, lensR: 40, lensOffset: 0.72,
   motifR: 29, motifSize: 3.4, motifRoundel: false, motifFill: false,
   crescents: 1, crescentR: 19, dots: 0.3, hubR: 11.5,
-  packMax: 5, packMin: 0.55, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, borderW: 4.6, cornerR: 13, stipple: 0.25,
+  packMax: 5, packMin: 0.55, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, fade: 0.3, fadeFrom: 'outer', borderW: 4.6, cornerR: 13, stipple: 0.25,
   oDot: 0.35, oSparkle: 0.5, oMotif: 0.35, oRosette: 0.3, oRoundel: 0.1, oScroll: 0.9, oStar: 0.1, oEye: 0.25, oCrescent: 0.1, orient: 'radial', links: 0.5, linkBend: 0.6, border: 'corners',
-  jWeight: 1.2, arrow: 'barb', arrowSize: 1, roundelR: 5.2, faceR: 28.5, variance: 0.5,
+  jWeight: 1.2, arrow: 'barb', arrowSize: 1, faceGroups: true, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'motifAt'> = {
   paper: '#f7f0e3', weight: 0.5, faint: 0.9, accent: 0.2,
@@ -170,9 +177,9 @@ const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'm
   petals: 4, petalR: 16, petalOffset: 1.1, lenses: 0, lensR: 40, lensOffset: 0.72,
   motifR: 26, motifSize: 3.2, motifRoundel: true, motifFill: false,
   crescents: 0, crescentR: 19, dots: 0.4, hubR: 12,
-  packMax: 5.5, packMin: 0.6, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, borderW: 4.6, cornerR: 13, stipple: 0.15,
+  packMax: 5.5, packMin: 0.6, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, fade: 0.3, fadeFrom: 'outer', borderW: 4.6, cornerR: 13, stipple: 0.15,
   oDot: 0.5, oSparkle: 0.3, oMotif: 0.5, oRosette: 0.6, oRoundel: 0.7, oScroll: 0, oStar: 0.35, oEye: 0.1, oCrescent: 0, orient: 'up', links: 0.2, linkBend: 0.2, border: 'frame',
-  jWeight: 1.2, arrow: 'barb', arrowSize: 1, roundelR: 5.2, faceR: 28.5, variance: 0.5,
+  jWeight: 1.2, arrow: 'barb', arrowSize: 1, faceGroups: true, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 
 /** by suit: hearts, diamonds, clubs, spades (the game's order) */
@@ -219,12 +226,12 @@ export const SCHEMA: Control[] = [
   n('dots', 'spoke beads', 'Ornament', 0, 1, 0.05, true), n('hubR', 'hub radius', 'Ornament', 7, 16, 0.25),
   n('packMax', 'largest', 'Fill', 1.5, 12, 0.25, true), n('packMin', 'smallest', 'Fill', 0.3, 4, 0.05, true), n('packGap', 'gap', 'Fill', 0, 3, 0.05, true),
   n('packEdge', 'off the lines', 'Fill', 0, 3, 0.05), n('packTries', 'evenness (tries)', 'Fill', 1, 60, 1), n('packJitter', 'size variety', 'Fill', 0, 0.9, 0.05, true),
-  n('snap', 'snap to mirrors', 'Fill', 0, 1, 0.05), n('stipple', 'stipple', 'Fill', 0, 1, 0.05, true),
+  n('snap', 'snap to mirrors', 'Fill', 0, 1, 0.05), n('fade', 'fade', 'Fill', 0, 1, 0.05, true), e('fadeFrom', 'dense at', 'Fill', ['outer', 'inner', 'edge', 'deep']), n('stipple', 'stipple', 'Fill', 0, 1, 0.05, true),
   n('oDot', 'dots', 'Vocabulary', 0, 1, 0.05), n('oSparkle', 'sparkles', 'Vocabulary', 0, 1, 0.05), n('oMotif', 'suit motif', 'Vocabulary', 0, 1, 0.05),
   n('oRosette', 'rosettes', 'Vocabulary', 0, 1, 0.05), n('oRoundel', 'roundels', 'Vocabulary', 0, 1, 0.05), n('oScroll', 'scrolls', 'Vocabulary', 0, 1, 0.05),
   n('oStar', 'star polygons', 'Vocabulary', 0, 1, 0.05), n('oEye', 'eyes', 'Vocabulary', 0, 1, 0.05), n('oCrescent', 'crescents', 'Vocabulary', 0, 1, 0.05),
   e('orient', 'orientation', 'Vocabulary', ['radial', 'tangent', 'up', 'free']), n('links', 'lace', 'Vocabulary', 0, 1, 0.05, true), n('linkBend', 'lace bow', 'Vocabulary', 0, 1, 0.05),
   n('medal', 'medallions', 'Zones', 0, 1.5, 0.05, true), n('zoneMargin', 'zone margin', 'Zones', 0, 5, 0.1), b('refill', 'refill round zones', 'Zones'),
   e('border', 'card border', 'Zones', ['none', 'frame', 'corners', 'both']), n('borderW', 'frame width (mm)', 'Zones', 2.5, 8, 0.1), n('cornerR', 'corner reach (mm)', 'Zones', 6, 22, 0.5),
-  n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), e('arrow', 'arrow heads', 'Junction', ['barb', 'dart', 'open', 'fleur']), n('arrowSize', 'arrow size', 'Junction', 0.5, 1.6, 0.05), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
+  n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), e('arrow', 'arrow heads', 'Junction', ['barb', 'dart', 'open', 'fleur']), n('arrowSize', 'arrow size', 'Junction', 0.5, 1.6, 0.05), b('faceGroups', 'group faces (4–6)', 'Junction'), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
 ];

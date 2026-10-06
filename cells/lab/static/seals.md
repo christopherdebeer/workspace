@@ -9,10 +9,11 @@ card renderer unchanged.
 Every junction card is a die table: six faces, each an exit (north, east, south, west) or a
 stay. The seal draws exactly that, bold, over a faint engraved ground:
 
-- **an exit** is a shaft from the hub out past the rim, with a barbed head; its faces are
-  numbered roundels across the shaft;
+- **an exit** is a shaft from the hub out past the rim, with a barbed head; its faces are one
+  label on the shaft, grouped as print does ("1–2", or "3" in a roundel; **group faces** off
+  gives a roundel per face, across the shaft);
 - **the stays** are a closed loop hanging off the hub, on the side furthest from the exits,
-  with an arrow back into the hub and the stay faces on the loop. The loop never reaches the
+  with an arrow back into the hub and the stay faces ("4–6") on the loop. The loop never reaches the
   rim, so a stay can't be read as an exit (the old dials' stay curl could);
 - every head (barbed, a slim dart, an open chevron, or barbed with a lozenge behind: **arrow
   heads**, with **arrow size**) is aimed along its line; on the loop it is aimed from a head's
@@ -42,6 +43,13 @@ rosettes, roundels, scrolls, star polygons, eyes, crescents), chosen by the suit
 **Evenness (tries)** is the dial: at 1 the discs go in at random and leave clumps and holes; at
 30 or more the largest space is always filled first, and the fill comes out even. Optional lace
 links neighbours with curved hairlines, and a stipple pass dots what is left.
+
+**Fade** makes a fill thin out: toward its sparse side the spacing between discs widens and
+the largest disc shrinks, so the fill stays evenly spaced but sparser, rather than losing discs at
+random. **Dense at** picks the dense side: *outer* (far from the centre: a seal's rim, a card's
+corners), *inner*, *edge* (along every edge of the region) or *deep* (its middle). The spacing
+only widens between discs, never against the construction's lines, so narrow bands keep their
+fill.
 
 The fill repeats under the seal's symmetry: a fourfold seal fills one sixteenth and turns and
 mirrors it. A disc close to a mirror line snaps onto it, so the axes carry ornament instead of
