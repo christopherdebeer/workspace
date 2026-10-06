@@ -168,6 +168,15 @@ Paired on sixty bot games: movement turns 8.7 → 13.0 (±1.1), lead changes 2.6
 halfway favourite winning 73% → 48% (±8), draws 2% → 7% (±3); on the twelve judged games, one
 over in two rounds instead of eight. Train +0.026, test +0.021.
 
+Round 6 tested the reviewer's hypothesis that unrestricted covering makes preparation
+disposable: the card under the counter may never be covered or swapped. Measured on sixty bot
+games against the v4.2 head: covers of the counter's card 45% → 0 by construction; race lays the
+counter later reaches 35% → 39% (±2); games decided by someone else's roll 37% → 62% (±9); Jack
+wins, draws and length unchanged. The judged games fell 0.04 and the judge's players noticed
+fewer threats (0.85 → 0.30 of the engine's). So preparation pays a little more, but the roller
+loses the one answer they had, and most games end on someone else's turn. Reverted; the
+measures are the finding.
+
 The questionnaire (h18–h19): on every second judged decision the acting player is asked, after
 choosing and before the move resolves, what they were trying to do, whether anyone is close to
 winning (checked against the engine's own forecast), how much better the move was than the next
