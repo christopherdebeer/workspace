@@ -90,6 +90,15 @@ for (const kind of H.SHAPE_KINDS) {
   assert.ok(F.sdf(frame, [8, 0]) < 0 && F.sdf(frame, [0, 0]) > 0 && F.sdf(frame, [12, 0]) > 0);
   assert.equal(F.copies({ kind: 'rot', c: [0, 0], fold: 4 }, [0, -5], 0).length, 4, 'a point on a mirror is kept once per turn');
 }
+// the card's number: pips round the orbit, a star of its points, its own seed
+{
+  const st = { ...T.SUIT_STYLES[2], variance: 0 };
+  const pips = (rank) => S.draw(st, null, 5, { rank }).marks.filter((m) => m.k === 'circle' && m.r === 0.82 && m.fill === 'ink').length;
+  for (const rank of [1, 4, 7, 10]) assert.equal(pips(rank), rank, `${rank} pips`);
+  const a = S.card({ style: st, seed: 5, faces: D.facesOf({ suit: 2, rank: 6 }), title: 't', id: 'r', rank: 6 }).svg;
+  const b = S.card({ style: st, seed: 5, faces: D.facesOf({ suit: 2, rank: 6 }), title: 't', id: 'r', rank: 7 }).svg;
+  assert.notEqual(a, b, 'the number changes the seal');
+}
 // seeds vary the seal; a variance of 0 pins the numbers
 const st = T.SUIT_STYLES[2];
 assert.notEqual(S.sealCard({ style: st, seed: 1, faces: null, title: '', id: 'a' }), S.sealCard({ style: st, seed: 2, faces: null, title: '', id: 'a' }));

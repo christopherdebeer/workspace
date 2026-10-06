@@ -69,6 +69,11 @@ export interface Style {
   /** draw the lines inside the band (spokes, star, orbit, arcs, petals): off leaves the fill
    *  the whole interior */
   lines: boolean;
+  /** the card's number as pips round the inner orbit (an Ace one, a ten ten), as the game's
+   *  dials have it */
+  rankMarks: boolean;
+  /** the inner star takes the card's number of points (from 5 up; below, the suit's own star) */
+  rankStar: boolean;
   /** spokes from the hub to the band: 0, 4 (the axes) or 8 (and the diagonals) */
   spokes: number;
   // petals: circles round the hub, overlapping into lenses
@@ -164,7 +169,7 @@ const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | '
   paper: '#f7f0e3', weight: 0.5, faint: 0.9, accent: 0.2,
   fold: 4, rings: 3, ringGap: 1.5, beads: 0.6, beadR: 0.42, nodeOut: 0, nodeDots: 0, diagNodes: true,
   band: 'rays', bandDensity: 1.6, bandLen: 11, bandRough: 0.6, bandSpan: 0.7,
-  lines: true, star: 6, starSkip: 2, starR: 31, starRot: 0, starExtend: 0.35, star2R: 0, spokes: 4,
+  lines: true, rankMarks: true, rankStar: true, star: 6, starSkip: 2, starR: 31, starRot: 0, starExtend: 0.35, star2R: 0, spokes: 4,
   petals: 0, petalR: 24, petalOffset: 0.85, lenses: 2, lensR: 40, lensOffset: 0.72,
   motifR: 29, motifSize: 3.4, motifRoundel: false, motifFill: false,
   crescents: 1, crescentR: 19, dots: 0.3, hubR: 11.5,
@@ -176,7 +181,7 @@ const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'm
   paper: '#f7f0e3', weight: 0.5, faint: 0.9, accent: 0.2,
   fold: 4, rings: 2, ringGap: 1.6, beads: 0.85, beadR: 0.34, nodeOut: 4, nodeDots: 2, diagNodes: true,
   band: 'scale', bandDensity: 2, bandLen: 7, bandRough: 0.8, bandSpan: 0.85,
-  lines: true, star: 4, starSkip: 1, starR: 33, starRot: 45, starExtend: 0.8, star2R: 0, spokes: 8,
+  lines: true, rankMarks: true, rankStar: true, star: 4, starSkip: 1, starR: 33, starRot: 45, starExtend: 0.8, star2R: 0, spokes: 8,
   petals: 4, petalR: 16, petalOffset: 1.1, lenses: 0, lensR: 40, lensOffset: 0.72,
   motifR: 26, motifSize: 3.2, motifRoundel: true, motifFill: false,
   crescents: 0, crescentR: 19, dots: 0.4, hubR: 12,
@@ -219,7 +224,7 @@ export const SCHEMA: Control[] = [
   n('nodeOut', 'nodes out', 'Rim', 0, 8, 0.5), n('nodeDots', 'node dots', 'Rim', 0, 4, 1), b('diagNodes', 'diagonal nodes', 'Rim'),
   e('band', 'band', 'Band', ['none', 'scale', 'rays']), n('bandDensity', 'density', 'Band', 0.3, 2.5, 0.05, true), n('bandLen', 'length', 'Band', 2, 12, 0.5, true),
   n('bandRough', 'roughness', 'Band', 0, 1, 0.05, true), n('bandSpan', 'span', 'Band', 0.15, 1, 0.05, true),
-  b('lines', 'inner lines', 'Lattice'), e('star', 'star points', 'Lattice', [0, 4, 5, 6, 8, 12]), n('starSkip', 'star skip', 'Lattice', 1, 5, 1), n('starR', 'star radius', 'Lattice', 15, 40, 0.5, true),
+  b('lines', 'inner lines', 'Lattice'), b('rankMarks', 'number as pips', 'Lattice'), b('rankStar', 'star from number', 'Lattice'), e('star', 'star points', 'Lattice', [0, 4, 5, 6, 8, 12]), n('starSkip', 'star skip', 'Lattice', 1, 5, 1), n('starR', 'star radius', 'Lattice', 15, 40, 0.5, true),
   n('starRot', 'star turn', 'Lattice', 0, 90, 7.5), n('starExtend', 'edges run on', 'Lattice', 0, 1.5, 0.05, true), n('star2R', 'inner star', 'Lattice', 0, 0.95, 0.05, true),
   e('spokes', 'spokes', 'Lattice', [0, 4, 8]),
   e('petals', 'petals', 'Petals', [0, 3, 4, 6, 8]), n('petalR', 'petal radius', 'Petals', 6, 36, 0.5, true), n('petalOffset', 'petal offset', 'Petals', 0.3, 1.4, 0.05, true),

@@ -37,6 +37,14 @@ Each suit has a style: a set of hyperparameters, read off the reference seals.
 | Clubs | lattice, olive | the same lattice, ragged scales, trefoils in roundels on the diagonals |
 | Spades | filigree, navy | denser: four great arcs, more rings, spades on the axes, crescents on all four |
 
+## The card's number
+
+As on the game's dials, the card's number is in its seal: **number as pips** puts it round the
+inner orbit (an Ace one pip, a ten ten, from 45°), and **star from number** gives the inner
+star the card's points from five up (a seven a heptagram, a ten a decagram; below five the suit
+keeps its own star). And each card has its own seed (the page's seed mixed with the number), so
+the ten cards of a suit are ten seals of one family.
+
 ## Even filling
 
 A seal has a few lines (rings, the band, optionally a star, spokes, arcs), and then a **fill**:

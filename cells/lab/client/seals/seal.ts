@@ -74,7 +74,7 @@ export function sample(style: Style, seed: number): Style {
  *  in the space they leave — then the junction (`faces`: six die faces, each an exit 0 north …
  *  3 west, or -1 to stay; null for the bare seal). `show`: draw the faces (default: when given);
  *  `zones`: keep the fill clear of where they go (default: when given). */
-export function draw(p: Style, faces: number[] | null, seed: number, o: { show?: boolean; zones?: boolean; stats?: boolean } = {}): Seal {
+export function draw(p: Style, faces: number[] | null, seed: number, o: { show?: boolean; zones?: boolean; stats?: boolean; rank?: number } = {}): Seal {
   const out: Mark[] = [];
   /** the lines the fill keeps off */
   const avoid: Shape[] = [];
@@ -194,12 +194,23 @@ export function draw(p: Style, faces: number[] | null, seed: number, o: { show?:
       path(d, W * 0.6, { clip: true });
       for (const c of v) if (Math.hypot(...c) < clipR - 1.5) { circle(c, 1.25, W * 0.8, { fill: 'paper' }); avoid.push({ k: 'circle', c, r: 1.25 + edge }); }
     };
-    if (p.star >= 3) {
-      const skip = clamp(Math.round(p.starSkip), 1, Math.floor((p.star - 1) / 2));
-      starAt(p.star, skip, p.starR, p.starRot, p.starExtend);
-      if (p.star2R > 0.05) starAt(p.star, skip, p.starR * p.star2R, p.starRot + 180 / p.star, 0);
+    // (the card's number as the star's points, from five up: a seven a heptagram)
+    const byRank = p.rankStar && (o.rank ?? 0) >= 5;
+    const points = byRank ? o.rank! : p.star;
+    if (points >= 3) {
+      const skip = byRank ? Math.floor((points - 1) / 2) : clamp(Math.round(p.starSkip), 1, Math.floor((points - 1) / 2));
+      const rot = byRank ? 0 : p.starRot;
+      starAt(points, skip, p.starR, rot, p.starExtend);
+      if (p.star2R > 0.05) starAt(points, skip, p.starR * p.star2R, rot + 180 / points, 0);
     }
     const orbit = p.hubR + (clipR - p.hubR) * 0.45;
+    // the card's number, once more, as pips round the orbit (an Ace one, a ten ten), from 45°
+    if (p.rankMarks && o.rank && o.rank >= 1 && o.rank <= 10) for (let k = 0; k < o.rank; k++) {
+      const c = pol(orbit, 45 + (k * 360) / o.rank);
+      circle(c, 1.45, accentW(W, 0.9, p.accent), { fill: 'paper' });
+      circle(c, 0.82, 0, { fill: 'ink' });
+      avoid.push({ k: 'circle', c, r: 1.45 + edge });
+    }
     circle([0, 0], orbit, W * 0.45, { dash: '.9 1.3' });
     avoid.push({ k: 'stroke', c: [0, 0], r: orbit, w: W * 0.25 + edge });
     for (let i = 0; i < p.lenses; i++) { const c = pol(p.lensR * p.lensOffset, (p.lenses === 2 ? 90 : 0) + (i * 360) / p.lenses); circle(c, p.lensR, W * 0.6, { clip: true }); avoid.push({ k: 'stroke', c, r: p.lensR, w: W * 0.3 + edge }); }
@@ -416,10 +427,12 @@ export interface CardResult { svg: string; seal: Seal; border: FillResult | null
 /** the seal on a playing card (63 × 88 mm): its title, the seal, the faces in words, and the
  *  border filled from the same style — kept clear of the seal and of every line of text, each
  *  zone sized to its words */
-export function card(o: { style: Style; seed: number; faces: number[] | null; title: string; id: string; mode?: FacesMode; overlay?: boolean; stats?: boolean }): CardResult {
-  const s = sample(o.style, o.seed);
+export function card(o: { style: Style; seed: number; faces: number[] | null; title: string; id: string; mode?: FacesMode; overlay?: boolean; stats?: boolean; rank?: number }): CardResult {
+  // (each card of a suit its own seal: the seed takes the card's number)
+  const seed = o.rank ? hash(o.seed, 0x7a11, o.rank) : o.seed;
+  const s = sample(o.style, seed);
   const mode = o.mode ?? 'shown';
-  const seal = draw(s, o.faces, o.seed, { show: mode === 'shown', zones: mode !== 'hidden', stats: o.stats });
+  const seal = draw(s, o.faces, seed, { show: mode === 'shown', zones: mode !== 'hidden', stats: o.stats, rank: o.rank });
   const bordered = s.border !== 'none';
   const scale = bordered ? 0.43 : 0.47, cy = bordered ? 41.2 : 40.6;
   const fY = bordered ? 73.4 : 74.8, sY = bordered ? 78.4 : 80.4, tY = 10.2;
@@ -440,7 +453,7 @@ export function card(o: { style: Style; seed: number; faces: number[] | null; ti
     const zm = s.zoneMargin * k;
     const zones: Shape[] = [{ k: 'circle', c: [31.5, cy], r: reach + zm }, { k: 'grow', s: textZone(31.5, tY, o.title, 3.4, 0.55), by: zm }];
     if (words) zones.push({ k: 'grow', s: textZone(31.5, fY, line, 3.7), by: zm }, { k: 'grow', s: textZone(31.5, sY + 0.8, sum, 2.15, 0.3), by: zm });
-    const made = ornate({ region, zones, sym: { kind: 'd2', c: [31.5, 44] }, style: s, seed: hash(o.seed, 0xb0d), k, centre: [31.5, 44], stats: o.stats });
+    const made = ornate({ region, zones, sym: { kind: 'd2', c: [31.5, 44] }, style: s, seed: hash(seed, 0xb0d), k, centre: [31.5, 44], stats: o.stats });
     border = made.fill;
     const st = made.structure, cid = `${o.id}b`;
     const clipped = st.marks.filter((m) => 'clip' in m && m.clip).map((m) => markSvg(m, s)).join('');

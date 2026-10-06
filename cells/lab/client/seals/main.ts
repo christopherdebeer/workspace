@@ -56,7 +56,7 @@ let uid = 0;
 let lastStats: string[] = [];
 const fmtStats = (name: string, e: Evenness) => `${name}: ${e.n} discs · coverage ${Math.round(e.coverage * 100)}% · gap mean ${e.meanGap} · p95 ${e.p95Gap} · max ${e.maxGap}`;
 const card = (suit: number, rank: number, seed: number, label = '') => {
-  const c = drawCard({ stats: state.view === 'one', style: styleOf(suit), seed, faces: facesFor(suit, rank), title: titleFor(suit, rank), id: `k${uid++}`, mode: state.mode, overlay: state.overlay });
+  const c = drawCard({ stats: state.view === 'one', style: styleOf(suit), seed, rank: rank || undefined, faces: facesFor(suit, rank), title: titleFor(suit, rank), id: `k${uid++}`, mode: state.mode, overlay: state.overlay });
   lastStats = [fmtStats('seal', c.seal.stats), ...(c.border ? [fmtStats('border', c.border.stats)] : [])];
   return `<figure class="card">${c.svg}${label ? `<figcaption>${label}</figcaption>` : ''}</figure>`;
 };
@@ -152,7 +152,7 @@ function render() {
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 function download() {
-  const svg = drawCard({ style: styleOf(state.suit), seed: state.seed, faces: facesFor(state.suit, state.rank), title: titleFor(state.suit, state.rank), id: 'k', mode: state.mode }).svg;
+  const svg = drawCard({ style: styleOf(state.suit), seed: state.seed, rank: state.rank || undefined, faces: facesFor(state.suit, state.rank), title: titleFor(state.suit, state.rank), id: 'k', mode: state.mode }).svg;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
   a.download = `seal-${SUIT_STYLES[state.suit].name}-${state.rank || 'bare'}-${seedName(state.seed)}.svg`;
