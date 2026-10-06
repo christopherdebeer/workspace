@@ -1,6 +1,6 @@
 ---
 name: "Markovs Chains"
-version: "4.1"
+version: "4.2"
 players: 2-4
 win_condition: "The shared counter arrives at the King of your secret suit"
 max_turns: 90
@@ -31,12 +31,14 @@ mechanics:
     reveal_on_completion: true
 
   # The table: a 5×5 grid of card spaces, the Ace of spades in the centre with the one shared
-  # counter on it. The Kings are dealt and placed in an opening court; then, from the first
-  # turn, lay and move: the counter follows the die faces printed on the card it stands on.
+  # counter on it. The Kings are dealt and placed in an opening court, on the rim but never the
+  # middle of an edge; then, from the first turn, lay and move: the counter follows the die
+  # faces printed on the card it stands on.
   junction_chain:
     dynamic: true
     flexible_order: true
     king_mode: dealt
+    no_cardinals: true
     size: 5
     start: "2,2"
     start_card: "origin"
@@ -146,8 +148,10 @@ three cards each.
 
 ### The opening court
 
-In turn order, each player places their dealt King on an empty square of the outer ring, not
-beside the counter and not beside another King. Nothing else happens until every King is placed:
+In turn order, each player places their dealt King on an empty square of the outer ring: never
+the middle square of an edge, not beside the counter and not beside another King. (So every King
+is at least three steps from the centre; a corner is four.) With fewer than four players the
+undealt King stands one square clockwise of its edge's middle. Nothing else happens until every King is placed:
 no junction, no movement, no win. Placing a King costs nothing else. The player who places the
 last King takes the first full turn.
 
@@ -177,10 +181,11 @@ King.
 
 ## Engine (implemented)
 
-The `junction_chain` mechanic (cells/playtest/engine/mechanics/junction-chain.ts) owns the table, the counter, the opening court (`king_mode: dealt`), the turn of one landscape action and one movement in either order (`dynamic`, `flexible_order`), the court cards, the decoy rule and the draw at thirty moves; hidden_objectives holds the secret commissions and `counter_at` is read by the chain. The build-then-race game of v3.2 is the same mechanic with those three flags off; the lab's simulation harness (`cells/lab/devtools/markovs-sim.mjs`) plays that one.
+The `junction_chain` mechanic (cells/playtest/engine/mechanics/junction-chain.ts) owns the table, the counter, the opening court (`king_mode: dealt`, `no_cardinals`), the turn of one landscape action and one movement in either order (`dynamic`, `flexible_order`), the court cards, the decoy rule and the draw at thirty moves; hidden_objectives holds the secret commissions and `counter_at` is read by the chain. The build-then-race game of v3.2 is the same mechanic with those three flags off; the lab's simulation harness (`cells/lab/devtools/markovs-sim.mjs`) plays that one.
 
 ## Design notes for the judge
 
 - The decision is the lay: where, which card, which way up, and what it tells the others; and in the court, where you put a King that may not be yours.
+- The court keeps off the edge middles (v4.2) so that no King is a two-step chute from the centre: measured on sixty bot games, four more movement turns, a lead change more, and the halfway favourite winning half the time instead of three-quarters.
 - Hidden information is real: the commission is never shown until it wins.
 - The open question: with no build phase, is the table rich enough? The free screen reports how many squares are laid when the game ends and how many moves a game lasts.

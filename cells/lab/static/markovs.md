@@ -156,6 +156,24 @@ standard error, and the free `screen` plays hundreds of bot games through the sa
 reports the same measures with standard errors — the fine instrument, with the judge suite kept
 for health and critique.
 
+That instrument kept the first change the coarse one had rejected three times. v4.2 (round 5):
+the court keeps off the four edge middles, so no King is a two-step chute from the centre.
+Paired on sixty bot games: movement turns 8.7 → 13.0 (±1.1), lead changes 2.6 → 3.8 (±0.5), the
+halfway favourite winning 73% → 48% (±8), draws 2% → 7% (±3); on the twelve judged games, one
+over in two rounds instead of eight. Train +0.026, test +0.021.
+
+The questionnaire (h18–h19): on every second judged decision the acting player is asked, after
+choosing and before the move resolves, what they were trying to do, whether anyone is close to
+winning (checked against the engine's own forecast), how much better the move was than the next
+best, and how likely someone wins before their next turn; and about their last probed turn,
+whether the table went their way, whether the counter's movement was expected or surprising or
+confusing, how much of it was the cards rather than the die, and whether they changed their
+plan. The answers are `q_*` measures beside the engine's, so targets can band them and rounds
+report their deltas. The first version taught which questions discriminate: threat calls against
+the engine (v4.2 cut false alarms 69% → 38% and the urgency error 0.37 → 0.23) and the revised
+plan do; "several alternatives", "as I expected" and "earlier moves mattered" sat at a ceiling,
+so v2 asks those as scores with a concrete reference.
+
 ## The transition sweep
 
 `devtools/markovs-sweep.mjs` rewrites the suits' die faces along four axes and plays the poker
