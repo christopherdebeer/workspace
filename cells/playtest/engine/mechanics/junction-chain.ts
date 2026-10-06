@@ -52,6 +52,9 @@ export interface JunctionChainConfig {
   dynamic?: boolean;
   flexible_order?: boolean;
   protect_current?: boolean;
+  /** the card under the counter may never be covered or swapped (the lab's coverUnder: false): a
+   *  route entered is a commitment; protect_current is the weaker form, before movement only */
+  no_cover_under?: boolean;
   optional_move?: boolean;
   seed_cross?: boolean;
   king_mode?: 'fixed' | 'reserve' | 'deck' | 'dealt';
@@ -236,7 +239,7 @@ function canLay(ch: ChainState, c: JunctionChainConfig, k: string, card: ChainCa
   if (card.role === 'destination') return c.king_mode === 'deck' && canKing(ch, c, k, card.suit ?? '');
   if (card.role === 'reroute' || card.role === 'swap' || card.role === 'chaos') return false;
   const here = ch.tiles[k];
-  if (here) return !here.king && !(c.protect_current && !ch.moved && k === ch.counter) && (ch.phase === 'race' ? c.cover !== false : !hasEmpty(ch));
+  if (here) return !here.king && !(c.protect_current && !ch.moved && k === ch.counter) && !(c.no_cover_under && k === ch.counter) && (ch.phase === 'race' ? c.cover !== false : !hasEmpty(ch));
   if (card.role === 'wild') return true;
   if (c.rim !== false && (x === 0 || y === 0 || x === ch.size - 1 || y === ch.size - 1)) return true;
   return DIRS.some(([dx, dy]) => { const t = ch.tiles[key(x + dx, y + dy)]; return t && !t.king; });
@@ -351,6 +354,7 @@ export const junctionChainMechanic: MechanicHooks = {
       dynamic: { type: 'boolean', description: 'Build and move from turn one' },
       flexible_order: { type: 'boolean', description: 'One landscape action and one movement in either order' },
       protect_current: { type: 'boolean', description: 'Cannot cover or swap the occupied junction before movement' },
+      no_cover_under: { type: 'boolean', description: 'The card under the counter is never covered or swapped' },
       optional_move: { type: 'boolean', description: 'May skip movement, but never on consecutive player turns' },
       seed_cross: { type: 'boolean', description: 'Seed four actual deck junctions around the start before the first turn' },
       king_mode: { type: 'string', enum: ['fixed', 'reserve', 'deck', 'dealt'], description: 'Fixed setup, public placement reserve, or one King dealt to each player for a mandatory opening placement' },
@@ -465,6 +469,7 @@ export const junctionChainMechanic: MechanicHooks = {
     if (type === 'swap') {
       const a = action as unknown as Swap;
       if (c.protect_current && !ch.moved && (a.a === ch.counter || a.b === ch.counter)) return { valid: false, error: 'The occupied junction is protected until movement' };
+      if (c.no_cover_under && (a.a === ch.counter || a.b === ch.counter)) return { valid: false, error: 'The card under the counter may not be swapped' };
       if (!hand.some((h) => h.role === 'swap')) return { valid: false, error: 'You need a Queen to swap' };
       const ta = ch.tiles[a.a]; const tb = ch.tiles[a.b];
       if (!ta || !tb || ta.king || tb.king || a.a === a.b) return { valid: false, error: 'Swap two different junctions (not Kings)' };
@@ -699,7 +704,7 @@ export const junctionChainMechanic: MechanicHooks = {
         if (crowns.length) out.push({ action: crowns[0], examples: crowns, priority: 35, category: 'placement', description: 'Place a King from the public reserve on the rim, away from the counter' });
       }
       if (hand.some((h) => h.role === 'swap')) {
-        const near = Object.keys(ch.tiles).filter((k) => !ch.tiles[k].king && !(c.protect_current && !ch.moved && k === ch.counter)).sort((a, b) => dist(a, ch.counter) - dist(b, ch.counter));
+        const near = Object.keys(ch.tiles).filter((k) => !ch.tiles[k].king && !(c.protect_current && !ch.moved && k === ch.counter) && !(c.no_cover_under && k === ch.counter)).sort((a, b) => dist(a, ch.counter) - dist(b, ch.counter));
         const swaps: GameAction[] = [];
         for (let i = 0; i < near.length && swaps.length < 60; i++) for (let j = i + 1; j < near.length && swaps.length < 60; j++) if (dist(near[i], ch.counter) <= 1 || dist(near[j], ch.counter) <= 1) swaps.push({ type: 'swap', a: near[i], b: near[j] } as unknown as GameAction);
         if (swaps.length) out.push({ action: swaps[0], priority: 40, category: 'cards', description: 'Play a Queen: exchange two junctions on the table', required: { a: 'A junction "x,y"', b: 'Another' }, examples: swaps });
