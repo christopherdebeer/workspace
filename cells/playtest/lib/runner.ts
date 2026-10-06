@@ -91,7 +91,7 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h13'; // Chaos, like a die roll, must not expose a sampled future outcome.
+export const HARNESS_VERSION = 'h14'; // h13: chaos never simulated; h14: 'over in two rounds' is a finding.
 
 /** "cost: everyone learns you are X" when `after` exposes the mover's role (public reveal, e.g. the Temple). */
 function exposure(before: Record<string, any>, after: Record<string, any>, pid: string): string[] {
@@ -1143,6 +1143,7 @@ function critiqueOf(a: Record<string, { score?: number; probabilities?: Record<s
 }
 
 /** Engine- and balance-level findings from the computed record alone. */
+const LIMIT_END_RE = /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit|draw/i;
 export function sessionFindings(s: Session, m = metrics(s), c?: Classification): Finding[] {
   const out: Finding[] = [];
   const multi = multiActionTurns(s);
@@ -1157,6 +1158,9 @@ export function sessionFindings(s: Session, m = metrics(s), c?: Classification):
   // (an end in the first round is an engine fault — a win check firing too early — unless the
   // game can legally be won from the first turn: the junction chain's dynamic race can)
   if (m.finished && m.rounds <= 1) { const early = !!c?.enabled.includes('junction-chain'); out.push({ kind: early ? 'balance' : 'engine', severity: early ? 'warn' : 'error', subject: 'instant end', detail: `ended in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? 'no reason logged'} — ${early ? 'inspect whether legal early wins leave enough decisions' : 'a win check is firing too early'}` }); }
+  // (a game decided in its first two rounds gave nobody time to plan, read or recover; the
+  // score's length part saturates at three rounds, so this is said here where a climb can see it)
+  if (m.finished && m.rounds > 1 && m.rounds <= 2 && !LIMIT_END_RE.test(m.endReason ?? '')) out.push({ kind: 'balance', severity: 'warn', subject: 'over in two rounds', detail: `decided in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? ''}` });
   if (m.dominantAction && m.dominantAction[1] > 0.7 && m.steps > 10) out.push({ kind: 'balance', severity: 'warn', subject: `${m.dominantAction[0]} dominates`, detail: `${Math.round(m.dominantAction[1] * 100)}% of all moves` });
   if (m.forcedShare > 0.6 && m.steps > 10) out.push({ kind: 'balance', severity: 'info', subject: 'few real choices', detail: `${Math.round(m.forcedShare * 100)}% of turns had exactly one legal move` });
   for (const u of s.unsuitable) {
