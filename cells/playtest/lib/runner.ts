@@ -91,7 +91,8 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$|^re
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h21'; // h21: the greedy stand-in takes a free reveal whenever it can.
+export const HARNESS_VERSION = 'h22'; // h22: an unjudged judged run counts as incomplete.
+// h21: // h21: the greedy stand-in takes a free reveal whenever it can.
 // h20: // h20: a reveal's outcome is never previewed (it would name the face-down King).
 // h19: // h19: questionnaire v2 — margin and authorship as scores, 'went my way' against the named move, the urgency scale fixed.
 // h18: // h18: the questionnaire (probe): sampled turns answer intention/threat/alternatives/urgency and, later, achieved/outcome/authorship/revised, as q_* measures.

@@ -262,7 +262,9 @@ async function assemble(o: { game: string; def: { version: number; hash: string;
     suite: db.suiteHash(o.suite),
     scoreVersion: SCORE_VERSION,
     harness: HARNESS_VERSION,
-    incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline').length,
+    // (h22: a judged run that finished but came back without a judgement is a measurement failure,
+    //  not a bad game — it counts as incomplete, so the round is inconclusive rather than scored on it)
+    incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline' || (d.split !== 'bot' && d.stopped === 'finished' && !d.verdict)).length,
     definitionHealth: definitionHealth(o.cls),
     classificationFindings: o.cls.findings,
     train: { score: scoreSuite(train.map((d) => d.score), o.cls, suiteBalance(train).balance, suiteBalance(train).genre, tTrain?.score ?? null), balance: suiteBalance(train).balance, runs: train, critique: summarizeCritique(train), targets: tTrain },

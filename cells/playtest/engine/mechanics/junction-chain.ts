@@ -59,6 +59,11 @@ export interface JunctionChainConfig {
    *  before anything else, a player may turn any one King face up for free; the counter entering a
    *  face-down King turns it up and resolves as usual; the undealt Kings stand face down too */
   concealed?: boolean;
+  /** a Jack walks the counter along one of the exits printed on the card under it (your choice of
+   *  which), not in any direction: it steers what the table offers rather than overriding it */
+  jack_on_exits?: boolean;
+  /** a Jack may not walk the counter onto a King: it steers, the die (or a Joker) arrives */
+  jack_no_king?: boolean;
   optional_move?: boolean;
   seed_cross?: boolean;
   king_mode?: 'fixed' | 'reserve' | 'deck' | 'dealt';
@@ -370,6 +375,8 @@ export const junctionChainMechanic: MechanicHooks = {
       protect_current: { type: 'boolean', description: 'Cannot cover or swap the occupied junction before movement' },
       no_cover_under: { type: 'boolean', description: 'The card under the counter is never covered or swapped' },
       concealed: { type: 'boolean', description: 'Kings are placed face down; one free reveal a turn; entering a face-down King turns it up' },
+      jack_on_exits: { type: 'boolean', description: 'A Jack walks the counter along one of the exits printed on its card' },
+      jack_no_king: { type: 'boolean', description: 'A Jack may not walk the counter onto a King' },
       optional_move: { type: 'boolean', description: 'May skip movement, but never on consecutive player turns' },
       seed_cross: { type: 'boolean', description: 'Seed four actual deck junctions around the start before the first turn' },
       king_mode: { type: 'string', enum: ['fixed', 'reserve', 'deck', 'dealt'], description: 'Fixed setup, public placement reserve, or one King dealt to each player for a mandatory opening placement' },
@@ -507,6 +514,8 @@ export const junctionChainMechanic: MechanicHooks = {
       const d = DIR_NAMES.indexOf(a.dir);
       const n = d >= 0 ? neighbour(ch, ch.counter, d, c.wrap !== false) : null;
       if (!n || !ch.tiles[n]) return { valid: false, error: `No card ${a.dir} of the counter` };
+      if (c.jack_on_exits && !exitsOf(ch.tiles[ch.counter]).includes(d)) return { valid: false, error: `The card under the counter has no ${a.dir} exit` };
+      if (c.jack_no_king && ch.tiles[n]?.king) return { valid: false, error: 'A Jack may not walk the counter onto a King' };
       return { valid: true };
     }
     if (type === 'chaos') {
@@ -722,7 +731,7 @@ export const junctionChainMechanic: MechanicHooks = {
     if (ch.phase === 'race' && !ch.moved && (ch.laid || c.flexible_order)) {
       const step2: AvailableAction[] = [{ action: { type: 'roll' } as unknown as GameAction, priority: 50, category: 'dice', description: 'Roll the d6: the counter follows that face on the card it stands on' }];
       if (hand.some((h) => h.role === 'reroute')) {
-        const dirs = DIR_NAMES.filter((_, d) => { const n = neighbour(ch, ch.counter, d, c.wrap !== false); return n && ch.tiles[n]; });
+        const dirs = DIR_NAMES.filter((_, d) => { const n = neighbour(ch, ch.counter, d, c.wrap !== false); return n && ch.tiles[n] && (!c.jack_on_exits || exitsOf(ch.tiles[ch.counter]).includes(d)) && !(c.jack_no_king && ch.tiles[n].king); });
         if (dirs.length) step2.push({ action: { type: 'reroute', dir: dirs[0] } as unknown as GameAction, priority: 45, category: 'cards', description: 'Play a Jack: instead of the roll, walk the counter one space your way', required: { dir: 'north, east, south or west' }, examples: dirs.map((dir) => ({ type: 'reroute', dir }) as unknown as GameAction) });
       }
       if (hand.some((h) => h.role === 'chaos')) step2.push({ action: { type: 'chaos' } as unknown as GameAction, priority: 30, category: 'cards', description: 'Play a Joker: instead of the roll, the counter takes one of its exits at random' });
