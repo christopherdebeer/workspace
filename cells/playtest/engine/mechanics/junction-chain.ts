@@ -57,6 +57,10 @@ export interface JunctionChainConfig {
   build_to?: number;
   /** cards laid per build turn (default 1) */
   build_lays?: number;
+  /** the court keeps off the middle of each edge: a dealt King goes on any other rim square, so
+   *  every King is at least three steps from the centre (the neutral King shifts one square
+   *  clockwise from its edge middle) */
+  no_cardinals?: boolean;
   size?: number;
   start?: string;
   start_card?: string;
@@ -183,6 +187,7 @@ function canKing(ch: ChainState, c: JunctionChainConfig, k: string, suit: string
   // Dealt Kings open the game before any junctions exist, so they may occupy
   // any empty rim square. Reserve Kings retain the stricter adjacency rule.
   if (c.king_mode === 'dealt') {
+    if (c.no_cardinals && (x === (ch.size - 1) / 2 || y === (ch.size - 1) / 2)) return false;
     const adjacentKing = DIRS.some(([dx, dy]) => ch.tiles[key(x + dx, y + dy)]?.king);
     return !adjacentKing;
   }
@@ -291,6 +296,7 @@ export const junctionChainMechanic: MechanicHooks = {
       kings: { type: 'object', description: 'Destination spaces by suit, "x,y" each' },
       wrap: { type: 'boolean', description: 'An exit off the edge comes in on the far side' },
       rim: { type: 'boolean', description: 'A card may be laid anywhere on the outer ring' },
+      no_cardinals: { type: 'boolean', description: 'Dealt Kings keep off the middle of each edge' },
       cover: { type: 'boolean', description: 'In the race, a card may be laid on top of a junction' },
       hand: { type: 'number', description: 'Hand size, refilled after every turn (default 3)' },
       moves: { type: 'number', description: 'Movement turns (rolls, Jacks and Jokers) the race may last; reaching it with no arrival is a draw (default: no cap)' },
@@ -322,7 +328,11 @@ export const junctionChainMechanic: MechanicHooks = {
       // With fewer than four players, keep the remaining suit as a neutral destination on the rim.
       const neutralSuit = suits[ctx.playerIds.length];
       if (neutralSuit) {
-        const neutralAt = kings[neutralSuit];
+        let neutralAt = kings[neutralSuit];
+        if (neutralAt && c.no_cardinals) { // one square clockwise round the rim from the edge middle
+          const [nx, ny] = neutralAt.split(',').map(Number); const last = size - 1;
+          neutralAt = ny === 0 ? key(nx + 1, 0) : nx === last ? key(last, ny + 1) : ny === last ? key(nx - 1, last) : key(0, ny - 1);
+        }
         if (neutralAt && !tiles[neutralAt]) tiles[neutralAt] = { card: { name: `K${SUIT_GLYPH[neutralSuit]} NEUTRAL DESTINATION`, suit: neutralSuit, role: 'destination', faces: [-1, -1, -1, -1, -1, -1] }, turn: 0, king: neutralSuit };
       }
     }

@@ -13,7 +13,9 @@
  *   judged   .15  Jev: P("plays as designed") over the session record
  *   variety  .10  no single move type over half of all moves (linear to 0 at 100%)
  *   agency   .10  real choice per turn: min(mean legal moves / 4, 1) × share of unforced turns
- *   length   .10  lasted ≥ 3 rounds (a first-round win is a broken game, not a quick one)
+ *   pace     .10  rounds in the band 4–10: 1; shorter, rounds/4 (a two-round game .5, a
+ *                 first-round win .25); longer, easing to .5 by 20 rounds; a draw at a turn or
+ *                 move limit with nobody named the winner .25; never finished .5
  *   clean    .10  no error-level findings from the session (engine faults surfaced by play)
  * A suite: 0.75 × mean(run scores) + 0.15 × definition health + 0.10 × outcome balance,
  *   definition health = 1 / (1 + 0.25 × error-level classification findings),
@@ -46,8 +48,14 @@ import { deduction, type DeductionReport } from './deduction';
  *  Games without a hidden enemy keep the v3.1 run formula and outcome balance (.75/.15/.10). */
 /** v4.1: evidence excludes what the enemy gave away by its own move (v4's first deploy counted a
  *  self-reveal as evidence, which would have flattered v0.4 in the calibration ladder). */
-export const SCORE_VERSION = 'score/v4.1';
-export const WEIGHTS = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, length: 0.1, clean: 0.1 } as const;
+/** v4.2 (2026-10-06): `length` (≥ 3 rounds) becomes `pace`, a band. v4.1 could not see pace: a
+ *  Markovs Chains version that ended a third of its games in two rounds scored the same as one
+ *  that ran 3–11 rounds every game, because a two-round game still earned .667 of a .10 term and
+ *  a 30-move draw earned the full term. Now a two-round game earns .5, a draw at the limit .25,
+ *  and a game that drags past ten rounds eases off; the band 4–10 is where the quick games this
+ *  suite wants live. Same weight; the other terms are untouched. */
+export const SCORE_VERSION = 'score/v4.2';
+export const WEIGHTS = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, pace: 0.1, clean: 0.1 } as const;
 export const WEIGHTS_HIDDEN_ROLE = { ended: 0.15, critique: 0.2, judged: 0.1, clean: 0.1, deduction: 0.2, interaction: 0.15, tension: 0.1 } as const;
 
 export interface RunScore {
@@ -57,19 +65,22 @@ export interface RunScore {
 }
 
 const clamp = (x: number) => Math.max(0, Math.min(1, x));
+/** v4.2: rounds 4–10 earn 1; fewer earn rounds/4; more ease to .5 at 20 rounds and stay there */
+export const paceBand = (rounds: number) => (rounds < 4 ? clamp(rounds / 4) : rounds <= 10 ? 1 : Math.max(0.5, 1 - (rounds - 10) / 20));
 const LIMIT_END = /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i;
 
 export function scoreRun(s: Session, findings: Finding[], j: Judgement | null): RunScore {
   const m = metrics(s);
   if (s.stopped === 'error' || s.stopped === 'stuck') {
-    return { score: 0, parts: { ended: 0, variety: 0, agency: 0, length: 0, clean: 0, judged: 0, critique: 0 } };
+    return { score: 0, parts: { ended: 0, variety: 0, agency: 0, pace: 0, clean: 0, judged: 0, critique: 0 } };
   }
   // A time-limit end is the game's own rule when the rules name who wins then (v3).
   const ended = m.finished ? (LIMIT_END.test(m.endReason ?? '') && !s.timeoutWinnerRule ? 0.3 : 1) : 0;
   const dom = m.dominantAction?.[1] ?? 0;
   const variety = clamp(1 - Math.max(0, dom - 0.5) / 0.5);
   const agency = clamp(m.meanValid / 4) * (1 - m.forcedShare);
-  const length = m.finished ? clamp(m.rounds / 3) : 0.5;
+  const limitDraw = m.finished && LIMIT_END.test(m.endReason ?? '') && !s.timeoutWinnerRule;
+  const pace = !m.finished ? 0.5 : limitDraw ? 0.25 : paceBand(m.rounds);
   const clean = findings.some((f) => f.severity === 'error') ? 0 : 1;
   const judged = j?.health.probabilities['plays as designed'] ?? 0;
   const critique = j?.critique?.index ?? 0;
@@ -81,7 +92,7 @@ export function scoreRun(s: Session, findings: Finding[], j: Judgement | null): 
     const score = (Object.keys(WEIGHTS_HIDDEN_ROLE) as Array<keyof typeof WEIGHTS_HIDDEN_ROLE>).reduce((a, k) => a + WEIGHTS_HIDDEN_ROLE[k] * parts[k], 0);
     return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])), deduction: d };
   }
-  const parts = { ended, variety, agency, length, clean, judged, critique };
+  const parts = { ended, variety, agency, pace, clean, judged, critique };
   const score = (Object.keys(WEIGHTS) as Array<keyof typeof WEIGHTS>).reduce((a, k) => a + WEIGHTS[k] * parts[k], 0);
   return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])) };
 }

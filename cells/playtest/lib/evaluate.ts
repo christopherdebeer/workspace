@@ -550,7 +550,7 @@ export async function proposeRound(opts: { game: string; rules: string; rational
 /** At a stall: where the train runs lose points, and what keeps showing up. */
 export function diagnose(ev: EvalRecord) {
   const runs = ev.train.runs.filter((r) => r.parts);
-  const keys = ['ended', 'variety', 'agency', 'length', 'clean', 'judged', 'critique'] as const;
+  const keys = ['ended', 'variety', 'agency', 'pace', 'clean', 'judged', 'critique'] as const;
   const weakest = keys
     .map((k) => ({ part: k, mean: +(runs.reduce((a, r) => a + (r.parts?.[k] ?? 0), 0) / (runs.length || 1)).toFixed(3) }))
     .sort((a, b) => a.mean - b.mean);
