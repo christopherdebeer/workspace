@@ -25,6 +25,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'changes', title: 'Changes', group: 'Contemplation',
+    blurb: 'Six blue lines, a moment of attention. Cast an I Ching hexagram, follow its changing lines, and keep a reflection. A quiet experiment in chance and interpretation, inspired by a minimal iOS app.',
+    page: 'static/changes.html', preview: 'preview', readme: 'static/changes.md',
+    presets: [{ label: 'cast', query: '' }, { label: 'beginning', query: 'hex=3' }, { label: 'changing lines', query: 'cast=688879' }],
+  },
+  {
     id: 'markovs', title: 'Markovs Chains', group: 'Play',
     blurb: 'A game of finite probabilities on a standard poker deck: build a table of junction cards, then race one counter to your secret King with a d6. Two to four at one phone, or against bots; print the deck and play it on a table.',
     page: 'static/markovs.html', preview: 'preview&seed=1941', readme: 'static/markovs.md',
