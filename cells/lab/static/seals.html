@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en" data-exp="seals">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#efe7d8">
+<title>Seals · Markovs Chains</title>
+<style>
+:root{--ink:#1f2c6c;--paper:#efe7d8;--muted:#6f6656;font-family:Georgia,'Times New Roman',serif;color:#2a2620;background:var(--paper)}
+*{box-sizing:border-box}body{margin:0;background:var(--paper)}
+button{font:inherit;min-height:44px;min-width:44px;padding:8px 12px;border:1px solid #cfc3ad;border-radius:22px;background:#f8f2e6;color:#2a2620;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+button[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:#fbf6ec}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:max(10px,env(safe-area-inset-top)) 16px 4px}
+header a{color:var(--muted);font-size:14px;text-decoration:none;min-height:44px;display:flex;align-items:center}
+header h1{font-size:15px;font-weight:400;letter-spacing:.18em;text-transform:uppercase;margin:0}
+main{max-width:1100px;margin:auto;padding:0 16px 40px}
+.bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0}
+.bar.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}.bar.scroll::-webkit-scrollbar{display:none}
+.bar.scroll button{flex:none}
+#suits button{font-size:20px;line-height:1}
+#seed{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);min-width:9em;text-align:center}
+.cards{display:grid;gap:12px;margin:12px 0}
+.cards.one{grid-template-columns:min(100%,440px);justify-content:center}
+.cards.many{grid-template-columns:repeat(2,1fr)}
+@media(min-width:720px){.cards.many{grid-template-columns:repeat(4,1fr)}}
+@media(min-width:1000px){.cards.many{grid-template-columns:repeat(5,1fr)}}
+.card{margin:0}.card svg{width:100%;height:auto;display:block;filter:drop-shadow(0 1px 3px rgba(60,40,10,.18))}
+.card figcaption{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);text-align:center;margin-top:4px}
+details{border-top:1px solid #d8ccb5;margin-top:16px;padding-top:4px}
+summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:15px}
+#controls{display:grid;gap:12px;grid-template-columns:1fr}
+@media(min-width:720px){#controls{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:1000px){#controls{grid-template-columns:repeat(3,1fr)}}
+fieldset{border:1px solid #d8ccb5;border-radius:8px;margin:0;padding:6px 12px 10px}
+legend{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:0 4px}
+label{display:grid;grid-template-columns:8.5em 1fr 3.2em;align-items:center;gap:8px;font-size:13px;min-height:36px}
+label.changed span{color:var(--ink);font-weight:bold}
+label span i{color:var(--muted);font-style:normal}
+label input[type=range]{width:100%;accent-color:var(--ink)}
+label input[type=checkbox]{width:22px;height:22px;accent-color:var(--ink);justify-self:start}
+label input[type=color]{width:44px;height:30px;border:0;background:none;padding:0}
+label select{font:inherit;font-size:16px;padding:4px;background:#f8f2e6;border:1px solid #cfc3ad;border-radius:6px;grid-column:2 / 4}
+output{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);text-align:right}
+.note{font-size:13px;color:var(--muted);line-height:1.5;max-width:60ch}
+#status{font-size:13px;color:var(--ink);min-height:1em}
+.preview header,.preview .bar,.preview details,.preview .note{display:none}
+.preview main{padding:8px}.preview .cards.grid4{grid-template-columns:repeat(2,1fr);gap:8px;margin:0}
+.cards.grid4{grid-template-columns:repeat(2,1fr)}
+</style>
+</head>
+<body>
+<header><a href="/">← lab</a><h1>Seals</h1><a href="{{readme}}">about</a></header>
+<main>
+<div class="bar" id="suits" role="group" aria-label="Suit"></div>
+<div class="bar scroll" id="ranks" role="group" aria-label="Card"></div>
+<div class="bar"><button id="prev" aria-label="Previous seed">‹</button><span id="seed" aria-live="polite"></span><button id="next" aria-label="Next seed">›</button><button id="dice" aria-label="New seed">⚄</button></div>
+<div class="bar" id="views" role="group" aria-label="View"></div>
+<div id="cards" class="cards one"></div>
+<details><summary>Hyperparameters</summary>
+<p class="note">The suit's style: its family. A seed picks one seal from it — the numbers marked ~ wander with the seed, by up to a quarter of their range times the seed variance. Changes stay with the suit and in the address.</p>
+<div class="bar"><button id="reset">Reset suit</button><button id="copy">Copy style</button><button id="svg">Download SVG</button><span id="status" role="status"></span></div>
+<div id="controls"></div>
+</details>
+</main>
+<script type="module" src="{{app}}"></script>
+</body>
+</html>

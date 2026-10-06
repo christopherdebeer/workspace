@@ -37,6 +37,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'you v three bots', query: 'seed=1941&players=4&bots=0111' }, { label: 'two at the table', query: 'seed=1941&players=2&bots=00' }, { label: 'four at the table', query: 'seed=1941&players=4&bots=0000' }, { label: 'the grid prototype', query: 'mode=physical' }, { label: 'the four-state chain', query: 'mode=challenge' }],
   },
   {
+    id: 'seals', title: 'Seals', group: 'Play',
+    blurb: 'The junction cards of Markovs Chains, engraved as seals: one family per suit, a seed for each card, every line from hyperparameters you can turn. Pure drawing functions, to be ported to the game.',
+    page: 'static/seals.html', preview: 'preview&seed=1', readme: 'static/seals.md',
+    presets: [{ label: 'the spade turn', query: 'suit=3&rank=3' }, { label: 'all four suits', query: 'view=suits&rank=5' }, { label: 'hearts, the suit', query: 'suit=0&view=suit' }, { label: 'six seeds', query: 'suit=2&rank=9&view=seeds' }, { label: 'bare seals', query: 'rank=0&view=suits' }],
+  },
+  {
     id: 'crystals', title: 'Crystals', group: 'Drawings',
     blurb: 'A mineral specimen from a seed, ray-traced: a cluster of crystals grows out of its matrix, and the key light goes through them — refracted, dispersed into colour at the edges, reflected inside, and thrown onto the slate as caustics. Drag to turn it; pinch to come close.',
     page: 'static/crystals.html', preview: 'preview&seed=1947&still', readme: 'static/crystals.md',
