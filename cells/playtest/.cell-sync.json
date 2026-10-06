@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:be0e7aadd3af33ed54e8f40776b47438f0649d252ef7b0f00160858094fcdffb",
-  "syncedAt": "2026-10-06T11:04:12.876Z",
+  "treeVersion": "tree:e90d83d83f530d9114f066a56670db6e601ef8cea0eb1f3159f7bc726ef17bae",
+  "syncedAt": "2026-10-06T11:06:38.393Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -224,7 +224,7 @@
     "lib/fingerprint.ts": "sha256:14fb2faea86e20e7dd2ed472d564d7dbbb64b45d3b8307043063c84a0574d5a5",
     "lib/jev.ts": "sha256:9b68102cd9e42be5942c4a029d8559ce43e37aa92115db6c5ed378742447629a",
     "lib/public.ts": "sha256:c7508569d537937f67902e129adda667810295c0868e30df6037eb6c23240bb0",
-    "lib/runner.ts": "sha256:589c81345f2638daef31070aac90838bac9e61e5384f7ab08169354e93009b8c",
+    "lib/runner.ts": "sha256:2838d81d309e0a2b23bb63af426fda0e74bc4d0860b6be6c4ab15d1751afaca3",
     "lib/score.ts": "sha256:36e9162464b533027985bcf3ba5c2c8e77b5aeaa73a9d1f8244dac5091b3bd2b",
     "lib/screen.ts": "sha256:3ffb660ca4b706a887a138d695ac60757288d86f9a1957c817e071b522577c55",
     "lib/store.ts": "sha256:e3538db26646a3616327a58dc36fb48a68c6ec1d25452177a8b7ab52bba26f01",
