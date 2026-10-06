@@ -29,8 +29,30 @@ habit — the shape its crystals take — a refractive index with its dispersion
 
 Every crystal is a convex hull: a list of planes in world space, which is all the renderer
 needs, and which grows — radius and length, or the polyhedron's size — from a seeded start time
-over a few seconds. The cluster sits on an ellipsoid of dark rock, the biggest crystal near the
-middle and the rest leaning outward.
+over a few seconds. Some habits taper toward the tip (tourmaline, tessin quartz). Some crystals
+are twins: quartz a Japan-law pair, two prisms from one base at 84.5°; fluorite and zircon a
+penetration twin, the same body turned 60° about a diagonal. The cluster sits on an ellipsoid of
+dark rock, lumpy and crevassed, with a druse of tiny facets that glitter; the biggest crystal
+near the middle and the rest leaning outward.
+
+## The inside
+
+Along the ray's first segment inside a crystal, a short march samples what the body holds, and
+two things are met exactly:
+
+- **colour zoning** between two body colours — the tip (amethyst, smoky, citrine), the core
+  (tourmaline), or bands (fluorite, rhodochrosite);
+- **phantoms**, ghost outlines of the crystal as it was;
+- **veils and feathers** of fluid inclusions, patchy sheets that scatter the light (emerald's
+  jardin, with its cracks);
+- **bubbles**, sparse specks;
+- **needles**, thin rods met exactly: gold rutile in rutilated quartz, tubes along the axis in
+  aquamarine and heliodor, dark needles in almandine;
+- **cleavage cracks**, two patchy planes, glinting with a thin film's colours.
+
+The faces have their own character: striations across the prism faces in lines along the axis
+(strongest on tourmaline), frosted faces on some crystals (an etched surface scatters), and
+iridescent tarnish on patches of fluorite and zircon.
 
 ## The light
 
@@ -57,7 +79,13 @@ crystals themselves.
 
 The light is a softbox behind the specimen from where you stand, a little to one side,
 wandering slowly: it comes through the crystals toward you and throws its caustics in front of
-them. A cool fill and a warm rim light give the facets something else to catch.
+them. A cool fill and a warm rim light give the facets something else to catch. Its shadow has
+a penumbra, sampled across the softbox's disc. The air holds a little dust: the key light
+scatters toward you along the view ray, forward-leaning, wherever the crystals and the rock let
+it through, so the beam shows and the crystals' shadows cut it. The scene is rendered to a
+half-float target; the glints and the caustics bloom (a soft-knee downsample, blurred twice),
+and the final pass grades it — cool shadows, warm highlights — with a vignette, a little
+chromatic aberration at the edges and grain.
 
 ## Checks
 

@@ -12,7 +12,7 @@
  */
 import { randomSeed, seedFrom, seedName } from '../kit/rng';
 import { bound, growth, planesOf, specimen, type Specimen } from './mineral';
-import { CAUSTIC_FS, CAUSTIC_VS, MAIN_FS, MAXC, QUAD_VS } from './shaders';
+import { BLOOM_FS, BLUR_FS, CAUSTIC_FS, CAUSTIC_VS, FINAL_FS, MAIN_FS, MAXC, QUAD_VS } from './shaders';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview');
@@ -32,6 +32,21 @@ function program(vs: string, fs: string): WebGLProgram {
 }
 const mainP = program(QUAD_VS, MAIN_FS);
 const causP = program(CAUSTIC_VS, CAUSTIC_FS);
+const bloomP = program(QUAD_VS, BLOOM_FS), blurP = program(QUAD_VS, BLUR_FS), finalP = program(QUAD_VS, FINAL_FS);
+/** a colour target of the given size (half-float when the extension allows) */
+function target(w: number, h: number): { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } {
+  const tex = gl!.createTexture()!;
+  gl!.bindTexture(gl!.TEXTURE_2D, tex);
+  gl!.texImage2D(gl!.TEXTURE_2D, 0, halfFloat ? gl!.RGBA16F : gl!.RGBA8, w, h, 0, gl!.RGBA, halfFloat ? gl!.HALF_FLOAT : gl!.UNSIGNED_BYTE, null);
+  gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MIN_FILTER, gl!.LINEAR); gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MAG_FILTER, gl!.LINEAR);
+  gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_S, gl!.CLAMP_TO_EDGE); gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE);
+  const fbo = gl!.createFramebuffer()!;
+  gl!.bindFramebuffer(gl!.FRAMEBUFFER, fbo);
+  gl!.framebufferTexture2D(gl!.FRAMEBUFFER, gl!.COLOR_ATTACHMENT0, gl!.TEXTURE_2D, tex, 0);
+  gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
+  return { tex, fbo, w, h };
+}
+let scene: ReturnType<typeof target> | null = null, bloomA: ReturnType<typeof target> | null = null, bloomB: ReturnType<typeof target> | null = null;
 const U = (p: WebGLProgram, n: string) => gl!.getUniformLocation(p, n);
 
 // the hulls: planes as a 64×4 float texture
@@ -58,7 +73,7 @@ let seed = seedFrom(qs.get('seed')) ?? (preview ? 1947 : randomSeed());
 let spec: Specimen;
 let born = 0;
 const C0 = new Float32Array(MAXC * 4), C1 = new Float32Array(MAXC * 4), C2 = new Float32Array(MAXC * 4);
-const C3 = new Float32Array(MAXC * 4), C4 = new Float32Array(MAXC * 4), C5 = new Float32Array(MAXC * 4), C6 = new Float32Array(MAXC * 4), C7 = new Float32Array(MAXC * 4), C8 = new Float32Array(MAXC * 4);
+const C3 = new Float32Array(MAXC * 4), C4 = new Float32Array(MAXC * 4), C5 = new Float32Array(MAXC * 4), C6 = new Float32Array(MAXC * 4), C7 = new Float32Array(MAXC * 4), C8 = new Float32Array(MAXC * 4), C9 = new Float32Array(MAXC * 4);
 const CENTRE: [number, number, number] = [0, 1.0, 0];
 /** the camera's reach: how tall and wide the specimen will be when grown */
 let reach = 1;
@@ -88,6 +103,7 @@ function grow(newSeed: number) {
     C6[i * 4 + 3] = ['none', 'tip', 'core', 'band'].indexOf(sp.zoning);
     C7.set([sp.veils, sp.needles, sp.cracks, sp.phantom], i * 4);
     C8.set([sp.needle[0], sp.needle[1], sp.needle[2], sp.along ? -1 : sp.bubbles], i * 4);
+    C9.set([c.frost ? 1 : 0, sp.tarnish, 0, 0], i * 4);
   }
 }
 /** the hulls as they are now: growth applied; planes and bounds uploaded */
@@ -145,7 +161,10 @@ const scale = quality === 'high' ? 0.8 : quality === 'mid' ? 0.5 : 0.4;
 function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2) * scale;
   const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
-  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+    if (halfFloat) { scene = target(w, h); bloomA = target(Math.max(1, w >> 2), Math.max(1, h >> 2)); bloomB = target(bloomA.w, bloomA.h); }
+  }
 }
 const GRID = quality === 'low' ? 224 : quality === 'mid' ? 320 : 512;
 const MAP = 3.4; // half-extent of the caustic map on the ground
@@ -156,6 +175,9 @@ function setCommon(p: WebGLProgram, L: number[], gain: number) {
   gl!.uniform4fv(U(p, 'uC0'), C0); gl!.uniform4fv(U(p, 'uC1'), C1); gl!.uniform4fv(U(p, 'uC2'), C2);
   gl!.uniform4fv(U(p, 'uC3'), C3); gl!.uniform4fv(U(p, 'uC4'), C4); gl!.uniform4fv(U(p, 'uC5'), C5); gl!.uniform4fv(U(p, 'uC6'), C6); gl!.uniform4fv(U(p, 'uC7'), C7); gl!.uniform4fv(U(p, 'uC8'), C8);
   gl!.uniform1f(U(p, 'uSeed'), (seed % 1000) * 0.37);
+  gl!.uniform4fv(U(p, 'uC9'), C9);
+  gl!.uniform1i(U(p, 'uSoft'), quality === 'high' ? 4 : quality === 'mid' ? 2 : 1);
+  gl!.uniform1i(U(p, 'uHaze'), quality === 'high' ? 6 : quality === 'mid' ? 3 : 0);
   gl!.uniform3fv(U(p, 'uMat'), spec.matrix);
   gl!.uniform3fv(U(p, 'uLight'), L); gl!.uniform3fv(U(p, 'uLightCol'), LIGHT_COL);
   gl!.uniform1f(U(p, 'uTime'), performance.now() / 1000 - born);
@@ -190,15 +212,35 @@ function frame() {
     gl!.drawArrays(gl!.POINTS, 0, GRID * GRID);
   }
   gl!.disable(gl!.BLEND);
-  // the main pass
-  gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
+  // the main pass: to a half-float scene when there is one, else straight to the screen
+  const post = !!scene && !qs.get('debug');
+  gl!.bindFramebuffer(gl!.FRAMEBUFFER, post ? scene!.fbo : null);
   gl!.viewport(0, 0, canvas.width, canvas.height);
   setCommon(mainP, L, halfFloat ? 1 : 12.5);
+  gl!.uniform1i(U(mainP, 'uHdr'), post ? 1 : 0);
   gl!.uniform3fv(U(mainP, 'uEye'), cam.eye); gl!.uniformMatrix3fv(U(mainP, 'uCam'), false, cam.m);
   gl!.uniform2f(U(mainP, 'uRes'), canvas.width, canvas.height); gl!.uniform1f(U(mainP, 'uFov'), Math.tan(0.34));
   gl!.uniform1i(U(mainP, 'uDisp'), quality === 'low' ? 0 : 1);
   gl!.uniform1i(U(mainP, 'uDebug'), qs.get('debug') === 'caustic' ? 1 : qs.get('debug') === 'id' ? 2 : qs.get('debug') === 'matrix' ? 3 : qs.get('debug') === 'raw' ? 4 : 0);
   gl!.drawArrays(gl!.TRIANGLES, 0, 3);
+  if (post) {
+    // bloom: the bright parts, downsampled, blurred twice; then the grade onto the screen
+    const quad = (p: WebGLProgram, to: ReturnType<typeof target> | null, tex: WebGLTexture) => {
+      gl!.useProgram(p); gl!.bindFramebuffer(gl!.FRAMEBUFFER, to ? to.fbo : null);
+      gl!.viewport(0, 0, to ? to.w : canvas.width, to ? to.h : canvas.height);
+      gl!.activeTexture(gl!.TEXTURE0); gl!.bindTexture(gl!.TEXTURE_2D, tex); gl!.uniform1i(U(p, 'uTex'), 0);
+      gl!.uniform2f(U(p, 'uRes'), to ? to.w : canvas.width, to ? to.h : canvas.height);
+    };
+    quad(bloomP, bloomA, scene!.tex); gl!.drawArrays(gl!.TRIANGLES, 0, 3);
+    for (let i = 0; i < 2; i++) {
+      quad(blurP, bloomB, bloomA!.tex); gl!.uniform2f(U(blurP, 'uDir'), 1, 0); gl!.drawArrays(gl!.TRIANGLES, 0, 3);
+      quad(blurP, bloomA, bloomB!.tex); gl!.uniform2f(U(blurP, 'uDir'), 0, 1); gl!.drawArrays(gl!.TRIANGLES, 0, 3);
+    }
+    quad(finalP, null, scene!.tex);
+    gl!.activeTexture(gl!.TEXTURE1); gl!.bindTexture(gl!.TEXTURE_2D, bloomA!.tex); gl!.uniform1i(U(finalP, 'uBloom'), 1);
+    gl!.uniform1f(U(finalP, 'uTime'), now);
+    gl!.drawArrays(gl!.TRIANGLES, 0, 3);
+  }
   frames++;
   requestAnimationFrame(frame);
 }

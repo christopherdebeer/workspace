@@ -58,39 +58,48 @@ export interface Species {
   bubbles: number;
   /** striations across the prism faces, 0..1 */
   striate: number;
+  /** the prism narrows toward the tip by this fraction of its radius (tessin, tourmaline) */
+  taper: number;
+  /** twins: the chance a crystal is one — quartz a Japan-law pair, cubes a penetration twin */
+  twin: number;
+  /** frosted (etched) faces: the chance a crystal's prism faces are rough, 0..1 */
+  frost: number;
+  /** iridescent tarnish on the faces, 0..1 */
+  tarnish: number;
 }
 
 const V = (kind: string, name: string, s: Partial<Species>): Species => ({
   kind, name, habit: 'prism', sides: 6, alt: 1, tip: 0.95, cap: 1, ior: 1.55, disp: 0.012, tint: [0.9, 0.9, 0.9], absorb: 0.4, milk: 0.0, slender: [3, 6], count: [6, 11], size: 1,
   tint2: s.tint ?? [0.9, 0.9, 0.9], zoning: 'none', phantom: 0, veils: 0.15, needles: 0, needle: [0.85, 0.6, 0.2], along: false, cracks: 0.1, bubbles: 0.1, striate: 0.3,
+  taper: 0, twin: 0, frost: 0, tarnish: 0,
   ...s,
 });
 
 /** The varieties, by weight of appearance. */
 export const SPECIES: Species[] = [
-  V('quartz', 'Rock crystal', { tint: [0.97, 0.97, 0.97], absorb: 0.15, milk: 0.02, phantom: 0.6, veils: 0.35, bubbles: 0.3, striate: 0.5 }),
+  V('quartz', 'Rock crystal', { tint: [0.97, 0.97, 0.97], absorb: 0.15, milk: 0.02, phantom: 0.6, veils: 0.35, bubbles: 0.3, striate: 0.5, twin: 0.25, frost: 0.2, taper: 0.1 }),
   V('quartz', 'Rutilated quartz', { tint: [0.95, 0.93, 0.88], absorb: 0.2, milk: 0.02, needles: 4, needle: [0.9, 0.62, 0.18], veils: 0.2, striate: 0.5 }),
   V('quartz', 'Amethyst', { tint: [0.6, 0.33, 0.86], tint2: [0.84, 0.74, 0.92], zoning: 'tip', absorb: 1.0, milk: 0.04, phantom: 0.5, veils: 0.2, striate: 0.5 }),
-  V('quartz', 'Smoky quartz', { tint: [0.55, 0.45, 0.36], tint2: [0.85, 0.8, 0.72], zoning: 'tip', absorb: 0.9, milk: 0.03, phantom: 0.4, cracks: 0.2, striate: 0.5 }),
+  V('quartz', 'Smoky quartz', { tint: [0.55, 0.45, 0.36], tint2: [0.85, 0.8, 0.72], zoning: 'tip', absorb: 0.9, milk: 0.03, phantom: 0.4, cracks: 0.2, striate: 0.5, taper: 0.3, twin: 0.15 }),
   V('quartz', 'Citrine', { tint: [0.95, 0.72, 0.28], tint2: [0.95, 0.9, 0.7], zoning: 'tip', absorb: 0.7, veils: 0.3, striate: 0.5 }),
   V('quartz', 'Rose quartz', { tint: [0.95, 0.62, 0.7], absorb: 0.5, milk: 0.35, tip: 1.2, slender: [1.5, 3], veils: 0.5, cracks: 0.3 }),
-  V('beryl', 'Aquamarine', { tip: Math.PI / 2, ior: 1.58, disp: 0.01, tint: [0.55, 0.85, 0.9], absorb: 0.6, slender: [3, 5], count: [4, 8], needles: 3, needle: [0.9, 0.95, 1.0], along: true, striate: 0.6 }),
+  V('beryl', 'Aquamarine', { tip: Math.PI / 2, ior: 1.58, disp: 0.01, tint: [0.55, 0.85, 0.9], absorb: 0.6, slender: [3, 5], count: [4, 8], needles: 3, needle: [0.9, 0.95, 1.0], along: true, striate: 0.6, frost: 0.5 }),
   V('beryl', 'Emerald', { tip: Math.PI / 2, ior: 1.58, disp: 0.01, tint: [0.2, 0.75, 0.42], absorb: 1.6, milk: 0.08, slender: [2.5, 4], count: [4, 7], veils: 0.7, cracks: 0.6, bubbles: 0.3, striate: 0.4 }),
   V('beryl', 'Heliodor', { tip: Math.PI / 2, ior: 1.58, disp: 0.01, tint: [0.95, 0.85, 0.35], absorb: 0.7, slender: [3, 5], count: [4, 8], needles: 2, needle: [0.95, 0.97, 1.0], along: true, striate: 0.6 }),
-  V('tourmaline', 'Rubellite', { alt: 0.72, tip: 1.1, cap: 0.35, ior: 1.64, disp: 0.014, tint: [0.9, 0.25, 0.45], tint2: [0.95, 0.75, 0.6], zoning: 'core', absorb: 1.5, slender: [4, 8], count: [5, 10], cracks: 0.4, striate: 1 }),
-  V('tourmaline', 'Verdelite', { alt: 0.72, tip: 1.1, cap: 0.35, ior: 1.64, disp: 0.014, tint: [0.3, 0.7, 0.35], tint2: [0.9, 0.35, 0.5], zoning: 'core', absorb: 1.6, slender: [4, 8], count: [5, 10], cracks: 0.3, striate: 1 }),
-  V('fluorite', 'Purple fluorite', { habit: 'cube', ior: 1.43, disp: 0.008, tint: [0.55, 0.3, 0.8], tint2: [0.85, 0.8, 0.95], zoning: 'band', absorb: 0.55, milk: 0.04, count: [5, 9], size: 0.9, cracks: 0.5, veils: 0.1, striate: 0 }),
-  V('fluorite', 'Green fluorite', { habit: 'cube', ior: 1.43, disp: 0.008, tint: [0.4, 0.85, 0.55], tint2: [0.5, 0.45, 0.85], zoning: 'band', absorb: 0.5, milk: 0.04, count: [5, 9], size: 0.9, cracks: 0.5, veils: 0.1, striate: 0 }),
-  V('fluorite', 'Blue John', { habit: 'cube', ior: 1.43, disp: 0.008, tint: [0.45, 0.45, 0.85], tint2: [0.95, 0.9, 0.75], zoning: 'band', absorb: 0.65, milk: 0.06, count: [5, 9], size: 0.9, cracks: 0.4, striate: 0 }),
-  V('calcite', 'Iceland spar', { habit: 'rhomb', ior: 1.6, disp: 0.012, tint: [0.96, 0.96, 0.93], absorb: 0.2, milk: 0.03, count: [4, 8], size: 0.95, cracks: 0.6, veils: 0.25, striate: 0 }),
-  V('calcite', 'Honey calcite', { habit: 'rhomb', ior: 1.6, disp: 0.012, tint: [0.95, 0.7, 0.35], absorb: 0.7, milk: 0.06, count: [4, 8], size: 0.95, cracks: 0.4, veils: 0.3, striate: 0 }),
+  V('tourmaline', 'Rubellite', { alt: 0.72, tip: 1.1, cap: 0.35, ior: 1.64, disp: 0.014, tint: [0.9, 0.25, 0.45], tint2: [0.95, 0.75, 0.6], zoning: 'core', absorb: 1.5, slender: [4, 8], count: [5, 10], cracks: 0.4, striate: 1, taper: 0.25 }),
+  V('tourmaline', 'Verdelite', { alt: 0.72, tip: 1.1, cap: 0.35, ior: 1.64, disp: 0.014, tint: [0.3, 0.7, 0.35], tint2: [0.9, 0.35, 0.5], zoning: 'core', absorb: 1.6, slender: [4, 8], count: [5, 10], cracks: 0.3, striate: 1, taper: 0.25 }),
+  V('fluorite', 'Purple fluorite', { habit: 'cube', ior: 1.43, disp: 0.008, tint: [0.55, 0.3, 0.8], tint2: [0.85, 0.8, 0.95], zoning: 'band', absorb: 0.55, milk: 0.04, count: [5, 9], size: 0.9, cracks: 0.5, veils: 0.1, striate: 0 , twin: 0.4, tarnish: 0.25}),
+  V('fluorite', 'Green fluorite', { habit: 'cube', ior: 1.43, disp: 0.008, tint: [0.4, 0.85, 0.55], tint2: [0.5, 0.45, 0.85], zoning: 'band', absorb: 0.5, milk: 0.04, count: [5, 9], size: 0.9, cracks: 0.5, veils: 0.1, striate: 0 , twin: 0.4, tarnish: 0.25}),
+  V('fluorite', 'Blue John', { habit: 'cube', ior: 1.43, disp: 0.008, tint: [0.4, 0.42, 0.88], tint2: [0.75, 0.72, 0.9], zoning: 'band', absorb: 0.65, milk: 0.06, count: [5, 9], size: 0.9, cracks: 0.4, striate: 0 , twin: 0.4, tarnish: 0.25}),
+  V('calcite', 'Iceland spar', { habit: 'rhomb', ior: 1.6, disp: 0.012, tint: [0.96, 0.96, 0.93], absorb: 0.2, milk: 0.03, count: [4, 8], size: 0.95, cracks: 0.6, veils: 0.25, striate: 0 , frost: 0.4}),
+  V('calcite', 'Honey calcite', { habit: 'rhomb', ior: 1.6, disp: 0.012, tint: [0.95, 0.7, 0.35], absorb: 0.7, milk: 0.06, count: [4, 8], size: 0.95, cracks: 0.4, veils: 0.3, striate: 0 , frost: 0.4}),
   V('rhodochrosite', 'Rhodochrosite', { habit: 'rhomb', ior: 1.65, disp: 0.012, tint: [0.95, 0.4, 0.5], tint2: [0.98, 0.8, 0.8], zoning: 'band', absorb: 1.2, milk: 0.2, count: [5, 9], size: 0.85, cracks: 0.3, striate: 0 }),
   V('topaz', 'Blue topaz', { sides: 4, alt: 0.62, tip: 0.8, cap: 0.5, ior: 1.62, disp: 0.011, tint: [0.6, 0.8, 0.95], absorb: 0.5, slender: [2, 4], count: [3, 6], size: 1.05, veils: 0.3, cracks: 0.3, striate: 0.7 }),
   V('topaz', 'Imperial topaz', { sides: 4, alt: 0.62, tip: 0.8, cap: 0.5, ior: 1.62, disp: 0.011, tint: [0.95, 0.6, 0.3], absorb: 0.8, slender: [2, 4], count: [3, 6], size: 1.05, veils: 0.3, cracks: 0.3, striate: 0.7 }),
   V('garnet', 'Almandine', { habit: 'dodeca', ior: 1.8, disp: 0.02, tint: [0.75, 0.12, 0.15], absorb: 2.2, count: [4, 8], size: 0.85, needles: 3, needle: [0.1, 0.08, 0.08], cracks: 0.3, striate: 0 }),
   V('garnet', 'Grossular', { habit: 'dodeca', ior: 1.74, disp: 0.018, tint: [0.85, 0.55, 0.25], absorb: 1.4, count: [4, 8], size: 0.85, veils: 0.3, cracks: 0.3, striate: 0 }),
-  V('zircon', 'Zircon', { habit: 'octa', ior: 1.95, disp: 0.04, tint: [0.95, 0.9, 0.8], absorb: 0.3, count: [4, 8], size: 0.8, cracks: 0.5, bubbles: 0.2, striate: 0 }),
-  V('zircon', 'Hyacinth', { habit: 'octa', ior: 1.95, disp: 0.04, tint: [0.9, 0.5, 0.3], absorb: 0.9, count: [4, 8], size: 0.8, cracks: 0.5, striate: 0 }),
+  V('zircon', 'Zircon', { habit: 'octa', ior: 1.95, disp: 0.04, tint: [0.95, 0.9, 0.8], absorb: 0.3, count: [4, 8], size: 0.8, cracks: 0.5, bubbles: 0.2, striate: 0 , tarnish: 0.2, twin: 0.2}),
+  V('zircon', 'Hyacinth', { habit: 'octa', ior: 1.95, disp: 0.04, tint: [0.9, 0.5, 0.3], absorb: 0.9, count: [4, 8], size: 0.8, cracks: 0.5, striate: 0 , tarnish: 0.2, twin: 0.2}),
 ];
 
 /** A plane n·p ≤ d, in world space. */
@@ -108,6 +117,8 @@ export interface Crystal {
   dur: number;
   /** a roll of the faces about the axis */
   roll: number;
+  /** frosted faces */
+  frost: boolean;
 }
 export interface Specimen {
   seed: number;
@@ -130,6 +141,18 @@ function frame(axis: [number, number, number], roll: number): number[] {
   z = norm(cross(y, x2)); x = x2;
   return [x[0], x[1], x[2], y[0], y[1], y[2], z[0], z[1], z[2]];
 }
+const c_frame = frame;
+/** column-major 3×3 product a·b */
+function mul(a: number[], b: number[]): number[] {
+  const o = new Array(9).fill(0);
+  for (let c = 0; c < 3; c++) for (let rr = 0; rr < 3; rr++) for (let k = 0; k < 3; k++) o[c * 3 + rr] += a[k * 3 + rr] * b[c * 3 + k];
+  return o;
+}
+/** a rotation about an axis, column-major */
+function rotAxis(ax: [number, number, number], a: number): number[] {
+  const [x, y, z] = norm(ax), c = Math.cos(a), s = Math.sin(a), t = 1 - c;
+  return [t * x * x + c, t * x * y + s * z, t * x * z - s * y, t * x * y - s * z, t * y * y + c, t * y * z + s * x, t * x * z + s * y, t * y * z - s * x, t * z * z + c];
+}
 export const rot = (R: number[], v: [number, number, number]): [number, number, number] => [R[0] * v[0] + R[3] * v[1] + R[6] * v[2], R[1] * v[0] + R[4] * v[1] + R[7] * v[2], R[2] * v[0] + R[5] * v[1] + R[8] * v[2]];
 
 export function pick(seed: number, kind?: string): Species {
@@ -149,6 +172,7 @@ export function specimen(seed: number, kind?: string): Specimen {
   const crystals: Crystal[] = [];
   const golden = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < n; i++) {
+    if (crystals.length >= 12) break;
     const big = i === 0 ? 1 : 0.45 + r() * 0.55;
     const rad = (i === 0 ? 0.1 : 0.25 + 0.95 * Math.sqrt(r())) * 1.05;
     const th = i * golden + r() * 0.6;
@@ -160,7 +184,23 @@ export function specimen(seed: number, kind?: string): Specimen {
     const slen = sp.slender[0] + r() * (sp.slender[1] - sp.slender[0]);
     const radius = (sp.habit === 'prism' ? 0.12 + 0.2 * big : 0.16 + 0.22 * big) * sp.size;
     const len = sp.habit === 'prism' ? radius * slen * sp.size : radius;
-    crystals.push({ at: [x, ym - 0.22 * radius / 0.3, z], R: frame(axis, r() * Math.PI * 2), r: radius, len, t0: i === 0 ? 0 : 0.4 + r() * 3.2, dur: 2.2 + r() * 2.4 + len, roll: r() * Math.PI * 2 });
+    const at: [number, number, number] = [x, ym - 0.22 * radius / 0.3, z];
+    const roll = r() * Math.PI * 2, t0 = i === 0 ? 0 : 0.4 + r() * 3.2, dur = 2.2 + r() * 2.4 + len;
+    const frost = r() < sp.frost;
+    crystals.push({ at, R: frame(axis, roll), r: radius, len, t0, dur, roll, frost });
+    // a twin: quartz a Japan-law pair, two prisms from one base at 84.5°; a cube or octahedron
+    // its penetration twin, the same body turned 60° about a body diagonal
+    if (r() < sp.twin && crystals.length < 11) {
+      if (sp.habit === 'prism') {
+        const tilt = 1.475;
+        const side = r() * Math.PI * 2;
+        const a2 = norm([axis[0] * Math.cos(tilt) + Math.cos(side) * Math.sin(tilt), axis[1] * Math.cos(tilt) + 0.0, axis[2] * Math.cos(tilt) + Math.sin(side) * Math.sin(tilt)]);
+        crystals.push({ at, R: frame(a2, roll), r: radius * 0.9, len: len * 0.85, t0: t0 + 0.3, dur, roll, frost });
+      } else {
+        const R2 = mul(c_frame(axis, roll), rotAxis([1, 1, 1], Math.PI / 3));
+        crystals.push({ at, R: R2, r: radius, len, t0, dur, roll, frost });
+      }
+    }
   }
   return { seed, species: sp, crystals, matrix };
 }
@@ -176,9 +216,13 @@ export function planesOf(c: Crystal, sp: Species, g: number): Plane[] {
   if (sp.habit === 'prism') {
     const r = c.r * (0.3 + 0.7 * g), L = c.len * e;
     const k = sp.sides;
+    // (a tapered prism's side faces lean in: the radius at the tip is r·(1 − taper))
+    const lean = Math.atan2(sp.taper * r, Math.max(L, 0.01));
     for (let j = 0; j < k; j++) {
       const a = c.roll + (j / k) * Math.PI * 2;
-      add([Math.cos(a), 0, Math.sin(a)], r * (j % 2 ? sp.alt : 1));
+      const rj = r * (j % 2 ? sp.alt : 1);
+      const nl: [number, number, number] = [Math.cos(a) * Math.cos(lean), Math.sin(lean), Math.sin(a) * Math.cos(lean)];
+      add(nl, rj * Math.cos(lean));
     }
     add([0, -1, 0], 0.3 * r);
     // the tip: pyramid faces through the rim, and a cap if it is cut

@@ -24,6 +24,9 @@ uniform vec4 uC6[${MAXC}]; // the second absorption rgb, zoning mode (0 none, 1 
 uniform vec4 uC7[${MAXC}]; // veils, needles, cracks, phantom
 uniform vec4 uC8[${MAXC}]; // needle colour rgb, bubbles
 uniform float uSeed;
+uniform vec4 uC9[${MAXC}]; // frosted (0/1), tarnish, –, –
+uniform int uSoft;         // shadow samples (1: hard)
+uniform int uHaze;         // haze samples along the view ray (0: none)
 uniform vec3 uMat;         // the matrix: an ellipsoid at the origin
 uniform vec3 uLight;       // toward the key light
 uniform vec3 uLightCol;
@@ -91,12 +94,24 @@ vec3 env(vec3 d) {
   return sky + key + fill + rim;
 }
 /** the key light at a ground or matrix point: 1 lit; through a crystal, a little; behind the matrix, none */
+float shadow1(vec3 o, vec3 L) {
+  if (ellipsoid(o, L) < 1e8) return 0.0;
+  float tn, tf; vec3 nn, nf;
+  int id = nearest(o, L, tn, nn, tf, nf);
+  return id < 0 ? 1.0 : 0.1;
+}
+/** the key light is a softbox: its shadow has a penumbra, sampled across the light's disc */
 float shadow(vec3 p) {
   vec3 o = p + vec3(0.0, 0.003, 0.0);
-  if (ellipsoid(o, uLight) < 1e8) return 0.0;
-  float tn, tf; vec3 nn, nf;
-  int id = nearest(o, uLight, tn, nn, tf, nf);
-  return id < 0 ? 1.0 : 0.1;
+  if (uSoft <= 1) return shadow1(o, uLight);
+  vec3 u = normalize(cross(vec3(0.0, 1.0, 0.0), uLight)), v = cross(uLight, u);
+  float sum = 0.0;
+  for (int i = 0; i < 4; i++) {
+    if (i >= uSoft) break;
+    float a = float(i) * 1.5708 + hash3(p * 37.0 + float(i)) * 1.5;
+    sum += shadow1(o, normalize(uLight + (u * cos(a) + v * sin(a)) * 0.09));
+  }
+  return sum / float(min(uSoft, 4));
 }
 vec3 caustic(vec3 p) {
   vec2 uv = (p.xz - uCMap.xy) / uCMap.z * 0.5 + 0.5;
@@ -113,16 +128,22 @@ vec3 groundLit(vec3 p) {
   return alb * (light + amb) * exp(-length(p.xz) * 0.16);
 }
 vec3 matrixShade(vec3 p, vec3 d) {
-  vec3 n = normalize(p / (uMat * uMat));
-  vec3 g = vec3(fbm(p * 6.0 + 1.0), fbm(p * 6.0 + 7.0), fbm(p * 6.0 + 13.0)) - 0.5;
-  n = normalize(n + g * 0.7);
-  float m = fbm(p * 5.0);
-  vec3 alb = mix(vec3(0.008, 0.008, 0.009), vec3(0.022, 0.021, 0.02), m);
-  float sh = shadow(p + n * 0.01);
+  vec3 n0 = normalize(p / (uMat * uMat));
+  // the rock: lumps at two scales, crevices dark, and a druse of tiny crystals that glitter
+  vec3 g = vec3(fbm(p * 5.0 + 1.0), fbm(p * 5.0 + 7.0), fbm(p * 5.0 + 13.0)) - 0.5;
+  vec3 g2 = vec3(vnoise(p * 23.0), vnoise(p * 23.0 + 5.0), vnoise(p * 23.0 + 9.0)) - 0.5;
+  vec3 n = normalize(n0 + g * 0.9 + g2 * 0.5);
+  float m = fbm(p * 5.0), crev = smoothstep(0.35, 0.6, fbm(p * 9.0 + 3.0));
+  vec3 alb = mix(vec3(0.007, 0.007, 0.008), vec3(0.03, 0.027, 0.024), m) * (0.45 + 0.55 * crev);
+  float sh = shadow(p + n0 * 0.01);
   float lam = max(dot(n, uLight), 0.0);
   vec3 col = alb * (uLightCol * lam * sh + vec3(0.05, 0.055, 0.07) * (0.5 + 0.5 * n.y));
   vec3 h = normalize(uLight - d);
-  col += uLightCol * sh * pow(max(dot(n, h), 0.0), 24.0) * 0.04;
+  col += uLightCol * sh * pow(max(dot(n, h), 0.0), 30.0) * 0.05;
+  // the druse: a facet here and there, catching the light at its own angle
+  vec3 cell = floor(p * 60.0); float fc = hash3(cell); vec3 fn = normalize(n0 + (vec3(hash3(cell + 1.0), hash3(cell + 2.0), hash3(cell + 3.0)) - 0.5) * 1.2);
+  float spark = step(0.86, fc) * pow(max(dot(fn, h), 0.0), 200.0) * sh;
+  col += uLightCol * spark * 1.5 * crev;
   return col;
 }
 /** what a ray sees, one level deep: a crystal as plain glass, the matrix, the lit ground, the light */
@@ -168,7 +189,7 @@ void main() { vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.
 
 export const MAIN_FS = /* glsl */ `#version 300 es
 ${COMMON}
-uniform vec3 uEye; uniform mat3 uCam; uniform vec2 uRes; uniform float uFov; uniform int uDisp; uniform int uDebug;
+uniform vec3 uEye; uniform mat3 uCam; uniform vec2 uRes; uniform float uFov; uniform int uDisp; uniform int uDebug; uniform int uHdr;
 out vec4 oColor;
 /** the crystal's own coordinates: across, along the axis, across */
 vec3 local(int id, vec3 p) {
@@ -222,7 +243,7 @@ Inner interior(int id, vec3 q, vec3 rd, float len) {
     vec3 c = (h3(fk) - 0.5) * vec3(R * 1.6, L * 0.9, R * 1.6) + vec3(0.0, L * 0.5, 0.0);
     vec3 dn = uC7[id].y > 0.0 && uC8[id].w < -0.5 ? vec3(0.0, 1.0, 0.0) : normalize(h3(fk + 2.0) - 0.5);
     // (a ray against a cylinder of radius rn about the line c + s*dn)
-    float rn = 0.012;
+    float rn = 0.006 + 0.004 * h1(fk + 4.0);
     vec3 oc = lq - c; vec3 dd = lrd - dn * dot(lrd, dn); vec3 oo = oc - dn * dot(oc, dn);
     float a = dot(dd, dd), b = dot(oo, dd), cc = dot(oo, oo) - rn * rn; float h = b * b - a * cc;
     if (h < 0.0 || a < 1e-6) continue;
@@ -241,8 +262,8 @@ Inner interior(int id, vec3 q, vec3 rd, float len) {
     if (mask <= 0.0) continue;
     vec3 wn = normalize(uC5[id].xyz * cn.x + uC4[id].xyz * cn.y + cross(uC4[id].xyz, uC5[id].xyz) * cn.z);
     float c = abs(dot(rd, wn));
-    vec3 film = 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + c * 9.0 + h1(fk) * 6.0);
-    r.glint += env(reflect(rd, wn)) * film * mask * (0.25 + 0.75 * pow(1.0 - c, 2.0)) * 0.7;
+    vec3 film = mix(vec3(1.0), 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + c * 9.0 + h1(fk) * 6.0), 0.55);
+    r.glint += env(reflect(rd, wn)) * film * mask * (0.25 + 0.75 * pow(1.0 - c, 2.0)) * 0.6;
     r.scatter += mask * 0.03 * uLightCol;
   }
   return r;
@@ -279,9 +300,16 @@ float through(int id, vec3 p, vec3 d, vec3 nn, float ior, int ch, out float path
 vec3 crystalShade(int id, vec3 p, vec3 d, vec3 nn) {
   float ior = uC1[id].z, disp = uC1[id].w;
   nn = striate(id, p, nn);
+  // frosted faces: an etched prism face scatters — its normal jitters at a fine grain
+  if (uC9[id].x > 0.5 && abs(dot(nn, uC4[id].xyz)) < 0.35) {
+    vec3 j = vec3(hash3(p * 900.0), hash3(p * 900.0 + 3.0), hash3(p * 900.0 + 7.0)) - 0.5;
+    nn = normalize(nn + j * 0.14);
+  }
   float cosi = max(dot(-d, nn), 0.0);
   float F = schlick(cosi, ior);
   vec3 refl = scene1(p + nn * 1e-3, reflect(d, nn));
+  // tarnish: a thin film on patches of the surface colours the reflection
+  if (uC9[id].y > 0.0) { float tm = smoothstep(0.5, 0.7, fbm(p * 7.0 + float(id))) * uC9[id].y; vec3 film = mix(vec3(1.0), 0.5 + 0.5 * cos(vec3(0.0, 2.1, 4.2) + cosi * 7.0 + fbm(p * 11.0) * 3.0), 0.6); refl = mix(refl, refl * film * 1.5, tm); }
   // the inside, once, along the green ray's first segment
   vec3 rd0 = refract(d, nn, 1.0 / ior); vec3 q0 = p - nn * 1e-3;
   float a0, b0; vec3 na0, nb0; hull(int(uC1[id].x), int(uC1[id].y), q0, rd0, a0, b0, na0, nb0);
@@ -309,17 +337,35 @@ vec3 crystalShade(int id, vec3 p, vec3 d, vec3 nn) {
   float glint = pow(1.0 - cosi, 6.0) * 0.15;
   return F * refl + (1.0 - F) * inner + glint * uLightCol * 0.2;
 }
+/** dust in the air: the key light scattered toward you along the ray, where the crystals and
+ *  the rock let it through — the beam of a softbox in a dim room */
+vec3 haze(vec3 o, vec3 d, float t, vec3 col) {
+  if (uHaze <= 0) return col;
+  float T = min(t, 16.0);
+  float ph = 0.08 + 0.92 * pow(max(dot(d, uLight), 0.0), 7.0); // (forward scattering)
+  vec3 sum = vec3(0.0);
+  float j = hash3(vec3(gl_FragCoord.xy, uTime));
+  for (int i = 0; i < 8; i++) {
+    if (i >= uHaze) break;
+    float s = (float(i) + j) / float(uHaze) * T;
+    vec3 ps = o + d * s;
+    float dens = 0.017 * exp(-max(ps.y, 0.0) * 0.45);
+    float vis = ps.y < 0.0 ? 0.0 : shadow1(ps, uLight);
+    sum += uLightCol * ph * vis * dens * (T / float(uHaze));
+  }
+  float ext = exp(-0.012 * T);
+  return col * ext + sum + vec3(0.004, 0.0045, 0.006) * (1.0 - ext) * 4.0;
+}
 vec3 shade(vec3 o, vec3 d) {
   float tn, tf; vec3 nn, nf; int id = nearest(o, d, tn, nn, tf, nf);
   float tm = ellipsoid(o, d);
   float tg = d.y < -1e-5 ? -o.y / d.y : 1e9;
   float tc = id >= 0 ? tn : 1e9;
   float t = min(min(tc, tm), tg);
-  if (t > 1e8) return env(d);
-  vec3 p = o + d * t;
-  if (tc <= t) return crystalShade(id, p, d, nn);
-  if (tm <= t) return matrixShade(p, d);
-  return ground(p, d);
+  vec3 col;
+  if (t > 1e8) { col = env(d); t = 30.0; }
+  else { vec3 p = o + d * t; col = tc <= t ? crystalShade(id, p, d, nn) : tm <= t ? matrixShade(p, d) : ground(p, d); }
+  return haze(o, d, t, col);
 }
 vec3 tonemap(vec3 x) { x *= 1.6; return (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14); }
 void main() {
@@ -330,7 +376,8 @@ void main() {
   if (uDebug == 4) { oColor = vec4(shade(uEye, d) * 4.0, 1.0); return; }
   if (uDebug == 2) { float tn, tf; vec3 nn, nf; int id = nearest(uEye, d, tn, nn, tf, nf); float tm = ellipsoid(uEye, d); float tg = d.y < -1e-5 ? -uEye.y / d.y : 1e9; float tc = id >= 0 ? tn : 1e9; float t = min(min(tc, tm), tg); oColor = vec4(tc <= t ? 1.0 : 0.0, tm <= t && tm < tc ? 1.0 : 0.0, tg <= t && tg < tc && tg < tm ? 1.0 : 0.0, 1.0); return; }
   vec3 col = shade(uEye, d);
-  // vignette and a little dither
+  if (uHdr == 1) { oColor = vec4(col, 1.0); return; }
+  // (no half-float targets: finish here)
   float vig = 1.0 - 0.35 * dot(uv, uv);
   col = tonemap(col * vig);
   col = pow(col, vec3(1.0 / 2.2)) + (hash3(vec3(gl_FragCoord.xy, uTime)) - 0.5) / 255.0;
@@ -389,4 +436,60 @@ export const CAUSTIC_FS = /* glsl */ `#version 300 es
 precision highp float;
 in vec3 vCol; out vec4 oColor;
 void main() { vec2 q = gl_PointCoord * 2.0 - 1.0; float r2 = dot(q, q); if (r2 > 1.0) discard; oColor = vec4(vCol * exp(-r2 * 3.0), 1.0); }
+`;
+
+/** the post chain: bloom from the bright parts, then the grade */
+export const BLOOM_FS = /* glsl */ `#version 300 es
+precision highp float;
+uniform sampler2D uTex; uniform vec2 uRes;
+out vec4 oColor;
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 px = 1.0 / vec2(textureSize(uTex, 0));
+  // a 13-tap downsample, then a soft knee: what glints and glows blooms
+  vec3 a = texture(uTex, uv + px * vec2(-2.0, -2.0)).rgb, b = texture(uTex, uv + px * vec2(0.0, -2.0)).rgb, c = texture(uTex, uv + px * vec2(2.0, -2.0)).rgb;
+  vec3 d = texture(uTex, uv + px * vec2(-2.0, 0.0)).rgb, e = texture(uTex, uv).rgb, f = texture(uTex, uv + px * vec2(2.0, 0.0)).rgb;
+  vec3 g = texture(uTex, uv + px * vec2(-2.0, 2.0)).rgb, h = texture(uTex, uv + px * vec2(0.0, 2.0)).rgb, i = texture(uTex, uv + px * vec2(2.0, 2.0)).rgb;
+  vec3 j = texture(uTex, uv + px * vec2(-1.0, -1.0)).rgb, k = texture(uTex, uv + px * vec2(1.0, -1.0)).rgb, l = texture(uTex, uv + px * vec2(-1.0, 1.0)).rgb, m = texture(uTex, uv + px * vec2(1.0, 1.0)).rgb;
+  vec3 col = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+  float lum = dot(col, vec3(0.3, 0.59, 0.11));
+  float knee = smoothstep(0.6, 1.6, lum);
+  oColor = vec4(col * knee, 1.0);
+}
+`;
+export const BLUR_FS = /* glsl */ `#version 300 es
+precision highp float;
+uniform sampler2D uTex; uniform vec2 uRes; uniform vec2 uDir;
+out vec4 oColor;
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes; vec2 px = uDir / vec2(textureSize(uTex, 0));
+  vec3 c = texture(uTex, uv).rgb * 0.2270270270;
+  c += (texture(uTex, uv + px * 1.3846153846).rgb + texture(uTex, uv - px * 1.3846153846).rgb) * 0.3162162162;
+  c += (texture(uTex, uv + px * 3.2307692308).rgb + texture(uTex, uv - px * 3.2307692308).rgb) * 0.0702702703;
+  oColor = vec4(c, 1.0);
+}
+`;
+export const FINAL_FS = /* glsl */ `#version 300 es
+precision highp float;
+uniform sampler2D uTex; uniform sampler2D uBloom; uniform vec2 uRes; uniform float uTime;
+out vec4 oColor;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uTime) * 43758.5453); }
+vec3 tonemap(vec3 x) { return (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14); }
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 c = (uv - 0.5) * vec2(uRes.x / uRes.y, 1.0);
+  // a little chromatic aberration toward the edges of the lens
+  float ab = 0.0025 * dot(c, c);
+  vec3 col = vec3(texture(uTex, uv + c * ab).r, texture(uTex, uv).g, texture(uTex, uv - c * ab).b);
+  vec3 bloom = texture(uBloom, uv).rgb;
+  col = col * 1.6 + bloom * 0.55;
+  // the grade: cool shadows, warm highlights; a vignette; grain
+  float lum = dot(col, vec3(0.3, 0.59, 0.11));
+  col *= mix(vec3(0.92, 0.96, 1.08), vec3(1.05, 1.0, 0.94), smoothstep(0.0, 1.2, lum));
+  col *= 1.0 - 0.38 * dot(c, c);
+  col = tonemap(col);
+  col = pow(col, vec3(1.0 / 2.2));
+  col += (hash(gl_FragCoord.xy) - 0.5) * 0.018;
+  oColor = vec4(col, 1.0);
+}
 `;
