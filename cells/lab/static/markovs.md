@@ -144,6 +144,35 @@ roll, Jack or Joker) so that the judge sees the consequences of a lay as a forec
 chances and never a simulated roll (harness h11). Hands refill at the start of a turn, so the
 deck never moves during an action. Suite: seeds 1–6 and 101–106 at three and four players.
 
+## The transition sweep
+
+`devtools/markovs-sweep.mjs` rewrites the suits' die faces along four axes and plays the poker
+game under the sim's bots (120 games a line, four greedy; a skill line with one random player);
+`BUILD=0|10` plays the court game with no build or a short one, `KINGS=corners|rim` moves the
+Kings. The scorecard adds the forecast's lead changes per game, whether the halfway leader won,
+and off-turn wins: games decided by someone else's roll.
+
+- **Stays are the draw lever.** Two fewer stay faces on every card: draws 20% → 3%, stalls 21%
+  → 5%, the same median length, more off-turn wins. Two more: draws 33%, stalls 46%. One fewer
+  on any single suit trims draws by a third; clubs' stays matter most.
+- **Back faces are the length lever.** One more face on the back exit of every card: median
+  race 13 → 9 rolls; one fewer: 14–15 rolls and more draws.
+- **Lean barely moves outcomes** (skill gap 27–31 points across the range); pulling the
+  temperaments apart (hearts leaner, spades stiller) raises stalls without buying anything.
+- **Kings off the cardinals change who wins, not how soon.** In the court game with no build,
+  edge-middle Kings give off-turn wins of 3%: the winner is almost always the roller, laying a
+  two-step chute and rolling it. Kings in the corners, or anywhere on the rim but a cardinal,
+  lift that to 15–19% and trim draws (18% → 13%); with a short build of ten, rim Kings have the
+  fewest draws of any cell (7%). But the shortest tenth of games stays at four or five rolls
+  under every placement, with or without the court cards: four players laying a card a turn
+  put a three-step chute down within a round whoever wanted it, and under wrap a King one
+  square off a cardinal is still three from the centre. The floor is the players, not the
+  table.
+
+So: Kings on the rim, off the cardinals, as the next rules change (interaction and draws); a
+stay reduction of one face per card, spades keeping their character, as the one after; and
+diagonals, if at all, only on the Aces.
+
 ## Open
 
 - The cover-under variant, with people: how often they cover the counter's card, how many build
