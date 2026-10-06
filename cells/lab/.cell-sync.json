@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:cd162baebdfc2745a7e72a0f6f16a0fa7ae0d1d3b48c936306513762a13f2a14",
-  "syncedAt": "2026-10-06T11:39:48.695Z",
+  "treeVersion": "tree:d0280b1cbebf72086588e85a778c18f7d3a25bd7698c7224f4d35b9d24238d94",
+  "syncedAt": "2026-10-06T11:41:11.501Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -27,7 +27,7 @@
     "client/markovs/archive.ts": "sha256:182b687c5d60bd6c5b2b225b6a067fc0c38fbcc5d5239fc888f2512d205936aa",
     "client/markovs/deck.ts": "sha256:15c1bf91b4d78e13918eea7102442ff777400b491698eb830e4ba77710be163d",
     "client/markovs/main.ts": "sha256:eadd208993df3646fae9e162da8d3e5b73eb0f68b3b3218ed9cb1051cb90dea5",
-    "client/markovs/page.ts": "sha256:b7cfd700993087d179e18f2434146ed2692dff8723fcce8ace44623519f9b54a",
+    "client/markovs/page.ts": "sha256:7420c0c783927dbb4821280a58e3eb786b2d2195b14824362ca5d4e2248cadda",
     "client/markovs/physical-rules.ts": "sha256:3b81e8ddb065027ddea6c887acf5141b6b86a5d59272f13052616cdc31e7f899",
     "client/markovs/physical.ts": "sha256:03f2bc9602ace9f80299758e4899d380acc15f4ebabc08a154dd12dfeebe2eed",
     "client/markovs/rules.ts": "sha256:0bb09e105f9978df7e70d9ab9c86b7420e4cc883b57ea1abae108c4adad108f9",
