@@ -91,7 +91,8 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h17'; // h17: the greedy stand-in values its options (own forecast, route) instead of picking any marked one.
+export const HARNESS_VERSION = 'h18'; // h18: the questionnaire (probe): sampled turns answer intention/threat/alternatives/urgency and, later, achieved/outcome/authorship/revised, as q_* measures.
+// h17: // h17: the greedy stand-in values its options (own forecast, route) instead of picking any marked one.
 // h16: // h15: sessions carry the mechanic's measures; h16: every eval plays a bot split (greedy stand-in, no judge) for the targets.
 
 /** "cost: everyone learns you are X" when `after` exposes the mover's role (public reveal, e.g. the Temple). */
@@ -545,6 +546,8 @@ export interface Session {
   timeoutWinnerRule?: boolean;
   /** h15: what the mechanic measured about this game (shared.measures), numbers a designer can set targets for */
   measures?: Record<string, number>;
+  /** h18: the questionnaire's answers, one record per probed turn */
+  probes?: ProbeRecord[];
   stopped: 'finished' | 'max-steps' | 'deadline' | 'stuck' | 'error';
   error?: string;
   tokens: number;
@@ -558,6 +561,75 @@ export interface PlayOptions {
   persona?: string;
   onTurn?: (t: TurnRecord) => void;
   signal?: AbortSignal;
+  /** h18: the questionnaire — every n-th judged decision of each player is followed by one
+   *  structured call asking about this turn (intention, threat, alternatives, urgency) and about
+   *  that player's last probed turn (achieved, outcome, authorship, revised plan). 0/unset: off. */
+  probe?: number;
+}
+
+/* ── the questionnaire (h18) ──────────────────────────────────────────────
+ * "Fun" decomposed into things a player can be asked at the table, as measures the targets
+ * can band. The probe comes AFTER the player has chosen and BEFORE the move resolves, so the
+ * answers cannot steer the move (the decider is stateless) and predictions are captured before
+ * outcomes. Private: nothing a player says reaches another player. Neutral wording: every
+ * question admits "nothing happened". The engine's own forecast (the view's progress lines)
+ * is kept beside each answer, so a claimed threat can be checked against a real one. */
+export interface ProbeRecord {
+  step: number;
+  player: string;
+  intention: string | null;
+  threat: string | null;
+  alternatives: string | null;
+  /** 0–4: how likely someone wins before this player's next turn, as the player sees it */
+  urgency: number | null;
+  /** the engine's forecast at the time: the largest chance of any King within the next few rolls, 0–1 */
+  engineThreat: number | null;
+  /** answers about this player's previous probed turn, given now */
+  achieved?: string | null;
+  outcome?: string | null;
+  authorship?: string | null;
+  revised?: number | null;
+  tokens: number;
+}
+const INTENTIONS = ['advance my own goal', 'hinder someone else', 'prepare for later turns', 'nothing in particular'];
+const THREATS = ['someone else could win before my next turn', 'I could win on my next turn', 'nobody is close to winning', 'unsure'];
+const ALTERNATIVES = ['no useful move', 'one obvious move', 'several meaningful alternatives'];
+const URGENCY = ['no chance', 'unlikely', 'even', 'likely', 'almost certain'];
+const ACHIEVED = ['fully', 'partly', 'not at all', 'not resolved yet'];
+const OUTCOMES = ['as I expected', 'surprising but understandable', 'confusing'];
+const AUTHORSHIP = ['earlier moves decided it', 'earlier moves mattered somewhat', 'earlier moves did not matter'];
+/** the engine's threat from the view's progress lines ("… 35% within 4 rolls …"): the largest near figure */
+function engineThreatOf(av: Record<string, unknown>): number | null {
+  const lines = [...(Array.isArray(av.objectiveProgress) ? (av.objectiveProgress as string[]) : []), ...(Array.isArray(av.progress) ? (av.progress as string[]) : [])];
+  let best: number | null = null;
+  for (const l of lines) { const m = /(\d+)%\s*within/.exec(l); if (m) best = Math.max(best ?? 0, Number(m[1]) / 100); }
+  return best;
+}
+/** The questionnaire's measures over a session's probes (q_*: shares 0–1; q_urgencyErr: mean |player − engine|). */
+export function probeMeasures(probes: ProbeRecord[]): Record<string, number> {
+  const n = probes.length;
+  if (!n) return {};
+  const share = (f: (p: ProbeRecord) => boolean, of = probes) => (of.length ? +(of.filter(f).length / of.length).toFixed(3) : 0);
+  const after = probes.filter((p) => p.achieved != null);
+  const threatened = probes.filter((p) => p.engineThreat != null && p.engineThreat >= 1 / 3);
+  const calm = probes.filter((p) => p.engineThreat != null && p.engineThreat < 1 / 6);
+  const urg = probes.filter((p) => p.urgency != null && p.engineThreat != null);
+  return {
+    q_n: n,
+    q_intent: share((p) => !!p.intention && p.intention !== 'nothing in particular'),
+    q_several: share((p) => p.alternatives === 'several meaningful alternatives'),
+    q_noUseful: share((p) => p.alternatives === 'no useful move'),
+    ...(threatened.length ? { q_threatSeen: share((p) => p.threat === THREATS[0] || p.threat === THREATS[1], threatened) } : {}),
+    ...(calm.length ? { q_threatFalse: share((p) => p.threat === THREATS[0] || p.threat === THREATS[1], calm) } : {}),
+    ...(urg.length ? { q_urgencyErr: +(urg.reduce((a, p) => a + Math.abs(p.urgency! / 4 - p.engineThreat!), 0) / urg.length).toFixed(3) } : {}),
+    ...(after.length ? {
+      q_achieved: share((p) => p.achieved === 'fully' || p.achieved === 'partly', after),
+      q_surprise: share((p) => p.outcome === OUTCOMES[1], after),
+      q_confusing: share((p) => p.outcome === OUTCOMES[2], after),
+      q_authorship: share((p) => p.authorship === AUTHORSHIP[0] || p.authorship === AUTHORSHIP[1], after),
+      q_revised: +(after.reduce((a, p) => a + (p.revised ?? 0), 0) / after.length).toFixed(3),
+    } : {}),
+  };
 }
 
 function mulberry32(seed: number): () => number {
@@ -731,6 +803,10 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
     unsuitable.set(k, u);
   };
   const recent: string[] = [];
+  // the questionnaire's bookkeeping: judged decisions per player, and each player's last probe
+  const decided: Record<string, number> = {};
+  const lastProbe: Record<string, ProbeRecord | undefined> = {};
+  if (opts.probe) session.probes = [];
   let gameId = '';
   try {
     let s = E(() => initGame(slot, opts.players)) as unknown as Record<string, any>;
@@ -827,6 +903,36 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       }
 
       if (!planned && (chosen as { rest?: Action[] }).rest?.length) plan = { pid, actions: [...(chosen as { rest?: Action[] }).rest!] };
+      // the questionnaire: after the choice, before it resolves (see ProbeRecord)
+      if (opts.probe && decide && picks.length > 1 && !responder) {
+        decided[pid] = (decided[pid] ?? 0) + 1;
+        if (decided[pid] % opts.probe === 0) {
+          const last = lastProbe[pid];
+          const q: Questions = {
+            intention: { type: 'choice', instructions: `You are ${pid}. You have just chosen "${chosen.label.replace(/\s*\[[^\]]*\]\s*$/, '')}". What were you trying to achieve this turn?`, criteria: Object.fromEntries(INTENTIONS.map((o) => [o, null])) },
+            threat: { type: 'choice', instructions: 'As the table stands, which is true?', criteria: Object.fromEntries(THREATS.map((o) => [o, null])) },
+            alternatives: { type: 'choice', instructions: 'Looking at the options you had this turn, which describes them?', criteria: Object.fromEntries(ALTERNATIVES.map((o) => [o, null])) },
+            urgency: { type: 'score', instructions: 'How likely is it that someone wins before your next turn?', criteria: URGENCY },
+            ...(last ? {
+              achieved: { type: 'choice', instructions: `On your last probed turn (step ${last.step}) you said you were trying to "${last.intention ?? 'do something'}". Did that action achieve what you intended?`, criteria: Object.fromEntries(ACHIEVED.map((o) => [o, null])) },
+              outcome: { type: 'choice', instructions: 'What happened after that action was…', criteria: Object.fromEntries(OUTCOMES.map((o) => [o, null])) },
+              authorship: { type: 'choice', instructions: 'How much did earlier moves on the table (yours or others\') contribute to what happened since?', criteria: Object.fromEntries(AUTHORSHIP.map((o) => [o, null])) },
+              revised: { type: 'noul', instructions: 'Did events since your last turn make you change your plan?' },
+            } : {}),
+          };
+          try {
+            const r = await decide(turnState(s, pid, av, rulesDigest, recent, cfg.max_turns ?? null), q, `probe ${step} · ${pid}`);
+            const a = r.answers;
+            const pick = (k: string, from: string[]) => (a[k]?.choice && from.includes(a[k]!.choice!) ? a[k]!.choice! : null);
+            const rec: ProbeRecord = { step, player: pid, intention: pick('intention', INTENTIONS), threat: pick('threat', THREATS), alternatives: pick('alternatives', ALTERNATIVES), urgency: typeof a.urgency?.score === 'number' ? a.urgency.score : null, engineThreat: engineThreatOf(av), tokens: r.tokens, ...(last ? { achieved: pick('achieved', ACHIEVED), outcome: pick('outcome', OUTCOMES), authorship: pick('authorship', AUTHORSHIP), revised: typeof a.revised?.noul === 'number' ? a.revised.noul : null } : {}) };
+            session.probes!.push(rec);
+            lastProbe[pid] = rec;
+            session.tokens += r.tokens;
+          } catch (e) {
+            if ((e as Error).name === 'AbortError') throw e;
+          }
+        }
+      }
       const at = { round: s.round, turn: s.turnNumber }; // before the action can end the turn
       const known = knowledgeSnapshot(s);
       E(() => executeAction(s as never, pid, chosen.action as never));
@@ -857,6 +963,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       if (step === maxSteps && s.status === 'in_progress') session.stopped = 'max-steps';
     }
     if (s.shared?.measures && typeof s.shared.measures === 'object') session.measures = Object.fromEntries(Object.entries(s.shared.measures as Record<string, unknown>).filter(([, v]) => typeof v === 'number')) as Record<string, number>;
+    if (session.probes?.length) session.measures = { ...(session.measures ?? {}), ...probeMeasures(session.probes) };
     (session as Session & { chainAudit?: unknown }).chainAudit = s.shared?.chain ? { ...s.shared.chain.audit, rolls: s.shared.chain.rolls, tiles: Object.keys(s.shared.chain.tiles).length, kingsOnBoard: Object.values(s.shared.chain.tiles).filter((t: any) => t.king).length } : undefined;
     session.status = s.status;
     session.winner = (s.winner as string) ?? (s.shared?.winner as string) ?? null;

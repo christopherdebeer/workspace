@@ -165,6 +165,8 @@ export interface Suite extends Item {
   /** v4.3: the bot split — seeded games played by the greedy stand-in (no judge), in volume, for
    *  the measures and targets; default thirty seeds × the train player counts */
   bot?: { seeds: number[]; players: number[] };
+  /** h18: the questionnaire on judged runs — every n-th decision of each player; 0 off (default 2) */
+  probe?: number;
 }
 export function botSplit(s: Suite): { seeds: number[]; players: number[] } {
   return s.bot ?? { seeds: Array.from({ length: 30 }, (_, i) => i + 1), players: s.train.players };

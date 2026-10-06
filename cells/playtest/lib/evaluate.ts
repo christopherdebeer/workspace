@@ -194,7 +194,7 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
   const timer = setTimeout(() => abort.abort(), Math.max(1000, o.deadlineAt - 20_000 - Date.now()));
   const bot = o.spec.split === 'bot';
   const persona = bot ? 'bot' : personaFor(o.spec.seed);
-  const session = await play(o.def.rules, bot ? greedyDecider(o.spec.seed * 31 + o.spec.players) : o.decide, { players: o.spec.players, seed: o.spec.seed, maxSteps: o.suite.maxSteps, signal: abort.signal, ...(bot ? {} : { persona }) });
+  const session = await play(o.def.rules, bot ? greedyDecider(o.spec.seed * 31 + o.spec.players) : o.decide, { players: o.spec.players, seed: o.spec.seed, maxSteps: o.suite.maxSteps, signal: abort.signal, ...(bot ? {} : { persona, probe: o.suite.probe ?? 2 }) });
   clearTimeout(timer);
   let tokens = session.tokens;
   let judgement: Judgement | null = null;
