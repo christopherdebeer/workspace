@@ -43,6 +43,9 @@ export function greedyDecider(seed: number): Decide {
   const rng = mulberry(seed ^ 0x9e3779b9);
   return async (_state, questions) => {
     const opts = Object.keys((questions.move as { criteria?: Record<string, unknown> } | undefined)?.criteria ?? {});
+    // free information first (h21): a reveal costs nothing and is never previewed, so a greedy player takes one, at random
+    const reveals = opts.filter((o) => /^reveal\b/.test(o));
+    if (reveals.length) return { answers: { move: { choice: reveals[Math.floor(rng() * reveals.length)], confidence: 1, probabilities: {} } } as never, tokens: 0, ms: 0 };
     const scored = opts.map((o) => [o, optionValue(o)] as const);
     const best = Math.max(...scored.map(([, v]) => v));
     // the best-valued options; with nothing marked, any non-pass option
