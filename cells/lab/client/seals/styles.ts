@@ -126,6 +126,8 @@ export interface Style {
   zoneMargin: number;
   /** close the zones' gaps with a pass of smaller, unsymmetric discs */
   refill: boolean;
+  /** medallions at a shape's nodes (on the rays `motifAt` names), as a share of their room: 0 none */
+  medal: number;
   // the card's border
   border: Border;
   /** the frame's width, and the corner pieces' reach (mm) */
@@ -148,7 +150,7 @@ const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | '
   petals: 0, petalR: 24, petalOffset: 0.85, lenses: 2, lensR: 40, lensOffset: 0.72,
   motifR: 29, motifSize: 3.4, motifRoundel: false, motifFill: false,
   crescents: 1, crescentR: 19, dots: 0.3, hubR: 11.5,
-  packMax: 5, packMin: 0.55, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, borderW: 4.6, cornerR: 13, stipple: 0.25,
+  packMax: 5, packMin: 0.55, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, borderW: 4.6, cornerR: 13, stipple: 0.25,
   oDot: 0.35, oSparkle: 0.5, oMotif: 0.35, oRosette: 0.3, oRoundel: 0.1, oScroll: 0.9, oStar: 0.1, oEye: 0.25, oCrescent: 0.1, orient: 'radial', links: 0.5, linkBend: 0.6, border: 'corners',
   jWeight: 1.2, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
@@ -160,7 +162,7 @@ const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'm
   petals: 4, petalR: 16, petalOffset: 1.1, lenses: 0, lensR: 40, lensOffset: 0.72,
   motifR: 26, motifSize: 3.2, motifRoundel: true, motifFill: false,
   crescents: 0, crescentR: 19, dots: 0.4, hubR: 12,
-  packMax: 5.5, packMin: 0.6, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, borderW: 4.6, cornerR: 13, stipple: 0.15,
+  packMax: 5.5, packMin: 0.6, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, borderW: 4.6, cornerR: 13, stipple: 0.15,
   oDot: 0.5, oSparkle: 0.3, oMotif: 0.5, oRosette: 0.6, oRoundel: 0.7, oScroll: 0, oStar: 0.35, oEye: 0.1, oCrescent: 0, orient: 'up', links: 0.2, linkBend: 0.2, border: 'frame',
   jWeight: 1.2, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
@@ -214,7 +216,7 @@ export const SCHEMA: Control[] = [
   n('oRosette', 'rosettes', 'Vocabulary', 0, 1, 0.05), n('oRoundel', 'roundels', 'Vocabulary', 0, 1, 0.05), n('oScroll', 'scrolls', 'Vocabulary', 0, 1, 0.05),
   n('oStar', 'star polygons', 'Vocabulary', 0, 1, 0.05), n('oEye', 'eyes', 'Vocabulary', 0, 1, 0.05), n('oCrescent', 'crescents', 'Vocabulary', 0, 1, 0.05),
   e('orient', 'orientation', 'Vocabulary', ['radial', 'tangent', 'up', 'free']), n('links', 'lace', 'Vocabulary', 0, 1, 0.05, true), n('linkBend', 'lace bow', 'Vocabulary', 0, 1, 0.05),
-  n('zoneMargin', 'zone margin', 'Zones', 0, 5, 0.1), b('refill', 'refill round zones', 'Zones'),
+  n('medal', 'medallions', 'Zones', 0, 1.5, 0.05, true), n('zoneMargin', 'zone margin', 'Zones', 0, 5, 0.1), b('refill', 'refill round zones', 'Zones'),
   e('border', 'card border', 'Zones', ['none', 'frame', 'corners', 'both']), n('borderW', 'frame width (mm)', 'Zones', 2.5, 8, 0.1), n('cornerR', 'corner reach (mm)', 'Zones', 6, 22, 0.5),
   n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
 ];

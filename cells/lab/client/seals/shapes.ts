@@ -5,7 +5,8 @@
  */
 import { hash } from '../kit/rng';
 import { shapeOutline, type Shape, type Sym } from './field';
-import { fill, type FillResult } from './ornament';
+import type { FillResult, Mark } from './ornament';
+import { ornate } from './structure';
 import { overlaySvg, sample, textZone } from './seal';
 import type { Style } from './styles';
 
@@ -41,12 +42,16 @@ export function shapeTile(o: { kind: ShapeKind; style: Style; seed: number; labe
   const { region, sym, lines } = shapeOf(o.kind, [4, 8, 12].includes(s.fold) ? s.fold : 4);
   const size = 8;
   const zones: Shape[] = o.label ? [{ k: 'grow', s: textZone(0, size * 0.34, o.label, size, 0.8), by: s.zoneMargin }] : [];
-  const res = fill({ region, avoid: [], zones, sym, style: s, seed: hash(o.seed, 0x5a9e, SHAPE_KINDS.indexOf(o.kind)), k: 1, centre: [0, 0], stats: true });
+  const { structure: st, fill: res } = ornate({ region, zones, sym, style: s, seed: hash(o.seed, 0x5a9e, SHAPE_KINDS.indexOf(o.kind)), k: 1, centre: [0, 0], stats: true });
   const col = (x?: string) => (x === 'ink' ? s.ink : x === 'paper' ? s.paper : 'none');
-  const marks = res.marks.map((m) => m.k === 'circle'
+  const svgOf = (m: Mark) => m.k === 'circle'
     ? `<circle cx="${m.x}" cy="${m.y}" r="${m.r}" fill="${col(m.fill)}"${m.w > 0 ? ` stroke="${s.ink}" stroke-width="${m.w}"` : ''}/>`
-    : m.k === 'path' ? `<path d="${m.d}" fill="${col(m.fill)}"${m.w > 0 ? ` stroke="${s.ink}" stroke-width="${m.w}"` : ''} stroke-linecap="round" stroke-linejoin="round"/>` : '').join('');
-  const outline = lines.map((l) => shapeOutline(l, `fill="none" stroke="${s.ink}" stroke-width="${s.weight * 1.2}"`)).join('');
+    : m.k === 'path' ? `<path d="${m.d}" fill="${col(m.fill)}"${m.w > 0 ? ` stroke="${s.ink}" stroke-width="${m.w}"` : ''} stroke-linecap="round" stroke-linejoin="round"/>` : '';
+  const id = `sh${o.kind}${o.seed}`;
+  const clipped = st.marks.filter((m) => 'clip' in m && m.clip).map(svgOf).join('');
+  const marks = `<clipPath id="${id}"><path d="${st.clip}" clip-rule="evenodd"/></clipPath><g clip-path="url(#${id})">${clipped}</g>${st.marks.filter((m) => !('clip' in m && m.clip)).map(svgOf).join('')}${res.marks.map(svgOf).join('')}`;
+  const outline = '';
+  void lines; void shapeOutline;
   const label = o.label ? `<text x="0" y="${size * 0.34}" text-anchor="middle" font-size="${size}" letter-spacing=".8" font-family="Georgia,'Times New Roman',serif" fill="${s.ink}">${o.label.replace(/[<&]/g, '')}</text>` : '';
   const over = o.overlay || o.zones ? overlaySvg(o.overlay ? res.discs : [], zones, 0.25) : '';
   return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-60 -60 120 120"><rect x="-60" y="-60" width="120" height="120" fill="${s.paper}"/><g opacity="${s.faint}">${outline}${marks}</g>${label}${over}</svg>`, fill: res };

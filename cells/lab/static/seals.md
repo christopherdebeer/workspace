@@ -60,11 +60,29 @@ packing: teal for the symmetric pass, orange for the refill.
 ## Shapes, borders and corners
 
 Regions are signed distance fields (`client/seals/field.ts`): circles, rings, rounded boxes,
-polygons, capsules, circle strokes, and their unions, intersections, differences and offsets.
-So the same fill makes a card's **frame** (a box minus a smaller box), its **corner pieces** (a
-disc at each inner corner, cut by the frame), a ring or a lens. **Card border** puts a frame,
-corners or both round each card, clear of the seal and of every line of text. The **Shapes**
-view fills six shapes around a label you type, its zone sized to the words.
+polygons, capsules, circle strokes, and their unions, intersections, differences, offsets and
+level lines. A shape gets the seal's **construction** before its fill (`structure.ts`), all of
+it read off the shape's own field:
+
+- **nodes**: rays along the symmetry's mirrors (and to a box's corners); where a ray runs inside
+  the shape, its deepest point is a node. On the rays the suit puts its motifs (hearts and
+  clubs the diagonals, diamonds both, spades the axes) a node carries a **medallion**: a small
+  seal of the suit's own, with rings, beads, a star polygon and the suit's motif;
+- **rules**: contour lines inset from the edge (marching squares on the field), of the shape
+  less its medallions and labels, so the rules wrap round both, like cartouches;
+- **band**: a bead rule, then ticks along a contour (the suit's scale or rays), lengths from a
+  noise that is the same at every mirror image;
+- **lattice**: a star polygon through the points where the rays meet the inner rule, spokes, and
+  arcs round the medallions, clipped to the shape, so across a frame they become rungs and
+  bracing;
+- the construction takes at most a third of the shape's depth, so a thin frame keeps its rules,
+  only finer; the fill packs what is left.
+
+So the same code makes a card's **frame** (a box minus a smaller box), its **corner pieces** (a
+disc at each corner, cut by the frame), a ring or a lens. **Card border** puts a frame, corners
+or both round each card: its rules wrap round the title, the face line, the summary and the
+seal, each zone sized to its words. The **Shapes** view does six shapes round a label you type.
+**Medallions** sets their size (0: none).
 
 ## Measuring evenness
 

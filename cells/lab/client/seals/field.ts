@@ -21,7 +21,9 @@ export type Shape =
   | { k: 'union'; of: Shape[] }
   | { k: 'inter'; of: Shape[] }
   | { k: 'diff'; a: Shape; minus: Shape[] }
-  | { k: 'grow'; s: Shape; by: number };
+  | { k: 'grow'; s: Shape; by: number }
+  /** the line where another shape's distance equals `at`, w either side (a rule inside a shape) */
+  | { k: 'level'; s: Shape; at: number; w: number };
 
 const len = (x: number, y: number) => Math.sqrt(x * x + y * y);
 export function sdf(s: Shape, p: Pt): number {
@@ -54,6 +56,7 @@ export function sdf(s: Shape, p: Pt): number {
     case 'inter': return s.of.reduce((m, x) => Math.max(m, sdf(x, p)), -Infinity);
     case 'diff': return s.minus.reduce((m, x) => Math.max(m, -sdf(x, p)), sdf(s.a, p));
     case 'grow': return sdf(s.s, p) - s.by;
+    case 'level': return Math.abs(sdf(s.s, p) - s.at) - s.w;
   }
 }
 /** the distance to the nearest of several shapes (Infinity for none) */
@@ -72,6 +75,7 @@ export function bounds(s: Shape): Box {
     case 'inter': { const bs = s.of.map(bounds); return [Math.max(...bs.map((b) => b[0])), Math.max(...bs.map((b) => b[1])), Math.min(...bs.map((b) => b[2])), Math.min(...bs.map((b) => b[3]))]; }
     case 'diff': return bounds(s.a);
     case 'grow': { const b = bounds(s.s); return [b[0] - s.by, b[1] - s.by, b[2] + s.by, b[3] + s.by]; }
+    case 'level': return bounds(s.s);
   }
 }
 export const grow = (s: Shape, by: number): Shape => (by ? { k: 'grow', s, by } : s);
@@ -88,7 +92,7 @@ export function shapeOutline(s: Shape, attrs: string): string {
     case 'stroke': return `<circle cx="${f(s.c[0])}" cy="${f(s.c[1])}" r="${f(s.r)}" fill="none" stroke="currentColor" stroke-width="${f(2 * s.w)}" ${attrs.replace(/fill="[^"]*"/, '').replace(/stroke="[^"]*"/, '')}/>`;
     case 'union': case 'inter': return s.of.map((x) => shapeOutline(x, attrs)).join('');
     case 'diff': return shapeOutline(s.a, attrs) + s.minus.map((x) => shapeOutline(x, attrs)).join('');
-    case 'grow': return shapeOutline(s.s, attrs);
+    case 'grow': case 'level': return shapeOutline(s.s, attrs);
   }
 }
 

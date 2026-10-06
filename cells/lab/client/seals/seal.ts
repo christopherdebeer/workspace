@@ -20,6 +20,7 @@ import { shapeOutline, type Pt, type Shape } from './field';
 import { add, f, fill, glyph, pol, pt, type Fill, type FillResult, type Mark } from './ornament';
 import type { Disc, Evenness } from './pack';
 import { SCHEMA, type Style } from './styles';
+import { ornate } from './structure';
 
 export { glyph, pol, type Fill, type Layer, type Mark } from './ornament';
 export interface Seal {
@@ -395,17 +396,20 @@ export function card(o: { style: Style; seed: number; faces: number[] | null; ti
     const k = 0.45, bw = s.borderW, e = s.packEdge * k;
     const outer: Shape = { k: 'box', c: [31.5, 44], hw: 29.1, hh: 41.6, rx: 2.2 };
     const inner: Shape = { k: 'box', c: [31.5, 44], hw: 29.1 - bw, hh: 41.6 - bw, rx: 1.2 };
-    const frame: Shape = { k: 'diff', a: { k: 'grow', s: outer, by: -e - 0.3 }, minus: [{ k: 'grow', s: inner, by: e + 0.3 }] };
+    const frame: Shape = { k: 'diff', a: outer, minus: [inner] };
+    void e;
     const ix = 29.1 - bw, iy = 41.6 - bw;
-    const corners: Shape = { k: 'union', of: [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => ({ k: 'inter', of: [{ k: 'circle', c: [31.5 + sx * ix, 44 + sy * iy], r: s.cornerR }, { k: 'grow', s: inner, by: -e - 0.3 }] }) as Shape) };
+    const corners: Shape = { k: 'union', of: [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => ({ k: 'inter', of: [{ k: 'circle', c: [31.5 + sx * ix, 44 + sy * iy], r: s.cornerR }, s.border === 'corners' ? outer : inner] }) as Shape) };
     const region: Shape = s.border === 'frame' ? frame : s.border === 'corners' ? corners : { k: 'union', of: [frame, corners] };
     const reach = (R + Math.max(4, s.nodeOut + 2.4 + s.nodeDots * 2.5 + 1)) * scale;
     const zm = s.zoneMargin * k;
     const zones: Shape[] = [{ k: 'circle', c: [31.5, cy], r: reach + zm }, { k: 'grow', s: textZone(31.5, tY, o.title, 3.4, 0.55), by: zm }];
     if (words) zones.push({ k: 'grow', s: textZone(31.5, fY, line, 3.7), by: zm }, { k: 'grow', s: textZone(31.5, sY + 0.8, sum, 2.15, 0.3), by: zm });
-    border = fill({ region, avoid: [], zones, sym: { kind: 'd2', c: [31.5, 44] }, style: s, seed: hash(o.seed, 0xb0d), k, centre: [31.5, 44], stats: o.stats });
-    const ruleIn = s.border !== 'corners' ? `<rect x="${f(31.5 - ix)}" y="${f(44 - iy)}" width="${f(2 * ix)}" height="${f(2 * iy)}" rx="1.2" fill="none" stroke="${s.ink}" stroke-width=".2"/>` : '';
-    borderSvg = `<g opacity="${s.faint}">${ruleIn}${border.marks.map((m) => markSvg(m, s)).join('')}</g>`;
+    const made = ornate({ region, zones, sym: { kind: 'd2', c: [31.5, 44] }, style: s, seed: hash(o.seed, 0xb0d), k, centre: [31.5, 44], stats: o.stats });
+    border = made.fill;
+    const st = made.structure, cid = `${o.id}b`;
+    const clipped = st.marks.filter((m) => 'clip' in m && m.clip).map((m) => markSvg(m, s)).join('');
+    borderSvg = `<g opacity="${s.faint}"><clipPath id="${cid}"><path d="${st.clip}" clip-rule="evenodd"/></clipPath><g clip-path="url(#${cid})">${clipped}</g>${st.marks.filter((m) => !('clip' in m && m.clip)).map((m) => markSvg(m, s)).join('')}${border.marks.map((m) => markSvg(m, s)).join('')}</g>`;
     if (o.overlay || mode === 'zones') borderOverlay = overlaySvg(o.overlay ? border.discs : [], zones, 0.12);
   }
   const sealOverlay = o.overlay || mode === 'zones' ? overlaySvg(o.overlay ? seal.discs : [], seal.zones, 0.25) : '';

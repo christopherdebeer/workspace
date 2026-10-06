@@ -3,7 +3,7 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(`../client/${f}`, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
-const S = await load('seals/seal.ts'), T = await load('seals/styles.ts'), D = await load('markovs/deck.ts'), F = await load('seals/field.ts'), P = await load('seals/pack.ts'), H = await load('seals/shapes.ts');
+const St = await load('seals/structure.ts'), S = await load('seals/seal.ts'), T = await load('seals/styles.ts'), D = await load('markovs/deck.ts'), F = await load('seals/field.ts'), P = await load('seals/pack.ts'), H = await load('seals/shapes.ts');
 
 // every junction of every suit, a few seeds: no NaN, the same twice
 for (let suit = 0; suit < 4; suit++) for (let rank = 1; rank <= 10; rank++) for (const seed of [1, 4096]) {
@@ -36,7 +36,12 @@ for (let suit = 0; suit < 4; suit++) for (const rank of [3, 5, 6]) {
   for (const d of seal.discs.filter((x) => x.pass === 0)) assert.ok(F.sdfAll(seal.avoid, d.c) >= d.r - 1e-6, 'disc off the lines');
   // the card: its border keeps clear of the seal and of the words
   const c = S.card({ style: T.SUIT_STYLES[suit], seed: 3, faces: D.facesOf({ suit, rank }), title: 'VIII · BACKTURN', id: 'z' });
-  if (c.border) assert.ok(c.border.discs.length > 20, 'a border is filled');
+  if (c.border) {
+    assert.ok(c.svg.includes('clip-path="url(#zb)"'), 'the border is constructed');
+    // no border ornament on the title or the words
+    const zs = [S.textZone(31.5, 10.2, 'VIII · BACKTURN', 3.4, 0.55)];
+    for (const d of c.border.discs) assert.ok(F.sdfAll(zs, d.c) >= d.r - 1e-6, 'border clear of the title');
+  }
 }
 // with no zones the fill is symmetric: every disc has its mirror image
 {
@@ -49,6 +54,7 @@ for (let suit = 0; suit < 4; suit++) for (const rank of [3, 5, 6]) {
 for (const kind of H.SHAPE_KINDS) {
   const t = H.shapeTile({ kind, style: T.SUIT_STYLES[1], seed: 2, label: 'Markovs' });
   assert.ok(t.fill.discs.length > 10 && !/NaN/.test(t.svg), `${kind} fills`);
+  assert.ok(/clip-path/.test(t.svg) && t.svg.length > 20000, `${kind} is constructed`);
 }
 // the evenness dial: largest-first fills more evenly than random sequential addition
 {
@@ -57,6 +63,12 @@ for (const kind of H.SHAPE_KINDS) {
   let even = 0, rand = 0;
   for (const seed of [1, 2, 3]) { even += P.evenness(region, [], P.fillPasses({ ...o, tries: 40, seed })).p95Gap; rand += P.evenness(region, [], P.fillPasses({ ...o, tries: 1, seed })).p95Gap; }
   assert.ok(even <= rand, `largest-first leaves smaller gaps (${even} vs ${rand})`);
+}
+// contours: a circle's isolines are circles at the right radius
+{
+  const lines = St.isolines(St.sampleGridFor({ k: 'circle', c: [0, 0], r: 10 }, 0.25), -3);
+  assert.equal(lines.length, 1, 'one closed line');
+  for (const p of lines[0]) assert.ok(Math.abs(Math.hypot(p[0], p[1]) - 7) < 0.05, 'at radius 7');
 }
 // sdf: a frame is inside between its boxes, outside in the middle
 {
