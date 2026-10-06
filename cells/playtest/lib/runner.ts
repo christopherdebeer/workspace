@@ -91,7 +91,8 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h18'; // h18: the questionnaire (probe): sampled turns answer intention/threat/alternatives/urgency and, later, achieved/outcome/authorship/revised, as q_* measures.
+export const HARNESS_VERSION = 'h19'; // h19: questionnaire v2 — margin and authorship as scores, 'went my way' against the named move, the urgency scale fixed.
+// h18: // h18: the questionnaire (probe): sampled turns answer intention/threat/alternatives/urgency and, later, achieved/outcome/authorship/revised, as q_* measures.
 // h17: // h17: the greedy stand-in values its options (own forecast, route) instead of picking any marked one.
 // h16: // h15: sessions carry the mechanic's measures; h16: every eval plays a bot split (greedy stand-in, no judge) for the targets.
 
@@ -579,25 +580,33 @@ export interface ProbeRecord {
   player: string;
   intention: string | null;
   threat: string | null;
-  alternatives: string | null;
-  /** 0–4: how likely someone wins before this player's next turn, as the player sees it */
+  /** 0–1: how much better the chosen move was than the next best (0 no better … 1 the only sensible move) */
+  margin: number | null;
+  /** 0–1: how likely someone wins before this player's next turn, as the player sees it */
   urgency: number | null;
   /** the engine's forecast at the time: the largest chance of any King within the next few rolls, 0–1 */
   engineThreat: number | null;
   /** answers about this player's previous probed turn, given now */
-  achieved?: string | null;
+  /** whether the table moved the way the player wanted since the move they named */
+  wentMyWay?: string | null;
+  /** the counter's movement since: expected, surprising but understandable, confusing, or none */
   outcome?: string | null;
-  authorship?: string | null;
+  /** 0–1: how much of what happened since was the cards laid earlier rather than the die */
+  authorship?: number | null;
   revised?: number | null;
+  /** the move the player had just chosen (for the next probe's questions) */
+  move?: string;
   tokens: number;
 }
 const INTENTIONS = ['advance my own goal', 'hinder someone else', 'prepare for later turns', 'nothing in particular'];
 const THREATS = ['someone else could win before my next turn', 'I could win on my next turn', 'nobody is close to winning', 'unsure'];
-const ALTERNATIVES = ['no useful move', 'one obvious move', 'several meaningful alternatives'];
+const MARGIN = ['no better than the next best', 'slightly better', 'clearly better', 'much better', 'it was the only sensible move'];
 const URGENCY = ['no chance', 'unlikely', 'even', 'likely', 'almost certain'];
-const ACHIEVED = ['fully', 'partly', 'not at all', 'not resolved yet'];
-const OUTCOMES = ['as I expected', 'surprising but understandable', 'confusing'];
-const AUTHORSHIP = ['earlier moves decided it', 'earlier moves mattered somewhat', 'earlier moves did not matter'];
+const WENT = ['yes', 'partly', 'no', 'nothing relevant has happened'];
+const OUTCOMES = ['as I expected', 'surprising but understandable', 'confusing', 'the counter did not move'];
+const AUTHORSHIP = ['all the die', 'mostly the die', 'even', 'mostly the cards', 'all the cards'];
+/** Jev's score answers arrive on 0–1 (an expectation over the levels); older or odd deciders may give the level index */
+const unit = (x: unknown, levels: number) => (typeof x !== 'number' ? null : x <= 1.1 ? Math.max(0, Math.min(1, x)) : Math.max(0, Math.min(1, x / (levels - 1))));
 /** the engine's threat from the view's progress lines ("… 35% within 4 rolls …"): the largest near figure */
 function engineThreatOf(av: Record<string, unknown>): number | null {
   const lines = [...(Array.isArray(av.objectiveProgress) ? (av.objectiveProgress as string[]) : []), ...(Array.isArray(av.progress) ? (av.progress as string[]) : [])];
@@ -610,24 +619,28 @@ export function probeMeasures(probes: ProbeRecord[]): Record<string, number> {
   const n = probes.length;
   if (!n) return {};
   const share = (f: (p: ProbeRecord) => boolean, of = probes) => (of.length ? +(of.filter(f).length / of.length).toFixed(3) : 0);
-  const after = probes.filter((p) => p.achieved != null);
+  const mean = (xs: number[]) => (xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3) : null);
+  const after = probes.filter((p) => p.wentMyWay != null || p.outcome != null || p.authorship != null);
   const threatened = probes.filter((p) => p.engineThreat != null && p.engineThreat >= 1 / 3);
   const calm = probes.filter((p) => p.engineThreat != null && p.engineThreat < 1 / 6);
   const urg = probes.filter((p) => p.urgency != null && p.engineThreat != null);
+  const num = (k: string, v: number | null) => (v === null ? {} : { [k]: v });
   return {
     q_n: n,
     q_intent: share((p) => !!p.intention && p.intention !== 'nothing in particular'),
-    q_several: share((p) => p.alternatives === 'several meaningful alternatives'),
-    q_noUseful: share((p) => p.alternatives === 'no useful move'),
+    q_hinder: share((p) => p.intention === 'hinder someone else'),
+    ...num('q_margin', mean(probes.map((p) => p.margin).filter((v): v is number => v != null))),
+    q_forced: share((p) => p.margin != null && p.margin >= 0.9),
     ...(threatened.length ? { q_threatSeen: share((p) => p.threat === THREATS[0] || p.threat === THREATS[1], threatened) } : {}),
     ...(calm.length ? { q_threatFalse: share((p) => p.threat === THREATS[0] || p.threat === THREATS[1], calm) } : {}),
-    ...(urg.length ? { q_urgencyErr: +(urg.reduce((a, p) => a + Math.abs(p.urgency! / 4 - p.engineThreat!), 0) / urg.length).toFixed(3) } : {}),
+    ...(urg.length ? { q_urgencyErr: +(urg.reduce((a, p) => a + Math.abs(p.urgency! - p.engineThreat!), 0) / urg.length).toFixed(3) } : {}),
     ...(after.length ? {
-      q_achieved: share((p) => p.achieved === 'fully' || p.achieved === 'partly', after),
+      q_wentMyWay: share((p) => p.wentMyWay === 'yes' || p.wentMyWay === 'partly', after),
+      q_nothingHappened: share((p) => p.wentMyWay === WENT[3], after),
       q_surprise: share((p) => p.outcome === OUTCOMES[1], after),
       q_confusing: share((p) => p.outcome === OUTCOMES[2], after),
-      q_authorship: share((p) => p.authorship === AUTHORSHIP[0] || p.authorship === AUTHORSHIP[1], after),
-      q_revised: +(after.reduce((a, p) => a + (p.revised ?? 0), 0) / after.length).toFixed(3),
+      ...num('q_authorship', mean(after.map((p) => p.authorship).filter((v): v is number => v != null))),
+      ...num('q_revised', mean(after.map((p) => p.revised).filter((v): v is number => v != null))),
     } : {}),
   };
 }
@@ -911,12 +924,12 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
           const q: Questions = {
             intention: { type: 'choice', instructions: `You are ${pid}. You have just chosen "${chosen.label.replace(/\s*\[[^\]]*\]\s*$/, '')}". What were you trying to achieve this turn?`, criteria: Object.fromEntries(INTENTIONS.map((o) => [o, null])) },
             threat: { type: 'choice', instructions: 'As the table stands, which is true?', criteria: Object.fromEntries(THREATS.map((o) => [o, null])) },
-            alternatives: { type: 'choice', instructions: 'Looking at the options you had this turn, which describes them?', criteria: Object.fromEntries(ALTERNATIVES.map((o) => [o, null])) },
+            margin: { type: 'score', instructions: 'How much better was the move you chose than the next best option you had?', criteria: MARGIN },
             urgency: { type: 'score', instructions: 'How likely is it that someone wins before your next turn?', criteria: URGENCY },
             ...(last ? {
-              achieved: { type: 'choice', instructions: `On your last probed turn (step ${last.step}) you said you were trying to "${last.intention ?? 'do something'}". Did that action achieve what you intended?`, criteria: Object.fromEntries(ACHIEVED.map((o) => [o, null])) },
-              outcome: { type: 'choice', instructions: 'What happened after that action was…', criteria: Object.fromEntries(OUTCOMES.map((o) => [o, null])) },
-              authorship: { type: 'choice', instructions: 'How much did earlier moves on the table (yours or others\') contribute to what happened since?', criteria: Object.fromEntries(AUTHORSHIP.map((o) => [o, null])) },
+              wentMyWay: { type: 'choice', instructions: `At step ${last.step} you played "${last.move ?? 'your move'}" to ${last.intention ?? 'do something'}. Since then, has the table moved the way you wanted?`, criteria: Object.fromEntries(WENT.map((o) => [o, null])) },
+              outcome: { type: 'choice', instructions: 'The counter\'s movement since your last turn was…', criteria: Object.fromEntries(OUTCOMES.map((o) => [o, null])) },
+              authorship: { type: 'score', instructions: 'What happened since your last turn: how much of it was decided by cards laid earlier (yours or others\') rather than by the die?', criteria: AUTHORSHIP },
               revised: { type: 'noul', instructions: 'Did events since your last turn make you change your plan?' },
             } : {}),
           };
@@ -924,7 +937,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
             const r = await decide(turnState(s, pid, av, rulesDigest, recent, cfg.max_turns ?? null), q, `probe ${step} · ${pid}`);
             const a = r.answers;
             const pick = (k: string, from: string[]) => (a[k]?.choice && from.includes(a[k]!.choice!) ? a[k]!.choice! : null);
-            const rec: ProbeRecord = { step, player: pid, intention: pick('intention', INTENTIONS), threat: pick('threat', THREATS), alternatives: pick('alternatives', ALTERNATIVES), urgency: typeof a.urgency?.score === 'number' ? a.urgency.score : null, engineThreat: engineThreatOf(av), tokens: r.tokens, ...(last ? { achieved: pick('achieved', ACHIEVED), outcome: pick('outcome', OUTCOMES), authorship: pick('authorship', AUTHORSHIP), revised: typeof a.revised?.noul === 'number' ? a.revised.noul : null } : {}) };
+            const rec: ProbeRecord = { step, player: pid, intention: pick('intention', INTENTIONS), threat: pick('threat', THREATS), margin: unit(a.margin?.score, MARGIN.length), urgency: unit(a.urgency?.score, URGENCY.length), engineThreat: engineThreatOf(av), move: chosen.label.replace(/\s*\[[^\]]*\]\s*$/, '').slice(0, 80), tokens: r.tokens, ...(last ? { wentMyWay: pick('wentMyWay', WENT), outcome: pick('outcome', OUTCOMES), authorship: unit(a.authorship?.score, AUTHORSHIP.length), revised: typeof a.revised?.noul === 'number' ? a.revised.noul : null } : {}) };
             session.probes!.push(rec);
             lastProbe[pid] = rec;
             session.tokens += r.tokens;
