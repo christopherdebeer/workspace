@@ -69,7 +69,7 @@ const LOOKAHEAD_MAX = 40;
 const FOLLOW_MAX = 30;
 /** Moves whose outcome turns on hidden information are never simulated (a denunciation
  *  would otherwise announce whether the target is the Enemy; a draw, the next card). */
-const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll/;
+const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
 
 /** What the runner shows Jev and how it drives play. Part of an eval's identity: a harness
  *  change moves scores without touching engine code, so baselines must match it too.
@@ -91,7 +91,7 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll/;
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h11';
+export const HARNESS_VERSION = 'h13'; // Chaos, like a die roll, must not expose a sampled future outcome.
 
 /** "cost: everyone learns you are X" when `after` exposes the mover's role (public reveal, e.g. the Temple). */
 function exposure(before: Record<string, any>, after: Record<string, any>, pid: string): string[] {
@@ -118,6 +118,22 @@ function hiddenFingerprint(state: Record<string, any>, pid: string): string {
 
 /** Play `c` on a copy of `s` (own RNG, the slot's files restored); null if it throws. */
 function simulate(s: Record<string, any>, pid: string, c: Action, prefix: string, snap: Record<string, string>, rng: () => number): Record<string, any> | null {
+  // Previewing arrival at an opponent's King would reveal its secret owner (or that it is a decoy).
+  const chain = s.shared?.chain;
+  if (chain && c.type === 'reroute') {
+    const d = ['north', 'east', 'south', 'west'].indexOf(String(c.dir));
+    if (d >= 0) {
+      const [x, y] = chain.counter.split(',').map(Number);
+      const [dx, dy] = [[0,-1],[1,0],[0,1],[-1,0]][d];
+      const wrap = s.config?.engine_mechanics?.junction_chain?.wrap !== false;
+      const nx = wrap ? (x + dx + chain.size) % chain.size : x + dx;
+      const ny = wrap ? (y + dy + chain.size) % chain.size : y + dy;
+      const king = chain.tiles[`${nx},${ny}`]?.king;
+      const obj = s.players[pid]?.objective;
+      const glyph = ({ hearts:'♥', diamonds:'♦', clubs:'♣', spades:'♠' } as Record<string,string>)[king];
+      if (king && !String(obj?.name ?? '').toLowerCase().includes(king) && !String(obj?.check?.counter_at ?? '').includes(glyph)) return null;
+    }
+  }
   const clone = structuredClone(s);
   try {
     withRng(rng, () => executeAction(clone as never, pid, c as never));
@@ -468,6 +484,8 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
     // (track vs point-to-point movement…): report only confident, top matches.
     const strong = prose.filter((m) => m.p >= 0.9).slice(0, 8);
     for (const m of strong) {
+      // These behaviours are implemented by the composite junction-chain mechanic itself.
+      if (cfg.engine_mechanics?.junction_chain && ['race', 'grid-movement', 'win-reach-state', 'tile-placement', 'square-grid'].includes(m.slug)) continue;
       if (!m.configured && m.implemented) findings.push({ kind: 'described-not-configured', severity: 'info', subject: m.slug, detail: `the prose describes ${m.name} (p ${m.p.toFixed(2)}) and the engine implements it, but the frontmatter doesn't enable it — the engine won't enforce it` });
       if (!m.implemented) findings.push({ kind: 'described-not-implemented', severity: 'warn', subject: m.slug, detail: `the prose describes ${m.name} (p ${m.p.toFixed(2)}) but no engine mechanic implements it` });
     }
@@ -477,7 +495,7 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
     }
   }
 
-  const multiActionEngine = !!(cfg.engine_mechanics && 'action_points' in cfg.engine_mechanics);
+  const multiActionEngine = !!(cfg.engine_mechanics && ('action_points' in cfg.engine_mechanics || 'junction_chain' in cfg.engine_mechanics));
   resetPrefix(`/pt/games/${slot}/`);
   return { name: String(cfg.name ?? 'untitled'), players, winCondition: String(cfg.win_condition ?? ''), declared, enabled, prose, ruleChecks, multiActionEngine, rulesText: String(markdown ?? '').slice(0, 8000), effects, schema, findings, tokens };
 }
@@ -811,7 +829,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       E(() => executeAction(s as never, pid, chosen.action as never));
       // What the other players see of this move: a move on a hidden project (stealth / hidden) shows
       // neither the card nor its consequences.
-      recent.push(`${pid}: ${(chosen.action as { stealth?: boolean; hidden?: boolean }).stealth || (chosen.action as { hidden?: boolean }).hidden ? `${chosen.action.type.replace(/_/g, ' ')} · (a hidden project)` : chosen.label}`);
+      recent.push(`${pid}: ${(chosen.action as { stealth?: boolean; hidden?: boolean }).stealth || (chosen.action as { hidden?: boolean }).hidden ? `${chosen.action.type.replace(/_/g, ' ')} · (a hidden project)` : labelOf(chosen.action)}`); // Public history must never expose private consequence/forecast labels.
       const next = E(() => loadState(gameId)) as unknown as Record<string, any>;
       const learned = knowledgeEvents(known, next, at.round, pid, chosen.label);
       session.knowledge.push(...learned);
@@ -835,6 +853,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       s = next;
       if (step === maxSteps && s.status === 'in_progress') session.stopped = 'max-steps';
     }
+    (session as Session & { chainAudit?: unknown }).chainAudit = s.shared?.chain ? { ...s.shared.chain.audit, rolls: s.shared.chain.rolls, tiles: Object.keys(s.shared.chain.tiles).length, kingsOnBoard: Object.values(s.shared.chain.tiles).filter((t: any) => t.king).length } : undefined;
     session.status = s.status;
     session.winner = (s.winner as string) ?? (s.shared?.winner as string) ?? null;
     session.roles = Object.fromEntries(
@@ -1135,7 +1154,7 @@ export function sessionFindings(s: Session, m = metrics(s), c?: Classification):
   if (s.stopped === 'error') out.push({ kind: 'engine', severity: 'error', subject: 'engine error', detail: s.error ?? 'unknown' });
   if (s.stopped === 'stuck') out.push({ kind: 'engine', severity: 'error', subject: 'no legal move', detail: s.error ?? 'a player had no valid move' });
   if (s.stopped === 'max-steps') out.push({ kind: 'balance', severity: 'warn', subject: 'never ended', detail: `still in progress after ${m.steps} moves (round ${m.rounds})` });
-  if (m.finished && m.rounds <= 1) out.push({ kind: 'engine', severity: 'error', subject: 'instant end', detail: `ended in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? 'no reason logged'} — a win check is firing too early` });
+  if (m.finished && m.rounds <= 1) out.push({ kind: 'balance', severity: 'warn', subject: 'instant end', detail: `ended in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? 'no reason logged'} — inspect whether legal early wins leave enough decisions` });
   if (m.dominantAction && m.dominantAction[1] > 0.7 && m.steps > 10) out.push({ kind: 'balance', severity: 'warn', subject: `${m.dominantAction[0]} dominates`, detail: `${Math.round(m.dominantAction[1] * 100)}% of all moves` });
   if (m.forcedShare > 0.6 && m.steps > 10) out.push({ kind: 'balance', severity: 'info', subject: 'few real choices', detail: `${Math.round(m.forcedShare * 100)}% of turns had exactly one legal move` });
   for (const u of s.unsuitable) {

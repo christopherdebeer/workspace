@@ -351,11 +351,11 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
     }
     case 'screen': {
       // Free structural preview of a design (no Jev): rules, preset, or a stored version.
-      const rules = a.rules ? String(a.rules) : a.preset ? PRESETS[String(a.preset)] : a.game ? (await db.getDefinition(need(a.game, 'game'), a.version !== undefined ? Number(a.version) : undefined))?.rules : a.edits ? (await resolveRules(a, need(a.game, 'game'))).rules : undefined;
+      const rules = a.rules ? String(a.rules) : a.preset ? PRESETS[String(a.preset)] : a.edits ? (await resolveRules(a, need(a.game, 'game'))).rules : a.game ? (await db.getDefinition(need(a.game, 'game'), a.version !== undefined ? Number(a.version) : undefined))?.rules : undefined;
       if (!rules) throw new ToolError('give rules, preset, or game (+version / edits)');
       const suite = a.game ? await db.getSuite(String(a.game)) : null;
       const ints = (v: unknown, d: number[]) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite).slice(0, 24) : d);
-      return screen(rules, { seeds: ints(a.seeds, suite?.train.seeds ?? [1, 2, 3, 4, 5, 6]), players: ints(a.players, suite?.train.players ?? [3, 4]), maxSteps: num(a.maxSteps, suite?.maxSteps ?? 300, 10, 400), deadlineAt: Date.now() + 40_000 });
+      return screen(rules, { seeds: ints(a.seeds, suite?.train.seeds ?? [1, 2, 3, 4, 5, 6]), players: ints(a.players, suite?.train.players ?? [3, 4]), maxSteps: num(a.maxSteps, suite?.maxSteps ?? 300, 10, 400), deadlineAt: Date.now() + 40_000, policy: a.policy === 'random' ? 'random' : 'greedy' });
     }
     case 'plans':
       return recentPlans(num(a.limit, 10, 1, 50));
@@ -441,7 +441,7 @@ const TOOLS = [
   { name: 'backlog', kind: 'read', description: 'The mechanic worklist: gaps evals keep hitting (missing/partial mechanics, unhandled card effects, engine faults, moves System One cannot play), ranked by hits × games. Fix these in engine/ and the next eval shows it.', inputSchema: S({ kind: { type: 'string' }, limit: { type: 'number' } }) },
   { name: 'engines', kind: 'read', description: 'Engine versions seen (code fingerprints) and which mechanics changed between consecutive versions.', inputSchema: S({}) },
   { name: 'regress', kind: 'act', description: 'After an engine change: re-evaluate every game\'s head on the current engine (one job per game).', inputSchema: S({ games: { type: 'array', items: { type: 'string' } } }) },
-  { name: 'screen', kind: 'read', description: 'Free structural preview (no Jev): N seeded games of rules / a preset / a stored version (or edits vs head) with a greedy stand-in player — outcomes by role, balance, rounds, move mix, errors. Screen a change before paying for propose.', inputSchema: S({ game, version, rules, edits, preset: { type: 'string' }, seeds: { type: 'array', items: { type: 'number' } }, players: { type: 'array', items: { type: 'number' } }, maxSteps: { type: 'number' } }) },
+  { name: 'screen', kind: 'read', description: 'Free structural preview (no Jev): N seeded games of rules / a preset / a stored version (or edits vs head) with a greedy stand-in player — outcomes by role, balance, rounds, move mix, errors. Screen a change before paying for propose.', inputSchema: S({ game, version, rules, edits, preset: { type: 'string' }, seeds: { type: 'array', items: { type: 'number' } }, players: { type: 'array', items: { type: 'number' } }, maxSteps: { type: 'number' }, policy: { type: 'string', enum: ['greedy', 'random'], description: 'Greedy with consequence labels (default) or fast seeded random structural smoke tests' } }) },
   { name: 'plans', kind: 'read', description: 'Recent fanned-out evals (plans): runs done of total, when assembled, the eval id, whether the job got its result.', inputSchema: S({ limit: { type: 'number' } }) },
   { name: 'job', kind: 'read', description: 'Poll an async job: {status: pending|running|done|error, out?, error?}.', inputSchema: S({ id: { type: 'string' } }, ['id']) },
   { name: 'set_token', kind: 'act', description: 'Owner-only, write-only: the gateway bearer this cell uses to call @c15r/jev (scope it to cell:c15r/jev:*).', inputSchema: S({ token: { type: 'string' } }, ['token']) },

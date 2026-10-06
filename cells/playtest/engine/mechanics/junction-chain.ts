@@ -13,11 +13,11 @@
  * (`cover`), or swap two junctions (a Queen), or hold; then roll — the counter moves by the
  * card it stands on — or, instead of the roll, play a Jack (walk it a step your way) or a Joker
  * (a random exit). The roll is its own action so that what a lay does to the table is seen
- * apart from what the die then does. Off the edge comes in on the far side (`wrap`). A King nobody holds
- * sends the counter back to the start.
+ * apart from what the die then does. Off the edge comes in on the far side (`wrap`). A King with no
+ * matching commission sends the counter back to the start.
  *
- * Winning is the hidden-objectives mechanic's: each player's objective names a suit; the
- * player whose King the counter arrives at wins (onCheckWin). Objectives with
+ * Winning is the hidden-objectives mechanic's: each player's commission names a suit; the
+ * player whose commissioned destination the counter arrives at wins (onCheckWin). Objectives with
  * `check: { counter_at: "K♥" }` are read here, not by hidden-objectives' metrics.
  *
  * The player's view carries a forecast of the counter's chances over the next few rolls, by
@@ -46,6 +46,13 @@ const SUIT_GLYPH: Record<string, string> = { hearts: '♥', diamonds: '♦', clu
 const OFFER_MAX = 140;
 
 export interface JunctionChainConfig {
+  /** Opt-in experiments; omitted fields preserve the published build/race game. */
+  dynamic?: boolean;
+  flexible_order?: boolean;
+  protect_current?: boolean;
+  optional_move?: boolean;
+  seed_cross?: boolean;
+  king_mode?: 'fixed' | 'reserve' | 'deck' | 'dealt';
   size?: number;
   start?: string;
   start_card?: string;
@@ -83,6 +90,17 @@ export interface ChainState {
   lastMove?: string;
   /** in the race: this turn's lay (or swap, or hold) is done; the roll, a Jack or a Joker ends it */
   laid?: boolean;
+  moved?: boolean;
+  skippedLast?: boolean;
+  seeded?: boolean;
+  /** in dealt mode, each player must open by placing their dealt King */
+  kingOpened?: Record<string, boolean>;
+  /** King suit held by each player before their opening crown action */
+  kingHeld?: Record<string, string>;
+  /** true after every dealt King has been placed; normal play is locked before this */
+  courtOpen?: boolean;
+  kingsDealt?: boolean;
+  audit?: Record<string, number>;
 }
 
 const key = (x: number, y: number) => `${x},${y}`;
@@ -142,13 +160,29 @@ function hasEmpty(ch: ChainState): boolean {
 function canLay(ch: ChainState, c: JunctionChainConfig, k: string, card: ChainCard): boolean {
   const [x, y] = xy(k);
   if (x < 0 || y < 0 || x >= ch.size || y >= ch.size) return false;
-  if (card.role === 'destination' || card.role === 'reroute' || card.role === 'swap' || card.role === 'chaos') return false;
+  if (card.role === 'destination') return c.king_mode === 'deck' && canKing(ch, c, k, card.suit ?? '');
+  if (card.role === 'reroute' || card.role === 'swap' || card.role === 'chaos') return false;
   const here = ch.tiles[k];
-  if (here) return !here.king && (ch.phase === 'race' ? c.cover !== false : !hasEmpty(ch));
+  if (here) return !here.king && !(c.protect_current && !ch.moved && k === ch.counter) && (ch.phase === 'race' ? c.cover !== false : !hasEmpty(ch));
   if (card.role === 'wild') return true;
   if (c.rim !== false && (x === 0 || y === 0 || x === ch.size - 1 || y === ch.size - 1)) return true;
   return DIRS.some(([dx, dy]) => { const t = ch.tiles[key(x + dx, y + dy)]; return t && !t.king; });
 }
+function canKing(ch: ChainState, c: JunctionChainConfig, k: string, suit: string): boolean {
+  const [x, y] = xy(k);
+  if (!SUITS.includes(suit) || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= ch.size || y >= ch.size || ch.tiles[k]) return false;
+  if (!(x === 0 || y === 0 || x === ch.size - 1 || y === ch.size - 1)) return false;
+  if (Object.values(ch.tiles).some(t => t.king === suit)) return false;
+  if (DIRS.some((_, d) => neighbour(ch, ch.counter, d, c.wrap !== false) === k)) return false;
+  // Dealt Kings open the game before any junctions exist, so they may occupy
+  // any empty rim square. Reserve Kings retain the stricter adjacency rule.
+  if (c.king_mode === 'dealt') {
+    const adjacentKing = DIRS.some(([dx, dy]) => ch.tiles[key(x + dx, y + dy)]?.king);
+    return !adjacentKing;
+  }
+  return DIRS.some(([dx, dy]) => { const t = ch.tiles[key(x + dx, y + dy)]; return t && !t.king; });
+}
+function count(ch: ChainState, name: string, n = 1): void { const a = ch.audit ??= {}; a[name] = (a[name] ?? 0) + n; }
 /** The counter's chances: from `at`, over `hops` rolls, the mass arriving at each King */
 export function forecast(ch: ChainState, at: string, wrap: boolean, hops: number): Record<string, number> {
   let mass = new Map<string, number>([[at, 1]]);
@@ -189,7 +223,7 @@ function arrive(ch: ChainState, state: GameState, at: string, log: string[]): vo
   ch.counter = at;
   const t = ch.tiles[at];
   if (t?.king && !heldSuits(state).has(t.king)) {
-    log.push(`the King of ${t.king} is nobody's: back to the start`);
+    log.push(`the King of ${t.king} has no matching commission: back to the start`);
     ch.counter = ch.start;
   }
 }
@@ -197,6 +231,7 @@ function moveCounter(ch: ChainState, state: GameState, wrap: boolean, face: numb
   const res = destination(ch, ch.counter, face, wrap);
   ch.lastRoll = face;
   ch.rolls++;
+  count(ch, res.reason === 'move' ? 'dieMoves' : res.reason === 'open' ? 'openExits' : 'stayFaces');
   if (res.reason === 'move') { log.push(`rolled ${face}: ${DIR_NAMES[res.dir]} to ${res.at}`); arrive(ch, state, res.at, log); }
   else log.push(`rolled ${face}: ${res.reason === 'stay' ? 'a stay face' : res.reason === 'open' ? 'an open exit' : 'nowhere'} — the counter stays at ${ch.counter}`);
   ch.lastMove = log[log.length - 1];
@@ -224,6 +259,8 @@ function dist(a: string, b: string): number {
 type Lay = { type: 'lay'; card: string; at: string; turn: number };
 type Swap = { type: 'swap'; a: string; b: string };
 type Reroute = { type: 'reroute'; dir: string };
+function spacesFor(ch: ChainState): string[] { const out: string[] = []; for (let y = 0; y < ch.size; y++) for (let x = 0; x < ch.size; x++) out.push(key(x, y)); return out; }
+
 
 export const junctionChainMechanic: MechanicHooks = {
   slug: 'junction-chain',
@@ -233,6 +270,12 @@ export const junctionChainMechanic: MechanicHooks = {
     type: 'object',
     description: 'One shared counter on a table of junction cards: build the table, then race the counter to your secret King by the die faces printed on the card it stands on',
     properties: {
+      dynamic: { type: 'boolean', description: 'Build and move from turn one' },
+      flexible_order: { type: 'boolean', description: 'One landscape action and one movement in either order' },
+      protect_current: { type: 'boolean', description: 'Cannot cover or swap the occupied junction before movement' },
+      optional_move: { type: 'boolean', description: 'May skip movement, but never on consecutive player turns' },
+      seed_cross: { type: 'boolean', description: 'Seed four actual deck junctions around the start before the first turn' },
+      king_mode: { type: 'string', enum: ['fixed', 'reserve', 'deck', 'dealt'], description: 'Fixed setup, public placement reserve, or one King dealt to each player for a mandatory opening placement' },
       size: { type: 'number', description: 'Table side (default 5)' },
       start: { type: 'string', description: 'The start space, "x,y" (default the centre)' },
       kings: { type: 'object', description: 'Destination spaces by suit, "x,y" each' },
@@ -257,8 +300,23 @@ export const junctionChainMechanic: MechanicHooks = {
     const tiles: Record<string, Tile> = {};
     tiles[start] = { card: startDef ? toChainCard(startDef as Card) : { name: 'start', role: 'wild', faces: parseExits('N1 E2 S1 W2') }, turn: 0, start: true };
     const kings = c.kings ?? { hearts: key(mid, 0), diamonds: key(size - 1, mid), clubs: key(mid, size - 1), spades: key(0, mid) };
-    for (const [suit, at] of Object.entries(kings)) tiles[at] = { card: { name: `K${SUIT_GLYPH[suit] ?? ''} DESTINATION`, suit, role: 'destination', faces: [-1, -1, -1, -1, -1, -1] }, turn: 0, king: suit };
-    const chain: ChainState = { size, tiles, counter: start, start, phase: 'build', rolls: 0 };
+    if (!c.king_mode || c.king_mode === 'fixed') for (const [suit, at] of Object.entries(kings)) tiles[at] = { card: { name: `K${SUIT_GLYPH[suit] ?? ''} DESTINATION`, suit, role: 'destination', faces: [-1, -1, -1, -1, -1, -1] }, turn: 0, king: suit };
+    const kingHeld: Record<string, string> = {};
+    const kingOpened: Record<string, boolean> = {};
+    if (c.king_mode === 'dealt') {
+      const suits = [...SUITS].sort(() => Math.random() - 0.5);
+      for (let i = 0; i < ctx.playerIds.length; i++) {
+        kingHeld[ctx.playerIds[i]] = suits[i];
+        kingOpened[ctx.playerIds[i]] = false;
+      }
+      // With fewer than four players, keep the remaining suit as a neutral destination on the rim.
+      const neutralSuit = suits[ctx.playerIds.length];
+      if (neutralSuit) {
+        const neutralAt = kings[neutralSuit];
+        if (neutralAt && !tiles[neutralAt]) tiles[neutralAt] = { card: { name: `K${SUIT_GLYPH[neutralSuit]} NEUTRAL DESTINATION`, suit: neutralSuit, role: 'destination', faces: [-1, -1, -1, -1, -1, -1] }, turn: 0, king: neutralSuit };
+      }
+    }
+    const chain: ChainState = { size, tiles, counter: start, start, phase: c.dynamic ? 'race' : 'build', rolls: 0, kingOpened, kingHeld, courtOpen: c.king_mode !== 'dealt', kingsDealt: c.king_mode === 'dealt', audit: {} };
     return { chain, alwaysCheckWin: true } as unknown as SharedStateInitResult;
   },
 
@@ -268,7 +326,8 @@ export const junctionChainMechanic: MechanicHooks = {
       case 'swap': return { required: ['a', 'b'], fields: { a: { type: 'string' }, b: { type: 'string' } } };
       case 'reroute': return { required: ['dir'], fields: { dir: { type: 'string' } } };
       case 'throw_in': return { required: ['card'], fields: { card: { type: 'string' } } };
-      case 'hold': case 'chaos': case 'roll': return { required: [], fields: {} };
+      case 'crown': return { required: ['suit', 'at'], fields: { suit: { type: 'string' }, at: { type: 'string' } } };
+      case 'skip_move': case 'hold': case 'chaos': case 'roll': return { required: [], fields: {} };
       default: return null;
     }
   },
@@ -284,10 +343,24 @@ export const junctionChainMechanic: MechanicHooks = {
     if (type === 'play_card' || type === 'place_card' || type === 'place_location' || type === 'move') return { valid: false, error: 'Not in this game: lay a card, swap, hold, throw a card in, roll, reroute or chaos.' };
     if (type === 'pass') return { valid: false, error: ch.phase === 'build' ? 'While the table is being built you must lay a card or throw one in.' : 'A race turn ends with the roll (or a Jack or a Joker), not a pass.' };
     if (type === 'draw') return { valid: false, error: 'Hands refill by themselves here; throw a card in instead.' };
-    const step2 = ['roll', 'reroute', 'chaos'].includes(type);
+    const step2 = ['roll', 'reroute', 'chaos', 'skip_move'].includes(type);
+    if (step2 && ch.moved) return { valid: false, error: 'Movement already used this turn' };
+    if (type === 'skip_move' && (!c.optional_move || ch.skippedLast)) return { valid: false, error: 'Movement required: no consecutive pauses' };
+    if (ch.phase === 'race' && c.king_mode === 'dealt' && !ch.courtOpen) {
+      if (!ch.kingOpened?.[ctx.playerId] && type !== 'crown') return { valid: false, error: 'Open your dealt King before taking a normal action' };
+      if (ch.kingOpened?.[ctx.playerId] && type !== 'crown') return { valid: false, error: 'The Court must be complete before normal play begins' };
+    }
     if (ch.phase === 'race' && !step2 && ch.laid && type !== 'throw_in') return { valid: false, error: 'You have laid this turn: now roll (or play a Jack or a Joker).' };
-    if (ch.phase === 'race' && step2 && !ch.laid) return { valid: false, error: 'First lay a card, swap, or hold.' };
-    if (type === 'roll') return ch.phase === 'race' ? { valid: true } : { valid: false, error: 'No rolling while the table is being built.' };
+    if (ch.phase === 'race' && step2 && !ch.laid && !c.flexible_order) return { valid: false, error: 'First lay a card, swap, or hold.' };
+    if (type === 'crown') {
+      const a = action as unknown as { suit: string; at: string };
+      const heldKing = hand.find((h) => h.role === 'destination' && (h.suit === a.suit || suitOf(h.name) === a.suit)) || (ch.kingHeld?.[ctx.playerId] === a.suit ? ({ name: `K${SUIT_GLYPH[a.suit]} DESTINATION`, suit: a.suit, role: 'destination' } as unknown as Card) : undefined);
+      const opening = c.king_mode === 'dealt' && !ch.kingOpened?.[ctx.playerId];
+      if (opening && heldKing && ch.phase === 'race' && canKing(ch, c, a.at, a.suit)) return { valid: true };
+      if (c.king_mode === 'reserve' && ch.phase === 'race' && canKing(ch, c, a.at, a.suit)) return { valid: true };
+      return { valid: false, error: opening ? 'You must place your dealt King on an empty rim square before taking a normal action' : 'King must be in reserve, on an empty rim square away from the counter' };
+    }
+    if (type === 'skip_move' || type === 'roll') return ch.phase === 'race' ? { valid: true } : { valid: false, error: 'No rolling while the table is being built.' };
     if (type === 'lay') {
       const a = action as unknown as Lay;
       const card = find(a.card);
@@ -306,6 +379,7 @@ export const junctionChainMechanic: MechanicHooks = {
     if (type === 'hold') return { valid: true };
     if (type === 'swap') {
       const a = action as unknown as Swap;
+      if (c.protect_current && !ch.moved && (a.a === ch.counter || a.b === ch.counter)) return { valid: false, error: 'The occupied junction is protected until movement' };
       if (!hand.some((h) => h.role === 'swap')) return { valid: false, error: 'You need a Queen to swap' };
       const ta = ch.tiles[a.a]; const tb = ch.tiles[a.b];
       if (!ta || !tb || ta.king || tb.king || a.a === a.b) return { valid: false, error: 'Swap two different junctions (not Kings)' };
@@ -336,14 +410,30 @@ export const junctionChainMechanic: MechanicHooks = {
     const take = (name: string): Card | undefined => { const i = hand.findIndex((h) => h.name === name); if (i < 0) return undefined; const [card] = hand.splice(i, 1); (getCardsState(state).discardPile ??= []).push(card); return card; };
     const takeRole = (role: string) => { const h = hand.find((x) => x.role === role); return h ? take(h.name) : undefined; };
     const log: string[] = [];
+    const counterBefore = ch.counter;
+    const movedBefore = !!ch.moved;
     const wrap = c.wrap !== false;
     /** step one of a race turn: the turn goes on to the roll */
     const laid = (message: string, extra: Record<string, unknown> = {}): ActionExecutionResult => {
+      count(ch, ch.phase === 'build' ? 'buildActions' : 'landscapeActions');
+      if (ch.phase === 'race' && ch.moved) { ch.laid = false; ch.moved = false; return { handled: true, advanceTurn: true, checkWin: true, logMessage: message, logData: { ...extra, order: 'move-then-landscape', counter: ch.counter, notes: log } }; }
       if (ch.phase === 'race') { ch.laid = true; return { handled: true, advanceTurn: false, checkWin: false, logMessage: message, logData: { ...extra, phase: ch.phase, counter: ch.counter, notes: log } }; }
       return { handled: true, advanceTurn: true, checkWin: true, logMessage: message, logData: { ...extra, phase: ch.phase, counter: ch.counter, notes: log } };
     };
     /** the end of a race turn: the counter has moved (or stayed); draw back up */
     const done = (message: string, extra: Record<string, unknown> = {}): ActionExecutionResult => {
+      count(ch, type === 'skip_move' ? 'pauses' : 'movements');
+      if (!ch.laid) count(ch, 'movementFirst');
+      if (type !== 'skip_move') {
+        count(ch, 'displacements', Number(ch.counter !== counterBefore));
+        const winnerSuit = ch.tiles[ch.counter]?.king;
+        if (winnerSuit && winnerSuit !== mySuit(ctx)) count(ch, 'offTurnWins');
+        const f = forecast(ch, ch.counter, wrap, 1);
+        if (Object.values(f).some(p => p >= 1 / 3)) count(ch, 'threatPositions');
+      }
+      ch.skippedLast = type === 'skip_move';
+      const continueTurn = !!c.flexible_order && !ch.laid;
+      ch.moved = continueTurn;
       ch.laid = false;
       // (the cap on movement turns: no arrival by then is a draw — unless this very move arrived)
       const t = ch.tiles[ch.counter];
@@ -355,13 +445,35 @@ export const junctionChainMechanic: MechanicHooks = {
         state.shared.endReason = reason;
         logEvent(state, { event: 'game_end', round: state.round, turnNumber: state.turnNumber, data: { winner: null, reason, endType: 'moves' } });
       }
-      return { handled: true, advanceTurn: true, checkWin: true, logMessage: message, logData: { ...extra, phase: ch.phase, counter: ch.counter, notes: log } };
+      return { handled: true, advanceTurn: !continueTurn || state.status !== 'in_progress', checkWin: true, logMessage: message, logData: { ...extra, phase: ch.phase, counter: ch.counter, from: counterBefore, order: continueTurn ? 'movement-first' : 'landscape-first', notes: log } };
     };
+    if (type === 'crown') {
+      const a = action as unknown as { suit: string; at: string };
+      const card = hand.find((h) => h.role === 'destination' && (h.suit === a.suit || suitOf(h.name) === a.suit));
+      if (card) take(card.name);
+      // Keep the dealt suit in state after placement so the completed Court can be verified and the UI can show it.
+      ch.tiles[a.at] = { card: { name: `K${SUIT_GLYPH[a.suit]}`, suit: a.suit, role: 'destination', faces: [-1,-1,-1,-1,-1,-1] }, turn: 0, king: a.suit };
+      (ch.kingOpened ??= {})[playerId] = true;
+      count(ch, 'kingsPlaced'); count(ch, 'kingOpenings'); log.push(`${playerId} placed dealt King of ${a.suit} at ${a.at}`);
+      const allOpen = Object.keys(ch.kingHeld ?? {}).length > 0 && Object.keys(ch.kingHeld ?? {}).every((pid) => ch.kingOpened?.[pid]);
+      if (allOpen) {
+        ch.courtOpen = true;
+        log.push('The Court is complete: normal play begins.');
+        // The final King placer receives the first normal turn; no landscape or movement was consumed by the crown.
+        return { handled: true, advanceTurn: false, checkWin: false, logMessage: 'court_opened', logData: { suit: a.suit, at: a.at, courtOpen: true, phase: ch.phase, counter: ch.counter, notes: log } };
+      }
+      // Until every King is placed, the crown is the whole turn and play passes clockwise.
+      return { handled: true, advanceTurn: true, checkWin: false, logMessage: 'king_opened', logData: { suit: a.suit, at: a.at, courtOpen: false, phase: ch.phase, counter: ch.counter, notes: log } };
+    }
+    if (type === 'skip_move') { log.push(`${playerId} pauses; the next player must move`); return done('paused'); }
     if (type === 'lay') {
       const a = action as unknown as Lay;
       const card = take(a.card)!;
       const was = ch.tiles[a.at];
-      ch.tiles[a.at] = { card: toChainCard(card as Card), turn: a.turn, start: was?.start };
+      const cc = toChainCard(card as Card);
+      ch.tiles[a.at] = { card: cc, turn: a.turn, start: was?.start, ...(cc.role === 'destination' ? { king: cc.suit } : {}) };
+      if (cc.role === 'destination') count(ch, 'kingsPlaced');
+      if (was && a.at === counterBefore) count(ch, movedBefore ? 'coverCurrentAfter' : 'coverCurrentBefore');
       log.push(`${playerId} ${was ? 'covered' : 'laid'} ${a.card} at ${a.at}, turned ${a.turn}`);
       if (ch.phase === 'build' && !hasEmpty(ch)) { ch.phase = 'race'; log.push('The table is built: the race begins.'); }
       return laid('laid', { card: a.card, at: a.at, turn: a.turn, covered: !!was });
@@ -377,7 +489,7 @@ export const junctionChainMechanic: MechanicHooks = {
       // (the card's distinct outward exits that lead to a card, north, east, south, west; one at random)
       const ds = [...new Set(exitsOf(t).filter((d) => d >= 0))].sort().map((d) => neighbour(ch, ch.counter, d, c.wrap !== false)).filter((n): n is string => !!n && !!ch.tiles[n]);
       if (ds.length) { const n = ds[Math.floor(Math.random() * ds.length)]; log.push(`${playerId} played a Joker: ${ds.length} exit${ds.length > 1 ? 's' : ''}, chaos takes the counter to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; }
-      else log.push(`${playerId} played a Joker: no exit leads anywhere; the counter stays`);
+      else { ch.rolls++; log.push(`${playerId} played a Joker: no exit leads anywhere; the counter stays`); }
       return done('chaos', {});
     }
     return null;
@@ -390,6 +502,30 @@ export const junctionChainMechanic: MechanicHooks = {
     const c = cfg(ctx.config);
     if (!ch || !c) return null;
     ch.laid = false;
+    ch.moved = false;
+    if (c.king_mode === 'dealt' && !ch.kingsDealt) {
+      const order = [...ctx.state.turnOrder];
+      const suits = [...SUITS].sort(() => Math.random() - 0.5).slice(0, order.length);
+      for (let i = 0; i < order.length; i++) {
+        const p = ctx.state.players[order[i]];
+        (p.hand ??= []).push({ name: `K${SUIT_GLYPH[suits[i]]} DESTINATION`, type: 'court', suit: suits[i], role: 'destination' } as unknown as Card);
+        ch.kingOpened![order[i]] = false;
+      }
+      ch.kingsDealt = true;
+      count(ch, 'kingsDealt', suits.length);
+    }
+    if (c.dynamic && c.seed_cross && !ch.seeded) {
+      const deck = getCardsState(ctx.state).deck;
+      for (let d = 0; d < 4; d++) {
+        const at = neighbour(ch, ch.start, d, false);
+        if (!at || ch.tiles[at]) continue;
+        const i = deck.findIndex((h: Card & { exits?: string; role?: string }) => !!h.exits && h.role !== 'destination');
+        if (i < 0) break;
+        const [card] = deck.splice(i, 1);
+        ch.tiles[at] = { card: toChainCard(card as Card), turn: Math.floor(Math.random() * 4) };
+      }
+      ch.seeded = true;
+    }
     refill(ctx.state, ctx.playerId, c.hand ?? 3);
     return null;
   },
@@ -411,7 +547,7 @@ export const junctionChainMechanic: MechanicHooks = {
     const t = ch.tiles[ch.counter];
     const suit = mySuit(ctx);
     if (!t?.king || !suit || t.king !== suit) return null;
-    return { won: true, reason: `the counter arrived at the King of ${suit}: ${ctx.playerId}'s King` };
+    return { won: true, reason: `the counter arrived at the King of ${suit}: ${ctx.playerId}'s commission` };
   },
 
   getAvailableActions(ctx: HookContext): AvailableAction[] {
@@ -420,6 +556,18 @@ export const junctionChainMechanic: MechanicHooks = {
     if (!ch || !c) return [];
     const hand = (ctx.player.hand ?? []) as Array<Card & { exits?: string; role?: string }>;
     const out: AvailableAction[] = [];
+    // Dealt Kings create a short opening court. Only the King placement is available until it is played.
+    if (c.king_mode === 'dealt' && !ch.courtOpen) {
+      const king = hand.find((h) => h.role === 'destination' && !!(h.suit ?? suitOf(h.name)));
+      const suit = king?.suit ?? suitOf(king?.name ?? '') ?? ch.kingHeld?.[ctx.playerId];
+      if (!ch.kingOpened?.[ctx.playerId]) {
+        if (!suit) return [];
+        const crowns: GameAction[] = [];
+        for (const at of spacesFor(ch)) if (canKing(ch, c, at, suit)) crowns.push({ type: 'crown', suit, at } as unknown as GameAction);
+        if (crowns.length) return [{ action: crowns[0], examples: crowns, priority: 100, category: 'opening', description: 'Place your dealt King; normal play waits until every King is placed', required: { suit: 'Your dealt King', at: 'An empty rim square' } }];
+      }
+      return [];
+    }
     // lays: every legal space × card × distinct turn, the ones nearest the counter first
     const spaces: string[] = [];
     for (let y = 0; y < ch.size; y++) for (let x = 0; x < ch.size; x++) spaces.push(key(x, y));
@@ -428,28 +576,37 @@ export const junctionChainMechanic: MechanicHooks = {
     const cards = hand.filter((h) => { if (seenCards.has(h.name)) return false; seenCards.add(h.name); return true; });
     const ranked = [...spaces].sort((a, b) => dist(a, ch.counter) - dist(b, ch.counter));
     for (const k of ranked) for (const h of cards) { const cc = toChainCard(h); if (!canLay(ch, c, k, cc)) continue; for (const turn of distinctTurns(cc)) lays.push({ type: 'lay', card: h.name, at: k, turn } as unknown as GameAction); }
+    if (ch.phase === 'race' && ch.laid) lays.length = 0;
     if (lays.length) out.push({ action: lays[0], priority: 60, category: 'placement', description: ch.phase === 'build' ? 'Lay a card from your hand on an empty space (turn = quarter turns clockwise)' : 'Lay a card on top of a junction', required: { card: 'A card in your hand', at: 'A space "x,y"', turn: '0–3' }, examples: lays.slice(0, OFFER_MAX) });
     const throwIns = cards.filter((h) => !lays.some((l) => (l as unknown as Lay).card === h.name));
     if (ch.phase === 'build' && (!lays.length || throwIns.length)) out.push({ action: { type: 'throw_in', card: (throwIns[0] ?? cards[0])?.name } as unknown as GameAction, priority: 20, category: 'cards', description: 'Throw a card in and draw another', required: { card: 'A card in your hand' }, examples: (throwIns.length ? throwIns : cards).map((h) => ({ type: 'throw_in', card: h.name }) as unknown as GameAction) });
-    if (ch.phase === 'race' && ch.laid) {
+    let movement: AvailableAction[] = [];
+    if (ch.phase === 'race' && !ch.moved && (ch.laid || c.flexible_order)) {
       const step2: AvailableAction[] = [{ action: { type: 'roll' } as unknown as GameAction, priority: 50, category: 'dice', description: 'Roll the d6: the counter follows that face on the card it stands on' }];
       if (hand.some((h) => h.role === 'reroute')) {
         const dirs = DIR_NAMES.filter((_, d) => { const n = neighbour(ch, ch.counter, d, c.wrap !== false); return n && ch.tiles[n]; });
         if (dirs.length) step2.push({ action: { type: 'reroute', dir: dirs[0] } as unknown as GameAction, priority: 45, category: 'cards', description: 'Play a Jack: instead of the roll, walk the counter one space your way', required: { dir: 'north, east, south or west' }, examples: dirs.map((dir) => ({ type: 'reroute', dir }) as unknown as GameAction) });
       }
       if (hand.some((h) => h.role === 'chaos')) step2.push({ action: { type: 'chaos' } as unknown as GameAction, priority: 30, category: 'cards', description: 'Play a Joker: instead of the roll, the counter takes one of its exits at random' });
-      return step2;
+      if (c.optional_move && !ch.skippedLast) step2.push({ action: { type: 'skip_move' } as unknown as GameAction, priority: 5, category: 'turn', description: 'Pause movement; next player must move' });
+      if (ch.laid) return step2;
+      movement = step2;
     }
     if (ch.phase === 'race') {
       out.push({ action: { type: 'hold' } as unknown as GameAction, priority: 10, category: 'turn', description: 'Lay nothing this turn (then roll)' });
+      if (c.king_mode === 'reserve') {
+        const crowns: GameAction[] = [];
+        for (const suit of SUITS) for (const at of spaces) if (canKing(ch, c, at, suit)) crowns.push({ type: 'crown', suit, at } as unknown as GameAction);
+        if (crowns.length) out.push({ action: crowns[0], examples: crowns, priority: 35, category: 'placement', description: 'Place a King from the public reserve on the rim, away from the counter' });
+      }
       if (hand.some((h) => h.role === 'swap')) {
-        const near = Object.keys(ch.tiles).filter((k) => !ch.tiles[k].king).sort((a, b) => dist(a, ch.counter) - dist(b, ch.counter));
+        const near = Object.keys(ch.tiles).filter((k) => !ch.tiles[k].king && !(c.protect_current && !ch.moved && k === ch.counter)).sort((a, b) => dist(a, ch.counter) - dist(b, ch.counter));
         const swaps: GameAction[] = [];
         for (let i = 0; i < near.length && swaps.length < 60; i++) for (let j = i + 1; j < near.length && swaps.length < 60; j++) if (dist(near[i], ch.counter) <= 1 || dist(near[j], ch.counter) <= 1) swaps.push({ type: 'swap', a: near[i], b: near[j] } as unknown as GameAction);
         if (swaps.length) out.push({ action: swaps[0], priority: 40, category: 'cards', description: 'Play a Queen: exchange two junctions on the table', required: { a: 'A junction "x,y"', b: 'Another' }, examples: swaps });
       }
     }
-    return out;
+    return [...movement, ...out];
   },
 
   /** The table, the counter, and the forecast: where the counter is likely to arrive over the
@@ -469,8 +626,13 @@ export const junctionChainMechanic: MechanicHooks = {
     return {
       phase: ch.phase === 'build' ? `building the table (${Object.values(ch.tiles).length - 1 - Object.keys(c.kings ?? {}).length || 0} laid; ${hasEmpty(ch) ? 'spaces still empty' : 'full'})` : `the race: ${ch.rolls} rolls so far`,
       counter: `${ch.counter}, on ${under ? tileLabel(ch.counter, under).replace(/^\S+ /, '') : '?'}`,
-      yourKing: suit ? `${SUIT_GLYPH[suit]} at ${Object.entries(c.kings ?? {}).find(([s]) => s === suit)?.[1] ?? '?'} (secret)` : undefined,
+      yourKing: suit ? `${SUIT_GLYPH[suit]} at ${Object.entries(ch.tiles).find(([, t]) => t.king === suit)?.[0] ?? 'not placed'} (commission, secret)` : undefined,
+      dealtKing: c.king_mode === 'dealt' ? (ch.kingHeld?.[ctx.playerId] ? `${SUIT_GLYPH[ch.kingHeld[ctx.playerId]]} (${ch.kingOpened?.[ctx.playerId] ? 'placed' : 'opening placement required'})` : 'placed') : undefined,
+      court: c.king_mode === 'dealt' ? (ch.courtOpen ? 'complete' : 'opening: Kings only') : undefined,
       table: Object.entries(ch.tiles).sort(([a], [b]) => (xy(a)[1] - xy(b)[1]) || (xy(a)[0] - xy(b)[0])).map(([k, t]) => tileLabel(k, t)),
+      turnStep: ch.moved ? 'movement used; landscape action or hold remaining' : ch.laid ? 'landscape used; movement remaining' : c.flexible_order ? 'landscape and movement available in either order' : 'landscape first, movement second',
+      kingsInReserve: c.king_mode === 'reserve' ? SUITS.filter(s => !Object.values(ch.tiles).some(t => t.king === s)) : undefined,
+      mustMove: !c.optional_move || !!ch.skippedLast,
       lastMove: ch.lastMove,
       progress,
     };
@@ -490,3 +652,4 @@ export const junctionChainMechanic: MechanicHooks = {
     return e ? { type: t, label: e[0], description: e[1], examples: [e[2]] } : null;
   },
 };
+

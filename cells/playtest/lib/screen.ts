@@ -30,7 +30,7 @@ export function greedyDecider(seed: number): Decide {
   };
 }
 
-export async function screen(rules: string, o: { seeds: number[]; players: number[]; maxSteps: number; deadlineAt: number }) {
+export async function screen(rules: string, o: { seeds: number[]; players: number[]; maxSteps: number; deadlineAt: number; policy?: string }) {
   const games: Array<Record<string, unknown>> = [];
   const runs: Array<{ winnerKey: string | null; positions: string[] }> = [];
   const mix = new Map<string, number>();
@@ -38,23 +38,26 @@ export async function screen(rules: string, o: { seeds: number[]; players: numbe
   for (const seed of o.seeds) {
     for (const players of o.players) {
       if (Date.now() > o.deadlineAt) break;
-      const s = await play(rules, greedyDecider(seed * 31 + players), { players, seed, maxSteps: o.maxSteps });
+      const s = await play(rules, o.policy === 'random' ? null : greedyDecider(seed * 31 + players), { players, seed, maxSteps: o.maxSteps });
       const m = metrics(s);
       steps += m.steps;
       for (const [k, v] of Object.entries(m.actionMix)) mix.set(k, (mix.get(k) ?? 0) + v);
       const role = s.winner ? (s.roles?.[s.winner] ?? null) : null;
       runs.push({ winnerKey: s.winner ? (role ?? `seat ${String(s.winner).replace(/\D/g, '')}`) : null, positions: s.roles && Object.keys(s.roles).length ? [...new Set(Object.values(s.roles))] : Array.from({ length: players }, (_, i) => `seat ${i + 1}`) });
-      games.push({ seed, players, stopped: s.stopped, rounds: m.rounds, steps: m.steps, winner: role ?? s.winner, end: m.endReason ?? s.error ?? null });
+      games.push({ seed, players, stopped: s.stopped, rounds: m.rounds, steps: m.steps, winner: role ?? s.winner, winnerSeat: s.winner, audit: (s as any).chainAudit ?? null, trace: [...s.turns.slice(0, 8), ...s.turns.slice(-4)].map(t => ({turn:t.turn, player:t.player, action:t.action})), end: m.endReason ?? s.error ?? null });
     }
   }
   const outcomes: Record<string, number> = {};
   for (const g of games) {
-    const k = `${g.winner ?? 'no winner'} · ${g.stopped === 'finished' ? (/limit|timeout|max/i.test(String(g.end ?? '')) ? 'time limit' : /denounc|accus/i.test(String(g.end ?? '')) ? 'denounce' : 'objective') : g.stopped}`;
+    const k = `${g.winner ?? 'no winner'} · ${g.stopped === 'finished' ? (/limit|timeout|max|draw/i.test(String(g.end ?? '')) ? 'time limit' : /denounc|accus/i.test(String(g.end ?? '')) ? 'denounce' : 'objective') : g.stopped}`;
     outcomes[k] = (outcomes[k] ?? 0) + 1;
   }
   const total = [...mix.values()].reduce((a, b) => a + b, 0) || 1;
   return {
-    note: 'greedy stand-in player, not Jev: structure only (ending, length, outcome spread, move mix, errors) — no scores',
+    note: `${o.policy === 'random' ? 'seeded random' : 'greedy stand-in'} player, not Jev: structural evidence, not a measure of enjoyment`,
+    requestedGames: o.seeds.length * o.players.length,
+    complete: games.length === o.seeds.length * o.players.length,
+    skipped: o.seeds.flatMap(seed => o.players.map(players => ({seed, players}))).filter(w => !games.some(g => g.seed === w.seed && g.players === w.players)),
     games: games.length,
     outcomes,
     balance: outcomeBalance(runs),
@@ -63,6 +66,7 @@ export async function screen(rules: string, o: { seeds: number[]; players: numbe
     errors: games.filter((g) => g.stopped === 'error' || g.stopped === 'stuck').map((g) => `${g.seed}×${g.players}: ${g.end}`),
     moveMix: Object.fromEntries([...mix].sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, `${Math.round((v / total) * 100)}%`])),
     meanSteps: Math.round(steps / (games.length || 1)),
-    sample: games.slice(0, 8),
+    sample: games,
   };
 }
+
