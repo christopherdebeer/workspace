@@ -15,6 +15,8 @@ targets:
   leadChanges: [3, 6]
   heldLead: [0, 0.6]
   contenders: [1.5, 3]
+  prepPayoff: [0.4, 1]
+  jackWin: [0, 0.2]
 
 # Each player is dealt one hidden commission (a suit: physically a Two) and, separately, one
 # King to place in the opening court. The King in your hand is not necessarily your destination.
