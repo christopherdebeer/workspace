@@ -22,7 +22,9 @@
  *
  * The player's view carries a forecast of the counter's chances over the next few rolls, by
  * King, as `objectiveProgress` lines ("your King ♥: 20%") — the runner's consequence labels
- * turn those into what a lay does for you. Nothing in the view is anyone else's secret.
+ * turn those into what a lay does for you — and the route: the fewest empty squares between the
+ * counter and each King, so that the first card toward a distant King reads as progress before
+ * any forecast can see it. Nothing in the view is anyone else's secret.
  *
  * Config (engine_mechanics.junction_chain):
  *   size: 5 · start: "2,2" · kings: { hearts: "2,0", diamonds: "4,2", clubs: "2,4", spades: "0,2" }
@@ -162,6 +164,28 @@ function destination(ch: ChainState, at: string, face: number, wrap: boolean): {
   if (d < 0) return { at, reason: 'stay', dir: d };
   const next = neighbour(ch, at, d, wrap);
   return next && ch.tiles[next] ? { at: next, reason: 'move', dir: d } : { at, reason: 'open', dir: d };
+}
+/** The route: the fewest empty squares between `from` and each King, walking the table through
+ *  laid cards (free) and empty squares (one each); a lay that fills one is a step toward that
+ *  King whether or not the forecast can see it yet. Kings other than the target block. */
+export function gaps(ch: ChainState, from: string, wrap: boolean): Record<string, number> {
+  const out: Record<string, number> = {};
+  const dist = new Map<string, number>([[from, 0]]);
+  const queue: string[] = [from]; // 0-1 BFS as a deque
+  while (queue.length) {
+    const k = queue.shift()!;
+    const d = dist.get(k)!;
+    const t = ch.tiles[k];
+    if (t?.king && k !== from) { if (out[t.king] === undefined) out[t.king] = d; continue; }
+    for (let dir = 0; dir < 4; dir++) {
+      const n = neighbour(ch, k, dir, wrap);
+      if (!n) continue;
+      const w = ch.tiles[n] ? 0 : 1;
+      const nd = d + w;
+      if (nd < (dist.get(n) ?? Infinity)) { dist.set(n, nd); if (w === 0) queue.unshift(n); else queue.push(n); }
+    }
+  }
+  return out;
 }
 function hasEmpty(ch: ChainState): boolean {
   for (let y = 0; y < ch.size; y++) for (let x = 0; x < ch.size; x++) if (!ch.tiles[key(x, y)]) return true;
@@ -641,7 +665,10 @@ export const junctionChainMechanic: MechanicHooks = {
     const suit = mySuit(ctx);
     const rest = (w: Record<string, number>) => SUITS.filter((s) => s !== suit).reduce((a, s) => a + (w[s] ?? 0), 0);
     // (progress, not objectiveProgress: hidden-objectives' view is merged after this one)
-    const progress = suit ? [`your King ${SUIT_GLYPH[suit]}: ${pct5(f[suit] ?? 0)} within ${near} rolls, ${pct5(g[suit] ?? 0)} within ${near * 3}`, `the other Kings together: ${pct5(rest(f))} within ${near}, ${pct5(rest(g))} within ${near * 3}`] : [];
+    const gp = gaps(ch, ch.counter, c.wrap !== false);
+    const gapLine = (s: string) => { const n = gp[s]; return n === undefined ? 'no route' : n === 0 ? 'cards all the way' : `${n} more card${n === 1 ? '' : 's'} to lay`; };
+    const nearestOther = SUITS.filter((s) => s !== suit && gp[s] !== undefined).sort((a, b) => gp[a] - gp[b])[0];
+    const progress = suit ? [`your King ${SUIT_GLYPH[suit]}: ${pct5(f[suit] ?? 0)} within ${near} rolls, ${pct5(g[suit] ?? 0)} within ${near * 3}`, `the other Kings together: ${pct5(rest(f))} within ${near}, ${pct5(rest(g))} within ${near * 3}`, `route to your King ${SUIT_GLYPH[suit]}: ${gapLine(suit)}`, `nearest other King${nearestOther ? ` ${SUIT_GLYPH[nearestOther]}` : ''}: ${nearestOther ? gapLine(nearestOther) : 'no route'}`] : [];
     const under = ch.tiles[ch.counter];
     return {
       phase: ch.phase === 'build' ? `building the table (${Object.values(ch.tiles).length - 1 - Object.keys(c.kings ?? {}).length || 0} laid; ${hasEmpty(ch) ? 'spaces still empty' : 'full'})` : `the race: ${ch.rolls} rolls so far`,
