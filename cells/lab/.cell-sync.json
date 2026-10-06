@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:a63000037f5e67a01bd8db545cb5dc614195734de7f5598841d4150ac13a9ae1",
-  "syncedAt": "2026-10-06T23:38:03.495Z",
+  "treeVersion": "tree:c679af9bc9a94b19a7191a25880159887052cd9b2da93ae3685bbace7b45186d",
+  "syncedAt": "2026-10-06T23:43:17.946Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -53,10 +53,10 @@
     "client/seals/main.ts": "sha256:95132e9d46850393ec5a20a9a0d2259ee6867468dd8e722fcdb0bd02cd8cd6b2",
     "client/seals/ornament.ts": "sha256:55dc897e15786d43a7d9e27005ef5e7361c98c495cbfd0518a97cb703304428c",
     "client/seals/pack.ts": "sha256:47dd4c595148c9972587bf795476ef08ca66aed32721d2e4676e728ac454e257",
-    "client/seals/seal.ts": "sha256:e5c3a0543863341dd570bfc9e014841878c3047ab207aa7fdfc2b34f3d09278e",
+    "client/seals/seal.ts": "sha256:04fb5bc957e4180fe1e002dee1437eeaf9921670ac0ddda752a6e86dc89d225f",
     "client/seals/shapes.ts": "sha256:5e3723c60622f590ceb3a9594747789b2c1fb52b08c49bd8299313b39a8eb7ba",
     "client/seals/structure.ts": "sha256:18cb023db58c936497adc554e4f365a9c59bba56b7b205ab5fffd49e3a70b4f4",
-    "client/seals/styles.ts": "sha256:9164fee357728b182ae5f6f873e24c63c3df621a4bf6e80629c123d9a6106da6",
+    "client/seals/styles.ts": "sha256:582b63a8be2d8058ef1519169c3438464d9ba0ce1582c67956b3d883b315f78e",
     "experiments.ts": "sha256:7401c821bfcbb555d68622265c64b9fa533cce1687983e217ddcc8c8eb6b661b",
     "index.ts": "sha256:f660aff1e326b77a9d66b1ce84dd9b25db7ac6cfad311fd8cd3e7e9670393846",
     "md.ts": "sha256:67f154204a60b874e30eb1e5724120168ae8c98b00dfc9b0a844ff9d3bb7379e",
@@ -153,7 +153,7 @@
     "static/plate.html": "sha256:d9487ca6106921855e14644def18f7135a6ccb86601d54ab0a7d480686f3ef2f",
     "static/plate.md": "sha256:13e54834de8032549f53f49b16af2f5a56b1829b482a4d70d562b55d73cad1f6",
     "static/seals.html": "sha256:e0ee6da6d97c90aba4ab57affd0d8680f42e1e543e26f09049926243a9c5a21d",
-    "static/seals.md": "sha256:927e081a6920887628c4f378b16f287a72ef3252ae1eb6e042cc4fc9d0c9c70b",
+    "static/seals.md": "sha256:7f6a501b088b802d5ad4584d8fc1471b63cc7a13fb236a17433c41ef9d8f08e0",
     "tsconfig.json": "sha256:aa5d5858c9ae1e731fcb88d91b3a59c88e2ef4b249b3e5802baf7c9fae241a30"
   }
 }
