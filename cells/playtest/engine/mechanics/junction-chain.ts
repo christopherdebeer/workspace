@@ -98,6 +98,8 @@ export interface ChainState {
   /** the last die face, and the counter's last move, for the log and the view */
   lastRoll?: number;
   lastMove?: string;
+  /** the last few movements, oldest first (the view's recentMovement: the counter's story since your last turn) */
+  history?: string[];
   /** in the race: this turn's lay (or swap, or hold) is done; the roll, a Jack or a Joker ends it */
   laid?: boolean;
   moved?: boolean;
@@ -250,6 +252,7 @@ function canKing(ch: ChainState, c: JunctionChainConfig, k: string, suit: string
 }
 /** a fair shuffle (Math.random is the game's seeded stream under the runner) */
 function shuffled<T>(a: T[]): T[] { const o = [...a]; for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; } return o; }
+function remember(ch: ChainState, note: string | undefined): void { if (!note) return; const h = (ch.history ??= []); h.push(note); if (h.length > 6) h.shift(); }
 function count(ch: ChainState, name: string, n = 1): void { const a = ch.audit ??= {}; a[name] = (a[name] ?? 0) + n; }
 /** The counter's chances: from `at`, over `hops` rolls, the mass arriving at each King */
 export function forecast(ch: ChainState, at: string, wrap: boolean, hops: number): Record<string, number> {
@@ -303,6 +306,7 @@ function moveCounter(ch: ChainState, state: GameState, wrap: boolean, face: numb
   if (res.reason === 'move') { log.push(`rolled ${face}: ${DIR_NAMES[res.dir]} to ${res.at}`); arrive(ch, state, res.at, log); }
   else log.push(`rolled ${face}: ${res.reason === 'stay' ? 'a stay face' : res.reason === 'open' ? 'an open exit' : 'nowhere'} — the counter stays at ${ch.counter}`);
   ch.lastMove = log[log.length - 1];
+  remember(ch, ch.lastMove);
 }
 function refill(state: GameState, playerId: string, hand: number): void {
   const have = (state.players[playerId].hand ?? []).length;
@@ -576,13 +580,13 @@ export const junctionChainMechanic: MechanicHooks = {
     if (type === 'swap') { const a = action as unknown as Swap; takeRole('swap'); count(ch, 'courtPlays'); const ta = ch.tiles[a.a]; const tb = ch.tiles[a.b]; ch.tiles[a.a] = { ...tb, start: ta.start }; ch.tiles[a.b] = { ...ta, start: tb.start }; log.push(`${playerId} swapped ${ta.card.name} (${a.a}) and ${tb.card.name} (${a.b})`); return laid('swapped', { a: a.a, b: a.b }); }
     if (type === 'hold') { log.push(`${playerId} lays nothing`); return laid('held'); }
     if (type === 'roll') { moveCounter(ch, state, wrap, 1 + Math.floor(Math.random() * 6), log); return done('rolled', { face: ch.lastRoll, to: ch.counter }); }
-    if (type === 'reroute') { const a = action as unknown as Reroute; takeRole('reroute'); count(ch, 'courtPlays'); const n = neighbour(ch, ch.counter, DIR_NAMES.indexOf(a.dir), c.wrap !== false)!; log.push(`${playerId} played a Jack: the counter walks ${a.dir} to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; return done('rerouted', { dir: a.dir, to: n }); }
+    if (type === 'reroute') { const a = action as unknown as Reroute; takeRole('reroute'); count(ch, 'courtPlays'); const n = neighbour(ch, ch.counter, DIR_NAMES.indexOf(a.dir), c.wrap !== false)!; log.push(`${playerId} played a Jack: the counter walks ${a.dir} to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; remember(ch, ch.lastMove); return done('rerouted', { dir: a.dir, to: n }); }
     if (type === 'chaos') {
       takeRole('chaos'); count(ch, 'courtPlays');
       const t = ch.tiles[ch.counter];
       // (the card's distinct outward exits that lead to a card, north, east, south, west; one at random)
       const ds = [...new Set(exitsOf(t).filter((d) => d >= 0))].sort().map((d) => neighbour(ch, ch.counter, d, c.wrap !== false)).filter((n): n is string => !!n && !!ch.tiles[n]);
-      if (ds.length) { const n = ds[Math.floor(Math.random() * ds.length)]; log.push(`${playerId} played a Joker: ${ds.length} exit${ds.length > 1 ? 's' : ''}, chaos takes the counter to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; }
+      if (ds.length) { const n = ds[Math.floor(Math.random() * ds.length)]; log.push(`${playerId} played a Joker: ${ds.length} exit${ds.length > 1 ? 's' : ''}, chaos takes the counter to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; remember(ch, ch.lastMove); }
       else { ch.rolls++; log.push(`${playerId} played a Joker: no exit leads anywhere; the counter stays`); }
       return done('chaos', {});
     }
@@ -723,6 +727,7 @@ export const junctionChainMechanic: MechanicHooks = {
       kingsInReserve: c.king_mode === 'reserve' ? SUITS.filter(s => !Object.values(ch.tiles).some(t => t.king === s)) : undefined,
       mustMove: !c.optional_move || !!ch.skippedLast,
       lastMove: ch.lastMove,
+      recentMovement: ch.history,
       progress,
     };
   },
