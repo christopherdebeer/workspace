@@ -117,6 +117,9 @@ export interface ChainState {
   leaders?: string[];
   /** held suits with a route of at most one empty square after each movement (measures: contenders) */
   live?: number[];
+  /** squares laid (or covered) in the race, by square, that the counter has not yet reached since (measures: prepPayoff) */
+  prepared?: Record<string, 1>;
+  usedLays?: number;
   /** lays made this build turn (build_lays) */
   buildLaid?: number;
 }
@@ -210,6 +213,9 @@ export function measuresOf(ch: ChainState, state: GameState, won = false): Recor
   const tail = live.slice(-3);
   return {
     offTurnWin: won ? Number((a.offTurnWins ?? 0) > 0) : 0,
+    jackWin: won ? Number((a.jackWins ?? 0) > 0) : 0,
+    coverUnder: (a.covers ?? 0) ? +(((a.coverCurrentBefore ?? 0) + (a.coverCurrentAfter ?? 0)) / (a.covers ?? 1)).toFixed(3) : 0,
+    prepPayoff: (a.lays ?? 0) ? +((ch.usedLays ?? 0) / (a.lays ?? 1)).toFixed(3) : 0,
     draw: state.status !== 'in_progress' && !won ? 1 : 0,
     leadChanges,
     heldLead: won && half === winner ? 1 : 0,
@@ -507,6 +513,9 @@ export const junctionChainMechanic: MechanicHooks = {
         count(ch, 'displacements', Number(ch.counter !== counterBefore));
         const winnerSuit = ch.tiles[ch.counter]?.king;
         if (winnerSuit && winnerSuit !== mySuit(ctx)) count(ch, 'offTurnWins');
+        if (winnerSuit && heldSuits(state).has(winnerSuit) && type === 'reroute') count(ch, 'jackWins');
+        // a prepared card the counter has now reached: the preparation paid
+        if (ch.counter !== counterBefore && ch.prepared?.[ch.counter]) { delete ch.prepared[ch.counter]; ch.usedLays = (ch.usedLays ?? 0) + 1; }
         const f = forecast(ch, ch.counter, wrap, 1);
         if (Object.values(f).some(p => p >= 1 / 3)) count(ch, 'threatPositions');
         // measures: the forecast's favourite and the live routes after this movement
@@ -562,7 +571,7 @@ export const junctionChainMechanic: MechanicHooks = {
       ch.tiles[a.at] = { card: cc, turn: a.turn, start: was?.start, ...(cc.role === 'destination' ? { king: cc.suit } : {}) };
       if (cc.role === 'destination') count(ch, 'kingsPlaced');
       if (was && a.at === counterBefore) count(ch, movedBefore ? 'coverCurrentAfter' : 'coverCurrentBefore');
-      if (cc.role !== 'destination') { count(ch, 'lays'); if (was) count(ch, 'covers'); }
+      if (cc.role !== 'destination') { count(ch, 'lays'); if (was) count(ch, 'covers'); if (ch.phase === 'race' && a.at !== ch.counter) (ch.prepared ??= {})[a.at] = 1; }
       log.push(`${playerId} ${was ? 'covered' : 'laid'} ${a.card} at ${a.at}, turned ${a.turn}`);
       if (ch.phase === 'build') {
         const laidCount = Object.values(ch.tiles).filter((t) => !t.king && !t.start).length;
