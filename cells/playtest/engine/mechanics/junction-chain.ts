@@ -53,6 +53,10 @@ export interface JunctionChainConfig {
   optional_move?: boolean;
   seed_cross?: boolean;
   king_mode?: 'fixed' | 'reserve' | 'deck' | 'dealt';
+  /** a short build: the build ends once this many junctions are laid (default: the table full) */
+  build_to?: number;
+  /** cards laid per build turn (default 1) */
+  build_lays?: number;
   size?: number;
   start?: string;
   start_card?: string;
@@ -101,6 +105,8 @@ export interface ChainState {
   courtOpen?: boolean;
   kingsDealt?: boolean;
   audit?: Record<string, number>;
+  /** lays made this build turn (build_lays) */
+  buildLaid?: number;
 }
 
 const key = (x: number, y: number) => `${x},${y}`;
@@ -278,6 +284,8 @@ export const junctionChainMechanic: MechanicHooks = {
       optional_move: { type: 'boolean', description: 'May skip movement, but never on consecutive player turns' },
       seed_cross: { type: 'boolean', description: 'Seed four actual deck junctions around the start before the first turn' },
       king_mode: { type: 'string', enum: ['fixed', 'reserve', 'deck', 'dealt'], description: 'Fixed setup, public placement reserve, or one King dealt to each player for a mandatory opening placement' },
+      build_to: { type: 'number', description: 'A short build: the race begins once this many junctions are laid (default: when the table is full)' },
+      build_lays: { type: 'number', description: 'Cards laid per build turn (default 1)' },
       size: { type: 'number', description: 'Table side (default 5)' },
       start: { type: 'string', description: 'The start space, "x,y" (default the centre)' },
       kings: { type: 'object', description: 'Destination spaces by suit, "x,y" each' },
@@ -348,7 +356,7 @@ export const junctionChainMechanic: MechanicHooks = {
     const step2 = ['roll', 'reroute', 'chaos', 'skip_move'].includes(type);
     if (step2 && ch.moved) return { valid: false, error: 'Movement already used this turn' };
     if (type === 'skip_move' && (!c.optional_move || ch.skippedLast)) return { valid: false, error: 'Movement required: no consecutive pauses' };
-    if (ch.phase === 'race' && c.king_mode === 'dealt' && !ch.courtOpen) {
+    if (c.king_mode === 'dealt' && !ch.courtOpen) {
       if (!ch.kingOpened?.[ctx.playerId] && type !== 'crown') return { valid: false, error: 'Open your dealt King before taking a normal action' };
       if (ch.kingOpened?.[ctx.playerId] && type !== 'crown') return { valid: false, error: 'The Court must be complete before normal play begins' };
     }
@@ -358,7 +366,7 @@ export const junctionChainMechanic: MechanicHooks = {
       const a = action as unknown as { suit: string; at: string };
       const heldKing = hand.find((h) => h.role === 'destination' && (h.suit === a.suit || suitOf(h.name) === a.suit)) || (ch.kingHeld?.[ctx.playerId] === a.suit ? ({ name: `K${SUIT_GLYPH[a.suit]} DESTINATION`, suit: a.suit, role: 'destination' } as unknown as Card) : undefined);
       const opening = c.king_mode === 'dealt' && !ch.kingOpened?.[ctx.playerId];
-      if (opening && heldKing && ch.phase === 'race' && canKing(ch, c, a.at, a.suit)) return { valid: true };
+      if (opening && heldKing && canKing(ch, c, a.at, a.suit)) return { valid: true };
       if (c.king_mode === 'reserve' && ch.phase === 'race' && canKing(ch, c, a.at, a.suit)) return { valid: true };
       return { valid: false, error: opening ? 'You must place your dealt King on an empty rim square before taking a normal action' : 'King must be in reserve, on an empty rim square away from the counter' };
     }
@@ -477,7 +485,16 @@ export const junctionChainMechanic: MechanicHooks = {
       if (cc.role === 'destination') count(ch, 'kingsPlaced');
       if (was && a.at === counterBefore) count(ch, movedBefore ? 'coverCurrentAfter' : 'coverCurrentBefore');
       log.push(`${playerId} ${was ? 'covered' : 'laid'} ${a.card} at ${a.at}, turned ${a.turn}`);
-      if (ch.phase === 'build' && !hasEmpty(ch)) { ch.phase = 'race'; log.push('The table is built: the race begins.'); }
+      if (ch.phase === 'build') {
+        const laidCount = Object.values(ch.tiles).filter((t) => !t.king && !t.start).length;
+        if (!hasEmpty(ch) || (c.build_to && laidCount >= c.build_to)) { ch.phase = 'race'; log.push('The table is built: the race begins.'); }
+        else if ((c.build_lays ?? 1) > 1) {
+          // (another lay this turn, while the hand has one that can go somewhere)
+          ch.buildLaid = (ch.buildLaid ?? 0) + 1;
+          const more = hand.some((h) => { const cc = toChainCard(h); return cc.role !== 'destination' && cc.role !== 'reroute' && cc.role !== 'swap' && cc.role !== 'chaos' && spacesFor(ch).some((k) => canLay(ch, c, k, cc)); });
+          if (ch.buildLaid < (c.build_lays ?? 1) && more) { count(ch, 'buildActions'); return { handled: true, advanceTurn: false, checkWin: false, logMessage: 'laid', logData: { card: a.card, at: a.at, turn: a.turn, covered: !!was, phase: ch.phase, counter: ch.counter, notes: log } }; }
+        }
+      }
       return laid('laid', { card: a.card, at: a.at, turn: a.turn, covered: !!was });
     }
     if (type === 'throw_in') { const a = action as unknown as { card: string }; take(a.card); log.push(`${playerId} threw in ${a.card}`); return laid('threw_in', { card: a.card }); }
@@ -505,6 +522,7 @@ export const junctionChainMechanic: MechanicHooks = {
     if (!ch || !c) return null;
     ch.laid = false;
     ch.moved = false;
+    ch.buildLaid = 0;
     // (the Kings were dealt at setup: ch.kingHeld; the crown action reads it)
     if (c.dynamic && c.seed_cross && !ch.seeded) {
       const deck = getCardsState(ctx.state).deck;
