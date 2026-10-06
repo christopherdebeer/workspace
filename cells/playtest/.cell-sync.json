@@ -1,8 +1,8 @@
 {
   "cell": "c15r/playtest",
   "cellId": "playtest-06b8e262",
-  "treeVersion": "tree:06b0f8398937c569040cdadecbd511d4401501ba2810002b1a8e87404147b8f8",
-  "syncedAt": "2026-10-06T10:41:47.793Z",
+  "treeVersion": "tree:e7b47fe6a9cc9ba813bde575a13fa093a9ec7545c9d44849cf36a1855a180166",
+  "syncedAt": "2026-10-06T11:00:49.435Z",
   "files": {
     "client/imports.json": "sha256:9104aec9cec3507cbba8e04cb8b9c40aad9b4d2f0961b5562717d88f0aebf35e",
     "client/lib/api.ts": "sha256:8107b5e4b3aae870163053206e8e63cf2c231db378516a065141f5b8cf1a727e",
@@ -217,17 +217,17 @@
     "engine/types/index.ts": "sha256:6c7ac67faf110ba25d56ed96711ca41f11f541c64ca7a9146f4978949a21c20c",
     "engine/types/logs.ts": "sha256:9731ecee84746d2a1590841d74e04009f6780ff49514df100e008a6d4ed0453e",
     "engine/vendor-info.ts": "sha256:eeaadfb93fcec2e4acfbfffb01bee4a12d5bc5f2f2641dbe0cccd764556c487a",
-    "index.ts": "sha256:e52401d8a9063004eb103ba37099e54865c7c6f48db2fd80f0fc00b07a3a5adc",
+    "index.ts": "sha256:d11e13e04d9fa8b1b3685f3f97d912240775c38402c0e54384457b3acc2248a1",
     "lib/deduction.ts": "sha256:cd832da72427fa97ac0476acc0810071f8b78e1eeea83f0b1dd4139084a5c95d",
     "lib/engine-src.ts": "sha256:f5b5c5831ea144c8e591a2a78d00db019bb32499d960088873a5a7d3026d2902",
-    "lib/evaluate.ts": "sha256:040d39e2b599842f9dca0c53e18554ddd56bbf96b790c05b456c6cffb0478348",
+    "lib/evaluate.ts": "sha256:0d5babb3d426ec138fcc5ecda88ee4810703a88c47db38f7b5a3555384b8b54f",
     "lib/fingerprint.ts": "sha256:14fb2faea86e20e7dd2ed472d564d7dbbb64b45d3b8307043063c84a0574d5a5",
     "lib/jev.ts": "sha256:9b68102cd9e42be5942c4a029d8559ce43e37aa92115db6c5ed378742447629a",
     "lib/public.ts": "sha256:c7508569d537937f67902e129adda667810295c0868e30df6037eb6c23240bb0",
-    "lib/runner.ts": "sha256:cc5219696a114c0322bd7f2797753e0d3696f328570015bd78cd57173f40bf9d",
+    "lib/runner.ts": "sha256:589c81345f2638daef31070aac90838bac9e61e5384f7ab08169354e93009b8c",
     "lib/score.ts": "sha256:36e9162464b533027985bcf3ba5c2c8e77b5aeaa73a9d1f8244dac5091b3bd2b",
     "lib/screen.ts": "sha256:3ffb660ca4b706a887a138d695ac60757288d86f9a1957c817e071b522577c55",
-    "lib/store.ts": "sha256:44676db345dde7c669808d141e2e8e0e5d0543b336bceb79429f5871b075e6c1",
+    "lib/store.ts": "sha256:e3538db26646a3616327a58dc36fb48a68c6ec1d25452177a8b7ab52bba26f01",
     "lib/types.ts": "sha256:0b991f9c4ac96fe03850d37995a9135bbba312cf7472132b3a619320a4cc8d76",
     "static/index.html": "sha256:7954f6b368d41d856689eded545314a5f5602ab0bdf4e31a33bb3885867cc34e"
   }
