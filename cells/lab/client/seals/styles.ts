@@ -16,6 +16,7 @@ export type Band = 'none' | 'scale' | 'rays';
 export type Where = 'axes' | 'diagonals' | 'both';
 export type Orient = 'radial' | 'tangent' | 'up' | 'free';
 export type Border = 'none' | 'frame' | 'corners' | 'both';
+export type Arrow = 'barb' | 'dart' | 'open' | 'fleur';
 
 export interface Style {
   name: string;
@@ -138,6 +139,10 @@ export interface Style {
   cornerR: number;
   // the junction, drawn over the ground
   jWeight: number;
+  /** the heads on the exits and the stay loop: barbed, a slim dart, an open chevron, or barbed
+   *  with a lozenge behind; and their size */
+  arrow: Arrow;
+  arrowSize: number;
   roundelR: number;
   /** where the face roundels sit, from the centre */
   faceR: number;
@@ -155,7 +160,7 @@ const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | '
   crescents: 1, crescentR: 19, dots: 0.3, hubR: 11.5,
   packMax: 5, packMin: 0.55, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, borderW: 4.6, cornerR: 13, stipple: 0.25,
   oDot: 0.35, oSparkle: 0.5, oMotif: 0.35, oRosette: 0.3, oRoundel: 0.1, oScroll: 0.9, oStar: 0.1, oEye: 0.25, oCrescent: 0.1, orient: 'radial', links: 0.5, linkBend: 0.6, border: 'corners',
-  jWeight: 1.2, roundelR: 5.2, faceR: 28.5, variance: 0.5,
+  jWeight: 1.2, arrow: 'barb', arrowSize: 1, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'motifAt'> = {
   paper: '#f7f0e3', weight: 0.5, faint: 0.9, accent: 0.2,
@@ -167,15 +172,15 @@ const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'm
   crescents: 0, crescentR: 19, dots: 0.4, hubR: 12,
   packMax: 5.5, packMin: 0.6, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, borderW: 4.6, cornerR: 13, stipple: 0.15,
   oDot: 0.5, oSparkle: 0.3, oMotif: 0.5, oRosette: 0.6, oRoundel: 0.7, oScroll: 0, oStar: 0.35, oEye: 0.1, oCrescent: 0, orient: 'up', links: 0.2, linkBend: 0.2, border: 'frame',
-  jWeight: 1.2, roundelR: 5.2, faceR: 28.5, variance: 0.5,
+  jWeight: 1.2, arrow: 'barb', arrowSize: 1, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 
 /** by suit: hearts, diamonds, clubs, spades (the game's order) */
 export const SUIT_STYLES: Style[] = [
   { ...filigree, name: 'hearts', ink: '#7a1b16', wash: '#d8301f', washAmount: 0.5, motif: 'heart', motifAt: 'diagonals' },
-  { ...lattice, name: 'diamonds', ink: '#3e2715', wash: '#b8742c', washAmount: 0, motif: 'diamond', motifAt: 'both', bandDensity: 1.5, petalR: 18, oStar: 0.8, oSparkle: 0.7, oRosette: 0.2, orient: 'radial', stipple: 0.35 },
+  { ...lattice, name: 'diamonds', ink: '#3e2715', wash: '#b8742c', washAmount: 0, motif: 'diamond', motifAt: 'both', arrow: 'dart', bandDensity: 1.5, petalR: 18, oStar: 0.8, oSparkle: 0.7, oRosette: 0.2, orient: 'radial', stipple: 0.35 },
   { ...lattice, name: 'clubs', ink: '#46461a', wash: '#7c8a2a', washAmount: 0, motif: 'trefoil', motifAt: 'diagonals' },
-  { ...filigree, name: 'spades', ink: '#1f2c6c', wash: '#3550b0', washAmount: 0, motif: 'spade', motifAt: 'axes', rings: 4, beads: 0.8, bandLen: 12, bandDensity: 2, starR: 33, petalR: 28, lenses: 4, lensR: 42, motifR: 40, motifSize: 2.6, crescents: 2, dots: 0.4, packMax: 4.5, oScroll: 1, oCrescent: 0.25, oEye: 0.35, links: 0.65, stipple: 0.35, border: 'both' },
+  { ...filigree, name: 'spades', ink: '#1f2c6c', wash: '#3550b0', washAmount: 0, motif: 'spade', motifAt: 'axes', rings: 4, beads: 0.8, bandLen: 12, bandDensity: 2, starR: 33, petalR: 28, lenses: 4, lensR: 42, motifR: 40, motifSize: 2.6, crescents: 2, dots: 0.4, packMax: 4.5, arrow: 'fleur', oScroll: 1, oCrescent: 0.25, oEye: 0.35, links: 0.65, stipple: 0.35, border: 'both' },
 ];
 
 export interface Control {
@@ -221,5 +226,5 @@ export const SCHEMA: Control[] = [
   e('orient', 'orientation', 'Vocabulary', ['radial', 'tangent', 'up', 'free']), n('links', 'lace', 'Vocabulary', 0, 1, 0.05, true), n('linkBend', 'lace bow', 'Vocabulary', 0, 1, 0.05),
   n('medal', 'medallions', 'Zones', 0, 1.5, 0.05, true), n('zoneMargin', 'zone margin', 'Zones', 0, 5, 0.1), b('refill', 'refill round zones', 'Zones'),
   e('border', 'card border', 'Zones', ['none', 'frame', 'corners', 'both']), n('borderW', 'frame width (mm)', 'Zones', 2.5, 8, 0.1), n('cornerR', 'corner reach (mm)', 'Zones', 6, 22, 0.5),
-  n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
+  n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), e('arrow', 'arrow heads', 'Junction', ['barb', 'dart', 'open', 'fleur']), n('arrowSize', 'arrow size', 'Junction', 0.5, 1.6, 0.05), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
 ];

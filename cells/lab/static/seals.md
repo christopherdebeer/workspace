@@ -14,6 +14,10 @@ stay. The seal draws exactly that, bold, over a faint engraved ground:
 - **the stays** are a closed loop hanging off the hub, on the side furthest from the exits,
   with an arrow back into the hub and the stay faces on the loop. The loop never reaches the
   rim, so a stay can't be read as an exit (the old dials' stay curl could);
+- every head (barbed, a slim dart, an open chevron, or barbed with a lozenge behind: **arrow
+  heads**, with **arrow size**) is aimed along its line; on the loop it is aimed from a head's
+  length back along the arc to the tip, so its base sits on the curve, and the arc stops where
+  the head takes over (the game's dials had the same fix);
 - the faces always read like print: left to right across a shaft, top to bottom down one;
 - under the seal, the same in words: `1–2 ↑   3 →   4–6 stay`, and
   `Six outcomes · one state · two exits`.

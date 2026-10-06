@@ -263,16 +263,23 @@ export function junction(p: Style, faces: number[]): { marks: Mark[]; zones: Sha
     out.push({ k: 'circle', x: f(c[0]), y: f(c[1]), r: f(r * 0.8), w: 0.28 * J, fill: 'none', layer: 'junction' });
     out.push({ k: 'text', x: f(c[0]), y: f(c[1] + r * 0.44), size: f(r * 1.25), text: String(n), layer: 'junction' });
   };
-  /** a barbed head, its tip at `tip`, pointing along angle t */
+  // the heads: their marks, and where along them (back from the tip) the line joins
+  const hs = p.arrowSize;
+  const HEADS: Record<string, { len: number; join: number }> = { barb: { len: 7, join: 4.6 }, dart: { len: 7, join: 6.6 }, open: { len: 6, join: 0.6 }, fleur: { len: 11, join: 4.6 } };
+  const spec = HEADS[p.arrow] ?? HEADS.barb;
+  /** a head with its tip at `tip`, pointing along angle t, at scale s */
   const head = (tip: Pt, t: number, s: number) => {
-    const L = (u: number, v: number) => add(tip, add(pol(u * s, t), pol(v * s, t + 90)));
-    return `M${pt(L(0, 0))}L${pt(L(-7, 3.4))}L${pt(L(-4.6, 0))}L${pt(L(-7, -3.4))}Z`;
+    const L = (u: number, v: number) => pt(add(tip, add(pol(u * s, t), pol(v * s, t + 90))));
+    if (p.arrow === 'open') { path(`M${L(-6, 3.4)}L${L(0, 0)}L${L(-6, -3.4)}`, 0.75 * J * Math.max(0.6, s)); return; }
+    if (p.arrow === 'dart') { path(`M${L(0, 0)}L${L(-7, 2.1)}L${L(-6.4, 0)}L${L(-7, -2.1)}Z`, 0.3 * J, 'ink'); return; }
+    path(`M${L(0, 0)}L${L(-7, 3.4)}L${L(-4.6, 0)}L${L(-7, -3.4)}Z`, 0.3 * J, 'ink');
+    if (p.arrow === 'fleur') path(`M${L(-7.6, 0)}L${L(-9.3, 1.5)}L${L(-11, 0)}L${L(-9.3, -1.5)}Z`, 0.4 * J, 'paper');
   };
   for (const d of exitsTo) {
-    const a = d * 90;
-    path(seg(pol(hj + 0.4, a), pol(R - 3.5, a)), 1.2 * J);
-    path(seg(pol(R - 9, a), pol(R - 3.5, a)), 0.3 * J);
-    path(head(pol(R + 3, a), a, 1), 0.3 * J, 'ink');
+    const a = d * 90, tip = R + 3, s = hs;
+    path(seg(pol(hj + 0.4, a), pol(tip - spec.join * s, a)), 1.2 * J);
+    zones.push({ k: 'capsule', a: pol(hj, a), b: pol(tip, a), r: 0.6 * J }, { k: 'circle', c: pol(tip - spec.len * s * 0.5, a), r: spec.len * s * 0.55 });
+    head(pol(tip, a), a, s);
   }
   // the stays: a loop off the hub, on the side furthest from the exits
   const stays = by.get(-1) ?? [];
@@ -297,9 +304,15 @@ export function junction(p: Style, faces: number[]): { marks: Mark[]; zones: Sha
     const P1 = add(pol(x, phi), pol(h, phi + 90)), P2 = add(pol(x, phi), pol(-h, phi + 90));
     const b1 = angleOf([P1[0] - C[0], P1[1] - C[1]]), b2 = angleOf([P2[0] - C[0], P2[1] - C[1]]);
     const cw = mod(phi - b1, 360) < mod(b2 - b1, 360);
-    path(`M${pt(P1)}A${f(rho)} ${f(rho)} 0 1 ${cw ? 1 : 0} ${pt(P2)}`, 1.0 * J);
+    // (the head lies along the curve: aimed from the point a head's length back on the arc to
+    // the tip, so its base sits on the curve too; the arc stops where the head takes over)
+    const s = 0.62 * hs, dir = cw ? 1 : -1, deg = 180 / Math.PI;
+    const back = add(C, pol(rho, b2 - dir * ((spec.len * s) / rho) * deg));
+    const t = angleOf([P2[0] - back[0], P2[1] - back[1]]);
+    const end = add(C, pol(rho, b2 - dir * ((spec.join * s) / rho) * deg));
+    path(`M${pt(P1)}A${f(rho)} ${f(rho)} 0 1 ${cw ? 1 : 0} ${pt(end)}`, 1.0 * J);
     zones.push({ k: 'stroke', c: C, r: rho, w: 0.5 * J });
-    path(head(P2, b2 + (cw ? 90 : -90), 0.62), 0.3 * J, 'ink');
+    head(P2, t, s);
     const r = rr * small, dpsi = ((2 * r * 1.12) / rho) * (180 / Math.PI);
     const at = inOrder(stays.map((_, i) => add(C, pol(rho, phi + (i - (stays.length - 1) / 2) * dpsi))));
     stays.forEach((n, i) => roundel(at[i], r, n));
