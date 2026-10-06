@@ -202,7 +202,7 @@ function playHybrid(seed, strats, { edges = false, cover = true } = {}) {
 // how much of the race rewrote the build: `under` = race lays that covered the counter's own
 // card, of all race lays; `onBuilt` = moves that landed on a card laid in the build and never
 // covered, of all moves.
-function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } = {}) {
+function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true, buildTo } = {}) {
   const P = strats.length; const r = rng(seed); const board = D.setup();
   const twos = D.shuffle(D.pack().filter((c) => c.rank === D.COMMISSION), r); const mine = strats.map((_, p) => twos[p].suit);
   let pile = D.shuffle(D.pack().filter((c) => c.rank !== D.KING && c.rank !== D.COMMISSION && !(c.rank === D.ACE && c.suit === 3)), r);
@@ -247,7 +247,8 @@ function pokerPlay(seed, strats, { rules = D.RULES, hand = 3, specials = true } 
     while (pile.length && hands[p].length < hand) hands[p].push(pile.shift());
   };
   // phase 1: build until nothing's empty
-  for (let i = 0; i < 80 && D.hasEmpty(board); i++) {
+  // (`buildTo`: the short build — stop once that many junctions are down; 0 is the court game, lay and move from the first turn)
+  for (let i = 0; i < 80 && D.hasEmpty(board) && (buildTo === undefined || laid.length < buildTo); i++) {
     const p = i % P; const before = new Map(board); act(p, 'build');
     // (readers note what the placement did — comparing the boards before and after)
     for (const o of strats.keys()) if (o !== p && strats[o] === 'reader') { const a = D.forecast(board, token, rules).wins, b = D.forecast(before, token, rules).wins; const bl = beliefs[o][p]; let z = 0; for (let su = 0; su < 4; su++) { bl[su] *= Math.exp(6 * (a[su] - b[su])); z += bl[su]; } for (let su = 0; su < 4; su++) bl[su] /= z; }
