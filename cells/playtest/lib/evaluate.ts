@@ -13,8 +13,8 @@
  *            test is flat is the overfitting signal → revert. Two or three
  *            rounds without a keep = stalled: diagnose, don't keep patching.
  * ------------------------------------------------------------------------- */
-import { classify, play, judge, metrics, sessionFindings, HARNESS_VERSION, personaFor, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
-import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, genreBalance, SCORE_VERSION, type RunScore } from './score';
+import { classify, play, judge, metrics, measuresOf, sessionFindings, HARNESS_VERSION, personaFor, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
+import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, genreBalance, targetsScore, targetsOf, measureMeans, SCORE_VERSION, type RunScore } from './score';
 import type { DeductionReport } from './deduction';
 import { engineFingerprint } from './fingerprint';
 import * as db from './store';
@@ -45,6 +45,8 @@ export interface RunDigest {
   endKind?: string;
   /** v4: the deduction loop as played (hidden-role games) */
   deduction?: DeductionReport | null;
+  /** v4.3: the mechanic's measures of this game (targets are set on their suite means) */
+  measures?: Record<string, number> | null;
 }
 
 /** The suite balance: the genre band when the runs carry deduction reports, else outcome balance. */
@@ -119,8 +121,8 @@ export interface EvalRecord extends db.Item {
   incomplete?: number;
   definitionHealth: number;
   classificationFindings: Finding[];
-  train: { score: number; balance?: number | null; runs: RunDigest[]; critique?: CritiqueSummary | null };
-  test: { score: number; n: number; runs: Array<{ id: string; score: number }> };
+  train: { score: number; balance?: number | null; runs: RunDigest[]; critique?: CritiqueSummary | null; targets?: ReturnType<typeof targetsScore> };
+  test: { score: number; n: number; runs: Array<{ id: string; score: number }>; targets?: number | null };
   tokens: number;
   ms: number;
   tag: string;
@@ -211,6 +213,7 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
     score: sc.score,
     parts: sc.parts,
     deduction: sc.deduction ?? null,
+    measures: measuresOf(session),
     stopped: session.stopped,
     endReason: m.endReason,
     steps: m.steps,
@@ -230,10 +233,13 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
 }
 
 /** Assemble and store the eval record from its runs (`missing` runs never reported). */
-async function assemble(o: { game: string; def: { version: number; hash: string }; suite: db.Suite; cls: Classification; tag: string; engine: string; digests: RunDigest[]; missing: number; tokens: number; ms: number }): Promise<EvalRecord> {
+async function assemble(o: { game: string; def: { version: number; hash: string; rules?: string }; suite: db.Suite; cls: Classification; tag: string; engine: string; digests: RunDigest[]; missing: number; tokens: number; ms: number }): Promise<EvalRecord> {
   await recordBacklog(o.game, o.engine, o.cls.findings);
   const train = o.digests.filter((d) => d.split === 'train');
   const test = o.digests.filter((d) => d.split === 'test');
+  const targets = o.def.rules ? targetsOf(o.def.rules) : null;
+  const tTrain = targets ? targetsScore(measureMeans(train), targets) : null;
+  const tTest = targets ? targetsScore(measureMeans(test), targets) : null;
   const rec: EvalRecord = {
     pk: '',
     sk: 'meta',
@@ -248,8 +254,8 @@ async function assemble(o: { game: string; def: { version: number; hash: string 
     incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline').length,
     definitionHealth: definitionHealth(o.cls),
     classificationFindings: o.cls.findings,
-    train: { score: scoreSuite(train.map((d) => d.score), o.cls, suiteBalance(train).balance, suiteBalance(train).genre), balance: suiteBalance(train).balance, runs: train, critique: summarizeCritique(train) },
-    test: { score: scoreSuite(test.map((d) => d.score), o.cls, suiteBalance(test).balance, suiteBalance(test).genre), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
+    train: { score: scoreSuite(train.map((d) => d.score), o.cls, suiteBalance(train).balance, suiteBalance(train).genre, tTrain?.score ?? null), balance: suiteBalance(train).balance, runs: train, critique: summarizeCritique(train), targets: tTrain },
+    test: { score: scoreSuite(test.map((d) => d.score), o.cls, suiteBalance(test).balance, suiteBalance(test).genre, tTest?.score ?? null), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })), targets: tTest?.score ?? null },
     tokens: o.tokens,
     ms: o.ms,
     tag: o.tag,
@@ -365,7 +371,8 @@ export async function finishPlan(planId: string): Promise<{ plan: Plan; rec: Eva
   const plan = (await getPlan(planId))!;
   const cls = (await db.getBlob<Classification>(`PLANCLS#${planId}`, plan.clsChunks))!;
   const digests = (await db.query(`PLAN#${planId}`, 'r')).map((r) => r.digest as RunDigest);
-  const rec = await assemble({ game: plan.game, def: { version: plan.version, hash: plan.defHash }, suite: plan.suite, cls, tag: plan.tag, engine: plan.engine, digests, missing: plan.total - digests.length, tokens: Number(plan.tokens ?? 0), ms: Date.now() - Date.parse(plan.startedAt) });
+  const def = (await db.get(`GAME#${plan.game}`, `DEF#${db.pad(plan.version)}`)) as db.Definition | undefined;
+  const rec = await assemble({ game: plan.game, def: { version: plan.version, hash: plan.defHash, rules: def?.rules }, suite: plan.suite, cls, tag: plan.tag, engine: plan.engine, digests, missing: plan.total - digests.length, tokens: Number(plan.tokens ?? 0), ms: Date.now() - Date.parse(plan.startedAt) });
   await db.update(`PLAN#${planId}`, 'meta', 'SET #e = :e', { ':e': rec.id }, { '#e': 'evalId' });
   return { plan: { ...plan, evalId: rec.id }, rec };
 }
@@ -452,19 +459,43 @@ export interface Round extends db.Item {
   reason: string;
   engine: string;
   createdAt: string;
+  /** v4.3: each measure's train mean, baseline vs candidate, with the paired standard error of the difference */
+  measures?: Record<string, { base: number; cand: number; delta: number; se: number | null }>;
+  /** v4.3: the targets term, baseline vs candidate (train) */
+  targets?: { base: number | null; cand: number | null };
+}
+
+/** Per-measure paired comparison of two evals' train runs (seed × players). */
+export function measureDeltas(base: RunDigest[], cand: RunDigest[]): Round['measures'] {
+  const key = (r: RunDigest) => `${r.seed}x${r.players}`;
+  const b = new Map(base.map((r) => [key(r), r.measures ?? {}]));
+  const keys = new Set([...base, ...cand].flatMap((r) => Object.keys(r.measures ?? {})));
+  const out: NonNullable<Round['measures']> = {};
+  for (const k of keys) {
+    const pairs = cand.filter((r) => b.has(key(r)) && typeof r.measures?.[k] === 'number' && typeof b.get(key(r))?.[k] === 'number').map((r) => [b.get(key(r))![k], r.measures![k]] as [number, number]);
+    if (!pairs.length) continue;
+    const mb = pairs.reduce((a, [x]) => a + x, 0) / pairs.length;
+    const mc = pairs.reduce((a, [, y]) => a + y, 0) / pairs.length;
+    const d = pairs.map(([x, y]) => y - x);
+    const md = d.reduce((a, x) => a + x, 0) / d.length;
+    const se = d.length >= 3 ? Math.sqrt(d.reduce((a, x) => a + (x - md) ** 2, 0) / (d.length - 1)) / Math.sqrt(d.length) : null;
+    out[k] = { base: +mb.toFixed(3), cand: +mc.toFixed(3), delta: +md.toFixed(3), se: se === null ? null : +se.toFixed(3) };
+  }
+  return out;
 }
 
 /** Standard error of the mean per-game difference, pairing runs by seed × players (the
- *  run score, before the suite's definition-health term), or null with < 3 pairs. */
-export function pairedSE(base: RunDigest[], cand: RunDigest[]): number | null {
+ *  run score, before the suite's definition-health term), or null with < 3 pairs.
+ *  `runWeight`: the runs' share of the suite score (.85 health-only, .75 with balance, .55 with targets). */
+export function pairedSE(base: RunDigest[], cand: RunDigest[], runWeight = 0.85): number | null {
   const key = (r: RunDigest) => `${r.seed}x${r.players}`;
   const b = new Map(base.map((r) => [key(r), r.score]));
   const d = cand.filter((r) => b.has(key(r))).map((r) => r.score - (b.get(key(r)) as number));
   if (d.length < 3) return null;
   const mean = d.reduce((x, y) => x + y, 0) / d.length;
   const sd = Math.sqrt(d.reduce((x, y) => x + (y - mean) ** 2, 0) / (d.length - 1));
-  // Suite score = 0.85 × mean(run) + 0.15 × health, so the mean's SE scales by 0.85.
-  return +((0.85 * sd) / Math.sqrt(d.length)).toFixed(4);
+  // Suite score = runWeight × mean(run) + the rest, so the mean's SE scales by runWeight.
+  return +((runWeight * sd) / Math.sqrt(d.length)).toFixed(4);
 }
 
 /** Check a proposal can be judged and store the candidate definition. */
@@ -491,7 +522,9 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
   const dTest = +(ev.test.score - baseline.test.score).toFixed(4);
   // Baseline and candidate play the same seeds × player counts, so the per-game
   // differences give a paired standard error: a change must also clear that.
-  const se = pairedSE(baseline.train.runs, ev.train.runs);
+  const se = pairedSE(baseline.train.runs, ev.train.runs, ev.train.targets ? 0.55 : ev.train.balance != null ? 0.75 : 0.85);
+  const measures = measureDeltas(baseline.train.runs, ev.train.runs);
+  const targets = { base: baseline.train.targets?.score ?? null, cand: ev.train.targets?.score ?? null };
   const eps = +Math.max(suite.epsilon, suite.noise ?? 0, se ?? 0).toFixed(4);
   let decision: Round['decision'] = 'reverted';
   let reason: string;
@@ -528,6 +561,8 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
     author: o.author,
     baseline: { evalId: baseline.id, train: baseline.train.score, test: baseline.test.score },
     candidate: { evalId: ev.id, train: ev.train.score, test: ev.test.score },
+    measures,
+    targets,
     delta: { train: dTrain, test: dTest },
     epsilon: eps,
     decision,

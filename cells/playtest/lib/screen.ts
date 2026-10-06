@@ -5,8 +5,8 @@
  * (it trades and accepts indiscriminately), so read it for structure, not for scores:
  * does the game end, how, how long, who wins as what, which move dominates, errors.
  * ------------------------------------------------------------------------- */
-import { play, metrics, type Decide } from './runner';
-import { outcomeBalance } from './score';
+import { play, metrics, measuresOf, type Decide } from './runner';
+import { outcomeBalance, targetsOf, targetsScore, measureMeans } from './score';
 
 function mulberry(seed: number) {
   let t = seed | 0;
@@ -32,7 +32,7 @@ export function greedyDecider(seed: number): Decide {
 
 export async function screen(rules: string, o: { seeds: number[]; players: number[]; maxSteps: number; deadlineAt: number; policy?: string }) {
   const games: Array<Record<string, unknown>> = [];
-  const runs: Array<{ winnerKey: string | null; positions: string[] }> = [];
+  const runs: Array<{ winnerKey: string | null; positions: string[]; measures: Record<string, number> }> = [];
   const mix = new Map<string, number>();
   let steps = 0;
   for (const seed of o.seeds) {
@@ -43,7 +43,7 @@ export async function screen(rules: string, o: { seeds: number[]; players: numbe
       steps += m.steps;
       for (const [k, v] of Object.entries(m.actionMix)) mix.set(k, (mix.get(k) ?? 0) + v);
       const role = s.winner ? (s.roles?.[s.winner] ?? null) : null;
-      runs.push({ winnerKey: s.winner ? (role ?? `seat ${String(s.winner).replace(/\D/g, '')}`) : null, positions: s.roles && Object.keys(s.roles).length ? [...new Set(Object.values(s.roles))] : Array.from({ length: players }, (_, i) => `seat ${i + 1}`) });
+      runs.push({ measures: measuresOf(s), winnerKey: s.winner ? (role ?? `seat ${String(s.winner).replace(/\D/g, '')}`) : null, positions: s.roles && Object.keys(s.roles).length ? [...new Set(Object.values(s.roles))] : Array.from({ length: players }, (_, i) => `seat ${i + 1}`) });
       games.push({ seed, players, stopped: s.stopped, rounds: m.rounds, steps: m.steps, winner: role ?? s.winner, winnerSeat: s.winner, audit: (s as any).chainAudit ?? null, trace: [...s.turns.slice(0, 8), ...s.turns.slice(-4)].map(t => ({turn:t.turn, player:t.player, action:t.action})), end: m.endReason ?? s.error ?? null });
     }
   }
@@ -53,6 +53,17 @@ export async function screen(rules: string, o: { seeds: number[]; players: numbe
     outcomes[k] = (outcomes[k] ?? 0) + 1;
   }
   const total = [...mix.values()].reduce((a, b) => a + b, 0) || 1;
+  // the measures: mean ± standard error over the games, and the designer's targets if declared
+  const means = measureMeans(runs);
+  const measures: Record<string, { mean: number; se: number }> = {};
+  for (const k of Object.keys(means)) {
+    const xs = runs.map((r) => r.measures[k]).filter((v): v is number => typeof v === 'number');
+    const mean = xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
+    const sd = Math.sqrt(xs.reduce((a, x) => a + (x - mean) ** 2, 0) / Math.max(1, xs.length - 1));
+    measures[k] = { mean: +mean.toFixed(3), se: +(sd / Math.sqrt(xs.length || 1)).toFixed(3) };
+  }
+  const targets = targetsOf(rules);
+  const targetsOut = targets ? targetsScore(means, targets) : null;
   return {
     note: `${o.policy === 'random' ? 'seeded random' : 'greedy stand-in'} player, not Jev: structural evidence, not a measure of enjoyment`,
     requestedGames: o.seeds.length * o.players.length,
@@ -61,6 +72,8 @@ export async function screen(rules: string, o: { seeds: number[]; players: numbe
     games: games.length,
     outcomes,
     balance: outcomeBalance(runs),
+    measures,
+    targets: targetsOut,
     meanRounds: +(games.reduce((a, g) => a + Number(g.rounds ?? 0), 0) / (games.length || 1)).toFixed(1),
     firstRoundEnds: games.filter((g) => Number(g.rounds) <= 1 && g.stopped === 'finished').length,
     errors: games.filter((g) => g.stopped === 'error' || g.stopped === 'stuck').map((g) => `${g.seed}×${g.players}: ${g.end}`),

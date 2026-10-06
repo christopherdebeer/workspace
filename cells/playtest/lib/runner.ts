@@ -91,7 +91,7 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$/;
  *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
  *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
  *  two-step race turn). */
-export const HARNESS_VERSION = 'h14'; // h13: chaos never simulated; h14: 'over in two rounds' is a finding.
+export const HARNESS_VERSION = 'h15'; // h14: 'over in two rounds' is a finding; h15: sessions carry the mechanic's measures.
 
 /** "cost: everyone learns you are X" when `after` exposes the mover's role (public reveal, e.g. the Temple). */
 function exposure(before: Record<string, any>, after: Record<string, any>, pid: string): string[] {
@@ -542,6 +542,8 @@ export interface Session {
   roles?: Record<string, string>;
   /** The rules name who wins at the time limit (win_timeout): a timeout is a designed ending. */
   timeoutWinnerRule?: boolean;
+  /** h15: what the mechanic measured about this game (shared.measures), numbers a designer can set targets for */
+  measures?: Record<string, number>;
   stopped: 'finished' | 'max-steps' | 'deadline' | 'stuck' | 'error';
   error?: string;
   tokens: number;
@@ -853,6 +855,7 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       s = next;
       if (step === maxSteps && s.status === 'in_progress') session.stopped = 'max-steps';
     }
+    if (s.shared?.measures && typeof s.shared.measures === 'object') session.measures = Object.fromEntries(Object.entries(s.shared.measures as Record<string, unknown>).filter(([, v]) => typeof v === 'number')) as Record<string, number>;
     (session as Session & { chainAudit?: unknown }).chainAudit = s.shared?.chain ? { ...s.shared.chain.audit, rolls: s.shared.chain.rolls, tiles: Object.keys(s.shared.chain.tiles).length, kingsOnBoard: Object.values(s.shared.chain.tiles).filter((t: any) => t.king).length } : undefined;
     session.status = s.status;
     session.winner = (s.winner as string) ?? (s.shared?.winner as string) ?? null;
@@ -916,6 +919,12 @@ export interface Metrics {
   usd: number;
 }
 
+/** The game's measures for targets: the mechanic's own (shared.measures) plus rounds and,
+ *  unless the mechanic reported one, draw (finished with nobody winning). */
+export function measuresOf(s: Session): Record<string, number> {
+  const m = metrics(s);
+  return { rounds: m.rounds, draw: m.finished && !s.winner ? 1 : 0, ...(s.measures ?? {}) };
+}
 export function metrics(s: Session): Metrics {
   const n = s.turns.length || 1;
   const mix: Record<string, number> = {};

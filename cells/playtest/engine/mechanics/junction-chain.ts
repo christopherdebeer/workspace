@@ -111,6 +111,10 @@ export interface ChainState {
   courtOpen?: boolean;
   kingsDealt?: boolean;
   audit?: Record<string, number>;
+  /** the forecast's favourite among the held suits after each movement (measures: lead changes, held lead) */
+  leaders?: string[];
+  /** held suits with a route of at most one empty square after each movement (measures: contenders) */
+  live?: number[];
   /** lays made this build turn (build_lays) */
   buildLaid?: number;
 }
@@ -186,6 +190,33 @@ export function gaps(ch: ChainState, from: string, wrap: boolean): Record<string
     }
   }
   return out;
+}
+/** The game's measures, as numbers the designer can set targets for (RULES.md `targets`):
+ *  offTurnWin (decided by someone else's roll), draw (the move cap), leadChanges (the forecast's
+ *  favourite changing hands), heldLead (the halfway favourite won), contenders (held suits with
+ *  a route of at most one card short, mean over the last three movements), lays, covers,
+ *  courtPlays (Jacks, Queens, Jokers), rolls. Written to shared.measures at every movement so
+ *  the runner reads the final values whenever the game ends. */
+export function measuresOf(ch: ChainState, state: GameState, won = false): Record<string, number> {
+  const a = ch.audit ?? {};
+  const leaders = ch.leaders ?? [];
+  let leadChanges = 0;
+  for (let i = 1; i < leaders.length; i++) if (leaders[i] !== leaders[i - 1]) leadChanges++;
+  const winner = ch.tiles[ch.counter]?.king;
+  const half = leaders[Math.floor(leaders.length / 2)];
+  const live = ch.live ?? [];
+  const tail = live.slice(-3);
+  return {
+    offTurnWin: won ? Number((a.offTurnWins ?? 0) > 0) : 0,
+    draw: state.status !== 'in_progress' && !won ? 1 : 0,
+    leadChanges,
+    heldLead: won && half === winner ? 1 : 0,
+    contenders: tail.length ? +(tail.reduce((x, y) => x + y, 0) / tail.length).toFixed(2) : 0,
+    lays: a.lays ?? 0,
+    covers: a.covers ?? 0,
+    courtPlays: a.courtPlays ?? 0,
+    rolls: ch.rolls,
+  };
 }
 function hasEmpty(ch: ChainState): boolean {
   for (let y = 0; y < ch.size; y++) for (let x = 0; x < ch.size; x++) if (!ch.tiles[key(x, y)]) return true;
@@ -474,6 +505,14 @@ export const junctionChainMechanic: MechanicHooks = {
         if (winnerSuit && winnerSuit !== mySuit(ctx)) count(ch, 'offTurnWins');
         const f = forecast(ch, ch.counter, wrap, 1);
         if (Object.values(f).some(p => p >= 1 / 3)) count(ch, 'threatPositions');
+        // measures: the forecast's favourite and the live routes after this movement
+        const held = heldSuits(state);
+        const g = forecast(ch, ch.counter, wrap, c.forecast ?? 4);
+        let best = ''; let bv = 0;
+        for (const su of SUITS) if (held.has(su) && (g[su] ?? 0) > bv + 1e-9) { best = su; bv = g[su]; }
+        (ch.leaders ??= []).push(best || (ch.leaders.at(-1) ?? ''));
+        const gp = gaps(ch, ch.counter, wrap);
+        (ch.live ??= []).push(SUITS.filter((su) => held.has(su) && gp[su] !== undefined && gp[su] <= 1).length);
       }
       ch.skippedLast = type === 'skip_move';
       const continueTurn = !!c.flexible_order && !ch.laid;
@@ -489,6 +528,7 @@ export const junctionChainMechanic: MechanicHooks = {
         state.shared.endReason = reason;
         logEvent(state, { event: 'game_end', round: state.round, turnNumber: state.turnNumber, data: { winner: null, reason, endType: 'moves' } });
       }
+      state.shared.measures = measuresOf(ch, state);
       return { handled: true, advanceTurn: !continueTurn || state.status !== 'in_progress', checkWin: true, logMessage: message, logData: { ...extra, phase: ch.phase, counter: ch.counter, from: counterBefore, order: continueTurn ? 'movement-first' : 'landscape-first', notes: log } };
     };
     if (type === 'crown') {
@@ -518,6 +558,7 @@ export const junctionChainMechanic: MechanicHooks = {
       ch.tiles[a.at] = { card: cc, turn: a.turn, start: was?.start, ...(cc.role === 'destination' ? { king: cc.suit } : {}) };
       if (cc.role === 'destination') count(ch, 'kingsPlaced');
       if (was && a.at === counterBefore) count(ch, movedBefore ? 'coverCurrentAfter' : 'coverCurrentBefore');
+      if (cc.role !== 'destination') { count(ch, 'lays'); if (was) count(ch, 'covers'); }
       log.push(`${playerId} ${was ? 'covered' : 'laid'} ${a.card} at ${a.at}, turned ${a.turn}`);
       if (ch.phase === 'build') {
         const laidCount = Object.values(ch.tiles).filter((t) => !t.king && !t.start).length;
@@ -532,12 +573,12 @@ export const junctionChainMechanic: MechanicHooks = {
       return laid('laid', { card: a.card, at: a.at, turn: a.turn, covered: !!was });
     }
     if (type === 'throw_in') { const a = action as unknown as { card: string }; take(a.card); log.push(`${playerId} threw in ${a.card}`); return laid('threw_in', { card: a.card }); }
-    if (type === 'swap') { const a = action as unknown as Swap; takeRole('swap'); const ta = ch.tiles[a.a]; const tb = ch.tiles[a.b]; ch.tiles[a.a] = { ...tb, start: ta.start }; ch.tiles[a.b] = { ...ta, start: tb.start }; log.push(`${playerId} swapped ${ta.card.name} (${a.a}) and ${tb.card.name} (${a.b})`); return laid('swapped', { a: a.a, b: a.b }); }
+    if (type === 'swap') { const a = action as unknown as Swap; takeRole('swap'); count(ch, 'courtPlays'); const ta = ch.tiles[a.a]; const tb = ch.tiles[a.b]; ch.tiles[a.a] = { ...tb, start: ta.start }; ch.tiles[a.b] = { ...ta, start: tb.start }; log.push(`${playerId} swapped ${ta.card.name} (${a.a}) and ${tb.card.name} (${a.b})`); return laid('swapped', { a: a.a, b: a.b }); }
     if (type === 'hold') { log.push(`${playerId} lays nothing`); return laid('held'); }
     if (type === 'roll') { moveCounter(ch, state, wrap, 1 + Math.floor(Math.random() * 6), log); return done('rolled', { face: ch.lastRoll, to: ch.counter }); }
-    if (type === 'reroute') { const a = action as unknown as Reroute; takeRole('reroute'); const n = neighbour(ch, ch.counter, DIR_NAMES.indexOf(a.dir), c.wrap !== false)!; log.push(`${playerId} played a Jack: the counter walks ${a.dir} to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; return done('rerouted', { dir: a.dir, to: n }); }
+    if (type === 'reroute') { const a = action as unknown as Reroute; takeRole('reroute'); count(ch, 'courtPlays'); const n = neighbour(ch, ch.counter, DIR_NAMES.indexOf(a.dir), c.wrap !== false)!; log.push(`${playerId} played a Jack: the counter walks ${a.dir} to ${n}`); arrive(ch, state, n, log); ch.rolls++; ch.lastMove = log[log.length - 1]; return done('rerouted', { dir: a.dir, to: n }); }
     if (type === 'chaos') {
-      takeRole('chaos');
+      takeRole('chaos'); count(ch, 'courtPlays');
       const t = ch.tiles[ch.counter];
       // (the card's distinct outward exits that lead to a card, north, east, south, west; one at random)
       const ds = [...new Set(exitsOf(t).filter((d) => d >= 0))].sort().map((d) => neighbour(ch, ch.counter, d, c.wrap !== false)).filter((n): n is string => !!n && !!ch.tiles[n]);
@@ -591,6 +632,7 @@ export const junctionChainMechanic: MechanicHooks = {
     const t = ch.tiles[ch.counter];
     const suit = mySuit(ctx);
     if (!t?.king || !suit || t.king !== suit) return null;
+    ctx.state.shared.measures = measuresOf(ch, ctx.state, true);
     return { won: true, reason: `the counter arrived at the King of ${suit}: ${ctx.playerId}'s commission` };
   },
 
