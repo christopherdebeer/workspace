@@ -289,10 +289,14 @@ export function junction(p: Style, faces: number[]): { marks: Mark[]; zones: Sha
     path(`M${L(0, 0)}L${L(-7, 3.4)}L${L(-4.6, 0)}L${L(-7, -3.4)}Z`, 0.3 * J, 'ink');
     if (p.arrow === 'fleur') path(`M${L(-7.6, 0)}L${L(-9.3, 1.5)}L${L(-11, 0)}L${L(-9.3, -1.5)}Z`, 0.4 * J, 'paper');
   };
+  /** a line's weight from its chance (n faces of six): the base weight at 2 in 6, thinner below,
+   *  heavier above, by `probWeight`; and its head, scaled with it (more gently) */
+  const weightOf = (n: number) => 1.2 * J * ((1 - p.probWeight) + p.probWeight * (0.3 + (1.05 * n) / 6 + 0.1 * (n >= 5 ? 1 : 0)));
+  const headOf = (w: number) => Math.max(0.75, Math.min(1.35, Math.sqrt(w / (1.2 * J))));
   for (const d of exitsTo) {
-    const a = d * 90, tip = R + 3, s = hs;
-    path(seg(pol(hj + 0.4, a), pol(tip - spec.join * s, a)), 1.2 * J);
-    zones.push({ k: 'capsule', a: pol(hj, a), b: pol(tip, a), r: 0.6 * J }, { k: 'circle', c: pol(tip - spec.len * s * 0.5, a), r: spec.len * s * 0.55 });
+    const a = d * 90, tip = R + 3, w = weightOf(by.get(d)!.length), s = hs * headOf(w);
+    path(seg(pol(hj + 0.4, a), pol(tip - spec.join * s, a)), w);
+    zones.push({ k: 'capsule', a: pol(hj, a), b: pol(tip, a), r: w / 2 }, { k: 'circle', c: pol(tip - spec.len * s * 0.5, a), r: spec.len * s * 0.55 });
     head(pol(tip, a), a, s);
   }
   // the stays: a loop off the hub, on the side furthest from the exits
@@ -320,11 +324,11 @@ export function junction(p: Style, faces: number[]): { marks: Mark[]; zones: Sha
     const cw = mod(phi - b1, 360) < mod(b2 - b1, 360);
     // (the head lies along the curve: aimed from the point a head's length back on the arc to
     // the tip, so its base sits on the curve too; the arc stops where the head takes over)
-    const s = 0.62 * hs, dir = cw ? 1 : -1, deg = 180 / Math.PI;
+    const lw = weightOf(stays.length) * 0.85, s = 0.62 * hs * headOf(lw / 0.85), dir = cw ? 1 : -1, deg = 180 / Math.PI;
     const back = add(C, pol(rho, b2 - dir * ((spec.len * s) / rho) * deg));
     const t = angleOf([P2[0] - back[0], P2[1] - back[1]]);
     const end = add(C, pol(rho, b2 - dir * ((spec.join * s) / rho) * deg));
-    path(`M${pt(P1)}A${f(rho)} ${f(rho)} 0 1 ${cw ? 1 : 0} ${pt(end)}`, 1.0 * J);
+    path(`M${pt(P1)}A${f(rho)} ${f(rho)} 0 1 ${cw ? 1 : 0} ${pt(end)}`, lw);
     zones.push({ k: 'stroke', c: C, r: rho, w: 0.5 * J });
     head(P2, t, s);
     const r = rr * small, dpsi = ((2 * r * 1.12) / rho) * (180 / Math.PI);

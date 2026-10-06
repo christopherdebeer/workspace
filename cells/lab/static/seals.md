@@ -15,6 +15,9 @@ stay. The seal draws exactly that, bold, over a faint engraved ground:
 - **the stays** are a closed loop hanging off the hub, on the side furthest from the exits,
   with an arrow back into the hub and the stay faces ("4–6") on the loop. The loop never reaches the
   rim, so a stay can't be read as an exit (the old dials' stay curl could);
+- a line's weight says its chance: a five-in-six exit is heavy, a one-in-six one fine, the
+  stay loop weighted by its own faces (**weight by chance**; 0 draws every line alike), and its
+  head grows with it, more gently;
 - every head (barbed, a slim dart, an open chevron, or barbed with a lozenge behind: **arrow
   heads**, with **arrow size**) is aimed along its line; on the loop it is aimed from a head's
   length back along the arc to the tip, so its base sits on the curve, and the arc stops where

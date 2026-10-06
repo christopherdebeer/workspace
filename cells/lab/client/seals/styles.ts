@@ -148,6 +148,9 @@ export interface Style {
    *  with a lozenge behind; and their size */
   arrow: Arrow;
   arrowSize: number;
+  /** how much a line's weight says its chance: 0 every line alike, 1 a one-in-six line a
+   *  hairline beside a five-in-six one */
+  probWeight: number;
   /** each direction's faces as one label ("4–6"), not a roundel apiece */
   faceGroups: boolean;
   roundelR: number;
@@ -167,7 +170,7 @@ const filigree: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | '
   crescents: 1, crescentR: 19, dots: 0.3, hubR: 11.5,
   packMax: 5, packMin: 0.55, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, fade: 0.3, fadeFrom: 'outer', borderW: 4.6, cornerR: 13, stipple: 0.25,
   oDot: 0.35, oSparkle: 0.5, oMotif: 0.35, oRosette: 0.3, oRoundel: 0.1, oScroll: 0.9, oStar: 0.1, oEye: 0.25, oCrescent: 0.1, orient: 'radial', links: 0.5, linkBend: 0.6, border: 'corners',
-  jWeight: 1.2, arrow: 'barb', arrowSize: 1, faceGroups: true, roundelR: 5.2, faceR: 28.5, variance: 0.5,
+  jWeight: 1.2, arrow: 'barb', arrowSize: 1, probWeight: 0.8, faceGroups: true, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'motifAt'> = {
   paper: '#f7f0e3', weight: 0.5, faint: 0.9, accent: 0.2,
@@ -179,7 +182,7 @@ const lattice: Omit<Style, 'name' | 'ink' | 'wash' | 'washAmount' | 'motif' | 'm
   crescents: 0, crescentR: 19, dots: 0.4, hubR: 12,
   packMax: 5.5, packMin: 0.6, packGap: 0.5, packEdge: 0.35, packTries: 30, packJitter: 0.3, snap: 0.5, zoneMargin: 1.4, refill: true, medal: 1, fade: 0.3, fadeFrom: 'outer', borderW: 4.6, cornerR: 13, stipple: 0.15,
   oDot: 0.5, oSparkle: 0.3, oMotif: 0.5, oRosette: 0.6, oRoundel: 0.7, oScroll: 0, oStar: 0.35, oEye: 0.1, oCrescent: 0, orient: 'up', links: 0.2, linkBend: 0.2, border: 'frame',
-  jWeight: 1.2, arrow: 'barb', arrowSize: 1, faceGroups: true, roundelR: 5.2, faceR: 28.5, variance: 0.5,
+  jWeight: 1.2, arrow: 'barb', arrowSize: 1, probWeight: 0.8, faceGroups: true, roundelR: 5.2, faceR: 28.5, variance: 0.5,
 };
 
 /** by suit: hearts, diamonds, clubs, spades (the game's order) */
@@ -233,5 +236,5 @@ export const SCHEMA: Control[] = [
   e('orient', 'orientation', 'Vocabulary', ['radial', 'tangent', 'up', 'free']), n('links', 'lace', 'Vocabulary', 0, 1, 0.05, true), n('linkBend', 'lace bow', 'Vocabulary', 0, 1, 0.05),
   n('medal', 'medallions', 'Zones', 0, 1.5, 0.05, true), n('zoneMargin', 'zone margin', 'Zones', 0, 5, 0.1), b('refill', 'refill round zones', 'Zones'),
   e('border', 'card border', 'Zones', ['none', 'frame', 'corners', 'both']), n('borderW', 'frame width (mm)', 'Zones', 2.5, 8, 0.1), n('cornerR', 'corner reach (mm)', 'Zones', 6, 22, 0.5),
-  n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), e('arrow', 'arrow heads', 'Junction', ['barb', 'dart', 'open', 'fleur']), n('arrowSize', 'arrow size', 'Junction', 0.5, 1.6, 0.05), b('faceGroups', 'group faces (4–6)', 'Junction'), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
+  n('jWeight', 'junction weight', 'Junction', 0.5, 1.8, 0.05), e('arrow', 'arrow heads', 'Junction', ['barb', 'dart', 'open', 'fleur']), n('arrowSize', 'arrow size', 'Junction', 0.5, 1.6, 0.05), n('probWeight', 'weight by chance', 'Junction', 0, 1, 0.05), b('faceGroups', 'group faces (4–6)', 'Junction'), n('roundelR', 'roundel size', 'Junction', 3, 6.5, 0.1), n('faceR', 'roundel radius', 'Junction', 20, 34, 0.5),
 ];
