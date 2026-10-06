@@ -177,6 +177,22 @@ fewer threats (0.85 → 0.30 of the engine's). So preparation pays a little more
 loses the one answer they had, and most games end on someone else's turn. Reverted; the
 measures are the finding.
 
+Round 7 tried the concealed court: dealt Kings placed face down (the placer knows which), one
+free reveal a turn before anything else, the counter turning up any King it enters. Measured
+against the v4.2 head: the judge's players revealed 2.8 Kings a game and 55% of those were their
+own (signal, not bluff); hindering an opponent appeared as a stated intention for the first time
+(0 → 10% of probed turns); false alarms about threats fell from 34% to 3%; but threats seen fell
+too (76% → 53%), the urgency error rose, and on sixty bot games draws doubled (5% → 13%) and
+lead changes fell (4.1 → 2.9) because nobody can steer at a King they cannot name. One judged
+game ran to the thirty-move draw. Judge score −0.011, targets 1.00 → 0.94. Reverted.
+
+The round's measure health, which every round now reports: eleven measures moved beyond two
+standard errors; four of six target bands were met on both sides, so the targets term was
+blind there; and the greedy stand-in never takes a reveal (0.18 a game, against Jev's 2.8), so
+the bot split measured the rule as if it did not exist. That last is the finding about the
+instrument: a rule that adds an action needs a stand-in that values it before the bot split can
+speak to it.
+
 The questionnaire (h18–h19): on every second judged decision the acting player is asked, after
 choosing and before the move resolves, what they were trying to do, whether anyone is close to
 winning (checked against the engine's own forecast), how much better the move was than the next
