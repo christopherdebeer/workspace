@@ -168,7 +168,8 @@ function specimens(v: MistView) {
     const turn = (f.seed % 628) / 100;
     // (a specimen that fails to draw is left out, not the wood with it)
     const draw = f.kind === 'crystal' ? (env: WoodEnv) => drawCrystal(env, f) : (env: WoodEnv) => drawCluster(env, f.seed, [f.x, f.z], turn);
-    customs.set(key, { x: f.x, z: f.z, top: topOf(f), draw: (env) => { try { draw(env); } catch (e) { console.warn('field: a specimen did not draw', e); customs.delete(key); failed.add(key); env.gl.depthMask(false); env.gl.disable(env.gl.SCISSOR_TEST); } } });
+    if ((f.kind === 'crystal' && qs.has('nocrystal')) || (f.kind === 'fungus' && qs.has('nofungi'))) continue;
+    customs.set(key, { x: f.x, z: f.z, top: topOf(f), draw: (env) => { try { draw(env); const e = env.gl.getError(); if (e) console.warn(`field: GL error ${e} after ${f.kind}`); } catch (e) { console.warn('field: a specimen did not draw', e); customs.delete(key); failed.add(key); env.gl.depthMask(false); env.gl.disable(env.gl.SCISSOR_TEST); } } });
   }
   for (const key of customs.keys()) if (key.startsWith('field:') && !keep.has(key)) customs.delete(key);
 }
