@@ -912,6 +912,9 @@ function frame(now: number) {
   }
   sound.water(dt, { near: Number.isFinite(voices.creekDist) ? Math.exp(-voices.creekDist / 14) : 0, pan: voices.creekDist > 0 ? Math.sin(voices.creekAt - view.yaw) : 0, ford: voices.creekFord });
   sound.creatures(dt, { night: 1 - atmos.day, wetPan: voices.wetPan, wetDist: voices.wetDist, open: voices.open, heat: atmos.day * Math.max(0, flag('warm') ?? 0) });
+  // (the camera, for whatever is drawn over the wood: a point's place on the screen follows from
+  // these — see render.ts, the world's projection — and the ground's height under it)
+  (window as unknown as { __mistwoodView: unknown }).__mistwoodView = { x: view.x, z: view.z, eye: view.eye, yaw: view.yaw, f: view.f, horizon: view.horizon, W: canvas.width, H: canvas.height, seed, density, ground: (x: number, z: number) => wood.groundH(x, z) };
   (window as unknown as { __mistwood: unknown }).__mistwood = {
     seed: seedName(seed),
     walked: Math.round(walked * 10) / 10,

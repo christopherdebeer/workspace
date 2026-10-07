@@ -49,6 +49,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'a specimen', query: '' }, { label: 'amethyst', query: 'mineral=amethyst&seed=12' }, { label: 'fluorite', query: 'mineral=fluorite&seed=5' }, { label: 'zircon', query: 'mineral=zircon&seed=8' }, { label: 'emerald', query: 'mineral=emerald&seed=3' }, { label: 'rhodochrosite', query: 'mineral=rhodochrosite&seed=4' }],
   },
   {
+    id: 'field', title: 'Field Journal', group: 'Woods',
+    blurb: 'The lab in one walk: the Mistwood wood, with the Seals engraving drawn over it, and in it crystals and fungi to find. Come close and open one: its card holds the real Crystals specimen or Hat-thrower, grown from the find, and the journal keeps it.',
+    page: 'static/field.html', preview: 'preview&hour=11', readme: 'static/field.md',
+    presets: [{ label: 'walk', query: '' }, { label: 'a morning', query: 'hour=8' }, { label: 'another wood', query: 'seed=moss-ford-7' }],
+  },
+  {
     id: 'mistwood',
     title: 'Mistwood',
     group: 'Woods',
