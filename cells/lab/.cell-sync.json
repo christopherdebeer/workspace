@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:2b61e3ece69c3217a73e7969e97e951ec83a08225a35e26d20094ba7966b0e24",
-  "syncedAt": "2026-10-07T08:56:41.899Z",
+  "treeVersion": "tree:b2e71733a8ec683f42cc85307524171b948d8cb4657bdb1d1274f8ae4d659bb4",
+  "syncedAt": "2026-10-07T09:02:39.052Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -31,7 +31,7 @@
     "client/markovs/archive.ts": "sha256:182b687c5d60bd6c5b2b225b6a067fc0c38fbcc5d5239fc888f2512d205936aa",
     "client/markovs/deck.ts": "sha256:15c1bf91b4d78e13918eea7102442ff777400b491698eb830e4ba77710be163d",
     "client/markovs/main.ts": "sha256:eadd208993df3646fae9e162da8d3e5b73eb0f68b3b3218ed9cb1051cb90dea5",
-    "client/markovs/page.ts": "sha256:aa28fd3051a45206f2ed91ade06225bdeaa041ace8abea1f1db05ed320eed3a9",
+    "client/markovs/page.ts": "sha256:56dda5435e00b56d8d6313659551ec6716b8564674c8c824d93b2bdf1df3fa47",
     "client/markovs/physical-rules.ts": "sha256:3b81e8ddb065027ddea6c887acf5141b6b86a5d59272f13052616cdc31e7f899",
     "client/markovs/physical.ts": "sha256:03f2bc9602ace9f80299758e4899d380acc15f4ebabc08a154dd12dfeebe2eed",
     "client/markovs/rules.ts": "sha256:0bb09e105f9978df7e70d9ab9c86b7420e4cc883b57ea1abae108c4adad108f9",
@@ -54,7 +54,7 @@
     "client/seals/main.ts": "sha256:c9d6b74ebd917f2c1cac667d08571c35c7178a45b11a9ac0d1d29f6e229515a8",
     "client/seals/ornament.ts": "sha256:4ff6a96d807b0d46fdcbbe05636b167f3cc0d9f0b382145d5b91f3c8873b0c93",
     "client/seals/pack.ts": "sha256:f95acf2bd62bc9e45183cf53a44f19aa551b3af72ad2a1e5b6cfb34d2443f89e",
-    "client/seals/seal.ts": "sha256:2a0d1fc272124086682d9b4f9cf1b1998537b4c0d4c85b83fcf98b08835384d4",
+    "client/seals/seal.ts": "sha256:20cdb46d8b5675e9c322ae069d4430acff52778160543b62b231c79136de6baf",
     "client/seals/shapes.ts": "sha256:5e3723c60622f590ceb3a9594747789b2c1fb52b08c49bd8299313b39a8eb7ba",
     "client/seals/structure.ts": "sha256:18cb023db58c936497adc554e4f365a9c59bba56b7b205ab5fffd49e3a70b4f4",
     "client/seals/styles.ts": "sha256:7dd2e261d50085899251b5420090e47ada89f982f8a62145e7f91104ec60a0b6",
