@@ -9,7 +9,11 @@ The lab's experiments in one walk. Nothing here is copied: each part is the expe
 - **The engraving is the Seals', drawn in light.** The compass is a seal that turns as you do; each
   find is marked by a small seal of its family (crystals the diamonds' lattice, fungi the clubs'),
   all of them glowing hairlines with nothing solid, fading into the fog with distance as the trees
-  do. A find's card is the same card shell as Markovs Chains'.
+  do. A seal has a fixed size in the wood (1.6 m), so it grows as you come close, and its detail
+  follows its size: far off a ring and its glyph; nearer, the construction (rings, band, star
+  lattice); nearer still an even fill of ornament; close to, fine and intricate, with lace. Each
+  level cross-fades into the next over a band of sizes, the lines stay one pixel at every size,
+  and a finer level is drawn just before it is wanted. A find's card is the same card shell as Markovs Chains'.
 - **The finds are Crystals and Hat-throwers.** Crystals in the stone and fungi in the litter are
   scattered from the wood's seed over 46 m cells (`client/field/finds.ts`): the same finds in the
   same places for anyone in that wood. Each carries a seed, and its name is the specimen's

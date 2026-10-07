@@ -26,11 +26,13 @@
     /* the live fungi's frames: in view (so they run) but behind the wood */
     iframe.live { position: fixed; left: 0; top: 0; width: 200px; height: 200px; border: 0; z-index: -1; pointer-events: none; }
     #wood { z-index: 0; }
-    .mark { position: fixed; transform: translate(-50%, -50%); padding: 0; border: 0; background: none; pointer-events: auto; cursor: pointer; transition: opacity .4s; }
+    .mark { position: fixed; transform: translate(-50%, -50%); padding: 0; border: 0; background: none; pointer-events: none; transition: opacity .4s; }
+    .mark .lod { position: absolute; inset: 0; }
+    .mark .hit { position: absolute; left: 50%; top: 50%; width: min(100%, 88px); height: min(100%, 88px); min-width: 44px; min-height: 44px; transform: translate(-50%, -50%); border-radius: 50%; pointer-events: auto; cursor: pointer; }
     /* the seals as light: hairlines that glow, nothing solid (every fill emptied, every line lit) */
     .mark svg, #compass svg { width: 100%; height: 100%; display: block; overflow: visible; }
-    .mark svg *, #compass svg * { fill: none !important; stroke: #fff4d6 !important; }
-    .mark text, #compass text { stroke-width: .9px !important; }
+    .mark svg *, #compass svg * { fill: none !important; stroke: #fff4d6 !important; vector-effect: non-scaling-stroke; stroke-width: 1px; }
+    .mark text, #compass text { stroke-width: 1px !important; }
     .mark { mix-blend-mode: screen; filter: drop-shadow(0 0 1.5px rgba(255, 244, 214, .95)) drop-shadow(0 0 6px rgba(255, 226, 160, .55)) drop-shadow(0 0 14px rgba(255, 214, 140, .3)); }
     #compass .dial { mix-blend-mode: screen; filter: drop-shadow(0 0 1.5px rgba(255, 244, 214, .95)) drop-shadow(0 0 7px rgba(255, 226, 160, .5)); }
     .mark.near { animation: breathe 2.4s ease-in-out infinite; }

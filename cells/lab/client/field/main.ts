@@ -35,17 +35,32 @@ const view = () => (window as unknown as { __mistwoodView?: MistView }).__mistwo
 // ─── seals, drawn once ──────────────────────────────────────────────────────────────────────────
 const cache = new Map<string, string>();
 /** a bare seal of a family, as an <svg> (a marker, the compass, a journal emblem) */
-function emblem(key: string, style: typeof SUIT_STYLES[number], seed: number, extra = ''): string {
-  const k = `${key}:${seed}`;
+function emblem(key: string, style: typeof SUIT_STYLES[number], seed: number, extra = '', lod = 2): string {
+  const k = `${key}:${seed}:${lod}`;
   let svg = cache.get(k);
   if (!svg) {
-    const st = { ...sample(style, seed), stipple: 0, washAmount: 0, faint: 1 };
+    const st = { ...sample(style, seed), stipple: 0, washAmount: 0, faint: 1, ...LOD[lod] };
     svg = `<svg viewBox="-62 -62 124 124" aria-hidden="true">${sealSvg(draw(st, null, seed), st, `e${k.replace(/\W/g, '')}`)}${extra}</svg>`;
     cache.set(k, svg);
   }
   return svg;
 }
-const glyphMark = (g: string, ink: string) => `<circle r="15" stroke="${ink}" stroke-width="1.2"/><text y="9" text-anchor="middle" font-size="25" font-family="Georgia,serif" fill="${ink}">${g}</text>`;
+/** a seal's levels of detail, coarse to fine: what each takes off (or adds to) the family's style.
+ *  0 — a ring and the glyph; 1 — the construction (rings, band, the star lattice); 2 — a coarse
+ *  even fill of ornament; 3 — fine and dense, with lace, for close up */
+const LOD: Array<Record<string, unknown>> = [
+  { rings: 1, beads: 0, band: 'none', lines: false, packTries: 0, dots: 0, crescents: 0, nodeDots: 0, diagNodes: false, medal: 0, motifSize: 0.01 },
+  { rings: 2, beads: 0.4, packTries: 0, dots: 0, nodeDots: 1 },
+  { packMax: 7.5, packMin: 1.6, links: 0, packTries: 16 },
+  { packMax: 4.2, packMin: 0.5, packTries: 30, links: 0.6 },
+];
+/** the screen size (px) at which each level has fully taken over from the one before, and the
+ *  width of the cross-fade below it (as a ratio of sizes) */
+const LOD_AT = [0, 46, 120, 300], LOD_FADE = 1.6;
+/** a seal's size in the wood (m): fixed, so it grows as you come close */
+const SEAL_M = 1.6;
+/** the glyph at a seal's heart: larger at the coarse levels, where it is most of what shows */
+const glyphMark = (g: string, ink: string, lod = 2) => { const s = [1.9, 1.3, 1, 0.8][lod] ?? 1; return `<g transform="scale(${s})"><circle r="15" stroke="${ink}" stroke-width="1.2"/><text y="9" text-anchor="middle" font-size="25" font-family="Georgia,serif" fill="${ink}">${g}</text></g>`; };
 
 // ─── the compass ────────────────────────────────────────────────────────────────────────────────
 const compass = $('compass');
@@ -190,6 +205,8 @@ function fungi(v: MistView) {
 // ─── the markers, every frame ───────────────────────────────────────────────────────────────────
 const layer = $('marks');
 const els = new Map<string, HTMLButtonElement>();
+/** seals drawn this frame (a fine one is slow: one a frame) */
+let drawnThisFrame = 0;
 const say = $('say');
 let sayUntil = 0;
 function hintAt(t: string) { say.textContent = t; say.classList.add('show'); sayUntil = performance.now() + 2200; }
@@ -204,6 +221,7 @@ function frame() {
   if (preview || !sheet.hidden) { layer.style.visibility = 'hidden'; return; }
   layer.style.visibility = '';
   const k = canvas.clientWidth / v.W;
+  drawnThisFrame = 0;
   const near = findsNear(v.seed, v.x, v.z, SHOW);
   const live = new Set<string>();
   for (const f of near) {
@@ -216,7 +234,9 @@ function frame() {
       el = document.createElement('button');
       el.className = `mark ${f.kind}`;
       el.setAttribute('aria-label', `${f.kind === 'crystal' ? 'a crystal' : 'a fungus'}: ${f.name}`);
-      el.innerHTML = emblem(f.kind, STYLE[f.kind], f.seed, glyphMark(GLYPH[f.kind], STYLE[f.kind].ink));
+      // (the levels, stacked, each drawn when first wanted; and the hit: only the middle takes a
+      // tap, so a seal grown large doesn't stop you walking)
+      el.innerHTML = `${LOD.map((_, i) => `<div class="lod" data-l="${i}"></div>`).join('')}<span class="hit"></span>`;
       el.addEventListener('click', () => {
         const w = view();
         if (!w) return;
@@ -227,13 +247,34 @@ function frame() {
       layer.appendChild(el);
       els.set(key, el);
     }
-    const size = Math.max(22, Math.min(96, (2.4 / p.r) * v.f * k));
+    // a fixed size in the wood: small far off, large close to
+    const size = Math.max(8, (SEAL_M / p.r) * v.f * k);
     // (it comes out of the fog as the trees do — the wood's own fog, thicker where the wood is
     // denser — and softens as it goes; one you have found is quieter)
     const fog = Math.exp(-p.r * 0.045 * Math.max(0.4, v.density));
     const op = fog * (1 - Math.min(1, Math.max(0, (p.r - (SHOW - 12)) / 12))) * (found(v.seed, f.id) ? 0.55 : 1);
-    el.style.cssText = `left:${p.px * k}px;top:${p.py * k}px;width:${size}px;height:${size}px;opacity:${op.toFixed(2)};z-index:${Math.round(1000 - p.r)}`;
+    el.style.cssText = `left:${p.px * k}px;top:${p.py * k}px;width:${size.toFixed(1)}px;height:${size.toFixed(1)}px;opacity:${op.toFixed(2)};z-index:${Math.round(1000 - p.r)}`;
     el.classList.toggle('near', p.r <= OPEN);
+    // the levels: each fades in over the band of sizes below where it takes over, the one before
+    // fading out as it does (a finer level not drawn yet: the coarser holds until it is)
+    const layers = el.querySelectorAll<HTMLElement>('.lod');
+    const w = LOD_AT.map((at, i) => (i === 0 ? 1 : Math.max(0, Math.min(1, Math.log(size / (at / LOD_FADE)) / Math.log(LOD_FADE)))));
+    let shown = 0;
+    for (let i = LOD.length - 1; i >= 0; i--) {
+      // (this level's share: its own weight, less what the finer levels have taken)
+      const finer = i < LOD.length - 1 ? w[i + 1] : 0;
+      const a = Math.max(0, w[i] - (i < LOD.length - 1 && layers[i + 1].firstChild ? finer : 0));
+      const want = a > 0.01 || (i < LOD.length - 1 && finer > 0.01 && !layers[i + 1].firstChild);
+      if (want && !layers[i].firstChild) {
+        if (drawnThisFrame < 1 || i === 0) { layers[i].innerHTML = emblem(f.kind, STYLE[f.kind], f.seed, glyphMark(GLYPH[f.kind], STYLE[f.kind].ink, i), i); drawnThisFrame++; }
+      }
+      const ready = !!layers[i].firstChild;
+      const opacity = ready ? Math.min(1, a + (i < LOD.length - 1 && !layers[i + 1].firstChild ? finer : 0)) : 0;
+      layers[i].style.opacity = opacity.toFixed(2);
+      layers[i].style.display = opacity > 0.01 ? '' : 'none';
+      if (opacity > 0.01) shown = Math.max(shown, i);
+    }
+    el.dataset.lod = String(shown);
   }
   for (const [key, el] of els) if (!live.has(key)) { el.remove(); els.delete(key); }
 }
