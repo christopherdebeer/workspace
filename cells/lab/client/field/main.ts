@@ -16,8 +16,8 @@ import { findsNear, project, type Find, type View } from './finds';
 import { formOf } from './mushrooms';
 import { clusterTop, drawCluster } from './woodfungi';
 import { customs } from '../mistwood/main';
-import { DEPTH_RANGE, type WoodEnv } from '../mistwood/render';
-import { createCrystalEngine, type CrystalEngine } from '../crystals/engine';
+import type { WoodEnv } from '../mistwood/render';
+import { woodCrystals, type WoodCrystals } from './woodcrystal';
 
 type MistView = View & { seed: number; density: number; ground: (x: number, z: number) => number };
 const qs = new URLSearchParams(location.search);
@@ -128,32 +128,10 @@ countEl.addEventListener('click', () => {
 const NEAR = 40;
 /** a crystal specimen's scale: metres to the Crystals' units (its matrix ~1.3 wide: ~35 cm) */
 const CRYSTAL_SCALE = 0.26;
-let engine: CrystalEngine | null = null;
-const fogAt = (d: number, above: number, density: number) => { const path = d * 0.55 + (d * d) / 40; const sm = Math.min(1, Math.max(0, (d - 5) / 15)); return 1 - Math.exp(-density * path * (1 + 1.1 * Math.exp(-Math.max(above, 0) * 0.35) * sm * sm * (3 - 2 * sm))); };
+let crystals: WoodCrystals | null | undefined;
 function drawCrystal(env: WoodEnv, f: Find) {
-  if (!engine) { try { engine = createCrystalEngine(env.gl, { quality: 'low', still: true, cut: true }); } catch (e) { console.warn('crystals in the wood:', e); return; } }
-  if (engine.seed !== f.seed || !engine.spec) engine.grow(f.seed);
-  const v = env.view, A = env.look.atmos;
-  const turn = (f.seed % 628) / 100;
-  // the scissor: round the specimen's reach, on the wood's screen (GL pixels, y up)
-  const reach = engine.extent() * CRYSTAL_SCALE * 1.15;
-  const cy = env.base + reach * 0.4;
-  const rx = f.x - v.x, rz = f.z - v.z, ry = cy - v.eye;
-  const cs = Math.cos(v.yaw), sn = Math.sin(v.yaw);
-  const cx = rx * cs - rz * sn, cz = rx * sn + rz * cs;
-  const hd = Math.max(0.05, Math.hypot(cx, cz));
-  let rect: [number, number, number, number] = [0, 0, env.W, env.H];
-  if (hd > reach * 1.6) {
-    const sx = Math.atan2(cx, cz) * v.f + env.W / 2, sy = (ry / hd) * v.f + v.horizon, pr = (reach / (hd - reach)) * v.f * 1.2 + 4;
-    rect = [Math.max(0, sx - pr), Math.max(0, sy - pr), Math.min(env.W, 2 * pr), Math.min(env.H, 2 * pr)];
-  }
-  const dist = Math.hypot(rx, rz);
-  const fog = 1 - (1 - fogAt(dist, 0.2, env.look.density)) * Math.exp(-(env.mist[0] + env.mist[1]) / 2);
-  const light = [Math.sin(A.at[0]) * Math.cos(A.at[1]), Math.sin(A.at[1]), Math.cos(A.at[0]) * Math.cos(A.at[1])];
-  const illum = (A.illum[0] + A.illum[1] + A.illum[2]) / 3;
-  env.gl.depthMask(true);
-  engine.drawWood({ res: [env.W, env.H], f: v.f, horizon: v.horizon, cam: [v.x, v.z, v.eye, v.yaw], anchor: [f.x, env.base, f.z], scale: CRYSTAL_SCALE, turn, light, lightCol: A.illum.map((c) => c * 1.6), fogCol: A.fogLow, fog, exposure: 0.55 + 0.6 * illum, depthRange: DEPTH_RANGE, rect });
-  env.gl.depthMask(false);
+  if (crystals === undefined) crystals = woodCrystals({ scale: CRYSTAL_SCALE });
+  crystals?.draw(env, f);
 }
 const tops = new Map<number, number>();
 const failed = new Set<string>();
@@ -168,8 +146,7 @@ function specimens(v: MistView) {
     const turn = (f.seed % 628) / 100;
     // (a specimen that fails to draw is left out, not the wood with it)
     const draw = f.kind === 'crystal' ? (env: WoodEnv) => drawCrystal(env, f) : (env: WoodEnv) => drawCluster(env, f.seed, [f.x, f.z], turn);
-    if ((f.kind === 'crystal' && qs.has('nocrystal')) || (f.kind === 'fungus' && qs.has('nofungi'))) continue;
-    customs.set(key, { x: f.x, z: f.z, top: topOf(f), draw: (env) => { try { draw(env); const e = env.gl.getError(); if (e) console.warn(`field: GL error ${e} after ${f.kind}`); } catch (e) { console.warn('field: a specimen did not draw', e); customs.delete(key); failed.add(key); env.gl.depthMask(false); env.gl.disable(env.gl.SCISSOR_TEST); } } });
+    customs.set(key, { x: f.x, z: f.z, top: topOf(f), draw: (env) => { try { draw(env); } catch (e) { console.warn('field: a specimen did not draw', e); customs.delete(key); failed.add(key); env.gl.depthMask(false); env.gl.disable(env.gl.SCISSOR_TEST); } } });
   }
   for (const key of customs.keys()) if (key.startsWith('field:') && !keep.has(key)) customs.delete(key);
 }

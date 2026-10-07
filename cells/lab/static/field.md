@@ -22,21 +22,23 @@ The lab's experiments in one walk. Nothing here is copied: each part is the expe
 
 ## The specimens in the wood
 
-The finds are not pictures over the wood: they stand in it, on the ground, among the trees and
-behind the grass, in the same fog, drawn by their own experiments.
+Close to, the finds are the real things, drawn into the wood itself by their own renderers — in
+their place among the trees and grass, in the wood's light, fog and mist:
 
-- **Crystals** — the Crystals ray tracer, made a reusable engine (`client/crystals/engine.ts`, the
-  Crystals page now a thin page over it), with a cut-out mode: the specimen alone on transparency.
-  One engine, offscreen, draws each crystal near you from where you stand (so walking round one,
-  it turns), the nearest and longest-waiting first.
-- **Fungi** — mushrooms native to the wood (`client/field/mushrooms.ts`): the Hat-throwers' capped
-  forms from its own genome (inkcaps, pleated and inking at the rim; mottlegills; slimy yolk-yellow
-  fieldcaps), each species' heights, bells, colours and counts, painted once as a small cluster
-  on the litter at true size (10–17 cm) and stood in the wood among the grass. Opening one shows
-  the Hat-throwers' own macro view of the same species, live, in its card.
-- **Mistwood** takes them as sprites (`sprites`, `spriteTexture` in `client/mistwood/main.ts`):
-  coloured pictures standing on the ground, drawn in their place among its cards with its fog,
-  mist and light.
+- **Crystals** — the Crystals ray tracer (`client/crystals/engine.ts`, the Crystals page a thin
+  page over it), in its cut-out mode on a small WebGL context of its own, its camera put where
+  your eye is relative to the specimen, every frame, its field of view fitted to it: so walking
+  round a crystal it turns, from above you look down into it, and it refracts and disperses as the
+  studio specimen does. Its picture is set into Mistwood's scene at the specimen's place and
+  depth (`client/field/woodcrystal.ts`).
+- **Fungi** — clusters of the Hat-throwers' capped species (its own genome: heights, bells,
+  colours, pleats, ink, slime) built as meshes, tapering stalks and caps turned from each form's
+  profile (an inkcap's pleated, inking bell; a mottlegill's cone; a fieldcap's flared slimy dome
+  over its gills), at true size, drawn in Mistwood's projection and shaded in its light and fog,
+  writing their depth (`client/field/woodfungi.ts`).
+- **Mistwood** takes them through a hook (`customs` in `client/mistwood/main.ts`, `CustomDraw` in
+  `render.ts`): anything another experiment draws is called in its place among the wood's cards,
+  back to front, into the scene with its depth buffer.
 
 The journal keeps what you open, in this browser; open it from the top-left.
 

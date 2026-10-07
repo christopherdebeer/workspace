@@ -12,9 +12,6 @@ export const MAXC = 12;
 
 export const COMMON = /* glsl */ `
 precision highp float; precision highp int; precision highp sampler2D;
-// (in the wood: the Field Journal draws the specimen into Mistwood's scene; what it sees around it
-// is the wood's fog, not the studio)
-uniform int uWood; uniform vec3 uFogCol;
 uniform sampler2D uPlanes;
 uniform int uN;
 uniform vec4 uC0[${MAXC}]; // bounding centre, radius
@@ -83,12 +80,6 @@ float ellipsoid(vec3 o, vec3 d) {
 }
 float schlick(float c, float ior) { float f0 = (ior - 1.0) / (ior + 1.0); f0 *= f0; float x = 1.0 - c; float x2 = x * x; return f0 + (1.0 - f0) * x2 * x2 * x; }
 vec3 env(vec3 d) {
-  if (uWood == 1) {
-    // the wood around it: fog, lighter above, the ground's dark below, the key light a soft glow
-    vec3 a = mix(uFogCol * 0.35, uFogCol * 1.25, smoothstep(-0.35, 0.5, d.y));
-    float kk = max(dot(d, uLight), 0.0);
-    return a + uLightCol * (0.6 * pow(kk, 6.0) + 1.5 * smoothstep(0.97, 0.995, kk));
-  }
   // a studio sweep: dark below, a grey glow low behind, darker again overhead
   vec3 sky = mix(vec3(0.02, 0.021, 0.028), vec3(0.11, 0.115, 0.14), smoothstep(-0.25, 0.15, d.y) * (1.0 - smoothstep(0.15, 0.9, d.y)) + 0.35 * smoothstep(0.15, 0.9, d.y));
   // the key light is a softbox: a broad bright disc, brighter toward its centre, with a hot core
@@ -201,10 +192,6 @@ ${COMMON}
 uniform vec3 uEye; uniform mat3 uCam; uniform vec2 uRes; uniform float uFov; uniform int uDisp; uniform int uDebug; uniform int uHdr;
 // (a cut-out: only the specimen, on nothing — what is not crystal or matrix is transparent; for drawing it into another scene)
 uniform int uCut;
-// the wood's camera (Mistwood's cylindrical projection: across is angle, up is height over the
-// distance), the specimen's place in it, its fog and the depth it writes
-uniform vec2 uWRes; uniform float uWF, uWHz; uniform vec4 uWCam; uniform vec3 uWAnchor; uniform float uWScale, uWTurn, uFogK, uDepthR, uWExp;
-vec3 turnY(vec3 v, float a) { float c = cos(a), s = sin(a); return vec3(v.x * c - v.z * s, v.y, v.x * s + v.z * c); }
 out vec4 oColor;
 /** the crystal's own coordinates: across, along the axis, across */
 vec3 local(int id, vec3 p) {
@@ -384,25 +371,6 @@ vec3 shade(vec3 o, vec3 d) {
 }
 vec3 tonemap(vec3 x) { x *= 1.6; return (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14); }
 void main() {
-  gl_FragDepth = gl_FragCoord.z;
-  if (uWood == 1) {
-    vec2 px = gl_FragCoord.xy;
-    float th = (px.x - 0.5 * uWRes.x) / uWF;
-    vec3 dc = normalize(vec3(sin(th), (px.y - uWHz) / uWF, cos(th)));
-    float cy = cos(uWCam.w), sy = sin(uWCam.w);
-    vec3 dw = vec3(dc.x * cy + dc.z * sy, dc.y, -dc.x * sy + dc.z * cy);
-    vec3 ew = vec3(uWCam.x, uWCam.z, uWCam.y);
-    vec3 o = turnY(ew - uWAnchor, -uWTurn) / uWScale, d = turnY(dw, -uWTurn);
-    float tn, tf; vec3 nn, nf; int id = nearest(o, d, tn, nn, tf, nf);
-    float tm = ellipsoid(o, d);
-    float t = min(id >= 0 ? tn : 1e9, tm);
-    if (t > 1e8) discard;
-    float hd = t * uWScale * length(dw.xz);
-    gl_FragDepth = clamp(hd / uDepthR, 0.0, 1.0);
-    vec3 col = tonemap(shade(o, d)) * uWExp;
-    oColor = vec4(mix(col, uFogCol, uFogK), 1.0);
-    return;
-  }
   vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
   if (uDebug == 1) { oColor = vec4(pow(texture(uCaustic, gl_FragCoord.xy / uRes).rgb * uCMap.w, vec3(1.0 / 2.2)), 1.0); return; }
   vec3 d = normalize(uCam * vec3(uv * uFov, -1.0));
