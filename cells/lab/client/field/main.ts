@@ -13,8 +13,10 @@ import { hash } from '../kit/rng';
 import { card as sealCard, draw, sample, sealSvg } from '../seals/seal';
 import { SUIT_STYLES } from '../seals/styles';
 import { findsNear, project, type Find, type View } from './finds';
-import { formOf, paintCluster } from './mushrooms';
-import { sprites, spriteTexture } from '../mistwood/main';
+import { formOf } from './mushrooms';
+import { clusterTop, drawCluster } from './woodfungi';
+import { customs } from '../mistwood/main';
+import { DEPTH_RANGE, type WoodEnv } from '../mistwood/render';
 import { createCrystalEngine, type CrystalEngine } from '../crystals/engine';
 
 type MistView = View & { seed: number; density: number; ground: (x: number, z: number) => number };
@@ -116,75 +118,60 @@ countEl.addEventListener('click', () => {
   void v;
 });
 
-// ─── the specimens in the wood: crystals, ray-traced where they lie ─────────────────────────────
-// One Crystals engine, offscreen, in its cut-out mode (the specimen on transparency): each crystal
-// near enough is drawn from where you stand — so walking round it, it turns — and its picture is
-// set into the wood as a sprite on the ground, among the trees, in the fog. They take turns, the
-// nearest and the longest-waiting first.
-const NEAR_SPECIMEN = 45, SPRITE_PX = 224, SPECIMEN_M = 1.15;
-let crystalGl: { engine: CrystalEngine; canvas: HTMLCanvasElement } | null = null;
-try {
-  const c = document.createElement('canvas');
-  c.width = c.height = SPRITE_PX;
-  const g = c.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, preserveDrawingBuffer: true });
-  if (g) crystalGl = { engine: createCrystalEngine(g, { quality: 'low', still: true, cut: true }), canvas: c };
-} catch { crystalGl = null; }
-const drawnAt = new Map<string, number>();
-function specimens(v: MistView) {
-  const near = preview ? [] : findsNear(v.seed, v.x, v.z, NEAR_SPECIMEN).filter((f) => f.kind === 'crystal');
-  const keep = new Set(near.map((f) => `${v.seed}:${f.id}`));
-  for (const key of sprites.keys()) if (key.startsWith('field:') && !keep.has(key.slice(6)) && !fungusKeys.has(key)) sprites.delete(key);
-  if (!crystalGl || !near.length) return;
-  const now = performance.now();
-  // the one most owed a new picture: never drawn, or drawn longest ago for how near it is
-  let best: Find | null = null, owed = -1;
-  for (const f of near) {
-    const r = Math.hypot(f.x - v.x, f.z - v.z), at = drawnAt.get(`${v.seed}:${f.id}`);
-    const o = at === undefined ? 1e9 : (now - at) / (200 + r * 40);
-    if (o > owed) { owed = o; best = f; }
+// ─── the specimens in the wood, as real geometry ────────────────────────────────────────────────
+// Drawn into Mistwood's own scene (its CustomDraw), in its place among the trees and grass, in its
+// light, fog and mist, writing its depth:
+// - crystals: the Crystals ray tracer itself, on the wood's GL context, every pixel's ray from the
+//   wood's camera (so walking round one, it turns; coming close, it fills the view, refracting
+//   and dispersing what is behind it as the studio specimen does) — within a scissor round it;
+// - fungi: a cluster of the species' mushrooms as meshes (woodfungi.ts).
+const NEAR = 40;
+/** a crystal specimen's scale: metres to the Crystals' units (its matrix ~1.3 wide: ~35 cm) */
+const CRYSTAL_SCALE = 0.26;
+let engine: CrystalEngine | null = null;
+const fogAt = (d: number, above: number, density: number) => { const path = d * 0.55 + (d * d) / 40; const sm = Math.min(1, Math.max(0, (d - 5) / 15)); return 1 - Math.exp(-density * path * (1 + 1.1 * Math.exp(-Math.max(above, 0) * 0.35) * sm * sm * (3 - 2 * sm))); };
+function drawCrystal(env: WoodEnv, f: Find) {
+  if (!engine) { try { engine = createCrystalEngine(env.gl, { quality: 'low', still: true, cut: true }); } catch (e) { console.warn('crystals in the wood:', e); return; } }
+  if (engine.seed !== f.seed || !engine.spec) engine.grow(f.seed);
+  const v = env.view, A = env.look.atmos;
+  const turn = (f.seed % 628) / 100;
+  // the scissor: round the specimen's reach, on the wood's screen (GL pixels, y up)
+  const reach = engine.extent() * CRYSTAL_SCALE * 1.15;
+  const cy = env.base + reach * 0.4;
+  const rx = f.x - v.x, rz = f.z - v.z, ry = cy - v.eye;
+  const cs = Math.cos(v.yaw), sn = Math.sin(v.yaw);
+  const cx = rx * cs - rz * sn, cz = rx * sn + rz * cs;
+  const hd = Math.max(0.05, Math.hypot(cx, cz));
+  let rect: [number, number, number, number] = [0, 0, env.W, env.H];
+  if (hd > reach * 1.6) {
+    const sx = Math.atan2(cx, cz) * v.f + env.W / 2, sy = (ry / hd) * v.f + v.horizon, pr = (reach / (hd - reach)) * v.f * 1.2 + 4;
+    rect = [Math.max(0, sx - pr), Math.max(0, sy - pr), Math.min(env.W, 2 * pr), Math.min(env.H, 2 * pr)];
   }
-  if (!best || owed < 1) return;
-  const f = best, key = `${v.seed}:${f.id}`, r = Math.hypot(f.x - v.x, f.z - v.z);
-  const { engine, canvas } = crystalGl;
-  if (engine.seed !== f.seed) engine.grow(f.seed);
-  // (seen from here: round it as you stand to it, and from as high as your eye is over it)
-  const az = Math.atan2(v.x - f.x, v.z - f.z) + (f.seed % 628) / 100;
-  const el = Math.max(0.1, Math.min(0.9, Math.atan2(v.eye - v.ground(f.x, f.z) - 0.35, r)));
-  engine.frame({ az, el, dist: 9 }, SPRITE_PX, SPRITE_PX);
-  const old = sprites.get(`field:${key}`);
-  const tex = spriteTexture(canvas, old?.tex ?? null);
-  sprites.set(`field:${key}`, { x: f.x, z: f.z, w: SPECIMEN_M, h: SPECIMEN_M, sink: 0.22, alpha: 1, tex });
-  drawnAt.set(key, now);
+  const dist = Math.hypot(rx, rz);
+  const fog = 1 - (1 - fogAt(dist, 0.2, env.look.density)) * Math.exp(-(env.mist[0] + env.mist[1]) / 2);
+  const light = [Math.sin(A.at[0]) * Math.cos(A.at[1]), Math.sin(A.at[1]), Math.cos(A.at[0]) * Math.cos(A.at[1])];
+  const illum = (A.illum[0] + A.illum[1] + A.illum[2]) / 3;
+  env.gl.depthMask(true);
+  engine.drawWood({ res: [env.W, env.H], f: v.f, horizon: v.horizon, cam: [v.x, v.z, v.eye, v.yaw], anchor: [f.x, env.base, f.z], scale: CRYSTAL_SCALE, turn, light, lightCol: A.illum.map((c) => c * 1.6), fogCol: A.fogLow, fog, exposure: 0.55 + 0.6 * illum, depthRange: DEPTH_RANGE, rect });
+  env.gl.depthMask(false);
 }
-
-// ─── the fungi in the wood: mushrooms grown from the Hat-throwers' genome ───────────────────────
-// A cluster of the find's species (mushrooms.ts), painted once at its size in metres and stood on
-// the litter as one of the wood's sprites — lit, fogged and hidden in the grass like the rest. Its
-// card holds the Hat-throwers' own macro view of the same species, live.
-const NEAR_FUNGUS = 60;
-const clusters = new Map<number, { w: number; h: number; tex: WebGLTexture }>();
-const clusterOf = (seed: number) => {
-  let c = clusters.get(seed);
-  if (!c) { const p = paintCluster(seed); c = { w: p.w, h: p.h, tex: spriteTexture(p.canvas) }; clusters.set(seed, c); }
-  return c;
-};
-const FUNGUS_M = 0.12;
-function fungi(v: MistView) {
-  const near = preview ? [] : findsNear(v.seed, v.x, v.z, NEAR_FUNGUS).filter((f) => f.kind === 'fungus');
-  let painted = 0;
+const tops = new Map<number, number>();
+const failed = new Set<string>();
+const topOf = (f: Find) => { let t = tops.get(f.seed); if (t === undefined) { t = f.kind === 'crystal' ? 0.5 : clusterTop(f.seed); tops.set(f.seed, t); } return t; };
+function specimens(v: MistView) {
+  const near = preview ? [] : findsNear(v.seed, v.x, v.z, NEAR);
+  const keep = new Set<string>();
   for (const f of near) {
     const key = `field:${v.seed}:${f.id}`;
-    if (sprites.has(key)) continue;
-    // (one painted a frame: a cluster is quick, but not free)
-    if (!clusters.has(f.seed) && painted++ > 0) continue;
-    const c = clusterOf(f.seed);
-    sprites.set(key, { x: f.x, z: f.z, w: c.w, h: c.h, sink: 0.01, alpha: 1, tex: c.tex });
+    keep.add(key);
+    if (customs.has(key) || failed.has(key)) continue;
+    const turn = (f.seed % 628) / 100;
+    // (a specimen that fails to draw is left out, not the wood with it)
+    const draw = f.kind === 'crystal' ? (env: WoodEnv) => drawCrystal(env, f) : (env: WoodEnv) => drawCluster(env, f.seed, [f.x, f.z], turn);
+    customs.set(key, { x: f.x, z: f.z, top: topOf(f), draw: (env) => { try { draw(env); } catch (e) { console.warn('field: a specimen did not draw', e); customs.delete(key); failed.add(key); env.gl.depthMask(false); env.gl.disable(env.gl.SCISSOR_TEST); } } });
   }
-  const keep = new Set(near.map((f) => `field:${v.seed}:${f.id}`));
-  for (const key of sprites.keys()) if (key.startsWith('field:') && !keep.has(key) && fungusKeys.has(key)) { sprites.delete(key); fungusKeys.delete(key); }
-  for (const k of keep) fungusKeys.add(k);
+  for (const key of customs.keys()) if (key.startsWith('field:') && !keep.has(key)) customs.delete(key);
 }
-const fungusKeys = new Set<string>();
 
 // ─── the markers, every frame ───────────────────────────────────────────────────────────────────
 const layer = $('marks');
@@ -201,7 +188,6 @@ function frame() {
   if (!v) return;
   dial.style.transform = `rotate(${(-v.yaw * 180) / Math.PI}deg)`;
   specimens(v);
-  fungi(v);
   if (preview || !sheet.hidden) { layer.style.visibility = 'hidden'; return; }
   layer.style.visibility = '';
   const k = canvas.clientWidth / v.W;
@@ -209,7 +195,7 @@ function frame() {
   const near = findsNear(v.seed, v.x, v.z, SHOW);
   const live = new Set<string>();
   for (const f of near) {
-    const p = project(v, f.x, f.z, v.ground(f.x, f.z) + (f.kind === 'crystal' ? SPECIMEN_M + 0.45 : (clusters.get(f.seed)?.h ?? FUNGUS_M) + 1.1));
+    const p = project(v, f.x, f.z, v.ground(f.x, f.z) + topOf(f) + 1.1);
     if (!p) continue;
     const key = `${v.seed}:${f.id}`;
     live.add(key);

@@ -31,6 +31,10 @@ const LIGHT_COL = [1.0, 0.94, 0.86];
 
 export function createCrystalEngine(gl: WebGL2RenderingContext, o: EngineOpts) {
   const { quality } = o;
+  // (made inside another renderer's frame — the Field Journal's wood — it leaves the framebuffer
+  // and viewport as it found them)
+  const prevFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+  const prevVp = gl.getParameter(gl.VIEWPORT) as Int32Array;
   const still = !!o.still;
   const halfFloat = !!gl.getExtension('EXT_color_buffer_float');
   function program(vs: string, fs: string): WebGLProgram {
@@ -205,6 +209,7 @@ export function createCrystalEngine(gl: WebGL2RenderingContext, o: EngineOpts) {
     setCommon(mainP, L, halfFloat ? 1 : 12.5);
     gl.uniform1i(U(mainP, 'uHdr'), post ? 1 : 0);
     gl.uniform1i(U(mainP, 'uCut'), o.cut ? 1 : 0);
+    gl.uniform1i(U(mainP, 'uWood'), 0);
     gl.uniform3fv(U(mainP, 'uEye'), cam.eye); gl.uniformMatrix3fv(U(mainP, 'uCam'), false, cam.m);
     gl.uniform2f(U(mainP, 'uRes'), w, h); gl.uniform1f(U(mainP, 'uFov'), Math.tan(0.34));
     gl.uniform1i(U(mainP, 'uDisp'), quality === 'low' ? 0 : 1);
@@ -229,9 +234,48 @@ export function createCrystalEngine(gl: WebGL2RenderingContext, o: EngineOpts) {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
   }
+  // (the caustic map starts black: in the wood there is no caustic pass, and no ground to read it)
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo); gl.viewport(0, 0, CRES, CRES); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, prevFbo);
+  gl.viewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3]);
+  /** the specimen drawn into another scene that shares this context (the Field Journal's wood):
+   *  rays from that scene's camera (Mistwood's projection), the specimen standing at `anchor`
+   *  (its matrix half in the ground), `scale` metres to its units, turned by `turn`; lit by the
+   *  key light from `light` (world), fogged by `fog` toward `fogCol`; writing its depth. Into
+   *  whatever framebuffer is bound, within the scissor `rect` (GL pixels) */
+  function drawWood(w: { res: [number, number]; f: number; horizon: number; cam: [number, number, number, number]; anchor: [number, number, number]; scale: number; turn: number; light: number[]; lightCol: number[]; fogCol: number[]; fog: number; exposure: number; depthRange: number; rect: [number, number, number, number] }) {
+    upload(20);
+    const ct = Math.cos(-w.turn), st = Math.sin(-w.turn);
+    const L = [w.light[0] * ct - w.light[2] * st, w.light[1], w.light[0] * st + w.light[2] * ct];
+    setCommon(mainP, L, 1);
+    gl.uniform3fv(U(mainP, 'uLightCol'), w.lightCol);
+    gl.uniform1i(U(mainP, 'uWood'), 1);
+    gl.uniform3fv(U(mainP, 'uFogCol'), w.fogCol);
+    gl.uniform1i(U(mainP, 'uCut'), 1);
+    gl.uniform1i(U(mainP, 'uHaze'), 0);
+    gl.uniform1i(U(mainP, 'uDisp'), quality === 'low' ? 0 : 1);
+    gl.uniform1i(U(mainP, 'uDebug'), 0);
+    gl.uniform1i(U(mainP, 'uHdr'), 0);
+    gl.uniform2f(U(mainP, 'uWRes'), w.res[0], w.res[1]);
+    gl.uniform1f(U(mainP, 'uWF'), w.f); gl.uniform1f(U(mainP, 'uWHz'), w.horizon);
+    gl.uniform4fv(U(mainP, 'uWCam'), w.cam);
+    gl.uniform3fv(U(mainP, 'uWAnchor'), w.anchor);
+    gl.uniform1f(U(mainP, 'uWScale'), w.scale); gl.uniform1f(U(mainP, 'uWTurn'), w.turn);
+    gl.uniform1f(U(mainP, 'uFogK'), w.fog); gl.uniform1f(U(mainP, 'uDepthR'), w.depthRange); gl.uniform1f(U(mainP, 'uWExp'), w.exposure);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(Math.floor(w.rect[0]), Math.floor(w.rect[1]), Math.ceil(w.rect[2]), Math.ceil(w.rect[3]));
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.uniform1i(U(mainP, 'uWood'), 0);
+  }
+  /** how far the grown specimen reaches from its centre, in its own units (for a scissor rect) */
+  const extent = () => Math.max(...spec.crystals.map((c) => { const b = bound(c, spec.species, 1); return Math.hypot(b[0], b[1], b[2]) + b[3]; }), Math.max(spec.matrix[0], spec.matrix[2]));
   return {
     grow,
     frame,
+    drawWood,
+    extent,
     halfFloat,
     get seed() { return seed; },
     get spec() { return spec; },

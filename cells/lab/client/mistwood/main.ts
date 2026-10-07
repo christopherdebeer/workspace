@@ -15,7 +15,7 @@
  */
 import { Sound } from './audio';
 import { Baker, type Card } from './bake';
-import { Renderer, type Draw, type View } from './render';
+import { Renderer, type Draw, type View, type WoodEnv } from './render';
 import { countWider, type Species, type Structure } from './tree';
 import { atmosphere, moonPhase } from './sky';
 import { Deerland } from './deer';
@@ -50,6 +50,10 @@ const sound = new Sound();
  *  its texture (premultiplied, bottom row first) made with `spriteTexture` */
 export interface Sprite { x: number; z: number; w: number; h: number; sink: number; alpha: number; tex: WebGLTexture | null }
 export const sprites = new Map<string, Sprite>();
+/** things drawn into the wood by another experiment, as real geometry (render.ts CustomDraw): where
+ *  each stands, how tall, and how to draw it */
+export interface Custom { x: number; z: number; top: number; draw: (env: WoodEnv) => void }
+export const customs = new Map<string, Custom>();
 /** a texture in the wood's context from a picture (a canvas: another renderer's frame) */
 export function spriteTexture(src: TexImageSource, into?: WebGLTexture | null): WebGLTexture {
   const tex = into ?? gl.createTexture()!;
@@ -856,6 +860,11 @@ function frame(now: number) {
     const hd = Math.hypot(sp.x - view.x, sp.z - view.z);
     if (hd > VIEW || hd < 0.4 || !sp.tex) continue;
     draws.push({ live: false, card: { tex: sp.tex, level: 0, texels: 0, used: t, left: -sp.w / 2, bottom: 0, width: sp.w, height: sp.h, side: 0 } as Card, x: sp.x, z: sp.z, rect: [-sp.w / 2, -sp.sink, sp.w, sp.h], flip: false, phase: 0, patch: false, sprite: true, base: wood.groundH(sp.x, sp.z), mist: [0, 0], top: sp.h, bark: DARK, alpha: sp.alpha, d: hd });
+  }
+  for (const cu of customs.values()) {
+    const hd = Math.hypot(cu.x - view.x, cu.z - view.z);
+    if (hd > VIEW || hd < 0.2) continue;
+    draws.push({ live: false, custom: cu.draw, x: cu.x, z: cu.z, base: wood.groundH(cu.x, cu.z), mist: [0, 0], top: cu.top, alpha: 1, bark: DARK, d: hd });
   }
   // the mist along the way to each (to its foot, and to its top): it lies between you and it, so
   // walking, the banks pass in front of things and you walk into and through them

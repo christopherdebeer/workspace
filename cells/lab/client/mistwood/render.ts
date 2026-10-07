@@ -23,8 +23,10 @@ import { SEG } from './tree';
  * (written by the world pass), the cards, the deer and the live trees all hide one another
  * rightly. Nothing is drawn further than this.
  */
-const DEPTH_RANGE = 100;
+export const DEPTH_RANGE = 100;
 
+/** the wood's shared GLSL (noise, fog, mist, the camera's uniforms): for anything drawn into the wood */
+export const WOOD_GLSL = () => NOISE;
 const NOISE = `
 uniform uint uSeed;
 uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
@@ -1792,7 +1794,35 @@ export interface DeerDraw {
   alpha: number;
   bark: [number, number, number];
 }
-export type Draw = CardDraw | LiveDraw | DeerDraw;
+/** something another experiment draws into the wood itself (real geometry, its own shaders): it is
+ *  called in its place among the cards, back to front, into the scene with its depth buffer —
+ *  blending premultiplied, depth tested (LEQUAL), depth writes off; it may change programs,
+ *  vertex arrays and textures (they are set again after), and must leave the rest as it found it */
+export interface WoodEnv {
+  gl: WebGL2RenderingContext;
+  view: View;
+  look: Look;
+  /** the camera's and the wood's uniforms, set on a program of the caller's (made with WOOD_GLSL) */
+  common: (p: WebGLProgram) => void;
+  W: number;
+  H: number;
+  /** the mist along the way to its foot and its top, as for a card */
+  mist: [number, number];
+  base: number;
+  top: number;
+}
+export interface CustomDraw {
+  live: false;
+  custom: (env: WoodEnv) => void;
+  x: number;
+  z: number;
+  base: number;
+  mist: [number, number];
+  top: number;
+  alpha: number;
+  bark: [number, number, number];
+}
+export type Draw = CardDraw | LiveDraw | DeerDraw | CustomDraw;
 
 /** The photograph's colours. */
 const PAL = {
@@ -2026,6 +2056,14 @@ export class Renderer {
         gl.depthMask(false);
         gl.uniform1f(this.loc(L, 'uDepthPass'), 0);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.count);
+        continue;
+      }
+      if ('custom' in c) {
+        c.custom({ gl, view: v, look, common: (prog) => this.common(prog, v, look), W, H, mist: c.mist, base: c.base, top: c.top });
+        // (its programs and arrays are its own: ours are set again for what follows)
+        current = null;
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindVertexArray(this.vao);
         continue;
       }
       if ('pose' in c) {

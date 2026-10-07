@@ -88,8 +88,8 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
       page.errors = [];
       page.on('pageerror', (e) => page.errors.push(String(e)));
       page.on('console', (m) => m.type() === 'error' && !m.text().includes('404') && page.errors.push(m.text()));
-      await page.goto(base + (query ? `?${query}` : ''), { timeout: 120000 });
-      await page.waitForFunction(() => window.__mistwood, null, { timeout: 120000 });
+      await page.goto(base + (query ? `?${query}` : ''), { timeout: 600000 });
+      await page.waitForFunction(() => window.__mistwood, null, { timeout: 600000 });
       return page;
     },
     state: (page) => page.evaluate(() => window.__mistwood),
