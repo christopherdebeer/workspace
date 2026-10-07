@@ -6,6 +6,8 @@
 import { ACE, COMMISSION, DIR_NAMES, PLACES, SHAPES, TEMPER, TEMPER_NOTE, JACK, JOKER, KING, QUEEN, SIZE, SUITS, SUIT_NAMES, cardName, exits, key, neighbour, pack, roleOf, type Card, type Rules, type Tile } from './deck';
 import { ROLL_CAP, act, botAction, clone, current, legal, newGame, type Action, type Game } from './table';
 import { METHOD_TEXT, RULES_TEXT } from './text';
+import { card as sealCardOf, cardSeed, draw as drawSeal, sample as sampleSeal, sealSvg } from '../seals/seal';
+import { SUIT_STYLES } from '../seals/styles';
 
 const $ = (id: string) => document.getElementById(id)!;
 const qs = new URLSearchParams(location.search);
@@ -36,7 +38,37 @@ const ASSETS = (() => { const m = typeof document !== 'undefined' ? document.que
 const SUIT_KEY = ['h', 'd', 'c', 's'];
 const COURT = { [JACK]: ['THE WAYFINDER', 'REROUTE', 'Walk one step your way.'], [QUEEN]: ['THE EXCHANGE', 'SWAP', 'Exchange two junctions.'], [KING]: ['DESTINATION', 'DESTINATION', 'Reach this suit to win.'] } as Record<number, string[]>;
 /** `square`: a square viewport the card fits either way up (the table's parking spaces) */
+// ─── the junctions, engraved as seals (the lab's Seals experiment) ────────────────────────────
+/** the deck's seed: every junction's seal comes from it and the card's number */
+const SEAL_SEED = 1941;
+const ROMAN = ['', 'A', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+const sealCache = new Map<string, string>();
+/** a junction as a seal: the whole card (print, box, insert), or for the table and the hand the
+ *  seal alone, as large as the square allows. Seals are slow to draw, so each is drawn once. */
+function sealJunction(card: Card, rotation: number, square: boolean): string {
+  // (a turned card is drawn with its faces turned — the arrows point the way they now go, and every
+  // label stays upright)
+  const rot = ((rotation % 4) + 4) % 4;
+  const key = `${card.suit}.${card.rank}.${rot}.${square ? 's' : 'c'}`;
+  let inner = sealCache.get(key);
+  if (!inner) {
+    const style = SUIT_STYLES[card.suit], faces = exits({ card, rotation: rot }), id = `sl${card.suit}${card.rank}${rot}${square ? 's' : 'c'}`;
+    if (square) {
+      // (at tile size: a quieter ground, a bolder junction, larger labels)
+      const seed = cardSeed(SEAL_SEED, card.rank), st = { ...sampleSeal(style, seed), faint: 0.45, jWeight: 1.8, roundelR: 9, faceR: 30, arrowSize: 1.4 };
+      inner = `<rect x="-60" y="-60" width="120" height="120" rx="6" fill="${st.paper}"/>${sealSvg(drawSeal(st, faces, seed, { rank: card.rank }), st, id)}`;
+    } else {
+      const title = `${ROMAN[card.rank]} · ${card.rank === ACE ? 'WILD' : SHAPES[card.rank].name}`;
+      inner = sealCardOf({ style, seed: SEAL_SEED, faces, title, id, rank: card.rank, index: { rank: RANK[card.rank], glyph: SUITS[card.suit], color: COL[card.suit] } }).svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
+    }
+    sealCache.set(key, inner);
+  }
+  return square ? `<svg viewBox="-60 -60 120 120" aria-hidden="true">${inner}</svg>` : `<svg viewBox="0 0 63 88" aria-hidden="true">${inner}</svg>`;
+}
 export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): string {
+  // (the junctions — the Aces and the numbers; the Twos only in the plain deck, where they have no
+  // painting as commissions — are seals)
+  if (card.rank >= ACE && card.rank <= 10 && !(ASSETS && card.rank === COMMISSION)) return sealJunction(card, rotation, square);
   const col = card.rank === JOKER ? '#24231f' : COL[card.suit];
   const suit = card.rank === JOKER ? '★' : SUITS[card.suit];
   const rank = card.rank === JOKER ? 'JOKER' : RANK[card.rank];

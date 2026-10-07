@@ -153,6 +153,7 @@ export function cardBorder(s: Style, seed: number, L: BorderLayout): { marks: Ma
     const g = P(glyphAt), gs = 1.6 + d * 1.0;
     // (a medallion fills the corner: the glyph gives way to a small ring on the rules)
     if (cm > 2.5) { const q = P([inner - (n - 1) * gap / 2 + 0.25, inner - (n - 1) * gap / 2 + 0.25]); ring(q, 0.55); dot(q, 0.2); }
+    else if (room(g) < gs + 0.4) { /* (an index or a label sits here) */ }
     else if (s.bCorner === 'crescent') ink(glyph('crescent', g, gs * 0.85, c.out), 0, 'ink');
     else if (s.bCorner === 'motif') motif(g, gs * 0.75, c.out + 180);
     else if (s.bCorner === 'ring') { ring(g, gs * 0.55); dot(g, gs * 0.2); }
@@ -185,6 +186,7 @@ export function cardBorder(s: Style, seed: number, L: BorderLayout): { marks: Ma
     }
     // the pendant down the side: ring, lozenge, dot
     const px = inner + 1.9, py = reach + 1.2;
+    if (room(P([px, py + 2.5])) < 3.5) continue;
     ink(poly([P([px, py - 0.8]), P([px, py + 0.2])]), W * 0.6);
     ring(P([px, py + 0.9]), 0.65);
     ink(poly([P([px, py + 1.6]), P([px, py + 2.3])]), W * 0.6);

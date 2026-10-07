@@ -105,9 +105,11 @@ so re-baseline after any deploy.
 
 ## Art and print
 
-- **The stay loop on the dials** (Eddy, Switch): it reaches toward the western port and reads as an
-  exit. Being redrawn in the lab's **Seals** experiment (`client/seals/`): stays as a closed
-  loop off the hub, never reaching the rim; port `sealCard` into `cardSvg` once the styles settle.
+- **Junction art: seals** (done): the junction cards (Aces, 3–10; the Twos too in the plain
+  deck) are drawn by the lab's Seals experiment (`client/seals/`), from deck seed 1941 and each
+  card's number, with poker indices; the table and the hand show the seal alone, its faces turned
+  with the card so labels stay upright. Tune styles in the Seals page, paste them into
+  `client/seals/styles.ts`, and the game follows.
 - **Box art** (`static/markovs/box-*.jpg`): the supplied art with its lettering erased; every
   word on the box (title, tagline, player count, card count from the deck) is set in `BOX` in
   `client/markovs/page.ts`, so a rules change only needs that text edited.

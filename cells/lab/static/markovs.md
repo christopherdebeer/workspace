@@ -259,3 +259,13 @@ diagonals, if at all, only on the Aces.
   play them for drama.
 - A two-player variant with two Kings each.
 - The hand under the table on phones.
+
+
+## The junctions as seals
+
+The junction cards are now engraved seals, from the lab's **Seals** experiment: each suit a
+family (hearts and spades filigree, clubs and diamonds lattice), each card its own seal from the
+deck's seed and its number, the number as pips and as the star's points. A direction's faces are
+one label ("4–6") and its line's weight says its chance; the stays are a closed loop off the hub.
+On the table a turned card is redrawn with its faces turned, so its labels stay upright. The
+court cards keep their paintings.
