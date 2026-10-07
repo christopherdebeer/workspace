@@ -20,7 +20,7 @@ import { shapeOutline, type Pt, type Shape } from './field';
 import { accentW, add, f, fill, glyph, pol, pt, type Fill, type FillResult, type Mark } from './ornament';
 import type { Disc, Evenness } from './pack';
 import { SCHEMA, type Style } from './styles';
-import { ornate } from './structure';
+import { cardBorder } from './border';
 
 export { glyph, pol, type Fill, type Layer, type Mark } from './ornament';
 export interface Seal {
@@ -434,39 +434,35 @@ export function card(o: { style: Style; seed: number; faces: number[] | null; ti
   const mode = o.mode ?? 'shown';
   const seal = draw(s, o.faces, seed, { show: mode === 'shown', zones: mode !== 'hidden', stats: o.stats, rank: o.rank });
   const bordered = s.border !== 'none';
-  const scale = bordered ? 0.43 : 0.47, cy = bordered ? 41.2 : 40.6;
+  // (a denser border takes more of the card: the seal gives it room)
+  const scale = bordered ? 0.43 - 0.08 * Math.max(0, Math.min(1, s.bDensity)) : 0.47, cy = bordered ? 41.2 : 40.6;
   const fY = bordered ? 73.4 : 74.8, sY = bordered ? 78.4 : 80.4, tY = 10.2;
   const line = o.faces ? faceLine(o.faces) : '', sum = o.faces ? summary(o.faces) : '';
   const words = (mode === 'shown' || mode === 'zones') && !!o.faces;
-  // the border: a frame inside the card's rule, corner pieces inside the frame, or both
+  // the border: rules, crest and corners, rails and chains — sparse to dense — clear of the
+  // seal and of every line of text (each zone sized to its words)
   let border: FillResult | null = null, borderSvg = '', borderOverlay = '';
   if (bordered) {
-    const k = 0.45, bw = s.borderW, e = s.packEdge * k;
-    const outer: Shape = { k: 'box', c: [31.5, 44], hw: 29.1, hh: 41.6, rx: 2.2 };
-    const inner: Shape = { k: 'box', c: [31.5, 44], hw: 29.1 - bw, hh: 41.6 - bw, rx: 1.2 };
-    const frame: Shape = { k: 'diff', a: outer, minus: [inner] };
-    void e;
-    const ix = 29.1 - bw, iy = 41.6 - bw;
-    const corners: Shape = { k: 'union', of: [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => ({ k: 'inter', of: [{ k: 'circle', c: [31.5 + sx * ix, 44 + sy * iy], r: s.cornerR }, s.border === 'corners' ? outer : inner] }) as Shape) };
-    const region: Shape = s.border === 'frame' ? frame : s.border === 'corners' ? corners : { k: 'union', of: [frame, corners] };
+    const zm = s.zoneMargin * 0.45;
     const reach = (R + Math.max(4, s.nodeOut + 2.4 + s.nodeDots * 2.5 + 1)) * scale;
-    const zm = s.zoneMargin * k;
     const zones: Shape[] = [{ k: 'circle', c: [31.5, cy], r: reach + zm }, { k: 'grow', s: textZone(31.5, tY, o.title, 3.4, 0.55), by: zm }];
-    if (words) zones.push({ k: 'grow', s: textZone(31.5, fY, line, 3.7), by: zm }, { k: 'grow', s: textZone(31.5, sY + 0.8, sum, 2.15, 0.3), by: zm });
-    const made = ornate({ region, zones, sym: { kind: 'd2', c: [31.5, 44] }, style: s, seed: hash(seed, 0xb0d), k, centre: [31.5, 44], stats: o.stats });
-    border = made.fill;
-    const st = made.structure, cid = `${o.id}b`;
-    const clipped = st.marks.filter((m) => 'clip' in m && m.clip).map((m) => markSvg(m, s)).join('');
-    borderSvg = `<g opacity="${s.faint}"><clipPath id="${cid}"><path d="${st.clip}" clip-rule="evenodd"/></clipPath><g clip-path="url(#${cid})">${clipped}</g>${st.marks.filter((m) => !('clip' in m && m.clip)).map((m) => markSvg(m, s)).join('')}${border.marks.map((m) => markSvg(m, s)).join('')}</g>`;
-    if (o.overlay || mode === 'zones') borderOverlay = overlaySvg(o.overlay ? border.discs : [], zones, 0.12);
+    if (words) zones.push({ k: 'grow', s: textZone(31.5, fY, line, 3.7), by: zm }, { k: 'grow', s: textZone(31.5, sY, sum, 2.15, 0.3), by: zm });
+    const b = cardBorder(s, hash(seed, 0xb0d), {
+      title: { y: tY, hw: textWidth(o.title, 3.4, 0.55) / 2, size: 3.4 },
+      caption: words ? { y: sY, hw: textWidth(sum, 2.15, 0.3) / 2, size: 2.15 } : null,
+      seal: { c: [31.5, cy], r: reach }, zones,
+    });
+    const cid = `${o.id}b`;
+    borderSvg = `<g opacity="${s.faint}"><clipPath id="${cid}"><path d="${b.clip}" clip-rule="evenodd"/></clipPath><g clip-path="url(#${cid})" data-border="1">${b.marks.map((m) => markSvg(m, s)).join('')}</g></g>`;
+    if (o.overlay || mode === 'zones') borderOverlay = overlaySvg([], zones, 0.12);
   }
   const sealOverlay = o.overlay || mode === 'zones' ? overlaySvg(o.overlay ? seal.discs : [], seal.zones, 0.25) : '';
   const rule = sum.length * 0.62 + 2;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 88"><rect x=".5" y=".5" width="62" height="87" rx="3.4" fill="${s.paper}" stroke="#8d8270" stroke-width=".5"/><rect x="2.4" y="2.4" width="58.2" height="83.2" rx="2.2" fill="none" stroke="${s.ink}" stroke-width=".22" opacity=".7"/>`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 88"><rect x=".5" y=".5" width="62" height="87" rx="3.4" fill="${s.paper}" stroke="#8d8270" stroke-width=".5"/>${bordered ? '' : `<rect x="2.4" y="2.4" width="58.2" height="83.2" rx="2.2" fill="none" stroke="${s.ink}" stroke-width=".22" opacity=".7"/>`}`
     + borderSvg
     + `<text x="31.5" y="${tY}" text-anchor="middle" font-size="3.4" font-family="${SERIF}" letter-spacing=".55" fill="${s.ink}">${o.title}</text>`
     + `<g transform="translate(31.5 ${cy}) scale(${scale})">${sealSvg(seal, s, o.id)}${sealOverlay}</g>`
-    + (words && mode === 'shown' ? `<text x="31.5" y="${fY}" text-anchor="middle" font-size="3.7" font-family="${SERIF}" fill="${s.ink}" xml:space="preserve">${line}</text><path d="M7 ${sY - 0.8}H${f(31.5 - rule)}M${f(31.5 + rule)} ${sY - 0.8}H56" stroke="${s.ink}" stroke-width=".22"/><circle cx="7" cy="${sY - 0.8}" r=".45" fill="${s.ink}"/><circle cx="56" cy="${sY - 0.8}" r=".45" fill="${s.ink}"/><text x="31.5" y="${sY}" text-anchor="middle" font-size="2.15" font-family="${SERIF}" letter-spacing=".3" fill="${s.ink}">${sum}</text>` : '')
+    + (words && mode === 'shown' ? `<text x="31.5" y="${fY}" text-anchor="middle" font-size="3.7" font-family="${SERIF}" fill="${s.ink}" xml:space="preserve">${line}</text>${bordered ? '' : `<path d="M7 ${sY - 0.8}H${f(31.5 - rule)}M${f(31.5 + rule)} ${sY - 0.8}H56" stroke="${s.ink}" stroke-width=".22"/><circle cx="7" cy="${sY - 0.8}" r=".45" fill="${s.ink}"/><circle cx="56" cy="${sY - 0.8}" r=".45" fill="${s.ink}"/>`}<text x="31.5" y="${sY}" text-anchor="middle" font-size="2.15" font-family="${SERIF}" letter-spacing=".3" fill="${s.ink}">${sum}</text>` : '')
     + borderOverlay
     + '</svg>';
   return { svg, seal, border };

@@ -101,11 +101,30 @@ it read off the shape's own field:
 - the construction takes at most a third of the shape's depth, so a thin frame keeps its rules,
   only finer; the fill packs what is left.
 
-So the same code makes a card's **frame** (a box minus a smaller box), its **corner pieces** (a
-disc at each corner, cut by the frame), a ring or a lens. **Card border** puts a frame, corners
-or both round each card: its rules wrap round the title, the face line, the summary and the
-seal, each zone sized to its words. The **Shapes** view does six shapes round a label you type.
-**Medallions** sets their size (0: none).
+So the same code makes frames, corner pieces, rings and lenses round a label: the **Shapes**
+view does six of them round a label you type. **Medallions** sets their size (0: none).
+
+## The card's border
+
+A card's border has its own generator (`border.ts`), drawn after the reference frames and run
+on one dial, **sparse … dense** (default 0.2):
+
+- **sparse**: a double rule broken at the top by a crest (a compass star or a target) and at
+  the foot by a lozenge; in each corner a star (or the suit's crescent), a quarter arc with a
+  dashed echo, and a pendant of ring and lozenge; rails from the corners toward the crest
+  punctuated with dots and sparkles; down each side a chain of segments strung with rings,
+  dots, stars and lozenges; short rails either side of the caption;
+- **dense**: more rules with beads between them; open medallions in the corners with fans of
+  rays; an arched window that curves round them; the crest takes the suit's motif and scroll
+  wings; pendants hang either side of the title; a medallion with the suit's motif at the
+  middle of each side; a cartouche round the caption. The seal gives the denser border room.
+
+Mirrored left to right; the top and the foot differ (the corner medallions at the top and at
+the foot are each sized to what their side of the card leaves). Every element is placed clear
+of the title, the face line, the caption and the seal (their zones), and the border is clipped
+clear of them too, so nothing crosses a label. Also: **rules**, **crest** and **crest size**,
+**corner glyph** and **corner size**; **card border** *corners* keeps only the rules, crest,
+foot and corners.
 
 ## Measuring evenness
 

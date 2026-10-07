@@ -42,7 +42,7 @@ for (let suit = 0; suit < 4; suit++) for (const rank of [3, 5, 6]) {
   // the card: its border keeps clear of the seal and of the words
   const c = S.card({ style: T.SUIT_STYLES[suit], seed: 3, faces: D.facesOf({ suit, rank }), title: 'VIII · BACKTURN', id: 'z' });
   if (c.border) {
-    assert.ok(c.svg.includes('clip-path="url(#zb)"'), 'the border is constructed');
+    assert.ok(c.svg.includes('data-border="1"'), 'the border is drawn');
     // no border ornament on the title or the words
     const zs = [S.textZone(31.5, 10.2, 'VIII · BACKTURN', 3.4, 0.55)];
     for (const d of c.border.discs) assert.ok(F.sdfAll(zs, d.c) >= d.r - 1e-6, 'border clear of the title');
@@ -98,6 +98,14 @@ for (const kind of H.SHAPE_KINDS) {
   const a = S.card({ style: st, seed: 5, faces: D.facesOf({ suit: 2, rank: 6 }), title: 't', id: 'r', rank: 6 }).svg;
   const b = S.card({ style: st, seed: 5, faces: D.facesOf({ suit: 2, rank: 6 }), title: 't', id: 'r', rank: 7 }).svg;
   assert.notEqual(a, b, 'the number changes the seal');
+}
+// the border runs sparse to dense: more marks at the dense end, none of them NaN
+{
+  const st = T.SUIT_STYLES[3], faces = D.facesOf({ suit: 3, rank: 8 });
+  const size = (bDensity) => S.card({ style: { ...st, bDensity }, seed: 2, faces, title: 'VIII · WEIR', id: 'b', rank: 8 }).svg;
+  const sparse = size(0), dense = size(1);
+  assert.ok(!/NaN/.test(sparse + dense), 'clean');
+  assert.ok(dense.length > sparse.length * 1.05, 'the dense end draws more');
 }
 // seeds vary the seal; a variance of 0 pins the numbers
 const st = T.SUIT_STYLES[2];
