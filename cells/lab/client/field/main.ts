@@ -13,6 +13,7 @@ import { hash } from '../kit/rng';
 import { card as sealCard, draw, sample, sealSvg } from '../seals/seal';
 import { SUIT_STYLES } from '../seals/styles';
 import { findsNear, project, type Find, type View } from './finds';
+import { formOf, paintCluster } from './mushrooms';
 import { sprites, spriteTexture } from '../mistwood/main';
 import { createCrystalEngine, type CrystalEngine } from '../crystals/engine';
 
@@ -92,7 +93,7 @@ function cardFor(f: Find | Entry, wood: number): string {
   }).svg;
 }
 /** the real thing: the lab's own experiment, grown from the find's seed */
-const specimenSrc = (f: Find | Entry) => (f.kind === 'crystal' ? `/crystals?preview&seed=${f.seed}` : `/fungi?one&preview&seed=${f.seed}&t=250`);
+const specimenSrc = (f: Find | Entry) => (f.kind === 'crystal' ? `/crystals?preview&seed=${f.seed}` : `/fungi?one&seed=${f.seed}&form=${formOf(f.seed)}`);
 
 const sheet = $('sheet');
 function open(f: Find | Entry, wood: number) {
@@ -132,7 +133,7 @@ const drawnAt = new Map<string, number>();
 function specimens(v: MistView) {
   const near = preview ? [] : findsNear(v.seed, v.x, v.z, NEAR_SPECIMEN).filter((f) => f.kind === 'crystal');
   const keep = new Set(near.map((f) => `${v.seed}:${f.id}`));
-  for (const key of sprites.keys()) if (key.startsWith('field:') && !keep.has(key.slice(6)) && !lives.some((l) => `field:${l.key}` === key)) sprites.delete(key);
+  for (const key of sprites.keys()) if (key.startsWith('field:') && !keep.has(key.slice(6)) && !fungusKeys.has(key)) sprites.delete(key);
   if (!crystalGl || !near.length) return;
   const now = performance.now();
   // the one most owed a new picture: never drawn, or drawn longest ago for how near it is
@@ -156,51 +157,34 @@ function specimens(v: MistView) {
   drawnAt.set(key, now);
 }
 
-// ─── the fungi in the wood: the Hat-throwers' own renderer, live ───────────────────────────────
-// The two nearest fungi each run the Hat-throwers page itself, in its cut-out mode (`?one&cut`:
-// the species alone, on transparency, on its own clock — growing, glistening, throwing), in a
-// small frame kept in view behind the wood (so the browser keeps it running). Each frame it is
-// told where you stand, and its picture is lifted into the wood, on the litter, in the fog.
-const FUNGI_LIVE = 2, NEAR_FUNGUS = 32, FUNGUS_M = 0.75;
-interface Live { frame: HTMLIFrameElement; key: string; f: Find }
-const lives: Live[] = [];
+// ─── the fungi in the wood: mushrooms grown from the Hat-throwers' genome ───────────────────────
+// A cluster of the find's species (mushrooms.ts), painted once at its size in metres and stood on
+// the litter as one of the wood's sprites — lit, fogged and hidden in the grass like the rest. Its
+// card holds the Hat-throwers' own macro view of the same species, live.
+const NEAR_FUNGUS = 60;
+const clusters = new Map<number, { w: number; h: number; tex: WebGLTexture }>();
+const clusterOf = (seed: number) => {
+  let c = clusters.get(seed);
+  if (!c) { const p = paintCluster(seed); c = { w: p.w, h: p.h, tex: spriteTexture(p.canvas) }; clusters.set(seed, c); }
+  return c;
+};
+const FUNGUS_M = 0.12;
 function fungi(v: MistView) {
-  const near = preview ? [] : findsNear(v.seed, v.x, v.z, NEAR_FUNGUS).filter((f) => f.kind === 'fungus')
-    .sort((a, b) => Math.hypot(a.x - v.x, a.z - v.z) - Math.hypot(b.x - v.x, b.z - v.z)).slice(0, FUNGI_LIVE);
-  const want = new Map(near.map((f) => [`${v.seed}:${f.id}`, f]));
-  // (let go of the ones no longer near: their frame is reused for one that is)
-  for (const l of lives) if (!want.has(l.key)) { sprites.delete(`field:${l.key}`); l.key = ''; }
-  for (const [key, f] of want) {
-    if (lives.some((l) => l.key === key)) continue;
-    let l = lives.find((x) => !x.key);
-    if (!l) {
-      if (lives.length >= FUNGI_LIVE) continue;
-      const frame = document.createElement('iframe');
-      frame.className = 'live';
-      frame.setAttribute('aria-hidden', 'true');
-      frame.tabIndex = -1;
-      document.body.appendChild(frame);
-      l = { frame, key: '', f };
-      lives.push(l);
-    }
-    l.key = key;
-    l.f = f;
-    l.frame.src = `/fungi?one&cut&seed=${f.seed}&t=${8 + (f.seed % 10)}`;
+  const near = preview ? [] : findsNear(v.seed, v.x, v.z, NEAR_FUNGUS).filter((f) => f.kind === 'fungus');
+  let painted = 0;
+  for (const f of near) {
+    const key = `field:${v.seed}:${f.id}`;
+    if (sprites.has(key)) continue;
+    // (one painted a frame: a cluster is quick, but not free)
+    if (!clusters.has(f.seed) && painted++ > 0) continue;
+    const c = clusterOf(f.seed);
+    sprites.set(key, { x: f.x, z: f.z, w: c.w, h: c.h, sink: 0.01, alpha: 1, tex: c.tex });
   }
-  for (const l of lives) {
-    if (!l.key) continue;
-    const f = l.f, r = Math.hypot(f.x - v.x, f.z - v.z);
-    try {
-      const w = l.frame.contentWindow as (Window & { __fungiCut?: { yaw: number; pitch: number } }) | null;
-      const c = l.frame.contentDocument?.getElementById('macro') as HTMLCanvasElement | null;
-      if (!w || !c || !c.width) continue;
-      // (seen from where you stand: round it as you walk round it; from your eye's height over it)
-      w.__fungiCut = { yaw: Math.atan2(v.z - f.z, v.x - f.x) + (f.seed % 628) / 100, pitch: Math.max(0.12, Math.min(0.75, Math.atan2(v.eye - v.ground(f.x, f.z), r))) };
-      const old = sprites.get(`field:${l.key}`);
-      sprites.set(`field:${l.key}`, { x: f.x, z: f.z, w: FUNGUS_M, h: FUNGUS_M, sink: 0.12, alpha: 1, tex: spriteTexture(c, old?.tex ?? null) });
-    } catch { /* (not loaded yet, or another origin: no picture this frame) */ }
-  }
+  const keep = new Set(near.map((f) => `field:${v.seed}:${f.id}`));
+  for (const key of sprites.keys()) if (key.startsWith('field:') && !keep.has(key) && fungusKeys.has(key)) { sprites.delete(key); fungusKeys.delete(key); }
+  for (const k of keep) fungusKeys.add(k);
 }
+const fungusKeys = new Set<string>();
 
 // ─── the markers, every frame ───────────────────────────────────────────────────────────────────
 const layer = $('marks');
@@ -225,7 +209,7 @@ function frame() {
   const near = findsNear(v.seed, v.x, v.z, SHOW);
   const live = new Set<string>();
   for (const f of near) {
-    const p = project(v, f.x, f.z, v.ground(f.x, f.z) + (f.kind === 'crystal' ? SPECIMEN_M + 0.45 : FUNGUS_M + 0.2));
+    const p = project(v, f.x, f.z, v.ground(f.x, f.z) + (f.kind === 'crystal' ? SPECIMEN_M + 0.45 : (clusters.get(f.seed)?.h ?? FUNGUS_M) + 1.1));
     if (!p) continue;
     const key = `${v.seed}:${f.id}`;
     live.add(key);
@@ -252,7 +236,9 @@ function frame() {
     // (it comes out of the fog as the trees do — the wood's own fog, thicker where the wood is
     // denser — and softens as it goes; one you have found is quieter)
     const fog = Math.exp(-p.r * 0.045 * Math.max(0.4, v.density));
-    const op = fog * (1 - Math.min(1, Math.max(0, (p.r - (SHOW - 12)) / 12))) * (found(v.seed, f.id) ? 0.55 : 1);
+    // (and close to, it gives way to the thing itself: gone by 2.5 m, the find in front of you)
+    const near = Math.min(1, Math.max(0, (p.r - 2.5) / 3.5));
+    const op = fog * near * (1 - Math.min(1, Math.max(0, (p.r - (SHOW - 12)) / 12))) * (found(v.seed, f.id) ? 0.55 : 1);
     el.style.cssText = `left:${p.px * k}px;top:${p.py * k}px;width:${size.toFixed(1)}px;height:${size.toFixed(1)}px;opacity:${op.toFixed(2)};z-index:${Math.round(1000 - p.r)}`;
     el.classList.toggle('near', p.r <= OPEN);
     // the levels: each fades in over the band of sizes below where it takes over, the one before

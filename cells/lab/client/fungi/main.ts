@@ -28,10 +28,6 @@ const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
 /** one species on its own (`?one`), or — the default — a terrarium of them, over three weeks */
 const one = params.has('one');
-/** (`?one&cut`) the species alone on transparency — no ground, no backdrop, no lens blur — seen
- *  from where the parent page says (window.__fungiCut: yaw, pitch); for drawing it into another
- *  scene (the Field Journal's wood, which lifts this canvas each frame) */
-const cut = one && params.has('cut');
 /** the field (the default): pats of every age, in the grass, on the real clock; or (`?terrarium`,
  *  and the gallery's preview) one pat on its own, its three weeks from the start */
 const pasture = !one && !preview && !params.has('terrarium');
@@ -40,7 +36,7 @@ let seed = Number(params.get('seed')) || (pasture ? 1 : Math.floor(Math.random()
 
 
 const canvas = document.getElementById('macro') as HTMLCanvasElement;
-const gl = canvas.getContext('webgl2', { antialias: false, alpha: cut, premultipliedAlpha: true, preserveDrawingBuffer: cut, depth: false })!;
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false })!;
 if (!gl) throw new Error('WebGL2 is needed');
 if (preview) document.body.classList.add('preview');
 const hdr = !!gl.getExtension('EXT_color_buffer_float');
@@ -986,7 +982,7 @@ out vec4 o;
 uniform sampler2D uCol;
 uniform sampler2D uDepth;
 uniform vec2 uRes;
-uniform float uFocus, uK, uMax, uNear, uFar, uTime, uFade, uExposure, uCut;
+uniform float uFocus, uK, uMax, uNear, uFar, uTime, uFade, uExposure;
 float dist(vec2 uv) {
   float z = texture(uDepth, uv).r * 2. - 1.;
   return 2. * uNear * uFar / (uFar + uNear - z * (uFar - uNear));
@@ -1032,8 +1028,6 @@ void main() {
   col += glow / 16. * .9;
   col *= uExposure;
   col = col * (2.51 * col + .03) / (col * (2.43 * col + .59) + .14);
-  // (a cut-out keeps its coverage, premultiplied, and no vignette)
-  if (uCut > .5) { float a = texture(uCol, uv).a; o = vec4(col * a, a) * uFade; return; }
   col = mix(vec3(.03, .04, .025), vec3(1.), col);
   vec2 q = uv - .5;
   col *= 1. - dot(q, q) * .9;
@@ -1699,8 +1693,7 @@ function setView() {
 function camera(t: number) {
   const aspect = W / Hh;
   const look = cur.look;
-  // (a cut-out stands back: the whole of it in frame, nothing cut off at the edges)
-  const d = (cur.dist / Math.min(1.2, Math.max(0.75, aspect * 1.4))) * (cut ? 1.8 : 1);
+  const d = cur.dist / Math.min(1.2, Math.max(0.75, aspect * 1.4));
   const y = yaw + Math.sin(drift * 0.05) * 0.15 + shake * 0.012 * Math.sin(t * 57);
   const pt = pitch + shake * 0.01 * Math.cos(t * 49);
   const eye: V3 = [look[0] + Math.cos(pt) * Math.cos(y) * d, look[1] + Math.sin(pt) * d, look[2] + Math.cos(pt) * Math.sin(y) * d];
@@ -2603,12 +2596,6 @@ function frame(now: number) {
   if (T < lastT) jolted = new WeakSet();
   lastT = T;
   shake *= Math.exp(-dt * 5);
-  if (cut) {
-    const want = (window as unknown as { __fungiCut?: { yaw: number; pitch: number } }).__fungiCut;
-    if (want) { yaw = want.yaw; pitch = want.pitch; }
-    drift = 0;
-    shake = 0;
-  }
   const cam = camera(time);
   lastCam = cam;
   pullFocus(cam, dt);
@@ -2692,8 +2679,7 @@ function frame(now: number) {
   // 1. the opaque patch
   gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
   gl.viewport(0, 0, W, Hh);
-  if (cut) gl.clearColor(0, 0, 0, 0);
-  else gl.clearColor(0.08, 0.1, 0.055, 1);
+  gl.clearColor(0.08, 0.1, 0.055, 1);
   gl.clearDepth(1);
   gl.depthMask(true);
   gl.enable(gl.DEPTH_TEST);
@@ -2713,7 +2699,6 @@ function frame(now: number) {
     gl.uniform1f(u(p, 'uShK'), shK);
     gl.uniform1f(u(p, 'uShTexel'), 1 / SH);
   };
-  if (!cut) {
   gl.useProgram(backProg);
   gl.uniform2f(u(backProg, 'uRes'), W, Hh);
   gl.uniform3fv(u(backProg, 'uLightCol'), lightCol);
@@ -2736,7 +2721,6 @@ function frame(now: number) {
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(groundVao);
   gl.drawArrays(gl.TRIANGLES, 0, groundCount);
-  }
   common(solidProg);
   gl.uniform1f(u(solidProg, 'uFocal'), cam.focal);
   draw(solids, big);
@@ -2849,8 +2833,6 @@ function frame(now: number) {
   gl.uniform1f(u(dofProg, 'uFar'), cam.far);
   gl.uniform1f(u(dofProg, 'uTime'), time % 100);
   gl.uniform1f(u(dofProg, 'uFade'), fade);
-  gl.uniform1f(u(dofProg, 'uCut'), cut ? 1 : 0);
-  if (cut) { gl.uniform1f(u(dofProg, 'uK'), 0); gl.uniform1f(u(dofProg, 'uMax'), 0); }
   gl.uniform1f(u(dofProg, 'uExposure'), exposure);
   gl.bindVertexArray(quadVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);

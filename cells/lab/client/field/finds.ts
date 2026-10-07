@@ -6,7 +6,7 @@
  */
 import { hash } from '../kit/rng';
 import { pick } from '../crystals/mineral';
-import { species } from '../fungi/genome';
+import { formOf, mushroomSpecies } from './mushrooms';
 
 export type FindKind = 'crystal' | 'fungus';
 export interface Find {
@@ -19,6 +19,8 @@ export interface Find {
   name: string;
   /** a crystal's species kind (Crystals' `mineral`) */
   mineral?: string;
+  /** a fungus's form (the Hat-throwers' capped ones: inkcap, mottlegill, fieldcap) */
+  form?: string;
 }
 
 /** a cell's side (m), and the share of cells that hold a find */
@@ -39,7 +41,7 @@ export function findIn(wood: number, i: number, j: number): Find | null {
     const seed = (hash(h, 11) % 9000) + 1;
     const x = (i + 0.15 + 0.7 * u) * CELL, z = (j + 0.15 + 0.7 * v) * CELL;
     if (kind === 'crystal') { const sp = pick(seed); f = { id: `${i},${j}`, kind, x, z, seed, name: sp.name, mineral: sp.kind }; }
-    else f = { id: `${i},${j}`, kind, x, z, seed, name: species(seed).name };
+    else f = { id: `${i},${j}`, kind, x, z, seed, name: mushroomSpecies(seed).name, form: formOf(seed) };
   }
   memo.set(key, f);
   return f;

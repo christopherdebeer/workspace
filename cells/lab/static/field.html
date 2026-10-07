@@ -23,9 +23,6 @@
     footer button:focus-visible { outline: 1px solid rgba(238, 240, 228, .5); }
     /* the journal's layer over the wood */
     #marks { position: fixed; inset: 0; pointer-events: none; }
-    /* the live fungi's frames: in view (so they run) but behind the wood */
-    iframe.live { position: fixed; left: 0; top: 0; width: 200px; height: 200px; border: 0; z-index: -1; pointer-events: none; }
-    #wood { z-index: 0; }
     .mark { position: fixed; transform: translate(-50%, -50%); padding: 0; border: 0; background: none; pointer-events: none; transition: opacity .4s; }
     .mark .lod { position: absolute; inset: 0; }
     .mark .hit { position: absolute; left: 50%; top: 50%; width: min(100%, 88px); height: min(100%, 88px); min-width: 44px; min-height: 44px; transform: translate(-50%, -50%); border-radius: 50%; pointer-events: auto; cursor: pointer; }

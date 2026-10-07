@@ -9,7 +9,7 @@ The lab's experiments in one walk. Nothing here is copied: each part is the expe
 - **The engraving is the Seals', drawn in light.** The compass is a seal that turns as you do; each
   find is marked by a small seal of its family (crystals the diamonds' lattice, fungi the clubs'),
   all of them glowing hairlines with nothing solid, fading into the fog with distance as the trees
-  do. A seal has a fixed size in the wood (1.6 m), so it grows as you come close, and its detail
+  do, and giving way to the find itself in the last few metres. A seal has a fixed size in the wood (1.6 m), so it grows as you come close, and its detail
   follows its size: far off a ring and its glyph; nearer, the construction (rings, band, star
   lattice); nearer still an even fill of ornament; close to, fine and intricate, with lace. Each
   level cross-fades into the next over a band of sizes, the lines stay one pixel at every size,
@@ -29,10 +29,11 @@ behind the grass, in the same fog, drawn by their own experiments.
   Crystals page now a thin page over it), with a cut-out mode: the specimen alone on transparency.
   One engine, offscreen, draws each crystal near you from where you stand (so walking round one,
   it turns), the nearest and longest-waiting first.
-- **Fungi** — the Hat-throwers page itself, live, in its cut-out mode (`/fungi?one&cut`: the species
-  alone, no ground, no backdrop, the camera where the page above says): the two nearest fungi each
-  run in a small frame kept in view behind the wood, and their pictures are lifted into the wood
-  every frame — growing, glistening and throwing on their own clock.
+- **Fungi** — mushrooms native to the wood (`client/field/mushrooms.ts`): the Hat-throwers' capped
+  forms from its own genome (inkcaps, pleated and inking at the rim; mottlegills; slimy yolk-yellow
+  fieldcaps), each species' heights, bells, colours and counts, painted once as a small cluster
+  on the litter at true size (10–17 cm) and stood in the wood among the grass. Opening one shows
+  the Hat-throwers' own macro view of the same species, live, in its card.
 - **Mistwood** takes them as sprites (`sprites`, `spriteTexture` in `client/mistwood/main.ts`):
   coloured pictures standing on the ground, drawn in their place among its cards with its fog,
   mist and light.
