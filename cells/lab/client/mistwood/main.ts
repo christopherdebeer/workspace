@@ -45,6 +45,28 @@ const gl = renderer.gl;
 const baker = new Baker(gl, renderer.compile, renderer.sketch);
 const sound = new Sound();
 
+// ─── sprites: coloured pictures stood in the wood by another experiment ───────────────────────
+/** a picture standing on the ground at (x, z): w × h metres, its foot `sink` m into the ground,
+ *  its texture (premultiplied, bottom row first) made with `spriteTexture` */
+export interface Sprite { x: number; z: number; w: number; h: number; sink: number; alpha: number; tex: WebGLTexture | null }
+export const sprites = new Map<string, Sprite>();
+/** a texture in the wood's context from a picture (a canvas: another renderer's frame) */
+export function spriteTexture(src: TexImageSource, into?: WebGLTexture | null): WebGLTexture {
+  const tex = into ?? gl.createTexture()!;
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return tex;
+}
+
 // ─── the cards: baked per structure and resolution, kept while there is room ────────
 const cards = new Map<string, Card>();
 let texels = 0;
@@ -827,6 +849,13 @@ function frame(now: number) {
     // the legs: a walk is a small stride, a run the full bound
     const run = Math.min(1, d.speed / 5 + Math.min(d.speed, 0.6) * 0.25);
     draws.push({ live: false, pose: [d.headUp, d.headTurn, d.gait, run], bed: d.bed, x: d.x, z: d.z, base: wood.groundH(d.x, d.z), mist: [0, 0], top: 2.1 * d.size, size: d.size, face, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
+  }
+  // things set into the wood from outside (the Field Journal's finds): coloured sprites standing
+  // on the ground, drawn in their place among the trees, in the same fog
+  for (const sp of sprites.values()) {
+    const hd = Math.hypot(sp.x - view.x, sp.z - view.z);
+    if (hd > VIEW || hd < 0.4 || !sp.tex) continue;
+    draws.push({ live: false, card: { tex: sp.tex, level: 0, texels: 0, used: t, left: -sp.w / 2, bottom: 0, width: sp.w, height: sp.h, side: 0 } as Card, x: sp.x, z: sp.z, rect: [-sp.w / 2, -sp.sink, sp.w, sp.h], flip: false, phase: 0, patch: false, sprite: true, base: wood.groundH(sp.x, sp.z), mist: [0, 0], top: sp.h, bark: DARK, alpha: sp.alpha, d: hd });
   }
   // the mist along the way to each (to its foot, and to its top): it lies between you and it, so
   // walking, the banks pass in front of things and you walk into and through them

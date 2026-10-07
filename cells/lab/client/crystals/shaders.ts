@@ -190,6 +190,8 @@ void main() { vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.
 export const MAIN_FS = /* glsl */ `#version 300 es
 ${COMMON}
 uniform vec3 uEye; uniform mat3 uCam; uniform vec2 uRes; uniform float uFov; uniform int uDisp; uniform int uDebug; uniform int uHdr;
+// (a cut-out: only the specimen, on nothing — what is not crystal or matrix is transparent; for drawing it into another scene)
+uniform int uCut;
 out vec4 oColor;
 /** the crystal's own coordinates: across, along the axis, across */
 vec3 local(int id, vec3 p) {
@@ -375,13 +377,19 @@ void main() {
   if (uDebug == 3) { float tn, tf; vec3 nn, nf; int id = nearest(uEye, d, tn, nn, tf, nf); float tm = ellipsoid(uEye, d); float tc = id >= 0 ? tn : 1e9; if (tm < tc && tm < 1e8) { vec3 p = uEye + d * tm; vec3 n = normalize(p / (uMat * uMat)); oColor = vec4(matrixShade(p, d) * 4.0, 1.0); } else oColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
   if (uDebug == 4) { oColor = vec4(shade(uEye, d) * 4.0, 1.0); return; }
   if (uDebug == 2) { float tn, tf; vec3 nn, nf; int id = nearest(uEye, d, tn, nn, tf, nf); float tm = ellipsoid(uEye, d); float tg = d.y < -1e-5 ? -uEye.y / d.y : 1e9; float tc = id >= 0 ? tn : 1e9; float t = min(min(tc, tm), tg); oColor = vec4(tc <= t ? 1.0 : 0.0, tm <= t && tm < tc ? 1.0 : 0.0, tg <= t && tg < tc && tg < tm ? 1.0 : 0.0, 1.0); return; }
+  float cover = 1.0;
+  if (uCut == 1) {
+    float tn, tf; vec3 nn, nf; int id = nearest(uEye, d, tn, nn, tf, nf);
+    float tm = ellipsoid(uEye, d);
+    if (id < 0 && tm > 1e8) { oColor = vec4(0.0); return; }
+  }
   vec3 col = shade(uEye, d);
   if (uHdr == 1) { oColor = vec4(col, 1.0); return; }
   // (no half-float targets: finish here)
-  float vig = 1.0 - 0.35 * dot(uv, uv);
+  float vig = uCut == 1 ? 1.0 : 1.0 - 0.35 * dot(uv, uv);
   col = tonemap(col * vig);
   col = pow(col, vec3(1.0 / 2.2)) + (hash3(vec3(gl_FragCoord.xy, uTime)) - 0.5) / 255.0;
-  oColor = vec4(col, 1.0);
+  oColor = vec4(col * cover, cover);
 }
 `;
 

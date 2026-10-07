@@ -1216,6 +1216,15 @@ void main() {
   float flutter = vnoise(vec2(vWorld.x * 4. + uT * 1.7, vWorld.y * 4. - uT * .9)) - .5;
   // metres: a twig sways a few centimetres, trembles a little more
   float m = (sway * .035 * (.4 + .6 * gust) + flutter * .02) * uWind * flex * flex;
+  if (uKind > 1.5) {
+    // a picture stood in the wood (premultiplied): its own colours, in the wood's light, fogged
+    vec4 q = texture(uTex, vUV);
+    if (q.a < .01) discard;
+    vec3 col = q.rgb / q.a * mix(vec3(1.), uIllum * 1.6, .55);
+    float fogQ = 1. - (1. - fogAt(vDist, vWorld.y - uBase, uDensity)) * (1. - mistTo(vWorld));
+    o = vec4(mix(col, fogToward(vWorld), fogQ) * q.a, q.a) * uAlpha;
+    return;
+  }
   // near, out of focus: a blurrier level of the card (its texels are about the size of pixels)
   vec4 t = texture(uTex, vec2(vUV.x + m / abs(uRect.z) * uFlip, vUV.y), log2(1. + coc(vDist)));
   t *= smoothstep(.15, .6, vDist);
@@ -1735,6 +1744,8 @@ export interface CardDraw {
   flip: boolean;
   phase: number;
   patch: boolean;
+  /** a coloured picture (main.ts sprites), not a baked tree: drawn as it is, fogged */
+  sprite?: boolean;
   alpha: number;
   bark: [number, number, number];
 }
@@ -2045,7 +2056,7 @@ export class Renderer {
       gl.uniform1f(this.loc(p, 'uTopH'), c.top);
       gl.uniform4f(this.loc(p, 'uRect'), c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
       gl.uniform1f(this.loc(p, 'uPhase'), c.phase);
-      gl.uniform1f(this.loc(p, 'uKind'), c.patch ? 1 : 0);
+      gl.uniform1f(this.loc(p, 'uKind'), c.sprite ? 2 : c.patch ? 1 : 0);
       gl.uniform1f(this.loc(p, 'uFlip'), c.flip ? -1 : 1);
       gl.uniform1f(this.loc(p, 'uAlpha'), c.alpha);
       gl.uniform3fv(this.loc(p, 'uBark'), c.bark);

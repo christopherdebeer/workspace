@@ -59,6 +59,17 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(html);
     }
+    // (another experiment's page, as the cell redirects /<id> to it: for experiments that embed others)
+    const other = /^\/([a-z]+)$/.exec(u.pathname);
+    if (other && existsSync(join(CELL, `static/${other[1]}.html`))) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(readFileSync(join(CELL, `static/${other[1]}.html`), 'utf8').replace('{{app}}', '/app.js').replace(/\{\{assets\}\}/g, `/assets-${other[1]}/`));
+    }
+    if (u.pathname.startsWith('/assets-')) {
+      const m = /^\/assets-([a-z]+)\/(.*)$/.exec(u.pathname);
+      const f = m && join(CELL, `static/${m[1]}`, m[2]);
+      if (f && existsSync(f)) { res.writeHead(200, { 'content-type': TYPES[f.split('.').pop()] ?? 'application/octet-stream' }); return res.end(readFileSync(f)); }
+    }
     res.writeHead(404);
     res.end();
   });
