@@ -41,6 +41,9 @@ const COURT = { [JACK]: ['THE WAYFINDER', 'REROUTE', 'Walk one step your way.'],
 // ─── the junctions, engraved as seals (the lab's Seals experiment) ────────────────────────────
 /** the deck's seed: every junction's seal comes from it and the card's number */
 const SEAL_SEED = 1941;
+/** `?cards=scene`: the junctions with the suit's landscape across the lower third, the seal raised
+ *  above it, and no words but the title (an exploration; the default keeps the captions) */
+const SCENE = qs.get('cards') === 'scene';
 const ROMAN = ['', 'A', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 const sealCache = new Map<string, string>();
 /** a junction as a seal: the whole card (print, box, insert), or for the table and the hand the
@@ -59,7 +62,9 @@ function sealJunction(card: Card, rotation: number, square: boolean): string {
       inner = `<rect x="-60" y="-60" width="120" height="120" rx="6" fill="${st.paper}"/>${sealSvg(drawSeal(st, faces, seed, { rank: card.rank }), st, id)}`;
     } else {
       const title = `${ROMAN[card.rank]} · ${card.rank === ACE ? 'WILD' : SHAPES[card.rank].name}`;
-      inner = sealCardOf({ style, seed: SEAL_SEED, faces, title, id, rank: card.rank, index: { rank: RANK[card.rank], glyph: SUITS[card.suit], color: COL[card.suit] } }).svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
+      // (the scene: one of the suit's six landscape strips, by rank, as the old dials had it)
+      const scene = SCENE && ASSETS ? { svg: `<image href="${ASSETS}${SUIT_KEY[card.suit]}-vig${(card.rank + 4) % 6}.png" x="7.5" y="61" width="48" height="17" preserveAspectRatio="xMidYMax meet"/>`, zone: { k: 'box' as const, c: [31.5, 71.5] as [number, number], hw: 23.5, hh: 6.5, rx: 2 } } : undefined;
+      inner = sealCardOf({ style, seed: SEAL_SEED, faces, title, id, rank: card.rank, scene, index: { rank: RANK[card.rank], glyph: SUITS[card.suit], color: COL[card.suit] } }).svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
     }
     sealCache.set(key, inner);
   }

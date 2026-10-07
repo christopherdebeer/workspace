@@ -431,17 +431,19 @@ export interface CardResult { svg: string; seal: Seal | null; border: FillResult
 export const cardSeed = (seed: number, rank?: number) => (rank ? hash(seed, 0x7a11, rank) : seed);
 export function card(o: { style: Style; seed: number; faces: number[] | null; title: string; id: string; mode?: FacesMode; overlay?: boolean; stats?: boolean; rank?: number; index?: { rank: string; glyph: string; color: string };
   /** a picture in the seal's place (a court card's painting), with the zone it needs kept clear, and its caption */
-  body?: { svg: string; zone: Shape }; caption?: { line: string; sum: string } }): CardResult {
+  body?: { svg: string; zone: Shape }; caption?: { line: string; sum: string };
+  /** a scene across the lower third, the seal raised above it, and no words but the title */
+  scene?: { svg: string; zone: Shape } }): CardResult {
   const seed = cardSeed(o.seed, o.rank);
   const s = sample(o.style, seed);
   const mode = o.mode ?? 'shown';
   const seal = o.body ? null : draw(s, o.faces, seed, { show: mode === 'shown', zones: mode !== 'hidden', stats: o.stats, rank: o.rank });
   const bordered = s.border !== 'none';
   // (a denser border takes more of the card: the seal gives it room)
-  const scale = bordered ? 0.43 - 0.08 * Math.max(0, Math.min(1, s.bDensity)) : 0.47, cy = bordered ? 41.2 : 40.6;
+  const scale = (bordered ? 0.43 - 0.08 * Math.max(0, Math.min(1, s.bDensity)) : 0.47) * (o.scene ? 0.97 : 1), cy = o.scene ? 37.6 : bordered ? 41.2 : 40.6;
   const fY = bordered ? 73.4 : 74.8, sY = bordered ? 78.4 : 80.4, tY = 10.2;
   const line = o.caption ? o.caption.line : o.faces ? faceLine(o.faces) : '', sum = o.caption ? o.caption.sum : o.faces ? summary(o.faces) : '';
-  const words = !!o.caption || ((mode === 'shown' || mode === 'zones') && !!o.faces);
+  const words = !o.scene && (!!o.caption || ((mode === 'shown' || mode === 'zones') && !!o.faces));
   // the border: rules, crest and corners, rails and chains — sparse to dense — clear of the
   // seal and of every line of text (each zone sized to its words)
   let border: FillResult | null = null, borderSvg = '', borderOverlay = '';
@@ -449,6 +451,7 @@ export function card(o: { style: Style; seed: number; faces: number[] | null; ti
     const zm = s.zoneMargin * 0.45;
     const reach = (R + Math.max(4, s.nodeOut + 2.4 + s.nodeDots * 2.5 + 1)) * scale;
     const zones: Shape[] = [o.body ? { k: 'grow', s: o.body.zone, by: zm } : { k: 'circle', c: [31.5, cy], r: reach + zm }, { k: 'grow', s: textZone(31.5, tY, o.title, 3.4, 0.55), by: zm }];
+    if (o.scene) zones.push({ k: 'grow', s: o.scene.zone, by: zm });
     if (words) zones.push({ k: 'grow', s: textZone(31.5, fY, line, 3.7), by: zm }, { k: 'grow', s: o.index ? textZone(31.5, sY, sum, 1.95, 0.12) : textZone(31.5, sY, sum, 2.15, 0.3), by: zm });
     // (a playing card's indices, top-left and turned bottom-right)
     if (o.index) for (const [x, y] of [[6.9, 13.4], [63 - 6.9, 88 - 13.4]]) zones.push({ k: 'box', c: [x, y], hw: 3.2, hh: 6.2, rx: 1.5 });
@@ -466,6 +469,7 @@ export function card(o: { style: Style; seed: number; faces: number[] | null; ti
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 88"><rect x=".5" y=".5" width="62" height="87" rx="3.4" fill="${s.paper}" stroke="#8d8270" stroke-width=".5"/>${bordered ? '' : `<rect x="2.4" y="2.4" width="58.2" height="83.2" rx="2.2" fill="none" stroke="${s.ink}" stroke-width=".22" opacity=".7"/>`}`
     + borderSvg
     + `<text x="31.5" y="${tY}" text-anchor="middle" font-size="3.4" font-family="${SERIF}" letter-spacing=".55" fill="${s.ink}">${o.title}</text>`
+    + (o.scene ? o.scene.svg : '')
     + (seal ? `<g transform="translate(31.5 ${cy}) scale(${scale})">${sealSvg(seal, s, o.id)}${sealOverlay}</g>` : o.body!.svg)
     + (words && (mode === 'shown' || o.caption) ? `<text x="31.5" y="${fY}" text-anchor="middle" font-size="3.7" font-family="${SERIF}" fill="${s.ink}" xml:space="preserve">${line}</text>${bordered ? '' : `<path d="M7 ${sY - 0.8}H${f(31.5 - rule)}M${f(31.5 + rule)} ${sY - 0.8}H56" stroke="${s.ink}" stroke-width=".22"/><circle cx="7" cy="${sY - 0.8}" r=".45" fill="${s.ink}"/><circle cx="56" cy="${sY - 0.8}" r=".45" fill="${s.ink}"/>`}<text x="31.5" y="${sY}" text-anchor="middle" font-size="${o.index ? 1.95 : 2.15}" font-family="${SERIF}" letter-spacing="${o.index ? 0.12 : 0.3}" fill="${s.ink}">${sum}</text>` : '')
     + (o.index ? [false, true].map((flip) => `<g${flip ? ' transform="rotate(180 31.5 44)"' : ''}><text x="6.9" y="12.4" text-anchor="middle" font-size="${o.index!.rank.length > 1 ? 5.2 : 6.2}" font-family="${SERIF}" font-weight="bold" fill="${o.index!.color}">${o.index!.rank}</text><text x="6.9" y="18" text-anchor="middle" font-size="5" fill="${o.index!.color}">${o.index!.glyph}</text></g>`).join('') : '')

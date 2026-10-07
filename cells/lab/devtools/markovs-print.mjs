@@ -9,7 +9,7 @@ await withWood(async (wood) => {
   const page = await wood.browser.newPage({ viewport: { width: 900, height: 1200 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(wood.base + '?players=4&bots=0111&seed=1941');
+  await page.goto(wood.base + '?players=4&bots=0111&seed=1941' + (process.env.CARDS ? `&cards=${process.env.CARDS}` : ''));
   await page.waitForFunction(() => window.__markovs);
   // the playtest pages: the cell's public numbers, fetched here (the page tries too, but a dev
   // origin may not be allowed to) and handed to the page
