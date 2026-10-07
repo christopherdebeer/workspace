@@ -65,7 +65,32 @@ function sealJunction(card: Card, rotation: number, square: boolean): string {
   }
   return square ? `<svg viewBox="-60 -60 120 120" aria-hidden="true">${inner}</svg>` : `<svg viewBox="0 0 63 88" aria-hidden="true">${inner}</svg>`;
 }
+/** the court, the commissions and the Jokers in the junctions' dress: the same border, paper,
+ *  indices, title and caption, the painting where the seal would be */
+function courtCard(card: Card, rotation: number, square: boolean): string {
+  const jk = card.rank === JOKER, two = card.rank === COMMISSION;
+  const key = `${card.suit}.${card.rank}.court`;
+  let inner = sealCache.get(key);
+  if (!inner) {
+    const jsuit = jk ? (card.suit === 0 ? 0 : 3) : card.suit, sk = SUIT_KEY[jsuit];
+    const [name, sub, note] = card.rank === KING ? [PLACES[card.suit].toUpperCase(), 'DESTINATION', 'Reach this suit to win.'] : two ? [PLACES[card.suit].toUpperCase(), 'COMMISSION', 'Your King. Your secret.'] : jk ? ['THE TRICKSTER', 'CHAOS', 'A random exit. No dice.'] : COURT[card.rank];
+    const title = `${jk ? '★' : two ? 'II' : RANK[card.rank]} · ${sub}`;
+    // (the painting floats on the paper; the suit's seal at its foot, as before)
+    const art = `<image href="${ASSETS}${jk ? 'JOKER' : RANK[card.rank]}${card.suit}.webp" x="8" y="13.6" width="47" height="52" preserveAspectRatio="xMidYMax meet"/>${jk ? '' : `<image href="${ASSETS}${sk}-seal.png" x="26" y="57.4" width="11" height="11"/>`}`;
+    inner = sealCardOf({
+      style: SUIT_STYLES[jsuit], seed: SEAL_SEED, faces: null, title, id: `ct${card.suit}${card.rank}`, rank: jk ? 13 + card.suit : card.rank,
+      index: { rank: jk ? '★' : RANK[card.rank], glyph: jk ? '' : SUITS[card.suit], color: jk ? '#24231f' : COL[card.suit] },
+      body: { svg: art, zone: { k: 'box', c: [31.5, 41], hw: 23.5, hh: 27.6, rx: 3 } },
+      caption: { line: name, sum: note },
+    }).svg.replace(/^<svg[^>]*>|<\/svg>$/g, '');
+    sealCache.set(key, inner);
+  }
+  return square
+    ? `<svg viewBox="-12.5 0 88 88" aria-hidden="true"><g transform="rotate(${rotation * 90} 31.5 44)">${inner}</g></svg>`
+    : `<svg viewBox="0 0 63 88" aria-hidden="true"><g transform="rotate(${rotation * 90} 31.5 44)">${inner}</g></svg>`;
+}
 export function cardSvg(card: Card, rotation = 0, id = 'c', square = false): string {
+  if (ASSETS && (card.rank === JACK || card.rank === QUEEN || card.rank === KING || card.rank === JOKER || card.rank === COMMISSION)) return courtCard(card, rotation, square);
   // (the junctions — the Aces and the numbers; the Twos only in the plain deck, where they have no
   // painting as commissions — are seals)
   if (card.rank >= ACE && card.rank <= 10 && !(ASSETS && card.rank === COMMISSION)) return sealJunction(card, rotation, square);
