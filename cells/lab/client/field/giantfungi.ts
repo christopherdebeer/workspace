@@ -6,7 +6,7 @@
  * mesh — a tapering, leaning stalk with a swollen foot, a cap turned from its form's profile (an
  * inkcap's pleated bell inking at the rim, a mottlegill's cone, a fieldcap's flared dome), and
  * under the open caps their gills, every one a blade — drawn into Mistwood's scene in its light,
- * fog and mist, writing its depth. The gills glow with the anomaly's light.
+ * fog and mist, writing its depth.
  */
 import { hash, seeded } from '../kit/rng';
 import { WOOD_GLSL, type WoodEnv } from '../mistwood/render';
@@ -47,7 +47,6 @@ out vec4 o;
 uniform float uDensity;
 ${WOOD_GLSL()}
 uniform float uPleats, uInk, uSlime, uForm;
-uniform vec3 uLight;
 void main() {
   if (vWorld.y < landH(vWorld.xz) - .04) discard;
   vec3 eye = vec3(uCam.x, uCam.z, uCam.y);
@@ -60,7 +59,6 @@ void main() {
   // detail at every scale it is seen at: a metre's mottling, a hand's grain, a finger's
   vec3 q = vWorld * vec3(1., .6, 1.);
   float grain = vnoise(q.xz * 1.3 + q.y) * .5 + vnoise(q.xz * 7. + q.y * 5.) * .3 + vnoise(q.xz * 31. + q.y * 23.) * .2;
-  vec3 glow = vec3(0.);
   if (part < .5) {
     // the stalk: fibrous, streaked along its length, paler up it
     float fib = vnoise(vec2(vUV.y * 40., vWorld.y * .8)) * .6 + vnoise(vec2(vUV.y * 160., vWorld.y * 3.)) * .4;
@@ -82,23 +80,18 @@ void main() {
       base = mix(base * .8, base, smoothstep(0., .5, vUV.x));
     }
     base *= .82 + .3 * grain;
-    // where the gills show through at the rim, and the underside, its light
-    glow = uLight * smoothstep(.8, 1., vUV.x) * .45;
   } else {
-    // the gills: blades from the stalk to the rim, dark with spores, glowing
+    // the gills: blades from the stalk to the rim, dark with spores
     float blade = .5 + .5 * cos(vUV.y * 240.);
     base *= .6 + .5 * blade;
-    glow = uLight * 1.6 * (.35 + .65 * smoothstep(.2, .9, vUV.x)) * (.55 + .45 * sin(uT * .5 + vUV.y * 3. + vWorld.y));
   }
-  // lit as the wood is: wrapped key light, the fog's light from where it faces, a little through,
-  // and the anomaly's own light
+  // lit as the wood is: wrapped key light, the fog's light from where it faces, a little through
   float wrap = max(dot(N, L) * .6 + .4, 0.);
   vec3 amb = fogDir(N) * .5;
   float thin = part > .5 && part < 1.5 ? .25 * max(dot(-N, L), 0.) : 0.;
-  vec3 col = base * (uIllum * (.3 + .75 * wrap + thin) + amb * .55 + anomLight(vWorld) * .45);
+  vec3 col = base * (uIllum * (.3 + .75 * wrap + thin) + amb * .55);
   vec3 H = normalize(L + V);
   if (part > .5 && part < 1.5) col += uIllum * uSlime * .9 * pow(max(dot(N, H), 0.), 60.);
-  col += glow;
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
   o = vec4(mix(col, fogToward(vWorld), fog), 1.);
@@ -182,7 +175,7 @@ function mushroom(b: Builder, g: Genome, at: V3, H: number, r: () => number, fin
         const d0 = depth * Math.sin(Math.PI * Math.pow(s0, 0.7)), d1 = depth * Math.sin(Math.PI * Math.pow(s1, 0.7));
         quad(v(P(s0, 0), nrm, gc, 2, s0, a), v(P(s1, 0), nrm, gc, 2, s1, a), v(P(s0, d0), nrm, gc, 2, s0, a), v(P(s1, d1), nrm, gc, 2, s1, a));
       }
-      // (and the underside between them: dark, a glow coming through)
+      // (and the underside between them: dark)
     }
     const under = (i: number) => Array.from({ length: AROUND + 1 }, (_, j) => {
       const a = (j / AROUND) * Math.PI * 2, s = i / (giant ? 4 : 1), rr = sr * 1.4 + (rimR * 0.97 - sr * 1.4) * s;
@@ -236,7 +229,7 @@ const meshes = new WeakMap<WebGL2RenderingContext, Map<number, { mesh: Mesh; a: 
 /** what is solid of each anomaly built so far (by seed): discs in the wood (x, z, r) */
 export const fungusSolids = new Map<number, Array<[number, number, number]>>();
 /** draw a fungus anomaly into the wood (a render.ts CustomDraw, set at its heart) */
-export function drawFungusAnomaly(env: WoodEnv, f: Find, light: V3, ground: (x: number, z: number) => number) {
+export function drawFungusAnomaly(env: WoodEnv, f: Find, ground: (x: number, z: number) => number) {
   const { gl } = env;
   let p = progs.get(gl);
   if (!p) { p = program(gl, VS, FS()); progs.set(gl, p); }
@@ -262,7 +255,6 @@ export function drawFungusAnomaly(env: WoodEnv, f: Find, light: V3, ground: (x: 
   gl.uniform1f(u('uPleats'), Math.min(40, g.pleats));
   gl.uniform1f(u('uInk'), g.ink);
   gl.uniform1f(u('uSlime'), g.slime);
-  gl.uniform3fv(u('uLight'), light);
   gl.bindVertexArray(m.mesh.vao);
   gl.depthMask(true);
   gl.drawElements(gl.TRIANGLES, m.mesh.count, gl.UNSIGNED_INT, 0);

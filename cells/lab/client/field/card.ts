@@ -30,8 +30,8 @@ export function notes(f: Find | Recorded): string {
   const reach = 'reach' in f && f.reach ? f.reach : 36;
   if (f.kind === 'crystal') {
     const sp = pick(f.seed);
-    return `${sp.name}, broken up out of the ground: ${sp.kind} grown past any size it has a right to. The litter crusted pale for ${reach} m about it, the ground split, the fissures lit; the trees near it gone to stone. Its light is in the mist a long way off.`;
+    return `${sp.name}, broken up out of the ground: ${sp.kind} grown past any size it has a right to. The litter crusted pale for ${reach} m about it, the ground split; the trees near it gone to stone. Through it, the wood behind, bent; in it, the wood about.`;
   }
-  return `${f.name}, grown gigantic: caps over the canopy, a ring of lesser ones ${Math.round(reach * 0.8)} m out where the grass runs lush. The ground between white with threads; the trees dark and soft, crusted at the foot. Its gills glow.`;
+  return `${f.name}, grown gigantic: caps over the canopy, a ring of lesser ones ${Math.round(reach * 0.8)} m out where the grass runs lush. The ground between white with threads; the trees dark and soft, crusted at the foot.`;
 }
 

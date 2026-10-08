@@ -39,7 +39,7 @@
     footer button:focus-visible, footer a:focus-visible { outline: none; color: var(--lit); }
 
     #count { position: fixed; top: max(16px, env(safe-area-inset-top)); left: 26px; }
-    /* the compass: a seal in light that turns as you do; a mark on its rim toward each light in the fog */
+    /* the compass: a seal in light that turns as you do; a mark on its rim toward each anomaly near */
     #compass { position: fixed; top: max(12px, env(safe-area-inset-top)); right: 14px; width: 78px; height: 78px; pointer-events: none; }
     #compass .dial { position: relative; width: 100%; height: 100%; mix-blend-mode: screen; filter: var(--glow-line); }
     #compass svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
@@ -87,7 +87,7 @@
   <button id="prompt" class="lit" type="button"></button>
   <div id="sheet" hidden role="dialog" aria-modal="true" aria-label="A find"></div>
   <div id="title">FIELD JOURNAL</div>
-  <div id="hint">touch the ground to walk · the sky to look · follow a light in the mist</div>
+  <div id="hint">touch the ground to walk · the sky to look · the compass marks what has broken through</div>
   <footer>
     <button id="seed" type="button" aria-label="This wood's name. Touch for another wood."></button>
     <a id="readme" href="{{readme}}">about</a>

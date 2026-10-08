@@ -3,21 +3,19 @@
  *
  * The wood is Mistwood, itself (its module runs here, on this page's canvas). In it, now and then,
  * an anomaly: a crystal broken up out of the ground tens of metres high, or fungi grown gigantic —
- * the Crystals experiment's specimen, the Hat-throwers' species, from the find's seed — changing
- * the wood about it: its light in the mist (seen far off, before anything else), the ground
- * crusted and fissured or white with threads, the trees petrified or rotting, cleared in its
- * heart. Its seal is inscribed in light on the ground about it and stands in the air at its edge,
- * one by the path: in the wood, among the trees, in the fog, not seen from far off.
+ * the Crystals experiment's specimen, the Hat-throwers' species, from the find's seed — in the same
+ * wood, the same light and fog, changing what is about it: the ground crusted and fissured or
+ * white with threads, the trees petrified or rotting, cleared in its heart. Its seal is inscribed
+ * in light on the ground about it and stands in the air at its edge, one by the path: in the wood,
+ * among the trees, in the fog, not seen from far off.
  *
- * Over it, drawn in the same light: the compass (a seal that turns as you do, a mark on its rim
- * toward each anomaly whose light is in the fog), the journal, and a find's card.
+ * Over it, drawn in the seals' light: the compass (a seal that turns as you do, a mark on its rim
+ * toward each anomaly within a quarter-kilometre), the journal, and a find's card.
  *
  * Query: Mistwood's (seed, x, y, heading, hour …) · preview (the lab's index: the wood, the compass).
  */
 import './hooks';
-import { hash } from '../kit/rng';
 import { SUIT_STYLES } from '../seals/styles';
-import { pick } from '../crystals/mineral';
 import { anomalies, customs, obstacle } from '../mistwood/main';
 import type { Anomaly, WoodEnv } from '../mistwood/render';
 import { findsNear, gateOf, project, type Find, type View } from './finds';
@@ -26,8 +24,6 @@ import { cardFor, notes } from './card';
 import { crystalSolids, drawCrystalAnomaly, prepareCrystal, takeFrame } from './giantcrystal';
 import { drawFungusAnomaly, fungusSolids, prepareFungus } from './giantfungi';
 import { drawStanding, drawWard, sealArt, STAND, WARD } from './woodseal';
-import { drawMotes } from './motes';
-import type { V3 } from './mesh';
 
 type MistView = View & { seed: number; density: number; ground: (x: number, z: number) => number };
 const qs = new URLSearchParams(location.search);
@@ -36,24 +32,12 @@ const $ = (id: string) => document.getElementById(id)!;
 const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const view = () => (window as unknown as { __mistwoodView?: MistView }).__mistwoodView;
 
-/** how far an anomaly's light reaches through the fog (m: set into the wood within this), how far
- *  its body is drawn, and how near its seal at the path must be to open it */
-const LIGHT = 240, BODY = 110, OPEN = 11;
+/** how far off an anomaly is sensed (m: the compass marks it, and it is set into the wood), how
+ *  far its body is drawn, and how near its seal at the path must be to open it */
+const SENSE = 240, BODY = 110, OPEN = 11;
 
-// ─── each anomaly: its light, its gate, its seals' places ────────────────────────────────────────
-/** its light: a crystal's its body colour, brightened; a fungus's a glow of its own */
-function lightOf(f: Find): V3 {
-  if (f.kind === 'crystal') {
-    const t = pick(f.seed).tint;
-    const m = Math.max(...t), l = (t[0] + t[1] + t[2]) / 3 / m;
-    // (more saturated than the body: the light is the colour; a clear one glows a cold white)
-    const c = t.map((v) => Math.min(1, Math.max(0.08, l + (v / m - l) * 1.4))) as V3;
-    return (l > 0.95 ? [0.82, 0.9, 1] : c).map((v) => v * 0.36) as V3;
-  }
-  const hues: V3[] = [[0.42, 1, 0.55], [0.38, 0.88, 1], [0.72, 1, 0.38], [1, 0.72, 0.36]];
-  return hues[hash(f.seed, 0x11f) % hues.length].map((v) => v * 0.36) as V3;
-}
-interface Place { f: Find; light: V3; gate: { x: number; z: number; face: [number, number] }; stands: Array<{ x: number; z: number; face: [number, number] }> }
+// ─── each anomaly: its gate, its seals' places ───────────────────────────────────────────────────
+interface Place { f: Find; gate: { x: number; z: number; face: [number, number] }; stands: Array<{ x: number; z: number; face: [number, number] }> }
 const places = new Map<string, Place>();
 function placeOf(wood: number, f: Find): Place {
   const key = `${wood}:${f.id}`;
@@ -68,7 +52,7 @@ function placeOf(wood: number, f: Find): Place {
   // and three more about the ward's rim, facing out
   const a0 = Math.atan2(-g.to[0], -g.to[1]);
   const stands = [gate, ...[1, 2, 3].map((k) => { const a = a0 + (k * Math.PI) / 2; const face: [number, number] = [Math.sin(a), Math.cos(a)]; return { x: f.x + face[0] * rw, z: f.z + face[1] * rw, face }; })];
-  p = { f, light: lightOf(f), gate, stands };
+  p = { f, gate, stands };
   places.set(key, p);
   return p;
 }
@@ -81,15 +65,14 @@ const guard = (key: string, draw: (env: WoodEnv) => void) => (env: WoodEnv) => {
   try { draw(env); } catch (e) { console.error('field: did not draw', key, String(e)); customs.delete(key); failed.add(key); env.gl.depthMask(false); }
 };
 function inTheWood(v: MistView): Place[] {
-  const near = preview ? [] : findsNear(v.seed, v.x, v.z, LIGHT);
+  const near = preview ? [] : findsNear(v.seed, v.x, v.z, SENSE);
   const keep = new Set<string>();
   const here: Place[] = [];
   anomalies.length = 0;
   for (const f of near.sort((a, b) => Math.hypot(a.x - v.x, a.z - v.z) - Math.hypot(b.x - v.x, b.z - v.z))) {
     const p = placeOf(v.seed, f);
     here.push(p);
-    const g0 = v.ground(f.x, f.z);
-    anomalies.push({ x: f.x, z: f.z, reach: f.reach, kind: f.kind, light: p.light, heart: g0 + (f.kind === 'crystal' ? 6 : 9) } satisfies Anomaly);
+    anomalies.push({ x: f.x, z: f.z, reach: f.reach, kind: f.kind } satisfies Anomaly);
     const dist = Math.hypot(f.x - v.x, f.z - v.z);
     // (its meshes built a while before they are wanted, between frames)
     const key = `${v.seed}:${f.id}`;
@@ -107,13 +90,12 @@ function inTheWood(v: MistView): Place[] {
     // (a crystal's cluster in its place among the trees, so the wood behind it is drawn when it
     // is, to be seen through it and in its faces; its shards, and a fungus, first)
     if (f.kind === 'crystal') {
-      add(`${base}:body`, { x: f.x, z: f.z, top: 20, range: BODY, draw: guard(`${base}:body`, (env) => drawCrystalAnomaly(env, f, p.light, ground, 'body')) });
-      add(`${base}:shards`, { x: f.x, z: f.z, top: 4, first: 2, range: BODY, draw: guard(`${base}:shards`, (env) => drawCrystalAnomaly(env, f, p.light, ground, 'shards')) });
+      add(`${base}:body`, { x: f.x, z: f.z, top: 20, range: BODY, draw: guard(`${base}:body`, (env) => drawCrystalAnomaly(env, f, ground, 'body')) });
+      add(`${base}:shards`, { x: f.x, z: f.z, top: 4, first: 2, range: BODY, draw: guard(`${base}:shards`, (env) => drawCrystalAnomaly(env, f, ground, 'shards')) });
       // (and the finished wood taken, for it to reflect next frame)
       add(`field:${v.seed}:frame`, { x: v.x, z: v.z, top: 0, last: true, range: 1e9, draw: guard(`field:${v.seed}:frame`, takeFrame) });
-    } else add(`${base}:body`, { x: f.x, z: f.z, top: 20, first: 2, range: BODY, draw: guard(`${base}:body`, (env) => drawFungusAnomaly(env, f, p.light, ground)) });
+    } else add(`${base}:body`, { x: f.x, z: f.z, top: 20, first: 2, range: BODY, draw: guard(`${base}:body`, (env) => drawFungusAnomaly(env, f, ground)) });
     add(`${base}:ward`, { x: f.x, z: f.z, top: 0.1, first: 1, range: f.reach + 30, draw: guard(`${base}:ward`, (env) => drawWard(env, f, ground)) });
-    add(`${base}:motes`, { x: f.x, z: f.z, top: 30, range: f.reach + 40, draw: guard(`${base}:motes`, (env) => drawMotes(env, f, f.kind, p.light, f.reach * 0.6, f.kind === 'crystal' ? 26 : 34)) });
     p.stands.forEach((s, i) => add(`${base}:stand${i}`, { x: s.x, z: s.z, top: STAND.at + STAND.size / 2, range: 32, draw: guard(`${base}:stand${i}`, (env) => drawStanding(env, f, s.x, s.z, s.face)) }));
   }
   for (const key of customs.keys()) if (key.startsWith('field:') && !keep.has(key)) customs.delete(key);
@@ -155,7 +137,7 @@ function open(f: Find | Entry, wood: number) {
   }
 }
 countEl.addEventListener('click', () => {
-  sheet.innerHTML = `<div class="journal"><h2>The journal</h2>${journal.length ? `<div class="grid">${[...journal].reverse().map((e, i) => `<button class="entry" data-i="${journal.length - 1 - i}" aria-label="${esc(e.name)}">${findSeal(e.kind, e.seed, 1)}<span>${esc(e.name)}</span></button>`).join('')}</div>` : '<p>Nothing yet. Walk; look for a light in the mist.</p>'}<div class="row"><button class="lit" id="close">close</button></div></div>`;
+  sheet.innerHTML = `<div class="journal"><h2>The journal</h2>${journal.length ? `<div class="grid">${[...journal].reverse().map((e, i) => `<button class="entry" data-i="${journal.length - 1 - i}" aria-label="${esc(e.name)}">${findSeal(e.kind, e.seed, 1)}<span>${esc(e.name)}</span></button>`).join('')}</div>` : '<p>Nothing yet. Walk; the compass marks what has broken through.</p>'}<div class="row"><button class="lit" id="close">close</button></div></div>`;
   sheet.hidden = false;
   $('close').addEventListener('click', closeSheet);
   sheet.querySelectorAll<HTMLButtonElement>('.entry').forEach((b) => b.addEventListener('click', () => { const e = journal[Number(b.dataset.i)]; open(e, e.wood); }));
@@ -176,12 +158,12 @@ function frame() {
   const here = inTheWood(v);
   // (for tests and pictures: what is near, where)
   (window as unknown as { __field: unknown }).__field = here.map((p) => ({ id: p.f.id, kind: p.f.kind, name: p.f.name, x: p.f.x, z: p.f.z, reach: p.f.reach, gate: p.gate }));
-  // the compass: a mark toward each light in the fog, nearer brighter (north up on the dial: it
-  // turns with you, so they do too)
+  // the compass: a mark toward each anomaly within its sense, nearer brighter (north up on the
+  // dial: it turns with you, so they do too)
   sense.innerHTML = here.map((p) => {
     const d = Math.hypot(p.f.x - v.x, p.f.z - v.z);
     const a = Math.atan2(p.f.x - v.x, p.f.z - v.z);
-    const op = Math.max(0.15, 1 - d / LIGHT);
+    const op = Math.max(0.15, 1 - d / SENSE);
     const x = Math.sin(a) * 54, y = -Math.cos(a) * 54, x2 = Math.sin(a) * 60, y2 = -Math.cos(a) * 60;
     return `<path d="M${x.toFixed(1)} ${y.toFixed(1)}L${x2.toFixed(1)} ${y2.toFixed(1)}" opacity="${op.toFixed(2)}"/><circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="1.6" opacity="${op.toFixed(2)}"/>`;
   }).join('');
