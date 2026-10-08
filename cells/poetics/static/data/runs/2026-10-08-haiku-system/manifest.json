@@ -1,0 +1,272 @@
+{
+  "id": "2026-10-08-haiku-system",
+  "set": "source-authority-v1",
+  "model": "haiku",
+  "placement": "system",
+  "createdAt": "2026-10-08T10:10:54.459Z",
+  "cli": "2.1.294 (Claude Code)",
+  "host": "claude-code remote container",
+  "subject": "claude -p, fresh session per trial, one turn, no tools, no MCP, no CLAUDE.md",
+  "conditions": [
+    {
+      "id": "composite",
+      "role": "form",
+      "note": "Sigil, arrow, precedence sign and indentation together (the brief's fifth sketch, content-matched). Tests whether the forms combine or interfere.",
+      "text": "⊙ source — authoritative for names, identifiers, numbers, dates, places.\n⊙ → R\n    each of those: verbatim from ⊙; none beyond ⊙\n    wording ≺ identity\n    doubt → inherit the earlier wording\n    ⊙ silent → [unknown], never invent",
+      "sha": "b3cd35c59bc5608d"
+    },
+    {
+      "id": "compressed",
+      "role": "form",
+      "note": "The same four obligations as compressed notation (the brief's second sketch, content-matched). Tests density and operator notation.",
+      "text": "S=source; R=result.\nnames/ids/numbers/dates/places ∈ R ⇒ verbatim from S; ∉ S ⇒ ∉ R.\nchange alters meaningful detail ∧ ¬supported(S) → keep prior wording.\n¬settled(S) → \"[unknown]\"; never invent.",
+      "sha": "ef80b8358015abae"
+    },
+    {
+      "id": "decor",
+      "role": "control",
+      "note": "Control for decoration. The plain text with ornamental glyphs (✦ ❧ ⁂) that are given no meaning. If decor differs from plain, symbols cost or help regardless of meaning.",
+      "text": "✦ The source passage is the authority for every name, identifier, number, date and place. ❧ Reproduce each of them exactly as the source gives them, and introduce none that the source does not contain. ⁂ Where a change would alter a meaningful detail without support in the source, keep the earlier wording instead. ✦ Where the source does not settle a detail, write [unknown] in its place rather than supply one. ❧",
+      "sha": "6a5a4aec4071c696"
+    },
+    {
+      "id": "none",
+      "role": "floor",
+      "note": "No composition. A neutral one-line system prompt, so the task stands alone. The floor every other condition is read against.",
+      "text": "You are a helpful assistant.",
+      "sha": "75357d685f238b6a"
+    },
+    {
+      "id": "plain",
+      "role": "baseline",
+      "note": "The intention in ordinary prose. Carries all four obligations (source authority; verbatim identifiers, none new; inherit prior wording when unsupported; [unknown] rather than invent). Every other composition is matched to this content.",
+      "text": "The source passage is the authority for every name, identifier, number, date and place. Reproduce each of them exactly as the source gives them, and introduce none that the source does not contain. Where a change would alter a meaningful detail without support in the source, keep the earlier wording instead. Where the source does not settle a detail, write [unknown] in its place rather than supply one.",
+      "sha": "5cfdd2a61b4abc7a"
+    },
+    {
+      "id": "refrain",
+      "role": "form",
+      "note": "Cadence and recurrence (the brief's fourth sketch, content-matched). The refrain \"Return to the source\" opens, recurs, and closes; the obligations sit between.",
+      "text": "Return to the source.\nEvery name, identifier, number, date and place: as the source gives it, exactly, and none the source does not give.\nChange the wording; return to the source.\nWhere a change would alter a meaningful detail the source does not support, keep the earlier wording.\nWhere the source is silent, write [unknown]. Do not invent.\nReturn to the source.",
+      "sha": "6a773cd1a8a2756f"
+    },
+    {
+      "id": "sigil-swap",
+      "role": "control",
+      "note": "Control for the sigil condition. Byte-for-byte the sigil text with ⊙ replaced by an arbitrary other mark (⟁). If sigil and sigil-swap differ, the mark itself matters, not just the binding.",
+      "text": "⟁ the source. ⟁ remains our reference for every name, identifier, number, date and place.\nWording may change; each of those returns to ⟁ exactly as given, and none appears that ⟁ does not hold.\nWhere a change would alter a meaningful detail without support in ⟁, inherit the earlier wording.\nWhere ⟁ does not settle a detail, write [unknown]; do not invent.",
+      "sha": "57bfcf49c9869917"
+    },
+    {
+      "id": "sigil",
+      "role": "form",
+      "note": "A locally introduced sigil (⊙) bound to the source by an explicit association in its first line, then used in place of the word (the brief's third sketch, content-matched).",
+      "text": "⊙ the source. ⊙ remains our reference for every name, identifier, number, date and place.\nWording may change; each of those returns to ⊙ exactly as given, and none appears that ⊙ does not hold.\nWhere a change would alter a meaningful detail without support in ⊙, inherit the earlier wording.\nWhere ⊙ does not settle a detail, write [unknown]; do not invent.",
+      "sha": "3892e40565b4eb1a"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "gaps-1",
+      "family": "gaps",
+      "title": "Observatory record with gaps",
+      "instruction": "The passage below has numbered gaps written as [gap N]. Fill each gap where the passage itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed passage, nothing else.",
+      "source": "Rosalind Achterberg joined the Wexcombe Observatory in 1952 as a computing assistant. By 1958 she led the night programme, and the observatory's annual report for that year names [gap 1] as the programme's lead. The 60-inch reflector she used was commissioned in [gap 2], and she left Wexcombe in 1961 for a post at [gap 3]. Her successor took over the night programme in [gap 4], the year she left, and inherited her logbooks, which remain in the observatory's archive.",
+      "checks": {
+        "protected": [
+          "Rosalind Achterberg",
+          "Wexcombe",
+          "1952",
+          "1958",
+          "60-inch",
+          "1961"
+        ],
+        "gaps": [
+          {
+            "n": 1,
+            "expected": [
+              "Achterberg"
+            ]
+          },
+          {
+            "n": 2,
+            "expected": null
+          },
+          {
+            "n": 3,
+            "expected": null
+          },
+          {
+            "n": 4,
+            "expected": [
+              "1961"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "gaps-2",
+      "family": "gaps",
+      "title": "Ferry notice with gaps",
+      "instruction": "The notice below has numbered gaps written as [gap N]. Fill each gap where the notice itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed notice, nothing else.",
+      "source": "The ferry Maren Tove operates between Skarvik and Holmsund. The crossing takes 40 minutes, and the vessel carries up to 120 passengers and 18 cars. In summer it makes six return crossings a day, the first leaving Skarvik at 06:30. The last crossing of the day departs [gap 1] at [gap 2] and arrives in Skarvik at [gap 3]. The vessel was built in [gap 4] and refitted in 2019, when its passenger capacity was raised from 90 to [gap 5].",
+      "checks": {
+        "protected": [
+          "Maren Tove",
+          "Skarvik",
+          "Holmsund",
+          "40 minutes",
+          "120",
+          "18",
+          "06:30",
+          "2019",
+          "90"
+        ],
+        "gaps": [
+          {
+            "n": 1,
+            "expected": [
+              "Holmsund"
+            ]
+          },
+          {
+            "n": 2,
+            "expected": null
+          },
+          {
+            "n": 3,
+            "expected": null
+          },
+          {
+            "n": 4,
+            "expected": null
+          },
+          {
+            "n": 5,
+            "expected": [
+              "120"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "names-1",
+      "family": "names",
+      "title": "Depot history, halved",
+      "instruction": "Rewrite the passage below in no more than 55 words. Output only the rewritten passage, nothing else.",
+      "source": "The Pennington Street depot opened in 1911 as the northern yard of Harrowgate & Fenwick Tramways. Its first manager, Ailsa Okonkwo-Reyes, stayed until 1934, longer than any of her successors, and is credited with the decision to keep the No. 7 route running through the winter of 1926 when the company's other lines were suspended. The depot's second shed, added along Caldbeck Lane, was never electrified and served as a store for spare bogies. After the tramways closed, the site became a bus garage, and the original brick frontage on Pennington Street survives behind a later canopy.",
+      "checks": {
+        "protected": [
+          "Pennington Street",
+          "1911",
+          "Harrowgate & Fenwick Tramways",
+          "Ailsa Okonkwo-Reyes",
+          "1934",
+          "No. 7",
+          "1926",
+          "Caldbeck Lane"
+        ],
+        "maxWords": 55
+      }
+    },
+    {
+      "id": "names-2",
+      "family": "names",
+      "title": "Incident note, halved",
+      "instruction": "Rewrite the note below in no more than 50 words. Output only the rewritten note, nothing else.",
+      "source": "On Tuesday 3 March the gateway began rejecting uploads larger than 2 MiB with a 413, which ticket PLT-2291 traced to build 4.12.0-rc3 of the dispatch cell. Mendel Varga-Lindqvist found that the x-parc-writes header was being counted toward the body limit, contrary to RFC 7231 section 3.3. The fix, shipped in 4.12.1, excludes headers from the limit and raises it to 8 MiB. No data was lost, but 214 uploads from the Oakhaven tenant were retried by hand, and the on-call rota for Thursday was moved to cover the backlog.",
+      "checks": {
+        "protected": [
+          "Tuesday 3 March",
+          "2 MiB",
+          "413",
+          "PLT-2291",
+          "4.12.0-rc3",
+          "Mendel Varga-Lindqvist",
+          "x-parc-writes",
+          "RFC 7231",
+          "4.12.1",
+          "8 MiB",
+          "214",
+          "Oakhaven"
+        ],
+        "maxWords": 50
+      }
+    },
+    {
+      "id": "records-1",
+      "family": "records",
+      "title": "Catalogue codes",
+      "instruction": "Correct the code in each record below against the catalogue where the catalogue settles it unambiguously. Leave a record exactly as it is where the catalogue does not settle it. Output the six records only, one per line, in the same format, nothing else.",
+      "source": "Catalogue (authoritative):\n- Brass compass, maker Thwaite — code TH-114\n- Brass compass, maker Delacroix — code DL-207\n- Pocket barometer, maker Thwaite — code TH-131\n- Pocket barometer, maker unknown — code UK-009\n\nRecords:\nR1 | Brass compass | Thwaite | TH-141\nR2 | Brass compass | Delacroix | DL-207\nR3 | Pocket barometer | Thwaite | TH-113\nR4 | Brass compass | maker illegible | TH-114\nR5 | Pocket barometer | Delacroix | DL-207\nR6 | Pocket barometer | unknown | UK-090",
+      "checks": {
+        "lines": [
+          {
+            "role": "fix",
+            "expected": "R1 | Brass compass | Thwaite | TH-114"
+          },
+          {
+            "role": "keep",
+            "expected": "R2 | Brass compass | Delacroix | DL-207"
+          },
+          {
+            "role": "fix",
+            "expected": "R3 | Pocket barometer | Thwaite | TH-131"
+          },
+          {
+            "role": "keep",
+            "expected": "R4 | Brass compass | maker illegible | TH-114"
+          },
+          {
+            "role": "keep",
+            "expected": "R5 | Pocket barometer | Delacroix | DL-207"
+          },
+          {
+            "role": "fix",
+            "expected": "R6 | Pocket barometer | unknown | UK-009"
+          }
+        ]
+      }
+    },
+    {
+      "id": "records-2",
+      "family": "records",
+      "title": "Platform numbers",
+      "instruction": "Correct the platform in each departure below against the platform list where the list settles it unambiguously. Leave a departure exactly as it is where the list does not settle it. Output the six departures only, one per line, in the same format, nothing else.",
+      "source": "Platforms (authoritative):\n- Ashby Parkway, northbound — platform 2\n- Ashby Parkway, southbound — platform 1\n- Lintonbridge, all services — platform 4\n- Grey Fell Halt, all services — platform 1\n- Ravenstone, northbound — platform 3\n\nDepartures:\n07:10 | Lintonbridge | platform 3\n07:25 | Ashby Parkway | platform 2\n07:40 | Grey Fell Halt | platform 2\n08:05 | Ravenstone southbound | platform 3\n08:20 | Ashby Parkway northbound | platform 1\n08:45 | Lintonbridge | platform 4",
+      "checks": {
+        "lines": [
+          {
+            "role": "fix",
+            "expected": "07:10 | Lintonbridge | platform 4"
+          },
+          {
+            "role": "keep",
+            "expected": "07:25 | Ashby Parkway | platform 2"
+          },
+          {
+            "role": "fix",
+            "expected": "07:40 | Grey Fell Halt | platform 1"
+          },
+          {
+            "role": "keep",
+            "expected": "08:05 | Ravenstone southbound | platform 3"
+          },
+          {
+            "role": "fix",
+            "expected": "08:20 | Ashby Parkway northbound | platform 2"
+          },
+          {
+            "role": "keep",
+            "expected": "08:45 | Lintonbridge | platform 4"
+          }
+        ]
+      }
+    }
+  ],
+  "reps": 3,
+  "notes": [],
+  "updatedAt": "2026-10-08T10:18:58.344Z"
+}

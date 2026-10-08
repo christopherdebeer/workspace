@@ -1,0 +1,13 @@
+Round one, read on the day it ran. 144 trials, no errors, 19 cents. Scorer v2 (the v1 invention detector counted possessives and sentence-initial words; every trial was re-scored from its stored output).
+
+**What did not move.** Restraint was 1.00 in every condition: no subject filled an unsupported gap or corrected a record the reference left open. Invention was zero everywhere once the detector was fixed. The `records` family was perfect in all 36 trials, so it told us nothing this round; its two tasks are too easy for this model and need harder, held-out successors.
+
+**What moved was abstention.** With no composition at all, the subject filled every supported gap correctly (support 1.00). Every composition made it abstain more than it should: plain 0.42, refrain 0.58, sigil / sigil-swap / decor / composite 0.83, compressed 0.92. The intention includes "where the source does not settle a detail, write [unknown]", and the prose statement of it was taken as a licence to leave settled details unknown too. This is the brief's "excessive fallback" failure, and the floor beat the baseline on it (plain − none, gaps: −0.20).
+
+**The two clear contrasts are both against plain, and one is a control.** compressed − plain +0.07 [+0.01, +0.14] and decor − plain +0.06 [+0.00, +0.13]. Decoration is the plain text with meaningless glyphs. If the same words with ✦ ❧ ⁂ between them beat the words alone, what helped was not meaning carried by symbols. sigil − sigil-swap is −0.01 [−0.06, +0.03]: the particular mark did not matter. The honest reading is that, on this model, the prose form of the abstain clause did the damage and anything that broke the prose up softened it. Whether that is a real effect of form or two tasks' worth of noise is exactly what a round with more tasks would settle; at n=18 per condition and sd ≈ 0.1 these intervals barely clear zero.
+
+**One oddity.** The floor and plain both broke the word limit in 2 of 6 `names` trials (68–70 words against 50–55); the symbol-bearing forms did not. Not a pre-specified contrast, not explained, noted for round two.
+
+**Cost of form.** Compositions add about 100 input tokens over the floor. Output tokens were higher under every composition (1,800–2,300 vs 1,480 for the floor), so the subject worked longer when given a composition, in any form.
+
+**Round two, from this.** (1) Six more tasks per family, held out, with `records` made harder, so a contrast rests on more than two sources. (2) A `plain-minus-abstain` condition, to test the post-hoc reading that the abstain clause drives over-abstention. (3) `--placement user`. (4) The same round on a second model family before anything here is called a finding.

@@ -1,0 +1,38 @@
+{
+ "generatedAt": "2026-10-08T10:20:30.959Z",
+ "runs": [
+  {
+   "id": "2026-10-08-haiku-system",
+   "set": "source-authority-v1",
+   "model": "haiku",
+   "models": [
+    "claude-haiku-5-5"
+   ],
+   "placement": "system",
+   "createdAt": "2026-10-08T10:10:54.459Z",
+   "n": 144,
+   "errors": 0,
+   "costUsd": 0.1879,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "compressed",
+    "mean": 0.974
+   },
+   "floor": 0.951,
+   "plain": 0.901,
+   "clearContrasts": [
+    "decor−plain +0.064",
+    "compressed−plain +0.072"
+   ]
+  }
+ ]
+}

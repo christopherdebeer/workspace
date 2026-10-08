@@ -1,0 +1,17 @@
+{
+  "id": "records-2",
+  "family": "records",
+  "title": "Platform numbers",
+  "instruction": "Correct the platform in each departure below against the platform list where the list settles it unambiguously. Leave a departure exactly as it is where the list does not settle it. Output the six departures only, one per line, in the same format, nothing else.",
+  "source": "Platforms (authoritative):\n- Ashby Parkway, northbound — platform 2\n- Ashby Parkway, southbound — platform 1\n- Lintonbridge, all services — platform 4\n- Grey Fell Halt, all services — platform 1\n- Ravenstone, northbound — platform 3\n\nDepartures:\n07:10 | Lintonbridge | platform 3\n07:25 | Ashby Parkway | platform 2\n07:40 | Grey Fell Halt | platform 2\n08:05 | Ravenstone southbound | platform 3\n08:20 | Ashby Parkway northbound | platform 1\n08:45 | Lintonbridge | platform 4",
+  "checks": {
+    "lines": [
+      { "role": "fix", "expected": "07:10 | Lintonbridge | platform 4" },
+      { "role": "keep", "expected": "07:25 | Ashby Parkway | platform 2" },
+      { "role": "fix", "expected": "07:40 | Grey Fell Halt | platform 1" },
+      { "role": "keep", "expected": "08:05 | Ravenstone southbound | platform 3" },
+      { "role": "fix", "expected": "08:20 | Ashby Parkway northbound | platform 2" },
+      { "role": "keep", "expected": "08:45 | Lintonbridge | platform 4" }
+    ]
+  }
+}
