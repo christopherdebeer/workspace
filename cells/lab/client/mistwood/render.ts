@@ -1672,6 +1672,7 @@ in vec3 aP;
 in vec3 aN;
 in vec3 aC;
 in vec3 aB; // two bones, and the second's weight
+in float aD; // how far the coat may be dappled here
 uniform mat4 uBones[${BONES}];
 uniform vec2 uRes;
 uniform float uF, uHz;
@@ -1680,11 +1681,15 @@ out vec3 vWorld;
 out vec3 vN;
 out vec3 vC;
 out float vDist;
+out vec3 vRest;
+out float vD;
 void main() {
   mat4 M = uBones[int(aB.x + .5)] * (1. - aB.z) + uBones[int(aB.y + .5)] * aB.z;
   vec3 w = (M * vec4(aP, 1.)).xyz;
   vN = mat3(M) * aN;
   vC = aC;
+  vRest = aP;
+  vD = aD;
   vWorld = w;
   vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
   float cs = cos(uCam.w), sn = sin(uCam.w);
@@ -1703,10 +1708,43 @@ in vec3 vWorld;
 in vec3 vN;
 in vec3 vC;
 in float vDist;
+in vec3 vRest;
+in float vD;
 out vec4 o;
-uniform float uDensity, uAlpha;
+uniform float uDensity, uAlpha, uCoat;
 uniform vec2 uRes;
 ${NOISE}
+vec3 spotHash(vec3 c) {
+  return fract(sin(vec3(dot(c, vec3(127.1, 311.7, 74.7)), dot(c, vec3(269.5, 183.3, 246.1)), dot(c, vec3(113.5, 271.9, 124.6)))) * 43758.5453);
+}
+// a fallow's dapple: pale spots scattered over the back and flanks, fixed to the body (its rest
+// shape, so they move with it), and a pale line along the lower flank; where they are too small to
+// see, the coat a little paler for them instead
+float dapple(vec3 p) {
+  const float CELL = .05;
+  vec3 g = p / CELL;
+  vec3 i = floor(g);
+  float d = 9., r = 0.;
+  for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+    vec3 c = i + vec3(x, y, z);
+    vec3 h = spotHash(c);
+    vec3 at = c + .5 + (h - .5) * .7;
+    float k = length(g - at);
+    if (k < d) { d = k; r = h.x > .2 ? .22 + .12 * h.y : 0.; }
+  }
+  float aa = max(fwidth(d), 1e-4);
+  float spot = 1. - smoothstep(r - aa, r + aa, d);
+  float fine = smoothstep(.5, .25, aa);
+  return mix(.15, spot, fine);
+}
+// the pale line along a fallow's flank, halfway up, from behind the shoulder back toward the haunch
+float flankLine(vec3 p) {
+  float w = fwidth(p.y);
+  float band = 1. - smoothstep(.01, .016 + w, abs(p.y - .85 - .1 * p.z));
+  // (broken along its length, as the hair lies)
+  float broken = smoothstep(.25, .6, vnoise(vec2(p.z * 28., p.x * 3.)));
+  return band * broken * smoothstep(.13, .19, abs(p.x)) * smoothstep(-.5, -.38, p.z) * (1. - smoothstep(.1, .22, p.z)) * smoothstep(.06, .03, w);
+}
 void main() {
   vec3 eye = vec3(uCam.x, uCam.z, uCam.y);
   vec3 V = normalize(eye - vWorld);
@@ -1715,6 +1753,7 @@ void main() {
   // the coat: its colour, the hair lying in patches, lit as the wood is — a wrapped key light, the
   // fog's light from where it faces, and the fog behind catching in the hair at its edge
   vec3 alb = vC * (.86 + .28 * vnoise(vWorld.xz * 9. + vWorld.y * 6.));
+  if (uCoat > 0.) alb = mix(alb, vec3(.56, .52, .45), max(vD > .01 ? dapple(vRest) * vD : 0., flankLine(vRest) * .6) * uCoat);
   float wrap = max(dot(N, L) * .5 + .5, 0.);
   vec3 col = alb * (uIllum * (.3 + .85 * wrap) + fogDir(N) * .45);
   float rim = 1. - max(dot(N, V), 0.);
@@ -1868,6 +1907,8 @@ export interface DeerDraw {
   live: false;
   /** its skeleton's bones this frame (deermesh.ts DeerRig: BONES × 16, column-major, to the world) */
   bones: Float32Array;
+  /** its coat: 0 plain, 1 dappled */
+  coat: number;
   x: number;
   z: number;
   /** the ground's height at its foot (m) */
@@ -1876,7 +1917,6 @@ export interface DeerDraw {
   mist: [number, number];
   top: number;
   alpha: number;
-  bark: [number, number, number];
   d: number;
 }
 /** something another experiment draws into the wood itself (real geometry, its own shaders): it is
@@ -1967,6 +2007,7 @@ export class Renderer {
       at('aN', 3, 3);
       at('aC', 3, 6);
       at('aB', 3, 9);
+      at('aD', 1, 12);
       const ib = gl.createBuffer()!;
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.index, gl.STATIC_DRAW);
@@ -2197,6 +2238,7 @@ export class Renderer {
         gl.uniform2fv(this.loc(D, 'uMistT'), c.mist);
         gl.uniform1f(this.loc(D, 'uTopH'), c.top);
         gl.uniform1f(this.loc(D, 'uAlpha'), c.alpha);
+        gl.uniform1f(this.loc(D, 'uCoat'), c.coat);
         // (solid: it writes its depth, so its far legs go behind its body, and trees behind it)
         gl.depthMask(true);
         gl.drawElements(gl.TRIANGLES, this.deerCount, gl.UNSIGNED_INT, 0);

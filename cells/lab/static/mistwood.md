@@ -286,13 +286,22 @@ are far, so they are there again when you come back.
 - **Drawn** as geometry (`client/deermesh.ts`): a mesh lofted from cross-sections (rump,
   haunch, the deep ribcage, chest; the neck; the head, a wedge from skull to muzzle, with its
   eyes and ears; the tail; the legs, three bones each down to the hoof) skinned to a skeleton of
-  nineteen bones, the spine bending mid-back. Over each hind leg the haunch, the thigh's mass from
-  the croup down to the stifle, deep behind the bone (the ham) and wider than the waist, its top
-  moving with the hindquarters and its foot with the thigh, so it swings and stretches with the
-  stride; a lesser mass over each shoulder; the gaskin below deep and flat. (Its proportions were
-  checked against the drive's deer, a different look but the same animal: hips about half a metre
-  across, the legs set out under the haunches.) White under the tail, between the hams. Its pose
-  comes from what the herd's simulation says it is doing, each frame:
+  nineteen bones, the spine bending mid-back. Its proportions are a deer's, checked by laying its
+  side view over photographs (a fallow doe standing, a white-tailed fawn walking) and over the
+  drive's deer (a different look, the same animal): the trunk a third again as long as the deer is
+  tall at the withers and half as deep, the belly level under a deep ribcage and tucked up to the
+  stifle; the neck deep at its base in the chest front, rising steeply to the head; the ears big
+  leaves set out in a V, cupped and open to the front. Over each hind leg the haunch, the thigh's
+  mass from the croup down to the stifle, deep behind the bone (the ham) and wider than the waist
+  (hips about half a metre across, the legs set out under them), its top moving with the
+  hindquarters and its foot with the thigh, so it swings and stretches with the stride; a lesser
+  mass over each shoulder; the forearm full at the top, the gaskin deep and flat. Its coat is warm
+  brown, white beneath (belly, throat and chin, the insides of the legs, under the tail between the
+  hams, behind the black nose), the lower legs greyer; some herds are dappled as fallow are (each
+  herd one or the other, from its key): pale spots over the back, the upper flanks and the
+  haunches, fixed to the body as it moves, and a pale line along the lower flank — drawn in the
+  shader from the deer's rest shape, and where they are too small to see, the coat a little paler
+  for them instead. Its pose comes from what the herd's simulation says it is doing, each frame:
   - its gait follows its speed over the ground, the cycle advancing as far as it has gone, so a
     hoof set down stays put while the body passes over it: a four-beat walk, a trot in diagonal
     pairs, and the bound it dashes in (hind legs together, then the fore, a moment in the air, the
@@ -437,6 +446,6 @@ Current flags:
 - **wood:** `seed`, `only`
 - **stand:** `x`, `y`, `heading` (kept up to date), `at`, `look`, `near`, `find` (pond, creek, ford, log, veteran, glade, tower, viaduct, wall), `off`, `walk`, `tilt`
 - **sky:** `hour`, `moon`, `fog`, `warm`
-- **deer:** `deer`, `deerAt`, `deerBed`, `deerCalm`
+- **deer:** `deer`, `deerAt`, `deerBed`, `deerCalm`, `deerCoat`
 - **render:** `fixed`, `time`
 - **dev:** `tune`, `fly`

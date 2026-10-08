@@ -52,6 +52,7 @@ export const FLAGS = {
   deerAt: { kind: 'number', min: 5, max: 80, step: 1, unit: 'm', group: 'deer', doc: 'how far ahead `deer` puts them' },
   deerBed: { kind: 'bool', group: 'deer', doc: '`deer` lying up in cover rather than grazing' },
   deerCalm: { kind: 'bool', group: 'deer', live: true, doc: 'deer never take alarm (to watch them)' },
+  deerCoat: { kind: 'enum', values: ['plain', 'dappled'], group: 'deer', live: true, doc: 'every deer in this coat (otherwise each herd its own)' },
   // the drawing
   fixed: { kind: 'bool', group: 'render', doc: 'keep the resolution (no adapting to the frame rate)' },
   dof: { kind: 'number', min: 0, max: 3, step: 0.05, unit: '×', group: 'render', live: true, doc: 'depth of field: how much what is near blurs (0 none, 1 the default)' },

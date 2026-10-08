@@ -38,6 +38,8 @@ export interface Deer {
   pause: number;
   /** a step until the next rustle */
   step: number;
+  /** its coat: 0 plain, 1 dappled (a herd's deer all one or the other) */
+  coat: number;
 }
 
 export interface Herd {
@@ -157,11 +159,13 @@ export class Deerland {
   private make(key: string, x: number, z: number, hour: number, r: Rand): Herd {
     const count = 2 + Math.floor(r() * 4);
     const out = r() < activity(hour);
+    // (its coat from its key, not from r: the herd's other draws are as they were)
+    const coat = hash(this.land.seed, 0xc0a7, ...[...key].map((ch) => ch.charCodeAt(0))) % 2;
     const deer: Deer[] = [];
     for (let i = 0; i < count; i++) {
       const dx = x + (r() - 0.5) * 8;
       const dz = z + (r() - 0.5) * 8;
-      deer.push({ x: dx, z: dz, heading: r() * 6.28, headUp: 1, headTurn: 0, gait: r() * 6.28, speed: 0, size: 0.82 + r() * 0.28, bed: out ? 0 : 1, tx: dx, tz: dz, pause: r() * 6, step: r() });
+      deer.push({ x: dx, z: dz, heading: r() * 6.28, headUp: 1, headTurn: 0, gait: r() * 6.28, speed: 0, size: 0.82 + r() * 0.28, bed: out ? 0 : 1, tx: dx, tz: dz, pause: r() * 6, step: r(), coat });
     }
     const h: Herd = { key, homeX: x, homeZ: z, deer, mode: out ? 'graze' : 'bedded', calm: out ? 'graze' : 'bedded', t: 0, until: 40 + r() * 90, alarm: 0, spotX: x, spotZ: z, barks: 0, nextBark: 0, stamped: false, r };
     if (out) this.newSpot(h);

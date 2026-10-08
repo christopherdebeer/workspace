@@ -886,7 +886,8 @@ function frame(now: number) {
     if (hd > VIEW || hd < 0.5) continue;
     // its skeleton posed for what it is doing: its gait from its speed, its head, lying up or not
     const base = wood.groundH(d.x, d.z);
-    draws.push({ live: false, bones: deerRig.pose(d, base, view, flag('freeze') ? 0 : dt), x: d.x, z: d.z, base, mist: [0, 0], top: 1.9 * d.size, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
+    const coat = flag('deerCoat');
+    draws.push({ live: false, bones: deerRig.pose(d, base, view, flag('freeze') ? 0 : dt), x: d.x, z: d.z, base, mist: [0, 0], top: 1.9 * d.size, alpha: 1, coat: coat ? (coat === 'dappled' ? 1 : 0) : d.coat, d: hd });
   }
   // things set into the wood from outside (the Field Journal's finds): coloured sprites standing
   // on the ground, drawn in their place among the trees, in the same fog
