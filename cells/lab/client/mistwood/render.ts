@@ -122,6 +122,40 @@ uniform vec4 uCam; // x, z, eye, yaw
 uniform vec2 uSun; // the key light's azimuth, elevation (sun by day, moon by night)
 uniform vec3 uGlow; // its glow in the fog
 uniform vec3 uIllum; // what lights the wood
+// ─── anomalies: things set into the wood from outside (the Field Journal's), each changing the
+// wood about it — its light in the mist, the ground, the trees. None by default (uAnomN 0).
+// where each is, how far its presence reaches (m), its kind (1 a crystal, 2 a fungus)
+uniform vec4 uAnom[4];
+// its light (rgb), and the height of its heart (m, world)
+uniform vec4 uAnomL[4];
+uniform int uAnomN;
+// how much of an anomaly is at (x, z): all of it in its heart, none past its reach
+float anomAt(int i, vec2 xz) { float r = uAnom[i].z; return 1. - smoothstep(r * .35, r, length(xz - uAnom[i].xy)); }
+// the light the anomalies give at w: each one's colour, falling off from its heart
+vec3 anomLight(vec3 w) {
+  vec3 l = vec3(0.);
+  for (int i = 0; i < 4; i++) {
+    if (i >= uAnomN) break;
+    float d = length(w - vec3(uAnom[i].x, uAnomL[i].w, uAnom[i].y)) / (uAnom[i].z * .4);
+    l += uAnomL[i].rgb / (1. + d * d);
+  }
+  return l;
+}
+// their light in the mist, looking along d: a glow about each, wide when you are near or in it,
+// a far smudge in the fog a long way off (so it can be found by its light). Per anomaly, worked
+// out once a frame (it depends only on where you stand): the way to its heart and the width of
+// its glow (1 / 2σ²); its light as seen from here, and how much of it is all about you
+uniform vec4 uAnomH[4];
+uniform vec4 uAnomK[4];
+vec3 anomHalo(vec3 d) {
+  vec3 l = vec3(0.);
+  for (int i = 0; i < 4; i++) {
+    if (i >= uAnomN) break;
+    float th2 = max(0., 1. - dot(d, uAnomH[i].xyz)) * 2.;
+    l += uAnomK[i].rgb * (exp(-th2 * uAnomH[i].w) * .4 + uAnomK[i].w * .07 * exp(-th2 * .4));
+  }
+  return l;
+}
 // the fog's colour looking in a (world) direction: lighter higher, brighter towards the light.
 // Everything fogged takes its fog from the direction it is seen in, so a far tree fades into
 // exactly the fog behind it
@@ -129,7 +163,81 @@ vec3 fogDir(vec3 d) {
   float el = d.y;
   vec3 c = mix(uFogLow, uFogHigh, smoothstep(0., .6, max(el, 0.)));
   float da = mod(atan(d.x, d.z) - uSun.x + 3.14159, 6.28318) - 3.14159;
-  return c + exp(-da * da * 3. - (el - uSun.y) * (el - uSun.y) * 6.) * uGlow;
+  return c + exp(-da * da * 3. - (el - uSun.y) * (el - uSun.y) * 6.) * uGlow + (uAnomN > 0 ? anomHalo(d) : vec3(0.));
+}
+// the cracks of a cellular pattern: ~0 on a cell's border
+float cracks(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  float d1 = 9., d2 = 9.;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(x, y);
+    ivec2 c = ivec2(i + g);
+    float dd = length(g + vec2(h2(c), h2(c + ivec2(91, 37))) - f);
+    if (dd < d1) { d2 = d1; d1 = dd; } else if (dd < d2) d2 = dd;
+  }
+  return d2 - d1;
+}
+// threads: the crests of two turned layers of noise, fine and wandering (mycelium)
+float threads(vec2 p) {
+  float a = 1. - abs(vnoise(p) * 2. - 1.), b = 1. - abs(vnoise(mat2(.8, -.6, .6, .8) * p * 1.9 + 7.) * 2. - 1.);
+  return pow(a, 16.) + pow(b, 22.) * .7;
+}
+vec3 anomHue(int i) { vec3 c = uAnomL[i].rgb; return c / max(max(c.r, max(c.g, c.b)), 1e-3); }
+// the ground an anomaly has changed: a crystal's bleached to a pale crust and split by fissures
+// that glow; a fungus's dark and rich, white with threads, a ring of lush green at its edge. What
+// glows is added to em
+vec3 anomGround(vec3 p, vec3 g, inout vec3 em) {
+  for (int i = 0; i < 4; i++) {
+    if (i >= uAnomN) break;
+    float s = anomAt(i, p.xz);
+    if (s <= 0.) continue;
+    vec3 hue = anomHue(i);
+    float dist = length(p.xz - uAnom[i].xy);
+    if (uAnom[i].w < 1.5) {
+      float crust = s * (.55 + .45 * smoothstep(.3, .7, vnoise(p.xz * .8)));
+      g = mix(g, mix(vec3(.6, .6, .62), hue * .55 + .2, .3) * (.75 + .35 * vnoise(p.xz * 9.)), crust * .8);
+      vec2 warp = vec2(vnoise(p.xz * .3), vnoise(p.xz * .3 + 9.)) * 1.5;
+      float fine = (1. - smoothstep(0., .07, cracks(p.xz * .75 + warp))) * smoothstep(.25, .7, s);
+      float big = (1. - smoothstep(0., .035, cracks(p.xz * .16 + warp * .3 + 3.1))) * s;
+      float line = max(fine * .7, big);
+      g = mix(g, vec3(.03), line * .7);
+      em += hue * line * (.7 + .3 * sin(uT * .8 - dist * .3)) * (.35 + .65 * s) * 1.1;
+    } else {
+      g = mix(g, vec3(.085, .06, .04) * (.8 + .4 * vnoise(p.xz * 5.)), s * .75);
+      float th = clamp((threads(p.xz * 5.5) + threads(p.xz * 1.6 + 4.) * .4) * smoothstep(.05, .45, s), 0., 1.);
+      g = mix(g, vec3(.78, .76, .7), th * .45);
+      float ring = exp(-pow((dist - uAnom[i].z * .8) / 2.4, 2.));
+      g = mix(g, vec3(.09, .19, .05) * (.8 + .4 * vnoise(p.xz * 4.)), ring * .7);
+      em += hue * th * s * .03;
+    }
+  }
+  return g;
+}
+// grass near an anomaly: a crystal's bleached and frosted; a fungus's dark and rank
+vec3 anomGrass(vec3 w, vec3 base) {
+  for (int i = 0; i < 4; i++) {
+    if (i >= uAnomN) break;
+    float s = anomAt(i, w.xz);
+    if (s <= 0.) continue;
+    base = uAnom[i].w < 1.5 ? mix(base, vec3(.42, .43, .45) * (.8 + .3 * vnoise(w.xz * 4.)), s * .5) : base * (1. - .45 * s);
+  }
+  return base;
+}
+// a tree near an anomaly: a crystal's turned pale and glassy, as if petrified; a fungus's dark,
+// crusted pale at its foot
+vec3 anomTree(vec3 w, vec3 base) {
+  for (int i = 0; i < 4; i++) {
+    if (i >= uAnomN) break;
+    float s = anomAt(i, w.xz);
+    if (s <= 0.) continue;
+    if (uAnom[i].w < 1.5) base = mix(base, mix(vec3(.58, .6, .64), anomHue(i) * .5 + .3, .4) * (.8 + .35 * vnoise(vec2(w.x + w.z, w.y * 3.) * 2.)), s * .85);
+    else {
+      base *= 1. - .5 * s;
+      float foot = 1. - smoothstep(0., .6 + 1.4 * s, w.y - uBase);
+      base = mix(base, vec3(.7, .67, .58), foot * s * .6 * smoothstep(.4, .7, vnoise(vec2((w.x - w.z) * 9., w.y * 14.))));
+    }
+  }
+  return base;
 }
 vec3 fogToward(vec3 w) { return fogDir(normalize(w - vec3(uCam.x, uCam.z, uCam.y))); }
 `;
@@ -1064,6 +1172,9 @@ void main() {
         g = mix(g, rock, smoothstep(.01, .04, st));
       }
     }
+    // an anomaly's ground (the Field Journal's), and what of it glows
+    vec3 em = vec3(0.);
+    if (uAnomN > 0) g = anomGround(p, g, em);
     // shade: dark at each trunk's foot, a soft pool under each crown (the light is diffuse in fog)
     float ao = 0.;
     for (int i = 0; i < 40; i++) {
@@ -1076,7 +1187,7 @@ void main() {
     // broken up, as light through a crown and over tussocks is
     g *= 1. - min(ao, .6) * (.55 + .7 * vnoise(p.xz * 1.9));
     float fogD = fogAt(t, 0., uDensity);
-    col = mix(g * uIllum, fogDir(d), 1. - (1. - fogD) * exp(-tau));
+    col = mix(g * (uAnomN > 0 ? uIllum + anomLight(p) : uIllum) + em, fogDir(d), 1. - (1. - fogD) * exp(-tau));
   }
   vec3 under = col;
   col = sCol + sT * col;
@@ -1245,6 +1356,7 @@ void main() {
   base = mix(base, uLeaf, leaf);
   // thin wood is lit through by the fog behind it
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
+  if (uAnomN > 0) base = uKind < .5 ? anomTree(vWorld, base) : anomGrass(vWorld, base);
   // fog: by distance, and much thicker near the ground; banks of mist drift through
   // (the ground fog lies a few metres off: what is at your feet is clear)
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
@@ -1271,7 +1383,7 @@ void main() {
     o = vec4(sketchInk(mk, fog * (low ? .6 : 1.), vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
     return;
   }
-  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+  o = vec4(mix(base * (uAnomN > 0 ? uIllum + anomLight(vWorld) : uIllum), fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
 /**
@@ -1561,9 +1673,10 @@ void main() {
   vec3 base = mix(bark * lit, birch, vTL.x);
   base = mix(base, uLeaf, vTL.y);
   base = mix(base, uFogLow / max(uIllum, vec3(.05)), (1. - cov) * .22);
+  if (uAnomN > 0) base = anomTree(vWorld, base);
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
-  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+  o = vec4(mix(base * (uAnomN > 0 ? uIllum + anomLight(vWorld) : uIllum), fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
 /**
@@ -1647,7 +1760,7 @@ void main() {
     o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * am, am);
     return;
   }
-  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+  o = vec4(mix(base * (uAnomN > 0 ? uIllum + anomLight(vWorld) : uIllum), fogToward(vWorld), fog) * cov, cov) * uAlpha;
 }`;
 
 const POST_FS = `#version 300 es
@@ -1730,7 +1843,12 @@ export interface Look {
   focus: number;
   /** drawn in pencil (null: as film): darkness, stroke spacing, looseness, outlines, boil, tooth, how much is left unsaid */
   sketch: { pencil: number; hatch: number; loose: number; lines: number; boil: number; tooth: number; spare: number; haze: number } | null;
+  /** anomalies set into the wood from outside (main.ts `anomalies`; up to 4, nearest first) */
+  anom?: readonly Anomaly[];
 }
+/** something set into the wood that changes it about itself: where, how far it reaches (m), what
+ *  it is, its light (rgb, linear) and the height of its heart (m, world) */
+export interface Anomaly { x: number; z: number; reach: number; kind: 'crystal' | 'fungus'; light: [number, number, number]; heart: number }
 
 export interface CardDraw {
   live: false;
@@ -1938,6 +2056,33 @@ export class Renderer {
     gl.uniform3fv(this.loc(p, 'uIllum'), look.atmos.illum);
     gl.uniform1f(this.loc(p, 'uDensity'), look.density);
     gl.uniform4fv(this.loc(p, 'uRelief'), look.relief);
+    const an = look.anom ?? [];
+    const n = Math.min(4, an.length);
+    gl.uniform1i(this.loc(p, 'uAnomN'), n);
+    if (n) {
+      const A = new Float32Array(16), L = new Float32Array(16);
+      for (let i = 0; i < n; i++) {
+        const a = an[i];
+        A.set([a.x, a.z, a.reach, a.kind === 'crystal' ? 1 : 2], i * 4);
+        L.set([a.light[0], a.light[1], a.light[2], a.heart], i * 4);
+      }
+      gl.uniform4fv(this.loc(p, 'uAnom'), A);
+      gl.uniform4fv(this.loc(p, 'uAnomL'), L);
+      // (their glow in the mist, as seen from here: render.ts anomHalo)
+      const Hh = new Float32Array(16), K = new Float32Array(16);
+      for (let i = 0; i < n; i++) {
+        const a = an[i];
+        const cx = a.x - v.x, cy = a.heart - v.eye, cz = a.z - v.z;
+        const dist = Math.hypot(cx, cy, cz) || 1e-3;
+        const spread = Math.atan2(a.reach * 0.45, dist);
+        const fall = Math.exp(-Math.max(dist - a.reach, 0) / (a.reach * 1.8));
+        const about = 1 - Math.min(1, Math.max(0, (dist - a.reach * 0.4) / (a.reach * 0.7)));
+        Hh.set([cx / dist, cy / dist, cz / dist, 1 / (2 * spread * spread + 1e-3)], i * 4);
+        K.set([a.light[0] * fall, a.light[1] * fall, a.light[2] * fall, about * about * (3 - 2 * about)], i * 4);
+      }
+      gl.uniform4fv(this.loc(p, 'uAnomH'), Hh);
+      gl.uniform4fv(this.loc(p, 'uAnomK'), K);
+    }
     gl.uniform1f(this.loc(p, 'uOpen'), look.openness);
     gl.uniform1f(this.loc(p, 'uBlur'), look.blur);
     gl.uniform1f(this.loc(p, 'uFocus'), look.focus);

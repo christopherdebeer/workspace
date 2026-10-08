@@ -28,6 +28,10 @@ import { grow, growLog, growPatch, growScrub, sampleGenome, type Genome, type Sp
 export const CELL = 10;
 /** How far the wood is drawn (metres); the fog has it all by then. */
 export const VIEW = 75;
+/** Something set into the wood from outside that clears it (the Field Journal's anomalies): how
+ *  cleared (x, z) is in a wood, 0 (untouched) … 1 (nothing grows). Pure, from the seed; set
+ *  before any of the wood is placed (cells are kept once placed). None by default. */
+export const clearing: { at: ((seed: number, x: number, z: number) => number) | null } = { at: null };
 
 /** A species id ('t0', 'b1', …) or ground cover. */
 export type Kind = string;
@@ -522,7 +526,8 @@ export class Wood {
     const centre = this.pathDist(x0 + CELL / 2, z0 + CELL / 2);
     // the old trees near here, and the clearing each keeps about it
     const vets = this.veterans(x0 - 8, z0 - 8, x0 + CELL + 8, z0 + CELL + 8);
-    for (const v of vets) if (v.x >= x0 && v.x < x0 + CELL && v.z >= z0 && v.z < z0 + CELL) out.push(v);
+    const cleared = (x: number, z: number) => (clearing.at ? clearing.at(this.seed, x, z) : 0);
+    for (const v of vets) if (v.x >= x0 && v.x < x0 + CELL && v.z >= z0 && v.z < z0 + CELL && cleared(v.x, v.z) < 0.3) out.push(v);
     const stone = this.structuresNear(x0 + CELL / 2, z0 + CELL / 2, CELL);
     const cellWalls = this.wallsNear(x0 + CELL / 2, z0 + CELL / 2, CELL);
     const hasStone = stone.length > 0 || cellWalls.length > 0;
@@ -544,7 +549,7 @@ export class Wood {
         const pd = clear > 0 || grass ? this.pathDist(x, z) : 99;
         if (pd < clear || (grass && pd < this.path[2] * 0.8 + edge * 0.7)) continue;
         if (hasStone && this.stoneDist(x, z, stone, cellWalls) < (grass ? 0.15 : 1.5)) continue;
-        if (keep >= fits(this.place(x, z), x, z)) continue;
+        if (keep >= fits(this.place(x, z), x, z) * (1 - cleared(x, z) * (grass ? 0.6 : 1))) continue;
         out.push({ x, z, kind, pool: Math.floor(pr * pool), scale, rot, flip, phase });
       }
     };

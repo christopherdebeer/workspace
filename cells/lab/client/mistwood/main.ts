@@ -15,7 +15,7 @@
  */
 import { Sound } from './audio';
 import { Baker, type Card } from './bake';
-import { Renderer, type Draw, type View, type WoodEnv } from './render';
+import { Renderer, type Anomaly, type Draw, type View, type WoodEnv } from './render';
 import { countWider, type Species, type Structure } from './tree';
 import { atmosphere, moonPhase } from './sky';
 import { Deerland } from './deer';
@@ -52,8 +52,26 @@ export interface Sprite { x: number; z: number; w: number; h: number; sink: numb
 export const sprites = new Map<string, Sprite>();
 /** things drawn into the wood by another experiment, as real geometry (render.ts CustomDraw): where
  *  each stands, how tall, and how to draw it */
-export interface Custom { x: number; z: number; top: number; draw: (env: WoodEnv) => void }
+export interface Custom {
+  x: number;
+  z: number;
+  top: number;
+  draw: (env: WoodEnv) => void;
+  /** how far off it is still drawn (m; default the wood's VIEW) */
+  range?: number;
+  /** drawn before everything else (a thing that writes its depth, or lies on the ground): the trees
+   *  and grass then go in front of it or behind it by the depth it wrote. Higher, sooner (what
+   *  writes its depth before what only tests it) */
+  first?: number;
+}
 export const customs = new Map<string, Custom>();
+/** anomalies another experiment sets into the wood, each changing the wood about it (its light in
+ *  the mist, the ground, the trees: render.ts Anomaly). The nearest four are drawn */
+export const anomalies: Anomaly[] = [];
+/** what another experiment has set solid in the wood (the Field Journal's crystals and giant
+ *  stalks): how far (m) a point is outside it, as stoneDist. You walk along it, not through it */
+export const obstacle: { at: ((x: number, z: number) => number) | null } = { at: null };
+const nearestAnomalies = () => (anomalies.length <= 4 ? anomalies : [...anomalies].sort((a, b) => Math.hypot(a.x - posX, a.z - posZ) - Math.hypot(b.x - posX, b.z - posZ)).slice(0, 4));
 /** a texture in the wood's context from a picture (a canvas: another renderer's frame) */
 export function spriteTexture(src: TexImageSource, into?: WebGLTexture | null): WebGLTexture {
   const tex = into ?? gl.createTexture()!;
@@ -611,6 +629,23 @@ function frame(now: number) {
       mz = posZ;
     }
   }
+  // nor through anything set solid in the wood from outside: along it instead
+  const solid = obstacle.at;
+  if (!flying && solid && solid(mx, mz) < 0.45) {
+    const e = 0.05;
+    const gx = solid(mx + e, mz) - solid(mx - e, mz);
+    const gz = solid(mx, mz + e) - solid(mx, mz - e);
+    const gl = Math.hypot(gx, gz) || 1;
+    const vx = mx - posX;
+    const vz = mz - posZ;
+    const into = Math.min(0, (vx * gx + vz * gz) / gl);
+    mx = posX + vx - (into * gx) / gl;
+    mz = posZ + vz - (into * gz) / gl;
+    if (solid(mx, mz) < 0.4 && solid(mx, mz) < solid(posX, posZ)) {
+      mx = posX;
+      mz = posZ;
+    }
+  }
   // nor into water: a pond past its shallows, the creek where it runs deep (a ford takes you over);
   // along the bank instead (and out of it, if you are somehow in it)
   const deep = (x: number, z: number) => Math.max(wood.relief[2] - 0.15 - wood.landH(x, z), wood.creekDepth(x, z) - 0.2);
@@ -863,8 +898,8 @@ function frame(now: number) {
   }
   for (const cu of customs.values()) {
     const hd = Math.hypot(cu.x - view.x, cu.z - view.z);
-    if (hd > VIEW || hd < 0.2) continue;
-    draws.push({ live: false, custom: cu.draw, x: cu.x, z: cu.z, base: wood.groundH(cu.x, cu.z), mist: [0, 0], top: cu.top, alpha: 1, bark: DARK, d: hd });
+    if (hd > (cu.range ?? VIEW) || (cu.first === undefined && hd < 0.2)) continue;
+    draws.push({ live: false, custom: cu.draw, x: cu.x, z: cu.z, base: wood.groundH(cu.x, cu.z), mist: [0, 0], top: cu.top, alpha: 1, bark: DARK, d: cu.first !== undefined ? 1e6 * (1 + cu.first) - hd : hd });
   }
   // the mist along the way to each (to its foot, and to its top): it lies between you and it, so
   // walking, the banks pass in front of things and you walk into and through them
@@ -914,7 +949,7 @@ function frame(now: number) {
   const sketch = flag('style') === 'sketch'
     ? { pencil: flag('pencil') ?? 1, hatch: flag('hatch') ?? 5, loose: flag('loose') ?? 1, lines: flag('lines') ?? 1, boil: flag('boil') ?? 0, tooth: flag('tooth') ?? 0.6, spare: flag('spare') ?? 0.3, haze: flag('haze') ?? 0.05 }
     : null;
-  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, creek: wood.creekK, ford, fordN: fordsHere.length, structA, structB, structN: stone.length, wallA, wallB, wallN: wallsHere.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5, sketch }, draws);
+  renderer.draw(view, { light, shade, shadeOff, shadeN, seed, t, density, wind, path: wood.path, atmos, relief: wood.relief, openness: wood.openness, creek: wood.creekK, ford, fordN: fordsHere.length, structA, structB, structN: stone.length, wallA, wallB, wallN: wallsHere.length, blur: view.f * APERTURE * (flag('dof') ?? 1), focus: flag('focus') ?? 5, sketch, anom: nearestAnomalies() }, draws);
   sound.update(dt, t, speed, atmos.day, wind);
   // the small voices: where the nearest wet ground is (looked for now and then), how open it is
   if (t - lookedAbout > 1) {
