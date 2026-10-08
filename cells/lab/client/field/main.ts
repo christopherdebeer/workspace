@@ -23,7 +23,7 @@ import type { Anomaly, WoodEnv } from '../mistwood/render';
 import { findsNear, gateOf, project, type Find, type View } from './finds';
 import { emblem, findSeal, GLYPH } from './emblem';
 import { cardFor, notes } from './card';
-import { crystalSolids, drawCrystalAnomaly, prepareCrystal } from './giantcrystal';
+import { crystalSolids, drawCrystalAnomaly, prepareCrystal, takeFrame } from './giantcrystal';
 import { drawFungusAnomaly, fungusSolids, prepareFungus } from './giantfungi';
 import { drawStanding, drawWard, sealArt, STAND, WARD } from './woodseal';
 import { drawMotes } from './motes';
@@ -104,7 +104,14 @@ function inTheWood(v: MistView): Place[] {
     const base = `field:${v.seed}:${f.id}`;
     const add = (key: string, c: Parameters<typeof customs.set>[1]) => { keep.add(key); if (!customs.has(key) && !failed.has(key)) customs.set(key, c); };
     const ground = v.ground;
-    add(`${base}:body`, { x: f.x, z: f.z, top: 20, first: 2, range: BODY, draw: guard(`${base}:body`, (env) => (f.kind === 'crystal' ? drawCrystalAnomaly(env, f, p.light, ground) : drawFungusAnomaly(env, f, p.light, ground))) });
+    // (a crystal's cluster in its place among the trees, so the wood behind it is drawn when it
+    // is, to be seen through it and in its faces; its shards, and a fungus, first)
+    if (f.kind === 'crystal') {
+      add(`${base}:body`, { x: f.x, z: f.z, top: 20, range: BODY, draw: guard(`${base}:body`, (env) => drawCrystalAnomaly(env, f, p.light, ground, 'body')) });
+      add(`${base}:shards`, { x: f.x, z: f.z, top: 4, first: 2, range: BODY, draw: guard(`${base}:shards`, (env) => drawCrystalAnomaly(env, f, p.light, ground, 'shards')) });
+      // (and the finished wood taken, for it to reflect next frame)
+      add(`field:${v.seed}:frame`, { x: v.x, z: v.z, top: 0, last: true, range: 1e9, draw: guard(`field:${v.seed}:frame`, takeFrame) });
+    } else add(`${base}:body`, { x: f.x, z: f.z, top: 20, first: 2, range: BODY, draw: guard(`${base}:body`, (env) => drawFungusAnomaly(env, f, p.light, ground)) });
     add(`${base}:ward`, { x: f.x, z: f.z, top: 0.1, first: 1, range: f.reach + 30, draw: guard(`${base}:ward`, (env) => drawWard(env, f, ground)) });
     add(`${base}:motes`, { x: f.x, z: f.z, top: 30, range: f.reach + 40, draw: guard(`${base}:motes`, (env) => drawMotes(env, f, f.kind, p.light, f.reach * 0.6, f.kind === 'crystal' ? 26 : 34)) });
     p.stands.forEach((s, i) => add(`${base}:stand${i}`, { x: s.x, z: s.z, top: STAND.at + STAND.size / 2, range: 32, draw: guard(`${base}:stand${i}`, (env) => drawStanding(env, f, s.x, s.z, s.face)) }));

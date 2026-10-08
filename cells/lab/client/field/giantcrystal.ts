@@ -53,7 +53,31 @@ out vec4 o;
 uniform float uDensity;
 ${WOOD_GLSL()}
 uniform vec3 uTint, uTint2, uLight;
-uniform float uIor, uAbsorb, uMilk, uVeils, uPhantom, uZone, uStriate;
+uniform float uIor, uDisp, uAbsorb, uMilk, uVeils, uPhantom, uZone, uStriate;
+// the wood as drawn so far this frame (all that lies beyond it), to see through it and in it;
+// whether it is there (the shards, drawn first, have only the mist)
+uniform sampler2D uScene;
+// and the whole wood as it was last frame, the crystals left out of it (its alpha 0 where they were)
+uniform sampler2D uPrev;
+uniform float uGrab;
+uniform vec2 uRes;
+uniform float uF, uHz;
+// where on the screen (0..1) a direction is seen, in the wood's projection: what lies behind you
+// is not on it, so it is folded into view (the wood behind is like the wood ahead, near enough)
+vec2 screenDir(vec3 d) {
+  float cs = cos(uCam.w), sn = sin(uCam.w);
+  float cx = d.x * cs - d.z * sn, cz = d.x * sn + d.z * cs;
+  float a = abs(cx) + abs(cz) < 1e-6 ? 0. : atan(cx, cz);
+  float hw = .5 * uRes.x / uF;
+  if (abs(a) > hw) a = sign(a) * max(0., 3.14159 - abs(a));
+  a = clamp(a, -hw, hw);
+  float el = clamp(d.y / max(length(vec2(cx, cz)), .05), -2., 2.);
+  return clamp(vec2(a * uF + .5 * uRes.x, el * uF + uHz) / uRes, vec2(.002), vec2(.998));
+}
+// where on the screen a point is seen
+vec2 screenAt(vec3 w) { return screenDir(w - vec3(uCam.x, uCam.z, uCam.y)); }
+// the wood seen along a ray through the crystal, out its far side some metres on
+vec3 woodBeyond(vec3 rd, float far) { return texture(uScene, screenAt(vWorld + rd * far)).rgb; }
 void main() {
   // (what is under the ground is not seen: the ground does not hide it by its depth)
   if (vWorld.y < landH(vWorld.xz) - .04) discard;
@@ -86,9 +110,17 @@ void main() {
     if (uZone > .5 && uZone < 1.5) tint = mix(uTint2, uTint, smoothstep(.45, .85, al));
     else if (uZone > 1.5 && uZone < 2.5) tint = mix(uTint, uTint2, .5);
     else if (uZone > 2.5) tint = mix(uTint, uTint2, smoothstep(.35, .65, fract(al * 4.)));
-    // through it: what lies beyond, bent — the wood's mist, but darkened and deepened by the body
-    // over the way through (thick at a glancing look), not the bright fog itself
-    vec3 beyond = mix(uFogLow, fogDir(Rd), .55) * .8;
+    // through it: what lies beyond, bent — the wood itself (the trees, the ground, the mist
+    // behind it), each colour bent a little differently (its dispersion), darkened and deepened by
+    // the body over the way through (thick at a glancing look)
+    vec3 beyond;
+    if (uGrab > .5) {
+      float far = 6. + 10. * (1. - NV);
+      vec3 rR = refract(-V, N, 1. / (uIor - uDisp * 3.)), rB = refract(-V, N, 1. / (uIor + uDisp * 3.));
+      if (dot(rR, rR) < .01) rR = Rd;
+      if (dot(rB, rB) < .01) rB = Rd;
+      beyond = vec3(woodBeyond(rR, far).r, woodBeyond(Rd, far).g, woodBeyond(rB, far).b) * .92;
+    } else beyond = mix(uFogLow, fogDir(Rd), .55) * .8;
     // (deeper toward its root, where it is thickest and the earth's dark is in it)
     vec3 body = pow(tint, vec3(1.2 + uAbsorb * depth * 1.1 + 1.5 * (1. - clamp(vAx.w, 0., 1.))));
     vec3 through = beyond * body;
@@ -114,14 +146,26 @@ void main() {
     // its light: up from its heart, through it, slowly; strongest along the edges, piped up them
     float e = vE.x * vE.y;
     vec3 inner = uLight * (pow(max(1.1 - al, 0.), 2.) * .6 * rise + ph * .9 + exp(-e * 1.2) * .25);
-    // the faces: the sky and fog in them (the upward ones brighter), and the sun's glint
-    vec3 refl = fogDir(reflect(-V, N)) * (.75 + .35 * max(N.y, 0.));
+    // the faces: the wood about it in them (the trees and the ground, mirrored), the mist and the
+    // sky above, and the sun's glint
+    vec3 Rf = reflect(-V, N);
+    vec3 refl = fogDir(Rf);
+    if (uGrab > .5) {
+      // (where that falls on a crystal itself, the wood on the other side of the view instead)
+      vec2 at = screenDir(Rf);
+      vec4 w = texture(uPrev, at);
+      vec4 w2 = texture(uPrev, vec2(1. - at.x, at.y));
+      w = w.a > .5 ? w : w2;
+      refl = mix(refl, w.rgb, smoothstep(.5, .9, w.a) * (.85 - .5 * smoothstep(.35, .9, Rf.y)));
+    }
+    refl *= .8 + .3 * max(N.y, 0.);
     float spec = pow(max(dot(N, normalize(L + V)), 0.), 180.);
     // (each face a little different: growth hillocks, a face a shade off the next)
     float face = .85 + .3 * h2(ivec2(floor(vN.xz * 97.)));
     // (fine striations across its faces, growth lines)
     float stri = 1. - .12 * uStriate * smoothstep(.75, 1., sin(vAx.w * vK.y * 9.));
-    col = mix(through * face * stri + inner, refl, F * .9 + .06) + uIllum * spec * 2.5;
+    // (more of a mirror than glass has a right to be: polished, and huge)
+    col = mix(through * face * stri + inner, refl, F * .7 + .3) + uIllum * spec * 2.5;
     // the edges where its faces meet: lines of light, as the seals are drawn
     float w = max(.06, fwidth(e) * 1.5);
     float edge = 1. - smoothstep(w * .25, w, e);
@@ -170,7 +214,7 @@ function frame(axis: V3, roll: number): number[] {
   return [x[0], x[1], x[2], y[0], y[1], y[2], z[0], z[1], z[2]];
 }
 
-export interface CrystalAnomaly { b: Builder; top: number; species: Species; scale: number; /** what is solid underfoot: discs (x, z, r; m from the heart) */ solids: Array<[number, number, number]> }
+export interface CrystalAnomaly { b: Builder; top: number; species: Species; scale: number; /** indices of the cluster and its matrix (the shards follow) */ bodyCount: number; /** what is solid underfoot: discs (x, z, r; m from the heart) */ solids: Array<[number, number, number]> }
 /** the anomaly's meshes, in metres from its heart (at the ground there); `ground` the wood's
  *  ground (m) at a point, for the shards */
 export function crystalAnomaly(f: Find, ground: (x: number, z: number) => number): CrystalAnomaly {
@@ -238,6 +282,7 @@ export function crystalAnomaly(f: Find, ground: (x: number, z: number) => number
       b.fine(v(p00), v(p11), v(p01), 2.5);
     }
   }
+  const bodyCount = b.index.length;
   // shards: the species breaking through the litter about it, leaning out from its heart,
   // bigger nearer, some in twos and threes
   const n = 26 + Math.floor(r() * 22);
@@ -261,7 +306,7 @@ export function crystalAnomaly(f: Find, ground: (x: number, z: number) => number
       if (radius > 0.5) solids.push([x, z, radius * 0.9]);
     }
   }
-  return { b, top, species: sp, scale: S, solids };
+  return { b, top, species: sp, scale: S, solids, bodyCount };
 }
 
 /** meshes built ahead (off the frame that first draws them) */
@@ -273,8 +318,55 @@ const meshes = new WeakMap<WebGL2RenderingContext, Map<number, { mesh: Mesh; a: 
 export const crystalSolids = new Map<number, Array<[number, number, number]>>();
 const zoneOf = (z: Species['zoning']) => ({ none: 0, tip: 1, core: 2, band: 3 })[z];
 
-/** draw a crystal anomaly into the wood (a render.ts CustomDraw, set at its heart) */
-export function drawCrystalAnomaly(env: WoodEnv, f: Find, light: V3, ground: (x: number, z: number) => number) {
+/** the wood as drawn so far this frame, copied (a texture per context, kept at the frame's size) */
+const grabs = new WeakMap<WebGL2RenderingContext, { tex: WebGLTexture; w: number; h: number }>();
+function grab(gl: WebGL2RenderingContext, W: number, H: number): WebGLTexture {
+  let g = grabs.get(gl);
+  if (!g) { g = { tex: gl.createTexture()!, w: 0, h: 0 }; grabs.set(gl, g); }
+  gl.bindTexture(gl.TEXTURE_2D, g.tex);
+  if (g.w !== W || g.h !== H) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    g.w = W; g.h = H;
+  }
+  // (from the wood's own target, as it stands: everything beyond the crystal is drawn by now)
+  gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, W, H);
+  return g.tex;
+}
+
+/** the whole wood as it was at the end of the last frame (a texture per context) */
+const prevs = new WeakMap<WebGL2RenderingContext, { tex: WebGLTexture; w: number; h: number }>();
+function prevOf(gl: WebGL2RenderingContext, W: number, H: number): WebGLTexture {
+  let g = prevs.get(gl);
+  if (!g) { g = { tex: gl.createTexture()!, w: 0, h: 0 }; prevs.set(gl, g); }
+  if (g.w !== W || g.h !== H) {
+    gl.bindTexture(gl.TEXTURE_2D, g.tex);
+    // (nothing yet: alpha 0, so the mist stands in until a frame is taken)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    g.w = W; g.h = H;
+  }
+  return g.tex;
+}
+/** take the finished wood, for the crystals to reflect next frame (a CustomDraw drawn last) */
+export function takeFrame(env: WoodEnv) {
+  const { gl } = env;
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, prevOf(gl, env.W, env.H));
+  gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, env.W, env.H);
+  gl.activeTexture(gl.TEXTURE0);
+}
+
+/** draw a crystal anomaly into the wood (a render.ts CustomDraw, set at its heart): its cluster
+ *  and matrix in their place among the trees, seeing the wood drawn behind them; or its shards,
+ *  drawn first (scattered among the trees, they write their depth before them) */
+export function drawCrystalAnomaly(env: WoodEnv, f: Find, light: V3, ground: (x: number, z: number) => number, part: 'body' | 'shards' = 'body') {
   const { gl } = env;
   let p = progs.get(gl);
   if (!p) { p = program(gl, VS, FS()); progs.set(gl, p); }
@@ -289,9 +381,17 @@ export function drawCrystalAnomaly(env: WoodEnv, f: Find, light: V3, ground: (x:
     byGl.set(f.seed, m);
   }
   const sp = m.a.species;
+  const body = part === 'body';
+  gl.activeTexture(gl.TEXTURE3);
+  if (body) grab(gl, env.W, env.H);
   gl.useProgram(p);
   env.common(p);
   const u = (n: string) => gl.getUniformLocation(p!, n);
+  gl.uniform1i(u('uScene'), 3);
+  gl.uniform1i(u('uPrev'), 4);
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, prevOf(gl, env.W, env.H));
+  gl.uniform1f(u('uGrab'), body ? 1 : 0);
   gl.uniform3f(u('uAnchor'), f.x, env.base, f.z);
   gl.uniform1f(u('uBase'), env.base);
   gl.uniform2fv(u('uMistT'), env.mist);
@@ -300,6 +400,7 @@ export function drawCrystalAnomaly(env: WoodEnv, f: Find, light: V3, ground: (x:
   gl.uniform3fv(u('uTint2'), sp.tint2);
   gl.uniform3fv(u('uLight'), light);
   gl.uniform1f(u('uIor'), sp.ior);
+  gl.uniform1f(u('uDisp'), sp.disp);
   gl.uniform1f(u('uAbsorb'), sp.absorb);
   gl.uniform1f(u('uMilk'), sp.milk);
   gl.uniform1f(u('uVeils'), sp.veils);
@@ -308,6 +409,11 @@ export function drawCrystalAnomaly(env: WoodEnv, f: Find, light: V3, ground: (x:
   gl.uniform1f(u('uStriate'), sp.striate);
   gl.bindVertexArray(m.mesh.vao);
   gl.depthMask(true);
-  gl.drawElements(gl.TRIANGLES, m.mesh.count, gl.UNSIGNED_INT, 0);
+  // (it leaves its mark in the alpha: 0, so the wood it reflects next frame leaves it out)
+  if (body) gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ZERO);
+  const n = body ? m.a.bodyCount : m.mesh.count - m.a.bodyCount;
+  if (n > 0) gl.drawElements(gl.TRIANGLES, n, gl.UNSIGNED_INT, body ? 0 : m.a.bodyCount * 4);
   gl.depthMask(false);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.activeTexture(gl.TEXTURE0);
 }

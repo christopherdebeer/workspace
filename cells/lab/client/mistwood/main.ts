@@ -63,6 +63,8 @@ export interface Custom {
    *  and grass then go in front of it or behind it by the depth it wrote. Higher, sooner (what
    *  writes its depth before what only tests it) */
   first?: number;
+  /** drawn after everything else (to take the finished wood) */
+  last?: boolean;
 }
 export const customs = new Map<string, Custom>();
 /** anomalies another experiment sets into the wood, each changing the wood about it (its light in
@@ -898,8 +900,8 @@ function frame(now: number) {
   }
   for (const cu of customs.values()) {
     const hd = Math.hypot(cu.x - view.x, cu.z - view.z);
-    if (hd > (cu.range ?? VIEW) || (cu.first === undefined && hd < 0.2)) continue;
-    draws.push({ live: false, custom: cu.draw, x: cu.x, z: cu.z, base: wood.groundH(cu.x, cu.z), mist: [0, 0], top: cu.top, alpha: 1, bark: DARK, d: cu.first !== undefined ? 1e6 * (1 + cu.first) - hd : hd });
+    if (hd > (cu.range ?? VIEW) || (cu.first === undefined && !cu.last && hd < 0.2)) continue;
+    draws.push({ live: false, custom: cu.draw, x: cu.x, z: cu.z, base: wood.groundH(cu.x, cu.z), mist: [0, 0], top: cu.top, alpha: 1, bark: DARK, d: cu.first !== undefined ? 1e6 * (1 + cu.first) - hd : cu.last ? -1e6 : hd });
   }
   // the mist along the way to each (to its foot, and to its top): it lies between you and it, so
   // walking, the banks pass in front of things and you walk into and through them

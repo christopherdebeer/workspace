@@ -20,9 +20,10 @@ The lab's experiments in one walk. Nothing here is copied: each part is the expe
   each crystal the convex hull of its planes built as faceted geometry (`client/field/
   giantcrystal.ts`), the matrix a low dome of rock half-buried, and shards of the same species
   breaking through the litter about it, leaning out, smaller further off. Its glass: what is seen
-  through it is the mist beyond, bent by its index and coloured by its body over the way through,
-  with its zoning, milk and veils and ghost phantoms inside; a light rises through it from below;
-  the edges where its faces meet are lines of light.
+  through it is the wood itself behind it — the trees, the ground, the mist — bent by its index,
+  each colour a little differently (its dispersion), and coloured by its body over the way through,
+  with its zoning, milk and veils and ghost phantoms inside; its faces mirror the wood about it;
+  a light rises through it from below; the edges where its faces meet are lines of light.
 - **The fungi are the Hat-throwers' species**, grown gigantic (`client/field/giantfungi.ts`): one
   to three giants of ten to twenty-odd metres in the heart, a ring of lesser ones at the reach,
   young ones coming up between — stalks, caps turned from each form's profile (an inkcap's pleated,
@@ -52,9 +53,12 @@ Mistwood takes the anomalies through two hooks (`client/mistwood/main.ts`):
   `anomGrass`) are changed by each, and lit by it (`anomLight`). None by default: Mistwood alone is
   unchanged.
 - `customs`: anything another experiment draws, called in its place among the wood's cards, into
-  the scene with its depth buffer. The anomalies' bodies are drawn first, writing their depth, so the
-  trees then go in front of them or behind them by it; the wards next; the standing seals in their
-  place among the trees.
+  the scene with its depth buffer. A fungus and a crystal's shards are drawn first, writing their
+  depth, so the trees then go in front of them or behind them by it; the wards next. A crystal's
+  cluster is drawn in its place among the trees (its heart is cleared, so little stands between):
+  it takes a copy of the wood as drawn so far — everything beyond it — and sees through it, bent,
+  and in its faces (what lies behind you, not on the screen, folded in from the wood ahead). The
+  standing seals are drawn in their place among the trees.
 
 And one in `client/mistwood/world.ts`: `clearing`, how cleared a point is (the anomalies' hearts),
 set before the wood is placed.
