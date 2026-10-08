@@ -94,7 +94,7 @@ void main() {
   if (part > .5 && part < 1.5) col += uIllum * uSlime * .9 * pow(max(dot(N, H), 0.), 60.);
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
-  o = vec4(mix(col, fogToward(vWorld), fog), 1.);
+  o = vec4(mix(col, fogToward(vWorld), fog) + dither(), 1.);
 }`;
 
 /** one mushroom of the species, its foot at `at` (m, from the heart), `H` metres tall */

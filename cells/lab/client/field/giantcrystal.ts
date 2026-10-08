@@ -324,7 +324,7 @@ void main() {
   }
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
-  o = vec4(mix(col, fogToward(vWorld), fog), 1.);
+  o = vec4(mix(col, fogToward(vWorld), fog) + dither(), 1.);
 }`;
 
 /** a convex hull's faces: each plane's polygon, cut by all the others (in order round its normal) */

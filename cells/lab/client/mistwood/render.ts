@@ -211,6 +211,13 @@ vec3 anomTree(vec3 w, vec3 base) {
   return base;
 }
 vec3 fogToward(vec3 w) { return fogDir(normalize(w - vec3(uCam.x, uCam.z, uCam.y))); }
+// a step of the scene's 8-bit target, as noise (triangular, about ±1 step), added as a colour is
+// written: a smooth, dark gradient — the fog at night, brightened by the film's exposure — then
+// averages between its steps instead of breaking into bands
+vec3 dither() {
+  ivec2 p = ivec2(gl_FragCoord.xy) + ivec2(int(uT * 53.) & 255, int(uT * 37.) & 255);
+  return vec3(h2(p) + h2(p + ivec2(113, 71)) - 1.) / 255.;
+}
 `;
 
 const QUAD_VS = `#version 300 es
@@ -1235,7 +1242,7 @@ void main() {
     float fogAll = th < 0. ? 1. : 1. - (1. - fogAt(th, 0., uDensity)) * exp(-tau);
     col = sketchInk(m, fogAll, d);
   }
-  o = vec4(col, 1.);
+  o = vec4(col + dither(), 1.);
   // depth: the stone where it stands, all else at the far end
   gl_FragDepth = stone ? clamp(length((eye + d * tS).xz - eye.xz) / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) : 1.;
 }`;
@@ -1353,7 +1360,7 @@ void main() {
     o = vec4(sketchInk(mk, fog * (low ? .6 : 1.), vWorld - vec3(uCam.x, uCam.z, uCam.y)) * a, a);
     return;
   }
-  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+  o = vec4((mix(base * uIllum, fogToward(vWorld), fog) + dither()) * cov, cov) * uAlpha;
 }`;
 
 /**
@@ -1646,7 +1653,7 @@ void main() {
   if (uAnomN > 0) base = anomTree(vWorld, base);
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
-  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+  o = vec4((mix(base * uIllum, fogToward(vWorld), fog) + dither()) * cov, cov) * uAlpha;
 }`;
 
 /**
@@ -1730,7 +1737,7 @@ void main() {
     o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * am, am);
     return;
   }
-  o = vec4(mix(base * uIllum, fogToward(vWorld), fog) * cov, cov) * uAlpha;
+  o = vec4((mix(base * uIllum, fogToward(vWorld), fog) + dither()) * cov, cov) * uAlpha;
 }`;
 
 const POST_FS = `#version 300 es
