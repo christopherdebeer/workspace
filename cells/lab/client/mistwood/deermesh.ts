@@ -5,8 +5,10 @@
  * bones that meet mid-back, so the spine flexes in the bound; the neck and head are lofted too,
  * the head a wedge from skull to muzzle with its ears; the legs are tubes over three bones each
  * (the front: forearm, cannon, with the upper arm in the body; the hind: thigh, gaskin, the long
- * cannon below the hock), each vertex weighted to at most two bones. Pure: the same mesh and the
- * same pose from the same deer.
+ * cannon below the hock), each vertex weighted to at most two bones. Over each hind leg the
+ * haunch's mass, the croup to the stifle, skinned from the hindquarters to the thigh so it moves
+ * with both; over each foreleg a lesser one for the shoulder. Pure: the same mesh and the same
+ * pose from the same deer.
  *
  * The pose comes from what the herd's simulation says the deer is doing (deer.ts: where it is
  * and faces, how fast it goes, its head up or down, turned to you or not, lying up or standing):
@@ -56,8 +58,8 @@ interface LegDef { hip: V3; L: [number, number, number]; bend: number; front: bo
 const LEGS: LegDef[] = [
   { hip: [-0.12, 0.92, 0.38], L: [0.27, 0.31, 0.38], bend: -1, front: true, body: 1 },
   { hip: [0.12, 0.92, 0.38], L: [0.27, 0.31, 0.38], bend: -1, front: true, body: 1 },
-  { hip: [-0.13, 0.98, -0.48], L: [0.31, 0.35, 0.44], bend: 1, front: false, body: 0 },
-  { hip: [0.13, 0.98, -0.48], L: [0.31, 0.35, 0.44], bend: 1, front: false, body: 0 },
+  { hip: [-0.155, 0.98, -0.48], L: [0.31, 0.35, 0.44], bend: 1, front: false, body: 0 },
+  { hip: [0.155, 0.98, -0.48], L: [0.31, 0.35, 0.44], bend: 1, front: false, body: 0 },
 ];
 /** a leg's joints at rest: straight down from its hip */
 const restJoints = (l: LegDef): V3[] => [l.hip, sub(l.hip, [0, l.L[0], 0]), sub(l.hip, [0, l.L[0] + l.L[1], 0]), sub(l.hip, [0, l.L[0] + l.L[1] + l.L[2], 0])];
@@ -71,8 +73,9 @@ export function buildDeer(): { data: Float32Array; index: Uint32Array } {
   const index: number[] = [];
   const vert = (p: V3, n: V3, c: V3, b0: number, b1: number, w: number) => { data.push(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2], b0, b1, w); return data.length / DEER_STRIDE - 1; };
   /** a loft: rings about a line of centres, each an ellipse (half-widths across and up) in the
-   *  plane across the line; colour and skin per ring (or per vertex, by the colour function) */
-  const loft = (rings: Array<{ c: V3; rx: number; ry: number; b0: number; b1: number; w: number }>, side: V3, colour: (i: number, a: number, p: V3) => V3, around = 16, capEnds = true) => {
+   *  plane across the line; colour and skin per ring (or per vertex, by the colour function; an
+   *  end's cap coloured as the ring is at `capA` round it) */
+  const loft = (rings: Array<{ c: V3; rx: number; ry: number; b0: number; b1: number; w: number }>, side: V3, colour: (i: number, a: number, p: V3) => V3, around = 16, capEnds = true, capA = 0) => {
     const base = data.length / DEER_STRIDE;
     for (let i = 0; i < rings.length; i++) {
       const rg = rings[i];
@@ -96,7 +99,7 @@ export function buildDeer(): { data: Float32Array; index: Uint32Array } {
     if (capEnds) for (const [i, dir] of [[0, -1], [rings.length - 1, 1]] as const) {
       const rg = rings[i];
       const ahead = norm(sub(rings[Math.min(i + 1, rings.length - 1)].c, rings[Math.max(i - 1, 0)].c));
-      const c = vert(add(rg.c, mul(ahead, dir * Math.min(rg.rx, rg.ry) * 0.6)), mul(ahead, dir), colour(i, 0, rg.c), rg.b0, rg.b1, rg.w);
+      const c = vert(add(rg.c, mul(ahead, dir * Math.min(rg.rx, rg.ry) * 0.6)), mul(ahead, dir), colour(i, capA, rg.c), rg.b0, rg.b1, rg.w);
       for (let j = 0; j < around; j++) {
         const a = base + i * around + j, b = base + i * around + ((j + 1) % around);
         if (dir < 0) index.push(c, b, a); else index.push(c, a, b);
@@ -106,20 +109,42 @@ export function buildDeer(): { data: Float32Array; index: Uint32Array } {
   // the body: rump to chest, over the hindquarters (0) and forequarters (1)
   const BODY: Array<[number, number, number, number]> = [
     // z, half-width, half-height, centre height
-    [-0.7, 0.07, 0.08, 1.01], [-0.64, 0.15, 0.19, 0.99], [-0.52, 0.2, 0.26, 0.96], [-0.36, 0.2, 0.27, 0.94],
-    [-0.18, 0.19, 0.26, 0.93], [0.0, 0.185, 0.27, 0.925], [0.18, 0.19, 0.3, 0.94], [0.34, 0.18, 0.3, 0.965],
+    [-0.71, 0.08, 0.09, 1.02], [-0.65, 0.17, 0.2, 1.0], [-0.53, 0.225, 0.27, 0.975], [-0.38, 0.225, 0.275, 0.955],
+    [-0.2, 0.2, 0.26, 0.935], [0.0, 0.19, 0.27, 0.925], [0.18, 0.195, 0.3, 0.94], [0.34, 0.185, 0.3, 0.965],
     [0.48, 0.15, 0.25, 0.99], [0.58, 0.1, 0.17, 1.02], [0.63, 0.05, 0.09, 1.05],
   ];
   loft(BODY.map(([z, w, h, y]) => { const t = smooth(-0.2, 0.08, z); return { c: [0, y, z], rx: w, ry: h, b0: 0, b1: 1, w: t }; }), [1, 0, 0], (i, a, p) => {
     const s = Math.sin(a);
-    // the rump patch white about the tail; the belly lighter; a darker line along the back
-    const rump = smooth(-0.58, -0.68, p[2]) * smooth(-0.3, 0.2, s) * (1 - smooth(0.08, 0.12, Math.abs(p[0])));
+    // the rump patch white under the tail; the belly lighter; a darker line along the back
+    const rump = smooth(-0.6, -0.68, p[2]) * smooth(-0.9, -0.5, s) * (1 - smooth(-0.05, 0.25, s)) * (1 - smooth(0.06, 0.1, Math.abs(p[0])));
     const belly = smooth(-0.35, -0.85, s);
     const back = smooth(0.85, 1, s) * 0.3;
     let c = mixV(COAT, BELLY, belly);
     c = mul(c, 1 - back);
     return mixV(c, RUMP, rump);
-  }, 22);
+  }, 22, true, Math.PI / 2);
+  // the haunches: the thigh's mass over each hind leg, from the croup down to the stifle, wide and
+  // deep behind the bone (the ham), white inside about the tail; its top moves with the
+  // hindquarters, its foot with the thigh. And a lesser mass over each shoulder, to the elbow.
+  const HAUNCH: Array<[number, number, number, number, number]> = [
+    // height, z, half-width, half-depth, weight to the thigh
+    [1.08, -0.52, 0.04, 0.06, 0], [1.05, -0.53, 0.055, 0.12, 0], [1.0, -0.545, 0.105, 0.17, 0.1], [0.92, -0.54, 0.12, 0.185, 0.4],
+    [0.83, -0.52, 0.105, 0.16, 0.75], [0.74, -0.495, 0.08, 0.115, 0.95], [0.68, -0.48, 0.055, 0.075, 1],
+  ];
+  const SHOULDER: Array<[number, number, number, number, number]> = [
+    [1.1, 0.32, 0.02, 0.04, 0], [1.06, 0.33, 0.035, 0.08, 0], [1.0, 0.355, 0.06, 0.115, 0.1], [0.92, 0.375, 0.065, 0.11, 0.5], [0.86, 0.38, 0.05, 0.075, 0.9],
+  ];
+  LEGS.forEach((l, k) => {
+    const out = Math.sign(l.hip[0]);
+    const bone = 7 + k * 3;
+    const rings = (l.front ? SHOULDER : HAUNCH).map(([y, z, rx, ry, w]) => ({ c: [l.hip[0] * (l.front ? 1.05 : 1), y, z] as V3, rx, ry, b0: l.body, b1: bone, w }));
+    loft(rings, [1, 0, 0], (_i, a, p) => {
+      // (inside, toward the other leg, lighter; the back of the hams white under the tail)
+      const inner = smooth(0.2, 0.8, -Math.cos(a) * out);
+      const ham = l.front ? 0 : smooth(-0.6, -0.68, p[2]) * smooth(-0.2, 0.4, -Math.cos(a) * out) * smooth(0.1, 0.5, -Math.sin(a)) * smooth(0.76, 0.86, p[1]) * (1 - smooth(1.0, 1.06, p[1]));
+      return mixV(mixV(COAT, BELLY, inner * 0.6), RUMP, ham);
+    }, 16);
+  });
   // the neck: from the chest up to the head (blended into the forequarters at its base)
   const NECK: Array<[number, number, number]> = [[0, 0.13, 0.16], [0.25, 0.1, 0.12], [0.55, 0.075, 0.09], [0.85, 0.065, 0.075], [1, 0.06, 0.07]];
   loft(NECK.map(([t, rx, ry]) => ({ c: add(add(NECK0, mul(sub(HEAD0, NECK0), t)), [0, -0.04 * Math.sin(Math.PI * t), 0.03 * Math.sin(Math.PI * t)]), rx, ry, b0: 1, b1: 2, w: smooth(0, 0.25, t) })), [1, 0, 0], (_i, a) => (Math.sin(a) < -0.5 ? BELLY : COAT), 14);
@@ -135,13 +160,15 @@ export function buildDeer(): { data: Float32Array; index: Uint32Array } {
     const rings = [0, 0.04, 0.09, 0.14, 0.17].map((t, i) => ({ c: add(e, mul(dir, t)), rx: [0.025, 0.035, 0.035, 0.024, 0.006][i], ry: [0.012, 0.012, 0.01, 0.008, 0.003][i], b0: 4 + k, b1: 4 + k, w: 0 }));
     loft(rings, [0, 0, 1], (_i, a) => (Math.sin(a) > 0 ? EARIN : COAT), 8);
   });
-  // the tail: a short tuft, white beneath
-  loft([0, 0.06, 0.12, 0.16].map((t, i) => ({ c: add(TAIL0, [0, -t * 0.8, -t * 0.55]), rx: [0.035, 0.04, 0.035, 0.01][i], ry: [0.03, 0.035, 0.03, 0.01][i], b0: 6, b1: 6, w: 0 })), [1, 0, 0], (_i, a) => (Math.sin(a) < 0 ? RUMP : COAT), 8);
+  // the tail: a short tuft, white beneath (toward the rump as it hangs, shown when it flags)
+  loft([0, 0.06, 0.12, 0.16].map((t, i) => ({ c: add(TAIL0, [0, -t * 0.8, -t * 0.55]), rx: [0.035, 0.04, 0.035, 0.01][i], ry: [0.03, 0.035, 0.03, 0.01][i], b0: 6, b1: 6, w: 0 })), [1, 0, 0], (_i, a) => (Math.sin(a) > 0 ? RUMP : COAT), 8);
   // the legs: tubes down each bone, joints blended, a hoof at the foot
   LEGS.forEach((l, k) => {
     const J = restJoints(l);
     const b = 7 + k * 3;
-    const r = l.front ? [0.075, 0.05, 0.045, 0.032, 0.026, 0.022, 0.024, 0.026] : [0.09, 0.07, 0.05, 0.038, 0.03, 0.023, 0.025, 0.027];
+    const r = l.front ? [0.075, 0.05, 0.045, 0.032, 0.026, 0.022, 0.024, 0.026] : [0.09, 0.075, 0.056, 0.042, 0.03, 0.023, 0.025, 0.027];
+    // (deeper than wide: the hind leg's gaskin flat and deep under the haunch)
+    const deep = l.front ? [1.15, 1.15, 1.15, 1.15, 1.15, 1.15, 1.15, 1.15] : [1.15, 1.2, 1.35, 1.4, 1.3, 1.15, 1.15, 1.15];
     // stations: down the upper bone, the middle, the lower to the fetlock, the hoof
     const st: Array<{ y: number; r: number; b0: number; b1: number; w: number; c: V3 }> = [];
     const at = (i: number, t: number) => J[i][1] + (J[i + 1][1] - J[i][1]) * t;
@@ -153,7 +180,7 @@ export function buildDeer(): { data: Float32Array; index: Uint32Array } {
     st.push({ y: at(2, 0.55), r: r[5], b0: b + 2, b1: b + 2, w: 0, c: LEG });
     st.push({ y: at(2, 0.86), r: r[6], b0: b + 2, b1: b + 2, w: 0, c: HOOF });
     st.push({ y: at(2, 1.0), r: r[7], b0: b + 2, b1: b + 2, w: 0, c: HOOF });
-    loft(st.map((s) => ({ c: [l.hip[0], s.y, l.hip[2]] as V3, rx: s.r, ry: s.r * 1.15, b0: s.b0, b1: s.b1, w: s.w })), [1, 0, 0], (i) => st[i].c, 10);
+    loft(st.map((s, i) => ({ c: [l.hip[0], s.y, l.hip[2]] as V3, rx: s.r, ry: s.r * deep[i], b0: s.b0, b1: s.b1, w: s.w })), [1, 0, 0], (i) => st[i].c, 10);
   });
   return { data: new Float32Array(data), index: new Uint32Array(index) };
 }

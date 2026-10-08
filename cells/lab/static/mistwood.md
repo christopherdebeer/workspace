@@ -286,8 +286,13 @@ are far, so they are there again when you come back.
 - **Drawn** as geometry (`client/deermesh.ts`): a mesh lofted from cross-sections (rump,
   haunch, the deep ribcage, chest; the neck; the head, a wedge from skull to muzzle, with its
   eyes and ears; the tail; the legs, three bones each down to the hoof) skinned to a skeleton of
-  nineteen bones, the spine bending mid-back. Its pose comes from what the herd's simulation says
-  it is doing, each frame:
+  nineteen bones, the spine bending mid-back. Over each hind leg the haunch, the thigh's mass from
+  the croup down to the stifle, deep behind the bone (the ham) and wider than the waist, its top
+  moving with the hindquarters and its foot with the thigh, so it swings and stretches with the
+  stride; a lesser mass over each shoulder; the gaskin below deep and flat. (Its proportions were
+  checked against the drive's deer, a different look but the same animal: hips about half a metre
+  across, the legs set out under the haunches.) White under the tail, between the hams. Its pose
+  comes from what the herd's simulation says it is doing, each frame:
   - its gait follows its speed over the ground, the cycle advancing as far as it has gone, so a
     hoof set down stays put while the body passes over it: a four-beat walk, a trot in diagonal
     pairs, and the bound it dashes in (hind legs together, then the fore, a moment in the air, the
