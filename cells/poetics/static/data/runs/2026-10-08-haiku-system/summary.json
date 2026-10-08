@@ -737,6 +737,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": -0.05,
+    "lo": -0.146,
+    "hi": 0.035,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": -0.204,
@@ -777,6 +783,7 @@
      ]
     }
    },
+   "clearTrials": false,
    "clear": false
   },
   {
@@ -790,6 +797,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": 0.058,
+    "lo": 0.012,
+    "hi": 0.114,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": 0.146,
@@ -830,6 +843,7 @@
      ]
     }
    },
+   "clearTrials": false,
    "clear": false
   },
   {
@@ -843,6 +857,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": -0.013,
+    "lo": -0.042,
+    "hi": 0.019,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": 0,
@@ -883,6 +903,7 @@
      ]
     }
    },
+   "clearTrials": false,
    "clear": false
   },
   {
@@ -896,6 +917,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": 0.064,
+    "lo": 0.017,
+    "hi": 0.115,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": 0.146,
@@ -936,6 +963,7 @@
      ]
     }
    },
+   "clearTrials": true,
    "clear": true
   },
   {
@@ -949,6 +977,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": 0.072,
+    "lo": 0.017,
+    "hi": 0.131,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": 0.175,
@@ -989,6 +1023,7 @@
      ]
     }
    },
+   "clearTrials": true,
    "clear": true
   },
   {
@@ -1002,6 +1037,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": 0.032,
+    "lo": 0.006,
+    "hi": 0.069,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": 0.058,
@@ -1042,6 +1083,7 @@
      ]
     }
    },
+   "clearTrials": false,
    "clear": false
   },
   {
@@ -1055,6 +1097,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": 0.054,
+    "lo": 0.006,
+    "hi": 0.113,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": 0.146,
@@ -1095,6 +1143,7 @@
      ]
     }
    },
+   "clearTrials": false,
    "clear": false
   },
   {
@@ -1108,6 +1157,12 @@
     18,
     18
    ],
+   "clustered": {
+    "delta": -0.004,
+    "lo": -0.029,
+    "hi": 0.025,
+    "groups": 6
+   },
    "perFamily": {
     "gaps": {
      "delta": 0,
@@ -1148,6 +1203,7 @@
      ]
     }
    },
+   "clearTrials": false,
    "clear": false
   }
  ]

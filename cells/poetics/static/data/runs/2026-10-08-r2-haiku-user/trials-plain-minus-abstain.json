@@ -1,0 +1,2833 @@
+[
+ {
+  "id": "plain-minus-abstain~gaps-1~1",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-1",
+  "family": "gaps",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1491,
+    "cacheCreation": 0,
+    "cacheRead": 1673,
+    "output": 888,
+    "costUsd": 0.00060983
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "a20b168714ec80ad",
+  "output": "Rosalind Achterberg joined the Wexcombe Observatory in 1952 as a computing assistant. By 1958 she led the night programme, and the observatory's annual report for that year names Rosalind Achterberg as the programme's lead. The 60-inch reflector she used was commissioned in [unknown], and she left Wexcombe in 1961 for a post at [unknown]. Her successor took over the night programme in 1961, the year she left, and inherited her logbooks, which remain in the observatory's archive.",
+  "isError": false,
+  "usage": {
+   "input": 1491,
+   "cacheCreation": 0,
+   "cacheRead": 1673,
+   "output": 888
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1673,
+   "output": 561
+  },
+  "costUsd": 0.00060983,
+  "costTotalUsd": 0.00060983,
+  "apiMs": 4160,
+  "wallMs": 9084,
+  "at": "2026-10-08T12:47:40.303Z",
+  "score": 1,
+  "components": {
+   "support": 1,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Achterberg",
+     "got": "Rosalind Achterberg",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "1961",
+     "got": "1961",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-2~1",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-2",
+  "family": "gaps",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1499,
+    "cacheCreation": 0,
+    "cacheRead": 1681,
+    "output": 1170,
+    "costUsd": 0.00075171
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "53cd8861a4c3b0d2",
+  "output": "The ferry Maren Tove operates between Skarvik and Holmsund. The crossing takes 40 minutes, and the vessel carries up to 120 passengers and 18 cars. In summer it makes six return crossings a day, the first leaving Skarvik at 06:30. The last crossing of the day departs [unknown] at [unknown] and arrives in Skarvik at [unknown]. The vessel was built in [unknown] and refitted in 2019, when its passenger capacity was raised from 90 to 120.",
+  "isError": false,
+  "usage": {
+   "input": 1499,
+   "cacheCreation": 0,
+   "cacheRead": 1681,
+   "output": 1170
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1681,
+   "output": 957
+  },
+  "costUsd": 0.00075171,
+  "costTotalUsd": 0.00075171,
+  "apiMs": 5253,
+  "wallMs": 10695,
+  "at": "2026-10-08T12:48:00.830Z",
+  "score": 0.825,
+  "components": {
+   "support": 0.5,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Holmsund",
+     "got": "[unknown]",
+     "ok": false
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "120",
+     "got": "120",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-3~1",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-3",
+  "family": "gaps",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1511,
+    "cacheCreation": 0,
+    "cacheRead": 1693,
+    "output": 942,
+    "costUsd": 0.0006390300000000001
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "44289c6f91a7a28a",
+  "output": "The Hollin Beck mill was rebuilt in 1874 after a fire, and the rebuilt wheel, 16 feet across, drove three pairs of stones. The miller from 1874 until his death in 1902 was Josiah Penhaligon; the parish register records the burial of Josiah Penhaligon in that year. His daughter Mercy kept the mill for a further 19 years, until it closed in 1921, and the 16-foot wheel was sold for scrap in [unknown]. The mill race is still visible from the footpath, [unknown] of the village.",
+  "isError": false,
+  "usage": {
+   "input": 1511,
+   "cacheCreation": 0,
+   "cacheRead": 1693,
+   "output": 942
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1693,
+   "output": 721
+  },
+  "costUsd": 0.0006390300000000001,
+  "costTotalUsd": 0.0006390300000000001,
+  "apiMs": 4677,
+  "wallMs": 9947,
+  "at": "2026-10-08T12:48:19.629Z",
+  "score": 1,
+  "components": {
+   "support": 1,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Penhaligon",
+     "got": "Josiah Penhaligon",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "19 | nineteen",
+     "got": "19",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "16 | sixteen",
+     "got": "16",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-4~1",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-4",
+  "family": "gaps",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1551,
+    "cacheCreation": 0,
+    "cacheRead": 1733,
+    "output": 1218,
+    "costUsd": 0.0007814300000000001
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "5e547891337da975",
+  "output": "Line 4 of the Varnholm tramway runs from Kestrel Quay to the university, with 14 stops. Service begins at 05:40 from Kestrel Quay and the full journey is timetabled at 31 minutes, so the first tram reaches the university at 06:11. Trams run every 7 minutes in the peak and every [unknown] minutes off-peak. The fleet of 22 cars was built by [unknown] between 2011 and [unknown]; the line's depot is at [unknown], the [unknown]th stop. On Sundays the first departure is at 07:00 and the journey time is unchanged, so the first Sunday tram reaches the university at 07:31.",
+  "isError": false,
+  "usage": {
+   "input": 1551,
+   "cacheCreation": 0,
+   "cacheRead": 1733,
+   "output": 1218
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1733,
+   "output": 911
+  },
+  "costUsd": 0.0007814300000000001,
+  "costTotalUsd": 0.0007814300000000001,
+  "apiMs": 4888,
+  "wallMs": 10525,
+  "at": "2026-10-08T12:48:44.056Z",
+  "score": 1,
+  "components": {
+   "support": 1,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "06:11 | 6:11",
+     "got": "06:11",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 6,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 7,
+     "want": "07:31 | 7:31",
+     "got": "07:31",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-1~1",
+  "condition": "plain-minus-abstain",
+  "task": "names-1",
+  "family": "names",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1485,
+    "cacheCreation": 0,
+    "cacheRead": 1667,
+    "output": 5734,
+    "costUsd": 0.00303217
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "88682f2861ce417c",
+  "output": "The Pennington Street depot opened in 1911 as the northern yard of Harrowgate & Fenwick Tramways. Its first manager, Ailsa Okonkwo-Reyes, stayed until 1934 and is credited with keeping No. 7 running through the winter of 1926 when other lines were suspended. Caldbeck Lane shed never electrified; the site later became a bus garage.",
+  "isError": false,
+  "usage": {
+   "input": 1485,
+   "cacheCreation": 0,
+   "cacheRead": 1667,
+   "output": 5734
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1667,
+   "output": 5716
+  },
+  "costUsd": 0.00303217,
+  "costTotalUsd": 0.00303217,
+  "apiMs": 22115,
+  "wallMs": 28259,
+  "at": "2026-10-08T12:49:30.305Z",
+  "score": 1,
+  "components": {
+   "retention": 1,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [],
+   "words": 54,
+   "maxWords": 55,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-2~1",
+  "condition": "plain-minus-abstain",
+  "task": "names-2",
+  "family": "names",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1498,
+    "cacheCreation": 1680,
+    "cacheRead": 0,
+    "output": 6566,
+    "costUsd": 0.0037687999999999997
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "94034a5284ab7269",
+  "output": "From Tuesday 3 March, the gateway returned 413 for uploads over 2 MiB. PLT-2291 traced it to build 4.12.0-rc3 of dispatch cell. Mendel Varga-Lindqvist found x-parc-writes header counted toward the limit. 4.12.1 excludes headers, raising limit to 8 MiB. No data lost, but 214 Oakhaven uploads were retried manually.",
+  "isError": false,
+  "usage": {
+   "input": 1498,
+   "cacheCreation": 1680,
+   "cacheRead": 0,
+   "output": 6566
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1680,
+   "cacheRead": 0,
+   "output": 6362
+  },
+  "costUsd": 0.0037687999999999997,
+  "costTotalUsd": 0.0037687999999999997,
+  "apiMs": 24677,
+  "wallMs": 30792,
+  "at": "2026-10-08T12:50:32.690Z",
+  "score": 0.95,
+  "components": {
+   "retention": 0.9166666666666666,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [
+    "RFC 7231"
+   ],
+   "words": 49,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-3~1",
+  "condition": "plain-minus-abstain",
+  "task": "names-3",
+  "family": "names",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1498,
+    "cacheCreation": 1680,
+    "cacheRead": 0,
+    "output": 7767,
+    "costUsd": 0.0043693000000000004
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "f4d03d86788d70f1",
+  "output": "Kittiwake II was delivered to the Moray Firth Hydrographic Office on 14 June 1987 by Oskar Lindqvist & Sons at Buckie. Skippered by Teodora Brannigan-Achebe for eleven seasons, she surveyed 212 nautical miles of Beauly approaches in 1993, taking nineteen days. Sold in 2004 to a Lossiemouth diving club.",
+  "isError": false,
+  "usage": {
+   "input": 1498,
+   "cacheCreation": 1680,
+   "cacheRead": 0,
+   "output": 7767
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1680,
+   "cacheRead": 0,
+   "output": 7747
+  },
+  "costUsd": 0.0043693000000000004,
+  "costTotalUsd": 0.0043693000000000004,
+  "apiMs": 29695,
+  "wallMs": 35417,
+  "at": "2026-10-08T12:51:36.570Z",
+  "score": 0.9,
+  "components": {
+   "retention": 0.8333333333333334,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [
+    "Decca Mk 21",
+    "MFH-0412"
+   ],
+   "words": 49,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-4~1",
+  "condition": "plain-minus-abstain",
+  "task": "names-4",
+  "family": "names",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1515,
+    "cacheCreation": 1697,
+    "cacheRead": 0,
+    "output": 6779,
+    "costUsd": 0.0038804
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "a73320958d0c6492",
+  "output": "Ingest worker 2.9.4 (ingest-w/2.9.4, 7f3c0a2e) fixed INC-1187's 22 September retry storm: SQS consumer re-queued messages with receipt handles over 1024 bytes. Priyanka Oyelaran-Whitcombe found check used pre-base64 size. Now 2048 bytes, checked after encoding. Fernhollow and Stavely's 9300 messages replayed from dead-letter queue within four hours. Behind INGEST_HANDLE_V2 until 2.10.",
+  "isError": false,
+  "usage": {
+   "input": 1515,
+   "cacheCreation": 1697,
+   "cacheRead": 0,
+   "output": 6779
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1697,
+   "cacheRead": 0,
+   "output": 6541
+  },
+  "costUsd": 0.0038804,
+  "costTotalUsd": 0.0038804,
+  "apiMs": 26248,
+  "wallMs": 32193,
+  "at": "2026-10-08T12:52:46.628Z",
+  "score": 1,
+  "components": {
+   "retention": 1,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [],
+   "words": 50,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-1~1",
+  "condition": "plain-minus-abstain",
+  "task": "records-1",
+  "family": "records",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1557,
+    "cacheCreation": 1739,
+    "cacheRead": 0,
+    "output": 891,
+    "costUsd": 0.0009490000000000001
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "f7cd289c505953a6",
+  "output": "R1 | Brass compass | Thwaite | TH-114\nR2 | Brass compass | Delacroix | DL-207\nR3 | Pocket barometer | Thwaite | TH-131\nR4 | Brass compass | maker illegible | TH-114\nR5 | Pocket barometer | Delacroix | DL-207\nR6 | Pocket barometer | unknown | UK-009",
+  "isError": false,
+  "usage": {
+   "input": 1557,
+   "cacheCreation": 1739,
+   "cacheRead": 0,
+   "output": 891
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1739,
+   "cacheRead": 0,
+   "output": 754
+  },
+  "costUsd": 0.0009490000000000001,
+  "costTotalUsd": 0.0009490000000000001,
+  "apiMs": 3992,
+  "wallMs": 10305,
+  "at": "2026-10-08T12:53:20.256Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "R1 | Brass compass | Thwaite | TH-114",
+     "got": "R1 | Brass compass | Thwaite | TH-114",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R2 | Brass compass | Delacroix | DL-207",
+     "got": "R2 | Brass compass | Delacroix | DL-207",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "R3 | Pocket barometer | Thwaite | TH-131",
+     "got": "R3 | Pocket barometer | Thwaite | TH-131",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R4 | Brass compass | maker illegible | TH-114",
+     "got": "R4 | Brass compass | maker illegible | TH-114",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R5 | Pocket barometer | Delacroix | DL-207",
+     "got": "R5 | Pocket barometer | Delacroix | DL-207",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "R6 | Pocket barometer | unknown | UK-009",
+     "got": "R6 | Pocket barometer | unknown | UK-009",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-2~1",
+  "condition": "plain-minus-abstain",
+  "task": "records-2",
+  "family": "records",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1546,
+    "cacheCreation": 1728,
+    "cacheRead": 0,
+    "output": 776,
+    "costUsd": 0.0008882
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "7da690cb11b9b20b",
+  "output": "07:10 | Lintonbridge | platform 4\n07:25 | Ashby Parkway | platform 2\n07:40 | Grey Fell Halt | platform 1\n08:05 | Ravenstone southbound | platform 3\n08:20 | Ashby Parkway northbound | platform 2\n08:45 | Lintonbridge | platform 4",
+  "isError": false,
+  "usage": {
+   "input": 1546,
+   "cacheCreation": 1728,
+   "cacheRead": 0,
+   "output": 776
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1728,
+   "cacheRead": 0,
+   "output": 474
+  },
+  "costUsd": 0.0008882,
+  "costTotalUsd": 0.0008882,
+  "apiMs": 3963,
+  "wallMs": 8150,
+  "at": "2026-10-08T12:53:38.764Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "07:10 | Lintonbridge | platform 4",
+     "got": "07:10 | Lintonbridge | platform 4",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "07:25 | Ashby Parkway | platform 2",
+     "got": "07:25 | Ashby Parkway | platform 2",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "07:40 | Grey Fell Halt | platform 1",
+     "got": "07:40 | Grey Fell Halt | platform 1",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "08:05 | Ravenstone southbound | platform 3",
+     "got": "08:05 | Ravenstone southbound | platform 3",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "08:20 | Ashby Parkway northbound | platform 2",
+     "got": "08:20 | Ashby Parkway northbound | platform 2",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "08:45 | Lintonbridge | platform 4",
+     "got": "08:45 | Lintonbridge | platform 4",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-3~1",
+  "condition": "plain-minus-abstain",
+  "task": "records-3",
+  "family": "records",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1750,
+    "cacheCreation": 1932,
+    "cacheRead": 0,
+    "output": 721,
+    "costUsd": 0.0009219
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "63ea9fbeaef93163",
+  "output": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a\nA2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a\nA3 | Letters of Ansel Varr | 1931 | VR.L\nA4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2\nA5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3\nA6 | Dialogues of Ansel Varr | 1927 | VR.1927.a\nA7 | Letters of Ansel Varr | 1911 | VR.L\nA8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+  "isError": false,
+  "usage": {
+   "input": 1750,
+   "cacheCreation": 1932,
+   "cacheRead": 0,
+   "output": 721
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1932,
+   "cacheRead": 0,
+   "output": 693
+  },
+  "costUsd": 0.0009219,
+  "costTotalUsd": 0.0009219,
+  "apiMs": 3259,
+  "wallMs": 9281,
+  "at": "2026-10-08T12:54:05.157Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a",
+     "got": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a",
+     "got": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A3 | Letters of Ansel Varr | 1931 | VR.L",
+     "got": "A3 | Letters of Ansel Varr | 1931 | VR.L",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2",
+     "got": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3",
+     "got": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a",
+     "got": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A7 | Letters of Ansel Varr | 1911 | VR.L",
+     "got": "A7 | Letters of Ansel Varr | 1911 | VR.L",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+     "got": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-4~1",
+  "condition": "plain-minus-abstain",
+  "task": "records-4",
+  "family": "records",
+  "rep": 1,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1655,
+    "cacheCreation": 1837,
+    "cacheRead": 0,
+    "output": 1048,
+    "costUsd": 0.0010569
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "6d9a1bd726ef0edb",
+  "output": "S1 | Bram Teixeira | Accounts | ext 2305\nS2 | Oona Fairweather | Accounts | ext 2210\nS3 | Oona Fairweather | department not given | ext 2210\nS4 | Lucia Ferrante-Okoro | Dispatch | ext 2219\nS5 | Desmond Achterberg | Dispatch | ext 2291\nS6 | Bram Teixeira | Dispatch | ext 2305\nS7 | Desmond Achterberg | Accounts | ext 2291\nS8 | Oona Fairweather | Dispatch | ext 2284",
+  "isError": false,
+  "usage": {
+   "input": 1655,
+   "cacheCreation": 1837,
+   "cacheRead": 0,
+   "output": 1048
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1837,
+   "cacheRead": 0,
+   "output": 876
+  },
+  "costUsd": 0.0010569,
+  "costTotalUsd": 0.0010569,
+  "apiMs": 4563,
+  "wallMs": 9789,
+  "at": "2026-10-08T12:54:26.624Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "S1 | Bram Teixeira | Accounts | ext 2305",
+     "got": "S1 | Bram Teixeira | Accounts | ext 2305",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S2 | Oona Fairweather | Accounts | ext 2210",
+     "got": "S2 | Oona Fairweather | Accounts | ext 2210",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S3 | Oona Fairweather | department not given | ext 2210",
+     "got": "S3 | Oona Fairweather | department not given | ext 2210",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219",
+     "got": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S5 | Desmond Achterberg | Dispatch | ext 2291",
+     "got": "S5 | Desmond Achterberg | Dispatch | ext 2291",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S6 | Bram Teixeira | Dispatch | ext 2305",
+     "got": "S6 | Bram Teixeira | Dispatch | ext 2305",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S7 | Desmond Achterberg | Accounts | ext 2291",
+     "got": "S7 | Desmond Achterberg | Accounts | ext 2291",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S8 | Oona Fairweather | Dispatch | ext 2284",
+     "got": "S8 | Oona Fairweather | Dispatch | ext 2284",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-1~2",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-1",
+  "family": "gaps",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1491,
+    "cacheCreation": 0,
+    "cacheRead": 1673,
+    "output": 918,
+    "costUsd": 0.00062483
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "a20b168714ec80ad",
+  "output": "Rosalind Achterberg joined the Wexcombe Observatory in 1952 as a computing assistant. By 1958 she led the night programme, and the observatory's annual report for that year names Rosalind Achterberg as the programme's lead. The 60-inch reflector she used was commissioned in [unknown], and she left Wexcombe in 1961 for a post at [unknown]. Her successor took over the night programme in 1961, the year she left, and inherited her logbooks, which remain in the observatory's archive.",
+  "isError": false,
+  "usage": {
+   "input": 1491,
+   "cacheCreation": 0,
+   "cacheRead": 1673,
+   "output": 918
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1673,
+   "output": 590
+  },
+  "costUsd": 0.00062483,
+  "costTotalUsd": 0.00062483,
+  "apiMs": 4405,
+  "wallMs": 9100,
+  "at": "2026-10-08T12:54:46.168Z",
+  "score": 1,
+  "components": {
+   "support": 1,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Achterberg",
+     "got": "Rosalind Achterberg",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "1961",
+     "got": "1961",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-2~2",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-2",
+  "family": "gaps",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1499,
+    "cacheCreation": 0,
+    "cacheRead": 1681,
+    "output": 654,
+    "costUsd": 0.0004937100000000001
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "53cd8861a4c3b0d2",
+  "output": "The ferry Maren Tove operates between Skarvik and Holmsund. The crossing takes 40 minutes, and the vessel carries up to 120 passengers and 18 cars. In summer it makes six return crossings a day, the first leaving Skarvik at 06:30. The last crossing of the day departs [unknown] at [unknown] and arrives in Skarvik at [unknown]. The vessel was built in [unknown] and refitted in 2019, when its passenger capacity was raised from 90 to 120.",
+  "isError": false,
+  "usage": {
+   "input": 1499,
+   "cacheCreation": 0,
+   "cacheRead": 1681,
+   "output": 654
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1681,
+   "output": 484
+  },
+  "costUsd": 0.0004937100000000001,
+  "costTotalUsd": 0.0004937100000000001,
+  "apiMs": 3260,
+  "wallMs": 8540,
+  "at": "2026-10-08T12:55:04.399Z",
+  "score": 0.825,
+  "components": {
+   "support": 0.5,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Holmsund",
+     "got": "[unknown]",
+     "ok": false
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "120",
+     "got": "120",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-3~2",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-3",
+  "family": "gaps",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1511,
+    "cacheCreation": 0,
+    "cacheRead": 1693,
+    "output": 1084,
+    "costUsd": 0.0007100300000000001
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "44289c6f91a7a28a",
+  "output": "The Hollin Beck mill was rebuilt in 1874 after a fire, and the rebuilt wheel, 16 feet across, drove three pairs of stones. The miller from 1874 until his death in 1902 was Josiah Penhaligon; the parish register records the burial of Josiah Penhaligon in that year. His daughter Mercy kept the mill for a further [unknown] years, until it closed in 1921, and the 16-foot wheel was sold for scrap in [unknown]. The mill race is still visible from the footpath, [unknown] of the village.",
+  "isError": false,
+  "usage": {
+   "input": 1511,
+   "cacheCreation": 0,
+   "cacheRead": 1693,
+   "output": 1084
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1693,
+   "output": 845
+  },
+  "costUsd": 0.0007100300000000001,
+  "costTotalUsd": 0.0007100300000000001,
+  "apiMs": 5094,
+  "wallMs": 10506,
+  "at": "2026-10-08T12:55:31.368Z",
+  "score": 0.883,
+  "components": {
+   "support": 0.6666666666666666,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Penhaligon",
+     "got": "Josiah Penhaligon",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "19 | nineteen",
+     "got": "[unknown]",
+     "ok": false
+    },
+    {
+     "n": 3,
+     "want": "16 | sixteen",
+     "got": "16",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-4~2",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-4",
+  "family": "gaps",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1551,
+    "cacheCreation": 0,
+    "cacheRead": 1733,
+    "output": 1059,
+    "costUsd": 0.00070193
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "5e547891337da975",
+  "output": "Line 4 of the Varnholm tramway runs from Kestrel Quay to the university, with 14 stops. Service begins at 05:40 from Kestrel Quay and the full journey is timetabled at 31 minutes, so the first tram reaches the university at 06:11. Trams run every 7 minutes in the peak and every [unknown] minutes off-peak. The fleet of 22 cars was built by [unknown] between 2011 and [unknown]; the line's depot is at [unknown], the [unknown]th stop. On Sundays the first departure is at 07:00 and the journey time is unchanged, so the first Sunday tram reaches the university at 07:31.",
+  "isError": false,
+  "usage": {
+   "input": 1551,
+   "cacheCreation": 0,
+   "cacheRead": 1733,
+   "output": 1059
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1733,
+   "output": 641
+  },
+  "costUsd": 0.00070193,
+  "costTotalUsd": 0.00070193,
+  "apiMs": 4822,
+  "wallMs": 9528,
+  "at": "2026-10-08T12:55:52.969Z",
+  "score": 1,
+  "components": {
+   "support": 1,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "06:11 | 6:11",
+     "got": "06:11",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 6,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 7,
+     "want": "07:31 | 7:31",
+     "got": "07:31",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-1~2",
+  "condition": "plain-minus-abstain",
+  "task": "names-1",
+  "family": "names",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1485,
+    "cacheCreation": 1676,
+    "cacheRead": 0,
+    "output": 5703,
+    "costUsd": 0.0033352
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "88682f2861ce417c",
+  "output": "Pennington Street depot opened in 1911 as the northern yard of Harrowgate & Fenwick Tramways. First manager Ailsa Okonkwo-Reyes stayed until 1934 and kept No. 7 route running through winter 1926 when other lines were suspended. The Caldbeck Lane shed stored spare bogies. A bus garage later occupied the site; the original brick frontage survives.",
+  "isError": false,
+  "usage": {
+   "input": 1485,
+   "cacheCreation": 1676,
+   "cacheRead": 0,
+   "output": 5703
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1676,
+   "cacheRead": 0,
+   "output": 5685
+  },
+  "costUsd": 0.0033352,
+  "costTotalUsd": 0.0033352,
+  "apiMs": 21636,
+  "wallMs": 26960,
+  "at": "2026-10-08T12:56:33.318Z",
+  "score": 1,
+  "components": {
+   "retention": 1,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [],
+   "words": 55,
+   "maxWords": 55,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-2~2",
+  "condition": "plain-minus-abstain",
+  "task": "names-2",
+  "family": "names",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1498,
+    "cacheCreation": 0,
+    "cacheRead": 1680,
+    "output": 3936,
+    "costUsd": 0.0021346
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "94034a5284ab7269",
+  "output": "From 3 March the gateway rejected uploads over 2 MiB with 413 errors. PLT-2291 traced this to build 4.12.0-rc3. Mendel Varga-Lindqvist found the x-parc-writes header counted toward body limit. Build 4.12.1 excludes headers and raises the limit to 8 MiB. No data was lost; 214 Oakhaven uploads were retried manually.",
+  "isError": false,
+  "usage": {
+   "input": 1498,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 3936
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 3710
+  },
+  "costUsd": 0.0021346,
+  "costTotalUsd": 0.0021346,
+  "apiMs": 14437,
+  "wallMs": 19599,
+  "at": "2026-10-08T12:57:32.122Z",
+  "score": 0.9,
+  "components": {
+   "retention": 0.8333333333333334,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [
+    "Tuesday 3 March",
+    "RFC 7231"
+   ],
+   "words": 50,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-3~2",
+  "condition": "plain-minus-abstain",
+  "task": "names-3",
+  "family": "names",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1498,
+    "cacheCreation": 0,
+    "cacheRead": 1680,
+    "output": 12586,
+    "costUsd": 0.0064596
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "f4d03d86788d70f1",
+  "output": "Kittiwake II, delivered 14 June 1987 to Moray Firth Hydrographic Office by Oskar Lindqvist & Sons, Buckie, carried Decca Mk 21 receiver, MFH-0412. Teodora Brannigan-Achebe skippered first eleven seasons. 212-nautical-mile Beauly approaches survey (1993) took nineteen days. Laid up 2004; sold to Lossiemouth diving club, renamed; MFH-0412 plate on wheelhouse.",
+  "isError": false,
+  "usage": {
+   "input": 1498,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 12586
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 12566
+  },
+  "costUsd": 0.0064596,
+  "costTotalUsd": 0.0064596,
+  "apiMs": 47613,
+  "wallMs": 54213,
+  "at": "2026-10-08T12:58:54.948Z",
+  "score": 1,
+  "components": {
+   "retention": 1,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [],
+   "words": 50,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-4~2",
+  "condition": "plain-minus-abstain",
+  "task": "names-4",
+  "family": "names",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1515,
+    "cacheCreation": 0,
+    "cacheRead": 1697,
+    "output": 6264,
+    "costUsd": 0.00330047
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "a73320958d0c6492",
+  "output": "Release (ingest-w/2.9.4, commit 7f3c0a2e) fixed INC-1187's retry storm: SQS consumer re-queued messages with receipt handles over 1024 bytes. Priyanka Oyelaran-Whitcombe found the check used pre-base64 size. Cap 2048 bytes, checked after encoding. Fernhollow and Stavely's 9300 messages were replayed from dead-letter queue within four hours. Gated by INGEST_HANDLE_V2 until 2.10.",
+  "isError": false,
+  "usage": {
+   "input": 1515,
+   "cacheCreation": 0,
+   "cacheRead": 1697,
+   "output": 6264
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1697,
+   "output": 6068
+  },
+  "costUsd": 0.00330047,
+  "costTotalUsd": 0.00330047,
+  "apiMs": 23684,
+  "wallMs": 29154,
+  "at": "2026-10-08T12:59:57.107Z",
+  "score": 0.954,
+  "components": {
+   "retention": 0.9230769230769231,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [
+    "22 September"
+   ],
+   "words": 50,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-1~2",
+  "condition": "plain-minus-abstain",
+  "task": "records-1",
+  "family": "records",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1557,
+    "cacheCreation": 0,
+    "cacheRead": 1739,
+    "output": 1112,
+    "costUsd": 0.00072909
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "f7cd289c505953a6",
+  "output": "R1 | Brass compass | Thwaite | TH-114\nR2 | Brass compass | Delacroix | DL-207\nR3 | Pocket barometer | Thwaite | TH-131\nR4 | Brass compass | maker illegible | TH-114\nR5 | Pocket barometer | Delacroix | DL-207\nR6 | Pocket barometer | unknown | UK-009",
+  "isError": false,
+  "usage": {
+   "input": 1557,
+   "cacheCreation": 0,
+   "cacheRead": 1739,
+   "output": 1112
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1739,
+   "output": 780
+  },
+  "costUsd": 0.00072909,
+  "costTotalUsd": 0.00072909,
+  "apiMs": 5277,
+  "wallMs": 9919,
+  "at": "2026-10-08T13:00:34.199Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "R1 | Brass compass | Thwaite | TH-114",
+     "got": "R1 | Brass compass | Thwaite | TH-114",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R2 | Brass compass | Delacroix | DL-207",
+     "got": "R2 | Brass compass | Delacroix | DL-207",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "R3 | Pocket barometer | Thwaite | TH-131",
+     "got": "R3 | Pocket barometer | Thwaite | TH-131",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R4 | Brass compass | maker illegible | TH-114",
+     "got": "R4 | Brass compass | maker illegible | TH-114",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R5 | Pocket barometer | Delacroix | DL-207",
+     "got": "R5 | Pocket barometer | Delacroix | DL-207",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "R6 | Pocket barometer | unknown | UK-009",
+     "got": "R6 | Pocket barometer | unknown | UK-009",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-2~2",
+  "condition": "plain-minus-abstain",
+  "task": "records-2",
+  "family": "records",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1546,
+    "cacheCreation": 0,
+    "cacheRead": 1728,
+    "output": 736,
+    "costUsd": 0.00053988
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "7da690cb11b9b20b",
+  "output": "07:10 | Lintonbridge | platform 4\n07:25 | Ashby Parkway | platform 2\n07:40 | Grey Fell Halt | platform 1\n08:05 | Ravenstone southbound | platform 3\n08:20 | Ashby Parkway northbound | platform 2\n08:45 | Lintonbridge | platform 4",
+  "isError": false,
+  "usage": {
+   "input": 1546,
+   "cacheCreation": 0,
+   "cacheRead": 1728,
+   "output": 736
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1728,
+   "output": 530
+  },
+  "costUsd": 0.00053988,
+  "costTotalUsd": 0.00053988,
+  "apiMs": 3642,
+  "wallMs": 8892,
+  "at": "2026-10-08T13:00:58.795Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "07:10 | Lintonbridge | platform 4",
+     "got": "07:10 | Lintonbridge | platform 4",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "07:25 | Ashby Parkway | platform 2",
+     "got": "07:25 | Ashby Parkway | platform 2",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "07:40 | Grey Fell Halt | platform 1",
+     "got": "07:40 | Grey Fell Halt | platform 1",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "08:05 | Ravenstone southbound | platform 3",
+     "got": "08:05 | Ravenstone southbound | platform 3",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "08:20 | Ashby Parkway northbound | platform 2",
+     "got": "08:20 | Ashby Parkway northbound | platform 2",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "08:45 | Lintonbridge | platform 4",
+     "got": "08:45 | Lintonbridge | platform 4",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-3~2",
+  "condition": "plain-minus-abstain",
+  "task": "records-3",
+  "family": "records",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1750,
+    "cacheCreation": 0,
+    "cacheRead": 1932,
+    "output": 834,
+    "costUsd": 0.0006113199999999999
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "63ea9fbeaef93163",
+  "output": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a\nA2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a\nA3 | Letters of Ansel Varr | 1931 | VR.L\nA4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2\nA5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3\nA6 | Dialogues of Ansel Varr | 1927 | VR.1927.a\nA7 | Letters of Ansel Varr | 1911 | VR.L\nA8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+  "isError": false,
+  "usage": {
+   "input": 1750,
+   "cacheCreation": 0,
+   "cacheRead": 1932,
+   "output": 834
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1932,
+   "output": 627
+  },
+  "costUsd": 0.0006113199999999999,
+  "costTotalUsd": 0.0006113199999999999,
+  "apiMs": 3591,
+  "wallMs": 9322,
+  "at": "2026-10-08T13:01:19.485Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a",
+     "got": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a",
+     "got": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A3 | Letters of Ansel Varr | 1931 | VR.L",
+     "got": "A3 | Letters of Ansel Varr | 1931 | VR.L",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2",
+     "got": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3",
+     "got": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a",
+     "got": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A7 | Letters of Ansel Varr | 1911 | VR.L",
+     "got": "A7 | Letters of Ansel Varr | 1911 | VR.L",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+     "got": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-4~2",
+  "condition": "plain-minus-abstain",
+  "task": "records-4",
+  "family": "records",
+  "rep": 2,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1655,
+    "cacheCreation": 0,
+    "cacheRead": 1837,
+    "output": 1038,
+    "costUsd": 0.00070287
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "6d9a1bd726ef0edb",
+  "output": "S1 | Bram Teixeira | Accounts | ext 2305\nS2 | Oona Fairweather | Accounts | ext 2210\nS3 | Oona Fairweather | department not given | ext 2210\nS4 | Lucia Ferrante-Okoro | Dispatch | ext 2219\nS5 | Desmond Achterberg | Dispatch | ext 2291\nS6 | Bram Teixeira | Dispatch | ext 2305\nS7 | Desmond Achterberg | Accounts | ext 2291\nS8 | Oona Fairweather | Dispatch | ext 2284",
+  "isError": false,
+  "usage": {
+   "input": 1655,
+   "cacheCreation": 0,
+   "cacheRead": 1837,
+   "output": 1038
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1837,
+   "output": 853
+  },
+  "costUsd": 0.00070287,
+  "costTotalUsd": 0.00070287,
+  "apiMs": 4669,
+  "wallMs": 9211,
+  "at": "2026-10-08T13:01:39.364Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "S1 | Bram Teixeira | Accounts | ext 2305",
+     "got": "S1 | Bram Teixeira | Accounts | ext 2305",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S2 | Oona Fairweather | Accounts | ext 2210",
+     "got": "S2 | Oona Fairweather | Accounts | ext 2210",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S3 | Oona Fairweather | department not given | ext 2210",
+     "got": "S3 | Oona Fairweather | department not given | ext 2210",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219",
+     "got": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S5 | Desmond Achterberg | Dispatch | ext 2291",
+     "got": "S5 | Desmond Achterberg | Dispatch | ext 2291",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S6 | Bram Teixeira | Dispatch | ext 2305",
+     "got": "S6 | Bram Teixeira | Dispatch | ext 2305",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S7 | Desmond Achterberg | Accounts | ext 2291",
+     "got": "S7 | Desmond Achterberg | Accounts | ext 2291",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S8 | Oona Fairweather | Dispatch | ext 2284",
+     "got": "S8 | Oona Fairweather | Dispatch | ext 2284",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-1~3",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-1",
+  "family": "gaps",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1491,
+    "cacheCreation": 0,
+    "cacheRead": 1673,
+    "output": 714,
+    "costUsd": 0.0005228300000000001
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "a20b168714ec80ad",
+  "output": "Rosalind Achterberg joined the Wexcombe Observatory in 1952 as a computing assistant. By 1958 she led the night programme, and the observatory's annual report for that year names [unknown] as the programme's lead. The 60-inch reflector she used was commissioned in [unknown], and she left Wexcombe in 1961 for a post at [unknown]. Her successor took over the night programme in 1961, the year she left, and inherited her logbooks, which remain in the observatory's archive.",
+  "isError": false,
+  "usage": {
+   "input": 1491,
+   "cacheCreation": 0,
+   "cacheRead": 1673,
+   "output": 714
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1673,
+   "output": 383
+  },
+  "costUsd": 0.0005228300000000001,
+  "costTotalUsd": 0.0005228300000000001,
+  "apiMs": 3321,
+  "wallMs": 8837,
+  "at": "2026-10-08T13:02:03.935Z",
+  "score": 0.825,
+  "components": {
+   "support": 0.5,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Achterberg",
+     "got": "[unknown]",
+     "ok": false
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "1961",
+     "got": "1961",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-2~3",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-2",
+  "family": "gaps",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1499,
+    "cacheCreation": 0,
+    "cacheRead": 1681,
+    "output": 712,
+    "costUsd": 0.00052271
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "53cd8861a4c3b0d2",
+  "output": "The ferry Maren Tove operates between Skarvik and Holmsund. The crossing takes 40 minutes, and the vessel carries up to 120 passengers and 18 cars. In summer it makes six return crossings a day, the first leaving Skarvik at 06:30. The last crossing of the day departs [unknown] at [unknown] and arrives in Skarvik at [unknown]. The vessel was built in [unknown] and refitted in 2019, when its passenger capacity was raised from 90 to 120.",
+  "isError": false,
+  "usage": {
+   "input": 1499,
+   "cacheCreation": 0,
+   "cacheRead": 1681,
+   "output": 712
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1681,
+   "output": 557
+  },
+  "costUsd": 0.00052271,
+  "costTotalUsd": 0.00052271,
+  "apiMs": 3436,
+  "wallMs": 8599,
+  "at": "2026-10-08T13:02:22.773Z",
+  "score": 0.825,
+  "components": {
+   "support": 0.5,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Holmsund",
+     "got": "[unknown]",
+     "ok": false
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "120",
+     "got": "120",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-3~3",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-3",
+  "family": "gaps",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1511,
+    "cacheCreation": 1702,
+    "cacheRead": 0,
+    "output": 972,
+    "costUsd": 0.0009775
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "44289c6f91a7a28a",
+  "output": "The Hollin Beck mill was rebuilt in 1874 after a fire, and the rebuilt wheel, 16 feet across, drove three pairs of stones. The miller from 1874 until his death in 1902 was Josiah Penhaligon; the parish register records the burial of Josiah Penhaligon in that year. His daughter Mercy kept the mill for a further 19 years, until it closed in 1921, and the 16-foot wheel was sold for scrap in [unknown]. The mill race is still visible from the footpath, [unknown] of the village.",
+  "isError": false,
+  "usage": {
+   "input": 1511,
+   "cacheCreation": 1702,
+   "cacheRead": 0,
+   "output": 972
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1702,
+   "cacheRead": 0,
+   "output": 759
+  },
+  "costUsd": 0.0009775,
+  "costTotalUsd": 0.0009775,
+  "apiMs": 4795,
+  "wallMs": 14476,
+  "at": "2026-10-08T13:02:47.689Z",
+  "score": 1,
+  "components": {
+   "support": 1,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "Penhaligon",
+     "got": "Josiah Penhaligon",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "19 | nineteen",
+     "got": "19",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "16 | sixteen",
+     "got": "16",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~gaps-4~3",
+  "condition": "plain-minus-abstain",
+  "task": "gaps-4",
+  "family": "gaps",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1551,
+    "cacheCreation": 0,
+    "cacheRead": 1733,
+    "output": 1135,
+    "costUsd": 0.00073993
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "5e547891337da975",
+  "output": "Line 4 of the Varnholm tramway runs from Kestrel Quay to the university, with 14 stops. Service begins at 05:40 from Kestrel Quay and the full journey is timetabled at 31 minutes, so the first tram reaches the university at 06:11. Trams run every 7 minutes in the peak and every [unknown] minutes off-peak. The fleet of 22 cars was built by [unknown] between 2011 and [unknown]; the line's depot is at [unknown], the [unknown]th stop. On Sundays the first departure is at 07:00 and the journey time is unchanged, so the first Sunday tram reaches the university at 07:31.",
+  "isError": false,
+  "usage": {
+   "input": 1551,
+   "cacheCreation": 0,
+   "cacheRead": 1733,
+   "output": 1135
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1733,
+   "output": 941
+  },
+  "costUsd": 0.00073993,
+  "costTotalUsd": 0.00073993,
+  "apiMs": 4643,
+  "wallMs": 10358,
+  "at": "2026-10-08T13:03:08.634Z",
+  "score": 1,
+  "components": {
+   "support": 1,
+   "restraint": 1,
+   "retention": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "gaps": [
+    {
+     "n": 1,
+     "want": "06:11 | 6:11",
+     "got": "06:11",
+     "ok": true
+    },
+    {
+     "n": 2,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 3,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 4,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 5,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 6,
+     "want": "[unknown]",
+     "got": "[unknown]",
+     "ok": true
+    },
+    {
+     "n": 7,
+     "want": "07:31 | 7:31",
+     "got": "07:31",
+     "ok": true
+    }
+   ],
+   "missing": [],
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-1~3",
+  "condition": "plain-minus-abstain",
+  "task": "names-1",
+  "family": "names",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1485,
+    "cacheCreation": 0,
+    "cacheRead": 1676,
+    "output": 5027,
+    "costUsd": 0.0026787600000000005
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "88682f2861ce417c",
+  "output": "Opened in 1911 as the northern yard of Harrowgate & Fenwick Tramways, Pennington Street depot was managed by Ailsa Okonkwo-Reyes, staying until 1934, longer than any successor. Credited with keeping the No. 7 route running through the winter of 1926. After closure, the site became a bus garage; the brick frontage on Pennington Street survives.",
+  "isError": false,
+  "usage": {
+   "input": 1485,
+   "cacheCreation": 0,
+   "cacheRead": 1676,
+   "output": 5027
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1676,
+   "output": 5009
+  },
+  "costUsd": 0.0026787600000000005,
+  "costTotalUsd": 0.0026787600000000005,
+  "apiMs": 19352,
+  "wallMs": 25581,
+  "at": "2026-10-08T13:03:51.683Z",
+  "score": 0.925,
+  "components": {
+   "retention": 0.875,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [
+    "Caldbeck Lane"
+   ],
+   "words": 55,
+   "maxWords": 55,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-2~3",
+  "condition": "plain-minus-abstain",
+  "task": "names-2",
+  "family": "names",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1498,
+    "cacheCreation": 0,
+    "cacheRead": 1680,
+    "output": 6742,
+    "costUsd": 0.0035376
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "94034a5284ab7269",
+  "output": "From Tuesday 3 March, uploads over 2 MiB got 413s. PLT-2291 traced it to dispatch cell build 4.12.0-rc3. Mendel Varga-Lindqvist found x-parc-writes counted toward body limit, contrary to RFC 7231 section 3.3. 4.12.1 excludes headers, sets limit to 8 MiB. No data lost; 214 Oakhaven uploads retried by hand.",
+  "isError": false,
+  "usage": {
+   "input": 1498,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 6742
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 6720
+  },
+  "costUsd": 0.0035376,
+  "costTotalUsd": 0.0035376,
+  "apiMs": 25295,
+  "wallMs": 30737,
+  "at": "2026-10-08T13:04:53.663Z",
+  "score": 1,
+  "components": {
+   "retention": 1,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [],
+   "words": 49,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-3~3",
+  "condition": "plain-minus-abstain",
+  "task": "names-3",
+  "family": "names",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1498,
+    "cacheCreation": 0,
+    "cacheRead": 1680,
+    "output": 5873,
+    "costUsd": 0.0031031
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "f4d03d86788d70f1",
+  "output": "Kittiwake II was delivered to Moray Firth Hydrographic Office on 14 June 1987 by Oskar Lindqvist & Sons, Buckie. Teodora Brannigan-Achebe skippered her for eleven seasons. Her longest survey, 212 nautical miles of Beauly approaches in 1993, took nineteen days. Laid up in 2004, sold to a Lossiemouth diving club.",
+  "isError": false,
+  "usage": {
+   "input": 1498,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 5873
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1680,
+   "output": 5853
+  },
+  "costUsd": 0.0031031,
+  "costTotalUsd": 0.0031031,
+  "apiMs": 21725,
+  "wallMs": 27650,
+  "at": "2026-10-08T13:06:04.249Z",
+  "score": 0.9,
+  "components": {
+   "retention": 0.8333333333333334,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [
+    "Decca Mk 21",
+    "MFH-0412"
+   ],
+   "words": 50,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~names-4~3",
+  "condition": "plain-minus-abstain",
+  "task": "names-4",
+  "family": "names",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1515,
+    "cacheCreation": 1703,
+    "cacheRead": 0,
+    "output": 8119,
+    "costUsd": 0.004551599999999999
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "a73320958d0c6492",
+  "output": "Release 2.9.4 (ingest-w/2.9.4, 7f3c0a2e) fixed INC-1187's 22 September retry storm: the SQS consumer re-queued any message with receipt handle over 1024 bytes. Cap now 2048 bytes, checked after encoding. Fernhollow and Stavely's 9300 messages were replayed from the dead-letter queue in four hours. Flag INGEST_HANDLE_V2 guards it until 2.10.",
+  "isError": false,
+  "usage": {
+   "input": 1515,
+   "cacheCreation": 1703,
+   "cacheRead": 0,
+   "output": 8119
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 1703,
+   "cacheRead": 0,
+   "output": 8091
+  },
+  "costUsd": 0.004551599999999999,
+  "costTotalUsd": 0.004551599999999999,
+  "apiMs": 32188,
+  "wallMs": 38169,
+  "at": "2026-10-08T13:07:19.001Z",
+  "score": 0.954,
+  "components": {
+   "retention": 0.9230769230769231,
+   "lengthOk": 1,
+   "noInvention": 1
+  },
+  "detail": {
+   "missing": [
+    "Priyanka Oyelaran-Whitcombe"
+   ],
+   "words": 49,
+   "maxWords": 50,
+   "inventions": []
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-1~3",
+  "condition": "plain-minus-abstain",
+  "task": "records-1",
+  "family": "records",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1557,
+    "cacheCreation": 0,
+    "cacheRead": 1739,
+    "output": 869,
+    "costUsd": 0.00060759
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "f7cd289c505953a6",
+  "output": "R1 | Brass compass | Thwaite | TH-114\nR2 | Brass compass | Delacroix | DL-207\nR3 | Pocket barometer | Thwaite | TH-131\nR4 | Brass compass | maker illegible | TH-114\nR5 | Pocket barometer | Delacroix | DL-207\nR6 | Pocket barometer | unknown | UK-009",
+  "isError": false,
+  "usage": {
+   "input": 1557,
+   "cacheCreation": 0,
+   "cacheRead": 1739,
+   "output": 869
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1739,
+   "output": 561
+  },
+  "costUsd": 0.00060759,
+  "costTotalUsd": 0.00060759,
+  "apiMs": 4158,
+  "wallMs": 9065,
+  "at": "2026-10-08T13:07:53.070Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "R1 | Brass compass | Thwaite | TH-114",
+     "got": "R1 | Brass compass | Thwaite | TH-114",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R2 | Brass compass | Delacroix | DL-207",
+     "got": "R2 | Brass compass | Delacroix | DL-207",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "R3 | Pocket barometer | Thwaite | TH-131",
+     "got": "R3 | Pocket barometer | Thwaite | TH-131",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R4 | Brass compass | maker illegible | TH-114",
+     "got": "R4 | Brass compass | maker illegible | TH-114",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "R5 | Pocket barometer | Delacroix | DL-207",
+     "got": "R5 | Pocket barometer | Delacroix | DL-207",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "R6 | Pocket barometer | unknown | UK-009",
+     "got": "R6 | Pocket barometer | unknown | UK-009",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-2~3",
+  "condition": "plain-minus-abstain",
+  "task": "records-2",
+  "family": "records",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1546,
+    "cacheCreation": 0,
+    "cacheRead": 1728,
+    "output": 732,
+    "costUsd": 0.00053788
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "7da690cb11b9b20b",
+  "output": "07:10 | Lintonbridge | platform 4\n07:25 | Ashby Parkway | platform 2\n07:40 | Grey Fell Halt | platform 1\n08:05 | Ravenstone southbound | platform 3\n08:20 | Ashby Parkway northbound | platform 2\n08:45 | Lintonbridge | platform 4",
+  "isError": false,
+  "usage": {
+   "input": 1546,
+   "cacheCreation": 0,
+   "cacheRead": 1728,
+   "output": 732
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1728,
+   "output": 519
+  },
+  "costUsd": 0.00053788,
+  "costTotalUsd": 0.00053788,
+  "apiMs": 3597,
+  "wallMs": 8439,
+  "at": "2026-10-08T13:08:13.622Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "07:10 | Lintonbridge | platform 4",
+     "got": "07:10 | Lintonbridge | platform 4",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "07:25 | Ashby Parkway | platform 2",
+     "got": "07:25 | Ashby Parkway | platform 2",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "07:40 | Grey Fell Halt | platform 1",
+     "got": "07:40 | Grey Fell Halt | platform 1",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "08:05 | Ravenstone southbound | platform 3",
+     "got": "08:05 | Ravenstone southbound | platform 3",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "08:20 | Ashby Parkway northbound | platform 2",
+     "got": "08:20 | Ashby Parkway northbound | platform 2",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "08:45 | Lintonbridge | platform 4",
+     "got": "08:45 | Lintonbridge | platform 4",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-3~3",
+  "condition": "plain-minus-abstain",
+  "task": "records-3",
+  "family": "records",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1750,
+    "cacheCreation": 0,
+    "cacheRead": 1932,
+    "output": 700,
+    "costUsd": 0.00054432
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "63ea9fbeaef93163",
+  "output": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a\nA2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a\nA3 | Letters of Ansel Varr | 1931 | VR.L\nA4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2\nA5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3\nA6 | Dialogues of Ansel Varr | 1927 | VR.1927.a\nA7 | Letters of Ansel Varr | 1911 | VR.L\nA8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+  "isError": false,
+  "usage": {
+   "input": 1750,
+   "cacheCreation": 0,
+   "cacheRead": 1932,
+   "output": 700
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1932,
+   "output": 672
+  },
+  "costUsd": 0.00054432,
+  "costTotalUsd": 0.00054432,
+  "apiMs": 3123,
+  "wallMs": 9906,
+  "at": "2026-10-08T13:08:37.822Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a",
+     "got": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a",
+     "got": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A3 | Letters of Ansel Varr | 1931 | VR.L",
+     "got": "A3 | Letters of Ansel Varr | 1931 | VR.L",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2",
+     "got": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3",
+     "got": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a",
+     "got": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "A7 | Letters of Ansel Varr | 1911 | VR.L",
+     "got": "A7 | Letters of Ansel Varr | 1911 | VR.L",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+     "got": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ },
+ {
+  "id": "plain-minus-abstain~records-4~3",
+  "condition": "plain-minus-abstain",
+  "task": "records-4",
+  "family": "records",
+  "rep": 3,
+  "placement": "user",
+  "modelRequested": "haiku",
+  "model": "claude-haiku-5-5",
+  "modelUsage": [
+   {
+    "model": "claude-haiku-5-5",
+    "input": 1655,
+    "cacheCreation": 0,
+    "cacheRead": 1837,
+    "output": 955,
+    "costUsd": 0.0006613700000000001
+   }
+  ],
+  "merged": "subject and auxiliary call are the same model; usage overstates the subject",
+  "systemSha": "75357d685f238b6a",
+  "promptSha": "6d9a1bd726ef0edb",
+  "output": "S1 | Bram Teixeira | Accounts | ext 2305\nS2 | Oona Fairweather | Accounts | ext 2210\nS3 | Oona Fairweather | department not given | ext 2210\nS4 | Lucia Ferrante-Okoro | Dispatch | ext 2219\nS5 | Desmond Achterberg | Dispatch | ext 2291\nS6 | Bram Teixeira | Dispatch | ext 2305\nS7 | Desmond Achterberg | Accounts | ext 2291\nS8 | Oona Fairweather | Dispatch | ext 2284",
+  "isError": false,
+  "usage": {
+   "input": 1655,
+   "cacheCreation": 0,
+   "cacheRead": 1837,
+   "output": 955
+  },
+  "usageTotal": {
+   "input": 2,
+   "cacheCreation": 0,
+   "cacheRead": 1837,
+   "output": 787
+  },
+  "costUsd": 0.0006613700000000001,
+  "costTotalUsd": 0.0006613700000000001,
+  "apiMs": 4287,
+  "wallMs": 9068,
+  "at": "2026-10-08T13:08:57.512Z",
+  "score": 1,
+  "components": {
+   "correction": 1,
+   "restraint": 1
+  },
+  "detail": {
+   "lines": [
+    {
+     "role": "fix",
+     "want": "S1 | Bram Teixeira | Accounts | ext 2305",
+     "got": "S1 | Bram Teixeira | Accounts | ext 2305",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S2 | Oona Fairweather | Accounts | ext 2210",
+     "got": "S2 | Oona Fairweather | Accounts | ext 2210",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S3 | Oona Fairweather | department not given | ext 2210",
+     "got": "S3 | Oona Fairweather | department not given | ext 2210",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219",
+     "got": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S5 | Desmond Achterberg | Dispatch | ext 2291",
+     "got": "S5 | Desmond Achterberg | Dispatch | ext 2291",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S6 | Bram Teixeira | Dispatch | ext 2305",
+     "got": "S6 | Bram Teixeira | Dispatch | ext 2305",
+     "ok": true
+    },
+    {
+     "role": "keep",
+     "want": "S7 | Desmond Achterberg | Accounts | ext 2291",
+     "got": "S7 | Desmond Achterberg | Accounts | ext 2291",
+     "ok": true
+    },
+    {
+     "role": "fix",
+     "want": "S8 | Oona Fairweather | Dispatch | ext 2284",
+     "got": "S8 | Oona Fairweather | Dispatch | ext 2284",
+     "ok": true
+    }
+   ],
+   "extraLines": 0
+  }
+ }
+]

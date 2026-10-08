@@ -1,19 +1,19 @@
 {
- "id": "2026-10-08-r2-sonnet-system",
+ "id": "2026-10-08-r2-haiku-user",
  "scorerVersion": 3,
  "set": "source-authority-v2",
- "model": "sonnet",
+ "model": "haiku",
  "models": [
-  "claude-sonnet-5-5"
+  "claude-haiku-5-5"
  ],
- "placement": "system",
- "createdAt": "2026-10-08T12:47:22.377Z",
- "updatedAt": "2026-10-08T12:59:51.226Z",
+ "placement": "user",
+ "createdAt": "2026-10-08T12:47:22.347Z",
+ "updatedAt": "2026-10-08T13:09:08.012Z",
  "reps": 3,
  "n": 324,
  "errors": 0,
- "costUsd": 1.9056,
- "costTotalUsd": 1.9671,
+ "costUsd": 0.5075,
+ "costTotalUsd": 0.5075,
  "conditions": [
   "composite",
   "compressed",
@@ -67,14 +67,14 @@
    "n": 36,
    "errors": 0,
    "score": {
-    "mean": 0.949,
-    "sd": 0.076,
-    "min": 0.8,
+    "mean": 0.95,
+    "sd": 0.085,
+    "min": 0.662,
     "max": 1
    },
    "components": {
     "retention": {
-     "mean": 0.976,
+     "mean": 0.952,
      "n": 24
     },
     "noInvention": {
@@ -82,11 +82,11 @@
      "n": 24
     },
     "lengthOk": {
-     "mean": 0.75,
+     "mean": 0.833,
      "n": 12
     },
     "support": {
-     "mean": 0.792,
+     "mean": 0.833,
      "n": 12
     },
     "restraint": {
@@ -99,26 +99,70 @@
     }
    },
    "inventionRate": 0,
-   "inputTokens": 1741,
-   "outputTokens": 590,
-   "costUsd": 0.00882,
-   "apiMs": 5362,
+   "inputTokens": 3310,
+   "outputTokens": 2183,
+   "costUsd": 0.00135,
+   "apiMs": 8647,
    "models": [
-    "claude-sonnet-5-5"
+    "claude-haiku-5-5"
    ]
   },
   "compressed": {
    "n": 36,
    "errors": 0,
    "score": {
-    "mean": 0.883,
-    "sd": 0.138,
-    "min": 0.475,
+    "mean": 0.914,
+    "sd": 0.105,
+    "min": 0.65,
     "max": 1
    },
    "components": {
     "retention": {
-     "mean": 0.969,
+     "mean": 0.934,
+     "n": 24
+    },
+    "noInvention": {
+     "mean": 0.958,
+     "n": 24
+    },
+    "lengthOk": {
+     "mean": 0.917,
+     "n": 12
+    },
+    "support": {
+     "mean": 0.569,
+     "n": 12
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 24
+    },
+    "correction": {
+     "mean": 1,
+     "n": 12
+    }
+   },
+   "inventionRate": 0.042,
+   "inputTokens": 3319,
+   "outputTokens": 2240,
+   "costUsd": 0.00137,
+   "apiMs": 8969,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "decor": {
+   "n": 36,
+   "errors": 0,
+   "score": {
+    "mean": 0.937,
+    "sd": 0.093,
+    "min": 0.65,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.954,
      "n": 24
     },
     "noInvention": {
@@ -126,15 +170,15 @@
      "n": 24
     },
     "lengthOk": {
-     "mean": 0.083,
+     "mean": 0.667,
      "n": 12
     },
     "support": {
-     "mean": 0.708,
+     "mean": 0.806,
      "n": 12
     },
     "restraint": {
-     "mean": 0.958,
+     "mean": 1,
      "n": 24
     },
     "correction": {
@@ -143,34 +187,34 @@
     }
    },
    "inventionRate": 0,
-   "inputTokens": 1746,
-   "outputTokens": 235,
-   "costUsd": 0.00527,
-   "apiMs": 3259,
+   "inputTokens": 3370,
+   "outputTokens": 2745,
+   "costUsd": 0.00168,
+   "apiMs": 10802,
    "models": [
-    "claude-sonnet-5-5"
+    "claude-haiku-5-5"
    ]
   },
-  "decor": {
+  "none": {
    "n": 36,
    "errors": 0,
    "score": {
     "mean": 0.911,
-    "sd": 0.109,
-    "min": 0.75,
+    "sd": 0.132,
+    "min": 0.508,
     "max": 1
    },
    "components": {
     "retention": {
-     "mean": 0.98,
+     "mean": 0.883,
      "n": 24
     },
     "noInvention": {
-     "mean": 1,
+     "mean": 0.875,
      "n": 24
     },
     "lengthOk": {
-     "mean": 0,
+     "mean": 0.833,
      "n": 12
     },
     "support": {
@@ -186,71 +230,27 @@
      "n": 12
     }
    },
-   "inventionRate": 0,
-   "inputTokens": 1771,
-   "outputTokens": 257,
-   "costUsd": 0.00628,
-   "apiMs": 3811,
+   "inventionRate": 0.125,
+   "inputTokens": 3107,
+   "outputTokens": 1339,
+   "costUsd": 0.00086,
+   "apiMs": 5377,
    "models": [
-    "claude-sonnet-5-5"
-   ]
-  },
-  "none": {
-   "n": 36,
-   "errors": 0,
-   "score": {
-    "mean": 0.905,
-    "sd": 0.129,
-    "min": 0.475,
-    "max": 1
-   },
-   "components": {
-    "retention": {
-     "mean": 0.973,
-     "n": 24
-    },
-    "noInvention": {
-     "mean": 1,
-     "n": 24
-    },
-    "lengthOk": {
-     "mean": 0.167,
-     "n": 12
-    },
-    "support": {
-     "mean": 0.833,
-     "n": 12
-    },
-    "restraint": {
-     "mean": 0.958,
-     "n": 24
-    },
-    "correction": {
-     "mean": 1,
-     "n": 12
-    }
-   },
-   "inventionRate": 0,
-   "inputTokens": 1650,
-   "outputTokens": 219,
-   "costUsd": 0.00498,
-   "apiMs": 3501,
-   "models": [
-    "claude-sonnet-5-5"
+    "claude-haiku-5-5"
    ]
   },
   "plain-minus-abstain": {
    "n": 36,
    "errors": 0,
    "score": {
-    "mean": 0.903,
-    "sd": 0.103,
-    "min": 0.75,
+    "mean": 0.963,
+    "sd": 0.061,
+    "min": 0.825,
     "max": 1
    },
    "components": {
     "retention": {
-     "mean": 0.983,
+     "mean": 0.964,
      "n": 24
     },
     "noInvention": {
@@ -258,11 +258,11 @@
      "n": 24
     },
     "lengthOk": {
-     "mean": 0.083,
+     "mean": 1,
      "n": 12
     },
     "support": {
-     "mean": 0.75,
+     "mean": 0.806,
      "n": 12
     },
     "restraint": {
@@ -275,26 +275,26 @@
     }
    },
    "inventionRate": 0,
-   "inputTokens": 1723,
-   "outputTokens": 197,
-   "costUsd": 0.00469,
-   "apiMs": 3112,
+   "inputTokens": 3276,
+   "outputTokens": 2860,
+   "costUsd": 0.00169,
+   "apiMs": 11376,
    "models": [
-    "claude-sonnet-5-5"
+    "claude-haiku-5-5"
    ]
   },
   "plain": {
    "n": 36,
    "errors": 0,
    "score": {
-    "mean": 0.912,
-    "sd": 0.107,
-    "min": 0.7,
+    "mean": 0.957,
+    "sd": 0.087,
+    "min": 0.65,
     "max": 1
    },
    "components": {
     "retention": {
-     "mean": 0.963,
+     "mean": 0.964,
      "n": 24
     },
     "noInvention": {
@@ -302,11 +302,11 @@
      "n": 24
     },
     "lengthOk": {
-     "mean": 0.333,
+     "mean": 0.833,
      "n": 12
     },
     "support": {
-     "mean": 0.75,
+     "mean": 0.847,
      "n": 12
     },
     "restraint": {
@@ -319,38 +319,38 @@
     }
    },
    "inventionRate": 0,
-   "inputTokens": 1752,
-   "outputTokens": 215,
-   "costUsd": 0.00562,
-   "apiMs": 3127,
+   "inputTokens": 3332,
+   "outputTokens": 2568,
+   "costUsd": 0.00159,
+   "apiMs": 10149,
    "models": [
-    "claude-sonnet-5-5"
+    "claude-haiku-5-5"
    ]
   },
   "refrain": {
    "n": 36,
    "errors": 0,
    "score": {
-    "mean": 0.907,
-    "sd": 0.103,
-    "min": 0.75,
+    "mean": 0.948,
+    "sd": 0.095,
+    "min": 0.6,
     "max": 1
    },
    "components": {
     "retention": {
-     "mean": 0.986,
+     "mean": 0.976,
      "n": 24
     },
     "noInvention": {
-     "mean": 1,
+     "mean": 0.958,
      "n": 24
     },
     "lengthOk": {
-     "mean": 0,
+     "mean": 0.667,
      "n": 12
     },
     "support": {
-     "mean": 0.819,
+     "mean": 0.875,
      "n": 12
     },
     "restraint": {
@@ -362,22 +362,22 @@
      "n": 12
     }
    },
-   "inventionRate": 0,
-   "inputTokens": 1751,
-   "outputTokens": 259,
-   "costUsd": 0.00552,
-   "apiMs": 3671,
+   "inventionRate": 0.042,
+   "inputTokens": 3329,
+   "outputTokens": 2731,
+   "costUsd": 0.00164,
+   "apiMs": 10752,
    "models": [
-    "claude-sonnet-5-5"
+    "claude-haiku-5-5"
    ]
   },
   "sigil-swap": {
    "n": 36,
    "errors": 0,
    "score": {
-    "mean": 0.927,
-    "sd": 0.099,
-    "min": 0.75,
+    "mean": 0.982,
+    "sd": 0.052,
+    "min": 0.8,
     "max": 1
    },
    "components": {
@@ -390,7 +390,51 @@
      "n": 24
     },
     "lengthOk": {
-     "mean": 0.167,
+     "mean": 0.917,
+     "n": 12
+    },
+    "support": {
+     "mean": 0.917,
+     "n": 12
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 24
+    },
+    "correction": {
+     "mean": 1,
+     "n": 12
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 3369,
+   "outputTokens": 3494,
+   "costUsd": 0.002,
+   "apiMs": 13897,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "sigil": {
+   "n": 36,
+   "errors": 0,
+   "score": {
+    "mean": 0.964,
+    "sd": 0.069,
+    "min": 0.8,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.973,
+     "n": 24
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 24
+    },
+    "lengthOk": {
+     "mean": 0.833,
      "n": 12
     },
     "support": {
@@ -407,56 +451,12 @@
     }
    },
    "inventionRate": 0,
-   "inputTokens": 1771,
-   "outputTokens": 247,
-   "costUsd": 0.00598,
-   "apiMs": 3577,
+   "inputTokens": 3369,
+   "outputTokens": 3292,
+   "costUsd": 0.00192,
+   "apiMs": 13033,
    "models": [
-    "claude-sonnet-5-5"
-   ]
-  },
-  "sigil": {
-   "n": 36,
-   "errors": 0,
-   "score": {
-    "mean": 0.941,
-    "sd": 0.088,
-    "min": 0.8,
-    "max": 1
-   },
-   "components": {
-    "retention": {
-     "mean": 0.99,
-     "n": 24
-    },
-    "noInvention": {
-     "mean": 1,
-     "n": 24
-    },
-    "lengthOk": {
-     "mean": 0.25,
-     "n": 12
-    },
-    "support": {
-     "mean": 0.958,
-     "n": 12
-    },
-    "restraint": {
-     "mean": 1,
-     "n": 24
-    },
-    "correction": {
-     "mean": 1,
-     "n": 12
-    }
-   },
-   "inventionRate": 0,
-   "inputTokens": 1770,
-   "outputTokens": 261,
-   "costUsd": 0.00576,
-   "apiMs": 3467,
-   "models": [
-    "claude-sonnet-5-5"
+    "claude-haiku-5-5"
    ]
   }
  },
@@ -464,11 +464,11 @@
   "composite": {
    "gaps": {
     "n": 12,
-    "mean": 0.927
+    "mean": 0.942
    },
    "names": {
     "n": 12,
-    "mean": 0.921
+    "mean": 0.91
    },
    "records": {
     "n": 12,
@@ -478,11 +478,11 @@
   "compressed": {
    "gaps": {
     "n": 12,
-    "mean": 0.869
+    "mean": 0.848
    },
    "names": {
     "n": 12,
-    "mean": 0.78
+    "mean": 0.893
    },
    "records": {
     "n": 12,
@@ -490,6 +490,20 @@
    }
   },
   "decor": {
+   "gaps": {
+    "n": 12,
+    "mean": 0.932
+   },
+   "names": {
+    "n": 12,
+    "mean": 0.878
+   },
+   "records": {
+    "n": 12,
+    "mean": 1
+   }
+  },
+  "none": {
    "gaps": {
     "n": 12,
     "mean": 0.956
@@ -503,28 +517,14 @@
     "mean": 1
    }
   },
-  "none": {
-   "gaps": {
-    "n": 12,
-    "mean": 0.913
-   },
-   "names": {
-    "n": 12,
-    "mean": 0.801
-   },
-   "records": {
-    "n": 12,
-    "mean": 1
-   }
-  },
   "plain-minus-abstain": {
    "gaps": {
     "n": 12,
-    "mean": 0.913
+    "mean": 0.932
    },
    "names": {
     "n": 12,
-    "mean": 0.797
+    "mean": 0.957
    },
    "records": {
     "n": 12,
@@ -534,11 +534,11 @@
   "plain": {
    "gaps": {
     "n": 12,
-    "mean": 0.913
+    "mean": 0.947
    },
    "names": {
     "n": 12,
-    "mean": 0.822
+    "mean": 0.924
    },
    "records": {
     "n": 12,
@@ -548,11 +548,11 @@
   "refrain": {
    "gaps": {
     "n": 12,
-    "mean": 0.937
+    "mean": 0.956
    },
    "names": {
     "n": 12,
-    "mean": 0.784
+    "mean": 0.888
    },
    "records": {
     "n": 12,
@@ -562,11 +562,11 @@
   "sigil-swap": {
    "gaps": {
     "n": 12,
-    "mean": 0.956
+    "mean": 0.971
    },
    "names": {
     "n": 12,
-    "mean": 0.825
+    "mean": 0.975
    },
    "records": {
     "n": 12,
@@ -576,11 +576,11 @@
   "sigil": {
    "gaps": {
     "n": 12,
-    "mean": 0.985
+    "mean": 0.956
    },
    "names": {
     "n": 12,
-    "mean": 0.839
+    "mean": 0.934
    },
    "records": {
     "n": 12,
@@ -592,7 +592,7 @@
   "composite": {
    "gaps-1": {
     "n": 3,
-    "mean": 0.825
+    "mean": 0.883
    },
    "gaps-2": {
     "n": 3,
@@ -608,7 +608,7 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.8
+    "mean": 1
    },
    "names-2": {
     "n": 3,
@@ -616,11 +616,11 @@
    },
    "names-3": {
     "n": 3,
-    "mean": 0.95
+    "mean": 0.833
    },
    "names-4": {
     "n": 3,
-    "mean": 1
+    "mean": 0.872
    },
    "records-1": {
     "n": 3,
@@ -642,35 +642,35 @@
   "compressed": {
    "gaps-1": {
     "n": 3,
-    "mean": 0.708
+    "mean": 0.825
    },
    "gaps-2": {
     "n": 3,
-    "mean": 0.767
+    "mean": 0.942
    },
    "gaps-3": {
     "n": 3,
-    "mean": 1
+    "mean": 0.922
    },
    "gaps-4": {
     "n": 3,
-    "mean": 1
+    "mean": 0.703
    },
    "names-1": {
     "n": 3,
-    "mean": 0.867
+    "mean": 1
    },
    "names-2": {
     "n": 3,
-    "mean": 0.75
+    "mean": 0.867
    },
    "names-3": {
     "n": 3,
-    "mean": 0.733
+    "mean": 0.833
    },
    "names-4": {
     "n": 3,
-    "mean": 0.769
+    "mean": 0.872
    },
    "records-1": {
     "n": 3,
@@ -696,11 +696,11 @@
    },
    "gaps-2": {
     "n": 3,
-    "mean": 0.942
+    "mean": 0.883
    },
    "gaps-3": {
     "n": 3,
-    "mean": 1
+    "mean": 0.961
    },
    "gaps-4": {
     "n": 3,
@@ -708,19 +708,19 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.908
    },
    "names-2": {
     "n": 3,
-    "mean": 0.75
+    "mean": 0.9
    },
    "names-3": {
     "n": 3,
-    "mean": 0.783
+    "mean": 0.8
    },
    "names-4": {
     "n": 3,
-    "mean": 0.769
+    "mean": 0.903
    },
    "records-1": {
     "n": 3,
@@ -742,11 +742,11 @@
   "none": {
    "gaps-1": {
     "n": 3,
-    "mean": 0.825
+    "mean": 0.942
    },
    "gaps-2": {
     "n": 3,
-    "mean": 0.825
+    "mean": 0.883
    },
    "gaps-3": {
     "n": 3,
@@ -758,19 +758,19 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.867
+    "mean": 0.925
    },
    "names-2": {
     "n": 3,
-    "mean": 0.783
+    "mean": 0.817
    },
    "names-3": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.767
    },
    "names-4": {
     "n": 3,
-    "mean": 0.754
+    "mean": 0.595
    },
    "records-1": {
     "n": 3,
@@ -792,7 +792,7 @@
   "plain-minus-abstain": {
    "gaps-1": {
     "n": 3,
-    "mean": 0.825
+    "mean": 0.942
    },
    "gaps-2": {
     "n": 3,
@@ -800,7 +800,7 @@
    },
    "gaps-3": {
     "n": 3,
-    "mean": 1
+    "mean": 0.961
    },
    "gaps-4": {
     "n": 3,
@@ -808,19 +808,19 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.975
    },
    "names-2": {
     "n": 3,
-    "mean": 0.767
+    "mean": 0.95
    },
    "names-3": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.933
    },
    "names-4": {
     "n": 3,
-    "mean": 0.821
+    "mean": 0.969
    },
    "records-1": {
     "n": 3,
@@ -842,15 +842,15 @@
   "plain": {
    "gaps-1": {
     "n": 3,
-    "mean": 0.825
+    "mean": 0.942
    },
    "gaps-2": {
     "n": 3,
-    "mean": 0.825
+    "mean": 0.883
    },
    "gaps-3": {
     "n": 3,
-    "mean": 1
+    "mean": 0.961
    },
    "gaps-4": {
     "n": 3,
@@ -858,19 +858,19 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.867
+    "mean": 0.975
    },
    "names-2": {
     "n": 3,
-    "mean": 0.733
+    "mean": 0.983
    },
    "names-3": {
     "n": 3,
-    "mean": 0.75
+    "mean": 0.767
    },
    "names-4": {
     "n": 3,
-    "mean": 0.939
+    "mean": 0.969
    },
    "records-1": {
     "n": 3,
@@ -892,15 +892,15 @@
   "refrain": {
    "gaps-1": {
     "n": 3,
-    "mean": 1
+    "mean": 0.825
    },
    "gaps-2": {
     "n": 3,
-    "mean": 0.825
+    "mean": 1
    },
    "gaps-3": {
     "n": 3,
-    "mean": 0.922
+    "mean": 1
    },
    "gaps-4": {
     "n": 3,
@@ -908,19 +908,19 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.933
    },
    "names-2": {
     "n": 3,
-    "mean": 0.75
+    "mean": 0.95
    },
    "names-3": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.817
    },
    "names-4": {
     "n": 3,
-    "mean": 0.785
+    "mean": 0.851
    },
    "records-1": {
     "n": 3,
@@ -942,11 +942,11 @@
   "sigil-swap": {
    "gaps-1": {
     "n": 3,
-    "mean": 1
+    "mean": 0.883
    },
    "gaps-2": {
     "n": 3,
-    "mean": 0.825
+    "mean": 1
    },
    "gaps-3": {
     "n": 3,
@@ -958,19 +958,19 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.933
+    "mean": 1
    },
    "names-2": {
     "n": 3,
-    "mean": 0.8
+    "mean": 1
    },
    "names-3": {
     "n": 3,
-    "mean": 0.783
+    "mean": 0.967
    },
    "names-4": {
     "n": 3,
-    "mean": 0.785
+    "mean": 0.933
    },
    "records-1": {
     "n": 3,
@@ -992,11 +992,11 @@
   "sigil": {
    "gaps-1": {
     "n": 3,
-    "mean": 0.942
+    "mean": 0.883
    },
    "gaps-2": {
     "n": 3,
-    "mean": 1
+    "mean": 0.942
    },
    "gaps-3": {
     "n": 3,
@@ -1008,19 +1008,19 @@
    },
    "names-1": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.933
    },
    "names-2": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.95
    },
    "names-3": {
     "n": 3,
-    "mean": 0.8
+    "mean": 0.967
    },
    "names-4": {
     "n": 3,
-    "mean": 0.954
+    "mean": 0.887
    },
    "records-1": {
     "n": 3,
@@ -1045,33 +1045,33 @@
    "a": "plain",
    "b": "none",
    "question": "Does stating the intention help at all? (advice vs no advice)",
-   "delta": 0.007,
-   "lo": -0.042,
-   "hi": 0.061,
+   "delta": 0.046,
+   "lo": -0.003,
+   "hi": 0.098,
    "n": [
     36,
     36
    ],
    "clustered": {
-    "delta": 0.007,
-    "lo": -0.017,
-    "hi": 0.042,
+    "delta": 0.046,
+    "lo": -0.003,
+    "hi": 0.118,
     "groups": 12
    },
    "perFamily": {
     "gaps": {
-     "delta": 0,
-     "lo": -0.088,
-     "hi": 0.117,
+     "delta": -0.01,
+     "lo": -0.073,
+     "hi": 0.053,
      "n": [
       12,
       12
      ]
     },
     "names": {
-     "delta": 0.021,
-     "lo": -0.046,
-     "hi": 0.09,
+     "delta": 0.148,
+     "lo": 0.046,
+     "hi": 0.245,
      "n": [
       12,
       12
@@ -1089,18 +1089,18 @@
    },
    "perCohort": {
     "r1": {
-     "delta": -0.008,
-     "lo": -0.085,
-     "hi": 0.075,
+     "delta": 0.036,
+     "lo": -0.013,
+     "hi": 0.085,
      "n": [
       18,
       18
      ]
     },
     "r2": {
-     "delta": 0.022,
-     "lo": -0.044,
-     "hi": 0.088,
+     "delta": 0.056,
+     "lo": -0.031,
+     "hi": 0.145,
      "n": [
       18,
       18
@@ -1114,33 +1114,33 @@
    "a": "sigil",
    "b": "plain",
    "question": "Does the sigil form add to the same advice in prose?",
-   "delta": 0.03,
-   "lo": -0.013,
-   "hi": 0.073,
+   "delta": 0.007,
+   "lo": -0.027,
+   "hi": 0.044,
    "n": [
     36,
     36
    ],
    "clustered": {
-    "delta": 0.03,
-    "lo": -0.001,
-    "hi": 0.067,
+    "delta": 0.007,
+    "lo": -0.026,
+    "hi": 0.053,
     "groups": 12
    },
    "perFamily": {
     "gaps": {
-     "delta": 0.073,
-     "lo": 0.015,
-     "hi": 0.131,
+     "delta": 0.01,
+     "lo": -0.049,
+     "hi": 0.068,
      "n": [
       12,
       12
      ]
     },
     "names": {
-     "delta": 0.016,
-     "lo": -0.052,
-     "hi": 0.081,
+     "delta": 0.011,
+     "lo": -0.063,
+     "hi": 0.087,
      "n": [
       12,
       12
@@ -1158,18 +1158,18 @@
    },
    "perCohort": {
     "r1": {
-     "delta": 0.049,
-     "lo": -0.014,
-     "hi": 0.114,
+     "delta": -0.013,
+     "lo": -0.058,
+     "hi": 0.033,
      "n": [
       18,
       18
      ]
     },
     "r2": {
-     "delta": 0.011,
-     "lo": -0.043,
-     "hi": 0.066,
+     "delta": 0.026,
+     "lo": -0.023,
+     "hi": 0.089,
      "n": [
       18,
       18
@@ -1183,33 +1183,33 @@
    "a": "sigil",
    "b": "sigil-swap",
    "question": "Does the particular mark matter, or only the binding? (⊙ vs ⟁)",
-   "delta": 0.014,
-   "lo": -0.026,
-   "hi": 0.058,
+   "delta": -0.018,
+   "lo": -0.047,
+   "hi": 0.01,
    "n": [
     36,
     36
    ],
    "clustered": {
-    "delta": 0.014,
-    "lo": -0.026,
-    "hi": 0.06,
+    "delta": -0.018,
+    "lo": -0.034,
+    "hi": -0.004,
     "groups": 12
    },
    "perFamily": {
     "gaps": {
-     "delta": 0.029,
-     "lo": -0.015,
-     "hi": 0.088,
+     "delta": -0.015,
+     "lo": -0.073,
+     "hi": 0.044,
      "n": [
       12,
       12
      ]
     },
     "names": {
-     "delta": 0.013,
-     "lo": -0.05,
-     "hi": 0.072,
+     "delta": -0.041,
+     "lo": -0.091,
+     "hi": 0.013,
      "n": [
       12,
       12
@@ -1227,18 +1227,18 @@
    },
    "perCohort": {
     "r1": {
-     "delta": -0.003,
-     "lo": -0.065,
-     "hi": 0.054,
+     "delta": -0.029,
+     "lo": -0.072,
+     "hi": 0.013,
      "n": [
       18,
       18
      ]
     },
     "r2": {
-     "delta": 0.031,
-     "lo": -0.027,
-     "hi": 0.089,
+     "delta": -0.008,
+     "lo": -0.044,
+     "hi": 0.025,
      "n": [
       18,
       18
@@ -1252,33 +1252,33 @@
    "a": "decor",
    "b": "plain",
    "question": "Do meaningless symbols cost or help? (decoration control)",
-   "delta": -0.001,
-   "lo": -0.048,
-   "hi": 0.048,
+   "delta": -0.02,
+   "lo": -0.058,
+   "hi": 0.024,
    "n": [
     36,
     36
    ],
    "clustered": {
-    "delta": -0.001,
-    "lo": -0.038,
-    "hi": 0.033,
+    "delta": -0.02,
+    "lo": -0.042,
+    "hi": 0,
     "groups": 12
    },
    "perFamily": {
     "gaps": {
-     "delta": 0.044,
-     "lo": -0.015,
-     "hi": 0.117,
+     "delta": -0.015,
+     "lo": -0.078,
+     "hi": 0.049,
      "n": [
       12,
       12
      ]
     },
     "names": {
-     "delta": -0.047,
-     "lo": -0.109,
-     "hi": 0.009,
+     "delta": -0.046,
+     "lo": -0.131,
+     "hi": 0.045,
      "n": [
       12,
       12
@@ -1296,18 +1296,18 @@
    },
    "perCohort": {
     "r1": {
-     "delta": 0.021,
-     "lo": -0.046,
-     "hi": 0.089,
+     "delta": -0.035,
+     "lo": -0.082,
+     "hi": 0.014,
      "n": [
       18,
       18
      ]
     },
     "r2": {
-     "delta": -0.023,
-     "lo": -0.089,
-     "hi": 0.044,
+     "delta": -0.006,
+     "lo": -0.073,
+     "hi": 0.063,
      "n": [
       18,
       18
@@ -1321,33 +1321,33 @@
    "a": "compressed",
    "b": "plain",
    "question": "Does notation keep the obligations as well as prose?",
-   "delta": -0.029,
-   "lo": -0.085,
-   "hi": 0.029,
+   "delta": -0.043,
+   "lo": -0.086,
+   "hi": 0.003,
    "n": [
     36,
     36
    ],
    "clustered": {
-    "delta": -0.029,
-    "lo": -0.063,
-    "hi": -0.001,
+    "delta": -0.043,
+    "lo": -0.105,
+    "hi": 0.006,
     "groups": 12
    },
    "perFamily": {
     "gaps": {
-     "delta": -0.044,
-     "lo": -0.146,
-     "hi": 0.058,
+     "delta": -0.099,
+     "lo": -0.176,
+     "hi": -0.019,
      "n": [
       12,
       12
      ]
     },
     "names": {
-     "delta": -0.042,
-     "lo": -0.114,
-     "hi": 0.029,
+     "delta": -0.031,
+     "lo": -0.107,
+     "hi": 0.054,
      "n": [
       12,
       12
@@ -1365,18 +1365,18 @@
    },
    "perCohort": {
     "r1": {
-     "delta": -0.026,
-     "lo": -0.111,
-     "hi": 0.053,
+     "delta": -0.025,
+     "lo": -0.074,
+     "hi": 0.024,
      "n": [
       18,
       18
      ]
     },
     "r2": {
-     "delta": -0.031,
-     "lo": -0.103,
-     "hi": 0.039,
+     "delta": -0.061,
+     "lo": -0.127,
+     "hi": 0.013,
      "n": [
       18,
       18
@@ -1390,33 +1390,33 @@
    "a": "refrain",
    "b": "plain",
    "question": "Does cadence and recurrence add to prose?",
-   "delta": -0.005,
+   "delta": -0.009,
    "lo": -0.051,
-   "hi": 0.043,
+   "hi": 0.034,
    "n": [
     36,
     36
    ],
    "clustered": {
-    "delta": -0.005,
-    "lo": -0.045,
-    "hi": 0.039,
+    "delta": -0.009,
+    "lo": -0.044,
+    "hi": 0.029,
     "groups": 12
    },
    "perFamily": {
     "gaps": {
-     "delta": 0.024,
-     "lo": -0.039,
-     "hi": 0.088,
+     "delta": 0.01,
+     "lo": -0.049,
+     "hi": 0.068,
      "n": [
       12,
       12
      ]
     },
     "names": {
-     "delta": -0.038,
-     "lo": -0.101,
-     "hi": 0.017,
+     "delta": -0.036,
+     "lo": -0.134,
+     "hi": 0.058,
      "n": [
       12,
       12
@@ -1434,18 +1434,18 @@
    },
    "perCohort": {
     "r1": {
-     "delta": 0.021,
-     "lo": -0.044,
-     "hi": 0.089,
+     "delta": -0.013,
+     "lo": -0.06,
+     "hi": 0.035,
      "n": [
       18,
       18
      ]
     },
     "r2": {
-     "delta": -0.03,
-     "lo": -0.092,
-     "hi": 0.034,
+     "delta": -0.005,
+     "lo": -0.076,
+     "hi": 0.065,
      "n": [
       18,
       18
@@ -1459,240 +1459,33 @@
    "a": "composite",
    "b": "plain",
    "question": "Do the forms combine without interfering?",
-   "delta": 0.038,
-   "lo": -0.005,
-   "hi": 0.079,
+   "delta": -0.006,
+   "lo": -0.045,
+   "hi": 0.036,
    "n": [
     36,
     36
    ],
    "clustered": {
-    "delta": 0.038,
-    "lo": -0.001,
-    "hi": 0.088,
+    "delta": -0.006,
+    "lo": -0.031,
+    "hi": 0.017,
     "groups": 12
    },
    "perFamily": {
     "gaps": {
-     "delta": 0.015,
-     "lo": -0.058,
-     "hi": 0.088,
+     "delta": -0.005,
+     "lo": -0.068,
+     "hi": 0.058,
      "n": [
       12,
       12
      ]
     },
     "names": {
-     "delta": 0.099,
-     "lo": 0.024,
-     "hi": 0.166,
-     "n": [
-      12,
-      12
-     ]
-    },
-    "records": {
-     "delta": 0,
-     "lo": 0,
-     "hi": 0,
-     "n": [
-      12,
-      12
-     ]
-    }
-   },
-   "perCohort": {
-    "r1": {
-     "delta": 0.032,
-     "lo": -0.029,
-     "hi": 0.092,
-     "n": [
-      18,
-      18
-     ]
-    },
-    "r2": {
-     "delta": 0.044,
-     "lo": 0.004,
-     "hi": 0.091,
-     "n": [
-      18,
-      18
-     ]
-    }
-   },
-   "clearTrials": false,
-   "clear": false
-  },
-  {
-   "a": "composite",
-   "b": "sigil",
-   "question": "Does adding arrows/precedence/indent to the sigil change anything?",
-   "delta": 0.008,
-   "lo": -0.031,
-   "hi": 0.044,
-   "n": [
-    36,
-    36
-   ],
-   "clustered": {
-    "delta": 0.008,
-    "lo": -0.035,
-    "hi": 0.053,
-    "groups": 12
-   },
-   "perFamily": {
-    "gaps": {
-     "delta": -0.058,
-     "lo": -0.117,
-     "hi": 0,
-     "n": [
-      12,
-      12
-     ]
-    },
-    "names": {
-     "delta": 0.082,
-     "lo": 0.023,
-     "hi": 0.138,
-     "n": [
-      12,
-      12
-     ]
-    },
-    "records": {
-     "delta": 0,
-     "lo": 0,
-     "hi": 0,
-     "n": [
-      12,
-      12
-     ]
-    }
-   },
-   "perCohort": {
-    "r1": {
-     "delta": -0.017,
-     "lo": -0.074,
-     "hi": 0.043,
-     "n": [
-      18,
-      18
-     ]
-    },
-    "r2": {
-     "delta": 0.033,
-     "lo": 0.002,
-     "hi": 0.071,
-     "n": [
-      18,
-      18
-     ]
-    }
-   },
-   "clearTrials": false,
-   "clear": false
-  },
-  {
-   "a": "plain-minus-abstain",
-   "b": "plain",
-   "question": "Does removing the abstain clause from the prose recover what plain lost?",
-   "delta": -0.008,
-   "lo": -0.055,
-   "hi": 0.04,
-   "n": [
-    36,
-    36
-   ],
-   "clustered": {
-    "delta": -0.008,
-    "lo": -0.032,
-    "hi": 0.013,
-    "groups": 12
-   },
-   "perFamily": {
-    "gaps": {
-     "delta": 0,
-     "lo": -0.073,
-     "hi": 0.073,
-     "n": [
-      12,
-      12
-     ]
-    },
-    "names": {
-     "delta": -0.025,
-     "lo": -0.093,
-     "hi": 0.038,
-     "n": [
-      12,
-      12
-     ]
-    },
-    "records": {
-     "delta": 0,
-     "lo": 0,
-     "hi": 0,
-     "n": [
-      12,
-      12
-     ]
-    }
-   },
-   "perCohort": {
-    "r1": {
-     "delta": -0.006,
-     "lo": -0.069,
-     "hi": 0.063,
-     "n": [
-      18,
-      18
-     ]
-    },
-    "r2": {
-     "delta": -0.011,
-     "lo": -0.072,
-     "hi": 0.053,
-     "n": [
-      18,
-      18
-     ]
-    }
-   },
-   "clearTrials": false,
-   "clear": false
-  },
-  {
-   "a": "plain-minus-abstain",
-   "b": "none",
-   "question": "Without the abstain clause, is the prose back at the floor?",
-   "delta": -0.001,
-   "lo": -0.051,
-   "hi": 0.054,
-   "n": [
-    36,
-    36
-   ],
-   "clustered": {
-    "delta": -0.001,
-    "lo": -0.017,
-    "hi": 0.015,
-    "groups": 12
-   },
-   "perFamily": {
-    "gaps": {
-     "delta": 0,
-     "lo": -0.088,
-     "hi": 0.117,
-     "n": [
-      12,
-      12
-     ]
-    },
-    "names": {
-     "delta": -0.004,
-     "lo": -0.059,
-     "hi": 0.046,
+     "delta": -0.014,
+     "lo": -0.104,
+     "hi": 0.076,
      "n": [
       12,
       12
@@ -1711,17 +1504,17 @@
    "perCohort": {
     "r1": {
      "delta": -0.014,
-     "lo": -0.087,
-     "hi": 0.068,
+     "lo": -0.058,
+     "hi": 0.035,
      "n": [
       18,
       18
      ]
     },
     "r2": {
-     "delta": 0.011,
-     "lo": -0.055,
-     "hi": 0.075,
+     "delta": 0.001,
+     "lo": -0.062,
+     "hi": 0.068,
      "n": [
       18,
       18
@@ -1729,6 +1522,213 @@
     }
    },
    "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "composite",
+   "b": "sigil",
+   "question": "Does adding arrows/precedence/indent to the sigil change anything?",
+   "delta": -0.013,
+   "lo": -0.048,
+   "hi": 0.024,
+   "n": [
+    36,
+    36
+   ],
+   "clustered": {
+    "delta": -0.013,
+    "lo": -0.041,
+    "hi": 0.01,
+    "groups": 12
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": -0.015,
+     "lo": -0.073,
+     "hi": 0.058,
+     "n": [
+      12,
+      12
+     ]
+    },
+    "names": {
+     "delta": -0.025,
+     "lo": -0.102,
+     "hi": 0.045,
+     "n": [
+      12,
+      12
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      12,
+      12
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": -0.001,
+     "lo": -0.047,
+     "hi": 0.047,
+     "n": [
+      18,
+      18
+     ]
+    },
+    "r2": {
+     "delta": -0.025,
+     "lo": -0.078,
+     "hi": 0.025,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "plain-minus-abstain",
+   "b": "plain",
+   "question": "Does removing the abstain clause from the prose recover what plain lost?",
+   "delta": 0.006,
+   "lo": -0.026,
+   "hi": 0.044,
+   "n": [
+    36,
+    36
+   ],
+   "clustered": {
+    "delta": 0.006,
+    "lo": -0.016,
+    "hi": 0.039,
+    "groups": 12
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": -0.015,
+     "lo": -0.073,
+     "hi": 0.049,
+     "n": [
+      12,
+      12
+     ]
+    },
+    "names": {
+     "delta": 0.033,
+     "lo": -0.029,
+     "hi": 0.106,
+     "n": [
+      12,
+      12
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      12,
+      12
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": -0.015,
+     "lo": -0.058,
+     "hi": 0.031,
+     "n": [
+      18,
+      18
+     ]
+    },
+    "r2": {
+     "delta": 0.028,
+     "lo": -0.018,
+     "hi": 0.085,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "plain-minus-abstain",
+   "b": "none",
+   "question": "Without the abstain clause, is the prose back at the floor?",
+   "delta": 0.052,
+   "lo": 0.009,
+   "hi": 0.101,
+   "n": [
+    36,
+    36
+   ],
+   "clustered": {
+    "delta": 0.052,
+    "lo": -0.002,
+    "hi": 0.125,
+    "groups": 12
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": -0.024,
+     "lo": -0.088,
+     "hi": 0.039,
+     "n": [
+      12,
+      12
+     ]
+    },
+    "names": {
+     "delta": 0.181,
+     "lo": 0.104,
+     "hi": 0.261,
+     "n": [
+      12,
+      12
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      12,
+      12
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": 0.021,
+     "lo": -0.028,
+     "hi": 0.072,
+     "n": [
+      18,
+      18
+     ]
+    },
+    "r2": {
+     "delta": 0.084,
+     "lo": 0.009,
+     "hi": 0.163,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": true,
    "clear": false
   }
  ]

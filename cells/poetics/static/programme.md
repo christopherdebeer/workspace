@@ -163,6 +163,31 @@ Three runs, 9 conditions × 12 tasks × 3 reps = 324 trials each. The r1 tasks
 are run again inside each so a run is self-contained and the cohorts are
 comparable within it.
 
+## After round two
+
+Read on the day it ran (the full reading is on the run page of
+`2026-10-08-r2-haiku-system`). What it changed about the method:
+
+- Round one did not replicate on a same-model, same-task re-run five hours
+  later: both of its clear contrasts vanished and its abstention effect went
+  from −0.20 to −0.03. Both bootstrap intervals had excluded zero. So from
+  here a contrast is read only when it holds across runs; the next design
+  unit is the same run repeated on separate days.
+- Contrasts now carry two intervals, over trials and over tasks as clusters,
+  and are `clear` only when both exclude zero. Round one's pass both; that is
+  the point — six tasks are too few for either interval to mean much.
+- The ablation found nothing (plain-minus-abstain − plain ≈ 0 in all three
+  runs). The abstain clause was not the cause.
+- What held: on haiku, stating the intention at all keeps identifiers under a
+  word limit (names family +0.14, both placements, larger on the held-out
+  tasks). On sonnet, nothing in the content mattered and one form did: the
+  composite's terse indented layout brought rewrites under the limit where
+  every other condition overran. That is a genre effect to study on its own.
+- `records` is saturated for both models at both difficulties. Redesign
+  before reuse.
+- The runner attributes tokens per model; the CLI makes an auxiliary haiku
+  call that the top-level usage was summing in.
+
 ## Running it
 
 ```

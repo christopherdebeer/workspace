@@ -1,5 +1,5 @@
 {
- "generatedAt": "2026-10-08T13:07:21.038Z",
+ "generatedAt": "2026-10-08T13:12:35.930Z",
  "runs": [
   {
    "id": "2026-10-08-haiku-system",
@@ -76,9 +76,9 @@
    ],
    "placement": "user",
    "createdAt": "2026-10-08T12:47:22.347Z",
-   "n": 280,
+   "n": 324,
    "errors": 0,
-   "costUsd": 0.4493,
+   "costUsd": 0.5075,
    "conditions": [
     "composite",
     "compressed",
@@ -92,15 +92,13 @@
    ],
    "best": {
     "condition": "sigil-swap",
-    "mean": 0.979
+    "mean": 0.982
    },
-   "floor": 0.9,
-   "plain": 0.951,
-   "clearContrasts": [
-    "plain-minus-abstain−none +0.059"
-   ],
+   "floor": 0.911,
+   "plain": 0.957,
+   "clearContrasts": [],
    "clearHeldOut": [
-    "plain-minus-abstain−none +0.095"
+    "plain-minus-abstain−none +0.084"
    ]
   },
   {

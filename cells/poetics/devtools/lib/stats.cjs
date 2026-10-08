@@ -49,10 +49,38 @@ function bootstrapDelta(a, b, { iterations = 2000, seed = 7, level = 0.95 } = {}
   return { delta: round(mean(a) - mean(b)), lo: round(at(tail)), hi: round(at(1 - tail)), n: [a.length, b.length] };
 }
 
+/**
+ * Cluster bootstrap for mean(a) − mean(b) where trials are grouped (by task): resample the
+ * GROUPS with replacement, pool their trials, take the difference. `a` and `b` are maps
+ * group → number[]; both must share the group keys. Honest about the fact that three reps
+ * on one task are one observation of that task, not three.
+ */
+function bootstrapDeltaClustered(a, b, { iterations = 2000, seed = 11, level = 0.95 } = {}) {
+  const groups = Object.keys(a).filter((g) => (a[g] || []).length && (b[g] || []).length);
+  if (groups.length < 2) return { delta: NaN, lo: NaN, hi: NaN, groups: groups.length };
+  const r = rng(seed);
+  const deltas = new Array(iterations);
+  for (let i = 0; i < iterations; i++) {
+    const A = [];
+    const B = [];
+    for (let k = 0; k < groups.length; k++) {
+      const g = groups[(r() * groups.length) | 0];
+      A.push(...a[g]);
+      B.push(...b[g]);
+    }
+    deltas[i] = mean(A) - mean(B);
+  }
+  deltas.sort((x, y) => x - y);
+  const tail = (1 - level) / 2;
+  const at = (q) => deltas[Math.min(iterations - 1, Math.max(0, Math.floor(q * iterations)))];
+  const all = (m) => groups.flatMap((g) => m[g]);
+  return { delta: round(mean(all(a)) - mean(all(b))), lo: round(at(tail)), hi: round(at(1 - tail)), groups: groups.length };
+}
+
 function round(x, places = 3) {
   if (!Number.isFinite(x)) return x;
   const k = 10 ** places;
   return Math.round(x * k) / k;
 }
 
-module.exports = { mean, sd, bootstrapDelta, round, rng };
+module.exports = { mean, sd, bootstrapDelta, bootstrapDeltaClustered, round, rng };

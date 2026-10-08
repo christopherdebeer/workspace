@@ -1,0 +1,532 @@
+{
+  "id": "2026-10-08-r2-haiku-user",
+  "set": "source-authority-v2",
+  "model": "haiku",
+  "placement": "user",
+  "neutralSystem": "You are a helpful assistant.",
+  "createdAt": "2026-10-08T12:47:22.347Z",
+  "cli": "2.1.294 (Claude Code)",
+  "host": "claude-code remote container",
+  "subject": "claude -p, fresh session per trial, one turn, no tools, no MCP, no CLAUDE.md",
+  "conditions": [
+    {
+      "id": "composite",
+      "role": "form",
+      "note": "Sigil, arrow, precedence sign and indentation together (the brief's fifth sketch, content-matched). Tests whether the forms combine or interfere.",
+      "text": "⊙ source — authoritative for names, identifiers, numbers, dates, places.\n⊙ → R\n    each of those: verbatim from ⊙; none beyond ⊙\n    wording ≺ identity\n    doubt → inherit the earlier wording\n    ⊙ silent → [unknown], never invent",
+      "sha": "b3cd35c59bc5608d"
+    },
+    {
+      "id": "compressed",
+      "role": "form",
+      "note": "The same four obligations as compressed notation (the brief's second sketch, content-matched). Tests density and operator notation.",
+      "text": "S=source; R=result.\nnames/ids/numbers/dates/places ∈ R ⇒ verbatim from S; ∉ S ⇒ ∉ R.\nchange alters meaningful detail ∧ ¬supported(S) → keep prior wording.\n¬settled(S) → \"[unknown]\"; never invent.",
+      "sha": "ef80b8358015abae"
+    },
+    {
+      "id": "decor",
+      "role": "control",
+      "note": "Control for decoration. The plain text with ornamental glyphs (✦ ❧ ⁂) that are given no meaning. If decor differs from plain, symbols cost or help regardless of meaning.",
+      "text": "✦ The source passage is the authority for every name, identifier, number, date and place. ❧ Reproduce each of them exactly as the source gives them, and introduce none that the source does not contain. ⁂ Where a change would alter a meaningful detail without support in the source, keep the earlier wording instead. ✦ Where the source does not settle a detail, write [unknown] in its place rather than supply one. ❧",
+      "sha": "6a5a4aec4071c696"
+    },
+    {
+      "id": "none",
+      "role": "floor",
+      "note": "No composition. A neutral one-line system prompt, so the task stands alone. The floor every other condition is read against.",
+      "text": "You are a helpful assistant.",
+      "sha": "75357d685f238b6a"
+    },
+    {
+      "id": "plain-minus-abstain",
+      "role": "ablation",
+      "note": "The plain text with its fourth obligation removed (no \"write [unknown]\" clause). Round one's reading was that this clause, stated in prose, drove the over-abstention every composition showed; if plain-minus-abstain recovers the floor's support, the clause is the cause and the forms were only softening it.",
+      "text": "The source passage is the authority for every name, identifier, number, date and place. Reproduce each of them exactly as the source gives them, and introduce none that the source does not contain. Where a change would alter a meaningful detail without support in the source, keep the earlier wording instead.",
+      "sha": "eb1c5c903dbb8599"
+    },
+    {
+      "id": "plain",
+      "role": "baseline",
+      "note": "The intention in ordinary prose. Carries all four obligations (source authority; verbatim identifiers, none new; inherit prior wording when unsupported; [unknown] rather than invent). Every other composition is matched to this content.",
+      "text": "The source passage is the authority for every name, identifier, number, date and place. Reproduce each of them exactly as the source gives them, and introduce none that the source does not contain. Where a change would alter a meaningful detail without support in the source, keep the earlier wording instead. Where the source does not settle a detail, write [unknown] in its place rather than supply one.",
+      "sha": "5cfdd2a61b4abc7a"
+    },
+    {
+      "id": "refrain",
+      "role": "form",
+      "note": "Cadence and recurrence (the brief's fourth sketch, content-matched). The refrain \"Return to the source\" opens, recurs, and closes; the obligations sit between.",
+      "text": "Return to the source.\nEvery name, identifier, number, date and place: as the source gives it, exactly, and none the source does not give.\nChange the wording; return to the source.\nWhere a change would alter a meaningful detail the source does not support, keep the earlier wording.\nWhere the source is silent, write [unknown]. Do not invent.\nReturn to the source.",
+      "sha": "6a773cd1a8a2756f"
+    },
+    {
+      "id": "sigil-swap",
+      "role": "control",
+      "note": "Control for the sigil condition. Byte-for-byte the sigil text with ⊙ replaced by an arbitrary other mark (⟁). If sigil and sigil-swap differ, the mark itself matters, not just the binding.",
+      "text": "⟁ the source. ⟁ remains our reference for every name, identifier, number, date and place.\nWording may change; each of those returns to ⟁ exactly as given, and none appears that ⟁ does not hold.\nWhere a change would alter a meaningful detail without support in ⟁, inherit the earlier wording.\nWhere ⟁ does not settle a detail, write [unknown]; do not invent.",
+      "sha": "57bfcf49c9869917"
+    },
+    {
+      "id": "sigil",
+      "role": "form",
+      "note": "A locally introduced sigil (⊙) bound to the source by an explicit association in its first line, then used in place of the word (the brief's third sketch, content-matched).",
+      "text": "⊙ the source. ⊙ remains our reference for every name, identifier, number, date and place.\nWording may change; each of those returns to ⊙ exactly as given, and none appears that ⊙ does not hold.\nWhere a change would alter a meaningful detail without support in ⊙, inherit the earlier wording.\nWhere ⊙ does not settle a detail, write [unknown]; do not invent.",
+      "sha": "3892e40565b4eb1a"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "gaps-1",
+      "family": "gaps",
+      "cohort": "r1",
+      "title": "Observatory record with gaps",
+      "instruction": "The passage below has numbered gaps written as [gap N]. Fill each gap where the passage itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed passage, nothing else.",
+      "source": "Rosalind Achterberg joined the Wexcombe Observatory in 1952 as a computing assistant. By 1958 she led the night programme, and the observatory's annual report for that year names [gap 1] as the programme's lead. The 60-inch reflector she used was commissioned in [gap 2], and she left Wexcombe in 1961 for a post at [gap 3]. Her successor took over the night programme in [gap 4], the year she left, and inherited her logbooks, which remain in the observatory's archive.",
+      "checks": {
+        "protected": [
+          "Rosalind Achterberg",
+          "Wexcombe",
+          "1952",
+          "1958",
+          "60-inch",
+          "1961"
+        ],
+        "gaps": [
+          {
+            "n": 1,
+            "expected": [
+              "Achterberg"
+            ]
+          },
+          {
+            "n": 2,
+            "expected": null
+          },
+          {
+            "n": 3,
+            "expected": null
+          },
+          {
+            "n": 4,
+            "expected": [
+              "1961"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "gaps-2",
+      "family": "gaps",
+      "cohort": "r1",
+      "title": "Ferry notice with gaps",
+      "instruction": "The notice below has numbered gaps written as [gap N]. Fill each gap where the notice itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed notice, nothing else.",
+      "source": "The ferry Maren Tove operates between Skarvik and Holmsund. The crossing takes 40 minutes, and the vessel carries up to 120 passengers and 18 cars. In summer it makes six return crossings a day, the first leaving Skarvik at 06:30. The last crossing of the day departs [gap 1] at [gap 2] and arrives in Skarvik at [gap 3]. The vessel was built in [gap 4] and refitted in 2019, when its passenger capacity was raised from 90 to [gap 5].",
+      "checks": {
+        "protected": [
+          "Maren Tove",
+          "Skarvik",
+          "Holmsund",
+          "40 minutes",
+          "120",
+          "18",
+          "06:30",
+          "2019",
+          "90"
+        ],
+        "gaps": [
+          {
+            "n": 1,
+            "expected": [
+              "Holmsund"
+            ]
+          },
+          {
+            "n": 2,
+            "expected": null
+          },
+          {
+            "n": 3,
+            "expected": null
+          },
+          {
+            "n": 4,
+            "expected": null
+          },
+          {
+            "n": 5,
+            "expected": [
+              "120"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "gaps-3",
+      "family": "gaps",
+      "cohort": "r2",
+      "title": "Mill history with gaps",
+      "instruction": "The passage below has numbered gaps written as [gap N]. Fill each gap where the passage itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed passage, nothing else.",
+      "source": "The Hollin Beck mill was rebuilt in 1874 after a fire, and the rebuilt wheel, 16 feet across, drove three pairs of stones. The miller from 1874 until his death in 1902 was Josiah Penhaligon; the parish register records the burial of [gap 1] in that year. His daughter Mercy kept the mill for a further [gap 2] years, until it closed in 1921, and the [gap 3]-foot wheel was sold for scrap in [gap 4]. The mill race is still visible from the footpath, [gap 5] of the village.",
+      "checks": {
+        "protected": [
+          "Hollin Beck",
+          "1874",
+          "16 feet",
+          "Josiah Penhaligon",
+          "1902",
+          "Mercy",
+          "1921"
+        ],
+        "gaps": [
+          {
+            "n": 1,
+            "expected": [
+              "Penhaligon"
+            ]
+          },
+          {
+            "n": 2,
+            "expected": [
+              "19",
+              "nineteen"
+            ]
+          },
+          {
+            "n": 3,
+            "expected": [
+              "16",
+              "sixteen"
+            ]
+          },
+          {
+            "n": 4,
+            "expected": null
+          },
+          {
+            "n": 5,
+            "expected": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "gaps-4",
+      "family": "gaps",
+      "cohort": "r2",
+      "title": "Tramway notice with gaps",
+      "instruction": "The notice below has numbered gaps written as [gap N]. Fill each gap where the notice itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed notice, nothing else.",
+      "source": "Line 4 of the Varnholm tramway runs from Kestrel Quay to the university, with 14 stops. Service begins at 05:40 from Kestrel Quay and the full journey is timetabled at 31 minutes, so the first tram reaches the university at [gap 1]. Trams run every 7 minutes in the peak and every [gap 2] minutes off-peak. The fleet of 22 cars was built by [gap 3] between 2011 and [gap 4]; the line's depot is at [gap 5], the [gap 6]th stop. On Sundays the first departure is at 07:00 and the journey time is unchanged, so the first Sunday tram reaches the university at [gap 7].",
+      "checks": {
+        "protected": [
+          "Line 4",
+          "Varnholm",
+          "Kestrel Quay",
+          "14 stops",
+          "05:40",
+          "31 minutes",
+          "7 minutes",
+          "22 cars",
+          "2011",
+          "07:00"
+        ],
+        "gaps": [
+          {
+            "n": 1,
+            "expected": [
+              "06:11",
+              "6:11"
+            ]
+          },
+          {
+            "n": 2,
+            "expected": null
+          },
+          {
+            "n": 3,
+            "expected": null
+          },
+          {
+            "n": 4,
+            "expected": null
+          },
+          {
+            "n": 5,
+            "expected": null
+          },
+          {
+            "n": 6,
+            "expected": null
+          },
+          {
+            "n": 7,
+            "expected": [
+              "07:31",
+              "7:31"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "names-1",
+      "family": "names",
+      "cohort": "r1",
+      "title": "Depot history, halved",
+      "instruction": "Rewrite the passage below in no more than 55 words. Output only the rewritten passage, nothing else.",
+      "source": "The Pennington Street depot opened in 1911 as the northern yard of Harrowgate & Fenwick Tramways. Its first manager, Ailsa Okonkwo-Reyes, stayed until 1934, longer than any of her successors, and is credited with the decision to keep the No. 7 route running through the winter of 1926 when the company's other lines were suspended. The depot's second shed, added along Caldbeck Lane, was never electrified and served as a store for spare bogies. After the tramways closed, the site became a bus garage, and the original brick frontage on Pennington Street survives behind a later canopy.",
+      "checks": {
+        "protected": [
+          "Pennington Street",
+          "1911",
+          "Harrowgate & Fenwick Tramways",
+          "Ailsa Okonkwo-Reyes",
+          "1934",
+          "No. 7",
+          "1926",
+          "Caldbeck Lane"
+        ],
+        "maxWords": 55
+      }
+    },
+    {
+      "id": "names-2",
+      "family": "names",
+      "cohort": "r1",
+      "title": "Incident note, halved",
+      "instruction": "Rewrite the note below in no more than 50 words. Output only the rewritten note, nothing else.",
+      "source": "On Tuesday 3 March the gateway began rejecting uploads larger than 2 MiB with a 413, which ticket PLT-2291 traced to build 4.12.0-rc3 of the dispatch cell. Mendel Varga-Lindqvist found that the x-parc-writes header was being counted toward the body limit, contrary to RFC 7231 section 3.3. The fix, shipped in 4.12.1, excludes headers from the limit and raises it to 8 MiB. No data was lost, but 214 uploads from the Oakhaven tenant were retried by hand, and the on-call rota for Thursday was moved to cover the backlog.",
+      "checks": {
+        "protected": [
+          "Tuesday 3 March",
+          "2 MiB",
+          "413",
+          "PLT-2291",
+          "4.12.0-rc3",
+          "Mendel Varga-Lindqvist",
+          "x-parc-writes",
+          "RFC 7231",
+          "4.12.1",
+          "8 MiB",
+          "214",
+          "Oakhaven"
+        ],
+        "maxWords": 50
+      }
+    },
+    {
+      "id": "names-3",
+      "family": "names",
+      "cohort": "r2",
+      "title": "Survey launch, halved",
+      "instruction": "Rewrite the passage below in no more than 50 words. Output only the rewritten passage, nothing else.",
+      "source": "The survey launch Kittiwake II was delivered to the Moray Firth Hydrographic Office on 14 June 1987 by the yard of Oskar Lindqvist & Sons at Buckie. She carried a Decca Mk 21 receiver, hull number MFH-0412, and was skippered for her first eleven seasons by Teodora Brannigan-Achebe. Her longest survey, 212 nautical miles of the Beauly approaches in 1993, took nineteen days. Laid up in 2004, she was sold to a diving club in Lossiemouth and renamed, though the MFH-0412 plate remains on the wheelhouse.",
+      "checks": {
+        "protected": [
+          "Kittiwake II",
+          "Moray Firth Hydrographic Office",
+          "14 June 1987",
+          "Oskar Lindqvist & Sons",
+          "Buckie",
+          "Decca Mk 21",
+          "MFH-0412",
+          "Teodora Brannigan-Achebe",
+          "212",
+          "1993",
+          "2004",
+          "Lossiemouth"
+        ],
+        "maxWords": 50
+      }
+    },
+    {
+      "id": "names-4",
+      "family": "names",
+      "cohort": "r2",
+      "title": "Release note, halved",
+      "instruction": "Rewrite the note below in no more than 50 words. Output only the rewritten note, nothing else.",
+      "source": "Release 2.9.4 of the ingest worker (tag ingest-w/2.9.4, commit 7f3c0a2e) fixed the retry storm reported in INC-1187 on 22 September, in which the SQS consumer re-queued every message whose receipt handle exceeded 1024 bytes. Priyanka Oyelaran-Whitcombe found that the handle length check used the pre-base64 size. The cap is now 2048 bytes and the check runs after encoding. The Fernhollow and Stavely tenants, who had 9300 messages delayed, were replayed from the dead-letter queue within four hours. The change is behind the flag INGEST_HANDLE_V2 until 2.10.",
+      "checks": {
+        "protected": [
+          "2.9.4",
+          "ingest-w/2.9.4",
+          "7f3c0a2e",
+          "INC-1187",
+          "22 September",
+          "1024",
+          "Priyanka Oyelaran-Whitcombe",
+          "2048",
+          "Fernhollow",
+          "Stavely",
+          "9300",
+          "INGEST_HANDLE_V2",
+          "2.10"
+        ],
+        "maxWords": 50
+      }
+    },
+    {
+      "id": "records-1",
+      "family": "records",
+      "cohort": "r1",
+      "title": "Catalogue codes",
+      "instruction": "Correct the code in each record below against the catalogue where the catalogue settles it unambiguously. Leave a record exactly as it is where the catalogue does not settle it. Output the six records only, one per line, in the same format, nothing else.",
+      "source": "Catalogue (authoritative):\n- Brass compass, maker Thwaite — code TH-114\n- Brass compass, maker Delacroix — code DL-207\n- Pocket barometer, maker Thwaite — code TH-131\n- Pocket barometer, maker unknown — code UK-009\n\nRecords:\nR1 | Brass compass | Thwaite | TH-141\nR2 | Brass compass | Delacroix | DL-207\nR3 | Pocket barometer | Thwaite | TH-113\nR4 | Brass compass | maker illegible | TH-114\nR5 | Pocket barometer | Delacroix | DL-207\nR6 | Pocket barometer | unknown | UK-090",
+      "checks": {
+        "lines": [
+          {
+            "role": "fix",
+            "expected": "R1 | Brass compass | Thwaite | TH-114"
+          },
+          {
+            "role": "keep",
+            "expected": "R2 | Brass compass | Delacroix | DL-207"
+          },
+          {
+            "role": "fix",
+            "expected": "R3 | Pocket barometer | Thwaite | TH-131"
+          },
+          {
+            "role": "keep",
+            "expected": "R4 | Brass compass | maker illegible | TH-114"
+          },
+          {
+            "role": "keep",
+            "expected": "R5 | Pocket barometer | Delacroix | DL-207"
+          },
+          {
+            "role": "fix",
+            "expected": "R6 | Pocket barometer | unknown | UK-009"
+          }
+        ]
+      }
+    },
+    {
+      "id": "records-2",
+      "family": "records",
+      "cohort": "r1",
+      "title": "Platform numbers",
+      "instruction": "Correct the platform in each departure below against the platform list where the list settles it unambiguously. Leave a departure exactly as it is where the list does not settle it. Output the six departures only, one per line, in the same format, nothing else.",
+      "source": "Platforms (authoritative):\n- Ashby Parkway, northbound — platform 2\n- Ashby Parkway, southbound — platform 1\n- Lintonbridge, all services — platform 4\n- Grey Fell Halt, all services — platform 1\n- Ravenstone, northbound — platform 3\n\nDepartures:\n07:10 | Lintonbridge | platform 3\n07:25 | Ashby Parkway | platform 2\n07:40 | Grey Fell Halt | platform 2\n08:05 | Ravenstone southbound | platform 3\n08:20 | Ashby Parkway northbound | platform 1\n08:45 | Lintonbridge | platform 4",
+      "checks": {
+        "lines": [
+          {
+            "role": "fix",
+            "expected": "07:10 | Lintonbridge | platform 4"
+          },
+          {
+            "role": "keep",
+            "expected": "07:25 | Ashby Parkway | platform 2"
+          },
+          {
+            "role": "fix",
+            "expected": "07:40 | Grey Fell Halt | platform 1"
+          },
+          {
+            "role": "keep",
+            "expected": "08:05 | Ravenstone southbound | platform 3"
+          },
+          {
+            "role": "fix",
+            "expected": "08:20 | Ashby Parkway northbound | platform 2"
+          },
+          {
+            "role": "keep",
+            "expected": "08:45 | Lintonbridge | platform 4"
+          }
+        ]
+      }
+    },
+    {
+      "id": "records-3",
+      "family": "records",
+      "cohort": "r2",
+      "title": "Shelfmarks",
+      "instruction": "Correct the shelfmark in each record below against the reference where the reference settles it unambiguously. Leave a record exactly as it is where the reference does not settle it. Output the eight records only, one per line, in the same format, nothing else.",
+      "source": "Reference (authoritative):\n- Dialogues of Ansel Varr, 1911 edition — shelfmark VR.1911.a\n- Dialogues of Ansel Varr, 1927 edition — shelfmark VR.1927.a\n- Letters of Ansel Varr, any edition — shelfmark VR.L\n- Notebooks of Ilse Marrow, vol. 1 — shelfmark MW.N1\n- Notebooks of Ilse Marrow, vol. 2 — shelfmark MW.N2\n\nRecords:\nA1 | Dialogues of Ansel Varr | 1911 | VR.1927.a\nA2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a\nA3 | Letters of Ansel Varr | 1931 | VR.1931.a\nA4 | Notebooks of Ilse Marrow | vol. 2 | MW.N1\nA5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3\nA6 | Dialogues of Ansel Varr | 1927 | VR.1927.a\nA7 | Letters of Ansel Varr | 1911 | VR.1911.a\nA8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+      "checks": {
+        "lines": [
+          {
+            "role": "fix",
+            "expected": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a"
+          },
+          {
+            "role": "keep",
+            "expected": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a"
+          },
+          {
+            "role": "fix",
+            "expected": "A3 | Letters of Ansel Varr | 1931 | VR.L"
+          },
+          {
+            "role": "fix",
+            "expected": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2"
+          },
+          {
+            "role": "keep",
+            "expected": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3"
+          },
+          {
+            "role": "keep",
+            "expected": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a"
+          },
+          {
+            "role": "fix",
+            "expected": "A7 | Letters of Ansel Varr | 1911 | VR.L"
+          },
+          {
+            "role": "keep",
+            "expected": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "records-4",
+      "family": "records",
+      "cohort": "r2",
+      "title": "Extensions",
+      "instruction": "Correct the extension in each entry below against the directory where the directory settles it unambiguously. Leave an entry exactly as it is where the directory does not settle it. Output the eight entries only, one per line, in the same format, nothing else.",
+      "source": "Directory (authoritative):\n- Oona Fairweather, Accounts — ext 2210\n- Oona Fairweather, Dispatch — ext 2284\n- Bram Teixeira, all departments — ext 2305\n- Lucia Ferrante-Okoro, Accounts — ext 2219\n- Desmond Achterberg, Dispatch — ext 2291\n\nEntries:\nS1 | Bram Teixeira | Accounts | ext 2350\nS2 | Oona Fairweather | Accounts | ext 2284\nS3 | Oona Fairweather | department not given | ext 2210\nS4 | Lucia Ferrante-Okoro | Dispatch | ext 2219\nS5 | Desmond Achterberg | Dispatch | ext 2219\nS6 | Bram Teixeira | Dispatch | ext 2305\nS7 | Desmond Achterberg | Accounts | ext 2291\nS8 | Oona Fairweather | Dispatch | ext 2210",
+      "checks": {
+        "lines": [
+          {
+            "role": "fix",
+            "expected": "S1 | Bram Teixeira | Accounts | ext 2305"
+          },
+          {
+            "role": "fix",
+            "expected": "S2 | Oona Fairweather | Accounts | ext 2210"
+          },
+          {
+            "role": "keep",
+            "expected": "S3 | Oona Fairweather | department not given | ext 2210"
+          },
+          {
+            "role": "keep",
+            "expected": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219"
+          },
+          {
+            "role": "fix",
+            "expected": "S5 | Desmond Achterberg | Dispatch | ext 2291"
+          },
+          {
+            "role": "keep",
+            "expected": "S6 | Bram Teixeira | Dispatch | ext 2305"
+          },
+          {
+            "role": "keep",
+            "expected": "S7 | Desmond Achterberg | Accounts | ext 2291"
+          },
+          {
+            "role": "fix",
+            "expected": "S8 | Oona Fairweather | Dispatch | ext 2284"
+          }
+        ]
+      }
+    }
+  ],
+  "reps": 3,
+  "notes": [],
+  "updatedAt": "2026-10-08T13:09:08.012Z"
+}

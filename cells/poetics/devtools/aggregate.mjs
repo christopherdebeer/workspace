@@ -7,8 +7,10 @@
  * For every run under static/data/runs/<run>/ it writes summary.json beside
  * the trials (per condition: n, mean score and sd, the component means, error
  * count, token and cost means; per condition × family: n and mean; the
- * pre-specified contrasts as differences of means with a seeded bootstrap 95%
- * interval), then static/data/index.json listing the runs with their
+ * pre-specified contrasts as differences of means with two seeded bootstrap 95%
+ * intervals: over trials, and over TASKS as clusters — a contrast is `clear`
+ * only when both exclude zero; round one's two "clear" contrasts, trial-level
+ * only, did not survive a same-model re-run), then static/data/index.json listing the runs with their
  * headlines. It also copies docs/poetics-exploratory-programme.md into
  * static/programme.md so the cell serves the programme as it is in git.
  *
@@ -27,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { mean, sd, bootstrapDelta, round } = require('./lib/stats.cjs');
+const { mean, sd, bootstrapDelta, bootstrapDeltaClustered, round } = require('./lib/stats.cjs');
 const { score, SCORER_VERSION } = require('./lib/score.cjs');
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -123,6 +125,8 @@ function summarise(runDir) {
     const A = trials.filter((t) => t.condition === a && ok(t)).map((t) => t.score);
     const B = trials.filter((t) => t.condition === b && ok(t)).map((t) => t.score);
     const all = bootstrapDelta(A, B);
+    const byTask = (cond) => Object.fromEntries(manifest.tasks.map((t) => [t.id, trials.filter((x) => x.condition === cond && x.task === t.id && ok(x)).map((x) => x.score)]));
+    const clustered = bootstrapDeltaClustered(byTask(a), byTask(b));
     const perFamily = {};
     for (const f of families) {
       const Af = trials.filter((t) => t.condition === a && t.family === f && ok(t)).map((t) => t.score);
@@ -135,7 +139,8 @@ function summarise(runDir) {
       const Bc = trials.filter((t) => t.condition === b && cohortOf[t.task] === c && ok(t)).map((t) => t.score);
       perCohort[c] = bootstrapDelta(Ac, Bc);
     }
-    return { a, b, question, ...all, perFamily, perCohort, clear: Number.isFinite(all.lo) && (all.lo > 0 || all.hi < 0) };
+    const excludesZero = (d) => Number.isFinite(d.lo) && (d.lo > 0 || d.hi < 0);
+    return { a, b, question, ...all, clustered, perFamily, perCohort, clearTrials: excludesZero(all), clear: excludesZero(all) && excludesZero(clustered) };
   });
 
   const summary = {

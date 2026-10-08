@@ -33,6 +33,12 @@ const scorer = require('../cells/poetics/devtools/lib/score.cjs') as {
   FAMILIES: string[];
 };
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const stats = require('../cells/poetics/devtools/lib/stats.cjs') as {
+  bootstrapDelta(a: number[], b: number[]): { delta: number; lo: number; hi: number };
+  bootstrapDeltaClustered(a: Record<string, number[]>, b: Record<string, number[]>): { delta: number; lo: number; hi: number; groups: number };
+};
+
 const TASKS = join(__dirname, '..', 'cells', 'poetics', 'static', 'tasks');
 const load = (id: string): Task => JSON.parse(readFileSync(join(TASKS, `${id}.json`), 'utf8')) as Task;
 
@@ -177,5 +183,24 @@ describe('records', () => {
     const s = scorer.score(t, lines.join('\n'));
     expect(s.components.correction).toBe(1);
     expect(s.components.restraint).toBeCloseTo(2 / 3, 5);
+  });
+});
+
+describe('stats', () => {
+  it('a trial-level interval can clear zero where the task-clustered one does not', () => {
+    // two tasks: one where a wins by a lot, one where they tie — the effect is one task's
+    const a = { t1: [1, 1, 1, 1, 1, 1], t2: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5] };
+    const b = { t1: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5], t2: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5] };
+    const flat = stats.bootstrapDelta([...a.t1, ...a.t2], [...b.t1, ...b.t2]);
+    const clustered = stats.bootstrapDeltaClustered(a, b);
+    expect(flat.lo).toBeGreaterThan(0);
+    expect(clustered.delta).toBeCloseTo(0.25, 5);
+    expect(clustered.lo).toBeLessThanOrEqual(0); // resampling two tasks can draw t2 twice
+    expect(clustered.groups).toBe(2);
+  });
+  it('is seeded: the same inputs give the same interval', () => {
+    const a = [0.9, 0.8, 1, 0.7, 0.95];
+    const b = [0.6, 0.85, 0.7, 0.9, 0.5];
+    expect(stats.bootstrapDelta(a, b)).toEqual(stats.bootstrapDelta(a, b));
   });
 });
