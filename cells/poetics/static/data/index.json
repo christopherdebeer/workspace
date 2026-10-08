@@ -1,5 +1,5 @@
 {
- "generatedAt": "2026-10-08T12:43:54.986Z",
+ "generatedAt": "2026-10-08T13:07:21.038Z",
  "runs": [
   {
    "id": "2026-10-08-haiku-system",
@@ -34,6 +34,109 @@
     "compressed−plain +0.072"
    ],
    "clearHeldOut": []
+  },
+  {
+   "id": "2026-10-08-r2-haiku-system",
+   "set": "source-authority-v2",
+   "model": "haiku",
+   "models": [
+    "claude-haiku-5-5"
+   ],
+   "placement": "system",
+   "createdAt": "2026-10-08T12:47:22.306Z",
+   "n": 324,
+   "errors": 0,
+   "costUsd": 0.4568,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain-minus-abstain",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "sigil-swap",
+    "mean": 0.973
+   },
+   "floor": 0.914,
+   "plain": 0.953,
+   "clearContrasts": [],
+   "clearHeldOut": []
+  },
+  {
+   "id": "2026-10-08-r2-haiku-user",
+   "set": "source-authority-v2",
+   "model": "haiku",
+   "models": [
+    "claude-haiku-5-5"
+   ],
+   "placement": "user",
+   "createdAt": "2026-10-08T12:47:22.347Z",
+   "n": 280,
+   "errors": 0,
+   "costUsd": 0.4493,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain-minus-abstain",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "sigil-swap",
+    "mean": 0.979
+   },
+   "floor": 0.9,
+   "plain": 0.951,
+   "clearContrasts": [
+    "plain-minus-abstain−none +0.059"
+   ],
+   "clearHeldOut": [
+    "plain-minus-abstain−none +0.095"
+   ]
+  },
+  {
+   "id": "2026-10-08-r2-sonnet-system",
+   "set": "source-authority-v2",
+   "model": "sonnet",
+   "models": [
+    "claude-sonnet-5-5"
+   ],
+   "placement": "system",
+   "createdAt": "2026-10-08T12:47:22.377Z",
+   "n": 324,
+   "errors": 0,
+   "costUsd": 1.9056,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain-minus-abstain",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "composite",
+    "mean": 0.949
+   },
+   "floor": 0.905,
+   "plain": 0.912,
+   "clearContrasts": [],
+   "clearHeldOut": [
+    "composite−plain +0.044",
+    "composite−sigil +0.033"
+   ]
   }
  ]
 }

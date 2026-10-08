@@ -140,13 +140,28 @@ the headline.
 - No clear contrasts beyond plain − none is also a result: on this model, at
   this scale, the form carries nothing the prose does not.
 
-## What round two could be
+## Round two (run 2026-10-08, after reading round one)
 
-Whichever of these holds, the next round is the same harness with one factor
-changed: `--placement user`, a second model family, or the `natural` variants
-of the sketches (the brief's originals, obligations omitted) beside the
-matched ones. New tasks should be held out, not added to the ones conditions
-were read against.
+Round one moved on one thing: abstention. Every composition made the subject
+leave settled gaps unknown, plain prose most of all, and the two clear
+contrasts included a control. So round two does not add a form. It adds:
+
+- `plain-minus-abstain` (set `source-authority-v2`, role ablation): the plain
+  text without its fourth obligation. Two more pre-specified contrasts:
+  plain-minus-abstain − plain, and plain-minus-abstain − none. If the first
+  is clearly positive and the second near zero, the clause is the cause.
+- Six held-out tasks (cohort `r2`, two per family), written after round one's
+  reading and before any round-two data. `records` is harder: eight lines,
+  a reference keyed on two fields, lines whose current value is already right.
+  Every contrast is reported overall and per cohort; a contrast that holds on
+  `r2` was not fitted to its tasks.
+- `--placement user`: the composition at the head of the user turn, a neutral
+  one-line system prompt.
+- A second model family (sonnet), same set, same tasks, system placement.
+
+Three runs, 9 conditions × 12 tasks × 3 reps = 324 trials each. The r1 tasks
+are run again inside each so a run is self-contained and the cohorts are
+comparable within it.
 
 ## Running it
 

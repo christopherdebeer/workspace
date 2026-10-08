@@ -1,6 +1,6 @@
 {
  "id": "2026-10-08-haiku-system",
- "scorerVersion": 2,
+ "scorerVersion": 3,
  "set": "source-authority-v1",
  "model": "haiku",
  "models": [
