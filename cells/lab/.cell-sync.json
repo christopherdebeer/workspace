@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:0d40e726ddfea27af5f97dcdbbd2b9ac2df3b6e22c53b727234ff40ebf16ea78",
-  "syncedAt": "2026-10-08T19:00:38.248Z",
+  "treeVersion": "tree:1f47bd73acff5e1d55c94da12ae411650bf6e7453e316cc31573a43a1e9dcd75",
+  "syncedAt": "2026-10-08T22:37:03.699Z",
   "files": {
     "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -51,7 +51,7 @@
     "client/mistwood/audio.ts": "sha256:7b1f67fc1716e5b054ec8ffc0c46986f0ad9bb14a86dbb89eaab93cb24ee2781",
     "client/mistwood/bake.ts": "sha256:61138e610fadeb6dc25c5c62586254b3a58f3952c3045dc0c316fe413fc37d58",
     "client/mistwood/deer.ts": "sha256:cd99dddba3d585c045c528431e01c1f929604a0c8455531b1bf856fb1b508a7e",
-    "client/mistwood/deermesh.ts": "sha256:67bc5b2ecbee9792d6a7a4f4b0e26e58eb500eef2c4125404e2c6a88d0bf721d",
+    "client/mistwood/deermesh.ts": "sha256:52c51440a4fd41ca024a7a73ab2635223c06e2b5ce7251488821391e6e1c7db5",
     "client/mistwood/flags.ts": "sha256:cddb18b76aeea9aef6546a26321b6ebfbd708bed133eecc8e97eb239280f0c53",
     "client/mistwood/main.ts": "sha256:e6d4af7d0cd7c9e3495aaeedce3b6192c495b00d97c28d775c5c83857d7645f8",
     "client/mistwood/render.ts": "sha256:71fd71f1093bb296aff8903bb5edf304ae94896dac77548c8dc40759892e184c",
@@ -164,7 +164,7 @@
     "static/markovs/s-vig4.png": "sha256:b9c0c49b5418e1637941b0dfb79b97739b56dea9ac2a6e880639dd45bead40b2",
     "static/markovs/s-vig5.png": "sha256:e354fc6bdd6bcceee6e5a3c3b92c460615a1aa22285db48dc0ef8e2a7b73e47b",
     "static/mistwood.html": "sha256:088a83dcc06e6636c89cffe785e91126ff455e1924cbf3dd62950d6d17acd9db",
-    "static/mistwood.md": "sha256:867cacb2301e6e5d5640d77ad7b418a4230581f6a234f0499204b2c686d4f059",
+    "static/mistwood.md": "sha256:42b5b60f4b4a7cb7c64d4661b9be9139b365ac95734e24837f1aecdf4809ddae",
     "static/plate.html": "sha256:d9487ca6106921855e14644def18f7135a6ccb86601d54ab0a7d480686f3ef2f",
     "static/plate.md": "sha256:13e54834de8032549f53f49b16af2f5a56b1829b482a4d70d562b55d73cad1f6",
     "static/seals.html": "sha256:e0ee6da6d97c90aba4ab57affd0d8680f42e1e543e26f09049926243a9c5a21d",
