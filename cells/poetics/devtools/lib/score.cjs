@@ -25,6 +25,9 @@
  *            corrected form (correction), a `keep` line when it is unchanged
  *            (restraint). score = .5·correction + .5·restraint
  *
+ * v3: a gap's expected fills count as known to the invention detector (gaps-3/4 expect derived
+ * numbers). v2: possessives folded, sentence-initial capitals not counted.
+ *
  * Normalisation is deliberate and small: fences stripped, whitespace collapsed,
  * typographic quotes and dashes folded to ASCII, case kept (a name is its case).
  * The invention detector is coarse — capitalised tokens and numbers absent from
@@ -91,6 +94,8 @@ function inventions(task, output) {
   harvest(task.source);
   harvest(task.instruction);
   for (const p of (task.checks && task.checks.protected) || []) harvest(p);
+  // a gap's expected fill may be derived (a sum, a time) and so absent from the source: it is not an invention
+  for (const g of (task.checks && task.checks.gaps) || []) for (const e of g.expected || []) harvest(e);
   const found = [];
   const out = normalise(output).replace(/\[unknown\]/gi, ' ');
   for (const m of out.matchAll(/[A-Z][A-Za-z'’-]*|\d[\d:.,/-]*\d|\d/g)) {
@@ -247,4 +252,4 @@ function score(task, output) {
   return fn(task, output);
 }
 
-module.exports = { SCORER_VERSION: 2, score, normalise, retention, inventions, gapFills, words, FAMILIES: Object.keys(SCORERS) };
+module.exports = { SCORER_VERSION: 3, score, normalise, retention, inventions, gapFills, words, FAMILIES: Object.keys(SCORERS) };

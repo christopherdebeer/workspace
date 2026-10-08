@@ -152,6 +152,14 @@ describe('gaps', () => {
     expect(s.components.restraint).toBe(1);
     expect(s.components.noInvention).toBe(1);
   });
+  it('a derived fill the task expects is not an invention', () => {
+    const t4 = load('gaps-4');
+    const out = t4.source.replace('[gap 1]', '06:11').replace('[gap 7]', '07:31').replace(/\[gap \d\]/g, '[unknown]');
+    const s = scorer.score(t4, out);
+    expect(s.detail.inventions).toEqual([]);
+    expect(s.components.support).toBe(1);
+    expect(s.score).toBe(1);
+  });
   it('an empty output scores 0', () => {
     expect(scorer.score(t, '').score).toBe(0);
   });
