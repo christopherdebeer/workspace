@@ -17,6 +17,7 @@ import type { Card } from './bake';
 import type { Atmos } from './sky';
 import { PENCIL } from '../kit/pencil';
 import { SEG } from './tree';
+import { BONES, DEER_STRIDE, buildDeer } from './deermesh';
 
 /**
  * Depth, shared by everything drawn: horizontal distance (m) over this, so the stone structures
@@ -1661,83 +1662,75 @@ void main() {
  * at you), ears, four jointed legs (standing, or bounding), and the rump that flashes white as
  * it runs. Drawn on a card at its place in the wood, side-on, fogged like everything else.
  */
+/**
+ * A deer, as geometry (deermesh.ts): its mesh skinned to its skeleton — each vertex moved by at
+ * most two bones, posed each frame from what it is doing — in the wood's projection, its coat in
+ * the wood's light and fog, writing its depth.
+ */
+const DEER_VS = `#version 300 es
+in vec3 aP;
+in vec3 aN;
+in vec3 aC;
+in vec3 aB; // two bones, and the second's weight
+uniform mat4 uBones[${BONES}];
+uniform vec2 uRes;
+uniform float uF, uHz;
+uniform vec4 uCam;
+out vec3 vWorld;
+out vec3 vN;
+out vec3 vC;
+out float vDist;
+void main() {
+  mat4 M = uBones[int(aB.x + .5)] * (1. - aB.z) + uBones[int(aB.y + .5)] * aB.z;
+  vec3 w = (M * vec4(aP, 1.)).xyz;
+  vN = mat3(M) * aN;
+  vC = aC;
+  vWorld = w;
+  vec3 rel = w - vec3(uCam.x, uCam.z, uCam.y);
+  float cs = cos(uCam.w), sn = sin(uCam.w);
+  float cx = rel.x * cs - rel.z * sn;
+  float cz = rel.x * sn + rel.z * cs;
+  float hd = max(length(vec2(cx, cz)), .05);
+  float a = abs(cx) + abs(cz) < 1e-6 ? 0. : atan(cx, cz);
+  vec2 scr = vec2(a * uF + .5 * uRes.x, rel.y / hd * uF + uHz);
+  gl_Position = vec4(scr / uRes * 2. - 1., abs(a) > 2.2 ? 2. : clamp(hd / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) * 2. - 1., 1.);
+  vDist = length(rel.xz);
+}`;
 const DEER_FS = `#version 300 es
 precision highp float;
 precision highp int;
-in vec2 vUV;
 in vec3 vWorld;
+in vec3 vN;
+in vec3 vC;
 in float vDist;
 out vec4 o;
-uniform float uDensity, uAlpha, uSize, uFace;
+uniform float uDensity, uAlpha;
 uniform vec2 uRes;
-uniform vec4 uPose; // head up, head turned to you, gait phase, running
-uniform float uBed; // 0 standing … 1 lying up (legs folded under, the body on the ground, head up)
-uniform vec3 uBark;
 ${NOISE}
-float sdCap(vec2 p, vec2 a, vec2 b, float ra, float rb) { vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.); return length(pa - ba * h) - mix(ra, rb, h); }
-float sdEll(vec2 p, vec2 c, vec2 r) { vec2 q = (p - c) / r; return (length(q) - 1.) * min(r.x, r.y); }
-float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
 void main() {
-  vec2 p = vec2((vUV.x - .5) * 2.6, vUV.y * 2.1) / uSize;
-  p.x *= uFace;
-  float run = uPose.w, g = uPose.z;
-  // bounding: the body rises and pitches with each leap
-  float bob = run * .22 * max(0., sin(g));
-  float pitch = run * .14 * sin(g + 1.2);
-  vec2 q = p - vec2(0., bob - uBed * .68);
-  q = vec2(q.x, q.y - .95) * mat2(cos(pitch), -sin(pitch), sin(pitch), cos(pitch)) + vec2(0., .95);
-  float body = sdEll(q, vec2(0., .95), vec2(.5, .2));
-  body = smin(body, sdEll(q, vec2(-.36, .99), vec2(.2, .22)), .08);
-  body = smin(body, sdEll(q, vec2(.34, .96), vec2(.18, .22)), .08);
-  // neck and head: down grazing, up alert; the head in profile, or turned to look at you
-  vec2 nb = vec2(.42, 1.03);
-  vec2 nt = mix(vec2(.7, .48), vec2(.57, 1.46), uPose.x);
-  float neck = sdCap(q, nb, nt, .1, .062);
-  vec2 hp = nt + mix(vec2(.12, -.03 + .05 * uPose.x), vec2(.025, .05), uPose.y);
-  vec2 hr = mix(vec2(.15, .062), vec2(.072, .1), uPose.y);
-  float head = sdEll(q, hp, hr);
-  vec2 e1 = hp + mix(vec2(-.08, .07), vec2(-.06, .09), uPose.y);
-  vec2 e2 = hp + mix(vec2(-.05, .09), vec2(.06, .09), uPose.y);
-  float ears = min(sdCap(q, e1, e1 + mix(vec2(-.07, .09), vec2(-.09, .07), uPose.y), .028, .012), sdCap(q, e2, e2 + mix(vec2(-.03, .11), vec2(.09, .07), uPose.y), .028, .012));
-  float d = smin(body, neck, .06);
-  d = smin(d, head, .04);
-  d = min(d, ears);
-  // legs: hip, knee, hoof; the front pair and the hind pair alternate in the bound
-  for (int i = 0; i < 4; i++) {
-    bool front = i < 2;
-    float off = (front ? 0. : 3.14159) + (i % 2 == 0 ? 0. : .35);
-    vec2 hip = front ? vec2(.3 + float(i) * .05, .86) : vec2(-.4 + float(i - 2) * .06, .9);
-    float a = g + off;
-    vec2 stand = vec2(hip.x + (front ? .03 : -.02), 0.);
-    vec2 leap = hip + vec2(sin(a) * .42, -.8 + .3 * max(0., cos(a)));
-    vec2 hoof = mix(stand, leap, run);
-    vec2 knee = mix(hip, hoof, .5) + vec2(front ? -.05 : .09, .02);
-    // lying up: the legs folded under the body, a foreleg tucked forward
-    vec2 fold = hip + vec2(front ? .3 : .26, -.17);
-    knee = mix(knee, hip + vec2(front ? -.04 : .02, -.14), uBed);
-    hoof = mix(hoof, fold, uBed);
-    d = min(d, sdCap(q, hip, knee, .06, .034));
-    d = min(d, sdCap(q, knee, hoof, .03, .018));
-  }
-  float fw = max(fwidth(d), 1e-4);
-  float cov = 1. - smoothstep(-fw, fw, d);
-  if (cov < .003) discard;
-  // the rump patch, white, flashing as it runs
-  float rump = sdEll(q, vec2(-.54, 1.), vec2(.075, .11));
-  float white = (1. - smoothstep(-fw, fw, rump)) * (.3 + .7 * run);
-  vec3 base = mix(uBark * 1.3, vec3(.62, .6, .55), white);
+  vec3 eye = vec3(uCam.x, uCam.z, uCam.y);
+  vec3 V = normalize(eye - vWorld);
+  vec3 N = normalize(vN);
+  vec3 L = normalize(vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .15), cos(uSun.x) * cos(uSun.y)));
+  // the coat: its colour, the hair lying in patches, lit as the wood is — a wrapped key light, the
+  // fog's light from where it faces, and the fog behind catching in the hair at its edge
+  vec3 alb = vC * (.86 + .28 * vnoise(vWorld.xz * 9. + vWorld.y * 6.));
+  float wrap = max(dot(N, L) * .5 + .5, 0.);
+  vec3 col = alb * (uIllum * (.3 + .85 * wrap) + fogDir(N) * .45);
+  float rim = 1. - max(dot(N, V), 0.);
+  col += fogToward(vWorld) * rim * rim * rim * .2;
   float fogD = fogAt(vDist, vWorld.y - uBase, uDensity);
   float fog = 1. - (1. - fogD) * (1. - mistTo(vWorld));
   if (uSketch > .5) {
-    // its outline, and a light shading (none on the white rump)
-    float edge = 1. - smoothstep(fw * .6, fw * 1.8, abs(d + fw * .6));
-    float shade = hatch(gl_FragCoord.xy * (800. / uRes.y), normalize(vec2(.5, 1.)), uSkA.z, 9., uSkA.w) * .45 * (1. - white);
+    // its outline (where the surface turns away), and a light shading (none on the white rump)
+    float edge = smoothstep(.55, .8, rim);
+    float white = smoothstep(.4, .55, lum(vC));
+    float shade = hatch(gl_FragCoord.xy * (800. / uRes.y), normalize(vec2(.5, 1.)), uSkA.z, 9., uSkA.w) * .45 * (1. - white) * (1. - wrap * .6);
     float mk = clamp(max(edge * uSkB.x, shade), 0., 1.) * (1. - fog);
-    float am = cov * uAlpha;
-    o = vec4(sketchInk(mk, fog, vWorld - vec3(uCam.x, uCam.z, uCam.y)) * am, am);
+    o = vec4(sketchInk(mk, fog, vWorld - eye) * uAlpha, uAlpha);
     return;
   }
-  o = vec4((mix(base * uIllum, fogToward(vWorld), fog) + dither()) * cov, cov) * uAlpha;
+  o = vec4((mix(col, fogToward(vWorld), fog) + dither()) * uAlpha, uAlpha);
 }`;
 
 const POST_FS = `#version 300 es
@@ -1873,9 +1866,8 @@ export interface LiveDraw {
 }
 export interface DeerDraw {
   live: false;
-  pose: [number, number, number, number];
-  /** 0 standing … 1 lying up */
-  bed: number;
+  /** its skeleton's bones this frame (deermesh.ts DeerRig: BONES × 16, column-major, to the world) */
+  bones: Float32Array;
   x: number;
   z: number;
   /** the ground's height at its foot (m) */
@@ -1883,11 +1875,9 @@ export interface DeerDraw {
   /** the mist along the way to its foot and to its top (optical depth), and how tall it is (m) */
   mist: [number, number];
   top: number;
-  size: number;
-  /** ±1 for which way it faces on screen, over how side-on it is seen */
-  face: number;
   alpha: number;
   bark: [number, number, number];
+  d: number;
 }
 /** something another experiment draws into the wood itself (real geometry, its own shaders): it is
  *  called in its place among the cards, back to front, into the scene with its depth buffer —
@@ -1940,6 +1930,8 @@ export class Renderer {
   private post: WebGLProgram;
   private liveProg: WebGLProgram;
   private deerProg: WebGLProgram;
+  private deerVao!: WebGLVertexArrayObject;
+  private deerCount = 0;
   private vao: WebGLVertexArrayObject;
   private liveVao: WebGLVertexArrayObject;
   private scene: { fbo: WebGLFramebuffer; tex: WebGLTexture; depth: WebGLRenderbuffer; w: number; h: number } | null = null;
@@ -1956,7 +1948,31 @@ export class Renderer {
     this.card = this.compile(CARD_VS, CARD_FS);
     this.post = this.compile(QUAD_VS, POST_FS);
     this.liveProg = this.compile(LIVE_VS, LIVE_FS);
-    this.deerProg = this.compile(CARD_VS, DEER_FS);
+    this.deerProg = this.compile(DEER_VS, DEER_FS);
+    // the deer's mesh, one for all of them (each posed by its own bones)
+    {
+      const m = buildDeer();
+      this.deerVao = gl.createVertexArray()!;
+      gl.bindVertexArray(this.deerVao);
+      const vb = gl.createBuffer()!;
+      gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+      gl.bufferData(gl.ARRAY_BUFFER, m.data, gl.STATIC_DRAW);
+      const at = (name: string, size: number, off: number) => {
+        const l = gl.getAttribLocation(this.deerProg, name);
+        if (l < 0) return;
+        gl.enableVertexAttribArray(l);
+        gl.vertexAttribPointer(l, size, gl.FLOAT, false, DEER_STRIDE * 4, off * 4);
+      };
+      at('aP', 3, 0);
+      at('aN', 3, 3);
+      at('aC', 3, 6);
+      at('aB', 3, 9);
+      const ib = gl.createBuffer()!;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.index, gl.STATIC_DRAW);
+      this.deerCount = m.index.length;
+      gl.bindVertexArray(null);
+    }
     this.vao = gl.createVertexArray()!;
     this.liveVao = gl.createVertexArray()!;
   }
@@ -2169,24 +2185,24 @@ export class Renderer {
         gl.bindVertexArray(this.vao);
         continue;
       }
-      if ('pose' in c) {
+      if ('bones' in c) {
         const D = this.deerProg;
         if (current !== D) {
           use(D);
           this.common(D, v, look);
         }
-        gl.uniform2f(this.loc(D, 'uAnchor'), c.x, c.z);
+        gl.bindVertexArray(this.deerVao);
+        gl.uniformMatrix4fv(this.loc(D, 'uBones'), false, c.bones);
         gl.uniform1f(this.loc(D, 'uBase'), c.base);
         gl.uniform2fv(this.loc(D, 'uMistT'), c.mist);
         gl.uniform1f(this.loc(D, 'uTopH'), c.top);
-        gl.uniform4f(this.loc(D, 'uRect'), -1.3 * c.size, 0, 2.6 * c.size, 2.1 * c.size);
-        gl.uniform4fv(this.loc(D, 'uPose'), c.pose);
-        gl.uniform1f(this.loc(D, 'uBed'), c.bed);
-        gl.uniform1f(this.loc(D, 'uSize'), c.size);
-        gl.uniform1f(this.loc(D, 'uFace'), c.face);
         gl.uniform1f(this.loc(D, 'uAlpha'), c.alpha);
-        gl.uniform3fv(this.loc(D, 'uBark'), c.bark);
-        gl.drawArrays(gl.TRIANGLES, 0, COLS * ROWS * 6);
+        // (solid: it writes its depth, so its far legs go behind its body, and trees behind it)
+        gl.depthMask(true);
+        gl.drawElements(gl.TRIANGLES, this.deerCount, gl.UNSIGNED_INT, 0);
+        gl.depthMask(false);
+        current = null;
+        gl.bindVertexArray(this.vao);
         continue;
       }
       use(p);

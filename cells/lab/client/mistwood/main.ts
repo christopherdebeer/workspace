@@ -19,6 +19,7 @@ import { Renderer, type Anomaly, type Draw, type View, type WoodEnv } from './re
 import { countWider, type Species, type Structure } from './tree';
 import { atmosphere, moonPhase } from './sky';
 import { Deerland } from './deer';
+import { DeerRig } from './deermesh';
 import { flag, onFlag, setFlag, setFlags } from './flags';
 import { mountTune } from './tune';
 import { hash, seeded } from '../kit/rng';
@@ -251,6 +252,8 @@ function stand(z: number, resume = false) {
   }
 }
 let deer!: Deerland;
+/** the deer's skeletons: each one's step cycle, kept as it goes */
+const deerRig = new DeerRig();
 /** The trees drawn live last frame (they keep their place in the budget). */
 const live = new Set<Placed>();
 /** A live tree's extra turn (rad): the side its card showed when it came alive (see the frame). */
@@ -879,17 +882,11 @@ function frame(now: number) {
     },
   });
   for (const d of deer.all()) {
-    const rx = d.x - view.x;
-    const rz = d.z - view.z;
-    const hd = Math.hypot(rx, rz);
-    if (hd > VIEW || hd < 1) continue;
-    // side-on as seen from here: which way it faces on screen, and how foreshortened
-    const toward = Math.atan2(rx, rz);
-    const rel = Math.sin(d.heading - toward);
-    const face = (rel >= 0 ? 1 : -1) / Math.max(0.45, Math.abs(rel));
-    // the legs: a walk is a small stride, a run the full bound
-    const run = Math.min(1, d.speed / 5 + Math.min(d.speed, 0.6) * 0.25);
-    draws.push({ live: false, pose: [d.headUp, d.headTurn, d.gait, run], bed: d.bed, x: d.x, z: d.z, base: wood.groundH(d.x, d.z), mist: [0, 0], top: 2.1 * d.size, size: d.size, face, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
+    const hd = Math.hypot(d.x - view.x, d.z - view.z);
+    if (hd > VIEW || hd < 0.5) continue;
+    // its skeleton posed for what it is doing: its gait from its speed, its head, lying up or not
+    const base = wood.groundH(d.x, d.z);
+    draws.push({ live: false, bones: deerRig.pose(d, base, view, flag('freeze') ? 0 : dt), x: d.x, z: d.z, base, mist: [0, 0], top: 1.9 * d.size, alpha: 1, bark: [0.13, 0.1, 0.08], d: hd });
   }
   // things set into the wood from outside (the Field Journal's finds): coloured sprites standing
   // on the ground, drawn in their place among the trees, in the same fog

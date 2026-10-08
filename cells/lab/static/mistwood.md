@@ -283,8 +283,23 @@ are far, so they are there again when you come back.
 - **Heard before seen.** Their steps rustle in the leaves off in the fog, along
   with the stamp, the bark (a hoarse "bōh") and twig snaps. Each sound is
   panned to where it came from, and the further off, the more muffled.
-- **Drawn** by the shader from shapes: body, neck, head in profile or turned,
-  ears, and jointed legs that walk, bound, or fold under when lying up.
+- **Drawn** as geometry (`client/deermesh.ts`): a mesh lofted from cross-sections (rump,
+  haunch, the deep ribcage, chest; the neck; the head, a wedge from skull to muzzle, with its
+  eyes and ears; the tail; the legs, three bones each down to the hoof) skinned to a skeleton of
+  nineteen bones, the spine bending mid-back. Its pose comes from what the herd's simulation says
+  it is doing, each frame:
+  - its gait follows its speed over the ground, the cycle advancing as far as it has gone, so a
+    hoof set down stays put while the body passes over it: a four-beat walk, a trot in diagonal
+    pairs, and the bound it dashes in (hind legs together, then the fore, a moment in the air, the
+    spine flexing, the body pitching, the tail up), blended as it speeds up;
+  - each leg solved for its hoof: the cannon upright on the ground or folded back in the swing,
+    the two bones above bent to reach it (the front elbow back, the hind stifle forward);
+  - grazing, the neck down and the head turned back up from it, the muzzle in the grass,
+    nibbling; lying up, the legs folded under; alert, the head turned to look at you; the ears
+    flick, the tail twitches.
+
+  Its coat is lit as the wood is (a wrapped key light, the fog's light from where it faces, the
+  fog catching in the hair at its edge), fogged and misted, and it writes its depth.
 
 ## The journey in the address
 
