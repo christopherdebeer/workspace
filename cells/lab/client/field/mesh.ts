@@ -21,7 +21,7 @@ float project(vec3 w) {
   float cx = rel.x * cs - rel.z * sn;
   float cz = rel.x * sn + rel.z * cs;
   float hd = max(length(vec2(cx, cz)), .02);
-  float a = atan(cx, cz);
+  float a = abs(cx) + abs(cz) < 1e-6 ? 0. : atan(cx, cz);
   vec2 scr = vec2(a * uF + .5 * uRes.x, rel.y / hd * uF + uHz);
   gl_Position = vec4(scr / uRes * 2. - 1., abs(a) > 2.2 ? 2. : clamp(hd / ${DEPTH_RANGE.toFixed(1)}, 0., 1.) * 2. - 1., 1.);
   return length(rel.xz);

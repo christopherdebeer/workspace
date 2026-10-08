@@ -62,7 +62,7 @@ void main() {
   vec3 N = normalize(vN);
   float facing = dot(N, V);
   if (facing < 0.) N = -N;
-  float NV = abs(facing);
+  float NV = min(abs(facing), 1.);
   vec3 L = normalize(vec3(sin(uSun.x) * cos(uSun.y), max(sin(uSun.y), .15), cos(uSun.x) * cos(uSun.y)));
   float rise = .6 + .4 * sin(uT * .6 - vAx.w * 5.);
   vec3 col;
@@ -74,7 +74,7 @@ void main() {
     col = stone * (lit * uIllum + anomLight(vWorld) * .5);
     // (crystals in it, glinting)
     float gl = smoothstep(.86, .93, vnoise(vWorld.xz * 16. + vWorld.y * 11.));
-    col += uLight * gl * (.4 + .6 * pow(.5 + .5 * sin(uT * 2. + vWorld.x * 3. + vWorld.z * 5.), 4.));
+    col += uLight * gl * (.4 + .6 * pow(max(.5 + .5 * sin(uT * 2. + vWorld.x * 3. + vWorld.z * 5.), 0.), 4.));
   } else {
     vec3 Rd = refract(-V, N, 1. / uIor);
     if (dot(Rd, Rd) < .01) Rd = reflect(-V, N);
@@ -97,7 +97,8 @@ void main() {
     vec3 ax = vAx.xyz;
     vec3 b1 = normalize(cross(ax, abs(ax.y) < .9 ? vec3(0., 1., 0.) : vec3(1., 0., 0.)));
     vec3 b2 = cross(ax, b1);
-    float ang = atan(dot(Rd, b1), dot(Rd, b2));
+    float r1 = dot(Rd, b1), r2 = dot(Rd, b2);
+    float ang = abs(r1) + abs(r2) < 1e-6 ? 0. : atan(r1, r2);
     float tilt = dot(Rd, ax);
     float facets = smoothstep(-.06, .06, sin(ang * 3. + tilt * 7. + al * 2.5)) * smoothstep(-.1, .1, sin(ang * 5. - tilt * 4. + 1.3));
     through = mix(through * .4, through * 1.5 + uLight * .3 * body, facets);
@@ -107,7 +108,9 @@ void main() {
     float cloud = uMilk * 3. * fbm(q.xz * .35 + q.y * .25) + uVeils * veil * .7;
     through = mix(through, (uIllum * .45 + uLight * .7) * tint, clamp(cloud, 0., .8));
     // phantoms: the crystal as it was, ghost outlines across it inside
-    float ph = exp(-pow((fract(al * 3.2 + .27) - .5) * 24., 2.)) * uPhantom * smoothstep(.0, .2, al);
+    // (squared by hand: pow of a negative is undefined, NaN on some GPUs)
+    float pf = (fract(al * 3.2 + .27) - .5) * 24.;
+    float ph = exp(-pf * pf) * uPhantom * smoothstep(.0, .2, al);
     // its light: up from its heart, through it, slowly; strongest along the edges, piped up them
     float e = vE.x * vE.y;
     vec3 inner = uLight * (pow(max(1.1 - al, 0.), 2.) * .6 * rise + ph * .9 + exp(-e * 1.2) * .25);

@@ -162,7 +162,8 @@ vec3 anomHalo(vec3 d) {
 vec3 fogDir(vec3 d) {
   float el = d.y;
   vec3 c = mix(uFogLow, uFogHigh, smoothstep(0., .6, max(el, 0.)));
-  float da = mod(atan(d.x, d.z) - uSun.x + 3.14159, 6.28318) - 3.14159;
+  // (straight up or down has no bearing: atan(0, 0) is undefined, and some GPUs make it NaN)
+  float da = mod((abs(d.x) + abs(d.z) < 1e-6 ? 0. : atan(d.x, d.z)) - uSun.x + 3.14159, 6.28318) - 3.14159;
   return c + exp(-da * da * 3. - (el - uSun.y) * (el - uSun.y) * 6.) * uGlow + (uAnomN > 0 ? anomHalo(d) : vec3(0.));
 }
 // the cracks of a cellular pattern: ~0 on a cell's border
@@ -180,7 +181,7 @@ float cracks(vec2 p) {
 // threads: the crests of two turned layers of noise, fine and wandering (mycelium)
 float threads(vec2 p) {
   float a = 1. - abs(vnoise(p) * 2. - 1.), b = 1. - abs(vnoise(mat2(.8, -.6, .6, .8) * p * 1.9 + 7.) * 2. - 1.);
-  return pow(a, 16.) + pow(b, 22.) * .7;
+  return pow(max(a, 0.), 16.) + pow(max(b, 0.), 22.) * .7;
 }
 vec3 anomHue(int i) { vec3 c = uAnomL[i].rgb; return c / max(max(c.r, max(c.g, c.b)), 1e-3); }
 // the ground an anomaly has changed: a crystal's bleached to a pale crust and split by fissures
@@ -206,7 +207,9 @@ vec3 anomGround(vec3 p, vec3 g, inout vec3 em) {
       g = mix(g, vec3(.085, .06, .04) * (.8 + .4 * vnoise(p.xz * 5.)), s * .75);
       float th = clamp((threads(p.xz * 5.5) + threads(p.xz * 1.6 + 4.) * .4) * smoothstep(.05, .45, s), 0., 1.);
       g = mix(g, vec3(.78, .76, .7), th * .45);
-      float ring = exp(-pow((dist - uAnom[i].z * .8) / 2.4, 2.));
+      // (squared by hand: pow of a negative is undefined, NaN on some GPUs)
+      float rx = (dist - uAnom[i].z * .8) / 2.4;
+      float ring = exp(-rx * rx);
       g = mix(g, vec3(.09, .19, .05) * (.8 + .4 * vnoise(p.xz * 4.)), ring * .7);
       em += hue * th * s * .03;
     }

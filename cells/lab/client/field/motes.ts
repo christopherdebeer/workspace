@@ -51,7 +51,7 @@ void main() {
   vec2 c = gl_PointCoord * 2. - 1.;
   float a = exp(-dot(c, c) * 3.);
   // glints twinkle; spores breathe
-  float tw = uKind < 1.5 ? pow(.5 + .5 * sin(uT * (1.5 + 3. * vTw) + vTw * 40.), 6.) : .5 + .5 * sin(uT * .7 + vTw * 30.);
+  float tw = uKind < 1.5 ? pow(max(.5 + .5 * sin(uT * (1.5 + 3. * vTw) + vTw * 40.), 0.), 6.) : .5 + .5 * sin(uT * .7 + vTw * 30.);
   float fog = 1. - (1. - fogAt(vDist, vWorld.y - uBase, uDensity)) * (1. - mistTo(vWorld));
   float near = smoothstep(.5, 2.5, length(vWorld - vec3(uCam.x, uCam.z, uCam.y)));
   float k = a * (.25 + 1.6 * tw) * (1. - fog) * near;
