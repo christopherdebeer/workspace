@@ -10,6 +10,7 @@ import { join } from 'node:path';
 interface Task {
   id: string;
   family: string;
+  cohort?: string;
   instruction: string;
   source: string;
   checks: {
@@ -41,6 +42,23 @@ describe('the committed tasks', () => {
       const t = JSON.parse(readFileSync(join(TASKS, f), 'utf8')) as Task;
       expect(scorer.FAMILIES).toContain(t.family);
       expect(t.id).toBe(f.replace(/\.json$/, ''));
+      expect(['r1', 'r2']).toContain(t.cohort);
+      if (t.family === 'gaps') {
+        // every [gap N] in the source has a check, in order, and vice versa
+        const ns = [...t.source.matchAll(/\[gap (\d+)\]/g)].map((m) => Number(m[1]));
+        expect(t.checks.gaps!.map((g) => g.n)).toEqual(ns);
+      }
+      if (t.family === 'records') {
+        // the expected lines are the source's record lines with only the corrected field changed
+        const recs = t.source.split('\n').filter((l) => /\|/.test(l));
+        expect(t.checks.lines!.length).toBe(recs.length);
+        t.checks.lines!.forEach((l, i) => {
+          const a = recs[i].split('|').map((x) => x.trim());
+          const b = l.expected.split('|').map((x) => x.trim());
+          expect(b.slice(0, -1)).toEqual(a.slice(0, -1));
+          expect(b[b.length - 1] === a[a.length - 1]).toBe(l.role === 'keep');
+        });
+      }
       if (t.family === 'names') expect(typeof t.checks.maxWords).toBe('number');
       if (t.family === 'gaps') expect(t.checks.gaps!.length).toBeGreaterThan(0);
       if (t.family === 'records') expect(t.checks.lines!.length).toBeGreaterThan(0);

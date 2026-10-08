@@ -1,17 +1,36 @@
 {
   "id": "records-1",
   "family": "records",
+  "cohort": "r1",
   "title": "Catalogue codes",
   "instruction": "Correct the code in each record below against the catalogue where the catalogue settles it unambiguously. Leave a record exactly as it is where the catalogue does not settle it. Output the six records only, one per line, in the same format, nothing else.",
   "source": "Catalogue (authoritative):\n- Brass compass, maker Thwaite — code TH-114\n- Brass compass, maker Delacroix — code DL-207\n- Pocket barometer, maker Thwaite — code TH-131\n- Pocket barometer, maker unknown — code UK-009\n\nRecords:\nR1 | Brass compass | Thwaite | TH-141\nR2 | Brass compass | Delacroix | DL-207\nR3 | Pocket barometer | Thwaite | TH-113\nR4 | Brass compass | maker illegible | TH-114\nR5 | Pocket barometer | Delacroix | DL-207\nR6 | Pocket barometer | unknown | UK-090",
   "checks": {
     "lines": [
-      { "role": "fix", "expected": "R1 | Brass compass | Thwaite | TH-114" },
-      { "role": "keep", "expected": "R2 | Brass compass | Delacroix | DL-207" },
-      { "role": "fix", "expected": "R3 | Pocket barometer | Thwaite | TH-131" },
-      { "role": "keep", "expected": "R4 | Brass compass | maker illegible | TH-114" },
-      { "role": "keep", "expected": "R5 | Pocket barometer | Delacroix | DL-207" },
-      { "role": "fix", "expected": "R6 | Pocket barometer | unknown | UK-009" }
+      {
+        "role": "fix",
+        "expected": "R1 | Brass compass | Thwaite | TH-114"
+      },
+      {
+        "role": "keep",
+        "expected": "R2 | Brass compass | Delacroix | DL-207"
+      },
+      {
+        "role": "fix",
+        "expected": "R3 | Pocket barometer | Thwaite | TH-131"
+      },
+      {
+        "role": "keep",
+        "expected": "R4 | Brass compass | maker illegible | TH-114"
+      },
+      {
+        "role": "keep",
+        "expected": "R5 | Pocket barometer | Delacroix | DL-207"
+      },
+      {
+        "role": "fix",
+        "expected": "R6 | Pocket barometer | unknown | UK-009"
+      }
     ]
   }
 }

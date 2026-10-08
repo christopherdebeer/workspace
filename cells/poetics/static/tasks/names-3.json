@@ -1,0 +1,12 @@
+{
+  "id": "names-3",
+  "family": "names",
+  "cohort": "r2",
+  "title": "Survey launch, halved",
+  "instruction": "Rewrite the passage below in no more than 50 words. Output only the rewritten passage, nothing else.",
+  "source": "The survey launch Kittiwake II was delivered to the Moray Firth Hydrographic Office on 14 June 1987 by the yard of Oskar Lindqvist & Sons at Buckie. She carried a Decca Mk 21 receiver, hull number MFH-0412, and was skippered for her first eleven seasons by Teodora Brannigan-Achebe. Her longest survey, 212 nautical miles of the Beauly approaches in 1993, took nineteen days. Laid up in 2004, she was sold to a diving club in Lossiemouth and renamed, though the MFH-0412 plate remains on the wheelhouse.",
+  "checks": {
+    "protected": ["Kittiwake II", "Moray Firth Hydrographic Office", "14 June 1987", "Oskar Lindqvist & Sons", "Buckie", "Decca Mk 21", "MFH-0412", "Teodora Brannigan-Achebe", "212", "1993", "2004", "Lossiemouth"],
+    "maxWords": 50
+  }
+}

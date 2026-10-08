@@ -8,6 +8,6 @@ Round one, read on the day it ran. 144 trials, no errors, 19 cents. Scorer v2 (t
 
 **One oddity.** The floor and plain both broke the word limit in 2 of 6 `names` trials (68–70 words against 50–55); the symbol-bearing forms did not. Not a pre-specified contrast, not explained, noted for round two.
 
-**Cost of form.** Compositions add about 100 input tokens over the floor. Output tokens were higher under every composition (1,800–2,300 vs 1,480 for the floor), so the subject worked longer when given a composition, in any form.
+**Cost of form.** Compositions add about 100 input tokens over the floor. The output-token figures in this run's tables are not the subject's alone: the CLI makes an auxiliary haiku call for prompts of this length (found while setting up round two), and with a haiku subject the two merge into one count. The ordering across conditions survives (every composition drew more output than the floor), the absolute numbers do not. Round two records per-model usage.
 
 **Round two, from this.** (1) Six more tasks per family, held out, with `records` made harder, so a contrast rests on more than two sources. (2) A `plain-minus-abstain` condition, to test the post-hoc reading that the abstain clause drives over-abstention. (3) `--placement user`. (4) The same round on a second model family before anything here is called a finding.

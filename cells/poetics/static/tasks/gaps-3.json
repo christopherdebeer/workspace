@@ -1,0 +1,18 @@
+{
+  "id": "gaps-3",
+  "family": "gaps",
+  "cohort": "r2",
+  "title": "Mill history with gaps",
+  "instruction": "The passage below has numbered gaps written as [gap N]. Fill each gap where the passage itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed passage, nothing else.",
+  "source": "The Hollin Beck mill was rebuilt in 1874 after a fire, and the rebuilt wheel, 16 feet across, drove three pairs of stones. The miller from 1874 until his death in 1902 was Josiah Penhaligon; the parish register records the burial of [gap 1] in that year. His daughter Mercy kept the mill for a further [gap 2] years, until it closed in 1921, and the [gap 3]-foot wheel was sold for scrap in [gap 4]. The mill race is still visible from the footpath, [gap 5] of the village.",
+  "checks": {
+    "protected": ["Hollin Beck", "1874", "16 feet", "Josiah Penhaligon", "1902", "Mercy", "1921"],
+    "gaps": [
+      { "n": 1, "expected": ["Penhaligon"] },
+      { "n": 2, "expected": ["19", "nineteen"] },
+      { "n": 3, "expected": ["16", "sixteen"] },
+      { "n": 4, "expected": null },
+      { "n": 5, "expected": null }
+    ]
+  }
+}

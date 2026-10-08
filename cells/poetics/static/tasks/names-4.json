@@ -1,0 +1,12 @@
+{
+  "id": "names-4",
+  "family": "names",
+  "cohort": "r2",
+  "title": "Release note, halved",
+  "instruction": "Rewrite the note below in no more than 50 words. Output only the rewritten note, nothing else.",
+  "source": "Release 2.9.4 of the ingest worker (tag ingest-w/2.9.4, commit 7f3c0a2e) fixed the retry storm reported in INC-1187 on 22 September, in which the SQS consumer re-queued every message whose receipt handle exceeded 1024 bytes. Priyanka Oyelaran-Whitcombe found that the handle length check used the pre-base64 size. The cap is now 2048 bytes and the check runs after encoding. The Fernhollow and Stavely tenants, who had 9300 messages delayed, were replayed from the dead-letter queue within four hours. The change is behind the flag INGEST_HANDLE_V2 until 2.10.",
+  "checks": {
+    "protected": ["2.9.4", "ingest-w/2.9.4", "7f3c0a2e", "INC-1187", "22 September", "1024", "Priyanka Oyelaran-Whitcombe", "2048", "Fernhollow", "Stavely", "9300", "INGEST_HANDLE_V2", "2.10"],
+    "maxWords": 50
+  }
+}

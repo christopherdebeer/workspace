@@ -1,17 +1,47 @@
 {
   "id": "gaps-2",
   "family": "gaps",
+  "cohort": "r1",
   "title": "Ferry notice with gaps",
   "instruction": "The notice below has numbered gaps written as [gap N]. Fill each gap where the notice itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed notice, nothing else.",
   "source": "The ferry Maren Tove operates between Skarvik and Holmsund. The crossing takes 40 minutes, and the vessel carries up to 120 passengers and 18 cars. In summer it makes six return crossings a day, the first leaving Skarvik at 06:30. The last crossing of the day departs [gap 1] at [gap 2] and arrives in Skarvik at [gap 3]. The vessel was built in [gap 4] and refitted in 2019, when its passenger capacity was raised from 90 to [gap 5].",
   "checks": {
-    "protected": ["Maren Tove", "Skarvik", "Holmsund", "40 minutes", "120", "18", "06:30", "2019", "90"],
+    "protected": [
+      "Maren Tove",
+      "Skarvik",
+      "Holmsund",
+      "40 minutes",
+      "120",
+      "18",
+      "06:30",
+      "2019",
+      "90"
+    ],
     "gaps": [
-      { "n": 1, "expected": ["Holmsund"] },
-      { "n": 2, "expected": null },
-      { "n": 3, "expected": null },
-      { "n": 4, "expected": null },
-      { "n": 5, "expected": ["120"] }
+      {
+        "n": 1,
+        "expected": [
+          "Holmsund"
+        ]
+      },
+      {
+        "n": 2,
+        "expected": null
+      },
+      {
+        "n": 3,
+        "expected": null
+      },
+      {
+        "n": 4,
+        "expected": null
+      },
+      {
+        "n": 5,
+        "expected": [
+          "120"
+        ]
+      }
     ]
   }
 }

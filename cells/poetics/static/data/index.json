@@ -1,5 +1,5 @@
 {
- "generatedAt": "2026-10-08T10:20:30.959Z",
+ "generatedAt": "2026-10-08T12:43:54.986Z",
  "runs": [
   {
    "id": "2026-10-08-haiku-system",
@@ -32,7 +32,8 @@
    "clearContrasts": [
     "decor−plain +0.064",
     "compressed−plain +0.072"
-   ]
+   ],
+   "clearHeldOut": []
   }
  ]
 }

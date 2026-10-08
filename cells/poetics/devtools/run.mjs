@@ -148,7 +148,16 @@ function cast(system, prompt) {
 
 function trialFrom(cond, task, rep, res, system, prompt) {
   const j = res.json;
-  const models = j && j.modelUsage ? Object.keys(j.modelUsage) : [];
+  // Per-model accounting. The CLI's modelUsage can carry MORE than the subject: for prompts past a
+  // certain length it makes an auxiliary haiku call (observed 2026-10-08: ~1,200 in / ~250 out,
+  // present with or without --max-budget-usd, absent for a one-line prompt) whose tokens the
+  // top-level `usage` sums in. The subject is the entry matching the requested model; its own
+  // tokens are `usage`, the harness total is `usageTotal`. When subject and auxiliary are the same
+  // model (a haiku subject) they merge and cannot be separated — `usage` then overstates the subject.
+  const usageByModel = j && j.modelUsage
+    ? Object.entries(j.modelUsage).map(([m, u]) => ({ model: m, input: u.inputTokens, cacheCreation: u.cacheCreationInputTokens, cacheRead: u.cacheReadInputTokens, output: u.outputTokens, costUsd: u.costUSD }))
+    : [];
+  const subject = usageByModel.find((x) => x.model.includes(MODEL)) || usageByModel.slice().sort((a, b) => (b.input || 0) + (b.cacheCreation || 0) - (a.input || 0) - (a.cacheCreation || 0))[0] || null;
   const output = j && !j.is_error && typeof j.result === 'string' ? j.result : '';
   const s = score(task, output);
   return {
@@ -159,19 +168,23 @@ function trialFrom(cond, task, rep, res, system, prompt) {
     rep,
     placement: PLACEMENT,
     modelRequested: MODEL,
-    model: models[0] || null,
+    model: subject ? subject.model : null,
+    modelUsage: usageByModel.length ? usageByModel : undefined,
+    merged: !!subject && usageByModel.length === 1 && /haiku/.test(subject.model) ? 'subject and auxiliary call are the same model; usage overstates the subject' : undefined,
     systemSha: sha(system),
     promptSha: sha(prompt),
     output,
     isError: !j || !!j.is_error || res.exitCode !== 0,
     error: !j ? `no JSON (exit ${res.exitCode}): ${res.stderr || res.raw || ''}`.slice(0, 500) : j.is_error ? String(j.result).slice(0, 500) : undefined,
-    usage: j && j.usage ? {
+    usage: subject ? { input: subject.input, cacheCreation: subject.cacheCreation, cacheRead: subject.cacheRead, output: subject.output } : null,
+    usageTotal: j && j.usage ? {
       input: j.usage.input_tokens,
       cacheCreation: j.usage.cache_creation_input_tokens,
       cacheRead: j.usage.cache_read_input_tokens,
       output: j.usage.output_tokens,
     } : null,
-    costUsd: j ? j.total_cost_usd : null,
+    costUsd: subject ? subject.costUsd : null,
+    costTotalUsd: j ? j.total_cost_usd : null,
     apiMs: j ? j.duration_api_ms : null,
     wallMs: res.wallMs,
     at: new Date().toISOString(),

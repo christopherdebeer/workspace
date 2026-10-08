@@ -1,0 +1,20 @@
+{
+  "id": "gaps-4",
+  "family": "gaps",
+  "cohort": "r2",
+  "title": "Tramway notice with gaps",
+  "instruction": "The notice below has numbered gaps written as [gap N]. Fill each gap where the notice itself settles what belongs there. Where it does not, write [unknown] in the gap's place. Output only the completed notice, nothing else.",
+  "source": "Line 4 of the Varnholm tramway runs from Kestrel Quay to the university, with 14 stops. Service begins at 05:40 from Kestrel Quay and the full journey is timetabled at 31 minutes, so the first tram reaches the university at [gap 1]. Trams run every 7 minutes in the peak and every [gap 2] minutes off-peak. The fleet of 22 cars was built by [gap 3] between 2011 and [gap 4]; the line's depot is at [gap 5], the [gap 6]th stop. On Sundays the first departure is at 07:00 and the journey time is unchanged, so the first Sunday tram reaches the university at [gap 7].",
+  "checks": {
+    "protected": ["Line 4", "Varnholm", "Kestrel Quay", "14 stops", "05:40", "31 minutes", "7 minutes", "22 cars", "2011", "07:00"],
+    "gaps": [
+      { "n": 1, "expected": ["06:11", "6:11"] },
+      { "n": 2, "expected": null },
+      { "n": 3, "expected": null },
+      { "n": 4, "expected": null },
+      { "n": 5, "expected": null },
+      { "n": 6, "expected": null },
+      { "n": 7, "expected": ["07:31", "7:31"] }
+    ]
+  }
+}

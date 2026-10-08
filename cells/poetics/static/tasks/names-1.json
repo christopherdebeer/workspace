@@ -1,11 +1,21 @@
 {
   "id": "names-1",
   "family": "names",
+  "cohort": "r1",
   "title": "Depot history, halved",
   "instruction": "Rewrite the passage below in no more than 55 words. Output only the rewritten passage, nothing else.",
   "source": "The Pennington Street depot opened in 1911 as the northern yard of Harrowgate & Fenwick Tramways. Its first manager, Ailsa Okonkwo-Reyes, stayed until 1934, longer than any of her successors, and is credited with the decision to keep the No. 7 route running through the winter of 1926 when the company's other lines were suspended. The depot's second shed, added along Caldbeck Lane, was never electrified and served as a store for spare bogies. After the tramways closed, the site became a bus garage, and the original brick frontage on Pennington Street survives behind a later canopy.",
   "checks": {
-    "protected": ["Pennington Street", "1911", "Harrowgate & Fenwick Tramways", "Ailsa Okonkwo-Reyes", "1934", "No. 7", "1926", "Caldbeck Lane"],
+    "protected": [
+      "Pennington Street",
+      "1911",
+      "Harrowgate & Fenwick Tramways",
+      "Ailsa Okonkwo-Reyes",
+      "1934",
+      "No. 7",
+      "1926",
+      "Caldbeck Lane"
+    ],
     "maxWords": 55
   }
 }

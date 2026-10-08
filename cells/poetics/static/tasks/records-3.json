@@ -1,0 +1,20 @@
+{
+  "id": "records-3",
+  "family": "records",
+  "cohort": "r2",
+  "title": "Shelfmarks",
+  "instruction": "Correct the shelfmark in each record below against the reference where the reference settles it unambiguously. Leave a record exactly as it is where the reference does not settle it. Output the eight records only, one per line, in the same format, nothing else.",
+  "source": "Reference (authoritative):\n- Dialogues of Ansel Varr, 1911 edition — shelfmark VR.1911.a\n- Dialogues of Ansel Varr, 1927 edition — shelfmark VR.1927.a\n- Letters of Ansel Varr, any edition — shelfmark VR.L\n- Notebooks of Ilse Marrow, vol. 1 — shelfmark MW.N1\n- Notebooks of Ilse Marrow, vol. 2 — shelfmark MW.N2\n\nRecords:\nA1 | Dialogues of Ansel Varr | 1911 | VR.1927.a\nA2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a\nA3 | Letters of Ansel Varr | 1931 | VR.1931.a\nA4 | Notebooks of Ilse Marrow | vol. 2 | MW.N1\nA5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3\nA6 | Dialogues of Ansel Varr | 1927 | VR.1927.a\nA7 | Letters of Ansel Varr | 1911 | VR.1911.a\nA8 | Notebooks of Ilse Marrow | volume not stated | MW.N2",
+  "checks": {
+    "lines": [
+      { "role": "fix", "expected": "A1 | Dialogues of Ansel Varr | 1911 | VR.1911.a" },
+      { "role": "keep", "expected": "A2 | Dialogues of Ansel Varr | edition unknown | VR.1911.a" },
+      { "role": "fix", "expected": "A3 | Letters of Ansel Varr | 1931 | VR.L" },
+      { "role": "fix", "expected": "A4 | Notebooks of Ilse Marrow | vol. 2 | MW.N2" },
+      { "role": "keep", "expected": "A5 | Notebooks of Ilse Marrow | vol. 3 | MW.N3" },
+      { "role": "keep", "expected": "A6 | Dialogues of Ansel Varr | 1927 | VR.1927.a" },
+      { "role": "fix", "expected": "A7 | Letters of Ansel Varr | 1911 | VR.L" },
+      { "role": "keep", "expected": "A8 | Notebooks of Ilse Marrow | volume not stated | MW.N2" }
+    ]
+  }
+}

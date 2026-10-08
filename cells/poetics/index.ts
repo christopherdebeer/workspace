@@ -34,16 +34,17 @@ const SAFE = /^[A-Za-z0-9._-]+$/;
 
 interface Specimen { id: string; title: string; meta: Record<string, string>; body: string }
 interface Condition { id: string; role: string; note: string; text: string }
-interface Task { id: string; family: string; title?: string; instruction: string; source: string; checks: Json }
+interface Task { id: string; family: string; cohort?: string; title?: string; instruction: string; source: string; checks: Json }
 interface Stat { mean: number; sd?: number; min?: number; max?: number; n?: number }
 interface ConditionSummary {
   n: number; errors: number; score: Stat; components: Record<string, Stat>; inventionRate: number;
   inputTokens: number; outputTokens: number; costUsd: number; apiMs: number; models: string[];
 }
-interface Contrast { a: string; b: string; question: string; delta: number; lo: number; hi: number; n: [number, number]; clear: boolean; perFamily: Record<string, { delta: number; lo: number; hi: number }> }
+interface Delta { delta: number; lo: number; hi: number }
+interface Contrast { a: string; b: string; question: string; delta: number; lo: number; hi: number; n: [number, number]; clear: boolean; perFamily: Record<string, Delta>; perCohort?: Record<string, Delta> }
 interface Summary {
   id: string; scorerVersion?: number; set: string; model: string; models: string[]; placement: string; createdAt: string; updatedAt?: string; reps: number;
-  n: number; errors: number; costUsd: number; conditions: string[]; families: string[]; tasks: string[];
+  n: number; errors: number; costUsd: number; costTotalUsd?: number; conditions: string[]; families: string[]; cohorts?: string[]; tasks: string[]; taskCohort?: Record<string, string>;
   byCondition: Record<string, ConditionSummary>;
   byConditionFamily: Record<string, Record<string, { n: number; mean: number }>>;
   byConditionTask: Record<string, Record<string, { n: number; mean: number }>>;
@@ -54,7 +55,7 @@ interface Trial {
   usage: { input: number; cacheCreation: number; cacheRead: number; output: number } | null; costUsd: number | null; apiMs: number | null;
   score: number; components: Record<string, number>; detail: Json;
 }
-interface RunIndex { generatedAt: string; runs: Array<{ id: string; model: string; models: string[]; placement: string; createdAt: string; n: number; errors: number; costUsd: number; conditions: string[]; best: { condition: string; mean: number } | null; floor: number | null; plain: number | null; clearContrasts: string[] }> }
+interface RunIndex { generatedAt: string; runs: Array<{ id: string; model: string; models: string[]; placement: string; createdAt: string; n: number; errors: number; costUsd: number; conditions: string[]; best: { condition: string; mean: number } | null; floor: number | null; plain: number | null; clearContrasts: string[]; clearHeldOut?: string[] }> }
 
 function specimens(): Specimen[] {
   if (!exists('static/specimens')) return [];
@@ -166,7 +167,7 @@ function indexPage(): string {
   const sets = conditionSets();
   const ts = tasks();
   const runs = idx.runs.slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  const runRows = runs.map((r) => `<tr><td><a href="/run/${esc(r.id)}">${esc(r.id)}</a></td><td>${esc(r.models.join(', ') || r.model)}</td><td>${esc(r.placement)}</td><td class="n">${r.n}${r.errors ? ` <span class="bad">(${r.errors} err)</span>` : ''}</td><td class="n">${f3(r.floor)}</td><td class="n">${f3(r.plain)}</td><td>${r.best ? `${esc(r.best.condition)} <span class="k">${f3(r.best.mean)}</span>` : '–'}</td><td>${r.clearContrasts.length ? esc(r.clearContrasts.join(' · ')) : '<span class="muted">none</span>'}</td><td class="n">${usd(r.costUsd)}</td></tr>`).join('');
+  const runRows = runs.map((r) => `<tr><td><a href="/run/${esc(r.id)}">${esc(r.id)}</a></td><td>${esc(r.models.join(', ') || r.model)}</td><td>${esc(r.placement)}</td><td class="n">${r.n}${r.errors ? ` <span class="bad">(${r.errors} err)</span>` : ''}</td><td class="n">${f3(r.floor)}</td><td class="n">${f3(r.plain)}</td><td>${r.best ? `${esc(r.best.condition)} <span class="k">${f3(r.best.mean)}</span>` : '–'}</td><td>${r.clearContrasts.length ? esc(r.clearContrasts.join(' · ')) : '<span class="muted">none</span>'}${r.clearHeldOut?.length ? `<br><span class="k">held out: ${esc(r.clearHeldOut.join(' · '))}</span>` : ''}</td><td class="n">${usd(r.costUsd)}</td></tr>`).join('');
   const famCount = ts.reduce<Record<string, number>>((m, t) => ((m[t.family] = (m[t.family] || 0) + 1), m), {});
   return page('poetics', '', `
 <h1>Poetics of instruction</h1>
@@ -222,7 +223,7 @@ ${cs.map((c) => `<h3 id="${esc(c.id)}">${esc(c.id)}<span class="tag">${esc(c.rol
 function taskPage(id: string): string | null {
   const t = tasks().find((x) => x.id === id);
   if (!t) return null;
-  return page(t.id, `task · ${esc(t.id)}`, `<h1>${esc(t.title || t.id)}<span class="tag">${esc(t.family)}</span></h1>
+  return page(t.id, `task · ${esc(t.id)}`, `<h1>${esc(t.title || t.id)}<span class="tag">${esc(t.family)}</span>${t.cohort ? `<span class="tag">${esc(t.cohort)}${t.cohort === 'r2' ? ' · held out' : ''}</span>` : ''}</h1>
 <h3>Instruction</h3><pre>${esc(t.instruction)}</pre>
 <h3>Source</h3><pre>${esc(t.source)}</pre>
 <h3>What is scored</h3><pre>${esc(JSON.stringify(t.checks, null, 2))}</pre>
@@ -240,28 +241,30 @@ function runPage(id: string): string | null {
   }).join('');
   const famHead = s.families.map((f) => `<th class="n">${esc(f)}</th>`).join('');
   const famRows = order.map((c) => `<tr><td>${esc(c)}</td>${s.families.map((f) => barCell(s.byConditionFamily[c]?.[f]?.mean)).join('')}</tr>`).join('');
-  const taskHead = s.tasks.map((t) => `<th class="n"><a href="/task/${esc(t)}">${esc(t)}</a></th>`).join('');
+  const taskHead = s.tasks.map((t) => `<th class="n"><a href="/task/${esc(t)}">${esc(t)}</a>${s.taskCohort?.[t] === 'r2' ? '<span class="k"> ∗</span>' : ''}</th>`).join('');
   const taskRows = order.map((c) => `<tr><td>${esc(c)}</td>${s.tasks.map((t) => barCell(s.byConditionTask[c]?.[t]?.mean)).join('')}</tr>`).join('');
-  const contrastRows = s.contrasts.map((k) => `<tr><td>${esc(k.a)} − ${esc(k.b)}</td><td class="n ${k.clear ? (k.delta > 0 ? 'good' : 'bad') : ''}">${signed(k.delta)}</td><td class="n k">[${f3(k.lo)}, ${f3(k.hi)}]</td>${s.families.map((f) => { const p = k.perFamily[f]; const clear = p && Number.isFinite(p.lo) && (p.lo > 0 || p.hi < 0); return `<td class="n ${clear ? (p.delta > 0 ? 'good' : 'bad') : 'k'}">${p ? signed(p.delta) : '–'}</td>`; }).join('')}<td style="white-space:normal" class="muted">${esc(k.question)}</td></tr>`).join('');
+  const cohorts = (s.cohorts ?? []).length > 1 ? s.cohorts! : [];
+  const dcell = (p: Delta | undefined) => { const clear = p && Number.isFinite(p.lo) && (p.lo > 0 || p.hi < 0); return `<td class="n ${clear ? (p!.delta > 0 ? 'good' : 'bad') : 'k'}">${p ? signed(p.delta) : '–'}</td>`; };
+  const contrastRows = s.contrasts.map((k) => `<tr><td>${esc(k.a)} − ${esc(k.b)}</td><td class="n ${k.clear ? (k.delta > 0 ? 'good' : 'bad') : ''}">${signed(k.delta)}</td><td class="n k">[${f3(k.lo)}, ${f3(k.hi)}]</td>${cohorts.map((c) => dcell(k.perCohort?.[c])).join('')}${s.families.map((f) => dcell(k.perFamily[f])).join('')}<td style="white-space:normal" class="muted">${esc(k.question)}</td></tr>`).join('');
   const rd = reading(id);
   return page(s.id, `run · ${esc(s.id)}`, `<h1>${esc(s.id)}</h1>
-<p class="muted">model ${esc(s.models.join(', ') || s.model)} · placement <strong>${esc(s.placement)}</strong> · set <a href="/conditions/${esc(s.set)}">${esc(s.set)}</a> · ${s.n} trials (${s.reps} reps × ${s.tasks.length} tasks × ${s.conditions.length} conditions)${s.errors ? ` · <span class="bad">${s.errors} errors</span>` : ''} · ${usd(s.costUsd)} · ${esc(s.createdAt.slice(0, 16).replace('T', ' '))}${s.scorerVersion ? ` · scorer v${s.scorerVersion}` : ''}</p>
+<p class="muted">model ${esc(s.models.join(', ') || s.model)} · placement <strong>${esc(s.placement)}</strong> · set <a href="/conditions/${esc(s.set)}">${esc(s.set)}</a> · ${s.n} trials (${s.reps} reps × ${s.tasks.length} tasks × ${s.conditions.length} conditions)${s.errors ? ` · <span class="bad">${s.errors} errors</span>` : ''} · ${usd(s.costUsd)}${typeof s.costTotalUsd === 'number' && s.costTotalUsd !== s.costUsd ? ` subject (${usd(s.costTotalUsd)} with the CLI's auxiliary call)` : ''} · ${esc(s.createdAt.slice(0, 16).replace('T', ' '))}${s.scorerVersion ? ` · scorer v${s.scorerVersion}` : ''}</p>
 ${rd ? `<h2>Reading</h2>${markdown(frontmatter(rd).body).html}` : ''}
 
 <h2>Contrasts</h2>
 <p>Fixed before the round. Difference of mean score, with a seeded bootstrap 95% interval over trials; coloured when the interval excludes zero. Per-family columns are the same contrast within one task family (six trials a side, so read them as hints).</p>
-<div class="scroll"><table><thead><tr><th>contrast</th><th class="n">Δ score</th><th class="n">95%</th>${famHead}<th>question</th></tr></thead><tbody>${contrastRows}</tbody></table></div>
+<div class="scroll"><table><thead><tr><th>contrast</th><th class="n">Δ score</th><th class="n">95%</th>${cohorts.map((c) => `<th class="n">${esc(c)}${c === 'r2' ? ' (held out)' : ''}</th>`).join('')}${famHead}<th>question</th></tr></thead><tbody>${contrastRows}</tbody></table></div>${cohorts.length ? '<p class="muted">r1 are the tasks round one\'s conditions were read against; r2 were written afterwards and held out. A contrast that holds on r2 was not fitted to its tasks.</p>' : ''}
 
 <h2>By condition</h2>
 <div class="scroll"><table><thead><tr><th>condition</th><th class="n">n</th><th class="n">score</th><th class="n">sd</th>${comps.map((k) => `<th class="n">${esc(k)}</th>`).join('')}<th class="n">invented</th><th class="n">in tok</th><th class="n">out tok</th><th class="n">cost</th></tr></thead><tbody>${condRows}</tbody></table></div>
-<p class="muted">Components are means where the family defines them (· where it does not). <em>invented</em> is the share of trials with at least one capitalised word or number not in the source. Input tokens include the composition: the price of a form sits beside its effect.</p>
+<p class="muted">Components are means where the family defines them (· where it does not). <em>invented</em> is the share of trials with at least one capitalised word or number not in the source. Input tokens include the composition: the price of a form sits beside its effect. Tokens are the subject model's where the runner could separate them; with a haiku subject the CLI's auxiliary haiku call merges into the same count and overstates it.</p>
 
 <h2>By family</h2>
 <div class="scroll"><table><thead><tr><th>condition</th>${famHead}</tr></thead><tbody>${famRows}</tbody></table></div>
 
 <h2>By task</h2>
 <div class="scroll"><table><thead><tr><th>condition</th>${taskHead}</tr></thead><tbody>${taskRows}</tbody></table></div>
-<p class="muted">Each cell is ${s.reps} trials. Open a condition above to read every output and what the scorer missed in it. Raw: <a href="/data/runs/${esc(s.id)}/summary.json">summary.json</a> · <a href="/data/runs/${esc(s.id)}/manifest.json">manifest.json</a> (the exact text of every condition and task).</p>`);
+<p class="muted">Each cell is ${s.reps} trials${cohorts.length ? '; ∗ marks a held-out (r2) task' : ''}. Open a condition above to read every output and what the scorer missed in it. Raw: <a href="/data/runs/${esc(s.id)}/summary.json">summary.json</a> · <a href="/data/runs/${esc(s.id)}/manifest.json">manifest.json</a> (the exact text of every condition and task).</p>`);
 }
 
 function trialsPage(run: string, condition: string): string | null {

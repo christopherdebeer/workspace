@@ -46,6 +46,9 @@ const CONTRASTS = [
   ['refrain', 'plain', 'Does cadence and recurrence add to prose?'],
   ['composite', 'plain', 'Do the forms combine without interfering?'],
   ['composite', 'sigil', 'Does adding arrows/precedence/indent to the sigil change anything?'],
+  // round two (the ablation): is the abstain clause, stated in prose, the cause of over-abstention?
+  ['plain-minus-abstain', 'plain', 'Does removing the abstain clause from the prose recover what plain lost?'],
+  ['plain-minus-abstain', 'none', 'Without the abstain clause, is the prose back at the floor?'],
 ];
 
 const COMPONENTS = ['retention', 'noInvention', 'lengthOk', 'support', 'restraint', 'correction'];
@@ -70,6 +73,9 @@ function summarise(runDir) {
   }
   const conditions = manifest.conditions.map((c) => c.id);
   const families = [...new Set(manifest.tasks.map((t) => t.family))].sort();
+  // cohorts: r1 = the tasks round one's conditions were read against; r2 = held out, written after
+  const cohortOf = Object.fromEntries(manifest.tasks.map((t) => [t.id, t.cohort || 'r1']));
+  const cohorts = [...new Set(Object.values(cohortOf))].sort();
   const ok = (t) => !t.isError;
 
   const byCondition = {};
@@ -123,7 +129,13 @@ function summarise(runDir) {
       const Bf = trials.filter((t) => t.condition === b && t.family === f && ok(t)).map((t) => t.score);
       perFamily[f] = bootstrapDelta(Af, Bf);
     }
-    return { a, b, question, ...all, perFamily, clear: Number.isFinite(all.lo) && (all.lo > 0 || all.hi < 0) };
+    const perCohort = {};
+    for (const c of cohorts) {
+      const Ac = trials.filter((t) => t.condition === a && cohortOf[t.task] === c && ok(t)).map((t) => t.score);
+      const Bc = trials.filter((t) => t.condition === b && cohortOf[t.task] === c && ok(t)).map((t) => t.score);
+      perCohort[c] = bootstrapDelta(Ac, Bc);
+    }
+    return { a, b, question, ...all, perFamily, perCohort, clear: Number.isFinite(all.lo) && (all.lo > 0 || all.hi < 0) };
   });
 
   const summary = {
@@ -139,9 +151,13 @@ function summarise(runDir) {
     n: trials.length,
     errors: trials.filter((t) => !ok(t)).length,
     costUsd: round(trials.reduce((a, t) => a + (t.costUsd || 0), 0), 4),
+    // the harness total (subject + the CLI's auxiliary call), where the runner recorded it
+    costTotalUsd: trials.some((t) => typeof t.costTotalUsd === 'number') ? round(trials.reduce((a, t) => a + (t.costTotalUsd ?? t.costUsd ?? 0), 0), 4) : undefined,
     conditions,
     families,
+    cohorts,
     tasks: manifest.tasks.map((t) => t.id),
+    taskCohort: cohortOf,
     byCondition,
     byConditionFamily,
     byConditionTask,
@@ -172,6 +188,7 @@ function main() {
       floor: s.byCondition.none ? s.byCondition.none.score.mean : null,
       plain: s.byCondition.plain ? s.byCondition.plain.score.mean : null,
       clearContrasts: s.contrasts.filter((c) => c.clear).map((c) => `${c.a}−${c.b} ${c.delta > 0 ? '+' : ''}${c.delta}`),
+      clearHeldOut: s.cohorts.includes('r2') ? s.contrasts.filter((c) => c.perCohort.r2 && Number.isFinite(c.perCohort.r2.lo) && (c.perCohort.r2.lo > 0 || c.perCohort.r2.hi < 0)).map((c) => `${c.a}−${c.b} ${c.perCohort.r2.delta > 0 ? '+' : ''}${c.perCohort.r2.delta}`) : [],
     });
     console.log(`${s.id}: n=${s.n} errors=${s.errors} $${s.costUsd} · ${ranked.map(([c, v]) => `${c} ${v.score.mean}`).join(' · ')}`);
   }
