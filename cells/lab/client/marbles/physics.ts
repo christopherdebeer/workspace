@@ -11,7 +11,7 @@
  * Materials differ in density, bounce, grip and rolling resistance: the same slope, and glass,
  * steel, wood and rubber come down it differently.
  */
-import { WALL_H, WIDTH, add, cross, dot, finish as finishOf, len, mul, norm, sub, type Board, type Section, type V3 } from './track';
+import { FIELD_SIZE, WALL_H, WIDTH, add, cross, dot, finish as finishOf, len, mul, norm, sub, type Board, type Section, type V3 } from './track';
 
 export const G = 981;
 /** the board's roughness: a loss that grows with the square of the speed */
@@ -85,12 +85,12 @@ function boardContacts(bd: Board, m: Marble, time: number, out: Contact[]): numb
   const along = dot(d, f.t), up = dot(d, f.n), across = dot(d, f.b);
   const half = bd.width / 2;
   if (along < -m.r - 2 || along > bd.length + m.r + 2) return null;
-  if (Math.abs(across) > half + m.r + 1 || up > WALL_H + 6 || up < -m.r - 2) return null;
+  if (Math.abs(across) > half + m.r + 1 || up > (bd.sideH ?? WALL_H) + 6 || up < -m.r - 2) return null;
   const e = TRACK.e, mu = TRACK.mu;
   // the floor
   if (along >= -m.r && along <= bd.length + m.r && up < m.r && up > -m.r) out.push({ n: f.n, depth: m.r - up, vs: [0, 0, 0], e, mu });
-  // the sides
-  if (up < WALL_H) {
+  // the sides (a little above their top too: a marble can't ride over a wall it is barely higher than)
+  if (up < (bd.sideH ?? WALL_H) + 1.5) {
     for (const s of [1, -1]) {
       const over = s * across - half + m.r;
       if (over > 0) out.push({ n: mul(f.b, -s), depth: over, vs: [0, 0, 0], e, mu });
@@ -157,8 +157,8 @@ export class Course {
   /** Where a marble begins: in a row behind the gate of a section (or the top), lane by lane, at rest. */
   place(m: Marble, sec = 0, lane = 0, speed = 0) {
     const s = this.sections[sec];
-    const f = s ? s.boards[0].frame : this.fin.catchBoard.frame;
-    const n = Math.max(1, FIELD);
+    const f = s ? s.boards[0].frame : this.fin.board.frame;
+    const n = FIELD_SIZE;
     const across = ((lane + 0.5) / n - 0.5) * (WIDTH - 4);
     m.p = add(add(add(f.p, mul(f.t, 3)), mul(f.b, across)), mul(f.n, m.r + 0.2));
     m.v = mul(f.t, speed);
@@ -171,7 +171,6 @@ export class Course {
     m.slowFor = 0;
   }
 }
-const FIELD = 12;
 
 /** A step of the race: every marble, every contact, in small steps. */
 export function step(course: Course, marbles: Marble[], dt: number, time: number, impacts: Impact[] = []): void {
@@ -194,21 +193,30 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
           if (a !== null && (!best || si >= m.sec)) best = { along: a, sec: si };
         }
       }
-      // the catch board at the end
+      // the finish: the funnel, the line across its throat, the channel beyond
       if (m.sec >= course.sections.length - 1) {
-        const a = boardContacts(course.fin.catchBoard, m, t, contacts);
-        if (a !== null && m.finished < 0) m.finished = t;
+        const a = boardContacts(course.fin.board, m, t, contacts);
+        if (a !== null) {
+          m.progress = Math.max(m.progress, course.total + Math.max(0, a));
+          if (a >= course.fin.throat && m.finished < 0) m.finished = t;
+        }
       }
       if (best) {
         const prog = course.starts[best.sec] + Math.max(0, Math.min(course.sections[best.sec].length, best.along));
         m.progress = Math.max(m.progress, prog);
         if (best.sec > m.sec) { m.sec = best.sec; m.entryV = len(m.v); }
-        if (m.finished < 0 && m.progress >= course.total - 0.01 && best.sec === course.sections.length - 1 && best.along >= course.sections[best.sec].length) m.finished = t;
       }
       m.contact = contacts.length > 0;
       for (const c of contacts) resolve(m, c, h, impacts);
     }
     for (let i = 0; i < marbles.length; i++) for (let j = i + 1; j < marbles.length; j++) pair(marbles[i], marbles[j], impacts);
+    // (a push between marbles can't put one into a wall or the floor: the board has the last word)
+    for (const m of marbles) {
+      contacts.length = 0;
+      for (let si = Math.max(0, m.sec - 1); si <= Math.min(course.sections.length - 1, m.sec + 1); si++) for (const bd of course.sections[si].boards) boardContacts(bd, m, t, contacts);
+      if (m.sec >= course.sections.length - 1) boardContacts(course.fin.board, m, t, contacts);
+      for (const c of contacts) if (c.depth > 0) m.p = add(m.p, mul(c.n, c.depth));
+    }
     for (const m of marbles) spin(m, h);
   }
   for (const m of marbles) {
@@ -216,13 +224,18 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
     const sec = course.sections[m.sec];
     const low = sec ? sec.end.p[1] - sec.boards[0].step : course.top.p[1];
     if (m.p[1] < low - 60) { m.falls++; course.place(m, m.sec, 0, Math.max(0, m.entryV * 0.7)); }
+    // in the channel at the end, slow: settling (the pack's pushes would keep it shivering)
+    // (a slow enough one only: one still rolling down the channel isn't held back)
+    if (m.finished >= 0 && len(m.v) < 6) m.v = mul(m.v, 0.5);
     // stuck (resting against something, or wedged in the pack): a nudge sideways, toward the middle, and a little on
     if (m.finished < 0 && len(m.v) < 2 && m.contact) {
       m.slowFor += dt;
       if (m.slowFor > 1.5) {
-        const f = sec?.boards[0].frame ?? course.fin.catchBoard.frame;
+        const f = sec?.boards[0].frame ?? course.fin.board.frame;
         const across = dot(sub(m.p, f.p), f.b);
-        m.v = add(m.v, add(mul(f.b, across > 0 ? -28 : 28), mul(f.t, 12)));
+        // (toward the middle; the other way the next time, in case that was into something)
+        const side = (across > 0 ? -1 : 1) * (m.nudges % 2 ? -1 : 1);
+        m.v = add(m.v, add(mul(f.b, side * 28), mul(f.t, 12)));
         m.slowFor = 0;
         m.nudges++;
       }

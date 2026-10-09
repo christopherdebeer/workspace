@@ -61,6 +61,8 @@ export interface Board {
   backWall: boolean;
   /** how far the next board's floor is below this one's end (a step down) */
   step: number;
+  /** its sides' height, where not the usual (below a step they reach up to the board above) */
+  sideH?: number;
 }
 export interface Section {
   kind: Kind;
@@ -203,18 +205,25 @@ export function section(kind: Kind, from: { p: V3; yaw: number; pitch: number },
     }
     case 'step': {
       s.name = 'a step down';
-      board.step = ramp(r, 6, 10);
-      for (let j = 0; j < 3; j++) board.pegs.push([length * 0.4, (j - 1) * 12, 1.5]);
+      // (the board in two: the second lower, so what flies off the edge lands between its sides)
+      const h = ramp(r, 6, 10), la = length * 0.45;
+      board.length = la;
+      board.step = h;
+      const p2 = add(add(frame.p, mul(frame.t, la)), [0, -h, 0]);
+      const lower: Board = { frame: frameAt(p2, from.yaw, slope), width: W, length: length - la, slope, walls: [], pegs: [], spinners: [], backWall: false, step: 0, sideH: WALL_H + h };
+      for (let j = 0; j < 3; j++) lower.pegs.push([(length - la) * 0.55, (j - 1) * 12, 1.5]);
+      s.boards.push(lower);
       break;
     }
     case 'zigzag': {
       s.name = 'a zigzag';
       // lanes that bend together: two walls in parallel bends
-      const n = 3;
+      // (one after another, never overlapping: two that overlap make a pocket a marble can't leave)
+      const n = 3, span = (clear1 - clear0) / n;
       for (let i = 0; i < n; i++) {
-        const along = clear0 + ((clear1 - clear0) * i) / n;
+        const along = clear0 + span * i;
         const side = i % 2 ? 1 : -1;
-        board.walls.push({ a: [along, side * half * 0.35], b: [along + 20, -side * half * 0.35], thick: 0.5 });
+        board.walls.push({ a: [along, side * half * 0.35], b: [along + span - 2.5, -side * half * 0.35], thick: 0.5 });
       }
       break;
     }
@@ -226,11 +235,12 @@ export function section(kind: Kind, from: { p: V3; yaw: number; pitch: number },
   }
   // (everything inside the board; a wall may meet a side, but never stop just short of it: a marble
   // coming down the side would wedge in the gap)
-  const inside = (pt: [number, number]): [number, number] => [Math.max(1, Math.min(length - 1, pt[0])), Math.max(-half, Math.min(half, pt[1]))];
+  const inside = (pt: [number, number]): [number, number] => [Math.max(1, Math.min(board.length - 1, pt[0])), Math.max(-half, Math.min(half, pt[1]))];
   for (const w of board.walls) { w.a = inside(w.a); w.b = inside(w.b); }
-  board.pegs = board.pegs.map(([a, c, pr]) => [Math.max(6, Math.min(length - 3, a)), Math.max(-half + pr + 1, Math.min(half - pr - 1, c)), pr]);
-  // the far edge: where the next board begins (a step: lower)
-  const endP = add(add(frame.p, mul(frame.t, length)), [0, -board.step, 0]);
+  board.pegs = board.pegs.map(([a, c, pr]) => [Math.max(6, Math.min(board.length - 3, a)), Math.max(-half + pr + 1, Math.min(half - pr - 1, c)), pr]);
+  // the far edge: where the next board begins
+  const lastB = s.boards[s.boards.length - 1];
+  const endP = add(add(lastB.frame.p, mul(lastB.frame.t, lastB.length)), [0, -lastB.step, 0]);
   s.end = { p: endP, yaw: from.yaw, pitch: slope };
   s.drop = from.p[1] - endP[1];
   return s;
@@ -262,11 +272,29 @@ export function build(seed: number, choices: number[]): Section[] {
   return sections;
 }
 
-/** The finish: a chequered line across the last board's end, and a level catch board beyond, walled at its far end. */
-export function finish(end: { p: V3; yaw: number; pitch: number }): { line: Frame; catchBoard: Board } {
-  const line = frameAt(end.p, end.yaw, end.pitch);
-  const frame = frameAt(end.p, end.yaw, -2 * DEG);
-  return { line, catchBoard: { frame, width: WIDTH, length: 40, slope: -2 * DEG, walls: [{ a: [39, -WIDTH / 2], b: [39, WIDTH / 2], thick: 0.6 }], pegs: [], spinners: [], backWall: false, step: 0 } };
+/** every marble: the same size (a glass marble, 16 mm across) */
+export const MARBLE_R = 0.8;
+/** the channel at the end: a marble and a half wide between the strips, so they come to rest in single file */
+export const CHANNEL_HALF = MARBLE_R * 1.5 + 0.5;
+
+/**
+ * The finish: a funnel that brings everyone to a single gap, the chequered line across it, and
+ * a channel beyond, one marble wide, closed at its far end: they come to rest in it in the order
+ * they crossed, so the result is there to see.
+ */
+export function finish(end: { p: V3; yaw: number; pitch: number }): { board: Board; line: Frame; throat: number; channelEnd: number } {
+  const slope = -7 * DEG;
+  const frame = frameAt(end.p, end.yaw, slope);
+  const half = WIDTH / 2, ch = CHANNEL_HALF;
+  const throat = 44, channelEnd = throat + FIELD_SIZE * MARBLE_R * 2 + 14;
+  const length = channelEnd + 2;
+  const walls: Wall[] = [
+    { a: [0, -half], b: [throat, -ch], thick: 0.5 }, { a: [0, half], b: [throat, ch], thick: 0.5 },
+    { a: [throat, -ch], b: [channelEnd, -ch], thick: 0.5 }, { a: [throat, ch], b: [channelEnd, ch], thick: 0.5 },
+    { a: [channelEnd, -ch], b: [channelEnd, ch], thick: 0.5 },
+  ];
+  const line = frameAt(add(frame.p, mul(frame.t, throat)), end.yaw, slope);
+  return { board: { frame, width: WIDTH, length, slope, walls, pegs: [], spinners: [], backWall: false, step: 0 }, line, throat, channelEnd };
 }
 
 /** The run as a query string, and back. */

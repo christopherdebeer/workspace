@@ -14,10 +14,10 @@
  * wood, glass that refracts and glints, steel that mirrors the sky, wood with a grain, rubber
  * that doesn't shine), the camera, the race and the building, and the sounds.
  */
-import { seeded } from '../kit/rng';
+import { hash, seeded } from '../kit/rng';
 import { Course, MATERIALS, marble, order, step, type Impact, type Marble, type Material } from './physics';
-import { boardMesh, gateMesh, groundMesh, lineMesh, sphereMesh, spinnerMesh, towerMesh, VSTRIDE } from './mesh';
-import { TOP, WIDTH, add, build, candidates, cross, decode, dirOf, encode, len, mul, norm, sub, type Section, type V3 } from './track';
+import { boardMesh, gateMesh, groundMesh, lineMesh, ringMesh, sphereMesh, spinnerMesh, towerMesh, VSTRIDE } from './mesh';
+import { FIELD_SIZE, MARBLE_R, TOP, WIDTH, add, build, candidates, cross, decode, dirOf, encode, frameAt, len, mul, norm, sub, type Section, type V3 } from './track';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -68,6 +68,7 @@ in vec3 aNor;
 in float aMat;
 uniform mat4 uVP, uModel, uLightVP;
 uniform mat3 uNormal;
+uniform float uMatOver;
 out vec3 vWorld;
 out vec3 vNor;
 out vec3 vLocal;
@@ -78,7 +79,7 @@ void main() {
   vWorld = w.xyz;
   vLocal = aPos;
   vNor = normalize(uNormal * aNor);
-  vMat = aMat;
+  vMat = uMatOver >= 0. ? uMatOver : aMat;
   vShadow = uLightVP * w;
   gl_Position = uVP * w;
 }`;
@@ -89,10 +90,12 @@ in vec3 vWorld;
 in vec3 vNor;
 in vec3 vLocal;
 in vec4 vShadow;
-flat in float vMat; // 0 the board's floor, 1 a wall, 2 metal, 3 ground, 4 tower, 5 the chequered line; 10 glass, 11 steel, 12 wood, 13 rubber (a marble)
+flat in float vMat; // 0 the board's floor, 1 a wall, 2 metal, 3 ground, 4 tower, 5 the chequered line, 6 the marker; 10 glass, 11 steel, 12 wood, 13 rubber (a marble)
 out vec4 o;
 uniform sampler2D uShadowMap;
-uniform vec3 uSun, uEye, uFog, uSkyTop, uSkyLow, uTint;
+uniform vec3 uSun, uEye, uFog, uSkyTop, uSkyLow, uTint, uTint2;
+/** a marble's style: its kind (0 a cat's eye, 1 a swirl, 2 speckled, 3 banded), the pattern's scale, its phase */
+uniform vec4 uStyle;
 uniform float uCut;
 uniform float uTime, uGhost, uFar;
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
@@ -151,12 +154,33 @@ void main() {
     // the line: chequered
     float cx = floor(vLocal.x / 2.), cz = floor(vLocal.z / 2.);
     base = mod(cx + cz, 2.) < .5 ? vec3(.95) : vec3(.08); rough = .7;
+  } else if (vMat < 6.5) {
+    // the marker under the marble that's yours
+    o = vec4(1., .92, .45, .8); return;
   } else if (vMat < 10.5) {
-    // glass: a tinted swirl inside, the sky through and off it
-    float sw = noise(vLocal * 3. + vec3(1.7, 0., 0.)) ;
-    float band = smoothstep(.35, .5, sw) * (1. - smoothstep(.5, .65, sw));
-    base = mix(uTint, vec3(1.), .25) * (.6 + .4 * band);
-    rough = .08; alpha = .55 + .45 * band;
+    // a glass marble, its style its own (the pattern is in the glass, so it turns with it)
+    float kind = uStyle.x, sc = uStyle.y, ph = uStyle.z;
+    vec3 q = vLocal;
+    float sw = noise(q * sc + vec3(ph, 0., 0.));
+    float sw2 = noise(q * sc * 2.3 + vec3(0., ph * 1.7, 3.1));
+    rough = .08;
+    if (kind < .5) {
+      // a cat's eye: clear glass with a coloured ribbon twisted through it
+      float ribbon = smoothstep(.36, .46, sw) * (1. - smoothstep(.54, .64, sw));
+      base = mix(vec3(1.), mix(uTint, uTint2, smoothstep(.4, .6, sw2)), ribbon);
+      alpha = .3 + .7 * ribbon;
+    } else if (kind < 1.5) {
+      // opaque, two colours swirled together
+      base = mix(uTint, uTint2, smoothstep(.42, .58, sw + (sw2 - .5) * .4));
+    } else if (kind < 2.5) {
+      // speckled: one colour, flecked with another
+      float fl = smoothstep(.62, .7, noise(q * 16. + vec3(ph)));
+      base = mix(uTint, uTint2, fl);
+    } else {
+      // banded: stripes wound about an axis, wavering
+      float band = fract(q.y * sc * .55 + (sw - .5) * .35 + ph);
+      base = mix(uTint, uTint2, smoothstep(.35, .45, band) * (1. - smoothstep(.55, .65, band)));
+    }
   } else if (vMat < 11.5) {
     base = vec3(.8, .8, .82); rough = .12; metal = 1.;
   } else if (vMat < 12.5) {
@@ -256,6 +280,7 @@ let towerMesh_: Mesh | null = null;
 let groundMesh_: Mesh | null = null;
 let groundY = 0;
 const SPHERE = upload((() => { const v: number[] = []; sphereMesh(v); return v; })());
+const RING = upload((() => { const v: number[] = []; ringMesh(v); return v; })());
 const barMesh_ = upload(new Float32Array(0), true);
 const ghostMeshes: Mesh[] = [];
 
@@ -271,7 +296,7 @@ function rebuildCourse() {
   for (let i = sectionMeshes.length; i < sections.length; i++) sectionMeshes.push(meshOf(sections[i]));
   if (finishMesh) drop(finishMesh);
   const fv: number[] = [];
-  boardMesh(course.fin.catchBoard, fv);
+  boardMesh(course.fin.board, fv);
   lineMesh(course.fin.line, WIDTH, fv);
   finishMesh = upload(fv);
   // the ground: well below the line, and the tower from it
@@ -294,35 +319,68 @@ function save() {
 }
 
 // ─── the marbles ──────────────────────────────────────────────────────────────────────────────────
-const FIELD: Array<{ mat: number; r: number; name: string; tint: V3 }> = [
-  { mat: 0, r: 0.8, name: 'blue', tint: [0.3, 0.6, 0.95] },
-  { mat: 1, r: 0.9, name: 'steel', tint: [0.8, 0.8, 0.82] },
-  { mat: 2, r: 1.0, name: 'wood', tint: [0.7, 0.5, 0.3] },
-  { mat: 3, r: 1.0, name: 'rubber', tint: [0.2, 0.2, 0.2] },
-  { mat: 0, r: 0.85, name: 'green', tint: [0.3, 0.85, 0.45] },
-  { mat: 0, r: 0.75, name: 'red', tint: [0.95, 0.35, 0.3] },
-  { mat: 0, r: 0.8, name: 'amber', tint: [0.95, 0.7, 0.25] },
-  { mat: 0, r: 0.8, name: 'violet', tint: [0.6, 0.4, 0.9] },
-  { mat: 0, r: 0.85, name: 'teal', tint: [0.2, 0.75, 0.75] },
-  { mat: 1, r: 0.8, name: 'steel · small', tint: [0.7, 0.7, 0.74] },
-  { mat: 0, r: 0.9, name: 'clear', tint: [0.85, 0.9, 0.95] },
-  { mat: 0, r: 0.8, name: 'pink', tint: [0.95, 0.5, 0.7] },
-];
-let marbles: Marble[] = FIELD.map((f) => marble(f.name, MATERIALS[f.mat], f.r, f.tint));
+/** what a marble is called: a roster, like a tournament's */
+const NAMES = ['Ash', 'Breeze', 'Comet', 'Crimson', 'Dusk', 'Ember', 'Electro', 'Flint', 'Frost', 'Honey', 'Indigo', 'Jade', 'Juniper', 'Kiwi', 'Lava', 'Lemon', 'Mango', 'Mantis', 'Mint', 'Mochi', 'Nightfall', 'Nova', 'Olive', 'Opal', 'Pebble', 'Pearl', 'Plum', 'Quartz', 'Rose', 'Rusty', 'Sage', 'Sky', 'Storm', 'Sunny', 'Thunder', 'Tide', 'Twister', 'Umber', 'Willow', 'Zest'];
+interface Look { name: string; tint: V3; tint2: V3; style: [number, number, number, number]; css: string }
+/** hue (turns), saturation, lightness → rgb */
+function hsl(h: number, sl: number, l: number): V3 {
+  const f = (n: number) => { const k = (n + h * 12) % 12; const a = sl * Math.min(l, 1 - l); return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+  return [f(0), f(8), f(4)];
+}
+/**
+ * The roster: twelve marbles, all glass and all the same size (so the run and the knocks decide
+ * it, not the marble), each its own look from the seed: a cat's eye, a swirl, speckled, banded,
+ * in its own colours, with its own name. The same seed is the same roster.
+ */
+function roster(seedR: number): Look[] {
+  const r = seeded(hash(seedR, 0x9a7b));
+  const names = [...NAMES];
+  const looks: Look[] = [];
+  for (let i = 0; i < FIELD_SIZE; i++) {
+    const name = names.splice(Math.floor(r() * names.length), 1)[0];
+    // (the hues spread round the wheel, so no two are alike)
+    const h = (i / FIELD_SIZE + r() * 0.06) % 1;
+    const kind = Math.floor(r() * 4);
+    const tint = hsl(h, 0.55 + r() * 0.4, kind === 0 ? 0.45 : 0.4 + r() * 0.2);
+    const h2 = (h + 0.25 + r() * 0.5) % 1;
+    const tint2: V3 = kind === 2 ? (r() < 0.5 ? [0.1, 0.1, 0.12] : [0.95, 0.93, 0.88]) : r() < 0.3 ? [0.96, 0.95, 0.9] : hsl(h2, 0.7, 0.45 + r() * 0.25);
+    const css = `rgb(${tint.map((v) => Math.round(v * 255)).join(',')})`;
+    looks.push({ name, tint, tint2, style: [kind, 2 + r() * 2.5, r() * 10, 0], css });
+  }
+  return looks;
+}
+const LOOKS = roster(1);
+const lookOf = new Map(LOOKS.map((l) => [l.name, l]));
+let marbles: Marble[] = LOOKS.map((l) => marble(l.name, MATERIALS[0], MARBLE_R, l.tint));
 /** yours: the one the camera follows (its name), or the leader */
-let mine = 'blue';
+let mine = LOOKS[0].name;
 let follow: 'mine' | 'leader' = 'mine';
 let raceTime = 0;
 let racing = false;
+/** the race: lining up behind the gate (tap a marble to make it yours, tap to go), running, or all in */
+let phase: 'lineup' | 'racing' | 'done' = 'lineup';
 let impacts: Impact[] = [];
+let doneAt = 0;
 /** the race began from this section (0: the top) */
 let fromSection = 0;
+/** Everyone to the gate, the gate down: waiting on a tap. */
+function lineup() {
+  fromSection = 0;
+  marbles.forEach((m, i) => course.place(m, 0, i));
+  raceTime = 0;
+  racing = false;
+  phase = 'lineup';
+  mode('race');
+  showHands();
+}
 function release(from = 0) {
   fromSection = from;
   marbles.forEach((m, i) => course.place(m, from, i));
   raceTime = 0;
   racing = true;
+  phase = 'racing';
   mode('race');
+  showHands();
   tick(1.5);
 }
 /** whether the gate still holds them (the first moments of a race from the top) */
@@ -330,6 +388,13 @@ const held = () => racing && fromSection === 0 && raceTime < 0.35;
 function followed(): Marble {
   if (follow === 'leader') return order(marbles)[0];
   return marbles.find((m) => m.name === mine) ?? marbles[0];
+}
+function choose_(name: string) {
+  mine = name;
+  follow = 'mine';
+  showFollow();
+  save();
+  tick();
 }
 
 // ─── building ─────────────────────────────────────────────────────────────────────────────────────
@@ -370,6 +435,15 @@ function mode(v: 'race' | 'build') {
   view = v;
   document.body.classList.toggle('building', v === 'build');
   if (v === 'build') { racing = false; offer(0); flyToEnd(); }
+  showHands();
+}
+/** which hands show: the lineup's, the race's, the building's */
+function showHands() {
+  document.body.classList.toggle('lineup', view === 'race' && phase === 'lineup');
+  document.body.classList.toggle('done', view === 'race' && phase === 'done');
+  const l = lookOf.get(mine);
+  $('hint').textContent = phase === 'lineup' ? `${mine} is yours · tap another to change · tap the board to go` : phase === 'done' ? 'all in: first at the top of the channel · tap a marble to look at it' : 'tap a marble to follow it · drag to look round · pinch to come close';
+  $('go').style.setProperty('--mine', l?.css ?? '#fff');
 }
 
 // ─── the camera ─────────────────────────────────────────────────────────────────────────────────
@@ -393,6 +467,34 @@ function updateCamera(dt: number) {
     return;
   }
   const m = followed();
+  const k0 = 1 - Math.exp(-dt * 3);
+  if (phase === 'lineup') {
+    // the lineup: from above the gate, looking down across the board, so the row runs up the
+    // screen and every marble is big enough to tap (the run itself is seen at go)
+    const f = sections.length ? sections[0].boards[0].frame : frameAt(TOP.p, TOP.yaw, TOP.pitch);
+    // (the look a little past the row's lower end, so the row sits above the hands)
+    const centre = add(add(add(f.p, mul(f.t, 2)), mul(f.b, 6)), mul(f.n, MARBLE_R));
+    const dist = 62 / zoom;
+    const el = Math.max(0.6, Math.min(1.4, 1.12 + orbit.pitch * 0.5));
+    const fwd = norm(add(mul(f.b, Math.cos(el)), mul(f.n, -Math.sin(el))));
+    const wantEye = sub(centre, mul(fwd, dist));
+    for (let i = 0; i < 3; i++) { eye[i] += (wantEye[i] - eye[i]) * k0; look[i] += (centre[i] - look[i]) * k0; }
+    camYaw = Math.atan2(f.t[0], f.t[2]);
+    orbit.pitch *= Math.exp(-dt * 0.8);
+    return;
+  }
+  if (phase === 'done' || m.finished >= 0) {
+    // the result: over the channel, looking down it; first at the top
+    const f = course.fin.board.frame;
+    const centre = add(f.p, mul(f.t, (course.fin.throat + course.fin.channelEnd) / 2 + 2));
+    const wantEye = add(add(add(centre, mul(f.t, -16)), mul(f.n, 46 / zoom)), mul(f.b, orbit.yaw * 12));
+    const wantLook = add(centre, mul(f.t, 4));
+    for (let i = 0; i < 3; i++) { eye[i] += (wantEye[i] - eye[i]) * k0; look[i] += (wantLook[i] - look[i]) * k0; }
+    camYaw = Math.atan2(f.t[0], f.t[2]);
+    orbit.yaw *= Math.exp(-dt * 0.8);
+    orbit.pitch *= Math.exp(-dt * 0.8);
+    return;
+  }
   // the board's way (the run is straight down it), the camera behind and above
   const speed = len(m.v);
   const sec = sections[Math.min(m.sec, sections.length - 1)];
@@ -458,26 +560,56 @@ const up = (e: PointerEvent) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
   if (p && !p.moved && e.type === 'pointerup' && view === 'race') {
-    // a tap: follow the next marble
-    const i = marbles.findIndex((m) => m.name === mine);
-    mine = marbles[(i + 1) % marbles.length].name;
-    follow = 'mine';
-    showFollow();
-    save();
+    // a tap on a marble: that one is yours; lining up, a tap elsewhere is go; otherwise the next marble
+    const hit = pick(e.clientX, e.clientY);
+    if (hit) choose_(hit.name);
+    else if (phase === 'lineup') release(0);
+    else {
+      const i = marbles.findIndex((m) => m.name === mine);
+      choose_(marbles[(i + 1) % marbles.length].name);
+    }
   }
 };
 canvas.addEventListener('pointerup', up);
+/** the marble under a point on the screen (within a finger of it), the nearest if several */
+function pick(x: number, y: number): Marble | null {
+  let best: Marble | null = null, bd = 36;
+  for (const m of marbles) {
+    const c = project(m.p);
+    if (!c) continue;
+    const d = Math.hypot(c[0] - x, c[1] - y);
+    if (d < bd) { bd = d; best = m; }
+  }
+  return best;
+}
+let lastVP: Float32Array | null = null;
+/** a world point on the screen, in CSS pixels (or null, behind the camera) */
+function project(p: V3): [number, number] | null {
+  if (!lastVP) return null;
+  const v = lastVP;
+  const cx = v[0] * p[0] + v[4] * p[1] + v[8] * p[2] + v[12];
+  const cy = v[1] * p[0] + v[5] * p[1] + v[9] * p[2] + v[13];
+  const cw = v[3] * p[0] + v[7] * p[1] + v[11] * p[2] + v[15];
+  if (cw <= 0) return null;
+  return [((cx / cw) * 0.5 + 0.5) * innerWidth, (0.5 - (cy / cw) * 0.5) * innerHeight];
+}
 canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.5, Math.min(3, zoom * Math.exp(-e.deltaY * 0.0012))); }, { passive: false });
 
 const btn = (id: string, f: () => void) => $(id).addEventListener('click', (e) => { e.stopPropagation(); wake(); f(); });
-btn('race', () => release(0));
+btn('go', () => release(0));
+btn('race', () => lineup());
 btn('here', () => release(Math.max(0, sections.length - 1)));
 btn('build', () => mode(view === 'build' ? 'race' : 'build'));
 btn('add', addChosen);
 btn('undo', undoSection);
 btn('follow', () => { follow = follow === 'mine' ? 'leader' : 'mine'; showFollow(); save(); });
-btn('new', () => { seed = Math.floor(Math.random() * 90000) + 1; choices = []; rebuildCourse(); page = 0; release(0); });
+btn('new', () => { seed = Math.floor(Math.random() * 90000) + 1; choices = []; rebuildCourse(); page = 0; lineup(); });
+// (the board's rows: tap one and that marble is yours)
+$('board').addEventListener('click', (e) => {
+  const row = (e.target as HTMLElement).closest('.row') as HTMLElement | null;
+  if (row?.dataset.name) { wake(); choose_(row.dataset.name); }
+});
 $('offers').addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
   if (t.closest('#more')) { offer(page + 1); tick(1.5); return; }
@@ -486,10 +618,11 @@ $('offers').addEventListener('click', (e) => {
 });
 function showFollow() {
   $('follow').textContent = follow === 'leader' ? 'following the leader' : `following ${mine}`;
+  showHands();
 }
 addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
-  if (k === ' ') { e.preventDefault(); release(0); }
+  if (k === ' ') { e.preventDefault(); if (phase === 'lineup') release(0); else lineup(); }
   else if (k === 'b') mode(view === 'build' ? 'race' : 'build');
   else if (k === 'enter' && view === 'build') addChosen();
   else if (k === 'z' && view === 'build') undoSection();
@@ -625,8 +758,8 @@ function marbleModel(m: Marble): [Float32Array, Float32Array] {
   return [M, new Float32Array(R)];
 }
 /** which meshes are near enough to draw (sections around the followed marble, or all in build) */
-function visible(): Array<{ mesh: Mesh; model?: Float32Array }> {
-  const out: Array<{ mesh: Mesh; model?: Float32Array }> = [];
+function visible(): Draw[] {
+  const out: Draw[] = [];
   const m = followed();
   const far = view === 'build' ? Infinity : 600;
   sections.forEach((s, i) => {
@@ -641,8 +774,9 @@ function visible(): Array<{ mesh: Mesh; model?: Float32Array }> {
   if (towerMesh_) out.push({ mesh: towerMesh_ });
   return out;
 }
-function drawMeshes(list: Array<{ mesh: Mesh; model?: Float32Array; normal?: Float32Array; tint?: V3; ghost?: boolean }>, shadowPass: boolean) {
-  for (const { mesh, model, normal, tint, ghost } of list) {
+interface Draw { mesh: Mesh; model?: Float32Array; normal?: Float32Array; tint?: V3; tint2?: V3; style?: [number, number, number, number]; mat?: number; ghost?: boolean }
+function drawMeshes(list: Draw[], shadowPass: boolean) {
+  for (const { mesh, model, normal, tint, tint2, style, mat, ghost } of list) {
     if (!mesh.count) continue;
     if (shadowPass) {
       gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, model ?? I4);
@@ -651,6 +785,9 @@ function drawMeshes(list: Array<{ mesh: Mesh; model?: Float32Array; normal?: Flo
       gl.uniformMatrix4fv(u(prog, 'uModel'), false, model ?? I4);
       gl.uniformMatrix3fv(u(prog, 'uNormal'), false, normal ?? I3);
       gl.uniform3fv(u(prog, 'uTint'), tint ?? [1, 1, 1]);
+      gl.uniform3fv(u(prog, 'uTint2'), tint2 ?? [1, 1, 1]);
+      gl.uniform4fv(u(prog, 'uStyle'), style ?? [1, 3, 0, 0]);
+      gl.uniform1f(u(prog, 'uMatOver'), mat ?? -1);
       gl.uniform1f(u(prog, 'uGhost'), ghost ? 1 : 0);
       gl.bindVertexArray(mesh.vao);
     }
@@ -683,7 +820,9 @@ function frame(now: number) {
       knock(im.mat, im.j * Math.max(0.15, 1 - d / 120), im.other);
     }
     rollAt(len(me.v), me.contact);
-    if (marbles.every((m) => m.finished >= 0) && racing) { racing = false; rollAt(0, false); }
+    // all in: the result; the solver runs on until they've settled in the channel
+    if (phase === 'racing' && marbles.every((m) => m.finished >= 0)) { phase = 'done'; doneAt = raceTime; showHands(); }
+    if (phase === 'done' && (raceTime > doneAt + 8 || marbles.every((m) => len(m.v) < 0.5))) { racing = false; rollAt(0, false); }
   }
   updateCamera(dt);
   showBoard();
@@ -696,12 +835,13 @@ function frame(now: number) {
   const fov = 0.9;
   const far = 2600;
   const vp = viewProj(eye, fwd, right, upv, fov, aspect, 1, far);
+  lastVP = vp;
   // the sun's view: a box around the followed marble (or the end, building)
   const centre: V3 = view === 'build' ? (sections.length ? sections[sections.length - 1].end.p : TOP.p) : followed().p;
   const span = view === 'build' ? 110 : 70;
   const lightVP = ortho(centre, SUN, span, 400);
   const vis = visible();
-  const live: Array<{ mesh: Mesh; model?: Float32Array; normal?: Float32Array; tint?: V3; ghost?: boolean }> = [...vis];
+  const live: Draw[] = [...vis];
   // the spinners' arms where they are now, and the gate lifting
   {
     const bv: number[] = [];
@@ -713,8 +853,13 @@ function frame(now: number) {
     upload(gv, true, gateMesh_);
     if (gv.length) live.push({ mesh: gateMesh_ });
   }
-  // (building, the marbles are out of the way: the end of the run is where the next board goes)
-  const balls = view === 'build' ? [] : marbles.map((m) => { const [M, N] = marbleModel(m); return { mesh: SPHERE, model: M, normal: N, tint: m.tint, mat: m.mat }; });
+  // (building, the marbles are out of the way: the end of the run is where the next board goes;
+  // drawn far to near, so the clear ones show what's behind them)
+  const balls: Draw[] = view === 'build' ? [] : marbles.map((m) => {
+    const [M, N] = marbleModel(m);
+    const l = lookOf.get(m.name);
+    return { mesh: SPHERE, model: M, normal: N, tint: m.tint, tint2: l?.tint2, style: l?.style, mat: 10, d: len(sub(m.p, eye)) };
+  }).sort((a, b) => b.d - a.d);
 
   // 1. the shadow map
   gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFb);
@@ -763,16 +908,24 @@ function frame(now: number) {
   if (groundMesh_) drawMeshes([{ mesh: groundMesh_ }], false);
   gl.disable(gl.CULL_FACE);
   drawMeshes(live, false);
-  // the marbles: opaque ones, then the glass over them
+  // the marbles (glass: blended, far to near), and the marker under yours
   gl.enable(gl.CULL_FACE);
-  const solid = balls.filter((b) => b.mat.look !== 'glass'), glass = balls.filter((b) => b.mat.look === 'glass');
-  for (const b of solid) { drawMeshes([{ mesh: SPHERE, model: b.model, normal: b.normal, tint: b.tint }], false); }
-  // (a marble's material is its vertex material, so: one draw per look, the sphere's id rewritten)
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  for (const b of glass) drawMeshes([{ mesh: SPHERE, model: b.model, normal: b.normal, tint: b.tint }], false);
-  gl.disable(gl.BLEND);
+  drawMeshes(balls, false);
   gl.disable(gl.CULL_FACE);
+  if (view !== 'build' && follow === 'mine') {
+    const me = followed();
+    const sec = sections[Math.min(me.sec, sections.length - 1)];
+    const f = me.finished >= 0 ? course.fin.board.frame : sec ? sec.boards[0].frame : course.fin.board.frame;
+    const sz = MARBLE_R * 1.9;
+    const at = add(me.p, mul(f.n, -MARBLE_R + 0.06));
+    const M = new Float32Array([f.b[0] * sz, f.b[1] * sz, f.b[2] * sz, 0, f.n[0] * sz, f.n[1] * sz, f.n[2] * sz, 0, f.t[0] * sz, f.t[1] * sz, f.t[2] * sz, 0, at[0], at[1], at[2], 1]);
+    gl.depthMask(false);
+    drawMeshes([{ mesh: RING, model: M, mat: 6 }], false);
+    gl.depthMask(true);
+  }
+  gl.disable(gl.BLEND);
   // building: the one on offer, see-through, at the end
   if (view === 'build' && ghostMeshes[chosen]) {
     gl.enable(gl.BLEND);
@@ -784,27 +937,32 @@ function frame(now: number) {
   }
   gl.bindVertexArray(null);
   (window as unknown as { __marbles: unknown }).__marbles = {
-    seed, choices, sections: sections.length, racing, raceTime, view, chosen, offered: offered.map((s) => s.name),
+    seed, choices, sections: sections.length, racing, phase, raceTime, view, chosen, offered: offered.map((s) => s.name),
     order: order(marbles).map((m) => ({ name: m.name, progress: Math.round(m.progress), finished: m.finished, falls: m.falls, speed: Math.round(len(m.v)) })),
     me: followed().name, eye: eye.map((v) => Math.round(v)),
+    // (where each is along the finish board, once in)
+    rest: order(marbles).map((m) => (m.finished >= 0 ? Math.round(dotv(sub(m.p, course.fin.board.frame.p), course.fin.board.frame.t) * 10) / 10 : null)),
   };
   requestAnimationFrame(frame);
 }
 
 /** The board: the order, the gaps, the time. */
 let boardAt = 0;
+let boardHtml = '';
 function showBoard() {
   if (performance.now() - boardAt < 120) return;
   boardAt = performance.now();
   const o = order(marbles);
   const lead = o[0];
-  $('board').innerHTML = o.map((m, i) => {
+  const html = o.map((m, i) => {
     const gap = m.finished >= 0 ? `${m.finished.toFixed(1)} s` : m === lead ? `${(m.progress / 100).toFixed(1)} m` : `−${((lead.progress - m.progress) / 100).toFixed(1)} m`;
-    return `<div class="row${m.name === followed().name ? ' me' : ''}"><i style="background:${css(m.tint)}"></i><b>${i + 1}</b><span>${m.name}</span><em>${gap}</em></div>`;
+    const l = lookOf.get(m.name);
+    return `<div class="row${m.name === followed().name ? ' me' : ''}" data-name="${m.name}"><i style="background:${l?.css}"></i><b>${phase === 'lineup' ? '' : i + 1}</b><span>${m.name}</span><em>${phase === 'lineup' ? '' : gap}</em></div>`;
   }).join('');
-  $('clock').textContent = racing ? `${raceTime.toFixed(1)} s · ${Math.round(len(followed().v) / 100 * 3.6 * 10) / 10} km/h` : marbles.some((m) => m.finished >= 0) ? 'all in' : '';
+  // (only when it changed: the rows are tapped, and must hold still to be)
+  if (html !== boardHtml) { boardHtml = html; $('board').innerHTML = html; }
+  $('clock').textContent = racing ? `${raceTime.toFixed(1)} s · ${Math.round(len(followed().v) / 100 * 3.6 * 10) / 10} km/h` : phase === 'done' ? `all in · ${order(marbles)[0].name} first` : '';
 }
-const css = (c: V3) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
 
 // ─── small maths ────────────────────────────────────────────────────────────────────────────────
 function viewProj(e: V3, f: V3, r: V3, up: V3, fov: number, aspect: number, near: number, far: number): Float32Array {
@@ -868,12 +1026,12 @@ function invert(m: Float32Array): Float32Array {
     choices = [];
     for (let i = 0; i < (auto ? 6 : 4); i++) choices.push(Math.floor(r() * 3));
   }
-  mine = params.get('marble') ?? saved?.mine ?? 'glass';
-  if (!FIELD.some((f) => f.name === mine)) mine = 'blue';
+  mine = params.get('marble') ?? saved?.mine ?? LOOKS[0].name;
+  if (!lookOf.has(mine)) mine = LOOKS[0].name;
   follow = auto ? 'leader' : saved?.follow ?? 'mine';
   rebuildCourse();
   showFollow();
   resize();
-  release(0);
+  if (auto) release(0); else lineup();
   requestAnimationFrame(frame);
 }

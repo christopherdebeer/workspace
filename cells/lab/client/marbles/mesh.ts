@@ -60,9 +60,12 @@ export function boardMesh(bd: Board, out: number[]) {
   const half = bd.width / 2;
   const T = 0.6;
   box(out, f, f.p, 0, -T, -half - T, bd.length, 0, half + T, 0);
-  box(out, f, f.p, 0, 0, half, bd.length, WALL_H, half + T, 1);
-  box(out, f, f.p, 0, 0, -half - T, bd.length, WALL_H, -half, 1);
+  const sideH = bd.sideH ?? WALL_H;
+  box(out, f, f.p, 0, 0, half, bd.length, sideH, half + T, 1);
+  box(out, f, f.p, 0, 0, -half - T, bd.length, sideH, -half, 1);
   if (bd.backWall) box(out, f, f.p, -T, 0, -half - T, 0, WALL_H, half + T, 1);
+  // (a step: the drop's face, down to the lower board)
+  if (bd.step > 0) box(out, f, f.p, bd.length - T, -bd.step - T, -half - T, bd.length, 0, half + T, 1);
   for (const w of bd.walls) wallBox(out, f, f.p, w.a, w.b, w.thick, WALL_H * 0.8, 1);
   for (const [pa, pc, pr] of bd.pegs) cylinder(out, f, f.p, pa, pc, pr, 0, WALL_H * 0.75, 1);
   for (const sp of bd.spinners) cylinder(out, f, f.p, sp.at[0], sp.at[1], 0.8, 0, 2.6, 2);
@@ -104,6 +107,15 @@ export function sphereMesh(out: number[], S = 24, Rr = 16) {
   for (let j = 0; j < Rr; j++) for (let i = 0; i < S; i++) {
     const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
     quad(out, a, b, c, d, a, b, c, d, 2);
+  }
+}
+/** A flat ring about the origin (the marker under a marble), a unit across, lying in x–z. */
+export function ringMesh(out: number[], S = 32) {
+  const n: V3 = [0, 1, 0];
+  for (let i = 0; i < S; i++) {
+    const a0 = (i / S) * Math.PI * 2, a1 = ((i + 1) / S) * Math.PI * 2;
+    const P = (a: number, r: number): V3 => [Math.cos(a) * r, 0, Math.sin(a) * r];
+    quad(out, P(a0, 0.72), P(a0, 1), P(a1, 1), P(a1, 0.72), n, n, n, n, 6);
   }
 }
 /** The tower at the top: posts from the ground up to the first board. */

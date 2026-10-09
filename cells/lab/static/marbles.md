@@ -1,35 +1,32 @@
 # Marble Run
 
-Twelve marbles in a row behind a gate at the top of a wide, sloping board. The gate lifts and
-they go: down board after board of obstacles, bumping, parting, catching up, to a chequered line
-at the end. A chase camera follows yours. Past the line is build mode: three boards on offer;
-pick one and the run grows downward.
+Twelve marbles in a row behind a gate at the top of a wide, sloping board. Tap one and it's
+yours; tap the board and the gate lifts: down board after board of obstacles they go, bumping,
+parting, catching up, to a funnel at the end that brings them to a single gap, the chequered
+line across it, and a channel beyond, one marble wide. They come to rest in it in the order
+they crossed, first at the top: the result is there to see. A chase camera follows yours. Past
+the line is build mode: three boards on offer; pick one and the run grows downward.
 
 ## The race
 
 | | Touch | Mouse and keys |
 |---|---|---|
-| let them go from the top | `from the top` | space |
+| make a marble yours | tap it, or its row on the board | click |
+| go | `go`, or tap the board | space |
+| line up again | `from the top` | space |
 | from the last board | `from the end` | |
-| follow another marble | tap the board | click |
 | follow the leader instead | `following …` | F |
 | look round | drag | drag |
 | come close | pinch | the wheel |
 
 The board on the right is the order: who's over the line (their time), who leads (how far),
-and how far behind the rest are. The marbles are glass, steel, wood and rubber (several of
-each, each its own size and weight), and each comes down the same board differently:
+and how far behind the rest are. The marbles are a roster, as a tournament's: all glass and all
+the same size, so the run and the knocks decide it and not the marble; each its own look (a
+cat's eye, a swirl, speckled, banded), its own colours, its own name. The pattern is in the
+glass, so it turns as the marble rolls.
 
-| | density | bounce | grip | rolling resistance |
-|---|---|---|---|---|
-| glass | 2.5 | lively | low | least |
-| steel | 7.8 | firm | lowest | low |
-| wood | 0.7 | dull | fair | more |
-| rubber | 1.2 | most | most | most |
-
-Steel carries its weight through the pack; rubber grips and bounces; wood is light and gives
-up speed to its rolling resistance; glass is quick and skittish. Marbles knock into each other
-and sound as they do: glass rings, steel clacks, wood thocks, rubber thuds.
+The solver knows other materials too (`physics.ts`: steel, wood, rubber, with their densities,
+bounce, grip and rolling resistance), and the tests race them; the roster is glass.
 
 ## Building
 
@@ -58,7 +55,11 @@ a sliding one would, and does here.
 A board is a floor, its two sides, and what's stuck on it: walls (segments, met as capsules),
 pegs (cylinders), spinners (arms turning about an axle, whose own speed at the point of contact
 counts in the bounce and the grip). The floor is cardboard, dull and grippy; the strips are
-smoother, so a marble slides down a slanted one rather than resting against it. Marbles meet
+smoother, so a marble slides down a slanted one rather than resting against it. Nothing on a
+board stands square to the slope, and a wall that reaches a side meets it (a gap there wedges a
+marble); a marble that stops anyway is nudged sideways. After a push between marbles the board
+has the last word, so the pack can't press one through a wall; below a step the sides reach up
+to the board above. Marbles meet
 each other with restitution and friction between their materials, mass-weighted; twelve of them
 on one board is most of the race.
 
@@ -67,7 +68,8 @@ on one board is most of the race.
 - The track and the solver are tested on their own (`node cells/lab/devtools/marbles.test.mjs`):
   a seeded run is the same run, every board ends lower; the rolling rate, the materials, a
   bounce, walls and pegs, a spinner's fling, a collision, and whole runs with nearly everyone
-  over the line and nobody off the board. The page is driven with
+  over the line and nobody off the board. Across a sweep of seeded runs, the order at rest in
+  the channel is the order over the line. The page is driven with
   `node cells/lab/devtools/marbles-shot.mjs --test`.
 - Drawn in WebGL2 with a shadow map from the sun; the materials are shaded by roughness and
   metalness, glass refracts and glints, steel mirrors the sky; the floor and sides are
