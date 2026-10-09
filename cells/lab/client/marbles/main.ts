@@ -1,12 +1,13 @@
 /**
- * Marble Run: a race down a track that goes on for as long as you build it.
+ * Marble Run: a race down a run of boards that goes on for as long as you build it.
  *
- * From the top of a tower the track goes down in sections: slopes, bends, esses, helices,
- * drops, jumps, loops, slalom trays, funnels, spinners, switchbacks. Six marbles of glass,
- * steel, wood and rubber are let go together; a chase camera follows yours. At the end of the
- * run is the cup, and build mode: three sections on offer (and three more), from the seed and
- * where you are; pick one and the run grows downward. The run is its seed and your choices,
- * in the address, so a run can be shared and is the same run for anyone.
+ * Twelve marbles of glass, steel, wood and rubber wait in a row behind a gate at the top of a
+ * wide, sloping board; the gate lifts and they go, down board after board of obstacles (pegs,
+ * deflectors, splitters, chicanes, spinners, funnels, gates, bumpers, steps, zigzags), bumping
+ * and parting, to a chequered line. A chase camera follows yours. Past the line is build mode:
+ * three boards on offer (and three more), from the seed and where you are; pick one and the
+ * run grows downward. The run is its seed and your choices, in the address, so a run can be
+ * shared and is the same run for anyone.
  *
  * The track (`track.ts`) and the solver (`physics.ts`) are pure and tested on their own; the
  * meshes (`mesh.ts`) too. Here is the drawing (WebGL2: the sun's shadow map, materials: painted
@@ -15,8 +16,8 @@
  */
 import { seeded } from '../kit/rng';
 import { Course, MATERIALS, marble, order, step, type Impact, type Marble, type Material } from './physics';
-import { barMesh, bowlMesh, channelMesh, groundMesh, sphereMesh, towerMesh, trayMesh, VSTRIDE } from './mesh';
-import { TOP, add, build, candidates, cross, decode, dirOf, encode, len, mul, norm, sub, type Section, type V3 } from './track';
+import { boardMesh, gateMesh, groundMesh, lineMesh, sphereMesh, spinnerMesh, towerMesh, VSTRIDE } from './mesh';
+import { TOP, WIDTH, add, build, candidates, cross, decode, dirOf, encode, len, mul, norm, sub, type Section, type V3 } from './track';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -88,10 +89,11 @@ in vec3 vWorld;
 in vec3 vNor;
 in vec3 vLocal;
 in vec4 vShadow;
-flat in float vMat; // 0 the track's wood, 1 its rails, 2 metal, 3 ground, 4 tower; 10 glass, 11 steel, 12 wood, 13 rubber (a marble)
+flat in float vMat; // 0 the board's floor, 1 a wall, 2 metal, 3 ground, 4 tower, 5 the chequered line; 10 glass, 11 steel, 12 wood, 13 rubber (a marble)
 out vec4 o;
 uniform sampler2D uShadowMap;
 uniform vec3 uSun, uEye, uFog, uSkyTop, uSkyLow, uTint;
+uniform float uCut;
 uniform float uTime, uGhost, uFar;
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
 float noise(vec3 p) {
@@ -121,21 +123,22 @@ vec3 sky(vec3 d) {
   return c;
 }
 void main() {
-  // (the track right against the camera is cut away, so the chase is never inside a wall)
-  if (vMat < 4.5 && uGhost < .5 && length(vWorld - uEye) < 7.) discard;
+  // (the walls and pegs right against the camera are cut away, so the chase is never inside one; the floor stays)
+  if (vMat > .5 && vMat < 4.5 && uGhost < .5 && length(vWorld - uEye) < uCut) discard;
   vec3 n = normalize(vNor);
   vec3 V = normalize(uEye - vWorld);
   float ndl = max(dot(n, uSun), 0.);
   float sh = shadow(n);
   vec3 base; float rough = .6, metal = 0., alpha = 1.;
   if (vMat < .5) {
-    // painted wood: grain along the length, a little wear
-    float grain = noise(vWorld * vec3(.35, 2.2, .35) * 2.) * .5 + noise(vWorld * 6.) * .25;
-    base = mix(vec3(.84, .64, .4), vec3(.6, .42, .25), grain);
-    base = mix(base, vec3(.9, .35, .22), .0);
-    rough = .55;
+    // cardboard: tan, a little mottled, flat
+    float g = noise(vWorld * .9) * .5 + noise(vWorld * 5.) * .2;
+    base = mix(vec3(.78, .64, .44), vec3(.68, .54, .36), g);
+    rough = .85;
   } else if (vMat < 1.5) {
-    base = vec3(.93, .9, .82); rough = .5;
+    // a wall: cardboard on edge, lighter, with the flute's stripes
+    float stripe = smoothstep(.35, .65, fract(dot(vWorld, vec3(.7, .0, .7)) * 1.6)) * .12;
+    base = vec3(.84, .72, .52) - stripe; rough = .8;
   } else if (vMat < 2.5) {
     base = vec3(.6, .62, .65); rough = .35; metal = 1.;
   } else if (vMat < 3.5) {
@@ -144,6 +147,10 @@ void main() {
     base = mix(vec3(.55, .6, .42), vec3(.66, .66, .56), g); rough = .9;
   } else if (vMat < 4.5) {
     base = vec3(.5, .48, .45); rough = .8;
+  } else if (vMat < 5.5) {
+    // the line: chequered
+    float cx = floor(vLocal.x / 2.), cz = floor(vLocal.z / 2.);
+    base = mod(cx + cz, 2.) < .5 ? vec3(.95) : vec3(.08); rough = .7;
   } else if (vMat < 10.5) {
     // glass: a tinted swirl inside, the sky through and off it
     float sw = noise(vLocal * 3. + vec3(1.7, 0., 0.)) ;
@@ -244,6 +251,7 @@ let course!: Course;
 /** each section's mesh, the finish's, the tower's and the ground's */
 const sectionMeshes: Mesh[] = [];
 let finishMesh: Mesh | null = null;
+const gateMesh_ = upload(new Float32Array(0), true);
 let towerMesh_: Mesh | null = null;
 let groundMesh_: Mesh | null = null;
 let groundY = 0;
@@ -253,23 +261,21 @@ const ghostMeshes: Mesh[] = [];
 
 function meshOf(s: Section): Mesh {
   const v: number[] = [];
-  for (const ch of s.channels) channelMesh(ch.frames, ch.r, ch.open, v, ch.r1);
-  for (const tr of s.trays) trayMesh(tr, v);
-  for (const b of s.bowls) bowlMesh(b, v);
+  for (const b of s.boards) boardMesh(b, v);
   return upload(v);
 }
 function rebuildCourse() {
   sections = build(seed, choices);
-  course = new Course(sections, { p: TOP.p, t: dirOf(TOP.yaw, TOP.pitch) });
+  course = new Course(sections, TOP);
   while (sectionMeshes.length > sections.length) drop(sectionMeshes.pop()!);
   for (let i = sectionMeshes.length; i < sections.length; i++) sectionMeshes.push(meshOf(sections[i]));
   if (finishMesh) drop(finishMesh);
   const fv: number[] = [];
-  channelMesh(course.fin.channel.frames, course.fin.channel.r, course.fin.channel.open, fv);
-  bowlMesh(course.fin.bowl, fv);
+  boardMesh(course.fin.catchBoard, fv);
+  lineMesh(course.fin.line, WIDTH, fv);
   finishMesh = upload(fv);
-  // the ground: well below the cup, and the tower from it
-  groundY = course.fin.bowl.centre[1] - 140;
+  // the ground: well below the line, and the tower from it
+  groundY = course.fin.line.p[1] - 140;
   if (groundMesh_) drop(groundMesh_);
   const gv: number[] = [];
   groundMesh([TOP.p[0], 0, TOP.p[2]], groundY, 4000, gv);
@@ -289,16 +295,22 @@ function save() {
 
 // ─── the marbles ──────────────────────────────────────────────────────────────────────────────────
 const FIELD: Array<{ mat: number; r: number; name: string; tint: V3 }> = [
-  { mat: 0, r: 0.8, name: 'glass', tint: [0.3, 0.6, 0.95] },
+  { mat: 0, r: 0.8, name: 'blue', tint: [0.3, 0.6, 0.95] },
   { mat: 1, r: 0.9, name: 'steel', tint: [0.8, 0.8, 0.82] },
   { mat: 2, r: 1.0, name: 'wood', tint: [0.7, 0.5, 0.3] },
   { mat: 3, r: 1.0, name: 'rubber', tint: [0.2, 0.2, 0.2] },
-  { mat: 0, r: 0.85, name: 'glass · green', tint: [0.3, 0.85, 0.45] },
-  { mat: 0, r: 0.75, name: 'glass · red', tint: [0.95, 0.35, 0.3] },
+  { mat: 0, r: 0.85, name: 'green', tint: [0.3, 0.85, 0.45] },
+  { mat: 0, r: 0.75, name: 'red', tint: [0.95, 0.35, 0.3] },
+  { mat: 0, r: 0.8, name: 'amber', tint: [0.95, 0.7, 0.25] },
+  { mat: 0, r: 0.8, name: 'violet', tint: [0.6, 0.4, 0.9] },
+  { mat: 0, r: 0.85, name: 'teal', tint: [0.2, 0.75, 0.75] },
+  { mat: 1, r: 0.8, name: 'steel · small', tint: [0.7, 0.7, 0.74] },
+  { mat: 0, r: 0.9, name: 'clear', tint: [0.85, 0.9, 0.95] },
+  { mat: 0, r: 0.8, name: 'pink', tint: [0.95, 0.5, 0.7] },
 ];
 let marbles: Marble[] = FIELD.map((f) => marble(f.name, MATERIALS[f.mat], f.r, f.tint));
 /** yours: the one the camera follows (its name), or the leader */
-let mine = 'glass';
+let mine = 'blue';
 let follow: 'mine' | 'leader' = 'mine';
 let raceTime = 0;
 let racing = false;
@@ -313,6 +325,8 @@ function release(from = 0) {
   mode('race');
   tick(1.5);
 }
+/** whether the gate still holds them (the first moments of a race from the top) */
+const held = () => racing && fromSection === 0 && raceTime < 0.35;
 function followed(): Marble {
   if (follow === 'leader') return order(marbles)[0];
   return marbles.find((m) => m.name === mine) ?? marbles[0];
@@ -362,15 +376,15 @@ function mode(v: 'race' | 'build') {
 const eye: V3 = [0, 420, -40];
 const look: V3 = [0, 400, 0];
 let camYaw = 0;
-let camPitch = 0.55;
+let camPitch = 0.8;
 let orbit = { yaw: 0, pitch: 0 };
 let zoom = 1;
 let flyTarget: { eye: V3; look: V3 } | null = null;
 function flyToEnd() {
   const end = sections.length ? sections[sections.length - 1].end : TOP;
   const d = dirOf(end.yaw, 0);
-  const l: V3 = add(end.p, mul(d, 30));
-  flyTarget = { eye: add(add(end.p, mul(d, -40)), [0, 40, 0]), look: l };
+  const l: V3 = add(end.p, mul(d, 40));
+  flyTarget = { eye: add(add(end.p, mul(d, -50)), [0, 55, 0]), look: l };
 }
 function updateCamera(dt: number) {
   if (view === 'build' && flyTarget) {
@@ -379,11 +393,10 @@ function updateCamera(dt: number) {
     return;
   }
   const m = followed();
-  // the way it's going (the track's way when it's slow)
-  const v = m.v;
-  const speed = len(v);
-  let fwd: V3 = speed > 20 ? norm(v) : dirOf(camYaw, 0);
-  fwd = norm([fwd[0], fwd[1] * 0.5, fwd[2]]);
+  // the board's way (the run is straight down it), the camera behind and above
+  const speed = len(m.v);
+  const sec = sections[Math.min(m.sec, sections.length - 1)];
+  const fwd: V3 = sec ? sec.boards[0].frame.t : dirOf(TOP.yaw, TOP.pitch);
   const targetYaw = Math.atan2(fwd[0], fwd[2]);
   // (turn the camera's heading toward the marble's, smoothly round the circle)
   let dy = targetYaw - camYaw;
@@ -391,10 +404,13 @@ function updateCamera(dt: number) {
   camYaw += dy * (1 - Math.exp(-dt * 2.2));
   const yaw = camYaw + orbit.yaw;
   const pitch = camPitch + orbit.pitch;
-  const dist = (16 + Math.min(14, speed * 0.03)) / zoom;
+  const dist = (38 + Math.min(12, speed * 0.03)) / zoom;
   const back: V3 = [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
-  const wantEye = add(m.p, mul(back, dist));
-  const wantLook = add(m.p, mul(fwd, 4));
+  // (over the middle of the board, so the whole field is in view)
+  const bf = sec ? sec.boards[0].frame : null;
+  const mid = bf ? add(m.p, mul(bf.b, -dotv(sub(m.p, bf.p), bf.b) * 0.6)) : m.p;
+  const wantEye = add(mid, mul(back, dist));
+  const wantLook = add(mid, mul(fwd, 10));
   const k = 1 - Math.exp(-dt * 6);
   for (let i = 0; i < 3; i++) { eye[i] += (wantEye[i] - eye[i]) * k; look[i] += (wantLook[i] - look[i]) * (1 - Math.exp(-dt * 10)); }
   // (the orbit a finger gave decays back behind)
@@ -612,7 +628,7 @@ function marbleModel(m: Marble): [Float32Array, Float32Array] {
 function visible(): Array<{ mesh: Mesh; model?: Float32Array }> {
   const out: Array<{ mesh: Mesh; model?: Float32Array }> = [];
   const m = followed();
-  const far = view === 'build' ? Infinity : 420;
+  const far = view === 'build' ? Infinity : 600;
   sections.forEach((s, i) => {
     if (view !== 'build' && Math.abs(i - m.sec) > 6) {
       // (a long way along the run: only if it's near in space)
@@ -621,7 +637,7 @@ function visible(): Array<{ mesh: Mesh; model?: Float32Array }> {
     }
     out.push({ mesh: sectionMeshes[i] });
   });
-  if (finishMesh) out.push({ mesh: finishMesh });
+  if (finishMesh && view !== 'build') out.push({ mesh: finishMesh });
   if (towerMesh_) out.push({ mesh: towerMesh_ });
   return out;
 }
@@ -656,6 +672,7 @@ function frame(now: number) {
     impacts = [];
     while (lag >= 1 / 60) {
       lag -= 1 / 60;
+      if (held()) { for (const m of marbles) { m.v = [0, 0, 0]; } raceTime += 1 / 60; continue; }
       step(course, marbles, 1 / 60, raceTime, impacts);
       raceTime += 1 / 60;
     }
@@ -685,14 +702,19 @@ function frame(now: number) {
   const lightVP = ortho(centre, SUN, span, 400);
   const vis = visible();
   const live: Array<{ mesh: Mesh; model?: Float32Array; normal?: Float32Array; tint?: V3; ghost?: boolean }> = [...vis];
-  // the spinners' bars, where they are now
+  // the spinners' arms where they are now, and the gate lifting
   {
     const bv: number[] = [];
-    for (const s of sections) for (const tr of s.trays) if (tr.spinner) barMesh(tr, raceTime, bv);
+    for (const s of sections) for (const b of s.boards) spinnerMesh(b, raceTime, bv);
     upload(bv, true, barMesh_);
     if (bv.length) live.push({ mesh: barMesh_ });
+    const gv: number[] = [];
+    if (sections.length) gateMesh(sections[0].boards[0], racing ? Math.min(9, raceTime * 24) : fromSection > 0 ? 9 : 0, gv);
+    upload(gv, true, gateMesh_);
+    if (gv.length) live.push({ mesh: gateMesh_ });
   }
-  const balls = marbles.map((m) => { const [M, N] = marbleModel(m); return { mesh: SPHERE, model: M, normal: N, tint: m.tint, mat: m.mat }; });
+  // (building, the marbles are out of the way: the end of the run is where the next board goes)
+  const balls = view === 'build' ? [] : marbles.map((m) => { const [M, N] = marbleModel(m); return { mesh: SPHERE, model: M, normal: N, tint: m.tint, mat: m.mat }; });
 
   // 1. the shadow map
   gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFb);
@@ -728,6 +750,7 @@ function frame(now: number) {
   gl.uniformMatrix4fv(u(prog, 'uLightVP'), false, lightVP);
   gl.uniform3fv(u(prog, 'uSun'), SUN);
   gl.uniform3fv(u(prog, 'uEye'), eye);
+  gl.uniform1f(u(prog, 'uCut'), view === 'build' ? 4 : 8);
   gl.uniform3fv(u(prog, 'uFog'), FOG);
   gl.uniform3fv(u(prog, 'uSkyTop'), SKY_TOP);
   gl.uniform3fv(u(prog, 'uSkyLow'), SKY_LOW);
@@ -843,10 +866,10 @@ function invert(m: Float32Array): Float32Array {
     seed = auto ? 21 : Math.floor(Math.random() * 90000) + 1;
     const r = seeded(seed);
     choices = [];
-    for (let i = 0; i < (auto ? 7 : 4); i++) choices.push(Math.floor(r() * 3));
+    for (let i = 0; i < (auto ? 6 : 4); i++) choices.push(Math.floor(r() * 3));
   }
   mine = params.get('marble') ?? saved?.mine ?? 'glass';
-  if (!FIELD.some((f) => f.name === mine)) mine = 'glass';
+  if (!FIELD.some((f) => f.name === mine)) mine = 'blue';
   follow = auto ? 'leader' : saved?.follow ?? 'mine';
   rebuildCourse();
   showFollow();

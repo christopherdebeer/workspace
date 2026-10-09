@@ -125,7 +125,7 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'marbles',
     title: 'Marble Run',
     group: 'Play',
-    blurb: 'Six marbles of glass, steel, wood and rubber let go from the top of a tower, down a track of slopes, bends, helices, drops, jumps, loops, slaloms, funnels and spinners; each rolls, bounces and spins as its material does. A chase camera follows yours. At the end, build: three sections on offer from the seed, pick one and the run grows downward. The run is its seed and your choices, in the address.',
+    blurb: 'Twelve marbles of glass, steel, wood and rubber behind a gate at the top of a wide, sloping board; the gate lifts and they go, down board after board of pegs, deflectors, splitters, chicanes, spinners, funnels and gates, bumping and parting, to a chequered line. Each rolls, bounces and spins as its material does. A chase camera follows yours. At the end, build: three boards on offer from the seed, pick one and the run grows downward. The run is its seed and your choices, in the address.',
     page: 'static/marbles.html',
     preview: 'preview',
     readme: 'static/marbles.md',

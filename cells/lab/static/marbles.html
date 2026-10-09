@@ -14,8 +14,8 @@
     nav button, nav a, nav span { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .8; padding: 4px 2px; color: #f4f6f8; text-shadow: 0 1px 3px rgba(0,0,0,.35); text-decoration: none; white-space: nowrap; }
     nav button:hover, nav a:hover { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
     nav #race { opacity: 1; font-weight: bold; }
-    #board { position: fixed; right: 12px; top: calc(max(12px, env(safe-area-inset-top)) + 40px); background: rgba(255,255,255,.72); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-radius: 12px; padding: 6px 10px; font-size: 12px; min-width: 150px; }
-    #board .row { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+    #board { position: fixed; right: 12px; top: calc(max(12px, env(safe-area-inset-top)) + 40px); background: rgba(255,255,255,.72); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-radius: 12px; padding: 5px 10px; font-size: 11px; min-width: 140px; line-height: 1.3; }
+    #board .row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
     #board .row i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
     #board .row b { width: 12px; opacity: .6; font-weight: normal; }
     #board .row span { flex: 1; }
@@ -49,7 +49,7 @@
   <div id="board"></div>
   <div id="hint">tap to follow the next marble · drag to look round · pinch to come close</div>
   <div id="offers"></div>
-  <div id="hands"><button id="follow" class="race-only">following glass</button><button id="add" class="build-only">add it</button><button id="undo" class="build-only">take the last off</button></div>
+  <div id="hands"><button id="follow" class="race-only">following blue</button><button id="add" class="build-only">add it</button><button id="undo" class="build-only">take the last off</button></div>
   <script type="module" src="{{app}}"></script>
 </body>
 </html>
