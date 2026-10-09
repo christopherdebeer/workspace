@@ -343,11 +343,11 @@ console.log('technic ok');
 {
   const { missions } = P;
   const ms = missions();
-  assert.equal(ms.length, 4);
+  assert.equal(ms.length, 5);
   for (const m of ms) {
     const w = new World();
     for (const p of m.pieces) assert.ok(w.fits(p), `mission ${m.id}: ${JSON.stringify(p)} fits`), w.add(p);
-    assert.ok(m.tray.every((l) => P.TRAY.some((o) => o.label === l)), `${m.id}: its tray is real`);
+    assert.ok(m.tray.every((l) => l === 'your builds' || P.TRAY.some((o) => o.label === l)), `${m.id}: its tray is real`);
   }
   // 'turn': a 24 between the 8 and the 40 makes the big one turn
   {
@@ -423,4 +423,50 @@ console.log('technic ok');
     assert.ok(rung, 'the rocker rang the bell');
   }
   console.log('missions ok');
+}
+
+// ─── always alive: the machine takes over from itself as the build changes ────────────────────
+{
+  // a pendulum swinging; a beam added elsewhere; the new machine carries the swing on
+  const w = new World();
+  w.add(piece('pin', 2, 10, 15, BOARD));
+  const b = w.add(piece('beam', 9, 10, 15, 0, 3));
+  const sim1 = new S.Sim(w.mechanism());
+  sim1.a[sim1.bodyOf(b)] = 0.6;
+  for (let t = 0; t < 0.5; t += 1 / 60) sim1.step(1 / 60);
+  const a1 = sim1.a[sim1.bodyOf(b)], w1 = sim1.w[sim1.bodyOf(b)];
+  assert.ok(Math.abs(w1) > 0.5, 'swinging');
+  const old = sim1.mech.bodyOf;
+  w.add(piece('beam', 5, 20, 5, 0));
+  const sim2 = new S.Sim(w.mechanism());
+  sim2.adopt(sim1, (id) => (id < old.length ? old[id] : -1));
+  assert.ok(Math.abs(sim2.a[sim2.bodyOf(b)] - a1) < 1e-9 && Math.abs(sim2.w[sim2.bodyOf(b)] - w1) < 1e-9, 'the swing carried over');
+  // a loose beam that fell stays fallen when something else is added
+  const w2 = new World();
+  const loose = w2.add(piece('beam', 7, 10, 10, 1));
+  const s1 = new S.Sim(w2.mechanism());
+  for (let t = 0; t < 3; t += 1 / 60) s1.step(1 / 60);
+  const [, y1] = s1.pose(loose, 10, 10);
+  assert.ok(y1 < 1, 'it fell');
+  const old2 = s1.mech.bodyOf;
+  w2.add(piece('gear', 8, 20, 10, 0));
+  const s2 = new S.Sim(w2.mechanism());
+  s2.adopt(s1, (id) => (id < old2.length ? old2[id] : -1));
+  assert.ok(Math.abs(s2.pose(loose, 10, 10)[1] - y1) < 1e-9, 'still on the floor');
+  // a gear train turning; the rotor's phase carries so the motor doesn't jerk
+  const w3 = new World();
+  for (const p of demo('gears').pieces) w3.add(p);
+  const g8 = w3.pieces.findIndex((p) => p && p.kind === 'gear' && p.n === 8);
+  const r = run(w3, 1, [{ speed: 100, rule: 'run', period: 2 }]);
+  const old3 = r.mech.bodyOf;
+  const before = r.sim.a[r.sim.bodyOf(g8)];
+  w3.add(piece('beam', 3, 2, 15, 0));
+  const s3 = new S.Sim(w3.mechanism());
+  s3.adopt(r.sim, (id) => (id < old3.length ? old3[id] : -1));
+  assert.ok(Math.abs(s3.a[s3.bodyOf(g8)] - before) < 1e-9);
+  const ctl = new S.Controller([{ speed: 100, rule: 'run', period: 2 }]);
+  for (let t = 0; t < 1 / 60 * 3; t += 1 / 60) { ctl.update(s3, 1 / 60); s3.step(1 / 60); }
+  const after = s3.a[s3.bodyOf(g8)];
+  assert.ok(Math.abs(after - before) < 0.6, `no jerk: ${after - before}`);
+  console.log('alive ok');
 }

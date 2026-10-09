@@ -466,13 +466,12 @@ let hand = 0;
 let handRot = 0;
 /** the placed piece that's selected (-1: none) */
 let selected = -1;
-/** a piece on its way: out of the tray (`from` -1), or lifted off the build to move */
-let carry: { spec: Omit<Piece, 'at' | 'z'>; from: number; original: Piece | null; anchor: V2; zHint: number } | null = null;
-/** where it would go, with what it brings (an axle, pins); or where it can't, and why */
-let ghost: { piece: Piece; extra?: Piece; pins?: Piece[]; blocked?: { reason: string; id?: number }; meshWith?: number } | null = null;
-/** running, or building */
-let sim: Sim | null = null;
-let ctl: Controller | null = null;
+/** a piece on its way: out of the tray (`from` -1), or lifted off the build to move; or a whole build of yours, as a group */
+let carry: { spec: Omit<Piece, 'at' | 'z'>; from: number; original: Piece | null; anchor: V2; zHint: number; group?: Piece[] } | null = null;
+/** a build in hand, from the drawer (instead of a tray piece) */
+let handBuild: Build | null = null;
+/** where it would go, with what it brings (an axle, pins); or where it can't, and why; a group, all of it */
+let ghost: { piece: Piece; extra?: Piece; pins?: Piece[]; blocked?: { reason: string; id?: number }; meshWith?: number; group?: Piece[] } | null = null;
 let simLag = 0;
 
 interface Saved { pieces: Piece[]; ports: Port[]; hand: number }
@@ -505,6 +504,7 @@ function load() {
   const d = params.get('demo');
   if (auto || d) {
     loadDemo(d ?? 'crank');
+    rebuild(false);
     return;
   }
   loadBuilds();
@@ -518,43 +518,44 @@ function load() {
     for (const p of b.pieces) if (world.fits(p)) world.add(p);
     ports = b.ports.map((x) => ({ ...x }));
   }
+  rebuild(false);
   showTitle();
   // (the start screen, to pick up where you were or start from something)
   showStart();
 }
 
-// ─── running ───────────────────────────────────────────────────────────────────────────────────
-function running() {
-  return !!sim;
-}
-function run() {
-  if (sim) return;
-  select(-1);
-  if (carry) { ghost = null; letGo(); }
+// ─── always alive ──────────────────────────────────────────────────────────────────────────────
+/** The machine, always: rebuilt as the build changes, keeping where everything has got to. */
+let sim: Sim = new Sim(world.mechanism());
+let ctl: Controller = new Controller(ports);
+let playing = true;
+/** The build changed: a new machine, taking over where the old one had got to (or, rewound, as built). */
+function rebuild(keep = true) {
+  const old = sim;
+  const oldWorld = old.mech.bodyOf;
   sim = new Sim(world.mechanism());
-  ctl = new Controller(ports);
-  simLag = 0;
-  bellRung = false;
-  inBell.clear();
-  cupT = 0;
-  document.body.classList.add('running');
-  showRun();
-  hum(true);
-  if (sim.motors.length && !sim.mech.hubs.length) showWhy('the motor needs the hub: nothing is powered', 4000);
-  else if (!sim.motors.length && sim.mech.hubs.length) showWhy('the hub has no motor to drive', 3000);
-}
-function stop() {
-  if (!sim) return;
-  sim = null;
-  ctl = null;
+  if (keep) sim.adopt(old, (id) => (id < oldWorld.length ? oldWorld[id] : -1));
+  ctl.ports = ports;
+  ctl.rebind();
   finger = null;
-  document.body.classList.remove('running');
+  if (!keep) { inBell.clear(); cupT = 0; }
+  if (keep && sim.motors.length && !sim.mech.hubs.length && !said_noHub) { showWhy('the motor needs the hub: nothing is powered', 4000); said_noHub = true; }
+  if (sim.mech.hubs.length) said_noHub = false;
+}
+let said_noHub = false;
+/** Back to as built (still playing, if it was). */
+function rewind() {
+  rebuild(false);
+  tick(1.5);
+}
+function setPlaying(on: boolean) {
+  playing = on;
+  document.body.classList.toggle('paused', !on);
   showRun();
-  hum(false);
-  rollAt(0);
+  if (!on) rollAt(0);
 }
 function showRun() {
-  $('run').textContent = sim ? 'stop' : 'run';
+  $('run').textContent = playing ? 'pause' : 'play';
 }
 
 // ─── what a hand does ──────────────────────────────────────────────────────────────────────────
@@ -587,7 +588,7 @@ function select(id: number) {
   if (id !== selected && id >= 0) tick(1.5);
   selected = id;
   document.body.classList.toggle('has-sel', id >= 0);
-  if (id >= 0 && !sim) { reveal(id); showWhy(kin?.words ?? '', 4000); } else { kin = null; }
+  if (id >= 0) { reveal(id); showWhy(kin?.words ?? '', 4000); } else { kin = null; }
   if (id >= 0) {
     const p = world.pieces[id]!;
     document.body.classList.toggle('sel-colour', p.kind === 'beam' || p.kind === 'crank');
@@ -597,6 +598,15 @@ function select(id: number) {
 const handSpec = (): Omit<Piece, 'at' | 'z'> => ({ ...TRAY[hand].spec, rot: handRot });
 /** Take the piece in hand out of the tray. */
 function pickUp() {
+  if (handBuild) {
+    const g = handBuild.pieces.map((p) => ({ ...p, at: [...p.at] as V2 }));
+    const first = g.find((p) => isPlanar(p.kind)) ?? g[0];
+    if (!first) return;
+    carry = { spec: { ...first }, from: -1, original: null, anchor: [0, 0], zHint: first.z, group: g };
+    ghost = null;
+    leanBack(true);
+    return;
+  }
   const spec = handSpec();
   // (a beam by its middle, a block by its first hole)
   const anchor: V2 = spec.kind === 'beam' ? [Math.floor((spec.n - 1) / 2), 0] : [0, 0];
@@ -613,11 +623,13 @@ function lift(id: number, anchor: V2) {
   carry = { spec, from: id, original: p, anchor, zHint: z };
   ghost = { piece: p };
   leanBack(true);
+  rebuild();
 }
 /** The carried piece follows the finger: the hole it's held by lands in the cell under it. */
 function carryTo(px: number, py: number) {
   if (!carry) return;
   whyUntil = 0;
+  if (carry.group) return carryGroupTo(px, py);
   const spec = carry.spec;
   let found: { piece: Piece; extra?: Piece; pins?: Piece[]; meshWith?: number } | null = null;
   let tried: Piece | null = null;
@@ -666,6 +678,26 @@ function carryTo(px: number, py: number) {
   ghost = found;
   showWhy();
 }
+/** A build of yours carried: all of it moves together, by its first piece, in its own layers. */
+function carryGroupTo(px: number, py: number) {
+  const g = carry!.group!;
+  const first = g.find((p) => isPlanar(p.kind)) ?? g[0];
+  const c = cellAt(px, py, first.z + 1);
+  if (!c) { ghost = null; showWhy(); return; }
+  const dx = c[0] - first.at[0], dy = c[1] - first.at[1];
+  const moved = g.map((p) => ({ ...p, at: [p.at[0] + dx, p.at[1] + dy] as V2 }));
+  // (every piece of it must fit, and its pins and axles too)
+  let bad: { reason: string; id?: number } | null = null;
+  for (const p of moved) {
+    const why = world.why(p);
+    if (why) { bad = { reason: why.reason, id: why.id }; break; }
+  }
+  const was = ghost?.piece;
+  const piece = moved.find((p) => isPlanar(p.kind)) ?? moved[0];
+  if (!was || was.at[0] !== piece.at[0] || was.at[1] !== piece.at[1]) tick(bad ? 0.5 : 1);
+  ghost = bad ? { piece, group: moved, blocked: bad } : { piece, group: moved };
+  showWhy();
+}
 /** The caption over the build: why a piece can't go, what it will do, what just happened. */
 let whyUntil = 0;
 function showWhy(text?: string, ms = 0) {
@@ -683,6 +715,8 @@ function showWhy(text?: string, ms = 0) {
     const other = b.id !== undefined && world.pieces[b.id] ? nameOf(world.pieces[b.id]!) : '';
     t = b.reason === 'board' ? 'off the board' : b.reason === 'hole' ? `no hole for it here${other ? `: the ${other} is solid there` : ''}` : b.reason === 'piece' ? `in the way: the ${other}` : 'no room here';
     if (b.reason === 'piece' && isPlanar(ghost.piece.kind) && !isDisc(ghost.piece.kind)) t += ' <button id="why-front">put it in front</button>';
+  } else if (ghost?.group) {
+    t = `${handBuild?.name ?? 'your build'}: ${ghost.group.length} pieces, as kept`;
   } else if (ghost) {
     const p = ghost.piece;
     if (ghost.meshWith !== undefined) {
@@ -720,6 +754,18 @@ function nameOf(p: Piece): string {
 }
 /** The frontmost hole under a point on the screen (any layer, the board last), and its layer. */
 function holeUnder(px: number, py: number): [number, number, number] | null {
+  // (the piece under the finger, where it has got to: its hole there, as built)
+  const on = pieceAt(px, py);
+  if (on && on.id !== carry?.from) {
+    const p = world.pieces[on.id];
+    // (a disc only by its hub: its face is wide, and the holes behind it are what's meant)
+    const [ox, oy] = p ? poseOf(on.id, p) : [0, 0];
+    if (p && isPlanar(p.kind) && (!isDisc(p.kind) || Math.hypot(on.hit[0] - ox, on.hit[1] - oy) < 0.6)) {
+      const [dx, dy] = rotXY(on.anchor[0], on.anchor[1], p.rot);
+      const f = world.flatAt(p.at[0] + dx, p.at[1] + dy, p.z);
+      if (f && f.hole !== 'none') return [p.at[0] + dx, p.at[1] + dy, p.z];
+    }
+  }
   for (let z = 8; z >= 0; z--) {
     const c = cellAt(px, py, z + 1);
     if (!c) continue;
@@ -744,6 +790,16 @@ function letGo() {
       showWhy('nowhere to go: back to the tray', 1800);
       return;
     }
+    if (g.group) {
+      const ids = g.group.filter((p) => world.fits(p)).map((p) => world.add(p));
+      history.push({ add: ids });
+      clickSound(g.piece);
+      select(ids[0] ?? -1);
+      showWhy(`${handBuild?.name ?? 'your build'} went on: ${ids.length} pieces`, 2200);
+      save();
+      rebuild();
+      return;
+    }
     const ids: number[] = [];
     if (g.extra) ids.push(world.add(g.extra));
     const id = world.add(g.piece);
@@ -766,6 +822,7 @@ function letGo() {
     }
   }
   save();
+  rebuild();
 }
 /** What a drop did, said once: the pins it took, the axle it brought, what it meshes with. */
 function said(g: { piece: Piece; extra?: Piece; pins?: Piece[]; meshWith?: number }, did: string) {
@@ -789,10 +846,12 @@ function change(id: number, to: Piece | null): boolean {
   world.restore(id, to);
   history.push({ change: id, from, to });
   save();
+  rebuild();
   return true;
 }
 function turn() {
   if (selected < 0) {
+    if (handBuild) return;
     handRot = (handRot + 1) % 4;
     tick(1.5);
     return;
@@ -820,9 +879,9 @@ function removeSelected() {
   popSound();
   select(-1);
   save();
+  rebuild();
 }
 function undo() {
-  if (running()) return;
   const a = history.pop();
   if (!a) return;
   if ('add' in a) {
@@ -838,6 +897,7 @@ function undo() {
     popSound();
   }
   save();
+  rebuild();
 }
 
 // ─── the view ──────────────────────────────────────────────────────────────────────────────────
@@ -912,7 +972,6 @@ function cellAt(px: number, py: number, z: number): V2 | null {
 }
 /** Where a piece is now: its origin and its turn (built, or as the machine has it). */
 function poseOf(id: number, p: Piece): [number, number, number] {
-  if (!sim) return [p.at[0], p.at[1], 0];
   return sim.pose(id, p.at[0], p.at[1]);
 }
 /** The piece under a point on the screen, and the hole it was taken by. */
@@ -971,13 +1030,15 @@ canvas.addEventListener('pointerdown', (e) => {
   touchLift = e.pointerType === 'touch' ? 44 : 0;
   const on = e.button === 0 && !e.shiftKey ? pieceAt(e.clientX, e.clientY + touchLift) : null;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, button: e.button, shift: e.shiftKey, on });
-  // (held still on a piece: it lifts, to be moved — no need to select it first)
+  // (held still on a piece: it lifts, to be moved — no need to pick it first)
   clearTimeout(holdTimer);
-  if (!sim && on && pointers.size === 1) {
+  if (on && pointers.size === 1) {
     const id = e.pointerId;
     holdTimer = window.setTimeout(() => {
       const p = pointers.get(id);
-      if (!p || p.moved || carry || sim || !p.on || !world.pieces[p.on.id]) return;
+      if (!p || p.moved || carry || !p.on || !world.pieces[p.on.id]) return;
+      sim.finger = null;
+      finger = null;
       select(p.on.id);
       lift(p.on.id, p.on.anchor);
       carryTo(p.x, p.y);
@@ -986,16 +1047,16 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   if (pointers.size >= 2) {
     if (carry && carry.from >= 0) { ghost = null; letGo(); }
-    if (sim) { sim.finger = null; finger = null; }
-  } else if (sim && on) {
-    // (a hold on the machine: a soft pull on that piece, there)
+    sim.finger = null;
+    finger = null;
+  } else if (on && on.id !== selected && !carry) {
+    // (a hand on a piece that isn't picked: a soft pull on it, there, as it goes)
     const b = sim.bodyOf(on.id);
-    if (b > 0) {
+    if (b > 0 && (sim.invM[b] || sim.invI[b])) {
       const ca = Math.cos(-sim.a[b]), sa = Math.sin(-sim.a[b]);
       const wx = on.hit[0] - sim.x[b], wy = on.hit[1] - sim.y[b];
       sim.finger = { body: b, lx: ca * wx - sa * wy, ly: sa * wx + ca * wy, tx: on.hit[0], ty: on.hit[1] };
       finger = { z: on.z };
-      touchLift = 0;
     }
   }
   two = null;
@@ -1020,14 +1081,15 @@ canvas.addEventListener('pointermove', (e) => {
     for (const q of pointers.values()) q.moved = true;
     return;
   }
-  if (sim && sim.finger && finger) {
-    const t = onPlane(e.clientX, e.clientY, finger.z);
+  if (sim.finger && finger && !carry) {
+    const t = onPlane(e.clientX, e.clientY + touchLift, finger.z);
     if (t) { sim.finger.tx = t[0]; sim.finger.ty = t[1]; }
+    if (p.moved) clearTimeout(holdTimer);
     return;
   }
   if (!p.moved) return;
-  // on the selected piece: it moves, by the hole it was taken by; anywhere else: the view turns
-  if (!sim && p.on && p.on.id === selected && !carry) lift(selected, p.on.anchor);
+  // on the picked piece: it moves, by the hole it was taken by; anywhere else: the view turns
+  if (p.on && p.on.id === selected && !carry) lift(selected, p.on.anchor);
   if (carry && carry.from >= 0) carryTo(e.clientX, e.clientY);
   else if (p.button === 2 || p.shift) slide(dx, dy);
   else orbit(dx, dy);
@@ -1049,24 +1111,22 @@ canvas.addEventListener('pointerup', (e) => {
   const p = pointers.get(e.pointerId);
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
-  if (sim) {
-    sim.finger = null;
-    finger = null;
-    // a tap on the hub as it runs: its program
-    if (p && !p.moved && performance.now() - p.t0 < 600 && p.on && world.pieces[p.on.id]?.kind === 'hub') openHub();
-    return;
-  }
+  const pulled = !!sim.finger;
+  sim.finger = null;
+  finger = null;
   if (carry && carry.from >= 0) return letGo();
   if (!p || p.moved || performance.now() - p.t0 > 600 || p.button === 2) return;
-  // a tap: on a piece, select it (or let it go); on nothing, let go of the selection
+  // a tap: on a piece, pick it (or let it go); on the picked hub, its program; on nothing, let go
   if (p.on && p.on.id === selected && world.pieces[selected]?.kind === 'hub') return openHub();
+  void pulled;
   select(p.on && p.on.id !== selected ? p.on.id : -1);
 });
 canvas.addEventListener('pointercancel', (e) => {
   clearTimeout(holdTimer);
   pointers.delete(e.pointerId);
   two = null;
-  if (sim) { sim.finger = null; finger = null; }
+  sim.finger = null;
+  finger = null;
   if (carry && carry.from >= 0) { ghost = null; letGo(); }
 });
 canvas.addEventListener('wheel', (e) => {
@@ -1090,20 +1150,33 @@ const drawer = $('drawer');
 }
 function showHand() {
   for (const b of drawer.querySelectorAll('.tile')) {
-    const i = Number((b as HTMLElement).dataset.i);
-    b.classList.toggle('on', i === hand);
+    const el = b as HTMLElement;
+    if (el.dataset.b) {
+      el.classList.toggle('on', handBuild?.id === el.dataset.b);
+      el.classList.toggle('later', !buildsOffered());
+      continue;
+    }
+    const i = Number(el.dataset.i);
+    b.classList.toggle('on', !handBuild && i === hand);
     b.classList.toggle('later', !!mission && !mission.tray.includes(TRAY[i].label));
   }
-  $('next').textContent = TRAY[hand].label;
+  $('next').textContent = handBuild ? handBuild.name : TRAY[hand].label;
 }
 const offered = (i: number) => !mission || mission.tray.includes(TRAY[i].label);
+const buildsOffered = () => !mission || mission.tray.includes('your builds');
+/** Your builds, as tiles in the drawer: each a piece to drag on whole. */
+function showBuildTiles() {
+  const kept = builds.filter((b) => b.pieces.length);
+  $('build-tiles').innerHTML = kept.map((b) => `<button class="tile" data-b="${b.id}">${schematic(b.pieces, 56, 56)}<span>${esc(b.name)}</span></button>`).join('') || '<p class="none">nothing kept yet: `keep` makes one of what\'s on the board</p>';
+  showHand();
+}
 function openDrawer() { drawer.classList.add('on'); tick(1.5); }
 function closeDrawer() { drawer.classList.remove('on'); }
-let trayPtr: { id: number; x0: number; y0: number; moved: boolean; chip: number } | null = null;
-const trayDown = (e: PointerEvent, chip: number) => {
+let trayPtr: { id: number; x0: number; y0: number; moved: boolean; chip: number; build?: Build } | null = null;
+const trayDown = (e: PointerEvent, chip: number, build?: Build) => {
   wake();
-  if (carry || sim) return;
-  trayPtr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, chip };
+  if (carry) return;
+  trayPtr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, chip, build };
   document.getElementById('hint')?.classList.remove('on');
 };
 const trayMove = (e: PointerEvent) => {
@@ -1113,7 +1186,8 @@ const trayMove = (e: PointerEvent) => {
     if (Math.hypot(dx, dy) < 8) return;
     trayPtr.moved = true;
     touchLift = e.pointerType === 'touch' ? 44 : 0;
-    if (trayPtr.chip >= 0) { hand = trayPtr.chip; handRot = 0; showHand(); closeDrawer(); }
+    if (trayPtr.build) { handBuild = trayPtr.build; showHand(); closeDrawer(); }
+    else if (trayPtr.chip >= 0) { hand = trayPtr.chip; handBuild = null; handRot = 0; showHand(); closeDrawer(); }
     pickUp();
     select(-1);
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -1126,7 +1200,8 @@ const trayUp = (e: PointerEvent) => {
   trayPtr = null;
   if (!t.moved) {
     if (e.type !== 'pointerup') return;
-    if (t.chip >= 0) { hand = t.chip; handRot = 0; showHand(); closeDrawer(); tick(1.5); save(); }
+    if (t.build) { handBuild = t.build; showHand(); closeDrawer(); tick(1.5); }
+    else if (t.chip >= 0) { hand = t.chip; handBuild = null; handRot = 0; showHand(); closeDrawer(); tick(1.5); save(); }
     else turn();
     return;
   }
@@ -1135,6 +1210,12 @@ const trayUp = (e: PointerEvent) => {
 drawer.addEventListener('pointerdown', (e) => {
   const tile = (e.target as HTMLElement).closest('.tile') as HTMLElement | null;
   if (!tile) return;
+  if (tile.dataset.b) {
+    if (!buildsOffered()) { showWhy('not in this one: later', 1500); tick(0.5); return; }
+    const b = builds.find((x) => x.id === tile.dataset.b);
+    if (b) trayDown(e, -1, b);
+    return;
+  }
   if (!offered(Number(tile.dataset.i))) { showWhy('not in this one: later', 1500); tick(0.5); return; }
   trayDown(e, Number(tile.dataset.i));
 });
@@ -1187,7 +1268,6 @@ function storeMissions() {
   try { localStorage.setItem(MSTORE, JSON.stringify({ done: [...missionsDone], work: missionWork })); } catch { /* */ }
 }
 function startMission(m: Mission, fresh = false) {
-  stop();
   mission = m;
   goalDone = false;
   world = new World();
@@ -1199,12 +1279,13 @@ function startMission(m: Mission, fresh = false) {
   select(-1);
   closeStart();
   showTitle();
-  showHand();
+  showBuildTiles();
+  rebuild(false);
   showWhy(`<b>${m.name}</b> · ${m.ask}`, 9000);
 }
 /** The goals, looked at as it runs: met once, said and kept. */
 function checkGoals() {
-  if (!mission || !sim || !ctl || goalDone) return;
+  if (!mission || goalDone) return;
   const g = mission.goal;
   const m = sim.mech;
   let met = false;
@@ -1212,6 +1293,11 @@ function checkGoals() {
     const b = m.bodyOf[g.piece];
     met = b >= 0 && Math.abs(sim.a[b]) >= Math.PI * 2 * g.turns;
   } else if (g.kind === 'wall') met = ctl.wall < 3;
+  else if (g.kind === 'copies') {
+    let turning = 0;
+    world.pieces.forEach((p, id) => { if (p && p.kind === g.of && p.n === 40 && Math.abs(sim.w[m.bodyOf[id]]) > 0.5) turning++; });
+    met = turning >= g.n;
+  }
   else if (g.kind === 'bell') met = bellRung;
   else if (g.kind === 'cup') {
     let inCup = false;
@@ -1234,18 +1320,18 @@ function checkGoals() {
   const i = MISSIONS.indexOf(mission);
   const next = MISSIONS[(i + 1) % MISSIONS.length];
   showWhy(`<b>it works!</b> ${mission.name} · <button id="why-next">next: ${next.name}</button>`, 0);
+  showBuildTiles();
 }
 /** A bell is rung by anything that comes to meet it (in its layer): on the touch, not while it rests there. */
 let bellRung = false;
 const inBell = new Set<string>();
 function watchBells() {
-  if (!sim) return;
   const m = sim.mech;
   m.bells.forEach((bell, bi) => {
-    const [bx, by] = sim!.point(bell.body, bell.x, bell.y);
+    const [bx, by] = sim.point(bell.body, bell.x, bell.y);
     m.contacts.forEach((c, ci) => {
       if (c.body === bell.body || c.z !== bell.z) return;
-      const [px, py] = sim!.point(c.body, c.x, c.y);
+      const [px, py] = sim.point(c.body, c.x, c.y);
       const key = `${bi}:${ci}`;
       const touching = Math.hypot(px - bx, py - by) < c.r + bell.r;
       if (touching && !inBell.has(key)) { bellSound(); bellRung = true; bellFlash = 1; }
@@ -1265,7 +1351,6 @@ const STARTERS: Array<{ from: string; name: string }> = [
 ];
 /** Open a build: it becomes the current one, on the board. */
 function openBuild(b: Build) {
-  stop();
   mission = null;
   world = new World();
   history = [];
@@ -1276,6 +1361,8 @@ function openBuild(b: Build) {
   storeBuilds();
   closeStart();
   showTitle();
+  showHand();
+  rebuild(false);
 }
 /** A new build from a starter (or nothing). */
 function newBuild(from: string) {
@@ -1332,9 +1419,10 @@ $('start').addEventListener('click', (e) => {
     const btn = t.closest('button')!;
     if (btn.textContent !== 'sure?') { btn.textContent = 'sure?'; setTimeout(() => { btn.textContent = 'forget'; }, 3000); return; }
     builds = builds.filter((x) => x.id !== b.id);
-    if (current === b.id) { current = null; world = new World(); ports = []; history = []; }
+    if (current === b.id) { current = null; world = new World(); ports = []; history = []; rebuild(false); }
     storeBuilds();
     showStart();
+    showHand();
     return;
   }
   openBuild(b);
@@ -1352,11 +1440,12 @@ addEventListener('keydown', (e) => {
   else if (k === 'c') recolour();
   else if (k === '[') nudge(-1);
   else if (k === ']') nudge(1);
-  else if (k === ' ') { e.preventDefault(); sim ? stop() : run(); }
+  else if (k === ' ') { e.preventDefault(); setPlaying(!playing); }
+  else if (k === 'w') rewind();
   else if (k === 'delete' || k === 'backspace') removeSelected();
   else if (k === 'escape') { select(-1); closeHub(); closeDrawer(); closeStart(); }
   else if (k === 'p') openDrawer();
-  else if (k === 'n') { do hand = (hand + 1) % TRAY.length; while (!offered(hand)); handRot = 0; showHand(); }
+  else if (k === 'n') { handBuild = null; do hand = (hand + 1) % TRAY.length; while (!offered(hand)); handRot = 0; showHand(); }
 });
 
 // ─── the buttons ───────────────────────────────────────────────────────────────────────────────
@@ -1392,7 +1481,19 @@ $('why').addEventListener('click', (e) => {
   }
 });
 btn('builds', () => ($('start').classList.contains('on') ? closeStart() : showStart()));
-btn('run', () => (sim ? stop() : run()));
+btn('run', () => setPlaying(!playing));
+btn('rewind', rewind);
+btn('keep', () => {
+  const ps = world.list();
+  if (!ps.length) { showWhy('nothing on the board to keep', 1500); return; }
+  const name = (prompt('a name for this piece', `piece ${builds.length + 1}`) ?? '').trim();
+  if (!name) return;
+  builds.unshift({ id: 'b' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), name, from: mission ? `mission:${mission.id}` : 'kept', pieces: ps.map((p) => ({ ...p, at: [...p.at] as V2 })), ports: ports.map((x) => ({ ...x })), savedAt: Date.now() });
+  storeBuilds();
+  showBuildTiles();
+  tone(note(3), 0, 0.8, 0.05);
+  showWhy(`kept as <b>${esc(name)}</b>: it's in the drawer, under your builds`, 3000);
+});
 let armed: { what: string; at: number } | null = null;
 /** A button that asks twice (a build is a lot to lose). */
 function twice(id: string, label: string, ask: string, f: () => void) {
@@ -1410,12 +1511,12 @@ function twice(id: string, label: string, ask: string, f: () => void) {
   });
 }
 twice('again', 'begin again', 'clear it all?', () => {
-  stop();
   world = new World();
   history = [];
   ports = [];
   select(-1);
   save();
+  rebuild(false);
 });
 btn('sound', () => {
   soundOn = !soundOn;
@@ -1469,8 +1570,8 @@ hubEl.addEventListener('click', (e) => {
 });
 function showReadings() {
   if (!hubEl.classList.contains('on')) return;
-  $('readings').textContent = ctl ? `tilt ${Math.round(ctl.tilt)}° · wall ${ctl.wall.toFixed(1)}` : 'not running';
-  if (sim) sim.motors.forEach((m, i) => {
+  $('readings').textContent = `tilt ${Math.round(ctl.tilt)}° · wall ${ctl.wall.toFixed(1)}${playing ? '' : ' · paused'}`;
+  sim.motors.forEach((m, i) => {
     const el = hubEl.querySelector(`.port[data-i="${i}"] .what`);
     const rpm = Math.round((m.omega / (2 * Math.PI)) * 60);
     if (el) el.textContent = rpm ? `turning · ${rpm > 0 ? '↻' : '↺'} ${Math.abs(rpm)} a minute` : 'still';
@@ -1516,7 +1617,7 @@ function wake() {
   noise = ac.createBuffer(1, ac.sampleRate * 0.05, ac.sampleRate);
   const ch = noise.getChannelData(0);
   for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ac.sampleRate * 0.004));
-  if (sim) hum(true);
+  hum(true);
 }
 function tone(freq: number, when: number, dur: number, gain: number) {
   if (!ac || !space) return;
@@ -1620,7 +1721,7 @@ function rollAt(speed: number) {
     rollVoice = { g, f };
   }
   const s = Math.min(1, speed / 8);
-  rollVoice.g.gain.setTargetAtTime(sim ? s * 0.06 : 0, ac.currentTime, 0.08);
+  rollVoice.g.gain.setTargetAtTime(playing ? s * 0.06 : 0, ac.currentTime, 0.08);
   rollVoice.f.frequency.setTargetAtTime(150 + 500 * s, ac.currentTime, 0.08);
 }
 let lastThud = 0;
@@ -1661,14 +1762,14 @@ function gather() {
     for (const { m, colour, dull, at } of meshesOf(p)) instance(m, x, y, p.z, ang + restAngle(p), colour, dull && kind === 0 ? 3 : kind, at);
   };
   // (a ball carried or selected: what shares its layer is tinted, since that's what it meets)
-  const ballLayer: number = sim ? -1 : carry?.spec.kind === 'ball' && ghost && !ghost.blocked ? ghost.piece.z : selected >= 0 && world.pieces[selected]?.kind === 'ball' ? world.pieces[selected]!.z : -1;
+  const ballLayer: number = carry?.spec.kind === 'ball' && ghost && !ghost.blocked ? ghost.piece.z : selected >= 0 && world.pieces[selected]?.kind === 'ball' ? world.pieces[selected]!.z : -1;
   world.pieces.forEach((p, id) => {
     if (!p) return;
     const [x, y, ang] = poseOf(id, p);
-    const kind = id === selected && !sim ? 2 : (kin?.pieces.has(id) && !sim) || (ballLayer >= 0 && p.z === ballLayer && p.kind !== 'ball' && isPlanar(p.kind)) || (p.kind === 'bell' && bellFlash > 0) ? 5 : 0;
+    const kind = id === selected ? 2 : kin?.pieces.has(id) || (ballLayer >= 0 && p.z === ballLayer && p.kind !== 'ball' && isPlanar(p.kind)) || (p.kind === 'bell' && bellFlash > 0) ? 5 : 0;
     put(p, x, y, ang, kind);
   });
-  if (kin && !sim) for (const [x, y, z] of kin.joints) instance(mesh('dot', () => sphereMesh(0.16)), x, y, z - 0.5, 0, [1, 1, 1], 0);
+  if (kin) for (const [x, y, z] of kin.joints) { const [jx, jy] = sim.point(sim.bodyOf(selected) > 0 ? sim.bodyOf(selected) : 0, x, y); instance(mesh('dot', () => sphereMesh(0.16)), jx, jy, z - 0.5, 0, [1, 1, 1], 0); }
   flush();
 }
 /** The piece on its way, see-through, where it would go (drawn after the rest, over it). */
@@ -1679,7 +1780,8 @@ function gatherGhost() {
     const put = (p: Piece) => {
       for (const { m, colour, at } of meshesOf(p)) instance(m, p.at[0], p.at[1], p.z, restAngle(p), colour, kind, at);
     };
-    put(ghost.piece);
+    if (ghost.group) for (const p of ghost.group) put(p);
+    else put(ghost.piece);
     if (ghost.extra) put(ghost.extra);
     for (const pin of ghost.pins ?? []) put(pin);
     // (a gear carried: its pitch circle, and the one it would mesh with)
@@ -1713,6 +1815,30 @@ function drawNext(W: number, Hh: number) {
   gl.viewport(x0, y0, s, s);
   gl.clear(gl.DEPTH_BUFFER_BIT);
   clearCounts();
+  if (handBuild) {
+    // (the whole build, about its middle)
+    const ps = handBuild.pieces;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = 0;
+    for (const q of ps) { x0 = Math.min(x0, q.at[0]); y0 = Math.min(y0, q.at[1]); x1 = Math.max(x1, q.at[0]); y1 = Math.max(y1, q.at[1]); z1 = Math.max(z1, q.z + (isPlanar(q.kind) ? 1 : q.n)); }
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, size = Math.max(x1 - x0, y1 - y0) / 2 + 2;
+    for (const q of ps) for (const { m, colour, dull, at } of meshesOf(q)) instance(m, q.at[0] - cx, q.at[1] - cy, q.z - z1 / 2, restAngle(q), colour, dull ? 3 : 0, at);
+    flush();
+    const a = time * 0.45;
+    const r = size * 1.3 + 1.8;
+    const eye: C3 = [Math.cos(a) * r, r * 0.55, Math.sin(a) * r];
+    const fwd = normalize(sub([0, 0, 0], eye));
+    const right = normalize(cross(fwd, [0, 1, 0]));
+    gl.uniformMatrix4fv(u(prog, 'uVP'), false, viewProj(eye, fwd, right, cross(right, fwd), 0.62, 1));
+    gl.uniform3fv(u(prog, 'uEye'), eye);
+    gl.uniform1f(u(prog, 'uPlain'), 1);
+    gl.uniform1f(u(prog, 'uShadow'), 0);
+    gl.disable(gl.BLEND);
+    drawAll();
+    gl.uniform1f(u(prog, 'uPlain'), 0);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.viewport(0, 0, W, Hh);
+    return;
+  }
   const spec = handSpec();
   const p: Piece = { ...spec, at: [0, 0], z: 0 };
   // (held by its middle)
@@ -1753,7 +1879,7 @@ function frame(now: number) {
   if (auto) yaw = 0.3 + 0.25 * Math.sin(time * 0.12);
   else easeView(dt);
   // the machine: fixed steps, however the frames come
-  if (sim && ctl) {
+  if (playing) {
     simLag = Math.min(simLag + dt, 0.1);
     while (simLag >= 1 / 60) {
       simLag -= 1 / 60;
@@ -1801,7 +1927,7 @@ function frame(now: number) {
   gl.uniform1f(u(flatProg, 'uWhich'), 1);
   gl.drawArrays(gl.TRIANGLES, 6, 6);
   // while a piece is carried: the layers as sheets of glass, the one it lands in lit
-  if (carry && !sim) {
+  if (carry) {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
@@ -1847,7 +1973,7 @@ function frame(now: number) {
   gatherGhost();
   drawAll();
   gl.depthMask(true);
-  if (!auto && !sim) drawNext(W, Hh);
+  if (!auto) drawNext(W, Hh);
   gl.bindVertexArray(null);
   /** (for the devtools: where a point of the world is on the screen) */
   const probe = (x: number, y: number, z: number): [number, number] => {
@@ -1858,9 +1984,9 @@ function frame(now: number) {
   };
   (window as unknown as { __technic: unknown }).__technic = {
     probe,
-    pieces: world.count(), running: !!sim, ghost: ghost?.piece ?? null, hand: TRAY[hand].label, selected, sel: world.pieces[selected] ?? null, carrying: !!carry, undo: history.length,
+    pieces: world.count(), playing, ghost: ghost?.piece ?? null, hand: handBuild ? handBuild.name : TRAY[hand].label, selected, sel: world.pieces[selected] ?? null, carrying: !!carry, undo: history.length,
     drawer: drawer.classList.contains('on'), start: $('start').classList.contains('on'), mission: mission?.id ?? null, goalDone, why: $('why').textContent, blocked: ghost?.blocked ?? null, view: VIEWS[viewI].name, builds: builds.map((b) => ({ id: b.id, name: b.name, pieces: b.pieces.length })), current,
-    list: world.pieces, motion: sim?.motion() ?? 0, poses: sim ? world.pieces.map((p, id) => (p ? poseOf(id, p) : null)) : null, tilt: ctl?.tilt ?? 0, wall: ctl?.wall ?? 0, ports,
+    list: world.pieces, motion: sim.motion(), poses: world.pieces.map((p, id) => (p ? poseOf(id, p) : null)), tilt: ctl.tilt, wall: ctl.wall, ports,
   };
   requestAnimationFrame(frame);
 }
@@ -1891,7 +2017,6 @@ addEventListener('resize', measureTray);
 resize();
 load();
 measureTray();
-showHand();
+showBuildTiles();
 showRun();
-if (auto) run();
 requestAnimationFrame(frame);

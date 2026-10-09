@@ -41,8 +41,18 @@ to give the first move away and leave the model underneath.
   pieces that mission is about; the rest wait. A goal met rings, says so, and offers the next.
   `?mission=turn|bell|cup|wall` opens one fresh.
 
-Still to come: the machine running all the time, with a rewind to as-built instead of a stop,
-so that tinkering while it moves is the normal way to work.
+- **It's always going.** There is no run: gravity, the floor and the motors are on from the
+  first piece. A piece dropped onto holes is pinned and stays; one dropped in the air falls,
+  which is the lesson. Pieces you add or move join the machine where it has got to (a swinging
+  beam keeps swinging; a dropped pin goes into the hole where the beam is *now*). `pause` stops
+  time, to build in peace; `rewind` puts everything back as built, and it goes on from there.
+  Tap a piece to pick it, then drag to move it; drag a piece you haven't picked to pull on it.
+- **Your builds are pieces.** `keep` makes what's on the board a piece of your own, named; it
+  sits in the drawer under *your builds*, drawn whole, and drags on whole, pins and axles and
+  program included. A mission walks through it: make it, keep it, use it twice.
+- **The lean back**: while a piece is carried the view tilts a little toward from-above, so the
+  layers in front of the board come apart on screen instead of stacking; it comes back when you
+  let go. If it bothers the hand, it's one line to drop.
 
 ## Hands
 
@@ -62,7 +72,10 @@ so that tinkering while it moves is the normal way to work.
 | take it away | `remove` | Delete |
 | let it go | tap nothing | Esc |
 | step back | `undo` | Z |
-| run it, stop it | `run` / `stop` | space |
+| pause it, let it go on | `pause` / `play` | space |
+| back as built | `rewind` | W |
+| keep what's on the board as a piece | `keep` | the same |
+| pull on something as it goes | drag a piece you haven't picked | the same |
 | your builds | `builds` (the start screen: continue one, rename or forget it, or start from something) | Esc closes it |
 | the hub's program | tap the hub (as it runs, or a selected one); `program` | the same |
 | look around | drag anything else; two fingers pinch and slide | drag; right-drag (or shift) slides; the wheel |
@@ -101,8 +114,10 @@ doesn't.
 
 ## Running
 
-`run` lets it go. Gravity pulls, the floor and the walls hold, the motor turns. Drag anything to
-pull on it (a crank, by hand). `stop` puts it all back as built.
+It runs from the start: gravity pulls, the floor and the walls hold, the motor turns. Drag a
+piece you haven't picked to pull on it (a crank, by hand). `pause` stops time; `rewind` puts it
+all back as built. When the build changes, the machine is read again from it and takes over
+from where the old one had got to, so nothing jumps.
 
 The motor needs the hub, anywhere on the build; without it nothing is powered. Tap the hub for
 its program: each motor has a port (A, B, …, in the order the motors went on), a speed, and a
@@ -113,6 +128,9 @@ rule:
 - **turn at the walls**: the other way when the machine comes within reach of a wall (a car
   shuttles).
 - **turn when tipped**: the other way when the hub tips past 35°.
+
+The missions, on the start screen: *make the big gear turn*, *ring the bell*, *a marble in the
+cup*, *make it a piece, use it twice*, *drive to the wall*.
 
 The hub also shows what it reads: its tilt, and the distance to the nearer wall.
 

@@ -128,6 +128,54 @@ export class Sim {
     }
   }
 
+  /**
+   * Take over from the sim before this one, as the build changes under it: every body that has
+   * a piece the old sim knew keeps that piece's place and motion, so a swing goes on swinging
+   * and a fallen beam stays fallen; what's new starts as built (or where the body it's joined
+   * to has got to).
+   */
+  adopt(old: Sim, oldBodyOf: (piece: number) => number) {
+    const mech = this.mech;
+    for (let b = 1; b < this.n; b++) {
+      const B = mech.bodies[b];
+      // (the first piece this body has that the old sim knew, and was free there)
+      let from = -1;
+      for (const id of B.pieces) {
+        const ob = oldBodyOf(id);
+        if (ob > 0) { from = ob; break; }
+      }
+      if (from < 0) {
+        // (new, and joined to something that has moved: it goes along with that)
+        for (const j of mech.joints) {
+          const o = j.a === b ? j.b : j.b === b ? j.a : -1;
+          if (o <= 0) continue;
+          const ob = mech.bodies[o].pieces.map(oldBodyOf).find((x) => x > 0);
+          if (ob !== undefined) { from = ob; break; }
+        }
+      }
+      if (from < 0) continue;
+      const [x, y] = old.point(from, B.cx, B.cy);
+      const a = old.a[from];
+      // (its motion: the old body's, at this point)
+      const rx = x - old.x[from], ry = y - old.y[from];
+      const vx = old.vx[from] - old.w[from] * ry, vy = old.vy[from] + old.w[from] * rx;
+      this.a[b] = a;
+      this.w[b] = old.w[from];
+      if (this.invM[b]) { this.x[b] = x; this.y[b] = y; this.vx[b] = vx; this.vy[b] = vy; }
+    }
+    // (gear meshes and motors keep their phase from where the gears are now)
+    for (const g of this.gears) {
+      const ca = Math.cos(this.a[g.a]), sa = Math.sin(this.a[g.a]);
+      const cb = Math.cos(this.a[g.b]), sb = Math.sin(this.a[g.b]);
+      const ax = this.x[g.a] + ca * g.lax - sa * g.lay, ay = this.y[g.a] + sa * g.lax + ca * g.lay;
+      const bx = this.x[g.b] + cb * g.lbx - sb * g.lby, by = this.y[g.b] + sb * g.lbx + cb * g.lby;
+      g.phi = Math.atan2(by - ay, bx - ax);
+      g.phi0 = g.phi - (this.a[g.a] * g.ra + this.a[g.b] * g.rb) / (g.ra + g.rb);
+    }
+    for (const m of this.motors) m.target = this.a[m.rotor] - this.a[m.stator];
+    this.time = old.time;
+  }
+
   /** A point of a body (given at rest, in the world) as it is now. */
   point(b: number, rx: number, ry: number): [number, number] {
     const B = this.mech.bodies[b];
@@ -391,6 +439,10 @@ export class Controller {
   port(i: number): Port {
     while (this.ports.length <= i) this.ports.push(defaultPort());
     return this.ports[i];
+  }
+  /** The build changed under it: look again at what the hub is part of. */
+  rebind() {
+    this.machine = null;
   }
   private machineOf(sim: Sim, hb: number): Set<number> {
     if (this.machine) return this.machine;

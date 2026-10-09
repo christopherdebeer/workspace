@@ -756,7 +756,7 @@ export const RULES: Array<{ rule: Rule; label: string }> = [
 export const defaultPort = (): Port => ({ speed: 60, rule: 'run', period: 2 });
 
 // ─── the missions: a machine with something missing, and a goal ───────────────────────────────
-export type Goal = { kind: 'turn'; piece: number; turns: number } | { kind: 'cup' } | { kind: 'bell' } | { kind: 'wall' };
+export type Goal = { kind: 'turn'; piece: number; turns: number } | { kind: 'cup' } | { kind: 'bell' } | { kind: 'wall' } | { kind: 'copies'; of: Kind; n: number };
 export interface Mission {
   id: string;
   name: string;
@@ -792,6 +792,11 @@ export function missions(): Mission[] {
     const pieces = demo('marble').pieces.filter((p) => !(p.kind === 'ramp' && p.n === 10) && !(p.kind === 'pin' && p.at[1] === 9 && p.at[0] === 12) && !(p.kind === 'pin' && p.at[0] === 22 && p.at[1] === 6) && !(p.kind === 'beam' && p.n === 7) && !(p.kind === 'axle' && p.at[0] === 26) && !(p.kind === 'motor') && !(p.kind === 'crank') && !(p.kind === 'axle' && p.at[0] === 20) && !(p.kind === 'pin' && p.at[0] === 18));
     pieces.push(P('cup', 0, 25, 0, 0, 0, 5), pin(25, 0, BOARD), pin(27, 0, BOARD));
     out.push({ id: 'cup', name: 'a marble in the cup', ask: 'the marbles roll off the yellow ramp and drop. another ramp, the other way, to carry one to the cup', pieces, ports: [], tray: ['ramp 4·3', 'ramp 6·2', 'ramp 8·6', 'ramp 10·3', 'ball'], goal: { kind: 'cup' } });
+  }
+  {
+    // a finished train: keep it as a piece, and put a second one on from the drawer
+    const pieces = demo('gears').pieces;
+    out.push({ id: 'twice', name: 'make it a piece, use it twice', ask: 'this train is done. `keep` makes it a piece of your own, in the drawer under your builds; drag a second one onto the board, and both will turn', pieces, ports: [{ speed: 70, rule: 'run', period: 2 }], tray: ['your builds'], goal: { kind: 'copies', of: 'gear', n: 2 } });
   }
   {
     // the car with no front wheel

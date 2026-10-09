@@ -15,10 +15,10 @@ await withWood(async (lab) => {
     const page = await lab.open(q, name.includes('preview') ? { width: 300, height: 375 } : {});
     await page.waitForTimeout(name.includes('run') ? 3500 : 800);
     const s = await lab.state(page);
-    console.log(name, JSON.stringify({ pieces: s.pieces, running: s.running, motion: Number(s.motion.toFixed(2)) }), await lab.shot(page, name));
+    console.log(name, JSON.stringify({ pieces: s.pieces, playing: s.playing, motion: Number(s.motion.toFixed(2)) }), await lab.shot(page, name));
     c.ok(`${name}: no errors`, page.errors.length === 0, page.errors);
     c.ok(`${name}: pieces`, s.pieces > 5, s.pieces);
-    if (name.includes('run')) c.ok(`${name}: it moves`, s.running && s.motion > 0.05, s.motion);
+    if (name.includes('run')) c.ok(`${name}: it moves`, s.playing && s.motion > 0.05, s.motion);
     await page.close();
   }
   if (!test) return;
@@ -81,15 +81,12 @@ await withWood(async (lab) => {
     s = await lab.state(page);
     c.ok('dropped, it went on with its axle', s.sel && s.sel.kind === 'gear' && s.sel.n === 24, s.sel);
     console.log('  the build now:', JSON.stringify(s.list.filter(Boolean).map((p) => `${p.kind}${p.n}@${p.at}/${p.z}`)));
-    await page.click('#run');
-    // (a whole turn of the big gear: a few seconds of machine time, longer in software frames)
+    // (always alive: a whole turn of the big gear takes a few seconds of machine time, longer in software frames)
     await page.waitForFunction(() => window.__technic.goalDone, null, { timeout: 120000 }).catch(() => {});
     await frames();
     s = await lab.state(page);
-    c.ok('run: the big gear turns and the mission is done', s.goalDone, { goalDone: s.goalDone, why: s.why });
+    c.ok('alive: the big gear turns and the mission is done', s.goalDone, { goalDone: s.goalDone, why: s.why });
     await lab.shot(page, 'technic-mission-done');
-    await page.click('#run');
-    await frames();
   } else c.ok('a probe to find the gap', false, gap);
   await page.click('#builds');
   await frames();
@@ -98,6 +95,7 @@ await withWood(async (lab) => {
   await frames();
   s = await lab.state(page);
   c.ok('a starter opens as a new build', !s.start && s.mission === null && s.pieces === 12 && s.builds.length === 1 && s.current === s.builds[0].id, { start: s.start, pieces: s.pieces, builds: s.builds });
+  await page.keyboard.press('n');
   const before = s.pieces;
   // the drawer: open it, take a ramp
   await page.click('#pieces');
@@ -155,31 +153,79 @@ await withWood(async (lab) => {
   c.ok('a ball dragged out of the drawer went on', s.pieces === before + 1 && s.sel && s.sel.kind === 'ball' && !s.drawer, { pieces: s.pieces, sel: s.sel, drawer: s.drawer });
   await page.click('#undo');
   await frames();
-  // run: it goes; stop: it's back
-  await page.click('#run');
-  await page.waitForTimeout(2500);
+  // always going: pause stops time, play starts it, rewind puts it back as built
+  await page.waitForTimeout(1500);
   await frames();
   s = await lab.state(page);
-  c.ok('run: the motor turns the train', s.running && s.motion > 0.5, s.motion);
+  c.ok('alive: the motor turns the train without being asked', s.playing && s.motion > 0.5, { playing: s.playing, motion: s.motion });
   await lab.shot(page, 'technic-running');
   await page.click('#run');
   await frames();
+  const a0 = (await lab.state(page)).poses[7][2];
+  await page.waitForTimeout(600);
+  await frames();
   s = await lab.state(page);
-  c.ok('stop: back as built', !s.running && s.pieces === before, { running: s.running, pieces: s.pieces });
+  c.ok('pause: time stops', !s.playing && Math.abs(s.poses[7][2] - a0) < 1e-9, { playing: s.playing, a0, a1: s.poses[7][2] });
+  await page.click('#rewind');
+  await frames();
+  s = await lab.state(page);
+  c.ok('rewind: back as built', Math.abs(s.poses[7][2]) < 1e-9 && s.pieces === before, { a: s.poses[7][2], pieces: s.pieces });
+  await page.click('#run');
+  await frames();
+  s = await lab.state(page);
+  c.ok('play: it goes again', s.playing, s.playing);
+  // keep: what's on the board becomes a piece of your own, in the drawer; dragged on, it goes on whole
+  page.once('dialog', (d) => d.accept('my train'));
+  await page.click('#keep');
+  await frames();
+  s = await lab.state(page);
+  c.ok('keep: a build named by you, with the pieces', s.builds.some((b) => b.name === 'my train' && b.pieces === before), s.builds);
+  await page.click('#pieces');
+  await page.waitForTimeout(400);
+  const tiles = await page.evaluate(() => [...document.querySelectorAll('#build-tiles .tile')].map((t) => t.textContent));
+  c.ok('the drawer has it under your builds', tiles.includes('my train'), tiles);
+  await page.evaluate(() => document.querySelector('#build-tiles .tile').scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(300);
+  const bt = await page.evaluate(() => { const r = document.querySelector('#build-tiles .tile').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
+  await touch('touchStart', [bt]);
+  for (let i = 1; i <= 6; i++) await touch('touchMove', [[bt[0] + i * 8, bt[1]]]);
+  await page.waitForTimeout(900);
+  await frames();
+  const spot = await page.evaluate(() => window.__technic.probe(20, 16, 1));
+  const bfrom = [bt[0] + 48, bt[1]];
+  for (let i = 1; i <= 12; i++) await touch('touchMove', [[bfrom[0] + ((spot[0] - bfrom[0]) * i) / 12, bfrom[1] + ((spot[1] + 44 - bfrom[1]) * i) / 12]]);
+  await frames();
+  s = await lab.state(page);
+  c.ok('carried whole: the caption says so', s.hand === 'my train' && /pieces, as kept/.test(s.why), { hand: s.hand, why: s.why, blocked: s.blocked });
+  await lab.shot(page, 'technic-carry-build');
+  await touch('touchEnd', []);
+  await page.waitForTimeout(200);
+  await frames();
+  s = await lab.state(page);
+  c.ok('dropped: a second train on the board', s.pieces === before * 2, { pieces: s.pieces, why: s.why });
+  await page.waitForTimeout(1200);
+  await frames();
+  s = await lab.state(page);
+  c.ok('and both turn', s.playing && s.motion > 0.5, s.motion);
+  await lab.shot(page, 'technic-two-trains');
+  await page.click('#undo');
+  await frames();
+  s = await lab.state(page);
+  c.ok('undo takes the whole of it back', s.pieces === before, s.pieces);
   // the start screen again: the build is there; a second starter makes a second build
   await page.click('#builds');
   await frames();
   s = await lab.state(page);
-  c.ok('builds shows the start screen with the build', s.start && s.builds.length === 1 && s.builds[0].pieces === before, s.builds);
+  c.ok('builds shows the start screen with the builds (the one kept too)', s.start && s.builds.length === 2 && s.builds.every((b) => b.pieces === before), s.builds);
   await page.click('.starter[data-from="marble"]');
   await frames();
   s = await lab.state(page);
-  c.ok('a second build, the marble run, is current', s.builds.length === 2 && s.current === s.builds[0].id && s.pieces > 10, { builds: s.builds, pieces: s.pieces });
+  c.ok('a third build, the marble run, is current', s.builds.length === 3 && s.current === s.builds[0].id && s.pieces > 10, { builds: s.builds, pieces: s.pieces });
   await page.reload();
   await page.waitForFunction(() => window.__technic, null, { timeout: 600000 });
   await frames();
   s = await lab.state(page);
-  c.ok('after a reload both builds are there, the marble run current', s.builds.length === 2 && s.current === s.builds[0].id, s.builds);
+  c.ok('after a reload the builds are there, the marble run current', s.builds.length === 3 && s.current === s.builds[0].id, s.builds);
   c.ok('no errors in the page', page.errors.length === 0, page.errors);
 });
 c.done();

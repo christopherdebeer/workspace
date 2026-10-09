@@ -62,14 +62,15 @@
     #start .mission .meta { font-style: italic; }
     #start .none { font-style: italic; opacity: .6; font-size: 14px; }
     #start #start-close { position: fixed; top: max(12px, env(safe-area-inset-top)); right: 14px; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .66; }
-    .running #hands, .running #next, .running #drawer { display: none; }
+    nav #rewind { opacity: 1; }
+    .paused #run { text-decoration: underline; text-underline-offset: 3px; }
+    #drawer .none { font-size: 12px; font-style: italic; opacity: .6; margin: 2px 2px 6px; }
     #hint { position: fixed; left: 0; right: 0; top: calc(max(12px, env(safe-area-inset-top)) + 120px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity 2s; pointer-events: none; padding: 0 24px; }
     #hint.on { opacity: .62; }
     /* the caption: why a piece can't go, what a drop did, what a selected piece does */
     #why { position: fixed; left: 50%; transform: translateX(-50%); top: calc(max(12px, env(safe-area-inset-top)) + 124px); max-width: min(92vw, 520px); text-align: center; font-size: 14px; line-height: 1.45; padding: 7px 14px; border-radius: 14px; background: rgba(255,255,255,.78); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 3px 12px rgba(40,40,40,.08); opacity: 0; transition: opacity .25s; pointer-events: none; }
     #why.on { opacity: 1; pointer-events: auto; }
     #why button { margin-left: 8px; font-size: 12px; letter-spacing: .08em; font-variant: small-caps; padding: 3px 10px; border-radius: 12px; background: #34383b; color: #f1f0eb; }
-    .running #why { top: calc(max(12px, env(safe-area-inset-top)) + 60px); }
     /* the hub's program: a sheet */
     #hub { position: fixed; left: 0; right: 0; bottom: 0; transform: translateY(105%); transition: transform .25s; background: rgba(255,255,255,.86); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-radius: 18px 18px 0 0; padding: 14px 18px max(18px, env(safe-area-inset-bottom)); box-shadow: 0 -6px 30px rgba(40,40,40,.12); max-height: 70vh; overflow-y: auto; }
     #hub.on { transform: none; }
@@ -91,14 +92,14 @@
 </head>
 <body>
   <canvas id="build"></canvas>
-  <nav><button id="run">run</button><button id="builds">builds</button><button id="view">face on</button><button id="again">begin again</button><button id="sound">sound · on</button><a href="{{readme}}">notes</a></nav>
+  <nav><button id="run">pause</button><button id="rewind">rewind</button><button id="builds">builds</button><button id="view">face on</button><button id="again">begin again</button><button id="sound">sound · on</button><a href="{{readme}}">notes</a></nav>
   <div id="why"></div>
-  <div id="hint">`pieces` opens the drawer: tap one, then drag it from its corner onto the board · tap a placed piece to select it, then drag to move it · run, and tap the hub</div>
+  <div id="hint">it's always going: `pieces` opens the drawer, drag one onto the board · tap a piece to pick it, then drag to move it; drag anything else to pull on it · `keep` makes what's on the board a piece of your own</div>
   <div id="next">beam 5</div>
   <div id="tray">
-    <div id="hands"><button id="pieces">pieces</button><button id="undo">undo</button><button id="turn">turn</button><button id="nearer" class="sel">nearer</button><button id="farther" class="sel">farther</button><button id="colour" class="sel-colour">colour</button><button id="program" class="sel-hub">program</button><button id="remove" class="sel">remove</button></div>
+    <div id="hands"><button id="pieces">pieces</button><button id="keep">keep</button><button id="undo">undo</button><button id="turn">turn</button><button id="nearer" class="sel">nearer</button><button id="farther" class="sel">farther</button><button id="colour" class="sel-colour">colour</button><button id="program" class="sel-hub">program</button><button id="remove" class="sel">remove</button></div>
   </div>
-  <div id="drawer"><div id="tiles"></div></div>
+  <div id="drawer"><h3>your builds</h3><div class="tiles" id="build-tiles"></div><div id="tiles"></div></div>
   <div id="start"><button id="start-close">close</button><h1>Technic</h1><p class="lead">beams, pins, gears, a motor and a hub, on a pegboard: build it, then it goes</p><h2>missions</h2><div class="row" id="missions"></div><h2>your builds</h2><div class="row" id="mine"></div><h2>start from</h2><div class="row" id="starters"></div></div>
   <div id="hub"><h2>the hub <span id="readings"></span></h2><div id="ports"></div><button id="hub-done">done</button></div>
   <script type="module" src="{{app}}"></script>
