@@ -55,10 +55,11 @@ The bundler keeps each `import()` lazy, so a page runs only its own experiment.
 ## Deploy
 
 From the repo root: `node scripts/cell-sync.mjs push lab --deploy --message "…"`. The
-experiments' devtools run against the lab's bundle (`EXPERIMENT=<id>`, Mistwood by default):
-`node cells/lab/devtools/<tool>.mjs`.
+experiments' devtools run against the lab's bundle (`EXPERIMENT=<id>`, Mistwood by default; `READY=__<id>`
+names the global the page reports itself on, `__mistwood` by default): `node cells/lab/devtools/<tool>.mjs`.
 
 ## The experiments
 
 - **Mistwood** (`client/mistwood/`): a walk through a seeded wood in fog. It was its own cell
   (`@c15r/mistwood`); that cell now only redirects here, keeping the query.
+- **Technic** (`client/technic/`): Bricks evolved: beams, pins and axles on a pegboard, gears, wheels, a motor and a hub; a position-based solver (`sim.ts`) runs it. Rules and solver tested on their own (`devtools/technic.test.mjs`).

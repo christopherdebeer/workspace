@@ -100,6 +100,23 @@ export const EXPERIMENTS: Experiment[] = [
     ],
   },
   {
+    id: 'technic',
+    title: 'Technic',
+    group: 'Play',
+    blurb: 'Bricks, evolved: beams, pins and axles on a pegboard, gears that mesh, wheels that roll, a motor and a hub that tells it what to do. Build in layers in front of the board, then run it: gravity, the floor, the motor turning; drag anything to pull on it.',
+    page: 'static/technic.html',
+    preview: 'preview&demo=crank',
+    readme: 'static/technic.md',
+    presets: [
+      { label: 'build', query: '' },
+      { label: 'a gear train', query: 'demo=gears' },
+      { label: 'a crank and rocker', query: 'demo=crank' },
+      { label: 'a car', query: 'demo=car' },
+      { label: 'pendulums', query: 'demo=swing' },
+      { label: 'watch it run', query: 'auto&demo=car' },
+    ],
+  },
+  {
     id: 'fungi',
     title: 'Hat-throwers',
     group: 'Drawings',

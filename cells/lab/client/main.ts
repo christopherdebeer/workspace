@@ -10,6 +10,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   mistwood: () => import('./mistwood/main'),
   plate: () => import('./plate/main'),
   bricks: () => import('./bricks/main'),
+  technic: () => import('./technic/main'),
   fungi: () => import('./fungi/main'),
   markovs: () => import('./markovs/main'),
   crystals: () => import('./crystals/main'),
