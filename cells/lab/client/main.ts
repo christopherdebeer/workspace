@@ -11,6 +11,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   plate: () => import('./plate/main'),
   bricks: () => import('./bricks/main'),
   technic: () => import('./technic/main'),
+  marbles: () => import('./marbles/main'),
   fungi: () => import('./fungi/main'),
   markovs: () => import('./markovs/main'),
   crystals: () => import('./crystals/main'),

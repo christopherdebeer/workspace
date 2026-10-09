@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" data-exp="marbles">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#5a8fd0">
+  <title>Marble Run</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #dde3ea; overflow: hidden; touch-action: none; }
+    body { color: #26292d; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    button { all: unset; cursor: pointer; box-sizing: border-box; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; right: 14px; display: flex; gap: 14px; flex-wrap: wrap; }
+    nav button, nav a, nav span { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .8; padding: 4px 2px; color: #f4f6f8; text-shadow: 0 1px 3px rgba(0,0,0,.35); text-decoration: none; white-space: nowrap; }
+    nav button:hover, nav a:hover { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
+    nav #race { opacity: 1; font-weight: bold; }
+    #board { position: fixed; right: 12px; top: calc(max(12px, env(safe-area-inset-top)) + 40px); background: rgba(255,255,255,.72); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-radius: 12px; padding: 6px 10px; font-size: 12px; min-width: 150px; }
+    #board .row { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+    #board .row i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
+    #board .row b { width: 12px; opacity: .6; font-weight: normal; }
+    #board .row span { flex: 1; }
+    #board .row em { font-style: normal; opacity: .6; font-variant-numeric: tabular-nums; }
+    #board .row.me span { font-weight: bold; }
+    #clock { position: fixed; left: 14px; top: calc(max(12px, env(safe-area-inset-top)) + 40px); font-size: 13px; color: #f4f6f8; text-shadow: 0 1px 3px rgba(0,0,0,.35); font-variant-numeric: tabular-nums; }
+    #hands { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 14px max(14px, env(safe-area-inset-bottom)); display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+    #hands button { min-width: 72px; height: 48px; border-radius: 24px; text-align: center; line-height: 48px; padding: 0 14px; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 15px; letter-spacing: .1em; font-variant: small-caps; background: rgba(255,255,255,.72); box-shadow: 0 4px 14px rgba(20,30,40,.12); }
+    #hands button:active { background: #fff; }
+    #hands .build-only { display: none; }
+    .building #hands .build-only { display: inline-block; }
+    .building #hands .race-only { display: none; }
+    /* building: the three on offer */
+    #offers { position: fixed; left: 0; right: 0; bottom: 76px; display: none; justify-content: center; gap: 8px; padding: 0 12px; flex-wrap: wrap; }
+    .building #offers { display: flex; }
+    #offers .offer { width: 112px; padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,.72); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); display: flex; flex-direction: column; gap: 2px; box-shadow: 0 4px 14px rgba(20,30,40,.12); }
+    #offers .offer b { font-size: 14px; font-weight: normal; }
+    #offers .offer span { font-size: 11px; opacity: .6; }
+    #offers .offer.on { background: #26292d; color: #f4f6f8; }
+    #offers .offer.on span { opacity: .75; }
+    #offers #more { font-size: 12px; letter-spacing: .1em; font-variant: small-caps; padding: 8px 10px; opacity: .8; color: #f4f6f8; text-shadow: 0 1px 3px rgba(0,0,0,.35); }
+    #hint { position: fixed; left: 0; right: 0; bottom: 84px; text-align: center; font-size: 14px; font-style: italic; color: #f4f6f8; text-shadow: 0 1px 3px rgba(0,0,0,.4); pointer-events: none; }
+    .building #hint { display: none; }
+    .preview nav, .preview #board, .preview #clock, .preview #hands, .preview #offers, .preview #hint { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="run"></canvas>
+  <nav><button id="race">from the top</button><button id="here">from the end</button><button id="build">build</button><button id="new">a new run</button><span id="seed"></span><button id="sound">sound · on</button><a href="{{readme}}">notes</a></nav>
+  <div id="clock"></div>
+  <div id="board"></div>
+  <div id="hint">tap to follow the next marble · drag to look round · pinch to come close</div>
+  <div id="offers"></div>
+  <div id="hands"><button id="follow" class="race-only">following glass</button><button id="add" class="build-only">add it</button><button id="undo" class="build-only">take the last off</button></div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

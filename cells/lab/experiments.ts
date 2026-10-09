@@ -122,6 +122,22 @@ export const EXPERIMENTS: Experiment[] = [
     ],
   },
   {
+    id: 'marbles',
+    title: 'Marble Run',
+    group: 'Play',
+    blurb: 'Six marbles of glass, steel, wood and rubber let go from the top of a tower, down a track of slopes, bends, helices, drops, jumps, loops, slaloms, funnels and spinners; each rolls, bounces and spins as its material does. A chase camera follows yours. At the end, build: three sections on offer from the seed, pick one and the run grows downward. The run is its seed and your choices, in the address.',
+    page: 'static/marbles.html',
+    preview: 'preview',
+    readme: 'static/marbles.md',
+    presets: [
+      { label: 'race', query: '' },
+      { label: 'run 21', query: 'seed=21&run=0.1.2.0.1.2.0' },
+      { label: 'run 7, the long way', query: 'seed=7&run=0.1.2.0.1.2.0.1.2.0.1.2' },
+      { label: 'follow the steel', query: 'seed=21&run=0.1.2.0.1.2.0&marble=steel' },
+      { label: 'watch', query: 'auto' },
+    ],
+  },
+  {
     id: 'fungi',
     title: 'Hat-throwers',
     group: 'Drawings',
