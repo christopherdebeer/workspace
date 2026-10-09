@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-exp="fungi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c110b">
+  <title>Hat-throwers</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0c110b; overflow: hidden; touch-action: none; }
+    body { color: #eef0e6; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    button, a { all: unset; cursor: pointer; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 16px; right: 16px; display: flex; gap: 16px; align-items: baseline; }
+    nav button, nav a { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .72; text-shadow: 0 1px 6px rgba(0,0,0,.6); }
+    nav button:hover, nav a:hover { opacity: 1; }
+    /* the timelapse's clock, as the camera would stamp it */
+    #clock { margin-left: auto; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; letter-spacing: .08em; opacity: .8; text-shadow: 0 1px 6px rgba(0,0,0,.6); }
+    #foot { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); text-shadow: 0 1px 8px rgba(0,0,0,.7); }
+    #label i { display: block; font-size: 22px; }
+    #label span { display: block; font-size: 12px; letter-spacing: .1em; font-variant: small-caps; opacity: .7; margin-top: 3px; }
+    #scrub { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; margin: 12px 0 0; background: transparent; }
+    #scrub::-webkit-slider-runnable-track { height: 1px; background: rgba(238,240,230,.45); }
+    #scrub::-moz-range-track { height: 1px; background: rgba(238,240,230,.45); }
+    #scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%; background: #eef0e6; margin-top: -5px; }
+    #scrub::-moz-range-thumb { width: 11px; height: 11px; border-radius: 50%; background: #eef0e6; border: 0; }
+    .preview nav, .preview #foot { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="macro"></canvas>
+  <nav><button id="another">another</button><button id="play">pause</button><a href="{{readme}}">notes</a><span id="clock"></span></nav>
+  <div id="foot"><div id="label"></div><input id="scrub" type="range" min="0" max="1000" value="0"></div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

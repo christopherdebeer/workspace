@@ -26,7 +26,7 @@ import { cellJobs } from './vendor/cell-jobs.js';
 import { PRESETS } from './engine/presets';
 import VENDOR from './engine/vendor-info';
 import { classify, play, judge, metrics, sessionFindings, CRITIQUE, CRITIQUE_FIXES, HARNESS_VERSION } from './lib/runner';
-import { scoreRun, SCORE_VERSION, WEIGHTS } from './lib/score';
+import { scoreRun, SCORE_VERSION, WEIGHTS, WEIGHTS_HIDDEN_ROLE } from './lib/score';
 import { engineFingerprint, changedMechanics } from './lib/fingerprint';
 import { jevClient } from './lib/jev';
 import { evaluate, proposeRound, prepareProposal, decideRound, startPlan, runPlanned, finishPlan, getPlan, resumePlan, recentPlans, publicEval, compactEval, findEval, diagnose, STALL_ROUNDS, type EvalRecord, type RunDigest, type Plan } from './lib/evaluate';
@@ -283,25 +283,27 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
       const game = need(a.game, 'game');
       await gameOrThrow(game);
       const s = await db.getSuite(game);
-      return { ...s, hash: db.suiteHash(s) };
+      return { ...s, bot: db.botSplit(s), probe: s.probe ?? 2, hash: db.suiteHash(s) };
     }
     case 'set_suite': {
       if (!owner) throw new ToolError('set_suite is owner-only (it moves the goalposts)', 403);
       const game = need(a.game, 'game');
       await gameOrThrow(game);
       const cur = await db.getSuite(game);
-      const ints = (v: unknown, d: number[]) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite).slice(0, 12) : d);
+      const ints = (v: unknown, d: number[]) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite).slice(0, 48) : d);
       const s: db.Suite = {
         train: { seeds: ints(a.train?.seeds, cur.train.seeds), players: ints(a.train?.players, cur.train.players) },
         test: { seeds: ints(a.test?.seeds, cur.test.seeds), players: ints(a.test?.players, cur.test.players) },
         maxSteps: num(a.maxSteps, cur.maxSteps, 10, 300),
         epsilon: num(a.epsilon, cur.epsilon, 0, 0.5),
+        ...(a.probe !== undefined ? { probe: num(a.probe, cur.probe ?? 2, 0, 10) } : cur.probe !== undefined ? { probe: cur.probe } : {}),
+        ...(a.bot && typeof a.bot === 'object' ? { bot: { seeds: ints((a.bot as Record<string, unknown>).seeds, db.botSplit(cur).seeds).slice(0, 60), players: ints((a.bot as Record<string, unknown>).players, db.botSplit(cur).players) } } : cur.bot ? { bot: cur.bot } : {}),
       };
       // Noise belongs to the suite it was measured on: a new suite starts unmeasured.
       if (db.suiteHash(s) === db.suiteHash(cur)) Object.assign(s, { noise: cur.noise, noiseContext: cur.noiseContext });
       if (s.train.seeds.some((x) => s.test.seeds.includes(x))) throw new ToolError('train and test seeds must not overlap');
       const games = (s.train.seeds.length * s.train.players.length + s.test.seeds.length * s.test.players.length);
-      if (games > 48) throw new ToolError(`${games} games per eval is too many (≤ 48; each is its own invocation)`);
+      if (games > 96) throw new ToolError(`${games} games per eval is too many (≤ 96; each is its own invocation)`);
       await db.setSuite(game, s);
       return { ...s, hash: db.suiteHash(s), note: 'a new suite hash — previous evals no longer count as baselines' };
     }
@@ -329,6 +331,7 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
         return { ...summary, turns: blob.session.turns.slice(from, from + num(a.limit, 200, 1, 400)).map((t) => ({ step: t.step, round: t.round, turn: t.turn, player: t.player, valid: t.valid, move: t.label, confidence: t.confidence, runnerUp: t.top?.[1] ?? null, ahead: t.ahead, fallback: t.fallback })) };
       }
       if (view === 'log') return { ...summary, log: blob.session.log.slice(num(a.from, 0, 0, 1e6), num(a.from, 0, 0, 1e6) + num(a.limit, 300, 1, 1000)) };
+      if (view === 'probes') return { ...summary, probes: (blob.session as { probes?: unknown[] }).probes ?? [] };
       return { ...summary, findings: blob.findings, judgement: blob.judgement };
     }
     case 'climb_log': {
@@ -351,11 +354,11 @@ async function tool(name: string, a: Args, caller: string): Promise<unknown> {
     }
     case 'screen': {
       // Free structural preview of a design (no Jev): rules, preset, or a stored version.
-      const rules = a.rules ? String(a.rules) : a.preset ? PRESETS[String(a.preset)] : a.game ? (await db.getDefinition(need(a.game, 'game'), a.version !== undefined ? Number(a.version) : undefined))?.rules : a.edits ? (await resolveRules(a, need(a.game, 'game'))).rules : undefined;
+      const rules = a.rules ? String(a.rules) : a.preset ? PRESETS[String(a.preset)] : a.edits ? (await resolveRules(a, need(a.game, 'game'))).rules : a.game ? (await db.getDefinition(need(a.game, 'game'), a.version !== undefined ? Number(a.version) : undefined))?.rules : undefined;
       if (!rules) throw new ToolError('give rules, preset, or game (+version / edits)');
       const suite = a.game ? await db.getSuite(String(a.game)) : null;
       const ints = (v: unknown, d: number[]) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite).slice(0, 24) : d);
-      return screen(rules, { seeds: ints(a.seeds, suite?.train.seeds ?? [1, 2, 3, 4, 5, 6]), players: ints(a.players, suite?.train.players ?? [3, 4]), maxSteps: num(a.maxSteps, suite?.maxSteps ?? 300, 10, 400), deadlineAt: Date.now() + 40_000 });
+      return screen(rules, { seeds: ints(a.seeds, suite?.train.seeds ?? [1, 2, 3, 4, 5, 6]), players: ints(a.players, suite?.train.players ?? [3, 4]), maxSteps: num(a.maxSteps, suite?.maxSteps ?? 300, 10, 400), deadlineAt: Date.now() + 40_000, policy: a.policy === 'random' ? 'random' : 'greedy' });
     }
     case 'plans':
       return recentPlans(num(a.limit, 10, 1, 50));
@@ -429,19 +432,19 @@ const TOOLS = [
   { name: 'classify', kind: 'act', description: 'What a definition asks for vs what the engine has: declared mechanics (implemented/partial/missing), Jev reading the prose against the 209-mechanic catalogue, card effects nothing handles, rule facts, schema errors. ~1 Jev call.', inputSchema: S({ game, version, preset: { type: 'string' }, rules }) },
   { name: 'playtest', kind: 'act', description: 'One game played by Jev (async job): classification, per-move record, session judgement + qualitative critique, score/v2, findings. Poll with job.', inputSchema: S({ game, version, preset: { type: 'string' }, rules, players: { type: 'number' }, seed: { type: 'number' }, maxSteps: { type: 'number' }, persona: { type: 'string' } }) },
   { name: 'suite', kind: 'read', description: 'A game\'s eval suite: train and held-out test seeds × player counts, maxSteps, epsilon (smallest change acted on), measured noise.', inputSchema: S({ game }, ['game']) },
-  { name: 'set_suite', kind: 'act', description: 'Owner-only: change a game\'s suite (≤24 games per eval; train/test seeds disjoint). Invalidates baselines.', inputSchema: S({ game, train: { type: 'object' }, test: { type: 'object' }, maxSteps: { type: 'number' }, epsilon: { type: 'number' } }, ['game']) },
-  { name: 'eval', kind: 'act', description: 'Evaluate a definition version over its suite (async job, ≤300 s): every run judged and scored; returns train runs in full and the held-out test split as a score only. The first eval of the head is the climb baseline.', inputSchema: S({ game, version, tag: { type: 'string' } }, ['game']) },
+  { name: 'set_suite', kind: 'act', description: 'Owner-only: change a game\'s suite (≤96 judged games per eval; train/test seeds disjoint; bot: {seeds, players} for the greedy stand-in split, default 30 seeds × the train player counts; probe: the questionnaire every n-th decision on judged runs, default 2, 0 off). Invalidates baselines.', inputSchema: S({ game, train: { type: 'object' }, test: { type: 'object' }, bot: { type: 'object' }, probe: { type: 'number' }, maxSteps: { type: 'number' }, epsilon: { type: 'number' } }, ['game']) },
+  { name: 'eval', kind: 'act', description: 'Evaluate a definition version over its suite (async job): every judged run scored, train runs in full, the held-out test split as a score only, and the bot split (greedy stand-in, no judge, in volume) as each measure\'s mean ± SE and the targets term the rules declare. The first eval of the head is the climb baseline.', inputSchema: S({ game, version, tag: { type: 'string' } }, ['game']) },
   { name: 'noise', kind: 'act', description: 'Measure eval noise (async job): re-evaluate the head and compare with its baseline; the larger delta becomes the suite noise floor that proposals must beat. Run once before climbing.', inputSchema: S({ game }, ['game']) },
-  { name: 'propose', kind: 'act', description: 'One hill-climb round (async job): apply ONE change (rules or exact edits vs head) with a rationale, eval it, keep only if train improves by ≥ epsilon AND test improves; otherwise revert. After 3 rounds without a keep the climb is stalled and a diagnosis is returned.', inputSchema: S({ game, rules, edits, rationale: { type: 'string', description: 'the root cause this change addresses, from train runs only' } }, ['game', 'rationale']) },
+  { name: 'propose', kind: 'act', description: 'One hill-climb round (async job): apply ONE change (rules or exact edits vs head) with a rationale, eval it, keep if train improves by ≥ epsilon AND test improves, or if the targets term on the bot split improves by ≥ max(0.02, 2 × its jackknife SE) with the judge suite within its noise floor; otherwise revert. The round reports every measure\'s paired delta with its SE. After 3 rounds without a keep the climb is stalled and a diagnosis is returned.', inputSchema: S({ game, rules, edits, rationale: { type: 'string', description: 'the root cause this change addresses, from train runs only' } }, ['game', 'rationale']) },
   { name: 'baseline', kind: 'read', description: 'The eval of the current head on this engine + suite (the number a proposal must beat), or none.', inputSchema: S({ game }, ['game']) },
   { name: 'evals', kind: 'read', description: 'Eval history for a game (train/test scores by version and engine).', inputSchema: S({ game, limit: { type: 'number' } }, ['game']) },
   { name: 'eval_detail', kind: 'read', description: 'One eval (train runs with score parts and findings; test as a score). diagnose:true adds the stall diagnosis.', inputSchema: S({ id: { type: 'string' }, diagnose: { type: 'boolean' } }, ['id']) },
-  { name: 'run', kind: 'read', description: 'One run: view summary | turns | log | findings. Held-out (test) runs show only their score.', inputSchema: S({ id: { type: 'string' }, view: { type: 'string', enum: ['summary', 'turns', 'log', 'findings'] }, from: { type: 'number' }, limit: { type: 'number' } }, ['id']) },
+  { name: 'run', kind: 'read', description: 'One run: view summary | turns | log | findings | probes (the questionnaire\'s answers per probed turn). Held-out (test) runs show only their score.', inputSchema: S({ id: { type: 'string' }, view: { type: 'string', enum: ['summary', 'turns', 'log', 'findings', 'probes'] }, from: { type: 'number' }, limit: { type: 'number' } }, ['id']) },
   { name: 'climb_log', kind: 'read', description: 'Every round of a game\'s climb: change, rationale, baseline vs candidate train/test, delta, decision and reason.', inputSchema: S({ game }, ['game']) },
   { name: 'backlog', kind: 'read', description: 'The mechanic worklist: gaps evals keep hitting (missing/partial mechanics, unhandled card effects, engine faults, moves System One cannot play), ranked by hits × games. Fix these in engine/ and the next eval shows it.', inputSchema: S({ kind: { type: 'string' }, limit: { type: 'number' } }) },
   { name: 'engines', kind: 'read', description: 'Engine versions seen (code fingerprints) and which mechanics changed between consecutive versions.', inputSchema: S({}) },
   { name: 'regress', kind: 'act', description: 'After an engine change: re-evaluate every game\'s head on the current engine (one job per game).', inputSchema: S({ games: { type: 'array', items: { type: 'string' } } }) },
-  { name: 'screen', kind: 'read', description: 'Free structural preview (no Jev): N seeded games of rules / a preset / a stored version (or edits vs head) with a greedy stand-in player — outcomes by role, balance, rounds, move mix, errors. Screen a change before paying for propose.', inputSchema: S({ game, version, rules, edits, preset: { type: 'string' }, seeds: { type: 'array', items: { type: 'number' } }, players: { type: 'array', items: { type: 'number' } }, maxSteps: { type: 'number' } }) },
+  { name: 'screen', kind: 'read', description: 'Free structural preview (no Jev): N seeded games of rules / a preset / a stored version (or edits vs head) with a greedy stand-in player — outcomes by role, balance, rounds, move mix, errors. Screen a change before paying for propose.', inputSchema: S({ game, version, rules, edits, preset: { type: 'string' }, seeds: { type: 'array', items: { type: 'number' } }, players: { type: 'array', items: { type: 'number' } }, maxSteps: { type: 'number' }, policy: { type: 'string', enum: ['greedy', 'random'], description: 'Greedy with consequence labels (default) or fast seeded random structural smoke tests' } }) },
   { name: 'plans', kind: 'read', description: 'Recent fanned-out evals (plans): runs done of total, when assembled, the eval id, whether the job got its result.', inputSchema: S({ limit: { type: 'number' } }) },
   { name: 'job', kind: 'read', description: 'Poll an async job: {status: pending|running|done|error, out?, error?}.', inputSchema: S({ id: { type: 'string' } }, ['id']) },
   { name: 'set_token', kind: 'act', description: 'Owner-only, write-only: the gateway bearer this cell uses to call @c15r/jev (scope it to cell:c15r/jev:*).', inputSchema: S({ token: { type: 'string' } }, ['token']) },
@@ -473,7 +476,7 @@ async function publicApi(parts: string[]): Promise<unknown> {
     case 'presets':
       return a ? (PRESETS[a] ? { slug: a, rules: PRESETS[a], declared: pub.declared(PRESETS[a]) } : null) : Object.keys(PRESETS).map((slug) => ({ slug, ...pub.declared(PRESETS[slug]) }));
     case 'scoring':
-      return { version: SCORE_VERSION, weights: WEIGHTS, critique: CRITIQUE, fixes: CRITIQUE_FIXES };
+      return { version: SCORE_VERSION, weights: WEIGHTS, weightsHiddenRole: WEIGHTS_HIDDEN_ROLE, critique: CRITIQUE, fixes: CRITIQUE_FIXES };
     case 'tools':
       return TOOLS.map((t) => ({ name: t.name, kind: t.kind, description: t.description }));
   }
@@ -542,7 +545,7 @@ export const handler = async (
   if ((method === 'GET' || method === 'HEAD') && path.startsWith('/api/')) {
     try {
       const out = await publicApi(path.slice('/api/'.length).split('/').filter(Boolean).map(decodeURIComponent));
-      return out === undefined ? json(404, { error: `no route ${path}` }) : { ...json(out === null ? 404 : 200, out ?? { error: 'not found' }), headers: { 'content-type': 'application/json', 'cache-control': 'no-cache' } };
+      return out === undefined ? json(404, { error: `no route ${path}` }) : { ...json(out === null ? 404 : 200, out ?? { error: 'not found' }), headers: { 'content-type': 'application/json', 'cache-control': 'no-cache', 'access-control-allow-origin': '*' } };
     } catch (e) {
       return json(500, { error: (e as Error).message });
     }

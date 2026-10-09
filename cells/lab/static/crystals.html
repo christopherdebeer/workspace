@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-exp="crystals">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07080c">
+  <title>Crystals</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #07080c; overflow: hidden; touch-action: none; }
+    body { color: #d9d6cf; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    #label { position: fixed; left: 0; right: 0; bottom: max(22px, env(safe-area-inset-bottom)); text-align: center; pointer-events: none; padding: 0 16px; text-shadow: 0 1px 8px #000; }
+    #label b { display: block; font-weight: normal; font-size: 12px; letter-spacing: .14em; font-variant: small-caps; opacity: .6; margin-bottom: 2px; }
+    #label i { display: block; font-size: 22px; letter-spacing: .01em; }
+    #label span { display: block; font-size: 12px; letter-spacing: .08em; font-variant: small-caps; opacity: .6; margin-top: 4px; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; display: flex; gap: 14px; }
+    nav button, nav a { all: unset; cursor: pointer; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .7; padding: 4px 2px; color: inherit; text-decoration: none; }
+    nav a:hover, nav button:hover { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
+    .preview #label, .preview nav { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <nav><button id="another">another</button><button id="again">grow again</button><a href="{{readme}}">notes</a></nav>
+  <div id="label"></div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

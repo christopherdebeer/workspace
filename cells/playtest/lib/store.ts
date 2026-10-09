@@ -162,6 +162,14 @@ export interface Suite extends Item {
   noise?: number;
   /** engine/harness/suite-hash the noise was measured under */
   noiseContext?: string;
+  /** v4.3: the bot split — seeded games played by the greedy stand-in (no judge), in volume, for
+   *  the measures and targets; default thirty seeds × the train player counts */
+  bot?: { seeds: number[]; players: number[] };
+  /** h18: the questionnaire on judged runs — every n-th decision of each player; 0 off (default 2) */
+  probe?: number;
+}
+export function botSplit(s: Suite): { seeds: number[]; players: number[] } {
+  return s.bot ?? { seeds: Array.from({ length: 30 }, (_, i) => i + 1), players: s.train.players };
 }
 export const DEFAULT_SUITE: Suite = { train: { seeds: [1, 2, 3], players: [2, 3] }, test: { seeds: [101, 102, 103], players: [2, 3] }, maxSteps: 150, epsilon: 0.01 };
 /** Canonical JSON (sorted keys): DynamoDB returns map keys in any order, so a

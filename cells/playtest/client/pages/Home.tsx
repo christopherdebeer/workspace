@@ -133,7 +133,7 @@ export function Home() {
         </ul>
       </Panel>
 
-      <Panel title="What the score means" sub="score/v3 — each played game gets 0–1; a suite is 75% the average game, 15% how clean the definition is, and 10% outcome balance: how evenly wins spread across the secret roles (or seats).">
+      <Panel title="What the score means" sub="score/v4 — each played game gets 0–1. A game with a hidden enemy is scored on its deduction loop (second table); a suite is 65% the average game, 10% how clean the definition is, and 25% the genre band: the enemy exposed in 40–60% of games, winning 30–45%, with wrong accusations under 20% of all. Other games keep the first table; their suite is 75% / 15% / 10% outcome balance.">
         <div className="scroll">
           <table className="t">
             <thead>
@@ -152,6 +152,34 @@ export function Home() {
                 ['agency', 0.1, 'how many legal moves players typically had (4+ is full) × share of turns that were not forced'],
                 ['length', 0.1, 'rounds played, up to 3 (a game over in one round scores low); 0.5 if it never finished'],
                 ['clean', 0.1, 'no error-level findings during play'],
+              ].map(([k, w, d]) => (
+                <tr key={String(k)}>
+                  <td className="mono">{k}</td>
+                  <td className="num">{pct(Number(w))}</td>
+                  <td>{d}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="scroll">
+          <table className="t">
+            <thead>
+              <tr>
+                <th>hidden-enemy games</th>
+                <th className="num">weight</th>
+                <th>measured how</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['ended', 0.15, 'as above'],
+                ['critique', 0.2, 'as above'],
+                ['judged', 0.1, 'as above'],
+                ['clean', 0.1, 'as above'],
+                ['deduction', 0.2, 'accusations were earned: 1, less 0.3 per wrong accusation; the enemy exposed without any evidence 0.3; never accused 0.6'],
+                ['interaction', 0.15, 'share of seats that took an interactive move (cooperate, sabotage, expose, accuse, trade, power, targeted card) at least once per two rounds'],
+                ['tension', 0.1, 'lead changes (half, full at two) and a close finish (half at a margin of 3 or less, a quarter at 6)'],
               ].map(([k, w, d]) => (
                 <tr key={String(k)}>
                   <td className="mono">{k}</td>

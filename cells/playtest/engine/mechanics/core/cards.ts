@@ -290,8 +290,10 @@ export const cardsMechanic: MechanicHooks = {
     const cardsState = getCardsState(state);
     const actions: AvailableAction[] = [];
 
-    // === DRAW action (if game has a deck) ===
-    if (cardsState.deck || cardsState.discardPile) {
+    // === DRAW action (if game has a deck — and drawing is a move here: a game whose hands
+    // refill by rule sets cards.draw_action: false) ===
+    const drawIsAnAction = (ctx.config.engine_mechanics?.cards as { draw_action?: boolean } | undefined)?.draw_action !== false;
+    if (drawIsAnAction && (cardsState.deck || cardsState.discardPile)) {
       actions.push({
         action: { type: 'draw' } as GameAction,
         priority: 50,

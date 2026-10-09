@@ -13,8 +13,10 @@
  *            test is flat is the overfitting signal → revert. Two or three
  *            rounds without a keep = stalled: diagnose, don't keep patching.
  * ------------------------------------------------------------------------- */
-import { classify, play, judge, metrics, sessionFindings, HARNESS_VERSION, personaFor, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
-import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, SCORE_VERSION, type RunScore } from './score';
+import { classify, play, judge, metrics, measuresOf, sessionFindings, HARNESS_VERSION, personaFor, type Classification, type Decide, type Finding, type Judgement, type Critique, CRITIQUE } from './runner';
+import { scoreRun, scoreSuite, definitionHealth, outcomeBalance, genreBalance, targetsScore, targetsOf, measureMeans, SCORE_VERSION, type RunScore, type Targets } from './score';
+import { greedyDecider } from './screen';
+import type { DeductionReport } from './deduction';
 import { engineFingerprint } from './fingerprint';
 import * as db from './store';
 
@@ -23,7 +25,7 @@ export const STALL_ROUNDS = 3;
 
 export interface RunDigest {
   id: string;
-  split: 'train' | 'test';
+  split: 'train' | 'test' | 'bot';
   seed: number;
   players: number;
   score: number;
@@ -42,6 +44,16 @@ export interface RunDigest {
   positions?: string[];
   winnerKey?: string | null;
   endKind?: string;
+  /** v4: the deduction loop as played (hidden-role games) */
+  deduction?: DeductionReport | null;
+  /** v4.3: the mechanic's measures of this game (targets are set on their suite means) */
+  measures?: Record<string, number> | null;
+}
+
+/** The suite balance: the genre band when the runs carry deduction reports, else outcome balance. */
+export function suiteBalance(runs: RunDigest[]): { balance: number | null; genre: boolean } {
+  const g = genreBalance(runs);
+  return g === null ? { balance: outcomeBalance(runs), genre: false } : { balance: g, genre: true };
 }
 
 /** Train runs' critique, averaged: per dimension (0–4), and what the judge most often named. */
@@ -57,6 +69,8 @@ export interface CritiqueSummary {
   weakest: Array<[string, number]>;
   strongest: Array<[string, number]>;
   fixes: Array<[string, number]>;
+  /** v4: the deduction loop across the train games of a hidden-role game, as rates */
+  deduction?: { n: number; exposed: number; exposedWithEvidence: number; enemyWon: number; wrongAccusationShare: number; accusationsPerGame: number; interaction: number; leadChanges: number };
 }
 export function summarizeCritique(runs: RunDigest[]): CritiqueSummary | null {
   const cs = runs.map((r) => r.critique).filter((c): c is Critique => !!c);
@@ -84,7 +98,14 @@ export function summarizeCritique(runs: RunDigest[]): CritiqueSummary | null {
     const k = r.winnerRole ? `${r.winnerRole} · ${r.endKind}` : `no winner · ${r.endKind ?? 'none'}`;
     outcomes[k] = (outcomes[k] ?? 0) + 1;
   }
-  return { n: cs.length, outcomes, byPersona, cause: tally((c) => c.cause ?? []), index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes) };
+  // v4: the deduction loop over the suite (hidden-role games), as rates.
+  const ds = runs.map((r) => r.deduction).filter((d): d is DeductionReport => !!d && !!d.enemy);
+  const rate = (f: (d: DeductionReport) => boolean) => (ds.length ? +(ds.filter(f).length / ds.length).toFixed(3) : 0);
+  const accusations = ds.reduce((a, d) => a + d.accusations, 0);
+  const deductionSummary = ds.length
+    ? { n: ds.length, exposed: rate((d) => d.exposed), exposedWithEvidence: rate((d) => d.exposed && d.evidenceBeforeExposure === true), enemyWon: rate((d) => d.enemyWon), wrongAccusationShare: accusations ? +(ds.reduce((a, d) => a + d.wrong, 0) / accusations).toFixed(3) : 0, accusationsPerGame: +(accusations / ds.length).toFixed(2), interaction: +(ds.reduce((a, d) => a + d.interactiveShare, 0) / ds.length).toFixed(3), leadChanges: +(ds.reduce((a, d) => a + d.leadChanges, 0) / ds.length).toFixed(2) }
+    : null;
+  return { n: cs.length, outcomes, byPersona, cause: tally((c) => c.cause ?? []), index: mean(cs.map((c) => c.index).filter((v): v is number => typeof v === 'number')), dims, weakest: tally((c) => c.weakest), strongest: tally((c) => c.strongest), fixes: tally((c) => c.fixes), ...(deductionSummary ? { deduction: deductionSummary } : {}) };
 }
 
 export interface EvalRecord extends db.Item {
@@ -101,8 +122,12 @@ export interface EvalRecord extends db.Item {
   incomplete?: number;
   definitionHealth: number;
   classificationFindings: Finding[];
-  train: { score: number; balance?: number | null; runs: RunDigest[]; critique?: CritiqueSummary | null };
-  test: { score: number; n: number; runs: Array<{ id: string; score: number }> };
+  train: { score: number; balance?: number | null; runs: RunDigest[]; critique?: CritiqueSummary | null; targets?: ReturnType<typeof targetsScore> };
+  test: { score: number; n: number; runs: Array<{ id: string; score: number }>; targets?: number | null };
+  /** v4.3: the bot split — the greedy stand-in's games, in volume: each measure's mean ± standard
+   *  error, the targets term (the one the train and test scores carry when there are ≥ 8 bot
+   *  games), outcome balance, and the digests (measures only matter) */
+  bot?: { n: number; measures: Record<string, { mean: number; se: number }>; targets: ReturnType<typeof targetsScore>; balance: number | null; runs: RunDigest[] };
   tokens: number;
   ms: number;
   tag: string;
@@ -138,7 +163,7 @@ async function recordBacklog(game: string, engine: string, findings: Finding[]) 
   }
 }
 
-type RunSpec = { split: 'train' | 'test'; seed: number; players: number };
+type RunSpec = { split: 'train' | 'test' | 'bot'; seed: number; players: number };
 
 async function noteEngine() {
   const engine = engineFingerprint();
@@ -158,6 +183,8 @@ function runSpecs(suite: db.Suite, cls: Classification): RunSpec[] {
       }
     }
   }
+  const bot = db.botSplit(suite);
+  for (const seed of bot.seeds) for (const players of bot.players) if (players >= cls.players.min && players <= cls.players.max) out.push({ split: 'bot', seed, players });
   return out;
 }
 
@@ -165,13 +192,14 @@ function runSpecs(suite: db.Suite, cls: Classification): RunSpec[] {
 async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; cls: Classification; decide: Decide; deadlineAt: number; spec: RunSpec; engine: string }): Promise<{ digest: RunDigest; tokens: number }> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), Math.max(1000, o.deadlineAt - 20_000 - Date.now()));
-  const persona = personaFor(o.spec.seed);
-  const session = await play(o.def.rules, o.decide, { players: o.spec.players, seed: o.spec.seed, maxSteps: o.suite.maxSteps, signal: abort.signal, persona });
+  const bot = o.spec.split === 'bot';
+  const persona = bot ? 'bot' : personaFor(o.spec.seed);
+  const session = await play(o.def.rules, bot ? greedyDecider(o.spec.seed * 31 + o.spec.players) : o.decide, { players: o.spec.players, seed: o.spec.seed, maxSteps: o.suite.maxSteps, signal: abort.signal, ...(bot ? {} : { persona, probe: o.suite.probe ?? 2 }) });
   clearTimeout(timer);
   let tokens = session.tokens;
   let judgement: Judgement | null = null;
   let findings: Finding[] = sessionFindings(session, metrics(session), o.cls);
-  if (session.turns.length && Date.now() < o.deadlineAt - 5000) {
+  if (!bot && session.turns.length && Date.now() < o.deadlineAt - 5000) {
     try {
       const r = await judge(o.cls, session, o.decide);
       judgement = r.judgement;
@@ -192,6 +220,8 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
     persona,
     score: sc.score,
     parts: sc.parts,
+    deduction: sc.deduction ?? null,
+    measures: measuresOf(session),
     stopped: session.stopped,
     endReason: m.endReason,
     steps: m.steps,
@@ -202,7 +232,7 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
     winnerRole: session.winner ? (session.roles?.[session.winner] ?? null) : null,
     positions: session.roles && Object.keys(session.roles).length ? [...new Set(Object.values(session.roles))] : Array.from({ length: o.spec.players }, (_, i) => `seat ${i + 1}`),
     winnerKey: session.winner ? (session.roles?.[session.winner] ?? `seat ${Number(String(session.winner).replace(/\D/g, '')) || '?'}`) : null,
-    endKind: !m.finished ? 'none' : /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i.test(m.endReason ?? '') ? 'time limit' : /denounc|accus/i.test(m.endReason ?? '') ? 'denounce' : 'objective',
+    endKind: !m.finished ? 'none' : /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i.test(m.endReason ?? '') ? 'time limit' : /wrong player/i.test(m.endReason ?? '') ? 'wrong accusation' : /denounc|accus/i.test(m.endReason ?? '') ? 'denounce' : 'objective',
   };
   const chunks = await db.putBlob(`RUN#${id}`, { session, judgement, findings });
   await db.put({ pk: `RUN#${id}`, sk: 'meta', ...digest, game: o.game, version: o.def.version, engine: o.engine, metrics: m, judgement, chunks, createdAt: new Date().toISOString() });
@@ -211,10 +241,16 @@ async function playOne(o: { game: string; def: db.Definition; suite: db.Suite; c
 }
 
 /** Assemble and store the eval record from its runs (`missing` runs never reported). */
-async function assemble(o: { game: string; def: { version: number; hash: string }; suite: db.Suite; cls: Classification; tag: string; engine: string; digests: RunDigest[]; missing: number; tokens: number; ms: number }): Promise<EvalRecord> {
+async function assemble(o: { game: string; def: { version: number; hash: string; rules?: string }; suite: db.Suite; cls: Classification; tag: string; engine: string; digests: RunDigest[]; missing: number; tokens: number; ms: number }): Promise<EvalRecord> {
   await recordBacklog(o.game, o.engine, o.cls.findings);
   const train = o.digests.filter((d) => d.split === 'train');
   const test = o.digests.filter((d) => d.split === 'test');
+  const bot = o.digests.filter((d) => d.split === 'bot');
+  const targets = o.def.rules ? targetsOf(o.def.rules) : null;
+  const botTargets = targets && bot.length ? targetsScore(measureMeans(bot), targets) : null;
+  // The targets term comes from the bot split when it has volume; else from the judge's own games.
+  const tTrain = bot.length >= 8 ? botTargets : targets ? targetsScore(measureMeans(train), targets) : null;
+  const tTest = bot.length >= 8 ? botTargets : targets ? targetsScore(measureMeans(test), targets) : null;
   const rec: EvalRecord = {
     pk: '',
     sk: 'meta',
@@ -226,11 +262,14 @@ async function assemble(o: { game: string; def: { version: number; hash: string 
     suite: db.suiteHash(o.suite),
     scoreVersion: SCORE_VERSION,
     harness: HARNESS_VERSION,
-    incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline').length,
+    // (h22: a judged run that finished but came back without a judgement is a measurement failure,
+    //  not a bad game — it counts as incomplete, so the round is inconclusive rather than scored on it)
+    incomplete: o.missing + o.digests.filter((d) => d.stopped === 'deadline' || (d.split !== 'bot' && d.stopped === 'finished' && !d.verdict)).length,
     definitionHealth: definitionHealth(o.cls),
     classificationFindings: o.cls.findings,
-    train: { score: scoreSuite(train.map((d) => d.score), o.cls, outcomeBalance(train)), balance: outcomeBalance(train), runs: train, critique: summarizeCritique(train) },
-    test: { score: scoreSuite(test.map((d) => d.score), o.cls, outcomeBalance(test)), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })) },
+    train: { score: scoreSuite(train.map((d) => d.score), o.cls, suiteBalance(train).balance, suiteBalance(train).genre, tTrain?.score ?? null), balance: suiteBalance(train).balance, runs: train, critique: summarizeCritique(train), targets: tTrain },
+    test: { score: scoreSuite(test.map((d) => d.score), o.cls, suiteBalance(test).balance, suiteBalance(test).genre, tTest?.score ?? null), n: test.length, runs: test.map((d) => ({ id: d.id, score: d.score })), targets: tTest?.score ?? null },
+    ...(bot.length ? { bot: { n: bot.length, measures: measureStats(bot), targets: botTargets, balance: outcomeBalance(bot), runs: bot.map((d) => ({ id: d.id, split: d.split, seed: d.seed, players: d.players, score: d.score, rounds: d.rounds, stopped: d.stopped, endKind: d.endKind, winnerRole: d.winnerRole, winnerKey: d.winnerKey, positions: d.positions, measures: d.measures })) } } : {}),
     tokens: o.tokens,
     ms: o.ms,
     tag: o.tag,
@@ -346,7 +385,8 @@ export async function finishPlan(planId: string): Promise<{ plan: Plan; rec: Eva
   const plan = (await getPlan(planId))!;
   const cls = (await db.getBlob<Classification>(`PLANCLS#${planId}`, plan.clsChunks))!;
   const digests = (await db.query(`PLAN#${planId}`, 'r')).map((r) => r.digest as RunDigest);
-  const rec = await assemble({ game: plan.game, def: { version: plan.version, hash: plan.defHash }, suite: plan.suite, cls, tag: plan.tag, engine: plan.engine, digests, missing: plan.total - digests.length, tokens: Number(plan.tokens ?? 0), ms: Date.now() - Date.parse(plan.startedAt) });
+  const def = (await db.get(`GAME#${plan.game}`, `DEF#${db.pad(plan.version)}`)) as db.Definition | undefined;
+  const rec = await assemble({ game: plan.game, def: { version: plan.version, hash: plan.defHash, rules: def?.rules }, suite: plan.suite, cls, tag: plan.tag, engine: plan.engine, digests, missing: plan.total - digests.length, tokens: Number(plan.tokens ?? 0), ms: Date.now() - Date.parse(plan.startedAt) });
   await db.update(`PLAN#${planId}`, 'meta', 'SET #e = :e', { ':e': rec.id }, { '#e': 'evalId' });
   return { plan: { ...plan, evalId: rec.id }, rec };
 }
@@ -383,7 +423,8 @@ export function publicEval(e: EvalRecord) {
     harness: e.harness ?? 'h1',
     incomplete: e.incomplete ?? 0,
     train: e.train,
-    test: { score: e.test.score, n: e.test.n },
+    test: { score: e.test.score, n: e.test.n, targets: e.test.targets ?? null },
+    bot: e.bot ? { n: e.bot.n, measures: e.bot.measures, targets: e.bot.targets, balance: e.bot.balance } : null,
     definitionHealth: e.definitionHealth,
     classificationFindings: e.classificationFindings,
     tokens: e.tokens,
@@ -406,8 +447,11 @@ export function compactEval(e: EvalRecord) {
       score: p.train.score,
       balance: p.train.balance ?? null,
       critique: p.train.critique ?? null,
-      runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, persona: r.persona, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null })),
+      targets: e.train.targets ?? null,
+      runs: p.train.runs.map((r) => ({ id: r.id, seed: r.seed, players: r.players, persona: r.persona, score: r.score, parts: r.parts, stopped: r.stopped, steps: r.steps, rounds: r.rounds, verdict: r.verdict, winnerRole: r.winnerRole, endKind: r.endKind, critique: r.critique?.index ?? null, deduction: r.deduction ?? null })),
     },
+    test: { ...p.test, targets: e.test.targets ?? null },
+    bot: e.bot ? { n: e.bot.n, measures: e.bot.measures, targets: e.bot.targets, balance: e.bot.balance } : null,
     detail: `read @c15r/playtest.eval_detail {id:"${e.id}"} for findings and full critiques`,
   };
 }
@@ -433,19 +477,99 @@ export interface Round extends db.Item {
   reason: string;
   engine: string;
   createdAt: string;
+  /** v4.3: each measure's train mean, baseline vs candidate, with the paired standard error of the difference */
+  measures?: Record<string, { base: number; cand: number; delta: number; se: number | null }>;
+  /** v4.3: the targets term, baseline vs candidate (train) */
+  targets?: { base: number | null; cand: number | null };
+  /** v4.3: the bot split — each measure's paired delta and the targets term's delta with its jackknife SE */
+  bot?: { n: number; measures: Round['measures']; targets: ReturnType<typeof targetsDelta> };
+  /** the measures' own health this round: which moved beyond two standard errors, which are silent
+   *  (no variance over the games) or pinned at a bound, and which target bands both sides already
+   *  satisfy (so the gate cannot see a difference there) — a stuck instrument reported as such */
+  meta?: { moved: string[]; silent: string[]; pinned: string[]; saturatedTargets: string[]; note: string };
+}
+
+/** The measures' meta-evaluation for a round (see Round.meta). */
+export function measureMeta(botDeltas: Round['measures'], trainDeltas: Round['measures'], botRuns: RunDigest[], targets: Targets | null, baseBands?: Record<string, { band: number }>, candBands?: Record<string, { band: number }>): NonNullable<Round['meta']> {
+  const moved: string[] = [];
+  const silent: string[] = [];
+  const pinned: string[] = [];
+  const all = { ...(trainDeltas ?? {}), ...(botDeltas ?? {}) };
+  for (const [k, d] of Object.entries(all)) if (d.se !== null && d.se > 0 && Math.abs(d.delta) >= 2 * d.se) moved.push(`${k} ${d.delta >= 0 ? '+' : ''}${d.delta} (±${d.se})`);
+  const stats = measureStats(botRuns);
+  for (const [k, s] of Object.entries(stats)) {
+    const xs = botRuns.map((r) => r.measures?.[k]).filter((v): v is number => typeof v === 'number');
+    const sd = Math.sqrt(xs.reduce((a, x) => a + (x - s.mean) ** 2, 0) / Math.max(1, xs.length - 1));
+    if (xs.length >= 8 && sd < 1e-6) silent.push(k);
+    else if (xs.length >= 8 && xs.every((x) => x >= 0 && x <= 1) && (s.mean <= 0.02 || s.mean >= 0.98)) pinned.push(`${k} ≈ ${s.mean.toFixed(2)}`);
+  }
+  const saturatedTargets = targets ? Object.keys(targets).filter((k) => (baseBands?.[k]?.band ?? 0) >= 0.999 && (candBands?.[k]?.band ?? 0) >= 0.999) : [];
+  const parts: string[] = [];
+  parts.push(moved.length ? `moved beyond 2 SE: ${moved.join('; ')}` : 'no measure moved beyond two standard errors');
+  if (silent.length) parts.push(`silent (no variance): ${silent.join(', ')}`);
+  if (pinned.length) parts.push(`pinned at a bound: ${pinned.join(', ')}`);
+  if (saturatedTargets.length) parts.push(`targets both sides already meet (blind here): ${saturatedTargets.join(', ')}${targets && saturatedTargets.length === Object.keys(targets).length ? ' — every band; the targets term cannot prefer either side until a band is tightened' : ''}`);
+  return { moved, silent, pinned, saturatedTargets, note: parts.join('. ') };
+}
+
+/** Each measure's mean and standard error over the runs that carry it. */
+export function measureStats(runs: RunDigest[]): Record<string, { mean: number; se: number }> {
+  const out: Record<string, { mean: number; se: number }> = {};
+  const keys = new Set(runs.flatMap((r) => Object.keys(r.measures ?? {})));
+  for (const k of keys) {
+    const xs = runs.map((r) => r.measures?.[k]).filter((v): v is number => typeof v === 'number');
+    if (!xs.length) continue;
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const sd = Math.sqrt(xs.reduce((a, x) => a + (x - mean) ** 2, 0) / Math.max(1, xs.length - 1));
+    out[k] = { mean: +mean.toFixed(3), se: +(sd / Math.sqrt(xs.length)).toFixed(3) };
+  }
+  return out;
+}
+/** The targets term's paired delta between two bot splits, with a jackknife standard error. */
+export function targetsDelta(base: RunDigest[], cand: RunDigest[], targets: Targets): { base: number; cand: number; delta: number; se: number | null } | null {
+  const key = (r: RunDigest) => `${r.seed}x${r.players}`;
+  const b = new Map(base.map((r) => [key(r), r]));
+  const pairs = cand.filter((r) => b.has(key(r))).map((r) => [b.get(key(r))!, r] as [RunDigest, RunDigest]);
+  if (pairs.length < 4) return null;
+  const term = (rs: RunDigest[]) => targetsScore(measureMeans(rs), targets)?.score ?? 0;
+  const tb = term(pairs.map(([x]) => x)), tc = term(pairs.map(([, y]) => y));
+  const d = tc - tb;
+  const jack = pairs.map((_, i) => { const rest = pairs.filter((_, j) => j !== i); return term(rest.map(([, y]) => y)) - term(rest.map(([x]) => x)); });
+  const jm = jack.reduce((a, x) => a + x, 0) / jack.length;
+  const se = Math.sqrt(((jack.length - 1) / jack.length) * jack.reduce((a, x) => a + (x - jm) ** 2, 0));
+  return { base: +tb.toFixed(4), cand: +tc.toFixed(4), delta: +d.toFixed(4), se: +se.toFixed(4) };
+}
+/** Per-measure paired comparison of two evals' train runs (seed × players). */
+export function measureDeltas(base: RunDigest[], cand: RunDigest[]): Round['measures'] {
+  const key = (r: RunDigest) => `${r.seed}x${r.players}`;
+  const b = new Map(base.map((r) => [key(r), r.measures ?? {}]));
+  const keys = new Set([...base, ...cand].flatMap((r) => Object.keys(r.measures ?? {})));
+  const out: NonNullable<Round['measures']> = {};
+  for (const k of keys) {
+    const pairs = cand.filter((r) => b.has(key(r)) && typeof r.measures?.[k] === 'number' && typeof b.get(key(r))?.[k] === 'number').map((r) => [b.get(key(r))![k], r.measures![k]] as [number, number]);
+    if (!pairs.length) continue;
+    const mb = pairs.reduce((a, [x]) => a + x, 0) / pairs.length;
+    const mc = pairs.reduce((a, [, y]) => a + y, 0) / pairs.length;
+    const d = pairs.map(([x, y]) => y - x);
+    const md = d.reduce((a, x) => a + x, 0) / d.length;
+    const se = d.length >= 3 ? Math.sqrt(d.reduce((a, x) => a + (x - md) ** 2, 0) / (d.length - 1)) / Math.sqrt(d.length) : null;
+    out[k] = { base: +mb.toFixed(3), cand: +mc.toFixed(3), delta: +md.toFixed(3), se: se === null ? null : +se.toFixed(3) };
+  }
+  return out;
 }
 
 /** Standard error of the mean per-game difference, pairing runs by seed × players (the
- *  run score, before the suite's definition-health term), or null with < 3 pairs. */
-export function pairedSE(base: RunDigest[], cand: RunDigest[]): number | null {
+ *  run score, before the suite's definition-health term), or null with < 3 pairs.
+ *  `runWeight`: the runs' share of the suite score (.85 health-only, .75 with balance, .55 with targets). */
+export function pairedSE(base: RunDigest[], cand: RunDigest[], runWeight = 0.85): number | null {
   const key = (r: RunDigest) => `${r.seed}x${r.players}`;
   const b = new Map(base.map((r) => [key(r), r.score]));
   const d = cand.filter((r) => b.has(key(r))).map((r) => r.score - (b.get(key(r)) as number));
   if (d.length < 3) return null;
   const mean = d.reduce((x, y) => x + y, 0) / d.length;
   const sd = Math.sqrt(d.reduce((x, y) => x + (y - mean) ** 2, 0) / (d.length - 1));
-  // Suite score = 0.85 × mean(run) + 0.15 × health, so the mean's SE scales by 0.85.
-  return +((0.85 * sd) / Math.sqrt(d.length)).toFixed(4);
+  // Suite score = runWeight × mean(run) + the rest, so the mean's SE scales by runWeight.
+  return +((runWeight * sd) / Math.sqrt(d.length)).toFixed(4);
 }
 
 /** Check a proposal can be judged and store the candidate definition. */
@@ -472,17 +596,32 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
   const dTest = +(ev.test.score - baseline.test.score).toFixed(4);
   // Baseline and candidate play the same seeds × player counts, so the per-game
   // differences give a paired standard error: a change must also clear that.
-  const se = pairedSE(baseline.train.runs, ev.train.runs);
+  const se = pairedSE(baseline.train.runs, ev.train.runs, ev.train.targets ? 0.55 : ev.train.balance != null ? 0.75 : 0.85);
+  const measures = measureDeltas(baseline.train.runs, ev.train.runs);
+  const targets = { base: baseline.train.targets?.score ?? null, cand: ev.train.targets?.score ?? null };
   const eps = +Math.max(suite.epsilon, suite.noise ?? 0, se ?? 0).toFixed(4);
+  // The bot split: the designer's targets measured in volume, paired by seed × players.
+  const def = (await db.get(`GAME#${o.game}`, `DEF#${db.pad(o.candVersion)}`)) as db.Definition | undefined;
+  const tg = def?.rules ? targetsOf(def.rules) : null;
+  const bot = baseline.bot && ev.bot && tg ? { n: ev.bot.n, measures: measureDeltas(baseline.bot.runs, ev.bot.runs), targets: targetsDelta(baseline.bot.runs, ev.bot.runs, tg) } : undefined;
+  const meta = measureMeta(bot?.measures ?? {}, measures, ev.bot?.runs ?? [], tg, baseline.bot?.targets?.bands, ev.bot?.targets?.bands);
+  const floor = Math.max(suite.epsilon, suite.noise ?? 0);
   let decision: Round['decision'] = 'reverted';
   let reason: string;
   const inconclusive = !!ev.incomplete;
+  const td = bot?.targets ?? null;
+  const targetsWin = !!td && td.se !== null && td.delta >= Math.max(0.02, 2 * td.se);
+  const noRegression = dTrain >= -floor && dTest >= -floor;
   if (inconclusive) {
     reason = `inconclusive: ${ev.incomplete} run(s) hit the deadline or never reported, so the candidate's scores aren't comparable — reverted without counting toward a stall`;
   } else if (dTrain >= eps && dTest > 0) {
     decision = 'kept';
     reason = `train +${dTrain} (≥ ε ${eps}: max of epsilon ${suite.epsilon}, noise ${suite.noise ?? '—'}, paired SE ${se ?? '—'}) and test +${dTest}`;
+  } else if (targetsWin && noRegression) {
+    decision = 'kept';
+    reason = `targets +${td!.delta} on ${bot!.n} bot games (≥ max(0.02, 2 × jackknife SE ${td!.se})) with the judge suite within its noise floor ${floor} (train ${dTrain >= 0 ? '+' : ''}${dTrain}, test ${dTest >= 0 ? '+' : ''}${dTest})`;
   } else if (dTrain >= eps) reason = `train +${dTrain} but test ${dTest >= 0 ? '+' : ''}${dTest}: overfitting signal — reverted`;
+  else if (td && td.se !== null) reason = `train ${dTrain >= 0 ? '+' : ''}${dTrain} is below ε ${eps} and targets ${td.delta >= 0 ? '+' : ''}${td.delta} on ${bot!.n} bot games ${targetsWin ? 'would carry it but the judge suite regressed beyond its noise floor' : `is below max(0.02, 2 × jackknife SE ${td.se})`} — no real improvement`;
   else reason = `train ${dTrain >= 0 ? '+' : ''}${dTrain} is below ε ${eps} (max of epsilon ${suite.epsilon}, noise ${suite.noise ?? '—'}, paired SE ${se ?? '—'}) — no real improvement`;
 
   const fresh = (await db.getGame(o.game)) as db.GameIndex;
@@ -509,6 +648,10 @@ export async function decideRound(o: { game: string; headVersion: number; candVe
     author: o.author,
     baseline: { evalId: baseline.id, train: baseline.train.score, test: baseline.test.score },
     candidate: { evalId: ev.id, train: ev.train.score, test: ev.test.score },
+    measures,
+    targets,
+    ...(bot ? { bot } : {}),
+    meta,
     delta: { train: dTrain, test: dTest },
     epsilon: eps,
     decision,
@@ -531,7 +674,7 @@ export async function proposeRound(opts: { game: string; rules: string; rational
 /** At a stall: where the train runs lose points, and what keeps showing up. */
 export function diagnose(ev: EvalRecord) {
   const runs = ev.train.runs.filter((r) => r.parts);
-  const keys = ['ended', 'variety', 'agency', 'length', 'clean', 'judged', 'critique'] as const;
+  const keys = ['ended', 'variety', 'agency', 'pace', 'clean', 'judged', 'critique'] as const;
   const weakest = keys
     .map((k) => ({ part: k, mean: +(runs.reduce((a, r) => a + (r.parts?.[k] ?? 0), 0) / (runs.length || 1)).toFixed(3) }))
     .sort((a, b) => a.mean - b.mean);

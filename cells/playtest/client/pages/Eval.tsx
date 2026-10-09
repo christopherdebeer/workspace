@@ -1,10 +1,12 @@
 import * as React from 'react';
-import { useApi, Loading, Panel, Stat, Status, A, Bar, f3, when, go } from '../ui';
+import { useApi, Loading, Panel, Stat, Status, A, Bar, f3, when, go, pct } from '../ui';
 import type { EvalView, Parts, Finding } from '../lib/types';
 import { CritiquePanel } from './Critique';
 
 const WEIGHTS_V1: Partial<Record<keyof Parts, number>> = { ended: 0.3, judged: 0.2, variety: 0.15, agency: 0.15, length: 0.1, clean: 0.1 };
 const WEIGHTS_V2: Partial<Record<keyof Parts, number>> = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, length: 0.1, clean: 0.1 };
+// score/v4: a game with a hidden enemy is scored on its deduction loop (the runs' parts say which applied)
+const WEIGHTS_V4_HIDDEN: Partial<Record<keyof Parts, number>> = { ended: 0.15, critique: 0.2, judged: 0.1, clean: 0.1, deduction: 0.2, interaction: 0.15, tension: 0.1 };
 
 export function FindingList({ items }: { items: Finding[] }) {
   if (!items.length) return <p className="muted small">None.</p>;
@@ -30,7 +32,8 @@ export function Eval({ id }: { id: string }) {
   const { data, error } = useApi<EvalView>(`eval/${encodeURIComponent(id)}`);
   if (!data) return <Loading error={error} />;
   const runs = data.train.runs;
-  const WEIGHTS = data.scoreVersion === 'score/v1' ? WEIGHTS_V1 : WEIGHTS_V2;
+  const hiddenRole = runs.some((r) => r.parts && 'deduction' in r.parts);
+  const WEIGHTS = data.scoreVersion === 'score/v1' ? WEIGHTS_V1 : hiddenRole ? WEIGHTS_V4_HIDDEN : WEIGHTS_V2;
   const mean = (k: keyof Parts) => (runs.length ? runs.reduce((a, r) => a + (r.parts?.[k] ?? 0), 0) / runs.length : 0);
   return (
     <>
@@ -60,6 +63,19 @@ export function Eval({ id }: { id: string }) {
           <Bar key={k} label={`${k} ×${WEIGHTS[k]}`} value={mean(k)} />
         ))}
       </Panel>
+      {data.train.critique?.deduction && (
+        <Panel title="The deduction loop" sub="score/v4 — across train games: how often the hidden enemy was exposed, whether on evidence, how often it won, and how accusations went. The genre band wants 40–60% exposed, 30–45% enemy wins, under 20% wrong accusations.">
+          <div className="stats">
+            <Stat v={pct(data.train.critique.deduction.exposed)} l="enemy exposed" title={`${data.train.critique.deduction.n} games`} />
+            <Stat v={pct(data.train.critique.deduction.exposedWithEvidence)} l="exposed on evidence" />
+            <Stat v={pct(data.train.critique.deduction.enemyWon)} l="enemy won" />
+            <Stat v={pct(data.train.critique.deduction.wrongAccusationShare)} l="accusations wrong" />
+            <Stat v={data.train.critique.deduction.accusationsPerGame} l="accusations / game" />
+            <Stat v={pct(data.train.critique.deduction.interaction)} l="seats interacting" title="Share of seats taking an interactive move at least once per two rounds" />
+            <Stat v={data.train.critique.deduction.leadChanges} l="lead changes / game" />
+          </div>
+        </Panel>
+      )}
       {data.train.critique?.outcomes && (
         <Panel title="Who won, as what" sub="Train games by the winner's secret role and how the game ended — the first place a balance problem shows.">
           {Object.entries(data.train.critique.outcomes)

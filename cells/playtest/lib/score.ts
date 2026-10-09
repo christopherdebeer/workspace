@@ -13,7 +13,9 @@
  *   judged   .15  Jev: P("plays as designed") over the session record
  *   variety  .10  no single move type over half of all moves (linear to 0 at 100%)
  *   agency   .10  real choice per turn: min(mean legal moves / 4, 1) × share of unforced turns
- *   length   .10  lasted ≥ 3 rounds (a first-round win is a broken game, not a quick one)
+ *   pace     .10  rounds in the band 4–10: 1; shorter, rounds/4 (a two-round game .5, a
+ *                 first-round win .25); longer, easing to .5 by 20 rounds; a draw at a turn or
+ *                 move limit with nobody named the winner .25; never finished .5
  *   clean    .10  no error-level findings from the session (engine faults surfaced by play)
  * A suite: 0.75 × mean(run scores) + 0.15 × definition health + 0.10 × outcome balance,
  *   definition health = 1 / (1 + 0.25 × error-level classification findings),
@@ -25,39 +27,97 @@
  * ------------------------------------------------------------------------- */
 import type { Classification, Finding, Judgement, Session } from './runner';
 import { metrics } from './runner';
+import { deduction, type DeductionReport } from './deduction';
+import { parse as parseYaml } from 'yaml';
+
+/** The designer's targets from a RULES.md frontmatter: `targets: { rounds: [4, 10], … }`, or null. */
+export function targetsOf(rules: string): Targets | null {
+  const m = /^---\n([\s\S]*?)\n---/.exec(rules);
+  if (!m) return null;
+  try {
+    const t = (parseYaml(m[1]) as { targets?: Record<string, unknown> })?.targets;
+    if (!t || typeof t !== 'object') return null;
+    const out: Targets = {};
+    for (const [k, v] of Object.entries(t)) if (Array.isArray(v) && v.length === 2 && v.every((x) => typeof x === 'number')) out[k] = [v[0], v[1]];
+    return Object.keys(out).length ? out : null;
+  } catch { return null; }
+}
 
 /** v2 (2026-09-30): adds Jev's qualitative critique (16 dimensions, 0–1 index) at .20,
  *  taken from ended (.30→.25), variety (.15→.10), agency (.15→.10) and judged (.20→.15). */
 /** v3.1: v3 as designed — v3's first deploy never recorded who won by position, so its
  *  evals fell back to the balance-free suite formula; they don't compare with v3.1. */
-export const SCORE_VERSION = 'score/v3.1';
-export const WEIGHTS = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, length: 0.1, clean: 0.1 } as const;
+/** v4 (2026-10-04): a game with a hidden enemy is scored on its deduction loop — v3.1 gave 0.85 to
+ *  a three-round AAOTE game decided by the enemy exposing itself, because 65 % of its weight was
+ *  mechanical (ended, variety, agency, length, clean) and every such term was at its maximum.
+ *  For those games:
+ *    ended .15 · critique .20 · judged .10 · clean .10 ·
+ *    deduction .20  accusations were earned: 1, −0.3 per wrong accusation; an exposure without
+ *                   evidence 0.3; the enemy never accused 0.6 (the band below judges how often)
+ *    interaction .15  share of seats taking an interactive move at least once per two rounds
+ *    tension .10   lead changes (½, full at 2) and a close finish (½: margin ≤ 3, ¼: ≤ 6)
+ *  and the suite's balance term is the genre band: the enemy exposed in 40–60 % of games, the
+ *  enemy winning 30–45 %, wrong accusations under 20 % of all (each 1 inside, falling to 0 at
+ *  0.4 away), weighted .25 (runs .65, definition health .10).
+ *  Games without a hidden enemy keep the v3.1 run formula and outcome balance (.75/.15/.10). */
+/** v4.1: evidence excludes what the enemy gave away by its own move (v4's first deploy counted a
+ *  self-reveal as evidence, which would have flattered v0.4 in the calibration ladder). */
+/** v4.2 (2026-10-06): `length` (≥ 3 rounds) becomes `pace`, a band. v4.1 could not see pace: a
+ *  Markovs Chains version that ended a third of its games in two rounds scored the same as one
+ *  that ran 3–11 rounds every game, because a two-round game still earned .667 of a .10 term and
+ *  a 30-move draw earned the full term. Now a two-round game earns .5, a draw at the limit .25,
+ *  and a game that drags past ten rounds eases off; the band 4–10 is where the quick games this
+ *  suite wants live. Same weight; the other terms are untouched. */
+/** v4.3 (2026-10-06): targets. A definition may declare `targets: { <measure>: [lo, hi] }` in
+ *  its frontmatter — bands on numbers the engine measures about a game (rounds, draw, offTurnWin,
+ *  leadChanges, contenders, …; see the mechanic). Each measure's suite mean scores 1 inside its
+ *  band, falling to 0 one band-width outside; the targets term is their mean. With targets
+ *  declared, a suite is 0.55 × runs + 0.10 × health + 0.10 × balance + 0.25 × targets (the
+ *  hidden-role genre band takes the same slot). The judge terms were too compressed to see a
+ *  pacing or interaction change of the size a rules edit makes; the targets are the designer's
+ *  own definition of better, measured directly and in volume (the screen's bot games carry the
+ *  same measures). */
+export const SCORE_VERSION = 'score/v4.3';
+export const WEIGHTS = { ended: 0.25, critique: 0.2, judged: 0.15, variety: 0.1, agency: 0.1, pace: 0.1, clean: 0.1 } as const;
+export const WEIGHTS_HIDDEN_ROLE = { ended: 0.15, critique: 0.2, judged: 0.1, clean: 0.1, deduction: 0.2, interaction: 0.15, tension: 0.1 } as const;
 
 export interface RunScore {
   score: number;
-  parts: { ended: number; variety: number; agency: number; length: number; clean: number; judged: number; critique: number };
+  parts: Record<string, number>;
+  deduction?: DeductionReport;
 }
 
 const clamp = (x: number) => Math.max(0, Math.min(1, x));
+/** v4.2: rounds 4–10 earn 1; fewer earn rounds/4; more ease to .5 at 20 rounds and stay there */
+export const paceBand = (rounds: number) => (rounds < 4 ? clamp(rounds / 4) : rounds <= 10 ? 1 : Math.max(0.5, 1 - (rounds - 10) / 20));
 const LIMIT_END = /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit/i;
 
 export function scoreRun(s: Session, findings: Finding[], j: Judgement | null): RunScore {
   const m = metrics(s);
   if (s.stopped === 'error' || s.stopped === 'stuck') {
-    return { score: 0, parts: { ended: 0, variety: 0, agency: 0, length: 0, clean: 0, judged: 0, critique: 0 } };
+    return { score: 0, parts: { ended: 0, variety: 0, agency: 0, pace: 0, clean: 0, judged: 0, critique: 0 } };
   }
   // A time-limit end is the game's own rule when the rules name who wins then (v3).
   const ended = m.finished ? (LIMIT_END.test(m.endReason ?? '') && !s.timeoutWinnerRule ? 0.3 : 1) : 0;
   const dom = m.dominantAction?.[1] ?? 0;
   const variety = clamp(1 - Math.max(0, dom - 0.5) / 0.5);
   const agency = clamp(m.meanValid / 4) * (1 - m.forcedShare);
-  const length = m.finished ? clamp(m.rounds / 3) : 0.5;
+  const limitDraw = m.finished && LIMIT_END.test(m.endReason ?? '') && !s.timeoutWinnerRule;
+  const pace = !m.finished ? 0.5 : limitDraw ? 0.25 : paceBand(m.rounds);
   const clean = findings.some((f) => f.severity === 'error') ? 0 : 1;
   const judged = j?.health.probabilities['plays as designed'] ?? 0;
   const critique = j?.critique?.index ?? 0;
-  const parts = { ended, variety, agency, length, clean, judged, critique };
+  const d = deduction(s);
+  if (d.enemy) {
+    const ded = clamp(d.exposed ? (d.evidenceBeforeExposure ? 1 : 0.3) - 0.3 * d.wrong : 0.6 - 0.3 * d.wrong);
+    const tension = 0.5 * clamp(d.leadChanges / 2) + (d.margin === null ? 0 : d.margin <= 3 ? 0.5 : d.margin <= 6 ? 0.25 : 0);
+    const parts = { ended, critique, judged, clean, deduction: ded, interaction: d.interactiveShare, tension };
+    const score = (Object.keys(WEIGHTS_HIDDEN_ROLE) as Array<keyof typeof WEIGHTS_HIDDEN_ROLE>).reduce((a, k) => a + WEIGHTS_HIDDEN_ROLE[k] * parts[k], 0);
+    return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])), deduction: d };
+  }
+  const parts = { ended, variety, agency, pace, clean, judged, critique };
   const score = (Object.keys(WEIGHTS) as Array<keyof typeof WEIGHTS>).reduce((a, k) => a + WEIGHTS[k] * parts[k], 0);
-  return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])) as RunScore['parts'] };
+  return { score: +score.toFixed(4), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, +v.toFixed(3)])) };
 }
 
 export function definitionHealth(c: Classification): number {
@@ -87,9 +147,45 @@ export function outcomeBalance(runs: Array<{ winnerKey?: string | null; position
   return +(h / Math.log(Math.min(k, won.length))).toFixed(4);
 }
 
-export function scoreSuite(runScores: number[], c: Classification, balance: number | null = null): number {
+/** The genre band for hidden-role games (v4): null unless 4+ runs carry a deduction report. */
+export function genreBalance(runs: Array<{ deduction?: DeductionReport | null }>): number | null {
+  const ds = runs.map((r) => r.deduction).filter((d): d is DeductionReport => !!d && !!d.enemy);
+  if (ds.length < 4) return null;
+  const band = (x: number, lo: number, hi: number) => (x >= lo && x <= hi ? 1 : clamp(1 - (x < lo ? lo - x : x - hi) / 0.4));
+  const exposure = ds.filter((d) => d.exposed).length / ds.length;
+  const enemyWins = ds.filter((d) => d.enemyWon).length / ds.length;
+  const accusations = ds.reduce((a, d) => a + d.accusations, 0);
+  const wrongShare = accusations ? ds.reduce((a, d) => a + d.wrong, 0) / accusations : 0;
+  return +((band(exposure, 0.4, 0.6) + band(enemyWins, 0.3, 0.45) + band(wrongShare, 0, 0.2)) / 3).toFixed(4);
+}
+
+export type Targets = Record<string, [number, number]>;
+/** How well the suite's measure means sit in the designer's bands: 1 inside, 0 one band-width out. */
+export function targetsScore(means: Record<string, number>, targets: Targets): { score: number; bands: Record<string, { mean: number; lo: number; hi: number; band: number }> } | null {
+  const bands: Record<string, { mean: number; lo: number; hi: number; band: number }> = {};
+  for (const [k, [lo, hi]] of Object.entries(targets)) {
+    const mean = means[k];
+    if (mean === undefined || !Number.isFinite(mean)) continue;
+    const width = Math.max(hi - lo, Math.abs(hi) * 0.25, 1e-6);
+    const band = mean >= lo && mean <= hi ? 1 : clamp(1 - (mean < lo ? lo - mean : mean - hi) / width);
+    bands[k] = { mean: +mean.toFixed(3), lo, hi, band: +band.toFixed(3) };
+  }
+  const ks = Object.keys(bands);
+  if (!ks.length) return null;
+  return { score: +(ks.reduce((a, k) => a + bands[k].band, 0) / ks.length).toFixed(4), bands };
+}
+/** Mean of each measure over runs that carry it. */
+export function measureMeans(runs: Array<{ measures?: Record<string, number> | null }>): Record<string, number> {
+  const sums: Record<string, [number, number]> = {};
+  for (const r of runs) for (const [k, v] of Object.entries(r.measures ?? {})) { const s = (sums[k] ??= [0, 0]); s[0] += v; s[1] += 1; }
+  return Object.fromEntries(Object.entries(sums).map(([k, [s, n]]) => [k, s / n]));
+}
+
+export function scoreSuite(runScores: number[], c: Classification, balance: number | null = null, genre = false, targets: number | null = null): number {
   const mean = runScores.length ? runScores.reduce((a, b) => a + b, 0) / runScores.length : 0;
   // Without a balance reading (too few decided games), its weight goes back to the runs.
+  if (targets !== null) return +(balance === null ? 0.65 * mean + 0.1 * definitionHealth(c) + 0.25 * targets : 0.55 * mean + 0.1 * definitionHealth(c) + 0.1 * balance + 0.25 * targets).toFixed(4);
   if (balance === null) return +(0.85 * mean + 0.15 * definitionHealth(c)).toFixed(4);
+  if (genre) return +(0.65 * mean + 0.1 * definitionHealth(c) + 0.25 * balance).toFixed(4);
   return +(0.75 * mean + 0.15 * definitionHealth(c) + 0.1 * balance).toFixed(4);
 }

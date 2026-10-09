@@ -69,7 +69,7 @@ const LOOKAHEAD_MAX = 40;
 const FOLLOW_MAX = 30;
 /** Moves whose outcome turns on hidden information are never simulated (a denunciation
  *  would otherwise announce whether the target is the Enemy; a draw, the next card). */
-const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
+const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$|^roll|^chaos$|^reveal$/;
 
 /** What the runner shows Jev and how it drives play. Part of an eval's identity: a harness
  *  change moves scores without touching engine code, so baselines must match it too.
@@ -80,13 +80,37 @@ const NO_SIM = /denounce|accuse|guess|investigate|bluff|^draw$/;
  *  h5: compact option labels (no internal ids, empty values or JSON brackets) ·
  *  h6: player personas — odd seeds trusting, even seeds suspicious (PERSONAS) ·
  *  h7: moves that touch hidden information say that they do, not what ("+1 card",
- *  "learn player-2 objective") — discovery and evidence-gathering were invisible. */
-export const HARNESS_VERSION = 'h7';
+ *  "learn player-2 objective") — discovery and evidence-gathering were invisible ·
+ *  h8: turn plans — multi-step options found by a bounded search over the player's own
+ *  next actions; a chosen plan's later steps run without asking again ·
+ *  h9: players get the whole rules prose (up to RULES_MAX), not just the win/turn/action
+ *  sections — the map, denouncing, trading, powers and events were invisible to them ·
+ *  h10: costs on labels — a move that exposes your role says so ("cost: everyone learns you are …"), and an
+ *  accusation states what being right and wrong do; a player on the enemy team plays as the
+ *  hidden traitor (ENEMY_PERSONA); the judge sees who learned what, and when (knowledge_events) ·
+ *  h11: a die roll is never simulated — one outcome of a roll is not a consequence of choosing to
+ *  roll, and a lay must not inherit the luck of the roll that follows it (the junction chain's
+ *  two-step race turn). */
+export const HARNESS_VERSION = 'h22'; // h22: an unjudged judged run counts as incomplete.
+// h21: // h21: the greedy stand-in takes a free reveal whenever it can.
+// h20: // h20: a reveal's outcome is never previewed (it would name the face-down King).
+// h19: // h19: questionnaire v2 — margin and authorship as scores, 'went my way' against the named move, the urgency scale fixed.
+// h18: // h18: the questionnaire (probe): sampled turns answer intention/threat/alternatives/urgency and, later, achieved/outcome/authorship/revised, as q_* measures.
+// h17: // h17: the greedy stand-in values its options (own forecast, route) instead of picking any marked one.
+// h16: // h15: sessions carry the mechanic's measures; h16: every eval plays a bot split (greedy stand-in, no judge) for the targets.
+
+/** "cost: everyone learns you are X" when `after` exposes the mover's role (public reveal, e.g. the Temple). */
+function exposure(before: Record<string, any>, after: Record<string, any>, pid: string): string[] {
+  const was = before.players[pid]?.revealedAs;
+  const now = after.players[pid]?.revealedAs;
+  return !was && now ? [`cost: everyone learns you are ${now}${after.players[pid]?.team === 'enemy' ? ' — any player can then denounce you and win' : ''}`] : [];
+}
 
 function progressOf(state: Record<string, any>, pid: string): string[] {
   try {
     const v = mechanicRegistry.getPlayerView(state as never, pid) as Record<string, unknown>;
-    return Array.isArray(v?.objectiveProgress) ? (v.objectiveProgress as string[]) : [];
+    // objectiveProgress: how far along the goal; progress: any other per-step movement a mechanic reports.
+    return [...(Array.isArray(v?.objectiveProgress) ? (v.objectiveProgress as string[]) : []), ...(Array.isArray(v?.progress) ? (v.progress as string[]) : [])];
   } catch {
     return [];
   }
@@ -100,6 +124,22 @@ function hiddenFingerprint(state: Record<string, any>, pid: string): string {
 
 /** Play `c` on a copy of `s` (own RNG, the slot's files restored); null if it throws. */
 function simulate(s: Record<string, any>, pid: string, c: Action, prefix: string, snap: Record<string, string>, rng: () => number): Record<string, any> | null {
+  // Previewing arrival at an opponent's King would reveal its secret owner (or that it is a decoy).
+  const chain = s.shared?.chain;
+  if (chain && c.type === 'reroute') {
+    const d = ['north', 'east', 'south', 'west'].indexOf(String(c.dir));
+    if (d >= 0) {
+      const [x, y] = chain.counter.split(',').map(Number);
+      const [dx, dy] = [[0,-1],[1,0],[0,1],[-1,0]][d];
+      const wrap = s.config?.engine_mechanics?.junction_chain?.wrap !== false;
+      const nx = wrap ? (x + dx + chain.size) % chain.size : x + dx;
+      const ny = wrap ? (y + dy + chain.size) % chain.size : y + dy;
+      const king = chain.tiles[`${nx},${ny}`]?.king;
+      const obj = s.players[pid]?.objective;
+      const glyph = ({ hearts:'♥', diamonds:'♦', clubs:'♣', spades:'♠' } as Record<string,string>)[king];
+      if (king && !String(obj?.name ?? '').toLowerCase().includes(king) && !String(obj?.check?.counter_at ?? '').includes(glyph)) return null;
+    }
+  }
   const clone = structuredClone(s);
   try {
     withRng(rng, () => executeAction(clone as never, pid, c as never));
@@ -150,9 +190,9 @@ function consequences(s: Record<string, any>, pid: string, cands: Action[], slot
       if (dHand > 0) quiet.push(`+${dHand} card${dHand > 1 ? 's' : ''}`);
       const learned = Object.keys(after.players[pid]?.knowledge?.revealed ?? {}).filter((k) => !beforeKnown.has(k)).map((k) => k.replace(/ \(round \d+\)$/, ''));
       if (learned.length) quiet.push(`learn ${learned.join(', ')}`);
-      return quiet;
+      return [...exposure(s, after, pid), ...quiet];
     }
-    const facts: string[] = [];
+    const facts: string[] = [...exposure(s, after, pid)];
     const ended = after.status !== 'in_progress';
     const winner = after.shared?.winner ?? after.winner;
     if (ended && winner === pid) facts.push('YOU WIN');
@@ -189,6 +229,114 @@ function consequences(s: Record<string, any>, pid: string, cands: Action[], slot
         break;
       }
     }
+  }
+  return out;
+}
+
+/* ── turn plans (harness h8) ────────────────────────────────────────────
+ * A one-ply chooser can't hold a goal across actions: it shuttled between tiles for most
+ * of the game. Before a decision the runner searches the player's own next actions (up to
+ * the rest of the turn, depth ≤ PLAN_DEPTH, beam PLAN_BEAM) on throwaway states and offers
+ * the best multi-step plans as options — "move A → place B → move B [→ 3/6 visited]" —
+ * next to the single actions. A chosen plan's later steps run without asking again (each
+ * re-validated; if one no longer holds, the player decides afresh). A plan never continues
+ * past a step that touched hidden information: that step can only end it. */
+const PLAN_DEPTH = 3;
+const PLAN_BEAM = 10;
+const PLAN_MAX = 40;
+
+function scoreFacts(f: string[]): number {
+  let n = 0;
+  for (const x of f) {
+    if (x === 'YOU WIN') n += 1000;
+    else if (x.startsWith('→')) n += 10;
+    else if (x.startsWith('learn')) n += 3;
+    else if (/^\+\d+ card/.test(x)) n += Number(/^\+(\d+)/.exec(x)![1]);
+    else if (x.startsWith('score')) n += 5;
+    else if (/ wins$/.test(x)) n -= 1000;
+  }
+  return n;
+}
+
+function planOptions(s: Record<string, any>, pid: string, valid: Action[], slot: string, rng: () => number): Array<{ actions: Action[]; label: string }> {
+  if (valid.length > SIM_MAX) return [];
+  const prefix = `/pt/games/${slot}/`;
+  const snap = filesUnder(prefix);
+  const beforeProgress = progressOf(s, pid);
+  const beforeHidden = hiddenFingerprint(s, pid);
+  const beforeScore = Number(s.players[pid]?.score ?? 0);
+  const beforeHand = (s.players[pid]?.hand ?? []).length;
+  const beforeKnown = new Set(Object.keys(s.players[pid]?.knowledge?.revealed ?? {}));
+  // Cumulative facts of a state relative to the decision point (same rules as consequences()).
+  const factsOf = (after: Record<string, any>): { facts: string[]; open: boolean } => {
+    const hiddenMoved = hiddenFingerprint(after, pid) !== beforeHidden;
+    const facts: string[] = [...exposure(s, after, pid)];
+    if (!hiddenMoved) {
+      const ended = after.status !== 'in_progress';
+      const winner = after.shared?.winner ?? after.winner;
+      if (ended && winner === pid) facts.push('YOU WIN');
+      else if (ended && winner) facts.push(`${winner} wins`);
+      facts.push(...progressOf(after, pid).filter((l) => !beforeProgress.includes(l)).map((l) => `→ ${l}`));
+      const dScore = Number(after.players[pid]?.score ?? 0) - beforeScore;
+      if (dScore) facts.push(`score ${dScore > 0 ? '+' : ''}${dScore}`);
+    } else {
+      const dHand = (after.players[pid]?.hand ?? []).length - beforeHand;
+      if (dHand > 0) facts.push(`+${dHand} card${dHand > 1 ? 's' : ''}`);
+      const learned = Object.keys(after.players[pid]?.knowledge?.revealed ?? {}).filter((k) => !beforeKnown.has(k)).map((k) => k.replace(/ \(round \d+\)$/, ''));
+      if (learned.length) facts.push(`learn ${learned.join(', ')}`);
+    }
+    // Only keep planning from a state that is still this player's turn and hides nothing new.
+    return { facts, open: !hiddenMoved && after.status === 'in_progress' && after.currentPlayer === pid };
+  };
+  type Node = { actions: Action[]; state: Record<string, any>; facts: string[]; score: number; open: boolean };
+  const plans: Node[] = [];
+  let frontier: Node[] = [];
+  const firstScore = new Map<Action, number>();
+  // Outcomes one action already gets: a plan that only matches one of them is filler.
+  const rootOutcomes = new Set<string>();
+  for (const c of valid) {
+    if (NO_SIM.test(c.type)) continue;
+    const st = simulate(s, pid, c, prefix, snap, rng);
+    if (!st) continue;
+    const f = factsOf(st);
+    const sc = scoreFacts(f.facts);
+    firstScore.set(c, sc);
+    rootOutcomes.add(f.facts.join('; '));
+    if (f.open) frontier.push({ actions: [c], state: st, facts: f.facts, score: sc, open: true });
+  }
+  for (let depth = 2; depth <= PLAN_DEPTH && frontier.length; depth++) {
+    // Expand the most promising states, plus a few others so plans aren't all one opening.
+    frontier.sort((a, b) => b.score - a.score || rng() - 0.5);
+    const expand = frontier.slice(0, PLAN_BEAM);
+    const next: Node[] = [];
+    for (const n of expand) {
+      const nsnap = filesUnder(prefix);
+      for (const f of validMoves(n.state, pid, rng, 30)) {
+        const st = simulate(n.state, pid, f, prefix, nsnap, rng);
+        if (!st) continue;
+        const ff = factsOf(st);
+        const node: Node = { actions: [...n.actions, f], state: st, facts: ff.facts, score: scoreFacts(ff.facts), open: ff.open };
+        // A plan is worth offering only if it gets more than its first step alone does.
+        if (node.score > (firstScore.get(node.actions[0]) ?? 0) && node.score > n.score) plans.push(node);
+        if (ff.open) next.push(node);
+      }
+    }
+    frontier = next;
+  }
+  // Best first; one plan per distinct outcome, at most two per opening move.
+  // Best first, and for one outcome the shortest plan (fewest padding steps).
+  plans.sort((a, b) => b.score - a.score || a.actions.length - b.actions.length);
+  const seen = new Set<string>();
+  const perOpening = new Map<string, number>();
+  const out: Array<{ actions: Action[]; label: string }> = [];
+  for (const p of plans) {
+    const outcome = p.facts.join('; ');
+    const opening = JSON.stringify(p.actions[0]);
+    if (seen.has(outcome) || rootOutcomes.has(outcome) || (perOpening.get(opening) ?? 0) >= 2) continue;
+    seen.add(outcome);
+    perOpening.set(opening, (perOpening.get(opening) ?? 0) + 1);
+    out.push({ actions: p.actions, label: `plan: ${p.actions.map((a) => labelOf(a).slice(0, 48)).join(' → ')} [${outcome}]`.slice(0, 220) });
+    if (out.length >= PLAN_MAX) break;
   }
   return out;
 }
@@ -342,6 +490,8 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
     // (track vs point-to-point movement…): report only confident, top matches.
     const strong = prose.filter((m) => m.p >= 0.9).slice(0, 8);
     for (const m of strong) {
+      // These behaviours are implemented by the composite junction-chain mechanic itself.
+      if (cfg.engine_mechanics?.junction_chain && ['race', 'grid-movement', 'win-reach-state', 'tile-placement', 'square-grid'].includes(m.slug)) continue;
       if (!m.configured && m.implemented) findings.push({ kind: 'described-not-configured', severity: 'info', subject: m.slug, detail: `the prose describes ${m.name} (p ${m.p.toFixed(2)}) and the engine implements it, but the frontmatter doesn't enable it — the engine won't enforce it` });
       if (!m.implemented) findings.push({ kind: 'described-not-implemented', severity: 'warn', subject: m.slug, detail: `the prose describes ${m.name} (p ${m.p.toFixed(2)}) but no engine mechanic implements it` });
     }
@@ -351,7 +501,7 @@ export async function classify(rules: string, decide: Decide | null): Promise<Cl
     }
   }
 
-  const multiActionEngine = !!(cfg.engine_mechanics && 'action_points' in cfg.engine_mechanics);
+  const multiActionEngine = !!(cfg.engine_mechanics && ('action_points' in cfg.engine_mechanics || 'junction_chain' in cfg.engine_mechanics));
   resetPrefix(`/pt/games/${slot}/`);
   return { name: String(cfg.name ?? 'untitled'), players, winCondition: String(cfg.win_condition ?? ''), declared, enabled, prose, ruleChecks, multiActionEngine, rulesText: String(markdown ?? '').slice(0, 8000), effects, schema, findings, tokens };
 }
@@ -377,6 +527,10 @@ export interface TurnRecord {
   ms: number;
   tokens: number;
   scores: Record<string, number>;
+  /** options carrying a visible consequence ([→ …], [then …], plans, [+…], [learn …]) */
+  marked?: number;
+  /** knowledge events this move caused (h10): reveals, private peeks, public exposures */
+  learned?: string[];
 }
 
 export interface Session {
@@ -388,10 +542,16 @@ export interface Session {
   turns: TurnRecord[];
   log: Array<Record<string, unknown>>;
   unsuitable: Array<{ type: string; fields: string[]; why: 'free-text' | 'numeric' | 'no-valid-candidate'; times: number }>;
+  /** Who learned what, when (h10): public role reveals and private peeks, for the judge. */
+  knowledge: string[];
   /** Each player's secret role/objective, read at the end (for balance: who wins as what). */
   roles?: Record<string, string>;
   /** The rules name who wins at the time limit (win_timeout): a timeout is a designed ending. */
   timeoutWinnerRule?: boolean;
+  /** h15: what the mechanic measured about this game (shared.measures), numbers a designer can set targets for */
+  measures?: Record<string, number>;
+  /** h18: the questionnaire's answers, one record per probed turn */
+  probes?: ProbeRecord[];
   stopped: 'finished' | 'max-steps' | 'deadline' | 'stuck' | 'error';
   error?: string;
   tokens: number;
@@ -405,6 +565,87 @@ export interface PlayOptions {
   persona?: string;
   onTurn?: (t: TurnRecord) => void;
   signal?: AbortSignal;
+  /** h18: the questionnaire — every n-th judged decision of each player is followed by one
+   *  structured call asking about this turn (intention, threat, alternatives, urgency) and about
+   *  that player's last probed turn (achieved, outcome, authorship, revised plan). 0/unset: off. */
+  probe?: number;
+}
+
+/* ── the questionnaire (h18) ──────────────────────────────────────────────
+ * "Fun" decomposed into things a player can be asked at the table, as measures the targets
+ * can band. The probe comes AFTER the player has chosen and BEFORE the move resolves, so the
+ * answers cannot steer the move (the decider is stateless) and predictions are captured before
+ * outcomes. Private: nothing a player says reaches another player. Neutral wording: every
+ * question admits "nothing happened". The engine's own forecast (the view's progress lines)
+ * is kept beside each answer, so a claimed threat can be checked against a real one. */
+export interface ProbeRecord {
+  step: number;
+  player: string;
+  intention: string | null;
+  threat: string | null;
+  /** 0–1: how much better the chosen move was than the next best (0 no better … 1 the only sensible move) */
+  margin: number | null;
+  /** 0–1: how likely someone wins before this player's next turn, as the player sees it */
+  urgency: number | null;
+  /** the engine's forecast at the time: the largest chance of any King within the next few rolls, 0–1 */
+  engineThreat: number | null;
+  /** answers about this player's previous probed turn, given now */
+  /** whether the table moved the way the player wanted since the move they named */
+  wentMyWay?: string | null;
+  /** the counter's movement since: expected, surprising but understandable, confusing, or none */
+  outcome?: string | null;
+  /** 0–1: how much of what happened since was the cards laid earlier rather than the die */
+  authorship?: number | null;
+  revised?: number | null;
+  /** the move the player had just chosen (for the next probe's questions) */
+  move?: string;
+  tokens: number;
+}
+const INTENTIONS = ['advance my own goal', 'hinder someone else', 'prepare for later turns', 'nothing in particular'];
+const THREATS = ['someone else could win before my next turn', 'I could win on my next turn', 'nobody is close to winning', 'unsure'];
+const MARGIN = ['no better than the next best', 'slightly better', 'clearly better', 'much better', 'it was the only sensible move'];
+const URGENCY = ['no chance', 'unlikely', 'even', 'likely', 'almost certain'];
+const WENT = ['yes', 'partly', 'no', 'nothing relevant has happened'];
+const OUTCOMES = ['as I expected', 'surprising but understandable', 'confusing', 'the counter did not move'];
+const AUTHORSHIP = ['all the die', 'mostly the die', 'even', 'mostly the cards', 'all the cards'];
+/** Jev's score answers arrive on 0–1 (an expectation over the levels); older or odd deciders may give the level index */
+const unit = (x: unknown, levels: number) => (typeof x !== 'number' ? null : x <= 1.1 ? Math.max(0, Math.min(1, x)) : Math.max(0, Math.min(1, x / (levels - 1))));
+/** the engine's threat from the view's progress lines ("… 35% within 4 rolls …"): the largest near figure */
+function engineThreatOf(av: Record<string, unknown>): number | null {
+  const lines = [...(Array.isArray(av.objectiveProgress) ? (av.objectiveProgress as string[]) : []), ...(Array.isArray(av.progress) ? (av.progress as string[]) : [])];
+  let best: number | null = null;
+  for (const l of lines) { const m = /(\d+)%\s*within/.exec(l); if (m) best = Math.max(best ?? 0, Number(m[1]) / 100); }
+  return best;
+}
+/** The questionnaire's measures over a session's probes (q_*: shares 0–1; q_urgencyErr: mean |player − engine|). */
+export function probeMeasures(probes: ProbeRecord[]): Record<string, number> {
+  const n = probes.length;
+  if (!n) return {};
+  const share = (f: (p: ProbeRecord) => boolean, of = probes) => (of.length ? +(of.filter(f).length / of.length).toFixed(3) : 0);
+  const mean = (xs: number[]) => (xs.length ? +(xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(3) : null);
+  const after = probes.filter((p) => p.wentMyWay != null || p.outcome != null || p.authorship != null);
+  const threatened = probes.filter((p) => p.engineThreat != null && p.engineThreat >= 1 / 3);
+  const calm = probes.filter((p) => p.engineThreat != null && p.engineThreat < 1 / 6);
+  const urg = probes.filter((p) => p.urgency != null && p.engineThreat != null);
+  const num = (k: string, v: number | null) => (v === null ? {} : { [k]: v });
+  return {
+    q_n: n,
+    q_intent: share((p) => !!p.intention && p.intention !== 'nothing in particular'),
+    q_hinder: share((p) => p.intention === 'hinder someone else'),
+    ...num('q_margin', mean(probes.map((p) => p.margin).filter((v): v is number => v != null))),
+    q_forced: share((p) => p.margin != null && p.margin >= 0.9),
+    ...(threatened.length ? { q_threatSeen: share((p) => p.threat === THREATS[0] || p.threat === THREATS[1], threatened) } : {}),
+    ...(calm.length ? { q_threatFalse: share((p) => p.threat === THREATS[0] || p.threat === THREATS[1], calm) } : {}),
+    ...(urg.length ? { q_urgencyErr: +(urg.reduce((a, p) => a + Math.abs(p.urgency! - p.engineThreat!), 0) / urg.length).toFixed(3) } : {}),
+    ...(after.length ? {
+      q_wentMyWay: share((p) => p.wentMyWay === 'yes' || p.wentMyWay === 'partly', after),
+      q_nothingHappened: share((p) => p.wentMyWay === WENT[3], after),
+      q_surprise: share((p) => p.outcome === OUTCOMES[1], after),
+      q_confusing: share((p) => p.outcome === OUTCOMES[2], after),
+      ...num('q_authorship', mean(after.map((p) => p.authorship).filter((v): v is number => v != null))),
+      ...num('q_revised', mean(after.map((p) => p.revised).filter((v): v is number => v != null))),
+    } : {}),
+  };
 }
 
 function mulberry32(seed: number): () => number {
@@ -460,6 +701,28 @@ function fieldsNeedingWords(a: Action): string[] {
     .map(([k]) => k);
 }
 
+/** Who knows what before a move (executeAction mutates the state in place). */
+function knowledgeSnapshot(s: Record<string, any>): Record<string, { revealedAs?: string; knows: string[] }> & { __public?: number } {
+  const snap = Object.fromEntries(Object.entries(s.players as Record<string, any>).map(([p, pl]) => [p, { revealedAs: pl.revealedAs, knows: Object.keys(pl.knowledge?.revealed ?? {}) }]));
+  return Object.assign(snap, { __public: ((s.shared?.publicKnowledge as string[] | undefined) ?? []).length });
+}
+
+/** Public role reveals and private peeks caused by one move (h10): "R2 player-1 revealed to all as The Enemy". */
+function knowledgeEvents(before: ReturnType<typeof knowledgeSnapshot>, after: Record<string, any>, round: number, mover: string, label: string): string[] {
+  const out: string[] = [];
+  const by = `(${mover}: ${label.replace(/ \[.*$/, '').slice(0, 60)})`;
+  // Things a mechanic made public for everyone (shared.publicKnowledge): exposures, completions.
+  for (const line of ((after.shared?.publicKnowledge as string[] | undefined) ?? []).slice(before.__public ?? 0)) out.push(`R${round} everyone learned: ${line} ${by}`);
+  for (const [p, pl] of Object.entries(after.players as Record<string, any>)) {
+    if (p === '__public') continue;
+    const b = before[p] ?? { knows: [] };
+    if (pl.revealedAs && !b.revealedAs) out.push(`R${round} ${p} revealed to all as ${pl.revealedAs} ${by}`);
+    const was = new Set(b.knows);
+    for (const k of Object.keys(pl.knowledge?.revealed ?? {})) if (!was.has(k)) out.push(`R${round} ${p} privately learned ${k.replace(/ \(round \d+\)$/, '')} ${by}`);
+  }
+  return out;
+}
+
 /** Player personas (harness h6): evals alternate them by seed, so a rule change that only
  *  suits one kind of player shows up as a split instead of a gain. */
 export const PERSONAS: Record<string, string> = {
@@ -467,6 +730,19 @@ export const PERSONAS: Record<string, string> = {
   suspicious: 'Play as a wary player: assume one player is secretly working against everyone; do not help a player toward a goal you cannot see, and act on evidence about who the traitor is.',
 };
 export const personaFor = (seed: number) => (seed % 2 ? 'trusting' : 'suspicious');
+/** For a player on the enemy team the traitor-hunting personas make no sense (h10). */
+export const ENEMY_PERSONA = 'You are the hidden traitor: the others win by naming you, so keep your role secret — look like an honest player, and avoid any move that reveals you unless it wins the game outright.';
+
+/** What an accusation does, from the rules' denounce settings (accusations are never simulated). */
+function accusationStakes(cfg: Record<string, any>): string | null {
+  const d = cfg.engine_mechanics?.hidden_objectives?.denounce;
+  if (!d) return null;
+  const pts = d.points ?? {};
+  const right = (d.correct ?? 'win') === 'win' ? 'YOU WIN' : d.correct === 'score' ? `${d.ends_game ? 'the game ends, ' : ''}you score +${pts.accuser ?? 3} and they drop to 0` : 'they are revealed';
+  const penalty = d.correct === 'score' && pts.wrong ? `you lose ${Math.abs(pts.wrong)} points, ` : '';
+  const wrong = penalty + (({ forfeit: 'your objective is revealed and no longer counts', reveal_self: 'your role is revealed', end_turn: 'your turn ends', both: 'your role is revealed and your turn ends' } as Record<string, string>)[d.wrong ?? 'both'] ?? String(d.wrong));
+  return `if right: ${right} · if wrong: ${wrong}`;
+}
 
 /** Action types a player may take when it isn't their turn (replies), served before the current player. */
 const OFF_TURN = /(^|_)respond$/;
@@ -508,12 +784,18 @@ function turnState(state: Record<string, any>, pid: string, av: Record<string, a
   };
 }
 
-/** The winning/gameplay parts of the prose, capped — accuracy falls with irrelevant state. */
+/** The rules prose a player reads: all of it up to RULES_MAX. Over the cap, the win/turn/
+ *  action sections come first and the rest follow in order until it is full. */
+const RULES_MAX = 8000;
 function digest(markdown: string, winCondition: string): string {
-  const sections = markdown.split(/\n(?=#{1,3} )/);
-  const pick = sections.filter((s) => /win|victory|goal|objective|gameplay|turn|actions?/i.test(s.split('\n')[0] ?? ''));
-  const text = (pick.length ? pick : sections).join('\n').replace(/\n{3,}/g, '\n\n');
-  return `Win condition: ${winCondition}\n${text}`.slice(0, 2400);
+  const head = `Win condition: ${winCondition}\n`;
+  const all = markdown.replace(/\n{3,}/g, '\n\n').trim();
+  if (head.length + all.length <= RULES_MAX) return head + all;
+  const sections = all.split(/\n(?=#{1,3} )/);
+  const key = (s: string) => /win|victory|goal|objective|gameplay|turn|actions?/i.test(s.split('\n')[0] ?? '');
+  let out = head;
+  for (const s of [...sections.filter(key), ...sections.filter((s) => !key(s))]) if (out.length + s.length + 1 <= RULES_MAX) out += s + '\n';
+  return out;
 }
 
 export async function play(rules: string, decide: Decide | null, opts: PlayOptions): Promise<Session> {
@@ -524,10 +806,11 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
   const { config, markdown } = load(rules, slot);
   const cfg = config as unknown as { win_condition?: string; max_turns?: number; engine_mechanics?: Record<string, unknown> };
   const rulesDigest = digest(markdown, String(cfg.win_condition ?? ''));
+  const stakes = accusationStakes(cfg as Record<string, any>);
   const rng = mulberry32(seed);
   const simRng = mulberry32(seed ^ 0x5bd1e995); // simulations never touch the game's own stream
   const E = <T,>(fn: () => T): T => withRng(rng, fn);
-  const session: Session = { seed, players: opts.players, status: 'init', winner: null, endReason: null, turns: [], log: [], unsuitable: [], stopped: 'finished', tokens: 0, ms: 0, timeoutWinnerRule: !!cfg.engine_mechanics?.win_timeout };
+  const session: Session = { seed, players: opts.players, status: 'init', winner: null, endReason: null, turns: [], log: [], unsuitable: [], knowledge: [], stopped: 'finished', tokens: 0, ms: 0, timeoutWinnerRule: !!cfg.engine_mechanics?.win_timeout };
   const unsuitable = new Map<string, Session['unsuitable'][number]>();
   const note = (type: string, fields: string[], why: Session['unsuitable'][number]['why']) => {
     const k = `${type}:${why}`;
@@ -536,14 +819,20 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
     unsuitable.set(k, u);
   };
   const recent: string[] = [];
+  // the questionnaire's bookkeeping: judged decisions per player, and each player's last probe
+  const decided: Record<string, number> = {};
+  const lastProbe: Record<string, ProbeRecord | undefined> = {};
+  if (opts.probe) session.probes = [];
   let gameId = '';
   try {
     let s = E(() => initGame(slot, opts.players)) as unknown as Record<string, any>;
     gameId = s.gameId;
     E(() => startGame(gameId));
     s = E(() => loadState(gameId)) as unknown as Record<string, any>;
+    let plan: { pid: string; actions: Action[] } | null = null;
     for (let step = 1; s.status === 'in_progress' && step <= maxSteps; step++) {
       if (opts.signal?.aborted) throw Object.assign(new Error('stopped'), { name: 'AbortError' });
+      // (plan: the remaining steps of a multi-step option the current player chose)
       // A player who must answer something off-turn (a trade offered to them) goes first.
       const responder = (s.turnOrder as string[]).find((p) => p !== s.currentPlayer && (E(() => getAvailableActions(s as never, p)) as unknown as { actions: Array<{ type: string; enabled: boolean }> }).actions.some((a) => a.enabled && OFF_TURN.test(a.type)));
       const pid = responder ?? (s.currentPlayer as string);
@@ -568,10 +857,27 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         }
         if (!ok && a.type !== 'pass' && cands.length) note(a.type, Object.keys(a.required ?? {}), 'no-valid-candidate');
       }
-      const facts = decide && valid.length > 1 ? consequences(s, pid, valid, slot, simRng) : new Map<Action, string>();
-      const picks = dedupeLabels(valid)
+      // A chosen plan's next step runs without asking again, if it is still valid.
+      let planned: Action | null = null;
+      if (plan && (responder || plan.pid !== pid)) {
+        if (!responder) plan = null;
+      } else if (plan && plan.actions.length) {
+        const want = JSON.stringify(plan.actions[0]);
+        planned = valid.find((v) => JSON.stringify(v) === want) ?? null;
+        if (planned) plan.actions.shift();
+        else plan = null;
+        if (plan && !plan.actions.length) plan = null;
+      }
+      const facts = !planned && decide && valid.length > 1 ? consequences(s, pid, valid, slot, simRng) : new Map<Action, string>();
+      let picks: Array<{ action: Action; label: string; rest?: Action[] }> = dedupeLabels(valid)
         .slice(0, 255)
-        .map((p) => (facts.has(p.action) ? { ...p, label: `${p.label} [${facts.get(p.action)}]`.slice(0, 200) } : p));
+        .map((p) => (facts.has(p.action) ? { ...p, label: `${p.label} [${facts.get(p.action)}]`.slice(0, 200) } : p))
+        .map((p) => (stakes && /denounce|accuse/.test(String(p.action.type)) ? { ...p, label: `${p.label} [${av.yourTeam === 'enemy' ? 'you are The Enemy, so this is wrong: everyone learns your role' : stakes}]` } : p));
+      if (!planned && !responder && decide && valid.length > 1) {
+        const plans = planOptions(s, pid, valid, slot, simRng);
+        picks = [...plans.map((p) => ({ action: p.actions[0], label: p.label, rest: p.actions.slice(1) })), ...picks].slice(0, 255);
+      }
+      if (planned) picks = [{ action: planned, label: `${labelOf(planned)} (planned)` }];
 
       let chosen: { action: Action; label: string };
       let rec: Pick<TurnRecord, 'confidence' | 'top' | 'ahead' | 'ms' | 'tokens' | 'fallback'> = { confidence: null, top: [], ahead: null, ms: 0, tokens: 0 };
@@ -583,10 +889,10 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         chosen = picks.length === 1 ? picks[0] : picks[Math.floor(rng() * picks.length)];
         if (!decide && picks.length > 1) rec.fallback = 'random (no Jev)';
       } else {
-        const persona = opts.persona ? ` ${PERSONAS[opts.persona] ?? `Play as a ${opts.persona} player.`}` : '';
+        const persona = av.yourTeam === 'enemy' ? ` ${ENEMY_PERSONA}` : opts.persona ? ` ${PERSONAS[opts.persona] ?? `Play as a ${opts.persona} player.`}` : '';
         // Say the goal in the question itself: Jev reads the instruction literally, and a goal
         // buried in the state lost to options that merely sound active.
-        const goal = av.yourObjective ? ` Your secret objective: ${av.yourObjective}${Array.isArray(av.objectiveProgress) && av.objectiveProgress.length ? ` (so far: ${av.objectiveProgress.join('; ')})` : ''}. Options marked [→ …] or [then …] advance it.` : '';
+        const goal = av.yourObjective ? ` Your secret objective: ${av.yourObjective}${Array.isArray(av.objectiveProgress) && av.objectiveProgress.length ? ` (so far: ${av.objectiveProgress.join('; ')})` : ''}. Options marked [→ …] or [then …] advance it; a "plan:" option commits you to that sequence of moves this turn.` : '';
         const q: Questions = {
           move: { type: 'choice', instructions: responder ? `You are ${pid}, answering off-turn. Which reply gives you the best chance of winning this game?${goal}${persona}` : `You are ${pid}. Which move gives you the best chance of winning this game?${goal}${persona}`, criteria: Object.fromEntries(picks.map((p) => [p.label, null])) },
           ahead: { type: 'noul', instructions: `Is ${pid} currently ahead of every opponent?` },
@@ -612,18 +918,56 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
         }
       }
 
+      if (!planned && (chosen as { rest?: Action[] }).rest?.length) plan = { pid, actions: [...(chosen as { rest?: Action[] }).rest!] };
+      // the questionnaire: after the choice, before it resolves (see ProbeRecord)
+      if (opts.probe && decide && picks.length > 1 && !responder) {
+        decided[pid] = (decided[pid] ?? 0) + 1;
+        if (decided[pid] % opts.probe === 0) {
+          const last = lastProbe[pid];
+          const q: Questions = {
+            intention: { type: 'choice', instructions: `You are ${pid}. You have just chosen "${chosen.label.replace(/\s*\[[^\]]*\]\s*$/, '')}". What were you trying to achieve this turn?`, criteria: Object.fromEntries(INTENTIONS.map((o) => [o, null])) },
+            threat: { type: 'choice', instructions: 'As the table stands, which is true?', criteria: Object.fromEntries(THREATS.map((o) => [o, null])) },
+            margin: { type: 'score', instructions: 'How much better was the move you chose than the next best option you had?', criteria: MARGIN },
+            urgency: { type: 'score', instructions: 'How likely is it that someone wins before your next turn?', criteria: URGENCY },
+            ...(last ? {
+              wentMyWay: { type: 'choice', instructions: `At step ${last.step} you played "${last.move ?? 'your move'}" to ${last.intention ?? 'do something'}. Since then, has the table moved the way you wanted?`, criteria: Object.fromEntries(WENT.map((o) => [o, null])) },
+              outcome: { type: 'choice', instructions: 'The counter\'s movement since your last turn was…', criteria: Object.fromEntries(OUTCOMES.map((o) => [o, null])) },
+              authorship: { type: 'score', instructions: 'What happened since your last turn: how much of it was decided by cards laid earlier (yours or others\') rather than by the die?', criteria: AUTHORSHIP },
+              revised: { type: 'noul', instructions: 'Did events since your last turn make you change your plan?' },
+            } : {}),
+          };
+          try {
+            const r = await decide(turnState(s, pid, av, rulesDigest, recent, cfg.max_turns ?? null), q, `probe ${step} · ${pid}`);
+            const a = r.answers;
+            const pick = (k: string, from: string[]) => (a[k]?.choice && from.includes(a[k]!.choice!) ? a[k]!.choice! : null);
+            const rec: ProbeRecord = { step, player: pid, intention: pick('intention', INTENTIONS), threat: pick('threat', THREATS), margin: unit(a.margin?.score, MARGIN.length), urgency: unit(a.urgency?.score, URGENCY.length), engineThreat: engineThreatOf(av), move: chosen.label.replace(/\s*\[[^\]]*\]\s*$/, '').slice(0, 80), tokens: r.tokens, ...(last ? { wentMyWay: pick('wentMyWay', WENT), outcome: pick('outcome', OUTCOMES), authorship: unit(a.authorship?.score, AUTHORSHIP.length), revised: typeof a.revised?.noul === 'number' ? a.revised.noul : null } : {}) };
+            session.probes!.push(rec);
+            lastProbe[pid] = rec;
+            session.tokens += r.tokens;
+          } catch (e) {
+            if ((e as Error).name === 'AbortError') throw e;
+          }
+        }
+      }
       const at = { round: s.round, turn: s.turnNumber }; // before the action can end the turn
+      const known = knowledgeSnapshot(s);
       E(() => executeAction(s as never, pid, chosen.action as never));
-      recent.push(`${pid}: ${chosen.label}`);
+      // What the other players see of this move: a move on a hidden project (stealth / hidden) shows
+      // neither the card nor its consequences.
+      recent.push(`${pid}: ${(chosen.action as { stealth?: boolean; hidden?: boolean }).stealth || (chosen.action as { hidden?: boolean }).hidden ? `${chosen.action.type.replace(/_/g, ' ')} · (a hidden project)` : labelOf(chosen.action)}`); // Public history must never expose private consequence/forecast labels.
       const next = E(() => loadState(gameId)) as unknown as Record<string, any>;
+      const learned = knowledgeEvents(known, next, at.round, pid, chosen.label);
+      session.knowledge.push(...learned);
       const t: TurnRecord = {
+        ...(learned.length ? { learned } : {}),
         step,
         round: at.round,
         turn: at.turn,
         player: pid,
         offered: offered.length,
         valid: picks.length,
-        forced: picks.length === 1,
+        forced: picks.length === 1 && !planned,
+        marked: picks.filter((p) => /\[(→|then|\+\d|learn|YOU WIN)|^plan:/.test(p.label)).length,
         label: chosen.label,
         action: chosen.action,
         ...rec,
@@ -634,6 +978,9 @@ export async function play(rules: string, decide: Decide | null, opts: PlayOptio
       s = next;
       if (step === maxSteps && s.status === 'in_progress') session.stopped = 'max-steps';
     }
+    if (s.shared?.measures && typeof s.shared.measures === 'object') session.measures = Object.fromEntries(Object.entries(s.shared.measures as Record<string, unknown>).filter(([, v]) => typeof v === 'number')) as Record<string, number>;
+    if (session.probes?.length) session.measures = { ...(session.measures ?? {}), ...probeMeasures(session.probes) };
+    (session as Session & { chainAudit?: unknown }).chainAudit = s.shared?.chain ? { ...s.shared.chain.audit, rolls: s.shared.chain.rolls, tiles: Object.keys(s.shared.chain.tiles).length, kingsOnBoard: Object.values(s.shared.chain.tiles).filter((t: any) => t.king).length } : undefined;
     session.status = s.status;
     session.winner = (s.winner as string) ?? (s.shared?.winner as string) ?? null;
     session.roles = Object.fromEntries(
@@ -696,6 +1043,12 @@ export interface Metrics {
   usd: number;
 }
 
+/** The game's measures for targets: the mechanic's own (shared.measures) plus rounds and,
+ *  unless the mechanic reported one, draw (finished with nobody winning). */
+export function measuresOf(s: Session): Record<string, number> {
+  const m = metrics(s);
+  return { rounds: m.rounds, draw: m.finished && !s.winner ? 1 : 0, ...(s.measures ?? {}) };
+}
 export function metrics(s: Session): Metrics {
   const n = s.turns.length || 1;
   const mix: Record<string, number> = {};
@@ -872,6 +1225,7 @@ export async function judge(c: Classification, s: Session, decide: Decide): Prom
     // What the classifier already knows the engine lacks for these rules (so the judge can
     // tell rules that were played from rules that silently did nothing).
     known_engine_gaps: c.findings.filter((f) => f.severity !== 'info').slice(0, 30).map((f) => `${f.kind}: ${f.subject} — ${f.detail.slice(0, 140)}`),
+    ...(s.knowledge?.length ? { knowledge_events: s.knowledge.slice(0, 40) } : {}),
     play_by_round: playByRound(s),
   };
   const critiqueQs = Object.fromEntries(
@@ -922,6 +1276,7 @@ function critiqueOf(a: Record<string, { score?: number; probabilities?: Record<s
 }
 
 /** Engine- and balance-level findings from the computed record alone. */
+const LIMIT_END_RE = /max[_ ]?(turns|rounds)|turn limit|round limit|timeout|time limit|draw/i;
 export function sessionFindings(s: Session, m = metrics(s), c?: Classification): Finding[] {
   const out: Finding[] = [];
   const multi = multiActionTurns(s);
@@ -933,7 +1288,12 @@ export function sessionFindings(s: Session, m = metrics(s), c?: Classification):
   if (s.stopped === 'error') out.push({ kind: 'engine', severity: 'error', subject: 'engine error', detail: s.error ?? 'unknown' });
   if (s.stopped === 'stuck') out.push({ kind: 'engine', severity: 'error', subject: 'no legal move', detail: s.error ?? 'a player had no valid move' });
   if (s.stopped === 'max-steps') out.push({ kind: 'balance', severity: 'warn', subject: 'never ended', detail: `still in progress after ${m.steps} moves (round ${m.rounds})` });
-  if (m.finished && m.rounds <= 1) out.push({ kind: 'engine', severity: 'error', subject: 'instant end', detail: `ended in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? 'no reason logged'} — a win check is firing too early` });
+  // (an end in the first round is an engine fault — a win check firing too early — unless the
+  // game can legally be won from the first turn: the junction chain's dynamic race can)
+  if (m.finished && m.rounds <= 1) { const early = !!c?.enabled.includes('junction-chain'); out.push({ kind: early ? 'balance' : 'engine', severity: early ? 'warn' : 'error', subject: 'instant end', detail: `ended in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? 'no reason logged'} — ${early ? 'inspect whether legal early wins leave enough decisions' : 'a win check is firing too early'}` }); }
+  // (a game decided in its first two rounds gave nobody time to plan, read or recover; the
+  // score's length part saturates at three rounds, so this is said here where a climb can see it)
+  if (m.finished && m.rounds > 1 && m.rounds <= 2 && !LIMIT_END_RE.test(m.endReason ?? '')) out.push({ kind: 'balance', severity: 'warn', subject: 'over in two rounds', detail: `decided in round ${m.rounds} after ${m.steps} move(s): ${m.endReason ?? ''}` });
   if (m.dominantAction && m.dominantAction[1] > 0.7 && m.steps > 10) out.push({ kind: 'balance', severity: 'warn', subject: `${m.dominantAction[0]} dominates`, detail: `${Math.round(m.dominantAction[1] * 100)}% of all moves` });
   if (m.forcedShare > 0.6 && m.steps > 10) out.push({ kind: 'balance', severity: 'info', subject: 'few real choices', detail: `${Math.round(m.forcedShare * 100)}% of turns had exactly one legal move` });
   for (const u of s.unsuitable) {

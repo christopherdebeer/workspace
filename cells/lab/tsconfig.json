@@ -1,0 +1,15 @@
+{
+  "// purpose": "The lab cell's own type check (the shared client tsconfig does not include cells/). `npx tsc -p cells/lab`.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["client", "index.ts", "experiments.ts"]
+}
