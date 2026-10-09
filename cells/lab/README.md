@@ -54,7 +54,11 @@ The bundler keeps each `import()` lazy, so a page runs only its own experiment.
 
 ## Deploy
 
-From the repo root: `node scripts/cell-sync.mjs push lab --deploy --message "…"`. The
+From the repo root: `node scripts/cell-sync.mjs push lab --deploy --message "…"`. It needs a
+token: from a session that already holds the substrate (the Substate MCP), mint one directly
+with `auth.mintToken` (`scope: "cells:create read:workspace write:workspace"`, a label, a
+lifetime) and put it in `PARC_TOKEN` or `/tmp/parc-token.json` as `{"access_token": …}`; the
+device flow is only for a session with no substrate access at all. The
 experiments' devtools run against the lab's bundle (`EXPERIMENT=<id>`, Mistwood by default; `READY=__<id>`
 names the global the page reports itself on, `__mistwood` by default): `node cells/lab/devtools/<tool>.mjs`.
 

@@ -12,9 +12,12 @@
  *
  *   flags: --owner c15r · --dry-run · --take local|remote (settle conflicts) · --force
  *
- * Auth: PARC_TOKEN env, or a device-flow token JSON at /tmp/parc-token.json
- * (mint one: POST https://parc.land/auth/device, approve the user_code, then
- * exchange at /oauth/token with the device_code grant).
+ * Auth: PARC_TOKEN env, or a token JSON ({"access_token": …}) at /tmp/parc-token.json.
+ * A session that already holds the substrate (the Substate MCP) mints one directly:
+ * act("auth.mintToken", { scope: "cells:create read:workspace write:workspace",
+ * label, expiresInSec }) — no approval step. The device flow (POST
+ * https://parc.land/auth/device, approve the user_code, exchange at /oauth/token
+ * with the device_code grant) is only for a session with no substrate access.
  *
  * ── THREE-WAY, NOT MIRROR ──
  *
