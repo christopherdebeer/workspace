@@ -62,4 +62,4 @@ names the global the page reports itself on, `__mistwood` by default): `node cel
 
 - **Mistwood** (`client/mistwood/`): a walk through a seeded wood in fog. It was its own cell
   (`@c15r/mistwood`); that cell now only redirects here, keeping the query.
-- **Technic** (`client/technic/`): Bricks evolved: beams, pins and axles on a pegboard, gears, wheels, a motor and a hub; a position-based solver (`sim.ts`) runs it. Rules and solver tested on their own (`devtools/technic.test.mjs`).
+- **Technic** (`client/technic/`): Bricks evolved: beams, pins and axles on a pegboard, gears, wheels, ramps and marbles, a motor and a hub; a position-based solver (`sim.ts`) runs it. Builds are kept and started from (a start screen), pieces come from a drawer. Rules and solver tested on their own (`devtools/technic.test.mjs`).

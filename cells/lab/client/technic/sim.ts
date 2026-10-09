@@ -25,6 +25,9 @@ interface J { a: number; b: number; rax: number; ray: number; rbx: number; rby: 
 interface Gr { a: number; b: number; ra: number; rb: number; lax: number; lay: number; lbx: number; lby: number; phi0: number; phi: number }
 interface Mo { stator: number; rotor: number; target: number; omega: number; piece: number }
 interface Ct { body: number; lx: number; ly: number; r: number; grip: number }
+interface Bl { body: number; z: number; r: number; lx: number; ly: number }
+interface Br { body: number; z: number; ax: number; ay: number; bx: number; by: number; r: number }
+interface Ds { body: number; z: number; lx: number; ly: number; r: number }
 
 const cross = (rx: number, ry: number, nx: number, ny: number) => rx * ny - ry * nx;
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -41,6 +44,10 @@ export class Sim {
   gears: Gr[] = [];
   motors: Mo[] = [];
   contacts: Ct[] = [];
+  /** the balls, and what they meet in their layers */
+  balls: Bl[] = [];
+  bars: Br[] = [];
+  discs: Ds[] = [];
   /** a finger on a body: the point it holds (in the body) and where it is now (in the world) */
   finger: { body: number; lx: number; ly: number; tx: number; ty: number } | null = null;
   time = 0;
@@ -109,6 +116,16 @@ export class Sim {
       const [lx, ly] = local(c.body, c.x, c.y);
       this.contacts.push({ body: c.body, lx, ly, r: c.r, grip: c.grip });
     }
+    for (const b of mech.balls) this.balls.push({ body: b.body, z: b.z, r: b.r, lx: 0, ly: 0 });
+    for (const b of mech.bars) {
+      const [ax, ay] = local(b.body, b.ax, b.ay);
+      const [bx, by] = local(b.body, b.bx, b.by);
+      this.bars.push({ body: b.body, z: b.z, ax, ay, bx, by, r: b.r });
+    }
+    for (const d of mech.discs) {
+      const [lx, ly] = local(d.body, d.x, d.y);
+      this.discs.push({ body: d.body, z: d.z, lx, ly, r: d.r });
+    }
   }
 
   /** A point of a body (given at rest, in the world) as it is now. */
@@ -158,6 +175,7 @@ export class Sim {
       for (const j of this.joints) this.joint(j);
       for (const g of this.gears) this.gear(g);
       for (const c of this.contacts) this.contact(c);
+      for (const b of this.balls) this.ball(b);
       if (this.finger) this.pull(h);
       for (let i = 0; i < n; i++) {
         if (!invM[i] && !invI[i]) continue;
@@ -264,6 +282,76 @@ export class Sim {
       if (ct < -lim) ct = -lim;
       x[b] += invM[b] * ct * tx; y[b] += invM[b] * ct * ty; a[b] += invI[b] * kt * ct;
     }
+  }
+
+  /** A ball against the bars and discs in its layer, and the other balls there. */
+  private ball(b: Bl) {
+    const { x, y, a } = this;
+    const cx = x[b.body], cy = y[b.body];
+    for (const bar of this.bars) {
+      if (bar.z !== b.z || bar.body === b.body) continue;
+      const co = Math.cos(a[bar.body]), si = Math.sin(a[bar.body]);
+      const ax = x[bar.body] + co * bar.ax - si * bar.ay, ay = y[bar.body] + si * bar.ax + co * bar.ay;
+      const bx = x[bar.body] + co * bar.bx - si * bar.by, by = y[bar.body] + si * bar.bx + co * bar.by;
+      const dx = bx - ax, dy = by - ay;
+      const l2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / l2));
+      const qx = ax + dx * t, qy = ay + dy * t;
+      this.pair(b.body, bar.body, cx, cy, qx, qy, b.r + bar.r, 0.7);
+    }
+    for (const d of this.discs) {
+      if (d.z !== b.z || d.body === b.body) continue;
+      const co = Math.cos(a[d.body]), si = Math.sin(a[d.body]);
+      const qx = x[d.body] + co * d.lx - si * d.ly, qy = y[d.body] + si * d.lx + co * d.ly;
+      this.pair(b.body, d.body, cx, cy, qx, qy, b.r + d.r, 0.7);
+    }
+    for (const o of this.balls) {
+      if (o === b || o.z !== b.z || o.body <= b.body) continue;
+      this.pair(b.body, o.body, cx, cy, x[o.body], y[o.body], b.r + o.r, 0.4);
+    }
+  }
+  /**
+   * Two round things pushed apart: body A's point (its centre, for a ball) and the nearest point
+   * of body B, to be `gap` apart; then friction between them, as far as the grip allows.
+   */
+  private pair(A: number, B: number, ax: number, ay: number, qx: number, qy: number, gap: number, grip: number) {
+    const { x, y, a, px, py, pa, invM, invI } = this;
+    const dx = ax - qx, dy = ay - qy;
+    const d = Math.hypot(dx, dy);
+    const pen = gap - d;
+    if (pen <= 0 || d < 1e-9) return;
+    const nx = dx / d, ny = dy / d;
+    // the arms: from each body's place to the point of contact
+    const rax = ax - nx * (gap - pen) * 0.5 - x[A], ray = ay - ny * (gap - pen) * 0.5 - y[A];
+    const rbx = qx + nx * pen * 0.5 - x[B], rby = qy + ny * pen * 0.5 - y[B];
+    const ka = cross(rax, ray, nx, ny), kb = cross(rbx, rby, nx, ny);
+    const wa = invM[A] + invI[A] * ka * ka;
+    const wb = invM[B] + invI[B] * kb * kb;
+    if (wa + wb === 0) return;
+    const corr = pen / (wa + wb);
+    x[A] += invM[A] * corr * nx; y[A] += invM[A] * corr * ny; a[A] += invI[A] * ka * corr;
+    x[B] -= invM[B] * corr * nx; y[B] -= invM[B] * corr * ny; a[B] -= invI[B] * kb * corr;
+    // friction: how the two surfaces slid past each other this step, undone as far as the grip allows
+    const tx = -ny, ty = nx;
+    const moved = (b: number, rx: number, ry: number): [number, number] => {
+      // (where the bit of body now at arm (rx, ry) was at the start of the step)
+      const co = Math.cos(a[b]), si = Math.sin(a[b]);
+      const lx = co * rx + si * ry, ly = -si * rx + co * ry;
+      const cp = Math.cos(pa[b]), sp = Math.sin(pa[b]);
+      return [x[b] + rx - (px[b] + cp * lx - sp * ly), y[b] + ry - (py[b] + sp * lx + cp * ly)];
+    };
+    const [max, may] = invM[A] || invI[A] ? moved(A, rax, ray) : [0, 0];
+    const [mbx, mby] = invM[B] || invI[B] ? moved(B, rbx, rby) : [0, 0];
+    const slide = (max - mbx) * tx + (may - mby) * ty;
+    const kta = cross(rax, ray, tx, ty), ktb = cross(rbx, rby, tx, ty);
+    const wt = invM[A] + invI[A] * kta * kta + invM[B] + invI[B] * ktb * ktb;
+    if (wt === 0) return;
+    let ct = -slide / wt;
+    const lim = grip * corr;
+    if (ct > lim) ct = lim;
+    if (ct < -lim) ct = -lim;
+    x[A] += invM[A] * ct * tx; y[A] += invM[A] * ct * ty; a[A] += invI[A] * kta * ct;
+    x[B] -= invM[B] * ct * tx; y[B] -= invM[B] * ct * ty; a[B] -= invI[B] * ktb * ct;
   }
 
   private pull(h: number) {

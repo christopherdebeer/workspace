@@ -14,8 +14,9 @@
  * drawing (WebGL2: each kind of piece one mesh, instanced; glossy plastic lit by a sun, its
  * shadows thrown onto the floor and the board) and the hands.
  */
-import { BEAM_COLOURS, BH, BOARD, BW, COLOURS, DEMOS, FLOOR, RULES, TRAY, XMAX, XMIN, World, cellsOf, defaultPort, demo, isDisc, isPlanar, localCells, radiusOf, rotXY, spanOf, type C3, type Hole, type Kind, type Piece, type Port } from './pieces';
+import { BALL_R, BEAM_COLOURS, BH, BW, COLOURS, DEMOS, FLOOR, RULES, TRAY, TRAY_GROUPS, XMAX, XMIN, World, cellsOf, defaultPort, demo, isDisc, isPlanar, localCells, radiusOf, rampLength, rotXY, spanOf, type C3, type Hole, type Kind, type Piece, type Port } from './pieces';
 import { Controller, Sim, TURNS } from './sim';
+import { glyph, schematic } from './glyph';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -282,6 +283,39 @@ function discMesh(outerR: number, inner: ((t: number) => number) | null, z0: num
   ring(angles(48, inner === crossR ? CROSS_CORNERS : []), circle(outerR), inner, z0, z1, () => true, out);
   return out;
 }
+/** A ramp: a stadium as long as the ramp, a hole at each end (dark liners, drawn through it). */
+function stadiumMesh(len: number): number[] {
+  const a = len / 2;
+  const outer = (t: number) => {
+    const c = Math.abs(Math.cos(t)), sn = Math.abs(Math.sin(t));
+    const flat = sn > 1e-9 ? 0.5 / sn : 1e9;
+    if (flat * c <= a) return flat;
+    return a * c + Math.sqrt(Math.max(0, 0.25 - a * a * sn * sn));
+  };
+  const corner = Math.atan2(0.5, a);
+  const out: number[] = [];
+  ring(angles(64, [corner, Math.PI - corner, Math.PI + corner, 2 * Math.PI - corner]), outer, null, 0.02, 0.98, () => true, out, a, 0);
+  return out;
+}
+function linerMesh(): number[] {
+  const out: number[] = [];
+  ring(angles(20, []), circle(HOLE_R), null, -0.01, 1.01, () => true, out);
+  return out;
+}
+function sphereMesh(r: number): number[] {
+  const out: number[] = [];
+  const S = 18, R = 12;
+  const at = (i: number, j: number): C3 => {
+    const th = (i / S) * Math.PI * 2, ph = (j / R) * Math.PI;
+    return [Math.sin(ph) * Math.cos(th), Math.cos(ph), Math.sin(ph) * Math.sin(th)];
+  };
+  const push = (n: C3) => out.push(n[0] * r, n[1] * r, 0.5 + n[2] * r, n[0], n[1], n[2]);
+  for (let j = 0; j < R; j++) for (let i = 0; i < S; i++) {
+    const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+    push(a); push(b); push(c); push(a); push(c); push(d);
+  }
+  return out;
+}
 function pinMesh(n: number): number[] {
   const out: number[] = [];
   ring(angles(20, []), circle(PIN_R), null, 0.06, n - 0.06, () => true, out);
@@ -327,7 +361,7 @@ function mesh(key: string, make: () => number[]): Mesh {
   return m;
 }
 /** The meshes a piece is drawn with, each with its colour. */
-function meshesOf(p: { kind: Kind; n: number; colour: number }): Array<{ m: Mesh; colour: C3; dull?: boolean }> {
+function meshesOf(p: { kind: Kind; n: number; m?: number; colour: number }): Array<{ m: Mesh; colour: C3; dull?: boolean; at?: V2 }> {
   const c = COLOURS[p.colour].rgb;
   switch (p.kind) {
     case 'beam': case 'crank': case 'motor': case 'hub':
@@ -342,10 +376,25 @@ function meshesOf(p: { kind: Kind; n: number; colour: number }): Array<{ m: Mesh
     }
     case 'pin': return [{ m: mesh(`pin-${p.n}`, () => pinMesh(p.n)), colour: c }];
     case 'axle': return [{ m: mesh(`axle-${p.n}`, () => axleMesh(p.n)), colour: c }];
+    case 'ramp': {
+      const len = rampLength(p);
+      return [{ m: mesh(`ramp-${len.toFixed(2)}`, () => stadiumMesh(len)), colour: c }, { m: mesh('liner', linerMesh), colour: [0.16, 0.16, 0.17], at: [0, 0] }, { m: mesh('liner', linerMesh), colour: [0.16, 0.16, 0.17], at: [len, 0] }];
+    }
+    case 'ball': return [{ m: mesh('ball', () => sphereMesh(BALL_R)), colour: c }];
   }
 }
-function instance(m: Mesh, x: number, y: number, z: number, ang: number, colour: C3, kind: number) {
-  m.data.push(x, y, z, ang, colour[0], colour[1], colour[2], kind);
+/** A flat piece's turn as built: its quarter turns, or a ramp's slope. */
+function restAngle(p: { kind: Kind; n: number; m?: number; rot: number }): number {
+  if (!isPlanar(p.kind)) return 0;
+  if (p.kind === 'ramp') {
+    const [dx, dy] = rotXY(p.n, -(p.m ?? 0), p.rot);
+    return Math.atan2(dy, dx);
+  }
+  return (p.rot * Math.PI) / 2;
+}
+function instance(m: Mesh, x: number, y: number, z: number, ang: number, colour: C3, kind: number, at: V2 = [0, 0]) {
+  const c = Math.cos(ang), sn = Math.sin(ang);
+  m.data.push(x + c * at[0] - sn * at[1], y + sn * at[0] + c * at[1], z, ang, colour[0], colour[1], colour[2], kind);
   m.n++;
 }
 function flush() {
@@ -410,10 +459,16 @@ let simLag = 0;
 interface Saved { pieces: Piece[]; ports: Port[]; hand: number }
 function save() {
   if (auto) return;
-  try {
-    const s: Saved = { pieces: world.list(), ports, hand };
-    localStorage.setItem(STORE, JSON.stringify(s));
-  } catch { /* (a private window: it still builds, it just won't remember) */ }
+  const b = builds.find((x) => x.id === current);
+  if (b) {
+    b.pieces = world.list();
+    b.ports = ports;
+    b.savedAt = Date.now();
+    // (the most recent first)
+    builds.sort((p, q) => q.savedAt - p.savedAt);
+  }
+  storeBuilds();
+  try { localStorage.setItem(STORE + ':hand', String(hand)); } catch { /* */ }
 }
 function loadDemo(name: string) {
   world = new World();
@@ -428,17 +483,16 @@ function load() {
     loadDemo(d ?? 'crank');
     return;
   }
-  try {
-    const s = JSON.parse(localStorage.getItem(STORE) ?? 'null') as Saved | null;
-    if (!s || !s.pieces) {
-      document.getElementById('hint')?.classList.add('on');
-      loadDemo('gears');
-      return;
-    }
-    for (const p of s.pieces) if (world.fits(p)) world.add(p);
-    ports = s.ports ?? [];
-    hand = s.hand ?? 0;
-  } catch { /* */ }
+  loadBuilds();
+  try { hand = Math.min(TRAY.length - 1, Number(localStorage.getItem(STORE + ':hand') ?? 0) || 0); } catch { /* */ }
+  const b = builds.find((x) => x.id === current);
+  if (b) {
+    for (const p of b.pieces) if (world.fits(p)) world.add(p);
+    ports = b.ports.map((x) => ({ ...x }));
+  }
+  showTitle();
+  // (the start screen, to pick up where you were or start from something)
+  showStart();
 }
 
 // ─── running ───────────────────────────────────────────────────────────────────────────────────
@@ -704,7 +758,14 @@ function pieceAt(px: number, py: number): { id: number; anchor: V2; hit: V2; z: 
       let anchor: V2 = [0, 0];
       if (!isPlanar(p.kind)) hit = Math.hypot(lx, ly) <= 0.42;
       else if (isDisc(p.kind)) hit = Math.hypot(lx, ly) <= radiusOf(p);
-      else {
+      else if (p.kind === 'ramp') {
+        const [dx, dy] = rotXY(p.n, -(p.m ?? 0), p.rot);
+        const l2 = dx * dx + dy * dy;
+        const tt = Math.max(0, Math.min(1, (lx * dx + ly * dy) / l2));
+        hit = Math.hypot(lx - dx * tt, ly - dy * tt) <= 0.5;
+        // (by its nearer end)
+        anchor = tt > 0.5 ? [p.n, -(p.m ?? 0)] : [0, 0];
+      } else {
         for (const cell of localCells(p.kind, p.n)) {
           const [cx, cy] = rotXY(cell.i, cell.j, p.rot);
           if (Math.abs(lx - cx) <= 0.5 && Math.abs(ly - cy) <= 0.5) { hit = true; anchor = [cell.i, cell.j]; break; }
@@ -727,6 +788,7 @@ let two: { d: number; a: number; x: number; y: number } | null = null;
 let finger: { z: number } | null = null;
 canvas.addEventListener('pointerdown', (e) => {
   wake();
+  closeDrawer();
   canvas.setPointerCapture(e.pointerId);
   const on = e.button === 0 && !e.shiftKey ? pieceAt(e.clientX, e.clientY) : null;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, button: e.button, shift: e.shiftKey, on });
@@ -817,24 +879,30 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// the tray: tap a piece to take it in hand; drag it (or the one in hand, from its corner) out onto the build
+// the tray: a drawer of pieces. Tap one to take it in hand (it goes in the corner); drag one
+// (or the one in hand, from its corner) out onto the build
 const $ = (id: string) => document.getElementById(id)!;
-const chips = $('chips');
-TRAY.forEach((o, i) => {
-  const b = document.createElement('button');
-  b.textContent = o.label;
-  b.dataset.i = String(i);
-  chips.appendChild(b);
-});
+const drawer = $('drawer');
+{
+  let html = '';
+  for (const g of TRAY_GROUPS) {
+    html += `<h3>${g}</h3><div class="tiles">`;
+    TRAY.forEach((o, i) => { if (o.group === g) html += `<button class="tile" data-i="${i}">${glyph(o.spec, 56)}<span>${o.label}</span></button>`; });
+    html += '</div>';
+  }
+  $('tiles').innerHTML = html;
+}
 function showHand() {
-  for (const b of chips.children) (b as HTMLElement).classList.toggle('on', Number((b as HTMLElement).dataset.i) === hand);
+  for (const b of drawer.querySelectorAll('.tile')) b.classList.toggle('on', Number((b as HTMLElement).dataset.i) === hand);
   $('next').textContent = TRAY[hand].label;
 }
-let trayPtr: { id: number; x0: number; y0: number; moved: boolean; chip: number; scrolled: number } | null = null;
+function openDrawer() { drawer.classList.add('on'); tick(1.5); }
+function closeDrawer() { drawer.classList.remove('on'); }
+let trayPtr: { id: number; x0: number; y0: number; moved: boolean; chip: number } | null = null;
 const trayDown = (e: PointerEvent, chip: number) => {
   wake();
   if (carry || sim) return;
-  trayPtr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, chip, scrolled: chips.scrollLeft };
+  trayPtr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, chip };
   document.getElementById('hint')?.classList.remove('on');
 };
 const trayMove = (e: PointerEvent) => {
@@ -842,10 +910,8 @@ const trayMove = (e: PointerEvent) => {
   const dx = e.clientX - trayPtr.x0, dy = e.clientY - trayPtr.y0;
   if (!trayPtr.moved) {
     if (Math.hypot(dx, dy) < 8) return;
-    // (along the tray: it scrolls; up out of it: the piece comes)
-    if (trayPtr.chip >= 0 && Math.abs(dx) > Math.abs(dy) * 1.5) { trayPtr = null; return; }
     trayPtr.moved = true;
-    if (trayPtr.chip >= 0) { hand = trayPtr.chip; handRot = 0; showHand(); }
+    if (trayPtr.chip >= 0) { hand = trayPtr.chip; handRot = 0; showHand(); closeDrawer(); }
     pickUp();
     select(-1);
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -858,25 +924,129 @@ const trayUp = (e: PointerEvent) => {
   trayPtr = null;
   if (!t.moved) {
     if (e.type !== 'pointerup') return;
-    if (t.chip >= 0) { hand = t.chip; handRot = 0; showHand(); tick(1.5); save(); }
+    if (t.chip >= 0) { hand = t.chip; handRot = 0; showHand(); closeDrawer(); tick(1.5); save(); }
     else turn();
     return;
   }
   letGo();
 };
-chips.addEventListener('pointerdown', (e) => {
-  const chip = (e.target as HTMLElement).closest('button');
-  if (!chip) return;
-  trayDown(e, Number(chip.dataset.i));
+drawer.addEventListener('pointerdown', (e) => {
+  const tile = (e.target as HTMLElement).closest('.tile') as HTMLElement | null;
+  if (!tile) return;
+  trayDown(e, Number(tile.dataset.i));
 });
-chips.addEventListener('pointermove', trayMove);
-chips.addEventListener('pointerup', trayUp);
-chips.addEventListener('pointercancel', trayUp);
+drawer.addEventListener('pointermove', trayMove);
+drawer.addEventListener('pointerup', trayUp);
+drawer.addEventListener('pointercancel', trayUp);
 const corner = $('next');
 corner.addEventListener('pointerdown', (e) => { corner.setPointerCapture(e.pointerId); trayDown(e, -1); });
 corner.addEventListener('pointermove', trayMove);
 corner.addEventListener('pointerup', trayUp);
 corner.addEventListener('pointercancel', trayUp);
+
+// ─── the builds: kept here, each with a name; the start screen shows them, and what to start from
+interface Build { id: string; name: string; from: string; pieces: Piece[]; ports: Port[]; savedAt: number }
+const BUILDS = 'technic:builds';
+let builds: Build[] = [];
+let current: string | null = null;
+function loadBuilds() {
+  try {
+    const s = JSON.parse(localStorage.getItem(BUILDS) ?? 'null') as { builds: Build[]; current: string | null } | null;
+    if (s) { builds = s.builds ?? []; current = s.current ?? null; }
+    // (a build from before there were builds)
+    const old = JSON.parse(localStorage.getItem(STORE) ?? 'null') as Saved | null;
+    if (old && old.pieces && !builds.length) {
+      builds.push({ id: 'b' + Date.now().toString(36), name: 'my build', from: 'before', pieces: old.pieces, ports: old.ports ?? [], savedAt: Date.now() });
+      localStorage.removeItem(STORE);
+    }
+  } catch { /* */ }
+}
+function storeBuilds() {
+  if (auto) return;
+  try { localStorage.setItem(BUILDS, JSON.stringify({ builds, current })); } catch { /* */ }
+}
+const STARTERS: Array<{ from: string; name: string }> = [
+  { from: 'empty', name: 'an empty board' },
+  { from: 'gears', name: 'a gear train' },
+  { from: 'crank', name: 'a crank and rocker' },
+  { from: 'car', name: 'a car' },
+  { from: 'swing', name: 'pendulums' },
+  { from: 'marble', name: 'a marble run' },
+];
+/** Open a build: it becomes the current one, on the board. */
+function openBuild(b: Build) {
+  stop();
+  world = new World();
+  history = [];
+  for (const p of b.pieces) if (world.fits(p)) world.add(p);
+  ports = b.ports.map((x) => ({ ...x }));
+  current = b.id;
+  select(-1);
+  storeBuilds();
+  closeStart();
+  showTitle();
+}
+/** A new build from a starter (or nothing). */
+function newBuild(from: string) {
+  const d = from === 'empty' ? { pieces: [], ports: [] } : demo(from);
+  const name = STARTERS.find((s) => s.from === from)?.name ?? from;
+  const b: Build = { id: 'b' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), name, from, pieces: d.pieces, ports: d.ports, savedAt: Date.now() };
+  builds.unshift(b);
+  openBuild(b);
+  if (from === 'empty') document.getElementById('hint')?.classList.add('on');
+}
+const when = (t: number) => {
+  const d = Date.now() - t;
+  if (d < 60e3) return 'just now';
+  if (d < 3600e3) return `${Math.round(d / 60e3)} min ago`;
+  if (d < 86400e3) return `${Math.round(d / 3600e3)} h ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+function showStart() {
+  const mine = builds.map((b) => `<article class="build${b.id === current ? ' current' : ''}" data-id="${b.id}">
+    <div class="pic">${b.pieces.length ? schematic(b.pieces, 150, 100, { board: true }) : '<span class="empty">nothing yet</span>'}</div>
+    <div class="name">${esc(b.name)}</div><div class="meta">${b.pieces.length} pieces · ${when(b.savedAt)}</div>
+    <div class="acts"><button data-act="rename">rename</button><button data-act="forget">forget</button></div>
+  </article>`).join('');
+  $('mine').innerHTML = mine || '<p class="none">none yet: start from something below</p>';
+  $('starters').innerHTML = STARTERS.map((st) => {
+    const ps = st.from === 'empty' ? [] : demo(st.from).pieces;
+    return `<article class="build starter" data-from="${st.from}"><div class="pic">${ps.length ? schematic(ps, 150, 100, { board: true }) : '<span class="empty">a board, a tray</span>'}</div><div class="name">${st.name}</div></article>`;
+  }).join('');
+  $('start').classList.add('on');
+}
+function closeStart() { $('start').classList.remove('on'); }
+$('start').addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  const act = t.closest('button')?.dataset.act;
+  const card = t.closest('.build') as HTMLElement | null;
+  if (t.id === 'start-close') return closeStart();
+  if (!card) return;
+  wake();
+  if (card.dataset.from) return newBuild(card.dataset.from);
+  const b = builds.find((x) => x.id === card.dataset.id);
+  if (!b) return;
+  if (act === 'rename') {
+    const name = prompt('a name for it', b.name);
+    if (name && name.trim()) { b.name = name.trim(); storeBuilds(); showStart(); }
+    return;
+  }
+  if (act === 'forget') {
+    const btn = t.closest('button')!;
+    if (btn.textContent !== 'sure?') { btn.textContent = 'sure?'; setTimeout(() => { btn.textContent = 'forget'; }, 3000); return; }
+    builds = builds.filter((x) => x.id !== b.id);
+    if (current === b.id) { current = null; world = new World(); ports = []; history = []; }
+    storeBuilds();
+    showStart();
+    return;
+  }
+  openBuild(b);
+});
+function showTitle() {
+  const b = builds.find((x) => x.id === current);
+  $('builds').textContent = b ? b.name : 'builds';
+}
 
 addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).tagName === 'INPUT') return;
@@ -888,7 +1058,8 @@ addEventListener('keydown', (e) => {
   else if (k === ']') nudge(1);
   else if (k === ' ') { e.preventDefault(); sim ? stop() : run(); }
   else if (k === 'delete' || k === 'backspace') removeSelected();
-  else if (k === 'escape') { select(-1); closeHub(); }
+  else if (k === 'escape') { select(-1); closeHub(); closeDrawer(); closeStart(); }
+  else if (k === 'p') openDrawer();
   else if (k === 'n') { hand = (hand + 1) % TRAY.length; handRot = 0; showHand(); }
 });
 
@@ -901,6 +1072,8 @@ btn('farther', () => nudge(-1));
 btn('colour', recolour);
 btn('remove', removeSelected);
 btn('program', openHub);
+btn('pieces', () => (drawer.classList.contains('on') ? closeDrawer() : openDrawer()));
+btn('builds', () => ($('start').classList.contains('on') ? closeStart() : showStart()));
 btn('run', () => (sim ? stop() : run()));
 let armed: { what: string; at: number } | null = null;
 /** A button that asks twice (a build is a lot to lose). */
@@ -923,13 +1096,6 @@ twice('again', 'begin again', 'clear it all?', () => {
   world = new World();
   history = [];
   ports = [];
-  select(-1);
-  save();
-});
-let demoI = 0;
-twice('machine', 'a machine', 'replace the build?', () => {
-  stop();
-  loadDemo(DEMOS[demoI++ % DEMOS.length]);
   select(-1);
   save();
 });
@@ -1122,7 +1288,7 @@ addEventListener('resize', resize);
 function gather() {
   clearCounts();
   const put = (p: Piece, x: number, y: number, ang: number, kind: number) => {
-    for (const { m, colour, dull } of meshesOf(p)) instance(m, x, y, p.z, ang + (isPlanar(p.kind) ? (p.rot * Math.PI) / 2 : 0), colour, dull && kind === 0 ? 3 : kind);
+    for (const { m, colour, dull, at } of meshesOf(p)) instance(m, x, y, p.z, ang + restAngle(p), colour, dull && kind === 0 ? 3 : kind, at);
   };
   world.pieces.forEach((p, id) => {
     if (!p) return;
@@ -1136,7 +1302,7 @@ function gatherGhost() {
   clearCounts();
   if (ghost) {
     const put = (p: Piece) => {
-      for (const { m, colour } of meshesOf(p)) instance(m, p.at[0], p.at[1], p.z, isPlanar(p.kind) ? (p.rot * Math.PI) / 2 : 0, colour, 1);
+      for (const { m, colour, at } of meshesOf(p)) instance(m, p.at[0], p.at[1], p.z, restAngle(p), colour, 1, at);
     };
     put(ghost.piece);
     if (ghost.extra) put(ghost.extra);
@@ -1173,9 +1339,10 @@ function drawNext(W: number, Hh: number) {
     cx = cs.reduce((a, c) => a + c.x, 0) / cs.length;
     cy = cs.reduce((a, c) => a + c.y, 0) / cs.length;
     size = Math.max(...cs.map((c) => Math.hypot(c.x - cx, c.y - cy))) + 0.5;
+    if (p.kind === 'ramp') { const [dx, dy] = rotXY(p.n, -(p.m ?? 0), p.rot); cx = dx / 2; cy = dy / 2; size = rampLength(p) / 2 + 0.5; }
   } else if (isDisc(p.kind)) size = radiusOf(p);
   else { cz = p.n / 2; size = p.n / 2; }
-  for (const { m, colour, dull } of meshesOf(p)) instance(m, -cx, -cy, -cz, (p.rot * Math.PI) / 2, colour, dull ? 3 : 0);
+  for (const { m, colour, dull, at } of meshesOf(p)) instance(m, -cx, -cy, -cz, restAngle(p), colour, dull ? 3 : 0, at);
   flush();
   const a = time * 0.45;
   const r = size * 1.3 + 1.8;
@@ -1274,6 +1441,7 @@ function frame(now: number) {
   gl.bindVertexArray(null);
   (window as unknown as { __technic: unknown }).__technic = {
     pieces: world.count(), running: !!sim, ghost: ghost?.piece ?? null, hand: TRAY[hand].label, selected, sel: world.pieces[selected] ?? null, carrying: !!carry, undo: history.length,
+    drawer: drawer.classList.contains('on'), start: $('start').classList.contains('on'), builds: builds.map((b) => ({ id: b.id, name: b.name, pieces: b.pieces.length })), current,
     motion: sim?.motion() ?? 0, poses: sim ? world.pieces.map((p, id) => (p ? poseOf(id, p) : null)) : null, tilt: ctl?.tilt ?? 0, wall: ctl?.wall ?? 0, ports,
   };
   requestAnimationFrame(frame);

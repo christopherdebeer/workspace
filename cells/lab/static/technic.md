@@ -1,8 +1,8 @@
 # Technic
 
 Bricks, evolved. The studs are gone; in their place, holes. Beams with holes along them, pins
-and axles that go through the holes, gears that mesh, wheels that roll, a motor, and a hub that
-tells the motor what to do. You build it, then it goes.
+and axles that go through the holes, gears that mesh, wheels that roll, ramps and marbles, a
+motor, and a hub that tells the motor what to do. You build it, then it goes.
 
 The build stands on a pegboard: a wall of holes behind it, a floor beneath. Pieces lie in layers
 in front of the board, each layer one module deep (a module is one hole pitch, 8 mm, as on the
@@ -12,7 +12,9 @@ real pieces). Pins and axles go through the holes, across the layers, and into t
 
 | | Touch | Mouse and keys |
 |---|---|---|
-| take a piece | tap it in the tray (it goes in the corner); drag it from the tray, or from its corner | the same; N for the next |
+| the drawer of pieces | `pieces` | P |
+| take a piece | tap it in the drawer (it goes in the corner); or drag it sideways out of the drawer onto the build | the same; N for the next |
+| use the piece in hand | drag it from its corner | the same |
 | put it on | let go where it should go | the same |
 | turn the piece in hand | tap its corner | R |
 | select a placed piece | tap it (the one you just put on already is) | click it |
@@ -23,6 +25,7 @@ real pieces). Pins and axles go through the holes, across the layers, and into t
 | let it go | tap nothing | Esc |
 | step back | `undo` | Z |
 | run it, stop it | `run` / `stop` | space |
+| your builds | `builds` (the start screen: continue one, rename or forget it, or start from something) | Esc closes it |
 | the hub's program | tap the hub (as it runs, or a selected one); `program` | the same |
 | look around | drag anything else; two fingers pinch and slide | drag; right-drag (or shift) slides; the wheel |
 
@@ -42,6 +45,13 @@ real pieces). Pins and axles go through the holes, across the layers, and into t
 - **A gear** or **a wheel** goes onto the axle under your finger, in the first layer along it with
   room. Dropped on a hole with no axle, it brings one, long enough to reach from the board (or
   from the back piece) to the gear.
+- **A ramp** is a bar with a hole at each end, sloping: `ramp 8·6` goes eight along and six
+  down from the hole you hold it by (its top). `turn` makes it slope the other way. Only its
+  ends are holes; a pin at either end holds it. It lies between the holes, so nothing else can
+  cross it in its layer.
+- **A ball** goes where you drop it, in the layer there (or the first in front with room).
+  It's the one piece that meets the others: in its own layer it rolls on beams, ramps, the
+  motor and the hub, and bounces off gears, wheels and other balls. Across layers, it passes.
 - Two gears in one layer mesh when their pitch circles touch: an 8 and a 24 two holes apart, an 8
   and a 40 three, a 24 and a 40 four, two 24s three. The pitch radius is the teeth over sixteen,
   as on the real ones.
@@ -81,12 +91,28 @@ only so much torque: stalled, it slips. Friction at the floor holds the bit of r
 it, which is what makes a wheel roll.
 
 Pieces don't collide with each other (they're in layers, and they pass): only the floor and the
-walls are solid. Gravity is a tabletop's, not the world's.
+walls are solid, and balls, which meet whatever shares their layer. Gravity is a tabletop's,
+not the world's.
+
+## Builds
+
+The start screen (`builds`) keeps your builds in this browser, each with a name and a picture,
+and offers what to start from: an empty board, or one of the machines. Starting from a machine
+makes a new build of your own from it, to take apart, extend and change; the original stays as
+it was. `begin again` clears the current build.
+
+The marble run is the one to extend: two ramps, a seesaw, a paddle on the motor. Balls meet
+whatever shares their layer (the one against the board, in that build), so a ramp, a beam or a
+gear put there is in their way; a ball dropped anywhere joins in. A longer run is more ramps,
+staggered, each held by a tight pin at its top; a lift is a crank or a wheel on the motor
+where the balls come to rest.
 
 ## Notes
 
 - The rules and the solver are tested on their own (`node cells/lab/devtools/technic.test.mjs`);
   the page, drawn and driven, with `node cells/lab/devtools/technic-shot.mjs --test`.
-- `?demo=gears|crank|car|swing` opens a machine built for you; `?auto` runs it by itself (the
-  index's preview is `preview&demo=crank`). `a machine` in the page cycles through them.
-- Your build, the hub's program and the piece in hand are kept in this browser.
+- `?demo=gears|crank|car|swing|marble` opens a machine built for you (not kept); `?auto` runs it
+  by itself (the index's preview is `preview&demo=crank`).
+- Your builds, each with the hub's program, and the piece in hand are kept in this browser.
+- The flat drawings (the drawer's glyphs, the builds' pictures) are `client/technic/glyph.ts`:
+  pure SVG from the pieces as built.

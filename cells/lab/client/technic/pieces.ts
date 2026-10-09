@@ -24,13 +24,15 @@ export const FLOOR = -0.5;
 export const XMIN = -6;
 export const XMAX = BW + 6;
 
-export type Kind = 'beam' | 'crank' | 'pin' | 'axle' | 'gear' | 'wheel' | 'motor' | 'hub';
+export type Kind = 'beam' | 'crank' | 'ramp' | 'pin' | 'axle' | 'gear' | 'wheel' | 'motor' | 'hub' | 'ball';
 export type Hole = 'round' | 'axle' | 'none';
 
 export interface Piece {
   kind: Kind;
-  /** beams and cranks: holes along; pins and axles: layers through; gears: teeth; wheels: modules across */
+  /** beams and cranks: holes along; ramps: modules across; pins and axles: layers through; gears: teeth; wheels: modules across */
   n: number;
+  /** ramps: modules down, from the top end to the bottom */
+  m?: number;
   /** its origin hole (flat pieces), or the hole it goes through (through pieces) */
   at: [number, number];
   /** its layer, or (through pieces) the layer its back end is in */
@@ -60,27 +62,36 @@ export const COLOURS: Array<{ name: string; rgb: C3 }> = [
 /** the colours a beam can be turned through */
 export const BEAM_COLOURS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10];
 
-export const PLANAR = new Set<Kind>(['beam', 'crank', 'gear', 'wheel', 'motor', 'hub']);
+export const PLANAR = new Set<Kind>(['beam', 'crank', 'ramp', 'gear', 'wheel', 'motor', 'hub', 'ball']);
 export const isPlanar = (k: Kind) => PLANAR.has(k);
-export const isDisc = (k: Kind) => k === 'gear' || k === 'wheel';
+export const isDisc = (k: Kind) => k === 'gear' || k === 'wheel' || k === 'ball';
+/** a disc that goes on an axle (a ball doesn't) */
+export const onAxle = (k: Kind) => k === 'gear' || k === 'wheel';
+/** the radius of a ball: a module and a half across */
+export const BALL_R = 0.75;
 
-/** The tray: what can be picked up, in the order it's offered. */
+/** The tray: what can be picked up, in groups. */
 export interface Offer {
   label: string;
+  group: string;
   spec: Omit<Piece, 'at' | 'z'>;
 }
 export const TRAY: Offer[] = [
-  ...[3, 5, 7, 9, 11, 13, 15].map((n) => ({ label: `beam ${n}`, spec: { kind: 'beam' as Kind, n, rot: 0, colour: 0 } })),
-  { label: 'crank', spec: { kind: 'crank', n: 3, rot: 0, colour: 1 } },
-  { label: 'pin', spec: { kind: 'pin', n: 2, rot: 0, colour: 9 } },
-  { label: 'pin · tight', spec: { kind: 'pin', n: 2, rot: 0, colour: 2, friction: true } },
-  { label: 'long pin', spec: { kind: 'pin', n: 3, rot: 0, colour: 6 } },
-  ...[3, 5, 7].map((n) => ({ label: `axle ${n}`, spec: { kind: 'axle' as Kind, n, rot: 0, colour: 4 } })),
-  ...[8, 16, 24, 40].map((n) => ({ label: `gear ${n}`, spec: { kind: 'gear' as Kind, n, rot: 0, colour: n === 8 ? 9 : 0 } })),
-  { label: 'wheel', spec: { kind: 'wheel', n: 5, rot: 0, colour: 2 } },
-  { label: 'motor', spec: { kind: 'motor', n: 0, rot: 0, colour: 0 } },
-  { label: 'hub', spec: { kind: 'hub', n: 0, rot: 0, colour: 3 } },
+  ...[3, 5, 7, 9, 11, 13, 15].map((n) => ({ label: `beam ${n}`, group: 'beams', spec: { kind: 'beam' as Kind, n, rot: 0, colour: 0 } })),
+  { label: 'crank', group: 'beams', spec: { kind: 'crank', n: 3, rot: 0, colour: 1 } },
+  ...([[4, 3], [6, 2], [8, 6], [10, 3]] as Array<[number, number]>).map(([n, m]) => ({ label: `ramp ${n}·${m}`, group: 'ramps', spec: { kind: 'ramp' as Kind, n, m, rot: 0, colour: 0 } })),
+  { label: 'pin', group: 'pins & axles', spec: { kind: 'pin', n: 2, rot: 0, colour: 9 } },
+  { label: 'pin · tight', group: 'pins & axles', spec: { kind: 'pin', n: 2, rot: 0, colour: 2, friction: true } },
+  { label: 'long pin', group: 'pins & axles', spec: { kind: 'pin', n: 3, rot: 0, colour: 6 } },
+  ...[3, 5, 7].map((n) => ({ label: `axle ${n}`, group: 'pins & axles', spec: { kind: 'axle' as Kind, n, rot: 0, colour: 4 } })),
+  ...[8, 16, 24, 40].map((n) => ({ label: `gear ${n}`, group: 'gears & wheels', spec: { kind: 'gear' as Kind, n, rot: 0, colour: n === 8 ? 9 : 0 } })),
+  { label: 'wheel', group: 'gears & wheels', spec: { kind: 'wheel', n: 5, rot: 0, colour: 2 } },
+  { label: 'motor', group: 'power', spec: { kind: 'motor', n: 0, rot: 0, colour: 0 } },
+  { label: 'hub', group: 'power', spec: { kind: 'hub', n: 0, rot: 0, colour: 3 } },
+  { label: 'ball', group: 'marbles', spec: { kind: 'ball', n: 0, rot: 0, colour: 10 } },
 ];
+/** The tray's groups, in order. */
+export const TRAY_GROUPS = [...new Set(TRAY.map((o) => o.group))];
 /** the axle lengths a gear can bring with it */
 export const AXLES = [2, 3, 4, 5, 6, 8];
 
@@ -95,9 +106,11 @@ export function rotXY(i: number, j: number, rot: number): [number, number] {
 }
 
 /** A flat piece's cells, in its own frame (before its turn): which hole each has. */
-export function localCells(kind: Kind, n: number): Array<{ i: number; j: number; hole: Hole }> {
+export function localCells(kind: Kind, n: number, m = 0): Array<{ i: number; j: number; hole: Hole }> {
   switch (kind) {
     case 'beam': return Array.from({ length: n }, (_, i) => ({ i, j: 0, hole: 'round' as Hole }));
+    case 'ramp': return [{ i: 0, j: 0, hole: 'round' }, { i: n, j: -m, hole: 'round' }];
+    case 'ball': return [{ i: 0, j: 0, hole: 'none' }];
     case 'crank': return Array.from({ length: n }, (_, i) => ({ i, j: 0, hole: (i === 0 ? 'axle' : 'round') as Hole }));
     case 'gear': case 'wheel': return [{ i: 0, j: 0, hole: 'axle' }];
     case 'motor': {
@@ -116,15 +129,43 @@ export function localCells(kind: Kind, n: number): Array<{ i: number; j: number;
 }
 /** A flat piece's cells in the world. */
 export function cellsOf(p: Piece): Array<{ x: number; y: number; hole: Hole }> {
-  return localCells(p.kind, p.n).map((c) => {
+  return localCells(p.kind, p.n, p.m ?? 0).map((c) => {
     const [dx, dy] = rotXY(c.i, c.j, p.rot);
     return { x: p.at[0] + dx, y: p.at[1] + dy, hole: c.hole };
   });
 }
 /** A disc's radius: a gear's pitch radius (teeth over sixteen), a wheel's half its size. */
 export function radiusOf(p: { kind: Kind; n: number }): number {
-  return p.kind === 'gear' ? p.n / 16 : p.kind === 'wheel' ? p.n / 2 : 0;
+  return p.kind === 'gear' ? p.n / 16 : p.kind === 'wheel' ? p.n / 2 : p.kind === 'ball' ? BALL_R : 0;
 }
+/** A ramp's length, top hole to bottom hole. */
+export const rampLength = (p: { n: number; m?: number }) => Math.hypot(p.n, p.m ?? 0);
+/** The bars a flat piece is made of (its middle lines, half a module thick each): what a ball meets. */
+export function barsOf(p: Piece): Array<{ ax: number; ay: number; bx: number; by: number }> {
+  if (p.kind === 'ramp') {
+    const [dx, dy] = rotXY(p.n, -(p.m ?? 0), p.rot);
+    return [{ ax: p.at[0], ay: p.at[1], bx: p.at[0] + dx, by: p.at[1] + dy }];
+  }
+  if (p.kind === 'beam' || p.kind === 'crank') {
+    const [dx, dy] = rotXY(p.n - 1, 0, p.rot);
+    return [{ ax: p.at[0], ay: p.at[1], bx: p.at[0] + dx, by: p.at[1] + dy }];
+  }
+  if (p.kind === 'motor' || p.kind === 'hub') {
+    const w = p.kind === 'motor' ? 2 : 3;
+    return [0, 1].map((j) => {
+      const [ax, ay] = rotXY(0, j, p.rot);
+      const [bx, by] = rotXY(w, j, p.rot);
+      return { ax: p.at[0] + ax, ay: p.at[1] + ay, bx: p.at[0] + bx, by: p.at[1] + by };
+    });
+  }
+  return [];
+}
+const segDist = (px: number, py: number, ax: number, ay: number, bx: number, by: number) => {
+  const dx = bx - ax, dy = by - ay;
+  const l2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+};
 /** The layers a through piece spans. */
 export function spanOf(p: Piece): number[] {
   return Array.from({ length: p.n }, (_, i) => p.z + i);
@@ -139,6 +180,8 @@ export function massOf(p: Piece): number {
     case 'wheel': return 0.3;
     case 'motor': return 0.6;
     case 'hub': return 0.9;
+    case 'ramp': return 0.1 * rampLength(p);
+    case 'ball': return 0.15;
   }
 }
 
@@ -258,18 +301,23 @@ export class World {
         for (const d of this.discs(p.z, ignore)) {
           if (Math.hypot(d.x - p.at[0], d.y - p.at[1]) < d.r + r - 0.02) return false;
         }
-        // clear of the solid pieces in its layer (their cells, as circles half a module across)
-        for (const [k, f] of this.flat) {
-          if (f.id === ignore) continue;
-          const [x, y, z] = k.split(',').map(Number);
-          if (z !== p.z) continue;
-          const q = this.pieces[f.id]!;
-          if (isDisc(q.kind)) continue;
-          if (Math.hypot(x - p.at[0], y - p.at[1]) < r + 0.5 - 0.02) return false;
+        // clear of the solid pieces in its layer (their bars, half a module thick)
+        for (const q of this.list()) {
+          if (q.z !== p.z || isDisc(q.kind) || this.pieces.indexOf(q) === ignore) continue;
+          for (const b of barsOf(q)) if (segDist(p.at[0], p.at[1], b.ax, b.ay, b.bx, b.by) < r + 0.5 - 0.02) return false;
         }
       } else {
         for (const d of this.discs(p.z, ignore)) {
-          for (const c of cells) if (Math.hypot(d.x - c.x, d.y - c.y) < d.r + 0.5 - 0.02) return false;
+          for (const b of barsOf(p)) if (segDist(d.x, d.y, b.ax, b.ay, b.bx, b.by) < d.r + 0.5 - 0.02) return false;
+        }
+        // (a ramp's bar, between its ends, clear of the other bars in its layer: the cells
+        // don't say, since a ramp lies between them)
+        for (const q of this.list()) {
+          if (q.z !== p.z || isDisc(q.kind) || this.pieces.indexOf(q) === ignore) continue;
+          if (p.kind !== 'ramp' && q.kind !== 'ramp') continue;
+          for (const bar of barsOf(p)) for (const b of barsOf(q)) for (let t = 0; t <= 1; t += 0.1) {
+            if (segDist(bar.ax + (bar.bx - bar.ax) * t, bar.ay + (bar.by - bar.ay) * t, b.ax, b.ay, b.bx, b.by) < 0.98) return false;
+          }
         }
       }
       return true;
@@ -311,6 +359,13 @@ export class World {
       }
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const piece: Piece = { ...spec, at: [at[0] + dx, at[1] + dy], z: Math.max(0, zHint) };
+        if (this.fits(piece)) return { piece };
+      }
+      return null;
+    }
+    if (spec.kind === 'ball') {
+      for (let z = Math.max(0, zHint); z < ZMAX; z++) {
+        const piece: Piece = { ...spec, at: [cx, cy], z };
         if (this.fits(piece)) return { piece };
       }
       return null;
@@ -369,7 +424,7 @@ export class World {
   turned(id: number): Piece | null {
     const p = this.pieces[id];
     if (!p) return null;
-    const q = { ...p, rot: (p.rot + 1) % 4 };
+    const q = { ...p, rot: p.kind === 'ramp' ? (p.rot + 2) % 4 : (p.rot + 1) % 4 };
     return this.fits(q, id) ? q : null;
   }
   height(): number {
@@ -460,7 +515,10 @@ export class World {
       for (const id of b.pieces) {
         const p = pieces[id]!;
         const pm = massOf(p);
-        if (isPlanar(p.kind) && !isDisc(p.kind)) {
+        if (p.kind === 'ramp') {
+          const [bar] = barsOf(p);
+          for (let t = 0; t <= 1; t += 0.25) pts.push([bar.ax + (bar.bx - bar.ax) * t, bar.ay + (bar.by - bar.ay) * t, pm / 5]);
+        } else if (isPlanar(p.kind) && !isDisc(p.kind)) {
           const cs = cellsOf(p);
           for (const c of cs) pts.push([c.x, c.y, pm / cs.length]);
         } else pts.push([p.at[0], p.at[1], pm]);
@@ -499,14 +557,27 @@ export class World {
     pieces.forEach((p, id) => { if (p?.kind === 'hub') hubs.push(id); });
     // what touches the floor: a flat piece's cells as circles, a disc as its circle
     const contacts: Contact[] = [];
+    const bars: Bar[] = [];
+    const discs: Disc[] = [];
+    const balls: Ball[] = [];
     pieces.forEach((p, id) => {
       if (!p || !isPlanar(p.kind)) return;
       const b = bodyOf[id];
+      if (p.kind === 'ball') {
+        balls.push({ body: b, z: p.z, r: BALL_R });
+        contacts.push({ body: b, x: p.at[0], y: p.at[1], r: BALL_R, grip: 0.8 });
+        return;
+      }
+      if (isDisc(p.kind)) discs.push({ body: b, z: p.z, x: p.at[0], y: p.at[1], r: radiusOf(p) + (p.kind === 'gear' ? 0.08 : 0) });
+      else for (const bar of barsOf(p)) bars.push({ body: b, z: p.z, ...bar, r: 0.5 });
       if (bodies[b].fixed) return;
       if (isDisc(p.kind)) contacts.push({ body: b, x: p.at[0], y: p.at[1], r: radiusOf(p) + (p.kind === 'gear' ? 0.12 : 0), grip: p.kind === 'wheel' ? 1.2 : 0.4 });
-      else for (const c of cellsOf(p)) contacts.push({ body: b, x: c.x, y: c.y, r: 0.5, grip: 0.6 });
+      else if (p.kind === 'ramp') {
+        const [bar] = barsOf(p);
+        for (let t = 0; t <= 1; t += 0.25) contacts.push({ body: b, x: bar.ax + (bar.bx - bar.ax) * t, y: bar.ay + (bar.by - bar.ay) * t, r: 0.5, grip: 0.6 });
+      } else for (const c of cellsOf(p)) contacts.push({ body: b, x: c.x, y: c.y, r: 0.5, grip: 0.6 });
     });
-    return { bodies, bodyOf, joints, gears: gearJoints, motors: motorJoints, hubs, contacts };
+    return { bodies, bodyOf, joints, gears: gearJoints, motors: motorJoints, hubs, contacts, bars, discs, balls };
   }
 }
 
@@ -526,6 +597,10 @@ export interface GearJoint { a: number; b: number; ra: number; rb: number; ax: n
 /** A motor turning its rotor against its body. */
 export interface Motor { stator: number; rotor: number; piece: number }
 export interface Contact { body: number; x: number; y: number; r: number; grip: number }
+/** A bar of a piece (at rest, in the world): what a ball in its layer rolls on. */
+export interface Bar { body: number; z: number; ax: number; ay: number; bx: number; by: number; r: number }
+export interface Disc { body: number; z: number; x: number; y: number; r: number }
+export interface Ball { body: number; z: number; r: number }
 export interface Mech {
   bodies: Body[];
   bodyOf: Int32Array;
@@ -534,6 +609,9 @@ export interface Mech {
   motors: Motor[];
   hubs: number[];
   contacts: Contact[];
+  bars: Bar[];
+  discs: Disc[];
+  balls: Ball[];
 }
 
 // ─── the hub's program ────────────────────────────────────────────────────────────────────────
@@ -549,7 +627,7 @@ export const defaultPort = (): Port => ({ speed: 60, rule: 'run', period: 2 });
 
 // ─── the demonstrations ───────────────────────────────────────────────────────────────────────
 /** A few machines, built for you: for the index, and to take apart. */
-export const DEMOS = ['gears', 'crank', 'car', 'swing'] as const;
+export const DEMOS = ['gears', 'crank', 'car', 'swing', 'marble'] as const;
 export type Demo = (typeof DEMOS)[number];
 export function demo(name: string): { pieces: Piece[]; ports: Port[] } {
   const P = (kind: Kind, n: number, x: number, y: number, z: number, rot = 0, colour = 0, friction?: boolean): Piece => ({ kind, n, at: [x, y], z, rot, colour, ...(friction ? { friction } : {}) });
@@ -588,6 +666,20 @@ export function demo(name: string): { pieces: Piece[]; ports: Port[] } {
       pieces.push(P('beam', 3, 8, 3, 3, 1, 0), pin(8, 3, 2));
       pieces.push(P('hub', 0, 8, 4, 2, 0, 3), pin(8, 4, 2));
       ports.push({ speed: 80, rule: 'walls', period: 2 });
+      break;
+    }
+    case 'marble': {
+      // a marble run, all in the layer against the board: balls down two ramps onto a seesaw,
+      // then a paddle on the motor to fling them on
+      const ramp = (n: number, m: number, x: number, y: number, z: number, rot: number, colour: number): Piece => ({ kind: 'ramp', n, m, at: [x, y], z, rot, colour });
+      pieces.push(ramp(8, 6, 3, 18, 0, 0, 5), pin(3, 18, -1), pin(11, 12, -1));
+      pieces.push(ramp(10, 3, 12, 9, 0, 0, 4), pin(12, 9, -1), pin(22, 6, -1));
+      pieces.push(P('beam', 7, 23, 3, 0, 0, 7), axle(2, 26, 3, -1));
+      pieces.push(P('motor', 0, 18, 2, 1, 0, 0), pin(18, 2, -1, true, 3), pin(18, 3, -1, true, 3));
+      pieces.push(axle(3, 20, 2, -1), P('crank', 3, 20, 2, 0, 1, 1));
+      pieces.push(P('hub', 0, 25, 15, 0, 0, 3), pin(25, 15, -1), pin(28, 16, -1));
+      for (const x of [5, 7, 9]) pieces.push(P('ball', 0, x, 19, 0, 0, 10));
+      ports.push({ speed: -60, rule: 'run', period: 2 });
       break;
     }
     case 'swing': {

@@ -262,3 +262,41 @@ const run = (w, secs, ports = [], each) => {
   console.log('swing ok');
 }
 console.log('technic ok');
+
+// ─── marbles ──────────────────────────────────────────────────────────────────────────────────
+{
+  // a ramp fits by its ends; a ball above it rolls down it to the floor, the way it slopes
+  const w = new World();
+  const ramp = { kind: 'ramp', n: 8, m: 6, at: [4, 12], z: 0, rot: 0, colour: 0 };
+  assert.ok(w.fits(ramp));
+  w.add(ramp);
+  w.add(piece('pin', 2, 4, 12, BOARD, 0, true));
+  assert.ok(!w.fits(piece('beam', 5, 6, 10, 0)), 'a beam through the ramp\'s bar: no');
+  assert.ok(w.fits(piece('beam', 5, 6, 10, 1)), 'in front of it: yes');
+  const ball = w.add({ kind: 'ball', n: 0, at: [5, 13], z: 0, rot: 0, colour: 0 });
+  assert.ok(!w.fits({ kind: 'ball', n: 0, at: [6, 11], z: 0, rot: 0, colour: 0 }), 'a ball in the ramp: no');
+  const xs = [];
+  const { sim, mech } = run(w, 5, [], (s, t) => { if (Math.round(t * 60) % 30 === 0) xs.push(s.pose(ball, 5, 13)); });
+  const [bx, by] = sim.pose(ball, 5, 13);
+  assert.ok(bx > 11, `it rolled off the bottom end, to the right: ${xs.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ')}`);
+  assert.ok(Math.abs(by - (FLOOR + 0.75)) < 0.05, `and lies on the floor: ${by}`);
+  assert.ok(!Number.isNaN(sim.motion()));
+  // the ramp didn't move: it's pinned tight
+  assert.equal(mech.bodyOf[0], 0);
+  console.log('ramp ok');
+}
+{
+  // the marble run: the balls go down both ramps and end up low and to the right, the paddles turning
+  const w = new World();
+  for (const p of demo('marble').pieces) assert.ok(w.fits(p), `demo marble: ${JSON.stringify(p)} fits`), w.add(p);
+  const balls = w.pieces.map((p, i) => (p && p.kind === 'ball' ? i : -1)).filter((i) => i >= 0);
+  const { sim } = run(w, 12, demo('marble').ports);
+  for (const b of balls) {
+    const p = w.pieces[b];
+    const [x, y] = sim.pose(b, p.at[0], p.at[1]);
+    assert.ok(y < p.at[1] - 8, `ball ${b} came down: ${x.toFixed(1)},${y.toFixed(1)}`);
+    assert.ok(x > XMIN && x < XMAX, 'inside the walls');
+  }
+  assert.ok(!Number.isNaN(sim.motion()));
+  console.log('marble ok');
+}
