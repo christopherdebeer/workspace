@@ -1,0 +1,1210 @@
+{
+ "id": "2026-10-08-haiku-system",
+ "scorerVersion": 3,
+ "set": "source-authority-v1",
+ "model": "haiku",
+ "models": [
+  "claude-haiku-5-5"
+ ],
+ "placement": "system",
+ "createdAt": "2026-10-08T10:10:54.459Z",
+ "updatedAt": "2026-10-08T10:18:58.344Z",
+ "reps": 3,
+ "n": 144,
+ "errors": 0,
+ "costUsd": 0.1879,
+ "conditions": [
+  "composite",
+  "compressed",
+  "decor",
+  "none",
+  "plain",
+  "refrain",
+  "sigil-swap",
+  "sigil"
+ ],
+ "families": [
+  "gaps",
+  "names",
+  "records"
+ ],
+ "cohorts": [
+  "r1"
+ ],
+ "tasks": [
+  "gaps-1",
+  "gaps-2",
+  "names-1",
+  "names-2",
+  "records-1",
+  "records-2"
+ ],
+ "taskCohort": {
+  "gaps-1": "r1",
+  "gaps-2": "r1",
+  "names-1": "r1",
+  "names-2": "r1",
+  "records-1": "r1",
+  "records-2": "r1"
+ },
+ "byCondition": {
+  "composite": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.956,
+    "sd": 0.072,
+    "min": 0.8,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.938,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 1,
+     "n": 6
+    },
+    "support": {
+     "mean": 0.833,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1703,
+   "outputTokens": 1826,
+   "costUsd": 0.00124,
+   "apiMs": 7780,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "compressed": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.974,
+    "sd": 0.056,
+    "min": 0.825,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.958,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 1,
+     "n": 6
+    },
+    "support": {
+     "mean": 0.917,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1708,
+   "outputTokens": 2245,
+   "costUsd": 0.00146,
+   "apiMs": 9208,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "decor": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.965,
+    "sd": 0.059,
+    "min": 0.825,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.962,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 1,
+     "n": 6
+    },
+    "support": {
+     "mean": 0.833,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1734,
+   "outputTokens": 2015,
+   "costUsd": 0.00138,
+   "apiMs": 8389,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "none": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.951,
+    "sd": 0.08,
+    "min": 0.75,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.934,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 0.667,
+     "n": 6
+    },
+    "support": {
+     "mean": 1,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1612,
+   "outputTokens": 1481,
+   "costUsd": 0.00105,
+   "apiMs": 6390,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "plain": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.901,
+    "sd": 0.122,
+    "min": 0.65,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.979,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 0.667,
+     "n": 6
+    },
+    "support": {
+     "mean": 0.417,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1715,
+   "outputTokens": 1696,
+   "costUsd": 0.00118,
+   "apiMs": 7230,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "refrain": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.933,
+    "sd": 0.104,
+    "min": 0.65,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.983,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 0.833,
+     "n": 6
+    },
+    "support": {
+     "mean": 0.583,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1714,
+   "outputTokens": 2088,
+   "costUsd": 0.0014,
+   "apiMs": 8749,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "sigil-swap": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.972,
+    "sd": 0.059,
+    "min": 0.825,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.979,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 1,
+     "n": 6
+    },
+    "support": {
+     "mean": 0.833,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1733,
+   "outputTokens": 2343,
+   "costUsd": 0.00151,
+   "apiMs": 9684,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  },
+  "sigil": {
+   "n": 18,
+   "errors": 0,
+   "score": {
+    "mean": 0.96,
+    "sd": 0.072,
+    "min": 0.8,
+    "max": 1
+   },
+   "components": {
+    "retention": {
+     "mean": 0.976,
+     "n": 12
+    },
+    "noInvention": {
+     "mean": 1,
+     "n": 12
+    },
+    "lengthOk": {
+     "mean": 0.833,
+     "n": 6
+    },
+    "support": {
+     "mean": 0.833,
+     "n": 6
+    },
+    "restraint": {
+     "mean": 1,
+     "n": 12
+    },
+    "correction": {
+     "mean": 1,
+     "n": 6
+    }
+   },
+   "inventionRate": 0,
+   "inputTokens": 1733,
+   "outputTokens": 1817,
+   "costUsd": 0.00122,
+   "apiMs": 7554,
+   "models": [
+    "claude-haiku-5-5"
+   ]
+  }
+ },
+ "byConditionFamily": {
+  "composite": {
+   "gaps": {
+    "n": 6,
+    "mean": 0.942
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.925
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  },
+  "compressed": {
+   "gaps": {
+    "n": 6,
+    "mean": 0.971
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.95
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  },
+  "decor": {
+   "gaps": {
+    "n": 6,
+    "mean": 0.942
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.954
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  },
+  "none": {
+   "gaps": {
+    "n": 6,
+    "mean": 1
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.854
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  },
+  "plain": {
+   "gaps": {
+    "n": 6,
+    "mean": 0.796
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.908
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  },
+  "refrain": {
+   "gaps": {
+    "n": 6,
+    "mean": 0.854
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.946
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  },
+  "sigil-swap": {
+   "gaps": {
+    "n": 6,
+    "mean": 0.942
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.975
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  },
+  "sigil": {
+   "gaps": {
+    "n": 6,
+    "mean": 0.942
+   },
+   "names": {
+    "n": 6,
+    "mean": 0.938
+   },
+   "records": {
+    "n": 6,
+    "mean": 1
+   }
+  }
+ },
+ "byConditionTask": {
+  "composite": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 0.883
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 0.95
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.9
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  },
+  "compressed": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 0.942
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.9
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  },
+  "decor": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 0.942
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 0.942
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 0.975
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.933
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  },
+  "none": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 1
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 0.858
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.85
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  },
+  "plain": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 0.825
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 0.767
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 0.933
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.883
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  },
+  "refrain": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 0.942
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 0.767
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 0.975
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.917
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  },
+  "sigil-swap": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 0.883
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.95
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  },
+  "sigil": {
+   "gaps-1": {
+    "n": 3,
+    "mean": 0.942
+   },
+   "gaps-2": {
+    "n": 3,
+    "mean": 0.942
+   },
+   "names-1": {
+    "n": 3,
+    "mean": 0.975
+   },
+   "names-2": {
+    "n": 3,
+    "mean": 0.9
+   },
+   "records-1": {
+    "n": 3,
+    "mean": 1
+   },
+   "records-2": {
+    "n": 3,
+    "mean": 1
+   }
+  }
+ },
+ "contrasts": [
+  {
+   "a": "plain",
+   "b": "none",
+   "question": "Does stating the intention help at all? (advice vs no advice)",
+   "delta": -0.05,
+   "lo": -0.115,
+   "hi": 0.015,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": -0.05,
+    "lo": -0.146,
+    "hi": 0.035,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": -0.204,
+     "lo": -0.292,
+     "hi": -0.117,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": 0.054,
+     "lo": -0.029,
+     "hi": 0.138,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": -0.05,
+     "lo": -0.115,
+     "hi": 0.015,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "sigil",
+   "b": "plain",
+   "question": "Does the sigil form add to the same advice in prose?",
+   "delta": 0.058,
+   "lo": -0.001,
+   "hi": 0.125,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": 0.058,
+    "lo": 0.012,
+    "hi": 0.114,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": 0.146,
+     "lo": 0.029,
+     "hi": 0.262,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": 0.029,
+     "lo": -0.062,
+     "hi": 0.117,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": 0.058,
+     "lo": -0.001,
+     "hi": 0.125,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "sigil",
+   "b": "sigil-swap",
+   "question": "Does the particular mark matter, or only the binding? (⊙ vs ⟁)",
+   "delta": -0.013,
+   "lo": -0.056,
+   "hi": 0.031,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": -0.013,
+    "lo": -0.042,
+    "hi": 0.019,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": 0,
+     "lo": -0.088,
+     "hi": 0.088,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": -0.038,
+     "lo": -0.104,
+     "hi": 0.025,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": -0.013,
+     "lo": -0.056,
+     "hi": 0.031,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "decor",
+   "b": "plain",
+   "question": "Do meaningless symbols cost or help? (decoration control)",
+   "delta": 0.064,
+   "lo": 0.004,
+   "hi": 0.131,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": 0.064,
+    "lo": 0.017,
+    "hi": 0.115,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": 0.146,
+     "lo": 0.029,
+     "hi": 0.262,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": 0.046,
+     "lo": -0.025,
+     "hi": 0.121,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": 0.064,
+     "lo": 0.004,
+     "hi": 0.131,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": true,
+   "clear": true
+  },
+  {
+   "a": "compressed",
+   "b": "plain",
+   "question": "Does notation keep the obligations as well as prose?",
+   "delta": 0.072,
+   "lo": 0.014,
+   "hi": 0.135,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": 0.072,
+    "lo": 0.017,
+    "hi": 0.131,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": 0.175,
+     "lo": 0.058,
+     "hi": 0.292,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": 0.042,
+     "lo": -0.042,
+     "hi": 0.125,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": 0.072,
+     "lo": 0.014,
+     "hi": 0.135,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": true,
+   "clear": true
+  },
+  {
+   "a": "refrain",
+   "b": "plain",
+   "question": "Does cadence and recurrence add to prose?",
+   "delta": 0.032,
+   "lo": -0.036,
+   "hi": 0.104,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": 0.032,
+    "lo": 0.006,
+    "hi": 0.069,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": 0.058,
+     "lo": -0.087,
+     "hi": 0.175,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": 0.037,
+     "lo": -0.054,
+     "hi": 0.125,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": 0.032,
+     "lo": -0.036,
+     "hi": 0.104,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "composite",
+   "b": "plain",
+   "question": "Do the forms combine without interfering?",
+   "delta": 0.054,
+   "lo": -0.006,
+   "hi": 0.119,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": 0.054,
+    "lo": 0.006,
+    "hi": 0.113,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": 0.146,
+     "lo": 0.029,
+     "hi": 0.262,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": 0.017,
+     "lo": -0.067,
+     "hi": 0.104,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": 0.054,
+     "lo": -0.006,
+     "hi": 0.119,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  },
+  {
+   "a": "composite",
+   "b": "sigil",
+   "question": "Does adding arrows/precedence/indent to the sigil change anything?",
+   "delta": -0.004,
+   "lo": -0.049,
+   "hi": 0.042,
+   "n": [
+    18,
+    18
+   ],
+   "clustered": {
+    "delta": -0.004,
+    "lo": -0.029,
+    "hi": 0.025,
+    "groups": 6
+   },
+   "perFamily": {
+    "gaps": {
+     "delta": 0,
+     "lo": -0.088,
+     "hi": 0.088,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "names": {
+     "delta": -0.012,
+     "lo": -0.088,
+     "hi": 0.071,
+     "n": [
+      6,
+      6
+     ]
+    },
+    "records": {
+     "delta": 0,
+     "lo": 0,
+     "hi": 0,
+     "n": [
+      6,
+      6
+     ]
+    }
+   },
+   "perCohort": {
+    "r1": {
+     "delta": -0.004,
+     "lo": -0.049,
+     "hi": 0.042,
+     "n": [
+      18,
+      18
+     ]
+    }
+   },
+   "clearTrials": false,
+   "clear": false
+  }
+ ]
+}

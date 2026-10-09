@@ -1,0 +1,25 @@
+{
+  "id": "names-2",
+  "family": "names",
+  "cohort": "r1",
+  "title": "Incident note, halved",
+  "instruction": "Rewrite the note below in no more than 50 words. Output only the rewritten note, nothing else.",
+  "source": "On Tuesday 3 March the gateway began rejecting uploads larger than 2 MiB with a 413, which ticket PLT-2291 traced to build 4.12.0-rc3 of the dispatch cell. Mendel Varga-Lindqvist found that the x-parc-writes header was being counted toward the body limit, contrary to RFC 7231 section 3.3. The fix, shipped in 4.12.1, excludes headers from the limit and raises it to 8 MiB. No data was lost, but 214 uploads from the Oakhaven tenant were retried by hand, and the on-call rota for Thursday was moved to cover the backlog.",
+  "checks": {
+    "protected": [
+      "Tuesday 3 March",
+      "2 MiB",
+      "413",
+      "PLT-2291",
+      "4.12.0-rc3",
+      "Mendel Varga-Lindqvist",
+      "x-parc-writes",
+      "RFC 7231",
+      "4.12.1",
+      "8 MiB",
+      "214",
+      "Oakhaven"
+    ],
+    "maxWords": 50
+  }
+}

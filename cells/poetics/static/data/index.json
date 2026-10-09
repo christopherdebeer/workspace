@@ -1,0 +1,140 @@
+{
+ "generatedAt": "2026-10-08T13:12:35.930Z",
+ "runs": [
+  {
+   "id": "2026-10-08-haiku-system",
+   "set": "source-authority-v1",
+   "model": "haiku",
+   "models": [
+    "claude-haiku-5-5"
+   ],
+   "placement": "system",
+   "createdAt": "2026-10-08T10:10:54.459Z",
+   "n": 144,
+   "errors": 0,
+   "costUsd": 0.1879,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "compressed",
+    "mean": 0.974
+   },
+   "floor": 0.951,
+   "plain": 0.901,
+   "clearContrasts": [
+    "decor−plain +0.064",
+    "compressed−plain +0.072"
+   ],
+   "clearHeldOut": []
+  },
+  {
+   "id": "2026-10-08-r2-haiku-system",
+   "set": "source-authority-v2",
+   "model": "haiku",
+   "models": [
+    "claude-haiku-5-5"
+   ],
+   "placement": "system",
+   "createdAt": "2026-10-08T12:47:22.306Z",
+   "n": 324,
+   "errors": 0,
+   "costUsd": 0.4568,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain-minus-abstain",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "sigil-swap",
+    "mean": 0.973
+   },
+   "floor": 0.914,
+   "plain": 0.953,
+   "clearContrasts": [],
+   "clearHeldOut": []
+  },
+  {
+   "id": "2026-10-08-r2-haiku-user",
+   "set": "source-authority-v2",
+   "model": "haiku",
+   "models": [
+    "claude-haiku-5-5"
+   ],
+   "placement": "user",
+   "createdAt": "2026-10-08T12:47:22.347Z",
+   "n": 324,
+   "errors": 0,
+   "costUsd": 0.5075,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain-minus-abstain",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "sigil-swap",
+    "mean": 0.982
+   },
+   "floor": 0.911,
+   "plain": 0.957,
+   "clearContrasts": [],
+   "clearHeldOut": [
+    "plain-minus-abstain−none +0.084"
+   ]
+  },
+  {
+   "id": "2026-10-08-r2-sonnet-system",
+   "set": "source-authority-v2",
+   "model": "sonnet",
+   "models": [
+    "claude-sonnet-5-5"
+   ],
+   "placement": "system",
+   "createdAt": "2026-10-08T12:47:22.377Z",
+   "n": 324,
+   "errors": 0,
+   "costUsd": 1.9056,
+   "conditions": [
+    "composite",
+    "compressed",
+    "decor",
+    "none",
+    "plain-minus-abstain",
+    "plain",
+    "refrain",
+    "sigil-swap",
+    "sigil"
+   ],
+   "best": {
+    "condition": "composite",
+    "mean": 0.949
+   },
+   "floor": 0.905,
+   "plain": 0.912,
+   "clearContrasts": [],
+   "clearHeldOut": [
+    "composite−plain +0.044",
+    "composite−sigil +0.033"
+   ]
+  }
+ ]
+}

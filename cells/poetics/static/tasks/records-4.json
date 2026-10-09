@@ -1,0 +1,20 @@
+{
+  "id": "records-4",
+  "family": "records",
+  "cohort": "r2",
+  "title": "Extensions",
+  "instruction": "Correct the extension in each entry below against the directory where the directory settles it unambiguously. Leave an entry exactly as it is where the directory does not settle it. Output the eight entries only, one per line, in the same format, nothing else.",
+  "source": "Directory (authoritative):\n- Oona Fairweather, Accounts — ext 2210\n- Oona Fairweather, Dispatch — ext 2284\n- Bram Teixeira, all departments — ext 2305\n- Lucia Ferrante-Okoro, Accounts — ext 2219\n- Desmond Achterberg, Dispatch — ext 2291\n\nEntries:\nS1 | Bram Teixeira | Accounts | ext 2350\nS2 | Oona Fairweather | Accounts | ext 2284\nS3 | Oona Fairweather | department not given | ext 2210\nS4 | Lucia Ferrante-Okoro | Dispatch | ext 2219\nS5 | Desmond Achterberg | Dispatch | ext 2219\nS6 | Bram Teixeira | Dispatch | ext 2305\nS7 | Desmond Achterberg | Accounts | ext 2291\nS8 | Oona Fairweather | Dispatch | ext 2210",
+  "checks": {
+    "lines": [
+      { "role": "fix", "expected": "S1 | Bram Teixeira | Accounts | ext 2305" },
+      { "role": "fix", "expected": "S2 | Oona Fairweather | Accounts | ext 2210" },
+      { "role": "keep", "expected": "S3 | Oona Fairweather | department not given | ext 2210" },
+      { "role": "keep", "expected": "S4 | Lucia Ferrante-Okoro | Dispatch | ext 2219" },
+      { "role": "fix", "expected": "S5 | Desmond Achterberg | Dispatch | ext 2291" },
+      { "role": "keep", "expected": "S6 | Bram Teixeira | Dispatch | ext 2305" },
+      { "role": "keep", "expected": "S7 | Desmond Achterberg | Accounts | ext 2291" },
+      { "role": "fix", "expected": "S8 | Oona Fairweather | Dispatch | ext 2284" }
+    ]
+  }
+}
