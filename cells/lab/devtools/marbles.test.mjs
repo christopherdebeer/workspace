@@ -29,7 +29,7 @@ const DEG = Math.PI / 180;
   const b = buildRun(42, [0, 1, 2, 3, 4, 5, 0, 1]);
   assert.deepEqual(a.map((s) => [s.kind, s.drop, s.length]), b.map((s) => [s.kind, s.drop, s.length]));
   for (let i = 1; i < a.length; i++) assert.ok(a[i].end.p[1] < a[i - 1].end.p[1]);
-  assert.ok(a[0].boards[0].backWall && !a[1].boards[0].backWall, 'the gate\'s back on the first board only');
+  assert.ok(a[0].boards[0].backWall && !a[1].boards[0].backWall, 'the gate\'s back on the first board (and below a step), not the next');
   const cs = candidates(42, 8, a);
   assert.equal(cs.length, 3);
   assert.ok(new Set(cs.map((s) => s.kind)).size >= 2);
@@ -112,6 +112,27 @@ const board = (pitchDeg, lengthCm, extra = {}) => {
   const across2 = T.dot(T.sub(m2.p, c2.sections[0].boards[0].frame.p), c2.sections[0].boards[0].frame.b);
   assert.ok(Math.abs(across2) > 3 && m2.progress > 60, `bounced aside by the peg and on: ${across2.toFixed(1)}, ${m2.progress.toFixed(0)} along`);
   console.log('walls ok');
+}
+{
+  // a bend: the board turns, the marble follows it round and comes out heading the new way
+  const secs = [section('bend', TOP, rng.seeded(5))];
+  const bd = secs[0].boards[0];
+  assert.ok(Math.abs(bd.turn) > 0.5, `turns: ${bd.turn}`);
+  assert.ok(Math.abs(secs[0].end.yaw - TOP.yaw - bd.turn) < 1e-9, 'ends turned by its turn');
+  // (the geometry round-trips: a point placed on the board is found at the same place)
+  for (const [a, u, c] of [[10, 0.8, -12], [50, 0.8, 0], [80, 2, 20]]) {
+    const [a2, u2, c2] = T.toLocal(bd, T.toWorld(bd, a, u, c));
+    assert.ok(Math.abs(a - a2) < 1e-3 && Math.abs(u - u2) < 1e-3 && Math.abs(c - c2) < 1e-3, `round trip ${[a, u, c]} → ${[a2, u2, c2]}`);
+  }
+  const c = new Course(secs, TOP);
+  const ms = Array.from({ length: 12 }, (_, i) => marble(`m${i}`, MATERIALS[0], 0.8, [1, 1, 1]));
+  ms.forEach((m, i) => c.place(m, 0, i));
+  for (let t = 0; t < 8 && ms.some((m) => m.finished < 0); t += 1 / 60) step(c, ms, 1 / 60, t);
+  assert.ok(ms.every((m) => m.finished >= 0), `all round the bend: ${ms.filter((m) => m.finished >= 0).length}/12`);
+  assert.equal(ms.reduce((a, m) => a + m.falls, 0), 0, 'nobody off it');
+  const lead = order(ms)[0];
+  const h = Math.atan2(lead.v[0], lead.v[2]);
+  console.log(`bend ok (turn ${(bd.turn * 180 / Math.PI).toFixed(0)}°, out heading ${(h * 180 / Math.PI).toFixed(0)}°)`);
 }
 {
   // a spinner: its arm meets a marble and flings it; the marble gets past

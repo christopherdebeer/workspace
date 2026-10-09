@@ -17,7 +17,7 @@
 import { hash, seeded } from '../kit/rng';
 import { Course, MATERIALS, marble, order, step, type Impact, type Marble, type Material } from './physics';
 import { boardMesh, gateMesh, groundMesh, lineMesh, ringMesh, sphereMesh, spinnerMesh, towerMesh, VSTRIDE } from './mesh';
-import { FIELD_SIZE, MARBLE_R, TOP, WIDTH, add, build, candidates, cross, decode, dirOf, encode, frameAt, len, mul, norm, sub, type Section, type V3 } from './track';
+import { FIELD_SIZE, MARBLE_R, TOP, WIDTH, add, build, candidates, cross, decode, dirOf, encode, frameAlong, frameAt, len, mul, norm, sub, toLocal, type Board, type Frame, type Section, type V3 } from './track';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -376,6 +376,8 @@ function lineup() {
 function release(from = 0) {
   fromSection = from;
   marbles.forEach((m, i) => course.place(m, from, i));
+  raceSeed = auto ? 1 : Math.floor(Math.random() * 1e9);
+  scatter();
   raceTime = 0;
   racing = true;
   phase = 'racing';
@@ -388,6 +390,23 @@ const held = () => racing && fromSection === 0 && raceTime < 0.35;
 function followed(): Marble {
   if (follow === 'leader') return order(marbles)[0];
   return marbles.find((m) => m.name === mine) ?? marbles[0];
+}
+/** the board a marble is on (or nearest), and its frame there (a bent board turns as it goes) */
+function under(m: Marble): { board: Board; frame: Frame; along: number; across: number } {
+  const sec = sections[Math.min(m.sec, sections.length - 1)];
+  const boards = m.finished >= 0 || !sec ? [course.fin.board] : sec.boards;
+  let board = boards[0], [along, , across] = toLocal(board, m.p);
+  if (boards.length > 1 && along > board.length) { board = boards[1]; [along, , across] = toLocal(board, m.p); }
+  return { board, frame: frameAlong(board, Math.max(0, Math.min(board.length, along))), along, across };
+}
+/** Each race its own small differences: where exactly each starts (a hair either way), as a hand would set them. */
+let raceSeed = 1;
+function scatter() {
+  const r = seeded(hash(raceSeed, 0x5ca7));
+  for (const m of marbles) {
+    const { frame } = under(m);
+    m.p = add(add(m.p, mul(frame.b, (r() - 0.5) * 0.8)), mul(frame.t, (r() - 0.5) * 0.6));
+  }
 }
 function choose_(name: string) {
   mine = name;
@@ -497,8 +516,8 @@ function updateCamera(dt: number) {
   }
   // the board's way (the run is straight down it), the camera behind and above
   const speed = len(m.v);
-  const sec = sections[Math.min(m.sec, sections.length - 1)];
-  const fwd: V3 = sec ? sec.boards[0].frame.t : dirOf(TOP.yaw, TOP.pitch);
+  const u_ = sections.length ? under(m) : null;
+  const fwd: V3 = u_ ? u_.frame.t : dirOf(TOP.yaw, TOP.pitch);
   const targetYaw = Math.atan2(fwd[0], fwd[2]);
   // (turn the camera's heading toward the marble's, smoothly round the circle)
   let dy = targetYaw - camYaw;
@@ -509,8 +528,7 @@ function updateCamera(dt: number) {
   const dist = (38 + Math.min(12, speed * 0.03)) / zoom;
   const back: V3 = [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
   // (over the middle of the board, so the whole field is in view)
-  const bf = sec ? sec.boards[0].frame : null;
-  const mid = bf ? add(m.p, mul(bf.b, -dotv(sub(m.p, bf.p), bf.b) * 0.6)) : m.p;
+  const mid = u_ ? add(m.p, mul(u_.frame.b, -u_.across * 0.6)) : m.p;
   const wantEye = add(mid, mul(back, dist));
   const wantLook = add(mid, mul(fwd, 10));
   const k = 1 - Math.exp(-dt * 6);
@@ -916,8 +934,7 @@ function frame(now: number) {
   gl.disable(gl.CULL_FACE);
   if (view !== 'build' && follow === 'mine') {
     const me = followed();
-    const sec = sections[Math.min(me.sec, sections.length - 1)];
-    const f = me.finished >= 0 ? course.fin.board.frame : sec ? sec.boards[0].frame : course.fin.board.frame;
+    const f = under(me).frame;
     const sz = MARBLE_R * 1.9;
     const at = add(me.p, mul(f.n, -MARBLE_R + 0.06));
     const M = new Float32Array([f.b[0] * sz, f.b[1] * sz, f.b[2] * sz, 0, f.n[0] * sz, f.n[1] * sz, f.n[2] * sz, 0, f.t[0] * sz, f.t[1] * sz, f.t[2] * sz, 0, at[0], at[1], at[2], 1]);

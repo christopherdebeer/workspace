@@ -11,7 +11,7 @@
  * Materials differ in density, bounce, grip and rolling resistance: the same slope, and glass,
  * steel, wood and rubber come down it differently.
  */
-import { FIELD_SIZE, WALL_H, WIDTH, add, cross, dot, finish as finishOf, len, mul, norm, sub, type Board, type Section, type V3 } from './track';
+import { FIELD_SIZE, WALL_H, WIDTH, add, cross, dot, finish as finishOf, frameAlong, len, mul, norm, sub, toLocal, toWorld, type Board, type Section, type V3 } from './track';
 
 export const G = 981;
 /** the board's roughness: a loss that grows with the square of the speed */
@@ -78,14 +78,35 @@ export function marble(name: string, mat: Material, r: number, tint: V3): Marble
 /** A contact: the normal (out of the surface, toward the marble's centre), how deep, the surface's own speed there. */
 interface Contact { n: V3; depth: number; vs: V3; e: number; mu: number }
 
+/** a board's walls and pegs where they are in the world (a bent board's walls bend: in pieces), kept once */
+interface Placed { walls: V3[][]; pegs: Array<[V3, number]> }
+const placed = new WeakMap<Board, Placed>();
+function placedOn(bd: Board): Placed {
+  let w = placed.get(bd);
+  if (w) return w;
+  const walls: V3[][] = [];
+  for (const wall of bd.walls) {
+    const l = Math.hypot(wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]);
+    const n = bd.turn ? Math.max(1, Math.ceil(l / 3)) : 1;
+    const pts: V3[] = [];
+    for (let i = 0; i <= n; i++) {
+      const k = i / n;
+      pts.push(toWorld(bd, wall.a[0] + (wall.b[0] - wall.a[0]) * k, 0, wall.a[1] + (wall.b[1] - wall.a[1]) * k));
+    }
+    walls.push(pts);
+  }
+  w = { walls, pegs: bd.pegs.map(([pa, pc, pr]) => [toWorld(bd, pa, 0, pc), pr]) };
+  placed.set(bd, w);
+  return w;
+}
+
 /** The marble against a board: its floor, its walls, its pegs, its spinners; how far along, if it's on it. */
 function boardContacts(bd: Board, m: Marble, time: number, out: Contact[]): number | null {
-  const f = bd.frame;
-  const d = sub(m.p, f.p);
-  const along = dot(d, f.t), up = dot(d, f.n), across = dot(d, f.b);
+  const [along, up, across] = toLocal(bd, m.p);
   const half = bd.width / 2;
   if (along < -m.r - 2 || along > bd.length + m.r + 2) return null;
   if (Math.abs(across) > half + m.r + 1 || up > (bd.sideH ?? WALL_H) + 6 || up < -m.r - 2) return null;
+  const f = frameAlong(bd, along);
   const e = TRACK.e, mu = TRACK.mu;
   // the floor
   if (along >= -m.r && along <= bd.length + m.r && up < m.r && up > -m.r) out.push({ n: f.n, depth: m.r - up, vs: [0, 0, 0], e, mu });
@@ -97,46 +118,52 @@ function boardContacts(bd: Board, m: Marble, time: number, out: Contact[]): numb
     }
     if (bd.backWall && along < m.r) out.push({ n: f.t, depth: m.r - along, vs: [0, 0, 0], e, mu });
   }
-  // the walls in it
+  // the walls and pegs in it: against the marble's centre brought down to the floor, in the world
   if (up < WALL_H) {
-    for (const w of bd.walls) {
-      const ax = w.a[0], ay = w.a[1], bx = w.b[0], by = w.b[1];
-      const dx = bx - ax, dy = by - ay;
-      const l2 = dx * dx + dy * dy || 1;
-      const t = Math.max(0, Math.min(1, ((along - ax) * dx + (across - ay) * dy) / l2));
-      const qx = ax + dx * t, qy = ay + dy * t;
-      const ex = along - qx, ey = across - qy;
-      const dd = Math.hypot(ex, ey);
-      const over = m.r + w.thick - dd;
-      if (over > 0 && dd > 1e-6) out.push({ n: norm(add(mul(f.t, ex / dd), mul(f.b, ey / dd))), depth: over, vs: [0, 0, 0], e: STRIP.e, mu: STRIP.mu });
-    }
-    for (const [pa, pc, pr] of bd.pegs) {
-      const dx = along - pa, dz = across - pc;
-      const dd = Math.hypot(dx, dz);
+    const q = sub(m.p, mul(f.n, up));
+    const on = placedOn(bd);
+    bd.walls.forEach((w, wi) => {
+      const pts = on.walls[wi];
+      let bestD = Infinity, bestQ: V3 | null = null;
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const a = pts[i], d = sub(pts[i + 1], a);
+        const l2 = dot(d, d) || 1;
+        const t = Math.max(0, Math.min(1, dot(sub(q, a), d) / l2));
+        const c = add(a, mul(d, t));
+        const dd = len(sub(q, c));
+        if (dd < bestD) { bestD = dd; bestQ = c; }
+      }
+      const over = m.r + w.thick - bestD;
+      if (over > 0 && bestD > 1e-6 && bestQ) out.push({ n: mul(sub(q, bestQ), 1 / bestD), depth: over, vs: [0, 0, 0], e: STRIP.e, mu: STRIP.mu });
+    });
+    for (const [pc, pr] of on.pegs) {
+      const d = sub(q, pc);
+      const dd = len(d);
       const over = m.r + pr - dd;
-      if (over > 0 && dd > 1e-6) out.push({ n: norm(add(mul(f.t, dx / dd), mul(f.b, dz / dd))), depth: over, vs: [0, 0, 0], e: STRIP.e + 0.1, mu: STRIP.mu });
+      if (over > 0 && dd > 1e-6) out.push({ n: mul(d, 1 / dd), depth: over, vs: [0, 0, 0], e: STRIP.e + 0.1, mu: STRIP.mu });
     }
     for (const sp of bd.spinners) {
+      const fs = frameAlong(bd, sp.at[0]);
       const th0 = time * sp.rate * Math.PI * 2;
-      const ax = add(add(f.p, mul(f.t, sp.at[0])), add(mul(f.b, sp.at[1]), mul(f.n, 1.2)));
-      const omega = mul(f.n, sp.rate * Math.PI * 2);
+      const ax = toWorld(bd, sp.at[0], 1.2, sp.at[1]);
+      const omega = mul(fs.n, sp.rate * Math.PI * 2);
       // the axle
       {
-        const dx = along - sp.at[0], dz = across - sp.at[1];
-        const dd = Math.hypot(dx, dz);
+        const d = sub(q, toWorld(bd, sp.at[0], 0, sp.at[1]));
+        const dd = len(d);
         const over = m.r + 0.8 - dd;
-        if (over > 0 && dd > 1e-6) out.push({ n: norm(add(mul(f.t, dx / dd), mul(f.b, dz / dd))), depth: over, vs: [0, 0, 0], e, mu });
+        if (over > 0 && dd > 1e-6) out.push({ n: mul(d, 1 / dd), depth: over, vs: [0, 0, 0], e, mu });
       }
       for (let k = 0; k < sp.arms; k++) {
         const th = th0 + (k * Math.PI * 2) / sp.arms;
-        const bdir = add(mul(f.t, Math.cos(th)), mul(f.b, Math.sin(th)));
+        const bdir = add(mul(fs.t, Math.cos(th)), mul(fs.b, Math.sin(th)));
         const rel = sub(m.p, ax);
         const s = Math.max(0, Math.min(sp.half, dot(rel, bdir)));
-        const q = add(ax, mul(bdir, s));
-        const dq = sub(m.p, q);
+        const qq = add(ax, mul(bdir, s));
+        const dq = sub(m.p, qq);
         const dd = len(dq);
         const over = m.r + 0.7 - dd;
-        if (over > 0 && dd > 1e-6) out.push({ n: mul(dq, 1 / dd), depth: over, vs: cross(omega, sub(q, ax)), e: 0.45, mu: 0.5 });
+        if (over > 0 && dd > 1e-6) out.push({ n: mul(dq, 1 / dd), depth: over, vs: cross(omega, sub(qq, ax)), e: 0.45, mu: 0.5 });
       }
     }
   }
@@ -157,11 +184,11 @@ export class Course {
   /** Where a marble begins: in a row behind the gate of a section (or the top), lane by lane, at rest. */
   place(m: Marble, sec = 0, lane = 0, speed = 0) {
     const s = this.sections[sec];
-    const f = s ? s.boards[0].frame : this.fin.board.frame;
+    const bd = s ? s.boards[0] : this.fin.board;
     const n = FIELD_SIZE;
     const across = ((lane + 0.5) / n - 0.5) * (WIDTH - 4);
-    m.p = add(add(add(f.p, mul(f.t, 3)), mul(f.b, across)), mul(f.n, m.r + 0.2));
-    m.v = mul(f.t, speed);
+    m.p = toWorld(bd, 3, m.r + 0.2, across);
+    m.v = mul(frameAlong(bd, 3).t, speed);
     m.w = [0, 0, 0];
     m.q = [0, 0, 0, 1];
     m.sec = sec;
@@ -198,7 +225,7 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
         const a = boardContacts(course.fin.board, m, t, contacts);
         if (a !== null) {
           m.progress = Math.max(m.progress, course.total + Math.max(0, a));
-          if (a >= course.fin.throat && m.finished < 0) m.finished = t;
+          if (a >= course.fin.lineAt && m.finished < 0) m.finished = t;
         }
       }
       if (best) {
@@ -231,8 +258,9 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
     if (m.finished < 0 && len(m.v) < 2 && m.contact) {
       m.slowFor += dt;
       if (m.slowFor > 1.5) {
-        const f = sec?.boards[0].frame ?? course.fin.board.frame;
-        const across = dot(sub(m.p, f.p), f.b);
+        const bd = sec?.boards[0] ?? course.fin.board;
+        const [along, , across] = toLocal(bd, m.p);
+        const f = frameAlong(bd, along);
         // (toward the middle; the other way the next time, in case that was into something)
         const side = (across > 0 ? -1 : 1) * (m.nudges % 2 ? -1 : 1);
         m.v = add(m.v, add(mul(f.b, side * 28), mul(f.t, 12)));

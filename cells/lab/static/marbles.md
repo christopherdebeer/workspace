@@ -25,6 +25,11 @@ the same size, so the run and the knocks decide it and not the marble; each its 
 cat's eye, a swirl, speckled, banded), its own colours, its own name. The pattern is in the
 glass, so it turns as the marble rolls.
 
+The solver is deterministic, so the same start would be the same race every time, the same
+marble first: so each race is its own. Where each marble starts differs by a hair, as a hand
+setting them out would differ, and from there the knocks decide it; over a dozen races of one
+run the winner changes, though a lane can be a lucky one.
+
 The solver knows other materials too (`physics.ts`: steel, wood, rubber, with their densities,
 bounce, grip and rolling resistance), and the tests race them; the roster is glass.
 
@@ -36,8 +41,9 @@ they'd go. Tap one to see it; `add it` and the run is one longer; `three more` o
 deflectors (slats and curved slats), a splitter (a V that parts the pack into lanes), a
 chicane, spinners (turning crosses that fling), a funnel (everyone through one gap, then a fan
 of pegs to spread them again), gates (rows of chevrons with gaps between), bumpers, a step
-down, a zigzag, a straight. Nothing on a board stands square to the slope: whatever a marble
-meets, it slides off to one side or the other, as on a real board.
+down, a zigzag, a straight, a bend (the board sweeps round, left or right, and the run heads a
+new way; some other boards turn a little too). Nothing on a board stands square to the slope:
+whatever a marble meets, it slides off to one side or the other, as on a real board.
 
 The run is its seed and your choices, in the address (`?seed=…&run=0.2.1.…`): share it, and it
 is the same run for anyone. `a new run` starts another seed. `?marble=steel` follows that one.
@@ -62,6 +68,13 @@ has the last word, so the pack can't press one through a wall; below a step the 
 to the board above. Marbles meet
 each other with restitution and friction between their materials, mass-weighted; twelve of them
 on one board is most of the race.
+
+A bent board sweeps its frame round a circle: its middle an arc of its length, turning by its
+turn, dropping at its slope. Everything on it is placed by (along, up, across) and bends with
+it, the drawing and the solver alike: the floor and sides in pieces, the walls as bent
+polylines in the world; a marble's own (along, up, across) is found from its bearing about the
+centre of the turn, brought down to the floor first since the floor's normal leans with the
+slope.
 
 ## Notes
 

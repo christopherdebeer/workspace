@@ -44,15 +44,72 @@ export function frameAt(p: V3, yaw: number, pitch: number): Frame {
   return { p, t, n, b };
 }
 
+/**
+ * A board's geometry: everything on it is placed by (along, up, across). A straight board is its
+ * frame; a bent board sweeps its frame round a circle (its middle an arc of the board's length,
+ * turning by its turn, dropping at its slope), so the same (along, up, across) bends with it.
+ */
+export function frameAlong(bd: Board, along: number): Frame {
+  if (!bd.turn) return { ...bd.frame, p: add(bd.frame.p, mul(bd.frame.t, along)) };
+  const yaw0 = Math.atan2(bd.frame.t[0], bd.frame.t[2]);
+  const yaw = yaw0 + (bd.turn * along) / bd.length;
+  const t = dirOf(yaw, bd.slope);
+  const b = norm(cross([0, 1, 0], t));
+  const n = norm(cross(t, b));
+  // the middle's point: round the centre of the turn, dropping
+  const Rh = (bd.length * Math.cos(bd.slope)) / Math.abs(bd.turn), sg = Math.sign(bd.turn);
+  const C = add(bd.frame.p, mul(bd.frame.b, sg * Rh));
+  const p = add(add(C, mul(b, -sg * Rh)), [0, along * Math.sin(bd.slope), 0]);
+  return { p, t, n, b };
+}
+export function toWorld(bd: Board, along: number, up: number, across: number): V3 {
+  const f = frameAlong(bd, along);
+  return add(add(f.p, mul(f.n, up)), mul(f.b, across));
+}
+/** A point's (along, up, across) on a board. */
+export function toLocal(bd: Board, p: V3): [number, number, number] {
+  const f0 = bd.frame;
+  if (!bd.turn) {
+    const d = sub(p, f0.p);
+    return [dot(d, f0.t), dot(d, f0.n), dot(d, f0.b)];
+  }
+  const yaw0 = Math.atan2(f0.t[0], f0.t[2]);
+  const Rh = (bd.length * Math.cos(bd.slope)) / Math.abs(bd.turn), sg = Math.sign(bd.turn);
+  const C = add(f0.p, mul(f0.b, sg * Rh));
+  // the heading at the point: from its bearing about the centre (b is (cos yaw, 0, -sin yaw));
+  // the floor's normal leans along the slope, so a point above the floor is brought down to it
+  // first, and the bearing taken again
+  const alongOf = (q: V3) => {
+    const ang = Math.atan2(q[2] - C[2], q[0] - C[0]);
+    let yaw = sg > 0 ? Math.PI - ang : -ang;
+    // (unwrapped to the nearest to the board's own range of headings)
+    const mid = yaw0 + bd.turn! / 2;
+    yaw = mid + Math.atan2(Math.sin(yaw - mid), Math.cos(yaw - mid));
+    return ((yaw - yaw0) / bd.turn!) * bd.length;
+  };
+  let along = alongOf(p);
+  for (let i = 0; i < 2; i++) {
+    const f = frameAlong(bd, along);
+    along = alongOf(sub(p, mul(f.n, dot(sub(p, f.p), f.n))));
+  }
+  const f = frameAlong(bd, along);
+  const d = sub(p, f.p);
+  return [along, dot(d, f.n), dot(d, f.b)];
+}
+
 /** A wall on a board: a segment in the board's plane (along, across), so thick. */
 export interface Wall { a: [number, number]; b: [number, number]; thick: number }
 /** A spinning cross on a board: at (along, across), so many arms so long, turning so fast (turns a second, signed). */
 export interface Spinner { at: [number, number]; arms: number; half: number; rate: number }
 export interface Board {
+  /** its frame at its start (a bent board turns from there: see `frameAlong`) */
   frame: Frame;
   width: number;
+  /** along its middle (arc length, if it bends) */
   length: number;
   slope: number;
+  /** how far it turns, start to end (radians, signed: positive to the left); none, straight */
+  turn?: number;
   walls: Wall[];
   /** along, across, radius */
   pegs: Array<[number, number, number]>;
@@ -73,7 +130,7 @@ export interface Section {
   length: number;
   drop: number;
 }
-export const KINDS = ['pegs', 'deflectors', 'splitter', 'chicane', 'spinners', 'funnel', 'gates', 'bumpers', 'step', 'zigzag', 'open'] as const;
+export const KINDS = ['pegs', 'deflectors', 'splitter', 'chicane', 'spinners', 'funnel', 'gates', 'bumpers', 'step', 'zigzag', 'open', 'bend'] as const;
 export type Kind = (typeof KINDS)[number];
 const DEG = Math.PI / 180;
 
@@ -95,10 +152,13 @@ function arc(walls: Wall[], cx: number, cy: number, radius: number, a0: number, 
 /** A board of a kind from where the last ended, its particulars from the rng. */
 export function section(kind: Kind, from: { p: V3; yaw: number; pitch: number }, r: Rand): Section {
   const slope = kind === 'open' ? -ramp(r, 14, 18) * DEG : -ramp(r, 10, 15) * DEG;
-  const length = kind === 'step' ? ramp(r, 40, 56) : ramp(r, 60, 96);
+  const length = kind === 'step' ? ramp(r, 40, 56) : kind === 'bend' ? ramp(r, 84, 110) : ramp(r, 60, 96);
   const frame = frameAt(from.p, from.yaw, slope);
   const W = WIDTH, half = W / 2;
   const board: Board = { frame, width: W, length, slope, walls: [], pegs: [], spinners: [], backWall: false, step: 0 };
+  // a bend turns a good way; some other boards turn a little (not the first: the gate is straight)
+  if (kind === 'bend') board.turn = (r() < 0.5 ? -1 : 1) * ramp(r, 35, 65) * DEG;
+  else if (kind !== 'step' && from !== TOP && r() < 0.35) board.turn = (r() < 0.5 ? -1 : 1) * ramp(r, 10, 26) * DEG;
   const s: Section = { kind, name: '', boards: [board], end: from, length, drop: 0 };
   // (the first 8 and last 6 are kept clear, so what comes in and goes out can)
   const clear0 = 8, clear1 = length - 6;
@@ -210,8 +270,10 @@ export function section(kind: Kind, from: { p: V3; yaw: number; pitch: number },
       board.length = la;
       board.step = h;
       const p2 = add(add(frame.p, mul(frame.t, la)), [0, -h, 0]);
-      const lower: Board = { frame: frameAt(p2, from.yaw, slope), width: W, length: length - la, slope, walls: [], pegs: [], spinners: [], backWall: false, step: 0, sideH: WALL_H + h };
-      for (let j = 0; j < 3; j++) lower.pegs.push([(length - la) * 0.55, (j - 1) * 12, 1.5]);
+      // (closed at its start by the drop's face: what bounces back up it can't go under; and its
+      // pegs well past where a flier lands, or it bounces off one back up the board)
+      const lower: Board = { frame: frameAt(p2, from.yaw, slope), width: W, length: length - la, slope, walls: [], pegs: [], spinners: [], backWall: true, step: 0, sideH: WALL_H + h };
+      for (let j = 0; j < 3; j++) lower.pegs.push([(length - la) * 0.75, (j - 1) * 12, 1.5]);
       s.boards.push(lower);
       break;
     }
@@ -232,16 +294,23 @@ export function section(kind: Kind, from: { p: V3; yaw: number; pitch: number },
       if (r() < 0.6) board.pegs.push([length * 0.5, ramp(r, -10, 10), 2]);
       break;
     }
+    case 'bend': {
+      s.name = `a bend to the ${board.turn! > 0 ? 'left' : 'right'}`;
+      // (a few pegs, toward the outside, where they all end up)
+      const n = 3 + Math.floor(r() * 3), out = -Math.sign(board.turn!);
+      for (let i = 0; i < n; i++) board.pegs.push([clear0 + ((clear1 - clear0) * (i + 0.5)) / n, out * ramp(r, 2, 16), ramp(r, 1.5, 2.2)]);
+      break;
+    }
   }
   // (everything inside the board; a wall may meet a side, but never stop just short of it: a marble
   // coming down the side would wedge in the gap)
   const inside = (pt: [number, number]): [number, number] => [Math.max(1, Math.min(board.length - 1, pt[0])), Math.max(-half, Math.min(half, pt[1]))];
   for (const w of board.walls) { w.a = inside(w.a); w.b = inside(w.b); }
   board.pegs = board.pegs.map(([a, c, pr]) => [Math.max(6, Math.min(board.length - 3, a)), Math.max(-half + pr + 1, Math.min(half - pr - 1, c)), pr]);
-  // the far edge: where the next board begins
+  // the far edge: where the next board begins, heading on (turned, if the board bends)
   const lastB = s.boards[s.boards.length - 1];
-  const endP = add(add(lastB.frame.p, mul(lastB.frame.t, lastB.length)), [0, -lastB.step, 0]);
-  s.end = { p: endP, yaw: from.yaw, pitch: slope };
+  const endP = add(toWorld(lastB, lastB.length, 0, 0), [0, -lastB.step, 0]);
+  s.end = { p: endP, yaw: from.yaw + s.boards.reduce((a, b) => a + (b.turn ?? 0), 0), pitch: slope };
   s.drop = from.p[1] - endP[1];
   return s;
 }
@@ -254,7 +323,7 @@ export function candidates(seed: number, index: number, sections: Section[], pag
   for (let k = 0; k < 3; k++) {
     const r = seeded(hash(seed, index, page * 3 + k, 0x3a7));
     let kind: Kind = pick(r, KINDS);
-    for (let tries = 0; tries < 8 && (kind === last || (index === 0 && (kind === 'funnel' || kind === 'step'))); tries++) kind = pick(r, KINDS);
+    for (let tries = 0; tries < 8 && (kind === last || (index === 0 && (kind === 'funnel' || kind === 'step' || kind === 'bend'))); tries++) kind = pick(r, KINDS);
     const s = section(kind, from, r);
     if (index === 0) s.boards[0].backWall = true;
     out.push(s);
@@ -282,7 +351,7 @@ export const CHANNEL_HALF = MARBLE_R * 1.5 + 0.5;
  * a channel beyond, one marble wide, closed at its far end: they come to rest in it in the order
  * they crossed, so the result is there to see.
  */
-export function finish(end: { p: V3; yaw: number; pitch: number }): { board: Board; line: Frame; throat: number; channelEnd: number } {
+export function finish(end: { p: V3; yaw: number; pitch: number }): { board: Board; line: Frame; throat: number; lineAt: number; channelEnd: number } {
   const slope = -7 * DEG;
   const frame = frameAt(end.p, end.yaw, slope);
   const half = WIDTH / 2, ch = CHANNEL_HALF;
@@ -293,8 +362,11 @@ export function finish(end: { p: V3; yaw: number; pitch: number }): { board: Boa
     { a: [throat, -ch], b: [channelEnd, -ch], thick: 0.5 }, { a: [throat, ch], b: [channelEnd, ch], thick: 0.5 },
     { a: [channelEnd, -ch], b: [channelEnd, ch], thick: 0.5 },
   ];
-  const line = frameAt(add(frame.p, mul(frame.t, throat)), end.yaw, slope);
-  return { board: { frame, width: WIDTH, length, slope, walls, pegs: [], spinners: [], backWall: false, step: 0 }, line, throat, channelEnd };
+  // (the line a little into the channel, where they are in single file for good: at the throat
+  // itself two pressed together can still change places)
+  const lineAt = throat + 5;
+  const line = frameAt(add(frame.p, mul(frame.t, lineAt)), end.yaw, slope);
+  return { board: { frame, width: WIDTH, length, slope, walls, pegs: [], spinners: [], backWall: false, step: 0 }, line, throat, lineAt, channelEnd };
 }
 
 /** The run as a query string, and back. */
