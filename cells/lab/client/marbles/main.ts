@@ -473,8 +473,8 @@ function updateCamera(dt: number) {
     // screen and every marble is big enough to tap (the run itself is seen at go)
     const f = sections.length ? sections[0].boards[0].frame : frameAt(TOP.p, TOP.yaw, TOP.pitch);
     // (the look a little past the row's lower end, so the row sits above the hands)
-    const centre = add(add(add(f.p, mul(f.t, 2)), mul(f.b, 6)), mul(f.n, MARBLE_R));
-    const dist = 62 / zoom;
+    const centre = add(add(add(f.p, mul(f.t, 2)), mul(f.b, -9)), mul(f.n, MARBLE_R));
+    const dist = 66 / zoom;
     const el = Math.max(0.6, Math.min(1.4, 1.12 + orbit.pitch * 0.5));
     const fwd = norm(add(mul(f.b, Math.cos(el)), mul(f.n, -Math.sin(el))));
     const wantEye = sub(centre, mul(fwd, dist));
