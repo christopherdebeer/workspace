@@ -1,10 +1,10 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:ab75bfd6d8e4cf9a08df7aad82649b8ca7d09741a4fd063d5d7e6517daf455e0",
-  "syncedAt": "2026-10-08T23:11:18.325Z",
+  "treeVersion": "tree:384737adddbde111ec2b0abd7b35ee423348c25606e77cf1e85a6dd7a5e7ede2",
+  "syncedAt": "2026-10-09T11:09:24.254Z",
   "files": {
-    "README.md": "sha256:a9afeffb6fdc85cca9e034d02b76317b8293323cd0d3dbfc69771a9ff9e98b55",
+    "README.md": "sha256:4416d0814ad24bdb6a7e8889eb27cbff583676931df511ed28ee5f8bcd9b3caf",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
     "client/bricks/main.ts": "sha256:58f3f7e65cd13aa55d8b6f1e0eecfa27f7641c3109ea1b7cc7975efa9a51fce2",
     "client/changes/casting.ts": "sha256:c11e3e15f16f42adf0878d2cda4f3895494384cebae14cb780deded89c370d25",
@@ -38,7 +38,7 @@
     "client/fungi/visitors.ts": "sha256:e57c2d81fb0fa32c584c576cf7444ac560b43239983fe41648aa3feee8f0095d",
     "client/kit/pencil.ts": "sha256:51afe003d548d09f136469d9a9caeb0da79e319c8101a9913e34982a0cca2336",
     "client/kit/rng.ts": "sha256:cf8f19fc9ec1217284aed5c5ee99cd9194fb0799b7c947c604445dde9c417cfa",
-    "client/main.ts": "sha256:c2b1ee3604bdd07f19fbeb4ca15d49a507da4f9503cc5dce1e42f14d84861527",
+    "client/main.ts": "sha256:6f85b2b90c085356d15bdc4669b96e301d3b8364abbb9739a7eda31b885270f4",
     "client/markovs/archive.ts": "sha256:182b687c5d60bd6c5b2b225b6a067fc0c38fbcc5d5239fc888f2512d205936aa",
     "client/markovs/deck.ts": "sha256:15c1bf91b4d78e13918eea7102442ff777400b491698eb830e4ba77710be163d",
     "client/markovs/main.ts": "sha256:eadd208993df3646fae9e162da8d3e5b73eb0f68b3b3218ed9cb1051cb90dea5",
@@ -70,7 +70,10 @@
     "client/seals/shapes.ts": "sha256:5e3723c60622f590ceb3a9594747789b2c1fb52b08c49bd8299313b39a8eb7ba",
     "client/seals/structure.ts": "sha256:18cb023db58c936497adc554e4f365a9c59bba56b7b205ab5fffd49e3a70b4f4",
     "client/seals/styles.ts": "sha256:7dd2e261d50085899251b5420090e47ada89f982f8a62145e7f91104ec60a0b6",
-    "experiments.ts": "sha256:495351a51a1c9cb995a2ed531f6893fa982cac60f90522bcfa76e992723f5216",
+    "client/technic/main.ts": "sha256:a64a68ec11a6069f0bc004c76601f63c8ac68aadc3570578a270bc29bcce7327",
+    "client/technic/pieces.ts": "sha256:7d62a27221b4a58c3e5b7e917d5eacbcd3271502be73cd6bb812f067ef203b3d",
+    "client/technic/sim.ts": "sha256:ee944bd29b4aef9a6284b69108f425b2861ceccf2fd5b782921bdac73f4e4e6c",
+    "experiments.ts": "sha256:85d0816b55cabf18b62c4c6889af03a7aa2c66435ba4fa5c7e8771c6a6313233",
     "index.ts": "sha256:f660aff1e326b77a9d66b1ce84dd9b25db7ac6cfad311fd8cd3e7e9670393846",
     "md.ts": "sha256:67f154204a60b874e30eb1e5724120168ae8c98b00dfc9b0a844ff9d3bb7379e",
     "static/bricks.html": "sha256:6f65df89f999cd96433cb69e49667f83e592d0836c3a1ca26d016d0201285618",
@@ -169,6 +172,8 @@
     "static/plate.md": "sha256:13e54834de8032549f53f49b16af2f5a56b1829b482a4d70d562b55d73cad1f6",
     "static/seals.html": "sha256:e0ee6da6d97c90aba4ab57affd0d8680f42e1e543e26f09049926243a9c5a21d",
     "static/seals.md": "sha256:ac3cdc89b52cd09e57910ff68b2ab49645ac9279b95178e5fbc1e2ea84180bb0",
+    "static/technic.html": "sha256:e8ca794027485e93e69d78fd82ad7607509acc8eeabea680cc4891c90a8f91f4",
+    "static/technic.md": "sha256:a353f6ecdcfc099dce6656896ba997db041d622e28232e774f53b641d7d93f9e",
     "tsconfig.json": "sha256:aa5d5858c9ae1e731fcb88d91b3a59c88e2ef4b249b3e5802baf7c9fae241a30"
   }
 }
