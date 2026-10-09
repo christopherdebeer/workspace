@@ -52,6 +52,13 @@ export function drawPiece(p: Piece, dark = '#2a2b2c', paper = '#ebe9e3'): string
     }
     case 'pin': return `<circle cx="${f(x)}" cy="${f(-y)}" r=".3" fill="${c}"/><circle cx="${f(x)}" cy="${f(-y)}" r=".12" fill="${dark}" opacity=".5"/>`;
     case 'axle': return cross(x, y, 0.3, c);
+    case 'cup': {
+      // a trough: a floor and two walls, as its bars
+      const bars = barsOf(p).map((b) => { const len = Math.hypot(b.bx - b.ax, b.by - b.ay); const ang = (-Math.atan2(b.by - b.ay, b.bx - b.ax) * 180) / Math.PI; return `<g transform="translate(${f(b.ax)} ${f(-b.ay)}) rotate(${f(ang)})"><rect x="-.5" y="-.5" width="${f(len + 1)}" height="1" rx=".5" fill="${c}"/></g>`; }).join('');
+      const holes = cellsOf(p).filter((cell) => cell.hole === 'round').map((cell) => `<circle cx="${f(cell.x)}" cy="${f(-cell.y)}" r=".3" fill="${paper}"/>`).join('');
+      return bars + holes;
+    }
+    case 'bell': { const r = radiusOf(p); return `<path d="M${f(x - r)},${f(-y + r * 0.5)}A${f(r)},${f(r)} 0 1 1 ${f(x + r)},${f(-y + r * 0.5)}Z" fill="${c}"/><circle cx="${f(x)}" cy="${f(-y + r * 0.55)}" r=".2" fill="${dark}"/>${cross(x, y, 0.22, dark)}`; }
   }
 }
 

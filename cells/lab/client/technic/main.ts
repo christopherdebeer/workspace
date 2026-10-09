@@ -14,7 +14,7 @@
  * drawing (WebGL2: each kind of piece one mesh, instanced; glossy plastic lit by a sun, its
  * shadows thrown onto the floor and the board) and the hands.
  */
-import { BALL_R, BEAM_COLOURS, BH, BW, COLOURS, DEMOS, FLOOR, RULES, TRAY, TRAY_GROUPS, XMAX, XMIN, World, cellsOf, defaultPort, demo, isDisc, isPlanar, localCells, radiusOf, rampLength, rotXY, spanOf, type C3, type Hole, type Kind, type Piece, type Port } from './pieces';
+import { BALL_R, BEAM_COLOURS, BH, BOARD, BW, COLOURS, FLOOR, RULES, TRAY, TRAY_GROUPS, XMAX, XMIN, World, cellsOf, defaultPort, demo, isDisc, isGoal, isPlanar, localCells, missions, radiusOf, rampLength, rotXY, spanOf, type C3, type Hole, type Kind, type Mech, type Mission, type Piece, type Port } from './pieces';
 import { Controller, Sim, TURNS } from './sim';
 import { glyph, schematic } from './glyph';
 
@@ -77,7 +77,7 @@ precision highp float;
 in vec3 vWorld;
 in vec3 vNor;
 in vec3 vCol;
-flat in float vKind; // 0 a piece; 1 see-through (on its way); 2 selected; 3 dull (rubber)
+flat in float vKind; // 0 a piece; 1 see-through (on its way); 2 selected; 3 dull (rubber); 4 see-through, in the way; 5 moves with the selected
 out vec4 o;
 uniform vec3 uSun, uEye, uFog;
 uniform float uTime, uNear, uShadow, uPlain;
@@ -88,6 +88,8 @@ void main() {
   float breathe = .5 + .5 * sin(uTime * 2.4);
   vec3 base = vCol;
   if (vKind > 1.5 && vKind < 2.5) base = mix(base, vec3(1.), .18 + .14 * breathe);
+  if (vKind > 4.5) base = mix(base, vec3(1., .96, .7), .22 + .08 * breathe);
+  if (vKind > 3.5 && vKind < 4.5) base = mix(base, vec3(.85, .15, .1), .7);
   float diff = max(0., dot(n, uSun));
   // sky from above, a little warm bounce from below, the sun; and the plastic's shine
   vec3 light = vec3(.62, .65, .7) * (.72 + .28 * n.y) + vec3(.1, .09, .08) * max(0., -n.y);
@@ -102,7 +104,7 @@ void main() {
     float d = length(vWorld - uEye);
     c = mix(c, uFog, smoothstep(uNear, uNear + 70., d) * .5);
   }
-  if (vKind > .5 && vKind < 1.5) {
+  if ((vKind > .5 && vKind < 1.5) || (vKind > 3.5 && vKind < 4.5)) {
     // see-through: its colour, breathing
     float al = .5 + .12 * breathe;
     o = vec4(c * al, al);
@@ -122,10 +124,18 @@ precision highp float;
 in vec3 vWorld;
 out vec4 o;
 uniform vec3 uEye, uFog, uSun;
-uniform float uWhich; // 0 the board, 1 the floor
+uniform float uWhich; // 0 the board, 1 the floor, 2 a layer's face (glass), 3 the landing layer's
 uniform float uNear, uXMin, uXMax;
 void main() {
   vec3 c;
+  if (uWhich > 1.5) {
+    // a sheet of glass: faint, its edge a little brighter; the landing one lit
+    vec2 f = fract(vWorld.xy + .5) - .5;
+    float dots = 1. - smoothstep(.06, .1, length(f));
+    float lit = uWhich > 2.5 ? 1. : 0.;
+    o = vec4(mix(vec3(.75, .8, .9), vec3(1., .95, .7), lit), mix(.07, .16, lit) + dots * mix(.12, .3, lit));
+    return;
+  }
   if (uWhich < .5) {
     // the board: a hole at every module, dark inside, a soft rim
     vec2 f = fract(vWorld.xy + .5) - .5;
@@ -381,7 +391,15 @@ function meshesOf(p: { kind: Kind; n: number; m?: number; colour: number }): Arr
       return [{ m: mesh(`ramp-${len.toFixed(2)}`, () => stadiumMesh(len)), colour: c }, { m: mesh('liner', linerMesh), colour: [0.16, 0.16, 0.17], at: [0, 0] }, { m: mesh('liner', linerMesh), colour: [0.16, 0.16, 0.17], at: [len, 0] }];
     }
     case 'ball': return [{ m: mesh('ball', () => sphereMesh(BALL_R)), colour: c }];
+    case 'cup': return [{ m: mesh('cup', () => flatMesh(localCells('cup', 0), 0.02, 0.98)), colour: c }];
+    case 'bell': return [{ m: mesh('bell', () => discMesh(0.9, crossR, 0.1, 0.9)), colour: [0.85, 0.68, 0.2] }, { m: mesh('bell-clapper', () => discMesh(0.22, null, 0.92, 1.0)), colour: [0.2, 0.18, 0.16], at: [0, -0.55] }];
   }
+}
+/** A thin ring in a layer's face: a gear's pitch circle, shown while one is carried. */
+function ringMesh(r: number): number[] {
+  const out: number[] = [];
+  ring(angles(64, []), circle(r + 0.03), circle(r - 0.03), 0.99, 1.02, () => true, out);
+  return out;
 }
 /** A flat piece's turn as built: its quarter turns, or a ramp's slope. */
 function restAngle(p: { kind: Kind; n: number; m?: number; rot: number }): number {
@@ -424,10 +442,11 @@ const flatBuf = gl.createBuffer()!;
   const v = [
     x0, y0, zb, x1, y0, zb, x1, y1, zb, x0, y0, zb, x1, y1, zb, x0, y1, zb,
     fx0, FLOOR, fz0, fx1, FLOOR, fz0, fx1, FLOOR, fz1, fx0, FLOOR, fz0, fx1, FLOOR, fz1, fx0, FLOOR, fz1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   ];
   gl.bindVertexArray(flatVao);
   gl.bindBuffer(gl.ARRAY_BUFFER, flatBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.STATIC_DRAW);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW);
   const loc = gl.getAttribLocation(flatProg, 'aPos');
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 12, 0);
@@ -449,8 +468,8 @@ let handRot = 0;
 let selected = -1;
 /** a piece on its way: out of the tray (`from` -1), or lifted off the build to move */
 let carry: { spec: Omit<Piece, 'at' | 'z'>; from: number; original: Piece | null; anchor: V2; zHint: number } | null = null;
-/** where it would go */
-let ghost: { piece: Piece; extra?: Piece } | null = null;
+/** where it would go, with what it brings (an axle, pins); or where it can't, and why */
+let ghost: { piece: Piece; extra?: Piece; pins?: Piece[]; blocked?: { reason: string; id?: number }; meshWith?: number } | null = null;
 /** running, or building */
 let sim: Sim | null = null;
 let ctl: Controller | null = null;
@@ -459,6 +478,11 @@ let simLag = 0;
 interface Saved { pieces: Piece[]; ports: Port[]; hand: number }
 function save() {
   if (auto) return;
+  if (mission) {
+    missionWork[mission.id] = { pieces: world.list(), ports };
+    storeMissions();
+    return;
+  }
   const b = builds.find((x) => x.id === current);
   if (b) {
     b.pieces = world.list();
@@ -484,7 +508,11 @@ function load() {
     return;
   }
   loadBuilds();
+  loadMissions();
   try { hand = Math.min(TRAY.length - 1, Number(localStorage.getItem(STORE + ':hand') ?? 0) || 0); } catch { /* */ }
+  // (`?mission=<id>`: straight into one, fresh)
+  const mi = MISSIONS.find((m) => m.id === params.get('mission'));
+  if (mi) { startMission(mi, true); return; }
   const b = builds.find((x) => x.id === current);
   if (b) {
     for (const p of b.pieces) if (world.fits(p)) world.add(p);
@@ -506,9 +534,14 @@ function run() {
   sim = new Sim(world.mechanism());
   ctl = new Controller(ports);
   simLag = 0;
+  bellRung = false;
+  inBell.clear();
+  cupT = 0;
   document.body.classList.add('running');
   showRun();
   hum(true);
+  if (sim.motors.length && !sim.mech.hubs.length) showWhy('the motor needs the hub: nothing is powered', 4000);
+  else if (!sim.motors.length && sim.mech.hubs.length) showWhy('the hub has no motor to drive', 3000);
 }
 function stop() {
   if (!sim) return;
@@ -518,16 +551,43 @@ function stop() {
   document.body.classList.remove('running');
   showRun();
   hum(false);
+  rollAt(0);
 }
 function showRun() {
   $('run').textContent = sim ? 'stop' : 'run';
 }
 
 // ─── what a hand does ──────────────────────────────────────────────────────────────────────────
+/** what moves with the selected piece (its body), and the points it turns about */
+let kin: { pieces: Set<number>; joints: Array<[number, number, number]>; words: string } | null = null;
+function reveal(id: number) {
+  kin = null;
+  const p = world.pieces[id];
+  if (!p) return;
+  const m: Mech = world.mechanism();
+  const b = m.bodyOf[id];
+  const pieces = new Set<number>();
+  if (b > 0) for (const q of m.bodies[b].pieces) pieces.add(q);
+  const joints: Array<[number, number, number]> = [];
+  for (const j of m.joints) if (j.a === b || j.b === b) joints.push([j.x, j.y, p.z + 1]);
+  const bits: string[] = [];
+  if (b === 0) bits.push('held by the board');
+  else if (joints.length === 1) bits.push('turns about one point');
+  else if (joints.length > 1) bits.push(`joined at ${joints.length} points`);
+  else bits.push('loose: it will fall');
+  const mates = world.meshes(p);
+  for (const q of mates) {
+    const r = world.pieces[q]!.n / p.n;
+    bits.push(`meshes with the gear ${world.pieces[q]!.n} (${r === 1 ? 'the same speed' : r > 1 ? `${trim(r)}× faster` : `${trim(1 / r)}× slower`})`);
+  }
+  if (pieces.size > 1) bits.push(`moves with ${pieces.size - 1} other${pieces.size > 2 ? 's' : ''}`);
+  kin = { pieces, joints, words: `${nameOf(p)}, layer ${p.z + 1}: ${bits.join(' · ')}` };
+}
 function select(id: number) {
   if (id !== selected && id >= 0) tick(1.5);
   selected = id;
   document.body.classList.toggle('has-sel', id >= 0);
+  if (id >= 0 && !sim) { reveal(id); showWhy(kin?.words ?? '', 4000); } else { kin = null; }
   if (id >= 0) {
     const p = world.pieces[id]!;
     document.body.classList.toggle('sel-colour', p.kind === 'beam' || p.kind === 'crank');
@@ -542,6 +602,7 @@ function pickUp() {
   const anchor: V2 = spec.kind === 'beam' ? [Math.floor((spec.n - 1) / 2), 0] : [0, 0];
   carry = { spec, from: -1, original: null, anchor, zHint: 0 };
   ghost = null;
+  leanBack(true);
 }
 /** Lift a placed piece off the build, by the hole under the finger, to move it. */
 function lift(id: number, anchor: V2) {
@@ -551,17 +612,22 @@ function lift(id: number, anchor: V2) {
   const { at, z, ...spec } = p;
   carry = { spec, from: id, original: p, anchor, zHint: z };
   ghost = { piece: p };
+  leanBack(true);
 }
 /** The carried piece follows the finger: the hole it's held by lands in the cell under it. */
 function carryTo(px: number, py: number) {
   if (!carry) return;
+  whyUntil = 0;
   const spec = carry.spec;
-  let found: { piece: Piece; extra?: Piece } | null = null;
+  let found: { piece: Piece; extra?: Piece; pins?: Piece[]; meshWith?: number } | null = null;
+  let tried: Piece | null = null;
   if (isPlanar(spec.kind) && !isDisc(spec.kind)) {
     // (the cell under the finger, on the layer it would land in: tried from the back forward)
     for (let z = Math.max(0, carry.zHint); z < 9 && !found; z++) {
       const c = cellAt(px, py, z + 1);
       if (!c) break;
+      const [ax, ay] = rotXY(carry.anchor[0], carry.anchor[1], spec.rot);
+      if (!tried) tried = { ...spec, at: [c[0] - ax, c[1] - ay], z };
       const r = world.place(spec, c[0], c[1], carry.anchor, z);
       if (r && r.piece.z === z) found = r;
     }
@@ -569,19 +635,88 @@ function carryTo(px: number, py: number) {
       const c = cellAt(px, py, 1);
       if (c) found = world.place(spec, c[0], c[1], carry.anchor, 0);
     }
+    if (found) found.pins = world.connections(found.piece);
   } else {
     // a pin, an axle, a gear: onto the hole under the finger, the front one there
     const h = holeUnder(px, py);
-    if (h) found = world.place(spec, h[0], h[1], [0, 0], h[2]);
+    if (h) {
+      // (a gear near another is drawn to mesh with it)
+      const snap = world.meshSnap(spec, h[0], h[1]);
+      if (snap) {
+        found = world.place(spec, snap.x, snap.y, [0, 0], snap.z);
+        if (found && found.piece.z === snap.z) found.meshWith = snap.with;
+        else found = world.place(spec, h[0], h[1], [0, 0], h[2]);
+      } else found = world.place(spec, h[0], h[1], [0, 0], h[2]);
+      tried = { ...spec, at: [h[0], h[1]], z: spec.kind === 'pin' || spec.kind === 'axle' ? h[2] : Math.max(0, h[2]) };
+    }
   }
   if (!found) {
-    if (ghost) tick(0.5);
-    ghost = null;
+    // (nowhere: shown where it was tried, red, and why)
+    if (tried) {
+      const why = world.why(tried, carry.from);
+      const wasBlocked = ghost?.blocked;
+      ghost = { piece: tried, blocked: why ? { reason: why.reason, id: why.id } : { reason: 'room' } };
+      if (!wasBlocked) tick(0.5);
+    } else ghost = null;
+    showWhy();
     return;
   }
   const g = ghost;
-  if (!g || g.piece.at[0] !== found.piece.at[0] || g.piece.at[1] !== found.piece.at[1] || g.piece.z !== found.piece.z) tick();
+  if (!g || g.blocked || g.piece.at[0] !== found.piece.at[0] || g.piece.at[1] !== found.piece.at[1] || g.piece.z !== found.piece.z) tick();
   ghost = found;
+  showWhy();
+}
+/** The caption over the build: why a piece can't go, what it will do, what just happened. */
+let whyUntil = 0;
+function showWhy(text?: string, ms = 0) {
+  const el = $('why');
+  if (text !== undefined) {
+    el.innerHTML = text;
+    el.classList.toggle('on', !!text);
+    whyUntil = ms ? performance.now() + ms : 0;
+    return;
+  }
+  if (whyUntil > performance.now()) return;
+  let t = '';
+  if (ghost?.blocked) {
+    const b = ghost.blocked;
+    const other = b.id !== undefined && world.pieces[b.id] ? nameOf(world.pieces[b.id]!) : '';
+    t = b.reason === 'board' ? 'off the board' : b.reason === 'hole' ? `no hole for it here${other ? `: the ${other} is solid there` : ''}` : b.reason === 'piece' ? `in the way: the ${other}` : 'no room here';
+    if (b.reason === 'piece' && isPlanar(ghost.piece.kind) && !isDisc(ghost.piece.kind)) t += ' <button id="why-front">put it in front</button>';
+  } else if (ghost) {
+    const p = ghost.piece;
+    if (ghost.meshWith !== undefined) {
+      const q = world.pieces[ghost.meshWith]!;
+      const ratio = q.n / p.n;
+      t = `meshes with the gear ${q.n}: ${ratio === 1 ? 'the same speed' : ratio > 1 ? `${trim(ratio)} times faster` : `${trim(1 / ratio)} times slower`}, the other way`;
+    } else if (ghost.pins?.length === 1) t = 'one pin: it turns there';
+    else if (ghost.pins && ghost.pins.length >= 2) t = 'two pins: held fast';
+    else if (ghost.extra) t = `with an axle${ghost.extra.z === BOARD ? ' into the board: it turns there' : ''}`;
+    else if (p.kind === 'ball') t = `in layer ${p.z + 1}: it rolls on what's there`;
+    else if (p.kind === 'pin') t = p.z === BOARD ? 'into the board' : 'through both';
+    else if (p.kind === 'axle') t = p.z === BOARD ? 'into the board: a pivot' : 'through';
+  }
+  el.innerHTML = t;
+  el.classList.toggle('on', !!t);
+}
+const trim = (v: number) => (Math.round(v * 10) / 10).toString();
+/** A piece, named. */
+function nameOf(p: Piece): string {
+  const col = COLOURS[p.colour].name;
+  switch (p.kind) {
+    case 'beam': return `${col} beam`;
+    case 'crank': return 'crank';
+    case 'ramp': return `${col} ramp`;
+    case 'pin': return p.friction ? 'tight pin' : 'pin';
+    case 'axle': return 'axle';
+    case 'gear': return `gear ${p.n}`;
+    case 'wheel': return 'wheel';
+    case 'motor': return 'motor';
+    case 'hub': return 'hub';
+    case 'ball': return 'ball';
+    case 'cup': return 'cup';
+    case 'bell': return 'bell';
+  }
 }
 /** The frontmost hole under a point on the screen (any layer, the board last), and its layer. */
 function holeUnder(px: number, py: number): [number, number, number] | null {
@@ -601,23 +736,45 @@ function letGo() {
   const g = ghost;
   carry = null;
   ghost = null;
+  leanBack(false);
+  showWhy('');
   if (c.from < 0) {
-    if (!g) return;
+    if (!g || g.blocked) {
+      popSound();
+      showWhy('nowhere to go: back to the tray', 1800);
+      return;
+    }
     const ids: number[] = [];
     if (g.extra) ids.push(world.add(g.extra));
-    ids.push(world.add(g.piece));
+    const id = world.add(g.piece);
+    ids.push(id);
+    for (const pin of g.pins ?? []) if (world.fits(pin)) ids.push(world.add(pin));
     history.push({ add: ids });
     clickSound(g.piece);
-    select(ids[ids.length - 1]);
+    select(id);
+    said(g, 'went on');
   } else {
     const from = c.original!;
-    if (g && (g.piece.at[0] !== from.at[0] || g.piece.at[1] !== from.at[1] || g.piece.z !== from.z)) {
+    if (g && !g.blocked && (g.piece.at[0] !== from.at[0] || g.piece.at[1] !== from.at[1] || g.piece.z !== from.z)) {
       world.restore(c.from, g.piece);
       history.push({ change: c.from, from, to: g.piece });
       clickSound(g.piece);
-    } else world.restore(c.from, from);
+      select(c.from);
+    } else {
+      world.restore(c.from, from);
+      if (g?.blocked) { popSound(); showWhy('back where it was', 1500); }
+    }
   }
   save();
+}
+/** What a drop did, said once: the pins it took, the axle it brought, what it meshes with. */
+function said(g: { piece: Piece; extra?: Piece; pins?: Piece[]; meshWith?: number }, did: string) {
+  const bits: string[] = [];
+  if (g.meshWith !== undefined) bits.push(`meshing with the gear ${world.pieces[g.meshWith]?.n}`);
+  if (g.pins?.length === 1) bits.push('on one pin, so it turns');
+  if (g.pins && g.pins.length >= 2) bits.push('on two pins, held fast');
+  if (g.extra) bits.push(g.extra.z === BOARD ? 'on an axle into the board' : 'on an axle');
+  showWhy(bits.length ? `${nameOf(g.piece)} ${did}, ${bits.join(', ')}` : '', 2200);
 }
 /** Swap a placed piece for a changed one, if the change fits; remembered for undo. */
 function change(id: number, to: Piece | null): boolean {
@@ -688,6 +845,23 @@ let yaw = 0.42;
 let pitch = 0.3;
 let zoom = preview ? 1.0 : 1.45;
 const look: C3 = [BW / 2 - 0.5, BH * 0.3, 1.5];
+/** the three views: face on, from above (the layers), along the board; and where the view is going */
+const VIEWS: Array<{ name: string; yaw: number; pitch: number }> = [{ name: 'face on', yaw: 0.42, pitch: 0.3 }, { name: 'from above', yaw: 0.2, pitch: 1.0 }, { name: 'along', yaw: 1.1, pitch: 0.25 }];
+let viewI = 0;
+let goTo: { yaw: number; pitch: number } | null = null;
+/** The view leans back while a piece is carried, to show the layers; then comes back. */
+function leanBack(on: boolean) {
+  if (on) { if (!lean) lean = { yaw, pitch }; goTo = { yaw: Math.max(yaw, 0.55), pitch: Math.max(pitch, 0.62) }; }
+  else if (lean) { goTo = lean; lean = null; }
+}
+let lean: { yaw: number; pitch: number } | null = null;
+function easeView(dt: number) {
+  if (!goTo) return;
+  const k = 1 - Math.exp(-dt * 7);
+  yaw += (goTo.yaw - yaw) * k;
+  pitch += (goTo.pitch - pitch) * k;
+  if (Math.abs(goTo.yaw - yaw) < 0.003 && Math.abs(goTo.pitch - pitch) < 0.003) goTo = null;
+}
 function camera() {
   const W = canvas.width;
   const Hh = canvas.height;
@@ -712,7 +886,10 @@ let trayPx = 0;
 function trayFrac() {
   return innerHeight > 0 ? trayPx / innerHeight : 0;
 }
+/** how far above a touch the carried piece floats, so the thumb doesn't hide it */
+let touchLift = 0;
 function ray(px: number, py: number): { o: C3; d: C3 } {
+  py -= touchLift;
   const c = camera();
   const r = canvas.getBoundingClientRect();
   const nx = ((px - r.left) / r.width) * 2 - 1;
@@ -786,12 +963,27 @@ const pointers = new Map<number, Ptr>();
 let two: { d: number; a: number; x: number; y: number } | null = null;
 /** a finger on the machine as it runs */
 let finger: { z: number } | null = null;
+let holdTimer = 0;
 canvas.addEventListener('pointerdown', (e) => {
   wake();
   closeDrawer();
   canvas.setPointerCapture(e.pointerId);
-  const on = e.button === 0 && !e.shiftKey ? pieceAt(e.clientX, e.clientY) : null;
+  touchLift = e.pointerType === 'touch' ? 44 : 0;
+  const on = e.button === 0 && !e.shiftKey ? pieceAt(e.clientX, e.clientY + touchLift) : null;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, button: e.button, shift: e.shiftKey, on });
+  // (held still on a piece: it lifts, to be moved — no need to select it first)
+  clearTimeout(holdTimer);
+  if (!sim && on && pointers.size === 1) {
+    const id = e.pointerId;
+    holdTimer = window.setTimeout(() => {
+      const p = pointers.get(id);
+      if (!p || p.moved || carry || sim || !p.on || !world.pieces[p.on.id]) return;
+      select(p.on.id);
+      lift(p.on.id, p.on.anchor);
+      carryTo(p.x, p.y);
+      tick(1.5);
+    }, 380);
+  }
   if (pointers.size >= 2) {
     if (carry && carry.from >= 0) { ghost = null; letGo(); }
     if (sim) { sim.finger = null; finger = null; }
@@ -803,6 +995,7 @@ canvas.addEventListener('pointerdown', (e) => {
       const wx = on.hit[0] - sim.x[b], wy = on.hit[1] - sim.y[b];
       sim.finger = { body: b, lx: ca * wx - sa * wy, ly: sa * wx + ca * wy, tx: on.hit[0], ty: on.hit[1] };
       finger = { z: on.z };
+      touchLift = 0;
     }
   }
   two = null;
@@ -840,6 +1033,7 @@ canvas.addEventListener('pointermove', (e) => {
   else orbit(dx, dy);
 });
 function orbit(dx: number, dy: number) {
+  goTo = null;
   yaw = clamp(yaw + dx * 0.006, -1.2, 1.2);
   pitch = clamp(pitch + dy * 0.005, -0.2, 1.2);
 }
@@ -851,6 +1045,7 @@ function slide(dx: number, dy: number) {
   look[1] = clamp(look[1] + dy * k, -2, BH + 4);
 }
 canvas.addEventListener('pointerup', (e) => {
+  clearTimeout(holdTimer);
   const p = pointers.get(e.pointerId);
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
@@ -868,6 +1063,7 @@ canvas.addEventListener('pointerup', (e) => {
   select(p.on && p.on.id !== selected ? p.on.id : -1);
 });
 canvas.addEventListener('pointercancel', (e) => {
+  clearTimeout(holdTimer);
   pointers.delete(e.pointerId);
   two = null;
   if (sim) { sim.finger = null; finger = null; }
@@ -893,9 +1089,14 @@ const drawer = $('drawer');
   $('tiles').innerHTML = html;
 }
 function showHand() {
-  for (const b of drawer.querySelectorAll('.tile')) b.classList.toggle('on', Number((b as HTMLElement).dataset.i) === hand);
+  for (const b of drawer.querySelectorAll('.tile')) {
+    const i = Number((b as HTMLElement).dataset.i);
+    b.classList.toggle('on', i === hand);
+    b.classList.toggle('later', !!mission && !mission.tray.includes(TRAY[i].label));
+  }
   $('next').textContent = TRAY[hand].label;
 }
+const offered = (i: number) => !mission || mission.tray.includes(TRAY[i].label);
 function openDrawer() { drawer.classList.add('on'); tick(1.5); }
 function closeDrawer() { drawer.classList.remove('on'); }
 let trayPtr: { id: number; x0: number; y0: number; moved: boolean; chip: number } | null = null;
@@ -911,6 +1112,7 @@ const trayMove = (e: PointerEvent) => {
   if (!trayPtr.moved) {
     if (Math.hypot(dx, dy) < 8) return;
     trayPtr.moved = true;
+    touchLift = e.pointerType === 'touch' ? 44 : 0;
     if (trayPtr.chip >= 0) { hand = trayPtr.chip; handRot = 0; showHand(); closeDrawer(); }
     pickUp();
     select(-1);
@@ -933,6 +1135,7 @@ const trayUp = (e: PointerEvent) => {
 drawer.addEventListener('pointerdown', (e) => {
   const tile = (e.target as HTMLElement).closest('.tile') as HTMLElement | null;
   if (!tile) return;
+  if (!offered(Number(tile.dataset.i))) { showWhy('not in this one: later', 1500); tick(0.5); return; }
   trayDown(e, Number(tile.dataset.i));
 });
 drawer.addEventListener('pointermove', trayMove);
@@ -965,6 +1168,93 @@ function storeBuilds() {
   if (auto) return;
   try { localStorage.setItem(BUILDS, JSON.stringify({ builds, current })); } catch { /* */ }
 }
+// ─── the missions: a machine with something missing, a goal to meet
+const MISSIONS = missions();
+const MSTORE = 'technic:missions';
+let mission: Mission | null = null;
+let goalDone = false;
+let cupT = 0;
+let missionsDone = new Set<string>();
+let missionWork: Record<string, { pieces: Piece[]; ports: Port[] }> = {};
+function loadMissions() {
+  try {
+    const s = JSON.parse(localStorage.getItem(MSTORE) ?? 'null') as { done: string[]; work: typeof missionWork } | null;
+    if (s) { missionsDone = new Set(s.done ?? []); missionWork = s.work ?? {}; }
+  } catch { /* */ }
+}
+function storeMissions() {
+  if (auto) return;
+  try { localStorage.setItem(MSTORE, JSON.stringify({ done: [...missionsDone], work: missionWork })); } catch { /* */ }
+}
+function startMission(m: Mission, fresh = false) {
+  stop();
+  mission = m;
+  goalDone = false;
+  world = new World();
+  history = [];
+  const w = !fresh && missionWork[m.id];
+  for (const p of w ? w.pieces : m.pieces) if (world.fits(p)) world.add(p);
+  ports = (w ? w.ports : m.ports).map((x) => ({ ...x }));
+  current = null;
+  select(-1);
+  closeStart();
+  showTitle();
+  showHand();
+  showWhy(`<b>${m.name}</b> · ${m.ask}`, 9000);
+}
+/** The goals, looked at as it runs: met once, said and kept. */
+function checkGoals() {
+  if (!mission || !sim || !ctl || goalDone) return;
+  const g = mission.goal;
+  const m = sim.mech;
+  let met = false;
+  if (g.kind === 'turn') {
+    const b = m.bodyOf[g.piece];
+    met = b >= 0 && Math.abs(sim.a[b]) >= Math.PI * 2 * g.turns;
+  } else if (g.kind === 'wall') met = ctl.wall < 3;
+  else if (g.kind === 'bell') met = bellRung;
+  else if (g.kind === 'cup') {
+    let inCup = false;
+    for (const cup of m.cups) {
+      const [cx, cy] = sim.point(cup.body, cup.x, cup.y);
+      for (const ball of m.balls) {
+        if (ball.z !== cup.z) continue;
+        const speed = Math.hypot(sim.vx[ball.body], sim.vy[ball.body]);
+        if (Math.hypot(sim.x[ball.body] - cx, sim.y[ball.body] - cy) < 1.1 && speed < 0.6) inCup = true;
+      }
+    }
+    cupT = inCup ? cupT + 1 / 60 : 0;
+    met = cupT > 0.6;
+  }
+  if (!met) return;
+  goalDone = true;
+  missionsDone.add(mission.id);
+  storeMissions();
+  ding();
+  const i = MISSIONS.indexOf(mission);
+  const next = MISSIONS[(i + 1) % MISSIONS.length];
+  showWhy(`<b>it works!</b> ${mission.name} · <button id="why-next">next: ${next.name}</button>`, 0);
+}
+/** A bell is rung by anything that comes to meet it (in its layer): on the touch, not while it rests there. */
+let bellRung = false;
+const inBell = new Set<string>();
+function watchBells() {
+  if (!sim) return;
+  const m = sim.mech;
+  m.bells.forEach((bell, bi) => {
+    const [bx, by] = sim!.point(bell.body, bell.x, bell.y);
+    m.contacts.forEach((c, ci) => {
+      if (c.body === bell.body || c.z !== bell.z) return;
+      const [px, py] = sim!.point(c.body, c.x, c.y);
+      const key = `${bi}:${ci}`;
+      const touching = Math.hypot(px - bx, py - by) < c.r + bell.r;
+      if (touching && !inBell.has(key)) { bellSound(); bellRung = true; bellFlash = 1; }
+      if (touching) inBell.add(key); else inBell.delete(key);
+    });
+  });
+}
+let bellFlash = 0;
+
 const STARTERS: Array<{ from: string; name: string }> = [
   { from: 'empty', name: 'an empty board' },
   { from: 'gears', name: 'a gear train' },
@@ -976,6 +1266,7 @@ const STARTERS: Array<{ from: string; name: string }> = [
 /** Open a build: it becomes the current one, on the board. */
 function openBuild(b: Build) {
   stop();
+  mission = null;
   world = new World();
   history = [];
   for (const p of b.pieces) if (world.fits(p)) world.add(p);
@@ -1010,6 +1301,10 @@ function showStart() {
     <div class="acts"><button data-act="rename">rename</button><button data-act="forget">forget</button></div>
   </article>`).join('');
   $('mine').innerHTML = mine || '<p class="none">none yet: start from something below</p>';
+  $('missions').innerHTML = MISSIONS.map((m) => `<article class="build mission${mission?.id === m.id ? ' current' : ''}${missionsDone.has(m.id) ? ' done' : ''}" data-mission="${m.id}">
+    <div class="pic">${schematic(m.pieces, 150, 100, { board: true })}<span class="tick">✓</span></div>
+    <div class="name">${esc(m.name)}</div><div class="meta">${esc(m.ask)}</div>
+  </article>`).join('');
   $('starters').innerHTML = STARTERS.map((st) => {
     const ps = st.from === 'empty' ? [] : demo(st.from).pieces;
     return `<article class="build starter" data-from="${st.from}"><div class="pic">${ps.length ? schematic(ps, 150, 100, { board: true }) : '<span class="empty">a board, a tray</span>'}</div><div class="name">${st.name}</div></article>`;
@@ -1024,6 +1319,7 @@ $('start').addEventListener('click', (e) => {
   if (t.id === 'start-close') return closeStart();
   if (!card) return;
   wake();
+  if (card.dataset.mission) { const m = MISSIONS.find((x) => x.id === card.dataset.mission); if (m) startMission(m); return; }
   if (card.dataset.from) return newBuild(card.dataset.from);
   const b = builds.find((x) => x.id === card.dataset.id);
   if (!b) return;
@@ -1045,7 +1341,7 @@ $('start').addEventListener('click', (e) => {
 });
 function showTitle() {
   const b = builds.find((x) => x.id === current);
-  $('builds').textContent = b ? b.name : 'builds';
+  $('builds').textContent = mission ? mission.name : b ? b.name : 'builds';
 }
 
 addEventListener('keydown', (e) => {
@@ -1060,7 +1356,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'delete' || k === 'backspace') removeSelected();
   else if (k === 'escape') { select(-1); closeHub(); closeDrawer(); closeStart(); }
   else if (k === 'p') openDrawer();
-  else if (k === 'n') { hand = (hand + 1) % TRAY.length; handRot = 0; showHand(); }
+  else if (k === 'n') { do hand = (hand + 1) % TRAY.length; while (!offered(hand)); handRot = 0; showHand(); }
 });
 
 // ─── the buttons ───────────────────────────────────────────────────────────────────────────────
@@ -1073,6 +1369,28 @@ btn('colour', recolour);
 btn('remove', removeSelected);
 btn('program', openHub);
 btn('pieces', () => (drawer.classList.contains('on') ? closeDrawer() : openDrawer()));
+btn('view', () => {
+  viewI = (viewI + 1) % VIEWS.length;
+  goTo = { yaw: VIEWS[viewI].yaw, pitch: VIEWS[viewI].pitch };
+  lean = null;
+  $('view').textContent = VIEWS[viewI].name;
+  tick(1.5);
+});
+$('why').addEventListener('click', (e) => {
+  if ((e.target as HTMLElement).id === 'why-next' && mission) {
+    const i = MISSIONS.indexOf(mission);
+    startMission(MISSIONS[(i + 1) % MISSIONS.length]);
+    return;
+  }
+  // ("put it in front": the carried piece tries the next layer out)
+  if ((e.target as HTMLElement).id === 'why-front' && carry && ghost) {
+    carry.zHint = ghost.piece.z + 1;
+    const p = [...pointers.values()][0];
+    const t = trayPtr ? null : p;
+    if (t) carryTo(t.x, t.y);
+    tick();
+  }
+});
 btn('builds', () => ($('start').classList.contains('on') ? closeStart() : showStart()));
 btn('run', () => (sim ? stop() : run()));
 let armed: { what: string; at: number } | null = null;
@@ -1117,7 +1435,7 @@ function openHub() {
     rows.push(`<div class="port" data-i="${i}">
       <div class="row"><b>${String.fromCharCode(65 + i)}</b><span class="what">${i < motors ? 'motor' : 'no motor on this port'}</span><span class="speed">${p.speed}%</span></div>
       <input type="range" min="-100" max="100" value="${p.speed}" aria-label="speed">
-      <div class="rules">${RULES.map((r) => `<button data-rule="${r.rule}" class="${r.rule === p.rule ? 'on' : ''}">${r.label}</button>`).join('')}</div>
+      <div class="rules">${RULES.map((r) => `<button data-rule="${r.rule}" class="${r.rule === p.rule ? 'on' : ''}">${RULE_ICONS[r.rule]}<span>${r.label}</span></button>`).join('')}</div>
     </div>`);
   }
   $('ports').innerHTML = rows.join('');
@@ -1152,7 +1470,19 @@ hubEl.addEventListener('click', (e) => {
 function showReadings() {
   if (!hubEl.classList.contains('on')) return;
   $('readings').textContent = ctl ? `tilt ${Math.round(ctl.tilt)}° · wall ${ctl.wall.toFixed(1)}` : 'not running';
+  if (sim) sim.motors.forEach((m, i) => {
+    const el = hubEl.querySelector(`.port[data-i="${i}"] .what`);
+    const rpm = Math.round((m.omega / (2 * Math.PI)) * 60);
+    if (el) el.textContent = rpm ? `turning · ${rpm > 0 ? '↻' : '↺'} ${Math.abs(rpm)} a minute` : 'still';
+  });
 }
+/** The rules, as pictures. */
+const RULE_ICONS: Record<string, string> = {
+  run: '<svg viewBox="0 0 24 24" width="28" height="28"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 8l5 4-5 4z" fill="currentColor"/></svg>',
+  fro: '<svg viewBox="0 0 24 24" width="28" height="28"><path d="M4 9h13l-3-3M20 15H7l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  walls: '<svg viewBox="0 0 24 24" width="28" height="28"><path d="M3 4v16M21 4v16" stroke="currentColor" stroke-width="2"/><path d="M7 12h10l-3-3M17 12l-3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  tilt: '<svg viewBox="0 0 24 24" width="28" height="28"><g transform="rotate(-28 12 14)"><rect x="5" y="9" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="9" y="12" width="6" height="3" fill="currentColor"/></g><path d="M3 20h18" stroke="currentColor" stroke-width="1.6"/></svg>',
+};
 
 // ─── sound: a click as a pin goes in, a soft tone, the motors' hum ─────────────────────────────
 let ac: AudioContext | null = null;
@@ -1269,6 +1599,46 @@ function humAt(speed: number) {
   humVoice.f.frequency.setTargetAtTime(300 + 500 * s, ac.currentTime, 0.05);
 }
 
+/** Balls rolling: a soft rumble that follows how fast they go. */
+let rollVoice: { g: GainNode; f: BiquadFilterNode } | null = null;
+function rollAt(speed: number) {
+  if (!ac || !space || !noise) return;
+  if (!rollVoice) {
+    const src = ac.createBufferSource();
+    const long = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const ch = long.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+    src.buffer = long;
+    src.loop = true;
+    const f = ac.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 200;
+    const g = ac.createGain();
+    g.gain.value = 0;
+    src.connect(f).connect(g).connect(space);
+    src.start();
+    rollVoice = { g, f };
+  }
+  const s = Math.min(1, speed / 8);
+  rollVoice.g.gain.setTargetAtTime(sim ? s * 0.06 : 0, ac.currentTime, 0.08);
+  rollVoice.f.frequency.setTargetAtTime(150 + 500 * s, ac.currentTime, 0.08);
+}
+let lastThud = 0;
+function thud(how: number) {
+  const now = performance.now();
+  if (now - lastThud < 120) return;
+  lastThud = now;
+  snap(220, Math.min(0.5, how * 30));
+}
+function ding() {
+  for (const [i, f] of [523, 659, 784, 1047].entries()) tone(f, i * 0.09, 0.9, 0.06);
+}
+function bellSound() {
+  tone(1319, 0, 1.6, 0.07);
+  tone(1319 * 2.4, 0, 0.5, 0.025);
+  snap(4000, 0.2);
+}
+
 // ─── drawing ───────────────────────────────────────────────────────────────────────────────────
 const SUN = normalize([0.42, 0.78, 0.55]);
 const FOG: C3 = [0.9, 0.9, 0.88];
@@ -1290,22 +1660,35 @@ function gather() {
   const put = (p: Piece, x: number, y: number, ang: number, kind: number) => {
     for (const { m, colour, dull, at } of meshesOf(p)) instance(m, x, y, p.z, ang + restAngle(p), colour, dull && kind === 0 ? 3 : kind, at);
   };
+  // (a ball carried or selected: what shares its layer is tinted, since that's what it meets)
+  const ballLayer: number = sim ? -1 : carry?.spec.kind === 'ball' && ghost && !ghost.blocked ? ghost.piece.z : selected >= 0 && world.pieces[selected]?.kind === 'ball' ? world.pieces[selected]!.z : -1;
   world.pieces.forEach((p, id) => {
     if (!p) return;
     const [x, y, ang] = poseOf(id, p);
-    put(p, x, y, ang, id === selected && !sim ? 2 : 0);
+    const kind = id === selected && !sim ? 2 : (kin?.pieces.has(id) && !sim) || (ballLayer >= 0 && p.z === ballLayer && p.kind !== 'ball' && isPlanar(p.kind)) || (p.kind === 'bell' && bellFlash > 0) ? 5 : 0;
+    put(p, x, y, ang, kind);
   });
+  if (kin && !sim) for (const [x, y, z] of kin.joints) instance(mesh('dot', () => sphereMesh(0.16)), x, y, z - 0.5, 0, [1, 1, 1], 0);
   flush();
 }
 /** The piece on its way, see-through, where it would go (drawn after the rest, over it). */
 function gatherGhost() {
   clearCounts();
   if (ghost) {
+    const kind = ghost.blocked ? 4 : 1;
     const put = (p: Piece) => {
-      for (const { m, colour, at } of meshesOf(p)) instance(m, p.at[0], p.at[1], p.z, restAngle(p), colour, 1, at);
+      for (const { m, colour, at } of meshesOf(p)) instance(m, p.at[0], p.at[1], p.z, restAngle(p), colour, kind, at);
     };
     put(ghost.piece);
     if (ghost.extra) put(ghost.extra);
+    for (const pin of ghost.pins ?? []) put(pin);
+    // (a gear carried: its pitch circle, and the one it would mesh with)
+    if (ghost.piece.kind === 'gear' && !ghost.blocked) {
+      const r = radiusOf(ghost.piece);
+      instance(mesh(`ring-${r}`, () => ringMesh(r)), ghost.piece.at[0], ghost.piece.at[1], ghost.piece.z, 0, [1, 1, 1], 1);
+      const q = ghost.meshWith !== undefined ? world.pieces[ghost.meshWith] : null;
+      if (q) instance(mesh(`ring-${radiusOf(q)}`, () => ringMesh(radiusOf(q))), q.at[0], q.at[1], q.z, 0, [1, 1, 1], 1);
+    }
   }
   flush();
 }
@@ -1368,6 +1751,7 @@ function frame(now: number) {
   time += dt;
   resize();
   if (auto) yaw = 0.3 + 0.25 * Math.sin(time * 0.12);
+  else easeView(dt);
   // the machine: fixed steps, however the frames come
   if (sim && ctl) {
     simLag = Math.min(simLag + dt, 0.1);
@@ -1379,8 +1763,15 @@ function frame(now: number) {
     let fastest = 0;
     for (const m of sim.motors) fastest = Math.max(fastest, Math.abs(m.omega) / (TURNS * 2 * Math.PI));
     humAt(fastest);
+    let rolling = 0;
+    for (const b of sim.balls) rolling = Math.max(rolling, Math.hypot(sim.vx[b.body], sim.vy[b.body]));
+    rollAt(rolling);
+    if (sim.landed > 0.004) thud(sim.landed);
+    watchBells();
+    checkGoals();
     showReadings();
   }
+  bellFlash = Math.max(0, bellFlash - dt * 2);
   gather();
 
   const cam = camera();
@@ -1409,6 +1800,25 @@ function frame(now: number) {
   gl.drawArrays(gl.TRIANGLES, 0, 6);
   gl.uniform1f(u(flatProg, 'uWhich'), 1);
   gl.drawArrays(gl.TRIANGLES, 6, 6);
+  // while a piece is carried: the layers as sheets of glass, the one it lands in lit
+  if (carry && !sim) {
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    const top = Math.max(2, world.list().reduce((m, p) => Math.max(m, isPlanar(p.kind) ? p.z + 1 : p.z + p.n), 0) + 1);
+    const landing = ghost && !ghost.blocked ? (isPlanar(ghost.piece.kind) ? ghost.piece.z : -1) : -1;
+    gl.uniform1f(u(flatProg, 'uWhich'), 2);
+    gl.bindBuffer(gl.ARRAY_BUFFER, flatBuf);
+    for (let z = 0; z < top; z++) {
+      const zf = z + 1;
+      const x0 = -0.5, x1 = BW - 0.5, y0 = -0.5, y1 = BH - 0.5;
+      gl.bufferSubData(gl.ARRAY_BUFFER, 12 * 4 * 3, new Float32Array([x0, y0, zf, x1, y0, zf, x1, y1, zf, x0, y0, zf, x1, y1, zf, x0, y1, zf]));
+      gl.uniform1f(u(flatProg, 'uWhich'), z === landing ? 3 : 2);
+      gl.drawArrays(gl.TRIANGLES, 12, 6);
+    }
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
 
   // the pieces
   setCommon(prog, cam);
@@ -1439,10 +1849,18 @@ function frame(now: number) {
   gl.depthMask(true);
   if (!auto && !sim) drawNext(W, Hh);
   gl.bindVertexArray(null);
+  /** (for the devtools: where a point of the world is on the screen) */
+  const probe = (x: number, y: number, z: number): [number, number] => {
+    const v = cam.vp;
+    const cx = v[0] * x + v[4] * y + v[8] * z + v[12], cy = v[1] * x + v[5] * y + v[9] * z + v[13], cw = v[3] * x + v[7] * y + v[11] * z + v[15];
+    const r = canvas.getBoundingClientRect();
+    return [r.left + ((cx / cw + 1) / 2) * r.width, r.top + ((1 - cy / cw) / 2) * r.height];
+  };
   (window as unknown as { __technic: unknown }).__technic = {
+    probe,
     pieces: world.count(), running: !!sim, ghost: ghost?.piece ?? null, hand: TRAY[hand].label, selected, sel: world.pieces[selected] ?? null, carrying: !!carry, undo: history.length,
-    drawer: drawer.classList.contains('on'), start: $('start').classList.contains('on'), builds: builds.map((b) => ({ id: b.id, name: b.name, pieces: b.pieces.length })), current,
-    motion: sim?.motion() ?? 0, poses: sim ? world.pieces.map((p, id) => (p ? poseOf(id, p) : null)) : null, tilt: ctl?.tilt ?? 0, wall: ctl?.wall ?? 0, ports,
+    drawer: drawer.classList.contains('on'), start: $('start').classList.contains('on'), mission: mission?.id ?? null, goalDone, why: $('why').textContent, blocked: ghost?.blocked ?? null, view: VIEWS[viewI].name, builds: builds.map((b) => ({ id: b.id, name: b.name, pieces: b.pieces.length })), current,
+    list: world.pieces, motion: sim?.motion() ?? 0, poses: sim ? world.pieces.map((p, id) => (p ? poseOf(id, p) : null)) : null, tilt: ctl?.tilt ?? 0, wall: ctl?.wall ?? 0, ports,
   };
   requestAnimationFrame(frame);
 }

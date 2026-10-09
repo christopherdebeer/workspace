@@ -8,11 +8,49 @@ The build stands on a pegboard: a wall of holes behind it, a floor beneath. Piec
 in front of the board, each layer one module deep (a module is one hole pitch, 8 mm, as on the
 real pieces). Pins and axles go through the holes, across the layers, and into the board.
 
+## For small hands
+
+The rules are the real ones, and they are the teacher; what the hands do by default is meant
+to give the first move away and leave the model underneath.
+
+- **A drop explains itself.** Carried, a piece says what it will do: *one pin: it turns there*,
+  *two pins: held fast*, *meshes with the gear 8: 3 times slower, the other way*, *with an axle
+  into the board: it turns there*. Where it can't go it turns red and says why (*in the way: the
+  yellow beam*, *off the board*, *no hole for it here*), with *put it in front* when that would
+  do. Let go nowhere, and it goes back to the tray, and says so.
+- **Connections, not connectors.** A beam (a crank, a ramp, the motor, the hub) dropped with a
+  hole over another piece's hole, or over the board, takes a smooth pin there, on its own. One
+  such hole: a hinge. Two or more: its outermost two, and it's held fast, which is simply what two
+  pins do. Take one pin out of a held piece and it turns on the other. Tight pins and long pins
+  are still in the drawer, for when you mean them.
+- **Gears are magnetic.** A gear carried near another is drawn to the nearest hole where their
+  pitch circles touch, and to the hole that touches the most gears, so it lands *between* two.
+  The pitch circles show while it's carried. A gear or a wheel dropped on bare board brings an
+  axle into the board, so it turns in place.
+- **The layers show.** While a piece is carried the view leans back and the layers draw as
+  sheets of glass, the one it will land in lit. A ball carried or selected tints what shares its
+  layer, since that is what it meets.
+- **A selected piece tells you what moves with it**: *held by the board*, *turns about one
+  point*, *loose: it will fall*, what it meshes with, and how many pieces move with it; those are
+  tinted, and its pivots are drawn as dots.
+- **Hold to lift.** Press and hold any placed piece and it lifts to be moved; no selecting first.
+  On a phone the carried piece floats above the finger. `view` snaps between face on, from above
+  (the layers) and along the board.
+- **Missions.** The start screen offers machines with something missing and a goal: make the
+  big gear turn, ring the bell, a marble in the cup, drive to the wall. The drawer offers the
+  pieces that mission is about; the rest wait. A goal met rings, says so, and offers the next.
+  `?mission=turn|bell|cup|wall` opens one fresh.
+
+Still to come: the machine running all the time, with a rewind to as-built instead of a stop,
+so that tinkering while it moves is the normal way to work.
+
 ## Hands
 
 | | Touch | Mouse and keys |
 |---|---|---|
 | the drawer of pieces | `pieces` | P |
+| lift a placed piece to move it | press and hold it | the same |
+| the views | `view`: face on, from above, along | the same |
 | take a piece | tap it in the drawer (it goes in the corner); or drag it sideways out of the drawer onto the build | the same; N for the next |
 | use the piece in hand | drag it from its corner | the same |
 | put it on | let go where it should go | the same |

@@ -35,8 +35,9 @@
     #drawer .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
     #drawer .tile { width: 74px; height: 86px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: rgba(52,56,59,.06); touch-action: pan-y; }
     #drawer .tile svg { display: block; }
-    #drawer .tile span { font-size: 11px; letter-spacing: .06em; font-variant: small-caps; white-space: nowrap; }
+    #drawer .tile span { font-size: 10px; letter-spacing: .06em; font-variant: small-caps; white-space: nowrap; opacity: .7; }
     #drawer .tile.on { background: #34383b; color: #f1f0eb; }
+    #drawer .tile.later { opacity: .3; }
     #drawer .tile:active { background: rgba(52,56,59,.14); }
     /* the start screen: your builds, and what to start from */
     #start { position: fixed; inset: 0; background: rgba(230,230,227,.94); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); overflow-y: auto; padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); display: none; }
@@ -55,11 +56,20 @@
     #start .build .acts { display: flex; gap: 10px; margin-top: 2px; }
     #start .build .acts button { font-size: 11px; letter-spacing: .08em; font-variant: small-caps; opacity: .6; }
     #start .build .acts button:hover { opacity: 1; text-decoration: underline; }
+    #start .mission .pic { position: relative; }
+    #start .mission .tick { position: absolute; right: 8px; top: 6px; font-size: 18px; color: #2a7a3b; display: none; }
+    #start .mission.done .tick { display: block; }
+    #start .mission .meta { font-style: italic; }
     #start .none { font-style: italic; opacity: .6; font-size: 14px; }
     #start #start-close { position: fixed; top: max(12px, env(safe-area-inset-top)); right: 14px; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; opacity: .66; }
     .running #hands, .running #next, .running #drawer { display: none; }
     #hint { position: fixed; left: 0; right: 0; top: calc(max(12px, env(safe-area-inset-top)) + 120px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity 2s; pointer-events: none; padding: 0 24px; }
     #hint.on { opacity: .62; }
+    /* the caption: why a piece can't go, what a drop did, what a selected piece does */
+    #why { position: fixed; left: 50%; transform: translateX(-50%); top: calc(max(12px, env(safe-area-inset-top)) + 124px); max-width: min(92vw, 520px); text-align: center; font-size: 14px; line-height: 1.45; padding: 7px 14px; border-radius: 14px; background: rgba(255,255,255,.78); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 3px 12px rgba(40,40,40,.08); opacity: 0; transition: opacity .25s; pointer-events: none; }
+    #why.on { opacity: 1; pointer-events: auto; }
+    #why button { margin-left: 8px; font-size: 12px; letter-spacing: .08em; font-variant: small-caps; padding: 3px 10px; border-radius: 12px; background: #34383b; color: #f1f0eb; }
+    .running #why { top: calc(max(12px, env(safe-area-inset-top)) + 60px); }
     /* the hub's program: a sheet */
     #hub { position: fixed; left: 0; right: 0; bottom: 0; transform: translateY(105%); transition: transform .25s; background: rgba(255,255,255,.86); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-radius: 18px 18px 0 0; padding: 14px 18px max(18px, env(safe-area-inset-bottom)); box-shadow: 0 -6px 30px rgba(40,40,40,.12); max-height: 70vh; overflow-y: auto; }
     #hub.on { transform: none; }
@@ -71,22 +81,25 @@
     #hub .row .what { opacity: .6; flex: 1; font-style: italic; }
     #hub input[type=range] { width: 100%; margin: 8px 0; accent-color: #34383b; }
     #hub .rules { display: flex; gap: 6px; flex-wrap: wrap; }
-    #hub .rules button { font-size: 12px; letter-spacing: .06em; font-variant: small-caps; padding: 5px 11px; border-radius: 14px; background: rgba(52,56,59,.08); }
+    #hub .rules button { font-size: 11px; letter-spacing: .06em; font-variant: small-caps; padding: 6px 10px 4px; border-radius: 14px; background: rgba(52,56,59,.08); display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 70px; }
+    #hub .rules button svg { display: block; }
+    #hub input[type=range] { height: 32px; }
     #hub .rules button.on { background: #34383b; color: #f1f0eb; }
     #hub #hub-done { display: block; margin: 12px auto 0; font-size: 14px; letter-spacing: .1em; font-variant: small-caps; padding: 8px 22px; border-radius: 20px; background: rgba(52,56,59,.08); }
-    .preview nav, .preview #tray, .preview #hint, .preview #next, .preview #hub, .preview #drawer, .preview #start { display: none; }
+    .preview nav, .preview #tray, .preview #hint, .preview #next, .preview #hub, .preview #drawer, .preview #start, .preview #why { display: none; }
   </style>
 </head>
 <body>
   <canvas id="build"></canvas>
-  <nav><button id="run">run</button><button id="builds">builds</button><button id="again">begin again</button><button id="sound">sound · on</button><a href="{{readme}}">notes</a></nav>
+  <nav><button id="run">run</button><button id="builds">builds</button><button id="view">face on</button><button id="again">begin again</button><button id="sound">sound · on</button><a href="{{readme}}">notes</a></nav>
+  <div id="why"></div>
   <div id="hint">`pieces` opens the drawer: tap one, then drag it from its corner onto the board · tap a placed piece to select it, then drag to move it · run, and tap the hub</div>
   <div id="next">beam 5</div>
   <div id="tray">
     <div id="hands"><button id="pieces">pieces</button><button id="undo">undo</button><button id="turn">turn</button><button id="nearer" class="sel">nearer</button><button id="farther" class="sel">farther</button><button id="colour" class="sel-colour">colour</button><button id="program" class="sel-hub">program</button><button id="remove" class="sel">remove</button></div>
   </div>
   <div id="drawer"><div id="tiles"></div></div>
-  <div id="start"><button id="start-close">close</button><h1>Technic</h1><p class="lead">beams, pins, gears, a motor and a hub, on a pegboard: build it, then it goes</p><h2>your builds</h2><div class="row" id="mine"></div><h2>start from</h2><div class="row" id="starters"></div></div>
+  <div id="start"><button id="start-close">close</button><h1>Technic</h1><p class="lead">beams, pins, gears, a motor and a hub, on a pegboard: build it, then it goes</p><h2>missions</h2><div class="row" id="missions"></div><h2>your builds</h2><div class="row" id="mine"></div><h2>start from</h2><div class="row" id="starters"></div></div>
   <div id="hub"><h2>the hub <span id="readings"></span></h2><div id="ports"></div><button id="hub-done">done</button></div>
   <script type="module" src="{{app}}"></script>
 </body>

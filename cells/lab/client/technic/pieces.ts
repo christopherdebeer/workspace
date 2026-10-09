@@ -24,7 +24,7 @@ export const FLOOR = -0.5;
 export const XMIN = -6;
 export const XMAX = BW + 6;
 
-export type Kind = 'beam' | 'crank' | 'ramp' | 'pin' | 'axle' | 'gear' | 'wheel' | 'motor' | 'hub' | 'ball';
+export type Kind = 'beam' | 'crank' | 'ramp' | 'pin' | 'axle' | 'gear' | 'wheel' | 'motor' | 'hub' | 'ball' | 'cup' | 'bell';
 export type Hole = 'round' | 'axle' | 'none';
 
 export interface Piece {
@@ -62,11 +62,13 @@ export const COLOURS: Array<{ name: string; rgb: C3 }> = [
 /** the colours a beam can be turned through */
 export const BEAM_COLOURS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10];
 
-export const PLANAR = new Set<Kind>(['beam', 'crank', 'ramp', 'gear', 'wheel', 'motor', 'hub', 'ball']);
+export const PLANAR = new Set<Kind>(['beam', 'crank', 'ramp', 'gear', 'wheel', 'motor', 'hub', 'ball', 'cup', 'bell']);
 export const isPlanar = (k: Kind) => PLANAR.has(k);
-export const isDisc = (k: Kind) => k === 'gear' || k === 'wheel' || k === 'ball';
+export const isDisc = (k: Kind) => k === 'gear' || k === 'wheel' || k === 'ball' || k === 'bell';
 /** a disc that goes on an axle (a ball doesn't) */
-export const onAxle = (k: Kind) => k === 'gear' || k === 'wheel';
+export const onAxle = (k: Kind) => k === 'gear' || k === 'wheel' || k === 'bell';
+/** the goals: a cup to fill, a bell to ring */
+export const isGoal = (k: Kind) => k === 'cup' || k === 'bell';
 /** the radius of a ball: a module and a half across */
 export const BALL_R = 0.75;
 
@@ -78,17 +80,19 @@ export interface Offer {
 }
 export const TRAY: Offer[] = [
   ...[3, 5, 7, 9, 11, 13, 15].map((n) => ({ label: `beam ${n}`, group: 'beams', spec: { kind: 'beam' as Kind, n, rot: 0, colour: 0 } })),
-  { label: 'crank', group: 'beams', spec: { kind: 'crank', n: 3, rot: 0, colour: 1 } },
-  ...([[4, 3], [6, 2], [8, 6], [10, 3]] as Array<[number, number]>).map(([n, m]) => ({ label: `ramp ${n}·${m}`, group: 'ramps', spec: { kind: 'ramp' as Kind, n, m, rot: 0, colour: 0 } })),
-  { label: 'pin', group: 'pins & axles', spec: { kind: 'pin', n: 2, rot: 0, colour: 9 } },
-  { label: 'pin · tight', group: 'pins & axles', spec: { kind: 'pin', n: 2, rot: 0, colour: 2, friction: true } },
-  { label: 'long pin', group: 'pins & axles', spec: { kind: 'pin', n: 3, rot: 0, colour: 6 } },
-  ...[3, 5, 7].map((n) => ({ label: `axle ${n}`, group: 'pins & axles', spec: { kind: 'axle' as Kind, n, rot: 0, colour: 4 } })),
-  ...[8, 16, 24, 40].map((n) => ({ label: `gear ${n}`, group: 'gears & wheels', spec: { kind: 'gear' as Kind, n, rot: 0, colour: n === 8 ? 9 : 0 } })),
-  { label: 'wheel', group: 'gears & wheels', spec: { kind: 'wheel', n: 5, rot: 0, colour: 2 } },
-  { label: 'motor', group: 'power', spec: { kind: 'motor', n: 0, rot: 0, colour: 0 } },
-  { label: 'hub', group: 'power', spec: { kind: 'hub', n: 0, rot: 0, colour: 3 } },
-  { label: 'ball', group: 'marbles', spec: { kind: 'ball', n: 0, rot: 0, colour: 10 } },
+  { label: 'crank', group: 'turns', spec: { kind: 'crank', n: 3, rot: 0, colour: 1 } },
+  ...[8, 16, 24, 40].map((n) => ({ label: `gear ${n}`, group: 'turns', spec: { kind: 'gear' as Kind, n, rot: 0, colour: n === 8 ? 9 : 0 } })),
+  ...[3, 5, 7].map((n) => ({ label: `axle ${n}`, group: 'turns', spec: { kind: 'axle' as Kind, n, rot: 0, colour: 4 } })),
+  { label: 'pin', group: 'holds', spec: { kind: 'pin', n: 2, rot: 0, colour: 9 } },
+  { label: 'pin · tight', group: 'holds', spec: { kind: 'pin', n: 2, rot: 0, colour: 2, friction: true } },
+  { label: 'long pin', group: 'holds', spec: { kind: 'pin', n: 3, rot: 0, colour: 6 } },
+  { label: 'wheel', group: 'rolls', spec: { kind: 'wheel', n: 5, rot: 0, colour: 2 } },
+  { label: 'ball', group: 'rolls', spec: { kind: 'ball', n: 0, rot: 0, colour: 10 } },
+  ...([[4, 3], [6, 2], [8, 6], [10, 3]] as Array<[number, number]>).map(([n, m]) => ({ label: `ramp ${n}·${m}`, group: 'rolls', spec: { kind: 'ramp' as Kind, n, m, rot: 0, colour: 0 } })),
+  { label: 'motor', group: 'goes', spec: { kind: 'motor', n: 0, rot: 0, colour: 0 } },
+  { label: 'hub', group: 'goes', spec: { kind: 'hub', n: 0, rot: 0, colour: 3 } },
+  { label: 'cup', group: 'goals', spec: { kind: 'cup', n: 0, rot: 0, colour: 5 } },
+  { label: 'bell', group: 'goals', spec: { kind: 'bell', n: 0, rot: 0, colour: 5 } },
 ];
 /** The tray's groups, in order. */
 export const TRAY_GROUPS = [...new Set(TRAY.map((o) => o.group))];
@@ -111,6 +115,8 @@ export function localCells(kind: Kind, n: number, m = 0): Array<{ i: number; j: 
     case 'beam': return Array.from({ length: n }, (_, i) => ({ i, j: 0, hole: 'round' as Hole }));
     case 'ramp': return [{ i: 0, j: 0, hole: 'round' }, { i: n, j: -m, hole: 'round' }];
     case 'ball': return [{ i: 0, j: 0, hole: 'none' }];
+    case 'cup': return [{ i: 0, j: 0, hole: 'round' }, { i: 1, j: 0, hole: 'none' }, { i: 2, j: 0, hole: 'round' }, { i: 0, j: 1, hole: 'none' }, { i: 2, j: 1, hole: 'none' }];
+    case 'bell': return [{ i: 0, j: 0, hole: 'axle' }];
     case 'crank': return Array.from({ length: n }, (_, i) => ({ i, j: 0, hole: (i === 0 ? 'axle' : 'round') as Hole }));
     case 'gear': case 'wheel': return [{ i: 0, j: 0, hole: 'axle' }];
     case 'motor': {
@@ -136,7 +142,7 @@ export function cellsOf(p: Piece): Array<{ x: number; y: number; hole: Hole }> {
 }
 /** A disc's radius: a gear's pitch radius (teeth over sixteen), a wheel's half its size. */
 export function radiusOf(p: { kind: Kind; n: number }): number {
-  return p.kind === 'gear' ? p.n / 16 : p.kind === 'wheel' ? p.n / 2 : p.kind === 'ball' ? BALL_R : 0;
+  return p.kind === 'gear' ? p.n / 16 : p.kind === 'wheel' ? p.n / 2 : p.kind === 'ball' ? BALL_R : p.kind === 'bell' ? 0.9 : 0;
 }
 /** A ramp's length, top hole to bottom hole. */
 export const rampLength = (p: { n: number; m?: number }) => Math.hypot(p.n, p.m ?? 0);
@@ -149,6 +155,13 @@ export function barsOf(p: Piece): Array<{ ax: number; ay: number; bx: number; by
   if (p.kind === 'beam' || p.kind === 'crank') {
     const [dx, dy] = rotXY(p.n - 1, 0, p.rot);
     return [{ ax: p.at[0], ay: p.at[1], bx: p.at[0] + dx, by: p.at[1] + dy }];
+  }
+  if (p.kind === 'cup') {
+    return [[0, 0, 2, 0], [0, 0, 0, 1], [2, 0, 2, 1]].map(([i0, j0, i1, j1]) => {
+      const [ax, ay] = rotXY(i0, j0, p.rot);
+      const [bx, by] = rotXY(i1, j1, p.rot);
+      return { ax: p.at[0] + ax, ay: p.at[1] + ay, bx: p.at[0] + bx, by: p.at[1] + by };
+    });
   }
   if (p.kind === 'motor' || p.kind === 'hub') {
     const w = p.kind === 'motor' ? 2 : 3;
@@ -182,6 +195,8 @@ export function massOf(p: Piece): number {
     case 'hub': return 0.9;
     case 'ramp': return 0.1 * rampLength(p);
     case 'ball': return 0.15;
+    case 'cup': return 0.4;
+    case 'bell': return 0.2;
   }
 }
 
@@ -334,6 +349,101 @@ export class World {
     }
     return true;
   }
+  /**
+   * Why a piece doesn't fit where it is (null: it does): off the board, in the way of a piece
+   * (which), a pin or axle where there's no hole for it, or no room.
+   */
+  why(p: Piece, ignore = -1): { reason: 'board' | 'piece' | 'hole' | 'room'; id?: number } | null {
+    if (this.fits(p, ignore)) return null;
+    const bounds = isPlanar(p.kind) ? cellsOf(p).every((c) => this.inBounds(c.x, c.y)) : this.inBounds(p.at[0], p.at[1]);
+    if (!bounds || (isPlanar(p.kind) && (p.z < 0 || p.z >= ZMAX))) return { reason: 'board' };
+    if (isPlanar(p.kind)) {
+      for (const c of cellsOf(p)) {
+        const f = this.flatAt(c.x, c.y, p.z);
+        if (f && f.id !== ignore) return { reason: 'piece', id: f.id };
+        const t = this.throughAt(c.x, c.y, p.z);
+        if (t >= 0 && t !== ignore) return { reason: 'piece', id: t };
+      }
+      // (a disc or a ramp against a bar, or a bar against a disc: find which)
+      for (const q of this.list()) {
+        const id = this.pieces.indexOf(q);
+        if (q.z !== p.z || id === ignore) continue;
+        const copy = { ...p };
+        const w = new World();
+        w.add(q);
+        if (!w.fits(copy)) return { reason: 'piece', id };
+      }
+      return { reason: 'room' };
+    }
+    for (const z of spanOf(p)) {
+      if (z < BOARD || z >= ZMAX) return { reason: 'board' };
+      const t = this.throughAt(p.at[0], p.at[1], z);
+      if (t >= 0 && t !== ignore) return { reason: 'piece', id: t };
+      const h = this.holeAt(p.at[0], p.at[1], z);
+      if (h === null || (p.kind === 'pin' && h === 'axle')) return { reason: 'hole', id: this.flatAt(p.at[0], p.at[1], z)?.id };
+    }
+    return { reason: 'room' };
+  }
+  /**
+   * The pins a flat piece would take to connect where it lands: at each of its holes that sits
+   * over a hole of the piece behind it (or the board), a smooth pin — one hole, and it turns
+   * there; two or more (the outermost two), and it's held. Smooth either way: take one pin out
+   * of a held piece and it turns on the other.
+   */
+  connections(p: Piece): Piece[] {
+    if (!isPlanar(p.kind) || isDisc(p.kind)) return [];
+    const holes = cellsOf(p).filter((c) => c.hole === 'round');
+    const found: Array<{ x: number; y: number; z: number }> = [];
+    for (const c of holes) {
+      // (behind it: the piece in the layer behind, or the board; else in front)
+      for (const [z, n] of [[p.z - 1, 2], [p.z + 1, 2]] as Array<[number, number]>) {
+        if (z < BOARD) continue;
+        const h = this.holeAt(c.x, c.y, z);
+        if (h !== 'round') continue;
+        const pin: Piece = { kind: 'pin', n, at: [c.x, c.y], z: Math.min(z, p.z), rot: 0, colour: 9 };
+        if (this.fits(pin)) { found.push({ x: c.x, y: c.y, z: pin.z }); break; }
+      }
+    }
+    if (found.length > 2) found.splice(1, found.length - 2);
+    return found.map((f) => ({ kind: 'pin', n: 2, at: [f.x, f.y], z: f.z, rot: 0, colour: 9 }));
+  }
+  /**
+   * Where a gear should go to mesh: the hole nearest the one asked for at exactly a pitch
+   * circle's touch from a gear nearby (in any layer: it lands in that gear's, if it can). Null:
+   * no gear near enough to pull it.
+   */
+  meshSnap(spec: { kind: Kind; n: number }, cx: number, cy: number): { x: number; y: number; z: number; with: number } | null {
+    if (spec.kind !== 'gear') return null;
+    const r = radiusOf(spec);
+    const gears: Array<{ id: number; p: Piece; want: number }> = [];
+    this.pieces.forEach((q, id) => {
+      if (!q || q.kind !== 'gear') return;
+      const dq = Math.hypot(q.at[0] - cx, q.at[1] - cy);
+      const want = r + radiusOf(q);
+      if (dq <= want + 1.6 && dq >= 0.5) gears.push({ id, p: q, want });
+    });
+    if (!gears.length) return null;
+    // (every hole near the finger: the one touching the most gears wins, then the nearest)
+    let best: { x: number; y: number; z: number; with: number; n: number; d: number } | null = null;
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
+      const x = cx + dx, y = cy + dy;
+      const touching = gears.filter((g) => Math.abs(Math.hypot(g.p.at[0] - x, g.p.at[1] - y) - g.want) < 0.05);
+      if (!touching.length) continue;
+      const d = Math.hypot(dx, dy);
+      if (!best || touching.length > best.n || (touching.length === best.n && d < best.d)) best = { x, y, z: touching[0].p.z, with: touching[0].id, n: touching.length, d };
+    }
+    return best ? { x: best.x, y: best.y, z: best.z, with: best.with } : null;
+  }
+  /** The gears a gear meshes with where it is. */
+  meshes(p: Piece): number[] {
+    if (p.kind !== 'gear') return [];
+    const out: number[] = [];
+    this.pieces.forEach((q, id) => {
+      if (!q || q.kind !== 'gear' || q.z !== p.z || q === p) return;
+      if (Math.abs(Math.hypot(q.at[0] - p.at[0], q.at[1] - p.at[1]) - (radiusOf(p) + radiusOf(q))) < 0.05) out.push(id);
+    });
+    return out;
+  }
   /** Whether a through piece passes through anything at all (else it would just lie there). */
   holds(p: Piece): boolean {
     return spanOf(p).some((z) => this.holeAt(p.at[0], p.at[1], z) === 'round' || this.holeAt(p.at[0], p.at[1], z) === 'axle');
@@ -373,9 +483,10 @@ export class World {
     if (isDisc(spec.kind)) {
       const axle = this.axleAt(cx, cy);
       if (axle >= 0) {
-        // (from the back of the axle forward, the first layer with room)
-        for (const z of spanOf(this.pieces[axle]!)) {
-          if (z < 0) continue;
+        // (the layer asked for if it can; else from the back of the axle forward, the first with room)
+        const span = spanOf(this.pieces[axle]!);
+        for (const z of [zHint, ...span]) {
+          if (z < 0 || !span.includes(z)) continue;
           const piece: Piece = { ...spec, at: [cx, cy], z };
           if (this.fits(piece)) return { piece };
         }
@@ -383,15 +494,26 @@ export class World {
       }
       const col = this.column(cx, cy);
       if (col.length) {
-        const back = col[0] === 0 ? BOARD : col[0];
-        const z = col[col.length - 1] + 1;
-        const need = z - back + 1;
-        const n = AXLES.find((a) => a >= need);
-        if (!n) return null;
-        const extra: Piece = { kind: 'axle', n, at: [cx, cy], z: back, rot: 0, colour: n % 2 ? 0 : 2 };
+        // (in front of the front hole; failing that, behind the back one, as a car's wheels go)
+        const front = Math.max(col[col.length - 1] + 1, zHint);
+        for (const z of [front, col[0] - 1]) {
+          if (z < 0) continue;
+          const back = Math.min(z, col[0] === 0 ? BOARD : col[0]);
+          const need = Math.max(z, col[col.length - 1]) - back + 1;
+          const n = AXLES.find((a) => a >= need);
+          if (!n) continue;
+          const extra: Piece = { kind: 'axle', n, at: [cx, cy], z: back, rot: 0, colour: n % 2 ? 0 : 2 };
+          const piece: Piece = { ...spec, at: [cx, cy], z };
+          if (this.fits(extra) && this.fits(piece)) return { piece, extra };
+        }
+        return null;
+      }
+      // (nothing there at all: an axle into the board, and it turns on that)
+      if (onAxle(spec.kind) && this.inBounds(cx, cy)) {
+        const z = Math.max(0, zHint);
+        const extra: Piece = { kind: 'axle', n: z + 2, at: [cx, cy], z: BOARD, rot: 0, colour: (z + 2) % 2 ? 0 : 2 };
         const piece: Piece = { ...spec, at: [cx, cy], z };
-        if (!this.fits(extra) || !this.fits(piece)) return null;
-        return { piece, extra };
+        if (AXLES.includes(z + 2) && this.fits(extra) && this.fits(piece)) return { piece, extra };
       }
       for (let z = Math.max(0, zHint); z < ZMAX; z++) {
         const piece: Piece = { ...spec, at: [cx, cy], z };
@@ -560,24 +682,29 @@ export class World {
     const bars: Bar[] = [];
     const discs: Disc[] = [];
     const balls: Ball[] = [];
+    const bells: Disc[] = [];
+    const cups: Array<{ body: number; z: number; x: number; y: number }> = [];
     pieces.forEach((p, id) => {
       if (!p || !isPlanar(p.kind)) return;
       const b = bodyOf[id];
       if (p.kind === 'ball') {
         balls.push({ body: b, z: p.z, r: BALL_R });
-        contacts.push({ body: b, x: p.at[0], y: p.at[1], r: BALL_R, grip: 0.8 });
+        contacts.push({ body: b, x: p.at[0], y: p.at[1], r: BALL_R, grip: 0.8, z: p.z });
         return;
       }
+      if (p.kind === 'bell') bells.push({ body: b, z: p.z, x: p.at[0], y: p.at[1], r: radiusOf(p) });
+      // (a cup's catch: where a ball sits in it, a little over a module up from its floor)
+      if (p.kind === 'cup') cups.push({ body: b, z: p.z, x: p.at[0] + rotXY(1, 1.3, p.rot)[0], y: p.at[1] + rotXY(1, 1.3, p.rot)[1] });
       if (isDisc(p.kind)) discs.push({ body: b, z: p.z, x: p.at[0], y: p.at[1], r: radiusOf(p) + (p.kind === 'gear' ? 0.08 : 0) });
       else for (const bar of barsOf(p)) bars.push({ body: b, z: p.z, ...bar, r: 0.5 });
       if (bodies[b].fixed) return;
-      if (isDisc(p.kind)) contacts.push({ body: b, x: p.at[0], y: p.at[1], r: radiusOf(p) + (p.kind === 'gear' ? 0.12 : 0), grip: p.kind === 'wheel' ? 1.2 : 0.4 });
+      if (isDisc(p.kind)) contacts.push({ body: b, x: p.at[0], y: p.at[1], r: radiusOf(p) + (p.kind === 'gear' ? 0.12 : 0), grip: p.kind === 'wheel' ? 1.2 : 0.4, z: p.z });
       else if (p.kind === 'ramp') {
         const [bar] = barsOf(p);
-        for (let t = 0; t <= 1; t += 0.25) contacts.push({ body: b, x: bar.ax + (bar.bx - bar.ax) * t, y: bar.ay + (bar.by - bar.ay) * t, r: 0.5, grip: 0.6 });
-      } else for (const c of cellsOf(p)) contacts.push({ body: b, x: c.x, y: c.y, r: 0.5, grip: 0.6 });
+        for (let t = 0; t <= 1; t += 0.25) contacts.push({ body: b, x: bar.ax + (bar.bx - bar.ax) * t, y: bar.ay + (bar.by - bar.ay) * t, r: 0.5, grip: 0.6, z: p.z });
+      } else for (const c of cellsOf(p)) contacts.push({ body: b, x: c.x, y: c.y, r: 0.5, grip: 0.6, z: p.z });
     });
-    return { bodies, bodyOf, joints, gears: gearJoints, motors: motorJoints, hubs, contacts, bars, discs, balls };
+    return { bodies, bodyOf, joints, gears: gearJoints, motors: motorJoints, hubs, contacts, bars, discs, balls, bells, cups };
   }
 }
 
@@ -596,7 +723,7 @@ export interface Joint { a: number; b: number; x: number; y: number }
 export interface GearJoint { a: number; b: number; ra: number; rb: number; ax: number; ay: number; bx: number; by: number }
 /** A motor turning its rotor against its body. */
 export interface Motor { stator: number; rotor: number; piece: number }
-export interface Contact { body: number; x: number; y: number; r: number; grip: number }
+export interface Contact { body: number; x: number; y: number; r: number; grip: number; z: number }
 /** A bar of a piece (at rest, in the world): what a ball in its layer rolls on. */
 export interface Bar { body: number; z: number; ax: number; ay: number; bx: number; by: number; r: number }
 export interface Disc { body: number; z: number; x: number; y: number; r: number }
@@ -612,6 +739,9 @@ export interface Mech {
   bars: Bar[];
   discs: Disc[];
   balls: Ball[];
+  /** the goals: bells (rung by anything moving that meets them), cups (filled by a ball resting in them) */
+  bells: Disc[];
+  cups: Array<{ body: number; z: number; x: number; y: number }>;
 }
 
 // ─── the hub's program ────────────────────────────────────────────────────────────────────────
@@ -624,6 +754,52 @@ export const RULES: Array<{ rule: Rule; label: string }> = [
   { rule: 'tilt', label: 'turn when tipped' },
 ];
 export const defaultPort = (): Port => ({ speed: 60, rule: 'run', period: 2 });
+
+// ─── the missions: a machine with something missing, and a goal ───────────────────────────────
+export type Goal = { kind: 'turn'; piece: number; turns: number } | { kind: 'cup' } | { kind: 'bell' } | { kind: 'wall' };
+export interface Mission {
+  id: string;
+  name: string;
+  /** what to do, in a line */
+  ask: string;
+  /** what's there to begin with */
+  pieces: Piece[];
+  ports: Port[];
+  /** the tray labels on offer (the rest wait) */
+  tray: string[];
+  goal: Goal;
+}
+export function missions(): Mission[] {
+  const P = (kind: Kind, n: number, x: number, y: number, z: number, rot = 0, colour = 0, friction?: boolean): Piece => ({ kind, n, at: [x, y], z, rot, colour, ...(friction ? { friction } : {}) });
+  const pin = (x: number, y: number, z: number, tight = true, n = 2) => P('pin', n, x, y, z, 0, tight ? 2 : 9, tight);
+  const axle = (n: number, x: number, y: number, z: number) => P('axle', n, x, y, z, 0, n % 2 ? 0 : 2);
+  const out: Mission[] = [];
+  {
+    // the train with its middle gear missing: the big one must turn
+    const pieces = demo('gears').pieces.filter((p) => !(p.kind === 'gear' && p.n === 24) && !(p.kind === 'axle' && p.at[0] === 14));
+    const goal = pieces.findIndex((p) => p.kind === 'gear' && p.n === 40);
+    out.push({ id: 'turn', name: 'make the big gear turn', ask: 'the motor turns the small gear; the big one is two holes too far. a gear between them?', pieces, ports: [{ speed: 70, rule: 'run', period: 2 }], tray: ['gear 8', 'gear 16', 'gear 24', 'gear 40'], goal: { kind: 'turn', piece: goal, turns: 1 } });
+  }
+  {
+    // a crank with no rod: the bell is up by the rocker's top
+    const pieces = demo('crank').pieces.filter((p) => !(p.kind === 'beam' && p.rot === 0 && p.n === 9) && !(p.kind === 'pin' && p.at[0] === 20) && !(p.kind === 'pin' && p.at[0] === 28 && p.at[1] === 8));
+    // (the bell in the rocker's layer, where its top swings to)
+    pieces.push(axle(6, 25, 10, BOARD), P('bell', 0, 25, 10, 4, 0, 5));
+    out.push({ id: 'bell', name: 'ring the bell', ask: 'the crank goes round and the red rocker does nothing. a beam from the crank to the rocker, and the rocker will swing up to the bell', pieces, ports: [{ speed: 70, rule: 'run', period: 2 }], tray: ['beam 7', 'beam 9', 'beam 11', 'pin'], goal: { kind: 'bell' } });
+  }
+  {
+    // the marble run with its second ramp missing, and a cup at the end
+    const pieces = demo('marble').pieces.filter((p) => !(p.kind === 'ramp' && p.n === 10) && !(p.kind === 'pin' && p.at[1] === 9 && p.at[0] === 12) && !(p.kind === 'pin' && p.at[0] === 22 && p.at[1] === 6) && !(p.kind === 'beam' && p.n === 7) && !(p.kind === 'axle' && p.at[0] === 26) && !(p.kind === 'motor') && !(p.kind === 'crank') && !(p.kind === 'axle' && p.at[0] === 20) && !(p.kind === 'pin' && p.at[0] === 18));
+    pieces.push(P('cup', 0, 25, 0, 0, 0, 5), pin(25, 0, BOARD), pin(27, 0, BOARD));
+    out.push({ id: 'cup', name: 'a marble in the cup', ask: 'the marbles roll off the yellow ramp and drop. another ramp, the other way, to carry one to the cup', pieces, ports: [], tray: ['ramp 4·3', 'ramp 6·2', 'ramp 8·6', 'ramp 10·3', 'ball'], goal: { kind: 'cup' } });
+  }
+  {
+    // the car with no front wheel
+    const pieces = demo('car').pieces.filter((p) => !(p.kind === 'wheel' && p.at[0] === 9) && !(p.kind === 'axle' && p.at[0] === 9));
+    out.push({ id: 'wall', name: 'drive to the wall', ask: 'the car has a wheel at the back and nothing at the front. a wheel on the front hole, then run it', pieces, ports: [{ speed: 80, rule: 'walls', period: 2 }], tray: ['wheel', 'axle 3'], goal: { kind: 'wall' } });
+  }
+  return out;
+}
 
 // ─── the demonstrations ───────────────────────────────────────────────────────────────────────
 /** A few machines, built for you: for the index, and to take apart. */

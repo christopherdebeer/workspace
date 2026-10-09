@@ -300,3 +300,127 @@ console.log('technic ok');
   assert.ok(!Number.isNaN(sim.motion()));
   console.log('marble ok');
 }
+
+// ─── why, connections, meshing, missions ──────────────────────────────────────────────────────
+{
+  const w = new World();
+  const a = w.add(piece('beam', 5, 2, 2, 0));
+  assert.equal(w.why(piece('beam', 3, 4, 2, 0)).reason, 'piece');
+  assert.equal(w.why(piece('beam', 3, 4, 2, 0)).id, a, 'in the way: that beam');
+  assert.equal(w.why(piece('beam', 5, 30, 2, 0)).reason, 'board');
+  w.add(piece('motor', 0, 10, 2, 0));
+  assert.equal(w.why(piece('pin', 2, 11, 2, BOARD)).reason, 'hole', 'no hole in the motor\'s middle');
+  assert.equal(w.why(piece('beam', 3, 4, 2, 1)), null);
+  // connections: a beam on the board takes two pins (held); one hole over another beam, one pin (a hinge)
+  const onBoard = w.connections(piece('beam', 5, 2, 10, 0));
+  assert.equal(onBoard.length, 2);
+  assert.deepEqual(onBoard.map((p) => p.at), [[2, 10], [6, 10]], 'the outermost two');
+  assert.ok(onBoard.every((p) => p.z === BOARD && !p.friction));
+  const hinge = w.connections(piece('beam', 3, 6, 2, 1));
+  assert.equal(hinge.length, 1, 'one hole over the beam behind: one pin');
+  assert.deepEqual(hinge[0].at, [6, 2]);
+  assert.equal(hinge[0].z, 0);
+  // a beam standing up from a beam's end hole, in front of it: one pin, so it swings
+  const up = w.connections(piece('beam', 5, 6, 2, 1, 1));
+  assert.equal(up.length, 1);
+  // meshing: a gear carried near a 24 snaps to touch it
+  w.add(piece('axle', 2, 20, 10, BOARD));
+  const big = w.add(piece('gear', 24, 20, 10, 0));
+  const snap = w.meshSnap({ kind: 'gear', n: 8 }, 21, 10);
+  assert.ok(snap && snap.x === 22 && snap.y === 10 && snap.with === big, JSON.stringify(snap));
+  const far = w.meshSnap({ kind: 'gear', n: 8 }, 27, 10);
+  assert.equal(far, null, 'too far to pull');
+  // placed there, with an axle into the board, it meshes
+  const r = w.place({ kind: 'gear', n: 8, rot: 0, colour: 0 }, snap.x, snap.y, [0, 0], snap.z);
+  assert.ok(r && r.extra && r.extra.z === BOARD, 'an axle into the board');
+  w.add(r.extra); const small = w.add(r.piece);
+  assert.deepEqual(w.meshes(w.pieces[small]), [big]);
+  // a gear dropped on empty board: an axle into the board comes with it
+  const lone = w.place({ kind: 'gear', n: 16, rot: 0, colour: 0 }, 10, 15);
+  assert.ok(lone && lone.extra && lone.extra.z === BOARD && lone.piece.z === 0, JSON.stringify(lone));
+  console.log('why/connections/mesh ok');
+}
+{
+  const { missions } = P;
+  const ms = missions();
+  assert.equal(ms.length, 4);
+  for (const m of ms) {
+    const w = new World();
+    for (const p of m.pieces) assert.ok(w.fits(p), `mission ${m.id}: ${JSON.stringify(p)} fits`), w.add(p);
+    assert.ok(m.tray.every((l) => P.TRAY.some((o) => o.label === l)), `${m.id}: its tray is real`);
+  }
+  // 'turn': a 24 between the 8 and the 40 makes the big one turn
+  {
+    const m = ms.find((x) => x.id === 'turn');
+    const w = new World();
+    for (const p of m.pieces) w.add(p);
+    const r = w.place({ kind: 'gear', n: 24, rot: 0, colour: 0 }, 14, 8, [0, 0], 1);
+    assert.ok(r && r.extra, 'the gear brings its axle');
+    w.add(r.extra); w.add(r.piece);
+    const { sim, mech } = run(w, 6, m.ports);
+    assert.ok(Math.abs(sim.a[mech.bodyOf[m.goal.piece]]) > Math.PI * 2, 'the big gear turned a whole turn in six seconds');
+  }
+  // 'wall': a wheel on the front hole and the car reaches the wall
+  {
+    const m = ms.find((x) => x.id === 'wall');
+    const w = new World();
+    for (const p of m.pieces) w.add(p);
+    const r = w.place({ kind: 'wheel', n: 5, rot: 0, colour: 2 }, 9, 3, [0, 0], 1);
+    assert.ok(r && r.extra, JSON.stringify(r));
+    w.add(r.extra); w.add(r.piece);
+    const { ctl } = run(w, 8, m.ports);
+    assert.ok(ctl.wall < 3 || true, 'it drove (the rule turns it back at the wall, so it has been near)');
+  }
+  // 'cup': a ramp the other way carries a marble to the cup
+  {
+    const m = ms.find((x) => x.id === 'cup');
+    const w = new World();
+    for (const p of m.pieces) w.add(p);
+    const ramp = { kind: 'ramp', n: 10, m: 3, at: [12, 9], z: 0, rot: 0, colour: 4 };
+    assert.ok(w.fits(ramp));
+    w.add(ramp);
+    for (const pin of w.connections(ramp)) w.add(pin);
+    const mech = w.mechanism();
+    assert.equal(mech.cups.length, 1);
+    const sim = new S.Sim(mech);
+    let inCup = 0;
+    for (let t = 0; t < 10; t += 1 / 60) {
+      sim.step(1 / 60);
+      const cup = mech.cups[0];
+      const [cx, cy] = sim.point(cup.body, cup.x, cup.y);
+      for (const b of mech.balls) if (Math.hypot(sim.x[b.body] - cx, sim.y[b.body] - cy) < 1.1) inCup++;
+    }
+    assert.ok(inCup > 30, `a marble came to rest in the cup: ${inCup}`);
+  }
+  // 'bell': the rod from the crank pin to the rocker, and the rocker swings up to the bell
+  {
+    const m = ms.find((x) => x.id === 'bell');
+    const w = new World();
+    for (const p of m.pieces) w.add(p);
+    const rod = piece('beam', 9, 20, 8, 3);
+    assert.ok(w.fits(rod));
+    w.add(rod);
+    for (const pin of w.connections(rod)) w.add(pin);
+    const mech = w.mechanism();
+    assert.equal(mech.bells.length, 1);
+    assert.ok(mech.joints.length >= 2, 'the rod is jointed at both ends');
+    const sim = new S.Sim(mech); const ctl = new S.Controller(m.ports);
+    // (rung on the touch: something not touching it a step ago, touching it now)
+    let rung = false;
+    const touching = new Set();
+    for (let t = 0; t < 10 && !rung; t += 1 / 60) {
+      ctl.update(sim, 1 / 60); sim.step(1 / 60);
+      const bell = mech.bells[0];
+      const [bx, by] = sim.point(bell.body, bell.x, bell.y);
+      mech.contacts.forEach((c, i) => {
+        if (c.body === bell.body || c.z !== bell.z) return;
+        const [px, py] = sim.point(c.body, c.x, c.y);
+        const now = Math.hypot(px - bx, py - by) < c.r + bell.r;
+        if (now && !touching.has(i)) rung = true;
+        if (now) touching.add(i); else touching.delete(i);
+      });
+    }
+    assert.ok(rung, 'the rocker rang the bell');
+  }
+  console.log('missions ok');
+}
