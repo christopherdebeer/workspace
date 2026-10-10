@@ -21,7 +21,10 @@ mode: three boards on offer; pick one and the run grows downward.
 | come close | pinch | the wheel |
 
 `build` swaps those two buttons for building's three: `add it`, `undo`, and `try it`, which
-races just the last board, the camera on the leader, to see how it runs. A line of help
+races just the last board, the camera on the leader, to see how it runs. The three boards on
+offer are cards, each with a little drawing of the board from above; the one chosen is built
+in place at the end of the run, solid, with the finish moved on after it, so the run is seen
+whole as it would be. A line of help
 shows for a moment at each change and then gets out of the way.
 
 The row across the top is the order, first on the left: yours is the big one, named, and the
@@ -122,7 +125,13 @@ slope.
   through in the marble's own space, so they have depth and turn as it rolls; bubbles catch the
   light. The sun's shadow map moves in whole texels, so edges don't crawl; a soft dark lies
   under every marble; what the frame draws is between the solver's last two states, by how far
-  into the next step it is. Shadows are as soft as a broad window makes them: a blocker
+  into the next step it is. Every material has relief: paper fibres and flecks, the flutes of
+  a cut edge, oak's rings and pores, brass brushed and pitted, leather's pebble, the gaps and
+  nails of planks, recessed joints in stone, glaze's crackle; the normal is bent by it from
+  screen derivatives, so light catches it, and fine detail fades as it shrinks below a pixel.
+  Faces darken where they meet the floor, the floor along its walls. Highlights are GGX, the
+  room's reflection spreads with roughness, and lacquer and glaze wear a clear coat of their
+  own over the relief. Shadows are as soft as a broad window makes them: a blocker
   search in the shadow map finds how far the blocker is, and the filter is that wide, so the
   foot of a strip is crisp and its far edge spreads. Each marble lays a caustic in its own
   shadow, in its colour, from the key light by day and the nearest lamp at night. The frame

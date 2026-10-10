@@ -18,7 +18,7 @@ import { hash, seeded } from '../kit/rng';
 import { Course, MATERIALS, marble, order, step, type Impact, type Marble, type Material } from './physics';
 import { boardMesh, buntingMesh, discMesh, flagMesh, gateMesh, groundMesh, lampMesh, lineMesh, litterMesh, rafterMesh, ringMesh, roomMesh, sphereMesh, spinnerMesh, supportMesh, VSTRIDE } from './mesh';
 import { THEMES, matTables, themeById, type Theme } from './theme';
-import { FIELD_SIZE, MARBLE_R, TOP, WALL_H, WIDTH, add, build, candidates, cross, decode, dirOf, encode, frameAlong, frameAt, len, mul, norm, sub, toLocal, toWorld, type Board, type Frame, type Section, type V3 } from './track';
+import { FIELD_SIZE, MARBLE_R, TOP, WALL_H, WIDTH, add, build, candidates, cross, decode, dirOf, encode, finish as finishOf, frameAlong, frameAt, len, mul, norm, sub, toLocal, toWorld, type Board, type Frame, type Section, type V3 } from './track';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -262,88 +262,166 @@ uniform vec4 uPar[24];
 ${LIGHT_UNIFORMS}
 ${COMMON}
 ${SHADOW_GLSL}
-/** a style's detail at (u, v): how much lighter or darker, how much rougher or smoother, and how much gilt */
-vec3 detail(float style, vec2 uv, float k) {
-  if (style < .5) return vec3(1., 0., 0.);
+/**
+ * A surface as it was made, at (u, v) in the piece's own centimetres: how much lighter or darker,
+ * rougher or smoother, how much gilt, its height (relief, in cm: the normal is bent by it, so
+ * light catches fibres, flutes, grain and joints), and whether it wears a clear coat. Fine
+ * detail fades as it gets smaller than a pixel, so nothing shimmers in the distance.
+ */
+struct Surf { float tone; float rough; float gilt; float h; float coat; };
+float fade(float px, float freq) { return 1. - smoothstep(.2, .55, px * freq); }
+Surf surf(float style, vec2 uv, float k) {
+  Surf s = Surf(1., 0., 0., 0., 0.);
+  float px = length(fwidth(uv));
+  if (style < .5) return s;
   if (style < 1.5) {
-    // paper: fibres along, faint dents, the odd stain; wear where they run (the bands along the sides)
-    float fib = noise(vec3(uv.x * 1.5, uv.y * 24., 0.)) * .5 + noise(vec3(uv.x * 6., uv.y * 70., 3.)) * .25;
-    float dent = noise(vec3(uv * .22, 7.));
+    // kraft paper: fibres laid along, darker flecks of recycled fibre, soft dents, the odd stain,
+    // and the bands along the sides rubbed smooth where the marbles run
+    float f1 = noise(vec3(uv.x * 1.5, uv.y * 24., 0.)), f2 = noise(vec3(uv.x * 6., uv.y * 70., 3.));
+    float fine = fade(px, 70.), mid = fade(px, 24.);
+    float fleck = smoothstep(.78, .86, noise(vec3(uv * 9., 11.))) * fade(px, 9.);
+    float dent = fbm(vec3(uv * .22, 7.));
     float stain = smoothstep(.6, .8, noise(vec3(uv * .06, 19.)));
     float side = smoothstep(2.6, 1.2, 24. - abs(uv.y)) * .5;
-    return vec3((.88 + .22 * fib) * (.9 + .18 * dent) * (1. - .08 * stain) * (1. - .1 * side), -.15 * side + .06 * (dent - .5), 0.);
+    s.tone = (.88 + .22 * f1 * mid + .1 * f2 * fine) * (1. - .35 * fleck) * (.92 + .16 * dent) * (1. - .08 * stain) * (1. - .1 * side);
+    s.rough = -.15 * side + .06 * (dent - .5);
+    s.h = .012 * f1 * mid + .006 * f2 * fine + .05 * dent - .008 * fleck;
+    return s;
   }
   if (style < 2.5) {
-    // corrugation: the flutes side by side between two skins
-    float flute = .5 + .5 * sin(uv.x * 17.);
-    return vec3((.68 + .32 * flute) * (.9 + .2 * noise(vec3(uv * 6., 4.))), 0., 0.);
+    // corrugation: the flutes side by side, the hollows between them in shadow
+    float fl = abs(sin(uv.x * 8.5));
+    float shape = pow(fl, .55);
+    s.tone = mix(.38, 1., shape) * (.9 + .2 * noise(vec3(uv * 6., 4.)) * fade(px, 6.));
+    s.h = .14 * shape * fade(px, 2.7);
+    s.rough = .05 * (1. - shape);
+    return s;
   }
   if (style < 3.5) {
-    // lacquer: deep, with a soft mottle and the odd fine scratch
+    // lacquer: deep, a soft mottle, a faint orange-peel under a clear coat, the odd fine scratch
     float mot = noise(vec3(uv * .3, 5.));
-    float scratch = smoothstep(.93, .97, noise(vec3(uv.x * .4, uv.y * 9., 13.)));
-    return vec3(.9 + .2 * mot + .3 * scratch, .15 * scratch, 0.);
+    float scratch = smoothstep(.93, .97, noise(vec3(uv.x * .4, uv.y * 9., 13.))) * fade(px, 9.);
+    s.tone = .9 + .2 * mot + .3 * scratch;
+    s.rough = .15 * scratch;
+    s.h = .004 * noise(vec3(uv * 3., 1.)) * fade(px, 3.) - .006 * scratch;
+    s.coat = 1.;
+    return s;
   }
   if (style < 4.5) {
-    // brass: brushed along, a little tarnish in the hollows
-    float brush = noise(vec3(uv.x * 40., uv.y * 2., 1.)) * .3 + noise(vec3(uv.x * 160., uv.y * 4., 2.)) * .15;
+    // brass: brushed along, a little pitting, tarnish in the hollows
+    float brush = noise(vec3(uv.x * 40., uv.y * 2., 1.)) * .3 * fade(px, 40.) + noise(vec3(uv.x * 160., uv.y * 4., 2.)) * .15 * fade(px, 160.);
     float tarn = smoothstep(.55, .8, noise(vec3(uv * .8, 9.)));
-    return vec3((.85 + .3 * brush) * (1. - .25 * tarn), .15 * tarn, 0.);
+    float pit = smoothstep(.85, .92, noise(vec3(uv * 12., 4.))) * fade(px, 12.);
+    s.tone = (.85 + .3 * brush) * (1. - .25 * tarn) * (1. - .3 * pit);
+    s.rough = .15 * tarn + .2 * pit - .05;
+    s.h = .006 * brush - .01 * pit;
+    return s;
   }
   if (style < 5.5) {
-    // oak: grain along, in bands
-    float grain = noise(vec3(uv.x * .6, uv.y * 6., 2.)) * .5 + noise(vec3(uv.x * 2.5, uv.y * 14., 9.)) * .3;
-    return vec3(.75 + .45 * grain, .05 * (grain - .4), 0.);
+    // oak: growth rings wandering along it, open pores in dashes, ray flecks across
+    float wob = fbm(vec3(uv.x * .08, uv.y * .5, 2.)) * 6.;
+    float ring = .5 + .5 * sin((uv.y * 2.2 + wob) * 3.1416);
+    float pores = smoothstep(.7, .85, noise(vec3(uv.x * 1.2, uv.y * 30., 5.))) * ring * fade(px, 30.);
+    float ray = smoothstep(.88, .95, noise(vec3(uv.x * 4., uv.y * .6, 7.))) * fade(px, 4.);
+    s.tone = (.72 + .4 * ring) * (1. - .3 * pores) * (1. + .15 * ray);
+    s.rough = .08 * pores - .05 * ray;
+    s.h = .02 * ring * fade(px, 2.) - .015 * pores;
+    return s;
   }
   if (style < 6.5) {
-    // leather: a fine pebbled grain, worn paler on the ridges
-    float peb = noise(vec3(uv * 9., 3.)) * .6 + noise(vec3(uv * 27., 8.)) * .3;
-    return vec3(.85 + .35 * peb, .1 * (peb - .45), 0.);
+    // leather: a fine pebbled grain, worn paler and smoother on the ridges
+    float peb = noise(vec3(uv * 9., 3.)) * .6 * fade(px, 9.) + noise(vec3(uv * 27., 8.)) * .3 * fade(px, 27.);
+    float crease = smoothstep(.45, .5, abs(noise(vec3(uv * .7, 2.)) - .5)) * fade(px, 1.);
+    s.tone = (.82 + .4 * peb) * (1. - .2 * crease);
+    s.rough = -.12 * (peb - .45);
+    s.h = .035 * peb - .02 * crease;
+    return s;
   }
   if (style < 7.5) {
-    // planks: boards of old timber with gaps between
+    // planks: boards of old timber, gaps between, grain, a pair of nails at every board end
     float row = floor(uv.y / 12.), fr = fract(uv.y / 12.);
-    float gap = smoothstep(0., .06, fr) * smoothstep(1., .94, fr);
-    float grain = noise(vec3(uv.x * .25, row * 7.1, uv.y * 3.)) * .5 + noise(vec3(uv.x * 1.1, row * 3.3, 0.)) * .3;
-    return vec3(mix(.7, 1.3, grain) * mix(.45, 1., gap) * (.8 + .4 * hash3(vec3(row, floor((uv.x + row * 37.) / 110.), 0.))), 0., 0.);
+    float L = 110., x = uv.x + row * 37.;
+    float seg = floor(x / L), fx = fract(x / L);
+    float gap = smoothstep(0., .04, fr) * smoothstep(1., .96, fr) * smoothstep(0., .006, fx) * smoothstep(1., .994, fx);
+    float wob = noise(vec3(uv.x * .05, row * 3., seg));
+    float grain = .5 + .5 * sin((fr * 9. + wob * 4. + uv.x * .02) * 3.1416);
+    vec2 nl = vec2(min(fx, 1. - fx) * L, abs(fr - .5) * 12.);
+    float nail = 1. - smoothstep(.25, .4, length(nl - vec2(2.5, 3.)));
+    s.tone = mix(.75, 1.2, grain) * mix(.3, 1., gap) * (.75 + .45 * hash3(vec3(row, seg, 0.))) * (1. - .5 * nail);
+    s.rough = .25 * (1. - gap) - .2 * nail;
+    s.h = -.35 * (1. - gap) + .02 * grain * fade(px, 1.);
+    return s;
   }
   if (style < 8.5) {
-    // stone: big flags, their joints dark, a soft mottle in each
+    // stone: big flags, their joints recessed, a soft mottle, the odd chip
     vec2 cell = floor(uv / 60.), fr = fract(uv / 60.);
-    float joint = smoothstep(0., .03, fr.x) * smoothstep(1., .97, fr.x) * smoothstep(0., .03, fr.y) * smoothstep(1., .97, fr.y);
-    float mot = noise(vec3(uv * .08, cell.x * 3. + cell.y * 7.));
-    return vec3((.75 + .4 * mot) * mix(.35, 1., joint) * (.85 + .3 * hash3(vec3(cell, 1.))), .2 * (1. - joint), 0.);
+    float joint = smoothstep(0., .02, fr.x) * smoothstep(1., .98, fr.x) * smoothstep(0., .02, fr.y) * smoothstep(1., .98, fr.y);
+    float mot = fbm(vec3(uv * .08, cell.x * 3. + cell.y * 7.));
+    float grit = noise(vec3(uv * 4., 3.)) * fade(px, 4.);
+    s.tone = (.72 + .45 * mot) * mix(.3, 1., joint) * (.85 + .3 * hash3(vec3(cell, 1.))) * (.9 + .15 * grit);
+    s.rough = .2 * (1. - joint) - .1 * mot;
+    s.h = -.5 * (1. - joint) + .05 * mot + .01 * grit;
+    return s;
   }
   if (style < 9.5) {
-    // glaze: pooled thicker in the hollows, with a crackle
+    // glaze: pooled thicker in the hollows, a crackle through it, under its own gloss
     float pool = noise(vec3(uv * .4, 2.));
-    float crack = smoothstep(.9, .95, noise(vec3(uv * 3., 6.)));
-    return vec3(.9 + .2 * pool - .2 * crack, -.1 * pool, 0.);
+    float crack = smoothstep(.47, .5, abs(noise(vec3(uv * 3., 6.)) - .5)) * fade(px, 3.);
+    s.tone = .9 + .2 * pool - .25 * crack;
+    s.rough = -.1 * pool;
+    s.h = .02 * pool - .008 * crack;
+    s.coat = 1.;
+    return s;
   }
-  // a chart on lacquer: fine gold lines, circles and ticks, drawn along the board
+  // a chart on lacquer: fine gold lines, circles and ticks inlaid along the board, under a clear coat
   float mot = noise(vec3(uv * .3, 5.));
   float along = fract(uv.x / 40.), across = uv.y / 24.;
   float line = smoothstep(.012, .0, abs(along - .5)) + smoothstep(.015, .0, abs(across)) * .5;
   vec2 cc = vec2(uv.x - (floor(uv.x / 80.) + .5) * 80., uv.y);
   float ring = smoothstep(.5, .0, abs(length(cc) - 14.)) + smoothstep(.4, .0, abs(length(cc) - 6.)) * .7;
-  float ticks = smoothstep(.3, .0, abs(fract(uv.x / 4.) - .5) * 4.) * smoothstep(1.2, .6, abs(abs(uv.y) - 22.)) ;
+  float ticks = smoothstep(.3, .0, abs(fract(uv.x / 4.) - .5) * 4.) * smoothstep(1.2, .6, abs(abs(uv.y) - 22.));
   float gold = clamp(line + ring * .8 + ticks * .6, 0., 1.) * k;
-  return vec3(.9 + .2 * mot, -.15 * gold, gold);
+  s.tone = .9 + .2 * mot;
+  s.rough = -.15 * gold;
+  s.gilt = gold;
+  s.h = .01 * gold + .003 * noise(vec3(uv * 3., 1.)) * fade(px, 3.);
+  s.coat = 1.;
+  return s;
 }
+/** the normal bent by a height field, from screen derivatives alone (no tangents needed) */
+vec3 bumped(vec3 n, vec3 p, float h) {
+  vec3 dpx = dFdx(p), dpy = dFdy(p);
+  float dhx = dFdx(h), dhy = dFdy(h);
+  vec3 r1 = cross(dpy, n), r2 = cross(n, dpx);
+  float det = dot(dpx, r1);
+  vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+  return normalize(abs(det) * n - grad);
+}
+/** GGX: the distribution, the visibility, Schlick's Fresnel */
+float D_ggx(float NoH, float a) { float a2 = a * a; float d = NoH * NoH * (a2 - 1.) + 1.; return a2 / (3.1416 * d * d); }
+float V_smith(float NoV, float NoL, float a) { float a2 = a * a; return .5 / max(NoL * sqrt(NoV * NoV * (1. - a2) + a2) + NoV * sqrt(NoL * NoL * (1. - a2) + a2), 1e-4); }
 void main() {
   // (what stands on the board, right against the camera, is cut away: the chase is never inside a strip)
   bool stands = (vMat > .5 && vMat < 2.5) || (vMat > 6.5 && vMat < 7.5) || (vMat > 10.5 && vMat < 18.5);
   if (stands && uGhost < .5 && length(vWorld - uEye) < uCut) discard;
-  vec3 n = normalize(vNor);
+  vec3 nG = normalize(vNor);
+  if (!gl_FrontFacing) nG = -nG;
   vec3 V = normalize(uEye - vWorld);
   int id = int(vMat + .5);
   vec3 base = uCol[id].rgb; float rough = uCol[id].a, metal = uPar[id].x;
-  vec3 dt = detail(uPar[id].y, vUV, uPar[id].z);
-  base *= mix(1., dt.x, uPar[id].z);
-  // (gilt: the chart's lines are gold laid on the lacquer)
-  base = mix(base, vec3(.95, .72, .32), dt.z);
-  metal = mix(metal, .6, dt.z);
-  rough = clamp(rough + dt.y * uPar[id].z, .03, 1.);
+  Surf sf = surf(uPar[id].y, vUV, uPar[id].z);
+  base *= mix(1., sf.tone, uPar[id].z);
+  // (gilt: the chart's lines are gold laid in the lacquer)
+  base = mix(base, vec3(.95, .72, .32), sf.gilt);
+  metal = mix(metal, .7, sf.gilt);
+  rough = clamp(rough + sf.rough * uPar[id].z, .045, 1.);
+  vec3 n = uPar[id].w > 0. ? bumped(nG, vWorld, sf.h * uPar[id].w) : nG;
+  // ambient occlusion where faces meet: low on anything standing (its v is its height), and the
+  // floor along its walls
+  float ao = 1.;
+  bool upright = abs(dot(nG, normalize(vec3(0., 1., 0.)))) < .6;
+  if (upright && (id == 1 || id == 4 || id == 7 || id == 11 || id == 21)) ao = mix(.5, 1., smoothstep(0., 2.4, vUV.y));
+  if (id == 0 && abs(vUV.y) < 24.) ao = 1. - .4 * exp(-(24. - abs(vUV.y)) / 1.1);
   if (vMat > 4.5 && vMat < 5.5) {
     // the line: chequered
     float cx = floor(vUV.x / 2.), cz = floor(vUV.y / 2.);
@@ -384,20 +462,34 @@ void main() {
     o = vec4(tonemap(mix(day, night, uNight)), 1.); return;
   }
   // light: the key light through the window, in or out of shadow; the room from around; the lamps
-  float ndl = max(dot(n, uKey), 0.);
-  float sh = shadow(n);
-  vec3 amb = env(n) * .5 + env(vec3(0., 1., 0.)) * .12;
-  vec3 diffuse = base * (1. - metal) * (amb + uKeyCol * ndl * sh);
+  float NoV = max(dot(n, V), 1e-3), NoL = max(dot(n, uKey), 0.);
+  float sh = shadow(nG);
+  float a = rough * rough;
   vec3 F0 = mix(vec3(.04), base, metal);
-  float fres = pow(1. - max(dot(n, V), 0.), 5.);
-  vec3 F = F0 + (1. - F0) * fres;
   vec3 H = normalize(uKey + V);
-  float a = max(.02, rough * rough);
-  float spec = pow(max(dot(n, H), 0.), 2. / (a * a) - 2.) / (a * a) * .012;
+  float NoH = max(dot(n, H), 0.), VoH = max(dot(V, H), 0.);
+  vec3 Fk = F0 + (1. - F0) * pow(1. - VoH, 5.);
+  vec3 specK = D_ggx(NoH, a) * V_smith(NoV, NoL, a) * Fk * NoL;
+  vec3 kd = (1. - Fk) * (1. - metal);
+  // (paper and leather scatter a little light back toward a grazing view: a soft sheen)
+  float sheen = (uPar[id].y > .5 && uPar[id].y < 1.5) || (uPar[id].y > 5.5 && uPar[id].y < 6.5) ? .25 * pow(1. - NoV, 3.) : 0.;
+  vec3 amb = (env(n) * .55 + env(vec3(0., 1., 0.)) * .12) * ao;
+  vec3 c = base * kd * (amb + uKeyCol * NoL * sh) + base * sheen * (uKeyCol * sh * .4 + amb);
+  c += uKeyCol * specK * sh;
+  // reflections of the room: sharp on the smooth, spread to a glow on the rough
   vec3 R = reflect(-V, n);
-  vec3 refl = env(R) * (1. - rough) * (1. - rough);
-  vec3 c = diffuse + F * (refl + uKeyCol * spec * sh);
-  c += lamplight(vWorld, n, V, base * (1. - metal), F0, rough);
+  vec3 Fr = F0 + (max(vec3(1. - rough), F0) - F0) * pow(1. - NoV, 5.);
+  vec3 envR = mix(env(R), env(n) * .9, smoothstep(.1, .8, rough));
+  c += Fr * envR * ao * (1. - .7 * rough * (1. - metal));
+  c += lamplight(vWorld, n, V, base * (1. - metal), F0, rough) * mix(1., ao, .5);
+  // a clear coat over lacquer and glaze: its own smooth gloss, over the bumps, not following them
+  if (sf.coat > .5) {
+    float cNoV = max(dot(nG, V), 1e-3), cNoL = max(dot(nG, uKey), 0.), cNoH = max(dot(nG, H), 0.);
+    float Fc = .04 + .96 * pow(1. - cNoV, 5.);
+    c *= 1. - Fc;
+    c += Fc * env(reflect(-V, nG)) + uKeyCol * D_ggx(cNoH, .03) * V_smith(cNoV, cNoL, .03) * .04 * cNoL * sh;
+    c += lamplight(vWorld, nG, V, vec3(0.), vec3(.04), .06);
+  }
   float d = length(vWorld - uEye);
   c = mix(c, uHaze, smoothstep(uFar * uHazeNear, uFar, d) * .5);
   if (uGhost > .5) { c = mix(c, vec3(1., .95, .7), .5); o = vec4(tonemap(c * .6), .55); return; }
@@ -604,7 +696,9 @@ const SPHERE = upload((() => { const v: number[] = []; sphereMesh(v); return v; 
 const RING = upload((() => { const v: number[] = []; ringMesh(v); return v; })());
 const DISC = upload((() => { const v: number[] = []; discMesh(v); return v; })());
 const barMesh_ = upload(new Float32Array(0), true);
-const ghostMeshes: Mesh[] = [];
+/** building: each board on offer as it would be, and the finish moved on to the end of the one chosen */
+const offerMeshes: Mesh[] = [];
+let offerFinish: Mesh | null = null;
 
 function meshOf(s: Section): Mesh {
   const v: number[] = [];
@@ -620,10 +714,13 @@ function rebuildCourse() {
   const fv: number[] = [];
   boardMesh(course.fin.board, fv);
   lineMesh(course.fin.line, WIDTH, fv);
+  finishFlag(course.fin.line, fv);
   finishMesh = upload(fv);
   rebuildScenery();
   save();
 }
+/** the chequered flag at the line, on the right */
+function finishFlag(lf: Frame, out: number[]) { flagMesh(add(add(lf.p, mul(lf.b, WIDTH / 2 + 2)), mul(lf.n, WALL_H)), out); }
 /** the lamps' places (the nearest few light the scene, at night) */
 let lampAt: V3[] = [];
 /**
@@ -661,8 +758,6 @@ function rebuildScenery() {
   lamp(course.fin.board);
   if (overheadMesh_) drop(overheadMesh_);
   overheadMesh_ = upload(ov);
-  const lp = course.fin.line.p, lf = course.fin.line;
-  flagMesh(add(add(lp, mul(lf.b, WIDTH / 2 + 2)), mul(lf.n, WALL_H)), tv);
   if (sections.length) { const g = sections[0].boards[0]; for (const sd of [-1, 1]) flagMesh(toWorld(g, 1, WALL_H, sd * (WIDTH / 2 + 2)), tv); }
   if (theme.litter) litterMesh(bounds, groundY, r, tv);
   supportMesh_ = upload(tv);
@@ -807,14 +902,43 @@ let chosen = -1;
 function offer(p = page) {
   page = p;
   offered = candidates(seed, sections.length, sections, page);
-  while (ghostMeshes.length) drop(ghostMeshes.pop()!);
-  for (const s of offered) ghostMeshes.push(meshOf(s));
-  chosen = 0;
-  $('offers').innerHTML = offered.map((s, i) => `<button class="offer${i === chosen ? ' on' : ''}" data-i="${i}"><b>${s.name}</b><span>down ${Math.round(s.drop)} · along ${Math.round(s.length)}</span></button>`).join('') + `<button id="more">three more</button>`;
+  while (offerMeshes.length) drop(offerMeshes.pop()!);
+  for (const s of offered) offerMeshes.push(meshOf(s));
+  $('offers').innerHTML = offered.map((s, i) => `<button class="offer" data-i="${i}">${sketch(s)}<b>${s.name}</b><span>${Math.round(s.drop)} down · ${Math.round(s.length)} long</span></button>`).join('') + `<button id="more">three more</button>`;
+  choose(0);
+}
+/** A board seen from above, as a little drawing for its card: its sides, its strips, pegs and spinners. */
+function sketch(s: Section): string {
+  const L = s.boards.reduce((a, b) => a + b.length, 0), W = WIDTH;
+  const k = 64 / Math.max(L, W * 1.3);
+  const w = W * k, h = L * k;
+  let y0 = 0;
+  const parts: string[] = [];
+  for (const b of s.boards) {
+    const X = (c: number) => (w / 2 - c * k).toFixed(1), Y = (a: number) => (y0 + a * k).toFixed(1);
+    parts.push(`<rect x="0" y="${Y(0)}" width="${w.toFixed(1)}" height="${(b.length * k).toFixed(1)}" rx="1.5" class="bd"/>`);
+    for (const wl of b.walls) parts.push(`<line x1="${X(wl.a[1])}" y1="${Y(wl.a[0])}" x2="${X(wl.b[1])}" y2="${Y(wl.b[0])}"/>`);
+    for (const [pa, pc, pr] of b.pegs) parts.push(`<circle cx="${X(pc)}" cy="${Y(pa)}" r="${Math.max(0.9, pr * k).toFixed(1)}"/>`);
+    for (const sp of b.spinners) parts.push(`<circle cx="${X(sp.at[1])}" cy="${Y(sp.at[0])}" r="${(sp.half * k).toFixed(1)}" class="sp"/>`);
+    y0 += b.length * k + (b.step > 0 ? 2 : 0);
+  }
+  const turn = s.boards.reduce((a, b) => a + (b.turn ?? 0), 0);
+  // (a bent board drawn straight, with an arrow for which way it turns)
+  const arrow = Math.abs(turn) > 0.1 ? `<path d="M${(w / 2).toFixed(1)} ${(h + 3).toFixed(1)} q 0 6 ${(turn > 0 ? -8 : 8)} 6" class="tn"/>` : '';
+  return `<svg viewBox="-2 -2 ${(w + 4).toFixed(1)} ${(h + 14).toFixed(1)}" width="${(w + 4).toFixed(0)}" height="${(h + 14).toFixed(0)}">${parts.join('')}${arrow}</svg>`;
 }
 function choose(i: number) {
   chosen = i;
   for (const b of $('offers').querySelectorAll('.offer')) b.classList.toggle('on', Number((b as HTMLElement).dataset.i) === i);
+  // the finish moves on to the end of this one, so the run is seen whole as it would be
+  if (offerFinish) drop(offerFinish);
+  const fv: number[] = [];
+  const fin = finishOf(offered[i].end);
+  boardMesh(fin.board, fv);
+  lineMesh(fin.line, WIDTH, fv);
+  finishFlag(fin.line, fv);
+  offerFinish = upload(fv);
+  flyToEnd();
   tick();
 }
 function addChosen() {
@@ -872,11 +996,19 @@ let camPitch = 0.8;
 let orbit = { yaw: 0, pitch: 0 };
 let zoom = 1;
 let flyTarget: { eye: V3; look: V3 } | null = null;
+/** Building: a view of the end of the run, the board on offer and the finish after it, all in frame. */
 function flyToEnd() {
   const end = sections.length ? sections[sections.length - 1].end : TOP;
-  const d = dirOf(end.yaw, 0);
-  const l: V3 = add(end.p, mul(d, 40));
-  flyTarget = { eye: add(add(end.p, mul(d, -50)), [0, 55, 0]), look: l };
+  const cand = offered[chosen];
+  const far = cand ? cand.end.p : add(end.p, mul(dirOf(end.yaw, end.pitch), 60));
+  // (the middle of what's new: the offered board and the start of the channel)
+  const mid = mul(add(add(end.p, far), add(far, mul(dirOf(cand?.end.yaw ?? end.yaw, 0), 30))), 1 / 3);
+  const span = len(sub(far, end.p)) + 60;
+  const d = norm(sub(far, end.p));
+  const side = norm(cross(d, [0, 1, 0]));
+  const eye = add(add(sub(mid, mul([d[0], 0, d[2]], span * 0.95)), mul(side, span * 0.06)), [0, span * 1.25, 0]);
+  // (aimed a little past the middle: the board on offer and the channel after it, above the cards)
+  flyTarget = { eye, look: add(mid, mul([d[0], 0, d[2]], span * 0.08)) };
 }
 function updateCamera(dt: number) {
   if (view === 'build' && flyTarget) {
@@ -1294,6 +1426,10 @@ function visible(): Draw[] {
     } else out.push({ mesh: sectionMeshes[i] });
   });
   if (finishMesh && view !== 'build') out.push({ mesh: finishMesh });
+  if (view === 'build') {
+    if (offerMeshes[chosen]) out.push({ mesh: offerMeshes[chosen] });
+    if (offerFinish) out.push({ mesh: offerFinish });
+  }
   if (supportMesh_ && !params.has("nosupport")) out.push({ mesh: supportMesh_ });
   return out;
 }
@@ -1378,8 +1514,8 @@ function frame(now: number) {
   const vp = viewProj(eye, fwd, right, upv, fov, aspect, 1, far);
   lastVP = vp;
   // the sun's view: a box around the followed marble (or the end, building)
-  const centre: V3 = view === 'build' ? (sections.length ? sections[sections.length - 1].end.p : TOP.p) : followed().p;
-  const span = view === 'build' ? 110 : 70;
+  const centre: V3 = view === 'build' ? (flyTarget?.look ?? (sections.length ? sections[sections.length - 1].end.p : TOP.p)) : followed().p;
+  const span = view === 'build' ? 130 : 70;
   const lightVP = ortho(centre, norm(theme.key), span, 400);
   // (penumbra texels per unit of light depth: the depth range over a texel's width, times how
   // wide the window's light spreads for each centimetre between blocker and receiver)
@@ -1529,15 +1665,6 @@ function frame(now: number) {
     }
     gl.disable(gl.CULL_FACE);
     gl.useProgram(prog);
-  }
-  // building: the one on offer, see-through, at the end
-  if (view === 'build' && ghostMeshes[chosen]) {
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.depthMask(false);
-    drawMeshes([{ mesh: ghostMeshes[chosen], ghost: true }], false);
-    gl.depthMask(true);
-    gl.disable(gl.BLEND);
   }
   // the dust in the air, over everything
   if (!preview) {

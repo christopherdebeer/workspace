@@ -18,7 +18,8 @@ export const STYLE = { plain: 0, paper: 1, corrugation: 2, lacquer: 3, brass: 4,
 export type Style = (typeof STYLE)[keyof typeof STYLE];
 
 /** a material: colour, roughness, metalness, style, and how strong the style's detail is */
-export interface Mat { colour: V3; rough: number; metal?: number; style: Style; detail?: number }
+/** a material: colour, roughness, metalness, style, how strong the style's detail is, and how deep its relief (1: as made) */
+export interface Mat { colour: V3; rough: number; metal?: number; style: Style; detail?: number; bump?: number }
 
 export interface Theme {
   id: string;
@@ -88,17 +89,17 @@ const NOCTURNE: Theme = {
   // the moon, low through the arched windows; the lamps do the rest
   key: [-0.5, 0.55, 0.65], keyColour: [0.62, 0.72, 0.95], keyStrength: 0.3,
   win: [-0.55, 0.3, 0.75], winColour: [0.5, 0.6, 0.9], winStrength: 1.4,
-  envFloor: [0.05, 0.04, 0.04], envWall: [0.1, 0.08, 0.07], envCeil: [0.06, 0.05, 0.06],
+  envFloor: [0.07, 0.05, 0.04], envWall: [0.2, 0.14, 0.09], envCeil: [0.12, 0.09, 0.07],
   haze: [0.05, 0.045, 0.05], hazeNear: 0.3,
-  lamps: true, lampColour: [1, 0.78, 0.5], lampStrength: 1.2,
+  lamps: true, lampColour: [1, 0.78, 0.5], lampStrength: 1.6,
   dust: 0.35,
   mats: {
     0: { colour: [0.05, 0.07, 0.14], rough: 0.22, style: STYLE.chart, detail: 1 },
     1: { colour: [0.09, 0.12, 0.2], rough: 0.35, style: STYLE.leather, detail: 1 },
-    2: { colour: [0.85, 0.66, 0.32], rough: 0.3, metal: 0.75, style: STYLE.brass, detail: 1 },
+    2: { colour: [0.85, 0.66, 0.32], rough: 0.24, metal: 0.85, style: STYLE.brass, detail: 1 },
     3: { colour: [0.18, 0.14, 0.12], rough: 0.35, style: STYLE.stone, detail: 1 },
     4: { colour: [0.2, 0.13, 0.09], rough: 0.5, style: STYLE.oak, detail: 0.6 },
-    7: { colour: [0.85, 0.66, 0.32], rough: 0.3, metal: 0.75, style: STYLE.brass, detail: 1 },
+    7: { colour: [0.85, 0.66, 0.32], rough: 0.24, metal: 0.85, style: STYLE.brass, detail: 1 },
     8: { colour: [0.85, 0.66, 0.32], rough: 0.35, metal: 0.75, style: STYLE.brass, detail: 1 },
     11: { colour: [0.6, 0.46, 0.22], rough: 0.4, metal: 0.75, style: STYLE.plain },
     12: { colour: [0.08, 0.07, 0.07], rough: 0.5, style: STYLE.plain },
@@ -121,7 +122,7 @@ export function matTables(t: Theme): { col: Float32Array; par: Float32Array } {
   for (let i = 0; i < N; i++) {
     const m = t.mats[i] ?? { colour: [0.5, 0.5, 0.5] as V3, rough: 0.6, style: STYLE.plain };
     col.set([m.colour[0], m.colour[1], m.colour[2], m.rough], i * 4);
-    par.set([m.metal ?? 0, m.style, m.detail ?? 0, 0], i * 4);
+    par.set([m.metal ?? 0, m.style, m.detail ?? 0, m.bump ?? (m.style === STYLE.plain ? 0 : 1)], i * 4);
   }
   return { col, par };
 }
