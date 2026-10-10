@@ -25,10 +25,10 @@ await withWood(async (lab) => {
   c.ok('lined up, not yet racing', s.phase === 'lineup' && !s.racing, { phase: s.phase, racing: s.racing });
   c.ok('twelve named marbles', s.order.length === 12 && new Set(s.order.map((o) => o.name)).size === 12, s.order.map((o) => o.name));
   const other = s.order.find((o) => o.name !== s.me).name;
-  await page.click(`#board .row[data-name="${other}"]`);
+  await page.click(`#order .dot[data-name="${other}"]`);
   await frames();
   s = await lab.state(page);
-  c.ok('a tap on the board makes that marble yours', s.me === other, { me: s.me, other });
+  c.ok('a tap on the order makes that marble yours', s.me === other, { me: s.me, other });
   await page.click('#go');
   await page.waitForFunction(() => window.__marbles.phase === 'racing', null, { timeout: 5000, polling: 100 }).catch(() => {});
   await until(1.0);

@@ -154,16 +154,19 @@ void main() {
   if (vMat < .5) {
     // the playing surface: paper skin, its fibres along the board, faint dents, the odd darker patch
     float fib = noise(vec3(vUV.x * 1.5, vUV.y * 24., 0.)) * .5 + noise(vec3(vUV.x * 6., vUV.y * 70., 3.)) * .25;
-    float dent = fbm(vec3(vUV * .22, 7.));
-    float stain = smoothstep(.55, .75, fbm(vec3(vUV * .06, 19.)));
-    base = vec3(.60, .46, .30) * (.88 + .22 * fib) * (.9 + .18 * dent) * (1. - .08 * stain);
-    rough = .9;
+    float dent = noise(vec3(vUV * .22, 7.));
+    float stain = smoothstep(.6, .8, noise(vec3(vUV * .06, 19.)));
+    // (wear where they run: a rubbed, slightly shinier band along each side, and scuffs along the way)
+    float side = smoothstep(2.6, 1.2, 24. - abs(vUV.y)) * .5;
+    float scuff = smoothstep(.6, .9, noise(vec3(vUV.x * .35, vUV.y * 3., 31.))) * .3;
+    base = vec3(.60, .46, .30) * (.88 + .22 * fib) * (.9 + .18 * dent) * (1. - .08 * stain) * (1. - .1 * side - .06 * scuff);
+    rough = .9 - .15 * side - .08 * scuff + .06 * (dent - .5);
   } else if (vMat < 1.5) {
     // a strip's face: paper skin, fibres along it, compressed and darker toward the foot where it folds
     float fib = noise(vec3(vUV.x * 2., vUV.y * 26., 1.)) * .4 + noise(vec3(vUV.x * 8., vUV.y * 72., 5.)) * .2;
     float foot = smoothstep(0., .5, abs(vUV.y));
     base = vec3(.64, .51, .35) * (.84 + .26 * fib) * mix(.8, 1., foot);
-    rough = .85;
+    rough = .85 + .08 * (fib - .3);
   } else if (vMat < 2.5) {
     base = vec3(.62, .63, .66); rough = .3; metal = 1.;
   } else if (vMat < 3.5) {
@@ -637,7 +640,13 @@ function updateCamera(dt: number) {
   // the board's way (the run is straight down it), the camera behind and above
   const speed = len(m.v);
   const u_ = sections.length ? under(m) : null;
-  const fwd: V3 = u_ ? u_.frame.t : dirOf(TOP.yaw, TOP.pitch);
+  let fwd: V3 = u_ ? u_.frame.t : dirOf(TOP.yaw, TOP.pitch);
+  // (the end of the board near: the heading leans toward the next board's, so a bend or a turn is met, not chased)
+  if (u_ && m.finished < 0) {
+    const left = u_.board.length - u_.along;
+    const next = sections[m.sec + 1]?.boards[0];
+    if (next && left < 30) fwd = norm(add(mul(fwd, left / 30), mul(next.frame.t, 1 - left / 30)));
+  }
   const targetYaw = Math.atan2(fwd[0], fwd[2]);
   // (turn the camera's heading toward the marble's, smoothly round the circle)
   let dy = targetYaw - camYaw;
@@ -648,7 +657,8 @@ function updateCamera(dt: number) {
   const dist = (38 + Math.min(12, speed * 0.03)) / zoom;
   const back: V3 = [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
   // (over the middle of the board, so the whole field is in view)
-  const mid = u_ ? add(m.p, mul(u_.frame.b, (-u_.across * 0.6) / zoom)) : m.p;
+  // (a little toward the board's middle, so more of the field is in view; never so far that yours is at the edge)
+  const mid = u_ ? add(m.p, mul(u_.frame.b, Math.max(-7, Math.min(7, -u_.across * 0.45)) / zoom)) : m.p;
   const wantEye = add(mid, mul(back, dist));
   // (the look ahead further the faster, and drawn toward rivals close by, so the contest is in the frame)
   let look2 = add(mid, mul(fwd, (10 + Math.min(12, speed * 0.04)) / zoom));
@@ -751,8 +761,8 @@ btn('undo', undoSection);
 btn('follow', () => { follow = follow === 'mine' ? 'leader' : 'mine'; showFollow(); save(); });
 btn('new', () => { seed = Math.floor(Math.random() * 90000) + 1; choices = []; rebuildCourse(); page = 0; lineup(); });
 // (the board's rows: tap one and that marble is yours)
-$('board').addEventListener('click', (e) => {
-  const row = (e.target as HTMLElement).closest('.row') as HTMLElement | null;
+$('order').addEventListener('click', (e) => {
+  const row = (e.target as HTMLElement).closest('.dot') as HTMLElement | null;
   if (row?.dataset.name) { wake(); choose_(row.dataset.name); }
 });
 $('offers').addEventListener('click', (e) => {
@@ -1210,15 +1220,18 @@ function showBoard() {
   if (performance.now() - boardAt < 120) return;
   boardAt = performance.now();
   const o = order(marbles);
-  const lead = o[0];
-  const html = o.map((m, i) => {
-    const gap = m.finished >= 0 ? `${m.finished.toFixed(1)} s` : m === lead ? `${(m.progress / 100).toFixed(1)} m` : `−${((lead.progress - m.progress) / 100).toFixed(1)} m`;
+  // (the order across the top: a row of dots, first on the left; yours named; those in, ringed)
+  const html = o.map((m) => {
     const l = lookOf.get(m.name);
-    return `<div class="row${m.name === followed().name ? ' me' : ''}" data-name="${m.name}"><i style="background:${l?.css}"></i><b>${phase === 'lineup' ? '' : i + 1}</b><span>${m.name}</span><em>${phase === 'lineup' ? '' : gap}</em></div>`;
+    const me = m.name === followed().name;
+    return `<div class="dot${me ? ' me' : ''}${m.finished >= 0 ? ' in' : ''}" data-name="${m.name}"><i style="background:${l?.css}"></i><span>${m.name}</span></div>`;
   }).join('');
-  // (only when it changed: the rows are tapped, and must hold still to be)
-  if (html !== boardHtml) { boardHtml = html; $('board').innerHTML = html; }
-  $('clock').textContent = racing ? `${raceTime.toFixed(1)} s · ${Math.round(len(followed().v) / 100 * 3.6 * 10) / 10} km/h` : phase === 'done' ? `all in · ${order(marbles)[0].name} first` : '';
+  if (html !== boardHtml) { boardHtml = html; $('order').innerHTML = html; }
+  const me = followed();
+  const lead = o[0];
+  const place = o.indexOf(me) + 1;
+  const gap = me.finished >= 0 ? `${me.finished.toFixed(1)} s` : me === lead ? 'leading' : `${((lead.progress - me.progress) / 100).toFixed(1)} m back`;
+  $('clock').textContent = racing ? `${raceTime.toFixed(1)} s · ${place}${['st', 'nd', 'rd'][place - 1] ?? 'th'} · ${gap}` : phase === 'done' ? `${lead.name} first · ${me.name} ${place}${['st', 'nd', 'rd'][place - 1] ?? 'th'}` : '';
 }
 
 // ─── small maths ────────────────────────────────────────────────────────────────────────────────

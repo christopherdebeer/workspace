@@ -19,8 +19,9 @@ the line is build mode: three boards on offer; pick one and the run grows downwa
 | look round | drag | drag |
 | come close | pinch | the wheel |
 
-The board on the right is the order: who's over the line (their time), who leads (how far),
-and how far behind the rest are. The marbles are a roster, as a tournament's: all glass and all
+The row across the top is the order, first on the left: yours is the big one, named, and the
+ones in are ringed; tap any to follow it. The clock beside it has your place and your gap.
+Nothing else sits over the board. The marbles are a roster, as a tournament's: all glass and all
 the same size, so the run and the knocks decide it and not the marble; each its own look (a
 cat's eye, a swirl, speckled, banded), its own colours, its own name. The pattern is in the
 glass, so it turns as the marble rolls.
@@ -95,5 +96,7 @@ slope.
   through in the marble's own space, so they have depth and turn as it rolls; bubbles catch the
   light. The sun's shadow map moves in whole texels, so edges don't crawl; a soft dark lies
   under every marble; what the frame draws is between the solver's last two states, by how far
-  into the next step it is. A stuck marble's nudge is seen as a tap on the board, and heard.
+  into the next step it is. The floor wears where they run: a rubbed band along each side,
+  scuffs along the way, and the roughness varies with the paper. Nearing the end of a board the
+  chase leans toward the next board's heading, so a bend is met rather than chased. A stuck marble's nudge is seen as a tap on the board, and heard.
 - `?auto` (and the index's preview) races a fixed run and follows the leader.
