@@ -92,7 +92,8 @@ await withWood(async (lab) => {
   c.ok('the last taken off', s.sections === 7, s.sections);
   // building, try it: the last board raced, the camera on the leader
   await page.click('#try');
-  await until(1.5);
+  await page.waitForFunction(() => window.__marbles.phase === 'racing' && window.__marbles.view === 'race', null, { timeout: 30000, polling: 100 });
+  await until(1.0);
   s = await lab.state(page);
   c.ok('try it: the end raced, the camera on the leader', s.view === 'race' && s.raceTime > 0 && s.me === s.order[0].name, { racing: s.racing, raceTime: s.raceTime, me: s.me, lead: s.order[0].name });
   // the main button: again, back to the gate
@@ -103,7 +104,8 @@ await withWood(async (lab) => {
   // the camera toggle: yours, the leader, the finish, and round
   const cams = [];
   for (let i = 0; i < 3; i++) { await page.click('#cam'); await frames(); cams.push(await page.evaluate(() => document.getElementById('cam').textContent)); }
-  c.ok('the camera goes round: the leader, the finish, yours', /leader/.test(cams[0]) && /finish/.test(cams[1]) && !/leader|finish/.test(cams[2]), cams);
+  // (from wherever it was: three presses visit all three, and come back round)
+  c.ok('the camera goes round: yours, the leader, the finish', cams.some((t) => /leader/.test(t)) && cams.some((t) => /finish/.test(t)) && cams.some((t) => !/leader|finish/.test(t)), cams);
   c.ok('no errors in the page', page.errors.length === 0, page.errors);
   // the index's preview
   const pv = await lab.open('preview', { width: 300, height: 375 });
