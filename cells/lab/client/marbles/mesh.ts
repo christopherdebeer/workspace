@@ -16,7 +16,9 @@ import { WALL_H, add, cross, frameAlong, mul, norm, sub, toWorld, type Board, ty
  * a vertex: position, normal, material, (u, v).
  * materials: 0 the floor's top, 1 paper skin, 2 metal, 3 the workshop floor, 4 timber, 5 the
  * chequered line, 6 the marker, 7 a cut edge (the corrugated core), 8 tape, 9 a blob shadow,
- * 11 a glue seam, 12 black rubber; 10 a marble (its own shader)
+ * 11 a glue seam, 12 black rubber; 10 a marble (its own shader); 23 Perspex (drawn see-through,
+ * after everything else), 24 a sticker (its kind and colour in its (u, v)), 25 a bridge's deck,
+ * 26 a causeway's paving
  */
 export const VSTRIDE = 9;
 type UV = [number, number];
@@ -84,19 +86,44 @@ function cylinder(out: number[], M: Map3, F: Frame, along: number, across: numbe
  * cut core for its top and its rounded ends (as the solver has it: a capsule), and a glue seam
  * about its foot; bending with the board, in pieces.
  */
-function strip(out: number[], M: Map3, a: [number, number], b: [number, number], thick: number, height: number, bendy: boolean) {
+function strip(out: number[], M: Map3, a: [number, number], b: [number, number], thick: number, height: number, bendy: boolean, clear = false) {
   const dx = b[0] - a[0], dy = b[1] - a[1];
   const l = Math.hypot(dx, dy) || 1;
   const ux = dx / l, uy = dy / l;
   // (the strip's own (s, u, w): s along it, w across it, through the board's map)
   const W: Map3 = (s, u, w) => M(a[0] + ux * s - uy * w, u, a[1] + uy * s + ux * w);
   const pieces = bendy ? Math.max(1, Math.ceil(l / 3)) : 1;
-  boxM(out, W, 0, 0, -thick, l, height, thick, { top: 7, bottom: 1, side: 1, end: 7 }, pieces);
   const F: Frame = { p: [0, 0, 0], t: [1, 0, 0], n: [0, 1, 0], b: [0, 0, 1] };
+  if (clear) {
+    // (Perspex: one clear piece, its ends rounded too, no glue to see)
+    boxM(out, W, 0, 0, -thick * 0.6, l, height, thick * 0.6, same(23), pieces);
+    for (const s of [0, l]) cylinder(out, W, F, s, 0, thick * 0.6, 0, height, 23, 23, 10);
+    return;
+  }
+  boxM(out, W, 0, 0, -thick, l, height, thick, { top: 7, bottom: 1, side: 1, end: 7 }, pieces);
   for (const s of [0, l]) cylinder(out, W, F, s, 0, thick, 0, height, 7, 7, 10);
   // the seam: a dark fillet where it was glued down
   const g = 0.3;
   boxM(out, W, -g, 0, -thick - g, l + g, 0.22, thick + g, same(11), pieces);
+}
+/** A sticker flat on the floor: a quad turned so, its kind and colour carried in its (u, v). */
+function sticker(out: number[], M: Map3, st: { at: [number, number]; size: number; rot: number; kind: number; hue: number }) {
+  const c = Math.cos(st.rot) * st.size / 2, sn = Math.sin(st.rot) * st.size / 2;
+  const P = (x: number, y: number) => M(st.at[0] + x * c - y * sn, 0.025, st.at[1] + x * sn + y * c);
+  const H = Math.floor(st.hue * 16);
+  const U = (x: number, y: number): UV => [st.kind + 0.01 + 0.98 * (x * 0.5 + 0.5), H + 0.01 + 0.98 * (y * 0.5 + 0.5)];
+  flat(out, P(-1, -1), P(1, -1), P(1, 1), P(-1, 1), 24, U(-1, -1), U(1, -1), U(1, 1), U(-1, 1));
+}
+/** Tape: flat on the floor, or over the top of a wall (down both its faces) where it was repaired. */
+function tapeOver(out: number[], M: Map3, at: [number, number], rot: number, len: number, wallH: number, thick: number) {
+  const ux = Math.cos(rot), uy = Math.sin(rot);
+  const W: Map3 = (s, u, w) => M(at[0] + ux * s - uy * w, u, at[1] + uy * s + ux * w);
+  const w = 1.1;
+  if (wallH <= 0) { boxM(out, W, -len / 2, 0.02, -w, len / 2, 0.06, w, same(8)); return; }
+  const t = thick + 0.05;
+  boxM(out, W, -t, wallH, -w, t, wallH + 0.05, w, same(8));
+  boxM(out, W, -t - 0.05, wallH - 2.4, -w, -t, wallH, w, same(8));
+  boxM(out, W, t, wallH - 2.4, -w, t + 0.05, wallH, w, same(8));
 }
 
 /**
@@ -104,23 +131,52 @@ function strip(out: number[], M: Map3, a: [number, number], b: [number, number],
  * (the gate's; below a step the drop's face is the back), its strips, pegs and spinner axles
  * with their hubs, belts and motors, and tape across the join where it meets the board before.
  */
-export function boardMesh(bd: Board, out: number[]) {
+export function boardMesh(bd: Board, out: number[], clear: number[] = out) {
   const M = bent(bd);
   const bendy = !!bd.turn;
   const pieces = bendy ? Math.ceil(bd.length / 3) : 1;
   const half = bd.width / 2;
   const T = 0.6;
-  boxM(out, M, 0, -T, -half - T, bd.length, 0, half + T, { top: 0, bottom: 1, side: 7, end: 7 }, pieces);
-  const sideH = bd.sideH ?? WALL_H;
+  const deck = bd.deck === 'planks' ? 25 : bd.deck === 'paving' ? 26 : 0;
+  boxM(out, M, 0, -T, -half - T, bd.length, 0, half + T, { top: deck, bottom: 1, side: 7, end: 7 }, pieces);
+  // (a tunnel's walls are the usual height, the Perspex or card above them is the tunnel's)
+  const sideH = bd.roof ? WALL_H : bd.sideH ?? WALL_H;
   const sideMats: Mats = { top: 7, bottom: 1, side: 1, end: 7 };
-  boxM(out, M, 0, 0, half, bd.length, sideH, half + T, sideMats, pieces);
-  boxM(out, M, 0, 0, -half - T, bd.length, sideH, -half, sideMats, pieces);
+  if (bd.rails) {
+    // a bridge: clear panels for sides, timber posts and a rail along their tops
+    boxM(clear, M, 0, 0, half, bd.length, WALL_H, half + 0.3, same(23), pieces);
+    boxM(clear, M, 0, 0, -half - 0.3, bd.length, WALL_H, -half, same(23), pieces);
+    for (const sd of [-1, 1]) {
+      for (let a = 1; a < bd.length; a += 8) boxM(out, M, a - 0.6, -T, sd * (half + 0.15) - 0.6, a + 0.6, WALL_H + 1.2, sd * (half + 0.15) + 0.6, same(4));
+      boxM(out, M, 0, WALL_H + 0.4, sd * (half + 0.15) - 0.55, bd.length, WALL_H + 1.2, sd * (half + 0.15) + 0.55, same(4), pieces);
+    }
+  } else {
+    boxM(out, M, 0, 0, half, bd.length, sideH, half + T, sideMats, pieces);
+    boxM(out, M, 0, 0, -half - T, bd.length, sideH, -half, sideMats, pieces);
+  }
+  if (bd.roof) {
+    // a tunnel: its sides carried up, and a lid; Perspex, or a cardboard box over the board
+    const { a0, a1, h, clear: cl } = bd.roof;
+    const into = cl ? clear : out;
+    const mats: Mats = cl ? same(23) : { top: 1, bottom: 1, side: 1, end: 7 };
+    const p2 = bendy ? Math.max(1, Math.ceil((a1 - a0) / 3)) : 1;
+    boxM(into, M, a0, WALL_H, half, a1, h, half + T, mats, p2);
+    boxM(into, M, a0, WALL_H, -half - T, a1, h, -half, mats, p2);
+    boxM(into, M, a0, h, -half - T, a1, h + 0.5, half + T, cl ? same(23) : { top: 1, bottom: 1, side: 7, end: 7 }, p2);
+  }
   if (bd.backWall && !bd.sideH) boxM(out, M, -T, 0, -half - T, 0, WALL_H, half + T, sideMats);
   if (bd.step > 0) boxM(out, M, bd.length - T, -bd.step - T, -half - T, bd.length, 0, half + T, { top: 0, bottom: 1, side: 1, end: 7 });
   // (the seams where the sides were glued to the floor)
   boxM(out, M, 0, 0, half - 0.3, bd.length, 0.22, half, same(11), pieces);
   boxM(out, M, 0, 0, -half, bd.length, 0.22, -half + 0.3, same(11), pieces);
-  for (const w of bd.walls) strip(out, M, w.a, w.b, w.thick, WALL_H * 0.8, bendy);
+  for (const w of bd.walls) strip(w.clear ? clear : out, M, w.a, w.b, w.thick, WALL_H * 0.8, bendy, w.clear);
+  for (const st of bd.stickers ?? []) sticker(out, M, st);
+  for (const tp of bd.tape ?? []) {
+    // (over a wall it crosses, or over the side, or flat on the floor)
+    const onSide = Math.abs(Math.abs(tp.at[1]) - half) < 2;
+    const onWall = bd.walls.some((w) => Math.hypot((w.a[0] + w.b[0]) / 2 - tp.at[0], (w.a[1] + w.b[1]) / 2 - tp.at[1]) < 0.01);
+    tapeOver(out, M, onSide ? [tp.at[0], Math.sign(tp.at[1]) * (half + T / 2)] : tp.at, tp.rot, tp.len, onSide ? sideH : onWall ? WALL_H * 0.8 : 0, onSide ? T / 2 : 0.5);
+  }
   for (const [pa, pc, pr] of bd.pegs) {
     const F = frameAlong(bd, pa);
     cylinder(out, M, F, pa, pc, pr, 0, WALL_H * 0.75, 7, 1);
@@ -280,9 +336,9 @@ export function buntingMesh(bd: Board, at: number, r: () => number, out: number[
   const posts: V3[] = [];
   for (const s of [-1, 1]) {
     const foot = toWorld(bd, at, WALL_H, s * (half + 0.3));
-    cone(out, foot, 0.4, 0.4, 16, 18, 8);
-    cone(out, [foot[0], foot[1] + 16, foot[2]], 0.4, 0.05, 1.6, 12, 8);
-    posts.push([foot[0], foot[1] + 15, foot[2]]);
+    cone(out, foot, 0.4, 0.4, 30, 18, 8);
+    cone(out, [foot[0], foot[1] + 30, foot[2]], 0.4, 0.05, 1.6, 12, 8);
+    posts.push([foot[0], foot[1] + 29, foot[2]]);
   }
   const d = sub(posts[1], posts[0]);
   const L = Math.hypot(d[0], d[1], d[2]);

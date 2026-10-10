@@ -15,7 +15,7 @@
  * that doesn't shine), the camera, the race and the building, and the sounds.
  */
 import { hash, seeded } from '../kit/rng';
-import { Course, MATERIALS, marble, order, step, type Impact, type Marble, type Material } from './physics';
+import { Course, MATERIALS, boardOf, marble, order, step, type Impact, type Marble, type Material } from './physics';
 import { boardMesh, buntingMesh, discMesh, flagMesh, gateMesh, groundMesh, lampMesh, lineMesh, litterMesh, rafterMesh, ringMesh, roomMesh, sphereMesh, spinnerMesh, supportMesh, VSTRIDE } from './mesh';
 import { THEMES, matTables, themeById, type Theme } from './theme';
 import { FIELD_SIZE, MARBLE_R, TOP, WALL_H, WIDTH, add, build, candidates, cross, decode, dirOf, encode, finish as finishOf, frameAlong, frameAt, len, mul, norm, sub, toLocal, toWorld, type Board, type Frame, type Section, type V3 } from './track';
@@ -257,8 +257,8 @@ uniform sampler2D uShadowMap;
 uniform vec3 uEye, uTint;
 uniform float uCut, uTime, uGhost, uFar, uGlow;
 /** the theme's materials, by id: colour and roughness; metalness, style, detail */
-uniform vec4 uCol[24];
-uniform vec4 uPar[24];
+uniform vec4 uCol[32];
+uniform vec4 uPar[32];
 ${LIGHT_UNIFORMS}
 ${COMMON}
 ${SHADOW_GLSL}
@@ -373,6 +373,29 @@ Surf surf(float style, vec2 uv, float k) {
     s.coat = 1.;
     return s;
   }
+  if (style > 10.5 && style < 11.5) {
+    // slats laid across a bridge: a gap between each, grain along each, each a little its own shade
+    float sl = floor(uv.x / 3.2), fr = fract(uv.x / 3.2);
+    float gap = smoothstep(0., .07, fr) * smoothstep(1., .93, fr);
+    float grain = noise(vec3(sl * 7.3, uv.y * 1.5, 2.)) * .6 + noise(vec3(sl * 3.1, uv.y * 6., 5.)) * .3 * fade(px, 6.);
+    s.tone = mix(.3, 1., gap) * (.78 + .35 * grain) * (.85 + .3 * hash3(vec3(sl, 2., 0.)));
+    s.rough = .2 * (1. - gap);
+    s.h = -.18 * (1. - gap) + .015 * grain + .03 * (fr - .5) * (fr - .5) * -4.;
+    return s;
+  }
+  if (style > 11.5 && style < 12.5) {
+    // setts in rows, each domed a little, the joints between them dark and sunk
+    float row = floor(uv.x / 4.);
+    vec2 q = vec2(uv.x / 4., uv.y / 5. + .5 * mod(row, 2.));
+    vec2 cell = floor(q), fr = fract(q) - .5;
+    float edge = max(abs(fr.x), abs(fr.y));
+    float joint = smoothstep(.5, .43, edge);
+    float dome = 1. - dot(fr, fr) * 2.;
+    s.tone = (.78 + .35 * hash3(vec3(cell, 4.))) * mix(.35, 1., joint) * (.9 + .15 * noise(vec3(uv * 2., 3.)) * fade(px, 2.));
+    s.rough = .25 * (1. - joint);
+    s.h = .25 * dome * joint - .2 * (1. - joint);
+    return s;
+  }
   // a chart on lacquer: fine gold lines, circles and ticks inlaid along the board, under a clear coat
   float mot = noise(vec3(uv * .3, 5.));
   float along = fract(uv.x / 40.), across = uv.y / 24.;
@@ -422,7 +445,43 @@ void main() {
   bool upright = abs(dot(nG, normalize(vec3(0., 1., 0.)))) < .6;
   if (upright && (id == 1 || id == 4 || id == 7 || id == 11 || id == 21)) ao = mix(.5, 1., smoothstep(0., 2.4, vUV.y));
   if (id == 0 && abs(vUV.y) < 24.) ao = 1. - .4 * exp(-(24. - abs(vUV.y)) / 1.1);
-  if (vMat > 4.5 && vMat < 5.5) {
+  if (id == 23) {
+    // Perspex: clear, the room and the light lying on it, more at a glance than face on; its
+    // edges (thick, seen end on) catch more
+    float NoV = max(dot(nG, V), 0.);
+    float F = .04 + .96 * pow(1. - NoV, 5.);
+    vec3 R = reflect(-V, nG);
+    vec3 Hh = normalize(uKey + V);
+    float sp = D_ggx(max(dot(nG, Hh), 0.), .05) * V_smith(max(NoV, 1e-3), max(dot(nG, uKey), 0.), .05) * max(dot(nG, uKey), 0.) * .04;
+    float sh = shadow(nG);
+    vec3 col = base * (env(nG) * .25 + uKeyCol * .1) + F * env(R) + uKeyCol * sp * sh + lamplight(vWorld, nG, V, vec3(0.), vec3(.04), .05);
+    o = vec4(tonemap(col), clamp(.12 + F * .8 + sp * .2, 0., .85));
+    return;
+  }
+  if (id == 24) {
+    // a sticker, worn: its shape (star, dot, arrow, stripes, a face, a heart) in its colour, a
+    // white edge, scuffed through in places and lifting at its edges
+    float kind = floor(vUV.x), hueI = floor(vUV.y);
+    vec2 q = (vec2(fract(vUV.x), fract(vUV.y)) - .5) * 2.;
+    float d;
+    if (kind < .5) { float an = atan(q.y, q.x), r = length(q); float k = cos(floor(.5 + an / 1.2566) * 1.2566 - an); d = r * mix(1., k, .45) - .62; }
+    else if (kind < 1.5) d = length(q) - .85;
+    else if (kind < 2.5) d = max(min(max(abs(q.x + .2) - .45, abs(q.y) - .22), max(q.x - .85 + abs(q.y) * 1.1, -q.x + .15)), -q.x - .75);
+    else if (kind < 3.5) d = max(abs(q.x) - .9, abs(q.y) - .45);
+    else if (kind < 4.5) d = length(q) - .82;
+    else { vec2 hq = vec2(abs(q.x), -q.y * 1.1 + .25); d = length(hq - vec2(.32, .3)) - .38; d = min(d, max(hq.y - .3 + hq.x, -hq.y - .8 + hq.x * .3)); }
+    float wear = noise(vec3(vUV * 6., hueI)) * .6 + noise(vec3(vUV * 21., 2.)) * .4;
+    if (d > 0. || wear < .22) discard;
+    float hue = hueI / 16.;
+    vec3 col = clamp(abs(mod(hue * 6. + vec3(0., 4., 2.), 6.) - 3.) - 1., 0., 1.);
+    col = mix(vec3(.85), col, .8);
+    float rim = smoothstep(-.12, -.04, d);
+    float inner = kind > 2.5 && kind < 3.5 ? step(.5, fract(q.x * 2.5)) : kind > 3.5 && kind < 4.5 ? 1. - step(length(q - vec2(.3, .2)), .12) * (1. - step(length(q - vec2(-.3, .2)), .12)) : 1.;
+    if (kind > 3.5 && kind < 4.5) inner = (length(q - vec2(.3, .22)) < .13 || length(q - vec2(-.3, .22)) < .13 || (abs(length(q) - .45) < .06 && q.y < -.05)) ? 0. : 1.;
+    base = mix(mix(vec3(.08), col, inner), vec3(.95, .94, .9), rim) * (1. - .25 * smoothstep(.22, .3, 1. - wear)) * mix(.9, 1., uNight < .5 ? 1. : .6);
+    rough = mix(.25, .6, smoothstep(.3, .6, 1. - wear));
+    metal = 0.;
+  } else if (vMat > 4.5 && vMat < 5.5) {
     // the line: chequered
     float cx = floor(vUV.x / 2.), cz = floor(vUV.y / 2.);
     base = mod(cx + cz, 2.) < .5 ? vec3(.92) : vec3(.05); rough = .5;
@@ -642,7 +701,7 @@ const glassProg = program(VS, GLASS_FS);
 const u = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n);
 
 // ─── meshes on the card ──────────────────────────────────────────────────────────────────────────
-interface Mesh { vao: WebGLVertexArrayObject; svao: WebGLVertexArrayObject; gvao: WebGLVertexArrayObject; buf: WebGLBuffer; count: number; dynamic: boolean }
+interface Mesh { vao: WebGLVertexArrayObject; svao: WebGLVertexArrayObject; gvao: WebGLVertexArrayObject; buf: WebGLBuffer; count: number; dynamic: boolean; /** its see-through parts (Perspex), drawn after everything else */ clear?: Mesh }
 function upload(verts: number[] | Float32Array, dynamic = false, into?: Mesh): Mesh {
   const data = verts instanceof Float32Array ? verts : new Float32Array(verts);
   if (into) {
@@ -675,6 +734,7 @@ function drop(m: Mesh) {
   gl.deleteVertexArray(m.vao);
   gl.deleteVertexArray(m.svao);
   gl.deleteVertexArray(m.gvao);
+  if (m.clear) drop(m.clear);
 }
 
 // ─── the run ─────────────────────────────────────────────────────────────────────────────────────
@@ -701,9 +761,11 @@ const offerMeshes: Mesh[] = [];
 let offerFinish: Mesh | null = null;
 
 function meshOf(s: Section): Mesh {
-  const v: number[] = [];
-  for (const b of s.boards) boardMesh(b, v);
-  return upload(v);
+  const v: number[] = [], cv: number[] = [];
+  for (const b of s.boards) boardMesh(b, v, cv);
+  const m = upload(v);
+  if (cv.length) m.clear = upload(cv);
+  return m;
 }
 function rebuildCourse() {
   sections = build(seed, choices);
@@ -753,7 +815,7 @@ function rebuildScenery() {
   sections.forEach((s, i) => {
     const b = s.boards[0];
     if (i % 2 === 1) lamp(b);
-    if (i % 3 === 1 && theme.bunting) buntingMesh(b, 10 + r() * (b.length - 20), r, tv);
+    if (i % 4 === 2 && theme.bunting) buntingMesh(b, 10 + r() * (b.length - 20), r, tv);
   });
   lamp(course.fin.board);
   if (overheadMesh_) drop(overheadMesh_);
@@ -873,9 +935,8 @@ function followed(): Marble {
 /** the board a marble is on (or nearest), and its frame there (a bent board turns as it goes) */
 function under(m: Marble): { board: Board; frame: Frame; along: number; across: number } {
   const sec = sections[Math.min(m.sec, sections.length - 1)];
-  const boards = m.finished >= 0 || !sec ? [course.fin.board] : sec.boards;
-  let board = boards[0], [along, , across] = toLocal(board, m.p);
-  if (boards.length > 1 && along > board.length) { board = boards[1]; [along, , across] = toLocal(board, m.p); }
+  const board = m.finished >= 0 || !sec ? course.fin.board : boardOf(sec, m.p);
+  const [along, , across] = toLocal(board, m.p);
   return { board, frame: frameAlong(board, Math.max(0, Math.min(board.length, along))), along, across };
 }
 /** Each race its own small differences: where exactly each starts (a hair either way), as a hand would set them. */
@@ -916,8 +977,10 @@ function sketch(s: Section): string {
   const parts: string[] = [];
   for (const b of s.boards) {
     const X = (c: number) => (w / 2 - c * k).toFixed(1), Y = (a: number) => (y0 + a * k).toFixed(1);
-    parts.push(`<rect x="0" y="${Y(0)}" width="${w.toFixed(1)}" height="${(b.length * k).toFixed(1)}" rx="1.5" class="bd"/>`);
-    for (const wl of b.walls) parts.push(`<line x1="${X(wl.a[1])}" y1="${Y(wl.a[0])}" x2="${X(wl.b[1])}" y2="${Y(wl.b[0])}"/>`);
+    const bw = b.width * k;
+    parts.push(`<rect x="${((w - bw) / 2).toFixed(1)}" y="${Y(0)}" width="${bw.toFixed(1)}" height="${(b.length * k).toFixed(1)}" rx="1.5" class="bd${b.deck ? ' dk' : ''}"/>`);
+    if (b.roof) parts.push(`<rect x="${((w - bw) / 2).toFixed(1)}" y="${Y(b.roof.a0)}" width="${bw.toFixed(1)}" height="${((b.roof.a1 - b.roof.a0) * k).toFixed(1)}" class="rf${b.roof.clear ? ' cl' : ''}"/>`);
+    for (const wl of b.walls) parts.push(`<line x1="${X(wl.a[1])}" y1="${Y(wl.a[0])}" x2="${X(wl.b[1])}" y2="${Y(wl.b[0])}"${wl.clear ? ' class="cl"' : ''}/>`);
     for (const [pa, pc, pr] of b.pegs) parts.push(`<circle cx="${X(pc)}" cy="${Y(pa)}" r="${Math.max(0.9, pr * k).toFixed(1)}"/>`);
     for (const sp of b.spinners) parts.push(`<circle cx="${X(sp.at[1])}" cy="${Y(sp.at[0])}" r="${(sp.half * k).toFixed(1)}" class="sp"/>`);
     y0 += b.length * k + (b.step > 0 ? 2 : 0);
@@ -1666,6 +1729,21 @@ function frame(now: number) {
     gl.disable(gl.CULL_FACE);
     gl.useProgram(prog);
   }
+  // the see-through parts last (Perspex walls, panels, tunnels), over the marbles behind them
+  {
+    const clear = vis.filter((d) => d.mesh.clear);
+    if (clear.length) {
+      gl.useProgram(prog);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      drawMeshes(clear.map((d) => ({ mesh: d.mesh.clear!, model: d.model })), false);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    }
+  }
   // the dust in the air, over everything
   if (!preview) {
     gl.useProgram(dustProg);
@@ -1716,6 +1794,7 @@ function frame(now: number) {
     seed, choices, sections: sections.length, racing, phase, raceTime, view, chosen, offered: offered.map((s) => s.name),
     order: order(marbles).map((m) => ({ name: m.name, progress: Math.round(m.progress), finished: m.finished, falls: m.falls, speed: Math.round(len(m.v)) })),
     me: followed().name, eye: eye.map((v) => Math.round(v)), look: look.map((v) => Math.round(v)), theme: theme.id,
+    leadSec: followed().sec, leadKind: sections[followed().sec]?.kind,
     // (where each is along the finish board, once in)
     rest: order(marbles).map((m) => (m.finished >= 0 ? Math.round(dotv(sub(m.p, course.fin.board.frame.p), course.fin.board.frame.t) * 10) / 10 : null)),
   };

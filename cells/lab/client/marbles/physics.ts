@@ -122,6 +122,10 @@ function boardContacts(bd: Board, m: Marble, time: number, out: Contact[]): numb
     }
     if (bd.backWall && along < m.r) out.push({ n: f.t, depth: m.r - along, vs: [0, 0, 0], e, mu });
   }
+  // a tunnel's lid: what bounces up inside it comes back down
+  if (bd.roof && along > bd.roof.a0 - m.r && along < bd.roof.a1 + m.r && up + m.r > bd.roof.h && up < bd.roof.h + 1) {
+    out.push({ n: mul(f.n, -1), depth: up + m.r - bd.roof.h, vs: [0, 0, 0], e, mu });
+  }
   // the walls and pegs in it: against the marble's centre brought down to the floor, in the world
   if (up < WALL_H) {
     const q = sub(m.p, mul(f.n, up));
@@ -172,6 +176,15 @@ function boardContacts(bd: Board, m: Marble, time: number, out: Contact[]): numb
     }
   }
   return along;
+}
+
+/** The board of a section a point is over (the first, if none). */
+export function boardOf(sec: Section, p: V3): Board {
+  for (const b of sec.boards) {
+    const [a, u, c] = toLocal(b, p);
+    if (a >= -2 && a <= b.length + 2 && Math.abs(c) < b.width / 2 + 3 && u > -3 && u < 30) return b;
+  }
+  return sec.boards[0];
 }
 
 /** The gate, while it's down: a flat bar across the first board that a marble comes to rest against. */
@@ -236,9 +249,12 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
       let best: { along: number; sec: number } | null = null;
       for (let si = Math.max(0, m.sec - 1); si <= Math.min(course.sections.length - 1, m.sec + 1); si++) {
         const sec = course.sections[si];
+        // (how far along the section: each board's along, from where it starts in the section)
+        let off = 0;
         for (const bd of sec.boards) {
           const a = boardContacts(bd, m, t, contacts);
-          if (a !== null && (!best || si >= m.sec)) best = { along: a, sec: si };
+          if (a !== null && (!best || si >= m.sec)) best = { along: off + Math.max(0, a), sec: si };
+          off += bd.length;
         }
       }
       // the finish: the funnel, the line across its throat, the channel beyond
@@ -288,7 +304,8 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
     else if (m.finished < 0 && len(m.v) < 2 && m.contact) {
       m.slowFor += dt;
       if (m.slowFor > 1.5) {
-        const bd = sec?.boards[0] ?? course.fin.board;
+        const onFin = m.sec >= course.sections.length - 1 && (() => { const [a, u, c] = toLocal(course.fin.board, m.p); return a > -2 && Math.abs(c) < WIDTH / 2 + 2 && u < 4; })();
+        const bd = onFin || !sec ? course.fin.board : boardOf(sec, m.p);
         const [along, , across] = toLocal(bd, m.p);
         const f = frameAlong(bd, along);
         // (toward the middle; the other way the next time, in case that was into something)
@@ -296,6 +313,15 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
         m.v = add(m.v, add(mul(f.b, side * 28), mul(f.t, 12)));
         m.slowFor = 0;
         m.nudges++;
+        // (and the board is tapped under it: it and its neighbours hop a little, each its own way,
+        // which breaks an arch of marbles jammed across a gap as no push from one side can)
+        for (const o of marbles) {
+          if (o.finished >= 0 || len(sub(o.p, m.p)) > 10) continue;
+          const j = Math.sin(o.p[0] * 12.9898 + o.p[2] * 78.233) * 43758.5453;
+          const k = (j - Math.floor(j)) * 2 - 1;
+          o.v = add(o.v, add(add(mul(f.n, 16 + 8 * Math.abs(k)), mul(f.b, k * 22)), mul(f.t, -22)));
+          o.slowFor = 0;
+        }
       }
     } else m.slowFor = 0;
   }

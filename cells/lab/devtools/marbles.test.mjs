@@ -17,7 +17,8 @@ const DEG = Math.PI / 180;
   for (const kind of KINDS) for (const seed of [1, 2, 3]) {
     const s = section(kind, TOP, rng.seeded(seed));
     assert.ok(s.end.p[1] < TOP.p[1] - 5, `${kind} ${seed} ends lower: ${s.drop}`);
-    assert.equal(s.boards.length, s.kind === 'step' ? 2 : 1);
+    assert.ok(s.boards.length >= 1 && s.boards.length <= 3, `${kind}: boards`);
+    for (const bb of s.boards) assert.ok(bb.width > 12 && bb.length > 5, `${kind}: a board of a sane size`);
     const b = s.boards[0];
     assert.equal(b.width, WIDTH);
     for (const w of b.walls) for (const v of [...w.a, ...w.b]) assert.ok(Number.isFinite(v));

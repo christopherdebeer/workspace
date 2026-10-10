@@ -14,7 +14,7 @@
 import type { V3 } from './track';
 
 /** how a material's detail is made (the shader's `detail`) */
-export const STYLE = { plain: 0, paper: 1, corrugation: 2, lacquer: 3, brass: 4, oak: 5, leather: 6, planks: 7, stone: 8, glaze: 9, chart: 10 } as const;
+export const STYLE = { plain: 0, paper: 1, corrugation: 2, lacquer: 3, brass: 4, oak: 5, leather: 6, planks: 7, stone: 8, glaze: 9, chart: 10, slats: 11, cobbles: 12 } as const;
 export type Style = (typeof STYLE)[keyof typeof STYLE];
 
 /** a material: colour, roughness, metalness, style, and how strong the style's detail is */
@@ -78,6 +78,12 @@ const ATELIER: Theme = {
     18: { colour: [0.85, 0.62, 0.12], rough: 0.5, style: STYLE.plain },
     19: { colour: [0.6, 0.58, 0.54], rough: 0.95, style: STYLE.plain },
     21: { colour: [0.5, 0.42, 0.3], rough: 0.8, style: STYLE.oak, detail: 1 },
+    // Perspex: clear, a faint blue in its edges; stickers (their colour is their own); a bridge's
+    // deck of lolly-stick slats; a causeway paved with egg-box card
+    23: { colour: [0.86, 0.93, 0.97], rough: 0.06, style: STYLE.plain },
+    24: { colour: [1, 1, 1], rough: 0.35, style: STYLE.plain },
+    25: { colour: [0.86, 0.74, 0.55], rough: 0.7, style: STYLE.slats, detail: 1 },
+    26: { colour: [0.62, 0.6, 0.55], rough: 0.85, style: STYLE.cobbles, detail: 1 },
   },
   supports: 'boxes', bunting: true, litter: true,
   accent: '#ffeb73', pageColour: '#6b5a44',
@@ -107,6 +113,11 @@ const NOCTURNE: Theme = {
     18: { colour: [0.85, 0.66, 0.32], rough: 0.4, metal: 0.75, style: STYLE.plain },
     19: { colour: [0.16, 0.12, 0.1], rough: 0.8, style: STYLE.plain },
     21: { colour: [0.22, 0.15, 0.1], rough: 0.6, style: STYLE.oak, detail: 0.7 },
+    // smoked glass; stickers, dimmed under the lamps; ebonised slats; pale marble setts
+    23: { colour: [0.62, 0.66, 0.78], rough: 0.05, style: STYLE.plain },
+    24: { colour: [0.8, 0.78, 0.72], rough: 0.3, style: STYLE.plain },
+    25: { colour: [0.2, 0.13, 0.09], rough: 0.4, style: STYLE.slats, detail: 1 },
+    26: { colour: [0.62, 0.6, 0.58], rough: 0.3, style: STYLE.cobbles, detail: 1 },
   },
   supports: 'columns', bunting: false, litter: false,
   accent: '#ffd27a', pageColour: '#0b0d16',
@@ -115,9 +126,9 @@ const NOCTURNE: Theme = {
 export const THEMES: Theme[] = [ATELIER, NOCTURNE];
 export const themeById = (id: string | null | undefined): Theme => THEMES.find((t) => t.id === id) ?? ATELIER;
 
-/** the material table as the shader takes it: 24 ids × (colour, rough) and (metal, style, detail, 0) */
+/** the material table as the shader takes it: 32 ids × (colour, rough) and (metal, style, detail, 0) */
 export function matTables(t: Theme): { col: Float32Array; par: Float32Array } {
-  const N = 24;
+  const N = 32;
   const col = new Float32Array(N * 4), par = new Float32Array(N * 4);
   for (let i = 0; i < N; i++) {
     const m = t.mats[i] ?? { colour: [0.5, 0.5, 0.5] as V3, rough: 0.6, style: STYLE.plain };

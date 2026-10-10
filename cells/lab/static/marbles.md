@@ -48,18 +48,30 @@ bounce, grip and rolling resistance), and the tests race them; the roster is gla
 
 ## Building
 
-`build` flies to the end of the run, where three boards are on offer, drawn see-through where
-they'd go. Tap one to see it; `add it` and the run is one longer; `three more` offers others.
-`take the last off` undoes. The boards are 48 wide, walled at the sides, each a field: pegs,
-deflectors (slats and curved slats), a splitter (a V that parts the pack into lanes), a
-chicane, spinners (turning crosses that fling), a funnel (everyone through one gap, then a fan
-of pegs to spread them again), gates (rows of chevrons with gaps between), bumpers, a step
-down, a zigzag, a straight, a bend (the board sweeps round, left or right, and the run heads a
-new way; some other boards turn a little too). Nothing on a board stands square to the slope:
-whatever a marble meets, it slides off to one side or the other, as on a real board.
+`build` flies to the end of the run, where three boards are on offer as cards, each with a
+little drawing of the board from above; the one chosen is built in place, solid, with the
+finish moved on after it. `add it` and the run is one longer; `three more` offers others;
+`undo` takes the last off; `try it` races just the last board.
+
+There are twenty-two kinds. The fields, 48 wide and walled at the sides: pegs, deflectors
+(slats and curved slats), a splitter, a chicane, spinners (turning crosses on axles, belted to a
+motor), gates (rows of chevrons), bumpers, a zigzag, a maze (a weave of short slanted strips,
+one in four left out), a slalom (pairs of poles left and right, a guide strip toward each), a
+straight; and a mixed board, two fields one after the other. The shapes: a funnel, a step
+down, stairs (three short flights), a bend and a hairpin (the board sweeps round by up to 120°,
+bumpers on the outside), a steep ramp into a run-out, a jump (a lip that kicks up, a gap, and a
+lower board reaching back under it to land on), a bridge (the run narrows onto a span of slats
+between clear panels, posts and a rail), a causeway (a narrow paved way that curves), and a
+tunnel (a Perspex or cardboard lid over part of the board). About a third of the other boards
+turn a little too.
+
+Some strips are Perspex. Boards carry worn stickers (stars, dots, arrows, stripes, faces,
+hearts, scuffed through and peeling) and tape: across a side, or over the top of a strip
+where it was mended. Nothing on a board stands square to the slope: whatever a marble meets,
+it slides off to one side or the other, as on a real board.
 
 The run is its seed and your choices, in the address (`?seed=…&run=0.2.1.…`): share it, and it
-is the same run for anyone. `a new run` starts another seed. `?marble=steel` follows that one.
+is the same run for anyone. `new run` starts another seed. `?marble=Dusk` makes that one yours.
 
 ## Themes
 
@@ -89,7 +101,9 @@ pegs (cylinders), spinners (arms turning about an axle, whose own speed at the p
 counts in the bounce and the grip). The floor is cardboard, dull and grippy; the strips are
 smoother, so a marble slides down a slanted one rather than resting against it. Nothing on a
 board stands square to the slope, and a wall that reaches a side meets it (a gap there wedges a
-marble); a marble that stops anyway is nudged sideways. After a push between marbles the board
+marble); a marble that stops anyway is nudged sideways, and the board under it is tapped: it and its
+neighbours hop a little, each its own way, which breaks an arch of marbles jammed across a
+narrow gap as no push from one side can. After a push between marbles the board
 has the last word, so the pack can't press one through a wall; below a step the sides reach up
 to the board above. Marbles meet
 each other with restitution and friction between their materials, mass-weighted; twelve of them
