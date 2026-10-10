@@ -17,8 +17,8 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { MAT, RADIUS, REST_H, aim, buildLevel, launch, path, touch, towerAt, type Level, type V3 } from './level';
-import { VSTRIDE, disc, levelMesh, sphere } from './mesh';
+import { MAT, RADIUS, REST_H, aim, buildLevel, launch, liftAt, path, touch, towerAt, type Level, type V3 } from './level';
+import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -237,6 +237,48 @@ void main() {
     float grout = smoothstep(0., .03, f.x) * smoothstep(1., .97, f.x) * smoothstep(0., .03, f.y) * smoothstep(1., .97, f.y);
     base = mix(vec3(.5, .48, .44), vec3(.9, .89, .85) * (.93 + .1 * hash3(vec3(floor(q), 2.))), grout);
     rough = mix(.8, .12, grout); coat = grout;
+  } else if (id == ${MAT.butter}) {
+    // butter: pale yellow, a little waxy, a knife's cut across it and a fold of its paper's mark
+    float cut = smoothstep(.975, 1., noise(vec3(uv.x * .6, uv.y * 7., 9.)));
+    base = vec3(.98, .86, .46) * (1. - .12 * cut) * (.96 + .06 * noise(vec3(uv * 1.5, 3.)));
+    rough = .32; coat = .6;
+  } else if (id == ${MAT.honey}) {
+    // honey: deep amber, lit from within; run down a jar's side in drips that thin toward their ends
+    float drip = noise(vec3(uv.x * .9, 1., 5.)) * .7 + noise(vec3(uv.x * 3.2, 2., 8.)) * .3;
+    float thin = smoothstep(-5., 4., uv.y) * .35 + smoothstep(.5, .9, drip) * .4;
+    base = mix(vec3(.72, .34, .05), vec3(.95, .6, .15), thin);
+    rough = .06; coat = 1.; emit = .22 + .25 * thin;
+  } else if (id == ${MAT.glass}) {
+    base = vec3(.9, .95, .93); rough = .04; coat = 1.;
+  } else if (id == ${MAT.pot}) {
+    // enamelware: white, flecked dark blue, a navy rim
+    float fleck = step(.9, noise(vec3(uv * 2.6, 4.))) * .8 + step(.955, noise(vec3(uv * 7., 6.))) * .6;
+    base = mix(vec3(.94, .92, .87), vec3(.1, .16, .4), clamp(fleck, 0., 1.));
+    rough = .22; coat = 1.;
+  } else if (id == ${MAT.pan}) {
+    // cast iron, seasoned: near black, brushed in rings on its face
+    float ring = n.y > .8 ? .96 + .04 * sin(length(uv) * 70.) : 1.;
+    base = vec3(.11, .105, .1) * ring * (.85 + .3 * noise(vec3(uv * 4., 2.)));
+    rough = .42; metal = .35;
+  } else if (id == ${MAT.hob}) {
+    // the hob: brushed steel, its grain along x, a faint bloom of old heat here and there
+    float brush = noise(vec3(vWorld.x * .02, vWorld.z * 1.4, 7.)) * .5 + noise(vec3(vWorld.x * .4, vWorld.z * 9., 3.)) * .25;
+    float bloom = smoothstep(.55, .8, noise(vec3(vWorld.xz * .012, 11.)));
+    base = mix(vec3(.42, .43, .45), vec3(.4, .33, .28), bloom * .5) * (.85 + .3 * brush);
+    rough = .45; metal = .8;
+  } else if (id == ${MAT.burner}) {
+    // a burner's grate, cast iron, rings and spokes; the gas flame under it, blue at its roots, glowing on the iron
+    float r = length(uv), an = atan(uv.y, uv.x);
+    float rings = smoothstep(.05, .02, abs(r - .32)) + smoothstep(.05, .02, abs(r - .62)) + smoothstep(.05, .02, abs(r - .93));
+    float spokes = smoothstep(.1, .04, abs(sin(an * 3.))) * step(.3, r) * step(r, .95);
+    float grate = clamp(rings + spokes, 0., 1.);
+    float flick = .8 + .2 * sin(uTime * 23. + an * 4.) * sin(uTime * 17. + r * 30.);
+    vec3 flame = mix(vec3(.2, .4, 1.), vec3(1., .55, .15), smoothstep(.1, .4, r)) * (1. - smoothstep(.15, .45, r)) * flick;
+    base = mix(vec3(.5, .52, .54), vec3(.09, .08, .08), grate);
+    rough = mix(.38, .7, grate); metal = mix(.85, .2, grate);
+    emit = 0.; base += flame * (1. - grate) * 1.4;
+  } else if (id == ${MAT.knob}) {
+    base = vec3(.06, .06, .065); rough = .18; coat = 1.;
   } else if (id == 12) {
     // a window pane: the garden in the morning, softly
     vec3 sky = mix(vec3(1., .96, .88), vec3(.62, .78, .95), uv.y);
@@ -279,6 +321,8 @@ void main() {
   }
   float d = length(vWorld - uEye);
   c = mix(c, vec3(.62, .57, .5), smoothstep(250., 900., d) * .6);
+  // (glass: seen through, but for its gloss and its edges)
+  if (id == ${MAT.glass}) { float Fg = .04 + .96 * pow(1. - NoV, 4.); o = vec4(tonemap(c), clamp(.08 + Fg * .9 + length(spec) * .3, 0., 1.) * uAlpha); return; }
   o = vec4(tonemap(c), 1.);
 }`;
 
@@ -605,7 +649,10 @@ function drop(m: Mesh | null) {
 const SPHERE = upload((() => { const v: number[] = []; sphere(v, 13); return v; })());
 const DISC = upload((() => { const v: number[] = []; disc(v, 14); return v; })());
 let courseMesh: Mesh | null = null;
+let glassMesh: Mesh | null = null;
 let roomMesh: Mesh | null = null;
+/** the lids: each its own mesh about its rest place, drawn where it is now */
+let movers: Array<{ shape: LevelMesh['movers'][number]['shape']; mesh: Mesh }> = [];
 
 // ─── the dumpling on the card ────────────────────────────────────────────────────────────────────
 /** what it's made of: a clear glittery jelly (the squishy toy) or steamed dough */
@@ -751,15 +798,25 @@ let still = 0;
 /** fallen: when it comes back */
 let fallenAt = -1;
 let simTime = 0;
+/** each lid's lift last step (for the steam as one starts up); whether it was stuck to honey; when the autopilot last looked */
+let lidWas: number[] = [];
+let heldWas = false;
+let aimedAt = -9;
 function startLevel(n: number) {
   levelN = Math.max(1, n);
   lv = buildLevel(levelN);
-  drop(courseMesh);
-  courseMesh = upload(levelMesh(lv));
+  drop(courseMesh); drop(glassMesh);
+  for (const m of movers) drop(m.mesh);
+  const lm = levelMesh(lv);
+  courseMesh = upload(lm.solid);
+  glassMesh = lm.glass.length ? upload(lm.glass) : null;
+  movers = lm.movers.map((m) => ({ shape: m.shape, mesh: upload(m.verts) }));
+  lidWas = movers.map(() => 0);
   drop(roomMesh);
   roomMesh = upload(room(lv));
   const at = lv.towers[0].at;
-  body = new Dumpling([at[0], at[1] + REST_H + 0.4, at[2]], skin);
+  // (set down a little above, to drop on: on a lid, its knob is under it)
+  body = new Dumpling([at[0], at[1] + REST_H + 2, at[2]], skin);
   prevX = new Float32Array(body.x);
   check = 0; falls = 0; clock = 0; home = -1; still = 0; fallenAt = -1;
   camYaw = Math.atan2(lv.towers[1].at[0] - at[0], lv.towers[1].at[2] - at[2]);
@@ -769,7 +826,7 @@ function startLevel(n: number) {
   try { if (!auto) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
   if (!auto) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
-  hint(levelN === 1 ? 'drag back and let go: the dumpling flies the other way' : `level ${levelN}`);
+  hint(levelN === 1 ? 'drag back and let go: the dumpling flies the other way' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -798,41 +855,62 @@ function room(lv: Level): number[] {
   wall([x0, 0, z1], [x0, 0, z0], [1, 0, 0]);
   // the counter, to the walls
   const n: V3 = [0, 1, 0];
-  for (const [p, uv] of [[[x0, 0, z0], [x0, z0]], [[x0, 0, z1], [x0, z1]], [[x1, 0, z1], [x1, z1]], [[x0, 0, z0], [x0, z0]], [[x1, 0, z1], [x1, z1]], [[x1, 0, z0], [x1, z0]]] as Array<[V3, [number, number]]>) out.push(p[0], p[1], p[2], n[0], n[1], n[2], MAT.counter, uv[0], uv[1]);
+  const floor = lv.chapter === 'counter' ? MAT.counter : MAT.hob;
+  for (const [p, uv] of [[[x0, 0, z0], [x0, z0]], [[x0, 0, z1], [x0, z1]], [[x1, 0, z1], [x1, z1]], [[x0, 0, z0], [x0, z0]], [[x1, 0, z1], [x1, z1]], [[x1, 0, z0], [x1, z0]]] as Array<[V3, [number, number]]>) out.push(p[0], p[1], p[2], n[0], n[1], n[2], floor, uv[0], uv[1]);
   return out;
 }
 
 // ─── aiming and the flick ────────────────────────────────────────────────────────────────────────
-/** the pull: where the finger went down and where it is; what it would do */
-let pull: { sx: number; sy: number; x: number; y: number; id: number } | null = null;
+/** the pull: where the finger went down and where it is (and where it's been, lately); what it would do */
+let pull: { sx: number; sy: number; x: number; y: number; id: number; hist: Array<{ x: number; y: number; t: number }> } | null = null;
 let aimNow: { yaw: number; power: number; vel: V3 } | null = null;
 /** a flick asked for in the air: done on landing, if soon */
-let buffered: { vel: V3; until: number } | null = null;
-function aimFromPull() {
-  if (!pull) { aimNow = null; return; }
-  const dx = pull.x - pull.sx, dy = pull.y - pull.sy;
+let buffered: { vel: V3; spin: number; until: number } | null = null;
+function aimAt(x: number, y: number): typeof aimNow {
+  if (!pull) return null;
+  const dx = x - pull.sx, dy = y - pull.sy;
   const L = Math.hypot(dx, dy);
-  if (L < 14) { aimNow = null; return; }
+  if (L < 14) return null;
   const fwd: V3 = [Math.sin(camYaw), 0, Math.cos(camYaw)];
   const right: V3 = [-fwd[2], 0, fwd[0]];
   const d = norm(sub(mul(fwd, dy), mul(right, dx)));
   const yaw = Math.atan2(d[0], d[2]);
   const power = Math.min(1, (L - 14) / (0.3 * Math.min(innerWidth, innerHeight)));
-  aimNow = { yaw, power, vel: launch(yaw, power) };
+  return { yaw, power, vel: launch(yaw, power) };
 }
+function aimFromPull() { aimNow = pull ? aimAt(pull.x, pull.y) : null; }
+/**
+ * Let go. A finger lifted still flicks as aimed. A finger swiped as it lets go gives spin: swiped
+ * on, the way it will fly, topspin (it runs on when it lands); swiped back, backspin (it bites).
+ * The aim is taken from before the swipe, so the swipe doesn't change where it goes.
+ */
 function release() {
-  aimFromPull();
-  const a = aimNow;
+  if (!pull) return;
+  const now = performance.now();
+  const h = pull.hist;
+  let old = h[h.length - 1];
+  for (let i = h.length - 1; i >= 0; i--) { old = h[i]; if (now - h[i].t > 90) break; }
+  const dt = Math.max(0.03, (now - old.t) / 1000);
+  const vx = (pull.x - old.x) / dt, vy = (pull.y - old.y) / dt;
+  let a = aimAt(pull.x, pull.y), spin = 0;
+  if (Math.hypot(vx, vy) > 400) {
+    // (a swipe: the aim from where it was held; the spin from the swipe along the way it will go)
+    const held = aimAt(old.x, old.y);
+    const fx = pull.sx - old.x, fy = pull.sy - old.y, fl = Math.hypot(fx, fy) || 1;
+    const along = (vx * fx + vy * fy) / fl;
+    if (held && Math.abs(along) > 350) { a = held; spin = Math.sign(along) * Math.min(1, (Math.abs(along) - 350) / 1100); }
+  }
   pull = null; aimNow = null;
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
-  if (body.canFlick) doFlick(a.vel);
-  else buffered = { vel: a.vel, until: simTime + 0.35 };
+  if (body.canFlick) doFlick(a.vel, spin);
+  else buffered = { vel: a.vel, spin, until: simTime + 0.35 };
 }
-function doFlick(vel: V3) {
-  body.flick(vel);
+function doFlick(vel: V3, spin = 0) {
+  body.flick(vel, spin);
   buffered = null;
   pop(0.4 + len(vel) / 500);
+  if (Math.abs(spin) > 0.1) hint(spin > 0 ? 'topspin: it runs on' : 'backspin: it bites', 1400);
 }
 
 // ─── the camera ──────────────────────────────────────────────────────────────────────────────────
@@ -870,7 +948,7 @@ canvas.addEventListener('pointerdown', (e) => {
   wake();
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size === 1 && !auto) pull = { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId };
+  if (pointers.size === 1 && !auto) pull = { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }] };
   else { pull = null; aimNow = null; body.squeeze = null; two = null; }
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -890,7 +968,11 @@ canvas.addEventListener('pointermove', (e) => {
     two = { d, cx, cy };
     return;
   }
-  if (pull && pull.id === e.pointerId) { pull.x = e.clientX; pull.y = e.clientY; }
+  if (pull && pull.id === e.pointerId) {
+    pull.x = e.clientX; pull.y = e.clientY;
+    pull.hist.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+    if (pull.hist.length > 24) pull.hist.shift();
+  }
 });
 const up = (e: PointerEvent) => {
   pointers.delete(e.pointerId);
@@ -970,6 +1052,31 @@ const squish = (k: number) => { blop(260 + 140 * k, 90, 0.16, Math.min(0.35, 0.0
 const pop = (k: number) => blop(380, 900, 0.09, 0.12 * k);
 const boing = () => { blop(220, 520, 0.22, 0.2); blop(520, 260, 0.3, 0.08); };
 const plop = () => blop(180, 60, 0.4, 0.25);
+/** a lid lifted by steam: a hiss, and its rim rattling on the pot */
+function rattle() {
+  if (!ac || !master || !soundOn) return;
+  const t0 = ac.currentTime;
+  for (let i = 0; i < 7; i++) blopAt(t0 + 0.1 + i * 0.09 + Math.random() * 0.03, 1900 + Math.random() * 600, 1200, 0.03, 0.05);
+  // (the hiss: noise, shaped)
+  const n = ac.createBuffer(1, ac.sampleRate * 0.9, ac.sampleRate), d = n.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+  const src = ac.createBufferSource(); src.buffer = n;
+  const f = ac.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2500;
+  const g = ac.createGain(); g.gain.value = 0.05;
+  src.connect(f).connect(g).connect(master);
+  src.start(t0);
+}
+function blopAt(at: number, f0: number, f1: number, dur: number, loud: number) {
+  if (!ac || !master) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(f0, at);
+  o.frequency.exponentialRampToValueAtTime(f1, at + dur);
+  g.gain.setValueAtTime(loud, at);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  o.connect(g).connect(master);
+  o.start(at); o.stop(at + dur + 0.02);
+}
 function chime() { if (!ac) return; [660, 830, 990, 1320].forEach((f, i) => setTimeout(() => blop(f, f * 0.99, 0.5, 0.12), i * 110)); }
 
 // ─── steam and flour ────────────────────────────────────────────────────────────────────────────
@@ -1005,6 +1112,15 @@ function flourPuff(at: V3, k: number) {
   for (let i = 0; i < 6 + 10 * k; i++) {
     const a = r() * Math.PI * 2;
     puffs.push({ p: [at[0] + Math.cos(a) * RADIUS, at[1] - RADIUS * 0.4, at[2] + Math.sin(a) * RADIUS], v: [Math.cos(a) * (10 + 30 * k * r()), 4 + 10 * r(), Math.sin(a) * (10 + 30 * k * r())], age: 0, life: 0.6 + r() * 0.5, size: 1 + r(), a: 0.4 });
+  }
+}
+
+/** Steam out from under a lid as it lifts: from all round the pot's rim, up and out. */
+function steamOut(at: V3, r: number) {
+  const rr = seeded(hash(Math.floor(simTime * 1000), 5));
+  for (let i = 0; i < 26; i++) {
+    const a = rr() * Math.PI * 2;
+    puffs.push({ p: [at[0] + Math.cos(a) * r, at[1] + 0.5, at[2] + Math.sin(a) * r], v: [Math.cos(a) * (8 + 14 * rr()), 14 + 18 * rr(), Math.sin(a) * (8 + 14 * rr())], age: 0, life: 1 + rr() * 0.8, size: 1.5 + 1.5 * rr(), a: 0.35 });
   }
 }
 
@@ -1111,6 +1227,8 @@ function frame(now: number) {
   gl.uniformMatrix4fv(u(shadowProg, 'uLightVP'), false, lightVP);
   gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, I4);
   if (courseMesh) { gl.bindVertexArray(courseMesh.svao); gl.drawArrays(gl.TRIANGLES, 0, courseMesh.count); }
+  for (const m of movers) { gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, model([0, m.shape.c[1] - m.shape.lift!.y0, 0], 1)); gl.bindVertexArray(m.mesh.svao); gl.drawArrays(gl.TRIANGLES, 0, m.mesh.count); }
+  gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, I4);
   const sk = skins[body.kind];
   gl.bindVertexArray(sk.svao);
   gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
@@ -1145,6 +1263,8 @@ function frame(now: number) {
   // (the lazy Susans turn: drawn turned by their time)
   if (courseMesh) drawMesh(courseMesh);
   drawSusans();
+  // (the lids, where the steam has them)
+  for (const m of movers) drawMesh(m.mesh, model([0, m.shape.c[1] - m.shape.lift!.y0, 0], 1));
   // the dark under the dumpling
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -1157,7 +1277,7 @@ function frame(now: number) {
   }
   // the aiming line: dots along where its middle will go, a ring where it lands
   if (aimNow) {
-    const pa = path(lv, body.com, aimNow.vel);
+    const pa = path(lv, body.com, aimNow.vel, 3, simTime);
     const can = body.canFlick;
     gl.uniform3fv(u(prog, 'uTint'), can ? [1, 0.97, 0.88] : [1, 0.6, 0.5]);
     pa.pts.forEach((p, i) => {
@@ -1245,6 +1365,22 @@ function frame(now: number) {
     gl.disable(gl.CULL_FACE);
   }
 
+  // (the glass: over everything, seen through)
+  if (glassMesh) {
+    gl.useProgram(prog);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.uniform1f(u(prog, 'uAlpha'), 1);
+    gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.FRONT); drawMesh(glassMesh);
+    gl.cullFace(gl.BACK); drawMesh(glassMesh);
+    gl.disable(gl.CULL_FACE);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+
   // 5. steam and flour
   if (puffs.length) {
     const data = new Float32Array(puffs.length * 4);
@@ -1272,7 +1408,7 @@ function frame(now: number) {
     level: levelN, towers: lv.towers.length, check, falls, clock, home, com: body.com.map((v) => Math.round(v * 10) / 10),
     speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, power: aimNow?.power ?? 0,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,
-    eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull,
+    eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull, chapter: lv.chapter, held: body.held, pinned: body.pinned, spin: body.spinMode, kind: body.kind,
     // (how far its face is turned from you, in degrees; and how upright it is)
     faceOff: Math.round((Math.abs(Math.atan2(body.R[2] * (eye[2] - body.com[2]) - body.R[8] * (eye[0] - body.com[0]), body.R[2] * (eye[0] - body.com[0]) + body.R[8] * (eye[2] - body.com[2]))) * 180) / Math.PI),
     up: Math.round(body.R[4] * 100) / 100,
@@ -1374,7 +1510,7 @@ function tick(dt: number) {
   if (fallenAt >= 0) {
     if (simTime > fallenAt + 0.7) {
       const at = lv.towers[check].at;
-      body.place([at[0], at[1] + REST_H + 0.4, at[2]]);
+      body.place([at[0], at[1] + REST_H + 2, at[2]]);
       prevX = new Float32Array(body.x);
       fallenAt = -1;
       pop(0.6);
@@ -1389,10 +1525,22 @@ function tick(dt: number) {
     hint('splat. back to the last top', 1800);
     return;
   }
+  // the lids: steam out from under one as it lifts, a rattle while it's up
+  movers.forEach((m, i) => {
+    const l = m.shape.lift!;
+    if (m.shape.r < 2) return;
+    const { k } = liftAt(l, simTime);
+    if (k > 0.05 && lidWas[i] <= 0.05) { steamOut([m.shape.c[0], l.y0 - m.shape.hh, m.shape.c[2]], m.shape.r); if (len(sub(m.shape.c, body.com)) < 120) rattle(); }
+    lidWas[i] = k;
+  });
   const k = towerAt(lv, body.com, 1);
   const speed = len(body.vcom);
   if (k >= 0 && body.contacts > 0 && speed < 30) check = k;
-  still = speed < 8 && body.contacts > 0 ? still + dt : 0;
+  // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
+  const quiet = len(body.drift) < 6 && body.contacts > 0;
+  if (body.held > 1 && !heldWas) hint('stuck. flick to let go', 1800);
+  heldWas = body.held > 1;
+  still = quiet ? still + dt : 0;
   if (k === lv.towers.length - 1 && still > 0.5 && home < 0) {
     home = clock;
     chime();
@@ -1400,12 +1548,15 @@ function tick(dt: number) {
     hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`, 9000);
     try { const best = Number(localStorage.getItem(`${STORE}:best:${levelN}`)) || Infinity; if (clock < best) localStorage.setItem(`${STORE}:best:${levelN}`, String(clock)); } catch { /* */ }
   }
-  if (buffered && body.canFlick) { if (simTime < buffered.until) doFlick(buffered.vel); else buffered = null; }
+  if (buffered && body.canFlick) { if (simTime < buffered.until) doFlick(buffered.vel, buffered.spin); else buffered = null; }
   // the autopilot (the index's preview, and ?auto): the next top, as the course's own aim has it
   if (auto) {
     if (home >= 0 && still > 2.5) { startLevel(levelN); return; }
-    if (still > 0.5 && body.canFlick && k >= 0 && k < lv.towers.length - 1) {
-      const a = aim(lv, body.com, k + 1);
+    // (from where it's ended up, which may be over a top's edge; and, with no way on from there, a hop to the middle of this top first)
+    const at = k >= 0 ? k : towerAt(lv, body.com, 4);
+    if (still > 0.5 && body.canFlick && at >= 0 && at < lv.towers.length - 1 && simTime - aimedAt > 0.2) {
+      aimedAt = simTime;
+      const a = aim(lv, body.com, at + 1, simTime) ?? (lv.towers[at].jar ? null : aim(lv, body.com, at, simTime));
       if (a) doFlick(launch(a.yaw, a.power));
     }
   }

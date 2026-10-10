@@ -11,6 +11,7 @@ steamer: home.
 | | Touch | Mouse and keys |
 |---|---|---|
 | flick | drag back and let go | drag back and let go |
+| spin | swipe as you let go: on, the way it will fly, for topspin; back, for backspin | the same |
 | turn the camera, tilt it | two fingers, sideways and up or down | ← → |
 | come close | pinch | the wheel |
 | start the level again | `again` | R |
@@ -22,10 +23,17 @@ the glass shows how hard. Its middle flies a true parabola, so the arc is exact 
 touches something. You can only flick from something, but a flick let go in the air waits a
 moment (a third of a second) and goes as it touches.
 
+A finger lifted still flicks just as aimed. A finger *swiped* as it lets go gives spin, and the
+aim is taken from before the swipe, so the swipe doesn't change where it goes. Swiped on, the
+way it will fly, it has topspin: it rolls on when it lands, two or three times as far, which is
+how you cross a pan or reach the far side of a board. Swiped back, it has backspin: it bites
+where it lands and stays, even on butter. A word at the bottom says which you gave it.
+
 Fall to the counter and it's a splat, and back to the last top you stood on. The clock runs
 until you're home, the count of falls beside it, and your best time for each level is kept. Levels after the first are longer
 and their gaps wider, with more kinds of top: 1 is steamers and a board, 2 brings plates, 3
-puddings and tins, 4 the lazy Susan.
+puddings and tins, 4 the lazy Susan. Level 5 moves to the stovetop, a new kitchen with its own
+things (below); from 9 on the two are mixed.
 
 ## The tops
 
@@ -37,9 +45,28 @@ puddings and tins, 4 the lazy Susan.
 - **A tea tin**: tall, with a small top.
 - **Chopsticks**, now and then, laid as a bridge between two tops near the same height.
 
+## The stovetop
+
+From level 5 the course is on the hob: brushed steel, a burner under each pot, the tiles behind.
+
+- **A frying pan** on a pot: wide, a little slippery (seasoned iron), with a rim round it that
+  catches a slide, and its handle out to one side.
+- **A butter dish**: the butter is slippery, so a landing slides, a long way at speed; the dish
+  has a lip all round that stops you. Backspin bites instead. From against the lip, a flick over
+  it catches on it (the arc shows the catch), so flick away from it, or hop to the middle first.
+- **A honey jar**, from level 6: taller than a flick reaches, with honey run down its side. You
+  don't land on it: you land *against* it, splat into the honey, and stick, hanging there,
+  until you flick on. The course turns sharply at a jar. Honey holds whatever touches it, so a
+  flick into the jar from the honey climbs it a little and sticks again, higher.
+- **A pot with its lid on**, from level 7: every few seconds the steam under the lid lifts it,
+  seven centimetres, rattling, and lets it down again. Land on the lid and you ride up with it;
+  flick from the top of the lift and you've seven centimetres more. The arc knows the lid's
+  cycle, so it shows where you'd land at the moment you'd land there. A lid lifted while you
+  arrive is a lid you can land *under*, on the pot, and then it comes down on you.
+
 Every level is made from its number, so level 6 is always the same level, and every hop in it
-is checked when it's made: from the middle of each top there is a flick that lands on the
-next.
+is checked when it's made: from the middle of each top there is a flick that lands on the next;
+onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too.
 
 ## The dumpling
 
@@ -58,8 +85,16 @@ landing squashes it to under half its height and it jiggles back; the dough is s
 deader, and plops.
 
 Where it touches, there's friction (Coulomb, from how hard it was pushed out), bounce where the
-surface has any, and tack: dough is sticky, and the jelly nearly as much, so it holds to what it touches, a wall included
-for a moment, and the tack tires on a wall so it slides down. Its wobble is damped against its
+surface has any, and tack: dough is sticky, and the jelly nearly as much, so it holds to what it
+touches, a wall included for a moment, and the tack tires on a wall so it slides down. Butter
+has no tack to give. Honey has more than the dumpling's own, and it never tires: a particle
+that touches honey is held where it touched, the whole body is slowed hard so its momentum
+doesn't tear it off the patch that's stuck, and each step the rest of it is drawn back up so
+that it hangs from the patch rather than sagging off it.
+
+Spin is what you gave it at the flick, spent as it lands: with topspin it really rolls, the
+roll is let live and the grip eased for a moment; with backspin the grip is doubled, the tack
+quick to hold and the roll killed, so it plants. Its wobble is damped against its
 moving as one body (its middle's motion and its turning), so it jiggles and settles rather
 than ringing. On the ground its roll dies and it rights itself like a roly-poly: tipped over, on its side or
 its head, it rolls back over the edge it's lying on onto its flat bottom; sat still, it
@@ -89,4 +124,9 @@ The dough is lit as dough:
 thick, the light wrapping round it and glowing a little through its thin edges, darker in its
 pleats, faintly floury, with a dark under it on whatever it's over.
 
-`?level=3` starts a level; `?skin=dough` the dough; `?auto` lets it play itself.
+The lids move: they're drawn where the steam has them, with a puff of steam out from under as
+one lifts and a rattle you hear when you're near. The honey jar is glass, drawn after
+everything else and seen through, the honey in it lit from within.
+
+`?level=3` starts a level (5 to 8 are the stove); `?skin=dough` the dough; `?auto` lets it play
+itself.

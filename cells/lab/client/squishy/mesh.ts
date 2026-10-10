@@ -92,11 +92,33 @@ export function disc(out: number[], mat: number, segs = 28) {
   }
 }
 
-/** One tower, as it's made: a stack of steamers with their rims, a tin, jars and a board, a plate, a pudding on a saucer, a lazy Susan. */
-function towerMesh(t: Tower, out: number[]) {
+/** What's drawn: the solid course; the glass, drawn after it and seen through; and each thing that moves, on its own, about its rest place. */
+export interface LevelMesh { solid: number[]; glass: number[]; movers: Array<{ shape: Shape; verts: number[] }> }
+/**
+ * One tower, as it's made: a stack of steamers with their rims, a tin, jars and a board, a plate,
+ * a pudding on a saucer, a lazy Susan; a butter dish, a honey jar (glass, the honey in it, the
+ * honey down its side), a pot and its lid, a pan with its rim; and on the stove, its burner.
+ */
+function towerMesh(t: Tower, m: LevelMesh) {
+  const out = m.solid;
   const [x, , z] = t.at;
+  if (t.burner) cylinder(out, t.shapes[0].c[0], t.shapes[0].c[2], t.burner, 0, 0.5, MAT.burner, MAT.burner, 36);
   for (const s of t.shapes) {
-    if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); continue; }
+    if (s.lift) { const v: number[] = []; drawShape(s, v); m.movers.push({ shape: s, verts: v }); continue; }
+    if (s.mat === MAT.glass) {
+      // (a jar: the honey in it, most of the way up, then the glass over everything)
+      cylinder(out, s.c[0], s.c[2], s.r * 0.93, s.c[1] - s.hh, s.c[1] + s.hh * 0.55, MAT.honey, MAT.honey, 36);
+      cylinder(m.glass, s.c[0], s.c[2], s.r, s.c[1] - s.hh, s.c[1] + s.hh, MAT.glass, MAT.glass, 40);
+      continue;
+    }
+    drawShape(s, out);
+  }
+  void x; void z;
+}
+function drawShape(s: Shape, out: number[]) {
+  {
+    if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); return; }
+    if (s.kind === 'cap') { capsule(out, s.c, s.b, s.r, s.mat, 12, 4); return; }
     const y0 = s.c[1] - s.hh, y1 = s.c[1] + s.hh;
     const sx = s.c[0], sz = s.c[2];
     switch (s.mat) {
@@ -131,18 +153,31 @@ function towerMesh(t: Tower, out: number[]) {
         cylinder(out, sx, sz, s.r, y0, y1 - 1.6, MAT.jar, MAT.jar, 32, false);
         cylinder(out, sx, sz, s.r * 0.82, y1 - 1.6, y1, MAT.board, MAT.board, 32);
         break;
+      case MAT.pot:
+        // enamel, a little narrower at the foot, a rolled rim
+        if (s.hh > 2) {
+          cylinder(out, sx, sz, s.r, y0, y1, MAT.pot, MAT.pot, 40, true, s.r * 0.96);
+          cylinder(out, sx, sz, s.r + 0.3, y1 - 0.9, y1, MAT.pot, MAT.pot, 40, false);
+        } else {
+          // (a lid: a shallow dome, as a disc lifted a little toward its middle; its rim)
+          cylinder(out, sx, sz, s.r, y0, y1 - 0.4, MAT.pot, MAT.pot, 40, false);
+          cylinder(out, sx, sz, s.r, y1 - 0.4, y1 + 0.5, MAT.pot, MAT.pot, 40, true, s.r * 0.75);
+        }
+        break;
+      case MAT.pan:
+        cylinder(out, sx, sz, s.r, y0, y1, MAT.pan, MAT.pan, 44);
+        break;
       default:
         cylinder(out, sx, sz, s.r, y0, y1, s.mat, s.mat, 44);
     }
   }
-  void x; void z;
 }
 /** The whole course: every tower, and the chopsticks. */
-export function levelMesh(lv: Level): number[] {
-  const out: number[] = [];
-  for (const t of lv.towers) towerMesh(t, out);
-  for (const s of lv.sticks) stick(s, out);
-  return out;
+export function levelMesh(lv: Level): LevelMesh {
+  const m: LevelMesh = { solid: [], glass: [], movers: [] };
+  for (const t of lv.towers) towerMesh(t, m);
+  for (const s of lv.sticks) stick(s, m.solid);
+  return m;
 }
 /** A chopstick: a long capsule, thicker at its back end. */
 function stick(s: Shape, out: number[]) { capsule(out, s.c, s.b, s.r, MAT.chopstick, 10, 3); }
