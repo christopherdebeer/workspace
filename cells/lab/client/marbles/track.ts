@@ -343,8 +343,10 @@ export function build(seed: number, choices: number[]): Section[] {
 
 /** every marble: the same size (a glass marble, 16 mm across) */
 export const MARBLE_R = 0.8;
-/** the channel at the end: a marble and a half wide between the strips, so they come to rest in single file */
-export const CHANNEL_HALF = MARBLE_R * 1.5 + 0.5;
+/** the channel at the end: barely wider than a marble between the strips, so they come to rest in a straight file */
+export const CHANNEL_HALF = MARBLE_R * 1.2 + 0.5;
+/** the throat the funnel brings them to: a little wider than the channel, or two pressed together wedge in the funnel's V */
+export const THROAT_HALF = MARBLE_R * 1.5 + 0.5;
 
 /**
  * The finish: a funnel that brings everyone to a single gap, the chequered line across it, and
@@ -354,17 +356,18 @@ export const CHANNEL_HALF = MARBLE_R * 1.5 + 0.5;
 export function finish(end: { p: V3; yaw: number; pitch: number }): { board: Board; line: Frame; throat: number; lineAt: number; channelEnd: number } {
   const slope = -7 * DEG;
   const frame = frameAt(end.p, end.yaw, slope);
-  const half = WIDTH / 2, ch = CHANNEL_HALF;
-  const throat = 44, channelEnd = throat + FIELD_SIZE * MARBLE_R * 2 + 14;
+  const half = WIDTH / 2, ch = CHANNEL_HALF, th = THROAT_HALF;
+  const throat = 44, taper = throat + 8, channelEnd = throat + FIELD_SIZE * MARBLE_R * 2 + 18;
   const length = channelEnd + 2;
   const walls: Wall[] = [
-    { a: [0, -half], b: [throat, -ch], thick: 0.5 }, { a: [0, half], b: [throat, ch], thick: 0.5 },
-    { a: [throat, -ch], b: [channelEnd, -ch], thick: 0.5 }, { a: [throat, ch], b: [channelEnd, ch], thick: 0.5 },
+    { a: [0, -half], b: [throat, -th], thick: 0.5 }, { a: [0, half], b: [throat, th], thick: 0.5 },
+    { a: [throat, -th], b: [taper, -ch], thick: 0.5 }, { a: [throat, th], b: [taper, ch], thick: 0.5 },
+    { a: [taper, -ch], b: [channelEnd, -ch], thick: 0.5 }, { a: [taper, ch], b: [channelEnd, ch], thick: 0.5 },
     { a: [channelEnd, -ch], b: [channelEnd, ch], thick: 0.5 },
   ];
   // (the line a little into the channel, where they are in single file for good: at the throat
   // itself two pressed together can still change places)
-  const lineAt = throat + 5;
+  const lineAt = taper + 3;
   const line = frameAt(add(frame.p, mul(frame.t, lineAt)), end.yaw, slope);
   return { board: { frame, width: WIDTH, length, slope, walls, pegs: [], spinners: [], backWall: false, step: 0 }, line, throat, lineAt, channelEnd };
 }

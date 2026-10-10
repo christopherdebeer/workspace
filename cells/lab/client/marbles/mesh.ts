@@ -198,31 +198,132 @@ export function discMesh(out: number[], S = 24) {
     push(out, [0, 0, 0], n, 9, [0, 0]); push(out, p0, n, 9, [p0[0], p0[2]]); push(out, p1, n, 9, [p1[0], p1[2]]);
   }
 }
+/** a point, with its frame straight up: for things that stand or hang in the world */
+const UP: Frame = { p: [0, 0, 0], t: [1, 0, 0], n: [0, 1, 0], b: [0, 0, 1] };
+/** a cone (or a tapered cylinder) standing at a point: for shades and tips */
+function cone(out: number[], at: V3, r0: number, r1: number, h: number, mat: number, S = 14) {
+  for (let k = 0; k < S; k++) {
+    const a0 = (k / S) * Math.PI * 2, a1 = ((k + 1) / S) * Math.PI * 2;
+    const P = (a: number, r: number, y: number): V3 => [at[0] + Math.cos(a) * r, at[1] + y, at[2] + Math.sin(a) * r];
+    const n0: V3 = norm([Math.cos(a0), (r0 - r1) / h, Math.sin(a0)]), n1: V3 = norm([Math.cos(a1), (r0 - r1) / h, Math.sin(a1)]);
+    quad(out, P(a0, r0, 0), P(a1, r0, 0), P(a1, r1, h), P(a0, r1, h), n0, n1, n1, n0, mat, [a0 * r0, 0], [a1 * r0, 0], [a1 * r1, h], [a0 * r1, h]);
+  }
+}
 /**
- * Trestles under a board: an A-frame of timber at each end, its feet spread a little, a rail
- * between them near the ground and a brace up under the board; one more under the middle of a
- * long board.
+ * How a board is held up. Close to the floor it stands on cardboard boxes; higher, it hangs
+ * from the rafters by cords at its corners (thin and dark: close by they read as a hung
+ * installation, far off they vanish, as cords do).
  */
-export function trestleMesh(bd: Board, groundY: number, out: number[]) {
+export function supportMesh(bd: Board, groundY: number, rafterY: number, r: () => number, out: number[], overhead: number[]) {
   const half = bd.width / 2;
-  const ats = bd.length > 70 ? [7, bd.length / 2, bd.length - 7] : [7, bd.length - 7];
+  const ats = bd.length > 70 ? [6, bd.length / 2, bd.length - 6] : [6, bd.length - 6];
   for (const a of ats) {
-    const f = frameAlong(bd, a);
-    const feet: V3[] = [];
     for (const s of [-1, 1]) {
-      const top = toWorld(bd, a, -0.6, s * (half - 1.5));
+      const top = toWorld(bd, a, -0.6, s * (half - 1));
       const h = top[1] - groundY;
-      if (h < 2) continue;
-      const foot: V3 = add([top[0], groundY, top[2]], mul(f.b, s * Math.min(14, h * 0.12)));
-      feet.push(foot);
-      const dir = norm(sub(top, foot));
-      const lf: Frame = { p: foot, t: dir, n: norm(cross(dir, f.b)), b: f.b };
-      box(out, lf, foot, 0, -1.1, -1.1, h + 0.1, 1.1, 1.1, 4);
+      if (h < 70) {
+        // a stack of boxes from the floor up to the board (stopping short enough below its
+        // underside that no corner of a level box pokes up through the sloping floor)
+        let y = groundY;
+        const w = 16 + r() * 10;
+        const ceiling = top[1] - 1.2 - w * 0.5 * Math.tan(Math.abs(bd.slope));
+        while (y < ceiling - 1) {
+          const bh = Math.min(ceiling - y, 9 + r() * 9);
+          const cx = top[0] + (r() - 0.5) * 2, cz = top[2] + (r() - 0.5) * 2;
+          const yaw = (r() - 0.5) * 0.3;
+          const bf: Frame = { p: [0, 0, 0], t: [Math.cos(yaw), 0, Math.sin(yaw)], n: [0, 1, 0], b: [-Math.sin(yaw), 0, Math.cos(yaw)] };
+          boxM(out, linear(bf, [cx, y, cz]), -w / 2, 0, -w / 2, w / 2, bh, w / 2, { top: 1, bottom: 1, side: 1, end: 7 });
+          // (the tape across its top)
+          boxM(out, linear(bf, [cx, y, cz]), -w / 2, bh, -1.1, w / 2, bh + 0.05, 1.1, same(8));
+          y += bh;
+        }
+      } else {
+        // a cord up to the rafters, through a small eye in the rail
+        const at = toWorld(bd, a, WALL_H, s * (half + 0.3));
+        box(overhead, UP, [at[0], at[1], at[2]], -0.07, 0, -0.07, 0.07, rafterY - at[1], 0.07, 1);
+        cone(out, [at[0], at[1] - 0.2, at[2]], 0.5, 0.5, 0.4, 2, 8);
+      }
     }
-    if (feet.length === 2) {
-      const rf: Frame = { p: feet[0], t: norm(sub(feet[1], feet[0])), n: [0, 1, 0], b: f.t };
-      box(out, rf, add(feet[0], [0, 12, 0]), 0, -1, -0.9, len3(sub(feet[1], feet[0])), 1, 0.9, 4);
-    }
+  }
+}
+/**
+ * The rafters over the whole run: beams across it every so far, three along it, at one height
+ * above the top.
+ */
+export function rafterMesh(bounds: { min: V3; max: V3 }, y: number, out: number[]) {
+  const [x0, z0] = [bounds.min[0] - 160, bounds.min[2] - 160], [x1, z1] = [bounds.max[0] + 160, bounds.max[2] + 160];
+  const f = UP;
+  for (let x = x0; x <= x1; x += 150) box(out, f, [x, y, z0], -4, 0, 0, 4, 9, z1 - z0, 4);
+  for (const z of [z0, z1, (z0 + z1) / 2]) box(out, f, [x0, y + 9, z], 0, 0, -5, x1 - x0, 11, 5, 4);
+}
+/** A pendant lamp over a board: a cord from the rafters, an enamel shade, a bulb glowing in it. */
+export function lampMesh(bd: Board, rafterY: number, out: number[]) {
+  const at = toWorld(bd, bd.length / 2, 0, 0);
+  const y = at[1] + 70;
+  box(out, UP, [at[0], y, at[2]], -0.1, 0, -0.1, 0.1, rafterY - y, 0.1, 12);
+  cone(out, [at[0], y - 1, at[2]], 1.2, 1.2, 1.5, 12, 10);
+  cone(out, [at[0], y - 9, at[2]], 9, 1.6, 8.5, 15, 18);
+  cone(out, [at[0], y - 10.5, at[2]], 2.2, 0.6, 3.5, 16, 10);
+}
+/** Bunting across a board: a pencil at each side, a string between, little flags along it. */
+export function buntingMesh(bd: Board, at: number, r: () => number, out: number[]) {
+  const half = bd.width / 2;
+  const f = frameAlong(bd, at);
+  const posts: V3[] = [];
+  for (const s of [-1, 1]) {
+    const foot = toWorld(bd, at, WALL_H, s * (half + 0.3));
+    cone(out, foot, 0.4, 0.4, 16, 18, 8);
+    cone(out, [foot[0], foot[1] + 16, foot[2]], 0.4, 0.05, 1.6, 12, 8);
+    posts.push([foot[0], foot[1] + 15, foot[2]]);
+  }
+  const d = sub(posts[1], posts[0]);
+  const L = Math.hypot(d[0], d[1], d[2]);
+  const n = Math.floor(L / 5);
+  const hue0 = r();
+  for (let i = 0; i < n; i++) {
+    const t0 = (i + 0.15) / n, t1 = (i + 0.85) / n, tm = (i + 0.5) / n;
+    const sag = (tt: number) => 4 * Math.sin(tt * Math.PI);
+    const A = add(add(posts[0], mul(d, t0)), [0, -sag(t0), 0]), B = add(add(posts[0], mul(d, t1)), [0, -sag(t1), 0]);
+    const C = add(add(posts[0], mul(d, tm)), [0, -sag(tm) - 4.5, 0]);
+    const hue = (hue0 + i * 0.23) % 1;
+    const nn = f.t;
+    quad(out, A, B, C, C, nn, nn, nn, nn, 14, [hue, 0], [hue, 0], [hue, 1], [hue, 1]);
+    quad(out, B, A, C, C, mul(nn, -1), mul(nn, -1), mul(nn, -1), mul(nn, -1), 14, [hue, 0], [hue, 0], [hue, 1], [hue, 1]);
+  }
+  // the string, in pieces along the sag
+  for (let i = 0; i < 8; i++) {
+    const t0 = i / 8, t1 = (i + 1) / 8;
+    const A = add(add(posts[0], mul(d, t0)), [0, -4 * Math.sin(t0 * Math.PI), 0]), B = add(add(posts[0], mul(d, t1)), [0, -4 * Math.sin(t1 * Math.PI), 0]);
+    const dir = norm(sub(B, A));
+    const sf: Frame = { p: A, t: dir, n: norm(cross(dir, [0, 1, 0])), b: [0, 0, 0] };
+    sf.b = norm(cross(sf.t, sf.n));
+    box(out, sf, A, 0, -0.06, -0.06, Math.hypot(...sub(B, A)), 0.06, 0.06, 12);
+  }
+}
+/** A chequered flag on a pole at the line, and a start banner's poles at the gate. */
+export function flagMesh(at: V3, out: number[]) {
+  cone(out, at, 0.35, 0.35, 22, 12, 8);
+  const top: V3 = [at[0], at[1] + 22, at[2]];
+  const f: Frame = { p: top, t: [1, 0, 0], n: [0, 0, 1], b: [0, -1, 0] };
+  boxM(out, linear(f, top), 0, 0, 0, 9, 0.08, 6, same(5));
+}
+/**
+ * What lies about on the floor under the run: offcuts of cardboard, a few boxes, a roll of
+ * tape, pencils, as a workshop's floor has after a build; only where the run is low enough for
+ * the floor to matter.
+ */
+export function litterMesh(bounds: { min: V3; max: V3 }, groundY: number, r: () => number, out: number[]) {
+  const n = 60;
+  for (let i = 0; i < n; i++) {
+    const x = bounds.min[0] - 80 + r() * (bounds.max[0] - bounds.min[0] + 160);
+    const z = bounds.min[2] - 80 + r() * (bounds.max[2] - bounds.min[2] + 160);
+    const yaw = r() * Math.PI * 2;
+    const f: Frame = { p: [0, 0, 0], t: [Math.cos(yaw), 0, Math.sin(yaw)], n: [0, 1, 0], b: [-Math.sin(yaw), 0, Math.cos(yaw)] };
+    const k = r();
+    if (k < 0.55) boxM(out, linear(f, [x, groundY, z]), 0, 0, 0, 8 + r() * 30, 0.5, 4 + r() * 16, { top: 1, bottom: 1, side: 7, end: 7 });
+    else if (k < 0.75) { const w = 14 + r() * 16, h = 8 + r() * 12; boxM(out, linear(f, [x, groundY, z]), 0, 0, 0, w, h, w * (0.7 + r() * 0.5), { top: 1, bottom: 1, side: 1, end: 7 }); }
+    else if (k < 0.88) cone(out, [x, groundY, z], 3.2, 3.2, 2.2, 8, 16);
+    else box(out, f, [x, groundY + 0.35, z], 0, -0.35, -0.35, 17, 0.35, 0.35, 18);
   }
 }
 const len3 = (v: V3) => Math.hypot(v[0], v[1], v[2]);

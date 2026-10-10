@@ -21,7 +21,8 @@ the line is build mode: three boards on offer; pick one and the run grows downwa
 
 The row across the top is the order, first on the left: yours is the big one, named, and the
 ones in are ringed; tap any to follow it. The clock beside it has your place and your gap.
-Nothing else sits over the board. The marbles are a roster, as a tournament's: all glass and all
+Nothing else sits over the board. When all are in, each marble's name and time fades in beside
+it, to the right of the channel, which is barely wider than a marble, so the file is straight. The marbles are a roster, as a tournament's: all glass and all
 the same size, so the run and the knocks decide it and not the marble; each its own look (a
 cat's eye, a swirl, speckled, banded), its own colours, its own name. The pattern is in the
 glass, so it turns as the marble rolls.
@@ -89,8 +90,12 @@ slope.
   roll-off at the end. The cardboard is built: paper skins about a corrugated core, seen
   wherever a piece was cut (the top of every strip, its rounded ends, the edge of a board, the
   side of a peg), glue seams at every foot, tape at the joins, fibres along the way a piece was
-  made; trestles of timber hold the run up over a workshop floor, and the room around (a dark
-  floor, warm walls, a broad window) is what the glass reflects. A marble is glass seen into:
+  made. The run is a homemade installation in a workshop: near the floor the boards stand on
+  stacks of taped boxes, higher up they hang by cords from the rafters; pendant lamps with
+  enamel shades hang over every other board, bunting on pencils crosses some, a chequered flag
+  stands at the line and poles at the gate; offcuts, boxes, tape and pencils lie about the
+  floor; dust drifts in the light. The room around (a dark floor, warm walls, a broad window)
+  is what the glass reflects. A marble is glass seen into:
   the view refracts in, crosses the sphere and refracts out, and what it then meets is read from
   the scene already drawn (the board, magnified and bent); the ribbons and swirls are marched
   through in the marble's own space, so they have depth and turn as it rolls; bubbles catch the

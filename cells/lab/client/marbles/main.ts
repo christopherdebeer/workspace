@@ -16,8 +16,8 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Course, MATERIALS, marble, order, step, type Impact, type Marble, type Material } from './physics';
-import { boardMesh, discMesh, gateMesh, groundMesh, lineMesh, ringMesh, sphereMesh, spinnerMesh, trestleMesh, VSTRIDE } from './mesh';
-import { FIELD_SIZE, MARBLE_R, TOP, WIDTH, add, build, candidates, cross, decode, dirOf, encode, frameAlong, frameAt, len, mul, norm, sub, toLocal, type Board, type Frame, type Section, type V3 } from './track';
+import { boardMesh, buntingMesh, discMesh, flagMesh, gateMesh, groundMesh, lampMesh, lineMesh, litterMesh, rafterMesh, ringMesh, sphereMesh, spinnerMesh, supportMesh, VSTRIDE } from './mesh';
+import { FIELD_SIZE, MARBLE_R, TOP, WALL_H, WIDTH, add, build, candidates, cross, decode, dirOf, encode, frameAlong, frameAt, len, mul, norm, sub, toLocal, toWorld, type Board, type Frame, type Section, type V3 } from './track';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -73,6 +73,32 @@ float shadow(vec3 n) {
     lit += s.z - bias > d ? 0. : 1.;
   }
   return lit / 9.;
+}`;
+
+/** dust in the air: motes drifting in the light, kept in a box about the eye (wrapped, so it is never left) */
+const DUST_VS = `#version 300 es
+in vec3 aPos;
+uniform mat4 uVP;
+uniform vec3 uEye, uSun;
+uniform float uTime;
+out float vA;
+void main() {
+  float id = aPos.x * 7.1 + aPos.z * 3.3;
+  vec3 drift = vec3(sin(uTime * .21 + id) * 6., -uTime * 1.6 + sin(uTime * .17 + id * 2.) * 3., cos(uTime * .19 + id) * 6.);
+  vec3 p = mod(aPos + drift - uEye + 150., 300.) - 150. + uEye;
+  vec4 c = uVP * vec4(p, 1.);
+  gl_Position = c;
+  float d = length(p - uEye);
+  gl_PointSize = clamp(90. / max(d, 1.), 1., 4.);
+  vA = (1. - smoothstep(60., 150., d)) * smoothstep(3., 12., d) * .7;
+}`;
+const DUST_FS = `#version 300 es
+precision highp float;
+in float vA;
+out vec4 o;
+void main() {
+  float r = length(gl_PointCoord - .5) * 2.;
+  o = vec4(1., .95, .85, vA * (1. - smoothstep(.3, 1., r)));
 }`;
 
 const SKY_VS = `#version 300 es
@@ -203,8 +229,22 @@ void main() {
   } else if (vMat < 11.5) {
     // glue: dark, a little glossy
     base = vec3(.40, .32, .23); rough = .45;
-  } else {
+  } else if (vMat < 12.5) {
     base = vec3(.09, .09, .10); rough = .55;
+  } else if (vMat < 14.5) {
+    // a flag of the bunting: its colour by its hue, paper
+    float h = vUV.x * 6.;
+    vec3 col = clamp(abs(mod(h + vec3(0., 4., 2.), 6.) - 3.) - 1., 0., 1.);
+    base = mix(vec3(.5), col, .85) * .9; rough = .8;
+  } else if (vMat < 15.5) {
+    // an enamel shade: green outside, cream within
+    base = gl_FrontFacing ? vec3(.12, .30, .22) : vec3(.9, .86, .78); rough = .25;
+  } else if (vMat < 16.5) {
+    // the bulb: it glows
+    o = vec4(tonemap(vec3(1., .9, .7) * 5.), 1.); return;
+  } else {
+    // a pencil: yellow, hexagonal in effect from its facets
+    base = vec3(.85, .62, .12); rough = .5;
   }
   // light: the sun through the window, in or out of shadow; the room from around
   float ndl = max(dot(n, uSun), 0.);
@@ -346,6 +386,22 @@ function program(vs: string, fs: string): WebGLProgram {
   return p;
 }
 const skyProg = program(SKY_VS, SKY_FS);
+const dustProg = program(DUST_VS, DUST_FS);
+const dustVao = gl.createVertexArray()!;
+const DUST_N = 700;
+{
+  const pts = new Float32Array(DUST_N * 3);
+  const r = seeded(0xd057);
+  for (let i = 0; i < DUST_N * 3; i++) pts[i] = r() * 300;
+  const buf = gl.createBuffer()!;
+  gl.bindVertexArray(dustVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, pts, gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(dustProg, 'aPos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+}
 const shadowProg = program(SHADOW_VS, SHADOW_FS);
 const prog = program(VS, FS);
 const glassProg = program(VS, GLASS_FS);
@@ -397,8 +453,11 @@ const sectionMeshes: Mesh[] = [];
 let finishMesh: Mesh | null = null;
 const gateMesh_ = upload(new Float32Array(0), true);
 let supportMesh_: Mesh | null = null;
+/** what hangs overhead (rafters, cords, lamps): drawn, but casting no shadow, or the sun would be shut out */
+let overheadMesh_: Mesh | null = null;
 let groundMesh_: Mesh | null = null;
 let groundY = 0;
+let rafterY = 0;
 const SPHERE = upload((() => { const v: number[] = []; sphereMesh(v); return v; })());
 const RING = upload((() => { const v: number[] = []; ringMesh(v); return v; })());
 const DISC = upload((() => { const v: number[] = []; discMesh(v); return v; })());
@@ -429,8 +488,34 @@ function rebuildCourse() {
   groundMesh_ = upload(gv);
   if (supportMesh_) drop(supportMesh_);
   const tv: number[] = [];
-  for (const s of sections) for (const b of s.boards) trestleMesh(b, groundY, tv);
-  trestleMesh(course.fin.board, groundY, tv);
+  const r = seeded(hash(seed, 0xdec0));
+  // the run's bounds, the rafters above the top of it, cords or boxes under every board
+  const bounds = { min: [...TOP.p] as V3, max: [...TOP.p] as V3 };
+  const allBoards = [...sections.flatMap((s) => s.boards), course.fin.board];
+  for (const b of allBoards) for (const a of [0, b.length]) for (const c of [-24, 24]) {
+    const q = toWorld(b, a, 0, c);
+    for (let i = 0; i < 3; i++) { bounds.min[i] = Math.min(bounds.min[i], q[i]); bounds.max[i] = Math.max(bounds.max[i], q[i]); }
+  }
+  rafterY = TOP.p[1] + 150;
+  const ov: number[] = [];
+  rafterMesh(bounds, rafterY, ov);
+  const parts = params.get('parts');
+  const want = (k: string) => !parts || parts.split(',').includes(k);
+  for (const b of allBoards) supportMesh(b, groundY, rafterY, r, want('boxes') ? tv : [], ov);
+  sections.forEach((s, i) => {
+    const b = s.boards[0];
+    if (i % 2 === 1) lampMesh(b, rafterY, ov);
+    if (i % 3 === 1 && want('bunting')) buntingMesh(b, 10 + r() * (b.length - 20), r, tv);
+  });
+  lampMesh(course.fin.board, rafterY, ov);
+  if (overheadMesh_) drop(overheadMesh_);
+  overheadMesh_ = upload(ov);
+  const lp = course.fin.line.p, lf = course.fin.line;
+  if (want('flags')) {
+    flagMesh(add(add(lp, mul(lf.b, WIDTH / 2 + 2)), mul(lf.n, WALL_H)), tv);
+    if (sections.length) { const g = sections[0].boards[0]; for (const sd of [-1, 1]) flagMesh(toWorld(g, 1, WALL_H, sd * (WIDTH / 2 + 2)), tv); }
+  }
+  if (want('litter')) litterMesh(bounds, groundY, r, tv);
   supportMesh_ = upload(tv);
   save();
 }
@@ -620,7 +705,9 @@ function updateCamera(dt: number) {
     const el = Math.max(0.6, Math.min(1.4, 1.12 + orbit.pitch * 0.5));
     const fwd = norm(add(mul(f.b, Math.cos(el)), mul(f.n, -Math.sin(el))));
     const wantEye = sub(centre, mul(fwd, dist));
-    for (let i = 0; i < 3; i++) { eye[i] += (wantEye[i] - eye[i]) * k0; look[i] += (centre[i] - look[i]) * k0; }
+    // (the page's first moments: straight there, not a swing in from nowhere)
+    const kk = time < 0.3 ? 1 : k0;
+    for (let i = 0; i < 3; i++) { eye[i] += (wantEye[i] - eye[i]) * kk; look[i] += (centre[i] - look[i]) * kk; }
     camYaw = Math.atan2(f.t[0], f.t[2]);
     orbit.pitch *= Math.exp(-dt * 0.8);
     return;
@@ -983,7 +1070,7 @@ function visible(): Draw[] {
     } else out.push({ mesh: sectionMeshes[i] });
   });
   if (finishMesh && view !== 'build') out.push({ mesh: finishMesh });
-  if (supportMesh_) out.push({ mesh: supportMesh_ });
+  if (supportMesh_ && !params.has("nosupport")) out.push({ mesh: supportMesh_ });
   return out;
 }
 interface Draw { mesh: Mesh; model?: Float32Array; normal?: Float32Array; tint?: V3; tint2?: V3; style?: [number, number, number, number]; mat?: number; ghost?: boolean }
@@ -1129,6 +1216,7 @@ function frame(now: number) {
   gl.bindTexture(gl.TEXTURE_2D, shadowTex);
   gl.enable(gl.CULL_FACE);
   if (groundMesh_) drawMeshes([{ mesh: groundMesh_ }], false);
+  if (overheadMesh_) drawMeshes([{ mesh: overheadMesh_ }], false);
   gl.disable(gl.CULL_FACE);
   drawMeshes(live, false);
   // under each marble, a soft dark: the contact's own shadow (and the marker under yours)
@@ -1197,7 +1285,24 @@ function frame(now: number) {
     gl.depthMask(true);
     gl.disable(gl.BLEND);
   }
+  // the dust in the air, over everything
+  if (!preview) {
+    gl.useProgram(dustProg);
+    gl.uniformMatrix4fv(u(dustProg, 'uVP'), false, vp);
+    gl.uniform3fv(u(dustProg, 'uEye'), eye);
+    gl.uniform3fv(u(dustProg, 'uSun'), SUN);
+    gl.uniform1f(u(dustProg, 'uTime'), time);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.bindVertexArray(dustVao);
+    gl.drawArrays(gl.POINTS, 0, DUST_N);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.useProgram(prog);
+  }
   gl.bindVertexArray(null);
+  showNames();
   // 4. to the screen
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msFb);
   gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
@@ -1216,6 +1321,28 @@ function frame(now: number) {
 /** The board: the order, the gaps, the time. */
 let boardAt = 0;
 let boardHtml = '';
+/** At the finish: each marble's name and time beside it, to the right of the channel, fading in. */
+let namesOn = false;
+function showNames() {
+  const on = view === 'race' && phase === 'done';
+  if (on !== namesOn) {
+    namesOn = on;
+    $('names').classList.toggle('on', on);
+    if (on) {
+      const o = order(marbles);
+      $('names').innerHTML = o.map((m, i) => `<div class="name" data-name="${m.name}" style="transition-delay:${i * 90}ms"><b>${i + 1}</b> ${m.name} <em>${m.finished.toFixed(1)} s</em></div>`).join('');
+    }
+  }
+  if (!on) return;
+  const f = course.fin.board.frame;
+  for (const el of $('names').children as unknown as HTMLElement[]) {
+    const m = marbles.find((x) => x.name === el.dataset.name);
+    if (!m) continue;
+    const c = project(add(m.p, mul(f.b, -MARBLE_R * 5)));
+    if (!c) { el.style.opacity = '0'; continue; }
+    el.style.transform = `translate(${Math.round(c[0])}px, ${Math.round(c[1])}px) translateY(-50%)`;
+  }
+}
 function showBoard() {
   if (performance.now() - boardAt < 120) return;
   boardAt = performance.now();
