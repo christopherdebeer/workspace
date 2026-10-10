@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-exp="squishy">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#8a7a62">
+  <title>Squishy</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #9a8c78; overflow: hidden; touch-action: none; }
+    body { color: #fff; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    button { all: unset; cursor: pointer; box-sizing: border-box; }
+    #top { position: fixed; left: 0; right: 0; top: 0; height: calc(max(12px, env(safe-area-inset-top)) + 70px); background: linear-gradient(to bottom, rgba(30,22,14,.5), rgba(30,22,14,0)); pointer-events: none; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; }
+    nav a { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; padding: 4px 2px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); text-decoration: none; }
+    #status { position: fixed; right: 14px; top: max(12px, env(safe-area-inset-top)); font-size: 13px; letter-spacing: .06em; text-shadow: 0 1px 3px rgba(0,0,0,.6); font-variant-numeric: tabular-nums; }
+    #hands { position: fixed; left: 0; right: 0; bottom: 0; padding: 28px 14px max(12px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; background: linear-gradient(to top, rgba(30,22,14,.55), rgba(30,22,14,.25) 60%, rgba(30,22,14,0)); }
+    #hands button, #hands a { pointer-events: auto; }
+    #hint { min-height: 20px; padding: 0 10px; text-align: center; font-size: 15px; font-style: italic; text-shadow: 0 1px 3px rgba(0,0,0,.6); opacity: 0; transition: opacity .6s; }
+    #hint.on { opacity: 1; }
+    .pills { display: flex; gap: 10px; }
+    .pills button { height: 50px; border-radius: 25px; line-height: 50px; padding: 0 22px; font-size: 16px; letter-spacing: .08em; font-variant: small-caps; background: rgba(255,250,242,.86); color: #3a2e22; box-shadow: 0 4px 16px rgba(0,0,0,.18); transition: transform .08s; }
+    .pills button:active { transform: scale(.96); }
+    #next { display: none; background: #3a2e22; color: #fff6e8; }
+    .home #next { display: inline-block; }
+    .words { display: flex; gap: 4px 16px; align-items: baseline; flex-wrap: wrap; justify-content: center; }
+    .words button, .words a, .words span { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; padding: 6px 2px; color: #fff; opacity: .92; text-shadow: 0 1px 3px rgba(0,0,0,.6); text-decoration: none; }
+    .preview #top, .preview nav, .preview #status, .preview #hands { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="play"></canvas>
+  <canvas id="ui" style="pointer-events:none"></canvas>
+  <div id="top"></div>
+  <nav><a href="/">← lab</a></nav>
+  <div id="status"></div>
+  <div id="hands">
+    <div id="hint"></div>
+    <div class="pills"><button id="again">again</button><button id="next">next level</button></div>
+    <div class="words"><button id="prev">‹</button><span id="level">level 1</span><button id="nextw">›</button><button id="sound">sound on</button><a href="{{readme}}">notes</a></div>
+  </div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

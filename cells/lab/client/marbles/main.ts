@@ -878,8 +878,9 @@ let marbles: Marble[] = LOOKS.map((l) => marble(l.name, MATERIALS[0], MARBLE_R, 
 /** yours: the one the camera follows (its name) */
 let mine = LOOKS[0].name;
 /** the camera: on yours, on the leader, or on the finish (the channel, where they come to rest) */
-let follow: 'mine' | 'leader' | 'finish' = 'mine';
-const CAMS: Array<typeof follow> = ['mine', 'leader', 'finish'];
+type Follow = 'mine' | 'leader' | 'finish';
+let follow: Follow = 'mine';
+const CAMS: Follow[] = ['mine', 'leader', 'finish'];
 let raceTime = 0;
 let racing = false;
 /** the race: lining up behind the gate (tap a marble to make it yours, tap to go), running, or all in */
@@ -1617,7 +1618,7 @@ function frame(now: number) {
   gl.uniformMatrix4fv(u(shadowProg, 'uLightVP'), false, lightVP);
   drawMeshes(live, true);
   gl.cullFace(gl.BACK);
-  for (const b of balls) { gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, b.model); gl.bindVertexArray(SPHERE.svao); gl.drawArrays(gl.TRIANGLES, 0, SPHERE.count); }
+  for (const b of balls) { gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, b.model!); gl.bindVertexArray(SPHERE.svao); gl.drawArrays(gl.TRIANGLES, 0, SPHERE.count); }
   gl.disable(gl.CULL_FACE);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 

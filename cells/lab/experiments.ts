@@ -122,6 +122,21 @@ export const EXPERIMENTS: Experiment[] = [
     ],
   },
   {
+    id: 'squishy',
+    title: 'Squishy',
+    group: 'Play',
+    blurb: 'A third-person platformer in which you are a dumpling. You don\'t walk, you flick: drag back and let go, and it flies the other way, as hard as you pulled, the dotted line showing where it will land. It is a soft body: it squashes when it lands, bulges, wobbles back, dents on an edge, sticks to a wall for a moment, and rights itself like a roly-poly. Up stacks of bamboo steamers, tea tins, a chopping board on jars, a slippery plate, a bouncy mango pudding and a turning lazy Susan, to the golden steamer: home.',
+    page: 'static/squishy.html',
+    preview: 'preview',
+    readme: 'static/squishy.md',
+    presets: [
+      { label: 'level 1', query: 'level=1' },
+      { label: 'level 4', query: 'level=4' },
+      { label: 'level 8', query: 'level=8' },
+      { label: 'watch', query: 'auto&level=3' },
+    ],
+  },
+  {
     id: 'marbles',
     title: 'Marble Run',
     group: 'Play',
