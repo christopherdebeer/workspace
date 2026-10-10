@@ -50,6 +50,19 @@ whatever a marble meets, it slides off to one side or the other, as on a real bo
 The run is its seed and your choices, in the address (`?seed=…&run=0.2.1.…`): share it, and it
 is the same run for anyone. `a new run` starts another seed. `?marble=steel` follows that one.
 
+## Themes
+
+`atelier` is the workshop: kraft-paper boards on taped boxes and cords, bunting, daylight by
+the window. `nocturne` is an observatory at night: ink-blue lacquer with a star chart drawn in
+gold, brass-bound strips and brass pegs, dark oak posts, the moon low in the windows and the
+pendant lamps lit. The theme is where the run is and what it's made of (`theme.ts`): the key
+light, the room's colours, the lamps, the material of every part (colour, roughness,
+metalness, and a style: paper fibre, corrugation, lacquer, brushed brass, oak, leather,
+planks, stone, glaze, chart), the supports, what stands about, the haze and the dust. The
+course, the physics, the race and the camera know nothing of it: tap `atelier`/`nocturne`
+under a race and the race goes on exactly as it was, in another place. The scenery's
+randomness has its own seed, so it never changes the course. `?theme=nocturne` in the address.
+
 ## The solver
 
 Rigid spheres with spin, in centimetres and seconds, in many small steps. Each step a marble

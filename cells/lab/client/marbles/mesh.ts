@@ -214,13 +214,21 @@ function cone(out: number[], at: V3, r0: number, r1: number, h: number, mat: num
  * from the rafters by cords at its corners (thin and dark: close by they read as a hung
  * installation, far off they vanish, as cords do).
  */
-export function supportMesh(bd: Board, groundY: number, rafterY: number, r: () => number, out: number[], overhead: number[]) {
+export function supportMesh(bd: Board, groundY: number, rafterY: number, r: () => number, out: number[], overhead: number[], kind: 'boxes' | 'columns' = 'boxes') {
   const half = bd.width / 2;
   const ats = bd.length > 70 ? [6, bd.length / 2, bd.length - 6] : [6, bd.length - 6];
   for (const a of ats) {
     for (const s of [-1, 1]) {
       const top = toWorld(bd, a, -0.6, s * (half - 1));
       const h = top[1] - groundY;
+      if (kind === 'columns') {
+        // a turned post from the floor, a brass collar at its top and a brass foot
+        const foot: V3 = [top[0], groundY, top[2]];
+        cone(out, foot, 2.6, 2.2, 1.2, 2, 14);
+        cone(out, [foot[0], foot[1] + 1.2, foot[2]], 1.5, 1.5, Math.max(0.1, h - 3.2), 4, 12);
+        cone(out, [foot[0], top[1] - 2, foot[2]], 1.9, 1.9, 1.4, 2, 14);
+        continue;
+      }
       if (h < 70) {
         // a stack of boxes from the floor up to the board (stopping short enough below its
         // underside that no corner of a level box pokes up through the sloping floor)
@@ -327,6 +335,46 @@ export function litterMesh(bounds: { min: V3; max: V3 }, groundY: number, r: () 
   }
 }
 const len3 = (v: V3) => Math.hypot(v[0], v[1], v[2]);
+/**
+ * The room: four walls about the run, from the floor to above the rafters, with tall windows
+ * in them (their panes lit from beyond); the floor is the ground mesh.
+ */
+export function roomMesh(bounds: { min: V3; max: V3 }, groundY: number, topY: number, out: number[]) {
+  const m = 260;
+  const x0 = bounds.min[0] - m, x1 = bounds.max[0] + m, z0 = bounds.min[2] - m, z1 = bounds.max[2] + m;
+  const h = topY - groundY + 60;
+  const wall = (a: V3, b: V3, inward: V3) => {
+    // (a wall from a to b along the floor, up h; its (u, v) along and up; windows every so far)
+    const d = sub(b, a);
+    const L = Math.hypot(d[0], d[2]);
+    const t = mul(d, 1 / L);
+    const P = (s: number, y: number): V3 => add(add(a, mul(t, s)), [0, y, 0]);
+    quad(out, P(0, 0), P(0, h), P(L, h), P(L, 0), inward, inward, inward, inward, 19, [0, 0], [0, h], [L, h], [L, 0]);
+    const w = 80, wh = 170, sill = 70;
+    for (let s = 110; s + w < L - 60; s += 230) {
+      const off = mul(inward, 0.6);
+      const A = add(P(s, sill), off), B = add(P(s, sill + wh), off), C = add(P(s + w, sill + wh), off), D = add(P(s + w, sill), off);
+      quad(out, A, B, C, D, inward, inward, inward, inward, 20, [0, 0], [0, 1], [1, 1], [1, 0]);
+      // the frame about it, and a bar across and one up the middle
+      const F = mul(inward, 1.2);
+      const bar = (a2: V3, b2: V3, th: number) => {
+        const dd = sub(b2, a2);
+        const l = Math.hypot(...dd);
+        const dir = mul(dd, 1 / l);
+        const bf: Frame = { p: a2, t: dir, n: inward, b: norm(cross(dir, inward)) };
+        box(out, bf, add(a2, F), 0, -0.6, -th, l, 0.6, th, 4);
+      };
+      bar(A, B, 2); bar(D, C, 2); bar(B, C, 2); bar(A, D, 2);
+      bar(add(P(s + w / 2, sill), off), add(P(s + w / 2, sill + wh), off), 1);
+      bar(add(P(s, sill + wh * 0.6), off), add(P(s + w, sill + wh * 0.6), off), 1);
+    }
+  };
+  const y = groundY;
+  wall([x0, y, z0], [x1, y, z0], [0, 0, 1]);
+  wall([x1, y, z0], [x1, y, z1], [-1, 0, 0]);
+  wall([x1, y, z1], [x0, y, z1], [0, 0, -1]);
+  wall([x0, y, z1], [x0, y, z0], [1, 0, 0]);
+}
 /** The workshop floor: a big square far below. */
 export function groundMesh(centre: V3, y: number, size: number, out: number[]) {
   const n: V3 = [0, 1, 0];

@@ -39,6 +39,16 @@ await withWood(async (lab) => {
   s = await lab.state(page);
   console.log('4 s', JSON.stringify({ order: s.order.slice(0, 3), eye: s.eye }), await lab.shot(page, 'marbles-race'));
   c.ok('the marbles are on their way', s.order[0].progress > 100 && s.order[0].speed > 20, s.order[0]);
+  // a change of theme under the race: the scenery changes, the race does not
+  const before = await lab.state(page);
+  await page.click('#theme');
+  await frames();
+  s = await lab.state(page);
+  c.ok('the theme changed to nocturne', s.theme === 'nocturne' && before.theme === 'atelier', { before: before.theme, after: s.theme });
+  c.ok('and the race went on as it was', s.racing && s.raceTime >= before.raceTime && s.order.map((o) => o.name).slice(0, 3).join() === before.order.map((o) => o.name).slice(0, 3).join(), { before: before.order.slice(0, 3).map((o) => o.name), after: s.order.slice(0, 3).map((o) => o.name) });
+  await lab.shot(page, 'marbles-nocturne');
+  await page.click('#theme');
+  await frames();
   await until(9.0);
   s = await lab.state(page);
   console.log('9 s', JSON.stringify({ order: s.order.slice(0, 3) }), await lab.shot(page, 'marbles-race-2'));

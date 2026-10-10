@@ -20,7 +20,7 @@
     #order { position: fixed; left: 10px; right: 10px; top: calc(max(12px, env(safe-area-inset-top)) + 34px); display: flex; justify-content: center; align-items: flex-start; gap: 5px; }
     #order .dot { width: 22px; height: 34px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
     #order .dot i { width: 14px; height: 14px; border-radius: 50%; display: block; box-shadow: 0 1px 3px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.35); transition: width .2s, height .2s; margin-top: 3px; }
-    #order .dot.me i { width: 20px; height: 20px; margin-top: 0; box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,.5); }
+    #order .dot.me i { width: 20px; height: 20px; margin-top: 0; box-shadow: 0 0 0 2px var(--accent, #fff), 0 1px 4px rgba(0,0,0,.5); }
     #order .dot span { font-size: 10px; letter-spacing: .06em; font-variant: small-caps; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); white-space: nowrap; opacity: 0; }
     #order .dot.me span { opacity: 1; }
     #order .dot.in i { box-shadow: 0 1px 3px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.35), 0 0 0 1px rgba(255,255,255,.6); }
@@ -73,7 +73,7 @@
   <div id="offers"></div>
   <div id="hands">
     <div id="hint"></div>
-    <div class="words"><button id="race" class="race-only">from the top</button><button id="here" class="race-only">from the end</button><button id="build">build</button><button id="new">a new run</button><button id="sound">sound · on</button><a href="{{readme}}">notes</a></div>
+    <div class="words"><button id="race" class="race-only">from the top</button><button id="here" class="race-only">from the end</button><button id="build">build</button><button id="new">a new run</button><button id="sound">sound · on</button><button id="theme">atelier</button><a href="{{readme}}">notes</a></div>
     <div class="pills"><button id="go" class="lineup-only">go</button><button id="follow" class="chase-only">following</button><button id="add" class="build-only">add it</button><button id="undo" class="build-only">take the last off</button></div>
     <span id="seed"></span>
   </div>

@@ -16,13 +16,16 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Course, MATERIALS, marble, order, step, type Impact, type Marble, type Material } from './physics';
-import { boardMesh, buntingMesh, discMesh, flagMesh, gateMesh, groundMesh, lampMesh, lineMesh, litterMesh, rafterMesh, ringMesh, sphereMesh, spinnerMesh, supportMesh, VSTRIDE } from './mesh';
+import { boardMesh, buntingMesh, discMesh, flagMesh, gateMesh, groundMesh, lampMesh, lineMesh, litterMesh, rafterMesh, ringMesh, roomMesh, sphereMesh, spinnerMesh, supportMesh, VSTRIDE } from './mesh';
+import { THEMES, matTables, themeById, type Theme } from './theme';
 import { FIELD_SIZE, MARBLE_R, TOP, WALL_H, WIDTH, add, build, candidates, cross, decode, dirOf, encode, frameAlong, frameAt, len, mul, norm, sub, toLocal, toWorld, type Board, type Frame, type Section, type V3 } from './track';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
 const auto = preview || params.has('auto');
 const STORE = 'marbles:v1';
+/** where the run is and what it's made of (`theme.ts`): from the address, or as last chosen */
+let theme: Theme = themeById(params.get('theme') ?? (() => { try { return localStorage.getItem(STORE + ':theme'); } catch { return null; } })());
 
 const canvas = document.getElementById('run') as HTMLCanvasElement;
 // (drawn to our own multisampled buffer, resolved for the glass to look through, then put on the screen)
@@ -33,7 +36,15 @@ if (auto) document.body.classList.add('preview');
 const $ = (id: string) => document.getElementById(id)!;
 
 // ─── shaders ────────────────────────────────────────────────────────────────────────────────────
-/** what every pass shares: hashes and noise, the sun's shadow, the workshop around, the output transfer */
+/**
+ * what every pass shares: hashes and noise, the key light and the room (all from the theme:
+ * `theme.ts`), the lamps, the output transfer
+ */
+const LIGHT_UNIFORMS = `
+uniform vec3 uKey, uKeyCol, uWin, uWinCol, uEnvFloor, uEnvWall, uEnvCeil, uHaze, uLampCol;
+uniform float uHazeNear, uNight, uDust;
+/** the four nearest lamps: where, and how strong (0: none) */
+uniform vec4 uLamps[4];`;
 const COMMON = `
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
 float noise(vec3 p) {
@@ -44,14 +55,14 @@ float noise(vec3 p) {
   return mix(mix(mix(a, b, f.x), mix(c, d, f.x), f.y), mix(mix(e, g, f.x), mix(h, k, f.x), f.y), f.z);
 }
 float fbm(vec3 p) { return noise(p) * .5 + noise(p * 2.03 + 11.) * .25 + noise(p * 4.07 + 23.) * .125; }
-/** the workshop about the run, by direction: a dark floor, warm grey walls, a pale ceiling, and
-    the big window the light comes in by (broad, so it shows as a shape in the glass) */
+/** the room about the run, by direction: the floor below, the walls around, the ceiling above,
+    the window the key light comes in by (broad, so it shows as a shape in the glass), the light itself */
 vec3 env(vec3 d) {
-  vec3 c = mix(vec3(.20, .17, .14), vec3(.46, .45, .43), smoothstep(-.35, .45, d.y));
-  c = mix(c, vec3(.56, .56, .55), smoothstep(.45, 1., d.y));
+  vec3 c = mix(uEnvFloor, uEnvWall, smoothstep(-.35, .45, d.y));
+  c = mix(c, uEnvCeil, smoothstep(.45, 1., d.y));
   float w = dot(d, uWin);
-  c += vec3(1., .97, .9) * (2.6 * smoothstep(.80, .87, w) + .4 * pow(max(w, 0.), 6.));
-  c += vec3(1., .95, .85) * pow(max(dot(d, uSun), 0.), 600.) * 5.;
+  c += uWinCol * (smoothstep(.80, .87, w) + .15 * pow(max(w, 0.), 6.));
+  c += uKeyCol * pow(max(dot(d, uKey), 0.), 600.) * 3.;
   return c;
 }
 /** linear light to the screen: a filmic roll-off, then the display's curve */
@@ -60,12 +71,28 @@ vec3 tonemap(vec3 x) {
   x = (x * (2.51 * x + .03)) / (x * (2.43 * x + .59) + .14);
   return pow(clamp(x, 0., 1.), vec3(1. / 2.2));
 }
-vec3 sunlight() { return vec3(1., .95, .86) * 1.6; }`;
+/** the lamps' light on a point: diffuse and a highlight, falling off with distance */
+vec3 lamplight(vec3 p, vec3 n, vec3 V, vec3 diffuseCol, vec3 F0, float rough) {
+  vec3 acc = vec3(0.);
+  for (int i = 0; i < 4; i++) {
+    if (uLamps[i].w <= 0.) continue;
+    vec3 L = uLamps[i].xyz - p;
+    float d2 = max(dot(L, L), 25.);
+    L = normalize(L);
+    float att = uLamps[i].w * 3200. / d2;
+    float ndl = max(dot(n, L), 0.);
+    vec3 H = normalize(L + V);
+    float a = max(.02, rough * rough);
+    float spec = pow(max(dot(n, H), 0.), 2. / (a * a) - 2.) / (a * a) * .012;
+    acc += uLampCol * att * (diffuseCol * ndl + F0 * spec * ndl);
+  }
+  return acc;
+}`;
 const SHADOW_GLSL = `
 float shadow(vec3 n) {
   vec3 s = vShadow.xyz / vShadow.w * .5 + .5;
   if (s.x < 0. || s.x > 1. || s.y < 0. || s.y > 1. || s.z > 1.) return 1.;
-  float bias = max(.0012 * (1. - dot(n, uSun)), .0004);
+  float bias = max(.0012 * (1. - dot(n, uKey)), .0004);
   float lit = 0.;
   vec2 px = 1. / vec2(textureSize(uShadowMap, 0));
   for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) {
@@ -79,8 +106,8 @@ float shadow(vec3 n) {
 const DUST_VS = `#version 300 es
 in vec3 aPos;
 uniform mat4 uVP;
-uniform vec3 uEye, uSun;
-uniform float uTime;
+uniform vec3 uEye;
+uniform float uTime, uDust;
 out float vA;
 void main() {
   float id = aPos.x * 7.1 + aPos.z * 3.3;
@@ -90,15 +117,16 @@ void main() {
   gl_Position = c;
   float d = length(p - uEye);
   gl_PointSize = clamp(90. / max(d, 1.), 1., 4.);
-  vA = (1. - smoothstep(60., 150., d)) * smoothstep(3., 12., d) * .7;
+  vA = (1. - smoothstep(60., 150., d)) * smoothstep(3., 12., d) * uDust;
 }`;
 const DUST_FS = `#version 300 es
 precision highp float;
 in float vA;
 out vec4 o;
+uniform vec3 uKeyCol;
 void main() {
   float r = length(gl_PointCoord - .5) * 2.;
-  o = vec4(1., .95, .85, vA * (1. - smoothstep(.3, 1., r)));
+  o = vec4(normalize(uKeyCol + .3) * 1.2, vA * (1. - smoothstep(.3, 1., r)));
 }`;
 
 const SKY_VS = `#version 300 es
@@ -108,18 +136,18 @@ const SKY_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 out vec4 o;
-uniform vec3 uSun, uWin;
 uniform mat4 uInvVP;
+${LIGHT_UNIFORMS}
 ${COMMON}
 void main() {
-  // the workshop by the view ray
+  // the room by the view ray (beyond the walls: what's seen past the windows)
   vec4 w = uInvVP * vec4(vUV * 2. - 1., 1., 1.);
   vec3 d = normalize(w.xyz / w.w);
   vec3 c = env(d);
   o = vec4(tonemap(c) + (hash3(vec3(gl_FragCoord.xy, 0.)) - .5) / 255., 1.);
 }`;
 
-/** the sun's depth, from above */
+/** the key light's depth, from above */
 const SHADOW_VS = `#version 300 es
 in vec3 aPos;
 uniform mat4 uLightVP;
@@ -155,7 +183,12 @@ void main() {
   gl_Position = uVP * w;
 }`;
 
-/** everything but the marbles: cardboard built from paper and corrugation, timber, metal, the floor, the line */
+/**
+ * Everything but the marbles. Each material id has, from the theme, a colour, a roughness, a
+ * metalness and a style: how its detail is made (paper fibre, corrugation, lacquer with a
+ * chart drawn on it, brushed brass, oak grain, leather, planks, stone, glaze). The construction
+ * is the mesh's; the theme says what it's made of.
+ */
 const FS = `#version 300 es
 precision highp float;
 in vec3 vWorld;
@@ -163,105 +196,148 @@ in vec3 vNor;
 in vec3 vLocal;
 in vec2 vUV;
 in vec4 vShadow;
-flat in float vMat; // 0 the floor's top, 1 paper skin, 2 metal, 3 the workshop floor, 4 timber, 5 the chequered line, 6 the marker, 7 a cut edge, 8 tape, 9 a blob shadow, 11 a glue seam, 12 rubber
+flat in float vMat;
 out vec4 o;
 uniform sampler2D uShadowMap;
-uniform vec3 uSun, uEye, uWin, uTint;
+uniform vec3 uEye, uTint;
 uniform float uCut, uTime, uGhost, uFar;
+/** the theme's materials, by id: colour and roughness; metalness, style, detail */
+uniform vec4 uCol[24];
+uniform vec4 uPar[24];
+${LIGHT_UNIFORMS}
 ${COMMON}
 ${SHADOW_GLSL}
+/** a style's detail at (u, v): how much lighter or darker, how much rougher or smoother, and how much gilt */
+vec3 detail(float style, vec2 uv, float k) {
+  if (style < .5) return vec3(1., 0., 0.);
+  if (style < 1.5) {
+    // paper: fibres along, faint dents, the odd stain; wear where they run (the bands along the sides)
+    float fib = noise(vec3(uv.x * 1.5, uv.y * 24., 0.)) * .5 + noise(vec3(uv.x * 6., uv.y * 70., 3.)) * .25;
+    float dent = noise(vec3(uv * .22, 7.));
+    float stain = smoothstep(.6, .8, noise(vec3(uv * .06, 19.)));
+    float side = smoothstep(2.6, 1.2, 24. - abs(uv.y)) * .5;
+    return vec3((.88 + .22 * fib) * (.9 + .18 * dent) * (1. - .08 * stain) * (1. - .1 * side), -.15 * side + .06 * (dent - .5), 0.);
+  }
+  if (style < 2.5) {
+    // corrugation: the flutes side by side between two skins
+    float flute = .5 + .5 * sin(uv.x * 17.);
+    return vec3((.68 + .32 * flute) * (.9 + .2 * noise(vec3(uv * 6., 4.))), 0., 0.);
+  }
+  if (style < 3.5) {
+    // lacquer: deep, with a soft mottle and the odd fine scratch
+    float mot = noise(vec3(uv * .3, 5.));
+    float scratch = smoothstep(.93, .97, noise(vec3(uv.x * .4, uv.y * 9., 13.)));
+    return vec3(.9 + .2 * mot + .3 * scratch, .15 * scratch, 0.);
+  }
+  if (style < 4.5) {
+    // brass: brushed along, a little tarnish in the hollows
+    float brush = noise(vec3(uv.x * 40., uv.y * 2., 1.)) * .3 + noise(vec3(uv.x * 160., uv.y * 4., 2.)) * .15;
+    float tarn = smoothstep(.55, .8, noise(vec3(uv * .8, 9.)));
+    return vec3((.85 + .3 * brush) * (1. - .25 * tarn), .15 * tarn, 0.);
+  }
+  if (style < 5.5) {
+    // oak: grain along, in bands
+    float grain = noise(vec3(uv.x * .6, uv.y * 6., 2.)) * .5 + noise(vec3(uv.x * 2.5, uv.y * 14., 9.)) * .3;
+    return vec3(.75 + .45 * grain, .05 * (grain - .4), 0.);
+  }
+  if (style < 6.5) {
+    // leather: a fine pebbled grain, worn paler on the ridges
+    float peb = noise(vec3(uv * 9., 3.)) * .6 + noise(vec3(uv * 27., 8.)) * .3;
+    return vec3(.85 + .35 * peb, .1 * (peb - .45), 0.);
+  }
+  if (style < 7.5) {
+    // planks: boards of old timber with gaps between
+    float row = floor(uv.y / 12.), fr = fract(uv.y / 12.);
+    float gap = smoothstep(0., .06, fr) * smoothstep(1., .94, fr);
+    float grain = noise(vec3(uv.x * .25, row * 7.1, uv.y * 3.)) * .5 + noise(vec3(uv.x * 1.1, row * 3.3, 0.)) * .3;
+    return vec3(mix(.7, 1.3, grain) * mix(.45, 1., gap) * (.8 + .4 * hash3(vec3(row, floor((uv.x + row * 37.) / 110.), 0.))), 0., 0.);
+  }
+  if (style < 8.5) {
+    // stone: big flags, their joints dark, a soft mottle in each
+    vec2 cell = floor(uv / 60.), fr = fract(uv / 60.);
+    float joint = smoothstep(0., .03, fr.x) * smoothstep(1., .97, fr.x) * smoothstep(0., .03, fr.y) * smoothstep(1., .97, fr.y);
+    float mot = noise(vec3(uv * .08, cell.x * 3. + cell.y * 7.));
+    return vec3((.75 + .4 * mot) * mix(.35, 1., joint) * (.85 + .3 * hash3(vec3(cell, 1.))), .2 * (1. - joint), 0.);
+  }
+  if (style < 9.5) {
+    // glaze: pooled thicker in the hollows, with a crackle
+    float pool = noise(vec3(uv * .4, 2.));
+    float crack = smoothstep(.9, .95, noise(vec3(uv * 3., 6.)));
+    return vec3(.9 + .2 * pool - .2 * crack, -.1 * pool, 0.);
+  }
+  // a chart on lacquer: fine gold lines, circles and ticks, drawn along the board
+  float mot = noise(vec3(uv * .3, 5.));
+  float along = fract(uv.x / 40.), across = uv.y / 24.;
+  float line = smoothstep(.012, .0, abs(along - .5)) + smoothstep(.015, .0, abs(across)) * .5;
+  vec2 cc = vec2(uv.x - (floor(uv.x / 80.) + .5) * 80., uv.y);
+  float ring = smoothstep(.5, .0, abs(length(cc) - 14.)) + smoothstep(.4, .0, abs(length(cc) - 6.)) * .7;
+  float ticks = smoothstep(.3, .0, abs(fract(uv.x / 4.) - .5) * 4.) * smoothstep(1.2, .6, abs(abs(uv.y) - 22.)) ;
+  float gold = clamp(line + ring * .8 + ticks * .6, 0., 1.) * k;
+  return vec3(.9 + .2 * mot, -.15 * gold, gold);
+}
 void main() {
   // (what stands on the board, right against the camera, is cut away: the chase is never inside a strip)
-  bool stands = (vMat > .5 && vMat < 2.5) || (vMat > 6.5 && vMat < 7.5) || vMat > 10.5;
+  bool stands = (vMat > .5 && vMat < 2.5) || (vMat > 6.5 && vMat < 7.5) || (vMat > 10.5 && vMat < 18.5);
   if (stands && uGhost < .5 && length(vWorld - uEye) < uCut) discard;
   vec3 n = normalize(vNor);
   vec3 V = normalize(uEye - vWorld);
-  vec3 base; float rough = .6, metal = 0.;
-  if (vMat < .5) {
-    // the playing surface: paper skin, its fibres along the board, faint dents, the odd darker patch
-    float fib = noise(vec3(vUV.x * 1.5, vUV.y * 24., 0.)) * .5 + noise(vec3(vUV.x * 6., vUV.y * 70., 3.)) * .25;
-    float dent = noise(vec3(vUV * .22, 7.));
-    float stain = smoothstep(.6, .8, noise(vec3(vUV * .06, 19.)));
-    // (wear where they run: a rubbed, slightly shinier band along each side, and scuffs along the way)
-    float side = smoothstep(2.6, 1.2, 24. - abs(vUV.y)) * .5;
-    float scuff = smoothstep(.6, .9, noise(vec3(vUV.x * .35, vUV.y * 3., 31.))) * .3;
-    base = vec3(.60, .46, .30) * (.88 + .22 * fib) * (.9 + .18 * dent) * (1. - .08 * stain) * (1. - .1 * side - .06 * scuff);
-    rough = .9 - .15 * side - .08 * scuff + .06 * (dent - .5);
-  } else if (vMat < 1.5) {
-    // a strip's face: paper skin, fibres along it, compressed and darker toward the foot where it folds
-    float fib = noise(vec3(vUV.x * 2., vUV.y * 26., 1.)) * .4 + noise(vec3(vUV.x * 8., vUV.y * 72., 5.)) * .2;
-    float foot = smoothstep(0., .5, abs(vUV.y));
-    base = vec3(.64, .51, .35) * (.84 + .26 * fib) * mix(.8, 1., foot);
-    rough = .85 + .08 * (fib - .3);
-  } else if (vMat < 2.5) {
-    base = vec3(.62, .63, .66); rough = .3; metal = 1.;
-  } else if (vMat < 3.5) {
-    // the workshop floor: boards of old timber
-    float row = floor(vUV.y / 12.), fr = fract(vUV.y / 12.);
-    float gap = smoothstep(0., .06, fr) * smoothstep(1., .94, fr);
-    float grain = noise(vec3(vUV.x * .25, row * 7.1, vUV.y * 3.)) * .5 + noise(vec3(vUV.x * 1.1, row * 3.3, 0.)) * .3;
-    base = mix(vec3(.26, .19, .13), vec3(.40, .30, .20), grain) * mix(.45, 1., gap) * (.8 + .4 * hash3(vec3(row, floor((vUV.x + row * 37.) / 110.), 0.)));
-    rough = .7;
-  } else if (vMat < 4.5) {
-    // timber: pale, its grain along
-    float grain = noise(vec3(vUV.x * .6, vUV.y * 6., 2.)) * .5 + noise(vec3(vUV.x * 2.5, vUV.y * 14., 9.)) * .3;
-    base = mix(vec3(.82, .72, .54), vec3(.60, .48, .33), grain); rough = .75;
-  } else if (vMat < 5.5) {
+  int id = int(vMat + .5);
+  vec3 base = uCol[id].rgb; float rough = uCol[id].a, metal = uPar[id].x;
+  vec3 dt = detail(uPar[id].y, vUV, uPar[id].z);
+  base *= mix(1., dt.x, uPar[id].z);
+  // (gilt: the chart's lines are gold laid on the lacquer)
+  base = mix(base, vec3(.95, .72, .32), dt.z);
+  metal = mix(metal, .6, dt.z);
+  rough = clamp(rough + dt.y * uPar[id].z, .03, 1.);
+  if (vMat > 4.5 && vMat < 5.5) {
     // the line: chequered
     float cx = floor(vUV.x / 2.), cz = floor(vUV.y / 2.);
     base = mod(cx + cz, 2.) < .5 ? vec3(.92) : vec3(.05); rough = .5;
-  } else if (vMat < 6.5) {
+  } else if (vMat > 5.5 && vMat < 6.5) {
     // the marker under the marble that's yours
     o = vec4(1., .92, .45, .8); return;
-  } else if (vMat < 7.5) {
-    // a cut edge: the corrugated core, its flutes side by side, between two thin skins
-    float flute = .5 + .5 * sin(vUV.x * 17.);
-    float fl2 = noise(vec3(vUV.x * 6., vUV.y * 6., 4.));
-    base = vec3(.70, .58, .42) * (.68 + .32 * flute) * (.9 + .2 * fl2);
-    rough = .95;
-  } else if (vMat < 8.5) {
-    // tape: pale, a little glossy, its edge showing
-    base = vec3(.66, .60, .48) * (.95 + .1 * noise(vec3(vUV * 3., 2.))); rough = .3;
-  } else if (vMat < 9.5) {
-    // the dark under a marble, soft
+  } else if (vMat > 8.5 && vMat < 9.5) {
+    // the dark under a marble, soft, with a little of the marble's colour in it (the light it bends down)
     float r = length(vUV);
-    o = vec4(0., 0., 0., .5 * (1. - smoothstep(.25, 1., r))); return;
-  } else if (vMat < 11.5) {
-    // glue: dark, a little glossy
-    base = vec3(.40, .32, .23); rough = .45;
-  } else if (vMat < 12.5) {
-    base = vec3(.09, .09, .10); rough = .55;
-  } else if (vMat < 14.5) {
+    float a = 1. - smoothstep(.25, 1., r);
+    o = vec4(uTint * .35 * (1. - smoothstep(.0, .5, r)), .5 * a); return;
+  } else if (vMat > 13.5 && vMat < 14.5) {
     // a flag of the bunting: its colour by its hue, paper
     float h = vUV.x * 6.;
     vec3 col = clamp(abs(mod(h + vec3(0., 4., 2.), 6.) - 3.) - 1., 0., 1.);
     base = mix(vec3(.5), col, .85) * .9; rough = .8;
-  } else if (vMat < 15.5) {
-    // an enamel shade: green outside, cream within
-    base = gl_FrontFacing ? vec3(.12, .30, .22) : vec3(.9, .86, .78); rough = .25;
-  } else if (vMat < 16.5) {
-    // the bulb: it glows
-    o = vec4(tonemap(vec3(1., .9, .7) * 5.), 1.); return;
-  } else {
-    // a pencil: yellow, hexagonal in effect from its facets
-    base = vec3(.85, .62, .12); rough = .5;
+  } else if (vMat > 14.5 && vMat < 15.5) {
+    // an enamel shade: its colour outside, cream within (and lit from the bulb, at night)
+    base = gl_FrontFacing ? base : mix(vec3(.9, .86, .78), uLampCol * 3., uNight * .6);
+  } else if (vMat > 15.5 && vMat < 16.5) {
+    // the bulb: it glows when the lamps are lit; a dull glass when not
+    o = vec4(tonemap(mix(vec3(.5, .5, .48), uLampCol * 6., uNight)), 1.); return;
+  } else if (vMat > 19.5 && vMat < 20.5) {
+    // a window pane: by day the sky and the garden beyond, softly; by night the dark, stars, the moon
+    vec2 q = vUV;
+    vec3 day = mix(vec3(.75, .85, 1.) * 2.4, vec3(.45, .6, .35) * 1.6, smoothstep(.55, .25, q.y) * (.5 + .5 * noise(vec3(q * 4., 1.))));
+    float star = smoothstep(.985, 1., hash3(vec3(floor(q * 60.), 3.))) * 2.;
+    float moon = 1. - smoothstep(.06, .075, length(q - vec2(.7, .78)));
+    vec3 night = vec3(.06, .09, .18) * (.6 + .6 * q.y) + star + moon * vec3(2.4, 2.5, 2.8);
+    o = vec4(tonemap(mix(day, night, uNight)), 1.); return;
   }
-  // light: the sun through the window, in or out of shadow; the room from around
-  float ndl = max(dot(n, uSun), 0.);
+  // light: the key light through the window, in or out of shadow; the room from around; the lamps
+  float ndl = max(dot(n, uKey), 0.);
   float sh = shadow(n);
   vec3 amb = env(n) * .5 + env(vec3(0., 1., 0.)) * .12;
-  vec3 diffuse = base * (1. - metal) * (amb + sunlight() * ndl * sh);
+  vec3 diffuse = base * (1. - metal) * (amb + uKeyCol * ndl * sh);
   vec3 F0 = mix(vec3(.04), base, metal);
   float fres = pow(1. - max(dot(n, V), 0.), 5.);
   vec3 F = F0 + (1. - F0) * fres;
-  vec3 H = normalize(uSun + V);
+  vec3 H = normalize(uKey + V);
   float a = max(.02, rough * rough);
   float spec = pow(max(dot(n, H), 0.), 2. / (a * a) - 2.) / (a * a) * .012;
   vec3 R = reflect(-V, n);
   vec3 refl = env(R) * (1. - rough) * (1. - rough);
-  vec3 c = diffuse + F * (refl + sunlight() * spec * sh);
+  vec3 c = diffuse + F * (refl + uKeyCol * spec * sh);
+  c += lamplight(vWorld, n, V, base * (1. - metal), F0, rough);
   float d = length(vWorld - uEye);
-  c = mix(c, vec3(.42, .41, .39), smoothstep(uFar * .35, uFar, d) * .5);
+  c = mix(c, uHaze, smoothstep(uFar * uHazeNear, uFar, d) * .5);
   if (uGhost > .5) { c = mix(c, vec3(1., .95, .7), .5); o = vec4(tonemap(c * .6), .55); return; }
   o = vec4(tonemap(c), 1.);
 }`;
@@ -271,8 +347,8 @@ void main() {
  * refracts out, and what it then meets is read from the scene already drawn (the board,
  * magnified and bent, as through a real marble); on the way through, the ribbons and swirls in
  * the glass are marched through in the marble's own space, so they have depth and turn as it
- * rolls; bubbles catch the light; the glass tints what passes by how far it goes; the window
- * and the sun lie on the surface.
+ * rolls; bubbles catch the light; the glass tints what passes by how far it goes; the window,
+ * the key light and the lamps lie on the surface.
  */
 const GLASS_FS = `#version 300 es
 precision highp float;
@@ -283,12 +359,13 @@ in vec4 vShadow;
 flat in float vMat;
 out vec4 o;
 uniform sampler2D uShadowMap, uScene;
-uniform vec3 uSun, uEye, uWin, uTint, uTint2, uCentre;
+uniform vec3 uEye, uTint, uTint2, uCentre;
 uniform vec4 uStyle;
 uniform float uRadius, uTime;
 uniform mat3 uNormal;
 uniform mat4 uVP;
 uniform vec2 uRes;
+${LIGHT_UNIFORMS}
 ${COMMON}
 ${SHADOW_GLSL}
 // what the glass holds at a point of the unit marble (its own space): a colour, and how dense
@@ -301,16 +378,18 @@ vec4 inside(vec3 q) {
     float rib = smoothstep(.40, .46, sw) * (1. - smoothstep(.54, .60, sw));
     return vec4(mix(uTint, uTint2, smoothstep(.4, .6, sw2)), rib * 7.);
   } else if (kind < 1.5) {
-    // two colours swirled together, nearly solid
-    return vec4(mix(uTint, uTint2, smoothstep(.42, .58, sw + (sw2 - .5) * .4)), 10.);
+    // two colours swirled through clear glass, in broad veins
+    float vein = smoothstep(.3, .45, sw) * (1. - smoothstep(.55, .7, sw));
+    return vec4(mix(uTint, uTint2, smoothstep(.42, .58, sw2)), vein * 5.);
   } else if (kind < 2.5) {
-    // one colour, flecked with another
+    // a haze of one colour, flecked with another
     float fl = smoothstep(.62, .7, noise(q * 16. + vec3(ph)));
-    return vec4(mix(uTint, uTint2, fl), 10.);
+    return vec4(mix(uTint, uTint2, fl), 1.2 + fl * 12.);
   }
-  // bands wound about an axis, wavering
+  // bands wound about an axis, wavering, in clear glass
   float band = fract(q.y * sc * .55 + (sw - .5) * .35 + ph);
-  return vec4(mix(uTint, uTint2, smoothstep(.35, .45, band) * (1. - smoothstep(.55, .65, band))), 10.);
+  float b = smoothstep(.35, .45, band) * (1. - smoothstep(.55, .65, band));
+  return vec4(mix(uTint, uTint2, b), .8 + b * 6.);
 }
 void main() {
   vec3 n = normalize(vNor);
@@ -338,7 +417,7 @@ void main() {
   mat3 toMarble = transpose(uNormal);
   vec3 q0 = toMarble * ((P - uCentre) / R);
   vec3 q1 = toMarble * ((Q - uCentre) / R);
-  vec3 lit = env(n) * .4 + sunlight() * max(dot(n, uSun), 0.) * sh * .45 + sunlight() * .08;
+  vec3 lit = env(n) * .4 + uKeyCol * max(dot(n, uKey), 0.) * sh * .45 + uKeyCol * .08 + lamplight(vWorld, n, V, vec3(.5), vec3(0.), 1.);
   vec3 col = vec3(0.);
   float T = 1.;
   const int N = 7;
@@ -361,12 +440,12 @@ void main() {
   // the glass tints what comes through by the way it has come
   vec3 absorb = exp(-(vec3(1.) - uTint) * .06 * chord);
   vec3 through = behind * T * absorb;
-  // and the room and the sun lie on it
+  // and the room, the key light and the lamps lie on it
   vec3 F = vec3(.04) + .96 * pow(1. - max(dot(n, V), 0.), 5.);
   vec3 refl = env(reflect(I, n));
-  vec3 H = normalize(uSun + V);
+  vec3 H = normalize(uKey + V);
   float spec = pow(max(dot(n, H), 0.), 700.) * 2.5;
-  vec3 c = (1. - F) * (through + col) + F * refl + sunlight() * spec * sh * .8;
+  vec3 c = (1. - F) * (through + col) + F * refl + uKeyCol * spec * sh * .8 + lamplight(vWorld, n, V, vec3(0.), vec3(.04), .08);
   o = vec4(tonemap(c), 1.);
 }`;
 
@@ -479,8 +558,17 @@ function rebuildCourse() {
   boardMesh(course.fin.board, fv);
   lineMesh(course.fin.line, WIDTH, fv);
   finishMesh = upload(fv);
-  // the ground: well below the line, and the tower from it
-  // the workshop floor a little below the end of the run, and trestles up from it under every board
+  rebuildScenery();
+  save();
+}
+/** the lamps' places (the nearest few light the scene, at night) */
+let lampAt: V3[] = [];
+/**
+ * The scenery about the course, by the theme: the floor below, the room about, what holds the
+ * boards up, the rafters, the lamps, bunting, flags, litter. Its randomness has its own seed,
+ * so the scenery never changes the course, and a change of theme never changes the race.
+ */
+function rebuildScenery() {
   groundY = course.fin.board.frame.p[1] - 30;
   if (groundMesh_) drop(groundMesh_);
   const gv: number[] = [];
@@ -489,7 +577,6 @@ function rebuildCourse() {
   if (supportMesh_) drop(supportMesh_);
   const tv: number[] = [];
   const r = seeded(hash(seed, 0xdec0));
-  // the run's bounds, the rafters above the top of it, cords or boxes under every board
   const bounds = { min: [...TOP.p] as V3, max: [...TOP.p] as V3 };
   const allBoards = [...sections.flatMap((s) => s.boards), course.fin.board];
   for (const b of allBoards) for (const a of [0, b.length]) for (const c of [-24, 24]) {
@@ -499,30 +586,38 @@ function rebuildCourse() {
   rafterY = TOP.p[1] + 150;
   const ov: number[] = [];
   rafterMesh(bounds, rafterY, ov);
-  const parts = params.get('parts');
-  const want = (k: string) => !parts || parts.split(',').includes(k);
-  for (const b of allBoards) supportMesh(b, groundY, rafterY, r, want('boxes') ? tv : [], ov);
+  roomMesh(bounds, groundY, rafterY, ov);
+  for (const b of allBoards) supportMesh(b, groundY, rafterY, r, tv, ov, theme.supports);
+  lampAt = [];
+  const lamp = (b: Board) => { lampMesh(b, rafterY, ov); const at = toWorld(b, b.length / 2, 0, 0); lampAt.push([at[0], at[1] + 60, at[2]]); };
   sections.forEach((s, i) => {
     const b = s.boards[0];
-    if (i % 2 === 1) lampMesh(b, rafterY, ov);
-    if (i % 3 === 1 && want('bunting')) buntingMesh(b, 10 + r() * (b.length - 20), r, tv);
+    if (i % 2 === 1) lamp(b);
+    if (i % 3 === 1 && theme.bunting) buntingMesh(b, 10 + r() * (b.length - 20), r, tv);
   });
-  lampMesh(course.fin.board, rafterY, ov);
+  lamp(course.fin.board);
   if (overheadMesh_) drop(overheadMesh_);
   overheadMesh_ = upload(ov);
   const lp = course.fin.line.p, lf = course.fin.line;
-  if (want('flags')) {
-    flagMesh(add(add(lp, mul(lf.b, WIDTH / 2 + 2)), mul(lf.n, WALL_H)), tv);
-    if (sections.length) { const g = sections[0].boards[0]; for (const sd of [-1, 1]) flagMesh(toWorld(g, 1, WALL_H, sd * (WIDTH / 2 + 2)), tv); }
-  }
-  if (want('litter')) litterMesh(bounds, groundY, r, tv);
+  flagMesh(add(add(lp, mul(lf.b, WIDTH / 2 + 2)), mul(lf.n, WALL_H)), tv);
+  if (sections.length) { const g = sections[0].boards[0]; for (const sd of [-1, 1]) flagMesh(toWorld(g, 1, WALL_H, sd * (WIDTH / 2 + 2)), tv); }
+  if (theme.litter) litterMesh(bounds, groundY, r, tv);
   supportMesh_ = upload(tv);
+}
+/** A change of theme: the scenery and the materials, the page's colours; the race untouched. */
+function setTheme(t: Theme) {
+  theme = t;
+  try { localStorage.setItem(STORE + ':theme', t.id); } catch { /* */ }
+  document.documentElement.style.setProperty('--accent', t.accent);
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', t.pageColour);
+  $('theme').textContent = t.name;
+  if (course) rebuildScenery();
   save();
 }
 function save() {
   if (auto) return;
   try { localStorage.setItem(STORE, JSON.stringify({ seed, choices, mine, follow })); } catch { /* */ }
-  history.replaceState(null, '', `?${encode(seed, choices)}${mine ? `&marble=${mine}` : ''}`);
+  history.replaceState(null, '', `?${encode(seed, choices)}${mine ? `&marble=${mine}` : ''}${theme.id !== THEMES[0].id ? `&theme=${theme.id}` : ''}`);
   $('seed').textContent = `run ${seed} · ${sections.length} section${sections.length === 1 ? '' : 's'}`;
 }
 
@@ -840,6 +935,7 @@ canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.
 
 const btn = (id: string, f: () => void) => $(id).addEventListener('click', (e) => { e.stopPropagation(); wake(); f(); });
 btn('go', () => release(0));
+btn('theme', () => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]));
 btn('race', () => lineup());
 btn('here', () => release(Math.max(0, sections.length - 1)));
 btn('build', () => mode(view === 'build' ? 'race' : 'build'));
@@ -961,10 +1057,28 @@ function clickSound() { knock(MATERIALS[2], 60, null); }
 function popSound() { knock(MATERIALS[3], 60, null); }
 
 // ─── drawing ────────────────────────────────────────────────────────────────────────────────────
-/** the sun, in by the window: the window itself is broad and low in the same quarter */
-const SUN = norm([0.45, 0.8, 0.35]);
-const WIN = norm([0.7, 0.3, 0.55]);
-const FOG: V3 = [0.42, 0.41, 0.39];
+/** the theme's light, to every program that draws by it */
+function lightUniforms(p: WebGLProgram) {
+  const t = theme;
+  gl.uniform3fv(u(p, 'uKey'), norm(t.key));
+  gl.uniform3fv(u(p, 'uKeyCol'), mul(t.keyColour, t.keyStrength));
+  gl.uniform3fv(u(p, 'uWin'), norm(t.win));
+  gl.uniform3fv(u(p, 'uWinCol'), mul(t.winColour, t.winStrength));
+  gl.uniform3fv(u(p, 'uEnvFloor'), t.envFloor);
+  gl.uniform3fv(u(p, 'uEnvWall'), t.envWall);
+  gl.uniform3fv(u(p, 'uEnvCeil'), t.envCeil);
+  gl.uniform3fv(u(p, 'uHaze'), t.haze);
+  gl.uniform1f(u(p, 'uHazeNear'), t.hazeNear);
+  gl.uniform1f(u(p, 'uNight'), t.lamps ? 1 : 0);
+  gl.uniform1f(u(p, 'uDust'), t.dust);
+  gl.uniform3fv(u(p, 'uLampCol'), t.lampColour);
+  // the four nearest lamps to the marble followed (none, if the lamps are out)
+  const me = followed().p;
+  const near = t.lamps ? [...lampAt].sort((a, b) => len(sub(a, me)) - len(sub(b, me))).slice(0, 4) : [];
+  const arr = new Float32Array(16);
+  near.forEach((l, i) => arr.set([l[0], l[1], l[2], t.lampStrength], i * 4));
+  gl.uniform4fv(u(p, 'uLamps'), arr);
+}
 let dpr = 1;
 function resize() {
   dpr = Math.min(devicePixelRatio || 1, 1.75) * (preview ? 0.6 : 1);
@@ -1147,7 +1261,7 @@ function frame(now: number) {
   // the sun's view: a box around the followed marble (or the end, building)
   const centre: V3 = view === 'build' ? (sections.length ? sections[sections.length - 1].end.p : TOP.p) : followed().p;
   const span = view === 'build' ? 110 : 70;
-  const lightVP = ortho(centre, SUN, span, 400);
+  const lightVP = ortho(centre, norm(theme.key), span, 400);
   const vis = visible();
   const live: Draw[] = [...vis];
   // the spinners' arms where they are now, and the gate lifting
@@ -1190,12 +1304,11 @@ function frame(now: number) {
   sceneBuffers(W, H);
   gl.bindFramebuffer(gl.FRAMEBUFFER, msFb);
   gl.viewport(0, 0, W, H);
-  gl.clearColor(FOG[0], FOG[1], FOG[2], 1);
+  gl.clearColor(theme.haze[0], theme.haze[1], theme.haze[2], 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.disable(gl.DEPTH_TEST);
   gl.useProgram(skyProg);
-  gl.uniform3fv(u(skyProg, 'uSun'), SUN);
-  gl.uniform3fv(u(skyProg, 'uWin'), WIN);
+  lightUniforms(skyProg);
   gl.uniformMatrix4fv(u(skyProg, 'uInvVP'), false, invert(vp));
   gl.bindVertexArray(skyVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1205,10 +1318,12 @@ function frame(now: number) {
   gl.useProgram(prog);
   gl.uniformMatrix4fv(u(prog, 'uVP'), false, vp);
   gl.uniformMatrix4fv(u(prog, 'uLightVP'), false, lightVP);
-  gl.uniform3fv(u(prog, 'uSun'), SUN);
+  lightUniforms(prog);
+  const tables = matTables(theme);
+  gl.uniform4fv(u(prog, 'uCol'), tables.col);
+  gl.uniform4fv(u(prog, 'uPar'), tables.par);
   gl.uniform3fv(u(prog, 'uEye'), eye);
   gl.uniform1f(u(prog, 'uCut'), view === 'build' ? 4 : 8);
-  gl.uniform3fv(u(prog, 'uWin'), WIN);
   gl.uniform1f(u(prog, 'uTime'), time);
   gl.uniform1f(u(prog, 'uFar'), far);
   gl.uniform1i(u(prog, 'uShadowMap'), 0);
@@ -1230,7 +1345,7 @@ function frame(now: number) {
     const [, up] = toLocal(board, b.at);
     const lift = Math.max(0, up - b.r);
     if (lift > 6) continue;
-    drawMeshes([{ mesh: DISC, model: flatAt(f, add(b.at, mul(f.n, -(up - 0.04))), b.r * (1.5 + lift * 0.25)), mat: 9, tint: [1, 1, 1] }], false);
+    drawMeshes([{ mesh: DISC, model: flatAt(f, add(b.at, mul(f.n, -(up - 0.04))), b.r * (1.5 + lift * 0.25)), mat: 9, tint: b.tint }], false);
   }
   if (view !== 'build' && follow === 'mine') {
     const f = under(me).frame;
@@ -1251,8 +1366,7 @@ function frame(now: number) {
     gl.useProgram(glassProg);
     gl.uniformMatrix4fv(u(glassProg, 'uVP'), false, vp);
     gl.uniformMatrix4fv(u(glassProg, 'uLightVP'), false, lightVP);
-    gl.uniform3fv(u(glassProg, 'uSun'), SUN);
-    gl.uniform3fv(u(glassProg, 'uWin'), WIN);
+    lightUniforms(glassProg);
     gl.uniform3fv(u(glassProg, 'uEye'), eye);
     gl.uniform2f(u(glassProg, 'uRes'), W, H);
     gl.uniform1f(u(glassProg, 'uTime'), time);
@@ -1290,7 +1404,8 @@ function frame(now: number) {
     gl.useProgram(dustProg);
     gl.uniformMatrix4fv(u(dustProg, 'uVP'), false, vp);
     gl.uniform3fv(u(dustProg, 'uEye'), eye);
-    gl.uniform3fv(u(dustProg, 'uSun'), SUN);
+    gl.uniform1f(u(dustProg, 'uDust'), theme.dust);
+    gl.uniform3fv(u(dustProg, 'uKeyCol'), mul(theme.keyColour, theme.keyStrength));
     gl.uniform1f(u(dustProg, 'uTime'), time);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -1311,7 +1426,7 @@ function frame(now: number) {
   (window as unknown as { __marbles: unknown }).__marbles = {
     seed, choices, sections: sections.length, racing, phase, raceTime, view, chosen, offered: offered.map((s) => s.name),
     order: order(marbles).map((m) => ({ name: m.name, progress: Math.round(m.progress), finished: m.finished, falls: m.falls, speed: Math.round(len(m.v)) })),
-    me: followed().name, eye: eye.map((v) => Math.round(v)), look: look.map((v) => Math.round(v)),
+    me: followed().name, eye: eye.map((v) => Math.round(v)), look: look.map((v) => Math.round(v)), theme: theme.id,
     // (where each is along the finish board, once in)
     rest: order(marbles).map((m) => (m.finished >= 0 ? Math.round(dotv(sub(m.p, course.fin.board.frame.p), course.fin.board.frame.t) * 10) / 10 : null)),
   };
@@ -1431,6 +1546,7 @@ function invert(m: Float32Array): Float32Array {
   if (!lookOf.has(mine)) mine = LOOKS[0].name;
   follow = auto ? 'leader' : saved?.follow ?? 'mine';
   rebuildCourse();
+  setTheme(theme);
   showFollow();
   resize();
   if (auto) release(0); else lineup();
