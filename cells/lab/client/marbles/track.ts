@@ -325,7 +325,6 @@ export function candidates(seed: number, index: number, sections: Section[], pag
     let kind: Kind = pick(r, KINDS);
     for (let tries = 0; tries < 8 && (kind === last || (index === 0 && (kind === 'funnel' || kind === 'step' || kind === 'bend'))); tries++) kind = pick(r, KINDS);
     const s = section(kind, from, r);
-    if (index === 0) s.boards[0].backWall = true;
     out.push(s);
   }
   return out;

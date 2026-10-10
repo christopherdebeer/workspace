@@ -29,7 +29,8 @@ const DEG = Math.PI / 180;
   const b = buildRun(42, [0, 1, 2, 3, 4, 5, 0, 1]);
   assert.deepEqual(a.map((s) => [s.kind, s.drop, s.length]), b.map((s) => [s.kind, s.drop, s.length]));
   for (let i = 1; i < a.length; i++) assert.ok(a[i].end.p[1] < a[i - 1].end.p[1]);
-  assert.ok(a[0].boards[0].backWall && !a[1].boards[0].backWall, 'the gate\'s back on the first board (and below a step), not the next');
+  // (no back wall at the top: the field rests against the gate, and the run can be seen from behind)
+  assert.ok(!a[0].boards[0].backWall && !a[1].boards[0].backWall, 'no back wall at the top');
   const cs = candidates(42, 8, a);
   assert.equal(cs.length, 3);
   assert.ok(new Set(cs.map((s) => s.kind)).size >= 2);
@@ -112,6 +113,25 @@ const board = (pitchDeg, lengthCm, extra = {}) => {
   const across2 = T.dot(T.sub(m2.p, c2.sections[0].boards[0].frame.p), c2.sections[0].boards[0].frame.b);
   assert.ok(Math.abs(across2) > 3 && m2.progress > 60, `bounced aside by the peg and on: ${across2.toFixed(1)}, ${m2.progress.toFixed(0)} along`);
   console.log('walls ok');
+}
+{
+  // the gate: down, the field comes to rest against it, at rest and none lost off the open top;
+  // lifted, they go
+  const secs = buildRun(21, [0, 1, 2]);
+  const c = new Course(secs, TOP);
+  c.gateClosed = true;
+  const ms = Array.from({ length: 12 }, (_, i) => marble(`m${i}`, MATERIALS[0], 0.8, [1, 1, 1]));
+  ms.forEach((m, i) => c.place(m, 0, i));
+  for (let t = 0; t < 3; t += 1 / 60) step(c, ms, 1 / 60, 0);
+  const bd = secs[0].boards[0];
+  const alongs = ms.map((m) => T.toLocal(bd, m.p)[0]);
+  assert.ok(ms.every((m) => T.len(m.v) < 3), `at rest behind the gate: ${ms.map((m) => T.len(m.v).toFixed(1))}`);
+  assert.ok(alongs.every((a) => a > 3 && a < 6), `against the gate: ${alongs.map((a) => a.toFixed(1))}`);
+  assert.equal(ms.reduce((a, m) => a + m.falls + m.nudges, 0), 0, 'none lost, none nudged');
+  c.gateClosed = false;
+  for (let t = 0; t < 1.5; t += 1 / 60) step(c, ms, 1 / 60, t);
+  assert.ok(ms.every((m) => T.toLocal(bd, m.p)[0] > 20 || m.sec > 0), 'and off when it lifts');
+  console.log('gate ok');
 }
 {
   // a bend: the board turns, the marble follows it round and comes out heading the new way

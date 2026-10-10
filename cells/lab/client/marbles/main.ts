@@ -733,10 +733,17 @@ let doneAt = 0;
 let firstInAt = -1;
 /** the race began from this section (0: the top) */
 let fromSection = 0;
-/** Everyone to the gate, the gate down: waiting on a tap. */
+/**
+ * Everyone to the gate, the gate down. They're already alive: set down by hand (each a hair
+ * differently, so no two races are the same), they roll to the gate and settle against it,
+ * knocking; go only lifts the gate.
+ */
 function lineup() {
   fromSection = 0;
   marbles.forEach((m, i) => course.place(m, 0, i));
+  raceSeed = auto ? 1 : Math.floor(Math.random() * 1e9);
+  scatter();
+  course.gateClosed = true;
   raceTime = 0;
   racing = false;
   phase = 'lineup';
@@ -747,10 +754,14 @@ function lineup() {
   hint();
 }
 function release(from = 0) {
+  // (from the top, lined up: just lift the gate; from elsewhere, set them down there and go)
+  if (!(from === 0 && phase === 'lineup')) {
+    marbles.forEach((m, i) => course.place(m, from, i));
+    raceSeed = auto ? 1 : Math.floor(Math.random() * 1e9);
+    scatter();
+  }
   fromSection = from;
-  marbles.forEach((m, i) => course.place(m, from, i));
-  raceSeed = auto ? 1 : Math.floor(Math.random() * 1e9);
-  scatter();
+  course.gateClosed = false;
   raceTime = 0;
   racing = true;
   phase = 'racing';
@@ -760,8 +771,6 @@ function release(from = 0) {
   hint();
   tick(1.5);
 }
-/** whether the gate still holds them (the first moments of a race from the top) */
-const held = () => racing && fromSection === 0 && raceTime < 0.35;
 function followed(): Marble {
   if (follow === 'leader' || (follow === 'finish' && phase !== 'lineup')) return order(marbles)[0];
   return marbles.find((m) => m.name === mine) ?? marbles[0];
@@ -885,7 +894,11 @@ function updateCamera(dt: number) {
     const centre = add(add(add(f.p, mul(f.t, 2)), mul(f.b, -9)), mul(f.n, MARBLE_R));
     const dist = 66 / zoom;
     const el = Math.max(0.6, Math.min(1.4, 1.12 + orbit.pitch * 0.5));
-    const fwd = norm(add(mul(f.b, Math.cos(el)), mul(f.n, -Math.sin(el))));
+    // (drag sideways and it swings round the row: from beside it to behind it, looking down the run;
+    // nothing at the top is in the way now)
+    const sw = Math.max(-1.6, Math.min(1.6, orbit.yaw));
+    const across = norm(add(mul(f.b, Math.cos(sw)), mul(f.t, Math.sin(sw))));
+    const fwd = norm(add(mul(across, Math.cos(el)), mul(f.n, -Math.sin(el))));
     const wantEye = sub(centre, mul(fwd, dist));
     // (the page's first moments: straight there, not a swing in from nowhere)
     const kk = time < 0.3 ? 1 : k0;
@@ -1313,14 +1326,20 @@ function frame(now: number) {
   last = now;
   time += dt;
   resize();
-  // the race, in fixed steps
+  // the race, in fixed steps (and before it, the field settling against the gate)
+  const lining = phase === 'lineup' && view === 'race';
+  if (lining) {
+    lag = Math.min(lag + dt, 0.1);
+    impacts = [];
+    while (lag >= 1 / 60) { lag -= 1 / 60; remember(); step(course, marbles, 1 / 60, 0, impacts); }
+    for (const im of impacts.slice(0, 3)) knock(im.mat, im.j * 0.5, im.other);
+  }
   if (racing) {
     lag = Math.min(lag + dt, 0.1);
     impacts = [];
     while (lag >= 1 / 60) {
       lag -= 1 / 60;
       remember();
-      if (held()) { for (const m of marbles) { m.v = [0, 0, 0]; } raceTime += 1 / 60; continue; }
       step(course, marbles, 1 / 60, raceTime, impacts);
       raceTime += 1 / 60;
     }
@@ -1380,7 +1399,7 @@ function frame(now: number) {
   }
   // (building, the marbles are out of the way: the end of the run is where the next board goes;
   // drawn far to near, so the clear ones show what's behind them)
-  const alpha = racing ? Math.max(0, Math.min(1, lag * 60)) : 1;
+  const alpha = racing || lining ? Math.max(0, Math.min(1, lag * 60)) : 1;
   const balls: Array<Draw & { at: V3; r: number; m: Marble }> = view === 'build' ? [] : marbles.map((m, i) => {
     const { p, q } = shown(i, alpha);
     const [M, N] = marbleModel(m, p, q);
@@ -1583,11 +1602,27 @@ let boardHtml = '';
 function resetNames() {
   $('names').innerHTML = marbles.map((m) => `<div class="name" data-name="${m.name}"><b></b> ${m.name} <em></em></div>`).join('');
 }
+// (choosing yours in the lineup makes its name bold at once)
 function showNames() {
   const box = $('names');
-  const on = view === 'race' && phase !== 'lineup';
+  const on = view === 'race';
   box.classList.toggle('on', on);
   if (!on) return;
+  if (phase === 'lineup') {
+    // at the gate: every name beside its marble, as at the finish (yours in bold)
+    for (const el of box.children as unknown as HTMLElement[]) {
+      const i = marbles.findIndex((x) => x.name === el.dataset.name);
+      if (i < 0) continue;
+      const c = project(shown(i, 1).p);
+      el.classList.toggle('in', !!c);
+      if (!c) continue;
+      el.querySelector('b')!.textContent = '';
+      el.querySelector('em')!.textContent = '';
+      el.classList.toggle('me', marbles[i].name === mine);
+      el.style.transform = `translate(${Math.round(c[0] + 16)}px, ${Math.round(c[1])}px) translateY(-50%)`;
+    }
+    return;
+  }
   const f = course.fin.board.frame;
   const centre = add(f.p, mul(f.t, (course.fin.throat + course.fin.channelEnd) / 2));
   // (only when the finish is near enough to read)

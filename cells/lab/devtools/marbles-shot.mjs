@@ -23,6 +23,9 @@ await withWood(async (lab) => {
   c.ok('no errors', page.errors.length === 0, page.errors);
   c.ok('seven sections from the address', s.sections === 7 && s.seed === 21, { sections: s.sections, seed: s.seed });
   c.ok('lined up, not yet racing', s.phase === 'lineup' && !s.racing, { phase: s.phase, racing: s.racing });
+  // already alive, at rest against the gate, every name showing
+  const live = await page.evaluate(() => ({ speeds: window.__marbles.order.map((o) => o.speed), names: document.querySelectorAll('#names .name.in').length }));
+  c.ok('at the gate: settled, every name beside its marble', live.speeds.every((v) => v < 3) && live.names === 12, live);
   c.ok('twelve named marbles', s.order.length === 12 && new Set(s.order.map((o) => o.name)).size === 12, s.order.map((o) => o.name));
   const other = s.order.find((o) => o.name !== s.me).name;
   await page.click(`#order .dot[data-name="${other}"]`);

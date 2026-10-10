@@ -174,8 +174,22 @@ function boardContacts(bd: Board, m: Marble, time: number, out: Contact[]): numb
   return along;
 }
 
+/** The gate, while it's down: a flat bar across the first board that a marble comes to rest against. */
+function gateContact(course: Course, m: Marble, out: Contact[]) {
+  if (!course.gateClosed || !course.sections.length) return;
+  const bd = course.sections[0].boards[0];
+  const [along, up] = toLocal(bd, m.p);
+  if (up > 4 || along < GATE_AT - 4 || along > GATE_AT + 1) return;
+  const over = along + m.r - GATE_AT;
+  if (over > 0) out.push({ n: mul(frameAlong(bd, along).t, -1), depth: over, vs: [0, 0, 0], e: 0.3, mu: 0.3 });
+}
+
 /** The run as the solver sees it: its sections, the line and the catch board at the end, how far along each begins. */
+/** the gate across the first board: its face (along), and how far from the face the bar reaches back */
+export const GATE_AT = 6;
 export class Course {
+  /** the gate is down: a wall across the first board that the field rests against until it lifts */
+  gateClosed = false;
   starts: number[] = [];
   total = 0;
   fin: ReturnType<typeof finishOf>;
@@ -240,6 +254,7 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
         m.progress = Math.max(m.progress, prog);
         if (best.sec > m.sec) { m.sec = best.sec; m.entryV = len(m.v); }
       }
+      if (m.sec === 0) gateContact(course, m, contacts);
       m.contact = contacts.length > 0;
       for (const c of contacts) resolve(m, c, h, impacts);
     }
@@ -250,6 +265,7 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
       contacts.length = 0;
       for (let si = Math.max(0, m.sec - 1); si <= Math.min(course.sections.length - 1, m.sec + 1); si++) for (const bd of course.sections[si].boards) boardContacts(bd, m, t, contacts);
       if (m.sec >= course.sections.length - 1) boardContacts(course.fin.board, m, t, contacts);
+      if (m.sec === 0) gateContact(course, m, contacts);
       for (const c of contacts) if (c.depth > 0) m.p = add(m.p, mul(c.n, c.depth));
     }
     for (const m of marbles) if (!m.asleep) spin(m, h);
@@ -267,7 +283,9 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
       if (m.stillFor > 0.4) { m.asleep = true; m.v = [0, 0, 0]; m.w = [0, 0, 0]; }
     }
     // stuck (resting against something, or wedged in the pack): a nudge sideways, toward the middle, and a little on
-    if (m.finished < 0 && len(m.v) < 2 && m.contact) {
+    // (not the field at rest against the gate: that's where they're meant to be)
+    if (course.gateClosed && m.sec === 0) m.slowFor = 0;
+    else if (m.finished < 0 && len(m.v) < 2 && m.contact) {
       m.slowFor += dt;
       if (m.slowFor > 1.5) {
         const bd = sec?.boards[0] ?? course.fin.board;

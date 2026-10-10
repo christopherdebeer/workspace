@@ -1,11 +1,14 @@
 # Marble Run
 
-Twelve marbles in a row behind a gate at the top of a wide, sloping board. Tap one and it's
-yours; tap the board and the gate lifts: down board after board of obstacles they go, bumping,
-parting, catching up, to a funnel at the end that brings them to a single gap, the chequered
-line across it, and a channel beyond, one marble wide. They come to rest in it in the order
-they crossed, first at the top: the result is there to see. A chase camera follows yours. Past
-the line is build mode: three boards on offer; pick one and the run grows downward.
+Twelve marbles behind a gate at the top of a wide, sloping board. They're already alive: set
+down by hand, a hair differently each time, they roll to the gate and settle against it,
+knocking, each with its name beside it. Tap one and it's yours; go lifts the gate, and down
+board after board of obstacles they go, bumping, parting, catching up, to a funnel at the end
+that brings them to a single gap, the chequered line across it, and a channel beyond, one
+marble wide. They come to rest in it in the order they crossed, first at the top: the result
+is there to see. A chase camera follows yours. There's no wall behind the gate, so a drag
+swings the view round the row to look down the run from behind it. Past the line is build
+mode: three boards on offer; pick one and the run grows downward.
 
 ## The race
 
