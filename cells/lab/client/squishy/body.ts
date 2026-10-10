@@ -1,5 +1,6 @@
 /**
- * Squishy: the dumpling, a soft body.
+ * Squishy: the dumpling, a soft body: a clear jelly toy of one (a glittery gumdrop with a tip),
+ * or a steamed one of dough.
  *
  * A dumpling is a skin of particles (its mesh's own vertices) held to its shape by shape
  * matching (Müller et al., 2005): each small step the particles' best-fit rotation and best-fit
@@ -8,7 +9,8 @@
  * out at the sides, and wobbles back; the pull is soft enough to see, a few wobbles a second,
  * and damped. Each particle meets the course on its own, so a corner dents it and a floor
  * flattens its bottom, with Coulomb friction, the surface's own bounce and movement, and tack:
- * dough sticks, for a moment, even to a wall. Its momentum is its own, so in the air its middle
+ * it sticks, for a moment, even to a wall. Tipped over, it rolls itself back up, as a roly-poly.
+ * Its momentum is its own, so in the air its middle
  * flies a plain parabola: the aiming line shows where it will go.
  */
 import { G, RADIUS, near, touch, type Hit, type Level, type Shape, type V3 } from './level';
@@ -17,34 +19,32 @@ import { G, RADIUS, near, touch, type Hit, type Level, type Shape, type V3 } fro
 export const SUB = 10;
 /** each particle's skin: how far from a surface it stops */
 export const SKIN = 0.22;
-/** how quickly it springs back to its shape (wobbles a second), and how little each wobble keeps */
-const HZ = 9, ZETA = 0.14;
 /** how much of its volume it keeps each step (it squashes out sideways rather than in), and how fast a roll dies on the ground (/s) */
 const KEEP = 0.9, ROLL = 30;
 /** on the ground it rights itself, like a roly-poly: how fast it turns back upright (rad/s at a right angle) */
 const RIGHT = 9;
-/** how fast it shuffles round to face you, at most (radians a second) */
-const TURN = 4;
-/** how much squash and stretch it takes (the rest held to its shape) */
-const BETA = 0.25;
+/** how fast it shuffles round to face you, and rolls itself back upright, at most (radians a second) */
+const TURN = 4, UPRIGHT = 3;
 /** dough's tack: how hard it holds what it touches (cm/s²), and how near counts as touching */
 const TACK = 900, STICK = 0.35;
 
-/** The dumpling's rest shape: a round body with a flatter bottom, gathered at the top in pleats that twist to a knot. */
-export function dumplingRest(rings = 16, segs = 28): { pos: Float32Array; tris: Uint16Array } {
-  const R = RADIUS;
-  const at = (h: number, r: number, th: number): V3 => {
-    const sm = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-    let y = h < 0 ? h * 0.6 : h * 0.8;
-    let rr = r * (h < 0 ? 1.12 : 1.12 - 0.38 * h * h);
-    const pleat = sm(0.05, 0.7, h) * (1 - sm(0.88, 1, h)) * 0.1;
-    rr *= 1 + pleat * Math.cos(12 * th + 4 * h);
-    if (h > 0.8) y += (h - 0.8) * 0.9;
-    return [Math.cos(th) * rr * R, y * R, Math.sin(th) * rr * R];
-  };
+/** What it's made of: dough (steamed, pleated, plops) or jelly (a clear, glittery squishy toy: a gumdrop with a little tip, that jiggles). */
+export type Kind = 'jelly' | 'dough';
+/** each kind's spring back (wobbles a second), how little each wobble keeps, how much squash it takes, and its tack */
+export const KINDS: Record<Kind, { hz: number; zeta: number; beta: number; tack: number }> = {
+  dough: { hz: 9, zeta: 0.14, beta: 0.25, tack: 1 },
+  jelly: { hz: 14, zeta: 0.06, beta: 0.25, tack: 0.85 },
+};
+
+/**
+ * A skin turned on a lathe: a point at the bottom, rings up to a point at the top. `at(h, r, th)`
+ * places a point from its height on a unit sphere (h, -1 to 1), its distance out (r) and its
+ * angle round; `bias` crowds the rings toward the top, where a tip needs them.
+ */
+function lathe(at: (h: number, r: number, th: number) => V3, rings: number, segs: number, bias = 1): { pos: Float32Array; tris: Uint16Array } {
   const pts: V3[] = [at(-1, 0, 0)];
   for (let i = 1; i <= rings; i++) {
-    const phi = (i / (rings + 1)) * Math.PI;
+    const phi = (1 - (1 - i / (rings + 1)) ** bias) * Math.PI;
     for (let j = 0; j < segs; j++) pts.push(at(-Math.cos(phi), Math.sin(phi), (j / segs) * Math.PI * 2));
   }
   pts.push(at(1, 0, 0));
@@ -67,6 +67,35 @@ export function dumplingRest(rings = 16, segs = 28): { pos: Float32Array; tris: 
     if (n[0] * m[0] + n[1] * m[1] + n[2] * m[2] < 0) { const t = tris[k + 1]; tris[k + 1] = tris[k + 2]; tris[k + 2] = t; }
   }
   return { pos: new Float32Array(pts.flat()), tris: new Uint16Array(tris) };
+}
+const smooth = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/** The dumpling's rest shape: a round body with a flatter bottom, gathered at the top in pleats that twist to a knot. */
+export function dumplingRest(rings = 16, segs = 28): { pos: Float32Array; tris: Uint16Array } {
+  const R = RADIUS;
+  return lathe((h, r, th) => {
+    let y = h < 0 ? h * 0.6 : h * 0.8;
+    let rr = r * (h < 0 ? 1.12 : 1.12 - 0.38 * h * h);
+    const pleat = smooth(0.05, 0.7, h) * (1 - smooth(0.88, 1, h)) * 0.1;
+    rr *= 1 + pleat * Math.cos(12 * th + 4 * h);
+    if (h > 0.8) y += (h - 0.8) * 0.9;
+    return [Math.cos(th) * rr * R, y * R, Math.sin(th) * rr * R];
+  }, rings, segs);
+}
+/**
+ * The jelly's rest shape: a gumdrop, broad and soft-shouldered on a flat bottom, drawn up at
+ * the top into a little pointed tip (where the mould was filled).
+ */
+export function jellyRest(rings = 20, segs = 28): { pos: Float32Array; tris: Uint16Array } {
+  const R = RADIUS;
+  return lathe((h, r, th) => {
+    // (a squat body: the bottom flatter, the widest a little below the middle)
+    let y = h < 0 ? h * 0.55 : h * 0.8;
+    let rr = r * (h < 0 ? 1.1 - 0.06 * h * h : 1.1 - 0.3 * h * h);
+    // (the shoulders drawn in toward the tip, and the tip: a cone, its point a little rounded)
+    rr *= 1 - 0.3 * smooth(0.5, 1, h);
+    y += 0.42 * Math.exp(-Math.sqrt(rr * rr + 0.0004) / 0.15) * smooth(0, 0.6, h);
+    return [Math.cos(th) * rr * R, y * R, Math.sin(th) * rr * R];
+  }, rings, segs, 1.6);
 }
 
 const qmul = (a: number[], b: number[]) => [
@@ -154,8 +183,14 @@ export class Dumpling {
   /** which way it would like its face to look when it's sat still (a direction in the ground's plane), if any */
   look: V3 | null = null;
 
-  constructor(at: V3) {
-    const s = dumplingRest();
+  /** what it's made of, and so how it springs, squashes and sticks */
+  readonly kind: Kind;
+  private phys: (typeof KINDS)[Kind];
+
+  constructor(at: V3, kind: Kind = 'jelly') {
+    this.kind = kind;
+    this.phys = KINDS[kind];
+    const s = kind === 'jelly' ? jellyRest() : dumplingRest();
     this.n = s.pos.length / 3;
     this.tris = s.tris;
     const n = this.n;
@@ -239,7 +274,8 @@ export class Dumpling {
     const det = det3(A);
     if (det > 1e-6) { const s = 1 / Math.cbrt(det); for (let k = 0; k < 9; k++) A[k] *= s; } else A.set(R);
     const T = new Float64Array(9);
-    for (let k = 0; k < 9; k++) T[k] = BETA * A[k] + (1 - BETA) * R[k];
+    const beta = this.phys.beta;
+    for (let k = 0; k < 9; k++) T[k] = beta * A[k] + (1 - beta) * R[k];
     // (wound up for a flick: squeezed along the way it will go, and wider across, at the same volume)
     if (this.squeeze) {
       const [dx, dy, dz] = this.squeeze.d, k = this.squeeze.k;
@@ -292,9 +328,9 @@ export class Dumpling {
   step(lv: Level, dt: number, time: number) {
     const n = this.n, h = dt / SUB;
     const { x, v, p, cn, cd, cmu, cb, cvs, cv0, cf } = this;
-    const w0 = 2 * Math.PI * HZ;
+    const w0 = 2 * Math.PI * this.phys.hz;
     const alpha = Math.min(0.5, (w0 * h) ** 2);
-    const damp = 2 * ZETA * w0 * h;
+    const damp = 2 * this.phys.zeta * w0 * h;
     const speed = Math.hypot(...this.vcom);
     near(lv, this.com, RADIUS * 1.8 + speed * dt + 1, this.nearby);
     const o = this.hit;
@@ -358,7 +394,7 @@ export class Dumpling {
             if (cb[i] > 0 && cv0[i] < -40) vn = Math.max(vn, -cv0[i] * cb[i]);
           }
           // (dough's tack: drawn to what it touches, unless it's leaving it fast)
-          if (tackOn && this.tack > 0 && vn < 60) { const a = TACK * this.tack * h; vn -= a; dvn += a; }
+          if (tackOn && this.tack > 0 && vn < 60) { const a = TACK * this.phys.tack * this.tack * h; vn -= a; dvn += a; }
           const tm = Math.hypot(tx, ty, tz), lim = cmu[i] * dvn;
           const k = tm <= lim ? 0 : 1 - lim / tm;
           tx *= k; ty *= k; tz *= k;
@@ -389,26 +425,60 @@ export class Dumpling {
     this.shuffle(dt, contacts > 0);
   }
   /**
-   * Sat still and upright, it shuffles round on its bottom to look where it's asked to (its face is
-   * its rest shape's +z): the whole of it turned a little about its middle's upright, as dough would
-   * by little hops, not spun against the friction under it.
+   * Sat still, it sorts itself out, as a roly-poly would, by little hops rather than against the
+   * friction under it: tipped over (on its side, its shoulder, its head), it rolls itself back
+   * up onto its bottom; upright, it shuffles round to look where it's asked to (its face is its
+   * rest shape's +z). The whole of it turned a little about its middle.
    */
   private shuffle(dt: number, grounded: boolean) {
     const R = this.R, look = this.look;
-    if (!look || !grounded || this.sinceFlick < 0.4 || R[4] < 0.8 || Math.hypot(...this.vcom) > 20) return;
+    if (!grounded || this.sinceFlick < 0.4 || Math.hypot(...this.vcom) > 20) return;
+    const ux = R[1], uy = R[4], uz = R[7];
+    if (uy < 0.97) {
+      // (back up: about the level line square to the way it leans; on its head, any such line)
+      let ax = uz, az = -ux;
+      const l = Math.hypot(ax, az);
+      if (l < 1e-3) { ax = R[0]; az = R[6]; } else { ax /= l; az /= l; }
+      const off = Math.acos(Math.max(-1, Math.min(1, uy)));
+      // (rolled over the edge on its bottom's side, as a thing tipped over rolls back: not turned
+      // about its middle, nor about the middle of where it's touching, either of which drives one
+      // of the things it's resting on into the ground)
+      const lx = l < 1e-3 ? 0 : ux / l, lz = l < 1e-3 ? 0 : uz / l;
+      let best = Infinity;
+      for (let i = 0; i < this.n; i++) if (this.cf[i] === 1) best = Math.min(best, (this.x[i * 3] - this.com[0]) * lx + (this.x[i * 3 + 2] - this.com[2]) * lz);
+      let px = 0, py = 0, pz = 0, m = 0;
+      for (let i = 0; i < this.n; i++) {
+        if (this.cf[i] !== 1 || (this.x[i * 3] - this.com[0]) * lx + (this.x[i * 3 + 2] - this.com[2]) * lz > best + 0.6) continue;
+        px += this.x[i * 3]; py += this.x[i * 3 + 1]; pz += this.x[i * 3 + 2]; m++;
+      }
+      const pivot: V3 | undefined = m ? [px / m, py / m, pz / m] : undefined;
+      this.turn([ax / Math.hypot(ax, az), 0, az / Math.hypot(ax, az)], -Math.min(off * 4, UPRIGHT) * dt, pivot, true);
+      return;
+    }
+    if (!look) return;
     const fx = R[2], fz = R[8];
     const a = Math.atan2(fx * look[2] - fz * look[0], fx * look[0] + fz * look[2]);
-    const th = -Math.sign(a) * Math.min(Math.abs(a) * 5, TURN) * dt;
+    this.turn([0, 1, 0], -Math.sign(a) * Math.min(Math.abs(a) * 5, TURN) * dt);
+  }
+  /** The whole of it turned by th about an axis through its middle (or another point), and calmed if asked: its particles, their velocities, and its turn as last matched. */
+  private turn(k: V3, th: number, about: V3 = this.com, calm = false) {
     if (Math.abs(th) < 1e-5) return;
-    const c = Math.cos(th), s = Math.sin(th), [cx, , cz] = this.com, x = this.x, v = this.v;
-    for (let i = 0; i < this.n; i++) {
-      const i3 = i * 3, dx = x[i3] - cx, dz = x[i3 + 2] - cz, vx = v[i3], vz = v[i3 + 2];
-      x[i3] = cx + c * dx + s * dz; x[i3 + 2] = cz - s * dx + c * dz;
-      v[i3] = c * vx + s * vz; v[i3 + 2] = -s * vx + c * vz;
-    }
-    const q = this.quat, nq = qmul([0, Math.sin(th / 2), 0, Math.cos(th / 2)], q);
+    const c = Math.cos(th), s = Math.sin(th), [cx, cy, cz] = about, x = this.x, v = this.v;
+    const rot = (a: Float32Array, i3: number, ox: number, oy: number, oz: number) => {
+      const px = a[i3] - ox, py = a[i3 + 1] - oy, pz = a[i3 + 2] - oz;
+      const d = (k[0] * px + k[1] * py + k[2] * pz) * (1 - c);
+      const kx = k[1] * pz - k[2] * py, ky = k[2] * px - k[0] * pz, kz = k[0] * py - k[1] * px;
+      a[i3] = ox + px * c + kx * s + k[0] * d; a[i3 + 1] = oy + py * c + ky * s + k[1] * d; a[i3 + 2] = oz + pz * c + kz * s + k[2] * d;
+    };
+    for (let i = 0; i < this.n; i++) { rot(x, i * 3, cx, cy, cz); rot(v, i * 3, 0, 0, 0); }
+    // (calm: what turning it had of its own is let go, so it isn't falling back the way it came)
+    if (calm) for (let i = 0; i < this.n * 3; i++) v[i] = this.vcom[i % 3];
+    let mx = 0, my = 0, mz = 0;
+    for (let i = 0; i < this.n; i++) { mx += x[i * 3]; my += x[i * 3 + 1]; mz += x[i * 3 + 2]; }
+    this.com = [mx / this.n, my / this.n, mz / this.n];
+    const h = Math.sin(th / 2), q = this.quat, nq = qmul([k[0] * h, k[1] * h, k[2] * h, Math.cos(th / 2)], q);
     q[0] = nq[0]; q[1] = nq[1]; q[2] = nq[2]; q[3] = nq[3];
-    qmat(q, R);
+    qmat(q, this.R);
   }
   /** Damp what isn't the body moving as one: each particle's velocity drawn toward its middle's and its turning. */
   private dampWobble(vx: number, vy: number, vz: number, c: number, roll: number) {

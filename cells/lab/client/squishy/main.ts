@@ -1,5 +1,6 @@
 /**
- * Squishy: a third-person platformer in which you are a dumpling.
+ * Squishy: a third-person platformer in which you are a dumpling: a clear, glittery, pink jelly
+ * one, a squishy toy (or, as you like, a steamed one of dough).
  *
  * You don't walk: you flick. Drag back from anywhere and let go, as with a slingshot, and the
  * dumpling flies the other way, as hard as you pulled; while you pull it winds up, squeezed
@@ -10,11 +11,12 @@
  *
  * The dumpling (`body.ts`) and the course (`level.ts`) are pure and tested on their own; the
  * meshes (`mesh.ts`) too. Here is the drawing (WebGL2: the window's shadow map, soft; the
- * course's materials; dough lit as dough, thick and a little translucent, with a face drawn
- * on its rest shape so it turns and squashes with it), the camera, the hands, and the sounds.
+ * course's materials; the jelly seen through, refracting what's behind it, glitter in it; dough
+ * lit as dough; a face drawn on its rest shape so it turns and squashes with it), the camera,
+ * the hands, and the sounds.
  */
 import { hash, seeded } from '../kit/rng';
-import { Dumpling } from './body';
+import { Dumpling, type Kind } from './body';
 import { MAT, RADIUS, REST_H, aim, buildLevel, launch, path, touch, towerAt, type Level, type V3 } from './level';
 import { VSTRIDE, disc, levelMesh, sphere } from './mesh';
 
@@ -253,6 +255,11 @@ void main() {
     // the dark under the dumpling, soft
     float r = length(uv);
     o = vec4(0., 0., 0., .45 * (1. - smoothstep(.15, 1., r)) * uAlpha); return;
+  } else if (id == 16) {
+    // the window's light through the jelly: pink in its shadow, gathered bright in the middle (added)
+    float r = length(uv);
+    float focus = exp(-r * r * 22.) * 1.2 + (1. - smoothstep(.25, 1., r)) * .3;
+    o = vec4(vec3(1., .5, .64) * focus * uAlpha, 1.); return;
   }
   float NoV = max(dot(n, V), 1e-3), NoL = max(dot(n, uKey), 0.);
   float sh = shadow(n);
@@ -370,6 +377,153 @@ void main() {
   c = mix(c, vec3(1.), white * .95);
   o = vec4(tonemap(c), 1.);
 }`;
+/**
+ * Jelly: a clear pink squishy toy, glittery. Drawn in two goes over a copy of what's behind it.
+ * First its body (uPass 0): what's behind seen through it, bent as a lens of jelly would bend it
+ * and tinted the deeper it goes (red comes through, green and blue are taken), with the light
+ * caught inside it, pinker, glowing where the window is behind it. Then (after the glitter
+ * inside, uPass 1) what's on it: the gloss, sharp highlights of the window and the room, and
+ * its face, printed on: round black eyes with a shine, a smile, red cheeks.
+ */
+const JELLY_FS = `#version 300 es
+precision highp float;
+in vec3 vWorld;
+in vec3 vNor;
+in vec3 vRest;
+in vec4 vShadow;
+out vec4 o;
+uniform vec3 uEye;
+uniform mat4 uVP;
+uniform sampler2D uScene;
+uniform vec2 uRes;
+uniform float uBlink, uFace, uR, uPass;
+${COMMON}
+${SHADOW_GLSL}
+float seg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)); }
+const vec3 PINK = vec3(1., .42, .58);
+void main() {
+  vec3 n = normalize(vNor);
+  vec3 V = normalize(uEye - vWorld);
+  float NoV = max(dot(n, V), 0.);
+  float NoL = dot(n, uKey);
+  float sh = shadow(n);
+  float px = 1. / uRes.y;
+  if (uPass < .5) {
+    // how far through it the eye looks here (a chord of something round), and where that comes out
+    float thick = uR * 2.1 * NoV + .25;
+    vec3 rd = refract(-V, n, 1. / 1.4);
+    vec4 cp = uVP * vec4(vWorld + rd * (thick + 2.5), 1.);
+    vec2 suv = cp.xy / cp.w * .5 + .5;
+    // (a little soft, as through jelly: a few taps about it)
+    vec3 behind = vec3(0.);
+    for (int i = 0; i < 5; i++) {
+      float a = float(i) * 2.4;
+      behind += texture(uScene, clamp(suv + vec2(cos(a), sin(a)) * px * (i == 0 ? 0. : 2.5), .001, .999)).rgb;
+    }
+    behind /= 5.;
+    vec3 T = exp(-vec3(.025, .15, .095) * thick);
+    // the light inside it: the room's, and the window's, wrapped round, pinker the deeper
+    float wrap = max((NoL + .6) / 1.6, 0.);
+    vec3 inside = PINK * (env(n) * .07 + uKeyCol * wrap * mix(.25, 1., sh) * .09) * (1. - T.g * .5);
+    // and glowing through it where the window's behind
+    inside += PINK * uKeyCol * .35 * pow(max(dot(-V, uKey), 0.), 3.) * (1. - NoV * .5);
+    // (thin at its rim, where the light bounces about inside it: a pinker edge)
+    inside += PINK * env(n) * .3 * pow(1. - NoV, 3.);
+    vec3 c = behind * T;
+    vec3 add = tonemap(inside);
+    o = vec4(1. - (1. - c) * (1. - add), 1.);
+    return;
+  }
+  // ─── on it: the face, the gloss
+  vec3 q = vRest / uR;
+  float ang = atan(q.x, q.z);
+  vec2 p = vec2(ang * 1.12, q.y + .02);
+  float ink = 0., white = 0., cheek = 0.;
+  if (abs(ang) < 1.3) {
+    for (int s = 0; s < 2; s++) {
+      float sx = s == 0 ? -1. : 1.;
+      vec2 e = p - vec2(.36 * sx, 0.);
+      if (uFace < .5) {
+        // open: round, black, a shine up and to the right; shut a moment to blink
+        float hy = mix(.088, .01, uBlink);
+        float k = length(vec2(e.x / .095, e.y / hy));
+        ink = max(ink, 1. - smoothstep(.93, 1.03, k));
+        white = max(white, (1. - smoothstep(.028, .036, length(e - vec2(.035, .035)))) * (1. - uBlink));
+      } else if (uFace < 1.5) {
+        // squeezed shut, winding up: > <
+        float c = min(seg(e, vec2(-.06 * sx, .06), vec2(.05 * sx, 0.)), seg(e, vec2(.05 * sx, 0.), vec2(-.06 * sx, -.06)));
+        ink = max(ink, 1. - smoothstep(.014, .022, c));
+      } else {
+        // happy: ^ ^
+        float c = abs(e.y - (.05 - 8. * e.x * e.x));
+        ink = max(ink, (1. - smoothstep(.014, .022, c)) * step(abs(e.x), .075));
+      }
+      // cheeks, printed: red ovals, a little out and down from each eye
+      cheek = max(cheek, 1. - smoothstep(.8, 1., length(vec2((p.x - .5 * sx) / .085, (p.y + .14) / .055))));
+    }
+    // the mouth: a smile; an o in the air; a grin at home
+    vec2 m = p - vec2(0., -.1);
+    float mo = uFace > 2.5 ? abs(length(vec2(m.x, m.y * .8)) - .035) : uFace > 1.5 ? abs(m.y + .035 - 6. * m.x * m.x) + step(.1, abs(m.x)) : abs(m.y + .03 - 5.5 * m.x * m.x) + step(.085, abs(m.x));
+    ink = max(ink, 1. - smoothstep(.011, .019, mo));
+  }
+  // gloss: the room in it, at a glance more; the window and the sun sharp in it
+  vec3 R = reflect(-V, n);
+  float F = .035 + .965 * pow(1. - NoV, 5.);
+  vec3 H = normalize(uKey + V);
+  vec3 gloss = env(R) * F * .45
+    + uKeyCol * D_ggx(max(dot(n, H), 0.), .045) * V_smith(max(NoV, 1e-3), max(NoL, 0.), .045) * max(NoL, 0.) * sh * .5
+    + uKeyCol * D_ggx(max(dot(n, H), 0.), .25) * V_smith(max(NoV, 1e-3), max(NoL, 0.), .25) * max(NoL, 0.) * sh * .06;
+  // the print, lit as a print on its skin
+  vec3 lightOn = env(n) * .55 + uKeyCol * max(NoL, 0.) * mix(.25, 1., sh) * .6;
+  vec3 printCol = mix(vec3(1., .16, .2) * (lightOn * .8 + .35), vec3(.012, .01, .015), ink);
+  printCol = mix(printCol, vec3(1.) * lightOn * 1.2, white);
+  float a = max(max(ink, cheek * .92), white);
+  vec3 c = tonemap(printCol) * a + tonemap(gloss) * (1. - a * .4);
+  o = vec4(c, a);
+}`;
+/**
+ * The glitter in the jelly: flakes, each a tiny mirror turned its own way, so one catches the
+ * window and flashes as the jelly turns or wobbles; seen through the jelly, pinker and dimmer the
+ * further in.
+ */
+const GLITTER_VS = `#version 300 es
+in vec3 aPos;
+in vec3 aNor;
+in vec2 aK;
+uniform mat4 uVP;
+uniform vec3 uEye, uKey, uWin, uCom;
+uniform float uScale, uR;
+out vec3 vCol;
+out float vA;
+void main() {
+  gl_Position = uVP * vec4(aPos, 1.);
+  vec3 V = normalize(uEye - aPos);
+  vec3 n = normalize(aNor);
+  vec3 r = reflect(-V, n * sign(dot(n, V) + 1e-4));
+  float flash = pow(max(dot(r, uKey), 0.), 60.) * 3. + pow(max(dot(r, uWin), 0.), 24.) * .8;
+  // (how deep in: from the near side of it, toward the eye)
+  float depth = clamp(1. - dot(aPos - uCom, V) / uR, 0., 2.);
+  vec3 tint = exp(-vec3(.04, .25, .16) * depth * uR);
+  // silver, pink, and a few lilac: holographic, its colour shifting with the angle
+  vec3 base = aK.x < .6 ? vec3(1., .92, .95) : aK.x < .9 ? vec3(1., .55, .75) : vec3(.8, .7, 1.);
+  base *= .8 + .4 * cos(6.28 * (dot(n, V) * 1.5 + vec3(0., .33, .67)));
+  vCol = base * tint;
+  vA = .28 + flash;
+  gl_PointSize = clamp(uScale * aK.y * (1. + min(flash, 2.) * .6) / gl_Position.w, 1., 7.);
+}`;
+const GLITTER_FS = `#version 300 es
+precision highp float;
+in vec3 vCol;
+in float vA;
+out vec4 o;
+void main() {
+  vec2 d = gl_PointCoord - .5;
+  // (a flake: a bright core, and when it flashes a little cross of light)
+  float r = length(d) * 2.;
+  float core = 1. - smoothstep(.2, 1., r);
+  float star = max(1. - smoothstep(0., .12, abs(d.x)), 1. - smoothstep(0., .12, abs(d.y))) * (1. - r) * smoothstep(.6, 2., vA);
+  o = vec4(vCol * vA * (core + star), 1.);
+}`;
 /** steam and flour: soft points */
 const PUFF_VS = `#version 300 es
 in vec4 aP;
@@ -400,6 +554,8 @@ function program(vs: string, fs: string): WebGLProgram {
     return s;
   };
   const p = gl.createProgram()!;
+  // (the skin's attributes in fixed places, so one vertex array serves the dough's and the jelly's drawing)
+  if (vs === DOUGH_VS) { gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aNor'); gl.bindAttribLocation(p, 2, 'aRest'); }
   gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
   gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(p);
@@ -410,6 +566,8 @@ const skyProg = program(SKY_VS, SKY_FS);
 const shadowProg = program(SHADOW_VS, SHADOW_FS);
 const prog = program(VS, FS);
 const doughProg = program(DOUGH_VS, DOUGH_FS);
+const jellyProg = program(DOUGH_VS, JELLY_FS);
+const glitterProg = program(GLITTER_VS, GLITTER_FS);
 const puffProg = program(PUFF_VS, PUFF_FS);
 const ul = new Map<string, WebGLUniformLocation | null>();
 const u = (p: WebGLProgram, n: string) => {
@@ -450,15 +608,24 @@ let courseMesh: Mesh | null = null;
 let roomMesh: Mesh | null = null;
 
 // ─── the dumpling on the card ────────────────────────────────────────────────────────────────────
+/** what it's made of: a clear glittery jelly (the squishy toy) or steamed dough */
+let skin: Kind = ((): Kind => {
+  const want = params.get('skin') ?? (() => { try { return localStorage.getItem(STORE + ':skin'); } catch { return null; } })();
+  return want === 'dough' ? 'dough' : 'jelly';
+})();
 let body!: Dumpling;
-const dough = (() => {
-  const d = new Dumpling([0, 0, 0]);
+interface Flakes { n: number; rest: Float32Array; near: Uint16Array; w: Float32Array; nor: Float32Array; data: Float32Array; buf: WebGLBuffer; vao: WebGLVertexArrayObject }
+/**
+ * A skin on the card: its triangles, its positions and normals as drawn (rewritten each frame),
+ * where each was in its rest shape; and, for the jelly, the glitter in it: each flake placed
+ * somewhere inside, carried along by the four particles of the skin nearest it.
+ */
+function skinOnCard(kind: Kind) {
+  const d = new Dumpling([0, 0, 0], kind);
   const vao = gl.createVertexArray()!;
   gl.bindVertexArray(vao);
   const pos = gl.createBuffer()!, nor = gl.createBuffer()!, rest = gl.createBuffer()!, idx = gl.createBuffer()!;
-  const bind = (b: WebGLBuffer, name: string, p: WebGLProgram) => {
-    const loc = gl.getAttribLocation(p, name);
-    if (loc < 0) return;
+  const bind = (b: WebGLBuffer, loc: number) => {
     gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
@@ -469,22 +636,74 @@ const dough = (() => {
   gl.bufferData(gl.ARRAY_BUFFER, d.x.byteLength, gl.DYNAMIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, nor);
   gl.bufferData(gl.ARRAY_BUFFER, d.x.byteLength, gl.DYNAMIC_DRAW);
-  bind(pos, 'aPos', doughProg); bind(nor, 'aNor', doughProg); bind(rest, 'aRest', doughProg);
+  bind(pos, 0); bind(nor, 1); bind(rest, 2);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, d.tris, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
   // (and for the shadow map: the same positions)
   const svao = gl.createVertexArray()!;
   gl.bindVertexArray(svao);
-  bind(pos, 'aPos', shadowProg);
+  const sloc = gl.getAttribLocation(shadowProg, 'aPos');
+  gl.bindBuffer(gl.ARRAY_BUFFER, pos);
+  gl.enableVertexAttribArray(sloc);
+  gl.vertexAttribPointer(sloc, 3, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
   gl.bindVertexArray(null);
-  return { vao, svao, pos, nor, count: d.tris.length, normals: new Float32Array(d.x.length), shown: new Float32Array(d.x.length) };
-})();
-/** The dumpling's skin as drawn: between the solver's last two states, its normals from its triangles. */
+  let flakes: Flakes | null = null;
+  if (kind === 'jelly') {
+    const r = seeded(hash(7, 0x611));
+    const N = preview ? 500 : 1100, q = d.q;
+    const fr = new Float32Array(N * 3), near = new Uint16Array(N * 4), w = new Float32Array(N * 4), fn = new Float32Array(N * 3);
+    for (let f = 0; f < N; f++) {
+      // (anywhere inside, evenly: a point in a box about it, kept if it's within the skin that way)
+      for (let tries = 0; tries < 60; tries++) {
+        const P = [(r() * 2 - 1) * RADIUS * 1.2, (r() * 2 - 1) * RADIUS * 1.2, (r() * 2 - 1) * RADIUS * 1.2];
+        const l = Math.hypot(P[0], P[1], P[2]) || 1;
+        let most = -2, edge = 0;
+        for (let j = 0; j < d.n; j++) {
+          const qx = q[j * 3], qy = q[j * 3 + 1], qz = q[j * 3 + 2], ql = Math.hypot(qx, qy, qz) || 1;
+          const c = (qx * P[0] + qy * P[1] + qz * P[2]) / (ql * l);
+          if (c > most) { most = c; edge = ql; }
+        }
+        fr[f * 3] = P[0]; fr[f * 3 + 1] = P[1]; fr[f * 3 + 2] = P[2];
+        if (l < edge * 0.9) break;
+      }
+      const best: Array<[number, number]> = [];
+      for (let j = 0; j < d.n; j++) {
+        const dd = (q[j * 3] - fr[f * 3]) ** 2 + (q[j * 3 + 1] - fr[f * 3 + 1]) ** 2 + (q[j * 3 + 2] - fr[f * 3 + 2]) ** 2;
+        if (best.length < 4 || dd < best[3][0]) { best.push([dd, j]); best.sort((a, b) => a[0] - b[0]); if (best.length > 4) best.pop(); }
+      }
+      let sw = 0;
+      best.forEach(([dd, j], k) => { near[f * 4 + k] = j; w[f * 4 + k] = 1 / (dd + 0.05); sw += w[f * 4 + k]; });
+      for (let k = 0; k < 4; k++) w[f * 4 + k] /= sw;
+      const nz = r() * 2 - 1, na = r() * Math.PI * 2, nr = Math.sqrt(1 - nz * nz);
+      fn[f * 3] = nr * Math.cos(na); fn[f * 3 + 1] = nz; fn[f * 3 + 2] = nr * Math.sin(na);
+    }
+    // (each flake's own: what colour (silver, pink, lilac), how big)
+    const data = new Float32Array(N * 8);
+    for (let f = 0; f < N; f++) { data[f * 8 + 6] = r(); data[f * 8 + 7] = 0.05 + 0.05 * r(); }
+    const buf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
+    const fvao = gl.createVertexArray()!;
+    gl.bindVertexArray(fvao);
+    for (const [name, size, off] of [['aPos', 3, 0], ['aNor', 3, 3], ['aK', 2, 6]] as Array<[string, number, number]>) {
+      const loc = gl.getAttribLocation(glitterProg, name);
+      if (loc < 0) continue;
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 32, off * 4);
+    }
+    gl.bindVertexArray(null);
+    flakes = { n: N, rest: fr, near, w, nor: fn, data, buf, vao: fvao };
+  }
+  return { kind, vao, svao, pos, nor, count: d.tris.length, normals: new Float32Array(d.x.length), shown: new Float32Array(d.x.length), q: d.q, flakes };
+}
+const skins = { jelly: skinOnCard('jelly'), dough: skinOnCard('dough') };
+/** The skin as drawn: between the solver's last two states, its normals from its triangles; and the glitter carried along. */
 let prevX = new Float32Array(0);
-function uploadDough(alpha: number) {
-  const x = body.x, s = dough.shown, nrm = dough.normals;
+function uploadSkin(alpha: number) {
+  const g = skins[body.kind];
+  const x = body.x, s = g.shown, nrm = g.normals;
   for (let i = 0; i < x.length; i++) s[i] = prevX.length === x.length ? prevX[i] + (x[i] - prevX[i]) * alpha : x[i];
   nrm.fill(0);
   const t = body.tris;
@@ -495,10 +714,29 @@ function uploadDough(alpha: number) {
     for (const i of [a, b, c]) { nrm[i] += nx; nrm[i + 1] += ny; nrm[i + 2] += nz; }
   }
   for (let i = 0; i < nrm.length; i += 3) { const l = Math.hypot(nrm[i], nrm[i + 1], nrm[i + 2]) || 1; nrm[i] /= l; nrm[i + 1] /= l; nrm[i + 2] /= l; }
-  gl.bindBuffer(gl.ARRAY_BUFFER, dough.pos);
+  gl.bindBuffer(gl.ARRAY_BUFFER, g.pos);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, s);
-  gl.bindBuffer(gl.ARRAY_BUFFER, dough.nor);
+  gl.bindBuffer(gl.ARRAY_BUFFER, g.nor);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, nrm);
+  const fl = g.flakes;
+  if (!fl) return;
+  // (each flake where its four particles would put it, each as if the flake were held to it as it's turned)
+  const R = body.R, q = g.q, out = fl.data;
+  for (let f = 0; f < fl.n; f++) {
+    let px = 0, py = 0, pz = 0;
+    for (let k = 0; k < 4; k++) {
+      const j = fl.near[f * 4 + k], w = fl.w[f * 4 + k];
+      const dx = fl.rest[f * 3] - q[j * 3], dy = fl.rest[f * 3 + 1] - q[j * 3 + 1], dz = fl.rest[f * 3 + 2] - q[j * 3 + 2];
+      px += w * (s[j * 3] + R[0] * dx + R[1] * dy + R[2] * dz);
+      py += w * (s[j * 3 + 1] + R[3] * dx + R[4] * dy + R[5] * dz);
+      pz += w * (s[j * 3 + 2] + R[6] * dx + R[7] * dy + R[8] * dz);
+    }
+    const nx = fl.nor[f * 3], ny = fl.nor[f * 3 + 1], nz = fl.nor[f * 3 + 2];
+    out[f * 8] = px; out[f * 8 + 1] = py; out[f * 8 + 2] = pz;
+    out[f * 8 + 3] = R[0] * nx + R[1] * ny + R[2] * nz; out[f * 8 + 4] = R[3] * nx + R[4] * ny + R[5] * nz; out[f * 8 + 5] = R[6] * nx + R[7] * ny + R[8] * nz;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, fl.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, out);
 }
 
 // ─── the game ────────────────────────────────────────────────────────────────────────────────────
@@ -521,7 +759,7 @@ function startLevel(n: number) {
   drop(roomMesh);
   roomMesh = upload(room(lv));
   const at = lv.towers[0].at;
-  body = new Dumpling([at[0], at[1] + REST_H + 0.4, at[2]]);
+  body = new Dumpling([at[0], at[1] + REST_H + 0.4, at[2]], skin);
   prevX = new Float32Array(body.x);
   check = 0; falls = 0; clock = 0; home = -1; still = 0; fallenAt = -1;
   camYaw = Math.atan2(lv.towers[1].at[0] - at[0], lv.towers[1].at[2] - at[2]);
@@ -672,6 +910,17 @@ btn('again', () => startLevel(levelN));
 btn('next', () => startLevel(levelN + 1));
 btn('prev', () => startLevel(levelN - 1));
 btn('nextw', () => startLevel(levelN + 1));
+btn('skin', () => {
+  // (jelly ⇄ dough: the new one set down where the old one was)
+  skin = skin === 'jelly' ? 'dough' : 'jelly';
+  try { localStorage.setItem(STORE + ':skin', skin); } catch { /* */ }
+  const at = body.com;
+  body = new Dumpling([at[0], at[1] + 0.5, at[2]], skin);
+  prevX = new Float32Array(body.x);
+  showSkin();
+});
+function showSkin() { $('skin').textContent = skin; }
+showSkin();
 btn('sound', () => {
   soundOn = !soundOn;
   $('sound').textContent = soundOn ? 'sound on' : 'sound off';
@@ -802,6 +1051,21 @@ function drawMesh(m: Mesh, M: Float32Array = I4, mat = -1) {
   gl.drawArrays(gl.TRIANGLES, 0, m.count);
 }
 
+/** A copy of what's been drawn so far (the room, the course), for the jelly to be seen through. */
+const sceneTex = gl.createTexture()!;
+let sceneW = 0, sceneH = 0;
+function sceneCopy(W: number, H: number) {
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  if (W !== sceneW || H !== sceneH) {
+    sceneW = W; sceneH = H;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, W, H, 0, gl.RGB, gl.UNSIGNED_BYTE, null);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+  }
+  gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, W, H);
+  gl.activeTexture(gl.TEXTURE0);
+}
+
 let last = performance.now();
 let time = 0;
 let lag = 0;
@@ -836,7 +1100,7 @@ function frame(now: number) {
   const span = 70;
   const lightVP = ortho(body.com, KEY, span, 500);
   const shadowSoft = (500 * 0.08) / ((2 * span) / SHADOW);
-  uploadDough(Math.max(0, Math.min(1, lag * 60)));
+  uploadSkin(Math.max(0, Math.min(1, lag * 60)));
 
   // 1. the window's shadow map
   gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFb);
@@ -847,8 +1111,9 @@ function frame(now: number) {
   gl.uniformMatrix4fv(u(shadowProg, 'uLightVP'), false, lightVP);
   gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, I4);
   if (courseMesh) { gl.bindVertexArray(courseMesh.svao); gl.drawArrays(gl.TRIANGLES, 0, courseMesh.count); }
-  gl.bindVertexArray(dough.svao);
-  gl.drawElements(gl.TRIANGLES, dough.count, gl.UNSIGNED_SHORT, 0);
+  const sk = skins[body.kind];
+  gl.bindVertexArray(sk.svao);
+  gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
   // 2. the room beyond
@@ -910,23 +1175,75 @@ function frame(now: number) {
   gl.depthMask(true);
   gl.disable(gl.BLEND);
 
+  // (the jelly's light: where the window's light comes through it to the ground, focused, pink)
+  if (body.kind === 'jelly') {
+    const lit = groundAlong(body.com, mul(KEY, -1));
+    if (lit) {
+      const far = len(sub(lit.p, body.com));
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.depthMask(false);
+      gl.uniform1f(u(prog, 'uAlpha'), 0.42 * Math.max(0, 1 - far / 90));
+      drawMesh(DISC, flatOn(add(lit.p, mul(lit.n, 0.06)), lit.n, RADIUS * (1.25 + far * 0.012)), 16);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+    }
+  }
+
   // 4. the dumpling
-  gl.useProgram(doughProg);
-  lightUniforms(doughProg);
-  gl.uniformMatrix4fv(u(doughProg, 'uVP'), false, vp);
-  gl.uniformMatrix4fv(u(doughProg, 'uLightVP'), false, lightVP);
-  gl.uniform3fv(u(doughProg, 'uEye'), eye);
-  gl.uniform1f(u(doughProg, 'uShadowSoft'), shadowSoft);
-  gl.uniform1i(u(doughProg, 'uShadowMap'), 0);
-  gl.uniform1f(u(doughProg, 'uR'), RADIUS);
-  // (its face: squeezed shut winding up, an o in the air, a smile at home; and it blinks)
   if (time > blinkAt + 0.14) blinkAt = time + 2 + Math.random() * 3;
   const blink = time > blinkAt ? Math.sin(((time - blinkAt) / 0.14) * Math.PI) : 0;
+  // (its face: squeezed shut winding up, an o in the air, a smile at home; and it blinks)
   const face = home >= 0 ? 2 : aimNow ? 1 : body.contacts === 0 && body.sinceFlick < 2 ? 3 : 0;
-  gl.uniform1f(u(doughProg, 'uFace'), face);
-  gl.uniform1f(u(doughProg, 'uBlink'), blink);
-  gl.bindVertexArray(dough.vao);
-  gl.drawElements(gl.TRIANGLES, dough.count, gl.UNSIGNED_SHORT, 0);
+  const skinUniforms = (p: WebGLProgram) => {
+    gl.useProgram(p);
+    lightUniforms(p);
+    gl.uniformMatrix4fv(u(p, 'uVP'), false, vp);
+    gl.uniformMatrix4fv(u(p, 'uLightVP'), false, lightVP);
+    gl.uniform3fv(u(p, 'uEye'), eye);
+    gl.uniform1f(u(p, 'uShadowSoft'), shadowSoft);
+    gl.uniform1i(u(p, 'uShadowMap'), 0);
+    gl.uniform1f(u(p, 'uR'), RADIUS);
+    gl.uniform1f(u(p, 'uFace'), face);
+    gl.uniform1f(u(p, 'uBlink'), blink);
+  };
+  gl.bindVertexArray(sk.vao);
+  if (body.kind === 'dough') {
+    skinUniforms(doughProg);
+    gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
+  } else {
+    // what's behind it, to see through it
+    sceneCopy(W, H);
+    skinUniforms(jellyProg);
+    gl.uniform1i(u(jellyProg, 'uScene'), 1);
+    gl.uniform2f(u(jellyProg, 'uRes'), W, H);
+    gl.uniform1f(u(jellyProg, 'uPass'), 0);
+    gl.enable(gl.CULL_FACE);
+    gl.depthMask(false);
+    gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
+    // the glitter in it
+    const fl = sk.flakes!;
+    gl.useProgram(glitterProg);
+    lightUniforms(glitterProg);
+    gl.uniformMatrix4fv(u(glitterProg, 'uVP'), false, vp);
+    gl.uniform3fv(u(glitterProg, 'uEye'), eye);
+    gl.uniform3fv(u(glitterProg, 'uCom'), body.com);
+    gl.uniform1f(u(glitterProg, 'uR'), RADIUS);
+    gl.uniform1f(u(glitterProg, 'uScale'), H * 0.9);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.bindVertexArray(fl.vao);
+    gl.drawArrays(gl.POINTS, 0, fl.n);
+    // and on it: its gloss, its face
+    skinUniforms(jellyProg);
+    gl.uniform1f(u(jellyProg, 'uPass'), 1);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(true);
+    gl.bindVertexArray(sk.vao);
+    gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+  }
 
   // 5. steam and flour
   if (puffs.length) {
@@ -1031,6 +1348,18 @@ function groundUnder(p: V3): { p: V3; n: V3 } | null {
   return null;
 }
 
+/** Where a line from a point first meets the course (for where the window's light through the jelly falls). */
+function groundAlong(p: V3, d: V3, max = 160): { p: V3; n: V3 } | null {
+  const e = add(p, mul(d, max));
+  const lo = [Math.min(p[0], e[0]) - 1, Math.min(p[1], e[1]) - 1, Math.min(p[2], e[2]) - 1], hi = [Math.max(p[0], e[0]) + 1, Math.max(p[1], e[1]) + 1, Math.max(p[2], e[2]) + 1];
+  const col = lv.shapes.filter((s) => s.lo[0] <= hi[0] && s.hi[0] >= lo[0] && s.lo[1] <= hi[1] && s.hi[1] >= lo[1] && s.lo[2] <= hi[2] && s.hi[2] >= lo[2]);
+  for (let t = 0; t < max; t += 0.5) {
+    const x = p[0] + d[0] * t, y = p[1] + d[1] * t, z = p[2] + d[2] * t;
+    for (const s of col) if (touch(s, x, y, z, 0.05, hitTmp) && hitTmp.d > 0) return { p: [x, y, z], n: [hitTmp.nx, hitTmp.ny, hitTmp.nz] };
+  }
+  return null;
+}
+
 /** A step of the game: the dumpling; where it's stood, falling, home; a flick asked for in the air; the autopilot. */
 function tick(dt: number) {
   body.step(lv, dt, simTime);
@@ -1039,7 +1368,7 @@ function tick(dt: number) {
   if (body.impact > 90) {
     const k = Math.min(1, body.impact / 300);
     squish(k);
-    if (body.impact > 140) flourPuff(body.com, k);
+    if (body.impact > 140 && body.kind === 'dough') flourPuff(body.com, k);
     if (lv.shapes.some((s) => s.bounce > 0 && Math.hypot(s.c[0] - body.com[0], s.c[2] - body.com[2]) < s.r + 2) && body.impact > 120) boing();
   }
   if (fallenAt >= 0) {

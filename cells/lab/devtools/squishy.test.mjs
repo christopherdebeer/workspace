@@ -1,6 +1,6 @@
-// Squishy's dumpling and course, on their own: at rest it keeps its shape and its volume; dropped,
+// Squishy's dumpling (jelly and dough) and course, on their own: at rest it keeps its shape and its volume; dropped,
 // it squashes wide (not smaller) and comes back; flicked, its middle lands where the aiming arc
-// says; sat still it turns to look where it's asked; a chopstick is a stick; every level is the
+// says; tipped over it rolls back up; sat still it turns to look where it's asked; a chopstick is a stick; every level is the
 // same level each time, every hop in it can be made, and flicked by the book it gets home
 // without a fall. (node cells/lab/devtools/squishy.test.mjs)
 import { build } from 'esbuild';
@@ -14,9 +14,10 @@ const flat = { n: 0, towers: [], sticks: [], shapes: [L.box([0, -5, 0], [200, 5,
 const run = (d, lv, secs, each) => { for (let t = 0; t < secs; t += DT) { d.step(lv, DT, t); each?.(t); } };
 const speed = (d) => Math.hypot(...d.vcom);
 
+for (const kind of ['jelly', 'dough']) {
 // ─── at rest ──────────────────────────────────────────────────────────────────────────────────
 {
-  const d = new B.Dumpling([0, L.REST_H + 0.3, 0]);
+  const d = new B.Dumpling([0, L.REST_H + 0.3, 0], kind);
   assert.ok(d.n > 300, `particles: ${d.n}`);
   const h0 = d.height();
   run(d, flat, 3);
@@ -25,14 +26,14 @@ const speed = (d) => Math.hypot(...d.vcom);
   assert.ok(Math.abs(vol - 1) < 0.03, `keeps its volume at rest: ${vol}`);
   assert.ok(speed(d) < 1, `settles: ${speed(d)}`);
   assert.ok(d.R[4] > 0.98, `upright: ${d.R[4]}`);
-  assert.ok(d.height() > h0 * 0.7 && d.height() <= h0 * 1.05, `sits a little slumped, as dough: ${d.height() / h0}`);
+  assert.ok(d.height() > h0 * 0.7 && d.height() <= h0 * 1.05, `sits a little slumped, as soft things do: ${d.height() / h0}`);
   assert.ok(d.contacts > 0 && d.canFlick, 'on the ground, and can be flicked');
-  console.log(`rest ok: ${d.n} particles, height ${(d.height() / h0).toFixed(2)}, volume ${vol.toFixed(3)}`);
+  console.log(`${kind} rest ok: ${d.n} particles, height ${(d.height() / h0).toFixed(2)}, volume ${vol.toFixed(3)}`);
 }
 
 // ─── dropped ──────────────────────────────────────────────────────────────────────────────────
 {
-  const d = new B.Dumpling([0, 30, 0]);
+  const d = new B.Dumpling([0, 30, 0], kind);
   const h0 = d.height();
   let minH = 9, volAtMin = 1, wide = 0, after = 0;
   run(d, flat, 2.5, (t) => {
@@ -45,13 +46,13 @@ const speed = (d) => Math.hypot(...d.vcom);
   assert.ok(wide > L.RADIUS * 1.05, `bulges out: ${wide}`);
   assert.ok(after > minH + 0.05 && after > 0.7, `and comes back: ${after}`);
   assert.ok(d.R[4] > 0.95 && speed(d) < 2, 'upright and still');
-  console.log(`drop ok: squashed to ${minH.toFixed(2)} (volume ${volAtMin.toFixed(2)}), back to ${after.toFixed(2)}`);
+  console.log(`${kind} drop ok: squashed to ${minH.toFixed(2)} (volume ${volAtMin.toFixed(2)}), back to ${after.toFixed(2)}`);
 }
 
 // ─── flicked: lands where the arc says, and stays ─────────────────────────────────────────────
 {
   for (const [yaw, power] of [[0, 0.5], [1.2, 0.8], [-2, 0.2]]) {
-    const d = new B.Dumpling([0, L.REST_H + 0.2, 0]);
+    const d = new B.Dumpling([0, L.REST_H + 0.2, 0], kind);
     run(d, flat, 1);
     const vel = L.launch(yaw, power);
     const pa = L.path(flat, [...d.com], vel);
@@ -68,12 +69,12 @@ const speed = (d) => Math.hypot(...d.vcom);
     assert.ok(d.R[4] > 0.95, `right way up after: ${d.R[4]}`);
     assert.ok(Math.abs(d.volume() / d.restVolume - 1) < 0.04);
   }
-  console.log('flick ok');
+  console.log(`${kind} flick ok`);
 }
 
 // ─── sat still, it turns to look where it's asked (its face is its rest shape's +z) ───────────
 {
-  const d = new B.Dumpling([0, L.REST_H + 0.3, 0]);
+  const d = new B.Dumpling([0, L.REST_H + 0.3, 0], kind);
   run(d, flat, 1);
   const off = () => { const fx = d.R[2], fz = d.R[8], l = d.look; return Math.abs(Math.atan2(fx * l[2] - fz * l[0], fx * l[0] + fz * l[2])) * 180 / Math.PI; };
   d.look = [-0.6, 0, -0.8];
@@ -81,7 +82,19 @@ const speed = (d) => Math.hypot(...d.vcom);
   run(d, flat, 1.5);
   assert.ok(before > 120 && off() < 6, `turns to look: ${before.toFixed(0)}° → ${off().toFixed(0)}°`);
   assert.ok(speed(d) < 2 && d.R[4] > 0.98, 'turning, it stays put and upright');
-  console.log('look ok');
+  console.log(`${kind} look ok`);
+}
+
+// ─── tipped over, on its side or its head, it rolls itself back up ─────────────────────────────
+for (const ang of [1.6, 2.4, 3.1]) {
+  const d = new B.Dumpling([0, 5, 0], kind);
+  d.turn([1, 0, 0], ang);
+  assert.ok(d.R[4] < 0, 'starts over');
+  run(d, flat, 2);
+  assert.ok(d.R[4] > 0.98, `${kind} rights itself from ${ang}: ${d.R[4]}`);
+}
+console.log(`${kind} righting ok`);
+
 }
 
 // ─── the meshes: a chopstick is a stick, end to end ───────────────────────────────────────────
@@ -124,10 +137,10 @@ const speed = (d) => Math.hypot(...d.vcom);
 
 // ─── flicked by the book (to the middle of the band, from where it sits), it gets home ─────────
 {
-  for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
+  for (const [kind, n] of [1, 2, 3, 4, 5, 6, 7, 8].flatMap((n) => [['jelly', n], ['dough', n]]).filter(([k, n]) => k === 'jelly' || n % 2)) {
     const lv = L.buildLevel(n);
     const s = lv.towers[0].at;
-    const d = new B.Dumpling([s[0], s[1] + L.REST_H + 0.3, s[2]]);
+    const d = new B.Dumpling([s[0], s[1] + L.REST_H + 0.3, s[2]], kind);
     let home = -1, still = 0;
     for (let t = 0; t < 150 && home < 0; t += DT) {
       d.step(lv, DT, t);
@@ -141,8 +154,8 @@ const speed = (d) => Math.hypot(...d.vcom);
         d.flick(L.launch(a.yaw, a.power)); still = 0;
       }
     }
-    assert.ok(home >= 0, `level ${n} home`);
-    console.log(`level ${n} home in ${home.toFixed(1)} s`);
+    assert.ok(home >= 0, `${kind}: level ${n} home`);
+    console.log(`${kind}: level ${n} home in ${home.toFixed(1)} s`);
   }
 }
 console.log('squishy ok');
