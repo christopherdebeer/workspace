@@ -84,7 +84,16 @@ slope.
   over the line and nobody off the board. Across a sweep of seeded runs, the order at rest in
   the channel is the order over the line. The page is driven with
   `node cells/lab/devtools/marbles-shot.mjs --test`.
-- Drawn in WebGL2 with a shadow map from the sun; the materials are shaded by roughness and
-  metalness, glass refracts and glints, steel mirrors the sky; the floor and sides are
-  cardboard.
+- Drawn in WebGL2 into the frame's own multisampled buffer, in linear light with a filmic
+  roll-off at the end. The cardboard is built: paper skins about a corrugated core, seen
+  wherever a piece was cut (the top of every strip, its rounded ends, the edge of a board, the
+  side of a peg), glue seams at every foot, tape at the joins, fibres along the way a piece was
+  made; trestles of timber hold the run up over a workshop floor, and the room around (a dark
+  floor, warm walls, a broad window) is what the glass reflects. A marble is glass seen into:
+  the view refracts in, crosses the sphere and refracts out, and what it then meets is read from
+  the scene already drawn (the board, magnified and bent); the ribbons and swirls are marched
+  through in the marble's own space, so they have depth and turn as it rolls; bubbles catch the
+  light. The sun's shadow map moves in whole texels, so edges don't crawl; a soft dark lies
+  under every marble; what the frame draws is between the solver's last two states, by how far
+  into the next step it is. A stuck marble's nudge is seen as a tap on the board, and heard.
 - `?auto` (and the index's preview) races a fixed run and follows the leader.
