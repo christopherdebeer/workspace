@@ -11,18 +11,23 @@ the line is build mode: three boards on offer; pick one and the run grows downwa
 
 | | Touch | Mouse and keys |
 |---|---|---|
-| make a marble yours | tap it, or its row on the board | click |
-| go | `go`, or tap the board | space |
-| line up again | `from the top` | space |
-| from the last board | `from the end` | |
-| follow the leader instead | `following …` | F |
+| make a marble yours | tap it, or its dot in the order | click |
+| go (from the lineup) / again (back to the gate) | the dark button, or tap the board when lined up | space |
+| the camera: yours, the leader, the finish | the light button beside it | C |
 | look round | drag | drag |
 | come close | pinch | the wheel |
 
+`build` swaps those two buttons for building's three: `add it`, `undo`, and `try it`, which
+races just the last board, the camera on the leader, to see how it runs. A line of help
+shows for a moment at each change and then gets out of the way.
+
 The row across the top is the order, first on the left: yours is the big one, named, and the
 ones in are ringed; tap any to follow it. The clock beside it has your place and your gap.
-Nothing else sits over the board. When all are in, each marble's name and time fades in beside
-it, to the right of the channel, which is barely wider than a marble, so the file is straight. The marbles are a roster, as a tournament's: all glass and all
+Nothing else sits over the board. As each marble crosses the line its place, name and time
+fade in beside it, to the right of the channel, which is barely wider than a marble, so the
+file is straight. A marble that has come to rest there sleeps (it stays put, a stone for the
+next to stop against, unless knocked hard), so the file settles in under a second; and once
+the first is in, a straggler stuck on the run is waited for 25 seconds and no longer. The marbles are a roster, as a tournament's: all glass and all
 the same size, so the run and the knocks decide it and not the marble; each its own look (a
 cat's eye, a swirl, speckled, banded), its own colours, its own name. The pattern is in the
 glass, so it turns as the marble rolls.
@@ -114,7 +119,12 @@ slope.
   through in the marble's own space, so they have depth and turn as it rolls; bubbles catch the
   light. The sun's shadow map moves in whole texels, so edges don't crawl; a soft dark lies
   under every marble; what the frame draws is between the solver's last two states, by how far
-  into the next step it is. The floor wears where they run: a rubbed band along each side,
+  into the next step it is. Shadows are as soft as a broad window makes them: a blocker
+  search in the shadow map finds how far the blocker is, and the filter is that wide, so the
+  foot of a strip is crisp and its far edge spreads. Each marble lays a caustic in its own
+  shadow, in its colour, from the key light by day and the nearest lamp at night. The frame
+  goes to the screen through a lens: in focus at the marble the camera is on, softer nearer
+  and further, a sharp thing in front never smeared by the blur behind it. The floor wears where they run: a rubbed band along each side,
   scuffs along the way, and the roughness varies with the paper. Nearing the end of a board the
   chase leans toward the next board's heading, so a bend is met rather than chased. A stuck marble's nudge is seen as a tap on the board, and heard.
 - `?auto` (and the index's preview) races a fixed run and follows the leader.

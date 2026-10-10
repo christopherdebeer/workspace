@@ -89,17 +89,72 @@ vec3 lamplight(vec3 p, vec3 n, vec3 V, vec3 diffuseCol, vec3 F0, float rough) {
   return acc;
 }`;
 const SHADOW_GLSL = `
+/** how soft: penumbra texels per unit of light-space depth between the blocker and the receiver */
+uniform float uShadowSoft;
+const vec2 PD[12] = vec2[12](vec2(-.326, -.406), vec2(-.840, -.074), vec2(-.696, .457), vec2(-.203, .621), vec2(.962, -.195), vec2(.473, -.480),
+  vec2(.519, .767), vec2(.185, -.893), vec2(.507, .064), vec2(.896, .412), vec2(-.322, -.933), vec2(-.792, -.598));
+/**
+ * The key light's shadow, soft as it is under a broad window: where the blocker is close (the
+ * foot of a strip, a marble on the floor) the edge is crisp; further off it spreads. A blocker
+ * search finds how far, then a filter that wide, its taps turned per pixel so it never bands.
+ */
 float shadow(vec3 n) {
   vec3 s = vShadow.xyz / vShadow.w * .5 + .5;
   if (s.x < 0. || s.x > 1. || s.y < 0. || s.y > 1. || s.z > 1.) return 1.;
   float bias = max(.0012 * (1. - dot(n, uKey)), .0004);
-  float lit = 0.;
   vec2 px = 1. / vec2(textureSize(uShadowMap, 0));
-  for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) {
-    float d = texture(uShadowMap, s.xy + vec2(x, y) * px).r;
+  float a = hash3(vec3(gl_FragCoord.xy, 7.)) * 6.2832;
+  mat2 rot = mat2(cos(a), sin(a), -sin(a), cos(a));
+  float zb = 0., nb = 0.;
+  for (int i = 0; i < 6; i++) {
+    float d = texture(uShadowMap, s.xy + rot * PD[i * 2] * px * 14.).r;
+    if (d < s.z - bias) { zb += d; nb += 1.; }
+  }
+  if (nb < .5) return 1.;
+  zb /= nb;
+  float w = clamp((s.z - zb) * uShadowSoft, 1.2, 16.);
+  float lit = 0.;
+  for (int i = 0; i < 12; i++) {
+    float d = texture(uShadowMap, s.xy + rot * PD[i] * px * w).r;
     lit += s.z - bias > d ? 0. : 1.;
   }
-  return lit / 9.;
+  return lit / 12.;
+}`;
+
+/**
+ * Depth of field, as a lens has it: in focus at the marble the camera is on, softer nearer and
+ * further. Each pixel gathers a disc as wide as its own circle of confusion; a sharp thing in
+ * front isn't smeared over by the blur behind it.
+ */
+const POST_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 o;
+uniform sampler2D uColor, uDepth;
+uniform vec2 uRes;
+uniform float uFocus, uAperture, uMaxR, uNear, uFar;
+const vec2 PD[16] = vec2[16](vec2(-.94, -.40), vec2(.95, -.77), vec2(-.09, -.93), vec2(.34, .29), vec2(-.92, .46), vec2(-.38, .03), vec2(.18, -.38), vec2(.71, .22),
+  vec2(-.53, -.76), vec2(.45, -.20), vec2(-.21, .72), vec2(.63, .78), vec2(.02, .40), vec2(-.66, .02), vec2(.86, -.31), vec2(-.04, -.14));
+float lin(float z) { return 2. * uNear * uFar / (uFar + uNear - (2. * z - 1.) * (uFar - uNear)); }
+// (a lens's circle of confusion: the further from the focus, the wider, and less so the further the focus is)
+float coc(float d) { return clamp(uAperture * abs(d - uFocus) / max(d, 1.) * clamp(45. / uFocus, .4, 1.5) - .35, 0., uMaxR); }
+void main() {
+  float dc = lin(texture(uDepth, vUV).r);
+  float cc = coc(dc);
+  vec3 sum = texture(uColor, vUV).rgb;
+  float wsum = 1.;
+  if (cc > .6) {
+    for (int i = 0; i < 16; i++) {
+      vec2 uv = vUV + PD[i] * cc / uRes;
+      float ds = lin(texture(uDepth, uv).r);
+      float cs = coc(ds);
+      // (a nearer, sharper sample only counts as far as its own blur reaches)
+      float w = ds < dc ? clamp(cs / cc, 0., 1.) : 1.;
+      sum += texture(uColor, uv).rgb * w;
+      wsum += w;
+    }
+  }
+  o = vec4(sum / wsum, 1.);
 }`;
 
 /** dust in the air: motes drifting in the light, kept in a box about the eye (wrapped, so it is never left) */
@@ -200,7 +255,7 @@ flat in float vMat;
 out vec4 o;
 uniform sampler2D uShadowMap;
 uniform vec3 uEye, uTint;
-uniform float uCut, uTime, uGhost, uFar;
+uniform float uCut, uTime, uGhost, uFar, uGlow;
 /** the theme's materials, by id: colour and roughness; metalness, style, detail */
 uniform vec4 uCol[24];
 uniform vec4 uPar[24];
@@ -312,6 +367,13 @@ void main() {
   } else if (vMat > 15.5 && vMat < 16.5) {
     // the bulb: it glows when the lamps are lit; a dull glass when not
     o = vec4(tonemap(mix(vec3(.5, .5, .48), uLampCol * 6., uNight)), 1.); return;
+  } else if (vMat > 21.5 && vMat < 22.5) {
+    // a caustic: the light a marble gathers and lays on the floor in its own shadow, in its colour
+    float r2 = dot(vUV, vUV);
+    float core = exp(-r2 * 9.) * .9, halo = exp(-r2 * 2.5) * .25;
+    float edge = 1. - smoothstep(.75, 1., sqrt(r2));
+    vec3 cc = mix(vec3(1.), uTint, .65) * (core + halo) * edge * uGlow;
+    o = vec4(cc * .55, 1.); return;
   } else if (vMat > 19.5 && vMat < 20.5) {
     // a window pane: by day the sky and the garden beyond, softly; by night the dark, stars, the moon
     vec2 q = vUV;
@@ -466,6 +528,7 @@ function program(vs: string, fs: string): WebGLProgram {
 }
 const skyProg = program(SKY_VS, SKY_FS);
 const dustProg = program(DUST_VS, DUST_FS);
+const postProg = program(SKY_VS, POST_FS);
 const dustVao = gl.createVertexArray()!;
 const DUST_N = 700;
 {
@@ -618,7 +681,7 @@ function save() {
   if (auto) return;
   try { localStorage.setItem(STORE, JSON.stringify({ seed, choices, mine, follow })); } catch { /* */ }
   history.replaceState(null, '', `?${encode(seed, choices)}${mine ? `&marble=${mine}` : ''}${theme.id !== THEMES[0].id ? `&theme=${theme.id}` : ''}`);
-  $('seed').textContent = `run ${seed} · ${sections.length} section${sections.length === 1 ? '' : 's'}`;
+  $('seed').textContent = `run ${seed} · ${sections.length}`;
 }
 
 // ─── the marbles ──────────────────────────────────────────────────────────────────────────────────
@@ -655,15 +718,19 @@ function roster(seedR: number): Look[] {
 const LOOKS = roster(1);
 const lookOf = new Map(LOOKS.map((l) => [l.name, l]));
 let marbles: Marble[] = LOOKS.map((l) => marble(l.name, MATERIALS[0], MARBLE_R, l.tint));
-/** yours: the one the camera follows (its name), or the leader */
+/** yours: the one the camera follows (its name) */
 let mine = LOOKS[0].name;
-let follow: 'mine' | 'leader' = 'mine';
+/** the camera: on yours, on the leader, or on the finish (the channel, where they come to rest) */
+let follow: 'mine' | 'leader' | 'finish' = 'mine';
+const CAMS: Array<typeof follow> = ['mine', 'leader', 'finish'];
 let raceTime = 0;
 let racing = false;
 /** the race: lining up behind the gate (tap a marble to make it yours, tap to go), running, or all in */
 let phase: 'lineup' | 'racing' | 'done' = 'lineup';
 let impacts: Impact[] = [];
 let doneAt = 0;
+/** when the first crossed the line (a stuck straggler doesn't hold the result up for ever) */
+let firstInAt = -1;
 /** the race began from this section (0: the top) */
 let fromSection = 0;
 /** Everyone to the gate, the gate down: waiting on a tap. */
@@ -673,8 +740,11 @@ function lineup() {
   raceTime = 0;
   racing = false;
   phase = 'lineup';
+  if (follow === 'finish') follow = 'mine';
   mode('race');
-  showHands();
+  resetNames();
+  showFollow();
+  hint();
 }
 function release(from = 0) {
   fromSection = from;
@@ -684,14 +754,16 @@ function release(from = 0) {
   raceTime = 0;
   racing = true;
   phase = 'racing';
+  firstInAt = -1;
   mode('race');
-  showHands();
+  resetNames();
+  hint();
   tick(1.5);
 }
 /** whether the gate still holds them (the first moments of a race from the top) */
 const held = () => racing && fromSection === 0 && raceTime < 0.35;
 function followed(): Marble {
-  if (follow === 'leader') return order(marbles)[0];
+  if (follow === 'leader' || (follow === 'finish' && phase !== 'lineup')) return order(marbles)[0];
   return marbles.find((m) => m.name === mine) ?? marbles[0];
 }
 /** the board a marble is on (or nearest), and its frame there (a bent board turns as it goes) */
@@ -757,15 +829,30 @@ function mode(v: 'race' | 'build') {
   view = v;
   document.body.classList.toggle('building', v === 'build');
   if (v === 'build') { racing = false; offer(0); flyToEnd(); }
-  showHands();
+  hint();
 }
-/** which hands show: the lineup's, the race's, the building's */
+/** which hands show: the lineup's, the race's, the building's; what the main button says */
 function showHands() {
   document.body.classList.toggle('lineup', view === 'race' && phase === 'lineup');
   document.body.classList.toggle('done', view === 'race' && phase === 'done');
   const l = lookOf.get(mine);
-  $('hint').textContent = phase === 'lineup' ? `${mine} is yours · tap another to change · tap the board to go` : phase === 'done' ? 'all in: first at the top of the channel · tap a marble to look at it' : 'tap a marble to follow it · drag to look round · pinch to come close';
+  $('go').textContent = phase === 'lineup' ? 'go' : 'again';
   $('go').style.setProperty('--mine', l?.css ?? '#fff');
+  $('build').textContent = view === 'build' ? 'race' : 'build';
+}
+/** A line of help for a moment, then gone (it's there again at the next change of phase). */
+let hintTimer = 0;
+function hint() {
+  showHands();
+  const text = view === 'build' ? 'tap a board to see it · add it to the run · try it to race the end'
+    : phase === 'lineup' ? `${mine} is yours · tap another to choose · go when ready`
+    : phase === 'done' ? 'all in · first at the top of the channel'
+    : 'tap a marble to follow it · drag to look · pinch to come close';
+  const el = $('hint');
+  el.textContent = text;
+  el.classList.add('on');
+  clearTimeout(hintTimer);
+  hintTimer = window.setTimeout(() => el.classList.remove('on'), phase === 'lineup' && view === 'race' ? 9000 : 3500);
 }
 
 // ─── the camera ─────────────────────────────────────────────────────────────────────────────────
@@ -807,7 +894,7 @@ function updateCamera(dt: number) {
     orbit.pitch *= Math.exp(-dt * 0.8);
     return;
   }
-  if (phase === 'done' || m.finished >= 0) {
+  if (phase === 'done' || m.finished >= 0 || follow === 'finish') {
     // the result: over the channel, looking down it; first at the top
     const f = course.fin.board.frame;
     const centre = add(f.p, mul(f.t, (course.fin.throat + course.fin.channelEnd) / 2 + 2));
@@ -898,13 +985,10 @@ const up = (e: PointerEvent) => {
   if (pointers.size < 2) two = null;
   if (p && !p.moved && e.type === 'pointerup' && view === 'race') {
     // a tap on a marble: that one is yours; lining up, a tap elsewhere is go; otherwise the next marble
+    // (a tap on a marble: that one is yours, and the camera on it; lining up, a tap elsewhere is go)
     const hit = pick(e.clientX, e.clientY);
     if (hit) choose_(hit.name);
     else if (phase === 'lineup') release(0);
-    else {
-      const i = marbles.findIndex((m) => m.name === mine);
-      choose_(marbles[(i + 1) % marbles.length].name);
-    }
   }
 };
 canvas.addEventListener('pointerup', up);
@@ -934,14 +1018,15 @@ canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.5, Math.min(3, zoom * Math.exp(-e.deltaY * 0.0012))); }, { passive: false });
 
 const btn = (id: string, f: () => void) => $(id).addEventListener('click', (e) => { e.stopPropagation(); wake(); f(); });
-btn('go', () => release(0));
+/** the main button: go from the lineup; again from anywhere else (back to the gate) */
+btn('go', () => (phase === 'lineup' ? release(0) : lineup()));
+btn('cam', () => { follow = CAMS[(CAMS.indexOf(follow) + 1) % CAMS.length]; showFollow(); save(); });
 btn('theme', () => setTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]));
-btn('race', () => lineup());
-btn('here', () => release(Math.max(0, sections.length - 1)));
-btn('build', () => mode(view === 'build' ? 'race' : 'build'));
+btn('build', () => (view === 'build' ? lineup() : mode('build')));
 btn('add', addChosen);
 btn('undo', undoSection);
-btn('follow', () => { follow = follow === 'mine' ? 'leader' : 'mine'; showFollow(); save(); });
+/** building: race just the last board, to see how it runs */
+btn('try', () => { follow = 'leader'; release(Math.max(0, sections.length - 1)); showFollow(); });
 btn('new', () => { seed = Math.floor(Math.random() * 90000) + 1; choices = []; rebuildCourse(); page = 0; lineup(); });
 // (the board's rows: tap one and that marble is yours)
 $('order').addEventListener('click', (e) => {
@@ -955,16 +1040,18 @@ $('offers').addEventListener('click', (e) => {
   if (b) choose(Number(b.dataset.i));
 });
 function showFollow() {
-  $('follow').textContent = follow === 'leader' ? 'following the leader' : `following ${mine}`;
+  const l = lookOf.get(mine);
+  $('cam').innerHTML = follow === 'leader' ? '<i class="lead"></i>the leader' : follow === 'finish' ? '<i class="flag"></i>the finish' : `<i style="background:${l?.css}"></i>${mine}`;
   showHands();
 }
 addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (k === ' ') { e.preventDefault(); if (phase === 'lineup') release(0); else lineup(); }
+  else if (k === 'c') { follow = CAMS[(CAMS.indexOf(follow) + 1) % CAMS.length]; showFollow(); }
   else if (k === 'b') mode(view === 'build' ? 'race' : 'build');
   else if (k === 'enter' && view === 'build') addChosen();
   else if (k === 'z' && view === 'build') undoSection();
-  else if (k === 'f') { follow = follow === 'mine' ? 'leader' : 'mine'; showFollow(); }
+
   else if (k === '1' || k === '2' || k === '3') { if (view === 'build') choose(Number(k) - 1); }
 });
 btn('sound', () => {
@@ -979,7 +1066,7 @@ let ac: AudioContext | null = null;
 let master: GainNode | null = null;
 let noise: AudioBuffer | null = null;
 let soundOn = (() => { try { return localStorage.getItem(STORE + ':sound') !== '0'; } catch { return true; } })();
-function showSound() { $('sound').textContent = soundOn ? 'sound · on' : 'sound · off'; }
+function showSound() { $('sound').textContent = soundOn ? 'sound on' : 'sound off'; }
 showSound();
 let roll: { g: GainNode; f: BiquadFilterNode } | null = null;
 function wake() {
@@ -1139,6 +1226,7 @@ function marbleModel(m: Marble, p: V3, q: [number, number, number, number]): [Fl
  * multisampled one goes to the screen.
  */
 const sceneTex = gl.createTexture()!;
+const depthTex = gl.createTexture()!;
 const msFb = gl.createFramebuffer()!, resolveFb = gl.createFramebuffer()!;
 const msColour = gl.createRenderbuffer()!, msDepth = gl.createRenderbuffer()!;
 let sceneW = 0, sceneH = 0;
@@ -1160,12 +1248,21 @@ function sceneBuffers(w: number, h: number) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, depthTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.bindFramebuffer(gl.FRAMEBUFFER, resolveFb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depthTex, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 /** a board being tapped (a stuck marble nudged on): which section, until when */
 let shake: { sec: number; until: number } | null = null;
+/** where the lens is focused (eased toward the marble the camera is on) */
+let focus = 40;
 let nudgesSeen = 0;
 /** which meshes are near enough to draw (sections around the followed marble, or all in build) */
 function visible(): Draw[] {
@@ -1243,8 +1340,11 @@ function frame(now: number) {
     }
     rollAt(len(me.v), me.contact);
     // all in: the result; the solver runs on until they've settled in the channel
-    if (phase === 'racing' && marbles.every((m) => m.finished >= 0)) { phase = 'done'; doneAt = raceTime; showHands(); }
-    if (phase === 'done' && (raceTime > doneAt + 8 || marbles.every((m) => len(m.v) < 0.5))) { racing = false; rollAt(0, false); }
+    // all in (or the first in 25 s ago, and a straggler not worth waiting for): the result; the
+    // solver runs on until they're asleep in the channel
+    if (firstInAt < 0 && marbles.some((m) => m.finished >= 0)) firstInAt = raceTime;
+    if (phase === 'racing' && (marbles.every((m) => m.finished >= 0) || (firstInAt >= 0 && raceTime > firstInAt + 25))) { phase = 'done'; doneAt = raceTime; hint(); }
+    if (phase === 'done' && (raceTime > doneAt + 8 || marbles.every((m) => m.finished < 0 || m.asleep))) { racing = false; rollAt(0, false); }
   }
   updateCamera(dt);
   showBoard();
@@ -1262,6 +1362,9 @@ function frame(now: number) {
   const centre: V3 = view === 'build' ? (sections.length ? sections[sections.length - 1].end.p : TOP.p) : followed().p;
   const span = view === 'build' ? 110 : 70;
   const lightVP = ortho(centre, norm(theme.key), span, 400);
+  // (penumbra texels per unit of light depth: the depth range over a texel's width, times how
+  // wide the window's light spreads for each centimetre between blocker and receiver)
+  const shadowSoft = (400 * 0.1) / ((2 * span) / SHADOW);
   const vis = visible();
   const live: Draw[] = [...vis];
   // the spinners' arms where they are now, and the gate lifting
@@ -1327,6 +1430,7 @@ function frame(now: number) {
   gl.uniform1f(u(prog, 'uTime'), time);
   gl.uniform1f(u(prog, 'uFar'), far);
   gl.uniform1i(u(prog, 'uShadowMap'), 0);
+  gl.uniform1f(u(prog, 'uShadowSoft'), shadowSoft);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, shadowTex);
   gl.enable(gl.CULL_FACE);
@@ -1347,6 +1451,22 @@ function frame(now: number) {
     if (lift > 6) continue;
     drawMeshes([{ mesh: DISC, model: flatAt(f, add(b.at, mul(f.n, -(up - 0.04))), b.r * (1.5 + lift * 0.25)), mat: 9, tint: b.tint }], false);
   }
+  // and in each one's shadow, the light it gathers: a caustic in its colour (added light)
+  gl.blendFunc(gl.ONE, gl.ONE);
+  const nearestLamp = (p: V3) => lampAt.reduce((a, b) => (len(sub(b, p)) < len(sub(a, p)) ? b : a), lampAt[0] ?? p);
+  for (const b of balls) {
+    const { board, frame: f } = under(b.m);
+    const [, up] = toLocal(board, b.at);
+    if (up - b.r > 4) continue;
+    const L = theme.lamps && lampAt.length ? norm(sub(nearestLamp(b.at), b.at)) : norm(theme.key);
+    const ln = dotv(L, f.n);
+    if (ln < 0.2) continue;
+    const at = add(sub(b.at, mul(L, up / ln)), mul(f.n, 0.05));
+    const glow = theme.lamps ? theme.lampStrength * 0.9 : theme.keyStrength;
+    gl.uniform1f(u(prog, 'uGlow'), glow);
+    drawMeshes([{ mesh: DISC, model: flatAt(f, at, b.r * (1.5 + 0.8 * (1 - ln))), mat: 22, tint: b.tint }], false);
+  }
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   if (view !== 'build' && follow === 'mine') {
     const f = under(me).frame;
     const mi = marbles.indexOf(me);
@@ -1372,6 +1492,7 @@ function frame(now: number) {
     gl.uniform1f(u(glassProg, 'uTime'), time);
     gl.uniform1f(u(glassProg, 'uMatOver'), 10);
     gl.uniform1i(u(glassProg, 'uShadowMap'), 0);
+    gl.uniform1f(u(glassProg, 'uShadowSoft'), shadowSoft);
     gl.uniform1i(u(glassProg, 'uScene'), 1);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, shadowTex);
@@ -1418,11 +1539,33 @@ function frame(now: number) {
   }
   gl.bindVertexArray(null);
   showNames();
-  // 4. to the screen
+  // 4. to the screen, through the lens: resolved (colour and depth), then focused on the marble
+  // the camera is on, softer nearer and further
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msFb);
-  gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-  gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resolveFb);
+  gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT, gl.NEAREST);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.disable(gl.DEPTH_TEST);
+  gl.useProgram(postProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, depthTex);
+  gl.uniform1i(u(postProg, 'uColor'), 0);
+  gl.uniform1i(u(postProg, 'uDepth'), 1);
+  gl.uniform2f(u(postProg, 'uRes'), W, H);
+  const focusWant = view === 'build' ? len(sub(look, eye)) : phase === 'racing' && !(follow === 'finish' || followed().finished >= 0) ? len(sub(shown(marbles.indexOf(followed()), alpha).p, eye)) : len(sub(look, eye));
+  focus += (focusWant - focus) * (1 - Math.exp(-dt * 8));
+  gl.uniform1f(u(postProg, 'uFocus'), focus);
+  // (how soon it softens: a long lens close in, gentler far out; none in the preview, a little when building)
+  gl.uniform1f(u(postProg, 'uAperture'), preview ? 0 : (view === 'build' ? 1.5 : 3.2) * dpr);
+  gl.uniform1f(u(postProg, 'uMaxR'), 5 * dpr);
+  gl.uniform1f(u(postProg, 'uNear'), 1);
+  gl.uniform1f(u(postProg, 'uFar'), far);
+  gl.bindVertexArray(skyVao);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.activeTexture(gl.TEXTURE0);
   (window as unknown as { __marbles: unknown }).__marbles = {
     seed, choices, sections: sections.length, racing, phase, raceTime, view, chosen, offered: offered.map((s) => s.name),
     order: order(marbles).map((m) => ({ name: m.name, progress: Math.round(m.progress), finished: m.finished, falls: m.falls, speed: Math.round(len(m.v)) })),
@@ -1436,25 +1579,33 @@ function frame(now: number) {
 /** The board: the order, the gaps, the time. */
 let boardAt = 0;
 let boardHtml = '';
-/** At the finish: each marble's name and time beside it, to the right of the channel, fading in. */
-let namesOn = false;
+/** At the finish: each marble's place, name and time beside it, fading in as it crosses the line. */
+function resetNames() {
+  $('names').innerHTML = marbles.map((m) => `<div class="name" data-name="${m.name}"><b></b> ${m.name} <em></em></div>`).join('');
+}
 function showNames() {
-  const on = view === 'race' && phase === 'done';
-  if (on !== namesOn) {
-    namesOn = on;
-    $('names').classList.toggle('on', on);
-    if (on) {
-      const o = order(marbles);
-      $('names').innerHTML = o.map((m, i) => `<div class="name" data-name="${m.name}" style="transition-delay:${i * 90}ms"><b>${i + 1}</b> ${m.name} <em>${m.finished.toFixed(1)} s</em></div>`).join('');
-    }
-  }
+  const box = $('names');
+  const on = view === 'race' && phase !== 'lineup';
+  box.classList.toggle('on', on);
   if (!on) return;
   const f = course.fin.board.frame;
-  for (const el of $('names').children as unknown as HTMLElement[]) {
+  const centre = add(f.p, mul(f.t, (course.fin.throat + course.fin.channelEnd) / 2));
+  // (only when the finish is near enough to read)
+  const near = len(sub(centre, eye)) < 160;
+  const inOrder = marbles.filter((m) => m.finished >= 0).sort((a, b) => a.finished - b.finished);
+  for (const el of box.children as unknown as HTMLElement[]) {
     const m = marbles.find((x) => x.name === el.dataset.name);
     if (!m) continue;
-    const c = project(add(m.p, mul(f.b, -MARBLE_R * 5)));
-    if (!c) { el.style.opacity = '0'; continue; }
+    const place = inOrder.indexOf(m);
+    const c = near && place >= 0 ? project(add(m.p, mul(f.b, -MARBLE_R * 5))) : null;
+    el.classList.toggle('in', !!c);
+    if (!c) continue;
+    if (!el.dataset.set) {
+      el.dataset.set = '1';
+      el.querySelector('em')!.textContent = `${m.finished.toFixed(1)} s`;
+    }
+    el.querySelector('b')!.textContent = String(place + 1);
+    el.classList.toggle('me', m.name === mine);
     el.style.transform = `translate(${Math.round(c[0])}px, ${Math.round(c[1])}px) translateY(-50%)`;
   }
 }

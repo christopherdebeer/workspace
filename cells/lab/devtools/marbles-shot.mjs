@@ -45,13 +45,20 @@ await withWood(async (lab) => {
   await frames();
   s = await lab.state(page);
   c.ok('the theme changed to nocturne', s.theme === 'nocturne' && before.theme === 'atelier', { before: before.theme, after: s.theme });
-  c.ok('and the race went on as it was', s.racing && s.raceTime >= before.raceTime && s.order.map((o) => o.name).slice(0, 3).join() === before.order.map((o) => o.name).slice(0, 3).join(), { before: before.order.slice(0, 3).map((o) => o.name), after: s.order.slice(0, 3).map((o) => o.name) });
+  // (not reset: the time ran on and no marble lost ground; the order may change, as a race does)
+  const lost = before.order.filter((b) => (s.order.find((o) => o.name === b.name)?.progress ?? 0) < b.progress);
+  c.ok('and the race went on as it was', s.racing && s.raceTime >= before.raceTime && lost.length === 0, { raceTime: [before.raceTime, s.raceTime], lost: lost.map((b) => b.name) });
   await lab.shot(page, 'marbles-nocturne');
   await page.click('#theme');
   await frames();
   await until(9.0);
   s = await lab.state(page);
   console.log('9 s', JSON.stringify({ order: s.order.slice(0, 3) }), await lab.shot(page, 'marbles-race-2'));
+  // names come up as each crosses, not when the last does
+  await page.waitForFunction(() => window.__marbles.order.some((o) => o.finished >= 0) && window.__marbles.phase === 'racing', null, { timeout: 600000, polling: 100 }).catch(() => {});
+  await frames();
+  const early = await page.evaluate(() => ({ shown: document.querySelectorAll('#names .name.in').length, phase: window.__marbles.phase, inCount: window.__marbles.order.filter((o) => o.finished >= 0).length }));
+  c.ok('names appear as they cross, before the last is in', early.phase !== 'racing' || (early.shown >= 1 && early.shown <= early.inCount), early);
   // all in: the result at rest in the channel
   await page.waitForFunction(() => window.__marbles.phase === 'done' && !window.__marbles.racing, null, { timeout: 600000, polling: 200 });
   await frames();
@@ -83,16 +90,20 @@ await withWood(async (lab) => {
   await frames();
   s = await lab.state(page);
   c.ok('the last taken off', s.sections === 7, s.sections);
-  // race from the end, following the leader
-  await page.click('#here');
-  await page.click('#follow');
+  // building, try it: the last board raced, the camera on the leader
+  await page.click('#try');
   await until(1.5);
   s = await lab.state(page);
-  c.ok('from the end: raced, following the leader', s.view === 'race' && s.raceTime > 0 && s.me === s.order[0].name, { racing: s.racing, raceTime: s.raceTime, me: s.me, lead: s.order[0].name });
-  await page.click('#race');
+  c.ok('try it: the end raced, the camera on the leader', s.view === 'race' && s.raceTime > 0 && s.me === s.order[0].name, { racing: s.racing, raceTime: s.raceTime, me: s.me, lead: s.order[0].name });
+  // the main button: again, back to the gate
+  await page.click('#go');
   await frames();
   s = await lab.state(page);
-  c.ok('from the top: lined up again', s.phase === 'lineup', s.phase);
+  c.ok('again: lined up at the gate', s.phase === 'lineup', s.phase);
+  // the camera toggle: yours, the leader, the finish, and round
+  const cams = [];
+  for (let i = 0; i < 3; i++) { await page.click('#cam'); await frames(); cams.push(await page.evaluate(() => document.getElementById('cam').textContent)); }
+  c.ok('the camera goes round: the leader, the finish, yours', /leader/.test(cams[0]) && /finish/.test(cams[1]) && !/leader|finish/.test(cams[2]), cams);
   c.ok('no errors in the page', page.errors.length === 0, page.errors);
   // the index's preview
   const pv = await lab.open('preview', { width: 300, height: 375 });

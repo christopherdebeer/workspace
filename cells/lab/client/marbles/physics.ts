@@ -66,13 +66,17 @@ export interface Marble {
   falls: number;
   /** how often it had to be nudged on */
   nudges: number;
+  /** at rest in the channel at the end: it no longer moves until something knocks it hard */
+  asleep: boolean;
+  /** how long it has been slow in the channel (it sleeps after a moment of it) */
+  stillFor: number;
   tint: V3;
 }
 export interface Impact { at: V3; j: number; mat: Material; other: Material | null }
 
 export function marble(name: string, mat: Material, r: number, tint: V3): Marble {
   const m = (4 / 3) * Math.PI * r ** 3 * mat.density;
-  return { name, mat, r, m, I: 0.4 * m * r * r, p: [0, 0, 0], v: [0, 0, 0], w: [0, 0, 0], q: [0, 0, 0, 1], sec: 0, progress: 0, contact: false, slowFor: 0, entryV: 0, finished: -1, falls: 0, nudges: 0, tint };
+  return { name, mat, r, m, I: 0.4 * m * r * r, p: [0, 0, 0], v: [0, 0, 0], w: [0, 0, 0], q: [0, 0, 0, 1], sec: 0, progress: 0, contact: false, slowFor: 0, entryV: 0, finished: -1, falls: 0, nudges: 0, asleep: false, stillFor: 0, tint };
 }
 
 /** A contact: the normal (out of the surface, toward the marble's centre), how deep, the surface's own speed there. */
@@ -196,6 +200,8 @@ export class Course {
     m.progress = this.starts[sec] ?? 0;
     m.finished = -1;
     m.slowFor = 0;
+    m.asleep = false;
+    m.stillFor = 0;
   }
 }
 
@@ -209,6 +215,7 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
   for (let s = 0; s < n; s++) {
     const t = time + s * h;
     for (const m of marbles) {
+      if (m.asleep) continue;
       m.v[1] -= G * h;
       m.p = add(m.p, mul(m.v, h));
       contacts.length = 0;
@@ -239,12 +246,13 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
     for (let i = 0; i < marbles.length; i++) for (let j = i + 1; j < marbles.length; j++) pair(marbles[i], marbles[j], impacts);
     // (a push between marbles can't put one into a wall or the floor: the board has the last word)
     for (const m of marbles) {
+      if (m.asleep) continue;
       contacts.length = 0;
       for (let si = Math.max(0, m.sec - 1); si <= Math.min(course.sections.length - 1, m.sec + 1); si++) for (const bd of course.sections[si].boards) boardContacts(bd, m, t, contacts);
       if (m.sec >= course.sections.length - 1) boardContacts(course.fin.board, m, t, contacts);
       for (const c of contacts) if (c.depth > 0) m.p = add(m.p, mul(c.n, c.depth));
     }
-    for (const m of marbles) spin(m, h);
+    for (const m of marbles) if (!m.asleep) spin(m, h);
   }
   for (const m of marbles) {
     // fallen off: back to the start of its section
@@ -252,8 +260,12 @@ export function step(course: Course, marbles: Marble[], dt: number, time: number
     const low = sec ? sec.end.p[1] - sec.boards[0].step : course.top.p[1];
     if (m.p[1] < low - 60) { m.falls++; course.place(m, m.sec, 0, Math.max(0, m.entryV * 0.7)); }
     // in the channel at the end, slow: settling (the pack's pushes would keep it shivering)
-    // (a slow enough one only: one still rolling down the channel isn't held back)
-    if (m.finished >= 0 && len(m.v) < 6) m.v = mul(m.v, 0.5);
+    // (a slow enough one only: one still rolling down the channel isn't held back); and after
+    // a moment of it, asleep: it stays where it is, a stone for the next to come to rest against
+    if (m.finished >= 0 && !m.asleep) {
+      if (len(m.v) < 6) { m.v = mul(m.v, 0.5); m.stillFor += dt; } else m.stillFor = 0;
+      if (m.stillFor > 0.4) { m.asleep = true; m.v = [0, 0, 0]; m.w = [0, 0, 0]; }
+    }
     // stuck (resting against something, or wedged in the pack): a nudge sideways, toward the middle, and a little on
     if (m.finished < 0 && len(m.v) < 2 && m.contact) {
       m.slowFor += dt;
@@ -311,10 +323,23 @@ function resolve(m: Marble, c: Contact, h: number, impacts: Impact[]) {
 
 /** Two marbles meeting. */
 function pair(a: Marble, b: Marble, impacts: Impact[]) {
+  if (a.asleep && b.asleep) return;
   const d = sub(b.p, a.p);
   const dist = len(d);
   const over = a.r + b.r - dist;
   if (over <= 0 || dist < 1e-6) return;
+  // a sleeping one is a stone: a hard knock wakes it, anything less only stops the one that came
+  if (a.asleep || b.asleep) {
+    const [s, w] = a.asleep ? [a, b] : [b, a];
+    const n = norm(sub(w.p, s.p));
+    const vn = dot(w.v, n);
+    if (vn < -30) { s.asleep = false; s.stillFor = 0; }
+    else {
+      if (vn < 0) w.v = sub(w.v, mul(n, vn * (1 + (-vn > 25 ? Math.sqrt(w.mat.e * s.mat.e) : 0))));
+      w.p = add(w.p, mul(n, over));
+      return;
+    }
+  }
   const n = mul(d, 1 / dist);
   const ra = mul(n, a.r), rb = mul(n, -b.r);
   const vrel = sub(add(b.v, cross(b.w, rb)), add(a.v, cross(a.w, ra)));
