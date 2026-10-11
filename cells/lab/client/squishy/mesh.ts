@@ -11,9 +11,24 @@ type UV = [number, number];
 const norm = (a: V3): V3 => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 function push(out: number[], p: V3, n: V3, mat: number, uv: UV) { out.push(p[0], p[1], p[2], n[0], n[1], n[2], mat, uv[0], uv[1]); }
-export function quad(out: number[], a: V3, b: V3, c: V3, d: V3, na: V3, nb: V3, nc: V3, nd: V3, mat: number, ua: UV, ub: UV, uc: UV, ud: UV) {
+function quad(out: number[], a: V3, b: V3, c: V3, d: V3, na: V3, nb: V3, nc: V3, nd: V3, mat: number, ua: UV, ub: UV, uc: UV, ud: UV) {
   push(out, a, na, mat, ua); push(out, b, nb, mat, ub); push(out, c, nc, mat, uc);
   push(out, a, na, mat, ua); push(out, c, nc, mat, uc); push(out, d, nd, mat, ud);
+}
+/** Rolled edges catch the window light; kept within the existing collision silhouette. */
+function rolledRim(out: number[], x: number, y: number, z: number, radius: number, tube: number, mat: number) {
+  const segments = 48, sides = 6;
+  const vertex = (a: number, b: number): { p: V3; n: V3; uv: UV } => {
+    const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
+    return { p: [x + ca * (radius + tube * cb), y + tube * sb, z + sa * (radius + tube * cb)],
+      n: [ca * cb, sb, sa * cb], uv: [ca, sa] };
+  };
+  for (let i = 0; i < segments; i++) for (let j = 0; j < sides; j++) {
+    const a = i * Math.PI * 2 / segments, b = j * Math.PI * 2 / sides;
+    const a1 = (i + 1) * Math.PI * 2 / segments, b1 = (j + 1) * Math.PI * 2 / sides;
+    const A = vertex(a, b), B = vertex(a, b1), C = vertex(a1, b1), D = vertex(a1, b);
+    quad(out, A.p, B.p, C.p, D.p, A.n, B.n, C.n, D.n, mat, A.uv, B.uv, C.uv, D.uv);
+  }
 }
 /**
  * An upright cylinder from y0 to y1: its side (u round it in cm, v up in cm), and its top as a
@@ -137,8 +152,8 @@ function dustOn(s: Shape, out: number[]) {
 /** Shapes as they draw themselves (the sets' free things: a bench, a pad, a board), into out. */
 export function drawShapes(shapes: Shape[], out: number[]) { for (const s of shapes) drawShape(s, out); }
 function drawShape(s: Shape, out: number[]) {
-  // (a sheet is drawn by its prop, which made it; a jelly, each frame, as its top is)
-  if (s.kind === 'sheet' || s.kind === 'jelly') return;
+  // (a sheet is drawn by its prop, which made it)
+  if (s.kind === 'sheet') return;
   dustOn(s, out);
   {
     if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); return; }
@@ -157,11 +172,13 @@ function drawShape(s: Shape, out: number[]) {
           // (the rim at its top: a band of split bamboo, a little proud; gold for home)
           cylinder(out, sx, sz, s.r + 0.35, b - 1.4, b, s.mat === MAT.gold && i === n - 1 ? MAT.gold : MAT.bamboo, MAT.bamboo, 40, false);
         }
+        rolledRim(out, sx, y1 - .08, sz, s.r + .12, .20, s.mat === MAT.gold ? MAT.gold : MAT.bamboo);
         break;
       }
       case MAT.porcelain: {
         cylinder(out, sx, sz, s.r * 0.86, y0, y0 + s.hh * 0.6, MAT.porcelain, MAT.porcelain, 40, false, s.r);
         cylinder(out, sx, sz, s.r, y0 + s.hh * 0.6, y1, MAT.porcelain, MAT.porcelain, 48);
+        rolledRim(out, sx, y1 - .08, sz, s.r - .14, .16, MAT.porcelain);
         break;
       }
       case MAT.jelly:
@@ -171,7 +188,8 @@ function drawShape(s: Shape, out: number[]) {
       case MAT.tin:
         cylinder(out, sx, sz, s.r, y0, y1, MAT.tin, MAT.tin, 36);
         // (a lid that stands proud at the top)
-        cylinder(out, sx, sz, s.r + 0.25, y1 - 1.6, y1 + 0.05, MAT.gold, MAT.tin, 36);
+        cylinder(out, sx, sz, s.r + 0.25, y1 - 1.6, y1 + 0.05, MAT.gold, MAT.tin, 48);
+        rolledRim(out, sx, y1 - .05, sz, s.r + .10, .14, MAT.gold);
         break;
       case MAT.jar:
         cylinder(out, sx, sz, s.r, y0, y1 - 1.6, MAT.jar, MAT.jar, 32, false);
@@ -205,3 +223,4 @@ export function levelMesh(lv: Level): LevelMesh {
 }
 /** A chopstick: a long capsule, thicker at its back end. */
 function stick(s: Shape, out: number[]) { capsule(out, s.c, s.b, s.r, MAT.chopstick, 10, 3); }
+
