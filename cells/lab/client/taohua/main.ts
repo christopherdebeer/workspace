@@ -9,7 +9,7 @@
  * itself, quietly.
  */
 import { hash, randomSeed, seedFrom, seeded } from '../kit/rng';
-import { LANDING, Path, RISE, WIDTH, type V3 } from './path';
+import { Path, RISE, WIDTH, type V3 } from './path';
 import { lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
 import { BAND, INK, M, Mesh, NAMES, SPAN, ground, makeBand, type Band } from './world';
 
@@ -63,8 +63,8 @@ function plaques() {
   NAMES.forEach((name, i) => {
     // (row i is the texture's v from i/N to (i+1)/N, counted up from the bottom)
     const y = (NAMES.length - 1 - i) * 160;
-    g.fillStyle = '#8f2a20'; g.fillRect(0, y, 512, 160);
-    g.fillStyle = '#1f2630'; g.fillRect(14, y + 14, 484, 132);
+    g.fillStyle = '#a3321f'; g.fillRect(0, y, 512, 160);
+    g.fillStyle = '#3a2620'; g.fillRect(14, y + 14, 484, 132);
     g.strokeStyle = '#c9a55a'; g.lineWidth = 4; g.strokeRect(24, y + 24, 464, 112);
     g.fillStyle = '#e2c27a';
     g.font = '96px "Ma Shan Zheng", "STKaiti", "KaiTi", "Songti SC", serif';
@@ -76,18 +76,34 @@ function plaques() {
 plaques();
 void document.fonts?.load('96px "Ma Shan Zheng"', NAMES.join('')).then(() => plaques());
 
-// ─── the walker: a straw hat, a grey robe, a staff ───────────────────────────────────────────────
+// ─── the walker: a straw hat, a grey-blue robe with wide sleeves and a red sash, a tall staff ─────
 const walker = (() => {
   const m = new Mesh();
-  m.tube([0, 0.02, 0], [0, 1.3, 0], 0.27, 0.16, INK.robe, M.robe, 10);
-  m.tube([0, 0.02, 0], [0, 0.35, 0], 0.3, 0.28, INK.robe, M.robe, 10);
-  m.tube([0, 1.3, 0], [0, 1.55, 0.02], 0.1, 0.09, INK.skin, M.skin, 8);
-  // (the hat: a wide cone)
-  m.tube([0, 1.5, 0], [0, 1.82, 0], 0.46, 0.02, INK.hat, M.hat, 16);
-  // (an arm out to the staff; the staff)
-  m.tube([0.17, 1.2, 0], [0.33, 0.95, 0.12], 0.06, 0.05, INK.robe, M.robe, 6);
-  m.tube([0.36, 1.75, 0.06], [0.38, -0.02, 0.32], 0.025, 0.025, INK.trunk, M.trunk, 5);
-  return R.mesh(new Float32Array(m.v));
+  // (the robe: full at the hem, narrowing to the shoulders; the sash about it)
+  m.tube([0, 0.03, 0], [0, 0.82, 0], 0.31, 0.21, INK.robe, M.robe, 12);
+  m.tube([0, 0.82, 0], [0, 1.34, 0], 0.21, 0.16, INK.robe, M.robe, 12);
+  m.tube([0, 0.76, 0], [0, 0.9, 0], 0.225, 0.22, INK.red, M.red, 12);
+  m.tube([0.05, 0.8, 0.2], [0.08, 0.45, 0.24], 0.04, 0.03, INK.red, M.red, 4);
+  // (wide sleeves, the arms bent: one to the staff, one hanging)
+  m.tube([0.15, 1.28, 0], [0.3, 0.98, 0.1], 0.07, 0.13, INK.robe, M.robe, 8);
+  m.tube([-0.15, 1.28, 0], [-0.27, 0.92, -0.02], 0.07, 0.14, INK.robe, M.robe, 8);
+  m.tube([0.31, 0.98, 0.11], [0.34, 0.95, 0.13], 0.05, 0.045, INK.skin, M.skin, 6);
+  // (the head, the black hair gathered behind under the hat; the hat a wide shallow cone)
+  m.tube([0, 1.32, 0], [0, 1.56, 0.02], 0.1, 0.09, INK.skin, M.skin, 8);
+  m.tube([0, 1.36, -0.05], [0, 1.56, -0.04], 0.095, 0.09, INK.dark, M.dark, 8);
+  m.tube([0, 1.52, 0], [0, 1.76, 0], 0.44, 0.02, INK.hat, M.hat, 16);
+  // (shoes, just showing under the hem)
+  for (const sx of [-1, 1]) m.tube([sx * 0.09, 0.02, 0.05], [sx * 0.09, 0.02, 0.2], 0.045, 0.04, INK.dark, M.dark, 6);
+  // (the staff, taller than they are)
+  m.tube([0.37, 2.1, -0.04], [0.36, -0.02, 0.36], 0.022, 0.022, INK.trunk, M.trunk, 5);
+  // (their shadow: a stroke or two of grey, off to the side away from the light)
+  for (let k = 0; k < 14; k++) {
+    const a0 = (k / 14) * Math.PI * 2, a1 = ((k + 1) / 14) * Math.PI * 2, cx = -0.5, rx = 0.6, rz = 0.24;
+    m.v.push(cx, 0.03, 0.05, 0, 1, 0, 0, 0, 0.3, M.shade);
+    m.v.push(cx + Math.cos(a1) * rx, 0.03, 0.05 + Math.sin(a1) * rz, 0, 1, 0, Math.cos(a1), Math.sin(a1), 0.3, M.shade);
+    m.v.push(cx + Math.cos(a0) * rx, 0.03, 0.05 + Math.sin(a0) * rz, 0, 1, 0, Math.cos(a0), Math.sin(a0), 0.3, M.shade);
+  }
+  return R.mesh(m.v.out());
 })();
 
 // ─── the bands of the hill, made as they're needed, dropped behind ───────────────────────────────
@@ -129,8 +145,8 @@ const WALK = 1.25;
 function stand(sAt: number): { p: V3; dir: [number, number] } {
   const f = path.flightAt(sAt), d = sAt - f.s0;
   const at = path.at(sAt);
-  if (d < LANDING) return at;
-  const u = d - LANDING, k = Math.min(f.steps - 1, Math.floor(u / f.run)), fr2 = u / f.run - k;
+  if (d < f.ll) return at;
+  const u = d - f.ll, k = Math.min(f.steps - 1, Math.floor(u / f.run)), fr2 = u / f.run - k;
   const lift = k < f.steps - 1 ? RISE * smoothstep(0.62, 1, fr2) : 0;
   return { p: [at.p[0], f.a[1] + (k + 1) * RISE + lift, at.p[2]], dir: at.dir };
 }

@@ -18,58 +18,71 @@ spring.
 
 The path is made as you climb, flight by flight, from the seed and each flight's number, so the
 same seed is the same hillside, step for step (`?seed=…`). Each flight turns a little to one side
-of straight up the hill, the next to the other, a broad flagstone landing at each turn; each is
-six to sixteen steps of a hand's rise, each slab laid a little unevenly, set into the slope between
-walls of squared stone with a coping along their tops; the landings are L-shaped, so the turn
-happens on them. Now and then (never closer than seven flights apart), beside the landing at a
-flight's head, a temple stands on its terrace facing the path. The hill's height at any point up it is the path's there, so the ground
-runs up with the steps.
+of straight up the hill, the next to the other, with a stretch of trodden ground at each turn
+where the turn happens. A flight is six to sixteen steps of a hand's rise, each step a pale slab
+of its own laid on the hill, its two ends ragged (no two slabs the same length, nor quite in
+line), as the print's are; now and then a short wall of squared blocks holds the hill back along
+one side, stepping up with the stair. The hill's height at any point up it is the path's there,
+so the ground runs up with the steps, lying a little under them beside the path and rolling
+further off.
 
 The world is made in bands across the hill, twelve metres deep, as they come into view and
-dropped as they fall behind, each from the seed and its number: the ground, the steps and
-landings that fall in it, black rocks in little clusters along the path's edges and at the trees'
-roots, tufts of grass along the stair's foot and about the rocks, the trees, petals fallen under
-them and on the steps, and the temples. Each rock and tree has its patch of shade on the ground,
-stippled away at its edge; rocks are set into the slope they stand on, so no side of one floats.
+dropped as they fall behind, each from the seed and its number: the ground, the steps that fall
+in it, standing stones in little clusters along the path and in outcrops behind the trees, tufts
+of grass along the stair's foot and about the rocks, the trees, fallen blossom, and the temples.
 
 ## The temples
 
-A hall on a raised stone terrace, a stair up its front with sloped cheeks, a balustrade of posts
-and rails round its edge. White walls, red columns across the front and at the corners, a red
-door, lattice windows in the bays either side, the plaque with the temple's name over the door,
-a row of brackets under the eaves. The roof is hip-and-gable, as the print's is: the lower slopes
-hipped all round, the upper part a red gable at each end under its barge board; the eaves well
-out and swept up toward the corners; a ridge along the top with its ends curled up and in,
-ridges down the gables' edges, and down each hip to a turned-up tip. Its glazed tiles run in
-channels down whichever way each slope falls.
+Now and then (never closer than seven flights apart) a flight climbs straight up to a temple's
+gate hall, between balustrades, onto a stone terrace railed round; the path goes in at its open
+door, through, and on from behind. White walls on a grey stone plinth; a porch of red columns on
+round stone bases; a red beam with painted panels of teal and blue under it, a row of brackets;
+a red door, lattice windows; the plaque with the temple's name in gold on dark wood, hung under
+the eaves. White walls run off to either side, capped with tiles.
+
+The roof is hip-and-gable, as the print's is: the lower slopes hipped all round, a red gable at
+each end under its barge board; the eaves well out, swept up toward the corners, a row of round
+tile-ends along them; every tile drawn, barrel tiles in rows down whichever way each slope falls,
+each lapping the next, a gloss along each row's crown; a ridge along the top with its ends curled
+in and a tall beaded finial over each, ridges down the gables and hips with little knobs along
+them.
 
 ## The trees
 
-Each peach tree is grown: a short trunk, leaning, opening at once into four to six limbs that
-spread wide and up, each gently bent and splitting, and splitting again, into a spray of fine
-twigs. Along the twigs' ends the blossom gathers in clumps of puffs, so a tree is a broad
-umbrella of pink; its branches are drawn a little nearer the eye than they are, so they show over
-the blossom as ink over colour, as in the print. No crown hangs over the path, and the blossom
-nearer the eye than the walker thins away about them, so they're never lost. Each puff is lit by which way it faces out of its tree and how high it is in it, so
-the tops toward the light are pale and the undersides deep rose.
+Each peach tree is grown: a trunk you can see, leaning, kinked, before it opens into three to five
+limbs that spread wide and up. Every limb is drawn as the print draws them: straight runs and
+angles, not curves, forking sharply, and again, ending in fans of hairline twigs, with twigs out
+of the angles along the way. Bark is black with a hard-edged band of cream down the side toward
+the light, broken along its length. The blossom gathers in clumps about the twigs' ends and along
+the limbs, so a tree is a broad umbrella of pink; the branches are drawn a little nearer the eye
+than they are, so they show over the blossom as ink over colour. No crown hangs over the path,
+and the blossom nearer the eye than the walker thins away about them, so they're never lost.
 
 ## The print
 
-It's drawn as a print, in two steps. First the scene, in its inks (flat colours, hardly lit):
-paper-cream ground, pale stone, black rocks whose top faces catch a grey, bark in ink with a pale
-streak down the side toward the light, teal glazed tiles in their courses, red columns, white
-walls, the plaque's name in gold. With it, for each pixel, which way its surface faces and what
-it's made of, and its depth.
+It's drawn as a print, in two steps. First the scene, in its inks: flat colours, hardly lit. With
+it, for each pixel, which way its surface faces and what it's made of, and its depth. Then a pass
+over the screen prints it, with lines only where the print has them: black ink where things stand
+against each other (branches, the hall, the walker); on stone a thinner line, warm grey and broken
+as a dry brush leaves it; none about the rocks or the blossom, which stand by their fills alone,
+but for a deeper pink where one crown stands before another. Lines are one pixel, on the nearer
+side of an edge. Under it all the paper: its mottle, its fibres, its grain, the print's edge a
+shade darker, and the far hill fading into it.
 
-Then a pass over the screen prints it: ink lines where one thing stands in front of another,
-where a surface turns sharply, and where one thing meets another; about the blossom the lines are
-coral, not black, as the print's are. Under it all the paper: its mottle, its fibres, its grain,
-the print's edge a shade darker, and the far hill fading into it.
+The blossom is one field of pink per crown, not a heap of balls: each puff takes its tone from
+where it is on its tree (lit, high, or under) and from washes of deeper and paler pink that pool
+across the whole crown, as watercolour does; over that, fine pale flecks. Its edge crumbles into
+the paper in little square dabs, a few loose beyond it, as a worn block prints. Each tree is its
+own pink, a little deeper or paler than the next.
 
-The blossom puffs are discs turned to the eye with ragged, scalloped edges, each its own; their
-depth is a dome, so where puffs meet they meet as clouds do. Each is stippled: dots on a grid
-across it, some lighter, some deeper, a few red. Petals are little teardrops with a notch, lying
-where they fell, or turning as they fall about the walker; some on the ground are whole flowers,
-five petals round a darker heart.
+Rocks are standing stones, slabs and wedges on end, leaning a little, their faces flat: black
+turned from the light, charcoal toward it, grey on top, pocked with small pits. Shade on the
+ground is strokes of grey laid across, thinning out at the edges, off to the side away from the
+light. Steps are pale slabs with grey strokes along their tops and warmer faces. Fallen blossom
+is coral red, the reddest thing in the print: stamped five-lobed flowers in drifts under the
+trees, and specks of red between; petals turning as they fall about the walker.
+
+The walker: a grey-blue robe with wide sleeves and a red sash, black hair gathered under a straw
+hat, a staff taller than they are, and a stroke of shadow beside them.
 
 `?seed=…` a hillside; `?preview` climbs by itself, quietly.

@@ -34,7 +34,7 @@ void main() {
   vec4 w = uModel * vec4(aPos, 1.);
   vW = w.xyz; vN = normalize(mat3(uModel) * aNor); vC = aCol; vM = int(aMat + .5);
   // (the thinner branches drawn nearer the eye than they are: they show through the blossom, as ink over colour)
-  if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * 1.6;
+  if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * 2.6;
   gl_Position = uVP * w;
 }`;
 const SOLID_FS = `#version 300 es
@@ -46,61 +46,109 @@ layout(location = 1) out vec4 oA;
 ${COMMON}
 void main() {
   vec3 n = normalize(vN);
-  if (!gl_FrontFacing) n = -n;
+  // (each face lit from the side it's seen from, whichever way it was wound)
+  bool under = dot(n, uEye - vW) < 0.;
+  if (under) n = -n;
   vec3 c = vC;
   float lit = .9 + .14 * max(dot(n, L), 0.);
-  if (vM == ${M.ground}) {
+  if (vM == ${M.ground} || vM == ${M.shade}) {
     // the ground: the paper itself, a breath of shade in its hollows
     c = PAPER * (.985 + .03 * noise(vW * .35));
+    if (vC.b <= 0. && vC.r > 0.) {
+      // (beside the path, a few strokes of grey, as the brush went along it)
+      float st = smoothstep(.64, .8, noise(vec3(vW.x * 1.3, vW.z * 11., 1.))) * smoothstep(.35, .6, noise(vW * .8));
+      c = mix(c, vec3(.6, .55, .5), st * .3 * vC.r);
+    }
     if (vC.b > 0.) {
       // (a patch of shade: deep in its middle, its edge broken, stippled away into the paper)
-      float r = length(vC.rg) * (1. + .35 * (noise(vW * 1.7) - .5));
-      float f = 1. - smoothstep(.25, 1., r);
-      if (hash3(vec3(floor(gl_FragCoord.xy), 2.)) > f * 1.6) discard;
-      c *= 1. - vC.b * (.55 + .45 * f) * (.85 + .3 * noise(vW * 6.));
+      // (laid on in strokes across, as a dry brush does: they thin out toward its edge)
+      float r = length(vC.rg) * (1. + .3 * (noise(vW * 1.7) - .5));
+      float f = 1. - smoothstep(.2, 1., r);
+      float st = noise(vec3(vW.x * 1.1, vW.z * 9., 2.)) * .75 + noise(vec3(vW.x * 4., vW.z * 24., 5.)) * .25;
+      if (st < 1. - f * 1.15) discard;
+      c *= 1. - vC.b * (.6 + .4 * f) * (.85 + .3 * noise(vW * 6.));
     }
     lit = 1.;
   } else if (vM == ${M.grass}) {
     // grass: an olive ink, a little uneven
     c *= .8 + .35 * noise(vW * 9.);
     lit = 1.;
-  } else if (vM == ${M.step} || vM == ${M.stone}) {
+  } else if (vM == ${M.earth}) {
+    // trodden ground: the paper, a few grey strokes of a dry brush across it
+    c = PAPER * (.985 + .03 * noise(vW * .35));
+    float st = smoothstep(.62, .78, noise(vec3(vW.x * 1.3, vW.z * 11., vW.y * 3.))) * smoothstep(.3, .6, noise(vW * .9));
+    c = mix(c, vec3(.6, .55, .5), st * .3);
+    lit = 1.;
+  } else if (vM == ${M.step}) {
+    // a slab: its top pale, a few strokes of grey along it; its faces a warmer grey, darker under its edge
+    if (n.y > .5) {
+      float st = smoothstep(.68, .85, noise(vec3(vW.x * 1.6, vW.z * 13., vW.y * 9.))) * .22 + smoothstep(.985, 1., noise(vec3(vW.xz * 2.2, vW.y * 3.))) * .35;
+      c = mix(c, vec3(.55, .5, .44), st);
+      c *= .97 + .05 * noise(vW * 4.);
+    } else {
+      c = vec3(.86, .8, .72) * (.94 + .08 * noise(vW * vec3(2., 9., 2.)));
+    }
+    lit = 1.;
+  } else if (vM == ${M.stone}) {
     // stone: pale, a fine crack here and there, a darker grain; a wall's face laid in squared blocks
     float crack = smoothstep(.985, 1., noise(vec3(vW.xz * 2.2, vW.y * 3.)));
     c *= (.95 + .07 * noise(vW * 4.)) * (1. - .45 * crack);
-    if (vM == ${M.stone} && abs(n.y) < .5) {
-      float row = vW.y / .32, course = floor(row);
-      float along = (vW.x * n.z - vW.z * n.x) / .62 + course * .5;
+    if (abs(n.y) < .5) {
+      float row = vW.y / .3, course = floor(row);
+      float along = (vW.x * n.z - vW.z * n.x) / .55 + course * .5;
       float joint = max(1. - smoothstep(.0, .07, min(fract(row), 1. - fract(row))), 1. - smoothstep(.0, .05, min(fract(along), 1. - fract(along))));
-      c *= 1. - .38 * joint;
+      c *= 1. - .3 * joint;
     }
-    lit = vM == ${M.step} ? 1. : .9 + .1 * max(dot(n, L), 0.);
+    lit = .9 + .1 * max(dot(n, L), 0.);
   } else if (vM == ${M.rock}) {
-    // rock: black; where it turns up to the light, grey laid on with a dry brush, in strokes, broken
-    float up = n.y * .8 + n.x * .3 - n.z * .15;
-    float stroke = smoothstep(.42, .7, noise(vW * vec3(9., 2.2, 3.5) + n * 2.)) * .7 + smoothstep(.55, .8, noise(vW * 14.)) * .3;
-    float grey = smoothstep(.38, .82, up) * (.35 + .65 * stroke);
-    c = mix(vec3(.13, .125, .12), vec3(.58, .58, .56), grey) * (.92 + .16 * noise(vW * 5.));
+    // rock: flat inks by which way each face turns: black from the light, charcoal to it, grey on
+    // top; a faint mottle, and small dark pits pocking it
+    float toL = dot(normalize(n.xz + 1e-4), normalize(L.xz));
+    c = n.y > .62 ? vec3(.37, .36, .35) : toL > -.05 ? vec3(.27, .27, .26) : vec3(.13, .13, .12);
+    c *= .93 + .12 * noise(vW * 3.) + .05 * noise(vW * 11.);
+    vec3 pc = floor(vW * 7.);
+    vec3 pf = fract(vW * 7.) - .5 - (vec3(hash3(pc), hash3(pc + 3.), hash3(pc + 7.)) - .5) * .5;
+    if (hash3(pc + 11.) > .8) c *= mix(.45, 1., smoothstep(.06, .12, length(pf)));
     lit = 1.;
   } else if (vM == ${M.trunk} || vM == ${M.twig}) {
     // bark: ink, a pale streak down the side that faces the light, broken
-    float streak = smoothstep(.45, .7, dot(n, normalize(vec3(.8, 0., -.6)))) * smoothstep(.3, .55, noise(vW * vec3(5., 1.2, 5.)));
-    c = mix(c, vec3(.86, .82, .74), streak * .9);
+    // (hard edged, as cut in a block: a band of the paper's cream down the lit side, broken along its length)
+    float side = dot(n, normalize(vec3(.85, .1, -.5)));
+    float streak = smoothstep(.5, .56, side) * smoothstep(.4, .46, noise(vW * vec3(3.5, 1.1, 3.5) + 7.));
+    c = mix(c, vec3(.89, .84, .76), streak);
     lit = 1.;
   } else if (vM == ${M.tile} || vM == ${M.ridge}) {
-    // glazed tiles: teal, in courses, a darker line between, a gloss where the light falls
-    if (vC.b > 1.5) {
-      // a roof: its tiles in channels running down from the ridge, a darker line between, rows across faintly
-      vec3 teal = vec3(${INK.tile.map((v) => v.toFixed(3)).join(', ')});
-      float ch = fract(vC.r), row = fract(vC.g);
-      float gap = 1. - smoothstep(.0, .12, ch) * smoothstep(1., .82, ch);
-      c = teal * (1.03 - .12 * smoothstep(.3, .5, ch) * smoothstep(.9, .6, ch)) * (1. - .35 * gap) * (1. - .08 * (1. - smoothstep(.0, .1, row)));
+    // glazed tiles, turquoise: every tile drawn
+    vec3 gap = vec3(.09, .3, .27), body = vec3(.2, .56, .52), lite = vec3(.36, .74, .68), gloss = vec3(.55, .84, .78);
+    if (vC.b > 2.5) {
+      // the eaves' edge: a row of round tile-ends on the dark of the eave
+      vec2 q = vec2(fract(vC.r) - .5, vC.g - .42);
+      float r = length(q * vec2(1., 1.25));
+      c = gap * .8;
+      if (r < .4) c = mix(body, lite, smoothstep(.3, .05, length(q - vec2(-.08, -.1))));
+      if (r > .33 && r < .4) c = gap;
+      if (vC.g > .88) c = gap * .7;
+    } else if (vC.b > 1.5) {
+      // a roof: barrel tiles in rows running down the slope, each a short round segment lapping the
+      // next; the gap between rows dark; a gloss down each row's crown
+      float ch = fract(vC.r), row = vC.g;
+      float across = (ch - .5) / .36;
+      float crown = 1. - across * across;
+      // (each tile's lower end a curve, lapping the one below)
+      float seg = fract(row + .18 * across * across);
+      c = crown > 0. ? mix(body, lite, smoothstep(.0, .8, crown)) : gap;
+      if (crown > 0.) {
+        c = mix(c, gloss, smoothstep(.75, .95, crown) * smoothstep(.15, .6, seg) * .8);
+        c = mix(c, gap, smoothstep(.12, .0, seg) * .85);
+        c *= .92 + .1 * seg;
+      }
+      c *= .95 + .08 * noise(vW * 3.);
     } else {
       float course = smoothstep(.0, .12, fract(vW.y * 5.5)) * smoothstep(.0, .1, fract(dot(vW.xz, vec2(.7071)) * 3.5));
       c *= mix(.7, 1.05, course);
     }
-    if (!gl_FrontFacing) c *= .62;
-    lit = .85 + .3 * max(dot(n, L), 0.);
+    if (under) c *= .62;
+    lit = .9 + .2 * max(dot(n, L), 0.);
   } else if (vM == ${M.plaque}) {
     c = texture(uPlaque, vC.rg).rgb;
     lit = 1.;
@@ -129,7 +177,7 @@ const PUFF_FS = `#version 300 es
 precision highp float;
 in vec2 vQ; flat in vec3 vP; flat in float vR, vS, vSeed;
 uniform mat4 uVP; uniform vec3 uRight, uUp, uFwd, uEye;
-uniform vec4 uCut; uniform vec2 uView;
+uniform vec4 uCut; uniform vec2 uView; uniform float uDab;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
@@ -139,30 +187,32 @@ void main() {
   float cut = 1. - smoothstep(uCut.z * .6, uCut.z, length((ndc - uCut.xy) * vec2(uView.x / uView.y, 1.)));
   if (cut > 0. && length(vP - uEye) < uCut.w - 1.5 && hash3(vec3(gl_FragCoord.xy, 1.)) < cut) discard;
   float a = atan(vQ.y, vQ.x), r = length(vQ);
-  // (its edge: a cloud of little flowers, scalloped, ragged, each puff its own)
-  float edge = 1. - .09 * noise(vec3(cos(a) * 2.5, sin(a) * 2.5, vSeed * 40.)) - .07 * abs(sin(a * 7. + vSeed * 30.)) - .04 * abs(sin(a * 17. + vSeed * 11.));
-  if (r > edge) discard;
-  float rr = r / edge;
-  // its tones: pale where it's lit, at its top; coral; deep rose under, and at its lower edge
-  float tone = clamp(vS * .8 + .32 * vQ.y + .05 * vQ.x + .06, 0., 1.);
-  vec3 hi = vec3(.985, .76, .7), mid = vec3(.95, .56, .5), lo = vec3(.87, .4, .37), deep = vec3(.76, .28, .29);
-  vec3 c = tone > .62 ? mix(mid, hi, smoothstep(.62, .82, tone)) : tone > .32 ? mix(lo, mid, smoothstep(.32, .5, tone)) : mix(deep, lo, smoothstep(.08, .32, tone));
-  // its texture: a mottle of blossom, and over it fine stipple, little flowers lighter and darker, a few red
-  float mot = noise(vec3(vQ * 4.5, vSeed * 9.));
-  c = mix(c, mix(lo, hi, tone), (mot - .5) * .5);
-  vec2 g = vQ * 13. + vSeed * 17.;
+  // (its edge: the blossom crumbles away into the paper in little square dabs, as a worn block prints;
+  // a few dabs loose beyond it. The dabs are a few pixels of the print, wherever the puff is)
+  float edge = 1. - .1 * noise(vec3(cos(a) * 2.2, sin(a) * 2.2, vSeed * 40.));
+  vec2 dab = floor(gl_FragCoord.xy / uDab);
+  float hd = hash3(vec3(dab, floor(vSeed * 97.)));
+  float lim = edge * (.86 + .2 * hd);
+  if (r > lim && !(r < 1.12 && hd > .965)) discard;
+  float rr = min(1., r / edge);
+  // the dome, where on the tree this fragment is: its tone comes from there, not from the puff
+  float z = sqrt(max(0., 1. - rr * rr));
+  vec3 w = vP + (uRight * vQ.x + uUp * vQ.y) * vR - uFwd * z * vR * .8;
+  // its tone: the puff's place on its crown (lit, high, or under), and over it washes of deeper and
+  // paler pink in soft blotches across the whole crown, as watercolour pools
+  float wash = noise(w * .55) - .5, wash2 = noise(w * 1.7 + 4.) - .5;
+  float tone = clamp(vS + wash * .7 + wash2 * .22, 0., 1.);
+  vec3 deep = vec3(.69, .27, .25), lo = vec3(.8, .37, .32), mid = vec3(.88, .45, .39), lite = vec3(.93, .54, .47), hi = vec3(.97, .64, .58);
+  vec3 c = tone < .25 ? mix(deep, lo, smoothstep(.0, .25, tone)) : tone < .5 ? mix(lo, mid, smoothstep(.25, .5, tone)) : tone < .75 ? mix(mid, lite, smoothstep(.5, .75, tone)) : mix(lite, hi, smoothstep(.75, 1., tone));
+  // its grain: the print's pale flecks, fine, everywhere; a few deeper
+  vec2 g = vQ * vR * 18. + vSeed * 17.;
   vec2 cell = floor(g), f = fract(g) - .5;
   float h = hash3(vec3(cell, vSeed * 7.));
   vec2 jit = vec2(hash3(vec3(cell, 3.)), hash3(vec3(cell, 5.))) - .5;
-  float size = .1 + .12 * hash3(vec3(cell, 9.));
-  float dot1 = 1. - smoothstep(size, size + .08, length(f - jit * .55));
-  if (h > .58) c = mix(c, hi * 1.02, dot1 * .75);
-  else if (h < .1) c = mix(c, vec3(.78, .18, .2), dot1 * .85);
-  else if (h < .3) c = mix(c, deep, dot1 * .45);
-  // (a darker rim, faintly, where the puff turns away)
-  c *= 1. - .1 * smoothstep(.75, 1., rr);
-  float z = sqrt(max(0., 1. - rr * rr));
-  vec3 w = vP + (uRight * vQ.x + uUp * vQ.y) * vR - uFwd * z * vR * .8;
+  float dot1 = 1. - smoothstep(.13, .2, length(f - jit * .5));
+  if (h > .72) c = mix(c, vec3(1., .8, .73), dot1 * .7);
+  else if (h < .06) c = mix(c, deep * .9, dot1 * .6);
+  c *= .97 + .06 * noise(vec3(gl_FragCoord.xy * .5, 3.));
   vec4 clip = uVP * vec4(w, 1.);
   gl_FragDepth = clip.z / clip.w * .5 + .5;
   float d = length(w - uEye);
@@ -180,7 +230,7 @@ uniform mat4 uVP;
 out vec2 vQ; flat out float vS;
 void main() {
   vQ = aQ; vS = iShade;
-  vec2 q = aQ * iSize * vec2(.7, 1.);
+  vec2 q = aQ * iSize * (iShade > .5 ? vec2(1.) : vec2(.7, 1.));
   float c = cos(iTurn), s = sin(iTurn);
   vec3 u = vec3(c, 0., s), v = vec3(-s, 0., c);
   // (tilted up out of the ground's plane as it turns in the air)
@@ -192,20 +242,23 @@ precision highp float;
 in vec2 vQ; flat in float vS;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
+${COMMON}
 void main() {
   vec3 c;
   if (vS > .5) {
-    // (a whole flower: five petals round a darker heart)
-    float a = atan(vQ.y, vQ.x), r = length(vQ * vec2(1. / .7, 1.));
-    float pet = .55 + .45 * abs(cos(a * 2.5));
+    // (a fallen flower, as the print stamps them: a coral-red star of five round lobes, its edge a blot)
+    float a = atan(vQ.y, vQ.x), r = length(vQ);
+    float lobe = pow(abs(cos(a * 2.5 + vS * 40.)), .7);
+    float pet = (.42 + .5 * lobe) * (.88 + .2 * noise(vec3(cos(a) * 3., sin(a) * 3., vS * 50.)));
     if (r > pet) discard;
-    c = mix(vec3(.8, .22, .2), vec3(.93, .45, .4), smoothstep(.15, .5, r));
+    float t = noise(vec3(vQ * 3., vS * 30.));
+    c = mix(vec3(.76, .3, .26), vec3(.89, .48, .42), smoothstep(.3, .75, t)) * (1. - .12 * smoothstep(.25, 0., r));
   } else {
     // (a petal: round at one end, pointed at the other, a notch in its round end)
     float y = vQ.y * .5 + .5;
     float w = sin(3.1416 * pow(y, .8)) * .95;
     if (abs(vQ.x) > w || (y > .9 && abs(vQ.x) < .12)) discard;
-    c = mix(vec3(.83, .27, .23), vec3(.95, .55, .5), vS * 2.);
+    c = mix(vec3(.78, .3, .27), vec3(.92, .52, .46), vS * 2.);
   }
   oC = vec4(c, 1.);
   oA = vec4(.5, 1., .5, ${M.petal}. / 31.);
@@ -234,8 +287,12 @@ void main() {
   vec4 a0 = texture(uA, vUV);
   vec3 n0 = a0.xyz * 2. - 1.;
   int m0 = int(a0.a * 31. + .5);
-  float ink = 0., coral = 0.;
+  // the lines, as the print has them: black ink where things stand against each other; on stone a
+  // thin line, warm and broken; none about rock or blossom, which stand by their fills alone (only
+  // a deeper pink where one crown stands before another)
+  float ink = 0., stone = 0., coral = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
+  bool g0 = m0 == ${M.ground} || m0 == ${M.earth}, s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
     float di = texture(uD, uv).r;
@@ -243,17 +300,24 @@ void main() {
     vec4 ai = texture(uA, uv);
     vec3 ni = ai.xyz * 2. - 1.;
     int mi = int(ai.a * 31. + .5);
+    // (a line is drawn on the nearer side of an edge only, so it's one pixel, not two)
     float jump = smoothstep(.025, .06, (zi - z0) / z0);
     float turn = smoothstep(.35, .6, 1. - dot(n0, ni));
-    float meet = mi != m0 ? 1. : 0.;
-    bool soft = m0 == ${M.blossom} || mi == ${M.blossom};
-    bool none = m0 == ${M.petal} || mi == ${M.petal} || (m0 == ${M.ground} && mi == ${M.ground}) || (m0 == ${M.grass} && (mi == ${M.ground} || mi == ${M.grass})) || (mi == ${M.grass} && m0 == ${M.ground});
-    if (none) continue;
-    if (soft) coral = max(coral, max(jump, meet * .6));
-    else ink = max(ink, max(jump, max(turn * (m0 == ${M.ground} ? 0. : .8), meet)));
+    float meet = mi != m0 && zi >= z0 * .998 ? 1. : 0.;
+    if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
+    if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
+    bool gi = mi == ${M.ground} || mi == ${M.earth}, si = mi == ${M.step} || mi == ${M.stone};
+    if (g0 && gi) continue;
+    if ((m0 == ${M.rock} && (gi || mi == ${M.rock})) || (mi == ${M.rock} && g0)) continue;
+    float e = max(jump, max(turn * (g0 ? 0. : .8), meet));
+    if ((s0 || g0 || m0 == ${M.rock}) && (si || gi || mi == ${M.rock})) stone = max(stone, e);
+    else ink = max(ink, e);
   }
-  if (d0 >= 1.) { ink = 0.; coral = 0.; }
-  c = mix(c, vec3(.74, .32, .31), coral * .38);
+  if (d0 >= 1.) { ink = 0.; coral = 0.; stone = 0.; }
+  // (the stone's line broken, as a dry brush leaves it)
+  stone *= smoothstep(.25, .55, noise(vec3(gl_FragCoord.xy * .09, 5.)));
+  c = mix(c, vec3(.62, .24, .22), coral * .45);
+  c = mix(c, vec3(.4, .34, .28), stone * .7);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
   // the paper: its mottle, its fibres, its grain
   vec2 sp = gl_FragCoord.xy;
@@ -318,7 +382,10 @@ export class Renderer {
   setPlaque(src: HTMLCanvasElement) {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.plaque);
+    // (rows counted up from the bottom, as the plaques' uvs count them)
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
   }
@@ -428,6 +495,7 @@ export class Renderer {
     for (const [k, v] of [['uRight', view.right], ['uUp', view.up], ['uFwd', view.fwd], ['uEye', view.eye]] as Array<[string, V3]>) gl.uniform3fv(this.loc(this.puff, k), v);
     gl.uniform4fv(this.loc(this.puff, 'uCut'), view.cut);
     gl.uniform2f(this.loc(this.puff, 'uView'), W, H);
+    gl.uniform1f(this.loc(this.puff, 'uDab'), Math.max(2, Math.round(view.dpr * 1.6)));
     for (const p of puffs) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, p.count); }
     gl.useProgram(this.petal);
     gl.uniformMatrix4fv(this.loc(this.petal, 'uVP'), false, view.vp);
