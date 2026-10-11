@@ -97,7 +97,7 @@ await withWood(async (lab) => {
   console.log('title stretch', JSON.stringify(tt), await lab.shot(ti, 'squishy-title-stretch'));
   c.ok('on the title, held and pulled: drawn out after the finger, where it sits', tt[0].held && tt[0].reach > reach0 + 1.5 && tt[0].moved < 2, { reach0, tt });
   await ti.mouse.up();
-  await ti.waitForFunction((r) => window.__squishyAt().title[0].reach < r + 0.8, reach0, { timeout: 60000, polling: 100 }).catch(() => {});
+  await ti.waitForFunction((r) => window.__squishyAt().title[0].reach < r + 0.8 && window.__squishyAt().title[0].moved < 1, reach0, { timeout: 60000, polling: 100 }).catch(() => {});
   tt = (await ti.evaluate(() => window.__squishyAt())).title;
   c.ok('let go, it comes back, and stays put', !tt[0].held && tt[0].reach < reach0 + 0.8 && tt[0].moved < 1.5, { reach0, tt });
   const was = tt[1];
