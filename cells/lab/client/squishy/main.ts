@@ -1239,8 +1239,47 @@ function updateCamera(dt: number) {
   const pitch = Math.max(0.12, Math.min(1.2, 0.46 + orbit.pitch + 0.22 * windEase));
   const dist = (44 * (1 + 0.55 * windEase)) / zoom;
   const back: V3 = [-Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(camYaw) * Math.cos(pitch)];
-  const wantEye = add(camTarget, mul(back, dist));
+  // (never behind a wall: if the way out from the dumpling to where it would be meets one, it comes in short of it;
+  // and while it's held in, it turns back round to the room's side, against a finger turning it too)
+  const { f, n } = boom(camTarget, back, dist);
+  if (f < 0.98 && n) {
+    const away = Math.atan2(-n[0], -n[2]);
+    let dy = away - camYaw;
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    camYaw += dy * (1 - Math.exp(-dt * 7 * (1 - f)));
+  }
+  const wantEye = add(camTarget, mul(back, dist * f));
   for (let i = 0; i < 3; i++) eye[i] += (wantEye[i] - eye[i]) * (1 - Math.exp(-dt * (off ? 20 : 8)));
+  keepOut(eye, camTarget);
+}
+/** how near the camera comes to a wall (cm) */
+const CAM_R = 4;
+/**
+ * The way out from `from` along `dir`, so far: how much of it is clear of the room's walls (0–1),
+ * and the face of the wall it meets, if it meets one.
+ */
+function boom(from: V3, dir: V3, dist: number): { f: number; n: V3 | null } {
+  const walls = lv.walls ?? [];
+  if (!walls.length) return { f: 1, n: null };
+  const o = { nx: 0, ny: 0, nz: 0, d: 0, vx: 0, vy: 0, vz: 0 };
+  // (from just clear of a wall, if what it's looking at is right up against one)
+  from = [...from] as V3;
+  for (const w of walls) if (touch(w, from[0], from[1], from[2], CAM_R, o) && o.d > 0) { from[0] += o.nx * o.d; from[1] += o.ny * o.d; from[2] += o.nz * o.d; }
+  const steps = Math.ceil(dist / 1.5);
+  for (let i = 1; i <= steps; i++) {
+    const t = (i / steps) * dist;
+    for (const w of walls) if (touch(w, from[0] + dir[0] * t, from[1] + dir[1] * t, from[2] + dir[2] * t, CAM_R, o) && o.d > 0) {
+      return { f: Math.max(0.05, ((i - 1) / steps)), n: [o.nx, o.ny, o.nz] };
+    }
+  }
+  return { f: 1, n: null };
+}
+/** The camera, brought in short of any wall between it and what it's looking at (it shouldn't be, but whatever happens: never through one). */
+function keepOut(p: V3, from: V3) {
+  const d = sub(p, from), L = len(d);
+  if (L < 1e-3) return;
+  const { f } = boom(from, mul(d, 1 / L), L);
+  if (f < 1) for (let i = 0; i < 3; i++) p[i] = from[i] + d[i] * f;
 }
 
 // ─── hands ───────────────────────────────────────────────────────────────────────────────────────

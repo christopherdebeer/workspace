@@ -172,6 +172,8 @@ export interface Level {
   decor: number[];
   /** the room's floor, if not the counter's wood */
   floorMat?: number;
+  /** the room's walls, which the camera stays on this side of */
+  walls?: Shape[];
 }
 
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);

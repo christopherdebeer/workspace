@@ -77,6 +77,19 @@ await withWood(async (lab) => {
   const h = await lab.state(pv);
   console.log('auto', JSON.stringify(h), await lab.shot(pv, 'squishy-home'));
   c.ok('the autopilot gets home', h.home > 0 && h.falls === 0, h);
+  // a wall: however the camera's turned toward it, by mistake or on purpose, it stays this side of it
+  const wl = await lab.open('level=3', { width: 390, height: 844 });
+  await wl.waitForTimeout(3000);
+  for (let i = 0; i < 4; i++) await wl.mouse.wheel(0, 500);
+  let worst = -1e9;
+  for (let round = 0; round < 3; round++) {
+    await wl.mouse.move(40, 400); await wl.mouse.down();
+    for (let i = 1; i <= 20; i++) await wl.mouse.move(40 + i * 15, 400 - i * 4);
+    await wl.mouse.up();
+    for (let w = 0; w < 6; w++) { await wl.waitForTimeout(300); worst = Math.max(worst, (await lab.state(wl)).eye[2]); }
+  }
+  c.ok('turned hard toward the wall, the camera stays this side of it', worst < 64, { worst });
+  await wl.close();
   // the title: with nothing asked for, the name and what to do; New Game starts the first place
   const ti = await lab.open('', { width: 390, height: 844 });
   await ti.waitForTimeout(3000);

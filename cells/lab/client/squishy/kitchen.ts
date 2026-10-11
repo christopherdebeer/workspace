@@ -214,9 +214,11 @@ function room(lv: Level, stove: boolean) {
   const top = box([(x0 + x1) / 2, -2, (BACK - 18) / 2], [(x1 - x0) / 2, 2, (BACK + 18) / 2], 0, stove ? MAT.hob : MAT.counter, 0.8);
   lv.shapes[0] = top;
   drawShapes([top], lv.decor);
-  const wall = box([(x0 + x1) / 2, 75, BACK + 1], [(x1 - x0) / 2, 75, 1], 0, MAT.tiles, 0.4);
+  // (well past the course each way, and high: the camera can't go round its ends or over its top)
+  const wall = box([(x0 + x1) / 2, 150, BACK + 1], [(x1 - x0) / 2 + 300, 150, 1], 0, MAT.tiles, 0.4);
   wall.tack = 0;
   lv.shapes.push(wall);
+  lv.walls = [wall];
   drawShapes([wall], lv.decor);
   drawBox(lv.decor, [(x0 + x1) / 2, (lv.ground - 4) / 2, (BACK - 14) / 2], [(x1 - x0) / 2 - 1, (-4 - lv.ground) / 2, (BACK + 14) / 2], 0, MAT.enamel);
   // (windows along the wall, high, clear of the shelves)

@@ -279,7 +279,11 @@ thick, the light wrapping round it and glowing a little through its thin edges, 
 pleats, faintly floury, with a dark under it on whatever it's over.
 
 The camera follows easily, but if the dumpling nears the edge of the glass, or leaves it, the
-camera catches up at once.
+camera catches up at once. It never goes behind a wall: if the way out from the dumpling to where the
+camera would be meets the tiled wall, it comes in short of it, and while it's held in like that
+it turns back round to the room's side, against a finger turning it too; so turned toward the
+wall, by mistake or on purpose, it slides along it and comes back round. (The walls run well
+past the course each way, and high, so it can't go round their ends or over their tops.)
 
 The lids move: they're drawn where the steam has them, with a puff of steam out from under at
 each jump and a rattle you hear when you're near. The honey jar is glass, drawn after

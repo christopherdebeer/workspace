@@ -139,9 +139,11 @@ function layCounter(n: number, jit: number, r: Rand): Level {
   let x0 = Infinity, x1 = -Infinity;
   for (const s of lv.shapes) { x0 = Math.min(x0, s.lo[0]); x1 = Math.max(x1, s.hi[0]); }
   x0 -= 30; x1 += 30;
-  const wall = box([(x0 + x1) / 2, 75, BACK + 1], [(x1 - x0) / 2, 75, 1], 0, MAT.tiles, 0.4);
+  // (well past the course each way, and high: the camera can't go round its ends or over its top)
+  const wall = box([(x0 + x1) / 2, 150, BACK + 1], [(x1 - x0) / 2 + 300, 150, 1], 0, MAT.tiles, 0.4);
   wall.tack = 0;
   lv.shapes.push(wall);
+  lv.walls = [wall];
   drawShapes([wall], lv.decor);
   // the counter: butcher block, from the wall to its front edge; the cupboards under it to the floor
   const top = box([(x0 + x1) / 2, -2, (BACK - 18) / 2], [(x1 - x0) / 2, 2, (BACK + 18) / 2], 0, MAT.counter, 0.8);
@@ -382,9 +384,11 @@ function laySink(n: number, jit: number, r: Rand): Level {
   let x0 = Infinity, x1 = -Infinity;
   for (const s of lv.shapes) { x0 = Math.min(x0, s.lo[0]); x1 = Math.max(x1, s.hi[0]); }
   x0 -= 30; x1 += 30;
-  const wall = box([(x0 + x1) / 2, 75, BACK + 1], [(x1 - x0) / 2, 75, 1], 0, MAT.tiles, 0.4);
+  // (well past the course each way, and high: the camera can't go round its ends or over its top)
+  const wall = box([(x0 + x1) / 2, 150, BACK + 1], [(x1 - x0) / 2 + 300, 150, 1], 0, MAT.tiles, 0.4);
   wall.tack = 0;
   lv.shapes.push(wall);
+  lv.walls = [wall];
   drawShapes([wall], lv.decor);
   const F = -18, top = (a: number, b: number, c: number, d: number) => box([(a + b) / 2, -2, (c + d) / 2], [(b - a) / 2, 2, (d - c) / 2], 0, MAT.counter, 0.8);
   const counter = [top(x0, BX - HX - 1, F, BACK), top(BX + HX + 1, x1, F, BACK), top(BX - HX - 1, BX + HX + 1, F, BZ - HZ - 1), top(BX - HX - 1, BX + HX + 1, BZ + HZ + 1, BACK)];
