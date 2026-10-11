@@ -27,6 +27,8 @@ export const RADIUS = 3;
 export const V_MIN = 70, V_MAX = 340, LAUNCH = (60 * Math.PI) / 180;
 /** how high the dumpling's middle sits above what it rests on */
 export const REST_H = RADIUS * 0.62;
+/** How far a honey jar goes down below its tower's height (its foot, on its stand). */
+export const JAR_UNDER = 12;
 
 /** what each thing is made of, for the drawing */
 export const MAT = {
@@ -292,7 +294,7 @@ function size(top: Top, r: Rand): number {
     case 'susan': return ramp(r, 13, 15);
     case 'tin': return ramp(r, 6.5, 8);
     case 'butter': return 12;
-    case 'honey': return 6.5;
+    case 'honey': return 8.5;
     case 'lid': return ramp(r, 9.5, 12);
     case 'pan': return ramp(r, 13, 15);
     default: return 10;
@@ -302,6 +304,30 @@ function size(top: Top, r: Rand): number {
 function keep(t: Tower): { x: number; z: number; r: number } {
   if (t.jar) return { x: t.jar.c[0], z: t.jar.c[2], r: t.jar.r + 4 };
   return { x: t.at[0], z: t.at[2], r: t.box ? Math.hypot(t.box[0], t.box[1]) : t.r + 1 };
+}
+/**
+ * What raises a thing that isn't tall itself (a jar, a pot) to where it's wanted: a stack from
+ * the counter up to y1, of tea tins and a celadon jar or two, each a size of its own, with a
+ * wooden board on top for the thing to stand on. As wide as r at the top, narrower below.
+ */
+function stand(x: number, z: number, r: number, y1: number, yaw: number, coin: (salt: number) => number): Shape[] {
+  const out: Shape[] = [];
+  if (y1 < 1) return out;
+  // (the board on top: a square of wood a little wider than what's on it)
+  const bt = Math.min(2, y1);
+  out.push(box([x, y1 - bt / 2, z], [r + 1.2, bt / 2, r + 1.2], yaw, MAT.board, 0.85));
+  let y = 0, i = 0;
+  const top = y1 - bt;
+  while (top - y > 0.5) {
+    // (each piece 9 to 16 tall, the last one taking what's left)
+    let h = 9 + 7 * coin(0x40 + i);
+    if (top - y - h < 6) h = top - y;
+    const jar = coin(0x60 + i) < 0.3;
+    const w = r * (jar ? 0.62 : 0.55 + 0.35 * coin(0x80 + i));
+    out.push(cyl(x, z, Math.max(3.5, w), y, y + h, jar ? MAT.jar : MAT.tin));
+    y += h; i++;
+  }
+  return out;
 }
 /** A tower of a kind, its top at `at`: what holds it up from the counter, and what's on top. */
 export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Tower {
@@ -383,34 +409,41 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       break;
     }
     case 'honey': {
-      // a honey jar, taller than a flick reaches: honey has run down its side, and that's where you land, against it, and stick
+      // a big honey jar on a stand, its top higher than a flick reaches: honey has run down its side, and that's where you land, against it, and stick
       const jc: V3 = [x + Math.sin(yaw) * (rad + RADIUS * 0.82), 0, z + Math.cos(yaw) * (rad + RADIUS * 0.82)];
-      shapes.push(cyl(jc[0], jc[2], rad, 0, y + 15, MAT.glass, 0.45));
+      shapes.push(cyl(jc[0], jc[2], rad, y - JAR_UNDER, y + 15, MAT.glass, 0.45));
       shapes.push(cyl(jc[0], jc[2], rad * 0.9, y + 15, y + 17.5, MAT.board, 0.7));
       // (the honey has run well down: a splat slides a little before it holds, and stays on honey)
-      const h = cyl(jc[0], jc[2], rad + 0.45, y - 12, y + 4.5, MAT.honey, 0.9);
+      const h = cyl(jc[0], jc[2], rad + 0.45, y - JAR_UNDER + 0.3, y + 4.5, MAT.honey, 0.9);
       h.tack = 3; h.tire = 0;
       shapes.push(h);
+      shapes.push(...stand(jc[0], jc[2], rad, y - JAR_UNDER, yaw, coin));
       jar = { c: [jc[0], y, jc[2]], r: rad + 0.45 };
       landR = 0;
       break;
     }
     case 'lid': {
-      // a pot on the hob, its lid on: the steam under it lifts the lid every few seconds, and you with it
-      shapes.push(cyl(x, z, rad, 0, y - 1.8, MAT.pot));
+      // a pot, its lid on, on a stand: every few seconds the steam in it rattles the lid, and you on it
+      const ph = Math.min(y - 1.8, rad * 1.5);
+      shapes.push(cyl(x, z, rad, y - 1.8 - ph, y - 1.8, MAT.pot));
+      // (its two handles, out to the sides)
+      for (const sd of [-1, 1]) { const a = yaw + Math.PI / 2; shapes.push(box([x + Math.sin(a) * sd * (rad + 1.5), y - 4.2, z + Math.cos(a) * sd * (rad + 1.5)], [0.6, 0.45, 1.6], a, MAT.pot, 0.7)); }
       const l = cyl(x, z, rad + 0.7, y - 1.6, y, MAT.pot, 0.7);
-      l.lift = { amp: 7, period: ramp(r, 4.5, 6.5), phase: r(), y0: l.c[1] };
+      l.lift = { amp: 0.9, period: ramp(r, 4.5, 6.5), phase: r(), y0: l.c[1] };
       shapes.push(l);
       const k = cyl(x, z, 1.3, y, y + 1.2, MAT.knob, 0.7);
       k.lift = { ...l.lift, y0: k.c[1] };
       shapes.push(k);
       land = [l, k];
       landR = rad - 0.5;
+      shapes.push(...stand(x, z, rad, y - 1.8 - ph, yaw, coin));
       break;
     }
     case 'pan': {
       // a frying pan on a pot: wide and a little slippery, with a rim round it, and a handle out the back
-      shapes.push(cyl(x, z, 8, 0, y - 1.4, MAT.pot));
+      const ph = Math.min(y - 1.4, 13);
+      shapes.push(cyl(x, z, 8, y - 1.4 - ph, y - 1.4, MAT.pot));
+      shapes.push(...stand(x, z, 8, y - 1.4 - ph, yaw, coin));
       shapes.push(cyl(x, z, rad, y - 1.4, y, MAT.pan, 0.4));
       const segs = 14;
       for (let i = 0; i < segs; i++) {
@@ -494,17 +527,21 @@ export function touch(sh: Shape, px: number, py: number, pz: number, s: number, 
   return true;
 }
 /**
- * A lid's cycle: at rest most of the time, then it lifts (the steam under it), holds a moment,
- * rattling, and settles. 0–1 of its lift, and how fast it's going (lifts a second).
+ * A lid's cycle: shut most of the time; then the steam under it rattles it, a few quick jumps
+ * on the pot's rim, the steam escaping round it, and it settles shut again. 0–1 of its jump,
+ * how fast it's going (jumps a second), and whether it's rattling.
  */
-export function liftAt(l: NonNullable<Shape['lift']>, t: number): { k: number; v: number } {
+export const RATTLE = 0.16;
+export function liftAt(l: NonNullable<Shape['lift']>, t: number): { k: number; v: number; on: boolean } {
   const ph = (((t / l.period + l.phase) % 1) + 1) % 1;
-  const ease = (x: number) => x * x * (3 - 2 * x), dease = (x: number) => 6 * x * (1 - x);
-  if (ph < 0.6) return { k: 0, v: 0 };
-  if (ph < 0.7) { const x = (ph - 0.6) / 0.1; return { k: ease(x), v: dease(x) / (0.1 * l.period) }; }
-  if (ph < 0.82) { const x = (ph - 0.7) / 0.12; return { k: 1 - 0.06 * Math.sin(x * 25), v: (-0.06 * 25 * Math.cos(x * 25)) / (0.12 * l.period) }; }
-  const x = (ph - 0.82) / 0.18;
-  return { k: 1 - ease(x), v: -dease(x) / (0.18 * l.period) };
+  const f = (p: number) => {
+    const x = (p - (1 - RATTLE)) / RATTLE;
+    if (x <= 0 || x >= 1) return 0;
+    // (six jumps, the middle ones highest)
+    return Math.sin(Math.PI * x) ** 0.6 * Math.abs(Math.sin(6 * Math.PI * x));
+  };
+  const e = 1e-4;
+  return { k: f(ph), v: (f(ph + e) - f(ph - e)) / (2 * e * l.period), on: ph > 1 - RATTLE };
 }
 /** The lids where they are at a time: moved, their bounds with them, their speed kept (in b[1]) for what rests on them. */
 export function moveShapes(lv: Level, t: number) {
@@ -606,7 +643,7 @@ export function onTop(tw: Tower, p: V3, slack = 0): boolean {
   if (tw.jar) {
     // (against the honey on the jar's side, within its band)
     const d = Math.hypot(p[0] - tw.jar.c[0], p[2] - tw.jar.c[2]) - tw.jar.r;
-    return p[1] > tw.at[1] - 12 - slack && p[1] < tw.at[1] + 5.5 + slack && d > 0.5 - slack && d < 4.5 + slack;
+    return p[1] > tw.at[1] - JAR_UNDER - slack && p[1] < tw.at[1] + 5.5 + slack && d > 0.5 - slack && d < 4.5 + slack;
   }
   // (on a lid: above the lid where it is now, not on the pot under it while it's up)
   const lidTop = tw.land?.[0].lift ? tw.land[0].c[1] + tw.land[0].hh : tw.at[1];
@@ -635,7 +672,8 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
   for (let p = 0; p <= 1.0001; p += 0.01) {
     const pa = path(lv, from, launch(yaw, p), 3, t);
     // (on its top; or, for honey, against the honey, which holds)
-    const ok = pa.hit && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5);
+    // (a touch as it leaves, on what it's leaving, isn't a landing)
+    const ok = pa.hit && pa.t > 0.06 && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5);
     if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) break;
   }
   // (a little short of the middle of the band: it carries on a little after it lands)
@@ -649,14 +687,13 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
 export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cling: V3 | null = null): { yaw: number; power: number; climb?: V3 } | null {
   // (buttered, a jar's honey won't hold it: wait for the butter to wear off first)
   if (butter > 0.04 && lv.towers[at + 1]?.jar && lv.towers[at].top !== 'butter') return null;
-  // (from a lid, only once it's settled; onto one, not as it drops away under where it lands: wait for the moment)
-  const lift = (k: number) => lv.towers[k].land?.[0].lift;
-  const dropping = (k: number, at: number) => { const l = lift(k); return !!l && liftAt(l, at).v < -0.05; };
-  if (lift(at) && liftAt(lift(at)!, t).k > 0 && onTop(lv.towers[at], from, 1)) return null;
+  // (on a lid, or onto one, not while it's rattling: wait for it to settle)
+  const rattles = (k: number, at: number) => { const l = lv.towers[k].land?.[0].lift; return !!l && liftAt(l, at).on; };
+  if (rattles(at, t) && onTop(lv.towers[at], from, 1)) return null;
   const tries = [at + 1, lv.towers[at].jar ? -1 : at, at + 2].filter((k) => k >= 0 && k < lv.towers.length);
   for (const k of tries) {
     const a = aim(lv, from, k, t);
-    if (a) return dropping(k, t + path(lv, from, launch(a.yaw, a.power), 3, t).t) ? null : a;
+    if (a) return rattles(k, t + path(lv, from, launch(a.yaw, a.power), 3, t).t) ? null : a;
   }
   // (clinging to the side of something, with no flick away that lands: up it, and over onto its top)
   if (cling) for (const k of [at + 1, at].filter((k) => k >= 0 && k < lv.towers.length)) {
@@ -746,7 +783,7 @@ export function buildTowers(n: number): Level {
   const add = (tw: Tower) => {
     lv.towers.push(tw); lv.shapes.push(...tw.shapes);
     for (const s of tw.shapes) if (s.lift) lv.movers.push(s);
-    if (chapter !== 'counter' && tw.top !== 'honey' && tw.top !== 'board') tw.burner = (tw.top === 'butter' ? 5 : tw.shapes[0].r) + 3.5;
+    if (chapter !== 'counter' && !['honey', 'board', 'lid', 'pan'].includes(tw.top)) tw.burner = (tw.top === 'butter' ? 5 : tw.shapes[0].r) + 3.5;
   };
   const remove = (tw: Tower) => { lv.towers.pop(); lv.shapes.length -= tw.shapes.length; lv.movers = lv.movers.filter((m) => !tw.shapes.includes(m)); };
   add(tower('start', [0, 16, 0], size('start', r), 0, r));
@@ -768,7 +805,8 @@ export function buildTowers(n: number): Level {
       const turn = ramp(r, -0.75, 0.75) * (tries > 12 ? 0.5 : 1);
       const gap = ramp(r, 5, 12 + 22 * hard) * shrink;
       const dy = ramp(r, -6, 8 + 10 * hard) * shrink;
-      const y = Math.max(8, Math.min(320, prev.at[1] + dy));
+      // (a jar, high enough on its stand that what hangs from its honey hangs well clear of the hob)
+      const y = Math.max(top === 'honey' ? 28 : 8, Math.min(320, prev.at[1] + dy));
       const prevR = prev.jar ? 2 : prev.box ? Math.hypot(prev.box[0], prev.box[1]) - 3 : prev.r + 1;
       const d = prevR + gap + (top === 'honey' ? 1 : rad);
       const ny = yaw + turn;

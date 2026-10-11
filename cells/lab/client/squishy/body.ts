@@ -325,7 +325,7 @@ export class Dumpling {
    * of it a little, the way it's pushed along the ground (so a poke at its back rolls it on; at
    * its top, it dents and wobbles where it is).
    */
-  poke(at: V3, dir: V3) {
+  poke(at: V3, dir: V3, roll = true) {
     const x = this.x, v = this.v;
     for (let j = 0; j < this.n; j++) {
       const d = Math.hypot(x[j * 3] - at[0], x[j * 3 + 1] - at[1], x[j * 3 + 2] - at[2]);
@@ -335,7 +335,7 @@ export class Dumpling {
     }
     // (along the ground, it goes as far as the poke is along the ground: a level poke, a roll; a poke from above, hardly any)
     const h = Math.hypot(dir[0], dir[2]);
-    if (h > 1e-3) {
+    if (roll && h > 1e-3) {
       const ax = (dir[0] / h) * POKE_ROLL * h, az = (dir[2] / h) * POKE_ROLL * h;
       this.flick([this.vcom[0] + ax, this.vcom[1] + POKE_UP * h, this.vcom[2] + az], 0.5 * h);
     } else this.sinceFlick = 0;

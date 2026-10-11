@@ -959,7 +959,7 @@ function startLevel(n: number, quiet = false) {
   courseMesh = upload(lm.solid);
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
   movers = lm.movers.map((m) => ({ shape: m.shape, mesh: upload(m.verts) }));
-  lidWas = movers.map(() => 0);
+  lidWas = movers.map(() => -1);
   drop(roomMesh);
   roomMesh = upload(room(lv));
   const at = lv.towers[0].at;
@@ -976,7 +976,7 @@ function startLevel(n: number, quiet = false) {
   if (!auto) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
   showTitle();
-  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -1015,7 +1015,7 @@ function room(lv: Level): number[] {
 
 // ─── aiming and the flick ────────────────────────────────────────────────────────────────────────
 /** the pull: where the finger went down and where it is (and where it's been, lately); what it would do */
-let pull: { sx: number; sy: number; x: number; y: number; id: number; hist: Array<{ x: number; y: number; t: number }>; at: V3 } | null = null;
+let pull: { down: number; sx: number; sy: number; x: number; y: number; id: number; hist: Array<{ x: number; y: number; t: number }>; at: V3 } | null = null;
 /** a finger on the glass but not on the dumpling: turning the camera round; and whether you've turned it (then it stays as you left it, until the next flick) */
 let look: { id: number; x: number; y: number } | null = null;
 let userCam = false;
@@ -1112,12 +1112,12 @@ let two: { d: number; cx: number; cy: number } | null = null;
  * Which bit of the dumpling is under a point on the glass, if any: of its particles near the
  * point (as seen, give or take a fingertip), the one nearest the camera. Its index, or -1.
  */
-function pick(x: number, y: number): number {
+function pick(x: number, y: number, b: Dumpling = body): number {
   const reach = Math.max(26, 0.12 * Math.min(innerWidth, innerHeight));
   let near = Infinity;
-  const sx = new Float32Array(body.n), sy = new Float32Array(body.n), ok = new Uint8Array(body.n);
-  for (let i = 0; i < body.n; i++) {
-    const s2 = screenOf([body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]]);
+  const sx = new Float32Array(b.n), sy = new Float32Array(b.n), ok = new Uint8Array(b.n);
+  for (let i = 0; i < b.n; i++) {
+    const s2 = screenOf([b.x[i * 3], b.x[i * 3 + 1], b.x[i * 3 + 2]]);
     if (!s2) continue;
     sx[i] = s2[0]; sy[i] = s2[1]; ok[i] = 1;
     near = Math.min(near, Math.hypot(s2[0] - x, s2[1] - y));
@@ -1125,29 +1125,30 @@ function pick(x: number, y: number): number {
   if (near > reach) return -1;
   // (of those as near as the nearest, give or take, the one on the side facing you)
   let best = -1, bd = Infinity;
-  for (let i = 0; i < body.n; i++) {
+  for (let i = 0; i < b.n; i++) {
     if (!ok[i] || Math.hypot(sx[i] - x, sy[i] - y) > near + 14) continue;
-    const d = len(sub([body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]], eye));
+    const d = len(sub([b.x[i * 3], b.x[i * 3 + 1], b.x[i * 3 + 2]], eye));
     if (d < bd) { bd = d; best = i; }
   }
   return best;
 }
 canvas.addEventListener('pointerdown', (e) => {
   wake();
-  if (mode === 'title') return;
+  if (mode === 'title') { toyDown(e); return; }
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1 && !auto) {
     // on the dumpling: take hold of it (a drag is a flick, a tap a poke); anywhere else: the camera
     const i = home < 0 && fallenAt < 0 ? pick(e.clientX, e.clientY) : -1;
     if (i >= 0) {
-      pull = { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }], at: [body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]] };
+      pull = { down: e.timeStamp, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }], at: [body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]] };
       body.grab = { w: body.hold(i), pull: [0, 0, 0] };
       squish(0.15);
     } else look = { id: e.pointerId, x: e.clientX, y: e.clientY };
   } else { pull = null; aimNow = null; body.squeeze = null; body.grab = null; look = null; two = null; }
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (toy && toy.id === e.pointerId) { toyMove(e); return; }
   const p = pointers.get(e.pointerId);
   if (!p) return;
   p.x = e.clientX; p.y = e.clientY;
@@ -1178,17 +1179,67 @@ canvas.addEventListener('pointermove', (e) => {
   }
 });
 const up = (e: PointerEvent) => {
+  if (toy && toy.id === e.pointerId) { toyUp(e); return; }
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
   if (look && look.id === e.pointerId) look = null;
   if (pull && pull.id === e.pointerId) {
     // (a tap on it, not a pull: a poke, where it was touched, the way the finger was going into the glass)
-    const t0 = pull.hist[0].t, moved = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
+    const moved = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
     body.grab = null;
-    if (e.type === 'pointerup' && moved < 12 && performance.now() - t0 < 300 && two === null) { pokeAt(pull.at); pull = null; aimNow = null; body.squeeze = null; }
+    if (e.type === 'pointerup' && moved < 12 && e.timeStamp - pull.down < 300 && two === null) { pokeAt(pull.at); pull = null; aimNow = null; body.squeeze = null; }
     else if (e.type === 'pointerup') release(); else { pull = null; aimNow = null; body.squeeze = null; }
   }
 };
+// ─── on the title: the two of them to squish and stretch, where they sit ───────────────────────────
+/** the one held on the title: by which finger, where it went down and is now, when, and the bit of it touched */
+let toy: { b: Dumpling; id: number; sx: number; sy: number; x: number; y: number; t0: number; at: V3 } | null = null;
+/** when either was last touched on the title (they don't hop about while you're playing with them) */
+let toyAt = -9;
+function toyDown(e: PointerEvent) {
+  if (toy) return;
+  // (whichever is under the finger, the nearer if both)
+  let best: { b: Dumpling; i: number; d: number } | null = null;
+  for (const b of [body, buddy]) {
+    if (!b) continue;
+    const i = pick(e.clientX, e.clientY, b);
+    if (i < 0) continue;
+    const at = screenOf([b.x[i * 3], b.x[i * 3 + 1], b.x[i * 3 + 2]])!;
+    const d = Math.hypot(at[0] - e.clientX, at[1] - e.clientY);
+    if (!best || d < best.d) best = { b, i, d };
+  }
+  if (!best) return;
+  canvas.setPointerCapture(e.pointerId);
+  const { b, i } = best;
+  toy = { b, id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, t0: e.timeStamp, at: [b.x[i * 3], b.x[i * 3 + 1], b.x[i * 3 + 2]] };
+  b.grab = { w: b.hold(i), pull: [0, 0, 0] };
+  toyAt = simTime;
+  squish(0.15);
+}
+/** Stretched: the held bit drawn after the finger, across the glass at its depth, so far and no further. */
+function toyMove(e: PointerEvent) {
+  if (!toy || !toy.b.grab) return;
+  toy.x = e.clientX; toy.y = e.clientY;
+  const fwd = norm(sub(camTarget, eye)), right = norm(cross(fwd, [0, 1, 0])), upv = cross(right, fwd);
+  const px = (len(sub(toy.at, eye)) * 2 * Math.tan(0.45)) / innerHeight;
+  let d = add(mul(right, (toy.x - toy.sx) * px), mul(upv, (toy.sy - toy.y) * px));
+  const L = len(d);
+  if (L > TOY_REACH) d = mul(d, TOY_REACH / L);
+  toy.b.grab.pull = d;
+  toyAt = simTime;
+}
+function toyUp(e: PointerEvent) {
+  if (!toy) return;
+  const { b } = toy;
+  b.grab = null;
+  // (a tap: a poke, a dent and a wobble, where it is; no rolling off)
+  if (e.type === 'pointerup' && Math.hypot(toy.x - toy.sx, toy.y - toy.sy) < 12 && e.timeStamp - toy.t0 < 300) { b.poke(toy.at, norm(sub(toy.at, eye)), false); pop(0.3); }
+  else if (e.type === 'pointerup') squish(0.4);
+  toy = null;
+  toyAt = simTime;
+}
+/** how far the title's two can be stretched (cm) */
+const TOY_REACH = 6;
 /** A poke: at the bit of it touched, along the line from your eye through it. */
 function pokeAt(at: V3) {
   if (auto || home >= 0 || fallenAt >= 0 || !body.canFlick) return;
@@ -1263,15 +1314,33 @@ function startTitle() {
   buddy = new Dumpling([0, 0, 0], skin === 'jelly' ? 'dough' : 'jelly');
   buddy.place([pad[0] + right[0] * 4.2, y, pad[2] + right[2] * 4.2], face);
   prevX = new Float32Array(body.x); buddyPrev = new Float32Array(buddy.x);
+  seats = [{ b: body, at: [...body.com] as V3, face }, { b: buddy, at: [...buddy.com] as V3, face }];
+  toy = null;
   pickN = Math.max(1, saved() || 1);
   hopAt = simTime + 2;
   card = 'main';
   showMenu();
 }
+/** where the title's two sit: they're kept there, so a stretch or a poke never sends them off */
+let seats: Array<{ b: Dumpling; at: V3; face: number; peak?: number }> = [];
+/** On the title, each drawn gently back to its seat when it's not held; off the cloth altogether, set back down. */
+function keepSeated(dt: number) {
+  for (const s of seats) {
+    const b = s.b, dx = s.at[0] - b.com[0], dz = s.at[2] - b.com[2];
+    // (how hard it's jiggled lately, its skin moving about its middle, for the checks)
+    let jig = 0;
+    for (let i = 0; i < b.n; i++) jig = Math.max(jig, Math.hypot(b.v[i * 3] - b.vcom[0], b.v[i * 3 + 1] - b.vcom[1], b.v[i * 3 + 2] - b.vcom[2]));
+    s.peak = Math.max((s.peak ?? 0) * Math.exp(-dt), jig);
+    if (b.com[1] < s.at[1] - 8 || Math.hypot(dx, dz) > 12) { b.place(s.at, s.face); continue; }
+    if (b.grab) continue;
+    const k = Math.min(1, dt * 2);
+    for (let i = 0; i < b.n; i++) { b.x[i * 3] += dx * k; b.x[i * 3 + 2] += dz * k; }
+  }
+}
 /** Off the title, into level n. */
 function play(n: number) {
   mode = 'play';
-  buddy = null;
+  buddy = null; toy = null; seats = [];
   document.body.classList.remove('title');
   startLevel(n);
 }
@@ -1315,7 +1384,10 @@ btn('tomenu', () => startTitle());
 function titleTick(dt: number) {
   body.step(lv, dt, simTime);
   buddy?.step(lv, dt, simTime);
+  keepSeated(dt);
   simTime += dt;
+  // (left alone a while, now and then one hops)
+  if (simTime - toyAt < 8) hopAt = Math.max(hopAt, simTime + 2);
   if (simTime > hopAt) {
     const b = hopWho++ % 2 === 0 ? buddy : body;
     if (b && b.canFlick) b.flick([0, 90 + 40 * Math.random(), 0]);
@@ -1464,9 +1536,9 @@ function crumbPuff(at: V3) {
   for (let i = 0; i < 8; i++) { const a = rr() * Math.PI * 2; puffs.push({ p: [at[0] + Math.cos(a) * RADIUS, at[1] - RADIUS * 0.3, at[2] + Math.sin(a) * RADIUS], v: [Math.cos(a) * (20 + 30 * rr()), 10 + 20 * rr(), Math.sin(a) * (20 + 30 * rr())], age: 0, life: 0.4 + rr() * 0.3, size: 0.5 + rr() * 0.5, a: 0.4 }); }
 }
 /** Steam out from under a lid as it lifts: from all round the pot's rim, up and out. */
-function steamOut(at: V3, r: number) {
+function steamOut(at: V3, r: number, n = 26) {
   const rr = seeded(hash(Math.floor(simTime * 1000), 5));
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < n; i++) {
     const a = rr() * Math.PI * 2;
     puffs.push({ p: [at[0] + Math.cos(a) * r, at[1] + 0.5, at[2] + Math.sin(a) * r], v: [Math.cos(a) * (8 + 14 * rr()), 14 + 18 * rr(), Math.sin(a) * (8 + 14 * rr())], age: 0, life: 1 + rr() * 0.8, size: 1.5 + 1.5 * rr(), a: 0.35 });
   }
@@ -1536,7 +1608,8 @@ let lag = 0;
 /** blinking: when the next one is, and how far through one it is */
 let blinkAt = 2;
 function frame(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  // (a frame's time can be from before the page's own start, in a page opened behind another: never backwards)
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = now;
   time += dt;
   resize();
@@ -1557,7 +1630,7 @@ function frame(now: number) {
   aimFromPull();
   body.squeeze = aimNow && body.canFlick ? { d: norm(aimNow.vel), k: aimNow.power * 0.6 } : null;
   // (held: the dough under the finger drawn back the way it's pulled, as far as it's pulled, a few centimetres at most)
-  if (body.grab) {
+  if (body.grab && mode === 'play') {
     // (a climb is pulled down, to go up)
     const d = !aimNow ? ([0, 0, 0] as V3) : aimNow.climb ? ([0, -1, 0] as V3) : norm([-aimNow.vel[0], 0, -aimNow.vel[2]]);
     const k = aimNow ? 0.8 + 2.6 * aimNow.power : 0;
@@ -1675,7 +1748,7 @@ function frame(now: number) {
   const hero = body === drawn.find((b) => b !== buddy);
   const blink = hero ? blinkOf(blinkAt) : blinkOf(blinkAt + 1.3);
   // (its face: squeezed shut winding up, an o in the air, a smile at home; and it blinks)
-  const face = !hero ? (body.contacts === 0 ? 3 : 0) : home >= 0 ? 2 : aimNow ? 1 : body.contacts === 0 && body.sinceFlick < 2 ? 3 : 0;
+  const face = mode === 'title' ? (body.grab ? 1 : body.contacts === 0 || body.sinceFlick < 0.6 ? 3 : 0) : !hero ? (body.contacts === 0 ? 3 : 0) : home >= 0 ? 2 : aimNow ? 1 : body.contacts === 0 && body.sinceFlick < 2 ? 3 : 0;
   const sk = skins[body.kind];
   const skinUniforms = (p: WebGLProgram) => {
     gl.useProgram(p);
@@ -1890,13 +1963,14 @@ function tick(dt: number) {
     hint('splat. back to the last top', 1800);
     return;
   }
-  // the lids: steam out from under one as it lifts, a rattle while it's up
+  // the lids: as one starts to rattle, its rattle, and steam out from under it each time it jumps
   movers.forEach((m, i) => {
     const l = m.shape.lift!;
     if (m.shape.r < 2) return;
-    const { k } = liftAt(l, simTime);
-    if (k > 0.05 && lidWas[i] <= 0.05) { steamOut([m.shape.c[0], l.y0 - m.shape.hh, m.shape.c[2]], m.shape.r); if (len(sub(m.shape.c, body.com)) < 120) rattle(); }
-    lidWas[i] = k;
+    const { k, on } = liftAt(l, simTime);
+    if (on && lidWas[i] < 0 && len(sub(m.shape.c, body.com)) < 120) rattle();
+    if (k > 0.3 && lidWas[i] <= 0.3) steamOut([m.shape.c[0], l.y0 - m.shape.hh, m.shape.c[2]], m.shape.r, 10);
+    lidWas[i] = on ? k : -1;
   });
   const k = towerAt(lv, body.com, 1);
   const speed = len(body.vcom);
@@ -1997,7 +2071,15 @@ void lastVP;
 
 (window as unknown as { __squishyTop: (k: number) => string }).__squishyTop = (k: number) => lv.towers[k]?.top;
 /** (for the checks: where the dumpling is on the glass, in pixels; and the camera's turn) */
-(window as unknown as { __squishyAt: () => unknown }).__squishyAt = () => ({ at: screenOf(body.com), camYaw, grabbed: !!body.grab });
+(window as unknown as { __squishyAt: () => unknown }).__squishyAt = () => ({
+  at: screenOf(body.com), camYaw, grabbed: !!body.grab,
+  // (on the title: where each sits on the glass, how far it's drawn out, and how far it's moved from its seat)
+  title: seats.map((s) => {
+    let reach = 0;
+    for (let i = 0; i < s.b.n; i++) reach = Math.max(reach, Math.hypot(s.b.x[i * 3] - s.b.com[0], s.b.x[i * 3 + 1] - s.b.com[1], s.b.x[i * 3 + 2] - s.b.com[2]));
+    return { kind: s.b.kind, at: screenOf(s.b.com), top: screenOf([s.b.com[0], s.b.com[1] + REST_H, s.b.com[2]]), reach, moved: Math.hypot(s.b.com[0] - s.at[0], s.b.com[2] - s.at[2]), held: !!s.b.grab, deform: s.b.deform, peak: s.peak ?? 0 };
+  }),
+});
 // ─── begin ───────────────────────────────────────────────────────────────────────────────────────
 if (mode === 'title') startTitle(); else startLevel(levelN);
 resize();

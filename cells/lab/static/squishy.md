@@ -10,8 +10,11 @@ thrown over it, butter melted across the wood); then the counter's towers of ste
 a chopping board, a pudding, a lazy Susan and tea tins; then the stovetop.
 
 It opens on its title: its name in soft dough letters over the first place, the dumpling sat
-on its cloth and the jelly beside it (still to come, a treat for later), both turned to you, now
-and then one of them hopping. New Game starts at the beginning; Continue, once you've got
+on its cloth and the jelly beside it (still to come, a treat for later), both turned to you. They're
+there to play with: take hold of either and pull, and it stretches after your finger, as far as
+it'll go, and springs back when you let go; tap one and it dents and wobbles. They don't go
+anywhere: the title is where to feel how each of them gives. Left alone a while, now and then one
+of them hops. New Game starts at the beginning; Continue, once you've got
 somewhere, where you left off; Settings has the sound, which dumpling (once the jelly's come),
 and any level to start at. In play, the word `menu` at the bottom comes back here. (A link to a
 level, `?level=3`, goes straight to it.)
@@ -97,27 +100,28 @@ the tins are the solid shapes everything else is made of.
 
 ## The stovetop
 
-From level 5 the course is on the hob: brushed steel, a burner under each pot, the tiles behind.
+From level 5 the course is on the hob: brushed steel, burners under the steamers, the tiles behind.
+A pot, a pan or a jar is the size it is, and where it's wanted higher it stands on a stand: a
+wooden board on a stack of tea tins, now and then a celadon jar among them.
 
 - **A frying pan** on a pot: wide, a little slippery (seasoned iron), with a rim round it that
   catches a slide, and its handle out to one side.
 - **A butter dish**: the butter is slippery, so a landing slides, a long way at speed; the dish
   has a lip all round that stops you. Backspin bites instead. From against the lip, a flick over
   it catches on it (the arc shows the catch), so flick away from it, or hop to the middle first.
-- **A honey jar**, from level 6: taller than a flick reaches, with honey run down its side. You
+- **A honey jar**, from level 6: a big one, high on its stand, its top higher than a flick reaches, with honey run down its side. You
   don't land on it: you land *against* it, splat into the honey, and stick, hanging there,
   until you flick on. The course turns sharply at a jar. Honey holds whatever touches it, so a
   flick into the jar from the honey climbs it a little and sticks again, higher.
-- **A pot with its lid on**, from level 7: every few seconds the steam under the lid lifts it,
-  seven centimetres, rattling, and lets it down again. Land on the lid and you ride up with it;
-  flick from the top of the lift and you've seven centimetres more. The arc knows the lid's
-  cycle, so it shows where you'd land at the moment you'd land there. A lid lifted while you
-  arrive is a lid you can land *under*, on the pot, and then it comes down on you.
+- **A pot with its lid on**, from level 7: the lid's shut, but every few seconds the steam in the
+  pot rattles it, six quick jumps of a centimetre or so on the rim, steam escaping round it, and
+  it settles again. On the lid, you're jolted; flicked in the middle of a rattle, you go
+  unsteadily. The arc knows the rattle.
 
 Every level is made from its number, so level 6 is always the same level, and every hop in it
 is checked when it's made: from the middle of each top there is a flick that lands on the next;
 onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too. Playing
-itself, it waits on a lid until the lid's settled, and won't land on one dropping away.
+itself, it waits out a lid's rattle before it flicks from it or onto it.
 
 ## What gets on it
 
@@ -206,8 +210,8 @@ pleats, faintly floury, with a dark under it on whatever it's over.
 The camera follows easily, but if the dumpling nears the edge of the glass, or leaves it, the
 camera catches up at once.
 
-The lids move: they're drawn where the steam has them, with a puff of steam out from under as
-one lifts and a rattle you hear when you're near. The honey jar is glass, drawn after
+The lids move: they're drawn where the steam has them, with a puff of steam out from under at
+each jump and a rattle you hear when you're near. The honey jar is glass, drawn after
 everything else and seen through, the honey in it lit from within.
 
 `?level=3` starts a level (5 to 8 are the stove); `?skin=dough` the dough; `?auto` lets it play

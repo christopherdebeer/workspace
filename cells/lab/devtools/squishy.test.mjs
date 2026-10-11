@@ -177,20 +177,23 @@ console.log(`${kind} righting ok`);
     assert.ok(left, 'flicked, it lets go');
     console.log(`honey ok: stuck at ${stuckAt.toFixed(2)} s`);
   }
-  // a lid: it lifts on its cycle, and what's on it rides up
+  // a lid: shut, mostly; on its cycle the steam rattles it, and what's on it is jolted, and stays on
   {
-    const tw = L.tower('lid', [0, 20, 0], 11, 0, r);
-    const lid = tw.shapes[1];
+    const tw = L.tower('lid', [0, 40, 0], 11, 0, r);
+    const lid = tw.land[0];
+    const pot = tw.shapes[0];
+    assert.ok(pot.hh * 2 < 2 * 11 * 0.8 && pot.c[1] - pot.hh > 5, `a pot of a pot's size, on a stand: ${(pot.hh * 2).toFixed(1)} tall, its foot at ${(pot.c[1] - pot.hh).toFixed(1)}`);
     const lv = { n: 0, chapter: 'stove', towers: [tw], sticks: [], movers: tw.shapes.filter((s) => s.lift), shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0), ...tw.shapes] };
-    const d = new B.Dumpling([0, 20 + L.REST_H + 2, 0]);
-    let lo = 1e9, hi = -1e9, lidHi = -1e9, off = 0, frames = 0;
-    run(d, lv, lid.lift.period * 1.5, () => { lo = Math.min(lo, d.com[1]); hi = Math.max(hi, d.com[1]); lidHi = Math.max(lidHi, lid.c[1]); frames++; if (d.contacts === 0) off++; });
-    // (it may hop a frame as the lid rattles; it stays on)
-    assert.ok(off < frames * 0.1 && d.contacts > 0, `stays on the lid: off it ${off} of ${frames} frames`);
-    assert.ok(lidHi > lid.lift.y0 + 6.5, `the lid lifts: ${(lidHi - lid.lift.y0).toFixed(1)}`);
-    assert.ok(hi - lo > 6, `and it rides up with it: ${(hi - lo).toFixed(1)}`);
+    const d = new B.Dumpling([0, 40 + L.REST_H + 2, 0]);
+    let lo = 1e9, hi = -1e9, lidHi = -1e9, off = 0, frames = 0, up = 0;
+    run(d, lv, 1, () => {});
+    run(d, lv, lid.lift.period * 1.5, () => { lo = Math.min(lo, d.com[1]); hi = Math.max(hi, d.com[1]); lidHi = Math.max(lidHi, lid.c[1]); frames++; if (d.contacts === 0) off++; if (lid.c[1] > lid.lift.y0 + 0.05) up++; });
+    assert.ok(up < frames * 0.2, `the lid's shut most of the time: up ${up} of ${frames} frames`);
+    assert.ok(lidHi > lid.lift.y0 + 0.5 && lidHi < lid.lift.y0 + 1.5, `it rattles, a little: ${(lidHi - lid.lift.y0).toFixed(2)}`);
+    assert.ok(off < frames * 0.15 && d.contacts > 0, `stays on the lid: off it ${off} of ${frames} frames`);
+    assert.ok(hi - lo > 0.3, `jolted by it: ${(hi - lo).toFixed(2)}`);
     assert.ok(L.onTop(tw, d.com, 1), 'still on the lid');
-    console.log(`lid ok: rode up ${(hi - lo).toFixed(1)}`);
+    console.log(`lid ok: rattled ${(lidHi - lid.lift.y0).toFixed(2)}, jolted ${(hi - lo).toFixed(2)}`);
   }
 }
 
@@ -212,7 +215,7 @@ console.log(`${kind} righting ok`);
   const plain = slide(coatOn(L.DUST.none)), buttered = slide(coatOn(L.DUST.butter));
   assert.ok(buttered > plain * 3 + 3, `buttered, it slides: ${buttered.toFixed(1)} vs ${plain.toFixed(1)}`);
   {
-    // (a tall jar, its honey well off the floor: so it's the honey's hold that's tried, not a bounce back into it off the floor)
+    // (a jar high on its stand, its honey well off the floor: so it's the honey's hold that's tried, not a bounce back into it off the floor)
     const tw = L.tower('honey', [0, 40, 0], 6.5, 0, () => 0.5);
     const lv = { n: 0, chapter: 'stove', towers: [tw], sticks: [], movers: [], shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0), ...tw.shapes] };
     const d = new B.Dumpling([0, 40, -30], 'dough');
@@ -220,7 +223,7 @@ console.log(`${kind} righting ok`);
     d.flick([0, 150, 110]);
     let stuck = 0;
     run(d, lv, 3, () => { if (d.pinned > 4) stuck++; });
-    assert.ok(stuck === 0 && d.com[1] < 20, `honey won't hold butter: held ${stuck} frames, at y ${d.com[1].toFixed(1)}`);
+    assert.ok(stuck === 0 && d.com[1] < 40 - L.JAR_UNDER + L.RADIUS, `honey won't hold butter: held ${stuck} frames, slid down to y ${d.com[1].toFixed(1)}`);
   }
   // pepper: it sneezes, and the pepper's off it
   {

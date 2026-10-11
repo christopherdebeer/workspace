@@ -83,6 +83,30 @@ await withWood(async (lab) => {
   let t = await lab.state(ti);
   console.log('title', await lab.shot(ti, 'squishy-title'));
   c.ok('the title, with the two of them on it', t.mode === 'title' && (await ti.evaluate(() => document.body.classList.contains('title') && !!document.querySelector('#logo svg'))), t);
+  // (the two of them to play with: take hold of one and pull, and it stretches after the finger, staying where it sits; a tap pokes it)
+  await ti.waitForFunction(() => window.__squishyAt().title.length === 2, null, { timeout: 30000, polling: 250 });
+  // (the camera comes in to its place: until the two are still on the glass)
+  await ti.waitForFunction(() => { const w = window.__squishyAt().title[0].at, l = window.__lastAt ?? w; window.__lastAt = w; return Math.hypot(w[0] - l[0], w[1] - l[1]) < 0.5 && w !== l; }, null, { timeout: 60000, polling: 400 }).catch(() => {});
+  const seat = (await ti.evaluate(() => window.__squishyAt())).title;
+  const reach0 = seat[0].reach;
+  await ti.mouse.move(seat[0].top[0], seat[0].top[1]);
+  await ti.mouse.down();
+  for (let i = 1; i <= 10; i++) await ti.mouse.move(seat[0].top[0] + i * 6, seat[0].top[1] - i * 12);
+  await ti.waitForFunction((r) => window.__squishyAt().title[0].reach > r + 1.5, reach0, { timeout: 60000, polling: 100 }).catch(() => {});
+  let tt = (await ti.evaluate(() => window.__squishyAt())).title;
+  console.log('title stretch', JSON.stringify(tt), await lab.shot(ti, 'squishy-title-stretch'));
+  c.ok('on the title, held and pulled: drawn out after the finger, where it sits', tt[0].held && tt[0].reach > reach0 + 1.5 && tt[0].moved < 2, { reach0, tt });
+  await ti.mouse.up();
+  await ti.waitForFunction((r) => window.__squishyAt().title[0].reach < r + 0.8, reach0, { timeout: 60000, polling: 100 }).catch(() => {});
+  tt = (await ti.evaluate(() => window.__squishyAt())).title;
+  c.ok('let go, it comes back, and stays put', !tt[0].held && tt[0].reach < reach0 + 0.8 && tt[0].moved < 1.5, { reach0, tt });
+  const was = tt[1];
+  await ti.mouse.click(was.at[0], was.at[1]);
+  await ti.waitForFunction((d0) => window.__squishyAt().title[1].peak > d0 + 30, was.peak, { timeout: 30000, polling: 30 }).catch(() => {});
+  tt = (await ti.evaluate(() => window.__squishyAt())).title;
+  c.ok('a tap pokes the other: it jiggles, and doesn\'t roll off', tt[1].peak > was.peak + 30 && tt[1].moved < 1.5, { was, tt });
+  t = await lab.state(ti);
+  c.ok('still the title', t.mode === 'title', t);
   await ti.click('#new');
   // (its state is written each frame, and frames are slow without a graphics card: waited for)
   await ti.waitForFunction(() => window.__squishy.mode === 'play', null, { timeout: 60000, polling: 250 });
