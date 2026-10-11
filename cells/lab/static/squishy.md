@@ -4,9 +4,10 @@ A third-person platformer in which you are a dumpling: a steamed one, of dough, 
 from level 13 (and, once you've been there, by the word at the bottom, anywhere) a clear pink
 jelly squishy toy of one, full of glitter, with a pointed tip. You don't walk: you flick. Drag back
 from anywhere on the screen and let go, as with a slingshot, and the dumpling flies the other
-way, as hard as you pulled. Across a kitchen counter from one top to the next, steamers,
-plates, a chopping board, a pudding, a lazy Susan, tea tins, up and over, to the golden
-steamer: home.
+way, as hard as you pulled. Through a kitchen, place by place, to the golden steamer: home.
+First the preparation table, a place laid out as it is (a spoon to land in, a bench with a towel
+thrown over it, butter melted across the wood); then the counter's towers of steamers, plates,
+a chopping board, a pudding, a lazy Susan and tea tins; then the stovetop.
 
 | | Touch | Mouse and keys |
 |---|---|---|
@@ -33,11 +34,30 @@ where it lands and stays, even on butter. A word at the bottom says which you ga
 A tap is a nudge: one roll the way you tapped, a hand's width and no more, with hardly a hop. For
 creeping to an edge, off a lid, or back to the middle of a top.
 
-Fall to the counter and it's a splat, and back to the last top you stood on. The clock runs
-until you're home, the count of falls beside it, and your best time for each level is kept. Levels after the first are longer
-and their gaps wider, with more kinds of top: 1 is steamers and a board, 2 brings plates, 3
-puddings and tins, 4 the lazy Susan. Level 5 moves to the stovetop, a new kitchen with its own
-things (below); from 9 on the two are mixed.
+Fall and it's a splat, and back to the last top you stood on: on the counter, falling is
+landing on the counter itself, far below the tops; at the table, the table is ground (land on it
+and you're fine, and flick on from there) and falling is going off its edge. The clock runs
+until you're home, the count of falls beside it, and your best time for each level is kept. Each
+level opens with its place's name.
+
+Levels 1 and 2 are The Preparation Table (below). 3 and 4 are the counter's towers, longer and
+wider apart, with puddings, tins and the lazy Susan. Level 5 moves to the stovetop, a new
+kitchen with its own things (below); from 9 on, the whole kitchen, mixed.
+
+## The Preparation Table
+
+A wooden table, laid out by hand and varied a little each time: you start on a folded gingham
+cloth. Beside it a butter dish, its butter melted across the table toward a wooden spoon, which
+lies with its bowl on the table and its handle up on a painted tin bench: land in the spoon's
+bowl (it catches you), or in the butter on the way (it slides). Then up onto the bench, its far
+end under a tea towel thrown over it and hanging down both sides: linen grips, and a throw at
+the towel's hanging side clings a moment or two before it lets go. Down to a floury paddle
+board, up a tea tin, and home. The second time the gaps are wider, the bench is taller, and a
+plate is tipped up on a teacup on the way: a tilted top, glazed, a little slippery.
+
+The spoon, the towel, the butter and the tipped plate are sheets: surfaces made of triangles,
+with a thickness under them, met exactly as they're drawn. The table, the bench, the board and
+the tins are the solid shapes everything else is made of.
 
 ## The tops
 
@@ -108,8 +128,9 @@ The two are made differently: the jelly springs back faster and keeps more of ea
 landing squashes it to under half its height and it jiggles back; the dough is slower and
 deader, and plops.
 
-Where it touches, there's friction (Coulomb, from how hard it was pushed out), bounce where the
-surface has any, and tack: dough is sticky, and the jelly nearly as much, so it holds to what it
+Where it touches, there's friction (Coulomb, from how hard it was pushed out; it holds where it
+touches, so it sits on a slope as long as the slope's grip will hold it, on a ramp of 20° or a
+tipped plate, and slides off a steep one), bounce where the surface has any, and tack: dough is sticky, and the jelly nearly as much, so it holds to what it
 touches, a wall included for a moment, and the tack tires on a wall so it slides down. Butter
 has no tack to give. Honey has more than the dumpling's own, and it never tires: a particle
 that touches honey is held where it touched, the whole body is slowed hard so its momentum
@@ -121,8 +142,9 @@ roll is let live and the grip eased for a moment; with backspin the grip is doub
 quick to hold and the roll killed, so it plants. Its wobble is damped against its
 moving as one body (its middle's motion and its turning), so it jiggles and settles rather
 than ringing. On the ground its roll dies and it rights itself like a roly-poly: tipped over, on its side or
-its head, it rolls back over the edge it's lying on onto its flat bottom; sat still, it
-shuffles round to look at you.
+its head, it rolls back over the edge it's lying on onto its flat bottom, its bottom flat to
+whatever it's on (a slope's up, not the world's: righted to the world's on a slope, it would
+crawl down it); a small lean it leaves alone. Sat still, it shuffles round to look at you.
 
 The face is drawn on its rest shape, so it turns, squashes and stretches with it: round eyes
 with a shine that blink, red cheeks, squeeze shut `> <` while you wind up, an `o` in the air, a happy `^ ^` at home.

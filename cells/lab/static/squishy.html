@@ -25,7 +25,12 @@
     .home #next { display: inline-block; }
     .words { display: flex; gap: 4px 16px; align-items: baseline; flex-wrap: wrap; justify-content: center; }
     .words button, .words a, .words span { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; padding: 6px 2px; color: #fff; opacity: .92; text-shadow: 0 1px 3px rgba(0,0,0,.6); text-decoration: none; }
-    .preview #top, .preview nav, .preview #status, .preview #hands { display: none; }
+    #title { position: fixed; left: 0; right: 0; top: 34%; text-align: center; pointer-events: none; opacity: 0; transform: translateY(6px); transition: opacity .9s, transform .9s; text-shadow: 0 1px 12px rgba(40,24,10,.55), 0 1px 2px rgba(40,24,10,.5); }
+    #title.on { opacity: 1; transform: none; }
+    #title b { display: block; font-weight: 400; font-size: 21px; letter-spacing: .32em; text-transform: uppercase; padding-left: .32em; }
+    #title s { display: block; width: 26px; height: 1px; margin: 12px auto 9px; background: rgba(255,255,255,.85); }
+    #title i { display: block; font-style: normal; font-size: 12px; letter-spacing: .22em; opacity: .85; }
+    .preview #top, .preview nav, .preview #status, .preview #hands, .preview #title { display: none; }
   </style>
 </head>
 <body>
@@ -34,6 +39,7 @@
   <div id="top"></div>
   <nav><a href="/">← lab</a></nav>
   <div id="status"></div>
+  <div id="title"><b></b><s></s><i></i></div>
   <div id="hands">
     <div id="hint"></div>
     <div class="pills"><button id="again">again</button><button id="next">next level</button></div>

@@ -134,7 +134,11 @@ function dustOn(s: Shape, out: number[]) {
     }
   }
 }
+/** Shapes as they draw themselves (the sets' free things: a bench, a pad, a board), into out. */
+export function drawShapes(shapes: Shape[], out: number[]) { for (const s of shapes) drawShape(s, out); }
 function drawShape(s: Shape, out: number[]) {
+  // (a sheet is drawn by its prop, which made it)
+  if (s.kind === 'sheet') return;
   dustOn(s, out);
   {
     if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); return; }
@@ -194,7 +198,7 @@ function drawShape(s: Shape, out: number[]) {
 }
 /** The whole course: every tower, and the chopsticks. */
 export function levelMesh(lv: Level): LevelMesh {
-  const m: LevelMesh = { solid: [], glass: [], movers: [] };
+  const m: LevelMesh = { solid: [...lv.decor], glass: [], movers: [] };
   for (const t of lv.towers) towerMesh(t, m);
   for (const s of lv.sticks) stick(s, m.solid);
   return m;

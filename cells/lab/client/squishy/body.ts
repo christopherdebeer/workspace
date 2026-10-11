@@ -25,6 +25,8 @@ const KEEP = 0.9, ROLL = 30;
 const RIGHT = 9;
 /** how fast it shuffles round to face you, and rolls itself back upright, at most (radians a second) */
 const TURN = 4, UPRIGHT = 3;
+/** how far it may lean from what it's stood on before it rights itself (the sine of the angle: ~11°, fully by ~24°), and before it rolls itself back over (its cosine, ~22°) */
+const LEAN0 = 0.19, LEAN1 = 0.4, SHUFFLE_UP = 0.93;
 /** dough's tack: how hard it holds what it touches (cm/s²), and how near counts as touching */
 const TACK = 900, STICK = 0.35;
 /** a nudge: how fast it goes (cm/s), and the little hop with it */
@@ -161,8 +163,9 @@ export class Dumpling {
   A = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
   com: V3 = [0, 0, 0];
   vcom: V3 = [0, 0, 0];
-  /** its middle's velocity averaged over the last quarter second or so: a quiver on an edge averages to nothing */
+  /** how fast its middle has really been going, averaged over the last quarter second or so: a quiver on an edge averages to nothing */
   drift: V3 = [0, 0, 0];
+  private comWas: V3 = [0, 0, 0];
   restVolume: number;
   // touching, per particle: normal, depth pushed out this step, grip, bounce, surface velocity, normal speed coming in, and how (0 not, 1 touching, 2 near)
   private cn: Float32Array;
@@ -173,6 +176,7 @@ export class Dumpling {
   private cv0: Float32Array;
   private cf: Uint8Array;
   private ctk: Float32Array;
+  private ctr: Float32Array;
   private cdust: Uint8Array;
   private pin: Uint8Array;
   /** what each particle is coated with, and how thickly (0–1): picked up where it touches, worn off in time, shaken off by a hard landing */
@@ -197,6 +201,8 @@ export class Dumpling {
   onWall = false;
   groundNy = 1;
   onFloor = 1;
+  /** which way is up for it, where it's standing: the floor's own (a ramp's, a tipped plate's), or the world's on a wall or in the air */
+  upTo: V3 = [0, 1, 0];
   /** how much what it's touching holds it (the stickiest, 0–3), and how many particles honey has hold of */
   held = 0;
   pinned = 0;
@@ -228,7 +234,7 @@ export class Dumpling {
     const n = this.n;
     this.x = new Float32Array(n * 3); this.v = new Float32Array(n * 3); this.p = new Float32Array(n * 3); this.q = new Float32Array(n * 3);
     this.cn = new Float32Array(n * 3); this.cd = new Float32Array(n); this.cmu = new Float32Array(n); this.cb = new Float32Array(n);
-    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.pin = new Uint8Array(n); this.cdust = new Uint8Array(n);
+    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.ctr = new Float32Array(n); this.pin = new Uint8Array(n); this.cdust = new Uint8Array(n);
     this.coat = new Float32Array(n); this.coatKind = new Uint8Array(n);
     let cx = 0, cy = 0, cz = 0;
     for (let i = 0; i < n; i++) { cx += s.pos[i * 3]; cy += s.pos[i * 3 + 1]; cz += s.pos[i * 3 + 2]; }
@@ -251,7 +257,7 @@ export class Dumpling {
     this.R.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
     this.A.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
     this.com = [...at] as V3;
-    this.vcom = [0, 0, 0]; this.drift = [0, 0, 0];
+    this.vcom = [0, 0, 0]; this.drift = [0, 0, 0]; this.comWas = [...at] as V3;
     this.tack = 1; this.sinceContact = 0; this.sinceFlick = 9; this.squeeze = null;
     this.spinMode = 0; this.spinLeft = 0; this.held = 0;
     this.coat.fill(0); this.coatKind.fill(0); this.coated = [0, 0, 0, 0, 0, 0]; this.coatMost = DUST.none; this.sneeze = 0;
@@ -388,14 +394,14 @@ export class Dumpling {
   /** A frame: SUB small steps of falling, keeping its shape, meeting the course, friction and tack. */
   step(lv: Level, dt: number, time: number) {
     const n = this.n, h = dt / SUB;
-    const { x, v, p, cn, cd, cmu, cb, cvs, cv0, cf, ctk, cdust, coat, coatKind } = this;
+    const { x, v, p, cn, cd, cmu, cb, cvs, cv0, cf, ctk, ctr, cdust, coat, coatKind } = this;
     const w0 = 2 * Math.PI * this.phys.hz;
     const alpha = Math.min(0.5, (w0 * h) ** 2);
     const damp = 2 * this.phys.zeta * w0 * h;
     const speed = Math.hypot(...this.vcom);
     near(lv, this.com, RADIUS * 1.8 + speed * dt + 1, this.nearby);
     const o = this.hit;
-    let contacts = 0, wall = false, impact = 0, nyS = 0, floor = 0, held = 0, tire = 1, pinnedS = 0;
+    let contacts = 0, wall = false, impact = 0, nyS = 0, floor = 0, held = 0, tire = 1, pinnedS = 0, fx = 0, fy = 0, fz = 0;
     const tackOn = this.sinceFlick > 0.12;
     // the spin's say on landing: topspin lets the roll live and eases the grip; backspin grips and holds at once
     const top = Math.max(0, this.spinMode) * this.spinLeft, back = Math.max(0, -this.spinMode) * this.spinLeft;
@@ -420,14 +426,14 @@ export class Dumpling {
             const vn = (v[i3] - o.vx) * o.nx + (v[i3 + 1] - o.vy) * o.ny + (v[i3 + 2] - o.vz) * o.nz;
             if (cf[i] !== 1 || o.d > cd[i]) {
               cn[i3] = o.nx; cn[i3 + 1] = o.ny; cn[i3 + 2] = o.nz;
-              cmu[i] = sh.mu; cb[i] = sh.bounce; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = vn; ctk[i] = sh.tack; cdust[i] = sh.dust;
+              cmu[i] = sh.mu; cb[i] = sh.bounce; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = vn; ctk[i] = sh.tack; ctr[i] = sh.tire; cdust[i] = sh.dust;
               if (o.ny < 0.5 && sh.tire < tire) tire = sh.tire;
             }
             cd[i] += o.d;
             cf[i] = 1;
           } else if (cf[i] === 0) {
             cn[i3] = o.nx; cn[i3 + 1] = o.ny; cn[i3 + 2] = o.nz;
-            cmu[i] = sh.mu; cb[i] = 0; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = 0; ctk[i] = sh.tack; cdust[i] = sh.dust;
+            cmu[i] = sh.mu; cb[i] = 0; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = 0; ctk[i] = sh.tack; ctr[i] = sh.tire; cdust[i] = sh.dust;
             if (o.ny < 0.5 && sh.tire < tire) tire = sh.tire;
             cf[i] = 2;
           }
@@ -460,10 +466,12 @@ export class Dumpling {
           let mu = cmu[i], tk0 = ctk[i], bn = cb[i];
           if (ck > 0.05) {
             if (kind === DUST.flour) { mu *= 1 + 0.6 * ck; tk0 *= 1 - ck; }
-            else if (kind === DUST.butter) { mu *= 1 - 0.75 * ck; tk0 *= 1 - ck; }
+            else if (kind === DUST.butter) { mu *= 1 - 0.75 * ck; tk0 *= Math.max(0, 1 - 2.5 * ck); }
             else if (kind === DUST.crumbs) { bn = Math.max(bn, 1.6 * ck); mu *= 1 + 0.3 * ck; }
             else if (kind === DUST.sprinkles) { if (tk0 <= 1) tk0 += 1.2 * ck; }
           }
+          // (a hold that tires, linen's, sugar's, tires as its own tack does; honey's never)
+          if (tk0 > 1 && ctr[i] > 0) tk0 = 1 + (tk0 - 1) * this.tack;
           // (and it picks up what's there, as it touches)
           if (cf[i] === 1 && cdust[i]) {
             const on = DUSTS[cdust[i] as Dust].on * h;
@@ -472,7 +480,7 @@ export class Dumpling {
           }
           // (touching; or held by honey, which is as good as)
           if (cf[i] === 1 || (tk0 > 1 && tackOn)) {
-            contacts++; nyS += ny; if (ny > 0.5) floor++;
+            contacts++; nyS += ny; if (ny > 0.5) { floor++; fx += nx; fy += ny; fz += nz; }
             if (tk0 > held) held = tk0;
             if (ny < 0.5) wall = true;
           }
@@ -486,6 +494,9 @@ export class Dumpling {
           if (tackOn && tk > 0 && vn < 60) { const a = TACK * this.phys.tack * tk * tackK * h; vn -= a; dvn += a; }
           const tm = Math.hypot(tx, ty, tz), lim = mu * muK * dvn;
           const k = tm <= lim ? 0 : 1 - lim / tm;
+          // (what friction takes out of its sliding it takes out of where it went, too: else what the
+          // shape's pull moves along a slope each step would stay moved, and it would creep downhill)
+          if (cf[i] === 1 && k < 1) { const f = (1 - k) * h; p[i3] -= tx * f; p[i3 + 1] -= ty * f; p[i3 + 2] -= tz * f; }
           tx *= k; ty *= k; tz *= k;
           if (tk0 > 1 && tackOn) {
             // (honey: what touches it is held where it touched, so a splat against it hangs there until it's flicked)
@@ -514,12 +525,18 @@ export class Dumpling {
     for (let i = 0; i < n; i++) { cx += x[i * 3]; cy += x[i * 3 + 1]; cz += x[i * 3 + 2]; vx += v[i * 3]; vy += v[i * 3 + 1]; vz += v[i * 3 + 2]; }
     this.com = [cx / n, cy / n, cz / n];
     this.vcom = [vx / n, vy / n, vz / n];
-    const dk = 1 - Math.exp(-dt * 5);
-    for (let i = 0; i < 3; i++) this.drift[i] += (this.vcom[i] - this.drift[i]) * dk;
+    // (its drift: how its middle has actually moved, smoothed; not its particles' speeds, which a body wedged and quivering keeps up while going nowhere)
+    const dk = 1 - Math.exp(-dt * 5), was = this.comWas;
+    for (let i = 0; i < 3; i++) this.drift[i] += ((this.com[i] - was[i]) / dt - this.drift[i]) * dk;
+    this.comWas = [...this.com] as V3;
     this.contacts = Math.round(contacts / SUB);
     this.onWall = wall;
     this.groundNy = contacts > 0 ? nyS / contacts : 1;
     this.onFloor = contacts > 0 ? floor / contacts : 1;
+    {
+      const l = Math.hypot(fx, fy, fz);
+      this.upTo = l > 0 && fy / l > 0.75 ? [fx / l, fy / l, fz / l] : [0, 1, 0];
+    }
     this.held = held;
     this.pinned = Math.round(pinnedS / SUB);
     // the coatings wear off in time; a hard landing shakes some off; pepper brings on a sneeze
@@ -568,26 +585,30 @@ export class Dumpling {
   private shuffle(dt: number, grounded: boolean) {
     const R = this.R, look = this.look;
     if (!grounded || this.sinceFlick < 0.4 || Math.hypot(...this.vcom) > 20) return;
-    const ux = R[1], uy = R[4], uz = R[7];
-    if (uy < 0.97) {
-      // (back up: about the level line square to the way it leans; on its head, any such line)
-      let ax = uz, az = -ux;
-      const l = Math.hypot(ax, az);
-      if (l < 1e-3) { ax = R[0]; az = R[6]; } else { ax /= l; az /= l; }
-      const off = Math.acos(Math.max(-1, Math.min(1, uy)));
+    const ux = R[1], uy = R[4], uz = R[7], [gx, gy, gz] = this.upTo;
+    const along = ux * gx + uy * gy + uz * gz;
+    if (along < SHUFFLE_UP) {
+      // (back up, to the up of what it's on: about the line square to the way it leans; on its head, any such line)
+      let ax = uy * gz - uz * gy, ay = uz * gx - ux * gz, az = ux * gy - uy * gx;
+      const l = Math.hypot(ax, ay, az);
+      if (l < 1e-3) { ax = R[0]; ay = R[3]; az = R[6]; } else { ax /= l; ay /= l; az /= l; }
+      const off = Math.acos(Math.max(-1, Math.min(1, along)));
       // (rolled over the edge on its bottom's side, as a thing tipped over rolls back: not turned
       // about its middle, nor about the middle of where it's touching, either of which drives one
       // of the things it's resting on into the ground)
-      const lx = l < 1e-3 ? 0 : ux / l, lz = l < 1e-3 ? 0 : uz / l;
+      let lx = ux - gx * along, ly = uy - gy * along, lz = uz - gz * along;
+      const ll = Math.hypot(lx, ly, lz);
+      if (ll > 1e-3) { lx /= ll; ly /= ll; lz /= ll; } else { lx = 0; ly = 0; lz = 0; }
+      const lean = (i: number) => (this.x[i * 3] - this.com[0]) * lx + (this.x[i * 3 + 1] - this.com[1]) * ly + (this.x[i * 3 + 2] - this.com[2]) * lz;
       let best = Infinity;
-      for (let i = 0; i < this.n; i++) if (this.cf[i] === 1) best = Math.min(best, (this.x[i * 3] - this.com[0]) * lx + (this.x[i * 3 + 2] - this.com[2]) * lz);
+      for (let i = 0; i < this.n; i++) if (this.cf[i] === 1) best = Math.min(best, lean(i));
       let px = 0, py = 0, pz = 0, m = 0;
       for (let i = 0; i < this.n; i++) {
-        if (this.cf[i] !== 1 || (this.x[i * 3] - this.com[0]) * lx + (this.x[i * 3 + 2] - this.com[2]) * lz > best + 0.6) continue;
+        if (this.cf[i] !== 1 || lean(i) > best + 0.6) continue;
         px += this.x[i * 3]; py += this.x[i * 3 + 1]; pz += this.x[i * 3 + 2]; m++;
       }
       const pivot: V3 | undefined = m ? [px / m, py / m, pz / m] : undefined;
-      this.turn([ax / Math.hypot(ax, az), 0, az / Math.hypot(ax, az)], -Math.min(off * 4, UPRIGHT) * dt, pivot, true);
+      this.turn([ax, ay, az], Math.min(off * 4, UPRIGHT) * dt, pivot, true);
       return;
     }
     if (!look) return;
@@ -638,12 +659,16 @@ export class Dumpling {
     // (on the ground: its turning drawn toward the turn that rights it, its own up toward the
     // world's; so a roll dies, and it settles on its flat bottom, face out)
     const k = Math.min(1, roll);
-    const ux = this.R[1], uy = this.R[4], uz = this.R[7];
-    const tx = (k > 0 ? RIGHT : 0) * -uz, tz = (k > 0 ? RIGHT : 0) * ux;
-    const tilt = Math.hypot(tx, tz) / RIGHT;
-    const ty = 0;
+    // (righted toward what it's stood on: a floor's up, a ramp's)
+    // (not for a small lean: on a slope it sags a little downhill, and righting that would set it crawling)
+    const ux = this.R[1], uy = this.R[4], uz = this.R[7], [gx, gy, gz] = this.upTo;
+    const ax = uy * gz - uz * gy, ay = uz * gx - ux * gz, az = ux * gy - uy * gx;
+    const sinT = Math.hypot(ax, ay, az), dead = Math.min(1, Math.max(0, (sinT - LEAN0) / (LEAN1 - LEAN0)));
+    const K = k > 0 ? RIGHT * dead * dead * (3 - 2 * dead) : 0;
+    const tx = K * ax, ty = K * ay, tz = K * az;
+    const tilt = sinT;
     // (upside down the axis is lost: any way over will do)
-    const ex = (uy < 0 && tilt < 0.3 ? RIGHT : tx) - wx, ey = ty - wy, ez = tz - wz;
+    const ex = (ux * gx + uy * gy + uz * gz < 0 && tilt < 0.3 ? RIGHT : tx) - wx, ey = ty - wy, ez = tz - wz;
     for (let i = 0; i < n; i++) {
       const rx = x[i * 3] - cx, ry = x[i * 3 + 1] - cy, rz = x[i * 3 + 2] - cz;
       const gx = vx + wy * rz - wz * ry, gy = vy + wz * rx - wx * rz, gz = vz + wx * ry - wy * rx;

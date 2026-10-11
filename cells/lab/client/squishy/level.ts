@@ -33,6 +33,8 @@ export const MAT = {
   counter: 0, bamboo: 1, weave: 2, porcelain: 3, lacquer: 4, jelly: 5, tin: 6, jar: 7, board: 8, gold: 9, chopstick: 10, tiles: 11,
   // (12–16 are the drawing's own: a window, the aiming dots, the landing ring, the dark under it, the jelly's light)
   butter: 17, honey: 18, glass: 19, pot: 20, pan: 21, hob: 22, burner: 23, knob: 24,
+  // (25–29: what's on a top, drawn over it: 24 + its dust)
+  spoon: 30, towel: 31, gingham: 32, floral: 33, smear: 34, legs: 35,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -51,13 +53,38 @@ export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
   [DUST.pepper]: { on: 6, off: 0.12, shake: 0.3 },
   [DUST.sprinkles]: { on: 4, off: 0.04, shake: 0.4 },
 };
-/** which kitchen a level is in: the counter, then the stovetop, then both mixed */
-export type Chapter = 'counter' | 'stove' | 'mixed';
-export const chapterOf = (n: number): Chapter => (n <= 4 ? 'counter' : n <= 8 ? 'stove' : 'mixed');
+/** which kitchen a level is in: the preparation table, the counter, then the stovetop, then all of it mixed */
+export type Chapter = 'table' | 'counter' | 'stove' | 'mixed';
+export const chapterOf = (n: number): Chapter => (n <= 2 ? 'table' : n <= 4 ? 'counter' : n <= 8 ? 'stove' : 'mixed');
+/** what each kitchen is called, as its title card says */
+export const CHAPTER_NAME: Record<Chapter, string> = { table: 'The Preparation Table', counter: 'The Counter', stove: 'The Stovetop', mixed: 'The Whole Kitchen' };
 
-/** A solid the dumpling meets: a box (turned about the vertical), an upright cylinder, or a capsule. */
+/**
+ * A sheet of triangles with a thickness: a spoon, a towel, a tilted plate. Its top is the
+ * triangles (their normals point out of the top); its body goes down from them, so far, along
+ * each one's normal. Found by a grid: each cell lists the triangles that come near it.
+ */
+export interface Sheet {
+  /** each triangle's three corners (9 numbers), and its normal (3) */
+  tris: Float32Array;
+  norms: Float32Array;
+  /** how thick it is, under its top */
+  th: number;
+  grid: Map<number, Int32Array>;
+  /** each triangle's bounds (6 numbers), and the last ask that looked at it (so one ask looks at each once) */
+  box: Float32Array;
+  seen: Int32Array;
+}
+/** the grid's cell: each lists the triangles (with their thickness) that come into it */
+const CELL = 2.5;
+let ask = 0;
+const cellKey = (ix: number, iy: number, iz: number) => ((ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791)) | 0;
+
+/** A solid the dumpling meets: a box (turned about the vertical), an upright cylinder, a capsule, or a sheet. */
 export interface Shape {
-  kind: 'box' | 'cyl' | 'cap';
+  kind: 'box' | 'cyl' | 'cap' | 'sheet';
+  /** a sheet's triangles */
+  sheet?: Sheet;
   /** box and cylinder: the centre; capsule: one end */
   c: V3;
   /** capsule: the other end */
@@ -83,7 +110,8 @@ export interface Shape {
   lo: V3;
   hi: V3;
 }
-export type Top = 'start' | 'steamer' | 'plate' | 'board' | 'pudding' | 'susan' | 'tin' | 'goal' | 'butter' | 'honey' | 'lid' | 'pan';
+export type Top = 'start' | 'steamer' | 'plate' | 'board' | 'pudding' | 'susan' | 'tin' | 'goal' | 'butter' | 'honey' | 'lid' | 'pan'
+  | 'pad' | 'spoon' | 'bench' | 'paddle' | 'tilt';
 export interface Tower {
   top: Top;
   /** the middle of its top surface (for honey: the place against its side where you stick) */
@@ -104,13 +132,20 @@ export interface Tower {
 export interface Level {
   n: number;
   chapter: Chapter;
+  /** the stops along the way: where it starts, each top it must reach, home */
   towers: Tower[];
-  /** everything solid: the counter, the towers, the chopsticks */
+  /** everything solid: the counter (or the table), the towers, the props, the chopsticks */
   shapes: Shape[];
   /** chopstick pairs, for the drawing: each a pair of capsules */
   sticks: Shape[];
   /** the shapes that move (lids), for the drawing and for moving them */
   movers: Shape[];
+  /** below this, it's fallen (to the counter, or off the table) */
+  kill: number;
+  /** the room's floor, for the drawing */
+  ground: number;
+  /** what's drawn that isn't one of the shapes as they'd draw themselves (the props' own meshes, the table's legs), VSTRIDE vertices */
+  decor: number[];
 }
 
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
@@ -122,11 +157,121 @@ function bounds(s: Shape): Shape {
   } else if (s.kind === 'cyl') {
     s.lo = [s.c[0] - s.r, s.c[1] - s.hh, s.c[2] - s.r];
     s.hi = [s.c[0] + s.r, s.c[1] + s.hh, s.c[2] + s.r];
-  } else {
+  } else if (s.kind === 'cap') {
     s.lo = [Math.min(s.c[0], s.b[0]) - s.r, Math.min(s.c[1], s.b[1]) - s.r, Math.min(s.c[2], s.b[2]) - s.r];
     s.hi = [Math.max(s.c[0], s.b[0]) + s.r, Math.max(s.c[1], s.b[1]) + s.r, Math.max(s.c[2], s.b[2]) + s.r];
+  } else {
+    const t = s.sheet!.tris, th = s.sheet!.th;
+    s.lo = [Infinity, Infinity, Infinity]; s.hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < t.length; i += 3) for (let k = 0; k < 3; k++) { s.lo[k] = Math.min(s.lo[k], t[i + k] - th); s.hi[k] = Math.max(s.hi[k], t[i + k] + th); }
   }
   return s;
+}
+/**
+ * A sheet from its triangles (corners in order, so that (b − a) × (c − a) points out of its top),
+ * this thick under its top.
+ */
+export function sheet(all: number[], th: number, mat: number, mu = 0.8): Shape {
+  // (not the triangles with no area: the tip of a spoon, the middle of a plate)
+  const corners: number[] = [];
+  for (let o = 0; o < all.length; o += 9) {
+    const ux = all[o + 3] - all[o], uy = all[o + 4] - all[o + 1], uz = all[o + 5] - all[o + 2], vx = all[o + 6] - all[o], vy = all[o + 7] - all[o + 1], vz = all[o + 8] - all[o + 2];
+    if (Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) > 1e-6) for (let k = 0; k < 9; k++) corners.push(all[o + k]);
+  }
+  const n = corners.length / 9;
+  const tris = new Float32Array(corners), norms = new Float32Array(n * 3), bx = new Float32Array(n * 6);
+  const grid = new Map<number, number[]>();
+  for (let t = 0; t < n; t++) {
+    const o = t * 9;
+    const ux = tris[o + 3] - tris[o], uy = tris[o + 4] - tris[o + 1], uz = tris[o + 5] - tris[o + 2];
+    const vx = tris[o + 6] - tris[o], vy = tris[o + 7] - tris[o + 1], vz = tris[o + 8] - tris[o + 2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    nx /= l; ny /= l; nz /= l;
+    norms[t * 3] = nx; norms[t * 3 + 1] = ny; norms[t * 3 + 2] = nz;
+    // (listed in every cell its bounds, with its thickness, come into)
+    const lo = [0, 1, 2].map((k) => Math.min(tris[o + k], tris[o + 3 + k], tris[o + 6 + k]) - th);
+    const hi = [0, 1, 2].map((k) => Math.max(tris[o + k], tris[o + 3 + k], tris[o + 6 + k]) + th);
+    for (let k = 0; k < 3; k++) { bx[t * 6 + k] = lo[k]; bx[t * 6 + 3 + k] = hi[k]; lo[k] = Math.floor(lo[k] / CELL); hi[k] = Math.floor(hi[k] / CELL); }
+    for (let ix = lo[0]; ix <= hi[0]; ix++) for (let iy = lo[1]; iy <= hi[1]; iy++) for (let iz = lo[2]; iz <= hi[2]; iz++) {
+      const key = cellKey(ix, iy, iz);
+      let list = grid.get(key);
+      if (!list) grid.set(key, (list = []));
+      list.push(t);
+    }
+  }
+  const g = new Map<number, Int32Array>();
+  for (const [k, v] of grid) g.set(k, Int32Array.from(v));
+  return bounds({ ...base(), kind: 'sheet', sheet: { tris, norms, th, grid: g, box: bx, seen: new Int32Array(n) }, mat, mu });
+}
+/** The point of triangle (a, b, c) nearest p, into q; whether it's within the triangle's face (not on an edge or a corner). After Ericson. */
+function nearestOnTri(t: Float32Array, o: number, px: number, py: number, pz: number, q: number[]): boolean {
+  const ax = t[o], ay = t[o + 1], az = t[o + 2], bx = t[o + 3], by = t[o + 4], bz = t[o + 5], cx = t[o + 6], cy = t[o + 7], cz = t[o + 8];
+  const abx = bx - ax, aby = by - ay, abz = bz - az, acx = cx - ax, acy = cy - ay, acz = cz - az;
+  const apx = px - ax, apy = py - ay, apz = pz - az;
+  const d1 = abx * apx + aby * apy + abz * apz, d2 = acx * apx + acy * apy + acz * apz;
+  if (d1 <= 0 && d2 <= 0) { q[0] = ax; q[1] = ay; q[2] = az; return false; }
+  const bpx = px - bx, bpy = py - by, bpz = pz - bz;
+  const d3 = abx * bpx + aby * bpy + abz * bpz, d4 = acx * bpx + acy * bpy + acz * bpz;
+  if (d3 >= 0 && d4 <= d3) { q[0] = bx; q[1] = by; q[2] = bz; return false; }
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) { const v = d1 / (d1 - d3); q[0] = ax + abx * v; q[1] = ay + aby * v; q[2] = az + abz * v; return false; }
+  const cpx = px - cx, cpy = py - cy, cpz = pz - cz;
+  const d5 = abx * cpx + aby * cpy + abz * cpz, d6 = acx * cpx + acy * cpy + acz * cpz;
+  if (d6 >= 0 && d5 <= d6) { q[0] = cx; q[1] = cy; q[2] = cz; return false; }
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) { const w = d2 / (d2 - d6); q[0] = ax + acx * w; q[1] = ay + acy * w; q[2] = az + acz * w; return false; }
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) { const w = (d4 - d3) / (d4 - d3 + (d5 - d6)); q[0] = bx + (cx - bx) * w; q[1] = by + (cy - by) * w; q[2] = bz + (cz - bz) * w; return false; }
+  const den = 1 / (va + vb + vc), v = vb * den, w = vc * den;
+  q[0] = ax + abx * v + acx * w; q[1] = ay + aby * v + acy * w; q[2] = az + abz * v + acz * w;
+  return true;
+}
+const qTmp = [0, 0, 0];
+/**
+ * A point with a skin of s against a sheet: of the triangles listed near it, the one it's
+ * nearest. Over a triangle's face: above its top, pushed up off it; within its thickness, out
+ * the nearer side; below, pushed down off its underside. By an edge: out from the edge, which
+ * runs down through the sheet's thickness.
+ */
+function touchSheet(sh: Sheet, px: number, py: number, pz: number, s: number, o: Hit, gap: number): boolean {
+  const th = sh.th, t = sh.tris, N = sh.norms, B = sh.box, seen = sh.seen;
+  const R = s + gap;
+  const x0 = Math.floor((px - R) / CELL), x1 = Math.floor((px + R) / CELL), y0 = Math.floor((py - R) / CELL), y1 = Math.floor((py + R) / CELL), z0 = Math.floor((pz - R) / CELL), z1 = Math.floor((pz + R) / CELL);
+  const me = ++ask;
+  let best = -Infinity, found = false;
+  for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) for (let iz = z0; iz <= z1; iz++) {
+  const list = sh.grid.get(cellKey(ix, iy, iz));
+  if (!list) continue;
+  for (let k = 0; k < list.length; k++) {
+    const ti = list[k];
+    if (seen[ti] === me) continue;
+    seen[ti] = me;
+    const b6 = ti * 6;
+    if (px < B[b6] - R || px > B[b6 + 3] + R || py < B[b6 + 1] - R || py > B[b6 + 4] + R || pz < B[b6 + 2] - R || pz > B[b6 + 5] + R) continue;
+    const face = nearestOnTri(t, ti * 9, px, py, pz, qTmp);
+    const nx = N[ti * 3], ny = N[ti * 3 + 1], nz = N[ti * 3 + 2];
+    const dx = px - qTmp[0], dy = py - qTmp[1], dz = pz - qTmp[2];
+    const sd = dx * nx + dy * ny + dz * nz;
+    let d: number, ox: number, oy: number, oz: number;
+    if (face) {
+      if (sd >= -th / 2) { d = s - sd; ox = nx; oy = ny; oz = nz; }
+      else { d = s - (-sd - th); ox = -nx; oy = -ny; oz = -nz; }
+    } else {
+      // (an edge: the nearest point on it, down through the thickness)
+      const dn = Math.max(0, Math.min(th, -sd));
+      const ex = dx + nx * dn, ey = dy + ny * dn, ez = dz + nz * dn;
+      const dist = Math.hypot(ex, ey, ez);
+      if (dist < 1e-6) continue;
+      d = s - dist; ox = ex / dist; oy = ey / dist; oz = ez / dist;
+    }
+    if (d < -gap) continue;
+    if (d > best) { best = d; o.nx = ox; o.ny = oy; o.nz = oz; found = true; }
+  }
+  }
+  if (!found) return false;
+  o.d = best;
+  return true;
 }
 const base = (): Shape => ({ kind: 'box', c: [0, 0, 0], b: [0, 0, 0], h: [0, 0, 0], r: 0, hh: 0, yaw: 0, mu: 0.8, bounce: 0, spin: 0, tack: 1, tire: 1, lift: null, dust: DUST.none, mat: 0, lo: [0, 0, 0], hi: [0, 0, 0] });
 export const box = (c: V3, h: V3, yaw: number, mat: number, mu = 0.8): Shape => bounds({ ...base(), kind: 'box', c, h, yaw, mat, mu });
@@ -150,6 +295,7 @@ function size(top: Top, r: Rand): number {
     case 'honey': return 6.5;
     case 'lid': return ramp(r, 9.5, 12);
     case 'pan': return ramp(r, 13, 15);
+    default: return 10;
   }
 }
 /** how far a tower keeps others off, from its middle (a honey tower's middle is its jar's) */
@@ -294,8 +440,9 @@ export interface Hit { nx: number; ny: number; nz: number; d: number; vx: number
  * the push out (normal, depth), the surface's velocity there.
  */
 export function touch(sh: Shape, px: number, py: number, pz: number, s: number, o: Hit, gap = 0): boolean {
-  const dx = px - sh.c[0], dy = py - sh.c[1], dz = pz - sh.c[2];
   o.vx = 0; o.vy = 0; o.vz = 0;
+  if (sh.kind === 'sheet') return touchSheet(sh.sheet!, px, py, pz, s, o, gap);
+  const dx = px - sh.c[0], dy = py - sh.c[1], dz = pz - sh.c[2];
   if (sh.kind === 'box') {
     const cy = Math.cos(sh.yaw), sy = Math.sin(sh.yaw);
     const lx = cy * dx - sy * dz, ly = dy, lz = sy * dx + cy * dz;
@@ -429,7 +576,7 @@ export function onTop(tw: Tower, p: V3, slack = 0): boolean {
     return p[1] > tw.at[1] - 12 - slack && p[1] < tw.at[1] + 5.5 + slack && d > 0.5 - slack && d < 4.5 + slack;
   }
   // (on a lid: above the lid where it is now, not on the pot under it while it's up)
-  const lidTop = tw.land ? tw.land[0].c[1] + tw.land[0].hh : tw.at[1];
+  const lidTop = tw.land?.[0].lift ? tw.land[0].c[1] + tw.land[0].hh : tw.at[1];
   // (a little below its top too: a dish has a gutter round its butter)
   if (p[1] < lidTop - (tw.box ? 2 : 0.5) || p[1] > lidTop + RADIUS * 2.5) return false;
   if (tw.box) {
@@ -461,11 +608,22 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
   // (a little short of the middle of the band: it carries on a little after it lands)
   return lo < 0 ? null : { yaw, power: lo + (hi - lo) * 0.4 };
 }
+/**
+ * The autopilot's flick, from where it is, having last stood on tower `at`: on to the next; else
+ * back to the middle of this one (not a jar's); else on past the next; else, wedged somewhere
+ * with no clear flick, a hop toward the next to get loose.
+ */
+export function autoFlick(lv: Level, from: V3, at: number, t = 0): { yaw: number; power: number } {
+  const tries = [at + 1, lv.towers[at].jar ? -1 : at, at + 2].filter((k) => k >= 0 && k < lv.towers.length);
+  for (const k of tries) { const a = aim(lv, from, k, t); if (a) return a; }
+  const nx = lv.towers[Math.min(at + 1, lv.towers.length - 1)].at;
+  return { yaw: Math.atan2(nx[0] - from[0], nx[2] - from[2]), power: 0.3 };
+}
 /** Where the dumpling's middle is, sat on tower j at a time (on a lid, it rides with it). */
 export function standing(lv: Level, j: number, t = 0): V3 {
   const tw = lv.towers[j];
-  if (!tw.land) return [tw.at[0], tw.at[1] + REST_H, tw.at[2]];
-  const l = tw.land[0];
+  const l = tw.land?.[0];
+  if (!l?.lift) return [tw.at[0], tw.at[1] + REST_H, tw.at[2]];
   return [tw.at[0], l.lift!.y0 + l.hh + l.lift!.amp * liftAt(l.lift!, t).k + REST_H, tw.at[2]];
 }
 /**
@@ -475,7 +633,7 @@ export function standing(lv: Level, j: number, t = 0): V3 {
  */
 export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[][] } | null {
   const a = lv.towers[j], b = lv.towers[k];
-  const lid = (b.land ?? a.land)?.[0].lift;
+  const lid = b.land?.[0].lift ?? a.land?.[0].lift;
   const times = lid ? [0, 1, 2, 3, 4, 5].map((i) => ((i / 6 + 1 - lid.phase) % 1) * lid.period) : [0];
   const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3] : [f]; };
   for (const t of times) {
@@ -508,12 +666,12 @@ function pickTop(r: Rand, n: number, prev: Top): Top {
   if (prev === 'honey') pool = pool.filter((t) => t !== 'honey');
   return pool[Math.floor(r() * pool.length)];
 }
-/** Level n: from the start steamer up and across to the golden one, every hop made sure of. */
-export function buildLevel(n: number): Level {
+/** Level n, of towers: from the start steamer up and across to the golden one, every hop made sure of. (The sets, the first levels, are in `course.ts`.) */
+export function buildTowers(n: number): Level {
   const r = seeded(hash(n, 0x5917));
   const chapter = chapterOf(n);
   const counter = box([0, -10, 0], [3000, 10, 3000], 0, chapter === 'counter' ? MAT.counter : MAT.hob, 0.8);
-  const lv: Level = { n, chapter, towers: [], shapes: [counter], sticks: [], movers: [] };
+  const lv: Level = { n, chapter, towers: [], shapes: [counter], sticks: [], movers: [], kill: RADIUS * 2.2, ground: 0, decor: [] };
   const add = (tw: Tower) => {
     lv.towers.push(tw); lv.shapes.push(...tw.shapes);
     for (const s of tw.shapes) if (s.lift) lv.movers.push(s);

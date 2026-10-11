@@ -17,7 +17,8 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { DUST, MAT, RADIUS, REST_H, aim, buildLevel, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
+import { CHAPTER_NAME, DUST, MAT, RADIUS, REST_H, aim, autoFlick, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
+import { buildLevel } from './course';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
 
 const params = new URLSearchParams(location.search);
@@ -334,7 +335,47 @@ void main() {
     emit = 0.; base += flame * (1. - grate) * 1.4;
   } else if (id == ${MAT.knob}) {
     base = vec3(.06, .06, .065); rough = .18; coat = 1.;
-  } else if (id >= 25 && id <= 28) {
+  } else if (id == ${MAT.spoon}) {
+    // a wooden spoon: pale beech, its grain running along it, a little darker where it's been used
+    float g = noise(vec3(uv.x * .35, uv.y * 3., 2.)) * .55 + noise(vec3(uv.x * 2.2, uv.y * 11., 6.)) * .25 + .2 * sin(uv.x * 1.3 + noise(vec3(uv * .8, 1.)) * 4.);
+    base = mix(vec3(.74, .55, .34), vec3(.9, .74, .52), g) * (1. - .15 * smoothstep(9., 0., uv.x));
+    rough = .45; coat = .35;
+  } else if (id == ${MAT.towel}) {
+    // a linen tea towel: an off-white weave, red stripes down it near each side, a hem
+    vec2 w = uv * 9.;
+    float weave = .5 + .5 * sin(w.x * 3.1416) * sin(w.y * 3.1416);
+    float slub = noise(vec3(uv.x * 2., uv.y * .6, 4.)) * .5 + noise(vec3(uv * 6., 8.)) * .5;
+    float edge = min(uv.y, 11. - uv.y);
+    float stripe = smoothstep(.05, 0., abs(edge - 1.6) - .35) + smoothstep(.05, 0., abs(edge - 2.7) - .12);
+    float hem = smoothstep(.15, 0., edge - .35);
+    base = mix(vec3(.9, .87, .8), vec3(.72, .16, .14), clamp(stripe, 0., 1.)) * (.86 + .1 * weave + .08 * slub) * (1. - .12 * hem);
+    rough = .92;
+  } else if (id == ${MAT.gingham}) {
+    // a folded gingham cloth: red and white, checked, the crossings darkest
+    vec2 c = step(.5, fract(uv / 1.3));
+    float k = (c.x + c.y) * .5;
+    base = mix(vec3(.94, .9, .84), vec3(.66, .12, .12), k) * (.9 + .1 * noise(vec3(uv * 5., 2.)));
+    rough = .9;
+  } else if (id == ${MAT.floral}) {
+    // painted tin: red, a teal band round it, cream flowers with gold hearts, a little worn at its edges
+    vec2 q = uv / 5.5;
+    vec2 cell = fract(q) - .5, id2 = floor(q);
+    float an = atan(cell.y, cell.x) + hash3(vec3(id2, 3.)) * 6.28, rr = length(cell) * 2.;
+    float petal = smoothstep(.04, 0., rr - (.38 + .3 * abs(cos(an * 2.5))));
+    float heart = smoothstep(.03, 0., rr - .16);
+    float band = smoothstep(.1, 0., abs(fract(uv.y / 9.) - .5) - .38);
+    vec3 paint = mix(vec3(.62, .11, .08), vec3(.08, .38, .36), band);
+    vec3 c2 = mix(paint, vec3(.95, .88, .7), petal * (1. - heart));
+    c2 = mix(c2, vec3(.95, .74, .32), heart);
+    float wear = smoothstep(.7, .85, noise(vec3(uv * .6, 9.)));
+    base = mix(c2, vec3(.7, .7, .68), wear * .5);
+    rough = mix(.35, .25, heart); metal = heart * .8 + wear * .4; coat = .5;
+  } else if (id == ${MAT.smear}) {
+    // butter melted: a glossy yellow film, thicker in the middle of the run, thin and pale at its edges
+    float th2 = 1. - abs(uv.y * 2. - 1.);
+    base = mix(vec3(.98, .88, .55), vec3(.98, .78, .22), smoothstep(.1, .8, th2));
+    rough = .06; coat = 1.; emit = .12 * th2;
+  } else if (id >= 25 && id <= 29) {
     // what's on a top: flour on a board, crumbs or pepper on a plate, hundreds and thousands on a pudding, over the top it's on
     int k = id - 24;
     if (k == 1) base = vec3(.8, .64, .44); else if (k == 4 || k == 3) { float r = length(uv); base = mix(vec3(.94, .94, .92), vec3(.12, .25, .58), smoothstep(.78, .8, r) * (1. - smoothstep(.86, .88, r))); rough = .18; coat = 1.; } else { base = vec3(.62, .28, .06); rough = .12; coat = 1.; emit = .05; }
@@ -929,16 +970,18 @@ function startLevel(n: number) {
   try { if (!auto) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
   if (!auto) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
-  hint(levelN === 1 ? 'drag back and let go: the dumpling flies the other way' : levelN === 2 ? 'tap to nudge it a little, the way you tapped' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  showTitle();
+  hint(levelN === 1 ? 'drag back and let go: the dumpling flies the other way. the table is safe; its edge is not' : levelN === 2 ? 'tap to nudge it a little, the way you tapped' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
   const out: number[] = [];
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, top = 0;
   for (const t of lv.towers) { x0 = Math.min(x0, t.at[0]); x1 = Math.max(x1, t.at[0]); z0 = Math.min(z0, t.at[2]); z1 = Math.max(z1, t.at[2]); top = Math.max(top, t.at[1]); }
-  const m = 220;
+  // (round a table, the room is nearer, and its floor is far below)
+  const m = lv.chapter === 'table' ? 150 : 220, g = lv.ground;
   x0 -= m; x1 += m; z0 -= m; z1 += m;
-  const H = top + 260;
+  const H = top + 260 - g;
   const wall = (a: V3, b: V3, n: V3) => {
     const d = sub(b, a), L = Math.hypot(d[0], d[2]), t = mul(d, 1 / L);
     const P = (s: number, y: number): V3 => add(add(a, mul(t, s)), [0, y, 0]);
@@ -947,19 +990,21 @@ function room(lv: Level): number[] {
     };
     q(P(0, 0), P(0, H), P(L, H), P(L, 0), MAT.tiles, [0, 0], [0, H], [L, H], [L, 0]);
     // windows, every so far, their panes a little in front
+    // (their sills a little above the counter, or the table)
+    const w0 = lv.chapter === 'table' ? 85 : 60, w1 = w0 + 140;
     for (let s = 120; s + 90 < L - 60; s += 260) {
       const o = mul(n, 0.5);
-      q(add(P(s, 60), o), add(P(s, 200), o), add(P(s + 90, 200), o), add(P(s + 90, 60), o), 12, [0, 0], [0, 1], [1, 1], [1, 0]);
+      q(add(P(s, w0), o), add(P(s, w1), o), add(P(s + 90, w1), o), add(P(s + 90, w0), o), 12, [0, 0], [0, 1], [1, 1], [1, 0]);
     }
   };
-  wall([x0, 0, z0], [x1, 0, z0], [0, 0, 1]);
-  wall([x1, 0, z0], [x1, 0, z1], [-1, 0, 0]);
-  wall([x1, 0, z1], [x0, 0, z1], [0, 0, -1]);
-  wall([x0, 0, z1], [x0, 0, z0], [1, 0, 0]);
-  // the counter, to the walls
+  wall([x0, g, z0], [x1, g, z0], [0, 0, 1]);
+  wall([x1, g, z0], [x1, g, z1], [-1, 0, 0]);
+  wall([x1, g, z1], [x0, g, z1], [0, 0, -1]);
+  wall([x0, g, z1], [x0, g, z0], [1, 0, 0]);
+  // the counter (or the floor, under a table), to the walls
   const n: V3 = [0, 1, 0];
-  const floor = lv.chapter === 'counter' ? MAT.counter : MAT.hob;
-  for (const [p, uv] of [[[x0, 0, z0], [x0, z0]], [[x0, 0, z1], [x0, z1]], [[x1, 0, z1], [x1, z1]], [[x0, 0, z0], [x0, z0]], [[x1, 0, z1], [x1, z1]], [[x1, 0, z0], [x1, z0]]] as Array<[V3, [number, number]]>) out.push(p[0], p[1], p[2], n[0], n[1], n[2], floor, uv[0], uv[1]);
+  const floor = lv.chapter === 'counter' || lv.chapter === 'table' ? MAT.counter : MAT.hob;
+  for (const [p, uv] of [[[x0, g, z0], [x0, z0]], [[x0, g, z1], [x0, z1]], [[x1, g, z1], [x1, z1]], [[x0, g, z0], [x0, z0]], [[x1, g, z1], [x1, z1]], [[x1, g, z0], [x1, z0]]] as Array<[V3, [number, number]]>) out.push(p[0], p[1], p[2], n[0], n[1], n[2], floor, uv[0], uv[1]);
   return out;
 }
 
@@ -1142,6 +1187,16 @@ btn('sound', () => {
 function showHands() {
   document.body.classList.toggle('home', home >= 0);
   $('level').textContent = `level ${levelN}`;
+}
+/** the place's name, as a card when a level starts: spaced capitals, a rule under, fading */
+let titleTimer = 0;
+function showTitle() {
+  const el = $('title');
+  el.querySelector('b')!.textContent = CHAPTER_NAME[lv.chapter];
+  el.querySelector('i')!.textContent = `${levelN}`;
+  el.classList.add('on');
+  clearTimeout(titleTimer);
+  titleTimer = window.setTimeout(() => el.classList.remove('on'), 3200);
 }
 let hintTimer = 0;
 function hint(text: string, ms = 5000) {
@@ -1660,7 +1715,7 @@ function tick(dt: number) {
     return;
   }
   // fallen to the counter: back to the last top it stood on
-  if (body.com[1] < RADIUS * 2.2 || body.com[1] < -100) {
+  if (body.com[1] < lv.kill) {
     falls++;
     fallenAt = simTime;
     plop();
@@ -1704,11 +1759,12 @@ function tick(dt: number) {
   if (auto) {
     if (home >= 0 && still > 2.5) { startLevel(levelN); return; }
     // (from where it's ended up, which may be over a top's edge; and, with no way on from there, a hop to the middle of this top first)
-    const at = k >= 0 ? k : towerAt(lv, body.com, 4);
+    // (off any top, on the table: from where it is, on to the next after the last it stood on)
+    const near = k >= 0 ? k : towerAt(lv, body.com, 4), at = near >= 0 ? near : check;
     if (still > 0.5 && body.canFlick && at >= 0 && at < lv.towers.length - 1 && simTime - aimedAt > 0.2) {
       aimedAt = simTime;
-      const a = aim(lv, body.com, at + 1, simTime) ?? (lv.towers[at].jar ? null : aim(lv, body.com, at, simTime));
-      if (a) doFlick(launch(a.yaw, a.power));
+      const a = autoFlick(lv, body.com, at, simTime);
+      doFlick(launch(a.yaw, a.power));
     }
   }
 }
