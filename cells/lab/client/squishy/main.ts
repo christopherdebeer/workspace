@@ -17,8 +17,9 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { CHAPTER_NAME, DUST, MAT, RADIUS, REST_H, aim, autoFlick, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
+import { CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
 import { buildLevel } from './course';
+import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
 
 const params = new URLSearchParams(location.search);
@@ -789,6 +790,9 @@ let skin: Kind = ((): Kind => {
   return want === 'jelly' ? 'jelly' : want === 'dough' ? 'dough' : 'dough';
 })();
 let body!: Dumpling;
+/** on the title, a second dumpling beside the first: the other kind (the jelly, while it's still to come) */
+let buddy: Dumpling | null = null;
+let buddyPrev = new Float32Array(0);
 interface Flakes { n: number; rest: Float32Array; near: Uint16Array; w: Float32Array; nor: Float32Array; data: Float32Array; buf: WebGLBuffer; vao: WebGLVertexArrayObject }
 /**
  * A skin on the card: its triangles, its positions and normals as drawn (rewritten each frame),
@@ -878,7 +882,7 @@ function skinOnCard(kind: Kind) {
 const skins = { jelly: skinOnCard('jelly'), dough: skinOnCard('dough') };
 /** The skin as drawn: between the solver's last two states, its normals from its triangles; and the glitter carried along. */
 let prevX = new Float32Array(0);
-function uploadSkin(alpha: number) {
+function uploadSkin(body: Dumpling, prevX: Float32Array, alpha: number) {
   const g = skins[body.kind];
   const x = body.x, s = g.shown, nrm = g.normals;
   for (let i = 0; i < x.length; i++) s[i] = prevX.length === x.length ? prevX[i] + (x[i] - prevX[i]) * alpha : x[i];
@@ -940,7 +944,7 @@ let aimedAt = -9;
 /** what it was last coated with most, and which coatings it's been told about */
 let coatWas: Dust = DUST.none;
 const coatSaid = new Set<Dust>();
-function startLevel(n: number) {
+function startLevel(n: number, quiet = false) {
   levelN = Math.max(1, n);
   if (levelN >= JELLY_AT && !jellyOpen) {
     jellyOpen = true;
@@ -967,6 +971,7 @@ function startLevel(n: number) {
   camTarget = [at[0], at[1] + 4, at[2]];
   steamSeed = 0;
   puffs.length = 0;
+  if (quiet) return;
   try { if (!auto) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
   if (!auto) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
@@ -1069,6 +1074,7 @@ let orbit = { yaw: 0, pitch: 0, at: -9 };
 let zoom = 1;
 let windEase = 0;
 function updateCamera(dt: number) {
+  if (mode === 'title') { titleCamera(dt); return; }
   // (it follows easily; but if it's got near the edge of the glass, or off it, it catches up at once)
   const on = screenOf(body.com);
   const off = !on || on[0] < innerWidth * 0.12 || on[0] > innerWidth * 0.88 || on[1] < innerHeight * 0.1 || on[1] > innerHeight * 0.82;
@@ -1097,6 +1103,7 @@ const pointers = new Map<number, { x: number; y: number }>();
 let two: { d: number; cx: number; cy: number } | null = null;
 canvas.addEventListener('pointerdown', (e) => {
   wake();
+  if (mode === 'title') return;
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1 && !auto) pull = { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }] };
@@ -1158,6 +1165,7 @@ canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.5, Math.min(2.5, zoom * Math.exp(-e.deltaY * 0.0012))); }, { passive: false });
 addEventListener('keydown', (e) => {
+  if (mode === 'title') { if (e.key === 'Enter') play(1); return; }
   if (e.key === 'ArrowLeft') { camYaw += 0.15; orbit.at = simTime; }
   else if (e.key === 'ArrowRight') { camYaw -= 0.15; orbit.at = simTime; }
   else if (e.key.toLowerCase() === 'r') startLevel(levelN);
@@ -1178,12 +1186,113 @@ btn('skin', () => {
 });
 function showSkin() { $('skin').textContent = skin; $('skin').style.display = jellyOpen || params.has('skin') ? '' : 'none'; }
 showSkin();
-btn('sound', () => {
+function toggleSound() {
   soundOn = !soundOn;
   $('sound').textContent = soundOn ? 'sound on' : 'sound off';
   try { localStorage.setItem(STORE + ':sound', soundOn ? '1' : '0'); } catch { /* */ }
   if (master && ac) master.gain.setTargetAtTime(soundOn ? 1 : 0, ac.currentTime, 0.2);
+  showMenu();
+}
+btn('sound', toggleSound);
+
+// ─── the title: the name, New Game, Continue, Settings; the place behind it, the dumpling and its friend ─────
+/** the title or playing; on the title, which way the camera looks (toward the course), the level the settings would start, and which card is up */
+let mode: 'title' | 'play' = auto || params.has('level') || params.has('skin') ? 'play' : 'title';
+let titleYaw = 0, pickN = 1, card: 'main' | 'settings' = 'main';
+let hopAt = 2.5, hopWho = 0;
+const saved = () => { try { return Number(localStorage.getItem(STORE + ':level')) || 0; } catch { return 0; } };
+$('logo').innerHTML = logoSVG();
+/**
+ * The title: the first place laid out behind it, the dumpling sat on the cloth it starts on, and
+ * beside it the other kind (the jelly, while it's still to come), both turned to you.
+ */
+function startTitle() {
+  mode = 'title';
+  document.body.classList.add('title');
+  startLevel(1, true);
+  const pad = lv.towers[0].at, nx = lv.towers[1].at;
+  titleYaw = Math.atan2(nx[0] - pad[0], nx[2] - pad[2]);
+  // (side by side across the view: the dough on the left)
+  const right: V3 = [-Math.cos(titleYaw), 0, Math.sin(titleYaw)];
+  const y = pad[1] + REST_H + 1.2;
+  // (set down already turned to the camera, which looks along titleYaw)
+  const face = titleYaw + Math.PI;
+  body.place([pad[0] - right[0] * 3.9, y, pad[2] - right[2] * 3.9], face);
+  buddy = new Dumpling([0, 0, 0], skin === 'jelly' ? 'dough' : 'jelly');
+  buddy.place([pad[0] + right[0] * 4.2, y, pad[2] + right[2] * 4.2], face);
+  prevX = new Float32Array(body.x); buddyPrev = new Float32Array(buddy.x);
+  pickN = Math.max(1, saved() || 1);
+  hopAt = simTime + 2;
+  card = 'main';
+  showMenu();
+}
+/** Off the title, into level n. */
+function play(n: number) {
+  mode = 'play';
+  buddy = null;
+  document.body.classList.remove('title');
+  startLevel(n);
+}
+/** The title's cards as they are: Continue only with somewhere to continue to; the settings' values. */
+function showMenu() {
+  if (mode !== 'title') return;
+  $('main').hidden = card !== 'main';
+  $('settings').hidden = card !== 'settings';
+  const at = saved();
+  const cont = $('cont');
+  cont.hidden = at <= 1;
+  cont.innerHTML = `Continue<small>level ${at}</small>`;
+  $('s-sound').textContent = soundOn ? 'on' : 'off';
+  const sk = $('s-skin');
+  sk.textContent = jellyOpen ? skin : 'dough';
+  sk.classList.toggle('off', !jellyOpen);
+  sk.title = jellyOpen ? '' : `the jelly comes at level ${JELLY_AT}`;
+  $('s-level').textContent = String(pickN);
+  $('s-place').textContent = `${CHAPTER_NAME[chapterOf(pickN)]}${jellyOpen ? '' : ` · jelly from level ${JELLY_AT}`}`;
+  $('s-play').textContent = `Play level ${pickN}`;
+}
+btn('new', () => play(1));
+btn('cont', () => play(saved()));
+btn('opts', () => { card = 'settings'; showMenu(); });
+btn('s-back', () => { card = 'main'; showMenu(); });
+btn('s-play', () => play(pickN));
+btn('s-sound', toggleSound);
+btn('s-prev', () => { pickN = Math.max(1, pickN - 1); showMenu(); });
+btn('s-next', () => { pickN = Math.min(24, pickN + 1); showMenu(); });
+btn('s-skin', () => {
+  if (!jellyOpen) return;
+  skin = skin === 'jelly' ? 'dough' : 'jelly';
+  try { localStorage.setItem(STORE + ':skin', skin); } catch { /* */ }
+  showSkin();
+  startTitle();
+  card = 'settings';
+  showMenu();
 });
+btn('tomenu', () => startTitle());
+/** On the title: the two of them sat there, now and then one hopping, a little, where it is. */
+function titleTick(dt: number) {
+  body.step(lv, dt, simTime);
+  buddy?.step(lv, dt, simTime);
+  simTime += dt;
+  if (simTime > hopAt) {
+    const b = hopWho++ % 2 === 0 ? buddy : body;
+    if (b && b.canFlick) b.flick([0, 90 + 40 * Math.random(), 0]);
+    hopAt = simTime + 2.2 + Math.random() * 2.6;
+  }
+}
+/** On the title: from behind the cloth, low, toward the spoon and the bench, swaying a little; the two of them low on the glass, under the name. */
+function titleCamera(dt: number) {
+  const pad = lv.towers[0].at;
+  const yaw = titleYaw + 0.2 * Math.sin(time * 0.13);
+  const want: V3 = [pad[0], pad[1] + 8, pad[2]];
+  const pitch = 0.22, dist = innerWidth > innerHeight ? 34 : 27;
+  const back: V3 = [-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
+  const k = 1 - Math.exp(-dt * 3);
+  for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * k;
+  const wantEye = add(want, mul(back, dist));
+  for (let i = 0; i < 3; i++) eye[i] += (wantEye[i] - eye[i]) * k;
+  camYaw = yaw;
+}
 function showHands() {
   document.body.classList.toggle('home', home >= 0);
   $('level').textContent = `level ${levelN}`;
@@ -1394,12 +1503,14 @@ function frame(now: number) {
   while (lag >= 1 / 60) {
     lag -= 1 / 60;
     prevX = new Float32Array(body.x);
+    if (buddy) buddyPrev = new Float32Array(buddy.x);
     tick(1 / 60);
   }
   updateCamera(dt);
   updatePuffs(dt);
   // sat still: it turns to look at you (winding up, it looks where it's going)
   body.look = aimNow ? norm([aimNow.vel[0], 0, aimNow.vel[2]]) : norm([eye[0] - body.com[0], 0, eye[2] - body.com[2]]);
+  if (buddy) buddy.look = norm([eye[0] - buddy.com[0], 0, eye[2] - buddy.com[2]]);
   // winding up: squeezed along the way it would go
   aimFromPull();
   body.squeeze = aimNow && body.canFlick ? { d: norm(aimNow.vel), k: aimNow.power } : null;
@@ -1413,7 +1524,9 @@ function frame(now: number) {
   const span = 70;
   const lightVP = ortho(body.com, KEY, span, 500);
   const shadowSoft = (500 * 0.08) / ((2 * span) / SHADOW);
-  uploadSkin(Math.max(0, Math.min(1, lag * 60)));
+  // (the bodies to draw: the dumpling, and on the title its friend; the dough first, so the jelly sees it through itself)
+  const drawn = [body, ...(buddy ? [buddy] : [])].sort((a, b) => (a.kind === 'dough' ? 0 : 1) - (b.kind === 'dough' ? 0 : 1));
+  for (const b of drawn) uploadSkin(b, b === body ? prevX : buddyPrev, Math.max(0, Math.min(1, lag * 60)));
 
   // 1. the window's shadow map
   gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFb);
@@ -1426,9 +1539,7 @@ function frame(now: number) {
   if (courseMesh) { gl.bindVertexArray(courseMesh.svao); gl.drawArrays(gl.TRIANGLES, 0, courseMesh.count); }
   for (const m of movers) { gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, model([0, m.shape.c[1] - m.shape.lift!.y0, 0], 1)); gl.bindVertexArray(m.mesh.svao); gl.drawArrays(gl.TRIANGLES, 0, m.mesh.count); }
   gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, I4);
-  const sk = skins[body.kind];
-  gl.bindVertexArray(sk.svao);
-  gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
+  for (const b of drawn) { const sk = skins[b.kind]; gl.bindVertexArray(sk.svao); gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0); }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
   // 2. the room beyond
@@ -1466,9 +1577,10 @@ function frame(now: number) {
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.depthMask(false);
-  const ground = groundUnder(body.com);
-  if (ground) {
-    const lift = Math.max(0, body.com[1] - ground.p[1] - REST_H);
+  for (const b of drawn) {
+    const ground = groundUnder(b.com);
+    if (!ground) continue;
+    const lift = Math.max(0, b.com[1] - ground.p[1] - REST_H);
     gl.uniform1f(u(prog, 'uAlpha'), Math.max(0, 1 - lift / 40));
     drawMesh(DISC, flatOn(add(ground.p, mul(ground.n, 0.05)), ground.n, RADIUS * (1.3 + lift * 0.04)), 15);
   }
@@ -1493,10 +1605,10 @@ function frame(now: number) {
   gl.disable(gl.BLEND);
 
   // (the jelly's light: where the window's light comes through it to the ground, focused, pink)
-  if (body.kind === 'jelly') {
-    const lit = groundAlong(body.com, mul(KEY, -1));
+  for (const b of drawn) if (b.kind === 'jelly') {
+    const lit = groundAlong(b.com, mul(KEY, -1));
     if (lit) {
-      const far = len(sub(lit.p, body.com));
+      const far = len(sub(lit.p, b.com));
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
       gl.depthMask(false);
@@ -1507,11 +1619,15 @@ function frame(now: number) {
     }
   }
 
-  // 4. the dumpling
+  // 4. the dumpling (and on the title, its friend)
   if (time > blinkAt + 0.14) blinkAt = time + 2 + Math.random() * 3;
-  const blink = time > blinkAt ? Math.sin(((time - blinkAt) / 0.14) * Math.PI) : 0;
+  const blinkOf = (at: number) => (time > at && time < at + 0.14 ? Math.sin(((time - at) / 0.14) * Math.PI) : 0);
+  for (const body of drawn) {
+  const hero = body === drawn.find((b) => b !== buddy);
+  const blink = hero ? blinkOf(blinkAt) : blinkOf(blinkAt + 1.3);
   // (its face: squeezed shut winding up, an o in the air, a smile at home; and it blinks)
-  const face = home >= 0 ? 2 : aimNow ? 1 : body.contacts === 0 && body.sinceFlick < 2 ? 3 : 0;
+  const face = !hero ? (body.contacts === 0 ? 3 : 0) : home >= 0 ? 2 : aimNow ? 1 : body.contacts === 0 && body.sinceFlick < 2 ? 3 : 0;
+  const sk = skins[body.kind];
   const skinUniforms = (p: WebGLProgram) => {
     gl.useProgram(p);
     lightUniforms(p);
@@ -1562,6 +1678,8 @@ function frame(now: number) {
     gl.disable(gl.CULL_FACE);
   }
 
+  }
+
   // (the glass: over everything, seen through)
   if (glassMesh) {
     gl.useProgram(prog);
@@ -1605,7 +1723,7 @@ function frame(now: number) {
     level: levelN, towers: lv.towers.length, check, falls, clock, home, com: body.com.map((v) => Math.round(v * 10) / 10),
     speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, power: aimNow?.power ?? 0,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,
-    eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull, chapter: lv.chapter, held: body.held, pinned: body.pinned, spin: body.spinMode, kind: body.kind, coated: body.coated.map((v) => Math.round(v * 1000) / 1000), coatMost: body.coatMost, jellyOpen,
+    eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull, mode, chapter: lv.chapter, held: body.held, pinned: body.pinned, spin: body.spinMode, kind: body.kind, coated: body.coated.map((v) => Math.round(v * 1000) / 1000), coatMost: body.coatMost, jellyOpen,
     // (how far its face is turned from you, in degrees; and how upright it is)
     faceOff: Math.round((Math.abs(Math.atan2(body.R[2] * (eye[2] - body.com[2]) - body.R[8] * (eye[0] - body.com[0]), body.R[2] * (eye[0] - body.com[0]) + body.R[8] * (eye[2] - body.com[2]))) * 180) / Math.PI),
     up: Math.round(body.R[4] * 100) / 100,
@@ -1695,6 +1813,7 @@ function groundAlong(p: V3, d: V3, max = 160): { p: V3; n: V3 } | null {
 
 /** A step of the game: the dumpling; where it's stood, falling, home; a flick asked for in the air; the autopilot. */
 function tick(dt: number) {
+  if (mode === 'title') { titleTick(dt); return; }
   body.step(lv, dt, simTime);
   simTime += dt;
   if (home < 0) clock += dt;
@@ -1829,6 +1948,6 @@ void lastVP;
 
 (window as unknown as { __squishyTop: (k: number) => string }).__squishyTop = (k: number) => lv.towers[k]?.top;
 // ─── begin ───────────────────────────────────────────────────────────────────────────────────────
-startLevel(levelN);
+if (mode === 'title') startTitle(); else startLevel(levelN);
 resize();
 requestAnimationFrame(frame);

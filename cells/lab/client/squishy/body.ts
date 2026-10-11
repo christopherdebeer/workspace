@@ -251,11 +251,17 @@ export class Dumpling {
     this.restVolume = this.volume();
   }
   /** At rest at a place (its middle there), upright, still. */
-  place(at: V3) {
-    for (let i = 0; i < this.n * 3; i++) { this.x[i] = at[i % 3] + this.q[i]; this.v[i] = 0; }
-    this.quat = [0, 0, 0, 1];
-    this.R.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
-    this.A.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  place(at: V3, yaw = 0) {
+    // (turned about the upright by yaw: its face, its rest shape's +z, the way (sin yaw, 0, cos yaw))
+    const c = Math.cos(yaw), sn = Math.sin(yaw);
+    for (let i = 0; i < this.n; i++) {
+      const qx = this.q[i * 3], qy = this.q[i * 3 + 1], qz = this.q[i * 3 + 2];
+      this.x[i * 3] = at[0] + c * qx + sn * qz; this.x[i * 3 + 1] = at[1] + qy; this.x[i * 3 + 2] = at[2] - sn * qx + c * qz;
+      this.v[i * 3] = 0; this.v[i * 3 + 1] = 0; this.v[i * 3 + 2] = 0;
+    }
+    this.quat = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+    this.R.set([c, 0, sn, 0, 1, 0, -sn, 0, c]);
+    this.A.set(this.R);
     this.com = [...at] as V3;
     this.vcom = [0, 0, 0]; this.drift = [0, 0, 0]; this.comWas = [...at] as V3;
     this.tack = 1; this.sinceContact = 0; this.sinceFlick = 9; this.squeeze = null;

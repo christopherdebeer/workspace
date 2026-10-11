@@ -9,6 +9,13 @@ First the preparation table, a place laid out as it is (a spoon to land in, a be
 thrown over it, butter melted across the wood); then the counter's towers of steamers, plates,
 a chopping board, a pudding, a lazy Susan and tea tins; then the stovetop.
 
+It opens on its title: its name in soft dough letters over the first place, the dumpling sat
+on its cloth and the jelly beside it (still to come, a treat for later), both turned to you, now
+and then one of them hopping. New Game starts at the beginning; Continue, once you've got
+somewhere, where you left off; Settings has the sound, which dumpling (once the jelly's come),
+and any level to start at. In play, the word `menu` at the bottom comes back here. (A link to a
+level, `?level=3`, goes straight to it.)
+
 | | Touch | Mouse and keys |
 |---|---|---|
 | flick | drag back and let go | drag back and let go |

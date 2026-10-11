@@ -53,6 +53,18 @@ await withWood(async (lab) => {
   const h = await lab.state(pv);
   console.log('auto', JSON.stringify(h), await lab.shot(pv, 'squishy-home'));
   c.ok('the autopilot gets home', h.home > 0 && h.falls === 0, h);
+  // the title: with nothing asked for, the name and what to do; New Game starts the first place
+  const ti = await lab.open('', { width: 390, height: 844 });
+  await ti.waitForTimeout(3000);
+  let t = await lab.state(ti);
+  console.log('title', await lab.shot(ti, 'squishy-title'));
+  c.ok('the title, with the two of them on it', t.mode === 'title' && (await ti.evaluate(() => document.body.classList.contains('title') && !!document.querySelector('#logo svg'))), t);
+  await ti.click('#new');
+  // (its state is written each frame, and frames are slow without a graphics card: waited for)
+  await ti.waitForFunction(() => window.__squishy.mode === 'play', null, { timeout: 60000, polling: 250 });
+  t = await lab.state(ti);
+  c.ok('New Game: the first level, the title gone', t.mode === 'play' && t.level === 1 && !(await ti.evaluate(() => document.body.classList.contains('title'))), t);
+  c.ok('title: no errors', ti.errors.filter((e) => !e.includes('404')).length === 0, ti.errors);
   const pre = await lab.open('preview', { width: 300, height: 375 });
   await pre.waitForTimeout(3000);
   console.log('preview', await lab.shot(pre, 'squishy-preview'));
