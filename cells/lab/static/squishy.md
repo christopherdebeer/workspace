@@ -2,9 +2,9 @@
 
 A third-person platformer in which you are a dumpling: a steamed one, of dough, with a face;
 from level 13 (and, once you've been there, by the word at the bottom, anywhere) a clear pink
-jelly squishy toy of one, full of glitter, with a pointed tip. You don't walk: you flick. Drag back
-from anywhere on the screen and let go, as with a slingshot, and the dumpling flies the other
-way, as hard as you pulled. Through a kitchen, place by place, to the golden steamer: home.
+jelly squishy toy of one, full of glitter, with a pointed tip. You don't walk: you flick. Take
+hold of the dumpling itself, drag back and let go, as with a slingshot, and it flies the other
+way, as hard as you pulled. Touch anywhere else and you're moving the camera. Through a kitchen, place by place, to the golden steamer: home.
 First the preparation table, a place laid out as it is (a spoon to land in, a bench with a towel
 thrown over it, butter melted across the wood); then the counter's towers of steamers, plates,
 a chopping board, a pudding, a lazy Susan and tea tins; then the stovetop.
@@ -18,15 +18,18 @@ level, `?level=3`, goes straight to it.)
 
 | | Touch | Mouse and keys |
 |---|---|---|
-| flick | drag back and let go | drag back and let go |
+| flick | take hold of it, drag back and let go | the same |
 | spin | swipe as you let go: on, the way it will fly, for topspin; back, for backspin | the same |
-| nudge | tap: it rolls once toward where you tapped (tap on it: straight on) | click |
-| turn the camera, tilt it | two fingers, sideways and up or down | ← → |
+| poke | tap it: it dents where you tapped, and rolls away from your finger | click it |
+| climb | stuck to a wall: take hold, aim into the wall and let go | the same |
+| turn the camera, tilt it | drag anywhere off the dumpling (or two fingers) | the same, or ← → |
 | come close | pinch | the wheel |
 | start the level again | `again` | R |
 
-While you pull, the dumpling winds up, squeezed along the way it's going with its eyes shut
-tight, and a dotted arc shows where its middle will go, ending in a ring where it lands: green
+Where you take hold of it is where it's held: the dough under your finger is drawn out toward it as
+you pull, stretching, the rest of it hanging back, and it winds up, squeezed along the way it's
+going with its eyes shut tight. (It's picked by its skin as you see it: the nearest bit of it under
+your finger, the side facing you, with a little room round it for a fingertip.) A dotted arc shows where its middle will go, ending in a ring where it lands: green
 for a top further on, cream for one already reached, red for nowhere (the floor). The band on
 the glass shows how hard. Its middle flies a true parabola, so the arc is exact up to where it
 touches something. You can only flick from something, but a flick let go in the air waits a
@@ -38,8 +41,24 @@ way it will fly, it has topspin: it rolls on when it lands, two or three times a
 how you cross a pan or reach the far side of a board. Swiped back, it has backspin: it bites
 where it lands and stays, even on butter. A word at the bottom says which you gave it.
 
-A tap is a nudge: one roll the way you tapped, a hand's width and no more, with hardly a hop. For
-creeping to an edge, off a lid, or back to the middle of a top.
+A tap on it is a poke: it dents where you touched it, the way your finger went into the glass,
+and rolls away from it, a hand's width and no more, with hardly a hop. Poked at its back, it rolls
+on; poked from above, it only squashes and wobbles. For creeping to an edge, off a lid, or back
+to the middle of a top.
+
+Dragging off the dumpling turns the camera round it and tilts it, and it stays where you put it
+until your next flick, when it goes back to following.
+
+## Stuck to a wall
+
+Stuck to something's side (honey's splat, or a towel's grip) it isn't held up stiff: it hangs.
+Held at the patch that's stuck, the rest of it goes limp and droops, slumping down off the patch,
+the dough longer (half as tall again as it stands) and the jelly less so; let go, it gathers itself
+back. From there you can jump off, aiming away from the wall, or climb: aim into the wall, and it
+pushes up the wall, sliding, hardly gripping, and once its middle clears the top, over and onto
+it (a mantle). The arc shows that too, up the wall and over to where it'll land, so how hard is
+yours to judge: too soft and it slides back down to where it was; too hard and it goes over and
+off the far side.
 
 Fall and it's a splat, and back to the last top you stood on: on the counter, falling is
 landing on the counter itself, far below the tops; at the table, the table is ground (land on it
@@ -97,7 +116,8 @@ From level 5 the course is on the hob: brushed steel, a burner under each pot, t
 
 Every level is made from its number, so level 6 is always the same level, and every hop in it
 is checked when it's made: from the middle of each top there is a flick that lands on the next;
-onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too.
+onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too. Playing
+itself, it waits on a lid until the lid's settled, and won't land on one dropping away.
 
 ## What gets on it
 
@@ -126,7 +146,10 @@ flat bottom and drawn up into its tip; 450 for the dough's xiaolongbao, twelve p
 up to a knot), held to that shape by shape matching (Müller et al. 2005: each step,
 the rotation that best fits where the particles are, from Müller, Bender et al.'s 2016
 iteration, and the particles drawn back toward the rest shape so turned, partly allowed to
-stretch). Its volume is kept as a constraint of its own, so a hard landing squashes it wide
+stretch). It isn't fitted only as a whole: twelve overlapping patches of it are each fitted on their own as
+well, and each particle drawn toward a blend of the whole's fit and its patches', so a part of it
+can bend, droop and dent while the rest keeps its shape. Hanging, it goes limp (its pull back to
+shape eased, more of it left to the patches), which is the droop. Its volume is kept as a constraint of its own, so a hard landing squashes it wide
 and flat rather than smaller, and it bulges at the sides. It's stepped ten times a frame
 (position-based dynamics: move, fit, keep the volume, push out of what it touches, and take
 the velocities from where everything went).
@@ -138,7 +161,10 @@ deader, and plops.
 Where it touches, there's friction (Coulomb, from how hard it was pushed out; it holds where it
 touches, so it sits on a slope as long as the slope's grip will hold it, on a ramp of 20° or a
 tipped plate, and slides off a steep one), bounce where the surface has any, and tack: dough is sticky, and the jelly nearly as much, so it holds to what it
-touches, a wall included for a moment, and the tack tires on a wall so it slides down. Butter
+touches, a wall included for a moment, and the tack tires on a wall so it slides down. A towel's
+grip lasts longer and tires too, so a throw at the towel hangs a moment or two before it lets go.
+As it's flicked off something, what it's leaving hardly grips it, for a moment, so an edge can't
+snag it and tip it over as it goes. Butter
 has no tack to give. Honey has more than the dumpling's own, and it never tires: a particle
 that touches honey is held where it touched, the whole body is slowed hard so its momentum
 doesn't tear it off the patch that's stuck, and each step the rest of it is drawn back up so

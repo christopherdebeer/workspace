@@ -527,6 +527,15 @@ export function near(lv: Level, p: V3, rad: number, out: Shape[]): Shape[] {
 }
 
 // ─── the flick, and where it goes ─────────────────────────────────────────────────────────────────
+/** a climb: once it's up past the top of the wall it went up, how fast it's carried in over it (cm/s) */
+export const CLIMB_IN = 40;
+const SLIDE = 0.3, CLEAR_GAP = 1.2;
+/** and how long it must be off the wall to be clear of it (s) */
+export const CLIMB_CLEAR = 0.03;
+/** A climb, so hard (0–1): straight up the wall, as fast as a flick that hard. */
+export function climbLaunch(power: number): V3 {
+  return [0, V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power)), 0];
+}
 /** A flick the way yaw (from +z toward +x), so hard (0–1): the velocity it gives. */
 export function launch(yaw: number, power: number): V3 {
   const v = V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power));
@@ -537,11 +546,14 @@ export interface Path { pts: V3[]; hit: { p: V3; n: V3; shape: Shape } | null; t
  * Where the dumpling's middle goes from `from` at `vel`: a parabola (its middle flies one; the
  * squish is about it) until a ball the size of its middle meets something.
  */
-export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0): Path {
+export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | null = null): Path {
   const pts: V3[] = [];
   const h = 1 / 240, R = RADIUS * 0.82;
-  // (as it leaves it's still broad and low, sat on its flat bottom: a wider ball for the first moments, so a lip ahead of it is seen to catch it)
-  const ballAt = (t: number) => RADIUS * (1.15 - 0.33 * Math.min(1, t / 0.15));
+  // (climbing: up the wall, sliding along it; off its top, carried in over it: as the body does)
+  let climbing = !!climb, off = 0;
+  // (as it leaves it's still broad and low, sat on its flat bottom: a wider ball for the first moments, so a lip ahead of it is seen to catch it; climbing, it's long up the wall)
+  const ballAt = (t: number) => (climbing ? RADIUS * 1.1 : climb ? R : RADIUS * (1.15 - 0.33 * Math.min(1, t / 0.15)));
+
   const o: Hit = { nx: 0, ny: 0, nz: 0, d: 0, vx: 0, vy: 0, vz: 0 };
   const ns: Shape[] = [];
   let [x, y, z] = from, [vx, vy, vz] = vel;
@@ -558,6 +570,27 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0): Path {
     if (lv.movers.length && i % 4 === 0) moveShapes(lv, t0 + t);
     const Rt = ballAt(t);
     near(lv, [x, y, z], Rt + 1, ns);
+    if (climbing) {
+      let on = false;
+      // (on the wall while within a hair of it: sliding, it's kept there, not bounced off it and back)
+      for (const s of ns) if (touch(s, x, y, z, Rt + SLIDE, o) && o.d > 0 && Math.abs(o.ny) < 0.5) {
+        on = true;
+        const d = Math.max(0, o.d - SLIDE);
+        x += o.nx * d; y += o.ny * d; z += o.nz * d;
+        const vn = vx * o.nx + vy * o.ny + vz * o.nz;
+        if (vn < 0) { vx -= o.nx * vn; vy -= o.ny * vn; vz -= o.nz * vn; }
+      }
+      // (and clear of it only when well off it: a lip on the wall, a step in the glass, is still the wall)
+      if (!on) for (const s of ns) if (touch(s, x, y, z, Rt + CLEAR_GAP, o) && o.d > 0 && Math.abs(o.ny) < 0.5) { on = true; break; }
+      if (on) {
+        off = 0;
+        // (sliding back down: it hasn't made it)
+        if (vy < -30) { if (lv.movers.length) moveShapes(lv, t0); return { pts, hit: null, t }; }
+        continue;
+      }
+      if ((off += h) >= CLIMB_CLEAR) { vx -= climb![0] * CLIMB_IN; vz -= climb![2] * CLIMB_IN; climbing = false; }
+      else continue;
+    }
     for (const s of ns) if (!(t < 0.2 && leaving.includes(s)) && touch(s, x, y, z, Rt, o) && o.d > 0) {
       pts.push([x, y, z]);
       if (lv.movers.length) moveShapes(lv, t0);
@@ -609,15 +642,52 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
   return lo < 0 ? null : { yaw, power: lo + (hi - lo) * 0.4 };
 }
 /**
- * The autopilot's flick, from where it is, having last stood on tower `at`: on to the next; else
+ * The autopilot's flick, from where it is, having last stood on tower `at` (null: wait); on to the next; else
  * back to the middle of this one (not a jar's); else on past the next; else, wedged somewhere
  * with no clear flick, a hop toward the next to get loose.
  */
-export function autoFlick(lv: Level, from: V3, at: number, t = 0): { yaw: number; power: number } {
+export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cling: V3 | null = null): { yaw: number; power: number; climb?: V3 } | null {
+  // (buttered, a jar's honey won't hold it: wait for the butter to wear off first)
+  if (butter > 0.04 && lv.towers[at + 1]?.jar && lv.towers[at].top !== 'butter') return null;
+  // (from a lid, only once it's settled; onto one, not as it drops away under where it lands: wait for the moment)
+  const lift = (k: number) => lv.towers[k].land?.[0].lift;
+  const dropping = (k: number, at: number) => { const l = lift(k); return !!l && liftAt(l, at).v < -0.05; };
+  if (lift(at) && liftAt(lift(at)!, t).k > 0 && onTop(lv.towers[at], from, 1)) return null;
   const tries = [at + 1, lv.towers[at].jar ? -1 : at, at + 2].filter((k) => k >= 0 && k < lv.towers.length);
-  for (const k of tries) { const a = aim(lv, from, k, t); if (a) return a; }
+  for (const k of tries) {
+    const a = aim(lv, from, k, t);
+    if (a) return dropping(k, t + path(lv, from, launch(a.yaw, a.power), 3, t).t) ? null : a;
+  }
+  // (clinging to the side of something, with no flick away that lands: up it, and over onto its top)
+  if (cling) for (const k of [at + 1, at].filter((k) => k >= 0 && k < lv.towers.length)) {
+    const c = climbAim(lv, from, cling, k, t);
+    if (c) return { yaw: 0, power: c.power, climb: cling };
+  }
   const nx = lv.towers[Math.min(at + 1, lv.towers.length - 1)].at;
   return { yaw: Math.atan2(nx[0] - from[0], nx[2] - from[2]), power: 0.3 };
+}
+/**
+ * A climb from `from`, up the wall it's on (n: out of the wall), that lands on top of tower k:
+ * the strength in the middle of the band that does; null if none does.
+ */
+export function climbAim(lv: Level, from: V3, n: V3, k: number, t = 0): { power: number } | null {
+  const tw = lv.towers[k];
+  let lo = -1, hi = -1;
+  for (let p = 0; p <= 1.0001; p += 0.02) {
+    const pa = path(lv, from, climbLaunch(p), 3, t, n);
+    const ok = pa.hit && tw.shapes.includes(pa.hit.shape) && pa.hit.n[1] > 0.7 && inside(pa.hit.shape, pa.hit.p, 1.8);
+    if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) break;
+  }
+  return lo < 0 ? null : { power: lo + (hi - lo) * 0.4 };
+}
+/** Whether a point is over a shape's top, at least so far in from its edge. */
+function inside(s: Shape, p: V3, margin: number): boolean {
+  if (s.kind === 'cyl') return Math.hypot(p[0] - s.c[0], p[2] - s.c[2]) < s.r - margin;
+  if (s.kind === 'box') {
+    const cy = Math.cos(s.yaw), sy = Math.sin(s.yaw), dx = p[0] - s.c[0], dz = p[2] - s.c[2];
+    return Math.abs(cy * dx - sy * dz) < s.h[0] - margin && Math.abs(sy * dx + cy * dz) < s.h[2] - margin;
+  }
+  return true;
 }
 /** Where the dumpling's middle is, sat on tower j at a time (on a lid, it rides with it). */
 export function standing(lv: Level, j: number, t = 0): V3 {
@@ -662,8 +732,9 @@ function pickTop(r: Rand, n: number, prev: Top): Top {
   } else {
     pool = ['steamer', 'board', 'plate', 'pudding', 'tin', 'susan', 'pan', 'butter', 'honey', 'lid', 'honey', 'lid'];
   }
-  // (not honey twice running: from a jar's side the course turns, and a second jar there is a wall)
-  if (prev === 'honey') pool = pool.filter((t) => t !== 'honey');
+  // (not honey twice running: from a jar's side the course turns, and a second jar there is a wall;
+  // nor straight after butter: you'd leave the dish buttered, and honey won't hold butter)
+  if (prev === 'honey' || prev === 'butter') pool = pool.filter((t) => t !== 'honey');
   return pool[Math.floor(r() * pool.length)];
 }
 /** Level n, of towers: from the start steamer up and across to the golden one, every hop made sure of. (The sets, the first levels, are in `course.ts`.) */

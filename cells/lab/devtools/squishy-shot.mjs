@@ -22,15 +22,39 @@ await withWood(async (lab) => {
   console.log('rest', JSON.stringify(s), await lab.shot(page, 'squishy-rest'));
   c.ok('no errors', page.errors.filter((e) => !e.includes('404')).length === 0, page.errors);
   c.ok('at rest on the start, its volume kept', s.check === 0 && s.speed < 5 && s.canFlick && Math.abs(s.volume - 1) < 0.03, s);
-  // pull back toward the bottom of the screen: it should wind up, and the line show it landing ahead
-  await page.mouse.move(195, 420);
+  // a drag off the dumpling turns the camera, and doesn't flick it
+  const where = () => page.evaluate(() => window.__squishyAt());
+  let w = await where();
+  const yaw0 = w.camYaw;
+  await page.mouse.move(60, 140);
   await page.mouse.down();
-  for (let i = 1; i <= 10; i++) await page.mouse.move(195, 420 + i * 11);
+  for (let i = 1; i <= 8; i++) await page.mouse.move(60 + i * 12, 140);
+  await page.mouse.up();
+  await frames();
+  w = await where();
+  s = await st();
+  c.ok('a drag off it turns the camera, and leaves it be', Math.abs(w.camYaw - yaw0) > 0.3 && s.contacts > 0 && s.speed < 10, { yaw0, w, s });
+  // a tap on it pokes it
+  w = await where();
+  await page.mouse.click(w.at[0], w.at[1] - 6);
+  await page.waitForTimeout(400);
+  await frames();
+  s = await st();
+  c.ok('a tap on it pokes it: a dent, a wobble', s.deform > 0.05 || s.speed > 5, s);
+  await page.waitForFunction(() => window.__squishy.speed < 3 && window.__squishy.contacts > 0, null, { timeout: 60000, polling: 100 });
+  await page.waitForTimeout(600);
+  await frames();
+  // take hold of it and pull back toward the bottom of the screen: it should stretch and wind up, and the line show it landing ahead
+  w = await where();
+  await page.mouse.move(w.at[0], w.at[1] - 4);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(w.at[0], w.at[1] - 4 + i * 11);
   await page.waitForTimeout(600);
   await frames();
   s = await st();
-  console.log('aim', JSON.stringify({ aiming: s.aiming, power: s.power, squeeze: s.squeeze, deform: s.deform }), await lab.shot(page, 'squishy-aim'));
-  c.ok('pulling back winds it up', s.aiming && s.squeeze && s.power > 0.1, s);
+  const held = (await where()).grabbed;
+  console.log('aim', JSON.stringify({ aiming: s.aiming, power: s.power, squeeze: s.squeeze, deform: s.deform, held }), await lab.shot(page, 'squishy-aim'));
+  c.ok('taking hold and pulling back stretches it and winds it up', held && s.aiming && s.squeeze && s.power > 0.1, s);
   await page.mouse.up();
   await page.waitForFunction(() => window.__squishy.contacts === 0, null, { timeout: 20000, polling: 30 });
   await page.waitForTimeout(150);

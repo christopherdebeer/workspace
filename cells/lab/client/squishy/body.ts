@@ -13,7 +13,7 @@
  * Its momentum is its own, so in the air its middle
  * flies a plain parabola: the aiming line shows where it will go.
  */
-import { DUST, DUSTS, G, RADIUS, moveShapes, near, touch, type Dust, type Hit, type Level, type Shape, type V3 } from './level';
+import { CLIMB_CLEAR, CLIMB_IN, DUST, DUSTS, G, RADIUS, moveShapes, near, touch, type Dust, type Hit, type Level, type Shape, type V3 } from './level';
 
 /** small steps a frame */
 export const SUB = 10;
@@ -29,18 +29,30 @@ const TURN = 4, UPRIGHT = 3;
 const LEAN0 = 0.19, LEAN1 = 0.4, SHUFFLE_UP = 0.93;
 /** dough's tack: how hard it holds what it touches (cm/s²), and how near counts as touching */
 const TACK = 900, STICK = 0.35;
+/** held: how far round the touch the finger has the dough (cm), and how hard it draws it each small step */
+const GRAB_R = 2.6, GRAB_K = 0.12;
+/** a poke: how far round the finger it dents (cm), how hard (cm/s at the finger), and how much it goes along the ground with it, and up */
+const POKE_R = 2.4, POKE = 220, POKE_ROLL = 85, POKE_UP = 34;
 /** a nudge: how fast it goes (cm/s), and the little hop with it */
 const NUDGE = 90, NUDGE_UP = 40;
 /** honey: how fast it takes the speed out of what's stuck to it (/s), and how far a step the rest is drawn back up to what's stuck (cm) */
 const HONEY_DRAG = 90, HANG = 0.03;
+/** hanging: how much of its stiffness it lets go (all of it would be soup), and how far it may droop from where it's stuck before it's drawn back up (cm) */
+const LIMP = 0.55, DROOP = 1.1;
+/** honey: how long after it lands on it the honey takes hold of what touches it (s) */
+const SPLAT = 0.3;
 
 /** What it's made of: dough (steamed, pleated, plops) or jelly (a clear, glittery squishy toy: a gumdrop with a little tip, that jiggles). */
 export type Kind = 'jelly' | 'dough';
 /** each kind's spring back (wobbles a second), how little each wobble keeps, how much squash it takes, and its tack */
-export const KINDS: Record<Kind, { hz: number; zeta: number; beta: number; tack: number }> = {
-  dough: { hz: 9, zeta: 0.14, beta: 0.25, tack: 1 },
-  jelly: { hz: 14, zeta: 0.06, beta: 0.25, tack: 0.85 },
+export const KINDS: Record<Kind, { hz: number; zeta: number; beta: number; tack: number; local: number }> = {
+  dough: { hz: 9, zeta: 0.14, beta: 0.25, tack: 1, local: 0.65 },
+  jelly: { hz: 14, zeta: 0.06, beta: 0.25, tack: 0.85, local: 0.55 },
 };
+/** how many patches it's fitted by, besides the whole of it, and how many patches each particle is in */
+const CLUSTERS = 12, PER = 3;
+/** For so long after a flick, what it's leaving hardly grips it (s). */
+const LEAVE = 0.06;
 
 /**
  * A skin turned on a lathe: a point at the bottom, rings up to a point at the top. `at(h, r, th)`
@@ -158,6 +170,14 @@ export class Dumpling {
   q: Float32Array;
   private aqqInv = new Float64Array(9);
   private quat = [0, 0, 0, 1];
+  /**
+   * Its patches: each a dozen-odd neighbouring particles fitted on their own, so one part of it
+   * can bend from another (droop from where it's stuck, fold over an edge) while the whole of it
+   * still keeps its shape. Each: its particles, where each sits from the patch's middle at rest,
+   * and its own turn (kept from step to step).
+   */
+  private patches: Array<{ idx: Int32Array; r: Float32Array; quat: number[]; R: Float64Array }> = [];
+  private goals = new Float32Array(0);
   /** its turn and its squash, as last matched (row-major) */
   R = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
   A = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
@@ -203,6 +223,21 @@ export class Dumpling {
   onFloor = 1;
   /** which way is up for it, where it's standing: the floor's own (a ramp's, a tipped plate's), or the world's on a wall or in the air */
   upTo: V3 = [0, 1, 0];
+  /** how limp it's gone (0–1): hanging from something, held by its side, it lets its weight pull it into a droop */
+  limp = 0;
+  /**
+   * Climbing: flicked up the wall it was clinging to (its normal, out of the wall), sliding up it;
+   * once it's clear of the wall's top it's carried in over it. Whether it's been on the wall yet.
+   */
+  climb: { n: V3; on: boolean; off: number } | null = null;
+  /** the wall it's against, if any: the way out of it, level (the touching particles' normals, averaged) */
+  wallN: V3 = [0, 0, 0];
+  /** Clinging: on something mostly by its side, little or nothing under it. */
+  get clinging() { return this.contacts > 0 && this.onWall && this.onFloor < 0.3 && Math.hypot(this.wallN[0], this.wallN[2]) > 0.5; }
+  /** how long it can go on hanging by a grip that tires (linen's, sugar's): drained as it hangs, filled again on a floor (0–1) */
+  grip = 1;
+  /** how long it's been on honey this time (s; -1 when it isn't) */
+  honeyT = -1;
   /** how much what it's touching holds it (the stickiest, 0–3), and how many particles honey has hold of */
   held = 0;
   pinned = 0;
@@ -247,6 +282,7 @@ export class Dumpling {
     }
     aqq[3] = aqq[1]; aqq[6] = aqq[2]; aqq[7] = aqq[5];
     inv3(aqq, this.aqqInv);
+    this.makePatches();
     this.place(at);
     this.restVolume = this.volume();
   }
@@ -260,13 +296,49 @@ export class Dumpling {
       this.v[i * 3] = 0; this.v[i * 3 + 1] = 0; this.v[i * 3 + 2] = 0;
     }
     this.quat = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+    for (const pt of this.patches) { pt.quat = [...this.quat]; qmat(pt.quat, pt.R); }
     this.R.set([c, 0, sn, 0, 1, 0, -sn, 0, c]);
     this.A.set(this.R);
     this.com = [...at] as V3;
     this.vcom = [0, 0, 0]; this.drift = [0, 0, 0]; this.comWas = [...at] as V3;
     this.tack = 1; this.sinceContact = 0; this.sinceFlick = 9; this.squeeze = null;
-    this.spinMode = 0; this.spinLeft = 0; this.held = 0;
+    this.spinMode = 0; this.spinLeft = 0; this.held = 0; this.grip = 1; this.limp = 0; this.honeyT = -1; this.climb = null;
     this.coat.fill(0); this.coatKind.fill(0); this.coated = [0, 0, 0, 0, 0, 0]; this.coatMost = DUST.none; this.sneeze = 0;
+  }
+  /**
+   * Held by a finger: the dough round where it was touched (each particle so much, 1 at the
+   * touch, less away from it) drawn out by `pull` from where the shape would have it, so it
+   * stretches toward the finger; null when let go.
+   */
+  grab: { w: Float32Array; pull: V3 } | null = null;
+  /** Take hold of it at particle i: the dough within a couple of centimetres of it, that much less the further. */
+  hold(i: number): Float32Array {
+    const w = new Float32Array(this.n), x = this.x;
+    for (let j = 0; j < this.n; j++) {
+      const d = Math.hypot(x[j * 3] - x[i * 3], x[j * 3 + 1] - x[i * 3 + 1], x[j * 3 + 2] - x[i * 3 + 2]);
+      if (d < GRAB_R) w[j] = (1 - d / GRAB_R) ** 2;
+    }
+    return w;
+  }
+  /**
+   * A poke at a point, the finger going `dir`: the dough there pushed in (a dent), and the whole
+   * of it a little, the way it's pushed along the ground (so a poke at its back rolls it on; at
+   * its top, it dents and wobbles where it is).
+   */
+  poke(at: V3, dir: V3) {
+    const x = this.x, v = this.v;
+    for (let j = 0; j < this.n; j++) {
+      const d = Math.hypot(x[j * 3] - at[0], x[j * 3 + 1] - at[1], x[j * 3 + 2] - at[2]);
+      if (d >= POKE_R) continue;
+      const k = POKE * (1 - d / POKE_R) ** 2;
+      v[j * 3] += dir[0] * k; v[j * 3 + 1] += dir[1] * k; v[j * 3 + 2] += dir[2] * k;
+    }
+    // (along the ground, it goes as far as the poke is along the ground: a level poke, a roll; a poke from above, hardly any)
+    const h = Math.hypot(dir[0], dir[2]);
+    if (h > 1e-3) {
+      const ax = (dir[0] / h) * POKE_ROLL * h, az = (dir[2] / h) * POKE_ROLL * h;
+      this.flick([this.vcom[0] + ax, this.vcom[1] + POKE_UP * h, this.vcom[2] + az], 0.5 * h);
+    } else this.sinceFlick = 0;
   }
   /** A nudge: pushed, not flicked, it rolls once the way it's pushed, a hand's width, no more. */
   nudge(dir: V3) {
@@ -277,7 +349,9 @@ export class Dumpling {
   /** Whether it can be flicked: touching something (or only just off it), and not just flicked. */
   get canFlick() { return this.sinceContact < 0.2 && this.sinceFlick > 0.25; }
   /** Flicked: its middle goes at vel, a little of its wobble kept, and a roll: a little forward, or the spin it was given. */
-  flick(vel: V3, spin = 0) {
+  flick(vel: V3, spin = 0, climb: V3 | null = null) {
+    // (a climb: up the wall it's on, sliding, and over the top when it's clear; see step)
+    this.climb = climb ? { n: climb, on: false, off: 0 } : null;
     const h = Math.hypot(vel[0], vel[2]) || 1;
     // (topspin is a real roll forward; backspin only a little back, its bite being in how it lands)
     const w = 2 + 9 * Math.max(0, spin) - 2.5 * Math.max(0, -spin);
@@ -309,6 +383,54 @@ export class Dumpling {
     return hi - lo;
   }
 
+  /** Its patches: centres spread over its rest shape (each the furthest from those before), every particle in the few nearest. */
+  private makePatches() {
+    const n = this.n, q = this.q;
+    const centres: number[] = [];
+    let lowest = 0;
+    for (let i = 0; i < n; i++) if (q[i * 3 + 1] < q[lowest * 3 + 1]) lowest = i;
+    centres.push(lowest);
+    const far = new Float32Array(n).fill(Infinity);
+    while (centres.length < CLUSTERS) {
+      const c = centres[centres.length - 1];
+      let best = 0;
+      for (let i = 0; i < n; i++) {
+        const d = Math.hypot(q[i * 3] - q[c * 3], q[i * 3 + 1] - q[c * 3 + 1], q[i * 3 + 2] - q[c * 3 + 2]);
+        if (d < far[i]) far[i] = d;
+        if (far[i] > far[best]) best = i;
+      }
+      centres.push(best);
+    }
+    const members: number[][] = centres.map(() => []);
+    for (let i = 0; i < n; i++) {
+      const order = centres.map((c, k) => [Math.hypot(q[i * 3] - q[c * 3], q[i * 3 + 1] - q[c * 3 + 1], q[i * 3 + 2] - q[c * 3 + 2]), k]).sort((a, b) => a[0] - b[0]);
+      for (let k = 0; k < PER; k++) members[order[k][1]].push(i);
+    }
+    this.patches = members.map((m) => {
+      let mx = 0, my = 0, mz = 0;
+      for (const i of m) { mx += q[i * 3]; my += q[i * 3 + 1]; mz += q[i * 3 + 2]; }
+      mx /= m.length; my /= m.length; mz /= m.length;
+      const r = new Float32Array(m.length * 3);
+      m.forEach((i, j) => { r[j * 3] = q[i * 3] - mx; r[j * 3 + 1] = q[i * 3 + 1] - my; r[j * 3 + 2] = q[i * 3 + 2] - mz; });
+      return { idx: Int32Array.from(m), r, quat: [0, 0, 0, 1], R: new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]) };
+    });
+    this.goals = new Float32Array(n * 3);
+  }
+  /** The held dough drawn toward where the fitted shape would put it, moved out by pull, so far as each is held. */
+  private pullOut(p: Float32Array, w: Float32Array, pull: V3) {
+    const n = this.n, q = this.q, R = this.R;
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < n; i++) { cx += p[i * 3]; cy += p[i * 3 + 1]; cz += p[i * 3 + 2]; }
+    cx /= n; cy /= n; cz /= n;
+    for (let i = 0; i < n; i++) {
+      const k = w[i];
+      if (k <= 0) continue;
+      const q0 = q[i * 3], q1 = q[i * 3 + 1], q2 = q[i * 3 + 2];
+      const gx = cx + R[0] * q0 + R[1] * q1 + R[2] * q2 + pull[0] * k, gy = cy + R[3] * q0 + R[4] * q1 + R[5] * q2 + pull[1] * k, gz = cz + R[6] * q0 + R[7] * q1 + R[8] * q2 + pull[2] * k;
+      const a = GRAB_K * k;
+      p[i * 3] += (gx - p[i * 3]) * a; p[i * 3 + 1] += (gy - p[i * 3 + 1]) * a; p[i * 3 + 2] += (gz - p[i * 3 + 2]) * a;
+    }
+  }
   /** The particles drawn toward the shape that best fits them (turned, partly squashed, kept to its volume). */
   private match(p: Float32Array, alpha: number) {
     const n = this.n, q = this.q;
@@ -332,17 +454,6 @@ export class Dumpling {
     const T = new Float64Array(9);
     const beta = this.phys.beta;
     for (let k = 0; k < 9; k++) T[k] = beta * A[k] + (1 - beta) * R[k];
-    // (wound up for a flick: squeezed along the way it will go, and wider across, at the same volume)
-    if (this.squeeze) {
-      const [dx, dy, dz] = this.squeeze.d, k = this.squeeze.k;
-      const sd = 1 - 0.38 * k, sp = 1 / Math.sqrt(sd);
-      const D = [dx * dx, dx * dy, dx * dz, dy * dx, dy * dy, dy * dz, dz * dx, dz * dy, dz * dz];
-      const S = new Float64Array(9);
-      for (let k2 = 0; k2 < 9; k2++) S[k2] = (k2 % 4 === 0 ? sp : 0) + (sd - sp) * D[k2];
-      const T2 = new Float64Array(9);
-      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) T2[r * 3 + c] = S[r * 3] * T[c] + S[r * 3 + 1] * T[3 + c] + S[r * 3 + 2] * T[6 + c];
-      T.set(T2);
-    }
     // (held by honey: the whole of it carried so that what's stuck sits where the fitted shape
     // puts it; so it hangs from the patch, rather than sagging off it, a little more each step)
     if (this.pinned > 4) {
@@ -355,15 +466,51 @@ export class Dumpling {
       }
       if (m && m < n) {
         // (the rest moved the other way, enough to bring the fit's middle up to the patch; a little each step, as a pull, not a snap)
-        const l = Math.hypot(ox, oy, oz) / m, want = (l * n) / (n - m), k = l > 1e-9 ? -Math.min(want, HANG) / (l * m) : 0;
+        // (a droop of a couple of centimetres let be: only beyond that is it drawn back up)
+        const l = Math.hypot(ox, oy, oz) / m, over = Math.max(0, l - DROOP), want = (over * n) / (n - m), k = l > 1e-9 ? -Math.min(want, HANG) / (l * m) : 0;
         ox *= k; oy *= k; oz *= k;
         for (let i = 0; i < n; i++) if (!this.pin[i]) { p[i * 3] += ox; p[i * 3 + 1] += oy; p[i * 3 + 2] += oz; }
       }
     }
+    // each patch's own fit: where its particles would be, were the patch only turned
+    const G = this.goals, loc = this.phys.local + (0.85 - this.phys.local) * this.limp;
+    G.fill(0);
+    if (loc > 0) for (const pt of this.patches) {
+      const idx = pt.idx, r = pt.r, m = idx.length;
+      let mx = 0, my = 0, mz = 0;
+      for (let j = 0; j < m; j++) { const i = idx[j] * 3; mx += p[i]; my += p[i + 1]; mz += p[i + 2]; }
+      mx /= m; my /= m; mz /= m;
+      const ap = new Float64Array(9);
+      for (let j = 0; j < m; j++) {
+        const i = idx[j] * 3, d0 = p[i] - mx, d1 = p[i + 1] - my, d2 = p[i + 2] - mz, r0 = r[j * 3], r1 = r[j * 3 + 1], r2 = r[j * 3 + 2];
+        ap[0] += d0 * r0; ap[1] += d0 * r1; ap[2] += d0 * r2; ap[3] += d1 * r0; ap[4] += d1 * r1; ap[5] += d1 * r2; ap[6] += d2 * r0; ap[7] += d2 * r1; ap[8] += d2 * r2;
+      }
+      rotationOf(ap, pt.quat, pt.R, 2);
+      const P = pt.R;
+      for (let j = 0; j < m; j++) {
+        const i = idx[j] * 3, r0 = r[j * 3], r1 = r[j * 3 + 1], r2 = r[j * 3 + 2];
+        G[i] += mx + P[0] * r0 + P[1] * r1 + P[2] * r2; G[i + 1] += my + P[3] * r0 + P[4] * r1 + P[5] * r2; G[i + 2] += mz + P[6] * r0 + P[7] * r1 + P[8] * r2;
+      }
+    }
+    // (wound up for a flick: squeezed along the way it will go, and wider across, at the same volume, about its middle)
+    let S: Float64Array | null = null;
+    if (this.squeeze) {
+      const [dx, dy, dz] = this.squeeze.d, k = this.squeeze.k;
+      const sd = 1 - 0.38 * k, sp = 1 / Math.sqrt(sd);
+      const D = [dx * dx, dx * dy, dx * dz, dy * dx, dy * dy, dy * dz, dz * dx, dz * dy, dz * dz];
+      S = new Float64Array(9);
+      for (let k2 = 0; k2 < 9; k2++) S[k2] = (k2 % 4 === 0 ? sp : 0) + (sd - sp) * D[k2];
+    }
+    // each particle drawn toward its goal: the whole's fit and its patches', blended
     let dev = 0;
     for (let i = 0; i < n; i++) {
       const q0 = q[i * 3], q1 = q[i * 3 + 1], q2 = q[i * 3 + 2];
-      const gx = cx + T[0] * q0 + T[1] * q1 + T[2] * q2, gy = cy + T[3] * q0 + T[4] * q1 + T[5] * q2, gz = cz + T[6] * q0 + T[7] * q1 + T[8] * q2;
+      let gx = cx + T[0] * q0 + T[1] * q1 + T[2] * q2, gy = cy + T[3] * q0 + T[4] * q1 + T[5] * q2, gz = cz + T[6] * q0 + T[7] * q1 + T[8] * q2;
+      if (loc > 0) { gx += (G[i * 3] / PER - gx) * loc; gy += (G[i * 3 + 1] / PER - gy) * loc; gz += (G[i * 3 + 2] / PER - gz) * loc; }
+      if (S) {
+        const ox = gx - cx, oy = gy - cy, oz = gz - cz;
+        gx = cx + S[0] * ox + S[1] * oy + S[2] * oz; gy = cy + S[3] * ox + S[4] * oy + S[5] * oz; gz = cz + S[6] * ox + S[7] * oy + S[8] * oz;
+      }
       const ex = gx - p[i * 3], ey = gy - p[i * 3 + 1], ez = gz - p[i * 3 + 2];
       dev += ex * ex + ey * ey + ez * ez;
       p[i * 3] += ex * alpha; p[i * 3 + 1] += ey * alpha; p[i * 3 + 2] += ez * alpha;
@@ -407,8 +554,9 @@ export class Dumpling {
     const speed = Math.hypot(...this.vcom);
     near(lv, this.com, RADIUS * 1.8 + speed * dt + 1, this.nearby);
     const o = this.hit;
-    let contacts = 0, wall = false, impact = 0, nyS = 0, floor = 0, held = 0, tire = 1, pinnedS = 0, fx = 0, fy = 0, fz = 0;
-    const tackOn = this.sinceFlick > 0.12;
+    let contacts = 0, wall = false, impact = 0, nyS = 0, floor = 0, held = 0, onHoney = false, tire = 1, pinnedS = 0, fx = 0, fy = 0, fz = 0;
+    const tackOn = this.sinceFlick > 0.12 && !this.climb;
+    let wx = 0, wz = 0;
     // the spin's say on landing: topspin lets the roll live and eases the grip; backspin grips and holds at once
     const top = Math.max(0, this.spinMode) * this.spinLeft, back = Math.max(0, -this.spinMode) * this.spinLeft;
     const muK = 1 - 0.5 * top + 1.5 * back, tackK = 1 + 2 * back, rollK = 1 - 0.75 * top + 3 * back;
@@ -419,7 +567,9 @@ export class Dumpling {
         if (i % 3 === 1) v[i] -= G * h;
         p[i] = x[i] + v[i] * h;
       }
-      this.match(p, alpha);
+      this.match(p, alpha * (1 - LIMP * this.limp));
+      // (held: the dough under the finger drawn out toward it, from where the shape would have it)
+      if (this.grab) this.pullOut(p, this.grab.w, this.grab.pull);
       this.keepVolume(p);
       // each particle against the course
       for (let i = 0; i < n; i++) {
@@ -459,6 +609,7 @@ export class Dumpling {
       let vx = 0, vy = 0, vz = 0, pinned = 0;
       for (let i = 0; i < n; i++) {
         const i3 = i * 3;
+        const was = this.pin[i];
         this.pin[i] = 0;
         let nvx = (p[i3] - x[i3]) / h, nvy = (p[i3 + 1] - x[i3 + 1]) / h, nvz = (p[i3 + 2] - x[i3 + 2]) / h;
         if (cf[i]) {
@@ -477,7 +628,7 @@ export class Dumpling {
             else if (kind === DUST.sprinkles) { if (tk0 <= 1) tk0 += 1.2 * ck; }
           }
           // (a hold that tires, linen's, sugar's, tires as its own tack does; honey's never)
-          if (tk0 > 1 && ctr[i] > 0) tk0 = 1 + (tk0 - 1) * this.tack;
+          if (tk0 > 1 && ctr[i] > 0) tk0 = 1 + (tk0 - 1) * this.grip;
           // (and it picks up what's there, as it touches)
           if (cf[i] === 1 && cdust[i]) {
             const on = DUSTS[cdust[i] as Dust].on * h;
@@ -488,7 +639,8 @@ export class Dumpling {
           if (cf[i] === 1 || (tk0 > 1 && tackOn)) {
             contacts++; nyS += ny; if (ny > 0.5) { floor++; fx += nx; fy += ny; fz += nz; }
             if (tk0 > held) held = tk0;
-            if (ny < 0.5) wall = true;
+            if (ctk[i] > 1 && ctr[i] === 0) onHoney = true;
+            if (ny < 0.5) { wall = true; wx += nx; wz += nz; }
           }
           if (cf[i] === 1) {
             if (-cv0[i] > impact) impact = -cv0[i];
@@ -498,13 +650,15 @@ export class Dumpling {
           // (its own tack, which tires; honey's, which doesn't)
           const tk = tk0 > 1 ? tk0 : this.tack * tk0;
           if (tackOn && tk > 0 && vn < 60) { const a = TACK * this.phys.tack * tk * tackK * h; vn -= a; dvn += a; }
-          const tm = Math.hypot(tx, ty, tz), lim = mu * muK * dvn;
+          // (climbing: it slides up a wall, hardly gripping; and as it's flicked off something, nothing snags it and tips it over)
+          const tm = Math.hypot(tx, ty, tz), lim = mu * muK * dvn * (this.climb && Math.abs(ny) < 0.5 ? 0.05 : this.sinceFlick < LEAVE ? 0.1 : 1);
           const k = tm <= lim ? 0 : 1 - lim / tm;
           // (what friction takes out of its sliding it takes out of where it went, too: else what the
           // shape's pull moves along a slope each step would stay moved, and it would creep downhill)
           if (cf[i] === 1 && k < 1) { const f = (1 - k) * h; p[i3] -= tx * f; p[i3 + 1] -= ty * f; p[i3 + 2] -= tz * f; }
           tx *= k; ty *= k; tz *= k;
-          if (tk0 > 1 && tackOn) {
+          // (honey holds the splat: what touches it as it lands, and goes on holding that; dough that sags onto it later only sticks)
+          if (tk0 > 1 && tackOn && (was || this.honeyT < SPLAT)) {
             // (honey: what touches it is held where it touched, so a splat against it hangs there until it's flicked)
             // (it stays put, but for being pushed out of the honey's surface; nothing draws it off)
             tx = 0; ty = 0; tz = 0;
@@ -525,6 +679,18 @@ export class Dumpling {
       // its wobble damped: each particle's velocity drawn toward the body's own (its middle's, and
       // its turning); and on the ground, its roll dies (dough plops, and stays)
       this.dampWobble(vx, vy, vz, damp, contacts > 0 && this.sinceFlick > 0.12 ? ROLL * h * rollK : 0);
+      // (climbing: on the wall, sliding up; then off its top, carried in over it; or falling back, given up)
+      if (this.climb) {
+        let onWall = false;
+        for (let i = 0; i < n; i++) if (cf[i] === 1 && Math.abs(cn[i * 3 + 1]) < 0.5) { onWall = true; break; }
+        const c = this.climb;
+        // (clear of the wall: off it for a moment together, not between one small step and the next)
+        if (onWall) { c.on = true; c.off = 0; if (vy < -30) this.climb = null; }
+        else if ((c.off += h) >= CLIMB_CLEAR) {
+          for (let i = 0; i < n; i++) { v[i * 3] -= c.n[0] * CLIMB_IN; v[i * 3 + 2] -= c.n[2] * CLIMB_IN; }
+          this.climb = null;
+        }
+      }
     }
     // the middle, the speed, and how it's touching
     let cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0;
@@ -538,6 +704,7 @@ export class Dumpling {
     this.contacts = Math.round(contacts / SUB);
     this.onWall = wall;
     this.groundNy = contacts > 0 ? nyS / contacts : 1;
+    { const l = Math.hypot(wx, wz); this.wallN = l > 1e-6 ? [wx / l, 0, wz / l] : [0, 0, 0]; }
     this.onFloor = contacts > 0 ? floor / contacts : 1;
     {
       const l = Math.hypot(fx, fy, fz);
@@ -545,6 +712,11 @@ export class Dumpling {
     }
     this.held = held;
     this.pinned = Math.round(pinnedS / SUB);
+    // (from when it first touched the honey, however coated: a buttered splat doesn't take, and butter wearing off later doesn't make it)
+    this.honeyT = onHoney ? (this.honeyT < 0 ? 0 : this.honeyT + dt) : -1;
+    // (limp while it hangs, held by its side: by honey, by linen's grip; not when it's only up against a wall, or half off an edge)
+    const hanging = this.pinned > 4;
+    this.limp += ((hanging ? 1 : 0) - this.limp) * (1 - Math.exp(-dt * (hanging ? 5 : 8)));
     // the coatings wear off in time; a hard landing shakes some off; pepper brings on a sneeze
     this.shook = DUST.none; this.sneezed = false;
     const sums = [0, 0, 0, 0, 0, 0];
@@ -577,8 +749,9 @@ export class Dumpling {
     this.sinceContact = contacts > 0 ? 0 : this.sinceContact + dt;
     this.sinceFlick += dt;
     // tack tires on a wall (not on honey); comes back in the air and on the flat
-    if (wall && this.onFloor < 0.3) this.tack = Math.max(0, this.tack - dt * 0.9 * tire);
+    if (wall && this.onFloor < 0.3) { this.tack = Math.max(0, this.tack - dt * 0.9 * tire); this.grip = Math.max(0, this.grip - dt * tire); }
     else if (contacts === 0 || this.sinceFlick > 0.3) this.tack = Math.min(1, this.tack + dt * 1.5);
+    if (contacts > 0 && this.onFloor > 0.5) this.grip = Math.min(1, this.grip + dt * 1.5);
     // (on the flat it sorts itself out; stuck to a wall it hangs as it is)
     this.shuffle(dt, contacts > 0 && this.onFloor > 0.25);
   }
@@ -638,9 +811,13 @@ export class Dumpling {
     let mx = 0, my = 0, mz = 0;
     for (let i = 0; i < this.n; i++) { mx += x[i * 3]; my += x[i * 3 + 1]; mz += x[i * 3 + 2]; }
     this.com = [mx / this.n, my / this.n, mz / this.n];
-    const h = Math.sin(th / 2), q = this.quat, nq = qmul([k[0] * h, k[1] * h, k[2] * h, Math.cos(th / 2)], q);
-    q[0] = nq[0]; q[1] = nq[1]; q[2] = nq[2]; q[3] = nq[3];
-    qmat(q, this.R);
+    const h = Math.sin(th / 2), dq = [k[0] * h, k[1] * h, k[2] * h, Math.cos(th / 2)];
+    for (const q of [this.quat, ...this.patches.map((pt) => pt.quat)]) {
+      const nq = qmul(dq, q);
+      q[0] = nq[0]; q[1] = nq[1]; q[2] = nq[2]; q[3] = nq[3];
+    }
+    qmat(this.quat, this.R);
+    for (const pt of this.patches) qmat(pt.quat, pt.R);
   }
   /** Damp what isn't the body moving as one: each particle's velocity drawn toward its middle's and its turning. */
   private dampWobble(vx: number, vy: number, vz: number, c: number, roll: number) {

@@ -17,7 +17,7 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
+import { CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
 import { buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -976,7 +976,7 @@ function startLevel(n: number, quiet = false) {
   if (!auto) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
   showTitle();
-  hint(levelN === 1 ? 'drag back and let go: the dumpling flies the other way. the table is safe; its edge is not' : levelN === 2 ? 'tap to nudge it a little, the way you tapped' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -1015,10 +1015,13 @@ function room(lv: Level): number[] {
 
 // ─── aiming and the flick ────────────────────────────────────────────────────────────────────────
 /** the pull: where the finger went down and where it is (and where it's been, lately); what it would do */
-let pull: { sx: number; sy: number; x: number; y: number; id: number; hist: Array<{ x: number; y: number; t: number }> } | null = null;
-let aimNow: { yaw: number; power: number; vel: V3 } | null = null;
+let pull: { sx: number; sy: number; x: number; y: number; id: number; hist: Array<{ x: number; y: number; t: number }>; at: V3 } | null = null;
+/** a finger on the glass but not on the dumpling: turning the camera round; and whether you've turned it (then it stays as you left it, until the next flick) */
+let look: { id: number; x: number; y: number } | null = null;
+let userCam = false;
+let aimNow: { yaw: number; power: number; vel: V3; climb?: V3 } | null = null;
 /** a flick asked for in the air: done on landing, if soon */
-let buffered: { vel: V3; spin: number; until: number } | null = null;
+let buffered: { vel: V3; spin: number; until: number; climb?: V3 } | null = null;
 function aimAt(x: number, y: number): typeof aimNow {
   if (!pull) return null;
   const dx = x - pull.sx, dy = y - pull.sy;
@@ -1029,6 +1032,9 @@ function aimAt(x: number, y: number): typeof aimNow {
   const d = norm(sub(mul(fwd, dy), mul(right, dx)));
   const yaw = Math.atan2(d[0], d[2]);
   const power = Math.min(1, (L - 14) / (0.3 * Math.min(innerWidth, innerHeight)));
+  // (clinging to a wall, and aimed into it: a climb, up it and over its top)
+  const n = body.clinging ? body.wallN : null;
+  if (n && d[0] * n[0] + d[2] * n[2] < -0.35) return { yaw, power, vel: climbLaunch(power), climb: n };
   return { yaw, power, vel: launch(yaw, power) };
 }
 function aimFromPull() { aimNow = pull ? aimAt(pull.x, pull.y) : null; }
@@ -1056,11 +1062,12 @@ function release() {
   pull = null; aimNow = null;
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
-  if (body.canFlick) doFlick(a.vel, spin);
-  else buffered = { vel: a.vel, spin, until: simTime + 0.35 };
+  if (body.canFlick) doFlick(a.vel, spin, a.climb);
+  else buffered = { vel: a.vel, spin, until: simTime + 0.35, climb: a.climb };
 }
-function doFlick(vel: V3, spin = 0) {
-  body.flick(vel, spin);
+function doFlick(vel: V3, spin = 0, climb?: V3) {
+  body.flick(vel, climb ? 0 : spin, climb ?? null);
+  userCam = false;
   buffered = null;
   pop(0.4 + len(vel) / 500);
   if (Math.abs(spin) > 0.1) hint(spin > 0 ? 'topspin: it runs on' : 'backspin: it bites', 1400);
@@ -1082,7 +1089,7 @@ function updateCamera(dt: number) {
   const want = add(body.com, [0, 3, 0]);
   for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * k;
   // (turned toward the next top, when it's sat still and no one's turning the camera)
-  if (!pull && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
+  if (!pull && !userCam && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
     const nx = lv.towers[Math.min(check + 1, lv.towers.length - 1)];
     const wantYaw = Math.atan2(nx.at[0] - body.com[0], nx.at[2] - body.com[2]);
     let dy = wantYaw - camYaw;
@@ -1101,13 +1108,44 @@ function updateCamera(dt: number) {
 // ─── hands ───────────────────────────────────────────────────────────────────────────────────────
 const pointers = new Map<number, { x: number; y: number }>();
 let two: { d: number; cx: number; cy: number } | null = null;
+/**
+ * Which bit of the dumpling is under a point on the glass, if any: of its particles near the
+ * point (as seen, give or take a fingertip), the one nearest the camera. Its index, or -1.
+ */
+function pick(x: number, y: number): number {
+  const reach = Math.max(26, 0.12 * Math.min(innerWidth, innerHeight));
+  let near = Infinity;
+  const sx = new Float32Array(body.n), sy = new Float32Array(body.n), ok = new Uint8Array(body.n);
+  for (let i = 0; i < body.n; i++) {
+    const s2 = screenOf([body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]]);
+    if (!s2) continue;
+    sx[i] = s2[0]; sy[i] = s2[1]; ok[i] = 1;
+    near = Math.min(near, Math.hypot(s2[0] - x, s2[1] - y));
+  }
+  if (near > reach) return -1;
+  // (of those as near as the nearest, give or take, the one on the side facing you)
+  let best = -1, bd = Infinity;
+  for (let i = 0; i < body.n; i++) {
+    if (!ok[i] || Math.hypot(sx[i] - x, sy[i] - y) > near + 14) continue;
+    const d = len(sub([body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]], eye));
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
 canvas.addEventListener('pointerdown', (e) => {
   wake();
   if (mode === 'title') return;
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size === 1 && !auto) pull = { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }] };
-  else { pull = null; aimNow = null; body.squeeze = null; two = null; }
+  if (pointers.size === 1 && !auto) {
+    // on the dumpling: take hold of it (a drag is a flick, a tap a poke); anywhere else: the camera
+    const i = home < 0 && fallenAt < 0 ? pick(e.clientX, e.clientY) : -1;
+    if (i >= 0) {
+      pull = { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }], at: [body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]] };
+      body.grab = { w: body.hold(i), pull: [0, 0, 0] };
+      squish(0.15);
+    } else look = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  } else { pull = null; aimNow = null; body.squeeze = null; body.grab = null; look = null; two = null; }
 });
 canvas.addEventListener('pointermove', (e) => {
   const p = pointers.get(e.pointerId);
@@ -1121,10 +1159,17 @@ canvas.addEventListener('pointermove', (e) => {
       zoom = Math.max(0.5, Math.min(2.5, zoom * (d / two.d)));
       camYaw -= (cx - two.cx) * 0.008;
       orbit.pitch = Math.max(-0.3, Math.min(0.7, orbit.pitch + (cy - two.cy) * 0.004));
-      orbit.at = simTime;
+      orbit.at = simTime; userCam = true;
     }
     two = { d, cx, cy };
     return;
+  }
+  if (look && look.id === e.pointerId) {
+    // one finger off the dumpling: round it, and up and down
+    camYaw -= (e.clientX - look.x) * 0.009;
+    orbit.pitch = Math.max(-0.3, Math.min(0.75, orbit.pitch + (e.clientY - look.y) * 0.004));
+    orbit.at = simTime; userCam = true;
+    look.x = e.clientX; look.y = e.clientY;
   }
   if (pull && pull.id === e.pointerId) {
     pull.x = e.clientX; pull.y = e.clientY;
@@ -1135,23 +1180,20 @@ canvas.addEventListener('pointermove', (e) => {
 const up = (e: PointerEvent) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
+  if (look && look.id === e.pointerId) look = null;
   if (pull && pull.id === e.pointerId) {
-    // (a tap, not a pull: a nudge toward where it was tapped)
+    // (a tap on it, not a pull: a poke, where it was touched, the way the finger was going into the glass)
     const t0 = pull.hist[0].t, moved = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
-    if (e.type === 'pointerup' && moved < 12 && performance.now() - t0 < 260 && two === null) { nudgeToward(pull.x, pull.y); pull = null; aimNow = null; body.squeeze = null; }
+    body.grab = null;
+    if (e.type === 'pointerup' && moved < 12 && performance.now() - t0 < 300 && two === null) { pokeAt(pull.at); pull = null; aimNow = null; body.squeeze = null; }
     else if (e.type === 'pointerup') release(); else { pull = null; aimNow = null; body.squeeze = null; }
   }
 };
-/** A tap: it rolls once toward where you tapped, from where it is on the glass (or straight on, tapped on itself). */
-function nudgeToward(x: number, y: number) {
+/** A poke: at the bit of it touched, along the line from your eye through it. */
+function pokeAt(at: V3) {
   if (auto || home >= 0 || fallenAt >= 0 || !body.canFlick) return;
-  const fwd: V3 = [Math.sin(camYaw), 0, Math.cos(camYaw)];
-  const right: V3 = [-fwd[2], 0, fwd[0]];
-  const at = screenOf(body.com);
-  let dx = x - (at?.[0] ?? innerWidth / 2), dy = y - (at?.[1] ?? innerHeight / 2);
-  if (Math.hypot(dx, dy) < 28) { dx = 0; dy = -1; }
-  body.nudge(norm(sub(mul(fwd, -dy), mul(right, dx))));
-  pop(0.25);
+  body.poke(at, norm(sub(at, eye)));
+  pop(0.3);
 }
 /** Where a point is on the glass (pixels), if it's in front of the camera. */
 function screenOf(p: V3): [number, number] | null {
@@ -1513,7 +1555,14 @@ function frame(now: number) {
   if (buddy) buddy.look = norm([eye[0] - buddy.com[0], 0, eye[2] - buddy.com[2]]);
   // winding up: squeezed along the way it would go
   aimFromPull();
-  body.squeeze = aimNow && body.canFlick ? { d: norm(aimNow.vel), k: aimNow.power } : null;
+  body.squeeze = aimNow && body.canFlick ? { d: norm(aimNow.vel), k: aimNow.power * 0.6 } : null;
+  // (held: the dough under the finger drawn back the way it's pulled, as far as it's pulled, a few centimetres at most)
+  if (body.grab) {
+    // (a climb is pulled down, to go up)
+    const d = !aimNow ? ([0, 0, 0] as V3) : aimNow.climb ? ([0, -1, 0] as V3) : norm([-aimNow.vel[0], 0, -aimNow.vel[2]]);
+    const k = aimNow ? 0.8 + 2.6 * aimNow.power : 0;
+    body.grab.pull = aimNow?.climb ? [0, -k, 0] : [d[0] * k, 0.25 * k, d[2] * k];
+  }
 
   const W = canvas.width, H = canvas.height;
   const fwd = norm(sub(camTarget, eye));
@@ -1586,7 +1635,7 @@ function frame(now: number) {
   }
   // the aiming line: dots along where its middle will go, a ring where it lands
   if (aimNow) {
-    const pa = path(lv, body.com, aimNow.vel, 3, simTime);
+    const pa = path(lv, body.com, aimNow.vel, 3, simTime, aimNow.climb ?? null);
     const can = body.canFlick;
     gl.uniform3fv(u(prog, 'uTint'), can ? [1, 0.97, 0.88] : [1, 0.6, 0.5]);
     pa.pts.forEach((p, i) => {
@@ -1854,7 +1903,7 @@ function tick(dt: number) {
   if (k >= 0 && body.contacts > 0 && speed < 30) check = k;
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
   const quiet = len(body.drift) < 6 && body.contacts > 0;
-  if (body.held > 1 && !heldWas) hint('stuck. flick to let go', 1800);
+  if (body.held > 1 && !heldWas) hint('stuck. aim into it to climb up and over; aim away to jump off', 2600);
   heldWas = body.held > 1;
   // what it's picked up: a word the first time; a sneeze when it's peppered; what a hard landing shakes off
   if (body.coatMost !== coatWas) {
@@ -1873,7 +1922,7 @@ function tick(dt: number) {
     hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`, 9000);
     try { const best = Number(localStorage.getItem(`${STORE}:best:${levelN}`)) || Infinity; if (clock < best) localStorage.setItem(`${STORE}:best:${levelN}`, String(clock)); } catch { /* */ }
   }
-  if (buffered && body.canFlick) { if (simTime < buffered.until) doFlick(buffered.vel, buffered.spin); else buffered = null; }
+  if (buffered && body.canFlick) { if (simTime < buffered.until) doFlick(buffered.vel, buffered.spin, buffered.climb); else buffered = null; }
   // the autopilot (the index's preview, and ?auto): the next top, as the course's own aim has it
   if (auto) {
     if (home >= 0 && still > 2.5) { startLevel(levelN); return; }
@@ -1882,8 +1931,8 @@ function tick(dt: number) {
     const near = k >= 0 ? k : towerAt(lv, body.com, 4), at = near >= 0 ? near : check;
     if (still > 0.5 && body.canFlick && at >= 0 && at < lv.towers.length - 1 && simTime - aimedAt > 0.2) {
       aimedAt = simTime;
-      const a = autoFlick(lv, body.com, at, simTime);
-      doFlick(launch(a.yaw, a.power));
+      const a = autoFlick(lv, body.com, at, simTime, body.coated[DUST.butter], body.clinging ? body.wallN : null);
+      if (a) doFlick(a.climb ? climbLaunch(a.power) : launch(a.yaw, a.power), 0, a.climb);
     }
   }
 }
@@ -1947,6 +1996,8 @@ function invert(m: Float32Array): Float32Array {
 void lastVP;
 
 (window as unknown as { __squishyTop: (k: number) => string }).__squishyTop = (k: number) => lv.towers[k]?.top;
+/** (for the checks: where the dumpling is on the glass, in pixels; and the camera's turn) */
+(window as unknown as { __squishyAt: () => unknown }).__squishyAt = () => ({ at: screenOf(body.com), camYaw, grabbed: !!body.grab });
 // ─── begin ───────────────────────────────────────────────────────────────────────────────────────
 if (mode === 'title') startTitle(); else startLevel(levelN);
 resize();

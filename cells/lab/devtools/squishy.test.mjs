@@ -6,7 +6,8 @@
 // holds a splat, a lid lifts what's on it; flour, butter, crumbs, pepper and sprinkles coat it
 // where it touched and have their say; a tap nudges it; sheets (a spoon, a towel, a ramp) hold it
 // as solids do, a thin one isn't fallen through; the first levels are a set, The Preparation
-// Table, every hop in it sure. (node cells/lab/devtools/squishy.test.mjs)
+// Table, every hop in it sure; poked it dents and rolls, held it's drawn out; hung from honey it
+// droops, and climbs up and over. (node cells/lab/devtools/squishy.test.mjs)
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
@@ -211,13 +212,15 @@ console.log(`${kind} righting ok`);
   const plain = slide(coatOn(L.DUST.none)), buttered = slide(coatOn(L.DUST.butter));
   assert.ok(buttered > plain * 3 + 3, `buttered, it slides: ${buttered.toFixed(1)} vs ${plain.toFixed(1)}`);
   {
-    const tw = L.tower('honey', [0, 20, 0], 6.5, 0, () => 0.5);
+    // (a tall jar, its honey well off the floor: so it's the honey's hold that's tried, not a bounce back into it off the floor)
+    const tw = L.tower('honey', [0, 40, 0], 6.5, 0, () => 0.5);
     const lv = { n: 0, chapter: 'stove', towers: [tw], sticks: [], movers: [], shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0), ...tw.shapes] };
-    const d = new B.Dumpling([0, 20, -30], 'dough');
+    const d = new B.Dumpling([0, 40, -30], 'dough');
     for (let i = 0; i < d.n; i++) { d.coat[i] = 0.8; d.coatKind[i] = L.DUST.butter; }
     d.flick([0, 150, 110]);
-    run(d, lv, 3);
-    assert.ok(d.pinned === 0 && d.com[1] < 10, `honey won't hold butter: pinned ${d.pinned}, at y ${d.com[1].toFixed(1)}`);
+    let stuck = 0;
+    run(d, lv, 3, () => { if (d.pinned > 4) stuck++; });
+    assert.ok(stuck === 0 && d.com[1] < 20, `honey won't hold butter: held ${stuck} frames, at y ${d.com[1].toFixed(1)}`);
   }
   // pepper: it sneezes, and the pepper's off it
   {
@@ -270,13 +273,59 @@ console.log(`${kind} righting ok`);
   assert.ok(Math.hypot(f.com[0], f.com[2]) < 3.5 && f.com[1] > 1.5, `the bowl keeps it: at ${f.com.map((v) => v.toFixed(1))}`);
   // (a towel's hanging side: thrown at it, it holds a while, gripping linen)
   const hang = P.surface((u, v) => [(v - 0.5) * 30, u * 30, 0], 12, 12, 0.3, 0, 1, [0, 0, -1]);
-  hang.shapes[0].tack = 1.6; hang.shapes[0].tire = 0.35;
+  hang.shapes[0].tack = 2; hang.shapes[0].tire = 0.6;
   const g = new B.Dumpling([0, 15, -12], 'dough');
   g.flick([0, 30, 110]);
   let held = 0;
   run(g, on(hang.shapes), 5, () => { if (g.contacts > 0 && g.onWall) held += DT; });
-  assert.ok(held > 0.6 && held < 4.5, `it clings to the towel's side a while, then lets go: ${held.toFixed(2)} s`);
+  assert.ok(held > 1.2 && held < 4.5, `it clings to the towel's side a while, then lets go: ${held.toFixed(2)} s`);
   console.log(`sheets ok: on a sheet at ${b.com[1].toFixed(2)}, clung ${held.toFixed(2)} s`);
+}
+
+// ─── touched: a poke where it's poked, a hold that draws the dough out ───────────────────────────
+{
+  const nearest = (d, p) => { let b = 0, bd = 1e9; for (let i = 0; i < d.n; i++) { const dd = Math.hypot(d.x[i * 3] - p[0], d.x[i * 3 + 1] - p[1], d.x[i * 3 + 2] - p[2]); if (dd < bd) { bd = dd; b = i; } } return b; };
+  const poked = (dir) => {
+    const d = new B.Dumpling([0, L.REST_H + 0.3, 0], 'dough'); run(d, flat, 1);
+    const i = nearest(d, [d.com[0] - dir[0] * 5, d.com[1] - dir[1] * 5, d.com[2] - dir[2] * 5]);
+    d.poke([d.x[i * 3], d.x[i * 3 + 1], d.x[i * 3 + 2]], dir);
+    let dent = 0; run(d, flat, 0.2, () => { dent = Math.max(dent, d.deform); });
+    run(d, flat, 2.5);
+    return { went: Math.hypot(d.com[0], d.com[2]), along: d.com[2], dent, up: d.R[4] };
+  };
+  const side = poked([0, 0, 1]), top = poked([0, -1, 0]);
+  assert.ok(side.along > 4 && side.went < 14 && side.dent > 0.1, `poked at its back, it rolls on a little, dented: ${JSON.stringify(side)}`);
+  assert.ok(top.went < 1 && top.dent > 0.1 && top.up > 0.95, `poked from above, it dents where it is: ${JSON.stringify(top)}`);
+  const d = new B.Dumpling([0, L.REST_H + 0.3, 0], 'dough'); run(d, flat, 1);
+  d.grab = { w: d.hold(nearest(d, [0, d.com[1], -5])), pull: [0, 0.6, -3] };
+  run(d, flat, 1);
+  let out = -1e9; for (let j = 0; j < d.n; j++) out = Math.max(out, -d.x[j * 3 + 2]);
+  assert.ok(out > 5 && Math.hypot(d.com[0], d.com[2]) < 0.6, `held and pulled, the dough's drawn out where it's held, the rest stays: out to ${out.toFixed(2)}`);
+  d.grab = null; run(d, flat, 1.5);
+  out = -1e9; for (let j = 0; j < d.n; j++) out = Math.max(out, -d.x[j * 3 + 2]);
+  assert.ok(out < 4.2, `let go, it comes back: ${out.toFixed(2)}`);
+  console.log('touch ok');
+}
+
+// ─── hung from honey it droops; aimed into the jar it climbs up and over onto its top ───────────
+for (const kind of ['dough', 'jelly']) {
+  const tw = L.tower('honey', [0, 20, 0], 6.5, 0, () => 0.5);
+  const lv = { n: 0, chapter: 'stove', towers: [tw], sticks: [], movers: [], kill: -50, ground: 0, decor: [], shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0), ...tw.shapes] };
+  const top = tw.shapes[1].c[1] + tw.shapes[1].hh;
+  const d = new B.Dumpling([0, 20, -30], kind);
+  d.flick([0, 150, 110]);
+  run(d, lv, 2.5);
+  let lo = 1e9, hi = -1e9, py = 0, m = 0;
+  for (let i = 0; i < d.n; i++) { lo = Math.min(lo, d.x[i * 3 + 1]); hi = Math.max(hi, d.x[i * 3 + 1]); }
+  for (let i = 0; i < d.n; i++) if (d.pin[i]) { py += d.x[i * 3 + 1]; m++; }
+  assert.ok(d.clinging && d.limp > 0.8, `${kind} clings, limp`);
+  assert.ok(hi - lo > 5.6 && hi - lo < 11 && d.com[1] < py / m - 0.5, `${kind} droops from where it's stuck: ${(hi - lo).toFixed(1)} tall, its middle ${(py / m - d.com[1]).toFixed(1)} below the patch`);
+  const c = L.climbAim(lv, d.com, d.wallN, 0);
+  assert.ok(c, `${kind}: a climb onto the jar`);
+  d.flick(L.climbLaunch(c.power), 0, d.wallN);
+  run(d, lv, 3);
+  assert.ok(Math.hypot(d.com[0] - tw.jar.c[0], d.com[2] - tw.jar.c[2]) < 6.5 && d.com[1] > top && d.R[4] > 0.9, `${kind} climbed up and over onto the jar's top: at ${d.com.map((v) => v.toFixed(1))}`);
+  console.log(`${kind} climb ok: droop ${(hi - lo).toFixed(1)} tall; up and over at power ${c.power.toFixed(2)}`);
 }
 
 // ─── levels ───────────────────────────────────────────────────────────────────────────────────
@@ -300,8 +349,8 @@ console.log(`${kind} righting ok`);
   assert.ok(t1.shapes.some((sh) => sh.kind === 'sheet' && sh.mat === L.MAT.spoon) && t1.shapes.some((sh) => sh.kind === 'sheet' && sh.mat === L.MAT.towel), 'a spoon and a towel'); assert.equal(C.buildLevel(6).chapter, 'stove'); assert.equal(C.buildLevel(9).chapter, 'mixed');
   assert.ok(C.buildLevel(3).towers.every((t) => !['butter', 'honey', 'lid', 'pan'].includes(t.top)), 'the counter has none of the stove\'s things');
   assert.ok(C.buildLevel(7).movers.length > 0, 'level 7 has a lid');
-  const dusts = new Set(); for (let n = 1; n <= 12; n++) for (const sh of C.buildLevel(n).shapes) if (sh.dust) dusts.add(sh.dust);
-  for (const k of [L.DUST.flour, L.DUST.butter, L.DUST.crumbs, L.DUST.pepper, L.DUST.sprinkles]) assert.ok(dusts.has(k), `something with ${k} on it, in the first twelve levels`);
+  const dusts = new Set(); for (let n = 1; n <= 16; n++) for (const sh of C.buildLevel(n).shapes) if (sh.dust) dusts.add(sh.dust);
+  for (const k of [L.DUST.flour, L.DUST.butter, L.DUST.crumbs, L.DUST.pepper, L.DUST.sprinkles]) assert.ok(dusts.has(k), `something with ${k} on it, in the first sixteen levels`);
   assert.notDeepEqual(C.buildLevel(1).towers.map((t) => t.at), C.buildLevel(2).towers.map((t) => t.at));
   console.log('levels ok');
 }
@@ -323,8 +372,8 @@ console.log(`${kind} righting ok`);
       // (off any top, on the table: on from the last it stood on)
       const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), at = near >= 0 ? near : check;
       if (still > 0.35 && d.canFlick && at >= 0 && at < lv.towers.length - 1) {
-        const a = L.autoFlick(lv, d.com, at, t);
-        d.flick(L.launch(a.yaw, a.power)); still = 0;
+        const a = L.autoFlick(lv, d.com, at, t, d.coated[L.DUST.butter], d.clinging ? d.wallN : null);
+        if (a) { d.flick(a.climb ? L.climbLaunch(a.power) : L.launch(a.yaw, a.power), 0, a.climb ?? null); still = 0; }
       }
     }
     assert.ok(home >= 0, `${kind}: level ${n} home`);

@@ -119,7 +119,7 @@ export function towel(from: V3, dir: V3, side: V3, long: number, xs: Array<[numb
   }, Math.max(12, Math.round(total / 1.2)), Math.max(6, Math.round(long / 1.5)), 0.3, MAT.towel, 1.0, [0, 1, 0], (u, v) => [u * total, v * long]);
   const s = pr.shapes[0];
   // (linen grips: it holds a dumpling on its hanging side a moment or two, then lets it slide)
-  s.tack = 1.6; s.tire = 0.35;
+  s.tack = 2; s.tire = 0.6;
   return pr;
 }
 
