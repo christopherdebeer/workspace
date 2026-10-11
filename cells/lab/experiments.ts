@@ -49,6 +49,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'a specimen', query: '' }, { label: 'amethyst', query: 'mineral=amethyst&seed=12' }, { label: 'fluorite', query: 'mineral=fluorite&seed=5' }, { label: 'zircon', query: 'mineral=zircon&seed=8' }, { label: 'emerald', query: 'mineral=emerald&seed=3' }, { label: 'rhodochrosite', query: 'mineral=rhodochrosite&seed=4' }],
   },
   {
+    id: 'taohua', title: 'Taohua · 桃花', group: 'Woods',
+    blurb: 'A climb up a stone stair through peach blossom to the mountain temples, on forever. After a print: blossoming trees in puffs of stippled pink, black rocks along a zigzag of steps, temples of teal tiles and red columns, a walker in a straw hat, and Bai Juyi\'s lines down the side, a couplet more at each temple. Hold to climb.',
+    page: 'static/taohua.html', preview: 'preview&seed=7', readme: 'static/taohua.md',
+    presets: [{ label: 'climb', query: '' }, { label: 'a hillside', query: 'seed=7' }, { label: 'another', query: 'seed=peach-ford-3' }],
+  },
+  {
     id: 'field', title: 'Field Journal', group: 'Woods',
     blurb: 'The lab in one walk: the Mistwood wood, with the Seals engraving drawn over it, and in it crystals and fungi to find. Come close and open one: its card holds the real Crystals specimen or Hat-thrower, grown from the find, and the journal keeps it.',
     page: 'static/field.html', preview: 'preview&hour=11', readme: 'static/field.md',
