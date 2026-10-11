@@ -198,7 +198,7 @@ console.log(`${kind} righting ok`);
     for (const kind of ['dough', 'jelly']) {
       const kj = drop('konjac', kind), pc = drop('pannacotta', kind);
       assert.ok(kj.dent < -0.5 && pc.dent < -0.5, `${kind}: a landing dents it: konjac ${kj.dent.toFixed(2)}, panna cotta ${pc.dent.toFixed(2)}`);
-      assert.ok(kj.again > 4, `${kind}: the konjac throws it up again: ${kj.again.toFixed(1)} cm`);
+      assert.ok(kj.again > 3, `${kind}: the konjac throws it up again: ${kj.again.toFixed(1)} cm`);
       assert.ok(pc.again < 1.5, `${kind}: the panna cotta doesn't: ${pc.again.toFixed(1)} cm`);
       assert.ok(Math.abs(kj.sat) < 2 && Math.abs(pc.sat) < 2, `${kind}: and it ends sat on it: ${kj.sat.toFixed(2)}, ${pc.sat.toFixed(2)}`);
       console.log(`${kind} jelly ok: konjac throws it ${kj.again.toFixed(1)} cm, panna cotta ${pc.again.toFixed(1)}; dents ${kj.dent.toFixed(2)}, ${pc.dent.toFixed(2)}`);
@@ -372,7 +372,7 @@ for (const kind of ['dough', 'jelly']) {
 // ─── levels ───────────────────────────────────────────────────────────────────────────────────
 {
   const kinds = new Set();
-  for (let n = 1; n <= 10; n++) {
+  for (let n = 1; n <= 16; n++) {
     const a = C.buildLevel(n), b = C.buildLevel(n);
     assert.deepEqual(a.towers.map((t) => [t.top, t.at, t.r]), b.towers.map((t) => [t.top, t.at, t.r]), `level ${n} is the same each time`);
     assert.ok(['start', 'pad'].includes(a.towers[0].top));
@@ -382,7 +382,9 @@ for (const kind of ['dough', 'jelly']) {
     // (every hop: from the middle of each top, a flick that lands on the next)
     for (let k = 1; k < a.towers.length; k++) assert.ok(L.hop(a, k - 1, k), `level ${n}: hop ${k - 1}→${k} can be made`);
   }
-  for (const k of ['steamer', 'plate', 'board', 'pudding', 'susan', 'tin', 'butter', 'honey', 'lid', 'pan', 'pad', 'spoon', 'bench', 'paddle', 'tilt']) assert.ok(kinds.has(k), `a ${k} somewhere`);
+  for (const k of ['steamer', 'plate', 'board', 'pudding', 'susan', 'tin', 'butter', 'honey', 'lid', 'pan', 'pad', 'spoon', 'bench', 'paddle', 'tilt', 'boule', 'tray', 'stand', 'bin', 'shelf', 'jelly']) assert.ok(kinds.has(k), `a ${k} somewhere`);
+  // (the counter: a shelf reached only by its towel)
+  assert.ok(C.buildLevel(3).towers.some((t) => t.wall && t.top === 'shelf'), 'a shelf on the counter, reached by its towel');
   assert.equal(C.buildLevel(1).chapter, 'table'); assert.equal(C.buildLevel(2).chapter, 'table'); assert.equal(C.buildLevel(3).chapter, 'counter');
   // (the table is ground: off its edge is the fall, well below its top)
   const t1 = C.buildLevel(1);

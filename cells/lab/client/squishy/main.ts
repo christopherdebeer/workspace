@@ -314,8 +314,8 @@ void main() {
     rough = .85;
   } else if (id == ${MAT.enamel}) {
     // a bread bin: cream enamel, a navy rim, chipped here and there
-    float chip = smoothstep(.8, .83, noise(vWorld * .6 + 9.));
-    base = mix(vec3(.93, .9, .82), vec3(.08, .1, .2), chip * .8);
+    float chip = smoothstep(.9, .92, noise(vWorld * 1.7 + 9.));
+    base = mix(vec3(.93, .9, .82), vec3(.08, .1, .2), chip * .55);
     rough = .25; coat = 1.;
   } else if (id == ${MAT.tin}) {
     // Printed tea tins: repeating cream blossoms and restrained gold rules.
@@ -1128,7 +1128,7 @@ function room(lv: Level): number[] {
   wall([x0, g, z1], [x0, g, z0], [1, 0, 0]);
   // the counter (or the floor, under a table), to the walls
   const n: V3 = [0, 1, 0];
-  const floor = lv.chapter === 'counter' || lv.chapter === 'table' ? MAT.counter : MAT.hob;
+  const floor = lv.floorMat ?? (lv.chapter === 'counter' || lv.chapter === 'table' ? MAT.counter : MAT.hob);
   for (const [p, uv] of [[[x0, g, z0], [x0, z0]], [[x0, g, z1], [x0, z1]], [[x1, g, z1], [x1, z1]], [[x0, g, z0], [x0, z0]], [[x1, g, z1], [x1, z1]], [[x1, g, z0], [x1, z0]]] as Array<[V3, [number, number]]>) out.push(p[0], p[1], p[2], n[0], n[1], n[2], floor, uv[0], uv[1]);
   return out;
 }

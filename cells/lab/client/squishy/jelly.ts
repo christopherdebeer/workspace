@@ -19,14 +19,14 @@ export interface JellyFeel { hz: number; zeta: number; mass: number; spread: num
 export const FEELS = {
   pannacotta: { hz: 5, zeta: 0.25, mass: 15, spread: 4 },
   pudding: { hz: 7, zeta: 0.06, mass: 15, spread: 3 },
-  konjac: { hz: 8.5, zeta: 0.035, mass: 12, spread: 2 },
+  konjac: { hz: 14, zeta: 0.05, mass: 12, spread: 2 },
   // (a loaf: soft under its crust, and dead)
   boule: { hz: 6, zeta: 0.4, mass: 20, spread: 3 },
 } satisfies Record<string, JellyFeel>;
 
 export interface Jel {
-  /** its middle, its foot, its top at rest, its radius */
-  cx: number; cz: number; base: number; top: number; rad: number;
+  /** its middle, its foot, its top at rest (in the middle), its radius; and how far its top falls away to its rim at rest (a loaf's dome) */
+  cx: number; cz: number; base: number; top: number; rad: number; dome: number;
   /** rings out from the middle, spokes round */
   R: number; S: number;
   /** each node's height off its rest (cm) and how fast it's going: the middle, then ring by ring */
@@ -40,8 +40,11 @@ export interface Jel {
 const STEP = 1 / 600;
 /** how far its top can go: down (of its height), and up (cm) */
 const DOWN = 0.55, UP = 3;
+/** how much more a pressed node is damped, each press */
+export let LOADED = 0.0015;
+export const setLoaded = (v: number) => { LOADED = v; };
 
-export function makeJel(cx: number, cz: number, rad: number, base: number, top: number, feel: JellyFeel, R = 7, S = 24): Jel {
+export function makeJel(cx: number, cz: number, rad: number, base: number, top: number, feel: JellyFeel, dome = 0, R = 7, S = 24): Jel {
   const N = 1 + R * S;
   const lists: number[][] = Array.from({ length: N }, () => []);
   const id = (i: number, j: number) => (i === 0 ? 0 : 1 + (i - 1) * S + (((j % S) + S) % S));
@@ -54,7 +57,7 @@ export function makeJel(cx: number, cz: number, rad: number, base: number, top: 
   const nbrStart = new Int32Array(N + 1), flat: number[] = [];
   for (let k = 0; k < N; k++) { nbrStart[k] = flat.length; flat.push(...lists[k]); }
   nbrStart[N] = flat.length;
-  return { cx, cz, base, top, rad, R, S, z: new Float32Array(N), w: new Float32Array(N), nbrStart, nbr: Int32Array.from(flat), feel: { ...feel }, t: -1 };
+  return { cx, cz, base, top, rad, dome, R, S, z: new Float32Array(N), w: new Float32Array(N), nbrStart, nbr: Int32Array.from(flat), feel: { ...feel }, t: -1 };
 }
 
 /** The nodes about a point and how much each counts (up to four), into idx/wt; how many. */
@@ -74,7 +77,12 @@ function about(j: Jel, dx: number, dz: number): number {
   idx[n] = ring(i0 + 1, s1); wt[n++] = a * b;
   return n;
 }
-/** Its top's height off rest at a point (from its middle), and how fast that's going. */
+/** Its top's height at a point (from its middle), off its middle's rest height: its dome, and where the membrane has it. */
+export function surfAt(j: Jel, dx: number, dz: number): number {
+  const q = Math.min(1, (dx * dx + dz * dz) / (j.rad * j.rad));
+  return heightAt(j, dx, dz) - j.dome * q;
+}
+/** The membrane's height off rest at a point (from its middle). */
 export function heightAt(j: Jel, dx: number, dz: number): number {
   const n = about(j, dx, dz);
   let h = 0;
@@ -91,11 +99,13 @@ function speedAt(j: Jel, dx: number, dz: number): number {
 export function pressJel(j: Jel, x: number, z: number, impulse: number) {
   const n = about(j, x - j.cx, z - j.cz);
   const m = j.feel.mass / j.z.length;
-  for (let k = 0; k < n; k++) j.w[idx[k]] -= (impulse * wt[k]) / m;
+  // (and where it's pressed, it's damped a little more: what sits on a jelly settles, rather than the two of them humming on)
+  for (let k = 0; k < n; k++) { j.w[idx[k]] -= (impulse * wt[k]) / m; j.w[idx[k]] *= 1 - LOADED * wt[k]; }
 }
 /** On to time t, in its own fixed steps. */
 export function stepJel(j: Jel, t: number) {
-  if (j.t < 0 || t - j.t > 0.25) j.t = t;
+  // (first, after a long gap, or a clock started again: from now)
+  if (j.t < 0 || t - j.t > 0.25 || t < j.t) j.t = t;
   const K = (2 * Math.PI * j.feel.hz) ** 2, C = 2 * j.feel.zeta * 2 * Math.PI * j.feel.hz, P = (2 * Math.PI * j.feel.spread) ** 2;
   const lo = -DOWN * (j.top - j.base);
   const { z, w, nbrStart, nbr } = j, N = z.length;
@@ -128,11 +138,11 @@ export function touchJel(j: Jel, px: number, py: number, pz: number, s: number, 
   const dx = px - j.cx, dz = pz - j.cz, rr = Math.hypot(dx, dz);
   const rx = rr > 1e-6 ? dx / rr : 1, rz = rr > 1e-6 ? dz / rr : 0;
   if (rr <= j.rad) {
-    const ht = j.top + heightAt(j, dx, dz);
+    const ht = j.top + surfAt(j, dx, dz);
     if (py >= ht) {
       // (the top as it is here: its slope from either side)
       const e = 0.35;
-      const gx = (heightAt(j, dx + e, dz) - heightAt(j, dx - e, dz)) / (2 * e), gz = (heightAt(j, dx, dz + e) - heightAt(j, dx, dz - e)) / (2 * e);
+      const gx = (surfAt(j, dx + e, dz) - surfAt(j, dx - e, dz)) / (2 * e), gz = (surfAt(j, dx, dz + e) - surfAt(j, dx, dz - e)) / (2 * e);
       const l = Math.hypot(gx, 1, gz);
       const nx = -gx / l, ny = 1 / l, nz = -gz / l;
       const d = s - (py - ht) * ny;
@@ -152,7 +162,7 @@ export function touchJel(j: Jel, px: number, py: number, pz: number, s: number, 
     o.nx = 0; o.ny = -1; o.nz = 0; o.d = d;
     return true;
   }
-  const dr = rr - j.rad, rim = j.top + heightAt(j, dx, dz);
+  const dr = rr - j.rad, rim = j.top + surfAt(j, dx, dz);
   const dh = py > rim ? py - rim : py < j.base ? py - j.base : 0;
   if (dh === 0) {
     if (dr > s + gap) return false;
@@ -176,12 +186,12 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): numbe
   const P = (i: number, s: number): [number, number, number] => {
     const a = (s / S) * Math.PI * 2, r = (i / R) * rad;
     const k = i === 0 ? 0 : 1 + (i - 1) * S + (s % S);
-    return [j.cx + Math.cos(a) * r, j.top + j.z[k], j.cz + Math.sin(a) * r];
+    return [j.cx + Math.cos(a) * r, j.top + j.z[k] - j.dome * (i / R) ** 2, j.cz + Math.sin(a) * r];
   };
   const Nrm = (i: number, s: number): [number, number, number] => {
     const a = (s / S) * Math.PI * 2, r = (i / R) * rad;
     const dx = Math.cos(a) * r, dz = Math.sin(a) * r, e = 0.4;
-    const gx = (heightAt(j, dx + e, dz) - heightAt(j, dx - e, dz)) / (2 * e), gz = (heightAt(j, dx, dz + e) - heightAt(j, dx, dz - e)) / (2 * e);
+    const gx = (surfAt(j, dx + e, dz) - surfAt(j, dx - e, dz)) / (2 * e), gz = (surfAt(j, dx, dz + e) - surfAt(j, dx, dz - e)) / (2 * e);
     const l = Math.hypot(gx, 1, gz);
     return [-gx / l, 1 / l, -gz / l];
   };

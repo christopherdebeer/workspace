@@ -69,9 +69,9 @@ and you're fine, and flick on from there) and falling is going off its edge. The
 until you're home, the count of falls beside it, and your best time for each level is kept. Each
 level opens with its place's name.
 
-Levels 1 and 2 are The Preparation Table (below). 3 and 4 are the counter's towers, longer and
-wider apart, with puddings, tins and the lazy Susan. Level 5 moves to the stovetop, a new
-kitchen with its own things (below); from 9 on, the whole kitchen, mixed.
+Levels 1 and 2 are The Preparation Table (below); 3 and 4, The Counter by the Window (below).
+Level 5 moves to the stovetop, a new kitchen with its own things (below); from 9 on, the whole
+kitchen, mixed.
 
 ## The Preparation Table
 
@@ -87,6 +87,24 @@ plate is tipped up on a teacup on the way: a tilted top, glazed, a little slippe
 The spoon, the towel, the butter and the tipped plate are sheets: surfaces made of triangles,
 with a thickness under them, met exactly as they're drawn. The table, the bench, the board and
 the tins are the solid shapes everything else is made of.
+
+## The Counter by the Window
+
+A butcher-block counter against a tiled wall, a window in it, and the counter is ground (off its
+front is the fall). From a folded cloth: a round loaf on a floury bread board, the loaf soft
+under its crust (a jelly, a dead one: it gives, and doesn't throw you) and crumby, the board
+around it floured, so where you land decides what you pick up; a baking tray with butter melted
+across one corner of it, and a lip all round to stop a slide; a cake stand, its plate sticky
+with hundreds and thousands; the bread bin, deep, out from the wall. Above it, out of reach of
+any flick (a flick goes off at the one angle, so from below a high shelf by a wall, the arc
+meets the wall first), a shelf, a tea towel hung over its front edge: flick at the towel, it
+holds you, and climb up it and over onto the shelf. Fall off the towel and you're back on the
+bread bin, to try again. Home is the golden steamer on the window sill. A knife block (wood: it
+holds you a moment, too) and a crock of wooden spoons stand about. The second time, a konjac
+jelly to bounce on comes before the cake stand, and the shelf is higher.
+
+Every hop is checked as it's laid, the towel's too: a flick from the bread bin that lands
+against the towel, low enough to hold and high enough that a climb from there gets up and over.
 
 ## The tops
 
@@ -135,8 +153,12 @@ Then it springs back, and if it springs back quickly enough (faster than falling
 (2π × its Hz)² over g), it throws you up again, unasked, a moment after you've landed.
 
 Three kinds, by how they give: a **panna cotta** (cream, under a berry coulis) dents and that's
-all; a **mango pudding** comes back with a little hop; a **konjac jelly** (clear pink) is a launch
-pad, a hard landing coming back as a hop of ten centimetres. Each is four numbers: how fast it
+all; a **mango pudding** comes back with a little hop; a **konjac jelly** (clear pink) springs
+back fastest, a hard landing coming back as a hop of five or six centimetres. (Fast, too, so it
+doesn't hum along with the dough, whose own wobble is slower: a jelly that springs back at the
+dough's own pace and the dough on it would bounce each other on and on.) A jelly is glossy and
+moving, so the dumpling's tack hardly holds to it, and where something sits on it, it's damped a
+little more, so it settles. Each is four numbers: how fast it
 springs back (Hz), how much of each wobble it keeps, how heavy it is (the dumpling is 1), and how
 far a dent spreads.
 

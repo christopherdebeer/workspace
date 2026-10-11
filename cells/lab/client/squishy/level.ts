@@ -165,6 +165,8 @@ export interface Level {
   ground: number;
   /** what's drawn that isn't one of the shapes as they'd draw themselves (the props' own meshes, the table's legs), VSTRIDE vertices */
   decor: number[];
+  /** the room's floor, if not the counter's wood */
+  floorMat?: number;
 }
 
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
@@ -304,8 +306,11 @@ export const cyl = (x: number, z: number, r: number, y0: number, y1: number, mat
   bounds({ ...base(), kind: 'cyl', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu });
 export const cap = (a: V3, b: V3, r: number, mat: number, mu = 0.7): Shape => bounds({ ...base(), kind: 'cap', c: a, b, r, mat, mu });
 /** a round jelly from y0 up to y1, its top a membrane that gives (see jelly.ts) */
-export const jelly = (x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85): Shape =>
-  bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu, jel: makeJel(x, z, r, y0, y1, feel) });
+export const jelly = (x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85, dome = 0): Shape =>
+  bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu, tack: JELLY_TACK, jel: makeJel(x, z, r, y0, y1, feel, dome) });
+/** how much the dumpling's tack holds to a jelly: glossy, and moving, it hardly does */
+export let JELLY_TACK = 0.25;
+export const setJellyTack = (v: number) => { JELLY_TACK = v; };
 
 /** How far out each kind's top reaches, from its middle. */
 function size(top: Top, r: Rand): number {
