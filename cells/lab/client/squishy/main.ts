@@ -60,11 +60,12 @@ float fbm(vec3 p) { return noise(p) * .5 + noise(p * 2.03 + 11.) * .25 + noise(p
 /** the room by direction: the counter and floor below, cream walls, a pale ceiling, the window, the sun in it */
 // Diffuse room light is deliberately separate from sharp window reflections.
 vec3 irradiance(vec3 n) {
-  return mix(vec3(.21, .155, .105), vec3(.40, .45, .50), smoothstep(-.65, .85, n.y))
-    + vec3(.16, .145, .115) * max(dot(n, uWin), 0.);
+  // (warm: the wood below throws its colour up, the cream room round it, the window's light)
+  return mix(vec3(.27, .185, .115), vec3(.47, .44, .40), smoothstep(-.65, .85, n.y))
+    + vec3(.19, .16, .115) * max(dot(n, uWin), 0.);
 }
 vec3 env(vec3 d) {
-  vec3 c = mix(vec3(.23, .16, .10), vec3(.52, .57, .62), smoothstep(-.25, .8, d.y));
+  vec3 c = mix(vec3(.29, .2, .12), vec3(.62, .58, .52), smoothstep(-.25, .8, d.y));
   vec3 right = normalize(cross(vec3(0., 1., 0.), uWin));
   vec3 up = cross(uWin, right);
   float forward = dot(d, uWin);
@@ -74,6 +75,8 @@ vec3 env(vec3 d) {
   vec2 frame = 1. - smoothstep(vec2(.34, .48) - aa, vec2(.34, .48) + aa, abs(pane));
   float mullion = smoothstep(.016, .029, abs(pane.x)) * smoothstep(.016, .029, abs(pane.y));
   c += vec3(1., .95, .85) * 2.5 * frame.x * frame.y * mix(.30, 1., mullion) * step(.1, forward);
+  // (and the sun, a glint)
+  c += uKeyCol * pow(max(dot(d, uKey), 0.), 500.) * 2.;
   return c;
 }
 // Surface-gradient bump: world-space relief without a tangent attribute or extra texture reads.
@@ -540,7 +543,7 @@ void main() {
   float pleatAmt = smoothstep(.05, .7, h) * (1. - smoothstep(.88, 1., h));
   float crease = pleatAmt * pow(.5 - .5 * cos(12. * th + 4. * h), 3.);
   float flour = smoothstep(.72, .8, noise(q * 26.)) * .5 + smoothstep(.6, .9, noise(q * 5. + 3.)) * .25;
-  vec3 base = mix(vec3(.91, .83, .69), vec3(.98, .95, .87), flour * .6) * (1. - .18 * crease);
+  vec3 base = mix(vec3(.87, .77, .61), vec3(.95, .91, .83), flour * .6) * (1. - .22 * crease);
   base *= 1. - .14 * smoothstep(.2, 1., -h);
   // the face, on the front of its rest shape (+z), a little above its middle
   vec3 d = normalize(q * vec3(1., 1.35, 1.));
