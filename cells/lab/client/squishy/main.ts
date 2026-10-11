@@ -501,7 +501,8 @@ void main() {
   vec3 amb = irradiance(n) * cavity;
   vec3 c = base * (1. - metal) * (1. - Fk) * (amb + uKeyCol * NoL * sh) + uKeyCol * spec * sh;
   vec3 Fr = F0 + (max(vec3(1. - rough), F0) - F0) * pow(1. - NoV, 5.);
-  c += Fr * mix(env(reflect(-V, n)), irradiance(n), smoothstep(.1, .8, rough)) * (1. - .6 * rough * (1. - metal));
+  // (the room's window, sharp, only in what's glossy: a rougher surface takes the room's soft light, not a window that isn't where it shows)
+  c += Fr * mix(env(reflect(-V, n)), irradiance(n), smoothstep(.05, .4, rough)) * (1. - .6 * rough * (1. - metal));
   c += base * emit * (amb + uKeyCol * .5);
   if (coat > .01) {
     float Fc = (.04 + .96 * pow(1. - NoV, 5.)) * coat;
@@ -1104,7 +1105,7 @@ function startLevel(n: number, quiet = false) {
   body = new Dumpling([at[0], at[1] + REST_H + 2, at[2]], skin);
   prevX = new Float32Array(body.x);
   check = 0; falls = 0; clock = 0; home = -1; still = 0; fallenAt = -1;
-  camYaw = Math.atan2(lv.towers[1].at[0] - at[0], lv.towers[1].at[2] - at[2]);
+  camYaw = lv.walls?.length ? wallYaw(lv.towers[1].at[0] - at[0]) : Math.atan2(lv.towers[1].at[0] - at[0], lv.towers[1].at[2] - at[2]);
   camTarget = [at[0], at[1] + 4, at[2]];
   steamSeed = 0;
   puffs.length = 0;
@@ -1229,7 +1230,7 @@ function updateCamera(dt: number) {
   // (turned toward the next top, when it's sat still and no one's turning the camera)
   if (!pull && !userCam && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
     const nx = lv.towers[Math.min(check + 1, lv.towers.length - 1)];
-    const wantYaw = Math.atan2(nx.at[0] - body.com[0], nx.at[2] - body.com[2]);
+    const wantYaw = lv.walls?.length ? wallYaw(nx.at[0] - body.com[0]) : Math.atan2(nx.at[0] - body.com[0], nx.at[2] - body.com[2]);
     let dy = wantYaw - camYaw;
     dy = Math.atan2(Math.sin(dy), Math.cos(dy));
     camYaw += dy * (1 - Math.exp(-dt * 1.4));
@@ -1252,6 +1253,13 @@ function updateCamera(dt: number) {
   for (let i = 0; i < 3; i++) eye[i] += (wantEye[i] - eye[i]) * (1 - Math.exp(-dt * (off ? 20 : 8)));
   keepOut(eye, camTarget);
 }
+/**
+ * Along a counter against a wall, the camera looks at the wall, a little the way the course goes
+ * on (dx: how far on the next top is, along the counter): three-quarters on, the wall behind it all,
+ * what's ahead to one side and what's climbed face on; not round at the next top, which in a place
+ * is as often in the way.
+ */
+function wallYaw(dx: number): number { return Math.atan2(0.62 * (dx < 0 ? -1 : 1), 0.78); }
 /** how near the camera comes to a wall (cm) */
 const CAM_R = 4;
 /**
