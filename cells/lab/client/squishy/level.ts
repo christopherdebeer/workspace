@@ -18,6 +18,7 @@
  * across.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
+import { FEELS, makeJel, touchJel, type Jel, type JellyFeel } from './jelly';
 
 export type V3 = [number, number, number];
 export const G = 981;
@@ -37,6 +38,10 @@ export const MAT = {
   butter: 17, honey: 18, glass: 19, pot: 20, pan: 21, hob: 22, burner: 23, knob: 24,
   // (25–29: what's on a top, drawn over it: 24 + its dust)
   spoon: 30, towel: 31, gingham: 32, floral: 33, smear: 34, legs: 35,
+  // (jellies: a panna cotta with its coulis, a konjac jelly)
+  pannacotta: 36, konjac: 37,
+  // (the counter: a loaf's crust, a bread bin's enamel)
+  bread: 38, enamel: 39,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -59,7 +64,7 @@ export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
 export type Chapter = 'table' | 'counter' | 'stove' | 'mixed';
 export const chapterOf = (n: number): Chapter => (n <= 2 ? 'table' : n <= 4 ? 'counter' : n <= 8 ? 'stove' : 'mixed');
 /** what each kitchen is called, as its title card says */
-export const CHAPTER_NAME: Record<Chapter, string> = { table: 'The Preparation Table', counter: 'The Counter', stove: 'The Stovetop', mixed: 'The Whole Kitchen' };
+export const CHAPTER_NAME: Record<Chapter, string> = { table: 'The Preparation Table', counter: 'The Counter by the Window', stove: 'The Stovetop', mixed: 'The Whole Kitchen' };
 
 /**
  * A sheet of triangles with a thickness: a spoon, a towel, a tilted plate. Its top is the
@@ -84,9 +89,11 @@ const cellKey = (ix: number, iy: number, iz: number) => ((ix * 73856093) ^ (iy *
 
 /** A solid the dumpling meets: a box (turned about the vertical), an upright cylinder, a capsule, or a sheet. */
 export interface Shape {
-  kind: 'box' | 'cyl' | 'cap' | 'sheet';
+  kind: 'box' | 'cyl' | 'cap' | 'sheet' | 'jelly';
   /** a sheet's triangles */
   sheet?: Sheet;
+  /** a jelly's top, as it moves (see jelly.ts) */
+  jel?: Jel;
   /** box and cylinder: the centre; capsule: one end */
   c: V3;
   /** capsule: the other end */
@@ -113,7 +120,8 @@ export interface Shape {
   hi: V3;
 }
 export type Top = 'start' | 'steamer' | 'plate' | 'board' | 'pudding' | 'susan' | 'tin' | 'goal' | 'butter' | 'honey' | 'lid' | 'pan'
-  | 'pad' | 'spoon' | 'bench' | 'paddle' | 'tilt';
+  | 'pad' | 'spoon' | 'bench' | 'paddle' | 'tilt'
+  | 'boule' | 'tray' | 'stand' | 'bin' | 'block' | 'shelf' | 'sill' | 'jelly';
 export interface Tower {
   top: Top;
   /** the middle of its top surface (for honey: the place against its side where you stick) */
@@ -130,6 +138,13 @@ export interface Tower {
   exitYaw?: number;
   /** what's drawn under it on the stove: a burner, this wide */
   burner?: number;
+  /**
+   * reached by a wall: too high to flick onto, it's reached by landing against what hangs or
+   * stands below it (these shapes, a side that holds), and climbing up and over from there; and
+   * where on that wall to aim
+   */
+  wall?: Shape[];
+  wallAt?: V3;
 }
 export interface Level {
   n: number;
@@ -142,6 +157,8 @@ export interface Level {
   sticks: Shape[];
   /** the shapes that move (lids), for the drawing and for moving them */
   movers: Shape[];
+  /** the jellies: their tops move as they're pressed, and are drawn as they are */
+  jellies?: Shape[];
   /** below this, it's fallen (to the counter, or off the table) */
   kill: number;
   /** the room's floor, for the drawing */
@@ -162,6 +179,11 @@ function bounds(s: Shape): Shape {
   } else if (s.kind === 'cap') {
     s.lo = [Math.min(s.c[0], s.b[0]) - s.r, Math.min(s.c[1], s.b[1]) - s.r, Math.min(s.c[2], s.b[2]) - s.r];
     s.hi = [Math.max(s.c[0], s.b[0]) + s.r, Math.max(s.c[1], s.b[1]) + s.r, Math.max(s.c[2], s.b[2]) + s.r];
+  } else if (s.kind === 'jelly') {
+    const j = s.jel!;
+    s.lo = [j.cx - j.rad, j.base, j.cz - j.rad];
+    // (as high as its top can go)
+    s.hi = [j.cx + j.rad, j.top + 3.5, j.cz + j.rad];
   } else {
     const t = s.sheet!.tris, th = s.sheet!.th;
     s.lo = [Infinity, Infinity, Infinity]; s.hi = [-Infinity, -Infinity, -Infinity];
@@ -281,6 +303,9 @@ export const box = (c: V3, h: V3, yaw: number, mat: number, mu = 0.8): Shape => 
 export const cyl = (x: number, z: number, r: number, y0: number, y1: number, mat: number, mu = 0.8): Shape =>
   bounds({ ...base(), kind: 'cyl', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu });
 export const cap = (a: V3, b: V3, r: number, mat: number, mu = 0.7): Shape => bounds({ ...base(), kind: 'cap', c: a, b, r, mat, mu });
+/** a round jelly from y0 up to y1, its top a membrane that gives (see jelly.ts) */
+export const jelly = (x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85): Shape =>
+  bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu, jel: makeJel(x, z, r, y0, y1, feel) });
 
 /** How far out each kind's top reaches, from its middle. */
 function size(top: Top, r: Rand): number {
@@ -351,7 +376,7 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       shapes.push(cyl(x, z, rad * 0.5, 0, y - 1.6, MAT.tin));
       const pl = cyl(x, z, rad, y - 1.6, y, MAT.porcelain, 0.55);
       const d = coin(0x2c);
-      if (d < 0.3) pl.dust = DUST.crumbs; else if (d < 0.55) pl.dust = DUST.pepper;
+      if (d < 0.4) pl.dust = DUST.crumbs; else if (d < 0.65) pl.dust = DUST.pepper;
       shapes.push(pl);
       break;
     }
@@ -360,8 +385,8 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       const ux = Math.cos(yaw), uz = -Math.sin(yaw);
       for (const s of [-1, 1]) shapes.push(cyl(x + ux * 9 * s, z + uz * 9 * s, 4.5, 0, y - 2.4, MAT.jar));
       const bd = box([x, y - 1.2, z], [15, 1.2, 9], yaw, MAT.board, 0.85);
-      // (most boards are floury)
-      if (coin(0x1f) < 0.65) bd.dust = DUST.flour;
+      // (a board's for rolling out on: floury)
+      bd.dust = DUST.flour;
       shapes.push(bd);
       landR = 8;
       box2 = [14, 8];
@@ -371,11 +396,11 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       // a mango pudding on a saucer on a tin: it gives, and throws you back up
       shapes.push(cyl(x, z, 5.5, 0, y - 6.2, MAT.tin));
       shapes.push(cyl(x, z, 10.5, y - 6.2, y - 5.4, MAT.porcelain, 0.5));
-      const p = cyl(x, z, rad, y - 5.4, y, MAT.jelly, 0.85);
-      p.bounce = 0.3;
+      // (it gives: its top dents where you land and springs back, and may throw you up again)
+      const p = jelly(x, z, rad, y - 5.4, y, MAT.jelly, FEELS.pudding);
       // (some with hundreds and thousands on top)
-      if (coin(0x5e) < 0.5) p.dust = DUST.sprinkles;
-      shapes.push(bounds(p));
+      if (coin(0x5e) < 0.7) p.dust = DUST.sprinkles;
+      shapes.push(p);
       landR = rad - 1.5;
       break;
     }
@@ -475,6 +500,7 @@ export interface Hit { nx: number; ny: number; nz: number; d: number; vx: number
 export function touch(sh: Shape, px: number, py: number, pz: number, s: number, o: Hit, gap = 0): boolean {
   o.vx = 0; o.vy = 0; o.vz = 0;
   if (sh.kind === 'sheet') return touchSheet(sh.sheet!, px, py, pz, s, o, gap);
+  if (sh.kind === 'jelly') return touchJel(sh.jel!, px, py, pz, s, o, gap);
   const dx = px - sh.c[0], dy = py - sh.c[1], dz = pz - sh.c[2];
   if (sh.kind === 'box') {
     const cy = Math.cos(sh.yaw), sy = Math.sin(sh.yaw);
@@ -690,6 +716,12 @@ export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cl
   // (on a lid, or onto one, not while it's rattling: wait for it to settle)
   const rattles = (k: number, at: number) => { const l = lv.towers[k].land?.[0].lift; return !!l && liftAt(l, at).on; };
   if (rattles(at, t) && onTop(lv.towers[at], from, 1)) return null;
+  // (the next is reached by its wall: clinging to it, up and over; else at it)
+  const nx0 = lv.towers[at + 1];
+  if (nx0?.wall) {
+    if (cling) { const c = climbAim(lv, from, cling, at + 1, t); if (c) return { yaw: 0, power: c.power, climb: cling }; }
+    else { const w = aimWall(lv, from, at + 1, t); if (w) return { yaw: w.yaw, power: w.power }; }
+  }
   const tries = [at + 1, lv.towers[at].jar ? -1 : at, at + 2].filter((k) => k >= 0 && k < lv.towers.length);
   for (const k of tries) {
     const a = aim(lv, from, k, t);
@@ -717,6 +749,32 @@ export function climbAim(lv: Level, from: V3, n: V3, k: number, t = 0): { power:
   }
   return lo < 0 ? null : { power: lo + (hi - lo) * 0.4 };
 }
+/**
+ * A flick from `from` that lands against tower k's wall (its `wall`: a side that holds, below its
+ * top), low enough on it to cling and high enough that a climb from there gets up and over onto
+ * the top: the flick (yaw, strength), where it lands on the wall and which way the wall faces,
+ * and the climb's strength; null if there's none.
+ */
+export function aimWall(lv: Level, from: V3, k: number, t = 0): { yaw: number; power: number; at: V3; n: V3; climb: number } | null {
+  const tw = lv.towers[k];
+  if (!tw.wall || !tw.wallAt) return null;
+  const yaw = Math.atan2(tw.wallAt[0] - from[0], tw.wallAt[2] - from[2]);
+  const good: Array<{ power: number; at: V3; n: V3; climb: number }> = [];
+  for (let p = 0.05; p <= 1.0001; p += 0.02) {
+    const pa = path(lv, from, launch(yaw, p), 3, t);
+    const h = pa.hit;
+    if (!h || !tw.wall.includes(h.shape) || Math.abs(h.n[1]) > 0.5) { if (good.length) break; continue; }
+    const l = Math.hypot(h.n[0], h.n[2]);
+    const n: V3 = [h.n[0] / l, 0, h.n[2] / l];
+    // (where it hangs once it's stuck: a little down from where its middle met the wall)
+    const hang: V3 = [h.p[0] + n[0] * 0.4, h.p[1] - 1, h.p[2] + n[2] * 0.4];
+    const c = climbAim(lv, hang, n, k, t + pa.t);
+    if (c) good.push({ power: p, at: hang, n, climb: c.power }); else if (good.length) break;
+  }
+  if (!good.length) return null;
+  const g = good[Math.floor(good.length * 0.4)];
+  return { yaw, ...g };
+}
 /** Whether a point is over a shape's top, at least so far in from its edge. */
 function inside(s: Shape, p: V3, margin: number): boolean {
   if (s.kind === 'cyl') return Math.hypot(p[0] - s.c[0], p[2] - s.c[2]) < s.r - margin;
@@ -743,6 +801,13 @@ export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[]
   const lid = b.land?.[0].lift ?? a.land?.[0].lift;
   const times = lid ? [0, 1, 2, 3, 4, 5].map((i) => ((i / 6 + 1 - lid.phase) % 1) * lid.period) : [0];
   const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3] : [f]; };
+  // (onto a top reached by its wall: against the wall, and up)
+  if (b.wall) {
+    const f = standing(lv, j, 0), w = aimWall(lv, f, k, 0);
+    if (!w) return null;
+    const up = path(lv, w.at, climbLaunch(w.climb), 3, 0, w.n);
+    return { t: 0, flights: [path(lv, f, launch(w.yaw, w.power), 3, 0).pts, up.pts] };
+  }
   for (const t of times) {
     const fs = froms(t), aims = fs.map((f) => aim(lv, f, k, t));
     if (aims.every(Boolean)) return { t, flights: fs.map((f, i) => path(lv, f, launch(aims[i]!.yaw, aims[i]!.power), 3, t).pts) };
@@ -782,10 +847,10 @@ export function buildTowers(n: number): Level {
   const lv: Level = { n, chapter, towers: [], shapes: [counter], sticks: [], movers: [], kill: RADIUS * 2.2, ground: 0, decor: [] };
   const add = (tw: Tower) => {
     lv.towers.push(tw); lv.shapes.push(...tw.shapes);
-    for (const s of tw.shapes) if (s.lift) lv.movers.push(s);
+    for (const s of tw.shapes) if (s.lift) lv.movers.push(s); else if (s.jel) (lv.jellies ??= []).push(s);
     if (chapter !== 'counter' && !['honey', 'board', 'lid', 'pan'].includes(tw.top)) tw.burner = (tw.top === 'butter' ? 5 : tw.shapes[0].r) + 3.5;
   };
-  const remove = (tw: Tower) => { lv.towers.pop(); lv.shapes.length -= tw.shapes.length; lv.movers = lv.movers.filter((m) => !tw.shapes.includes(m)); };
+  const remove = (tw: Tower) => { lv.towers.pop(); lv.shapes.length -= tw.shapes.length; lv.movers = lv.movers.filter((m) => !tw.shapes.includes(m)); if (lv.jellies) lv.jellies = lv.jellies.filter((m) => !tw.shapes.includes(m)); };
   add(tower('start', [0, 16, 0], size('start', r), 0, r));
   const count = 6 + Math.min(10, n);
   // (the way each hop made sure of flies: nothing later is stood in it)

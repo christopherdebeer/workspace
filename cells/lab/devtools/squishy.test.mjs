@@ -16,6 +16,7 @@ const B = await load('../client/squishy/body.ts');
 const M = await load('../client/squishy/mesh.ts');
 const C = await load('../client/squishy/course.ts');
 const P = await load('../client/squishy/props.ts');
+const J = await load('../client/squishy/jelly.ts');
 const DT = 1 / 60;
 const flat = { n: 0, chapter: 'counter', towers: [], sticks: [], movers: [], shapes: [L.box([0, -5, 0], [200, 5, 200], 0, 0)] };
 const run = (d, lv, secs, each) => { for (let t = 0; t < secs; t += DT) { d.step(lv, DT, t); each?.(t); } };
@@ -177,6 +178,32 @@ console.log(`${kind} righting ok`);
     assert.ok(left, 'flicked, it lets go');
     console.log(`honey ok: stuck at ${stuckAt.toFixed(2)} s`);
   }
+  // a jelly: dropped on, it dents where it lands and springs back; a springy one throws it up again, unasked; a panna cotta doesn't
+  {
+    const drop = (feel, kind) => {
+      const jl = L.jelly(0, 0, 9, 0, 6, L.MAT.jelly, J.FEELS[feel]);
+      const lv = { n: 0, chapter: 'counter', towers: [], sticks: [], movers: [], jellies: [jl], kill: -50, ground: 0, decor: [], shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0), jl] };
+      const d = new B.Dumpling([0, 6 + L.REST_H + 40, 0], kind);
+      const rest = 6 + L.REST_H;
+      let dent = 0, landed = -1, again = 0, air = true;
+      run(d, lv, 2.5, (t) => {
+        dent = Math.min(dent, jl.jel.z[0]);
+        const nowAir = d.contacts === 0;
+        if (air && !nowAir && landed < 0) landed = t;
+        if (landed >= 0 && nowAir && t > landed + 0.05) again = Math.max(again, d.com[1] - rest);
+        air = nowAir;
+      });
+      return { dent, again, sat: d.com[1] - rest, still: speed(d) };
+    };
+    for (const kind of ['dough', 'jelly']) {
+      const kj = drop('konjac', kind), pc = drop('pannacotta', kind);
+      assert.ok(kj.dent < -0.5 && pc.dent < -0.5, `${kind}: a landing dents it: konjac ${kj.dent.toFixed(2)}, panna cotta ${pc.dent.toFixed(2)}`);
+      assert.ok(kj.again > 4, `${kind}: the konjac throws it up again: ${kj.again.toFixed(1)} cm`);
+      assert.ok(pc.again < 1.5, `${kind}: the panna cotta doesn't: ${pc.again.toFixed(1)} cm`);
+      assert.ok(Math.abs(kj.sat) < 2 && Math.abs(pc.sat) < 2, `${kind}: and it ends sat on it: ${kj.sat.toFixed(2)}, ${pc.sat.toFixed(2)}`);
+      console.log(`${kind} jelly ok: konjac throws it ${kj.again.toFixed(1)} cm, panna cotta ${pc.again.toFixed(1)}; dents ${kj.dent.toFixed(2)}, ${pc.dent.toFixed(2)}`);
+    }
+  }
   // a lid: shut, mostly; on its cycle the steam rattles it, and what's on it is jolted, and stays on
   {
     const tw = L.tower('lid', [0, 40, 0], 11, 0, r);
@@ -209,6 +236,17 @@ console.log(`${kind} righting ok`);
     const was = d.coated[k];
     run(d, flat, 8);
     assert.ok(d.coated[k] < was * 0.8, `wears off: ${was.toFixed(2)} → ${d.coated[k].toFixed(2)}`);
+  }
+  // landed hard in flour, it splashes up its sides: some of what's above its middle (what's seen) is floured too
+  {
+    const d = new B.Dumpling([0, L.REST_H + 30, 0], 'dough');
+    run(d, dusted(L.DUST.flour), 1);
+    let up = 0, above = 0;
+    for (let i = 0; i < d.n; i++) if (d.x[i * 3 + 1] > d.com[1] - 0.3) { above++; if (d.coat[i] > 0.1) up++; }
+    const soft = coatOn(L.DUST.flour, 1);
+    let up0 = 0; for (let i = 0; i < soft.n; i++) if (soft.x[i * 3 + 1] > soft.com[1] - 0.3 && soft.coat[i] > 0.1) up0++;
+    assert.ok(up > above * 0.15 && up > up0 * 2, `a hard landing in flour floured its sides: ${up} of ${above} above its middle (set down gently: ${up0})`);
+    console.log(`splash ok: ${up} of ${above} above its middle floured`);
   }
   // butter: it slides much further, and honey won't hold it
   const slide = (d) => { d.flick(L.launch(0, 0.6)); let land = null, fly = false; run(d, { ...flat, shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0, 0.5)] }, 3, () => { if (d.contacts === 0) fly = true; if (!land && fly && d.contacts > 0) land = [...d.com]; }); return d.com[2] - land[2]; };

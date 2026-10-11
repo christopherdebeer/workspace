@@ -93,7 +93,8 @@ the tins are the solid shapes everything else is made of.
 - **Steamers**: bamboo baskets stacked down to the counter, each with its rim. Good grip.
 - **A plate** on a tea tin: glazed porcelain, a little slippery. Land soft, or slide off.
 - **A chopping board** laid across two jars: wide, and grippy.
-- **A mango pudding** on a saucer: it gives, and throws you back up a little.
+- **A mango pudding** on a saucer: a jelly (below). It dents where you land and springs back,
+  and a hard landing comes back as a second little hop you didn't ask for.
 - **A lazy Susan**: lacquered, turning. It carries you round; flick from where it's taken you.
 - **A tea tin**: tall, with a small top.
 - **Chopsticks**, now and then, laid as a bridge between two tops near the same height.
@@ -123,23 +124,45 @@ is checked when it's made: from the middle of each top there is a flick that lan
 onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too. Playing
 itself, it waits out a lid's rattle before it flicks from it or onto it.
 
+## Jellies
+
+A jelly gives for real. Its top is a membrane: nodes on rings and spokes out from its middle, each
+held to its height by a spring, damped, and drawn toward its neighbours, so a dent spreads and
+ripples. Where the dumpling presses, the jelly is pushed down as hard as it pushes back (its share
+of the dumpling's weight, by how fast it was pushed out), so it dents where you land and where you
+sit, deeper at a hard landing, and tilts if you land near its edge, which throws you off sideways.
+Then it springs back, and if it springs back quickly enough (faster than falling: the dent times
+(2π × its Hz)² over g), it throws you up again, unasked, a moment after you've landed.
+
+Three kinds, by how they give: a **panna cotta** (cream, under a berry coulis) dents and that's
+all; a **mango pudding** comes back with a little hop; a **konjac jelly** (clear pink) is a launch
+pad, a hard landing coming back as a hop of ten centimetres. Each is four numbers: how fast it
+springs back (Hz), how much of each wobble it keeps, how heavy it is (the dumpling is 1), and how
+far a dent spreads.
+
+`?bench=jelly` is the jelly bench: the three of them in a row on a table, between the cloth and
+home, and a panel to try them: pick one, change its four numbers as you watch, and drop the
+dumpling on it from so high, again and again.
+
 ## What gets on it
 
 Some tops have something on them that comes off on the dumpling where it touches, and stays
 there, on that part of it, wearing off in time and shaken off by a hard landing; while it's on,
 it has its say in how it lands:
 
-- **Flour** (on half the chopping boards): dry. It grips better, and loses its own tack, so it
+- **Flour** (on every chopping board): dry. It grips better, and loses its own tack, so it
   won't hold to a wall.
 - **Butter** (the butter dish): slippery. It slides far on anything, can't hold a wall, and
   honey won't hold a buttered patch: a buttered dumpling thrown at a jar slides off it.
-- **Crumbs** (some plates): rough. It bounces where it lands, and takes longer to settle.
-- **Pepper** (some plates): it sneezes, a little while after, a hop any way, and the pepper's
+- **Crumbs** (two plates in five): rough. It bounces where it lands, and takes longer to settle.
+- **Pepper** (one plate in four): it sneezes, a little while after, a hop any way, and the pepper's
   off it. On a small top, mind.
-- **Hundreds and thousands** (some puddings): sweet and sticky. More tack: it holds walls
+- **Hundreds and thousands** (most puddings): sweet and sticky. More tack: it holds walls
   better.
 
-You can see all of it: the flour's dusting, thicker in the creases, butter's yellow sheen,
+It's picked up where it touches, and a hard landing into it splashes it up its sides, as far up
+as it came down hard: set down gently, only its bottom is floured; dropped from a height, most of
+it. You can see all of it: the flour's dusting, whiter and chalkier than the dough, in clumps, thicker in the creases, butter's yellow sheen,
 crumbs stuck on in lumps, pepper's specks, the sprinkles' coloured rods, each on the part that
 touched, riding its wobble. The first of each is named at the bottom when you pick it up.
 
@@ -214,5 +237,6 @@ The lids move: they're drawn where the steam has them, with a puff of steam out 
 each jump and a rattle you hear when you're near. The honey jar is glass, drawn after
 everything else and seen through, the honey in it lit from within.
 
-`?level=3` starts a level (5 to 8 are the stove); `?skin=dough` the dough; `?auto` lets it play
+`?level=3` starts a level (5 to 8 are the stove); `?bench=jelly` the jelly bench; `?bench=coats` a row of each thing that comes off on it, to land
+in; `?skin=dough` the dough; `?auto` lets it play
 itself.

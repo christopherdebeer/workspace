@@ -14,6 +14,7 @@
  * flies a plain parabola: the aiming line shows where it will go.
  */
 import { CLIMB_CLEAR, CLIMB_IN, DUST, DUSTS, G, RADIUS, moveShapes, near, touch, type Dust, type Hit, type Level, type Shape, type V3 } from './level';
+import { pressJel, stepJel } from './jelly';
 
 /** small steps a frame */
 export const SUB = 10;
@@ -554,6 +555,8 @@ export class Dumpling {
     const speed = Math.hypot(...this.vcom);
     near(lv, this.com, RADIUS * 1.8 + speed * dt + 1, this.nearby);
     const o = this.hit;
+    // (a landing into something dusty: where, how hard, and what)
+    let spN = 0, spX = 0, spY = 0, spZ = 0, spK = 0, spV = 0;
     let contacts = 0, wall = false, impact = 0, nyS = 0, floor = 0, held = 0, onHoney = false, tire = 1, pinnedS = 0, fx = 0, fy = 0, fz = 0;
     const tackOn = this.sinceFlick > 0.12 && !this.climb;
     let wx = 0, wz = 0;
@@ -563,6 +566,7 @@ export class Dumpling {
     for (let s = 0; s < SUB; s++) {
       const t = time + s * h;
       if (lv.movers.length) moveShapes(lv, t);
+      if (lv.jellies) for (const jl of lv.jellies) stepJel(jl.jel!, t);
       for (let i = 0; i < n * 3; i++) {
         if (i % 3 === 1) v[i] -= G * h;
         p[i] = x[i] + v[i] * h;
@@ -579,6 +583,8 @@ export class Dumpling {
           if (!touch(sh, p[i3], p[i3 + 1], p[i3 + 2], SKIN, o, STICK)) continue;
           if (o.d > 0) {
             p[i3] += o.nx * o.d; p[i3 + 1] += o.ny * o.d; p[i3 + 2] += o.nz * o.d;
+            // (a jelly is pushed back as hard as it pushes: its share of the dumpling's mass, by how fast it was pushed out)
+            if (sh.jel && o.ny > 0.3) pressJel(sh.jel, p[i3], p[i3 + 2], (o.d * o.ny) / h / n);
             const vn = (v[i3] - o.vx) * o.nx + (v[i3 + 1] - o.vy) * o.ny + (v[i3 + 2] - o.vz) * o.nz;
             if (cf[i] !== 1 || o.d > cd[i]) {
               cn[i3] = o.nx; cn[i3 + 1] = o.ny; cn[i3 + 2] = o.nz;
@@ -644,6 +650,7 @@ export class Dumpling {
           }
           if (cf[i] === 1) {
             if (-cv0[i] > impact) impact = -cv0[i];
+            if (cdust[i] && -cv0[i] > 60) { spN++; spX += p[i3]; spY += p[i3 + 1]; spZ += p[i3 + 2]; spK = cdust[i]; spV = Math.max(spV, -cv0[i]); }
             if (bn > 0 && cv0[i] < -40) vn = Math.max(vn, -cv0[i] * bn);
           }
           // (dough's tack: drawn to what it touches, unless it's leaving it fast)
@@ -720,7 +727,19 @@ export class Dumpling {
     // the coatings wear off in time; a hard landing shakes some off; pepper brings on a sneeze
     this.shook = DUST.none; this.sneezed = false;
     const sums = [0, 0, 0, 0, 0, 0];
-    const shake = impact > 150 ? Math.min(1, (impact - 150) / 250) : 0;
+    // (landed hard in it, it splashes up its sides, as far as it came down hard: so it's seen, and not only underneath)
+    if (spN > 0) {
+      const sx = spX / spN, sy = spY / spN, sz = spZ / spN, R = Math.min(RADIUS * 1.5, 1.5 + spV / 110), k0 = 0.7 * Math.min(1, spV / 220);
+      for (let i = 0; i < n; i++) {
+        const dd = Math.hypot(x[i * 3] - sx, x[i * 3 + 1] - sy, x[i * 3 + 2] - sz);
+        if (dd >= R) continue;
+        const a = k0 * (1 - dd / R);
+        if (coatKind[i] !== spK) { if (coat[i] > a) continue; coatKind[i] = spK; coat[i] = 0; }
+        coat[i] = Math.min(1, coat[i] + a);
+      }
+    }
+    // (a hard landing shakes off what's on it, but not what it's just landed in)
+    const shake = impact > 150 && spN === 0 ? Math.min(1, (impact - 150) / 250) : 0;
     for (let i = 0; i < n; i++) {
       if (coat[i] <= 0) continue;
       const k = coatKind[i] as Dust, d = DUSTS[k];

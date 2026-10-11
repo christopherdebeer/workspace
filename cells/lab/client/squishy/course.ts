@@ -10,7 +10,8 @@
  * the towers' are; if a jitter won't do, another is tried, and the set as drawn always does.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
-import { DUST, MAT, box, buildTowers, chapterOf, cyl, hop, tower, type Level, type Shape, type Tower, type V3 } from './level';
+import { DUST, MAT, box, buildTowers, chapterOf, cyl, hop, jelly, tower, type Level, type Shape, type Tower, type V3 } from './level';
+import { FEELS } from './jelly';
 import { box as drawBox, drawShapes } from './mesh';
 import { smear, spoon, tiltPlate, towel, type Prop } from './props';
 
@@ -95,7 +96,11 @@ function layTable(n: number, jit: number, r: Rand): Level {
   const goal = tower('goal', [tin.at[0] + 24 + J(3), 21 + J(1), tin.at[2] + 13 + J(3)], 13, 0, r);
   stop(goal);
 
-  // the table under it all, to a margin past everything; its legs down to the floor
+  underTable(lv);
+  return lv;
+}
+/** The table under it all, to a margin past everything; its legs down to the floor. */
+function underTable(lv: Level) {
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (const s of lv.shapes) { x0 = Math.min(x0, s.lo[0]); x1 = Math.max(x1, s.hi[0]); z0 = Math.min(z0, s.lo[2]); z1 = Math.max(z1, s.hi[2]); }
   x0 -= 26; x1 += 26; z0 -= 22; z1 += 26;
@@ -104,5 +109,45 @@ function layTable(n: number, jit: number, r: Rand): Level {
   lv.shapes.unshift(table);
   drawShapes([table], lv.decor);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) drawBox(lv.decor, [cx + sx * (hx - 6), (lv.ground - 5) / 2, cz + sz * (hz - 6)], [3, (-5 - lv.ground) / 2, 3], 0, MAT.board);
+}
+
+/**
+ * A bench: one thing to try, over and over, on a table: `jelly`, three jellies in a row on their
+ * saucers, a panna cotta, a mango pudding and a konjac jelly, from the cloth to home; `coats`, each
+ * thing that comes off on it, in a row: a floury board, plates with crumbs and with pepper, a
+ * pudding with hundreds and thousands, the butter dish.
+ */
+export function bench(name: string): Level {
+  const lv: Level = { n: 0, chapter: 'table', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -76, decor: [] };
+  const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) lv.shapes.push(s); };
+  const pad = box([0, 0.5, 0], [8, 0.5, 7], 0, MAT.gingham, 0.9);
+  drawShapes([pad], lv.decor);
+  stop({ top: 'pad', at: [0, 1, 0], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pad] });
+  if (name === 'jelly') {
+    const kinds: Array<[keyof typeof FEELS, number, number, number]> = [['pannacotta', MAT.pannacotta, 8, 6], ['pudding', MAT.jelly, 9, 7], ['konjac', MAT.konjac, 10, 8]];
+    kinds.forEach(([feel, mat, rad, h], i) => {
+      const at: V3 = [i * 6 - 6, 0, 24 + i * 24];
+      const saucer = cyl(at[0], at[2], rad + 3, 0, 0.8, MAT.porcelain, 0.5);
+      const j = jelly(at[0], at[2], rad, 0.8, 0.8 + h, mat, FEELS[feel]);
+      drawShapes([saucer], lv.decor);
+      lv.jellies!.push(j);
+      stop({ top: 'pudding', at: [at[0], 0.8 + h, at[2]], r: rad - 1, yaw: 0, shapes: [saucer, j], land: [j] });
+    });
+  }
+  if (name === 'coats') {
+    // each thing that comes off on it, in a row: flour, crumbs, pepper, sprinkles, butter
+    const one = () => 0.5;
+    const row: Tower[] = [tower('board', [-4, 6, 26], 9, 0.3, one), tower('plate', [6, 8, 50], 12, 0, one), tower('plate', [-2, 9, 76], 12, 0, one), tower('pudding', [8, 10, 100], 7.5, 0, one), tower('butter', [0, 8, 126], 12, 0.2, one)];
+    const want = [DUST.flour, DUST.crumbs, DUST.pepper, DUST.sprinkles, DUST.butter];
+    row.forEach((t, i) => {
+      for (const s of t.shapes) if (s.dust || (i < 4 && (s.kind === 'jelly' || s.mat === MAT.porcelain || s.mat === MAT.board) && s.c[1] + (s.hh || s.h[1]) >= t.at[1] - 0.1)) s.dust = want[i];
+      drawShapes(t.shapes, lv.decor);
+      for (const s of t.shapes) if (s.jel) lv.jellies!.push(s);
+      stop(t);
+    });
+  }
+  const last = lv.towers[lv.towers.length - 1].at;
+  stop(tower('goal', [last[0] + 6, 12, last[2] + 26], 13, 0, () => 0.5));
+  underTable(lv);
   return lv;
 }
