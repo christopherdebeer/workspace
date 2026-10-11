@@ -11,11 +11,11 @@ import { hash, seeded, type Rand } from '../kit/rng';
 import { LANDING, Path, RISE, WIDTH, type Flight, type V3 } from './path';
 
 /** how deep a band is, up the hill (m); how far across the hill the world goes, each side */
-export const BAND = 12, SPAN = 26;
+export const BAND = 12, SPAN = 20;
 /** a vertex: position, normal, colour, material */
 export const STRIDE = 10;
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -25,7 +25,7 @@ export const NAMES = ['大林寺', '桃花庵', '白云寺', '清凉寺', '栖�
 export const INK = {
   paper: hex(0xefe6d3), stepTop: hex(0xebe4d4), stepFace: hex(0xcfc6b4), stone: hex(0xb9b1a1), rock: hex(0x2a2827), rockTop: hex(0x7d7c79),
   trunk: hex(0x2b2321), tile: hex(0x3d9887), tileDark: hex(0x2b6f64), red: hex(0xb8382c), wall: hex(0xeee9df), dark: hex(0x2d2622),
-  robe: hex(0x6f7882), hat: hex(0xd8c39a), skin: hex(0xe2c7a6),
+  robe: hex(0x6f7882), hat: hex(0xd8c39a), skin: hex(0xe2c7a6), grass: hex(0x6d7258), gable: hex(0x9c3a2e),
 };
 
 export interface Band {
@@ -97,7 +97,7 @@ export function templesNear(path: Path, z0: number, z1: number): Array<{ c: V3; 
     // (on the landing at its head: the path goes on along the next flight; the temple stands off to the side, facing the landing)
     const L: V3 = [f.b[0] + f.dir[0] * LANDING / 2, f.b[1], f.b[2] + f.dir[1] * LANDING / 2];
     const px = f.dir[1] * f.temple, pz = -f.dir[0] * f.temple;
-    const c: V3 = [L[0] + px * (WIDTH / 2 + 5.2), f.b[1], L[2] + pz * (WIDTH / 2 + 5.2)];
+    const c: V3 = [L[0] + px * (WIDTH / 2 + 5.8), f.b[1], L[2] + pz * (WIDTH / 2 + 5.8)];
     if (c[2] < z0 - 12 || c[2] > z1 + 12) continue;
     out.push({ c, face: [-px, -pz], poem, flight: f });
   }
@@ -119,7 +119,7 @@ export function makeBand(path: Path, seed: number, j: number): Band {
   for (let i = 0; i < nx; i++) for (let k = 0; k < nz; k++) {
     const xa = -SPAN + i * 1.5, xb = xa + 1.5, za = z0 + k * 1.5, zb = za + 1.5;
     const P = (x: number, z: number): V3 => [x, ground(path, x, z), z];
-    mesh.quad(P(xa, za), P(xa, zb), P(xb, zb), P(xb, za), INK.paper, M.ground, [0, 1, 0]);
+    mesh.quad(P(xa, za), P(xa, zb), P(xb, zb), P(xb, za), [0, 0, 0], M.ground, [0, 1, 0]);
   }
 
   // the path: each step, each landing, that falls in this band, with their kerbs
@@ -128,9 +128,12 @@ export function makeBand(path: Path, seed: number, j: number): Band {
     const pd = prev ? prev.dir : f.dir;
     // (the landing: a broad flagstone where the flights meet, wide enough for the turn)
     if (inBand(f.land[2])) {
-      const dir = norm([pd[0] + f.dir[0], 0, pd[1] + f.dir[1]]);
-      const d2: [number, number] = [dir[0], dir[2]];
-      mesh.box([f.land[0], f.a[1] - 0.4, f.land[2]], [LANDING / 2 + 0.6, 0.4, WIDTH / 2 + 0.5], d2, INK.stepTop, INK.stepFace, M.step, M.stone);
+      // (the last flight's way on, and this one's, each as wide as the stair, meeting at the turn)
+      const start: V3 = prev ? prev.b : [0, 0, 0];
+      const e: V3 = [start[0] + pd[0] * LANDING * 0.5, f.a[1] - 0.4, start[2] + pd[1] * LANDING * 0.5];
+      mesh.box(e, [LANDING * 0.5 + 0.15, 0.4, WIDTH / 2 + 0.05], pd, INK.stepTop, INK.stone, M.step, M.stone);
+      const g: V3 = [f.a[0] - f.dir[0] * LANDING * 0.35, f.a[1] - 0.4 + 0.002, f.a[2] - f.dir[1] * LANDING * 0.35];
+      mesh.box(g, [LANDING * 0.35 + 0.15, 0.4, WIDTH / 2 + 0.05], f.dir, INK.stepTop, INK.stone, M.step, M.stone);
     }
     for (let k = 0; k < f.steps; k++) {
       const u = (k + 0.5) * f.run;
@@ -177,38 +180,70 @@ export function makeBand(path: Path, seed: number, j: number): Band {
   // temples
   for (const t of temples) if (inBand(t.c[2])) temple(mesh, t.c, t.face, hash(seed, t.poem, 0x7e), (t.poem - 1) % NAMES.length);
 
-  // rocks along the path's edges, black, and the ground about them
-  const rocks: Array<[V3, number]> = [];
+  // rocks along the path's edges, black, in little clusters, and the ground about them
+  const gy = (x: number, z: number) => ground(path, x, z);
+  const rocks: Array<[number, number, number]> = [];
   path.flights.forEach((f, fi) => {
     const rr = seeded(hash(seed, fi, 0x40c));
     for (let u = 0.6; u < f.steps * f.run; u += ramp(rr, 0.9, 2.6)) {
       for (const sd of [-1, 1]) {
-        if (rr() < 0.35) continue;
-        const off = (WIDTH / 2 + 0.55 + rr() * 0.9) * sd;
+        if (rr() < 0.55) continue;
+        const off = (WIDTH / 2 + 0.6 + rr() * 0.9) * sd;
         const x = f.a[0] + f.dir[0] * u + f.dir[1] * off, z = f.a[2] + f.dir[1] * u - f.dir[0] * off;
         if (!inBand(z)) continue;
-        rocks.push([[x, ground(path, x, z), z], ramp(rr, 0.35, 1.0)]);
-        if (rr() < 0.5) { const x2 = x + (rr() - 0.5) * 1.2 + f.dir[1] * 0.5 * sd, z2 = z + (rr() - 0.5) * 1.2; rocks.push([[x2, ground(path, x2, z2), z2], ramp(rr, 0.25, 0.6)]); }
+        rocks.push([x, z, ramp(rr, 0.28, 0.7)]);
+        // (a smaller one leaning on it, now and then; and another)
+        for (let k = 0; k < 2 && rr() < 0.55; k++) { const a = rr() * 6.3, d = ramp(rr, 0.45, 0.8); rocks.push([x + Math.cos(a) * d + f.dir[1] * 0.2 * sd, z + Math.sin(a) * d, ramp(rr, 0.18, 0.42)]); }
       }
     }
   });
-  // (and some out among the trees)
-  for (let i = 0; i < 10; i++) {
+  // (and a few out among the trees, low and broad)
+  for (let i = 0; i < 5; i++) {
     const x = ramp(r, -SPAN + 2, SPAN - 2), z = ramp(r, z0, z1);
-    if (path.nearest(x, z).d < WIDTH / 2 + 0.6) continue;
-    rocks.push([[x, ground(path, x, z), z], ramp(r, 0.4, 1.4)]);
+    if (path.nearest(x, z).d < WIDTH / 2 + 0.8) continue;
+    rocks.push([x, z, ramp(r, 0.4, 0.95)]);
   }
-  for (const [p, s] of rocks) rock(mesh, p, s, seeded(hash(Math.round(p[0] * 10), Math.round(p[2] * 10), seed)));
+  for (const [x, z, sz] of rocks) {
+    if (path.nearest(x, z).d < WIDTH / 2 + 0.35) continue;
+    const rr = seeded(hash(Math.round(x * 10), Math.round(z * 10), seed));
+    rock(mesh, [x, gy(x, z), z], sz, rr, gy);
+    shade(mesh, path, x - 0.25 * sz, z + 0.2 * sz, sz * 1.9, sz * 1.6, 0.32);
+    for (let k = 0, n = 1 + Math.floor(rr() * 3); k < n; k++) { const a = rr() * 6.3, d = sz * ramp(rr, 1, 1.5); tuft(mesh, path, x + Math.cos(a) * d, z + Math.sin(a) * d, rr, 3 + Math.floor(rr() * 4)); }
+  }
+  // grass in tufts along the stair's foot, and here and there on the hill
+  path.flights.forEach((f, fi) => {
+    const rr = seeded(hash(seed, fi, 0x6a5));
+    for (let u = 0.3; u < f.steps * f.run; u += ramp(rr, 0.5, 1.4)) {
+      const sd = rr() < 0.5 ? 1 : -1, off = (WIDTH / 2 + 0.3 + rr() * 0.25) * sd;
+      const x = f.a[0] + f.dir[0] * u + f.dir[1] * off, z = f.a[2] + f.dir[1] * u - f.dir[0] * off;
+      if (inBand(z)) tuft(mesh, path, x, z, rr, 3 + Math.floor(rr() * 4));
+    }
+  });
+  for (let i = 0; i < 40; i++) {
+    const x = ramp(r, -SPAN, SPAN), z = ramp(r, z0, z1);
+    if (path.nearest(x, z).d > WIDTH / 2 + 0.5) tuft(mesh, path, x, z, r, 2 + Math.floor(r() * 4));
+  }
 
-  // trees: on a jittered grid, not on the path (though they lean over it), not where a temple is
-  const G = 5.0;
+  // trees: on a jittered grid, not on the path (though they lean over it), not on a temple's terrace
+  const G = 3.9;
+  const onTemple = (x: number, z: number, m: number) => temples.some((t) => {
+    // (in the temple's own frame: across its front, and out from it)
+    const dx = x - t.c[0], dz = z - t.c[2];
+    const ax = Math.abs(dx * -t.face[1] + dz * t.face[0]), az = dx * t.face[0] + dz * t.face[1];
+    return ax < 5 + m && az > -4.2 - m && az < 5.2 + m;
+  });
   for (let gx = -SPAN + 1; gx < SPAN; gx += G) for (let gz = Math.ceil(z0 / G) * G; gz < z1; gz += G) {
     const tr = seeded(hash(seed, Math.round(gx * 10), Math.round(gz * 10), 0x7ee));
     if (tr() < 0.06) continue;
     const x = gx + (tr() - 0.5) * G * 0.9, z = gz + (tr() - 0.5) * G * 0.9;
     if (!inBand(z)) continue;
-    if (path.nearest(x, z).d < WIDTH / 2 + 1.3) continue;
-    if (temples.some((t) => Math.hypot(x - t.c[0], z - t.c[2]) < 8)) continue;
+    if (path.nearest(x, z).d < WIDTH / 2 + 1.5) continue;
+    if (onTemple(x, z, 0.8)) continue;
+    // (rocks at its roots, now and then, as in the print)
+    if (tr() < 0.45) for (let k = 0, n = 1 + Math.floor(tr() * 3); k < n; k++) {
+      const a = tr() * 6.3, d = 0.5 + tr() * 0.9, rx = x + Math.cos(a) * d, rz = z + Math.sin(a) * d, sz = ramp(tr, 0.3, 0.7);
+      if (path.nearest(rx, rz).d > WIDTH / 2 + 0.5) { rock(mesh, [rx, gy(rx, rz), rz], sz, seeded(hash(seed, Math.round(rx * 10), Math.round(rz * 10))), gy); tuft(mesh, path, rx + sz, rz, tr, 4); }
+    }
     tree(mesh, puffs, petals, [x, ground(path, x, z), z], tr, path);
   }
   // petals fallen on the path too
@@ -221,82 +256,166 @@ export function makeBand(path: Path, seed: number, j: number): Band {
   return { j, verts: new Float32Array(mesh.v), puffs: new Float32Array(puffs), petals: new Float32Array(petals), temples: temples.filter((t) => inBand(t.c[2])).map((t) => ({ c: t.c, face: Math.atan2(t.face[0], t.face[1]), poem: t.poem })) };
 }
 
-/** A rock: an angular lump, black, its top faces catching the light grey. */
-function rock(mesh: Mesh, at: V3, size: number, r: Rand) {
-  // (a squashed icosahedron, its corners pulled about, its foot sunk)
+/**
+ * A rock: a craggy lump, black, as the print has them; where its faces turn up to the light, a grey
+ * laid on with a dry brush (in the drawing). An icosahedron cut once more, its corners pushed out
+ * and in, then split along a few planes (flat faces, sharp edges: a crag, not a pebble), squashed,
+ * and set into the slope it stands on, its foot under the ground all round.
+ */
+function rock(mesh: Mesh, at: V3, size: number, r: Rand, gy?: (x: number, z: number) => number) {
   const t = (1 + Math.sqrt(5)) / 2;
-  const P: V3[] = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((p) => norm(p as V3));
-  const F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
-  const sx = size * ramp(r, 0.9, 1.4), sy = size * ramp(r, 0.6, 1.0), sz = size * ramp(r, 0.8, 1.2), turn = r() * 6.3;
-  const Q = P.map((p) => {
-    const k = ramp(r, 0.75, 1.15);
-    const x = p[0] * sx * k, z = p[2] * sz * k, y = Math.max(-0.25, p[1]) * sy * k;
-    return [at[0] + x * Math.cos(turn) - z * Math.sin(turn), at[1] + y + sy * 0.15, at[2] + x * Math.sin(turn) + z * Math.cos(turn)] as V3;
+  let P: V3[] = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((p) => norm(p as V3));
+  let F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
+  // (cut once more: each face into four, the new corners on the sphere)
+  const mids = new Map<string, number>();
+  const mid = (a: number, b: number) => {
+    const key = a < b ? `${a},${b}` : `${b},${a}`;
+    if (!mids.has(key)) { P.push(norm(add(P[a], P[b]))); mids.set(key, P.length - 1); }
+    return mids.get(key)!;
+  };
+  F = F.flatMap(([a, b, c]) => { const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a); return [[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]; });
+  const sx = size * ramp(r, 0.9, 1.5), sy = size * ramp(r, 0.6, 1.15), sz = size * ramp(r, 0.8, 1.2), turn = r() * 6.3;
+  const bump = P.map(() => ramp(r, 0.78, 1.15));
+  // (its planes of cleavage: what stands out past one is pressed back onto it)
+  const cuts: Array<[V3, number]> = [];
+  for (let k = 0, n = 4 + Math.floor(r() * 4); k < n; k++) cuts.push([norm([ramp(r, -1, 1), ramp(r, -0.2, 1), ramp(r, -1, 1)]), ramp(r, 0.55, 0.85)]);
+  // (a crag leans: its top pushed off to one side)
+  const lx = ramp(r, -0.3, 0.3), lz = ramp(r, -0.3, 0.3);
+  P = P.map((p0, i) => {
+    let p = mul(p0, bump[i]);
+    for (const [n, d] of cuts) { const e = p[0] * n[0] + p[1] * n[1] + p[2] * n[2] - d; if (e > 0) p = sub(p, mul(n, e)); }
+    const y = Math.max(-0.35, p[1]);
+    const x = (p[0] + lx * Math.max(0, y)) * sx, z = (p[2] + lz * Math.max(0, y)) * sz;
+    const wx = at[0] + x * Math.cos(turn) - z * Math.sin(turn), wz = at[2] + x * Math.sin(turn) + z * Math.cos(turn);
+    // (stood on the ground where each part of it is: on a slope, it follows the slope, so no side of it floats)
+    const g = gy ? gy(wx, wz) : at[1];
+    return [wx, g + y * sy + sy * 0.18, wz] as V3;
   });
-  for (const [a, b, c] of F) {
-    const n = norm(cross(sub(Q[b], Q[a]), sub(Q[c], Q[a])));
-    // (the faces toward the sky and the light take a grey; the rest stay black)
-    const lit = n[1] * 0.8 + n[0] * 0.3 - n[2] * 0.15;
-    const col: C3 = lit > 0.78 ? INK.rockTop : lit > 0.6 ? [0.3, 0.3, 0.3] : INK.rock;
-    mesh.tri(Q[a], Q[b], Q[c], col, M.rock, n);
+  for (const [a, b, c] of F) mesh.tri(P[a], P[b], P[c], INK.rock, M.rock);
+}
+
+/**
+ * Shade on the ground: a soft patch, under a rock or a tree, a little off toward the shadow side
+ * (in the drawing: the ground's colour carries where in the patch it is, and how deep).
+ */
+function shade(mesh: Mesh, path: Path, x: number, z: number, rx: number, rz: number, deep: number) {
+  const N = 12, lift = 0.04 + deep * 0.08;
+  const G = (u: number, v: number): V3 => { const px = x + u * rx, pz = z + v * rz; return [px, ground(path, px, pz) + lift, pz]; };
+  const c = G(0, 0);
+  for (let k = 0; k < N; k++) {
+    const a0 = (k / N) * Math.PI * 2, a1 = ((k + 1) / N) * Math.PI * 2;
+    const p0 = G(Math.cos(a0), Math.sin(a0)), p1 = G(Math.cos(a1), Math.sin(a1));
+    mesh.v.push(c[0], c[1], c[2], 0, 1, 0, 0, 0, deep, M.ground);
+    mesh.v.push(p1[0], p1[1], p1[2], 0, 1, 0, Math.cos(a1), Math.sin(a1), deep, M.ground);
+    mesh.v.push(p0[0], p0[1], p0[2], 0, 1, 0, Math.cos(a0), Math.sin(a0), deep, M.ground);
+  }
+}
+
+/** A tuft of grass: a few blades, fine, leaning out from a clump; where the ground meets a rock or a wall. */
+function tuft(mesh: Mesh, path: Path, x: number, z: number, r: Rand, n = 5) {
+  const y = ground(path, x, z);
+  for (let k = 0; k < n; k++) {
+    const a = r() * Math.PI * 2, lean = ramp(r, 0.15, 0.6), h = ramp(r, 0.12, 0.32), w = ramp(r, 0.018, 0.03);
+    const bx = x + Math.cos(a) * 0.08 * r(), bz = z + Math.sin(a) * 0.08 * r();
+    const tip: V3 = [bx + Math.cos(a) * lean * h, y + h, bz + Math.sin(a) * lean * h];
+    // (a blade: a thin triangle, turned across the way it leans)
+    const px = -Math.sin(a) * w, pz = Math.cos(a) * w;
+    mesh.tri([bx - px, y - 0.02, bz - pz], [bx + px, y - 0.02, bz + pz], tip, INK.grass, M.grass, [0, 1, 0]);
   }
 }
 
 /**
- * A peach tree: a short trunk leaning, splitting into a few limbs that spread wide and up, each
- * splitting again, and again; at the ends of the branches the blossom gathers in clumps, wider
- * than they're tall, lit from up and to the right; petals under it.
+ * A peach tree, as the print has them: a short trunk, leaning, opening at once into four to six
+ * limbs that spread wide and up, each limb gently bent and splitting, and splitting again, into a
+ * fan of thin twigs; the blossom in clumps along the ends of the twigs, so a tree is a broad
+ * umbrella of pink, pale on top and deep beneath, with its dark branches through it (the thinner
+ * ones are drawn a little nearer the eye than they are, so they show over the blossom, as ink
+ * over colour); petals fallen under it, some whole flowers, in drifts.
  */
 function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, path: Path) {
-  const H = ramp(r, 0.7, 1.4), lean: V3 = norm([ramp(r, -0.35, 0.35), 1, ramp(r, -0.35, 0.35)]);
+  const H = ramp(r, 0.45, 1.0), lean: V3 = norm([ramp(r, -0.3, 0.3), 1, ramp(r, -0.3, 0.3)]);
   const top = add(base, mul(lean, H));
-  const R0 = ramp(r, 0.16, 0.24);
-  mesh.tube([base[0], base[1] - 0.3, base[2]], top, R0 * 1.25, R0, INK.trunk, M.trunk, 7);
-  const tips: Array<[V3, number]> = [];
+  const R0 = ramp(r, 0.17, 0.27);
+  mesh.tube([base[0], base[1] - 0.3, base[2]], top, R0 * 1.4, R0, INK.trunk, M.trunk, 8);
+  const tips: Array<[V3, V3]> = [];
+  const UP: V3 = [0, 1, 0];
+  /** a limb: bent a little partway, then on; at its end, more, or a spray of twigs */
   const grow = (from: V3, dir: V3, len: number, rad: number, depth: number) => {
-    const to = add(from, mul(dir, len));
-    mesh.tube(from, to, rad, rad * 0.62, INK.trunk, depth >= 2 ? M.twig : M.trunk, depth >= 2 ? 4 : 6);
-    if (depth >= 3) { tips.push([to, len]); return; }
-    const n = depth === 0 ? 3 + Math.floor(r() * 3) : 2 + Math.floor(r() * 2);
+    const bend = norm(add(add(dir, mul(UP, 0.18)), [ramp(r, -0.2, 0.2), ramp(r, -0.1, 0.15), ramp(r, -0.2, 0.2)]));
+    const mid = add(from, mul(dir, len * 0.5)), to = add(mid, mul(bend, len * 0.5));
+    const m = M.twig, sides = depth >= 2 ? 3 : depth >= 1 ? 5 : 7;
+    mesh.tube(from, mid, rad, rad * 0.84, INK.trunk, m, sides);
+    mesh.tube(mid, to, rad * 0.84, rad * 0.66, INK.trunk, m, sides);
+    if (depth >= 2) {
+      // (a spray of fine twigs out of the end, and the blossom along them)
+      for (let k = 0; k < 3; k++) {
+        const d = norm(add(bend, [ramp(r, -0.7, 0.7), ramp(r, -0.2, 0.5), ramp(r, -0.7, 0.7)]));
+        const end = add(to, mul(d, len * ramp(r, 0.5, 0.9)));
+        mesh.tube(to, end, rad * 0.6, 0.008, INK.trunk, M.twig, 3);
+        tips.push([end, d]);
+      }
+      tips.push([to, bend]);
+      return;
+    }
+    const n = depth === 0 ? 2 + Math.floor(r() * 2) : 2 + Math.floor(r() * 2);
+    // (about its own way, each child turned out, a little up)
+    const u = norm(cross(bend, Math.abs(bend[1]) < 0.9 ? UP : [1, 0, 0])), w = cross(bend, u);
     for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2 + r() * 1.2;
-      // (out and up: limbs spread wide, twigs go on more up)
-      const spread = depth === 0 ? ramp(r, 0.9, 1.4) : ramp(r, 0.5, 0.9);
-      const d = norm([dir[0] * 0.5 + Math.cos(a) * spread, dir[1] * 0.45 + ramp(r, 0.1, 0.45), dir[2] * 0.5 + Math.sin(a) * spread]);
-      grow(to, d, len * ramp(r, 0.6, 0.85), rad * 0.62, depth + 1);
+      const phi = (i / n) * Math.PI * 2 + r() * 1.5, th = depth === 0 ? ramp(r, 0.4, 0.7) : ramp(r, 0.35, 0.6);
+      const d = norm(add(add(mul(bend, Math.cos(th)), mul(add(mul(u, Math.cos(phi)), mul(w, Math.sin(phi))), Math.sin(th))), mul(UP, 0.12)));
+      grow(to, d, len * ramp(r, 0.62, 0.8), rad * 0.62, depth + 1);
     }
   };
-  grow(top, lean, ramp(r, 1.4, 2.1), R0, 0);
-  // the canopy's middle, for its lighting
+  // (the limbs: four to six, round about, spreading out and up from the top of the trunk)
+  const limbs = 4 + Math.floor(r() * 3), a0 = r() * 6.28;
+  for (let i = 0; i < limbs; i++) {
+    const a = a0 + (i / limbs) * Math.PI * 2 + ramp(r, -0.3, 0.3), el = ramp(r, 0.55, 0.95);
+    const d = norm([Math.cos(a) * Math.cos(el) + lean[0] * 0.3, Math.sin(el), Math.sin(a) * Math.cos(el) + lean[2] * 0.3]);
+    grow(top, d, ramp(r, 1.3, 1.9), R0 * 0.55, 0);
+  }
+  // the crown's middle, for its lighting
   let cx = 0, cy = 0, cz = 0;
   for (const [p] of tips) { cx += p[0]; cy += p[1]; cz += p[2]; }
   cx /= tips.length; cy /= tips.length; cz /= tips.length;
+  // (its shade on the ground: broad and faint under the crown, off to the shadow side; deeper about the trunk's foot)
+  shade(mesh, path, cx - 0.5 * (cy - base[1]) * 0.55, cz + 0.5 * (cy - base[1]) * 0.35, 2.7, 2.3, 0.1);
+  shade(mesh, path, base[0] - 0.15, base[2] + 0.1, 0.75, 0.6, 0.22);
   const L: V3 = norm([0.55, 0.75, -0.35]);
-  for (const [p, len] of tips) {
-    const n = 4 + Math.floor(r() * 3);
+  for (const [p, d] of tips) {
+    const n = 1 + Math.floor(r() * 2);
     for (let i = 0; i < n; i++) {
-      const q: V3 = [p[0] + ramp(r, -1, 1) * len, p[1] + ramp(r, -0.3, 0.45) * len, p[2] + ramp(r, -1, 1) * len];
-      const rad = ramp(r, 0.6, 1.05);
-      // (lit by which way it faces out of the canopy, and how high it is in it)
-      const out = norm([q[0] - cx, (q[1] - cy) * 1.6, q[2] - cz]);
-      const shade = Math.max(0, Math.min(1, 0.45 + 0.45 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.25 * (q[1] - cy)));
+      // (clumps along the twig's end, lifted a little: the blossom sits on top of the branches)
+      const q: V3 = [p[0] + d[0] * ramp(r, -0.3, 0.1) + ramp(r, -0.35, 0.35), p[1] + ramp(r, 0, 0.35), p[2] + d[2] * ramp(r, -0.3, 0.1) + ramp(r, -0.35, 0.35)];
+      const rad = ramp(r, 0.4, 0.68);
+      // (none over the path: the crowns stop short of it, so the way stays open)
+      if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.25) continue;
+      const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
+      const shade = Math.max(0, Math.min(1, 0.42 + 0.4 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.3 * (q[1] - cy) + ramp(r, -0.08, 0.08)));
       puffs.push(q[0], q[1], q[2], rad, shade, r());
     }
   }
-  // petals fallen under it, where it's not the path
-  for (let i = 0; i < 26; i++) {
-    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 3.2;
-    const x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
-    const nr = path.nearest(x, z);
-    const y = nr.d < WIDTH / 2 ? path.at(nr.s).p[1] + 0.01 : ground(path, x, z) + 0.02;
-    petals.push(x, y, z, ramp(r, 0.05, 0.11), r() * Math.PI, r());
+  // petals fallen under it, where it's not the path: in drifts, some whole flowers
+  for (let k = 0; k < 4; k++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 3.4;
+    const dx = cx + Math.cos(a) * d, dz = cz + Math.sin(a) * d;
+    for (let i = 0; i < 9; i++) {
+      const x = dx + (r() - 0.5) * 1.6, z = dz + (r() - 0.5) * 1.2;
+      const nr = path.nearest(x, z);
+      const y = nr.d < WIDTH / 2 ? path.at(nr.s).p[1] + 0.01 : ground(path, x, z) + 0.02;
+      // (shade above .5: a whole flower)
+      petals.push(x, y, z, ramp(r, 0.06, 0.12), r() * Math.PI, r());
+    }
   }
 }
 
 /**
- * A temple hall on its terrace: a stone platform, white walls, red columns across its front and
- * a red door, a plaque over it; its roof of teal glazed tiles, hipped, its eaves curving up at the
- * corners, a ridge along its top with its ends turned up. `face`: the way its front looks.
+ * A temple hall on its terrace, as the print has it: a stone platform, raised, a stair up its front
+ * and a balustrade round its edge; white walls, red columns across its front, lattice windows and a
+ * red door, a plaque over it, a row of brackets under the eaves; its roof of teal glazed tiles,
+ * hip-and-gable: the lower slopes hipped all round, the upper part a gable at each end, red, under
+ * a barge board; its eaves well out and swept up at the corners; a ridge along its top with its
+ * ends curled up, ridges down the gables' edges, and down each hip to the corners.
+ * `face`: the way its front looks.
  */
 function temple(mesh: Mesh, c: V3, face: [number, number], seed: number, name: number) {
   const r = seeded(seed);
@@ -304,59 +423,154 @@ function temple(mesh: Mesh, c: V3, face: [number, number], seed: number, name: n
   const fx = -face[1], fz = face[0];
   const P = (x: number, y: number, z: number): V3 => [c[0] + fx * x + face[0] * z, c[1] + y, c[2] + fz * x + face[1] * z];
   const along: [number, number] = [fx, fz];
-  const W = ramp(r, 2.9, 3.5), D = ramp(r, 2.1, 2.5), Hw = 2.7;
-  // the terrace: stone, its front edge toward the path
-  mesh.box(P(0, -0.6, 0.4), [W + 1.4, 0.9, D + 1.6], along, INK.stepTop, INK.stepFace, M.step, M.stone);
-  // the walls
-  mesh.box(P(0, 0.3 + Hw / 2, -0.3), [W, Hw / 2, D - 0.4], along, INK.wall, INK.wall, M.wall);
-  // the columns across its front, red
-  const n = 4;
-  for (let i = 0; i < n; i++) {
-    const x = -W + 0.35 + (i / (n - 1)) * (2 * W - 0.7);
-    mesh.tube(P(x, 0.3, D - 0.25), P(x, 0.3 + Hw, D - 0.25), 0.17, 0.15, INK.red, M.red, 8);
+  const W = ramp(r, 2.9, 3.4), D = ramp(r, 2.0, 2.4), Hw = 2.6, B = 0.9;
+  const stone = INK.stepTop;
+  // the terrace: stone, raised, deep into the hill under it
+  const tw = W + 1.4, tf = D + 1.3, tb = -D - 0.9;
+  mesh.box(P(0, B - 2.5, (tf + tb) / 2), [tw, 2.5, (tf - tb) / 2], along, stone, INK.stepFace, M.step, M.stone);
+  // (its stair, down the front to the path; cheeks either side)
+  const ns = 4, sw = 1.25;
+  for (let k = 0; k < ns; k++) {
+    const top = B * (ns - k) / (ns + 1), z = tf + (k + 0.5) * 0.32;
+    mesh.box(P(0, top - 1.5, z), [sw, 1.5, 0.17], along, stone, INK.stepFace, M.step, M.stone);
   }
-  // a beam over them; the door, red, its opening dark; the plaque
-  mesh.box(P(0, 0.3 + Hw - 0.2, D - 0.25), [W, 0.2, 0.18], along, INK.red, INK.red, M.red);
-  mesh.box(P(0, 0.3 + 1.15, D - 0.62), [0.85, 1.15, 0.06], along, INK.red, INK.red, M.red);
-  mesh.box(P(0, 0.3 + 1.05, D - 0.6), [0.62, 1.05, 0.07], along, INK.dark, INK.dark, M.dark);
+  for (const sx of [-1, 1]) {
+    // (a cheek: a sloped stone wall, its top a coping, down beside the stair)
+    const x = sx * (sw + 0.14), z0 = tf, z1 = tf + ns * 0.32 + 0.1, y0 = B + 0.12, y1 = B / (ns + 1) + 0.1;
+    const o = 0.14;
+    mesh.quad(P(x + o * sx, y0, z0), P(x + o * sx, y1, z1), P(x + o * sx, -1.5, z1), P(x + o * sx, -1.5, z0), INK.stone, M.stone, [fx * sx, 0, fz * sx]);
+    mesh.quad(P(x - o * sx, y0, z0), P(x - o * sx, -1.5, z0), P(x - o * sx, -1.5, z1), P(x - o * sx, y1, z1), INK.stone, M.stone, [-fx * sx, 0, -fz * sx]);
+    mesh.quad(P(x - o, y0, z0), P(x + o, y0, z0), P(x + o, y1, z1), P(x - o, y1, z1), stone, M.stone);
+    mesh.quad(P(x - o, y1, z1), P(x + o, y1, z1), P(x + o, -1.5, z1), P(x - o, -1.5, z1), INK.stone, M.stone, [face[0], 0, face[1]]);
+  }
+  // (the balustrade: posts, a rail along their tops and one low; round the terrace but where the stair goes up)
+  const rail = (ax: number, az: number, bx: number, bz: number) => {
+    const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 0.55));
+    const dl: [number, number] = [((bx - ax) * fx + (bz - az) * face[0]) / L, ((bx - ax) * fz + (bz - az) * face[1]) / L];
+    for (let i = 0; i <= n; i++) {
+      const x = ax + (bx - ax) * (i / n), z = az + (bz - az) * (i / n);
+      mesh.box(P(x, B + 0.25, z), [0.065, 0.25, 0.065], along, stone, INK.stone, M.stone);
+    }
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    mesh.box(P(mx, B + 0.42, mz), [L / 2, 0.035, 0.04], dl, stone, INK.stone, M.stone);
+    mesh.box(P(mx, B + 0.1, mz), [L / 2, 0.03, 0.03], dl, stone, INK.stone, M.stone);
+  };
+  const ei = 0.12;
+  rail(-tw + ei, tf - ei, -sw - 0.3, tf - ei); rail(sw + 0.3, tf - ei, tw - ei, tf - ei);
+  rail(-tw + ei, tf - ei, -tw + ei, tb + ei); rail(tw - ei, tf - ei, tw - ei, tb + ei);
+  // the walls
+  const wz = -0.3, wd = D - 0.4;
+  mesh.box(P(0, B + Hw / 2, wz), [W, Hw / 2, wd], along, INK.wall, INK.wall, M.wall);
+  // the columns across its front (and round its sides), red
+  const n = 4, colZ = D - 0.25;
+  const colX = (i: number) => -W + 0.35 + (i / (n - 1)) * (2 * W - 0.7);
+  for (let i = 0; i < n; i++) mesh.tube(P(colX(i), B, colZ), P(colX(i), B + Hw, colZ), 0.17, 0.15, INK.red, M.red, 8);
+  for (const sx of [-1, 1]) for (const z of [wz, -D + 0.1]) mesh.tube(P(sx * (W + 0.05), B, z), P(sx * (W + 0.05), B + Hw, z), 0.15, 0.13, INK.red, M.red, 8);
+  // a beam over them, and a row of brackets on it, under the eaves, all round
+  mesh.box(P(0, B + Hw - 0.2, colZ), [W, 0.2, 0.18], along, INK.red, INK.red, M.red);
+  for (let x = -W + 0.25; x <= W - 0.2; x += 0.5) {
+    mesh.box(P(x, B + Hw + 0.08, colZ + 0.05), [0.13, 0.08, 0.2], along, INK.tileDark, INK.tileDark, M.ridge);
+    mesh.box(P(x, B + Hw + 0.08, wz - wd - 0.05), [0.13, 0.08, 0.2], along, INK.tileDark, INK.tileDark, M.ridge);
+  }
+  // the door, red, its opening dark; lattice windows in the bays either side
+  const fz0 = wz + wd;
+  mesh.box(P(0, B + 1.15, fz0 + 0.02), [0.85, 1.15, 0.06], along, INK.red, INK.red, M.red);
+  mesh.box(P(0, B + 1.05, fz0 + 0.04), [0.62, 1.05, 0.07], along, INK.dark, INK.dark, M.dark);
+  for (const sx of [-1, 1]) {
+    const x = sx * (W * 0.62);
+    mesh.box(P(x, B + 1.45, fz0 + 0.02), [0.62, 0.6, 0.05], along, INK.red, INK.red, M.red);
+    mesh.box(P(x, B + 1.45, fz0 + 0.04), [0.5, 0.48, 0.05], along, INK.dark, INK.dark, M.dark);
+    // (its lattice: bars, red, across the dark)
+    for (let i = -2; i <= 2; i++) mesh.box(P(x + i * 0.17, B + 1.45, fz0 + 0.09), [0.018, 0.48, 0.02], along, INK.red, INK.red, M.red);
+    for (let i = -2; i <= 2; i++) mesh.box(P(x, B + 1.45 + i * 0.17, fz0 + 0.09), [0.5, 0.018, 0.02], along, INK.red, INK.red, M.red);
+    // (and under it, a panel of the wall, framed)
+    mesh.box(P(x, B + 0.45, fz0 + 0.02), [0.62, 0.42, 0.04], along, INK.red, INK.red, M.red);
+  }
   // (the plaque: its face carries its name, from the plaque's texture: uv in its colour)
-  const pq = [P(-0.95, 0.3 + Hw - 0.3, D - 0.05), P(-0.95, 0.3 + Hw + 0.35, D - 0.05), P(0.95, 0.3 + Hw + 0.35, D - 0.05), P(0.95, 0.3 + Hw - 0.3, D - 0.05)] as const;
+  const pz = colZ + 0.2, py = B + Hw - 0.3;
+  const pq = [P(-0.95, py, pz), P(-0.95, py + 0.65, pz), P(0.95, py + 0.65, pz), P(0.95, py, pz)] as const;
   const fn: V3 = [face[0], 0, face[1]];
   // (u to the right as it's looked at from in front)
   const uv: Array<[number, number]> = [[1, 0], [1, 1], [0, 1], [0, 0]];
   // (its name, from the plaques' sheet: one name a row)
   for (const k of [0, 1, 2, 0, 2, 3]) { const p = pq[k]; mesh.v.push(p[0], p[1], p[2], fn[0], fn[1], fn[2], uv[k][0], (name + uv[k][1]) / NAMES.length, 0, M.plaque); }
-  // the roof: hipped, the eaves well out, curving up at the corners
-  const ex = W + 1.1, ez = D + 1.1, y0 = 0.3 + Hw + 0.1, rise = 1.9, ridge = W * 0.55;
-  const S = 14;
-  const roofAt = (u: number, v: number): V3 => {
-    // (u across the front, -1 to 1; v front to back, -1 to 1)
-    const x = u * ex, z = v * ez;
-    // (how far in from the eaves: the ridge's line is the middle, along x, as far as `ridge`)
-    const dz = 1 - Math.abs(v), dx = Math.max(0, (ex - Math.abs(x)) / (ex - ridge));
-    const inward = Math.min(dz, Math.min(1, dx));
-    // (a curve: steep near the ridge, flattening to the eaves; the corners swept up)
-    const corner = Math.pow(Math.abs(u) * Math.abs(v), 3) * 0.7;
-    return P(x, y0 + rise * Math.pow(inward, 0.75) + corner, z);
+
+  // the roof: hip-and-gable. u across the front (-1 to 1), v front to back (-1 to 1); within the
+  // gables (|x| < gx) the front and back slopes run up to the ridge; outside, the hipped ends run
+  // up only so far as the gables' foot (g of the way)
+  const ex = W + 1.15, ez = D + 1.15, rz = -0.2, y0 = B + Hw + 0.2, rise = 2.1;
+  const gx = W * 0.72, gu = gx / ex, g = 0.5;
+  const H = (k: number) => rise * Math.pow(k, 0.72);
+  const inward = (u: number, v: number, end: boolean) => {
+    const hz = 1 - Math.abs(v);
+    if (!end) return hz;
+    const hx = g * (ex - Math.abs(u * ex)) / (ex - gx);
+    return Math.min(hz, hx);
   };
-  for (let i = 0; i < S; i++) for (let k = 0; k < S; k++) {
-    const u0 = -1 + (2 * i) / S, u1 = u0 + 2 / S, v0 = -1 + (2 * k) / S, v1 = v0 + 2 / S;
-    const a = roofAt(u0, v0), b = roofAt(u0, v1), cc = roofAt(u1, v1), d = roofAt(u1, v0);
-    // (one surface, seen from both sides: its underside darker, in the drawing; its colour carries where on the roof it is, for its tiles' channels)
-    const at = (u: number, v: number): C3 => [(u * ex) / 0.24, (Math.abs(v) * ez) / 0.32, 2];
-    const n = norm(cross(sub(b, a), sub(d, a)));
-    for (const [p, uu, vv] of [[a, u0, v0], [b, u0, v1], [cc, u1, v1], [a, u0, v0], [cc, u1, v1], [d, u1, v0]] as Array<[V3, number, number]>) {
-      const col = at(uu, vv);
-      mesh.v.push(p[0], p[1], p[2], n[0], n[1], n[2], col[0], col[1], col[2], M.tile);
+  const roofAt = (u: number, v: number, end: boolean, up = 0): V3 => {
+    const k = inward(u, v, end);
+    // (the eaves swept up toward the corners, most at the corner itself)
+    const sweep = 0.95 * Math.pow(smooth(0.3, 1, Math.abs(u)) * smooth(0.3, 1, Math.abs(v)), 1.3) * Math.pow(1 - k, 1.4);
+    return P(u * ex, y0 + H(k) + sweep + up, rz + v * ez);
+  };
+  const patch = (ua: number, ub: number, nu: number, end: boolean) => {
+    const S = 14;
+    for (let i = 0; i < nu; i++) for (let k = 0; k < S; k++) {
+      const u0 = ua + ((ub - ua) * i) / nu, u1 = ua + ((ub - ua) * (i + 1)) / nu, v0 = -1 + (2 * k) / S, v1 = v0 + 2 / S;
+      const a = roofAt(u0, v0, end), b = roofAt(u0, v1, end), cc = roofAt(u1, v1, end), d = roofAt(u1, v0, end);
+      // (one surface, seen from both sides: its underside darker, in the drawing; its colour carries where on the roof it is, for its tiles' channels: down the slope, whichever way the slope runs)
+      const at = (uu: number, vv: number): C3 => {
+        const hz = 1 - Math.abs(vv), hx = end ? g * (ex - Math.abs(uu * ex)) / (ex - gx) : 9;
+        return hx < hz ? [(vv * ez) / 0.24, (ex - Math.abs(uu * ex)) / 0.32, 2] : [(uu * ex) / 0.24, (Math.abs(vv) * ez) / 0.32, 2];
+      };
+      const nn = norm(cross(sub(b, a), sub(d, a)));
+      for (const [p, uu, vv] of [[a, u0, v0], [b, u0, v1], [cc, u1, v1], [a, u0, v0], [cc, u1, v1], [d, u1, v0]] as Array<[V3, number, number]>) {
+        const col = at(uu, vv);
+        mesh.v.push(p[0], p[1], p[2], nn[0], nn[1], nn[2], col[0], col[1], col[2], M.tile);
+      }
+    }
+  };
+  patch(-1, -gu, 5, true); patch(-gu, gu, 10, false); patch(gu, 1, 5, true);
+  const dark = INK.tileDark;
+  // (the eaves' edge: a band, thick and dark, all round)
+  const edge = (pts: V3[]) => { for (let i = 0; i + 1 < pts.length; i++) { const a = pts[i], b = pts[i + 1]; mesh.quad(a, b, [b[0], b[1] - 0.17, b[2]], [a[0], a[1] - 0.17, a[2]], dark, M.ridge); } };
+  const E = 24;
+  const eave = (f: (t: number) => [number, number]) => edge(Array.from({ length: E + 1 }, (_, i) => { const [u, v] = f(i / E); return roofAt(u, v, Math.abs(u) > gu - 1e-6); }));
+  eave((t) => [-1 + 2 * t, 1]); eave((t) => [-1 + 2 * t, -1]); eave((t) => [-1, -1 + 2 * t]); eave((t) => [1, -1 + 2 * t]);
+  // (a line of ridge: a run of tube, a little over the roof)
+  const ridgeLine = (pts: V3[], ra: number, rb: number) => { for (let i = 0; i + 1 < pts.length; i++) { const t0 = i / (pts.length - 1), t1 = (i + 1) / (pts.length - 1); mesh.tube(pts[i], pts[i + 1], ra + (rb - ra) * t0, ra + (rb - ra) * t1, dark, M.ridge, 6); } };
+  for (const sx of [-1, 1]) {
+    // the gable: a red triangle, standing up from the hipped end, under its barge board
+    const N = 8, vg = 1 - g;
+    for (let i = 0; i < N; i++) {
+      const v0 = -vg + (2 * vg * i) / N, v1 = -vg + (2 * vg * (i + 1)) / N;
+      const t0 = roofAt(sx * gu, v0, false, -0.04), t1 = roofAt(sx * gu, v1, false, -0.04);
+      const b0 = roofAt(sx * gu, v0, true), b1 = roofAt(sx * gu, v1, true);
+      // (set back a hand from the hipped end's top)
+      const back: V3 = [-fx * sx * 0.12, 0, -fz * sx * 0.12];
+      mesh.quad(add(b0, back), add(t0, back), add(t1, back), add(b1, back), INK.gable, M.red, [fx * sx, 0, fz * sx]);
+    }
+    // (its barge board: ridges down both its edges from the top)
+    for (const sv of [-1, 1]) ridgeLine(Array.from({ length: 7 }, (_, i) => roofAt(sx * gu, sv * vg * (i / 6), false, 0.08)), 0.1, 0.08);
+    // the hips: from the gable's foot down to the corners, ending turned up
+    for (const sv of [-1, 1]) {
+      const pts = Array.from({ length: 8 }, (_, i) => { const k = g * (1 - i / 7); return roofAt(sx * (ex - (k * (ex - gx)) / g) / ex, sv * (1 - k), true, 0.08); });
+      ridgeLine(pts, 0.09, 0.07);
+      const tip = pts[pts.length - 1], out = norm(sub(tip, pts[pts.length - 2]));
+      mesh.tube(tip, add(add(tip, mul(out, 0.3)), [0, 0.3, 0]), 0.07, 0.03, dark, M.ridge, 5);
     }
   }
-  // the ridge, and its ends turned up
-  const ry = y0 + rise + 0.05;
-  mesh.box(P(0, ry + 0.12, 0), [ridge + 0.2, 0.14, 0.14], along, INK.tileDark, INK.tileDark, M.ridge);
-  for (const sx of [-1, 1]) mesh.tube(P(sx * (ridge + 0.2), ry + 0.1, 0), P(sx * (ridge + 0.55), ry + 0.75, 0), 0.13, 0.06, INK.tileDark, M.ridge, 6);
+  // the ridge along its top, and its ends curled up and in
+  const top = roofAt(0, 0, false, 0.12);
+  mesh.box([top[0], top[1] + 0.06, top[2]], [gx + 0.15, 0.17, 0.13], along, dark, dark, M.ridge);
+  for (const sx of [-1, 1]) {
+    const q = (x: number, y: number): V3 => { const b = roofAt(sx * gu, 0, false, 0.1); return add(b, [fx * sx * x, y, fz * sx * x]); };
+    ridgeLine([q(0.1, 0), q(0.18, 0.4), q(0.1, 0.72), q(-0.12, 0.84), q(-0.28, 0.7)], 0.16, 0.06);
+  }
   // low walls out to each side, white, capped with tiles
   for (const sx of [-1, 1]) {
-    mesh.box(P(sx * (W + 3.2), 0.3 + 0.8, -0.6), [2.2, 0.8, 0.22], along, INK.wall, INK.wall, M.wall);
-    mesh.box(P(sx * (W + 3.2), 0.3 + 1.7, -0.6), [2.35, 0.12, 0.42], along, INK.tile, INK.tileDark, M.tile);
+    mesh.box(P(sx * (W + 3.4), 0.3 + 0.8, -0.6), [2.2, 0.8, 0.22], along, INK.wall, INK.wall, M.wall);
+    mesh.box(P(sx * (W + 3.4), 0.3 + 1.7, -0.6), [2.35, 0.12, 0.42], along, INK.tile, INK.tileDark, M.tile);
   }
 }
+const smooth = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };

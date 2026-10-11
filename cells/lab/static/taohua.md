@@ -19,22 +19,38 @@ spring.
 The path is made as you climb, flight by flight, from the seed and each flight's number, so the
 same seed is the same hillside, step for step (`?seed=…`). Each flight turns a little to one side
 of straight up the hill, the next to the other, a broad flagstone landing at each turn; each is
-some steps of a hand's rise, deeper treads where it's gentler, with a low stone kerb either side
-stepping up with it. Now and then, beside the landing at a flight's head, a temple stands on its
-terrace facing the path. The hill's height at any point up it is the path's there, so the ground
+six to sixteen steps of a hand's rise, each slab laid a little unevenly, set into the slope between
+walls of squared stone with a coping along their tops; the landings are L-shaped, so the turn
+happens on them. Now and then (never closer than seven flights apart), beside the landing at a
+flight's head, a temple stands on its terrace facing the path. The hill's height at any point up it is the path's there, so the ground
 runs up with the steps.
 
 The world is made in bands across the hill, twelve metres deep, as they come into view and
 dropped as they fall behind, each from the seed and its number: the ground, the steps and
-landings that fall in it, black rocks along the path's edges and out among the trees, the
-trees, petals fallen under them and on the steps, and the temples.
+landings that fall in it, black rocks in little clusters along the path's edges and at the trees'
+roots, tufts of grass along the stair's foot and about the rocks, the trees, petals fallen under
+them and on the steps, and the temples. Each rock and tree has its patch of shade on the ground,
+stippled away at its edge; rocks are set into the slope they stand on, so no side of one floats.
+
+## The temples
+
+A hall on a raised stone terrace, a stair up its front with sloped cheeks, a balustrade of posts
+and rails round its edge. White walls, red columns across the front and at the corners, a red
+door, lattice windows in the bays either side, the plaque with the temple's name over the door,
+a row of brackets under the eaves. The roof is hip-and-gable, as the print's is: the lower slopes
+hipped all round, the upper part a red gable at each end under its barge board; the eaves well
+out and swept up toward the corners; a ridge along the top with its ends curled up and in,
+ridges down the gables' edges, and down each hip to a turned-up tip. Its glazed tiles run in
+channels down whichever way each slope falls.
 
 ## The trees
 
-Each peach tree is grown: a short trunk, leaning, splitting into three to five limbs that spread
-wide and up, each splitting again, and again. At the ends of its branches the blossom gathers in
-clumps of puffs, wider than they're tall, so a tree is a cloud of pink with its branches dark
-through it. Each puff is lit by which way it faces out of its tree and how high it is in it, so
+Each peach tree is grown: a short trunk, leaning, opening at once into four to six limbs that
+spread wide and up, each gently bent and splitting, and splitting again, into a spray of fine
+twigs. Along the twigs' ends the blossom gathers in clumps of puffs, so a tree is a broad
+umbrella of pink; its branches are drawn a little nearer the eye than they are, so they show over
+the blossom as ink over colour, as in the print. No crown hangs over the path, and the blossom
+nearer the eye than the walker thins away about them, so they're never lost. Each puff is lit by which way it faces out of its tree and how high it is in it, so
 the tops toward the light are pale and the undersides deep rose.
 
 ## The print
@@ -53,6 +69,7 @@ the print's edge a shade darker, and the far hill fading into it.
 The blossom puffs are discs turned to the eye with ragged, scalloped edges, each its own; their
 depth is a dome, so where puffs meet they meet as clouds do. Each is stippled: dots on a grid
 across it, some lighter, some deeper, a few red. Petals are little teardrops with a notch, lying
-where they fell, or turning as they fall about the walker.
+where they fell, or turning as they fall about the walker; some on the ground are whole flowers,
+five petals round a darker heart.
 
 `?seed=…` a hillside; `?preview` climbs by itself, quietly.

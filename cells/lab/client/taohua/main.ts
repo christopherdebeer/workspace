@@ -94,7 +94,7 @@ const walker = (() => {
 interface Live { band: Band; solid: Drawn; puffs: Drawn; petals: Drawn }
 const live = new Map<number, Live>();
 function keepBands(z: number) {
-  const lo = Math.floor((z - 16) / BAND), hi = Math.floor((z + 70) / BAND);
+  const lo = Math.floor((z - 14) / BAND), hi = Math.floor((z + 52) / BAND);
   for (const [j, l] of live) if (j < lo - 1 || j > hi + 1) { R.drop(l.solid); R.drop(l.puffs); R.drop(l.petals); live.delete(j); }
   // (one band a frame at most, nearest first, so a climb never stutters)
   for (let j = Math.floor(z / BAND); j <= hi; j++) if (!live.has(j)) { add(j); return; }

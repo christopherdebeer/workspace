@@ -28,11 +28,13 @@ const vec3 L = normalize(vec3(.55, .75, -.35));
 
 const SOLID_VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in vec3 aCol; in float aMat;
-uniform mat4 uVP, uModel;
+uniform mat4 uVP, uModel; uniform vec3 uEye;
 out vec3 vW; out vec3 vN; out vec3 vC; flat out int vM;
 void main() {
   vec4 w = uModel * vec4(aPos, 1.);
   vW = w.xyz; vN = normalize(mat3(uModel) * aNor); vC = aCol; vM = int(aMat + .5);
+  // (the thinner branches drawn nearer the eye than they are: they show through the blossom, as ink over colour)
+  if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * 1.6;
   gl_Position = uVP * w;
 }`;
 const SOLID_FS = `#version 300 es
@@ -50,15 +52,35 @@ void main() {
   if (vM == ${M.ground}) {
     // the ground: the paper itself, a breath of shade in its hollows
     c = PAPER * (.985 + .03 * noise(vW * .35));
+    if (vC.b > 0.) {
+      // (a patch of shade: deep in its middle, its edge broken, stippled away into the paper)
+      float r = length(vC.rg) * (1. + .35 * (noise(vW * 1.7) - .5));
+      float f = 1. - smoothstep(.25, 1., r);
+      if (hash3(vec3(floor(gl_FragCoord.xy), 2.)) > f * 1.6) discard;
+      c *= 1. - vC.b * (.55 + .45 * f) * (.85 + .3 * noise(vW * 6.));
+    }
+    lit = 1.;
+  } else if (vM == ${M.grass}) {
+    // grass: an olive ink, a little uneven
+    c *= .8 + .35 * noise(vW * 9.);
     lit = 1.;
   } else if (vM == ${M.step} || vM == ${M.stone}) {
-    // stone: pale, a fine crack here and there, a darker grain
+    // stone: pale, a fine crack here and there, a darker grain; a wall's face laid in squared blocks
     float crack = smoothstep(.985, 1., noise(vec3(vW.xz * 2.2, vW.y * 3.)));
     c *= (.95 + .07 * noise(vW * 4.)) * (1. - .45 * crack);
+    if (vM == ${M.stone} && abs(n.y) < .5) {
+      float row = vW.y / .32, course = floor(row);
+      float along = (vW.x * n.z - vW.z * n.x) / .62 + course * .5;
+      float joint = max(1. - smoothstep(.0, .07, min(fract(row), 1. - fract(row))), 1. - smoothstep(.0, .05, min(fract(along), 1. - fract(along))));
+      c *= 1. - .38 * joint;
+    }
     lit = vM == ${M.step} ? 1. : .9 + .1 * max(dot(n, L), 0.);
   } else if (vM == ${M.rock}) {
-    // rock: its inks flat, a scumble of grey in the black
-    c *= .9 + .25 * noise(vW * 3.);
+    // rock: black; where it turns up to the light, grey laid on with a dry brush, in strokes, broken
+    float up = n.y * .8 + n.x * .3 - n.z * .15;
+    float stroke = smoothstep(.42, .7, noise(vW * vec3(9., 2.2, 3.5) + n * 2.)) * .7 + smoothstep(.55, .8, noise(vW * 14.)) * .3;
+    float grey = smoothstep(.38, .82, up) * (.35 + .65 * stroke);
+    c = mix(vec3(.13, .125, .12), vec3(.58, .58, .56), grey) * (.92 + .16 * noise(vW * 5.));
     lit = 1.;
   } else if (vM == ${M.trunk} || vM == ${M.twig}) {
     // bark: ink, a pale streak down the side that faces the light, broken
@@ -117,23 +139,26 @@ void main() {
   float cut = 1. - smoothstep(uCut.z * .6, uCut.z, length((ndc - uCut.xy) * vec2(uView.x / uView.y, 1.)));
   if (cut > 0. && length(vP - uEye) < uCut.w - 1.5 && hash3(vec3(gl_FragCoord.xy, 1.)) < cut) discard;
   float a = atan(vQ.y, vQ.x), r = length(vQ);
-  // (ragged: a scalloped edge, each puff its own)
-  float edge = 1. - .1 * noise(vec3(cos(a) * 2.2, sin(a) * 2.2, vSeed * 40.)) - .06 * sin(a * 9. + vSeed * 30.);
+  // (its edge: a cloud of little flowers, scalloped, ragged, each puff its own)
+  float edge = 1. - .09 * noise(vec3(cos(a) * 2.5, sin(a) * 2.5, vSeed * 40.)) - .07 * abs(sin(a * 7. + vSeed * 30.)) - .04 * abs(sin(a * 17. + vSeed * 11.));
   if (r > edge) discard;
   float rr = r / edge;
-  // its tones: the light ones up and to the light, the coral, the deep rose underneath
-  float tone = clamp(vS * .85 + .25 * vQ.y * .5 + .1, 0., 1.);
-  vec3 hi = vec3(.975, .74, .69), mid = vec3(.94, .55, .5), lo = vec3(.85, .38, .36), deep = vec3(.74, .27, .28);
-  vec3 c = tone > .66 ? mix(mid, hi, smoothstep(.66, .8, tone)) : tone > .33 ? mix(lo, mid, smoothstep(.33, .5, tone)) : mix(deep, lo, smoothstep(.1, .33, tone));
-  // stippled: dots on a grid in the puff, each a little lighter or darker, a few red
-  vec2 g = vQ * 7. + vSeed * 13.;
+  // its tones: pale where it's lit, at its top; coral; deep rose under, and at its lower edge
+  float tone = clamp(vS * .8 + .32 * vQ.y + .05 * vQ.x + .06, 0., 1.);
+  vec3 hi = vec3(.985, .76, .7), mid = vec3(.95, .56, .5), lo = vec3(.87, .4, .37), deep = vec3(.76, .28, .29);
+  vec3 c = tone > .62 ? mix(mid, hi, smoothstep(.62, .82, tone)) : tone > .32 ? mix(lo, mid, smoothstep(.32, .5, tone)) : mix(deep, lo, smoothstep(.08, .32, tone));
+  // its texture: a mottle of blossom, and over it fine stipple, little flowers lighter and darker, a few red
+  float mot = noise(vec3(vQ * 4.5, vSeed * 9.));
+  c = mix(c, mix(lo, hi, tone), (mot - .5) * .5);
+  vec2 g = vQ * 13. + vSeed * 17.;
   vec2 cell = floor(g), f = fract(g) - .5;
   float h = hash3(vec3(cell, vSeed * 7.));
   vec2 jit = vec2(hash3(vec3(cell, 3.)), hash3(vec3(cell, 5.))) - .5;
-  float dot1 = 1. - smoothstep(.12, .2, length(f - jit * .5));
-  if (h > .55) c = mix(c, hi * 1.03, dot1 * .7);
-  else if (h < .12) c = mix(c, vec3(.8, .2, .2), dot1 * .8);
-  else if (h < .3) c = mix(c, lo, dot1 * .5);
+  float size = .1 + .12 * hash3(vec3(cell, 9.));
+  float dot1 = 1. - smoothstep(size, size + .08, length(f - jit * .55));
+  if (h > .58) c = mix(c, hi * 1.02, dot1 * .75);
+  else if (h < .1) c = mix(c, vec3(.78, .18, .2), dot1 * .85);
+  else if (h < .3) c = mix(c, deep, dot1 * .45);
   // (a darker rim, faintly, where the puff turns away)
   c *= 1. - .1 * smoothstep(.75, 1., rr);
   float z = sqrt(max(0., 1. - rr * rr));
@@ -168,11 +193,20 @@ in vec2 vQ; flat in float vS;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 void main() {
-  // (a teardrop: round at one end, pointed at the other, a notch in its round end)
-  float y = vQ.y * .5 + .5;
-  float w = sin(3.1416 * pow(y, .8)) * .95;
-  if (abs(vQ.x) > w || (y > .9 && abs(vQ.x) < .12)) discard;
-  vec3 c = mix(vec3(.83, .27, .23), vec3(.95, .55, .5), vS);
+  vec3 c;
+  if (vS > .5) {
+    // (a whole flower: five petals round a darker heart)
+    float a = atan(vQ.y, vQ.x), r = length(vQ * vec2(1. / .7, 1.));
+    float pet = .55 + .45 * abs(cos(a * 2.5));
+    if (r > pet) discard;
+    c = mix(vec3(.8, .22, .2), vec3(.93, .45, .4), smoothstep(.15, .5, r));
+  } else {
+    // (a petal: round at one end, pointed at the other, a notch in its round end)
+    float y = vQ.y * .5 + .5;
+    float w = sin(3.1416 * pow(y, .8)) * .95;
+    if (abs(vQ.x) > w || (y > .9 && abs(vQ.x) < .12)) discard;
+    c = mix(vec3(.83, .27, .23), vec3(.95, .55, .5), vS * 2.);
+  }
   oC = vec4(c, 1.);
   oA = vec4(.5, 1., .5, ${M.petal}. / 31.);
 }`;
@@ -213,13 +247,13 @@ void main() {
     float turn = smoothstep(.35, .6, 1. - dot(n0, ni));
     float meet = mi != m0 ? 1. : 0.;
     bool soft = m0 == ${M.blossom} || mi == ${M.blossom};
-    bool none = m0 == ${M.petal} || mi == ${M.petal} || (m0 == ${M.ground} && mi == ${M.ground});
+    bool none = m0 == ${M.petal} || mi == ${M.petal} || (m0 == ${M.ground} && mi == ${M.ground}) || (m0 == ${M.grass} && (mi == ${M.ground} || mi == ${M.grass})) || (mi == ${M.grass} && m0 == ${M.ground});
     if (none) continue;
     if (soft) coral = max(coral, max(jump, meet * .6));
     else ink = max(ink, max(jump, max(turn * (m0 == ${M.ground} ? 0. : .8), meet)));
   }
   if (d0 >= 1.) { ink = 0.; coral = 0.; }
-  c = mix(c, vec3(.72, .3, .3), coral * .6);
+  c = mix(c, vec3(.74, .32, .31), coral * .38);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
   // the paper: its mottle, its fibres, its grain
   vec2 sp = gl_FragCoord.xy;

@@ -13,7 +13,7 @@ import { hash, seeded } from '../kit/rng';
 export type V3 = [number, number, number];
 
 /** the stair's width; a step's rise; a landing's depth */
-export const WIDTH = 2.3, RISE = 0.16, LANDING = 2.6;
+export const WIDTH = 1.9, RISE = 0.16, LANDING = 2.2;
 
 export interface Flight {
   /** its foot (the landing's far edge) and its head, and its way (unit, across the ground) */
@@ -48,17 +48,20 @@ export class Path {
     const a: V3 = [start[0] + pd[0] * LANDING, start[1], start[2] + pd[1] * LANDING];
     // (zigzag: turned to one side of straight up, then the other; back toward the middle if it's wandered)
     let side = i % 2 === 0 ? 1 : -1;
-    if (a[0] > 6) side = -1; else if (a[0] < -6) side = 1;
-    const ang = side * (0.35 + r() * 0.5) * (i === 0 ? 0.3 : 1);
+    if (a[0] > 4) side = -1; else if (a[0] < -4) side = 1;
+    const ang = side * (0.35 + r() * 0.6) * (i === 0 ? 0.3 : 1);
     const dir: [number, number] = [Math.sin(ang), Math.cos(ang)];
     // (a flight: some steps, each a hand's rise; deep treads where it's gentler)
-    const steps = 14 + Math.floor(r() * 26);
-    const run = 0.3 + r() * 0.18;
+    const steps = 6 + Math.floor(r() * 11);
+    const run = 0.3 + r() * 0.12;
     const flat = steps * run;
     const b: V3 = [a[0] + dir[0] * flat, a[1] + steps * RISE, a[2] + dir[1] * flat];
     const s0 = prev ? prev.s0 + prev.len : 0;
     // (now and then, at the head of a flight, a temple beside the landing, away from where the path turns)
-    const temple = i > 1 && hash(this.seed, i, 0x7e) % 5 === 0 ? -side : 0;
+    // (not too often: seven flights at least since the last)
+    let since = 99;
+    for (let k = i - 1; k >= 0 && k > i - 8; k--) if (this.flights[k].temple) { since = i - k; break; }
+    const temple = i > 1 && since >= 7 && hash(this.seed, i, 0x7e) % 4 === 0 ? -side : 0;
     this.flights.push({ a, b, dir, steps, run, s0, len: LANDING + flat, land, temple });
   }
 
