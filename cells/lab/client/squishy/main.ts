@@ -17,14 +17,17 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
-import { buildLevel } from './course';
+import { CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
+import { jelMesh, jelMeshSize, FEELS } from './jelly';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
 const auto = preview || params.has('auto');
+/** a bench: one thing to try over and over (`?bench=jelly`) */
+const benchName = params.get('bench');
 const STORE = 'squishy:v1';
 
 const canvas = document.getElementById('play') as HTMLCanvasElement;
@@ -66,7 +69,8 @@ vec3 env(vec3 d) {
   vec3 up = cross(uWin, right);
   float forward = dot(d, uWin);
   vec2 pane = vec2(dot(d, right), dot(d, up)) / max(forward, .01);
-  vec2 aa = max(fwidth(pane), vec2(.015));
+  // (a fixed softness, not fwidth: env is reached from inside branches, where derivatives aren't defined)
+  vec2 aa = vec2(.02);
   vec2 frame = 1. - smoothstep(vec2(.34, .48) - aa, vec2(.34, .48) + aa, abs(pane));
   float mullion = smoothstep(.016, .029, abs(pane.x)) * smoothstep(.016, .029, abs(pane.y));
   c += vec3(1., .95, .85) * 2.5 * frame.x * frame.y * mix(.30, 1., mullion) * step(.1, forward);
@@ -100,22 +104,23 @@ vec3 coatColor(vec3 q, vec2 coat, vec3 base, inout float rough, inout float glos
   int k = int(coat.y + .5);
   vec3 c = base;
   if (k == 1) {
-    // flour: a dusting, thicker in the creases, speckled
+    // flour: a dusting, thicker in the creases, speckled; whiter and cooler than the dough, and chalky, so it shows on it
     float fine = noise(q * 30.) * .5 + noise(q * 9. + 7.) * .5;
-    float d = smoothstep(.2, .9, a * (0.6 + .8 * fine));
-    c = mix(base, vec3(.97, .95, .9), d);
-    rough = mix(rough, .95, d); gloss *= 1. - d;
+    float d = smoothstep(.08, .55, a * (0.55 + .9 * fine));
+    float clump = smoothstep(.62, .7, noise(q * 14. + 3.)) * smoothstep(.3, .7, a);
+    c = mix(base, vec3(1.04, 1.04, 1.06), clamp(d + clump * .5, 0., 1.));
+    rough = mix(rough, 1., d); gloss *= 1. - d;
   } else if (k == 2) {
     // butter: a yellow sheen, greasy
-    float d = smoothstep(.05, .6, a);
-    c = mix(base, base * vec3(1., .88, .5) + vec3(.1, .07, 0.), d);
-    rough = mix(rough, .12, d); gloss += d * .6;
+    float d = smoothstep(.03, .4, a);
+    c = mix(base, base * vec3(1., .84, .32) + vec3(.16, .11, 0.), d);
+    rough = mix(rough, .08, d); gloss += d * .9;
   } else if (k == 3) {
     // crumbs: brown bits stuck on, each a little lump
     vec3 g = floor(q * 11.);
     float h = hash3(g);
     vec2 cell = fract(q.xz * 11. + q.y * 3.) - .5;
-    float bit = step(h, a * .9) * (1. - smoothstep(.18, .3, length(cell)));
+    float bit = step(h, a * 1.25) * (1. - smoothstep(.2, .32, length(cell)));
     c = mix(base, mix(vec3(.5, .3, .13), vec3(.75, .52, .28), hash3(g + 1.)), bit);
     n = normalize(n + nRest * 0. + vec3(cell.x, 0., cell.y) * bit * .8);
     rough = mix(rough, .8, bit);
@@ -123,7 +128,7 @@ vec3 coatColor(vec3 q, vec2 coat, vec3 base, inout float rough, inout float glos
     // pepper: black and grey specks
     vec3 g = floor(q * 26.);
     float h = hash3(g);
-    float bit = step(h, a * .55) * (1. - smoothstep(.2, .35, length(fract(q.xz * 26. + q.y * 5.) - .5)));
+    float bit = step(h, a * .95) * (1. - smoothstep(.22, .36, length(fract(q.xz * 26. + q.y * 5.) - .5)));
     c = mix(base, mix(vec3(.05), vec3(.35, .3, .25), hash3(g + 2.)), bit);
     rough = mix(rough, .7, bit);
   } else if (k == 5) {
@@ -134,7 +139,7 @@ vec3 coatColor(vec3 q, vec2 coat, vec3 base, inout float rough, inout float glos
     float ang = hash3(g + 3.) * 3.1416;
     vec2 e = vec2(cos(ang), sin(ang));
     float along = dot(cell, e), across = abs(dot(cell, vec2(-e.y, e.x)));
-    float rod = step(h, a * .8) * (1. - smoothstep(.1, .14, across)) * (1. - smoothstep(.3, .36, abs(along)));
+    float rod = step(h, a * 1.15) * (1. - smoothstep(.11, .15, across)) * (1. - smoothstep(.3, .36, abs(along)));
     float hue = hash3(g + 5.);
     vec3 col = hue < .2 ? vec3(1., .3, .4) : hue < .4 ? vec3(1., .85, .2) : hue < .6 ? vec3(.3, .6, 1.) : hue < .8 ? vec3(.4, .85, .4) : vec3(1., .5, .8);
     c = mix(base, col, rod);
@@ -281,6 +286,34 @@ void main() {
     base = top ? vec3(.62, .28, .06) : vec3(1., .58, .14);
     rough = .12; coat = 1.;
     emit = top ? .05 : .3;
+  } else if (id == ${MAT.pannacotta}) {
+    // a panna cotta: cream, soft-lit through, under a berry coulis
+    bool top = n.y > .8;
+    base = top ? vec3(.5, .04, .1) : vec3(.96, .91, .8);
+    rough = top ? .1 : .3; coat = top ? 1. : .4;
+    emit = top ? .02 : .22;
+  } else if (id == ${MAT.konjac}) {
+    // a konjac jelly: clear pink, the light right through it, brightest at its top
+    base = mix(vec3(.9, .25, .36), vec3(1., .55, .6), clamp(n.y, 0., 1.));
+    rough = .06; coat = 1.;
+    emit = .45;
+  } else if (id == ${MAT.bread}) {
+    // a round loaf: a brown crust, floured on top, scored across, the pale crumb showing in the cuts
+    bool top = n.y > .55;
+    float crack = noise(vWorld * 1.3) * .5 + noise(vWorld * 4.) * .3;
+    base = mix(vec3(.5, .29, .12), vec3(.7, .45, .22), crack);
+    if (top) {
+      float flour = smoothstep(.3, .7, noise(vWorld * .9 + 3.)) * .6 + .25;
+      base = mix(base, vec3(.92, .88, .8), flour);
+      float score = min(abs(uv.x - uv.y), abs(uv.x + uv.y)) * 9.;
+      base = mix(vec3(.93, .86, .66), base, smoothstep(.15, .45, score));
+    }
+    rough = .85;
+  } else if (id == ${MAT.enamel}) {
+    // a bread bin: cream enamel, a navy rim, chipped here and there
+    float chip = smoothstep(.8, .83, noise(vWorld * .6 + 9.));
+    base = mix(vec3(.93, .9, .82), vec3(.08, .1, .2), chip * .8);
+    rough = .25; coat = 1.;
   } else if (id == ${MAT.tin}) {
     // Printed tea tins: repeating cream blossoms and restrained gold rules.
     float b = fract(uv.y / 9.);
@@ -613,11 +646,11 @@ void main() {
     vec3 T = exp(-vec3(.025, .15, .095) * thick);
     // the light inside it: the room's, and the window's, wrapped round, pinker the deeper
     float wrap = max((NoL + .6) / 1.6, 0.);
-    vec3 inside = PINK * (env(n) * .07 + uKeyCol * wrap * mix(.25, 1., sh) * .09) * (1. - T.g * .5);
+    vec3 inside = PINK * (irradiance(n) * .07 + uKeyCol * wrap * mix(.25, 1., sh) * .09) * (1. - T.g * .5);
     // and glowing through it where the window's behind
     inside += PINK * uKeyCol * .35 * pow(max(dot(-V, uKey), 0.), 3.) * (1. - NoV * .5);
     // (thin at its rim, where the light bounces about inside it: a pinker edge)
-    inside += PINK * env(n) * .3 * pow(1. - NoV, 3.);
+    inside += PINK * irradiance(n) * .3 * pow(1. - NoV, 3.);
     vec3 c = behind * T;
     vec3 add = tonemap(inside);
     o = vec4(1. - (1. - c) * (1. - add), 1.);
@@ -663,7 +696,7 @@ void main() {
     + uKeyCol * D_ggx(max(dot(n, H), 0.), .045) * V_smith(max(NoV, 1e-3), max(NoL, 0.), .045) * max(NoL, 0.) * sh * .5
     + uKeyCol * D_ggx(max(dot(n, H), 0.), .25) * V_smith(max(NoV, 1e-3), max(NoL, 0.), .25) * max(NoL, 0.) * sh * .06;
   // the print, lit as a print on its skin
-  vec3 lightOn = env(n) * .55 + uKeyCol * max(NoL, 0.) * mix(.25, 1., sh) * .6;
+  vec3 lightOn = irradiance(n) * .55 + uKeyCol * max(NoL, 0.) * mix(.25, 1., sh) * .6;
   vec3 printCol = mix(vec3(1., .16, .2) * (lightOn * .8 + .35), vec3(.012, .01, .015), ink);
   printCol = mix(printCol, vec3(1.) * lightOn * 1.2, white);
   float a = max(max(ink, cheek * .92), white);
@@ -774,11 +807,11 @@ const u = (p: WebGLProgram, n: string) => {
 
 // ─── meshes on the card ──────────────────────────────────────────────────────────────────────────
 interface Mesh { vao: WebGLVertexArrayObject; svao: WebGLVertexArrayObject; buf: WebGLBuffer; count: number }
-function upload(verts: number[]): Mesh {
-  const data = new Float32Array(verts);
+function upload(verts: number[] | Float32Array, usage: number = gl.STATIC_DRAW): Mesh {
+  const data = verts instanceof Float32Array ? verts : new Float32Array(verts);
   const buf = gl.createBuffer()!;
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+  gl.bufferData(gl.ARRAY_BUFFER, data, usage);
   const make = (p: WebGLProgram, attrs: Array<[string, number, number]>) => {
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
@@ -801,6 +834,16 @@ function drop(m: Mesh | null) {
 const SPHERE = upload((() => { const v: number[] = []; sphere(v, 13); return v; })());
 const DISC = upload((() => { const v: number[] = []; disc(v, 14); return v; })());
 let courseMesh: Mesh | null = null;
+/** the jellies, drawn as their tops are each frame: the mesh, and the floats it's filled from */
+let jellyMeshes: Array<{ shape: Shape; mesh: Mesh; data: Float32Array }> = [];
+function fillJellies() {
+  for (const jm of jellyMeshes) {
+    const n = jelMesh(jm.shape.jel!, jm.data, jm.shape.mat, jm.shape.dust ? 24 + jm.shape.dust : 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, jm.mesh.buf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, jm.data, 0, n);
+    jm.mesh.count = n / VSTRIDE;
+  }
+}
 let glassMesh: Mesh | null = null;
 let roomMesh: Mesh | null = null;
 /** the lids: each its own mesh about its rest place, drawn where it is now */
@@ -972,6 +1015,49 @@ let aimedAt = -9;
 /** what it was last coated with most, and which coatings it's been told about */
 let coatWas: Dust = DUST.none;
 const coatSaid = new Set<Dust>();
+/**
+ * The jelly bench's panel: which jelly, and how it gives (how fast it springs back, how much of
+ * each wobble it keeps, how heavy, how far a dent spreads), changed as it's tried; and a drop onto
+ * it from so high, to see it again.
+ */
+let benchPick = 1, benchDrop = 25;
+function benchPanel() {
+  if (benchName !== 'jelly' && benchName !== 'coats') return;
+  const jellyBench = benchName === 'jelly';
+  let el = document.getElementById('bench');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'bench';
+    document.body.appendChild(el);
+    const st = document.createElement('style');
+    st.textContent = `#bench { position: fixed; left: 8px; right: 8px; top: calc(max(12px, env(safe-area-inset-top)) + 44px); padding: 8px 10px; border-radius: 12px; background: rgba(30,22,14,.55); color: #fff; font: 12px/1.3 system-ui, sans-serif; display: grid; gap: 4px; z-index: 5; max-width: 420px; margin: 0 auto; }
+      #bench .tabs { display: flex; gap: 6px; } #bench .tabs button, #bench .go { flex: 1; padding: 6px 4px; border-radius: 8px; border: 1px solid rgba(255,255,255,.4); background: transparent; color: #fff; font: inherit; }
+      #bench .tabs button.on { background: rgba(255,255,255,.85); color: #3a2a18; }
+      #bench label { display: grid; grid-template-columns: 70px 1fr 44px; align-items: center; gap: 6px; } #bench input { width: 100%; }
+      #bench .go { background: rgba(255,255,255,.85); color: #3a2a18; }`;
+    document.head.appendChild(st);
+  }
+  const names = jellyBench ? ['panna cotta', 'mango pudding', 'konjac'] : ['flour', 'crumbs', 'pepper', 'sprinkles', 'butter'];
+  benchPick = Math.min(benchPick, names.length - 1);
+  const jl = jellyBench ? lv.jellies![benchPick].jel! : { feel: { hz: 0, zeta: 0, mass: 0, spread: 0 } };
+  type Row = [keyof typeof jl.feel | 'drop', string, number, number, number];
+  const feelRows: Row[] = [['hz', 'spring Hz', 1, 14, 0.1], ['zeta', 'damping', 0, 0.6, 0.005], ['mass', 'mass', 2, 40, 0.5], ['spread', 'spread Hz', 0, 14, 0.1]];
+  const rows: Row[] = [...(jellyBench ? feelRows : []), ['drop', 'drop cm', 5, 80, 1]];
+  el.innerHTML = `<div class="tabs">${names.map((n, i) => `<button data-i="${i}" class="${i === benchPick ? 'on' : ''}">${n}</button>`).join('')}</div>`
+    + rows.map(([k, label, lo, hi, step]) => `<label>${label}<input type="range" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${k === 'drop' ? benchDrop : jl.feel[k]}"><span>${(k === 'drop' ? benchDrop : jl.feel[k]).toFixed(step < 0.01 ? 3 : step < 1 ? 1 : 0)}</span></label>`).join('')
+    + `<button class="go">drop it on the ${names[benchPick]}</button>`;
+  el.querySelectorAll<HTMLButtonElement>('.tabs button').forEach((b) => b.addEventListener('click', () => { benchPick = Number(b.dataset.i); benchPanel(); }));
+  el.querySelectorAll<HTMLInputElement>('input').forEach((inp) => inp.addEventListener('input', () => {
+    const k = inp.dataset.k as keyof typeof jl.feel | 'drop', v = Number(inp.value);
+    if (k === 'drop') benchDrop = v; else jl.feel[k] = v;
+    inp.nextElementSibling!.textContent = v.toFixed(Number(inp.step) < 0.01 ? 3 : Number(inp.step) < 1 ? 1 : 0);
+  }));
+  el.querySelector('.go')!.addEventListener('click', () => {
+    const t = lv.towers[benchPick + 1];
+    body.place([t.at[0], t.at[1] + REST_H + benchDrop, t.at[2]], camYaw + Math.PI);
+    prevX = new Float32Array(body.x);
+  });
+}
 function startLevel(n: number, quiet = false) {
   levelN = Math.max(1, n);
   if (levelN >= JELLY_AT && !jellyOpen) {
@@ -980,9 +1066,11 @@ function startLevel(n: number, quiet = false) {
     if (!params.has('skin')) skin = 'jelly';
     showSkin();
   }
-  lv = buildLevel(levelN);
+  lv = benchName ? bench(benchName) : buildLevel(levelN);
   drop(courseMesh); drop(glassMesh);
   for (const m of movers) drop(m.mesh);
+  for (const jm of jellyMeshes) drop(jm.mesh);
+  jellyMeshes = (lv.jellies ?? []).map((shape) => { const data = new Float32Array(jelMeshSize(shape.jel!, shape.dust)); return { shape, data, mesh: upload(data, gl.DYNAMIC_DRAW) }; });
   const lm = levelMesh(lv);
   courseMesh = upload(lm.solid);
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
@@ -1000,10 +1088,11 @@ function startLevel(n: number, quiet = false) {
   steamSeed = 0;
   puffs.length = 0;
   if (quiet) return;
-  try { if (!auto) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
-  if (!auto) history.replaceState(null, '', `?level=${levelN}`);
+  try { if (!auto && !benchName) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
+  if (!auto && !benchName) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
   showTitle();
+  if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
   hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
@@ -1318,7 +1407,7 @@ btn('sound', toggleSound);
 
 // ─── the title: the name, New Game, Continue, Settings; the place behind it, the dumpling and its friend ─────
 /** the title or playing; on the title, which way the camera looks (toward the course), the level the settings would start, and which card is up */
-let mode: 'title' | 'play' = auto || params.has('level') || params.has('skin') ? 'play' : 'title';
+let mode: 'title' | 'play' = auto || benchName || params.has('level') || params.has('skin') ? 'play' : 'title';
 let titleYaw = 0, pickN = 1, card: 'main' | 'settings' = 'main';
 let hopAt = 2.5, hopWho = 0;
 const saved = () => { try { return Number(localStorage.getItem(STORE + ':level')) || 0; } catch { return 0; } };
@@ -1444,8 +1533,8 @@ function showHands() {
 let titleTimer = 0;
 function showTitle() {
   const el = $('title');
-  el.querySelector('b')!.textContent = CHAPTER_NAME[lv.chapter];
-  el.querySelector('i')!.textContent = `${levelN}`;
+  el.querySelector('b')!.textContent = benchName ? `the ${benchName} bench` : CHAPTER_NAME[lv.chapter];
+  el.querySelector('i')!.textContent = benchName ? 'try it, again and again' : `${levelN}`;
   el.classList.add('on');
   clearTimeout(titleTimer);
   titleTimer = window.setTimeout(() => el.classList.remove('on'), 3200);
@@ -1690,6 +1779,8 @@ function frame(now: number) {
   if (courseMesh) { gl.bindVertexArray(courseMesh.svao); gl.drawArrays(gl.TRIANGLES, 0, courseMesh.count); }
   for (const m of movers) { gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, model([0, m.shape.c[1] - m.shape.lift!.y0, 0], 1)); gl.bindVertexArray(m.mesh.svao); gl.drawArrays(gl.TRIANGLES, 0, m.mesh.count); }
   gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, I4);
+  fillJellies();
+  for (const jm of jellyMeshes) { gl.bindVertexArray(jm.mesh.svao); gl.drawArrays(gl.TRIANGLES, 0, jm.mesh.count); }
   for (const b of drawn) { const sk = skins[b.kind]; gl.bindVertexArray(sk.svao); gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0); }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
@@ -1724,6 +1815,8 @@ function frame(now: number) {
   drawSusans();
   // (the lids, where the steam has them)
   for (const m of movers) drawMesh(m.mesh, model([0, m.shape.c[1] - m.shape.lift!.y0, 0], 1));
+  // (the jellies, as their tops are)
+  for (const jm of jellyMeshes) drawMesh(jm.mesh);
   // the dark under the dumpling
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);

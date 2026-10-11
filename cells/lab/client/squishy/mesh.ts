@@ -11,7 +11,7 @@ type UV = [number, number];
 const norm = (a: V3): V3 => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 function push(out: number[], p: V3, n: V3, mat: number, uv: UV) { out.push(p[0], p[1], p[2], n[0], n[1], n[2], mat, uv[0], uv[1]); }
-function quad(out: number[], a: V3, b: V3, c: V3, d: V3, na: V3, nb: V3, nc: V3, nd: V3, mat: number, ua: UV, ub: UV, uc: UV, ud: UV) {
+export function quad(out: number[], a: V3, b: V3, c: V3, d: V3, na: V3, nb: V3, nc: V3, nd: V3, mat: number, ua: UV, ub: UV, uc: UV, ud: UV) {
   push(out, a, na, mat, ua); push(out, b, nb, mat, ub); push(out, c, nc, mat, uc);
   push(out, a, na, mat, ua); push(out, c, nc, mat, uc); push(out, d, nd, mat, ud);
 }
@@ -152,8 +152,8 @@ function dustOn(s: Shape, out: number[]) {
 /** Shapes as they draw themselves (the sets' free things: a bench, a pad, a board), into out. */
 export function drawShapes(shapes: Shape[], out: number[]) { for (const s of shapes) drawShape(s, out); }
 function drawShape(s: Shape, out: number[]) {
-  // (a sheet is drawn by its prop, which made it)
-  if (s.kind === 'sheet') return;
+  // (a sheet is drawn by its prop, which made it; a jelly, each frame, as its top is)
+  if (s.kind === 'sheet' || s.kind === 'jelly') return;
   dustOn(s, out);
   {
     if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); return; }
