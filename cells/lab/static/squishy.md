@@ -1,8 +1,8 @@
 # Squishy
 
-A third-person platformer in which you are a dumpling: a clear pink squishy toy of one, full of
-glitter, with a little pointed tip and a face printed on (or, by the `jelly` word at the bottom,
-a steamed one of dough). You don't walk: you flick. Drag back
+A third-person platformer in which you are a dumpling: a steamed one, of dough, with a face;
+from level 13 (and, once you've been there, by the word at the bottom, anywhere) a clear pink
+jelly squishy toy of one, full of glitter, with a pointed tip. You don't walk: you flick. Drag back
 from anywhere on the screen and let go, as with a slingshot, and the dumpling flies the other
 way, as hard as you pulled. Across a kitchen counter from one top to the next, steamers,
 plates, a chopping board, a pudding, a lazy Susan, tea tins, up and over, to the golden
@@ -12,6 +12,7 @@ steamer: home.
 |---|---|---|
 | flick | drag back and let go | drag back and let go |
 | spin | swipe as you let go: on, the way it will fly, for topspin; back, for backspin | the same |
+| nudge | tap: it rolls once toward where you tapped (tap on it: straight on) | click |
 | turn the camera, tilt it | two fingers, sideways and up or down | ← → |
 | come close | pinch | the wheel |
 | start the level again | `again` | R |
@@ -28,6 +29,9 @@ aim is taken from before the swipe, so the swipe doesn't change where it goes. S
 way it will fly, it has topspin: it rolls on when it lands, two or three times as far, which is
 how you cross a pan or reach the far side of a board. Swiped back, it has backspin: it bites
 where it lands and stays, even on butter. A word at the bottom says which you gave it.
+
+A tap is a nudge: one roll the way you tapped, a hand's width and no more, with hardly a hop. For
+creeping to an edge, off a lid, or back to the middle of a top.
 
 Fall to the counter and it's a splat, and back to the last top you stood on. The clock runs
 until you're home, the count of falls beside it, and your best time for each level is kept. Levels after the first are longer
@@ -67,6 +71,26 @@ From level 5 the course is on the hob: brushed steel, a burner under each pot, t
 Every level is made from its number, so level 6 is always the same level, and every hop in it
 is checked when it's made: from the middle of each top there is a flick that lands on the next;
 onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too.
+
+## What gets on it
+
+Some tops have something on them that comes off on the dumpling where it touches, and stays
+there, on that part of it, wearing off in time and shaken off by a hard landing; while it's on,
+it has its say in how it lands:
+
+- **Flour** (on half the chopping boards): dry. It grips better, and loses its own tack, so it
+  won't hold to a wall.
+- **Butter** (the butter dish): slippery. It slides far on anything, can't hold a wall, and
+  honey won't hold a buttered patch: a buttered dumpling thrown at a jar slides off it.
+- **Crumbs** (some plates): rough. It bounces where it lands, and takes longer to settle.
+- **Pepper** (some plates): it sneezes, a little while after, a hop any way, and the pepper's
+  off it. On a small top, mind.
+- **Hundreds and thousands** (some puddings): sweet and sticky. More tack: it holds walls
+  better.
+
+You can see all of it: the flour's dusting, thicker in the creases, butter's yellow sheen,
+crumbs stuck on in lumps, pepper's specks, the sprinkles' coloured rods, each on the part that
+touched, riding its wobble. The first of each is named at the bottom when you pick it up.
 
 ## The dumpling
 
@@ -123,6 +147,9 @@ light gathers in its shadow.
 The dough is lit as dough:
 thick, the light wrapping round it and glowing a little through its thin edges, darker in its
 pleats, faintly floury, with a dark under it on whatever it's over.
+
+The camera follows easily, but if the dumpling nears the edge of the glass, or leaves it, the
+camera catches up at once.
 
 The lids move: they're drawn where the steam has them, with a puff of steam out from under as
 one lifts and a rattle you hear when you're near. The honey jar is glass, drawn after

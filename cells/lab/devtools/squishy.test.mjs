@@ -3,7 +3,8 @@
 // says; tipped over it rolls back up; sat still it turns to look where it's asked; a chopstick is a stick; every level is the
 // same level each time, every hop in it can be made, and flicked by the book it gets home
 // without a fall; spin runs on or bites; the stove's butter slides and its lip catches, honey
-// holds a splat, a lid lifts what's on it. (node cells/lab/devtools/squishy.test.mjs)
+// holds a splat, a lid lifts what's on it; flour, butter, crumbs, pepper and sprinkles coat it
+// where it touched and have their say; a tap nudges it. (node cells/lab/devtools/squishy.test.mjs)
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
@@ -188,6 +189,56 @@ console.log(`${kind} righting ok`);
   }
 }
 
+// ─── coatings: picked up where it touches, worn off in time, each with its say ───────────────────
+{
+  const dusted = (dust, mu = 0.8) => { const f = L.box([0, -5, 0], [400, 5, 400], 0, 0, mu); f.dust = dust; return { ...flat, shapes: [f] }; };
+  const coatOn = (dust, secs = 2.5) => { const d = new B.Dumpling([0, L.REST_H + 0.3, 0], 'dough'); run(d, dusted(dust), secs); return d; };
+  for (const k of [L.DUST.flour, L.DUST.butter, L.DUST.crumbs, L.DUST.sprinkles]) {
+    const d = coatOn(k);
+    assert.ok(d.coated[k] > 0.08 && d.coatMost === k, `picks up ${k}: ${d.coated[k].toFixed(2)}`);
+    let n = 0; for (let i = 0; i < d.n; i++) if (d.coat[i] > 0.05) n++;
+    assert.ok(n > d.n * 0.08 && n < d.n * 0.7, `on the part of it that touched, not all over: ${n} of ${d.n}`);
+    const was = d.coated[k];
+    run(d, flat, 8);
+    assert.ok(d.coated[k] < was * 0.8, `wears off: ${was.toFixed(2)} → ${d.coated[k].toFixed(2)}`);
+  }
+  // butter: it slides much further, and honey won't hold it
+  const slide = (d) => { d.flick(L.launch(0, 0.6)); let land = null, fly = false; run(d, { ...flat, shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0, 0.5)] }, 3, () => { if (d.contacts === 0) fly = true; if (!land && fly && d.contacts > 0) land = [...d.com]; }); return d.com[2] - land[2]; };
+  const plain = slide(coatOn(L.DUST.none)), buttered = slide(coatOn(L.DUST.butter));
+  assert.ok(buttered > plain * 3 + 3, `buttered, it slides: ${buttered.toFixed(1)} vs ${plain.toFixed(1)}`);
+  {
+    const tw = L.tower('honey', [0, 20, 0], 6.5, 0, () => 0.5);
+    const lv = { n: 0, chapter: 'stove', towers: [tw], sticks: [], movers: [], shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0), ...tw.shapes] };
+    const d = new B.Dumpling([0, 20, -30], 'dough');
+    for (let i = 0; i < d.n; i++) { d.coat[i] = 0.8; d.coatKind[i] = L.DUST.butter; }
+    d.flick([0, 150, 110]);
+    run(d, lv, 3);
+    assert.ok(d.pinned === 0 && d.com[1] < 10, `honey won't hold butter: pinned ${d.pinned}, at y ${d.com[1].toFixed(1)}`);
+  }
+  // pepper: it sneezes, and the pepper's off it
+  {
+    const d = coatOn(L.DUST.pepper, 1);
+    let sneezes = 0;
+    run(d, flat, 6, () => { if (d.sneezed) sneezes++; });
+    assert.ok(sneezes >= 1 && sneezes <= 4, `sneezes: ${sneezes}`);
+    assert.ok(d.coated[L.DUST.pepper] < 0.02, 'and the pepper is off it');
+  }
+  console.log('coatings ok');
+}
+
+// ─── a nudge: a tap rolls it a hand's width, no more ────────────────────────────────────────────
+{
+  const d = new B.Dumpling([0, L.REST_H + 0.3, 0], 'dough');
+  run(d, flat, 1);
+  d.nudge([0, 0, 1]);
+  let top = 0;
+  run(d, flat, 2.5, () => { top = Math.max(top, d.com[1]); });
+  assert.ok(d.com[2] > 5 && d.com[2] < 16, `rolls a little way: ${d.com[2].toFixed(1)}`);
+  assert.ok(top < 8, `and hardly leaves the ground: up to ${top.toFixed(1)}`);
+  assert.ok(d.R[4] > 0.95 && Math.hypot(...d.drift) < 2, 'upright and still after');
+  console.log(`nudge ok: ${d.com[2].toFixed(1)} cm`);
+}
+
 // ─── levels ───────────────────────────────────────────────────────────────────────────────────
 {
   const kinds = new Set();
@@ -205,6 +256,8 @@ console.log(`${kind} righting ok`);
   assert.equal(L.buildLevel(2).chapter, 'counter'); assert.equal(L.buildLevel(6).chapter, 'stove'); assert.equal(L.buildLevel(9).chapter, 'mixed');
   assert.ok(L.buildLevel(3).towers.every((t) => !['butter', 'honey', 'lid', 'pan'].includes(t.top)), 'the counter has none of the stove\'s things');
   assert.ok(L.buildLevel(7).movers.length > 0, 'level 7 has a lid');
+  const dusts = new Set(); for (let n = 1; n <= 12; n++) for (const sh of L.buildLevel(n).shapes) if (sh.dust) dusts.add(sh.dust);
+  for (const k of [L.DUST.flour, L.DUST.butter, L.DUST.crumbs, L.DUST.pepper, L.DUST.sprinkles]) assert.ok(dusts.has(k), `something with ${k} on it, in the first twelve levels`);
   assert.notDeepEqual(L.buildLevel(1).towers.map((t) => t.at), L.buildLevel(2).towers.map((t) => t.at));
   console.log('levels ok');
 }

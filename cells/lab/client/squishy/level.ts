@@ -34,6 +34,23 @@ export const MAT = {
   // (12–16 are the drawing's own: a window, the aiming dots, the landing ring, the dark under it, the jelly's light)
   butter: 17, honey: 18, glass: 19, pot: 20, pan: 21, hob: 22, burner: 23, knob: 24,
 } as const;
+/**
+ * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
+ * (slippery: it slides, can't hold a wall, and honey won't hold it), crumbs (rough: it bounces
+ * and won't settle), pepper (it sneezes: a hop, and the pepper's off), hundreds and thousands
+ * (sweet and sticky: more tack). None is 0.
+ */
+export const DUST = { none: 0, flour: 1, butter: 2, crumbs: 3, pepper: 4, sprinkles: 5 } as const;
+export type Dust = (typeof DUST)[keyof typeof DUST];
+/** each coating: how fast it comes off on what touches it (/s), how fast it wears off (/s), how much a hard landing shakes off */
+export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
+  [DUST.none]: { on: 0, off: 0, shake: 0 },
+  [DUST.flour]: { on: 6, off: 0.06, shake: 0.5 },
+  [DUST.butter]: { on: 3, off: 0.08, shake: 0.5 },
+  [DUST.crumbs]: { on: 5, off: 0.1, shake: 0.7 },
+  [DUST.pepper]: { on: 6, off: 0.12, shake: 0.3 },
+  [DUST.sprinkles]: { on: 4, off: 0.04, shake: 0.4 },
+};
 /** which kitchen a level is in: the counter, then the stovetop, then both mixed */
 export type Chapter = 'counter' | 'stove' | 'mixed';
 export const chapterOf = (n: number): Chapter => (n <= 4 ? 'counter' : n <= 8 ? 'stove' : 'mixed');
@@ -60,6 +77,8 @@ export interface Shape {
   tire: number;
   /** a lid that lifts: how far, its cycle, where in it it starts, and its rest height */
   lift: { amp: number; period: number; phase: number; y0: number } | null;
+  /** what's on it that comes off on the dumpling (flour, crumbs, pepper, sprinkles; butter), if anything */
+  dust: Dust;
   mat: number;
   lo: V3;
   hi: V3;
@@ -109,7 +128,7 @@ function bounds(s: Shape): Shape {
   }
   return s;
 }
-const base = (): Shape => ({ kind: 'box', c: [0, 0, 0], b: [0, 0, 0], h: [0, 0, 0], r: 0, hh: 0, yaw: 0, mu: 0.8, bounce: 0, spin: 0, tack: 1, tire: 1, lift: null, mat: 0, lo: [0, 0, 0], hi: [0, 0, 0] });
+const base = (): Shape => ({ kind: 'box', c: [0, 0, 0], b: [0, 0, 0], h: [0, 0, 0], r: 0, hh: 0, yaw: 0, mu: 0.8, bounce: 0, spin: 0, tack: 1, tire: 1, lift: null, dust: DUST.none, mat: 0, lo: [0, 0, 0], hi: [0, 0, 0] });
 export const box = (c: V3, h: V3, yaw: number, mat: number, mu = 0.8): Shape => bounds({ ...base(), kind: 'box', c, h, yaw, mat, mu });
 /** an upright cylinder from y0 up to y1 */
 export const cyl = (x: number, z: number, r: number, y0: number, y1: number, mat: number, mu = 0.8): Shape =>
@@ -141,6 +160,8 @@ function keep(t: Tower): { x: number; z: number; r: number } {
 /** A tower of a kind, its top at `at`: what holds it up from the counter, and what's on top. */
 export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Tower {
   const [x, y, z] = at;
+  // (what's on a top is decided from where it stands, not from the level's own dice, so it changes no layout)
+  const coin = (salt: number) => (hash(Math.round(x * 10), Math.round(z * 10), salt) % 1000) / 1000;
   const shapes: Shape[] = [];
   let landR = rad - 1;
   let box2: [number, number] | null = null;
@@ -154,16 +175,22 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       shapes.push(cyl(x, z, rad, 0, y, top === 'goal' ? MAT.gold : MAT.bamboo));
       break;
     case 'plate': {
-      // a plate on a tea tin: glazed, and so a little slippery
+      // a plate on a tea tin: glazed, and so a little slippery; now and then with crumbs on it, or pepper
       shapes.push(cyl(x, z, rad * 0.5, 0, y - 1.6, MAT.tin));
-      shapes.push(cyl(x, z, rad, y - 1.6, y, MAT.porcelain, 0.55));
+      const pl = cyl(x, z, rad, y - 1.6, y, MAT.porcelain, 0.55);
+      const d = coin(0x2c);
+      if (d < 0.3) pl.dust = DUST.crumbs; else if (d < 0.55) pl.dust = DUST.pepper;
+      shapes.push(pl);
       break;
     }
     case 'board': {
       // a chopping board laid across two jars
       const ux = Math.cos(yaw), uz = -Math.sin(yaw);
       for (const s of [-1, 1]) shapes.push(cyl(x + ux * 9 * s, z + uz * 9 * s, 4.5, 0, y - 2.4, MAT.jar));
-      shapes.push(box([x, y - 1.2, z], [15, 1.2, 9], yaw, MAT.board, 0.85));
+      const bd = box([x, y - 1.2, z], [15, 1.2, 9], yaw, MAT.board, 0.85);
+      // (most boards are floury)
+      if (coin(0x1f) < 0.65) bd.dust = DUST.flour;
+      shapes.push(bd);
       landR = 8;
       box2 = [14, 8];
       break;
@@ -174,6 +201,8 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       shapes.push(cyl(x, z, 10.5, y - 6.2, y - 5.4, MAT.porcelain, 0.5));
       const p = cyl(x, z, rad, y - 5.4, y, MAT.jelly, 0.85);
       p.bounce = 0.3;
+      // (some with hundreds and thousands on top)
+      if (coin(0x5e) < 0.5) p.dust = DUST.sprinkles;
       shapes.push(bounds(p));
       landR = rad - 1.5;
       break;
@@ -197,7 +226,7 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       shapes.push(cyl(x, z, 5, 0, y - 2, MAT.tin));
       shapes.push(box([x, y - 1.6, z], [12, 0.6, 8.5], yaw, MAT.porcelain, 0.5));
       const b = box([x, y - 0.5, z], [8.5, 0.5, 5.5], yaw, MAT.butter, 0.28);
-      b.tack = 0;
+      b.tack = 0; b.dust = DUST.butter;
       shapes.push(b);
       const cy = Math.cos(yaw), sy = Math.sin(yaw);
       // (the lip: a proper wall, as a covered dish's base has; a fast slide stops against it)

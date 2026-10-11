@@ -13,7 +13,7 @@
  * Its momentum is its own, so in the air its middle
  * flies a plain parabola: the aiming line shows where it will go.
  */
-import { G, RADIUS, moveShapes, near, touch, type Hit, type Level, type Shape, type V3 } from './level';
+import { DUST, DUSTS, G, RADIUS, moveShapes, near, touch, type Dust, type Hit, type Level, type Shape, type V3 } from './level';
 
 /** small steps a frame */
 export const SUB = 10;
@@ -27,6 +27,8 @@ const RIGHT = 9;
 const TURN = 4, UPRIGHT = 3;
 /** dough's tack: how hard it holds what it touches (cm/s²), and how near counts as touching */
 const TACK = 900, STICK = 0.35;
+/** a nudge: how fast it goes (cm/s), and the little hop with it */
+const NUDGE = 90, NUDGE_UP = 40;
 /** honey: how fast it takes the speed out of what's stuck to it (/s), and how far a step the rest is drawn back up to what's stuck (cm) */
 const HONEY_DRAG = 90, HANG = 0.03;
 
@@ -171,7 +173,19 @@ export class Dumpling {
   private cv0: Float32Array;
   private cf: Uint8Array;
   private ctk: Float32Array;
+  private cdust: Uint8Array;
   private pin: Uint8Array;
+  /** what each particle is coated with, and how thickly (0–1): picked up where it touches, worn off in time, shaken off by a hard landing */
+  coat: Float32Array;
+  coatKind: Uint8Array;
+  /** how much of it is coated, by kind (0–1 each), and the most of any */
+  coated: number[] = [0, 0, 0, 0, 0, 0];
+  coatMost: Dust = DUST.none;
+  /** peppered: how close to a sneeze (0–1); it sneezes at 1 */
+  sneeze = 0;
+  /** things that happened this step, for the drawing and the sounds: it sneezed; it shook some coating off (which) */
+  sneezed = false;
+  shook: Dust = DUST.none;
   private nearby: Shape[] = [];
   private hit: Hit = { nx: 0, ny: 0, nz: 0, d: 0, vx: 0, vy: 0, vz: 0 };
   /** how much tack is left (dough tires of holding a wall), seconds since it touched anything, since it was flicked */
@@ -214,7 +228,8 @@ export class Dumpling {
     const n = this.n;
     this.x = new Float32Array(n * 3); this.v = new Float32Array(n * 3); this.p = new Float32Array(n * 3); this.q = new Float32Array(n * 3);
     this.cn = new Float32Array(n * 3); this.cd = new Float32Array(n); this.cmu = new Float32Array(n); this.cb = new Float32Array(n);
-    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.pin = new Uint8Array(n);
+    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.pin = new Uint8Array(n); this.cdust = new Uint8Array(n);
+    this.coat = new Float32Array(n); this.coatKind = new Uint8Array(n);
     let cx = 0, cy = 0, cz = 0;
     for (let i = 0; i < n; i++) { cx += s.pos[i * 3]; cy += s.pos[i * 3 + 1]; cz += s.pos[i * 3 + 2]; }
     cx /= n; cy /= n; cz /= n;
@@ -239,6 +254,13 @@ export class Dumpling {
     this.vcom = [0, 0, 0]; this.drift = [0, 0, 0];
     this.tack = 1; this.sinceContact = 0; this.sinceFlick = 9; this.squeeze = null;
     this.spinMode = 0; this.spinLeft = 0; this.held = 0;
+    this.coat.fill(0); this.coatKind.fill(0); this.coated = [0, 0, 0, 0, 0, 0]; this.coatMost = DUST.none; this.sneeze = 0;
+  }
+  /** A nudge: pushed, not flicked, it rolls once the way it's pushed, a hand's width, no more. */
+  nudge(dir: V3) {
+    const h = Math.hypot(dir[0], dir[2]) || 1;
+    const dx = dir[0] / h, dz = dir[2] / h;
+    this.flick([dx * NUDGE, NUDGE_UP, dz * NUDGE], 0.5);
   }
   /** Whether it can be flicked: touching something (or only just off it), and not just flicked. */
   get canFlick() { return this.sinceContact < 0.2 && this.sinceFlick > 0.25; }
@@ -366,7 +388,7 @@ export class Dumpling {
   /** A frame: SUB small steps of falling, keeping its shape, meeting the course, friction and tack. */
   step(lv: Level, dt: number, time: number) {
     const n = this.n, h = dt / SUB;
-    const { x, v, p, cn, cd, cmu, cb, cvs, cv0, cf, ctk } = this;
+    const { x, v, p, cn, cd, cmu, cb, cvs, cv0, cf, ctk, cdust, coat, coatKind } = this;
     const w0 = 2 * Math.PI * this.phys.hz;
     const alpha = Math.min(0.5, (w0 * h) ** 2);
     const damp = 2 * this.phys.zeta * w0 * h;
@@ -398,14 +420,14 @@ export class Dumpling {
             const vn = (v[i3] - o.vx) * o.nx + (v[i3 + 1] - o.vy) * o.ny + (v[i3 + 2] - o.vz) * o.nz;
             if (cf[i] !== 1 || o.d > cd[i]) {
               cn[i3] = o.nx; cn[i3 + 1] = o.ny; cn[i3 + 2] = o.nz;
-              cmu[i] = sh.mu; cb[i] = sh.bounce; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = vn; ctk[i] = sh.tack;
+              cmu[i] = sh.mu; cb[i] = sh.bounce; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = vn; ctk[i] = sh.tack; cdust[i] = sh.dust;
               if (o.ny < 0.5 && sh.tire < tire) tire = sh.tire;
             }
             cd[i] += o.d;
             cf[i] = 1;
           } else if (cf[i] === 0) {
             cn[i3] = o.nx; cn[i3 + 1] = o.ny; cn[i3 + 2] = o.nz;
-            cmu[i] = sh.mu; cb[i] = 0; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = 0; ctk[i] = sh.tack;
+            cmu[i] = sh.mu; cb[i] = 0; cvs[i3] = o.vx; cvs[i3 + 1] = o.vy; cvs[i3 + 2] = o.vz; cv0[i] = 0; ctk[i] = sh.tack; cdust[i] = sh.dust;
             if (o.ny < 0.5 && sh.tire < tire) tire = sh.tire;
             cf[i] = 2;
           }
@@ -433,24 +455,39 @@ export class Dumpling {
           let vn = rx * nx + ry * ny + rz * nz;
           let tx = rx - nx * vn, ty = ry - ny * vn, tz = rz - nz * vn;
           let dvn = cf[i] === 1 ? cd[i] / h : 0;
+          // what it's coated with here has its say: flour grips and is dry; butter slips, and honey won't hold it; crumbs bounce; sprinkles are sticky
+          const ck = coat[i], kind = coatKind[i];
+          let mu = cmu[i], tk0 = ctk[i], bn = cb[i];
+          if (ck > 0.05) {
+            if (kind === DUST.flour) { mu *= 1 + 0.6 * ck; tk0 *= 1 - ck; }
+            else if (kind === DUST.butter) { mu *= 1 - 0.75 * ck; tk0 *= 1 - ck; }
+            else if (kind === DUST.crumbs) { bn = Math.max(bn, 1.6 * ck); mu *= 1 + 0.3 * ck; }
+            else if (kind === DUST.sprinkles) { if (tk0 <= 1) tk0 += 1.2 * ck; }
+          }
+          // (and it picks up what's there, as it touches)
+          if (cf[i] === 1 && cdust[i]) {
+            const on = DUSTS[cdust[i] as Dust].on * h;
+            if (coatKind[i] !== cdust[i]) { if (coat[i] < on * 4) { coatKind[i] = cdust[i]; coat[i] = Math.min(1, coat[i] * 0.5 + on); } }
+            else coat[i] = Math.min(1, coat[i] + on);
+          }
           // (touching; or held by honey, which is as good as)
-          if (cf[i] === 1 || (ctk[i] > 1 && tackOn)) {
+          if (cf[i] === 1 || (tk0 > 1 && tackOn)) {
             contacts++; nyS += ny; if (ny > 0.5) floor++;
-            if (ctk[i] > held) held = ctk[i];
+            if (tk0 > held) held = tk0;
             if (ny < 0.5) wall = true;
           }
           if (cf[i] === 1) {
             if (-cv0[i] > impact) impact = -cv0[i];
-            if (cb[i] > 0 && cv0[i] < -40) vn = Math.max(vn, -cv0[i] * cb[i]);
+            if (bn > 0 && cv0[i] < -40) vn = Math.max(vn, -cv0[i] * bn);
           }
           // (dough's tack: drawn to what it touches, unless it's leaving it fast)
           // (its own tack, which tires; honey's, which doesn't)
-          const tk = ctk[i] > 1 ? ctk[i] : this.tack * ctk[i];
+          const tk = tk0 > 1 ? tk0 : this.tack * tk0;
           if (tackOn && tk > 0 && vn < 60) { const a = TACK * this.phys.tack * tk * tackK * h; vn -= a; dvn += a; }
-          const tm = Math.hypot(tx, ty, tz), lim = cmu[i] * muK * dvn;
+          const tm = Math.hypot(tx, ty, tz), lim = mu * muK * dvn;
           const k = tm <= lim ? 0 : 1 - lim / tm;
           tx *= k; ty *= k; tz *= k;
-          if (ctk[i] > 1 && tackOn) {
+          if (tk0 > 1 && tackOn) {
             // (honey: what touches it is held where it touched, so a splat against it hangs there until it's flicked)
             // (it stays put, but for being pushed out of the honey's surface; nothing draws it off)
             tx = 0; ty = 0; tz = 0;
@@ -485,6 +522,33 @@ export class Dumpling {
     this.onFloor = contacts > 0 ? floor / contacts : 1;
     this.held = held;
     this.pinned = Math.round(pinnedS / SUB);
+    // the coatings wear off in time; a hard landing shakes some off; pepper brings on a sneeze
+    this.shook = DUST.none; this.sneezed = false;
+    const sums = [0, 0, 0, 0, 0, 0];
+    const shake = impact > 150 ? Math.min(1, (impact - 150) / 250) : 0;
+    for (let i = 0; i < n; i++) {
+      if (coat[i] <= 0) continue;
+      const k = coatKind[i] as Dust, d = DUSTS[k];
+      coat[i] = Math.max(0, coat[i] - d.off * dt - d.shake * shake * coat[i]);
+      if (shake > 0.2 && d.shake > 0 && coat[i] > 0.2) this.shook = k;
+      if (coat[i] <= 0) coatKind[i] = 0; else sums[k] += coat[i];
+    }
+    this.coated = sums.map((v) => v / n);
+    let most: Dust = DUST.none, mostV = 0.01;
+    for (let k = 1; k < 6; k++) if (this.coated[k] > mostV) { mostV = this.coated[k]; most = k as Dust; }
+    this.coatMost = most;
+    if (this.coated[DUST.pepper] > 0.02) {
+      this.sneeze += dt * (0.2 + 2 * this.coated[DUST.pepper]);
+      if (this.sneeze >= 1 && contacts > 0) {
+        // (achoo: a hop, any way, and the pepper's off it)
+        this.sneeze = 0; this.sneezed = true;
+        const a = Math.random() * Math.PI * 2;
+        this.flick([Math.cos(a) * 22, 85, Math.sin(a) * 22], 0);
+        this.sinceFlick = 0.2;
+        for (let i = 0; i < n; i++) if (coatKind[i] === DUST.pepper) { coat[i] = 0; coatKind[i] = 0; }
+        this.coated[DUST.pepper] = 0;
+      }
+    } else this.sneeze = Math.max(0, this.sneeze - dt * 0.5);
     if (contacts > 0 && this.sinceFlick > 0.12) this.spinLeft = Math.max(0, this.spinLeft - dt * 2.2);
     this.impact = impact;
     this.sinceContact = contacts > 0 ? 0 : this.sinceContact + dt;

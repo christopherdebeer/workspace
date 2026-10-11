@@ -17,7 +17,7 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { MAT, RADIUS, REST_H, aim, buildLevel, launch, liftAt, path, touch, towerAt, type Level, type V3 } from './level';
+import { DUST, MAT, RADIUS, REST_H, aim, buildLevel, launch, liftAt, path, touch, towerAt, type Dust, type Level, type V3 } from './level';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
 
 const params = new URLSearchParams(location.search);
@@ -68,6 +68,60 @@ vec3 tonemap(vec3 x) {
 }
 float D_ggx(float NoH, float a) { float a2 = a * a; float d = NoH * NoH * (a2 - 1.) + 1.; return a2 / (3.1416 * d * d); }
 float V_smith(float NoV, float NoL, float a) { float a2 = a * a; return .5 / max(NoL * sqrt(NoV * NoV * (1. - a2) + a2) + NoV * sqrt(NoL * NoL * (1. - a2) + a2), 1e-4); }`;
+/**
+ * What's on the dumpling: flour (white, dry, matte), butter (yellow, glossy), crumbs (brown bits,
+ * and bumpy), pepper (black specks), hundreds and thousands (little coloured rods). Each where it
+ * is, as thick as it is; the patterns sit on its rest shape, so they ride its wobble.
+ */
+const COAT_GLSL = `
+vec3 coatColor(vec3 q, vec2 coat, vec3 base, inout float rough, inout float gloss, inout vec3 n, vec3 nRest) {
+  float a = coat.x;
+  if (a < .02) return base;
+  int k = int(coat.y + .5);
+  vec3 c = base;
+  if (k == 1) {
+    // flour: a dusting, thicker in the creases, speckled
+    float fine = noise(q * 30.) * .5 + noise(q * 9. + 7.) * .5;
+    float d = smoothstep(.2, .9, a * (0.6 + .8 * fine));
+    c = mix(base, vec3(.97, .95, .9), d);
+    rough = mix(rough, .95, d); gloss *= 1. - d;
+  } else if (k == 2) {
+    // butter: a yellow sheen, greasy
+    float d = smoothstep(.05, .6, a);
+    c = mix(base, base * vec3(1., .88, .5) + vec3(.1, .07, 0.), d);
+    rough = mix(rough, .12, d); gloss += d * .6;
+  } else if (k == 3) {
+    // crumbs: brown bits stuck on, each a little lump
+    vec3 g = floor(q * 11.);
+    float h = hash3(g);
+    vec2 cell = fract(q.xz * 11. + q.y * 3.) - .5;
+    float bit = step(h, a * .9) * (1. - smoothstep(.18, .3, length(cell)));
+    c = mix(base, mix(vec3(.5, .3, .13), vec3(.75, .52, .28), hash3(g + 1.)), bit);
+    n = normalize(n + nRest * 0. + vec3(cell.x, 0., cell.y) * bit * .8);
+    rough = mix(rough, .8, bit);
+  } else if (k == 4) {
+    // pepper: black and grey specks
+    vec3 g = floor(q * 26.);
+    float h = hash3(g);
+    float bit = step(h, a * .55) * (1. - smoothstep(.2, .35, length(fract(q.xz * 26. + q.y * 5.) - .5)));
+    c = mix(base, mix(vec3(.05), vec3(.35, .3, .25), hash3(g + 2.)), bit);
+    rough = mix(rough, .7, bit);
+  } else if (k == 5) {
+    // hundreds and thousands: little rods, each its own colour
+    vec3 g = floor(q * 9.5);
+    float h = hash3(g);
+    vec2 cell = fract(q.xz * 9.5 + q.y * 2.) - .5;
+    float ang = hash3(g + 3.) * 3.1416;
+    vec2 e = vec2(cos(ang), sin(ang));
+    float along = dot(cell, e), across = abs(dot(cell, vec2(-e.y, e.x)));
+    float rod = step(h, a * .8) * (1. - smoothstep(.1, .14, across)) * (1. - smoothstep(.3, .36, abs(along)));
+    float hue = hash3(g + 5.);
+    vec3 col = hue < .2 ? vec3(1., .3, .4) : hue < .4 ? vec3(1., .85, .2) : hue < .6 ? vec3(.3, .6, 1.) : hue < .8 ? vec3(.4, .85, .4) : vec3(1., .5, .8);
+    c = mix(base, col, rod);
+    rough = mix(rough, .3, rod); gloss += rod * .3;
+  }
+  return c;
+}`;
 /** the window's shadow: soft as a broad window makes it (a blocker search, then a filter that wide) */
 const SHADOW_GLSL = `
 uniform sampler2D uShadowMap;
@@ -151,6 +205,7 @@ uniform vec3 uEye, uTint;
 uniform float uTime, uAlpha;
 ${COMMON}
 ${SHADOW_GLSL}
+${COAT_GLSL}
 void main() {
   vec3 n = normalize(vNor);
   if (!gl_FrontFacing) n = -n;
@@ -279,6 +334,16 @@ void main() {
     emit = 0.; base += flame * (1. - grate) * 1.4;
   } else if (id == ${MAT.knob}) {
     base = vec3(.06, .06, .065); rough = .18; coat = 1.;
+  } else if (id >= 25 && id <= 28) {
+    // what's on a top: flour on a board, crumbs or pepper on a plate, hundreds and thousands on a pudding, over the top it's on
+    int k = id - 24;
+    if (k == 1) base = vec3(.8, .64, .44); else if (k == 4 || k == 3) { float r = length(uv); base = mix(vec3(.94, .94, .92), vec3(.12, .25, .58), smoothstep(.78, .8, r) * (1. - smoothstep(.86, .88, r))); rough = .18; coat = 1.; } else { base = vec3(.62, .28, .06); rough = .12; coat = 1.; emit = .05; }
+    float gl = 0.;
+    float amount = k == 1 ? .55 : k == 3 ? .5 : k == 4 ? .45 : .6;
+    // (thinner toward the edge, as a sprinkle or a dusting lies)
+    float spread = k == 1 ? .8 + .4 * noise(vec3(vWorld.xz * .3, 1.)) : 1. - .5 * smoothstep(.5, 1., length(uv));
+    base = coatColor(vWorld * .33, vec2(amount * spread, float(k)), base, rough, gl, n, n);
+    coat = max(coat * (1. - gl), gl);
   } else if (id == 12) {
     // a window pane: the garden in the morning, softly
     vec3 sky = mix(vec3(1., .96, .88), vec3(.62, .78, .95), uv.y);
@@ -331,13 +396,15 @@ const DOUGH_VS = `#version 300 es
 in vec3 aPos;
 in vec3 aNor;
 in vec3 aRest;
+in vec2 aCoat;
 uniform mat4 uVP, uLightVP;
 out vec3 vWorld;
 out vec3 vNor;
 out vec3 vRest;
+out vec2 vCoat;
 out vec4 vShadow;
 void main() {
-  vWorld = aPos; vNor = aNor; vRest = aRest;
+  vWorld = aPos; vNor = aNor; vRest = aRest; vCoat = aCoat;
   vShadow = uLightVP * vec4(aPos, 1.);
   gl_Position = uVP * vec4(aPos, 1.);
 }`;
@@ -352,12 +419,14 @@ precision highp float;
 in vec3 vWorld;
 in vec3 vNor;
 in vec3 vRest;
+in vec2 vCoat;
 in vec4 vShadow;
 out vec4 o;
 uniform vec3 uEye;
 uniform float uBlink, uFace, uR;
 ${COMMON}
 ${SHADOW_GLSL}
+${COAT_GLSL}
 float seg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)); }
 void main() {
   vec3 n = normalize(vNor);
@@ -402,6 +471,9 @@ void main() {
     ink = max(ink, 1. - smoothstep(.008, .015, mo));
   }
   base = mix(base, vec3(.98, .5, .5), cheek * .6);
+  // what it's coated with
+  float cRough = .5, cGloss = 0.;
+  base = coatColor(q, vCoat, base, cRough, cGloss, n, normalize(q));
   // light: wrapped round (it's thick, and light gets into it), a warm glow through the edges
   float NoL = dot(n, uKey);
   float wrap = max((NoL + .5) / 1.5, 0.);
@@ -416,7 +488,9 @@ void main() {
   vec3 H = normalize(uKey + V);
   float NoV = max(dot(n, V), 1e-3);
   c += uKeyCol * D_ggx(max(dot(n, H), 0.), .3) * V_smith(NoV, max(NoL, 0.), .3) * .05 * max(NoL, 0.) * sh;
-  c += (.04 + .96 * pow(1. - NoV, 5.)) * env(reflect(-V, n)) * .25;
+  c += (.04 + .96 * pow(1. - NoV, 5.)) * env(reflect(-V, n)) * .25 * (1. - .7 * smoothstep(.5, .95, cRough));
+  // (butter's grease, sprinkles' sugar: a gloss)
+  c += (uKeyCol * D_ggx(max(dot(n, H), 0.), .1) * V_smith(NoV, max(NoL, 0.), .1) * max(NoL, 0.) * sh * .25 + env(reflect(-V, n)) * .12) * cGloss;
   c = mix(c, vec3(.08, .05, .05), ink);
   c = mix(c, vec3(1.), white * .95);
   o = vec4(tonemap(c), 1.);
@@ -434,6 +508,7 @@ precision highp float;
 in vec3 vWorld;
 in vec3 vNor;
 in vec3 vRest;
+in vec2 vCoat;
 in vec4 vShadow;
 out vec4 o;
 uniform vec3 uEye;
@@ -443,6 +518,7 @@ uniform vec2 uRes;
 uniform float uBlink, uFace, uR, uPass;
 ${COMMON}
 ${SHADOW_GLSL}
+${COAT_GLSL}
 float seg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)); }
 const vec3 PINK = vec3(1., .42, .58);
 void main() {
@@ -522,7 +598,13 @@ void main() {
   vec3 printCol = mix(vec3(1., .16, .2) * (lightOn * .8 + .35), vec3(.012, .01, .015), ink);
   printCol = mix(printCol, vec3(1.) * lightOn * 1.2, white);
   float a = max(max(ink, cheek * .92), white);
-  vec3 c = tonemap(printCol) * a + tonemap(gloss) * (1. - a * .4);
+  // what's stuck to it, over the gloss
+  float cRough = .5, cGloss = 0.;
+  vec3 coatC = coatColor(q, vCoat, vec3(-1.), cRough, cGloss, n, normalize(q));
+  float ca = coatC.x < 0. ? 0. : vCoat.x * (vCoat.y < 1.5 ? smoothstep(.2, .9, vCoat.x * (.6 + .8 * noise(q * 30.))) : 1.) ;
+  if (coatC.x >= 0. && ca > 0.) { vec3 lit = coatC * lightOn; a = max(a, ca * .9); }
+  vec3 c = tonemap(printCol) * max(max(ink, cheek * .92), white) + tonemap(gloss) * (1. - a * .4);
+  if (coatC.x >= 0.) { float k = clamp(ca, 0., 1.) * (1. - max(ink, white)); c = mix(c, tonemap(coatC * lightOn * (1. + cGloss * .4)), k); }
   o = vec4(c, a);
 }`;
 /**
@@ -599,7 +681,7 @@ function program(vs: string, fs: string): WebGLProgram {
   };
   const p = gl.createProgram()!;
   // (the skin's attributes in fixed places, so one vertex array serves the dough's and the jelly's drawing)
-  if (vs === DOUGH_VS) { gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aNor'); gl.bindAttribLocation(p, 2, 'aRest'); }
+  if (vs === DOUGH_VS) { gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aNor'); gl.bindAttribLocation(p, 2, 'aRest'); gl.bindAttribLocation(p, 3, 'aCoat'); }
   gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
   gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(p);
@@ -655,10 +737,15 @@ let roomMesh: Mesh | null = null;
 let movers: Array<{ shape: LevelMesh['movers'][number]['shape']; mesh: Mesh }> = [];
 
 // ─── the dumpling on the card ────────────────────────────────────────────────────────────────────
-/** what it's made of: a clear glittery jelly (the squishy toy) or steamed dough */
+/**
+ * What it's made of: steamed dough; or, from level 13 (and once you've been there, anywhere), a
+ * clear glittery jelly, the squishy toy, kept for later as a treat.
+ */
+const JELLY_AT = 13;
+let jellyOpen = ((): boolean => { try { return localStorage.getItem(STORE + ':jelly') === '1'; } catch { return false; } })();
 let skin: Kind = ((): Kind => {
-  const want = params.get('skin') ?? (() => { try { return localStorage.getItem(STORE + ':skin'); } catch { return null; } })();
-  return want === 'dough' ? 'dough' : 'jelly';
+  const want = params.get('skin') ?? (jellyOpen ? (() => { try { return localStorage.getItem(STORE + ':skin'); } catch { return null; } })() : null);
+  return want === 'jelly' ? 'jelly' : want === 'dough' ? 'dough' : 'dough';
 })();
 let body!: Dumpling;
 interface Flakes { n: number; rest: Float32Array; near: Uint16Array; w: Float32Array; nor: Float32Array; data: Float32Array; buf: WebGLBuffer; vao: WebGLVertexArrayObject }
@@ -671,11 +758,11 @@ function skinOnCard(kind: Kind) {
   const d = new Dumpling([0, 0, 0], kind);
   const vao = gl.createVertexArray()!;
   gl.bindVertexArray(vao);
-  const pos = gl.createBuffer()!, nor = gl.createBuffer()!, rest = gl.createBuffer()!, idx = gl.createBuffer()!;
-  const bind = (b: WebGLBuffer, loc: number) => {
+  const pos = gl.createBuffer()!, nor = gl.createBuffer()!, rest = gl.createBuffer()!, idx = gl.createBuffer()!, coat = gl.createBuffer()!;
+  const bind = (b: WebGLBuffer, loc: number, size = 3) => {
     gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
   };
   gl.bindBuffer(gl.ARRAY_BUFFER, rest);
   gl.bufferData(gl.ARRAY_BUFFER, d.q, gl.STATIC_DRAW);
@@ -683,7 +770,9 @@ function skinOnCard(kind: Kind) {
   gl.bufferData(gl.ARRAY_BUFFER, d.x.byteLength, gl.DYNAMIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, nor);
   gl.bufferData(gl.ARRAY_BUFFER, d.x.byteLength, gl.DYNAMIC_DRAW);
-  bind(pos, 0); bind(nor, 1); bind(rest, 2);
+  gl.bindBuffer(gl.ARRAY_BUFFER, coat);
+  gl.bufferData(gl.ARRAY_BUFFER, d.n * 2 * 4, gl.DYNAMIC_DRAW);
+  bind(pos, 0); bind(nor, 1); bind(rest, 2); bind(coat, 3, 2);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, d.tris, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
@@ -743,7 +832,7 @@ function skinOnCard(kind: Kind) {
     gl.bindVertexArray(null);
     flakes = { n: N, rest: fr, near, w, nor: fn, data, buf, vao: fvao };
   }
-  return { kind, vao, svao, pos, nor, count: d.tris.length, normals: new Float32Array(d.x.length), shown: new Float32Array(d.x.length), q: d.q, flakes };
+  return { kind, vao, svao, pos, nor, coat, coatData: new Float32Array(d.n * 2), count: d.tris.length, normals: new Float32Array(d.x.length), shown: new Float32Array(d.x.length), q: d.q, flakes };
 }
 const skins = { jelly: skinOnCard('jelly'), dough: skinOnCard('dough') };
 /** The skin as drawn: between the solver's last two states, its normals from its triangles; and the glitter carried along. */
@@ -765,6 +854,11 @@ function uploadSkin(alpha: number) {
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, s);
   gl.bindBuffer(gl.ARRAY_BUFFER, g.nor);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, nrm);
+  // (and what's on it)
+  const cd = g.coatData;
+  for (let i = 0; i < body.n; i++) { cd[i * 2] = body.coat[i]; cd[i * 2 + 1] = body.coatKind[i]; }
+  gl.bindBuffer(gl.ARRAY_BUFFER, g.coat);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, cd);
   const fl = g.flakes;
   if (!fl) return;
   // (each flake where its four particles would put it, each as if the flake were held to it as it's turned)
@@ -802,8 +896,17 @@ let simTime = 0;
 let lidWas: number[] = [];
 let heldWas = false;
 let aimedAt = -9;
+/** what it was last coated with most, and which coatings it's been told about */
+let coatWas: Dust = DUST.none;
+const coatSaid = new Set<Dust>();
 function startLevel(n: number) {
   levelN = Math.max(1, n);
+  if (levelN >= JELLY_AT && !jellyOpen) {
+    jellyOpen = true;
+    try { localStorage.setItem(STORE + ':jelly', '1'); } catch { /* */ }
+    if (!params.has('skin')) skin = 'jelly';
+    showSkin();
+  }
   lv = buildLevel(levelN);
   drop(courseMesh); drop(glassMesh);
   for (const m of movers) drop(m.mesh);
@@ -826,7 +929,7 @@ function startLevel(n: number) {
   try { if (!auto) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
   if (!auto) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
-  hint(levelN === 1 ? 'drag back and let go: the dumpling flies the other way' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : `level ${levelN}`);
+  hint(levelN === 1 ? 'drag back and let go: the dumpling flies the other way' : levelN === 2 ? 'tap to nudge it a little, the way you tapped' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a lid lifts on the steam: ride it up' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -921,7 +1024,10 @@ let orbit = { yaw: 0, pitch: 0, at: -9 };
 let zoom = 1;
 let windEase = 0;
 function updateCamera(dt: number) {
-  const k = 1 - Math.exp(-dt * 5);
+  // (it follows easily; but if it's got near the edge of the glass, or off it, it catches up at once)
+  const on = screenOf(body.com);
+  const off = !on || on[0] < innerWidth * 0.12 || on[0] > innerWidth * 0.88 || on[1] < innerHeight * 0.1 || on[1] > innerHeight * 0.82;
+  const k = 1 - Math.exp(-dt * (off ? 22 : 5));
   const want = add(body.com, [0, 3, 0]);
   for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * k;
   // (turned toward the next top, when it's sat still and no one's turning the camera)
@@ -938,7 +1044,7 @@ function updateCamera(dt: number) {
   const dist = (44 * (1 + 0.55 * windEase)) / zoom;
   const back: V3 = [-Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(camYaw) * Math.cos(pitch)];
   const wantEye = add(camTarget, mul(back, dist));
-  for (let i = 0; i < 3; i++) eye[i] += (wantEye[i] - eye[i]) * (1 - Math.exp(-dt * 8));
+  for (let i = 0; i < 3; i++) eye[i] += (wantEye[i] - eye[i]) * (1 - Math.exp(-dt * (off ? 20 : 8)));
 }
 
 // ─── hands ───────────────────────────────────────────────────────────────────────────────────────
@@ -977,8 +1083,32 @@ canvas.addEventListener('pointermove', (e) => {
 const up = (e: PointerEvent) => {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) two = null;
-  if (pull && pull.id === e.pointerId) { if (e.type === 'pointerup') release(); else { pull = null; aimNow = null; body.squeeze = null; } }
+  if (pull && pull.id === e.pointerId) {
+    // (a tap, not a pull: a nudge toward where it was tapped)
+    const t0 = pull.hist[0].t, moved = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
+    if (e.type === 'pointerup' && moved < 12 && performance.now() - t0 < 260 && two === null) { nudgeToward(pull.x, pull.y); pull = null; aimNow = null; body.squeeze = null; }
+    else if (e.type === 'pointerup') release(); else { pull = null; aimNow = null; body.squeeze = null; }
+  }
 };
+/** A tap: it rolls once toward where you tapped, from where it is on the glass (or straight on, tapped on itself). */
+function nudgeToward(x: number, y: number) {
+  if (auto || home >= 0 || fallenAt >= 0 || !body.canFlick) return;
+  const fwd: V3 = [Math.sin(camYaw), 0, Math.cos(camYaw)];
+  const right: V3 = [-fwd[2], 0, fwd[0]];
+  const at = screenOf(body.com);
+  let dx = x - (at?.[0] ?? innerWidth / 2), dy = y - (at?.[1] ?? innerHeight / 2);
+  if (Math.hypot(dx, dy) < 28) { dx = 0; dy = -1; }
+  body.nudge(norm(sub(mul(fwd, -dy), mul(right, dx))));
+  pop(0.25);
+}
+/** Where a point is on the glass (pixels), if it's in front of the camera. */
+function screenOf(p: V3): [number, number] | null {
+  if (!lastVP) return null;
+  const m = lastVP;
+  const cx = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], cy = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], cw = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+  if (cw <= 0) return null;
+  return [((cx / cw) * 0.5 + 0.5) * innerWidth, (0.5 - (cy / cw) * 0.5) * innerHeight];
+}
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.5, Math.min(2.5, zoom * Math.exp(-e.deltaY * 0.0012))); }, { passive: false });
@@ -1001,7 +1131,7 @@ btn('skin', () => {
   prevX = new Float32Array(body.x);
   showSkin();
 });
-function showSkin() { $('skin').textContent = skin; }
+function showSkin() { $('skin').textContent = skin; $('skin').style.display = jellyOpen || params.has('skin') ? '' : 'none'; }
 showSkin();
 btn('sound', () => {
   soundOn = !soundOn;
@@ -1052,6 +1182,8 @@ const squish = (k: number) => { blop(260 + 140 * k, 90, 0.16, Math.min(0.35, 0.0
 const pop = (k: number) => blop(380, 900, 0.09, 0.12 * k);
 const boing = () => { blop(220, 520, 0.22, 0.2); blop(520, 260, 0.3, 0.08); };
 const plop = () => blop(180, 60, 0.4, 0.25);
+/** a sneeze: a quick rising breath, then the squeak out */
+function sneezeSound() { if (!ac) return; blop(300, 900, 0.14, 0.1); setTimeout(() => blop(1200, 400, 0.18, 0.2), 150); }
 /** a lid lifted by steam: a hiss, and its rim rattling on the pot */
 function rattle() {
   if (!ac || !master || !soundOn) return;
@@ -1115,6 +1247,16 @@ function flourPuff(at: V3, k: number) {
   }
 }
 
+/** A sneeze's pepper: a few dark-ish puffs, thrown out in front. */
+function pepperPuff(at: V3) {
+  const rr = seeded(hash(Math.floor(simTime * 1000), 9));
+  for (let i = 0; i < 10; i++) { const a = rr() * Math.PI * 2; puffs.push({ p: [at[0], at[1], at[2]], v: [Math.cos(a) * 30 * rr(), 20 + 30 * rr(), Math.sin(a) * 30 * rr()], age: 0, life: 0.5 + rr() * 0.4, size: 0.6 + rr() * 0.8, a: 0.25 }); }
+}
+/** Crumbs (or sugar) shaken off: a scatter of small bright bits. */
+function crumbPuff(at: V3) {
+  const rr = seeded(hash(Math.floor(simTime * 1000), 11));
+  for (let i = 0; i < 8; i++) { const a = rr() * Math.PI * 2; puffs.push({ p: [at[0] + Math.cos(a) * RADIUS, at[1] - RADIUS * 0.3, at[2] + Math.sin(a) * RADIUS], v: [Math.cos(a) * (20 + 30 * rr()), 10 + 20 * rr(), Math.sin(a) * (20 + 30 * rr())], age: 0, life: 0.4 + rr() * 0.3, size: 0.5 + rr() * 0.5, a: 0.4 }); }
+}
 /** Steam out from under a lid as it lifts: from all round the pot's rim, up and out. */
 function steamOut(at: V3, r: number) {
   const rr = seeded(hash(Math.floor(simTime * 1000), 5));
@@ -1408,7 +1550,7 @@ function frame(now: number) {
     level: levelN, towers: lv.towers.length, check, falls, clock, home, com: body.com.map((v) => Math.round(v * 10) / 10),
     speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, power: aimNow?.power ?? 0,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,
-    eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull, chapter: lv.chapter, held: body.held, pinned: body.pinned, spin: body.spinMode, kind: body.kind,
+    eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull, chapter: lv.chapter, held: body.held, pinned: body.pinned, spin: body.spinMode, kind: body.kind, coated: body.coated.map((v) => Math.round(v * 1000) / 1000), coatMost: body.coatMost, jellyOpen,
     // (how far its face is turned from you, in degrees; and how upright it is)
     faceOff: Math.round((Math.abs(Math.atan2(body.R[2] * (eye[2] - body.com[2]) - body.R[8] * (eye[0] - body.com[0]), body.R[2] * (eye[0] - body.com[0]) + body.R[8] * (eye[2] - body.com[2]))) * 180) / Math.PI),
     up: Math.round(body.R[4] * 100) / 100,
@@ -1504,7 +1646,7 @@ function tick(dt: number) {
   if (body.impact > 90) {
     const k = Math.min(1, body.impact / 300);
     squish(k);
-    if (body.impact > 140 && body.kind === 'dough') flourPuff(body.com, k);
+    if (body.impact > 140 && (body.kind === 'dough' || body.coated[DUST.flour] > 0.05)) flourPuff(body.com, k * (body.kind === 'dough' ? 1 : 2 * body.coated[DUST.flour]));
     if (lv.shapes.some((s) => s.bounce > 0 && Math.hypot(s.c[0] - body.com[0], s.c[2] - body.com[2]) < s.r + 2) && body.impact > 120) boing();
   }
   if (fallenAt >= 0) {
@@ -1540,6 +1682,15 @@ function tick(dt: number) {
   const quiet = len(body.drift) < 6 && body.contacts > 0;
   if (body.held > 1 && !heldWas) hint('stuck. flick to let go', 1800);
   heldWas = body.held > 1;
+  // what it's picked up: a word the first time; a sneeze when it's peppered; what a hard landing shakes off
+  if (body.coatMost !== coatWas) {
+    const said = ['', 'flour: dry and grippy, and no stick', 'butter: slippery, and honey won\'t hold it', 'crumbs: bouncy', 'pepper...', 'hundreds and thousands: sticky'][body.coatMost];
+    if (said && !coatSaid.has(body.coatMost)) { coatSaid.add(body.coatMost); hint(said, 2600); }
+    coatWas = body.coatMost;
+  }
+  if (body.sneezed) { sneezeSound(); hint('achoo!', 1200); pepperPuff(body.com); }
+  if (body.shook === DUST.flour) flourPuff(body.com, 0.6);
+  else if (body.shook === DUST.crumbs || body.shook === DUST.sprinkles) crumbPuff(body.com);
   still = quiet ? still + dt : 0;
   if (k === lv.towers.length - 1 && still > 0.5 && home < 0) {
     home = clock;

@@ -115,7 +115,27 @@ function towerMesh(t: Tower, m: LevelMesh) {
   }
   void x; void z;
 }
+/** What's on a top (flour, crumbs, pepper, sprinkles): drawn as a skin just over it, in its own material. */
+function dustOn(s: Shape, out: number[]) {
+  if (!s.dust || s.mat === MAT.butter) return;
+  const mat = 24 + s.dust;
+  if (s.kind === 'box') {
+    const cy = Math.cos(s.yaw), sy = Math.sin(s.yaw);
+    const W = (x: number, z: number): V3 => [s.c[0] + cy * x + sy * z, s.c[1] + s.h[1] + 0.06, s.c[2] - sy * x + cy * z];
+    const [hx, , hz] = s.h;
+    quad(out, W(-hx, -hz), W(-hx, hz), W(hx, hz), W(hx, -hz), [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], mat, [-hx, -hz], [-hx, hz], [hx, hz], [hx, -hz]);
+  } else if (s.kind === 'cyl') {
+    const y = s.c[1] + s.hh + 0.06, r = s.r * (s.mat === MAT.jelly ? 0.9 : 1);
+    for (let k = 0; k < 40; k++) {
+      const a0 = (k / 40) * Math.PI * 2, a1 = ((k + 1) / 40) * Math.PI * 2;
+      push(out, [s.c[0], y, s.c[2]], [0, 1, 0], mat, [0, 0]);
+      push(out, [s.c[0] + Math.cos(a1) * r, y, s.c[2] + Math.sin(a1) * r], [0, 1, 0], mat, [Math.cos(a1), Math.sin(a1)]);
+      push(out, [s.c[0] + Math.cos(a0) * r, y, s.c[2] + Math.sin(a0) * r], [0, 1, 0], mat, [Math.cos(a0), Math.sin(a0)]);
+    }
+  }
+}
 function drawShape(s: Shape, out: number[]) {
+  dustOn(s, out);
   {
     if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); return; }
     if (s.kind === 'cap') { capsule(out, s.c, s.b, s.r, s.mat, 12, 4); return; }
