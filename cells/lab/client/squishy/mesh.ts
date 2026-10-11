@@ -67,7 +67,8 @@ export function box(out: number[], c: V3, h: V3, yaw: number, mat: number) {
 export function capsule(out: number[], a: V3, b: V3, r: number, mat: number, segs = 12, rings = 6) {
   const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
   const L = Math.hypot(d[0], d[1], d[2]);
-  const t = norm(d as V3);
+  // (no length at all, a ball: a bubble; any axis will do)
+  const t: V3 = L > 1e-6 ? norm(d as V3) : [0, 1, 0];
   const ref: V3 = Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
   const u = norm([t[1] * ref[2] - t[2] * ref[1], t[2] * ref[0] - t[0] * ref[2], t[0] * ref[1] - t[1] * ref[0]]);
   const w: V3 = [t[1] * u[2] - t[2] * u[1], t[2] * u[0] - t[0] * u[2], t[0] * u[1] - t[1] * u[0]];

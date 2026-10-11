@@ -12,13 +12,14 @@
 import { hash, seeded, type Rand } from '../kit/rng';
 import { DUST, MAT, box, buildTowers, cap, chapterOf, cyl, hop, jelly, tower, type Level, type Shape, type Tower, type V3 } from './level';
 import { FEELS } from './jelly';
+import { buildKitchen } from './kitchen';
 import { box as drawBox, drawShapes, quad } from './mesh';
-import { smear, spoon, tiltPlate, towel, type Prop } from './props';
+import { drainer, smear, spoon, tiltPlate, towel, type Prop } from './props';
 
 /** Level n: a set, or towers. */
 export function buildLevel(n: number): Level {
   const ch = chapterOf(n);
-  return ch === 'table' ? prepTable(n) : ch === 'counter' ? counterSet(n) : buildTowers(n);
+  return ch === 'table' ? prepTable(n) : ch === 'counter' ? counterSet(n) : ch === 'sink' ? sinkSet(n) : buildKitchen(n);
 }
 
 /** A set: tried with a little jitter until every hop is sure, or as drawn. */
@@ -31,6 +32,7 @@ function tried(n: number, salt: number, lay: (n: number, jit: number, r: Rand) =
   return lv!;
 }
 const counterSet = (n: number) => tried(n, 0xc0ffee, layCounter);
+const sinkSet = (n: number) => tried(n, 0x5157, laySink);
 
 /**
  * The Counter by the Window: a butcher-block counter against a tiled wall, a window in it. From a
@@ -278,5 +280,116 @@ export function bench(name: string): Level {
   const last = lv.towers[lv.towers.length - 1].at;
   stop(tower('goal', [last[0] + 6, 12, last[2] + 26], 13, 0, () => 0.5));
   underTable(lv);
+  return lv;
+}
+
+/**
+ * The Sink: the counter round a steel sink, its window above. From a folded dishcloth: a sponge
+ * (soft, and it soaks up a landing); a soap dish heaped with bubbles (they bounce you, and hold
+ * nothing); the steel drainer board, grooved and sloping down to the sink, wet, so it slips; the
+ * dish rack, its wire rails to land across, plates stood up in it. Then across the sink, the
+ * water below (in it is the fall), at the dishcloth hung over the window sill's edge: it holds
+ * you, and you climb it onto the sill. Home along the sill. The second time it's higher, the
+ * gaps wider.
+ */
+function laySink(n: number, jit: number, r: Rand): Level {
+  const J = (a: number) => (r() * 2 - 1) * a * jit;
+  const two = n >= 6;
+  const BACK = 66;
+  const lv: Level = { n, chapter: 'sink', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -90, decor: [], floorMat: MAT.tiles };
+  const free = (...ss: Shape[]) => { lv.shapes.push(...ss); drawShapes(ss, lv.decor); for (const s of ss) if (s.jel) lv.jellies!.push(s); };
+  const prop = (p: Prop) => { lv.shapes.push(...p.shapes); lv.decor.push(...p.verts); return p; };
+  const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) { lv.shapes.push(s); if (s.jel) lv.jellies!.push(s); } };
+
+  // a folded dishcloth to start on
+  const pad = box([0, 0.5, 0], [8, 0.5, 7], 0, MAT.towel, 0.95);
+  free(pad);
+  stop({ top: 'pad', at: [0, 1, 0], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pad] });
+
+  // a sponge, soft: it soaks up a landing
+  const S1: V3 = [24 + J(3), 0, 16 + J(3)];
+  const sponge = jelly(S1[0], S1[2], 6.5, 0, 4.5, MAT.sponge, FEELS.sponge, 0.95);
+  free(sponge);
+  stop({ top: 'sponge', at: [S1[0], 4.5, S1[2]], r: 4.5, yaw: 0, shapes: [sponge], land: [sponge] });
+
+  // a soap dish, heaped with bubbles: they bounce you, and hold nothing
+  const D: V3 = [S1[0] + 26 + J(3), 0, S1[2] - 14 + J(3)];
+  const dish = cyl(D[0], D[2], 9, 0, 1.2, MAT.porcelain, 0.5);
+  const bubbles: Shape[] = [];
+  for (let i = 0; i < (two ? 8 : 6); i++) {
+    // (round its rim, the middle clear for a dumpling to sit among them)
+    const a = (i / (two ? 8 : 6)) * Math.PI * 2 + r() * 0.4, d = 6.8 + 1.2 * r(), br = 1.4 + r() * 0.9;
+    const c: V3 = [D[0] + Math.cos(a) * d, 1.2 + br * 0.75, D[2] + Math.sin(a) * d];
+    const b = cap(c, c, br, MAT.bubble, 0.1);
+    b.bounce = 0.85; b.tack = 0;
+    bubbles.push(b);
+  }
+  free(dish, ...bubbles);
+  stop({ top: 'soap', at: [D[0], 1.2, D[2]], r: 5.5, yaw: 0, shapes: [dish, ...bubbles], land: [dish, ...bubbles] });
+
+  // the sink: a hole in the counter, steel all round, the water in it
+  const BX = D[0] + 92 + J(3), BZ = 30, HX = 22, HZ = 16, BY = -18;
+  // the drainer board, sloping down to the sink's left edge, grooved, wet
+  const dx0 = BX - HX - 34, dx1 = BX - HX;
+  const dr = prop(drainer(dx0, dx1, BZ - HZ, BZ + HZ, 2.4, 0.4));
+  stop({ top: 'drainer', at: [(dx0 + dx1) / 2 - 6, 1.9, BZ - 9], r: 6, box: [9, 5.5], yaw: 0, shapes: dr.shapes, land: dr.shapes });
+
+  // the dish rack, on the back of the drainer: wire rails to land across, plates stood up at its near end
+  const RX = dx0 + 16 + J(2), RZ = BZ + 7, RY = two ? 9 : 7;
+  const rails: Shape[] = [];
+  for (let i = 0; i < 9; i++) { const z = RZ - 8 + i * 2; rails.push(cap([RX - 13, RY, z], [RX + 13, RY, z], 0.45, MAT.steel, 0.7)); }
+  const legs = [[-13, -8], [13, -8], [-13, 8], [13, 8]].map(([lx, lz]) => cap([RX + lx, 0, RZ + lz], [RX + lx, RY, RZ + lz], 0.35, MAT.steel, 0.6));
+  free(...rails, ...legs);
+  const plates: Shape[] = [];
+  // (two plates, stood together at its far end: a wall, with no gap between to wedge in)
+  for (const px of [-13, -12]) { const pr = prop(tiltPlate([RX + px, RY + 8.2, RZ], 8, Math.PI / 2, 1.5)); plates.push(...pr.shapes); }
+  stop({ top: 'rack', at: [RX + 5.5, RY + 0.35, RZ], r: 5, box: [6.5, 7.5], yaw: 0, shapes: [...rails, ...legs, ...plates], land: rails });
+
+  // the basin
+  const steel = (c: V3, h: V3) => box(c, h, 0, MAT.steel, 0.3);
+  const basin = [steel([BX - HX - 0.5, BY / 2, BZ], [0.5, -BY / 2, HZ + 1]), steel([BX + HX + 0.5, BY / 2, BZ], [0.5, -BY / 2, HZ + 1]),
+    steel([BX, BY / 2, BZ - HZ - 0.5], [HX + 1, -BY / 2, 0.5]), steel([BX, BY / 2, BZ + HZ + 0.5], [HX + 1, -BY / 2, 0.5]), steel([BX, BY - 0.5, BZ], [HX + 1, 0.5, HZ + 1])];
+  for (const b of basin) b.tack = 0;
+  free(...basin);
+  quad(lv.decor, [BX - HX, -10, BZ - HZ], [BX - HX, -10, BZ + HZ], [BX + HX, -10, BZ + HZ], [BX + HX, -10, BZ - HZ], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], MAT.water, [0, 0], [0, 1], [1, 1], [1, 0]);
+
+  // the window sill above the sink, and the dishcloth hung over its edge, down toward the water
+  const SY = (two ? 60 : 56) + J(1), SZ = BACK - 6;
+  const sill = box([BX + 6, SY - 1.5, SZ], [32, 1.5, 6], 0, MAT.porcelain, 0.7);
+  free(sill);
+  const hangTo = two ? 28 : 24;
+  const cloth = prop(towel([BX - 22, SY, BACK - 12], [1, 0, 0], [0, 0, -1], 20,
+    [[-4.5, 0.15], [-0.6, 0.35], [0.35, -0.5], [0.6, -4], [0.75, hangTo - SY + 6], [0.8, hangTo - SY]], n * 5 + 1));
+  stop({ top: 'sill', at: [BX - 10, SY, SZ], r: 4, box: [10, 4.2], yaw: 0, shapes: [sill, ...cloth.shapes], land: [sill, ...cloth.shapes],
+    wall: cloth.shapes, wallAt: [BX - 12, (SY + hangTo) / 2, BACK - 12.8] });
+  const GX = BX + 26;
+  const basket = cyl(GX, BACK - 7, 5.5, SY, SY + 7, MAT.gold);
+  stop({ top: 'goal', at: [GX, SY + 7, BACK - 7], r: 4.5, yaw: 0, shapes: [basket] });
+  drawShapes([basket], lv.decor);
+  // the window over it all
+  const wy0 = SY + 3, wy1 = SY + 58, wx0 = BX - 26, wx1 = BX + 38;
+  quad(lv.decor, [wx0, wy0, BACK - 0.2], [wx0, wy1, BACK - 0.2], [wx1, wy1, BACK - 0.2], [wx1, wy0, BACK - 0.2], [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1], 12, [0, 0], [0, 1], [1, 1], [1, 0]);
+  for (const [c, h] of [[[(wx0 + wx1) / 2, wy1 + 1, BACK - 1], [(wx1 - wx0) / 2 + 2, 1, 1]], [[wx0 - 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]], [[wx1 + 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]], [[(wx0 + wx1) / 2, (wy0 + wy1) / 2, BACK - 0.8], [0.5, (wy1 - wy0) / 2, 0.6]]] as Array<[V3, V3]>) drawBox(lv.decor, c, h, 0, MAT.porcelain);
+
+  // the tap, behind the sink's right side: its pillar, its arm out over the water, its handles
+  const TX = BX + 12;
+  const tap = [cyl(TX, BACK - 9, 2.6, 0, 4, MAT.steel, 0.3), cap([TX, 4, BACK - 9], [TX, 26, BACK - 9], 1.3, MAT.steel, 0.3), cap([TX, 26, BACK - 9], [TX, 26, BACK - 24], 1.2, MAT.steel, 0.3),
+    cap([TX, 26, BACK - 24], [TX, 22.5, BACK - 25], 1.1, MAT.steel, 0.3), cyl(TX - 8, BACK - 9, 2, 0, 6, MAT.steel, 0.3), cyl(TX + 8, BACK - 9, 2, 0, 6, MAT.steel, 0.3)];
+  for (const t of tap) t.tack = 0;
+  free(...tap);
+
+  // the wall, and the counter round the sink (a hole where the sink is), the cupboards under it
+  let x0 = Infinity, x1 = -Infinity;
+  for (const s of lv.shapes) { x0 = Math.min(x0, s.lo[0]); x1 = Math.max(x1, s.hi[0]); }
+  x0 -= 30; x1 += 30;
+  const wall = box([(x0 + x1) / 2, 75, BACK + 1], [(x1 - x0) / 2, 75, 1], 0, MAT.tiles, 0.4);
+  wall.tack = 0;
+  lv.shapes.push(wall);
+  drawShapes([wall], lv.decor);
+  const F = -18, top = (a: number, b: number, c: number, d: number) => box([(a + b) / 2, -2, (c + d) / 2], [(b - a) / 2, 2, (d - c) / 2], 0, MAT.counter, 0.8);
+  const counter = [top(x0, BX - HX - 1, F, BACK), top(BX + HX + 1, x1, F, BACK), top(BX - HX - 1, BX + HX + 1, F, BZ - HZ - 1), top(BX - HX - 1, BX + HX + 1, BZ + HZ + 1, BACK)];
+  lv.shapes.unshift(...counter);
+  drawShapes(counter, lv.decor);
+  drawBox(lv.decor, [(x0 + x1) / 2, (lv.ground - 4) / 2, (BACK - 14) / 2], [(x1 - x0) / 2 - 1, (-4 - lv.ground) / 2, (BACK + 14) / 2], 0, MAT.enamel);
   return lv;
 }

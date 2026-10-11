@@ -382,16 +382,18 @@ for (const kind of ['dough', 'jelly']) {
     // (every hop: from the middle of each top, a flick that lands on the next)
     for (let k = 1; k < a.towers.length; k++) assert.ok(L.hop(a, k - 1, k), `level ${n}: hop ${k - 1}→${k} can be made`);
   }
-  for (const k of ['steamer', 'plate', 'board', 'pudding', 'susan', 'tin', 'butter', 'honey', 'lid', 'pan', 'pad', 'spoon', 'bench', 'paddle', 'tilt', 'boule', 'tray', 'stand', 'bin', 'shelf', 'jelly']) assert.ok(kinds.has(k), `a ${k} somewhere`);
+  for (const k of ['steamer', 'plate', 'board', 'pudding', 'susan', 'tin', 'butter', 'honey', 'lid', 'pan', 'pad', 'spoon', 'bench', 'paddle', 'tilt', 'boule', 'tray', 'stand', 'bin', 'shelf', 'jelly', 'sponge', 'soap', 'drainer', 'rack', 'sill']) assert.ok(kinds.has(k), `a ${k} somewhere`);
   // (the counter: a shelf reached only by its towel)
   assert.ok(C.buildLevel(3).towers.some((t) => t.wall && t.top === 'shelf'), 'a shelf on the counter, reached by its towel');
   assert.equal(C.buildLevel(1).chapter, 'table'); assert.equal(C.buildLevel(2).chapter, 'table'); assert.equal(C.buildLevel(3).chapter, 'counter');
   // (the table is ground: off its edge is the fall, well below its top)
   const t1 = C.buildLevel(1);
   assert.ok(t1.kill < -5 && t1.ground < -50 && t1.decor.length > 0, 'a table, with legs, over a floor');
-  assert.ok(t1.shapes.some((sh) => sh.kind === 'sheet' && sh.mat === L.MAT.spoon) && t1.shapes.some((sh) => sh.kind === 'sheet' && sh.mat === L.MAT.towel), 'a spoon and a towel'); assert.equal(C.buildLevel(6).chapter, 'stove'); assert.equal(C.buildLevel(9).chapter, 'mixed');
+  assert.ok(t1.shapes.some((sh) => sh.kind === 'sheet' && sh.mat === L.MAT.spoon) && t1.shapes.some((sh) => sh.kind === 'sheet' && sh.mat === L.MAT.towel), 'a spoon and a towel'); assert.equal(C.buildLevel(5).chapter, 'sink'); assert.equal(C.buildLevel(7).chapter, 'stove'); assert.equal(C.buildLevel(11).chapter, 'mixed');
   assert.ok(C.buildLevel(3).towers.every((t) => !['butter', 'honey', 'lid', 'pan'].includes(t.top)), 'the counter has none of the stove\'s things');
-  assert.ok(C.buildLevel(7).movers.length > 0, 'level 7 has a lid');
+  assert.ok(C.buildLevel(9).movers.length > 0, 'level 9 has a lid');
+  // (the sink: its water is the fall; its sill reached by the dishcloth)
+  { const s5 = C.buildLevel(5); assert.ok(s5.towers.some((t) => t.wall && t.top === 'sill') && s5.shapes.some((sh) => sh.mat === L.MAT.bubble && sh.bounce > 0.5), 'the sink: bubbles, a sill reached by its dishcloth'); }
   const dusts = new Set(); for (let n = 1; n <= 16; n++) for (const sh of C.buildLevel(n).shapes) if (sh.dust) dusts.add(sh.dust);
   for (const k of [L.DUST.flour, L.DUST.butter, L.DUST.crumbs, L.DUST.pepper, L.DUST.sprinkles]) assert.ok(dusts.has(k), `something with ${k} on it, in the first sixteen levels`);
   assert.notDeepEqual(C.buildLevel(1).towers.map((t) => t.at), C.buildLevel(2).towers.map((t) => t.at));
@@ -410,7 +412,7 @@ for (const kind of ['dough', 'jelly']) {
       assert.ok(d.com[1] > lv.kill, `level ${n}: no fall (at ${t.toFixed(1)} s)`);
       const k = L.towerAt(lv, d.com, 1);
       if (k >= 0 && d.contacts > 0 && speed(d) < 30) check = Math.max(check, k);
-      still = Math.hypot(...d.drift) < 6 && d.contacts > 0 ? still + DT : 0;
+      still = Math.hypot(...d.drift) < 6 && d.sinceContact < 0.12 ? still + DT : 0;
       if (k === lv.towers.length - 1 && still > 0.4) { home = t; break; }
       // (off any top, on the table: on from the last it stood on)
       const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), at = near >= 0 ? near : check;

@@ -151,3 +151,11 @@ export function tiltPlate(c: V3, rad: number, dir: number, tilt: number): Prop {
     return [c[0] + dx * a2 + dz * across, c[1] + y2, c[2] + dz * a2 - dx * across];
   }, 12, 36, 0.45, MAT.porcelain, 0.55, [0, 1, 0], (u, v) => [Math.cos(v * Math.PI * 2) * u, Math.sin(v * Math.PI * 2) * u]);
 }
+
+/** A steel drainer board, x0 to x1 and z0 to z1, falling from yHigh to yLow along x (toward the sink), grooved along its fall. Wet steel: it slips. */
+export function drainer(x0: number, x1: number, z0: number, z1: number, yHigh: number, yLow: number): Prop {
+  return surface((u, v) => {
+    const z = z0 + (z1 - z0) * v;
+    return [x0 + (x1 - x0) * u, yHigh + (yLow - yHigh) * u + 0.22 * Math.abs(Math.sin(((z - z0) * Math.PI) / 2.6)), z];
+  }, 16, Math.max(12, Math.round((z1 - z0) / 0.65)), 0.5, MAT.steel, 0.35, [0, 1, 0], (u, v) => [(x1 - x0) * u, (z1 - z0) * v]);
+}

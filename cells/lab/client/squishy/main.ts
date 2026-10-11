@@ -17,7 +17,7 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -317,6 +317,24 @@ void main() {
     float chip = smoothstep(.9, .92, noise(vWorld * 1.7 + 9.));
     base = mix(vec3(.93, .9, .82), vec3(.08, .1, .2), chip * .55);
     rough = .25; coat = 1.;
+  } else if (id == ${MAT.steel}) {
+    // brushed stainless steel: fine lines along it, a cool grey
+    float brush = noise(vec3(vWorld.x * .25, vWorld.z * 40., vWorld.y * 40.)) * .5 + noise(vec3(vWorld.x * 2., vWorld.z * 90., 3.)) * .2;
+    base = vec3(.6, .62, .64) * (.85 + .25 * brush); metal = .9; rough = .28 + .1 * brush;
+  } else if (id == ${MAT.sponge}) {
+    // a sponge: yellow and full of holes, a green scourer on its top
+    bool top = n.y > .6;
+    float pore = smoothstep(.55, .62, noise(vWorld * 2.6));
+    base = top ? vec3(.16, .42, .2) * (.8 + .3 * noise(vWorld * 5.)) : vec3(.96, .8, .26) * (1. - .45 * pore);
+    rough = 1.;
+  } else if (id == ${MAT.bubble}) {
+    // a soap bubble: clear, a film of colours swirling over it, bright where it catches the light
+    float film = fract(dot(n, vec3(1.3, 2.1, .7)) * 1.4 + noise(vWorld * 1.2) * .6);
+    vec3 hue = .5 + .5 * cos(6.2832 * (film + vec3(0., .33, .67)));
+    base = mix(vec3(.92, .94, .97), hue, .35); rough = .03; coat = 1.; emit = .25;
+  } else if (id == ${MAT.water}) {
+    // the water in the sink: grey-blue, a little cloudy with soap
+    base = vec3(.16, .23, .27) * (.9 + .2 * noise(vec3(vWorld.xz * .2, uTime * .3))); rough = .04; coat = 1.;
   } else if (id == ${MAT.tin}) {
     // Printed tea tins: repeating cream blossoms and restrained gold rules.
     float b = fract(uv.y / 9.);
@@ -1096,7 +1114,7 @@ function startLevel(n: number, quiet = false) {
   showHands();
   showTitle();
   if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
-  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === 5 ? 'the stovetop. butter slides; a pan has a rim' : levelN === 6 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === 7 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -2102,7 +2120,8 @@ function tick(dt: number) {
   const speed = len(body.vcom);
   if (k >= 0 && body.contacts > 0 && speed < 30) check = k;
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
-  const quiet = len(body.drift) < 6 && body.contacts > 0;
+  // (sat still: not drifting, and touching, or only a moment off it, trembling on a jelly)
+  const quiet = len(body.drift) < 6 && body.sinceContact < 0.12;
   if (body.held > 1 && !heldWas) hint('stuck. aim into it to climb up and over; aim away to jump off', 2600);
   heldWas = body.held > 1;
   // what it's picked up: a word the first time; a sneeze when it's peppered; what a hard landing shakes off

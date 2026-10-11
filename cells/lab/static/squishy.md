@@ -6,8 +6,10 @@ jelly squishy toy of one, full of glitter, with a pointed tip. You don't walk: y
 hold of the dumpling itself, drag back and let go, as with a slingshot, and it flies the other
 way, as hard as you pulled. Touch anywhere else and you're moving the camera. Through a kitchen, place by place, to the golden steamer: home.
 First the preparation table, a place laid out as it is (a spoon to land in, a bench with a towel
-thrown over it, butter melted across the wood); then the counter's towers of steamers, plates,
-a chopping board, a pudding, a lazy Susan and tea tins; then the stovetop.
+thrown over it, butter melted across the wood); then the counter by the window (a loaf, a
+buttered tray, a bread bin, a shelf you climb up to by its towel); then the sink (a sponge, soap
+bubbles, the drainer, the dish rack, and over the water to the sill); then the stovetop, and
+the whole kitchen.
 
 It opens on its title: its name in soft dough letters over the first place, the dumpling sat
 on its cloth and the jelly beside it (still to come, a treat for later), both turned to you. They're
@@ -69,9 +71,9 @@ and you're fine, and flick on from there) and falling is going off its edge. The
 until you're home, the count of falls beside it, and your best time for each level is kept. Each
 level opens with its place's name.
 
-Levels 1 and 2 are The Preparation Table (below); 3 and 4, The Counter by the Window (below).
-Level 5 moves to the stovetop, a new kitchen with its own things (below); from 9 on, the whole
-kitchen, mixed.
+Levels 1 and 2 are The Preparation Table; 3 and 4, The Counter by the Window; 5 and 6, The
+Sink (each below). Level 7 moves to the stovetop, a new kitchen with its own things (below); from
+11 on, the whole kitchen, mixed.
 
 ## The Preparation Table
 
@@ -106,6 +108,16 @@ jelly to bounce on comes before the cake stand, and the shelf is higher.
 Every hop is checked as it's laid, the towel's too: a flick from the bread bin that lands
 against the towel, low enough to hold and high enough that a climb from there gets up and over.
 
+## The Sink
+
+The counter round a steel sink, the window over it. From a folded dishcloth: a sponge (soft, a
+dead jelly: it soaks up a landing), its green scourer up; a soap dish heaped round its rim with
+bubbles, which bounce you and hold nothing; the steel drainer board, grooved and sloping down to
+the sink, wet, so it slips; the dish rack, its wire rails to land across, two plates stood up at
+its far end. Then across the sink, the water under you (in it is the fall), at the dishcloth
+hung over the window sill's edge: it holds you, and you climb it onto the sill. Home along the
+sill. The second time the rack and the sill are higher and the dishcloth shorter.
+
 ## The tops
 
 - **Steamers**: bamboo baskets stacked down to the counter, each with its rim. Good grip.
@@ -117,9 +129,22 @@ against the towel, low enough to hold and high enough that a climb from there ge
 - **A tea tin**: tall, with a small top.
 - **Chopsticks**, now and then, laid as a bridge between two tops near the same height.
 
+## The kitchen, from the stovetop on
+
+From the stovetop on, a level is a run along a counter (the hob, on the stove) against a tiled
+wall with windows in it, made of pieces, each laid where the last left off: one thing at the
+height it stands (the tops below); a towel and a shelf (a bread bin out from the wall, the shelf
+above it out of reach of any flick, a towel hung over its edge to land against and climb); two
+jellies in a row, a mango pudding and a konjac, to bounce across; a baking tray buttered in one
+corner; a folded cloth on the counter, somewhere low to land. The counter is ground: miss, and
+you're on it, and go again (everything but the climbs is low enough to reach from it); off its
+front is the fall. What a level brings in (the honey jar on the stove's second level, the lids
+on its third, the towel on its fourth) comes early in it, for sure; no level has more than two
+climbs or two jars.
+
 ## The stovetop
 
-From level 5 the course is on the hob: brushed steel, burners under the steamers, the tiles behind.
+From level 7 the course is on the hob: brushed steel, burners under the steamers, the tiles behind.
 A pot, a pan or a jar is the size it is, and where it's wanted higher it stands on a stand: a
 wooden board on a stack of tea tins, now and then a celadon jar among them.
 
@@ -128,18 +153,19 @@ wooden board on a stack of tea tins, now and then a celadon jar among them.
 - **A butter dish**: the butter is slippery, so a landing slides, a long way at speed; the dish
   has a lip all round that stops you. Backspin bites instead. From against the lip, a flick over
   it catches on it (the arc shows the catch), so flick away from it, or hop to the middle first.
-- **A honey jar**, from level 6: a big one, high on its stand, its top higher than a flick reaches, with honey run down its side. You
+- **A honey jar**, from level 8: a big one, high on its stand, its top higher than a flick reaches, with honey run down its side. You
   don't land on it: you land *against* it, splat into the honey, and stick, hanging there,
   until you flick on. The course turns sharply at a jar. Honey holds whatever touches it, so a
   flick into the jar from the honey climbs it a little and sticks again, higher.
-- **A pot with its lid on**, from level 7: the lid's shut, but every few seconds the steam in the
+- **A pot with its lid on**, from level 9: the lid's shut, but every few seconds the steam in the
   pot rattles it, six quick jumps of a centimetre or so on the rim, steam escaping round it, and
   it settles again. On the lid, you're jolted; flicked in the middle of a rattle, you go
   unsteadily. The arc knows the rattle.
 
-Every level is made from its number, so level 6 is always the same level, and every hop in it
+Every level is made from its number, so level 8 is always the same level, and every hop in it
 is checked when it's made: from the middle of each top there is a flick that lands on the next;
-onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too. Playing
+onto a lid, at some moment of its cycle; from a honey jar, from a little lower on it too, and on
+forward, away from the jar; up to a shelf, a flick against its towel and a climb from there. Playing
 itself, it waits out a lid's rattle before it flicks from it or onto it.
 
 ## Jellies
@@ -259,6 +285,6 @@ The lids move: they're drawn where the steam has them, with a puff of steam out 
 each jump and a rattle you hear when you're near. The honey jar is glass, drawn after
 everything else and seen through, the honey in it lit from within.
 
-`?level=3` starts a level (5 to 8 are the stove); `?bench=jelly` the jelly bench; `?bench=coats` a row of each thing that comes off on it, to land
+`?level=3` starts a level (3 and 4 the counter, 5 and 6 the sink, 7 to 10 the stove); `?bench=jelly` the jelly bench; `?bench=coats` a row of each thing that comes off on it, to land
 in; `?skin=dough` the dough; `?auto` lets it play
 itself.

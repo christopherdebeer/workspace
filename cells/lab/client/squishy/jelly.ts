@@ -22,6 +22,8 @@ export const FEELS = {
   konjac: { hz: 14, zeta: 0.05, mass: 12, spread: 2 },
   // (a loaf: soft under its crust, and dead)
   boule: { hz: 6, zeta: 0.4, mass: 20, spread: 3 },
+  // (a sponge: soft, and it soaks up a landing)
+  sponge: { hz: 4.5, zeta: 0.6, mass: 8, spread: 5 },
 } satisfies Record<string, JellyFeel>;
 
 export interface Jel {

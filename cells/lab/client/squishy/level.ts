@@ -42,6 +42,8 @@ export const MAT = {
   pannacotta: 36, konjac: 37,
   // (the counter: a loaf's crust, a bread bin's enamel)
   bread: 38, enamel: 39,
+  // (the sink: brushed steel, a sponge, soap bubbles, the water)
+  steel: 40, sponge: 41, bubble: 42, water: 43,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -61,10 +63,12 @@ export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
   [DUST.sprinkles]: { on: 4, off: 0.04, shake: 0.4 },
 };
 /** which kitchen a level is in: the preparation table, the counter, then the stovetop, then all of it mixed */
-export type Chapter = 'table' | 'counter' | 'stove' | 'mixed';
-export const chapterOf = (n: number): Chapter => (n <= 2 ? 'table' : n <= 4 ? 'counter' : n <= 8 ? 'stove' : 'mixed');
+export type Chapter = 'table' | 'counter' | 'sink' | 'stove' | 'mixed';
+export const chapterOf = (n: number): Chapter => (n <= 2 ? 'table' : n <= 4 ? 'counter' : n <= 6 ? 'sink' : n <= 10 ? 'stove' : 'mixed');
+/** the first level of each kitchen */
+export const CHAPTER_AT: Record<Chapter, number> = { table: 1, counter: 3, sink: 5, stove: 7, mixed: 11 };
 /** what each kitchen is called, as its title card says */
-export const CHAPTER_NAME: Record<Chapter, string> = { table: 'The Preparation Table', counter: 'The Counter by the Window', stove: 'The Stovetop', mixed: 'The Whole Kitchen' };
+export const CHAPTER_NAME: Record<Chapter, string> = { table: 'The Preparation Table', counter: 'The Counter by the Window', sink: 'The Sink', stove: 'The Stovetop', mixed: 'The Whole Kitchen' };
 
 /**
  * A sheet of triangles with a thickness: a spoon, a towel, a tilted plate. Its top is the
@@ -121,7 +125,8 @@ export interface Shape {
 }
 export type Top = 'start' | 'steamer' | 'plate' | 'board' | 'pudding' | 'susan' | 'tin' | 'goal' | 'butter' | 'honey' | 'lid' | 'pan'
   | 'pad' | 'spoon' | 'bench' | 'paddle' | 'tilt'
-  | 'boule' | 'tray' | 'stand' | 'bin' | 'block' | 'shelf' | 'sill' | 'jelly';
+  | 'boule' | 'tray' | 'stand' | 'bin' | 'block' | 'shelf' | 'sill' | 'jelly'
+  | 'sponge' | 'soap' | 'drainer' | 'rack';
 export interface Tower {
   top: Top;
   /** the middle of its top surface (for honey: the place against its side where you stick) */
@@ -725,7 +730,9 @@ export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cl
   const nx0 = lv.towers[at + 1];
   if (nx0?.wall) {
     if (cling) { const c = climbAim(lv, from, cling, at + 1, t); if (c) return { yaw: 0, power: c.power, climb: cling }; }
-    else { const w = aimWall(lv, from, at + 1, t); if (w) return { yaw: w.yaw, power: w.power }; }
+    // (not on the wall, or held by something else: at the wall)
+    const w = aimWall(lv, from, at + 1, t);
+    if (w) return { yaw: w.yaw, power: w.power };
   }
   const tries = [at + 1, lv.towers[at].jar ? -1 : at, at + 2].filter((k) => k >= 0 && k < lv.towers.length);
   for (const k of tries) {
@@ -752,7 +759,9 @@ export function climbAim(lv: Level, from: V3, n: V3, k: number, t = 0): { power:
     const ok = pa.hit && tw.shapes.includes(pa.hit.shape) && pa.hit.n[1] > 0.7 && inside(pa.hit.shape, pa.hit.p, 1.8);
     if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) break;
   }
-  return lo < 0 ? null : { power: lo + (hi - lo) * 0.4 };
+  // (up a towel, high in the band: sliding up it costs a little, and past the top there's the wall behind to stop it;
+  // onto a jar's top, nothing behind to stop it, the middle of the band)
+  return lo < 0 ? null : { power: lo + (hi - lo) * (tw.wall ? 0.65 : 0.4) };
 }
 /**
  * A flick from `from` that lands against tower k's wall (its `wall`: a side that holds, below its
@@ -777,7 +786,8 @@ export function aimWall(lv: Level, from: V3, k: number, t = 0): { yaw: number; p
     if (c) good.push({ power: p, at: hang, n, climb: c.power }); else if (good.length) break;
   }
   if (!good.length) return null;
-  const g = good[Math.floor(good.length * 0.4)];
+  // (high on the band: it slides a little, and droops, once it's stuck, and wants wall above it to climb)
+  const g = good[Math.floor(good.length * 0.65)];
   return { yaw, ...g };
 }
 /** Whether a point is over a shape's top, at least so far in from its edge. */
@@ -831,11 +841,12 @@ function pickTop(r: Rand, n: number, prev: Top): Top {
     if (n >= 3) pool.push('pudding', 'tin');
     if (n >= 4) pool.push('susan', 'plate');
   } else if (ch === 'stove') {
-    // the stovetop: level 5 brings the butter dish and the pan; 6 the honey jar; 7 the lids
+    // the stovetop: its first level brings the butter dish and the pan; the next the honey jar; then the lids
+    const s = n - CHAPTER_AT.stove;
     pool = ['steamer', 'pan', 'butter', 'pan'];
-    if (n >= 6) pool.push('honey', 'butter', 'honey');
-    if (n >= 7) pool.push('lid', 'lid', 'honey');
-    if (n >= 8) pool.push('tin', 'lid');
+    if (s >= 1) pool.push('honey', 'butter', 'honey');
+    if (s >= 2) pool.push('lid', 'lid', 'honey');
+    if (s >= 3) pool.push('tin', 'lid');
   } else {
     pool = ['steamer', 'board', 'plate', 'pudding', 'tin', 'susan', 'pan', 'butter', 'honey', 'lid', 'honey', 'lid'];
   }
