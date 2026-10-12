@@ -86,26 +86,38 @@ are cut high, a bridge: a deck of stone slabs, arched a little, a kerb along eit
 either bank. No tree stands in the water, on a bank cut steep, nor just downhill of the water,
 where its crown would stand between the eye and it: the water's an open mass, as the print's are.
 
-It's drawn as the prints draw water: not coloured in, but the paper itself, and brush strokes.
-Each stroke is its own wavy mark, tapered to a hair at both ends and swelling a little past its
-middle, as a brush presses and lifts, its length, weight and tone its own, and on a stream broken
-here and there along its length, as a dry brush breaks; they're laid in staggered rows, in loose
-groups, with open paper between. On a stream they run along it, long and sweeping, close
-together, in rows parallel to its middle line (so they bend as it bends), with a second layer of
-shorter, finer ones; more by its banks; short, close and wavier where it runs fast; drifting down
-it slowly. On a pool, strokes echo its shore, and out on its open water a few long strokes lie
-across it, far apart. Where it falls, a few fine lines run the whole way down the sheet. Each
-stroke thins to nothing before the shore, so none's cut off by it.
+It's drawn as the prints draw water: not coloured in, but the paper itself, and lines, of a kind
+for each state of the water. Each line is its own brush mark, tapered to a hair at both ends and
+swelling a little past its middle, its length, weight and tone its own, laid in staggered rows.
 
-Its banks are drawn in ink: a brush line along the shore, swelling and thinning, broken now and
-then, its edge notched here and there like a ledge of rock, with a hairline echo just inside it.
-Rocks line its banks at the water's edge, stand in it where it runs fast (and now and then where
-it's slow), and out in its ponds; each rock standing in the water has two or three broken rings of
-ripples about it, drawn out downstream where it runs. On still water, what stands at it or over it
-is mirrored below it, as the eye sees it, in broken strokes down, combed across by the ripples and
-fading as they go: the rocks in grey, and the blossom of a crown above a pool in pink. Petals float
-on its stiller water. Where the banks are cut deep they're inked as rock, black as the print's
-banks are. In the composition view, water's open paper, faintly cooler.
+- **Still** (a pool, a pond, a marsh): long, nearly straight lines across it, far apart out on the
+  open water, closer by its shore.
+- **Gentle** (a stream running slowly): long low waves along it, close together, in rows parallel
+  to its middle line (so they bend as it bends), broken here and there as a dry brush breaks, with
+  a finer second set between; drifting slowly down it.
+- **Rapid** (where it runs fast): short choppy waves, two sets at a slant to each other, crossing.
+- **Falling** (a fall's sheet, a cascade's lip): lines down it, of varied length, running down.
+- **Foam**: a stipple of dots and here and there a tiny ring, at the foot of each drop and thinning
+  out below it, and in patches where it runs fast.
+
+Each line thins to nothing before the shore, so none's cut off by it. Its bank is a fine line of
+ink along the shore, swelling a little, broken now and then, with a hairline echo just inside it.
+Where a stream drops into a pool there's a small cascade, its lip held by a rock either side.
+Rocks line its banks, stand in it where it runs fast (and now and then where it's slow), and out in
+its ponds; each has two or three broken rings hugging it, drawn out a little downstream, and a
+short dark stroke under it where it meets the water; behind some, in slow water, a small eddy
+spirals. Petals float on its stiller water, some with a ring of their own. On still water what
+stands at it or over it is mirrored below it, as the eye sees it, in broken strokes down, fading as
+they go: rocks in grey, and the blossom of a crown above a pool in pink.
+
+Where its banks are cut deep into the hill (about a fall's pool, in a run of falls) they're rock
+walls, as the prints wash them: a grey wash, paler where it faces the light and deeper turned from
+it, with dry strokes dragged down it and an ink line along its top where the cut begins.
+
+Over slow water, a crossing that's a bridge is now and then a stone arch: hump-backed, one round
+opening over the water, its faces of squared stone, a low parapet either side; on still water its
+reflection rounds the opening into a ring. In the composition view, water's open paper, faintly
+cooler.
 
 ## The temples
 
@@ -235,7 +247,7 @@ place.
 at full rendering resolution. The footer identifies the pass, seed and where on the ways. Remove
 `review` to walk normally. On seed 1: `at=w3:36` (a fork), `at=w10:15` (a pavilion), `at=w11:22`
 (a pagoda), `at=w19:44` (a cast where a branch ends), `at=w13:61` (a gate), `at=w64:9` (a hall),
-`at=w8:6` (stepping stones under a waterfall), `at=w29:36` (a bridge). On still-ford-7,
+`at=w8:8` (a waterfall's pool, and stepping stones below), `at=w29:36` (a stone arch). On still-ford-7,
 `at=w41:19` (stepping stones over a winding stream, a waterfall above).
 (The ways' ids follow from how the hill grows, so these change when it does.)
 

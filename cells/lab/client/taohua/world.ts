@@ -19,7 +19,7 @@ export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
 const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24, ring: 25, eddy: 26, archReflect: 27 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -599,13 +599,22 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
   const sts = W.streamsNear(z0, z1);
   if (!sts.length) return;
   const D = 0.5;
-  const cache = new Map<number, [number, number, number, number, number, number] | null>();
+  const cache = new Map<number, number[] | null>();
   const at = (x: number, z: number) => {
     const key = Math.round(x * 4) * 100000 + Math.round(z * 4);
     if (cache.has(key)) return cache.get(key)!;
     const w = W.at(x, z);
-    // (its edge is drawn where it's 0 m in from its edge (see the drawing); further out, the sheet's tucked under the ground)
-    const v: [number, number, number, number, number, number] | null = w && w.s < 1.2 ? [x, w.s > 0.8 ? Math.min(w.L, ground(ways, x, z) - 0.03) : w.L, z, -w.s, w.across, WATER_KIND[w.kind] + Math.min(0.99, w.run)] : null;
+    let v: number[] | null = null;
+    if (w && w.s < 1.2) {
+      // (foam: at the foot of a drop just above it, thinning out below; in fast water, a little)
+      let foam = 0;
+      for (const [dz, f] of [[0.6, 1], [1.2, 0.75], [2, 0.4]] as Array<[number, number]>) {
+        const u = W.at(x, z + dz);
+        if (u && u.s < 0.3 && u.L - w.L > 0.2 + 0.36 * dz) { foam = f; break; }
+      }
+      // (its edge is drawn where it's 0 m in from its edge (see the drawing); further out, the sheet's tucked under the ground)
+      v = [x, w.s > 0.8 ? Math.min(w.L, ground(ways, x, z) - 0.03) : w.L, z, -w.s, w.across, WATER_KIND[w.kind] + Math.min(0.99, w.run), foam];
+    }
     cache.set(key, v);
     return v;
   };
@@ -618,7 +627,8 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
       let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
       const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
       if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      for (const v of t) mesh.v.vert(v[0], v[1], v[2], nx, ny, nz, v[3], v[4], v[5], M.water);
+      // (where it lies level, its normal's up, leaning by how much foam there is: for the drawing)
+      for (const v of t) ny > 0.97 ? mesh.v.vert(v[0], v[1], v[2], v[6], 1, 0, v[3], v[4], v[5], M.water) : mesh.v.vert(v[0], v[1], v[2], nx, ny, nz, v[3], v[4], v[5], M.water);
     }
   }
   const inT = (x: number, z: number) => z >= z0 && z < z1 && x >= x0 && x < x1;
@@ -662,6 +672,14 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
     }
     for (const p of st.pools) {
       if (p.z + p.rz * 2 < z0 || p.z - p.rz * 2 > z1) continue;
+      // (where the stream drops into it, a small cascade: rocks either side of its lip)
+      if (p.kind !== 'spring' && p.kind !== 'plunge') {
+        const hz = p.z + p.rz * 0.95, hx = W.xAt(st, hz), drop = W.levelAt(st, hz + 0.8).L - p.L;
+        if (drop > 0.2) for (const sd of [-1, 1]) {
+          const x = hx + sd * (W.halfAt(st, hz) + ramp(r, 0.05, 0.4)), z = hz + ramp(r, -0.2, 0.4);
+          if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, ramp(r, 0.45, 0.8), r);
+        }
+      }
       // (rocks about a spring, above it, where it comes out)
       if (p.kind === 'spring') for (let k = 0; k < 5; k++) {
         const a = ramp(r, 0.3, 2.85), x = p.x + Math.cos(a) * p.rx * ramp(r, 1.1, 1.6), z = p.z + Math.sin(a) * p.rz * ramp(r, 1.1, 1.6);
@@ -679,7 +697,7 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
       }
       // (and one or two standing out in a pond)
       if (p.kind === 'pond' || p.kind === 'plunge') for (let k = 0; k < 2; k++) {
-        if (r() < 0.4) continue;
+        if (r() < 0.55) continue;
         const a = r() * 6.3, x = p.x + Math.cos(a) * p.rx * ramp(r, 0.35, 0.75), z = p.z + Math.sin(a) * p.rz * ramp(r, 0.35, 0.75);
         if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, ramp(r, 0.55, 0.95), r);
       }
@@ -690,7 +708,10 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
   for (let i = 0; i < 70; i++) {
     const x = ramp(pr, x0, x1), z = ramp(pr, z0, z1), w = W.at(x, z);
     if (!w || w.s > -0.15 || (w.kind === 'flow' && w.run > 0.2) || w.kind === 'falls') continue;
-    petals.push(x, w.L + 0.015, z, ramp(pr, 0.04, 0.09), pr() * Math.PI, pr() * 0.6);
+    const sz = ramp(pr, 0.04, 0.09);
+    petals.push(x, w.L + 0.015, z, sz, pr() * Math.PI, pr() * 0.6);
+    // (about some, a ring on the water where it lies)
+    if (pr() < 0.22) { const R = sz * ramp(pr, 2.2, 3); decal(mesh, W, x - R * 1.25, x + R * 1.25, z - R * 1.25, z + R * 1.25, w.L + 0.012, M.ring, (px, pz) => [(px - x) / R, (pz - z) / R]); }
   }
 }
 /**
@@ -726,8 +747,13 @@ function waterMarks(mesh: Mesh, W: Water, x: number, z: number, size: number, h:
   if (!w || w.s > 0.4 || w.kind === 'falls') return;
   const L = w.L;
   if (w.s < 0.4) {
-    const R = size * 0.9, down = w.kind === 'flow' ? 1.7 : 1;
-    decal(mesh, W, x - R * 2.3, x + R * 2.3, z - R * 2.3 * down, z + R * 2.3, L + 0.014, M.ripple, (px, pz) => [(px - x) / R, (pz - z) / R / (pz < z ? down : 1)]);
+    const R = size * 0.78, down = w.kind === 'flow' ? 1.5 : 1;
+    decal(mesh, W, x - R * 1.8, x + R * 1.8, z - R * 1.8 * down, z + R * 1.8, L + 0.014, M.ripple, (px, pz) => [(px - x) / R, (pz - z) / R / (pz < z ? down : 1)]);
+    // (behind it, downstream, where the water's not too quick, now and then an eddy)
+    if (w.kind === 'flow' && w.run < 0.2 && hash(Math.round(x * 10), Math.round(z * 10), 0xedd1) % 100 < 40) {
+      const E = size * 0.7, ez = z - size * 1.7;
+      decal(mesh, W, x - E, x + E, ez - E, ez + E, L + 0.016, M.eddy, (px, pz) => [(px - x) / E, (pz - ez) / E]);
+    }
   }
   if (w.run < 0.2) {
     const dz = h * 1.06 + 0.2, hx = size * 0.85;
@@ -780,6 +806,7 @@ function crossing(mesh: Mesh, ways: Ways, w: Way, inT: (x: number, z: number) =>
     }
     return;
   }
+  if (c.kind === 'arch') { archBridge(mesh, ways, w, inT); return; }
   const span0 = c.u0 - 0.4, span1 = c.u1 + 0.4, n = Math.max(3, Math.round((span1 - span0) / 0.5));
   const du = (span1 - span0) / n;
   for (let k = 0; k < n; k++) {
@@ -799,6 +826,57 @@ function crossing(mesh: Mesh, ways: Ways, w: Way, inT: (x: number, z: number) =>
     const top = ways.surface(w, u, m.p[2]) - 0.2, foot = Math.min(ground(ways, m.p[0], m.p[2]), c.L) - 0.6;
     mesh.box([m.p[0], (top + foot) / 2, m.p[2]], [0.32, (top - foot) / 2, WIDTH / 2 + 0.16], m.dir, INK.stepTop, INK.stone, M.stone);
   }
+}
+
+/**
+ * A stone arch over the water: one round arch, its opening over the water as wide as it can be,
+ * its crown under the deck; its face of squared stone, the deck pale, a low parapet either side. Its
+ * reflection below it, as the eye sees it: its face mirrored round its opening's mirror, so the arch
+ * and its reflection make a ring.
+ */
+function archBridge(mesh: Mesh, ways: Ways, w: Way, inT: (x: number, z: number) => boolean) {
+  const c = w.cross!, W = ways.water;
+  // (its opening: over the water, a little wider; round, as high as it's wide, or as the deck allows)
+  let wa = Infinity, wb = -Infinity;
+  for (let u = c.u0; u <= c.u1; u += 0.1) { const q = ways.at(w, u, true).p, t = W.at(q[0], q[2]); if (t && t.s < 0) { wa = Math.min(wa, u); wb = Math.max(wb, u); } }
+  if (!(wb > wa)) { wa = c.u0 + 1.2; wb = c.u1 - 1.2; }
+  const o0 = Math.max(c.u0 + 0.3, wa - 0.35), o1 = Math.min(c.u1 - 0.3, wb + 0.35), mid = (o0 + o1) / 2;
+  const top = (u: number, z: number) => ways.surface(w, Math.max(c.u0, Math.min(c.u1, u)), z);
+  const crown = top(mid, ways.at(w, mid, true).p[2]) - 0.3;
+  const H = Math.max(0.3, Math.min((o1 - o0) / 2, crown - c.L));
+  const s0 = c.u0 - 0.7, s1 = c.u1 + 0.7, n = Math.max(12, Math.round((s1 - s0) / 0.18));
+  const HW = WIDTH / 2 + 0.14;
+  // (a section across it at each step along it: its middle, across, deck, and the arch's soffit or the abutment's foot)
+  const sec = Array.from({ length: n + 1 }, (_, k) => {
+    const u = s0 + ((s1 - s0) * k) / n, m = ways.at(w, u, true), y1 = top(u, m.p[2]);
+    const f = (u - o0) / (o1 - o0);
+    const y0 = f > 0 && f < 1 ? Math.min(y1 - 0.12, c.L + H * Math.sqrt(Math.max(0, 1 - (2 * f - 1) ** 2))) : Math.min(ground(ways, m.p[0], m.p[2]), c.L) - 0.5;
+    return { p: m.p, ax: m.dir[1], az: -m.dir[0], y1, y0, open: f > 0 && f < 1 };
+  });
+  const P = (q: typeof sec[number], off: number, y: number): V3 => [q.p[0] + q.ax * off, y, q.p[2] + q.az * off];
+  for (let k = 0; k < n; k++) {
+    const a = sec[k], b = sec[k + 1];
+    if (!inT(a.p[0], a.p[2]) && !inT(b.p[0], b.p[2])) continue;
+    // (its deck, pale stone)
+    mesh.quad(P(a, -HW, a.y1), P(b, -HW, b.y1), P(b, HW, b.y1), P(a, HW, a.y1), INK.stepTop, M.stone, [0, 1, 0]);
+    // (its two faces, squared stone, from the deck down to the arch, or into the ground)
+    for (const sd of [-1, 1]) {
+      mesh.quad(P(a, sd * HW, a.y0), P(b, sd * HW, b.y0), P(b, sd * HW, b.y1), P(a, sd * HW, a.y1), INK.stone, M.stone);
+      // (a low parapet along each side)
+      const o = sd * (HW - 0.08);
+      mesh.box([(P(a, o, 0)[0] + P(b, o, 0)[0]) / 2, (a.y1 + b.y1) / 2 + 0.13, (P(a, o, 0)[2] + P(b, o, 0)[2]) / 2], [Math.hypot(b.p[0] - a.p[0], b.p[2] - a.p[2]) / 2 + 0.01, 0.13, 0.08], [b.p[0] - a.p[0], b.p[2] - a.p[2]].map((v, _, arr) => v / (Math.hypot(arr[0], arr[1]) || 1)) as [number, number], INK.stepTop, INK.stone, M.stone);
+    }
+    // (the arch's soffit, under it, in shadow)
+    if (a.open || b.open) mesh.quad(P(a, -HW, a.y0), P(a, HW, a.y0), P(b, HW, b.y0), P(b, -HW, b.y0), INK.rock, M.stone);
+  }
+  // (its reflection, on the side the eye sees it from)
+  const a = ways.at(w, o0, true).p, b = ways.at(w, o1, true).p, mm = ways.at(w, mid, true);
+  const wt = W.at(mm.p[0], mm.p[2]);
+  if (!wt || wt.run >= 0.2 || !inT(mm.p[0], mm.p[2])) return;
+  const half = Math.abs(b[0] - a[0]) / 2, xm = (a[0] + b[0]) / 2;
+  if (half < 0.8) return;
+  const face = mm.p[2] - (WIDTH / 2 + 0.14) * Math.abs(mm.dir[0]) - 0.05, D = (H * 1.06) / 0.72, hw = half / 0.78;
+  decal(mesh, W, xm - hw, xm + hw, face - D, face, c.L + 0.012, M.archReflect, (px, pz) => [(px - xm) / hw, (face - pz) / D]);
 }
 
 /** Where a fallen petal comes to rest: on a way (its tread, a stepping stone, a bridge's deck), afloat on water, or on the ground. */

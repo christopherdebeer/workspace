@@ -45,8 +45,10 @@ export interface Junction {
   /** the ways that come up to it, and those that go on from it */
   ins: Way[]; outs: Way[];
 }
+/** how high a stone arch's deck rises over its banks, at its middle: a hump, as such bridges are */
+export const archRise = (c: { u0: number; u1: number }) => 0.7 + 0.13 * (c.u1 - c.u0);
 /** where a way crosses water: from u0 to u1 along it (bank to bank), on what, over water at what level */
-export interface Crossing { u0: number; u1: number; kind: 'stones' | 'bridge'; L: number; y0: number; y1: number }
+export interface Crossing { u0: number; u1: number; kind: 'stones' | 'bridge' | 'arch'; L: number; y0: number; y1: number }
 /** a stretch of a way that climbs in steps: from u0 to u1 along it, so many steps */
 export interface StairRun { u0: number; u1: number; n: number; h0: number; h1: number }
 export interface Way {
@@ -385,7 +387,9 @@ export class Ways {
     // (stepping stones only where both banks are about the water's level; else a bridge, over a pool's
     // cut bank or a run of white water, as high as it must be)
     const low = Math.max(Math.abs(y0 - L - 0.16), Math.abs(y1 - L - 0.16)) < 0.45;
-    const kind = !low || steep ? 'bridge' : marsh || r() < 0.55 ? 'stones' : 'bridge';
+    let kind: Crossing['kind'] = !low || steep ? 'bridge' : marsh || r() < 0.55 ? 'stones' : 'bridge';
+    // (over slow water, a span the right size, now and then a stone arch, its deck rising over it)
+    if (kind === 'bridge' && !marsh && fast < 0.2 && u1 - u0 > 3.5 && u1 - u0 < 8 && r() < 0.55) kind = 'arch';
     return { u0, u1, kind, L, y0, y1 };
   }
   /** (as made so far: no growing) */
@@ -485,6 +489,7 @@ export class Ways {
       const t = (u - c.u0) / Math.max(0.01, c.u1 - c.u0), bank = c.y0 + (c.y1 - c.y0) * t;
       // (on a bridge, its deck, arched a little; on stepping stones, their tops, just above the water)
       if (c.kind === 'bridge') return bank + (0.25 + 0.03 * (c.u1 - c.u0)) * Math.sin(Math.PI * t);
+      if (c.kind === 'arch') return bank + archRise(c) * Math.sin(Math.PI * t);
       const e = Math.min(u - c.u0, c.u1 - u);
       return bank + (c.L + 0.16 - bank) * smooth(0.4, 1.4, e);
     }

@@ -75,6 +75,17 @@ float strokes(vec2 p, float rs, float len, float dens, float seed, float fy, flo
   float br = dry > 0. ? step(dry, noise(vec3(p.x * 2.4 / len, row * 3.1, seed + 17.))) : 1.;
   return (1. - smoothstep(w, w + .8, px)) * mix(.5, 1., hash3(id + 9.9)) * br;
 }
+/** A stipple of foam: in cells so wide (m), a dot in so many of them (amt), and here and there a tiny ring; fpx: metres to a pixel. */
+float stipple(vec2 p, float cell, float amt, float fpx) {
+  if (amt <= 0.) return 0.;
+  vec2 c = floor(p / cell), f = fract(p / cell);
+  vec3 id = vec3(c * vec2(1.31, .77), 31.);
+  if (hash3(id) > amt) return 0.;
+  vec2 o = .25 + .5 * vec2(hash3(id + 1.1), hash3(id + 2.3));
+  float d = length(f - o) * cell / fpx, rr = mix(.5, 1.4, hash3(id + 3.7));
+  if (hash3(id + 4.1) < .2) return (1. - smoothstep(.35, 1., abs(d - rr - 1.6))) * .85;
+  return 1. - smoothstep(rr, rr + .8, d);
+}
 void main() {
   vec3 n = normalize(vN);
   // (each face lit from the side it's seen from, whichever way it was wound)
@@ -90,12 +101,20 @@ void main() {
     c = PAPER;
     float rag = noise(vW * 1.3) * .5 + noise(vW * 2.6) * .2;
     if (vM == ${M.ground} && vC.b <= 0. && vC.g > .32 + rag) {
-      // (where it's cut deep for water, the banks are rock: inked as rock is, by which way each facet turns)
+      // (where it's cut deep for water, the banks are rock walls, as the prints wash them: a grey wash,
+      // paler where it faces the light, deeper turned from it, mottled; dry strokes dragged down it;
+      // an ink line along its top, where the cut begins)
       vec3 nf = normalize(cross(dFdx(vW), dFdy(vW)));
       if (nf.y < 0.) nf = -nf;
       float toL = dot(normalize(nf.xz + 1e-4), normalize(L.xz));
-      c = nf.y > .8 ? vec3(.4, .39, .38) : toL > -.05 ? vec3(.25, .25, .24) : vec3(.1, .1, .1);
-      if (vC.g < .44 + rag) c = vec3(.4, .39, .38);
+      c = nf.y > .8 ? vec3(.68, .66, .62) : mix(vec3(.4, .39, .38), vec3(.6, .58, .55), smoothstep(-.4, .5, toL));
+      c *= .92 + .12 * noise(vW * 1.4);
+      vec2 along = normalize(vec2(-nf.z, nf.x) + 1e-4);
+      vec2 pw = vec2(-vW.y, dot(vW.xz, along));
+      float drag = strokes(pw, .16, 1.1, .5, 12., max(fwidth(pw.y), 1e-5), nf.y > .8 ? 0. : 1., .03, .3);
+      c = mix(c, vec3(.2, .19, .18), drag * .85);
+      float rimD = (vC.g - .32 - rag) / max(fwidth(vC.g), 1e-4);
+      c = mix(c, vec3(.13, .12, .11), (1. - smoothstep(1.2, 2.2, rimD)) * .9);
       lit = 1.;
     } else
     if (vC.b <= 0. && vC.r > 0.) {
@@ -189,88 +208,116 @@ void main() {
     c = texture(uPlaque, vC.rg).rgb;
     lit = 1.;
   } else if (vM == ${M.water}) {
-    // water, as the prints draw it: the paper itself, and line work. An ink line along its shore,
-    // broken here and there; the current, a few fine wavy strokes following the banks, in loose
-    // groups, broken, drifting down it slowly (quicker, closer, shorter where it runs fast); out on
-    // a pool's open water, a few long wavy strokes across; where it falls, fine strokes down the
-    // sheet, running down. (vC: how far in from its edge; across from a stream's middle; its kind, and after the point how fast it runs)
+    // water, as the prints draw it: the paper itself, and lines, of a kind for each state of it.
+    // Still (a pool, a marsh): long, nearly straight lines across, closer by the shore. Gentle (a
+    // stream that runs slowly): long low waves along it, close, parallel to its banks. Rapid (where it
+    // runs fast): short choppy waves, two sets crossing. Falling (a fall, a cascade's lip): lines down
+    // it, of varied length. Foam (at a fall's foot, below a cascade, in fast water): a stipple of dots
+    // and tiny rings. Its bank: a fine line of ink along the shore, broken.
+    // (vC: how far in from its edge; across from a stream's middle; its kind, and after the point how
+    // fast it runs. Its normal, where it's level: up, leaning by how much foam there is.)
     float inn = vC.r, across = vC.g;
     int kind = int(floor(vC.b + .001));
     float run = fract(vC.b + .001);
-    bool fall = abs(normalize(vN).y) < .55;
+    vec3 nn = normalize(vN);
+    bool fall = abs(nn.y) < .55, lip = !fall && abs(nn.y) < .9;
+    float foamAmt = lip || fall ? 0. : clamp(vN.x / max(abs(vN.y), .2), 0., 1.);
     // (its shore: where it's no way in from its edge, it isn't)
     if (inn < 0. && !fall) discard;
-    vec3 LINE = vec3(.24, .26, .27), BANK = vec3(.13, .12, .11);
+    vec3 LINE = vec3(.22, .24, .25), BANK = vec3(.13, .12, .11);
     float ink = 0., bank = 0.;
-    if (fall) {
-      // (where it falls, long fine strokes down the sheet, broken, running down)
-      vec2 p = vec2(-vW.y - uTime * .9, vW.x * .8 + vW.z * .6);
-      ink = .75 * strokes(p, .2, 12., .4, 3., fwidth(p.y), .75, .01, 0.);
+    float fpx = max(length(fwidth(vW.xz)), 1e-4) * .7;
+    if (fall || lip) {
+      // (falling: lines down it, of varied length, wavering a little, running down)
+      vec2 p = vec2((fall ? -vW.y : vW.z * 1.4) - uTime * .9, vW.x * .8 + vW.z * .6);
+      ink = .85 * strokes(p, .1, fall ? 1.5 : .7, .62, 3., fwidth(p.y), .8, .02, 0.);
     } else {
-      float t = uTime * (kind == 0 ? .12 + run * 1.4 : .015), fast = smoothstep(.14, .3, run);
+      float t = uTime * (kind == 0 ? .12 + run * 1.4 : .015), fast = smoothstep(.13, .26, run);
       float grp = noise(vec3(vW.xz * .2, 8.)), shore = 1. - smoothstep(.15, 1., inn);
       // (each thins to nothing at the shore, so none's cut off by it)
       float thin = smoothstep(.0, .25, inn);
-      if (kind == 0 || kind == 3 || abs(normalize(vN).y) < .92) {
-        // a stream: long sweeping strokes along it, in rows across it parallel to its middle line
-        // (so they bend as it bends), close together, broken as a dry brush breaks; a second layer of
-        // shorter, finer ones; more by its banks; quicker, shorter, wavier where it runs fast; drifting
-        float dens = .42 + .2 * shore + .2 * fast + (grp - .5) * .35;
+      if (kind == 0 || kind == 3) {
         vec2 p = vec2(vW.z + t, across);
         float fy = fwidth(across);
-        ink = strokes(p, mix(.17, .13, fast), mix(3.4, 1.1, fast), dens, 1., fy, thin, mix(.035, .09, fast), .28);
-        ink = max(ink, .6 * strokes(p + vec2(3.1, .07), mix(.26, .2, fast), mix(1.3, .5, fast), dens * .6, 2., fy, thin * .8, .08, 0.));
+        // gentle: long low waves along it, close together, a finer second set between
+        float dens = .55 + .15 * shore + (grp - .5) * .3;
+        float gentle = strokes(p, .12, 3.6, dens, 1., fy, thin * .85, .035, .3);
+        gentle = max(gentle, .6 * strokes(p + vec2(3.1, .06), .19, 1.6, dens * .6, 2., fy, thin * .6, .05, 0.));
+        // rapid: short choppy waves, two sets at a slant to each other, crossing
+        vec2 pa = mat2(.976, -.22, .22, .976) * p, pb = mat2(.976, .22, -.22, .976) * p;
+        float rapid = max(strokes(pa, .1, .55, .62, 6., fy, thin, .16, 0.), .8 * strokes(pb + vec2(1.7, .05), .12, .45, .5, 7., fy, thin * .8, .18, 0.));
+        ink = mix(gentle, rapid, fast);
+        foamAmt = max(foamAmt, .22 * smoothstep(.2, .32, run) * smoothstep(.45, .65, noise(vec3(vW.xz * .7, 23.))));
       } else {
-        // a pool: by its shore, strokes echoing it; out on its open water, a few long strokes
-        // across, far apart, in loose groups
-        vec2 ps = vec2((vW.x + vW.z) * .7, inn);
-        float near = strokes(ps, .2, 1.4, .5 + (grp - .5) * .4, 4., fwidth(inn), thin, .06, .25) * (1. - smoothstep(.5, .9, inn));
-        vec2 po = vec2(vW.x + t, vW.z);
-        float open = strokes(po, .36, 2.4, .2 + (grp - .5) * .3, 5., fwidth(vW.z), 1., .1, .2) * smoothstep(.7, 1.2, inn);
-        ink = max(near, open);
+        // still: long, nearly straight lines across it, far apart out on it, closer by its shore
+        vec2 p = vec2(vW.x + t, vW.z);
+        float fy = fwidth(vW.z);
+        float dens = .16 + .5 * shore + (grp - .5) * .3;
+        ink = strokes(p, .24, 3.4, dens, 5., fy, thin * .9, .008, .22);
+        ink = max(ink, .55 * strokes(p + vec2(2.3, .11), .24, 1.4, dens * .5, 9., fy, thin * .7, .012, 0.));
       }
-      // the bank: a line of ink along the shore, as a brush draws it, swelling and thinning, broken
-      // now and then, its edge notched here and there like a ledge of rock; inside it, a hairline echo
+      // foam: a stipple of dots, and here and there a tiny ring
+      ink = max(ink, stipple(vW.xz, .1, foamAmt * .75 * smoothstep(.25, .55, noise(vec3(vW.xz * 1.6, 24.)) + foamAmt * .4), fpx));
+      // the bank: a fine line of ink along the shore, as a brush draws it, swelling a little, broken
+      // now and then; a hairline echo inside it, now and then
       float wi = max(fwidth(inn), 1e-4);
       float nb = noise(vec3(vW.xz * .55, 4.)), gap = noise(vec3(vW.xz * 1.7, 11.));
-      float notch = smoothstep(.45, .6, noise(vec3(vW.xz * 1.1, 13.))) * .05;
-      float lw = mix(.4, 2.6, smoothstep(.3, .85, nb));
-      bank = (1. - smoothstep(lw, lw + .9, (inn - notch) / wi)) * step(.33, gap);
-      float e1 = abs(inn - .17 - .05 * sin(vW.x * 2.7 + vW.z * 1.9)) / wi;
-      ink = max(ink, (1. - smoothstep(.35, 1.1, e1)) * step(.5, noise(vec3(vW.xz * 1.2, 14.))) * .7);
+      float notch = smoothstep(.45, .6, noise(vec3(vW.xz * 1.1, 13.))) * .04;
+      float lw = mix(.3, 1.5, smoothstep(.3, .85, nb));
+      bank = (1. - smoothstep(lw, lw + .8, (inn - notch) / wi)) * step(.38, gap);
+      float e1 = abs(inn - .15 - .04 * sin(vW.x * 2.7 + vW.z * 1.9)) / wi;
+      ink = max(ink, (1. - smoothstep(.3, 1., e1)) * step(.6, noise(vec3(vW.xz * 1.2, 14.))) * .45);
     }
     c = mix(PAPER, LINE, ink);
-    c = mix(c, BANK, bank * .92);
+    c = mix(c, BANK, bank * .85);
     lit = 1.;
-  } else if (vM == ${M.ripple} || vM == ${M.reflect} || vM == ${M.reflectPink}) {
+  } else if (vM >= ${M.ripple}) {
     // marks on water about what stands in it or over it: (vC: where, in its own measure; how far in
-    // from the water's edge). Ripples: two or three rings about a rock standing in the water, broken,
-    // drawn out downstream. Reflections: what stands at or over the water, mirrored below it, as
-    // broken strokes down, combed across by the water's ripples, fading as they go.
+    // from the water's edge).
     if (vC.b < .03) discard;
     vec2 q = vC.rg;
     float a = 0.;
-    vec3 col = vec3(.3, .33, .34);
-    if (vM == ${M.ripple}) {
-      float r = length(q), fr = max(fwidth(r), 1e-4);
-      float ang = atan(q.y, q.x);
+    vec3 col = vec3(.24, .26, .27);
+    float r = length(q), fr = max(fwidth(r), 1e-4), ang = atan(q.y, q.x);
+    if (vM == ${M.ripple} || vM == ${M.ring}) {
+      // ripples: rings hugging what stands in the water, broken, the outer ones fainter (a petal,
+      // one ring); and, under a rock, a short dark stroke where it meets the water
+      int n = vM == ${M.ring} ? 1 : 3;
       for (int i = 0; i < 3; i++) {
-        float R = 1.1 + float(i) * .42 + .08 * sin(ang * 3. + float(i));
-        float on = step(.38 + float(i) * .1, noise(vec3(cos(ang) * 2.2, sin(ang) * 2.2, float(i) * 3.7 + vW.x)));
-        a = max(a, (1. - smoothstep(.5, 1.3, abs(r - R) / fr)) * on * (1. - float(i) * .22));
+        if (i >= n) break;
+        float R = 1. + float(i) * .27 + .05 * sin(ang * 3. + float(i));
+        float on = step(.36 + float(i) * .1 + (vM == ${M.ring} ? .12 : 0.), noise(vec3(cos(ang) * 2.2, sin(ang) * 2.2, float(i) * 3.7 + vW.x)));
+        a = max(a, (1. - smoothstep(.4, 1.2, abs(r - R) / fr)) * on * (1. - float(i) * .25));
       }
+      if (vM == ${M.ripple}) {
+        float under = smoothstep(-.2, -.6, q.y / max(r, 1e-3)) * (1. - smoothstep(1.1, 2.4, abs(r - .9) / fr));
+        if (under > .05) { col = vec3(.12, .11, .1); a = max(a, under); }
+      }
+    } else if (vM == ${M.eddy}) {
+      // an eddy: a small spiral, drawn in, broken
+      float sp = r / .28 - ang / 6.2832;
+      float d = abs(fract(sp) - .5) / max(fwidth(sp), 1e-4);
+      a = (1. - smoothstep(.4, 1.2, d)) * (1. - smoothstep(.7, 1., r)) * step(.3, noise(vec3(q * 3., 21.))) * .9;
     } else {
-      // (q.x across, -1 to 1; q.y down from its foot, 0 to 1)
+      // reflections: (q.x across, -1 to 1; q.y down from its foot, 0 to 1) in columns down from its
+      // foot, each a broken stroke, thin, waving a little; fewer and fainter as they go down
       float fx = max(fwidth(q.x), 1e-4);
-      // (in columns down from its foot, each a broken stroke, thin, waving a little; fewer and
-      // fainter as they go down, and toward its sides)
       float col0 = q.x * 4.5 + .25 * sin(q.y * 11. + q.x * 3.);
       float d = abs(fract(col0) - .5) / (fx * 4.5);
       float w = mix(.4, 1.3, hash3(vec3(floor(col0), 3., 1.)));
       float comb = step(.5 + .3 * q.y, noise(vec3(floor(col0) * 1.3, q.y * 7., 2.)));
       float fade = (1. - smoothstep(.15, 1., q.y)) * (1. - smoothstep(.5, 1., abs(q.x)));
-      a = (1. - smoothstep(w, w + .8, d)) * comb * fade * step(hash3(vec3(floor(col0), 9., 4.)), .75);
-      if (vM == ${M.reflectPink}) { col = vec3(.88, .6, .56); a *= .6; } else { col = vec3(.34, .34, .34); a *= .8; }
+      if (vM == ${M.archReflect}) {
+        // (a stone arch's: its face mirrored below it, round its opening's mirror, so the two make a ring)
+        float e = length(vec2(q.x / .78, (q.y - .02) / .72));
+        fade = (1. - smoothstep(.25, 1., q.y)) * (1. - smoothstep(.85, 1., abs(q.x))) * smoothstep(.98, 1.04, e);
+        float ring = 1. - smoothstep(.8, 1.8, abs(e - 1.) / max(fwidth(e), 1e-4));
+        a = max((1. - smoothstep(w, w + .8, d)) * comb * fade, ring * .9 * step(.25, noise(vec3(q * 6., 5.))));
+        col = vec3(.3, .3, .3);
+      } else {
+        a = (1. - smoothstep(w, w + .8, d)) * comb * fade * step(hash3(vec3(floor(col0), 9., 4.)), .75);
+        if (vM == ${M.reflectPink}) { col = vec3(.88, .6, .56); a *= .6; } else { col = vec3(.34, .34, .34); a *= .8; }
+      }
     }
     if (a < .05) discard;
     c = mix(PAPER, col, a);
