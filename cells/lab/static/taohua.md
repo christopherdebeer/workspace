@@ -115,7 +115,7 @@ at full rendering resolution. The footer identifies the pass, seed and path posi
 `review` to walk normally. Composition passes: compare `at=2`, `at=24` and `at=90`.
 
 
-Composition pass 2 widens and raises the portrait view, flattens blossom depth and tonal
-contrast, breaks crown edges into irregular sprays, and uses clipped stone treads and lower,
-tapered rock forms. Verse occupies parallel vertical columns; the large title sits at lower
-left. Use the same seed 1 / at 24 / review view for comparison with pass 1.
+Composition pass 2 broke crown edges into irregular sprays and brought clipped stone treads,
+lower tapered rocks, verse in parallel vertical columns and the large title at lower left. Pass 3
+keeps those and brings back what pass 2 flattened: the ink branches (through their own crowns
+only), the crowns' light and depth, and the starker stair; its camera sits between the two.
