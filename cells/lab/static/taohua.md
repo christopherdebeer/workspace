@@ -1,57 +1,48 @@
 # Taohua · 桃花
 
-A climb up a stone stair through peach blossom, to the mountain temples, on forever. After a
-print: a hillside of peach trees in flower, black rocks along a zigzag of steps, a temple of teal
-tiles and red columns at the top, a walker in a straw hat with a staff, and down its side Bai
-Juyi's couplet on the temple at Dalin:
+A journey up a hillside of peach blossom, on forever. There's no one path: ways cross the hill,
+parting and meeting, past mountain temples and casts from Changes written on the hillside. After a
+print: peach trees in flower, black standing stones, stone steps where the way is steep, a temple
+of teal tiles and red columns, a walker in a straw hat with a staff, the paper's cream under it all.
 
-> 人间四月芳菲尽，山寺桃花始盛开。
-> *In the world below, April's flowers are all gone; at the mountain temple, the peach blossom is just opening.*
+Tap a way and the walker goes there, by whichever ways lead there, up the hill or back down;
+press on a way and slide along it, and they follow your finger. A tap anywhere else (the hillside,
+a temple, a tree) sends them to the nearest place on a way that can be seen, so they're always seen
+to arrive; a tap on a temple can send them to the way it stands over. The place a tap found is
+answered in the scene: a ring of vermilion, left open as a brush draws it, for a moment. With keys,
+↑ or W walks on (at a fork, by the way most nearly ahead), ↓ or S back. Drag anywhere off the ways
+to look about a little; let go, and the view comes back. The steps climbed are counted at the top;
+the last temple passed has its name at the foot of the print over 桃花.
 
-Tap the path and the walker goes there, up or back down; press on the path and slide along it, and
-they follow your finger. Only path you can see answers a tap: a tap on blossom, a rock, a temple, or
-anywhere off the path does nothing, so the walker never goes where you can't see them arrive. (↑, W
-walk on up; ↓, S back down.) Drag anywhere off the path to look about a little; let go, and the view
-comes back. A tap that finds the path is answered in the scene: a ring of vermilion,
-left open as a brush draws it, on the place it found, for a moment. A tap anywhere else (the hillside,
-a temple, a tree) sends the walker to the nearest place on the path that can be seen, so they're
-always seen to arrive. The steps you've climbed are counted at the top. At each temple you pass,
-its name comes up at the foot of the print over 桃花.
+## The hill and its ways
 
-## The hill
+The hill comes first. It rises up the slope, gently in some bands and steeply in others, the same
+all across it. On it, junctions in rows up the hill, one to three in a row, each row a dozen metres
+or so above the last; between one row and the next, ways, each from a junction below to one above,
+bending as it goes, so that every junction can be reached and no two ways cross. Where a row has
+more junctions than the one below, a way forks; fewer, ways meet. Each way takes the hill's height
+as it goes: where its going is steep (the hill steep there, or the way heading straight up it) it
+climbs in steps, each a pale slab of its own, ragged at its ends, turning as the way bends, now and
+then a short wall of squared blocks beside it; where it's gentle, it's a trail, a few flat stones
+and a worn line of grey strokes. All of it from the seed: the same seed, the same hillside.
 
-The path is made as you climb, piece by piece, from the seed and each piece's number, so the same
-seed is the same hillside, step for step (`?seed=…`). The way winds across the hill as much as it climbs it. More than
-half of it, by distance, is trail: no steps, a gentle rise, running well across the slope (up to
-two-thirds of a right angle from straight up), bending as it goes, with only a few flat stones, an
-occasional rock and a worn line of grey strokes to show where it runs, sometimes through an open
-glade with no trees. Between trails, and now and then one after another, flights of four to twelve
-steps, each turned a little or a lot to one side of straight up the hill, back across it more
-often than not but not always, with a stretch of trodden ground at the turn. Each step is a pale
-slab of its own laid on the hill, its two ends ragged, as the print's are; now and then a short wall
-of squared blocks holds the hill back along one side. The path wanders up to ten metres or so to
-either side before it turns back. (Paths
-that branch are to come.)
-
-The hill's height at any point up it is the path's there, so the ground runs up with the steps,
-lying a little under them beside the path and rolling further off. The world is made in bands
-across the hill, twelve metres deep, as they come into view and dropped as they fall behind, each
-from the seed and its number: the ground, the steps and stones that fall in it, standing stones in
-little clusters along the path and in outcrops behind the trees, tufts of grass, the trees, fallen
-blossom, and the temples. No crown hangs right over the path; in front of it, as the eye looks up
-the hill, the crowns stand as they grow, and the walker passes behind them and comes out again.
+The world is made in bands across the hill, twelve metres deep, as they come into view and dropped
+as they fall behind, each from the seed and its number: the ground, the steps and stones that fall
+in it, standing stones in little clusters along the ways and in outcrops behind the trees, tufts of
+grass, the trees, fallen blossom, and the temples. No crown hangs right over a way; in front of
+one, as the eye looks up the hill, the crowns stand as they grow, and the walker passes behind them
+and comes out again.
 
 ## The temples
 
-Now and then (never closer than seven pieces apart) a temple. Mostly it stands beside the path, to
-the left or right, where a level trail runs through a glade: raised on its stone terrace, railed
-round, a stair down its front to the path, and the view leans toward it as you pass. Sometimes, a
-third of the time, it's a gate hall across the path instead: a flight climbs straight up to it
-between balustrades onto its terrace, the path goes in at its open door, through, and on from
-behind. White walls on a grey stone plinth; a porch of red columns on round stone bases; a red beam
-with painted panels of teal and blue under it, a row of brackets; a red door, lattice windows; the
-plaque with the temple's name in gold on dark wood, hung under the eaves. White walls run off to
-either side, capped with tiles.
+Now and then a junction alone in its row is a temple's gate hall: the ways come up to the foot of
+its front stair, climb straight up it onto its terrace, go in at its open door and out the back,
+and down its back stair to go on. Now and then, where a way runs level for a while, a temple stands
+beside it, raised on its stone terrace, railed round, a stair down its front to the way. White
+walls on a grey stone plinth; a porch of red columns on round stone bases; a red beam with painted
+panels of teal and blue under it, a row of brackets; a red door, lattice windows; the plaque with
+the temple's name in gold on dark wood, hung under the eaves. White walls run off to either side,
+capped with tiles.
 
 The roof is hip-and-gable, as the print's is: the lower slopes hipped all round, a red gable at
 each end under its barge board; the eaves well out, swept up toward the corners, a row of round
@@ -121,19 +112,22 @@ bands; jittered trees belong to the band containing their final position. Trees 
 The broad blossom wash is fixed to cluster centres; fine marks remain attached to the illustrated
 lobes. Distant paper fade starts beyond the usual focal distance.
 
-## Stations
+## Changes along the way
 
-Before any tree is grown, the way up the hill is given its places: stations at intervals along the
-path, each a space beside it kept open on the paper, as the prints keep paper clear for their
-verse. Each is placed from the seed, clear of the temples, on the side of the path with more hill,
-and clear of the path all round where it bends back (else the other side, else a little further
-on), and clear of the station before. Trees stand back from its edge, further on its downhill
-side, where a crown would stand over the space as the eye sees it; no rock is set in it. Two of
-every three stations hold a couplet, written on the hillside there in the open space, so the
-walker passes each as they climb, and the next comes up the hill toward them (Bai Juyi's poem
-through, then Cui Hu's 人面桃花, Su Shi, Li Bai, and Tao Yuanming's peach blossom spring). A
-couplet fades while it passes under the title. Every third station's space is kept for something
-to come from Changes.
+Before any tree is grown, the ways are given their places: about a third of them have a station
+beside them, a space kept open on the paper on whichever side has room, clear of every way, as the
+prints keep paper clear for their verse. Each holds a cast from Changes, from the seed and the
+station's number: six lines, each as three coins fall, so old lines come as often as they would.
+It's written on the hillside there, in the open space: the hexagram drawn in ink, its moving lines
+in vermilion; its name, and if it moves, 之 and the name of what it becomes; their titles small.
+Tap it and it opens in Changes.
+
+The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
+stones along its upper edge; Wind, a grove close behind; Thunder, one tree at its far side,
+leaning over. Its lower trigram is what lies in it: Water, stepping stones across it; Lake, a ring
+of flat stones; Fire, fallen blossom heaped red; Mountain, one low stone; Wind, grass in tufts;
+Thunder, a stone split in two. Heaven and Earth leave it open. Trees stand back from a station's
+edge, further on its downhill side, where a crown would stand over the space as the eye sees it.
 
 ## The composition view
 
@@ -141,19 +135,20 @@ to come from Changes.
 strokes with nothing recognisable: the camera stands nearly twice as far off and sees further up
 the hill; each part of the print is gathered over a wide brush and laid down as a few inks
 (blossom a grey wash, deeper where it's dense; rock and trunks black; buildings vermilion; the
-rest paper); the path is brushed over it as one stroke, heavy where it's a stair, dry and broken
-where it's a trail; the walker is a dot of vermilion; and the places the verse and the title take
+rest paper); each way is brushed over it as a stroke, heavy where it's steps, dry and broken
+where it's a trail; the walker is a dot of vermilion; and the places the casts and the title take
 are outlined, so they can be judged against the masses they sit on; the stations' spaces are
-drawn as dashed rings, the verse's in ink, those kept for Changes in vermilion with 易. It works with `review` and
+drawn as dashed vermilion rings, each with its hexagram small in its middle. Every way is brushed,
+so the forks and meetings read at a glance. It works with `review` and
 while walking, for judging how the arrangement holds as it unrolls, and for deciding where
-later things along the way (passages from Changes, say) should fall.
+things along the way should fall.
 
-`?seed=…` a hillside; `?preview` climbs by itself, quietly. The address keeps the seed and how far
-along the path the walker is (`?at=…`), updated as they go, so a reload or a shared link comes
-back to the same place.
-`?seed=1&at=24&review` freezes the walker, camera and falling petals for a repeatable comparison
-at full rendering resolution. The footer identifies the pass, seed and path position. Remove
-`review` to walk normally. Composition passes: compare `at=2`, `at=24` and `at=90`.
+`?seed=…` a hillside; `?preview` climbs by itself, quietly. The address keeps the seed and where the walker
+is (`?at=way:metres`), updated as they go, so a reload or a shared link comes back to the same
+place.
+`?seed=1&at=7.0-0:3&review` freezes the walker, camera and falling petals for a repeatable comparison
+at full rendering resolution. The footer identifies the pass, seed and where on the ways. Remove
+`review` to walk normally. Compare `at=0.0-0:0.5` (the start), `at=7.0-0:3` (a gate) and `at=15.1-1:1` (a temple beside a way).
 
 
 Composition pass 2 broke crown edges into irregular sprays and brought clipped stone treads,
