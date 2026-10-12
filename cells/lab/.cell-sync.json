@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:497e0a157df00957ab45f4e7978761b2d17ed5fb155b9d7c9c8ee01de4274e91",
-  "syncedAt": "2026-10-12T09:57:03.191Z",
+  "treeVersion": "tree:07fc0e7c4d015e054f0771b2d0d48acba7fbbc9e1a239432caa8acaaec00c588",
+  "syncedAt": "2026-10-12T09:59:21.085Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -88,7 +88,7 @@
     "client/taohua/main.ts": "sha256:4ea79d4454ba489e75c53a6f3d1d7c8375ffea105c70895fd0648ffdbf5272c3",
     "client/taohua/path.ts": "sha256:091617ae135d8830e18d921b56b924ed6e2925ac387a801ff1ea0c9b1e118c3a",
     "client/taohua/render.ts": "sha256:ccd8d71a534db013aac0e07d2eb7d1e7cedb78a75523d74eac10d75ba4da2645",
-    "client/taohua/world.ts": "sha256:dfd01630b14dffaa1ba74b29a00205b71348926de6ef1f39f5a6a28041c50f35",
+    "client/taohua/world.ts": "sha256:314c8ce53aa53563fa2a1d4c6d65e7fd61fa9adf60cd95be453cf9f4afee1fe4",
     "client/technic/glyph.ts": "sha256:80a2b44ab00bac1d743d4024818439977086d78400f19b32ebbf942f9be60277",
     "client/technic/main.ts": "sha256:827f48610503519332055985d78bb4e0cf2858150ceb58eae8ef564351e3e2c8",
     "client/technic/pieces.ts": "sha256:2f5af9566fbbd19422ab1c94e171e4c1d35a96f34662085c29ae3c8d4efd0a61",
