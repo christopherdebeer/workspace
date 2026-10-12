@@ -12,12 +12,10 @@ Tap the path and the walker goes there, up or back down; press on the path and s
 they follow your finger. Only path you can see answers a tap: a tap on blossom, a rock, a temple, or
 anywhere off the path does nothing, so the walker never goes where you can't see them arrive. (↑, W
 walk on up; ↓, S back down.) Drag anywhere off the path to look about a little; let go, and the view
-comes back. A tap leaves a ripple of ink where it touched (vermilion if it found
-the path, faint grey if not), and where the walker is going a ring of vermilion, left open as a
-brush draws it, stays on its place on the path until they arrive. The steps you've climbed are counted at the top. At each temple you pass,
-its name comes up at the foot of the print over 桃花, and the next couplet down the side: Bai
-Juyi's poem through, then Cui Hu's 人面桃花, Su Shi, Li Bai, and Tao Yuanming's peach blossom
-spring.
+comes back. A tap that finds the path is answered in the scene: a ring of vermilion,
+left open as a brush draws it, on the place it found, for a moment. A tap that finds nothing
+gets nothing. The steps you've climbed are counted at the top. At each temple you pass,
+its name comes up at the foot of the print over 桃花.
 
 ## The hill
 
@@ -113,6 +111,20 @@ bands; jittered trees belong to the band containing their final position. Trees 
 The broad blossom wash is fixed to cluster centres; fine marks remain attached to the illustrated
 lobes. Distant paper fade starts beyond the usual focal distance.
 
+## Stations
+
+Before any tree is grown, the way up the hill is given its places: stations at intervals along the
+path, each a space beside it kept open on the paper, as the prints keep paper clear for their
+verse. Each is placed from the seed, clear of the temples, on the side of the path with more hill,
+and clear of the path all round where it bends back (else the other side, else a little further
+on), and clear of the station before. Trees stand back from its edge, further on its downhill
+side, where a crown would stand over the space as the eye sees it; no rock is set in it. Two of
+every three stations hold a couplet, written on the hillside there in the open space, so the
+walker passes each as they climb, and the next comes up the hill toward them (Bai Juyi's poem
+through, then Cui Hu's 人面桃花, Su Shi, Li Bai, and Tao Yuanming's peach blossom spring). A
+couplet fades while it passes under the title. Every third station's space is kept for something
+to come from Changes.
+
 ## The composition view
 
 `?ink` (or C on a keyboard) steps back from the print to show only its arrangement, in broad
@@ -121,7 +133,8 @@ the hill; each part of the print is gathered over a wide brush and laid down as 
 (blossom a grey wash, deeper where it's dense; rock and trunks black; buildings vermilion; the
 rest paper); the path is brushed over it as one stroke, heavy where it's a stair, dry and broken
 where it's a trail; the walker is a dot of vermilion; and the places the verse and the title take
-are outlined, so they can be judged against the masses they sit on. It works with `review` and
+are outlined, so they can be judged against the masses they sit on; the stations' spaces are
+drawn as dashed rings, the verse's in ink, those kept for Changes in vermilion with 易. It works with `review` and
 while walking, for judging how the arrangement holds as it unrolls, and for deciding where
 later things along the way (passages from Changes, say) should fall.
 

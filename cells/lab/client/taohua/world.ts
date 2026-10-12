@@ -8,6 +8,7 @@
  * the blossom and the petals are lists for instancing.
  */
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
+import { inStation, stationsNear } from './compose';
 import { GATE, LANDING, Path, RISE, TERRACE, WIDTH, type Flight, type V3 } from './path';
 
 /** how deep a band is, up the hill (m); how far across the hill the world goes, each side */
@@ -186,6 +187,9 @@ export function makeBand(path: Path, seed: number, j: number): Band {
   // (whether a place is in an open glade, about the middle of a trail through one)
   const glades = path.flights.filter((f) => f.glade && Math.abs(f.land[2] - (z0 + z1) / 2) < 40).map((f) => ({ m: path.at(f.s0 + f.flat / 2).p, r: f.glade }));
   const inGlade = (x: number, z: number) => glades.some((g) => Math.hypot(x - g.m[0], z - g.m[2]) < g.r);
+  // (the stations' spaces, kept open: no tree whose crown would stand over one, no rock in one)
+  const sts = stationsNear(path, seed, z0, z1);
+  const treeOut = (x: number, z: number) => inStation(sts, x, z, 1.6, 4.5);
 
   // the ground: a sheet across the hill, the paper's cream
   const nx = 2 * SPAN / 1.5, nz = BAND / 1.5;
@@ -300,7 +304,7 @@ export function makeBand(path: Path, seed: number, j: number): Band {
     rocks.push([x, z, ramp(r, 0.4, 0.95)]);
   }
   for (const [x, z, sz] of rocks) {
-    if (path.nearest(x, z).d < WIDTH / 2 + 0.35 || onTemple(x, z, 0.3)) continue;
+    if (path.nearest(x, z).d < WIDTH / 2 + 0.35 || onTemple(x, z, 0.3) || inStation(sts, x, z, 0.4)) continue;
     const rr = seeded(hash(Math.round(x * 10), Math.round(z * 10), seed));
     rock(mesh, [x, gy(x, z), z], sz, rr, gy);
     shade(mesh, path, x - 0.9 * sz, z + 0.15 * sz, sz * 2.2, sz * 0.8, 0.3);
@@ -318,7 +322,7 @@ export function makeBand(path: Path, seed: number, j: number): Band {
   });
   for (let i = 0; i < 40; i++) {
     const x = ramp(r, -SPAN, SPAN), z = ramp(r, z0, z1);
-    if (path.nearest(x, z).d > WIDTH / 2 + 0.5 && !onTemple(x, z, 0)) tuft(mesh, path, x, z, r, 2 + Math.floor(r() * 4));
+    if (path.nearest(x, z).d > WIDTH / 2 + 0.5 && !onTemple(x, z, 0) && !inStation(sts, x, z, 0)) tuft(mesh, path, x, z, r, 2 + Math.floor(r() * 4));
   }
 
   // (each opening held by one tree standing alone in it, toward its far side, away from the path,
@@ -327,7 +331,7 @@ export function makeBand(path: Path, seed: number, j: number): Band {
     const o = opening(path, seed, i), lr = seeded(hash(seed, i, 0x10e));
     if (lr() < 0.25) continue;
     const x = o.cx + o.side * o.rx * ramp(lr, 0.25, 0.5), z = o.cz + o.rz * ramp(lr, -0.1, 0.35);
-    if (!inBand(z) || path.nearest(x, z).d < WIDTH / 2 + 2.2 || onTemple(x, z, 1) || inGlade(x, z)) continue;
+    if (!inBand(z) || path.nearest(x, z).d < WIDTH / 2 + 2.2 || onTemple(x, z, 1) || inGlade(x, z) || treeOut(x, z)) continue;
     tree(mesh, puffs, petals, [x, ground(path, x, z), z], lr, path);
   }
 
@@ -341,11 +345,11 @@ export function makeBand(path: Path, seed: number, j: number): Band {
     if (!inBand(z)) continue;
     if (accept > groveDensity(path, seed, x, z)) continue;
     if (path.nearest(x, z).d < WIDTH / 2 + 1.5) continue;
-    if (onTemple(x, z, 0.8) || inGlade(x, z)) continue;
+    if (onTemple(x, z, 0.8) || inGlade(x, z) || treeOut(x, z)) continue;
     // (an outcrop behind it, now and then, as in the print: black slabs the blossom stands against)
     if (tr() < 0.5) for (let k = 0, n = 2 + Math.floor(tr() * 3); k < n; k++) {
       const a = Math.PI / 2 + ramp(tr, -1.1, 1.1), d = ramp(tr, 0.45, 1.5), rx = x + Math.cos(a) * d, rz = z + Math.sin(a) * d, sz = ramp(tr, 0.4, 0.9) * (k ? 0.75 : 1);
-      if (path.nearest(rx, rz).d > WIDTH / 2 + 0.6 && !onTemple(rx, rz, 0.3)) {
+      if (path.nearest(rx, rz).d > WIDTH / 2 + 0.6 && !onTemple(rx, rz, 0.3) && !inStation(sts, rx, rz, 0.4)) {
         rock(mesh, [rx, gy(rx, rz), rz], sz, seeded(hash(seed, Math.round(rx * 10), Math.round(rz * 10))), gy);
         shade(mesh, path, rx - 0.9 * sz, rz + 0.1, sz * 2.2, sz * 0.7, 0.28);
         tuft(mesh, path, rx + sz * 0.9, rz - sz * 0.3, tr, 4);

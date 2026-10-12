@@ -12,6 +12,7 @@
 import { hash, randomSeed, seedFrom, seeded } from '../kit/rng';
 import { Path, RISE, WIDTH, type V3 } from './path';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
+import { stationsNear, type Station } from './compose';
 import { BAND, INK, M, Mesh, NAMES, SPAN, ground, makeBand, templesNear, type Band } from './world';
 
 const params = new URLSearchParams(location.search);
@@ -21,7 +22,7 @@ const review = params.has('review');
 let ink = params.has('ink');
 const setInk = (on: boolean) => { ink = on; document.body.classList.toggle('ink', on); };
 setInk(ink);
-const PASS = 'composition-4';
+const PASS = 'composition-5';
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
@@ -36,7 +37,7 @@ try { R = new Renderer(canvas); } catch (e) {
 
 const path = new Path(seed);
 
-// ─── the poems down the side: a couplet at a time, the next at each temple ─────────────────────
+// ─── the poems: a couplet at each station along the way, written on the hillside ────────────────────────────────────
 const POEMS: Array<[string, string, string]> = [
   ['人间四月芳菲尽，', '山寺桃花始盛开。', '唐 · 白居易'],
   ['长恨春归无觅处，', '不知转入此中来。', '唐 · 白居易'],
@@ -47,21 +48,40 @@ const POEMS: Array<[string, string, string]> = [
   ['桃花流水窅然去，', '别有天地非人间。', '唐 · 李白'],
   ['夹岸数百步，', '中无杂树，芳草鲜美，落英缤纷。', '晋 · 陶渊明'],
 ];
-let poemAt = -1;
-function showPoem(i: number) {
-  if (i === poemAt) return;
-  poemAt = i;
-  const p = POEMS[i % POEMS.length];
-  const el = $('poem');
-  el.classList.remove('on');
-  setTimeout(() => {
-    el.querySelector('.l1')!.textContent = p[0];
-    el.querySelector('.l2')!.textContent = p[1];
-    el.querySelector('.by')!.textContent = p[2];
-    el.classList.add('on');
-  }, preview ? 0 : 700);
+// (each couplet written on the hillside, in the space kept for it at a station beside the path: the
+// walker passes it as they climb. Its words are set to the space as the eye sees it)
+const verses = new Map<number, HTMLElement>();
+function verseEl(st: Station) {
+  let el = verses.get(st.i);
+  if (el) return el;
+  const p = POEMS[Math.floor(st.i - Math.floor(st.i / 3)) % POEMS.length];
+  el = document.createElement('div');
+  el.className = 'verse';
+  for (const [cls, t] of [['l1', p[0]], ['l2', p[1]], ['by', p[2]], ['seal', '春山']]) { const sp = document.createElement('span'); sp.className = cls; sp.textContent = t; el.appendChild(sp); }
+  document.body.appendChild(el);
+  verses.set(st.i, el);
+  return el;
 }
-function showName(i: number) { $('name').textContent = NAMES[i % NAMES.length]; }
+let titleBox = $('title').getBoundingClientRect();
+addEventListener('resize', () => { titleBox = $('title').getBoundingClientRect(); });
+void document.fonts?.ready.then(() => { titleBox = $('title').getBoundingClientRect(); });
+function placeVerses(z: number) {
+  const near = stationsNear(path, seed, z - 30, z + 90);
+  const keep = new Set<number>();
+  for (const st of near) {
+    if (st.kind !== 'verse') continue;
+    keep.add(st.i);
+    const el = verseEl(st);
+    const q = project(st.c);
+    el.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) translate(-50%, -50%)`;
+    // (shown while it's on the print; not while it passes under the title, which keeps its place)
+    const b = el.getBoundingClientRect(), t = titleBox;
+    const under = b.left < t.right && b.right > t.left && b.top < t.bottom && b.bottom > t.top;
+    el.classList.toggle('on', q[2] > 0 && q[1] > -40 && q[1] < innerHeight + 40 && !under);
+  }
+  for (const [i, el] of verses) if (!keep.has(i)) { el.remove(); verses.delete(i); }
+}
+function showName(i: number) { $('name').textContent = NAMES[i % NAMES.length]; titleBox = $('title').getBoundingClientRect(); }
 
 // ─── the plaques: each temple's name in gold on its dark board, red framed ──────────────────────
 function plaques() {
@@ -175,7 +195,7 @@ const smoothstep = (a: number, b: number, x: number) => { const t = Math.max(0, 
 
 // tap the path (or press on it and slide along it) and they walk there; tap anywhere else and nothing moves;
 // drag off the path to look about; keys walk on or back
-let goal: number | null = null, downAt: { x: number; y: number; id: number; on: boolean } | null = null, looking = false;
+let markAt = -1e9, goal: number | null = null, downAt: { x: number; y: number; id: number; on: boolean } | null = null, looking = false;
 let lookYaw = 0, lookPitch = 0, lookAt0 = -9;
 const keys = new Set<string>();
 /** the last frame's view, to find what's under a finger */
@@ -206,20 +226,11 @@ function pick(px: number, py: number): number | null {
   }
   return best;
 }
-/** a ripple of ink where a tap touched: vermilion if it found the path, faint grey if not */
-function ripple(x: number, y: number, hit: boolean) {
-  const el = document.createElement('div');
-  el.className = hit ? 'ripple' : 'ripple miss';
-  el.style.left = `${x}px`; el.style.top = `${y}px`;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 700);
-}
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   const at = pick(e.clientX, e.clientY);
-  ripple(e.clientX, e.clientY, at !== null);
   downAt = { x: e.clientX, y: e.clientY, id: e.pointerId, on: at !== null };
-  if (at !== null) goal = at;
+  if (at !== null) { goal = at; markAt = performance.now(); }
   looking = false;
   $('hint').classList.remove('on');
 });
@@ -228,7 +239,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (downAt.on) {
     // (pressed on the path: slid along it, the goal follows the finger, so long as it's on the path)
     const at = pick(e.clientX, e.clientY);
-    if (at !== null) goal = at;
+    if (at !== null) { goal = at; markAt = performance.now(); }
     return;
   }
   const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
@@ -298,6 +309,19 @@ function brushPath(pos: V3) {
     prev = q;
   }
   g.setLineDash([]);
+  // (the stations' spaces: outlined, the verse's in ink, Changes' in vermilion with its sign)
+  for (const st of stationsNear(path, seed, pos[2] - 30, pos[2] + 140)) {
+    g.beginPath();
+    for (let k = 0; k <= 32; k++) {
+      const a = (k / 32) * Math.PI * 2, q = project([st.c[0] + Math.cos(a) * st.rx, st.c[1], st.c[2] + Math.sin(a) * st.rz]);
+      if (k) g.lineTo(q[0], q[1]); else g.moveTo(q[0], q[1]);
+    }
+    g.setLineDash([6, 5]); g.lineWidth = 1.5;
+    g.strokeStyle = st.kind === 'changes' ? '#b8382c' : 'rgba(42,36,32,.6)';
+    g.stroke();
+    if (st.kind === 'changes') { const q = project(st.c); g.fillStyle = '#b8382c'; g.font = '22px "Noto Serif SC", serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('易', q[0], q[1]); }
+  }
+  g.setLineDash([]);
   const w = project([pos[0], pos[1] + 0.8, pos[2]]);
   g.fillStyle = '#b8382c';
   g.beginPath(); g.arc(w[0], w[1], 5, 0, Math.PI * 2); g.fill();
@@ -337,7 +361,7 @@ function frame(now: number) {
   // the temple last passed: its couplet, its name
   let n = 0;
   for (const f of path.flights) { if (f.b[2] > pos[2] - 2) break; if (f.temple) n++; }
-  if (n !== reached || poemAt < 0) { reached = n; showPoem(n); showName(n > 0 ? n - 1 : 0); }
+  if (n !== reached) { reached = n; showName(n > 0 ? n - 1 : 0); }
 
   // (passing a temple beside the path, the view leans toward it, so it's in the print with the walker)
   let lean = 0;
@@ -380,13 +404,14 @@ function frame(now: number) {
   const bands = [...live.values()];
   lastVP = vp;
   if (ink) brushPath(pos);
-  // (the mark where they're going, kept on its place on the path as the view moves)
-  const mark = $('mark');
-  if (goal !== null) {
+  // (the mark where they're going: a ring of vermilion on its place on the path, for a moment, as the tap is answered)
+  const mark = $('mark'), ma = (performance.now() - markAt) / 1000;
+  if (goal !== null && ma < 1.1) {
     const q = project(path.at(goal).p);
-    mark.style.transform = `translate(${q[0]}px, ${q[1]}px)`;
-    mark.classList.add('on');
-  } else mark.classList.remove('on');
+    mark.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) scale(${(0.8 + 0.35 * Math.min(1, ma * 4)).toFixed(3)})`;
+    mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
+  } else mark.style.opacity = '0';
+  placeVerses(pos[2]);
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink },
     [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
@@ -396,7 +421,6 @@ function frame(now: number) {
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
-showPoem(0);
 showName(0);
 if (review) {
   $('hint').textContent = PASS + ' · seed ' + seed + ' · at ' + s.toFixed(1);

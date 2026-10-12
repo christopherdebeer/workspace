@@ -14,11 +14,11 @@
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
     nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; z-index: 2; }
     nav a { font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; color: #2d2622; text-decoration: none; opacity: .8; }
-    /* the couplet down the side, as on the print: the first line on the right */
-    #poem { position: fixed; left: max(22px, env(safe-area-inset-left)); top: calc(max(12px, env(safe-area-inset-top)) + 46px); writing-mode: vertical-rl; display: flex; flex-direction: column; gap: .55em; align-items: flex-start; pointer-events: none; opacity: 0; transition: opacity 1.4s; font-size: clamp(14px, 3.6vw, 21px); letter-spacing: .12em; line-height: 1.25; color: #2b2420; text-shadow: 0 0 6px rgba(239,230,211,.9), 0 0 2px rgba(239,230,211,1); }
-    #poem.on { opacity: 1; }
-    #poem .by { font-size: .58em; letter-spacing: .25em; margin-top: 2.2em; opacity: .85; }
-    #poem .seal { writing-mode: horizontal-tb; width: 1.25em; height: 1.25em; margin-top: .6em; border: 2px solid #b8382c; color: #b8382c; font-size: .55em; line-height: 1.05; display: grid; place-items: center; text-align: center; letter-spacing: 0; font-family: "Ma Shan Zheng", serif; }
+    /* a couplet, written on the hillside in the space kept for it: the first line on the right */
+    .verse { position: fixed; left: 0; top: 0; font-size: clamp(14px, 4.2vw, 21px); writing-mode: vertical-rl; display: flex; flex-direction: column; gap: .55em; align-items: flex-start; pointer-events: none; opacity: 0; transition: opacity 1.2s; letter-spacing: .12em; line-height: 1.25; color: #2b2420; white-space: nowrap; }
+    .verse.on { opacity: 1; }
+    .verse .by { font-size: .58em; letter-spacing: .25em; margin-top: 2.2em; opacity: .85; }
+    .verse .seal { writing-mode: horizontal-tb; width: 1.25em; height: 1.25em; margin-top: .6em; border: 2px solid #b8382c; color: #b8382c; font-size: .55em; line-height: 1.05; display: grid; place-items: center; text-align: center; letter-spacing: 0; font-family: "Ma Shan Zheng", serif; }
     /* the title, bottom right: the temple's name over 桃花, large */
     #title { position: fixed; left: max(18px, env(safe-area-inset-left)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 30px); writing-mode: vertical-rl; display: flex; align-items: flex-end; gap: .2em; pointer-events: none; color: #f6efe2; text-shadow: 0 1px 14px rgba(150,40,30,.35); }
     #name { font-size: clamp(26px, 8vw, 46px); font-weight: 400; letter-spacing: .05em; }
@@ -29,22 +29,15 @@
     #hint { position: fixed; left: 0; right: 0; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 8px); text-align: center; font-family: "Iowan Old Style", Palatino, Georgia, serif; font-style: italic; font-size: 15px; opacity: 0; transition: opacity .8s; pointer-events: none; text-shadow: 0 0 8px rgba(239,230,211,1); }
     #hint.on { opacity: .85; }
     .preview nav, .preview #hint, .preview #climb { display: none; }
-    /* where a tap on the path sends the walker: a ring of vermilion ink, left open, as a brush draws it; it fades when they arrive */
-    #mark { position: fixed; left: 0; top: 0; width: 46px; height: 24px; margin: -12px 0 0 -23px; pointer-events: none; opacity: 0; transition: opacity .5s; }
-    #mark.on { opacity: .9; }
-    #mark svg { width: 100%; height: 100%; overflow: visible; animation: breathe 1.8s ease-in-out infinite; }
-    @keyframes breathe { 50% { transform: scale(1.12); } }
-    /* a tap: a ripple of ink where the finger touched; vermilion where it found the path, a faint grey where it didn't */
-    .ripple { position: fixed; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid #b8382c; pointer-events: none; animation: ripple .55s ease-out forwards; }
-    .ripple.miss { border-color: rgba(60,50,45,.35); border-width: 1.5px; }
-    @keyframes ripple { from { transform: scale(.4); opacity: .9; } to { transform: scale(3.2); opacity: 0; } }
+    /* where a tap on the path sends the walker: a ring of vermilion ink, left open as a brush draws it, on its place in the scene, for a moment */
+    #mark { position: fixed; left: 0; top: 0; width: 46px; height: 24px; margin: -12px 0 0 -23px; pointer-events: none; opacity: 0; }
+    #mark svg { width: 100%; height: 100%; overflow: visible; }
     /* the composition view: the text's places shown as the spaces they take, so they can be judged with the masses */
     #brush { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
     .ink #brush { display: block; }
-    .ink #poem, .ink #title { outline: 1.5px dashed rgba(176,52,40,.7); outline-offset: 6px; }
-    .ink #poem *, .ink #title * { opacity: .35; }
-    @media (prefers-reduced-motion: reduce) { #mark svg { animation: none; } .ripple { animation-duration: .01s; } }
-    .preview #poem { font-size: 14px; } .preview #big { font-size: 56px; } .preview #name { font-size: 20px; }
+    .ink .verse, .ink #title { outline: 1.5px dashed rgba(176,52,40,.7); outline-offset: 6px; }
+    .ink .verse *, .ink #title * { opacity: .35; }
+    .preview .verse { font-size: 13px; } .preview #big { font-size: 56px; } .preview #name { font-size: 20px; }
     .nogl::after { content: "This needs WebGL2."; position: fixed; inset: 0; display: grid; place-items: center; }
   </style>
 </head>
@@ -52,7 +45,6 @@
   <canvas id="print"></canvas>
   <canvas id="brush"></canvas>
   <nav><a href="/">&larr; lab</a></nav>
-  <div id="poem"><span class="l1"></span><span class="l2"></span><span class="by"></span><span class="seal">春山</span></div>
   <div id="title"><span id="name"></span><span id="big">桃花</span><span class="seal">桃源</span></div>
   <div id="climb">0</div>
   <div id="mark"><svg viewBox="-24 -12 48 24"><path d="M 19 -4 A 20 9.5 0 1 1 9 -8.4" fill="none" stroke="#b8382c" stroke-width="2.6" stroke-linecap="round"/><path d="M 10 -8 A 20 9.5 0 0 1 17 -5.6" fill="none" stroke="#b8382c" stroke-width="1.2" stroke-linecap="round" opacity=".6"/></svg></div>
