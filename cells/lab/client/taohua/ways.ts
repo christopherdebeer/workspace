@@ -18,9 +18,14 @@
  * branch's end is a building's terrace, the way climbing its stair to it. On forever, made as far
  * ahead as it's needed, from the seed: the same seed, the same hillside.
  *
+ * The water comes before the ways (see water.ts): a way may cross a stream once, fairly square to
+ * it, where it runs (or over a marsh), on stepping stones or a bridge; never through a pool or at
+ * falls, and no junction nor terrace stands by the water.
+ *
  * World: y up; z up the hill; x across it.
  */
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
+import { Water } from './water';
 
 export type V3 = [number, number, number];
 
@@ -40,6 +45,8 @@ export interface Junction {
   /** the ways that come up to it, and those that go on from it */
   ins: Way[]; outs: Way[];
 }
+/** where a way crosses water: from u0 to u1 along it (bank to bank), on what, over water at what level */
+export interface Crossing { u0: number; u1: number; kind: 'stones' | 'bridge'; L: number; y0: number; y1: number }
 /** a stretch of a way that climbs in steps: from u0 to u1 along it, so many steps */
 export interface StairRun { u0: number; u1: number; n: number; h0: number; h1: number }
 export interface Way {
@@ -56,6 +63,8 @@ export interface Way {
   box: [number, number, number, number];
   /** (its line across the ground, as points (x, z) and how far along each is: for nearness) */
   pts: Float64Array;
+  /** where it crosses water, if it does */
+  cross: Crossing | null;
 }
 export interface Near { d: number; w: Way; u: number; p: V3 }
 
@@ -72,7 +81,9 @@ const BUCKET = 32;
 interface Tip { j: Junction; d: [number, number] }
 
 export class Ways {
+  readonly water: Water;
   constructor(readonly seed: number) {
+    this.water = new Water(seed, (z) => this.hill(z), (z) => this.slope(z));
     const root = this.junction(0, 2, null);
     this.tips.push({ j: root, d: [0, 1] });
   }
@@ -114,6 +125,7 @@ export class Ways {
     w.n = this.all.length; w.id = `w${w.n}`;
     this.all.push(w); this.ids.set(w.id, w);
     w.from.outs.push(w); w.to.ins.push(w);
+    if (w.cross === undefined || w.cross === null) { const c = this.crossing(w); w.cross = c || null; }
     for (let k = Math.floor(w.box[2] / BUCKET); k <= Math.floor(w.box[3] / BUCKET); k++) (this.wb.get(k) ?? this.wb.set(k, []).get(k)!).push(w);
     w.stairs = this.stairsOf(w);
   }
@@ -327,9 +339,54 @@ export class Ways {
         if (distTo(e.pts, P[i], P[i + 1]) < APART + (e.to.reach || w.to.reach ? 2 : 0)) return false;
       }
     }
+    // (water: crossed once, fairly square, where it runs, or not at all; its junction and any terrace well clear of it)
+    const c = this.crossing(w);
+    if (c === false) return false;
+    w.cross = c;
+    if (this.dryOf(to.x, to.z) < (to.reach ? to.reach + 3 : 4)) return false;
     // (a building at its end: its terrace clear of every other way)
     if (to.reach) for (const e of others) if (e !== w && distTo(e.pts, to.x, to.z) < TERRACE_OF.hall + 6) return false;
     return true;
+  }
+  /** how far a place is from water's edge, give or take its banks (a long way, if there's none near) */
+  dryOf(x: number, z: number): number {
+    const w = this.water.at(x, z);
+    if (!w) return 99;
+    return w.s - Math.max(0, this.hill(z) - w.L - 0.05) / w.bank;
+  }
+  /**
+   * Where a way would cross water: null if it keeps dry; false if it can't be (wet more than once,
+   * or along it, or by a junction, or through a pool or a fall); else the crossing, bank to bank.
+   */
+  private crossing(w: Way): Crossing | null | false {
+    const step = 0.5, M = Math.ceil(w.len / step);
+    let u0 = -1, u1 = -1, runs = 0, wettest = Infinity, marsh = false, L = 0, fast = 0;
+    let was = false;
+    for (let i = 0; i <= M; i++) {
+      const u = Math.min(w.len, i * step), q = this.atPts(w, u);
+      const wt = this.water.at(q.x, q.z);
+      const wet = !!wt && wt.s - Math.max(0, this.hill(q.z) - wt.L - 0.05) / wt.bank < WIDTH / 2 + 0.7;
+      if (wet) {
+        if (!was) { runs++; u0 = u; }
+        u1 = u;
+        if (wt!.kind !== 'flow' && wt!.kind !== 'marsh') return false;
+        marsh ||= wt!.kind === 'marsh';
+        if (wt!.s < wettest) { wettest = wt!.s; L = wt!.L; }
+        fast = Math.max(fast, wt!.run);
+      }
+      was = wet;
+    }
+    if (!runs) return null;
+    if (runs > 1 || u0 < 3 || u1 > w.len - 3 || wettest > 0) return false;
+    if (u1 - u0 > (marsh ? 16 : 7)) return false;
+    const y0 = this.hill(this.atPts(w, u0).z), y1 = this.hill(this.atPts(w, u1).z);
+    const r = seeded(hash(this.seed, w.from.n, Math.round(w.to.x * 10), 0xc055));
+    const steep = Math.abs(y1 - y0) / Math.max(1, u1 - u0) > 0.13 || fast > 0.2;
+    // (stepping stones only where both banks are about the water's level; else a bridge, over a pool's
+    // cut bank or a run of white water, as high as it must be)
+    const low = Math.max(Math.abs(y0 - L - 0.16), Math.abs(y1 - L - 0.16)) < 0.45;
+    const kind = !low || steep ? 'bridge' : marsh || r() < 0.55 ? 'stones' : 'bridge';
+    return { u0, u1, kind, L, y0, y1 };
   }
   /** (as made so far: no growing) */
   private waysAt(z0: number, z1: number): Way[] {
@@ -357,7 +414,7 @@ export class Ways {
     const env = (t: number) => (to.reach ? 1 - smooth(0.55, 0.92, t) : 1) * (from.gate ? smooth(0.08, 0.45, t) : 1);
     const off = (t: number) => (A[0] * Math.sin(Math.PI * t) + A[1] * Math.sin(2 * Math.PI * t + ph * 0.6) * Math.sin(Math.PI * t) * 1.6 + A[2] * Math.sin(3 * Math.PI * t) + A[3] * Math.sin(5 * Math.PI * t)) * env(t);
     void r;
-    const w: Way = { id: '', n: -1, from, to, a, c: a, b, a0, b1, head: 0, tail: 0, len: 0, samp: new Float64Array(0), stairs: [], spur, box: [0, 0, 0, 0], pts: new Float64Array(0) };
+    const w: Way = { id: '', n: -1, from, to, a, c: a, b, a0, b1, head: 0, tail: 0, len: 0, samp: new Float64Array(0), stairs: [], spur, box: [0, 0, 0, 0], pts: new Float64Array(0), cross: null };
     const head = Math.hypot(a[0] - a0[0], a[2] - a0[2]), tail = Math.hypot(b1[0] - b[0], b1[2] - b[2]);
     w.head = head; w.tail = tail;
     const P: number[] = [];
@@ -394,7 +451,8 @@ export class Ways {
     for (let i = 0; i < M; i++) {
       const u0 = (i / M) * w.len, u1 = ((i + 1) / M) * w.len;
       const h0 = this.hill(this.at(w, u0, true).p[2]), h1 = this.hill(this.at(w, u1, true).p[2]);
-      steep.push((h1 - h0) / (u1 - u0) > 0.13);
+      const c = w.cross;
+      steep.push((h1 - h0) / (u1 - u0) > 0.13 && !(c && u1 > c.u0 - 1.5 && u0 < c.u1 + 1.5));
     }
     // (runs of steep: short gentle gaps in a stair taken into it; short steep bits left as trail)
     const runs: StairRun[] = [];
@@ -422,6 +480,14 @@ export class Ways {
   }
   /** The height one stands at on a way, so far along it: on a stair, the tread; else the hill. */
   surface(w: Way, u: number, z?: number): number {
+    const c = w.cross;
+    if (c && u >= c.u0 && u <= c.u1) {
+      const t = (u - c.u0) / Math.max(0.01, c.u1 - c.u0), bank = c.y0 + (c.y1 - c.y0) * t;
+      // (on a bridge, its deck, arched a little; on stepping stones, their tops, just above the water)
+      if (c.kind === 'bridge') return bank + (0.25 + 0.03 * (c.u1 - c.u0)) * Math.sin(Math.PI * t);
+      const e = Math.min(u - c.u0, c.u1 - u);
+      return bank + (c.L + 0.16 - bank) * smooth(0.4, 1.4, e);
+    }
     for (const s of w.stairs) if (u >= s.u0 && u < s.u1) {
       const k = Math.min(s.n - 1, Math.floor(((u - s.u0) / (s.u1 - s.u0)) * s.n));
       return s.h0 + ((k + 1) / s.n) * (s.h1 - s.h0);

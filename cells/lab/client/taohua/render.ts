@@ -43,7 +43,7 @@ void main() {
 const SOLID_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec3 vN; in vec3 vC; flat in int vM;
-uniform vec3 uEye; uniform sampler2D uPlaque, uType;
+uniform vec3 uEye; uniform sampler2D uPlaque, uType; uniform float uTime;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
@@ -149,6 +149,35 @@ void main() {
     lit = .9 + .2 * max(dot(n, L), 0.);
   } else if (vM == ${M.plaque}) {
     c = texture(uPlaque, vC.rg).rgb;
+    lit = 1.;
+  } else if (vM == ${M.water}) {
+    // water, in few inks: deep slate where it's deep, paler where it's shallow and the bed shows,
+    // paler still at its edge; white where it runs fast and where it falls; fine white ripples drawn
+    // along it, drifting down it, slowly. (vC: how far in from its edge; how fast it runs; its kind)
+    float inn = vC.r, run = vC.g;
+    int kind = int(vC.b + .5);
+    // (its shore: where it's no way in from its edge, it isn't)
+    if (inn < 0. && abs(normalize(vN).y) > .55) discard;
+    vec3 DEEP = vec3(.25, .33, .35), MID = vec3(.37, .46, .47), SHAL = vec3(.55, .6, .57), FOAM = vec3(.93, .92, .88);
+    float br = noise(vec3(vW.xz * .9, 5.)) * .5;
+    c = kind == 2 ? (inn > 1.4 + br ? MID : SHAL) : inn > 1.05 + br ? DEEP : inn > .4 + br * .4 ? MID : SHAL;
+    float fall = 1. - abs(normalize(vN).y);
+    if (fall > .45) {
+      // (a fall: a sheet of white, streaked grey down it, the streaks running down)
+      float sk = noise(vec3(vW.x * 5. + vW.z * 2., (vW.y + uTime * .7) * 1.4, 7.));
+      c = mix(FOAM, vec3(.6, .66, .67), smoothstep(.56, .64, sk));
+    } else {
+      float flow = vW.z + uTime * (.12 + run * 2.5);
+      // (ripples: short fine strokes across the stream, drifting down it)
+      float rp = noise(vec3(vW.x * 1.6, flow * 3.2, 1.)), rq = noise(vec3(vW.x * .7, flow * .4, 3.));
+      float line = smoothstep(.035, .0, abs(rp - .5)) * smoothstep(.45, .7, rq);
+      c = mix(c, vec3(.86, .87, .83), line * (kind == 1 ? .5 : .8));
+      // (white water where it runs fast)
+      float foam = smoothstep(.14, .3, run) * smoothstep(.5, .7, noise(vec3(vW.x * 2.6, flow * 1.3, 2.)));
+      c = mix(c, FOAM, foam);
+      // (at its edge, a pale line, broken)
+      c = mix(c, vec3(.83, .85, .8), smoothstep(.16, .02, inn) * smoothstep(.3, .5, noise(vec3(vW.xz * 2.2, 9.))));
+    }
     lit = 1.;
   } else if (vM == ${M.type}) {
     // (a cast's words, inked on the hillside: from the sheet of words, or a stroke of ink or vermilion;
@@ -312,7 +341,7 @@ void main() {
   // a deeper pink where one crown stands before another)
   float ink = 0., stone = 0., coral = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
-  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type}, s0 = m0 == ${M.step} || m0 == ${M.stone};
+  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || m0 == ${M.water}, s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
     float di = texture(uD, uv).r;
@@ -326,7 +355,7 @@ void main() {
     float meet = mi != m0 && zi >= z0 * .998 ? 1. : 0.;
     if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
     if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
-    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type}, si = mi == ${M.step} || mi == ${M.stone};
+    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || mi == ${M.water}, si = mi == ${M.step} || mi == ${M.stone};
     if (g0 && gi) continue;
     if ((m0 == ${M.rock} && (gi || mi == ${M.rock})) || (mi == ${M.rock} && g0)) continue;
     float e = max(jump, max(turn * (g0 ? 0. : .8), meet));
@@ -346,7 +375,7 @@ void main() {
     // wide brush, then laid down as a few inks. Blossom a grey wash (deeper where it's dense); rock
     // and trunk black; buildings vermilion; the rest paper. (The path and the walker are brushed over
     // it, on the page)
-    float fol = 0., drk = 0., arc = 0.;
+    float fol = 0., drk = 0., arc = 0., wat = 0.;
     const int K = 48;
     for (int i = 0; i < K; i++) {
       float fi = float(i) + .5, r = sqrt(fi / float(K)) * .03, a = fi * 2.39996;
@@ -354,7 +383,9 @@ void main() {
       if (m == ${M.blossom} || m == ${M.twig}) fol += 1.;
       else if (m == ${M.rock} || m == ${M.trunk}) drk += 1.;
       else if (m == ${M.tile} || m == ${M.red} || m == ${M.wall} || m == ${M.plaque} || m == ${M.ridge}) arc += 1.;
+      else if (m == ${M.water}) wat += 1.;
     }
+    wat /= float(K);
     fol /= float(K); drk /= float(K); arc /= float(K);
     // (the brush: its edge wanders, in long strokes across)
     float br = noise(vec3(gl_FragCoord.xy * vec2(.005, .018), 3.)) - .5;
@@ -362,6 +393,7 @@ void main() {
     if (fol > .42 + br * .3) c = vec3(.6, .56, .52);
     if (fol > .82 + br * .2) c = vec3(.44, .4, .37);
     if (drk > .28 + br * .2) c = vec3(.12, .11, .1);
+    if (wat > .4 + br * .2) c = vec3(.3, .38, .4);
     if (arc > .22 + br * .15) c = vec3(.7, .22, .17);
   }
   // the paper: its mottle, its fibres, its grain
@@ -548,7 +580,7 @@ export class Renderer {
    * The frame: the solids (the world's bands, the walker by its own placing), the blossom, the
    * petals; then the print.
    */
-  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: boolean },
+  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: boolean; time?: number },
     solids: Array<{ d: Drawn; model?: M4 }>, puffs: Drawn[], petals: Drawn[]) {
     const gl = this.gl, W = this.canvas.width, H = this.canvas.height;
     this.targets(W, H);
@@ -564,6 +596,7 @@ export class Renderer {
     gl.uniformMatrix4fv(this.loc(this.solid, 'uVP'), false, view.vp);
     gl.uniform3fv(this.loc(this.solid, 'uEye'), view.eye);
     gl.uniform1f(this.loc(this.solid, 'uReveal'), REVEAL);
+    gl.uniform1f(this.loc(this.solid, 'uTime'), view.time ?? 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.plaque);
     gl.uniform1i(this.loc(this.solid, 'uPlaque'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.type);

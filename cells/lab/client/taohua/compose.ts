@@ -39,12 +39,13 @@ export function cast(seed: number, i: number): Line[] {
   return Array.from({ length: 6 }, () => (6 + (r() < 0.5 ? 1 : 0) + (r() < 0.5 ? 1 : 0) + (r() < 0.5 ? 1 : 0)) as Line);
 }
 
-/** whether a space about c is clear of every way */
+/** whether a space about c is clear of every way, and of water */
 function clearOfWays(ways: Ways, c: V3): boolean {
-  if (ways.nearest(c[0], c[2]).d < WIDTH / 2 + 0.4) return false;
+  if (ways.nearest(c[0], c[2]).d < WIDTH / 2 + 0.4 || ways.dryOf(c[0], c[2]) < 2) return false;
   for (let k = 0; k < 16; k++) {
-    const a = (k / 16) * Math.PI * 2;
-    if (ways.nearest(c[0] + Math.cos(a) * RX * 1.05, c[2] + Math.sin(a) * RZ * 1.05).d < WIDTH / 2 + 0.4) return false;
+    const a = (k / 16) * Math.PI * 2, x = c[0] + Math.cos(a) * RX * 1.05, z = c[2] + Math.sin(a) * RZ * 1.05;
+    // (and of water: a cast is written on dry ground)
+    if (ways.nearest(x, z).d < WIDTH / 2 + 0.4 || ways.dryOf(x, z) < 1.5) return false;
   }
   return true;
 }

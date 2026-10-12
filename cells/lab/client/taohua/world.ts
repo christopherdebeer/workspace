@@ -9,7 +9,7 @@
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { identify, moving } from '../changes/model';
 import { inStation, stationsNear, type Station } from './compose';
-import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3 } from './ways';
+import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3, type Way } from './ways';
 
 /** how deep a tile of the hill is, up it (m), and how wide, across it: the world is made a tile at a time, about the walker, as far across as the ways go */
 export const BAND = 12, TILE = 16;
@@ -18,7 +18,7 @@ export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
 const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -128,9 +128,15 @@ export function ground(ways: Ways, x: number, z: number): number {
   // (beside a way, it lies smooth under it; further off, it rolls. Beside a stair it lies well
   // under: the stair rises in steps and the hill in a slope, so at each step's front the slope comes
   // up nearly to the tread, and must stay clear of it)
+  // (and by water, carved to hold it: see Water.bed)
+  return groundCut(ways, x, z).y;
+}
+/** the ground, and how deep it's cut into the hill there for water (where deep, its banks are rock) */
+export function groundCut(ways: Ways, x: number, z: number): { y: number; cut: number } {
   const nr = ways.nearest(x, z), k = smooth(1.3, 3.4, nr.d);
   const under = ways.stairAt(nr.w, nr.u) ? 0.34 : 0.08;
-  return ways.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04 - under * (1 - k);
+  const g = ways.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04 - under * (1 - k);
+  return ways.water.bed(x, z, g);
 }
 
 /** a temple's stair: so many steps, each so deep, from so high (above the temple's foot) at its foot up to its terrace */
@@ -259,10 +265,40 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     if (!v) { const nr = ways.nearest(x, z); const worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.6, nr.d); v = [x, ground(ways, x, z), z, 0, 1, 0, worn, 0, 0, M.ground]; gv.set(key, v); }
     return v;
   };
+  // (by water, finer, so its banks are drawn true; where they're cut deep into the hill, rock)
+  const cutAt = new Map<string, number>();
+  const GW = (x: number, z: number) => {
+    const key = `${x},${z}`;
+    let v = gv.get(key);
+    if (!v) {
+      const nr = ways.nearest(x, z), worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.6, nr.d), gc = groundCut(ways, x, z);
+      v = [x, gc.y, z, 0, 1, 0, worn, 0, 0, M.ground]; gv.set(key, v); cutAt.set(key, gc.cut);
+    }
+    return v;
+  };
   for (let i = 0; i < Math.round(nx); i++) for (let k = 0; k < nz; k++) {
     const xa = x0 + i * 1.5, xb = xa + 1.5, za = z0 + k * 1.5, zb = za + 1.5;
-    for (const [x, z] of [[xa, za], [xa, zb], [xb, zb], [xa, za], [xb, zb], [xb, za]]) mesh.v.push(...GV(x, z));
+    if (ways.dryOf(xa + 0.75, za + 0.75) > 3.5) {
+      for (const [x, z] of [[xa, za], [xa, zb], [xb, zb], [xa, za], [xb, zb], [xb, za]]) mesh.v.push(...GV(x, z));
+      continue;
+    }
+    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) {
+      const xs = xa + a * 0.5, zs = za + b * 0.5, xe = xs + 0.5, ze = zs + 0.5;
+      for (const tri of [[[xs, zs], [xs, ze], [xe, ze]], [[xs, zs], [xe, ze], [xe, zs]]]) {
+        const vs = tri.map(([x, z]) => GW(x, z));
+        const cut = tri.reduce((m, [x, z]) => Math.max(m, cutAt.get(`${x},${z}`) ?? 0), 0);
+        // (rock where the bank's cut steep: as steep as the triangle stands)
+        const ux = vs[1][0] - vs[0][0], uy = vs[1][1] - vs[0][1], uz = vs[1][2] - vs[0][2], wx = vs[2][0] - vs[0][0], wy = vs[2][1] - vs[0][1], wz = vs[2][2] - vs[0][2];
+        const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx, up = Math.abs(ny) / (Math.hypot(nx, ny, nz) || 1);
+        if (cut > 0.3 && up < 0.72) mesh.tri([vs[0][0], vs[0][1], vs[0][2]], [vs[1][0], vs[1][1], vs[1][2]], [vs[2][0], vs[2][1], vs[2][2]], INK.rock, M.rock);
+        else for (const v of vs) mesh.v.push(...v);
+      }
+    }
   }
+
+  // the water: its surface, level across, following the hill down or level in its pools, dropping at
+  // its falls; with rocks along its banks and in it where it runs fast, ledges at its falls, reeds in a marsh
+  water(mesh, petals, ways, seed, x0, x1, z0, z1);
 
   // the ways: on their steep stretches, steps, each a slab of its own, laid on the hill, its ends
   // ragged (no two the same length, nor quite in line), turning as the way bends; on their gentle
@@ -313,10 +349,12 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
         }
       }
     }
+    // (where it crosses water: stepping stones, or a bridge)
+    if (w.cross) crossing(mesh, ways, w, inT);
     // (stones along its gentle stretches)
     const tr = seeded(hash(wh, 0x5e7));
     for (let u = ramp(tr, 0.2, 0.8); u < w.len; u += ramp(tr, 0.6, 1.8)) {
-      if (tr() < 0.45 || ways.stairAt(w, u)) continue;
+      if (tr() < 0.45 || ways.stairAt(w, u) || (w.cross && u > w.cross.u0 - 0.5 && u < w.cross.u1 + 0.5)) continue;
       const m = ways.at(w, u, true), off = ramp(tr, -0.45, 0.45);
       const x = m.p[0] + m.dir[1] * off, z = m.p[2] - m.dir[0] * off;
       if (!inT(x, z) || onTerrace(x, z)) continue;
@@ -353,6 +391,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     rocks.push([x, z, ramp(r, 0.4, 0.95)]);
   }
   for (const [x, z, sz] of rocks) {
+    if (ways.dryOf(x, z) < 0.1) continue;
     if (ways.nearest(x, z).d < WIDTH / 2 + 0.35 || onTemple(x, z, 0.3) || inStation(sts, x, z, 0.4)) continue;
     const rr = seeded(hash(Math.round(x * 10), Math.round(z * 10), seed));
     rock(mesh, [x, gy(x, z), z], sz, rr, gy);
@@ -474,9 +513,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   // petals fallen on the path too
   for (let i = 0; i < 36; i++) {
     const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
-    const nr = ways.nearest(x, z);
-    const y = nr.d < WIDTH / 2 ? ways.surface(nr.w, nr.u, z) + 0.01 : ground(ways, x, z) + 0.02;
-    petals.push(x, y, z, ramp(r, 0.04, 0.08), r() * Math.PI, r() * 0.5);
+    petals.push(x, restY(ways, x, z, 0.02), z, ramp(r, 0.04, 0.08), r() * Math.PI, r() * 0.5);
   }
   return { i, j, verts: mesh.v.out(), puffs: new Float32Array(puffs), petals: new Float32Array(petals), temples: temples.filter((t) => inT(t.c[0], t.c[2])).map((t) => ({ c: t.c, face: Math.atan2(t.face[0], t.face[1]), poem: t.name })) };
 }
@@ -553,8 +590,157 @@ export function shade(mesh: Mesh, ways: Ways, x: number, z: number, rx: number, 
   }
 }
 
+const WATER_KIND = { flow: 0, pool: 1, pond: 1, spring: 1, plunge: 1, marsh: 2, falls: 3 } as const;
+/**
+ * The water in a tile: its surface (a fine sheet, at its level wherever it's within reach of the
+ * water; the banks, carved, stand up through it at its edge; where its level drops from step to
+ * step the sheet drops too, a fall); rocks along it; reeds in a marsh; petals afloat.
+ * Each vertex carries, for the drawing, how far in from the edge it is, how fast the water runs, and what kind of water.
+ */
+function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: number, x1: number, z0: number, z1: number) {
+  const W = ways.water;
+  const sts = W.streamsNear(z0, z1);
+  if (!sts.length) return;
+  const D = 0.5;
+  const cache = new Map<number, [number, number, number, number, number, number] | null>();
+  const at = (x: number, z: number) => {
+    const key = Math.round(x * 4) * 100000 + Math.round(z * 4);
+    if (cache.has(key)) return cache.get(key)!;
+    const w = W.at(x, z);
+    // (its edge is drawn where it's 0 m in from its edge (see the drawing); further out, the sheet's tucked under the ground)
+    const v: [number, number, number, number, number, number] | null = w && w.s < 1.2 ? [x, w.s > 0.8 ? Math.min(w.L, ground(ways, x, z) - 0.03) : w.L, z, -w.s, w.run, WATER_KIND[w.kind]] : null;
+    cache.set(key, v);
+    return v;
+  };
+  for (let x = x0; x < x1 - 1e-6; x += D) for (let z = z0; z < z1 - 1e-6; z += D) {
+    const a = at(x, z), b = at(x, z + D), c = at(x + D, z + D), d = at(x + D, z);
+    if (!a || !b || !c || !d || Math.max(a[3], b[3], c[3], d[3]) < -0.6) continue;
+    for (const t of [[a, b, c], [a, c, d]]) {
+      const [p, q, o] = t;
+      const ux = q[0] - p[0], uy = q[1] - p[1], uz = q[2] - p[2], vx = o[0] - p[0], vy = o[1] - p[1], vz = o[2] - p[2];
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+      if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      for (const v of t) mesh.v.vert(v[0], v[1], v[2], nx, ny, nz, v[3], v[4], v[5], M.water);
+    }
+  }
+  const inT = (x: number, z: number) => z >= z0 && z < z1 && x >= x0 && x < x1;
+  const gy = (x: number, z: number) => ground(ways, x, z);
+  const clearOfWays = (x: number, z: number, m: number) => ways.nearest(x, z).d > WIDTH / 2 + m;
+  for (const st of sts) {
+    const r = seeded(hash(seed, st.k, Math.floor(z0), Math.floor(x0), 0x40c4));
+    // (rocks along its banks, and in it where it runs fast)
+    for (let z = Math.max(z0, st.z0 - 2); z < Math.min(z1, st.z1 + 2); z += ramp(r, 1.2, 3)) {
+      const xc = W.xAt(st, z), hw = W.halfAt(st, z), lv = W.levelAt(st, z), fast = lv.kind === 'flow' && ways.slope(z) > 0.2;
+      for (const sd of [-1, 1]) {
+        if (r() > (fast ? 0.7 : 0.38)) continue;
+        const x = xc + sd * (hw + ramp(r, -0.3, 0.6));
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.35, 0.8), r, gy);
+      }
+      if (fast && r() < 0.5) { const x = xc + ramp(r, -hw * 0.6, hw * 0.6); if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.3, 0.55), r, gy); }
+    }
+    // (at each fall's lip, ledges of rock either side; under a high fall, rock all about its pool)
+    for (const f of st.falls) for (const lip of f.lips) {
+      if (lip < z0 - 3 || lip > z1 + 3) continue;
+      const xc = W.xAt(st, lip), hw = W.halfAt(st, lip) * 1.5;
+      // (along the step the banks make at its lip, as far out as it's cut, rocks: a ledge, broken)
+      for (const sd of [-1, 1]) for (let d = hw + ramp(r, 0, 0.4); d < hw + 7; d += ramp(r, 0.7, 1.1)) {
+        const x = xc + sd * d, z = lip + ramp(r, -0.5, 0.7);
+        if (d > hw + 1.5 && groundCut(ways, x, z - 0.6).cut < 0.35) break;
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.55, 1) * (f.single ? 1.3 : 1), r, gy);
+      }
+      if (f.single) for (const sd of [-1, 1]) for (let k = 0; k < 3; k++) {
+        const x = xc + sd * (hw + ramp(r, 0.1, 0.9) + k * 0.6), z = lip - 1.5 - k * 1.6;
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.7, 1.2), r, gy);
+      }
+    }
+    for (const p of st.pools) {
+      if (p.z + p.rz * 2 < z0 || p.z - p.rz * 2 > z1) continue;
+      // (rocks about a spring, above it, where it comes out)
+      if (p.kind === 'spring') for (let k = 0; k < 5; k++) {
+        const a = ramp(r, 0.3, 2.85), x = p.x + Math.cos(a) * p.rx * ramp(r, 1.1, 1.6), z = p.z + Math.sin(a) * p.rz * ramp(r, 1.1, 1.6);
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.5, 1), r, gy);
+      }
+      // (reeds in a marsh, in clumps; a few rocks about a pond's shore)
+      if (p.kind === 'marsh') for (let k = 0; k < 60; k++) {
+        const a = r() * 6.3, e = Math.sqrt(r()) * 1.05, x = p.x + Math.cos(a) * p.rx * e, z = p.z + Math.sin(a) * p.rz * e;
+        const w = W.at(x, z);
+        if (inT(x, z) && w && w.s > -2.2 && w.s < 0.6 && clearOfWays(x, z, 0.3)) reeds(mesh, x, w.s < 0 ? w.L : gy(x, z), z, r, 5 + Math.floor(r() * 7));
+      }
+      if (p.kind === 'pond' || p.kind === 'pool' || p.kind === 'plunge') for (let k = 0; k < (p.kind === 'pool' ? 2 : 5); k++) {
+        const a = r() * 6.3, x = p.x + Math.cos(a) * p.rx * ramp(r, 0.95, 1.15), z = p.z + Math.sin(a) * p.rz * ramp(r, 0.95, 1.15);
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.4, 0.9), r, gy);
+      }
+    }
+  }
+  // (petals afloat, drifting together in its stiller water)
+  const pr = seeded(hash(seed, Math.floor(x0), Math.floor(z0), 0xf10a));
+  for (let i = 0; i < 70; i++) {
+    const x = ramp(pr, x0, x1), z = ramp(pr, z0, z1), w = W.at(x, z);
+    if (!w || w.s > -0.15 || (w.kind === 'flow' && w.run > 0.2) || w.kind === 'falls') continue;
+    petals.push(x, w.L + 0.015, z, ramp(pr, 0.04, 0.09), pr() * Math.PI, pr() * 0.6);
+  }
+}
+/** Reeds: a clump of tall thin blades, standing up out of the water. */
+function reeds(mesh: Mesh, x: number, y: number, z: number, r: Rand, n: number) {
+  for (let k = 0; k < n; k++) {
+    const a = r() * Math.PI * 2, lean = ramp(r, 0.05, 0.3), h = ramp(r, 0.45, 1.05), w = ramp(r, 0.015, 0.03);
+    const bx = x + Math.cos(a) * 0.12 * r(), bz = z + Math.sin(a) * 0.12 * r();
+    const tip: V3 = [bx + Math.cos(a) * lean * h, y + h, bz + Math.sin(a) * lean * h];
+    const px = -Math.sin(a) * w, pz = Math.cos(a) * w;
+    mesh.tri([bx - px, y - 0.05, bz - pz], [bx + px, y - 0.05, bz + pz], tip, INK.grass, M.grass, [0, 1, 0]);
+  }
+}
+/**
+ * A way's crossing of water: stepping stones (squarish, pale-topped, a stride apart, just above
+ * the water), or a bridge (a deck of stone slabs, arched a little, with a low kerb either side and
+ * a pier at either bank).
+ */
+function crossing(mesh: Mesh, ways: Ways, w: Way, inT: (x: number, z: number) => boolean) {
+  const c = w.cross!, r = seeded(hash(w.n, 0xb21d9e));
+  if (c.kind === 'stones') {
+    for (let u = c.u0 + 0.55; u < c.u1 - 0.3; u += ramp(r, 0.55, 0.7)) {
+      const m = ways.at(w, u, true), side = ramp(r, -0.18, 0.18);
+      const x = m.p[0] + m.dir[1] * side, z = m.p[2] - m.dir[0] * side;
+      if (!inT(x, z)) continue;
+      const top = ways.surface(w, u, z), turn = ramp(r, -0.35, 0.35), dir: [number, number] = [m.dir[0] * Math.cos(turn) - m.dir[1] * Math.sin(turn), m.dir[0] * Math.sin(turn) + m.dir[1] * Math.cos(turn)];
+      mesh.box([x, top - 0.4, z], [ramp(r, 0.2, 0.27), 0.4, ramp(r, 0.26, 0.36)], dir, INK.stepTop, INK.stepFace, M.step);
+    }
+    return;
+  }
+  const span0 = c.u0 - 0.4, span1 = c.u1 + 0.4, n = Math.max(3, Math.round((span1 - span0) / 0.5));
+  const du = (span1 - span0) / n;
+  for (let k = 0; k < n; k++) {
+    const u = span0 + (k + 0.5) * du, m = ways.at(w, u, true);
+    if (!inT(m.p[0], m.p[2])) continue;
+    const top = ways.surface(w, Math.max(c.u0, Math.min(c.u1, u)), m.p[2]);
+    mesh.box([m.p[0], top - 0.1, m.p[2]], [du / 2 + 0.01, 0.1, WIDTH / 2 + 0.06], m.dir, INK.stepTop, INK.stone, M.stone);
+    for (const sd of [-1, 1]) {
+      const off = (WIDTH / 2 + 0.02) * sd;
+      mesh.box([m.p[0] + m.dir[1] * off, top + 0.1, m.p[2] - m.dir[0] * off], [du / 2 - 0.02, 0.1, 0.08], m.dir, INK.stepTop, INK.stone, M.stone);
+    }
+  }
+  // (its piers, at either bank, down into the ground)
+  for (const u of [c.u0, c.u1]) {
+    const m = ways.at(w, u, true);
+    if (!inT(m.p[0], m.p[2])) continue;
+    const top = ways.surface(w, u, m.p[2]) - 0.2, foot = Math.min(ground(ways, m.p[0], m.p[2]), c.L) - 0.6;
+    mesh.box([m.p[0], (top + foot) / 2, m.p[2]], [0.32, (top - foot) / 2, WIDTH / 2 + 0.16], m.dir, INK.stepTop, INK.stone, M.stone);
+  }
+}
+
+/** Where a fallen petal comes to rest: on a way (its tread, a stepping stone, a bridge's deck), afloat on water, or on the ground. */
+function restY(ways: Ways, x: number, z: number, lift: number): number {
+  const nr = ways.nearest(x, z);
+  if (nr.d < WIDTH / 2) return ways.surface(nr.w, nr.u, z) + 0.01;
+  const wt = ways.water.at(x, z);
+  if (wt && wt.s < -0.05) return wt.L + 0.015;
+  return ground(ways, x, z) + lift;
+}
+
 /** A tuft of grass: a few blades, fine, leaning out from a clump; where the ground meets a rock or a wall. */
 function tuft(mesh: Mesh, ways: Ways, x: number, z: number, r: Rand, n = 5) {
+  if (ways.dryOf(x, z) < 0.15) return;
   const y = ground(ways, x, z);
   for (let k = 0; k < n; k++) {
     const a = r() * Math.PI * 2, lean = ramp(r, 0.15, 0.6), h = ramp(r, 0.12, 0.32), w = ramp(r, 0.018, 0.03);
@@ -575,6 +761,10 @@ function tuft(mesh: Mesh, ways: Ways, x: number, z: number, r: Rand, n = 5) {
  * over colour); petals fallen under it, some whole flowers, in drifts.
  */
 function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, ways: Ways) {
+  // (none stands in water, nor on a bank cut steep; nor just downhill of water, where its crown would
+  // stand between the eye and it: the water's an open mass, as the print's are)
+  if (ways.dryOf(base[0], base[2]) < 2.2) return;
+  for (const dz of [1.5, 3, 4.5, 6, 7.5]) { const w = ways.water.at(base[0], base[2] + dz); if (w && w.s < 0) return; }
   // (a trunk you can see: tall before it opens, leaning, with a kink or two; bold, as the print's are)
   const stature = ramp(r, 0.82, 1.3);
   const H = ramp(r, 1.6, 2.6) * stature, lean: V3 = norm([ramp(r, -0.4, 0.4), 1, ramp(r, -0.15, 0.3)]);
@@ -703,7 +893,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       const x = dx + (r() - 0.5) * (big ? 1.8 : 2.6), z = dz + (r() - 0.5) * (big ? 1.2 : 1.8);
       const nr = ways.nearest(x, z);
       if (big && nr.d < WIDTH / 2 + 0.3) continue;
-      const y = nr.d < WIDTH / 2 ? ways.surface(nr.w, nr.u, z) + 0.01 : ground(ways, x, z) + 0.06;
+      const y = restY(ways, x, z, 0.06);
       // (shade above .5: a whole flower)
       petals.push(x, y, z, big ? ramp(r, 0.2, 0.36) : ramp(r, 0.04, 0.08), r() * Math.PI, big ? ramp(r, 0.55, 1) : r() * 0.5);
     }
