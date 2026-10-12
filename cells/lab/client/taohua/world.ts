@@ -52,8 +52,6 @@ class Verts {
     this.n = i + 10;
   }
   out() { return this.a.slice(0, this.n); }
-  /** another's vertices, after these */
-  append(o: Verts) { this.room(o.n); this.a.set(o.a.subarray(0, o.n), this.n); this.n += o.n; }
 }
 
 /** A mesh as it's built: faces pushed with their normals and colours. */
@@ -112,9 +110,6 @@ export function ground(path: Path, x: number, z: number): number {
   const k = smooth(1.3, 3.4, path.nearest(x, z).d);
   return path.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04 - 0.08 * (1 - k);
 }
-
-/** how far up the hill the eye's line falls for each metre down it (the eye looks down at about 40°) */
-export const VIEW_RUN = 1.2;
 
 /** how far a temple beside the path stands from its middle line: clear of it, its stair down to it */
 const BESIDE_OFF = WIDTH / 2 + 0.45 + TERRACE / 2 + 4 * 0.32;
@@ -301,9 +296,7 @@ export function makeBand(path: Path, seed: number, j: number): Band {
         tuft(mesh, path, rx + sz * 0.9, rz - sz * 0.3, tr, 4);
       }
     }
-    // (grown apart, and kept only if the most of its blossom stands clear of the eye's line to the path: a tree stripped bare would look wintry)
-    const tm = new Mesh(), tp: number[] = [], tpe: number[] = [];
-    if (tree(tm, tp, tpe, [x, ground(path, x, z), z], tr, path) > 0.5) { mesh.v.append(tm.v); puffs.push(...tp); petals.push(...tpe); }
+    tree(mesh, puffs, petals, [x, ground(path, x, z), z], tr, path);
   }
   // petals fallen on the path too
   for (let i = 0; i < 90; i++) {
@@ -408,8 +401,7 @@ function tuft(mesh: Mesh, path: Path, x: number, z: number, r: Rand, n = 5) {
  * ones are drawn a little nearer the eye than they are, so they show over the blossom, as ink
  * over colour); petals fallen under it, some whole flowers, in drifts.
  */
-function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, path: Path): number {
-  let tried = 0, kept = 0;
+function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, path: Path) {
   // (a trunk you can see: tall before it opens, leaning, with a kink or two)
   const H = ramp(r, 1.5, 2.5), lean: V3 = norm([ramp(r, -0.35, 0.35), 1, ramp(r, -0.35, 0.35)]);
   const R0 = ramp(r, 0.2, 0.3);
@@ -478,19 +470,12 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       // (a clump about the fan of twigs, lifted a little: the blossom sits on top of the branches)
       const q: V3 = [p[0] + d[0] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55), p[1] + ramp(r, 0.05, 0.5), p[2] + d[2] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55)];
       const rad = ramp(r, 0.5, 0.78);
-      // (none over the path, nor just in front of it: the eye looks up the hill from above, so a clump
-      // hides the ground a little further up the hill than it stands. The crowns stop short of the
-      // path's edge as the eye sees it; further down the hill they may stand before it, and the
-      // walker passes behind them)
-      tried++;
-      const hgt = q[1] - base[1] + rad;
-      let hides = false;
-      for (const k of [0, 0.3]) if (path.nearest(q[0], q[2] + hgt * VIEW_RUN * k).d < WIDTH / 2 + 0.2 + rad * 0.4) { hides = true; break; }
-      if (hides) continue;
+      // (none right over the path, so its way stays open; in front of it, as the eye looks up the hill,
+      // the crowns stand as they grow, and the walker passes behind them and comes out again)
+      if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
       const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
       const shade = Math.max(0, Math.min(1, 0.52 + t0 + 0.3 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.22 * (q[1] - cy) + ramp(r, -0.06, 0.06)));
       puffs.push(q[0], q[1], q[2], rad, shade, r());
-      kept++;
     }
   }
   // fallen blossom under it, where it's not the path: in drifts, stamped flowers and specks of red
@@ -507,7 +492,6 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       petals.push(x, y, z, big ? ramp(r, 0.2, 0.36) : ramp(r, 0.04, 0.08), r() * Math.PI, big ? ramp(r, 0.55, 1) : r() * 0.5);
     }
   }
-  return kept / Math.max(1, tried);
 }
 
 /**

@@ -34,9 +34,8 @@ lying a little under them beside the path and rolling further off. The world is 
 across the hill, twelve metres deep, as they come into view and dropped as they fall behind, each
 from the seed and its number: the ground, the steps and stones that fall in it, standing stones in
 little clusters along the path and in outcrops behind the trees, tufts of grass, the trees, fallen
-blossom, and the temples. No crown stands over the path, nor just in front of it as the eye looks
-up the hill; further down, a crown may stand before it, and the walker passes behind and comes out
-again. A tree that would lose most of its blossom to that isn't grown at all.
+blossom, and the temples. No crown hangs right over the path; in front of it, as the eye looks up
+the hill, the crowns stand as they grow, and the walker passes behind them and comes out again.
 
 ## The temples
 
