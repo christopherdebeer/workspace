@@ -7,8 +7,10 @@ of teal tiles and red columns, a walker in a straw hat with a staff, the paper's
 
 Tap a way and the walker goes there, by whichever ways lead there, up the hill or back down (a
 branch that ends goes nowhere else, so to see another, come back to the fork). A tap anywhere else
-(the hillside, a temple, a tree, a cast) sends them to the nearest place on a way that can be seen,
-so they're always seen to arrive; a tap on a temple can send them to the way it stands over. The
+(the hillside, a temple, a tree, blossom over a way, a cast) is taken down through whatever stands
+there to the ground under it, as if it weren't there, and sends them to the nearest place on a way to
+that, whether it can be seen or not: a tap on blossom over a way goes to that way, under it, and the
+walker may go out of sight under the crowns, as the way does. The
 place a tap found is answered in the scene: a ring of vermilion, left open as a brush draws it, for
 a moment. Only a tap walks: a drag, wherever it starts, even on a way, looks about a little; let
 go, and the view comes back. With keys, ↑ or W walks on (at a fork, by the way most nearly ahead),

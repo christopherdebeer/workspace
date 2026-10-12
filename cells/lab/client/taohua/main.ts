@@ -300,8 +300,6 @@ const project = (p: V3): [number, number, number] => {
 };
 /** what a way, seen, is: its steps and stones, the ground and what lies on it */
 const OPEN = new Set<number>([M.step, M.earth, M.ground, M.shade, M.petal, M.grass]);
-/** what a temple is drawn in: its roof, walls, paint, plaque, door, and its terrace's stone */
-const TEMPLE = new Set<number>([M.tile, M.ridge, M.red, M.wall, M.plaque, M.dark, M.stone]);
 /** every place on the ways about where the walker is, to the eye, every so far along */
 function* spots(step: number): Generator<Spot> {
   const z = here.w.a[2] + (here.w.b[2] - here.w.a[2]) * (here.u / here.w.len);
@@ -326,29 +324,35 @@ function pick(px: number, py: number): Spot | null {
   return best;
 }
 /**
- * Where on a way is nearest a point on the screen that isn't on one (the hillside, a temple, a
- * tree): of the places along the ways that can be seen (not behind blossom, a rock, a roof), the
- * one nearest the finger on the glass, so the walker goes there and is seen to arrive.
+ * Where on the hill a point on the screen (CSS pixels) lies: down through whatever stands over it
+ * (blossom, a tree, a roof), as if it weren't there, to the ground under it.
  */
-function nearestSeen(px: number, py: number): Spot | null {
+function onHill(px: number, py: number): V3 | null {
   if (!lastVP) return null;
-  const m = R.mats();
-  if (!m) return null;
-  const kx = canvas.width / innerWidth, ky = canvas.height / innerHeight;
-  // (a tap on a temple: the way behind it counts as seen, as the temple stands over it there)
-  const onTemple = TEMPLE.has(m.at(px * kx, py * ky));
-  const seen = (mat: number) => OPEN.has(mat) || (onTemple && TEMPLE.has(mat));
-  let best: Spot | null = null, bestD = Infinity;
-  for (const sp of spots(0.25)) {
-    const q = project(spotP(sp));
-    if (q[2] <= 0 || q[0] < 8 || q[1] < 8 || q[0] > innerWidth - 8 || q[1] > innerHeight - 8) continue;
-    const d = Math.hypot(px - q[0], py - q[1]);
-    if (d >= bestD) continue;
-    // (seen: what's drawn there is the way, or the ground beside it, about the place and just above, where the walker would stand)
-    if (![[0, 0], [0, -10], [-4, -4], [4, -4]].every(([dx, dy]) => seen(m.at((q[0] + dx) * kx, (q[1] + dy) * ky)))) continue;
-    bestD = d; best = sp;
+  const iv = invert(lastVP), nx = (px / innerWidth) * 2 - 1, ny = 1 - (py / innerHeight) * 2;
+  const P = (z: number): V3 => { const x = iv[0] * nx + iv[4] * ny + iv[8] * z + iv[12], y = iv[1] * nx + iv[5] * ny + iv[9] * z + iv[13], zz = iv[2] * nx + iv[6] * ny + iv[10] * z + iv[14], w = iv[3] * nx + iv[7] * ny + iv[11] * z + iv[15]; return [x / w, y / w, zz / w]; };
+  const a = P(-1), b = P(1), d: V3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], L = Math.hypot(d[0], d[1], d[2]);
+  const at = (t: number): V3 => [a[0] + (d[0] * t) / L, a[1] + (d[1] * t) / L, a[2] + (d[2] * t) / L];
+  const under = (t: number) => { const q = at(t); return q[1] < ground(ways, q[0], q[2]); };
+  // (along the line of sight, a step at a time, to where it first goes under the ground; then closer)
+  let t0 = 0;
+  for (let t = 0.5; t < Math.min(L, 400); t += 0.5) {
+    if (!under(t)) { t0 = t; continue; }
+    let lo = t0, hi = t;
+    for (let k = 0; k < 12; k++) { const m = (lo + hi) / 2; if (under(m)) hi = m; else lo = m; }
+    return at(hi);
   }
-  return best;
+  return null;
+}
+/**
+ * Where on a way is nearest a point on the screen that isn't on one (the hillside, a temple, a
+ * tree, blossom): the place on the hill under the finger, and the way nearest it there, seen or not.
+ */
+function nearestTo(px: number, py: number): Spot | null {
+  const h = onHill(px, py);
+  if (!h) return null;
+  const n = ways.nearest(h[0], h[2]);
+  return { w: n.w, u: n.u };
 }
 /** Go there: the route, through the junctions, from where they are. */
 function goTo(sp: Spot) {
@@ -374,9 +378,9 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const up = (e: PointerEvent) => {
   if (downAt?.id !== e.pointerId) return;
-  // (a tap: on a way, there; anywhere else, the nearest place on one that can be seen)
+  // (a tap: on a way, there; anywhere else, the nearest place on one to where it falls on the hill)
   if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600) {
-    const at = pick(e.clientX, e.clientY) ?? nearestSeen(e.clientX, e.clientY);
+    const at = pick(e.clientX, e.clientY) ?? nearestTo(e.clientX, e.clientY);
     if (at !== null) goTo(at);
   }
   downAt = null; looking = false;
@@ -593,7 +597,7 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestSeen(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
