@@ -12,9 +12,9 @@
 import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
 import { RISE, WIDTH, Ways, type V3, type Way } from './ways';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
-import { stationsNear, type Station } from './compose';
-import { hexagrams, identify, moving } from '../changes/model';
-import { ATLAS, BAND, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
+import { stationsNear } from './compose';
+import { hexagrams, moving } from '../changes/model';
+import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -38,61 +38,65 @@ try { R = new Renderer(canvas); } catch (e) {
 
 const ways = new Ways(seed);
 
-// ─── Changes: at each station a cast, written on the hillside in the space kept for it ──────────
-// (the hexagram drawn in ink, its moving lines in vermilion; its name, and if it moves, 之 and the
-// name of what it becomes; their titles, small. Written on the hill where it is, it moves with the
-// hill; it isn't a button)
-const casts = new Map<number, HTMLElement>();
-function castEl(st: Station) {
-  let el = casts.get(st.i);
-  if (el) return el;
-  const hex = identify(st.lines), moves = st.lines.some(moving), rel = moves ? identify(st.lines, true) : null;
-  const a = document.createElement('div');
-  a.className = 'cast';
-  a.setAttribute('role', 'img');
-  a.setAttribute('aria-label', `${hex.number} ${hex.title}${rel ? `, becoming ${rel.number} ${rel.title}` : ''}`);
-  // (the figure: six lines, the first at the bottom; a yin line broken)
-  const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 60 64'); svg.setAttribute('class', 'gua');
-  st.lines.forEach((v, k) => {
-    const y = 58 - k * 10.4, col = moving(v) ? '#b8382c' : '#2b2420';
-    const bar = (x0: number, x1: number) => { const r = document.createElementNS(NS, 'rect'); r.setAttribute('x', `${x0}`); r.setAttribute('y', `${y - 3.4}`); r.setAttribute('width', `${x1 - x0}`); r.setAttribute('height', '6.8'); r.setAttribute('fill', col); svg.appendChild(r); };
-    if (v % 2) bar(2, 58); else { bar(2, 25); bar(35, 58); }
-  });
-  a.appendChild(svg);
-  const names = document.createElement('div');
-  names.className = 'names';
-  names.textContent = rel ? `${hex.han}之${rel.han}` : hex.han;
-  a.appendChild(names);
-  const en = document.createElement('div');
-  en.className = 'en';
-  en.textContent = `${hex.number} · ${hex.title}${rel ? `  →  ${rel.number} · ${rel.title}` : ''}`;
-  a.appendChild(en);
-  document.body.appendChild(a);
-  casts.set(st.i, a);
-  return a;
+// ─── Changes: at each station a cast, its words inked on the hillside in the space kept for it ──
+// (the words come from a sheet, ink on nothing: each hexagram's name, its characters one under the
+// other; 之; each hexagram's number and title, small, plain and after an arrow. The world lays them
+// on the hill, where what stands before them stands before them)
+function words() {
+  const c = document.createElement('canvas');
+  c.width = TYPE.w; c.height = TYPE.h;
+  const g = c.getContext('2d')!;
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#2b2420';
+  g.font = '104px "Noto Serif SC", "Songti SC", "STSong", serif';
+  const column = (r: number[], text: string) => [...text].forEach((ch, j) => g.fillText(ch, r[0] + 64, r[1] + 64 + j * 128));
+  hexagrams.forEach((h, k) => column(TYPE.han(k), h.han));
+  column(TYPE.zhi, '之');
+  g.textAlign = 'left'; g.fillStyle = '#463d36';
+  const en = (r: number[], text: string) => {
+    g.font = 'italic 40px "Iowan Old Style", Palatino, Georgia, serif';
+    const w = g.measureText(text).width;
+    if (w > r[2] - 8) g.font = `italic ${Math.floor(40 * (r[2] - 8) / w)}px "Iowan Old Style", Palatino, Georgia, serif`;
+    g.fillText(text, r[0] + 2, r[1] + r[3] / 2);
+  };
+  hexagrams.forEach((h, k) => { en(TYPE.en(k, false), `${h.number} · ${h.title}`); en(TYPE.en(k, true), `→ ${h.number} · ${h.title}`); });
+  R.setType(c);
 }
-let titleBox = $('title').getBoundingClientRect();
-addEventListener('resize', () => { titleBox = $('title').getBoundingClientRect(); });
-void document.fonts?.ready.then(() => { titleBox = $('title').getBoundingClientRect(); });
-function placeCasts(z: number) {
-  const near = stationsNear(ways, seed, z - 30, z + 90);
-  const keep = new Set<number>();
-  for (const st of near) {
-    keep.add(st.i);
-    const el = castEl(st);
-    // (written a little toward the uphill side of the space: what its lower trigram lays on the ground lies below it)
-    const q = project([st.c[0], st.c[1], st.c[2] + st.rz * 0.2]);
-    // (held to its place on the hill, as the hill moves)
-    el.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) translate(-50%, -50%)`;
-    // (shown while it's on the print; not while it passes under the title, which keeps its place)
-    const b = el.getBoundingClientRect();
-    const under = [titleBox, $('climb').getBoundingClientRect(), document.querySelector('nav')!.getBoundingClientRect()].some((t) => b.left < t.right + 8 && b.right > t.left - 8 && b.top < t.bottom + 8 && b.bottom > t.top - 8);
-    el.classList.toggle('on', q[2] > 0 && q[1] > -120 && q[1] < innerHeight + 120 && !under);
+words();
+void document.fonts?.load('104px "Noto Serif SC"', hexagrams.map((h) => h.han).join('') + '之').then(() => words());
+
+// ─── the title, at the foot of the print where the journey starts: the first temple's name over
+// 桃花, large, and the seal 桃源. It's of the hillside there, and is walked away from ───────────────
+let titleAt: V3 | null = null, titleFoot: [number, number] = [0, 0];
+/** where the title's foot stands on the print, untouched */
+function titleRest() {
+  const el = $('title'), t = el.style.transform;
+  el.style.transform = '';
+  const b = el.getBoundingClientRect();
+  el.style.transform = t;
+  titleFoot = [b.left + b.width / 2, b.bottom];
+}
+addEventListener('resize', titleRest);
+function placeTitle(pos: V3) {
+  const el = $('title');
+  if (!titleAt) {
+    // (its name the first temple's up the hill from where the journey starts)
+    let first: { z: number; name: number } | null = null;
+    for (const t of templesNear(ways, pos[2], pos[2] + 400)) if (t.c[2] > pos[2] && (!first || t.c[2] < first.z)) first = { z: t.c[2], name: t.name };
+    showName(first ? first.name : 0);
+    // (the hill under its foot, as the print starts: it stays with that, as the hill moves)
+    titleRest();
+    let best = Infinity;
+    for (let dz = -30; dz <= 30; dz += 0.25) for (let dx = -24; dx <= 24; dx += 0.5) {
+      const x = pos[0] + dx, z = pos[2] + dz, p: V3 = [x, ways.hill(z), z], q = project(p), d = Math.hypot(q[0] - titleFoot[0], q[1] - titleFoot[1]);
+      if (q[2] > 0 && d < best) { best = d; titleAt = p; }
+    }
   }
-  for (const [i, el] of casts) if (!keep.has(i)) { el.remove(); casts.delete(i); }
+  const q = project(titleAt!);
+  const dx = q[0] - titleFoot[0], dy = q[1] - titleFoot[1];
+  el.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+  el.style.visibility = q[2] > 0 && Math.abs(dy) < innerHeight * 1.5 && Math.abs(dx) < innerWidth * 1.5 ? '' : 'hidden';
 }
-function showName(i: number) { $('name').textContent = NAMES[i % NAMES.length]; titleBox = $('title').getBoundingClientRect(); }
+function showName(i: number) { $('name').textContent = NAMES[i % NAMES.length]; }
 
 // ─── the plaques: each temple's name in gold on its dark board, red framed ──────────────────────
 function plaques() {
@@ -111,16 +115,6 @@ function plaques() {
     g.font = '96px "Ma Shan Zheng", "STKaiti", "KaiTi", "Songti SC", serif';
     g.fillText(name, x + 256, y + 84);
   });
-  // (the hexagrams' names and 之, cut in pale stone: the cut dark, a lighter edge below it)
-  const carve = (i: number, text: string) => {
-    const [x, y] = at(i);
-    g.fillStyle = '#ebe4d4'; g.fillRect(x, y, 512, 160);
-    g.font = '110px "Ma Shan Zheng", "STKaiti", "KaiTi", "Songti SC", serif';
-    g.fillStyle = '#fbf7ee'; g.fillText(text, x + 256, y + 86);
-    g.fillStyle = '#2b2420'; g.fillText(text, x + 256, y + 82);
-  };
-  hexagrams.forEach((h, k) => carve(ATLAS.hex + k, h.han));
-  carve(ATLAS.zhi, '之');
   R.setPlaque(c);
 }
 plaques();
@@ -421,7 +415,6 @@ function brushPath(pos: V3) {
 
 // ─── the frame ───────────────────────────────────────────────────────────────────────────────────
 let last = performance.now(), time = 0, idleLook = 0, urlAt = '', urlT = -1e9;
-let reached = 0;
 function frame(now: number) {
   const dt = review ? 0 : Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = now; time += dt;
@@ -479,12 +472,6 @@ function frame(now: number) {
   const yaw = facing;
   keepBands(cam.x || pos[0], pos[2]);
 
-  // the temple last passed: its name, at the foot of the print
-  let passed: { z: number; name: number } | null = null;
-  for (const t of templesNear(ways, pos[2] - 80, pos[2])) if (t.c[2] < pos[2] - 2 && (!passed || t.c[2] > passed.z)) passed = { z: t.c[2], name: t.name };
-  const nm = passed ? passed.name : 0;
-  if (nm !== reached) { reached = nm; showName(nm); }
-
   // (passing a temple beside the path, the view leans toward it, so it's in the print with the walker)
   let lean = 0;
   for (const tp of nearTemples) if (!tp.gate) { const d = Math.hypot(tp.c[0] - pos[0], tp.c[2] - pos[2]); lean = (tp.c[0] - pos[0]) * 0.45 * (1 - smoothstep(9, 16, d)); }
@@ -526,7 +513,7 @@ function frame(now: number) {
   const bands = [...live.values()];
   lastVP = vp;
   if (ink) brushPath(pos);
-  placeCasts(pos[2]);
+  placeTitle(pos);
   // (the mark where they're going: a ring of vermilion on its place on the path, for a moment, as the tap is answered)
   const mark = $('mark'), ma = (performance.now() - markAt) / 1000;
   if (goal !== null && ma < 1.1) {
@@ -549,11 +536,10 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestSeen(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestSeen(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
-showName(0);
 if (review) {
   $('hint').textContent = PASS + ' · seed ' + seed + ' · at ' + here.w.id + ':' + here.u.toFixed(1);
   $('hint').classList.add('on');

@@ -43,7 +43,7 @@ void main() {
 const SOLID_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec3 vN; in vec3 vC; flat in int vM;
-uniform vec3 uEye; uniform sampler2D uPlaque;
+uniform vec3 uEye; uniform sampler2D uPlaque, uType;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
@@ -149,6 +149,13 @@ void main() {
     lit = .9 + .2 * max(dot(n, L), 0.);
   } else if (vM == ${M.plaque}) {
     c = texture(uPlaque, vC.rg).rgb;
+    lit = 1.;
+  } else if (vM == ${M.type}) {
+    // (a cast's words, inked on the hillside: from the sheet of words, or a stroke of ink or vermilion;
+    // where there's no ink, the hill)
+    vec4 t = vC.b > 1.5 ? vec4(.72, .22, .17, 1.) : vC.b > .5 ? vec4(.17, .14, .125, 1.) : texture(uType, vC.rg);
+    if (t.a < .45) discard;
+    c = t.rgb;
     lit = 1.;
   } else if (vM == ${M.wall} || vM == ${M.red}) {
     c *= .97 + .04 * noise(vW * 6.);
@@ -305,7 +312,7 @@ void main() {
   // a deeper pink where one crown stands before another)
   float ink = 0., stone = 0., coral = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
-  bool g0 = m0 == ${M.ground} || m0 == ${M.earth}, s0 = m0 == ${M.step} || m0 == ${M.stone};
+  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type}, s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
     float di = texture(uD, uv).r;
@@ -319,7 +326,7 @@ void main() {
     float meet = mi != m0 && zi >= z0 * .998 ? 1. : 0.;
     if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
     if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
-    bool gi = mi == ${M.ground} || mi == ${M.earth}, si = mi == ${M.step} || mi == ${M.stone};
+    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type}, si = mi == ${M.step} || mi == ${M.stone};
     if (g0 && gi) continue;
     if ((m0 == ${M.rock} && (gi || mi == ${M.rock})) || (mi == ${M.rock} && g0)) continue;
     float e = max(jump, max(turn * (g0 ? 0. : .8), meet));
@@ -394,6 +401,7 @@ export class Renderer {
   private fb: WebGLFramebuffer | null = null; private texC: WebGLTexture | null = null; private texA: WebGLTexture | null = null; private texD: WebGLTexture | null = null;
   private w = 0; private h = 0;
   plaque: WebGLTexture;
+  type: WebGLTexture;
   private u = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
 
   constructor(readonly canvas: HTMLCanvasElement) {
@@ -408,6 +416,7 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
     this.plaque = gl.createTexture()!;
+    this.type = gl.createTexture()!;
   }
   private loc(p: WebGLProgram, name: string) {
     let m = this.u.get(p);
@@ -424,6 +433,15 @@ export class Renderer {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  }
+
+  /** the sheet of the casts' words, from a canvas (ink on nothing; rows from the top, as their uvs count them) */
+  setType(src: HTMLCanvasElement) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.type);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
   }
@@ -548,6 +566,9 @@ export class Renderer {
     gl.uniform1f(this.loc(this.solid, 'uReveal'), REVEAL);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.plaque);
     gl.uniform1i(this.loc(this.solid, 'uPlaque'), 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.type);
+    gl.uniform1i(this.loc(this.solid, 'uType'), 1);
+    gl.activeTexture(gl.TEXTURE0);
     for (const s of solids) {
       gl.uniformMatrix4fv(this.loc(this.solid, 'uModel'), false, s.model ?? I);
       gl.bindVertexArray(s.d.vao);

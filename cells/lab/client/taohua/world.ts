@@ -7,6 +7,7 @@
  * the blossom and the petals are lists for instancing.
  */
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
+import { identify, moving } from '../changes/model';
 import { inStation, stationsNear, type Station } from './compose';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3 } from './ways';
 
@@ -17,19 +18,28 @@ export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
 const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
 /** the temples' names, in turn, as their plaques have them */
 export const NAMES = ['大林寺', '桃花庵', '白云寺', '清凉寺', '栖霞寺', '云居寺', '灵岩寺', '兰若寺'];
-/**
- * The sheet of carved and painted words the drawing reads from: the temples' names, as plaques
- * (cells 0-7); the hexagrams' names, cut in stone (cells 8 + number - 1); and 之, cut in stone
- * (cell 72). Cells 512 by 160, in columns; a cell's place on the sheet, as the drawing's u, v.
- */
-export const ATLAS = { cols: 4, rows: 19, w: 512, h: 160, hex: 8, zhi: 72 };
+/** The sheet of the temples' names, as their plaques have them: cells 512 by 160, in columns; a cell's place on the sheet, as the drawing's u, v. */
+export const ATLAS = { cols: 4, rows: 2, w: 512, h: 160 };
 export const atlasUV = (cell: number, u: number, v: number): [number, number] => [((cell % ATLAS.cols) + u) / ATLAS.cols, (Math.floor(cell / ATLAS.cols) + v) / ATLAS.rows];
+type Rect = [number, number, number, number];
+/**
+ * The sheet the casts' words are written from, in ink on nothing (where there's no ink, the hill
+ * shows): each hexagram's name, its characters one under the other (cells 128 by 256, sixteen to a
+ * row); 之; each hexagram's number and title, small, plain and again after an arrow (cells 512 by
+ * 56, four to a row). Pixels, from its top left.
+ */
+export const TYPE = {
+  w: 2048, h: 3072,
+  han: (k: number): Rect => [(k % 16) * 128, Math.floor(k / 16) * 256, 128, 256],
+  zhi: [0, 1024, 128, 128] as Rect,
+  en: (k: number, arrow: boolean): Rect => { const i = k + (arrow ? 64 : 0); return [(i % 4) * 512, 1152 + Math.floor(i / 4) * 56, 512, 56]; },
+};
 /** the print's inks */
 export const INK = {
   paper: hex(0xefe6d3), stepTop: hex(0xebe4d4), stepFace: hex(0xcfc6b4), stone: hex(0xb9b1a1), rock: hex(0x2a2827), rockTop: hex(0x7d7c79),
@@ -364,8 +374,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     if (ways.nearest(x, z).d > WIDTH / 2 + 0.5 && !onTemple(x, z, 0) && !inStation(sts, x, z, 0)) tuft(mesh, ways, x, z, r, 2 + Math.floor(r() * 4));
   }
 
-  // (beside each station's words, a cairn or a wayside shrine)
-  for (const st of sts) if (inT(st.c[0], st.c[2])) castMark(mesh, ways, st);
+  // (each station's words, inked on the hill; beside them, a cairn or a wayside shrine)
+  for (const st of sts) if (inT(st.c[0], st.c[2])) { castWords(mesh, ways, st); castMark(mesh, ways, st); }
 
   // (each station's space shaped by its cast: what stands behind it, as its upper trigram has it; what
   // lies in it, below the words, as its lower has it)
@@ -698,6 +708,57 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       petals.push(x, y, z, big ? ramp(r, 0.2, 0.36) : ramp(r, 0.04, 0.08), r() * Math.PI, big ? ramp(r, 0.55, 1) : r() * 0.5);
     }
   }
+}
+
+/**
+ * A cast's words, inked on the hillside in the space kept for them, as a page would set them: the
+ * figure (six lines, the first at the bottom, a yin line broken, the moving lines vermilion); its
+ * name in a column beside it, and if it moves, 之 and the name of what it becomes; under both, the
+ * numbers and titles, small. Laid on the ground (just above it, following it), stretched up the hill
+ * as much as the eye's slant onto the slope there shortens it, so it reads square. Whatever stands
+ * before it (a crown, a rock) stands before it.
+ */
+function castWords(mesh: Mesh, ways: Ways, st: Station) {
+  const hex = identify(st.lines), rel = st.lines.some(moving) ? identify(st.lines, true) : null;
+  // (the page: in its pixels, about as the print shows them where the walker is)
+  const PX = 0.038, CH = 30, EN = 18, ENW = 512 * EN / 56;
+  const nh = [...hex.han].length, nr = rel ? [...rel.han].length : 0;
+  const colH = (nh + (rel ? 1 + nr : 0)) * CH, top = Math.max(45, colH);
+  const Wb = 120, Hb = top + 6 + EN * (rel ? 2 : 1);
+  const ax = st.c[0], az = st.c[2] + st.rz * 0.2;
+  const grade = ways.slope(az), sl = Math.atan(grade), kz = PX * Math.cos(sl) / Math.sin(0.76 + sl);
+  const nl = Math.hypot(1, grade), nrm: V3 = [0, 1 / nl, -grade / nl];
+  // (the page's right is the hill's -x, as the eye looks up it; its down, down the hill)
+  const at = (px: number, py: number): [number, number] => [ax - (px - Wb / 2) * PX, az - (py - Hb / 2) * kz];
+  const quad = (x0: number, y0: number, x1: number, y1: number, r: Rect | null, ink: number) => {
+    const nx = Math.max(1, Math.ceil((x1 - x0) / 24)), ny = Math.max(1, Math.ceil((y1 - y0) / 24));
+    const P = (i: number, j: number) => {
+      const fx = i / nx, fy = j / ny, [x, z] = at(x0 + (x1 - x0) * fx, y0 + (y1 - y0) * fy);
+      const u = r ? (r[0] + r[2] * fx) / TYPE.w : 0, v = r ? (r[1] + r[3] * fy) / TYPE.h : 0;
+      return [x, ground(ways, x, z) + 0.06, z, nrm[0], nrm[1], nrm[2], u, v, ink, M.type];
+    };
+    for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+      const a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), d = P(i, j + 1);
+      for (const q of [a, b, c, a, c, d]) mesh.v.push(...q);
+    }
+  };
+  // (the figure: 42 by 45)
+  st.lines.forEach((v, k) => {
+    const y = (58 - k * 10.4) * 0.7, h = 3.4 * 0.7, col = moving(v) ? 2 : 1;
+    if (v % 2) quad(1.4, y - h, 40.6, y + h, null, col);
+    else { quad(1.4, y - h, 17.5, y + h, null, col); quad(24.5, y - h, 40.6, y + h, null, col); }
+  });
+  // (the names, a column beside it)
+  const cell = (r: Rect, n: number): Rect => [r[0], r[1], r[2], 128 * n];
+  let y = 0;
+  quad(52, y, 52 + CH, y + nh * CH, cell(TYPE.han(hex.number - 1), nh), 0); y += nh * CH;
+  if (rel) {
+    quad(52, y, 52 + CH, y + CH, TYPE.zhi, 0); y += CH;
+    quad(52, y, 52 + CH, y + nr * CH, cell(TYPE.han(rel.number - 1), nr), 0);
+  }
+  // (the titles, small, under both)
+  quad(0, top + 6, ENW, top + 6 + EN, TYPE.en(hex.number - 1, false), 0);
+  if (rel) quad(0, top + 6 + EN, ENW, top + 6 + EN * 2, TYPE.en(rel.number - 1, true), 0);
 }
 
 /**

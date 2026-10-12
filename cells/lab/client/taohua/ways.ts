@@ -122,7 +122,7 @@ export class Ways {
     for (let guard = 0; guard < 400; guard++) {
       let lo = Infinity;
       for (const t of this.tips) lo = Math.min(lo, t.j.z);
-      if (lo > z + 150) break;
+      if (lo > z + 200) break;
       this.grow();
     }
   }
@@ -153,8 +153,14 @@ export class Ways {
   first(): Way { this.extend(0); return this.all[0]; }
 
   // ─── growing ───────────────────────────────────────────────────────────────────────────────────
-  /** The lowest branch's tip, grown on: on, or forked, or ended, or met with a neighbour's. */
+  /** The lowest branch's tip grown on; and where that's brought a branch near another it's far from by the ways, a path between them. */
   private grow() {
+    const n0 = this.js.length;
+    this.growOn();
+    for (const j of this.js.slice(n0)) this.link(j);
+  }
+  /** The lowest branch's tip, grown on: on, or forked, or ended, or met with a neighbour's. */
+  private growOn() {
     let ti = 0;
     for (let i = 1; i < this.tips.length; i++) if (this.tips[i].j.z < this.tips[ti].j.z) ti = i;
     const tip = this.tips.splice(ti, 1)[0];
@@ -195,8 +201,15 @@ export class Ways {
     // (it goes on; now and then through a gate)
     const gate = !early && j.n > 4 && r() < 0.14;
     if (this.reach(tip, base, r, null, 34, 64, gate)) { if (!j.gate) this.spur(tip, base, r); return; }
-    // (through a gate the way always goes on: straight up the hill if it must)
-    if (j.gate) { this.reach(tip, base, r, null, 34, 44, false, true); return; }
+    // (through a gate the way goes on: up the hill some way that fits, if not the way it faces; and if
+    // it's hemmed in, it isn't a gate after all, but a hall at its branch's end)
+    if (j.gate) {
+      for (const d of [base, [0, 1], rot([0, 1], 0.5), rot([0, 1], -0.5), rot([0, 1], 0.9), rot([0, 1], -0.9)] as Array<[number, number]>) {
+        if (this.reach(tip, d, r, null, 30, 40)) return;
+      }
+      j.gate = false; j.end = 'hall';
+      return;
+    }
     if (live > 1) { if (!j.end) j.end = 'cast'; return; }
     // (the only branch, with nowhere to go: straight on up the hill)
     this.reach(tip, [0, 1], r, null, 40, 40, false, true);
@@ -235,6 +248,54 @@ export class Ways {
     }
     return false;
   }
+  /**
+   * Where a branch has come near another (16 to 44 metres across the hill) that's far off by the
+   * ways (more than four times as far, and a hundred metres or more, back down to where they parted
+   * and up again), most often a path across between them, a short one, gently wandering, as one
+   * walks between two branches of a temple hill. Between plain places on them both: never a
+   * building's, a gate's or a clearing's, nor a fork already three ways, nor near any terrace.
+   */
+  private link(j: Junction) {
+    const plain = (k: Junction) => !k.end && !k.gate && k.ins.length + k.outs.length <= 2;
+    if (!plain(j) || j.n < 4) return;
+    const r = seeded(hash(this.seed, j.n, 0x11c));
+    if (r() > 0.8) return;
+    const cand: Array<{ k: Junction; d: number }> = [];
+    for (const k of this.junctionsAt(j.z - 44, j.z + 44)) {
+      if (k === j || !plain(k)) continue;
+      const d = Math.hypot(k.x - j.x, k.z - j.z);
+      if (d < 16 || d > 44) continue;
+      const g = this.apart(j, k, Math.max(100, d * 4));
+      if (g > Math.max(100, d * 4)) cand.push({ k, d });
+    }
+    cand.sort((a, b) => a.d - b.d);
+    for (const { k } of cand.slice(0, 3)) {
+      const [lo, hi] = j.z <= k.z ? [j, k] : [k, j];
+      for (const bend of [1, 0.5, 0]) {
+        const w = this.make(lo, hi, r, bend, true);
+        if (!this.fits(w, [])) continue;
+        // (clear of every terrace about)
+        if (this.junctionsAt(w.box[2] - 12, w.box[3] + 12).some((t) => t.reach && distTo(w.pts, t.x, t.z) < TERRACE_OF.hall + 5)) continue;
+        this.commitW(w);
+        return;
+      }
+    }
+  }
+  /** How far apart two junctions are by the ways, as made so far (or more than `cap`, if they're further). */
+  private apart(a: Junction, b: Junction, cap: number): number {
+    const dist = new Map<Junction, number>([[a, 0]]), todo: Junction[] = [a];
+    while (todo.length) {
+      todo.sort((p, q) => dist.get(p)! - dist.get(q)!);
+      const j = todo.shift()!, d = dist.get(j)!;
+      if (j === b) return d;
+      if (d > cap) break;
+      for (const e of [...j.ins, ...j.outs]) {
+        const o = e.from === j ? e.to : e.from, nd = d + e.len;
+        if (nd < (dist.get(o) ?? Infinity)) { dist.set(o, nd); todo.push(o); }
+      }
+    }
+    return Infinity;
+  }
   /** Two tips meeting at a junction above them both. */
   private meet(a: Tip, b: Tip, r: Rand): boolean {
     const z = Math.max(a.j.z, b.j.z) + ramp(r, 30, 46), x = (a.j.x + b.j.x) / 2 + ramp(r, -4, 4);
@@ -255,7 +316,7 @@ export class Ways {
     const P = w.pts;
     for (const e of others) {
       if (e === w) continue;
-      const shared = e.from === w.from || e.to === w.from || e.to === w.to;
+      const shared = e.from === w.from || e.to === w.from || e.to === w.to || e.from === w.to;
       if (shared ? crosses(w, e, 0.6) : crosses(w, e)) return false;
       if (e.box[0] > w.box[1] + APART || e.box[1] < w.box[0] - APART) continue;
       for (let i = 0; i < P.length; i += 3) {
@@ -450,7 +511,7 @@ function crosses(u: Way, v: Way, clear = 0): boolean {
   // (where they share a junction, not within `clear` of it: there they meet, as they must)
   const ends = [u.from, u.to].filter((j) => j === v.from || j === v.to);
   const nearEnd = (x: number, z: number) => ends.some((j) => Math.hypot(x - j.x, z - j.z) < clear);
-  const lo = clear ? 0 : 3;
+  const lo = clear || !ends.length ? 0 : 3;
   for (let i = lo; i + 3 < A.length; i += 3) for (let j = lo; j + 3 < B.length; j += 3) {
     const [ax, az, bx, bz, cx, cz, dx, dz] = [A[i], A[i + 1], A[i + 3], A[i + 4], B[j], B[j + 1], B[j + 3], B[j + 4]];
     if (clear && (nearEnd(ax, az) || nearEnd(cx, cz))) continue;

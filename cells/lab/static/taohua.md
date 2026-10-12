@@ -12,8 +12,12 @@ so they're always seen to arrive; a tap on a temple can send them to the way it 
 place a tap found is answered in the scene: a ring of vermilion, left open as a brush draws it, for
 a moment. Only a tap walks: a drag, wherever it starts, even on a way, looks about a little; let
 go, and the view comes back. With keys, ↑ or W walks on (at a fork, by the way most nearly ahead),
-↓ or S back. The steps climbed are counted at the top;
-the last temple passed has its name at the foot of the print over 桃花.
+↓ or S back. The steps climbed are counted at the top.
+
+The title stands at the foot of the print where the journey starts: the name of the first temple up
+the hill from there, over 桃花, large, and a small seal, 桃源. It belongs to the hillside there, not
+to the screen, so it moves with the hill and is walked away from, and doesn't come back unless you
+walk back down to it.
 
 ## The hill and its ways
 
@@ -26,10 +30,17 @@ metres, slanting well across the hill, as often back the way it came across as o
 climbs the hill in long zigzags, pulled back toward the middle when it strays far to one side), or
 forks in two, the forks heading off to either side; now and then a short spur leaves it, up to a building or a clearing of its own on the
 slope; now and then a branch ends, at a building or a clearing. Rarely, two branches that have
-drawn near meet again. There are never more than three branches at once, and never fewer than
+drawn near meet again. And where a branch comes near another (16 to 44 metres across the hill)
+that it's far from by the ways (more than four times as far, and a hundred metres or more, back
+down to where they parted and up again), most often a short path runs across between them,
+gently wandering, between plain places on both (never a building's, a gate's or a clearing's, nor
+a fork that's already three ways, nor near a terrace), so a way you can see close by is close by
+to walk to as well. There are never more than three branches at once, and never fewer than
 one: with one, it forks more often; with three, a branch is more likely to end. No way crosses
 another, nor runs within eight metres of one, and no two junctions come within sixteen metres;
-where a branch has no room to go on, it ends there, in a quiet clearing.
+where a branch has no room to go on, it ends there, in a quiet clearing. A way through a gate
+always goes on, by whichever way up the hill it fits; if none fits, the gate was never a gate, and
+a hall stands at the end of its branch instead.
 
 No reach is straight: each wanders along its way, a long sway to one side, a turn back, smaller
 bends over that, all its own, settling straight only where it comes to a building's stair or
@@ -135,11 +146,14 @@ there, just past its end; at some forks, in the space up the hill between the fo
 about a quarter of the longer ways, on whichever side has room. Each is clear of every way and
 well apart from the others. Each holds a cast from Changes, from the seed and the station's
 number: six lines, each as three coins fall, so old lines come as often as they would. The cast is
-written on the hillside in its clearing, as a print sets its verse in the paper it keeps open: the
-hexagram's six lines in ink, its moving lines vermilion; its name down beside it, and, if it
+inked on the hillside in its clearing, as a print sets its verse in the paper it keeps open: the
+hexagram's six lines, its moving lines vermilion; its name in a column beside them, and, if it
 moves, 之 and the name of what it becomes; under them, small, the numbers and names in English.
-It's held to its place on the hill, moving with it as the view moves, and only reads (a tap on it
-walks, like a tap on the hillside). Beside it, a small built thing ties it to the place: a cairn of
+The words are laid on the ground itself, just above it and following it, stretched up the hill as
+much as the eye's slant onto the slope there shortens them, so they read square; so whatever
+stands before them (a crown, a rock) stands before them, and nothing has to make room for them.
+They come from a sheet of words, ink on nothing: where there's no ink, the hill shows. They only
+read (a tap on them walks, like a tap on the hillside). Beside it, a small built thing ties it to the place: a cairn of
 flat stones, each smaller than the last (always where Mountain or Earth is in the cast), or a
 wayside shrine, a stone post with a little white niche under a roof of teal tiles.
 
@@ -169,8 +183,8 @@ is (`?at=way:metres`), updated as they go, so a reload or a shared link comes ba
 place.
 `?seed=1&at=w3:40&review` freezes the walker, camera and falling petals for a repeatable comparison
 at full rendering resolution. The footer identifies the pass, seed and where on the ways. Remove
-`review` to walk normally. On seed 1: `at=w3:40` (a fork), `at=w9:14` (a pavilion), `at=w11:20`
-(a pagoda), `at=w22:9` (a cast where a branch ends), `at=w21:46` (a gate), `at=w62:9` (a hall).
+`review` to walk normally. On seed 1: `at=w3:40` (a fork), `at=w9:14` (a pavilion), `at=w12:20`
+(a pagoda), `at=w23:9` (a cast where a branch ends), `at=w22:46` (a gate), `at=w67:20` (a hall).
 (The ways' ids follow from how the hill grows, so these change when it does.)
 
 
