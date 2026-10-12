@@ -145,7 +145,9 @@ drawn as dashed rings, the verse's in ink, those kept for Changes in vermilion w
 while walking, for judging how the arrangement holds as it unrolls, and for deciding where
 later things along the way (passages from Changes, say) should fall.
 
-`?seed=…` a hillside; `?preview` climbs by itself, quietly.
+`?seed=…` a hillside; `?preview` climbs by itself, quietly. The address keeps the seed and how far
+along the path the walker is (`?at=…`), updated as they go, so a reload or a shared link comes
+back to the same place.
 `?seed=1&at=24&review` freezes the walker, camera and falling petals for a repeatable comparison
 at full rendering resolution. The footer identifies the pass, seed and path position. Remove
 `review` to walk normally. Composition passes: compare `at=2`, `at=24` and `at=90`.

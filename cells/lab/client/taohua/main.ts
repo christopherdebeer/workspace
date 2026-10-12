@@ -9,7 +9,7 @@
  * in the address (?seed=…): the same seed, the same hillside, step for step. `?preview` climbs by
  * itself, quietly.
  */
-import { hash, randomSeed, seedFrom, seeded } from '../kit/rng';
+import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
 import { Path, RISE, WIDTH, type V3 } from './path';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
 import { stationsNear, type Station } from './compose';
@@ -360,7 +360,7 @@ function brushPath(pos: V3) {
 }
 
 // ─── the frame ───────────────────────────────────────────────────────────────────────────────────
-let last = performance.now(), time = 0, idleLook = 0;
+let last = performance.now(), time = 0, idleLook = 0, urlAt = -1, urlT = -1e9;
 let reached = 0;
 function frame(now: number) {
   const dt = review ? 0 : Math.max(0, Math.min(0.05, (now - last) / 1000));
@@ -447,6 +447,15 @@ function frame(now: number) {
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink },
     [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
+
+  // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
+  // link, comes back to the same place; written a couple of times a second at most, as they move)
+  if (!preview && !review && Math.abs(s - urlAt) > 0.3 && now - urlT > 400) {
+    urlAt = s; urlT = now;
+    const u = new URL(location.href);
+    u.searchParams.set('seed', seedName(seed)); u.searchParams.set('at', s.toFixed(1));
+    history.replaceState(null, '', u);
+  }
 
   // what it reports of itself, for the checks
   (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, s, goal, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (si: number) => project(path.at(si).p), pick, nearestSeen, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
