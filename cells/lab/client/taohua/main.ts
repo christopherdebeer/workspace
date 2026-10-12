@@ -268,7 +268,7 @@ function startSpot(): Spot {
  */
 let off: P2 | null = null, trail: P2[] = [], join: Spot | null = null, offDir: [number, number] = [0, 1];
 let here: Spot = startSpot();
-let speed = 0, want = 0, phase = 0, stride = 0, facing = NaN;
+let speed = 0, want = 0, phase = 0, stride = 0, facing = NaN, backward = false;
 /** the walker's pace (m/s); `?pace=…` times it, for trying things out quickly */
 const WALK = 1.25 * Math.max(0.1, Math.min(40, Number(params.get('pace')) || 1));
 /** Where the walker stands at a spot: on the step under them, lifting onto the next as they come to its edge; on a temple's terrace or stair, on that. */
@@ -621,7 +621,10 @@ function frame(now: number) {
   const pos: V3 = [st.p[0], st.p[1] + bob, st.p[2]];
   posNow = pos;
   // (they turn to face their way, not at once)
-  const want_yaw = Math.atan2(st.dir[0], st.dir[1]) + (!off && speed < -0.05 ? Math.PI : 0);
+  // (facing down the way while they go down it, and still so once they stop: they turn only when they set off again)
+  if (Math.abs(speed) > 0.05) backward = !off && speed < 0;
+  if (off) backward = false;
+  const want_yaw = Math.atan2(st.dir[0], st.dir[1]) + (backward ? Math.PI : 0);
   facing += Math.atan2(Math.sin(want_yaw - facing), Math.cos(want_yaw - facing)) * (1 - Math.exp(-dt * 5));
   const yaw = facing;
   keepBands(cam.x || pos[0], pos[2]);
