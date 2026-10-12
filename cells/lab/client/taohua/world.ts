@@ -258,10 +258,12 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   // (the open space about a temple beside a way, where its terrace and courtyard stand)
   const inGlade = (x: number, z: number) => temples.some((t) => !t.gate && Math.hypot(x - t.c[0], z - t.c[2]) < t.T + 4.5);
   // (the stations' spaces, kept open: no tree whose crown would stand over one, no rock in one)
-  const sts = stationsNear(ways, seed, z0, z1);
+  // (those whose spaces reach this tile, kept open across it: a space reaches some fourteen metres down the hill from its middle, and a few up)
+  const sts = stationsNear(ways, seed, z0 - 8, z1 + 16);
   // (and the deer's places: no tree or rock where a deer stands, nor its crown just before it)
   const herds = deerNear(ways, seed, z0 - 10, z1 + 10);
-  const treeOut = (x: number, z: number) => inStation(sts, x, z, 2.8, 4.5) || !clearOfDeer(herds, x, z, 3) || [2, 4, 6, 8].some((dz) => !clearOfDeer(herds, x, z + dz, 3.2));
+  // (a crown spreads four metres and more from its trunk: so the trunks stand that far back from the sheet's sides)
+  const treeOut = (x: number, z: number) => inStation(sts, x, z, 4.2, 4.5) || !clearOfDeer(herds, x, z, 3) || [2, 4, 6, 8].some((dz) => !clearOfDeer(herds, x, z + dz, 3.2));
   /** whether (x, z) is just downhill of a way, where a crown would stand between the eye and it */
   const belowWay = (x: number, z: number) => [2, 3.8, 5.6, 7.2].some((dz) => ways.nearest(x, z + dz).d < WIDTH / 2 + 1);
 
@@ -439,8 +441,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
           if (inT(x, z) && ways.nearest(x, z).d > WIDTH / 2 + 1.5 && !belowWay(x, z)) tree(mesh, puffs, petals, [x, gy(x, z), z], sr, ways);
         }
         break;
-      case 'Thunder': { // (one tree at its far side, leaning out over it)
-        const [x, z] = R(away * ramp(sr, 1.15, 1.35), ramp(sr, 0.2, 0.7));
+      case 'Thunder': { // (one tree at its far side, leaning in toward it; well out to the side of the sheet, so its crown frames the words, not covers them)
+        const [x, z] = R(away * ramp(sr, 2.5, 2.7), ramp(sr, 0.05, 0.4));
         if (inT(x, z) && ways.nearest(x, z).d > WIDTH / 2 + 1.5 && !belowWay(x, z)) tree(mesh, puffs, petals, [x, gy(x, z), z], sr, ways);
         break;
       }

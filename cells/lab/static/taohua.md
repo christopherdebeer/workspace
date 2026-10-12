@@ -246,11 +246,13 @@ flat stones, each smaller than the last (always where Mountain or Earth is in th
 wayside shrine, a stone post with a little white niche under a roof of teal tiles.
 
 The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
-stones along its upper edge; Wind, a grove close behind; Thunder, one tree at its far side,
-leaning over. Its lower trigram is what lies in it: Water, stepping stones across it; Lake, a ring
+stones along its upper edge; Wind, a grove close behind; Thunder, one tree well out at its far
+side, framing it. Its lower trigram is what lies in it: Water, stepping stones across it; Lake, a ring
 of flat stones; Fire, fallen blossom heaped red; Mountain, one low stone; Wind, grass in tufts;
 Thunder, a stone split in two. Heaven and Earth leave it open. Trees stand well back from a station's
-edge, further on its downhill side, where a crown would stand over the space as the eye sees it.
+edge (a crown spreads four metres and more, so its trunk stands that much further off), further on
+its downhill side, where a crown would stand over the space as the eye sees it; every tile near a
+station keeps it open, not only the one it stands in.
 
 ## The composition view
 
