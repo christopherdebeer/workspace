@@ -531,16 +531,8 @@ function brushPath(pos: V3) {
     }
   }
   g.setLineDash([]);
-  // (the stations' spaces: outlined in vermilion, their hexagrams drawn small in their middles)
+  // (the stations: their hexagrams drawn small in their middles)
   for (const st of stationsNear(ways, seed, pos[2] - 30, pos[2] + 140)) {
-    g.beginPath();
-    for (let k = 0; k <= 32; k++) {
-      const a = (k / 32) * Math.PI * 2, q = project([st.c[0] + Math.cos(a) * st.rx, st.c[1], st.c[2] + Math.sin(a) * st.rz]);
-      if (k) g.lineTo(q[0], q[1]); else g.moveTo(q[0], q[1]);
-    }
-    g.setLineDash([6, 5]); g.lineWidth = 1.5;
-    g.strokeStyle = '#b8382c';
-    g.stroke();
     const q = project(st.c);
     st.lines.forEach((v, k) => {
       const y = q[1] + 15 - k * 6;
@@ -548,7 +540,6 @@ function brushPath(pos: V3) {
       if (v % 2) g.fillRect(q[0] - 12, y - 2, 24, 4); else { g.fillRect(q[0] - 12, y - 2, 10, 4); g.fillRect(q[0] + 2, y - 2, 10, 4); }
     });
   }
-  g.setLineDash([]);
   const w = project([pos[0], pos[1] + 0.8, pos[2]]);
   g.fillStyle = '#b8382c';
   g.beginPath(); g.arc(w[0], w[1], 5, 0, Math.PI * 2); g.fill();
