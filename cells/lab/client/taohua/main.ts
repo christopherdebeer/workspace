@@ -17,7 +17,7 @@ import { BAND, INK, M, Mesh, NAMES, SPAN, ground, makeBand, templesNear, type Ba
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
 const review = params.has('review');
-const PASS = 'composition-2';
+const PASS = 'composition-3';
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
@@ -235,8 +235,8 @@ function camera(p: V3, dt: number) {
   // (looked about by hand, it comes back after a while)
   if (!looking && performance.now() - lookAt0 > 2500) { lookYaw *= Math.exp(-dt * 1.2); lookPitch *= Math.exp(-dt * 1.2); }
   const aspect = canvas.width / canvas.height;
-  const dist = (aspect < 1 ? 64 : 46) + (preview ? 6 : 0);
-  const pitch = 0.82 + lookPitch, yaw = lookYaw;
+  const dist = (aspect < 1 ? 56 : 44) + (preview ? 6 : 0);
+  const pitch = 0.76 + lookPitch, yaw = lookYaw;
   const t: V3 = [cam.x + (cam.t[0] - p[0]) * 0, cam.t[1], cam.t[2]];
   t[0] = cam.x;
   const eye: V3 = [t[0] - Math.sin(yaw) * Math.cos(pitch) * dist, t[1] + Math.sin(pitch) * dist, t[2] - Math.cos(yaw) * Math.cos(pitch) * dist];
@@ -281,7 +281,7 @@ function frame(now: number) {
   const { eye, t } = camera([pos[0] + lean, pos[1], pos[2]], dt);
   const aspect = W / H;
   const near = 1, far = 160;
-  const fov = aspect < 1 ? 0.64 : 0.44;
+  const fov = aspect < 1 ? 0.56 : 0.42;
   const v = lookAt(eye, t);
   const vp = mulM(perspective(fov, aspect, near, far), v.m);
 

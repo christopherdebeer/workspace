@@ -146,21 +146,25 @@ export function templesNear(path: Path, z0: number, z1: number): TempleAt[] {
  * opening beside the route; overlapping soft fields leave wooded shoulders between them.
  * This controls whole groves before any individual tree is grown.
  */
+export interface Opening { cx: number; cz: number; rx: number; rz: number; side: number; i: number }
+export function opening(path: Path, seed: number, i: number): Opening {
+  const rr = seeded(hash(seed, i, 0xc041));
+  const cz = i * 36 + 12 + rr() * 12;
+  const side = rr() < 0.5 ? -1 : 1;
+  const at = path.at(path.nearest(0, cz).s).p;
+  const cx = at[0] + side * (2.5 + rr() * 2.5);
+  return { cx, cz, rx: 5.5 + rr() * 3.5, rz: 8 + rr() * 5, side, i };
+}
 export function groveDensity(path: Path, seed: number, x: number, z: number): number {
   const cell = Math.floor(z / 36);
-  let opening = 0;
+  let open = 0;
   for (let i = cell - 1; i <= cell + 1; i++) {
-    const rr = seeded(hash(seed, i, 0xc041));
-    const cz = i * 36 + 12 + rr() * 12;
-    const side = rr() < 0.5 ? -1 : 1;
-    const at = path.at(path.nearest(0, cz).s).p;
-    const cx = at[0] + side * (2.5 + rr() * 2.5);
-    const rx = 5.5 + rr() * 3.5, rz = 8 + rr() * 5;
-    const d = Math.hypot((x - cx) / rx, (z - cz) / rz);
-    opening = Math.max(opening, 1 - smooth(0.55, 1.15, d));
+    const o = opening(path, seed, i);
+    const d = Math.hypot((x - o.cx) / o.rx, (z - o.cz) / o.rz);
+    open = Math.max(open, 1 - smooth(0.55, 1.15, d));
   }
   const mass = noise1(hash(seed, 0xc042), z / 17 + x / 11);
-  return (0.7 + 0.29 * mass) * (1 - opening);
+  return (0.7 + 0.29 * mass) * (1 - open);
 }
 
 /** Band j of the hill. */
@@ -317,6 +321,16 @@ export function makeBand(path: Path, seed: number, j: number): Band {
     if (path.nearest(x, z).d > WIDTH / 2 + 0.5 && !onTemple(x, z, 0)) tuft(mesh, path, x, z, r, 2 + Math.floor(r() * 4));
   }
 
+  // (each opening held by one tree standing alone in it, toward its far side, away from the path,
+  // its blossom fallen about it: the clearing is a shape the tree gives meaning to, not just a gap)
+  for (let i = Math.floor(z0 / 36) - 1; i <= Math.floor(z1 / 36) + 1; i++) {
+    const o = opening(path, seed, i), lr = seeded(hash(seed, i, 0x10e));
+    if (lr() < 0.25) continue;
+    const x = o.cx + o.side * o.rx * ramp(lr, 0.25, 0.5), z = o.cz + o.rz * ramp(lr, -0.1, 0.35);
+    if (!inBand(z) || path.nearest(x, z).d < WIDTH / 2 + 2.2 || onTemple(x, z, 1) || inGlade(x, z)) continue;
+    tree(mesh, puffs, petals, [x, ground(path, x, z), z], lr, path);
+  }
+
   // trees: on a jittered grid, not on the path (though they lean over it), not on a temple's terrace
   const G = 3.9;
   for (let gx = -SPAN + 1; gx < SPAN; gx += G) for (let gz = Math.floor((z0 - G * 0.45) / G) * G; gz < z1 + G * 0.45; gz += G) {
@@ -451,13 +465,14 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   const top = add(knee, mul(norm(add(lean, [ramp(r, -0.3, 0.3), 0.4, ramp(r, -0.3, 0.3)])), H * 0.45));
   mesh.tube([base[0], base[1] - 0.3, base[2]], knee, R0 * 1.35, R0 * 1.05, INK.trunk, M.trunk, 8);
   mesh.tube(knee, top, R0 * 1.05, R0 * 0.9, INK.trunk, M.trunk, 8);
+  const limbsFrom = mesh.v.n;
   const ends: Array<[V3, V3, number]> = [];
   const UP: V3 = [0, 1, 0];
   const twig = (from: V3, d: V3, len: number, rad: number) => {
     // (a hairline, straight, thinning to nothing)
     const e = add(from, mul(d, len));
     mesh.tube(from, e, rad, 0.004, INK.trunk, M.twig, 3);
-    if (r() < 0.4) ends.push([e, d, 1]);
+    if (r() < 0.75) ends.push([e, d, 1]);
     return e;
   };
   /**
@@ -500,33 +515,38 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   let cx = 0, cy = 0, cz = 0;
   for (const [p] of tips) { cx += p[0]; cy += p[1]; cz += p[2]; }
   cx /= tips.length; cy /= tips.length; cz /= tips.length;
+  // (its branches shown through its own blossom, as ink over colour, and not through anything
+  // else: each point of a limb is drawn nearer the eye by as far as it lies inside the crown in
+  // front of it, the most at the crown's heart, none at its rim or below it, so the limbs stay
+  // joined to the trunk and can't show through a neighbouring tree or a roof. In the drawing: the
+  // limb's colour carries how far)
+  let Rh = 0.8, Rv = 0.6;
+  for (const [p] of tips) { Rh = Math.max(Rh, Math.hypot(p[0] - cx, p[2] - cz)); Rv = Math.max(Rv, Math.abs(p[1] - cy)); }
+  Rh += 0.5; Rv += 0.6;
+  for (let i = limbsFrom, va = mesh.v.a; i < mesh.v.n; i += STRIDE) {
+    if (va[i + 9] !== M.twig) continue;
+    const e = Math.hypot((va[i] - cx) / Rh, (va[i + 1] - cy) / Rv, (va[i + 2] - cz) / Rh);
+    va[i + 6] = Math.sqrt(Math.max(0, 1 - e * e)) * Rh;
+  }
   // (its shade on the ground: broad and faint under the crown, off to the shadow side; deeper about the trunk's foot)
   shade(mesh, path, cx - 0.5 * (cy - base[1]) * 0.55, cz + 0.5 * (cy - base[1]) * 0.35, 3.0, 1.6, 0.1);
   shade(mesh, path, base[0] - 0.5, base[2] + 0.1, 1.1, 0.4, 0.22);
   const L: V3 = norm([0.55, 0.75, -0.35]);
   // (each tree its own pink, a little deeper or paler than the next)
   const t0 = ramp(r, -0.24, 0.12);
-  // A shared missing wedge exposes connected branch structure without pulling it through
-  // unrelated objects. The remaining masses range from broad lobes to small fringe clusters.
-  const gapAngle = r() * Math.PI * 2;
-  const gapWidth = ramp(r, 0.16, 0.32);
   const crownSeed = r();
   for (const [p, d, k] of tips) {
     const n = k + (k > 1 && r() < 0.4 ? 1 : 0);
     for (let i = 0; i < n; i++) {
       // (a clump about the fan of twigs, lifted a little: the blossom sits on top of the branches)
       const q: V3 = [p[0] + d[0] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55), p[1] + ramp(r, 0.05, 0.5), p[2] + d[2] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55)];
-      const angle = Math.atan2(q[2] - cz, q[0] - cx);
-      const gap = Math.abs(Math.atan2(Math.sin(angle - gapAngle), Math.cos(angle - gapAngle)));
-      const radial = Math.hypot(q[0] - cx, q[2] - cz);
-      if (gap < gapWidth && radial > 0.65 * stature && q[1] < cy + 0.9 * stature) continue;
-      const rad = (k > 1 ? ramp(r, 0.68, 1.02) : ramp(r, 0.32, 0.58)) * stature;
+      const rad = (k > 1 ? ramp(r, 0.55, 0.85) : ramp(r, 0.32, 0.55)) * Math.min(stature, 1.15);
       // (none right over the path, so its way stays open; in front of it, as the eye looks up the hill,
       // the crowns stand as they grow, and the walker passes behind them and comes out again)
       if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
       const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
-      const shade = Math.max(0, Math.min(1, 0.59 + t0 + 0.07 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.055 * (q[1] - cy) + ramp(r, -0.025, 0.025)));
-      puffs.push(q[0], q[1], q[2], rad, shade, crownSeed);
+      const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
+      puffs.push(q[0], q[1], q[2], rad, shade, crownSeed * 0.5 + r() * 0.5);
     }
   }
   // fallen blossom under it, where it's not the path: in drifts, stamped flowers and specks of red

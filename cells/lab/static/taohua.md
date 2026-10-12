@@ -63,8 +63,12 @@ limbs that spread wide and up. Every limb is drawn as the print draws them: stra
 angles, not curves, forking sharply, and again, ending in fans of hairline twigs, with twigs out
 of the angles along the way. Bark is black with a hard-edged band of cream down the side toward
 the light, broken along its length. The blossom gathers in clumps about the twigs' ends and along
-the limbs, so a tree is a broad umbrella of pink; the branches keep their true depth. Unequal crown lobes and a missing wedge of blossom expose
-connected limbs without drawing them through neighbouring trees.
+the limbs, so a tree is a broad umbrella of pink. Its branches show through its own blossom, as
+ink over colour: each point of a limb is drawn nearer the eye by as far as it lies inside its own
+crown, the most at the crown's heart and none at its rim or below, so the limbs stay joined to the
+trunk and never show through a neighbouring tree or a roof. The blossom's tone is continuous but
+keeps the crown's structure, pale where it's lit and high, deep beneath, dappled over that with
+pale dabs and deep recesses in clusters; each tree is its own pink.
 
 ## The print
 
@@ -99,16 +103,16 @@ hat, a staff taller than they are, and a stroke of shadow beside them. As they w
 forward and the other back with each step, and the staff swings forward, is planted, and they pass
 it.
 
-Broad, asymmetric openings beside the route alternate with denser wooded shoulders. These
-composition fields span streaming bands; jittered trees belong to the band containing their
-final position. Trees vary in stature, with broad crown lobes and smaller fringe clusters. The
-broad blossom wash is fixed to cluster centres; fine marks remain attached to the illustrated
+Broad, asymmetric openings beside the route alternate with denser wooded shoulders, each opening
+held by one tree standing alone toward its far side. These composition fields span streaming
+bands; jittered trees belong to the band containing their final position. Trees vary in stature.
+The broad blossom wash is fixed to cluster centres; fine marks remain attached to the illustrated
 lobes. Distant paper fade starts beyond the usual focal distance.
 
 `?seed=…` a hillside; `?preview` climbs by itself, quietly.
 `?seed=1&at=24&review` freezes the walker, camera and falling petals for a repeatable comparison
 at full rendering resolution. The footer identifies the pass, seed and path position. Remove
-`review` to walk normally. Composition pass 1: compare `at=2`, `at=24` and `at=90`.
+`review` to walk normally. Composition passes: compare `at=2`, `at=24` and `at=90`.
 
 
 Composition pass 2 widens and raises the portrait view, flattens blossom depth and tonal

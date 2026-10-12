@@ -33,7 +33,8 @@ out vec3 vW; out vec3 vN; out vec3 vC; flat out int vM;
 void main() {
   vec4 w = uModel * vec4(aPos, 1.);
   vW = w.xyz; vN = normalize(mat3(uModel) * aNor); vC = aCol; vM = int(aMat + .5);
-  // Branches retain their actual depth and connected junctions. Crown gaps reveal the ink.
+  // (a limb drawn nearer the eye by as far as it lies inside its own crown: it shows through its own blossom, as ink over colour, but not through anything else)
+  if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * aCol.r;
   gl_Position = uVP * w;
 }`;
 const SOLID_FS = `#version 300 es
@@ -82,7 +83,7 @@ void main() {
     if (n.y > .5) {
       c = vec3(.96, .94, .89);
       if (step(.8, noise(vec3(vW.x * 1.6, vW.z * 13., vW.y * 9.))) > .5) c = mix(c, GREY, .6);
-    } else c = vec3(.76, .71, .62);
+    } else c = vec3(.66, .61, .54);
     lit = 1.;
   } else if (vM == ${M.stone}) {
     // stone: a wall's face laid in squared blocks, its joints dark; tops pale
@@ -104,6 +105,7 @@ void main() {
     if (hash3(pc + 11.) > .8 && length(pf) < .09) c *= .4;
     lit = 1.;
   } else if (vM == ${M.trunk} || vM == ${M.twig}) {
+    c = vec3(${INK.trunk.map((v) => v.toFixed(3)).join(', ')});
     // bark: ink, a pale streak down the side that faces the light, broken
     // (hard edged, as cut in a block: a band of the paper's cream down the lit side, broken along its length)
     float side = dot(n, normalize(vec3(.85, .1, -.5)));
@@ -201,12 +203,16 @@ void main() {
   // Fine marks remain attached to the illustrated lobe.
   vec3 mark = vP + vec3(vQ.x, vQ.y, 0.) * vR;
   float wash = noise(vP * .55) - .5, wash2 = noise(mark * 1.7 + 4.) - .5;
-  // A continuous low-contrast ink field replaces the large stepped camouflage patches.
-  float tone = clamp(vS + wash * .18 + wash2 * .075, 0., 1.);
-  vec3 deep = vec3(.76, .34, .32), lo = vec3(.85, .43, .39), mid = vec3(.92, .53, .47), hi = vec3(.97, .65, .57);
-  vec3 c = tone < .5 ? mix(deep, mid, tone * 2.) : mix(mid, hi, (tone - .5) * 2.);
-  float leaf = noise(mark * 19. + vSeed * 7.);
-  c = mix(c, lo, smoothstep(.64, .82, leaf) * .27);
+  // its tone: continuous, not stepped, but with the crown's own structure: pale where it's lit and
+  // high, deep under and toward its foot; dappled over that, as the print dabs it, pale dabs in
+  // clusters on the lit side, deep recesses in clusters on the shaded
+  float tone = clamp(vS + wash * .32 + wash2 * .12, 0., 1.);
+  vec3 deep = vec3(.72, .29, .27), lo = vec3(.84, .41, .36), mid = vec3(.92, .52, .45), hi = vec3(.98, .68, .6);
+  vec3 c = tone < .5 ? mix(deep, mid, smoothstep(.0, .5, tone)) : mix(mid, hi, smoothstep(.5, 1., tone));
+  float dap = noise(mark * 9. + vSeed * 7.), leaf = noise(mark * 19. + vSeed * 3.);
+  c = mix(c, hi, smoothstep(.62, .78, dap) * smoothstep(.3, .7, tone) * .55);
+  c = mix(c, deep, smoothstep(.36, .2, dap) * smoothstep(.75, .3, tone) * .45);
+  c = mix(c, lo, smoothstep(.66, .84, leaf) * .2);
   // Sparse pinholes open the foliage itself, rather than stippling only its outer edge.
   if (hd < .018 && noise(mark * 5.) > .52) discard;
   // its grain: the print's pale flecks, fine, everywhere; a few deeper
@@ -321,9 +327,9 @@ void main() {
   // (the stone's line broken, as a dry brush leaves it)
   // (where on the hill this is, so the breaks stay with the stone, not the glass)
   vec4 wp = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
-  stone *= smoothstep(.32, .58, noise(wp.xyz / wp.w * 5.));
-  c = mix(c, vec3(.72, .37, .32), coral * .13);
-  c = mix(c, vec3(.43, .38, .31), stone * .48);
+  stone *= smoothstep(.2, .42, noise(wp.xyz / wp.w * 3.));
+  c = mix(c, vec3(.64, .25, .23), coral * .32);
+  c = mix(c, vec3(.25, .21, .18), stone * .82);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
   // the paper: its mottle, its fibres, its grain
   vec2 sp = gl_FragCoord.xy;
