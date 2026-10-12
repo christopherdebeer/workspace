@@ -8,7 +8,6 @@
  */
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { inStation, stationsNear, type Station } from './compose';
-import { identify } from '../changes/model';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3 } from './ways';
 
 /** how deep a tile of the hill is, up it (m), and how wide, across it: the world is made a tile at a time, about the walker, as far across as the ways go */
@@ -236,7 +235,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   const inGlade = (x: number, z: number) => temples.some((t) => !t.gate && Math.hypot(x - t.c[0], z - t.c[2]) < t.T + 4.5);
   // (the stations' spaces, kept open: no tree whose crown would stand over one, no rock in one)
   const sts = stationsNear(ways, seed, z0, z1);
-  const treeOut = (x: number, z: number) => inStation(sts, x, z, 3.8, 4.5);
+  const treeOut = (x: number, z: number) => inStation(sts, x, z, 2.8, 4.5);
   /** whether (x, z) is just downhill of a way, where a crown would stand between the eye and it */
   const belowWay = (x: number, z: number) => [2, 3.8, 5.6, 7.2].some((dz) => ways.nearest(x, z + dz).d < WIDTH / 2 + 1);
 
@@ -365,8 +364,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     if (ways.nearest(x, z).d > WIDTH / 2 + 0.5 && !onTemple(x, z, 0) && !inStation(sts, x, z, 0)) tuft(mesh, ways, x, z, r, 2 + Math.floor(r() * 4));
   }
 
-  // (each station's cast laid in its clearing: the figure in stone, its name cut in a tablet behind)
-  for (const st of sts) if (inT(st.c[0], st.c[2])) castStone(mesh, ways, st);
+  // (beside each station's words, a cairn or a wayside shrine)
+  for (const st of sts) if (inT(st.c[0], st.c[2])) castMark(mesh, ways, st);
 
   // (each station's space shaped by its cast: what stands behind it, as its upper trigram has it; what
   // lies in it, below the words, as its lower has it)
@@ -668,9 +667,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       if ((q[2] - cz) < -0.3 * Rh && q[1] < cy - 0.1 && r() < 0.45) continue;
       if (r() > full) continue;
       const rad = (k > 1 ? ramp(r, 0.5, 0.78) : ramp(r, 0.32, 0.52)) * Math.min(stature, 1.15);
-      // (none right over the path, so its way stays open; in front of it, as the eye looks up the hill,
-      // the crowns stand as they grow, and the walker passes behind them and comes out again)
-      if (ways.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
+      // (crowns stand as they grow, over a way too: the walker passes under them and comes out again)
       const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
       const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
       puffs.push(q[0], q[1], q[2], rad, shade, crownSeed * 0.5 + r() * 0.5);
@@ -683,7 +680,6 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
     const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * 0.9, up = ramp(r, -0.35, 1);
     const back = ramp(r, 1.0, 1.6);
     const q: V3 = [cx + Math.cos(a) * rr * Rh + VIEW[0] * back, cy + up * Rv * 0.8 + VIEW[1] * back, cz + Math.sin(a) * rr * Rh * 0.6 + VIEW[2] * back];
-    if (ways.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
     const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
     const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
     puffs.push(q[0], q[1], q[2], ramp(r, 0.5, 0.75) * Math.min(stature, 1.15), shade, crownSeed * 0.5 + r() * 0.5);
@@ -705,39 +701,38 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
 }
 
 /**
- * A cast, laid in its clearing as a feature of the hill: its six lines in stone set in the ground,
- * the first nearest the foot of the hill, a yin line in two, its moving lines lacquered vermilion;
- * behind them, up the hill, a low stone tablet with its name cut in it, and, if it moves, 之 and the
- * name of what it becomes.
+ * Beside a cast's words, a small built thing that ties them to the place: a cairn of flat dark
+ * stones, stacked, or a wayside shrine (a stone post, a little white house on it with a dark niche,
+ * red posts at its front, under its own small roof of tiles), facing down the hill.
  */
-function castStone(mesh: Mesh, ways: Ways, st: Station) {
-  const c = st.c, gy = (x: number, z: number) => ground(ways, x, z);
-  const len = 2.1, gap = 0.36, th = 0.5, step = 0.95, z0 = c[2] - st.rz * 0.62;
-  // (each bar a slab, its top a hand above the ground at its middle, its foot sunk)
-  const bar = (x0: number, x1: number, z: number, moving: boolean) => {
-    const xm = (x0 + x1) / 2, y = gy(xm, z) + 0.12;
-    mesh.box([xm, y - 0.2, z], [(x1 - x0) / 2, 0.2, th / 2], [1, 0], moving ? INK.red : INK.stepTop, moving ? INK.red : INK.stepFace, moving ? M.red : M.step);
-  };
-  st.lines.forEach((v, k) => {
-    const z = z0 + k * step, mv = v === 6 || v === 9;
-    if (v % 2) bar(c[0] - len, c[0] + len, z, mv);
-    else { bar(c[0] - len, c[0] - gap, z, mv); bar(c[0] + gap, c[0] + len, z, mv); }
-  });
-  // the tablet: a slab of stone standing low behind the figure, facing down the hill, its name cut in its face
-  const hex = identify(st.lines), moves = st.lines.some((v) => v === 6 || v === 9), rel = moves ? identify(st.lines, true) : null;
-  const tz = z0 + 6 * step + 1.1, hw = moves ? 3.3 : 1.6, hh = 0.75, ty = gy(c[0], tz);
-  mesh.box([c[0], ty + hh - 0.15, tz], [hw, hh, 0.22], [1, 0], INK.stepTop, INK.stepFace, M.step);
-  mesh.box([c[0], ty - 0.05, tz], [hw + 0.15, 0.14, 0.34], [1, 0], INK.stone, INK.stone, M.stone);
-  // (its words: each a cell of the sheet on the tablet's face, a hair proud of it)
-  const word = (cell: number, xm: number, w: number) => {
-    const y0 = ty + hh - 0.15 - w / 3.2, y1 = ty + hh - 0.15 + w / 3.2, zf = tz - 0.23;
-    const q: V3[] = [[xm - w, y0, zf], [xm - w, y1, zf], [xm + w, y1, zf], [xm + w, y0, zf]];
-    // (read from down the hill: there, +x is to the left)
-    const uv: Array<[number, number]> = [[1, 0], [1, 1], [0, 1], [0, 0]];
-    for (const k of [0, 1, 2, 0, 2, 3]) { const p = q[k], [tu, tv] = atlasUV(cell, uv[k][0], uv[k][1]); mesh.v.push(p[0], p[1], p[2], 0, 0, -1, tu, tv, 0, M.plaque); }
-  };
-  if (rel) { word(ATLAS.hex + hex.number - 1, c[0] + 1.95, 1.3); word(ATLAS.zhi, c[0], 0.65); word(ATLAS.hex + rel.number - 1, c[0] - 1.95, 1.3); }
-  else word(ATLAS.hex + hex.number - 1, c[0], 1.45);
+function castMark(mesh: Mesh, ways: Ways, st: Station) {
+  const r = seeded(hash(st.i, 0x5a1));
+  const away = st.side || (st.i % 2 ? 1 : -1);
+  const x = st.c[0] + away * st.rx * ramp(r, 1.2, 1.4), z = st.c[2] + st.rz * ramp(r, -0.12, 0.05);
+  const y = ground(ways, x, z);
+  const earthy = st.upper === 'Mountain' || st.lower === 'Mountain' || st.upper === 'Earth' || st.lower === 'Earth';
+  if (earthy || r() < 0.35) {
+    // (a cairn: flat stones, each smaller, each turned a little, the last a pebble)
+    let h = y - 0.04, s0 = ramp(r, 0.36, 0.48);
+    for (let k = 0, n = 4 + Math.floor(r() * 3); k < n; k++) {
+      const sx = s0 * (1 - k * 0.14), th = ramp(r, 0.08, 0.14), a = r() * 3;
+      mesh.box([x + ramp(r, -0.03, 0.03), h + th, z + ramp(r, -0.03, 0.03)], [sx, th, sx * ramp(r, 0.6, 0.85)], [Math.cos(a), Math.sin(a)], INK.rock, INK.rock, M.rock);
+      h += th * 2;
+    }
+    shade(mesh, ways, x - 0.5, z + 0.1, 0.9, 0.35, 0.28);
+    return;
+  }
+  // (a wayside shrine, facing down the hill)
+  const face: [number, number] = [0, -1], fx = -face[1], fz = face[0];
+  const P = (px: number, py: number, pz: number): V3 => [x + fx * px + face[0] * pz, y + py, z + fz * px + face[1] * pz];
+  const along: [number, number] = [fx, fz];
+  mesh.box(P(0, 0.35, 0), [0.2, 0.42, 0.18], along, INK.stepTop, INK.stepFace, M.step, M.stone);
+  mesh.box(P(0, 0.8, 0), [0.4, 0.06, 0.34], along, INK.stepTop, INK.stepFace, M.step);
+  mesh.box(P(0, 1.1, -0.02), [0.32, 0.25, 0.26], along, INK.wall, INK.wall, M.wall);
+  mesh.box(P(0, 1.06, 0.22), [0.16, 0.18, 0.03], along, INK.dark, INK.dark, M.dark);
+  for (const sx of [-1, 1]) mesh.tube(P(sx * 0.3, 0.86, 0.26), P(sx * 0.3, 1.36, 0.26), 0.035, 0.03, INK.red, M.red, 5);
+  roof(mesh, P, fx, fz, { ex: 0.6, ez: 0.5, rz: 0, y0: 1.38, rise: 0.4, gx: 0.22, g: 0.5, sweep: 0.22 });
+  shade(mesh, ways, x - 0.6, z + 0.1, 1.0, 0.35, 0.28);
 }
 
 /**

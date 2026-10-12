@@ -46,7 +46,7 @@ export interface Way {
   id: string; n: number; from: Junction; to: Junction;
   /** its curve across the ground (a, c, b; their heights the hill's); and where it truly starts and ends (a0, b1), straight to and from the curve (onto a building's terrace up its stair; from a gate's, down its back) */
   a: V3; c: V3; b: V3; a0: V3; b1: V3; head: number; tail: number;
-  /** its length across the ground (all of it); how far along its curve each of its samples is */
+  /** its length across the ground (all of it) */
   len: number; samp: Float64Array;
   /** where it climbs in steps */
   stairs: StairRun[];
@@ -60,10 +60,6 @@ export interface Way {
 export interface Near { d: number; w: Way; u: number; p: V3 }
 
 const N = 40;
-const bez = (a: V3, c: V3, b: V3, t: number): V3 => {
-  const u = 1 - t;
-  return [u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1], u * u * a[2] + 2 * u * t * c[2] + t * t * b[2]];
-};
 const smooth = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const rot = (d: [number, number], a: number): [number, number] => [d[0] * Math.cos(a) + d[1] * Math.sin(a), -d[0] * Math.sin(a) + d[1] * Math.cos(a)];
 /** a building's terrace's half-depth, by kind */
@@ -165,7 +161,15 @@ export class Ways {
     const j = tip.j, r = seeded(hash(this.seed, j.n, 0x33));
     const live = this.tips.length + 1;
     // (the way on leans up the hill, drawn back toward the middle when it's wandered far)
-    let base: [number, number] = norm2([tip.d[0] * 0.6 - j.x / 260, tip.d[1] * 0.6 + 0.4]);
+    // (it goes on across the hill as much as up it: turned to one side of straight up, then, more
+    // often than not, the other, as a way up a hillside zigzags; back toward the middle if it's wandered far)
+    const was = Math.sign(tip.d[0]) || (r() < 0.5 ? 1 : -1);
+    let side = r() < 0.68 ? -was : was;
+    if (j.x > 45) side = -1; else if (j.x < -45) side = 1;
+    const ang = side * ramp(r, 0.4, 1.05);
+    let base: [number, number] = [Math.sin(ang), Math.cos(ang)];
+    // (a fork: its two ways either side of straight up)
+    const forkBase: [number, number] = norm2([tip.d[0] * 0.3 - j.x / 300, 1]);
     if (j.gate) base = [-j.face[0], -j.face[1]];
     const early = j.n < 2;
     const roll = r();
@@ -184,8 +188,8 @@ export class Ways {
     if (!j.gate && roll >= pMeet + pEnd && roll < pMeet + pEnd + pFork) {
       // (it forks: two ways, one to either side)
       const s = ramp(r, 0.45, 0.85), t = ramp(r, 0.45, 0.85);
-      const a = this.reach(tip, rot(base, s), r, null, 34, 64);
-      const b = this.reach(tip, rot(base, -t), r, null, 34, 64);
+      const a = this.reach(tip, rot(forkBase, s + 0.15), r, null, 34, 64);
+      const b = this.reach(tip, rot(forkBase, -t - 0.15), r, null, 34, 64);
       if (a || b) { this.spur(tip, base, r); return; }
     }
     // (it goes on; now and then through a gate)
@@ -213,7 +217,7 @@ export class Ways {
     for (let k = 0; k < 7; k++) {
       let dir = k === 0 ? d : rot(d, (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 0.22);
       if (j.gate) dir = d;
-      if (dir[1] < (spur ? 0.22 : 0.32)) dir = norm2([Math.sign(dir[0]) || 1, spur ? 0.22 : 0.32]);
+      if (dir[1] < (spur ? 0.22 : 0.26)) dir = norm2([Math.sign(dir[0]) || 1, spur ? 0.22 : 0.26]);
       const L = ramp(r, L0, L1) * (k > 3 ? 0.8 : 1);
       const to = this.junction(j.x + dir[0] * L, j.z + dir[1] * L, end);
       to.gate = gate && !end;
@@ -283,28 +287,44 @@ export class Ways {
     const a: V3 = from.gate ? [from.x - from.face[0] * from.reach, 0, from.z - from.face[1] * from.reach] : [...a0];
     const b: V3 = to.reach ? [to.x + to.face[0] * to.reach, 0, to.z + to.face[1] * to.reach] : [...b1];
     a[1] = this.hill(a[2]); b[1] = this.hill(b[2]);
-    const dx = b[0] - a[0], dz = b[2] - a[2], L = Math.hypot(dx, dz) || 1;
-    const bb = bend * (hash(this.seed, from.n, Math.round(to.x * 10), 0xbe) % 1000 / 1000 - 0.5) * 0.4 * L;
-    let c: V3 = [(a[0] + b[0]) / 2 + (dz / L) * bb, 0, (a[2] + b[2]) / 2 - (dx / L) * bb];
-    // (into a building's front, out of a gate's back: its curve meets the straight on its line)
-    if (to.reach) c = [b[0] + to.face[0] * L * 0.4, 0, b[2] + to.face[1] * L * 0.4];
-    if (from.gate) c = [a[0] - from.face[0] * L * 0.4, 0, a[2] - from.face[1] * L * 0.4];
-    c[2] = Math.max(Math.min(a[2], b[2]) + 0.3, Math.min(Math.max(a[2], b[2]) - 0.3, c[2]));
-    c[1] = this.hill(c[2]);
+    const dx = b[0] - a[0], dz = b[2] - a[2], L = Math.hypot(dx, dz) || 1, px = dz / L, pz = -dx / L;
+    // (it wanders: swinging to one side and the other as it goes, in long bends and shorter ones, its
+    // own; straight where it climbs a building's stair, and where it leaves a gate's)
+    const mr = seeded(hash(this.seed, from.n, Math.round(to.x * 10), Math.round(to.z * 10), 0xbe));
+    const A = [ramp(mr, -0.24, 0.24), ramp(mr, -0.12, 0.12), ramp(mr, -0.07, 0.07), ramp(mr, -0.04, 0.04)].map((k) => k * L * bend * (spur ? 0.6 : 1));
+    const ph = ramp(mr, 0, 1);
+    const env = (t: number) => (to.reach ? 1 - smooth(0.55, 0.92, t) : 1) * (from.gate ? smooth(0.08, 0.45, t) : 1);
+    const off = (t: number) => (A[0] * Math.sin(Math.PI * t) + A[1] * Math.sin(2 * Math.PI * t + ph * 0.6) * Math.sin(Math.PI * t) * 1.6 + A[2] * Math.sin(3 * Math.PI * t) + A[3] * Math.sin(5 * Math.PI * t)) * env(t);
     void r;
-    const w: Way = { id: '', n: -1, from, to, a, c, b, a0, b1, head: 0, tail: 0, len: 0, samp: new Float64Array(N + 1), stairs: [], spur, box: [0, 0, 0, 0], pts: new Float64Array(0) };
+    const w: Way = { id: '', n: -1, from, to, a, c: a, b, a0, b1, head: 0, tail: 0, len: 0, samp: new Float64Array(0), stairs: [], spur, box: [0, 0, 0, 0], pts: new Float64Array(0) };
     const head = Math.hypot(a[0] - a0[0], a[2] - a0[2]), tail = Math.hypot(b1[0] - b[0], b1[2] - b[2]);
     w.head = head; w.tail = tail;
-    w.box = [Math.min(a0[0], a[0], b[0], c[0], b1[0]), Math.max(a0[0], a[0], b[0], c[0], b1[0]), Math.min(a0[2], a[2], b[2], b1[2]), Math.max(a0[2], a[2], b[2], b1[2])];
-    let len = 0, q = a;
-    for (let t = 1; t <= N; t++) { const p = bez(a, c, b, t / N); len += Math.hypot(p[0] - q[0], p[2] - q[2]); w.samp[t] = len; q = p; }
-    w.len = head + len + tail;
     const P: number[] = [];
-    if (head > 0) P.push(a0[0], a0[2], 0);
-    for (let t = 0; t <= N; t++) { const p = bez(a, c, b, t / N); P.push(p[0], p[2], head + w.samp[t]); }
-    if (tail > 0) P.push(b1[0], b1[2], w.len);
+    let len = 0, qx = a0[0], qz = a0[2];
+    const push = (x: number, z: number) => { len += Math.hypot(x - qx, z - qz); P.push(x, z, len); qx = x; qz = z; };
+    P.push(a0[0], a0[2], 0);
+    if (head > 0) push(a[0], a[2]);
+    for (let t = 1; t <= N; t++) { const f = t / N, o = off(f); push(a[0] + dx * f + px * o, a[2] + dz * f + pz * o); }
+    if (tail > 0) push(b1[0], b1[2]);
+    w.len = len;
     w.pts = new Float64Array(P);
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < P.length; i += 3) { x0 = Math.min(x0, P[i]); x1 = Math.max(x1, P[i]); z0 = Math.min(z0, P[i + 1]); z1 = Math.max(z1, P[i + 1]); }
+    w.box = [x0, x1, z0, z1];
+    // (its middle, for whoever wants one)
+    const m = this.atPts(w, len / 2);
+    w.c = [m.x, this.hill(m.z), m.z];
     return w;
+  }
+  /** where on a way's line, so far along it, and its going there */
+  private atPts(w: Way, u: number): { x: number; z: number; dx: number; dz: number } {
+    const P = w.pts, n = P.length / 3;
+    u = Math.max(0, Math.min(w.len, u));
+    let lo = 0, hi = n - 2;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (P[m * 3 + 2] <= u) lo = m; else hi = m - 1; }
+    const i = lo * 3, du = P[i + 5] - P[i + 2] || 1, f = Math.max(0, Math.min(1, (u - P[i + 2]) / du));
+    const ddx = P[i + 3] - P[i], ddz = P[i + 4] - P[i + 1], l = Math.hypot(ddx, ddz) || 1;
+    return { x: P[i] + ddx * f, z: P[i + 1] + ddz * f, dx: ddx / l, dz: ddz / l };
   }
   /** Where along a way it climbs in steps: where its height, as the hill gives it, rises steeply for its going. */
   private stairsOf(w: Way): StairRun[] {
@@ -332,31 +352,12 @@ export class Ways {
   }
 
   // ─── along a way ───────────────────────────────────────────────────────────────────────────────
-  /** A way's t on its curve, so far along it. */
-  tAt(w: Way, u: number): number {
-    const S = w.samp;
-    u -= w.head;
-    if (u <= 0) return 0;
-    if (u >= S[N]) return 1;
-    let k = 1;
-    while (S[k] < u) k++;
-    return (k - 1 + (u - S[k - 1]) / (S[k] - S[k - 1] || 1)) / N;
-  }
-  /** Where a way is, so far along it: its middle, standing on it (on a step, the step's tread), and its going there. `bare`: the curve only. */
+  /** Where a way is, so far along it: its middle, standing on it (on a step, the step's tread), and its going there. `bare`: the hill's height. */
   at(w: Way, u: number, bare = false): { p: V3; dir: [number, number] } {
-    const straight = (p0: V3, p1: V3, f: number) => {
-      const dx = p1[0] - p0[0], dz = p1[2] - p0[2], l = Math.hypot(dx, dz) || 1;
-      const p: V3 = [p0[0] + dx * f, 0, p0[2] + dz * f];
-      p[1] = bare ? this.hill(p[2]) : this.surface(w, u, p[2]);
-      return { p, dir: [dx / l, dz / l] as [number, number] };
-    };
-    if (w.head > 0 && u < w.head) return straight(w.a0, w.a, Math.max(0, u / w.head));
-    if (w.tail > 0 && u > w.len - w.tail) return straight(w.b, w.b1, Math.min(1, (u - (w.len - w.tail)) / w.tail));
-    const t = this.tAt(w, u);
-    const p = bez(w.a, w.c, w.b, t), p2 = bez(w.a, w.c, w.b, Math.min(1, t + 0.01)), p1 = bez(w.a, w.c, w.b, Math.max(0, t - 0.01));
-    const dx = p2[0] - p1[0], dz = p2[2] - p1[2], l = Math.hypot(dx, dz) || 1;
-    if (!bare) p[1] = this.surface(w, u, p[2]);
-    return { p, dir: [dx / l, dz / l] };
+    const q = this.atPts(w, u);
+    const p: V3 = [q.x, 0, q.z];
+    p[1] = bare ? this.hill(q.z) : this.surface(w, u, q.z);
+    return { p, dir: [q.dx, q.dz] };
   }
   /** The height one stands at on a way, so far along it: on a stair, the tread; else the hill. */
   surface(w: Way, u: number, z?: number): number {

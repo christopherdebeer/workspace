@@ -22,15 +22,18 @@ all across it.
 
 On it, the ways grow from the foot of the hill like a tree laid on the slope: a branch at a time,
 always the lowest first. From where it's reached, each branch goes on (a long reach, 34 to 64
-metres, up and across the hill, turning a little), or forks in two, the forks heading off to
-either side; now and then a short spur leaves it, up to a building or a clearing of its own on the
+metres, slanting well across the hill, as often back the way it came across as on, so a way
+climbs the hill in long zigzags, pulled back toward the middle when it strays far to one side), or
+forks in two, the forks heading off to either side; now and then a short spur leaves it, up to a building or a clearing of its own on the
 slope; now and then a branch ends, at a building or a clearing. Rarely, two branches that have
 drawn near meet again. There are never more than three branches at once, and never fewer than
 one: with one, it forks more often; with three, a branch is more likely to end. No way crosses
 another, nor runs within eight metres of one, and no two junctions come within sixteen metres;
 where a branch has no room to go on, it ends there, in a quiet clearing.
 
-Each way takes the hill's height as it goes: where its going is steep (the hill steep there, or
+No reach is straight: each wanders along its way, a long sway to one side, a turn back, smaller
+bends over that, all its own, settling straight only where it comes to a building's stair or
+leaves a gate's back. Each way takes the hill's height as it goes: where its going is steep (the hill steep there, or
 the way heading straight up it) it climbs in steps, each a pale slab of its own, ragged at its
 ends, turning as the way bends, now and then a short wall of squared blocks beside it; where it's
 gentle, it's a trail, a few flat stones and a worn line of grey strokes. The ground just downhill
@@ -40,8 +43,8 @@ front of it. All of it from the seed: the same seed, the same hillside.
 The world is made in tiles, sixteen metres across and twelve deep, about wherever the walker is,
 as far across as the view reaches, as they come into view and dropped as they're left, each from
 the seed and its place: the ground, the steps and stones, standing stones along the ways and in
-outcrops behind the trees, tufts of grass, the trees, fallen blossom, and the buildings. No crown
-hangs right over a way.
+outcrops behind the trees, tufts of grass, the trees, fallen blossom, and the buildings. Crowns
+stand as they grow, over a way too: nothing is cut out of a crown to show what's under it.
 
 ## The temples
 
@@ -132,10 +135,13 @@ there, just past its end; at some forks, in the space up the hill between the fo
 about a quarter of the longer ways, on whichever side has room. Each is clear of every way and
 well apart from the others. Each holds a cast from Changes, from the seed and the station's
 number: six lines, each as three coins fall, so old lines come as often as they would. The cast is
-laid in its clearing as a feature of the hill, there for good: its six lines are slabs of stone set
-in the ground, the first nearest the foot of the hill, a yin line in two, its moving lines
-lacquered vermilion; behind them, up the hill, a low stone tablet with the hexagram's name cut in
-it, and, if it moves, 之 and the name of what it becomes.
+written on the hillside in its clearing, as a print sets its verse in the paper it keeps open: the
+hexagram's six lines in ink, its moving lines vermilion; its name down beside it, and, if it
+moves, 之 and the name of what it becomes; under them, small, the numbers and names in English.
+It's held to its place on the hill, moving with it as the view moves, and only reads (a tap on it
+walks, like a tap on the hillside). Beside it, a small built thing ties it to the place: a cairn of
+flat stones, each smaller than the last (always where Mountain or Earth is in the cast), or a
+wayside shrine, a stone post with a little white niche under a roof of teal tiles.
 
 The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
 stones along its upper edge; Wind, a grove close behind; Thunder, one tree at its far side,
@@ -161,10 +167,11 @@ things along the way should fall.
 `?seed=…` a hillside; `?preview` climbs by itself, quietly. The address keeps the seed and where the walker
 is (`?at=way:metres`), updated as they go, so a reload or a shared link comes back to the same
 place.
-`?seed=1&at=w16:48&review` freezes the walker, camera and falling petals for a repeatable comparison
+`?seed=1&at=w3:40&review` freezes the walker, camera and falling petals for a repeatable comparison
 at full rendering resolution. The footer identifies the pass, seed and where on the ways. Remove
-`review` to walk normally. On seed 1: `at=w2:45` (a fork), `at=w6:12` (a pavilion up a spur), `at=w16:48` (a gate), `at=w19:8`
-(a pagoda), `at=w40:9` (a hall).
+`review` to walk normally. On seed 1: `at=w3:40` (a fork), `at=w9:14` (a pavilion), `at=w11:20`
+(a pagoda), `at=w22:9` (a cast where a branch ends), `at=w21:46` (a gate), `at=w62:9` (a hall).
+(The ways' ids follow from how the hill grows, so these change when it does.)
 
 
 Composition pass 2 broke crown edges into irregular sprays and brought clipped stone treads,

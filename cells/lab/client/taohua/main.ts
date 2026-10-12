@@ -12,8 +12,8 @@
 import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
 import { RISE, WIDTH, Ways, type V3, type Way } from './ways';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
-import { stationsNear } from './compose';
-import { hexagrams, moving } from '../changes/model';
+import { stationsNear, type Station } from './compose';
+import { hexagrams, identify, moving } from '../changes/model';
 import { ATLAS, BAND, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
 
 const params = new URLSearchParams(location.search);
@@ -38,9 +38,60 @@ try { R = new Renderer(canvas); } catch (e) {
 
 const ways = new Ways(seed);
 
+// ─── Changes: at each station a cast, written on the hillside in the space kept for it ──────────
+// (the hexagram drawn in ink, its moving lines in vermilion; its name, and if it moves, 之 and the
+// name of what it becomes; their titles, small. Written on the hill where it is, it moves with the
+// hill; it isn't a button)
+const casts = new Map<number, HTMLElement>();
+function castEl(st: Station) {
+  let el = casts.get(st.i);
+  if (el) return el;
+  const hex = identify(st.lines), moves = st.lines.some(moving), rel = moves ? identify(st.lines, true) : null;
+  const a = document.createElement('div');
+  a.className = 'cast';
+  a.setAttribute('role', 'img');
+  a.setAttribute('aria-label', `${hex.number} ${hex.title}${rel ? `, becoming ${rel.number} ${rel.title}` : ''}`);
+  // (the figure: six lines, the first at the bottom; a yin line broken)
+  const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 60 64'); svg.setAttribute('class', 'gua');
+  st.lines.forEach((v, k) => {
+    const y = 58 - k * 10.4, col = moving(v) ? '#b8382c' : '#2b2420';
+    const bar = (x0: number, x1: number) => { const r = document.createElementNS(NS, 'rect'); r.setAttribute('x', `${x0}`); r.setAttribute('y', `${y - 3.4}`); r.setAttribute('width', `${x1 - x0}`); r.setAttribute('height', '6.8'); r.setAttribute('fill', col); svg.appendChild(r); };
+    if (v % 2) bar(2, 58); else { bar(2, 25); bar(35, 58); }
+  });
+  a.appendChild(svg);
+  const names = document.createElement('div');
+  names.className = 'names';
+  names.textContent = rel ? `${hex.han}之${rel.han}` : hex.han;
+  a.appendChild(names);
+  const en = document.createElement('div');
+  en.className = 'en';
+  en.textContent = `${hex.number} · ${hex.title}${rel ? `  →  ${rel.number} · ${rel.title}` : ''}`;
+  a.appendChild(en);
+  document.body.appendChild(a);
+  casts.set(st.i, a);
+  return a;
+}
 let titleBox = $('title').getBoundingClientRect();
 addEventListener('resize', () => { titleBox = $('title').getBoundingClientRect(); });
 void document.fonts?.ready.then(() => { titleBox = $('title').getBoundingClientRect(); });
+function placeCasts(z: number) {
+  const near = stationsNear(ways, seed, z - 30, z + 90);
+  const keep = new Set<number>();
+  for (const st of near) {
+    keep.add(st.i);
+    const el = castEl(st);
+    // (written a little toward the uphill side of the space: what its lower trigram lays on the ground lies below it)
+    const q = project([st.c[0], st.c[1], st.c[2] + st.rz * 0.2]);
+    // (held to its place on the hill, as the hill moves)
+    el.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) translate(-50%, -50%)`;
+    // (shown while it's on the print; not while it passes under the title, which keeps its place)
+    const b = el.getBoundingClientRect();
+    const under = [titleBox, $('climb').getBoundingClientRect(), document.querySelector('nav')!.getBoundingClientRect()].some((t) => b.left < t.right + 8 && b.right > t.left - 8 && b.top < t.bottom + 8 && b.bottom > t.top - 8);
+    el.classList.toggle('on', q[2] > 0 && q[1] > -120 && q[1] < innerHeight + 120 && !under);
+  }
+  for (const [i, el] of casts) if (!keep.has(i)) { el.remove(); casts.delete(i); }
+}
 function showName(i: number) { $('name').textContent = NAMES[i % NAMES.length]; titleBox = $('title').getBoundingClientRect(); }
 
 // ─── the plaques: each temple's name in gold on its dark board, red framed ──────────────────────
@@ -475,6 +526,7 @@ function frame(now: number) {
   const bands = [...live.values()];
   lastVP = vp;
   if (ink) brushPath(pos);
+  placeCasts(pos[2]);
   // (the mark where they're going: a ring of vermilion on its place on the path, for a moment, as the tap is answered)
   const mark = $('mark'), ma = (performance.now() - markAt) / 1000;
   if (goal !== null && ma < 1.1) {
