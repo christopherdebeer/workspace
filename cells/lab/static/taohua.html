@@ -29,16 +29,33 @@
     #hint { position: fixed; left: 0; right: 0; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 8px); text-align: center; font-family: "Iowan Old Style", Palatino, Georgia, serif; font-style: italic; font-size: 15px; opacity: 0; transition: opacity .8s; pointer-events: none; text-shadow: 0 0 8px rgba(239,230,211,1); }
     #hint.on { opacity: .85; }
     .preview nav, .preview #hint, .preview #climb { display: none; }
+    /* where a tap on the path sends the walker: a ring of vermilion ink, left open, as a brush draws it; it fades when they arrive */
+    #mark { position: fixed; left: 0; top: 0; width: 46px; height: 24px; margin: -12px 0 0 -23px; pointer-events: none; opacity: 0; transition: opacity .5s; }
+    #mark.on { opacity: .9; }
+    #mark svg { width: 100%; height: 100%; overflow: visible; animation: breathe 1.8s ease-in-out infinite; }
+    @keyframes breathe { 50% { transform: scale(1.12); } }
+    /* a tap: a ripple of ink where the finger touched; vermilion where it found the path, a faint grey where it didn't */
+    .ripple { position: fixed; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid #b8382c; pointer-events: none; animation: ripple .55s ease-out forwards; }
+    .ripple.miss { border-color: rgba(60,50,45,.35); border-width: 1.5px; }
+    @keyframes ripple { from { transform: scale(.4); opacity: .9; } to { transform: scale(3.2); opacity: 0; } }
+    /* the composition view: the text's places shown as the spaces they take, so they can be judged with the masses */
+    #brush { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+    .ink #brush { display: block; }
+    .ink #poem, .ink #title { outline: 1.5px dashed rgba(176,52,40,.7); outline-offset: 6px; }
+    .ink #poem *, .ink #title * { opacity: .35; }
+    @media (prefers-reduced-motion: reduce) { #mark svg { animation: none; } .ripple { animation-duration: .01s; } }
     .preview #poem { font-size: 14px; } .preview #big { font-size: 56px; } .preview #name { font-size: 20px; }
     .nogl::after { content: "This needs WebGL2."; position: fixed; inset: 0; display: grid; place-items: center; }
   </style>
 </head>
 <body>
   <canvas id="print"></canvas>
+  <canvas id="brush"></canvas>
   <nav><a href="/">&larr; lab</a></nav>
   <div id="poem"><span class="l1"></span><span class="l2"></span><span class="by"></span><span class="seal">春山</span></div>
   <div id="title"><span id="name"></span><span id="big">桃花</span><span class="seal">桃源</span></div>
   <div id="climb">0</div>
+  <div id="mark"><svg viewBox="-24 -12 48 24"><path d="M 19 -4 A 20 9.5 0 1 1 9 -8.4" fill="none" stroke="#b8382c" stroke-width="2.6" stroke-linecap="round"/><path d="M 10 -8 A 20 9.5 0 0 1 17 -5.6" fill="none" stroke="#b8382c" stroke-width="1.2" stroke-linecap="round" opacity=".6"/></svg></div>
   <div id="hint">tap the path to walk there &middot; drag to look about</div>
   <script type="module" src="{{app}}"></script>
 </body>

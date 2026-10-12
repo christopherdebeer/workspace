@@ -17,7 +17,11 @@ import { BAND, INK, M, Mesh, NAMES, SPAN, ground, makeBand, templesNear, type Ba
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
 const review = params.has('review');
-const PASS = 'composition-3';
+/** the composition view: the print as broad strokes only, stepped back, to judge its arrangement on its own (`?ink`, or C) */
+let ink = params.has('ink');
+const setInk = (on: boolean) => { ink = on; document.body.classList.toggle('ink', on); };
+setInk(ink);
+const PASS = 'composition-4';
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
@@ -81,42 +85,53 @@ plaques();
 void document.fonts?.load('96px "Ma Shan Zheng"', NAMES.join('')).then(() => plaques());
 
 // ─── the walker: a straw hat, a grey-blue robe with wide sleeves and a red sash, a tall staff ─────
-const walker = (() => {
-  const m = new Mesh();
+// (in parts, each placed by its own turning: the body, which sways and leans as they walk; the head
+// under its hat, which looks about when they stand; the free arm, which swings; the shoes; the
+// staff; and their shadow on the ground, which does none of that)
+const part = (build: (m: Mesh) => void) => { const m = new Mesh(); build(m); return R.mesh(m.v.out()); };
+const body = part((m) => {
   // (the robe: full at the hem, narrowing to the shoulders; the sash about it)
   m.tube([0, 0.03, 0], [0, 0.82, 0], 0.31, 0.21, INK.robe, M.robe, 12);
   m.tube([0, 0.82, 0], [0, 1.34, 0], 0.21, 0.16, INK.robe, M.robe, 12);
   m.tube([0, 0.76, 0], [0, 0.9, 0], 0.225, 0.22, INK.red, M.red, 12);
   m.tube([0.05, 0.8, 0.2], [0.08, 0.45, 0.24], 0.04, 0.03, INK.red, M.red, 4);
-  // (wide sleeves, the arms bent: one to the staff, one hanging)
+  // (the arm to the staff, its wide sleeve, the hand)
   m.tube([0.15, 1.28, 0], [0.36, 1.0, 0.12], 0.07, 0.13, INK.robe, M.robe, 8);
-  m.tube([-0.15, 1.28, 0], [-0.27, 0.92, -0.02], 0.07, 0.14, INK.robe, M.robe, 8);
   m.tube([0.38, 0.99, 0.13], [0.43, 0.96, 0.15], 0.05, 0.045, INK.skin, M.skin, 6);
+});
+const head = part((m) => {
   // (the head, the black hair gathered behind under the hat; the hat a wide shallow cone)
   m.tube([0, 1.32, 0], [0, 1.56, 0.02], 0.1, 0.09, INK.skin, M.skin, 8);
   m.tube([0, 1.36, -0.05], [0, 1.56, -0.04], 0.095, 0.09, INK.dark, M.dark, 8);
   m.tube([0, 1.52, 0], [0, 1.76, 0], 0.44, 0.02, INK.hat, M.hat, 16);
-  // (their shadow: a stroke or two of grey, off to the side away from the light)
+});
+const freeArm = part((m) => m.tube([-0.15, 1.28, 0], [-0.25, 0.9, 0.02], 0.07, 0.14, INK.robe, M.robe, 8));
+const shadow = part((m) => {
+  // (a stroke or two of grey, off to the side away from the light)
   for (let k = 0; k < 14; k++) {
     const a0 = (k / 14) * Math.PI * 2, a1 = ((k + 1) / 14) * Math.PI * 2, cx = -0.5, rx = 0.6, rz = 0.24;
     m.v.push(cx, 0.03, 0.05, 0, 1, 0, 0, 0, 0.3, M.shade);
     m.v.push(cx + Math.cos(a1) * rx, 0.03, 0.05 + Math.sin(a1) * rz, 0, 1, 0, Math.cos(a1), Math.sin(a1), 0.3, M.shade);
     m.v.push(cx + Math.cos(a0) * rx, 0.03, 0.05 + Math.sin(a0) * rz, 0, 1, 0, Math.cos(a0), Math.sin(a0), 0.3, M.shade);
   }
-  return R.mesh(m.v.out());
-})();
-// (what moves as they walk, each drawn by its own placing: a shoe, the other; the staff, taller than they are, swung forward and planted)
-const shoe = (sx: number) => { const m = new Mesh(); m.tube([sx * 0.09, 0.03, -0.05], [sx * 0.09, 0.03, 0.12], 0.045, 0.04, INK.dark, M.dark, 6); return R.mesh(m.v.out()); };
+});
+const shoe = (sx: number) => part((m) => m.tube([sx * 0.09, 0.03, -0.05], [sx * 0.09, 0.03, 0.12], 0.045, 0.04, INK.dark, M.dark, 6));
 const shoes = [shoe(-1), shoe(1)];
-const staff = (() => { const m = new Mesh(); m.tube([0.46, 2.15, 0.15], [0.46, -0.02, 0.15], 0.024, 0.024, INK.trunk, M.trunk, 5); return R.mesh(m.v.out()); })();
-/** the hand that holds the staff: it turns about there */
-const HAND: V3 = [0.46, 0.96, 0.15];
+const staff = part((m) => m.tube([0.46, 2.15, 0.15], [0.46, -0.02, 0.15], 0.024, 0.024, INK.trunk, M.trunk, 5));
+/** where each turns: the hand that holds the staff; the neck; the free shoulder */
+const HAND: V3 = [0.46, 0.96, 0.15], NECK: V3 = [0, 1.32, 0], SHOULDER: V3 = [-0.15, 1.28, 0];
+/** matrices: a move; a turn about x (forward), y (about), z (sideways); about a point */
+const Tm = (x: number, y: number, z: number): M4 => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
+const Rx = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]); };
+const Ry = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]); };
+const Rz = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); };
+const about = (p: V3, r: M4): M4 => mulM(Tm(p[0], p[1], p[2]), mulM(r, Tm(-p[0], -p[1], -p[2])));
 
 // ─── the bands of the hill, made as they're needed, dropped behind ───────────────────────────────
 interface Live { band: Band; solid: Drawn; puffs: Drawn; petals: Drawn }
 const live = new Map<number, Live>();
 function keepBands(z: number) {
-  const lo = Math.floor((z - 24) / BAND), hi = Math.floor((z + 70) / BAND);
+  const lo = Math.floor((z - (ink ? 40 : 24)) / BAND), hi = Math.floor((z + (ink ? 130 : 70)) / BAND);
   for (const [j, l] of live) if (j < lo - 1 || j > hi + 1) { R.drop(l.solid); R.drop(l.puffs); R.drop(l.petals); live.delete(j); }
   // (one band a frame at most, nearest first, so a climb never stutters)
   for (let j = Math.floor(z / BAND); j <= hi; j++) if (!live.has(j)) { add(j); return; }
@@ -145,7 +160,7 @@ let fallDrawn: Drawn | null = null;
 
 // ─── walking ─────────────────────────────────────────────────────────────────────────────────────
 // (`?at=…`: start so far up the path, for looking at a stretch of it)
-let s = Math.max(2, Number(params.get('at')) || 2), speed = 0, want = 0, phase = 0, stride = 0;
+let s = Math.max(2, Number(params.get('at')) || 2), speed = 0, want = 0, phase = 0, stride = 0, facing = NaN;
 const WALK = 1.25;
 /** Where the walker stands at s: on the step under them, lifting onto the next as they come to its edge. */
 function stand(sAt: number): { p: V3; dir: [number, number] } {
@@ -191,9 +206,18 @@ function pick(px: number, py: number): number | null {
   }
   return best;
 }
+/** a ripple of ink where a tap touched: vermilion if it found the path, faint grey if not */
+function ripple(x: number, y: number, hit: boolean) {
+  const el = document.createElement('div');
+  el.className = hit ? 'ripple' : 'ripple miss';
+  el.style.left = `${x}px`; el.style.top = `${y}px`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 700);
+}
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   const at = pick(e.clientX, e.clientY);
+  ripple(e.clientX, e.clientY, at !== null);
   downAt = { x: e.clientX, y: e.clientY, id: e.pointerId, on: at !== null };
   if (at !== null) goal = at;
   looking = false;
@@ -218,7 +242,10 @@ canvas.addEventListener('pointermove', (e) => {
 const up = (e: PointerEvent) => { if (downAt?.id === e.pointerId) { downAt = null; looking = false; } };
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
-addEventListener('keydown', (e) => { keys.add(e.key.toLowerCase()); goal = null; $('hint').classList.remove('on'); });
+addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 'c') { setInk(!ink); return; }
+  keys.add(e.key.toLowerCase()); goal = null; $('hint').classList.remove('on');
+});
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => { keys.clear(); });
 
@@ -235,7 +262,7 @@ function camera(p: V3, dt: number) {
   // (looked about by hand, it comes back after a while)
   if (!looking && performance.now() - lookAt0 > 2500) { lookYaw *= Math.exp(-dt * 1.2); lookPitch *= Math.exp(-dt * 1.2); }
   const aspect = canvas.width / canvas.height;
-  const dist = (aspect < 1 ? 56 : 44) + (preview ? 6 : 0);
+  const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (ink ? 1.8 : 1);
   const pitch = 0.76 + lookPitch, yaw = lookYaw;
   const t: V3 = [cam.x + (cam.t[0] - p[0]) * 0, cam.t[1], cam.t[2]];
   t[0] = cam.x;
@@ -243,8 +270,41 @@ function camera(p: V3, dt: number) {
   return { eye, t };
 }
 
+// ─── the composition view's brush: the path as one stroke, thick and thin, dry where it's a trail;
+// the walker a dot of vermilion; where they're going, a ring ───────────────────────────────────────
+const brush = document.getElementById('brush') as HTMLCanvasElement;
+function brushPath(pos: V3) {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (brush.width !== W || brush.height !== H) { brush.width = W; brush.height = H; }
+  const g = brush.getContext('2d')!;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, innerWidth, innerHeight);
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  // (each piece of the path its own stroke, so a stair reads heavier than a trail)
+  let prev: [number, number, number] | null = null;
+  for (let si = Math.max(1, s - 60); si < s + 160; si += 0.5) {
+    const at = path.at(si), q = project(at.p);
+    const f = path.flightAt(si);
+    if (prev && q[2] > 0 && prev[2] > 0) {
+      const e = project([at.p[0] + at.dir[1] * WIDTH * 0.5, at.p[1], at.p[2] - at.dir[0] * WIDTH * 0.5]);
+      const wpx = Math.min(12, Math.max(1.5, Math.hypot(e[0] - q[0], e[1] - q[1]) * 1.4));
+      const trail = f.kind === 'trail';
+      g.strokeStyle = trail ? '#9c948a' : '#2a2420';
+      g.lineWidth = wpx * (trail ? 0.45 : 1) * (0.85 + 0.3 * Math.sin(si * 0.7));
+      g.setLineDash(trail ? [wpx * 0.6, wpx * 0.5] : []);
+      g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(q[0], q[1]); g.stroke();
+    }
+    prev = q;
+  }
+  g.setLineDash([]);
+  const w = project([pos[0], pos[1] + 0.8, pos[2]]);
+  g.fillStyle = '#b8382c';
+  g.beginPath(); g.arc(w[0], w[1], 5, 0, Math.PI * 2); g.fill();
+}
+
 // ─── the frame ───────────────────────────────────────────────────────────────────────────────────
-let last = performance.now(), time = 0;
+let last = performance.now(), time = 0, idleLook = 0;
 let reached = 0;
 function frame(now: number) {
   const dt = review ? 0 : Math.max(0, Math.min(0.05, (now - last) / 1000));
@@ -260,13 +320,17 @@ function frame(now: number) {
     if (Math.abs(togo) < 0.08 && !downAt) { s = goal; speed = 0; goal = null; }
   } else want = preview ? 0.8 : keys.has('arrowup') || keys.has('w') ? 1 : keys.has('arrowdown') || keys.has('s') ? -0.7 : 0;
   speed += (want - speed) * (1 - Math.exp(-dt * 4));
-  if (goal !== null && Math.abs(goal - s) < Math.abs(speed * WALK * dt)) { s = goal; speed = 0; } else s = Math.max(1, s + speed * WALK * dt);
+  if (goal !== null && Math.abs(goal - s) < Math.abs(speed * WALK * dt)) { s = goal; speed = 0; } else s = Math.max(1, s + speed * WALK * dt * (1 + 0.14 * Math.sin(phase * 2 - 0.8) * stride));
   phase += Math.abs(speed) * WALK * dt * 4.4;
   stride += ((Math.abs(speed) > 0.05 ? 1 : 0) - stride) * (1 - Math.exp(-dt * 5));
   const st = stand(s);
+  if (Number.isNaN(facing)) facing = Math.atan2(st.dir[0], st.dir[1]);
   const bob = 0.03 * Math.abs(Math.sin(phase)) * stride;
   const pos: V3 = [st.p[0], st.p[1] + bob, st.p[2]];
-  const yaw = Math.atan2(st.dir[0], st.dir[1]) + (speed < -0.05 ? Math.PI : 0);
+  // (they turn to face their way, not at once)
+  const want_yaw = Math.atan2(st.dir[0], st.dir[1]) + (speed < -0.05 ? Math.PI : 0);
+  facing += Math.atan2(Math.sin(want_yaw - facing), Math.cos(want_yaw - facing)) * (1 - Math.exp(-dt * 5));
+  const yaw = facing;
   path.extend(pos[2] + 80);
   keepBands(pos[2]);
 
@@ -280,7 +344,7 @@ function frame(now: number) {
   for (const tp of templesNear(path, pos[2] - 8, pos[2] + 8)) if (!tp.gate) { const d = Math.hypot(tp.c[0] - pos[0], tp.c[2] - pos[2]); lean = (tp.c[0] - pos[0]) * 0.45 * (1 - smoothstep(9, 16, d)); }
   const { eye, t } = camera([pos[0] + lean, pos[1], pos[2]], dt);
   const aspect = W / H;
-  const near = 1, far = 160;
+  const near = 1, far = ink ? 260 : 160;
   const fov = aspect < 1 ? 0.56 : 0.42;
   const v = lookAt(eye, t);
   const vp = mulM(perspective(fov, aspect, near, far), v.m);
@@ -299,17 +363,32 @@ function frame(now: number) {
   R.update(fallDrawn, fall, 7);
 
   const c = Math.cos(yaw), sn = Math.sin(yaw);
-  const model: M4 = new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1], pos[2], 1]);
-  // (each step a foot forward, the other back; the staff swung forward with one, planted, and the walker passing it)
+  const ground_: M4 = new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1] - bob, pos[2], 1]);
+  // (the body: a sway from foot to foot, a lean into the climb, a little twist with each step; still, it breathes)
   const sw = Math.sin(phase) * stride;
-  const T = (x: number, y: number, z: number): M4 => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
-  const shoeAt = (k: number) => mulM(model, T(0, Math.max(0, Math.cos(phase) * (k ? 1 : -1)) * 0.05 * stride, (k ? 1 : -1) * sw * 0.15));
-  const th = -0.42 * Math.sin(phase + 0.6) * stride, ct = Math.cos(th), st2 = Math.sin(th);
-  const staffAt = mulM(model, mulM(T(HAND[0], HAND[1], HAND[2]), mulM(new Float32Array([1, 0, 0, 0, 0, ct, st2, 0, 0, -st2, ct, 0, 0, 0, 0, 1]), T(-HAND[0], -HAND[1], -HAND[2]))));
+  const climbing = Math.max(0, Math.min(1, (st.p[1] - stand(s - 0.5).p[1]) * 4));
+  const model: M4 = mulM(new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1], pos[2], 1]),
+    mulM(Ry(0.06 * sw), mulM(Rz(0.045 * sw), mulM(Rx(0.05 * stride + 0.06 * climbing * stride), Tm(0, 0.006 * Math.sin(time * 1.7) * (1 - stride), 0)))));
+  // (the head: turned back a little against the body's twist as they walk; standing, it looks about, now one way, now another)
+  idleLook += ((1 - stride) * (0.5 * Math.sin(time * 0.31) + 0.35 * Math.sin(time * 0.53 + 1.3)) - idleLook) * (1 - Math.exp(-dt * 1.5));
+  const headAt = mulM(model, about(NECK, mulM(Ry(-0.05 * sw + idleLook), Rx(0.03 * Math.sin(phase * 2) * stride))));
+  // (the free arm swings against the step)
+  const armAt = mulM(model, about(SHOULDER, Rx(-0.4 * sw)));
+  // (each step a foot forward, the other back; the staff swung forward with one, planted, and the walker passing it)
+  const shoeAt = (k: number) => mulM(ground_, Tm(0, Math.max(0, Math.cos(phase) * (k ? 1 : -1)) * 0.05 * stride, (k ? 1 : -1) * sw * 0.15));
+  const staffAt = mulM(model, about(HAND, Rx(-0.42 * Math.sin(phase + 0.6) * stride)));
   const bands = [...live.values()];
   lastVP = vp;
-  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr },
-    [...bands.map((l) => ({ d: l.solid })), { d: walker, model }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }],
+  if (ink) brushPath(pos);
+  // (the mark where they're going, kept on its place on the path as the view moves)
+  const mark = $('mark');
+  if (goal !== null) {
+    const q = project(path.at(goal).p);
+    mark.style.transform = `translate(${q[0]}px, ${q[1]}px)`;
+    mark.classList.add('on');
+  } else mark.classList.remove('on');
+  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink },
+    [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // what it reports of itself, for the checks

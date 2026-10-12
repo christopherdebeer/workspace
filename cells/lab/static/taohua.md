@@ -12,7 +12,9 @@ Tap the path and the walker goes there, up or back down; press on the path and s
 they follow your finger. Only path you can see answers a tap: a tap on blossom, a rock, a temple, or
 anywhere off the path does nothing, so the walker never goes where you can't see them arrive. (↑, W
 walk on up; ↓, S back down.) Drag anywhere off the path to look about a little; let go, and the view
-comes back. The steps you've climbed are counted at the top. At each temple you pass,
+comes back. A tap leaves a ripple of ink where it touched (vermilion if it found
+the path, faint grey if not), and where the walker is going a ring of vermilion, left open as a
+brush draws it, stays on its place on the path until they arrive. The steps you've climbed are counted at the top. At each temple you pass,
 its name comes up at the foot of the print over 桃花, and the next couplet down the side: Bai
 Juyi's poem through, then Cui Hu's 人面桃花, Su Shi, Li Bai, and Tao Yuanming's peach blossom
 spring.
@@ -100,14 +102,28 @@ trees, and specks of red between; petals turning as they fall about the walker.
 
 The walker: a grey-blue robe with wide sleeves and a red sash, black hair gathered under a straw
 hat, a staff taller than they are, and a stroke of shadow beside them. As they walk, a foot goes
-forward and the other back with each step, and the staff swings forward, is planted, and they pass
-it.
+forward and the other back with each step, the staff swings forward, is planted, and they pass it;
+the body sways from foot to foot and twists a little with each step, leans into a climb, the free
+arm swings against the stride, and the pace surges and eases within each step. They turn to face
+their way gradually. Standing, they breathe, and look about, now one way, now another.
 
 Broad, asymmetric openings beside the route alternate with denser wooded shoulders, each opening
 held by one tree standing alone toward its far side. These composition fields span streaming
 bands; jittered trees belong to the band containing their final position. Trees vary in stature.
 The broad blossom wash is fixed to cluster centres; fine marks remain attached to the illustrated
 lobes. Distant paper fade starts beyond the usual focal distance.
+
+## The composition view
+
+`?ink` (or C on a keyboard) steps back from the print to show only its arrangement, in broad
+strokes with nothing recognisable: the camera stands nearly twice as far off and sees further up
+the hill; each part of the print is gathered over a wide brush and laid down as a few inks
+(blossom a grey wash, deeper where it's dense; rock and trunks black; buildings vermilion; the
+rest paper); the path is brushed over it as one stroke, heavy where it's a stair, dry and broken
+where it's a trail; the walker is a dot of vermilion; and the places the verse and the title take
+are outlined, so they can be judged against the masses they sit on. It works with `review` and
+while walking, for judging how the arrangement holds as it unrolls, and for deciding where
+later things along the way (passages from Changes, say) should fall.
 
 `?seed=…` a hillside; `?preview` climbs by itself, quietly.
 `?seed=1&at=24&review` freezes the walker, camera and falling petals for a repeatable comparison
