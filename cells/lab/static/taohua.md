@@ -21,13 +21,16 @@ its name comes up at the foot of the print over 桃花.
 ## The hill
 
 The path is made as you climb, piece by piece, from the seed and each piece's number, so the same
-seed is the same hillside, step for step (`?seed=…`). Most pieces are flights of five to sixteen
+seed is the same hillside, step for step (`?seed=…`). The way winds across the hill as much as it climbs it. More than
+half of it, by distance, is trail: no steps, a gentle rise, running well across the slope (up to
+two-thirds of a right angle from straight up), bending as it goes, with only a few flat stones, an
+occasional rock and a worn line of grey strokes to show where it runs, sometimes through an open
+glade with no trees. Between trails, and now and then one after another, flights of four to twelve
 steps, each turned a little or a lot to one side of straight up the hill, back across it more
 often than not but not always, with a stretch of trodden ground at the turn. Each step is a pale
 slab of its own laid on the hill, its two ends ragged, as the print's are; now and then a short wall
-of squared blocks holds the hill back along one side. Between flights, now and then, the way is a
-trail instead: no steps, a gentle rise, bending as it goes, with only a few flat stones and a worn
-line of grey strokes to show where it runs, sometimes through an open glade with no trees. (Paths
+of squared blocks holds the hill back along one side. The path wanders up to ten metres or so to
+either side before it turns back. (Paths
 that branch are to come.)
 
 The hill's height at any point up it is the path's there, so the ground runs up with the steps,

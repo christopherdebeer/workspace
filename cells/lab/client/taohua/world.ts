@@ -292,7 +292,8 @@ export function makeBand(path: Path, seed: number, j: number): Band {
     for (let u = 0.6; u < f.flat; u += ramp(rr, 0.9, 2.6)) {
       const m = along(f, u);
       for (const sd of [-1, 1]) {
-        if (rr() < (f.glade ? 0.85 : 0.55)) continue;
+        // (fewer along a trail: it's open ground, a stone or two by the way)
+        if (rr() < (f.glade ? 0.88 : f.kind === 'trail' ? 0.82 : 0.55)) continue;
         const off = (WIDTH / 2 + 0.6 + rr() * 0.9) * sd;
         const x = m.p[0] + m.dir[1] * off, z = m.p[2] - m.dir[0] * off;
         if (!inBand(z)) continue;

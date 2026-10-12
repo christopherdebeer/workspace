@@ -75,17 +75,19 @@ export class Path {
     // (which way it turns: back across the hill more often than not, and always back toward the middle if it's wandered far)
     const prevSide = prev ? Math.sign(prev.dir[0]) || 1 : 1;
     let side = r() < 0.68 ? -prevSide : prevSide;
-    if (start[0] > 6) side = -1; else if (start[0] < -6) side = 1;
-    const trail = i > 1 && prev?.temple !== GATE && ((templeHere && !gate) || (!templeHere && r() < 0.3));
+    if (start[0] > 8) side = -1; else if (start[0] < -8) side = 1;
+    const trail = i > 1 && prev?.temple !== GATE && ((templeHere && !gate) || (!templeHere && r() < 0.55));
     if (trail) {
       // a trail: no steps, a gentle rise; it leaves along the way the path was going and bends to its own
       // (the temple on the side away from where the path has wandered, so it stands on the hill, not off its edge)
       const temple = templeHere ? (start[0] > 2 ? BESIDE_L : start[0] < -2 ? BESIDE_R : r() < 0.5 ? BESIDE_L : BESIDE_R) : 0;
       // (beside a temple, level and straight up the hill, through a glade, so its terrace stands on level ground)
-      const L = temple ? 10 : 4.5 + r() * 6;
-      const ang = temple ? 0 : side * r() * 0.65;
+      // (mostly across the hill, rising gently: the way winds from side to side as much as it climbs)
+      const L = temple ? 10 : 6 + r() * 8;
+      let ang = temple ? 0 : side * (0.45 + r() * 0.7);
+      if (Math.abs(start[0] + Math.sin(ang) * L) > 11) ang = -ang;
       const dir: [number, number] = [Math.sin(ang), Math.cos(ang)];
-      const slope = temple ? 0 : 0.07 + r() * 0.13;
+      const slope = temple ? 0 : 0.05 + r() * 0.1;
       const a: V3 = [...start];
       const b: V3 = [a[0] + dir[0] * L, a[1] + L * slope, a[2] + dir[1] * L];
       const ctrl: V3 = temple ? [(a[0] + b[0]) / 2, a[1], (a[2] + b[2]) / 2] : [a[0] + pd[0] * L * 0.5, (a[1] + b[1]) / 2, a[2] + pd[1] * L * 0.5];
@@ -102,10 +104,10 @@ export class Path {
     const ll = prev?.temple === GATE ? TERRACE : prev?.kind === 'trail' ? 0.6 : LANDING * (0.75 + r() * 0.7);
     const land: V3 = [start[0] + pd[0] * ll / 2, start[1], start[2] + pd[1] * ll / 2];
     const a: V3 = [start[0] + pd[0] * ll, start[1], start[2] + pd[1] * ll];
-    const ang = gate ? side * 0.06 : side * (0.12 + r() * 0.8) * (i === 0 ? 0.3 : 1);
+    const ang = gate ? side * 0.06 : side * (0.15 + r() * 0.85) * (i === 0 ? 0.3 : 1);
     const dir: [number, number] = [Math.sin(ang), Math.cos(ang)];
     // (some steps, each a hand's rise; deep treads where it's gentler)
-    const steps = gate ? 10 + Math.floor(r() * 6) : 5 + Math.floor(r() * 12);
+    const steps = gate ? 10 + Math.floor(r() * 6) : 4 + Math.floor(r() * 9);
     const run = 0.3 + r() * 0.12;
     const flat = steps * run;
     const b: V3 = [a[0] + dir[0] * flat, a[1] + steps * RISE, a[2] + dir[1] * flat];
