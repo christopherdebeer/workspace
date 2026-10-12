@@ -588,7 +588,7 @@ const WATER_KIND = { flow: 0, pool: 1, pond: 1, spring: 1, plunge: 1, marsh: 2, 
  * The water in a tile: its surface (a fine sheet, at its level wherever it's within reach of the
  * water; the banks, carved, stand up through it at its edge; where its level drops from step to
  * step the sheet drops too, a fall); rocks along it; reeds in a marsh; petals afloat.
- * Each vertex carries, for the drawing, how far in from the edge it is, how fast the water runs, and what kind of water.
+ * Each vertex carries, for the drawing, how far in from the edge it is, how far across from a stream's middle line, and what kind of water (and, after the point, how fast it runs).
  */
 function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: number, x1: number, z0: number, z1: number) {
   const W = ways.water;
@@ -601,7 +601,7 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
     if (cache.has(key)) return cache.get(key)!;
     const w = W.at(x, z);
     // (its edge is drawn where it's 0 m in from its edge (see the drawing); further out, the sheet's tucked under the ground)
-    const v: [number, number, number, number, number, number] | null = w && w.s < 1.2 ? [x, w.s > 0.8 ? Math.min(w.L, ground(ways, x, z) - 0.03) : w.L, z, -w.s, w.run, WATER_KIND[w.kind]] : null;
+    const v: [number, number, number, number, number, number] | null = w && w.s < 1.2 ? [x, w.s > 0.8 ? Math.min(w.L, ground(ways, x, z) - 0.03) : w.L, z, -w.s, w.across, WATER_KIND[w.kind] + Math.min(0.99, w.run)] : null;
     cache.set(key, v);
     return v;
   };

@@ -47,6 +47,32 @@ uniform vec3 uEye; uniform sampler2D uPlaque, uType; uniform float uTime;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
+/**
+ * A field of brush strokes, as the prints draw water: in rows (across p.y), each row broken into
+ * strokes along p.x, staggered; each stroke a short wavy mark, tapered to a hair at both ends,
+ * undulating once or twice, its length, weight and tone its own. rs: the rows' spacing (m); len:
+ * a stroke's length, about (m); dens: how many are drawn (0-1); fy: metres to a pixel across the
+ * rows; thin: how much of its weight it keeps here (0-1). Returns its ink (0-1).
+ */
+float strokes(vec2 p, float rs, float len, float dens, float seed, float fy, float thin) {
+  float rv = p.y / rs, row = floor(rv);
+  float L = len * mix(.6, 1.5, hash3(vec3(row, seed, 2.3)));
+  float sx = p.x / L + hash3(vec3(row, seed, 7.1)) * 13.;
+  float seg = floor(sx), t = fract(sx);
+  vec3 id = vec3(row * 1.37, seg * .71, seed);
+  if (hash3(id + 1.3) > dens) return 0.;
+  // (it takes only part of its place along the row: a gap before it, and after)
+  float a0 = hash3(id + 2.1) * .35, a1 = 1. - hash3(id + 3.7) * .35;
+  float u = (t - a0) / (a1 - a0);
+  if (u <= 0. || u >= 1.) return 0.;
+  float k = hash3(id + 4.9) < .65 ? 1. : 2.;
+  float y0 = .5 + (hash3(id + 5.3) - .5) * .36;
+  float wav = (.05 + .07 * hash3(id + 6.1)) * sin(6.2832 * (k * u + hash3(id + 7.7)));
+  float px = abs(fract(rv) - y0 - wav) * rs / max(fy, 1e-5);
+  // (its weight swells toward its middle, a little past it, as a brush presses and lifts)
+  float w = mix(.3, 1.35, hash3(id + 8.3)) * pow(sin(3.14159 * pow(u, .85)), 1.1) * thin;
+  return (1. - smoothstep(w, w + .8, px)) * mix(.5, 1., hash3(id + 9.9));
+}
 void main() {
   vec3 n = normalize(vN);
   // (each face lit from the side it's seen from, whichever way it was wound)
@@ -165,37 +191,45 @@ void main() {
     // broken here and there; the current, a few fine wavy strokes following the banks, in loose
     // groups, broken, drifting down it slowly (quicker, closer, shorter where it runs fast); out on
     // a pool's open water, a few long wavy strokes across; where it falls, fine strokes down the
-    // sheet, running down. (vC: how far in from its edge; how fast it runs; its kind)
-    float inn = vC.r, run = vC.g;
-    int kind = int(vC.b + .5);
+    // sheet, running down. (vC: how far in from its edge; across from a stream's middle; its kind, and after the point how fast it runs)
+    float inn = vC.r, across = vC.g;
+    int kind = int(floor(vC.b + .001));
+    float run = fract(vC.b + .001);
     bool fall = abs(normalize(vN).y) < .55;
     // (its shore: where it's no way in from its edge, it isn't)
     if (inn < 0. && !fall) discard;
-    vec3 LINE = vec3(.3, .28, .26);
+    vec3 LINE = vec3(.3, .33, .34);
     float ink = 0.;
     if (fall) {
-      float x = (vW.x * .8 + vW.z * .6) * 2.6;
-      float d = abs(fract(x + .25 * noise(vec3(vW.xz, 2.))) - .5) / max(fwidth(x), 1e-4);
-      ink = (1. - smoothstep(.7, 1.7, d)) * step(.4, noise(vec3(floor(x) * 1.7, (vW.y + uTime * .9) * 1.2, 7.)));
+      // (where it falls, fine strokes down the sheet, running down)
+      vec2 p = vec2(-vW.y - uTime * .9, vW.x * .8 + vW.z * .6);
+      ink = strokes(p, .13, .45, .62, 3., fwidth(p.y), 1.);
     } else {
-      float t = uTime * (kind == 0 ? .2 + run * 2. : .03), fast = smoothstep(.14, .3, run);
-      // (the shore line)
-      float wi = max(fwidth(inn), 1e-4);
-      float shore = (1. - smoothstep(wi * 1.3, wi * 2.6, inn)) * step(.1, noise(vec3(vW.xz * 1.4, 4.)));
-      // (the current: lines at even distances in from the edge, so they follow the banks, wavering)
-      float sp = mix(.3, .2, fast), e = inn / sp + .22 * sin(vW.x * 2.3 + vW.z * 2.6) + .12 * sin(vW.z * 6.1 - vW.x * 1.7);
-      float de = abs(fract(e) - .5) / max(fwidth(e), 1e-4);
-      float dash = noise(vec3(vW.x * .8, (vW.z + t) * mix(.7, 2.2, fast), floor(e) * 1.7));
-      float grp = noise(vec3(vW.xz * .18, 8.));
-      float cur = (1. - smoothstep(.6, 1.7, de)) * step(mix(.5, .42, fast) + (.5 - grp) * .3, dash) * step(.6, e);
-      // (on a pool, the current's only about its shore; out on it, long waves across)
-      if (kind != 0) {
-        cur *= 1. - smoothstep(.55, .95, inn);
-        float zz = vW.z / .45 + .25 * sin(vW.x * 1.6 + 1.) + .12 * sin(vW.x * 4.1);
-        float dz = abs(fract(zz) - .5) / max(fwidth(zz), 1e-4);
-        cur = max(cur, (1. - smoothstep(.6, 1.7, dz)) * step(.52, noise(vec3(vW.x * .3 + t, floor(zz) * 1.3, 6.))) * smoothstep(1.2, 1.9, inn));
+      float t = uTime * (kind == 0 ? .12 + run * 1.4 : .015), fast = smoothstep(.14, .3, run);
+      float grp = noise(vec3(vW.xz * .2, 8.)), shore = 1. - smoothstep(.15, 1., inn);
+      // (each thins to nothing at the shore, so none's cut off by it)
+      float thin = smoothstep(.0, .25, inn);
+      if (kind == 0) {
+        // a stream: strokes along it, in rows at even distances in from its banks (so they bend as
+        // it bends), long and gently waving where it's slow, short and close where it runs fast;
+        // more of them by its banks; drifting down it
+        float dens = .3 + .22 * shore + .3 * fast + (grp - .5) * .4;
+        vec2 p = vec2(vW.z + t, across);
+        float fy = fwidth(across);
+        ink = strokes(p, mix(.24, .16, fast), mix(1.5, .55, fast), dens, 1., fy, thin);
+        ink = max(ink, .65 * strokes(p + vec2(3.1, .09), mix(.33, .22, fast), mix(.8, .35, fast), dens * .6, 2., fy, thin * .75));
+      } else {
+        // a pool: by its shore, strokes echoing it; out on its open water, a few long strokes
+        // across, far apart, in loose groups
+        vec2 ps = vec2((vW.x + vW.z) * .7, inn);
+        float near = strokes(ps, .22, 1.1, .55 + (grp - .5) * .4, 4., fwidth(inn), thin) * (1. - smoothstep(.5, .9, inn));
+        vec2 po = vec2(vW.x + t, vW.z);
+        float open = strokes(po, .38, 2.2, .2 + (grp - .5) * .3, 5., fwidth(vW.z), 1.) * smoothstep(.7, 1.2, inn);
+        ink = max(near, open);
       }
-      ink = max(shore, cur * .75);
+      // (and at the shore, now and then, a hair's touch of the brush along it)
+      float wi = max(fwidth(inn), 1e-4);
+      ink = max(ink, (1. - smoothstep(wi * .5, wi * 1.4, inn)) * smoothstep(.42, .58, noise(vec3(vW.xz * .9, 4.))) * .6);
     }
     c = mix(PAPER, LINE, ink);
     lit = 1.;

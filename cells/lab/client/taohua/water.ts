@@ -40,6 +40,8 @@ export interface Wet {
   bank: number;
   /** how fast it runs here: the hill's slope under it, if it's flowing */
   run: number;
+  /** (for a stream: how far across from its middle line, signed) */
+  across: number;
 }
 
 /** the levels' drop below the hill, where a stream runs */
@@ -153,7 +155,7 @@ export class Water {
         const lv = this.levelAt(st, z);
         const xc = this.xAt(st, z), d = Math.abs(x - xc) / Math.hypot(1, this.dxAt(st, z));
         const s = d - this.halfAt(st, z) * (lv.kind === 'falls' ? 1.5 : 1);
-        if (s < 14) out.push({ s, L: lv.L, kind: lv.kind, st, bank: lv.kind === 'falls' ? 1.3 : lv.kind === 'plunge' ? 1.6 : 0.35, run: lv.kind === 'flow' ? this.slope(z) : 0 });
+        if (s < 14) out.push({ s, L: lv.L, kind: lv.kind, st, bank: lv.kind === 'falls' ? 1.3 : lv.kind === 'plunge' ? 1.6 : 0.35, run: lv.kind === 'flow' ? this.slope(z) : 0, across: (x - xc) / Math.hypot(1, this.dxAt(st, z)) });
       }
       for (const p of st.pools) {
         const dx = (x - p.x) / p.rx, dz = (z - p.z) / p.rz, e = Math.hypot(dx, dz);
@@ -161,7 +163,7 @@ export class Water {
         // (its edge wavers, so no pond is an ellipse)
         const wob = 1 + 0.12 * Math.sin(Math.atan2(dz, dx) * 3 + p.z) + 0.07 * Math.sin(Math.atan2(dz, dx) * 5 + p.x);
         const s = (e / wob - 1) * Math.min(p.rx, p.rz);
-        if (s < 14) out.push({ s, L: p.L, kind: p.kind, st, bank: p.kind === 'plunge' ? 1.6 : 0.3, run: 0 });
+        if (s < 14) out.push({ s, L: p.L, kind: p.kind, st, bank: p.kind === 'plunge' ? 1.6 : 0.3, run: 0, across: 0 });
       }
     }
     this.memo.set(key, out);

@@ -85,15 +85,18 @@ are cut high, a bridge: a deck of stone slabs, arched a little, a kerb along eit
 either bank. No tree stands in the water, on a bank cut steep, nor just downhill of the water,
 where its crown would stand between the eye and it: the water's an open mass, as the print's are.
 
-It's drawn as the prints draw water: not coloured in, but the paper itself, and line work, as the
-ways' strokes and the stairs' are. An ink line along its shore, broken here and there; the current,
-a few fine wavy strokes following its banks (lines at even distances in from its edge, so they
-bend as the stream bends), in loose groups, broken into dashes that drift down it slowly, closer,
-shorter and quicker where it runs fast; on a pool, two or three such strokes echoing its shore,
-and out on its open water a few long wavy strokes across, far apart; where it falls, fine strokes
-down the sheet, running down. Petals float on its stiller water. Its shore is drawn by the water
-itself, so it's smooth however narrow the stream; where the banks are cut deep, they're inked as
-rock, black as the print's banks are. In the composition view, water's open paper, faintly cooler.
+It's drawn as the prints draw water: not coloured in, but the paper itself, and brush strokes.
+Each stroke is its own short wavy mark, tapered to a hair at both ends and swelling a little past
+its middle, as a brush presses and lifts, undulating once or twice, its length, weight and tone
+its own; they're laid in staggered rows, in loose groups, with open paper between. On a stream
+they run along it, in rows parallel to its middle line (so they bend as it bends), more of them
+by its banks, long and gently waving where it's slow, short and close where it runs fast, drifting
+down it slowly. On a pool, strokes echo its shore, and out on its open water a few long strokes
+lie across it, far apart. Where it falls, fine strokes run down the sheet. Each stroke thins to
+nothing before the shore, so none's cut off by it; the shore itself is only touched, here and
+there, by a hairline. Petals float on its stiller water. Where the banks are cut deep they're
+inked as rock, black as the print's banks are. In the composition view, water's open paper,
+faintly cooler.
 
 ## The temples
 
