@@ -221,6 +221,13 @@ const WALK = 1.25;
 function stand(sp: Spot): { p: V3; dir: [number, number] } {
   const at = ways.at(sp.w, sp.u, true), p = at.p;
   for (const t of nearTemples) { const y = templeSurface(t, p[0], p[2]); if (y !== null) return { p: [p[0], y, p[2]], dir: at.dir }; }
+  // (over water: on a bridge's deck, or on the stepping stones, a little hop from one to the next)
+  const c = sp.w.cross;
+  if (c && sp.u >= c.u0 && sp.u <= c.u1) {
+    let y = ways.surface(sp.w, sp.u, p[2]);
+    if (c.kind === 'stones') { const e = Math.min(sp.u - c.u0, c.u1 - sp.u); y += 0.07 * Math.abs(Math.sin((Math.PI * (sp.u - c.u0)) / 0.62)) * smoothstep(0.3, 0.9, e); }
+    return { p: [p[0], y, p[2]], dir: at.dir };
+  }
   const st = ways.stairAt(sp.w, sp.u);
   if (!st) return { p: [p[0], ways.hill(p[2]) - 0.1, p[2]], dir: at.dir };
   const f = ((sp.u - st.u0) / (st.u1 - st.u0)) * st.n, k = Math.min(st.n - 1, Math.floor(f));
