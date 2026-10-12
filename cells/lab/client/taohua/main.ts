@@ -323,12 +323,15 @@ function pick(px: number, py: number): Spot | null {
   const m = R.matAt(px * (canvas.width / innerWidth), py * (canvas.height / innerHeight));
   if (!OPEN.has(m)) return null;
   let best: Spot | null = null, bestK = 1;
+  // (where the tap falls on the ground: a way there must be about under it, not one projected wildly from just before the eye)
+  const h = onHill(px, py);
   for (const sp of spots(0.2)) {
     const at = ways.at(sp.w, sp.u), q = project(at.p);
-    if (q[2] <= 0) continue;
+    if (q[2] <= 2 || q[0] < -40 || q[1] < -40 || q[0] > innerWidth + 40 || q[1] > innerHeight + 40) continue;
+    if (h && Math.hypot(at.p[0] - h[0], at.p[2] - h[2]) > WIDTH * 1.5) continue;
     // (how wide the way is there, on the glass)
     const e = project([at.p[0] + at.dir[1] * WIDTH * 0.5, at.p[1], at.p[2] - at.dir[0] * WIDTH * 0.5]);
-    const half = Math.max(12, Math.hypot(e[0] - q[0], e[1] - q[1]) * 1.15);
+    const half = Math.min(60, Math.max(12, Math.hypot(e[0] - q[0], e[1] - q[1]) * 1.15));
     const k = Math.hypot(px - q[0], py - q[1]) / half;
     if (k < bestK) { bestK = k; best = sp; }
   }
