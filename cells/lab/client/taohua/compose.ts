@@ -28,7 +28,7 @@ export interface Station {
 }
 
 /** a station's space: for a cast, its figure, its names and their titles, as the camera sees them */
-const RX = 2.6, RZ = 6.2;
+const RX = 3.6, RZ = 6.6;
 
 /**
  * A cast, from the seed and the station's number: six lines, each as three coins fall (two sides

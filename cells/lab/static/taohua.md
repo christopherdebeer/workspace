@@ -6,13 +6,13 @@ print: peach trees in flower, black standing stones, stone steps where the way i
 of teal tiles and red columns, a walker in a straw hat with a staff, the paper's cream under it all.
 
 Tap a way and the walker goes there, by whichever ways lead there, up the hill or back down (a
-branch that ends goes nowhere else, so to see another, come back to the fork);
-press on a way and slide along it, and they follow your finger. A tap anywhere else (the hillside,
-a temple, a tree) sends them to the nearest place on a way that can be seen, so they're always seen
-to arrive; a tap on a temple can send them to the way it stands over. The place a tap found is
-answered in the scene: a ring of vermilion, left open as a brush draws it, for a moment. With keys,
-↑ or W walks on (at a fork, by the way most nearly ahead), ↓ or S back. Drag anywhere off the ways
-to look about a little; let go, and the view comes back. The steps climbed are counted at the top;
+branch that ends goes nowhere else, so to see another, come back to the fork). A tap anywhere else
+(the hillside, a temple, a tree, a cast) sends them to the nearest place on a way that can be seen,
+so they're always seen to arrive; a tap on a temple can send them to the way it stands over. The
+place a tap found is answered in the scene: a ring of vermilion, left open as a brush draws it, for
+a moment. Only a tap walks: a drag, wherever it starts, even on a way, looks about a little; let
+go, and the view comes back. With keys, ↑ or W walks on (at a fork, by the way most nearly ahead),
+↓ or S back. The steps climbed are counted at the top;
 the last temple passed has its name at the foot of the print over 桃花.
 
 ## The hill and its ways
@@ -131,16 +131,17 @@ the paper, as the prints keep paper clear for their verse: where a branch ends i
 there, just past its end; at some forks, in the space up the hill between the forks; and beside
 about a quarter of the longer ways, on whichever side has room. Each is clear of every way and
 well apart from the others. Each holds a cast from Changes, from the seed and the station's
-number: six lines, each as three coins fall, so old lines come as often as they would. It's
-written on the hillside there, in the open space: the hexagram drawn in ink, its moving lines in
-vermilion; its name, and if it moves, 之 and the name of what it becomes; their titles small. Tap
-it and it opens in Changes.
+number: six lines, each as three coins fall, so old lines come as often as they would. The cast is
+laid in its clearing as a feature of the hill, there for good: its six lines are slabs of stone set
+in the ground, the first nearest the foot of the hill, a yin line in two, its moving lines
+lacquered vermilion; behind them, up the hill, a low stone tablet with the hexagram's name cut in
+it, and, if it moves, 之 and the name of what it becomes.
 
 The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
 stones along its upper edge; Wind, a grove close behind; Thunder, one tree at its far side,
 leaning over. Its lower trigram is what lies in it: Water, stepping stones across it; Lake, a ring
 of flat stones; Fire, fallen blossom heaped red; Mountain, one low stone; Wind, grass in tufts;
-Thunder, a stone split in two. Heaven and Earth leave it open. Trees stand back from a station's
+Thunder, a stone split in two. Heaven and Earth leave it open. Trees stand well back from a station's
 edge, further on its downhill side, where a crown would stand over the space as the eye sees it.
 
 ## The composition view

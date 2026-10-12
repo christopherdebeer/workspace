@@ -12,9 +12,9 @@
 import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
 import { RISE, WIDTH, Ways, type V3, type Way } from './ways';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
-import { stationsNear, type Station } from './compose';
-import { identify, moving } from '../changes/model';
-import { BAND, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
+import { stationsNear } from './compose';
+import { hexagrams, moving } from '../changes/model';
+import { ATLAS, BAND, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -38,84 +38,42 @@ try { R = new Renderer(canvas); } catch (e) {
 
 const ways = new Ways(seed);
 
-// ─── Changes: at each station a cast, written on the hillside in the space kept for it ──────────
-// (the hexagram drawn in ink, its moving lines in vermilion; its name, and if it moves, 之 and the
-// name of what it becomes; their titles, small. Tapping it opens the cast in Changes)
-const casts = new Map<number, HTMLElement>();
-function castEl(st: Station) {
-  let el = casts.get(st.i);
-  if (el) return el;
-  const hex = identify(st.lines), moves = st.lines.some(moving), rel = moves ? identify(st.lines, true) : null;
-  const a = document.createElement('a');
-  a.className = 'cast';
-  a.href = `/changes?cast=${st.lines.join('')}`;
-  a.setAttribute('aria-label', `${hex.number} ${hex.title}${rel ? `, becoming ${rel.number} ${rel.title}` : ''}: open in Changes`);
-  // (the figure: six lines, the first at the bottom; a yin line broken)
-  const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 60 64'); svg.setAttribute('class', 'gua');
-  st.lines.forEach((v, k) => {
-    const y = 58 - k * 10.4, col = moving(v) ? '#b8382c' : '#2b2420';
-    const bar = (x0: number, x1: number) => { const r = document.createElementNS(NS, 'rect'); r.setAttribute('x', `${x0}`); r.setAttribute('y', `${y - 3.4}`); r.setAttribute('width', `${x1 - x0}`); r.setAttribute('height', '6.8'); r.setAttribute('fill', col); svg.appendChild(r); };
-    if (v % 2) bar(2, 58); else { bar(2, 25); bar(35, 58); }
-  });
-  a.appendChild(svg);
-  const names = document.createElement('div');
-  names.className = 'names';
-  names.textContent = rel ? `${hex.han}之${rel.han}` : hex.han;
-  a.appendChild(names);
-  const en = document.createElement('div');
-  en.className = 'en';
-  en.textContent = `${hex.number} · ${hex.title}${rel ? `  →  ${rel.number} · ${rel.title}` : ''}`;
-  a.appendChild(en);
-  document.body.appendChild(a);
-  casts.set(st.i, a);
-  return a;
-}
 let titleBox = $('title').getBoundingClientRect();
 addEventListener('resize', () => { titleBox = $('title').getBoundingClientRect(); });
 void document.fonts?.ready.then(() => { titleBox = $('title').getBoundingClientRect(); });
-function placeCasts(z: number) {
-  const near = stationsNear(ways, seed, z - 30, z + 90);
-  const keep = new Set<number>();
-  for (const st of near) {
-    keep.add(st.i);
-    const el = castEl(st);
-    // (written a little toward the uphill side of the space: what its lower trigram lays on the ground lies below it)
-    const q = project([st.c[0], st.c[1], st.c[2] + st.rz * 0.2]);
-    // (kept whole on the print, its space's place on the glass or as near it as fits)
-    const bw = el.offsetWidth || 120, bh = el.offsetHeight || 90;
-    const x = Math.max(bw / 2 + 10, Math.min(innerWidth - bw / 2 - 10, q[0]));
-    el.style.transform = `translate(${x.toFixed(1)}px, ${q[1].toFixed(1)}px) translate(-50%, -50%)`;
-    void bh;
-    // (shown while it's on the print; not while it passes under the title, which keeps its place)
-    const b = el.getBoundingClientRect();
-    const under = [titleBox, $('climb').getBoundingClientRect(), document.querySelector('nav')!.getBoundingClientRect()].some((t) => b.left < t.right + 8 && b.right > t.left - 8 && b.top < t.bottom + 8 && b.bottom > t.top - 8);
-    el.classList.toggle('on', q[2] > 0 && q[1] > -40 && q[1] < innerHeight + 40 && !under);
-  }
-  for (const [i, el] of casts) if (!keep.has(i)) { el.remove(); casts.delete(i); }
-}
 function showName(i: number) { $('name').textContent = NAMES[i % NAMES.length]; titleBox = $('title').getBoundingClientRect(); }
 
 // ─── the plaques: each temple's name in gold on its dark board, red framed ──────────────────────
 function plaques() {
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 160 * NAMES.length;
+  c.width = ATLAS.w * ATLAS.cols; c.height = ATLAS.h * ATLAS.rows;
   const g = c.getContext('2d')!;
+  // (cell i: column i % cols; row i / cols, counted up from the bottom, as the drawing's v is)
+  const at = (i: number) => [(i % ATLAS.cols) * ATLAS.w, (ATLAS.rows - 1 - Math.floor(i / ATLAS.cols)) * ATLAS.h];
+  g.textAlign = 'center'; g.textBaseline = 'middle';
   NAMES.forEach((name, i) => {
-    // (row i is the texture's v from i/N to (i+1)/N, counted up from the bottom)
-    const y = (NAMES.length - 1 - i) * 160;
-    g.fillStyle = '#a3321f'; g.fillRect(0, y, 512, 160);
-    g.fillStyle = '#3a2620'; g.fillRect(14, y + 14, 484, 132);
-    g.strokeStyle = '#c9a55a'; g.lineWidth = 4; g.strokeRect(24, y + 24, 464, 112);
+    const [x, y] = at(i);
+    g.fillStyle = '#a3321f'; g.fillRect(x, y, 512, 160);
+    g.fillStyle = '#3a2620'; g.fillRect(x + 14, y + 14, 484, 132);
+    g.strokeStyle = '#c9a55a'; g.lineWidth = 4; g.strokeRect(x + 24, y + 24, 464, 112);
     g.fillStyle = '#e2c27a';
     g.font = '96px "Ma Shan Zheng", "STKaiti", "KaiTi", "Songti SC", serif';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText(name, 256, y + 84);
+    g.fillText(name, x + 256, y + 84);
   });
+  // (the hexagrams' names and 之, cut in pale stone: the cut dark, a lighter edge below it)
+  const carve = (i: number, text: string) => {
+    const [x, y] = at(i);
+    g.fillStyle = '#ebe4d4'; g.fillRect(x, y, 512, 160);
+    g.font = '110px "Ma Shan Zheng", "STKaiti", "KaiTi", "Songti SC", serif';
+    g.fillStyle = '#fbf7ee'; g.fillText(text, x + 256, y + 86);
+    g.fillStyle = '#2b2420'; g.fillText(text, x + 256, y + 82);
+  };
+  hexagrams.forEach((h, k) => carve(ATLAS.hex + k, h.han));
+  carve(ATLAS.zhi, '之');
   R.setPlaque(c);
 }
 plaques();
-void document.fonts?.load('96px "Ma Shan Zheng"', NAMES.join('')).then(() => plaques());
+void document.fonts?.load('96px "Ma Shan Zheng"', NAMES.join('') + hexagrams.map((h) => h.han).join('') + '之').then(() => plaques());
 
 // ─── the walker: a straw hat, a grey-blue robe with wide sleeves and a red sash, a tall staff ─────
 // (in parts, each placed by its own turning: the body, which sways and leans as they walk; the head
@@ -235,7 +193,7 @@ const spotP = (sp: Spot): V3 => stand(sp).p;
 // tap anywhere else, to the nearest place on a way that can be seen; drag off the ways to look
 // about; keys walk on or back
 let markAt = -1e9, goal: Spot | null = null, legs: Array<{ w: Way; u0: number; u1: number }> = [];
-let downAt: { x: number; y: number; id: number; on: boolean } | null = null, looking = false;
+let downAt: { x: number; y: number; id: number; on: boolean; t: number } | null = null, looking = false;
 let lookYaw = 0, lookPitch = 0, lookAt0 = -9;
 const keys = new Set<string>();
 /** the last frame's view, to find what's under a finger */
@@ -302,22 +260,15 @@ function goTo(sp: Spot) {
   goal = sp; markAt = performance.now();
   legs = ways.route(here.w, here.u, sp.w, sp.u);
 }
+// (a press is only a tap if it lets go where it began, soon: then the walker goes there; any drag looks about, wherever it began)
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
-  const at = pick(e.clientX, e.clientY);
-  downAt = { x: e.clientX, y: e.clientY, id: e.pointerId, on: at !== null };
-  if (at !== null) goTo(at);
+  downAt = { x: e.clientX, y: e.clientY, id: e.pointerId, on: false, t: performance.now() };
   looking = false;
   $('hint').classList.remove('on');
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!downAt || downAt.id !== e.pointerId) return;
-  if (downAt.on) {
-    // (pressed on a way: slid along it, the goal follows the finger, so long as it's on a way)
-    const at = pick(e.clientX, e.clientY);
-    if (at !== null) goTo(at);
-    return;
-  }
   const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
   if (!looking && Math.hypot(dx, dy) > 10) looking = true;
   if (looking) {
@@ -328,8 +279,11 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const up = (e: PointerEvent) => {
   if (downAt?.id !== e.pointerId) return;
-  // (a tap off the ways, not a drag: to the nearest place on one that can be seen)
-  if (!downAt.on && !looking && e.type === 'pointerup') { const at = nearestSeen(e.clientX, e.clientY); if (at !== null) goTo(at); }
+  // (a tap: on a way, there; anywhere else, the nearest place on one that can be seen)
+  if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600) {
+    const at = pick(e.clientX, e.clientY) ?? nearestSeen(e.clientX, e.clientY);
+    if (at !== null) goTo(at);
+  }
   downAt = null; looking = false;
 };
 canvas.addEventListener('pointerup', up);
@@ -442,7 +396,7 @@ function frame(now: number) {
         here.u = leg.u1; move = Math.sign(move) * Math.max(0, Math.abs(move) - Math.abs(togo));
         legs.shift();
         if (legs.length) { here = { w: legs[0].w, u: legs[0].u0 }; speed = Math.abs(speed) * Math.sign(legs[0].u1 - legs[0].u0 || 1); move = Math.abs(move) * Math.sign(speed); }
-        else { if (!downAt) goal = null; speed = 0; move = 0; }
+        else { goal = null; speed = 0; move = 0; }
       } else { here.u += Math.sign(togo) * Math.abs(move); move = 0; }
       continue;
     }
@@ -528,7 +482,6 @@ function frame(now: number) {
     mark.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) scale(${(0.8 + 0.35 * Math.min(1, ma * 4)).toFixed(3)})`;
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
-  placeCasts(pos[2]);
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink },
     [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);

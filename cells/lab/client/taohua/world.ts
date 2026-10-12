@@ -7,7 +7,8 @@
  * the blossom and the petals are lists for instancing.
  */
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
-import { inStation, stationsNear } from './compose';
+import { inStation, stationsNear, type Station } from './compose';
+import { identify } from '../changes/model';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3 } from './ways';
 
 /** how deep a tile of the hill is, up it (m), and how wide, across it: the world is made a tile at a time, about the walker, as far across as the ways go */
@@ -23,6 +24,13 @@ type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
 /** the temples' names, in turn, as their plaques have them */
 export const NAMES = ['大林寺', '桃花庵', '白云寺', '清凉寺', '栖霞寺', '云居寺', '灵岩寺', '兰若寺'];
+/**
+ * The sheet of carved and painted words the drawing reads from: the temples' names, as plaques
+ * (cells 0-7); the hexagrams' names, cut in stone (cells 8 + number - 1); and 之, cut in stone
+ * (cell 72). Cells 512 by 160, in columns; a cell's place on the sheet, as the drawing's u, v.
+ */
+export const ATLAS = { cols: 4, rows: 19, w: 512, h: 160, hex: 8, zhi: 72 };
+export const atlasUV = (cell: number, u: number, v: number): [number, number] => [((cell % ATLAS.cols) + u) / ATLAS.cols, (Math.floor(cell / ATLAS.cols) + v) / ATLAS.rows];
 /** the print's inks */
 export const INK = {
   paper: hex(0xefe6d3), stepTop: hex(0xebe4d4), stepFace: hex(0xcfc6b4), stone: hex(0xb9b1a1), rock: hex(0x2a2827), rockTop: hex(0x7d7c79),
@@ -228,7 +236,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   const inGlade = (x: number, z: number) => temples.some((t) => !t.gate && Math.hypot(x - t.c[0], z - t.c[2]) < t.T + 4.5);
   // (the stations' spaces, kept open: no tree whose crown would stand over one, no rock in one)
   const sts = stationsNear(ways, seed, z0, z1);
-  const treeOut = (x: number, z: number) => inStation(sts, x, z, 1.6, 4.5);
+  const treeOut = (x: number, z: number) => inStation(sts, x, z, 3.8, 4.5);
   /** whether (x, z) is just downhill of a way, where a crown would stand between the eye and it */
   const belowWay = (x: number, z: number) => [2, 3.8, 5.6, 7.2].some((dz) => ways.nearest(x, z + dz).d < WIDTH / 2 + 1);
 
@@ -357,12 +365,16 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     if (ways.nearest(x, z).d > WIDTH / 2 + 0.5 && !onTemple(x, z, 0) && !inStation(sts, x, z, 0)) tuft(mesh, ways, x, z, r, 2 + Math.floor(r() * 4));
   }
 
+  // (each station's cast laid in its clearing: the figure in stone, its name cut in a tablet behind)
+  for (const st of sts) if (inT(st.c[0], st.c[2])) castStone(mesh, ways, st);
+
   // (each station's space shaped by its cast: what stands behind it, as its upper trigram has it; what
   // lies in it, below the words, as its lower has it)
   for (const st of sts) {
     const sr = seeded(hash(seed, st.i, 0x7121));
     const R = (u: number, v: number): [number, number] => [st.c[0] + u * st.rx, st.c[2] + v * st.rz];
-    const away = st.side;
+    // (a station at a junction has no side of a way: its own, from its number)
+    const away = st.side || (st.i % 2 ? 1 : -1);
     switch (st.upper) {
       case 'Mountain': // (standing stones along its upper edge)
         for (let k = 0, n = 3 + Math.floor(sr() * 2); k < n; k++) {
@@ -385,32 +397,32 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     switch (st.lower) {
       case 'Water': // (flat stones across it, as stepping stones over a stream)
         for (let k = 0; k < 5; k++) {
-          const t = k / 4, [x, z] = R(-0.7 + 1.4 * t, -0.75 + 0.35 * t + ramp(sr, -0.05, 0.05));
+          const t = k / 4, [x, z] = R(-0.7 + 1.4 * t, -0.97 + 0.08 * t + ramp(sr, -0.03, 0.03));
           if (inT(x, z)) stone(mesh, ways, x, z, ramp(sr, 0.2, 0.3), sr);
         }
         break;
       case 'Lake': // (a ring of flat stones)
         for (let k = 0; k < 7; k++) {
-          const a = (k / 7) * Math.PI * 2, [x, z] = R(Math.cos(a) * 0.42, -0.5 + Math.sin(a) * 0.2);
+          const a = (k / 7) * Math.PI * 2, [x, z] = R(-away * 0.95 + Math.cos(a) * 0.3, -0.55 + Math.sin(a) * 0.14);
           if (inT(x, z)) stone(mesh, ways, x, z, ramp(sr, 0.14, 0.22), sr);
         }
         break;
       case 'Fire': // (fallen blossom, red, heaped)
         for (let k = 0; k < 16; k++) {
-          const [x, z] = R(ramp(sr, -0.6, 0.6), ramp(sr, -0.85, -0.25));
+          const [x, z] = R(ramp(sr, -0.9, 0.9), ramp(sr, -1.05, -0.85));
           if (inT(x, z)) petals.push(x, gy(x, z) + 0.06, z, ramp(sr, 0.2, 0.34), sr() * Math.PI, ramp(sr, 0.6, 1));
         }
         break;
       case 'Mountain': { // (one stone, low, at its edge)
-        const [x, z] = R(-away * 0.55, -0.6);
+        const [x, z] = R(-away * 0.95, -0.7);
         if (inT(x, z)) { const sz = ramp(sr, 0.35, 0.5); rock(mesh, [x, gy(x, z), z], sz, sr, gy); shade(mesh, ways, x - 0.9 * sz, z + 0.1, sz * 2.2, sz * 0.7, 0.28); }
         break;
       }
       case 'Wind': // (grass, in tufts)
-        for (let k = 0; k < 6; k++) { const [x, z] = R(ramp(sr, -0.7, 0.7), ramp(sr, -0.85, -0.3)); if (inT(x, z)) tuft(mesh, ways, x, z, sr, 4); }
+        for (let k = 0; k < 6; k++) { const [x, z] = R((k % 2 ? 1 : -1) * ramp(sr, 0.75, 0.95), ramp(sr, -0.8, 0.2)); if (inT(x, z)) tuft(mesh, ways, x, z, sr, 4); }
         break;
       case 'Thunder': // (a stone split in two)
-        for (const dx of [-0.12, 0.12]) { const [x, z] = R(dx, -0.6); if (inT(x, z)) rock(mesh, [x, gy(x, z), z], 0.3, seeded(hash(st.i, 3)), gy); }
+        for (const dx of [-0.08, 0.08]) { const [x, z] = R(away * 0.92 + dx, -0.7); if (inT(x, z)) rock(mesh, [x, gy(x, z), z], 0.3, seeded(hash(st.i, 3)), gy); }
         break;
     }
   }
@@ -693,6 +705,42 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
 }
 
 /**
+ * A cast, laid in its clearing as a feature of the hill: its six lines in stone set in the ground,
+ * the first nearest the foot of the hill, a yin line in two, its moving lines lacquered vermilion;
+ * behind them, up the hill, a low stone tablet with its name cut in it, and, if it moves, 之 and the
+ * name of what it becomes.
+ */
+function castStone(mesh: Mesh, ways: Ways, st: Station) {
+  const c = st.c, gy = (x: number, z: number) => ground(ways, x, z);
+  const len = 2.1, gap = 0.36, th = 0.5, step = 0.95, z0 = c[2] - st.rz * 0.62;
+  // (each bar a slab, its top a hand above the ground at its middle, its foot sunk)
+  const bar = (x0: number, x1: number, z: number, moving: boolean) => {
+    const xm = (x0 + x1) / 2, y = gy(xm, z) + 0.12;
+    mesh.box([xm, y - 0.2, z], [(x1 - x0) / 2, 0.2, th / 2], [1, 0], moving ? INK.red : INK.stepTop, moving ? INK.red : INK.stepFace, moving ? M.red : M.step);
+  };
+  st.lines.forEach((v, k) => {
+    const z = z0 + k * step, mv = v === 6 || v === 9;
+    if (v % 2) bar(c[0] - len, c[0] + len, z, mv);
+    else { bar(c[0] - len, c[0] - gap, z, mv); bar(c[0] + gap, c[0] + len, z, mv); }
+  });
+  // the tablet: a slab of stone standing low behind the figure, facing down the hill, its name cut in its face
+  const hex = identify(st.lines), moves = st.lines.some((v) => v === 6 || v === 9), rel = moves ? identify(st.lines, true) : null;
+  const tz = z0 + 6 * step + 1.1, hw = moves ? 3.3 : 1.6, hh = 0.75, ty = gy(c[0], tz);
+  mesh.box([c[0], ty + hh - 0.15, tz], [hw, hh, 0.22], [1, 0], INK.stepTop, INK.stepFace, M.step);
+  mesh.box([c[0], ty - 0.05, tz], [hw + 0.15, 0.14, 0.34], [1, 0], INK.stone, INK.stone, M.stone);
+  // (its words: each a cell of the sheet on the tablet's face, a hair proud of it)
+  const word = (cell: number, xm: number, w: number) => {
+    const y0 = ty + hh - 0.15 - w / 3.2, y1 = ty + hh - 0.15 + w / 3.2, zf = tz - 0.23;
+    const q: V3[] = [[xm - w, y0, zf], [xm - w, y1, zf], [xm + w, y1, zf], [xm + w, y0, zf]];
+    // (read from down the hill: there, +x is to the left)
+    const uv: Array<[number, number]> = [[1, 0], [1, 1], [0, 1], [0, 0]];
+    for (const k of [0, 1, 2, 0, 2, 3]) { const p = q[k], [tu, tv] = atlasUV(cell, uv[k][0], uv[k][1]); mesh.v.push(p[0], p[1], p[2], 0, 0, -1, tu, tv, 0, M.plaque); }
+  };
+  if (rel) { word(ATLAS.hex + hex.number - 1, c[0] + 1.95, 1.3); word(ATLAS.zhi, c[0], 0.65); word(ATLAS.hex + rel.number - 1, c[0] - 1.95, 1.3); }
+  else word(ATLAS.hex + hex.number - 1, c[0], 1.45);
+}
+
+/**
  * A roof of glazed tiles, every tile drawn: hip-and-gable (g < 1: the lower slopes hipped all
  * round, a red gable at each end under its barge board), hipped (g 1, a ridge gx long), or a
  * pyramid (g 1, gx 0, coming to a point). Its eaves well out (ex across, ez front to back, about
@@ -871,7 +919,7 @@ function temple(mesh: Mesh, t: TempleAt, seed: number) {
     const fn: V3 = [face[0], 0, face[1]];
     // (u to the right as it's looked at from in front; its name, from the plaques' sheet: one name a row)
     const uv: Array<[number, number]> = [[1, 0], [1, 1], [0, 1], [0, 0]];
-    for (const k of [0, 1, 2, 0, 2, 3]) { const p = pq[k]; mesh.v.push(p[0], p[1], p[2], fn[0], fn[1], fn[2], uv[k][0], (name + uv[k][1]) / NAMES.length, 0, M.plaque); }
+    for (const k of [0, 1, 2, 0, 2, 3]) { const p = pq[k], [tu, tv] = atlasUV(name, uv[k][0], uv[k][1]); mesh.v.push(p[0], p[1], p[2], fn[0], fn[1], fn[2], tu, tv, 0, M.plaque); }
   };
 
   if (kind === 'pavilion') {
