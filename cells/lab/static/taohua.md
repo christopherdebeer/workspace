@@ -19,7 +19,9 @@ and on by the ways. Off the ways, the address keeps where they stand (`?at=@x,z`
 place a tap found is answered in the scene: a ring of vermilion, left open as a brush draws it, for
 a moment. Only a tap walks: a drag, wherever it starts, even on a way, looks about a little; let
 go, and the view comes back. With keys, ↑ or W walks on (at a fork, by the way most nearly ahead),
-↓ or S back. Pinch (or the wheel) to come nearer, up to two and a half times, in the print; in
+↓ or S back. Pinch (or the wheel) to come nearer in the print, and nearest of all the camera comes down behind
+the walker to look up the hill over their shoulder (blossom right before the eye thinning away in
+dabs); in
 the composition view, to stand further off still, up to twice as far. Each view keeps its own. The steps climbed are counted at the top.
 
 The title stands at the foot of the print where the journey starts: the name of the first temple up

@@ -369,6 +369,9 @@ layout(location = 1) out vec4 oA;
 ${COMMON}
 void main() {
   float shape = fract(sin(dot(vP, vec3(12.9898, 4.1414, 78.233))) * 43758.5453);
+  // (a clump right before the eye, as when looking low over the walker's shoulder, thins away in dabs: never a wall of pink)
+  float near = smoothstep(2.5, 6., length(vP - uEye));
+  if (near < 1. && hash3(vec3(floor(gl_FragCoord.xy / 3.), vSeed * 31.)) > near) discard;
   vec2 shapeQ = vQ / vec2(1.05 + .22 * shape, .76 + .16 * shape);
   float a = atan(shapeQ.y, shapeQ.x), r = length(shapeQ);
   // (its edge: the blossom crumbles away into the paper in little square dabs, as a worn block prints;

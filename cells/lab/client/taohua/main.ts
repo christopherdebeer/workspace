@@ -27,11 +27,11 @@ let ink = params.has('ink');
 /** how far into the composition view: eased toward it (1) or back from it (0) over a little over half a second, so each thing in the print is seen to become its mass */
 let inkT = ink ? 1 : 0;
 /**
- * How near the camera stands, by pinching (or the wheel): in the print, nearer only (down to 0.4 of its
- * distance); in the composition view, further only (out to twice its distance). Each view keeps its own.
+ * How near the camera stands, by pinching (or the wheel): in the print, nearer only (down to 0.08 of its
+ * distance; the nearest of it coming down behind the walker, to look over their shoulder up the hill); in the composition view, further only (out to twice its distance). Each view keeps its own.
  */
 let zoomN = 1, zoomI = 1;
-const ZOOM_N: [number, number] = [0.4, 1], ZOOM_I: [number, number] = [1, 2];
+const ZOOM_N: [number, number] = [0.08, 1], ZOOM_I: [number, number] = [1, 2];
 const zoomBy = (k: number) => {
   if (ink) zoomI = Math.max(ZOOM_I[0], Math.min(ZOOM_I[1], zoomI * k));
   else zoomN = Math.max(ZOOM_N[0], Math.min(ZOOM_N[1], zoomN * k));
@@ -512,22 +512,34 @@ let camInit = false;
 function camera(p: V3, dt: number) {
   const k = 1 - Math.exp(-dt * 2.2);
   // (looking a little ahead up the hill; nearer, as the camera comes nearer, so the walker keeps their place in the print)
-  const ahead = 7 * (zoomN + (1 - zoomN) * ease(inkT));
+  // (and nearest, come down low behind them, looking up the hill over their shoulder: it looks
+  // further ahead, from about the height of their eyes)
+  const low = (1 - ease(inkT)) * smoothstep(0.4, 0.1, zoomN);
+  const ahead = 7 * Math.max(0.4, zoomN + (1 - zoomN) * ease(inkT));
   const target: V3 = [p[0], p[1] + 1.2, p[2] + ahead];
   if (!camInit) { cam.t = [...target]; cam.x = p[0]; camInit = true; }
   for (let i = 0; i < 3; i++) cam.t[i] += (target[i] - cam.t[i]) * k;
   // (it swings across slowly as the path zigzags)
-  cam.x += (p[0] - cam.x) * (1 - Math.exp(-dt * 1.2));
+  cam.x += (p[0] - cam.x) * (1 - Math.exp(-dt * (1.2 + 4 * low)));
   // (looked about by hand, it comes back after a while)
   if (!looking && performance.now() - lookAt0 > 2500) { lookYaw *= Math.exp(-dt * 1.2); lookPitch *= Math.exp(-dt * 1.2); }
   const aspect = canvas.width / canvas.height;
   // (the composition view stands further off: the camera eases back as it comes in, and in again as it goes)
   const zk = ease(inkT), zoom = zoomN + (zoomI - zoomN) * zk;
-  const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (1 + 0.8 * zk) * zoom;
+  const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (1 + 0.8 * zk) * Math.max(0.4, zoom);
   const pitch = 0.76 + lookPitch, yaw = lookYaw;
   const t: V3 = [cam.x + (cam.t[0] - p[0]) * 0, cam.t[1], cam.t[2]];
   t[0] = cam.x;
   const eye: V3 = [t[0] - Math.sin(yaw) * Math.cos(pitch) * dist, t[1] + Math.sin(pitch) * dist, t[2] - Math.cos(yaw) * Math.cos(pitch) * dist];
+  if (low > 0) {
+    // (over the shoulder: some eight metres behind them, a couple of metres over their head, looking up
+    // the hill to a place six metres ahead of them at about their eyes' height; eased into from above)
+    const ps = 0.15 + lookPitch * 0.5, ds = 14;
+    const ts: V3 = [p[0] + Math.sin(yaw) * 6, p[1] + 1.5, p[2] + Math.cos(yaw) * 6];
+    const es: V3 = [ts[0] - Math.sin(yaw) * Math.cos(ps) * ds, ts[1] + Math.sin(ps) * ds + 0.0, ts[2] - Math.cos(yaw) * Math.cos(ps) * ds];
+    es[1] = Math.max(es[1], p[1] + 2.6);
+    for (let i = 0; i < 3; i++) { eye[i] += (es[i] - eye[i]) * low; t[i] += (ts[i] - t[i]) * low; }
+  }
   return { eye, t };
 }
 
