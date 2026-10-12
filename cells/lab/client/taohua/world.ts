@@ -109,9 +109,12 @@ const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
 
 /** The ground's height at (x, z): the hill there, a little rolling. */
 export function ground(path: Path, x: number, z: number): number {
-  // (beside the path, it lies a little under the steps, smooth; further off, it rolls)
-  const k = smooth(1.3, 3.4, path.nearest(x, z).d);
-  return path.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04 - 0.08 * (1 - k);
+  // (beside the path, it lies smooth under it; further off, it rolls. Beside a stair it lies well
+  // under: the stair rises in steps and the hill in a slope, so at each step's front the slope comes
+  // up nearly to the tread, and must stay clear of it)
+  const nr = path.nearest(x, z), k = smooth(1.3, 3.4, nr.d);
+  const under = path.flightAt(nr.s).kind === 'stair' ? 0.34 : 0.08;
+  return path.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04 - under * (1 - k);
 }
 
 /** how far a temple beside the path stands from its middle line: clear of it, its stair down to it */
@@ -261,7 +264,7 @@ export function makeBand(path: Path, seed: number, j: number): Band {
         const a = corners[n], b = corners[(n + 1) % corners.length];
         const pa = P(a[0], a[1], top), pb = P(b[0], b[1], top);
         mesh.tri(centre, pb, pa, INK.stepTop, M.step, [0, 1, 0]);
-        mesh.quad(P(a[0], a[1], top - 0.24), P(b[0], b[1], top - 0.24), pb, pa, INK.stepFace, M.step);
+        mesh.quad(P(a[0], a[1], top - 0.6), P(b[0], b[1], top - 0.6), pb, pa, INK.stepFace, M.step);
       }
     }
     // (now and then, along one side of a flight, a wall of squared blocks holding the hill back,
