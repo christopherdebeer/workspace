@@ -7,7 +7,7 @@
  * a landing, a temple. What's solid is one mesh (vertices: position, normal, colour, material);
  * the blossom and the petals are lists for instancing.
  */
-import { hash, seeded, type Rand } from '../kit/rng';
+import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { GATE, LANDING, Path, RISE, TERRACE, WIDTH, type Flight, type V3 } from './path';
 
 /** how deep a band is, up the hill (m); how far across the hill the world goes, each side */
@@ -139,6 +139,28 @@ export function templesNear(path: Path, z0: number, z1: number): TempleAt[] {
     }
   }
   return out;
+}
+
+/**
+ * Large-scale composition, independent of streaming bands. Every 36 m has an asymmetric
+ * opening beside the route; overlapping soft fields leave wooded shoulders between them.
+ * This controls whole groves before any individual tree is grown.
+ */
+export function groveDensity(path: Path, seed: number, x: number, z: number): number {
+  const cell = Math.floor(z / 36);
+  let opening = 0;
+  for (let i = cell - 1; i <= cell + 1; i++) {
+    const rr = seeded(hash(seed, i, 0xc041));
+    const cz = i * 36 + 12 + rr() * 12;
+    const side = rr() < 0.5 ? -1 : 1;
+    const at = path.at(path.nearest(0, cz).s).p;
+    const cx = at[0] + side * (2.5 + rr() * 2.5);
+    const rx = 5.5 + rr() * 3.5, rz = 8 + rr() * 5;
+    const d = Math.hypot((x - cx) / rx, (z - cz) / rz);
+    opening = Math.max(opening, 1 - smooth(0.55, 1.15, d));
+  }
+  const mass = noise1(hash(seed, 0xc042), z / 17 + x / 11);
+  return (0.7 + 0.29 * mass) * (1 - opening);
 }
 
 /** Band j of the hill. */
@@ -280,11 +302,13 @@ export function makeBand(path: Path, seed: number, j: number): Band {
 
   // trees: on a jittered grid, not on the path (though they lean over it), not on a temple's terrace
   const G = 3.9;
-  for (let gx = -SPAN + 1; gx < SPAN; gx += G) for (let gz = Math.ceil(z0 / G) * G; gz < z1; gz += G) {
+  for (let gx = -SPAN + 1; gx < SPAN; gx += G) for (let gz = Math.floor((z0 - G * 0.45) / G) * G; gz < z1 + G * 0.45; gz += G) {
     const tr = seeded(hash(seed, Math.round(gx * 10), Math.round(gz * 10), 0x7ee));
-    if (tr() < 0.06) continue;
+    const accept = tr();
     const x = gx + (tr() - 0.5) * G * 0.9, z = gz + (tr() - 0.5) * G * 0.9;
+    // Ownership follows the final jittered position; neighbouring bands visit the same candidates.
     if (!inBand(z)) continue;
+    if (accept > groveDensity(path, seed, x, z)) continue;
     if (path.nearest(x, z).d < WIDTH / 2 + 1.5) continue;
     if (onTemple(x, z, 0.8) || inGlade(x, z)) continue;
     // (an outcrop behind it, now and then, as in the print: black slabs the blossom stands against)
@@ -403,8 +427,9 @@ function tuft(mesh: Mesh, path: Path, x: number, z: number, r: Rand, n = 5) {
  */
 function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, path: Path) {
   // (a trunk you can see: tall before it opens, leaning, with a kink or two)
-  const H = ramp(r, 1.5, 2.5), lean: V3 = norm([ramp(r, -0.35, 0.35), 1, ramp(r, -0.35, 0.35)]);
-  const R0 = ramp(r, 0.2, 0.3);
+  const stature = ramp(r, 0.82, 1.3);
+  const H = ramp(r, 1.5, 2.5) * stature, lean: V3 = norm([ramp(r, -0.35, 0.35), 1, ramp(r, -0.35, 0.35)]);
+  const R0 = ramp(r, 0.2, 0.3) * stature;
   const knee = add(base, add(mul(lean, H * 0.55), [ramp(r, -0.15, 0.15), 0, ramp(r, -0.15, 0.15)]));
   const top = add(knee, mul(norm(add(lean, [ramp(r, -0.3, 0.3), 0.4, ramp(r, -0.3, 0.3)])), H * 0.45));
   mesh.tube([base[0], base[1] - 0.3, base[2]], knee, R0 * 1.35, R0 * 1.05, INK.trunk, M.trunk, 8);
@@ -450,7 +475,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   for (let i = 0; i < limbs; i++) {
     const a = a0 + (i / limbs) * Math.PI * 2 + ramp(r, -0.35, 0.35), el = ramp(r, 0.5, 0.95);
     const d = norm([Math.cos(a) * Math.cos(el) + lean[0] * 0.3, Math.sin(el), Math.sin(a) * Math.cos(el) + lean[2] * 0.3]);
-    grow(top, d, ramp(r, 1.5, 2.2), R0 * 0.62, 0);
+    grow(top, d, ramp(r, 1.5, 2.2) * stature, R0 * 0.62, 0);
   }
   if (r() < 0.5) { const a = r() * 6.28; grow(knee, norm([Math.cos(a), 0.6, Math.sin(a)]), ramp(r, 1.2, 1.7), R0 * 0.45, 1); }
   const tips = ends;
@@ -464,18 +489,27 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   const L: V3 = norm([0.55, 0.75, -0.35]);
   // (each tree its own pink, a little deeper or paler than the next)
   const t0 = ramp(r, -0.24, 0.12);
+  // A shared missing wedge exposes connected branch structure without pulling it through
+  // unrelated objects. The remaining masses range from broad lobes to small fringe clusters.
+  const gapAngle = r() * Math.PI * 2;
+  const gapWidth = ramp(r, 0.16, 0.32);
+  const crownSeed = r();
   for (const [p, d, k] of tips) {
     const n = k + (k > 1 && r() < 0.4 ? 1 : 0);
     for (let i = 0; i < n; i++) {
       // (a clump about the fan of twigs, lifted a little: the blossom sits on top of the branches)
       const q: V3 = [p[0] + d[0] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55), p[1] + ramp(r, 0.05, 0.5), p[2] + d[2] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55)];
-      const rad = ramp(r, 0.5, 0.78);
+      const angle = Math.atan2(q[2] - cz, q[0] - cx);
+      const gap = Math.abs(Math.atan2(Math.sin(angle - gapAngle), Math.cos(angle - gapAngle)));
+      const radial = Math.hypot(q[0] - cx, q[2] - cz);
+      if (gap < gapWidth && radial > 0.65 * stature && q[1] < cy + 0.9 * stature) continue;
+      const rad = (k > 1 ? ramp(r, 0.68, 1.02) : ramp(r, 0.32, 0.58)) * stature;
       // (none right over the path, so its way stays open; in front of it, as the eye looks up the hill,
       // the crowns stand as they grow, and the walker passes behind them and comes out again)
       if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
       const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
       const shade = Math.max(0, Math.min(1, 0.52 + t0 + 0.3 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.22 * (q[1] - cy) + ramp(r, -0.06, 0.06)));
-      puffs.push(q[0], q[1], q[2], rad, shade, r());
+      puffs.push(q[0], q[1], q[2], rad, shade, crownSeed);
     }
   }
   // fallen blossom under it, where it's not the path: in drifts, stamped flowers and specks of red

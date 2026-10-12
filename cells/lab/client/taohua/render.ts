@@ -33,8 +33,7 @@ out vec3 vW; out vec3 vN; out vec3 vC; flat out int vM;
 void main() {
   vec4 w = uModel * vec4(aPos, 1.);
   vW = w.xyz; vN = normalize(mat3(uModel) * aNor); vC = aCol; vM = int(aMat + .5);
-  // (the thinner branches drawn nearer the eye than they are: they show through the blossom, as ink over colour)
-  if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * 2.6;
+  // Branches retain their actual depth and connected junctions. Crown gaps reveal the ink.
   gl_Position = uVP * w;
 }`;
 const SOLID_FS = `#version 300 es
@@ -152,7 +151,7 @@ void main() {
   c *= lit;
   // (far off, it fades into the paper)
   float d = length(vW - uEye);
-  c = mix(c, PAPER, smoothstep(45., 95., d) * .85);
+  c = mix(c, PAPER, smoothstep(65., 125., d) * .68);
   oC = vec4(c, 1.);
   oA = vec4(n * .5 + .5, float(vM) / 31.);
 }`;
@@ -164,7 +163,10 @@ in vec3 iPos; in float iRad; in float iShade; in float iSeed;
 uniform mat4 uVP; uniform vec3 uRight, uUp;
 out vec2 vQ; flat out vec3 vP; flat out float vR, vS, vSeed;
 void main() {
-  vQ = aQ * 1.18; vP = iPos; vR = iRad; vS = iShade; vSeed = iSeed;
+  // Unequal broad lobes within a crown, sharing one stable tree seed.
+  float shape = fract(sin(dot(iPos, vec3(12.9898, 4.1414, 78.233))) * 43758.5453);
+  vQ = aQ * 1.18 * vec2(1.05 + .22 * shape, .76 + .16 * shape);
+  vP = iPos; vR = iRad; vS = iShade; vSeed = iSeed;
   gl_Position = uVP * vec4(iPos + (uRight * vQ.x + uUp * vQ.y) * iRad, 1.);
 }`;
 const PUFF_FS = `#version 300 es
@@ -175,7 +177,9 @@ layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
 void main() {
-  float a = atan(vQ.y, vQ.x), r = length(vQ);
+  float shape = fract(sin(dot(vP, vec3(12.9898, 4.1414, 78.233))) * 43758.5453);
+  vec2 shapeQ = vQ / vec2(1.05 + .22 * shape, .76 + .16 * shape);
+  float a = atan(shapeQ.y, shapeQ.x), r = length(shapeQ);
   // (its edge: the blossom crumbles away into the paper in little square dabs, as a worn block prints;
   // a few dabs loose beyond it. The dabs are the puff's own, so they stay where they are as the view moves)
   float edge = 1. - .1 * noise(vec3(cos(a) * 2.2, sin(a) * 2.2, vSeed * 40.));
@@ -189,10 +193,13 @@ void main() {
   vec3 w = vP + (uRight * vQ.x + uUp * vQ.y) * vR - uFwd * z * vR * .8;
   // its tone: the puff's place on its crown (lit, high, or under), and over it washes of deeper and
   // paler pink in soft blotches across the whole crown, as watercolour pools
-  float wash = noise(w * .55) - .5, wash2 = noise(w * 1.7 + 4.) - .5;
+  // Broad wash belongs to the cluster centre, independent of camera orientation.
+  // Fine marks remain attached to the illustrated lobe.
+  vec3 mark = vP + vec3(vQ.x, vQ.y, 0.) * vR;
+  float wash = noise(vP * .55) - .5, wash2 = noise(mark * 1.7 + 4.) - .5;
   float tone = clamp(vS + wash * .7 + wash2 * .22, 0., 1.);
   // (in four inks only, as a block prints them: where one meets the next, a ragged edge)
-  float lvl = floor(clamp(tone * 3.6 + (noise(w * 7.) - .5) * .7, 0., 3.));
+  float lvl = floor(clamp(tone * 3.6 + (noise(mark * 7.) - .5) * .7, 0., 3.));
   vec3 deep = vec3(.71, .27, .25), lo = vec3(.83, .38, .33), mid = vec3(.91, .48, .41), hi = vec3(.97, .65, .58);
   vec3 c = lvl < .5 ? deep : lvl < 1.5 ? lo : lvl < 2.5 ? mid : hi;
   // its grain: the print's pale flecks, fine, everywhere; a few deeper
@@ -206,7 +213,7 @@ void main() {
   vec4 clip = uVP * vec4(w, 1.);
   gl_FragDepth = clip.z / clip.w * .5 + .5;
   float d = length(w - uEye);
-  c = mix(c, PAPER, smoothstep(45., 95., d) * .85);
+  c = mix(c, PAPER, smoothstep(65., 125., d) * .68);
   oC = vec4(c, 1.);
   vec3 n = normalize(uRight * vQ.x + uUp * vQ.y - uFwd * z);
   oA = vec4(n * .5 + .5, ${M.blossom}. / 31.);

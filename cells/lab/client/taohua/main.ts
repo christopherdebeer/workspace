@@ -16,10 +16,13 @@ import { BAND, INK, M, Mesh, NAMES, SPAN, ground, makeBand, templesNear, type Ba
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
-const seed = seedFrom(params.get('seed')) ?? (preview ? 1 : randomSeed());
+const review = params.has('review');
+const PASS = 'composition-1';
+const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
 if (preview) document.body.classList.add('preview');
+if (review) canvas.style.pointerEvents = 'none';
 
 let R: Renderer;
 try { R = new Renderer(canvas); } catch (e) {
@@ -244,7 +247,7 @@ function camera(p: V3, dt: number) {
 let last = performance.now(), time = 0;
 let reached = 0;
 function frame(now: number) {
-  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
+  const dt = review ? 0 : Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = now; time += dt;
   const dpr = Math.min(devicePixelRatio || 1, 2) * (preview ? 0.6 : 1);
   const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
@@ -310,12 +313,15 @@ function frame(now: number) {
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { seed, s, goal, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (si: number) => project(path.at(si).p), pick };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, s, goal, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (si: number) => project(path.at(si).p), pick };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
 showPoem(0);
 showName(0);
-if (!preview) setTimeout(() => $('hint').classList.add('on'), 1200);
+if (review) {
+  $('hint').textContent = PASS + ' · seed ' + seed + ' · at ' + s.toFixed(1);
+  $('hint').classList.add('on');
+} else if (!preview) setTimeout(() => $('hint').classList.add('on'), 1200);
 void SPAN; void WIDTH;
 requestAnimationFrame(frame);
