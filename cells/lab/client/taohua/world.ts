@@ -10,6 +10,7 @@ import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { identify, moving } from '../changes/model';
 import { inStation, stationsNear, type Station } from './compose';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3, type Way } from './ways';
+import type { Water } from './water';
 
 /** how deep a tile of the hill is, up it (m), and how wide, across it: the world is made a tile at a time, about the walker, as far across as the ways go */
 export const BAND = 12, TILE = 16;
@@ -18,7 +19,7 @@ export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
 const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -503,6 +504,9 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     }
     tree(mesh, puffs, petals, [x, ground(ways, x, z), z], tr, ways);
   }
+  // (the blossom's reflection in still water)
+  if (ways.water.streamsNear(z0, z1).length) blossomInWater(mesh, ways, puffs, hash(seed, i, j));
+
   // petals fallen on the path too
   for (let i = 0; i < 36; i++) {
     const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
@@ -620,17 +624,26 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
   const inT = (x: number, z: number) => z >= z0 && z < z1 && x >= x0 && x < x1;
   const gy = (x: number, z: number) => ground(ways, x, z);
   const clearOfWays = (x: number, z: number, m: number) => ways.nearest(x, z).d > WIDTH / 2 + m;
+  // (a rock by or in the water: and, if it stands in it, ripples about it; and where the water's still enough, its reflection)
+  const stone = (x: number, z: number, size: number, r: Rand) => {
+    // (one standing in the water stands up out of it: its foot a little under the water, not on the bed)
+    const w = W.at(x, z);
+    const foot = w && w.s < 0.3 ? (px: number, pz: number) => Math.max(gy(px, pz), w.L - size * 0.2) : gy;
+    rock(mesh, [x, foot(x, z), z], size, r, foot);
+    waterMarks(mesh, W, x, z, size, size * ramp(r, 1, 1.4));
+  };
   for (const st of sts) {
     const r = seeded(hash(seed, st.k, Math.floor(z0), Math.floor(x0), 0x40c4));
     // (rocks along its banks, and in it where it runs fast)
     for (let z = Math.max(z0, st.z0 - 2); z < Math.min(z1, st.z1 + 2); z += ramp(r, 1.2, 3)) {
       const xc = W.xAt(st, z), hw = W.halfAt(st, z), lv = W.levelAt(st, z), fast = lv.kind === 'flow' && ways.slope(z) > 0.2;
       for (const sd of [-1, 1]) {
-        if (r() > (fast ? 0.7 : 0.38)) continue;
-        const x = xc + sd * (hw + ramp(r, -0.3, 0.6));
-        if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.35, 0.8), r, gy);
+        if (r() > (fast ? 0.75 : 0.55)) continue;
+        const x = xc + sd * (hw + ramp(r, -0.35, 0.4));
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, ramp(r, 0.35, 0.8), r);
       }
-      if (fast && r() < 0.5) { const x = xc + ramp(r, -hw * 0.6, hw * 0.6); if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.3, 0.55), r, gy); }
+      // (and in it: where it runs fast, often; where it's slow, now and then)
+      if (r() < (fast ? 0.5 : 0.2)) { const x = xc + ramp(r, -hw * 0.7, hw * 0.7), pool = W.at(x, z)?.kind === 'pool'; if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, pool ? ramp(r, 0.6, 1) : ramp(r, 0.35, 0.65), r); }
     }
     // (at each fall's lip, ledges of rock either side; under a high fall, rock all about its pool)
     for (const f of st.falls) for (const lip of f.lips) {
@@ -662,7 +675,13 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
       }
       if (p.kind === 'pond' || p.kind === 'pool' || p.kind === 'plunge') for (let k = 0; k < (p.kind === 'pool' ? 2 : 5); k++) {
         const a = r() * 6.3, x = p.x + Math.cos(a) * p.rx * ramp(r, 0.95, 1.15), z = p.z + Math.sin(a) * p.rz * ramp(r, 0.95, 1.15);
-        if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.4, 0.9), r, gy);
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, ramp(r, 0.4, 0.9), r);
+      }
+      // (and one or two standing out in a pond)
+      if (p.kind === 'pond' || p.kind === 'plunge') for (let k = 0; k < 2; k++) {
+        if (r() < 0.4) continue;
+        const a = r() * 6.3, x = p.x + Math.cos(a) * p.rx * ramp(r, 0.35, 0.75), z = p.z + Math.sin(a) * p.rz * ramp(r, 0.35, 0.75);
+        if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, ramp(r, 0.55, 0.95), r);
       }
     }
   }
@@ -672,6 +691,66 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
     const x = ramp(pr, x0, x1), z = ramp(pr, z0, z1), w = W.at(x, z);
     if (!w || w.s > -0.15 || (w.kind === 'flow' && w.run > 0.2) || w.kind === 'falls') continue;
     petals.push(x, w.L + 0.015, z, ramp(pr, 0.04, 0.09), pr() * Math.PI, pr() * 0.6);
+  }
+}
+/**
+ * A patch on the water's surface, for marks drawn on it: a fine sheet from (xa, za) to (xb, zb), just
+ * above the water at y, each corner carrying where it is in the marks' own measure, and how far in
+ * from the water's edge it is (so they're only drawn on the water).
+ */
+function decal(mesh: Mesh, W: Water, xa: number, xb: number, za: number, zb: number, y: number, mat: number, map: (x: number, z: number) => [number, number]) {
+  const nx = Math.max(2, Math.ceil((xb - xa) / 0.22)), nz = Math.max(2, Math.ceil((zb - za) / 0.22));
+  const V = (i: number, k: number) => {
+    const x = xa + ((xb - xa) * i) / nx, z = za + ((zb - za) * k) / nz, w = W.at(x, z), m = map(x, z);
+    return [x, y, z, 0, 1, 0, m[0], m[1], w ? -w.s : -1, mat];
+  };
+  for (let i = 0; i < nx; i++) for (let k = 0; k < nz; k++) {
+    const a = V(i, k), b = V(i, k + 1), c = V(i + 1, k + 1), d = V(i + 1, k);
+    if (Math.max(a[8], b[8], c[8], d[8]) < 0) continue;
+    for (const v of [a, b, c, a, c, d]) mesh.v.push(...v);
+  }
+}
+/**
+ * The marks on the water about something standing at (x, z), so wide (size) and so high (h): if it
+ * stands in the water, two or three rings of ripples about it, drawn out downstream where it runs;
+ * where the water's still enough, its reflection below it.
+ */
+function waterMarks(mesh: Mesh, W: Water, x: number, z: number, size: number, h: number) {
+  const w = W.at(x, z), below = W.at(x, z - size);
+  if (below && below.s < 0 && below.run < 0.2 && below.kind !== 'falls' && (!w || w.s > 0.4)) {
+    // (on the bank just uphill of still water: only its reflection, in the water below it)
+    const dz = h * 1.06 + 0.2, hx = size * 0.85, L = below.L;
+    decal(mesh, W, x - hx, x + hx, z - dz, z + 0.15, L + 0.01, M.reflect, (px, pz) => [(px - x) / hx, (z + 0.15 - pz) / (dz + 0.15)]);
+    return;
+  }
+  if (!w || w.s > 0.4 || w.kind === 'falls') return;
+  const L = w.L;
+  if (w.s < 0.4) {
+    const R = size * 0.9, down = w.kind === 'flow' ? 1.7 : 1;
+    decal(mesh, W, x - R * 2.3, x + R * 2.3, z - R * 2.3 * down, z + R * 2.3, L + 0.014, M.ripple, (px, pz) => [(px - x) / R, (pz - z) / R / (pz < z ? down : 1)]);
+  }
+  if (w.run < 0.2) {
+    const dz = h * 1.06 + 0.2, hx = size * 0.85;
+    decal(mesh, W, x - hx, x + hx, z - dz, z + 0.15, L + 0.01, M.reflect, (px, pz) => [(px - x) / hx, (z + 0.15 - pz) / (dz + 0.15)]);
+  }
+}
+/**
+ * The blossom's reflection, on still water: for each clump of a crown whose mirror image falls on
+ * the water (below it as the eye sees it: as far down the hill from it, on the water, as it stands
+ * above the water), a patch of pink strokes there.
+ */
+function blossomInWater(mesh: Mesh, ways: Ways, puffs: number[], seed: number) {
+  const W = ways.water, r = seeded(hash(seed, puffs.length, 0x5ef1));
+  let n = 0;
+  for (let i = 0; i < puffs.length && n < 80; i += 6) {
+    if (r() < 0.45) continue;
+    const x = puffs[i], y = puffs[i + 1], z = puffs[i + 2], rad = puffs[i + 3];
+    const w0 = W.at(x, z - (y - ways.hill(z)) * 1.06);
+    if (!w0 || w0.s > 0) continue;
+    const zr = z - (y - w0.L) * 1.06, w = W.at(x, zr);
+    if (!w || w.s > -0.15 || w.run >= 0.2 || w.kind === 'falls') continue;
+    decal(mesh, W, x - rad, x + rad, zr - rad * 1.5, zr + rad * 0.4, w.L + 0.006 + r() * 0.003, M.reflectPink, (px, pz) => [(px - x) / rad, (zr + rad * 0.4 - pz) / (rad * 1.9)]);
+    n++;
   }
 }
 /** Reeds: a clump of tall thin blades, standing up out of the water. */
@@ -756,8 +835,8 @@ function tuft(mesh: Mesh, ways: Ways, x: number, z: number, r: Rand, n = 5) {
 function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, ways: Ways) {
   // (none stands in water, nor on a bank cut steep; nor just downhill of water, where its crown would
   // stand between the eye and it: the water's an open mass, as the print's are)
-  if (ways.dryOf(base[0], base[2]) < 2.2) return;
-  for (const dz of [1.5, 3, 4.5, 6, 7.5]) { const w = ways.water.at(base[0], base[2] + dz); if (w && w.s < 0) return; }
+  if (ways.dryOf(base[0], base[2]) < 1.6) return;
+  for (const dz of [1.5, 3, 4.5, 6]) { const w = ways.water.at(base[0], base[2] + dz); if (w && w.s < 0) return; }
   // (a trunk you can see: tall before it opens, leaning, with a kink or two; bold, as the print's are)
   const stature = ramp(r, 0.82, 1.3);
   const H = ramp(r, 1.6, 2.6) * stature, lean: V3 = norm([ramp(r, -0.4, 0.4), 1, ramp(r, -0.15, 0.3)]);

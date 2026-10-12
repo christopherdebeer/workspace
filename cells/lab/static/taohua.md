@@ -62,7 +62,8 @@ stand as they grow, over a way too: nothing is cut out of a crown to show what's
 Now and then a stream comes down the hill: one every few hundred metres up it, each two to three
 hundred metres long. It's laid out before the ways, from the seed alone, a stream at a time up
 the hill, so any part of it can be made without the rest. From a spring among rocks it runs down
-the hill, wandering across it in long bends and shorter ones, narrow at its spring and wider
+the hill, wandering across it in long bends and shorter ones, and short wiggles of its own every
+few metres, as a stream winds among stones, narrow at its spring and wider
 below, to a pond at its foot (or a marsh, its reeds in clumps), where the hill's gentlest
 thereabouts. Where the hill's gentle it slows, and now and then pools; where it's steep it runs
 white over rocks, or falls: in steps, from pool to pool, each held at its lip by a ledge of rock;
@@ -86,17 +87,25 @@ either bank. No tree stands in the water, on a bank cut steep, nor just downhill
 where its crown would stand between the eye and it: the water's an open mass, as the print's are.
 
 It's drawn as the prints draw water: not coloured in, but the paper itself, and brush strokes.
-Each stroke is its own short wavy mark, tapered to a hair at both ends and swelling a little past
-its middle, as a brush presses and lifts, undulating once or twice, its length, weight and tone
-its own; they're laid in staggered rows, in loose groups, with open paper between. On a stream
-they run along it, in rows parallel to its middle line (so they bend as it bends), more of them
-by its banks, long and gently waving where it's slow, short and close where it runs fast, drifting
-down it slowly. On a pool, strokes echo its shore, and out on its open water a few long strokes
-lie across it, far apart. Where it falls, fine strokes run down the sheet. Each stroke thins to
-nothing before the shore, so none's cut off by it; the shore itself is only touched, here and
-there, by a hairline. Petals float on its stiller water. Where the banks are cut deep they're
-inked as rock, black as the print's banks are. In the composition view, water's open paper,
-faintly cooler.
+Each stroke is its own wavy mark, tapered to a hair at both ends and swelling a little past its
+middle, as a brush presses and lifts, its length, weight and tone its own, and on a stream broken
+here and there along its length, as a dry brush breaks; they're laid in staggered rows, in loose
+groups, with open paper between. On a stream they run along it, long and sweeping, close
+together, in rows parallel to its middle line (so they bend as it bends), with a second layer of
+shorter, finer ones; more by its banks; short, close and wavier where it runs fast; drifting down
+it slowly. On a pool, strokes echo its shore, and out on its open water a few long strokes lie
+across it, far apart. Where it falls, a few fine lines run the whole way down the sheet. Each
+stroke thins to nothing before the shore, so none's cut off by it.
+
+Its banks are drawn in ink: a brush line along the shore, swelling and thinning, broken now and
+then, its edge notched here and there like a ledge of rock, with a hairline echo just inside it.
+Rocks line its banks at the water's edge, stand in it where it runs fast (and now and then where
+it's slow), and out in its ponds; each rock standing in the water has two or three broken rings of
+ripples about it, drawn out downstream where it runs. On still water, what stands at it or over it
+is mirrored below it, as the eye sees it, in broken strokes down, combed across by the ripples and
+fading as they go: the rocks in grey, and the blossom of a crown above a pool in pink. Petals float
+on its stiller water. Where the banks are cut deep they're inked as rock, black as the print's
+banks are. In the composition view, water's open paper, faintly cooler.
 
 ## The temples
 

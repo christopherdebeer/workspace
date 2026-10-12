@@ -65,8 +65,8 @@ export class Water {
     const z1 = z0 + ramp(r, 170, 330);
     const st: Stream = {
       k, z0, z1, x0: ramp(r, -26, 26),
-      A: [ramp(r, 7, 15), ramp(r, 2, 5)], lam: [ramp(r, 34, 60), ramp(r, 11, 19)], ph: [r() * 6.3, r() * 6.3],
-      w0: ramp(r, 0.95, 1.5), pools: [], falls: [], foot: r() < 0.35 ? 'marsh' : 'pond',
+      A: [ramp(r, 7, 15), ramp(r, 2, 5), ramp(r, 0.6, 1.1)], lam: [ramp(r, 34, 60), ramp(r, 11, 19), ramp(r, 1, 1.35)], ph: [r() * 6.3, r() * 6.3, r() * 6.3],
+      w0: ramp(r, 0.6, 1), pools: [], falls: [], foot: r() < 0.35 ? 'marsh' : 'pond',
     };
     // (where it's steep: runs of falls, now and then; else it runs white down the slope)
     let z = z0 + 14;
@@ -115,11 +115,12 @@ export class Water {
   private rimLevel(z: number, rz: number) { return this.hill(z - rz * 0.85) - SINK + 0.08; }
   /** Where across the hill a stream runs, at z. */
   xAt(st: Stream, z: number): number {
-    return st.x0 + st.A[0] * Math.sin(z / st.lam[0] + st.ph[0]) + st.A[1] * Math.sin(z / st.lam[1] + st.ph[1]);
+    // (in long bends across the hill, shorter ones, and short wiggles of its own, as a stream winds among stones)
+    return st.x0 + st.A[0] * Math.sin(z / st.lam[0] + st.ph[0]) + st.A[1] * Math.sin(z / st.lam[1] + st.ph[1]) + st.A[2] * Math.sin(z / st.lam[2] + st.ph[2]) * (0.6 + 0.4 * Math.sin(z / 23 + st.ph[0]));
   }
   /** its going across the hill for its going down it, at z */
   private dxAt(st: Stream, z: number): number {
-    return (st.A[0] / st.lam[0]) * Math.cos(z / st.lam[0] + st.ph[0]) + (st.A[1] / st.lam[1]) * Math.cos(z / st.lam[1] + st.ph[1]);
+    return (st.A[0] / st.lam[0]) * Math.cos(z / st.lam[0] + st.ph[0]) + (st.A[1] / st.lam[1]) * Math.cos(z / st.lam[1] + st.ph[1]) + (st.A[2] / st.lam[2]) * Math.cos(z / st.lam[2] + st.ph[2]) * (0.6 + 0.4 * Math.sin(z / 23 + st.ph[0]));
   }
   /** its half-width at z: narrow at its spring, wider toward its foot, wider in a run of falls' pools */
   halfAt(st: Stream, z: number): number {

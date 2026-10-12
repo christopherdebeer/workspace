@@ -54,7 +54,7 @@ ${COMMON}
  * a stroke's length, about (m); dens: how many are drawn (0-1); fy: metres to a pixel across the
  * rows; thin: how much of its weight it keeps here (0-1). Returns its ink (0-1).
  */
-float strokes(vec2 p, float rs, float len, float dens, float seed, float fy, float thin) {
+float strokes(vec2 p, float rs, float len, float dens, float seed, float fy, float thin, float wv, float dry) {
   float rv = p.y / rs, row = floor(rv);
   float L = len * mix(.6, 1.5, hash3(vec3(row, seed, 2.3)));
   float sx = p.x / L + hash3(vec3(row, seed, 7.1)) * 13.;
@@ -67,11 +67,13 @@ float strokes(vec2 p, float rs, float len, float dens, float seed, float fy, flo
   if (u <= 0. || u >= 1.) return 0.;
   float k = hash3(id + 4.9) < .65 ? 1. : 2.;
   float y0 = .5 + (hash3(id + 5.3) - .5) * .36;
-  float wav = (.05 + .07 * hash3(id + 6.1)) * sin(6.2832 * (k * u + hash3(id + 7.7)));
+  float wav = wv * (.6 + .8 * hash3(id + 6.1)) * sin(6.2832 * (k * u + hash3(id + 7.7)));
   float px = abs(fract(rv) - y0 - wav) * rs / max(fy, 1e-5);
   // (its weight swells toward its middle, a little past it, as a brush presses and lifts)
   float w = mix(.3, 1.35, hash3(id + 8.3)) * pow(sin(3.14159 * pow(u, .85)), 1.1) * thin;
-  return (1. - smoothstep(w, w + .8, px)) * mix(.5, 1., hash3(id + 9.9));
+  // (a dry brush: the stroke breaks, here and there, along its length)
+  float br = dry > 0. ? step(dry, noise(vec3(p.x * 2.4 / len, row * 3.1, seed + 17.))) : 1.;
+  return (1. - smoothstep(w, w + .8, px)) * mix(.5, 1., hash3(id + 9.9)) * br;
 }
 void main() {
   vec3 n = normalize(vN);
@@ -198,40 +200,80 @@ void main() {
     bool fall = abs(normalize(vN).y) < .55;
     // (its shore: where it's no way in from its edge, it isn't)
     if (inn < 0. && !fall) discard;
-    vec3 LINE = vec3(.3, .33, .34);
-    float ink = 0.;
+    vec3 LINE = vec3(.24, .26, .27), BANK = vec3(.13, .12, .11);
+    float ink = 0., bank = 0.;
     if (fall) {
-      // (where it falls, fine strokes down the sheet, running down)
+      // (where it falls, long fine strokes down the sheet, broken, running down)
       vec2 p = vec2(-vW.y - uTime * .9, vW.x * .8 + vW.z * .6);
-      ink = strokes(p, .13, .45, .62, 3., fwidth(p.y), 1.);
+      ink = .75 * strokes(p, .2, 12., .4, 3., fwidth(p.y), .75, .01, 0.);
     } else {
       float t = uTime * (kind == 0 ? .12 + run * 1.4 : .015), fast = smoothstep(.14, .3, run);
       float grp = noise(vec3(vW.xz * .2, 8.)), shore = 1. - smoothstep(.15, 1., inn);
       // (each thins to nothing at the shore, so none's cut off by it)
       float thin = smoothstep(.0, .25, inn);
-      if (kind == 0) {
-        // a stream: strokes along it, in rows at even distances in from its banks (so they bend as
-        // it bends), long and gently waving where it's slow, short and close where it runs fast;
-        // more of them by its banks; drifting down it
-        float dens = .3 + .22 * shore + .3 * fast + (grp - .5) * .4;
+      if (kind == 0 || kind == 3 || abs(normalize(vN).y) < .92) {
+        // a stream: long sweeping strokes along it, in rows across it parallel to its middle line
+        // (so they bend as it bends), close together, broken as a dry brush breaks; a second layer of
+        // shorter, finer ones; more by its banks; quicker, shorter, wavier where it runs fast; drifting
+        float dens = .42 + .2 * shore + .2 * fast + (grp - .5) * .35;
         vec2 p = vec2(vW.z + t, across);
         float fy = fwidth(across);
-        ink = strokes(p, mix(.24, .16, fast), mix(1.5, .55, fast), dens, 1., fy, thin);
-        ink = max(ink, .65 * strokes(p + vec2(3.1, .09), mix(.33, .22, fast), mix(.8, .35, fast), dens * .6, 2., fy, thin * .75));
+        ink = strokes(p, mix(.17, .13, fast), mix(3.4, 1.1, fast), dens, 1., fy, thin, mix(.035, .09, fast), .28);
+        ink = max(ink, .6 * strokes(p + vec2(3.1, .07), mix(.26, .2, fast), mix(1.3, .5, fast), dens * .6, 2., fy, thin * .8, .08, 0.));
       } else {
         // a pool: by its shore, strokes echoing it; out on its open water, a few long strokes
         // across, far apart, in loose groups
         vec2 ps = vec2((vW.x + vW.z) * .7, inn);
-        float near = strokes(ps, .22, 1.1, .55 + (grp - .5) * .4, 4., fwidth(inn), thin) * (1. - smoothstep(.5, .9, inn));
+        float near = strokes(ps, .2, 1.4, .5 + (grp - .5) * .4, 4., fwidth(inn), thin, .06, .25) * (1. - smoothstep(.5, .9, inn));
         vec2 po = vec2(vW.x + t, vW.z);
-        float open = strokes(po, .38, 2.2, .2 + (grp - .5) * .3, 5., fwidth(vW.z), 1.) * smoothstep(.7, 1.2, inn);
+        float open = strokes(po, .36, 2.4, .2 + (grp - .5) * .3, 5., fwidth(vW.z), 1., .1, .2) * smoothstep(.7, 1.2, inn);
         ink = max(near, open);
       }
-      // (and at the shore, now and then, a hair's touch of the brush along it)
+      // the bank: a line of ink along the shore, as a brush draws it, swelling and thinning, broken
+      // now and then, its edge notched here and there like a ledge of rock; inside it, a hairline echo
       float wi = max(fwidth(inn), 1e-4);
-      ink = max(ink, (1. - smoothstep(wi * .5, wi * 1.4, inn)) * smoothstep(.42, .58, noise(vec3(vW.xz * .9, 4.))) * .6);
+      float nb = noise(vec3(vW.xz * .55, 4.)), gap = noise(vec3(vW.xz * 1.7, 11.));
+      float notch = smoothstep(.45, .6, noise(vec3(vW.xz * 1.1, 13.))) * .05;
+      float lw = mix(.4, 2.6, smoothstep(.3, .85, nb));
+      bank = (1. - smoothstep(lw, lw + .9, (inn - notch) / wi)) * step(.33, gap);
+      float e1 = abs(inn - .17 - .05 * sin(vW.x * 2.7 + vW.z * 1.9)) / wi;
+      ink = max(ink, (1. - smoothstep(.35, 1.1, e1)) * step(.5, noise(vec3(vW.xz * 1.2, 14.))) * .7);
     }
     c = mix(PAPER, LINE, ink);
+    c = mix(c, BANK, bank * .92);
+    lit = 1.;
+  } else if (vM == ${M.ripple} || vM == ${M.reflect} || vM == ${M.reflectPink}) {
+    // marks on water about what stands in it or over it: (vC: where, in its own measure; how far in
+    // from the water's edge). Ripples: two or three rings about a rock standing in the water, broken,
+    // drawn out downstream. Reflections: what stands at or over the water, mirrored below it, as
+    // broken strokes down, combed across by the water's ripples, fading as they go.
+    if (vC.b < .03) discard;
+    vec2 q = vC.rg;
+    float a = 0.;
+    vec3 col = vec3(.3, .33, .34);
+    if (vM == ${M.ripple}) {
+      float r = length(q), fr = max(fwidth(r), 1e-4);
+      float ang = atan(q.y, q.x);
+      for (int i = 0; i < 3; i++) {
+        float R = 1.1 + float(i) * .42 + .08 * sin(ang * 3. + float(i));
+        float on = step(.38 + float(i) * .1, noise(vec3(cos(ang) * 2.2, sin(ang) * 2.2, float(i) * 3.7 + vW.x)));
+        a = max(a, (1. - smoothstep(.5, 1.3, abs(r - R) / fr)) * on * (1. - float(i) * .22));
+      }
+    } else {
+      // (q.x across, -1 to 1; q.y down from its foot, 0 to 1)
+      float fx = max(fwidth(q.x), 1e-4);
+      // (in columns down from its foot, each a broken stroke, thin, waving a little; fewer and
+      // fainter as they go down, and toward its sides)
+      float col0 = q.x * 4.5 + .25 * sin(q.y * 11. + q.x * 3.);
+      float d = abs(fract(col0) - .5) / (fx * 4.5);
+      float w = mix(.4, 1.3, hash3(vec3(floor(col0), 3., 1.)));
+      float comb = step(.5 + .3 * q.y, noise(vec3(floor(col0) * 1.3, q.y * 7., 2.)));
+      float fade = (1. - smoothstep(.15, 1., q.y)) * (1. - smoothstep(.5, 1., abs(q.x)));
+      a = (1. - smoothstep(w, w + .8, d)) * comb * fade * step(hash3(vec3(floor(col0), 9., 4.)), .75);
+      if (vM == ${M.reflectPink}) { col = vec3(.88, .6, .56); a *= .6; } else { col = vec3(.34, .34, .34); a *= .8; }
+    }
+    if (a < .05) discard;
+    c = mix(PAPER, col, a);
     lit = 1.;
   } else if (vM == ${M.type}) {
     // (a cast's words, inked on the hillside: from the sheet of words, or a stroke of ink or vermilion;
@@ -395,7 +437,7 @@ void main() {
   // a deeper pink where one crown stands before another)
   float ink = 0., stone = 0., coral = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
-  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || m0 == ${M.water}, s0 = m0 == ${M.step} || m0 == ${M.stone};
+  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || m0 >= ${M.water}, s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
     float di = texture(uD, uv).r;
@@ -409,7 +451,7 @@ void main() {
     float meet = mi != m0 && zi >= z0 * .998 ? 1. : 0.;
     if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
     if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
-    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || mi == ${M.water}, si = mi == ${M.step} || mi == ${M.stone};
+    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || mi >= ${M.water}, si = mi == ${M.step} || mi == ${M.stone};
     if (g0 && gi) continue;
     if ((m0 == ${M.rock} && (gi || mi == ${M.rock})) || (mi == ${M.rock} && g0)) continue;
     float e = max(jump, max(turn * (g0 ? 0. : .8), meet));
@@ -437,7 +479,7 @@ void main() {
       if (m == ${M.blossom} || m == ${M.twig}) fol += 1.;
       else if (m == ${M.rock} || m == ${M.trunk}) drk += 1.;
       else if (m == ${M.tile} || m == ${M.red} || m == ${M.wall} || m == ${M.plaque} || m == ${M.ridge}) arc += 1.;
-      else if (m == ${M.water}) wat += 1.;
+      else if (m >= ${M.water}) wat += 1.;
     }
     wat /= float(K);
     fol /= float(K); drk /= float(K); arc /= float(K);
