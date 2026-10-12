@@ -13,6 +13,8 @@ import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
 import { RISE, WIDTH, Ways, type V3, type Way } from './ways';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
 import { stationsNear } from './compose';
+import { deerNear, type DeerKind } from './herds';
+import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
 import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
 
@@ -171,6 +173,34 @@ const Rx = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return n
 const Ry = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]); };
 const Rz = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); };
 const about = (p: V3, r: M4): M4 => mulM(Tm(p[0], p[1], p[2]), mulM(r, Tm(-p[0], -p[1], -p[2])));
+
+// ─── deer: now and then a few, a little off the ways (herds.ts); each of its kind's parts (deer.ts)
+const deerKinds = new Map<DeerKind, { body: Drawn; neck: Drawn; head: Drawn; legs: Drawn[]; shadow: Drawn }>();
+const kindParts = (k: DeerKind) => {
+  let d = deerKinds.get(k);
+  if (!d) { const p = deerParts(k); d = { body: R.mesh(p.body.v.out()), neck: R.mesh(p.neck.v.out()), head: R.mesh(p.head.v.out()), legs: p.legs.map((l) => R.mesh(l.v.out())), shadow: R.mesh(p.shadow.v.out()) }; deerKinds.set(k, d); }
+  return d;
+};
+const herds = new Map<number, Deer[]>();
+/** The herds about where the walker is, living; those left far behind, let go. */
+function keepHerds(z: number) {
+  for (const site of deerNear(ways, seed, z - 40, z + 110)) if (!herds.has(site.k)) herds.set(site.k, site.deer.map((d, n) => new Deer(d, site.drink, site.k * 3 + n)));
+  for (const [k, h] of herds) if (h.every((d) => d.z < z - 90 || d.z > z + 200)) herds.delete(k);
+}
+/** Each deer a step on, and its parts where it's got to: for the drawing. */
+function liveDeer(dt: number, time: number, pos: V3): Array<{ d: Drawn; model: M4 }> {
+  const out: Array<{ d: Drawn; model: M4 }> = [];
+  for (const h of herds.values()) {
+    // (when one bounds away, the others go with it)
+    let scared = h.some((d) => d.mode === 'flee');
+    for (const d of h) if (d.step(dt, ways, pos[0], pos[2], scared)) scared = true;
+    for (const d of h) {
+      const p = d.pose(ways, time), m = kindParts(d.kind);
+      out.push({ d: m.shadow, model: p.shadow }, { d: m.body, model: p.body }, { d: m.neck, model: p.neck }, { d: m.head, model: p.head }, ...m.legs.map((l, i) => ({ d: l, model: p.legs[i] })));
+    }
+  }
+  return out;
+}
 
 // ─── the bands of the hill, made as they're needed, dropped behind ───────────────────────────────
 interface Live { band: Band; solid: Drawn; puffs: Drawn; petals: Drawn }
@@ -487,6 +517,7 @@ function frame(now: number) {
   facing += Math.atan2(Math.sin(want_yaw - facing), Math.cos(want_yaw - facing)) * (1 - Math.exp(-dt * 5));
   const yaw = facing;
   keepBands(cam.x || pos[0], pos[2]);
+  keepHerds(pos[2]);
 
   // (passing a temple beside the path, the view leans toward it, so it's in the print with the walker)
   let lean = 0;
@@ -538,7 +569,7 @@ function frame(now: number) {
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink, time: review ? 0 : performance.now() / 1000 },
-    [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }],
+    [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }, ...liveDeer(review ? 1 / 30 : dt, time, pos)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
@@ -552,7 +583,7 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestSeen(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestSeen(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }

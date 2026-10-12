@@ -278,7 +278,7 @@ void main() {
     c = mix(PAPER, LINE, ink);
     c = mix(c, BANK, bank * .85);
     lit = 1.;
-  } else if (vM >= ${M.ripple}) {
+  } else if (vM >= ${M.ripple} && vM <= ${M.archReflect}) {
     // marks on water about what stands in it or over it: (vC: where, in its own measure; how far in
     // from the water's edge).
     if (vC.b < .03) discard;
@@ -491,7 +491,7 @@ void main() {
   // a deeper pink where one crown stands before another)
   float ink = 0., stone = 0., coral = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
-  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || m0 >= ${M.water}, s0 = m0 == ${M.step} || m0 == ${M.stone};
+  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || (m0 >= ${M.water} && m0 <= ${M.archReflect}), s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
     float di = texture(uD, uv).r;
@@ -505,7 +505,7 @@ void main() {
     float meet = mi != m0 && zi >= z0 * .998 ? 1. : 0.;
     if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
     if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
-    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || mi >= ${M.water}, si = mi == ${M.step} || mi == ${M.stone};
+    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || (mi >= ${M.water} && mi <= ${M.archReflect}), si = mi == ${M.step} || mi == ${M.stone};
     if (g0 && gi) continue;
     if ((m0 == ${M.rock} && (gi || mi == ${M.rock})) || (mi == ${M.rock} && g0)) continue;
     float e = max(jump, max(turn * (g0 ? 0. : .8), meet));
@@ -533,7 +533,7 @@ void main() {
       if (m == ${M.blossom} || m == ${M.twig}) fol += 1.;
       else if (m == ${M.rock} || m == ${M.trunk}) drk += 1.;
       else if (m == ${M.tile} || m == ${M.red} || m == ${M.wall} || m == ${M.plaque} || m == ${M.ridge}) arc += 1.;
-      else if (m >= ${M.water}) wat += 1.;
+      else if (m >= ${M.water} && m <= ${M.archReflect}) wat += 1.;
     }
     wat /= float(K);
     fol /= float(K); drk /= float(K); arc /= float(K);

@@ -9,6 +9,7 @@
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { identify, moving } from '../changes/model';
 import { inStation, stationsNear, type Station } from './compose';
+import { clearOfDeer, deerNear } from './herds';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3, type Way } from './ways';
 import type { Water } from './water';
 
@@ -19,7 +20,7 @@ export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
 const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24, ring: 25, eddy: 26, archReflect: 27 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24, ring: 25, eddy: 26, archReflect: 27, deer: 28 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -252,7 +253,9 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   const inGlade = (x: number, z: number) => temples.some((t) => !t.gate && Math.hypot(x - t.c[0], z - t.c[2]) < t.T + 4.5);
   // (the stations' spaces, kept open: no tree whose crown would stand over one, no rock in one)
   const sts = stationsNear(ways, seed, z0, z1);
-  const treeOut = (x: number, z: number) => inStation(sts, x, z, 2.8, 4.5);
+  // (and the deer's places: no tree or rock where a deer stands, nor its crown just before it)
+  const herds = deerNear(ways, seed, z0 - 10, z1 + 10);
+  const treeOut = (x: number, z: number) => inStation(sts, x, z, 2.8, 4.5) || !clearOfDeer(herds, x, z, 3) || [2, 4, 6, 8].some((dz) => !clearOfDeer(herds, x, z + dz, 3.2));
   /** whether (x, z) is just downhill of a way, where a crown would stand between the eye and it */
   const belowWay = (x: number, z: number) => [2, 3.8, 5.6, 7.2].some((dz) => ways.nearest(x, z + dz).d < WIDTH / 2 + 1);
 
@@ -385,7 +388,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     rocks.push([x, z, ramp(r, 0.4, 0.95)]);
   }
   for (const [x, z, sz] of rocks) {
-    if (ways.dryOf(x, z) < 0.1) continue;
+    if (ways.dryOf(x, z) < 0.1 || !clearOfDeer(herds, x, z, 1.4)) continue;
     if (ways.nearest(x, z).d < WIDTH / 2 + 0.35 || onTemple(x, z, 0.3) || inStation(sts, x, z, 0.4)) continue;
     const rr = seeded(hash(Math.round(x * 10), Math.round(z * 10), seed));
     rock(mesh, [x, gy(x, z), z], sz, rr, gy);

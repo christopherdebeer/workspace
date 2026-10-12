@@ -119,6 +119,24 @@ opening over the water, its faces of squared stone, a low parapet either side; o
 reflection rounds the opening into a ring. In the composition view, water's open paper, faintly
 cooler.
 
+## The deer
+
+Now and then, not often (in about two stretches of three, each some three hundred metres up the
+hill), a few sika deer stand somewhere a little off a way: 梅花鹿, the plum-blossom deer, a warm russet
+coat spotted white along the back, a pale belly and a white rump, the stag's antlers branched. One to
+three: a stag, a doe, a fawn. Most often, if there's a pool in the stretch, at its edge, drinking;
+else out in the open, four to eight metres off a way. No tree stands where they do, nor in front of
+them as the eye sees them, so they're seen, as the print sees its figures, in the middle distance.
+They're drawn in the print's flat inks and lined in ink like everything else, each made of parts
+turned about its joints (the body, the neck, the head, each leg).
+
+They graze (or drink), head down, nibbling, and now and then lift their heads to look about. As the
+walker comes within some twenty-four metres they lift their heads and watch, turning a little toward
+them; within fourteen, they bound away together (forelegs reaching, hind legs pushing, the body
+rising and pitching with each leap), up the hill and off from the ways, turning aside from water,
+and stop a good thirty metres off to look back, watching for as long as the walker stays near; left
+alone, they graze again. They never come close.
+
 ## The temples
 
 Buildings stand where the ways give them a place, each of its kind and from its parts, on a stone
