@@ -13,6 +13,9 @@
 import { INK, M, STRIDE } from './world';
 
 export type V3 = [number, number, number];
+/** how far a limb inside its own crown is drawn toward the eye (of its depth in it, and never more than a hand's span or two): only a little, so a tree's limbs show through its own blossom but never through a crown in front of it */
+export let REVEAL = 0.3;
+export const setReveal = (k: number) => { REVEAL = k; };
 export type M4 = Float32Array;
 
 const COMMON = `
@@ -28,13 +31,13 @@ const vec3 L = normalize(vec3(.55, .75, -.35));
 
 const SOLID_VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in vec3 aCol; in float aMat;
-uniform mat4 uVP, uModel; uniform vec3 uEye;
+uniform mat4 uVP, uModel; uniform vec3 uEye; uniform float uReveal;
 out vec3 vW; out vec3 vN; out vec3 vC; flat out int vM;
 void main() {
   vec4 w = uModel * vec4(aPos, 1.);
   vW = w.xyz; vN = normalize(mat3(uModel) * aNor); vC = aCol; vM = int(aMat + .5);
   // (a limb drawn nearer the eye by as far as it lies inside its own crown: it shows through its own blossom, as ink over colour, but not through anything else)
-  if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * aCol.r;
+  if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * min(aCol.r * uReveal, .6);
   gl_Position = uVP * w;
 }`;
 const SOLID_FS = `#version 300 es
@@ -542,6 +545,7 @@ export class Renderer {
     gl.useProgram(this.solid);
     gl.uniformMatrix4fv(this.loc(this.solid, 'uVP'), false, view.vp);
     gl.uniform3fv(this.loc(this.solid, 'uEye'), view.eye);
+    gl.uniform1f(this.loc(this.solid, 'uReveal'), REVEAL);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.plaque);
     gl.uniform1i(this.loc(this.solid, 'uPlaque'), 0);
     for (const s of solids) {

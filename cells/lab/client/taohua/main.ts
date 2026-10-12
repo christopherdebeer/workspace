@@ -207,6 +207,8 @@ const project = (p: V3): [number, number, number] => {
 };
 /** what the path, seen, is: its steps and stones, the ground and what lies on it */
 const OPEN = new Set<number>([M.step, M.earth, M.ground, M.shade, M.petal, M.grass]);
+/** what a temple is drawn in: its roof, walls, paint, plaque, door, and its terrace's stone */
+const TEMPLE = new Set<number>([M.tile, M.ridge, M.red, M.wall, M.plaque, M.dark, M.stone]);
 /** Where on the path a point on the screen (CSS pixels) falls, if it falls on it where it can be seen: how far along it. */
 function pick(px: number, py: number): number | null {
   if (!lastVP) return null;
@@ -236,6 +238,9 @@ function nearestSeen(px: number, py: number): number | null {
   const m = R.mats();
   if (!m) return null;
   const kx = canvas.width / innerWidth, ky = canvas.height / innerHeight;
+  // (a tap on a temple: the path behind it counts as seen, as the temple stands over it there)
+  const onTemple = TEMPLE.has(m.at(px * kx, py * ky));
+  const seen = (mat: number) => OPEN.has(mat) || (onTemple && TEMPLE.has(mat));
   let best: number | null = null, bestD = Infinity;
   for (let si = Math.max(1, s - 40); si < s + 90; si += 0.25) {
     const q = project(path.at(si).p);
@@ -243,7 +248,7 @@ function nearestSeen(px: number, py: number): number | null {
     const d = Math.hypot(px - q[0], py - q[1]);
     if (d >= bestD) continue;
     // (seen: what's drawn there is the path, or the ground beside it, about the place and just above, where the walker would stand)
-    if (![[0, 0], [0, -10], [-4, -4], [4, -4]].every(([dx, dy]) => OPEN.has(m.at((q[0] + dx) * kx, (q[1] + dy) * ky)))) continue;
+    if (![[0, 0], [0, -10], [-4, -4], [4, -4]].every(([dx, dy]) => seen(m.at((q[0] + dx) * kx, (q[1] + dy) * ky)))) continue;
     bestD = d; best = si;
   }
   return best;
@@ -444,7 +449,7 @@ function frame(now: number) {
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, s, goal, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (si: number) => project(path.at(si).p), pick, nearestSeen };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, s, goal, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (si: number) => project(path.at(si).p), pick, nearestSeen, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }

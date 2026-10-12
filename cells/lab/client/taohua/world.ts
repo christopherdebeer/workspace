@@ -547,11 +547,24 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   let Rh = 0.8, Rv = 0.6;
   for (const [p] of tips) { Rh = Math.max(Rh, Math.hypot(p[0] - cx, p[2] - cz)); Rv = Math.max(Rv, Math.abs(p[1] - cy)); }
   Rh += 0.5; Rv += 0.6;
+  // (and how deep its branching lies along the eye's line, about the crown's middle: its blossom is
+  // set behind the middle of that, so the ink falls across the crown in front of its own colour)
+  let dLo = Infinity, dHi = -Infinity;
   for (let i = limbsFrom, va = mesh.v.a; i < mesh.v.n; i += STRIDE) {
     if (va[i + 9] !== M.twig) continue;
     const e = Math.hypot((va[i] - cx) / Rh, (va[i + 1] - cy) / Rv, (va[i + 2] - cz) / Rh);
     va[i + 6] = Math.sqrt(Math.max(0, 1 - e * e)) * Rh;
+    const dd = (va[i] - cx) * VIEW[0] + (va[i + 1] - cy) * VIEW[1] + (va[i + 2] - cz) * VIEW[2];
+    dLo = Math.min(dLo, dd); dHi = Math.max(dHi, dd);
   }
+  const dBack = (dLo + dHi) / 2 + 0.15;
+  /** a clump set back along the eye's line, if it stands in front of the branching's middle: the same place on the print, behind the ink */
+  const behind = (q: V3): V3 => {
+    const dd = (q[0] - cx) * VIEW[0] + (q[1] - cy) * VIEW[1] + (q[2] - cz) * VIEW[2];
+    if (dd >= dBack) return q;
+    const k = dBack - dd + r() * 0.35;
+    return [q[0] + VIEW[0] * k, q[1] + VIEW[1] * k, q[2] + VIEW[2] * k];
+  };
   // (its shade on the ground: broad and faint under the crown, off to the shadow side; deeper about the trunk's foot)
   shade(mesh, path, cx - 0.5 * (cy - base[1]) * 0.55, cz + 0.5 * (cy - base[1]) * 0.35, 3.0, 1.6, 0.1);
   shade(mesh, path, base[0] - 0.5, base[2] + 0.1, 1.1, 0.4, 0.22);
@@ -575,7 +588,8 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
       const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
       const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
-      puffs.push(q[0], q[1], q[2], rad, shade, crownSeed * 0.5 + r() * 0.5);
+      const b = behind(q);
+      puffs.push(b[0], b[1], b[2], rad, shade, crownSeed * 0.5 + r() * 0.5);
     }
   }
   // (and the dome filled out behind its branches, so the crown is one full mass of blossom with the
@@ -588,7 +602,8 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
     if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
     const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
     const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
-    puffs.push(q[0], q[1], q[2], ramp(r, 0.5, 0.75) * Math.min(stature, 1.15), shade, crownSeed * 0.5 + r() * 0.5);
+    const b = behind(q);
+    puffs.push(b[0], b[1], b[2], ramp(r, 0.5, 0.75) * Math.min(stature, 1.15), shade, crownSeed * 0.5 + r() * 0.5);
   }
   // fallen blossom under it, where it's not the path: in drifts, stamped flowers and specks of red
   for (let k = 0; k < 4; k++) {
