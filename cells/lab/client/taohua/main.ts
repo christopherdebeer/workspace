@@ -22,7 +22,7 @@ const review = params.has('review');
 let ink = params.has('ink');
 const setInk = (on: boolean) => { ink = on; document.body.classList.toggle('ink', on); };
 setInk(ink);
-const PASS = 'trees-1';
+const PASS = 'trees-2';
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;

@@ -13,8 +13,8 @@
 import { INK, M, STRIDE } from './world';
 
 export type V3 = [number, number, number];
-/** how far a limb inside its own crown is drawn toward the eye (of its depth in it, and never more than a hand's span or two): only a little, so a tree's limbs show through its own blossom but never through a crown in front of it */
-export let REVEAL = 0.3;
+/** how far a limb inside its own crown is drawn toward the eye: not at all. Limbs show where the tree's growth and its blossom's density leave them open, and never through a crown in front */
+export let REVEAL = 0;
 export const setReveal = (k: number) => { REVEAL = k; };
 export type M4 = Float32Array;
 

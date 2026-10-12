@@ -69,11 +69,11 @@ of each crown is open and its limbs are seen. Bark is black with a band of cream
 toward the light, broken only now and then.
 
 The blossom gathers in clumps about the twigs' ends, each set a little behind its twigs along the
-eye's line, so it sits in the same place on the print but the ink falls in front of it, as the
-print lays ink over colour; and the dome is filled out behind the branches with more clumps,
-further back, so the crown is one full mass. Where a limb is still inside its own crown, it's drawn
-a little nearer the eye too, the most at the crown's heart and none at its rim, so the limbs show
-through their own blossom but never through a neighbouring tree or a roof. The blossom's tone keeps
+eye's line, and the dome is filled out with more clumps further back, so the crown is one full
+mass. The limbs are never drawn through it: they show where the tree's growth and its blossom's
+density leave them open, past the crown's edge, on the near side of a crown low down, and through
+the thinner crowns (most trees are full, some thinner, each its own).
+The blossom's tone keeps
 the crown's structure, pale where it's lit and high, deep beneath, dappled with pale dabs and deep
 recesses in clusters; each tree is its own pink.
 
