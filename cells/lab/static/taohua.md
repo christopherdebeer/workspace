@@ -171,8 +171,8 @@ strokes with nothing recognisable: the camera stands nearly twice as far off and
 the hill; each part of the print is gathered over a wide brush and laid down as a few inks
 (blossom a grey wash, deeper where it's dense; rock and trunks black; buildings vermilion; the
 rest paper); each way is brushed over it as a stroke, heavy where it's steps, dry and broken
-where it's a trail; the walker is a dot of vermilion; and the places the casts and the title take
-are outlined, so they can be judged against the masses they sit on; the stations' spaces are
+where it's a trail; the walker is a dot of vermilion; the title, while it's in view, is outlined,
+so it can be judged against the masses it sits on; the stations' spaces are
 drawn as dashed vermilion rings, each with its hexagram small in its middle. Every way is brushed,
 so the forks and meetings read at a glance. It works with `review` and
 while walking, for judging how the arrangement holds as it unrolls, and for deciding where
