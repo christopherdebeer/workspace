@@ -60,7 +60,7 @@ void main() {
   if (vM == ${M.ground} || vM == ${M.shade}) {
     // the ground: the paper itself
     c = PAPER;
-    float rag = noise(vW * 1.3) * .5 + noise(vW * 4.) * .25;
+    float rag = noise(vW * 1.3) * .5 + noise(vW * 2.6) * .2;
     if (vM == ${M.ground} && vC.b <= 0. && vC.g > .32 + rag) {
       // (where it's cut deep for water, the banks are rock: inked as rock is, by which way each facet turns)
       vec3 nf = normalize(cross(dFdx(vW), dFdy(vW)));
@@ -161,33 +161,43 @@ void main() {
     c = texture(uPlaque, vC.rg).rgb;
     lit = 1.;
   } else if (vM == ${M.water}) {
-    // water, in few inks: deep slate where it's deep, paler where it's shallow and the bed shows,
-    // paler still at its edge; white where it runs fast and where it falls; fine white ripples drawn
-    // along it, drifting down it, slowly. (vC: how far in from its edge; how fast it runs; its kind)
+    // water, as the prints draw it: the paper itself, and line work. An ink line along its shore,
+    // broken here and there; the current, a few fine wavy strokes following the banks, in loose
+    // groups, broken, drifting down it slowly (quicker, closer, shorter where it runs fast); out on
+    // a pool's open water, a few long wavy strokes across; where it falls, fine strokes down the
+    // sheet, running down. (vC: how far in from its edge; how fast it runs; its kind)
     float inn = vC.r, run = vC.g;
     int kind = int(vC.b + .5);
+    bool fall = abs(normalize(vN).y) < .55;
     // (its shore: where it's no way in from its edge, it isn't)
-    if (inn < 0. && abs(normalize(vN).y) > .55) discard;
-    vec3 DEEP = vec3(.25, .33, .35), MID = vec3(.37, .46, .47), SHAL = vec3(.55, .6, .57), FOAM = vec3(.93, .92, .88);
-    float br = noise(vec3(vW.xz * .9, 5.)) * .5;
-    c = kind == 2 ? (inn > 1.4 + br ? MID : SHAL) : inn > 1.05 + br ? DEEP : inn > .4 + br * .4 ? MID : SHAL;
-    float fall = 1. - abs(normalize(vN).y);
-    if (fall > .45) {
-      // (a fall: a sheet of white, streaked grey down it, the streaks running down)
-      float sk = noise(vec3(vW.x * 5. + vW.z * 2., (vW.y + uTime * .7) * 1.4, 7.));
-      c = mix(FOAM, vec3(.6, .66, .67), step(.6, sk));
+    if (inn < 0. && !fall) discard;
+    vec3 LINE = vec3(.3, .28, .26);
+    float ink = 0.;
+    if (fall) {
+      float x = (vW.x * .8 + vW.z * .6) * 2.6;
+      float d = abs(fract(x + .25 * noise(vec3(vW.xz, 2.))) - .5) / max(fwidth(x), 1e-4);
+      ink = (1. - smoothstep(.7, 1.7, d)) * step(.4, noise(vec3(floor(x) * 1.7, (vW.y + uTime * .9) * 1.2, 7.)));
     } else {
-      float flow = vW.z + uTime * (.12 + run * 2.5);
-      // (ripples: short fine strokes across the stream, drifting down it)
-      float rp = noise(vec3(vW.x * 1.6, flow * 3.2, 1.)), rq = noise(vec3(vW.x * .7, flow * .4, 3.));
-      float line = smoothstep(.035, .0, abs(rp - .5)) * smoothstep(.45, .7, rq);
-      c = mix(c, vec3(.86, .87, .83), line * (kind == 1 ? .5 : .8));
-      // (white water where it runs fast)
-      float foam = step(.6 - smoothstep(.14, .32, run) * .14, noise(vec3(vW.x * 2.6, flow * .8, 2.))) * step(.14, run);
-      c = mix(c, FOAM, foam);
-      // (at its edge, a pale line, broken)
-      c = mix(c, vec3(.83, .85, .8), smoothstep(.16, .02, inn) * smoothstep(.3, .5, noise(vec3(vW.xz * 2.2, 9.))));
+      float t = uTime * (kind == 0 ? .2 + run * 2. : .03), fast = smoothstep(.14, .3, run);
+      // (the shore line)
+      float wi = max(fwidth(inn), 1e-4);
+      float shore = (1. - smoothstep(wi * 1.3, wi * 2.6, inn)) * step(.1, noise(vec3(vW.xz * 1.4, 4.)));
+      // (the current: lines at even distances in from the edge, so they follow the banks, wavering)
+      float sp = mix(.3, .2, fast), e = inn / sp + .22 * sin(vW.x * 2.3 + vW.z * 2.6) + .12 * sin(vW.z * 6.1 - vW.x * 1.7);
+      float de = abs(fract(e) - .5) / max(fwidth(e), 1e-4);
+      float dash = noise(vec3(vW.x * .8, (vW.z + t) * mix(.7, 2.2, fast), floor(e) * 1.7));
+      float grp = noise(vec3(vW.xz * .18, 8.));
+      float cur = (1. - smoothstep(.6, 1.7, de)) * step(mix(.5, .42, fast) + (.5 - grp) * .3, dash) * step(.6, e);
+      // (on a pool, the current's only about its shore; out on it, long waves across)
+      if (kind != 0) {
+        cur *= 1. - smoothstep(.55, .95, inn);
+        float zz = vW.z / .45 + .25 * sin(vW.x * 1.6 + 1.) + .12 * sin(vW.x * 4.1);
+        float dz = abs(fract(zz) - .5) / max(fwidth(zz), 1e-4);
+        cur = max(cur, (1. - smoothstep(.6, 1.7, dz)) * step(.52, noise(vec3(vW.x * .3 + t, floor(zz) * 1.3, 6.))) * smoothstep(1.2, 1.9, inn));
+      }
+      ink = max(shore, cur * .75);
     }
+    c = mix(PAPER, LINE, ink);
     lit = 1.;
   } else if (vM == ${M.type}) {
     // (a cast's words, inked on the hillside: from the sheet of words, or a stroke of ink or vermilion;
@@ -403,7 +413,7 @@ void main() {
     if (fol > .42 + br * .3) c = vec3(.6, .56, .52);
     if (fol > .82 + br * .2) c = vec3(.44, .4, .37);
     if (drk > .28 + br * .2) c = vec3(.12, .11, .1);
-    if (wat > .4 + br * .2) c = vec3(.3, .38, .4);
+    if (wat > .4 + br * .2) c = vec3(.86, .87, .84);
     if (arc > .22 + br * .15) c = vec3(.7, .22, .17);
   }
   // the paper: its mottle, its fibres, its grain

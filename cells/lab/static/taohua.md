@@ -85,12 +85,15 @@ are cut high, a bridge: a deck of stone slabs, arched a little, a kerb along eit
 either bank. No tree stands in the water, on a bank cut steep, nor just downhill of the water,
 where its crown would stand between the eye and it: the water's an open mass, as the print's are.
 
-It's drawn in few inks: deep slate where it's deep, paler where it's shallow, paler again at its
-edge, with a broken pale line along the shore; fine white ripples drawn across it, drifting down
-it slowly; hard-edged white where it runs fast; and where it falls, a sheet of white streaked
-grey, the streaks running down. Petals float on its stiller water. Its shore is drawn by the
-water itself, so it's smooth however narrow the stream; where the banks are cut deep, they're
-inked as rock. In the composition view, water's a slate mass of its own.
+It's drawn as the prints draw water: not coloured in, but the paper itself, and line work, as the
+ways' strokes and the stairs' are. An ink line along its shore, broken here and there; the current,
+a few fine wavy strokes following its banks (lines at even distances in from its edge, so they
+bend as the stream bends), in loose groups, broken into dashes that drift down it slowly, closer,
+shorter and quicker where it runs fast; on a pool, two or three such strokes echoing its shore,
+and out on its open water a few long wavy strokes across, far apart; where it falls, fine strokes
+down the sheet, running down. Petals float on its stiller water. Its shore is drawn by the water
+itself, so it's smooth however narrow the stream; where the banks are cut deep, they're inked as
+rock, black as the print's banks are. In the composition view, water's open paper, faintly cooler.
 
 ## The temples
 
