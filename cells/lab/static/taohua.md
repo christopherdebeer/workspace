@@ -233,9 +233,10 @@ is (`?at=way:metres`), updated as they go, so a reload or a shared link comes ba
 place.
 `?seed=1&at=w3:40&review` freezes the walker, camera and falling petals for a repeatable comparison
 at full rendering resolution. The footer identifies the pass, seed and where on the ways. Remove
-`review` to walk normally. On seed 1: `at=w3:40` (a fork), `at=w9:18` (a pavilion), `at=w10:37`
-(a pagoda), `at=w21:12` (a cast where a branch ends), `at=w12:51` (a gate), `at=w67:17` (a hall),
-`at=w8:10` (stepping stones under a waterfall), `at=w3:30` (a bridge), `at=w2:24` (a pond).
+`review` to walk normally. On seed 1: `at=w3:36` (a fork), `at=w10:15` (a pavilion), `at=w11:22`
+(a pagoda), `at=w19:44` (a cast where a branch ends), `at=w13:61` (a gate), `at=w64:9` (a hall),
+`at=w8:6` (stepping stones under a waterfall), `at=w29:36` (a bridge). On still-ford-7,
+`at=w41:19` (stepping stones over a winding stream, a waterfall above).
 (The ways' ids follow from how the hill grows, so these change when it does.)
 
 
