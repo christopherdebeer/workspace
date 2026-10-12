@@ -51,64 +51,58 @@ void main() {
   if (under) n = -n;
   vec3 c = vC;
   float lit = .9 + .14 * max(dot(n, L), 0.);
+  // (few inks, flat, as a block prints: the paper; one grey for strokes and shade; pale stone and its
+  // one darker face; rock in three; nothing mottled but the paper itself)
+  vec3 GREY = vec3(.62, .58, .53);
   if (vM == ${M.ground} || vM == ${M.shade}) {
-    // the ground: the paper itself, a breath of shade in its hollows
-    c = PAPER * (.985 + .03 * noise(vW * .35));
+    // the ground: the paper itself
+    c = PAPER;
     if (vC.b <= 0. && vC.r > 0.) {
-      // (beside the path, a few strokes of grey, as the brush went along it)
-      float st = smoothstep(.64, .8, noise(vec3(vW.x * 1.3, vW.z * 11., 1.))) * smoothstep(.35, .6, noise(vW * .8));
-      c = mix(c, vec3(.6, .55, .5), st * .3 * vC.r);
+      // (along a trail, a few strokes of grey, as the brush went along it: a worn way)
+      float st = step(.7, noise(vec3(vW.x * 1.3, vW.z * 11., 1.))) * step(.45, noise(vW * .8));
+      if (st * vC.r > .5) c = GREY;
     }
     if (vC.b > 0.) {
-      // (a patch of shade: deep in its middle, its edge broken, stippled away into the paper)
-      // (laid on in strokes across, as a dry brush does: they thin out toward its edge)
+      // (a patch of shade: grey laid on in strokes across, as a dry brush does, thinning out toward its edge)
       float r = length(vC.rg) * (1. + .3 * (noise(vW * 1.7) - .5));
       float f = 1. - smoothstep(.2, 1., r);
       float st = noise(vec3(vW.x * 1.1, vW.z * 9., 2.)) * .75 + noise(vec3(vW.x * 4., vW.z * 24., 5.)) * .25;
       if (st < 1. - f * 1.15) discard;
-      c *= 1. - vC.b * (.6 + .4 * f) * (.85 + .3 * noise(vW * 6.));
+      c = mix(PAPER, GREY, min(1., vC.b * 3.));
     }
     lit = 1.;
   } else if (vM == ${M.grass}) {
-    // grass: an olive ink, a little uneven
-    c *= .8 + .35 * noise(vW * 9.);
     lit = 1.;
   } else if (vM == ${M.earth}) {
-    // trodden ground: the paper, a few grey strokes of a dry brush across it
-    c = PAPER * (.985 + .03 * noise(vW * .35));
-    float st = smoothstep(.62, .78, noise(vec3(vW.x * 1.3, vW.z * 11., vW.y * 3.))) * smoothstep(.3, .6, noise(vW * .9));
-    c = mix(c, vec3(.6, .55, .5), st * .3);
+    // trodden ground: the paper, a few grey strokes across it
+    c = PAPER;
+    if (step(.72, noise(vec3(vW.x * 1.3, vW.z * 11., vW.y * 3.))) * step(.45, noise(vW * .9)) > .5) c = GREY;
     lit = 1.;
   } else if (vM == ${M.step}) {
-    // a slab: its top pale, a few strokes of grey along it; its faces a warmer grey, darker under its edge
+    // a slab: its top pale, now and then a stroke of grey along it; its faces one darker stone
     if (n.y > .5) {
-      float st = smoothstep(.68, .85, noise(vec3(vW.x * 1.6, vW.z * 13., vW.y * 9.))) * .22 + smoothstep(.985, 1., noise(vec3(vW.xz * 2.2, vW.y * 3.))) * .35;
-      c = mix(c, vec3(.55, .5, .44), st);
-      c *= .97 + .05 * noise(vW * 4.);
-    } else {
-      c = vec3(.86, .8, .72) * (.94 + .08 * noise(vW * vec3(2., 9., 2.)));
-    }
+      c = vec3(.96, .94, .89);
+      if (step(.8, noise(vec3(vW.x * 1.6, vW.z * 13., vW.y * 9.))) > .5) c = mix(c, GREY, .6);
+    } else c = vec3(.66, .61, .54);
     lit = 1.;
   } else if (vM == ${M.stone}) {
-    // stone: pale, a fine crack here and there, a darker grain; a wall's face laid in squared blocks
-    float crack = smoothstep(.985, 1., noise(vec3(vW.xz * 2.2, vW.y * 3.)));
-    c *= (.95 + .07 * noise(vW * 4.)) * (1. - .45 * crack);
+    // stone: a wall's face laid in squared blocks, its joints dark; tops pale
     if (abs(n.y) < .5) {
+      c = vec3(.74, .7, .64);
       float row = vW.y / .3, course = floor(row);
       float along = (vW.x * n.z - vW.z * n.x) / .55 + course * .5;
-      float joint = max(1. - smoothstep(.0, .07, min(fract(row), 1. - fract(row))), 1. - smoothstep(.0, .05, min(fract(along), 1. - fract(along))));
-      c *= 1. - .3 * joint;
-    }
-    lit = .9 + .1 * max(dot(n, L), 0.);
+      float joint = max(step(min(fract(row), 1. - fract(row)), .05), step(min(fract(along), 1. - fract(along)), .035));
+      c = mix(c, vec3(.36, .32, .28), joint);
+    } else c = vec3(.94, .92, .87);
+    lit = 1.;
   } else if (vM == ${M.rock}) {
     // rock: flat inks by which way each face turns: black from the light, charcoal to it, grey on
-    // top; a faint mottle, and small dark pits pocking it
+    // top; small dark pits pocking it
     float toL = dot(normalize(n.xz + 1e-4), normalize(L.xz));
-    c = n.y > .62 ? vec3(.37, .36, .35) : toL > -.05 ? vec3(.27, .27, .26) : vec3(.13, .13, .12);
-    c *= .93 + .12 * noise(vW * 3.) + .05 * noise(vW * 11.);
+    c = n.y > .62 ? vec3(.4, .39, .38) : toL > -.05 ? vec3(.25, .25, .24) : vec3(.1, .1, .1);
     vec3 pc = floor(vW * 7.);
     vec3 pf = fract(vW * 7.) - .5 - (vec3(hash3(pc), hash3(pc + 3.), hash3(pc + 7.)) - .5) * .5;
-    if (hash3(pc + 11.) > .8) c *= mix(.45, 1., smoothstep(.06, .12, length(pf)));
+    if (hash3(pc + 11.) > .8 && length(pf) < .09) c *= .4;
     lit = 1.;
   } else if (vM == ${M.trunk} || vM == ${M.twig}) {
     // bark: ink, a pale streak down the side that faces the light, broken
@@ -177,20 +171,15 @@ const PUFF_FS = `#version 300 es
 precision highp float;
 in vec2 vQ; flat in vec3 vP; flat in float vR, vS, vSeed;
 uniform mat4 uVP; uniform vec3 uRight, uUp, uFwd, uEye;
-uniform vec4 uCut; uniform vec2 uView; uniform float uDab;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
 void main() {
-  // (a window through the blossom to the walker: what's nearer the eye than them, about them on the glass, thins away)
-  vec2 ndc = gl_FragCoord.xy / uView * 2. - 1.;
-  float cut = 1. - smoothstep(uCut.z * .6, uCut.z, length((ndc - uCut.xy) * vec2(uView.x / uView.y, 1.)));
-  if (cut > 0. && length(vP - uEye) < uCut.w - 1.5 && hash3(vec3(gl_FragCoord.xy, 1.)) < cut) discard;
   float a = atan(vQ.y, vQ.x), r = length(vQ);
   // (its edge: the blossom crumbles away into the paper in little square dabs, as a worn block prints;
-  // a few dabs loose beyond it. The dabs are a few pixels of the print, wherever the puff is)
+  // a few dabs loose beyond it. The dabs are the puff's own, so they stay where they are as the view moves)
   float edge = 1. - .1 * noise(vec3(cos(a) * 2.2, sin(a) * 2.2, vSeed * 40.));
-  vec2 dab = floor(gl_FragCoord.xy / uDab);
+  vec2 dab = floor(vQ * vR / .045);
   float hd = hash3(vec3(dab, floor(vSeed * 97.)));
   float lim = edge * (.86 + .2 * hd);
   if (r > lim && !(r < 1.12 && hd > .965)) discard;
@@ -202,8 +191,10 @@ void main() {
   // paler pink in soft blotches across the whole crown, as watercolour pools
   float wash = noise(w * .55) - .5, wash2 = noise(w * 1.7 + 4.) - .5;
   float tone = clamp(vS + wash * .7 + wash2 * .22, 0., 1.);
-  vec3 deep = vec3(.69, .27, .25), lo = vec3(.8, .37, .32), mid = vec3(.88, .45, .39), lite = vec3(.93, .54, .47), hi = vec3(.97, .64, .58);
-  vec3 c = tone < .25 ? mix(deep, lo, smoothstep(.0, .25, tone)) : tone < .5 ? mix(lo, mid, smoothstep(.25, .5, tone)) : tone < .75 ? mix(mid, lite, smoothstep(.5, .75, tone)) : mix(lite, hi, smoothstep(.75, 1., tone));
+  // (in four inks only, as a block prints them: where one meets the next, a ragged edge)
+  float lvl = floor(clamp(tone * 3.6 + (noise(w * 7.) - .5) * .7, 0., 3.));
+  vec3 deep = vec3(.71, .27, .25), lo = vec3(.83, .38, .33), mid = vec3(.91, .48, .41), hi = vec3(.97, .65, .58);
+  vec3 c = lvl < .5 ? deep : lvl < 1.5 ? lo : lvl < 2.5 ? mid : hi;
   // its grain: the print's pale flecks, fine, everywhere; a few deeper
   vec2 g = vQ * vR * 18. + vSeed * 17.;
   vec2 cell = floor(g), f = fract(g) - .5;
@@ -212,7 +203,6 @@ void main() {
   float dot1 = 1. - smoothstep(.13, .2, length(f - jit * .5));
   if (h > .72) c = mix(c, vec3(1., .8, .73), dot1 * .7);
   else if (h < .06) c = mix(c, deep * .9, dot1 * .6);
-  c *= .97 + .06 * noise(vec3(gl_FragCoord.xy * .5, 3.));
   vec4 clip = uVP * vec4(w, 1.);
   gl_FragDepth = clip.z / clip.w * .5 + .5;
   float d = length(w - uEye);
@@ -272,7 +262,7 @@ const POST_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 uniform sampler2D uC, uA, uD;
-uniform vec2 uPx; uniform float uNear, uFar, uLine;
+uniform vec2 uPx; uniform float uNear, uFar, uLine; uniform mat4 uIVP;
 out vec4 o;
 ${COMMON}
 float lin(float d) { float z = d * 2. - 1.; return 2. * uNear * uFar / (uFar + uNear - z * (uFar - uNear)); }
@@ -315,9 +305,11 @@ void main() {
   }
   if (d0 >= 1.) { ink = 0.; coral = 0.; stone = 0.; }
   // (the stone's line broken, as a dry brush leaves it)
-  stone *= smoothstep(.25, .55, noise(vec3(gl_FragCoord.xy * .09, 5.)));
+  // (where on the hill this is, so the breaks stay with the stone, not the glass)
+  vec4 wp = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
+  stone *= smoothstep(.2, .4, noise(wp.xyz / wp.w * 3.));
   c = mix(c, vec3(.62, .24, .22), coral * .45);
-  c = mix(c, vec3(.4, .34, .28), stone * .7);
+  c = mix(c, vec3(.25, .21, .18), stone * .85);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
   // the paper: its mottle, its fibres, its grain
   vec2 sp = gl_FragCoord.xy;
@@ -388,6 +380,18 @@ export class Renderer {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  }
+
+  /** What's drawn at a point of the canvas (device pixels from its top left) in the last frame: its material. */
+  matAt(x: number, y: number): number {
+    const gl = this.gl;
+    if (!this.fb) return -1;
+    const px = new Uint8Array(4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.readPixels(Math.round(x), Math.round(this.h - 1 - y), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return Math.round((px[3] / 255) * 31);
   }
 
   /** A solid mesh (STRIDE floats a vertex). */
@@ -468,7 +472,7 @@ export class Renderer {
    * The frame: the solids (the world's bands, the walker by its own placing), the blossom, the
    * petals; then the print.
    */
-  frame(view: { vp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; cut: [number, number, number, number] },
+  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number },
     solids: Array<{ d: Drawn; model?: M4 }>, puffs: Drawn[], petals: Drawn[]) {
     const gl = this.gl, W = this.canvas.width, H = this.canvas.height;
     this.targets(W, H);
@@ -493,9 +497,6 @@ export class Renderer {
     gl.useProgram(this.puff);
     gl.uniformMatrix4fv(this.loc(this.puff, 'uVP'), false, view.vp);
     for (const [k, v] of [['uRight', view.right], ['uUp', view.up], ['uFwd', view.fwd], ['uEye', view.eye]] as Array<[string, V3]>) gl.uniform3fv(this.loc(this.puff, k), v);
-    gl.uniform4fv(this.loc(this.puff, 'uCut'), view.cut);
-    gl.uniform2f(this.loc(this.puff, 'uView'), W, H);
-    gl.uniform1f(this.loc(this.puff, 'uDab'), Math.max(2, Math.round(view.dpr * 1.6)));
     for (const p of puffs) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, p.count); }
     gl.useProgram(this.petal);
     gl.uniformMatrix4fv(this.loc(this.petal, 'uVP'), false, view.vp);
@@ -511,6 +512,7 @@ export class Renderer {
     gl.uniform2f(this.loc(this.post, 'uPx'), 1 / W, 1 / H);
     gl.uniform1f(this.loc(this.post, 'uNear'), view.near);
     gl.uniform1f(this.loc(this.post, 'uFar'), view.far);
+    gl.uniformMatrix4fv(this.loc(this.post, 'uIVP'), false, view.ivp);
     gl.uniform1f(this.loc(this.post, 'uLine'), Math.max(1, view.dpr * 0.9));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
@@ -536,3 +538,21 @@ export function mulM(a: M4, b: M4): M4 {
 }
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a: V3): V3 => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+/** The inverse of a 4×4 matrix (column-major). */
+export function invert(m: M4): M4 {
+  const o = new Float32Array(16);
+  const [a00, a01, a02, a03, a10, a11, a12, a13, a20, a21, a22, a23, a30, a31, a32, a33] = m;
+  const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10, b03 = a01 * a12 - a02 * a11;
+  const b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12, b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30;
+  const b08 = a20 * a33 - a23 * a30, b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+  const det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06 || 1e-9, id = 1 / det;
+  o[0] = (a11 * b11 - a12 * b10 + a13 * b09) * id; o[1] = (a02 * b10 - a01 * b11 - a03 * b09) * id;
+  o[2] = (a31 * b05 - a32 * b04 + a33 * b03) * id; o[3] = (a22 * b04 - a21 * b05 - a23 * b03) * id;
+  o[4] = (a12 * b08 - a10 * b11 - a13 * b07) * id; o[5] = (a00 * b11 - a02 * b08 + a03 * b07) * id;
+  o[6] = (a32 * b02 - a30 * b05 - a33 * b01) * id; o[7] = (a20 * b05 - a22 * b02 + a23 * b01) * id;
+  o[8] = (a10 * b10 - a11 * b08 + a13 * b06) * id; o[9] = (a01 * b08 - a00 * b10 - a03 * b06) * id;
+  o[10] = (a30 * b04 - a31 * b02 + a33 * b00) * id; o[11] = (a21 * b02 - a20 * b04 - a23 * b00) * id;
+  o[12] = (a11 * b07 - a10 * b09 - a12 * b06) * id; o[13] = (a00 * b09 - a01 * b07 + a02 * b06) * id;
+  o[14] = (a31 * b01 - a30 * b03 - a32 * b00) * id; o[15] = (a20 * b03 - a21 * b01 + a22 * b00) * id;
+  return o;
+}

@@ -50,7 +50,7 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'taohua', title: 'Taohua · 桃花', group: 'Woods',
-    blurb: 'A climb up a stone stair through peach blossom to the mountain temples, on forever. After a print: blossoming trees in puffs of stippled pink, black rocks along a zigzag of steps, temples of teal tiles and red columns, a walker in a straw hat, and Bai Juyi\'s lines down the side, a couplet more at each temple. Hold to climb.',
+    blurb: 'A climb through peach blossom to the mountain temples, on forever. After a print: crowns of flat pink, black standing stones, stone steps and trails that wander between them, temples of teal tiles and red columns, a walker in a straw hat with a staff, and Bai Juyi\'s lines down the side, a couplet more at each temple. Tap the path to walk.',
     page: 'static/taohua.html', preview: 'preview&seed=7', readme: 'static/taohua.md',
     presets: [{ label: 'climb', query: '' }, { label: 'a hillside', query: 'seed=7' }, { label: 'another', query: 'seed=peach-ford-3' }],
   },
