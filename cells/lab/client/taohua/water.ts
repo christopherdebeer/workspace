@@ -156,7 +156,7 @@ export class Water {
         const lv = this.levelAt(st, z);
         const xc = this.xAt(st, z), d = Math.abs(x - xc) / Math.hypot(1, this.dxAt(st, z));
         const s = d - this.halfAt(st, z) * (lv.kind === 'falls' ? 1.5 : 1);
-        if (s < 14) out.push({ s, L: lv.L, kind: lv.kind, st, bank: lv.kind === 'falls' ? 1.3 : lv.kind === 'plunge' ? 1.6 : 0.35, run: lv.kind === 'flow' ? this.slope(z) : 0, across: (x - xc) / Math.hypot(1, this.dxAt(st, z)) });
+        if (s < 14) out.push({ s, L: lv.L, kind: lv.kind, st, bank: lv.kind === 'falls' ? 1.3 : lv.kind === 'plunge' ? 1.6 : Math.max(0.35, this.steep(z)), run: lv.kind === 'flow' ? this.slope(z) : 0, across: (x - xc) / Math.hypot(1, this.dxAt(st, z)) });
       }
       for (const p of st.pools) {
         const dx = (x - p.x) / p.rx, dz = (z - p.z) / p.rz, e = Math.hypot(dx, dz);
@@ -164,12 +164,14 @@ export class Water {
         // (its edge wavers, so no pond is an ellipse)
         const wob = 1 + 0.12 * Math.sin(Math.atan2(dz, dx) * 3 + p.z) + 0.07 * Math.sin(Math.atan2(dz, dx) * 5 + p.x);
         const s = (e / wob - 1) * Math.min(p.rx, p.rz);
-        if (s < 14) out.push({ s, L: p.L, kind: p.kind, st, bank: p.kind === 'plunge' ? 1.6 : 0.3, run: 0, across: 0 });
+        if (s < 14) out.push({ s, L: p.L, kind: p.kind, st, bank: p.kind === 'plunge' ? 1.6 : Math.max(0.3, this.steep(z)), run: 0, across: 0 });
       }
     }
     this.memo.set(key, out);
     return out;
   }
+  /** how steeply a bank must rise from the water, at least, to meet the hill there and not run on along it as a shelf: well steeper than the hill */
+  private steep(z: number) { return 0.6 + 2.2 * this.slope(z); }
   /** The water nearest (x, z), within a few metres (within a pool, the pool, its level the pool's); null if there's none so near. */
   at(x: number, z: number): Wet | null {
     let best: Wet | null = null;
