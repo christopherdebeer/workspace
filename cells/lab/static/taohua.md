@@ -17,17 +17,22 @@ the last temple passed has its name at the foot of the print over 桃花.
 ## The hill and its ways
 
 The hill comes first. It rises up the slope, gently in some bands and steeply in others, the same
-all across it. On it, junctions in rows up the hill, one to three in a row, each row a dozen metres
-or so above the last; between one row and the next, ways, each from a junction below to one above,
-bending as it goes, so that every junction can be reached and no two ways cross. Where a row has
-more junctions than the one below, a way forks; fewer, ways meet. Each way takes the hill's height
-as it goes: where its going is steep (the hill steep there, or the way heading straight up it) it
-climbs in steps, each a pale slab of its own, ragged at its ends, turning as the way bends, now and
-then a short wall of squared blocks beside it; where it's gentle, it's a trail, a few flat stones
-and a worn line of grey strokes. All of it from the seed: the same seed, the same hillside.
+all across it. On it, junctions in rows up the hill, far apart: one to three in a row, thirty-five
+to sixty-five metres above the last, spread widely across the hill and at unequal distances from
+one another, each row drifting on from the last. Between one row and the next, ways, each from a
+junction below to one above, forty to sixty-five metres long, bending as it goes, so that every
+junction can be reached and no two ways cross. Where a row has more junctions than the one below,
+a way forks; fewer, ways meet. Each way takes the hill's height as it goes: where its going is
+steep (the hill steep there, or the way heading straight up it) it climbs in steps, each a pale
+slab of its own, ragged at its ends, turning as the way bends, now and then a short wall of
+squared blocks beside it; where it's gentle, it's a trail, a few flat stones and a worn line of
+grey strokes. The ground just downhill of a way is kept open of trees, a tree's height deep, so a
+way running across the hill isn't lost under the crowns in front of it as the eye looks up the
+slope: the hillside is terraced by its ways. All of it from the seed: the same seed, the same hillside.
 
-The world is made in bands across the hill, twelve metres deep, as they come into view and dropped
-as they fall behind, each from the seed and its number: the ground, the steps and stones that fall
+The world is made in tiles, sixteen metres across and twelve deep, about wherever the walker is,
+as far across as the view reaches, as they come into view and dropped as they're left, each from
+the seed and its place: the ground, the steps and stones that fall
 in it, standing stones in little clusters along the ways and in outcrops behind the trees, tufts of
 grass, the trees, fallen blossom, and the temples. No crown hangs right over a way; in front of
 one, as the eye looks up the hill, the crowns stand as they grow, and the walker passes behind them
@@ -114,8 +119,8 @@ lobes. Distant paper fade starts beyond the usual focal distance.
 
 ## Changes along the way
 
-Before any tree is grown, the ways are given their places: about a third of them have a station
-beside them, a space kept open on the paper on whichever side has room, clear of every way, as the
+Before any tree is grown, the ways are given their places: most of them have a station
+beside them, a space kept open on the paper on whichever side has room, well apart from the next, clear of every way, as the
 prints keep paper clear for their verse. Each holds a cast from Changes, from the seed and the
 station's number: six lines, each as three coins fall, so old lines come as often as they would.
 It's written on the hillside there, in the open space: the hexagram drawn in ink, its moving lines

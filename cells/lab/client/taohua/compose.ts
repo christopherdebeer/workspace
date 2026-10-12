@@ -49,15 +49,16 @@ export function stationOf(ways: Ways, seed: number, w: Way): Station | null {
   if (memo.has(key)) return memo.get(key)!;
   const r = seeded(hash(seed, w.row, w.from.k * 7 + w.to.k, 0x57a7));
   let st: Station | null = null;
-  if (r() < 0.36 && w.len > 9 && !w.temple && !w.to.gate && !w.from.gate) {
+  if (r() < 0.7 && w.len > 9 && !w.temple && !w.to.gate && !w.from.gate) {
     const first = r() < 0.5 ? 1 : -1;
     for (const u of [w.len * 0.5, w.len * 0.35, w.len * 0.65]) {
       for (const side of [first, -first]) {
         const at = ways.at(w, u, true);
-        const off = WIDTH / 2 + 1.1 + RX;
-        const c: V3 = [at.p[0] + at.dir[1] * side * off, 0, at.p[2] - at.dir[0] * side * off];
+        // (out from the way by as far as the space reaches that way, which is further where the way runs across the hill)
+        const nx = at.dir[1], nz = -at.dir[0];
+        const off = WIDTH / 2 + 1.1 + Math.hypot(RX * nx, RZ * nz);
+        const c: V3 = [at.p[0] + nx * side * off, 0, at.p[2] + nz * side * off];
         c[1] = ways.hill(c[2]);
-        if (Math.abs(c[0]) > 15) continue;
         let clear = ways.nearest(c[0], c[2]).d > WIDTH / 2 + 0.4;
         for (let k = 0; k < 16 && clear; k++) {
           const a = (k / 16) * Math.PI * 2;
@@ -69,7 +70,7 @@ export function stationOf(ways: Ways, seed: number, w: Way): Station | null {
           for (const o of ways.waysUp(k)) {
             if (o === w) break;
             const os = stationOf(ways, seed, o);
-            if (os && Math.hypot((os.c[0] - c[0]) / (RX * 3), (os.c[2] - c[2]) / (RZ * 2.2)) < 1) clear = false;
+            if (os && Math.hypot((os.c[0] - c[0]) / (RX * 5), (os.c[2] - c[2]) / (RZ * 3.4)) < 1) clear = false;
           }
         }
         if (!clear) continue;

@@ -10,8 +10,8 @@ import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { inStation, stationsNear } from './compose';
 import { RISE, TERRACE, WIDTH, Ways, type V3 } from './ways';
 
-/** how deep a band is, up the hill (m); how far across the hill the world goes, each side */
-export const BAND = 12, SPAN = 20;
+/** how deep a tile of the hill is, up it (m), and how wide, across it: the world is made a tile at a time, about the walker, as far across as the ways go */
+export const BAND = 12, TILE = 16;
 /** a vertex: position, normal, colour, material */
 export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
@@ -31,7 +31,7 @@ export const INK = {
 };
 
 export interface Band {
-  j: number;
+  i: number; j: number;
   verts: Float32Array;
   /** blossom puffs: x, y, z, radius, shade (0 dark–1 light), seed; per puff */
   puffs: Float32Array;
@@ -186,19 +186,20 @@ export function templeSurface(t: TempleAt, x: number, z: number): number | null 
  * This controls whole groves before any individual tree is grown.
  */
 export interface Opening { cx: number; cz: number; rx: number; rz: number; side: number; i: number }
-export function opening(ways: Ways, seed: number, i: number): Opening {
-  const rr = seeded(hash(seed, i, 0xc041));
-  const cz = i * 36 + 12 + rr() * 12;
+/** the opening in cell (ix, iz) of the hill, 36 m each way: beside whichever way passes nearest its middle */
+export function opening(ways: Ways, seed: number, ix: number, iz: number): Opening {
+  const rr = seeded(hash(seed, ix, iz, 0xc041));
+  const cz = iz * 36 + 12 + rr() * 12, mx = ix * 36 + 18;
   const side = rr() < 0.5 ? -1 : 1;
-  const at = ways.nearest(0, cz).p;
+  const at = ways.nearest(mx, cz).p;
   const cx = at[0] + side * (2.5 + rr() * 2.5);
-  return { cx, cz, rx: 5.5 + rr() * 3.5, rz: 8 + rr() * 5, side, i };
+  return { cx, cz, rx: 5.5 + rr() * 3.5, rz: 8 + rr() * 5, side, i: ix * 100003 + iz };
 }
 export function groveDensity(ways: Ways, seed: number, x: number, z: number): number {
-  const cell = Math.floor(z / 36);
+  const cz = Math.floor(z / 36), cx = Math.floor(x / 36);
   let open = 0;
-  for (let i = cell - 1; i <= cell + 1; i++) {
-    const o = opening(ways, seed, i);
+  for (let i = cz - 1; i <= cz + 1; i++) for (let k = cx - 1; k <= cx + 1; k++) {
+    const o = opening(ways, seed, k, i);
     const d = Math.hypot((x - o.cx) / o.rx, (z - o.cz) / o.rz);
     open = Math.max(open, 1 - smooth(0.55, 1.15, d));
   }
@@ -206,14 +207,14 @@ export function groveDensity(ways: Ways, seed: number, x: number, z: number): nu
   return (0.7 + 0.29 * mass) * (1 - open);
 }
 
-/** Band j of the hill. */
-export function makeBand(ways: Ways, seed: number, j: number): Band {
-  const z0 = j * BAND, z1 = z0 + BAND;
-  const r = seeded(hash(seed, j, 0xb4d));
+/** Tile (i, j) of the hill: i across it, j up it. */
+export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
+  const z0 = j * BAND, z1 = z0 + BAND, x0 = i * TILE, x1 = x0 + TILE;
+  const r = seeded(hash(seed, i, j, 0xb4d));
   const mesh = new Mesh();
   const puffs: number[] = [], petals: number[] = [];
   const temples = templesNear(ways, z0, z1);
-  const inBand = (z: number) => z >= z0 && z < z1;
+  const inT = (x: number, z: number) => z >= z0 && z < z1 && x >= x0 && x < x1;
   // (whether a place is on a temple's terrace or by its walls, in the temple's own frame: across its front, and out from it)
   const onTemple = (x: number, z: number, m: number) => temples.some((t) => {
     const dx = x - t.c[0], dz = z - t.c[2];
@@ -226,9 +227,11 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
   // (the stations' spaces, kept open: no tree whose crown would stand over one, no rock in one)
   const sts = stationsNear(ways, seed, z0, z1);
   const treeOut = (x: number, z: number) => inStation(sts, x, z, 1.6, 4.5);
+  /** whether (x, z) is just downhill of a way, where a crown would stand between the eye and it */
+  const belowWay = (x: number, z: number) => [2, 3.8, 5.6, 7.2].some((dz) => ways.nearest(x, z + dz).d < WIDTH / 2 + 1);
 
   // the ground: a sheet across the hill, the paper's cream
-  const nx = 2 * SPAN / 1.5, nz = BAND / 1.5;
+  const nx = TILE / 1.5, nz = BAND / 1.5;
   // (each corner: where it is, and how near the path, for the brush strokes along it)
   const gv = new Map<string, number[]>();
   const GV = (x: number, z: number) => {
@@ -237,15 +240,15 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
     if (!v) { const nr = ways.nearest(x, z); const worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.6, nr.d); v = [x, ground(ways, x, z), z, 0, 1, 0, worn, 0, 0, M.ground]; gv.set(key, v); }
     return v;
   };
-  for (let i = 0; i < nx; i++) for (let k = 0; k < nz; k++) {
-    const xa = -SPAN + i * 1.5, xb = xa + 1.5, za = z0 + k * 1.5, zb = za + 1.5;
+  for (let i = 0; i < Math.round(nx); i++) for (let k = 0; k < nz; k++) {
+    const xa = x0 + i * 1.5, xb = xa + 1.5, za = z0 + k * 1.5, zb = za + 1.5;
     for (const [x, z] of [[xa, za], [xa, zb], [xb, zb], [xa, za], [xb, zb], [xb, za]]) mesh.v.push(...GV(x, z));
   }
 
   // the ways: on their steep stretches, steps, each a slab of its own, laid on the hill, its ends
   // ragged (no two the same length, nor quite in line), turning as the way bends; on their gentle
   // stretches, only a few flat stones here and there, and a worn line (in the drawing)
-  const near = ways.waysNear(z0 - 3, z1 + 3);
+  const near = ways.waysNear(z0 - 3, z1 + 3).filter((w) => w.box[1] > x0 - 4 && w.box[0] < x1 + 4);
   const onTerrace = (x: number, z: number) => temples.some((t) => t.gate && templeSurface(t, x, z) !== null);
   for (const w of near) {
     const wh = hash(seed, w.row, w.from.k, w.to.k);
@@ -254,7 +257,7 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
       for (let k = 0; k < st.n; k++) {
         const uc = st.u0 + (k + 0.5) * du;
         const m = ways.at(w, uc, true), dir = m.dir;
-        if (!inBand(m.p[2]) || onTerrace(m.p[0], m.p[2])) continue;
+        if (!inT(m.p[0], m.p[2]) || onTerrace(m.p[0], m.p[2])) continue;
         const top = st.h0 + ((k + 1) / st.n) * (st.h1 - st.h0);
         const h = hash(wh, si, k);
         // (its two ends, each its own way out or in)
@@ -287,7 +290,7 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
           const m = ways.at(w, st.u0 + (k + 0.5) * du, true), top = st.h0 + ((k + 1) / st.n) * (st.h1 - st.h0) + 0.22 + (k % 2) * 0.16;
           const off = (WIDTH / 2 + 0.55) * sd;
           const bc: V3 = [m.p[0] + m.dir[1] * off, top - 0.45, m.p[2] - m.dir[0] * off];
-          if (inBand(bc[2]) && !onTerrace(bc[0], bc[2])) mesh.box(bc, [du / 2 + 0.01, 0.45, 0.3], m.dir, INK.stepTop, INK.stone, M.stone);
+          if (inT(bc[0], bc[2]) && !onTerrace(bc[0], bc[2])) mesh.box(bc, [du / 2 + 0.01, 0.45, 0.3], m.dir, INK.stepTop, INK.stone, M.stone);
         }
       }
     }
@@ -297,13 +300,13 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
       if (tr() < 0.45 || ways.stairAt(w, u)) continue;
       const m = ways.at(w, u, true), off = ramp(tr, -0.45, 0.45);
       const x = m.p[0] + m.dir[1] * off, z = m.p[2] - m.dir[0] * off;
-      if (!inBand(z) || onTerrace(x, z)) continue;
+      if (!inT(x, z) || onTerrace(x, z)) continue;
       stone(mesh, ways, x, z, ramp(tr, 0.16, 0.34), tr);
     }
   }
 
   // temples
-  for (const t of temples) if (inBand(t.c[2])) temple(mesh, t, hash(seed, Math.round(t.c[2] * 10), 0x7e));
+  for (const t of temples) if (inT(t.c[0], t.c[2])) temple(mesh, t, hash(seed, Math.round(t.c[2] * 10), 0x7e));
 
   // rocks along the ways' edges, black, in little clusters, and the ground about them
   const gy = (x: number, z: number) => ground(ways, x, z);
@@ -317,7 +320,7 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
         if (rr() < (stair ? 0.55 : 0.82)) continue;
         const off = (WIDTH / 2 + 0.6 + rr() * 0.9) * sd;
         const x = m.p[0] + m.dir[1] * off, z = m.p[2] - m.dir[0] * off;
-        if (!inBand(z)) continue;
+        if (!inT(x, z)) continue;
         rocks.push([x, z, ramp(rr, 0.28, 0.7)]);
         // (a smaller one leaning on it, now and then; and another)
         for (let k = 0; k < 2 && rr() < 0.55; k++) { const a = rr() * 6.3, d = ramp(rr, 0.45, 0.8); rocks.push([x + Math.cos(a) * d + m.dir[1] * 0.2 * sd, z + Math.sin(a) * d, ramp(rr, 0.18, 0.42)]); }
@@ -325,8 +328,8 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
     }
   }
   // (and a few out among the trees, low and broad)
-  for (let i = 0; i < 5; i++) {
-    const x = ramp(r, -SPAN + 2, SPAN - 2), z = ramp(r, z0, z1);
+  for (let i = 0; i < 2; i++) {
+    const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
     if (ways.nearest(x, z).d < WIDTH / 2 + 0.8) continue;
     rocks.push([x, z, ramp(r, 0.4, 0.95)]);
   }
@@ -344,11 +347,11 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
       const m = ways.at(w, u, true), stair = !!ways.stairAt(w, u);
       const sd = rr() < 0.5 ? 1 : -1, off = (WIDTH / 2 + (stair ? 0.3 : -0.15) + rr() * 0.3) * sd;
       const x = m.p[0] + m.dir[1] * off, z = m.p[2] - m.dir[0] * off;
-      if (inBand(z) && !onTemple(x, z, 0) && ways.nearest(x, z).d > WIDTH / 2 - 0.3) tuft(mesh, ways, x, z, rr, 3 + Math.floor(rr() * 4));
+      if (inT(x, z) && !onTemple(x, z, 0) && ways.nearest(x, z).d > WIDTH / 2 - 0.3) tuft(mesh, ways, x, z, rr, 3 + Math.floor(rr() * 4));
     }
   }
-  for (let i = 0; i < 40; i++) {
-    const x = ramp(r, -SPAN, SPAN), z = ramp(r, z0, z1);
+  for (let i = 0; i < 16; i++) {
+    const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
     if (ways.nearest(x, z).d > WIDTH / 2 + 0.5 && !onTemple(x, z, 0) && !inStation(sts, x, z, 0)) tuft(mesh, ways, x, z, r, 2 + Math.floor(r() * 4));
   }
 
@@ -362,18 +365,18 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
       case 'Mountain': // (standing stones along its upper edge)
         for (let k = 0, n = 3 + Math.floor(sr() * 2); k < n; k++) {
           const [x, z] = R(ramp(sr, -0.9, 0.9), ramp(sr, 1.05, 1.3));
-          if (inBand(z) && ways.nearest(x, z).d > WIDTH / 2 + 0.6) { const sz = ramp(sr, 0.45, 0.9); rock(mesh, [x, gy(x, z), z], sz, sr, gy); shade(mesh, ways, x - 0.9 * sz, z + 0.1, sz * 2.2, sz * 0.7, 0.28); }
+          if (inT(x, z) && ways.nearest(x, z).d > WIDTH / 2 + 0.6) { const sz = ramp(sr, 0.45, 0.9); rock(mesh, [x, gy(x, z), z], sz, sr, gy); shade(mesh, ways, x - 0.9 * sz, z + 0.1, sz * 2.2, sz * 0.7, 0.28); }
         }
         break;
       case 'Wind': // (a grove close behind it)
         for (let k = 0; k < 3; k++) {
           const [x, z] = R(ramp(sr, -0.9, 0.9), ramp(sr, 1.25, 1.6));
-          if (inBand(z) && ways.nearest(x, z).d > WIDTH / 2 + 1.5) tree(mesh, puffs, petals, [x, gy(x, z), z], sr, ways);
+          if (inT(x, z) && ways.nearest(x, z).d > WIDTH / 2 + 1.5 && !belowWay(x, z)) tree(mesh, puffs, petals, [x, gy(x, z), z], sr, ways);
         }
         break;
       case 'Thunder': { // (one tree at its far side, leaning out over it)
         const [x, z] = R(away * ramp(sr, 1.15, 1.35), ramp(sr, 0.2, 0.7));
-        if (inBand(z) && ways.nearest(x, z).d > WIDTH / 2 + 1.5) tree(mesh, puffs, petals, [x, gy(x, z), z], sr, ways);
+        if (inT(x, z) && ways.nearest(x, z).d > WIDTH / 2 + 1.5 && !belowWay(x, z)) tree(mesh, puffs, petals, [x, gy(x, z), z], sr, ways);
         break;
       }
     }
@@ -381,55 +384,58 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
       case 'Water': // (flat stones across it, as stepping stones over a stream)
         for (let k = 0; k < 5; k++) {
           const t = k / 4, [x, z] = R(-0.7 + 1.4 * t, -0.75 + 0.35 * t + ramp(sr, -0.05, 0.05));
-          if (inBand(z)) stone(mesh, ways, x, z, ramp(sr, 0.2, 0.3), sr);
+          if (inT(x, z)) stone(mesh, ways, x, z, ramp(sr, 0.2, 0.3), sr);
         }
         break;
       case 'Lake': // (a ring of flat stones)
         for (let k = 0; k < 7; k++) {
           const a = (k / 7) * Math.PI * 2, [x, z] = R(Math.cos(a) * 0.42, -0.5 + Math.sin(a) * 0.2);
-          if (inBand(z)) stone(mesh, ways, x, z, ramp(sr, 0.14, 0.22), sr);
+          if (inT(x, z)) stone(mesh, ways, x, z, ramp(sr, 0.14, 0.22), sr);
         }
         break;
       case 'Fire': // (fallen blossom, red, heaped)
         for (let k = 0; k < 16; k++) {
           const [x, z] = R(ramp(sr, -0.6, 0.6), ramp(sr, -0.85, -0.25));
-          if (inBand(z)) petals.push(x, gy(x, z) + 0.06, z, ramp(sr, 0.2, 0.34), sr() * Math.PI, ramp(sr, 0.6, 1));
+          if (inT(x, z)) petals.push(x, gy(x, z) + 0.06, z, ramp(sr, 0.2, 0.34), sr() * Math.PI, ramp(sr, 0.6, 1));
         }
         break;
       case 'Mountain': { // (one stone, low, at its edge)
         const [x, z] = R(-away * 0.55, -0.6);
-        if (inBand(z)) { const sz = ramp(sr, 0.35, 0.5); rock(mesh, [x, gy(x, z), z], sz, sr, gy); shade(mesh, ways, x - 0.9 * sz, z + 0.1, sz * 2.2, sz * 0.7, 0.28); }
+        if (inT(x, z)) { const sz = ramp(sr, 0.35, 0.5); rock(mesh, [x, gy(x, z), z], sz, sr, gy); shade(mesh, ways, x - 0.9 * sz, z + 0.1, sz * 2.2, sz * 0.7, 0.28); }
         break;
       }
       case 'Wind': // (grass, in tufts)
-        for (let k = 0; k < 6; k++) { const [x, z] = R(ramp(sr, -0.7, 0.7), ramp(sr, -0.85, -0.3)); if (inBand(z)) tuft(mesh, ways, x, z, sr, 4); }
+        for (let k = 0; k < 6; k++) { const [x, z] = R(ramp(sr, -0.7, 0.7), ramp(sr, -0.85, -0.3)); if (inT(x, z)) tuft(mesh, ways, x, z, sr, 4); }
         break;
       case 'Thunder': // (a stone split in two)
-        for (const dx of [-0.12, 0.12]) { const [x, z] = R(dx, -0.6); if (inBand(z)) rock(mesh, [x, gy(x, z), z], 0.3, seeded(hash(st.i, 3)), gy); }
+        for (const dx of [-0.12, 0.12]) { const [x, z] = R(dx, -0.6); if (inT(x, z)) rock(mesh, [x, gy(x, z), z], 0.3, seeded(hash(st.i, 3)), gy); }
         break;
     }
   }
 
   // (each opening held by one tree standing alone in it, toward its far side, away from the path,
   // its blossom fallen about it: the clearing is a shape the tree gives meaning to, not just a gap)
-  for (let i = Math.floor(z0 / 36) - 1; i <= Math.floor(z1 / 36) + 1; i++) {
-    const o = opening(ways, seed, i), lr = seeded(hash(seed, i, 0x10e));
+  for (let i = Math.floor(z0 / 36) - 1; i <= Math.floor(z1 / 36) + 1; i++) for (let ix = Math.floor(x0 / 36) - 1; ix <= Math.floor(x1 / 36) + 1; ix++) {
+    const o = opening(ways, seed, ix, i), lr = seeded(hash(seed, ix, i, 0x10e));
     if (lr() < 0.25) continue;
     const x = o.cx + o.side * o.rx * ramp(lr, 0.25, 0.5), z = o.cz + o.rz * ramp(lr, -0.1, 0.35);
-    if (!inBand(z) || ways.nearest(x, z).d < WIDTH / 2 + 2.2 || onTemple(x, z, 1) || inGlade(x, z) || treeOut(x, z)) continue;
+    if (!inT(x, z) || ways.nearest(x, z).d < WIDTH / 2 + 2.2 || belowWay(x, z) || onTemple(x, z, 1) || inGlade(x, z) || treeOut(x, z)) continue;
     tree(mesh, puffs, petals, [x, ground(ways, x, z), z], lr, ways);
   }
 
   // trees: on a jittered grid, not on the path (though they lean over it), not on a temple's terrace
   const G = 3.9;
-  for (let gx = -SPAN + 1; gx < SPAN; gx += G) for (let gz = Math.floor((z0 - G * 0.45) / G) * G; gz < z1 + G * 0.45; gz += G) {
+  for (let gx = Math.floor((x0 - G * 0.45) / G) * G; gx < x1 + G * 0.45; gx += G) for (let gz = Math.floor((z0 - G * 0.45) / G) * G; gz < z1 + G * 0.45; gz += G) {
     const tr = seeded(hash(seed, Math.round(gx * 10), Math.round(gz * 10), 0x7ee));
     const accept = tr();
     const x = gx + (tr() - 0.5) * G * 0.9, z = gz + (tr() - 0.5) * G * 0.9;
     // Ownership follows the final jittered position; neighbouring bands visit the same candidates.
-    if (!inBand(z)) continue;
+    if (!inT(x, z)) continue;
     if (accept > groveDensity(ways, seed, x, z)) continue;
     if (ways.nearest(x, z).d < WIDTH / 2 + 1.5) continue;
+    // (nor just downhill of a way: from above, its crown would stand between the eye and the way, and a
+    // way across the hill would be lost under it; the strip below each way is kept open, a tree's height deep)
+    if (belowWay(x, z)) continue;
     if (onTemple(x, z, 0.8) || inGlade(x, z) || treeOut(x, z)) continue;
     // (an outcrop behind it, now and then, as in the print: black slabs the blossom stands against)
     if (tr() < 0.5) for (let k = 0, n = 2 + Math.floor(tr() * 3); k < n; k++) {
@@ -443,13 +449,13 @@ export function makeBand(ways: Ways, seed: number, j: number): Band {
     tree(mesh, puffs, petals, [x, ground(ways, x, z), z], tr, ways);
   }
   // petals fallen on the path too
-  for (let i = 0; i < 90; i++) {
-    const x = ramp(r, -SPAN, SPAN), z = ramp(r, z0, z1);
+  for (let i = 0; i < 36; i++) {
+    const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
     const nr = ways.nearest(x, z);
     const y = nr.d < WIDTH / 2 ? ways.surface(nr.w, nr.u, z) + 0.01 : ground(ways, x, z) + 0.02;
     petals.push(x, y, z, ramp(r, 0.04, 0.08), r() * Math.PI, r() * 0.5);
   }
-  return { j, verts: mesh.v.out(), puffs: new Float32Array(puffs), petals: new Float32Array(petals), temples: temples.filter((t) => inBand(t.c[2])).map((t) => ({ c: t.c, face: Math.atan2(t.face[0], t.face[1]), poem: t.name })) };
+  return { i, j, verts: mesh.v.out(), puffs: new Float32Array(puffs), petals: new Float32Array(petals), temples: temples.filter((t) => inT(t.c[0], t.c[2])).map((t) => ({ c: t.c, face: Math.atan2(t.face[0], t.face[1]), poem: t.name })) };
 }
 
 /**

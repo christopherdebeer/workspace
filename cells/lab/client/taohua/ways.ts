@@ -42,7 +42,7 @@ export interface Way {
 }
 export interface Near { d: number; w: Way; u: number; p: V3 }
 
-const N = 24;
+const N = 40;
 const bez = (a: V3, c: V3, b: V3, t: number): V3 => {
   const u = 1 - t;
   return [u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1], u * u * a[2] + 2 * u * t * c[2] + t * t * b[2]];
@@ -74,7 +74,7 @@ export class Ways {
   private rows: Junction[][] = [];
   /** the z of row k */
   zOf(k: number): number {
-    while (this.rowZ.length <= k) { const r = seeded(hash(this.seed, this.rowZ.length, 0x20)); this.rowZ.push(this.rowZ[this.rowZ.length - 1] + 11 + r() * 6); }
+    while (this.rowZ.length <= k) { const r = seeded(hash(this.seed, this.rowZ.length, 0x20)); this.rowZ.push(this.rowZ[this.rowZ.length - 1] + (this.rowZ.length < 2 ? 16 : 34 + r() * 30)); }
     return this.rowZ[k];
   }
   /** the row nearest below z (or 0) */
@@ -93,14 +93,16 @@ export class Ways {
     const r = seeded(hash(this.seed, k, 0x21));
     const z = this.zOf(k), y = this.hill(z);
     const J = (i: number, x: number): Junction => ({ id: `${k}.${i}`, row: k, k: i, x, z, y, gate: false, face: [0, -1] });
-    if (k < 2) return [J(0, k === 0 ? 0 : (r() - 0.5) * 4)];
-    // (how many: one, often; two, often; three, now and then; drifting across the hill, back toward the middle if it's wandered)
+    if (k < 2) return [J(0, k === 0 ? 0 : (r() - 0.5) * 10)];
+    // (how many: one, often; two, often; three, now and then; spread far across the hill, each row
+    // drifting on from the last, unequal gaps between; drawn back a little if it's wandered far)
     const prev = this.rows[k - 1];
     const mid = prev.reduce((a, j) => a + j.x, 0) / prev.length;
-    const n = r() < 0.45 ? 1 : r() < 0.78 ? 2 : 3;
-    const m = Math.max(-6, Math.min(6, mid + (r() - 0.5) * 7 - mid * 0.25));
-    const gap = 6.5 + r() * 4.5;
-    const xs = Array.from({ length: n }, (_, i) => m + (i - (n - 1) / 2) * gap + (r() - 0.5) * 1.5).map((x) => Math.max(-12, Math.min(12, x)));
+    const n = r() < 0.4 ? 1 : r() < 0.75 ? 2 : 3;
+    const m = mid + (r() - 0.5) * 50 - mid * (Math.abs(mid) > 40 ? 0.5 : 0.2);
+    const xs: number[] = [];
+    let x = m - ((n - 1) / 2) * 32;
+    for (let i = 0; i < n; i++) { xs.push(x + (r() - 0.5) * 10); x += 18 + r() * 34; }
     return xs.map((x, i) => J(i, x));
   }
 

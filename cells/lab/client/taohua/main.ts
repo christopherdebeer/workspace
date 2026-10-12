@@ -14,7 +14,7 @@ import { RISE, WIDTH, Ways, type V3, type Way } from './ways';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
 import { stationsNear, type Station } from './compose';
 import { identify, moving } from '../changes/model';
-import { BAND, INK, M, Mesh, NAMES, SPAN, ground, makeBand, templeSurface, templesNear, type Band } from './world';
+import { BAND, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -162,19 +162,28 @@ const about = (p: V3, r: M4): M4 => mulM(Tm(p[0], p[1], p[2]), mulM(r, Tm(-p[0],
 
 // ─── the bands of the hill, made as they're needed, dropped behind ───────────────────────────────
 interface Live { band: Band; solid: Drawn; puffs: Drawn; petals: Drawn }
-const live = new Map<number, Live>();
-function keepBands(z: number) {
+const live = new Map<string, Live>();
+/** Keep the tiles about where the eye looks made, and drop those it's left: across the hill as far as the view reaches, up it ahead and a little behind. */
+function keepBands(x: number, z: number) {
+  const aspect = canvas.width / Math.max(1, canvas.height);
+  const half = (aspect < 1 ? 22 : 46) * (ink ? 1.8 : 1);
   const lo = Math.floor((z - (ink ? 40 : 24)) / BAND), hi = Math.floor((z + (ink ? 130 : 70)) / BAND);
-  for (const [j, l] of live) if (j < lo - 1 || j > hi + 1) { R.drop(l.solid); R.drop(l.puffs); R.drop(l.petals); live.delete(j); }
-  // (one band a frame at most, nearest first, so a climb never stutters)
-  for (let j = Math.floor(z / BAND); j <= hi; j++) if (!live.has(j)) { add(j); return; }
-  for (let j = lo; j <= hi; j++) if (!live.has(j)) { add(j); return; }
+  const il = Math.floor((x - half) / TILE), ih = Math.floor((x + half) / TILE);
+  for (const [key, l] of live) if (l.band.j < lo - 1 || l.band.j > hi + 1 || l.band.i < il - 1 || l.band.i > ih + 1) { R.drop(l.solid); R.drop(l.puffs); R.drop(l.petals); live.delete(key); }
+  // (one tile a frame at most, nearest the walker first, so a climb never stutters)
+  let best: [number, number] | null = null, bd = Infinity;
+  for (let j = lo; j <= hi; j++) for (let i = il; i <= ih; i++) {
+    if (live.has(`${i},${j}`)) continue;
+    const d = Math.hypot((i + 0.5) * TILE - x, ((j + 0.5) * BAND - z) * (j * BAND < z - 6 ? 2 : 1));
+    if (d < bd) { bd = d; best = [i, j]; }
+  }
+  if (best) add(best[0], best[1]);
 }
-function add(j: number) {
-  const band = makeBand(ways, seed, j);
+function add(i: number, j: number) {
+  const band = makeBand(ways, seed, i, j);
   const pet = new Float32Array((band.petals.length / 6) * 7);
-  for (let i = 0; i < band.petals.length / 6; i++) { pet.set(band.petals.subarray(i * 6, i * 6 + 6), i * 7); pet[i * 7 + 6] = 0; }
-  live.set(j, { band, solid: R.mesh(band.verts), puffs: R.instances('puff', band.puffs), petals: R.instances('petal', pet) });
+  for (let k = 0; k < band.petals.length / 6; k++) { pet.set(band.petals.subarray(k * 6, k * 6 + 6), k * 7); pet[k * 7 + 6] = 0; }
+  live.set(`${i},${j}`, { band, solid: R.mesh(band.verts), puffs: R.instances('puff', band.puffs), petals: R.instances('petal', pet) });
 }
 
 // ─── petals falling, about where you are ─────────────────────────────────────────────────────────
@@ -463,7 +472,7 @@ function frame(now: number) {
   const want_yaw = Math.atan2(st.dir[0], st.dir[1]) + (speed < -0.05 ? Math.PI : 0);
   facing += Math.atan2(Math.sin(want_yaw - facing), Math.cos(want_yaw - facing)) * (1 - Math.exp(-dt * 5));
   const yaw = facing;
-  keepBands(pos[2]);
+  keepBands(cam.x || pos[0], pos[2]);
 
   // the temple last passed: its name, at the foot of the print
   let passed: { z: number; name: number } | null = null;
@@ -544,5 +553,5 @@ if (review) {
   $('hint').textContent = PASS + ' · seed ' + seed + ' · at ' + here.w.id + ':' + here.u.toFixed(1);
   $('hint').classList.add('on');
 } else if (!preview) setTimeout(() => $('hint').classList.add('on'), 1200);
-void SPAN; void WIDTH;
+void WIDTH;
 requestAnimationFrame(frame);
