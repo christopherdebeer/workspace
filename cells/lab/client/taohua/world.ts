@@ -235,7 +235,24 @@ export function makeBand(path: Path, seed: number, j: number): Band {
       const l = WIDTH / 2 + ((h >> 8) % 100) / 100 * 0.24 - 0.08, rr = WIDTH / 2 + ((h >> 16) % 100) / 100 * 0.24 - 0.08;
       const shift = (rr - l) / 2, half = (l + rr) / 2;
       const cc: V3 = [c[0] + f.dir[1] * shift, c[1], c[2] - f.dir[0] * shift];
-      mesh.box(cc, [f.run / 2 + 0.015, 0.15, half], f.dir, INK.stepTop, INK.stepFace, M.step);
+      // Worn slabs: clipped, unequal corners; continuous treads keep the walk surface level.
+      const sr = seeded(h), hx = f.run / 2 + 0.02;
+      const cut = () => 0.025 + sr() * 0.075;
+      const corners: Array<[number, number]> = [
+        [-hx + cut(), -half], [hx - cut(), -half + sr() * 0.04],
+        [hx, -half + cut()], [hx, half - cut()],
+        [hx - cut(), half], [-hx + cut(), half - sr() * 0.04],
+        [-hx, half - cut()], [-hx, -half + cut()],
+      ];
+      const P = (u: number, v: number, y: number): V3 =>
+        [cc[0] + f.dir[0] * u + f.dir[1] * v, y, cc[2] + f.dir[1] * u - f.dir[0] * v];
+      const centre = P(0, 0, top);
+      for (let n = 0; n < corners.length; n++) {
+        const a = corners[n], b = corners[(n + 1) % corners.length];
+        const pa = P(a[0], a[1], top), pb = P(b[0], b[1], top);
+        mesh.tri(centre, pb, pa, INK.stepTop, M.step, [0, 1, 0]);
+        mesh.quad(P(a[0], a[1], top - 0.24), P(b[0], b[1], top - 0.24), pb, pa, INK.stepFace, M.step);
+      }
     }
     // (now and then, along one side of a flight, a wall of squared blocks holding the hill back,
     // stepping up with the stair)
@@ -340,8 +357,8 @@ export function makeBand(path: Path, seed: number, j: number): Band {
  * corner, its foot sunk.
  */
 function rock(mesh: Mesh, at: V3, size: number, r: Rand, gy?: (x: number, z: number) => number) {
-  const n = 4 + Math.floor(r() * 3), turn = r() * 6.3, long = ramp(r, 1, 1.7);
-  const h = size * ramp(r, 1.0, 2.1), taper = ramp(r, 0.5, 0.85), tilt = ramp(r, 0.15, 0.5), ta = r() * 6.3;
+  const n = 5 + Math.floor(r() * 3), turn = r() * 6.3, long = ramp(r, 1.3, 2.1);
+  const h = size * ramp(r, 0.7, 1.65), taper = ramp(r, 0.22, 0.62), tilt = ramp(r, 0.25, 0.65), ta = r() * 6.3;
   const ring = (rad: number, y: number, jit: number): V3[] => Array.from({ length: n }, (_, i) => {
     const a = (i / n) * Math.PI * 2 + (i ? ramp(r, -0.35, 0.35) / n * 3 : 0), rr = rad * ramp(r, 1 - jit, 1);
     const lx = Math.cos(a) * rr * long, lz = Math.sin(a) * rr;
@@ -508,7 +525,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       // the crowns stand as they grow, and the walker passes behind them and comes out again)
       if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
       const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
-      const shade = Math.max(0, Math.min(1, 0.52 + t0 + 0.3 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.22 * (q[1] - cy) + ramp(r, -0.06, 0.06)));
+      const shade = Math.max(0, Math.min(1, 0.59 + t0 + 0.07 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.055 * (q[1] - cy) + ramp(r, -0.025, 0.025)));
       puffs.push(q[0], q[1], q[2], rad, shade, crownSeed);
     }
   }

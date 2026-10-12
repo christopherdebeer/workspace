@@ -82,7 +82,7 @@ void main() {
     if (n.y > .5) {
       c = vec3(.96, .94, .89);
       if (step(.8, noise(vec3(vW.x * 1.6, vW.z * 13., vW.y * 9.))) > .5) c = mix(c, GREY, .6);
-    } else c = vec3(.66, .61, .54);
+    } else c = vec3(.76, .71, .62);
     lit = 1.;
   } else if (vM == ${M.stone}) {
     // stone: a wall's face laid in squared blocks, its joints dark; tops pale
@@ -151,7 +151,7 @@ void main() {
   c *= lit;
   // (far off, it fades into the paper)
   float d = length(vW - uEye);
-  c = mix(c, PAPER, smoothstep(65., 125., d) * .68);
+  c = mix(c, PAPER, smoothstep(85., 150., d) * .55);
   oC = vec4(c, 1.);
   oA = vec4(n * .5 + .5, float(vM) / 31.);
 }`;
@@ -182,7 +182,11 @@ void main() {
   float a = atan(shapeQ.y, shapeQ.x), r = length(shapeQ);
   // (its edge: the blossom crumbles away into the paper in little square dabs, as a worn block prints;
   // a few dabs loose beyond it. The dabs are the puff's own, so they stay where they are as the view moves)
-  float edge = 1. - .1 * noise(vec3(cos(a) * 2.2, sin(a) * 2.2, vSeed * 40.));
+  // Irregular scallops at several scales interrupt the circular silhouette.
+  float edge = .84 + .11 * noise(vec3(cos(a) * 3.8, sin(a) * 3.8, vSeed * 40.))
+    + .065 * sin(a * 7. + vSeed * 19.) + .035 * sin(a * 13. + shape * 11.);
+  // Broken undersides leave room for the branches below each spray.
+  edge -= .12 * smoothstep(.1, .75, -shapeQ.y) * noise(vec3(shapeQ.x * 8., 2., vSeed * 23.));
   vec2 dab = floor(vQ * vR / .045);
   float hd = hash3(vec3(dab, floor(vSeed * 97.)));
   float lim = edge * (.86 + .2 * hd);
@@ -190,18 +194,21 @@ void main() {
   float rr = min(1., r / edge);
   // the dome, where on the tree this fragment is: its tone comes from there, not from the puff
   float z = sqrt(max(0., 1. - rr * rr));
-  vec3 w = vP + (uRight * vQ.x + uUp * vQ.y) * vR - uFwd * z * vR * .8;
+  vec3 w = vP + (uRight * vQ.x + uUp * vQ.y) * vR - uFwd * z * vR * .14;
   // its tone: the puff's place on its crown (lit, high, or under), and over it washes of deeper and
   // paler pink in soft blotches across the whole crown, as watercolour pools
   // Broad wash belongs to the cluster centre, independent of camera orientation.
   // Fine marks remain attached to the illustrated lobe.
   vec3 mark = vP + vec3(vQ.x, vQ.y, 0.) * vR;
   float wash = noise(vP * .55) - .5, wash2 = noise(mark * 1.7 + 4.) - .5;
-  float tone = clamp(vS + wash * .7 + wash2 * .22, 0., 1.);
-  // (in four inks only, as a block prints them: where one meets the next, a ragged edge)
-  float lvl = floor(clamp(tone * 3.6 + (noise(mark * 7.) - .5) * .7, 0., 3.));
-  vec3 deep = vec3(.71, .27, .25), lo = vec3(.83, .38, .33), mid = vec3(.91, .48, .41), hi = vec3(.97, .65, .58);
-  vec3 c = lvl < .5 ? deep : lvl < 1.5 ? lo : lvl < 2.5 ? mid : hi;
+  // A continuous low-contrast ink field replaces the large stepped camouflage patches.
+  float tone = clamp(vS + wash * .18 + wash2 * .075, 0., 1.);
+  vec3 deep = vec3(.76, .34, .32), lo = vec3(.85, .43, .39), mid = vec3(.92, .53, .47), hi = vec3(.97, .65, .57);
+  vec3 c = tone < .5 ? mix(deep, mid, tone * 2.) : mix(mid, hi, (tone - .5) * 2.);
+  float leaf = noise(mark * 19. + vSeed * 7.);
+  c = mix(c, lo, smoothstep(.64, .82, leaf) * .27);
+  // Sparse pinholes open the foliage itself, rather than stippling only its outer edge.
+  if (hd < .018 && noise(mark * 5.) > .52) discard;
   // its grain: the print's pale flecks, fine, everywhere; a few deeper
   vec2 g = vQ * vR * 18. + vSeed * 17.;
   vec2 cell = floor(g), f = fract(g) - .5;
@@ -213,7 +220,7 @@ void main() {
   vec4 clip = uVP * vec4(w, 1.);
   gl_FragDepth = clip.z / clip.w * .5 + .5;
   float d = length(w - uEye);
-  c = mix(c, PAPER, smoothstep(65., 125., d) * .68);
+  c = mix(c, PAPER, smoothstep(85., 150., d) * .55);
   oC = vec4(c, 1.);
   vec3 n = normalize(uRight * vQ.x + uUp * vQ.y - uFwd * z);
   oA = vec4(n * .5 + .5, ${M.blossom}. / 31.);
@@ -314,9 +321,9 @@ void main() {
   // (the stone's line broken, as a dry brush leaves it)
   // (where on the hill this is, so the breaks stay with the stone, not the glass)
   vec4 wp = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
-  stone *= smoothstep(.2, .4, noise(wp.xyz / wp.w * 3.));
-  c = mix(c, vec3(.62, .24, .22), coral * .45);
-  c = mix(c, vec3(.25, .21, .18), stone * .85);
+  stone *= smoothstep(.32, .58, noise(wp.xyz / wp.w * 5.));
+  c = mix(c, vec3(.72, .37, .32), coral * .13);
+  c = mix(c, vec3(.43, .38, .31), stone * .48);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
   // the paper: its mottle, its fibres, its grain
   vec2 sp = gl_FragCoord.xy;

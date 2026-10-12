@@ -80,7 +80,7 @@ view moves; only the paper's own grain belongs to the sheet. Under it all the pa
 shade darker, and the far hill fading into it.
 
 Few inks, flat, as a block prints them. The blossom is one field of pink per crown, not a heap of
-balls, in four pinks only: each puff takes its tone from where it is on its tree (lit, high, or
+balls, in a narrow range of pink inks: each puff takes its tone from where it is on its tree (lit, high, or
 under) and from washes that pool across the whole crown, and where one pink meets the next the
 edge is ragged; over that, fine pale flecks. Stone is two: pale tops, one darker face. Shade and
 the strokes on the ground are one grey. Its edge crumbles into
@@ -109,3 +109,9 @@ lobes. Distant paper fade starts beyond the usual focal distance.
 `?seed=1&at=24&review` freezes the walker, camera and falling petals for a repeatable comparison
 at full rendering resolution. The footer identifies the pass, seed and path position. Remove
 `review` to walk normally. Composition pass 1: compare `at=2`, `at=24` and `at=90`.
+
+
+Composition pass 2 widens and raises the portrait view, flattens blossom depth and tonal
+contrast, breaks crown edges into irregular sprays, and uses clipped stone treads and lower,
+tapered rock forms. Verse occupies parallel vertical columns; the large title sits at lower
+left. Use the same seed 1 / at 24 / review view for comparison with pass 1.
