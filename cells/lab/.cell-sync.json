@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:9bb4a4e37127870db8f94dc69fce3008aaf4bd6f19bc164922cf16747061eda1",
-  "syncedAt": "2026-10-12T22:13:57.521Z",
+  "treeVersion": "tree:01c43a9d4f90c8003b0180ae5e73270f8db3d07050b0a7464454665bd48e70d2",
+  "syncedAt": "2026-10-12T22:15:46.399Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -87,7 +87,7 @@
     "client/taohua/compose.ts": "sha256:eeb974a3ac14997cb3eddeeb4fbe1951e4d8a9e28e588fc511a5eceac01ef8b2",
     "client/taohua/deer.ts": "sha256:e6d792f0fe2c34e29f1a84e52c2fcc03cb91402d44bf04136134486ef2c32ae6",
     "client/taohua/herds.ts": "sha256:fa642d0664ac283b328efeeca5f3efb171373b27d874e1e831d29ea18eec327e",
-    "client/taohua/main.ts": "sha256:790c5606c05a4604b812553974166de0ba39dec3bb8faa86d1defae365fde56a",
+    "client/taohua/main.ts": "sha256:1e3e6be201b297ebe4a1c58297f852167d2a4518531a5c2e4690ff95fd86324f",
     "client/taohua/render.ts": "sha256:761c0c593af2913b4b61fe58f68c98710f72b94bfab0fc49a4f50b86296b63de",
     "client/taohua/roam.ts": "sha256:88c0ea8a640dcf1fae5fb1946fee8cb288ed8f3297d5b457e59798e3c1edf03c",
     "client/taohua/water.ts": "sha256:06c273c8173ba3ada5d3ddfa10aaa1fd877d4e5d193bef58c5a5a05910ab8f11",
