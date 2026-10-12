@@ -15,6 +15,8 @@ import { GATE, LANDING, Path, RISE, TERRACE, WIDTH, type Flight, type V3 } from 
 export const BAND = 12, SPAN = 20;
 /** a vertex: position, normal, colour, material */
 export const STRIDE = 10;
+/** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
+const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
 export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19 } as const;
 
@@ -461,59 +463,74 @@ function tuft(mesh: Mesh, path: Path, x: number, z: number, r: Rand, n = 5) {
  * over colour); petals fallen under it, some whole flowers, in drifts.
  */
 function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, path: Path) {
-  // (a trunk you can see: tall before it opens, leaning, with a kink or two)
+  // (a trunk you can see: tall before it opens, leaning, with a kink or two; bold, as the print's are)
   const stature = ramp(r, 0.82, 1.3);
-  const H = ramp(r, 1.5, 2.5) * stature, lean: V3 = norm([ramp(r, -0.35, 0.35), 1, ramp(r, -0.35, 0.35)]);
-  const R0 = ramp(r, 0.2, 0.3) * stature;
-  const knee = add(base, add(mul(lean, H * 0.55), [ramp(r, -0.15, 0.15), 0, ramp(r, -0.15, 0.15)]));
-  const top = add(knee, mul(norm(add(lean, [ramp(r, -0.3, 0.3), 0.4, ramp(r, -0.3, 0.3)])), H * 0.45));
-  mesh.tube([base[0], base[1] - 0.3, base[2]], knee, R0 * 1.35, R0 * 1.05, INK.trunk, M.trunk, 8);
-  mesh.tube(knee, top, R0 * 1.05, R0 * 0.9, INK.trunk, M.trunk, 8);
+  const H = ramp(r, 1.6, 2.6) * stature, lean: V3 = norm([ramp(r, -0.4, 0.4), 1, ramp(r, -0.15, 0.3)]);
+  const R0 = ramp(r, 0.24, 0.34) * stature;
+  const knee = add(base, add(mul(lean, H * 0.5), [ramp(r, -0.2, 0.2), 0, ramp(r, -0.1, 0.1)]));
+  const top = add(knee, mul(norm(add(lean, [ramp(r, -0.35, 0.35), 0.3, ramp(r, -0.1, 0.2)])), H * 0.5));
+  mesh.tube([base[0], base[1] - 0.3, base[2]], knee, R0 * 1.4, R0 * 1.05, INK.trunk, M.trunk, 8);
+  mesh.tube(knee, top, R0 * 1.05, R0 * 0.88, INK.trunk, M.trunk, 8);
   const limbsFrom = mesh.v.n;
   const ends: Array<[V3, V3, number]> = [];
   const UP: V3 = [0, 1, 0];
+  /**
+   * (the way a limb goes, drawn as the print draws a tree: spread across the picture, up and out to
+   * either side, little toward the eye or away; and what depth it has, a little away from the eye
+   * rather than toward it, so the near side of the crown is open and its limbs are seen)
+   */
+  const fan = (d: V3): V3 => norm([d[0], d[1], d[2] * 0.45 + 0.14]);
   const twig = (from: V3, d: V3, len: number, rad: number) => {
     // (a hairline, straight, thinning to nothing)
     const e = add(from, mul(d, len));
     mesh.tube(from, e, rad, 0.004, INK.trunk, M.twig, 3);
-    if (r() < 0.75) ends.push([e, d, 1]);
+    if (r() < 0.6) ends.push([e, d, 1]);
     return e;
   };
   /**
-   * a limb: straight, then a kink and on, straight again (as the print's are drawn: runs and
-   * angles, not curves); at its end it forks at a sharp angle, or, at the last, fans into twigs
+   * a limb: a long run, then a slight turn and on (as the print's are drawn: runs and angles, not
+   * curves), thinning steadily; at its end it forks, two ways or three, the forks narrow; at the
+   * last, a lace of fine twigs out to the crown's edge, and the blossom about them
    */
   const grow = (from: V3, dir: V3, len: number, rad: number, depth: number) => {
-    const kink = norm(add(add(dir, mul(UP, 0.12)), [ramp(r, -0.45, 0.45), ramp(r, -0.15, 0.2), ramp(r, -0.45, 0.45)]));
-    const mid = add(from, mul(dir, len * ramp(r, 0.4, 0.6))), to = add(mid, mul(kink, len * 0.5));
-    const sides = depth >= 2 ? 3 : depth >= 1 ? 5 : 6;
-    mesh.tube(from, mid, rad, rad * 0.86, INK.trunk, M.twig, sides);
-    mesh.tube(mid, to, rad * 0.86, rad * 0.68, INK.trunk, M.twig, sides);
-    // (a twig or two straight out of the kink, as a branch carries them all along it)
-    for (let k = 0, n = depth >= 1 && r() < 0.6 ? 1 : 0; k < n; k++) twig(mid, norm(add(kink, [ramp(r, -0.9, 0.9), ramp(r, 0, 0.5), ramp(r, -0.9, 0.9)])), len * ramp(r, 0.35, 0.6), rad * 0.4);
-    if (depth >= 2) {
-      // (a fan of fine twigs out of the end; the blossom about them)
-      for (let k = 0, n = 3 + Math.floor(r() * 2); k < n; k++) twig(to, norm(add(kink, [ramp(r, -0.8, 0.8), ramp(r, -0.1, 0.6), ramp(r, -0.8, 0.8)])), len * ramp(r, 0.35, 0.65), rad * 0.5);
+    const kink = fan(norm(add(add(dir, mul(UP, 0.08)), [ramp(r, -0.3, 0.3), ramp(r, -0.12, 0.15), ramp(r, -0.3, 0.3)])));
+    const mid = add(from, mul(dir, len * ramp(r, 0.45, 0.6))), to = add(mid, mul(kink, len * 0.48));
+    const sides = depth >= 3 ? 3 : depth >= 2 ? 4 : depth >= 1 ? 5 : 6;
+    const taper = depth >= 3 ? 0.55 : 0.78;
+    if (depth <= 1) {
+      // (the main limbs wander a little along their way: a third bend, small, between)
+      const q1 = add(add(from, mul(sub(mid, from), 0.5)), [ramp(r, -0.08, 0.08) * len, ramp(r, -0.05, 0.08) * len, ramp(r, -0.04, 0.04) * len]);
+      const rm = rad * (1 + taper) / 2;
+      mesh.tube(from, q1, rad, (rad + rm) / 2, INK.trunk, M.twig, sides);
+      mesh.tube(q1, mid, (rad + rm) / 2, rm, INK.trunk, M.twig, sides);
+    } else mesh.tube(from, mid, rad, rad * (1 + taper) / 2, INK.trunk, M.twig, sides);
+    mesh.tube(mid, to, rad * (1 + taper) / 2, rad * taper, INK.trunk, M.twig, sides);
+    // (now and then a short spur out of the turn)
+    if (depth >= 1 && r() < 0.45) twig(mid, fan(norm(add(kink, [ramp(r, -1, 1), ramp(r, 0, 0.5), ramp(r, -0.6, 0.6)]))), len * ramp(r, 0.3, 0.5), rad * 0.4);
+    if (depth >= 3) {
+      for (let k = 0, n = 3 + Math.floor(r() * 3); k < n; k++) twig(to, fan(norm(add(kink, [ramp(r, -0.7, 0.7), ramp(r, -0.05, 0.5), ramp(r, -0.6, 0.6)]))), len * ramp(r, 0.5, 0.9), rad * 0.45);
       ends.push([to, kink, 3]);
       return;
     }
-    if (depth === 1 && r() < 0.5) ends.push([to, kink, 1]);
-    const n = 2 + Math.floor(r() * 2);
+    if (depth === 2 && r() < 0.35) ends.push([to, kink, 1]);
+    const n = depth === 0 ? 2 + (r() < 0.45 ? 1 : 0) : 2;
     const u = norm(cross(kink, Math.abs(kink[1]) < 0.9 ? UP : [1, 0, 0])), w = cross(kink, u);
+    const phi0 = r() * Math.PI * 2;
     for (let i = 0; i < n; i++) {
-      const phi = (i / n) * Math.PI * 2 + r() * 1.5, th = depth === 0 ? ramp(r, 0.45, 0.8) : ramp(r, 0.4, 0.75);
-      const d = norm(add(add(mul(kink, Math.cos(th)), mul(add(mul(u, Math.cos(phi)), mul(w, Math.sin(phi))), Math.sin(th))), mul(UP, 0.08)));
-      grow(to, d, len * ramp(r, 0.6, 0.78), rad * 0.64, depth + 1);
+      const phi = phi0 + (i / n) * Math.PI * 2 + ramp(r, -0.4, 0.4), th = ramp(r, 0.32, 0.62);
+      const d = fan(norm(add(mul(kink, Math.cos(th)), mul(add(mul(u, Math.cos(phi)), mul(w, Math.sin(phi))), Math.sin(th)))));
+      grow(to, d, len * ramp(r, 0.68, 0.82), rad * 0.62, depth + 1);
     }
   };
-  // (the limbs: three to five, round about, out and up from the top of the trunk; now and then one lower down)
-  const limbs = 3 + Math.floor(r() * 3), a0 = r() * 6.28;
+  // (the limbs: three or four, up and out to either side across the picture from the top of the trunk; now and then one lower down)
+  const limbs = 3 + (r() < 0.45 ? 1 : 0), a0 = ramp(r, -0.4, 0.4);
   for (let i = 0; i < limbs; i++) {
-    const a = a0 + (i / limbs) * Math.PI * 2 + ramp(r, -0.35, 0.35), el = ramp(r, 0.5, 0.95);
-    const d = norm([Math.cos(a) * Math.cos(el) + lean[0] * 0.3, Math.sin(el), Math.sin(a) * Math.cos(el) + lean[2] * 0.3]);
-    grow(top, d, ramp(r, 1.5, 2.2) * stature, R0 * 0.62, 0);
+    // (spread across: from up-left to up-right, the middle ones the more upright)
+    const t = limbs === 1 ? 0.5 : i / (limbs - 1), a = -1.15 + 2.3 * t + a0 * 0.4 + ramp(r, -0.18, 0.18);
+    const d = fan(norm([Math.sin(a) + lean[0] * 0.3, Math.cos(a) * ramp(r, 0.85, 1.15), ramp(r, -0.6, 0.6)]));
+    grow(top, d, ramp(r, 1.3, 1.9) * stature, R0 * 0.56, 0);
   }
-  if (r() < 0.5) { const a = r() * 6.28; grow(knee, norm([Math.cos(a), 0.6, Math.sin(a)]), ramp(r, 1.2, 1.7), R0 * 0.45, 1); }
+  if (r() < 0.5) { const sd = r() < 0.5 ? -1 : 1; grow(knee, fan(norm([sd, 0.7, ramp(r, -0.4, 0.4)])), ramp(r, 1.1, 1.5) * stature, R0 * 0.45, 1); }
   const tips = ends;
   // the crown's middle, for its lighting
   let cx = 0, cy = 0, cz = 0;
@@ -543,8 +560,13 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
     const n = k + (k > 1 && r() < 0.4 ? 1 : 0);
     for (let i = 0; i < n; i++) {
       // (a clump about the fan of twigs, lifted a little: the blossom sits on top of the branches)
-      const q: V3 = [p[0] + d[0] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55), p[1] + ramp(r, 0.05, 0.5), p[2] + d[2] * ramp(r, 0, 0.6) + ramp(r, -0.55, 0.55)];
-      const rad = (k > 1 ? ramp(r, 0.55, 0.85) : ramp(r, 0.32, 0.55)) * Math.min(stature, 1.15);
+      // (a clump about the twigs' ends, set a little behind them along the eye's line, so it's in the
+      // same place on the print but the ink falls in front of it, as the print lays it)
+      const back = ramp(r, 0.35, 0.8);
+      const q: V3 = [p[0] + d[0] * ramp(r, 0, 0.5) + ramp(r, -0.5, 0.5) + VIEW[0] * back, p[1] + ramp(r, 0, 0.4) + VIEW[1] * back, p[2] + d[2] * ramp(r, 0, 0.5) + ramp(r, -0.4, 0.4) + VIEW[2] * back];
+      // (the near side of the crown, low down, left open: there the limbs are seen against the blossom behind)
+      if ((q[2] - cz) < -0.3 * Rh && q[1] < cy - 0.2 && r() < 0.3) continue;
+      const rad = (k > 1 ? ramp(r, 0.5, 0.78) : ramp(r, 0.32, 0.52)) * Math.min(stature, 1.15);
       // (none right over the path, so its way stays open; in front of it, as the eye looks up the hill,
       // the crowns stand as they grow, and the walker passes behind them and comes out again)
       if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
@@ -552,6 +574,18 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
       puffs.push(q[0], q[1], q[2], rad, shade, crownSeed * 0.5 + r() * 0.5);
     }
+  }
+  // (and the dome filled out behind its branches, so the crown is one full mass of blossom with the
+  // ink across it, as the print has it: clumps through the upper part of the crown, set back along
+  // the eye's line from the branches' plane)
+  for (let k = 0, n = Math.round(tips.length * 0.4); k < n; k++) {
+    const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * 0.9, up = ramp(r, -0.35, 1);
+    const back = ramp(r, 1.0, 1.6);
+    const q: V3 = [cx + Math.cos(a) * rr * Rh + VIEW[0] * back, cy + up * Rv * 0.8 + VIEW[1] * back, cz + Math.sin(a) * rr * Rh * 0.6 + VIEW[2] * back];
+    if (path.nearest(q[0], q[2]).d < WIDTH / 2 + 0.1) continue;
+    const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
+    const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
+    puffs.push(q[0], q[1], q[2], ramp(r, 0.5, 0.75) * Math.min(stature, 1.15), shade, crownSeed * 0.5 + r() * 0.5);
   }
   // fallen blossom under it, where it's not the path: in drifts, stamped flowers and specks of red
   for (let k = 0; k < 4; k++) {

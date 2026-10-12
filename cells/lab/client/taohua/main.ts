@@ -22,7 +22,7 @@ const review = params.has('review');
 let ink = params.has('ink');
 const setInk = (on: boolean) => { ink = on; document.body.classList.toggle('ink', on); };
 setInk(ink);
-const PASS = 'composition-5';
+const PASS = 'trees-1';
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
@@ -226,6 +226,28 @@ function pick(px: number, py: number): number | null {
   }
   return best;
 }
+/**
+ * Where on the path is nearest a point on the screen that isn't on it (the hillside, a temple, a
+ * tree): of the places along the path that can be seen (not behind blossom, a rock, a roof), the
+ * one nearest the finger on the glass, so the walker goes there and is seen to arrive.
+ */
+function nearestSeen(px: number, py: number): number | null {
+  if (!lastVP) return null;
+  const m = R.mats();
+  if (!m) return null;
+  const kx = canvas.width / innerWidth, ky = canvas.height / innerHeight;
+  let best: number | null = null, bestD = Infinity;
+  for (let si = Math.max(1, s - 40); si < s + 90; si += 0.25) {
+    const q = project(path.at(si).p);
+    if (q[2] <= 0 || q[0] < 8 || q[1] < 8 || q[0] > innerWidth - 8 || q[1] > innerHeight - 8) continue;
+    const d = Math.hypot(px - q[0], py - q[1]);
+    if (d >= bestD) continue;
+    // (seen: what's drawn there is the path, or the ground beside it, about the place and just above, where the walker would stand)
+    if (![[0, 0], [0, -10], [-4, -4], [4, -4]].every(([dx, dy]) => OPEN.has(m.at((q[0] + dx) * kx, (q[1] + dy) * ky)))) continue;
+    bestD = d; best = si;
+  }
+  return best;
+}
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   const at = pick(e.clientX, e.clientY);
@@ -250,7 +272,12 @@ canvas.addEventListener('pointermove', (e) => {
     lookAt0 = performance.now();
   }
 });
-const up = (e: PointerEvent) => { if (downAt?.id === e.pointerId) { downAt = null; looking = false; } };
+const up = (e: PointerEvent) => {
+  if (downAt?.id !== e.pointerId) return;
+  // (a tap off the path, not a drag: to the nearest place on the path that can be seen)
+  if (!downAt.on && !looking && e.type === 'pointerup') { const at = nearestSeen(e.clientX, e.clientY); if (at !== null) { goal = at; markAt = performance.now(); } }
+  downAt = null; looking = false;
+};
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
@@ -417,7 +444,7 @@ function frame(now: number) {
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, s, goal, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (si: number) => project(path.at(si).p), pick };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, s, goal, pos, steps: Math.round(pos[1] / RISE), bands: live.size, reached, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), screen: (si: number) => project(path.at(si).p), pick, nearestSeen };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }

@@ -109,7 +109,7 @@ void main() {
     // bark: ink, a pale streak down the side that faces the light, broken
     // (hard edged, as cut in a block: a band of the paper's cream down the lit side, broken along its length)
     float side = dot(n, normalize(vec3(.85, .1, -.5)));
-    float streak = smoothstep(.5, .56, side) * smoothstep(.4, .46, noise(vW * vec3(3.5, 1.1, 3.5) + 7.));
+    float streak = smoothstep(.56, .62, side) * smoothstep(.22, .3, noise(vW * vec3(1.6, .5, 1.6) + 7.));
     c = mix(c, vec3(.89, .84, .76), streak);
     lit = 1.;
   } else if (vM == ${M.tile} || vM == ${M.ridge}) {
@@ -435,6 +435,18 @@ export class Renderer {
     gl.readPixels(Math.round(x), Math.round(this.h - 1 - y), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     return Math.round((px[3] / 255) * 31);
+  }
+
+  /** What's drawn where, the whole last frame at once: each pixel's material, rows from the top. */
+  mats(): { w: number; h: number; at: (x: number, y: number) => number } | null {
+    const gl = this.gl;
+    if (!this.fb) return null;
+    const px = new Uint8Array(this.w * this.h * 4), w = this.w, h = this.h;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { w, h, at: (x, y) => { const i = Math.round(x), j = h - 1 - Math.round(y); return i < 0 || j < 0 || i >= w || j >= h ? -1 : Math.round((px[(j * w + i) * 4 + 3] / 255) * 31); } };
   }
 
   /** A solid mesh (STRIDE floats a vertex). */

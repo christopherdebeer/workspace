@@ -13,8 +13,9 @@ they follow your finger. Only path you can see answers a tap: a tap on blossom, 
 anywhere off the path does nothing, so the walker never goes where you can't see them arrive. (↑, W
 walk on up; ↓, S back down.) Drag anywhere off the path to look about a little; let go, and the view
 comes back. A tap that finds the path is answered in the scene: a ring of vermilion,
-left open as a brush draws it, on the place it found, for a moment. A tap that finds nothing
-gets nothing. The steps you've climbed are counted at the top. At each temple you pass,
+left open as a brush draws it, on the place it found, for a moment. A tap anywhere else (the hillside,
+a temple, a tree) sends the walker to the nearest place on the path that can be seen, so they're
+always seen to arrive. The steps you've climbed are counted at the top. At each temple you pass,
 its name comes up at the foot of the print over 桃花.
 
 ## The hill
@@ -58,17 +59,23 @@ them.
 
 ## The trees
 
-Each peach tree is grown: a trunk you can see, leaning, kinked, before it opens into three to five
-limbs that spread wide and up. Every limb is drawn as the print draws them: straight runs and
-angles, not curves, forking sharply, and again, ending in fans of hairline twigs, with twigs out
-of the angles along the way. Bark is black with a hard-edged band of cream down the side toward
-the light, broken along its length. The blossom gathers in clumps about the twigs' ends and along
-the limbs, so a tree is a broad umbrella of pink. Its branches show through its own blossom, as
-ink over colour: each point of a limb is drawn nearer the eye by as far as it lies inside its own
-crown, the most at the crown's heart and none at its rim or below, so the limbs stay joined to the
-trunk and never show through a neighbouring tree or a roof. The blossom's tone is continuous but
-keeps the crown's structure, pale where it's lit and high, deep beneath, dappled over that with
-pale dabs and deep recesses in clusters; each tree is its own pink.
+Each peach tree is grown as the print draws one: a bold trunk you can see, leaning, kinked, before
+it opens into three or four limbs that spread up and out to either side across the picture. Every
+limb is a long run thinning steadily, wandering a little along its way, then forking two or three
+ways at a narrow angle, and again, four times over, ending in a lace of hairline twigs out to the
+crown's edge, with spurs out of the turns along the way. The branching spreads across the view,
+with little depth toward the eye or away; what depth it has leans a little away, so the near side
+of each crown is open and its limbs are seen. Bark is black with a band of cream down the side
+toward the light, broken only now and then.
+
+The blossom gathers in clumps about the twigs' ends, each set a little behind its twigs along the
+eye's line, so it sits in the same place on the print but the ink falls in front of it, as the
+print lays ink over colour; and the dome is filled out behind the branches with more clumps,
+further back, so the crown is one full mass. Where a limb is still inside its own crown, it's drawn
+a little nearer the eye too, the most at the crown's heart and none at its rim, so the limbs show
+through their own blossom but never through a neighbouring tree or a roof. The blossom's tone keeps
+the crown's structure, pale where it's lit and high, deep beneath, dappled with pale dabs and deep
+recesses in clusters; each tree is its own pink.
 
 ## The print
 
