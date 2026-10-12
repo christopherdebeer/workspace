@@ -5,7 +5,8 @@ parting and meeting, past mountain temples and casts from Changes written on the
 print: peach trees in flower, black standing stones, stone steps where the way is steep, a temple
 of teal tiles and red columns, a walker in a straw hat with a staff, the paper's cream under it all.
 
-Tap a way and the walker goes there, by whichever ways lead there, up the hill or back down;
+Tap a way and the walker goes there, by whichever ways lead there, up the hill or back down (a
+branch that ends goes nowhere else, so to see another, come back to the fork);
 press on a way and slide along it, and they follow your finger. A tap anywhere else (the hillside,
 a temple, a tree) sends them to the nearest place on a way that can be seen, so they're always seen
 to arrive; a tap on a temple can send them to the way it stands over. The place a tap found is
@@ -17,44 +18,50 @@ the last temple passed has its name at the foot of the print over 桃花.
 ## The hill and its ways
 
 The hill comes first. It rises up the slope, gently in some bands and steeply in others, the same
-all across it. On it, junctions in rows up the hill, far apart: one to three in a row, thirty-five
-to sixty-five metres above the last, spread widely across the hill and at unequal distances from
-one another, each row drifting on from the last. Between one row and the next, ways, each from a
-junction below to one above, forty to sixty-five metres long, bending as it goes, so that every
-junction can be reached and no two ways cross. Where a row has more junctions than the one below,
-a way forks; fewer, ways meet. Each way takes the hill's height as it goes: where its going is
-steep (the hill steep there, or the way heading straight up it) it climbs in steps, each a pale
-slab of its own, ragged at its ends, turning as the way bends, now and then a short wall of
-squared blocks beside it; where it's gentle, it's a trail, a few flat stones and a worn line of
-grey strokes. The ground just downhill of a way is kept open of trees, a tree's height deep, so a
-way running across the hill isn't lost under the crowns in front of it as the eye looks up the
-slope: the hillside is terraced by its ways. All of it from the seed: the same seed, the same hillside.
+all across it.
+
+On it, the ways grow from the foot of the hill like a tree laid on the slope: a branch at a time,
+always the lowest first. From where it's reached, each branch goes on (a long reach, 34 to 64
+metres, up and across the hill, turning a little), or forks in two, the forks heading off to
+either side; now and then a short spur leaves it, up to a building or a clearing of its own on the
+slope; now and then a branch ends, at a building or a clearing. Rarely, two branches that have
+drawn near meet again. There are never more than three branches at once, and never fewer than
+one: with one, it forks more often; with three, a branch is more likely to end. No way crosses
+another, nor runs within eight metres of one, and no two junctions come within sixteen metres;
+where a branch has no room to go on, it ends there, in a quiet clearing.
+
+Each way takes the hill's height as it goes: where its going is steep (the hill steep there, or
+the way heading straight up it) it climbs in steps, each a pale slab of its own, ragged at its
+ends, turning as the way bends, now and then a short wall of squared blocks beside it; where it's
+gentle, it's a trail, a few flat stones and a worn line of grey strokes. The ground just downhill
+of a way is kept open of trees, so a way running across the hill isn't lost under the crowns in
+front of it. All of it from the seed: the same seed, the same hillside.
 
 The world is made in tiles, sixteen metres across and twelve deep, about wherever the walker is,
 as far across as the view reaches, as they come into view and dropped as they're left, each from
-the seed and its place: the ground, the steps and stones that fall
-in it, standing stones in little clusters along the ways and in outcrops behind the trees, tufts of
-grass, the trees, fallen blossom, and the temples. No crown hangs right over a way; in front of
-one, as the eye looks up the hill, the crowns stand as they grow, and the walker passes behind them
-and comes out again.
+the seed and its place: the ground, the steps and stones, standing stones along the ways and in
+outcrops behind the trees, tufts of grass, the trees, fallen blossom, and the buildings. No crown
+hangs right over a way.
 
 ## The temples
 
-Now and then a junction alone in its row is a temple's gate hall: the ways come up to the foot of
-its front stair, climb straight up it onto its terrace, go in at its open door and out the back,
-and down its back stair to go on. Now and then, where a way runs level for a while, a temple stands
-beside it, raised on its stone terrace, railed round, a stair down its front to the way. White
-walls on a grey stone plinth; a porch of red columns on round stone bases; a red beam with painted
-panels of teal and blue under it, a row of brackets; a red door, lattice windows; the plaque with
-the temple's name in gold on dark wood, hung under the eaves. White walls run off to either side,
-capped with tiles.
+Buildings stand where the ways give them a place, each of its kind and from its parts, on a stone
+terrace railed round with a stair down its front to the way, facing back down the way it's
+reached by and down the hill:
 
-The roof is hip-and-gable, as the print's is: the lower slopes hipped all round, a red gable at
-each end under its barge board; the eaves well out, swept up toward the corners, a row of round
-tile-ends along them; every tile drawn, barrel tiles in rows down whichever way each slope falls,
-each lapping the next, a gloss along each row's crown; a ridge along the top with its ends curled
-in and a tall beaded finial over each, ridges down the gables and hips with little knobs along
-them.
+- a **gate hall** across a way now and then: the way climbs its front stair, goes in at its open
+  door and out the back, down its back stair, and on; white walls run off to either side;
+- at a branch's end, or up a spur: a **hall** (three bays or five; a hip-and-gable roof or a
+  hipped one; single eaves or double, with an upper storey; sometimes walls out to its sides), an
+  open **pavilion** (columns, benches between, a pyramid roof or a short ridge, its eaves swept
+  high), a **pagoda** (three to five tiers, each narrower, each under a skirt of tiles, a tall
+  spire), or a small **shrine**.
+
+White walls on a grey stone plinth; red columns on round stone bases; a red beam with painted
+panels of teal and blue under it, a row of brackets; a red door, lattice windows; the plaque with
+the temple's name in gold on dark wood. Every roof's tiles are drawn, barrel tiles in rows down
+whichever way each slope falls, round tile-ends along the eaves, ridges down the hips with knobs
+along them, curled ridge ends or a finial at the peak.
 
 ## The trees
 
@@ -119,13 +126,15 @@ lobes. Distant paper fade starts beyond the usual focal distance.
 
 ## Changes along the way
 
-Before any tree is grown, the ways are given their places: most of them have a station
-beside them, a space kept open on the paper on whichever side has room, well apart from the next, clear of every way, as the
-prints keep paper clear for their verse. Each holds a cast from Changes, from the seed and the
-station's number: six lines, each as three coins fall, so old lines come as often as they would.
-It's written on the hillside there, in the open space: the hexagram drawn in ink, its moving lines
-in vermilion; its name, and if it moves, 之 and the name of what it becomes; their titles small.
-Tap it and it opens in Changes.
+Before any tree is grown, the ways are given their places for Changes, each a space kept open on
+the paper, as the prints keep paper clear for their verse: where a branch ends in a clearing,
+there, just past its end; at some forks, in the space up the hill between the forks; and beside
+about a quarter of the longer ways, on whichever side has room. Each is clear of every way and
+well apart from the others. Each holds a cast from Changes, from the seed and the station's
+number: six lines, each as three coins fall, so old lines come as often as they would. It's
+written on the hillside there, in the open space: the hexagram drawn in ink, its moving lines in
+vermilion; its name, and if it moves, 之 and the name of what it becomes; their titles small. Tap
+it and it opens in Changes.
 
 The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
 stones along its upper edge; Wind, a grove close behind; Thunder, one tree at its far side,
@@ -151,9 +160,10 @@ things along the way should fall.
 `?seed=…` a hillside; `?preview` climbs by itself, quietly. The address keeps the seed and where the walker
 is (`?at=way:metres`), updated as they go, so a reload or a shared link comes back to the same
 place.
-`?seed=1&at=7.0-0:3&review` freezes the walker, camera and falling petals for a repeatable comparison
+`?seed=1&at=w16:48&review` freezes the walker, camera and falling petals for a repeatable comparison
 at full rendering resolution. The footer identifies the pass, seed and where on the ways. Remove
-`review` to walk normally. Compare `at=0.0-0:0.5` (the start), `at=7.0-0:3` (a gate) and `at=15.1-1:1` (a temple beside a way).
+`review` to walk normally. On seed 1: `at=w2:45` (a fork), `at=w6:12` (a pavilion up a spur), `at=w16:48` (a gate), `at=w19:8`
+(a pagoda), `at=w40:9` (a hall).
 
 
 Composition pass 2 broke crown edges into irregular sprays and brought clipped stone treads,

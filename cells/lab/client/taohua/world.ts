@@ -8,7 +8,7 @@
  */
 import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { inStation, stationsNear } from './compose';
-import { RISE, TERRACE, WIDTH, Ways, type V3 } from './ways';
+import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3 } from './ways';
 
 /** how deep a tile of the hill is, up it (m), and how wide, across it: the world is made a tile at a time, about the walker, as far across as the ways go */
 export const BAND = 12, TILE = 16;
@@ -116,62 +116,64 @@ export function ground(ways: Ways, x: number, z: number): number {
   return ways.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04 - under * (1 - k);
 }
 
-/** how far a temple beside a way stands from its middle line: clear of it, its stair down to it */
-const BESIDE_OFF = WIDTH / 2 + 0.45 + TERRACE / 2 + 4 * 0.32;
 /** a temple's stair: so many steps, each so deep, from so high (above the temple's foot) at its foot up to its terrace */
 export interface TempleStair { n: number; h0: number }
+export type BuildingKind = 'gate' | 'hall' | 'pavilion' | 'pagoda' | 'shrine';
 export interface TempleAt {
-  c: V3; face: [number, number]; name: number; gate: boolean;
-  /** its terrace's height above its foot (c's height); its stair down the front; a gate's down the back */
-  B: number; front: TempleStair; back: TempleStair | null;
+  c: V3; face: [number, number]; name: number; kind: BuildingKind; gate: boolean;
+  /** its terrace: how high above its foot (c's height), how far across from its middle, how deep from it */
+  B: number; tw: number; T: number;
+  /** its stair down the front; a gate's down the back */
+  front: TempleStair; back: TempleStair | null;
+  /** a hall's bays (3 or 5), its roof hipped (not hip-and-gable), its eaves double, walls out to its sides */
+  bays: number; hip: boolean; double: boolean; wings: boolean;
 }
 /** how deep a temple's step is */
 export const TSTEP = 0.32;
 
 /**
- * Where the temples stand, near z: a gate hall at a junction, the way going in at its front and on
- * from its back; or beside a way where it runs level, facing it. Each with its terrace's height and
- * its stairs, so the walker can climb them.
+ * The buildings near z: at each junction that has one (a gate across a way, or a building at a
+ * branch's end), on its terrace, its front looking down the way it's reached by. Each of its kind,
+ * its parts from the seed and its junction; with its terrace's height and its stairs, so the
+ * walker can climb them.
  */
 export function templesNear(ways: Ways, z0: number, z1: number): TempleAt[] {
   const out: TempleAt[] = [];
-  const L = (c: V3, face: [number, number], x: number, z: number): V3 => [c[0] - face[1] * x + face[0] * z, 0, c[2] + face[0] * x + face[1] * z];
-  const stairTo = (c: V3, face: [number, number], B: number, sgn: number): TempleStair => {
-    // (from the hill at the stair's foot up to the terrace)
-    const foot = L(c, face, 0, sgn * (TERRACE / 2 + 1.4));
-    const h0 = ways.hill(foot[2]) - c[1];
-    return { n: Math.max(2, Math.round((B - h0) / RISE)), h0 };
-  };
-  for (const w of ways.waysNear(z0 - 16, z1 + 16)) {
-    const name = hash(ways.seed, w.row, w.to.k, 0x7e) % NAMES.length;
-    if (w.temple) {
-      const m = ways.at(w, w.templeU, true);
-      const px = m.dir[1] * w.temple, pz = -m.dir[0] * w.temple;
-      const cz = m.p[2] + pz * BESIDE_OFF;
-      const c: V3 = [m.p[0] + px * BESIDE_OFF, ways.hill(cz), cz];
-      if (c[2] < z0 - 14 || c[2] > z1 + 14) continue;
-      const face: [number, number] = [-px, -pz];
-      out.push({ c, face, name, gate: false, B: 0.7, front: stairTo(c, face, 0.7, 1), back: null });
-    }
-    const j = w.to;
-    if (j.gate && j.z > z0 - 14 && j.z < z1 + 14) {
-      const c: V3 = [j.x, j.y, j.z];
-      // (its terrace level with the hill at its back, or a little above; its front stair up from below)
-      const backFoot = L(c, j.face, 0, -(TERRACE / 2 + 1.4));
-      const B = Math.max(0.5, ways.hill(backFoot[2]) - c[1] + 0.16);
-      out.push({ c, face: j.face, name, gate: true, B, front: stairTo(c, j.face, B, 1), back: stairTo(c, j.face, B, -1) });
-    }
+  for (const j of ways.junctionsNear(z0 - 16, z1 + 16)) {
+    const kind: BuildingKind | null = j.gate ? 'gate' : j.end && j.end !== 'cast' ? j.end : null;
+    if (!kind) continue;
+    const memo = templeMemo.get(j);
+    if (memo) { out.push(memo); continue; }
+    const r = seeded(hash(ways.seed, j.n, 0x7e1));
+    const c: V3 = [j.x, j.y, j.z], face = j.face;
+    const T = TERRACE_OF[kind];
+    const bays = kind === 'hall' && r() < 0.4 ? 5 : 3;
+    const tw = kind === 'hall' || kind === 'gate' ? (bays === 5 ? ramp(r, 5.7, 6.3) : ramp(r, 4.4, 4.8)) : kind === 'pavilion' ? ramp(r, 2.3, 3.2) : kind === 'pagoda' ? T : 2.3;
+    const L = (x: number, z: number): V3 => [c[0] - face[1] * x + face[0] * z, 0, c[2] + face[0] * x + face[1] * z];
+    // (its terrace level with the hill at its back, or a little above; its front stair up from below)
+    const backFoot = L(0, -(T + 1.4));
+    const B = Math.max(kind === 'pavilion' || kind === 'shrine' ? 0.45 : 0.6, ways.hill(backFoot[2]) - c[1] + 0.16);
+    const stairTo = (sgn: number): TempleStair => {
+      const foot = L(0, sgn * (T + 1.4));
+      const h0 = ways.hill(foot[2]) - c[1];
+      return { n: Math.max(2, Math.round((B - h0) / RISE)), h0 };
+    };
+    const name = hash(ways.seed, j.n, 0x7e) % NAMES.length;
+    const t: TempleAt = { c, face, name, kind, gate: kind === 'gate', B, tw, T, front: stairTo(1), back: kind === 'gate' ? stairTo(-1) : null, bays, hip: r() < 0.3, double: kind === 'hall' && r() < 0.4, wings: kind === 'hall' && r() < 0.5 };
+    templeMemo.set(j, t);
+    out.push(t);
   }
-  return out;
+  return out.filter((t) => t.c[2] > z0 - 14 && t.c[2] < z1 + 14);
 }
+const templeMemo = new WeakMap<Junction, TempleAt>();
 
 /** Where one stands on a temple's terrace or stair, if (x, z) is on one: the height there. */
 export function templeSurface(t: TempleAt, x: number, z: number): number | null {
   const dx = x - t.c[0], dz = z - t.c[2];
   const ax = dx * -t.face[1] + dz * t.face[0], az = dx * t.face[0] + dz * t.face[1];
   if (Math.abs(ax) > WIDTH / 2 + 0.4) return null;
-  const T = TERRACE / 2;
-  if (Math.abs(az) <= T) return t.c[1] + t.B;
+  const T = t.T;
+  if (Math.abs(az) <= t.T) return t.c[1] + t.B;
   const st = az > 0 ? t.front : t.back;
   if (!st) return null;
   const k = Math.floor((Math.abs(az) - T) / TSTEP);
@@ -219,11 +221,11 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   const onTemple = (x: number, z: number, m: number) => temples.some((t) => {
     const dx = x - t.c[0], dz = z - t.c[2];
     const ax = Math.abs(dx * -t.face[1] + dz * t.face[0]), az = dx * t.face[0] + dz * t.face[1];
-    return (ax < 5.2 + m && Math.abs(az) < TERRACE / 2 + 0.6 + m) || (ax < 10.5 + m && Math.abs(az + 0.3) < 0.8 + m);
+    return (ax < t.tw + 0.4 + m && az < t.T + 0.6 + m + (t.front.n + 1) * TSTEP && az > -t.T - 0.6 - m - (t.back ? (t.back.n + 1) * TSTEP : 0)) || (t.gate && ax < t.tw + 6.3 + m && Math.abs(az + 0.3) < 0.8 + m);
   });
 
   // (the open space about a temple beside a way, where its terrace and courtyard stand)
-  const inGlade = (x: number, z: number) => temples.some((t) => !t.gate && Math.hypot(x - t.c[0], z - t.c[2]) < 7.5);
+  const inGlade = (x: number, z: number) => temples.some((t) => !t.gate && Math.hypot(x - t.c[0], z - t.c[2]) < t.T + 4.5);
   // (the stations' spaces, kept open: no tree whose crown would stand over one, no rock in one)
   const sts = stationsNear(ways, seed, z0, z1);
   const treeOut = (x: number, z: number) => inStation(sts, x, z, 1.6, 4.5);
@@ -249,9 +251,9 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   // ragged (no two the same length, nor quite in line), turning as the way bends; on their gentle
   // stretches, only a few flat stones here and there, and a worn line (in the drawing)
   const near = ways.waysNear(z0 - 3, z1 + 3).filter((w) => w.box[1] > x0 - 4 && w.box[0] < x1 + 4);
-  const onTerrace = (x: number, z: number) => temples.some((t) => t.gate && templeSurface(t, x, z) !== null);
+  const onTerrace = (x: number, z: number) => temples.some((t) => templeSurface(t, x, z) !== null);
   for (const w of near) {
-    const wh = hash(seed, w.row, w.from.k, w.to.k);
+    const wh = hash(seed, w.n, 0x5a);
     for (const [si, st] of w.stairs.entries()) {
       const du = (st.u1 - st.u0) / st.n;
       for (let k = 0; k < st.n; k++) {
@@ -312,7 +314,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   const gy = (x: number, z: number) => ground(ways, x, z);
   const rocks: Array<[number, number, number]> = [];
   for (const w of near) {
-    const rr = seeded(hash(seed, w.row, w.from.k * 7 + w.to.k, 0x40c));
+    const rr = seeded(hash(seed, w.n, 0x40c));
     for (let u = 0.6; u < w.len; u += ramp(rr, 0.9, 2.6)) {
       const m = ways.at(w, u, true), stair = !!ways.stairAt(w, u);
       for (const sd of [-1, 1]) {
@@ -342,7 +344,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   }
   // grass in tufts along the ways' edges, more along a trail, and here and there on the hill
   for (const w of near) {
-    const rr = seeded(hash(seed, w.row, w.from.k * 7 + w.to.k, 0x6a5));
+    const rr = seeded(hash(seed, w.n, 0x6a5));
     for (let u = 0.3; u < w.len; u += ramp(rr, 0.3, 1.2)) {
       const m = ways.at(w, u, true), stair = !!ways.stairAt(w, u);
       const sd = rr() < 0.5 ? 1 : -1, off = (WIDTH / 2 + (stair ? 0.3 : -0.15) + rr() * 0.3) * sd;
@@ -691,30 +693,132 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
 }
 
 /**
- * A temple's gate hall, across the head of its flight, as the print has it: the stair climbs
- * straight up to it between balustrades onto a stone terrace, railed round; the hall stands on the
- * terrace with its doors open front and back, and the path goes through it and on from behind.
- * White walls on a grey stone plinth; a porch of red columns on stone bases; a red beam, painted
- * panels of teal and blue under it, a row of brackets; a red door, lattice windows; the plaque
- * with the temple's name hung under the eaves. Its roof of turquoise glazed tiles, hip-and-gable,
- * every tile drawn: the lower slopes hipped all round, a red gable at each end; the eaves well out,
- * a row of round tile-ends along them, and swept up at the corners; a ridge along its top with
- * tall beaded finials at its ends, ridges down the gables and the hips, little knobs along them.
- * White walls run off to each side, capped with tiles. `face`: the way its front looks.
+ * A roof of glazed tiles, every tile drawn: hip-and-gable (g < 1: the lower slopes hipped all
+ * round, a red gable at each end under its barge board), hipped (g 1, a ridge gx long), or a
+ * pyramid (g 1, gx 0, coming to a point). Its eaves well out (ex across, ez front to back, about
+ * rz), swept up toward the corners; a row of round tile-ends along them; ridges down its hips and
+ * gables with knobs along them; along its top a ridge with its ends curled in and a beaded finial
+ * over each, or, coming to a point, one finial there. `P` places its own (x, y, z) in the world
+ * (x along the front, z out of it).
+ */
+function roof(mesh: Mesh, P: (x: number, y: number, z: number) => V3, fx: number, fz: number, o: { ex: number; ez: number; rz: number; y0: number; rise: number; gx: number; g: number; sweep: number; spire?: number }) {
+  const { ex, ez, rz, y0, rise, g } = o;
+  const gx = Math.min(o.gx, ex * 0.8), gu = gx / ex, along: [number, number] = [fx, fz];
+  const gable = g < 1 && gx > 0.1;
+  const H = (k: number) => rise * Math.pow(k, 0.72);
+  const inward = (u: number, v: number, end: boolean) => {
+    const hz = 1 - Math.abs(v);
+    if (!end) return hz;
+    const hx = g * (ex - Math.abs(u * ex)) / Math.max(1e-3, ex - gx);
+    return Math.min(hz, hx);
+  };
+  const roofAt = (u: number, v: number, end: boolean, up = 0): V3 => {
+    const k = inward(u, v, end);
+    // (the eaves swept up toward the corners, most at the corner itself)
+    const sweep = o.sweep * Math.pow(smooth(0.3, 1, Math.abs(u)) * smooth(0.3, 1, Math.abs(v)), 1.3) * Math.pow(1 - k, 1.4);
+    return P(u * ex, y0 + H(k) + sweep + up, rz + v * ez);
+  };
+  const patch = (ua: number, ub: number, nu: number, end: boolean) => {
+    if (ub - ua < 1e-4) return;
+    const S = 14;
+    for (let i = 0; i < nu; i++) for (let k = 0; k < S; k++) {
+      const u0 = ua + ((ub - ua) * i) / nu, u1 = ua + ((ub - ua) * (i + 1)) / nu, v0 = -1 + (2 * k) / S, v1 = v0 + 2 / S;
+      const a = roofAt(u0, v0, end), b = roofAt(u0, v1, end), cc = roofAt(u1, v1, end), d = roofAt(u1, v0, end);
+      // (one surface, seen from both sides: its underside darker, in the drawing; its colour carries where on the roof it is, for its tiles: their rows run down the slope, whichever way the slope runs)
+      const at = (uu: number, vv: number): C3 => {
+        const hz = 1 - Math.abs(vv), hx = end ? g * (ex - Math.abs(uu * ex)) / Math.max(1e-3, ex - gx) : 9;
+        return hx < hz ? [(vv * ez) / 0.26, (ex - Math.abs(uu * ex)) / 0.3, 2] : [(uu * ex) / 0.26, (1 - Math.abs(vv)) * ez / 0.3, 2];
+      };
+      const nn = norm(cross(sub(b, a), sub(d, a)));
+      for (const [p, uu, vv] of [[a, u0, v0], [b, u0, v1], [cc, u1, v1], [a, u0, v0], [cc, u1, v1], [d, u1, v0]] as Array<[V3, number, number]>) {
+        const col = at(uu, vv);
+        mesh.v.push(p[0], p[1], p[2], nn[0], nn[1], nn[2], col[0], col[1], col[2], M.tile);
+      }
+    }
+  };
+  const nEnd = Math.max(3, Math.round(5 * (1 - gu))), nMid = Math.max(1, Math.round(10 * gu));
+  patch(-1, -gu, nEnd, true); patch(-gu, gu, nMid, false); patch(gu, 1, nEnd, true);
+  const dark = INK.tileDark;
+  // (the eaves' edge: a band all round, carrying a row of round tile-ends, in the drawing: its colour says where along it each is)
+  const E = 28;
+  const eave = (fn2: (t: number) => [number, number]) => {
+    const pts = Array.from({ length: E + 1 }, (_, i) => { const [u, v] = fn2(i / E); return roofAt(u, v, Math.abs(u) > gu - 1e-6); });
+    let run = 0;
+    for (let i = 0; i < E; i++) {
+      const a = pts[i], b = pts[i + 1], L = Math.hypot(b[0] - a[0], b[2] - a[2]);
+      const a2: V3 = [a[0], a[1] - 0.2, a[2]], b2: V3 = [b[0], b[1] - 0.2, b[2]];
+      const nn = norm(cross(sub(b, a), sub(a2, a)));
+      const r0 = run / 0.26, r1 = (run + L) / 0.26;
+      for (const [p, cu, cv] of [[a, r0, 0], [b, r1, 0], [b2, r1, 1], [a, r0, 0], [b2, r1, 1], [a2, r0, 1]] as Array<[V3, number, number]>) mesh.v.push(p[0], p[1], p[2], nn[0], nn[1], nn[2], cu, cv, 3, M.ridge);
+      run += L;
+    }
+  };
+  eave((t) => [-1 + 2 * t, 1]); eave((t) => [-1 + 2 * t, -1]); eave((t) => [-1, -1 + 2 * t]); eave((t) => [1, -1 + 2 * t]);
+  const ridgeLine = (pts: V3[], ra: number, rb: number, knobs = 0) => {
+    for (let i = 0; i + 1 < pts.length; i++) { const t0 = i / (pts.length - 1), t1 = (i + 1) / (pts.length - 1); mesh.tube(pts[i], pts[i + 1], ra + (rb - ra) * t0, ra + (rb - ra) * t1, dark, M.ridge, 6); }
+    for (let k = 0; k < knobs; k++) { const p = pts[pts.length - 2 - k]; if (p) mesh.tube(p, add(p, [0, 0.22, 0]), 0.07, 0.03, INK.tile, M.ridge, 5); }
+  };
+  const vg = 1 - g;
+  for (const sx of [-1, 1]) {
+    if (gable) {
+      // the gable: a red triangle, standing up from the hipped end, under its barge board
+      const NG = 8;
+      for (let i = 0; i < NG; i++) {
+        const v0 = -vg + (2 * vg * i) / NG, v1 = -vg + (2 * vg * (i + 1)) / NG;
+        const t0 = roofAt(sx * gu, v0, false, -0.04), t1 = roofAt(sx * gu, v1, false, -0.04);
+        const b0 = roofAt(sx * gu, v0, true), b1 = roofAt(sx * gu, v1, true);
+        const back: V3 = [-fx * sx * 0.12, 0, -fz * sx * 0.12];
+        mesh.quad(add(b0, back), add(t0, back), add(t1, back), add(b1, back), INK.gable, M.red, [fx * sx, 0, fz * sx]);
+      }
+      for (const sv of [-1, 1]) ridgeLine(Array.from({ length: 7 }, (_, i) => roofAt(sx * gu, sv * vg * (i / 6), false, 0.08)), 0.1, 0.08, 1);
+    }
+    // the hips: down to the corners, a few knobs near their ends, ending turned up
+    for (const sv of [-1, 1]) {
+      const pts = Array.from({ length: 8 }, (_, i) => { const k = g * (1 - i / 7); return roofAt(sx * (ex - (k * (ex - gx)) / g) / ex, sv * (1 - k), true, 0.08); });
+      ridgeLine(pts, 0.09, 0.07, 3);
+      const tip = pts[pts.length - 1], out = norm(sub(tip, pts[pts.length - 2]));
+      mesh.tube(tip, add(add(tip, mul(out, 0.3)), [0, 0.35, 0]), 0.07, 0.03, dark, M.ridge, 5);
+    }
+  }
+  if (gx > 0.1) {
+    // the ridge along its top, and its ends: curled up and in, a tall beaded finial over each
+    const top = roofAt(0, 0, false, 0.12);
+    mesh.box([top[0], top[1] + 0.06, top[2]], [gx + 0.15, 0.18, 0.14], along, INK.tile, dark, M.ridge);
+    for (const sx of [-1, 1]) {
+      const q = (x: number, y: number): V3 => { const b2 = roofAt(sx * gu, 0, false, 0.1); return add(b2, [fx * sx * x, y, fz * sx * x]); };
+      ridgeLine([q(0.1, 0), q(0.18, 0.4), q(0.1, 0.72), q(-0.12, 0.84), q(-0.28, 0.7)], 0.17, 0.06);
+      finial(mesh, q(-0.05, 0.15), 1.1);
+    }
+  } else finial(mesh, roofAt(0, 0, true, 0.02), o.spire ?? 1.2);
+}
+/** a finial: beads stacked, the top one pointed */
+function finial(mesh: Mesh, at: V3, h: number) {
+  const rs = [0.17, 0.11, 0.16, 0.09, 0.13, 0.06, 0.1, 0.02];
+  const k = Math.max(1, h / 1.1);
+  for (let i = 0; i + 1 < rs.length; i++) mesh.tube(add(at, [0, (h * i) / (rs.length - 1), 0]), add(at, [0, (h * (i + 1)) / (rs.length - 1), 0]), rs[i] * Math.sqrt(k), rs[i + 1] * Math.sqrt(k), i % 2 ? INK.tileDark : INK.tile, M.ridge, 6);
+}
+
+/**
+ * A building on its terrace, of its kind, from its parts: a gate hall across a way; a hall, three
+ * bays or five, under a hip-and-gable roof or a hipped one, its eaves single or double; an open
+ * pavilion under a pyramid roof; a pagoda of three to five tiers; a small shrine. Each raised on a
+ * stone terrace, railed round, a stair down its front to the way (a gate's down its back too);
+ * white walls on a grey stone plinth, red columns on round stone bases, painted panels and a row
+ * of brackets under the eaves, a red door, lattice windows, the plaque with the temple's name.
+ * `face`: the way its front looks.
  */
 function temple(mesh: Mesh, t: TempleAt, seed: number) {
   const r = seeded(seed);
-  const { c, face, gate, B, name } = t;
-  // (its x along the front; z out of the front. It stands raised on its terrace, a stair down its
-  // front to the way; a gate's, down its back too, the way going on from there)
+  const { c, face, B, name, kind } = t;
+  const gate = kind === 'gate';
+  // (its x along the front; z out of the front)
   const fx = -face[1], fz = face[0];
   const P0 = (x: number, y: number, z: number): V3 => [c[0] + fx * x + face[0] * z, c[1] + y, c[2] + fz * x + face[1] * z];
   const P = (x: number, y: number, z: number): V3 => P0(x, y + B, z);
   const along: [number, number] = [fx, fz];
-  const W = ramp(r, 2.9, 3.3), wd = ramp(r, 1.4, 1.6), Hw = 3.0;
   const stone = INK.stepTop, blue = hex(0x3c5f8a), base = hex(0xd9d0bf);
+  const tw = t.tw, T = t.T;
   // the terrace: stone, deep into the hill under it
-  const tw = W + 1.5, T = TERRACE / 2;
   mesh.box(P(0, -3, 0), [tw, 3, T], along, stone, INK.stepFace, M.step, M.stone);
   // (its stairs, a balustrade either side: from the terrace down to the hill at their foot)
   const sw = WIDTH / 2 + 0.15;
@@ -735,9 +839,11 @@ function temple(mesh: Mesh, t: TempleAt, seed: number) {
     }
     for (const row of tops) for (let i = 0; i + 1 < row.length; i++) mesh.tube(row[i], row[i + 1], 0.04, 0.04, stone, M.stone, 4);
   }
-  // (the terrace's balustrade: posts with round heads, carved panels between, a rail over; round it but where the stair comes up)
+  // (the terrace's balustrade: posts with round heads, carved panels between, a rail over; round it but where the stairs come up)
   const rail = (ax: number, az: number, bx: number, bz: number) => {
-    const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 0.7));
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 0.3) return;
+    const n = Math.max(1, Math.round(L / 0.7));
     const dl: [number, number] = [((bx - ax) * fx + (bz - az) * face[0]) / L, ((bx - ax) * fz + (bz - az) * face[1]) / L];
     for (let i = 0; i <= n; i++) {
       const x = ax + (bx - ax) * (i / n), z = az + (bz - az) * (i / n);
@@ -753,149 +859,102 @@ function temple(mesh: Mesh, t: TempleAt, seed: number) {
   const ei = 0.12, so = WIDTH / 2 + 0.53;
   rail(-tw + ei, T - ei, -so, T - ei); rail(so, T - ei, tw - ei, T - ei);
   rail(-tw + ei, T - ei, -tw + ei, -T + ei); rail(tw - ei, T - ei, tw - ei, -T + ei);
-  if (gate) { rail(-tw + ei, -T + ei, -so, -T + ei); rail(so, -T + ei, tw - ei, -T + ei); } else rail(-tw + ei, -T + ei, tw - ei, -T + ei);
-  // the walls, white on a plinth of grey stone
-  const wz = -0.25, zf = wz + wd, zc = zf + 0.5;
+  if (t.back) { rail(-tw + ei, -T + ei, -so, -T + ei); rail(so, -T + ei, tw - ei, -T + ei); } else rail(-tw + ei, -T + ei, tw - ei, -T + ei);
+  const column = (x: number, z: number, h: number, rad = 0.16) => {
+    mesh.tube(P(x, 0, z), P(x, h, z), rad, rad * 0.88, INK.red, M.red, 8);
+    mesh.tube(P(x, 0, z), P(x, 0.14, z), rad + 0.1, rad + 0.08, base, M.stone, 10);
+  };
+  const plaque = (pw: number, py: number, pz: number) => {
+    const ph = pw * 0.62;
+    mesh.box(P(0, py + ph / 2, pz - 0.05), [pw + 0.1, ph / 2 + 0.1, 0.04], along, INK.red, INK.red, M.red);
+    const pq = [P(-pw, py, pz), P(-pw, py + ph, pz), P(pw, py + ph, pz), P(pw, py, pz)] as const;
+    const fn: V3 = [face[0], 0, face[1]];
+    // (u to the right as it's looked at from in front; its name, from the plaques' sheet: one name a row)
+    const uv: Array<[number, number]> = [[1, 0], [1, 1], [0, 1], [0, 0]];
+    for (const k of [0, 1, 2, 0, 2, 3]) { const p = pq[k]; mesh.v.push(p[0], p[1], p[2], fn[0], fn[1], fn[2], uv[k][0], (name + uv[k][1]) / NAMES.length, 0, M.plaque); }
+  };
+
+  if (kind === 'pavilion') {
+    // an open pavilion: columns at its corners (and its sides, if it's long), low benches between, a pyramid roof (or a short ridge), its eaves swept high
+    const s = t.tw - 0.6, d = Math.min(s, T - 0.5), Hc = ramp(r, 2.4, 2.8);
+    const xs = s > 2.2 ? [-s, 0, s] : [-s, s];
+    for (const x of xs) for (const z of [-d, d]) column(x, z, Hc, 0.13);
+    for (const [ax, az, bx, bz] of [[-s, -d, s, -d], [-s, -d, -s, d], [s, -d, s, d]] as Array<[number, number, number, number]>) {
+      const L = Math.hypot(bx - ax, bz - az), dl: [number, number] = [((bx - ax) * fx + (bz - az) * face[0]) / L, ((bx - ax) * fz + (bz - az) * face[1]) / L];
+      mesh.box(P((ax + bx) / 2, 0.45, (az + bz) / 2), [L / 2, 0.05, 0.16], dl, INK.red, INK.red, M.red);
+    }
+    mesh.box(P(0, Hc - 0.1, d), [s + 0.15, 0.12, 0.12], along, INK.red, INK.red, M.red);
+    mesh.box(P(0, Hc - 0.1, -d), [s + 0.15, 0.12, 0.12], along, INK.red, INK.red, M.red);
+    const pyramid = r() < 0.65;
+    roof(mesh, P, fx, fz, { ex: s + 0.95, ez: d + 0.95, rz: 0, y0: Hc + 0.05, rise: ramp(r, 1.5, 2), gx: pyramid ? 0 : s * 0.4, g: 1, sweep: 1.1, spire: 1 });
+    return;
+  }
+  if (kind === 'pagoda') {
+    // a pagoda: tiers, each a little narrower, white walls with a dark door, under a skirt of tiles; the last under a pyramid and a tall spire
+    const tiers = 3 + Math.floor(r() * 3);
+    let y = 0, S = Math.min(t.tw, T) - 0.7;
+    for (let i = 0; i < tiers; i++) {
+      const h = i === 0 ? 2.4 : 1.45, s = S * (1 - 0.13 * i);
+      mesh.box(P(0, y + h / 2, 0), [s, h / 2, s], along, INK.wall, INK.wall, M.wall);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) mesh.tube(P(sx * s, y, sz * s), P(sx * s, y + h, sz * s), 0.09, 0.08, INK.red, M.red, 6);
+      mesh.box(P(0, y + Math.min(1.1, h * 0.42), s + 0.01), [Math.min(0.5, s * 0.35), Math.min(1.1, h * 0.42), 0.05], along, INK.dark, INK.dark, M.dark);
+      if (i === 0) mesh.box(P(0, 0.28, 0), [s + 0.04, 0.28, s + 0.04], along, stone, INK.stone, M.stone);
+      const last = i === tiers - 1;
+      roof(mesh, P, fx, fz, { ex: s + 0.75, ez: s + 0.75, rz: 0, y0: y + h + 0.05, rise: last ? 1.3 : 0.8, gx: 0, g: 1, sweep: 0.55, spire: last ? 2.4 : 0.01 });
+      y += h + 0.25;
+    }
+    return;
+  }
+
+  // a hall (or a gate, or a shrine): its walls, white on a plinth of grey stone; columns across its porch and at its corners
+  const small = kind === 'shrine';
+  const n = small ? 2 : t.bays + 1;
+  const W = t.tw - (small ? 0.7 : 1.5), wd = small ? 1.0 : ramp(r, 1.4, 1.6), Hw = small ? 2.3 : 3.0;
+  const wz = small ? -0.3 : -0.25, zf = wz + wd, zc = zf + (small ? 0.35 : 0.5);
   mesh.box(P(0, Hw / 2, wz), [W, Hw / 2, wd], along, INK.wall, INK.wall, M.wall);
   mesh.box(P(0, 0.28, wz), [W + 0.04, 0.28, wd + 0.04], along, stone, INK.stone, M.stone);
-  // the columns, red on round stone bases: across the porch, and at the corners
-  const n = 4;
-  const colX = (i: number) => -W + 0.3 + (i / (n - 1)) * (2 * W - 0.6);
-  const column = (x: number, z: number) => {
-    mesh.tube(P(x, 0, z), P(x, Hw, z), 0.16, 0.14, INK.red, M.red, 8);
-    mesh.tube(P(x, 0, z), P(x, 0.14, z), 0.26, 0.24, base, M.stone, 10);
-  };
-  for (let i = 0; i < n; i++) column(colX(i), zc);
-  for (const sx of [-1, 1]) column(sx * (W + 0.06), wz - wd - 0.06);
+  const colX = (i: number) => n === 2 ? (i ? 1 : -1) * (W - 0.25) : -W + 0.3 + (i / (n - 1)) * (2 * W - 0.6);
+  for (let i = 0; i < n; i++) column(colX(i), zc, Hw);
+  for (const sx of [-1, 1]) column(sx * (W + 0.06), wz - wd - 0.06, Hw, 0.15);
   // a beam over the porch; under it, between the columns, painted panels; over it a row of brackets, all round
   mesh.box(P(0, Hw - 0.15, zc), [W + 0.1, 0.15, 0.16], along, INK.red, INK.red, M.red);
+  const mid = Math.floor((n - 1) / 2);
   for (let i = 0; i + 1 < n; i++) {
     const x0 = colX(i), x1 = colX(i + 1), mx = (x0 + x1) / 2, hw = (x1 - x0) / 2 - 0.16;
-    if (i === 1) continue;
+    if (i === mid && !small) continue;
     mesh.box(P(mx, Hw - 0.48, zc + 0.02), [hw, 0.17, 0.05], along, INK.red, INK.red, M.red);
     mesh.box(P(mx, Hw - 0.48, zc + 0.06), [hw - 0.06, 0.12, 0.03], along, INK.tile, INK.tile, M.red);
     mesh.box(P(mx, Hw - 0.48, zc + 0.08), [hw * 0.55, 0.07, 0.03], along, blue, blue, M.red);
   }
-  for (let x = -W + 0.2; x <= W - 0.15; x += 0.42) for (const z of [zc + 0.05, wz - wd - 0.05]) {
-    mesh.box(P(x, Hw + 0.1, z), [0.12, 0.1, 0.22], along, INK.tileDark, INK.tile, M.ridge);
+  for (let x = -W + 0.2; x <= W - 0.15; x += 0.42) for (const z of [zc + 0.05, wz - wd - 0.05]) mesh.box(P(x, Hw + 0.1, z), [0.12, 0.1, 0.22], along, INK.tileDark, INK.tile, M.ridge);
+  // the doors (front, and a gate's back): red, open, the dark within; lattice windows in the bays either side
+  const doors: Array<[number, number]> = gate ? [[zf, 1], [wz - wd, -1]] : [[zf, 1]];
+  const dw = small ? 0.55 : 0.95;
+  for (const [z, sgn] of doors) {
+    mesh.box(P(0, Hw * 0.4, z + 0.02 * sgn), [dw, Hw * 0.4, 0.06], along, INK.red, INK.red, M.red);
+    mesh.box(P(0, Hw * 0.37, z + 0.05 * sgn), [dw - 0.2, Hw * 0.37, 0.06], along, INK.dark, INK.dark, M.dark);
   }
-  // the doors, front and back: red, open, the dark within; lattice windows either side in front
-  for (const [z, sgn] of [[zf, 1], [wz - wd, -1]] as Array<[number, number]>) {
-    mesh.box(P(0, 1.2, z + 0.02 * sgn), [0.95, 1.2, 0.06], along, INK.red, INK.red, M.red);
-    mesh.box(P(0, 1.1, z + 0.05 * sgn), [0.75, 1.1, 0.06], along, INK.dark, INK.dark, M.dark);
+  if (!small) for (let i = 0; i + 1 < n; i++) {
+    if (i === mid) continue;
+    const x = (colX(i) + colX(i + 1)) / 2, hw = Math.min(0.62, (colX(i + 1) - colX(i)) / 2 - 0.25);
+    mesh.box(P(x, 1.45, zf + 0.02), [hw, 0.62, 0.05], along, INK.red, INK.red, M.red);
+    mesh.box(P(x, 1.45, zf + 0.04), [hw - 0.12, 0.5, 0.05], along, INK.dark, INK.dark, M.dark);
+    for (let k = -2; k <= 2; k++) mesh.box(P(x + k * (hw - 0.12) / 2.5, 1.45, zf + 0.09), [0.018, 0.5, 0.02], along, INK.red, INK.red, M.red);
+    for (let k = -2; k <= 2; k++) mesh.box(P(x, 1.45 + k * 0.17, zf + 0.09), [hw - 0.12, 0.018, 0.02], along, INK.red, INK.red, M.red);
   }
-  for (const sx of [-1, 1]) {
-    const x = sx * (W * 0.64);
-    mesh.box(P(x, 1.45, zf + 0.02), [0.62, 0.62, 0.05], along, INK.red, INK.red, M.red);
-    mesh.box(P(x, 1.45, zf + 0.04), [0.5, 0.5, 0.05], along, INK.dark, INK.dark, M.dark);
-    for (let i = -2; i <= 2; i++) mesh.box(P(x + i * 0.17, 1.45, zf + 0.09), [0.018, 0.5, 0.02], along, INK.red, INK.red, M.red);
-    for (let i = -2; i <= 2; i++) mesh.box(P(x, 1.45 + i * 0.17, zf + 0.09), [0.5, 0.018, 0.02], along, INK.red, INK.red, M.red);
-  }
-  // (the plaque, hung from the beam between the middle columns: its face carries its name, from the plaque's texture: uv in its colour)
-  const pz = zc + 0.1, py = Hw - 1.2, pw = (colX(2) - colX(1)) / 2 - 0.12, ph = pw * 0.62;
-  mesh.box(P(0, py + ph / 2, pz - 0.05), [pw + 0.1, ph / 2 + 0.1, 0.04], along, INK.red, INK.red, M.red);
-  const pq = [P(-pw, py, pz), P(-pw, py + ph, pz), P(pw, py + ph, pz), P(pw, py, pz)] as const;
-  const fn: V3 = [face[0], 0, face[1]];
-  // (u to the right as it's looked at from in front)
-  const uv: Array<[number, number]> = [[1, 0], [1, 1], [0, 1], [0, 0]];
-  // (its name, from the plaques' sheet: one name a row)
-  for (const k of [0, 1, 2, 0, 2, 3]) { const p = pq[k]; mesh.v.push(p[0], p[1], p[2], fn[0], fn[1], fn[2], uv[k][0], (name + uv[k][1]) / NAMES.length, 0, M.plaque); }
-
-  // the roof: hip-and-gable. u across the front (-1 to 1), v front to back (-1 to 1); within the
-  // gables (|x| < gx) the front and back slopes run up to the ridge; outside, the hipped ends run
-  // up only so far as the gables' foot (g of the way)
-  const ex = W + 1.15, ez = zc + 0.95, rz = 0, y0 = Hw + 0.25, rise = 2.2;
-  const gx = W * 0.72, gu = gx / ex, g = 0.5;
-  const H = (k: number) => rise * Math.pow(k, 0.72);
-  const inward = (u: number, v: number, end: boolean) => {
-    const hz = 1 - Math.abs(v);
-    if (!end) return hz;
-    const hx = g * (ex - Math.abs(u * ex)) / (ex - gx);
-    return Math.min(hz, hx);
-  };
-  const roofAt = (u: number, v: number, end: boolean, up = 0): V3 => {
-    const k = inward(u, v, end);
-    // (the eaves swept up toward the corners, most at the corner itself)
-    const sweep = 0.95 * Math.pow(smooth(0.3, 1, Math.abs(u)) * smooth(0.3, 1, Math.abs(v)), 1.3) * Math.pow(1 - k, 1.4);
-    return P(u * ex, y0 + H(k) + sweep + up, rz + v * ez);
-  };
-  const patch = (ua: number, ub: number, nu: number, end: boolean) => {
-    const S = 14;
-    for (let i = 0; i < nu; i++) for (let k = 0; k < S; k++) {
-      const u0 = ua + ((ub - ua) * i) / nu, u1 = ua + ((ub - ua) * (i + 1)) / nu, v0 = -1 + (2 * k) / S, v1 = v0 + 2 / S;
-      const a = roofAt(u0, v0, end), b = roofAt(u0, v1, end), cc = roofAt(u1, v1, end), d = roofAt(u1, v0, end);
-      // (one surface, seen from both sides: its underside darker, in the drawing; its colour carries where on the roof it is, for its tiles: their rows run down the slope, whichever way the slope runs)
-      const at = (uu: number, vv: number): C3 => {
-        const hz = 1 - Math.abs(vv), hx = end ? g * (ex - Math.abs(uu * ex)) / (ex - gx) : 9;
-        return hx < hz ? [(vv * ez) / 0.26, (ex - Math.abs(uu * ex)) / 0.3, 2] : [(uu * ex) / 0.26, (1 - Math.abs(vv)) * ez / 0.3, 2];
-      };
-      const nn = norm(cross(sub(b, a), sub(d, a)));
-      for (const [p, uu, vv] of [[a, u0, v0], [b, u0, v1], [cc, u1, v1], [a, u0, v0], [cc, u1, v1], [d, u1, v0]] as Array<[V3, number, number]>) {
-        const col = at(uu, vv);
-        mesh.v.push(p[0], p[1], p[2], nn[0], nn[1], nn[2], col[0], col[1], col[2], M.tile);
-      }
-    }
-  };
-  patch(-1, -gu, 5, true); patch(-gu, gu, 10, false); patch(gu, 1, 5, true);
-  const dark = INK.tileDark;
-  // (the eaves' edge: a band all round, carrying a row of round tile-ends, in the drawing: its colour says where along it each is)
-  const E = 28;
-  const eave = (fn2: (t: number) => [number, number]) => {
-    const pts = Array.from({ length: E + 1 }, (_, i) => { const [u, v] = fn2(i / E); return roofAt(u, v, Math.abs(u) > gu - 1e-6); });
-    let run = 0;
-    for (let i = 0; i < E; i++) {
-      const a = pts[i], b = pts[i + 1], L = Math.hypot(b[0] - a[0], b[2] - a[2]);
-      const a2: V3 = [a[0], a[1] - 0.2, a[2]], b2: V3 = [b[0], b[1] - 0.2, b[2]];
-      const nn = norm(cross(sub(b, a), sub(a2, a)));
-      const r0 = run / 0.26, r1 = (run + L) / 0.26;
-      for (const [p, cu, cv] of [[a, r0, 0], [b, r1, 0], [b2, r1, 1], [a, r0, 0], [b2, r1, 1], [a2, r0, 1]] as Array<[V3, number, number]>) mesh.v.push(p[0], p[1], p[2], nn[0], nn[1], nn[2], cu, cv, 3, M.ridge);
-      run += L;
-    }
-  };
-  eave((t) => [-1 + 2 * t, 1]); eave((t) => [-1 + 2 * t, -1]); eave((t) => [-1, -1 + 2 * t]); eave((t) => [1, -1 + 2 * t]);
-  // (a line of ridge: a run of tube, a little over the roof; knobs along it now and then)
-  const ridgeLine = (pts: V3[], ra: number, rb: number, knobs = 0) => {
-    for (let i = 0; i + 1 < pts.length; i++) { const t0 = i / (pts.length - 1), t1 = (i + 1) / (pts.length - 1); mesh.tube(pts[i], pts[i + 1], ra + (rb - ra) * t0, ra + (rb - ra) * t1, dark, M.ridge, 6); }
-    for (let k = 0; k < knobs; k++) { const p = pts[pts.length - 2 - k]; if (p) mesh.tube(p, add(p, [0, 0.22, 0]), 0.07, 0.03, INK.tile, M.ridge, 5); }
-  };
-  /** a finial: beads stacked, the top one pointed */
-  const finial = (at: V3, h: number) => {
-    const rs = [0.17, 0.11, 0.16, 0.09, 0.13, 0.06, 0.1, 0.02];
-    for (let i = 0; i + 1 < rs.length; i++) mesh.tube(add(at, [0, (h * i) / (rs.length - 1), 0]), add(at, [0, (h * (i + 1)) / (rs.length - 1), 0]), rs[i], rs[i + 1], i % 2 ? dark : INK.tile, M.ridge, 6);
-  };
-  for (const sx of [-1, 1]) {
-    // the gable: a red triangle, standing up from the hipped end, under its barge board
-    const NG = 8, vg = 1 - g;
-    for (let i = 0; i < NG; i++) {
-      const v0 = -vg + (2 * vg * i) / NG, v1 = -vg + (2 * vg * (i + 1)) / NG;
-      const t0 = roofAt(sx * gu, v0, false, -0.04), t1 = roofAt(sx * gu, v1, false, -0.04);
-      const b0 = roofAt(sx * gu, v0, true), b1 = roofAt(sx * gu, v1, true);
-      // (set back a hand from the hipped end's top)
-      const back: V3 = [-fx * sx * 0.12, 0, -fz * sx * 0.12];
-      mesh.quad(add(b0, back), add(t0, back), add(t1, back), add(b1, back), INK.gable, M.red, [fx * sx, 0, fz * sx]);
-    }
-    // (its barge board: ridges down both its edges from the top, knobs at their feet)
-    for (const sv of [-1, 1]) ridgeLine(Array.from({ length: 7 }, (_, i) => roofAt(sx * gu, sv * vg * (i / 6), false, 0.08)), 0.1, 0.08, 1);
-    // the hips: from the gable's foot down to the corners, a few knobs near their ends, ending turned up
-    for (const sv of [-1, 1]) {
-      const pts = Array.from({ length: 8 }, (_, i) => { const k = g * (1 - i / 7); return roofAt(sx * (ex - (k * (ex - gx)) / g) / ex, sv * (1 - k), true, 0.08); });
-      ridgeLine(pts, 0.09, 0.07, 3);
-      const tip = pts[pts.length - 1], out = norm(sub(tip, pts[pts.length - 2]));
-      mesh.tube(tip, add(add(tip, mul(out, 0.3)), [0, 0.35, 0]), 0.07, 0.03, dark, M.ridge, 5);
-    }
-  }
-  // the ridge along its top, and its ends: curled up and in, a tall beaded finial over each
-  const top = roofAt(0, 0, false, 0.12);
-  mesh.box([top[0], top[1] + 0.06, top[2]], [gx + 0.15, 0.18, 0.14], along, INK.tile, dark, M.ridge);
-  for (const sx of [-1, 1]) {
-    const q = (x: number, y: number): V3 => { const b2 = roofAt(sx * gu, 0, false, 0.1); return add(b2, [fx * sx * x, y, fz * sx * x]); };
-    ridgeLine([q(0.1, 0), q(0.18, 0.4), q(0.1, 0.72), q(-0.12, 0.84), q(-0.28, 0.7)], 0.17, 0.06);
-    finial(q(-0.05, 0.15), 1.1);
-  }
-  // white walls out to each side, their tops tiled
-  // (long, across the hill, for a gate; short, for a temple beside the path, so they don't run along it)
-  const wl = gate ? 4.6 : 1.6, wx = gate ? W + 1.2 + wl : tw + wl;
-  for (const sx of [-1, 1]) {
+  plaque(small ? 0.55 : Math.min(0.95, (colX(mid + 1) - colX(mid)) / 2 - 0.12), Hw - (small ? 0.85 : 1.2), zc + 0.1);
+  // the roof: double eaves (a skirt of tiles all round, and an upper storey under its own roof), or single
+  const ex = W + (small ? 0.85 : 1.15), ez = zc + (small ? 0.75 : 0.95) - (small ? -0.3 : 0), rzc = small ? -0.3 + (zc - wz) * 0 : 0;
+  if (t.double) {
+    roof(mesh, P, fx, fz, { ex, ez: zc + 0.95, rz: 0, y0: Hw + 0.25, rise: 0.95, gx: W * 0.6, g: 1, sweep: 0.6 });
+    const H2 = 1.5, W2 = W * 0.74, D2 = wd * 0.78;
+    mesh.box(P(0, Hw + 0.2 + H2 / 2, wz), [W2, H2 / 2, D2], along, INK.wall, INK.wall, M.wall);
+    for (let x = -W2; x <= W2 + 1e-3; x += (2 * W2) / Math.max(1, n - 2)) mesh.tube(P(x, Hw + 0.2, wz + D2 + 0.02), P(x, Hw + 0.2 + H2, wz + D2 + 0.02), 0.1, 0.09, INK.red, M.red, 6);
+    roof(mesh, P, fx, fz, { ex: W2 + 1.0, ez: D2 + 1.0, rz: wz, y0: Hw + 0.2 + H2 + 0.15, rise: 1.9, gx: W2 * 0.72, g: t.hip ? 1 : 0.5, sweep: 0.95 });
+  } else roof(mesh, P, fx, fz, { ex, ez: small ? ez : zc + 0.95, rz: small ? rzc : 0, y0: Hw + 0.25, rise: small ? 1.5 : 2.2, gx: W * 0.72, g: t.hip ? 1 : 0.5, sweep: small ? 0.7 : 0.95 });
+  // white walls out to each side, their tops tiled: long, across the hill, for a gate; short, now and then, for a hall
+  const wl = gate ? 4.6 : t.wings ? 1.6 : 0, wx = gate ? W + 1.2 + wl : tw + wl;
+  if (wl) for (const sx of [-1, 1]) {
     mesh.box(P(sx * wx, 0.35, wz), [wl, 1.85, 0.24], along, INK.wall, INK.wall, M.wall);
     mesh.box(P(sx * wx, -0.9, wz), [wl + 0.02, 1.3, 0.26], along, stone, INK.stone, M.stone);
     mesh.box(P(sx * wx, 2.32, wz), [wl + 0.15, 0.13, 0.45], along, INK.tile, INK.tileDark, M.tile);

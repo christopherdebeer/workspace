@@ -209,7 +209,7 @@ function startSpot(): Spot {
   const [id, u] = at.split(':');
   const w = id ? ways.byId(id) : null;
   if (w) return { w, u: Math.max(0, Math.min(w.len, Number(u) || 0)) };
-  return { w: ways.waysUp(0)[0], u: 0.5 };
+  return { w: ways.first(), u: 0.5 };
 }
 let here: Spot = startSpot();
 let speed = 0, want = 0, phase = 0, stride = 0, facing = NaN;
@@ -217,7 +217,7 @@ const WALK = 1.25;
 /** Where the walker stands at a spot: on the step under them, lifting onto the next as they come to its edge; on a temple's terrace or stair, on that. */
 function stand(sp: Spot): { p: V3; dir: [number, number] } {
   const at = ways.at(sp.w, sp.u, true), p = at.p;
-  for (const t of nearTemples) if (t.gate) { const y = templeSurface(t, p[0], p[2]); if (y !== null) return { p: [p[0], y, p[2]], dir: at.dir }; }
+  for (const t of nearTemples) { const y = templeSurface(t, p[0], p[2]); if (y !== null) return { p: [p[0], y, p[2]], dir: at.dir }; }
   const st = ways.stairAt(sp.w, sp.u);
   if (!st) return { p: [p[0], ways.hill(p[2]) - 0.1, p[2]], dir: at.dir };
   const f = ((sp.u - st.u0) / (st.u1 - st.u0)) * st.n, k = Math.min(st.n - 1, Math.floor(f));
