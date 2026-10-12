@@ -56,6 +56,8 @@ export interface Band {
   puffs: Float32Array;
   /** fallen petals: x, y, z, size, turn, shade */
   petals: Float32Array;
+  /** what stands in the walker's way, off the ways, as circles (x, z, radius): rocks, a cast's sheet, its cairn or shrine */
+  blocks: Float32Array;
   /** temples in it: where (their terrace's middle), facing */
   temples: Array<{ c: V3; face: number; poem: number }>;
 }
@@ -235,7 +237,11 @@ export function groveDensity(ways: Ways, seed: number, x: number, z: number): nu
 }
 
 /** Tile (i, j) of the hill: i across it, j up it. */
+/** (as a tile's made, what's set in it that the walker can't walk through) */
+let blocking: number[] | null = null;
+const block = (x: number, z: number, r: number) => { blocking?.push(x, z, r); };
 export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
+  blocking = [];
   const z0 = j * BAND, z1 = z0 + BAND, x0 = i * TILE, x1 = x0 + TILE;
   const r = seeded(hash(seed, i, j, 0xb4d));
   const mesh = new Mesh();
@@ -515,7 +521,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
     petals.push(x, restY(ways, x, z, 0.02), z, ramp(r, 0.04, 0.08), r() * Math.PI, r() * 0.5);
   }
-  return { i, j, verts: mesh.v.out(), puffs: new Float32Array(puffs), petals: new Float32Array(petals), temples: temples.filter((t) => inT(t.c[0], t.c[2])).map((t) => ({ c: t.c, face: Math.atan2(t.face[0], t.face[1]), poem: t.name })) };
+  const blocks = new Float32Array(blocking); blocking = null;
+  return { i, j, verts: mesh.v.out(), puffs: new Float32Array(puffs), petals: new Float32Array(petals), blocks, temples: temples.filter((t) => inT(t.c[0], t.c[2])).map((t) => ({ c: t.c, face: Math.atan2(t.face[0], t.face[1]), poem: t.name })) };
 }
 
 /**
@@ -526,6 +533,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
  * corner, its foot sunk.
  */
 function rock(mesh: Mesh, at: V3, size: number, r: Rand, gy?: (x: number, z: number) => number) {
+  block(at[0], at[2], size * 1.1 + 0.25);
   const n = 5 + Math.floor(r() * 3), turn = r() * 6.3, long = ramp(r, 1.3, 2.1);
   const h = size * ramp(r, 0.7, 1.65), taper = ramp(r, 0.22, 0.62), tilt = ramp(r, 0.25, 0.65), ta = r() * 6.3;
   const ring = (rad: number, y: number, jit: number): V3[] => Array.from({ length: n }, (_, i) => {
@@ -1070,6 +1078,7 @@ function castWords(mesh: Mesh, ways: Ways, st: Station) {
   const Wb = 120, Hb = top + 6 + EN * (rel ? 2 : 1);
   // (its foot, at the uphill side of its space, a little above the ground)
   const ax = st.c[0], az = st.c[2] + st.rz * 0.25, ay = ground(ways, ax, az) + 0.2;
+  block(ax, az, 1.2);
   const off = (px: number, py: number): [number, number] => [(px - Wb / 2) * PX, (Hb - py) * PX];
   const quad = (x0: number, y0: number, x1: number, y1: number, r: Rect | null, ink: number) => {
     const nx = Math.max(1, Math.ceil((x1 - x0) / 24)), ny = Math.max(1, Math.ceil((y1 - y0) / 24));
@@ -1111,6 +1120,7 @@ function castMark(mesh: Mesh, ways: Ways, st: Station) {
   const r = seeded(hash(st.i, 0x5a1));
   const away = st.side || (st.i % 2 ? 1 : -1);
   const x = st.c[0] + away * st.rx * ramp(r, 1.2, 1.4), z = st.c[2] + st.rz * ramp(r, -0.12, 0.05);
+  block(x, z, 0.9);
   const y = ground(ways, x, z);
   const earthy = st.upper === 'Mountain' || st.lower === 'Mountain' || st.upper === 'Earth' || st.lower === 'Earth';
   if (earthy || r() < 0.35) {

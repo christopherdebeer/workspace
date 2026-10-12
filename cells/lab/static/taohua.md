@@ -10,7 +10,12 @@ branch that ends goes nowhere else, so to see another, come back to the fork). A
 (the hillside, a temple, a tree, blossom over a way, a cast) is taken down through whatever stands
 there to the ground under it, as if it weren't there, and sends them to the nearest place on a way to
 that, whether it can be seen or not: a tap on blossom over a way goes to that way, under it, and the
-walker may go out of sight under the crowns, as the way does. The
+walker may go out of sight under the crowns, as the way does. A tap on open ground that's seen
+(the ground itself, not blossom over it; not a rock, a terrace, a cast's sheet, water, or a bank cut
+steep) within fifteen metres of a way takes them off the ways, there: they leave the way and pick
+their way across the open ground, round whatever's in it, a little more carefully than on a way.
+From there, a tap on a way (or the keys) takes them back across the open ground to the nearest way,
+and on by the ways. Off the ways, the address keeps where they stand (`?at=@x,z`). The
 place a tap found is answered in the scene: a ring of vermilion, left open as a brush draws it, for
 a moment. Only a tap walks: a drag, wherever it starts, even on a way, looks about a little; let
 go, and the view comes back. With keys, ↑ or W walks on (at a fork, by the way most nearly ahead),
@@ -263,7 +268,7 @@ so the forks and meetings read at a glance. It works with `review` and
 while walking, for judging how the arrangement holds as it unrolls, and for deciding where
 things along the way should fall.
 
-`?seed=…` a hillside; `?preview` climbs by itself, quietly. The address keeps the seed and where the walker
+`?seed=…` a hillside; `?preview` climbs by itself, quietly; `?pace=…` times the walker's pace (for trying things out quickly). The address keeps the seed and where the walker
 is (`?at=way:metres`), updated as they go, so a reload or a shared link comes back to the same
 place.
 `?seed=1&at=w3:40&review` freezes the walker, camera and falling petals for a repeatable comparison

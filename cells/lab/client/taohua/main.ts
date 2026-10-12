@@ -16,7 +16,8 @@ import { stationsNear } from './compose';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, ground, makeBand, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, TSTEP, ground, groundCut, makeBand, templeSurface, templesNear, type Band } from './world';
+import { plan, type P2 } from './roam';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -206,7 +207,7 @@ function liveDeer(dt: number, time: number, pos: V3): Array<{ d: Drawn; model: M
 }
 
 // ─── the bands of the hill, made as they're needed, dropped behind ───────────────────────────────
-interface Live { band: Band; solid: Drawn; puffs: Drawn; petals: Drawn }
+interface Live { band: Band; solid: Drawn; puffs: Drawn; petals: Drawn; cover: Map<number, number[]> }
 const live = new Map<string, Live>();
 /** Keep the tiles about where the eye looks made, and drop those it's left: across the hill as far as the view reaches, up it ahead and a little behind. */
 function keepBands(x: number, z: number) {
@@ -229,7 +230,7 @@ function add(i: number, j: number) {
   const band = makeBand(ways, seed, i, j);
   const pet = new Float32Array((band.petals.length / 6) * 7);
   for (let k = 0; k < band.petals.length / 6; k++) { pet.set(band.petals.subarray(k * 6, k * 6 + 6), k * 7); pet[k * 7 + 6] = 0; }
-  live.set(`${i},${j}`, { band, solid: R.mesh(band.verts), puffs: R.instances('puff', band.puffs), petals: R.instances('petal', pet) });
+  live.set(`${i},${j}`, { band, solid: R.mesh(band.verts), puffs: R.instances('puff', band.puffs), petals: R.instances('petal', pet), cover: coverOf(band) });
 }
 
 // ─── petals falling, about where you are ─────────────────────────────────────────────────────────
@@ -252,14 +253,24 @@ interface Spot { w: Way; u: number }
 // (`?at=way:metres`: start there; else at the foot of the hill)
 function startSpot(): Spot {
   const at = params.get('at') ?? '';
+  // (off the ways, on the open hill: there, and the way nearest it to go back to)
+  const offAt = /^@(-?[\d.]+),(-?[\d.]+)$/.exec(at);
+  if (offAt) { const x = Number(offAt[1]), z = Number(offAt[2]), n = ways.nearest(x, z); off = [x, z]; return { w: n.w, u: n.u }; }
   const [id, u] = at.split(':');
   const w = id ? ways.byId(id) : null;
   if (w) return { w, u: Math.max(0, Math.min(w.len, Number(u) || 0)) };
   return { w: ways.first(), u: 0.5 };
 }
+/**
+ * Off the ways: where the walker stands on the open hill (null while they're on a way); the way
+ * they're taking across it (points still to come); and where they'll join a way at its end, to go on by
+ * the ways to `goal`.
+ */
+let off: P2 | null = null, trail: P2[] = [], join: Spot | null = null, offDir: [number, number] = [0, 1];
 let here: Spot = startSpot();
 let speed = 0, want = 0, phase = 0, stride = 0, facing = NaN;
-const WALK = 1.25;
+/** the walker's pace (m/s); `?pace=…` times it, for trying things out quickly */
+const WALK = 1.25 * Math.max(0.1, Math.min(40, Number(params.get('pace')) || 1));
 /** Where the walker stands at a spot: on the step under them, lifting onto the next as they come to its edge; on a temple's terrace or stair, on that. */
 function stand(sp: Spot): { p: V3; dir: [number, number] } {
   const at = ways.at(sp.w, sp.u, true), p = at.p;
@@ -354,9 +365,73 @@ function nearestTo(px: number, py: number): Spot | null {
   const n = ways.nearest(h[0], h[2]);
   return { w: n.w, u: n.u };
 }
+// ─── the open hill: where the walker may go off the ways ─────────────────────────────────────────
+/** whether (x, z) is on a way, where the walker may always go */
+const onWay = (x: number, z: number) => ways.nearest(x, z).d < WIDTH / 2 - 0.1;
+/**
+ * Whether the ground at (x, z) is open, for the walker to stand on off the ways: not under a crown,
+ * nor on a rock, a temple's terrace or by its walls, a cast's sheet, its cairn or its shrine; not in
+ * water, nor on a bank cut steep for it. (What the tiles about it hold: those made.)
+ */
+function isOpen(x: number, z: number): boolean {
+  if (ways.dryOf(x, z) < 0.4 || groundCut(ways, x, z).cut > 0.3) return false;
+  for (const t of templesNear(ways, z - 20, z + 20)) {
+    const dx = x - t.c[0], dz = z - t.c[2], ax = Math.abs(dx * -t.face[1] + dz * t.face[0]), az = dx * t.face[0] + dz * t.face[1];
+    if ((ax < t.tw + 1 && az < t.T + 1.2 + (t.front.n + 1) * TSTEP && az > -t.T - 1.2 - (t.back ? (t.back.n + 1) * TSTEP : 0)) || (t.gate && ax < t.tw + 6.8 && Math.abs(az + 0.3) < 1.3)) return false;
+  }
+  const i = Math.floor(x / TILE), j = Math.floor(z / BAND), key = coverKey(x, z);
+  for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+    const l = live.get(`${i + di},${j + dj}`);
+    const c = l?.cover.get(key);
+    if (c) for (let n = 0; n < c.length; n += 3) if (Math.hypot(x - c[n], z - c[n + 1]) < c[n + 2]) return false;
+  }
+  return true;
+}
+/** (the cover's buckets: 2 m across) */
+const coverKey = (x: number, z: number) => Math.floor(x / 2) * 100003 + Math.floor(z / 2);
+/** What in a tile covers the ground against the walker, bucketed: its crowns (each clump's footprint, and a little more), and what stands in the way. */
+function coverOf(band: Band): Map<number, number[]> {
+  const m = new Map<number, number[]>();
+  const put = (x: number, z: number, r: number) => {
+    for (let bx = Math.floor((x - r) / 2); bx <= Math.floor((x + r) / 2); bx++) for (let bz = Math.floor((z - r) / 2); bz <= Math.floor((z + r) / 2); bz++) {
+      const k = bx * 100003 + bz;
+      (m.get(k) ?? m.set(k, []).get(k)!).push(x, z, r);
+    }
+  };
+  const P = band.puffs;
+  for (let n = 0; n < P.length; n += 6) put(P[n], P[n + 2], P[n + 3] * 0.9 + 0.3);
+  const B = band.blocks;
+  for (let n = 0; n < B.length; n += 3) put(B[n], B[n + 1], B[n + 2]);
+  return m;
+}
+/** where a tap's answer is marked, for a moment */
+let markP: V3 | null = null;
+/** where the walker is now (for planning from) */
+let posNow: V3 = [0, 0, 0];
+/**
+ * Off the ways, to a place on the open hill (within fifteen metres of a way): a way there across the
+ * open ground, from wherever they are; if there's none, false.
+ */
+function roamTo(h: V3): boolean {
+  if (ways.nearest(h[0], h[2]).d > 15 || !isOpen(h[0], h[2])) return false;
+  const from: P2 = off ?? [posNow[0], posNow[2]];
+  const route = plan(from, [h[0], h[2]], isOpen, onWay);
+  if (!route) return false;
+  off = from; trail = route.slice(1); join = null; goal = null; legs = [];
+  markP = [h[0], ground(ways, h[0], h[2]), h[2]]; markAt = performance.now();
+  return true;
+}
 /** Go there: the route, through the junctions, from where they are. */
 function goTo(sp: Spot) {
-  goal = sp; markAt = performance.now();
+  goal = sp; markAt = performance.now(); markP = spotP(sp);
+  if (off) {
+    // (off the ways: back across the open ground to the nearest, then on by the ways)
+    const n = ways.nearest(off[0], off[1]);
+    join = { w: n.w, u: n.u };
+    trail = plan(off, [n.p[0], n.p[2]], isOpen, onWay)?.slice(1) ?? [[n.p[0], n.p[2]]];
+    legs = [];
+    return;
+  }
   legs = ways.route(here.w, here.u, sp.w, sp.u);
 }
 // (a press is only a tap if it lets go where it began, soon: then the walker goes there; any drag looks about, wherever it began)
@@ -378,10 +453,17 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const up = (e: PointerEvent) => {
   if (downAt?.id !== e.pointerId) return;
-  // (a tap: on a way, there; anywhere else, the nearest place on one to where it falls on the hill)
+  // (a tap: on a way, there; on open ground near one, there; anywhere else, the nearest place on a way to where it falls on the hill)
   if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600) {
-    const at = pick(e.clientX, e.clientY) ?? nearestTo(e.clientX, e.clientY);
+    // (on a way, there; on open ground near one, there, across it; else the nearest way to where it falls)
+    const at = pick(e.clientX, e.clientY);
     if (at !== null) goTo(at);
+    else {
+      // (off the ways only to open ground that's seen: where the tap falls on the ground itself, not on blossom over it)
+      const seenGround = OPEN.has(R.matAt(e.clientX * (canvas.width / innerWidth), e.clientY * (canvas.height / innerHeight)));
+      const h = onHill(e.clientX, e.clientY);
+      if (!h || !seenGround || !roamTo(h)) { const n = nearestTo(e.clientX, e.clientY); if (n) goTo(n); }
+    }
   }
   downAt = null; looking = false;
 };
@@ -390,6 +472,7 @@ canvas.addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'c') { setInk(!ink); return; }
   keys.add(e.key.toLowerCase()); goal = null; legs = []; $('hint').classList.remove('on');
+  if (off && !join && ['arrowup', 'arrowdown', 'w', 's'].includes(e.key.toLowerCase())) { const n = ways.nearest(off[0], off[1]); join = { w: n.w, u: n.u }; trail = plan(off, [n.p[0], n.p[2]], isOpen, onWay)?.slice(1) ?? [[n.p[0], n.p[2]]]; }
 });
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => { keys.clear(); });
@@ -478,52 +561,73 @@ function frame(now: number) {
   const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
   if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
 
-  // walk: by the route to where was tapped, slowing as they come to it; or on, or back, by the keys
-  // (speed is along the way they're on: up it, +; down it, -)
-  if (legs.length) {
-    const leg = legs[0], togo = leg.u1 - here.u;
-    const left = Math.abs(togo) + legs.slice(1).reduce((a, l) => a + Math.abs(l.u1 - l.u0), 0);
-    want = Math.sign(togo || 1) * Math.min(1, left * 1.4 + 0.15);
-  } else want = preview ? 0.8 : keys.has('arrowup') || keys.has('w') ? 1 : keys.has('arrowdown') || keys.has('s') ? -0.7 : 0;
-  if (Math.sign(want) !== Math.sign(speed) && Math.abs(speed) < 0.3) speed = Math.sign(want) * Math.abs(speed);
-  speed += (want - speed) * (1 - Math.exp(-dt * 4));
-  let move = speed * WALK * dt * (1 + 0.14 * Math.sin(phase * 2 - 0.8) * stride);
-  for (let guard = 0; guard < 4 && Math.abs(move) > 1e-6; guard++) {
-    if (legs.length) {
-      // (along the leg; at its end, on to the next, or there)
-      const leg = legs[0], togo = leg.u1 - here.u;
-      if (Math.abs(togo) <= Math.abs(move) || Math.abs(togo) < 0.02) {
-        here.u = leg.u1; move = Math.sign(move) * Math.max(0, Math.abs(move) - Math.abs(togo));
-        legs.shift();
-        if (legs.length) { here = { w: legs[0].w, u: legs[0].u0 }; speed = Math.abs(speed) * Math.sign(legs[0].u1 - legs[0].u0 || 1); move = Math.abs(move) * Math.sign(speed); }
-        else { goal = null; speed = 0; move = 0; }
-      } else { here.u += Math.sign(togo) * Math.abs(move); move = 0; }
-      continue;
+  if (off) {
+    // off the ways: along their way across the open ground, a little more carefully; at its end, if
+    // it joins a way, on by the ways
+    const rem = trail.reduce((acc, t, k) => acc + Math.hypot(t[0] - (k ? trail[k - 1][0] : off![0]), t[1] - (k ? trail[k - 1][1] : off![1])), 0);
+    want = trail.length ? Math.min(1, rem * 1.4 + 0.15) : 0;
+    speed = Math.max(0, speed + (want - speed) * (1 - Math.exp(-dt * 4)));
+    let move = speed * WALK * 0.85 * dt * (1 + 0.14 * Math.sin(phase * 2 - 0.8) * stride);
+    while (move > 1e-6 && trail.length) {
+      const t = trail[0], o: P2 = off, dx: number = t[0] - o[0], dz: number = t[1] - o[1], d = Math.hypot(dx, dz);
+      if (d > 1e-4) offDir = [dx / d, dz / d];
+      if (d <= move) { off = [t[0], t[1]]; move -= d; trail.shift(); } else { off = [o[0] + (dx / d) * move, o[1] + (dz / d) * move]; move = 0; }
     }
-    // (by the keys: on along the way; at a junction, on by the way most nearly ahead, up or down)
-    const nu = here.u + move;
-    if (nu > here.w.len) {
-      const end = ways.at(here.w, here.w.len, true).dir, j = here.w.to;
-      const next = ways.outOf(j).sort((a, b) => dotDir(ways.at(b, 0, true).dir, end) - dotDir(ways.at(a, 0, true).dir, end))[0];
-      if (!next) { here.u = here.w.len; speed = 0; break; }
-      move = nu - here.w.len; here = { w: next, u: 0 };
-    } else if (nu < 0) {
-      const start = ways.at(here.w, 0, true).dir, j = here.w.from;
-      const prev = ways.into(j).sort((a, b) => dotDir(ways.at(b, b.len, true).dir, start) - dotDir(ways.at(a, a.len, true).dir, start))[0];
-      if (!prev) { here.u = 0; speed = 0; break; }
-      move = nu; here = { w: prev, u: prev.len };
-    } else { here.u = nu; move = 0; }
+    if (!trail.length && join) {
+      here = join; join = null; off = null;
+      legs = goal ? ways.route(here.w, here.u, goal.w, goal.u) : [];
+      if (!legs.length) { goal = null; speed = 0; } else speed = Math.abs(speed) * Math.sign(legs[0].u1 - legs[0].u0 || 1);
+    }
+  } else {
+    // walk: by the route to where was tapped, slowing as they come to it; or on, or back, by the keys
+    // (speed is along the way they're on: up it, +; down it, -)
+    if (legs.length) {
+      const leg = legs[0], togo = leg.u1 - here.u;
+      const left = Math.abs(togo) + legs.slice(1).reduce((a, l) => a + Math.abs(l.u1 - l.u0), 0);
+      want = Math.sign(togo || 1) * Math.min(1, left * 1.4 + 0.15);
+    } else want = preview ? 0.8 : keys.has('arrowup') || keys.has('w') ? 1 : keys.has('arrowdown') || keys.has('s') ? -0.7 : 0;
+    if (Math.sign(want) !== Math.sign(speed) && Math.abs(speed) < 0.3) speed = Math.sign(want) * Math.abs(speed);
+    speed += (want - speed) * (1 - Math.exp(-dt * 4));
+    let move = speed * WALK * dt * (1 + 0.14 * Math.sin(phase * 2 - 0.8) * stride);
+    for (let guard = 0; guard < 4 && Math.abs(move) > 1e-6; guard++) {
+      if (legs.length) {
+        // (along the leg; at its end, on to the next, or there)
+        const leg = legs[0], togo = leg.u1 - here.u;
+        if (Math.abs(togo) <= Math.abs(move) || Math.abs(togo) < 0.02) {
+          here.u = leg.u1; move = Math.sign(move) * Math.max(0, Math.abs(move) - Math.abs(togo));
+          legs.shift();
+          if (legs.length) { here = { w: legs[0].w, u: legs[0].u0 }; speed = Math.abs(speed) * Math.sign(legs[0].u1 - legs[0].u0 || 1); move = Math.abs(move) * Math.sign(speed); }
+          else { goal = null; speed = 0; move = 0; }
+        } else { here.u += Math.sign(togo) * Math.abs(move); move = 0; }
+        continue;
+      }
+      // (by the keys: on along the way; at a junction, on by the way most nearly ahead, up or down)
+      const nu = here.u + move;
+      if (nu > here.w.len) {
+        const end = ways.at(here.w, here.w.len, true).dir, j = here.w.to;
+        const next = ways.outOf(j).sort((a, b) => dotDir(ways.at(b, 0, true).dir, end) - dotDir(ways.at(a, 0, true).dir, end))[0];
+        if (!next) { here.u = here.w.len; speed = 0; break; }
+        move = nu - here.w.len; here = { w: next, u: 0 };
+      } else if (nu < 0) {
+        const start = ways.at(here.w, 0, true).dir, j = here.w.from;
+        const prev = ways.into(j).sort((a, b) => dotDir(ways.at(b, b.len, true).dir, start) - dotDir(ways.at(a, a.len, true).dir, start))[0];
+        if (!prev) { here.u = 0; speed = 0; break; }
+        move = nu; here = { w: prev, u: prev.len };
+      } else { here.u = nu; move = 0; }
+    }
   }
   phase += Math.abs(speed) * WALK * dt * 4.4;
   stride += ((Math.abs(speed) > 0.05 ? 1 : 0) - stride) * (1 - Math.exp(-dt * 5));
-  const z0 = ways.at(here.w, here.u, true).p[2];
+  const z0 = off ? off[1] : ways.at(here.w, here.u, true).p[2];
   nearTemples = templesNear(ways, z0 - 20, z0 + 20);
-  const st = stand(here);
+  // (off the ways, on the ground there; where they cross a way, on its tread or stone)
+  const st = off ? (() => { const n = ways.nearest(off![0], off![1]); const y = n.d < WIDTH / 2 ? ways.surface(n.w, n.u, off![1]) : ground(ways, off![0], off![1]) - 0.03; return { p: [off![0], y, off![1]] as V3, dir: offDir }; })() : stand(here);
   if (Number.isNaN(facing)) facing = Math.atan2(st.dir[0], st.dir[1]);
   const bob = 0.03 * Math.abs(Math.sin(phase)) * stride;
   const pos: V3 = [st.p[0], st.p[1] + bob, st.p[2]];
+  posNow = pos;
   // (they turn to face their way, not at once)
-  const want_yaw = Math.atan2(st.dir[0], st.dir[1]) + (speed < -0.05 ? Math.PI : 0);
+  const want_yaw = Math.atan2(st.dir[0], st.dir[1]) + (!off && speed < -0.05 ? Math.PI : 0);
   facing += Math.atan2(Math.sin(want_yaw - facing), Math.cos(want_yaw - facing)) * (1 - Math.exp(-dt * 5));
   const yaw = facing;
   keepBands(cam.x || pos[0], pos[2]);
@@ -556,7 +660,7 @@ function frame(now: number) {
   const ground_: M4 = new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1] - bob, pos[2], 1]);
   // (the body: a sway from foot to foot, a lean into the climb, a little twist with each step; still, it breathes)
   const sw = Math.sin(phase) * stride;
-  const climbing = Math.max(0, Math.min(1, (st.p[1] - stand({ w: here.w, u: Math.max(0, here.u - 0.5 * Math.sign(speed || 1)) }).p[1]) * 4 * Math.sign(speed || 1)));
+  const climbing = off ? 0 : Math.max(0, Math.min(1, (st.p[1] - stand({ w: here.w, u: Math.max(0, here.u - 0.5 * Math.sign(speed || 1)) }).p[1]) * 4 * Math.sign(speed || 1)));
   const model: M4 = mulM(new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1], pos[2], 1]),
     mulM(Ry(0.06 * sw), mulM(Rz(0.045 * sw), mulM(Rx(0.05 * stride + 0.06 * climbing * stride), Tm(0, 0.006 * Math.sin(time * 1.7) * (1 - stride), 0)))));
   // (the head: turned back a little against the body's twist as they walk; standing, it looks about, now one way, now another)
@@ -577,8 +681,8 @@ function frame(now: number) {
   placeTitle(pos);
   // (the mark where they're going: a ring of vermilion on its place on the path, for a moment, as the tap is answered)
   const mark = $('mark'), ma = (performance.now() - markAt) / 1000;
-  if (goal !== null && ma < 1.1) {
-    const q = project(spotP(goal));
+  if (markP !== null && ma < 1.1) {
+    const q = project(markP);
     mark.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) scale(${(0.8 + 0.35 * Math.min(1, ma * 4)).toFixed(3)})`;
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
@@ -588,7 +692,7 @@ function frame(now: number) {
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
   // link, comes back to the same place; written a couple of times a second at most, as they move)
-  const atNow = `${here.w.id}:${here.u.toFixed(1)}`;
+  const atNow = off ? `@${off[0].toFixed(1)},${off[1].toFixed(1)}` : `${here.w.id}:${here.u.toFixed(1)}`;
   if (!preview && !review && atNow !== urlAt && now - urlT > 400) {
     urlAt = atNow; urlT = now;
     const u = new URL(location.href);
@@ -597,12 +701,12 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
 if (review) {
-  $('hint').textContent = PASS + ' · seed ' + seed + ' · at ' + here.w.id + ':' + here.u.toFixed(1);
+  $('hint').textContent = PASS + ' · seed ' + seed + ' · at ' + (params.get('at')?.startsWith('@') ? params.get('at')! : here.w.id + ':' + here.u.toFixed(1));
   $('hint').classList.add('on');
 } else if (!preview) setTimeout(() => $('hint').classList.add('on'), 1200);
 void WIDTH;
