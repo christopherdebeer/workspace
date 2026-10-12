@@ -60,6 +60,16 @@ void main() {
   if (vM == ${M.ground} || vM == ${M.shade}) {
     // the ground: the paper itself
     c = PAPER;
+    float rag = noise(vW * 1.3) * .5 + noise(vW * 4.) * .25;
+    if (vM == ${M.ground} && vC.b <= 0. && vC.g > .32 + rag) {
+      // (where it's cut deep for water, the banks are rock: inked as rock is, by which way each facet turns)
+      vec3 nf = normalize(cross(dFdx(vW), dFdy(vW)));
+      if (nf.y < 0.) nf = -nf;
+      float toL = dot(normalize(nf.xz + 1e-4), normalize(L.xz));
+      c = nf.y > .8 ? vec3(.4, .39, .38) : toL > -.05 ? vec3(.25, .25, .24) : vec3(.1, .1, .1);
+      if (vC.g < .44 + rag) c = vec3(.4, .39, .38);
+      lit = 1.;
+    } else
     if (vC.b <= 0. && vC.r > 0.) {
       // (along a trail, a few strokes of grey, as the brush went along it: a worn way)
       float st = step(.7, noise(vec3(vW.x * 1.3, vW.z * 11., 1.))) * step(.45, noise(vW * .8));
@@ -165,7 +175,7 @@ void main() {
     if (fall > .45) {
       // (a fall: a sheet of white, streaked grey down it, the streaks running down)
       float sk = noise(vec3(vW.x * 5. + vW.z * 2., (vW.y + uTime * .7) * 1.4, 7.));
-      c = mix(FOAM, vec3(.6, .66, .67), smoothstep(.56, .64, sk));
+      c = mix(FOAM, vec3(.6, .66, .67), step(.6, sk));
     } else {
       float flow = vW.z + uTime * (.12 + run * 2.5);
       // (ripples: short fine strokes across the stream, drifting down it)
@@ -173,7 +183,7 @@ void main() {
       float line = smoothstep(.035, .0, abs(rp - .5)) * smoothstep(.45, .7, rq);
       c = mix(c, vec3(.86, .87, .83), line * (kind == 1 ? .5 : .8));
       // (white water where it runs fast)
-      float foam = smoothstep(.14, .3, run) * smoothstep(.5, .7, noise(vec3(vW.x * 2.6, flow * 1.3, 2.)));
+      float foam = step(.6 - smoothstep(.14, .32, run) * .14, noise(vec3(vW.x * 2.6, flow * .8, 2.))) * step(.14, run);
       c = mix(c, FOAM, foam);
       // (at its edge, a pale line, broken)
       c = mix(c, vec3(.83, .85, .8), smoothstep(.16, .02, inn) * smoothstep(.3, .5, noise(vec3(vW.xz * 2.2, 9.))));

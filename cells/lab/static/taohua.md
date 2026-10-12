@@ -57,6 +57,41 @@ the seed and its place: the ground, the steps and stones, standing stones along 
 outcrops behind the trees, tufts of grass, the trees, fallen blossom, and the buildings. Crowns
 stand as they grow, over a way too: nothing is cut out of a crown to show what's under it.
 
+## The water
+
+Now and then a stream comes down the hill: one every few hundred metres up it, each two to three
+hundred metres long. It's laid out before the ways, from the seed alone, a stream at a time up
+the hill, so any part of it can be made without the rest. From a spring among rocks it runs down
+the hill, wandering across it in long bends and shorter ones, narrow at its spring and wider
+below, to a pond at its foot (or a marsh, its reeds in clumps), where the hill's gentlest
+thereabouts. Where the hill's gentle it slows, and now and then pools; where it's steep it runs
+white over rocks, or falls: in steps, from pool to pool, each held at its lip by a ledge of rock;
+or all at once, from as high as four metres, into a deep pool cut into the hill under a bowl of
+cliff.
+
+Its water lies level across it; down it, the level follows the hill, or stands level in a pool
+(held at the pool's downhill rim, so the pool's cut into the hill behind rather than banked up
+before it), or drops at a fall. The ground's carved to hold it: a bed under it, deeper toward its
+middle; banks rising from its edge to meet the hill, steep and rocky by falls and pools cut deep;
+raised a little where the hill lies below the water's level, except where another water runs out
+through it. Where two waters meet, the ground's carved by both. Its rocks: along its banks, more
+where it runs fast, and in it there; ledges at each fall's lip; rocks about each spring and pond.
+
+The ways cross it where they can: once, fairly square to it, where it runs or over a marsh; never
+through a pool or at a fall, and no junction, terrace or cast stands by the water. Where both
+banks are about the water's level, a crossing is stepping stones (pale, squarish, a stride apart,
+just above the water) or a bridge; where the way's steep there, or the water's white, or the banks
+are cut high, a bridge: a deck of stone slabs, arched a little, a kerb along either side, a pier at
+either bank. No tree stands in the water, on a bank cut steep, nor just downhill of the water,
+where its crown would stand between the eye and it: the water's an open mass, as the print's are.
+
+It's drawn in few inks: deep slate where it's deep, paler where it's shallow, paler again at its
+edge, with a broken pale line along the shore; fine white ripples drawn across it, drifting down
+it slowly; hard-edged white where it runs fast; and where it falls, a sheet of white streaked
+grey, the streaks running down. Petals float on its stiller water. Its shore is drawn by the
+water itself, so it's smooth however narrow the stream; where the banks are cut deep, they're
+inked as rock. In the composition view, water's a slate mass of its own.
+
 ## The temples
 
 Buildings stand where the ways give them a place, each of its kind and from its parts, on a stone

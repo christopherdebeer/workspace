@@ -265,14 +265,15 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     if (!v) { const nr = ways.nearest(x, z); const worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.6, nr.d); v = [x, ground(ways, x, z), z, 0, 1, 0, worn, 0, 0, M.ground]; gv.set(key, v); }
     return v;
   };
-  // (by water, finer, so its banks are drawn true; where they're cut deep into the hill, rock)
+  // (by water, finer, so its banks are drawn true; each corner carries how deep it's cut into the
+  // hill for the water: where deep, the drawing makes it rock)
   const cutAt = new Map<string, number>();
   const GW = (x: number, z: number) => {
     const key = `${x},${z}`;
     let v = gv.get(key);
     if (!v) {
       const nr = ways.nearest(x, z), worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.6, nr.d), gc = groundCut(ways, x, z);
-      v = [x, gc.y, z, 0, 1, 0, worn, 0, 0, M.ground]; gv.set(key, v); cutAt.set(key, gc.cut);
+      v = [x, gc.y, z, 0, 1, 0, worn, gc.cut, 0, M.ground]; gv.set(key, v); cutAt.set(key, gc.cut);
     }
     return v;
   };
@@ -284,15 +285,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     }
     for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) {
       const xs = xa + a * 0.5, zs = za + b * 0.5, xe = xs + 0.5, ze = zs + 0.5;
-      for (const tri of [[[xs, zs], [xs, ze], [xe, ze]], [[xs, zs], [xe, ze], [xe, zs]]]) {
-        const vs = tri.map(([x, z]) => GW(x, z));
-        const cut = tri.reduce((m, [x, z]) => Math.max(m, cutAt.get(`${x},${z}`) ?? 0), 0);
-        // (rock where the bank's cut steep: as steep as the triangle stands)
-        const ux = vs[1][0] - vs[0][0], uy = vs[1][1] - vs[0][1], uz = vs[1][2] - vs[0][2], wx = vs[2][0] - vs[0][0], wy = vs[2][1] - vs[0][1], wz = vs[2][2] - vs[0][2];
-        const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx, up = Math.abs(ny) / (Math.hypot(nx, ny, nz) || 1);
-        if (cut > 0.3 && up < 0.72) mesh.tri([vs[0][0], vs[0][1], vs[0][2]], [vs[1][0], vs[1][1], vs[1][2]], [vs[2][0], vs[2][1], vs[2][2]], INK.rock, M.rock);
-        else for (const v of vs) mesh.v.push(...v);
-      }
+      for (const [x, z] of [[xs, zs], [xs, ze], [xe, ze], [xs, zs], [xe, ze], [xe, zs]]) mesh.v.push(...GW(x, z));
     }
   }
 
