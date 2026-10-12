@@ -21,7 +21,16 @@ const preview = params.has('preview');
 const review = params.has('review');
 /** the composition view: the print as broad strokes only, stepped back, to judge its arrangement on its own (`?ink`, or C) */
 let ink = params.has('ink');
-const setInk = (on: boolean) => { ink = on; document.body.classList.toggle('ink', on); };
+const setInk = (on: boolean) => {
+  ink = on; document.body.classList.toggle('ink', on);
+  document.getElementById('inkt')?.setAttribute('aria-pressed', String(on));
+  // (the address keeps it, so a reload or a shared link comes back to the same view)
+  const u = new URL(location.href);
+  if (on) u.searchParams.set('ink', ''); else u.searchParams.delete('ink');
+  history.replaceState(null, '', u.toString().replace(/ink=(&|$)/, 'ink$1'));
+};
+// (the composition view's seal, under the steps: a tap toggles it, as C does)
+document.getElementById('inkt')?.addEventListener('click', () => setInk(!ink));
 setInk(ink);
 const PASS = 'journey-1';
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());

@@ -208,13 +208,14 @@ there, just past its end; at some forks, in the space up the hill between the fo
 about a quarter of the longer ways, on whichever side has room. Each is clear of every way and
 well apart from the others. Each holds a cast from Changes, from the seed and the station's
 number: six lines, each as three coins fall, so old lines come as often as they would. The cast is
-inked on the hillside in its clearing, as a print sets its verse in the paper it keeps open: the
+written in its clearing, as a print sets its verse in the paper it keeps open: the
 hexagram's six lines, its moving lines vermilion; its name in a column beside them, and, if it
 moves, 之 and the name of what it becomes; under them, small, the numbers and names in English.
-The words are laid on the ground itself, just above it and following it, stretched up the hill as
-much as the eye's slant onto the slope there shortens them, so they read square; so whatever
-stands before them (a crown, a rock) stands before them, and nothing has to make room for them.
-They come from a sheet of words, ink on nothing: where there's no ink, the hill shows. They only
+The words stand on a sheet at the uphill side of the clearing, always turned to face the eye (the
+drawing turns each corner of it about its foot), so they read square however the view moves; but
+they're of the hill, so whatever stands before them (a crown, a rock) stands before them, and nothing
+has to make room for them. They come from a sheet of words, ink on nothing: where there's no ink,
+the hill shows through. They only
 read (a tap on them walks, like a tap on the hillside). Beside it, a small built thing ties it to the place: a cairn of
 flat stones, each smaller than the last (always where Mountain or Earth is in the cast), or a
 wayside shrine, a stone post with a little white niche under a roof of teal tiles.
@@ -228,7 +229,7 @@ edge, further on its downhill side, where a crown would stand over the space as 
 
 ## The composition view
 
-`?ink` (or C on a keyboard) steps back from the print to show only its arrangement, in broad
+`?ink` (or C on a keyboard, or the small seal 墨 under the steps, which is stamped vermilion while it's on) steps back from the print to show only its arrangement, in broad
 strokes with nothing recognisable: the camera stands nearly twice as far off and sees further up
 the hill; each part of the print is gathered over a wide brush and laid down as a few inks
 (blossom a grey wash, deeper where it's dense; rock and trunks black; buildings vermilion; the

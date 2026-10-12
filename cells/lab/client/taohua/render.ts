@@ -31,11 +31,18 @@ const vec3 L = normalize(vec3(.55, .75, -.35));
 
 const SOLID_VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in vec3 aCol; in float aMat;
-uniform mat4 uVP, uModel; uniform vec3 uEye; uniform float uReveal;
+uniform mat4 uVP, uModel; uniform vec3 uEye, uRight, uUp; uniform float uReveal;
 out vec3 vW; out vec3 vN; out vec3 vC; flat out int vM;
 void main() {
   vec4 w = uModel * vec4(aPos, 1.);
-  vW = w.xyz; vN = normalize(mat3(uModel) * aNor); vC = aCol; vM = int(aMat + .5);
+  vC = aCol; vM = int(aMat + .5);
+  if (vM == ${M.type}) {
+    // (a cast's words: a sheet standing at its place on the hill, always facing the eye; its
+    // position there, and each corner's offset across and up the sheet, in place of a normal)
+    w.xyz += uRight * aNor.x + uUp * aNor.y;
+    vN = normalize(uEye - w.xyz);
+  } else vN = normalize(mat3(uModel) * aNor);
+  vW = w.xyz;
   // (a limb drawn nearer the eye by as far as it lies inside its own crown: it shows through its own blossom, as ink over colour, but not through anything else)
   if (vM == ${M.twig}) w.xyz += normalize(uEye - w.xyz) * min(aCol.r * uReveal, .6);
   gl_Position = uVP * w;
@@ -739,6 +746,8 @@ export class Renderer {
     gl.uniformMatrix4fv(this.loc(this.solid, 'uVP'), false, view.vp);
     gl.uniform3fv(this.loc(this.solid, 'uEye'), view.eye);
     gl.uniform1f(this.loc(this.solid, 'uReveal'), REVEAL);
+    gl.uniform3fv(this.loc(this.solid, 'uRight'), view.right);
+    gl.uniform3fv(this.loc(this.solid, 'uUp'), view.up);
     gl.uniform1f(this.loc(this.solid, 'uTime'), view.time ?? 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.plaque);
     gl.uniform1i(this.loc(this.solid, 'uPlaque'), 0);

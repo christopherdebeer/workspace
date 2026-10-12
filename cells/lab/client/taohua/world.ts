@@ -1051,31 +1051,29 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
 }
 
 /**
- * A cast's words, inked on the hillside in the space kept for them, as a page would set them: the
- * figure (six lines, the first at the bottom, a yin line broken, the moving lines vermilion); its
+ * A cast's words, written on a sheet standing in the space kept for them, as a page would set them:
+ * the figure (six lines, the first at the bottom, a yin line broken, the moving lines vermilion); its
  * name in a column beside it, and if it moves, 之 and the name of what it becomes; under both, the
- * numbers and titles, small. Laid on the ground (just above it, following it), stretched up the hill
- * as much as the eye's slant onto the slope there shortens it, so it reads square. Whatever stands
- * before it (a crown, a rock) stands before it.
+ * numbers and titles, small. The sheet stands at its place on the hill and always faces the eye (the
+ * drawing turns it: each corner carries its offset across and up the sheet), so it reads square from
+ * wherever it's seen; whatever stands before it (a crown, a rock) stands before it.
  */
 function castWords(mesh: Mesh, ways: Ways, st: Station) {
   const hex = identify(st.lines), rel = st.lines.some(moving) ? identify(st.lines, true) : null;
   // (the page: in its pixels, about as the print shows them where the walker is)
-  const PX = 0.038, CH = 30, EN = 18, ENW = 512 * EN / 56;
+  const PX = 0.034, CH = 30, EN = 18, ENW = 512 * EN / 56;
   const nh = [...hex.han].length, nr = rel ? [...rel.han].length : 0;
   const colH = (nh + (rel ? 1 + nr : 0)) * CH, top = Math.max(45, colH);
   const Wb = 120, Hb = top + 6 + EN * (rel ? 2 : 1);
-  const ax = st.c[0], az = st.c[2] + st.rz * 0.2;
-  const grade = ways.slope(az), sl = Math.atan(grade), kz = PX * Math.cos(sl) / Math.sin(0.76 + sl);
-  const nl = Math.hypot(1, grade), nrm: V3 = [0, 1 / nl, -grade / nl];
-  // (the page's right is the hill's -x, as the eye looks up it; its down, down the hill)
-  const at = (px: number, py: number): [number, number] => [ax - (px - Wb / 2) * PX, az - (py - Hb / 2) * kz];
+  // (its foot, at the uphill side of its space, a little above the ground)
+  const ax = st.c[0], az = st.c[2] + st.rz * 0.25, ay = ground(ways, ax, az) + 0.2;
+  const off = (px: number, py: number): [number, number] => [(px - Wb / 2) * PX, (Hb - py) * PX];
   const quad = (x0: number, y0: number, x1: number, y1: number, r: Rect | null, ink: number) => {
     const nx = Math.max(1, Math.ceil((x1 - x0) / 24)), ny = Math.max(1, Math.ceil((y1 - y0) / 24));
     const P = (i: number, j: number) => {
-      const fx = i / nx, fy = j / ny, [x, z] = at(x0 + (x1 - x0) * fx, y0 + (y1 - y0) * fy);
+      const fx = i / nx, fy = j / ny, [ox, oy] = off(x0 + (x1 - x0) * fx, y0 + (y1 - y0) * fy);
       const u = r ? (r[0] + r[2] * fx) / TYPE.w : 0, v = r ? (r[1] + r[3] * fy) / TYPE.h : 0;
-      return [x, ground(ways, x, z) + 0.06, z, nrm[0], nrm[1], nrm[2], u, v, ink, M.type];
+      return [ax, ay, az, ox, oy, 0, u, v, ink, M.type];
     };
     for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
       const a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), d = P(i, j + 1);
