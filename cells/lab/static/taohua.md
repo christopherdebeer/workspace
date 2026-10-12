@@ -248,7 +248,9 @@ edge, further on its downhill side, where a crown would stand over the space as 
 ## The composition view
 
 `?ink` (or C on a keyboard, or the small seal 墨 under the steps, which is stamped vermilion while it's on) steps back from the print to show only its arrangement, in broad
-strokes with nothing recognisable: the camera stands nearly twice as far off and sees further up
+strokes with nothing recognisable (going in, the camera eases back over a little over half a second
+and then the print gives way to its masses, so each thing is seen to become its mass; coming out,
+the other way): the camera stands nearly twice as far off and sees further up
 the hill; each part of the print is gathered over a wide brush and laid down as a few inks
 (blossom a grey wash, deeper where it's dense; rock and trunks black; buildings vermilion; the
 rest paper); each way is brushed over it as a stroke, heavy where it's steps, dry and broken

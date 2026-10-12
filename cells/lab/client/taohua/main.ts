@@ -23,6 +23,9 @@ const preview = params.has('preview');
 const review = params.has('review');
 /** the composition view: the print as broad strokes only, stepped back, to judge its arrangement on its own (`?ink`, or C) */
 let ink = params.has('ink');
+/** how far into the composition view: eased toward it (1) or back from it (0) over a little over half a second, so each thing in the print is seen to become its mass */
+let inkT = ink ? 1 : 0;
+const ease = (t: number) => t * t * (3 - 2 * t);
 const setInk = (on: boolean) => {
   ink = on; document.body.classList.toggle('ink', on);
   document.getElementById('inkt')?.setAttribute('aria-pressed', String(on));
@@ -208,8 +211,9 @@ const live = new Map<string, Live>();
 /** Keep the tiles about where the eye looks made, and drop those it's left: across the hill as far as the view reaches, up it ahead and a little behind. */
 function keepBands(x: number, z: number) {
   const aspect = canvas.width / Math.max(1, canvas.height);
-  const half = (aspect < 1 ? 22 : 46) * (ink ? 1.8 : 1);
-  const lo = Math.floor((z - (ink ? 40 : 24)) / BAND), hi = Math.floor((z + (ink ? 130 : 70)) / BAND);
+  const wide = ink || inkT > 0.001;
+  const half = (aspect < 1 ? 22 : 46) * (wide ? 1.8 : 1);
+  const lo = Math.floor((z - (wide ? 40 : 24)) / BAND), hi = Math.floor((z + (wide ? 130 : 70)) / BAND);
   const il = Math.floor((x - half) / TILE), ih = Math.floor((x + half) / TILE);
   for (const [key, l] of live) if (l.band.j < lo - 1 || l.band.j > hi + 1 || l.band.i < il - 1 || l.band.i > ih + 1) { R.drop(l.solid); R.drop(l.puffs); R.drop(l.petals); live.delete(key); }
   // (one tile a frame at most, nearest the walker first, so a climb never stutters)
@@ -399,7 +403,8 @@ function camera(p: V3, dt: number) {
   // (looked about by hand, it comes back after a while)
   if (!looking && performance.now() - lookAt0 > 2500) { lookYaw *= Math.exp(-dt * 1.2); lookPitch *= Math.exp(-dt * 1.2); }
   const aspect = canvas.width / canvas.height;
-  const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (ink ? 1.8 : 1);
+  // (the composition view stands further off: the camera eases back as it comes in, and in again as it goes)
+  const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (1 + 0.8 * ease(inkT));
   const pitch = 0.76 + lookPitch, yaw = lookYaw;
   const t: V3 = [cam.x + (cam.t[0] - p[0]) * 0, cam.t[1], cam.t[2]];
   t[0] = cam.x;
@@ -463,6 +468,7 @@ function brushPath(pos: V3) {
 let last = performance.now(), time = 0, idleLook = 0, urlAt = '', urlT = -1e9;
 function frame(now: number) {
   const dt = review ? 0 : Math.max(0, Math.min(0.05, (now - last) / 1000));
+  { const to = ink ? 1 : 0, step = review ? 1 : Math.min(0.12, Math.max(0, (now - last) / 1000)) / 0.6; inkT = to > inkT ? Math.min(to, inkT + step) : Math.max(to, inkT - step); }
   last = now; time += dt;
   const dpr = Math.min(devicePixelRatio || 1, 2) * (preview ? 0.6 : 1);
   const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
@@ -524,7 +530,7 @@ function frame(now: number) {
   for (const tp of nearTemples) if (!tp.gate) { const d = Math.hypot(tp.c[0] - pos[0], tp.c[2] - pos[2]); lean = (tp.c[0] - pos[0]) * 0.45 * (1 - smoothstep(9, 16, d)); }
   const { eye, t } = camera([pos[0] + lean, pos[1], pos[2]], dt);
   const aspect = W / H;
-  const near = 1, far = ink ? 260 : 160;
+  const near = 1, far = 160 + 100 * ease(inkT);
   const fov = aspect < 1 ? 0.56 : 0.42;
   const v = lookAt(eye, t);
   const vp = mulM(perspective(fov, aspect, near, far), v.m);
@@ -559,7 +565,11 @@ function frame(now: number) {
   const staffAt = mulM(model, about(HAND, Rx(-0.42 * Math.sin(phase + 0.6) * stride)));
   const bands = [...live.values()];
   lastVP = vp;
-  if (ink) brushPath(pos);
+  // (the masses, and the ways brushed over them, come in as the camera finishes stepping back, and go first on the way in)
+  const massT = ease(Math.max(0, Math.min(1, (inkT - 0.4) / 0.6)));
+  brush.style.display = massT > 0.005 ? 'block' : 'none';
+  brush.style.opacity = massT.toFixed(3);
+  if (massT > 0.005) brushPath(pos);
   placeTitle(pos);
   // (the mark where they're going: a ring of vermilion on its place on the path, for a moment, as the tap is answered)
   const mark = $('mark'), ma = (performance.now() - markAt) / 1000;
@@ -568,7 +578,7 @@ function frame(now: number) {
     mark.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) scale(${(0.8 + 0.35 * Math.min(1, ma * 4)).toFixed(3)})`;
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
-  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink, time: review ? 0 : performance.now() / 1000 },
+  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000 },
     [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }, ...liveDeer(review ? 1 / 30 : dt, time, pos)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 

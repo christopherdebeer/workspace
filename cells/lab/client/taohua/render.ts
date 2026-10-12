@@ -520,7 +520,7 @@ void main() {
   c = mix(c, vec3(.64, .25, .23), coral * .32);
   c = mix(c, vec3(.25, .21, .18), stone * .82);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
-  if (uInk > .5) {
+  if (uInk > .002) {
     // the composition alone, in broad strokes: what covers each part of the print, gathered over a
     // wide brush, then laid down as a few inks. Blossom a grey wash (deeper where it's dense); rock
     // and trunk black; buildings vermilion; the rest paper. (The path and the walker are brushed over
@@ -539,12 +539,14 @@ void main() {
     fol /= float(K); drk /= float(K); arc /= float(K);
     // (the brush: its edge wanders, in long strokes across)
     float br = noise(vec3(gl_FragCoord.xy * vec2(.005, .018), 3.)) - .5;
-    c = PAPER;
-    if (fol > .42 + br * .3) c = vec3(.6, .56, .52);
-    if (fol > .82 + br * .2) c = vec3(.44, .4, .37);
-    if (drk > .28 + br * .2) c = vec3(.12, .11, .1);
-    if (wat > .4 + br * .2) c = vec3(.86, .87, .84);
-    if (arc > .22 + br * .15) c = vec3(.7, .22, .17);
+    vec3 cm = PAPER;
+    if (fol > .42 + br * .3) cm = vec3(.6, .56, .52);
+    if (fol > .82 + br * .2) cm = vec3(.44, .4, .37);
+    if (drk > .28 + br * .2) cm = vec3(.12, .11, .1);
+    if (wat > .4 + br * .2) cm = vec3(.86, .87, .84);
+    if (arc > .22 + br * .15) cm = vec3(.7, .22, .17);
+    // (coming in, the print gives way to its masses; going out, the other way)
+    c = mix(c, cm, uInk);
   }
   // the paper: its mottle, its fibres, its grain
   vec2 sp = gl_FragCoord.xy;
@@ -730,7 +732,7 @@ export class Renderer {
    * The frame: the solids (the world's bands, the walker by its own placing), the blossom, the
    * petals; then the print.
    */
-  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: boolean; time?: number },
+  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: number | boolean; time?: number },
     solids: Array<{ d: Drawn; model?: M4 }>, puffs: Drawn[], petals: Drawn[]) {
     const gl = this.gl, W = this.canvas.width, H = this.canvas.height;
     this.targets(W, H);
@@ -778,7 +780,7 @@ export class Renderer {
     gl.uniform1f(this.loc(this.post, 'uNear'), view.near);
     gl.uniform1f(this.loc(this.post, 'uFar'), view.far);
     gl.uniformMatrix4fv(this.loc(this.post, 'uIVP'), false, view.ivp);
-    gl.uniform1f(this.loc(this.post, 'uInk'), view.ink ? 1 : 0);
+    gl.uniform1f(this.loc(this.post, 'uInk'), Number(view.ink ?? 0));
     gl.uniform1f(this.loc(this.post, 'uLine'), Math.max(1, view.dpr * 0.9));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
