@@ -26,6 +26,16 @@ const review = params.has('review');
 let ink = params.has('ink');
 /** how far into the composition view: eased toward it (1) or back from it (0) over a little over half a second, so each thing in the print is seen to become its mass */
 let inkT = ink ? 1 : 0;
+/**
+ * How near the camera stands, by pinching (or the wheel): in the print, nearer only (down to 0.4 of its
+ * distance); in the composition view, further only (out to twice its distance). Each view keeps its own.
+ */
+let zoomN = 1, zoomI = 1;
+const ZOOM_N: [number, number] = [0.4, 1], ZOOM_I: [number, number] = [1, 2];
+const zoomBy = (k: number) => {
+  if (ink) zoomI = Math.max(ZOOM_I[0], Math.min(ZOOM_I[1], zoomI * k));
+  else zoomN = Math.max(ZOOM_N[0], Math.min(ZOOM_N[1], zoomN * k));
+};
 const ease = (t: number) => t * t * (3 - 2 * t);
 const setInk = (on: boolean) => {
   ink = on; document.body.classList.toggle('ink', on);
@@ -212,19 +222,22 @@ const live = new Map<string, Live>();
 /** Keep the tiles about where the eye looks made, and drop those it's left: across the hill as far as the view reaches, up it ahead and a little behind. */
 function keepBands(x: number, z: number) {
   const aspect = canvas.width / Math.max(1, canvas.height);
-  const wide = ink || inkT > 0.001;
-  const half = (aspect < 1 ? 22 : 46) * (wide ? 1.8 : 1);
-  const lo = Math.floor((z - (wide ? 40 : 24)) / BAND), hi = Math.floor((z + (wide ? 130 : 70)) / BAND);
+  const wide = ink || inkT > 0.001, zi = wide ? zoomI : 1;
+  const half = (aspect < 1 ? 22 : 46) * (wide ? 1.8 * zi : 1);
+  const lo = Math.floor((z - (wide ? 40 * zi * zi : 24)) / BAND), hi = Math.floor((z + (wide ? 130 * zi : 70)) / BAND);
   const il = Math.floor((x - half) / TILE), ih = Math.floor((x + half) / TILE);
   for (const [key, l] of live) if (l.band.j < lo - 1 || l.band.j > hi + 1 || l.band.i < il - 1 || l.band.i > ih + 1) { R.drop(l.solid); R.drop(l.puffs); R.drop(l.petals); live.delete(key); }
-  // (one tile a frame at most, nearest the walker first, so a climb never stutters)
-  let best: [number, number] | null = null, bd = Infinity;
-  for (let j = lo; j <= hi; j++) for (let i = il; i <= ih; i++) {
-    if (live.has(`${i},${j}`)) continue;
-    const d = Math.hypot((i + 0.5) * TILE - x, ((j + 0.5) * BAND - z) * (j * BAND < z - 6 ? 2 : 1));
-    if (d < bd) { bd = d; best = [i, j]; }
+  // (one tile a frame, nearest the walker first, so a climb never stutters; two, while the
+  // composition view stands far off, so its wider view fills in)
+  for (let n = 0; n < (wide && zi > 1.2 ? 2 : 1); n++) {
+    let best: [number, number] | null = null, bd = Infinity;
+    for (let j = lo; j <= hi; j++) for (let i = il; i <= ih; i++) {
+      if (live.has(`${i},${j}`)) continue;
+      const d = Math.hypot((i + 0.5) * TILE - x, ((j + 0.5) * BAND - z) * (j * BAND < z - 6 ? 2 : 1));
+      if (d < bd) { bd = d; best = [i, j]; }
+    }
+    if (best) add(best[0], best[1]); else break;
   }
-  if (best) add(best[0], best[1]);
 }
 function add(i: number, j: number) {
   const band = makeBand(ways, seed, i, j);
@@ -438,13 +451,24 @@ function goTo(sp: Spot) {
   legs = ways.route(here.w, here.u, sp.w, sp.u);
 }
 // (a press is only a tap if it lets go where it began, soon: then the walker goes there; any drag looks about, wherever it began)
+// (two fingers: a pinch, nearer or further; it's never a tap, nor a look about)
+const touches = new Map<number, [number, number]>();
+let pinch0 = 0;
+const spread = () => { const p = [...touches.values()]; return p.length < 2 ? 0 : Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]); };
+// (Safari's own pinch, which would zoom the page: not here)
+for (const g of ['gesturestart', 'gesturechange']) document.addEventListener(g, (e) => e.preventDefault(), { passive: false } as AddEventListenerOptions);
+canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomBy(Math.exp(e.deltaY * 0.0015)); }, { passive: false });
 canvas.addEventListener('pointerdown', (e) => {
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (touches.size >= 2) { pinch0 = spread(); downAt = null; looking = false; return; }
   canvas.setPointerCapture(e.pointerId);
   downAt = { x: e.clientX, y: e.clientY, id: e.pointerId, on: false, t: performance.now() };
   looking = false;
   $('hint').classList.remove('on');
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (touches.size >= 2) { const d = spread(); if (pinch0 > 0 && d > 0) zoomBy(pinch0 / d); pinch0 = d; return; }
   if (!downAt || downAt.id !== e.pointerId) return;
   const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
   if (!looking && Math.hypot(dx, dy) > 10) looking = true;
@@ -455,6 +479,8 @@ canvas.addEventListener('pointermove', (e) => {
   }
 });
 const up = (e: PointerEvent) => {
+  touches.delete(e.pointerId);
+  if (touches.size < 2) pinch0 = 0;
   if (downAt?.id !== e.pointerId) return;
   // (a tap: on a way, there; on open ground near one, there; anywhere else, the nearest place on a way to where it falls on the hill)
   if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600) {
@@ -485,7 +511,9 @@ const cam = { t: [0, 0, 0] as V3, x: 0 };
 let camInit = false;
 function camera(p: V3, dt: number) {
   const k = 1 - Math.exp(-dt * 2.2);
-  const target: V3 = [p[0], p[1] + 1.2, p[2] + 7];
+  // (looking a little ahead up the hill; nearer, as the camera comes nearer, so the walker keeps their place in the print)
+  const ahead = 7 * (zoomN + (1 - zoomN) * ease(inkT));
+  const target: V3 = [p[0], p[1] + 1.2, p[2] + ahead];
   if (!camInit) { cam.t = [...target]; cam.x = p[0]; camInit = true; }
   for (let i = 0; i < 3; i++) cam.t[i] += (target[i] - cam.t[i]) * k;
   // (it swings across slowly as the path zigzags)
@@ -494,7 +522,8 @@ function camera(p: V3, dt: number) {
   if (!looking && performance.now() - lookAt0 > 2500) { lookYaw *= Math.exp(-dt * 1.2); lookPitch *= Math.exp(-dt * 1.2); }
   const aspect = canvas.width / canvas.height;
   // (the composition view stands further off: the camera eases back as it comes in, and in again as it goes)
-  const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (1 + 0.8 * ease(inkT));
+  const zk = ease(inkT), zoom = zoomN + (zoomI - zoomN) * zk;
+  const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (1 + 0.8 * zk) * zoom;
   const pitch = 0.76 + lookPitch, yaw = lookYaw;
   const t: V3 = [cam.x + (cam.t[0] - p[0]) * 0, cam.t[1], cam.t[2]];
   t[0] = cam.x;
@@ -635,7 +664,7 @@ function frame(now: number) {
   for (const tp of nearTemples) if (!tp.gate) { const d = Math.hypot(tp.c[0] - pos[0], tp.c[2] - pos[2]); lean = (tp.c[0] - pos[0]) * 0.45 * (1 - smoothstep(9, 16, d)); }
   const { eye, t } = camera([pos[0] + lean, pos[1], pos[2]], dt);
   const aspect = W / H;
-  const near = 1, far = 160 + 100 * ease(inkT);
+  const near = 1, far = (160 + 100 * ease(inkT)) * Math.max(1, zoomI * ease(inkT));
   const fov = aspect < 1 ? 0.56 : 0.42;
   const v = lookAt(eye, t);
   const vp = mulM(perspective(fov, aspect, near, far), v.m);
@@ -698,7 +727,7 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
