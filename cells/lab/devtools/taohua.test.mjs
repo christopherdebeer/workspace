@@ -27,7 +27,11 @@ await withWood(async (wood) => {
 
   // 1. a key during the arrival
   {
-    const page = await wood.open('seed=1&intro=33');
+    // (a couple of seconds before its end, however long it is)
+    const probe = await wood.open('seed=1&intro=0');
+    const T = await probe.evaluate(() => window.__taohua.arriveT);
+    await probe.close();
+    const page = await wood.open(`seed=1&intro=${(T - 2).toFixed(1)}`);
     const t0 = await s(page);
     c.ok('the arrival is going on', t0.intro >= 0 && t0.intro < t0.arriveT, t0.intro);
     await page.keyboard.press('ArrowUp');
