@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:9af0b704421530cf07500648c7a3e5ec8fbfed463b4229178c6a676e0a1a4d31",
-  "syncedAt": "2026-10-13T23:47:59.066Z",
+  "treeVersion": "tree:6057997c5f696d1a70eee14a9cf57e4699914351a284ebf6fa97669086f30632",
+  "syncedAt": "2026-10-13T23:58:51.166Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -80,7 +80,7 @@
     "client/squishy/jelly.ts": "sha256:0f2098a9ff51b2d61eb2cd60be56e4cb42c292b0119db0e63aecddbdbd3cd3b2",
     "client/squishy/kitchen.ts": "sha256:8ba9ca8e0f9e0a7cb85eae8ff5506be5e6c94dd054cfbfbf55a9dc79d4dccf8b",
     "client/squishy/level.ts": "sha256:ec444a47715582fa4768e49e013ce41317026bd645075ec072293dad2c36f3c0",
-    "client/squishy/main.ts": "sha256:b6ee325b42e4e8eb9e30362a9f43216afe17c7e237229bc0ca278f84decbc2d3",
+    "client/squishy/main.ts": "sha256:e2c0144f0bf666052467ad9b5045211e247d4654ac342b54a59814f2356078b9",
     "client/squishy/mesh.ts": "sha256:84fb47b2739905d2a73e5cb3b21301999492a837baf465c58e39d229ebe7b4f9",
     "client/squishy/props.ts": "sha256:020026d043a0b584aee518e32be7ce1b969ec799ae5cacc019877bc5ee5ff41b",
     "client/squishy/title.ts": "sha256:82fdd43d20e2cc40c70a5630053ae6db27adfb9f41797a591f1457c1647d9b4e",
@@ -203,7 +203,7 @@
     "static/seals.html": "sha256:e0ee6da6d97c90aba4ab57affd0d8680f42e1e543e26f09049926243a9c5a21d",
     "static/seals.md": "sha256:ac3cdc89b52cd09e57910ff68b2ab49645ac9279b95178e5fbc1e2ea84180bb0",
     "static/squishy.html": "sha256:25015f31c2d13e258eae6e41ee0820c1023d584dab0d1b6f48962f7d3228662f",
-    "static/squishy.md": "sha256:e776433f341d7a014739d03f53c70a3f6a3423ea48437578a05160513b746c6b",
+    "static/squishy.md": "sha256:f98d788988eb4cce1f7d9a51eb399d348156af0caac32f8c99776ffde2020b24",
     "static/taohua.html": "sha256:b9a7e79efe3ae7599967f4da1941737cfe7ead55243f6977ad356254a88dfe6e",
     "static/taohua.md": "sha256:ff3ef5a040d196f5f5222ac75296fab9a9e8c817a1af6214db71dd89952219c0",
     "static/technic.html": "sha256:2558d2e003449ac4f6b054415f3380d157e382c4e0876b6cb316d285088cec3a",
