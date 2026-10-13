@@ -36,3 +36,20 @@ export function bench(ways: Ways, scene: Scene): [number, number] {
   const z = s.focus - s.back;
   return [ways.water.xAt(st, s.focus) + s.side, z];
 }
+
+/**
+ * The ways bench: places on one hill (seed 1) where a kind of way can be studied, each looking up it
+ * from a little below (`?bench=ways&scene=flight|rock|timber|cut|bend|steep`, best with `review`;
+ * trees left out, so the way's drawing stands alone). Found by searching the hill for: the
+ * longest flight of each kind of stair, the deepest cut beside a trail, its sharpest bend, its
+ * steepest stretch. (They're the hill's own places, so they move if the ways are laid differently.)
+ */
+export const WAY_SCENES = {
+  flight: 'w26:0.5',
+  rock: 'w9:21.3',
+  timber: 'w0:8.4',
+  cut: 'w0:44.0',
+  bend: 'w17:40.0',
+  steep: 'w1:12.0',
+} as const;
+export type WayScene = keyof typeof WAY_SCENES;

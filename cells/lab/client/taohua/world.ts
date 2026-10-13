@@ -11,6 +11,7 @@ import { identify, moving } from '../changes/model';
 import { inStation, stationsNear, type Station } from './compose';
 import { clearOfDeer, deerNear } from './herds';
 import { obstacleMarks, streamMarks } from './marks';
+import { wayMarks, type WayKind } from './pathmarks';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3, type Way } from './ways';
 import type { Water } from './water';
 
@@ -21,7 +22,7 @@ export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
 const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24, ring: 25, eddy: 26, archReflect: 27, deer: 28, mark: 29 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24, ring: 25, eddy: 26, archReflect: 27, deer: 28, mark: 29, stroke: 30 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -180,6 +181,28 @@ export function groundCut(ways: Ways, x: number, z: number): { y: number; cut: n
   const f = smooth(bench, bench + bank, nr.d);
   const g = level + diff * f;
   return ways.water.bed(x, z, g);
+}
+
+/**
+ * A way's cross-section to one side (sd, ±1, across it), so far along it, as groundCut makes it: how
+ * far out its bench's edge is, how far out its bank ends (where it meets the hill), and how high the
+ * bank stands there (above the bench: a cut; below it: a fill).
+ */
+export function bankAt(ways: Ways, w: Way, u: number, sd: number): { bench: number; top: number; diff: number } {
+  const m = ways.at(w, u, true);
+  const level = m.p[1] - 0.04 - (ways.stairAt(w, u) ? 0.34 : 0.08);
+  const rag = noise1(w.n * 977 + 5, u * 0.6);
+  const bench = WIDTH / 2 + 0.12 + 0.25 * rag;
+  const nat = (d: number) => {
+    const x = m.p[0] + m.dir[1] * d * sd, z = m.p[2] - m.dir[0] * d * sd, k = smooth(1.3, 3.4, d);
+    return ways.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04;
+  };
+  let top = bench + 1, diff = 0;
+  for (let i = 0; i < 2; i++) {
+    diff = nat(top) - level;
+    top = bench + (diff > 0 ? 0.3 + Math.abs(diff) * (0.7 + 0.5 * rag) : 0.55 + Math.abs(diff) * (1.5 + 0.6 * rag));
+  }
+  return { bench, top, diff };
 }
 
 /** a temple's stair: so many steps, each so deep, from so high (above the temple's foot) at its foot up to its terrace */
@@ -347,7 +370,9 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     let v = gv.get(key);
     if (!v) {
       const nr = ways.nearest(x, z), worn = ways.stairAt(nr.w, nr.u) || trailKind(seed, nr.w, nr.u) !== 'trail' ? 0 : 1 - smooth(0.5, 1.3 + 0.9 * noise1(nr.w.n * 31, nr.u * 0.5), nr.d), gc = groundCut(ways, x, z);
-      v = [x, gc.y, z, 0, 1, 0, worn, gc.cut, 0, M.ground]; gv.set(key, v); cutAt.set(key, gc.cut);
+      // (beside a way, its banks are hatched by marks of their own (pathmarks.ts), not by the drawing: so marked, -1)
+      const byWay = ways.dryOf(x, z) > 2.5 ? -(1 - smooth(4.2, 5, nr.d)) : 0;
+      v = [x, gc.y, z, 0, 1, 0, worn, gc.cut, byWay, M.ground]; gv.set(key, v); cutAt.set(key, gc.cut);
     }
     return v;
   };
@@ -575,6 +600,28 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
       else if (pick < 0.8) tuft(mesh, ways, x, z, fr, 2 + Math.floor(fr() * 4));
       else petals.push(x, ground(ways, x, z) + 0.03, z, ramp(fr, 0.04, 0.08), fr() * Math.PI, fr() * 0.5);
     }
+  }
+  // the marks along each way: the top of its cut and strokes down the bank, its bed's edge, a trail's
+  // wear and runnels, a tread's worn edge (see pathmarks.ts)
+  {
+    const yAt = new Map<string, number>();
+    const Y = (x: number, z: number) => { const key = `${x},${z}`; let y = gv.get(key)?.[1] ?? yAt.get(key); if (y === undefined) { y = ground(ways, x, z); yAt.set(key, y); } return y; };
+    // (the ground's height as the sheet draws it: across its triangles, coarse or fine as it's laid)
+    const surf = (x: number, z: number) => {
+      const xa = x0 + Math.floor((x - x0) / 1.5) * 1.5, za = z0 + Math.floor((z - z0) / 1.5) * 1.5;
+      const S = ways.dryOf(xa + 0.75, za + 0.75) > 3.5 && ways.nearest(xa + 0.75, za + 0.75).d > WIDTH / 2 + 3.2 ? 1.5 : 0.5;
+      const xs = xa + Math.floor((x - xa) / S) * S, zs = za + Math.floor((z - za) / S) * S, fx = (x - xs) / S, fz = (z - zs) / S;
+      const y00 = Y(xs, zs), y11 = Y(xs + S, zs + S);
+      return fz >= fx ? y00 + fz * (Y(xs, zs + S) - y00) + fx * (y11 - Y(xs, zs + S)) : y00 + fx * (Y(xs + S, zs) - y00) + fz * (y11 - Y(xs + S, zs));
+    };
+    const kind = (w: Way, u: number): WayKind => {
+      if (w.cross && u > w.cross.u0 - 0.5 && u < w.cross.u1 + 0.5) return 'wet';
+      const st = ways.stairAt(w, u);
+      return st ? stairKind(seed, w, w.stairs.indexOf(st)) : trailKind(seed, w, u);
+    };
+    const own = (x: number, z: number) => inT(x, z) && !onTemple(x, z, 0.2) && !inStation(sts, x, z, 0);
+    const push = (v: number[]) => { mesh.v.push(...v); };
+    for (const w of near) wayMarks(push, { ways, seed, tile: [x0, x1, z0, z1], own, surf, bank: (ww, u, sd) => bankAt(ways, ww, u, sd), kind }, w, M.stroke);
   }
   // grass in tufts along the ways' edges, more along a trail, and here and there on the hill
   for (const w of near) {

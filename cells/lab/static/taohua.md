@@ -74,8 +74,7 @@ stand as they grow, over a way too: nothing is cut out of a crown to show what's
 A way meets the hill by degrees, not at a line. Each is benched into the hill: across it and a
 little either side, the ground lies level with its middle; uphill of that, a cut bank rises quickly
 to the hill, and downhill a fill slope falls more gently to it, the bench's edge and the banks'
-widths ragged along the way; where a bank's steeper than the hill it's hatched in short grey strokes
-down it, as the prints hatch a bank. From the way's edge out, a fringe of loose pebbles, tufts and
+widths ragged along the way. From the way's edge out, a fringe of loose pebbles, tufts and
 drifted petals thins away into the open hill, in loose groups; by a stair, a few stones spilt from
 it lie half sunk in the bank. The worn earth of a trail spreads unevenly either side of it.
 
@@ -92,6 +91,24 @@ edge. Over a marsh, a boardwalk of planks on posts.
 
 At the head of a stair, now and then, there's a landing: a broader place, paved in cracked ice, to
 stand and look; by it, a stone lantern (石灯籠), a bench, or a cairn.
+
+The ways are drawn as the water is: the paper, and marks only where something happens, each its own
+geometry with its reason (pathmarks.ts), lying on the ground as it's laid. Where a way's cut into the
+hill, a line along the top of the cut, where it begins, broken, heavier the higher it stands; and
+hanging from it, strokes down the bank, in groups, each leaning its own way, mostly short, now and
+then one long, closer where it's steep, fewer where the way turns sharply (strokes square to it there
+would fan out). Its bed's edge is a fine line, broken: more of it under a cut than down the hill,
+where the way's built out and meets the hill by degrees; none beside a stair or flags, whose slabs
+and kerbs are their edge. A trail's trodden earth is a faint warm wash, gone toward its edges, with
+now and then a long stroke along it where feet have worn it, crowding the inside of a bend, and where
+it's steep, a short wandering runnel. On a stair of slabs, the worn edge of a tread, at the flight's
+foot and head and now and then between. All are heavier where something happens (a flight's foot or
+head, a way's ends, a crossing) and lighter between. In the marks view (`?marks`) they're coloured by
+what made them: edge teal, cut magenta, bank brown, wear blue, tread orange, runnel green.
+
+`?bench=ways&scene=flight|rock|timber|cut|bend|steep` (best with `review`) shows a place on one hill
+(seed 1) where a kind of way can be studied, looking up it, with the trees left out: the longest
+flight of each kind of stair, the deepest cut beside a trail, its sharpest bend, its steepest stretch.
 
 ## The water
 

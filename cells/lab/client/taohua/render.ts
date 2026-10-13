@@ -134,13 +134,13 @@ void main() {
         vec2 fall = normalize(nf.xz + 1e-4), con = vec2(-fall.y, fall.x);
         vec2 ph = vec2(dot(vW.xz, fall) * 1.3 - vW.y, dot(vW.xz, con));
         float h = strokes(ph, .2, .8, .12 + .4 * steep, 15., max(fwidth(ph.y), 1e-5), .75, .015, 0.);
-        c = mix(c, GREY, h * .8 * smoothstep(.0, .5, steep));
+        // (none beside a way: its banks have marks of their own, see pathmarks.ts)
+        c = mix(c, GREY, h * .8 * smoothstep(.0, .5, steep) * clamp(1. + vC.b, 0., 1.));
       }
     }
     if (vC.b <= 0. && vC.r > 0.) {
-      // (along a trail, a few strokes of grey, as the brush went along it: a worn way)
-      float st = step(.7, noise(vec3(vW.x * 1.3, vW.z * 11., 1.))) * step(.45, noise(vW * .8));
-      if (st * vC.r > .5) c = GREY;
+      // (along a trail, trodden: a faint warm wash, gone toward its edges; its wear is drawn in marks)
+      c = mix(c, vec3(.86, .8, .7), .2 * vC.r * (.8 + .4 * noise(vW * .6)));
     }
     if (vC.b > 0.) {
       // (a patch of shade: grey laid on in strokes across, as a dry brush does, thinning out toward its edge)
@@ -248,7 +248,7 @@ void main() {
     if (!fall && !lip) c = mix(c, vec3(.7, .76, .78), .16 * (1. - smoothstep(.05, .75, inn)));
     if (uMarks > .5) c = PAPER;
     lit = 1.;
-  } else if (vM == ${M.mark}) {
+  } else if (vM == ${M.mark} || vM == ${M.stroke}) {
     // a mark on the water: a ribbon, its edge drawn smooth however thin it is (its coverage, from how
     // wide it is on the glass), broken here and there along it as a dry brush breaks; ink on the paper.
     // (vC: across it, -1 to 1; along it, 0 to 1; its family, and after the point its weight)
@@ -258,8 +258,10 @@ void main() {
     float dry = smoothstep(.18, .32, noise(vec3(vW.xz * 7.5, fam * 3.1)));
     float a = cov * weight * mix(.55, 1., dry);
     if (a < .02) discard;
-    vec3 col = vec3(.2, .22, .23);
-    if (uMarks > .5) col = fam < .5 ? vec3(.15, .35, .8) : fam < 1.5 ? vec3(.85, .2, .15) : fam < 2.5 ? vec3(.15, .6, .25) : fam < 3.5 ? vec3(.55, .2, .7) : fam < 4.5 ? vec3(.9, .5, .1) : vec3(.4, .4, .4);
+    // (the water's cool; the ways' warm, as the brush is on the hill)
+    vec3 col = vM == ${M.stroke} ? vec3(.25, .22, .19) : vec3(.2, .22, .23);
+    if (uMarks > .5 && fam > 5.5) col = fam < 6.5 ? vec3(.1, .6, .6) : fam < 7.5 ? vec3(.8, .1, .5) : fam < 8.5 ? vec3(.5, .35, .1) : fam < 9.5 ? vec3(.2, .3, .9) : fam < 10.5 ? vec3(.9, .45, .1) : vec3(.3, .7, .2);
+    else if (uMarks > .5) col = fam < .5 ? vec3(.15, .35, .8) : fam < 1.5 ? vec3(.85, .2, .15) : fam < 2.5 ? vec3(.15, .6, .25) : fam < 3.5 ? vec3(.55, .2, .7) : fam < 4.5 ? vec3(.9, .5, .1) : vec3(.4, .4, .4);
     c = mix(PAPER, col, min(1., a));
     n = vec3(0., 1., 0.);
     lit = 1.;
@@ -480,7 +482,7 @@ void main() {
   float ink = 0., stone = 0., coral = 0., shore = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
   bool w0 = (m0 >= ${M.water} && m0 <= ${M.archReflect}) || m0 == ${M.mark};
-  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || (m0 >= ${M.water} && m0 <= ${M.archReflect}) || m0 == ${M.mark}, s0 = m0 == ${M.step} || m0 == ${M.stone};
+  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || (m0 >= ${M.water} && m0 <= ${M.archReflect}) || m0 == ${M.mark} || m0 == ${M.stroke}, s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
     float di = texture(uD, uv).r;
@@ -492,9 +494,11 @@ void main() {
     float jump = smoothstep(.025, .06, (zi - z0) / z0);
     float turn = smoothstep(.35, .6, 1. - dot(n0, ni));
     float meet = mi != m0 && zi >= z0 * .998 ? 1. : 0.;
+    // (a way's marks lie on what they're drawn on, and take no line of their own)
+    if ((m0 == ${M.stroke} || mi == ${M.stroke}) && jump < .5) continue;
     if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
     if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
-    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || (mi >= ${M.water} && mi <= ${M.archReflect}) || mi == ${M.mark}, si = mi == ${M.step} || mi == ${M.stone};
+    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || (mi >= ${M.water} && mi <= ${M.archReflect}) || mi == ${M.mark} || mi == ${M.stroke}, si = mi == ${M.step} || mi == ${M.stone};
     // (the water's edge: a fine line, on the water's side, where it meets the hill)
     // (not where the sheet drops from level to level, whose steps aren't its shore)
     if (w0 && n0.y > .92 && (mi == ${M.ground} || mi == ${M.earth})) shore = 1.;
@@ -512,7 +516,7 @@ void main() {
   // (the water's edge broken now and then, in long lengths, and lighter than the ink)
   shore *= smoothstep(.22, .36, noise(wp.xyz / wp.w * .9 + 17.)) * (.45 + .2 * noise(wp.xyz / wp.w * 4. + 5.));
   // (the marks view: everything but the water's marks faded nearly to the paper, its lines too)
-  if (uMarks > .5) { if (m0 != ${M.mark}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; shore *= .15; }
+  if (uMarks > .5) { if (m0 != ${M.mark} && m0 != ${M.stroke}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; shore *= .15; }
   c = mix(c, vec3(.24, .26, .27), shore);
   c = mix(c, vec3(.64, .25, .23), coral * .32);
   c = mix(c, vec3(.25, .21, .18), stone * .82);

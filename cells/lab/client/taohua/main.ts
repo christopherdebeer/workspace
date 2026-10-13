@@ -18,7 +18,7 @@ import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
 import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, TSTEP, ground, groundCut, makeBand, setBench, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
-import { bench, SCENES, type Scene } from './bench';
+import { bench, SCENES, WAY_SCENES, type Scene, type WayScene } from './bench';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -50,6 +50,9 @@ const setInk = (on: boolean) => {
 document.getElementById('inkt')?.addEventListener('click', () => setInk(!ink));
 setInk(ink);
 const PASS = 'journey-1';
+// (the ways bench: fixed places on one hill, each a kind of way to study; see bench.ts)
+const waysScene = params.get('bench') === 'ways' ? WAY_SCENES[(params.get('scene') ?? 'flight') as WayScene] ?? WAY_SCENES.flight : null;
+if (waysScene) { params.set('seed', '1'); params.set('at', waysScene); }
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
@@ -71,6 +74,7 @@ if (benchScene) {
   params.set('at', `@${bx.toFixed(2)},${bz.toFixed(2)}`);
   document.body.classList.add('bench');
 }
+if (waysScene) { setBench(true); document.body.classList.add('bench'); }
 
 // ─── Changes: at each station a cast, its words inked on the hillside in the space kept for it ──
 // (the words come from a sheet, ink on nothing: each hexagram's name, its characters one under the
