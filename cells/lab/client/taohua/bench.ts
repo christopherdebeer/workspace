@@ -88,7 +88,7 @@ export function treeBench(ways: Ways, scene: TreeScene, n: number): { at: [numbe
     { x: TX - 3.4, z: 60, seed: s(0), iso: 0 },
     { x: TX + 3.4, z: 60, seed: s(0), iso: 1 },
     { x: TX, z: 140, seed: s(0), iso: 0.6, rocks: true },
-    { x: TX - 2.5, z: 207, seed: s(0), iso: 0.6 },
+    { x: TX - 1.5, z: 206.2, seed: s(0), iso: 0.6 },
   ];
   // (the grove: a grid, jittered, as the hill's own are)
   for (let gx = -2; gx <= 2; gx++) for (let gz = -1; gz <= 2; gz++) {

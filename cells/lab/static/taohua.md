@@ -214,7 +214,10 @@ along them, curled ridge ends or a finial at the peak.
 ## The trees
 
 Each peach tree is grown as the print draws one: a bold trunk you can see, leaning, kinked, before
-it opens into three or four limbs that spread up and out to either side across the picture. Every
+it opens into three or four limbs that spread up and out to either side across the picture. Each
+has its own form: most open from a short trunk into a vase of limbs; some keep a leader, their limbs
+from it in two tiers; some fork low into two stems; some lean hard, their limbs thrown out the way
+they lean; some are low and broad, their limbs spreading wide and level. Every
 limb is a long run thinning steadily, wandering a little along its way, then forking two or three
 ways at a narrow angle, and again, four times over, ending in a lace of hairline twigs out to the
 crown's edge, with spurs out of the turns along the way. The branching spreads across the view,
@@ -230,12 +233,17 @@ the thinner crowns (most trees are full, some thinner, each its own).
 The blossom's tone keeps
 the crown's structure, pale where it's lit and high, deep beneath, dappled with pale dabs and deep
 recesses in clusters; each tree is its own pink.
+No clump of blossom is left adrift: as the eye sees a crown, a clump or two off by themselves, held up
+by twigs too fine to see, would read as blobs, so they're not grown, and their twigs show bare past the
+crown. Where one crown stands before another (well before it, not only a clump of it among the
+other's), the one behind is drawn deeper along the edge, a band a few pixels wide, as the prints part
+crown from crown: a grove is crowns among crowns, not one pink mass.
 
 `?bench=tree&scene=lone|pair|grove|rocks|water|lineup&tree=N` (best with `review`) is a hill of its
 own, no ways on it and one pond, with trees set out as given, each grown from its own seed (`tree`
 chooses which): one tree alone; the same tree twice, as the orchard draws it (right) and as it's drawn
 standing alone (left); a grove, crowns among crowns; a tree with an outcrop behind it; a tree above a
-still pond; and three side by side, each its own. The same trees every time, so the drawing of a tree
+still pond, close enough to the shore that its blossom shows in the water; and three side by side, each its own. The same trees every time, so the drawing of a tree
 can be changed and compared against itself, and against what stands about it.
 
 ## The print

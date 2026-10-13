@@ -408,7 +408,8 @@ void main() {
   c = mix(c, PAPER, smoothstep(85., 150., d) * .55);
   oC = vec4(c, 1.);
   vec3 n = normalize(uRight * vQ.x + uUp * vQ.y - uFwd * z);
-  oA = vec4(n * .5 + .5, ${M.blossom}. / 31.);
+  // (in place of the normal's depth, which crown this is: so the drawing can tell one from the next)
+  oA = vec4(n.xy * .5 + .5, floor(vSeed) / 255., ${M.blossom}. / 31.);
 }`;
 
 /** a petal: a little teardrop, lying flat or turning in the air */
@@ -509,6 +510,16 @@ void main() {
     else ink = max(ink, e);
   }
   if (d0 >= 1.) { ink = 0.; coral = 0.; stone = 0.; shore = 0.; }
+  // (where one crown stands before another, the one behind is deeper along the edge, a band a few
+  // pixels wide, as the prints part crown from crown: each crown its own mass, not one pink sea)
+  float crown = 0.;
+  if (m0 == ${M.blossom}) for (int i = 0; i < 4; i++) for (int k = 1; k <= 3; k++) {
+    vec2 uv = vUV + offs[i] * float(k);
+    vec4 ai = texture(uA, uv);
+    if (int(ai.a * 31. + .5) != ${M.blossom} || abs(ai.b - a0.b) < .5 / 255.) continue;
+    float di = texture(uD, uv).r;
+    if (di < 1. && lin(di) < z0 - max(1.2, z0 * .04)) crown = max(crown, 1. - float(k - 1) * .3);
+  }
   // (the stone's line broken, as a dry brush leaves it)
   // (where on the hill this is, so the breaks stay with the stone, not the glass)
   vec4 wp = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
@@ -518,7 +529,7 @@ void main() {
   // (the marks view: everything but the water's marks faded nearly to the paper, its lines too)
   if (uMarks > .5) { if (m0 != ${M.mark} && m0 != ${M.stroke}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; shore *= .15; }
   c = mix(c, vec3(.24, .26, .27), shore);
-  c = mix(c, vec3(.64, .25, .23), coral * .32);
+  c = mix(c, vec3(.64, .25, .23), max(coral * .32, crown * .5));
   c = mix(c, vec3(.25, .21, .18), stone * .82);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
   if (uInk > .002) {

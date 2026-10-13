@@ -1223,13 +1223,28 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   if (ways.dryOf(base[0], base[2]) < 1.6) return;
   for (const dz of [1.5, 3, 4.5, 6]) { const w = ways.water.at(base[0], base[2] + dz); if (w && w.s < 0) return; }
   // (a trunk you can see: tall before it opens, leaning, with a kink or two; bold, as the print's are)
+  // (each tree its own form: most open from a short trunk into a vase of limbs; some keep a leader,
+  // limbs from it in two tiers; some fork low into two stems; some lean hard, their limbs thrown out
+  // the way they lean; some are low and broad, their limbs spreading wide and level)
+  const fv = seeded(hash(Math.round(base[0] * 100), Math.round(base[2] * 100), 0xf0a))();
+  const form = fv < 0.36 ? 'vase' : fv < 0.55 ? 'leader' : fv < 0.71 ? 'twin' : fv < 0.86 ? 'lean' : 'low';
   const stature = ramp(r, 0.82, 1.3) * (1 + 0.22 * iso);
-  const H = ramp(r, 1.6, 2.6) * stature, lean: V3 = norm([ramp(r, -0.4, 0.4), 1, ramp(r, -0.15, 0.3)]);
+  const H = ramp(r, 1.6, 2.6) * stature * (form === 'leader' ? 1.4 : form === 'low' ? 0.62 : 1);
+  const lean0 = ramp(r, -0.4, 0.4), leanSd = lean0 < 0 ? -1 : 1;
+  const lean: V3 = norm([form === 'lean' ? leanSd * (0.75 + Math.abs(lean0)) : lean0, 1, ramp(r, -0.15, 0.3)]);
   const R0 = ramp(r, 0.24, 0.34) * stature;
   const knee = add(base, add(mul(lean, H * 0.5), [ramp(r, -0.2, 0.2), 0, ramp(r, -0.1, 0.1)]));
   const top = add(knee, mul(norm(add(lean, [ramp(r, -0.35, 0.35), 0.3, ramp(r, -0.1, 0.2)])), H * 0.5));
-  mesh.tube([base[0], base[1] - 0.3, base[2]], knee, R0 * 1.4, R0 * 1.05, INK.trunk, M.trunk, 8);
-  mesh.tube(knee, top, R0 * 1.05, R0 * 0.88, INK.trunk, M.trunk, 8);
+  // (the twin's two stems: from a fork low on the trunk, out either side and up)
+  const fork = add(base, mul(lean, H * 0.32));
+  const stems: V3[] = form === 'twin' ? [-1, 1].map((sd) => add(fork, mul(norm([lean[0] + sd * 0.42, 1, lean[2] + sd * 0.08]), H * 0.85))) : [top];
+  if (form === 'twin') {
+    mesh.tube([base[0], base[1] - 0.3, base[2]], fork, R0 * 1.45, R0 * 1.15, INK.trunk, M.trunk, 8);
+    for (const st of stems) mesh.tube(fork, st, R0 * 0.85, R0 * 0.66, INK.trunk, M.trunk, 8);
+  } else {
+    mesh.tube([base[0], base[1] - 0.3, base[2]], knee, R0 * 1.4, R0 * 1.05, INK.trunk, M.trunk, 8);
+    mesh.tube(knee, top, R0 * 1.05, R0 * 0.88, INK.trunk, M.trunk, 8);
+  }
   const limbsFrom = mesh.v.n;
   const ends: Array<[V3, V3, number]> = [];
   const UP: V3 = [0, 1, 0];
@@ -1282,14 +1297,21 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
     }
   };
   // (the limbs: three or four, up and out to either side across the picture from the top of the trunk; now and then one lower down)
-  const limbs = 3 + (r() < 0.45 ? 1 : 0), a0 = ramp(r, -0.4, 0.4);
+  const limbs = 3 + (r() < 0.45 ? 1 : 0) + (form === 'leader' || form === 'twin' ? 1 : 0), a0 = ramp(r, -0.4, 0.4);
+  // (how wide the limbs spread, and how level: the low tree's wide and flat; the leader's narrower, up)
+  const spread = form === 'low' ? 1.5 : form === 'leader' ? 0.85 : 1.15, rise = form === 'low' ? 0.62 : 1;
   for (let i = 0; i < limbs; i++) {
     // (spread across: from up-left to up-right, the middle ones the more upright)
-    const t = limbs === 1 ? 0.5 : i / (limbs - 1), a = -1.15 + 2.3 * t + a0 * 0.4 + ramp(r, -0.18, 0.18);
-    const d = fan(norm([Math.sin(a) + lean[0] * 0.3, Math.cos(a) * ramp(r, 0.85, 1.15), ramp(r, -0.6, 0.6)]));
-    grow(top, d, ramp(r, 1.3, 1.9) * stature, R0 * 0.56, 0);
+    const t = limbs === 1 ? 0.5 : i / (limbs - 1);
+    let a = -spread + 2 * spread * t + a0 * 0.4 + ramp(r, -0.18, 0.18);
+    // (the leaning tree throws its limbs out the way it leans)
+    if (form === 'lean') a = a * 0.75 + leanSd * 0.45;
+    const d = fan(norm([Math.sin(a) + lean[0] * 0.3, Math.cos(a) * ramp(r, 0.85, 1.15) * rise, ramp(r, -0.6, 0.6)]));
+    // (from where: the top; on a leader, the lower tier from part way up; on a twin, each stem its side)
+    const from = form === 'twin' ? stems[t < 0.5 ? 0 : 1] : form === 'leader' && i % 2 === 0 ? add(base, mul(sub(top, base), 0.62)) : top;
+    grow(from, d, ramp(r, 1.3, 1.9) * stature * (form === 'low' ? 1.15 : 1), R0 * 0.56, 0);
   }
-  if (r() < 0.5) { const sd = r() < 0.5 ? -1 : 1; grow(knee, fan(norm([sd, 0.7, ramp(r, -0.4, 0.4)])), ramp(r, 1.1, 1.5) * stature, R0 * 0.45, 1); }
+  if (r() < 0.5) { const sd = r() < 0.5 ? -1 : 1; grow(form === 'twin' ? fork : knee, fan(norm([sd, 0.7, ramp(r, -0.4, 0.4)])), ramp(r, 1.1, 1.5) * stature, R0 * 0.45, 1); }
   const tips = ends;
   // the crown's middle, for its lighting
   let cx = 0, cy = 0, cz = 0;
@@ -1310,6 +1332,9 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   // (each tree its own pink, a little deeper or paler than the next)
   const t0 = ramp(r, -0.24, 0.12);
   const crownSeed = r();
+  // (which crown: for the drawing, so where one crown stands before another it can say so)
+  const cid = 1 + Math.floor(crownSeed * 250);
+  const puffsFrom = puffs.length;
   // (each tree its own fullness: most crowns full, some thinner, where more of the limbs show)
   let full = r() < 0.7 ? ramp(r, 0.85, 1) : ramp(r, 0.55, 0.75);
   if (iso > 0) full *= 1 - 0.3 * iso;
@@ -1328,7 +1353,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       // (crowns stand as they grow, over a way too: the walker passes under them and comes out again)
       const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
       const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
-      puffs.push(q[0], q[1], q[2], rad, shade, crownSeed * 0.5 + r() * 0.5);
+      puffs.push(q[0], q[1], q[2], rad, shade, cid + (crownSeed * 0.5 + r() * 0.5) * 0.998);
     }
   }
   // (and the dome filled out behind its branches, so the crown is one full mass of blossom with the
@@ -1340,7 +1365,35 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
     const q: V3 = [cx + Math.cos(a) * rr * Rh + VIEW[0] * back, cy + up * Rv * 0.8 + VIEW[1] * back, cz + Math.sin(a) * rr * Rh * 0.6 + VIEW[2] * back];
     const out = norm([q[0] - cx, (q[1] - cy) * 1.8, q[2] - cz]);
     const shade = Math.max(0, Math.min(1, 0.55 + t0 + 0.26 * (out[0] * L[0] + out[1] * L[1] + out[2] * L[2]) + 0.2 * (q[1] - cy) + ramp(r, -0.04, 0.04)));
-    puffs.push(q[0], q[1], q[2], ramp(r, 0.5, 0.75) * Math.min(stature, 1.15), shade, crownSeed * 0.5 + r() * 0.5);
+    puffs.push(q[0], q[1], q[2], ramp(r, 0.5, 0.75) * Math.min(stature, 1.15), shade, cid + (crownSeed * 0.5 + r() * 0.5) * 0.998);
+  }
+  // (no clump adrift: as the eye sees the crown, a clump or two off by themselves, held up by twigs too
+  // fine to see, read as blobs, not blossom; so they go, and their twigs show bare past the crown)
+  {
+    const n = (puffs.length - puffsFrom) / 6, P = (i: number) => puffsFrom + i * 6;
+    const sx = new Float64Array(n), sy = new Float64Array(n), up: V3 = [0, VIEW[2], -VIEW[1]];
+    for (let i = 0; i < n; i++) { const o = P(i); sx[i] = puffs[o]; sy[i] = puffs[o + 1] * up[1] + puffs[o + 2] * up[2]; }
+    const root = Array.from({ length: n }, (_, i) => i);
+    const find = (i: number): number => (root[i] === i ? i : (root[i] = find(root[i])));
+    // (swept across, so only clumps near each other across the picture are compared)
+    const ord = Array.from({ length: n }, (_, i) => i).sort((a, b) => sx[a] - sx[b]);
+    let maxR = 0;
+    for (let i = 0; i < n; i++) maxR = Math.max(maxR, puffs[P(i) + 3]);
+    for (let a = 0; a < n; a++) {
+      const i = ord[a], ri = puffs[P(i) + 3];
+      for (let b = a + 1; b < n; b++) {
+        const j = ord[b], dx = sx[j] - sx[i];
+        if (dx > (ri + maxR) * 0.8) break;
+        const lim = (ri + puffs[P(j) + 3]) * 0.8, dy = sy[j] - sy[i];
+        if (dx * dx + dy * dy < lim * lim) root[find(i)] = find(j);
+      }
+    }
+    const area = new Map<number, number>(), count = new Map<number, number>();
+    for (let i = 0; i < n; i++) { const k = find(i), rr = puffs[P(i) + 3]; area.set(k, (area.get(k) ?? 0) + rr * rr); count.set(k, (count.get(k) ?? 0) + 1); }
+    const most = Math.max(0, ...area.values());
+    const keep: number[] = [];
+    for (let i = 0; i < n; i++) { const k = find(i); if (count.get(k)! > 3 || area.get(k)! >= most * 0.25) for (let q = 0; q < 6; q++) keep.push(puffs[P(i) + q]); }
+    puffs.length = puffsFrom; puffs.push(...keep);
   }
   // fallen blossom under it, where it's not the path: in drifts, stamped flowers and specks of red
   for (let k = 0; k < 4; k++) {
