@@ -338,19 +338,43 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
         // Worn slabs: clipped, unequal corners; continuous treads keep the walk surface level.
         const sr = seeded(h), hx = du / 2 + 0.03;
         const cut = () => 0.025 + sr() * 0.075;
-        const corners: Array<[number, number]> = [
-          [-hx + cut(), -half], [hx - cut(), -half + sr() * 0.04],
-          [hx, -half + cut()], [hx, half - cut()],
-          [hx - cut(), half], [-hx + cut(), half - sr() * 0.04],
-          [-hx, half - cut()], [-hx, -half + cut()],
-        ];
         const P = (u: number, v: number, y: number): V3 => [cc[0] + dir[0] * u + dir[1] * v, y, cc[2] + dir[1] * u - dir[0] * v];
-        const centre = P(0, 0, top);
-        for (let n = 0; n < corners.length; n++) {
-          const a = corners[n], b = corners[(n + 1) % corners.length];
-          const pa = P(a[0], a[1], top), pb = P(b[0], b[1], top);
-          mesh.tri(centre, pb, pa, INK.stepTop, M.step, [0, 1, 0]);
-          mesh.quad(P(a[0], a[1], top - 0.6), P(b[0], b[1], top - 0.6), pb, pa, INK.stepFace, M.step);
+        // (a slab, or a piece of one, from va to vb across the way; its top so high, tipped a little across)
+        const slab = (va: number, vb: number, y: number, tip: number) => {
+          const corners: Array<[number, number]> = [
+            [-hx + cut(), va], [hx - cut(), va + sr() * 0.04],
+            [hx, va + cut()], [hx, vb - cut()],
+            [hx - cut(), vb], [-hx + cut(), vb - sr() * 0.04],
+            [-hx, vb - cut()], [-hx, va + cut()],
+          ];
+          const Y = (v: number) => y + tip * (v - (va + vb) / 2);
+          const centre = P(0, (va + vb) / 2, y);
+          for (let n = 0; n < corners.length; n++) {
+            const a = corners[n], b = corners[(n + 1) % corners.length];
+            const pa = P(a[0], a[1], Y(a[1])), pb = P(b[0], b[1], Y(b[1]));
+            mesh.tri(centre, pb, pa, INK.stepTop, M.step, [0, 1, 0]);
+            mesh.quad(P(a[0], a[1], y - 0.6), P(b[0], b[1], y - 0.6), pb, pa, INK.stepFace, M.step);
+          }
+        };
+        // (weathered, now and then: cracked across, in two; sunk a little and tipped; or an end broken
+        // off, the piece lying by it)
+        const wear = sr();
+        if (wear < 0.1) { const c = ramp(sr, -0.3, 0.3) * half; slab(-half, c - 0.025, top, 0); slab(c + 0.025, half, top - 0.02, ramp(sr, -0.02, 0.02)); }
+        else if (wear < 0.17) slab(-half, half, top - 0.03, ramp(sr, -0.03, 0.03));
+        else if (wear < 0.26) {
+          const end = sr() < 0.5 ? -1 : 1, lost = ramp(sr, 0.25, 0.42);
+          if (end < 0) slab(-half + lost, half, top, 0); else slab(-half, half - lost, top, 0);
+          const lx = cc[0] + dir[1] * end * (half + 0.25), lz = cc[2] - dir[0] * end * (half + 0.25);
+          stone(mesh, ways, lx + ramp(sr, -0.15, 0.15), lz + ramp(sr, -0.15, 0.15), ramp(sr, 0.13, 0.2), sr);
+        } else slab(-half, half, top, 0);
+        // (moss and grass in the joint at the back of the tread, where the next step rises; and the
+        // fallen petals drifted against the riser there)
+        if (k < st.n - 1) {
+          for (const sd of [-1, 1]) if (sr() < 0.3) { const v = sd * (half - ramp(sr, 0.05, 0.25)); tuftAt(mesh, P(hx - 0.05, v, top), sr, 2 + Math.floor(sr() * 3), 0.6); }
+          if (sr() < 0.4) for (let q = 0, nq = 2 + Math.floor(sr() * 4); q < nq; q++) {
+            const pp = P(hx - ramp(sr, 0.02, 0.12), ramp(sr, -half, half) * (sr() < 0.6 ? 0.9 : 0.4), top + 0.012);
+            petals.push(pp[0], pp[1], pp[2], ramp(sr, 0.04, 0.08), sr() * Math.PI, sr() * 0.5);
+          }
         }
       }
       // (now and then, along one side of a stair, a wall of squared blocks holding the hill back, stepping up with it)
@@ -929,6 +953,17 @@ function restY(ways: Ways, x: number, z: number, lift: number): number {
   const wt = ways.water.at(x, z);
   if (wt && wt.s < -0.05) return wt.L + 0.015;
   return ground(ways, x, z) + lift;
+}
+
+/** A little grass at a given height (in a joint between stones): fine short blades, so tall (k). */
+function tuftAt(mesh: Mesh, at: V3, r: Rand, n: number, k = 1) {
+  for (let i = 0; i < n; i++) {
+    const a = r() * Math.PI * 2, lean = ramp(r, 0.15, 0.6), h = ramp(r, 0.08, 0.2) * k, w = ramp(r, 0.015, 0.025);
+    const bx = at[0] + Math.cos(a) * 0.05 * r(), bz = at[2] + Math.sin(a) * 0.05 * r();
+    const tip: V3 = [bx + Math.cos(a) * lean * h, at[1] + h, bz + Math.sin(a) * lean * h];
+    const px = -Math.sin(a) * w, pz = Math.cos(a) * w;
+    mesh.tri([bx - px, at[1] - 0.01, bz - pz], [bx + px, at[1] - 0.01, bz + pz], tip, INK.grass, M.grass, [0, 1, 0]);
+  }
 }
 
 /** A tuft of grass: a few blades, fine, leaning out from a clump; where the ground meets a rock or a wall. */
