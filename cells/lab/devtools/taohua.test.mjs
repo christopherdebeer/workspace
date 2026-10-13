@@ -110,9 +110,9 @@ await withWood(async (wood) => {
   {
     const look = async () => {
       const page = await wood.open('seed=1&at=w3:40&review');
-      // (the tiles come one a frame: wait for them to stop coming)
-      let n = -1;
-      for (let k = 0; k < 120; k++) { await page.waitForTimeout(500); const b = (await s(page)).bands; if (b === n) break; n = b; }
+      // (the tiles come one a frame, and a headless frame can take seconds: wait till none's come for a while)
+      let n = -1, same = 0;
+      for (let k = 0; k < 200 && same < 3; k++) { await page.waitForTimeout(1500); const b = (await s(page)).bands; same = b === n ? same + 1 : 0; n = b; }
       const t = await s(page);
       await page.close();
       return { bands: t.bands, puffs: t.puffs, pos: t.pos.map((v) => +v.toFixed(3)) };
