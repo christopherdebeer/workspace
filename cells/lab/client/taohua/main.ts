@@ -410,10 +410,13 @@ function sail(dt: number) {
   const drive = pushing();
   if (a.to) {
     // (brought in: to where it lies at the landing, slower as it comes)
-    const H = a.to.boat, dx = H[0] - a.p[0], dz = H[2] - a.p[1], d = Math.hypot(dx, dz), want = Math.min(0.75, 0.12 + d * 0.3);
+    // (round the end of the pier, if it stands between: out past its end first)
+    const across = (a.p[0] - JETTY.x) * (a.to.boat[0] - JETTY.x) < 0 && a.to.kind !== 'jetty' && a.p[1] > JETTY.z0 - 3;
+    const H: V3 = across ? [a.p[0] + (a.to.boat[0] - a.p[0]) * 0.15, RIVER_L, JETTY.z0 - 4.2] : a.to.boat;
+    const dx = H[0] - a.p[0], dz = H[2] - a.p[1], d = across ? Math.max(3, Math.hypot(dx, dz)) : Math.hypot(dx, dz), want = Math.min(0.75, 0.12 + d * 0.3);
     const k = 1 - Math.exp(-dt * 1.4);
     a.v[0] += ((dx / Math.max(d, 1e-3)) * want - a.v[0]) * k; a.v[1] += ((dz / Math.max(d, 1e-3)) * want - a.v[1]) * k;
-    if (d < 0.25) {
+    if (!across && d < 0.25) {
       if (a.to.kind === 'reeds') { a.resting = true; a.p = [H[0], H[2]]; a.v = [0, 0]; a.yaw = a.to.yaw; a.to = null; a.tip = null; }
       else { landAt(a.to); return; }
     }
