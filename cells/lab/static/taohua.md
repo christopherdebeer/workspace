@@ -409,6 +409,16 @@ read (a tap on them walks, like a tap on the hillside). Beside it, a small built
 flat stones, each smaller than the last (always where Mountain or Earth is in the cast), or a
 wayside shrine, a stone post with a little white niche under a roof of teal tiles.
 
+A tap on a cast's words opens its page: a sheet of paper over the painting, near the whole screen, to
+read it by (the painting set aside under it, not drawn, and the walker staying where they are). On it,
+the figure (its moving lines vermilion), its number, its name and, if it moves, 之 and the name of
+what it becomes, in English and pinyin; Legge's Judgment and Image (1882); its changing lines, from
+the bottom up, and all six behind a fold; a question to sit with; and where on the hill it was cast,
+the hill's own, the same each time it's read. The page is one of three paper surfaces
+(surfaces.ts), the others yet to be used: a drawer from the foot of the screen, for doing something
+there with the painting still seen above it, and a side sheet from an edge and on past it, for finding
+one's way. What's shown is kept apart from how it's shown. ✕, a tap beside it, or Escape puts it away.
+
 The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
 stones along its upper edge; Wind, a grove close behind; Thunder, one tree well out at its far
 side, framing it. Its lower trigram is what lies in it: Water, stepping stones across it; Lake, a ring

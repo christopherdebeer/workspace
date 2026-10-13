@@ -24,6 +24,54 @@
     #poem p { margin: 0; }
     #poem .by { display: block; font-size: 10px; letter-spacing: .25em; padding-top: 2.4em; opacity: .75; }
     .bench #poem { display: none; }
+    /* ─── the paper surfaces (surfaces.ts): one paper, three ways of laying it over the painting ─── */
+    #sheets { position: fixed; inset: 0; z-index: 20; pointer-events: none; display: none; }
+    #sheets.on { display: block; pointer-events: auto; }
+    #sheets .veil { position: absolute; inset: 0; background: rgba(43, 35, 30, .16); opacity: 0; transition: opacity .38s ease; }
+    #sheets.shown .veil { opacity: 1; }
+    #sheets .sheet { position: absolute; box-sizing: border-box; color: #2d2622; outline: none;
+      /* the paper: warm ivory, a fine fibre in it, a thin sheet's shadow at its edge */
+      background-color: #f4eddf;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9 .05' numOctaves='2' seed='7'/%3E%3CfeColorMatrix values='0 0 0 0 .35  0 0 0 0 .3  0 0 0 0 .25  0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23f)'/%3E%3C/svg%3E");
+      box-shadow: 0 0 0 .5px rgba(80, 64, 50, .22), 0 6px 26px rgba(60, 40, 30, .16), 0 1px 3px rgba(60, 40, 30, .12);
+      transition: transform .42s cubic-bezier(.2, .7, .2, 1), opacity .32s ease; opacity: 0; }
+    #sheets.shown .sheet { opacity: 1; transform: none; }
+    /* the page: near the whole screen, for reading */
+    #sheets.page .sheet { inset: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)) 10px; border-radius: 3px; transform: translateY(2.5%); }
+    /* the drawer: from the foot of the screen, the painting seen above it */
+    #sheets.drawer .sheet { left: 0; right: 0; bottom: -2px; max-height: 62vh; border-radius: 6px 6px 0 0; transform: translateY(100%); }
+    /* the side sheet: from the right edge, on past it */
+    #sheets.side .sheet { top: max(16px, env(safe-area-inset-top)); bottom: -2px; right: -2px; width: min(88vw, 420px); border-radius: 6px 0 0 0; transform: translateX(100%); }
+    #sheets .body { position: absolute; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 54px 26px calc(40px + env(safe-area-inset-bottom)); }
+    #sheets .x { position: absolute; top: 10px; left: 12px; z-index: 1; width: 40px; height: 40px; border: 0; background: none; color: #2d2622; font: 300 28px/1 "Iowan Old Style", Palatino, Georgia, serif; opacity: .7; cursor: pointer; outline: none; }
+    #sheets .x:focus-visible { outline: 1px solid rgba(45, 38, 34, .5); outline-offset: 2px; }
+    #sheets .body { font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 16px; line-height: 1.55; }
+    #sheets .head { display: flex; gap: 18px; align-items: center; }
+    #sheets .hx { display: grid; gap: 5px; width: 44px; flex: none; }
+    #sheets .hx i, #sheets .ln { display: flex; gap: 6px; height: 6px; }
+    #sheets .hx i b, #sheets .ln b { flex: 1; background: #2b2321; }
+    #sheets .hx i.yang b + b, #sheets .ln.yang b + b { display: none; }
+    #sheets .hx i.moving b, #sheets .ln.moving b { background: #b8382c; }
+    #sheets .num { font-size: 15px; letter-spacing: .12em; opacity: .75; }
+    #sheets h1 { margin: 2px 0 0; font: 400 30px/1.2 "Noto Serif SC", "Songti SC", "STSong", serif; letter-spacing: .08em; }
+    #sheets h1 .zhi { font-size: .62em; margin: 0 .3em; opacity: .7; }
+    #sheets .en { margin: 4px 0 0; font-size: 17px; }
+    #sheets .pin { margin: 2px 0 0; font-size: 13px; letter-spacing: .06em; opacity: .6; }
+    #sheets hr { border: 0; width: 26px; height: 1px; background: #2d2622; opacity: .4; margin: 22px 0; }
+    #sheets h3 { font-size: 17px; font-weight: 400; font-style: italic; margin: 0 0 6px; }
+    #sheets section + section { margin-top: 16px; }
+    #sheets .text { margin: 0; }
+    #sheets .quiet, #sheets .note { opacity: .8; }
+    #sheets ol.lines { list-style: none; margin: 8px 0 0; padding: 0; }
+    #sheets ol.lines li { display: flex; gap: 14px; padding: 10px 0; border-top: 1px solid rgba(45, 38, 34, .14); }
+    #sheets .ln { width: 22px; height: 3px; gap: 3px; flex: none; margin-top: 9px; }
+    #sheets h4 { margin: 0; font-size: 14px; font-weight: 400; letter-spacing: .03em; }
+    #sheets ol.lines p { margin: 2px 0 0; font-size: 14.5px; opacity: .85; }
+    #sheets details { margin-top: 12px; }
+    #sheets summary { cursor: pointer; font-size: 14px; opacity: .7; }
+    #sheets footer { margin-top: 26px; font-size: 12.5px; opacity: .6; }
+    #sheets footer p { margin: 0 0 6px; }
+    @media (prefers-reduced-motion: reduce) { #sheets .sheet, #sheets .veil { transition: opacity .2s; transform: none !important; } }
     #climb { position: fixed; right: 16px; top: max(12px, env(safe-area-inset-top)); font-size: 13px; letter-spacing: .1em; opacity: .75; font-variant-numeric: tabular-nums; }
     #climb::after { content: " 步"; }
     /* the composition view's toggle: a small seal, 墨, under the steps; pressed, stamped in vermilion */

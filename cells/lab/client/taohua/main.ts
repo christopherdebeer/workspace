@@ -13,6 +13,7 @@ import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
 import { RISE, WIDTH, Ways, type V3, type Way } from './ways';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
 import { stationsNear } from './compose';
+import { covers, isOpen as sheetOpen, present } from './surfaces';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
@@ -835,12 +836,28 @@ canvas.addEventListener('pointermove', (e) => {
     lookAt0 = performance.now();
   }
 });
+/** Which station's cast a tap falls on, if it falls on one's words: the words are drawn there, so the one whose sheet is nearest where they are. */
+function castTapped(px: number, py: number) {
+  if (R.matAt(px * (canvas.width / innerWidth), py * (canvas.height / innerHeight)) !== M.type) return null;
+  let best = null as ReturnType<typeof stationsNear>[number] | null, bd = 160;
+  for (const st of stationsNear(ways, seed, posNow[2] - 40, posNow[2] + 120)) {
+    const az = st.c[2] + st.rz * 0.25, q = project([st.c[0], ground(ways, st.c[0], az) + 1.8, az]);
+    const d = Math.hypot(q[0] - px, q[1] - py);
+    if (q[2] > 0 && d < bd) { bd = d; best = st; }
+  }
+  return best;
+}
 const up = (e: PointerEvent) => {
   touches.delete(e.pointerId);
   if (touches.size < 2) pinch0 = 0;
   if (downAt?.id !== e.pointerId) return;
   // (a tap: on a way, there; on open ground near one, there; anywhere else, the nearest place on a way to where it falls on the hill)
-  if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600 && (hop || afloat)) {
+  const tapped = !looking && e.type === 'pointerup' && performance.now() - downAt.t < 600;
+  const reading = tapped && !hop && !afloat ? castTapped(e.clientX, e.clientY) : null;
+  if (reading) {
+    // (a tap on a cast's words: its page, to read it; the walker stays where they are)
+    present({ surface: 'page', encounter: { kind: 'station', seed, station: reading.i, lines: reading.lines } });
+  } else if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600 && (hop || afloat)) {
     // (afloat, a tap's for the boat: see tapAfloat; stepping in or out, it waits)
     if (afloat) tapAfloat(e.clientX, e.clientY);
   } else if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600 && onBoat(e.clientX, e.clientY) && moored.by && Math.hypot(posNow[0] - moored.by[0], posNow[2] - moored.by[2]) < 40) {
@@ -870,6 +887,8 @@ const up = (e: PointerEvent) => {
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
+  // (while a sheet's open, the keys are its)
+  if (sheetOpen()) return;
   if (e.key.toLowerCase() === 'c') { setInk(!ink); return; }
   // (arriving, stepping in or out, or afloat, the keys don't walk: the walker's in the boat)
   if (intro >= 0 || hop || afloat) return;
@@ -974,6 +993,8 @@ function brushPath(pos: V3) {
 // ─── the frame ───────────────────────────────────────────────────────────────────────────────────
 let last = performance.now(), time = 0, idleLook = 0, urlAt = '', urlT = -1e9;
 function frame(now: number) {
+  // (under the page, the painting's set aside: not drawn, nor moving on)
+  if (covers()) { last = now; requestAnimationFrame(frame); return; }
   const dt = review ? 0 : Math.max(0, Math.min(0.05, (now - last) / 1000));
   { const to = ink ? 1 : 0, step = review ? 1 : Math.min(0.12, Math.max(0, (now - last) / 1000)) / 0.6; inkT = to > inkT ? Math.min(to, inkT + step) : Math.max(to, inkT - step); }
   last = now; time += dt;
@@ -1157,7 +1178,7 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, intro: () => intro, boatLog: () => boatLog, pole: () => { if (!afloat) return null; const q = poleNow(time); return [q.top.map((v) => +v.toFixed(2)), q.tip.map((v) => +v.toFixed(2)), handsAt(time).map((v) => +v.toFixed(2))]; }, landTo: (k: string) => { const l = LANDS.find((q) => q.kind === k); if (afloat && l) { afloat.to = l; afloat.resting = false; } }, strokeAt: (x: number, z: number) => { if (!afloat) return; const dx = x - afloat.p[0], dz = z - afloat.p[1], d = Math.hypot(dx, dz) || 1; afloat.to = null; afloat.resting = false; afloat.aim = [dx / d, dz / d]; afloat.sTo = Math.min(afloat.s + 2.999, Math.max(afloat.sTo, afloat.s) + 1); }, arriveT: ARRIVE.T, scr: (x: number, y: number, z: number) => project([x, y, z]).map((v) => Math.round(v)), boat: () => { const p = boatPoseNow(); return { afloat: afloat && { p: afloat.p.map((v) => +v.toFixed(2)), v: afloat.v.map((v) => +v.toFixed(2)), to: afloat.to?.kind ?? null, resting: afloat.resting, s: +afloat.s.toFixed(2), tip: !!afloat.tip }, moored: moored.kind, lands: LANDS.map((l) => ({ kind: l.kind, at: l.at.map((v) => +v.toFixed(1)), scr: project([l.at[0], RIVER_L, l.at[1]]).map((v) => Math.round(v)) })), hop: !!hop, p: p.p.map((v) => +v.toFixed(2)), scr: project([p.p[0], p.p[1] + 0.4, p.p[2]]).map((v) => Math.round(v)), ripples: ripples.length, rverts: ripplesD.count }; }, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, intro: () => intro, read: () => { const st = stationsNear(ways, seed, posNow[2] - 40, posNow[2] + 200)[0]; if (st) present({ surface: 'page', encounter: { kind: 'station', seed, station: st.i, lines: st.lines } }); return st?.i ?? null; }, boatLog: () => boatLog, pole: () => { if (!afloat) return null; const q = poleNow(time); return [q.top.map((v) => +v.toFixed(2)), q.tip.map((v) => +v.toFixed(2)), handsAt(time).map((v) => +v.toFixed(2))]; }, landTo: (k: string) => { const l = LANDS.find((q) => q.kind === k); if (afloat && l) { afloat.to = l; afloat.resting = false; } }, strokeAt: (x: number, z: number) => { if (!afloat) return; const dx = x - afloat.p[0], dz = z - afloat.p[1], d = Math.hypot(dx, dz) || 1; afloat.to = null; afloat.resting = false; afloat.aim = [dx / d, dz / d]; afloat.sTo = Math.min(afloat.s + 2.999, Math.max(afloat.sTo, afloat.s) + 1); }, arriveT: ARRIVE.T, scr: (x: number, y: number, z: number) => project([x, y, z]).map((v) => Math.round(v)), boat: () => { const p = boatPoseNow(); return { afloat: afloat && { p: afloat.p.map((v) => +v.toFixed(2)), v: afloat.v.map((v) => +v.toFixed(2)), to: afloat.to?.kind ?? null, resting: afloat.resting, s: +afloat.s.toFixed(2), tip: !!afloat.tip }, moored: moored.kind, lands: LANDS.map((l) => ({ kind: l.kind, at: l.at.map((v) => +v.toFixed(1)), scr: project([l.at[0], RIVER_L, l.at[1]]).map((v) => Math.round(v)) })), hop: !!hop, p: p.p.map((v) => +v.toFixed(2)), scr: project([p.p[0], p.p[1] + 0.4, p.p[2]]).map((v) => Math.round(v)), ripples: ripples.length, rverts: ripplesD.count }; }, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
