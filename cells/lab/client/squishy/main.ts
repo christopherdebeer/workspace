@@ -249,7 +249,8 @@ void main() {
   vec3 V = normalize(uEye - vWorld);
   int id = int(vMat + .5);
   vec2 uv = vUV;
-  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1.;
+  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1.;
+  float NoV0 = max(dot(n, V), 0.);
   if (id == ${MAT.counter}) {
     // Broad maple boards: restrained grain, narrow joints, no noisy zebra striping.
     float strip = floor(vWorld.z / 9.);
@@ -293,22 +294,31 @@ void main() {
     base = mix(vec3(.5, .05, .04), vec3(.95, .72, .32), clamp(ring + rays * .7, 0., 1.));
     metal = (ring + rays) * .7; rough = .2; coat = 1.;
   } else if (id == ${MAT.jelly}) {
-    // a mango pudding: deep orange, glowing through, a caramel top
+    // a mango pudding: deep orange, glowing through, brightest where it's thinnest (its edges, as seen),
+    // flecked with bits of mango; a caramel top, glossy
     bool top = n.y > .8;
-    base = top ? vec3(.62, .28, .06) : vec3(1., .58, .14);
-    rough = .12; coat = 1.;
-    emit = top ? .05 : .3;
+    float rim = pow(1. - NoV0, 1.6);
+    float bits = smoothstep(.74, .8, noise(vWorld * 2.6 + 4.)) * .45;
+    base = top ? mix(vec3(.48, .2, .03), vec3(.7, .32, .06), rim * .6) : mix(mix(vec3(.9, .36, .04), vec3(1., .58, .14), rim), vec3(1., .66, .2), bits);
+    rough = top ? .16 : .12; coat = top ? .35 : .8;
+    emit = top ? .08 + .3 * rim : .3 + .7 * rim;
   } else if (id == ${MAT.pannacotta}) {
-    // a panna cotta: cream, soft-lit through, under a berry coulis
+    // a panna cotta: cream, soft-lit through (most at its edges, as seen), under a berry coulis
     bool top = n.y > .8;
-    base = top ? vec3(.5, .04, .1) : vec3(.96, .91, .8);
-    rough = top ? .1 : .3; coat = top ? 1. : .4;
-    emit = top ? .02 : .22;
+    float rim = pow(1. - NoV0, 1.8);
+    base = top ? vec3(.5, .04, .1) : mix(vec3(.95, .9, .79), vec3(1., .97, .9), rim);
+    rough = top ? .1 : .3; coat = top ? 1. : .5;
+    emit = top ? .02 : .2 + .45 * rim;
   } else if (id == ${MAT.konjac}) {
-    // a konjac jelly: clear pink, the light right through it, brightest at its top
+    // a konjac jelly: clear pink, seen partly through (more where it's seen face on, less at its edges, where
+    // the light's through more of it), brightest at its top, a few small bubbles held in it
+    float rim = pow(1. - NoV0, 1.4);
+    float bub = smoothstep(.83, .86, noise(vWorld * 1.8 + 9.));
     base = mix(vec3(.9, .25, .36), vec3(1., .55, .6), clamp(n.y, 0., 1.));
-    rough = .06; coat = 1.;
-    emit = .45;
+    base = mix(base, vec3(1., .85, .88), bub * .7);
+    rough = .07; coat = n.y > .8 ? .4 : .9;
+    emit = .4 + .5 * rim;
+    alpha = mix(.58, .95, rim);
   } else if (id == ${MAT.bread}) {
     // a round loaf: a brown crust, floured on top, scored across, the pale crumb showing in the cuts
     bool top = n.y > .55;
@@ -377,12 +387,19 @@ void main() {
     base = mix(base, vec3(.95, .72, .32), band);
     metal = band; rough = mix(.55, .2, lac); coat = lac * .8;
   } else if (id == ${MAT.tiles}) {
-    vec2 q = uv / 12., f = fract(q);
-    float edge = min(min(f.x, 1. - f.x), min(f.y, 1. - f.y));
-    float tile = smoothstep(.014, .035, edge);
-    float bevel = smoothstep(.014, .065, edge);
-    base = mix(vec3(.37, .34, .28), vec3(.72, .73, .66) * (.95 + .07 * hash3(vec3(floor(q), 2.))), tile);
-    relief = bevel * .09; rough = mix(.88, .27, tile); coat = tile * .45;
+    // subway tiles, laid in a brick bond: a warm white glaze, each a shade its own, pale grout; and the
+    // room's light bounced back off the counter onto them, so a wall's a pale, quiet field, not a dark grid
+    vec2 sz = vec2(15., 7.5);
+    float row = floor(uv.y / sz.y);
+    vec2 q = vec2(uv.x / sz.x + .5 * mod(row, 2.), uv.y / sz.y), f = fract(q);
+    vec2 e2 = min(f, 1. - f) * sz;
+    float edge = min(e2.x, e2.y);
+    float soft = .08 + length(vWorld - uEye) * .0016;
+    float tile = smoothstep(.12, .12 + soft, edge);
+    float bevel = smoothstep(.12, .7, edge);
+    base = mix(vec3(.76, .73, .67), vec3(.93, .91, .86) * (.96 + .05 * hash3(vec3(floor(q), 2.))), tile);
+    relief = bevel * .05; rough = mix(.9, .22, tile); coat = tile * .5;
+    emit = .22;
   } else if (id == ${MAT.butter}) {
     // butter: pale yellow, a little waxy, a knife's cut across it and a fold of its paper's mark
     float cut = smoothstep(.975, 1., noise(vec3(uv.x * .6, uv.y * 7., 9.)));
@@ -521,7 +538,7 @@ void main() {
   c = mix(c, vec3(.62, .57, .5), smoothstep(250., 900., d) * .6);
   // (glass: seen through, but for its gloss and its edges)
   if (id == ${MAT.glass}) { float Fg = .04 + .96 * pow(1. - NoV, 4.); o = vec4(tonemap(c), clamp(.08 + Fg * .9 + length(spec) * .3, 0., 1.) * uAlpha); return; }
-  o = vec4(tonemap(c), 1.);
+  o = vec4(tonemap(c), alpha);
 }`;
 
 /** the dumpling: its skin's particles as they are now, its normals, and where each was in its rest shape */
@@ -793,16 +810,21 @@ out float vA;
 void main() {
   gl_Position = uVP * vec4(aP.xyz, 1.);
   float s = fract(aP.w);
-  vA = floor(aP.w) / 100.;
-  gl_PointSize = clamp(uScale * s * 12. / gl_Position.w, 1., 64.);
+  // (none close to the eye, where a puff would be a blur over the glass)
+  vA = floor(aP.w) / 100. * smoothstep(14., 34., gl_Position.w);
+  gl_PointSize = clamp(uScale * s * 10. / gl_Position.w, 1., 40.);
 }`;
 const PUFF_FS = `#version 300 es
 precision highp float;
 in float vA;
 out vec4 o;
+float h2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 void main() {
-  float r = length(gl_PointCoord - .5) * 2.;
-  o = vec4(1., .98, .95, vA * (1. - smoothstep(.2, 1., r)));
+  // (a wisp, not a disc: thin at its edge, broken)
+  vec2 q = gl_PointCoord - .5;
+  float r = length(q) * 2.;
+  float br = h2(floor(gl_PointCoord * 5.) + vA * 37.);
+  o = vec4(1., .98, .95, vA * (1. - smoothstep(0., 1., r)) * (1. - smoothstep(0., 1., r)) * (.55 + .45 * br));
 }`;
 
 function program(vs: string, fs: string): WebGLProgram {
@@ -1937,8 +1959,11 @@ function frame(now: number) {
   drawSusans();
   // (the lids, where the steam has them)
   for (const m of movers) drawMesh(m.mesh, model([0, m.shape.c[1] - m.shape.lift!.y0, 0], 1));
-  // (the jellies, as their tops are)
+  // (the jellies, as their tops are: the konjac seen partly through)
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   for (const jm of jellyMeshes) drawMesh(jm.mesh);
+  gl.disable(gl.BLEND);
   // the dark under the dumpling
   gl.uniform3fv(u(prog, 'uHole'), [0, 0, 0]);
   gl.enable(gl.BLEND);

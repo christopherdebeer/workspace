@@ -178,7 +178,7 @@ sit, deeper at a hard landing, and tilts if you land near its edge, which throws
 Then it springs back, and if it springs back quickly enough (faster than falling: the dent times
 (2π × its Hz)² over g), it throws you up again, unasked, a moment after you've landed.
 
-Three kinds, by how they give: a **panna cotta** (cream, under a berry coulis) dents and that's
+Each is lit as a jelly is: glowing through, brightest where it's thinnest as seen (its edges), the mango pudding flecked with bits of fruit under its caramel top, the konjac seen partly through, a few small bubbles held in it. Three kinds, by how they give: a **panna cotta** (cream, under a berry coulis) dents and that's
 all; a **mango pudding** comes back with a little hop; a **konjac jelly** (clear pink) springs
 back fastest, a hard landing coming back as a hop of five or six centimetres. (Fast, too, so it
 doesn't hum along with the dough, whose own wobble is slower: a jelly that springs back at the
@@ -262,7 +262,7 @@ with a shine that blink, red cheeks, squeeze shut `> <` while you wind up, an `o
 WebGL2. The light is a window's: a soft shadow map (the shadow sharper near what casts it),
 the course in its materials (woven bamboo with its rims, glazed porcelain, a pudding with a
 caramel top, lacquer, painted tins, a chopping board's grain, chopsticks with lacquered ends),
-the tiled wall with its windows behind, steam in the air.
+the tiled wall with its windows behind (subway tiles in a brick bond, a warm white glaze, pale grout, the room's light bounced up onto them), steam in the air, in wisps that thin out at their edges and never come close enough to blur the glass.
 
 The jelly is seen through. What's behind it is copied and drawn again through it, bent as a lens
 of jelly bends it (refracted, from how far through it the eye looks at each point) and tinted
