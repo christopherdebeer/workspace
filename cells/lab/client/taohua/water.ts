@@ -77,6 +77,23 @@ export class Water {
    */
   riverHalf(x: number): number { return 8 + 2.5 * noise1(hash(this.seed, 0x71e), x / 45) + 22 * smooth(14, 70, x); }
   riverMid(x: number): number { return this.riverNearBank(x) - this.riverHalf(x); }
+  /**
+   * The river's current at (x, z): which way it runs and how fast (m/s), as [along x, along z, speed].
+   * It runs down the river (toward -x), along its course; quick in the narrows and slow on the broad
+   * water above (the same water through a wider way), quickest down its middle and slack along its
+   * banks; and behind the jetty (downstream of it, between its end and the bank) an eddy, where it
+   * idles and turns a little back on itself. (Its marks are drawn from it: see marks.ts.)
+   */
+  riverFlow(x: number, z: number): [number, number, number] {
+    const hw = this.riverHalf(x), a = (z - this.riverMid(x)) / hw;
+    if (Math.abs(a) > 1.02) return [0, 0, 0];
+    const dm = this.riverMid(x + 0.5) - this.riverMid(x - 0.5), l = Math.hypot(1, dm);
+    const s0 = Math.max(0.1, Math.min(0.62, (0.55 * 8.5) / hw));
+    const prof = 0.18 + 0.82 * Math.pow(Math.max(0, 1 - a * a), 0.6);
+    const near = this.riverNearBank(x), eddy = smooth(-7.5, -4, x) * smooth(0.2, -1.2, x) * smooth(-6.5, -4.8, z - near) * smooth(0.6, -0.6, z - near);
+    const sp = s0 * prof * (1 - 1.3 * eddy);
+    return [(-1 / l) * sp, (-dm / l) * sp, Math.abs(sp)];
+  }
   /** whether the river (or its banks) reach anywhere between z0 and z1 */
   riverNear(z0: number, z1: number): boolean { return z0 < RIVER_NEAR + 6 && z1 > RIVER_NEAR - 80; }
 

@@ -172,28 +172,30 @@ function plaques() {
 plaques();
 void document.fonts?.load('96px "Ma Shan Zheng"', NAMES.join('') + hexagrams.map((h) => h.han).join('') + '之').then(() => plaques());
 
-// ─── the walker: a straw hat, a grey-blue robe with wide sleeves and a red sash, a tall staff ─────
+// ─── the walker: a straw hat, a robe with wide sleeves, a sash, a tall staff; in ink, a figure in a print ─
+// (dark: the robe nearly black, the sash and face a little less; the hat a mid grey, so it reads)
+const FIG = { robe: [0.2, 0.18, 0.17] as [number, number, number], sash: [0.27, 0.24, 0.22] as [number, number, number], skin: [0.3, 0.27, 0.25] as [number, number, number], hat: [0.45, 0.42, 0.39] as [number, number, number] };
 // (in parts, each placed by its own turning: the body, which sways and leans as they walk; the head
 // under its hat, which looks about when they stand; the free arm, which swings; the shoes; the
 // staff; and their shadow on the ground, which does none of that)
 const part = (build: (m: Mesh) => void) => { const m = new Mesh(); build(m); return R.mesh(m.v.out()); };
 const body = part((m) => {
   // (the robe: full at the hem, narrowing to the shoulders; the sash about it)
-  m.tube([0, 0.03, 0], [0, 0.82, 0], 0.31, 0.21, INK.robe, M.robe, 12);
-  m.tube([0, 0.82, 0], [0, 1.34, 0], 0.21, 0.16, INK.robe, M.robe, 12);
-  m.tube([0, 0.76, 0], [0, 0.9, 0], 0.225, 0.22, INK.red, M.red, 12);
-  m.tube([0.05, 0.8, 0.2], [0.08, 0.45, 0.24], 0.04, 0.03, INK.red, M.red, 4);
+  m.tube([0, 0.03, 0], [0, 0.82, 0], 0.31, 0.21, FIG.robe, M.robe, 12);
+  m.tube([0, 0.82, 0], [0, 1.34, 0], 0.21, 0.16, FIG.robe, M.robe, 12);
+  m.tube([0, 0.76, 0], [0, 0.9, 0], 0.225, 0.22, FIG.sash, M.robe, 12);
+  m.tube([0.05, 0.8, 0.2], [0.08, 0.45, 0.24], 0.04, 0.03, FIG.sash, M.robe, 4);
   // (the arm to the staff, its wide sleeve, the hand)
-  m.tube([0.15, 1.28, 0], [0.36, 1.0, 0.12], 0.07, 0.13, INK.robe, M.robe, 8);
-  m.tube([0.38, 0.99, 0.13], [0.43, 0.96, 0.15], 0.05, 0.045, INK.skin, M.skin, 6);
+  m.tube([0.15, 1.28, 0], [0.36, 1.0, 0.12], 0.07, 0.13, FIG.robe, M.robe, 8);
+  m.tube([0.38, 0.99, 0.13], [0.43, 0.96, 0.15], 0.05, 0.045, FIG.skin, M.skin, 6);
 });
 const head = part((m) => {
   // (the head, the black hair gathered behind under the hat; the hat a wide shallow cone)
-  m.tube([0, 1.32, 0], [0, 1.56, 0.02], 0.1, 0.09, INK.skin, M.skin, 8);
+  m.tube([0, 1.32, 0], [0, 1.56, 0.02], 0.1, 0.09, FIG.skin, M.skin, 8);
   m.tube([0, 1.36, -0.05], [0, 1.56, -0.04], 0.095, 0.09, INK.dark, M.dark, 8);
-  m.tube([0, 1.52, 0], [0, 1.76, 0], 0.44, 0.02, INK.hat, M.hat, 16);
+  m.tube([0, 1.52, 0], [0, 1.76, 0], 0.44, 0.02, FIG.hat, M.hat, 16);
 });
-const freeArm = part((m) => m.tube([-0.15, 1.28, 0], [-0.25, 0.9, 0.02], 0.07, 0.14, INK.robe, M.robe, 8));
+const freeArm = part((m) => m.tube([-0.15, 1.28, 0], [-0.25, 0.9, 0.02], 0.07, 0.14, FIG.robe, M.robe, 8));
 const shadow = part((m) => {
   // (a stroke or two of grey, off to the side away from the light)
   for (let k = 0; k < 14; k++) {
@@ -238,16 +240,39 @@ function boatPose(t: number): { p: V3; yaw: number } {
   const e = Math.pow(u, 6);
   return { p: [B(P0[0], P1[0], P2[0]), E[1], B(P0[2], P1[2], P2[2])], yaw: yaw * (1 - e) + JETTY.boatYaw * e };
 }
+/**
+ * Moored, it rides on its lines in the current: pushed down the river by it (as the square of its
+ * speed there, which comes and goes in slow gusts), the lines pulling it back, so it eases off a hand's
+ * breadth and back, and swings a little about them. (A spring and its damping, a step at a time.)
+ */
+const ride = { off: 0, offV: 0, yaw: 0, yawV: 0, t: 0 };
+function rideOn(dt: number) {
+  if (dt <= 0) return;
+  ride.t += dt;
+  const sp = ways.water.riverFlow(JETTY.boat[0], JETTY.boat[2])[2];
+  const gust = 0.55 + 0.45 * Math.sin(ride.t * 0.37) * Math.sin(ride.t * 0.21 + 1.3) + 0.15 * Math.sin(ride.t * 1.3);
+  const push = sp * sp * gust * 1.6;
+  for (let k = 0; k < 4; k++) {
+    const h = dt / 4;
+    ride.offV += (push - 9 * ride.off - 2.6 * ride.offV) * h; ride.off += ride.offV * h;
+    ride.yawV += (push * 0.9 - 6 * ride.yaw - 2.2 * ride.yawV) * h; ride.yaw += ride.yawV * h;
+  }
+}
 function boatAt(time: number): M4 {
-  // (it rocks: rolling a little, pitching less, rising and falling on the current's swell)
-  const pose = intro >= 0 ? boatPose(intro) : { p: JETTY.boat, yaw: JETTY.boatYaw };
+  // (it rocks: rolling a little, pitching less, rising and falling on the current's swell; moored, it
+  // rides on its lines as the current has it)
+  let pose = intro >= 0 ? boatPose(intro) : { p: JETTY.boat, yaw: JETTY.boatYaw };
+  if (intro < 0) {
+    const [fx, fz, sp] = ways.water.riverFlow(JETTY.boat[0], JETTY.boat[2]), u = sp > 1e-4 ? 1 / sp : 0;
+    pose = { p: [JETTY.boat[0] + fx * u * ride.off, JETTY.boat[1], JETTY.boat[2] + fz * u * ride.off], yaw: JETTY.boatYaw - ride.yaw };
+  }
   const [x, y, z] = pose.p, c = Math.cos(pose.yaw), sn = Math.sin(pose.yaw);
   return mulM(mulM(Tm(x, y + 0.012 * Math.sin(time * 0.9), z), new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, 0, 0, 0, 1])), mulM(Rz(0.022 * Math.sin(time * 1.1) + 0.008 * Math.sin(time * 2.3)), Rx(0.01 * Math.sin(time * 0.73 + 1))));
 }
 /** where the walker stands, t seconds into the arrival: aboard, at the stern behind the canopy; then stepping off */
 function introStand(t: number, time: number): { p: V3; dir: [number, number] } {
   // (sitting, low in the boat, behind its canopy)
-  const m = boatAt(time), local: V3 = [0, -0.16, -1.3];
+  const m = boatAt(time), local: V3 = [0, -0.06, -1.3];
   const aboard: V3 = [m[0] * local[0] + m[4] * local[1] + m[8] * local[2] + m[12], m[1] * local[0] + m[5] * local[1] + m[9] * local[2] + m[13], m[2] * local[0] + m[6] * local[1] + m[10] * local[2] + m[14]];
   const yaw = intro >= 0 ? boatPose(Math.min(t, DRIFT)).yaw : 0;
   if (t < DRIFT) return { p: aboard, dir: [Math.sin(yaw), Math.cos(yaw)] };
@@ -819,7 +844,7 @@ function frame(now: number) {
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks') },
-    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos), { d: boatD, model: boatAt(review ? 0 : time) }],
+    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos), { d: boatD, model: (rideOn(dt), boatAt(review ? 0 : time)) }],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the

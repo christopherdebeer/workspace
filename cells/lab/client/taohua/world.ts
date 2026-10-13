@@ -1030,23 +1030,25 @@ export const JETTY = {
 export const onJetty = (x: number, z: number) => Math.abs(x - JETTY.x) < JETTY.hw - 0.12 && z > JETTY.z0 + 0.1 && z < JETTY.z1 + 0.35;
 function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number) => boolean) {
   const r = seeded(hash(seed, 0x7e77));
-  const WOOD = hex(0x8a7158), DARKWOOD = hex(0x5e4a3a), { x, z0, z1, hw, y } = JETTY;
+  const { x, z0, z1, hw, y } = JETTY;
   const push = (v: number[]) => { mesh.v.push(...v); };
-  // (its planks, laid across, each its own length and set, a little worn)
-  for (let z = z1; z > z0; z -= 0.26) {
+  // (a pier of stone, as the stairs and bridges are: a deck of pale slabs laid across, each its own
+  // length, set a little unevenly; on piers of squared stone standing in the water)
+  for (let z = z1, k = 0; z > z0 + 0.05; z -= 0.52, k++) {
+    if (!inT(x, z - 0.25)) continue;
+    const L = hw + ramp(r, -0.04, 0.05), sx = ramp(r, -0.03, 0.03);
+    mesh.box([x + sx, y - 0.07 + ramp(r, -0.006, 0.006), z - 0.26], [L, 0.07, 0.245], [1, 0], INK.stepTop, INK.stepFace, M.step);
+  }
+  for (let z = z1 - 0.45, k = 0; z >= z0 + 0.2; z -= 1.65, k++) {
     if (!inT(x, z)) continue;
-    const L = hw - 0.04 + ramp(r, -0.05, 0.06), sx = ramp(r, -0.04, 0.04);
-    mesh.box([x + sx, y - 0.03 + ramp(r, -0.008, 0.008), z - 0.12], [L, 0.03, 0.115], [1, 0], r() < 0.2 ? DARKWOOD : WOOD, DARKWOOD, M.wall);
+    mesh.box([x, (y - 0.14 + RIVER_L - 1.2) / 2, z], [hw - 0.08, (y - 0.14 - RIVER_L + 1.2) / 2, 0.24], [1, 0], INK.stone, INK.stone, M.stone);
+    for (const sd of [-1, 1]) postReflection(push, ways.water, x + sd * (hw - 0.15), z - 0.2, 0.75, seed + k * 2 + (sd > 0 ? 1 : 0), M.mark);
   }
-  // (on posts, in pairs, the bearers along them; the last pair taller, to tie up to)
-  for (let z = z1 - 0.3, k = 0; z >= z0 - 0.01; z -= 1.55, k++) for (const sd of [-1, 1]) {
-    const px = x + sd * (hw + 0.02), last = z - 1.55 < z0, top = y + (last ? 0.45 : 0.05);
-    if (inT(px, z)) {
-      mesh.tube([px, RIVER_L - 1.2, z], [px, top, z], 0.065, 0.055, INK.trunk, M.trunk, 6);
-      postReflection(push, ways.water, px, z, (top - RIVER_L) * 1.05 + 0.15, seed, M.mark);
-    }
+  // (at its far end, a stone post at each corner to tie up to)
+  for (const sd of [-1, 1]) {
+    const px = x + sd * (hw - 0.14), pz = z0 + 0.22;
+    if (inT(px, pz)) { mesh.box([px, y + 0.2, pz], [0.1, 0.27, 0.1], [1, 0], INK.stepTop, INK.stepFace, M.step, M.stone); postReflection(push, ways.water, px, pz - 0.2, 0.9, seed + 31 + sd, M.mark); }
   }
-  for (const sd of [-1, 1]) if (inT(x + sd * hw, (z0 + z1) / 2)) mesh.box([x + sd * (hw - 0.02), y - 0.09, (z0 + z1) / 2], [0.05, 0.05, (z1 - z0) / 2], [1, 0], DARKWOOD, DARKWOOD, M.wall);
   // (at its end, a pole with a red paper lantern hung from its arm)
   const lx = x - hw + 0.08, lz = z0 + 0.25;
   if (inT(lx, lz)) {
@@ -1060,13 +1062,13 @@ function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number)
   const onBoat = (lx: number, ly: number, lz: number): V3 => [B[0] + cy * lx + sy * lz, B[1] + ly, B[2] - sy * lx + cy * lz];
   if (inT(B[0], B[2])) {
     boatMarks(mesh, ways.water, B, JETTY.boatYaw, seed);
-    for (const [from, post] of [[onBoat(0, 0.5, 2.05), [x + hw + 0.02, y + 0.03, z1 - 0.3 - 1.55]], [onBoat(0, 0.5, -2.0), [x + hw + 0.02, y + 0.03, z1 - 0.3 - 1.55 * 3]]] as Array<[V3, V3]>) {
+    for (const [from, post] of [[onBoat(0, 0.5, 2.05), [x + hw - 0.02, y - 0.02, z1 - 1.2]], [onBoat(0, 0.5, -2.0), [x + hw - 0.14, y + 0.4, z0 + 0.22]]] as Array<[V3, V3]>) {
       const mid: V3 = [(from[0] + post[0]) / 2, (from[1] + post[1]) / 2 - 0.12, (from[2] + post[2]) / 2];
-      mesh.tube(from, mid, 0.012, 0.012, hex(0x6b5442), M.wall, 4);
-      mesh.tube(mid, post, 0.012, 0.012, hex(0x6b5442), M.wall, 4);
+      mesh.tube(from, mid, 0.012, 0.012, INK.dark, M.dark, 4);
+      mesh.tube(mid, post, 0.012, 0.012, INK.dark, M.dark, 4);
     }
   }
-  // (beside the pier, stone steps down into the water from the landing; and either side, the bank faced
+  // (beside the pier, stone steps down into the water from the landing; and along the bank, faced
   // with dressed stone, as at a landing that's been there a long time)
   const W = ways.water, sx0 = -2.9, sx1 = -1.3;
   for (let ex = -6.4; ex < 5.2; ex += 0.62) {
@@ -1081,7 +1083,6 @@ function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number)
       const top = yt - k * dy, sz = zb - k * 0.34;
       if (inT(sxm, sz)) mesh.box([sxm, top - 0.16, sz], [(sx1 - sx0) / 2, 0.16, 0.18], [1, 0], INK.stepTop, INK.stepFace, M.step);
     }
-    for (const sd of [-1, 1]) { const ex = sd < 0 ? sx0 - 0.14 : sx1 + 0.14; if (inT(ex, zb - 0.6)) mesh.box([ex, (yt + RIVER_L - 0.3) / 2 - 0.02, zb - 0.6], [0.12, (yt - RIVER_L + 0.3) / 2 - 0.02, 0.85], [1, 0], INK.stone, INK.stone, M.stone); }
   }
   // (from its land end up to the first way: a landing, paved in cracked ice, its edges ragged)
   const w0 = ways.first(), top = ways.at(w0, 0, true).p;
@@ -1094,15 +1095,32 @@ function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number)
     if (inT(px, pz) && ways.dryOf(px, pz) > 0.25) pts.push([px, pz]);
   }
   pave(mesh, ways, pts, 0.24, r);
+  // (over the landing, part way up, a gate, as a temple's: two red columns on stone bases, a red beam
+  // across, a dark board on it, and a little roof of teal tiles: the threshold from the river to the hill)
+  const gz = z1 + 1.7, gy = ground(ways, x, gz), face: [number, number] = [0, -1], fx = -face[1], fz = face[0];
+  if (inT(x, gz)) {
+    const P = (px: number, py: number, pz: number): V3 => [x + fx * px + face[0] * pz, gy + py, gz + fz * px + face[1] * pz];
+    const along: [number, number] = [fx, fz];
+    for (const sd of [-1, 1]) {
+      mesh.box(P(sd * 1.3, 0.12, 0), [0.2, 0.16, 0.2], along, INK.stepTop, INK.stepFace, M.step, M.stone);
+      mesh.tube(P(sd * 1.3, 0.25, 0), P(sd * 1.3, 2.55, 0), 0.1, 0.09, INK.red, M.red, 8);
+      block(...([P(sd * 1.3, 0, 0)[0], P(sd * 1.3, 0, 0)[2], 0.32] as [number, number, number]));
+    }
+    mesh.box(P(0, 2.3, 0), [1.5, 0.08, 0.09], along, INK.red, INK.red, M.red);
+    mesh.box(P(0, 2.12, 0.02), [0.42, 0.11, 0.03], along, INK.dark, INK.dark, M.dark);
+    mesh.box(P(0, 2.5, 0), [1.45, 0.06, 0.12], along, INK.red, INK.red, M.red);
+    roof(mesh, P, fx, fz, { ex: 1.85, ez: 0.5, rz: 0, y0: 2.58, rise: 0.48, gx: 1.15, g: 0.5, sweep: 0.32 });
+  }
 }
 
 /**
- * The boat moored at the jetty (a sampan): its hull of dark planks, long and low, its ends rising; amidships
+ * The boat moored at the jetty (a sampan), drawn in ink: its hull of dark planks, long and low, its ends rising; amidships
  * a woven canopy, arched; a pole laid along it, a red lantern on a post at its stern. In its own frame:
  * along +z its bow, its waterline at y = 0.
  */
 export function boat(mesh: Mesh) {
-  const HULL = hex(0x4e3c30), RIM = hex(0x6b5442), MAT = hex(0xb79a6a);
+  // (in ink, as the prints draw a boat on the water: a dark hull, its rail and floor a little less dark, the canopy's matting grey)
+  const HULL = hex(0x2b2421), RIM = hex(0x3f3833), MAT = hex(0x6e675f);
   const L = 2.3, B = 0.62;
   // (its sections along it: half-beam and how high its sheer stands, rising to its ends)
   const sec = (t: number) => { const e = Math.abs(t); return { hb: B * Math.sqrt(Math.max(0.02, 1 - e ** 2.2)), top: 0.32 + 0.22 * e ** 2.4, bot: -0.16 * (1 - e ** 2) }; };

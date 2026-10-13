@@ -240,8 +240,10 @@ export function obstacleMarks(push: Push, W: Water, o: Obstacle, mat: number) {
  * The river's marks, those that start between x0 and x1 (and that `own` says belong here). Its current,
  * as the prints draw a river's: long trails of small crests, each crest a little arc of its own with
  * the paper between, following the river's course a few at a time across it (one near each bank, one
- * or two between), each coming and going along it; closer and more of them in the narrows, few out on
- * the broad water above, where it hardly seems to move. Its bank at the hill's side (up the picture):
+ * or two between), each coming and going along it; drawn from its current (Water.riverFlow): where it
+ * runs quick, the crests longer and closer, more of the trails there; where it's slow, on the broad
+ * water above, along the banks, in the eddy behind the jetty, few and short, so the drawing shows where
+ * the water's moving. Its bank at the hill's side (up the picture):
  * a line now and then between its rocks, and under it here and there the bank in the water; its other
  * bank, nearer the eye, left open but for a stroke now and then.
  */
@@ -254,13 +256,13 @@ export function riverMarks(push: Push, W: Water, x0: number, x1: number, own: (x
   const SEG = 9, STEP = 0.62;
   for (let k = 0; k < BASE.length; k++) for (let c = Math.floor((x0 - 1) / SEG); c <= Math.floor((x1 + 1) / SEG); c++) {
     // (a trail comes and goes along the river: in this stretch of it, or not)
-    const broad = smooth(14, 70, (c + 0.5) * SEG);
-    if (seeded(hash(W.seed, k, c, 0x7a11))() > (k === 0 ? 0.72 : 0.55) * (1 - 0.75 * broad)) continue;
+    const cx = (c + 0.5) * SEG, quick = W.riverFlow(cx, W.riverMid(cx) + vOf(k, cx) * W.riverHalf(cx))[2] / 0.55;
+    if (seeded(hash(W.seed, k, c, 0x7a11))() > (k === 0 ? 0.75 : 0.6) * Math.min(1, 0.25 + quick)) continue;
     for (let i = Math.floor((c * SEG) / STEP); i < Math.floor(((c + 1) * SEG) / STEP); i++) {
       const r = seeded(hash(W.seed, k, i, 0xc4e5));
-      if (r() < 0.12 + 0.3 * broad) continue;
-      const xa = i * STEP + ramp(r, 0, 0.14), len = ramp(r, 0.36, 0.56), lift = ramp(r, 0.06, 0.1) * (r() < 0.8 ? 1 : -1);
-      const za = W.riverMid(xa) + vOf(k, xa) * W.riverHalf(xa);
+      const xa = i * STEP + ramp(r, 0, 0.14), za = W.riverMid(xa) + vOf(k, xa) * W.riverHalf(xa), q = W.riverFlow(xa, za)[2] / 0.55;
+      if (r() > 0.2 + 0.85 * q) continue;
+      const len = ramp(r, 0.24, 0.36) + 0.3 * Math.min(1, q), lift = ramp(r, 0.05, 0.09) * (r() < 0.8 ? 1 : -1);
       if (xa < x0 || xa >= x1 || !own(xa, za)) continue;
       // (a crest: a little arc, down the river from where it starts)
       const crest = (dz: number) => {
