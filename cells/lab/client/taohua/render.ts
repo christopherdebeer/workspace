@@ -186,11 +186,35 @@ void main() {
     lit = 1.;
   } else if (vM == ${M.trunk} || vM == ${M.twig}) {
     c = vec3(${INK.trunk.map((v) => v.toFixed(3)).join(', ')});
-    // bark: ink, a pale streak down the side that faces the light, broken
-    // (hard edged, as cut in a block: a band of the paper's cream down the lit side, broken along its length)
-    float side = dot(n, normalize(vec3(.85, .1, -.5)));
-    float streak = smoothstep(.56, .62, side) * smoothstep(.22, .3, noise(vW * vec3(1.6, .5, 1.6) + 7.));
-    c = mix(c, vec3(.89, .84, .76), streak);
+    // bark, as a brush draws it along the limb: (the limb's own frame: along its axis, carried in place
+    // of its colour; and around it, as a point on a circle, so nothing's seamed)
+    vec3 ax = normalize(vC * 2. - 1. + 1e-4);
+    vec3 bu = normalize(cross(ax, abs(ax.y) < .9 ? vec3(0., 1., 0.) : vec3(1., 0., 0.))), bw = cross(ax, bu);
+    vec2 ring = normalize(vec2(dot(n, bu), dot(n, bw)) + 1e-4);
+    float along = dot(vW, ax);
+    // (lit from the side, a little away from the eye: so the cream runs down one edge of a limb, as the
+    // prints have it, not down its middle, which would draw it hollow)
+    float side = dot(n, normalize(vec3(.95, .2, -.12)));
+    // the lit side the paper's cream, laid as a dry brush leaves it ("flying white"): pale streaks
+    // along the limb, its edge toward the shade ragged and broken, a few dark hairlines in it
+    float fw = noise(vec3(ring * 1.6, along * .55 + 3.)) * .6 + noise(vec3(ring * 4.5, along * 1.7 + 9.)) * .4;
+    float pale = smoothstep(.0, .08, side - (vM == ${M.trunk} ? .12 : .3) + (fw - .5) * .6);
+    pale *= smoothstep(.12, .22, noise(vec3(ring * 2.2, along * 1.1 + 17.)));
+    float hair = smoothstep(.72, .8, noise(vec3(ring * 7., along * .35 + 23.)));
+    c = mix(c, vec3(.89, .84, .76), pale * (1. - hair * .8));
+    if (vM == ${M.trunk}) {
+      // the peach's bark: short level dashes across the trunk, a hand apart, pale on the dark and dark
+      // on the pale, broken round it (fading out where they'd be finer than the glass can show)
+      float rg = along * 3.3 + .6 * noise(vec3(ring * 1.3, along * .4));
+      float lw = fwidth(rg), dd = abs(fract(rg) - .5);
+      float dash = (1. - smoothstep(.035, .035 + lw * 1.2, dd)) * step(.62, noise(vec3(ring * 3.4, floor(rg) * 1.7 + .5))) * step(.35, hash3(vec3(floor(rg), 2., 9.)));
+      dash *= 1. - smoothstep(.12, .3, lw);
+      c = mix(c, pale > .5 ? vec3(.32, .27, .24) : vec3(.46, .42, .38), dash * .8);
+    }
+    // and here and there on the lit side a dark dot, a knot or moss, as the brush dots a branch
+    vec3 kc = vec3(ring * 2.5, along * 4.);
+    vec3 kf = fract(kc) - .5;
+    if (hash3(floor(kc)) > .9 && length(kf) < .2 && pale > .3) c = mix(c, vec3(.12, .1, .09), .85);
     lit = 1.;
   } else if (vM == ${M.tile} || vM == ${M.ridge}) {
     // glazed tiles, turquoise: every tile drawn

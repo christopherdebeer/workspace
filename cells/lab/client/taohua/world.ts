@@ -112,13 +112,20 @@ export class Mesh {
   /** a tapered tube from a to b, so many sides */
   tube(a: V3, b: V3, ra: number, rb: number, col: C3, m: number, sides = 6) {
     const d = norm(sub(b, a));
+    // (a limb's: its segments overlap a little at their joints, so a turn shows no seam; and each
+    // vertex carries the limb's axis in place of a colour, so the drawing can lay its brush along it)
+    const limb = m === M.trunk || m === M.twig;
+    if (limb) { a = sub(a, mul(d, ra * 0.35)); b = add(b, mul(d, rb * 0.35)); }
+    const c: C3 = limb ? [d[0] * 0.5 + 0.5, d[1] * 0.5 + 0.5, d[2] * 0.5 + 0.5] : col;
     const ref: V3 = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
-    const u = norm(cross(d, ref)), w = cross(d, u);
+    const u = norm(cross(d, ref)), w = cross(d, u), v = this.v;
+    // (round, not faceted: each vertex its own normal, out from the axis)
+    const P = (p: V3, o: V3, r: number) => v.vert(p[0] + o[0] * r, p[1] + o[1] * r, p[2] + o[2] * r, o[0], o[1], o[2], c[0], c[1], c[2], m);
     for (let k = 0; k < sides; k++) {
       const t0 = (k / sides) * Math.PI * 2, t1 = ((k + 1) / sides) * Math.PI * 2;
       const o0: V3 = add(mul(u, Math.cos(t0)), mul(w, Math.sin(t0))), o1: V3 = add(mul(u, Math.cos(t1)), mul(w, Math.sin(t1)));
-      const n = norm(add(o0, o1));
-      this.quad(add(a, mul(o0, ra)), add(b, mul(o0, rb)), add(b, mul(o1, rb)), add(a, mul(o1, ra)), col, m, n);
+      P(a, o0, ra); P(b, o0, rb); P(b, o1, rb);
+      P(a, o0, ra); P(b, o1, rb); P(a, o1, ra);
     }
   }
 }
