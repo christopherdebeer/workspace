@@ -278,8 +278,17 @@ The dough is lit as dough:
 thick, the light wrapping round it and glowing a little through its thin edges, darker in its
 pleats, faintly floury, with a dark under it on whatever it's over.
 
+A level, the first time it's played, opens on the way over it: from high over home, back along
+the course top by top, coming down to where the dumpling sits at the start, so you've seen where
+you're going before you go (a touch, or a key, cuts it short; started over, it doesn't come again;
+the clock waits for it).
+
 The camera follows easily, but if the dumpling nears the edge of the glass, or leaves it, the
-camera catches up at once. It never goes behind a wall: if the way out from the dumpling to where the
+camera catches up at once. Sat still on a top, it stands back and looks a little toward the next,
+far enough off to have both in view, so you can judge the flick; once it's flown, it comes back in.
+Along a counter it looks down on the counter more than across it at the wall. Whatever stands
+between it and the dumpling (a loaf, a jar) dissolves round it in a soft round hole, so it's never
+lost behind something; not what it stands on, nor anything lower. It never goes behind a wall: if the way out from the dumpling to where the
 camera would be meets the tiled wall, it comes in short of it, and while it's held in like that
 it turns back round to the room's side, against a finger turning it too; so turned toward the
 wall, by mistake or on purpose, it slides along it and comes back round. (The walls run well

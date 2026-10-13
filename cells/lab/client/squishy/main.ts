@@ -238,7 +238,8 @@ ${SHADOW_GLSL}
 ${COAT_GLSL}
 void main() {
   // (what stands between the eye and the dumpling dissolves round it, in a soft round hole, so it's never lost behind a loaf)
-  if (uHole.z > 0. && length(vWorld - uEye) < length(uHoleAt - uEye) - ${(3 * 1.6).toFixed(1)}) {
+  // (not what it stands on, or anything lower: only what rises in front of it)
+  if (uHole.z > 0. && vWorld.y > uHoleAt.y - .6 && length(vWorld - uEye) < length(uHoleAt - uEye) - ${(3 * 1.6).toFixed(1)}) {
     float k = 1. - smoothstep(uHole.z * .6, uHole.z, length(gl_FragCoord.xy - uHole.xy));
     float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715))));
     if (ign < k * .9) discard;
@@ -1269,7 +1270,7 @@ function updateCamera(dt: number) {
   const settled = body.contacts > 0 && len(body.vcom) < 8 && home < 0 && !userCam;
   ahead += ((settled ? 1 : 0) - ahead) * (1 - Math.exp(-dt * (settled ? 1.2 : 4)));
   const toNext = sub(nxt.at, body.com), sep = Math.hypot(toNext[0], toNext[2]);
-  const want = add(add(body.com, [0, 3, 0]), mul(toNext, 0.4 * ahead * Math.min(1, 90 / Math.max(1, sep))));
+  const want = add(add(body.com, [0, 3, 0]), mul(toNext, 0.5 * ahead * Math.min(1, 110 / Math.max(1, sep))));
   for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * (1 - Math.exp(-dt * (off ? 22 : ahead > 0.01 && ahead < 0.99 ? 3 : 5)));
   // (turned toward the next top, when it's sat still and no one's turning the camera)
   if (!pull && !userCam && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
@@ -1283,7 +1284,7 @@ function updateCamera(dt: number) {
   windEase += (wind - windEase) * (1 - Math.exp(-dt * 4));
   // (looking down on the counter a little more than across it, so the wall behind doesn't take half the glass)
   const pitch = Math.max(0.12, Math.min(1.2, (lv.walls?.length ? 0.56 : 0.48) + orbit.pitch + 0.22 * windEase));
-  const dist = (Math.max(44, Math.min(95, 30 + sep * 0.75) * ahead + 44 * (1 - ahead)) * (1 + 0.55 * windEase)) / zoom;
+  const dist = (Math.max(44, Math.min(120, 34 + sep * 0.95) * ahead + 44 * (1 - ahead)) * (1 + 0.55 * windEase)) / zoom;
   const back: V3 = [-Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(camYaw) * Math.cos(pitch)];
   // (never behind a wall: if the way out from the dumpling to where it would be meets one, it comes in short of it;
   // and while it's held in, it turns back round to the room's side, against a finger turning it too)
@@ -1926,7 +1927,7 @@ function frame(now: number) {
   // (the hole through what stands before the dumpling: where it is on the glass, in the canvas's pixels, and how big it looks)
   const hc = mode === 'play' && fly < 0 ? screenOf(body.com) : null, he = hc && screenOf(add(body.com, mul(right, RADIUS)));
   const dpr = W / innerWidth;
-  gl.uniform3fv(u(prog, 'uHole'), hc && he ? [hc[0] * dpr, (innerHeight - hc[1]) * dpr, Math.max(40 * dpr, Math.hypot(he[0] - hc[0], he[1] - hc[1]) * 2.6 * dpr)] : [0, 0, 0]);
+  gl.uniform3fv(u(prog, 'uHole'), hc && he ? [hc[0] * dpr, (innerHeight - hc[1]) * dpr, Math.max(40 * dpr, Math.hypot(he[0] - hc[0], he[1] - hc[1]) * 2.1 * dpr)] : [0, 0, 0]);
   gl.uniform3fv(u(prog, 'uHoleAt'), body.com);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, shadowTex);
