@@ -473,7 +473,7 @@ canvas.addEventListener('pointermove', (e) => {
   const dx = e.clientX - downAt.x, dy = e.clientY - downAt.y;
   if (!looking && Math.hypot(dx, dy) > 10) looking = true;
   if (looking) {
-    lookYaw = Math.max(-0.7, Math.min(0.7, lookYaw - (e.movementX || 0) * 0.005));
+    lookYaw = Math.max(-0.7, Math.min(0.7, lookYaw - (e.movementX || 0) * 0.005 * (1 - 0.5 * firstT)));
     lookPitch = Math.max(-0.25, Math.min(0.3, lookPitch + (e.movementY || 0) * 0.003));
     lookAt0 = performance.now();
   }
@@ -509,11 +509,12 @@ addEventListener('blur', () => { keys.clear(); });
 // ─── the camera: high, looking up the hill, the walker low in the frame ──────────────────────────
 const cam = { t: [0, 0, 0] as V3, x: 0 };
 let camInit = false;
+/** how far into seeing through the walker's eyes (0: not at all; 1: there) */
+let firstT = 0;
+const norm3 = (v: V3): V3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 function camera(p: V3, dt: number) {
   const k = 1 - Math.exp(-dt * 2.2);
   // (looking a little ahead up the hill; nearer, as the camera comes nearer, so the walker keeps their place in the print)
-  // (and nearest, come down low behind them, looking up the hill over their shoulder: it looks
-  // further ahead, from about the height of their eyes)
   const low = (1 - ease(inkT)) * smoothstep(0.4, 0.1, zoomN);
   const ahead = 7 * Math.max(0.4, zoomN + (1 - zoomN) * ease(inkT));
   const target: V3 = [p[0], p[1] + 1.2, p[2] + ahead];
@@ -532,14 +533,24 @@ function camera(p: V3, dt: number) {
   t[0] = cam.x;
   const eye: V3 = [t[0] - Math.sin(yaw) * Math.cos(pitch) * dist, t[1] + Math.sin(pitch) * dist, t[2] - Math.cos(yaw) * Math.cos(pitch) * dist];
   if (low > 0) {
-    // (over the shoulder: some eight metres behind them, a couple of metres over their head, looking up
-    // the hill to a place six metres ahead of them at about their eyes' height; eased into from above)
-    const ps = 0.15 + lookPitch * 0.5, ds = 14;
-    const ts: V3 = [p[0] + Math.sin(yaw) * 6, p[1] + 1.5, p[2] + Math.cos(yaw) * 6];
-    const es: V3 = [ts[0] - Math.sin(yaw) * Math.cos(ps) * ds, ts[1] + Math.sin(ps) * ds + 0.0, ts[2] - Math.cos(yaw) * Math.cos(ps) * ds];
-    es[1] = Math.max(es[1], p[1] + 2.6);
-    for (let i = 0; i < 3; i++) { eye[i] += (es[i] - eye[i]) * low; t[i] += (ts[i] - t[i]) * low; }
+    // nearest of all, through their eyes. The view lifts first, from looking down on the hill to
+    // looking out along their way, while the camera's still high behind them, so they drop out of the
+    // bottom of the shot; only then does it come down and in, to just where their eyes are.
+    const q = posNow, f = facing;
+    const fy = f + lookYaw * 1.8, fp = 0.05 + lookPitch * 1.2;
+    const eyeAt: V3 = [q[0] + Math.sin(f) * 0.12, q[1] + 1.55, q[2] + Math.cos(f) * 0.12];
+    // (the way there: first in to a place some five metres behind them and well over their head,
+    // looking out over them, so they're below the shot; then down, and in, to their eyes)
+    const above: V3 = [q[0] - Math.sin(f) * 5, q[1] + 4.5, q[2] - Math.cos(f) * 5];
+    const look: V3 = [Math.sin(fy) * Math.cos(fp), Math.sin(fp), Math.cos(fy) * Math.cos(fp)];
+    const d0 = norm3([t[0] - eye[0], t[1] - eye[1], t[2] - eye[2]]);
+    const a1 = ease(Math.min(1, low / 0.55)), a2 = ease(Math.max(0, (low - 0.55) / 0.45));
+    const turn = smoothstep(0.1, 0.5, low);
+    const d = norm3([d0[0] + (look[0] - d0[0]) * turn, d0[1] + (look[1] - d0[1]) * turn, d0[2] + (look[2] - d0[2]) * turn]);
+    for (let i = 0; i < 3; i++) eye[i] = eye[i] + (above[i] - eye[i]) * a1 + (eyeAt[i] - above[i]) * a2;
+    for (let i = 0; i < 3; i++) t[i] = eye[i] + d[i] * 10;
   }
+  firstT = low;
   return { eye, t };
 }
 
@@ -676,7 +687,7 @@ function frame(now: number) {
   for (const tp of nearTemples) if (!tp.gate) { const d = Math.hypot(tp.c[0] - pos[0], tp.c[2] - pos[2]); lean = (tp.c[0] - pos[0]) * 0.45 * (1 - smoothstep(9, 16, d)); }
   const { eye, t } = camera([pos[0] + lean, pos[1], pos[2]], dt);
   const aspect = W / H;
-  const near = 1, far = (160 + 100 * ease(inkT)) * Math.max(1, zoomI * ease(inkT));
+  const near = 1 - 0.85 * firstT, far = (160 + 100 * ease(inkT)) * Math.max(1, zoomI * ease(inkT));
   const fov = aspect < 1 ? 0.56 : 0.42;
   const v = lookAt(eye, t);
   const vp = mulM(perspective(fov, aspect, near, far), v.m);
@@ -725,7 +736,7 @@ function frame(now: number) {
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000 },
-    [...bands.map((l) => ({ d: l.solid })), { d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }, ...liveDeer(review ? 1 / 30 : dt, time, pos)],
+    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
