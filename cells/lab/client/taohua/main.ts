@@ -18,7 +18,7 @@ import { identify } from '../changes/model';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, POLE_L, TILE, TSTEP, boat, boatReflection, ground, moorings, SHADOW, groundCut, landingsOf, laidPole, makeBand, onJetty, poleMesh, type Landing, setBench, setOldRefl, setSpecimens, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, POLE_L, TILE, TSTEP, boat, boatReflection, ground, moorings, SHADOW, groundCut, landingsOf, laidPole, makeBand, onJetty, poleMesh, type Landing, setBench, setOldRefl, setOldShade, setSpecimens, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
 import { ribbon } from './marks';
 import { RIVER_L } from './water';
@@ -76,6 +76,9 @@ const ways = new Ways(seed);
 // (`?refl=old`: the old hand-laid reflections, to compare with the drawing's own)
 const oldRefl = params.get('refl') === 'old';
 setOldRefl(oldRefl);
+// (`?shade=old`: the old shade, patches laid on the ground, to compare with the drawing's own)
+const oldShade = params.get('shade') === 'old';
+setOldShade(oldShade);
 // (the water bench: a hill of its own, its four streams, a scene of one of them; see bench.ts)
 const benchScene = params.get('bench') === 'water' ? ((params.get('scene') ?? 'pond') as Scene) : null;
 if (benchScene) {
@@ -1222,7 +1225,7 @@ function frame(now: number) {
     mark.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) scale(${(0.8 + 0.35 * Math.min(1, ma * 4)).toFixed(3)})`;
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
-  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks'), oldRefl },
+  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks'), oldRefl, oldShade },
     [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, ...(intro >= 0 || afloat || hop ? [] : [{ d: shadow, model: Tm(pos[0], pos[1] - bob, pos[2]) }]), { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, ...(poling || seated ? [] : [{ d: staff, model: staffAt }])]), ...liveDeer(review ? 1 / 30 : dt, time, pos), ...boatDraw(dt, review ? 0 : time)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 

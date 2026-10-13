@@ -345,6 +345,13 @@ export const setBench = (on: boolean) => { BENCH = on; };
  */
 export let OLD_REFL = false;
 export const setOldRefl = (on: boolean) => { OLD_REFL = on; };
+/**
+ * Shade is the drawing's too (see render.ts: wherever the sun's hidden, as seen from the sun, a grey laid
+ * over what's there, its lines and marks still on it), not patches laid on the ground; `?shade=old`
+ * brings back the old patches, to compare.
+ */
+export let OLD_SHADE = false;
+export const setOldShade = (on: boolean) => { OLD_SHADE = on; };
 /** the tree bench's trees, set out as given (see bench.ts) */
 let SPECIMENS: Array<{ x: number; z: number; seed: number; iso: number; rocks?: boolean }> = [];
 export const setSpecimens = (s: typeof SPECIMENS) => { SPECIMENS = s; };
@@ -869,6 +876,7 @@ function shadeY(ways: Ways, x: number, z: number): number {
  * shade, broken where none reaches: so a crown's, of a patch under each clump, is dappled.
  */
 export function shadeAlong(mesh: Mesh, ways: Ways, x: number, z: number, ux: number, uz: number, rx: number, rz: number, deep: number, N = 12, yAt?: (x: number, z: number) => number) {
+  if (!OLD_SHADE) return;
   const lift = 0.04 + deep * 0.08, ul = Math.hypot(ux, uz) || 1, ax = ux / ul, az = uz / ul;
   // (a patch clear of every way lies on the ground alone, near enough a plane: three asks of the ground,
   // not one at each corner)
@@ -1774,7 +1782,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   // (the crown's shade: under each clump of blossom, where the sun puts it on the ground, a patch, a
   // little smaller than the clump; where the crown's thin, the ground shows through: dappled. From a
   // stream of its own, so the tree is as it was.)
-  {
+  if (OLD_SHADE) {
     const sr = seeded(hash(tid, 0x5ad)), [sx, sz] = SHADOW;
     // (the ground under a crown, as a plane through the foot, asked once for the tree; a patch on a way
     // lies on its treads)

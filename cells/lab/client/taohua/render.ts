@@ -51,7 +51,7 @@ void main() {
 const SOLID_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec3 vN; in vec3 vC; flat in int vM;
-uniform vec3 uEye; uniform sampler2D uPlaque, uType; uniform float uTime, uMarks;
+uniform vec3 uEye; uniform sampler2D uPlaque, uType; uniform float uTime, uMarks, uDropShade;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
@@ -95,6 +95,8 @@ float stipple(vec2 p, float cell, float amt, float fpx) {
   return 1. - smoothstep(rr, rr + .8, d);
 }
 void main() {
+  // (the old shade's patches, where they're still made (a walker's, a deer's), unless they're asked for: the drawing has its own)
+  if (uDropShade > .5 && vM == ${M.shade}) discard;
   vec3 n = normalize(vN);
   // (each face lit from the side it's seen from, whichever way it was wound)
   bool under = dot(n, uEye - vW) < 0.;
@@ -498,6 +500,50 @@ void main() {
   oA = vec4(.5, 1., .5, ${M.petal}. / 31.);
 }`;
 
+/**
+ * The sun's view: the scene drawn from the sun, its depth only, so the print can tell what the sun
+ * doesn't reach. What lies flat on what's under it (water, its marks, a way's strokes, grass, the
+ * casts' words) casts nothing; the blossom casts its clumps, as discs turned to the sun, with holes
+ * in them where the sun comes through: so a crown's shade is dappled.
+ */
+const SUN_VS = `#version 300 es
+in vec3 aPos; in vec3 aNor; in vec3 aCol; in float aMat;
+uniform mat4 uLVP, uModel;
+flat out int vM;
+void main() { vM = int(aMat + .5); gl_Position = uLVP * uModel * vec4(aPos, 1.); }`;
+const SUN_FS = `#version 300 es
+precision highp float;
+flat in int vM;
+void main() {
+  if (vM == ${M.shade} || (vM >= ${M.water} && vM <= ${M.archReflect}) || vM == ${M.mark} || vM == ${M.stroke} || vM == ${M.grass} || vM == ${M.type}) discard;
+}`;
+const SUN_PUFF_VS = `#version 300 es
+in vec2 aQ;
+in vec3 iPos; in float iRad; in float iShade; in float iSeed;
+uniform mat4 uLVP; uniform vec3 uLR, uLU;
+out vec2 vQ; flat out vec3 vP; flat out float vR, vSeed;
+void main() {
+  float shape = fract(sin(dot(iPos, vec3(12.9898, 4.1414, 78.233))) * 43758.5453);
+  vQ = aQ * 1.18 * vec2(1.05 + .22 * shape, .76 + .16 * shape);
+  vP = iPos; vR = iRad; vSeed = iSeed;
+  gl_Position = uLVP * vec4(iPos + (uLR * vQ.x + uLU * vQ.y) * iRad, 1.);
+}`;
+const SUN_PUFF_FS = `#version 300 es
+precision highp float;
+in vec2 vQ; flat in vec3 vP; flat in float vR, vSeed;
+uniform vec3 uLR, uLU;
+${COMMON}
+void main() {
+  float shape = fract(sin(dot(vP, vec3(12.9898, 4.1414, 78.233))) * 43758.5453);
+  vec2 q = vQ / vec2(1.05 + .22 * shape, .76 + .16 * shape);
+  float a = atan(q.y, q.x), r = length(q);
+  float edge = .8 + .12 * noise(vec3(cos(a) * 3.8, sin(a) * 3.8, vSeed * 40.)) + .06 * sin(a * 7. + vSeed * 19.);
+  if (r > edge) discard;
+  // (where the sun comes through: holes, a hand's breadth to an arm's, held where they are on the tree)
+  vec3 w = vP + (uLR * vQ.x + uLU * vQ.y) * vR;
+  if (noise(w * 1.5 + vSeed) * .7 + noise(w * 4.) * .3 > .52) discard;
+}`;
+
 /** the print: ink lines, the paper under it all */
 const POST_VS = `#version 300 es
 out vec2 vUV;
@@ -505,10 +551,14 @@ void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); vUV = p; g
 const POST_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
-uniform sampler2D uC, uA, uD;
+uniform sampler2D uC, uA, uD, uSS, uSD;
 uniform vec2 uPx; uniform float uNear, uFar, uLine, uInk, uMarks, uRefl; uniform mat4 uIVP, uVP; uniform vec3 uEye;
+// (the sun's view: its matrix; how deep it is, and how wide, in metres; whether there's shade to draw)
+uniform mat4 uLVP; uniform float uLDeep, uLWide, uShade;
 out vec4 o;
 ${COMMON}
+/** what the sun's view has nearest it at uv: the hill's, or what moves on it (the walker, the deer, the boat) */
+float sunD(vec2 uv) { return min(texture(uSS, uv).r, texture(uSD, uv).r); }
 float lin(float d) { float z = d * 2. - 1.; return 2. * uNear * uFar / (uFar + uNear - z * (uFar - uNear)); }
 int matAt(vec2 uv) { return int(texture(uA, uv).a * 31. + .5); }
 void main() {
@@ -556,6 +606,56 @@ void main() {
       float seg = mix(.22, 1., calm), br = noise(vec3(P.x / seg, floor(row) * 1.37, 7.));
       bar *= smoothstep(.36 - .22 * calm, .46 - .22 * calm, br);
       c = mix(c, inkR, strength * bar);
+    }
+  }
+  // shade: where the sun's hidden, a grey laid over what's there, as a dry brush lays it, before the
+  // lines, so they're drawn on it. Deep close to what casts it (at a rock's foot, under the walker),
+  // paler far from it (under a crown, high over the ground). Not on the blossom (its own tones say
+  // where it's lit), nor the water, nor the casts' words; and not on a face turned from the sun,
+  // which its own ink already darkens.
+  if (uShade > .5 && d0 < 1.) {
+    vec4 as = texture(uA, vUV);
+    int ms = int(as.a * 31. + .5);
+    bool recv = !(ms == ${M.blossom} || ms == ${M.type} || ms == ${M.shade} || (ms >= ${M.water} && ms <= ${M.archReflect}) || ms == ${M.mark});
+    vec3 ns = ms == ${M.petal} ? vec3(0., 1., 0.) : normalize(as.xyz * 2. - 1.);
+    float face = smoothstep(.04, .22, dot(ns, L));
+    if (recv && face > 0.) {
+      vec4 pw4 = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
+      vec3 P = pw4.xyz / pw4.w;
+      // (looked for a little off the surface, out along it, so it doesn't shade itself)
+      vec3 lq = (uLVP * vec4(P + ns * uLWide * .0012, 1.)).xyz * .5 + .5;
+      float fade = smoothstep(0., .06, min(min(lq.x, lq.y), min(1. - lq.x, 1. - lq.y)));
+      if (fade > 0. && lq.z < 1.) {
+        float zr = lq.z - .08 / uLDeep, perM = 1. / uLWide;
+        float rot = hash3(floor(P * 37.)) * 6.2832;
+        mat2 R = mat2(cos(rot), sin(rot), -sin(rot), cos(rot));
+        // (first, how far off what hides it is, from a few looks about; then how much of the sun's
+        // hidden, over a breadth that grows with that: sharp at a foot, soft under a crown)
+        float blk = 0., nb = 0.;
+        for (int i = 0; i < 4; i++) {
+          float a = float(i) * 1.5708 + .4;
+          float dz = sunD(lq.xy + R * vec2(cos(a), sin(a)) * .3 * perM);
+          if (dz < zr) { blk += zr - dz; nb += 1.; }
+        }
+        float dc = sunD(lq.xy);
+        if (dc < zr) { blk += zr - dc; nb += 1.; }
+        if (nb > 0.) {
+          float occ = blk / nb * uLDeep;
+          float pen = clamp(.05 + occ * .045, .05, .4) * perM, sh = 0.;
+          for (int i = 0; i < 8; i++) {
+            float fi = float(i) + .5, rr = sqrt(fi / 8.), a = fi * 2.39996;
+            sh += sunD(lq.xy + R * vec2(cos(a), sin(a)) * rr * pen) < zr ? 1. : 0.;
+          }
+          sh /= 8.;
+          // (as the old patches were laid: strokes across, thinning out at the edge)
+          vec3 sp = vec3(P.x, P.z + P.y * .6, 0.);
+          float st = noise(vec3(sp.x * 1.1, sp.y * 9., 2.)) * .75 + noise(vec3(sp.x * 4., sp.y * 24., 5.)) * .25;
+          float vis = st >= 1. - sh * 1.15 ? 1. : 0.;
+          float deep = mix(.9, .3, smoothstep(.3, 5., occ));
+          vec3 GREY = vec3(.62, .58, .53);
+          c *= mix(vec3(1.), GREY / PAPER, deep * vis * face * fade);
+        }
+      }
     }
   }
   // ink: where depth jumps (one thing before another), where the surface turns, where one thing meets another
@@ -675,7 +775,7 @@ void main() {
   o = vec4(c, 1.);
 }`;
 
-function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
+function compile(gl: WebGL2RenderingContext, vs: string, fs: string, binds?: WebGLProgram): WebGLProgram {
   const mk = (type: number, src: string) => {
     const s = gl.createShader(type)!;
     gl.shaderSource(s, src); gl.compileShader(s);
@@ -684,6 +784,11 @@ function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgr
   };
   const p = gl.createProgram()!;
   gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  // (where it's to draw the same vertices as another program, its inputs where that one's are)
+  if (binds) for (let i = 0, n = gl.getProgramParameter(binds, gl.ACTIVE_ATTRIBUTES); i < n; i++) {
+    const a = gl.getActiveAttrib(binds, i)!;
+    gl.bindAttribLocation(p, gl.getAttribLocation(binds, a.name), a.name);
+  }
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
   return p;
@@ -694,6 +799,12 @@ export interface Drawn { vao: WebGLVertexArrayObject; bufs: WebGLBuffer[]; count
 export class Renderer {
   readonly gl: WebGL2RenderingContext;
   private solid: WebGLProgram; private puff: WebGLProgram; private petal: WebGLProgram; private post: WebGLProgram;
+  private sun: WebGLProgram; private sunPuff: WebGLProgram;
+  /** the sun's views: the hill's (drawn again only when what's on it, or where the view is, changes) and what moves on it (each frame) */
+  private hill: { S: number; tex: WebGLTexture; fb: WebGLFramebuffer; key: string } | null = null;
+  private moving: { S: number; tex: WebGLTexture; fb: WebGLFramebuffer; key: string } | null = null;
+  private light: { c: V3; R: number; lvp: M4; right: V3; up: V3 } | null = null;
+  private ids = new WeakMap<object, number>(); private nextId = 1;
   private quadBuf: WebGLBuffer;
   private fb: WebGLFramebuffer | null = null; private texC: WebGLTexture | null = null; private texA: WebGLTexture | null = null; private texD: WebGLTexture | null = null;
   private w = 0; private h = 0;
@@ -709,6 +820,8 @@ export class Renderer {
     this.puff = compile(gl, PUFF_VS, PUFF_FS);
     this.petal = compile(gl, PETAL_VS, PETAL_FS);
     this.post = compile(gl, POST_VS, POST_FS);
+    this.sun = compile(gl, SUN_VS, SUN_FS, this.solid);
+    this.sunPuff = compile(gl, SUN_PUFF_VS, SUN_PUFF_FS, this.puff);
     this.quadBuf = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
@@ -848,14 +961,91 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
+  private depthTarget(S: number) {
+    const gl = this.gl, tex = gl.createTexture()!, fb = gl.createFramebuffer()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, S, S, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, tex, 0);
+    gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { S, tex, fb, key: '' };
+  }
+  private idOf(o: object) { let i = this.ids.get(o); if (!i) this.ids.set(o, (i = this.nextId++)); return i; }
+
+  /**
+   * Where the sun looks from: square on to it, over as much of the hill as the view takes in (out to
+   * so far, past which the paper takes it anyway), and held still as the view moves a little, so the
+   * hill's own view needn't be drawn again each frame; its edges on whole texels, so when it is, the
+   * shade on the hill doesn't crawl.
+   */
+  private fitLight(view: { ivp: M4; eye: V3 }) {
+    const reach = 90, S = this.hill!.S;
+    const un = (x: number, y: number, z: number): V3 => { const m = view.ivp, w = m[3] * x + m[7] * y + m[11] * z + m[15]; return [(m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w, (m[2] * x + m[6] * y + m[10] * z + m[14]) / w]; };
+    const pts: V3[] = [];
+    for (const x of [-1, 1]) for (const y of [-1, 1]) {
+      const a = un(x, y, -1), b = un(x, y, 1), e = view.eye, d: V3 = [b[0] - e[0], b[1] - e[1], b[2] - e[2]], L = Math.hypot(...d), k = Math.min(1, reach / L);
+      pts.push(a, [e[0] + d[0] * k, e[1] + d[1] * k, e[2] + d[2] * k]);
+    }
+    const c: V3 = [0, 0, 0];
+    for (const p of pts) for (let i = 0; i < 3; i++) c[i] += p[i] / pts.length;
+    let R = 0;
+    for (const p of pts) R = Math.max(R, Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]));
+    R = Math.ceil((R + 8) / 8) * 8;
+    const was = this.light;
+    if (was && was.R === R && Math.hypot(c[0] - was.c[0], c[1] - was.c[1], c[2] - was.c[2]) < 6) return was;
+    const D = 160, lv = lookAt([c[0] + SUN[0] * D, c[1] + SUN[1] * D, c[2] + SUN[2] * D], c);
+    const tx = (2 * R) / S, a = lv.right[0] * c[0] + lv.right[1] * c[1] + lv.right[2] * c[2], b = lv.up[0] * c[0] + lv.up[1] * c[1] + lv.up[2] * c[2];
+    const da = Math.round(a / tx) * tx - a, db = Math.round(b / tx) * tx - b;
+    const cs: V3 = [c[0] + lv.right[0] * da + lv.up[0] * db, c[1] + lv.right[1] * da + lv.up[1] * db, c[2] + lv.right[2] * da + lv.up[2] * db];
+    const v2 = lookAt([cs[0] + SUN[0] * D, cs[1] + SUN[1] * D, cs[2] + SUN[2] * D], cs);
+    const lvp = mulM(ortho(R, 1, 2 * D), v2.m);
+    return (this.light = { c, R, lvp, right: v2.right, up: v2.up });
+  }
+
+  /** the sun's view drawn: the solids given, and the blossom */
+  private sunPass(t: { S: number; fb: WebGLFramebuffer }, lvp: M4, solids: Array<{ d: Drawn; model?: M4 }>, puffs: Drawn[], lr: V3, lu: V3) {
+    const gl = this.gl, I = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+    gl.viewport(0, 0, t.S, t.S);
+    gl.clearBufferfv(gl.DEPTH, 0, [1]);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1.5, 3);
+    gl.useProgram(this.sun);
+    gl.uniformMatrix4fv(this.loc(this.sun, 'uLVP'), false, lvp);
+    for (const s of solids) {
+      gl.uniformMatrix4fv(this.loc(this.sun, 'uModel'), false, s.model ?? I);
+      gl.bindVertexArray(s.d.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, s.d.count);
+    }
+    if (puffs.length) {
+      gl.useProgram(this.sunPuff);
+      gl.uniformMatrix4fv(this.loc(this.sunPuff, 'uLVP'), false, lvp);
+      gl.uniform3fv(this.loc(this.sunPuff, 'uLR'), lr); gl.uniform3fv(this.loc(this.sunPuff, 'uLU'), lu);
+      for (const p of puffs) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, p.count); }
+    }
+    gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+  }
+
   /**
    * The frame: the solids (the world's bands, the walker by its own placing), the blossom, the
    * petals; then the print.
    */
-  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: number | boolean; time?: number; marks?: boolean; oldRefl?: boolean },
+  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: number | boolean; time?: number; marks?: boolean; oldRefl?: boolean; oldShade?: boolean },
     solids: Array<{ d: Drawn; model?: M4 }>, puffs: Drawn[], petals: Drawn[]) {
     const gl = this.gl, W = this.canvas.width, H = this.canvas.height;
     this.targets(W, H);
+    // the sun's views: the hill's when it's changed, what moves on it each frame
+    const shading = !view.oldShade;
+    if (shading) {
+      if (!this.hill) { this.hill = this.depthTarget(2048); this.moving = this.depthTarget(1024); }
+      const L = this.fitLight(view), still = solids.filter((s) => !s.model), moving = solids.filter((s) => s.model);
+      const key = `${L.lvp.join(',')}|${still.map((s) => this.idOf(s.d)).join(',')}|${puffs.map((p) => this.idOf(p)).join(',')}`;
+      if (key !== this.hill.key) { this.sunPass(this.hill, L.lvp, still, puffs, L.right, L.up); this.hill.key = key; }
+      this.sunPass(this.moving!, L.lvp, moving, [], L.right, L.up);
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     gl.viewport(0, 0, W, H);
     gl.clearBufferfv(gl.COLOR, 0, [...INK.paper, 1]);
@@ -872,6 +1062,7 @@ export class Renderer {
     gl.uniform3fv(this.loc(this.solid, 'uUp'), view.up);
     gl.uniform1f(this.loc(this.solid, 'uTime'), view.time ?? 0);
     gl.uniform1f(this.loc(this.solid, 'uMarks'), view.marks ? 1 : 0);
+    gl.uniform1f(this.loc(this.solid, 'uDropShade'), shading ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.plaque);
     gl.uniform1i(this.loc(this.solid, 'uPlaque'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.type);
@@ -907,12 +1098,25 @@ export class Renderer {
     gl.uniform1f(this.loc(this.post, 'uInk'), Number(view.ink ?? 0));
     gl.uniform1f(this.loc(this.post, 'uMarks'), view.marks ? 1 : 0);
     gl.uniform1f(this.loc(this.post, 'uLine'), Math.max(1, view.dpr * 0.9));
+    gl.uniform1f(this.loc(this.post, 'uShade'), shading ? 1 : 0);
+    if (shading) {
+      [this.hill!.tex, this.moving!.tex].forEach((t, i) => { gl.activeTexture(gl.TEXTURE3 + i); gl.bindTexture(gl.TEXTURE_2D, t); });
+      gl.uniformMatrix4fv(this.loc(this.post, 'uLVP'), false, this.light!.lvp);
+      gl.uniform1f(this.loc(this.post, 'uLDeep'), 320 - 1);
+      gl.uniform1f(this.loc(this.post, 'uLWide'), 2 * this.light!.R);
+    }
+    gl.uniform1i(this.loc(this.post, 'uSS'), 3); gl.uniform1i(this.loc(this.post, 'uSD'), 4);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
   }
 }
 
 // ─── matrices ────────────────────────────────────────────────────────────────────────────────────
+/** a square orthographic view, so wide each way of its middle, from near to far */
+export function ortho(R: number, near: number, far: number): M4 {
+  const nf = 1 / (near - far);
+  return new Float32Array([1 / R, 0, 0, 0, 0, 1 / R, 0, 0, 0, 0, 2 * nf, 0, 0, 0, (far + near) * nf, 1]);
+}
 export function perspective(fovy: number, aspect: number, near: number, far: number): M4 {
   const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
   return new Float32Array([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0]);

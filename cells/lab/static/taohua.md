@@ -367,14 +367,17 @@ the body sways from foot to foot and twists a little with each step, leans into 
 arm swings against the stride, and the pace surges and eases within each step. They turn to face
 their way gradually. Standing, they breathe, and look about, now one way, now another.
 
-One sun lights it all, high to the front and right: the print's light and every shade are cast from
-it. Shade on the ground is grey laid on as a dry brush does, thinning out at its edge, and it falls
-on whatever is there, the ground or a way's treads and steps alike. A thing standing casts its shade
-away from the sun, as long as it is tall: a rock, a cairn, a shrine, a trunk. Close about its foot
-the shade is deeper, so it sits on the ground and doesn't float. A crown's shade is dappled: a patch
-under each of some of its clumps, as far off as the clump is high, the patches running into one
-another and broken where none reaches. A hall's roof lays its shade across its terrace. The walker's
-shade lies away from the sun whichever way they face, and they leave it ashore when they board.
+One sun lights it all, high to the front and right: the print's light and its shade both come from
+it. Shade is the drawing's, not patches laid on the ground: the scene is drawn once more as the sun
+sees it, and wherever the sun's hidden a grey is laid over what's there, as a dry brush lays it, in
+strokes across that thin out at its edge, with every line and mark still drawn on it. So it falls
+on whatever's there: the ground, a way's treads and steps, a trunk, the walker, a deer, the boat;
+and it moves with what casts it. It is deep close to what casts it (at a rock's foot, under the
+walker) and pale far from it (under a crown, high over the ground), sharp-edged close and soft far
+off. A crown casts its clumps, with holes where the sun comes through, so its shade is dappled. The
+blossom and the water take none; a face turned from the sun is darkened by its own ink, not the
+shade. The hill's view from the sun is drawn again only when the hill changes or the view has moved
+on; what moves on it is drawn each frame. `?shade=old` brings back the old patches, to compare.
 
 Broad, asymmetric openings beside the route alternate with denser wooded shoulders, each opening
 held by one tree standing alone toward its far side. These composition fields span streaming
