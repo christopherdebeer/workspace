@@ -110,6 +110,6 @@ export const RIVER_SCENES = {
   jetty: { at: '@-0.15,-8.4' },
   far: { at: '@2,-22.6' },
   bank: { at: '@-16,-2' },
-  arrive: { intro: 9 },
+  arrive: { intro: 9 }, open: { intro: 2 },
 } as const;
 export type RiverScene = keyof typeof RIVER_SCENES;

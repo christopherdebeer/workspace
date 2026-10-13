@@ -65,13 +65,20 @@ export class Water {
    */
   readonly river: Stream = { k: -1, z0: -60, z1: 0, x0: 0, A: [0, 0, 0], lam: [1, 1, 1], ph: [0, 0, 0], w0: 9, pools: [], falls: [], foot: 'pond' };
   riverNearBank(x: number): number {
-    const ph = (this.seed % 997) * 0.37, f = (x: number) => 1.7 * Math.sin(x / 41 + ph) + 0.8 * Math.sin(x / 17 + ph * 1.7) + 0.25 * Math.sin(x / 5.3 + ph * 2.3);
+    // (in long bends, so its banks run across the picture, not along it: drawn back from the hill's
+    // foot either side of the jetty (never up into the hill where the ways begin), and wandering a
+    // little of its own)
+    const ph = (this.seed % 997) * 0.37, f = (x: number) => -4.5 * (1 - Math.cos(x / 23 + 0.4 * Math.sin(ph))) + 1.1 * Math.sin(x / 9.5 + ph) + 0.25 * Math.sin(x / 4.1 + ph * 2.3);
     return RIVER_NEAR + f(x) - f(0);
   }
-  riverHalf(x: number): number { return 8.5 + 3 * noise1(hash(this.seed, 0x71e), x / 45); }
+  /**
+   * its half-width at x: upstream (+x) it opens out into broad water whose far bank's lost to the eye;
+   * coming down to the jetty it narrows; below, a river of a fair width
+   */
+  riverHalf(x: number): number { return 8 + 2.5 * noise1(hash(this.seed, 0x71e), x / 45) + 22 * smooth(14, 70, x); }
   riverMid(x: number): number { return this.riverNearBank(x) - this.riverHalf(x); }
   /** whether the river (or its banks) reach anywhere between z0 and z1 */
-  riverNear(z0: number, z1: number): boolean { return z0 < RIVER_NEAR + 6 && z1 > RIVER_NEAR - 34; }
+  riverNear(z0: number, z1: number): boolean { return z0 < RIVER_NEAR + 6 && z1 > RIVER_NEAR - 80; }
 
   streamsNear(z0: number, z1: number): Stream[] {
     while (!this.fixed && (!this.streams.length || this.streams[this.streams.length - 1].z0 < z1 + 400)) this.lay();
@@ -191,7 +198,7 @@ export class Water {
     if (this.memo.size > 600000) this.memo.clear();
     const out: Wet[] = [];
     // (the river: its edge where it is across its middle line by its half-width)
-    if (z < RIVER_NEAR + 18 && z > RIVER_NEAR - 50) {
+    if (z < RIVER_NEAR + 18 && z > RIVER_NEAR - 100) {
       const zc = this.riverMid(x), hw = this.riverHalf(x), s = Math.abs(z - zc) - hw;
       if (s < 14) out.push({ s, L: RIVER_L, kind: 'river', st: this.river, bank: 0.7, run: 0, across: z - zc });
     }

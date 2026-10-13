@@ -28,24 +28,38 @@ the composition view, to stand further off still, up to twice as far. Each view 
 
 The journey starts on the river, as 桃花源记 has it: a fisherman, rowing up a stream, comes on a forest
 of peach blossom lining its banks, and leaves his boat to go in. Across the foot of the hill runs a
-wide river, its far bank a low plain; out from its near bank, below the first way, a jetty of planks
-on posts, a red paper lantern on a pole at its end, and from its land end up to the first way a
-landing paved in cracked ice. Unless the address says where to start, the walker arrives aboard a
-boat, drifting down the river and slowing as it turns in to lie alongside the jetty, and steps off
-onto its deck, facing up the hill (a tap ends the arrival at once). The boat stays moored there,
-rocking a little on the current: a sampan, its hull of dark planks rising to its ends, a woven
-canopy amidships, a pole laid along it and a red lantern at its stern. The walker can come back down
-to the jetty's deck (it's open ground, over the water). The river's drawn as the hill's water is, the
-paper and marks where something happens: groups of long rippling lines along it, broken, fewer out in
-its middle; its bank at the hill's side a broken line, the bank showing in the water under it here and
-there; its other bank, nearer the eye, left open; reeds in clumps along its far bank; each post of the
-jetty and the lantern a wavering line down the water from its foot; the boat a dark broken line along
-each side. Petals float on it, fewer, carried on. Every hill keeps the same ways it had: the river lies
-below where they start.
+river in long bends, so its banks run across the picture, not along it; upstream it opens out into
+broad water whose far bank is lost to the eye, and narrows coming down to the hill. Its banks are held
+by black rocks in clumps, half in the water (more along its near bank, up the picture), reeds here and
+there between. Out from its near bank, below the first way, a jetty of planks on posts, a red paper
+lantern on a pole at its end; beside it stone steps go down into the water, the bank either side faced
+with dressed stone, and from there a landing paved in cracked ice goes up to the first way. A boat is
+moored at the pier, lying a little across it, bow in, tied at bow and stern: a sampan, its hull of dark
+planks rising to its ends, a woven canopy amidships, a pole laid along it and a red lantern at its
+stern. It rocks a little on the current.
 
-`?bench=river&scene=jetty|far|bank|arrive` (best with `review`) shows places at the foot of one hill
-(seed 1): on the jetty by the boat; on the far bank, looking back across the river to the hill; on the
-near bank a way along; and the arrival held part way. `?intro=t` holds the arrival t seconds in.
+Unless the address says where to start, the journey begins out on the broad water: nothing but the
+paper and a few marks on it, the boat, the walker sitting low in it behind its canopy. It drifts down
+the river; the banks come in, rocks first, then the blossom; it slows into the narrows, turns in and
+comes alongside the jetty, and the walker steps off onto its deck, facing up the hill (a tap ends the
+arrival at once). The title stands on the water where it began, and beside it, as the prints set a
+verse, the lines it comes from: 缘溪行，忘路之远近。忽逢桃花林，夹岸数百步。 (晋 · 陶渊明); both are left
+behind. The walker can come back down to the jetty's deck (it's open ground, over the water).
+
+The river's drawn as the hill's water is, the paper and marks where something happens. Its current as
+the prints draw a river's: long trails of small crests, each a little arc of its own with the paper
+between, following the river's course a few at a time across it, one near each bank and one or two
+between, each coming and going along it; closer in the narrows, few out on the broad water above,
+where it hardly seems to move. Its bank at the hill's side is a line now and then between its rocks,
+the bank showing in the water under it here and there; its other bank, nearer the eye, left open.
+Each post of the jetty and the lantern is a wavering line down the water from its foot; the boat's
+reflection is short level bars stacked under its hull, dark and broken, shorter and fainter going
+down. Fallen petals gather along the banks, behind the pier and about the boat; few float out on the
+river. Every hill keeps the same ways it had: the river lies below where they start.
+
+`?bench=river&scene=jetty|far|bank|arrive|open` (best with `review`) shows places at the foot of one
+hill (seed 1): on the jetty by the boat; on the far bank, looking back across the river to the hill; on
+the near bank a way along; the arrival held part way; and its beginning, out on the broad water. `?intro=t` holds the arrival t seconds in.
 
 The title stands at the foot of the print where the journey starts: the name of the first temple up
 the hill from there, over 桃花, large, and a small seal, 桃源. It belongs to the hillside there, not

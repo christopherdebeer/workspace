@@ -144,6 +144,9 @@ function placeTitle(pos: V3) {
   const dx = q[0] - titleFoot[0], dy = q[1] - titleFoot[1];
   el.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
   el.style.visibility = q[2] > 0 && Math.abs(dy) < innerHeight * 1.5 && Math.abs(dx) < innerWidth * 1.5 ? '' : 'hidden';
+  // (and the lines beside it go with it)
+  const poem = document.getElementById('poem');
+  if (poem) { poem.style.transform = el.style.transform; poem.style.visibility = el.style.visibility; }
 }
 function showName(i: number) { $('name').textContent = NAMES[i % NAMES.length]; }
 
@@ -219,28 +222,32 @@ const boatD = part((m) => boat(m));
  * boat, drifting down to the jetty and turning in to lie alongside it; then the walker steps off onto
  * its deck. A tap ends it at once. (`intro`: how long it's been going, in seconds; -1 once it's over.)
  */
-const DRIFT = 14, STEP = 1.4;
+const DRIFT = 26, STEP = 1.4;
 let intro = -1;
 /** where the boat is, t seconds into its arrival, and its heading (its bow along +z at 0) */
 function boatPose(t: number): { p: V3; yaw: number } {
-  const E = JETTY.boat, W = ways.water, sx = E[0] + 26;
-  const P0: V3 = [sx, E[1], W.riverMid(sx) + 1.5], P1: V3 = [E[0] + 2.5, E[1], W.riverMid(E[0] + 2.5) + 1], P2 = E;
+  // (from out on the broad water above, where neither bank can be made out, down into the narrows and
+  // in to the jetty)
+  const E = JETTY.boat, W = ways.water, sx = E[0] + 58;
+  const P0: V3 = [sx, E[1], W.riverMid(sx) + 5], P1: V3 = [E[0] + 7, E[1], W.riverMid(E[0] + 7) + 1.5], P2 = E;
   // (slowing as it comes in)
   const u = Math.min(1, t / DRIFT), k = 1 - Math.pow(1 - u, 2.2);
   const B = (a: number, b: number, c: number) => (1 - k) * (1 - k) * a + 2 * (1 - k) * k * b + k * k * c;
   const D = (a: number, b: number, c: number) => 2 * (1 - k) * (b - a) + 2 * k * (c - b);
   const yaw = Math.atan2(D(P0[0], P1[0], P2[0]), D(P0[2], P1[2], P2[2]));
-  return { p: [B(P0[0], P1[0], P2[0]), E[1], B(P0[2], P1[2], P2[2])], yaw: yaw * (1 - Math.pow(u, 6)) };
+  const e = Math.pow(u, 6);
+  return { p: [B(P0[0], P1[0], P2[0]), E[1], B(P0[2], P1[2], P2[2])], yaw: yaw * (1 - e) + JETTY.boatYaw * e };
 }
 function boatAt(time: number): M4 {
   // (it rocks: rolling a little, pitching less, rising and falling on the current's swell)
-  const pose = intro >= 0 ? boatPose(intro) : { p: JETTY.boat, yaw: 0 };
+  const pose = intro >= 0 ? boatPose(intro) : { p: JETTY.boat, yaw: JETTY.boatYaw };
   const [x, y, z] = pose.p, c = Math.cos(pose.yaw), sn = Math.sin(pose.yaw);
   return mulM(mulM(Tm(x, y + 0.012 * Math.sin(time * 0.9), z), new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, 0, 0, 0, 1])), mulM(Rz(0.022 * Math.sin(time * 1.1) + 0.008 * Math.sin(time * 2.3)), Rx(0.01 * Math.sin(time * 0.73 + 1))));
 }
 /** where the walker stands, t seconds into the arrival: aboard, at the stern behind the canopy; then stepping off */
 function introStand(t: number, time: number): { p: V3; dir: [number, number] } {
-  const m = boatAt(time), local: V3 = [0, 0.12, -1.25];
+  // (sitting, low in the boat, behind its canopy)
+  const m = boatAt(time), local: V3 = [0, -0.16, -1.3];
   const aboard: V3 = [m[0] * local[0] + m[4] * local[1] + m[8] * local[2] + m[12], m[1] * local[0] + m[5] * local[1] + m[9] * local[2] + m[13], m[2] * local[0] + m[6] * local[1] + m[10] * local[2] + m[14]];
   const yaw = intro >= 0 ? boatPose(Math.min(t, DRIFT)).yaw : 0;
   if (t < DRIFT) return { p: aboard, dir: [Math.sin(yaw), Math.cos(yaw)] };

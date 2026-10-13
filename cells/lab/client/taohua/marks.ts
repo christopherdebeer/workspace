@@ -23,6 +23,7 @@ export const FAM = { current: 0, obstacle: 1, bank: 2, fall: 3, impact: 4, still
 export type Push = (v: number[]) => void;
 
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
+const smooth = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 /**
  * A ribbon through the points: so wide (m) at its fullest, tapering to a hair at both ends, swelling
@@ -236,61 +237,62 @@ export function obstacleMarks(push: Push, W: Water, o: Obstacle, mat: number) {
 }
 
 /**
- * The river's marks, those that start between x0 and x1 (and that `own` says belong here): decided a
- * cell (a metre and a half along it) at a time, from the river and the cell alone. Its current: now
- * and then a group of long lines along it, one over another, each rippling as the prints draw moving
- * water (〰), broken, set at their own distances across it, fewer out in its middle; its bank at the
- * hill's side (up the picture, the bank under which it lies): a line, broken, and under it here and
- * there a dash or two, the bank in the water; its other bank, nearer the eye, left open but for a
- * stroke now and then.
+ * The river's marks, those that start between x0 and x1 (and that `own` says belong here). Its current,
+ * as the prints draw a river's: long trails of small crests, each crest a little arc of its own with
+ * the paper between, following the river's course a few at a time across it (one near each bank, one
+ * or two between), each coming and going along it; closer and more of them in the narrows, few out on
+ * the broad water above, where it hardly seems to move. Its bank at the hill's side (up the picture):
+ * a line now and then between its rocks, and under it here and there the bank in the water; its other
+ * bank, nearer the eye, left open but for a stroke now and then.
  */
 export function riverMarks(push: Push, W: Water, x0: number, x1: number, own: (x: number, z: number) => boolean, mat: number) {
+  const onWater = (x: number, z: number): V3 | null => { const w = W.at(x, z); return w && w.kind === 'river' && w.s < -0.08 ? [x, w.L + 0.022, z] : null; };
+  const ph = (W.seed % 991) * 0.53;
+  // (each trail where it is across the river at x: -1 its far bank, 1 its near)
+  const BASE = [0.74, 0.3, -0.12, -0.62];
+  const vOf = (k: number, x: number) => BASE[k] + 0.16 * Math.sin(x / 17 + k * 1.7 + ph) + 0.07 * Math.sin(x / 6.3 + k * 2.9);
+  const SEG = 9, STEP = 0.62;
+  for (let k = 0; k < BASE.length; k++) for (let c = Math.floor((x0 - 1) / SEG); c <= Math.floor((x1 + 1) / SEG); c++) {
+    // (a trail comes and goes along the river: in this stretch of it, or not)
+    const broad = smooth(14, 70, (c + 0.5) * SEG);
+    if (seeded(hash(W.seed, k, c, 0x7a11))() > (k === 0 ? 0.72 : 0.55) * (1 - 0.75 * broad)) continue;
+    for (let i = Math.floor((c * SEG) / STEP); i < Math.floor(((c + 1) * SEG) / STEP); i++) {
+      const r = seeded(hash(W.seed, k, i, 0xc4e5));
+      if (r() < 0.12 + 0.3 * broad) continue;
+      const xa = i * STEP + ramp(r, 0, 0.14), len = ramp(r, 0.36, 0.56), lift = ramp(r, 0.06, 0.1) * (r() < 0.8 ? 1 : -1);
+      const za = W.riverMid(xa) + vOf(k, xa) * W.riverHalf(xa);
+      if (xa < x0 || xa >= x1 || !own(xa, za)) continue;
+      // (a crest: a little arc, down the river from where it starts)
+      const crest = (dz: number) => {
+        const pts: V3[] = [];
+        for (let t = 0; t <= 1.0001; t += 0.25) { const x = xa - len * t, p = onWater(x, W.riverMid(x) + vOf(k, x) * W.riverHalf(x) + dz + lift * Math.sin(Math.PI * t)); if (p) pts.push(p); }
+        ribbon(push, pts, ramp(r, 0.04, 0.06), FAM.current, ramp(r, 0.65, 0.92), mat);
+      };
+      crest(0);
+      // (now and then a second beside it, a trail doubled)
+      if (r() < 0.22) crest(ramp(r, 0.1, 0.16) * (r() < 0.5 ? 1 : -1));
+    }
+  }
   const CELL = 1.5;
-  const onWater = (x: number, z: number): V3 | null => { const w = W.at(x, z); return w && w.kind === 'river' && w.s < -0.06 ? [x, w.L + 0.022, z] : null; };
-  for (let c = Math.floor((x0 - 9) / CELL); c <= Math.floor((x1 + 1) / CELL); c++) {
+  for (let c = Math.floor((x0 - 3) / CELL); c <= Math.floor((x1 + 1) / CELL); c++) {
     const r = seeded(hash(W.seed, c, 0x41fe));
     const xc = (c + r()) * CELL, hw = W.riverHalf(xc), mid = W.riverMid(xc);
-    // (a line along it from xc, so long, at v across it (-1 its far bank, 1 its near), rippling)
-    const line = (v: number, len: number, amp: number, lam: number, ph: number): V3[] => {
+    const line = (v: number, len: number): V3[] => {
       const pts: V3[] = [];
-      for (let d = 0; d <= len + 1e-6; d += lam / 6) {
-        const x = xc - d, z = W.riverMid(x) + v * W.riverHalf(x) + amp * Math.sin(ph + (d / lam) * Math.PI * 2) * Math.sin(Math.PI * Math.min(1, d / len));
-        const p = onWater(x, z);
-        if (!p) { if (pts.length > 1) break; pts.length = 0; continue; }
-        pts.push(p);
-      }
+      for (let d = 0; d <= len + 1e-6; d += 0.15) { const x = xc - d, p = onWater(x, W.riverMid(x) + v * W.riverHalf(x)); if (!p) { if (pts.length > 1) break; pts.length = 0; continue; } pts.push(p); }
       return pts;
     };
-    for (let g = 0; g < 2; g++) if (r() < 0.6) {
-      // the current: a group of lines, one over another, each broken into lengths
-      const v = ramp(r, -0.88, 0.88), mid0 = 1 - Math.abs(v);
-      if (r() < 0.75 * (1 - 0.5 * mid0) + 0.2) {
-        const n = 1 + Math.floor(r() * 3), gap = ramp(r, 0.3, 0.55) / hw, lam = ramp(r, 0.6, 1.1), amp = ramp(r, 0.05, 0.1);
-        for (let k = 0; k < n; k++) {
-          const len = ramp(r, 3, 9), ph = r() * 6.3, vv = v + k * gap;
-          const z0 = mid + vv * hw;
-          if (!own(xc, z0)) continue;
-          // (broken: a gap or two along it)
-          const pts = line(vv, len, amp, lam, ph);
-          for (let a = 0; a < pts.length - 1;) {
-            const b = Math.min(pts.length, a + 4 + Math.floor(r() * 10));
-            ribbon(push, pts.slice(a, b), ramp(r, 0.03, 0.05), FAM.current, ramp(r, 0.5, 0.85), mat);
-            a = b + 1 + Math.floor(r() * 2);
-          }
-        }
-      }
-    }
-    // its bank at the hill's side: a line, broken, about two thirds drawn; under it, the bank in the water
-    if (r() < 0.66 && own(xc, mid + hw)) {
-      const pts = line(0.985, ramp(r, 0.8, 2), 0.02, 2.5, r() * 6.3);
-      ribbon(push, pts, ramp(r, 0.07, 0.11), FAM.bank, ramp(r, 0.75, 0.95), mat);
+    // its bank at the hill's side: now and then a line; under it, the bank in the water
+    if (r() < 0.4 && own(xc, mid + hw)) {
+      const pts = line(1 - 0.12 / hw, ramp(r, 0.6, 1.6));
+      ribbon(push, pts, ramp(r, 0.05, 0.08), FAM.bank, ramp(r, 0.65, 0.9), mat);
       if (pts.length > 3 && r() < 0.5) {
         const off = ramp(r, 0.25, 0.55), dash = pts.slice(0, Math.max(2, Math.floor(pts.length * ramp(r, 0.4, 0.9)))).map((p) => onWater(p[0], p[2] - off)).filter((p): p is V3 => !!p);
         ribbon(push, dash, ramp(r, 0.04, 0.06), FAM.still, ramp(r, 0.5, 0.75), mat);
       }
     }
     // its other bank, nearer the eye: now and then a stroke
-    if (r() < 0.16 && own(xc, mid - hw)) ribbon(push, line(-0.985, ramp(r, 0.6, 1.4), 0.02, 2.5, r() * 6.3), ramp(r, 0.04, 0.06), FAM.bank, ramp(r, 0.5, 0.7), mat);
+    if (r() < 0.12 && own(xc, mid - hw)) ribbon(push, line(-1 + 0.12 / hw, ramp(r, 0.6, 1.4)), ramp(r, 0.04, 0.06), FAM.bank, ramp(r, 0.5, 0.7), mat);
   }
 }
 
