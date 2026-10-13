@@ -414,10 +414,28 @@ read it by (the painting set aside under it, not drawn, and the walker staying w
 the figure (its moving lines vermilion), its number, its name and, if it moves, 之 and the name of
 what it becomes, in English and pinyin; Legge's Judgment and Image (1882); its changing lines, from
 the bottom up, and all six behind a fold; a question to sit with; and where on the hill it was cast,
-the hill's own, the same each time it's read. The page is one of three paper surfaces
-(surfaces.ts), the others yet to be used: a drawer from the foot of the screen, for doing something
-there with the painting still seen above it, and a side sheet from an edge and on past it, for finding
-one's way. What's shown is kept apart from how it's shown. ✕, a tap beside it, or Escape puts it away.
+the hill's own, the same each time it's read.
+
+The page is one of three paper surfaces (surfaces.ts), each a sheet of the same paper (warm ivory, a
+fine fibre in it, its edge rough as handmade paper's is, cut afresh to each sheet's size, its shadow
+following the edge): the page, for reading; the drawer, from the foot of the screen, for doing
+something there, the painting still seen above it; and the side sheet, from the right and on past the
+edges, for finding one's way, the painting kept beside it. What's shown is kept apart from how it's
+shown. ✕, a tap beside the sheet, or Escape puts it away; while one's open, taps and keys are its.
+
+The seal 記 (travel notes), at the top right above 墨, opens the side sheet: headed with the nearest
+temple's name, in three tabs. Nearby: the temples, the casts on the hill and the river's landings about
+the walker, nearest first, with how far (a temple or a landing tapped, the walker goes there; a cast,
+its page); and at its head, Cast a reading. The journal: what's been read on the hill, and cast, kept in
+this browser only; a tap reads it again. Settings: the composition view, the steps counted, and these
+notes.
+
+Cast a reading opens the drawer: a question (or none), then three coins (開元通寶, the Tang's), thrown
+six times, the figure built line by line from the bottom; each line the coins' sum, a face two and a
+plain back three, so a six is three faces and a nine three backs. It's cast as the Changes experiment
+casts: the question and the hour give the lines, so the same question in the same hour casts the same
+figure. Then its names, and Read it opens its page (the question at its head, and when it was cast);
+it's kept in the journal. A cast of one's own is its own, apart from the hill's.
 
 The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
 stones along its upper edge; Wind, a grove close behind; Thunder, one tree well out at its far
