@@ -871,7 +871,7 @@ canvas.addEventListener('pointerdown', (e) => {
   touches.set(e.pointerId, [e.clientX, e.clientY]);
   if (touches.size >= 2) { pinch0 = spread(); downAt = null; looking = false; return; }
   canvas.setPointerCapture(e.pointerId);
-  downAt = { x: e.clientX, y: e.clientY, id: e.pointerId, on: false, t: performance.now() };
+  downAt = { x: e.clientX, y: e.clientY, id: e.pointerId, on: false, t: e.timeStamp };
   looking = false;
   $('hint').classList.remove('on');
 });
@@ -903,15 +903,15 @@ const up = (e: PointerEvent) => {
   if (touches.size < 2) pinch0 = 0;
   if (downAt?.id !== e.pointerId) return;
   // (a tap: on a way, there; on open ground near one, there; anywhere else, the nearest place on a way to where it falls on the hill)
-  const tapped = !looking && e.type === 'pointerup' && performance.now() - downAt.t < 600;
+  const tapped = !looking && e.type === 'pointerup' && e.timeStamp - downAt.t < 600;
   const reading = tapped && !hop && !afloat ? castTapped(e.clientX, e.clientY) : null;
   if (reading) {
     // (a tap on a cast's words: its page, to read it; the walker stays where they are)
     present({ surface: 'page', encounter: { kind: 'station', seed, station: reading.i, lines: reading.lines } });
-  } else if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600 && (hop || afloat)) {
+  } else if (tapped && (hop || afloat)) {
     // (afloat, a tap's for the boat: see tapAfloat; stepping in or out, it waits)
     if (afloat) tapAfloat(e.clientX, e.clientY);
-  } else if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600 && onBoat(e.clientX, e.clientY) && moored.by && Math.hypot(posNow[0] - moored.by[0], posNow[2] - moored.by[2]) < 40) {
+  } else if (tapped && onBoat(e.clientX, e.clientY) && moored.by && Math.hypot(posNow[0] - moored.by[0], posNow[2] - moored.by[2]) < 40) {
     // (a tap on the boat: to beside it, if not there, and in: at the jetty across its deck; at the stone
     // landing, by the ways to where its stones go down, and down them)
     const by = moored.by;
@@ -922,7 +922,7 @@ const up = (e: PointerEvent) => {
       if (off && Math.hypot(off[0] - top[0], off[1] - top[1]) < 3) { trail = [...moored.trail].reverse().slice(1).map((q) => [q[0], q[1]] as P2); join = null; boardWhenThere = true; }
       else { goTo({ w: moored.join.w, u: moored.join.u }); boardVia = moored; }
     }
-  } else if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600) {
+  } else if (tapped) {
     // (on a way, there; on open ground near one, there, across it; else the nearest way to where it falls)
     const at = pick(e.clientX, e.clientY);
     if (at !== null) goTo(at);
