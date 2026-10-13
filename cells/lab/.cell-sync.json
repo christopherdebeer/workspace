@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:59af0e4c74f3b010535ef93cb90678c291d48923ef9a5d05d17100bd830ed905",
-  "syncedAt": "2026-10-12T22:36:14.204Z",
+  "treeVersion": "tree:b88d73d094678d6e0475070f00878e6b899502cdf4417ad404d2d90c70f4efe3",
+  "syncedAt": "2026-10-13T08:46:43.596Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -87,7 +87,7 @@
     "client/taohua/compose.ts": "sha256:eeb974a3ac14997cb3eddeeb4fbe1951e4d8a9e28e588fc511a5eceac01ef8b2",
     "client/taohua/deer.ts": "sha256:e6d792f0fe2c34e29f1a84e52c2fcc03cb91402d44bf04136134486ef2c32ae6",
     "client/taohua/herds.ts": "sha256:fa642d0664ac283b328efeeca5f3efb171373b27d874e1e831d29ea18eec327e",
-    "client/taohua/main.ts": "sha256:f1641fddadc2b7a6ca9e2b2c89728c38bbe1d3b21d31ba08aba185fe2fe8eaa9",
+    "client/taohua/main.ts": "sha256:b44db671d8fe3dcfd9bf37f708b35c3c603200f7b0405dfa3035c60fe7f32bda",
     "client/taohua/render.ts": "sha256:7c39c12f37bff89d9472d23e258a8a161a7539e0f6b1c312c021640b5a2a51e9",
     "client/taohua/roam.ts": "sha256:88c0ea8a640dcf1fae5fb1946fee8cb288ed8f3297d5b457e59798e3c1edf03c",
     "client/taohua/water.ts": "sha256:06c273c8173ba3ada5d3ddfa10aaa1fd877d4e5d193bef58c5a5a05910ab8f11",
@@ -201,7 +201,7 @@
     "static/squishy.html": "sha256:25015f31c2d13e258eae6e41ee0820c1023d584dab0d1b6f48962f7d3228662f",
     "static/squishy.md": "sha256:073276aa31f0125b5f83fd57d586093237b9f617acbf7cbb7333aa57b0a8debc",
     "static/taohua.html": "sha256:72555112d65ea5ed86f836150c66954733d64e05ca6c605e31c586b72e2ff25a",
-    "static/taohua.md": "sha256:09c9a7c34f58793f2b7b96d9679795fae3d92cf059951859740c4a2f7a6476d3",
+    "static/taohua.md": "sha256:115e06bf3dc4a9943ed3f7f6195dadabea80238f496aa0c12c129620318dfd6b",
     "static/technic.html": "sha256:2558d2e003449ac4f6b054415f3380d157e382c4e0876b6cb316d285088cec3a",
     "static/technic.md": "sha256:84a77ce3985d89ae04724584251e7766e469374920c0a862c7793f9bcc30b582",
     "tsconfig.json": "sha256:aa5d5858c9ae1e731fcb88d91b3a59c88e2ef4b249b3e5802baf7c9fae241a30"
