@@ -1366,8 +1366,8 @@ function pick(x: number, y: number, b: Dumpling = body): number {
 canvas.addEventListener('pointerdown', (e) => {
   wake();
   if (mode === 'title') { toyDown(e); return; }
-  // (the way over the level, cut short: from there, play)
-  if (fly >= 0) { fly = -1; return; }
+  // (the way over the level, cut short by a touch, which goes on to be what it would be: from there, play)
+  if (fly >= 0) fly = -1;
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1 && !auto) {
@@ -1492,7 +1492,7 @@ canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.5, Math.min(2.5, zoom * Math.exp(-e.deltaY * 0.0012))); }, { passive: false });
 addEventListener('keydown', (e) => {
   if (mode === 'title') { if (e.key === 'Enter') play(1); return; }
-  if (fly >= 0) { fly = -1; return; }
+  if (fly >= 0) fly = -1;
   if (e.key === 'ArrowLeft') { camYaw += 0.15; orbit.at = simTime; }
   else if (e.key === 'ArrowRight') { camYaw -= 0.15; orbit.at = simTime; }
   else if (e.key.toLowerCase() === 'r') startLevel(levelN);
