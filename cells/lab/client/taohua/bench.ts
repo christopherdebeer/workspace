@@ -18,14 +18,19 @@ export const SCENES = {
 } as const;
 export type Scene = keyof typeof SCENES;
 
-/** Make the hill the bench: its slope, no ways near it, its streams. Returns where to stand for the scene. */
-export function bench(ways: Ways, scene: Scene): [number, number] {
+/** a hill of the bench's own: its slope as given, and no ways on it */
+function isolate(ways: Ways, s: (z: number) => number) {
   const w = ways as unknown as Record<string, unknown>;
-  w.slope = slope;
+  w.slope = s;
   const first = ways.first();
   w.nearest = (x: number, z: number) => ({ d: 999, w: first, u: 0, p: [x, 0, z] });
   w.waysNear = () => [];
   w.junctionsNear = () => [];
+}
+
+/** Make the hill the bench: its slope, no ways near it, its streams. Returns where to stand for the scene. */
+export function bench(ways: Ways, scene: Scene): [number, number] {
+  isolate(ways, slope);
   ways.water.fix([
     { z0: 30, z1: 78, x0: X, A: [1.5, 0.6, 0.3], lam: [20, 7, 1.2], w0: 0.8, pools: [{ z: 27, rx: 11, rz: 6, kind: 'pond' }, { z: 78, rx: 1.6, rz: 1.4, kind: 'spring' }] },
     { z0: 101, z1: 185, x0: X, A: [8, 2, 0.5], lam: [12, 5, 1.2], w0: 1.0, pools: [{ z: 99, rx: 4, rz: 3, kind: 'pool' }, { z: 185, rx: 1.8, rz: 1.5, kind: 'spring' }] },
@@ -53,3 +58,44 @@ export const WAY_SCENES = {
   steep: 'w1:12.0',
 } as const;
 export type WayScene = keyof typeof WAY_SCENES;
+
+/**
+ * The tree bench: a hill of its own (no ways, no water but one pond), with trees set out as given,
+ * each grown from its own seed (`?bench=tree&scene=…&tree=N`, N choosing the seeds, best with `review`):
+ * one tree alone; the same tree twice, as the orchard draws it and as it's drawn standing alone; a
+ * grove, crowns among crowns; a tree with an outcrop behind it, as the prints set blossom against
+ * black rock; a tree above a still pond; and a lineup of three, each its own.
+ */
+const TX = -1000;
+export interface Specimen { x: number; z: number; seed: number; iso: number; rocks?: boolean }
+export const TREE_SCENES = {
+  lone: { focus: 20, back: 7, side: 1.5 },
+  pair: { focus: 60, back: 8, side: 0 },
+  grove: { focus: 102, back: 11, side: 0 },
+  rocks: { focus: 140, back: 7, side: 1.5 },
+  water: { focus: 203, back: 10, side: 1 },
+  lineup: { focus: 252, back: 10, side: 0 },
+} as const;
+export type TreeScene = keyof typeof TREE_SCENES;
+
+/** Make the hill the tree bench; returns where to stand for the scene, and the trees to grow. */
+export function treeBench(ways: Ways, scene: TreeScene, n: number): { at: [number, number]; trees: Specimen[] } {
+  isolate(ways, (z) => (z < 0 ? 0.12 : 0.1));
+  ways.water.fix([{ z0: 203, z1: 216, x0: TX + 7, A: [1, 0.4, 0.2], lam: [20, 7, 1.2], w0: 0.7, pools: [{ z: 200, rx: 9, rz: 4.5, kind: 'pond' }, { z: 216, rx: 1.4, rz: 1.2, kind: 'spring' }] }]);
+  const s = (k: number) => n * 101 + k;
+  const trees: Specimen[] = [
+    { x: TX, z: 20, seed: s(0), iso: 1 },
+    { x: TX - 3.4, z: 60, seed: s(0), iso: 0 },
+    { x: TX + 3.4, z: 60, seed: s(0), iso: 1 },
+    { x: TX, z: 140, seed: s(0), iso: 0.6, rocks: true },
+    { x: TX - 2.5, z: 207, seed: s(0), iso: 0.6 },
+  ];
+  // (the grove: a grid, jittered, as the hill's own are)
+  for (let gx = -2; gx <= 2; gx++) for (let gz = -1; gz <= 2; gz++) {
+    const k = (gx + 2) * 4 + gz + 1, j = (a: number) => (((s(k) * 2654435761 + a * 40503) >>> 0) % 1000) / 1000 - 0.5;
+    trees.push({ x: TX + gx * 3.9 + j(1) * 3.5, z: 100 + gz * 3.9 + j(2) * 3.5, seed: s(10 + k), iso: 0 });
+  }
+  for (let k = 0; k < 3; k++) trees.push({ x: TX - 5.5 + k * 5.5, z: 252 + (k % 2) * 1.5, seed: s(40 + k), iso: 0.5 });
+  const sc = TREE_SCENES[scene];
+  return { at: [TX + sc.side, sc.focus - sc.back], trees };
+}

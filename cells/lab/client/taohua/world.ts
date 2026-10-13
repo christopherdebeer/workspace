@@ -322,6 +322,9 @@ export function groveDensity(ways: Ways, seed: number, x: number, z: number): nu
 /** the water bench (bench.ts): no trees, nothing but the hill, its water and its rocks */
 let BENCH = false;
 export const setBench = (on: boolean) => { BENCH = on; };
+/** the tree bench's trees, set out as given (see bench.ts) */
+let SPECIMENS: Array<{ x: number; z: number; seed: number; iso: number; rocks?: boolean }> = [];
+export const setSpecimens = (s: typeof SPECIMENS) => { SPECIMENS = s; };
 /** (as a tile's made, what's set in it that the walker can't walk through) */
 let blocking: number[] | null = null;
 const block = (x: number, z: number, r: number) => { blocking?.push(x, z, r); };
@@ -738,6 +741,17 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     // (a tree with few about it is drawn the more fully: its limbs seen, its twigs out past its crown)
     const dens = groveDensity(ways, seed, x, z);
     tree(mesh, puffs, petals, [x, ground(ways, x, z), z], tr, ways, Math.max(0, Math.min(1, (0.45 - dens) / 0.33)));
+  }
+  // (the tree bench's trees, each from its own seed; one with an outcrop behind it, as the hill's are)
+  for (const sp of SPECIMENS) {
+    if (!inT(sp.x, sp.z)) continue;
+    const tr = seeded(hash(sp.seed, 0x7ee));
+    if (sp.rocks) for (let k = 0; k < 3; k++) {
+      const a = Math.PI / 2 + (k - 1) * 0.7, d = 1 + 0.3 * k, rx = sp.x + Math.cos(a) * d, rz = sp.z + Math.sin(a) * d, sz = k === 1 ? 0.9 : 0.6;
+      rock(mesh, [rx, gy(rx, rz), rz], sz, seeded(hash(sp.seed, k)), gy);
+      shade(mesh, ways, rx - 0.9 * sz, rz + 0.1, sz * 2.2, sz * 0.7, 0.28);
+    }
+    tree(mesh, puffs, petals, [sp.x, ground(ways, sp.x, sp.z), sp.z], tr, ways, sp.iso);
   }
   // (the blossom's reflection in still water)
   if (ways.water.streamsNear(z0, z1).length) blossomInWater(mesh, ways, puffs, hash(seed, i, j));

@@ -231,6 +231,13 @@ The blossom's tone keeps
 the crown's structure, pale where it's lit and high, deep beneath, dappled with pale dabs and deep
 recesses in clusters; each tree is its own pink.
 
+`?bench=tree&scene=lone|pair|grove|rocks|water|lineup&tree=N` (best with `review`) is a hill of its
+own, no ways on it and one pond, with trees set out as given, each grown from its own seed (`tree`
+chooses which): one tree alone; the same tree twice, as the orchard draws it (right) and as it's drawn
+standing alone (left); a grove, crowns among crowns; a tree with an outcrop behind it; a tree above a
+still pond; and three side by side, each its own. The same trees every time, so the drawing of a tree
+can be changed and compared against itself, and against what stands about it.
+
 ## The print
 
 It's drawn as a print, in two steps. First the scene, in its inks: flat colours, hardly lit. With

@@ -16,9 +16,9 @@ import { stationsNear } from './compose';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, TSTEP, ground, groundCut, makeBand, setBench, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, TSTEP, ground, groundCut, makeBand, setBench, setSpecimens, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
-import { bench, SCENES, WAY_SCENES, type Scene, type WayScene } from './bench';
+import { bench, SCENES, TREE_SCENES, treeBench, WAY_SCENES, type Scene, type TreeScene, type WayScene } from './bench';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -75,6 +75,14 @@ if (benchScene) {
   document.body.classList.add('bench');
 }
 if (waysScene) { setBench(true); document.body.classList.add('bench'); }
+// (the tree bench: a hill of its own, its trees set out as given, each from its own seed; see bench.ts)
+if (params.get('bench') === 'tree') {
+  const sc = (params.get('scene') ?? 'lone') as TreeScene;
+  const tb = treeBench(ways, sc in TREE_SCENES ? sc : 'lone', Number(params.get('tree')) || 1);
+  setBench(true); setSpecimens(tb.trees);
+  params.set('at', `@${tb.at[0].toFixed(2)},${tb.at[1].toFixed(2)}`);
+  document.body.classList.add('bench');
+}
 
 // ─── Changes: at each station a cast, its words inked on the hillside in the space kept for it ──
 // (the words come from a sheet, ink on nothing: each hexagram's name, its characters one under the
