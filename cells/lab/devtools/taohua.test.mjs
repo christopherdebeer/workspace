@@ -8,6 +8,8 @@
  * 2. A tap while arriving ends it at once.
  * 3. Walking: told to go somewhere on the ways, the walker gets there and stops.
  * 4. The same seed and place make the same hillside about the walker.
+ * 5. The boat: its pole keeps its length, the hands on it, and a burst of taps (more than are
+ *    queued) comes to an end with the pole lifted out, at a release.
  */
 process.env.EXPERIMENT ??= 'taohua';
 process.env.READY ??= '__taohua';
@@ -61,6 +63,41 @@ await withWood(async (wood) => {
     await page.waitForFunction(() => window.__taohua.legs === 0 && window.__taohua.goal === null, null, { timeout: 600000, polling: 250 });
     const t = await s(page);
     c.ok('told to go along the way, they get there', t.here.id === 'w3' && Math.abs(t.here.u - 40) < 0.2, t.here);
+    c.ok('… no errors in the page', page.errors.length === 0, page.errors);
+    await page.close();
+  }
+
+  // 5. the boat: a pole of its own length, and a stroke always ends with it out of the water
+  {
+    const page = await wood.open('seed=1&at=@0.5,-8.0&pace=6');
+    await page.waitForTimeout(2000);
+    const b = await page.evaluate(() => window.__taohua.boat());
+    await page.mouse.click(b.scr[0], b.scr[1]);
+    await page.waitForFunction(() => window.__taohua.boat().afloat && !window.__taohua.boat().hop, null, { timeout: 300000, polling: 200 });
+    c.ok('a tap on the boat, and they\'re afloat', true);
+    const tap = () => page.evaluate(() => { const a = window.__taohua.boat().afloat; window.__taohua.strokeAt(a.p[0] + 4, a.p[1] - 10); });
+    /** the pole: its length, and how far the hands are from its tip */
+    const pole = () => page.evaluate(() => {
+      const q = window.__taohua.pole(), a = window.__taohua.boat().afloat, d = (u, v) => Math.hypot(u[0] - v[0], u[1] - v[1], u[2] - v[2]);
+      return { L: d(q[0], q[1]), hands: d(q[2], q[1]), s: a.s, sTo: a.sTo, tip: a.tip };
+    });
+    // (a burst of taps, more than the queue holds, the last while the pole's planted)
+    await tap(); await tap(); await tap();
+    const planted = await page.waitForFunction(() => { const a = window.__taohua.boat().afloat; const ph = ((a.s % 1) + 1) % 1; return a.tip && ph > 0.8 && ph < 0.95; }, null, { timeout: 300000, polling: 20 }).then(() => true, () => false);
+    c.ok('… a stroke plants the pole and drives', planted, await pole());
+    await tap(); await tap();
+    const seen = [];
+    for (let i = 0; i < 400; i++) {
+      const r = await pole();
+      seen.push(r);
+      if (!r.tip && r.s >= r.sTo - 1e-6) break;
+      await page.waitForTimeout(100);
+    }
+    const end = seen[seen.length - 1];
+    c.ok('… the pole keeps its length', seen.every((r) => Math.abs(r.L - 3.8) < 0.01), seen.map((r) => +r.L.toFixed(2)).filter((L) => Math.abs(L - 3.8) >= 0.01).slice(0, 5));
+    c.ok('… the hands stay on it', seen.every((r) => r.hands <= 3.8), Math.max(...seen.map((r) => r.hands)));
+    c.ok('… the strokes come to an end, the pole out of the water', !end.tip && end.s >= end.sTo - 1e-6, end);
+    c.ok('… at a release', Math.abs(((end.s % 1) + 1) % 1 - 0.25) < 1e-3, end.s);
     c.ok('… no errors in the page', page.errors.length === 0, page.errors);
     await page.close();
   }

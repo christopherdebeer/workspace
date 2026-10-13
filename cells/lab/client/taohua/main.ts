@@ -18,7 +18,7 @@ import { identify } from '../changes/model';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, TILE, TSTEP, boat, boatReflection, ground, moorings, groundCut, landingsOf, laidPole, makeBand, onJetty, poleMesh, type Landing, setBench, setOldRefl, setSpecimens, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, POLE_L, TILE, TSTEP, boat, boatReflection, ground, moorings, groundCut, landingsOf, laidPole, makeBand, onJetty, poleMesh, type Landing, setBench, setOldRefl, setSpecimens, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
 import { ribbon } from './marks';
 import { RIVER_L } from './water';
@@ -303,6 +303,8 @@ function rideOn(dt: number) {
  * and rests there, the walker sitting in it, until the next stroke).
  */
 interface Afloat { p: [number, number]; v: [number, number]; yaw: number; to: Landing | null; resting: boolean; s: number; sTo: number; aim: [number, number]; tip: V3 | null; lift: V3 | null }
+/** the next release of the stroke (its phase at .25), from s: s itself if it's at one */
+const nextRelease = (s: number) => Math.ceil(s - 0.25 - 1e-6) + 0.25;
 let afloat: Afloat | null = null;
 /** a step from one place to another (into the boat, or out of it), so long, and then what */
 let hop: { t: number; dur: number; from: () => V3; to: () => V3; dir: [number, number]; done: () => void } | null = null;
@@ -340,12 +342,13 @@ function poleNow(time: number): { top: V3; tip: V3 } {
   if (a.tip) tip = a.tip;
   else if (a.sTo > a.s + 1e-3 && ph >= 0.25 && ph <= 0.75 && a.lift) {
     // (swung forward through the air, from where it came out to where it'll go in, lifted on the way)
-    const f = (ph - 0.25) / 0.5, e = f * f * (3 - 2 * f), to = catchAt(time);
-    tip = [a.lift[0] + (to[0] - a.lift[0]) * e, a.lift[1] + (to[1] - a.lift[1]) * e + 1.1 * Math.sin(Math.PI * f), a.lift[2] + (to[2] - a.lift[2]) * e];
+    // (from where it came out as the boat has it, so it goes with the boat, not left behind on the water)
+    const f = (ph - 0.25) / 0.5, e = f * f * (3 - 2 * f), to = catchAt(time), from = apply(B, a.lift);
+    tip = [from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e + 1.1 * Math.sin(Math.PI * f), from[2] + (to[2] - from[2]) * e];
   } else { const q = apply(B, [POLER[0] + 0.5, 0, POLER[2] + 0.3]); tip = [q[0], RIVER_L - 0.9, q[2]]; }
-  // (the pole runs on past the hands, a little)
+  // (a pole of its own length, from its tip up through the hands, which slide along it as a poler's do)
   const d: V3 = [h[0] - tip[0], h[1] - tip[1], h[2] - tip[2]], L = Math.hypot(d[0], d[1], d[2]) || 1;
-  return { top: [h[0] + (d[0] / L) * 0.7, h[1] + (d[1] / L) * 0.7, h[2] + (d[2] / L) * 0.7], tip };
+  return { top: [tip[0] + (d[0] / L) * POLE_L, tip[1] + (d[1] / L) * POLE_L, tip[2] + (d[2] / L) * POLE_L], tip };
 }
 /** a matrix taking the pole's own (0,0,0)-(0,1,0) to the world, from its top to its tip */
 function poleModel(top: V3, tip: V3): M4 {
@@ -398,6 +401,24 @@ function landAt(l: Landing) {
     if (l.trail.length) { trail = l.trail.slice(1).map((q) => [q[0], q[1]] as P2); join = l.join ? { w: l.join.w, u: l.join.u } : null; }
   } };
 }
+/**
+ * The pole lifted out: where it came out kept as the boat has it, for the swing forward. Early (the boat
+ * gone so far past it that the hands would run off its end), the stroke's drive is over then too.
+ */
+function release(a: Afloat, early: boolean) {
+  if (!a.tip) return;
+  const B = boatAt(time), dx = a.tip[0] - B[12], dz = a.tip[2] - B[14], c = B[0], sn = B[8];
+  // (in the boat's frame: across it and along it, at the water)
+  a.lift = [c * dx - sn * dz, 0, sn * dx + c * dz];
+  ripple('drip', a.tip[0], a.tip[2]); a.tip = null; dripsLeft = 3;
+  if (early) a.s = Math.min(a.sTo, nextRelease(a.s));
+}
+/** A stroke asked for, toward (dx, dz): queued, two ahead of the one going at most; each ends with the pole out of the water. */
+function queueStroke(a: Afloat, dx: number, dz: number) {
+  const d = Math.hypot(dx, dz) || 1;
+  a.to = null; a.resting = false; a.aim = [dx / d, dz / d];
+  a.sTo = Math.min(nextRelease(a.s) + 2, Math.max(a.sTo, a.s) + 1);
+}
 /** The boat a step on, afloat. */
 function sail(dt: number) {
   if (!afloat || dt <= 0) return;
@@ -410,7 +431,7 @@ function sail(dt: number) {
   }
   const crossed = (at: number) => Math.floor(a.s - at) > Math.floor(before - at);
   if (crossed(0.75)) { a.tip = catchAt(time); ripple('ring', a.tip[0], a.tip[2]); }
-  if (crossed(0.25) && a.tip) { a.lift = [a.tip[0], RIVER_L, a.tip[2]]; ripple('drip', a.tip[0], a.tip[2]); a.tip = null; dripsLeft = 3; }
+  if (crossed(0.25)) release(a, false);
   const drive = pushing();
   if (a.to) {
     // (brought in: to where it lies at the landing, slower as it comes)
@@ -444,6 +465,8 @@ function sail(dt: number) {
   // (and off the pier)
   const px = a.p[0] - JETTY.x, lim = JETTY.hw + 0.15 + reachX;
   if (Math.abs(px) < lim && a.p[1] > JETTY.z0 - reachZ - 0.2 && a.p[1] < JETTY.z1 + 0.5 && a.to?.kind !== 'jetty') { const sd = px >= 0 ? 1 : -1; a.p[0] = JETTY.x + sd * lim; if (a.v[0] * sd < 0) a.v[0] *= -0.2; }
+  // (planted, and the boat gone so far past it that the hands would come off its end: lifted out)
+  if (a.tip && Math.hypot(...(handsAt(time).map((v, i) => v - a.tip![i]) as V3)) > POLE_L - 0.5) release(a, true);
   // (its heading: where it's going through the water, as fast as it's going; drifting, swinging slowly as the current has it)
   const rx = a.v[0] - cx, rz = a.v[1] - cz, rl = Math.hypot(rx, rz);
   let want = rl > 0.1 ? Math.atan2(rx, rz) : Math.atan2(cx, cz);
@@ -459,12 +482,9 @@ function tapAfloat(px: number, py: number) {
   const hit = LANDS.find((l) => (l.kind === 'jetty' ? Math.abs(q[0] - JETTY.x) < 4.5 && q[1] > JETTY.z0 - 1.5 && q[1] < JETTY.z1 + 6 : Math.hypot(q[0] - l.at[0], q[1] - l.at[1]) < 4.5));
   markP = [q[0], RIVER_L + 0.02, q[1]]; markAt = performance.now();
   afloat.resting = false;
-  if (hit) { afloat.to = hit; return; }
-  afloat.to = null;
-  const dx = q[0] - afloat.p[0], dz = q[1] - afloat.p[1], d = Math.hypot(dx, dz) || 1;
-  afloat.aim = [dx / d, dz / d];
-  // (a stroke, queued: two ahead at most)
-  afloat.sTo = Math.min(afloat.s + 2.999, Math.max(afloat.sTo, afloat.s) + 1);
+  // (to a landing: the stroke going is finished, and no more)
+  if (hit) { afloat.to = hit; afloat.sTo = Math.min(afloat.sTo, nextRelease(afloat.s)); return; }
+  queueStroke(afloat, q[0] - afloat.p[0], q[1] - afloat.p[1]);
 }
 /**
  * Ripples: marks on the water born of what happens there, and gone again: rings spreading where the
@@ -1209,7 +1229,7 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, intro: () => intro, sheet: (surface: 'side' | 'drawer', tab = 'nearby') => present(surface === 'side' ? { surface, encounter: { kind: 'atlas', tab: tab as 'nearby' } } : { surface, encounter: { kind: 'cast' } }), read: () => { const st = stationsNear(ways, seed, posNow[2] - 40, posNow[2] + 200)[0]; if (st) present({ surface: 'page', encounter: { kind: 'station', seed, station: st.i, lines: st.lines } }); return st?.i ?? null; }, boatLog: () => boatLog, pole: () => { if (!afloat) return null; const q = poleNow(time); return [q.top.map((v) => +v.toFixed(2)), q.tip.map((v) => +v.toFixed(2)), handsAt(time).map((v) => +v.toFixed(2))]; }, landTo: (k: string) => { const l = LANDS.find((q) => q.kind === k); if (afloat && l) { afloat.to = l; afloat.resting = false; } }, strokeAt: (x: number, z: number) => { if (!afloat) return; const dx = x - afloat.p[0], dz = z - afloat.p[1], d = Math.hypot(dx, dz) || 1; afloat.to = null; afloat.resting = false; afloat.aim = [dx / d, dz / d]; afloat.sTo = Math.min(afloat.s + 2.999, Math.max(afloat.sTo, afloat.s) + 1); }, arriveT: ARRIVE.T, scr: (x: number, y: number, z: number) => project([x, y, z]).map((v) => Math.round(v)), boat: () => { const p = boatPoseNow(); return { afloat: afloat && { p: afloat.p.map((v) => +v.toFixed(2)), v: afloat.v.map((v) => +v.toFixed(2)), to: afloat.to?.kind ?? null, resting: afloat.resting, s: +afloat.s.toFixed(2), tip: !!afloat.tip }, moored: moored.kind, lands: LANDS.map((l) => ({ kind: l.kind, at: l.at.map((v) => +v.toFixed(1)), scr: project([l.at[0], RIVER_L, l.at[1]]).map((v) => Math.round(v)) })), hop: !!hop, p: p.p.map((v) => +v.toFixed(2)), scr: project([p.p[0], p.p[1] + 0.4, p.p[2]]).map((v) => Math.round(v)), ripples: ripples.length, rverts: ripplesD.count }; }, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, intro: () => intro, sheet: (surface: 'side' | 'drawer', tab = 'nearby') => present(surface === 'side' ? { surface, encounter: { kind: 'atlas', tab: tab as 'nearby' } } : { surface, encounter: { kind: 'cast' } }), read: () => { const st = stationsNear(ways, seed, posNow[2] - 40, posNow[2] + 200)[0]; if (st) present({ surface: 'page', encounter: { kind: 'station', seed, station: st.i, lines: st.lines } }); return st?.i ?? null; }, boatLog: () => boatLog, pole: () => { if (!afloat) return null; const q = poleNow(time); return [q.top.map((v) => +v.toFixed(2)), q.tip.map((v) => +v.toFixed(2)), handsAt(time).map((v) => +v.toFixed(2))]; }, landTo: (k: string) => { const l = LANDS.find((q) => q.kind === k); if (afloat && l) { afloat.to = l; afloat.resting = false; afloat.sTo = Math.min(afloat.sTo, nextRelease(afloat.s)); } }, strokeAt: (x: number, z: number) => { if (afloat) queueStroke(afloat, x - afloat.p[0], z - afloat.p[1]); }, arriveT: ARRIVE.T, scr: (x: number, y: number, z: number) => project([x, y, z]).map((v) => Math.round(v)), boat: () => { const p = boatPoseNow(); return { afloat: afloat && { p: afloat.p.map((v) => +v.toFixed(2)), v: afloat.v.map((v) => +v.toFixed(2)), to: afloat.to?.kind ?? null, resting: afloat.resting, s: +afloat.s.toFixed(2), tip: !!afloat.tip, sTo: +afloat.sTo.toFixed(3) }, moored: moored.kind, lands: LANDS.map((l) => ({ kind: l.kind, at: l.at.map((v) => +v.toFixed(1)), scr: project([l.at[0], RIVER_L, l.at[1]]).map((v) => Math.round(v)) })), hop: !!hop, p: p.p.map((v) => +v.toFixed(2)), scr: project([p.p[0], p.p[1] + 0.4, p.p[2]]).map((v) => Math.round(v)), ripples: ripples.length, rverts: ripplesD.count }; }, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }

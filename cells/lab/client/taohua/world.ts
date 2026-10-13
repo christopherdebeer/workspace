@@ -1260,6 +1260,8 @@ export function boatReflection(mesh: Mesh, yaw: number) {
   }
 }
 /** The boat's pole, laid along it (when no one's poling): in the boat's frame */
+/** the pole's length, as it lies in the boat (laidPole) and as it's held */
+export const POLE_L = 3.8;
 export function laidPole(mesh: Mesh) { mesh.tube([0.42, 0.42, -2.3 * 0.95], [0.3, 0.4, 2.3 * 0.7], 0.022, 0.018, INK.trunk, M.trunk, 4); }
 /** A pole, from (0,0,0) to (0,1,0): placed and stretched where it's held, end to end */
 export function poleMesh(mesh: Mesh) { mesh.tube([0, 0, 0], [0, 1, 0], 0.024, 0.02, INK.trunk, M.trunk, 5); }
