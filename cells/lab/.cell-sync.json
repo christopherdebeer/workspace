@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:0a6e49792a56ff042c7220f75c8755f0adc8f777a039bfc7b99546e0fce4207b",
-  "syncedAt": "2026-10-13T15:50:09.678Z",
+  "treeVersion": "tree:b969daf51e44bdecf4604dcffd7791891829798ca850209947d9fa9272f3d9b3",
+  "syncedAt": "2026-10-13T16:19:44.990Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -88,7 +88,7 @@
     "client/taohua/compose.ts": "sha256:eeb974a3ac14997cb3eddeeb4fbe1951e4d8a9e28e588fc511a5eceac01ef8b2",
     "client/taohua/deer.ts": "sha256:e6d792f0fe2c34e29f1a84e52c2fcc03cb91402d44bf04136134486ef2c32ae6",
     "client/taohua/herds.ts": "sha256:fa642d0664ac283b328efeeca5f3efb171373b27d874e1e831d29ea18eec327e",
-    "client/taohua/main.ts": "sha256:5ab82e2f33eda1a0bcafc67ff9e406641db17046f3b88b5fc5e961c220c1161c",
+    "client/taohua/main.ts": "sha256:f87c5b322f0a06daa24617cc9acf69c218ccc874f9dd3c7650c2c56f2c8fb4fc",
     "client/taohua/marks.ts": "sha256:adddf62b4f24b3c4a1cc8cd836ffcf125fde12517037ebecffe838ab09e810c4",
     "client/taohua/pathmarks.ts": "sha256:734ce7ab614686450b7338120e4429980d15614f4c5c65474bcaa753d7c7641d",
     "client/taohua/render.ts": "sha256:7c21e5925ead23c3ebbf8050a17213354c5181bdc6fc6ca699879d3da16400cf",
@@ -96,7 +96,7 @@
     "client/taohua/surfaces.ts": "sha256:2647ede6864e937879230018c1cc8354e3f19d0d86d54ba610b23afbae3e7945",
     "client/taohua/water.ts": "sha256:b94b70103a2fa29a7453f6ceb7ef1dac72f7a636c819bc2d8a502c7809fdff37",
     "client/taohua/ways.ts": "sha256:1a1e605a018b3769f6db6d6e3216e6b6eb93b7e37d0cb85ed95230619aa97b0b",
-    "client/taohua/world.ts": "sha256:6bdab454375ba0fc6098590b6c8bf752a79c833f5858c56ae3f6ae8460626801",
+    "client/taohua/world.ts": "sha256:f791c8231aecd9de76b29a40eee72ceff0cae710d32456015be983b00c8d36e9",
     "client/technic/glyph.ts": "sha256:80a2b44ab00bac1d743d4024818439977086d78400f19b32ebbf942f9be60277",
     "client/technic/main.ts": "sha256:827f48610503519332055985d78bb4e0cf2858150ceb58eae8ef564351e3e2c8",
     "client/technic/pieces.ts": "sha256:2f5af9566fbbd19422ab1c94e171e4c1d35a96f34662085c29ae3c8d4efd0a61",
