@@ -4,6 +4,10 @@
  * hill is gentle it slows and pools; where it's steep it runs white over rocks, or falls, in steps
  * from pool to pool or all at once into a deep pool under a cliff.
  *
+ * And across the hill's foot, a wide river, where the journey starts: the hill rises from its near bank
+ * (a jetty there, a boat moored at it); its far bank a low plain. It lies level, its near bank wandering
+ * a little across the hill, its width its own along it (see `river`).
+ *
  * It's laid out before the ways, from the seed alone, a stream at a time up the hill, so any part of
  * it can be made without the rest; the ways cross it where they can (see Ways.fits). Each stream's
  * water lies level across it; down it, its level follows the hill, or stands level in a pool, or
@@ -34,7 +38,7 @@ export interface Stream {
 /** What the water is at a place, if near: how far outside its edge (negative within), its level, and what kind of water. */
 export interface Wet {
   s: number; L: number;
-  kind: 'flow' | 'falls' | PoolKind;
+  kind: 'flow' | 'falls' | PoolKind | 'river';
   st: Stream;
   /** how steeply its banks rise from it (rock where steep) */
   bank: number;
@@ -46,6 +50,8 @@ export interface Wet {
 
 /** the levels' drop below the hill, where a stream runs */
 const SINK = 0.12;
+/** the river's level; and where its near bank is at x = 0 (its jetty there) */
+export const RIVER_L = -0.64, RIVER_NEAR = -4.6;
 
 export class Water {
   private streams: Stream[] = [];
@@ -53,6 +59,20 @@ export class Water {
   constructor(readonly seed: number, private hill: (z: number) => number, private slope: (z: number) => number) {}
 
   /** The streams that run anywhere between z0 and z1. */
+  /**
+   * The river: (as a stream to whatever asks which water it is, though it runs across the hill, not
+   * down it; it's none of the streams.) Its near bank at x, its half-width there, its middle line.
+   */
+  readonly river: Stream = { k: -1, z0: -60, z1: 0, x0: 0, A: [0, 0, 0], lam: [1, 1, 1], ph: [0, 0, 0], w0: 9, pools: [], falls: [], foot: 'pond' };
+  riverNearBank(x: number): number {
+    const ph = (this.seed % 997) * 0.37, f = (x: number) => 1.7 * Math.sin(x / 41 + ph) + 0.8 * Math.sin(x / 17 + ph * 1.7) + 0.25 * Math.sin(x / 5.3 + ph * 2.3);
+    return RIVER_NEAR + f(x) - f(0);
+  }
+  riverHalf(x: number): number { return 8.5 + 3 * noise1(hash(this.seed, 0x71e), x / 45); }
+  riverMid(x: number): number { return this.riverNearBank(x) - this.riverHalf(x); }
+  /** whether the river (or its banks) reach anywhere between z0 and z1 */
+  riverNear(z0: number, z1: number): boolean { return z0 < RIVER_NEAR + 6 && z1 > RIVER_NEAR - 34; }
+
   streamsNear(z0: number, z1: number): Stream[] {
     while (!this.fixed && (!this.streams.length || this.streams[this.streams.length - 1].z0 < z1 + 400)) this.lay();
     return this.streams.filter((s) => s.z1 + 20 >= z0 && s.z0 - 32 <= z1);
@@ -170,6 +190,11 @@ export class Water {
     if (got) return got;
     if (this.memo.size > 600000) this.memo.clear();
     const out: Wet[] = [];
+    // (the river: its edge where it is across its middle line by its half-width)
+    if (z < RIVER_NEAR + 18 && z > RIVER_NEAR - 50) {
+      const zc = this.riverMid(x), hw = this.riverHalf(x), s = Math.abs(z - zc) - hw;
+      if (s < 14) out.push({ s, L: RIVER_L, kind: 'river', st: this.river, bank: 0.7, run: 0, across: z - zc });
+    }
     for (const st of this.streamsNear(z, z)) {
       if (z < st.z0 - 30 || z > st.z1 + 6) continue;
       // (its channel: from its spring down into its foot's pool)
@@ -197,7 +222,7 @@ export class Water {
   at(x: number, z: number): Wet | null {
     let best: Wet | null = null;
     for (const w of this.near(x, z)) {
-      const pool = w.kind !== 'flow' && w.kind !== 'falls';
+      const pool = w.kind !== 'flow' && w.kind !== 'falls' && w.kind !== 'river';
       if (!best || w.s < best.s || (pool && w.s < 0 && best.kind === 'flow')) best = pool && best && best.s < w.s ? { ...w, s: best.s } : w;
     }
     return best;
@@ -224,7 +249,7 @@ export class Water {
   }
   private bedOf(w: Wet, g: number): number {
     if (w.s < 0) {
-      const deep = w.kind === 'pond' || w.kind === 'plunge' ? 1.5 : w.kind === 'marsh' ? 0.35 : w.kind === 'pool' || w.kind === 'falls' ? 0.9 : 0.6;
+      const deep = w.kind === 'river' ? 1.8 : w.kind === 'pond' || w.kind === 'plunge' ? 1.5 : w.kind === 'marsh' ? 0.35 : w.kind === 'pool' || w.kind === 'falls' ? 0.9 : 0.6;
       return w.L - Math.min(deep, 0.08 + 0.5 * -w.s);
     }
     // (its edge lies just under the water, so the water draws the shore: see the drawing's water; a

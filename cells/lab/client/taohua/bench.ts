@@ -99,3 +99,17 @@ export function treeBench(ways: Ways, scene: TreeScene, n: number): { at: [numbe
   const sc = TREE_SCENES[scene];
   return { at: [TX + sc.side, sc.focus - sc.back], trees };
 }
+
+/**
+ * The river bench: places at the foot of one hill (seed 1) to study the river from
+ * (`?bench=river&scene=jetty|far|bank|arrive`, best with `review`): standing on the jetty by the boat,
+ * as the journey starts; on the river's far bank, looking back across it to the hill; on its near bank
+ * a way along, the river below; and the arrival, held part way, the boat coming in.
+ */
+export const RIVER_SCENES = {
+  jetty: { at: '@-0.15,-8.4' },
+  far: { at: '@2,-22.6' },
+  bank: { at: '@-16,-2' },
+  arrive: { intro: 9 },
+} as const;
+export type RiverScene = keyof typeof RIVER_SCENES;

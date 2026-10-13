@@ -10,10 +10,10 @@ import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { identify, moving } from '../changes/model';
 import { inStation, stationsNear, type Station } from './compose';
 import { clearOfDeer, deerNear } from './herds';
-import { obstacleMarks, streamMarks } from './marks';
+import { obstacleMarks, postReflection, ribbon, riverMarks, streamMarks } from './marks';
 import { wayMarks, type WayKind } from './pathmarks';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3, type Way } from './ways';
-import type { Water } from './water';
+import { RIVER_L, RIVER_NEAR, type Water } from './water';
 
 /** how deep a tile of the hill is, up it (m), and how wide, across it: the world is made a tile at a time, about the walker, as far across as the ways go */
 export const BAND = 12, TILE = 16;
@@ -412,6 +412,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   // the water: its surface, level across, following the hill down or level in its pools, dropping at
   // its falls; with rocks along its banks and in it where it runs fast, ledges at its falls, reeds in a marsh
   water(mesh, petals, ways, seed, x0, x1, z0, z1);
+  // the jetty where the journey starts, out from the river's near bank below the first way (see `jetty`)
+  if (z0 < JETTY.z1 + 1 && z1 > JETTY.z0 - 2 && x0 < 3 && x1 > -3) jetty(mesh, ways, seed, inT);
 
   // the ways: on their steep stretches, steps, each a slab of its own, laid on the hill, its ends
   // ragged (no two the same length, nor quite in line), turning as the way bends; on their gentle
@@ -855,7 +857,7 @@ export function shade(mesh: Mesh, ways: Ways, x: number, z: number, rx: number, 
   }
 }
 
-const WATER_KIND = { flow: 0, pool: 1, pond: 1, spring: 1, plunge: 1, marsh: 2, falls: 3 } as const;
+const WATER_KIND = { flow: 0, pool: 1, pond: 1, spring: 1, plunge: 1, marsh: 2, falls: 3, river: 1 } as const;
 /**
  * The water in a tile: its surface (a fine sheet, at its level wherever it's within reach of the
  * water; the banks, carved, stand up through it at its edge; where its level drops from step to
@@ -864,8 +866,8 @@ const WATER_KIND = { flow: 0, pool: 1, pond: 1, spring: 1, plunge: 1, marsh: 2, 
  */
 function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: number, x1: number, z0: number, z1: number) {
   const W = ways.water;
-  const sts = W.streamsNear(z0, z1);
-  if (!sts.length) return;
+  const sts = W.streamsNear(z0, z1), river = W.riverNear(z0, z1);
+  if (!sts.length && !river) return;
   const D = 0.5;
   const cache = new Map<number, number[] | null>();
   const at = (x: number, z: number) => {
@@ -975,17 +977,136 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
       }
     }
   }
+  if (river) {
+    // the river: its marks (see marks.ts); reeds in clumps along its far bank and, now and then, its
+    // near one; a few rocks at its near bank's edge
+    riverMarks(push, W, x0, x1, inT, M.mark);
+    const rr = seeded(hash(seed, Math.floor(x0), 0x21e7));
+    for (let k = 0; k < 7; k++) {
+      const x = ramp(rr, x0, x1), far = rr() < 0.75, hw = W.riverHalf(x), z = W.riverMid(x) + (far ? -1 : 1) * (hw + ramp(rr, -0.9, 0.3)), w = W.at(x, z);
+      if (!inT(x, z) || !w || Math.abs(x) < 4) continue;
+      if (rr() < 0.7) reeds(mesh, x, w.s < 0 ? w.L : gy(x, z), z, rr, 6 + Math.floor(rr() * 9));
+      else if (!far) stone(x, z, ramp(rr, 0.35, 0.7), rr);
+    }
+  }
   // (petals afloat, drifting together in its stiller water)
   const pr = seeded(hash(seed, Math.floor(x0), Math.floor(z0), 0xf10a));
   for (let i = 0; i < 70; i++) {
     const x = ramp(pr, x0, x1), z = ramp(pr, z0, z1), w = W.at(x, z);
     if (!w || w.s > -0.15 || (w.kind === 'flow' && w.run > 0.2) || w.kind === 'falls') continue;
+    // (on the river, fewer, carried on: no rings)
+    if (w.kind === 'river' && pr() < 0.75) continue;
     const sz = ramp(pr, 0.04, 0.09);
     petals.push(x, w.L + 0.015, z, sz, pr() * Math.PI, pr() * 0.6);
     // (about some, a ring on the water where it lies)
-    if (pr() < 0.22) { const R = sz * ramp(pr, 2.2, 3); decal(mesh, W, x - R * 1.25, x + R * 1.25, z - R * 1.25, z + R * 1.25, w.L + 0.012, M.ring, (px, pz) => [(px - x) / R, (pz - z) / R]); }
+    if (w.kind !== 'river' && pr() < 0.22) { const R = sz * ramp(pr, 2.2, 3); decal(mesh, W, x - R * 1.25, x + R * 1.25, z - R * 1.25, z + R * 1.25, w.L + 0.012, M.ring, (px, pz) => [(px - x) / R, (pz - z) / R]); }
   }
 }
+/**
+ * Where the journey starts: a jetty out from the river's near bank at the foot of the hill, below the
+ * first way: a deck of planks on posts driven into the bed, a lantern on a pole at its end; from its
+ * land end up to the first way, a landing paved in cracked ice. A boat's moored along its side (see
+ * `boat`; drawn apart, as it rocks).
+ */
+export const JETTY = {
+  /** its middle line across the hill, its land end and its far end up the hill, its half-width, its deck */
+  x: 0, z1: RIVER_NEAR + 0.9, z0: RIVER_NEAR - 5.4, hw: 0.8, y: RIVER_L + 0.42,
+  /** where the boat lies: its middle, alongside the deck, its bow out into the river */
+  boat: [1.62, RIVER_L, RIVER_NEAR - 3.4] as V3,
+};
+/** whether (x, z) is on the jetty's deck, where one can stand */
+export const onJetty = (x: number, z: number) => Math.abs(x - JETTY.x) < JETTY.hw - 0.12 && z > JETTY.z0 + 0.1 && z < JETTY.z1 + 0.35;
+function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number) => boolean) {
+  const r = seeded(hash(seed, 0x7e77));
+  const WOOD = hex(0x8a7158), DARKWOOD = hex(0x5e4a3a), { x, z0, z1, hw, y } = JETTY;
+  const push = (v: number[]) => { mesh.v.push(...v); };
+  // (its planks, laid across, each its own length and set, a little worn)
+  for (let z = z1; z > z0; z -= 0.26) {
+    if (!inT(x, z)) continue;
+    const L = hw - 0.04 + ramp(r, -0.05, 0.06), sx = ramp(r, -0.04, 0.04);
+    mesh.box([x + sx, y - 0.03 + ramp(r, -0.008, 0.008), z - 0.12], [L, 0.03, 0.115], [1, 0], r() < 0.2 ? DARKWOOD : WOOD, DARKWOOD, M.wall);
+  }
+  // (on posts, in pairs, the bearers along them; the last pair taller, to tie up to)
+  for (let z = z1 - 0.3, k = 0; z >= z0 - 0.01; z -= 1.55, k++) for (const sd of [-1, 1]) {
+    const px = x + sd * (hw + 0.02), last = z - 1.55 < z0, top = y + (last ? 0.45 : 0.05);
+    if (inT(px, z)) {
+      mesh.tube([px, RIVER_L - 1.2, z], [px, top, z], 0.065, 0.055, INK.trunk, M.trunk, 6);
+      postReflection(push, ways.water, px, z, (top - RIVER_L) * 1.05 + 0.15, seed, M.mark);
+    }
+  }
+  for (const sd of [-1, 1]) if (inT(x + sd * hw, (z0 + z1) / 2)) mesh.box([x + sd * (hw - 0.02), y - 0.09, (z0 + z1) / 2], [0.05, 0.05, (z1 - z0) / 2], [1, 0], DARKWOOD, DARKWOOD, M.wall);
+  // (at its end, a pole with a red paper lantern hung from its arm)
+  const lx = x - hw + 0.08, lz = z0 + 0.25;
+  if (inT(lx, lz)) {
+    mesh.tube([lx, y - 0.1, lz], [lx, y + 2.3, lz], 0.04, 0.03, INK.trunk, M.trunk, 5);
+    mesh.tube([lx, y + 2.25, lz], [lx - 0.45, y + 2.3, lz], 0.022, 0.018, INK.trunk, M.trunk, 4);
+    mesh.tube([lx - 0.42, y + 1.95, lz], [lx - 0.42, y + 2.22, lz], 0.13, 0.12, hex(0xc8412e), M.red, 8);
+    postReflection(push, ways.water, lx - 0.42, lz, 1.4, seed + 1, M.mark);
+  }
+  // (and the boat's reflection about it, where it lies)
+  if (inT(JETTY.boat[0], JETTY.boat[2])) boatMarks(mesh, ways.water, JETTY.boat, seed);
+  // (from its land end up to the first way: a landing, paved in cracked ice, its edges ragged)
+  const w0 = ways.first(), top = ways.at(w0, 0, true).p;
+  const pts: Array<[number, number]> = [];
+  for (let z = z1 - 0.1; z < top[2] + 0.4; z += 0.42) for (let a = -1; a <= 1; a += 0.5) {
+    const f = (z - z1) / Math.max(0.1, top[2] - z1), cx = x + (top[0] - x) * f, half = hw + 0.25 + 0.35 * Math.sin(Math.PI * f);
+    const px = cx + a * half + ramp(r, -0.08, 0.08), pz = z + ramp(r, -0.08, 0.08);
+    if (inT(px, pz) && ways.dryOf(px, pz) > 0.25) pts.push([px, pz]);
+  }
+  pave(mesh, ways, pts, 0.24, r);
+}
+
+/**
+ * The boat moored at the jetty (a sampan): its hull of dark planks, long and low, its ends rising; amidships
+ * a woven canopy, arched; a pole laid along it, a red lantern on a post at its stern. In its own frame:
+ * along +z its bow, its waterline at y = 0.
+ */
+export function boat(mesh: Mesh) {
+  const HULL = hex(0x4e3c30), RIM = hex(0x6b5442), MAT = hex(0xb79a6a);
+  const L = 2.3, B = 0.62;
+  // (its sections along it: half-beam and how high its sheer stands, rising to its ends)
+  const sec = (t: number) => { const e = Math.abs(t); return { hb: B * Math.sqrt(Math.max(0.02, 1 - e ** 2.2)), top: 0.32 + 0.22 * e ** 2.4, bot: -0.16 * (1 - e ** 2) }; };
+  const N = 12;
+  for (let i = 0; i < N; i++) {
+    const ta = -1 + (2 * i) / N, tb = -1 + (2 * (i + 1)) / N, a = sec(ta), b = sec(tb), za = ta * L, zb = tb * L;
+    for (const sd of [-1, 1]) {
+      mesh.quad([sd * a.hb, a.top, za], [sd * b.hb, b.top, zb], [sd * b.hb * 0.55, b.bot, zb], [sd * a.hb * 0.55, a.bot, za], HULL, M.wall);
+      // (the gunwale: a rail along its sheer)
+      mesh.quad([sd * a.hb, a.top + 0.035, za], [sd * b.hb, b.top + 0.035, zb], [sd * b.hb, b.top - 0.02, zb], [sd * a.hb, a.top - 0.02, za], RIM, M.wall);
+    }
+    mesh.quad([-a.hb * 0.55, a.bot, za], [a.hb * 0.55, a.bot, za], [b.hb * 0.55, b.bot, zb], [-b.hb * 0.55, b.bot, zb], HULL, M.wall);
+    // (its floor of boards, just under its sheer)
+    mesh.quad([-a.hb * 0.9, 0.1, za], [-b.hb * 0.9, 0.1, zb], [b.hb * 0.9, 0.1, zb], [a.hb * 0.9, 0.1, za], RIM, M.wall, [0, 1, 0]);
+  }
+  // (amidships its canopy: a woven arch of matting on bent ribs)
+  const c0 = -0.75, c1 = 0.55, R = 0.6, M2 = 10;
+  for (let k = 0; k < M2; k++) {
+    const a0 = Math.PI * (k / M2), a1 = Math.PI * ((k + 1) / M2);
+    const p = (a: number, z: number): V3 => [Math.cos(a) * R, 0.36 + Math.sin(a) * R * 0.95, z];
+    mesh.quad(p(a0, c0), p(a1, c0), p(a1, c1), p(a0, c1), MAT, M.hat);
+  }
+  for (const z of [c0, c1]) for (let k = 0; k < M2; k++) {
+    const a0 = Math.PI * (k / M2), a1 = Math.PI * ((k + 1) / M2);
+    mesh.tube([Math.cos(a0) * R, 0.36 + Math.sin(a0) * R * 0.95, z], [Math.cos(a1) * R, 0.36 + Math.sin(a1) * R * 0.95, z], 0.025, 0.025, INK.trunk, M.trunk, 4);
+  }
+  // (a pole laid along it; a post at its stern, a red lantern hung from it)
+  mesh.tube([0.42, 0.42, -L * 0.95], [0.3, 0.4, L * 0.7], 0.022, 0.018, INK.trunk, M.trunk, 4);
+  mesh.tube([0, 0.4, -L * 0.82], [0, 1.6, -L * 0.82], 0.03, 0.025, INK.trunk, M.trunk, 5);
+  mesh.tube([0, 1.55, -L * 0.82], [0, 1.58, -L * 0.82 + 0.32], 0.016, 0.014, INK.trunk, M.trunk, 4);
+  mesh.tube([0, 1.22, -L * 0.82 + 0.3], [0, 1.46, -L * 0.82 + 0.3], 0.11, 0.1, hex(0xc8412e), M.red, 8);
+}
+/** The boat's reflection on the water about it: a dark line, broken, along each side at the waterline, and a few dashes off it. */
+export function boatMarks(mesh: Mesh, W: Water, at: V3, seed: number) {
+  const push = (v: number[]) => { mesh.v.push(...v); };
+  const r = seeded(hash(seed, 0xb0a7));
+  for (const sd of [-1, 1]) for (let k = 0; k < 3; k++) {
+    const x = at[0] + sd * (0.66 + k * ramp(r, 0.18, 0.3)), za = at[2] - 2.1 + ramp(r, 0, 0.8), zb = at[2] + 2.1 - ramp(r, 0, 0.8);
+    const pts: V3[] = [];
+    for (let z = za; z <= zb; z += 0.2) { const w = W.at(x, z); if (w && w.s < -0.05) pts.push([x + 0.03 * Math.sin(z * 7 + k), w.L + 0.023, z]); }
+    for (let a = 0; a < pts.length - 1;) { const b = Math.min(pts.length, a + 3 + Math.floor(r() * 8)); if (k === 0 || r() < 0.6) ribbon(push, pts.slice(a, b), k === 0 ? 0.06 : 0.035, 1, k === 0 ? 0.85 : 0.55, M.mark); a = b + 1 + Math.floor(r() * 3); }
+  }
+}
+
 /**
  * A patch on the water's surface, for marks drawn on it: a fine sheet from (xa, za) to (xb, zb), just
  * above the water at y, each corner carrying where it is in the marks' own measure, and how far in

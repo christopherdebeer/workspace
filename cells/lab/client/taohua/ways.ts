@@ -93,14 +93,15 @@ export class Ways {
   // ─── the hill ──────────────────────────────────────────────────────────────────────────────────
   /** how steeply the hill rises at z: mostly gently, in bands steeply */
   slope(z: number): number {
-    if (z < 0) return 0.12;
+    if (z < 0) return 0.119 * Math.exp(z / 4.2);
     const n = noise1(hash(this.seed, 0x51), z / 30) * 0.65 + noise1(hash(this.seed, 0x52), z / 11) * 0.35;
     return 0.05 + 0.28 * smooth(0.42, 0.85, n);
   }
   private hillT: number[] = [0];
   /** The hill's height at z (the same all across it): its slope, summed up the hill. */
   hill(z: number): number {
-    if (z <= 0) return z * 0.12;
+    // (below the foot of the hill, it falls away to the river's plain, a little above the river)
+    if (z <= 0) return -0.5 * (1 - Math.exp(z / 4.2));
     const D = 0.25, T = this.hillT;
     while ((T.length - 1) * D < z + D) { const z0 = (T.length - 1) * D; T.push(T[T.length - 1] + this.slope(z0 + D / 2) * D); }
     const i = Math.floor(z / D), f = z / D - i;

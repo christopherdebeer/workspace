@@ -16,9 +16,9 @@ import { stationsNear } from './compose';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, TSTEP, ground, groundCut, makeBand, setBench, setSpecimens, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, TILE, TSTEP, boat, ground, groundCut, makeBand, onJetty, setBench, setSpecimens, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
-import { bench, SCENES, TREE_SCENES, treeBench, WAY_SCENES, type Scene, type TreeScene, type WayScene } from './bench';
+import { bench, RIVER_SCENES, SCENES, TREE_SCENES, treeBench, WAY_SCENES, type RiverScene, type Scene, type TreeScene, type WayScene } from './bench';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -53,6 +53,9 @@ const PASS = 'journey-1';
 // (the ways bench: fixed places on one hill, each a kind of way to study; see bench.ts)
 const waysScene = params.get('bench') === 'ways' ? WAY_SCENES[(params.get('scene') ?? 'flight') as WayScene] ?? WAY_SCENES.flight : null;
 if (waysScene) { params.set('seed', '1'); params.set('at', waysScene); }
+// (the river bench: places at the foot of one hill, or the arrival held part way; see bench.ts)
+const riverScene = params.get('bench') === 'river' ? RIVER_SCENES[(params.get('scene') ?? 'jetty') as RiverScene] ?? RIVER_SCENES.jetty : null;
+if (riverScene) { params.set('seed', '1'); if ('at' in riverScene) params.set('at', riverScene.at); else { params.delete('at'); params.set('intro', String(riverScene.intro)); } }
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
@@ -209,6 +212,42 @@ const Ry = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return n
 const Rz = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); };
 const about = (p: V3, r: M4): M4 => mulM(Tm(p[0], p[1], p[2]), mulM(r, Tm(-p[0], -p[1], -p[2])));
 
+// ─── the boat moored at the jetty, rocking on the river (world.ts `boat`) ─────────────────────────
+const boatD = part((m) => boat(m));
+/**
+ * The arrival: unless the address says where to start, the journey begins on the river, aboard the
+ * boat, drifting down to the jetty and turning in to lie alongside it; then the walker steps off onto
+ * its deck. A tap ends it at once. (`intro`: how long it's been going, in seconds; -1 once it's over.)
+ */
+const DRIFT = 14, STEP = 1.4;
+let intro = -1;
+/** where the boat is, t seconds into its arrival, and its heading (its bow along +z at 0) */
+function boatPose(t: number): { p: V3; yaw: number } {
+  const E = JETTY.boat, W = ways.water, sx = E[0] + 26;
+  const P0: V3 = [sx, E[1], W.riverMid(sx) + 1.5], P1: V3 = [E[0] + 2.5, E[1], W.riverMid(E[0] + 2.5) + 1], P2 = E;
+  // (slowing as it comes in)
+  const u = Math.min(1, t / DRIFT), k = 1 - Math.pow(1 - u, 2.2);
+  const B = (a: number, b: number, c: number) => (1 - k) * (1 - k) * a + 2 * (1 - k) * k * b + k * k * c;
+  const D = (a: number, b: number, c: number) => 2 * (1 - k) * (b - a) + 2 * k * (c - b);
+  const yaw = Math.atan2(D(P0[0], P1[0], P2[0]), D(P0[2], P1[2], P2[2]));
+  return { p: [B(P0[0], P1[0], P2[0]), E[1], B(P0[2], P1[2], P2[2])], yaw: yaw * (1 - Math.pow(u, 6)) };
+}
+function boatAt(time: number): M4 {
+  // (it rocks: rolling a little, pitching less, rising and falling on the current's swell)
+  const pose = intro >= 0 ? boatPose(intro) : { p: JETTY.boat, yaw: 0 };
+  const [x, y, z] = pose.p, c = Math.cos(pose.yaw), sn = Math.sin(pose.yaw);
+  return mulM(mulM(Tm(x, y + 0.012 * Math.sin(time * 0.9), z), new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, 0, 0, 0, 1])), mulM(Rz(0.022 * Math.sin(time * 1.1) + 0.008 * Math.sin(time * 2.3)), Rx(0.01 * Math.sin(time * 0.73 + 1))));
+}
+/** where the walker stands, t seconds into the arrival: aboard, at the stern behind the canopy; then stepping off */
+function introStand(t: number, time: number): { p: V3; dir: [number, number] } {
+  const m = boatAt(time), local: V3 = [0, 0.12, -1.25];
+  const aboard: V3 = [m[0] * local[0] + m[4] * local[1] + m[8] * local[2] + m[12], m[1] * local[0] + m[5] * local[1] + m[9] * local[2] + m[13], m[2] * local[0] + m[6] * local[1] + m[10] * local[2] + m[14]];
+  const yaw = intro >= 0 ? boatPose(Math.min(t, DRIFT)).yaw : 0;
+  if (t < DRIFT) return { p: aboard, dir: [Math.sin(yaw), Math.cos(yaw)] };
+  const f = Math.min(1, (t - DRIFT) / STEP), e = f * f * (3 - 2 * f), on: V3 = [off![0], JETTY.y, off![1]];
+  return { p: [aboard[0] + (on[0] - aboard[0]) * e, aboard[1] + (on[1] - aboard[1]) * e + 0.12 * Math.sin(Math.PI * f), aboard[2] + (on[2] - aboard[2]) * e], dir: [0, 1] };
+}
+
 // ─── deer: now and then a few, a little off the ways (herds.ts); each of its kind's parts (deer.ts)
 const deerKinds = new Map<DeerKind, { body: Drawn; neck: Drawn; head: Drawn; legs: Drawn[]; shadow: Drawn }>();
 const kindParts = (k: DeerKind) => {
@@ -293,7 +332,13 @@ function startSpot(): Spot {
   const [id, u] = at.split(':');
   const w = id ? ways.byId(id) : null;
   if (w) return { w, u: Math.max(0, Math.min(w.len, Number(u) || 0)) };
-  return { w: ways.first(), u: 0.5 };
+  // (else on the jetty, by the boat, at the foot of the hill across the river)
+  const jx = JETTY.x - 0.15, jz = JETTY.z0 + 1.6, n = ways.nearest(jx, jz);
+  off = [jx, jz];
+  // (`?intro=t`: the arrival, t seconds in: held there, in a review)
+  if (params.has('intro')) intro = Math.max(0, Number(params.get('intro')) || 0);
+  else if (!review && !preview && !params.has('bench')) intro = 0;
+  return { w: n.w, u: n.u };
 }
 /**
  * Off the ways: where the walker stands on the open hill (null while they're on a way); the way
@@ -304,7 +349,7 @@ let off: P2 | null = null, trail: P2[] = [], join: Spot | null = null, offDir: [
 let here: Spot = startSpot();
 let speed = 0, want = 0, phase = 0, stride = 0, facing = NaN, backward = false;
 /** the walker's pace (m/s); `?pace=…` times it, for trying things out quickly */
-const WALK = 1.25 * Math.max(0.1, Math.min(40, Number(params.get('pace')) || 1));
+const PACE = Math.max(0.1, Math.min(40, Number(params.get('pace')) || 1)), WALK = 1.25 * PACE;
 /** Where the walker stands at a spot: on the step under them, lifting onto the next as they come to its edge; on a temple's terrace or stair, on that. */
 function stand(sp: Spot): { p: V3; dir: [number, number] } {
   const at = ways.at(sp.w, sp.u, true), p = at.p;
@@ -411,6 +456,8 @@ const onWay = (x: number, z: number) => ways.nearest(x, z).d < WIDTH / 2 - 0.1;
  * water, nor on a bank cut steep for it. (What the tiles about it hold: those made.)
  */
 function isOpen(x: number, z: number): boolean {
+  // (the jetty's deck is open, over the water)
+  if (onJetty(x, z)) return true;
   if (ways.dryOf(x, z) < 0.4 || groundCut(ways, x, z).cut > 0.3) return false;
   for (const t of templesNear(ways, z - 20, z + 20)) {
     const dx = x - t.c[0], dz = z - t.c[2], ax = Math.abs(dx * -t.face[1] + dz * t.face[0]), az = dx * t.face[0] + dz * t.face[1];
@@ -480,6 +527,8 @@ const spread = () => { const p = [...touches.values()]; return p.length < 2 ? 0 
 for (const g of ['gesturestart', 'gesturechange']) document.addEventListener(g, (e) => e.preventDefault(), { passive: false } as AddEventListenerOptions);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomBy(Math.exp(e.deltaY * 0.0015)); }, { passive: false });
 canvas.addEventListener('pointerdown', (e) => {
+  // (a tap while arriving: there at once)
+  if (intro >= 0) { intro = -1; return; }
   touches.set(e.pointerId, [e.clientX, e.clientY]);
   if (touches.size >= 2) { pinch0 = spread(); downAt = null; looking = false; return; }
   canvas.setPointerCapture(e.pointerId);
@@ -688,7 +737,13 @@ function frame(now: number) {
   const z0 = off ? off[1] : ways.at(here.w, here.u, true).p[2];
   nearTemples = templesNear(ways, z0 - 20, z0 + 20);
   // (off the ways, on the ground there; where they cross a way, on its tread or stone)
-  const st = off ? (() => { const n = ways.nearest(off![0], off![1]); const y = n.d < WIDTH / 2 ? ways.surface(n.w, n.u, off![1]) : ground(ways, off![0], off![1]) - 0.03; return { p: [off![0], y, off![1]] as V3, dir: offDir }; })() : stand(here);
+  let st = off ? (() => { const n = ways.nearest(off![0], off![1]); const y = onJetty(off![0], off![1]) ? JETTY.y : n.d < WIDTH / 2 ? ways.surface(n.w, n.u, off![1]) : ground(ways, off![0], off![1]) - 0.03; return { p: [off![0], y, off![1]] as V3, dir: offDir }; })() : stand(here);
+  if (intro >= 0) {
+    // (arriving: aboard as the boat comes in, then stepping off onto the jetty)
+    intro += dt * PACE;
+    st = introStand(intro, time);
+    if (intro > DRIFT + STEP) intro = -1;
+  }
   if (Number.isNaN(facing)) facing = Math.atan2(st.dir[0], st.dir[1]);
   const bob = 0.03 * Math.abs(Math.sin(phase)) * stride;
   const pos: V3 = [st.p[0], st.p[1] + bob, st.p[2]];
@@ -757,7 +812,7 @@ function frame(now: number) {
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks') },
-    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos)],
+    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos), { d: boatD, model: boatAt(review ? 0 : time) }],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
@@ -771,7 +826,7 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, intro: () => intro, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }
