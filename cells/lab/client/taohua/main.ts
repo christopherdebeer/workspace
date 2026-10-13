@@ -4,9 +4,9 @@
  * trees in flower, black rocks, stone steps where the way is steep, a temple of teal tiles and red
  * columns, a walker in a straw hat with a staff, the paper's cream under it all.
  *
- * Tap a way (or press on it and slide along it) to walk there, by whichever ways lead there; tap
- * anywhere else to go to the nearest place on a way that can be seen; ↑, W walk on up (at a fork,
- * the way most nearly ahead), ↓, S back down. Drag off the ways to look about a little. The seed
+ * Tap a way to walk there, by whichever ways lead there; tap open ground near one to go there across
+ * it; tap anywhere else to go to the nearest place on a way to where it falls on the hill, seen or not;
+ * ↑, W walk on up (at a fork, the way most nearly ahead), ↓, S back down. A drag looks about a little. The seed
  * and where the walker is are in the address (?seed=…&at=…). `?preview` climbs by itself, quietly.
  */
 import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
@@ -366,11 +366,13 @@ function boatDraw(dt: number, time: number): Array<{ d: Drawn; model: M4 }> {
   if (ripplesD.count) out.push({ d: ripplesD, model: Tm(0, 0, 0) });
   return out;
 }
+/** where the arrival steps off onto the jetty's deck */
+const ARRIVE_ON: P2 = [JETTY.x - 0.15, JETTY.z0 + 1.6];
 /** where the walker stands, t seconds into the arrival: in the boat, sitting; then stepping off */
 function introStand(t: number, time: number): { p: V3; dir: [number, number] } {
   const aboard = apply(boatAt(time), SEAT), yaw = boatPose(Math.min(t, ARRIVE.T)).yaw;
   if (t < ARRIVE.T) return { p: aboard, dir: [Math.sin(yaw), Math.cos(yaw)] };
-  const f = Math.min(1, (t - ARRIVE.T) / STEP), e = f * f * (3 - 2 * f), on: V3 = [off![0], JETTY.y, off![1]];
+  const f = Math.min(1, (t - ARRIVE.T) / STEP), e = f * f * (3 - 2 * f), on: V3 = [ARRIVE_ON[0], JETTY.y, ARRIVE_ON[1]];
   return { p: [aboard[0] + (on[0] - aboard[0]) * e, aboard[1] + (on[1] - aboard[1]) * e + 0.12 * Math.sin(Math.PI * f), aboard[2] + (on[2] - aboard[2]) * e], dir: [0, 1] };
 }
 /** Into the boat from beside it, standing at its stern with the pole; cast off. */
@@ -616,7 +618,7 @@ function startSpot(): Spot {
   const w = id ? ways.byId(id) : null;
   if (w) return { w, u: Math.max(0, Math.min(w.len, Number(u) || 0)) };
   // (else on the jetty, by the boat, at the foot of the hill across the river)
-  const jx = JETTY.x - 0.15, jz = JETTY.z0 + 1.6, n = ways.nearest(jx, jz);
+  const [jx, jz] = ARRIVE_ON, n = ways.nearest(jx, jz);
   off = [jx, jz];
   // (`?intro=t`: the arrival, t seconds in: held there, in a review)
   if (params.has('intro')) intro = Math.max(0, Number(params.get('intro')) || 0);
@@ -780,6 +782,7 @@ let posNow: V3 = [0, 0, 0];
  * open ground, from wherever they are; if there's none, false.
  */
 function roamTo(h: V3): boolean {
+  boardWhenThere = false; boardVia = null;
   if (ways.nearest(h[0], h[2]).d > 15 || !isOpen(h[0], h[2])) return false;
   const from: P2 = off ?? [posNow[0], posNow[2]];
   const route = plan(from, [h[0], h[2]], isOpen, onWay);
@@ -790,6 +793,7 @@ function roamTo(h: V3): boolean {
 }
 /** Go there: the route, through the junctions, from where they are. */
 function goTo(sp: Spot) {
+  boardWhenThere = false; boardVia = null;
   goal = sp; markAt = performance.now(); markP = spotP(sp);
   if (off) {
     // (off the ways: back across the open ground to the nearest, then on by the ways)
@@ -867,6 +871,9 @@ canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'c') { setInk(!ink); return; }
+  // (arriving, stepping in or out, or afloat, the keys don't walk: the walker's in the boat)
+  if (intro >= 0 || hop || afloat) return;
+  boardWhenThere = false; boardVia = null;
   keys.add(e.key.toLowerCase()); goal = null; legs = []; $('hint').classList.remove('on');
   if (off && !join && ['arrowup', 'arrowdown', 'w', 's'].includes(e.key.toLowerCase())) { const n = ways.nearest(off[0], off[1]); join = { w: n.w, u: n.u }; trail = plan(off, [n.p[0], n.p[2]], isOpen, onWay)?.slice(1) ?? [[n.p[0], n.p[2]]]; }
 });
@@ -1076,7 +1083,12 @@ function frame(now: number) {
 
   // (passing a temple beside the path, the view leans toward it, so it's in the print with the walker)
   let lean = 0;
-  for (const tp of nearTemples) if (!tp.gate) { const d = Math.hypot(tp.c[0] - pos[0], tp.c[2] - pos[2]); lean = (tp.c[0] - pos[0]) * 0.45 * (1 - smoothstep(9, 16, d)); }
+  for (let k = 0, near = 0; k < nearTemples.length; k++) {
+    const tp = nearTemples[k];
+    if (tp.gate) continue;
+    const d = Math.hypot(tp.c[0] - pos[0], tp.c[2] - pos[2]), n = 1 - smoothstep(9, 16, d);
+    if (n > near) { near = n; lean = (tp.c[0] - pos[0]) * 0.45 * n; }
+  }
   const { eye, t } = camera([pos[0] + lean, pos[1], pos[2]], dt);
   const aspect = W / H;
   const near = 1 - 0.85 * firstT, far = (160 + 100 * ease(inkT)) * Math.max(1, zoomI * ease(inkT));
