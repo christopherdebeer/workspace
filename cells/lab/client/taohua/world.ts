@@ -374,7 +374,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   // (and the deer's places: no tree or rock where a deer stands, nor its crown just before it)
   const herds = deerNear(ways, seed, z0 - 10, z1 + 10);
   // (a crown spreads four metres and more from its trunk: so the trunks stand that far back from the sheet's sides)
-  const treeOut = (x: number, z: number) => inStation(sts, x, z, 4.2, 4.5) || !clearOfDeer(herds, x, z, 3) || [2, 4, 6, 8].some((dz) => !clearOfDeer(herds, x, z + dz, 3.2));
+  const lands = landingsOf(ways, seed);
+  const treeOut = (x: number, z: number) => nearLanding(lands, x, z) < 2.8 || inStation(sts, x, z, 4.2, 4.5) || !clearOfDeer(herds, x, z, 3) || [2, 4, 6, 8].some((dz) => !clearOfDeer(herds, x, z + dz, 3.2));
   /** whether (x, z) is just downhill of a way, where a crown would stand between the eye and it */
   const belowWay = (x: number, z: number) => [2, 3.8, 5.6, 7.2].some((dz) => ways.nearest(x, z + dz).d < WIDTH / 2 + 1);
 
@@ -420,6 +421,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   water(mesh, petals, ways, seed, x0, x1, z0, z1);
   // the jetty where the journey starts, out from the river's near bank below the first way (see `jetty`)
   if (z0 < JETTY.z1 + 1 && z1 > JETTY.z0 - 2 && x0 < 3 && x1 > -3) jetty(mesh, ways, seed, inT);
+  // the other landings along the river (see `landingsOf`)
+  for (const l of lands) if (l.kind !== 'jetty') landing(mesh, petals, puffs, ways, seed, l, inT);
 
   // the ways: on their steep stretches, steps, each a slab of its own, laid on the hill, its ends
   // ragged (no two the same length, nor quite in line), turning as the way bends; on their gentle
@@ -603,7 +606,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     rocks.push([x, z, ramp(r, 0.4, 0.95)]);
   }
   for (const [x, z, sz] of rocks) {
-    if (ways.dryOf(x, z) < 0.1 || !clearOfDeer(herds, x, z, 1.4)) continue;
+    if (ways.dryOf(x, z) < 0.1 || !clearOfDeer(herds, x, z, 1.4) || nearLanding(lands, x, z) < 1.6) continue;
     if (ways.nearest(x, z).d < WIDTH / 2 + 0.35 || onTemple(x, z, 0.3) || inStation(sts, x, z, 0.4)) continue;
     const rr = seeded(hash(Math.round(x * 10), Math.round(z * 10), seed));
     rock(mesh, [x, gy(x, z), z], sz, rr, gy);
@@ -992,7 +995,7 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
     riverMarks(push, W, x0, x1, inT, M.mark);
     for (let c = Math.floor((x0 - 4) / 6.5); c <= Math.floor((x1 + 4) / 6.5); c++) for (const near of [true, false]) {
       const rr = seeded(hash(seed, c, near ? 1 : 2, 0x21e7)), xc = (c + ramp(rr, 0.1, 0.9)) * 6.5;
-      if (Math.abs(xc) < 5.5 || (!near && xc > 30)) continue;
+      if (Math.abs(xc) < 5.5 || (!near && xc > 30) || (near && landingsOf(ways, seed).some((l) => l.kind !== 'jetty' && Math.abs(xc - l.at[0]) < 5))) continue;
       const bank = (x: number) => W.riverMid(x) + (near ? 1 : -1) * W.riverHalf(x);
       const pick = rr();
       if (pick < (near ? 0.62 : 0.4)) {
@@ -1112,6 +1115,90 @@ function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number)
 }
 
 /**
+ * The places along the river where the boat can come in, from the seed alone: the jetty; downstream,
+ * a stone landing under a tree standing alone, a few steps down into the water and a post to tie up
+ * to, with a way of stepping stones up from it to the nearest of the ways; and upstream, a reed bank,
+ * where the boat can only rest, nosed in among the reeds, and there's nowhere to go.
+ */
+export interface Landing {
+  kind: 'jetty' | 'stone' | 'reeds';
+  /** where it is, on the river's near bank */
+  at: [number, number];
+  /** where the boat lies there, and its heading */
+  boat: V3; yaw: number;
+  /** where one steps in and out (none at the reed bank) */
+  by: V3 | null;
+  /** the way of stepping stones from the landing up to a way: from `by`, to where it meets the way (and which way, how far along it) */
+  trail: Array<[number, number]>; join: { w: Way; u: number } | null;
+}
+const landingMemo = new Map<number, Landing[]>();
+export function landingsOf(ways: Ways, seed: number): Landing[] {
+  const got = landingMemo.get(seed);
+  if (got) return got;
+  const W = ways.water, r = seeded(hash(seed, 0x1a4d));
+  const out: Landing[] = [{ kind: 'jetty', at: [JETTY.x, RIVER_NEAR], boat: JETTY.boat, yaw: JETTY.boatYaw, by: [JETTY.x + JETTY.hw - 0.42, JETTY.y, JETTY.boat[2] + 0.5], trail: [], join: null }];
+  // (downstream: of the places along the near bank where a way comes nearest it, one, from the seed)
+  const cands: Array<{ x: number; d: number }> = [];
+  for (let x = -72; x <= -22; x += 2) {
+    const zb = W.riverNearBank(x), n = ways.nearest(x, zb + 2.5);
+    if (n.d < 60 && n.d > 5) cands.push({ x, d: n.d });
+  }
+  cands.sort((a, b) => a.d - b.d);
+  const pick = cands[Math.min(cands.length - 1, Math.floor(r() * Math.min(4, cands.length)))];
+  if (pick) {
+    const x = pick.x, zb = W.riverNearBank(x), top: V3 = [x, ground(ways, x, zb + 1.6), zb + 1.6];
+    const n = ways.nearest(x, zb + 2.5), trail: Array<[number, number]> = [];
+    // (the stepping stones' way up: from the landing to the way, bending a little)
+    const bend = ramp(r, -1.5, 1.5), steps = Math.max(2, Math.ceil(Math.hypot(n.p[0] - x, n.p[2] - top[2]) / 0.75));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      trail.push([x + (n.p[0] - x) * t + bend * Math.sin(Math.PI * t), top[2] + (n.p[2] - top[2]) * t]);
+    }
+    out.push({ kind: 'stone', at: [x, zb], boat: [x + 0.2, RIVER_L, zb - 1.15], yaw: Math.PI / 2, by: top, trail, join: { w: n.w, u: n.u } });
+  }
+  // (upstream: a reed bank, where the broad water begins)
+  const xr = ramp(r, 24, 40), zr = W.riverNearBank(xr);
+  out.push({ kind: 'reeds', at: [xr, zr], boat: [xr, RIVER_L, zr - 2.6], yaw: ramp(r, -0.35, 0.35), by: null, trail: [], join: null });
+  landingMemo.set(seed, out);
+  return out;
+}
+/** how near a place is to a landing's ground (its steps and the way up from it) */
+export function nearLanding(ls: Landing[], x: number, z: number): number {
+  let d = Infinity;
+  for (const l of ls) {
+    if (l.kind !== 'stone') continue;
+    d = Math.min(d, Math.hypot(x - l.at[0], z - l.at[1] - 1));
+    for (const [px, pz] of l.trail) d = Math.min(d, Math.hypot(x - px, z - pz));
+  }
+  return d;
+}
+/** A landing: stone steps down into the water, a post to tie up to, its tree, and the stones up from it; or a bank of reeds. */
+function landing(mesh: Mesh, petals: number[], puffs: number[], ways: Ways, seed: number, l: Landing, inT: (x: number, z: number) => boolean) {
+  const r = seeded(hash(seed, Math.round(l.at[0] * 10), 0x1a5d)), W = ways.water, [x, zb] = l.at;
+  if (l.kind === 'reeds') {
+    for (let k = 0; k < 9; k++) {
+      const px = x + ramp(r, -3.2, 3.2), pz = W.riverNearBank(px) + ramp(r, -2.8, 0.6), w = W.at(px, pz);
+      if (inT(px, pz) && w) reeds(mesh, px, w.s < 0 ? w.L : ground(ways, px, pz), pz, r, 8 + Math.floor(r() * 10));
+    }
+    return;
+  }
+  // (its steps down into the water, the bank faced with stone either side of them)
+  const yt = ground(ways, x, zb + 1.1), n = 5, dy = (yt - (RIVER_L - 0.12)) / n;
+  for (let k = 0; k < n; k++) { const sz = zb + 0.9 - k * 0.36; if (inT(x, sz)) mesh.box([x, yt - k * dy - 0.16, sz], [0.85 - k * 0.03, 0.16, 0.2], [1, 0], INK.stepTop, INK.stepFace, M.step); }
+  for (const sd of [-1, 1]) for (let k = 0; k < 2; k++) {
+    const ex = x + sd * (1.25 + k * 0.62), ez = W.riverNearBank(ex) + 0.12, et = ground(ways, ex, ez + 0.5) + 0.04;
+    if (inT(ex, ez)) mesh.box([ex, (et + RIVER_L - 0.4) / 2, ez], [0.3, (et - RIVER_L + 0.4) / 2, 0.14], [1, 0], INK.stone, INK.stone, M.stone);
+  }
+  // (a post to tie up to, at the top of the steps)
+  if (inT(x + 1, zb + 1)) mesh.box([x + 1, yt + 0.25, zb + 1], [0.09, 0.32, 0.09], [1, 0], INK.stepTop, INK.stepFace, M.step, M.stone);
+  // (the stepping stones up from it)
+  for (let k = 1; k < l.trail.length - 1; k++) { const [px, pz] = l.trail[k]; if (inT(px, pz)) stone(mesh, ways, px + ramp(r, -0.1, 0.1), pz, ramp(r, 0.22, 0.3), r); }
+  // (its tree, standing alone beside it, up the bank)
+  const tx = x + (r() < 0.5 ? -1 : 1) * ramp(r, 2.6, 3.4), tz = W.riverNearBank(tx) + ramp(r, 3.2, 4.2);
+  if (inT(tx, tz)) tree(mesh, puffs, petals, [tx, ground(ways, tx, tz), tz], seeded(hash(seed, 0x7eee)), ways, 1);
+}
+
+/**
  * The boat moored at the jetty (a sampan), drawn in ink: its hull of dark planks, long and low, its ends rising; amidships
  * a woven canopy, arched; a pole laid along it, a red lantern on a post at its stern. In its own frame:
  * along +z its bow, its waterline at y = 0.
@@ -1146,7 +1233,6 @@ export function boat(mesh: Mesh) {
     mesh.tube([Math.cos(a0) * R, 0.36 + Math.sin(a0) * R * 0.95, z], [Math.cos(a1) * R, 0.36 + Math.sin(a1) * R * 0.95, z], 0.025, 0.025, INK.trunk, M.trunk, 4);
   }
   // (a pole laid along it; a post at its stern, a red lantern hung from it)
-  mesh.tube([0.42, 0.42, -L * 0.95], [0.3, 0.4, L * 0.7], 0.022, 0.018, INK.trunk, M.trunk, 4);
   mesh.tube([0, 0.4, -L * 0.82], [0, 1.6, -L * 0.82], 0.03, 0.025, INK.trunk, M.trunk, 5);
   mesh.tube([0, 1.55, -L * 0.82], [0, 1.58, -L * 0.82 + 0.32], 0.016, 0.014, INK.trunk, M.trunk, 4);
   mesh.tube([0, 1.22, -L * 0.82 + 0.3], [0, 1.46, -L * 0.82 + 0.3], 0.11, 0.1, hex(0xc8412e), M.red, 8);
@@ -1173,6 +1259,10 @@ export function boatReflection(mesh: Mesh, yaw: number) {
     }
   }
 }
+/** The boat's pole, laid along it (when no one's poling): in the boat's frame */
+export function laidPole(mesh: Mesh) { mesh.tube([0.42, 0.42, -2.3 * 0.95], [0.3, 0.4, 2.3 * 0.7], 0.022, 0.018, INK.trunk, M.trunk, 4); }
+/** A pole, from (0,0,0) to (0,1,0): placed and stretched where it's held, end to end */
+export function poleMesh(mesh: Mesh) { mesh.tube([0, 0, 0], [0, 1, 0], 0.024, 0.02, INK.trunk, M.trunk, 5); }
 /** The boat's mooring lines, bow and stern, sagging to the posts at the pier's end, as it lies moored. */
 export function moorings(mesh: Mesh) {
   const { x, hw, y, z0, z1 } = JETTY, B = JETTY.boat, cy = Math.cos(JETTY.boatYaw), sy = Math.sin(JETTY.boatYaw);
