@@ -49,11 +49,12 @@ const SINK = 0.12;
 
 export class Water {
   private streams: Stream[] = [];
+  private fixed = false;
   constructor(readonly seed: number, private hill: (z: number) => number, private slope: (z: number) => number) {}
 
   /** The streams that run anywhere between z0 and z1. */
   streamsNear(z0: number, z1: number): Stream[] {
-    while (!this.streams.length || this.streams[this.streams.length - 1].z0 < z1 + 400) this.lay();
+    while (!this.fixed && (!this.streams.length || this.streams[this.streams.length - 1].z0 < z1 + 400)) this.lay();
     return this.streams.filter((s) => s.z1 + 20 >= z0 && s.z0 - 32 <= z1);
   }
 
@@ -109,6 +110,26 @@ export class Water {
     st.z0 = fz + fr[1] * 0.4;
     for (const p of st.pools) p.x = this.xAt(st, p.z);
     this.streams.push(st);
+  }
+
+  /**
+   * For a bench: these streams and no others, laid as given: where each runs, its pools, and (if it
+   * has one) a single fall, its lip at `fall`, dropping into a deep pool cut under it from `foot`.
+   */
+  fix(specs: Array<{ z0: number; z1: number; x0: number; A: [number, number, number]; lam: [number, number, number]; w0: number; pools: Array<{ z: number; rx: number; rz: number; kind: PoolKind }>; fall?: { lip: number; foot: number } }>) {
+    this.streams = specs.map((sp, k) => {
+      const st: Stream = { k, z0: sp.z0, z1: sp.z1, x0: sp.x0, A: sp.A, lam: sp.lam, ph: [0.4, 1.3, 2.1], w0: sp.w0, pools: [], falls: [], foot: 'pond' };
+      if (sp.fall) {
+        const { lip, foot } = sp.fall;
+        st.falls.push({ za: foot, zb: lip + 6, lips: [lip], single: true });
+        st.pools.push({ x: 0, z: foot + (lip - foot) * 0.4, rx: 4.6, rz: (lip - foot) * 0.55 + 1.2, L: this.hill(foot) - SINK + 0.06, kind: 'plunge' });
+      }
+      for (const p of sp.pools) st.pools.push({ x: 0, z: p.z, rx: p.rx, rz: p.rz, L: p.kind === 'spring' ? this.hill(p.z) - SINK : this.rimLevel(p.z, p.rz), kind: p.kind });
+      for (const p of st.pools) p.x = this.xAt(st, p.z);
+      return st;
+    });
+    this.fixed = true;
+    this.memo.clear();
   }
 
   /** A pool's level: held at its downhill rim, so it's cut into the hill behind (rather than banked up before it). */

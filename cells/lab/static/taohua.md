@@ -122,29 +122,26 @@ are cut high, a bridge: a deck of stone slabs, arched a little, a kerb along eit
 either bank. No tree stands in the water, on a bank cut steep, nor just downhill of the water,
 where its crown would stand between the eye and it: the water's an open mass, as the print's are.
 
-It's drawn as the prints draw water: not coloured in, but the paper itself, and lines, of a kind
-for each state of the water. Each line is its own brush mark, tapered to a hair at both ends and
-swelling a little past its middle, its length, weight and tone its own, laid in staggered rows.
+It's drawn as the prints draw water: the paper itself, and ink only where something happens. Its
+marks aren't a texture laid over it but geometry of their own (marks.ts), each with a reason to be
+there, read from the water: where a stream bends, its current crowds in short strokes against the
+outer bank and draws out long along the inner; where it runs gently, now and then one long low stroke
+along it; where it runs fast, short strokes, slanted, crossing; where a stone stands in it, the
+current splits about it upstream and trails a wake behind; where it falls, a broken lip across the
+top, lines down the sheet of different lengths, and at its foot strokes flung out downstream and rings
+spreading, fainter as they go; where it comes into a pool, rings spreading from the inlet; and on still
+water, almost nothing: a long line or two across, far apart. Its banks are a broken line, about half
+drawn, heavier where they're cut steep or the current's against them; a pond's far shore (up the hill,
+where the bank's cut) is drawn, broken, and its near shore left open. Each mark is a ribbon laid on the
+water (or down a fall), tapered to a hair at both ends, its width and weight its own, its edge drawn
+smooth however thin, broken now and then as a dry brush breaks; it stays where it is as the view moves.
+Foam is a stipple at the foot of each drop and in patches where it runs fast; stones in the water have
+their rings, and on still water their reflections. Petals float on its stiller water.
 
-- **Still** (a pool, a pond, a marsh): long, nearly straight lines across it, far apart out on the
-  open water, closer by its shore.
-- **Gentle** (a stream running slowly): long low waves along it, close together, in rows parallel
-  to its middle line (so they bend as it bends), broken here and there as a dry brush breaks, with
-  a finer second set between; drifting slowly down it.
-- **Rapid** (where it runs fast): short choppy waves, two sets at a slant to each other, crossing.
-- **Falling** (a fall's sheet, a cascade's lip): lines down it, of varied length, running down.
-- **Foam**: a stipple of dots and here and there a tiny ring, at the foot of each drop and thinning
-  out below it, and in patches where it runs fast.
-
-Each line thins to nothing before the shore, so none's cut off by it. Its bank is a fine line of
-ink along the shore, swelling a little, broken now and then, with a hairline echo just inside it.
-Where a stream drops into a pool there's a small cascade, its lip held by a rock either side.
-Rocks line its banks, stand in it where it runs fast (and now and then where it's slow), and out in
-its ponds; each has two or three broken rings hugging it, drawn out a little downstream, and a
-short dark stroke under it where it meets the water; behind some, in slow water, a small eddy
-spirals. Petals float on its stiller water, some with a ring of their own. On still water what
-stands at it or over it is mirrored below it, as the eye sees it, in broken strokes down, fading as
-they go: rocks in grey, and the blossom of a crown above a pool in pink.
+`?bench=water&scene=pond|bend|rapid|fall` (best with `review`) is a hill of its own, far off across the
+hill from any way, its four streams laid as given: the same geometry every time, so the drawing of the
+water can be compared against itself. `?marks` shows only the water's marks, each coloured by what made
+it (current blue, stone red, bank green, fall purple, impact orange, still grey), the rest faded.
 
 Where its banks are cut deep into the hill (about a fall's pool, in a run of falls) they're rock
 walls, as the prints wash them: a grey wash, paler where it faces the light and deeper turned from

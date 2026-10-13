@@ -10,6 +10,7 @@ import { hash, noise1, seeded, type Rand } from '../kit/rng';
 import { identify, moving } from '../changes/model';
 import { inStation, stationsNear, type Station } from './compose';
 import { clearOfDeer, deerNear } from './herds';
+import { obstacleMarks, streamMarks } from './marks';
 import { RISE, TERRACE_OF, WIDTH, Ways, type Junction, type V3, type Way } from './ways';
 import type { Water } from './water';
 
@@ -20,7 +21,7 @@ export const STRIDE = 10;
 /** the way the eye looks, on the whole (down the hill's slope from above and below it): for setting things behind one another as it sees them */
 const VIEW: V3 = (() => { const p = 0.76; return [0, -Math.sin(p), Math.cos(p)]; })();
 /** materials: what the drawing does with each */
-export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24, ring: 25, eddy: 26, archReflect: 27, deer: 28 } as const;
+export const M = { ground: 0, step: 1, stone: 2, rock: 3, trunk: 4, tile: 5, red: 6, wall: 7, robe: 8, hat: 9, petal: 10, blossom: 11, plaque: 12, twig: 13, dark: 14, skin: 15, ridge: 16, grass: 17, earth: 18, shade: 19, type: 20, water: 21, ripple: 22, reflect: 23, reflectPink: 24, ring: 25, eddy: 26, archReflect: 27, deer: 28, mark: 29 } as const;
 
 type C3 = [number, number, number];
 const hex = (h: number): C3 => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -275,6 +276,9 @@ export function groveDensity(ways: Ways, seed: number, x: number, z: number): nu
 }
 
 /** Tile (i, j) of the hill: i across it, j up it. */
+/** the water bench (bench.ts): no trees, nothing but the hill, its water and its rocks */
+let BENCH = false;
+export const setBench = (on: boolean) => { BENCH = on; };
 /** (as a tile's made, what's set in it that the walker can't walk through) */
 let blocking: number[] | null = null;
 const block = (x: number, z: number, r: number) => { blocking?.push(x, z, r); };
@@ -519,7 +523,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     }
   }
   // (and a few out among the trees, low and broad)
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < (BENCH ? 0 : 2); i++) {
     const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
     if (ways.nearest(x, z).d < WIDTH / 2 + 0.8) continue;
     rocks.push([x, z, ramp(r, 0.4, 0.95)]);
@@ -632,7 +636,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   // its blossom fallen about it: the clearing is a shape the tree gives meaning to, not just a gap)
   for (let i = Math.floor(z0 / 36) - 1; i <= Math.floor(z1 / 36) + 1; i++) for (let ix = Math.floor(x0 / 36) - 1; ix <= Math.floor(x1 / 36) + 1; ix++) {
     const o = opening(ways, seed, ix, i), lr = seeded(hash(seed, ix, i, 0x10e));
-    if (lr() < 0.25) continue;
+    if (BENCH || lr() < 0.25) continue;
     const x = o.cx + o.side * o.rx * ramp(lr, 0.25, 0.5), z = o.cz + o.rz * ramp(lr, -0.1, 0.35);
     if (!inT(x, z) || ways.nearest(x, z).d < WIDTH / 2 + 2.2 || belowWay(x, z) || onTemple(x, z, 1) || inGlade(x, z) || treeOut(x, z)) continue;
     tree(mesh, puffs, petals, [x, ground(ways, x, z), z], lr, ways);
@@ -645,7 +649,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     const accept = tr();
     const x = gx + (tr() - 0.5) * G * 0.9, z = gz + (tr() - 0.5) * G * 0.9;
     // Ownership follows the final jittered position; neighbouring bands visit the same candidates.
-    if (!inT(x, z)) continue;
+    if (BENCH || !inT(x, z)) continue;
     if (accept > groveDensity(ways, seed, x, z)) continue;
     if (ways.nearest(x, z).d < WIDTH / 2 + 1.5) continue;
     // (nor just downhill of a way: from above, its crown would stand between the eye and the way, and a
@@ -667,7 +671,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   if (ways.water.streamsNear(z0, z1).length) blossomInWater(mesh, ways, puffs, hash(seed, i, j));
 
   // petals fallen on the path too
-  for (let i = 0; i < 36; i++) {
+  for (let i = 0; i < (BENCH ? 0 : 36); i++) {
     const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
     petals.push(x, restY(ways, x, z, 0.02), z, ramp(r, 0.04, 0.08), r() * Math.PI, r() * 0.5);
   }
@@ -802,7 +806,9 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
     const foot = w && w.s < 0.3 ? (px: number, pz: number) => Math.max(gy(px, pz), w.L - size * 0.2) : gy;
     rock(mesh, [x, foot(x, z), z], size, r, foot);
     waterMarks(mesh, W, x, z, size, size * ramp(r, 1, 1.4));
+    obstacleMarks(push, W, { x, z, r: size }, M.mark);
   };
+  const push = (v: number[]) => { mesh.v.push(...v); };
   for (const st of sts) {
     const r = seeded(hash(seed, st.k, Math.floor(z0), Math.floor(x0), 0x40c4));
     // (rocks along its banks, and in it where it runs fast)
@@ -831,6 +837,8 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
         if (inT(x, z) && clearOfWays(x, z, 0.6)) rock(mesh, [x, gy(x, z), z], ramp(r, 0.7, 1.2), r, gy);
       }
     }
+    // (and the marks on it: see marks.ts)
+    streamMarks(push, W, st, z0, z1, inT, (x, z) => groundCut(ways, x, z).cut, M.mark);
     for (const p of st.pools) {
       if (p.z + p.rz * 2 < z0 || p.z - p.rz * 2 > z1) continue;
       // (where the stream drops into it, a small cascade: rocks either side of its lip)

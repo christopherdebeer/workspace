@@ -16,8 +16,9 @@ import { stationsNear } from './compose';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, TSTEP, ground, groundCut, makeBand, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, M, Mesh, NAMES, TILE, TSTEP, ground, groundCut, makeBand, setBench, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
+import { bench, SCENES, type Scene } from './bench';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -62,6 +63,14 @@ try { R = new Renderer(canvas); } catch (e) {
 }
 
 const ways = new Ways(seed);
+// (the water bench: a hill of its own, its four streams, a scene of one of them; see bench.ts)
+const benchScene = params.get('bench') === 'water' ? ((params.get('scene') ?? 'pond') as Scene) : null;
+if (benchScene) {
+  setBench(true);
+  const [bx, bz] = bench(ways, benchScene in SCENES ? benchScene : 'pond');
+  params.set('at', `@${bx.toFixed(2)},${bz.toFixed(2)}`);
+  document.body.classList.add('bench');
+}
 
 // ─── Changes: at each station a cast, its words inked on the hillside in the space kept for it ──
 // (the words come from a sheet, ink on nothing: each hexagram's name, its characters one under the
@@ -735,7 +744,7 @@ function frame(now: number) {
     mark.style.transform = `translate(${q[0].toFixed(1)}px, ${q[1].toFixed(1)}px) scale(${(0.8 + 0.35 * Math.min(1, ma * 4)).toFixed(3)})`;
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
-  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000 },
+  R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks') },
     [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 

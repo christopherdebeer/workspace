@@ -50,7 +50,7 @@ void main() {
 const SOLID_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec3 vN; in vec3 vC; flat in int vM;
-uniform vec3 uEye; uniform sampler2D uPlaque, uType; uniform float uTime;
+uniform vec3 uEye; uniform sampler2D uPlaque, uType; uniform float uTime, uMarks;
 layout(location = 0) out vec4 oC;
 layout(location = 1) out vec4 oA;
 ${COMMON}
@@ -228,68 +228,37 @@ void main() {
     c = texture(uPlaque, vC.rg).rgb;
     lit = 1.;
   } else if (vM == ${M.water}) {
-    // water, as the prints draw it: the paper itself, and lines, of a kind for each state of it.
-    // Still (a pool, a marsh): long, nearly straight lines across, closer by the shore. Gentle (a
-    // stream that runs slowly): long low waves along it, close, parallel to its banks. Rapid (where it
-    // runs fast): short choppy waves, two sets crossing. Falling (a fall, a cascade's lip): lines down
-    // it, of varied length. Foam (at a fall's foot, below a cascade, in fast water): a stipple of dots
-    // and tiny rings. Its bank: a fine line of ink along the shore, broken.
+    // water: the paper itself. Its marks are its own geometry (see marks.ts), each where something
+    // happens; here only foam, a stipple at the foot of a drop and in patches where it runs fast.
     // (vC: how far in from its edge; across from a stream's middle; its kind, and after the point how
     // fast it runs. Its normal, where it's level: up, leaning by how much foam there is.)
-    float inn = vC.r, across = vC.g;
-    int kind = int(floor(vC.b + .001));
+    float inn = vC.r;
     float run = fract(vC.b + .001);
     vec3 nn = normalize(vN);
     bool fall = abs(nn.y) < .55, lip = !fall && abs(nn.y) < .9;
     float foamAmt = lip || fall ? 0. : clamp(vN.x / max(abs(vN.y), .2), 0., 1.);
     // (its shore: where it's no way in from its edge, it isn't)
     if (inn < 0. && !fall) discard;
-    vec3 LINE = vec3(.22, .24, .25), BANK = vec3(.13, .12, .11);
-    float ink = 0., bank = 0.;
+    foamAmt = max(foamAmt, .22 * smoothstep(.2, .32, run) * smoothstep(.45, .65, noise(vec3(vW.xz * .7, 23.))));
     float fpx = max(length(fwidth(vW.xz)), 1e-4) * .7;
-    if (fall || lip) {
-      // (falling: lines down it, of varied length, wavering a little, running down)
-      vec2 p = vec2((fall ? -vW.y : vW.z * 1.4) - uTime * .9, vW.x * .8 + vW.z * .6);
-      ink = .85 * strokes(p, .1, fall ? 1.5 : .7, .62, 3., fwidth(p.y), .8, .02, 0.);
-    } else {
-      float t = uTime * (kind == 0 ? .12 + run * 1.4 : .015), fast = smoothstep(.13, .26, run);
-      float grp = noise(vec3(vW.xz * .2, 8.)), shore = 1. - smoothstep(.15, 1., inn);
-      // (each thins to nothing at the shore, so none's cut off by it)
-      float thin = smoothstep(.0, .25, inn);
-      if (kind == 0 || kind == 3) {
-        vec2 p = vec2(vW.z + t, across);
-        float fy = fwidth(across);
-        // gentle: long low waves along it, close together, a finer second set between
-        float dens = .55 + .15 * shore + (grp - .5) * .3;
-        float gentle = strokes(p, .12, 3.6, dens, 1., fy, thin * .85, .035, .3);
-        gentle = max(gentle, .6 * strokes(p + vec2(3.1, .06), .19, 1.6, dens * .6, 2., fy, thin * .6, .05, 0.));
-        // rapid: short choppy waves, two sets at a slant to each other, crossing
-        vec2 pa = mat2(.976, -.22, .22, .976) * p, pb = mat2(.976, .22, -.22, .976) * p;
-        float rapid = max(strokes(pa, .1, .55, .62, 6., fy, thin, .16, 0.), .8 * strokes(pb + vec2(1.7, .05), .12, .45, .5, 7., fy, thin * .8, .18, 0.));
-        ink = mix(gentle, rapid, fast);
-        foamAmt = max(foamAmt, .22 * smoothstep(.2, .32, run) * smoothstep(.45, .65, noise(vec3(vW.xz * .7, 23.))));
-      } else {
-        // still: long, nearly straight lines across it, far apart out on it, closer by its shore
-        vec2 p = vec2(vW.x + t, vW.z);
-        float fy = fwidth(vW.z);
-        float dens = .16 + .5 * shore + (grp - .5) * .3;
-        ink = strokes(p, .24, 3.4, dens, 5., fy, thin * .9, .008, .22);
-        ink = max(ink, .55 * strokes(p + vec2(2.3, .11), .24, 1.4, dens * .5, 9., fy, thin * .7, .012, 0.));
-      }
-      // foam: a stipple of dots, and here and there a tiny ring
-      ink = max(ink, stipple(vW.xz, .1, foamAmt * .75 * smoothstep(.25, .55, noise(vec3(vW.xz * 1.6, 24.)) + foamAmt * .4), fpx));
-      // the bank: a fine line of ink along the shore, as a brush draws it, swelling a little, broken
-      // now and then; a hairline echo inside it, now and then
-      float wi = max(fwidth(inn), 1e-4);
-      float nb = noise(vec3(vW.xz * .55, 4.)), gap = noise(vec3(vW.xz * 1.7, 11.));
-      float notch = smoothstep(.45, .6, noise(vec3(vW.xz * 1.1, 13.))) * .04;
-      float lw = mix(.3, 1.5, smoothstep(.3, .85, nb));
-      bank = (1. - smoothstep(lw, lw + .8, (inn - notch) / wi)) * step(.38, gap);
-      float e1 = abs(inn - .15 - .04 * sin(vW.x * 2.7 + vW.z * 1.9)) / wi;
-      ink = max(ink, (1. - smoothstep(.3, 1., e1)) * step(.6, noise(vec3(vW.xz * 1.2, 14.))) * .45);
-    }
-    c = mix(PAPER, LINE, ink);
-    c = mix(c, BANK, bank * .85);
+    float ink = fall || lip ? 0. : stipple(vW.xz, .1, foamAmt * .75 * smoothstep(.25, .55, noise(vec3(vW.xz * 1.6, 24.)) + foamAmt * .4), fpx);
+    c = mix(PAPER, vec3(.22, .24, .25), ink);
+    if (uMarks > .5) c = PAPER;
+    lit = 1.;
+  } else if (vM == ${M.mark}) {
+    // a mark on the water: a ribbon, its edge drawn smooth however thin it is (its coverage, from how
+    // wide it is on the glass), broken here and there along it as a dry brush breaks; ink on the paper.
+    // (vC: across it, -1 to 1; along it, 0 to 1; its family, and after the point its weight)
+    float across = vC.r, fam = floor(vC.b + .001), weight = fract(vC.b + .001);
+    float aa = max(fwidth(across), 1e-4);
+    float cov = (1. - smoothstep(1. - aa, 1. + aa * .5, abs(across))) * min(1., 2. / aa);
+    float dry = smoothstep(.18, .32, noise(vec3(vW.xz * 7.5, fam * 3.1)));
+    float a = cov * weight * mix(.55, 1., dry);
+    if (a < .02) discard;
+    vec3 col = vec3(.2, .22, .23);
+    if (uMarks > .5) col = fam < .5 ? vec3(.15, .35, .8) : fam < 1.5 ? vec3(.85, .2, .15) : fam < 2.5 ? vec3(.15, .6, .25) : fam < 3.5 ? vec3(.55, .2, .7) : fam < 4.5 ? vec3(.9, .5, .1) : vec3(.4, .4, .4);
+    c = mix(PAPER, col, min(1., a));
+    n = vec3(0., 1., 0.);
     lit = 1.;
   } else if (vM >= ${M.ripple} && vM <= ${M.archReflect}) {
     // marks on water about what stands in it or over it: (vC: where, in its own measure; how far in
@@ -487,7 +456,7 @@ const POST_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 uniform sampler2D uC, uA, uD;
-uniform vec2 uPx; uniform float uNear, uFar, uLine, uInk; uniform mat4 uIVP;
+uniform vec2 uPx; uniform float uNear, uFar, uLine, uInk, uMarks; uniform mat4 uIVP;
 out vec4 o;
 ${COMMON}
 float lin(float d) { float z = d * 2. - 1.; return 2. * uNear * uFar / (uFar + uNear - z * (uFar - uNear)); }
@@ -507,7 +476,7 @@ void main() {
   // a deeper pink where one crown stands before another)
   float ink = 0., stone = 0., coral = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
-  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || (m0 >= ${M.water} && m0 <= ${M.archReflect}), s0 = m0 == ${M.step} || m0 == ${M.stone};
+  bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || (m0 >= ${M.water} && m0 <= ${M.archReflect}) || m0 == ${M.mark}, s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
     float di = texture(uD, uv).r;
@@ -521,7 +490,7 @@ void main() {
     float meet = mi != m0 && zi >= z0 * .998 ? 1. : 0.;
     if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
     if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
-    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || (mi >= ${M.water} && mi <= ${M.archReflect}), si = mi == ${M.step} || mi == ${M.stone};
+    bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || (mi >= ${M.water} && mi <= ${M.archReflect}) || mi == ${M.mark}, si = mi == ${M.step} || mi == ${M.stone};
     if (g0 && gi) continue;
     if ((m0 == ${M.rock} && (gi || mi == ${M.rock})) || (mi == ${M.rock} && g0)) continue;
     float e = max(jump, max(turn * (g0 ? 0. : .8), meet));
@@ -533,6 +502,8 @@ void main() {
   // (where on the hill this is, so the breaks stay with the stone, not the glass)
   vec4 wp = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
   stone *= smoothstep(.2, .42, noise(wp.xyz / wp.w * 3.));
+  // (the marks view: everything but the water's marks faded nearly to the paper, its lines too)
+  if (uMarks > .5) { if (m0 != ${M.mark}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; }
   c = mix(c, vec3(.64, .25, .23), coral * .32);
   c = mix(c, vec3(.25, .21, .18), stone * .82);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
@@ -549,7 +520,7 @@ void main() {
       if (m == ${M.blossom} || m == ${M.twig}) fol += 1.;
       else if (m == ${M.rock} || m == ${M.trunk}) drk += 1.;
       else if (m == ${M.tile} || m == ${M.red} || m == ${M.wall} || m == ${M.plaque} || m == ${M.ridge}) arc += 1.;
-      else if (m >= ${M.water} && m <= ${M.archReflect}) wat += 1.;
+      else if ((m >= ${M.water} && m <= ${M.archReflect}) || m == ${M.mark}) wat += 1.;
     }
     wat /= float(K);
     fol /= float(K); drk /= float(K); arc /= float(K);
@@ -748,7 +719,7 @@ export class Renderer {
    * The frame: the solids (the world's bands, the walker by its own placing), the blossom, the
    * petals; then the print.
    */
-  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: number | boolean; time?: number },
+  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: number | boolean; time?: number; marks?: boolean },
     solids: Array<{ d: Drawn; model?: M4 }>, puffs: Drawn[], petals: Drawn[]) {
     const gl = this.gl, W = this.canvas.width, H = this.canvas.height;
     this.targets(W, H);
@@ -767,6 +738,7 @@ export class Renderer {
     gl.uniform3fv(this.loc(this.solid, 'uRight'), view.right);
     gl.uniform3fv(this.loc(this.solid, 'uUp'), view.up);
     gl.uniform1f(this.loc(this.solid, 'uTime'), view.time ?? 0);
+    gl.uniform1f(this.loc(this.solid, 'uMarks'), view.marks ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.plaque);
     gl.uniform1i(this.loc(this.solid, 'uPlaque'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.type);
@@ -797,6 +769,7 @@ export class Renderer {
     gl.uniform1f(this.loc(this.post, 'uFar'), view.far);
     gl.uniformMatrix4fv(this.loc(this.post, 'uIVP'), false, view.ivp);
     gl.uniform1f(this.loc(this.post, 'uInk'), Number(view.ink ?? 0));
+    gl.uniform1f(this.loc(this.post, 'uMarks'), view.marks ? 1 : 0);
     gl.uniform1f(this.loc(this.post, 'uLine'), Math.max(1, view.dpr * 0.9));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
