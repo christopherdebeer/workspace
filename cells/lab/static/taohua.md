@@ -49,14 +49,22 @@ slow on the broad water above (the same water through a wider way), quickest dow
 along its banks, and behind the pier an eddy, where it idles and turns a little back on itself. Its
 marks are drawn from it, so the drawing shows where the water's moving.
 
-Unless the address says where to start, the journey begins out on the broad water: nothing but the
-paper and a few marks on it, the boat, the walker sitting low in it behind its canopy. It drifts down
-the river at about the river's own pace, a metre a second; the banks come in, rocks first, then the
-blossom; it eases over its last few metres, turns in and comes alongside the jetty, and the walker
-steps off onto its deck, facing up the hill (a tap ends the arrival at once; it takes about half a
-minute). The title stands on the water where it began, and beside it, as the prints set a
-verse, the lines it comes from: 缘溪行，忘路之远近。忽逢桃花林，夹岸数百步。 (晋 · 陶渊明); both are left
-behind. The walker can come back down to the jetty's deck (it's open ground, over the water).
+Unless the address says where to be, the journey starts out on the broad water, far up the river and
+out from the hill, so that none of it's in view: nothing but the paper and a few marks on it, the boat
+set to the right, the walker sitting low in it behind its canopy, and on the open water to the left the
+title, in ink: the name of the first temple up the hill, in vermilion, over 桃花, large, and the seal,
+桃源, stamped in vermilion. Under it, 启程 · Set out, and, if a journey's kept in this browser, 续行 ·
+Continue (back to where it was left: its seed and its place, kept as it goes, as the address keeps them).
+Taps on the print do nothing yet; Enter sets out.
+
+Set out, and the boat gets under way: down the broad water quickly, then through the narrows at about
+the river's own pace, a metre a second; the banks come in, rocks first, then the blossom; it eases over
+its last few metres, turns in and comes alongside the jetty, and the walker steps off onto its deck,
+facing up the hill (a tap ends the arrival at once; it takes under a minute). The title stays on the
+water where it began, and beside it now, as the prints set a verse, the lines it comes from: 缘溪行，忘
+路之远近。忽逢桃花林，夹岸数百步。 (晋 · 陶渊明); both are left behind. Where the address says where to
+be (a link, a reload, Continue), there's no title: it's of the start. The walker can come back down to
+the jetty's deck (it's open ground, over the water).
 
 The river's drawn as the hill's water is, the paper and marks where something happens. Its current as
 the prints draw a river's: long trails of small crests, each a little arc of its own with the paper
@@ -92,14 +100,13 @@ brought in and comes alongside by itself, slowing as it comes, and the walker st
 Moored, the lines are made fast again. Fallen petals gather along the banks, behind the pier and about the boat; few float out on the
 river. Every hill keeps the same ways it had: the river lies below where they start.
 
-`?bench=river&scene=jetty|far|bank|arrive|open` (best with `review`) shows places at the foot of one
+`?bench=river&scene=jetty|far|bank|arrive|open|start` (best with `review`) shows places at the foot of one
 hill (seed 1): on the jetty by the boat; on the far bank, looking back across the river to the hill; on
-the near bank a way along; the arrival held part way; and its beginning, out on the broad water. `?intro=t` holds the arrival t seconds in.
+the near bank a way along; the arrival held part way; its beginning, out on the broad water; and the
+start, waiting. `?intro=t` holds the arrival t seconds in; `?splash` holds the start.
 
-The title stands at the foot of the print where the journey starts: the name of the first temple up
-the hill from there, over 桃花, large, and a small seal, 桃源. It belongs to the hillside there, not
-to the screen, so it moves with the hill and is walked away from, and doesn't come back unless you
-walk back down to it.
+The title belongs to the water where the journey starts, not to the screen, so it moves with the
+water and is left behind, and doesn't come back unless you come back up the river to it.
 
 ## The hill and its ways
 

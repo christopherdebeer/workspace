@@ -14,11 +14,27 @@
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
     nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; z-index: 2; }
     nav a { font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; color: #2d2622; text-decoration: none; opacity: .8; }
-    /* the title, at the foot of the print where the journey starts: the first temple's name over 桃花, large, and the seal; it stays with the hill there, and is walked away from */
-    #title { position: fixed; left: max(18px, env(safe-area-inset-left)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 30px); writing-mode: vertical-rl; display: flex; align-items: flex-end; gap: .2em; pointer-events: none; color: #f6efe2; text-shadow: 0 1px 14px rgba(150,40,30,.35); }
-    #name { font-size: clamp(26px, 8vw, 46px); font-weight: 400; letter-spacing: .05em; }
+    /* the title, on the open water where the journey starts: the first temple's name (in vermilion) over 桃花, large, in ink, and the seal, stamped; it stays with the water there, and is left behind */
+    #title { position: fixed; left: max(18px, env(safe-area-inset-left)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 124px); writing-mode: vertical-rl; display: flex; align-items: flex-end; gap: .2em; pointer-events: none; color: #2d2622; text-shadow: 0 0 10px rgba(239,230,211,.95), 0 0 3px rgba(239,230,211,.9); }
+    #name { font-size: clamp(26px, 8vw, 46px); font-weight: 400; letter-spacing: .05em; color: #b8382c; }
     #big { font-size: clamp(58px, 17vw, 108px); font-weight: 900; line-height: 1; }
-    #title .seal { writing-mode: horizontal-tb; align-self: flex-start; margin-top: .4em; width: 22px; height: 22px; border: 1.5px solid #f6efe2; font-size: 9px; line-height: 1.05; display: grid; place-items: center; text-align: center; font-family: "Ma Shan Zheng", serif; opacity: .9; }
+    #title .seal { writing-mode: horizontal-tb; align-self: flex-start; margin-top: .4em; width: 22px; height: 22px; border: 1.5px solid #b8382c; background: #b8382c; color: #f6efe2; text-shadow: none; font-size: 9px; line-height: 1.05; display: grid; place-items: center; text-align: center; font-family: "Ma Shan Zheng", serif; opacity: .92; }
+    /* where it starts from the address, there's no title: only at the start */
+    .untitled #title, .untitled #poem { display: none; }
+    .bench.splashing #title { display: flex; }
+    /* at the start: under the title, Set out, and (if a journey's kept) Continue; the rest of the page's marks wait */
+    #splash { position: fixed; left: max(20px, env(safe-area-inset-left)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 30px); display: none; flex-direction: column; align-items: flex-start; gap: 10px; z-index: 3; transition: opacity .8s; }
+    .splashing #splash { display: flex; }
+    #splash button { appearance: none; border: 0; background: none; padding: 4px 2px; display: flex; align-items: baseline; gap: .55em; cursor: pointer; color: #2d2622; font: italic 18px/1.2 "Iowan Old Style", Palatino, Georgia, serif; text-shadow: 0 0 8px rgba(239,230,211,1), 0 0 2px rgba(239,230,211,1); -webkit-tap-highlight-color: transparent; }
+    #splash button[hidden] { display: none; }
+    #splash button .zh { font: 400 20px/1 "Noto Serif SC", "Songti SC", serif; font-style: normal; letter-spacing: .08em; }
+    #splash button::before { content: ""; width: 9px; height: 9px; border: 1.4px solid #b8382c; align-self: center; }
+    #splash #setout::before { background: #b8382c; }
+    #splash button:hover .en, #splash button:focus-visible .en { text-decoration: underline; text-decoration-color: #b8382c; text-underline-offset: 3px; }
+    #splash button:focus { outline: none; }
+    .splashing #poem { opacity: 0; }
+    #poem { transition: opacity 2.5s; }
+    .splashing #book, .splashing #inkt, .splashing #climb, .splashing #hint { opacity: 0; pointer-events: none; }
     /* beside it, on the water, the lines it comes from (桃花源记), a column or two as the prints set a verse; it goes with the title */
     #poem { position: fixed; left: max(24px, env(safe-area-inset-left)); top: max(58px, 9vh); writing-mode: vertical-rl; pointer-events: none; color: #2d2622; font-size: 15px; letter-spacing: .22em; line-height: 1.7; opacity: .85; text-shadow: 0 0 6px rgba(239,230,211,.95), 0 0 2px rgba(239,230,211,.95); }
     #poem p { margin: 0; }
@@ -163,6 +179,7 @@
   <nav><a href="/">&larr; lab</a></nav>
   <div id="poem"><p>缘溪行，忘路之远近。</p><p>忽逢桃花林，夹岸数百步。</p><span class="by">晋 · 陶渊明</span></div>
   <div id="title"><span id="name"></span><span id="big">桃花</span><span class="seal">桃源</span></div>
+  <div id="splash"><button id="setout" type="button"><span class="zh">启程</span><span class="en">Set out</span></button><button id="continue" type="button"><span class="zh">续行</span><span class="en">Continue</span></button></div>
   <div id="climb">0</div>
   <button id="book" type="button" aria-label="this place, the journal, settings" title="this place · journal"><span>記</span></button>
   <button id="inkt" type="button" aria-pressed="false" aria-label="composition view" title="composition (C)"><span>墨</span></button>

@@ -59,8 +59,19 @@ const waysScene = params.get('bench') === 'ways' ? WAY_SCENES[(params.get('scene
 if (waysScene) { params.set('seed', '1'); params.set('at', waysScene); }
 // (the river bench: places at the foot of one hill, or the arrival held part way; see bench.ts)
 const riverScene = params.get('bench') === 'river' ? RIVER_SCENES[(params.get('scene') ?? 'jetty') as RiverScene] ?? RIVER_SCENES.jetty : null;
-if (riverScene) { params.set('seed', '1'); if ('at' in riverScene) params.set('at', riverScene.at); else { params.delete('at'); params.set('intro', String(riverScene.intro)); } }
+if (riverScene) { params.set('seed', '1'); if ('at' in riverScene) params.set('at', riverScene.at); else if ('intro' in riverScene) { params.delete('at'); params.set('intro', String(riverScene.intro)); } else { params.delete('at'); params.set('splash', ''); } }
 const seed = seedFrom(params.get('seed')) ?? (preview || review ? 1 : randomSeed());
+/**
+ * The start: unless the address says where to be, the boat waits out on the broad water, the title
+ * on the water beside it, and under it, Set out (the arrival, from there) and, if there's a journey
+ * kept in this browser, Continue (back to where it was left). (`?splash`: held there, in a review.)
+ */
+let splash = params.has('splash') || (!params.has('at') && !params.has('intro') && !review && !preview && !params.has('bench'));
+/** where a journey was left, kept in this browser as it goes: its seed and place */
+const KEPT = 'taohua-journey-v1';
+const kept = (() => { try { const k = JSON.parse(localStorage.getItem(KEPT) ?? 'null'); return k && typeof k.seed === 'string' && typeof k.at === 'string' ? k as { seed: string; at: string } : null; } catch { return null; } })();
+/** the title (and its lines) only where the journey starts from the start: not when the address puts them somewhere */
+const titled = splash || params.has('intro');
 const canvas = document.getElementById('print') as HTMLCanvasElement;
 const $ = (id: string) => document.getElementById(id)!;
 if (preview) document.body.classList.add('preview');
@@ -137,6 +148,7 @@ function titleRest() {
 addEventListener('resize', titleRest);
 function placeTitle(pos: V3) {
   const el = $('title');
+  if (!titled) return;
   if (!titleAt) {
     // (its name the first temple's up the hill from where the journey starts)
     let first: { z: number; name: number } | null = null;
@@ -146,7 +158,7 @@ function placeTitle(pos: V3) {
     titleRest();
     let best = Infinity;
     for (let dz = -30; dz <= 30; dz += 0.25) for (let dx = -24; dx <= 24; dx += 0.5) {
-      const x = pos[0] + dx, z = pos[2] + dz, p: V3 = [x, ways.hill(z), z], q = project(p), d = Math.hypot(q[0] - titleFoot[0], q[1] - titleFoot[1]);
+      const x = pos[0] + dx, z = pos[2] + dz, p: V3 = [x, RIVER_L, z], q = project(p), d = Math.hypot(q[0] - titleFoot[0], q[1] - titleFoot[1]);
       if (q[2] > 0 && d < best) { best = d; titleAt = p; }
     }
   }
@@ -237,6 +249,21 @@ const about = (p: V3, r: M4): M4 => mulM(Tm(p[0], p[1], p[2]), mulM(r, Tm(-p[0],
 // ─── the boat, on the river (world.ts `boat`): moored at the jetty, the arrival in it, going about in it
 const boatD = part((m) => boat(m)), mooringsD = part((m) => moorings(m));
 /** its reflection, for each of sixteen headings */
+/** Set out: the start's put away, and the boat gets under way */
+function setOut() {
+  if (!splash) return;
+  splash = false;
+  document.body.classList.remove('splashing');
+  setTimeout(() => $('hint').classList.add('on'), 2500);
+}
+if (splash) {
+  document.body.classList.add('splashing');
+  $('setout').addEventListener('click', setOut);
+  const c = $('continue') as HTMLButtonElement;
+  if (kept) c.addEventListener('click', () => { location.href = `${location.pathname}?seed=${encodeURIComponent(kept.seed)}&at=${encodeURIComponent(kept.at)}`; });
+  else c.hidden = true;
+}
+if (!titled) document.body.classList.add('untitled');
 const boatReflD = Array.from({ length: 16 }, (_, k) => part((m) => boatReflection(m, (k / 16) * Math.PI * 2)));
 /** where the walker sits in it: low, behind its canopy (in its own frame) */
 const SEAT: V3 = [0, -0.06, -1.3];
@@ -249,9 +276,13 @@ const wrapA = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
  * tap ends it at once. (`intro`: how long it's been going, in seconds; -1 once it's over.)
  */
 let intro = -1;
+/** where the arrival starts: so far upstream of the jetty, and so far out from the river's middle toward its far side (m) */
+const START = [Number(params.get('sx')) || 70, Number(params.get('sz')) || 16];
 const ARRIVE = (() => {
-  const E = JETTY.boat, W = ways.water, sx = E[0] + 22;
-  const P0 = [sx, W.riverMid(sx) + 4], P1 = [E[0] + 8, W.riverMid(E[0] + 8) + 1.8], P2 = [E[0], E[2]];
+  // (from out on the broad water upstream, far enough from the hill that none of it's in view, only the
+  // water: then down to the narrows, and in)
+  const E = JETTY.boat, W = ways.water, sx = E[0] + START[0];
+  const P0 = [sx, W.riverMid(sx) - START[1]], P1 = [E[0] + 8, W.riverMid(E[0] + 8) + 1.8], P2 = [E[0], E[2]];
   const pts: Array<[number, number]> = [], cum: number[] = [];
   for (let i = 0; i <= 240; i++) {
     const k = i / 240, q: [number, number] = [(1 - k) ** 2 * P0[0] + 2 * (1 - k) * k * P1[0] + k * k * P2[0], (1 - k) ** 2 * P0[1] + 2 * (1 - k) * k * P1[1] + k * k * P2[1]];
@@ -259,8 +290,9 @@ const ARRIVE = (() => {
     pts.push(q);
   }
   const L = cum[cum.length - 1];
-  // (its pace: about a metre a second, the river carrying it; easing over its last metres into the mooring)
-  const speed = (s: number) => 1.05 * (0.1 + 0.9 * sm(0, 8, L - s));
+  // (its pace: getting under way from where it waited; quicker over the broad water, then about a
+  // metre a second, the river carrying it through the narrows; easing over its last metres into the mooring)
+  const speed = (s: number) => (0.12 + 0.88 * sm(0, 5, s)) * (1.05 + 1.9 * (1 - sm(L - 20, L - 9, s))) * (0.12 + 0.88 * sm(0, 6, L - s));
   const ts: number[] = [0];
   for (let s = 0; s < L - 0.005 && ts.length < 40000;) { s = Math.min(L, s + speed(s) * 0.05 + 0.0004); ts.push(s); }
   return { pts, cum, L, ts, T: (ts.length - 1) * 0.05 };
@@ -685,7 +717,7 @@ function startSpot(): Spot {
   off = [jx, jz];
   // (`?intro=t`: the arrival, t seconds in: held there, in a review)
   if (params.has('intro')) intro = Math.max(0, Number(params.get('intro')) || 0);
-  else if (!review && !preview && !params.has('bench')) intro = 0;
+  else if (splash || (!review && !preview && !params.has('bench'))) intro = 0;
   return { w: n.w, u: n.u };
 }
 /**
@@ -877,7 +909,8 @@ const spread = () => { const p = [...touches.values()]; return p.length < 2 ? 0 
 for (const g of ['gesturestart', 'gesturechange']) document.addEventListener(g, (e) => e.preventDefault(), { passive: false } as AddEventListenerOptions);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomBy(Math.exp(e.deltaY * 0.0015)); }, { passive: false });
 canvas.addEventListener('pointerdown', (e) => {
-  // (a tap while arriving: there at once)
+  // (at the start, the menu's are the only taps; a tap while arriving: there at once)
+  if (splash) return;
   if (intro >= 0) { intro = -1; return; }
   touches.set(e.pointerId, [e.clientX, e.clientY]);
   if (touches.size >= 2) { pinch0 = spread(); downAt = null; looking = false; return; }
@@ -951,6 +984,7 @@ canvas.addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
   // (while a sheet's open, the keys are its)
   if (sheetOpen()) return;
+  if (splash) { if (e.key === 'Enter') setOut(); return; }
   if (e.key.toLowerCase() === 'c') { setInk(!ink); return; }
   // (arriving, stepping in or out, or afloat, the keys don't walk: the walker's in the boat)
   if (intro >= 0 || hop || afloat) return;
@@ -963,7 +997,7 @@ addEventListener('blur', () => { keys.clear(); });
 
 // ─── the camera: high, looking up the hill, the walker low in the frame ──────────────────────────
 const cam = { t: [0, 0, 0] as V3, x: 0 };
-let camInit = false;
+let camInit = false, camInit2 = false, shift = 0;
 /** how far into seeing through the walker's eyes (0: not at all; 1: there) */
 let firstT = 0;
 const norm3 = (v: V3): V3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
@@ -985,7 +1019,9 @@ function camera(p: V3, dt: number) {
   const dist = ((aspect < 1 ? 56 : 44) + (preview ? 6 : 0)) * (1 + 0.8 * zk) * Math.max(0.4, zoom);
   const pitch = 0.76 + lookPitch, yaw = lookYaw;
   const t: V3 = [cam.x + (cam.t[0] - p[0]) * 0, cam.t[1], cam.t[2]];
-  t[0] = cam.x;
+  // (at the start, the boat's set to the right, the open water left of it for the title; it comes back to the middle as they set out)
+  shift += ((splash ? 3.2 : 0) - shift) * (camInit2 ? 1 - Math.exp(-dt * 0.5) : 1); camInit2 = true;
+  t[0] = cam.x + shift;
   const eye: V3 = [t[0] - Math.sin(yaw) * Math.cos(pitch) * dist, t[1] + Math.sin(pitch) * dist, t[2] - Math.cos(yaw) * Math.cos(pitch) * dist];
   if (low > 0) {
     // nearest of all, through their eyes. The view lifts first, from looking down on the hill to
@@ -1127,7 +1163,7 @@ function frame(now: number) {
   let st = off ? (() => { const n = ways.nearest(off![0], off![1]); const y = onJetty(off![0], off![1]) ? JETTY.y : n.d < WIDTH / 2 ? ways.surface(n.w, n.u, off![1]) : ground(ways, off![0], off![1]) - 0.03; return { p: [off![0], y, off![1]] as V3, dir: offDir }; })() : stand(here);
   if (intro >= 0) {
     // (arriving: aboard as the boat comes in, then stepping off onto the jetty)
-    intro += dt * PACE;
+    if (!splash) intro += dt * PACE;
     st = introStand(intro, time);
     if (intro > ARRIVE.T + STEP) intro = -1;
   } else if (hop) {
@@ -1232,11 +1268,14 @@ function frame(now: number) {
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
   // link, comes back to the same place; written a couple of times a second at most, as they move)
   const atNow = off ? `@${off[0].toFixed(1)},${off[1].toFixed(1)}` : `${here.w.id}:${here.u.toFixed(1)}`;
-  if (!preview && !review && atNow !== urlAt && now - urlT > 400) {
+  // (and this browser keeps it too, so the start can offer to continue it; not till they've arrived)
+  if (!preview && !review && !params.has('bench') && intro < 0 && atNow !== urlAt && now - urlT > 400) {
     urlAt = atNow; urlT = now;
     const u = new URL(location.href);
     u.searchParams.set('seed', seedName(seed)); u.searchParams.set('at', atNow);
+    u.searchParams.delete('splash'); u.searchParams.delete('intro');
     history.replaceState(null, '', u);
+    try { localStorage.setItem(KEPT, JSON.stringify({ seed: seedName(seed), at: atNow })); } catch { /* (kept nowhere, then) */ }
   }
 
   // what it reports of itself, for the checks
@@ -1247,6 +1286,6 @@ function frame(now: number) {
 if (review) {
   $('hint').textContent = PASS + ' · seed ' + seed + ' · at ' + (params.get('at')?.startsWith('@') ? params.get('at')! : here.w.id + ':' + here.u.toFixed(1));
   $('hint').classList.add('on');
-} else if (!preview) setTimeout(() => $('hint').classList.add('on'), 1200);
+} else if (!preview && !splash) setTimeout(() => $('hint').classList.add('on'), 1200);
 void WIDTH;
 requestAnimationFrame(frame);
