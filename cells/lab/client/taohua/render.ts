@@ -310,7 +310,14 @@ void main() {
         col = vec3(.3, .3, .3);
       } else {
         a = (1. - smoothstep(w, w + .8, d)) * comb * fade * step(hash3(vec3(floor(col0), 9., 4.)), .75);
-        if (vM == ${M.reflectPink}) { col = vec3(.88, .6, .56); a *= .6; } else { col = vec3(.34, .34, .34); a *= .8; }
+        if (vM == ${M.reflectPink}) {
+          // (blossom's: not strokes but a soft pale mass, the crown's shape mirrored, its edge ragged, broken
+          // across by level streaks of the paper where the water moves; fainter down from the bank)
+          float e = length(vec2(q.x, (q.y - .42) / .58)) + .18 * (noise(vec3(q * 3.5, vW.x)) - .5);
+          float streak = noise(vec3(vW.x * .5, vW.z * 7.5, 3.)) + .25 * noise(vec3(vW.x * 2., vW.z * 22., 5.));
+          a = (1. - smoothstep(.55, .95, e)) * smoothstep(.42, .55, streak) * (1. - smoothstep(.3, 1., q.y) * .6) * .5;
+          col = vec3(.93, .7, .65);
+        } else { col = vec3(.34, .34, .34); a *= .8; }
       }
     }
     if (a < .05) discard;

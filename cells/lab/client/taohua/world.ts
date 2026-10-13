@@ -1344,7 +1344,11 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
       // (a clump about the fan of twigs, lifted a little: the blossom sits on top of the branches)
       // (a clump about the twigs' ends, set a little behind them along the eye's line, so it's in the
       // same place on the print but the ink falls in front of it, as the print lays it)
-      const back = ramp(r, 0.35, 0.8);
+      // (but inside the crown, as the eye sees it, the clump stands before its twigs instead: there the
+      // limbs that hold them are hidden, and a fan of twigs on its own, cut off, reads as stubble; at
+      // the crown's rim the twigs stay before it, a lace out to the edge)
+      const rim = Math.hypot((p[0] - cx) / Rh, ((p[1] - cy) * VIEW[2] - (p[2] - cz) * VIEW[1]) / Rv);
+      const back0 = ramp(r, 0.35, 0.8), back = rim < 0.45 * (1 - 0.5 * iso) && p[1] > cy - 0.3 * Rv ? -0.2 - (back0 - 0.35) * 0.4 : back0;
       const q: V3 = [p[0] + d[0] * ramp(r, 0, 0.5) + ramp(r, -0.5, 0.5) + VIEW[0] * back, p[1] + ramp(r, 0, 0.4) + VIEW[1] * back, p[2] + d[2] * ramp(r, 0, 0.5) + ramp(r, -0.4, 0.4) + VIEW[2] * back];
       // (the near side of the crown, low down, left open: there the limbs are seen against the blossom behind)
       if ((q[2] - cz) < -0.3 * Rh && q[1] < cy - 0.1 && r() < 0.45) continue;

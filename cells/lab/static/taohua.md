@@ -157,7 +157,9 @@ the bank shows in it, and its near shore left open. Each mark is a ribbon laid o
 water (or down a fall), tapered to a hair at both ends, its width and weight its own, its edge drawn
 smooth however thin, broken now and then as a dry brush breaks; it stays where it is as the view moves.
 Foam is a stipple at the foot of each drop and in patches where it runs fast; stones in the water have
-their rings, and on still water their reflections. Petals float on its stiller water.
+their rings, and on still water their reflections. A crown over still water shows in it as a soft
+pale mass, the crown's shape mirrored, its edge ragged, broken across by level streaks of the paper.
+Petals float on its stiller water.
 
 `?bench=water&scene=pond|bend|rapid|fall` (best with `review`) is a hill of its own, far off across the
 hill from any way, its four streams laid as given: the same geometry every time, so the drawing of the
@@ -233,7 +235,9 @@ the thinner crowns (most trees are full, some thinner, each its own).
 The blossom's tone keeps
 the crown's structure, pale where it's lit and high, deep beneath, dappled with pale dabs and deep
 recesses in clusters; each tree is its own pink.
-No clump of blossom is left adrift: as the eye sees a crown, a clump or two off by themselves, held up
+Inside a crown, as the eye sees it, a clump stands before its twigs; only toward the crown's rim do
+the twigs stand before their blossom, a lace out to the edge (more of it on a tree standing alone):
+inside, the limbs that hold them are hidden, and a fan of twigs on its own reads as stubble. No clump of blossom is left adrift: as the eye sees a crown, a clump or two off by themselves, held up
 by twigs too fine to see, would read as blobs, so they're not grown, and their twigs show bare past the
 crown. Where one crown stands before another (well before it, not only a clump of it among the
 other's), the one behind is drawn deeper along the edge, a band a few pixels wide, as the prints part
