@@ -551,14 +551,15 @@ void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); vUV = p; g
 const POST_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
-uniform sampler2D uC, uA, uD, uSS, uSD;
+uniform sampler2D uC, uA, uD, uSS;
+uniform highp sampler2DShadow uSD;
 uniform vec2 uPx; uniform float uNear, uFar, uLine, uInk, uMarks, uRefl; uniform mat4 uIVP, uVP; uniform vec3 uEye;
 // (the sun's view: its matrix; how deep it is, and how wide, in metres; whether there's shade to draw)
 uniform mat4 uLVP; uniform float uLDeep, uLWide, uShade;
 out vec4 o;
 ${COMMON}
-/** what the sun's view has nearest it at uv: the hill's, or what moves on it (the walker, the deer, the boat) */
-float sunD(vec2 uv) { return min(texture(uSS, uv).r, texture(uSD, uv).r); }
+/** what the hill's view from the sun has nearest it at uv */
+float sunD(vec2 uv) { return texture(uSS, uv).r; }
 float lin(float d) { float z = d * 2. - 1.; return 2. * uNear * uFar / (uFar + uNear - z * (uFar - uNear)); }
 int matAt(vec2 uv) { return int(texture(uA, uv).a * 31. + .5); }
 void main() {
@@ -626,11 +627,11 @@ void main() {
       vec3 lq = (uLVP * vec4(P + ns * uLWide * .0012, 1.)).xyz * .5 + .5;
       float fade = smoothstep(0., .06, min(min(lq.x, lq.y), min(1. - lq.x, 1. - lq.y)));
       if (fade > 0. && lq.z < 1.) {
-        float zr = lq.z - .08 / uLDeep, perM = 1. / uLWide;
+        float zr = lq.z - .08 / uLDeep, perM = 1. / uLWide, amt = 0.;
         float rot = hash3(floor(P * 37.)) * 6.2832;
         mat2 R = mat2(cos(rot), sin(rot), -sin(rot), cos(rot));
-        // (first, how far off what hides it is, from a few looks about; then how much of the sun's
-        // hidden, over a breadth that grows with that: sharp at a foot, soft under a crown)
+        // (the hill's shade: first, how far off what hides it is, from a few looks about; then how much
+        // of the sun's hidden, over a breadth that grows with that: sharp at a foot, soft under a crown)
         float blk = 0., nb = 0.;
         for (int i = 0; i < 4; i++) {
           float a = float(i) * 1.5708 + .4;
@@ -651,10 +652,18 @@ void main() {
           vec3 sp = vec3(P.x, P.z + P.y * .6, 0.);
           float st = noise(vec3(sp.x * 1.1, sp.y * 9., 2.)) * .75 + noise(vec3(sp.x * 4., sp.y * 24., 5.)) * .25;
           float vis = st >= 1. - sh * 1.15 ? 1. : 0.;
-          float deep = mix(.9, .3, smoothstep(.3, 5., occ));
-          vec3 GREY = vec3(.62, .58, .53);
-          c *= mix(vec3(1.), GREY / PAPER, deep * vis * face * fade);
+          amt = mix(.9, .3, smoothstep(.3, 5., occ)) * vis;
         }
+        // (what moves on it: a soft wash, not strokes held to the ground it passes over, which would
+        // flicker at its edge as it went; the same breadth all round, smoothed between the view's texels)
+        float mv = 0.;
+        for (int i = 0; i < 8; i++) {
+          float fi = float(i) + .5, rr = sqrt(fi / 8.), a = fi * 2.39996;
+          mv += 1. - texture(uSD, vec3(lq.xy + vec2(cos(a), sin(a)) * rr * .07 * perM, zr));
+        }
+        amt = max(amt, smoothstep(0., 1., mv / 8.) * .5);
+        vec3 GREY = vec3(.62, .58, .53);
+        c *= mix(vec3(1.), GREY / PAPER, amt * face * fade);
       }
     }
   }
@@ -961,11 +970,14 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private depthTarget(S: number) {
+  /** a view from the sun, its depth only; `compare`: read by asking whether a depth is behind it, smoothed between texels */
+  private depthTarget(S: number, compare = false) {
     const gl = this.gl, tex = gl.createTexture()!, fb = gl.createFramebuffer()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, S, S, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
-    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    const f = compare ? gl.LINEAR : gl.NEAREST;
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, f], [gl.TEXTURE_MAG_FILTER, f], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    if (compare) { gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL); }
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, tex, 0);
     gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
@@ -1040,7 +1052,7 @@ export class Renderer {
     // the sun's views: the hill's when it's changed, what moves on it each frame
     const shading = !view.oldShade;
     if (shading) {
-      if (!this.hill) { this.hill = this.depthTarget(2048); this.moving = this.depthTarget(1024); }
+      if (!this.hill) { this.hill = this.depthTarget(2048); this.moving = this.depthTarget(2048, true); }
       const L = this.fitLight(view), still = solids.filter((s) => !s.model), moving = solids.filter((s) => s.model);
       const key = `${L.lvp.join(',')}|${still.map((s) => this.idOf(s.d)).join(',')}|${puffs.map((p) => this.idOf(p)).join(',')}`;
       if (key !== this.hill.key) { this.sunPass(this.hill, L.lvp, still, puffs, L.right, L.up); this.hill.key = key; }

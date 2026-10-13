@@ -376,8 +376,9 @@ and it moves with what casts it. It is deep close to what casts it (at a rock's 
 walker) and pale far from it (under a crown, high over the ground), sharp-edged close and soft far
 off. A crown casts its clumps, with holes where the sun comes through, so its shade is dappled. The
 blossom and the water take none; a face turned from the sun is darkened by its own ink, not the
-shade. The hill's view from the sun is drawn again only when the hill changes or the view has moved
-on; what moves on it is drawn each frame. `?shade=old` brings back the old patches, to compare.
+shade. What moves (the walker, a deer, the boat) casts a softer, paler wash, smooth at its edge, not
+strokes held to the ground it passes over, which would flicker as it went. The hill's view from the
+sun is drawn again only when the hill changes or the view has moved on; what moves on it, each frame. `?shade=old` brings back the old patches, to compare.
 
 Broad, asymmetric openings beside the route alternate with denser wooded shoulders, each opening
 held by one tree standing alone toward its far side. These composition fields span streaming
