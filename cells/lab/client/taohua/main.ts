@@ -16,7 +16,7 @@ import { stationsNear } from './compose';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, TILE, TSTEP, boat, ground, groundCut, makeBand, onJetty, setBench, setSpecimens, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, TILE, TSTEP, boat, boatReflection, ground, moorings, groundCut, makeBand, onJetty, setBench, setSpecimens, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
 import { bench, RIVER_SCENES, SCENES, TREE_SCENES, treeBench, WAY_SCENES, type RiverScene, type Scene, type TreeScene, type WayScene } from './bench';
 
@@ -217,28 +217,46 @@ const Ry = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return n
 const Rz = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); };
 const about = (p: V3, r: M4): M4 => mulM(Tm(p[0], p[1], p[2]), mulM(r, Tm(-p[0], -p[1], -p[2])));
 
-// ─── the boat moored at the jetty, rocking on the river (world.ts `boat`) ─────────────────────────
-const boatD = part((m) => boat(m));
+// ─── the boat, on the river (world.ts `boat`): moored at the jetty, the arrival in it, going about in it
+const boatD = part((m) => boat(m)), mooringsD = part((m) => moorings(m));
+/** its reflection, for each of sixteen headings */
+const boatReflD = Array.from({ length: 16 }, (_, k) => part((m) => boatReflection(m, (k / 16) * Math.PI * 2)));
+/** where the walker sits in it: low, behind its canopy (in its own frame) */
+const SEAT: V3 = [0, -0.06, -1.3];
+const sm = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const wrapA = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 /**
- * The arrival: unless the address says where to start, the journey begins on the river, aboard the
- * boat, drifting down to the jetty and turning in to lie alongside it; then the walker steps off onto
- * its deck. A tap ends it at once. (`intro`: how long it's been going, in seconds; -1 once it's over.)
+ * The arrival: unless the address says where to start, the journey begins on the river, in the boat,
+ * out on the broad water, drifting down at about the river's own pace into the narrows and in to the
+ * jetty, slowing over its last few metres to lie alongside; then the walker steps off onto its deck. A
+ * tap ends it at once. (`intro`: how long it's been going, in seconds; -1 once it's over.)
  */
-const DRIFT = 26, STEP = 1.4;
 let intro = -1;
+const ARRIVE = (() => {
+  const E = JETTY.boat, W = ways.water, sx = E[0] + 22;
+  const P0 = [sx, W.riverMid(sx) + 4], P1 = [E[0] + 8, W.riverMid(E[0] + 8) + 1.8], P2 = [E[0], E[2]];
+  const pts: Array<[number, number]> = [], cum: number[] = [];
+  for (let i = 0; i <= 240; i++) {
+    const k = i / 240, q: [number, number] = [(1 - k) ** 2 * P0[0] + 2 * (1 - k) * k * P1[0] + k * k * P2[0], (1 - k) ** 2 * P0[1] + 2 * (1 - k) * k * P1[1] + k * k * P2[1]];
+    cum.push(i ? cum[i - 1] + Math.hypot(q[0] - pts[i - 1][0], q[1] - pts[i - 1][1]) : 0);
+    pts.push(q);
+  }
+  const L = cum[cum.length - 1];
+  // (its pace: about a metre a second, the river carrying it; easing over its last metres into the mooring)
+  const speed = (s: number) => 1.05 * (0.1 + 0.9 * sm(0, 8, L - s));
+  const ts: number[] = [0];
+  for (let s = 0; s < L - 0.005 && ts.length < 40000;) { s = Math.min(L, s + speed(s) * 0.05 + 0.0004); ts.push(s); }
+  return { pts, cum, L, ts, T: (ts.length - 1) * 0.05 };
+})();
+const STEP = 1.4;
 /** where the boat is, t seconds into its arrival, and its heading (its bow along +z at 0) */
 function boatPose(t: number): { p: V3; yaw: number } {
-  // (from out on the broad water above, where neither bank can be made out, down into the narrows and
-  // in to the jetty)
-  const E = JETTY.boat, W = ways.water, sx = E[0] + 58;
-  const P0: V3 = [sx, E[1], W.riverMid(sx) + 5], P1: V3 = [E[0] + 7, E[1], W.riverMid(E[0] + 7) + 1.5], P2 = E;
-  // (slowing as it comes in)
-  const u = Math.min(1, t / DRIFT), k = 1 - Math.pow(1 - u, 2.2);
-  const B = (a: number, b: number, c: number) => (1 - k) * (1 - k) * a + 2 * (1 - k) * k * b + k * k * c;
-  const D = (a: number, b: number, c: number) => 2 * (1 - k) * (b - a) + 2 * k * (c - b);
-  const yaw = Math.atan2(D(P0[0], P1[0], P2[0]), D(P0[2], P1[2], P2[2]));
-  const e = Math.pow(u, 6);
-  return { p: [B(P0[0], P1[0], P2[0]), E[1], B(P0[2], P1[2], P2[2])], yaw: yaw * (1 - e) + JETTY.boatYaw * e };
+  const f = Math.min(ARRIVE.ts.length - 1, Math.max(0, t / 0.05)), i = Math.floor(f), s = ARRIVE.ts[i] + (ARRIVE.ts[Math.min(i + 1, ARRIVE.ts.length - 1)] - ARRIVE.ts[i]) * (f - i);
+  let j = 0;
+  while (j < ARRIVE.cum.length - 2 && ARRIVE.cum[j + 1] < s) j++;
+  const a = ARRIVE.pts[j], b = ARRIVE.pts[j + 1], u = Math.min(1, (s - ARRIVE.cum[j]) / Math.max(1e-6, ARRIVE.cum[j + 1] - ARRIVE.cum[j]));
+  const e = sm(ARRIVE.L - 6, ARRIVE.L, s), yaw = Math.atan2(b[0] - a[0], b[1] - a[1]);
+  return { p: [a[0] + (b[0] - a[0]) * u, JETTY.boat[1], a[1] + (b[1] - a[1]) * u], yaw: yaw + wrapA(JETTY.boatYaw - yaw) * e };
 }
 /**
  * Moored, it rides on its lines in the current: pushed down the river by it (as the square of its
@@ -258,26 +276,114 @@ function rideOn(dt: number) {
     ride.yawV += (push * 0.9 - 6 * ride.yaw - 2.2 * ride.yawV) * h; ride.yaw += ride.yawV * h;
   }
 }
-function boatAt(time: number): M4 {
-  // (it rocks: rolling a little, pitching less, rising and falling on the current's swell; moored, it
-  // rides on its lines as the current has it)
-  let pose = intro >= 0 ? boatPose(intro) : { p: JETTY.boat, yaw: JETTY.boatYaw };
-  if (intro < 0) {
-    const [fx, fz, sp] = ways.water.riverFlow(JETTY.boat[0], JETTY.boat[2]), u = sp > 1e-4 ? 1 / sp : 0;
-    pose = { p: [JETTY.boat[0] + fx * u * ride.off, JETTY.boat[1], JETTY.boat[2] + fz * u * ride.off], yaw: JETTY.boatYaw - ride.yaw };
-  }
-  const [x, y, z] = pose.p, c = Math.cos(pose.yaw), sn = Math.sin(pose.yaw);
-  return mulM(mulM(Tm(x, y + 0.012 * Math.sin(time * 0.9), z), new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, 0, 0, 0, 1])), mulM(Rz(0.022 * Math.sin(time * 1.1) + 0.008 * Math.sin(time * 2.3)), Rx(0.01 * Math.sin(time * 0.73 + 1))));
+/**
+ * Afloat: going about on the river. The current carries the boat: what the walker does is through the
+ * water, and the water's moving. Its speed through the water eases away (the water drags on it), so it
+ * comes to go with the current; a tap on the water is a stroke of the pole toward there (taps one after
+ * another, up the river against the current, rowing it); a tap on the jetty (or the landing, the bank
+ * by it) takes it home: it's brought in and comes alongside by itself, and they step ashore. Its heading
+ * goes its own way: it turns to where it's being moved through the water, and left to drift, slowly
+ * swings as the current takes it. It keeps off the banks and the pier.
+ */
+let afloat: { p: [number, number]; v: [number, number]; yaw: number; home: boolean } | null = null;
+/** a step from one place to another (into the boat, or out of it), so long, and then what */
+let hop: { t: number; dur: number; from: () => V3; to: () => V3; dir: [number, number]; done: () => void } | null = null;
+let boardWhenThere = false;
+function boatPoseNow(): { p: V3; yaw: number } {
+  if (intro >= 0) return boatPose(intro);
+  if (afloat) return { p: [afloat.p[0], JETTY.boat[1], afloat.p[1]], yaw: afloat.yaw };
+  const [fx, fz, sp] = ways.water.riverFlow(JETTY.boat[0], JETTY.boat[2]), u = sp > 1e-4 ? 1 / sp : 0;
+  return { p: [JETTY.boat[0] + fx * u * ride.off, JETTY.boat[1], JETTY.boat[2] + fz * u * ride.off], yaw: JETTY.boatYaw - ride.yaw };
 }
-/** where the walker stands, t seconds into the arrival: aboard, at the stern behind the canopy; then stepping off */
+function boatAt(time: number): M4 {
+  // (it rocks: rolling a little, pitching less, rising and falling on the current's swell)
+  const pose = boatPoseNow(), [x, y, z] = pose.p;
+  return mulM(mulM(Tm(x, y + 0.012 * Math.sin(time * 0.9), z), Ry(pose.yaw)), mulM(Rz(0.022 * Math.sin(time * 1.1) + 0.008 * Math.sin(time * 2.3)), Rx(0.01 * Math.sin(time * 0.73 + 1))));
+}
+const apply = (m: M4, l: V3): V3 => [m[0] * l[0] + m[4] * l[1] + m[8] * l[2] + m[12], m[1] * l[0] + m[5] * l[1] + m[9] * l[2] + m[13], m[2] * l[0] + m[6] * l[1] + m[10] * l[2] + m[14]];
+/** the boat, its reflection (turned with it, but level on the water), and, moored, its lines */
+function boatDraw(dt: number, time: number): Array<{ d: Drawn; model: M4 }> {
+  rideOn(dt);
+  const pose = boatPoseNow();
+  const out = [{ d: boatD, model: boatAt(time) }, { d: boatReflD[((Math.round(pose.yaw / (Math.PI / 8)) % 16) + 16) % 16], model: Tm(pose.p[0], JETTY.boat[1], pose.p[2]) }];
+  if (intro < 0 && !afloat) out.push({ d: mooringsD, model: Tm(0, 0, 0) });
+  return out;
+}
+/** where the walker stands, t seconds into the arrival: in the boat, sitting; then stepping off */
 function introStand(t: number, time: number): { p: V3; dir: [number, number] } {
-  // (sitting, low in the boat, behind its canopy)
-  const m = boatAt(time), local: V3 = [0, -0.06, -1.3];
-  const aboard: V3 = [m[0] * local[0] + m[4] * local[1] + m[8] * local[2] + m[12], m[1] * local[0] + m[5] * local[1] + m[9] * local[2] + m[13], m[2] * local[0] + m[6] * local[1] + m[10] * local[2] + m[14]];
-  const yaw = intro >= 0 ? boatPose(Math.min(t, DRIFT)).yaw : 0;
-  if (t < DRIFT) return { p: aboard, dir: [Math.sin(yaw), Math.cos(yaw)] };
-  const f = Math.min(1, (t - DRIFT) / STEP), e = f * f * (3 - 2 * f), on: V3 = [off![0], JETTY.y, off![1]];
+  const aboard = apply(boatAt(time), SEAT), yaw = boatPose(Math.min(t, ARRIVE.T)).yaw;
+  if (t < ARRIVE.T) return { p: aboard, dir: [Math.sin(yaw), Math.cos(yaw)] };
+  const f = Math.min(1, (t - ARRIVE.T) / STEP), e = f * f * (3 - 2 * f), on: V3 = [off![0], JETTY.y, off![1]];
   return { p: [aboard[0] + (on[0] - aboard[0]) * e, aboard[1] + (on[1] - aboard[1]) * e + 0.12 * Math.sin(Math.PI * f), aboard[2] + (on[2] - aboard[2]) * e], dir: [0, 1] };
+}
+/** the deck beside the boat, where one steps in and out */
+const BY_BOAT: V3 = [JETTY.x + JETTY.hw - 0.42, JETTY.y, JETTY.boat[2] + 0.5];
+/** Into the boat from the deck beside it, and cast off. */
+function board() {
+  const from: V3 = [posNow[0], posNow[1], posNow[2]];
+  hop = { t: 0, dur: STEP, from: () => from, to: () => apply(boatAt(time), SEAT), dir: [Math.sin(JETTY.boatYaw), Math.cos(JETTY.boatYaw)], done: () => {
+    const pose = boatPoseNow();
+    // (cast off, and pushed off from the pier, out into the river)
+    afloat = { p: [pose.p[0], pose.p[2]], v: [0.35, -0.55], yaw: pose.yaw, home: false };
+  } };
+}
+/** Alongside again: out of the boat onto the deck. */
+function landHome() {
+  afloat = null;
+  hop = { t: 0, dur: STEP, from: () => apply(boatAt(time), SEAT), to: () => BY_BOAT, dir: [0, 1], done: () => { off = [BY_BOAT[0], BY_BOAT[2]]; offDir = [0, 1]; trail = []; join = null; } };
+}
+/** The boat a step on, afloat. */
+function sail(dt: number) {
+  if (!afloat || dt <= 0) return;
+  const W = ways.water, a = afloat, [cx, cz] = W.riverFlow(a.p[0], a.p[1]);
+  if (a.home) {
+    // (brought in: to where it lies moored, slower as it comes)
+    const H = JETTY.boat, dx = H[0] - a.p[0], dz = H[2] - a.p[1], d = Math.hypot(dx, dz), want = Math.min(0.75, 0.12 + d * 0.3);
+    const k = 1 - Math.exp(-dt * 1.4);
+    a.v[0] += ((dx / Math.max(d, 1e-3)) * want - a.v[0]) * k; a.v[1] += ((dz / Math.max(d, 1e-3)) * want - a.v[1]) * k;
+    if (d < 0.25) { ride.off = 0; ride.offV = 0; ride.yaw = wrapA(JETTY.boatYaw - a.yaw); ride.yawV = 0; landHome(); return; }
+  } else {
+    // (the water dragging on it: it comes to go with the current)
+    const k = 1 - Math.exp(-dt * 0.5);
+    a.v[0] += (cx - a.v[0]) * k; a.v[1] += (cz - a.v[1]) * k;
+  }
+  a.p[0] += a.v[0] * dt; a.p[1] += a.v[1] * dt;
+  // (off the banks: kept a little out from them, its way toward them taken off)
+  // (its hull's reach, from its middle, along the river and across it, as it lies)
+  const reachX = 0.6 + 2.2 * Math.abs(Math.sin(a.yaw)), reachZ = 0.6 + 2.2 * Math.abs(Math.cos(a.yaw));
+  const hw = W.riverHalf(a.p[0]), mid = W.riverMid(a.p[0]), across = a.p[1] - mid, room = hw - 0.5 - reachZ;
+  if (Math.abs(across) > room) { const sd = Math.sign(across); a.p[1] = mid + sd * room; if (a.v[1] * sd > 0) a.v[1] *= -0.2; }
+  // (and off the pier)
+  const px = a.p[0] - JETTY.x, lim = JETTY.hw + 0.15 + reachX;
+  if (Math.abs(px) < lim && a.p[1] > JETTY.z0 - reachZ - 0.2 && a.p[1] < JETTY.z1 + 0.5 && !a.home) { const sd = px >= 0 ? 1 : -1; a.p[0] = JETTY.x + sd * lim; if (a.v[0] * sd < 0) a.v[0] *= -0.2; }
+  // (its heading: where it's moved through the water; drifting, swinging slowly as the current has it)
+  const rx = a.v[0] - cx, rz = a.v[1] - cz, rl = Math.hypot(rx, rz);
+  let want = rl > 0.12 ? Math.atan2(rx, rz) : Math.atan2(cx, cz);
+  if (a.home) want = a.yaw + wrapA(JETTY.boatYaw - a.yaw) * sm(3, 0.5, Math.hypot(JETTY.boat[0] - a.p[0], JETTY.boat[2] - a.p[1])) + wrapA(Math.atan2(a.v[0], a.v[1]) - a.yaw) * (1 - sm(3, 0.5, Math.hypot(JETTY.boat[0] - a.p[0], JETTY.boat[2] - a.p[1])));
+  a.yaw += wrapA(want - a.yaw) * (1 - Math.exp(-dt * (rl > 0.12 || a.home ? 1.1 : 0.1)));
+}
+/** A tap while afloat: on the jetty (or by it), home; on the water anywhere else, a stroke toward there. */
+function tapAfloat(px: number, py: number) {
+  if (!afloat || !lastVP) return;
+  const iv = invert(lastVP), nx = (px / innerWidth) * 2 - 1, ny = 1 - (py / innerHeight) * 2;
+  const P = (z: number): V3 => { const x = iv[0] * nx + iv[4] * ny + iv[8] * z + iv[12], y = iv[1] * nx + iv[5] * ny + iv[9] * z + iv[13], zz = iv[2] * nx + iv[6] * ny + iv[10] * z + iv[14], w = iv[3] * nx + iv[7] * ny + iv[11] * z + iv[15]; return [x / w, y / w, zz / w]; };
+  const a = P(-1), b = P(1), t = (JETTY.boat[1] - a[1]) / (b[1] - a[1] || 1e-6), q = [a[0] + (b[0] - a[0]) * t, a[2] + (b[2] - a[2]) * t];
+  const toJetty = Math.abs(q[0] - JETTY.x) < 4.5 && q[1] > JETTY.z0 - 1.5 && q[1] < JETTY.z1 + 6;
+  if (toJetty) { afloat.home = true; markP = [q[0], JETTY.y, q[1]]; markAt = performance.now(); return; }
+  afloat.home = false;
+  const dx = q[0] - afloat.p[0], dz = q[1] - afloat.p[1], d = Math.hypot(dx, dz) || 1;
+  // (a stroke: so much more way through the water toward there; there's only so much way one can make)
+  const [cx, cz] = ways.water.riverFlow(afloat.p[0], afloat.p[1]);
+  let rx = afloat.v[0] - cx + (dx / d) * 0.8, rz = afloat.v[1] - cz + (dz / d) * 0.8;
+  const rl = Math.hypot(rx, rz);
+  if (rl > 1.5) { rx *= 1.5 / rl; rz *= 1.5 / rl; }
+  afloat.v = [cx + rx, cz + rz];
+  markP = [q[0], JETTY.boat[1] + 0.02, q[1]]; markAt = performance.now();
+}
+/** Whether a tap on the screen is on (or by) the boat. */
+function onBoat(px: number, py: number): boolean {
+  const pose = boatPoseNow(), q = project([pose.p[0], pose.p[1] + 0.4, pose.p[2]]);
+  return q[2] > 0 && Math.hypot(q[0] - px, q[1] - py) < 64;
 }
 
 // ─── deer: now and then a few, a little off the ways (herds.ts); each of its kind's parts (deer.ts)
@@ -585,7 +691,14 @@ const up = (e: PointerEvent) => {
   if (touches.size < 2) pinch0 = 0;
   if (downAt?.id !== e.pointerId) return;
   // (a tap: on a way, there; on open ground near one, there; anywhere else, the nearest place on a way to where it falls on the hill)
-  if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600) {
+  if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600 && (hop || afloat)) {
+    // (afloat, a tap's for the boat: see tapAfloat; stepping in or out, it waits)
+    if (afloat) tapAfloat(e.clientX, e.clientY);
+  } else if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600 && onBoat(e.clientX, e.clientY) && Math.hypot(posNow[0] - BY_BOAT[0], posNow[2] - BY_BOAT[2]) < 20) {
+    // (a tap on the boat: to the deck beside it, if not there, and in)
+    if (off && onJetty(off[0], off[1]) && Math.hypot(off[0] - BY_BOAT[0], off[1] - BY_BOAT[2]) < 1.2) board();
+    else if (roamTo(BY_BOAT)) boardWhenThere = true;
+  } else if (!looking && e.type === 'pointerup' && performance.now() - downAt.t < 600) {
     // (on a way, there; on open ground near one, there, across it; else the nearest way to where it falls)
     const at = pick(e.clientX, e.clientY);
     if (at !== null) goTo(at);
@@ -774,7 +887,21 @@ function frame(now: number) {
     // (arriving: aboard as the boat comes in, then stepping off onto the jetty)
     intro += dt * PACE;
     st = introStand(intro, time);
-    if (intro > DRIFT + STEP) intro = -1;
+    if (intro > ARRIVE.T + STEP) intro = -1;
+  } else if (hop) {
+    // (stepping into the boat, or out of it)
+    hop.t += dt * PACE;
+    const f = Math.min(1, hop.t / hop.dur), e = f * f * (3 - 2 * f), a = hop.from(), b = hop.to();
+    st = { p: [a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e + 0.12 * Math.sin(Math.PI * f), a[2] + (b[2] - a[2]) * e], dir: hop.dir };
+    if (f >= 1) { const h = hop; hop = null; h.done(); }
+  } else if (afloat) {
+    // (afloat: sitting in the boat as it goes)
+    sail(dt * PACE);
+    if (afloat) st = { p: apply(boatAt(time), SEAT), dir: [Math.sin(afloat.yaw), Math.cos(afloat.yaw)] };
+  } else if (boardWhenThere && off && !trail.length) {
+    // (come to the deck beside the boat: in)
+    boardWhenThere = false;
+    if (onJetty(off[0], off[1])) board();
   }
   if (Number.isNaN(facing)) facing = Math.atan2(st.dir[0], st.dir[1]);
   const bob = 0.03 * Math.abs(Math.sin(phase)) * stride;
@@ -844,7 +971,7 @@ function frame(now: number) {
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks') },
-    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos), { d: boatD, model: (rideOn(dt), boatAt(review ? 0 : time)) }],
+    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, { d: staff, model: staffAt }]), ...liveDeer(review ? 1 / 30 : dt, time, pos), ...boatDraw(dt, review ? 0 : time)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
@@ -858,7 +985,7 @@ function frame(now: number) {
   }
 
   // what it reports of itself, for the checks
-  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, intro: () => intro, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
+  (window as unknown as { __taohua: unknown }).__taohua = { pass: PASS, review, seed, intro: () => intro, arriveT: ARRIVE.T, scr: (x: number, y: number, z: number) => project([x, y, z]).map((v) => Math.round(v)), boat: () => { const p = boatPoseNow(); return { afloat: afloat && { p: afloat.p.map((v) => +v.toFixed(2)), v: afloat.v.map((v) => +v.toFixed(2)), home: afloat.home }, hop: !!hop, p: p.p.map((v) => +v.toFixed(2)), scr: project([p.p[0], p.p[1] + 0.4, p.p[2]]).map((v) => Math.round(v)) }; }, at: atNow, goal: goal ? `${goal.w.id}:${goal.u.toFixed(1)}` : null, legs: legs.length, pos, steps: Math.round(pos[1] / RISE), bands: live.size, puffs: bands.reduce((a, l) => a + l.puffs.count, 0), deer: () => [...herds.values()].flat().map((d) => ({ kind: d.kind, mode: d.mode, x: +d.x.toFixed(1), z: +d.z.toFixed(1), s: project([d.x, ground(ways, d.x, d.z) + 0.8, d.z]).map((v) => Math.round(v)) })), screen: (id: string, u: number) => { const w = ways.byId(id); return w ? project(spotP({ w, u })) : null; }, here: () => ({ id: here.w.id, u: here.u, len: here.w.len, ahead: ways.outOf(here.w.to).length }), pick: (x: number, y: number) => { const p = pick(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, nearestSeen: (x: number, y: number) => { const p = nearestTo(x, y); return p && `${p.w.id}:${p.u.toFixed(1)}`; }, onHill: (x: number, y: number) => onHill(x, y), isOpen: (x: number, z: number) => isOpen(x, z), roam: (x: number, z: number) => roamTo([x, ground(ways, x, z), z]), zoom: (k: number) => zoomBy(k), go: (id: string, u: number) => { const w = ways.byId(id); if (w) goTo({ w, u }); }, off: () => off && { off, trail: trail.length, join: join && `${join.w.id}:${join.u.toFixed(1)}` }, mat: (x: number, y: number) => R.matAt(x * (canvas.width / innerWidth), y * (canvas.height / innerHeight)) };
   $('climb').textContent = `${Math.max(0, Math.round(pos[1] / RISE))}`;
   requestAnimationFrame(frame);
 }

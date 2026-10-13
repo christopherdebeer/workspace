@@ -51,9 +51,10 @@ marks are drawn from it, so the drawing shows where the water's moving.
 
 Unless the address says where to start, the journey begins out on the broad water: nothing but the
 paper and a few marks on it, the boat, the walker sitting low in it behind its canopy. It drifts down
-the river; the banks come in, rocks first, then the blossom; it slows into the narrows, turns in and
-comes alongside the jetty, and the walker steps off onto its deck, facing up the hill (a tap ends the
-arrival at once). The title stands on the water where it began, and beside it, as the prints set a
+the river at about the river's own pace, a metre a second; the banks come in, rocks first, then the
+blossom; it eases over its last few metres, turns in and comes alongside the jetty, and the walker
+steps off onto its deck, facing up the hill (a tap ends the arrival at once; it takes about half a
+minute). The title stands on the water where it began, and beside it, as the prints set a
 verse, the lines it comes from: 缘溪行，忘路之远近。忽逢桃花林，夹岸数百步。 (晋 · 陶渊明); both are left
 behind. The walker can come back down to the jetty's deck (it's open ground, over the water).
 
@@ -65,8 +66,20 @@ the trails there; where it's slow (on the broad water above, along the banks, in
 pier), few and short. Its bank at the hill's side is a line now and then between its rocks,
 the bank showing in the water under it here and there; its other bank, nearer the eye, left open.
 Each post of the jetty and the lantern is a wavering line down the water from its foot; the boat's
-reflection is short level bars stacked under its hull, dark and broken, shorter and fainter going
-down. Fallen petals gather along the banks, behind the pier and about the boat; few float out on the
+reflection goes with it: short level bars stacked under its hull, dark and broken, shorter and fainter
+going down the picture, whichever way it lies.
+
+The boat can be taken out. A tap on it walks the walker to the deck beside it (if they're not already
+there) and they step in; it's cast off and pushed out from the pier. On the water the current carries
+it: what the walker does is through the water, and the water's moving. Its way through the water eases
+off (the water drags on it), so left alone it comes to go with the current, down the river. A tap on
+the water is a stroke of the pole toward there: more way through the water, that way, though there's
+only so much one can make; taps one after another, up the river, row it against the current, slowly
+(easier along the banks, where the water's slack). Its heading goes its own way: it turns to where
+it's being moved through the water, and drifting, it swings slowly as the current takes it. It keeps
+off the banks and the pier. A tap on the jetty (or the landing, the water by it) takes it home: it's
+brought in and comes alongside by itself, slowing as it comes, and the walker steps out onto the deck.
+Moored, the lines are made fast again. Fallen petals gather along the banks, behind the pier and about the boat; few float out on the
 river. Every hill keeps the same ways it had: the river lies below where they start.
 
 `?bench=river&scene=jetty|far|bank|arrive|open` (best with `review`) shows places at the foot of one

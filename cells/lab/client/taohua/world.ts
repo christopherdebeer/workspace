@@ -1057,17 +1057,7 @@ function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number)
     mesh.tube([lx - 0.42, y + 1.95, lz], [lx - 0.42, y + 2.22, lz], 0.13, 0.12, hex(0xc8412e), M.red, 8);
     postReflection(push, ways.water, lx - 0.42, lz, 1.4, seed + 1, M.mark);
   }
-  // (and the boat's reflection about it, where it lies; and its mooring lines, bow and stern, to the posts, sagging)
-  const B = JETTY.boat, cy = Math.cos(JETTY.boatYaw), sy = Math.sin(JETTY.boatYaw);
-  const onBoat = (lx: number, ly: number, lz: number): V3 => [B[0] + cy * lx + sy * lz, B[1] + ly, B[2] - sy * lx + cy * lz];
-  if (inT(B[0], B[2])) {
-    boatMarks(mesh, ways.water, B, JETTY.boatYaw, seed);
-    for (const [from, post] of [[onBoat(0, 0.5, 2.05), [x + hw - 0.02, y - 0.02, z1 - 1.2]], [onBoat(0, 0.5, -2.0), [x + hw - 0.14, y + 0.4, z0 + 0.22]]] as Array<[V3, V3]>) {
-      const mid: V3 = [(from[0] + post[0]) / 2, (from[1] + post[1]) / 2 - 0.12, (from[2] + post[2]) / 2];
-      mesh.tube(from, mid, 0.012, 0.012, INK.dark, M.dark, 4);
-      mesh.tube(mid, post, 0.012, 0.012, INK.dark, M.dark, 4);
-    }
-  }
+  // (the boat, its reflection and its mooring lines are drawn apart: see `boat`, `boatReflection`, `moorings`)
   // (beside the pier, stone steps down into the water from the landing; and along the bank, faced
   // with dressed stone, as at a landing that's been there a long time)
   const W = ways.water, sx0 = -2.9, sx1 = -1.3;
@@ -1154,22 +1144,35 @@ export function boat(mesh: Mesh) {
   mesh.tube([0, 1.22, -L * 0.82 + 0.3], [0, 1.46, -L * 0.82 + 0.3], 0.11, 0.1, hex(0xc8412e), M.red, 8);
 }
 /**
- * The boat's reflection on the water below it: as the prints have it, short level bars, stacked, dark
- * under its hull and broken, shorter and fainter as they go down from it.
+ * The boat's reflection on the water, as it lies turned so (yaw): as the prints have it, short level
+ * bars, stacked, dark under its hull and broken, shorter and fainter going down from it (down the
+ * picture, whichever way it lies: so it's made for so many headings, and the nearest drawn). About its
+ * middle, its waterline at y = 0.
  */
-export function boatMarks(mesh: Mesh, W: Water, at: V3, yaw: number, seed: number) {
+export function boatReflection(mesh: Mesh, yaw: number) {
   const push = (v: number[]) => { mesh.v.push(...v); };
-  const r = seeded(hash(seed, 0xb0a7)), c = Math.cos(yaw), sn = Math.sin(yaw);
+  const r = seeded(0xb0a7), c = Math.cos(yaw), sn = Math.sin(yaw);
   for (let t = -0.92; t <= 0.92; t += 0.16) {
     const lz = t * 2.3, hb = 0.62 * Math.sqrt(Math.max(0.05, 1 - Math.abs(t) ** 2.2));
-    const px = at[0] + sn * lz, pz = at[2] + c * lz;
-    for (let j = 0; j < 4; j++) {
-      if (j && r() < 0.25 + 0.15 * j) continue;
-      const dz = -(0.12 + j * ramp(r, 0.16, 0.24)), half = hb * (1.1 - 0.22 * j) * ramp(r, 0.7, 1.1), x0 = px + ramp(r, -0.1, 0.1);
+    // (this station of the hull, where it lies; and how wide the hull shows there, across the picture)
+    const sx = sn * lz, sz = c * lz, wide = hb * Math.abs(c) + 0.2 * Math.abs(sn) + 0.08;
+    for (let j = 0; j < 5; j++) {
+      if (j > 1 && r() < 0.15 + 0.15 * j) continue;
+      const dz = -(0.1 + hb * 0.45 + j * ramp(r, 0.13, 0.19)), half = wide * (1.3 - 0.2 * j) * ramp(r, 0.8, 1.1) + 0.12 * Math.abs(sn), x0 = sx + ramp(r, -0.1, 0.1);
       const pts: V3[] = [];
-      for (let u = -half; u <= half + 1e-6; u += 0.1) { const x = x0 + u, z = pz + dz - hb * 0.4 + 0.02 * Math.sin(u * 13 + j), w = W.at(x, z); if (w && w.s < -0.05) pts.push([x, w.L + 0.023, z]); }
-      ribbon(push, pts, ramp(r, 0.055, 0.085), 1, Math.max(0.3, 0.92 - 0.2 * j), M.mark);
+      for (let u = -half; u <= half + 1e-6; u += 0.1) pts.push([x0 + u, 0.023, sz + dz + 0.02 * Math.sin(u * 13 + j)]);
+      ribbon(push, pts, ramp(r, 0.07, 0.11) * (1 - 0.12 * j), 1, Math.max(0.3, 0.95 - 0.16 * j), M.mark);
     }
+  }
+}
+/** The boat's mooring lines, bow and stern, sagging to the posts at the pier's end, as it lies moored. */
+export function moorings(mesh: Mesh) {
+  const { x, hw, y, z0, z1 } = JETTY, B = JETTY.boat, cy = Math.cos(JETTY.boatYaw), sy = Math.sin(JETTY.boatYaw);
+  const onBoat = (lx: number, ly: number, lz: number): V3 => [B[0] + cy * lx + sy * lz, B[1] + ly, B[2] - sy * lx + cy * lz];
+  for (const [from, post] of [[onBoat(0, 0.5, 2.05), [x + hw - 0.02, y - 0.02, z1 - 1.2]], [onBoat(0, 0.5, -2.0), [x + hw - 0.14, y + 0.4, z0 + 0.22]]] as Array<[V3, V3]>) {
+    const mid: V3 = [(from[0] + post[0]) / 2, (from[1] + post[1]) / 2 - 0.12, (from[2] + post[2]) / 2];
+    mesh.tube(from, mid, 0.012, 0.012, INK.dark, M.dark, 4);
+    mesh.tube(mid, post, 0.012, 0.012, INK.dark, M.dark, 4);
   }
 }
 
