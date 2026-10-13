@@ -128,11 +128,12 @@ there, read from the water: where a stream bends, its current crowds in short st
 outer bank and draws out long along the inner; where it runs gently, now and then one long low stroke
 along it; where it runs fast, short strokes, slanted, crossing; where a stone stands in it, the
 current splits about it upstream and trails a wake behind; where it falls, a broken lip across the
-top, lines down the sheet of different lengths, and at its foot strokes flung out downstream and rings
-spreading, fainter as they go; where it comes into a pool, rings spreading from the inlet; and on still
+top, lines down the sheet of different lengths, and at its foot strokes flung out downstream, the heaviest
+marks on the water, and rings spreading, fainter as they go; where it comes into a pool, rings spreading from the inlet; and on still
 water, almost nothing: a long line or two across, far apart. Its banks are a broken line, about half
 drawn, heavier where they're cut steep or the current's against them; a pond's far shore (up the hill,
-where the bank's cut) is drawn, broken, and its near shore left open. Each mark is a ribbon laid on the
+where the bank's cut) is drawn, broken, with a few short level strokes just below it on the water where
+the bank shows in it, and its near shore left open. Each mark is a ribbon laid on the
 water (or down a fall), tapered to a hair at both ends, its width and weight its own, its edge drawn
 smooth however thin, broken now and then as a dry brush breaks; it stays where it is as the view moves.
 Foam is a stipple at the foot of each drop and in patches where it runs fast; stones in the water have
@@ -250,6 +251,20 @@ held by one tree standing alone toward its far side. These composition fields sp
 bands; jittered trees belong to the band containing their final position. Trees vary in stature.
 The broad blossom wash is fixed to cluster centres; fine marks remain attached to the illustrated
 lobes. Distant paper fade starts beyond the usual focal distance.
+
+## The journey's movements
+
+The way up is told in movements, as a scroll is: every stretch of about 170 metres along the
+climb has its own character, from the seed and the stretch's number, and the hill eases from one
+to the next over the last thirty metres of each. An orchard is the hill as it has always been; a
+grove draws the trees close and deep; an open stretch lets the paper through, a tree here and
+there; a lone stretch is nearly empty, a single tree or two standing out at its openings; a
+stretch of stones thins the trees and sets rocks about the hillside. The first stretch is always
+orchard, so every journey begins among the blossom.
+
+A tree that stands alone is drawn as a print draws one it means you to look at: a little taller,
+with more twigs at the ends of its limbs, and its blossom held back so the branching shows
+through. Trees in a grove stay as they were, one full mass among many.
 
 ## Changes along the way
 

@@ -140,12 +140,12 @@ export function streamMarks(push: Push, W: Water, st: Stream, z0: number, z1: nu
     const fz = f.single ? lip - 0.6 : lip - 0.35;
     if (!start0(xc, fz) || drop < 0.15) continue;
     const big = f.single ? 1 : 0.55;
-    for (let q = 0, nq = Math.round((5 + r() * 3) * big); q < nq; q++) {
-      const a = -Math.PI / 2 + ramp(r, -1.1, 1.1), r0 = ramp(r, 0.35, 0.7) * big, r1 = r0 + ramp(r, 0.35, 0.8) * big, pts: V3[] = [];
-      for (let t = 0; t <= 1.0001; t += 0.25) { const p = onWater(xc + Math.cos(a) * (r0 + (r1 - r0) * t), fz + Math.sin(a) * (r0 + (r1 - r0) * t)); if (p) pts.push(p); }
-      ribbon(push, pts, ramp(r, 0.03, 0.05), FAM.impact, ramp(r, 0.6, 0.95), mat);
+    for (let q = 0, nq = Math.round((7 + r() * 4) * big); q < nq; q++) {
+      const a = -Math.PI / 2 + ramp(r, -1.2, 1.2), r0 = ramp(r, 0.3, 0.6) * big, r1 = r0 + ramp(r, 0.5, 1.1) * big, pts: V3[] = [];
+      for (let t = 0; t <= 1.0001; t += 0.2) { const p = onWater(xc + Math.cos(a) * (r0 + (r1 - r0) * t), fz + Math.sin(a) * (r0 + (r1 - r0) * t)); if (p) pts.push(p); }
+      ribbon(push, pts, ramp(r, 0.05, 0.08), FAM.impact, ramp(r, 0.75, 1), mat);
     }
-    rings(push, onWater, xc, fz, [1, 1.7, 2.6].map((v) => v * big), -Math.PI / 2, 1.25, r, FAM.impact, mat);
+    rings(push, onWater, xc, fz, [1, 1.7, 2.6].map((v) => v * big), -Math.PI / 2, 1.3, r, FAM.impact, mat, 0.055);
   }
   // its pools: where the stream comes in, rings spreading from the inlet; out on still water, a long
   // line or two across, far apart, and otherwise nothing
@@ -166,6 +166,12 @@ export function streamMarks(push: Push, W: Water, st: Stream, z0: number, z1: nu
           if (q && start0(q[0], q[2])) pts.push(q); else if (pts.length) break;
         }
         ribbon(push, pts, ramp(r, 0.08, 0.13) * (0.6 + 0.6 * Math.max(0, up)), FAM.bank, 0.8 + 0.19 * Math.max(0, up), mat);
+        // (and under it, now and then, the bank's reflection: a dash or two, broken, a little out on the water)
+        if (up > 0.2 && pts.length > 3) for (let q = 0, nq = r() < 0.6 ? 1 + Math.floor(r() * 2) : 0; q < nq; q++) {
+          const off = ramp(r, 0.25, 0.6) * (q + 1), i0 = Math.floor(r() * pts.length * 0.5), i1 = Math.min(pts.length, i0 + 2 + Math.floor(r() * pts.length * 0.5));
+          const dash = pts.slice(i0, i1).map((p) => onWater(p[0], p[2] - off)).filter((p): p is V3 => !!p);
+          ribbon(push, dash, ramp(r, 0.04, 0.07), FAM.still, ramp(r, 0.55, 0.8), mat);
+        }
       }
       a += span + ramp(r, 0.12, 0.45);
     }
@@ -183,13 +189,13 @@ export function streamMarks(push: Push, W: Water, st: Stream, z0: number, z1: nu
 }
 
 /** Arcs about a centre: at each radius, a ring broken into two or three pieces, spanning so far either side of the angle `a`, fainter and sparser outward. */
-function rings(push: Push, onWater: (x: number, z: number) => V3 | null, x: number, z: number, radii: number[], a: number, span: number, r: Rand, fam: number, mat: number) {
+function rings(push: Push, onWater: (x: number, z: number) => V3 | null, x: number, z: number, radii: number[], a: number, span: number, r: Rand, fam: number, mat: number, w0 = 0.035) {
   radii.forEach((R, i) => {
     const sp = span * (1 - i * 0.12);
     for (let b = a - sp; b < a + sp;) {
       const e = Math.min(a + sp, b + ramp(r, 0.3, 0.8) * sp), pts: V3[] = [];
       for (let t = b; t <= e; t += 0.12 / R) { const p = onWater(x + Math.cos(t) * R, z + Math.sin(t) * R * 0.85); if (p) pts.push(p); }
-      if (r() < 0.85 - i * 0.15) ribbon(push, pts, 0.035 * (1 - i * 0.15), fam, 0.85 - i * 0.18, mat);
+      if (r() < 0.85 - i * 0.15) ribbon(push, pts, w0 * (1 - i * 0.15), fam, 0.85 - i * 0.18, mat);
       b = e + ramp(r, 0.15, 0.4) * sp;
     }
   });

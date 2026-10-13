@@ -114,12 +114,12 @@ void main() {
       vec3 nf = normalize(cross(dFdx(vW), dFdy(vW)));
       if (nf.y < 0.) nf = -nf;
       float toL = dot(normalize(nf.xz + 1e-4), normalize(L.xz));
-      c = nf.y > .8 ? vec3(.68, .66, .62) : mix(vec3(.4, .39, .38), vec3(.6, .58, .55), smoothstep(-.4, .5, toL));
+      c = nf.y > .8 ? vec3(.8, .78, .74) : mix(vec3(.55, .53, .5), vec3(.74, .72, .68), smoothstep(-.4, .5, toL));
       c *= .92 + .12 * noise(vW * 1.4);
       vec2 along = normalize(vec2(-nf.z, nf.x) + 1e-4);
       vec2 pw = vec2(-vW.y, dot(vW.xz, along));
       float drag = strokes(pw, .16, 1.1, .5, 12., max(fwidth(pw.y), 1e-5), nf.y > .8 ? 0. : 1., .03, .3);
-      c = mix(c, vec3(.2, .19, .18), drag * .85);
+      c = mix(c, vec3(.24, .23, .22), drag * .7);
       float rimD = (vC.g - .32 - rag) / max(fwidth(vC.g), 1e-4);
       c = mix(c, vec3(.13, .12, .11), (1. - smoothstep(1.2, 2.2, rimD)) * .9);
       lit = 1.;

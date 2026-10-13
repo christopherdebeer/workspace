@@ -263,6 +263,26 @@ export function opening(ways: Ways, seed: number, ix: number, iz: number): Openi
   const cx = at[0] + side * (2.5 + rr() * 2.5);
   return { cx, cz, rx: 5.5 + rr() * 3.5, rz: 8 + rr() * 5, side, i: ix * 100003 + iz };
 }
+/**
+ * The journey's movements: the hill, stretch by stretch up it (some hundred and seventy metres each),
+ * is given a character, so that a walk up it is a succession of pictures and not one picture again
+ * and again: a dense grove; an orchard (as the hill is most often); open hillside, a few trees; a lone
+ * tree or two on open paper, drawn the more fully for it; or a garden of standing stones. Each eases
+ * into the next over its last thirty metres.
+ */
+export type Movement = 'grove' | 'orchard' | 'open' | 'lone' | 'stones';
+const MOVE = 170;
+export function movementOf(seed: number, b: number): Movement {
+  if (b <= 0) return 'orchard';
+  const v = seeded(hash(seed, b, 0x30fe))();
+  return v < 0.28 ? 'grove' : v < 0.56 ? 'orchard' : v < 0.72 ? 'open' : v < 0.88 ? 'lone' : 'stones';
+}
+const DENSITY: Record<Movement, number> = { grove: 1.25, orchard: 1, open: 0.38, lone: 0.12, stones: 0.5 };
+/** how thick the trees stand, as the journey's movement has it there (eased between movements) */
+export function movementDensity(seed: number, z: number): number {
+  const b = Math.floor(z / MOVE), f = smooth(MOVE - 30, MOVE, z - b * MOVE);
+  return DENSITY[movementOf(seed, b)] * (1 - f) + DENSITY[movementOf(seed, b + 1)] * f;
+}
 export function groveDensity(ways: Ways, seed: number, x: number, z: number): number {
   const cz = Math.floor(z / 36), cx = Math.floor(x / 36);
   let open = 0;
@@ -272,7 +292,7 @@ export function groveDensity(ways: Ways, seed: number, x: number, z: number): nu
     open = Math.max(open, 1 - smooth(0.55, 1.15, d));
   }
   const mass = noise1(hash(seed, 0xc042), z / 17 + x / 11);
-  return (0.7 + 0.29 * mass) * (1 - open);
+  return Math.min(0.98, (0.7 + 0.29 * mass) * (1 - open) * movementDensity(seed, z));
 }
 
 /** Tile (i, j) of the hill: i across it, j up it. */
@@ -523,7 +543,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     }
   }
   // (and a few out among the trees, low and broad)
-  for (let i = 0; i < (BENCH ? 0 : 2); i++) {
+  const mvHere = movementOf(seed, Math.floor((z0 + z1) / 2 / MOVE));
+  for (let i = 0; i < (BENCH ? 0 : mvHere === 'stones' ? 7 : mvHere === 'open' ? 3 : 2); i++) {
     const x = ramp(r, x0, x1), z = ramp(r, z0, z1);
     if (ways.nearest(x, z).d < WIDTH / 2 + 0.8) continue;
     rocks.push([x, z, ramp(r, 0.4, 0.95)]);
@@ -636,10 +657,12 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   // its blossom fallen about it: the clearing is a shape the tree gives meaning to, not just a gap)
   for (let i = Math.floor(z0 / 36) - 1; i <= Math.floor(z1 / 36) + 1; i++) for (let ix = Math.floor(x0 / 36) - 1; ix <= Math.floor(x1 / 36) + 1; ix++) {
     const o = opening(ways, seed, ix, i), lr = seeded(hash(seed, ix, i, 0x10e));
-    if (BENCH || lr() < 0.25) continue;
+    const mv = movementOf(seed, Math.floor(o.cz / MOVE));
+    if (BENCH || (lr() < 0.25 && mv !== 'lone')) continue;
     const x = o.cx + o.side * o.rx * ramp(lr, 0.25, 0.5), z = o.cz + o.rz * ramp(lr, -0.1, 0.35);
     if (!inT(x, z) || ways.nearest(x, z).d < WIDTH / 2 + 2.2 || belowWay(x, z) || onTemple(x, z, 1) || inGlade(x, z) || treeOut(x, z)) continue;
-    tree(mesh, puffs, petals, [x, ground(ways, x, z), z], lr, ways);
+    // (alone in its clearing, it's drawn the more fully; the more so where the hill's open about it)
+    tree(mesh, puffs, petals, [x, ground(ways, x, z), z], lr, ways, mv === 'lone' || mv === 'open' ? 1 : 0.6);
   }
 
   // trees: on a jittered grid, not on the path (though they lean over it), not on a temple's terrace
@@ -665,7 +688,9 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
         tuft(mesh, ways, rx + sz * 0.9, rz - sz * 0.3, tr, 4);
       }
     }
-    tree(mesh, puffs, petals, [x, ground(ways, x, z), z], tr, ways);
+    // (a tree with few about it is drawn the more fully: its limbs seen, its twigs out past its crown)
+    const dens = groveDensity(ways, seed, x, z);
+    tree(mesh, puffs, petals, [x, ground(ways, x, z), z], tr, ways, Math.max(0, Math.min(1, (0.45 - dens) / 0.33)));
   }
   // (the blossom's reflection in still water)
   if (ways.water.streamsNear(z0, z1).length) blossomInWater(mesh, ways, puffs, hash(seed, i, j));
@@ -815,12 +840,12 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
     for (let z = Math.max(z0, st.z0 - 2); z < Math.min(z1, st.z1 + 2); z += ramp(r, 1.2, 3)) {
       const xc = W.xAt(st, z), hw = W.halfAt(st, z), lv = W.levelAt(st, z), fast = lv.kind === 'flow' && ways.slope(z) > 0.2;
       for (const sd of [-1, 1]) {
-        if (r() > (fast ? 0.75 : 0.55)) continue;
+        if (r() > (fast ? 0.45 : 0.4)) continue;
         const x = xc + sd * (hw + ramp(r, -0.35, 0.4));
         if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, ramp(r, 0.35, 0.8), r);
       }
       // (and in it: where it runs fast, often; where it's slow, now and then)
-      if (r() < (fast ? 0.5 : 0.2)) { const x = xc + ramp(r, -hw * 0.7, hw * 0.7), pool = W.at(x, z)?.kind === 'pool'; if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, pool ? ramp(r, 0.6, 1) : ramp(r, 0.35, 0.65), r); }
+      if (r() < (fast ? 0.22 : 0.15)) { const x = xc + ramp(r, -hw * 0.7, hw * 0.7), pool = W.at(x, z)?.kind === 'pool'; if (inT(x, z) && clearOfWays(x, z, 0.6)) stone(x, z, pool ? ramp(r, 0.6, 1) : ramp(r, 0.35, 0.65), r); }
     }
     // (at each fall's lip, ledges of rock either side; under a high fall, rock all about its pool)
     for (const f of st.falls) for (const lip of f.lips) {
@@ -1131,13 +1156,13 @@ function tuft(mesh: Mesh, ways: Ways, x: number, z: number, r: Rand, n = 5) {
  * ones are drawn a little nearer the eye than they are, so they show over the blossom, as ink
  * over colour); petals fallen under it, some whole flowers, in drifts.
  */
-function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, ways: Ways) {
+function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, ways: Ways, iso = 0) {
   // (none stands in water, nor on a bank cut steep; nor just downhill of water, where its crown would
   // stand between the eye and it: the water's an open mass, as the print's are)
   if (ways.dryOf(base[0], base[2]) < 1.6) return;
   for (const dz of [1.5, 3, 4.5, 6]) { const w = ways.water.at(base[0], base[2] + dz); if (w && w.s < 0) return; }
   // (a trunk you can see: tall before it opens, leaning, with a kink or two; bold, as the print's are)
-  const stature = ramp(r, 0.82, 1.3);
+  const stature = ramp(r, 0.82, 1.3) * (1 + 0.22 * iso);
   const H = ramp(r, 1.6, 2.6) * stature, lean: V3 = norm([ramp(r, -0.4, 0.4), 1, ramp(r, -0.15, 0.3)]);
   const R0 = ramp(r, 0.24, 0.34) * stature;
   const knee = add(base, add(mul(lean, H * 0.5), [ramp(r, -0.2, 0.2), 0, ramp(r, -0.1, 0.1)]));
@@ -1181,7 +1206,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
     // (now and then a short spur out of the turn)
     if (depth >= 1 && r() < 0.45) twig(mid, fan(norm(add(kink, [ramp(r, -1, 1), ramp(r, 0, 0.5), ramp(r, -0.6, 0.6)]))), len * ramp(r, 0.3, 0.5), rad * 0.4);
     if (depth >= 3) {
-      for (let k = 0, n = 3 + Math.floor(r() * 3); k < n; k++) twig(to, fan(norm(add(kink, [ramp(r, -0.7, 0.7), ramp(r, -0.05, 0.5), ramp(r, -0.6, 0.6)]))), len * ramp(r, 0.5, 0.9), rad * 0.45);
+      for (let k = 0, n = 3 + Math.floor(r() * 3) + (iso > 0 ? Math.round(iso * 3) : 0); k < n; k++) twig(to, fan(norm(add(kink, [ramp(r, -0.7, 0.7), ramp(r, -0.05, 0.5), ramp(r, -0.6, 0.6)]))), len * ramp(r, 0.5, 0.9), rad * 0.45);
       ends.push([to, kink, 3]);
       return;
     }
@@ -1225,7 +1250,8 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   const t0 = ramp(r, -0.24, 0.12);
   const crownSeed = r();
   // (each tree its own fullness: most crowns full, some thinner, where more of the limbs show)
-  const full = r() < 0.7 ? ramp(r, 0.85, 1) : ramp(r, 0.55, 0.75);
+  let full = r() < 0.7 ? ramp(r, 0.85, 1) : ramp(r, 0.55, 0.75);
+  if (iso > 0) full *= 1 - 0.3 * iso;
   for (const [p, d, k] of tips) {
     const n = k + (k > 1 && r() < 0.4 ? 1 : 0);
     for (let i = 0; i < n; i++) {
@@ -1247,7 +1273,7 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   // (and the dome filled out behind its branches, so the crown is one full mass of blossom with the
   // ink across it, as the print has it: clumps through the upper part of the crown, set back along
   // the eye's line from the branches' plane)
-  for (let k = 0, n = Math.round(tips.length * 0.4); k < n; k++) {
+  for (let k = 0, n = Math.round(tips.length * 0.4 * (1 - 0.6 * iso)); k < n; k++) {
     const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * 0.9, up = ramp(r, -0.35, 1);
     const back = ramp(r, 1.0, 1.6);
     const q: V3 = [cx + Math.cos(a) * rr * Rh + VIEW[0] * back, cy + up * Rv * 0.8 + VIEW[1] * back, cz + Math.sin(a) * rr * Rh * 0.6 + VIEW[2] * back];
