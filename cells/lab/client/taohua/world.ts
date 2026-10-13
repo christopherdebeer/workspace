@@ -139,7 +139,17 @@ export function ground(ways: Ways, x: number, z: number): number {
 export function groundCut(ways: Ways, x: number, z: number): { y: number; cut: number } {
   const nr = ways.nearest(x, z), k = smooth(1.3, 3.4, nr.d);
   const under = ways.stairAt(nr.w, nr.u) ? 0.34 : 0.08;
-  const g = ways.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04 - under * (1 - k);
+  const nat = ways.hill(z) + k * 0.18 * Math.sin(x * 0.7 + z * 0.3) * Math.sin(z * 0.53 - x * 0.2) - 0.04;
+  // (a way's bench, cut into the hill: across the way and a little either side of it, level with the
+  // way's middle there; then, uphill of it, a cut bank rising quickly to the hill, and downhill, a fill
+  // slope falling more gently to it; the bench's edge and the banks' widths ragged along the way)
+  const level = ways.hill(nr.p[2]) - 0.04 - under;
+  const diff = nat - level;
+  const rag = noise1(nr.w.n * 977 + 5, nr.u * 0.6);
+  const bench = WIDTH / 2 + 0.12 + 0.25 * rag;
+  const bank = diff > 0 ? 0.3 + Math.abs(diff) * (0.7 + 0.5 * rag) : 0.55 + Math.abs(diff) * (1.5 + 0.6 * rag);
+  const f = smooth(bench, bench + bank, nr.d);
+  const g = level + diff * f;
   return ways.water.bed(x, z, g);
 }
 
@@ -284,14 +294,15 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     const key = `${x},${z}`;
     let v = gv.get(key);
     if (!v) {
-      const nr = ways.nearest(x, z), worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.6, nr.d), gc = groundCut(ways, x, z);
+      const nr = ways.nearest(x, z), worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.3 + 0.9 * noise1(nr.w.n * 31, nr.u * 0.5), nr.d), gc = groundCut(ways, x, z);
       v = [x, gc.y, z, 0, 1, 0, worn, gc.cut, 0, M.ground]; gv.set(key, v); cutAt.set(key, gc.cut);
     }
     return v;
   };
   for (let i = 0; i < Math.round(nx); i++) for (let k = 0; k < nz; k++) {
     const xa = x0 + i * 1.5, xb = xa + 1.5, za = z0 + k * 1.5, zb = za + 1.5;
-    if (ways.dryOf(xa + 0.75, za + 0.75) > 3.5) {
+    // (finer near a way, where its banks are, and by water)
+    if (ways.dryOf(xa + 0.75, za + 0.75) > 3.5 && ways.nearest(xa + 0.75, za + 0.75).d > WIDTH / 2 + 3.2) {
       for (const [x, z] of [[xa, za], [xa, zb], [xb, zb], [xa, za], [xb, zb], [xb, za]]) mesh.v.push(...GV(x, z));
       continue;
     }
@@ -402,6 +413,25 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     rock(mesh, [x, gy(x, z), z], sz, rr, gy);
     shade(mesh, ways, x - 0.9 * sz, z + 0.15 * sz, sz * 2.2, sz * 0.8, 0.3);
     for (let k = 0, n = 1 + Math.floor(rr() * 3); k < n; k++) { const a = rr() * 6.3, d = sz * ramp(rr, 1, 1.5); tuft(mesh, ways, x + Math.cos(a) * d, z + Math.sin(a) * d, rr, 3 + Math.floor(rr() * 4)); }
+  }
+  // the fringe of each way: from its edge out, loose pebbles, tufts and drifted petals, thinning
+  // away into the open hill, so a way meets the hill by degrees, not at a line; by a stair, a few
+  // stones spilt from it, half sunk in the bank
+  for (const w of near) {
+    const fr = seeded(hash(seed, w.n, 0xf1e9e));
+    for (let u = ramp(fr, 0, 0.4); u < w.len; u += ramp(fr, 0.18, 0.5)) {
+      const m = ways.at(w, u, true), stair = !!ways.stairAt(w, u), sd = fr() < 0.5 ? 1 : -1;
+      const out = -Math.log(1 - fr() * 0.97) * 0.75;
+      // (fewer the further out, and in loose groups along the way)
+      if (fr() > Math.exp(-out / 0.9) * (0.55 + 0.45 * noise1(w.n * 13 + sd, u * 0.35))) continue;
+      const off = (WIDTH / 2 + 0.05 + out) * sd, x = m.p[0] + m.dir[1] * off + ramp(fr, -0.2, 0.2), z = m.p[2] - m.dir[0] * off + ramp(fr, -0.2, 0.2);
+      if (!inT(x, z) || onTemple(x, z, 0.2) || ways.dryOf(x, z) < 0.3 || ways.nearest(x, z).d < WIDTH / 2 + 0.05) continue;
+      const pick = fr();
+      if (stair && out < 0.6 && pick < 0.35) stone(mesh, ways, x, z, ramp(fr, 0.14, 0.26), fr);
+      else if (pick < 0.45) stone(mesh, ways, x, z, ramp(fr, 0.05, 0.12), fr);
+      else if (pick < 0.8) tuft(mesh, ways, x, z, fr, 2 + Math.floor(fr() * 4));
+      else petals.push(x, ground(ways, x, z) + 0.03, z, ramp(fr, 0.04, 0.08), fr() * Math.PI, fr() * 0.5);
+    }
   }
   // grass in tufts along the ways' edges, more along a trail, and here and there on the hill
   for (const w of near) {

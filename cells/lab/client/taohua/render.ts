@@ -124,6 +124,19 @@ void main() {
       c = mix(c, vec3(.13, .12, .11), (1. - smoothstep(1.2, 2.2, rimD)) * .9);
       lit = 1.;
     } else
+    if (vM == ${M.ground} && vC.b <= 0. && vC.g <= .32 + rag) {
+      // (a bank, where the ground's cut or filled steeper than the hill: short grey strokes down it,
+      // close where it's steep, as the prints hatch a bank)
+      vec3 nf = normalize(cross(dFdx(vW), dFdy(vW)));
+      if (nf.y < 0.) nf = -nf;
+      float steep = smoothstep(.93, .7, nf.y);
+      if (steep > 0.) {
+        vec2 fall = normalize(nf.xz + 1e-4), con = vec2(-fall.y, fall.x);
+        vec2 ph = vec2(dot(vW.xz, fall) * 1.3 - vW.y, dot(vW.xz, con));
+        float h = strokes(ph, .2, .8, .12 + .4 * steep, 15., max(fwidth(ph.y), 1e-5), .75, .015, 0.);
+        c = mix(c, GREY, h * .8 * smoothstep(.0, .5, steep));
+      }
+    }
     if (vC.b <= 0. && vC.r > 0.) {
       // (along a trail, a few strokes of grey, as the brush went along it: a worn way)
       float st = step(.7, noise(vec3(vW.x * 1.3, vW.z * 11., 1.))) * step(.45, noise(vW * .8));
