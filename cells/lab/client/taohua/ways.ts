@@ -48,7 +48,7 @@ export interface Junction {
 /** how high a stone arch's deck rises over its banks, at its middle: a hump, as such bridges are */
 export const archRise = (c: { u0: number; u1: number }) => 0.7 + 0.13 * (c.u1 - c.u0);
 /** where a way crosses water: from u0 to u1 along it (bank to bank), on what, over water at what level */
-export interface Crossing { u0: number; u1: number; kind: 'stones' | 'bridge' | 'arch'; L: number; y0: number; y1: number }
+export interface Crossing { u0: number; u1: number; kind: 'stones' | 'bridge' | 'arch' | 'boards'; L: number; y0: number; y1: number }
 /** a stretch of a way that climbs in steps: from u0 to u1 along it, so many steps */
 export interface StairRun { u0: number; u1: number; n: number; h0: number; h1: number }
 export interface Way {
@@ -390,6 +390,8 @@ export class Ways {
     let kind: Crossing['kind'] = !low || steep ? 'bridge' : marsh || r() < 0.55 ? 'stones' : 'bridge';
     // (over slow water, a span the right size, now and then a stone arch, its deck rising over it)
     if (kind === 'bridge' && !marsh && fast < 0.2 && u1 - u0 > 3.5 && u1 - u0 < 8 && r() < 0.55) kind = 'arch';
+    // (over a marsh, a boardwalk: planks across, on posts, a little over the water)
+    if (marsh && low) kind = 'boards';
     return { u0, u1, kind, L, y0, y1 };
   }
   /** (as made so far: no growing) */
@@ -490,6 +492,7 @@ export class Ways {
       // (on a bridge, its deck, arched a little; on stepping stones, their tops, just above the water)
       if (c.kind === 'bridge') return bank + (0.25 + 0.03 * (c.u1 - c.u0)) * Math.sin(Math.PI * t);
       if (c.kind === 'arch') return bank + archRise(c) * Math.sin(Math.PI * t);
+      if (c.kind === 'boards') { const e = Math.min(u - c.u0, c.u1 - u); return bank + (c.L + 0.3 - bank) * smooth(0, 0.8, e); }
       const e = Math.min(u - c.u0, c.u1 - u);
       return bank + (c.L + 0.16 - bank) * smooth(0.4, 1.4, e);
     }

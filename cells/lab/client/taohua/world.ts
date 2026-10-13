@@ -127,6 +127,34 @@ const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[
 const norm = (a: V3): V3 => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
 
+// ─── the ways' kinds, stretch by stretch ─────────────────────────────────────────────────────────
+export type StairKind = 'slab' | 'rock' | 'timber';
+export type TrailKind = 'trail' | 'stepping' | 'flags';
+/** how far along a way it is to a building's terrace at either end (Infinity if neither has one) */
+const toBuilding = (w: Way, u: number) => Math.min(w.to.reach || w.to.gate ? w.len - u : Infinity, w.from.gate ? u : Infinity);
+/**
+ * What a stair's made of: most often pale slabs; now and then steps cut in the black rock (where it
+ * climbs through an outcrop), or earth steps held by logs (on a wilder stretch). Before a temple, slabs.
+ */
+export function stairKind(seed: number, w: Way, si: number): StairKind {
+  const st = w.stairs[si];
+  if (toBuilding(w, st.u1) < 18 || toBuilding(w, st.u0) < 18) return 'slab';
+  const r = seeded(hash(seed, w.n, si, 0x57a1))();
+  return r < 0.2 ? 'rock' : r < 0.36 ? 'timber' : 'slab';
+}
+/**
+ * What a gentle stretch of a way is (between its stairs): most often a worn earth trail, a few flat
+ * stones in it; now and then stepping stones through the grass; and coming to a temple, paving of
+ * flags, laid in a cracked-ice pattern (冰裂纹).
+ */
+export function trailKind(seed: number, w: Way, u: number): TrailKind {
+  if (toBuilding(w, u) < 16) return 'flags';
+  let seg = 0, a = 0, b = w.len;
+  for (const st of w.stairs) { if (st.u1 <= u) { seg++; a = st.u1; } else if (st.u0 > u) { b = Math.min(b, st.u0); } }
+  if (b - a < 5) return 'trail';
+  return seeded(hash(seed, w.n, seg, 0x9e17))() < 0.28 ? 'stepping' : 'trail';
+}
+
 /** The ground's height at (x, z): the hill there, a little rolling. */
 export function ground(ways: Ways, x: number, z: number): number {
   // (beside a way, it lies smooth under it; further off, it rolls. Beside a stair it lies well
@@ -284,7 +312,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   const GV = (x: number, z: number) => {
     const key = `${x},${z}`;
     let v = gv.get(key);
-    if (!v) { const nr = ways.nearest(x, z); const worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.6, nr.d); v = [x, ground(ways, x, z), z, 0, 1, 0, worn, 0, 0, M.ground]; gv.set(key, v); }
+    if (!v) { const nr = ways.nearest(x, z); const worn = ways.stairAt(nr.w, nr.u) || trailKind(seed, nr.w, nr.u) !== 'trail' ? 0 : 1 - smooth(0.5, 1.6, nr.d); v = [x, ground(ways, x, z), z, 0, 1, 0, worn, 0, 0, M.ground]; gv.set(key, v); }
     return v;
   };
   // (by water, finer, so its banks are drawn true; each corner carries how deep it's cut into the
@@ -294,7 +322,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     const key = `${x},${z}`;
     let v = gv.get(key);
     if (!v) {
-      const nr = ways.nearest(x, z), worn = ways.stairAt(nr.w, nr.u) ? 0 : 1 - smooth(0.5, 1.3 + 0.9 * noise1(nr.w.n * 31, nr.u * 0.5), nr.d), gc = groundCut(ways, x, z);
+      const nr = ways.nearest(x, z), worn = ways.stairAt(nr.w, nr.u) || trailKind(seed, nr.w, nr.u) !== 'trail' ? 0 : 1 - smooth(0.5, 1.3 + 0.9 * noise1(nr.w.n * 31, nr.u * 0.5), nr.d), gc = groundCut(ways, x, z);
       v = [x, gc.y, z, 0, 1, 0, worn, gc.cut, 0, M.ground]; gv.set(key, v); cutAt.set(key, gc.cut);
     }
     return v;
@@ -324,7 +352,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   for (const w of near) {
     const wh = hash(seed, w.n, 0x5a);
     for (const [si, st] of w.stairs.entries()) {
-      const du = (st.u1 - st.u0) / st.n;
+      const du = (st.u1 - st.u0) / st.n, sk = stairKind(seed, w, si);
       for (let k = 0; k < st.n; k++) {
         const uc = st.u0 + (k + 0.5) * du;
         const m = ways.at(w, uc, true), dir = m.dir;
@@ -340,7 +368,8 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
         const cut = () => 0.025 + sr() * 0.075;
         const P = (u: number, v: number, y: number): V3 => [cc[0] + dir[0] * u + dir[1] * v, y, cc[2] + dir[1] * u - dir[0] * v];
         // (a slab, or a piece of one, from va to vb across the way; its top so high, tipped a little across)
-        const slab = (va: number, vb: number, y: number, tip: number) => {
+        const slab = (va: number, vb: number, y: number, tip: number) => slabIn(va, vb, y, INK.stepTop, INK.stepFace, M.step, tip);
+        const slabIn = (va: number, vb: number, y: number, topC: C3, faceC: C3, mat: number, tip = 0) => {
           const corners: Array<[number, number]> = [
             [-hx + cut(), va], [hx - cut(), va + sr() * 0.04],
             [hx, va + cut()], [hx, vb - cut()],
@@ -352,12 +381,27 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
           for (let n = 0; n < corners.length; n++) {
             const a = corners[n], b = corners[(n + 1) % corners.length];
             const pa = P(a[0], a[1], Y(a[1])), pb = P(b[0], b[1], Y(b[1]));
-            mesh.tri(centre, pb, pa, INK.stepTop, M.step, [0, 1, 0]);
-            mesh.quad(P(a[0], a[1], y - 0.6), P(b[0], b[1], y - 0.6), pb, pa, INK.stepFace, M.step);
+            mesh.tri(centre, pb, pa, topC, mat, [0, 1, 0]);
+            mesh.quad(P(a[0], a[1], y - 0.6), P(b[0], b[1], y - 0.6), pb, pa, faceC, mat);
           }
         };
         // (weathered, now and then: cracked across, in two; sunk a little and tipped; or an end broken
         // off, the piece lying by it)
+        if (sk === 'rock') {
+          // (cut in the black rock: each step a block of it, its top worn grey; the outcrop it's cut
+          // through standing either side, now and then)
+          slabIn(-half, half, top, INK.rockTop, INK.rock, M.rock);
+          for (const sd of [-1, 1]) if (sr() < 0.45) { const pp = P(ramp(sr, -hx, hx), sd * (half + ramp(sr, 0.35, 0.7)), 0); if (!onTerrace(pp[0], pp[2])) rock(mesh, [pp[0], ground(ways, pp[0], pp[2]), pp[2]], ramp(sr, 0.5, 0.95), sr, (x, z) => ground(ways, x, z)); }
+          continue;
+        }
+        if (sk === 'timber') {
+          // (earth steps, each held at its front by a log laid across, pegged at its ends)
+          mesh.box(P(0, 0, top - 0.3), [hx, 0.3, half - 0.05], dir, INK.paper, INK.stepFace, M.earth, M.stone);
+          mesh.tube(P(-hx + 0.03, -half - 0.08, top - 0.02), P(-hx + 0.03, half + 0.08, top - 0.02), 0.075, 0.07, INK.trunk, M.trunk, 6);
+          for (const sd of [-1, 1]) mesh.tube(P(-hx - 0.06, sd * (half + 0.12), top - 0.3), P(-hx - 0.06, sd * (half + 0.12), top + 0.07), 0.035, 0.03, INK.trunk, M.trunk, 5);
+          if (sr() < 0.35) tuftAt(mesh, P(hx - 0.05, ramp(sr, -half, half) * 0.8, top), sr, 3, 0.7);
+          continue;
+        }
         const wear = sr();
         if (wear < 0.1) { const c = ramp(sr, -0.3, 0.3) * half; slab(-half, c - 0.025, top, 0); slab(c + 0.025, half, top - 0.02, ramp(sr, -0.02, 0.02)); }
         else if (wear < 0.17) slab(-half, half, top - 0.03, ramp(sr, -0.03, 0.03));
@@ -391,14 +435,64 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     }
     // (where it crosses water: stepping stones, or a bridge)
     if (w.cross) crossing(mesh, ways, w, inT);
-    // (stones along its gentle stretches)
+    // (its gentle stretches, each of its kind: a trail, a few flat stones in it; stepping stones in
+    // the grass, a stride apart; or, coming to a temple, flags in a cracked-ice pattern, kerbed)
     const tr = seeded(hash(wh, 0x5e7));
+    const wet = (u: number) => !!w.cross && u > w.cross.u0 - 0.5 && u < w.cross.u1 + 0.5;
     for (let u = ramp(tr, 0.2, 0.8); u < w.len; u += ramp(tr, 0.6, 1.8)) {
-      if (tr() < 0.45 || ways.stairAt(w, u) || (w.cross && u > w.cross.u0 - 0.5 && u < w.cross.u1 + 0.5)) continue;
+      if (ways.stairAt(w, u) || wet(u) || trailKind(seed, w, u) !== 'trail' || tr() < 0.45) continue;
       const m = ways.at(w, u, true), off = ramp(tr, -0.45, 0.45);
       const x = m.p[0] + m.dir[1] * off, z = m.p[2] - m.dir[0] * off;
       if (!inT(x, z) || onTerrace(x, z)) continue;
       stone(mesh, ways, x, z, ramp(tr, 0.16, 0.34), tr);
+    }
+    for (let u = ramp(tr, 0.1, 0.4), side = 1; u < w.len; u += ramp(tr, 0.6, 0.74), side = -side) {
+      if (ways.stairAt(w, u) || wet(u) || trailKind(seed, w, u) !== 'stepping') continue;
+      const m = ways.at(w, u, true), off = side * ramp(tr, 0.05, 0.22);
+      const x = m.p[0] + m.dir[1] * off, z = m.p[2] - m.dir[0] * off;
+      if (!inT(x, z) || onTerrace(x, z)) continue;
+      stone(mesh, ways, x, z, ramp(tr, 0.24, 0.33), tr);
+      if (tr() < 0.6) tuft(mesh, ways, x - m.dir[1] * off * 2.5, z + m.dir[0] * off * 2.5, tr, 3 + Math.floor(tr() * 3));
+    }
+    const flagged: Array<[number, number]> = [];
+    for (let u = 0.2; u < w.len; u += 0.4) {
+      if (ways.stairAt(w, u) || wet(u) || trailKind(seed, w, u) !== 'flags') continue;
+      const m = ways.at(w, u, true);
+      for (let a = -1; a <= 1; a += 0.5) { const v = a * (WIDTH / 2 - 0.12) + ramp(tr, -0.06, 0.06); flagged.push([m.p[0] + m.dir[1] * v + ramp(tr, -0.07, 0.07), m.p[2] - m.dir[0] * v + ramp(tr, -0.07, 0.07)]); }
+      // (its kerbs: long stones set along either edge)
+      if (Math.round(u / 0.4) % 2 === 0) for (const sd of [-1, 1]) {
+        const v = sd * (WIDTH / 2 + 0.06), x = m.p[0] + m.dir[1] * v, z = m.p[2] - m.dir[0] * v;
+        if (inT(x, z) && !onTerrace(x, z)) mesh.box([x, ground(ways, x, z) + 0.03, z], [0.38, 0.07, 0.07], m.dir, INK.stepTop, INK.stepFace, M.stone);
+      }
+    }
+    pave(mesh, ways, flagged.filter(([x, z]) => inT(x, z) && !onTerrace(x, z)), 0.24, tr);
+  }
+
+  // landings: at the head of a stair now and then, a broader place, paved, to stand and look; by it, a
+  // stone lantern, a bench, or a cairn
+  for (const w of near) for (const [si, st] of w.stairs.entries()) {
+    const lr = seeded(hash(seed, w.n, si, 0x1a9d));
+    if (lr() > 0.45 || st.u1 > w.len - 4 || toBuilding(w, st.u1) < 14) continue;
+    const u = Math.min(w.len - 1, st.u1 + 0.9), m = ways.at(w, u, true);
+    if (!inT(m.p[0], m.p[2]) || onTerrace(m.p[0], m.p[2]) || ways.dryOf(m.p[0], m.p[2]) < 3 || inStation(sts, m.p[0], m.p[2], 1.5)) continue;
+    const side = lr() < 0.5 ? -1 : 1, pts: Array<[number, number]> = [];
+    for (let a = -1.1; a <= 1.1; a += 0.42) for (let b = -1; b <= 1; b += 0.42) {
+      if (Math.hypot(a / 1.2, b / 1.05) > 1) continue;
+      const v = b * (WIDTH / 2 + 0.75) + side * 0.35;
+      pts.push([m.p[0] + m.dir[0] * a + m.dir[1] * v + ramp(lr, -0.06, 0.06), m.p[2] + m.dir[1] * a - m.dir[0] * v + ramp(lr, -0.06, 0.06)]);
+    }
+    pave(mesh, ways, pts.filter(([x, z]) => !ways.stairAt(ways.nearest(x, z).w, ways.nearest(x, z).u)), 0.25, lr);
+    const fx = m.p[0] + m.dir[1] * side * (WIDTH / 2 + 1.25), fz = m.p[2] - m.dir[0] * side * (WIDTH / 2 + 1.25);
+    if (ways.nearest(fx, fz).d < WIDTH / 2 + 0.6 || onTemple(fx, fz, 0.3)) continue;
+    const pick = lr(), fy = ground(ways, fx, fz);
+    block(fx, fz, 0.55);
+    if (pick < 0.45) lantern(mesh, [fx, fy, fz], [-m.dir[1] * side, m.dir[0] * side], lr);
+    else if (pick < 0.75) { // (a bench: a slab on two stones)
+      for (const e of [-0.42, 0.42]) mesh.box([fx + m.dir[0] * e, fy + 0.2, fz + m.dir[1] * e], [0.1, 0.2, 0.17], m.dir, INK.stepFace, INK.stepFace, M.stone);
+      mesh.box([fx, fy + 0.44, fz], [0.62, 0.05, 0.22], m.dir, INK.stepTop, INK.stepFace, M.stone);
+    } else { // (a cairn)
+      let hh = fy - 0.04, s0 = ramp(lr, 0.3, 0.42);
+      for (let q = 0, nq = 4 + Math.floor(lr() * 3); q < nq; q++) { const sx = s0 * (1 - q * 0.14), th = ramp(lr, 0.07, 0.12), aa = lr() * 3; mesh.box([fx, hh + th, fz], [sx, th, sx * 0.75], [Math.cos(aa), Math.sin(aa)], INK.rockTop, INK.rock, M.rock); hh += th * 2; }
     }
   }
 
@@ -874,6 +968,18 @@ function crossing(mesh: Mesh, ways: Ways, w: Way, inT: (x: number, z: number) =>
     return;
   }
   if (c.kind === 'arch') { archBridge(mesh, ways, w, inT); return; }
+  if (c.kind === 'boards') {
+    // (a boardwalk: planks laid across, on posts driven into the marsh at either side, every so often)
+    const WOOD = hex(0x8a7158);
+    for (let u = c.u0 - 0.3; u < c.u1 + 0.3; u += 0.27) {
+      const m = ways.at(w, u, true);
+      if (!inT(m.p[0], m.p[2])) continue;
+      const top = ways.surface(w, Math.max(c.u0, Math.min(c.u1, u)), m.p[2]);
+      mesh.box([m.p[0], top - 0.03, m.p[2]], [0.12, 0.03, WIDTH / 2 - 0.1 + r() * 0.06], m.dir, WOOD, WOOD, M.wall);
+      if (Math.round((u - c.u0) / 0.27) % 5 === 0) for (const sd of [-1, 1]) { const v = sd * (WIDTH / 2 - 0.05); mesh.tube([m.p[0] + m.dir[1] * v, c.L - 0.5, m.p[2] - m.dir[0] * v], [m.p[0] + m.dir[1] * v, top + 0.02, m.p[2] - m.dir[0] * v], 0.05, 0.05, INK.trunk, M.trunk, 5); }
+    }
+    return;
+  }
   const span0 = c.u0 - 0.4, span1 = c.u1 + 0.4, n = Math.max(3, Math.round((span1 - span0) / 0.5));
   const du = (span1 - span0) / n;
   for (let k = 0; k < n; k++) {
@@ -953,6 +1059,35 @@ function restY(ways: Ways, x: number, z: number, lift: number): number {
   const wt = ways.water.at(x, z);
   if (wt && wt.s < -0.05) return wt.L + 0.015;
   return ground(ways, x, z) + lift;
+}
+
+/**
+ * Paving in a cracked-ice pattern: about each of the points, a flag, an irregular polygon of five to
+ * seven sides, pale, thin, laid on the ground, the joints between them left open.
+ */
+function pave(mesh: Mesh, ways: Ways, pts: Array<[number, number]>, rad: number, r: Rand) {
+  for (const [x, z] of pts) {
+    const n = 5 + Math.floor(r() * 3), turn = r() * 6.3, y = ground(ways, x, z) + 0.04 + r() * 0.012;
+    const ring: V3[] = [];
+    for (let i = 0; i < n; i++) { const a = turn + (i / n) * Math.PI * 2 + ramp(r, -0.3, 0.3), rr = rad * ramp(r, 0.78, 1.08); ring.push([x + Math.cos(a) * rr, y, z + Math.sin(a) * rr]); }
+    const c: V3 = [x, y, z];
+    for (let i = 0; i < n; i++) {
+      const a = ring[i], b = ring[(i + 1) % n];
+      mesh.tri(c, b, a, INK.stepTop, M.step, [0, 1, 0]);
+      mesh.quad([a[0], y - 0.12, a[2]], [b[0], y - 0.12, b[2]], b, a, INK.stepFace, M.step);
+    }
+  }
+}
+/** A stone lantern (石灯籠): a broad foot, a post, a fire-box with its dark window, a hipped cap and a knob; facing f. */
+function lantern(mesh: Mesh, at: V3, f: [number, number], r: Rand) {
+  const [x, y, z] = at, dir: [number, number] = [f[1], -f[0]], h = ramp(r, 0.9, 1.2);
+  mesh.box([x, y + 0.06, z], [0.24, 0.06, 0.24], dir, INK.stepTop, INK.stepFace, M.stone);
+  mesh.tube([x, y + 0.1, z], [x, y + h * 0.55, z], 0.08, 0.07, INK.stepFace, M.stone, 6);
+  mesh.box([x, y + h * 0.58, z], [0.2, 0.04, 0.2], dir, INK.stepTop, INK.stepFace, M.stone);
+  mesh.box([x, y + h * 0.72, z], [0.14, 0.11, 0.14], dir, INK.stepTop, INK.stepFace, M.stone);
+  mesh.box([x + f[0] * 0.13, y + h * 0.72, z + f[1] * 0.13], [0.07, 0.065, 0.015], dir, INK.dark, INK.dark, M.dark);
+  mesh.tube([x, y + h * 0.83, z], [x, y + h * 0.98, z], 0.27, 0.03, INK.stepFace, M.stone, 4);
+  mesh.tube([x, y + h * 0.97, z], [x, y + h * 1.05, z], 0.04, 0.02, INK.stepFace, M.stone, 5);
 }
 
 /** A little grass at a given height (in a joint between stones): fine short blades, so tall (k). */

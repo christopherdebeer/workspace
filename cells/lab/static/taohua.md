@@ -69,6 +69,30 @@ the seed and its place: the ground, the steps and stones, standing stones along 
 outcrops behind the trees, tufts of grass, the trees, fallen blossom, and the buildings. Crowns
 stand as they grow, over a way too: nothing is cut out of a crown to show what's under it.
 
+## The ways, close to
+
+A way meets the hill by degrees, not at a line. Each is benched into the hill: across it and a
+little either side, the ground lies level with its middle; uphill of that, a cut bank rises quickly
+to the hill, and downhill a fill slope falls more gently to it, the bench's edge and the banks'
+widths ragged along the way; where a bank's steeper than the hill it's hatched in short grey strokes
+down it, as the prints hatch a bank. From the way's edge out, a fringe of loose pebbles, tufts and
+drifted petals thins away into the open hill, in loose groups; by a stair, a few stones spilt from
+it lie half sunk in the bank. The worn earth of a trail spreads unevenly either side of it.
+
+Stairs weather: now and then a slab's cracked across, in two; sunk a little and tipped; or broken
+at an end, the piece lying beside it. Moss and grass grow in the joint at the back of a tread, where
+the next step rises, and fallen petals drift against the risers.
+
+Each stretch is of its own kind. A stair is most often of pale slabs; now and then cut in the black
+rock, the outcrop it climbs through standing either side; or earth steps, each held at its front by
+a log, pegged at its ends. Before a temple, slabs. A gentle stretch is most often a worn earth trail
+with a few flat stones in it; now and then stepping stones through the grass, a stride apart,
+alternating; and coming to a temple, flags laid in a cracked-ice pattern (冰裂纹), kerbed along either
+edge. Over a marsh, a boardwalk of planks on posts.
+
+At the head of a stair, now and then, there's a landing: a broader place, paved in cracked ice, to
+stand and look; by it, a stone lantern (石灯籠), a bench, or a cairn.
+
 ## The water
 
 Now and then a stream comes down the hill: one every few hundred metres up it, each two to three
