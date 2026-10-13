@@ -224,8 +224,13 @@ limb is a long run thinning steadily, wandering a little along its way, then for
 ways at a narrow angle, and again, four times over, ending in a lace of hairline twigs out to the
 crown's edge, with spurs out of the turns along the way. The branching spreads across the view,
 with little depth toward the eye or away; what depth it has leans a little away, so the near side
-of each crown is open and its limbs are seen. Bark is black with a band of cream down the side
-toward the light, broken only now and then.
+of each crown is open and its limbs are seen.
+Trunk and limbs are round, and seamless where they turn. Bark is black, the side toward the light laid
+in the paper's cream as a dry brush leaves it (飞白, "flying white"): pale streaks along the limb, its
+edge toward the shade ragged and broken, a dark hairline or two in it, the cream down one edge of a
+limb, not its middle; here and there on it a dark dot, a knot or moss, as a brush dots a branch. On the
+trunk, the peach's bark: short level dashes across it, a hand apart, broken round it, pale on the dark
+and dark on the pale (fading out where they'd be finer than the screen can show).
 
 The blossom gathers in clumps about the twigs' ends, each set a little behind its twigs along the
 eye's line, and the dome is filled out with more clumps further back, so the crown is one full
