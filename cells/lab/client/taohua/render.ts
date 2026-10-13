@@ -243,6 +243,9 @@ void main() {
     float fpx = max(length(fwidth(vW.xz)), 1e-4) * .7;
     float ink = fall || lip ? 0. : stipple(vW.xz, .1, foamAmt * .75 * smoothstep(.25, .55, noise(vec3(vW.xz * 1.6, 24.)) + foamAmt * .4), fpx);
     c = mix(PAPER, vec3(.22, .24, .25), ink);
+    // (along its edge, a faint cool wash, gone a little way in, as the prints grade water from its
+    // bank: enough that it reads as water against the hill, not so much it's coloured in)
+    if (!fall && !lip) c = mix(c, vec3(.7, .76, .78), .16 * (1. - smoothstep(.05, .75, inn)));
     if (uMarks > .5) c = PAPER;
     lit = 1.;
   } else if (vM == ${M.mark}) {
@@ -474,8 +477,9 @@ void main() {
   // the lines, as the print has them: black ink where things stand against each other; on stone a
   // thin line, warm and broken; none about rock or blossom, which stand by their fills alone (only
   // a deeper pink where one crown stands before another)
-  float ink = 0., stone = 0., coral = 0.;
+  float ink = 0., stone = 0., coral = 0., shore = 0.;
   vec2 offs[4] = vec2[4](vec2(px.x, 0.), vec2(-px.x, 0.), vec2(0., px.y), vec2(0., -px.y));
+  bool w0 = (m0 >= ${M.water} && m0 <= ${M.archReflect}) || m0 == ${M.mark};
   bool g0 = m0 == ${M.ground} || m0 == ${M.earth} || m0 == ${M.type} || (m0 >= ${M.water} && m0 <= ${M.archReflect}) || m0 == ${M.mark}, s0 = m0 == ${M.step} || m0 == ${M.stone};
   for (int i = 0; i < 4; i++) {
     vec2 uv = vUV + offs[i];
@@ -491,19 +495,25 @@ void main() {
     if (m0 == ${M.blossom} || mi == ${M.blossom}) { if (m0 == mi) coral = max(coral, jump); continue; }
     if (m0 == ${M.petal} || mi == ${M.petal} || m0 == ${M.grass} || mi == ${M.grass} || m0 == ${M.shade} || mi == ${M.shade}) continue;
     bool gi = mi == ${M.ground} || mi == ${M.earth} || mi == ${M.type} || (mi >= ${M.water} && mi <= ${M.archReflect}) || mi == ${M.mark}, si = mi == ${M.step} || mi == ${M.stone};
+    // (the water's edge: a fine line, on the water's side, where it meets the hill)
+    // (not where the sheet drops from level to level, whose steps aren't its shore)
+    if (w0 && n0.y > .92 && (mi == ${M.ground} || mi == ${M.earth})) shore = 1.;
     if (g0 && gi) continue;
     if ((m0 == ${M.rock} && (gi || mi == ${M.rock})) || (mi == ${M.rock} && g0)) continue;
     float e = max(jump, max(turn * (g0 ? 0. : .8), meet));
     if ((s0 || g0 || m0 == ${M.rock}) && (si || gi || mi == ${M.rock})) stone = max(stone, e);
     else ink = max(ink, e);
   }
-  if (d0 >= 1.) { ink = 0.; coral = 0.; stone = 0.; }
+  if (d0 >= 1.) { ink = 0.; coral = 0.; stone = 0.; shore = 0.; }
   // (the stone's line broken, as a dry brush leaves it)
   // (where on the hill this is, so the breaks stay with the stone, not the glass)
   vec4 wp = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
   stone *= smoothstep(.2, .42, noise(wp.xyz / wp.w * 3.));
+  // (the water's edge broken now and then, in long lengths, and lighter than the ink)
+  shore *= smoothstep(.22, .36, noise(wp.xyz / wp.w * .9 + 17.)) * (.45 + .2 * noise(wp.xyz / wp.w * 4. + 5.));
   // (the marks view: everything but the water's marks faded nearly to the paper, its lines too)
-  if (uMarks > .5) { if (m0 != ${M.mark}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; }
+  if (uMarks > .5) { if (m0 != ${M.mark}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; shore *= .15; }
+  c = mix(c, vec3(.24, .26, .27), shore);
   c = mix(c, vec3(.64, .25, .23), coral * .32);
   c = mix(c, vec3(.25, .21, .18), stone * .82);
   c = mix(c, vec3(.16, .13, .12), ink * .85);

@@ -123,6 +123,9 @@ either bank. No tree stands in the water, on a bank cut steep, nor just downhill
 where its crown would stand between the eye and it: the water's an open mass, as the print's are.
 
 It's drawn as the prints draw water: the paper itself, and ink only where something happens. Its
+edge is always there, quietly, since it can't be walked into: a fine line where it meets the hill,
+lighter than the ink and broken now and then in long lengths, and just inside it a faint cool wash,
+gone half a metre in, as the prints grade water from its bank. Its
 marks aren't a texture laid over it but geometry of their own (marks.ts), each with a reason to be
 there, read from the water: where a stream bends, its current crowds in short strokes against the
 outer bank and draws out long along the inner; where it runs gently, now and then one long low stroke
