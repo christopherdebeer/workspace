@@ -231,10 +231,18 @@ flat in float vMat;
 out vec4 o;
 uniform vec3 uEye, uTint;
 uniform float uTime, uAlpha;
+/** the dumpling, seen through what's before it: where it is on the glass (px), how big a hole (px), where it is */
+uniform vec3 uHole, uHoleAt;
 ${COMMON}
 ${SHADOW_GLSL}
 ${COAT_GLSL}
 void main() {
+  // (what stands between the eye and the dumpling dissolves round it, in a soft round hole, so it's never lost behind a loaf)
+  if (uHole.z > 0. && length(vWorld - uEye) < length(uHoleAt - uEye) - ${(3 * 1.6).toFixed(1)}) {
+    float k = 1. - smoothstep(uHole.z * .6, uHole.z, length(gl_FragCoord.xy - uHole.xy));
+    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715))));
+    if (ign < k * .9) discard;
+  }
   vec3 n = normalize(vNor);
   if (!gl_FrontFacing) n = -n;
   vec3 V = normalize(uEye - vWorld);
@@ -1109,6 +1117,11 @@ function startLevel(n: number, quiet = false) {
   camTarget = [at[0], at[1] + 4, at[2]];
   steamSeed = 0;
   puffs.length = 0;
+  ahead = 0;
+  // (a level's first time: the way over it, from home back to the start; not when it's started over)
+  fly = -1;
+  if (!quiet && !benchName && !preview && flown !== levelN && lv.towers.length > 1) { fly = 0; flyFor = Math.max(3, Math.min(6, 1.6 + 0.35 * lv.towers.length)); }
+  flown = levelN;
   if (quiet) return;
   try { if (!auto && !benchName) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
   if (!auto && !benchName) history.replaceState(null, '', `?level=${levelN}`);
@@ -1219,14 +1232,45 @@ let camYaw = 0;
 let orbit = { yaw: 0, pitch: 0, at: -9 };
 let zoom = 1;
 let windEase = 0;
+/** how much the camera's drawn back to take in the next top as well (0–1): when it's sat still on a top */
+let ahead = 0;
+/**
+ * The way over a level as it opens: from above home, back along the course, top by top, down to the
+ * start (`fly`: how far through it, in seconds; -1 once it's done, or a touch cut it short). Once a
+ * level; again, after a fall or a start over, it isn't.
+ */
+let fly = -1, flyFor = 0, flown = -1;
+const ease = (x: number) => x * x * (3 - 2 * x);
+function flyCamera(dt: number) {
+  fly += dt;
+  const T = lv.towers, u = ease(Math.min(1, fly / flyFor));
+  // (the course from home back to the start, as a path through its tops)
+  const f = (1 - u) * (T.length - 1), i = Math.min(T.length - 2, Math.floor(f)), k = f - i, a = T[i].at, b = T[i + 1].at;
+  const p: V3 = [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k + 3, a[2] + (b[2] - a[2]) * k];
+  // (high and far at first, coming down and in to where play begins)
+  const pitch = 0.95 - 0.45 * u, dist = 150 - 100 * u;
+  const back: V3 = [-Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(camYaw) * Math.cos(pitch)];
+  const kk = 1 - Math.exp(-dt * 6);
+  for (let j = 0; j < 3; j++) camTarget[j] += (p[j] - camTarget[j]) * (fly < dt * 1.5 ? 1 : kk);
+  const want = add(camTarget, mul(back, dist));
+  for (let j = 0; j < 3; j++) eye[j] += (want[j] - eye[j]) * (fly < dt * 1.5 ? 1 : kk);
+  keepOut(eye, camTarget);
+  if (fly >= flyFor) fly = -1;
+}
 function updateCamera(dt: number) {
   if (mode === 'title') { titleCamera(dt); return; }
+  if (fly >= 0) { flyCamera(dt); return; }
   // (it follows easily; but if it's got near the edge of the glass, or off it, it catches up at once)
   const on = screenOf(body.com);
   const off = !on || on[0] < innerWidth * 0.12 || on[0] > innerWidth * 0.88 || on[1] < innerHeight * 0.1 || on[1] > innerHeight * 0.82;
   const k = 1 - Math.exp(-dt * (off ? 22 : 5));
-  const want = add(body.com, [0, 3, 0]);
-  for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * k;
+  // (sat still on a top, and not home: the camera looks a little toward the next, and stands back far enough to see it too)
+  const nxt = lv.towers[Math.min(check + 1, lv.towers.length - 1)];
+  const settled = body.contacts > 0 && len(body.vcom) < 8 && home < 0 && !userCam;
+  ahead += ((settled ? 1 : 0) - ahead) * (1 - Math.exp(-dt * (settled ? 1.2 : 4)));
+  const toNext = sub(nxt.at, body.com), sep = Math.hypot(toNext[0], toNext[2]);
+  const want = add(add(body.com, [0, 3, 0]), mul(toNext, 0.4 * ahead * Math.min(1, 90 / Math.max(1, sep))));
+  for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * (1 - Math.exp(-dt * (off ? 22 : ahead > 0.01 && ahead < 0.99 ? 3 : 5)));
   // (turned toward the next top, when it's sat still and no one's turning the camera)
   if (!pull && !userCam && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
     const nx = lv.towers[Math.min(check + 1, lv.towers.length - 1)];
@@ -1237,8 +1281,9 @@ function updateCamera(dt: number) {
   }
   const wind = aimNow ? aimNow.power : 0;
   windEase += (wind - windEase) * (1 - Math.exp(-dt * 4));
-  const pitch = Math.max(0.12, Math.min(1.2, 0.46 + orbit.pitch + 0.22 * windEase));
-  const dist = (44 * (1 + 0.55 * windEase)) / zoom;
+  // (looking down on the counter a little more than across it, so the wall behind doesn't take half the glass)
+  const pitch = Math.max(0.12, Math.min(1.2, (lv.walls?.length ? 0.56 : 0.48) + orbit.pitch + 0.22 * windEase));
+  const dist = (Math.max(44, Math.min(95, 30 + sep * 0.75) * ahead + 44 * (1 - ahead)) * (1 + 0.55 * windEase)) / zoom;
   const back: V3 = [-Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(camYaw) * Math.cos(pitch)];
   // (never behind a wall: if the way out from the dumpling to where it would be meets one, it comes in short of it;
   // and while it's held in, it turns back round to the room's side, against a finger turning it too)
@@ -1320,6 +1365,8 @@ function pick(x: number, y: number, b: Dumpling = body): number {
 canvas.addEventListener('pointerdown', (e) => {
   wake();
   if (mode === 'title') { toyDown(e); return; }
+  // (the way over the level, cut short: from there, play)
+  if (fly >= 0) { fly = -1; return; }
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 1 && !auto) {
@@ -1444,6 +1491,7 @@ canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.5, Math.min(2.5, zoom * Math.exp(-e.deltaY * 0.0012))); }, { passive: false });
 addEventListener('keydown', (e) => {
   if (mode === 'title') { if (e.key === 'Enter') play(1); return; }
+  if (fly >= 0) { fly = -1; return; }
   if (e.key === 'ArrowLeft') { camYaw += 0.15; orbit.at = simTime; }
   else if (e.key === 'ArrowRight') { camYaw -= 0.15; orbit.at = simTime; }
   else if (e.key.toLowerCase() === 'r') startLevel(levelN);
@@ -1875,6 +1923,11 @@ function frame(now: number) {
   gl.uniform1i(u(prog, 'uShadowMap'), 0);
   gl.uniform1f(u(prog, 'uAlpha'), 1);
   gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
+  // (the hole through what stands before the dumpling: where it is on the glass, in the canvas's pixels, and how big it looks)
+  const hc = mode === 'play' && fly < 0 ? screenOf(body.com) : null, he = hc && screenOf(add(body.com, mul(right, RADIUS)));
+  const dpr = W / innerWidth;
+  gl.uniform3fv(u(prog, 'uHole'), hc && he ? [hc[0] * dpr, (innerHeight - hc[1]) * dpr, Math.max(40 * dpr, Math.hypot(he[0] - hc[0], he[1] - hc[1]) * 2.6 * dpr)] : [0, 0, 0]);
+  gl.uniform3fv(u(prog, 'uHoleAt'), body.com);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, shadowTex);
   if (roomMesh) drawMesh(roomMesh);
@@ -1886,6 +1939,7 @@ function frame(now: number) {
   // (the jellies, as their tops are)
   for (const jm of jellyMeshes) drawMesh(jm.mesh);
   // the dark under the dumpling
+  gl.uniform3fv(u(prog, 'uHole'), [0, 0, 0]);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.depthMask(false);
@@ -2033,7 +2087,7 @@ function frame(now: number) {
   showStatus();
   (window as unknown as { __squishy: unknown }).__squishy = {
     visualBuild: 'tactile-01',
-    level: levelN, towers: lv.towers.length, check, falls, clock, home, com: body.com.map((v) => Math.round(v * 10) / 10),
+    level: levelN, towers: lv.towers.length, check, falls, clock, home, fly, ahead: Math.round(ahead * 100) / 100, com: body.com.map((v) => Math.round(v * 10) / 10),
     speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, power: aimNow?.power ?? 0,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,
     eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull, mode, chapter: lv.chapter, held: body.held, pinned: body.pinned, spin: body.spinMode, kind: body.kind, coated: body.coated.map((v) => Math.round(v * 1000) / 1000), coatMost: body.coatMost, jellyOpen,
@@ -2129,7 +2183,7 @@ function tick(dt: number) {
   if (mode === 'title') { titleTick(dt); return; }
   body.step(lv, dt, simTime);
   simTime += dt;
-  if (home < 0) clock += dt;
+  if (home < 0 && fly < 0) clock += dt;
   if (body.impact > 90) {
     const k = Math.min(1, body.impact / 300);
     squish(k);
