@@ -103,6 +103,8 @@ void main() {
   // (few inks, flat, as a block prints: the paper; one grey for strokes and shade; pale stone and its
   // one darker face; rock in three; nothing mottled but the paper itself)
   vec3 GREY = vec3(.62, .58, .53);
+  // (for wood: how wide its contour's brush is here, in pixels; see the drawing)
+  float brush = 0.;
   if (vM == ${M.ground} || vM == ${M.shade}) {
     // the ground: the paper itself
     c = PAPER;
@@ -186,35 +188,42 @@ void main() {
     lit = 1.;
   } else if (vM == ${M.trunk} || vM == ${M.twig}) {
     c = vec3(${INK.trunk.map((v) => v.toFixed(3)).join(', ')});
-    // bark, as a brush draws it along the limb: (the limb's own frame: along its axis, carried in place
-    // of its colour; and around it, as a point on a circle, so nothing's seamed)
-    vec3 ax = normalize(vC * 2. - 1. + 1e-4);
-    vec3 bu = normalize(cross(ax, abs(ax.y) < .9 ? vec3(0., 1., 0.) : vec3(1., 0., 0.))), bw = cross(ax, bu);
-    vec2 ring = normalize(vec2(dot(n, bu), dot(n, bw)) + 1e-4);
-    float along = dot(vW, ax);
-    // (lit from the side, a little away from the eye: so the cream runs down one edge of a limb, as the
+    // bark, as a brush draws a limb: one stroke from where it leaves its parent to its tip (vC: which
+    // stroke; how far along it; its class × 10 + the whole stroke's length), so its marks run on
+    // unbroken through its turns. (Round it, the marks go by the normal, which turns smoothly too.)
+    float sid = vC.r, arc = vC.g, cls = floor(vC.b / 10. + .001), SL = vC.b - cls * 10.;
+    vec3 V = normalize(uEye - vW);
+    // (lit from the side, a little toward the eye: so the cream runs down one edge of a limb, as the
     // prints have it, not down its middle, which would draw it hollow)
     float side = dot(n, normalize(vec3(.95, .2, -.12)));
     // the lit side the paper's cream, laid as a dry brush leaves it ("flying white"): pale streaks
-    // along the limb, its edge toward the shade ragged and broken, a few dark hairlines in it
-    float fw = noise(vec3(ring * 1.6, along * .55 + 3.)) * .6 + noise(vec3(ring * 4.5, along * 1.7 + 9.)) * .4;
-    float pale = smoothstep(.0, .08, side - (vM == ${M.trunk} ? .12 : .3) + (fw - .5) * .6);
-    pale *= smoothstep(.12, .22, noise(vec3(ring * 2.2, along * 1.1 + 17.)));
-    float hair = smoothstep(.72, .8, noise(vec3(ring * 7., along * .35 + 23.)));
+    // along the stroke, its edge toward the shade ragged and broken, a few dark hairlines in it
+    float fw = noise(n * 1.6 + vec3(sid, arc * .55 + 3., 0.)) * .6 + noise(n * 4.5 + vec3(0., arc * 1.7 + 9., sid)) * .4;
+    float pale = smoothstep(.0, .08, side - (cls > 3.5 ? .5 : vM == ${M.trunk} ? .12 : .3) + (fw - .5) * .6);
+    pale *= smoothstep(.12, .22, noise(n * 2.2 + vec3(arc * 1.1 + 17., sid, 0.)));
+    float hair = smoothstep(.8, .86, noise(n * 4.5 + vec3(0., arc * .5 + 23., sid)));
     c = mix(c, vec3(.89, .84, .76), pale * (1. - hair * .8));
-    if (vM == ${M.trunk}) {
+    if (vM == ${M.trunk} && cls < .5) {
       // the peach's bark: short level dashes across the trunk, a hand apart, pale on the dark and dark
       // on the pale, broken round it (fading out where they'd be finer than the glass can show)
-      float rg = along * 3.3 + .6 * noise(vec3(ring * 1.3, along * .4));
+      float rg = arc * 3.3 + .6 * noise(n * 1.3 + vec3(arc * .4, sid, 0.));
       float lw = fwidth(rg), dd = abs(fract(rg) - .5);
-      float dash = (1. - smoothstep(.035, .035 + lw * 1.2, dd)) * step(.62, noise(vec3(ring * 3.4, floor(rg) * 1.7 + .5))) * step(.35, hash3(vec3(floor(rg), 2., 9.)));
+      float dash = (1. - smoothstep(.035, .035 + lw * 1.2, dd)) * step(.62, noise(n * 3.4 + vec3(floor(rg) * 1.7 + .5, sid, 0.))) * step(.35, hash3(vec3(floor(rg), sid, 9.)));
       dash *= 1. - smoothstep(.12, .3, lw);
       c = mix(c, pale > .5 ? vec3(.32, .27, .24) : vec3(.46, .42, .38), dash * .8);
     }
     // and here and there on the lit side a dark dot, a knot or moss, as the brush dots a branch
-    vec3 kc = vec3(ring * 2.5, along * 4.);
+    vec3 kc = n * 2.5 + vec3(arc * 4., sid, 0.);
     vec3 kf = fract(kc) - .5;
     if (hash3(floor(kc)) > .9 && length(kf) < .2 && pale > .3) c = mix(c, vec3(.12, .1, .09), .85);
+    // its contour, as the brush draws it: landing pressed where the limb leaves its parent (so every
+    // fork is marked), running on, lifting toward the tip; firmer the bigger the wood; broken now and
+    // then where the brush runs dry. Here only how wide the brush is (px), for the drawing to lay along
+    // the wood's edge, where it meets what's behind it (on the dark side it's lost in the dark)
+    float land = .9 * exp(-arc / .3), lift = 1. - smoothstep(SL * .55, SL, arc);
+    float press = (.6 + .4 * noise(vec3(arc * 1.3, sid, 31.))) * (.45 + .55 * lift) + land;
+    float dry = smoothstep(.2, .3, noise(vec3(arc * 2.6, sid, 41.)));
+    brush = (cls < .5 ? 2.2 : cls < 1.5 ? 1.7 : cls < 2.5 ? 1.25 : .8) * press * dry;
     lit = 1.;
   } else if (vM == ${M.tile} || vM == ${M.ridge}) {
     // glazed tiles, turquoise: every tile drawn
@@ -361,7 +370,7 @@ void main() {
   // (far off, it fades into the paper)
   float d = length(vW - uEye);
   c = mix(c, PAPER, smoothstep(85., 150., d) * .55);
-  oC = vec4(c, 1.);
+  oC = vec4(c, clamp(brush / 4., 0., 1.));
   oA = vec4(n * .5 + .5, float(vM) / 31.);
 }`;
 
@@ -541,6 +550,20 @@ void main() {
     else ink = max(ink, e);
   }
   if (d0 >= 1.) { ink = 0.; coral = 0.; stone = 0.; shore = 0.; }
+  // (a limb's contour: inked along the wood's edge where it meets what's behind it, as wide as the
+  // wood's brush says there; on the lit side it draws the limb against the paper, on the dark it's lost)
+  float wood = 0.;
+  if (m0 == ${M.trunk} || m0 == ${M.twig}) {
+    float wb = texture(uC, vUV).a * 4.;
+    for (int i = 0; i < 4; i++) for (int k = 1; k <= 4; k++) {
+      if (float(k) > wb + .5) break;
+      vec2 uv = vUV + offs[i] * float(k);
+      int mi = int(texture(uA, uv).a * 31. + .5);
+      if (mi == ${M.trunk} || mi == ${M.twig}) continue;
+      float di = texture(uD, uv).r;
+      if (di >= 1. || lin(di) > z0 * 1.01) wood = max(wood, smoothstep(wb + .5, wb - .5, float(k)));
+    }
+  }
   // (where one crown stands before another, the one behind is deeper along the edge, a band a few
   // pixels wide, as the prints part crown from crown: each crown its own mass, not one pink sea)
   float crown = 0.;
@@ -558,9 +581,10 @@ void main() {
   // (the water's edge broken now and then, in long lengths, and lighter than the ink)
   shore *= smoothstep(.22, .36, noise(wp.xyz / wp.w * .9 + 17.)) * (.45 + .2 * noise(wp.xyz / wp.w * 4. + 5.));
   // (the marks view: everything but the water's marks faded nearly to the paper, its lines too)
-  if (uMarks > .5) { if (m0 != ${M.mark} && m0 != ${M.stroke}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; shore *= .15; }
+  if (uMarks > .5) { if (m0 != ${M.mark} && m0 != ${M.stroke}) c = mix(c, PAPER, .82); ink *= .15; stone *= .15; coral *= .15; shore *= .15; wood *= .15; }
   c = mix(c, vec3(.24, .26, .27), shore);
   c = mix(c, vec3(.64, .25, .23), max(coral * .32, crown * .5));
+  c = mix(c, vec3(.1, .09, .08), wood * .92);
   c = mix(c, vec3(.25, .21, .18), stone * .82);
   c = mix(c, vec3(.16, .13, .12), ink * .85);
   if (uInk > .002) {

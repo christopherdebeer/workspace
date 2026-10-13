@@ -110,23 +110,33 @@ export class Mesh {
     for (const [a, b, cc, d, n] of faces) this.quad(a, b, cc, d, side, mSide, n);
   }
   /** a tapered tube from a to b, so many sides */
-  tube(a: V3, b: V3, ra: number, rb: number, col: C3, m: number, sides = 6) {
-    const d = norm(sub(b, a));
-    // (a limb's: its segments overlap a little at their joints, so a turn shows no seam; and each
-    // vertex carries the limb's axis in place of a colour, so the drawing can lay its brush along it)
+  /**
+   * a tapered tube from a to b, so many sides. A limb's (trunk or twig) is part of a stroke, as a brush
+   * draws a branch from where it leaves its parent to its tip: `st` says which stroke, how far along it
+   * this piece starts, its class (0 trunk, 1 limb, 2 branch, 3 twig, 4 root) and how long the whole stroke is;
+   * each vertex carries them in place of a colour (which stroke; how far along it; class × 10 + its
+   * length), for the drawing. Returns how far along the stroke its end is.
+   */
+  tube(a: V3, b: V3, ra: number, rb: number, col: C3, m: number, sides = 6, st?: { id: number; s: number; cls: number; L: number }): number {
+    const d = norm(sub(b, a)), len = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    // (a limb's segments overlap a little at their joints, so a turn shows no seam)
     const limb = m === M.trunk || m === M.twig;
     if (limb) { a = sub(a, mul(d, ra * 0.35)); b = add(b, mul(d, rb * 0.35)); }
-    const c: C3 = limb ? [d[0] * 0.5 + 0.5, d[1] * 0.5 + 0.5, d[2] * 0.5 + 0.5] : col;
+    const s0 = st ? st.s : 0, sa = limb ? s0 - ra * 0.35 : 0, sb = limb ? s0 + len + rb * 0.35 : 0;
+    const id = st ? st.id : 0, code = st ? st.cls * 10 + Math.min(9.9, st.L) : 2 * 10 + 9.9;
     const ref: V3 = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
     const u = norm(cross(d, ref)), w = cross(d, u), v = this.v;
     // (round, not faceted: each vertex its own normal, out from the axis)
-    const P = (p: V3, o: V3, r: number) => v.vert(p[0] + o[0] * r, p[1] + o[1] * r, p[2] + o[2] * r, o[0], o[1], o[2], c[0], c[1], c[2], m);
+    const P = (p: V3, o: V3, r: number, sv: number) => limb
+      ? v.vert(p[0] + o[0] * r, p[1] + o[1] * r, p[2] + o[2] * r, o[0], o[1], o[2], id, sv, code, m)
+      : v.vert(p[0] + o[0] * r, p[1] + o[1] * r, p[2] + o[2] * r, o[0], o[1], o[2], col[0], col[1], col[2], m);
     for (let k = 0; k < sides; k++) {
       const t0 = (k / sides) * Math.PI * 2, t1 = ((k + 1) / sides) * Math.PI * 2;
       const o0: V3 = add(mul(u, Math.cos(t0)), mul(w, Math.sin(t0))), o1: V3 = add(mul(u, Math.cos(t1)), mul(w, Math.sin(t1)));
-      P(a, o0, ra); P(b, o0, rb); P(b, o1, rb);
-      P(a, o0, ra); P(b, o1, rb); P(a, o1, ra);
+      P(a, o0, ra, sa); P(b, o0, rb, sb); P(b, o1, rb, sb);
+      P(a, o0, ra, sa); P(b, o1, rb, sb); P(a, o1, ra, sa);
     }
+    return s0 + len;
   }
 }
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -1245,12 +1255,33 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   // (the twin's two stems: from a fork low on the trunk, out either side and up)
   const fork = add(base, mul(lean, H * 0.32));
   const stems: V3[] = form === 'twin' ? [-1, 1].map((sd) => add(fork, mul(norm([lean[0] + sd * 0.42, 1, lean[2] + sd * 0.08]), H * 0.85))) : [top];
+  // (each limb a stroke of the brush, from where it leaves its parent to its tip: which, numbered
+  // from the tree's place, so a stroke's marks are its own)
+  const tid = hash(Math.round(base[0] * 100), Math.round(base[2] * 100), 0x51d) % 1000;
+  let strokes = 0;
+  const stroke = (cls: number, L: number) => ({ id: tid * 0.37 + ++strokes * 7.13, s: 0, cls, L });
+  // (its foot flares out to the ground, the trunk's own first stretch, so the tree stands on the hill)
+  const foot = add(base, mul(lean, 0.38));
+  const trunkTo = form === 'twin' ? fork : knee;
+  const ts = stroke(0, H + 0.6);
+  ts.s = mesh.tube([base[0], base[1] - 0.3, base[2]], foot, R0 * 1.8, R0 * 1.42, INK.trunk, M.trunk, 10, ts);
+  ts.s = mesh.tube(foot, trunkTo, R0 * 1.42, form === 'twin' ? R0 * 1.15 : R0 * 1.05, INK.trunk, M.trunk, 10, ts);
   if (form === 'twin') {
-    mesh.tube([base[0], base[1] - 0.3, base[2]], fork, R0 * 1.45, R0 * 1.15, INK.trunk, M.trunk, 8);
-    for (const st of stems) mesh.tube(fork, st, R0 * 0.85, R0 * 0.66, INK.trunk, M.trunk, 8);
-  } else {
-    mesh.tube([base[0], base[1] - 0.3, base[2]], knee, R0 * 1.4, R0 * 1.05, INK.trunk, M.trunk, 8);
-    mesh.tube(knee, top, R0 * 1.05, R0 * 0.88, INK.trunk, M.trunk, 8);
+    for (const st of stems) { const ss = stroke(0, H); ss.s = ts.s; mesh.tube(fork, st, R0 * 0.85, R0 * 0.66, INK.trunk, M.trunk, 8, ss); }
+  } else mesh.tube(knee, top, R0 * 1.05, R0 * 0.88, INK.trunk, M.trunk, 10, ts);
+  // (and its roots, where they leave it and dive into the ground: short ridges, a few, each its own
+  // stroke; from their own stream, so the tree above is as it was)
+  {
+    const rr = seeded(hash(Math.round(base[0] * 100), Math.round(base[2] * 100), 0x2007));
+    for (let k = 0, n = 3 + Math.floor(rr() * 3), a0 = rr() * 6.3; k < n; k++) {
+      const a = a0 + (k / n) * 6.283 + ramp(rr, -0.4, 0.4), dir: V3 = [Math.cos(a), 0, Math.sin(a)], L = R0 * ramp(rr, 1.6, 3);
+      const at = (t: number, dy: number): V3 => { const x = base[0] + dir[0] * (R0 * 1.2 + L * t) + ramp(rr, -0.04, 0.04), z = base[2] + dir[2] * (R0 * 1.2 + L * t); return [x, ground(ways, x, z) + dy, z]; };
+      // (a root's class, 4: drawn dark, the cream only on its very top)
+      const rs = stroke(4, L);
+      const p0: V3 = [base[0] + dir[0] * R0 * 0.7, base[1] + 0.06, base[2] + dir[2] * R0 * 0.7], p1 = at(0.45, -0.03), p2 = at(1, -0.12);
+      rs.s = mesh.tube(p0, p1, R0 * 0.42, R0 * 0.22, INK.trunk, M.trunk, 6, rs);
+      mesh.tube(p1, p2, R0 * 0.22, 0.02, INK.trunk, M.trunk, 5, rs);
+    }
   }
   const limbsFrom = mesh.v.n;
   const ends: Array<[V3, V3, number]> = [];
@@ -1261,10 +1292,15 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
    * rather than toward it, so the near side of the crown is open and its limbs are seen)
    */
   const fan = (d: V3): V3 => norm([d[0], d[1], d[2] * 0.45 + 0.14]);
+  // (the twigs' turns, from a stream of their own, so the tree's growth is as it was)
+  const tk = seeded(hash(tid, 0x7a1));
   const twig = (from: V3, d: V3, len: number, rad: number) => {
-    // (a hairline, straight, thinning to nothing)
+    // (a hairline, thinning to nothing, with a turn in it, sharper than a limb's)
     const e = add(from, mul(d, len));
-    mesh.tube(from, e, rad, 0.004, INK.trunk, M.twig, 3);
+    const m: V3 = add(add(from, mul(d, len * ramp(tk, 0.4, 0.6))), [ramp(tk, -0.07, 0.07) * len, ramp(tk, -0.02, 0.05) * len, ramp(tk, -0.04, 0.04) * len]);
+    const st = stroke(3, len);
+    st.s = mesh.tube(from, m, rad, (rad + 0.004) * 0.55, INK.trunk, M.twig, 3, st);
+    mesh.tube(m, e, (rad + 0.004) * 0.55, 0.004, INK.trunk, M.twig, 3, st);
     if (r() < 0.6) ends.push([e, d, 1]);
     return e;
   };
@@ -1274,18 +1310,21 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
    * last, a lace of fine twigs out to the crown's edge, and the blossom about them
    */
   const grow = (from: V3, dir: V3, len: number, rad: number, depth: number) => {
-    const kink = fan(norm(add(add(dir, mul(UP, 0.08)), [ramp(r, -0.3, 0.3), ramp(r, -0.12, 0.15), ramp(r, -0.3, 0.3)])));
+    // (the turn sharper the further out: a limb's runs long and steady, a branch's quicker)
+    const kk = 0.8 + 0.25 * depth;
+    const kink = fan(norm(add(add(dir, mul(UP, 0.08)), [ramp(r, -0.3, 0.3) * kk, ramp(r, -0.12, 0.15), ramp(r, -0.3, 0.3) * kk])));
     const mid = add(from, mul(dir, len * ramp(r, 0.45, 0.6))), to = add(mid, mul(kink, len * 0.48));
     const sides = depth >= 3 ? 3 : depth >= 2 ? 4 : depth >= 1 ? 5 : 6;
     const taper = depth >= 3 ? 0.55 : 0.78;
+    const st = stroke(depth === 0 ? 1 : depth <= 2 ? 2 : 3, len);
     if (depth <= 1) {
       // (the main limbs wander a little along their way: a third bend, small, between)
       const q1 = add(add(from, mul(sub(mid, from), 0.5)), [ramp(r, -0.08, 0.08) * len, ramp(r, -0.05, 0.08) * len, ramp(r, -0.04, 0.04) * len]);
       const rm = rad * (1 + taper) / 2;
-      mesh.tube(from, q1, rad, (rad + rm) / 2, INK.trunk, M.twig, sides);
-      mesh.tube(q1, mid, (rad + rm) / 2, rm, INK.trunk, M.twig, sides);
-    } else mesh.tube(from, mid, rad, rad * (1 + taper) / 2, INK.trunk, M.twig, sides);
-    mesh.tube(mid, to, rad * (1 + taper) / 2, rad * taper, INK.trunk, M.twig, sides);
+      st.s = mesh.tube(from, q1, rad, (rad + rm) / 2, INK.trunk, M.twig, sides, st);
+      st.s = mesh.tube(q1, mid, (rad + rm) / 2, rm, INK.trunk, M.twig, sides, st);
+    } else st.s = mesh.tube(from, mid, rad, rad * (1 + taper) / 2, INK.trunk, M.twig, sides, st);
+    mesh.tube(mid, to, rad * (1 + taper) / 2, rad * taper, INK.trunk, M.twig, sides, st);
     // (now and then a short spur out of the turn)
     if (depth >= 1 && r() < 0.45) twig(mid, fan(norm(add(kink, [ramp(r, -1, 1), ramp(r, 0, 0.5), ramp(r, -0.6, 0.6)]))), len * ramp(r, 0.3, 0.5), rad * 0.4);
     if (depth >= 3) {
