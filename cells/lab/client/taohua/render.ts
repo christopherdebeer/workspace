@@ -280,6 +280,9 @@ void main() {
     // bank: enough that it reads as water against the hill, not so much it's coloured in)
     if (!fall && !lip) c = mix(c, vec3(.7, .76, .78), .16 * (1. - smoothstep(.05, .75, inn)));
     if (uMarks > .5) c = PAPER;
+    // (how calm it is, for its reflections (see the drawing): still water calm; running, as fast as it runs; a fall not at all)
+    float kindW = floor(vC.b + .001);
+    brush = fall || lip || kindW > 2.5 ? 0. : 4. * (kindW < .5 ? 1. - clamp(run * 4., 0., 1.) : 1. - clamp(run * 5., 0., 1.));
     lit = 1.;
   } else if (vM == ${M.mark} || vM == ${M.stroke}) {
     // a mark on the water: a ribbon, its edge drawn smooth however thin it is (its coverage, from how
@@ -502,7 +505,7 @@ const POST_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 uniform sampler2D uC, uA, uD;
-uniform vec2 uPx; uniform float uNear, uFar, uLine, uInk, uMarks; uniform mat4 uIVP;
+uniform vec2 uPx; uniform float uNear, uFar, uLine, uInk, uMarks, uRefl; uniform mat4 uIVP, uVP; uniform vec3 uEye;
 out vec4 o;
 ${COMMON}
 float lin(float d) { float z = d * 2. - 1.; return 2. * uNear * uFar / (uFar + uNear - z * (uFar - uNear)); }
@@ -510,8 +513,50 @@ int matAt(vec2 uv) { return int(texture(uA, uv).a * 31. + .5); }
 void main() {
   vec2 px = uPx * uLine;
   float d0 = texture(uD, vUV).r;
-  vec3 c = texture(uC, vUV).rgb;
+  vec4 c4 = texture(uC, vUV);
+  vec3 c = c4.rgb;
   if (d0 >= 1.) c = PAPER;
+  // reflections: on the water, what stands over it, as the prints draw it: not a mirror, but its ink, laid
+  // in level bars fixed to the water, long and calm on still water, short and broken where it runs, and
+  // only near where the thing meets the water, fading as it goes up it. (Found by following the line of
+  // sight, turned up off the water, back across the picture until it goes behind something that stands.)
+  if (uRefl > .5 && d0 < 1. && int(texture(uA, vUV).a * 31. + .5) == ${M.water}) {
+    vec4 pw = uIVP * vec4(vUV * 2. - 1., d0 * 2. - 1., 1.);
+    // (the line turned up flatter than a mirror's, as the prints draw reflections long down the water)
+    vec3 P = pw.xyz / pw.w, V = normalize(P - uEye), Rr = normalize(vec3(V.x, -V.y * .38, V.z));
+    float t = .08, hitT = -1.;
+    vec2 huv = vec2(0.);
+    for (int i = 0; i < 26; i++) {
+      vec4 q = uVP * vec4(P + Rr * t, 1.);
+      if (q.w <= 0.) break;
+      vec3 nq = q.xyz / q.w;
+      vec2 uv = nq.xy * .5 + .5;
+      if (uv.x < 0. || uv.x > 1. || uv.y < 0. || uv.y > 1.) break;
+      float ds = texture(uD, uv).r, zq = lin(nq.z * .5 + .5), zs = lin(ds);
+      if (ds < 1. && zq > zs + .02 && zq < zs + .45 + t * .3) {
+        int mh = matAt(uv);
+        bool stands = mh == ${M.trunk} || mh == ${M.twig} || mh == ${M.rock} || mh == ${M.stone} || mh == ${M.step} || mh == ${M.wall} || mh == ${M.red} || mh == ${M.tile} || mh == ${M.ridge} || mh == ${M.robe} || mh == ${M.hat} || mh == ${M.skin} || mh == ${M.dark} || mh == ${M.deer} || mh == ${M.plaque} || mh == ${M.blossom};
+        if (stands) { hitT = t; huv = uv; break; }
+      }
+      t = t * 1.2 + .03;
+    }
+    if (hitT > 0.) {
+      vec3 ch = texture(uC, huv).rgb;
+      bool pink = matAt(huv) == ${M.blossom};
+      float lum = dot(ch, vec3(.3, .59, .11));
+      vec3 inkR = pink ? vec3(.92, .7, .65) : mix(vec3(.19, .18, .17), vec3(.6, .58, .55), smoothstep(.25, .85, lum));
+      float strength = (pink ? .5 : mix(.92, .4, smoothstep(.25, .85, lum))) * (1. - smoothstep(.25, 2.6, hitT * Rr.y));
+      float calm = c4.a;
+      // (where it runs quick, broken up and fainter: running water holds a reflection badly)
+      strength *= mix(.42, 1., calm);
+      float rowH = mix(.075, .11, calm), row = (P.z + .012 * sin(P.x * 3.1 + P.z)) / rowH;
+      float rf = abs(fract(row) - .5) * 2., aa = max(fwidth(row) * 2., .02), lineW = mix(.42, .66, calm);
+      float bar = 1. - smoothstep(lineW - aa, lineW + aa, rf);
+      float seg = mix(.22, 1., calm), br = noise(vec3(P.x / seg, floor(row) * 1.37, 7.));
+      bar *= smoothstep(.36 - .22 * calm, .46 - .22 * calm, br);
+      c = mix(c, inkR, strength * bar);
+    }
+  }
   // ink: where depth jumps (one thing before another), where the surface turns, where one thing meets another
   float z0 = lin(d0);
   vec4 a0 = texture(uA, vUV);
@@ -737,6 +782,13 @@ export class Renderer {
     gl.bindVertexArray(null);
     return { vao, bufs: [buf], count: verts.length / STRIDE };
   }
+  /** Fill a mesh made by `mesh` with new vertices (for what changes from frame to frame: the ripples). */
+  refill(d: Drawn, verts: Float32Array) {
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, d.bufs[0]);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+    d.count = verts.length / STRIDE;
+  }
   /** Instances of a quad (puffs: 6 floats each; petals: 7), as the program wants them. */
   instances(kind: 'puff' | 'petal', data: Float32Array, dynamic = false): Drawn {
     const gl = this.gl, p = kind === 'puff' ? this.puff : this.petal;
@@ -799,7 +851,7 @@ export class Renderer {
    * The frame: the solids (the world's bands, the walker by its own placing), the blossom, the
    * petals; then the print.
    */
-  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: number | boolean; time?: number; marks?: boolean },
+  frame(view: { vp: M4; ivp: M4; eye: V3; right: V3; up: V3; fwd: V3; near: number; far: number; dpr: number; ink?: number | boolean; time?: number; marks?: boolean; oldRefl?: boolean },
     solids: Array<{ d: Drawn; model?: M4 }>, puffs: Drawn[], petals: Drawn[]) {
     const gl = this.gl, W = this.canvas.width, H = this.canvas.height;
     this.targets(W, H);
@@ -848,6 +900,9 @@ export class Renderer {
     gl.uniform1f(this.loc(this.post, 'uNear'), view.near);
     gl.uniform1f(this.loc(this.post, 'uFar'), view.far);
     gl.uniformMatrix4fv(this.loc(this.post, 'uIVP'), false, view.ivp);
+    gl.uniformMatrix4fv(this.loc(this.post, 'uVP'), false, view.vp);
+    gl.uniform3fv(this.loc(this.post, 'uEye'), view.eye);
+    gl.uniform1f(this.loc(this.post, 'uRefl'), view.oldRefl ? 0 : 1);
     gl.uniform1f(this.loc(this.post, 'uInk'), Number(view.ink ?? 0));
     gl.uniform1f(this.loc(this.post, 'uMarks'), view.marks ? 1 : 0);
     gl.uniform1f(this.loc(this.post, 'uLine'), Math.max(1, view.dpr * 0.9));

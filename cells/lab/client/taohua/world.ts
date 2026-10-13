@@ -339,6 +339,12 @@ export function groveDensity(ways: Ways, seed: number, x: number, z: number): nu
 /** the water bench (bench.ts): no trees, nothing but the hill, its water and its rocks */
 let BENCH = false;
 export const setBench = (on: boolean) => { BENCH = on; };
+/**
+ * Reflections are the drawing's (see render.ts: what stands over the water, found and drawn there in
+ * level bars), not laid on the water by hand; `?refl=old` brings back the old, hand-laid ones, to compare.
+ */
+export let OLD_REFL = false;
+export const setOldRefl = (on: boolean) => { OLD_REFL = on; };
 /** the tree bench's trees, set out as given (see bench.ts) */
 let SPECIMENS: Array<{ x: number; z: number; seed: number; iso: number; rocks?: boolean }> = [];
 export const setSpecimens = (s: typeof SPECIMENS) => { SPECIMENS = s; };
@@ -773,7 +779,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     tree(mesh, puffs, petals, [sp.x, ground(ways, sp.x, sp.z), sp.z], tr, ways, sp.iso);
   }
   // (the blossom's reflection in still water)
-  if (ways.water.streamsNear(z0, z1).length) blossomInWater(mesh, ways, puffs, hash(seed, i, j));
+  if (OLD_REFL && ways.water.streamsNear(z0, z1).length) blossomInWater(mesh, ways, puffs, hash(seed, i, j));
 
   // petals fallen on the path too
   for (let i = 0; i < (BENCH ? 0 : 36); i++) {
@@ -883,7 +889,9 @@ function water(mesh: Mesh, petals: number[], ways: Ways, seed: number, x0: numbe
         if (u && u.s < 0.3 && u.L - w.L > 0.2 + 0.36 * dz) { foam = f; break; }
       }
       // (its edge is drawn where it's 0 m in from its edge (see the drawing); further out, the sheet's tucked under the ground)
-      v = [x, w.s > 0.8 ? Math.min(w.L, ground(ways, x, z) - 0.03) : w.L, z, -w.s, w.across, WATER_KIND[w.kind] + Math.min(0.99, w.run), foam];
+      // (on the river, how fast it runs here, for the drawing: its reflections calm or broken)
+      const run = w.kind === 'river' ? W.riverFlow(x, z)[2] * 0.3 : w.run;
+      v = [x, w.s > 0.8 ? Math.min(w.L, ground(ways, x, z) - 0.03) : w.L, z, -w.s, w.across, WATER_KIND[w.kind] + Math.min(0.99, run), foam];
     }
     cache.set(key, v);
     return v;
@@ -1042,12 +1050,12 @@ function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number)
   for (let z = z1 - 0.45, k = 0; z >= z0 + 0.2; z -= 1.65, k++) {
     if (!inT(x, z)) continue;
     mesh.box([x, (y - 0.14 + RIVER_L - 1.2) / 2, z], [hw - 0.08, (y - 0.14 - RIVER_L + 1.2) / 2, 0.24], [1, 0], INK.stone, INK.stone, M.stone);
-    for (const sd of [-1, 1]) postReflection(push, ways.water, x + sd * (hw - 0.15), z - 0.2, 0.75, seed + k * 2 + (sd > 0 ? 1 : 0), M.mark);
+    if (OLD_REFL) for (const sd of [-1, 1]) postReflection(push, ways.water, x + sd * (hw - 0.15), z - 0.2, 0.75, seed + k * 2 + (sd > 0 ? 1 : 0), M.mark);
   }
   // (at its far end, a stone post at each corner to tie up to)
   for (const sd of [-1, 1]) {
     const px = x + sd * (hw - 0.14), pz = z0 + 0.22;
-    if (inT(px, pz)) { mesh.box([px, y + 0.2, pz], [0.1, 0.27, 0.1], [1, 0], INK.stepTop, INK.stepFace, M.step, M.stone); postReflection(push, ways.water, px, pz - 0.2, 0.9, seed + 31 + sd, M.mark); }
+    if (inT(px, pz)) { mesh.box([px, y + 0.2, pz], [0.1, 0.27, 0.1], [1, 0], INK.stepTop, INK.stepFace, M.step, M.stone); if (OLD_REFL) postReflection(push, ways.water, px, pz - 0.2, 0.9, seed + 31 + sd, M.mark); }
   }
   // (at its end, a pole with a red paper lantern hung from its arm)
   const lx = x - hw + 0.08, lz = z0 + 0.25;
@@ -1055,7 +1063,7 @@ function jetty(mesh: Mesh, ways: Ways, seed: number, inT: (x: number, z: number)
     mesh.tube([lx, y - 0.1, lz], [lx, y + 2.3, lz], 0.04, 0.03, INK.trunk, M.trunk, 5);
     mesh.tube([lx, y + 2.25, lz], [lx - 0.45, y + 2.3, lz], 0.022, 0.018, INK.trunk, M.trunk, 4);
     mesh.tube([lx - 0.42, y + 1.95, lz], [lx - 0.42, y + 2.22, lz], 0.13, 0.12, hex(0xc8412e), M.red, 8);
-    postReflection(push, ways.water, lx - 0.42, lz, 1.4, seed + 1, M.mark);
+    if (OLD_REFL) postReflection(push, ways.water, lx - 0.42, lz, 1.4, seed + 1, M.mark);
   }
   // (the boat, its reflection and its mooring lines are drawn apart: see `boat`, `boatReflection`, `moorings`)
   // (beside the pier, stone steps down into the water from the landing; and along the bank, faced
@@ -1203,7 +1211,7 @@ function waterMarks(mesh: Mesh, W: Water, x: number, z: number, size: number, h:
   if (below && below.s < 0 && below.run < 0.2 && below.kind !== 'falls' && (!w || w.s > 0.4)) {
     // (on the bank just uphill of still water: only its reflection, in the water below it)
     const dz = h * 1.06 + 0.2, hx = size * 0.85, L = below.L;
-    decal(mesh, W, x - hx, x + hx, z - dz, z + 0.15, L + 0.01, M.reflect, (px, pz) => [(px - x) / hx, (z + 0.15 - pz) / (dz + 0.15)]);
+    if (OLD_REFL) decal(mesh, W, x - hx, x + hx, z - dz, z + 0.15, L + 0.01, M.reflect, (px, pz) => [(px - x) / hx, (z + 0.15 - pz) / (dz + 0.15)]);
     return;
   }
   if (!w || w.s > 0.4 || w.kind === 'falls') return;
@@ -1217,7 +1225,7 @@ function waterMarks(mesh: Mesh, W: Water, x: number, z: number, size: number, h:
       decal(mesh, W, x - E, x + E, ez - E, ez + E, L + 0.016, M.eddy, (px, pz) => [(px - x) / E, (pz - ez) / E]);
     }
   }
-  if (w.run < 0.2) {
+  if (OLD_REFL && w.run < 0.2) {
     const dz = h * 1.06 + 0.2, hx = size * 0.85;
     decal(mesh, W, x - hx, x + hx, z - dz, z + 0.15, L + 0.01, M.reflect, (px, pz) => [(px - x) / hx, (z + 0.15 - pz) / (dz + 0.15)]);
   }
@@ -1350,7 +1358,7 @@ function archBridge(mesh: Mesh, ways: Ways, w: Way, inT: (x: number, z: number) 
   const half = Math.abs(b[0] - a[0]) / 2, xm = (a[0] + b[0]) / 2;
   if (half < 0.8) return;
   const face = mm.p[2] - (WIDTH / 2 + 0.14) * Math.abs(mm.dir[0]) - 0.05, D = (H * 1.06) / 0.72, hw = half / 0.78;
-  decal(mesh, W, xm - hw, xm + hw, face - D, face, c.L + 0.012, M.archReflect, (px, pz) => [(px - xm) / hw, (face - pz) / D]);
+  if (OLD_REFL) decal(mesh, W, xm - hw, xm + hw, face - D, face, c.L + 0.012, M.archReflect, (px, pz) => [(px - xm) / hw, (face - pz) / D]);
 }
 
 /** Where a fallen petal comes to rest: on a way (its tread, a stepping stone, a bridge's deck), afloat on water, or on the ground. */

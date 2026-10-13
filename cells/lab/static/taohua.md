@@ -65,9 +65,19 @@ between, each coming and going along it; where it runs quick, the crests longer 
 the trails there; where it's slow (on the broad water above, along the banks, in the eddy behind the
 pier), few and short. Its bank at the hill's side is a line now and then between its rocks,
 the bank showing in the water under it here and there; its other bank, nearer the eye, left open.
-Each post of the jetty and the lantern is a wavering line down the water from its foot; the boat's
-reflection goes with it: short level bars stacked under its hull, dark and broken, shorter and fainter
-going down the picture, whichever way it lies.
+Reflections are the drawing's own, not laid on the water: for every place on the water, the drawing
+follows the line of sight turned up off it (flatter than a mirror's, so they run long down the water, as
+the prints draw them) back across the picture to whatever stands over the water there (a post, the
+boat, the walker, a rock, a crown) and draws it as the prints do, not a mirror but its ink (dark wood
+and stone and figures dark, pale things paler, blossom a soft pale pink), laid in level bars fixed to
+the water: long and calm on still water, short, broken and fainter where it runs; and only near where
+the thing meets the water, fading going down. So whatever moves (the boat, the walker on the pier, a
+deer at a pond) has its reflection with it, and anything new has one. (`?refl=old` brings back the
+old, hand-laid reflections, to compare.)
+
+Ripples come of what happens: where the pole goes in, rings spreading, broken into arcs, one inside
+another; while the boat's moving through the water, its wake, crests off either side of its bow,
+spreading behind it. Each is carried off down the river by the current, spreads, thins and goes.
 
 The boat can be taken out. A tap on it walks the walker to the deck beside it (if they're not already
 there) and they step in; it's cast off and pushed out from the pier. On the water the current carries
