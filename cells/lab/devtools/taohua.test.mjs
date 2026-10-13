@@ -18,10 +18,10 @@ const { withWood, checks } = await import('./harness.mjs');
 const c = checks();
 await withWood(async (wood) => {
   const s = (page) => page.evaluate(() => ({ ...window.__taohua, intro: window.__taohua.intro(), here: window.__taohua.here(), off: window.__taohua.off() }));
-  /** whether the page is still drawing: it reports itself afresh each frame */
+  /** whether the page is still drawing: it reports itself afresh each frame (given 4 s: a headless, software-drawn frame can take 2) */
   const alive = async (page) => {
     const was = await page.evaluateHandle(() => window.__taohua);
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(4000);
     return page.evaluate((w) => w !== window.__taohua, was);
   };
 
