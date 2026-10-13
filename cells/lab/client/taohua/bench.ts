@@ -113,3 +113,14 @@ export const RIVER_SCENES = {
   arrive: { intro: 9 }, open: { intro: 2 },
 } as const;
 export type RiverScene = keyof typeof RIVER_SCENES;
+
+/**
+ * The benches, registered: each a fixed place (or hill of its own) to study one thing against itself,
+ * its scenes, and what it's for. The side sheet's settings list them (surfaces.ts), so each is a tap away.
+ */
+export const BENCHES: Array<{ id: string; title: string; note: string; scenes: string[] }> = [
+  { id: 'water', title: 'Water', note: 'Four streams on a hill of their own: a pond, a bend, a rapid, a fall', scenes: Object.keys(SCENES) },
+  { id: 'ways', title: 'Ways', note: 'Kinds of way on one hill, trees left out: flights of each kind of stair, a cut, a bend, a steep stretch', scenes: Object.keys(WAY_SCENES) },
+  { id: 'tree', title: 'Trees', note: 'Trees set out as given: alone, a pair, a grove, by rocks, by water, a lineup', scenes: Object.keys(TREE_SCENES) },
+  { id: 'river', title: 'River', note: 'The foot of one hill: the jetty, the far bank, the near bank, the arrival', scenes: Object.keys(RIVER_SCENES) },
+];

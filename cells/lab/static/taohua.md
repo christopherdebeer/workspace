@@ -356,9 +356,7 @@ the paper in little square dabs, a few loose beyond it, as a worn block prints. 
 own pink, a little deeper or paler than the next.
 
 Rocks are standing stones, slabs and wedges on end, leaning a little, their faces flat: black
-turned from the light, charcoal toward it, grey on top, pocked with small pits. Shade on the
-ground is strokes of grey laid across, thinning out at the edges, off to the side away from the
-light. Steps are pale slabs with grey strokes along their tops and warmer faces. Fallen blossom
+turned from the light, charcoal toward it, grey on top, pocked with small pits. Steps are pale slabs with grey strokes along their tops and warmer faces. Fallen blossom
 is coral red, the reddest thing in the print: stamped five-lobed flowers in drifts under the
 trees, and specks of red between; petals turning as they fall about the walker.
 
@@ -368,6 +366,15 @@ forward and the other back with each step, the staff swings forward, is planted,
 the body sways from foot to foot and twists a little with each step, leans into a climb, the free
 arm swings against the stride, and the pace surges and eases within each step. They turn to face
 their way gradually. Standing, they breathe, and look about, now one way, now another.
+
+One sun lights it all, high to the front and right: the print's light and every shade are cast from
+it. Shade on the ground is grey laid on as a dry brush does, thinning out at its edge, and it falls
+on whatever is there, the ground or a way's treads and steps alike. A thing standing casts its shade
+away from the sun, as long as it is tall: a rock, a cairn, a shrine, a trunk. Close about its foot
+the shade is deeper, so it sits on the ground and doesn't float. A crown's shade is dappled: a patch
+under each of some of its clumps, as far off as the clump is high, the patches running into one
+another and broken where none reaches. A hall's roof lays its shade across its terrace. The walker's
+shade lies away from the sun whichever way they face, and they leave it ashore when they board.
 
 Broad, asymmetric openings beside the route alternate with denser wooded shoulders, each opening
 held by one tree standing alone toward its far side. These composition fields span streaming
@@ -427,8 +434,9 @@ The seal 記 (travel notes), at the top right above 墨, opens the side sheet: h
 temple's name, in three tabs. Nearby: the temples, the casts on the hill and the river's landings about
 the walker, nearest first, with how far (a temple or a landing tapped, the walker goes there; a cast,
 its page); and at its head, Cast a reading. The journal: what's been read on the hill, and cast, kept in
-this browser only; a tap reads it again. Settings: the composition view, the steps counted, and these
-notes.
+this browser only; a tap reads it again. Settings: the composition view, the steps counted, these
+notes, and Benches: each bench (water, ways, trees, river) with a link to each of its scenes, so
+that every scene a bench sets out can be found without knowing its name.
 
 Cast a reading opens the drawer: a question (or none), then three coins (開元通寶, the Tang's), thrown
 six times, the figure built line by line from the bottom; each line the coins' sum, a face two and a

@@ -10,7 +10,7 @@
  * meet as clouds do, stippled with lighter and darker pinks and a fleck of red; petals are little
  * teardrops, lying on the ground or turning as they fall.
  */
-import { INK, M, STRIDE } from './world';
+import { INK, M, STRIDE, SUN } from './world';
 
 export type V3 = [number, number, number];
 /** how far a limb inside its own crown is drawn toward the eye: not at all. Limbs show where the tree's growth and its blossom's density leave them open, and never through a crown in front */
@@ -26,7 +26,8 @@ float noise(vec3 x) {
              mix(mix(hash3(i + vec3(0, 0, 1)), hash3(i + vec3(1, 0, 1)), f.x), mix(hash3(i + vec3(0, 1, 1)), hash3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
 }
 const vec3 PAPER = vec3(${INK.paper.map((v) => v.toFixed(3)).join(', ')});
-const vec3 L = normalize(vec3(.55, .75, -.35));
+// (the sun: world.ts's, the one light the print's lit by)
+const vec3 L = normalize(vec3(${SUN.map((v) => v.toFixed(4)).join(', ')}));
 `;
 
 const SOLID_VS = `#version 300 es

@@ -18,11 +18,11 @@ import { identify } from '../changes/model';
 import { deerNear, type DeerKind } from './herds';
 import { Deer, deerParts } from './deer';
 import { hexagrams, moving } from '../changes/model';
-import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, POLE_L, TILE, TSTEP, boat, boatReflection, ground, moorings, groundCut, landingsOf, laidPole, makeBand, onJetty, poleMesh, type Landing, setBench, setOldRefl, setSpecimens, templeSurface, templesNear, type Band } from './world';
+import { ATLAS, BAND, TYPE, INK, JETTY, M, Mesh, NAMES, POLE_L, TILE, TSTEP, boat, boatReflection, ground, moorings, SHADOW, groundCut, landingsOf, laidPole, makeBand, onJetty, poleMesh, type Landing, setBench, setOldRefl, setSpecimens, templeSurface, templesNear, type Band } from './world';
 import { plan, type P2 } from './roam';
 import { ribbon } from './marks';
 import { RIVER_L } from './water';
-import { bench, RIVER_SCENES, SCENES, TREE_SCENES, treeBench, WAY_SCENES, type RiverScene, type Scene, type TreeScene, type WayScene } from './bench';
+import { BENCHES, bench, RIVER_SCENES, SCENES, TREE_SCENES, treeBench, WAY_SCENES, type RiverScene, type Scene, type TreeScene, type WayScene } from './bench';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -204,13 +204,20 @@ const head = part((m) => {
 });
 const freeArm = part((m) => m.tube([-0.15, 1.28, 0], [-0.25, 0.9, 0.02], 0.07, 0.14, FIG.robe, M.robe, 8));
 const shadow = part((m) => {
-  // (a stroke or two of grey, off to the side away from the light)
-  for (let k = 0; k < 14; k++) {
-    const a0 = (k / 14) * Math.PI * 2, a1 = ((k + 1) / 14) * Math.PI * 2, cx = -0.5, rx = 0.6, rz = 0.24;
-    m.v.push(cx, 0.03, 0.05, 0, 1, 0, 0, 0, 0.3, M.shade);
-    m.v.push(cx + Math.cos(a1) * rx, 0.03, 0.05 + Math.sin(a1) * rz, 0, 1, 0, Math.cos(a1), Math.sin(a1), 0.3, M.shade);
-    m.v.push(cx + Math.cos(a0) * rx, 0.03, 0.05 + Math.sin(a0) * rz, 0, 1, 0, Math.cos(a0), Math.sin(a0), 0.3, M.shade);
-  }
+  // (their shade, cast away from the sun as they stand, about as long as they're tall; deeper at their feet. In the
+  // world's frame, not theirs: it doesn't turn as they do)
+  const [sx, sz] = SHADOW, L = Math.hypot(sx, sz), ux = sx / L, uz = sz / L;
+  const patch = (cx: number, cz: number, rx: number, rz: number, deep: number) => {
+    for (let k = 0; k < 14; k++) {
+      const a0 = (k / 14) * Math.PI * 2, a1 = ((k + 1) / 14) * Math.PI * 2, P = (a: number): [number, number] => [cx + ux * Math.cos(a) * rx - uz * Math.sin(a) * rz, cz + uz * Math.cos(a) * rx + ux * Math.sin(a) * rz];
+      const p0 = P(a0), p1 = P(a1);
+      m.v.push(cx, 0.03, cz, 0, 1, 0, 0, 0, deep, M.shade);
+      m.v.push(p1[0], 0.03, p1[1], 0, 1, 0, Math.cos(a1), Math.sin(a1), deep, M.shade);
+      m.v.push(p0[0], 0.03, p0[1], 0, 1, 0, Math.cos(a0), Math.sin(a0), deep, M.shade);
+    }
+  };
+  patch(sx * 0.75, sz * 0.75, L * 0.85 + 0.25, 0.26, 0.24);
+  patch(sx * 0.08, sz * 0.08, 0.36, 0.28, 0.32);
 });
 const shoe = (sx: number) => part((m) => m.tube([sx * 0.09, 0.03, -0.05], [sx * 0.09, 0.03, 0.12], 0.045, 0.04, INK.dark, M.dark, 6));
 const shoes = [shoe(-1), shoe(1)];
@@ -582,6 +589,7 @@ attach({
   },
   ink: () => ink,
   setInk: (on) => setInk(on),
+  benches: () => BENCHES,
 });
 document.getElementById('book')?.addEventListener('click', () => present({ surface: 'side', encounter: { kind: 'atlas', tab: 'nearby' } }));
 
@@ -1215,7 +1223,7 @@ function frame(now: number) {
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks'), oldRefl },
-    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, { d: shadow, model: ground_ }, { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, ...(poling || seated ? [] : [{ d: staff, model: staffAt }])]), ...liveDeer(review ? 1 / 30 : dt, time, pos), ...boatDraw(dt, review ? 0 : time)],
+    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, ...(intro >= 0 || afloat || hop ? [] : [{ d: shadow, model: Tm(pos[0], pos[1] - bob, pos[2]) }]), { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, ...(poling || seated ? [] : [{ d: staff, model: staffAt }])]), ...liveDeer(review ? 1 / 30 : dt, time, pos), ...boatDraw(dt, review ? 0 : time)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the

@@ -18,7 +18,7 @@ import { identify, moving, type Line } from '../changes/model';
 import { hash, seeded } from '../kit/rng';
 
 export type Surface = 'page' | 'drawer' | 'side';
-export type Tab = 'nearby' | 'journal' | 'settings';
+export type Tab = 'nearby' | 'journal' | 'settings' | 'benches';
 export type Encounter =
   | { kind: 'station'; seed: number; station: number; lines: Line[] }
   | { kind: 'casting'; id: string; date: string; question: string; lines: Line[]; context: CastContext }
@@ -33,6 +33,8 @@ export interface World {
   here(): string;
   nearby(): Place[];
   ink(): boolean; setInk(on: boolean): void;
+  /** the benches registered (bench.ts) */
+  benches(): Array<{ id: string; title: string; note: string; scenes: string[] }>;
 }
 let world: World | null = null;
 export function attach(w: World) { world = w; }
@@ -119,7 +121,7 @@ function casting(): string {
 
 /** the side sheet: this place, the journal, the settings */
 function atlas(tab: Tab): string {
-  const tabs = (['nearby', 'journal', 'settings'] as Tab[]).map((t) => `<button class="tab${t === tab ? ' on' : ''}" data-tab="${t}">${{ nearby: 'Nearby', journal: 'Journal', settings: 'Settings' }[t]}</button>`).join('');
+  const tabs = (['nearby', 'journal', 'settings'] as Tab[]).map((t) => `<button class="tab${t === tab ? ' on' : ''}" data-tab="${t}">${({ nearby: 'Nearby', journal: 'Journal', settings: 'Settings' } as Record<string, string>)[t]}</button>`).join('');
   let body = '';
   if (tab === 'nearby') {
     places = world?.nearby() ?? [];
@@ -134,7 +136,15 @@ function atlas(tab: Tab): string {
   } else {
     body = `<label class="row set"><span><b>Composition view</b><small>The painting as its masses, in a few inks (墨)</small></span><input type="checkbox" data-set="ink"${world?.ink() ? ' checked' : ''}></label>
       <label class="row set"><span><b>Steps climbed</b><small>Counted at the top of the screen</small></span><input type="checkbox" data-set="steps"${document.body.classList.contains('nosteps') ? '' : ' checked'}></label>
+      <button class="row" data-tab="benches"><span><b>Benches</b><small>Fixed places to study one thing against itself</small></span><span class="d">›</span></button>
       <a class="row" href="${location.pathname.replace(/\/?$/, '/readme')}"><span><b>About Taohua</b><small>How it's made, and what it's after</small></span><span class="d">›</span></a>`;
+  }
+  if (tab === 'benches') {
+    // (a sub-page of the settings: each bench, and its scenes, each a link to it, still)
+    const at = (id: string, sc: string) => `${location.pathname}?bench=${id}&scene=${sc}&review`;
+    body = (world?.benches() ?? []).map((b) => `<div class="row bench"><span><b>${esc(b.title)}</b><small>${esc(b.note)}</small><span class="scenes">${b.scenes.map((sc) => `<a href="${at(b.id, sc)}">${esc(sc)}</a>`).join('')}</span></span></div>`).join('')
+      + '<p class="note">Each opens still (review); add &amp;marks to the address to see the water\'s marks by what made them.</p>';
+    return `<button class="back" data-tab="settings">‹ Settings</button><h2>Benches</h2><div class="rows">${body}</div>`;
   }
   return `<h2>${tab === 'nearby' ? esc(world?.here() ?? 'This place') : tab === 'journal' ? 'The journal' : 'Settings'}</h2><div class="tabs" role="tablist">${tabs}</div><div class="rows">${body}</div>`;
 }

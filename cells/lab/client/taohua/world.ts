@@ -577,7 +577,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
   }
 
   // temples
-  for (const t of temples) if (inT(t.c[0], t.c[2])) temple(mesh, t, hash(seed, Math.round(t.c[2] * 10), 0x7e));
+  for (const t of temples) if (inT(t.c[0], t.c[2])) temple(mesh, t, hash(seed, Math.round(t.c[2] * 10), 0x7e), ways);
 
   // rocks along the ways' edges, black, in little clusters, and the ground about them
   const gy = (x: number, z: number) => ground(ways, x, z);
@@ -610,7 +610,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     if (ways.nearest(x, z).d < WIDTH / 2 + 0.35 || onTemple(x, z, 0.3) || inStation(sts, x, z, 0.4)) continue;
     const rr = seeded(hash(Math.round(x * 10), Math.round(z * 10), seed));
     rock(mesh, [x, gy(x, z), z], sz, rr, gy);
-    shade(mesh, ways, x - 0.9 * sz, z + 0.15 * sz, sz * 2.2, sz * 0.8, 0.3);
+    castShade(mesh, ways, x, z, sz * 0.9, sz * 1.5);
     for (let k = 0, n = 1 + Math.floor(rr() * 3); k < n; k++) { const a = rr() * 6.3, d = sz * ramp(rr, 1, 1.5); tuft(mesh, ways, x + Math.cos(a) * d, z + Math.sin(a) * d, rr, 3 + Math.floor(rr() * 4)); }
   }
   // the fringe of each way: from its edge out, loose pebbles, tufts and drifted petals, thinning
@@ -683,7 +683,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
       case 'Mountain': // (standing stones along its upper edge)
         for (let k = 0, n = 3 + Math.floor(sr() * 2); k < n; k++) {
           const [x, z] = R(ramp(sr, -0.9, 0.9), ramp(sr, 1.05, 1.3));
-          if (inT(x, z) && ways.nearest(x, z).d > WIDTH / 2 + 0.6) { const sz = ramp(sr, 0.45, 0.9); rock(mesh, [x, gy(x, z), z], sz, sr, gy); shade(mesh, ways, x - 0.9 * sz, z + 0.1, sz * 2.2, sz * 0.7, 0.28); }
+          if (inT(x, z) && ways.nearest(x, z).d > WIDTH / 2 + 0.6) { const sz = ramp(sr, 0.45, 0.9); rock(mesh, [x, gy(x, z), z], sz, sr, gy); castShade(mesh, ways, x, z, sz * 0.9, sz * 1.5); }
         }
         break;
       case 'Wind': // (a grove close behind it)
@@ -719,7 +719,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
         break;
       case 'Mountain': { // (one stone, low, at its edge)
         const [x, z] = R(-away * 0.95, -0.7);
-        if (inT(x, z)) { const sz = ramp(sr, 0.35, 0.5); rock(mesh, [x, gy(x, z), z], sz, sr, gy); shade(mesh, ways, x - 0.9 * sz, z + 0.1, sz * 2.2, sz * 0.7, 0.28); }
+        if (inT(x, z)) { const sz = ramp(sr, 0.35, 0.5); rock(mesh, [x, gy(x, z), z], sz, sr, gy); castShade(mesh, ways, x, z, sz * 0.9, sz * 1.5); }
         break;
       }
       case 'Wind': // (grass, in tufts)
@@ -762,7 +762,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
       const a = Math.PI / 2 + ramp(tr, -1.1, 1.1), d = ramp(tr, 0.45, 1.5), rx = x + Math.cos(a) * d, rz = z + Math.sin(a) * d, sz = ramp(tr, 0.4, 0.9) * (k ? 0.75 : 1);
       if (ways.nearest(rx, rz).d > WIDTH / 2 + 0.6 && !onTemple(rx, rz, 0.3) && !inStation(sts, rx, rz, 0.4)) {
         rock(mesh, [rx, gy(rx, rz), rz], sz, seeded(hash(seed, Math.round(rx * 10), Math.round(rz * 10))), gy);
-        shade(mesh, ways, rx - 0.9 * sz, rz + 0.1, sz * 2.2, sz * 0.7, 0.28);
+        castShade(mesh, ways, rx, rz, sz * 0.9, sz * 1.5);
         tuft(mesh, ways, rx + sz * 0.9, rz - sz * 0.3, tr, 4);
       }
     }
@@ -777,7 +777,7 @@ export function makeBand(ways: Ways, seed: number, i: number, j: number): Band {
     if (sp.rocks) for (let k = 0; k < 3; k++) {
       const a = Math.PI / 2 + (k - 1) * 0.7, d = 1 + 0.3 * k, rx = sp.x + Math.cos(a) * d, rz = sp.z + Math.sin(a) * d, sz = k === 1 ? 0.9 : 0.6;
       rock(mesh, [rx, gy(rx, rz), rz], sz, seeded(hash(sp.seed, k)), gy);
-      shade(mesh, ways, rx - 0.9 * sz, rz + 0.1, sz * 2.2, sz * 0.7, 0.28);
+      castShade(mesh, ways, rx, rz, sz * 0.9, sz * 1.5);
     }
     tree(mesh, puffs, petals, [sp.x, ground(ways, sp.x, sp.z), sp.z], tr, ways, sp.iso);
   }
@@ -850,12 +850,37 @@ function stone(mesh: Mesh, ways: Ways, x: number, z: number, size: number, r: Ra
 }
 
 /**
- * Shade on the ground: a soft patch, under a rock or a tree, a little off toward the shadow side
- * (in the drawing: the ground's colour carries where in the patch it is, and how deep).
+ * The sun: the one light the whole print is lit by (render.ts takes it from here), up and to the right,
+ * a little from the eye's side. And where a thing a metre high casts its shade, across the ground:
+ * away from the sun, so far as the sun's low.
  */
-export function shade(mesh: Mesh, ways: Ways, x: number, z: number, rx: number, rz: number, deep: number) {
-  const N = 12, lift = 0.04 + deep * 0.08;
-  const G = (u: number, v: number): V3 => { const px = x + u * rx, pz = z + v * rz; return [px, ground(ways, px, pz) + lift, pz]; };
+export const SUN: V3 = norm([0.55, 0.75, -0.35]);
+export const SHADOW: [number, number] = [-SUN[0] / SUN[1], -SUN[2] / SUN[1]];
+/** the height shade falls on at (x, z): a way's tread or stone where it's on a way, else the ground */
+function shadeY(ways: Ways, x: number, z: number): number {
+  const n = ways.nearest(x, z);
+  if (n.d < WIDTH / 2 + 0.05) return Math.max(ground(ways, x, z), ways.surface(n.w, n.u, z));
+  return ground(ways, x, z);
+}
+/**
+ * Shade: a soft patch, its long axis (rx) along (ux, uz), lying on whatever it falls on (the ground, a
+ * way's steps, or as `yAt` has it); in the drawing a grey laid on as a dry brush does, thinning toward
+ * its edge (its colour carries where in the patch it is, and how deep). Patches that overlap make one
+ * shade, broken where none reaches: so a crown's, of a patch under each clump, is dappled.
+ */
+export function shadeAlong(mesh: Mesh, ways: Ways, x: number, z: number, ux: number, uz: number, rx: number, rz: number, deep: number, N = 12, yAt?: (x: number, z: number) => number) {
+  const lift = 0.04 + deep * 0.08, ul = Math.hypot(ux, uz) || 1, ax = ux / ul, az = uz / ul;
+  // (a patch clear of every way lies on the ground alone, near enough a plane: three asks of the ground,
+  // not one at each corner)
+  let on = yAt;
+  if (!on) {
+    const e = Math.max(rx, rz);
+    if (ways.nearest(x, z).d > WIDTH / 2 + 0.05 + e) {
+      const g0 = ground(ways, x, z), gx = (ground(ways, x + e, z) - g0) / e, gz = (ground(ways, x, z + e) - g0) / e;
+      on = (px, pz) => g0 + gx * (px - x) + gz * (pz - z);
+    } else on = (px, pz) => shadeY(ways, px, pz);
+  }
+  const G = (u: number, v: number): V3 => { const px = x + (ax * u * rx - az * v * rz), pz = z + (az * u * rx + ax * v * rz); return [px, on(px, pz) + lift, pz]; };
   const c = G(0, 0);
   for (let k = 0; k < N; k++) {
     const a0 = (k / N) * Math.PI * 2, a1 = ((k + 1) / N) * Math.PI * 2;
@@ -864,6 +889,17 @@ export function shade(mesh: Mesh, ways: Ways, x: number, z: number, rx: number, 
     mesh.v.push(p1[0], p1[1], p1[2], 0, 1, 0, Math.cos(a1), Math.sin(a1), deep, M.shade);
     mesh.v.push(p0[0], p0[1], p0[2], 0, 1, 0, Math.cos(a0), Math.sin(a0), deep, M.shade);
   }
+}
+export function shade(mesh: Mesh, ways: Ways, x: number, z: number, rx: number, rz: number, deep: number) { shadeAlong(mesh, ways, x, z, 1, 0, rx, rz, deep); }
+/**
+ * A thing standing on the ground, so high, so wide: its shade cast away from the sun, as long as it's
+ * high (a long patch along the shadow's way), and where it stands a deeper patch close about its foot,
+ * so it sits on the ground and doesn't float.
+ */
+export function castShade(mesh: Mesh, ways: Ways, x: number, z: number, h: number, w: number, deep = 0.26) {
+  const [sx, sz] = SHADOW, L = Math.hypot(sx, sz) * h;
+  shadeAlong(mesh, ways, x + sx * h * 0.5, z + sz * h * 0.5, sx, sz, L * 0.5 + w * 0.5, w * 0.62, deep * 0.85);
+  shadeAlong(mesh, ways, x + sx * w * 0.12, z + sz * w * 0.12, sx, sz, w * 0.72, w * 0.56, deep + 0.06, 10);
 }
 
 const WATER_KIND = { flow: 0, pool: 1, pond: 1, spring: 1, plunge: 1, marsh: 2, falls: 3, river: 1 } as const;
@@ -1662,8 +1698,8 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
   for (const [p] of tips) { Rh = Math.max(Rh, Math.hypot(p[0] - cx, p[2] - cz)); Rv = Math.max(Rv, Math.abs(p[1] - cy)); }
   Rh += 0.5; Rv += 0.6;
   // (its shade on the ground: broad and faint under the crown, off to the shadow side; deeper about the trunk's foot)
-  shade(mesh, ways, cx - 0.5 * (cy - base[1]) * 0.55, cz + 0.5 * (cy - base[1]) * 0.35, 3.0, 1.6, 0.1);
-  shade(mesh, ways, base[0] - 0.5, base[2] + 0.1, 1.1, 0.4, 0.22);
+  // (the trunk's shade, long, from its foot away from the sun; deeper close about its foot)
+  castShade(mesh, ways, base[0], base[2], Math.max(0.5, cy - base[1] - Rv * 0.6), R0 * 2.4, 0.24);
   const L: V3 = norm([0.55, 0.75, -0.35]);
   // (each tree its own pink, a little deeper or paler than the next)
   const t0 = ramp(r, -0.24, 0.12);
@@ -1734,6 +1770,33 @@ function tree(mesh: Mesh, puffs: number[], petals: number[], base: V3, r: Rand, 
     const keep: number[] = [];
     for (let i = 0; i < n; i++) { const k = find(i); if (count.get(k)! > 3 || area.get(k)! >= most * 0.25) for (let q = 0; q < 6; q++) keep.push(puffs[P(i) + q]); }
     puffs.length = puffsFrom; puffs.push(...keep);
+  }
+  // (the crown's shade: under each clump of blossom, where the sun puts it on the ground, a patch, a
+  // little smaller than the clump; where the crown's thin, the ground shows through: dappled. From a
+  // stream of its own, so the tree is as it was.)
+  {
+    const sr = seeded(hash(tid, 0x5ad)), [sx, sz] = SHADOW;
+    // (the ground under a crown, as a plane through the foot, asked once for the tree; a patch on a way
+    // lies on its treads)
+    const b0 = base[1], e = 1.5, bx = (ground(ways, base[0] + e, base[2]) - b0) / e, bz = (ground(ways, base[0], base[2] + e) - b0) / e;
+    const plane = (qx: number, qz: number) => b0 + bx * (qx - base[0]) + bz * (qz - base[2]);
+    const dap: number[] = [];
+    let reach = 0;
+    for (let i = puffsFrom; i < puffs.length; i += 6) {
+      if (sr() < 0.55) continue;
+      const px = puffs[i], py = puffs[i + 1], pz = puffs[i + 2], rad = puffs[i + 3];
+      const h = Math.max(0, py - b0), gx = px + sx * h, gz = pz + sz * h;
+      const rx = rad * ramp(sr, 0.9, 1.2) * 1.2, rz = rad * ramp(sr, 0.65, 0.9), deep = ramp(sr, 0.075, 0.115);
+      dap.push(gx, gz, rx, rz, deep);
+      reach = Math.max(reach, Math.hypot(gx - base[0], gz - base[2]) + rx);
+    }
+    // (and whether any of it can reach a way at all: asked once, unless it can)
+    const clear = ways.nearest(base[0], base[2]).d > WIDTH / 2 + 0.05 + reach;
+    for (let i = 0; i < dap.length; i += 5) {
+      const [gx, gz, rx, rz, deep] = dap.slice(i, i + 5);
+      const onWay = !clear && ways.nearest(gx, gz).d < WIDTH / 2 + 0.05 + rx;
+      shadeAlong(mesh, ways, gx, gz, sx, sz, rx, rz, deep, 6, onWay ? (qx, qz) => shadeY(ways, qx, qz) : plane);
+    }
   }
   // fallen blossom under it, where it's not the path: in drifts, stamped flowers and specks of red
   for (let k = 0; k < 4; k++) {
@@ -1821,7 +1884,7 @@ function castMark(mesh: Mesh, ways: Ways, st: Station) {
       mesh.box([x + ramp(r, -0.03, 0.03), h + th, z + ramp(r, -0.03, 0.03)], [sx, th, sx * ramp(r, 0.6, 0.85)], [Math.cos(a), Math.sin(a)], INK.rock, INK.rock, M.rock);
       h += th * 2;
     }
-    shade(mesh, ways, x - 0.5, z + 0.1, 0.9, 0.35, 0.28);
+    castShade(mesh, ways, x, z, 0.9, 0.7);
     return;
   }
   // (a wayside shrine, facing down the hill)
@@ -1834,7 +1897,7 @@ function castMark(mesh: Mesh, ways: Ways, st: Station) {
   mesh.box(P(0, 1.06, 0.22), [0.16, 0.18, 0.03], along, INK.dark, INK.dark, M.dark);
   for (const sx of [-1, 1]) mesh.tube(P(sx * 0.3, 0.86, 0.26), P(sx * 0.3, 1.36, 0.26), 0.035, 0.03, INK.red, M.red, 5);
   roof(mesh, P, fx, fz, { ex: 0.6, ez: 0.5, rz: 0, y0: 1.38, rise: 0.4, gx: 0.22, g: 0.5, sweep: 0.22 });
-  shade(mesh, ways, x - 0.6, z + 0.1, 1.0, 0.35, 0.28);
+  castShade(mesh, ways, x, z, 1.7, 0.8);
 }
 
 /**
@@ -1952,7 +2015,7 @@ function finial(mesh: Mesh, at: V3, h: number) {
  * of brackets under the eaves, a red door, lattice windows, the plaque with the temple's name.
  * `face`: the way its front looks.
  */
-function temple(mesh: Mesh, t: TempleAt, seed: number) {
+function temple(mesh: Mesh, t: TempleAt, seed: number, ways0: Ways) {
   const r = seeded(seed);
   const { c, face, B, name, kind } = t;
   const gate = kind === 'gate';
@@ -1960,6 +2023,13 @@ function temple(mesh: Mesh, t: TempleAt, seed: number) {
   const fx = -face[1], fz = face[0];
   const P0 = (x: number, y: number, z: number): V3 => [c[0] + fx * x + face[0] * z, c[1] + y, c[2] + fz * x + face[1] * z];
   const P = (x: number, y: number, z: number): V3 => P0(x, y + B, z);
+  // (the shade of its roof, across its terrace away from the sun, where the eaves stand over it; on the
+  // terrace, or the ground beyond its edge)
+  if (!gate) {
+    const tops = (x: number, z: number) => { const ax = (x - c[0]) * fx + (z - c[2]) * fz, az = (x - c[0]) * face[0] + (z - c[2]) * face[1]; return Math.abs(ax) < t.tw + 0.05 && Math.abs(az) < t.T + 0.05 ? c[1] + B : null; };
+    const [sx, sz] = SHADOW, k = 1.6;
+    shadeAlong(mesh, ways0, c[0] + sx * k, c[2] + sz * k, fx, fz, t.tw * 0.92, t.T * 0.82, 0.2, 16, (x, z) => tops(x, z) ?? ground(ways0, x, z));
+  }
   const along: [number, number] = [fx, fz];
   const stone = INK.stepTop, blue = hex(0x3c5f8a), base = hex(0xd9d0bf);
   const tw = t.tw, T = t.T;
