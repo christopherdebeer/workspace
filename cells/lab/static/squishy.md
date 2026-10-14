@@ -144,11 +144,11 @@ and for playing itself), and the way the opening view goes over it.
 
 ## The tops
 
-- **Steamers**: bamboo baskets stacked down to the counter, each with its rim. Good grip.
-- **A plate** on a tea tin: glazed porcelain, a little slippery. Land soft, or slide off.
+- **Steamers**: bamboo baskets stacked, each with its rim. Good grip.
+- **A plate**: glazed porcelain, a little slippery. Land soft, or slide off.
 - **A chopping board** laid across two jars: wide, and grippy.
-- **A mango pudding** on a saucer: a jelly (below). It dents where you land and springs back,
-  and a hard landing comes back as a second little hop you didn't ask for.
+- **A mango pudding** on a saucer: a jelly (below). It dents where you land and gives most of a
+  landing back.
 - **A lazy Susan**: lacquered, turning. It carries you round; flick from where it's taken you.
 - **A tea tin**: tall, with a small top.
 - **Chopsticks**, now and then, laid as a bridge between two tops near the same height.
@@ -157,14 +157,39 @@ and for playing itself), and the way the opening view goes over it.
 
 From the stovetop on, a level is a run along a counter (the hob, on the stove) against a tiled
 wall with windows in it, made of pieces, each laid where the last left off: one thing at the
-height it stands (the tops below); a towel and a shelf (a bread bin out from the wall, the shelf
-above it out of reach of any flick, a towel hung over its edge to land against and climb); two
-jellies in a row, a mango pudding and a konjac, to bounce across; a baking tray buttered in one
-corner; a folded cloth on the counter, somewhere low to land. The counter is ground: miss, and
-you're on it, and go again (everything but the climbs is low enough to reach from it); off its
-front is the fall. What a level brings in (the honey jar on the stove's second level, the lids
-on its third, the towel on its fourth) comes early in it, for sure; no level has more than two
-climbs or two jars.
+height it stands, on what it stands on (below); a tiered cake stand, its upper plate to land on
+and its lower a ledge under it; a cooling rack with nothing on it, to land across its wires; a
+towel and a shelf (a bread bin out from the wall, the shelf above it out of reach of any flick, a
+towel hung over its edge to land against and climb); two jellies in a row, a mango pudding and a
+konjac, each on something, to bounce across; a baking tray on a rack, buttered in one corner; a
+folded cloth on cookbooks or a stool, where it starts. As in the sets, there's no safe ground: the
+counter's well below every top, and to touch it is to fall. What a level brings in (the honey jar
+on the stove's second level, the lids on its third, the towel on its fourth) comes early in it,
+for sure; no level has more than two climbs or two jars.
+
+## What things stand on
+
+A kitchen's things aren't stood on towers of tins. Each top stands on something with a shape of its
+own, from a small vocabulary (supports.ts), each built from what it stands on up to its seat:
+
+- **a stool**: three legs splayed out under a round seat, rungs between them a third of the way up;
+- **a little bench**: a square seat on four legs, rails along two sides;
+- **a cake stand**: a round foot, a neck flaring out of it, a thin stem, a broad plate;
+- **a trestle**: a board laid across two jars, or tea tins, or mugs upturned;
+- **a crate**, turned over: slats round its sides with dark between, lid boards across the top;
+- **cookbooks**, stacked a little anyhow, each its own size, turned and set off a little;
+- **a bowl upturned**: its foot ring the seat, its shoulders falling away round it to its rim;
+- **a cooling rack** on two tins: wires close together, a frame round them, little feet;
+- and tea tins and jars under a board, as before.
+
+What's met is kept simple and what's drawn is what it is; but where it would be played with, what's
+met is what's drawn: a stool's legs and rungs, a cake stand's thin neck, a rack's wires, an upturned
+bowl's shoulders (a sheet, so you slide off them). A support too short of itself for where it's
+wanted is stood on another: a bowl on a crate, a rack on cookbooks. Any top can go on any support that
+can hold it (a steamer on a stool or a rack, a pudding on a cake stand, the butter dish on a crate, a
+pan on a board across jars), and now and then it's set off to one side of a broader seat, the rest of
+the seat a lower ledge. The room has its say: on the stove, crates, racks, boards across jars, tins,
+little stools; past it, anything. `?bench=supports` is one of each, in a run over a table.
 
 ## The stovetop
 
@@ -341,6 +366,6 @@ The lids move: they're drawn where the steam has them, with a puff of steam out 
 each jump and a rattle you hear when you're near. The honey jar is glass, drawn after
 everything else and seen through, the honey in it lit from within.
 
-`?level=3` starts a level (3 and 4 the counter, 5 and 6 the sink, 7 to 10 the stove); `?bench=jelly` the jelly bench; `?bench=coats` a row of each thing that comes off on it, to land
+`?level=3` starts a level (3 and 4 the counter, 5 and 6 the sink, 7 to 10 the stove); `?bench=jelly` the jelly bench; `?bench=supports` what things stand on; `?bench=coats` a row of each thing that comes off on it, to land
 in; `?skin=dough` the dough; `?auto` lets it play
-itself.
+itself; `?view=ex,ey,ez,tx,ty,tz` holds the camera at an eye looking at a point (for a look at a place).
