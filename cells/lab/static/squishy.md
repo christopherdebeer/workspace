@@ -67,9 +67,9 @@ it (a mantle). The arc shows that too, up the wall and over to where it'll land,
 yours to judge: too soft and it slides back down to where it was; too hard and it goes over and
 off the far side.
 
-Fall and it's a splat, and back to the last top you stood on: on the counter, falling is
-landing on the counter itself, far below the tops; at the table, the table is ground (land on it
-and you're fine, and flick on from there) and falling is going off its edge. The clock runs
+Fall and it's a splat, and back to the last spot you stood on. There's no safe ground anywhere:
+every place is made of stations, things standing at their own sizes with a spot or two up on each,
+and the table's or the counter's top beneath them is the fall, as the sink's water is. The clock runs
 until you're home, the count of falls beside it, and your best time for each level is kept. Each
 level opens with its place's name.
 
@@ -79,46 +79,47 @@ Sink (each below). Level 7 moves to the stovetop, a new kitchen with its own thi
 
 ## The Preparation Table
 
-A wooden table, laid out by hand and varied a little each time: you start on a folded gingham
-cloth. Beside it a butter dish, its butter melted across the table toward a wooden spoon, which
-lies with its bowl on the table and its handle up on a painted tin bench: land in the spoon's
-bowl (it catches you), or in the butter on the way (it slides). Then up onto the bench, its far
-end under a tea towel thrown over it and hanging down both sides: linen grips, and a throw at
-the towel's hanging side clings a moment or two before it lets go. Down to a floury paddle
-board, up a tea tin, and home. The second time the gaps are wider, the bench is taller, and a
-plate is tipped up on a teacup on the way: a tilted top, glazed, a little slippery.
+A wooden table, laid out by hand and varied a little each time, its top the fall. You start on a
+folded cloth on a stack of cookbooks. A ramekin, and a wooden spoon laid from it up to a painted tin
+bench: land in the spoon's bowl (it catches you) and go up its handle. The bench, its far end under a
+tea towel thrown over it and hanging down both sides: linen grips, and a throw at the towel's hanging
+side clings a moment or two before it lets go. Then the butter dish up on its tin (its butter slips,
+and stays on you), the floury paddle board laid across two jars (flour gives a buttered dumpling its
+grip back), a tea tin, and home. The second time the gaps are wider, the bench is taller, and a plate
+is tipped up on a teacup, up on a cake tin, on the way: a tilted top, glazed, a little slippery.
 
-The spoon, the towel, the butter and the tipped plate are sheets: surfaces made of triangles,
-with a thickness under them, met exactly as they're drawn. The table, the bench, the board and
-the tins are the solid shapes everything else is made of.
+The spoon, the towel and the tipped plate are sheets: surfaces made of triangles, with a thickness
+under them, met exactly as they're drawn. The table, the bench, the board and the tins are the solid
+shapes everything else is made of.
 
 ## The Counter by the Window
 
-A butcher-block counter against a tiled wall, a window in it, and the counter is ground (off its
-front is the fall). From a folded cloth: a round loaf on a floury bread board, the loaf soft
-under its crust (a jelly, a dead one: it gives, and doesn't throw you) and crumby, the board
-around it floured, so where you land decides what you pick up; a baking tray with butter melted
-across one corner of it, and a lip all round to stop a slide; a cake stand, its plate sticky
-with hundreds and thousands; the bread bin, deep, out from the wall. Above it, out of reach of
-any flick (a flick goes off at the one angle, so from below a high shelf by a wall, the arc
-meets the wall first), a shelf, a tea towel hung over its front edge: flick at the towel, it
-holds you, and climb up it and over onto the shelf. Fall off the towel and you're back on the
-bread bin, to try again. Home is the golden steamer on the window sill. A knife block (wood: it
-holds you a moment, too) and a crock of wooden spoons stand about. The second time, a konjac
-jelly to bounce on comes before the cake stand, and the shelf is higher.
+A butcher-block counter against a tiled wall, a window in it, the counter the fall. From a folded
+cloth on a biscuit tin: a round loaf in a woven bread basket on two flour canisters, the loaf soft
+under its crust (a jelly, a dead one: it gives, and doesn't throw you) and crumby, the basket floured
+inside, so where you land decides what you pick up, and its rim catches a bounce; a baking tray on a
+cooling rack, butter melted across one corner of it, a lip all round to stop a slide; a tall cake stand,
+its plate sticky with hundreds and thousands; the bread bin, deep, out from the wall. Above it, out of
+reach of any flick (a flick goes off at the one angle, so from below a high shelf by a wall, the arc
+meets the wall first), a shelf, a tea towel hung over its front edge: flick at the towel, it holds
+you, and climb up it and over onto the shelf. Fall off the towel and you're back on the bread bin, to
+try again. Home is the golden steamer on the window sill. A knife block and a crock of wooden spoons
+stand about. The second time, a konjac jelly on a tin to bounce on comes before the cake stand, and the
+shelf is higher.
 
-Every hop is checked as it's laid, the towel's too: a flick from the bread bin that lands
-against the towel, low enough to hold and high enough that a climb from there gets up and over.
+Every hop is checked as it's laid, the towel's too: a flick from the bread bin that lands against the
+towel, low enough to hold and high enough that a climb from there gets up and over.
 
 ## The Sink
 
-The counter round a steel sink, the window over it. From a folded dishcloth: a sponge (soft, a
-dead jelly: it soaks up a landing), its green scourer up; a soap dish heaped round its rim with
-bubbles, which bounce you and hold nothing; the steel drainer board, grooved and sloping down to
-the sink, wet, so it slips; the dish rack, its wire rails to land across, two plates stood up at
-its far end. Then across the sink, the water under you (in it is the fall), at the dishcloth
-hung over the window sill's edge: it holds you, and you climb it onto the sill. Home along the
-sill. The second time the rack and the sill are higher and the dishcloth shorter.
+The counter round a steel sink, the window over it; the counter's the fall, and so's the water. From a
+folded dishcloth on an upturned pudding basin: a sponge up on a tin (soft, a dead jelly: it soaks up a
+landing), its green scourer up; a soap dish up on a tin, heaped round its rim with bubbles, which bounce
+you and hold nothing; a two-tier dish rack, its steel drip tray grooved and sloping down toward the
+sink, wet, so it slips, and above it the wire rack, its rails to land across, two plates stood up at its
+far end. Then across the sink, at the dishcloth hung over the window sill's edge: it holds you, and you
+climb it onto the sill. Home along the sill. The second time the rack and the sill are higher and the
+dishcloth shorter.
 
 ## The Breakfast Counter
 
