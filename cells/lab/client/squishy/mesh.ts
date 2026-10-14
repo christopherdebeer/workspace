@@ -4,6 +4,7 @@
  * chopping board, plates, a pudding, a lazy Susan, chopsticks; a unit sphere and a flat disc.
  */
 import { MAT, type Level, type Shape, type Tower, type V3 } from './level';
+import { bookFaces, slotOf } from './books';
 
 /** a vertex: position, normal, material, (u, v) */
 export const VSTRIDE = 9;
@@ -169,6 +170,22 @@ function dustOn(s: Shape, out: number[]) {
     }
   }
 }
+/**
+ * A cookbook lying flat (a box of book): its cover up, its spine out to one side or another, which
+ * book it is by where it is.
+ */
+function bookBox(out: number[], s: Shape) {
+  const cy = Math.cos(s.yaw), sy = Math.sin(s.yaw), X: V3 = [cy, 0, -sy], Z: V3 = [sy, 0, cy], [hx, hy, hz] = s.h;
+  const slot = slotOf(s.c[0], s.c[1], s.c[2]), k = slot % 4;
+  const neg = (a: V3): V3 => [-a[0], -a[1], -a[2]];
+  // (its spine on side k; its head the way that puts its cover up)
+  const [S, Hd, w, h] = k === 0 ? [X, Z, hx, hz] : k === 1 ? [neg(X), neg(Z), hx, hz] : k === 2 ? [Z, neg(X), hz, hx] : [neg(Z), X, hz, hx];
+  book(out, slot, s.c, S, Hd, hy, w, h);
+}
+/** A cookbook (books.ts): which one, its middle, its spine's way out and its head's, half its thickness, width and height. */
+export function book(out: number[], slot: number, c: V3, S: V3, Hd: V3, t: number, w: number, h: number) {
+  bookFaces((p, n, mat, uv) => push(out, p, n, mat, uv), MAT.book, slot, c, S, Hd, t, w, h);
+}
 /** Shapes as they draw themselves (the sets' free things: a bench, a pad, a board), into out. */
 export function drawShapes(shapes: Shape[], out: number[]) { for (const s of shapes) drawShape(s, out); }
 function drawShape(s: Shape, out: number[]) {
@@ -177,6 +194,7 @@ function drawShape(s: Shape, out: number[]) {
   dustOn(s, out);
   {
     if (s.mat === MAT.napkin) { serviette(out, s); return; }
+    if (s.mat === MAT.book && s.kind === 'box') { bookBox(out, s); return; }
     // (a counter's or a table's top, in cells: so the dark round what stands on it can be baked into it)
     if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat, (s.mat === MAT.counter || s.mat === MAT.hob) && s.h[0] * s.h[2] > 400 ? 3 : 0); return; }
     if (s.kind === 'cap') { capsule(out, s.c, s.b, s.r, s.mat, 12, 4); return; }

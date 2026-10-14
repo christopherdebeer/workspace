@@ -8,7 +8,9 @@
  * table with a gingham cloth and its chairs. At the table, the same run along the room's back wall.
  */
 import { MAT, type V3 } from './level';
-import { box, capsule, cylinder, quad } from './mesh';
+import { hash } from '../kit/rng';
+import { slotOf } from './books';
+import { book, box, capsule, cylinder, quad } from './mesh';
 
 /** A run of kitchen along a wall at zb (facing -z), its counter's front at zf, its top at yt, the floor at g, the counter from xa to xb. */
 export interface Run {
@@ -21,7 +23,7 @@ export interface Run {
 const CAB = 60, DOOR_GAP = 1.2;
 
 /** Where a run's things go: the range's and the fridge's ends, the counter's run on past the course, the wall cupboards' spans and the windows between them. */
-export interface RunLayout { ext: number; rx0: number; rx1: number; fx0: number; fx1: number; wy0: number; wy1: number; wf: number; windows: number[]; cupboards: Array<[number, number]> }
+export interface RunLayout { ext: number; rx0: number; rx1: number; fx0: number; fx1: number; wy0: number; wy1: number; wf: number; windows: number[]; cupboards: Array<[number, number]>; shelves: Array<[number, number]> }
 export function runLayout(o: Run): RunLayout {
   const { xa, xb, zb, yt } = o;
   const ext = 64, fx0 = xb + ext + 2, fx1 = fx0 + 74, rx0 = xa - 76, rx1 = xa - 2;
@@ -45,7 +47,11 @@ export function runLayout(o: Run): RunLayout {
     }
     for (const sg of segs) if (sg[1] - sg[0] >= 30) cupboards.push(sg);
   }
-  return { ext, rx0, rx1, fx0, fx1, wy0, wy1, wf, windows, cupboards };
+  // (and over the course, now and then, one open, cookbooks on its shelves instead: at least one, if there's a wide one)
+  const shelves: Array<[number, number]> = [];
+  const wide = cupboards.filter(([a, b]) => b - a >= 45 && b > xa && a < xb);
+  wide.forEach((c, i) => { if (hash(Math.round(c[0]), 0x5e1f) % 3 === 0 || (i === wide.length - 1 && !shelves.length)) shelves.push(c); });
+  return { ext, rx0, rx1, fx0, fx1, wy0, wy1, wf, windows, cupboards: cupboards.filter((c) => !shelves.includes(c)), shelves };
 }
 /** A box: its middle and half-sizes. */
 export type Block = { c: V3; h: V3; mat: number };
@@ -61,7 +67,47 @@ export function runSolids(o: Run): { blocks: Block[]; pots: Pot[] } {
   for (const [x, x1] of L.cupboards) blocks.push({ c: [(x + x1) / 2, (L.wy0 + L.wy1) / 2, (L.wf + zb) / 2], h: [(x1 - x) / 2 - 0.3, (L.wy1 - L.wy0) / 2, (zb - L.wf) / 2], mat: MAT.cabinet });
   blocks.push(overFridge(L, zb, g), fridgeBody(L.fx0, L.fx1, zf - 3, zb, g), { c: [xb + L.ext / 2, yt + 14, zb - 21], h: [24, 14, 17], mat: MAT.fridge }, ...hood(L.rx0, L.rx1, zb, yt));
   for (const wx of L.windows) { blocks.push(sillOf(wx, yt + 40, zb, 96)); pots.push(...potsOf(wx, yt + 40, zb, 96)); }
+  for (const [x, x1] of L.shelves) { const u = shelfUnit(x, x1, zb, L.wy0, L.wy1); blocks.push(...u.carcass, ...u.rows); }
   return { blocks, pots };
+}
+/** An open shelf unit, x0 to x1, against the wall at zb, from y0 to y1: its carcass, and its cookbooks (stood up, spines out; at a row's end now and then a few lying flat). */
+export type ShelfBook = { slot: number; c: V3; S: V3; Hd: V3; t: number; w: number; h: number };
+const SHELF_D = 24;
+export function shelfUnit(x0: number, x1: number, zb: number, y0: number, y1: number): { carcass: Block[]; books: ShelfBook[]; rows: Block[] } {
+  const T = 0.8, carcass: Block[] = [], books: ShelfBook[] = [], rows: Block[] = [];
+  const zc = zb - SHELF_D / 2, mid = (y0 + y1) / 2;
+  for (const y of [y0 + T, mid, y1 - T]) carcass.push({ c: [(x0 + x1) / 2, y, zc], h: [(x1 - x0) / 2, T, SHELF_D / 2], mat: MAT.cabinet });
+  for (const x of [x0 + T, x1 - T]) carcass.push({ c: [x, (y0 + y1) / 2, zc], h: [T, (y1 - y0) / 2, SHELF_D / 2], mat: MAT.cabinet });
+  const coin = (...k: number[]) => (hash(Math.round(x0 * 10), ...k) % 1000) / 1000;
+  const out: V3 = [0, 0, -1], up: V3 = [0, 1, 0], along: V3 = [1, 0, 0];
+  [[y0 + 2 * T, mid - T], [mid + T, y1 - 2 * T]].forEach(([b, top], row) => {
+    const room = top - b - 1.5;
+    let x = x0 + 2 * T + 0.4, i = 0, hiY = b, deep = 0;
+    const end = x1 - 2 * T - 0.4;
+    // (a few lying flat at the row's end, one in three)
+    const stack = coin(row, 99) < 0.34 ? 2 + Math.floor(coin(row, 98) * 2) : 0, stackW = stack ? 19 : 0;
+    while (true) {
+      const t = 1.1 + coin(row, i, 1) * 1.5, h = Math.min(room / 2, 8.5 + coin(row, i, 2) * 5), w = 6.5 + coin(row, i, 3) * 3;
+      if (x + 2 * t > end - stackW) break;
+      // (now and then a gap, a book out)
+      if (i > 0 && coin(row, i, 4) < 0.12) { x += 2 + coin(row, i, 5) * 5; i++; continue; }
+      const c: V3 = [x + t, b + h, zb - 1.5 - w];
+      books.push({ slot: slotOf(c[0], c[1], c[2]), c, S: out, Hd: up, t, w, h });
+      hiY = Math.max(hiY, b + 2 * h); deep = Math.max(deep, 2 * w);
+      x += 2 * t + 0.15; i++;
+    }
+    const xEnd = x;
+    let sy = b;
+    for (let k = 0; k < stack; k++) {
+      const t = 1.2 + coin(row, k, 7) * 0.9, w = 7 + coin(row, k, 8) * 2, h = 8 + coin(row, k, 9) * 1.5;
+      const c: V3 = [end - h - 0.3 - coin(row, k, 10), sy + t, zb - 1.5 - w];
+      books.push({ slot: slotOf(c[0], c[1], c[2]), c, S: out, Hd: along, t, w, h });
+      sy += 2 * t; deep = Math.max(deep, 2 * w);
+    }
+    hiY = Math.max(hiY, sy);
+    if (books.length) rows.push({ c: [(x0 + 2 * T + Math.max(xEnd, end)) / 2, (b + hiY) / 2, zb - 1.5 - deep / 2], h: [(Math.max(xEnd, end) - x0 - 2 * T) / 2, (hiY - b) / 2, deep / 2], mat: MAT.book });
+  });
+  return { carcass, books, rows };
 }
 const overFridge = (L: RunLayout, zb: number, g: number): Block => ({ c: [(L.fx0 + L.fx1) / 2, (g + 192 + L.wy1) / 2, (L.wf + zb) / 2], h: [(L.fx1 - L.fx0) / 2, (L.wy1 - g - 192) / 2, (zb - L.wf) / 2], mat: MAT.cabinet });
 const fridgeBody = (x0: number, x1: number, zf: number, zb: number, g: number): Block => ({ c: [(x0 + x1) / 2, g + 94, (zf + 2 + zb) / 2], h: [(x1 - x0) / 2, 94, (zb - zf - 2) / 2], mat: MAT.fridge });
@@ -97,6 +143,13 @@ export function kitchenRun(out: number[], o: Run) {
   for (const [x, x1] of L.cupboards) {
     box(out, [(x + x1) / 2, (wy0 + wy1) / 2, (wf + zb) / 2], [(x1 - x) / 2 - 0.3, (wy1 - wy0) / 2, (zb - wf) / 2], 0, MAT.cabinet);
     panel(out, (x + x1) / 2, (wy0 + wy1) / 2, wf, x1 - x - DOOR_GAP * 2, wy1 - wy0 - 2, false, true);
+  }
+  // (the open ones: a back, the carcass, the cookbooks)
+  for (const [x, x1] of L.shelves) {
+    const u = shelfUnit(x, x1, zb, wy0, wy1);
+    box(out, [(x + x1) / 2, (wy0 + wy1) / 2, zb - 0.4], [(x1 - x) / 2, (wy1 - wy0) / 2, 0.4], 0, MAT.cabinet);
+    for (const b of u.carcass) box(out, b.c, b.h, 0, b.mat);
+    for (const b of u.books) book(out, b.slot, b.c, b.S, b.Hd, b.t, b.w, b.h);
   }
   // (over the fridge, a short one)
   const of = overFridge(L, zb, g);

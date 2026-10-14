@@ -21,6 +21,7 @@ import { kitchenRun, tableSet } from './room';
 import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, carried, chapterOf, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
+import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
 import { BAKE_RANGE, albedos, bakeDirs } from './bake';
 import { bounceOf, jelMesh, jelMeshSize, FEELS } from './jelly';
@@ -286,6 +287,8 @@ uniform vec3 uEye, uTint;
 uniform float uTime, uAlpha;
 /** the dumpling, seen through what's before it: whether to (z > 0), and where it is */
 uniform vec3 uHole, uHoleAt;
+/** the cookbooks' atlas (books.ts) */
+uniform sampler2D uBooks;
 ${COMMON}
 ${SHADOW_GLSL}
 ${COAT_GLSL}
@@ -637,6 +640,23 @@ void main() {
     float cut = smoothstep(.985, 1., noise(vec3(uv.x * 9., uv.y * .4, 7.))) * fine1;
     base = mix(vec3(.72, .55, .36), vec3(.88, .74, .54), g) * (1. - .25 * cut);
     relief = g * .025 - cut * .018; rough = .64;
+  } else if (id == ${MAT.book} && uv.y >= 100.) {
+    // a cookbook from the catalogue (books.ts): which, and which face, on v; its cloth (its cell's corner), its cover
+    // and its spine lettered on the atlas; at its other sides, the pages' cream edges between its boards
+    float tv = uv.y - 100., cd = floor(tv / 4.), lv = tv - cd * 4. - 1., slot = floor(cd / 4.), fc = cd - slot * 4.;
+    vec2 cell = vec2(mod(slot, ${BOOK_COLS}.), floor(slot / ${BOOK_COLS}.));
+    vec3 cloth = texelFetch(uBooks, ivec2(cell * ${BOOK_CELL}.) + ivec2(3), 0).rgb;
+    base = cloth * (.95 + .08 * noise(vWorld * 3.)); rough = .75;
+    if (fc < 1.5) {
+      vec2 q = fc < .5 ? vec2(uv.x, lv * .75) : vec2(uv.x, .75 + lv * .25);
+      bool inside = uv.x >= 0. && uv.x <= 1. && lv >= 0. && lv <= 1.;
+      if (inside) base = texture(uBooks, (cell + q) / vec2(${BOOK_COLS}., ${BOOK_ROWS}.)).rgb * (.95 + .08 * noise(vWorld * 3.));
+    } else if (fc < 2.5) {
+      float T = uv.x / max(lv, .02);
+      bool boards = uv.x < .38 || T - uv.x < .38;
+      base = boards ? cloth : vec3(.93, .89, .8) * (.94 + .06 * sin(uv.x * 60.));
+      rough = boards ? .75 : .9;
+    }
   } else if (id == ${MAT.book}) {
     // cookbooks, stacked: each its own cloth colour (by which book of the stack it is), a title band on the
     // cover; at the sides, the pages' cream edges between the boards, finely lined
@@ -2447,6 +2467,18 @@ function resize() {
 }
 addEventListener('resize', resize);
 const SHADOW = preview ? 1024 : 2048;
+// the cookbooks, every title lettered (books.ts): on texture 6, for good
+{
+  const t = gl.createTexture()!;
+  gl.activeTexture(gl.TEXTURE6);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, paintAtlas());
+  gl.generateMipmap(gl.TEXTURE_2D);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+  const an = gl.getExtension('EXT_texture_filter_anisotropic');
+  if (an) gl.texParameterf(gl.TEXTURE_2D, an.TEXTURE_MAX_ANISOTROPY_EXT, 8);
+  gl.activeTexture(gl.TEXTURE0);
+}
 const shadowTex = gl.createTexture()!;
 gl.bindTexture(gl.TEXTURE_2D, shadowTex);
 gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, SHADOW, SHADOW, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
@@ -2832,6 +2864,7 @@ function frame(now: number) {
   gl.uniform1f(u(prog, 'uShadowSoft'), shadowSoft);
   gl.uniform1f(u(prog, 'uBakeView'), params.has('bakeview') ? 1 + Number(params.get('bakeview') === 'colour') : 0);
   gl.uniform1i(u(prog, 'uShadowMap'), 0);
+  gl.uniform1i(u(prog, 'uBooks'), 6);
   gl.uniform1f(u(prog, 'uAlpha'), 1);
   gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
   // (the screen over what stands before the dumpling: on in play, once the way over's done)
