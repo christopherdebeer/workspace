@@ -298,6 +298,10 @@ void main() {
   vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1.;
   // (the glaze over it, if any: how rough, and how bright the sun's caught in it)
   float coatRough = .08, coatSpec = .04;
+  // (cloth: no glint, a soft sheen at a glance instead; and how small a centimetre is on the glass here, so fine
+  // pattern fades out before it can shimmer)
+  float fabric = 0., px = length(fwidth(vWorld));
+  float fine1 = 1. - smoothstep(.08, .3, px);
   float NoV0 = max(dot(n, V), 0.);
   if (id == ${MAT.counter}) {
     // Broad maple boards: restrained grain, narrow joints, no noisy zebra striping.
@@ -307,6 +311,10 @@ void main() {
     float joint = 1. - smoothstep(.018, .065, min(fract(vWorld.z / 9.), 1. - fract(vWorld.z / 9.)));
     base = mix(vec3(.57, .39, .22), vec3(.73, .56, .36), grain) * (.94 + .10 * hash3(vec3(strip, 1., 1.)));
     base *= 1. - joint * .16; relief = grain * .018 - joint * .035; rough = .54 + grain * .12;
+    // (oiled: a faint sheen over it, which the chopping boards, dry, haven't)
+    float fib = noise(vec3(vWorld.x * .6, vWorld.z * 9., strip + 5.)) * fine1;
+    base *= .97 + .06 * fib; relief += fib * .006;
+    coat = .18; coatRough = .22; coatSpec = .03;
   } else if (id == ${MAT.bamboo}) {
     float seam = 1. - smoothstep(.06, .32, abs(fract(uv.y / 7. + .5) - .5) * 7.);
     float fibre = noise(vec3(uv.x * .12, uv.y * 5., 1.));
@@ -347,32 +355,58 @@ void main() {
     float rays = smoothstep(.97, .99, cos(an * 12. + uTime * 0.)) * step(.35, r) * step(r, .8);
     base = mix(vec3(.5, .05, .04), vec3(.95, .72, .32), clamp(ring + rays * .7, 0., 1.));
     metal = (ring + rays) * .7; rough = .2; coat = 1.;
-  } else if (id == ${MAT.jelly}) {
-    // a mango pudding: deep orange, glowing through, brightest where it's thinnest (its edges, as seen),
-    // flecked with bits of mango; a caramel top, glossy
-    bool top = n.y > .8;
+  } else if (id == ${MAT.jelly} || id == ${MAT.pannacotta} || id == ${MAT.konjac}) {
+    // a pudding set in its mould: its layers, poured one on another and set, blended where they met, a little
+    // wavy; the colour heavier low down where it settled. Which recipe: in its material's fraction; how far up
+    // it this is: on its side, its v (2 + how far up); its top is the top layer
+    bool side = vUV.y > 1.5, top = !side;
+    float t = side ? vUV.y - 2. : 1., ang = side ? vUV.x * 6.2832 : 0.;
+    int rec = int(fract(vMat) * 100. + .5);
+    float wav = .025 * sin(ang * 3. + float(rec) * 1.7) + .015 * sin(ang * 7. + 2.);
     float rim = pow(1. - NoV0, 1.6);
-    float bits = smoothstep(.74, .8, noise(vWorld * 2.6 + 4.)) * .45;
-    base = top ? mix(vec3(.48, .2, .03), vec3(.7, .32, .06), rim * .6) : mix(mix(vec3(.9, .36, .04), vec3(1., .58, .14), rim), vec3(1., .66, .2), bits);
-    rough = top ? .16 : .12; coat = top ? .35 : .8;
-    emit = top ? .08 + .3 * rim : .3 + .7 * rim;
-  } else if (id == ${MAT.pannacotta}) {
-    // a panna cotta: cream, soft-lit through (most at its edges, as seen), under a berry coulis
-    bool top = n.y > .8;
-    float rim = pow(1. - NoV0, 1.8);
-    base = top ? vec3(.5, .04, .1) : mix(vec3(.95, .9, .79), vec3(1., .97, .9), rim);
-    rough = top ? .1 : .3; coat = top ? 1. : .5;
-    emit = top ? .02 : .2 + .45 * rim;
-  } else if (id == ${MAT.konjac}) {
-    // a konjac jelly: clear pink, seen partly through (more where it's seen face on, less at its edges, where
-    // the light's through more of it), brightest at its top, a few small bubbles held in it
-    float rim = pow(1. - NoV0, 1.4);
-    float bub = smoothstep(.83, .86, noise(vWorld * 1.8 + 9.));
-    base = mix(vec3(.9, .25, .36), vec3(1., .55, .6), clamp(n.y, 0., 1.));
-    base = mix(base, vec3(1., .85, .88), bub * .7);
-    rough = .07; coat = n.y > .8 ? .4 : .9;
-    emit = .4 + .5 * rim;
-    alpha = mix(.58, .95, rim);
+    #define LAYER(a, b, at) mix(a, b, smoothstep((at) + wav - .045, (at) + wav + .045, t))
+    if (id == ${MAT.jelly}) {
+      // a mango pudding: mango, deeper where it settled; or on coconut cream; or with a cream band; or graded to
+      // pale gold; flecked with mango, more low down; caramel on the top of some
+      vec3 deep = vec3(.82, .28, .03), mango = vec3(.92, .4, .05), pale = vec3(1., .7, .26), cream = vec3(.97, .92, .8);
+      vec3 col = mix(deep, mango, smoothstep(0., .7, t));
+      float glow = 1.;
+      if (rec == 1) { col = LAYER(cream, mango, .38); glow = mix(.35, 1., smoothstep(.33, .43, t)); }
+      else if (rec == 2) { vec3 c2 = LAYER(mango, cream, .45); col = LAYER(c2, mix(mango, pale, .3), .6); glow = 1. - .6 * (smoothstep(.4, .5, t) - smoothstep(.55, .65, t)); }
+      else if (rec == 3) col = mix(deep, pale, smoothstep(.1, 1., t));
+      float bits = smoothstep(.74, .8, noise(vWorld * 2.6 + 4.)) * .45 * (1.3 - t * .6) * glow;
+      bool caramel = top && (rec == 0 || rec == 2 || rec == 3);
+      base = caramel ? mix(vec3(.48, .2, .03), vec3(.7, .32, .06), rim * .6) : mix(mix(col, col * 1.12 + .04, rim), vec3(1., .66, .2), bits);
+      rough = caramel ? .16 : .12; coat = caramel ? .35 : .8;
+      emit = (caramel ? .08 + .3 * rim : .3 + .7 * rim) * glow;
+    } else if (id == ${MAT.pannacotta}) {
+      // a panna cotta: cream, soft-lit through; on a berry jelly set first; or a coffee band through it; or
+      // vanilla-flecked; under a berry coulis, most of them
+      vec3 cream = vec3(.95, .9, .79), berry = vec3(.62, .07, .14), coffee = vec3(.58, .4, .24);
+      vec3 col = mix(cream * vec3(1., .98, .93), cream, t);
+      float glow = 1.;
+      if (rec == 1) { col = LAYER(berry, cream, .3); glow = mix(.6, 1., smoothstep(.25, .35, t)); }
+      else if (rec == 2) { vec3 c2 = LAYER(cream, coffee, .48); col = LAYER(c2, cream, .62); }
+      else if (rec == 3) col = mix(col, vec3(.3, .22, .15), smoothstep(.82, .9, noise(vWorld * 7. + 3.)) * .6);
+      bool coulis = top && rec != 1;
+      base = coulis ? vec3(.5, .04, .1) : mix(col, min(col * 1.06 + .03, vec3(1.)), pow(1. - NoV0, 1.8));
+      rough = coulis ? .1 : .3; coat = coulis ? 1. : .5;
+      emit = coulis ? .02 : (.2 + .45 * pow(1. - NoV0, 1.8)) * glow;
+    } else {
+      // a konjac jelly: clear pink, seen partly through, deeper low down; or on a lychee-white layer, or a peach
+      // one; or with a white band; a few small bubbles held in it
+      vec3 deep = vec3(.82, .2, .32), pink = vec3(1., .55, .6), lychee = vec3(.96, .9, .88), peach = vec3(1., .6, .38);
+      vec3 col = mix(deep, pink, smoothstep(0., 1., t * .8 + n.y * .2));
+      if (rec == 1) col = LAYER(lychee, col, .45);
+      else if (rec == 2) col = LAYER(peach, col, .4);
+      else if (rec == 3) { vec3 c2 = LAYER(col, lychee, .42); col = LAYER(c2, pink, .55); }
+      float bub = smoothstep(.83, .86, noise(vWorld * 1.8 + 9.));
+      base = mix(col, vec3(1., .85, .88), bub * .7);
+      rough = .07; coat = n.y > .8 ? .4 : .9;
+      emit = .4 + .5 * pow(1. - NoV0, 1.4);
+      alpha = mix(.58, .95, pow(1. - NoV0, 1.4));
+    }
+    #undef LAYER
   } else if (id == ${MAT.bread}) {
     // a round loaf: a brown crust, floured on top, scored across, the pale crumb showing in the cuts
     bool top = n.y > .55;
@@ -396,7 +430,7 @@ void main() {
   } else if (id == ${MAT.steel}) {
     // brushed stainless steel: fine lines along it, a cool grey
     float brush = noise(vec3(vWorld.x * .25, vWorld.z * 40., vWorld.y * 40.)) * .5 + noise(vec3(vWorld.x * 2., vWorld.z * 90., 3.)) * .2;
-    base = vec3(.6, .62, .64) * (.85 + .25 * brush); metal = .9; rough = .28 + .1 * brush;
+    base = vec3(.58, .6, .62) * (.88 + .2 * brush * fine1); metal = .95; rough = .22 + .08 * brush;
   } else if (id == ${MAT.sponge}) {
     // a sponge: yellow and full of holes, a green scourer on its top
     bool top = n.y > .6;
@@ -435,8 +469,9 @@ void main() {
     rough = .2; coat = 1.;
   } else if (id == ${MAT.board}) {
     // a chopping board (and a jar's cork): pale wood, grain along, cuts across it
-    float g = noise(vec3(uv.x * .1, uv.y * 2.4, 4.)) * .6 + noise(vec3(uv.x * .5, uv.y * 7., 1.)) * .25;
-    float cut = smoothstep(.985, 1., noise(vec3(uv.x * 9., uv.y * .4, 7.)));
+    // (its grain: the growth along it, broad; finer fibre over that, fading out far off)
+    float g = noise(vec3(uv.x * .1, uv.y * 2.4, 4.)) * .6 + noise(vec3(uv.x * .5, uv.y * 7., 1.)) * .25 * fine1 + .125 * (1. - fine1);
+    float cut = smoothstep(.985, 1., noise(vec3(uv.x * 9., uv.y * .4, 7.))) * fine1;
     base = mix(vec3(.72, .55, .36), vec3(.88, .74, .54), g) * (1. - .25 * cut);
     relief = g * .025 - cut * .018; rough = .64;
   } else if (id == ${MAT.book}) {
@@ -549,14 +584,20 @@ void main() {
     float edge = min(uv.y, 11. - uv.y);
     float stripe = smoothstep(.05, 0., abs(edge - 1.6) - .35) + smoothstep(.05, 0., abs(edge - 2.7) - .12);
     float hem = smoothstep(.15, 0., edge - .35);
-    base = mix(vec3(.9, .87, .8), vec3(.72, .16, .14), clamp(stripe, 0., 1.)) * (.86 + .1 * weave + .08 * slub) * (1. - .12 * hem);
-    relief = weave * .018; rough = .92;
+    float wk = 1. - smoothstep(.04, .14, px);
+    base = mix(vec3(.9, .87, .8), vec3(.72, .16, .14), clamp(stripe, 0., 1.)) * (.86 + .1 * mix(.5, weave, wk) + .08 * slub) * (1. - .12 * hem);
+    relief = weave * .018 * wk; rough = .92; fabric = 1.;
   } else if (id == ${MAT.gingham}) {
     // a folded gingham cloth: red and white, checked, the crossings darkest
-    vec2 c = step(.5, fract(uv / 1.3));
+    // (woven: each thread's colour run along it, softened at its edge, as small as it can be seen and no smaller;
+    // the threads themselves, finely, close to)
+    vec2 aa = vec2(fwidth(uv.x), fwidth(uv.y)) / 1.3 + .02;
+    vec2 f = fract(uv / 1.3);
+    vec2 c = smoothstep(.5 - aa, .5 + aa, f) - smoothstep(1. - aa, 1. + aa, f);
     float k = (c.x + c.y) * .5;
-    base = mix(vec3(.94, .9, .84), vec3(.66, .12, .12), k) * (.9 + .1 * noise(vec3(uv * 5., 2.)));
-    rough = .9;
+    float thread = (.5 + .5 * sin(uv.x * 40.) * sin(uv.y * 40.)) * (1. - smoothstep(.02, .06, px));
+    base = mix(vec3(.94, .9, .84), vec3(.66, .12, .12), k) * (.9 + .1 * noise(vec3(uv * 5., 2.))) * (.95 + .08 * thread);
+    rough = .9; fabric = 1.;
   } else if (id == ${MAT.floral}) {
     // painted tin: red, a teal band round it, cream flowers with gold hearts, a little worn at its edges
     vec2 q = uv / 5.5;
@@ -626,10 +667,13 @@ void main() {
   vec3 amb = irradiance(n) * cavity * (1. - .85 * occ) + vBake.yzw * occ * (irradiance(-n) * .55 + uKeyCol * .1) * .6;
   // (and where it's well shut in, a little of the sun too: what stands on a thing sits down into it, even in the sun)
   float sunIn = 1. - .45 * occ * occ;
+  spec *= 1. - .85 * fabric;
   vec3 c = base * (1. - metal) * (1. - Fk) * (amb + uKeyCol * NoL * sh * sunIn) + uKeyCol * spec * sh * sunIn;
+  // (cloth's sheen: its fibres catching the light at a glance, in its own colour, soft)
+  c += fabric * base * (irradiance(n) * .3 * (1. - .7 * occ) + uKeyCol * NoL * sh * .18) * pow(1. - NoV, 2.5);
   vec3 Fr = F0 + (max(vec3(1. - rough), F0) - F0) * pow(1. - NoV, 5.);
   // (the room's window, sharp, only in what's glossy: a rougher surface takes the room's soft light, not a window that isn't where it shows)
-  c += Fr * mix(env(reflect(-V, n)), irradiance(n), smoothstep(.05, .4, rough)) * (1. - .6 * rough * (1. - metal)) * (1. - .5 * occ);
+  c += Fr * mix(env(reflect(-V, n)), irradiance(n), smoothstep(.05, .4, rough)) * (1. - .6 * rough * (1. - metal)) * (1. - .5 * occ) * (1. - .8 * fabric);
   c += base * emit * (amb + uKeyCol * .5);
   if (coat > .01) {
     float Fc = (.04 + .96 * pow(1. - NoV, 5.)) * coat;

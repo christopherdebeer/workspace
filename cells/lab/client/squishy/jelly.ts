@@ -48,12 +48,44 @@ export interface Jel {
   lost?: number;
   /** how far the dumpling's in it, as a bed (cm; 0, not), see `bedOf`, `holdJel`; and how high its middle was over its top as it touched, and how fast it came in */
   held?: number; ride?: number; vin?: number;
+  /** its mould (see `Mould`), if it was set in one */
+  mould?: Mould;
 }
+/**
+ * The mould a pudding was set in: its side's radius up its height (of its top's radius, from its foot to its
+ * top, PROF_N of them: a flan's taper, a bell's flare); its side fluted round (so many ribs, so deep, of its
+ * radius); and which recipe it was set from (its layers: see the drawing).
+ */
+export interface Mould { prof: number[]; flutes: number; flute: number; recipe: number }
+export const PROF_N = 9;
+/** A mould, from the dice: a taper, a bell, a straight drum; fluted or not; domed or not; a recipe. */
+export function mouldFor(r: () => number): { mould: Mould; dome: number } {
+  const kind = Math.floor(r() * 4), flare = 0.12 + r() * 0.2;
+  const prof = Array.from({ length: PROF_N }, (_, k) => {
+    const t = k / (PROF_N - 1);
+    // (a flan's straight taper; a bell's curve; a drum, nearly straight; a tall dariole, waisted a little low down)
+    return kind === 0 ? 1 + flare * (1 - t) : kind === 1 ? 1 + flare * 1.4 * (1 - t) ** 2.2 : kind === 2 ? 1 + 0.04 * (1 - t) : 1 + flare * 0.8 * (1 - t) ** 3 - 0.05 * Math.sin(Math.PI * t);
+  });
+  const fl = r() < 0.55;
+  return { mould: { prof, flutes: fl ? [8, 12, 16, 12][Math.floor(r() * 4)] : 0, flute: fl ? 0.035 + r() * 0.035 : 0, recipe: Math.floor(r() * 4) }, dome: r() < 0.35 ? 0.4 + r() * 0.9 : 0 };
+}
+/** How wide its side is (of its top's radius) so far up it (0, its foot; 1, its top); and how fast that changes up it. */
+export function profAt(j: Jel, t: number): number {
+  const p = j.mould?.prof;
+  if (!p) return 1;
+  const x = Math.max(0, Math.min(1, t)) * (PROF_N - 1), k = Math.min(PROF_N - 2, Math.floor(x));
+  return p[k] + (p[k + 1] - p[k]) * (x - k);
+}
+const profSlope = (j: Jel, t: number) => (profAt(j, t + 0.02) - profAt(j, t - 0.02)) / 0.04;
+/** its ribs: how much wider it is here round it (1, not fluted) */
+export const fluteAt = (j: Jel, a: number) => (j.mould?.flutes ? 1 + j.mould.flute * Math.cos(j.mould.flutes * a) : 1);
 const STEP = 1 / 600;
 /** how far its top can go: down (of its height), and up (cm) */
 const DOWN = 0.55, UP = 3;
 
-export function makeJel(cx: number, cz: number, rad: number, base: number, top: number, feel: JellyFeel, dome = 0, R = 7, S = 24): Jel {
+export function makeJel(cx: number, cz: number, rad: number, base: number, top: number, feel: JellyFeel, dome = 0, R = 7, S = 24, mould?: Mould): Jel {
+  // (fluted, more spokes, so its rim follows its ribs)
+  if (mould?.flutes) S = 48;
   const N = 1 + R * S;
   const lists: number[][] = Array.from({ length: N }, () => []);
   const id = (i: number, j: number) => (i === 0 ? 0 : 1 + (i - 1) * S + (((j % S) + S) % S));
@@ -66,7 +98,7 @@ export function makeJel(cx: number, cz: number, rad: number, base: number, top: 
   const nbrStart = new Int32Array(N + 1), flat: number[] = [];
   for (let k = 0; k < N; k++) { nbrStart[k] = flat.length; flat.push(...lists[k]); }
   nbrStart[N] = flat.length;
-  return { cx, cz, base, top, rad, dome, R, S, z: new Float32Array(N), w: new Float32Array(N), nbrStart, nbr: Int32Array.from(flat), feel: { ...feel }, t: -1 };
+  return { cx, cz, base, top, rad, dome, R, S, z: new Float32Array(N), w: new Float32Array(N), nbrStart, nbr: Int32Array.from(flat), feel: { ...feel }, t: -1, mould };
 }
 
 /** The nodes about a point and how much each counts (up to four), into idx/wt; how many. */
@@ -202,7 +234,7 @@ export function touchJel(j: Jel, px: number, py: number, pz: number, s: number, 
       return true;
     }
     if (py >= j.base) {
-      const dTop = ht - py, dSide = j.rad - rr, dBot = py - j.base;
+      const dTop = ht - py, dSide = j.rad * profAt(j, (py - j.base) / (j.top - j.base)) - rr, dBot = py - j.base;
       if (dTop <= dSide && dTop <= dBot) { o.nx = 0; o.ny = 1; o.nz = 0; o.d = s + dTop; o.vy = speedAt(j, dx, dz); }
       else if (dSide <= dBot) { o.nx = rx; o.ny = 0; o.nz = rz; o.d = s + dSide; }
       else { o.nx = 0; o.ny = -1; o.nz = 0; o.d = s + dBot; }
@@ -213,13 +245,17 @@ export function touchJel(j: Jel, px: number, py: number, pz: number, s: number, 
     o.nx = 0; o.ny = -1; o.nz = 0; o.d = d;
     return true;
   }
-  const dr = rr - j.rad, rim = j.top + surfAt(j, dx, dz);
+  const rim = j.top + surfAt(j, dx, dz);
   const dh = py > rim ? py - rim : py < j.base ? py - j.base : 0;
   if (dh === 0) {
-    if (dr > s + gap) return false;
-    o.nx = rx; o.ny = 0; o.nz = rz; o.d = s - dr;
+    // (its side, as moulded: as wide as its mould is so far up, sloped as it tapers, so a bell's flare is to slide off)
+    const H = j.top - j.base, t = (py - j.base) / H, sl = (j.rad * profSlope(j, t)) / H, c = 1 / Math.hypot(1, sl);
+    const dist = (rr - j.rad * profAt(j, t)) * c;
+    if (dist > s + gap) return false;
+    o.nx = rx * c; o.ny = -sl * c; o.nz = rz * c; o.d = s - dist;
     return true;
   }
+  const dr = rr - j.rad * (dh < 0 ? profAt(j, 0) : 1);
   const dist = Math.hypot(dr, dh);
   if (dist > s + gap) return false;
   o.nx = (rx * dr) / dist; o.ny = dh / dist; o.nz = (rz * dr) / dist; o.d = s - dist;
@@ -235,7 +271,7 @@ export function touchJel(j: Jel, px: number, py: number, pz: number, s: number, 
 export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): number {
   const { R, S, rad } = j;
   const P = (i: number, s: number): [number, number, number] => {
-    const a = (s / S) * Math.PI * 2, r = (i / R) * rad;
+    const a = (s / S) * Math.PI * 2, r = (i / R) * rad * (i === R ? fluteAt(j, a) : 1);
     const k = i === 0 ? 0 : 1 + (i - 1) * S + (s % S);
     return [j.cx + Math.cos(a) * r, j.top + j.z[k] - j.dome * (i / R) ** 2, j.cz + Math.sin(a) * r];
   };
@@ -251,6 +287,8 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): numbe
     out[o++] = p[0]; out[o++] = p[1]; out[o++] = p[2]; out[o++] = n[0]; out[o++] = n[1]; out[o++] = n[2]; out[o++] = m; out[o++] = u; out[o++] = v;
   };
   const uv = (p: number[]) => [(p[0] - j.cx) / rad, (p[2] - j.cz) / rad];
+  // (which recipe it was set from, carried in its material's fraction, for the drawing's layers)
+  mat += (j.mould?.recipe ?? 0) * 0.01;
   const top = (m: number, lift: number) => {
     const L = (p: number[], n: number[]) => [p[0] + n[0] * lift, p[1] + n[1] * lift, p[2] + n[2] * lift];
     for (let i = 0; i < R; i++) for (let s = 0; s < S; s++) {
@@ -262,17 +300,37 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): numbe
     }
   };
   top(mat, 0);
-  // its side, down from its rim as it is
-  for (let s = 0; s < S; s++) {
-    const a0 = (s / S) * Math.PI * 2, a1 = ((s + 1) / S) * Math.PI * 2;
-    const r0 = P(R, s), r1 = P(R, s + 1);
-    const n0 = [Math.cos(a0), 0, Math.sin(a0)], n1 = [Math.cos(a1), 0, Math.sin(a1)];
-    const b0 = [r0[0], j.base, r0[2]], b1 = [r1[0], j.base, r1[2]];
-    put(b0, n0, mat, a0 * rad, j.base); put(r0, n0, mat, a0 * rad, r0[1]); put(r1, n1, mat, a1 * rad, r1[1]);
-    put(b0, n0, mat, a0 * rad, j.base); put(r1, n1, mat, a1 * rad, r1[1]); put(b1, n1, mat, a1 * rad, j.base);
+  // its side, down from its rim as it is to its foot, as moulded: ring by ring up it, round its ribs (its (u, v):
+  // how far round, and 2 + how far up, so the drawing knows where in its layers it is)
+  const H = j.top - j.base, K = SIDE_RINGS;
+  const ring = (k: number, s: number): number[] => {
+    if (k === K) return P(R, s);
+    const a = (s / S) * Math.PI * 2, t = k / K, r = rad * profAt(j, t) * fluteAt(j, a);
+    return [j.cx + Math.cos(a) * r, j.base + t * H, j.cz + Math.sin(a) * r];
+  };
+  const G: number[][][] = [];
+  for (let k = 0; k <= K; k++) { G.push([]); for (let s = 0; s <= S; s++) G[k].push(ring(k, s % S)); }
+  const nrmAt = (k: number, s: number): number[] => {
+    const up = G[Math.min(K, k + 1)][s], dn = G[Math.max(0, k - 1)][s], lf = G[k][(s + S - 1) % S], rt = G[k][(s + 1) % S];
+    const ux = rt[0] - lf[0], uy = rt[1] - lf[1], uz = rt[2] - lf[2], vx = up[0] - dn[0], vy = up[1] - dn[1], vz = up[2] - dn[2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    // (outward)
+    const ox = G[k][s][0] - j.cx, oz = G[k][s][2] - j.cz;
+    if (nx * ox + nz * oz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    return [nx / l, ny / l, nz / l];
+  };
+  for (let k = 0; k < K; k++) for (let s = 0; s < S; s++) {
+    const a = G[k][s], b = G[k + 1][s], c = G[k + 1][s + 1], d = G[k][s + 1];
+    const na = nrmAt(k, s), nb = nrmAt(k + 1, s), nc = nrmAt(k + 1, (s + 1) % S), nd = nrmAt(k, (s + 1) % S);
+    const ua = [s / S, 2 + k / K], ub = [s / S, 2 + (k + 1) / K], uc = [(s + 1) / S, 2 + (k + 1) / K], ud = [(s + 1) / S, 2 + k / K];
+    put(a, na, mat, ua[0], ua[1]); put(b, nb, mat, ub[0], ub[1]); put(c, nc, mat, uc[0], uc[1]);
+    put(a, na, mat, ua[0], ua[1]); put(c, nc, mat, uc[0], uc[1]); put(d, nd, mat, ud[0], ud[1]);
   }
   if (coat) top(coat, 0.06);
   return o;
 }
 /** how many floats its mesh takes */
-export const jelMeshSize = (j: Jel, coat = 0) => (j.R * j.S * 6 * (coat ? 2 : 1) + j.S * 6) * 9;
+export const jelMeshSize = (j: Jel, coat = 0) => (j.R * j.S * 6 * (coat ? 2 : 1) + j.S * SIDE_RINGS * 6) * 9;
+/** how many rings up its side it's drawn in */
+const SIDE_RINGS = 8;

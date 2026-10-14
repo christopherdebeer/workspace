@@ -359,6 +359,21 @@ Porcelain is a satin body with a few iron specks fired into it under a clear har
 little at its rim and over its painted band; enamel, glass fired on steel, is glossier and flat in
 colour, and chipped only now and then, the steel showing there.
 
+Puddings are set in moulds: each its own, from where it stands, a flan's straight taper, a bell's
+flare, a drum, a dariole waisted low down; fluted with ribs or not; domed on top or not. It's met as
+it's moulded: its side as wide as its mould is so far up, sloped as it tapers, so a bell's flare is
+something to slide off (the ribs are only drawn). And each was set from a recipe, its layers poured
+one on another, blended where they met and a little wavy, the colour heavier low down where it
+settled: a mango pudding all mango, or on coconut cream, or with a cream band through it, or graded
+to pale gold, flecked with mango and caramel on top of most; a panna cotta plain, or on a berry jelly,
+or with a coffee band, or flecked with vanilla, under its coulis; a konjac pink, deeper low down, or
+on a lychee-white layer, or a peach one, or with a white band.
+
+Cloth has no glint, but a soft sheen at a glance, in its own colour; its pattern (the gingham's
+checks, the towel's weave) and the wood's fine grain fade as they get too small to see, so nothing
+shimmers far off. The counter's oiled, a faint sheen over it the dry chopping boards haven't; steel
+is crisper.
+
 `?bench=look` is a still life to judge all this by (the dumpling on a cloth on cookbooks, a mango
 pudding on a cake stand, a konjac on a crate, a plate on a stool, the painted bench and its towel);
 `?light=morning|noon|shade` sets the light (low and warm, the default; high and white; the sun off

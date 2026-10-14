@@ -8,7 +8,7 @@
  * Units are centimetres; the dumpling is 6 across.
  */
 import { hash, type Rand } from '../kit/rng';
-import { FEELS, makeJel, touchJel, type Jel, type JellyFeel } from './jelly';
+import { FEELS, makeJel, mouldFor, touchJel, type Jel, type JellyFeel, type Mould } from './jelly';
 
 export type V3 = [number, number, number];
 export const G = 981;
@@ -194,9 +194,10 @@ function bounds(s: Shape): Shape {
     s.hi = [Math.max(s.c[0], s.b[0]) + s.r, Math.max(s.c[1], s.b[1]) + s.r, Math.max(s.c[2], s.b[2]) + s.r];
   } else if (s.kind === 'jelly') {
     const j = s.jel!;
-    s.lo = [j.cx - j.rad, j.base, j.cz - j.rad];
-    // (as high as its top can go)
-    s.hi = [j.cx + j.rad, j.top + 3.5, j.cz + j.rad];
+    // (as wide as its mould's widest, ribs and all; as high as its top can go)
+    const w = j.rad * Math.max(1, ...(j.mould?.prof ?? [1])) * (1 + (j.mould?.flute ?? 0));
+    s.lo = [j.cx - w, j.base, j.cz - w];
+    s.hi = [j.cx + w, j.top + 3.5, j.cz + w];
   } else {
     const t = s.sheet!.tris, th = s.sheet!.th;
     s.lo = [Infinity, Infinity, Infinity]; s.hi = [-Infinity, -Infinity, -Infinity];
@@ -317,8 +318,17 @@ export const cyl = (x: number, z: number, r: number, y0: number, y1: number, mat
   bounds({ ...base(), kind: 'cyl', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu });
 export const cap = (a: V3, b: V3, r: number, mat: number, mu = 0.7): Shape => bounds({ ...base(), kind: 'cap', c: a, b, r, mat, mu });
 /** a round jelly from y0 up to y1, its top a membrane that gives (see jelly.ts) */
-export const jelly = (x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85, dome = 0): Shape =>
-  bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu, tack: JELLY_TACK, jel: makeJel(x, z, r, y0, y1, feel, dome) });
+export function jelly(x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85, dome = 0): Shape {
+  // (a pudding, a panna cotta, a konjac: set in a mould of its own, from where it stands; not a loaf, nor a sponge)
+  let mould: Mould | undefined;
+  if (mat === MAT.jelly || mat === MAT.pannacotta || mat === MAT.konjac) {
+    let h = hash(Math.round(x * 10), Math.round(z * 10), 0x30d);
+    const m = mouldFor(() => ((h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0), (h % 100000) / 100000));
+    mould = m.mould;
+    if (!dome) dome = m.dome;
+  }
+  return bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu, tack: JELLY_TACK, jel: makeJel(x, z, r, y0, y1, feel, dome, 7, 24, mould) });
+}
 /** how much the dumpling's tack holds to a jelly: glossy, and moving, it hardly does */
 export let JELLY_TACK = 0.25;
 export const setJellyTack = (v: number) => { JELLY_TACK = v; };
