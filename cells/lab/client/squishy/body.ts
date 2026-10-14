@@ -14,7 +14,7 @@
  * flies a plain parabola: the aiming line shows where it will go.
  */
 import { CLIMB_CLEAR, CLIMB_IN, DUST, DUSTS, G, RADIUS, moveShapes, near, touch, type Dust, type Hit, type Level, type Shape, type V3 } from './level';
-import { pressJel, stepJel } from './jelly';
+import { bedOf, holdJel, restAt, stepJel, type Jel } from './jelly';
 
 /** small steps a frame */
 export const SUB = 10;
@@ -30,6 +30,8 @@ const TURN = 4, UPRIGHT = 3;
 const LEAN0 = 0.19, LEAN1 = 0.4, SHUFFLE_UP = 0.93;
 /** dough's tack: how hard it holds what it touches (cm/s²), and how near counts as touching */
 const TACK = 900, STICK = 0.35;
+/** a jelly's bed: how far up from its lowest point the dumpling's foot is (cm), that its top's held to; and how far short of the foot, so the foot's touching it */
+const FOOT = 1.2, BED_SKIN = 0.003;
 /** held: how far round the touch the finger has the dough (cm), and how hard it draws it each small step */
 const GRAB_R = 2.6, GRAB_K = 0.12;
 /** a poke: how far round the finger it dents (cm), how hard (cm/s at the finger), and how much it goes along the ground with it, and up */
@@ -200,6 +202,8 @@ export class Dumpling {
   private ctr: Float32Array;
   private cdust: Uint8Array;
   private pin: Uint8Array;
+  /** (scratch: each point's weight on a jelly's bed) */
+  private bw: Float32Array;
   /** what each particle is coated with, and how thickly (0–1): picked up where it touches, worn off in time, shaken off by a hard landing */
   coat: Float32Array;
   coatKind: Uint8Array;
@@ -270,7 +274,7 @@ export class Dumpling {
     const n = this.n;
     this.x = new Float32Array(n * 3); this.v = new Float32Array(n * 3); this.p = new Float32Array(n * 3); this.q = new Float32Array(n * 3);
     this.cn = new Float32Array(n * 3); this.cd = new Float32Array(n); this.cmu = new Float32Array(n); this.cb = new Float32Array(n);
-    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.ctr = new Float32Array(n); this.pin = new Uint8Array(n); this.cdust = new Uint8Array(n);
+    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.ctr = new Float32Array(n); this.pin = new Uint8Array(n); this.bw = new Float32Array(n); this.cdust = new Uint8Array(n);
     this.coat = new Float32Array(n); this.coatKind = new Uint8Array(n);
     let cx = 0, cy = 0, cz = 0;
     for (let i = 0; i < n; i++) { cx += s.pos[i * 3]; cy += s.pos[i * 3 + 1]; cz += s.pos[i * 3 + 2]; }
@@ -545,6 +549,58 @@ export class Dumpling {
     for (let i = 0; i < n * 3; i++) p[i] += g[i] * lam;
   }
 
+  /**
+   * On a jelly's top, a bed: how far its foot is in, under the top as it is at rest (x, its lowest point's),
+   * and how fast it's going (v), and the jelly pushes the whole of it back up k x (1 + (x/x0)²) − c v (see
+   * `bedOf`), and holds it from sliding, as much as that push lets it. (How far in from where it was at the
+   * start of the step, not where it's going: else the bed takes a little of each landing, as a damper would.
+   * And on the whole of it, not its foot: pushed on its foot it squashes, and its squash keeps half of what
+   * the bed gives back.) The jelly's top is held to its foot while it's in (`holdJel`), and wobbles on after.
+   */
+  private bed(j: Jel, mu: number, p: Float32Array, h: number) {
+    const n = this.n, x = this.x, bw = this.bw, r2 = j.rad * j.rad;
+    let low = Infinity, lowP = Infinity;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3, dx = x[i3] - j.cx, dz = x[i3 + 2] - j.cz;
+      if (dx * dx + dz * dz > r2) { bw[i] = NaN; continue; }
+      bw[i] = x[i3 + 1] - SKIN - restAt(j, dx, dz);
+      if (bw[i] < low) low = bw[i];
+      const y = p[i3 + 1] - x[i3 + 1] + bw[i];
+      if (y < lowP) lowP = y;
+    }
+    // (not in, nor going in this step: let go)
+    if (!(low < 0) && !(lowP < 0)) { holdJel(j, 0, 0, 0, 0, 0); j.ride = undefined; return; }
+    let sw = 0, cx = 0, cz = 0, vy = 0, vx = 0, vz = 0, mx = 0, my = 0, mz = 0;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      mx += x[i3]; my += x[i3 + 1]; mz += x[i3 + 2];
+      vx += p[i3] - x[i3]; vy += p[i3 + 1] - x[i3 + 1]; vz += p[i3 + 2] - x[i3 + 2];
+      const w = bw[i] === bw[i] ? Math.max(0, FOOT - (bw[i] - low)) : 0;
+      bw[i] = w; sw += w; cx += x[i3] * w; cz += x[i3 + 2] * w;
+    }
+    vx /= n * h; vy /= n * h; vz /= n * h; cx /= sw; cz /= sw; mx /= n; my /= n; mz /= n;
+    // (how far in: its middle, from where its middle was as its foot touched; not its foot, which its own
+    // sagging and squashing, or tack drawing it down, would take deeper, and the bed would push back harder)
+    const over = my - restAt(j, mx - j.cx, mz - j.cz);
+    if (j.ride === undefined) { j.ride = over - Math.min(0, low); j.vin = -vy; }
+    const depth = Math.max(0, j.ride - over);
+    let rf = 0;
+    for (let i = 0; i < n; i++) if (bw[i] > 0) rf = Math.max(rf, Math.hypot(x[i * 3] - cx, x[i * 3 + 2] - cz));
+    const { k, zeta, x0 } = bedOf(j, j.vin), q = depth / x0;
+    const F = depth > 0 ? Math.max(0, k * depth * (1 + q * q) - 2 * zeta * Math.sqrt(k * (1 + 3 * q * q)) * vy) : 0;
+    // (and its sliding held back, as much as the push lets it)
+    const vt = Math.hypot(vx, vz), ft = vt > 1e-6 ? Math.min(vt, mu * F * h) / vt : 0;
+    const a = h * h;
+    let foot = Infinity;
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      p[i3 + 1] += F * a; p[i3] -= (vx * ft * a) / h; p[i3 + 2] -= (vz * ft * a) / h;
+      if (bw[i] > 0) { const y = p[i3 + 1] - SKIN - restAt(j, p[i3] - j.cx, p[i3 + 2] - j.cz); if (y < foot) foot = y; }
+    }
+    // (its top held to its foot as it is now, pushed: just touching)
+    holdJel(j, cx, cz, rf, Math.max(1e-4, -foot - BED_SKIN), vy + F * h);
+  }
+
   /** A frame: SUB small steps of falling, keeping its shape, meeting the course, friction and tack. */
   step(lv: Level, dt: number, time: number) {
     const n = this.n, h = dt / SUB;
@@ -575,6 +631,8 @@ export class Dumpling {
       // (held: the dough under the finger drawn out toward it, from where the shape would have it)
       if (this.grab) this.pullOut(p, this.grab.w, this.grab.pull);
       this.keepVolume(p);
+      // (on a jelly: it gives under the whole of it, as a bed)
+      if (lv.jellies) for (const sh of this.nearby) if (sh.jel) this.bed(sh.jel, sh.mu, p, h);
       // each particle against the course
       for (let i = 0; i < n; i++) {
         cf[i] = 0; cd[i] = 0;
@@ -583,8 +641,6 @@ export class Dumpling {
           if (!touch(sh, p[i3], p[i3 + 1], p[i3 + 2], SKIN, o, STICK)) continue;
           if (o.d > 0) {
             p[i3] += o.nx * o.d; p[i3 + 1] += o.ny * o.d; p[i3 + 2] += o.nz * o.d;
-            // (a jelly is pushed back as hard as it pushes: its share of the dumpling's mass, by how fast it was pushed out)
-            if (sh.jel && o.ny > 0.3) pressJel(sh.jel, p[i3], p[i3 + 2], (o.d * o.ny) / h / n);
             const vn = (v[i3] - o.vx) * o.nx + (v[i3 + 1] - o.vy) * o.ny + (v[i3 + 2] - o.vz) * o.nz;
             if (cf[i] !== 1 || o.d > cd[i]) {
               cn[i3] = o.nx; cn[i3 + 1] = o.ny; cn[i3 + 2] = o.nz;
@@ -606,7 +662,8 @@ export class Dumpling {
         let cx = 0, cy = 0, cz = 0;
         for (let i = 0; i < n; i++) { cx += p[i * 3]; cy += p[i * 3 + 1]; cz += p[i * 3 + 2]; }
         cx /= n; cy /= n; cz /= n;
-        for (const sh of this.nearby) if (touch(sh, cx, cy, cz, RADIUS * 0.5, o) && o.d > 0) {
+        // (not into a jelly it's in: the bed has it)
+        for (const sh of this.nearby) if (!sh.jel?.held && touch(sh, cx, cy, cz, RADIUS * 0.5, o) && o.d > 0) {
           for (let i = 0; i < n; i++) { p[i * 3] += o.nx * o.d; p[i * 3 + 1] += o.ny * o.d; p[i * 3 + 2] += o.nz * o.d; }
           cx += o.nx * o.d; cy += o.ny * o.d; cz += o.nz * o.d;
         }

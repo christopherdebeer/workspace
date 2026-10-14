@@ -1,29 +1,35 @@
 /**
  * Squishy: a jelly to land on. A round jelly whose top is a membrane: nodes on rings and spokes,
  * each held to its rest height by a spring, damped, and drawn toward its neighbours (so a dent
- * spreads, and ripples). The dumpling pushes it down where it presses, and it pushes back: a
- * landing dents it, the dent springs back, and if it springs back slower than the dumpling
- * settles, it throws the dumpling up again, unasked. Edges tilt under it. It keeps its own clock,
- * so however many things step it, it moves once.
+ * spreads, and ripples). What it does to a landing is set, not left to come out of the membrane: the
+ * dumpling sinks into it as into a bed, a spring that firms up, damped to give back what the jelly's
+ * kind should (a panna cotta keeps a landing; a mango pudding gives most of it back; a konjac nearly
+ * all), its top held to the dumpling's foot while it's in, and let go to wobble when it leaves. It
+ * keeps its own clock, so however many things step it, it moves once.
  */
 import type { Hit } from './level';
 
-/** How a jelly gives: how fast its top springs back (Hz), how much of each wobble it keeps, how heavy it is (the dumpling is 1), how far a dent spreads (Hz). */
-export interface JellyFeel { hz: number; zeta: number; mass: number; spread: number }
 /**
- * The kinds: a panna cotta (it dents, and that's all), a mango pudding (lively: a hard landing comes
- * back as a little hop), a konjac jelly (springy: it throws you up again, a good way). A jelly has to
- * spring back quickly to throw anything: only a top that turns round faster than falling (its
- * dent × (2π hz)² over g) leaves what's on it behind.
+ * How a jelly gives. Its top's wobble: how fast it springs back (Hz), how much of each wobble it keeps,
+ * how heavy it is (the dumpling is 1), how far a dent spreads (Hz). And what a landing on it does, set by
+ * what it should do, not left to come out of the wobble: how much of a landing it gives back (restitution),
+ * and how far into it (of its height) a gentle landing goes (from 10 cm) and a hard one (from 50 cm). (So
+ * how long it's in it follows: these are little jellies, a few cm deep; a landing's over in a few hundredths.)
+ */
+export interface JellyFeel { hz: number; zeta: number; mass: number; spread: number; e: number; soft: number; deep: number }
+/**
+ * The kinds: a panna cotta (soft: it takes a landing in, and keeps it), a mango pudding (lively: it gives
+ * most of a landing back), a konjac jelly (firm and springy: it throws you up nearly as high as you fell).
+ * A loaf and a sponge: soft, and dead.
  */
 export const FEELS = {
-  pannacotta: { hz: 5, zeta: 0.25, mass: 15, spread: 4 },
-  pudding: { hz: 7, zeta: 0.06, mass: 15, spread: 3 },
-  konjac: { hz: 14, zeta: 0.05, mass: 12, spread: 2 },
+  pannacotta: { hz: 5, zeta: 0.25, mass: 15, spread: 4, e: 0.2, soft: 0.5, deep: 0.8 },
+  pudding: { hz: 7, zeta: 0.06, mass: 15, spread: 3, e: 0.75, soft: 0.28, deep: 0.5 },
+  konjac: { hz: 14, zeta: 0.05, mass: 12, spread: 2, e: 0.92, soft: 0.22, deep: 0.42 },
   // (a loaf: soft under its crust, and dead)
-  boule: { hz: 6, zeta: 0.4, mass: 20, spread: 3 },
+  boule: { hz: 6, zeta: 0.4, mass: 20, spread: 3, e: 0.1, soft: 0.3, deep: 0.5 },
   // (a sponge: soft, and it soaks up a landing)
-  sponge: { hz: 4.5, zeta: 0.6, mass: 8, spread: 5 },
+  sponge: { hz: 4.5, zeta: 0.6, mass: 8, spread: 5, e: 0.05, soft: 0.35, deep: 0.55 },
 } satisfies Record<string, JellyFeel>;
 
 export interface Jel {
@@ -40,13 +46,12 @@ export interface Jel {
   t: number;
   /** (for the bench's measures) the energy its stops have taken: what a node was going with as it hit one */
   lost?: number;
+  /** how far the dumpling's in it, as a bed (cm; 0, not), see `bedOf`, `holdJel`; and how high its middle was over its top as it touched, and how fast it came in */
+  held?: number; ride?: number; vin?: number;
 }
 const STEP = 1 / 600;
 /** how far its top can go: down (of its height), and up (cm) */
 const DOWN = 0.55, UP = 3;
-/** how much more a pressed node is damped, each press */
-export let LOADED = 0.0015;
-export const setLoaded = (v: number) => { LOADED = v; };
 
 export function makeJel(cx: number, cz: number, rad: number, base: number, top: number, feel: JellyFeel, dome = 0, R = 7, S = 24): Jel {
   const N = 1 + R * S;
@@ -99,12 +104,51 @@ function speedAt(j: Jel, dx: number, dz: number): number {
   for (let k = 0; k < n; k++) v += j.w[idx[k]] * wt[k];
   return v;
 }
-/** Pushed down at a point (world x, z), by so much momentum (the dumpling's mass × cm/s). */
-export function pressJel(j: Jel, x: number, z: number, impulse: number) {
-  const n = about(j, x - j.cx, z - j.cz);
-  const m = j.feel.mass / j.z.length;
-  // (and where it's pressed, it's damped a little more: what sits on a jelly settles, rather than the two of them humming on)
-  for (let k = 0; k < n; k++) { j.w[idx[k]] -= (impulse * wt[k]) / m; j.w[idx[k]] *= 1 - LOADED * wt[k]; }
+/** Its top's height at rest at a point (from its middle): where its top is, undented (a loaf's dome falls away). */
+export const restAt = (j: Jel, dx: number, dz: number) => j.top - j.dome * Math.min(1, (dx * dx + dz * dz) / (j.rad * j.rad));
+/**
+ * The dumpling in it as a bed: pushed back up by k x (1 + (x/x0)²) less c v, x how far in, v how fast (up):
+ * a damped spring that firms up, damped as stiff as it is where it is (c = 2ζ√(its stiffness there)), so it
+ * gives back as much of a hard landing as of a gentle one: e = exp(−ζπ/√(1−ζ²)). k and x0 so a landing
+ * from 10 cm goes `soft` of its height in, and one from 50 cm `deep` (½v² = k (x²/2 + x⁴/4x0²), a unit of
+ * mass; near enough, undamped).
+ */
+export function bedOf(j: Jel, vin = LIVELY): { k: number; zeta: number; x0: number } {
+  // (a gentle landing it gives less of back, so a bouncing dumpling settles, rather than bouncing on and on)
+  const { soft, deep } = j.feel, e = j.feel.e * Math.min(1, Math.sqrt(Math.max(0, vin) / LIVELY)), L = Math.log(Math.max(0.01, Math.min(0.999, e)));
+  const zeta = -L / Math.sqrt(Math.PI * Math.PI + L * L), H = j.top - j.base;
+  const a = soft * H, b = deep * H, E1 = G_ * 10, E2 = G_ * 50;
+  // (u = 1/4x0²: how much it firms; none, if going twice as fast gets it no deeper than a plain spring would)
+  const u = Math.max(0, (E1 * b * b - E2 * a * a) / (2 * (E2 * a ** 4 - E1 * b ** 4)));
+  const k = E1 / (a * a / 2 + a ** 4 * u);
+  return { k, zeta, x0: u > 0 ? 1 / (2 * Math.sqrt(u)) : 1e6 };
+}
+const G_ = 980;
+/** how fast a landing (cm/s; from 20 cm) a jelly gives all it can back of */
+const LIVELY = 200;
+/** how far past where it's pressed a dent falls away (cm); and how much of the dumpling's speed its top keeps, let go */
+const FALL = 2.6, LET_GO = 0.6;
+/**
+ * Its top, under the dumpling in it: held to the dumpling's foot (depth in, flat across it, about (x, z), rf
+ * across), and going as fast (vy); then let go of, the further out, the more, to go as it would. Let go of
+ * altogether (depth 0), it keeps some of how fast it was going, and wobbles on.
+ */
+export function holdJel(j: Jel, x: number, z: number, rf: number, depth: number, vy: number) {
+  const { R, S, rad } = j, lo = -DOWN * (j.top - j.base);
+  if (depth <= 0) {
+    if (j.held) { for (let k = 0; k < j.w.length; k++) j.w[k] *= LET_GO; j.held = 0; }
+    return;
+  }
+  j.held = depth;
+  const ox = x - j.cx, oz = z - j.cz;
+  for (let i = 0; i <= R; i++) for (let s = 0; s < (i === 0 ? 1 : S); s++) {
+    const a = (s / S) * Math.PI * 2, r = (i / R) * rad;
+    const d = Math.hypot(Math.cos(a) * r - ox, Math.sin(a) * r - oz);
+    const f = d <= rf ? 1 : d >= rf + FALL ? 0 : 0.5 + 0.5 * Math.cos(((d - rf) / FALL) * Math.PI);
+    if (f <= 0) continue;
+    const k = i === 0 ? 0 : 1 + (i - 1) * S + s, to = Math.max(lo, -depth);
+    j.z[k] += (to - j.z[k]) * f; j.w[k] += (vy - j.w[k]) * f;
+  }
 }
 /** On to time t, in its own fixed steps. */
 export function stepJel(j: Jel, t: number) {

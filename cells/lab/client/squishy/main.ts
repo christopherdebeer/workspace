@@ -1153,9 +1153,9 @@ function benchPanel() {
   }
   const names = jellyBench ? ['panna cotta', 'mango pudding', 'konjac'] : ['flour', 'crumbs', 'pepper', 'sprinkles', 'butter'];
   benchPick = Math.min(benchPick, names.length - 1);
-  const jl = jellyBench ? lv.jellies![benchPick].jel! : { feel: { hz: 0, zeta: 0, mass: 0, spread: 0 } };
+  const jl = jellyBench ? lv.jellies![benchPick].jel! : { feel: { hz: 0, zeta: 0, mass: 0, spread: 0, e: 0, soft: 0, deep: 0 } };
   type Row = [keyof typeof jl.feel | 'drop', string, number, number, number];
-  const feelRows: Row[] = [['hz', 'spring Hz', 1, 14, 0.1], ['zeta', 'damping', 0, 0.6, 0.005], ['mass', 'mass', 2, 40, 0.5], ['spread', 'spread Hz', 0, 14, 0.1]];
+  const feelRows: Row[] = [['e', 'gives back', 0, 1, 0.01], ['soft', 'in, 10 cm', 0.05, 0.8, 0.01], ['deep', 'in, 50 cm', 0.1, 1, 0.01], ['hz', 'wobble Hz', 1, 14, 0.1], ['zeta', 'wobble damping', 0, 0.6, 0.005]];
   const rows: Row[] = [...(jellyBench ? feelRows : []), ['drop', 'drop cm', 5, 80, 1]];
   el.innerHTML = `<div class="tabs">${names.map((n, i) => `<button data-i="${i}" class="${i === benchPick ? 'on' : ''}">${n}</button>`).join('')}</div>`
     + rows.map(([k, label, lo, hi, step]) => `<label>${label}<input type="range" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${k === 'drop' ? benchDrop : jl.feel[k]}"><span>${(k === 'drop' ? benchDrop : jl.feel[k]).toFixed(step < 0.01 ? 3 : step < 1 ? 1 : 0)}</span></label>`).join('')

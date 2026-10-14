@@ -178,7 +178,8 @@ console.log(`${kind} righting ok`);
     assert.ok(left, 'flicked, it lets go');
     console.log(`honey ok: stuck at ${stuckAt.toFixed(2)} s`);
   }
-  // a jelly: dropped on, it dents where it lands and springs back; a springy one throws it up again, unasked; a panna cotta doesn't
+  // a jelly: dropped on, it dents where it lands and springs back; a konjac throws it up again, nearly as high, unasked, and
+  // again, lower each time, till it's sat on it; a panna cotta takes the landing in
   {
     const drop = (feel, kind) => {
       const jl = L.jelly(0, 0, 9, 0, 6, L.MAT.jelly, J.FEELS[feel]);
@@ -186,7 +187,7 @@ console.log(`${kind} righting ok`);
       const d = new B.Dumpling([0, 6 + L.REST_H + 40, 0], kind);
       const rest = 6 + L.REST_H;
       let dent = 0, landed = -1, again = 0, air = true;
-      run(d, lv, 2.5, (t) => {
+      run(d, lv, 4.5, (t) => {
         dent = Math.min(dent, jl.jel.z[0]);
         const nowAir = d.contacts === 0;
         if (air && !nowAir && landed < 0) landed = t;
@@ -198,8 +199,8 @@ console.log(`${kind} righting ok`);
     for (const kind of ['dough', 'jelly']) {
       const kj = drop('konjac', kind), pc = drop('pannacotta', kind);
       assert.ok(kj.dent < -0.5 && pc.dent < -0.5, `${kind}: a landing dents it: konjac ${kj.dent.toFixed(2)}, panna cotta ${pc.dent.toFixed(2)}`);
-      assert.ok(kj.again > 3, `${kind}: the konjac throws it up again: ${kj.again.toFixed(1)} cm`);
-      assert.ok(pc.again < 1.5, `${kind}: the panna cotta doesn't: ${pc.again.toFixed(1)} cm`);
+      assert.ok(kj.again > 28, `${kind}: the konjac throws it up again, most of the way: ${kj.again.toFixed(1)} cm of 40`);
+      assert.ok(pc.again < 3, `${kind}: the panna cotta hardly does: ${pc.again.toFixed(1)} cm of 40`);
       assert.ok(Math.abs(kj.sat) < 2 && Math.abs(pc.sat) < 2, `${kind}: and it ends sat on it: ${kj.sat.toFixed(2)}, ${pc.sat.toFixed(2)}`);
       console.log(`${kind} jelly ok: konjac throws it ${kj.again.toFixed(1)} cm, panna cotta ${pc.again.toFixed(1)}; dents ${kj.dent.toFixed(2)}, ${pc.dent.toFixed(2)}`);
     }
