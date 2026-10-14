@@ -299,9 +299,10 @@ export function touchJel(j: Jel, px: number, py: number, pz: number, s: number, 
 /**
  * Its mesh as it is now, into out (VSTRIDE floats a vertex: position, normal, material, uv): its
  * top, each node where it is, lit by its slope; its side, up to where its rim is; a coat on its top
- * (mat, if any) just over it.
+ * (mat, if any) just over it. And, if wanted, into def, two a vertex: how far its top's pressed in
+ * here (of DENT; out, less than 0) and how fast it's moving (of MOVING), for the drawing.
  */
-export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): number {
+export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0, def?: Float32Array): number {
   const { R, S, rad } = j;
   const P = (i: number, s: number): [number, number, number] => {
     const a = (s / S) * Math.PI * 2, r = (i / R) * rad * shapeAt(j, a);
@@ -315,9 +316,14 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): numbe
     const l = Math.hypot(gx, 1, gz);
     return [-gx / l, 1 / l, -gz / l];
   };
-  let o = 0;
-  const put = (p: number[], n: number[], m: number, u: number, v: number) => {
+  const Def = (i: number, s: number): [number, number] => {
+    const k = i === 0 ? 0 : 1 + (i - 1) * S + (s % S);
+    return [Math.max(-1, Math.min(1, -j.z[k] / DENT)), Math.max(-1, Math.min(1, j.w[k] / MOVING))];
+  };
+  let o = 0, od = 0;
+  const put = (p: number[], n: number[], m: number, u: number, v: number, d?: [number, number]) => {
     out[o++] = p[0]; out[o++] = p[1]; out[o++] = p[2]; out[o++] = n[0]; out[o++] = n[1]; out[o++] = n[2]; out[o++] = m; out[o++] = u; out[o++] = v;
+    if (def) { def[od++] = d ? d[0] : 0; def[od++] = d ? d[1] : 0; }
   };
   const uv = (p: number[]) => [(p[0] - j.cx) / rad, (p[2] - j.cz) / rad];
   // (which recipe it was set from, carried in its material's fraction, for the drawing's layers)
@@ -327,9 +333,10 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): numbe
     for (let i = 0; i < R; i++) for (let s = 0; s < S; s++) {
       const a = P(i, s), b = P(i + 1, s), c = P(i + 1, s + 1), d = P(i, s + 1);
       const na = Nrm(i, s), nb = Nrm(i + 1, s), nc = Nrm(i + 1, s + 1), nd = Nrm(i, s + 1);
-      const tri = (p: number[][], n: number[][]) => { for (let q = 0; q < 3; q++) { const pp = L(p[q], n[q]); const t = uv(pp); put(pp, n[q], m, t[0], t[1]); } };
-      tri([a, c, b], [na, nc, nb]);
-      tri([a, d, c], [na, nd, nc]);
+      const da = Def(i, s), db = Def(i + 1, s), dc = Def(i + 1, s + 1), dd = Def(i, s + 1);
+      const tri = (p: number[][], n: number[][], e: Array<[number, number]>) => { for (let q = 0; q < 3; q++) { const pp = L(p[q], n[q]); const t = uv(pp); put(pp, n[q], m, t[0], t[1], e[q]); } };
+      tri([a, c, b], [na, nc, nb], [da, dc, db]);
+      tri([a, d, c], [na, nd, nc], [da, dd, dc]);
     }
   };
   top(mat, 0);
@@ -357,8 +364,10 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): numbe
     const a = G[k][s], b = G[k + 1][s], c = G[k + 1][s + 1], d = G[k][s + 1];
     const na = nrmAt(k, s), nb = nrmAt(k + 1, s), nc = nrmAt(k + 1, (s + 1) % S), nd = nrmAt(k, (s + 1) % S);
     const ua = [s / S, 2 + k / K], ub = [s / S, 2 + (k + 1) / K], uc = [(s + 1) / S, 2 + (k + 1) / K], ud = [(s + 1) / S, 2 + k / K];
-    put(a, na, mat, ua[0], ua[1]); put(b, nb, mat, ub[0], ub[1]); put(c, nc, mat, uc[0], uc[1]);
-    put(a, na, mat, ua[0], ua[1]); put(c, nc, mat, uc[0], uc[1]); put(d, nd, mat, ud[0], ud[1]);
+    // (its rim moves with its top)
+    const eb = k + 1 === K ? Def(R, s) : undefined, ec = k + 1 === K ? Def(R, s + 1) : undefined;
+    put(a, na, mat, ua[0], ua[1]); put(b, nb, mat, ub[0], ub[1], eb); put(c, nc, mat, uc[0], uc[1], ec);
+    put(a, na, mat, ua[0], ua[1]); put(c, nc, mat, uc[0], uc[1], ec); put(d, nd, mat, ud[0], ud[1]);
   }
   if (coat) top(coat, 0.06);
   // what's set on top, by its recipe: berries, sat a little into its top where it is now (its kind in their
@@ -383,6 +392,8 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0): numbe
 }
 /** how many floats its mesh takes */
 export const jelMeshSize = (j: Jel, coat = 0) => (j.R * j.S * 6 * (coat ? 2 : 1) + j.S * SIDE_RINGS * 6 + (GARNISH[j.mould?.recipe ?? -1]?.n ?? 0) * BLA * BLO * 6) * 9;
+/** (for the drawing) how far in its top is pressed to count all (cm), and how fast it moves to (cm/s) */
+const DENT = 2.5, MOVING = 60;
 /** a berry's material (level.ts's MAT.berry; here so as not to depend on it) */
 const MAT_BERRY = 46;
 /** a berry's mesh: so many bands from its top down, so many round */

@@ -32,6 +32,8 @@ const LEAN0 = 0.19, LEAN1 = 0.4, SHUFFLE_UP = 0.93;
 const TACK = 900, STICK = 0.35;
 /** a jelly's bed: how far up from its lowest point the dumpling's foot is (cm), that its top's held to; and how far short of the foot, so the foot's touching it */
 const FOOT = 1.2, BED_SKIN = 0.003;
+/** pressed (see `press`): how much just resting on something counts; how fast coming in counts all (cm/s); how fast it's let go of (s) */
+const PRESS_REST = 0.4, PRESS_HARD = 250, PRESS_LET = 0.09;
 /** held: how far round the touch the finger has the dough (cm), and how hard it draws it each small step */
 const GRAB_R = 2.6, GRAB_K = 0.12;
 /** a poke: how far round the finger it dents (cm), how hard (cm/s at the finger), and how much it goes along the ground with it, and up */
@@ -207,6 +209,10 @@ export class Dumpling {
   private pin: Uint8Array;
   /** (scratch: each point's weight on a jelly's bed) */
   private bw: Float32Array;
+  /** how hard each particle's pressed against what it's on (0–1): touching, more as it comes in hard or sinks into a jelly's
+   * bed; let go of quickly as it comes away (for the drawing: what's pressed darkens and spreads its gloss); and this step's */
+  press: Float32Array;
+  private pressNow: Float32Array;
   /** what each particle is coated with, and how thickly (0–1): picked up where it touches, worn off in time, shaken off by a hard landing */
   coat: Float32Array;
   coatKind: Uint8Array;
@@ -278,7 +284,7 @@ export class Dumpling {
     this.x = new Float32Array(n * 3); this.v = new Float32Array(n * 3); this.p = new Float32Array(n * 3); this.q = new Float32Array(n * 3);
     this.cn = new Float32Array(n * 3); this.cd = new Float32Array(n); this.cmu = new Float32Array(n); this.cb = new Float32Array(n);
     this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.ctr = new Float32Array(n); this.pin = new Uint8Array(n); this.bw = new Float32Array(n); this.cdust = new Uint8Array(n);
-    this.coat = new Float32Array(n); this.coatKind = new Uint8Array(n);
+    this.coat = new Float32Array(n); this.coatKind = new Uint8Array(n); this.press = new Float32Array(n); this.pressNow = new Float32Array(n);
     let cx = 0, cy = 0, cz = 0;
     for (let i = 0; i < n; i++) { cx += s.pos[i * 3]; cy += s.pos[i * 3 + 1]; cz += s.pos[i * 3 + 2]; }
     cx /= n; cy /= n; cz /= n;
@@ -311,7 +317,7 @@ export class Dumpling {
     this.vcom = [0, 0, 0]; this.drift = [0, 0, 0]; this.comWas = [...at] as V3;
     this.tack = 1; this.sinceContact = 0; this.sinceFlick = 9; this.squeeze = null;
     this.spinMode = 0; this.spinLeft = 0; this.held = 0; this.grip = 1; this.limp = 0; this.honeyT = -1; this.climb = null;
-    this.coat.fill(0); this.coatKind.fill(0); this.coated = [0, 0, 0, 0, 0, 0]; this.coatMost = DUST.none; this.sneeze = 0;
+    this.coat.fill(0); this.coatKind.fill(0); this.press.fill(0); this.coated = [0, 0, 0, 0, 0, 0]; this.coatMost = DUST.none; this.sneeze = 0;
   }
   /**
    * Held by a finger: the dough round where it was touched (each particle so much, 1 at the
@@ -597,6 +603,8 @@ export class Dumpling {
     for (let i = 0; i < n; i++) if (bw[i] > 0) rf = Math.max(rf, Math.hypot(x[i * 3] - cx, x[i * 3 + 2] - cz));
     const { k, zeta, x0 } = bedOf(j, j.vin), q = depth / x0;
     const F = depth > 0 ? Math.max(0, k * depth * (1 + q * q) - 2 * zeta * Math.sqrt(k * (1 + 3 * q * q)) * vy) : 0;
+    // (pressed into it: its foot, the more the deeper it's in)
+    for (let i = 0; i < n; i++) if (bw[i] > 0) this.pressNow[i] = Math.max(this.pressNow[i], (bw[i] / FOOT) * (PRESS_REST + (1 - PRESS_REST) * Math.min(1, q)));
     // (and its sliding held back, as much as the push lets it)
     const vt = Math.hypot(vx, vz), ft = vt > 1e-6 ? Math.min(vt, mu * F * h) / vt : 0;
     const a = h * h;
@@ -719,6 +727,7 @@ export class Dumpling {
           }
           if (cf[i] === 1) {
             if (-cv0[i] > impact) impact = -cv0[i];
+            this.pressNow[i] = Math.max(this.pressNow[i], PRESS_REST + (1 - PRESS_REST) * Math.min(1, Math.max(0, -cv0[i]) / PRESS_HARD));
             if (cdust[i] && -cv0[i] > 60) { spN++; spX += p[i3]; spY += p[i3 + 1]; spZ += p[i3 + 2]; spK = cdust[i]; spV = Math.max(spV, -cv0[i]); }
             if (bn > 0 && cv0[i] < -40) vn = Math.max(vn, -cv0[i] * bn);
           }
@@ -768,6 +777,9 @@ export class Dumpling {
         }
       }
     }
+    // how hard each is pressed: at once as it's pressed, let go of quickly
+    { const keep = Math.exp(-dt / PRESS_LET), pn = this.pressNow, pr = this.press;
+      for (let i = 0; i < n; i++) { pr[i] = Math.max(pn[i], pr[i] * keep); pn[i] = 0; } }
     // the middle, the speed, and how it's touching
     let cx = 0, cy = 0, cz = 0, vx = 0, vy = 0, vz = 0;
     for (let i = 0; i < n; i++) { cx += x[i * 3]; cy += x[i * 3 + 1]; cz += x[i * 3 + 2]; vx += v[i * 3]; vy += v[i * 3 + 1]; vz += v[i * 3 + 2]; }

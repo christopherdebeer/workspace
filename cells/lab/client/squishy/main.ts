@@ -241,9 +241,11 @@ in vec3 aNor;
 in float aMat;
 in vec2 aUV;
 in vec4 aBake;
+in vec2 aDef;
 uniform mat4 uVP, uModel, uLightVP;
 uniform float uMatOver;
 out vec4 vBake;
+out vec2 vDef;
 out vec3 vWorld;
 out vec3 vNor;
 out vec2 vUV;
@@ -255,6 +257,7 @@ void main() {
   vNor = normalize(mat3(uModel) * aNor);
   vUV = aUV;
   vBake = aBake;
+  vDef = aDef;
   vMat = uMatOver >= 0. ? uMatOver : aMat;
   vShadow = uLightVP * w;
   gl_Position = uVP * w;
@@ -264,6 +267,14 @@ const FS = `#version 300 es
 precision highp float;
 uniform float uBakeView;
 in vec4 vBake;
+/** how a jelly's top is deformed here: pressed in (+) or bulged up (-), and how fast it's moving (see jelMesh) */
+in vec2 vDef;
+/** rings spreading on a jelly's top from where the dumpling landed on it: where (x, z), how long ago, how hard; and the
+ * dumpling's colour, for the light off it into what it's pressed into */
+uniform vec4 uRipple;
+uniform vec3 uBodyCol;
+/** the dumpling, as a ball (where, how big), for how much of the room it shuts off from what's near it */
+uniform vec4 uBodyAt;
 in vec3 vWorld;
 in vec3 vNor;
 in vec2 vUV;
@@ -311,7 +322,7 @@ void main() {
   vec3 V = normalize(uEye - vWorld);
   int id = int(vMat + .5);
   vec2 uv = vUV;
-  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1.;
+  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1., contact = 0.;
   // (the glaze over it, if any: how rough, and how bright the sun's caught in it)
   float coatRough = .08, coatSpec = .04;
   // (cloth: no glint, a soft sheen at a glance instead; and how small a centimetre is on the glass here, so fine
@@ -448,6 +459,20 @@ void main() {
     rough = mix(.3, .07, L.a); coat = mix(.45, .9, L.a);
     emit = mix(.2 + .45 * rim, .25 + .6 * rim, L.a) + bub * .8;
     alpha = mix(1., mix(.72, .95, pow(1. - NoV0, 1.4)), clear2);
+    // as it's deformed (from its top as the simulation has it, so it comes and goes with it): pressed in, shut in by the
+    // dumpling in it, the gloss spread wider and duller there; bulged up round it, thicker, a clear layer's colour denser;
+    // moving, a little sheen; and rings spreading from where it came down, fading
+    float dent = smoothstep(.05, .8, vDef.x), bulge = smoothstep(.02, .5, -vDef.x), moving = smoothstep(.1, .8, abs(vDef.y));
+    contact = .75 * dent;
+    rough = mix(rough, rough + .16, dent);
+    base *= mix(vec3(1.), vec3(.82, .78, .8), bulge * L.a);
+    emit += .2 * moving * rim * L.a;
+    if (top && uRipple.w > 0. && uRipple.z >= 0.) {
+      vec2 dp = vWorld.xz - uRipple.xy;
+      float rr = length(dp), age = uRipple.z, front = age * 26., ph = rr - front;
+      float amp = uRipple.w * exp(-age * 2.4) * exp(-ph * ph / 14.) * smoothstep(0., 1.5, rr);
+      n = normalize(n + vec3(dp / max(rr, 1e-3), 0.).xzy * amp * .35 * cos(ph * 2.2));
+    }
     if (deco > 0.) {
       base = mix(base, mix(dcol, dcol * 1.4 + .05, rim * .6), deco); rough = mix(rough, rec == 6 ? .4 : .12, deco); coat = mix(coat, rec == 6 ? .2 : 1., deco);
       emit = mix(emit, (rec == 6 ? .15 : .06) + .25 * rim, deco); alpha = mix(alpha, 1., deco);
@@ -728,8 +753,13 @@ void main() {
   vec3 spec = D_ggx(max(dot(n, H), 0.), a) * V_smith(NoV, NoL, a) * Fk * NoL;
   // (the room's light, less where it's shut in by what's near it (baked as the level's laid); and the light off
   // what's near, onto it, in its colour: lit by the room, and a little by the sun on it)
-  float occ = vBake.x;
-  vec3 amb = irradiance(n) * cavity * (1. - .85 * occ) + vBake.yzw * occ * (irradiance(-n) * .55 + uKeyCol * .1) * .6;
+  // (near the dumpling, shut in by it as by a ball, the more the nearer and the more it faces it: a tight contact
+  // shadow where it sits, deeper where it's pressed into a jelly's top, the light that gets in there what's come off it)
+  vec3 bd = uBodyAt.xyz - vWorld;
+  float bl = max(length(bd), 1e-3);
+  contact = max(contact, clamp(dot(n, bd / bl) * uBodyAt.w * uBodyAt.w / (bl * bl), 0., 1.) * (1. - smoothstep(uBodyAt.w * 2., uBodyAt.w * 3.5, bl)));
+  float occ = max(vBake.x, contact);
+  vec3 amb = irradiance(n) * cavity * (1. - .85 * occ) + (contact > vBake.x ? uBodyCol * .3 : vBake.yzw) * occ * (irradiance(-n) * .55 + uKeyCol * .1) * .6;
   // (and where it's well shut in, a little of the sun too: what stands on a thing sits down into it, even in the sun)
   float sunIn = 1. - .45 * occ * occ;
   spec *= 1. - .85 * fabric;
@@ -739,7 +769,7 @@ void main() {
   vec3 Fr = F0 + (max(vec3(1. - rough), F0) - F0) * pow(1. - NoV, 5.);
   // (the room's window, sharp, only in what's glossy: a rougher surface takes the room's soft light, not a window that isn't where it shows)
   c += Fr * mix(env(reflect(-V, n)), irradiance(n), smoothstep(.05, .4, rough)) * (1. - .6 * rough * (1. - metal)) * (1. - .5 * occ) * (1. - .8 * fabric);
-  c += base * emit * (amb + uKeyCol * .5);
+  c += base * emit * (amb + uKeyCol * .5 * (1. - .7 * contact));
   if (coat > .01) {
     float Fc = (.04 + .96 * pow(1. - NoV, 5.)) * coat;
     c = c * (1. - Fc) + Fc * env(reflect(-V, n)) * (1. - .5 * occ) + coat * uKeyCol * D_ggx(max(dot(n, H), 0.), coatRough) * V_smith(NoV, NoL, coatRough) * coatSpec * NoL * sh;
@@ -757,13 +787,13 @@ in vec3 aPos;
 in vec3 aNor;
 in vec3 aRest;
 in vec2 aCoat;
-in vec2 aSkin;
+in vec3 aSkin;
 uniform mat4 uVP, uLightVP;
 out vec3 vWorld;
 out vec3 vNor;
 out vec3 vRest;
 out vec2 vCoat;
-out vec2 vSkin;
+out vec3 vSkin;
 out vec4 vShadow;
 void main() {
   vWorld = aPos; vNor = aNor; vRest = aRest; vCoat = aCoat; vSkin = aSkin;
@@ -782,7 +812,7 @@ in vec3 vWorld;
 in vec3 vNor;
 in vec3 vRest;
 in vec2 vCoat;
-in vec2 vSkin;
+in vec3 vSkin;
 in vec4 vShadow;
 out vec4 o;
 uniform vec3 uEye;
@@ -805,7 +835,10 @@ void main() {
   // creases close and darken, and less light gets through; stretched, it's thinner, milkier, the light through it more)
   float thick = max(vSkin.x, .2), strain = clamp(vSkin.y, -.6, .6);
   float squash = smoothstep(0., .35, -strain), stretch = smoothstep(0., .35, strain);
-  crease = min(1., crease * (1. + 1.4 * squash) + squash * .25 * pleatAmt);
+  // (and pressed against what it's on: there its creases close the more, and broaden; it's shut in, darker, the light
+  // that gets in there what's come off what it's on; its gloss spread flat and dull)
+  float press = clamp(vSkin.z, 0., 1.);
+  crease = min(1., crease * (1. + 1.4 * squash + .8 * press) + squash * .25 * pleatAmt);
   vec3 base = mix(vec3(.87, .77, .61), vec3(.95, .91, .83), flour * .6) * (1. - .22 * crease);
   base *= 1. - .14 * smoothstep(.2, 1., -h);
   base = mix(base, base * vec3(1.03, 1.02, 1.), stretch * .6);
@@ -848,8 +881,8 @@ void main() {
   float wrap = max((NoL + .5) / 1.5, 0.);
   float sh = shadow(n);
   float lit = mix(wrap * .3, wrap, sh) * .72;
-  vec3 amb = irradiance(n) * (1. - .28 * crease) * (.75 + .25 * smoothstep(-1., .3, n.y));
-  vec3 c = base * (amb + uKeyCol * lit);
+  vec3 amb = irradiance(n) * (1. - .28 * crease) * (.75 + .25 * smoothstep(-1., .3, n.y)) * (1. - .55 * press);
+  vec3 c = base * (amb + uKeyCol * lit * (1. - .5 * press));
   float edge = pow(1. - max(dot(n, V), 0.), 2.);
   c += vec3(1., .62, .42) * uKeyCol * .22 * pow(clamp(1. - abs(NoL), 0., 1.), 3.) * sh;
   // (light through it: where it's thin, the sun from behind it comes through warm, milky; and the room's light
@@ -862,7 +895,7 @@ void main() {
   float NoV = max(dot(n, V), 1e-3);
   float NoH = max(dot(n, H), 0.), NoLp = max(NoL, 0.);
   c += uKeyCol * D_ggx(NoH, .48) * V_smith(NoV, NoLp, .48) * .07 * NoLp * sh;
-  float wet = mix(.16, .11, stretch);
+  float wet = mix(mix(.16, .11, stretch), .3, press);
   c += uKeyCol * D_ggx(NoH, wet) * V_smith(NoV, NoLp, wet) * .018 * NoLp * sh * (1. - squash * .6);
   c += (.04 + .96 * pow(1. - NoV, 5.)) * env(reflect(-V, n)) * .25 * (1. - .7 * smoothstep(.5, .95, cRough));
   // (butter's grease, sprinkles' sugar: a gloss)
@@ -885,6 +918,7 @@ in vec3 vWorld;
 in vec3 vNor;
 in vec3 vRest;
 in vec2 vCoat;
+in vec3 vSkin;
 in vec4 vShadow;
 out vec4 o;
 uniform vec3 uEye;
@@ -945,6 +979,8 @@ void main() {
       }
     }
     inside += (irradiance(n) * .5 + uKeyCol * .25) * bub * .5;
+    // (pressed against what it's on: shut in there, less light inside it)
+    inside *= 1. - .45 * clamp(vSkin.z, 0., 1.);
     vec3 c = behind * mix(T, sqrt(T), clamp(clear, 0., 1.) * .6);
 #ifdef HDR
     // (its own light over what's seen through it, as a screen over it would be, in light)
@@ -991,9 +1027,11 @@ void main() {
   vec3 R = reflect(-V, n);
   float F = .035 + .965 * pow(1. - NoV, 5.);
   vec3 H = normalize(uKey + V);
-  vec3 gloss = env(R) * F * .45
+  // (where it's pressed flat against what it's on, wet against it, no air between: no gloss there, it's seen into)
+  float press = clamp(vSkin.z, 0., 1.);
+  vec3 gloss = (env(R) * F * .45
     + uKeyCol * D_ggx(max(dot(n, H), 0.), .045) * V_smith(max(NoV, 1e-3), max(NoL, 0.), .045) * max(NoL, 0.) * sh * .5
-    + uKeyCol * D_ggx(max(dot(n, H), 0.), .25) * V_smith(max(NoV, 1e-3), max(NoL, 0.), .25) * max(NoL, 0.) * sh * .06;
+    + uKeyCol * D_ggx(max(dot(n, H), 0.), .25) * V_smith(max(NoV, 1e-3), max(NoL, 0.), .25) * max(NoL, 0.) * sh * .06) * (1. - .75 * press);
   // the print, lit as a print on its skin
   vec3 lightOn = irradiance(n) * .55 + uKeyCol * max(NoL, 0.) * mix(.25, 1., sh) * .6;
   vec3 printCol = mix(vec3(1., .16, .2) * (lightOn * .8 + .35), vec3(.012, .01, .015), ink);
@@ -1179,9 +1217,12 @@ const u = (p: WebGLProgram, n: string) => {
 };
 
 // ─── meshes on the card ──────────────────────────────────────────────────────────────────────────
-interface Mesh { vao: WebGLVertexArrayObject; svao: WebGLVertexArrayObject; buf: WebGLBuffer; bbuf?: WebGLBuffer | null; count: number }
-function upload(verts: number[] | Float32Array, usage: number = gl.STATIC_DRAW, baked: Float32Array | null = null): Mesh {
+interface Mesh { vao: WebGLVertexArrayObject; svao: WebGLVertexArrayObject; buf: WebGLBuffer; bbuf?: WebGLBuffer | null; dbuf?: WebGLBuffer | null; count: number }
+/** A mesh on the card: its vertices; what's baked into each, if any; and, if it deforms, a buffer of how (two a vertex, see jelMesh). */
+function upload(verts: number[] | Float32Array, usage: number = gl.STATIC_DRAW, baked: Float32Array | null = null, def: Float32Array | null = null): Mesh {
   const data = verts instanceof Float32Array ? verts : new Float32Array(verts);
+  const dbuf = def ? gl.createBuffer()! : null;
+  if (dbuf) { gl.bindBuffer(gl.ARRAY_BUFFER, dbuf); gl.bufferData(gl.ARRAY_BUFFER, def!, gl.DYNAMIC_DRAW); }
   const bbuf = baked ? gl.createBuffer()! : null;
   if (bbuf) { gl.bindBuffer(gl.ARRAY_BUFFER, bbuf); gl.bufferData(gl.ARRAY_BUFFER, baked!, gl.STATIC_DRAW); }
   const buf = gl.createBuffer()!;
@@ -1200,26 +1241,39 @@ function upload(verts: number[] | Float32Array, usage: number = gl.STATIC_DRAW, 
     // (what's baked into it, from its own buffer)
     const bl = p === prog && bbuf ? gl.getAttribLocation(p, 'aBake') : -1;
     if (bl >= 0) { gl.bindBuffer(gl.ARRAY_BUFFER, bbuf); gl.enableVertexAttribArray(bl); gl.vertexAttribPointer(bl, 4, gl.FLOAT, false, 0, 0); }
+    const dl = p === prog && dbuf ? gl.getAttribLocation(p, 'aDef') : -1;
+    if (dl >= 0) { gl.bindBuffer(gl.ARRAY_BUFFER, dbuf); gl.enableVertexAttribArray(dl); gl.vertexAttribPointer(dl, 2, gl.FLOAT, false, 0, 0); }
     gl.bindVertexArray(null);
     return vao;
   };
-  return { vao: make(prog, [['aPos', 3, 0], ['aNor', 3, 3], ['aMat', 1, 6], ['aUV', 2, 7]]), svao: make(shadowProg, [['aPos', 3, 0]]), buf, bbuf, count: data.length / VSTRIDE };
+  return { vao: make(prog, [['aPos', 3, 0], ['aNor', 3, 3], ['aMat', 1, 6], ['aUV', 2, 7]]), svao: make(shadowProg, [['aPos', 3, 0]]), buf, bbuf, dbuf, count: data.length / VSTRIDE };
 }
 function drop(m: Mesh | null) {
   if (!m) return;
-  gl.deleteBuffer(m.buf); if (m.bbuf) gl.deleteBuffer(m.bbuf); gl.deleteVertexArray(m.vao); gl.deleteVertexArray(m.svao);
+  gl.deleteBuffer(m.buf); if (m.bbuf) gl.deleteBuffer(m.bbuf); if (m.dbuf) gl.deleteBuffer(m.dbuf); gl.deleteVertexArray(m.vao); gl.deleteVertexArray(m.svao);
 }
 const SPHERE = upload((() => { const v: number[] = []; sphere(v, 13); return v; })());
 const DISC = upload((() => { const v: number[] = []; disc(v, 14); return v; })());
 let courseMesh: Mesh | null = null;
-/** the jellies, drawn as their tops are each frame: the mesh, and the floats it's filled from */
-let jellyMeshes: Array<{ shape: Shape; mesh: Mesh; data: Float32Array }> = [];
+/**
+ * The jellies, drawn as their tops are each frame: the mesh, the floats it's filled from, and how it's deformed; and
+ * the rings spreading from where the dumpling last came down on it (where, when, how hard), and whether it's in it now.
+ */
+/** ?nodef: nothing drawn from how things are deformed or pressed (the dumpling's press, a jelly's dent and rings), to compare */
+const noDef = params.has('nodef');
+let jellyMeshes: Array<{ shape: Shape; mesh: Mesh; data: Float32Array; def: Float32Array; ripple: [number, number, number, number]; was: boolean }> = [];
 function fillJellies() {
   for (const jm of jellyMeshes) {
-    const n = jelMesh(jm.shape.jel!, jm.data, jm.shape.mat, jm.shape.dust ? 24 + jm.shape.dust : 0);
+    const j = jm.shape.jel!;
+    const n = jelMesh(j, jm.data, jm.shape.mat, jm.shape.dust ? 24 + jm.shape.dust : 0, noDef ? undefined : jm.def);
     gl.bindBuffer(gl.ARRAY_BUFFER, jm.mesh.buf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, jm.data, 0, n);
+    if (!noDef) { gl.bindBuffer(gl.ARRAY_BUFFER, jm.mesh.dbuf!); gl.bufferSubData(gl.ARRAY_BUFFER, 0, jm.def, 0, (n / VSTRIDE) * 2); }
     jm.mesh.count = n / VSTRIDE;
+    // (come down on: rings from there, as hard as it came)
+    const now = (j.held ?? 0) > 0;
+    if (now && !jm.was && !noDef) jm.ripple = [body.com[0], body.com[2], simTime, Math.min(1, (j.vin ?? 0) / 300)];
+    jm.was = now;
   }
 }
 let glassMesh: Mesh | null = null;
@@ -1306,12 +1360,12 @@ function skinOnCard(kind: Kind) {
   // (how thick it is at each point, through its rest shape, and how much skin is round each point at rest: for how
   // it's stretched or squashed, as it's drawn)
   const { thick, area: restArea } = skinMeasure(d.q, d.tris);
-  const skinData = new Float32Array(d.n * 2);
-  for (let i = 0; i < d.n; i++) skinData[i * 2] = thick[i];
+  const skinData = new Float32Array(d.n * 3);
+  for (let i = 0; i < d.n; i++) skinData[i * 3] = thick[i];
   const skin = gl.createBuffer()!;
   gl.bindBuffer(gl.ARRAY_BUFFER, skin);
   gl.bufferData(gl.ARRAY_BUFFER, skinData, gl.DYNAMIC_DRAW);
-  bind(pos, 0); bind(nor, 1); bind(rest, 2); bind(coat, 3, 2); bind(skin, 4, 2);
+  bind(pos, 0); bind(nor, 1); bind(rest, 2); bind(coat, 3, 2); bind(skin, 4, 3);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, d.tris, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
@@ -1390,9 +1444,10 @@ function uploadSkin(body: Dumpling, prevX: Float32Array, alpha: number) {
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, A = Math.hypot(nx, ny, nz) / 6;
     for (const i of [a, b, c]) { nrm[i] += nx; nrm[i + 1] += ny; nrm[i + 2] += nz; an[i / 3] += A; }
   }
-  // (how much skin is about each point now, against at rest: stretched, more; squashed, less)
+  // (how much skin is about each point now, against at rest: stretched, more; squashed, less; and how hard it's pressed
+  // against what it's on)
   const sd = g.skinData, ra = g.restArea;
-  for (let j = 0; j < an.length; j++) sd[j * 2 + 1] += ((ra[j] > 0 ? an[j] / ra[j] - 1 : 0) - sd[j * 2 + 1]) * 0.5;
+  for (let j = 0; j < an.length; j++) { sd[j * 3 + 1] += ((ra[j] > 0 ? an[j] / ra[j] - 1 : 0) - sd[j * 3 + 1]) * 0.5; sd[j * 3 + 2] = noDef ? 0 : body.press[j]; }
   gl.bindBuffer(gl.ARRAY_BUFFER, g.skin);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, sd);
   for (let i = 0; i < nrm.length; i += 3) { const l = Math.hypot(nrm[i], nrm[i + 1], nrm[i + 2]) || 1; nrm[i] /= l; nrm[i + 1] /= l; nrm[i + 2] /= l; }
@@ -1513,7 +1568,10 @@ function startLevel(n: number, quiet = false) {
   susanMeshes.clear();
   for (const m of movers) drop(m.mesh);
   for (const jm of jellyMeshes) drop(jm.mesh);
-  jellyMeshes = (lv.jellies ?? []).map((shape) => { const data = new Float32Array(jelMeshSize(shape.jel!, shape.dust)); return { shape, data, mesh: upload(data, gl.DYNAMIC_DRAW) }; });
+  jellyMeshes = (lv.jellies ?? []).map((shape) => {
+    const data = new Float32Array(jelMeshSize(shape.jel!, shape.dust)), def = new Float32Array((data.length / VSTRIDE) * 2);
+    return { shape, data, def, mesh: upload(data, gl.DYNAMIC_DRAW, null, def), ripple: [0, 0, -99, 0], was: false };
+  });
   const lm = levelMesh(lv);
   const solid = new Float32Array(lm.solid);
   courseMesh = upload(solid, gl.STATIC_DRAW, bakeLight(solid));
@@ -2646,6 +2704,9 @@ function frame(now: number) {
   // (the screen over what stands before the dumpling: on in play, once the way over's done)
   gl.uniform3fv(u(prog, 'uHole'), mode === 'play' && fly < 0 && !fixedView ? [0, 0, 1] : [0, 0, 0]);
   gl.uniform3fv(u(prog, 'uHoleAt'), body.com);
+  // (the dumpling, as a ball shutting in what's near it, and its colour, for the light off it)
+  gl.uniform4f(u(prog, 'uBodyAt'), body.com[0], body.com[1], body.com[2], noDef ? 0 : RADIUS * 1.3);
+  gl.uniform3fv(u(prog, 'uBodyCol'), body.kind === 'jelly' ? [0.9, 0.3, 0.42] : [0.85, 0.72, 0.52]);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, shadowTex);
   if (roomMesh) drawMesh(roomMesh);
@@ -2657,7 +2718,9 @@ function frame(now: number) {
   // (the jellies, as their tops are: the konjac seen partly through)
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  for (const jm of jellyMeshes) drawMesh(jm.mesh);
+
+  for (const jm of jellyMeshes) { const r = jm.ripple; gl.uniform4f(u(prog, 'uRipple'), r[0], r[1], simTime - r[2], r[3]); drawMesh(jm.mesh); }
+  gl.uniform4f(u(prog, 'uRipple'), 0, 0, -99, 0);
   gl.disable(gl.BLEND);
   // the dark under the dumpling
   gl.uniform3fv(u(prog, 'uHole'), [0, 0, 0]);

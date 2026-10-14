@@ -355,6 +355,19 @@ farthest wherever it's seen), so how thick it is where you look is how thick it 
 stretched: colour taken out by that thickness (pink deepening through its middle, clear at its thin
 edges), what's seen through it softer the thicker, and three bubbles held in it, set when it was
 made and going with it, each a bright ring; its glitter turned down, so its depth holds the eye.
+
+How things are pressed shows, from the simulation itself, so it comes and goes with it: the dumpling
+keeps how hard each point of it is pressed against what it's on (touching; more as it comes in hard
+or sinks into a jelly's bed; let go of within a tenth of a second as it comes away), and a jelly's
+top how far each point of it is pressed in or bulged up and how fast it's moving. Pressed, the dough
+is shut in and darker there, its creases closing the more, its gloss spread flat; the jelly
+dumpling loses its gloss where it's flat against something, wet against it with no air between. A
+pudding's top, pressed in, is shut in by the dumpling in it, its gloss spread wider; bulged up round
+it, thicker, a clear layer's colour denser; moving, a little sheen; and rings spread out from where
+the dumpling came down, as hard as it came, fading. And anything near the dumpling is shut in by it
+as by a ball, the more the nearer and the more it faces it, the light that gets in there what's come
+off the dumpling: a tight contact shadow where it sits, on a cloth, a board, a pudding. `?nodef`
+leaves all this out, to compare.
 Porcelain is a satin body with a few iron specks fired into it under a clear hard glaze, pooled a
 little at its rim and over its painted band; enamel, glass fired on steel, is glossier and flat in
 colour, and chipped only now and then, the steel showing there.
