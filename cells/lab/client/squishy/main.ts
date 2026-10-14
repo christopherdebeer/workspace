@@ -1559,6 +1559,48 @@ let levelN = Math.max(1, Number(params.get('level')) || (() => { try { return Nu
 let lv!: Level;
 /** the tower last stood on (where a fall comes back to), falls, the clock, home (the time, or not yet) */
 let check = 0;
+/** the tops stood on this go (not where it starts): for the score */
+const visited = new Set<number>();
+/**
+ * A level's score, from how it went: every top stood on, 100; a bonus for each tenth of a second under par (8 s a hop);
+ * 60 off for each fall, and 150 more for none. Kept with the best time and the fewest falls, each its own best.
+ */
+interface Run { score: number; time: number; falls: number; tops: number }
+function scoreOf(time: number, falls: number, tops: number): Run {
+  const par = 8 * Math.max(1, lv.towers.length - 1);
+  const score = Math.max(0, tops * 100 + Math.max(0, Math.round((par - time) * 10)) - falls * 60 + (falls ? 0 : 150));
+  return { score, time, falls, tops };
+}
+const RECORD = (n: number) => `${STORE}:record:${n}`;
+function recordOf(n: number): (Run & { bestTime: number; fewestFalls: number }) | null {
+  try {
+    const r = JSON.parse(localStorage.getItem(RECORD(n)) ?? 'null');
+    if (r) return r;
+    // (from before scores: a best time alone)
+    const t = Number(localStorage.getItem(`${STORE}:best:${n}`));
+    return t ? { score: 0, time: t, falls: 0, tops: 0, bestTime: t, fewestFalls: Infinity } : null;
+  } catch { return null; }
+}
+/** Home: the run scored, kept if it's the best, and shown on a card (gold, a new best). */
+function showDone(r: Run) {
+  const was = recordOf(levelN);
+  const better = !was || r.score > was.score, fasterThan = !was || r.time < was.bestTime, cleaner = !was || r.falls < was.fewestFalls;
+  const rec = { ...(better ? r : was!), bestTime: Math.min(r.time, was?.bestTime ?? Infinity), fewestFalls: Math.min(r.falls, was?.fewestFalls ?? Infinity) };
+  if (!auto && !benchName) try { localStorage.setItem(RECORD(levelN), JSON.stringify(rec)); localStorage.setItem(`${STORE}:best:${levelN}`, String(rec.bestTime)); } catch { /* */ }
+  const el = $('done');
+  const first = !was || !was.score;
+  el.classList.toggle('best', better && !first);
+  el.querySelector('b')!.textContent = first ? 'home!' : better ? 'a new best!' : 'home!';
+  const row = (k: string, v: string, note: string, hi: boolean) => `<div class="row${hi ? ' hi' : ''}"><span>${k}</span><b>${v}</b><i>${note}</i></div>`;
+  const tops = lv.towers.length - 1;
+  el.querySelector('.rows')!.innerHTML =
+    row('time', `${r.time.toFixed(1)} s`, was && !first ? (fasterThan ? `was ${was.bestTime.toFixed(1)}` : `best ${was.bestTime.toFixed(1)}`) : '', fasterThan && !first)
+    + row('falls', `${r.falls}`, was && !first && Number.isFinite(was.fewestFalls) ? (cleaner ? `was ${was.fewestFalls}` : `fewest ${was.fewestFalls}`) : '', cleaner && !first)
+    + row('tops', `${r.tops} of ${tops}`, '', false)
+    + row('score', `${r.score}`, was && !first ? (better ? `was ${was.score}` : `best ${was.score}`) : '', better && !first);
+  el.classList.add('on');
+  if (better && !first) setTimeout(() => { if (ac) [990, 1320, 1760].forEach((f, i) => setTimeout(() => blop(f, f * 1.01, 0.4, 0.1), i * 90)); }, 520);
+}
 let falls = 0;
 let clock = 0;
 let home = -1;
@@ -1657,7 +1699,7 @@ function startLevel(n: number, quiet = false) {
   // (set down a little above, to drop on: on a lid, its knob is under it)
   body = new Dumpling([at[0], at[1] + REST_H + 2, at[2]], skin);
   prevX = new Float32Array(body.x);
-  check = 0; falls = 0; clock = 0; home = -1; still = 0; fallenAt = -1;
+  check = 0; falls = 0; clock = 0; home = -1; still = 0; fallenAt = -1; visited.clear(); $('done').classList.remove('on');
   way = [0];
   const n1 = lv.towers[nextTop(lv, 0)].at;
   camYaw = lv.walls?.length ? wallYaw(n1[0] - at[0]) : Math.atan2(n1[0] - at[0], n1[2] - at[2]);
@@ -2262,7 +2304,8 @@ let titleTimer = 0;
 function showTitle() {
   const el = $('title');
   el.querySelector('b')!.textContent = benchName ? `the ${benchName} bench` : CHAPTER_NAME[lv.chapter];
-  el.querySelector('i')!.textContent = benchName ? 'try it, again and again' : `${levelN}`;
+  const rec = benchName ? null : recordOf(levelN);
+  el.querySelector('i')!.textContent = benchName ? 'try it, again and again' : `${levelN}${rec?.score ? ` · best ${rec.score}` : rec ? ` · best ${rec.bestTime.toFixed(1)} s` : ''}`;
   el.classList.add('on');
   clearTimeout(titleTimer);
   titleTimer = window.setTimeout(() => el.classList.remove('on'), 3200);
@@ -3181,7 +3224,7 @@ function tick(dt: number) {
   const speed = body.moving;
   // (stood on it: on its feet on its top, or hanging from it if it's a rail; not draped over its edge, nor clinging to its side)
   const stood = k >= 0 && (lv.towers[k].rail ? !!body.onRail : body.onFeet);
-  if (stood && body.contacts > 0 && speed < 30) { check = k; if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
+  if (stood && body.contacts > 0 && speed < 30) { check = k; if (k > 0) visited.add(k); if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
   // (sat still: not drifting, and touching, or only a moment off it, trembling on a jelly)
   const quiet = len(sub(body.drift, carried(lv, body.com))) < 6 && body.sinceContact < 0.12;
@@ -3202,9 +3245,10 @@ function tick(dt: number) {
     chime();
     showHands();
     if (way[way.length - 1] !== k) way.push(k);
-    hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}${lv.route ? ` · ${wayWords(way)}` : ''}`, 9000);
+    if (benchName || auto) hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}${lv.route ? ` · ${wayWords(way)}` : ''}`, 9000);
     if (lv.route && !auto) { try { localStorage.setItem(WAYS(), JSON.stringify([{ way: wayWords(way), t: Math.round(clock * 10) / 10, falls }, ...waysKept()].slice(0, 30))); } catch { /* */ } benchPanel(); }
-    try { const best = Number(localStorage.getItem(`${STORE}:best:${levelN}`)) || Infinity; if (clock < best) localStorage.setItem(`${STORE}:best:${levelN}`, String(clock)); } catch { /* */ }
+    // (scored; a card, a new best gold)
+    if (!benchName && !auto) showDone(scoreOf(clock, falls, visited.size));
     try { if (!auto && !benchName) localStorage.setItem(STORE + ':reached', String(Math.max(reachedNow(), levelN + 1))); } catch { /* */ }
     // (got home from the level before the jelly's: it's yours)
     if (!benchName && !auto && levelN >= JELLY_AT - 1 && !jellyOpen) {
@@ -3293,6 +3337,8 @@ function invert(m: Float32Array): Float32Array {
 void lastVP;
 
 (window as unknown as { __squishyTop: (k: number) => string }).__squishyTop = (k: number) => lv.towers[k]?.top;
+/** (for the lab's renders: the card at home, for a made-up run) */
+(window as unknown as { __squishyDone: (t: number, f: number, n: number) => void }).__squishyDone = (t, f, n) => { showDone(scoreOf(t, f, n)); };
 /** (for the checks: where the dumpling is on the glass, in pixels; and the camera's turn) */
 (window as unknown as { __squishyAt: () => unknown }).__squishyAt = () => ({
   at: screenOf(body.com), camYaw, grabbed: !!body.grab,

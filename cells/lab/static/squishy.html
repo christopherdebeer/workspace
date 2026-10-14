@@ -36,6 +36,22 @@
     #title b { display: block; font-weight: 400; font-size: 21px; letter-spacing: .32em; text-transform: uppercase; padding-left: .32em; }
     #title s { display: block; width: 26px; height: 1px; margin: 12px auto 9px; background: rgba(255,255,255,.85); }
     #title i { display: block; font-style: normal; font-size: 12px; letter-spacing: .22em; opacity: .85; }
+    /* home: how it went, on a card; a new best, gold */
+    #done { position: fixed; left: 50%; top: calc(max(12px, env(safe-area-inset-top)) + 70px); width: min(80vw, 300px); box-sizing: border-box; padding: 14px 20px 8px; border-radius: 24px; background: rgba(255,250,240,.94); border: 3px solid #4b2614; color: #4b2614; box-shadow: 0 6px 16px rgba(60,30,10,.28); pointer-events: none; opacity: 0; transform: translate(-50%, -8px) scale(.96); transition: opacity .5s, transform .5s; }
+    #done.on { opacity: 1; transform: translate(-50%, 0); }
+    #done > b { display: block; text-align: center; font: 700 24px Georgia, "Iowan Old Style", serif; letter-spacing: .02em; margin-bottom: 6px; }
+    #done .row { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid rgba(75,38,20,.15); font-size: 15px; }
+    #done .row:last-child { border-bottom: none; font-size: 17px; }
+    #done .row span { font-variant: small-caps; letter-spacing: .08em; opacity: .8; }
+    #done .row b { font-variant-numeric: tabular-nums; }
+    #done .row i { grid-column: 1 / -1; text-align: right; font-size: 12px; opacity: .6; }
+    #done .row i:empty { display: none; }
+    #done.best { border-color: #c99a3e; box-shadow: 0 0 0 2.5px #4b2614, 0 0 28px rgba(255,200,90,.75), 0 6px 16px rgba(60,30,10,.28); animation: shine 1.6s ease-in-out .4s 2; }
+    #done.best > b { color: #a0661a; }
+    #done .row.hi b { color: #a0661a; }
+    #done .row.hi b::after { content: " \2605"; font-size: .8em; }
+    @keyframes shine { 50% { box-shadow: 0 0 0 2.5px #4b2614, 0 0 48px rgba(255,210,110,1), 0 6px 16px rgba(60,30,10,.28); transform: translate(-50%, 0) scale(1.03); } }
+    .preview #done, .title #done { display: none; }
     .preview #top, .preview nav, .preview #status, .preview #hands, .preview #title { display: none; }
     /* the title: the name, and what to do */
     #menu { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; padding-top: calc(max(12px, env(safe-area-inset-top)) + 8vh); pointer-events: none; }
@@ -72,6 +88,7 @@
   <nav><a href="/">← lab</a></nav>
   <div id="status"></div>
   <div id="title"><b></b><s></s><i></i></div>
+  <div id="done"><b></b><div class="rows"></div></div>
   <div id="menu">
     <div id="logo"></div>
     <div class="choices" id="main">

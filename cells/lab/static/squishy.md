@@ -87,7 +87,11 @@ count, as the spot you're put back on after a fall, or as home.
 Fall and it's a splat, and back to the last spot you stood on. There's no safe ground anywhere:
 every place is made of stations, things standing at their own sizes with a spot or two up on each,
 and the table's or the counter's top beneath them is the fall, as the sink's water is. The clock runs
-until you're home, the count of falls beside it, and your best time for each level is kept. Each
+until you're home, the count of falls beside it. Home, a card shows how it went: the time, the falls, the
+tops you stood on, and a score from them (100 a top, a bonus for every tenth of a second under par, 8 s a
+hop; 60 off a fall, 150 for none). Each level keeps its best score, and its best time and fewest falls
+each in their own right; beat the best score and the card's gold, a new best, with a little fanfare,
+what you beat starred and what it was beside it. A level's opening card says its best. Each
 level opens with its place's name.
 
 Every level is laid fresh from its own seed by its place, four levels to a place: 1 to 4, The
