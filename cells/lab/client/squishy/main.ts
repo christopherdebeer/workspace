@@ -29,6 +29,14 @@ const auto = preview || params.has('auto');
 /** a bench: one thing to try over and over (`?bench=jelly`) */
 const benchName = params.get('bench');
 const STORE = 'squishy:v1';
+/**
+ * The lab's way in (`?lab`, or a bench, or playing itself): any level, the dumpling either way, a step back
+ * or on from the foot of the glass. Otherwise it's a game: a level's open once the one before's been got
+ * home (or once it's been played at all, from before there was any of this), and the jelly's earned, by
+ * getting level 12 home.
+ */
+const lab = params.has('lab') || params.has('auto') || params.has('preview') || params.has('bench');
+const reachedNow = () => { try { return Math.max(1, Number(localStorage.getItem(STORE + ':reached')) || 0, Number(localStorage.getItem(STORE + ':level')) || 0); } catch { return 1; } };
 
 const canvas = document.getElementById('play') as HTMLCanvasElement;
 const gl = canvas.getContext('webgl2', { antialias: true, alpha: false })!;
@@ -1113,7 +1121,7 @@ function benchPanel() {
 }
 function startLevel(n: number, quiet = false) {
   levelN = Math.max(1, n);
-  if (levelN >= JELLY_AT && !jellyOpen) {
+  if (lab && levelN >= JELLY_AT && !jellyOpen) {
     jellyOpen = true;
     try { localStorage.setItem(STORE + ':jelly', '1'); } catch { /* */ }
     if (!params.has('skin')) skin = 'jelly';
@@ -1121,6 +1129,8 @@ function startLevel(n: number, quiet = false) {
   }
   lv = benchName ? bench(benchName) : buildLevel(levelN);
   drop(courseMesh); drop(glassMesh);
+  for (const m of susanMeshes.values()) drop(m);
+  susanMeshes.clear();
   for (const m of movers) drop(m.mesh);
   for (const jm of jellyMeshes) drop(jm.mesh);
   jellyMeshes = (lv.jellies ?? []).map((shape) => { const data = new Float32Array(jelMeshSize(shape.jel!, shape.dust)); return { shape, data, mesh: upload(data, gl.DYNAMIC_DRAW) }; });
@@ -1255,6 +1265,8 @@ let camYaw = 0;
 let orbit = { yaw: 0, pitch: 0, at: -9 };
 let zoom = 1;
 let windEase = 0;
+/** where the aim last said it would land, for the camera */
+let aimLand: V3 | null = null;
 /** how much the camera's drawn back to take in the next top as well (0–1): when it's sat still on a top */
 let ahead = 0;
 /**
@@ -1302,10 +1314,12 @@ function updateCamera(dt: number) {
     dy = Math.atan2(Math.sin(dy), Math.cos(dy));
     camYaw += dy * (1 - Math.exp(-dt * 1.4));
   }
-  const wind = aimNow ? aimNow.power : 0;
-  windEase += (wind - windEase) * (1 - Math.exp(-dt * 4));
+  // (winding up, the view holds still under the finger: it only stands back, slowly, if where it'll land would be off the glass)
+  const ring = aimNow && aimLand ? screenOf(aimLand) : null;
+  const outside = !!aimNow && (!ring || ring[0] < innerWidth * 0.08 || ring[0] > innerWidth * 0.92 || ring[1] < innerHeight * 0.12 || ring[1] > innerHeight * 0.85);
+  windEase = outside ? Math.min(0.8, windEase + dt * 0.9) : aimNow ? windEase : windEase * Math.exp(-dt * 2);
   // (looking down on the counter a little more than across it, so the wall behind doesn't take half the glass)
-  const pitch = Math.max(0.12, Math.min(1.2, (lv.walls?.length ? 0.56 : 0.48) + orbit.pitch + 0.22 * windEase));
+  const pitch = Math.max(0.12, Math.min(1.2, (lv.walls?.length ? 0.56 : 0.48) + orbit.pitch + 0.12 * windEase));
   const dist = (Math.max(44, Math.min(120, 34 + sep * 0.95) * ahead + 44 * (1 - ahead)) * (1 + 0.55 * windEase)) / zoom;
   const back: V3 = [-Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(camYaw) * Math.cos(pitch)];
   // (never behind a wall: if the way out from the dumpling to where it would be meets one, it comes in short of it;
@@ -1533,7 +1547,9 @@ btn('skin', () => {
   prevX = new Float32Array(body.x);
   showSkin();
 });
-function showSkin() { $('skin').textContent = skin; $('skin').style.display = jellyOpen || params.has('skin') ? '' : 'none'; }
+function showSkin() { $('skin').textContent = skin; $('skin').style.display = lab && (jellyOpen || params.has('skin')) ? '' : 'none'; }
+// (a level back or on, from the foot of the glass: the lab's)
+if (!lab) for (const id of ['prev', 'nextw']) $(id).style.display = 'none';
 showSkin();
 function toggleSound() {
   soundOn = !soundOn;
@@ -1625,7 +1641,7 @@ btn('s-back', () => { card = 'main'; showMenu(); });
 btn('s-play', () => play(pickN));
 btn('s-sound', toggleSound);
 btn('s-prev', () => { pickN = Math.max(1, pickN - 1); showMenu(); });
-btn('s-next', () => { pickN = Math.min(24, pickN + 1); showMenu(); });
+btn('s-next', () => { pickN = Math.min(lab ? 24 : Math.min(24, reachedNow()), pickN + 1); showMenu(); });
 btn('s-skin', () => {
   if (!jellyOpen) return;
   skin = skin === 'jelly' ? 'dough' : 'jelly';
@@ -1977,8 +1993,10 @@ function frame(now: number) {
     drawMesh(DISC, flatOn(add(ground.p, mul(ground.n, 0.05)), ground.n, RADIUS * (1.3 + lift * 0.04)), 15);
   }
   // the aiming line: dots along where its middle will go, a ring where it lands
+  aimLand = null;
   if (aimNow) {
     const pa = path(lv, body.com, aimNow.vel, 3, simTime, aimNow.climb ?? null);
+    aimLand = pa.hit ? pa.hit.p : pa.pts[pa.pts.length - 1] ?? null;
     const can = body.canFlick;
     gl.uniform3fv(u(prog, 'uTint'), can ? [1, 0.97, 0.88] : [1, 0.6, 0.5]);
     pa.pts.forEach((p, i) => {
@@ -2267,6 +2285,15 @@ function tick(dt: number) {
     showHands();
     hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`, 9000);
     try { const best = Number(localStorage.getItem(`${STORE}:best:${levelN}`)) || Infinity; if (clock < best) localStorage.setItem(`${STORE}:best:${levelN}`, String(clock)); } catch { /* */ }
+    try { if (!auto && !benchName) localStorage.setItem(STORE + ':reached', String(Math.max(reachedNow(), levelN + 1))); } catch { /* */ }
+    // (got home from the level before the jelly's: it's yours)
+    if (!benchName && !auto && levelN >= JELLY_AT - 1 && !jellyOpen) {
+      jellyOpen = true;
+      try { localStorage.setItem(STORE + ':jelly', '1'); } catch { /* */ }
+      if (!params.has('skin')) skin = 'jelly';
+      showSkin();
+      setTimeout(() => hint('the jelly\'s yours: it\'s jelly from the next level (switch in settings)', 6000), 2500);
+    }
   }
   if (buffered && body.canFlick) { if (simTime < buffered.until) doFlick(buffered.vel, buffered.spin, buffered.climb); else buffered = null; }
   // the autopilot (the index's preview, and ?auto): the next top, as the course's own aim has it

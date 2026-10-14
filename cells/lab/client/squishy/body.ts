@@ -756,7 +756,8 @@ export class Dumpling {
       if (this.sneeze >= 1 && contacts > 0) {
         // (achoo: a hop, any way, and the pepper's off it)
         this.sneeze = 0; this.sneezed = true;
-        const a = Math.random() * Math.PI * 2;
+        // (which way: from the moment, so a run played again sneezes the same way)
+        const a = (((Math.sin(time * 91.7 + lv.n * 12.9898) * 43758.5453) % 1) + 1) % 1 * Math.PI * 2;
         this.flick([Math.cos(a) * 22, 85, Math.sin(a) * 22], 0);
         this.sinceFlick = 0.2;
         for (let i = 0; i < n; i++) if (coatKind[i] === DUST.pepper) { coat[i] = 0; coatKind[i] = 0; }
