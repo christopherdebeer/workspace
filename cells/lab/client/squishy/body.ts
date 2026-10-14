@@ -14,7 +14,7 @@
  * flies a plain parabola: the aiming line shows where it will go.
  */
 import { CLIMB_CLEAR, CLIMB_IN, DUST, DUSTS, G, RADIUS, moveShapes, near, touch, type Dust, type Hit, type Level, type Shape, type V3 } from './level';
-import { bedOf, holdJel, restAt, stepJel, type Jel } from './jelly';
+import { bedOf, holdJel, restAt, stepJel, surfAt, type Jel } from './jelly';
 
 /** small steps a frame */
 export const SUB = 10;
@@ -34,6 +34,8 @@ const TACK = 900, STICK = 0.35;
 const FOOT = 1.2, BED_SKIN = 0.003;
 /** pressed (see `press`): how much just resting on something counts; how fast coming in counts all (cm/s); how fast it's let go of (s) */
 const PRESS_REST = 0.4, PRESS_HARD = 250, PRESS_LET = 0.09;
+/** on a jelly: how much of the slide its grip takes off it goes into rolling it on */
+const SPIN_K = 0.4;
 /** held: how far round the touch the finger has the dough (cm), and how hard it draws it each small step */
 const GRAB_R = 2.6, GRAB_K = 0.12;
 /** a poke: how far round the finger it dents (cm), how hard (cm/s at the finger), and how much it goes along the ground with it, and up */
@@ -664,13 +666,21 @@ export class Dumpling {
     const F = depth > 0 ? Math.max(0, k * depth * (1 + q * q) - 2 * zeta * Math.sqrt(k * (1 + 3 * q * q)) * vy) : 0;
     // (pressed into it: its foot, the more the deeper it's in)
     for (let i = 0; i < n; i++) if (bw[i] > 0) this.pressNow[i] = Math.max(this.pressNow[i], (bw[i] / FOOT) * (PRESS_REST + (1 - PRESS_REST) * Math.min(1, q)));
-    // (and its sliding held back, as much as the push lets it)
+    // (pushed out of its top as its top is there, dented or domed, not only up)
+    const se = 0.5, sx = cx - j.cx, sz = cz - j.cz;
+    const gx = (surfAt(j, sx + se, sz) - surfAt(j, sx - se, sz)) / (2 * se), gz = (surfAt(j, sx, sz + se) - surfAt(j, sx, sz - se)) / (2 * se);
+    const nl = Math.hypot(gx, 1, gz), nx = -gx / nl, ny = 1 / nl, nz = -gz / nl;
+    // (and its sliding held back, as much as the push and its slipperiness let it: glossy, hardly; and what's held
+    // back at its foot sets it rolling, the way it was going)
     const vt = Math.hypot(vx, vz), ft = vt > 1e-6 ? Math.min(vt, mu * F * h) / vt : 0;
-    const a = h * h;
+    const a = h * h, w = vt > 1e-6 ? (SPIN_K * vt * ft) / RADIUS : 0, wx = vt > 1e-6 ? (vz / vt) * w : 0, wz = vt > 1e-6 ? (-vx / vt) * w : 0;
     let foot = Infinity;
     for (let i = 0; i < n; i++) {
-      const i3 = i * 3;
-      p[i3 + 1] += F * a; p[i3] -= (vx * ft * a) / h; p[i3 + 2] -= (vz * ft * a) / h;
+      const i3 = i * 3, rx = x[i3] - mx, ry = x[i3 + 1] - my, rz = x[i3 + 2] - mz;
+      p[i3] += nx * F * a; p[i3 + 1] += ny * F * a; p[i3 + 2] += nz * F * a;
+      p[i3] -= (vx * ft * a) / h; p[i3 + 2] -= (vz * ft * a) / h;
+      // (ω × r, for this small step)
+      p[i3] += -wz * ry * h; p[i3 + 1] += (wz * rx - wx * rz) * h; p[i3 + 2] += wx * ry * h;
       if (bw[i] > 0) { const y = p[i3 + 1] - SKIN - restAt(j, p[i3] - j.cx, p[i3 + 2] - j.cz); if (y < foot) foot = y; }
     }
     // (its top held to its foot as it is now, pushed: just touching)

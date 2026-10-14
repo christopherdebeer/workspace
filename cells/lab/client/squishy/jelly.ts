@@ -16,20 +16,22 @@ import type { Hit } from './level';
  * and how far into it (of its height) a gentle landing goes (from 10 cm) and a hard one (from 50 cm). (So
  * how long it's in it follows: these are little jellies, a few cm deep; a landing's over in a few hundredths.)
  */
-export interface JellyFeel { hz: number; zeta: number; mass: number; spread: number; e: number; soft: number; deep: number }
+export interface JellyFeel { hz: number; zeta: number; mass: number; spread: number; e: number; soft: number; deep: number; slip: number }
 /**
  * The kinds: a panna cotta (soft: it takes a landing in, and keeps it), a mango pudding (lively: it gives
  * most of a landing back), a konjac jelly (firm and springy: it throws you up nearly as high as you fell).
+ * And how slippery each is (its grip, as the dumpling slides on it): glossy jelly hardly holds a slanting
+ * landing back, so it skids, and bounces on; a panna cotta, matt, a little more; a konjac, slickest.
  * A loaf and a sponge: soft, and dead.
  */
 export const FEELS = {
-  pannacotta: { hz: 5, zeta: 0.25, mass: 15, spread: 4, e: 0.2, soft: 0.5, deep: 0.8 },
-  pudding: { hz: 7, zeta: 0.06, mass: 15, spread: 3, e: 0.75, soft: 0.28, deep: 0.5 },
-  konjac: { hz: 14, zeta: 0.05, mass: 12, spread: 2, e: 0.92, soft: 0.22, deep: 0.42 },
+  pannacotta: { hz: 5, zeta: 0.25, mass: 15, spread: 4, e: 0.2, soft: 0.5, deep: 0.8, slip: 0.35 },
+  pudding: { hz: 7, zeta: 0.06, mass: 15, spread: 3, e: 0.75, soft: 0.28, deep: 0.5, slip: 0.2 },
+  konjac: { hz: 14, zeta: 0.05, mass: 12, spread: 2, e: 0.92, soft: 0.22, deep: 0.42, slip: 0.12 },
   // (a loaf: soft under its crust, and dead)
-  boule: { hz: 6, zeta: 0.4, mass: 20, spread: 3, e: 0.1, soft: 0.3, deep: 0.5 },
+  boule: { hz: 6, zeta: 0.4, mass: 20, spread: 3, e: 0.1, soft: 0.3, deep: 0.5, slip: 0.9 },
   // (a sponge: soft, and it soaks up a landing)
-  sponge: { hz: 4.5, zeta: 0.6, mass: 8, spread: 5, e: 0.05, soft: 0.35, deep: 0.55 },
+  sponge: { hz: 4.5, zeta: 0.6, mass: 8, spread: 5, e: 0.05, soft: 0.35, deep: 0.55, slip: 0.95 },
 } satisfies Record<string, JellyFeel>;
 
 export interface Jel {
@@ -146,7 +148,7 @@ export function shapeMax(j: Jel): number {
   for (let k = 0; k < 96; k++) m = Math.max(m, shapeAt(j, (k / 96) * Math.PI * 2));
   return m * 1.01;
 }
-const shapeTo = (j: Jel, dx: number, dz: number) => shapeAt(j, Math.atan2(dz, dx));
+export const shapeTo = (j: Jel, dx: number, dz: number) => shapeAt(j, Math.atan2(dz, dx));
 const STEP = 1 / 600;
 /** how far its top can go: down (of its height), and up (cm) */
 const DOWN = 0.55, UP = 3;

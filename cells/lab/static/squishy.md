@@ -228,7 +228,7 @@ A pot, a pan or a jar is the size it is, and where it's wanted higher it stands 
 wooden board on a stack of tea tins, now and then a celadon jar among them.
 
 - **A frying pan** on a pot: wide, a little slippery (seasoned iron), with a rim round it that
-  catches a slide, and its handle out to one side.
+  catches a slide, and its handle out to one side. Cracked pepper in it: mind the sneeze.
 - **A butter dish**: the butter is slippery, so a landing slides, a long way at speed; the dish
   has a lip all round that stops you. Backspin bites instead. From against the lip, a flick over
   it catches on it (the arc shows the catch), so flick away from it, or hop to the middle first.
@@ -258,8 +258,15 @@ restitution), how far into it (of its height) a gentle landing goes (from 10 cm)
 one (from 50 cm). From those, the spring and how it firms; and it's damped as stiff as it is where
 it is, so it gives back as much of a hard landing as of a gentle one. Of a gentle landing (from
 under about 20 cm) it gives back less, so a bouncing dumpling goes boing, boing, and settles. It
-holds the dumpling from sliding as hard as it pushes, so a landing sticks where it lands, and a
-bounce goes straight up. A flick off a jelly goes as aimed: it lets go, and doesn't throw it harder
+pushes it out of its top as its top is there (dented, domed), and it's glossy: it holds the dumpling
+from sliding only as much as its slipperiness and the push allow (a konjac hardly at all, a mango
+pudding a little more, a panna cotta, matt, more again; bread and a sponge as anything does), so a
+slanting landing skids and bounces on, and what its grip does take off the slide sets the dumpling
+rolling, so later bounces lose less. Land steep to stay; land slanting on a konjac and it carries you
+on, maybe off its far side, maybe on to the next; catch its rounded near shoulder and it throws you
+back the way you came. The aim's dots follow it all: up, on, and down again,
+bounce after bounce, to where it settles; the autopilot and every hop laid are made sure of the same
+way, and onto a jelly only by a band of strengths that holds, not one lucky strength among the skids. A flick off a jelly goes as aimed: it lets go, and doesn't throw it harder
 for what it had sunk in.
 
 Its top is a membrane: nodes on rings and spokes out from its middle, each held to its height by a
@@ -295,7 +302,7 @@ it has its say in how it lands:
 - **Butter** (the butter dish): slippery. It slides far on anything, can't hold a wall, and
   honey won't hold a buttered patch: a buttered dumpling thrown at a jar slides off it.
 - **Crumbs** (two plates in five): rough. It bounces where it lands, and takes longer to settle.
-- **Pepper** (one plate in four): it sneezes, a little while after, a hop any way, and the pepper's
+- **Pepper** (a frying pan, and some plates): it sneezes, a little while after, a hop any way, and the pepper's
   off it. On a small top, mind.
 - **Hundreds and thousands** (most puddings): sweet and sticky. More tack: it holds walls
   better.

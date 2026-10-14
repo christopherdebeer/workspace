@@ -63,7 +63,7 @@ const PLACE: Record<Chapter, { pool: (i: number) => Kind[]; intro: (i: number) =
   },
   sink: {
     pool: (i) => ['sponge', 'soap', 'drainer', 'plate', 'tin', 'stack', 'sponge', 'soap', ...(i >= 1 ? ['pudding', 'rack', 'rail'] as Kind[] : []), ...(i >= 2 ? ['tiered', 'konjac', 'sill'] as Kind[] : [])],
-    intro: (i) => (i === 0 ? ['sponge', 'soap', 'drainer'] : i === 1 ? ['rack'] : i === 2 ? ['konjac'] : ['tiered']),
+    intro: (i) => (i === 0 ? ['sponge', 'soap', 'drainer'] : i === 1 ? ['rack'] : i === 2 ? ['sill', 'konjac'] : ['tiered']),
     finale: (i, r) => (i === 0 || r() < 0.7 ? 'sinkHome' : null),
   },
   stove: {
@@ -538,7 +538,7 @@ export function buildKitchen(n: number): Level {
       // (what's hung from, not the last thing before home: home's laid from where it's let go of, and must be reachable)
       if (b >= count - 3 && !goal && (kind === 'rail' || kind === 'sill' || kind === 'oven')) continue;
       const prev = lv.towers[lv.towers.length - 1];
-      const gap = easy ? ramp(r, 4, 9) : ramp(r, 6, 12 + 14 * hard) * (1 - tries * 0.02);
+      const gap = easy && !goal ? ramp(r, 4, 9) : (tries < 20 ? ramp(r, 6, 12 + 14 * hard) * (1 - tries * 0.02) : ramp(r, 4, 8) + (tries - 20) * 1.5);
       const x = prev.at[0] + reach + gap + (kind === 'towel' || kind === 'tray' || kind === 'shelfHome' ? 18 : kind === 'honey' ? 2 : 12);
       // (from a jar's side, forward, away from the jar)
       const z = prev.jar ? Math.max(FRONT + 12, prev.at[2] - ramp(r, 16, 26)) : Math.max(FRONT + 12, Math.min(BACK - 22, prev.at[2] + ramp(r, -22, 22) * (easy ? 0.4 : 1)));

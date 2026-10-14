@@ -47,7 +47,7 @@ export function bench(name: string): Level {
     for (let k = 0; k <= 10; k++) {
       const at: V3 = [(k % 4) * 22 - 33, 0, 30 + Math.floor(k / 4) * 24], mat = [MAT.jelly, MAT.pannacotta, MAT.konjac][k % 3];
       const saucer = cyl(at[0], at[2], 11, 0, 0.8, MAT.porcelain, 0.5);
-      const j = jelly(at[0], at[2], 8, 0.8, 7.8, mat, FEELS.pudding, 0.85, 0, k);
+      const j = jelly(at[0], at[2], 8, 0.8, 7.8, mat, FEELS.pudding, undefined, 0, k);
       drawShapes([saucer], lv.decor);
       lv.jellies!.push(j);
       stop({ top: 'pudding', at: [at[0], 7.8, at[2]], r: 7, yaw: 0, shapes: [saucer, j], land: [j] });
@@ -127,7 +127,7 @@ function supportsBench(lv: Level, stop: (t: Tower) => void): Level {
   stop({ top: 'pad', at: [0, 15.8, 0], r: 6, box: [7, 6], yaw: 0.15, shapes: [...st.shapes, cloth], land: [cloth] });
   const row: Array<[Top, Holder, number, number, number]> = [
     ['steamer', 'stool', 21, 11, 0], ['pudding', 'pedestal', 19, 7.5, 0], ['plate', 'trestle', 17, 12, 0], ['pan', 'crate', 21, 13, 0],
-    ['susan', 'bench', 18, 13, 0], ['tin', 'bowl', 23, 7, 0], ['butter', 'rack', 19, 12, 0], ['pudding', 'crate', 24, 7.5, 0], ['plate', 'books', 20, 11, 0], ['pudding', 'stool', 21, 7.5, 4],
+    ['susan', 'bench', 18, 13, 0], ['tin', 'bowl', 23, 7, 0], ['butter', 'rack', 19, 12, 0], ['pudding', 'crate', 21, 7.5, 0], ['plate', 'books', 20, 11, 0], ['pudding', 'stool', 21, 7.5, 4],
   ];
   let x = 0, z = 0;
   row.forEach(([top, kind, y, rad, off], i) => {

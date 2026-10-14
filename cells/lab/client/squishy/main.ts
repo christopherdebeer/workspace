@@ -1650,9 +1650,9 @@ function benchPanel() {
   }
   const names = jellyBench ? ['panna cotta', 'mango pudding', 'konjac'] : ['flour', 'crumbs', 'pepper', 'sprinkles', 'butter'];
   benchPick = Math.min(benchPick, names.length - 1);
-  const jl = jellyBench ? lv.jellies![benchPick].jel! : { feel: { hz: 0, zeta: 0, mass: 0, spread: 0, e: 0, soft: 0, deep: 0 } };
+  const jl = jellyBench ? lv.jellies![benchPick].jel! : { feel: { hz: 0, zeta: 0, mass: 0, spread: 0, e: 0, soft: 0, deep: 0, slip: 0 } };
   type Row = [keyof typeof jl.feel | 'drop', string, number, number, number];
-  const feelRows: Row[] = [['e', 'gives back', 0, 1, 0.01], ['soft', 'in, 10 cm', 0.05, 0.8, 0.01], ['deep', 'in, 50 cm', 0.1, 1, 0.01], ['hz', 'wobble Hz', 1, 14, 0.1], ['zeta', 'wobble damping', 0, 0.6, 0.005]];
+  const feelRows: Row[] = [['e', 'gives back', 0, 1, 0.01], ['slip', 'grip (slippery 0)', 0, 1, 0.01], ['soft', 'in, 10 cm', 0.05, 0.8, 0.01], ['deep', 'in, 50 cm', 0.1, 1, 0.01], ['hz', 'wobble Hz', 1, 14, 0.1], ['zeta', 'wobble damping', 0, 0.6, 0.005]];
   const rows: Row[] = [...(jellyBench ? feelRows : []), ['drop', 'drop cm', 5, 80, 1]];
   el.innerHTML = `<div class="tabs">${names.map((n, i) => `<button data-i="${i}" class="${i === benchPick ? 'on' : ''}">${n}</button>`).join('')}</div>`
     + rows.map(([k, label, lo, hi, step]) => `<label>${label}<input type="range" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${k === 'drop' ? benchDrop : jl.feel[k]}"><span>${(k === 'drop' ? benchDrop : jl.feel[k]).toFixed(step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0)}</span></label>`).join('')
@@ -1660,7 +1660,7 @@ function benchPanel() {
   el.querySelectorAll<HTMLButtonElement>('.tabs button').forEach((b) => b.addEventListener('click', () => { benchPick = Number(b.dataset.i); benchPanel(); }));
   el.querySelectorAll<HTMLInputElement>('input').forEach((inp) => inp.addEventListener('input', () => {
     const k = inp.dataset.k as keyof typeof jl.feel | 'drop', v = Number(inp.value);
-    if (k === 'drop') benchDrop = v; else jl.feel[k] = v;
+    if (k === 'drop') benchDrop = v; else { jl.feel[k] = v; if (k === 'slip' && jellyBench) lv.jellies![benchPick].mu = v; }
     inp.nextElementSibling!.textContent = v.toFixed(Number(inp.step) < 0.01 ? 3 : Number(inp.step) < 0.1 ? 2 : Number(inp.step) < 1 ? 1 : 0);
   }));
   el.querySelector('.go')!.addEventListener('click', () => {
@@ -2885,15 +2885,7 @@ function frame(now: number) {
       gl.uniform1f(u(prog, 'uAlpha'), (can ? 0.95 : 0.5) * (1 - (i / pa.pts.length) * 0.5));
       drawMesh(SPHERE, model(p, 0.55 + 0.25 * aimNow!.power), 13);
     });
-    // (onto a jelly's top: how high it'll be thrown back up, in fainter dots)
-    if (pa.hit?.shape.jel && pa.hit.n[1] > 0.5) {
-      const up = bounceOf(pa.hit.shape.jel, -pa.hit.v[1]);
-      gl.uniform3fv(u(prog, 'uTint'), [1, 0.97, 0.88]);
-      for (let k = 1, m = Math.floor(up / BOUNCE_GAP); k <= m; k++) {
-        gl.uniform1f(u(prog, 'uAlpha'), 0.5 * (1 - (k / (m + 1)) * 0.6));
-        drawMesh(SPHERE, model(add(pa.hit.p, [0, k * BOUNCE_GAP, 0]), 0.4), 13);
-      }
-    }
+    // (onto a jelly's top, the dots go on: up as high as it's thrown back, on as far as it skids)
     if (pa.hit) {
       const lands = towerAt(lv, pa.hit.p, 0.5);
       gl.uniform3fv(u(prog, 'uTint'), lands > check ? [0.6, 1, 0.65] : lands >= 0 ? [1, 0.97, 0.88] : [1, 0.5, 0.45]);

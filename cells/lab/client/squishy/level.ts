@@ -8,7 +8,7 @@
  * Units are centimetres; the dumpling is 6 across.
  */
 import { hash, type Rand } from '../kit/rng';
-import { FEELS, breadFor, makeJel, mouldFor, shapeMax, touchJel, type Bread, type Jel, type JellyFeel, type Mould } from './jelly';
+import { FEELS, breadFor, givesBack, makeJel, mouldFor, shapeMax, shapeTo, surfAt, touchJel, type Bread, type Jel, type JellyFeel, type Mould } from './jelly';
 
 export type V3 = [number, number, number];
 export const G = 981;
@@ -332,7 +332,7 @@ export const cyl = (x: number, z: number, r: number, y0: number, y1: number, mat
   bounds({ ...base(), kind: 'cyl', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu });
 export const cap = (a: V3, b: V3, r: number, mat: number, mu = 0.7): Shape => bounds({ ...base(), kind: 'cap', c: a, b, r, mat, mu });
 /** a jelly from y0 up to y1, set in a mould (of a recipe, if wanted), its top a membrane that gives (see jelly.ts) */
-export function jelly(x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85, dome = 0, recipe?: number): Shape {
+export function jelly(x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu?: number, dome = 0, recipe?: number): Shape {
   // (a pudding, a panna cotta, a konjac: set in a mould of its own, from where it stands; not a loaf, nor a sponge)
   let mould: Mould | undefined;
   if (mat === MAT.jelly || mat === MAT.pannacotta || mat === MAT.konjac) {
@@ -342,7 +342,8 @@ export function jelly(x: number, z: number, r: number, y0: number, y1: number, m
     mould = m.mould;
     if (!dome) dome = m.dome;
   }
-  return bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu, tack: JELLY_TACK, jel: makeJel(x, z, r, y0, y1, feel, dome, 7, 24, mould) });
+  // (its grip: its own slipperiness)
+  return bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu: mu ?? feel.slip, tack: JELLY_TACK, jel: makeJel(x, z, r, y0, y1, feel, dome, 7, 24, mould) });
 }
 /** A bread (see jelly.ts's `BREAD`), its foot at y0, its length lying yaw: soft under its crust, and dead, as a loaf is. */
 export function bread(x: number, z: number, kind: Bread, y0: number, yaw = 0): Shape {
@@ -522,11 +523,14 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand, seat 
       break;
     }
     case 'pan': {
-      // a frying pan on a pot: wide and a little slippery, with a rim round it, and a handle out the back
+      // a frying pan on a pot: wide and a little slippery, with a rim round it, and a handle out the back; cracked
+      // pepper in it, ready
       const ph = Math.min(y - 1.4 - seat, 13);
       if (ph > 0.5) shapes.push(cyl(x, z, 8, y - 1.4 - ph, y - 1.4, MAT.pot));
       shapes.push(...stand(x, z, 8, y - 1.4 - Math.max(0, ph), yaw, coin, seat));
-      shapes.push(cyl(x, z, rad, y - 1.4, y, MAT.pan, 0.4));
+      const base = cyl(x, z, rad, y - 1.4, y, MAT.pan, 0.4);
+      base.dust = DUST.pepper;
+      shapes.push(base);
       const segs = 14;
       for (let i = 0; i < segs; i++) {
         const a0 = (i / segs) * Math.PI * 2, a1 = ((i + 1) / segs) * Math.PI * 2;
@@ -686,9 +690,12 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
   near(lv, from, RAIL_NEAR + 1, ns);
   if (ns.some((s) => s.rail && railDist(s, from).d < RAIL_NEAR + 1)) {
     // (and what it hangs against as it hangs there, the sill's face, the oven's door: it pushes off it)
-    near(lv, from, R + 1.5, ns);
-    for (const s of ns) if (s.rail || touch(s, from[0], from[1], from[2], R + 1.5, o)) leaving.push(s);
+    // (as broad as it is as it leaves: a rail's end bracket by it, slid up to, isn't a hit either)
+    near(lv, from, ballAt(0) + 1.5, ns);
+    for (const s of ns) if (s.rail || touch(s, from[0], from[1], from[2], ballAt(0) + 1.5, o)) leaving.push(s);
   }
+  // (how many times it's bounced off a jelly's top so far, and when it last left one)
+  let bounces = 0, bounceT = 0;
   for (let i = 0, t = 0; t < max; i++, t += h) {
     vy -= G * h;
     x += vx * h; y += vy * h; z += vz * h;
@@ -718,16 +725,45 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
       if ((off += h) >= CLIMB_CLEAR) { vx -= climb![0] * CLIMB_IN; vz -= climb![2] * CLIMB_IN; climbing = false; }
       else continue;
     }
-    for (const s of ns) if (!(t < 0.2 && leaving.includes(s)) && touch(s, x, y, z, Rt, o) && o.d > 0) {
+    let bounced = false;
+    for (const s of ns) if (!(t - bounceT < 0.2 && leaving.includes(s)) && touch(s, x, y, z, Rt, o) && o.d > 0) {
       pts.push([x, y, z]);
+      // (onto a jelly's top: thrown back up as much as it gives back, its slide carried on as much as it's
+      // slippery; settled once there's little left of the bounce, carried on a little, and on its top or off it)
+      const j = s.jel;
+      if (j && o.ny > 0.5 && bounces < 6) {
+        const vin = Math.max(0, -vy), vout = givesBack(j, vin) * vin, vt = Math.hypot(vx, vz);
+        // (after the first, it's rolling the way it's going: what its foot loses its roll gives back, mostly)
+        const keep = vt > 1e-6 ? Math.max(0, vt - j.feel.slip * (vin + vout) * (1.15 + 0.6 * (1 - j.feel.e)) * (bounces ? SPUN : 1)) / vt : 0;
+        vx *= keep; vz *= keep; bounces++;
+        // (thrown back out of its top as its top is there where it touches: off a domed or rounded shoulder, outward too)
+        if (vout >= SETTLE) {
+          const se = 0.5, sx = x - o.nx * Rt - j.cx, sz = z - o.nz * Rt - j.cz;
+          const gx = (surfAt(j, sx + se, sz) - surfAt(j, sx - se, sz)) / (2 * se), gz = (surfAt(j, sx, sz + se) - surfAt(j, sx, sz - se)) / (2 * se), nl = Math.hypot(gx, 1, gz);
+          vy = vout / nl; vx -= (gx / nl) * vout; vz -= (gz / nl) * vout; y += o.ny * (o.d + 0.05); bounced = true; break;
+        }
+        const carry = Math.hypot(vx, vz) * CARRY_T;
+        if (carry > 1e-3) { const k = carry / Math.hypot(vx, vz); x += vx * k; z += vz * k; }
+        const top = j.top + surfAt(j, x - j.cx, z - j.cz);
+        if (Math.hypot(x - j.cx, z - j.cz) < j.rad * shapeTo(j, x - j.cx, z - j.cz) - RADIUS * 0.4) {
+          pts.push([x, top + Rt, z]);
+          if (lv.movers.length) moveShapes(lv, t0);
+          return { pts, hit: { p: [x, top + Rt, z], n: [0, 1, 0], shape: s, v: [vx, 0, vz] }, t };
+        }
+        // (carried off its edge: on from there, falling)
+        y = Math.max(y, top + Rt); vy = 0; leaving.length = 0; leaving.push(s); bounceT = t; bounced = true; break;
+      }
       if (lv.movers.length) moveShapes(lv, t0);
       return { pts, hit: { p: [x, y, z], n: [o.nx, o.ny, o.nz], shape: s, v: [vx, vy, vz] }, t };
     }
+    if (bounced) continue;
   }
   if (lv.movers.length) moveShapes(lv, t0);
   return { pts, hit: null, t: max };
 }
 /** Whether a point is on a tower's top: within its landing reach, and resting on it (not below). */
+/** a jelly's bounce, as the aim has it: so little up (cm/s) and it's settled; and how long its slide carries it on, settled (s) */
+const SETTLE = 28, CARRY_T = 0.3, SPUN = 0.3;
 export function onTop(tw: Tower, p: V3, slack = 0): boolean {
   const dx = p[0] - tw.at[0], dz = p[2] - tw.at[2];
   // (hanging from a rail: by it, anywhere along it)
@@ -783,6 +819,8 @@ export function towerAt(lv: Level, p: V3, slack = 0): number {
 export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power: number } | null {
   const tw = lv.towers[k];
   const yaw = Math.atan2(tw.at[0] - from[0], tw.at[2] - from[2]);
+  // (onto a jelly, a band that holds, not a lucky strength among skids and bounces off it)
+  const glossy = !!(tw.land ?? tw.shapes).some((s) => s.jel);
   let lo = -1, hi = -1;
   for (let p = 0; p <= 1.0001; p += 0.01) {
     const pa = path(lv, from, launch(yaw, p), 3, t);
@@ -790,10 +828,10 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
     // (a touch as it leaves, on what it's leaving, isn't a landing)
     // (a rail: caught anywhere along its first part, from any side)
     const ok = pa.hit && pa.t > 0.06 && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.rail ? pa.hit.shape === tw.rail.shape && railDist(tw.rail.shape, pa.hit.p).f < RAIL_CATCH : (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5));
-    if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) break;
+    if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) { if (!glossy || hi - lo > 0.005) break; lo = hi = -1; }
   }
   // (a little short of the middle of the band: it carries on a little after it lands)
-  return lo < 0 ? null : { yaw, power: lo + (hi - lo) * 0.4 };
+  return lo < 0 || (glossy && hi - lo < 0.005) ? null : { yaw, power: lo + (hi - lo) * 0.4 };
 }
 /**
  * The autopilot's flick, from where it is, having last stood on tower `at` (null: wait); on to the next; else
@@ -906,14 +944,15 @@ export function standing(lv: Level, j: number, t = 0): V3 {
 }
 /**
  * Whether the hop from tower j to tower k can be made: from the middle of j (from a jar's side,
- * from lower down too: a splat slides before the honey holds it). With a lid at either end, at some moment
+ * from lower down too: a splat slides before the honey holds it; from a rail, from higher too: a
+ * firm one hangs closer up to it, and onto a glossy jelly a few cm decides skid or stop). With a lid at either end, at some moment
  * of its cycle; otherwise, now.
  */
 export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[][] } | null {
   const a = lv.towers[j], b = lv.towers[k];
   const lid = b.land?.[0].lift ?? a.land?.[0].lift;
   const times = lid ? [0, 1, 2, 3, 4, 5].map((i) => ((i / 6 + 1 - lid.phase) % 1) * lid.period) : [0];
-  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3] : [f]; };
+  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3] : a.rail ? [f, [f[0], f[1] + 3, f[2]] as V3] : [f]; };
   // (onto a top reached by its wall: against the wall, and up)
   if (b.wall) {
     const f = standing(lv, j, 0), w = aimWall(lv, f, k, 0);
