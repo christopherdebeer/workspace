@@ -164,7 +164,7 @@ function dustOn(s: Shape, out: number[]) {
 export function drawShapes(shapes: Shape[], out: number[]) { for (const s of shapes) drawShape(s, out); }
 function drawShape(s: Shape, out: number[]) {
   // (a sheet is drawn by its prop, which made it; a jelly, each frame, as its top is)
-  if (s.kind === 'sheet' || s.kind === 'jelly') return;
+  if (s.kind === 'sheet' || s.kind === 'jelly' || s.ghost) return;
   dustOn(s, out);
   {
     if (s.mat === MAT.napkin) { serviette(out, s); return; }

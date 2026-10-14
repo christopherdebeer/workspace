@@ -3,27 +3,39 @@
  * counter (the hob, on the stove) against a tiled wall with windows in it, made of set pieces,
  * each laid where the last left off and every hop in it made sure of as it's laid:
  *
- * - **one thing** at the height it stands: a stack of steamers, a plate on a tin, a pudding (a
- *   jelly) on its saucer, a lazy Susan, a tea tin, the butter dish, a pan on its pot, a pot with its
- *   lid on, a honey jar high on its stand (you land against its honey);
+ * - **one thing** at the height it stands, on what it stands on (see supports.ts): a steamer on a
+ *   stool, a plate on cookbooks, a pudding (a jelly) on a cake stand, a lazy Susan on a crate, a tea
+ *   tin on an upturned bowl, the butter dish on a cooling rack, a pan on a board across jars, a pot
+ *   with its lid on, a honey jar high on its stand (you land against its honey);
+ * - **a tiered cake stand**, its upper plate to land on, its lower a ledge under it;
+ * - **a cooling rack** with nothing on it, to land across its wires;
  * - **a towel and a shelf**: a bread bin out from the wall, a shelf above it no flick reaches, a
  *   towel hung over its edge to land against and climb;
- * - **two jellies** in a row, a pudding and a konjac, to bounce across;
- * - **a baking tray**, buttered in one corner;
- * - **a folded cloth** on the counter, somewhere low to land.
+ * - **two jellies** in a row, a pudding and a konjac, each on something, to bounce across;
+ * - **a baking tray** on a rack, buttered in one corner;
+ * - **a folded cloth** on cookbooks or a stool, where it starts.
  *
- * The counter is ground: miss, and you're on it, and go again (everything but the climbs is low
- * enough to reach from it). Off its front is the fall.
+ * What things stand on goes by the room: on the stove, crates, racks, boards across jars, tins, little
+ * stools; past it, anything. There's no safe ground: the counter's well below every top, and to touch
+ * it is to fall, back to the last top you stood on.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
 import { FEELS } from './jelly';
 import { CHAPTER_AT, DUST, MAT, RADIUS, box, chapterOf, cyl, hop, jelly, tower, type Level, type Shape, type Top, type Tower, type V3 } from './level';
 import { box as drawBox, drawShapes, quad } from './mesh';
 import { smear, towel } from './props';
+import { HOLDS, assemble, holder, tiered, type Holder } from './supports';
 
 /** where the wall is (its face), and how far out from it a course may come */
 const BACK = 66, FRONT = 2;
-type Kind = 'stack' | 'plate' | 'pudding' | 'susan' | 'tin' | 'butter' | 'pan' | 'lid' | 'honey' | 'board' | 'towel' | 'jellies' | 'tray' | 'cloth';
+type Kind = 'stack' | 'plate' | 'pudding' | 'susan' | 'tin' | 'butter' | 'pan' | 'lid' | 'honey' | 'board' | 'towel' | 'jellies' | 'tray' | 'cloth' | 'tiered' | 'rack';
+/** the counter's this far below every top, at least: to touch it is to fall */
+const KILL = 6, LOW = 15;
+/** what things stand on, by room: the stove's sturdy and plain (and steel); past it, anything */
+const ROOM: Record<'stove' | 'mixed', Holder[]> = {
+  stove: ['crate', 'rack', 'trestle', 'tins', 'bench', 'books', 'crate', 'stool'],
+  mixed: ['stool', 'pedestal', 'crate', 'books', 'bowl', 'trestle', 'bench', 'rack', 'tins'],
+};
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
 
 /** What can come next, by level and by what came last. */
@@ -31,11 +43,11 @@ function pick(r: Rand, n: number, last: Kind | null, used: Map<Kind, number>): K
   let pool: Kind[];
   if (chapterOf(n) === 'stove') {
     const s = n - CHAPTER_AT.stove;
-    pool = ['stack', 'pan', 'butter', 'pan', 'cloth', 'tray'];
+    pool = ['stack', 'pan', 'butter', 'pan', 'rack', 'tray'];
     if (s >= 1) pool.push('honey', 'honey', 'jellies');
     if (s >= 2) pool.push('lid', 'lid', 'towel');
     if (s >= 3) pool.push('tin', 'lid', 'towel');
-  } else pool = ['stack', 'board', 'plate', 'pudding', 'tin', 'susan', 'pan', 'butter', 'honey', 'lid', 'jellies', 'towel', 'tray', 'cloth', 'towel', 'honey'];
+  } else pool = ['stack', 'board', 'plate', 'pudding', 'tin', 'susan', 'pan', 'butter', 'honey', 'lid', 'jellies', 'towel', 'tray', 'tiered', 'rack', 'towel', 'honey', 'tiered'];
   // (not the same twice running; nor honey after butter, or after a buttered tray: honey won't hold butter)
   pool = pool.filter((k) => k !== last && !((last === 'butter' || last === 'tray') && k === 'honey'));
   // (two climbs, two jars, at most, a level)
@@ -45,19 +57,37 @@ function pick(r: Rand, n: number, last: Kind | null, used: Map<Kind, number>): K
 
 /** The tops of a kind of one thing: how high it stands (its top), how far out it reaches. */
 const ONE: Partial<Record<Kind, { top: Top; y: [number, number]; rad: [number, number] }>> = {
-  stack: { top: 'steamer', y: [7, 28], rad: [10.5, 13] },
-  plate: { top: 'plate', y: [9, 20], rad: [11, 13] },
-  pudding: { top: 'pudding', y: [10, 16], rad: [7.5, 7.5] },
-  susan: { top: 'susan', y: [8, 16], rad: [13, 15] },
-  tin: { top: 'tin', y: [12, 24], rad: [6.5, 8] },
-  butter: { top: 'butter', y: [7, 12], rad: [12, 12] },
-  pan: { top: 'pan', y: [15, 25], rad: [13, 15] },
-  lid: { top: 'lid', y: [16, 28], rad: [9.5, 12] },
-  board: { top: 'board', y: [8, 14], rad: [9, 9] },
+  stack: { top: 'steamer', y: [16, 30], rad: [10.5, 13] },
+  plate: { top: 'plate', y: [15, 26], rad: [11, 13] },
+  pudding: { top: 'pudding', y: [16, 26], rad: [7.5, 7.5] },
+  susan: { top: 'susan', y: [15, 24], rad: [13, 15] },
+  tin: { top: 'tin', y: [18, 30], rad: [6.5, 8] },
+  butter: { top: 'butter', y: [15, 22], rad: [12, 12] },
+  pan: { top: 'pan', y: [16, 26], rad: [13, 15] },
+  lid: { top: 'lid', y: [18, 30], rad: [9.5, 12] },
+  board: { top: 'board', y: [15, 20], rad: [9, 9] },
   honey: { top: 'honey', y: [28, 34], rad: [8.5, 8.5] },
 };
 
 interface Piece { stops: Tower[]; extra: Shape[]; decor: number[]; reach: number }
+
+/** What a top stands on, from what its kind can and what the room has. */
+function holderFor(top: Top, r: Rand, n: number): Holder | null {
+  const can = HOLDS[top];
+  if (!can) return null;
+  const room = ROOM[chapterOf(n) === 'stove' ? 'stove' : 'mixed'].filter((h) => can.includes(h));
+  return room.length ? room[Math.floor(r() * room.length)] : null;
+}
+/** A top on what it stands on; on tins from the counter, as they always were, if nothing will hold it. */
+function standOn(top: Top, at: V3, rad: number, yaw: number, r: Rand, n: number): { stop: Tower; decor: number[]; on: boolean } {
+  const kind = holderFor(top, r, n);
+  const off = kind && kind !== 'rack' && kind !== 'bowl' && r() < 0.3 ? (r() < 0.5 ? -1 : 1) * ramp(r, 3, 5) : 0;
+  const a = kind ? assemble(top, kind, at, rad, yaw, r, 0, off) : null;
+  return a ? { stop: a.tower, decor: a.decor, on: true } : { stop: tower(top, at, rad, yaw, r), decor: [], on: false };
+}
+/** (what stands on the counter itself, as it always did: on the stove, a burner under it) */
+const onHob = new WeakSet<Tower>();
+const coinAt = (x: number, z: number) => (salt: number) => (hash(Math.round(x * 10), Math.round(z * 10), salt) % 1000) / 1000;
 
 /** A piece of a kind, its first stop's middle at x, z (a height of its own), from the dice. */
 function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | null {
@@ -68,37 +98,65 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     if (kind === 'honey' && (z > BACK - 26 || z < 26)) z = Math.max(26, Math.min(BACK - 26, z));
     const rad = ramp(r, ...one.rad);
     // (turned to the course, which runs along x: a pan's handle, a board's jars, out to the sides; a jar toward the wall)
-    const t = tower(one.top, [x, Math.round(ramp(r, ...one.y)), z], rad, kind === 'honey' ? 0 : Math.PI / 2 + ramp(r, -0.4, 0.4), r);
+    const yaw = kind === 'honey' ? 0 : Math.PI / 2 + ramp(r, -0.4, 0.4), at: V3 = [x, Math.round(ramp(r, ...one.y)), z];
+    const t = kind === 'honey' || kind === 'board' ? { stop: tower(one.top, at, rad, yaw, r), decor: [], on: false } : standOn(one.top, at, rad, yaw, r, n);
+    if (!t.on) onHob.add(t.stop);
+    // (a plate: crumbs on it, or pepper, more often than not)
+    if (kind === 'plate') { const pl = t.stop.land?.find((sh) => sh.mat === MAT.porcelain), d = r(); if (pl) pl.dust = d < 0.4 ? DUST.pepper : d < 0.75 ? DUST.crumbs : DUST.none; }
     // (past a jar is past the jar, not only where you landed against it)
-    return { stops: [t], extra: [], decor: [], reach: kind === 'honey' ? 11 : t.box ? Math.hypot(...t.box) : rad };
+    return { stops: [t.stop], extra: [], decor: t.decor, reach: kind === 'honey' ? 11 : Math.max(rad, ...t.stop.shapes.map((s) => Math.max(s.hi[0] - x, s.hi[2] - z, x - s.lo[0], z - s.lo[2]))) };
   }
+  // (what isn't a top on something: stood on something itself)
+  const under = (kinds: Holder[], y1: number, need: number, yaw = 0) => holder(kinds[Math.floor(r() * kinds.length)], x, z, 0, y1, need, yaw, coinAt(x, z));
   if (kind === 'cloth') {
-    const pad = box([x, 0.5, z], [8, 0.5, 7], ramp(r, -0.5, 0.5), MAT.gingham, 0.9);
-    return { stops: [{ top: 'pad', at: [x, 1, z], r: 6, box: [7.5, 6.5], yaw: pad.yaw, shapes: [pad] }], extra: [], decor: [], reach: 10 };
+    // (where it starts: a cloth folded on cookbooks, or on a stool)
+    const y = Math.round(ramp(r, LOW, LOW + 3)), yaw = ramp(r, -0.5, 0.5);
+    const h = under(['books', 'stool', 'crate'], y - 0.8, 8, yaw);
+    const pad = box([x, y - 0.4, z], [7.5, 0.4, 6.5], yaw, MAT.gingham, 0.9);
+    return { stops: [{ top: 'pad', at: [x, y, z], r: 6, box: [7, 6], yaw, shapes: [...h.shapes, pad], land: [pad] }], extra: [], decor: h.decor, reach: 10 };
   }
   if (kind === 'tray') {
-    const tray = box([x, 0.4, z], [15, 0.4, 11], 0, MAT.pan, 0.6);
-    const lips = [box([x - 15, 1.1, z], [0.3, 0.7, 11], 0, MAT.pan, 0.6), box([x + 15, 1.1, z], [0.3, 0.7, 11], 0, MAT.pan, 0.6),
-      box([x, 1.1, z - 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6), box([x, 1.1, z + 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6)];
-    const d: number[] = [];
+    // (a baking tray on a cooling rack, or a crate, buttered in one corner)
+    const y = Math.round(ramp(r, LOW, LOW + 5));
+    const h = under(['rack', 'crate', 'books'], y - 0.8, 13);
+    const tray = box([x, y - 0.4, z], [15, 0.4, 11], 0, MAT.pan, 0.6);
+    const lips = [box([x - 15, y + 0.3, z], [0.3, 0.7, 11], 0, MAT.pan, 0.6), box([x + 15, y + 0.3, z], [0.3, 0.7, 11], 0, MAT.pan, 0.6),
+      box([x, y + 0.3, z - 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6), box([x, y + 0.3, z + 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6)];
+    const d: number[] = [...h.decor];
     const corner = r() < 0.5 ? 1 : -1;
-    const sm = smear([x + 13 * corner, 0.8, z - 9], [x + 2 * corner, 0.8, z + 2], 9, n * 7 + Math.round(x));
+    const sm = smear([x + 13 * corner, y, z - 9], [x + 2 * corner, y, z + 2], 9, n * 7 + Math.round(x));
     for (const s of sm.shapes) { s.tack = 0; s.dust = DUST.butter; }
     d.push(...sm.verts);
-    return { stops: [{ top: 'tray', at: [x, 0.8, z], r: 9, box: [13.5, 9.5], yaw: 0, shapes: [tray, ...lips, ...sm.shapes], land: [tray, ...sm.shapes] }], extra: [], decor: d, reach: 17 };
+    return { stops: [{ top: 'tray', at: [x, y, z], r: 9, box: [13.5, 9.5], yaw: 0, shapes: [...h.shapes, tray, ...lips, ...sm.shapes], land: [tray, ...sm.shapes] }], extra: [], decor: d, reach: 17 };
   }
   if (kind === 'jellies') {
+    // (a pudding and a konjac, each on its saucer on something: a cake stand, a stool, a crate)
     const d: number[] = [], stops: Tower[] = [];
     const kinds: Array<[keyof typeof FEELS, number, number, number]> = [['pudding', MAT.jelly, 8, 7], ['konjac', MAT.konjac, 9, 8]];
     const dz = ramp(r, -10, 10);
     kinds.forEach(([feel, mat, rad, h], i) => {
-      const cx = x + i * 24, cz = Math.max(FRONT + 10, Math.min(BACK - 20, z + i * dz));
-      const saucer = cyl(cx, cz, rad + 3, 0, 0.8, MAT.porcelain, 0.5);
-      const j = jelly(cx, cz, rad, 0.8, 0.8 + h, mat, FEELS[feel]);
+      const cx = x + i * 26, cz = Math.max(FRONT + 12, Math.min(BACK - 22, z + i * dz));
+      const seat = Math.round(ramp(r, LOW - 6, LOW - 2));
+      const kinds: Holder[] = ['pedestal', 'stool', 'crate'];
+      const hd = holder(kinds[Math.floor(r() * kinds.length)], cx, cz, 0, seat, rad + 3, ramp(r, 0, 3), coinAt(cx, cz));
+      const saucer = cyl(cx, cz, rad + 3, hd.y, hd.y + 0.8, MAT.porcelain, 0.5);
+      const j = jelly(cx, cz, rad, hd.y + 0.8, hd.y + 0.8 + h, mat, FEELS[feel]);
       if (r() < 0.4) j.dust = DUST.sprinkles;
-      stops.push({ top: 'jelly', at: [cx, 0.8 + h, cz], r: rad - 2, yaw: 0, shapes: [saucer, j], land: [j] });
+      d.push(...hd.decor);
+      stops.push({ top: 'jelly', at: [cx, hd.y + 0.8 + h, cz], r: rad - 2, yaw: 0, shapes: [...hd.shapes, saucer, j], land: [j] });
     });
-    return { stops, extra: [], decor: d, reach: 12 };
+    return { stops, extra: [], decor: d, reach: 14 };
+  }
+  if (kind === 'tiered') {
+    const t = tiered(x, z, 0, Math.round(ramp(r, LOW + 4, LOW + 12)), coinAt(x, z));
+    return { stops: [t.stop], extra: [], decor: t.decor, reach: 15 };
+  }
+  if (kind === 'rack') {
+    // (a cooling rack with nothing on it, on its tins: land across its wires)
+    const y = Math.round(ramp(r, LOW, LOW + 6));
+    const h = holder('rack', x, z, 0, y, 9, ramp(r, -0.3, 0.3), coinAt(x, z));
+    const wires = h.shapes.filter((s) => s.kind === 'cap' && Math.abs(s.c[1] - s.b[1]) < 0.01 && s.c[1] > y - 0.6);
+    return { stops: [{ top: 'rack', at: [x, y, z], r: h.r - 1, box: [h.box![0] - 1.5, h.box![1] - 1.5], yaw: ramp(r, 0, 0), shapes: h.shapes, land: wires }], extra: [], decor: h.decor, reach: Math.hypot(...h.box!) };
   }
   if (kind === 'towel') {
     // (a bread bin out from the wall; a shelf above it no flick reaches; a towel over the shelf's edge)
@@ -142,13 +200,13 @@ export function buildKitchen(n: number): Level {
   const chapter = chapterOf(n);
   const stove = chapter === 'stove';
   // (the counter, long enough for anything, for the hops to be made sure of against; cut to the course at the end)
-  const lv: Level = { n, chapter, towers: [], shapes: [box([1400, -2, (BACK - 18) / 2], [1600, 2, (BACK + 18) / 2], 0, MAT.counter)], sticks: [], movers: [], jellies: [], kill: -12, ground: -90, decor: [], floorMat: MAT.tiles };
+  const lv: Level = { n, chapter, towers: [], shapes: [box([1400, -2, (BACK - 18) / 2], [1600, 2, (BACK + 18) / 2], 0, MAT.counter)], sticks: [], movers: [], jellies: [], kill: KILL, ground: -90, decor: [], floorMat: MAT.tiles };
   const add = (p: Piece) => {
     for (const t of p.stops) {
       lv.towers.push(t);
       for (const s of t.shapes) if (!lv.shapes.includes(s)) { lv.shapes.push(s); if (s.lift) lv.movers.push(s); if (s.jel) lv.jellies!.push(s); }
-      // (on the stove, a burner under what would sit on one)
-      if (stove && ['steamer', 'plate', 'tin', 'butter', 'susan', 'pudding', 'goal'].includes(t.top)) t.burner = (t.top === 'butter' ? 5 : t.shapes[0].r) + 3.5;
+      // (on the stove, a burner under what would sit on one, stood on the hob itself)
+      if (stove && onHob.has(t) && ['steamer', 'plate', 'tin', 'butter', 'susan', 'pudding', 'goal'].includes(t.top)) t.burner = (t.top === 'butter' ? 5 : t.shapes[0].r) + 3.5;
     }
     lv.shapes.push(...p.extra);
   };
@@ -181,9 +239,10 @@ export function buildKitchen(n: number): Level {
       const x = prev.at[0] + reach + gap + (kind === 'towel' || kind === 'tray' ? 18 : kind === 'honey' ? 2 : 12);
       // (from a jar's side, forward, away from the jar)
       const z = prev.jar ? Math.max(FRONT + 12, prev.at[2] - ramp(r, 16, 26)) : Math.max(FRONT + 12, Math.min(BACK - 22, prev.at[2] + ramp(r, -22, 22) * (easy ? 0.4 : 1)));
-      const y = Math.round(Math.max(7, Math.min(28, prev.at[1] > 30 ? ramp(r, 14, 24) : prev.at[1] + ramp(r, -4, 6))));
-      const p = goal ? { stops: [tower('goal', [x, Math.round(ramp(r, 12, 22)), z], 13, 0, r)], extra: [], decor: [] as number[], reach: 13 }
-        : easy ? { stops: [tower('steamer', [x, y, z], 11, 0, r)], extra: [], decor: [] as number[], reach: 11 } : piece(kind, x, z, r, n);
+      const y = Math.round(Math.max(LOW + 1, Math.min(30, prev.at[1] > 32 ? ramp(r, 18, 26) : prev.at[1] + ramp(r, -4, 6))));
+      // (home, and what's sure to fit when nothing else will: a steamer, on something)
+      const sure = (top: Top, at: V3, rad: number): Piece => { const t = standOn(top, at, rad, 0, r, n); if (!t.on) onHob.add(t.stop); return { stops: [t.stop], extra: [], decor: t.decor, reach: rad + 2 }; };
+      const p = goal ? sure('goal', [x, Math.round(ramp(r, LOW + 3, LOW + 11)), z], 13) : easy ? sure('steamer', [x, y, z], 11) : piece(kind, x, z, r, n);
       if (!p || !clear(lv, p, corridors)) continue;
       const k0 = lv.towers.length;
       add(p);

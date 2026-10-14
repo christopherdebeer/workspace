@@ -10,8 +10,9 @@
  * the towers' are; if a jitter won't do, another is tried, and the set as drawn always does.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
-import { DUST, MAT, box, buildTowers, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Level, type Shape, type Tower, type V3 } from './level';
+import { DUST, MAT, box, buildTowers, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Level, type Shape, type Top, type Tower, type V3 } from './level';
 import { FEELS } from './jelly';
+import { assemble, holder, tiered, type Holder } from './supports';
 import { buildKitchen } from './kitchen';
 import { box as drawBox, drawShapes, quad } from './mesh';
 import { drainer, smear, spoon, tiltPlate, towel, type Prop } from './props';
@@ -308,8 +309,39 @@ export function bench(name: string): Level {
       stop(t);
     });
   }
+  if (name === 'supports') return supportsBench(lv, stop);
   const last = lv.towers[lv.towers.length - 1].at;
   stop(tower('goal', [last[0] + 6, 12, last[2] + 26], 13, 0, () => 0.5));
+  underTable(lv);
+  return lv;
+}
+/**
+ * `supports`: what things stand on, one of each, in a run over a table that's the fall: a cloth on cookbooks,
+ * a steamer on a stool, a pudding on a cake stand, a plate on a board across jars, a pan on a crate, a lazy
+ * Susan on a little four-legged stool, a tea tin on an upturned bowl, a tiered stand, the butter dish on a
+ * cooling rack, a cake stand on a crate, a pudding set off to one side of a stool's seat; home on a crate.
+ */
+function supportsBench(lv: Level, stop: (t: Tower) => void): Level {
+  lv.kill = 6;
+  lv.towers.length = 0; lv.shapes.length = 0; lv.decor.length = 0;
+  const r = seeded(0x5ab0);
+  const put = (a: { tower: Tower; decor: number[] } | null) => { if (!a) throw new Error('a support that can\'t hold it'); lv.decor.push(...a.decor); stop(a.tower); for (const s of a.tower.shapes) if (s.jel) lv.jellies!.push(s); };
+  // (a cloth folded on cookbooks: where it starts)
+  const st = holder('books', 0, 0, 0, 15, 8, 0.15, () => 0.5);
+  const cloth = box([0, 15.4, 0], [7.5, 0.4, 6.5], 0.15, MAT.gingham, 0.9);
+  lv.decor.push(...st.decor);
+  stop({ top: 'pad', at: [0, 15.8, 0], r: 6, box: [7, 6], yaw: 0.15, shapes: [...st.shapes, cloth], land: [cloth] });
+  const row: Array<[Top, Holder, number, number, number]> = [
+    ['steamer', 'stool', 21, 11, 0], ['pudding', 'pedestal', 19, 7.5, 0], ['plate', 'trestle', 17, 12, 0], ['pan', 'crate', 21, 13, 0],
+    ['susan', 'bench', 18, 13, 0], ['tin', 'bowl', 23, 7, 0], ['butter', 'rack', 19, 12, 0], ['pudding', 'crate', 24, 7.5, 0], ['plate', 'books', 20, 11, 0], ['pudding', 'stool', 21, 7.5, 4],
+  ];
+  let x = 0, z = 0;
+  row.forEach(([top, kind, y, rad, off], i) => {
+    x += 34; z = i % 2 ? 8 : -8;
+    if (i === 6) { const t = tiered(x, z, 0, 22, (q) => ((q * 7919) % 1000) / 1000); lv.decor.push(...t.decor); stop(t.stop); x += 34; }
+    put(assemble(top, kind, [x, y, z], rad, Math.PI / 2, r, 0, off));
+  });
+  put(assemble('goal', 'crate', [x + 36, 22, 0], 13, 0, r));
   underTable(lv);
   return lv;
 }

@@ -126,6 +126,8 @@ export interface Shape {
   mat: number;
   lo: V3;
   hi: V3;
+  /** met, but drawn by what it's part of (a crate's slats over its solid sides), not as itself */
+  ghost?: boolean;
 }
 export type Top = 'start' | 'steamer' | 'plate' | 'board' | 'pudding' | 'susan' | 'tin' | 'goal' | 'butter' | 'honey' | 'lid' | 'pan'
   | 'pad' | 'spoon' | 'bench' | 'paddle' | 'tilt'
@@ -359,13 +361,13 @@ function keep(t: Tower): { x: number; z: number; r: number } {
  * the counter up to y1, of tea tins and a celadon jar or two, each a size of its own, with a
  * wooden board on top for the thing to stand on. As wide as r at the top, narrower below.
  */
-function stand(x: number, z: number, r: number, y1: number, yaw: number, coin: (salt: number) => number): Shape[] {
+function stand(x: number, z: number, r: number, y1: number, yaw: number, coin: (salt: number) => number, y0 = 0): Shape[] {
   const out: Shape[] = [];
-  if (y1 < 1) return out;
+  if (y1 - y0 < 1) return out;
   // (the board on top: a square of wood a little wider than what's on it)
-  const bt = Math.min(2, y1);
+  const bt = Math.min(2, y1 - y0);
   out.push(box([x, y1 - bt / 2, z], [r + 1.2, bt / 2, r + 1.2], yaw, MAT.board, 0.85));
-  let y = 0, i = 0;
+  let y = y0, i = 0;
   const top = y1 - bt;
   while (top - y > 0.5) {
     // (each piece 9 to 16 tall, the last one taking what's left)
@@ -378,7 +380,6 @@ function stand(x: number, z: number, r: number, y1: number, yaw: number, coin: (
   }
   return out;
 }
-/** A tower of a kind, its top at `at`: what holds it up from the counter, and what's on top. */
 /**
  * Home's serviette: a paper napkin folded square and laid on its top, as small as fits inside the top
  * (none of it overhangs, so it catches nothing: come in badly and you go off the far side, as you would
@@ -389,11 +390,35 @@ export function serviette(x: number, y: number, z: number, rad: number, yaw = 0.
   const h = Math.min(6.5, rad * 0.66);
   return box([x, y + 0.12, z], [h, 0.12, h], yaw, MAT.napkin, 0.95);
 }
-export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Tower {
+/**
+ * How high a kind of top stands of itself, off what it's stood on (a plate, its own thickness; a pudding, its
+ * saucer and itself; a pot, itself and its lid): what a support has to make up the rest of.
+ */
+export function ownHeight(top: Top, rad: number): number {
+  switch (top) {
+    case 'start': case 'steamer': case 'goal': return 7;
+    case 'plate': return 1.6;
+    case 'board': return 7;
+    case 'pudding': return 6.2;
+    case 'susan': return 1.4;
+    case 'tin': return Math.round(rad * 1.3);
+    case 'butter': return 2.2;
+    case 'lid': return Math.round(rad * 1.5 + 1.8);
+    case 'pan': return 1.4;
+    default: return 2;
+  }
+}
+/**
+ * A tower of a kind, its top at `at`: what's on top, and what holds it up from what it stands on (the counter,
+ * or, `seat` high, a support: see supports.ts), tins and jars making up whatever's between.
+ */
+export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand, seat = 0): Tower {
   const [x, y, z] = at;
   // (what's on a top is decided from where it stands, not from the level's own dice, so it changes no layout)
   const coin = (salt: number) => (hash(Math.round(x * 10), Math.round(z * 10), salt) % 1000) / 1000;
   const shapes: Shape[] = [];
+  // (a filler of tins from what it's stood on up to so high, if there's any way to go)
+  const fill = (y1: number, rr: number, mat: number = MAT.tin) => { if (y1 - seat > 0.5) shapes.push(cyl(x, z, rr, seat, y1, mat)); };
   let landR = rad - 1;
   let box2: [number, number] | null = null;
   let jar: Tower['jar'];
@@ -402,13 +427,13 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
     case 'start':
     case 'steamer':
     case 'goal':
-      // a stack of bamboo steamers right down to the counter
-      shapes.push(cyl(x, z, rad, 0, y, top === 'goal' ? MAT.gold : MAT.bamboo));
+      // a stack of bamboo steamers right down to what it stands on
+      shapes.push(cyl(x, z, rad, seat, y, top === 'goal' ? MAT.gold : MAT.bamboo));
       if (top === 'goal') { const n = serviette(x, y, z, rad); shapes.push(n); land = [shapes[0], n]; }
       break;
     case 'plate': {
       // a plate on a tea tin: glazed, and so a little slippery; now and then with crumbs on it, or pepper
-      shapes.push(cyl(x, z, rad * 0.5, 0, y - 1.6, MAT.tin));
+      fill(y - 1.6, rad * 0.5);
       const pl = cyl(x, z, rad, y - 1.6, y, MAT.porcelain, 0.55);
       const d = coin(0x2c);
       if (d < 0.4) pl.dust = DUST.crumbs; else if (d < 0.65) pl.dust = DUST.pepper;
@@ -418,7 +443,7 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
     case 'board': {
       // a chopping board laid across two jars
       const ux = Math.cos(yaw), uz = -Math.sin(yaw);
-      for (const s of [-1, 1]) shapes.push(cyl(x + ux * 9 * s, z + uz * 9 * s, 4.5, 0, y - 2.4, MAT.jar));
+      for (const s of [-1, 1]) shapes.push(cyl(x + ux * 9 * s, z + uz * 9 * s, 4.5, seat, y - 2.4, MAT.jar));
       const bd = box([x, y - 1.2, z], [15, 1.2, 9], yaw, MAT.board, 0.85);
       // (a board's for rolling out on: floury)
       bd.dust = DUST.flour;
@@ -429,7 +454,7 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
     }
     case 'pudding': {
       // a mango pudding on a saucer on a tin: it gives, and throws you back up
-      shapes.push(cyl(x, z, 5.5, 0, y - 6.2, MAT.tin));
+      fill(y - 6.2, 5.5);
       shapes.push(cyl(x, z, 10.5, y - 6.2, y - 5.4, MAT.porcelain, 0.5));
       // (it gives: its top dents where you land and springs back, and may throw you up again)
       const p = jelly(x, z, rad, y - 5.4, y, MAT.jelly, FEELS.pudding);
@@ -441,7 +466,7 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
     }
     case 'susan': {
       // a lacquered lazy Susan on a tin, turning
-      shapes.push(cyl(x, z, 6, 0, y - 1.4, MAT.tin));
+      fill(y - 1.4, 6);
       const s = cyl(x, z, rad, y - 1.4, y, MAT.lacquer, 0.85);
       s.spin = (r() < 0.5 ? -1 : 1) * ramp(r, 0.45, 0.8);
       shapes.push(bounds(s));
@@ -449,13 +474,13 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
     }
     case 'tin': {
       // a tall tea tin: a small top
-      shapes.push(cyl(x, z, rad, 0, y, MAT.tin));
+      shapes.push(cyl(x, z, rad, seat, y, MAT.tin));
       landR = rad - 1.5;
       break;
     }
     case 'butter': {
       // a butter dish on a tin: a block of butter, slippery, in a porcelain dish with a lip round it that catches you
-      shapes.push(cyl(x, z, 5, 0, y - 2, MAT.tin));
+      fill(y - 2.2, 5);
       shapes.push(box([x, y - 1.6, z], [12, 0.6, 8.5], yaw, MAT.porcelain, 0.5));
       const b = box([x, y - 0.5, z], [8.5, 0.5, 5.5], yaw, MAT.butter, 0.28);
       b.tack = 0; b.dust = DUST.butter;
@@ -477,14 +502,14 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       const h = cyl(jc[0], jc[2], rad + 0.45, y - JAR_UNDER + 0.3, y + 4.5, MAT.honey, 0.9);
       h.tack = 3; h.tire = 0;
       shapes.push(h);
-      shapes.push(...stand(jc[0], jc[2], rad, y - JAR_UNDER, yaw, coin));
+      shapes.push(...stand(jc[0], jc[2], rad, y - JAR_UNDER, yaw, coin, seat));
       jar = { c: [jc[0], y, jc[2]], r: rad + 0.45 };
       landR = 0;
       break;
     }
     case 'lid': {
       // a pot, its lid on, on a stand: every few seconds the steam in it rattles the lid, and you on it
-      const ph = Math.min(y - 1.8, rad * 1.5);
+      const ph = Math.min(y - 1.8 - seat, rad * 1.5);
       shapes.push(cyl(x, z, rad, y - 1.8 - ph, y - 1.8, MAT.pot));
       // (its two handles, out to the sides)
       for (const sd of [-1, 1]) { const a = yaw + Math.PI / 2; shapes.push(box([x + Math.sin(a) * sd * (rad + 1.5), y - 4.2, z + Math.cos(a) * sd * (rad + 1.5)], [0.6, 0.45, 1.6], a, MAT.pot, 0.7)); }
@@ -496,14 +521,14 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
       shapes.push(k);
       land = [l, k];
       landR = rad - 0.5;
-      shapes.push(...stand(x, z, rad, y - 1.8 - ph, yaw, coin));
+      shapes.push(...stand(x, z, rad, y - 1.8 - ph, yaw, coin, seat));
       break;
     }
     case 'pan': {
       // a frying pan on a pot: wide and a little slippery, with a rim round it, and a handle out the back
-      const ph = Math.min(y - 1.4, 13);
-      shapes.push(cyl(x, z, 8, y - 1.4 - ph, y - 1.4, MAT.pot));
-      shapes.push(...stand(x, z, 8, y - 1.4 - ph, yaw, coin));
+      const ph = Math.min(y - 1.4 - seat, 13);
+      if (ph > 0.5) shapes.push(cyl(x, z, 8, y - 1.4 - ph, y - 1.4, MAT.pot));
+      shapes.push(...stand(x, z, 8, y - 1.4 - Math.max(0, ph), yaw, coin, seat));
       shapes.push(cyl(x, z, rad, y - 1.4, y, MAT.pan, 0.4));
       const segs = 14;
       for (let i = 0; i < segs; i++) {

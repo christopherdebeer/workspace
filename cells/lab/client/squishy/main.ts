@@ -28,6 +28,8 @@ const preview = params.has('preview');
 const auto = preview || params.has('auto');
 /** a bench: one thing to try over and over (`?bench=jelly`) */
 const benchName = params.get('bench');
+/** (for a look at a place from where you say: ?view=eye x,y,z,looking at x,y,z) */
+const fixedView = params.get('view')?.split(',').map(Number);
 const STORE = 'squishy:v1';
 /**
  * The lab's way in (`?lab`, or a bench, or playing itself): any level, the dumpling either way, a step back
@@ -1216,7 +1218,7 @@ function startLevel(n: number, quiet = false) {
   showHands();
   showTitle();
   if (benchName === 'breakfast') { hint('the breakfast counter: home is the golden steamer, up high. more than one way there: find yours', 7000); benchPanel(); return; }
-  if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
+  if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : benchName === 'supports' ? 'what things stand on: a stool, a cake stand, a board on jars, a crate, cookbooks, a bowl upturned, a tiered stand, a cooling rack' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
   hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
@@ -1956,6 +1958,7 @@ function frame(now: number) {
     tick(1 / 60);
   }
   updateCamera(dt);
+  if (fixedView?.length === 6) { eye[0] = fixedView[0]; eye[1] = fixedView[1]; eye[2] = fixedView[2]; camTarget = [fixedView[3], fixedView[4], fixedView[5]]; }
   updatePuffs(dt);
   // sat still: it turns to look at you (winding up, it looks where it's going)
   body.look = aimNow ? norm([aimNow.vel[0], 0, aimNow.vel[2]]) : norm([eye[0] - body.com[0], 0, eye[2] - body.com[2]]);
@@ -2024,7 +2027,7 @@ function frame(now: number) {
   gl.uniform1f(u(prog, 'uAlpha'), 1);
   gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
   // (the screen over what stands before the dumpling: on in play, once the way over's done)
-  gl.uniform3fv(u(prog, 'uHole'), mode === 'play' && fly < 0 ? [0, 0, 1] : [0, 0, 0]);
+  gl.uniform3fv(u(prog, 'uHole'), mode === 'play' && fly < 0 && !fixedView ? [0, 0, 1] : [0, 0, 0]);
   gl.uniform3fv(u(prog, 'uHoleAt'), body.com);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, shadowTex);
