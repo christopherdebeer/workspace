@@ -21,7 +21,7 @@ export function buildLevel(n: number): Level {
  * A bench: one thing to try, over and over, on a table: `jelly`, three jellies in a row on their
  * saucers, a panna cotta, a mango pudding and a konjac jelly, from the cloth to home; `coats`, each
  * thing that comes off on it, in a row: a floury board, plates with crumbs and with pepper, a
- * pudding with hundreds and thousands, the butter dish.
+ * pudding with hundreds and thousands, the butter dish; `puddings`, each recipe in its mould, in rows.
  */
 export function bench(name: string): Level {
   if (name === 'breakfast') return breakfast();
@@ -40,6 +40,17 @@ export function bench(name: string): Level {
       lv.jellies!.push(j);
       stop({ top: 'pudding', at: [at[0], 0.8 + h, at[2]], r: rad - 1, yaw: 0, shapes: [saucer, j], land: [j] });
     });
+  }
+  if (name === 'puddings') {
+    // each recipe, in its mould, in rows of four: to look at, not to cross
+    for (let k = 0; k <= 10; k++) {
+      const at: V3 = [(k % 4) * 22 - 33, 0, 30 + Math.floor(k / 4) * 24], mat = [MAT.jelly, MAT.pannacotta, MAT.konjac][k % 3];
+      const saucer = cyl(at[0], at[2], 11, 0, 0.8, MAT.porcelain, 0.5);
+      const j = jelly(at[0], at[2], 8, 0.8, 7.8, mat, FEELS.pudding, 0.85, 0, k);
+      drawShapes([saucer], lv.decor);
+      lv.jellies!.push(j);
+      stop({ top: 'pudding', at: [at[0], 7.8, at[2]], r: 7, yaw: 0, shapes: [saucer, j], land: [j] });
+    }
   }
   if (name === 'coats') {
     // each thing that comes off on it, in a row: flour, crumbs, pepper, sprinkles, butter

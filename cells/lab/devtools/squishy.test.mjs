@@ -425,8 +425,8 @@ for (const kind of ['dough', 'jelly']) {
       if (k >= 0 && d.contacts > 0 && speed(d) < 30) check = Math.max(check, k);
       still = Math.hypot(...d.drift.map((v, i) => v - L.carried(lv, d.com)[i])) < 6 && d.sinceContact < 0.12 ? still + DT : 0;
       if (k === lv.towers.length - 1 && still > 0.4) { home = t; break; }
-      // (off any top, on the table: on from the last it stood on)
-      const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), at = near >= 0 ? near : check;
+      // (off any top, on the table: on from the last it stood on; past home, off it: back on to it)
+      const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), on = near >= 0 ? near : check, at = on === lv.towers.length - 1 && k !== on ? on - 1 : on;
       if (still > 0.35 && d.canFlick && at >= 0 && at < lv.towers.length - 1) {
         const a = L.autoFlick(lv, d.com, at, t, d.coated[L.DUST.butter], d.clinging ? d.wallN : null);
         if (a) { d.flick(a.climb ? L.climbLaunch(a.power) : L.launch(a.yaw, a.power), 0, a.climb ?? null); still = 0; }
@@ -457,7 +457,7 @@ for (const kind of ['dough', 'jelly']) {
       if (k >= 0 && d.contacts > 0 && speed(d) < 30) check = k;
       still = Math.hypot(...d.drift.map((v, i) => v - L.carried(lv, d.com)[i])) < 6 && d.sinceContact < 0.12 ? still + DT : 0;
       if (k === lv.towers.length - 1 && still > 0.4) { home = t; break; }
-      const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), at = near >= 0 ? near : check;
+      const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), on = near >= 0 ? near : check, at = on === lv.towers.length - 1 && k !== on ? on - 1 : on;
       if (still > 0.35 && d.canFlick && at >= 0 && at < lv.towers.length - 1) {
         const a = L.autoFlick(lv, d.com, at, t, d.coated[L.DUST.butter], d.clinging ? d.wallN : null);
         if (a) { d.flick(a.climb ? L.climbLaunch(a.power) : L.launch(a.yaw, a.power), 0, a.climb ?? null); still = 0; }

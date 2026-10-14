@@ -360,14 +360,24 @@ little at its rim and over its painted band; enamel, glass fired on steel, is gl
 colour, and chipped only now and then, the steel showing there.
 
 Puddings are set in moulds: each its own, from where it stands, a flan's straight taper, a bell's
-flare, a drum, a dariole waisted low down; fluted with ribs or not; domed on top or not. It's met as
-it's moulded: its side as wide as its mould is so far up, sloped as it tapers, so a bell's flare is
-something to slide off (the ribs are only drawn). And each was set from a recipe, its layers poured
-one on another, blended where they met and a little wavy, the colour heavier low down where it
-settled: a mango pudding all mango, or on coconut cream, or with a cream band through it, or graded
-to pale gold, flecked with mango and caramel on top of most; a panna cotta plain, or on a berry jelly,
-or with a coffee band, or flecked with vanilla, under its coulis; a konjac pink, deeper low down, or
-on a lychee-white layer, or a peach one, or with a white band.
+flare, a drum, a dariole a little in at its top; round, or fluted (rounded ribs), or a flower (petals
+pinched between), or a square with soft corners; its top's edge rounded over, more or less; domed on
+top or not. It's met as it's moulded: its side as wide as its mould is so far up and so far round,
+sloped as it tapers, so a bell's flare is something to slide off and its top's give follows its
+outline.
+
+And each was set from a recipe, its layers poured one on another, each its own colour and its own
+clearness (a cream is opaque; a jelly is clear, seen into, deeper low down), meeting crisply or
+run into each other where they met, a little wavy. A mango pudding is graded mango under caramel run
+over its edge, or mango on coconut cream; a ring of dark berry jelly, cream and clear pink in a
+shallow fluted mould; a strawberry slab, clear pink, cream, clear pink, in a square mould, pieces of
+strawberry set in it and a strawberry on top; a vanilla panna cotta under clear raspberry jelly with
+whole raspberries in it and three on top, and bubbles; blackcurrant mousse run into white chocolate,
+a sauce pooled on top and a blackcurrant on it; a clear red jelly in a deep fluted mould with a flat
+crown; a rainbow of thin stripes in a flower mould, pink hearts piped round its white top; a panna
+cotta under a coulis run over its edge; a konjac pink, or on a lychee-white layer. The panna cottas,
+the mango puddings and the konjacs each have their own of these. `?bench=puddings` sets every recipe
+out in a row, to look at.
 
 Cloth has no glint, but a soft sheen at a glance, in its own colour; its pattern (the gingham's
 checks, the towel's weave) and the wood's fine grain fade as they get too small to see, so nothing

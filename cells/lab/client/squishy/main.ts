@@ -277,6 +277,22 @@ uniform vec3 uHole, uHoleAt;
 ${COMMON}
 ${SHADOW_GLSL}
 ${COAT_GLSL}
+/** the nearest of points scattered one to a unit cell about p: how far, and that point's own hash */
+vec2 cellAt(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  float d = 9., h = 0.;
+  for (int z = -1; z <= 1; z++) for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec3 g = vec3(x, y, z), c = i + g;
+    float e = length(g + vec3(hash3(c), hash3(c + 17.3), hash3(c + 31.7)) - f);
+    if (e < d) { d = e; h = hash3(c + 5.1); }
+  }
+  return vec2(d, h);
+}
+/** a rainbow pudding's stripe, from its foot up: each colour, then a white (its colour, how clear) */
+vec4 stripe(float k) {
+  if (mod(k, 2.) > .5) return vec4(.96, .93, .88, 0.);
+  return k < 1. ? vec4(1., .2, .25, .35) : k < 3. ? vec4(1., .3, .03, .35) : k < 5. ? vec4(1., .7, .06, .3) : vec4(.2, .52, .06, .35);
+}
 void main() {
   // (whatever rises between the eye and the dumpling, anywhere on the glass, is screened: drawn at about half, a fine
   // regular screen of it there and not, so the dumpling's never lost behind a loaf and the loaf's never gone; not what
@@ -356,57 +372,106 @@ void main() {
     base = mix(vec3(.5, .05, .04), vec3(.95, .72, .32), clamp(ring + rays * .7, 0., 1.));
     metal = (ring + rays) * .7; rough = .2; coat = 1.;
   } else if (id == ${MAT.jelly} || id == ${MAT.pannacotta} || id == ${MAT.konjac}) {
-    // a pudding set in its mould: its layers, poured one on another and set, blended where they met, a little
-    // wavy; the colour heavier low down where it settled. Which recipe: in its material's fraction; how far up
-    // it this is: on its side, its v (2 + how far up); its top is the top layer
+    // a pudding set in its mould: its layers, poured one on another and set, each its colour and how clear it is
+    // (a cream, opaque; a jelly, clear, seen into), met crisply or blended where they met, a little wavy; what's set
+    // in the clear ones (fruit, a few bubbles); and what's on its top (caramel, a coulis run over its edge, a sauce
+    // pooled, piped hearts). Which recipe: in its material's fraction; how far up it this is: on its side, its v
+    // (2 + how far up); its top is the top layer
     bool side = vUV.y > 1.5, top = !side;
-    float t = side ? vUV.y - 2. : 1., ang = side ? vUV.x * 6.2832 : 0.;
+    float t = side ? vUV.y - 2. : 1., ang = side ? vUV.x * 6.2832 : atan(vUV.y, vUV.x), r = top ? length(vUV) : 1.;
     int rec = int(fract(vMat) * 100. + .5);
-    float wav = .025 * sin(ang * 3. + float(rec) * 1.7) + .015 * sin(ang * 7. + 2.);
+    float wav = side ? .02 * sin(ang * 3. + float(rec) * 1.7) + .012 * sin(ang * 7. + 2.) : 0.;
     float rim = pow(1. - NoV0, 1.6);
-    #define LAYER(a, b, at) mix(a, b, smoothstep((at) + wav - .045, (at) + wav + .045, t))
-    if (id == ${MAT.jelly}) {
-      // a mango pudding: mango, deeper where it settled; or on coconut cream; or with a cream band; or graded to
-      // pale gold; flecked with mango, more low down; caramel on the top of some
-      vec3 deep = vec3(.82, .28, .03), mango = vec3(.92, .4, .05), pale = vec3(1., .7, .26), cream = vec3(.97, .92, .8);
-      vec3 col = mix(deep, mango, smoothstep(0., .7, t));
-      float glow = 1.;
-      if (rec == 1) { col = LAYER(cream, mango, .38); glow = mix(.35, 1., smoothstep(.33, .43, t)); }
-      else if (rec == 2) { vec3 c2 = LAYER(mango, cream, .45); col = LAYER(c2, mix(mango, pale, .3), .6); glow = 1. - .6 * (smoothstep(.4, .5, t) - smoothstep(.55, .65, t)); }
-      else if (rec == 3) col = mix(deep, pale, smoothstep(.1, 1., t));
-      float bits = smoothstep(.74, .8, noise(vWorld * 2.6 + 4.)) * .45 * (1.3 - t * .6) * glow;
-      bool caramel = top && (rec == 0 || rec == 2 || rec == 3);
-      base = caramel ? mix(vec3(.48, .2, .03), vec3(.7, .32, .06), rim * .6) : mix(mix(col, col * 1.12 + .04, rim), vec3(1., .66, .2), bits);
-      rough = caramel ? .16 : .12; coat = caramel ? .35 : .8;
-      emit = (caramel ? .08 + .3 * rim : .3 + .7 * rim) * glow;
-    } else if (id == ${MAT.pannacotta}) {
-      // a panna cotta: cream, soft-lit through; on a berry jelly set first; or a coffee band through it; or
-      // vanilla-flecked; under a berry coulis, most of them
-      vec3 cream = vec3(.95, .9, .79), berry = vec3(.62, .07, .14), coffee = vec3(.58, .4, .24);
-      vec3 col = mix(cream * vec3(1., .98, .93), cream, t);
-      float glow = 1.;
-      if (rec == 1) { col = LAYER(berry, cream, .3); glow = mix(.6, 1., smoothstep(.25, .35, t)); }
-      else if (rec == 2) { vec3 c2 = LAYER(cream, coffee, .48); col = LAYER(c2, cream, .62); }
-      else if (rec == 3) col = mix(col, vec3(.3, .22, .15), smoothstep(.82, .9, noise(vWorld * 7. + 3.)) * .6);
-      bool coulis = top && rec != 1;
-      base = coulis ? vec3(.5, .04, .1) : mix(col, min(col * 1.06 + .03, vec3(1.)), pow(1. - NoV0, 1.8));
-      rough = coulis ? .1 : .3; coat = coulis ? 1. : .5;
-      emit = coulis ? .02 : (.2 + .45 * pow(1. - NoV0, 1.8)) * glow;
-    } else {
-      // a konjac jelly: clear pink, seen partly through, deeper low down; or on a lychee-white layer, or a peach
-      // one; or with a white band; a few small bubbles held in it
-      vec3 deep = vec3(.82, .2, .32), pink = vec3(1., .55, .6), lychee = vec3(.96, .9, .88), peach = vec3(1., .6, .38);
-      vec3 col = mix(deep, pink, smoothstep(0., 1., t * .8 + n.y * .2));
-      if (rec == 1) col = LAYER(lychee, col, .45);
-      else if (rec == 2) col = LAYER(peach, col, .4);
-      else if (rec == 3) { vec3 c2 = LAYER(col, lychee, .42); col = LAYER(c2, pink, .55); }
-      float bub = smoothstep(.83, .86, noise(vWorld * 1.8 + 9.));
-      base = mix(col, vec3(1., .85, .88), bub * .7);
-      rough = .07; coat = n.y > .8 ? .4 : .9;
-      emit = .4 + .5 * pow(1. - NoV0, 1.4);
-      alpha = mix(.58, .95, pow(1. - NoV0, 1.4));
+    #define LAY(a, b, at, w) mix(a, b, smoothstep((at) + wav - (w), (at) + wav + (w), t))
+    vec4 L = vec4(.95, .9, .8, 0.);
+    vec4 cream = vec4(.94, .88, .74, 0.), mango = vec4(.92, .32, .02, .3);
+    // (in light, as the drawing works in: a deep red's very little green or blue)
+    if (rec == 0) L = vec4(mix(vec3(.7, .14, .01), mango.rgb, smoothstep(0., .75, t)), .3);
+    else if (rec == 1) L = LAY(LAY(vec4(.1, .0, .025, .85), cream, .3, .012), vec4(1., .2, .3, .8), .62, .012);
+    else if (rec == 2) { vec4 s = vec4(.8, .03, .06, .8); L = LAY(LAY(s, vec4(.96, .9, .84, 0.), .28, .012), s, .52, .012); }
+    else if (rec == 3) L = LAY(vec4(.94, .86, .66, 0.), vec4(.6, .01, .04, .85), .42, .02);
+    else if (rec == 4) {
+      // (blackcurrant mousse under white chocolate, run into each other: a lilac line where they met)
+      L = LAY(vec4(.16, .03, .16, 0.), cream, .5, .06);
+      L.rgb = mix(L.rgb, vec3(.4, .25, .55), .45 * (1. - smoothstep(0., .1, abs(t - .5 - wav))));
     }
-    #undef LAYER
+    else if (rec == 5) L = vec4(mix(vec3(.25, .0, .01), vec3(.62, .01, .02), smoothstep(0., .8, t)), .9);
+    else if (rec == 6) {
+      // (rainbow: thin stripes, each colour on a white)
+      float tt = clamp(t - wav, 0., .999) * 8., k = floor(tt);
+      L = mix(stripe(k), stripe(min(k + 1., 7.)), smoothstep(.88, 1., fract(tt)));
+    }
+    else if (rec == 7) L = vec4(mix(vec3(.65, .04, .1), vec3(1., .25, .32), smoothstep(0., 1., t * .8 + n.y * .2)), .8);
+    else if (rec == 8) L = LAY(vec4(.94, .9, .82, 0.), mango, .38, .02);
+    else if (rec == 9) L = vec4(mix(vec3(.86, .77, .58), vec3(.92, .84, .66), t), 0.);
+    else if (rec == 10) L = LAY(vec4(.9, .84, .8, .3), vec4(1., .25, .32, .8), .45, .02);
+    #undef LAY
+    // (a clear one deeper low down, where it settled)
+    L.rgb *= mix(1., .8 + .2 * t, L.a);
+    // vanilla seeds in a cream
+    if (rec == 3 || rec == 9) L.rgb = mix(L.rgb, vec3(.06, .03, .015), smoothstep(.9, .94, noise(vWorld * 6. + 3.)) * .6 * (1. - L.a));
+    // fruit set in the clear: whole raspberries, a strawberry's pieces, a little dimmed by the jelly over them
+    if ((rec == 3 || rec == 2) && L.a > .5) {
+      vec2 cl = cellAt(vWorld * .36 + float(rec) * 3.1);
+      float fr = (1. - smoothstep(.3, .36, cl.x)) * step(cl.y, .65) * smoothstep(.5, .7, L.a);
+      // (a raspberry's drupelets; a strawberry's pale heart)
+      vec2 dp = cellAt(vWorld * 3.2);
+      vec3 fruit = rec == 3 ? mix(vec3(.08, .0, .01), vec3(.42, .0, .03), 1. - smoothstep(.2, .6, dp.x)) : mix(vec3(.75, .03, .03), vec3(1., .3, .22), .6 * (1. - smoothstep(.05, .3, cl.x + .08 * noise(vWorld * 4.))));
+      L.rgb = mix(L.rgb, fruit, fr * .85); L.a = mix(L.a, .2, fr);
+    }
+    // bubbles held in the clear (in a raspberry jelly, more near its top)
+    float bub = 0.;
+    if (L.a > .5) {
+      vec2 bq = cellAt(vWorld * 1.3 + 11.);
+      bub = step(bq.y, .28) * (smoothstep(.06, .1, bq.x) - smoothstep(.11, .14, bq.x)) * (rec == 3 ? smoothstep(.5, .9, t) : .5);
+    }
+    // on top: caramel, or a coulis, run over the edge in tongues; a sauce pooled in the middle; piped hearts round it
+    float deco = 0.; vec3 dcol = vec3(0.);
+    float edge = .93 - .12 * pow(max(0., sin(ang * 7. + float(rec))), 6.);
+    float over = top ? 1. : smoothstep(edge - .008, edge + .008, t);
+    if (rec == 0) { deco = over; dcol = vec3(.22, .05, .005); }
+    else if (rec == 9) { deco = over; dcol = vec3(.4, .0, .02); }
+    else if (rec == 4 && top) { float e = .5 + .05 * sin(ang * 5.) + .03 * sin(ang * 11.); deco = 1. - smoothstep(e - .02, e, r); dcol = vec3(.05, .004, .035); }
+    else if (rec == 6 && top) {
+      float sl = 6.2832 / 6., k = floor(ang / sl + .5), ca = k * sl;
+      vec2 p = mat2(cos(ca), -sin(ca), sin(ca), cos(ca)) * vUV - vec2(.6, 0.);
+      vec2 q = vec2(p.y, p.x) / .13;
+      float h = dot(q, q) - 1.; h = h * h * h - q.x * q.x * q.y * q.y * q.y;
+      vec2 q0 = vUV.yx * vec2(1., -1.) / .17;
+      float h0 = dot(q0, q0) - 1.; h0 = h0 * h0 * h0 - q0.x * q0.x * q0.y * q0.y * q0.y;
+      float hw = fwidth(h) + 1e-4, hw0 = fwidth(h0) + 1e-4;
+      deco = max(1. - smoothstep(-hw, hw, h), 1. - smoothstep(-hw0, hw0, h0)); dcol = vec3(1., .28, .45);
+      relief = .03 * deco;
+    }
+    base = mix(L.rgb, min(L.rgb * 1.08 + .03, vec3(1.)), rim) + bub * .35;
+    float clear2 = L.a * L.a;
+    rough = mix(.3, .07, L.a); coat = mix(.45, .9, L.a);
+    emit = mix(.2 + .45 * rim, .25 + .6 * rim, L.a) + bub * .8;
+    alpha = mix(1., mix(.72, .95, pow(1. - NoV0, 1.4)), clear2);
+    if (deco > 0.) {
+      base = mix(base, mix(dcol, dcol * 1.4 + .05, rim * .6), deco); rough = mix(rough, rec == 6 ? .4 : .12, deco); coat = mix(coat, rec == 6 ? .2 : 1., deco);
+      emit = mix(emit, (rec == 6 ? .15 : .06) + .25 * rim, deco); alpha = mix(alpha, 1., deco);
+    }
+  } else if (id == ${MAT.berry}) {
+    // what's set on a pudding's top: a raspberry, its drupelets; a strawberry, glossy, its seeds sunk in it, its
+    // hull green; a blackcurrant, near black, glossy, a bloom on it
+    int kind = int(fract(vMat) * 100. + .5);
+    if (kind == 0) {
+      vec2 d = cellAt(vWorld * 3.2);
+      float bump = 1. - smoothstep(.2, .6, d.x);
+      base = mix(vec3(.1, .0, .015), vec3(.6, .015, .07), bump) * (.85 + .3 * d.y);
+      relief = bump * .05; rough = .32; coat = .5; emit = .18 * bump;
+    } else if (kind == 1) {
+      vec2 d = cellAt(vWorld * 2.6 + 4.);
+      float seed = 1. - smoothstep(.1, .16, d.x), pit = 1. - smoothstep(.12, .3, d.x);
+      base = mix(vec3(.7, .01, .02), vec3(.9, .6, .12), seed) * (1. - .25 * pit * (1. - seed));
+      relief = -pit * .03 + seed * .02; rough = .25; coat = .8; emit = .12;
+      float hull = smoothstep(.72, .82, n.y + .08 * noise(vWorld * 4.));
+      base = mix(base, vec3(.05, .2, .02), hull); rough = mix(rough, .5, hull);
+    } else {
+      base = vec3(.02, .008, .03) * (.9 + .2 * noise(vWorld * 5.));
+      rough = mix(.12, .45, smoothstep(.4, .7, noise(vWorld * 3. + 2.))); coat = .9; coatRough = .05;
+    }
   } else if (id == ${MAT.bread}) {
     // a round loaf: a brown crust, floured on top, scored across, the pale crumb showing in the cuts
     bool top = n.y > .55;
@@ -3003,7 +3068,9 @@ function tick(dt: number) {
     // (from where it's ended up, which may be over a top's edge; and, with no way on from there, a hop to the middle of this top first)
     // (off any top, on the table: from where it is, on to the next after the last it stood on)
     // (in a place, down on the counter: the way again from its first hop, which the counter reaches)
-    const near = k >= 0 ? k : towerAt(lv, body.com, 4), at = near >= 0 ? near : lv.next && !body.clinging && body.com[1] < 8 ? 0 : check;
+    // (and past home, off it: back on to it)
+    const last = lv.towers.length - 1, near = k >= 0 ? k : towerAt(lv, body.com, 4), on = near >= 0 ? near : lv.next && !body.clinging && body.com[1] < 8 ? 0 : check;
+    const at = on === last && k !== last ? last - 1 : on;
     if (still > 0.5 && body.canFlick && at >= 0 && at < lv.towers.length - 1 && simTime - aimedAt > 0.2) {
       aimedAt = simTime;
       const a = autoFlick(lv, body.com, at, simTime, body.coated[DUST.butter], body.clinging ? body.wallN : null);

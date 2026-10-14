@@ -8,7 +8,7 @@
  * Units are centimetres; the dumpling is 6 across.
  */
 import { hash, type Rand } from '../kit/rng';
-import { FEELS, makeJel, mouldFor, touchJel, type Jel, type JellyFeel, type Mould } from './jelly';
+import { FEELS, makeJel, mouldFor, shapeMax, touchJel, type Jel, type JellyFeel, type Mould } from './jelly';
 
 export type V3 = [number, number, number];
 export const G = 981;
@@ -38,6 +38,8 @@ export const MAT = {
   napkin: 44,
   // (cookbooks, stacked: cloth covers, their pages' edges at the sides)
   book: 45,
+  // (on a pudding's top: a raspberry, a strawberry, a blackcurrant (its kind in the hundredths))
+  berry: 46,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -195,7 +197,7 @@ function bounds(s: Shape): Shape {
   } else if (s.kind === 'jelly') {
     const j = s.jel!;
     // (as wide as its mould's widest, ribs and all; as high as its top can go)
-    const w = j.rad * Math.max(1, ...(j.mould?.prof ?? [1])) * (1 + (j.mould?.flute ?? 0));
+    const w = j.rad * Math.max(1, ...(j.mould?.prof ?? [1])) * shapeMax(j);
     s.lo = [j.cx - w, j.base, j.cz - w];
     s.hi = [j.cx + w, j.top + 3.5, j.cz + w];
   } else {
@@ -317,13 +319,14 @@ export const box = (c: V3, h: V3, yaw: number, mat: number, mu = 0.8): Shape => 
 export const cyl = (x: number, z: number, r: number, y0: number, y1: number, mat: number, mu = 0.8): Shape =>
   bounds({ ...base(), kind: 'cyl', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu });
 export const cap = (a: V3, b: V3, r: number, mat: number, mu = 0.7): Shape => bounds({ ...base(), kind: 'cap', c: a, b, r, mat, mu });
-/** a round jelly from y0 up to y1, its top a membrane that gives (see jelly.ts) */
-export function jelly(x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85, dome = 0): Shape {
+/** a jelly from y0 up to y1, set in a mould (of a recipe, if wanted), its top a membrane that gives (see jelly.ts) */
+export function jelly(x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu = 0.85, dome = 0, recipe?: number): Shape {
   // (a pudding, a panna cotta, a konjac: set in a mould of its own, from where it stands; not a loaf, nor a sponge)
   let mould: Mould | undefined;
   if (mat === MAT.jelly || mat === MAT.pannacotta || mat === MAT.konjac) {
     let h = hash(Math.round(x * 10), Math.round(z * 10), 0x30d);
-    const m = mouldFor(() => ((h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0), (h % 100000) / 100000));
+    const kind = mat === MAT.pannacotta ? 'pannacotta' : mat === MAT.konjac ? 'konjac' : 'pudding';
+    const m = mouldFor(() => ((h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0), (h % 100000) / 100000), kind, recipe);
     mould = m.mould;
     if (!dome) dome = m.dome;
   }
