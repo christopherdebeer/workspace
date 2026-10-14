@@ -153,6 +153,11 @@ export interface Tower {
    */
   wall?: Shape[];
   wallAt?: V3;
+  /**
+   * In a place, how high up it is in the place's way of climbing: the ground reaches only the first
+   * tier; each tier is reached only from the one below; home is the top tier. (See `tierLeaks`.)
+   */
+  tier?: number;
 }
 export interface Level {
   n: number;

@@ -123,25 +123,30 @@ sill. The second time the rack and the sill are higher and the dishcloth shorter
 ## The Breakfast Counter
 
 `?bench=breakfast`: one place, not a run, to try whether the things the dumpling already does make
-for choices. A counter against the tiled wall, laid for breakfast, and home, the golden steamer, on
-a tall tea tin, up where only something already high can reach it. The counter's ground: miss, and
-you're on it, and go on from where you are (none of it reaches home, or the bread bin, in one).
+for choices. A counter against the tiled wall, laid for breakfast, and the counter's ground: miss,
+and you're on it, and go on from where you are. But it's laid in tiers, so going along the counter
+gets you nowhere much:
 
-- **Along the front**, quick and risky: a baking tray buttered all along, to land on and slide to its
-  far lip (topspin carries you; too hard and you're off its side), a stack of pancakes by its far end,
-  the bread bin, home. You leave it buttered, and honey won't hold butter.
-- **Along the back**, slower and sure: a konjac jelly to bounce up off, a stack of steamers, the bin.
-  (A hard, long flick from the cloth reaches the steamers too.)
-- **Through the middle**, a gamble: the cereal box, tall, its top a narrow ledge. From it (or the
-  jelly, or the steamers, or a long flick from the cloth) the honey jar against the wall: splat into
-  its honey, stick, and home is one flick from there. Not if you came the buttered way.
+- **The first tier**, what the counter reaches: the buttered roasting tray, a tall stack of pancakes
+  (icing sugar on top, which gives a buttered landing its grip back), a konjac jelly up on a tin, the
+  cereal box's narrow ledge.
+- **The second tier**, higher than any flick from the counter goes, reached only from the first: the
+  bread bin up on a big cake tin, a tall stack of steamers, the honey jar high on its stand (splat into
+  its honey and stick; not if you're buttered, or sugared).
+- **Home**, on a shelf on the wall, out of the first tier's reach, reached from the second (from the
+  bin; from the steamers, a long one). No rim on it to catch you: come in badly and you go off.
 
-Home has no rim to catch you: come in badly and you go off its far side, as you should. Every way
-it's meant to be gone is made sure of, as a run's hops are (`hop`, from each top to each it
-leads to). There's no count of tops here, only the clock; home, it says the way you came, and keeps it,
-and the panel at the top left shows the last few ways taken and how long each took (tap it to fold it).
-A place says, for each top, which to make for next (for the camera's look ahead and for playing
-itself), and the way the opening view goes over it.
+So the ways: along the front, the tray, the pancakes, the bin, home (quick, slippery); along the back,
+the konjac, the steamers, the bin, home; through the middle, the cereal box, the honey, the bin, home.
+Every way it's meant to be gone is made sure of (`hop`), and the tiers are too (`tierLeaks`: from all
+over the counter's open ground, nothing above the first tier is reached; no top reaches two tiers up).
+Played through, the jelly gets home every way; the dough, heavier and deader, finds the bigger steps
+hard, overshooting off the konjac.
+
+There's no count of tops here, only the clock; home, it says the way you came, and keeps it, and the
+panel at the top left shows the last few ways taken and how long each took (tap it to fold it). A place
+says, for each top, which to make for next (for the camera's look ahead and for playing itself), and the
+way the opening view goes over it.
 
 ## The tops
 
