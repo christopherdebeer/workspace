@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:6057997c5f696d1a70eee14a9cf57e4699914351a284ebf6fa97669086f30632",
-  "syncedAt": "2026-10-13T23:58:51.166Z",
+  "treeVersion": "tree:9c4c45bd33c0c2b979bfd172df1d6726072e5f1cc1266cdac3d46d984d81ba63",
+  "syncedAt": "2026-10-14T00:01:50.188Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -202,8 +202,8 @@
     "static/plate.md": "sha256:13e54834de8032549f53f49b16af2f5a56b1829b482a4d70d562b55d73cad1f6",
     "static/seals.html": "sha256:e0ee6da6d97c90aba4ab57affd0d8680f42e1e543e26f09049926243a9c5a21d",
     "static/seals.md": "sha256:ac3cdc89b52cd09e57910ff68b2ab49645ac9279b95178e5fbc1e2ea84180bb0",
-    "static/squishy.html": "sha256:25015f31c2d13e258eae6e41ee0820c1023d584dab0d1b6f48962f7d3228662f",
-    "static/squishy.md": "sha256:f98d788988eb4cce1f7d9a51eb399d348156af0caac32f8c99776ffde2020b24",
+    "static/squishy.html": "sha256:c15ff03b4970ca68914dd978751e02d126cd9e73044e3697a6fd57dd380c1f3b",
+    "static/squishy.md": "sha256:2c67099fdf966d05d8a866883b671e9fe269772c9e0e9a2a0663a8a2fdd11a7e",
     "static/taohua.html": "sha256:b9a7e79efe3ae7599967f4da1941737cfe7ead55243f6977ad356254a88dfe6e",
     "static/taohua.md": "sha256:ff3ef5a040d196f5f5222ac75296fab9a9e8c817a1af6214db71dd89952219c0",
     "static/technic.html": "sha256:2558d2e003449ac4f6b054415f3380d157e382c4e0876b6cb316d285088cec3a",
