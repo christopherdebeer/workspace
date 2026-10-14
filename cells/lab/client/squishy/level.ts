@@ -1,23 +1,13 @@
 /**
- * Squishy: the course, apart from the drawing and the dumpling (so it can be tested on its own).
- *
- * A level is a seeded climb across a kitchen: towers of things stood up from the counter
- * (stacks of bamboo steamers, tea tins, jars under a chopping board, a plate on a tin, a mango
- * pudding, a lazy Susan that turns), each a top to land on, and the last a golden steamer:
- * home. Sometimes a pair of chopsticks lies from one top to the next. The counter itself is
- * too far down: land on it and it's back to the last top you stood on.
- *
- * The kitchen comes in chapters, by level: the counter first; then the stovetop, where the
- * tops are a butter dish (slippery, with a lip that catches you), a honey jar (you don't land
- * on it: you land against it, stick to the honey on its side, and flick on from there), a pot
- * whose lid lifts on steam every few seconds (a ride up), and a frying pan with its rim.
- *
- * Every tower is made sure of as it's laid: from the top before it, some flick (the way to it,
- * some strength) must land the dumpling's middle on it, by the same parabola the aiming line
- * draws; for a lid, at some moment of its cycle. Units are centimetres; the dumpling is 6
- * across.
+ * Squishy: the course, apart from the drawing and the dumpling (so it can be tested on its own): what's
+ * met (boxes, cylinders, capsules, sheets, jellies), what a top is and the kinds of top (steamers, a
+ * plate, a chopping board across jars, a mango pudding, a lazy Susan, a tea tin; the butter dish, a honey
+ * jar you land against, a pot whose lid lifts on steam, a frying pan with its rim), and the flick: where
+ * it goes, and whether a hop from one top to another can be made, by the same parabola the aiming line
+ * draws (for a lid, at some moment of its cycle). The places and their levels are laid in kitchen.ts.
+ * Units are centimetres; the dumpling is 6 across.
  */
-import { hash, seeded, type Rand } from '../kit/rng';
+import { hash, type Rand } from '../kit/rng';
 import { FEELS, makeJel, touchJel, type Jel, type JellyFeel } from './jelly';
 
 export type V3 = [number, number, number];
@@ -68,9 +58,9 @@ export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
 };
 /** which kitchen a level is in: the preparation table, the counter, then the stovetop, then all of it mixed */
 export type Chapter = 'table' | 'counter' | 'sink' | 'stove' | 'mixed';
-export const chapterOf = (n: number): Chapter => (n <= 2 ? 'table' : n <= 4 ? 'counter' : n <= 6 ? 'sink' : n <= 10 ? 'stove' : 'mixed');
+export const chapterOf = (n: number): Chapter => (n <= 4 ? 'table' : n <= 8 ? 'counter' : n <= 12 ? 'sink' : n <= 16 ? 'stove' : 'mixed');
 /** the first level of each kitchen */
-export const CHAPTER_AT: Record<Chapter, number> = { table: 1, counter: 3, sink: 5, stove: 7, mixed: 11 };
+export const CHAPTER_AT: Record<Chapter, number> = { table: 1, counter: 5, sink: 9, stove: 13, mixed: 17 };
 /** what each kitchen is called, as its title card says */
 export const CHAPTER_NAME: Record<Chapter, string> = { table: 'The Preparation Table', counter: 'The Counter by the Window', sink: 'The Sink', stove: 'The Stovetop', mixed: 'The Whole Kitchen' };
 
@@ -333,29 +323,6 @@ export const jelly = (x: number, z: number, r: number, y0: number, y1: number, m
 export let JELLY_TACK = 0.25;
 export const setJellyTack = (v: number) => { JELLY_TACK = v; };
 
-/** How far out each kind's top reaches, from its middle. */
-function size(top: Top, r: Rand): number {
-  switch (top) {
-    case 'start': return 14;
-    case 'goal': return 15;
-    case 'steamer': return ramp(r, 10.5, 13.5);
-    case 'plate': return ramp(r, 11, 14);
-    case 'board': return 9;
-    case 'pudding': return 7.5;
-    case 'susan': return ramp(r, 13, 15);
-    case 'tin': return ramp(r, 6.5, 8);
-    case 'butter': return 12;
-    case 'honey': return 8.5;
-    case 'lid': return ramp(r, 9.5, 12);
-    case 'pan': return ramp(r, 13, 15);
-    default: return 10;
-  }
-}
-/** how far a tower keeps others off, from its middle (a honey tower's middle is its jar's) */
-function keep(t: Tower): { x: number; z: number; r: number } {
-  if (t.jar) return { x: t.jar.c[0], z: t.jar.c[2], r: t.jar.r + 4 };
-  return { x: t.at[0], z: t.at[2], r: t.box ? Math.hypot(t.box[0], t.box[1]) : t.r + 1 };
-}
 /**
  * What raises a thing that isn't tall itself (a jar, a pot) to where it's wanted: a stack from
  * the counter up to y1, of tea tins and a celadon jar or two, each a size of its own, with a
@@ -742,6 +709,14 @@ export function onTop(tw: Tower, p: V3, slack = 0): boolean {
   }
   return Math.hypot(dx, dz) < tw.r + slack;
 }
+/** How fast what's under a point carries it (a lazy Susan's top, turning), so sat on one it's still, though it goes round. */
+export function carried(lv: Level, p: V3): V3 {
+  const k = towerAt(lv, p, 1);
+  const s = k >= 0 ? (lv.towers[k].land ?? lv.towers[k].shapes).find((sh) => sh.spin) : undefined;
+  if (!s) return [0, 0, 0];
+  const dx = p[0] - s.c[0], dz = p[2] - s.c[2];
+  return [s.spin * dz, 0, -s.spin * dx];
+}
 /** The tower whose top a point is on, or -1. */
 export function towerAt(lv: Level, p: V3, slack = 0): number {
   for (let i = lv.towers.length - 1; i >= 0; i--) if (onTop(lv.towers[i], p, slack)) return i;
@@ -881,119 +856,4 @@ export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[]
     if (aims.every(Boolean)) return { t, flights: fs.map((f, i) => path(lv, f, launch(aims[i]!.yaw, aims[i]!.power), 3, t).pts) };
   }
   return null;
-}
-
-// ─── a level ─────────────────────────────────────────────────────────────────────────────────────
-/** what can come next, by level: the harder kinds come in as it goes */
-function pickTop(r: Rand, n: number, prev: Top): Top {
-  const ch = chapterOf(n);
-  let pool: Top[];
-  if (ch === 'counter') {
-    pool = ['steamer', 'steamer', 'board'];
-    if (n >= 2) pool.push('plate', 'steamer');
-    if (n >= 3) pool.push('pudding', 'tin');
-    if (n >= 4) pool.push('susan', 'plate');
-  } else if (ch === 'stove') {
-    // the stovetop: its first level brings the butter dish and the pan; the next the honey jar; then the lids
-    const s = n - CHAPTER_AT.stove;
-    pool = ['steamer', 'pan', 'butter', 'pan'];
-    if (s >= 1) pool.push('honey', 'butter', 'honey');
-    if (s >= 2) pool.push('lid', 'lid', 'honey');
-    if (s >= 3) pool.push('tin', 'lid');
-  } else {
-    pool = ['steamer', 'board', 'plate', 'pudding', 'tin', 'susan', 'pan', 'butter', 'honey', 'lid', 'honey', 'lid'];
-  }
-  // (not honey twice running: from a jar's side the course turns, and a second jar there is a wall;
-  // nor straight after butter: you'd leave the dish buttered, and honey won't hold butter)
-  if (prev === 'honey' || prev === 'butter') pool = pool.filter((t) => t !== 'honey');
-  return pool[Math.floor(r() * pool.length)];
-}
-/** Level n, of towers: from the start steamer up and across to the golden one, every hop made sure of. (The sets, the first levels, are in `course.ts`.) */
-export function buildTowers(n: number): Level {
-  const r = seeded(hash(n, 0x5917));
-  const chapter = chapterOf(n);
-  const counter = box([0, -10, 0], [3000, 10, 3000], 0, chapter === 'counter' ? MAT.counter : MAT.hob, 0.8);
-  const lv: Level = { n, chapter, towers: [], shapes: [counter], sticks: [], movers: [], kill: RADIUS * 2.2, ground: 0, decor: [] };
-  const add = (tw: Tower) => {
-    lv.towers.push(tw); lv.shapes.push(...tw.shapes);
-    for (const s of tw.shapes) if (s.lift) lv.movers.push(s); else if (s.jel) (lv.jellies ??= []).push(s);
-    if (chapter !== 'counter' && !['honey', 'board', 'lid', 'pan'].includes(tw.top)) tw.burner = (tw.top === 'butter' ? 5 : tw.shapes[0].r) + 3.5;
-  };
-  const remove = (tw: Tower) => { lv.towers.pop(); lv.shapes.length -= tw.shapes.length; lv.movers = lv.movers.filter((m) => !tw.shapes.includes(m)); if (lv.jellies) lv.jellies = lv.jellies.filter((m) => !tw.shapes.includes(m)); };
-  add(tower('start', [0, 16, 0], size('start', r), 0, r));
-  const count = 6 + Math.min(10, n);
-  // (the way each hop made sure of flies: nothing later is stood in it)
-  const corridors: V3[][] = [];
-  const inTheWay = (tw: Tower) => tw.shapes.some((s) => corridors.some((c) => c.some((p) => p[0] > s.lo[0] - RADIUS * 1.3 && p[0] < s.hi[0] + RADIUS * 1.3 && p[1] > s.lo[1] - RADIUS * 1.3 && p[1] < s.hi[1] + RADIUS * 1.3 && p[2] > s.lo[2] - RADIUS * 1.3 && p[2] < s.hi[2] + RADIUS * 1.3)));
-  let yaw = 0;
-  for (let k = 1; k <= count; k++) {
-    const prev = lv.towers[k - 1];
-    const top: Top = k === count ? 'goal' : pickTop(r, n, prev.top);
-    const rad = size(top, r);
-    const hard = Math.min(1, n / 10);
-    // (from a jar's side the course turns away from the jar, sharply)
-    if (prev.exitYaw !== undefined) yaw = prev.exitYaw;
-    let placed: Tower | null = null;
-    for (let tries = 0; tries < 24 && !placed; tries++) {
-      const shrink = 1 - tries * 0.035;
-      const turn = ramp(r, -0.75, 0.75) * (tries > 12 ? 0.5 : 1);
-      const gap = ramp(r, 5, 12 + 22 * hard) * shrink;
-      const dy = ramp(r, -6, 8 + 10 * hard) * shrink;
-      // (a jar, high enough on its stand that what hangs from its honey hangs well clear of the hob)
-      const y = Math.max(top === 'honey' ? 28 : 8, Math.min(320, prev.at[1] + dy));
-      const prevR = prev.jar ? 2 : prev.box ? Math.hypot(prev.box[0], prev.box[1]) - 3 : prev.r + 1;
-      const d = prevR + gap + (top === 'honey' ? 1 : rad);
-      const ny = yaw + turn;
-      const at: V3 = [prev.at[0] + Math.sin(ny) * d, y, prev.at[2] + Math.cos(ny) * d];
-      const tw = tower(top, at, rad, ny + (top === 'honey' ? 0 : ramp(r, -0.4, 0.4)), r);
-      // (clear of every tower so far, a hand's width between)
-      const me = keep(tw);
-      if (lv.towers.some((t) => { const o = keep(t); return Math.hypot(o.x - me.x, o.z - me.z) < o.r + me.r + 6; })) continue;
-      if (inTheWay(tw)) continue;
-      add(tw);
-      // (this hop can be made; and the one before still can, with this tower stood by it)
-      const h = hop(lv, k - 1, k);
-      if (h && (k < 2 || hop(lv, k - 2, k - 1))) {
-        placed = tw; yaw = ny;
-        corridors.push(...h.flights);
-        if (tw.jar) tw.exitYaw = ny + (r() < 0.5 ? -1 : 1) * ramp(r, 1.7, 2.3);
-      } else remove(tw);
-    }
-    if (!placed) {
-      // (nothing fitted: a steamer close by, a little up, which nearly always does; turned this way or that until it's clear)
-      // (from a jar's side, further off: a close top is a wall to a flick from low on the honey)
-      for (const [turn, reach] of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4, 3].flatMap((t) => [[t, 18], [t, 26]])) {
-        const ny = yaw + turn, d = (prev.jar ? 10 : prev.r) + reach;
-        const at: V3 = [prev.at[0] + Math.sin(ny) * d, prev.at[1] + 2, prev.at[2] + Math.cos(ny) * d];
-        const tw = tower(k === count ? 'goal' : 'steamer', at, 11, ny, r);
-        const me = keep(tw);
-        if (lv.towers.some((t) => { const o = keep(t); return Math.hypot(o.x - me.x, o.z - me.z) < o.r + me.r + 6; }) || inTheWay(tw)) continue;
-        add(tw);
-        const h = hop(lv, k - 1, k);
-        if (h && (k < 2 || hop(lv, k - 2, k - 1))) { placed = tw; yaw = ny; corridors.push(...h.flights); break; }
-        remove(tw);
-      }
-      if (!placed) {
-        const d = (prev.jar ? 12 : prev.r) + 18;
-        const at: V3 = [prev.at[0] + Math.sin(yaw) * d, prev.at[1] + 2, prev.at[2] + Math.cos(yaw) * d];
-        add(tower(k === count ? 'goal' : 'steamer', at, 11, yaw, r));
-      }
-    }
-  }
-  // chopsticks laid from one top to the next, now and then, where the two are near level
-  for (let k = 1; k < lv.towers.length; k++) {
-    const a = lv.towers[k - 1], b = lv.towers[k];
-    if (Math.abs(a.at[1] - b.at[1]) > 5 || r() > 0.35 || a.top === 'susan' || b.top === 'susan' || a.jar || b.jar || a.top === 'lid' || b.top === 'lid' || a.top === 'pan' || b.top === 'pan') continue;
-    const dx = b.at[0] - a.at[0], dz = b.at[2] - a.at[2], L = Math.hypot(dx, dz);
-    const ux = dx / L, uz = dz / L, px = -uz, pz = ux;
-    const ea = a.box ? a.box[1] + 1 : a.r - 2, eb = b.box ? b.box[1] + 1 : b.r - 2;
-    for (const s of [-1.6, 1.6]) {
-      const A: V3 = [a.at[0] + ux * ea + px * s, a.at[1] + 0.6, a.at[2] + uz * ea + pz * s];
-      const B: V3 = [b.at[0] - ux * eb + px * s, b.at[1] + 0.6, b.at[2] - uz * eb + pz * s];
-      const st = cap(A, B, 0.6, MAT.chopstick, 0.6);
-      lv.sticks.push(st);
-      lv.shapes.push(st);
-    }
-  }
-  return lv;
 }

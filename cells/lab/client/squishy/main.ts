@@ -17,7 +17,7 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, chapterOf, nextTop, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, carried, chapterOf, nextTop, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -2354,7 +2354,7 @@ function tick(dt: number) {
   if (k >= 0 && body.contacts > 0 && speed < 30) { check = k; if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
   // (sat still: not drifting, and touching, or only a moment off it, trembling on a jelly)
-  const quiet = len(body.drift) < 6 && body.sinceContact < 0.12;
+  const quiet = len(sub(body.drift, carried(lv, body.com))) < 6 && body.sinceContact < 0.12;
   if (body.held > 1 && !heldWas) hint('stuck. aim into it to climb up and over; aim away to jump off', 2600);
   heldWas = body.held > 1;
   // what it's picked up: a word the first time; a sneeze when it's peppered; what a hard landing shakes off
