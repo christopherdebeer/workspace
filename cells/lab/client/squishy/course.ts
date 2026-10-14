@@ -35,68 +35,81 @@ const counterSet = (n: number) => tried(n, 0xc0ffee, layCounter);
 const sinkSet = (n: number) => tried(n, 0x5157, laySink);
 
 /**
- * The Counter by the Window: a butcher-block counter against a tiled wall, a window in it. From a
- * folded cloth: a round loaf on a floury bread board (it gives, and it's crumby); a baking tray,
- * butter melted in one corner of it; a cake stand, its plate sticky with hundreds and thousands
- * (the second time, a konjac jelly first, to bounce on); the bread bin, out from the wall. Above,
- * out of reach of any flick, a shelf, a tea towel hung over its front edge: land against the
- * towel, it holds you, and climb up it and over onto the shelf. Home is on the window sill. A
- * knife block (wood, that holds you a moment) and a crock of wooden spoons stand about; the
- * counter is ground, and off its front is the fall.
+ * The Counter by the Window: a butcher-block counter against a tiled wall, a window in it, and the
+ * counter's the fall: everything's up on something. From a folded cloth on a biscuit tin: a round loaf
+ * in a woven bread basket on two canisters (it gives, and it's crumby; the basket's rim catches a bounce); a baking tray on a
+ * cooling rack, butter melted in one corner of it; a tall cake stand, its plate sticky with hundreds and
+ * thousands (the second time, a konjac jelly on a tin first, to bounce on); the bread bin, out from the
+ * wall. Above, out of reach of any flick, a shelf, a tea towel hung over its front edge: land against
+ * the towel, it holds you, and climb up it and over onto the shelf. Home is on the window sill. A knife
+ * block and a crock of wooden spoons stand about.
  */
 function layCounter(n: number, jit: number, r: Rand): Level {
   const J = (a: number) => (r() * 2 - 1) * a * jit;
   const two = n >= 4;
   const BACK = 66;
-  const lv: Level = { n, chapter: 'counter', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -90, decor: [], floorMat: MAT.tiles };
+  // (the counter is the fall now: come down on it and you're back on the last spot)
+  const lv: Level = { n, chapter: 'counter', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: 6, ground: -90, decor: [], floorMat: MAT.tiles };
   const free = (...ss: Shape[]) => { lv.shapes.push(...ss); drawShapes(ss, lv.decor); for (const s of ss) if (s.jel) lv.jellies!.push(s); };
   const prop = (p: Prop) => { lv.shapes.push(...p.shapes); lv.decor.push(...p.verts); return p; };
   const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) { lv.shapes.push(s); if (s.jel) lv.jellies!.push(s); } };
+  const UP = 14;
 
-  // the folded cloth it starts on
-  const pad = box([0, 0.5, 0], [8, 0.5, 7], 0, MAT.gingham, 0.9);
-  free(pad);
-  stop({ top: 'pad', at: [0, 1, 0], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pad] });
+  // a biscuit tin, a folded cloth on its lid: where it starts
+  const btin = cyl(0, 0, 11, 0, UP, MAT.tin);
+  const pad = box([0, UP + 0.5, 0], [8, 0.5, 7], 0, MAT.gingham, 0.9);
+  free(btin, pad);
+  stop({ top: 'pad', at: [0, UP + 1, 0], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [btin, pad], land: [pad] });
 
-  // a round loaf on a floury bread board: the board around it floured, the loaf soft and crumby
+  // a round loaf on a floury bread board, the board laid across two flour canisters: the board around it floured,
+  // the loaf soft and crumby
   const B1: V3 = [28 + J(3), 0, 20 + J(3)], y1 = 0.25 + J(0.2);
-  const board = box([B1[0], 1, B1[2]], [17, 1, 12], y1, MAT.board, 0.85);
+  const cans = [-1, 1].map((sx) => cyl(B1[0] + Math.cos(y1) * 10 * sx, B1[2] - Math.sin(y1) * 10 * sx, 5, 0, UP, MAT.enamel, 0.7));
+  // (a shallow woven bread basket, floured inside, its rim round it: a bounce off the loaf's crumbs comes down in it)
+  const board = box([B1[0], UP + 0.6, B1[2]], [17, 0.6, 12], y1, MAT.weave, 0.85);
   board.dust = DUST.flour;
-  const lx = B1[0] - Math.cos(y1) * 4, lz = B1[2] + Math.sin(y1) * 4;
-  // (a dome: risen in the middle, its sides down to the board)
-  const loaf = jelly(lx, lz, 8.5, 2, 11, MAT.bread, FEELS.boule, 0.9, 5.5);
+  const cy1 = Math.cos(y1), sy1 = Math.sin(y1);
+  const at1 = (lx: number, lz: number, y: number): V3 => [B1[0] + cy1 * lx + sy1 * lz, y, B1[2] - sy1 * lx + cy1 * lz];
+  const rim = [box(at1(-17, 0, UP + 2.4), [0.6, 1.8, 12], y1, MAT.weave, 0.85), box(at1(17, 0, UP + 2.4), [0.6, 1.8, 12], y1, MAT.weave, 0.85),
+    box(at1(0, -12, UP + 2.4), [17, 1.8, 0.6], y1, MAT.weave, 0.85), box(at1(0, 12, UP + 2.4), [17, 1.8, 0.6], y1, MAT.weave, 0.85)];
+  const lx = B1[0] - cy1 * 4, lz = B1[2] + sy1 * 4;
+  // (a dome: risen in the middle, its sides down to the basket)
+  const loaf = jelly(lx, lz, 8.5, UP + 1.2, UP + 10.2, MAT.bread, FEELS.boule, 0.9, 5.5);
   loaf.dust = DUST.crumbs;
-  free(board, loaf);
-  stop({ top: 'boule', at: [lx, 11, lz], r: 5, yaw: 0, shapes: [board, loaf], land: [loaf] });
+  free(...cans, board, ...rim, loaf);
+  stop({ top: 'boule', at: [lx, UP + 10.2, lz], r: 5, yaw: 0, shapes: [...cans, board, ...rim, loaf], land: [loaf] });
 
-  // a baking tray, butter melted across one corner of it; its lip all round
+  // a baking tray on a cooling rack on two tins, butter melted across one corner of it; its lip all round
   const T: V3 = [B1[0] + 34 + J(3), 0, B1[2] - 16 + J(3)];
-  const tray = box([T[0], 0.4, T[2]], [15, 0.4, 11], 0, MAT.pan, 0.6);
-  const lips = [box([T[0] - 15, 1.1, T[2]], [0.3, 0.7, 11], 0, MAT.pan, 0.6), box([T[0] + 15, 1.1, T[2]], [0.3, 0.7, 11], 0, MAT.pan, 0.6),
-    box([T[0], 1.1, T[2] - 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6), box([T[0], 1.1, T[2] + 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6)];
-  free(tray, ...lips);
-  const bt = prop(smear([T[0] + 13, 0.8, T[2] - 9], [T[0] + 2, 0.8, T[2] + 2], 9, n * 5));
+  const rack = [-9, 9].map((dx) => cyl(T[0] + dx, T[2], 4.5, 0, UP, MAT.tin));
+  const tray = box([T[0], UP + 0.4, T[2]], [15, 0.4, 11], 0, MAT.pan, 0.6);
+  const lips = [box([T[0] - 15, UP + 1.1, T[2]], [0.3, 0.7, 11], 0, MAT.pan, 0.6), box([T[0] + 15, UP + 1.1, T[2]], [0.3, 0.7, 11], 0, MAT.pan, 0.6),
+    box([T[0], UP + 1.1, T[2] - 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6), box([T[0], UP + 1.1, T[2] + 11], [15, 0.7, 0.3], 0, MAT.pan, 0.6)];
+  free(...rack, tray, ...lips);
+  const bt = prop(smear([T[0] + 13, UP + 0.8, T[2] - 9], [T[0] + 2, UP + 0.8, T[2] + 2], 9, n * 5));
   for (const s of bt.shapes) { s.tack = 0; s.dust = DUST.butter; }
-  stop({ top: 'tray', at: [T[0], 0.8, T[2]], r: 9, box: [13.5, 9.5], yaw: 0, shapes: [tray, ...lips, ...bt.shapes], land: [tray, ...bt.shapes] });
+  stop({ top: 'tray', at: [T[0], UP + 0.8, T[2]], r: 9, box: [13.5, 9.5], yaw: 0, shapes: [...rack, tray, ...lips, ...bt.shapes], land: [tray, ...bt.shapes] });
 
   let last: V3 = T;
-  // (the second time: a konjac jelly on a saucer, to bounce on)
+  // (the second time: a konjac jelly on a saucer, up on a tin, to bounce on)
   if (two) {
     const K: V3 = [T[0] + 26 + J(3), 0, T[2] + 22 + J(3)];
-    const saucer = cyl(K[0], K[2], 12, 0, 0.8, MAT.porcelain, 0.5);
-    const kj = jelly(K[0], K[2], 9, 0.8, 8.8, MAT.konjac, FEELS.konjac);
-    free(saucer, kj);
-    stop({ top: 'jelly', at: [K[0], 8.8, K[2]], r: 7, yaw: 0, shapes: [saucer, kj], land: [kj] });
+    const kt = cyl(K[0], K[2], 8, 0, UP, MAT.tin);
+    const saucer = cyl(K[0], K[2], 12, UP, UP + 0.8, MAT.porcelain, 0.5);
+    const kj = jelly(K[0], K[2], 9, UP + 0.8, UP + 8.8, MAT.konjac, FEELS.konjac);
+    free(kt, saucer, kj);
+    stop({ top: 'jelly', at: [K[0], UP + 8.8, K[2]], r: 7, yaw: 0, shapes: [kt, saucer, kj], land: [kj] });
     last = K;
   }
 
-  // a cake stand, its plate sticky with hundreds and thousands
+  // a tall cake stand, its plate sticky with hundreds and thousands
   const S: V3 = [last[0] + 28 + J(3), 0, (two ? last[2] + 4 : last[2] + 30) + J(3)];
-  const stem = cyl(S[0], S[2], 2.2, 0, 9, MAT.porcelain, 0.5);
-  const plate = cyl(S[0], S[2], 11, 9, 10, MAT.porcelain, 0.6);
+  const stem = cyl(S[0], S[2], 2.6, 0, 21, MAT.porcelain, 0.5);
+  const foot = cyl(S[0], S[2], 7, 0, 1.2, MAT.porcelain, 0.5);
+  const plate = cyl(S[0], S[2], 11, 21, 22, MAT.porcelain, 0.6);
   plate.dust = DUST.sprinkles;
-  free(stem, plate);
-  stop({ top: 'stand', at: [S[0], 10, S[2]], r: 9, yaw: 0, shapes: [stem, plate], land: [plate] });
+  free(foot, stem, plate);
+  stop({ top: 'stand', at: [S[0], 22, S[2]], r: 9, yaw: 0, shapes: [foot, stem, plate], land: [plate] });
 
   // the shelf, high on the wall, out of reach of any flick; a tea towel hung over its front edge
   const SY = (two ? 78 : 74) + J(1), SX = S[0] + 52 + J(3), SZ = BACK - 6;
@@ -164,38 +177,45 @@ function prepTable(n: number): Level {
   return lv!;
 }
 
+/**
+ * The Preparation Table, as stations over a fall: the table's top is the fall now, nothing on it to
+ * stand on but what stands up off it. From a cloth on a stack of cookbooks: a ramekin, a wooden spoon
+ * laid from it up to a painted tin bench (land in the spoon's bowl, it catches you, and up its handle);
+ * the bench, a tea towel thrown over its far end (linen grips, and a throw at its hanging side clings a
+ * moment or two); the butter dish up on its tin (its butter slips and stays on you, its lip stops you);
+ * the floury paddle board laid across two jars (flour, which gives a buttered dumpling its grip back); the second time, a plate tipped up on a teacup up on a cake tin; a tall
+ * tea tin; and home.
+ */
 function layTable(n: number, jit: number, r: Rand): Level {
   const J = (a: number) => (r() * 2 - 1) * a * jit;
   const two = n >= 2;
-  const lv: Level = { n, chapter: 'table', towers: [], shapes: [], sticks: [], movers: [], kill: -12, ground: -76, decor: [] };
+  // (the table's top is the fall: come down on it and you're back on the last spot)
+  const lv: Level = { n, chapter: 'table', towers: [], shapes: [], sticks: [], movers: [], kill: 6, ground: -76, decor: [] };
   const free = (...ss: Shape[]) => { lv.shapes.push(...ss); drawShapes(ss, lv.decor); };
   const prop = (p: Prop) => { lv.shapes.push(...p.shapes); lv.decor.push(...p.verts); return p; };
   const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) lv.shapes.push(s); };
 
-  // the folded cloth it starts on
-  const pad = box([0, 0.5, 0], [8, 0.5, 7], 0, MAT.gingham, 0.9);
-  drawShapes([pad], lv.decor);
-  stop({ top: 'pad', at: [0, 1, 0], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pad] });
+  // a stack of cookbooks, a cloth folded on top: where it starts
+  const books = [[0, 11, 9, 0.05], [0.4, 10.2, 8.4, -0.12], [-0.3, 9.6, 8, 0.2]].map(([dx, hx, hz, yw], i) => box([dx, 2.3 + i * 4.6, (i - 1) * 0.4], [hx, 2.3, hz], yw, MAT.book, 0.8));
+  const pad = box([0, 14.3, 0], [7.5, 0.5, 6.5], 0.2, MAT.gingham, 0.9);
+  free(...books, pad);
+  stop({ top: 'pad', at: [0, 14.8, 0], r: 6, box: [7, 6], yaw: 0.2, shapes: [...books, pad], land: [pad] });
 
-  // the butter dish, and its butter melted across the table toward the spoon
-  const dish = tower('butter', [24 + J(2), 3.2, 6 + J(2)], 12, 0.5 + J(0.3), r);
-  free(...dish.shapes);
-  const bowl: V3 = [-6 + J(2), 0, 31 + J(2)];
-  const sm = prop(smear([dish.at[0] - 9, 0, dish.at[2] + 7], [bowl[0] + 2, 0, bowl[2] - 4.5], 10, 3 + n));
-  for (const s of sm.shapes) { s.tack = 0; s.dust = DUST.butter; }
-
-  // the bench, painted tin, its top so high; the spoon's bowl on the table, its handle up on the bench's near side
-  const H = two ? 11 : 9, W = 13, BL = 30;
-  const Cb: V3 = [-10 + J(3), 0, (two ? 68 : 63) + J(3)];
+  // the bench, painted tin, tall; a ramekin by it, and a wooden spoon laid from the ramekin up to the bench's near side
+  const H = two ? 20 : 18, W = 13, BL = 30;
+  const Cb: V3 = [-10 + J(3), 0, (two ? 70 : 64) + J(3)];
   const top = box([Cb[0], H - 0.4, Cb[2]], [BL / 2, 0.4, W / 2], 0, MAT.floral, 0.8);
   const legs = [-1, 1].map((sx) => box([Cb[0] + sx * (BL / 2 - 0.4), (H - 0.8) / 2, Cb[2]], [0.4, (H - 0.8) / 2, W / 2], 0, MAT.floral, 0.8));
   free(top, ...legs);
+  const RY = 14, bowl: V3 = [-4 + J(2), RY, 30 + J(2)];
+  const ramekin = cyl(bowl[0], bowl[2], 5.2, 0, RY + 0.5, MAT.porcelain, 0.6);
+  free(ramekin);
   const rest: V3 = [bowl[0] + J(3), 0, Cb[2] - W / 2 + 0.8];
   const yaw = Math.atan2(rest[0] - bowl[0], rest[2] - bowl[2]);
   const sp = prop(spoon(bowl, yaw, Math.hypot(rest[0] - bowl[0], rest[2] - bowl[2]), H + 0.6));
-  stop({ top: 'spoon', at: [bowl[0], 0.6, bowl[2]], r: 4.6, yaw, shapes: sp.shapes, land: sp.shapes });
+  stop({ top: 'spoon', at: [bowl[0], RY + 0.6, bowl[2]], r: 4.6, yaw, shapes: [...sp.shapes, ramekin], land: sp.shapes });
 
-  // a tea towel thrown over the bench's far end, down both its sides to the table
+  // a tea towel thrown over the bench's far end, down both its sides
   const xs: Array<[number, number]> = [
     [-W / 2 - 6, 0.15], [-W / 2 - 2.2, 0.3], [-W / 2 - 0.9, 1.6], [-W / 2 - 0.55, H * 0.5], [-W / 2 - 0.4, H - 1.2], [-W / 2 + 0.2, H + 0.25], [-W / 2 + 1.4, H + 0.32],
     [W / 2 - 1.4, H + 0.32], [W / 2 - 0.2, H + 0.25], [W / 2 + 0.4, H - 1.2], [W / 2 + 0.55, H * 0.5], [W / 2 + 0.9, 1.6], [W / 2 + 2.2, 0.3], [W / 2 + 6, 0.15],
@@ -203,31 +223,38 @@ function layTable(n: number, jit: number, r: Rand): Level {
   const tw = prop(towel([Cb[0] - BL / 2 + 1.5, 0, Cb[2]], [1, 0, 0], [0, 0, 1], 11, xs, n * 7));
   stop({ top: 'bench', at: [Cb[0], H, Cb[2]], r: 6, box: [BL / 2 - 1.5, W / 2 - 1], yaw: 0, shapes: [top, ...legs, ...tw.shapes], land: [top, ...tw.shapes] });
 
-  // the paddle board, floured, lying on the table off to the side
-  const P3: V3 = [Cb[0] - (two ? 32 : 27) + J(4), 0, Cb[2] + (two ? 25 : 21) + J(4)];
-  const y3 = 0.3 + J(0.5);
-  const board = box([P3[0], 0.8, P3[2]], [12, 0.8, 8.5], y3, MAT.board, 0.85);
-  board.dust = DUST.flour;
-  const handle = box([P3[0] + Math.cos(y3) * 17, 0.8, P3[2] - Math.sin(y3) * 17], [5, 0.8, 2], y3, MAT.board, 0.85);
-  free(board, handle);
-  stop({ top: 'paddle', at: [P3[0], 1.6, P3[2]], r: 7, box: [11, 7.5], yaw: y3, shapes: [board, handle], land: [board] });
+  // the butter dish, up on its tin, off the bench's end: its butter slips, and stays on you (into a spoon's bowl
+  // buttered, you'd slide out; on flour, you get your grip back)
+  const dish = tower('butter', [Cb[0] - 34 + J(2), 17, Cb[2] + 4 + J(2)], 12, 0.5 + J(0.3), r);
+  stop(dish);
 
-  // (the second time: a plate tipped up on a teacup, on the way)
+  // the paddle board, floured, laid across two jars beyond it
+  const P3: V3 = [Cb[0] - (two ? 58 : 54) + J(4), 0, Cb[2] + (two ? 30 : 26) + J(4)];
+  const y3 = 0.3 + J(0.5), PY = 15;
+  const jars = [-1, 1].map((sx) => cyl(P3[0] + Math.cos(y3) * 8 * sx, P3[2] - Math.sin(y3) * 8 * sx, 4.2, 0, PY - 1.6, MAT.jar));
+  const board = box([P3[0], PY - 0.8, P3[2]], [12, 0.8, 8.5], y3, MAT.board, 0.85);
+  board.dust = DUST.flour;
+  const handle = box([P3[0] + Math.cos(y3) * 17, PY - 0.8, P3[2] - Math.sin(y3) * 17], [5, 0.8, 2], y3, MAT.board, 0.85);
+  free(...jars, board, handle);
+  stop({ top: 'paddle', at: [P3[0], PY, P3[2]], r: 7, box: [11, 7.5], yaw: y3, shapes: [...jars, board, handle], land: [board] });
+
+  // (the second time: a plate tipped up on a teacup, the two up on a cake tin, on the way)
   let last: V3 = P3;
   if (two) {
-    const c: V3 = [P3[0] + 16 + J(3), 2.4, P3[2] + 24 + J(3)];
+    const TY = 14, c: V3 = [P3[0] + 16 + J(3), TY + 2.4, P3[2] + 26 + J(3)];
     const dir = Math.PI / 2 + J(0.4), tilt = 0.17;
-    const cup = cyl(c[0] + Math.sin(dir) * 8, c[2] + Math.cos(dir) * 8, 3.5, 0, 3.6, MAT.porcelain, 0.6);
-    free(cup);
+    const cake = cyl(c[0], c[2], 13, 0, TY, MAT.tin);
+    const cup = cyl(c[0] + Math.sin(dir) * 8, c[2] + Math.cos(dir) * 8, 3.5, TY, TY + 3.6, MAT.porcelain, 0.6);
+    free(cake, cup);
     const pl = prop(tiltPlate(c, 11, dir, tilt));
-    stop({ top: 'tilt', at: c, r: 7, yaw: dir, shapes: [...pl.shapes, cup], land: pl.shapes });
+    stop({ top: 'tilt', at: c, r: 7, yaw: dir, shapes: [...pl.shapes, cup, cake], land: pl.shapes });
     last = c;
   }
 
   // a tea tin, then home: the golden steamer
-  const tin = tower('tin', [last[0] + (two ? 4 : 18) + J(3), (two ? 17 : 15) + J(1), last[2] + (two ? 25 : 23) + J(3)], 7, 0, r);
+  const tin = tower('tin', [last[0] + (two ? 4 : 18) + J(3), (two ? 20 : 19) + J(1), last[2] + (two ? 25 : 23) + J(3)], 9, 0, r);
   stop(tin);
-  const goal = tower('goal', [tin.at[0] + 24 + J(3), 21 + J(1), tin.at[2] + 13 + J(3)], 13, 0, r);
+  const goal = tower('goal', [tin.at[0] + 24 + J(3), 24 + J(1), tin.at[2] + 13 + J(3)], 13, 0, r);
   stop(goal);
 
   underTable(lv);
@@ -400,61 +427,68 @@ function breakfast(): Level {
 }
 
 /**
- * The Sink: the counter round a steel sink, its window above. From a folded dishcloth: a sponge
- * (soft, and it soaks up a landing); a soap dish heaped with bubbles (they bounce you, and hold
- * nothing); the steel drainer board, grooved and sloping down to the sink, wet, so it slips; the
- * dish rack, its wire rails to land across, plates stood up in it. Then across the sink, the
- * water below (in it is the fall), at the dishcloth hung over the window sill's edge: it holds
- * you, and you climb it onto the sill. Home along the sill. The second time it's higher, the
- * gaps wider.
+ * The Sink: the counter round a steel sink, its window above, and the counter's the fall, as the
+ * water always was. From a folded dishcloth on an upturned pudding basin: a sponge up on a tin (soft,
+ * and it soaks up a landing); a soap dish up on a tin, heaped with bubbles (they bounce you, and hold
+ * nothing); a two-tier dish rack, its steel drip tray grooved and sloping down toward the sink, wet, so
+ * it slips, and above it the wire rack, its rails to land across, plates stood up in it. Then across
+ * the sink at the dishcloth hung over the window sill's edge: it holds you, and you climb it onto the
+ * sill. Home along the sill. The second time it's higher, the gaps wider.
  */
 function laySink(n: number, jit: number, r: Rand): Level {
   const J = (a: number) => (r() * 2 - 1) * a * jit;
   const two = n >= 6;
   const BACK = 66;
-  const lv: Level = { n, chapter: 'sink', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -90, decor: [], floorMat: MAT.tiles };
+  // (the counter's the fall now, as the water always was: everything's up on something)
+  const lv: Level = { n, chapter: 'sink', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: 6, ground: -90, decor: [], floorMat: MAT.tiles };
+  const UP = 14;
   const free = (...ss: Shape[]) => { lv.shapes.push(...ss); drawShapes(ss, lv.decor); for (const s of ss) if (s.jel) lv.jellies!.push(s); };
   const prop = (p: Prop) => { lv.shapes.push(...p.shapes); lv.decor.push(...p.verts); return p; };
   const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) { lv.shapes.push(s); if (s.jel) lv.jellies!.push(s); } };
 
-  // a folded dishcloth to start on
-  const pad = box([0, 0.5, 0], [8, 0.5, 7], 0, MAT.towel, 0.95);
-  free(pad);
-  stop({ top: 'pad', at: [0, 1, 0], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pad] });
+  // a folded dishcloth to start on, on an upturned pudding basin
+  const pb = cyl(0, 0, 9.5, 0, UP, MAT.pot, 0.6);
+  const pad = box([0, UP + 0.5, 0], [8, 0.5, 7], 0, MAT.towel, 0.95);
+  free(pb, pad);
+  stop({ top: 'pad', at: [0, UP + 1, 0], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pb, pad], land: [pad] });
 
-  // a sponge, soft: it soaks up a landing
+  // a sponge, up on a tin, soft: it soaks up a landing
   const S1: V3 = [24 + J(3), 0, 16 + J(3)];
-  const sponge = jelly(S1[0], S1[2], 6.5, 0, 4.5, MAT.sponge, FEELS.sponge, 0.95);
-  free(sponge);
-  stop({ top: 'sponge', at: [S1[0], 4.5, S1[2]], r: 4.5, yaw: 0, shapes: [sponge], land: [sponge] });
+  const st = cyl(S1[0], S1[2], 6, 0, UP, MAT.tin);
+  const sponge = jelly(S1[0], S1[2], 6.5, UP, UP + 4.5, MAT.sponge, FEELS.sponge, 0.95);
+  free(st, sponge);
+  stop({ top: 'sponge', at: [S1[0], UP + 4.5, S1[2]], r: 4.5, yaw: 0, shapes: [st, sponge], land: [sponge] });
 
-  // a soap dish, heaped with bubbles: they bounce you, and hold nothing
+  // a soap dish up on a tin, heaped with bubbles: they bounce you, and hold nothing
   const D: V3 = [S1[0] + 26 + J(3), 0, S1[2] - 14 + J(3)];
-  const dish = cyl(D[0], D[2], 9, 0, 1.2, MAT.porcelain, 0.5);
+  const dt = cyl(D[0], D[2], 6.5, 0, UP, MAT.tin);
+  const dish = cyl(D[0], D[2], 9, UP, UP + 1.2, MAT.porcelain, 0.5);
   const bubbles: Shape[] = [];
   for (let i = 0; i < (two ? 8 : 6); i++) {
     // (round its rim, the middle clear for a dumpling to sit among them)
     const a = (i / (two ? 8 : 6)) * Math.PI * 2 + r() * 0.4, d = 6.8 + 1.2 * r(), br = 1.4 + r() * 0.9;
-    const c: V3 = [D[0] + Math.cos(a) * d, 1.2 + br * 0.75, D[2] + Math.sin(a) * d];
+    const c: V3 = [D[0] + Math.cos(a) * d, UP + 1.2 + br * 0.75, D[2] + Math.sin(a) * d];
     const b = cap(c, c, br, MAT.bubble, 0.1);
     b.bounce = 0.85; b.tack = 0;
     bubbles.push(b);
   }
-  free(dish, ...bubbles);
-  stop({ top: 'soap', at: [D[0], 1.2, D[2]], r: 5.5, yaw: 0, shapes: [dish, ...bubbles], land: [dish, ...bubbles] });
+  free(dt, dish, ...bubbles);
+  stop({ top: 'soap', at: [D[0], UP + 1.2, D[2]], r: 5.5, yaw: 0, shapes: [dt, dish, ...bubbles], land: [dish, ...bubbles] });
 
   // the sink: a hole in the counter, steel all round, the water in it
   const BX = D[0] + 92 + J(3), BZ = 30, HX = 22, HZ = 16, BY = -18;
-  // the drainer board, sloping down to the sink's left edge, grooved, wet
+  // a two-tier dish rack by the sink: its grooved drip tray on legs, sloping down toward the sink, wet
   const dx0 = BX - HX - 34, dx1 = BX - HX;
-  const dr = prop(drainer(dx0, dx1, BZ - HZ, BZ + HZ, 2.4, 0.4));
-  stop({ top: 'drainer', at: [(dx0 + dx1) / 2 - 6, 1.9, BZ - 9], r: 6, box: [9, 5.5], yaw: 0, shapes: dr.shapes, land: dr.shapes });
+  const dr = prop(drainer(dx0, dx1, BZ - HZ, BZ + HZ, UP + 2.4, UP + 0.4));
+  const dlegs = [[dx0 + 1, BZ - HZ + 1, UP + 2.2], [dx0 + 1, BZ + HZ - 1, UP + 2.2], [dx1 - 1, BZ - HZ + 1, UP + 0.4], [dx1 - 1, BZ + HZ - 1, UP + 0.4]].map(([x, z, y]) => cap([x, 0, z], [x, y, z], 0.45, MAT.steel, 0.6));
+  free(...dlegs);
+  stop({ top: 'drainer', at: [(dx0 + dx1) / 2 - 6, UP + 1.9, BZ - 9], r: 6, box: [9, 5.5], yaw: 0, shapes: [...dr.shapes, ...dlegs], land: dr.shapes });
 
-  // the dish rack, on the back of the drainer: wire rails to land across, plates stood up at its near end
-  const RX = dx0 + 16 + J(2), RZ = BZ + 7, RY = two ? 9 : 7;
+  // its wire rack, on the back of the tray, above it: rails to land across, plates stood up at its near end
+  const RX = dx0 + 16 + J(2), RZ = BZ + 7, RY = UP + (two ? 9 : 7);
   const rails: Shape[] = [];
   for (let i = 0; i < 9; i++) { const z = RZ - 8 + i * 2; rails.push(cap([RX - 13, RY, z], [RX + 13, RY, z], 0.45, MAT.steel, 0.7)); }
-  const legs = [[-13, -8], [13, -8], [-13, 8], [13, 8]].map(([lx, lz]) => cap([RX + lx, 0, RZ + lz], [RX + lx, RY, RZ + lz], 0.35, MAT.steel, 0.6));
+  const legs = [[-13, -8], [13, -8], [-13, 8], [13, 8]].map(([lx, lz]) => cap([RX + lx, UP + 1.5, RZ + lz], [RX + lx, RY, RZ + lz], 0.35, MAT.steel, 0.6));
   free(...rails, ...legs);
   const plates: Shape[] = [];
   // (two plates, stood together at its far end: a wall, with no gap between to wedge in)

@@ -197,12 +197,17 @@ function drawShape(s: Shape, out: number[]) {
         // a pudding: a little narrower at the top, a caramel top
         cylinder(out, sx, sz, s.r, y0, y1, MAT.jelly, MAT.jelly, 40, true, s.r * 0.9);
         break;
-      case MAT.tin:
+      case MAT.tin: {
+        // (each tin its own printing: which of the colourways, from where it stands, carried in its v as thousands)
+        const from = out.length;
         cylinder(out, sx, sz, s.r, y0, y1, MAT.tin, MAT.tin, 36);
+        const way = Math.abs(Math.round(sx * 7.31 + sz * 3.17 + s.r * 11.3)) % 4;
+        for (let i = from; i < out.length; i += VSTRIDE) if (out[i + 6] === MAT.tin) out[i + 8] += way * 1000;
         // (a lid that stands proud at the top)
         cylinder(out, sx, sz, s.r + 0.25, y1 - 1.6, y1 + 0.05, MAT.gold, MAT.tin, 48);
         rolledRim(out, sx, y1 - .05, sz, s.r + .10, .14, MAT.gold);
         break;
+      }
       case MAT.jar:
         cylinder(out, sx, sz, s.r, y0, y1 - 1.6, MAT.jar, MAT.jar, 32, false);
         cylinder(out, sx, sz, s.r * 0.82, y1 - 1.6, y1, MAT.board, MAT.board, 32);

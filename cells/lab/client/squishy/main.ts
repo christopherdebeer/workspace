@@ -368,9 +368,14 @@ void main() {
     // the water in the sink: grey-blue, a little cloudy with soap
     base = vec3(.16, .23, .27) * (.9 + .2 * noise(vec3(vWorld.xz * .2, uTime * .3))); rough = .04; coat = 1.;
   } else if (id == ${MAT.tin}) {
-    // Printed tea tins: repeating cream blossoms and restrained gold rules.
+    // Printed tea tins: repeating cream blossoms and restrained gold rules; each tin in one of four
+    // colourways (carried in its v as thousands): red and teal, navy and cream, mustard and black, sage and white
+    float way = floor((uv.y + 500.) / 1000.);
+    uv.y -= way * 1000.;
     float b = fract(uv.y / 9.);
-    vec3 paint = b < .45 ? vec3(.48, .095, .075) : vec3(.055, .27, .245);
+    vec3 pa = way < .5 ? vec3(.48, .095, .075) : way < 1.5 ? vec3(.09, .14, .32) : way < 2.5 ? vec3(.78, .56, .16) : vec3(.42, .52, .4);
+    vec3 pb = way < .5 ? vec3(.055, .27, .245) : way < 1.5 ? vec3(.86, .8, .66) : way < 2.5 ? vec3(.09, .08, .07) : vec3(.9, .9, .85);
+    vec3 paint = b < .45 ? pa : pb;
     float line = 1. - smoothstep(.009, .019, min(abs(b - .45), min(b, 1. - b)));
     vec2 flower = fract(uv / vec2(5.2, 4.5)) - .5;
     float angle = atan(flower.y, flower.x), radius = length(flower);
@@ -390,6 +395,24 @@ void main() {
     float cut = smoothstep(.985, 1., noise(vec3(uv.x * 9., uv.y * .4, 7.)));
     base = mix(vec3(.72, .55, .36), vec3(.88, .74, .54), g) * (1. - .25 * cut);
     relief = g * .025 - cut * .018; rough = .64;
+  } else if (id == ${MAT.book}) {
+    // cookbooks, stacked: each its own cloth colour (by which book of the stack it is), a title band on the
+    // cover; at the sides, the pages' cream edges between the boards, finely lined
+    float bk = floor(vWorld.y / 4.6);
+    float pick = hash3(vec3(bk, 3., 7.));
+    vec3 cloth = pick < .25 ? vec3(.5, .1, .09) : pick < .5 ? vec3(.12, .2, .36) : pick < .75 ? vec3(.2, .34, .22) : vec3(.72, .52, .2);
+    cloth *= .92 + .1 * noise(vWorld * 3.);
+    if (abs(n.y) > .5) {
+      base = cloth;
+      float band = smoothstep(.6, .5, abs(fract(uv.x * .08 + bk * .37) - .5) * 2.) * step(abs(uv.y), 2.5);
+      base = mix(base, vec3(.85, .72, .4), band * .0);
+      rough = .75;
+    } else {
+      float f = fract(vWorld.y / 4.6) * 4.6;
+      bool boards = f < .38 || f > 4.22;
+      base = boards ? cloth : vec3(.93, .89, .8) * (.94 + .06 * sin(vWorld.y * 60.));
+      rough = boards ? .75 : .9;
+    }
   } else if (id == ${MAT.napkin}) {
     // home's serviette: white paper, quilted in a diamond, folded in four (its creases across), a red
     // printed border near its edge and a red peach in one corner; its edges (uv 2) plain paper

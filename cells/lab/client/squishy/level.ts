@@ -46,6 +46,8 @@ export const MAT = {
   steel: 40, sponge: 41, bubble: 42, water: 43,
   // (home's paper serviette, folded square on its top)
   napkin: 44,
+  // (cookbooks, stacked: cloth covers, their pages' edges at the sides)
+  book: 45,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
