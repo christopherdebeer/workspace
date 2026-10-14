@@ -296,6 +296,8 @@ void main() {
   int id = int(vMat + .5);
   vec2 uv = vUV;
   vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1.;
+  // (the glaze over it, if any: how rough, and how bright the sun's caught in it)
+  float coatRough = .08, coatSpec = .04;
   float NoV0 = max(dot(n, V), 0.);
   if (id == ${MAT.counter}) {
     // Broad maple boards: restrained grain, narrow joints, no noisy zebra striping.
@@ -329,9 +331,15 @@ void main() {
     float r = length(uv);
     float band = smoothstep(.78, .8, r) * (1. - smoothstep(.86, .88, r));
     float leaf = smoothstep(.55, .75, sin(atan(uv.y, uv.x) * 18.)) * smoothstep(.66, .69, r) * (1. - smoothstep(.74, .76, r));
+    // (the body under its glaze, satin, a few iron specks fired into it, fixed to it; the glaze over it clear and hard,
+    // pooled a little thicker at the rim and where the band's painted, a cool tint where it's thick)
+    float speck = smoothstep(.93, .96, noise(vWorld * 2.3 + 17.));
     base = mix(vec3(.94, .94, .92), vec3(.12, .25, .58), max(band, leaf * .8));
-    rough = .23; coat = .65;
-    relief = noise(vec3(uv * 22., 3.)) * .008;
+    base = mix(base, vec3(.45, .38, .32), speck * .6);
+    float pool = smoothstep(.84, .97, r) + band * .5;
+    base *= mix(vec3(1.), vec3(.9, .95, .97), pool * .5);
+    rough = .42; coat = 1.; coatRough = mix(.03, .05, pool); coatSpec = .32;
+    relief = noise(vec3(uv * 22., 3.)) * .006;
   } else if (id == ${MAT.lacquer}) {
     // a lazy Susan: red lacquer, a gold ring and fine gold rays
     float r = length(uv), an = atan(uv.y, uv.x);
@@ -379,9 +387,12 @@ void main() {
     rough = .85;
   } else if (id == ${MAT.enamel}) {
     // a bread bin: cream enamel, a navy rim, chipped here and there
-    float chip = smoothstep(.9, .92, noise(vWorld * 1.7 + 9.));
-    base = mix(vec3(.93, .9, .82), vec3(.08, .1, .2), chip * .55);
-    rough = .25; coat = 1.;
+    // (enamel: glass fired onto steel, so it's glossier than porcelain and its colour flat and even; chipped only
+    // now and then, and there the steel shows)
+    float chip = smoothstep(.955, .965, noise(vWorld * 1.7 + 9.));
+    base = vec3(.93, .9, .82);
+    rough = .3; coat = 1. - chip; coatRough = .05; coatSpec = .26;
+    if (chip > .5) { base = vec3(.45, .46, .48); metal = .9; rough = .35; }
   } else if (id == ${MAT.steel}) {
     // brushed stainless steel: fine lines along it, a cool grey
     float brush = noise(vec3(vWorld.x * .25, vWorld.z * 40., vWorld.y * 40.)) * .5 + noise(vec3(vWorld.x * 2., vWorld.z * 90., 3.)) * .2;
@@ -622,7 +633,7 @@ void main() {
   c += base * emit * (amb + uKeyCol * .5);
   if (coat > .01) {
     float Fc = (.04 + .96 * pow(1. - NoV, 5.)) * coat;
-    c = c * (1. - Fc) + Fc * env(reflect(-V, n)) + coat * uKeyCol * D_ggx(max(dot(n, H), 0.), .08) * V_smith(NoV, NoL, .08) * .04 * NoL * sh;
+    c = c * (1. - Fc) + Fc * env(reflect(-V, n)) * (1. - .5 * occ) + coat * uKeyCol * D_ggx(max(dot(n, H), 0.), coatRough) * V_smith(NoV, NoL, coatRough) * coatSpec * NoL * sh;
   }
   float d = length(vWorld - uEye);
   c = mix(c, vec3(.62, .57, .5), smoothstep(250., 900., d) * .6);
@@ -637,14 +648,16 @@ in vec3 aPos;
 in vec3 aNor;
 in vec3 aRest;
 in vec2 aCoat;
+in vec2 aSkin;
 uniform mat4 uVP, uLightVP;
 out vec3 vWorld;
 out vec3 vNor;
 out vec3 vRest;
 out vec2 vCoat;
+out vec2 vSkin;
 out vec4 vShadow;
 void main() {
-  vWorld = aPos; vNor = aNor; vRest = aRest; vCoat = aCoat;
+  vWorld = aPos; vNor = aNor; vRest = aRest; vCoat = aCoat; vSkin = aSkin;
   vShadow = uLightVP * vec4(aPos, 1.);
   gl_Position = uVP * vec4(aPos, 1.);
 }`;
@@ -660,6 +673,7 @@ in vec3 vWorld;
 in vec3 vNor;
 in vec3 vRest;
 in vec2 vCoat;
+in vec2 vSkin;
 in vec4 vShadow;
 out vec4 o;
 uniform vec3 uEye;
@@ -678,8 +692,14 @@ void main() {
   float pleatAmt = smoothstep(.05, .7, h) * (1. - smoothstep(.88, 1., h));
   float crease = pleatAmt * pow(.5 - .5 * cos(12. * th + 4. * h), 3.);
   float flour = smoothstep(.72, .8, noise(q * 26.)) * .5 + smoothstep(.6, .9, noise(q * 5. + 3.)) * .25;
+  // (how thick it is here, through its rest shape; and how it's stretched (+) or squashed (-) now: squashed, its
+  // creases close and darken, and less light gets through; stretched, it's thinner, milkier, the light through it more)
+  float thick = max(vSkin.x, .2), strain = clamp(vSkin.y, -.6, .6);
+  float squash = smoothstep(0., .35, -strain), stretch = smoothstep(0., .35, strain);
+  crease = min(1., crease * (1. + 1.4 * squash) + squash * .25 * pleatAmt);
   vec3 base = mix(vec3(.87, .77, .61), vec3(.95, .91, .83), flour * .6) * (1. - .22 * crease);
   base *= 1. - .14 * smoothstep(.2, 1., -h);
+  base = mix(base, base * vec3(1.03, 1.02, 1.), stretch * .6);
   // the face, on the front of its rest shape (+z), a little above its middle
   vec3 d = normalize(q * vec3(1., 1.35, 1.));
   float ink = 0., white = 0., cheek = 0.;
@@ -723,11 +743,18 @@ void main() {
   vec3 c = base * (amb + uKeyCol * lit);
   float edge = pow(1. - max(dot(n, V), 0.), 2.);
   c += vec3(1., .62, .42) * uKeyCol * .22 * pow(clamp(1. - abs(NoL), 0., 1.), 3.) * sh;
-  c += vec3(1., .7, .5) * uKeyCol * .35 * pow(max(dot(V, -uKey), 0.), 3.) * edge;
-  // a moist sheen
+  // (light through it: where it's thin, the sun from behind it comes through warm, milky; and the room's light
+  // gets into it everywhere a little, the more the thinner)
+  float T = exp(-thick * (.42 - .12 * stretch + .3 * squash));
+  c += vec3(1., .66, .45) * uKeyCol * .7 * pow(max(dot(V, -uKey), 0.), 2.) * T * (.35 + .65 * sh) * (.3 + .7 * edge);
+  c += base * vec3(1., .8, .62) * irradiance(-n) * .45 * T;
+  // a moist sheen: broad and low, steamed; and a little tighter one, wetter, narrower where it's stretched taut
   vec3 H = normalize(uKey + V);
   float NoV = max(dot(n, V), 1e-3);
-  c += uKeyCol * D_ggx(max(dot(n, H), 0.), .3) * V_smith(NoV, max(NoL, 0.), .3) * .05 * max(NoL, 0.) * sh;
+  float NoH = max(dot(n, H), 0.), NoLp = max(NoL, 0.);
+  c += uKeyCol * D_ggx(NoH, .48) * V_smith(NoV, NoLp, .48) * .07 * NoLp * sh;
+  float wet = mix(.16, .11, stretch);
+  c += uKeyCol * D_ggx(NoH, wet) * V_smith(NoV, NoLp, wet) * .018 * NoLp * sh * (1. - squash * .6);
   c += (.04 + .96 * pow(1. - NoV, 5.)) * env(reflect(-V, n)) * .25 * (1. - .7 * smoothstep(.5, .95, cRough));
   // (butter's grease, sprinkles' sugar: a gloss)
   c += (uKeyCol * D_ggx(max(dot(n, H), 0.), .1) * V_smith(NoV, max(NoL, 0.), .1) * max(NoL, 0.) * sh * .25 + env(reflect(-V, n)) * .12) * cGloss;
@@ -753,9 +780,11 @@ in vec4 vShadow;
 out vec4 o;
 uniform vec3 uEye;
 uniform mat4 uVP;
-uniform sampler2D uScene;
+uniform sampler2D uScene, uBack;
 uniform vec2 uRes;
-uniform float uBlink, uFace, uR, uPass;
+uniform float uBlink, uFace, uR, uPass, uHasBack;
+uniform mat3 uRot;
+uniform vec3 uCom;
 ${COMMON}
 ${SHADOW_GLSL}
 ${COAT_GLSL}
@@ -770,18 +799,21 @@ void main() {
   float px = 1. / uRes.y;
   if (uPass < .5) {
     // how far through it the eye looks here (a chord of something round), and where that comes out
-    float thick = uR * 2.1 * NoV + .25;
+    // how far through it the eye looks here: from its back, as drawn just before (the real way through it, as
+    // it's squashed or stretched); without that, as through something round
+    float thick = uHasBack > .5 ? clamp(texelFetch(uBack, ivec2(gl_FragCoord.xy), 0).r - length(uEye - vWorld), .15, uR * 2.8) : uR * 2.1 * NoV + .25;
     vec3 rd = refract(-V, n, 1. / 1.4);
     vec4 cp = uVP * vec4(vWorld + rd * (thick + 2.5), 1.);
     vec2 suv = cp.xy / cp.w * .5 + .5;
-    // (a little soft, as through jelly: a few taps about it)
+    // (soft, as through jelly, the softer the thicker: a few taps about it)
     vec3 behind = vec3(0.);
-    for (int i = 0; i < 5; i++) {
-      float a = float(i) * 2.4;
-      behind += texture(uScene, clamp(suv + vec2(cos(a), sin(a)) * px * (i == 0 ? 0. : 2.5), .001, .999)).rgb;
+    float spread = 1.2 + thick * .55;
+    for (int i = 0; i < 7; i++) {
+      float a = float(i) * 2.4, rr = i == 0 ? 0. : sqrt(float(i) / 6.);
+      behind += texture(uScene, clamp(suv + vec2(cos(a), sin(a)) * px * spread * rr * 2.2, .001, .999)).rgb;
     }
-    behind /= 5.;
-    vec3 T = exp(-vec3(.025, .15, .095) * thick);
+    behind /= 7.;
+    vec3 T = exp(-vec3(.012, .12, .075) * thick);
     // the light inside it: the room's, and the window's, wrapped round, pinker the deeper
     float wrap = max((NoL + .6) / 1.6, 0.);
     vec3 inside = PINK * (irradiance(n) * .07 + uKeyCol * wrap * mix(.25, 1., sh) * .09) * (1. - T.g * .5);
@@ -789,7 +821,22 @@ void main() {
     inside += PINK * uKeyCol * .35 * pow(max(dot(-V, uKey), 0.), 3.) * (1. - NoV * .5);
     // (thin at its rim, where the light bounces about inside it: a pinker edge)
     inside += PINK * irradiance(n) * .3 * pow(1. - NoV, 3.);
-    vec3 c = behind * T;
+    // a few bubbles held in it, where they were set when it was made (they go with it): each a bright ring, its
+    // middle a little clearer
+    vec3 ro = transpose(uRot) * (vWorld - uCom), rv = transpose(uRot) * rd;
+    float bub = 0., clear = 0.;
+    for (int b = 0; b < 3; b++) {
+      vec4 B = b == 0 ? vec4(.55, .25, -.45, .42) : b == 1 ? vec4(-.85, -.35, .5, .3) : vec4(.15, -.6, .95, .22);
+      vec3 oc = ro - B.xyz * uR / 3.;
+      float tb = -dot(oc, rv);
+      if (tb > 0. && tb < thick) {
+        float dmin = length(oc + rv * tb), r = B.w * uR / 3.;
+        bub += smoothstep(r * .55, r * .92, dmin) * (1. - smoothstep(r * .92, r * 1.04, dmin));
+        clear += 1. - smoothstep(r * .5, r, dmin);
+      }
+    }
+    inside += (irradiance(n) * .5 + uKeyCol * .25) * bub * .5;
+    vec3 c = behind * mix(T, sqrt(T), clamp(clear, 0., 1.) * .6);
 #ifdef HDR
     // (its own light over what's seen through it, as a screen over it would be, in light)
     o = vec4(c + inside / (1. + c), 1.);
@@ -893,7 +940,8 @@ void main() {
   float r = length(d) * 2.;
   float core = 1. - smoothstep(.2, 1., r);
   float star = max(1. - smoothstep(0., .12, abs(d.x)), 1. - smoothstep(0., .12, abs(d.y))) * (1. - r) * smoothstep(.6, 2., vA);
-  o = vec4(vCol * vA * (core + star), 1.);
+  // (a little less of it than there was: it's the jelly's depth that should hold the eye, not its sparkle)
+  o = vec4(vCol * vA * (core + star) * .6, 1.);
 }`;
 /** steam and flour: soft points */
 const PUFF_VS = `#version 300 es
@@ -927,6 +975,13 @@ void main() {
   o = vec4(c, vA * (1. - smoothstep(0., 1., r)) * (1. - smoothstep(0., 1., r)) * (.55 + .45 * br));
 }`;
 
+/** the jelly's back, for how thick it is where it's seen: how far each of its far faces is from the eye */
+const BACK_FS = `#version 300 es
+precision highp float;
+in vec3 vWorld;
+uniform vec3 uEye;
+out vec4 o;
+void main() { o = vec4(length(uEye - vWorld)); }`;
 /** the finish: a triangle over the glass */
 const QUAD_VS = `#version 300 es
 out vec2 vUV;
@@ -989,7 +1044,7 @@ function program(vs: string, fs: string): WebGLProgram {
   };
   const p = gl.createProgram()!;
   // (the skin's attributes in fixed places, so one vertex array serves the dough's and the jelly's drawing)
-  if (vs === DOUGH_VS) { gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aNor'); gl.bindAttribLocation(p, 2, 'aRest'); gl.bindAttribLocation(p, 3, 'aCoat'); }
+  if (vs === DOUGH_VS) { gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aNor'); gl.bindAttribLocation(p, 2, 'aRest'); gl.bindAttribLocation(p, 3, 'aCoat'); gl.bindAttribLocation(p, 4, 'aSkin'); }
   gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
   gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(p);
@@ -1006,6 +1061,7 @@ const jellyProg = program(DOUGH_VS, JELLY_FS);
 const glitterProg = program(GLITTER_VS, GLITTER_FS);
 const puffProg = program(PUFF_VS, PUFF_FS);
 const brightProg = program(QUAD_VS, BRIGHT_FS), blurProg = program(QUAD_VS, BLUR_FS), finishProg = program(QUAD_VS, FINISH_FS);
+const backProg = HDR ? program(DOUGH_VS, BACK_FS) : null;
 const ul = new Map<string, WebGLUniformLocation | null>();
 const u = (p: WebGLProgram, n: string) => {
   const k = `${(p as { __id?: number }).__id ??= Math.random()}:${n}`;
@@ -1083,6 +1139,43 @@ interface Flakes { n: number; rest: Float32Array; near: Uint16Array; w: Float32A
  * where each was in its rest shape; and, for the jelly, the glitter in it: each flake placed
  * somewhere inside, carried along by the four particles of the skin nearest it.
  */
+/**
+ * A skin at rest: how thick it is at each point (along its inward normal to where that comes out the far side),
+ * and how much of its surface is about each point (a third of each triangle it's a corner of).
+ */
+function skinMeasure(q: Float32Array, tris: ArrayLike<number>): { thick: Float32Array; area: Float32Array } {
+  const n = q.length / 3, nrm = new Float32Array(n * 3), area = new Float32Array(n), thick = new Float32Array(n);
+  for (let k = 0; k < tris.length; k += 3) {
+    const a = tris[k] * 3, b = tris[k + 1] * 3, c = tris[k + 2] * 3;
+    const ux = q[b] - q[a], uy = q[b + 1] - q[a + 1], uz = q[b + 2] - q[a + 2], vx = q[c] - q[a], vy = q[c + 1] - q[a + 1], vz = q[c + 2] - q[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, A = Math.hypot(nx, ny, nz) / 2;
+    for (const i of [a, b, c]) { nrm[i] += nx; nrm[i + 1] += ny; nrm[i + 2] += nz; area[i / 3] += A / 3; }
+  }
+  for (let i = 0; i < n; i++) {
+    const l = Math.hypot(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]) || 1;
+    const dx = -nrm[i * 3] / l, dy = -nrm[i * 3 + 1] / l, dz = -nrm[i * 3 + 2] / l;
+    const ox = q[i * 3] + dx * 0.02, oy = q[i * 3 + 1] + dy * 0.02, oz = q[i * 3 + 2] + dz * 0.02;
+    let best = RADIUS * 2.2;
+    // (the nearest triangle the inward ray meets, past its own: Möller–Trumbore)
+    for (let k = 0; k < tris.length; k += 3) {
+      const a = tris[k] * 3, b = tris[k + 1] * 3, c = tris[k + 2] * 3;
+      if (a === i * 3 || b === i * 3 || c === i * 3) continue;
+      const e1x = q[b] - q[a], e1y = q[b + 1] - q[a + 1], e1z = q[b + 2] - q[a + 2], e2x = q[c] - q[a], e2y = q[c + 1] - q[a + 1], e2z = q[c + 2] - q[a + 2];
+      const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x, det = e1x * px + e1y * py + e1z * pz;
+      if (Math.abs(det) < 1e-9) continue;
+      const inv = 1 / det, tx = ox - q[a], ty = oy - q[a + 1], tz = oz - q[a + 2];
+      const uu = (tx * px + ty * py + tz * pz) * inv;
+      if (uu < 0 || uu > 1) continue;
+      const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+      const vv = (dx * qx + dy * qy + dz * qz) * inv;
+      if (vv < 0 || uu + vv > 1) continue;
+      const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+      if (t > 0.05 && t < best) best = t;
+    }
+    thick[i] = best;
+  }
+  return { thick, area };
+}
 function skinOnCard(kind: Kind) {
   const d = new Dumpling([0, 0, 0], kind);
   const vao = gl.createVertexArray()!;
@@ -1101,7 +1194,15 @@ function skinOnCard(kind: Kind) {
   gl.bufferData(gl.ARRAY_BUFFER, d.x.byteLength, gl.DYNAMIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, coat);
   gl.bufferData(gl.ARRAY_BUFFER, d.n * 2 * 4, gl.DYNAMIC_DRAW);
-  bind(pos, 0); bind(nor, 1); bind(rest, 2); bind(coat, 3, 2);
+  // (how thick it is at each point, through its rest shape, and how much skin is round each point at rest: for how
+  // it's stretched or squashed, as it's drawn)
+  const { thick, area: restArea } = skinMeasure(d.q, d.tris);
+  const skinData = new Float32Array(d.n * 2);
+  for (let i = 0; i < d.n; i++) skinData[i * 2] = thick[i];
+  const skin = gl.createBuffer()!;
+  gl.bindBuffer(gl.ARRAY_BUFFER, skin);
+  gl.bufferData(gl.ARRAY_BUFFER, skinData, gl.DYNAMIC_DRAW);
+  bind(pos, 0); bind(nor, 1); bind(rest, 2); bind(coat, 3, 2); bind(skin, 4, 2);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, d.tris, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
@@ -1161,7 +1262,7 @@ function skinOnCard(kind: Kind) {
     gl.bindVertexArray(null);
     flakes = { n: N, rest: fr, near, w, nor: fn, data, buf, vao: fvao };
   }
-  return { kind, vao, svao, pos, nor, coat, coatData: new Float32Array(d.n * 2), count: d.tris.length, normals: new Float32Array(d.x.length), shown: new Float32Array(d.x.length), q: d.q, flakes };
+  return { kind, vao, svao, pos, nor, coat, skin, skinData, restArea, areaNow: new Float32Array(d.n), coatData: new Float32Array(d.n * 2), count: d.tris.length, normals: new Float32Array(d.x.length), shown: new Float32Array(d.x.length), q: d.q, flakes };
 }
 const skins = { jelly: skinOnCard('jelly'), dough: skinOnCard('dough') };
 /** The skin as drawn: between the solver's last two states, its normals from its triangles; and the glitter carried along. */
@@ -1171,13 +1272,20 @@ function uploadSkin(body: Dumpling, prevX: Float32Array, alpha: number) {
   const x = body.x, s = g.shown, nrm = g.normals;
   for (let i = 0; i < x.length; i++) s[i] = prevX.length === x.length ? prevX[i] + (x[i] - prevX[i]) * alpha : x[i];
   nrm.fill(0);
+  const an = g.areaNow;
+  an.fill(0);
   const t = body.tris;
   for (let k = 0; k < t.length; k += 3) {
     const a = t[k] * 3, b = t[k + 1] * 3, c = t[k + 2] * 3;
     const ux = s[b] - s[a], uy = s[b + 1] - s[a + 1], uz = s[b + 2] - s[a + 2], vx = s[c] - s[a], vy = s[c + 1] - s[a + 1], vz = s[c + 2] - s[a + 2];
-    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    for (const i of [a, b, c]) { nrm[i] += nx; nrm[i + 1] += ny; nrm[i + 2] += nz; }
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, A = Math.hypot(nx, ny, nz) / 6;
+    for (const i of [a, b, c]) { nrm[i] += nx; nrm[i + 1] += ny; nrm[i + 2] += nz; an[i / 3] += A; }
   }
+  // (how much skin is about each point now, against at rest: stretched, more; squashed, less)
+  const sd = g.skinData, ra = g.restArea;
+  for (let j = 0; j < an.length; j++) sd[j * 2 + 1] += ((ra[j] > 0 ? an[j] / ra[j] - 1 : 0) - sd[j * 2 + 1]) * 0.5;
+  gl.bindBuffer(gl.ARRAY_BUFFER, g.skin);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, sd);
   for (let i = 0; i < nrm.length; i += 3) { const l = Math.hypot(nrm[i], nrm[i + 1], nrm[i + 2]) || 1; nrm[i] /= l; nrm[i + 1] /= l; nrm[i + 2] /= l; }
   gl.bindBuffer(gl.ARRAY_BUFFER, g.pos);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, s);
@@ -2082,6 +2190,7 @@ const SAMPLES = Math.max(1, Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as numbe
 const msFb = gl.createFramebuffer()!, msColor = gl.createRenderbuffer()!, msDepth = gl.createRenderbuffer()!;
 const resFb = gl.createFramebuffer()!, resTex = gl.createTexture()!;
 const bloomFb = [gl.createFramebuffer()!, gl.createFramebuffer()!], bloomTex = [gl.createTexture()!, gl.createTexture()!];
+const backFb = gl.createFramebuffer()!, backTex = gl.createTexture()!;
 let tgtW = 0, tgtH = 0;
 function blankTex(t: WebGLTexture, w: number, h: number) {
   gl.bindTexture(gl.TEXTURE_2D, t);
@@ -2101,6 +2210,11 @@ function targets(W: number, H: number) {
   blankTex(resTex, W, H);
   gl.bindFramebuffer(gl.FRAMEBUFFER, resFb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, resTex, 0);
+  if (backProg) {
+    blankTex(backTex, W, H);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, backFb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, backTex, 0);
+  }
   for (let i = 0; i < 2; i++) {
     blankTex(bloomTex[i], Math.max(1, W >> 2), Math.max(1, H >> 2));
     gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFb[i]);
@@ -2547,10 +2661,34 @@ function frame(now: number) {
     skinUniforms(doughProg);
     gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
   } else {
+    // its far side: how far from the eye, the farthest wherever it's seen, for how thick it is there
+    if (backProg) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, backFb);
+      gl.viewport(0, 0, W, H);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT);
+      gl.enable(gl.BLEND); gl.blendEquation(gl.MAX);
+      gl.useProgram(backProg);
+      gl.uniformMatrix4fv(u(backProg, 'uVP'), false, vp);
+      gl.uniform3fv(u(backProg, 'uEye'), eye);
+      gl.bindVertexArray(sk.vao);
+      gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0);
+      gl.blendEquation(gl.FUNC_ADD); gl.disable(gl.BLEND);
+      gl.cullFace(gl.BACK); gl.disable(gl.CULL_FACE);
+      gl.enable(gl.DEPTH_TEST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, msFb);
+    }
     // what's behind it, to see through it
     sceneCopy(W, H);
     skinUniforms(jellyProg);
     gl.uniform1i(u(jellyProg, 'uScene'), 1);
+    gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, backTex); gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(u(jellyProg, 'uBack'), 5);
+    gl.uniform1f(u(jellyProg, 'uHasBack'), backProg ? 1 : 0);
+    gl.uniformMatrix3fv(u(jellyProg, 'uRot'), true, new Float32Array(body.R));
+    gl.uniform3fv(u(jellyProg, 'uCom'), body.com);
     gl.uniform2f(u(jellyProg, 'uRes'), W, H);
     gl.uniform1f(u(jellyProg, 'uPass'), 0);
     gl.enable(gl.CULL_FACE);

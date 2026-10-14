@@ -345,6 +345,20 @@ small cells so there's somewhere for it to go. It dims the room's light most, an
 a thing's well shut in. Under the dumpling, a soft dark, and where it's touching, a tighter, darker
 core as wide as what of it touches, wider as it squashes.
 
+The dumpling knows how thick it is at each point (measured once through its rest shape, along its
+inward normal) and how stretched or squashed its skin is there now (the skin about each point against
+at rest). The dough: where it's thin, the sun from behind comes through it warm and milky and the
+room's light gets into it; squashed, its creases close and darken and less gets through; stretched,
+it's thinner, milkier, its wet sheen narrower; a broad low steamed sheen and a smaller wetter one
+over it, not one plastic glint. The jelly: its far side drawn first (how far from the eye, the
+farthest wherever it's seen), so how thick it is where you look is how thick it is, squashed or
+stretched: colour taken out by that thickness (pink deepening through its middle, clear at its thin
+edges), what's seen through it softer the thicker, and three bubbles held in it, set when it was
+made and going with it, each a bright ring; its glitter turned down, so its depth holds the eye.
+Porcelain is a satin body with a few iron specks fired into it under a clear hard glaze, pooled a
+little at its rim and over its painted band; enamel, glass fired on steel, is glossier and flat in
+colour, and chipped only now and then, the steel showing there.
+
 `?bench=look` is a still life to judge all this by (the dumpling on a cloth on cookbooks, a mango
 pudding on a cake stand, a konjac on a crate, a plate on a stool, the painted bench and its towel);
 `?light=morning|noon|shade` sets the light (low and warm, the default; high and white; the sun off
