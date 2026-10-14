@@ -29,7 +29,7 @@ level, `?level=3`, goes straight to it.)
 | climb | stuck to a wall: take hold, aim into the wall and let go | the same |
 | turn the camera, tilt it | drag anywhere off the dumpling (or two fingers) | the same, or ← → |
 | come close | pinch | the wheel |
-| start the level again | `again` | R |
+| start the level again | ↺, under the clock | R |
 
 Where you take hold of it is where it's held: the dough under your finger is drawn out toward it as
 you pull, stretching, the rest of it hanging back, and it winds up, squeezed along the way it's
