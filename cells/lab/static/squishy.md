@@ -194,27 +194,40 @@ itself, it waits out a lid's rattle before it flicks from it or onto it.
 
 ## Jellies
 
-A jelly gives for real. Its top is a membrane: nodes on rings and spokes out from its middle, each
-held to its height by a spring, damped, and drawn toward its neighbours, so a dent spreads and
-ripples. Where the dumpling presses, the jelly is pushed down as hard as it pushes back (its share
-of the dumpling's weight, by how fast it was pushed out), so it dents where you land and where you
-sit, deeper at a hard landing, and tilts if you land near its edge, which throws you off sideways.
-Then it springs back, and if it springs back quickly enough (faster than falling: the dent times
-(2π × its Hz)² over g), it throws you up again, unasked, a moment after you've landed.
+A jelly gives, and what it does with a landing is set by what it should do, not left to come out of
+how it wobbles. The dumpling sinks into a jelly's top as into a bed: a damped spring under the whole
+of it that firms up the further in it goes (k x (1 + (x/x0)²) − c v), measured on its middle from
+where its middle was as its foot touched (so its own squash, or tack drawing its foot down, can't
+pump it). Each jelly is three numbers for that: how much of a landing it gives back (its
+restitution), how far into it (of its height) a gentle landing goes (from 10 cm), and how far a hard
+one (from 50 cm). From those, the spring and how it firms; and it's damped as stiff as it is where
+it is, so it gives back as much of a hard landing as of a gentle one. Of a gentle landing (from
+under about 20 cm) it gives back less, so a bouncing dumpling goes boing, boing, and settles. It
+holds the dumpling from sliding as hard as it pushes, so a landing sticks where it lands, and a
+bounce goes straight up. A flick off a jelly goes as aimed: it lets go, and doesn't throw it harder
+for what it had sunk in.
 
-Each is lit as a jelly is: glowing through, brightest where it's thinnest as seen (its edges), the mango pudding flecked with bits of fruit under its caramel top, the konjac seen partly through, a few small bubbles held in it. Three kinds, by how they give: a **panna cotta** (cream, under a berry coulis) dents and that's
-all; a **mango pudding** comes back with a little hop; a **konjac jelly** (clear pink) springs
-back fastest, a hard landing coming back as a hop of five or six centimetres. (Fast, too, so it
-doesn't hum along with the dough, whose own wobble is slower: a jelly that springs back at the
-dough's own pace and the dough on it would bounce each other on and on.) A jelly is glossy and
-moving, so the dumpling's tack hardly holds to it, and where something sits on it, it's damped a
-little more, so it settles. Each is four numbers: how fast it
-springs back (Hz), how much of each wobble it keeps, how heavy it is (the dumpling is 1), and how
-far a dent spreads.
+Its top is a membrane: nodes on rings and spokes out from its middle, each held to its height by a
+spring, damped, and drawn toward its neighbours. While the dumpling's in it, the top is held to the
+dumpling's foot, flat under it and falling away round it; when it leaves, it's let go with some of
+the speed it had, and wobbles on and ripples.
+
+Each is lit as a jelly is: glowing through, brightest where it's thinnest as seen (its edges), the
+mango pudding flecked with bits of fruit under its caramel top, the konjac seen partly through, a few
+small bubbles held in it. Three kinds, by how they give: a **panna cotta** (cream, under a berry
+coulis) is soft and keeps a landing (it gives back a fifth of it, or nothing of a gentle one); a
+**mango pudding** gives most of it back (about three quarters: from 25 cm, up 13); a **konjac jelly**
+(clear pink) is firm and gives nearly all of it back (about nine tenths: from 25 cm, up 21; from 40,
+up 33), dented a centimetre and a half by a gentle landing and three by a hard one. A loaf and a
+sponge are soft and dead. The aiming line, landing on a jelly, goes on up in fainter dots as high as
+it'll be thrown.
 
 `?bench=jelly` is the jelly bench: the three of them in a row on a table, between the cloth and
-home, and a panel to try them: pick one, change its four numbers as you watch, and drop the
-dumpling on it from so high, again and again.
+home, and a panel to try them: pick one, change how much it gives back, how far in a gentle and a
+hard landing go, and how its top wobbles, as you watch, and drop the dumpling on it from so high,
+again and again. `node cells/lab/devtools/squishy-drops.mjs` measures them: each dumpling, with and
+without sprinkles, dropped on each from 10, 25 and 50 cm: how long it's in, how fast it comes in and
+leaves, how high it comes back up and so its restitution, how far in it goes.
 
 ## What gets on it
 

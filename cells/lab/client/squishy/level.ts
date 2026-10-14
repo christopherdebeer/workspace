@@ -639,7 +639,7 @@ export function launch(yaw: number, power: number): V3 {
   const v = V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power));
   return [Math.sin(yaw) * Math.cos(LAUNCH) * v, Math.sin(LAUNCH) * v, Math.cos(yaw) * Math.cos(LAUNCH) * v];
 }
-export interface Path { pts: V3[]; hit: { p: V3; n: V3; shape: Shape } | null; t: number }
+export interface Path { pts: V3[]; hit: { p: V3; n: V3; shape: Shape; v: V3 } | null; t: number }
 /**
  * Where the dumpling's middle goes from `from` at `vel`: a parabola (its middle flies one; the
  * squish is about it) until a ball the size of its middle meets something.
@@ -692,7 +692,7 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
     for (const s of ns) if (!(t < 0.2 && leaving.includes(s)) && touch(s, x, y, z, Rt, o) && o.d > 0) {
       pts.push([x, y, z]);
       if (lv.movers.length) moveShapes(lv, t0);
-      return { pts, hit: { p: [x, y, z], n: [o.nx, o.ny, o.nz], shape: s }, t };
+      return { pts, hit: { p: [x, y, z], n: [o.nx, o.ny, o.nz], shape: s, v: [vx, vy, vz] }, t };
     }
   }
   if (lv.movers.length) moveShapes(lv, t0);

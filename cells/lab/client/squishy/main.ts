@@ -21,7 +21,7 @@ import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, chapterOf, nextTop, RADIUS, REST_H
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
-import { jelMesh, jelMeshSize, FEELS } from './jelly';
+import { bounceOf, jelMesh, jelMeshSize, FEELS } from './jelly';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview');
@@ -1158,13 +1158,13 @@ function benchPanel() {
   const feelRows: Row[] = [['e', 'gives back', 0, 1, 0.01], ['soft', 'in, 10 cm', 0.05, 0.8, 0.01], ['deep', 'in, 50 cm', 0.1, 1, 0.01], ['hz', 'wobble Hz', 1, 14, 0.1], ['zeta', 'wobble damping', 0, 0.6, 0.005]];
   const rows: Row[] = [...(jellyBench ? feelRows : []), ['drop', 'drop cm', 5, 80, 1]];
   el.innerHTML = `<div class="tabs">${names.map((n, i) => `<button data-i="${i}" class="${i === benchPick ? 'on' : ''}">${n}</button>`).join('')}</div>`
-    + rows.map(([k, label, lo, hi, step]) => `<label>${label}<input type="range" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${k === 'drop' ? benchDrop : jl.feel[k]}"><span>${(k === 'drop' ? benchDrop : jl.feel[k]).toFixed(step < 0.01 ? 3 : step < 1 ? 1 : 0)}</span></label>`).join('')
+    + rows.map(([k, label, lo, hi, step]) => `<label>${label}<input type="range" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${k === 'drop' ? benchDrop : jl.feel[k]}"><span>${(k === 'drop' ? benchDrop : jl.feel[k]).toFixed(step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0)}</span></label>`).join('')
     + `<button class="go">drop it on the ${names[benchPick]}</button>`;
   el.querySelectorAll<HTMLButtonElement>('.tabs button').forEach((b) => b.addEventListener('click', () => { benchPick = Number(b.dataset.i); benchPanel(); }));
   el.querySelectorAll<HTMLInputElement>('input').forEach((inp) => inp.addEventListener('input', () => {
     const k = inp.dataset.k as keyof typeof jl.feel | 'drop', v = Number(inp.value);
     if (k === 'drop') benchDrop = v; else jl.feel[k] = v;
-    inp.nextElementSibling!.textContent = v.toFixed(Number(inp.step) < 0.01 ? 3 : Number(inp.step) < 1 ? 1 : 0);
+    inp.nextElementSibling!.textContent = v.toFixed(Number(inp.step) < 0.01 ? 3 : Number(inp.step) < 0.1 ? 2 : Number(inp.step) < 1 ? 1 : 0);
   }));
   el.querySelector('.go')!.addEventListener('click', () => {
     const t = lv.towers[benchPick + 1];
@@ -1323,6 +1323,8 @@ let zoom = 1;
 let windEase = 0;
 /** where the aim last said it would land, for the camera */
 let aimLand: V3 | null = null;
+/** (the dots of a bounce off a jelly: how far apart, cm) */
+const BOUNCE_GAP = 2.4;
 /** how much the camera's drawn back to take in the next top as well (0–1): when it's sat still on a top */
 let ahead = 0;
 /**
@@ -2060,6 +2062,15 @@ function frame(now: number) {
       gl.uniform1f(u(prog, 'uAlpha'), (can ? 0.95 : 0.5) * (1 - (i / pa.pts.length) * 0.5));
       drawMesh(SPHERE, model(p, 0.55 + 0.25 * aimNow!.power), 13);
     });
+    // (onto a jelly's top: how high it'll be thrown back up, in fainter dots)
+    if (pa.hit?.shape.jel && pa.hit.n[1] > 0.5) {
+      const up = bounceOf(pa.hit.shape.jel, -pa.hit.v[1]);
+      gl.uniform3fv(u(prog, 'uTint'), [1, 0.97, 0.88]);
+      for (let k = 1, m = Math.floor(up / BOUNCE_GAP); k <= m; k++) {
+        gl.uniform1f(u(prog, 'uAlpha'), 0.5 * (1 - (k / (m + 1)) * 0.6));
+        drawMesh(SPHERE, model(add(pa.hit.p, [0, k * BOUNCE_GAP, 0]), 0.4), 13);
+      }
+    }
     if (pa.hit) {
       const lands = towerAt(lv, pa.hit.p, 0.5);
       gl.uniform3fv(u(prog, 'uTint'), lands > check ? [0.6, 1, 0.65] : lands >= 0 ? [1, 0.97, 0.88] : [1, 0.5, 0.45]);

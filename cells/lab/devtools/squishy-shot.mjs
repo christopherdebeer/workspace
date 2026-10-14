@@ -41,7 +41,8 @@ await withWood(async (lab) => {
   await frames();
   s = await st();
   c.ok('a tap on it pokes it: a dent, a wobble', s.deform > 0.05 || s.speed > 5, s);
-  await page.waitForFunction(() => window.__squishy.speed < 3 && window.__squishy.contacts > 0, null, { timeout: 60000, polling: 100 });
+  // (it may roll a little way and back: in a software-drawn browser, a frame or two a second, settling takes minutes)
+  await page.waitForFunction(() => window.__squishy.speed < 3 && window.__squishy.contacts > 0, null, { timeout: 240000, polling: 100 });
   await page.waitForTimeout(600);
   await frames();
   // take hold of it and pull back toward the bottom of the screen: it should stretch and wind up, and the line show it landing ahead
@@ -61,7 +62,7 @@ await withWood(async (lab) => {
   s = await st();
   console.log('air', JSON.stringify({ com: s.com, speed: s.speed }), await lab.shot(page, 'squishy-air'));
   c.ok('flicked: off and flying', s.contacts === 0 && s.speed > 50, s);
-  await page.waitForFunction(() => window.__squishy.contacts > 0 && window.__squishy.speed < 10, null, { timeout: 60000, polling: 100 });
+  await page.waitForFunction(() => window.__squishy.contacts > 0 && window.__squishy.speed < 10, null, { timeout: 240000, polling: 100 });
   await page.waitForTimeout(800);
   s = await st();
   console.log('landed', JSON.stringify(s), await lab.shot(page, 'squishy-landed'));

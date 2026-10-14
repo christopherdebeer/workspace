@@ -568,8 +568,9 @@ export class Dumpling {
       const y = p[i3 + 1] - x[i3 + 1] + bw[i];
       if (y < lowP) lowP = y;
     }
-    // (not in, nor going in this step: let go)
-    if (!(low < 0) && !(lowP < 0)) { holdJel(j, 0, 0, 0, 0, 0); j.ride = undefined; return; }
+    // (not in, nor going in this step; or flicked off it, which goes as it was aimed, not thrown harder by what
+    // it had sunk in: let go)
+    if ((!(low < 0) && !(lowP < 0)) || (this.sinceFlick < LEAVE && this.vcom[1] > 0)) { holdJel(j, 0, 0, 0, 0, 0); j.ride = undefined; return; }
     let sw = 0, cx = 0, cz = 0, vy = 0, vx = 0, vz = 0, mx = 0, my = 0, mz = 0;
     for (let i = 0; i < n; i++) {
       const i3 = i * 3;

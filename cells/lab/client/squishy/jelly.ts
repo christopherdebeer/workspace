@@ -106,6 +106,10 @@ function speedAt(j: Jel, dx: number, dz: number): number {
 }
 /** Its top's height at rest at a point (from its middle): where its top is, undented (a loaf's dome falls away). */
 export const restAt = (j: Jel, dx: number, dz: number) => j.top - j.dome * Math.min(1, (dx * dx + dz * dz) / (j.rad * j.rad));
+/** How much of a landing (cm/s, coming in) it gives back: all its kind does, but of a gentle landing less, so a bouncing dumpling settles, rather than bouncing on and on. */
+export const givesBack = (j: Jel, vin: number) => j.feel.e * Math.min(1, Math.sqrt(Math.max(0, vin) / LIVELY));
+/** How high (cm) a landing coming in at vin (cm/s) is thrown back up. */
+export const bounceOf = (j: Jel, vin: number) => (givesBack(j, vin) * vin) ** 2 / (2 * G_);
 /**
  * The dumpling in it as a bed: pushed back up by k x (1 + (x/x0)²) less c v, x how far in, v how fast (up):
  * a damped spring that firms up, damped as stiff as it is where it is (c = 2ζ√(its stiffness there)), so it
@@ -114,8 +118,7 @@ export const restAt = (j: Jel, dx: number, dz: number) => j.top - j.dome * Math.
  * mass; near enough, undamped).
  */
 export function bedOf(j: Jel, vin = LIVELY): { k: number; zeta: number; x0: number } {
-  // (a gentle landing it gives less of back, so a bouncing dumpling settles, rather than bouncing on and on)
-  const { soft, deep } = j.feel, e = j.feel.e * Math.min(1, Math.sqrt(Math.max(0, vin) / LIVELY)), L = Math.log(Math.max(0.01, Math.min(0.999, e)));
+  const { soft, deep } = j.feel, L = Math.log(Math.max(0.01, Math.min(0.999, givesBack(j, vin))));
   const zeta = -L / Math.sqrt(Math.PI * Math.PI + L * L), H = j.top - j.base;
   const a = soft * H, b = deep * H, E1 = G_ * 10, E2 = G_ * 50;
   // (u = 1/4x0²: how much it firms; none, if going twice as fast gets it no deeper than a plain spring would)
