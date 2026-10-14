@@ -408,6 +408,10 @@ export function underTable(lv: Level) {
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) drawBox(lv.decor, [cx + sx * (hx - 6), (lv.ground - 5) / 2, cz + sz * (hz - 6)], [3, (-5 - lv.ground) / 2, 3], 0, MAT.board);
 }
 
+/** A piece, laid by itself (for a bench): a kind of piece at (x, z), from a seed. */
+export function pieceAt(kind: Kind, x: number, z: number, seed: number): Piece | null { return piece(kind, x, z, seeded(seed), 1); }
+export type { Kind as PieceKind, Piece };
+
 /** Whether a piece stands clear of what's laid already (a hand's width between), and of the flights made sure of. */
 function clear(lv: Level, p: Piece, corridors: V3[][]): boolean {
   const mine = [...p.stops.flatMap((t) => t.shapes), ...p.extra];

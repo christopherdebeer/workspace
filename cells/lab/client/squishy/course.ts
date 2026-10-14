@@ -8,7 +8,7 @@ import { seeded } from '../kit/rng';
 import { DUST, MAT, box, cap, cyl, jelly, serviette, tower, type Level, type Shape, type Top, type Tower, type V3 } from './level';
 import { FEELS } from './jelly';
 import { assemble, holder, tiered, type Holder } from './supports';
-import { buildKitchen, underTable } from './kitchen';
+import { buildKitchen, pieceAt, underTable } from './kitchen';
 import { box as drawBox, drawShapes } from './mesh';
 import { smear, type Prop } from './props';
 
@@ -54,8 +54,35 @@ export function bench(name: string): Level {
     });
   }
   if (name === 'supports') return supportsBench(lv, stop);
+  if (name === 'look') return lookBench(lv, stop);
   const last = lv.towers[lv.towers.length - 1].at;
   stop(tower('goal', [last[0] + 6, 12, last[2] + 26], 13, 0, () => 0.5));
+  underTable(lv);
+  return lv;
+}
+/**
+ * `look`: a still-life to judge the light and the materials by, the same each time, close together: the
+ * dumpling on a cloth on cookbooks; a mango pudding on a cake stand; a konjac on a crate; a plate (crumbs on it)
+ * on a stool; the painted bench, its tea towel over its end; home on a crate. With ?view, the same picture.
+ */
+function lookBench(lv: Level, stop: (t: Tower) => void): Level {
+  lv.kill = 6;
+  lv.towers.length = 0; lv.shapes.length = 0; lv.decor.length = 0;
+  const r = seeded(0x100c);
+  const put = (a: { tower: Tower; decor: number[] } | null) => { if (!a) throw new Error('nothing to hold it'); for (const v of a.decor) lv.decor.push(v); stop(a.tower); for (const s of a.tower.shapes) if (s.jel) lv.jellies!.push(s); };
+  const st = holder('books', 0, 0, 0, 15, 8, 0.15, () => 0.5);
+  const cloth = box([0, 15.4, 0], [7.5, 0.4, 6.5], 0.15, MAT.gingham, 0.9);
+  for (const v of st.decor) lv.decor.push(v);
+  stop({ top: 'pad', at: [0, 15.8, 0], r: 6, box: [7, 6], yaw: 0.15, shapes: [...st.shapes, cloth], land: [cloth] });
+  put(assemble('pudding', 'pedestal', [-22, 19, 16], 7.5, 0, r));
+  const kj = pieceAt('konjac', 24, 10, 0x2a)!;
+  for (const v of kj.decor) lv.decor.push(v);
+  for (const t of kj.stops) { stop(t); for (const s of t.shapes) if (s.jel) lv.jellies!.push(s); }
+  put(assemble('plate', 'stool', [4, 21, 34], 11, 0.3, r));
+  const sp = pieceAt('spoon', -26, 46, 0x51)!;
+  for (const v of sp.decor) lv.decor.push(v);
+  for (const t of sp.stops) stop(t);
+  put(assemble('goal', 'crate', [40, 22, 40], 12, 0.2, r));
   underTable(lv);
   return lv;
 }

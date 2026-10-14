@@ -41,8 +41,16 @@ const lab = params.has('lab') || params.has('auto') || params.has('preview') || 
 const reachedNow = () => { try { return Math.max(1, Number(localStorage.getItem(STORE + ':reached')) || 0, Number(localStorage.getItem(STORE + ':level')) || 0); } catch { return 1; } };
 
 const canvas = document.getElementById('play') as HTMLCanvasElement;
-const gl = canvas.getContext('webgl2', { antialias: true, alpha: false })!;
+// (no antialiasing of the canvas itself: the scene's drawn into a multisampled target of its own, and only the finish goes on the canvas)
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false })!;
 if (!gl) throw new Error('WebGL2 is needed');
+/**
+ * Light in linear values, as it adds up, in a half-float target, tonemapped once at the end with what's
+ * brightest blooming: if the card can draw into floats (?ldr: as before, each thing tonemapped as drawn).
+ */
+const HDR = !!gl.getExtension('EXT_color_buffer_float') && !params.has('ldr');
+/** the light: ?light=morning (low and warm through the window: the default), noon (high and white), shade (the sun off the window: the room's light only) */
+const LIGHT = params.get('light') ?? 'morning';
 if (preview) document.body.classList.add('preview');
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -57,7 +65,7 @@ const norm = (a: V3): V3 => { const l = len(a) || 1; return [a[0] / l, a[1] / l,
 // ─── shaders ────────────────────────────────────────────────────────────────────────────────────
 /** the kitchen: a morning window, warm walls, the counter's wood; and the output transfer */
 const COMMON = `
-uniform vec3 uKey, uKeyCol, uWin;
+uniform vec3 uKey, uKeyCol, uWin, uAmb;
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
 float noise(vec3 p) {
   vec3 i = floor(p), f = fract(p);
@@ -71,8 +79,8 @@ float fbm(vec3 p) { return noise(p) * .5 + noise(p * 2.03 + 11.) * .25 + noise(p
 // Diffuse room light is deliberately separate from sharp window reflections.
 vec3 irradiance(vec3 n) {
   // (warm: the wood below throws its colour up, the cream room round it, the window's light)
-  return mix(vec3(.27, .185, .115), vec3(.47, .44, .40), smoothstep(-.65, .85, n.y))
-    + vec3(.19, .16, .115) * max(dot(n, uWin), 0.);
+  return (mix(vec3(.27, .185, .115), vec3(.47, .44, .40), smoothstep(-.65, .85, n.y))
+    + vec3(.19, .16, .115) * max(dot(n, uWin), 0.)) * uAmb;
 }
 vec3 env(vec3 d) {
   vec3 c = mix(vec3(.29, .2, .12), vec3(.62, .58, .52), smoothstep(-.25, .8, d.y));
@@ -98,11 +106,24 @@ vec3 reliefNormal(vec3 n, vec3 p, float h) {
   grad /= max(1., length(grad) / .55);
   return normalize(n - grad);
 }
-vec3 tonemap(vec3 x) {
+// (in HDR, what's drawn stays linear light, tonemapped once at the end (FINISH_FS); without it, each thing as it's drawn)
+vec3 tonemapNow(vec3 x) {
   x *= .7;
   x = (x * (2.51 * x + .03)) / (x * (2.43 * x + .59) + .14);
   return pow(clamp(x, 0., 1.), vec3(1. / 2.2));
 }
+#ifdef HDR
+vec3 tonemap(vec3 x) { return x; }
+// (a colour meant as seen, back to the light that would be seen as it)
+vec3 untonemap(vec3 c) {
+  vec3 y = pow(clamp(c, 0., .97), vec3(2.2));
+  vec3 a = 2.51 - 2.43 * y, b = .03 - .59 * y, k = -.14 * y;
+  return (-b + sqrt(b * b - 4. * a * k)) / (2. * a) / .7;
+}
+#else
+vec3 tonemap(vec3 x) { return tonemapNow(x); }
+vec3 untonemap(vec3 c) { return c; }
+#endif
 float D_ggx(float NoH, float a) { float a2 = a * a; float d = NoH * NoH * (a2 - 1.) + 1.; return a2 / (3.1416 * d * d); }
 float V_smith(float NoV, float NoL, float a) { float a2 = a * a; return .5 / max(NoL * sqrt(NoV * NoV * (1. - a2) + a2) + NoV * sqrt(NoL * NoL * (1. - a2) + a2), 1e-4); }`;
 /**
@@ -198,7 +219,11 @@ ${COMMON}
 void main() {
   vec4 w = uInvVP * vec4(vUV * 2. - 1., 1., 1.);
   vec3 d = normalize(w.xyz / w.w);
+#ifdef HDR
+  o = vec4(env(d), 1.);
+#else
   o = vec4(tonemap(env(d)) + (hash3(vec3(gl_FragCoord.xy, 0.)) - .5) / 255., 1.);
+#endif
 }`;
 const SHADOW_VS = `#version 300 es
 in vec3 aPos;
@@ -552,12 +577,12 @@ void main() {
     return;
   } else if (id == 13) {
     // the aiming line's dots
-    o = vec4(uTint, uAlpha); return;
+    o = vec4(untonemap(uTint), uAlpha); return;
   } else if (id == 14) {
     // where it will land: a soft ring
     float r = length(uv);
     float a = smoothstep(.7, .82, r) * (1. - smoothstep(.9, 1., r)) + .18 * (1. - smoothstep(0., .8, r));
-    o = vec4(uTint, a * uAlpha); return;
+    o = vec4(untonemap(uTint), a * uAlpha); return;
   } else if (id == 15) {
     // the dark under the dumpling, soft
     float r = length(uv);
@@ -752,8 +777,13 @@ void main() {
     // (thin at its rim, where the light bounces about inside it: a pinker edge)
     inside += PINK * irradiance(n) * .3 * pow(1. - NoV, 3.);
     vec3 c = behind * T;
+#ifdef HDR
+    // (its own light over what's seen through it, as a screen over it would be, in light)
+    o = vec4(c + inside / (1. + c), 1.);
+#else
     vec3 add = tonemap(inside);
     o = vec4(1. - (1. - c) * (1. - add), 1.);
+#endif
     return;
   }
   // ─── on it: the face, the gloss
@@ -876,13 +906,70 @@ void main() {
   vec2 q = gl_PointCoord - .5;
   float r = length(q) * 2.;
   float br = h2(floor(gl_PointCoord * 5.) + vA * 37.);
-  o = vec4(1., .98, .95, vA * (1. - smoothstep(0., 1., r)) * (1. - smoothstep(0., 1., r)) * (.55 + .45 * br));
+#ifdef HDR
+  vec3 c = vec3(1.9, 1.84, 1.75);
+#else
+  vec3 c = vec3(1., .98, .95);
+#endif
+  o = vec4(c, vA * (1. - smoothstep(0., 1., r)) * (1. - smoothstep(0., 1., r)) * (.55 + .45 * br));
+}`;
+
+/** the finish: a triangle over the glass */
+const QUAD_VS = `#version 300 es
+out vec2 vUV;
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUV = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
+/** what's brightest (past a knee, so only glints, the sun, what glows through the jelly: not a white plate in the sun), a quarter the size */
+const BRIGHT_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 o;
+uniform sampler2D uSrc;
+uniform vec2 uTexel;
+uniform float uThresh, uKnee;
+void main() {
+  vec3 c = vec3(0.);
+  for (int i = 0; i < 4; i++) c += texture(uSrc, vUV + uTexel * vec2(i % 2 == 0 ? -1. : 1., i < 2 ? -1. : 1.)).rgb;
+  c *= .25;
+  float l = max(c.r, max(c.g, c.b));
+  float k = clamp(l - uThresh + uKnee, 0., 2. * uKnee);
+  float w = max(k * k / (4. * uKnee + 1e-4), l - uThresh) / max(l, 1e-4);
+  o = vec4(c * max(w, 0.), 1.);
+}`;
+/** a soft spread one way (then the other) */
+const BLUR_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 o;
+uniform sampler2D uSrc;
+uniform vec2 uDir;
+void main() {
+  vec3 c = texture(uSrc, vUV).rgb * .227;
+  c += (texture(uSrc, vUV + uDir * 1.385).rgb + texture(uSrc, vUV - uDir * 1.385).rgb) * .316;
+  c += (texture(uSrc, vUV + uDir * 3.231).rgb + texture(uSrc, vUV - uDir * 3.231).rgb) * .07;
+  o = vec4(c, 1.);
+}`;
+/** onto the glass: the light as drawn, its bloom added, tonemapped once, a touch of grade, dithered */
+const FINISH_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 o;
+uniform sampler2D uScene, uBloom;
+uniform float uBloomK, uExposure;
+${COMMON}
+void main() {
+#ifdef HDR
+  vec3 c = texture(uScene, vUV).rgb + texture(uBloom, vUV).rgb * uBloomK;
+  c = tonemapNow(c * uExposure);
+  o = vec4(c + (hash3(vec3(gl_FragCoord.xy, 0.)) - .5) / 255., 1.);
+#else
+  o = vec4(texture(uScene, vUV).rgb, 1.);
+#endif
 }`;
 
 function program(vs: string, fs: string): WebGLProgram {
   const sh = (type: number, src: string) => {
     const s = gl.createShader(type)!;
-    gl.shaderSource(s, src);
+    gl.shaderSource(s, HDR ? src.replace('#version 300 es', '#version 300 es\n#define HDR 1') : src);
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
     return s;
@@ -903,6 +990,7 @@ const doughProg = program(DOUGH_VS, DOUGH_FS);
 const jellyProg = program(DOUGH_VS, JELLY_FS);
 const glitterProg = program(GLITTER_VS, GLITTER_FS);
 const puffProg = program(PUFF_VS, PUFF_FS);
+const brightProg = program(QUAD_VS, BRIGHT_FS), blurProg = program(QUAD_VS, BLUR_FS), finishProg = program(QUAD_VS, FINISH_FS);
 const ul = new Map<string, WebGLUniformLocation | null>();
 const u = (p: WebGLProgram, n: string) => {
   const k = `${(p as { __id?: number }).__id ??= Math.random()}:${n}`;
@@ -1218,7 +1306,7 @@ function startLevel(n: number, quiet = false) {
   showHands();
   showTitle();
   if (benchName === 'breakfast') { hint('the breakfast counter: home is the golden steamer, up high. more than one way there: find yours', 7000); benchPanel(); return; }
-  if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : benchName === 'supports' ? 'what things stand on: a stool, a cake stand, a board on jars, a crate, cookbooks, a bowl upturned, a tiered stand, a cooling rack' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
+  if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : benchName === 'look' ? 'a still life, to judge the light by' : benchName === 'supports' ? 'what things stand on: a stool, a cake stand, a board on jars, a crate, cookbooks, a bowl upturned, a tiered stand, a cooling rack' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
   hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
@@ -1917,9 +2005,11 @@ function steamOut(at: V3, r: number, n = 26) {
 }
 
 // ─── drawing ─────────────────────────────────────────────────────────────────────────────────────
-const KEY = norm([0.55, 0.75, 0.38]);
+const KEY = norm(LIGHT === 'noon' ? [0.3, 0.92, 0.25] : [0.55, 0.75, 0.38]);
 const WIN = norm([0.62, 0.32, 0.5]);
-const KEY_COL: V3 = [2.1, 1.95, 1.72];
+const KEY_COL: V3 = LIGHT === 'noon' ? [2.3, 2.25, 2.15] : LIGHT === 'shade' ? [0.16, 0.16, 0.18] : [2.1, 1.95, 1.72];
+/** the room's own light, by the light: in shade, it's most of what there is, and a little cooler */
+const AMB: V3 = LIGHT === 'shade' ? [1.55, 1.6, 1.72] : LIGHT === 'noon' ? [1.05, 1.05, 1.05] : [1, 1, 1];
 let dpr = 1;
 function resize() {
   dpr = Math.min(devicePixelRatio || 1, 2) * (preview ? 0.6 : 1);
@@ -1950,6 +2040,7 @@ function flatOn(at: V3, n: V3, s: number): Float32Array {
 function lightUniforms(p: WebGLProgram) {
   gl.uniform3fv(u(p, 'uKey'), KEY);
   gl.uniform3fv(u(p, 'uKeyCol'), KEY_COL);
+  gl.uniform3fv(u(p, 'uAmb'), AMB);
   gl.uniform3fv(u(p, 'uWin'), WIN);
 }
 function drawMesh(m: Mesh, M: Float32Array = I4, mat = -1) {
@@ -1959,19 +2050,109 @@ function drawMesh(m: Mesh, M: Float32Array = I4, mat = -1) {
   gl.drawArrays(gl.TRIANGLES, 0, m.count);
 }
 
-/** A copy of what's been drawn so far (the room, the course), for the jelly to be seen through. */
-const sceneTex = gl.createTexture()!;
-let sceneW = 0, sceneH = 0;
-function sceneCopy(W: number, H: number) {
-  gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
-  if (W !== sceneW || H !== sceneH) {
-    sceneW = W; sceneH = H;
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, W, H, 0, gl.RGB, gl.UNSIGNED_BYTE, null);
-    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+// ─── where the scene's drawn, and its finish ──────────────────────────────────────────────────────
+/**
+ * The scene's drawn into a multisampled target of its own (half floats, in HDR: light as it adds up), resolved
+ * into a texture: mid-frame, for the jelly to be seen through; at the end, for the finish (the bloom from
+ * what's brightest, a quarter the size, spread; then tonemapped once onto the glass).
+ */
+const FMT = HDR ? gl.RGBA16F : gl.RGBA8;
+const SAMPLES = Math.max(1, Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number));
+const msFb = gl.createFramebuffer()!, msColor = gl.createRenderbuffer()!, msDepth = gl.createRenderbuffer()!;
+const resFb = gl.createFramebuffer()!, resTex = gl.createTexture()!;
+const bloomFb = [gl.createFramebuffer()!, gl.createFramebuffer()!], bloomTex = [gl.createTexture()!, gl.createTexture()!];
+let tgtW = 0, tgtH = 0;
+function blankTex(t: WebGLTexture, w: number, h: number) {
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, FMT, w, h, 0, gl.RGBA, HDR ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+}
+function targets(W: number, H: number) {
+  if (W === tgtW && H === tgtH) return;
+  tgtW = W; tgtH = H;
+  gl.bindRenderbuffer(gl.RENDERBUFFER, msColor);
+  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, SAMPLES, FMT, W, H);
+  gl.bindRenderbuffer(gl.RENDERBUFFER, msDepth);
+  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, SAMPLES, gl.DEPTH_COMPONENT24, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, msFb);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, msColor);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, msDepth);
+  blankTex(resTex, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, resFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, resTex, 0);
+  for (let i = 0; i < 2; i++) {
+    blankTex(bloomTex[i], Math.max(1, W >> 2), Math.max(1, H >> 2));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFb[i]);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bloomTex[i], 0);
   }
-  gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+/** What's been drawn so far, resolved, for the jelly to be seen through (on texture 1); and on drawing the scene again. */
+function sceneCopy(W: number, H: number) {
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msFb);
+  gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resFb);
+  gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, msFb);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, resTex);
   gl.activeTexture(gl.TEXTURE0);
+}
+/** how bright before it blooms (linear: a white plate in the sun is about 2), and how much */
+const BLOOM_T = 2.8, BLOOM_KNEE = 0.8, BLOOM_K = 0.35;
+/** The finish: resolved; in HDR, bloom from what's brightest; onto the glass, tonemapped once. */
+function finish(W: number, H: number) {
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msFb);
+  gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resFb);
+  gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.depthMask(true);
+  gl.bindVertexArray(skyVao);
+  const bw = Math.max(1, W >> 2), bh = Math.max(1, H >> 2);
+  if (HDR) {
+    gl.viewport(0, 0, bw, bh);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFb[0]);
+    gl.useProgram(brightProg);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, resTex);
+    gl.uniform1i(u(brightProg, 'uSrc'), 1);
+    gl.uniform2f(u(brightProg, 'uTexel'), 1 / W, 1 / H);
+    gl.uniform1f(u(brightProg, 'uThresh'), BLOOM_T); gl.uniform1f(u(brightProg, 'uKnee'), BLOOM_KNEE);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.useProgram(blurProg);
+    gl.uniform1i(u(blurProg, 'uSrc'), 1);
+    for (let pass = 0; pass < 2; pass++) for (let d = 0; d < 2; d++) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFb[1 - d]);
+      gl.bindTexture(gl.TEXTURE_2D, bloomTex[d]);
+      gl.uniform2f(u(blurProg, 'uDir'), d === 0 ? (1 + pass) / bw : 0, d === 1 ? (1 + pass) / bh : 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.useProgram(finishProg);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, resTex);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, bloomTex[0]);
+  gl.uniform1i(u(finishProg, 'uScene'), 1); gl.uniform1i(u(finishProg, 'uBloom'), 2);
+  gl.uniform1f(u(finishProg, 'uBloomK'), BLOOM_K); gl.uniform1f(u(finishProg, 'uExposure'), 1);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.activeTexture(gl.TEXTURE0);
+}
+/** ?perf: how long a frame takes (and the card's own time for it, where it'll say), what it's drawing into */
+const perfEl = params.has('perf') ? (() => { const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9;font:11px/1.3 ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.55);padding:4px 6px;border-radius:6px;pointer-events:none'; document.body.appendChild(d); return d; })() : null;
+const timerExt = perfEl ? gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null : null;
+const queries: WebGLQuery[] = [];
+let perfMs = 16, perfGpu = -1, perfShown = 0;
+function perfStart() { if (!timerExt) return; const q = gl.createQuery()!; gl.beginQuery(timerExt.TIME_ELAPSED_EXT, q); queries.push(q); }
+function perfEnd(dtMs: number, now: number) {
+  if (!perfEl) return;
+  if (timerExt) {
+    gl.endQuery(timerExt.TIME_ELAPSED_EXT);
+    while (queries.length && gl.getQueryParameter(queries[0], gl.QUERY_RESULT_AVAILABLE)) {
+      const q = queries.shift()!;
+      if (!gl.getParameter(timerExt.GPU_DISJOINT_EXT)) perfGpu += ((gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6 - perfGpu) * 0.1;
+      gl.deleteQuery(q);
+    }
+  }
+  perfMs += (dtMs - perfMs) * 0.1;
+  if (now - perfShown > 500) { perfShown = now; perfEl.textContent = `${(1000 / perfMs).toFixed(0)} fps · ${perfMs.toFixed(1)} ms${timerExt ? ` · gpu ${perfGpu.toFixed(1)} ms` : ''} · ${HDR ? 'hdr' : 'ldr'} ${SAMPLES}x · ${canvas.width}×${canvas.height}`; }
 }
 
 let last = performance.now();
@@ -1982,7 +2163,9 @@ let blinkAt = 2;
 function frame(now: number) {
   // (a frame's time can be from before the page's own start, in a page opened behind another: never backwards)
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
+  const dtMs = now - last;
   last = now;
+  perfStart();
   time += dt;
   resize();
   // the dumpling, in fixed steps
@@ -2038,7 +2221,8 @@ function frame(now: number) {
   fillJellies();
   for (const jm of jellyMeshes) { gl.bindVertexArray(jm.mesh.svao); gl.drawArrays(gl.TRIANGLES, 0, jm.mesh.count); }
   for (const b of drawn) { const sk = skins[b.kind]; gl.bindVertexArray(sk.svao); gl.drawElements(gl.TRIANGLES, sk.count, gl.UNSIGNED_SHORT, 0); }
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  targets(W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, msFb);
 
   // 2. the room beyond
   gl.viewport(0, 0, W, H);
@@ -2255,6 +2439,8 @@ function frame(now: number) {
     gl.depthMask(true);
     gl.disable(gl.BLEND);
   }
+  finish(W, H);
+  perfEnd(dtMs, now);
   gl.bindVertexArray(null);
   drawBand();
   showStatus();
