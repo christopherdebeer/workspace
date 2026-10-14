@@ -641,8 +641,11 @@ export class Dumpling {
             if (coatKind[i] !== cdust[i]) { if (coat[i] < on * 4) { coatKind[i] = cdust[i]; coat[i] = Math.min(1, coat[i] * 0.5 + on); } }
             else coat[i] = Math.min(1, coat[i] + on);
           }
+          // (what holds by itself, as honey does, a towel's linen, a knife block's wood: the surface's own tack, never
+          // what a coating's added; sprinkles make it stickier where it touches, they don't make a jelly into honey)
+          const holds = ctk[i] > 1 && tk0 > 1;
           // (touching; or held by honey, which is as good as)
-          if (cf[i] === 1 || (tk0 > 1 && tackOn)) {
+          if (cf[i] === 1 || (holds && tackOn)) {
             contacts++; nyS += ny; if (ny > 0.5) { floor++; fx += nx; fy += ny; fz += nz; }
             if (tk0 > held) held = tk0;
             if (ctk[i] > 1 && ctr[i] === 0) onHoney = true;
@@ -665,7 +668,7 @@ export class Dumpling {
           if (cf[i] === 1 && k < 1) { const f = (1 - k) * h; p[i3] -= tx * f; p[i3 + 1] -= ty * f; p[i3 + 2] -= tz * f; }
           tx *= k; ty *= k; tz *= k;
           // (honey holds the splat: what touches it as it lands, and goes on holding that; dough that sags onto it later only sticks)
-          if (tk0 > 1 && tackOn && (was || this.honeyT < SPLAT)) {
+          if (holds && tackOn && (was || this.honeyT < SPLAT)) {
             // (honey: what touches it is held where it touched, so a splat against it hangs there until it's flicked)
             // (it stays put, but for being pushed out of the honey's surface; nothing draws it off)
             tx = 0; ty = 0; tz = 0;

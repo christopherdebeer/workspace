@@ -38,6 +38,8 @@ export interface Jel {
   feel: JellyFeel;
   /** its own time */
   t: number;
+  /** (for the bench's measures) the energy its stops have taken: what a node was going with as it hit one */
+  lost?: number;
 }
 const STEP = 1 / 600;
 /** how far its top can go: down (of its height), and up (cm) */
@@ -122,8 +124,8 @@ export function stepJel(j: Jel, t: number) {
     }
     for (let k = 0; k < N; k++) {
       z[k] += w[k] * STEP;
-      if (z[k] < lo) { z[k] = lo; if (w[k] < 0) w[k] = 0; }
-      else if (z[k] > UP) { z[k] = UP; if (w[k] > 0) w[k] = 0; }
+      if (z[k] < lo) { z[k] = lo; if (w[k] < 0) { j.lost = (j.lost ?? 0) + 0.5 * (j.feel.mass / N) * w[k] * w[k]; w[k] = 0; } }
+      else if (z[k] > UP) { z[k] = UP; if (w[k] > 0) { j.lost = (j.lost ?? 0) + 0.5 * (j.feel.mass / N) * w[k] * w[k]; w[k] = 0; } }
     }
   }
 }
