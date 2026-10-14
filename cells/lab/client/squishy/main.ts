@@ -16,7 +16,7 @@
  * the hands, and the sounds.
  */
 import { hash, seeded } from '../kit/rng';
-import { Dumpling, type Kind } from './body';
+import { Dumpling, ROLL_MAX, ROLL_MIN, rollReach, type Kind } from './body';
 import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, carried, chapterOf, nextTop, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
@@ -1219,7 +1219,7 @@ function startLevel(n: number, quiet = false) {
   showTitle();
   if (benchName === 'breakfast') { hint('the breakfast counter: home is the golden steamer, up high. more than one way there: find yours', 7000); benchPanel(); return; }
   if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : benchName === 'supports' ? 'what things stand on: a stool, a cake stand, a board on jars, a crate, cookbooks, a bowl upturned, a tiered stand, a cooling rack' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
-  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -1269,7 +1269,8 @@ function aimAt(x: number, y: number): typeof aimNow {
   if (!pull) return null;
   const dx = x - pull.sx, dy = y - pull.sy;
   const L = Math.hypot(dx, dy);
-  if (L < 14) return null;
+  // (a flick only if it's been pulled back, toward you or to the side; pushed on, up the glass, it's a roll: see pushAt)
+  if (L < 14 || dy < -PUSH_K * L) return null;
   const fwd: V3 = [Math.sin(camYaw), 0, Math.cos(camYaw)];
   const right: V3 = [-fwd[2], 0, fwd[0]];
   const d = norm(sub(mul(fwd, dy), mul(right, dx)));
@@ -1280,7 +1281,20 @@ function aimAt(x: number, y: number): typeof aimNow {
   if (n && d[0] * n[0] + d[2] * n[2] < -0.35) return { yaw, power, vel: climbLaunch(power), climb: n };
   return { yaw, power, vel: launch(yaw, power) };
 }
-function aimFromPull() { aimNow = pull ? aimAt(pull.x, pull.y) : null; }
+/** how far up the glass a drag on the dumpling has to go (of its length) to be a push, not a pull */
+const PUSH_K = 0.15;
+/** A push: the dumpling pushed on, up the glass (the way the finger goes), to roll it that way, as hard as it's pushed. */
+let pushNow: { dir: V3; power: number; v: number } | null = null;
+function pushAt(x: number, y: number): typeof pushNow {
+  if (!pull) return null;
+  const dx = x - pull.sx, dy = y - pull.sy, L = Math.hypot(dx, dy);
+  if (L < 14 || dy >= -PUSH_K * L) return null;
+  const fwd: V3 = [Math.sin(camYaw), 0, Math.cos(camYaw)], right: V3 = [-fwd[2], 0, fwd[0]];
+  const dir = norm(add(mul(fwd, -dy), mul(right, dx)));
+  const power = Math.min(1, (L - 14) / (0.32 * Math.min(innerWidth, innerHeight)));
+  return { dir, power, v: ROLL_MIN + (ROLL_MAX - ROLL_MIN) * power };
+}
+function aimFromPull() { aimNow = pull ? aimAt(pull.x, pull.y) : null; pushNow = pull ? pushAt(pull.x, pull.y) : null; }
 /**
  * Let go. A finger lifted still flicks as aimed. A finger swiped as it lets go gives spin: swiped
  * on, the way it will fly, topspin (it runs on when it lands); swiped back, backspin (it bites).
@@ -1294,6 +1308,13 @@ function release() {
   for (let i = h.length - 1; i >= 0; i--) { old = h[i]; if (now - h[i].t > 90) break; }
   const dt = Math.max(0.03, (now - old.t) / 1000);
   const vx = (pull.x - old.x) / dt, vy = (pull.y - old.y) / dt;
+  // (pushed on: a roll, that way, as hard as it was pushed)
+  const push = pushAt(pull.x, pull.y);
+  if (push) {
+    pull = null; aimNow = null; pushNow = null; body.squeeze = null;
+    if (home < 0 && fallenAt < 0 && body.canFlick) { body.roll(push.dir, push.v); userCam = false; pop(0.25 + push.power * 0.3); }
+    return;
+  }
   let a = aimAt(pull.x, pull.y), spin = 0;
   if (Math.hypot(vx, vy) > 400) {
     // (a swipe: the aim from where it was held; the spin from the swipe along the way it will go)
@@ -1302,7 +1323,7 @@ function release() {
     const along = (vx * fx + vy * fy) / fl;
     if (held && Math.abs(along) > 350) { a = held; spin = Math.sign(along) * Math.min(1, (Math.abs(along) - 350) / 1100); }
   }
-  pull = null; aimNow = null;
+  pull = null; aimNow = null; pushNow = null;
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
   if (body.canFlick) doFlick(a.vel, spin, a.climb);
@@ -1322,9 +1343,10 @@ let camTarget: V3 = [0, 20, 0];
 let camYaw = 0;
 let orbit = { yaw: 0, pitch: 0, at: -9 };
 let zoom = 1;
-let windEase = 0;
+/** winding up: how far the camera's gone over to framing the flick (0–1), what it's looking at then, and how far back it wants to be */
+let framed = 0, aimMid: V3 | null = null, wantFrame = 44;
 /** where the aim last said it would land, for the camera */
-let aimLand: V3 | null = null;
+let aimLand: V3 | null = null, aimTop: V3 | null = null;
 /** (the dots of a bounce off a jelly: how far apart, cm) */
 const BOUNCE_GAP = 2.4;
 /** how much the camera's drawn back to take in the next top as well (0–1): when it's sat still on a top */
@@ -1367,8 +1389,14 @@ function updateCamera(dt: number) {
   const settled = onTop >= 0 && body.contacts > 0 && len(body.vcom) < 8 && home < 0 && !userCam;
   ahead += ((settled ? 1 : 0) - ahead) * (1 - Math.exp(-dt * (settled ? 1.2 : 4)));
   const toNext = sub(nxt.at, body.com), sep = Math.hypot(toNext[0], toNext[2]);
-  const want = add(add(body.com, [0, 3, 0]), mul(toNext, 0.5 * ahead * Math.min(1, 110 / Math.max(1, sep))));
-  for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * (1 - Math.exp(-dt * (off ? 22 : ahead > 0.01 && ahead < 0.99 ? 3 : 5)));
+  let want = add(add(body.com, [0, 3, 0]), mul(toNext, 0.5 * ahead * Math.min(1, 110 / Math.max(1, sep))));
+  // (winding up a flick: it follows where it'll land, looking between the two, the landing and the dumpling both in view)
+  const framing = !!aimNow && !!aimLand;
+  framed += ((framing ? 1 : 0) - framed) * (1 - Math.exp(-dt * (framing ? 3 : 2)));
+  if (aimNow && aimLand) aimMid = add(mul(add(body.com, aimLand), 0.5), [0, 3, 0]);
+  if (aimMid) want = add(mul(want, 1 - framed), mul(aimMid, framed));
+  if (framed < 0.01 && !framing) aimMid = null;
+  for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * (1 - Math.exp(-dt * (framing ? 4 : off ? 22 : ahead > 0.01 && ahead < 0.99 ? 3 : 5)));
   // (turned toward the next top, when it's sat still and no one's turning the camera)
   if (!pull && !userCam && onTop >= 0 && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
     const nx = lv.towers[nextTop(lv, onTop)];
@@ -1377,14 +1405,22 @@ function updateCamera(dt: number) {
     dy = Math.atan2(Math.sin(dy), Math.cos(dy));
     camYaw += dy * (1 - Math.exp(-dt * 1.4));
   }
-  // (winding up, the view holds still under the finger: it only stands back, slowly, if where it'll land would be off the glass)
-  const ring = aimNow && aimLand ? screenOf(aimLand) : null;
-  const outside = !!aimNow && (!ring || ring[0] < innerWidth * 0.08 || ring[0] > innerWidth * 0.92 || ring[1] < innerHeight * 0.12 || ring[1] > innerHeight * 0.85);
-  windEase = outside ? Math.min(0.8, windEase + dt * 0.9) : aimNow ? windEase : windEase * Math.exp(-dt * 2);
-  // (looking down on the counter a little more than across it, so the wall behind doesn't take half the glass)
-  const pitch = Math.max(0.12, Math.min(1.2, (lv.walls?.length ? 0.56 : 0.48) + orbit.pitch + 0.12 * windEase));
-  const dist = (Math.max(44, Math.min(120, 34 + sep * 0.95) * ahead + 44 * (1 - ahead)) * (1 + 0.55 * windEase)) / zoom;
+  // (looking down on the counter a little more than across it, so the wall behind doesn't take half the glass; winding up, a little more)
+  const pitch = Math.max(0.12, Math.min(1.2, (lv.walls?.length ? 0.56 : 0.48) + orbit.pitch + 0.1 * framed));
   const back: V3 = [-Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(camYaw) * Math.cos(pitch)];
+  let dist = Math.max(44, Math.min(120, 34 + sep * 0.95) * ahead + 44 * (1 - ahead)) / zoom;
+  // (and back far enough that the dumpling, where it'll land, and the top of the way there are all on the glass)
+  if (aimMid && framed > 0.001) {
+    const f = mul(back, -1), right = norm(cross(f, [0, 1, 0])), upv = cross(right, f);
+    const tv = Math.tan(0.45), th = tv * (innerWidth / innerHeight);
+    let need = dist;
+    for (const p of [body.com, aimLand ?? body.com, aimTop ?? body.com]) {
+      const o = sub(p, camTarget), x = dot(o, right), y = dot(o, upv), z = dot(o, back);
+      need = Math.max(need, z + Math.abs(x) / (th * 0.78) + RADIUS, z + Math.abs(y) / (tv * 0.7) + RADIUS);
+    }
+    wantFrame += (Math.min(260, need) - wantFrame) * (1 - Math.exp(-dt * 3));
+    dist += (Math.max(dist, wantFrame) - dist) * framed;
+  } else wantFrame = dist;
   // (never behind a wall: if the way out from the dumpling to where it would be meets one, it comes in short of it;
   // and while it's held in, it turns back round to the room's side, against a finger turning it too)
   const { f, n } = boom(camTarget, back, dist);
@@ -1477,7 +1513,7 @@ canvas.addEventListener('pointerdown', (e) => {
       body.grab = { w: body.hold(i), pull: [0, 0, 0] };
       squish(0.15);
     } else look = { id: e.pointerId, x: e.clientX, y: e.clientY };
-  } else { pull = null; aimNow = null; body.squeeze = null; body.grab = null; look = null; two = null; }
+  } else { pull = null; aimNow = null; pushNow = null; body.squeeze = null; body.grab = null; look = null; two = null; }
 });
 canvas.addEventListener('pointermove', (e) => {
   if (toy && toy.id === e.pointerId) { toyMove(e); return; }
@@ -1519,8 +1555,8 @@ const up = (e: PointerEvent) => {
     // (a tap on it, not a pull: a poke, where it was touched, the way the finger was going into the glass)
     const moved = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
     body.grab = null;
-    if (e.type === 'pointerup' && moved < 12 && e.timeStamp - pull.down < 300 && two === null) { pokeAt(pull.at); pull = null; aimNow = null; body.squeeze = null; }
-    else if (e.type === 'pointerup') release(); else { pull = null; aimNow = null; body.squeeze = null; }
+    if (e.type === 'pointerup' && moved < 12 && e.timeStamp - pull.down < 300 && two === null) { pokeAt(pull.at); pull = null; aimNow = null; pushNow = null; body.squeeze = null; }
+    else if (e.type === 'pointerup') release(); else { pull = null; aimNow = null; pushNow = null; body.squeeze = null; }
   }
 };
 // ─── on the title: the two of them to squish and stretch, where they sit ───────────────────────────
@@ -1965,12 +2001,13 @@ function frame(now: number) {
   if (buddy) buddy.look = norm([eye[0] - buddy.com[0], 0, eye[2] - buddy.com[2]]);
   // winding up: squeezed along the way it would go
   aimFromPull();
-  body.squeeze = aimNow && body.canFlick ? { d: norm(aimNow.vel), k: aimNow.power * 0.6 } : null;
+  body.squeeze = aimNow && body.canFlick ? { d: norm(aimNow.vel), k: aimNow.power * 0.6 } : pushNow && body.canFlick ? { d: pushNow.dir, k: pushNow.power * 0.35 } : null;
   // (held: the dough under the finger drawn back the way it's pulled, as far as it's pulled, a few centimetres at most)
   if (body.grab && mode === 'play') {
     // (a climb is pulled down, to go up)
-    const d = !aimNow ? ([0, 0, 0] as V3) : aimNow.climb ? ([0, -1, 0] as V3) : norm([-aimNow.vel[0], 0, -aimNow.vel[2]]);
-    const k = aimNow ? 0.8 + 2.6 * aimNow.power : 0;
+    // (pushed on: leant over the way it's pushed)
+    const d = pushNow ? pushNow.dir : !aimNow ? ([0, 0, 0] as V3) : aimNow.climb ? ([0, -1, 0] as V3) : norm([-aimNow.vel[0], 0, -aimNow.vel[2]]);
+    const k = pushNow ? 0.6 + 1.6 * pushNow.power : aimNow ? 0.8 + 2.6 * aimNow.power : 0;
     body.grab.pull = aimNow?.climb ? [0, -k, 0] : [d[0] * k, 0.25 * k, d[2] * k];
   }
 
@@ -2059,6 +2096,7 @@ function frame(now: number) {
   if (aimNow) {
     const pa = path(lv, body.com, aimNow.vel, 3, simTime, aimNow.climb ?? null);
     aimLand = pa.hit ? pa.hit.p : pa.pts[pa.pts.length - 1] ?? null;
+    aimTop = pa.pts.reduce<V3 | null>((m, p) => (!m || p[1] > m[1] ? p : m), null);
     const can = body.canFlick;
     gl.uniform3fv(u(prog, 'uTint'), can ? [1, 0.97, 0.88] : [1, 0.6, 0.5]);
     pa.pts.forEach((p, i) => {
@@ -2081,6 +2119,26 @@ function frame(now: number) {
       const n = pa.hit.n;
       drawMesh(DISC, flatOn(add(sub(pa.hit.p, mul(n, RADIUS * 0.8)), mul(n, 0.08)), n, RADIUS * 1.4), 14);
     }
+  }
+  // the push: dots along what it's on, the way it'll roll, about as far as it will on the flat; to an edge it'd go
+  // off, they stop there, and they're red
+  if (pushNow) {
+    const can = body.canFlick, reach = rollReach(pushNow.v), g = groundUnder(body.com);
+    let y = g ? g.p[1] : body.com[1] - REST_H;
+    const dots: V3[] = [];
+    let over = false;
+    for (let t = RADIUS + 2; t <= RADIUS + reach; t += 2.6) {
+      const x = body.com[0] + pushNow.dir[0] * t, z = body.com[2] + pushNow.dir[2] * t;
+      const on = surfaceNear(x, z, y);
+      if (on === null) { over = true; break; }
+      y = on;
+      dots.push([x, y + 0.6, z]);
+    }
+    gl.uniform3fv(u(prog, 'uTint'), !can ? [1, 0.6, 0.5] : over ? [1, 0.45, 0.4] : [1, 0.97, 0.88]);
+    dots.forEach((p, i) => {
+      gl.uniform1f(u(prog, 'uAlpha'), (can ? 0.85 : 0.45) * (1 - (i / (dots.length + 1)) * 0.5));
+      drawMesh(SPHERE, model(p, 0.45), 13);
+    });
   }
   gl.depthMask(true);
   gl.disable(gl.BLEND);
@@ -2203,7 +2261,7 @@ function frame(now: number) {
   (window as unknown as { __squishy: unknown }).__squishy = {
     visualBuild: 'tactile-01',
     level: levelN, towers: lv.towers.length, check, falls, clock, home, fly, ahead: Math.round(ahead * 100) / 100, com: body.com.map((v) => Math.round(v * 10) / 10),
-    speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, power: aimNow?.power ?? 0,
+    speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, pushing: !!pushNow, power: aimNow?.power ?? pushNow?.power ?? 0, framed: Math.round(framed * 100) / 100,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,
     eye: eye.map((v) => Math.round(v)), camYaw, pulling: !!pull, mode, chapter: lv.chapter, held: body.held, pinned: body.pinned, spin: body.spinMode, kind: body.kind, coated: body.coated.map((v) => Math.round(v * 1000) / 1000), coatMost: body.coatMost, jellyOpen,
     // (how far its face is turned from you, in degrees; and how upright it is)
@@ -2297,6 +2355,12 @@ function groundUnder(p: V3): { p: V3; n: V3 } | null {
   return null;
 }
 
+/** What's under (x, z) near height y (a little above it, or a little below): its top's height; null if nothing (an edge, past it a drop). */
+function surfaceNear(x: number, z: number, y: number): number | null {
+  const col = lv.shapes.filter((s) => x >= s.lo[0] - 0.5 && x <= s.hi[0] + 0.5 && z >= s.lo[2] - 0.5 && z <= s.hi[2] + 0.5 && s.lo[1] < y + 2 && s.hi[1] > y - 4);
+  for (let yy = y + 2; yy > y - 4; yy -= 0.3) for (const s of col) if (touch(s, x, yy, z, 0.05, hitTmp) && hitTmp.d > 0 && hitTmp.ny > 0.5) return yy - 0.05 + hitTmp.d;
+  return null;
+}
 /** Where a line from a point first meets the course (for where the window's light through the jelly falls). */
 function groundAlong(p: V3, d: V3, max = 160): { p: V3; n: V3 } | null {
   const e = add(p, mul(d, max));

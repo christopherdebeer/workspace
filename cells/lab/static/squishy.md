@@ -25,9 +25,10 @@ level, `?level=3`, goes straight to it.)
 
 | | Touch | Mouse and keys |
 |---|---|---|
-| flick | take hold of it, drag back and let go | the same |
+| flick | take hold of it, drag back (toward you, or to the side) and let go | the same |
 | spin | swipe as you let go: on, the way it will fly, for topspin; back, for backspin | the same |
 | poke | tap it: it dents where you tapped, and rolls away from your finger | click it |
+| roll | push it on, up the glass, the way you want it to go: it rolls that way, as hard as you pushed (dots along what it's on show how far; red, if it'd roll off an edge) | the same |
 | climb | stuck to a wall: take hold, aim into the wall and let go | the same |
 | turn the camera, tilt it | drag anywhere off the dumpling (or two fingers) | the same, or ← → |
 | come close | pinch | the wheel |
@@ -356,8 +357,10 @@ serviette folded square, white with a red printed border and a peach in one corn
 lie within the top (none of it overhangs, so it catches nothing), and paper, so it grips a little.
 
 The camera follows easily, but if the dumpling nears the edge of the glass, or leaves it, the
-camera catches up at once. Winding up, it holds still under the finger, standing back only (slowly)
-if where it'll land would be off the glass. Sat still on a top, it stands back and looks a little toward the one that comes after that top (the top it's on, not the last it sat on: gone on along the ground past some, it isn't turned back to them; on the ground, or hanging on something, it doesn't look ahead, it only follows),
+camera catches up at once. Winding up a flick (pulled back: a drag that goes up the
+glass is a push, a roll, not a flick), it follows where it'll land: it looks between the dumpling and
+the landing and stands back, easing, till both, and the top of the way there, are on the glass. It
+doesn't turn while you wind up, so the aim under your finger stays put. Sat still on a top, it stands back and looks a little toward the one that comes after that top (the top it's on, not the last it sat on: gone on along the ground past some, it isn't turned back to them; on the ground, or hanging on something, it doesn't look ahead, it only follows),
 far enough off to have both in view, so you can judge the flick; once it's flown, it comes back in.
 Along a counter it looks down on the counter more than across it at the wall. Whatever rises between it and the dumpling (a loaf, a jar), anywhere on the glass, is screened: drawn at
 about half, a fine checker of it there and not, so the dumpling's never lost behind something and the

@@ -38,6 +38,9 @@ const GRAB_R = 2.6, GRAB_K = 0.12;
 const POKE_R = 2.4, POKE = 220, POKE_ROLL = 85, POKE_UP = 34;
 /** a nudge: how fast it goes (cm/s), and the little hop with it */
 const NUDGE = 90, NUDGE_UP = 40;
+/** a push's roll: how fast, gentlest to hardest (cm/s); and about how far that rolls on the flat (cm) */
+export const ROLL_MIN = 45, ROLL_MAX = 145;
+export const rollReach = (v: number) => 0.00125 * v * v;
 /** honey: how fast it takes the speed out of what's stuck to it (/s), and how far a step the rest is drawn back up to what's stuck (cm) */
 const HONEY_DRAG = 90, HANG = 0.03;
 /** hanging: how much of its stiffness it lets go (all of it would be soup), and how far it may droop from where it's stuck before it's drawn back up (cm) */
@@ -350,6 +353,11 @@ export class Dumpling {
     const h = Math.hypot(dir[0], dir[2]) || 1;
     const dx = dir[0] / h, dz = dir[2] / h;
     this.flick([dx * NUDGE, NUDGE_UP, dz * NUDGE], 0.5);
+  }
+  /** A push: rolled the way it's pushed (dir, along the ground), so fast (cm/s); it goes about `rollReach` of that, on the flat. */
+  roll(dir: V3, v: number) {
+    const h = Math.hypot(dir[0], dir[2]) || 1;
+    this.flick([(dir[0] / h) * v, 12 + 0.05 * v, (dir[2] / h) * v], 0.5);
   }
   /** Whether it can be flicked: touching something (or only just off it), and not just flicked. */
   get canFlick() { return this.sinceContact < 0.2 && this.sinceFlick > 0.25; }
