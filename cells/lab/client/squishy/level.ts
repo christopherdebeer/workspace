@@ -8,7 +8,7 @@
  * Units are centimetres; the dumpling is 6 across.
  */
 import { hash, type Rand } from '../kit/rng';
-import { FEELS, makeJel, mouldFor, shapeMax, touchJel, type Jel, type JellyFeel, type Mould } from './jelly';
+import { FEELS, breadFor, makeJel, mouldFor, shapeMax, touchJel, type Bread, type Jel, type JellyFeel, type Mould } from './jelly';
 
 export type V3 = [number, number, number];
 export const G = 981;
@@ -331,6 +331,11 @@ export function jelly(x: number, z: number, r: number, y0: number, y1: number, m
     if (!dome) dome = m.dome;
   }
   return bounds({ ...base(), kind: 'jelly', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu, tack: JELLY_TACK, jel: makeJel(x, z, r, y0, y1, feel, dome, 7, 24, mould) });
+}
+/** A bread (see jelly.ts's `BREAD`), its foot at y0, its length lying yaw: soft under its crust, and dead, as a loaf is. */
+export function bread(x: number, z: number, kind: Bread, y0: number, yaw = 0): Shape {
+  const b = breadFor(kind, yaw);
+  return bounds({ ...base(), kind: 'jelly', c: [x, y0 + b.h / 2, z], r: b.rad, hh: b.h / 2, mat: MAT.bread, mu: 0.9, tack: JELLY_TACK, jel: makeJel(x, z, b.rad, y0, y0 + b.h, FEELS.boule, b.dome, 7, 24, b.mould) });
 }
 /** how much the dumpling's tack holds to a jelly: glossy, and moving, it hardly does */
 export let JELLY_TACK = 0.25;

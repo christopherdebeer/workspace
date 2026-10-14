@@ -5,8 +5,8 @@
  * laid by hand with more than one way through it.
  */
 import { seeded } from '../kit/rng';
-import { DUST, MAT, box, cap, cyl, jelly, serviette, tower, type Level, type Shape, type Top, type Tower, type V3 } from './level';
-import { FEELS } from './jelly';
+import { DUST, MAT, box, bread, cap, cyl, jelly, serviette, tower, type Level, type Shape, type Top, type Tower, type V3 } from './level';
+import { FEELS, type Bread } from './jelly';
 import { assemble, holder, tiered, type Holder } from './supports';
 import { buildKitchen, pieceAt, underTable } from './kitchen';
 import { box as drawBox, drawShapes } from './mesh';
@@ -21,7 +21,8 @@ export function buildLevel(n: number): Level {
  * A bench: one thing to try, over and over, on a table: `jelly`, three jellies in a row on their
  * saucers, a panna cotta, a mango pudding and a konjac jelly, from the cloth to home; `coats`, each
  * thing that comes off on it, in a row: a floury board, plates with crumbs and with pepper, a
- * pudding with hundreds and thousands, the butter dish; `puddings`, each recipe in its mould, in rows.
+ * pudding with hundreds and thousands, the butter dish; `puddings`, each recipe in its mould, in rows; `breads`,
+ * each bread on a board.
  */
 export function bench(name: string): Level {
   if (name === 'breakfast') return breakfast();
@@ -50,6 +51,17 @@ export function bench(name: string): Level {
       drawShapes([saucer], lv.decor);
       lv.jellies!.push(j);
       stop({ top: 'pudding', at: [at[0], 7.8, at[2]], r: 7, yaw: 0, shapes: [saucer, j], land: [j] });
+    }
+  }
+  if (name === 'breads') {
+    // each bread on a board: a boule, a bloomer, a baguette, a ciabatta, three rolls
+    const set: Array<[Bread, number, number, number]> = [['boule', -30, 30, 0], ['bloomer', 0, 30, 0.3], ['baguette', 30, 30, -0.4], ['ciabatta', -15, 56, 0.1], ['roll', 12, 56, 0], ['roll', 21.5, 56, 0], ['roll', 16.7, 64, 0]];
+    for (const [kind, bx, bz, yaw] of set) {
+      const board = box([bx, 0.6, bz], [kind === 'roll' ? 6 : 18, 0.6, kind === 'roll' ? 6 : 11], yaw, MAT.board, 0.8);
+      const b = bread(bx, bz, kind, 1.2, -yaw);
+      drawShapes([board], lv.decor);
+      lv.jellies!.push(b);
+      stop({ top: 'boule', at: [bx, b.hi[1] - 3.5, bz], r: 3, yaw: 0, shapes: [board, b], land: [b] });
     }
   }
   if (name === 'coats') {

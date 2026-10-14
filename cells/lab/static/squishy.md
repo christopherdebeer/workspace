@@ -103,8 +103,11 @@ shapes everything else is made of.
 ## The Counter by the Window
 
 A butcher-block counter against a tiled wall with windows in it, the counter the fall. You start on a
-folded cloth on a biscuit tin. Its pieces: a round loaf in a woven bread basket on two flour canisters
-(the loaf soft under its crust, a dead jelly that gives and doesn't throw you, and crumby; the basket
+folded cloth on a biscuit tin. Its pieces: bread in a woven bread basket on two flour canisters (a
+boule, cross-cut and floured in its proving basket's rings; a bloomer, slashed across; a flat floury
+ciabatta; or three glazed rolls with sesame on them; beside a bloomer or a ciabatta, sometimes a
+baguette, its scores overlapping down it: each soft under its crust, a dead jelly that gives and
+doesn't throw you, and crumby; the basket
 floured inside, so where you land decides what you pick up, and its rim catches a bounce); a baking
 tray on a rack or a crate, butter melted across one corner of it, a lip all round to stop a slide; a
 tall cake stand, its plate sticky with hundreds and thousands; a tiered stand; things on cake stands
@@ -355,6 +358,12 @@ farthest wherever it's seen), so how thick it is where you look is how thick it 
 stretched: colour taken out by that thickness (pink deepening through its middle, clear at its thin
 edges), what's seen through it softer the thicker, and three bubbles held in it, set when it was
 made and going with it, each a bright ring; its glitter turned down, so its depth holds the eye.
+
+Bread is shaped as it was proved and baked: round, a long oval, a flat slab with soft corners, its
+foot tucked in where it sat, its top domed and its edge rolled over, met as it's drawn. Its crust is
+golden, deepest on its crown, paler down its side, finely crackled and blistered; its cuts opened as
+it rose, thin pale gold in them and their edges risen and dark. `?bench=breads` sets each out on a
+board.
 
 How things are pressed shows, from the simulation itself, so it comes and goes with it: the dumpling
 keeps how hard each point of it is pressed against what it's on (touching; more as it comes in hard

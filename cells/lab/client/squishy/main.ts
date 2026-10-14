@@ -498,17 +498,68 @@ void main() {
       rough = mix(.12, .45, smoothstep(.4, .7, noise(vWorld * 3. + 2.))); coat = .9; coatRough = .05;
     }
   } else if (id == ${MAT.bread}) {
-    // a round loaf: a brown crust, floured on top, scored across, the pale crumb showing in the cuts
-    bool top = n.y > .55;
-    float crack = noise(vWorld * 1.3) * .5 + noise(vWorld * 4.) * .3;
-    base = mix(vec3(.5, .29, .12), vec3(.7, .45, .22), crack);
+    // bread, baked: its crust golden, deepest on its crown where the heat was, paler down its side and at its foot,
+    // finely crackled; and by which bread (its material's fraction): a boule, cross-cut, floured in the rings of the
+    // basket it proved in; a bloomer, slashed across; a baguette, its scores overlapping down its length, their edges
+    // risen and dark; a ciabatta, flat, pale, blistered, heavy with flour; a roll, glossy with egg, sesame on it. Its
+    // top's (u, v): along it and across it, of its length; its side's v, 2 + how far up
+    int kind = int(fract(vMat) * 100. + .5);
+    bool side = vUV.y > 1.5, top = !side && n.y > .2;
+    float asp = kind == 1 || kind == 3 ? .55 : kind == 2 ? .21 : 1.;
+    vec2 pn = vec2(uv.x, uv.y / asp);
+    float q = kind == 3 ? pow(pow(abs(pn.x), 4.) + pow(abs(pn.y), 4.), .25) : length(pn);
+    vec3 deep = vec3(.3, .11, .03), gold = vec3(.58, .29, .08), pale = vec3(.78, .52, .24), crumb = vec3(.9, .78, .54), flourC = vec3(.9, .88, .84);
+    if (kind == 3) { gold = vec3(.72, .48, .22); deep = vec3(.5, .27, .09); }
+    float crackle = noise(vWorld * 7.) * .6 + noise(vWorld * 19.) * .4;
+    float bake = side ? .25 * smoothstep(.2, 1., vUV.y - 2.) : .35 + .4 * (1. - q * q) + .15 * noise(vWorld * 1.2);
+    vec3 col = side ? mix(pale, gold, smoothstep(0., .8, vUV.y - 2.)) : mix(gold, deep, bake);
+    col *= .93 + .14 * crackle;
+    float flour = 0., cut = 0., ear = 0.;
+    // (blisters: little dark bubbles of crust)
+    vec2 bl = cellAt(vWorld * 1.1 + 3.);
+    float blister = (1. - smoothstep(.08, .16, bl.x)) * step(bl.y, kind == 3 || kind == 2 ? .45 : .15);
+    col = mix(col, deep * .7, blister * .6);
     if (top) {
-      float flour = smoothstep(.3, .7, noise(vWorld * .9 + 3.)) * .6 + .25;
-      base = mix(base, vec3(.92, .88, .8), flour);
-      float score = min(abs(uv.x - uv.y), abs(uv.x + uv.y)) * 9.;
-      base = mix(vec3(.93, .86, .66), base, smoothstep(.15, .45, score));
-    }
-    rough = .85;
+      if (kind == 0) {
+        // (cross-cut: the cuts opened out, crumb in them, their edges risen; floured in the basket's rings)
+        float d = min(abs(pn.x), abs(pn.y)), w = .07 * (1. - smoothstep(.35, .75, q));
+        cut = (1. - smoothstep(w * .5, w, d)) * step(q, .78);
+        ear = (smoothstep(w, w * 1.6, d) - smoothstep(w * 1.6, w * 2.6, d)) * step(q, .78);
+        flour = smoothstep(.7, .98, .5 + .5 * sin(q * 40. + noise(vWorld * 1.5) * 1.5)) * .2 * (.5 + .5 * smoothstep(.2, .7, noise(vWorld * .4 + 1.))) * (1. - smoothstep(.7, .95, q));
+      } else if (kind == 1) {
+        // (slashed across, a little slanted)
+        float g = pn.x * 3.1 + pn.y * .45, f = abs(fract(g + .5) - .5);
+        float on = step(abs(pn.x), .8), w = .085 * sqrt(max(0., 1. - abs(pn.y) / .8));
+        cut = (1. - smoothstep(w * .45, w, f)) * on; ear = (smoothstep(w, w + .03, f) - smoothstep(w + .03, w + .08, f)) * on * step(.01, w);
+      } else if (kind == 2) {
+        // (five scores, each a slanting stroke down its length, overlapping the next, opened most in their middles)
+        for (int i = 0; i < 5; i++) {
+          float ui = -.6 + float(i) * .3;
+          vec2 a = vec2(ui - .17, -.38 * asp), b = vec2(ui + .17, .38 * asp), pa = uv - a, ba = b - a;
+          float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.), d = length(pa - ba * h), w = .028 * (1. - 4. * (h - .5) * (h - .5)) + .004;
+          cut = max(cut, 1. - smoothstep(w * .6, w, d));
+          ear = max(ear, (smoothstep(w, w * 1.5, d) - smoothstep(w * 1.5, w * 2.6, d)) * step(.05, h) * step(h, .95));
+        }
+      } else if (kind == 3) {
+        // (flat, dimpled, heavy with flour from the couche, thinner where it rose)
+        flour = smoothstep(.15, .95, noise(vWorld * .35 + 7.)) * .5 + .15 * smoothstep(.45, .8, noise(vWorld * 5.));
+        relief += (noise(vWorld * .7) - .5) * .05;
+      } else if (kind == 4) {
+        // (glazed; sesame scattered over it, each a little pale oval)
+        vec2 se = cellAt(vWorld * vec3(2.2, 1.6, 2.2));
+        float seed = (1. - smoothstep(.12, .2, se.x)) * step(se.y, .55) * smoothstep(.3, .6, n.y);
+        col = mix(col, vec3(.86, .72, .45), seed);
+        relief += seed * .02;
+      }
+    } else if (side && kind == 3) flour = smoothstep(.5, .85, noise(vWorld * .8 + 2.)) * .3;
+    col = mix(col, deep * .8, ear * .6);
+    // (in a cut, the crust that opened as it rose: thin, pale gold)
+    col = mix(col, mix(vec3(.62, .38, .13), vec3(.75, .52, .24), noise(vWorld * 6.)), cut);
+    col = mix(col, flourC, clamp(flour, 0., 1.));
+    base = col;
+    relief += crackle * .015 - cut * .06 + ear * .03;
+    rough = mix(kind == 4 ? .32 : .6, .9, max(flour, cut));
+    if (kind == 4) { coat = .45 * (1. - flour); coatRough = .2; coatSpec = .05; }
   } else if (id == ${MAT.enamel}) {
     // a bread bin: cream enamel, a navy rim, chipped here and there
     // (enamel: glass fired onto steel, so it's glossier than porcelain and its colour flat and even; chipped only
@@ -1265,7 +1316,7 @@ let jellyMeshes: Array<{ shape: Shape; mesh: Mesh; data: Float32Array; def: Floa
 function fillJellies() {
   for (const jm of jellyMeshes) {
     const j = jm.shape.jel!;
-    const n = jelMesh(j, jm.data, jm.shape.mat, jm.shape.dust ? 24 + jm.shape.dust : 0, noDef ? undefined : jm.def);
+    const n = jelMesh(j, jm.data, jm.shape.mat, jm.shape.dust && jm.shape.mat !== MAT.bread ? 24 + jm.shape.dust : 0, noDef ? undefined : jm.def);
     gl.bindBuffer(gl.ARRAY_BUFFER, jm.mesh.buf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, jm.data, 0, n);
     if (!noDef) { gl.bindBuffer(gl.ARRAY_BUFFER, jm.mesh.dbuf!); gl.bufferSubData(gl.ARRAY_BUFFER, 0, jm.def, 0, (n / VSTRIDE) * 2); }
@@ -1569,7 +1620,7 @@ function startLevel(n: number, quiet = false) {
   for (const m of movers) drop(m.mesh);
   for (const jm of jellyMeshes) drop(jm.mesh);
   jellyMeshes = (lv.jellies ?? []).map((shape) => {
-    const data = new Float32Array(jelMeshSize(shape.jel!, shape.dust)), def = new Float32Array((data.length / VSTRIDE) * 2);
+    const data = new Float32Array(jelMeshSize(shape.jel!, shape.mat === MAT.bread ? 0 : shape.dust)), def = new Float32Array((data.length / VSTRIDE) * 2);
     return { shape, data, def, mesh: upload(data, gl.DYNAMIC_DRAW, null, def), ripple: [0, 0, -99, 0], was: false };
   });
   const lm = levelMesh(lv);

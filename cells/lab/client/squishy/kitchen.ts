@@ -9,7 +9,7 @@
  *   tea towel thrown over the bench's end; the floury paddle board across two jars; a plate tipped up on
  *   a teacup on a cake tin; the butter dish; plates, tins and steamers on stools, crates and cookbooks.
  *   It starts on a cloth on cookbooks; home is the golden steamer.
- * - **The Counter by the Window**: a loaf in its bread basket on two canisters; a baking tray on a rack,
+ * - **The Counter by the Window**: bread in its basket on two canisters (a boule, a bloomer, a ciabatta, rolls; a baguette); a baking tray on a rack,
  *   buttered in a corner; a tall cake stand, sticky with hundreds and thousands; a tiered stand; a konjac
  *   jelly, or two jellies; and, at the end, the bread bin and the shelf above it with a towel hung over
  *   its edge to climb, and home on the window sill.
@@ -24,8 +24,8 @@
  * touch it is to fall, back to the last spot you stood on.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
-import { FEELS } from './jelly';
-import { CHAPTER_AT, DUST, MAT, RADIUS, box, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Chapter, type Level, type Shape, type Top, type Tower, type V3 } from './level';
+import { FEELS, breadFor } from './jelly';
+import { CHAPTER_AT, DUST, MAT, RADIUS, box, bread, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Chapter, type Level, type Shape, type Top, type Tower, type V3 } from './level';
 import { box as drawBox, capsule, drawShapes, quad } from './mesh';
 import { drainer, smear, spoon, tiltPlate, towel } from './props';
 import { HOLDS, assemble, holder, tiered, type Holder } from './supports';
@@ -272,7 +272,10 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     return { stops: [{ top: 'tilt', at: c, r: 7, yaw: dir, shapes: [...pl.shapes, cup, cake], land: pl.shapes }], extra: [], decor: pl.verts, reach: 14 };
   }
   if (kind === 'loaf') {
-    // a round loaf in a shallow woven bread basket, floured, on two canisters: it gives, and it's crumby; the basket's rim catches a bounce
+    // bread in a shallow woven bread basket, floured, on two canisters: it gives, and it's crumby; the basket's rim
+    // catches a bounce. Which bread (from where it is, not the dice, so what's laid after it's as it was): a boule, a
+    // bloomer or a ciabatta lying along the basket, or three rolls in a row; beside a bloomer or a ciabatta, sometimes
+    // a baguette
     const UP = Math.round(ramp(r, LOW - 1, LOW + 2)), y1 = ramp(r, -0.3, 0.3);
     const c1 = Math.cos(y1), s1 = Math.sin(y1);
     const at1 = (lx: number, lz: number, y: number): V3 => [x + c1 * lx + s1 * lz, y, z - s1 * lx + c1 * lz];
@@ -281,10 +284,21 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     basket.dust = DUST.flour;
     const rim = [box(at1(-17, 0, UP + 2.4), [0.6, 1.8, 12], y1, MAT.weave, 0.85), box(at1(17, 0, UP + 2.4), [0.6, 1.8, 12], y1, MAT.weave, 0.85),
       box(at1(0, -12, UP + 2.4), [17, 1.8, 0.6], y1, MAT.weave, 0.85), box(at1(0, 12, UP + 2.4), [17, 1.8, 0.6], y1, MAT.weave, 0.85)];
-    const lx = x - c1 * 4, lz = z + s1 * 4;
-    const loaf = jelly(lx, lz, 8.5, UP + 1.2, UP + 10.2, MAT.bread, FEELS.boule, 0.9, 5.5);
-    loaf.dust = DUST.crumbs;
-    return { stops: [{ top: 'boule', at: [lx, UP + 10.2, lz], r: 5, yaw: 0, shapes: [...cans, basket, ...rim, loaf], land: [loaf] }], extra: [], decor: [], reach: 19 };
+    const h = hash(n, Math.round(x * 10), Math.round(z * 10), 0xb7ead);
+    const which = (['boule', 'bloomer', 'ciabatta', 'rolls', 'boule', 'bloomer', 'rolls', 'ciabatta'] as const)[h % 8], y0 = UP + 1.2;
+    const breads: Shape[] = [];
+    let land: Shape[], top: V3, rr = 5;
+    if (which === 'rolls') {
+      for (const k of [-1, 0, 1]) { const p = at1(k * 9.3, 0, y0); breads.push(bread(p[0], p[2], 'roll', y0)); }
+      land = breads; top = at1(0, 0, y0 + breadFor('roll').h); rr = 3.2;
+    } else {
+      const two = which !== 'boule' && (h >> 3) % 2 === 0, p = which === 'boule' ? at1(-4, 0, y0) : at1(0, two ? -3.2 : 0, y0);
+      const main = bread(p[0], p[2], which, y0, -y1);
+      breads.push(main); land = [main]; top = [p[0], y0 + breadFor(which).h, p[2]];
+      if (two) { const q = at1(0, 7.9, y0); breads.push(bread(q[0], q[2], 'baguette', y0, -y1)); }
+    }
+    for (const b of breads) b.dust = DUST.crumbs;
+    return { stops: [{ top: 'boule', at: top, r: rr, yaw: 0, shapes: [...cans, basket, ...rim, ...breads], land }], extra: [], decor: [], reach: 19 };
   }
   if (kind === 'konjac') {
     // a konjac jelly on its saucer, up on something: it throws you up

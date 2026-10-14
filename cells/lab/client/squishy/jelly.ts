@@ -57,10 +57,38 @@ export interface Jel {
  * flower, rounded petals pinched between; a square with soft corners), so many lobes, so deep; how much its top's
  * edge is rounded over; and which recipe it was set from (its layers, and what's on top: see the drawing).
  */
-export interface Mould { prof: number[]; shape: number; lobes: number; lobe: number; bevel: number; recipe: number }
+export interface Mould {
+  prof: number[]; shape: number; lobes: number; lobe: number; bevel: number; recipe: number;
+  /** (an oval or a slab: how wide across, of how long; and which way its length lies) */
+  aspect?: number; yaw?: number;
+  /** a loaf, not a pudding: its recipe is which bread (see `BREAD`) */
+  bread?: boolean;
+}
 export const PROF_N = 9;
 /** the outlines */
-export const SHAPE = { round: 0, flute: 1, flower: 2, square: 3 } as const;
+export const SHAPE = { round: 0, flute: 1, flower: 2, square: 3, oval: 4, slab: 5 } as const;
+/**
+ * The breads, each proved and baked to its own shape: a round boule, cross-cut and floured; a bloomer, a long oval,
+ * slashed across; a baguette, long and thin, its scores overlapping down it; a ciabatta, a flat floury slab; a
+ * roll, small and round, glazed. How long (cm, half), how wide of that, how high, how its top domes and its edge rolls
+ * over; how tucked in at its foot.
+ */
+export const BREAD = { boule: 0, bloomer: 1, baguette: 2, ciabatta: 3, roll: 4 } as const;
+export type Bread = keyof typeof BREAD;
+const BREADS: Record<Bread, { shape: number; rad: number; aspect: number; h: number; dome: number; bevel: number; tuck: number }> = {
+  boule: { shape: SHAPE.round, rad: 8.5, aspect: 1, h: 9, dome: 4, bevel: 2.6, tuck: 0.88 },
+  bloomer: { shape: SHAPE.oval, rad: 13, aspect: 0.55, h: 8, dome: 3, bevel: 2.2, tuck: 0.9 },
+  baguette: { shape: SHAPE.oval, rad: 16, aspect: 0.21, h: 5, dome: 1.2, bevel: 1.8, tuck: 0.9 },
+  ciabatta: { shape: SHAPE.slab, rad: 12.5, aspect: 0.55, h: 4.5, dome: 0.8, bevel: 1.3, tuck: 0.95 },
+  roll: { shape: SHAPE.round, rad: 4.5, aspect: 1, h: 5, dome: 1.6, bevel: 1.7, tuck: 0.86 },
+};
+/** A bread's shape: its outline, its foot, its top; how long (half), how wide (half), how high. */
+export function breadFor(kind: Bread, yaw = 0): { mould: Mould; dome: number; rad: number; half: number; h: number } {
+  const b = BREADS[kind];
+  // (its side: tucked in at its foot where it sat as it proved, out to its full width a third of the way up)
+  const prof = Array.from({ length: PROF_N }, (_, k) => { const t = k / (PROF_N - 1); return b.tuck + (1 - b.tuck) * Math.sin(Math.min(1, t * 2.2) * Math.PI / 2); });
+  return { mould: { prof, shape: b.shape, lobes: 0, lobe: 0, bevel: b.bevel, recipe: BREAD[kind], aspect: b.aspect, yaw, bread: true }, dome: b.dome, rad: b.rad, half: b.rad * b.aspect, h: b.h };
+}
 /**
  * The recipes, shared: 0 mango, caramel on top; 1 dark berry jelly, cream, clear pink (a ring mould's); 2 a
  * strawberry slab, clear pink, cream, clear pink, a strawberry on top; 3 vanilla panna cotta under clear raspberry
@@ -104,11 +132,20 @@ export function shapeAt(j: Jel, a: number): number {
   if (!m || m.shape === SHAPE.round) return 1;
   if (m.shape === SHAPE.flute) return 1 + m.lobe * Math.cos(m.lobes * a);
   if (m.shape === SHAPE.flower) return 1 - m.lobe * (1 - Math.abs(Math.cos((m.lobes * a) / 2)) ** 0.55);
+  if (m.shape === SHAPE.oval || m.shape === SHAPE.slab) {
+    const b = a - (m.yaw ?? 0), c = Math.abs(Math.cos(b)), s = Math.abs(Math.sin(b)) / (m.aspect ?? 1);
+    return m.shape === SHAPE.oval ? 1 / Math.hypot(c, s) : 1 / (c ** 4 + s ** 4) ** 0.25;
+  }
   const c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a)), p = 5;
   return 0.92 / (c ** p + s ** p) ** (1 / p);
 }
 /** how far out its outline comes, at most */
-export const shapeMax = (j: Jel) => (!j.mould ? 1 : j.mould.shape === SHAPE.square ? 1.17 : j.mould.shape === SHAPE.flute ? 1 + j.mould.lobe : 1);
+export function shapeMax(j: Jel): number {
+  if (!j.mould) return 1;
+  let m = 0;
+  for (let k = 0; k < 96; k++) m = Math.max(m, shapeAt(j, (k / 96) * Math.PI * 2));
+  return m * 1.01;
+}
 const shapeTo = (j: Jel, dx: number, dz: number) => shapeAt(j, Math.atan2(dz, dx));
 const STEP = 1 / 600;
 /** how far its top can go: down (of its height), and up (cm) */
@@ -116,7 +153,9 @@ const DOWN = 0.55, UP = 3;
 
 export function makeJel(cx: number, cz: number, rad: number, base: number, top: number, feel: JellyFeel, dome = 0, R = 7, S = 24, mould?: Mould): Jel {
   // (not round: more spokes, so its rim follows its outline)
-  if (mould && mould.shape !== SHAPE.round) S = Math.max(48, mould.lobes * 6);
+  if (mould && (mould.shape !== SHAPE.round || mould.bread)) S = Math.max(48, mould.lobes * 6);
+  // (and a long one, more rings: so far along it, they'd be far apart)
+  if (mould?.aspect && mould.aspect < 0.4) R = 10;
   const N = 1 + R * S;
   const lists: number[][] = Array.from({ length: N }, () => []);
   const id = (i: number, j: number) => (i === 0 ? 0 : 1 + (i - 1) * S + (((j % S) + S) % S));
@@ -303,11 +342,13 @@ export function touchJel(j: Jel, px: number, py: number, pz: number, s: number, 
  * here (of DENT; out, less than 0) and how fast it's moving (of MOVING), for the drawing.
  */
 export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0, def?: Float32Array): number {
-  const { R, S, rad } = j;
+  const { R, S, rad } = j, bevel = j.mould?.bevel ?? 0;
   const P = (i: number, s: number): [number, number, number] => {
     const a = (s / S) * Math.PI * 2, r = (i / R) * rad * shapeAt(j, a);
     const k = i === 0 ? 0 : 1 + (i - 1) * S + (s % S);
-    return [j.cx + Math.cos(a) * r, j.top + j.z[k] - j.dome * (i / R) ** 2, j.cz + Math.sin(a) * r];
+    // (its dome, and its edge rolled over, as surfAt has them)
+    const f = i / R, e = Math.max(0, (f - 0.72) / 0.28);
+    return [j.cx + Math.cos(a) * r, j.top + j.z[k] - j.dome * f * f - bevel * e * e, j.cz + Math.sin(a) * r];
   };
   const Nrm = (i: number, s: number): [number, number, number] => {
     const a = (s / S) * Math.PI * 2, r = (i / R) * rad * shapeAt(j, a);
@@ -325,7 +366,9 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0, def?: 
     out[o++] = p[0]; out[o++] = p[1]; out[o++] = p[2]; out[o++] = n[0]; out[o++] = n[1]; out[o++] = n[2]; out[o++] = m; out[o++] = u; out[o++] = v;
     if (def) { def[od++] = d ? d[0] : 0; def[od++] = d ? d[1] : 0; }
   };
-  const uv = (p: number[]) => [(p[0] - j.cx) / rad, (p[2] - j.cz) / rad];
+  // (its top's (u, v), along and across it, if it lies some way)
+  const cy = Math.cos(j.mould?.yaw ?? 0), sy = Math.sin(j.mould?.yaw ?? 0);
+  const uv = (p: number[]) => { const dx = (p[0] - j.cx) / rad, dz = (p[2] - j.cz) / rad; return [dx * cy + dz * sy, -dx * sy + dz * cy]; };
   // (which recipe it was set from, carried in its material's fraction, for the drawing's layers)
   mat += (j.mould?.recipe ?? 0) * 0.01;
   const top = (m: number, lift: number) => {
@@ -342,11 +385,12 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0, def?: 
   top(mat, 0);
   // its side, down from its rim as it is to its foot, as moulded: ring by ring up it, round its ribs (its (u, v):
   // how far round, and 2 + how far up, so the drawing knows where in its layers it is)
-  const H = j.top - j.base, K = SIDE_RINGS;
+  const H = j.top - j.base, K = SIDE_RINGS, Hs = Math.max(0.3, H - j.dome - bevel);
   const ring = (k: number, s: number): number[] => {
     if (k === K) return P(R, s);
-    const a = (s / S) * Math.PI * 2, t = k / K, r = rad * profAt(j, t) * shapeAt(j, a);
-    return [j.cx + Math.cos(a) * r, j.base + t * H, j.cz + Math.sin(a) * r];
+    // (up to where its top comes down to at its rim, not past it)
+    const a = (s / S) * Math.PI * 2, t = k / K, y = t * Hs, r = rad * profAt(j, y / H) * shapeAt(j, a);
+    return [j.cx + Math.cos(a) * r, j.base + y, j.cz + Math.sin(a) * r];
   };
   const G: number[][][] = [];
   for (let k = 0; k <= K; k++) { G.push([]); for (let s = 0; s <= S; s++) G[k].push(ring(k, s % S)); }
@@ -372,7 +416,7 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0, def?: 
   if (coat) top(coat, 0.06);
   // what's set on top, by its recipe: berries, sat a little into its top where it is now (its kind in their
   // material's fraction)
-  const g = GARNISH[j.mould?.recipe ?? -1];
+  const g = j.mould?.bread ? undefined : GARNISH[j.mould?.recipe ?? -1];
   if (g) for (let k = 0; k < g.n; k++) {
     const a = 0.8 + k * 2.1, rr = g.n > 1 ? rad * 0.55 : rad * 0.42;
     const gx = Math.cos(a) * rr, gz = Math.sin(a) * rr, gy = j.top + surfAt(j, gx, gz) + g.r * 0.55;
@@ -391,7 +435,7 @@ export function jelMesh(j: Jel, out: Float32Array, mat: number, coat = 0, def?: 
   return o;
 }
 /** how many floats its mesh takes */
-export const jelMeshSize = (j: Jel, coat = 0) => (j.R * j.S * 6 * (coat ? 2 : 1) + j.S * SIDE_RINGS * 6 + (GARNISH[j.mould?.recipe ?? -1]?.n ?? 0) * BLA * BLO * 6) * 9;
+export const jelMeshSize = (j: Jel, coat = 0) => (j.R * j.S * 6 * (coat ? 2 : 1) + j.S * SIDE_RINGS * 6 + (j.mould?.bread ? 0 : GARNISH[j.mould?.recipe ?? -1]?.n ?? 0) * BLA * BLO * 6) * 9;
 /** (for the drawing) how far in its top is pressed to count all (cm), and how fast it moves to (cm/s) */
 const DENT = 2.5, MOVING = 60;
 /** a berry's material (level.ts's MAT.berry; here so as not to depend on it) */
