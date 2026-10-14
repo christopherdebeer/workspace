@@ -328,6 +328,31 @@ with a shine that blink, red cheeks, squeeze shut `> <` while you wind up, an `o
 
 ## Drawing
 
+Light is worked in linear values: the scene's drawn into a multisampled target of its own, in half
+floats where the card can draw into them, and tonemapped once, at the end, onto the glass, what's
+brightest of it (a glint, the sun in glaze, what glows through jelly; not a white plate in the sun)
+blooming a little first. The jelly sees through to that light, not to finished pixels. A card that
+can't draw into floats (or `?ldr`) draws as before, each thing tonemapped as it's drawn.
+
+As a level's laid, the light its things give each other is baked into it, once: the course is seen
+from forty-eight ways round, its depth and colour, and each vertex adds up how much of all round it
+is shut off by what's near it (nearer counts more) and the colour of what does it. So what stands on
+something sits down into it: the dark under a cake stand's plate and round its foot, between a crate's
+slats, at the foot of a stack of cookbooks, under a stool; and the light off what's near comes onto it
+in its colour (the wood's amber up into a plate, a pudding's orange onto its saucer). The room itself
+(the counter, the table's top, the walls) takes it but shuts nothing off, and its top is drawn in
+small cells so there's somewhere for it to go. It dims the room's light most, and the sun only where
+a thing's well shut in. Under the dumpling, a soft dark, and where it's touching, a tighter, darker
+core as wide as what of it touches, wider as it squashes.
+
+`?bench=look` is a still life to judge all this by (the dumpling on a cloth on cookbooks, a mango
+pudding on a cake stand, a konjac on a crate, a plate on a stool, the painted bench and its towel);
+`?light=morning|noon|shade` sets the light (low and warm, the default; high and white; the sun off
+the window, the room's light only); `?view=ex,ey,ez,tx,ty,tz` holds the camera; `?bakeview` shows
+only what's baked (`?bakeview=colour`, its colour too), `?nobake` leaves it out; `?perf` shows how
+long a frame takes, the card's own time for it where it'll say, what it's drawing into, and how
+long the bake took.
+
 WebGL2. The light is a window's: a soft shadow map (the shadow sharper near what casts it),
 the course in its materials (woven bamboo with its rims, glazed porcelain, a pudding with a
 caramel top, lacquer, painted tins, a chopping board's grain, chopsticks with lacquered ends),

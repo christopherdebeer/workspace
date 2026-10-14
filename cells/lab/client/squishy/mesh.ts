@@ -50,13 +50,22 @@ export function cylinder(out: number[], x: number, z: number, r: number, y0: num
     }
   }
 }
-/** A box, turned about the vertical: each face's (u, v) in cm along it. */
-export function box(out: number[], c: V3, h: V3, yaw: number, mat: number) {
+/**
+ * A box, turned about the vertical: each face's (u, v) in cm along it. Its top in cells this size, if
+ * given (a counter's, a table's: so what's baked into it, the dark round what stands on it, has vertices to be in).
+ */
+export function box(out: number[], c: V3, h: V3, yaw: number, mat: number, cell = 0) {
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   const W = (x: number, y: number, z: number): V3 => [c[0] + cy * x + sy * z, c[1] + y, c[2] - sy * x + cy * z];
   const N = (x: number, y: number, z: number): V3 => [cy * x + sy * z, y, -sy * x + cy * z];
   const [hx, hy, hz] = h;
-  quad(out, W(-hx, hy, -hz), W(-hx, hy, hz), W(hx, hy, hz), W(hx, hy, -hz), N(0, 1, 0), N(0, 1, 0), N(0, 1, 0), N(0, 1, 0), mat, [-hx, -hz], [-hx, hz], [hx, hz], [hx, -hz]);
+  if (cell > 0) {
+    const nx = Math.max(1, Math.round((2 * hx) / cell)), nz = Math.max(1, Math.round((2 * hz) / cell)), up = N(0, 1, 0);
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
+      const x0 = -hx + (2 * hx * i) / nx, x1 = -hx + (2 * hx * (i + 1)) / nx, z0 = -hz + (2 * hz * j) / nz, z1 = -hz + (2 * hz * (j + 1)) / nz;
+      quad(out, W(x0, hy, z0), W(x0, hy, z1), W(x1, hy, z1), W(x1, hy, z0), up, up, up, up, mat, [x0, z0], [x0, z1], [x1, z1], [x1, z0]);
+    }
+  } else quad(out, W(-hx, hy, -hz), W(-hx, hy, hz), W(hx, hy, hz), W(hx, hy, -hz), N(0, 1, 0), N(0, 1, 0), N(0, 1, 0), N(0, 1, 0), mat, [-hx, -hz], [-hx, hz], [hx, hz], [hx, -hz]);
   quad(out, W(-hx, -hy, hz), W(-hx, -hy, -hz), W(hx, -hy, -hz), W(hx, -hy, hz), N(0, -1, 0), N(0, -1, 0), N(0, -1, 0), N(0, -1, 0), mat, [-hx, hz], [-hx, -hz], [hx, -hz], [hx, hz]);
   quad(out, W(-hx, -hy, -hz), W(-hx, hy, -hz), W(hx, hy, -hz), W(hx, -hy, -hz), N(0, 0, -1), N(0, 0, -1), N(0, 0, -1), N(0, 0, -1), mat, [-hx, -hy], [-hx, hy], [hx, hy], [hx, -hy]);
   quad(out, W(hx, -hy, hz), W(hx, hy, hz), W(-hx, hy, hz), W(-hx, -hy, hz), N(0, 0, 1), N(0, 0, 1), N(0, 0, 1), N(0, 0, 1), mat, [hx, -hy], [hx, hy], [-hx, hy], [-hx, -hy]);
@@ -168,7 +177,8 @@ function drawShape(s: Shape, out: number[]) {
   dustOn(s, out);
   {
     if (s.mat === MAT.napkin) { serviette(out, s); return; }
-    if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); return; }
+    // (a counter's or a table's top, in cells: so the dark round what stands on it can be baked into it)
+    if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat, (s.mat === MAT.counter || s.mat === MAT.hob) && s.h[0] * s.h[2] > 400 ? 3 : 0); return; }
     if (s.kind === 'cap') { capsule(out, s.c, s.b, s.r, s.mat, 12, 4); return; }
     const y0 = s.c[1] - s.hh, y1 = s.c[1] + s.hh;
     const sx = s.c[0], sz = s.c[2];

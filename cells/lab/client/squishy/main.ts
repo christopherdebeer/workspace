@@ -21,6 +21,7 @@ import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, carried, chapterOf, nextTop, RADIU
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
+import { BAKE_RANGE, albedos, bakeDirs } from './bake';
 import { bounceOf, jelMesh, jelMeshSize, FEELS } from './jelly';
 
 const params = new URLSearchParams(location.search);
@@ -239,8 +240,10 @@ in vec3 aPos;
 in vec3 aNor;
 in float aMat;
 in vec2 aUV;
+in vec4 aBake;
 uniform mat4 uVP, uModel, uLightVP;
 uniform float uMatOver;
+out vec4 vBake;
 out vec3 vWorld;
 out vec3 vNor;
 out vec2 vUV;
@@ -251,6 +254,7 @@ void main() {
   vWorld = w.xyz;
   vNor = normalize(mat3(uModel) * aNor);
   vUV = aUV;
+  vBake = aBake;
   vMat = uMatOver >= 0. ? uMatOver : aMat;
   vShadow = uLightVP * w;
   gl_Position = uVP * w;
@@ -258,6 +262,8 @@ void main() {
 /** the course's things: bamboo, weave, porcelain, lacquer, mango pudding, a tin, a jar, a board, gold, chopsticks, tiles */
 const FS = `#version 300 es
 precision highp float;
+uniform float uBakeView;
+in vec4 vBake;
 in vec3 vWorld;
 in vec3 vNor;
 in vec2 vUV;
@@ -593,6 +599,8 @@ void main() {
     float focus = exp(-r * r * 22.) * 1.2 + (1. - smoothstep(.25, 1., r)) * .3;
     o = vec4(vec3(1., .5, .64) * focus * uAlpha, 1.); return;
   }
+  // (?bakeview: what's baked, alone: how shut in, grey; the colour of what shuts it in, over it)
+  if (uBakeView > .5) { o = vec4(tonemap(untonemap(mix(vec3(1. - vBake.x), vBake.yzw * (1. - vBake.x * .5), uBakeView - 1.))), 1.); return; }
   n = reliefNormal(n, vWorld, relief);
   float NoV = max(dot(n, V), 1e-3), NoL = max(dot(n, uKey), 0.);
   float sh = shadow(n);
@@ -601,11 +609,16 @@ void main() {
   vec3 H = normalize(uKey + V);
   vec3 Fk = F0 + (1. - F0) * pow(1. - max(dot(V, H), 0.), 5.);
   vec3 spec = D_ggx(max(dot(n, H), 0.), a) * V_smith(NoV, NoL, a) * Fk * NoL;
-  vec3 amb = irradiance(n) * cavity;
-  vec3 c = base * (1. - metal) * (1. - Fk) * (amb + uKeyCol * NoL * sh) + uKeyCol * spec * sh;
+  // (the room's light, less where it's shut in by what's near it (baked as the level's laid); and the light off
+  // what's near, onto it, in its colour: lit by the room, and a little by the sun on it)
+  float occ = vBake.x;
+  vec3 amb = irradiance(n) * cavity * (1. - .85 * occ) + vBake.yzw * occ * (irradiance(-n) * .55 + uKeyCol * .1) * .6;
+  // (and where it's well shut in, a little of the sun too: what stands on a thing sits down into it, even in the sun)
+  float sunIn = 1. - .45 * occ * occ;
+  vec3 c = base * (1. - metal) * (1. - Fk) * (amb + uKeyCol * NoL * sh * sunIn) + uKeyCol * spec * sh * sunIn;
   vec3 Fr = F0 + (max(vec3(1. - rough), F0) - F0) * pow(1. - NoV, 5.);
   // (the room's window, sharp, only in what's glossy: a rougher surface takes the room's soft light, not a window that isn't where it shows)
-  c += Fr * mix(env(reflect(-V, n)), irradiance(n), smoothstep(.05, .4, rough)) * (1. - .6 * rough * (1. - metal));
+  c += Fr * mix(env(reflect(-V, n)), irradiance(n), smoothstep(.05, .4, rough)) * (1. - .6 * rough * (1. - metal)) * (1. - .5 * occ);
   c += base * emit * (amb + uKeyCol * .5);
   if (coat > .01) {
     float Fc = (.04 + .96 * pow(1. - NoV, 5.)) * coat;
@@ -986,6 +999,8 @@ function program(vs: string, fs: string): WebGLProgram {
 const skyProg = program(SKY_VS, SKY_FS);
 const shadowProg = program(SHADOW_VS, SHADOW_FS);
 const prog = program(VS, FS);
+// (what isn't baked (the dots, the jellies' tops, the lids) is open, and throws nothing)
+{ const bl = gl.getAttribLocation(prog, 'aBake'); if (bl >= 0) gl.vertexAttrib4f(bl, 0, 0, 0, 0); }
 const doughProg = program(DOUGH_VS, DOUGH_FS);
 const jellyProg = program(DOUGH_VS, JELLY_FS);
 const glitterProg = program(GLITTER_VS, GLITTER_FS);
@@ -999,9 +1014,11 @@ const u = (p: WebGLProgram, n: string) => {
 };
 
 // ─── meshes on the card ──────────────────────────────────────────────────────────────────────────
-interface Mesh { vao: WebGLVertexArrayObject; svao: WebGLVertexArrayObject; buf: WebGLBuffer; count: number }
-function upload(verts: number[] | Float32Array, usage: number = gl.STATIC_DRAW): Mesh {
+interface Mesh { vao: WebGLVertexArrayObject; svao: WebGLVertexArrayObject; buf: WebGLBuffer; bbuf?: WebGLBuffer | null; count: number }
+function upload(verts: number[] | Float32Array, usage: number = gl.STATIC_DRAW, baked: Float32Array | null = null): Mesh {
   const data = verts instanceof Float32Array ? verts : new Float32Array(verts);
+  const bbuf = baked ? gl.createBuffer()! : null;
+  if (bbuf) { gl.bindBuffer(gl.ARRAY_BUFFER, bbuf); gl.bufferData(gl.ARRAY_BUFFER, baked!, gl.STATIC_DRAW); }
   const buf = gl.createBuffer()!;
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, data, usage);
@@ -1015,14 +1032,17 @@ function upload(verts: number[] | Float32Array, usage: number = gl.STATIC_DRAW):
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, size, gl.FLOAT, false, VSTRIDE * 4, off * 4);
     }
+    // (what's baked into it, from its own buffer)
+    const bl = p === prog && bbuf ? gl.getAttribLocation(p, 'aBake') : -1;
+    if (bl >= 0) { gl.bindBuffer(gl.ARRAY_BUFFER, bbuf); gl.enableVertexAttribArray(bl); gl.vertexAttribPointer(bl, 4, gl.FLOAT, false, 0, 0); }
     gl.bindVertexArray(null);
     return vao;
   };
-  return { vao: make(prog, [['aPos', 3, 0], ['aNor', 3, 3], ['aMat', 1, 6], ['aUV', 2, 7]]), svao: make(shadowProg, [['aPos', 3, 0]]), buf, count: data.length / VSTRIDE };
+  return { vao: make(prog, [['aPos', 3, 0], ['aNor', 3, 3], ['aMat', 1, 6], ['aUV', 2, 7]]), svao: make(shadowProg, [['aPos', 3, 0]]), buf, bbuf, count: data.length / VSTRIDE };
 }
 function drop(m: Mesh | null) {
   if (!m) return;
-  gl.deleteBuffer(m.buf); gl.deleteVertexArray(m.vao); gl.deleteVertexArray(m.svao);
+  gl.deleteBuffer(m.buf); if (m.bbuf) gl.deleteBuffer(m.bbuf); gl.deleteVertexArray(m.vao); gl.deleteVertexArray(m.svao);
 }
 const SPHERE = upload((() => { const v: number[] = []; sphere(v, 13); return v; })());
 const DISC = upload((() => { const v: number[] = []; disc(v, 14); return v; })());
@@ -1278,7 +1298,8 @@ function startLevel(n: number, quiet = false) {
   for (const jm of jellyMeshes) drop(jm.mesh);
   jellyMeshes = (lv.jellies ?? []).map((shape) => { const data = new Float32Array(jelMeshSize(shape.jel!, shape.dust)); return { shape, data, mesh: upload(data, gl.DYNAMIC_DRAW) }; });
   const lm = levelMesh(lv);
-  courseMesh = upload(lm.solid);
+  const solid = new Float32Array(lm.solid);
+  courseMesh = upload(solid, gl.STATIC_DRAW, bakeLight(solid));
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
   movers = lm.movers.map((m) => ({ shape: m.shape, mesh: upload(m.verts) }));
   lidWas = movers.map(() => -1);
@@ -2135,6 +2156,157 @@ function finish(W: number, H: number) {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.activeTexture(gl.TEXTURE0);
 }
+// ─── the bake: the light the course's things give each other, once, as the level's laid (see bake.ts) ──
+const BAKE_OCC_VS = `#version 300 es
+in vec3 aPos;
+in float aMat;
+uniform mat4 uLVP;
+flat out int vMat;
+void main() { vMat = int(aMat + .5); gl_Position = uLVP * vec4(aPos, 1.); }`;
+const BAKE_OCC_FS = `#version 300 es
+precision highp float;
+flat in int vMat;
+uniform vec3 uAlb[64];
+out vec4 o;
+void main() {
+  if (vMat == ${MAT.counter} || vMat == ${MAT.hob} || vMat == ${MAT.tiles}) discard;
+  o = vec4(uAlb[clamp(vMat, 0, 63)], 1.);
+}`;
+const BAKE_PT_VS = `#version 300 es
+in vec3 aPos;
+in vec3 aNor;
+uniform mat4 uLVP;
+uniform highp sampler2D uDepth, uCol;
+uniform vec3 uDir;
+uniform float uDepthRange, uRange;
+uniform vec2 uOut, uMap;
+out vec4 vAcc;
+void main() {
+  vec3 n = normalize(aNor);
+  float w = max(dot(n, uDir), 0.);
+  vec4 lp = uLVP * vec4(aPos + n * .35, 1.);
+  vec2 uv = lp.xy * .5 + .5;
+  vAcc = vec4(0.);
+  if (w > 0. && all(greaterThan(uv, vec2(0.))) && all(lessThan(uv, vec2(1.)))) {
+    ivec2 tc = ivec2(uv * uMap);
+    float dz = (lp.z * .5 + .5 - texelFetch(uDepth, tc, 0).r) * uDepthRange;
+    // (something between it and the room that way, so far off: the nearer, the more it shuts off)
+    if (dz > .6) { float occ = w / (1. + max(0., dz - 1.) / uRange); vAcc = vec4(occ, texelFetch(uCol, tc, 0).rgb * occ); }
+  }
+  int id = gl_VertexID, W = int(uOut.x);
+  gl_Position = vec4((vec2(float(id % W), float(id / W)) + .5) / uOut * 2. - 1., 0., 1.);
+  gl_PointSize = 1.;
+}`;
+const BAKE_PT_FS = `#version 300 es
+precision highp float;
+in vec4 vAcc;
+out vec4 o;
+void main() { o = vAcc; }`;
+const bakeOccProg = HDR ? program(BAKE_OCC_VS, BAKE_OCC_FS) : null, bakePtProg = HDR ? program(BAKE_PT_VS, BAKE_PT_FS) : null;
+const BAKE_ALB = albedos(), BAKE_DIRS = bakeDirs(48), BAKE_MAP = 2048;
+/**
+ * The bake, drawn: the course seen from each of the ways out (its depth, and the colour of what's seen), then
+ * each vertex, a point of its own in a row of them, adding up how much each way is shut off near it and in
+ * what colour; read back, four numbers a vertex (how shut in, 0–1; the colour of what shuts it in). Null
+ * without float targets (then nothing's baked: all open).
+ */
+function bakeLight(verts: Float32Array): Float32Array | null {
+  if (!bakeOccProg || !bakePtProg || params.has('nobake')) return null;
+  const n = Math.floor(verts.length / VSTRIDE);
+  if (!n) return null;
+  const t0 = performance.now();
+  let lo: V3 = [Infinity, Infinity, Infinity], hi: V3 = [-Infinity, -Infinity, -Infinity];
+  const roomMat = (m: number) => m === MAT.counter || m === MAT.hob || m === MAT.tiles || m === MAT.enamel;
+  for (let i = 0; i < n; i++) { if (roomMat(Math.round(verts[i * VSTRIDE + 6]))) continue; for (let k = 0; k < 3; k++) { const v = verts[i * VSTRIDE + k]; if (v < lo[k]) lo[k] = v; if (v > hi[k]) hi[k] = v; } }
+  if (!(lo[0] < hi[0])) return null;
+  // (not the room's far reaches: the course and a margin round it, from what isn't the room)
+  const c: V3 = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+  const R = Math.min(450, len(sub(hi, lo)) / 2 + 12), depth = 2 * R + 40;
+  const buf = gl.createBuffer()!;
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+  const vao = (p: WebGLProgram, attrs: Array<[string, number, number]>) => {
+    const v = gl.createVertexArray()!;
+    gl.bindVertexArray(v);
+    for (const [name, size, off] of attrs) { const l = gl.getAttribLocation(p, name); if (l < 0) continue; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, VSTRIDE * 4, off * 4); }
+    return v;
+  };
+  const occVao = vao(bakeOccProg, [['aPos', 3, 0], ['aMat', 1, 6]]), ptVao = vao(bakePtProg, [['aPos', 3, 0], ['aNor', 3, 3]]);
+  const tex = (internal: number, w: number, h: number, format: number, type: number) => {
+    const t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, null);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    return t;
+  };
+  const dTex = tex(gl.DEPTH_COMPONENT24, BAKE_MAP, BAKE_MAP, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT), cTex = tex(gl.RGBA8, BAKE_MAP, BAKE_MAP, gl.RGBA, gl.UNSIGNED_BYTE);
+  const mapFb = gl.createFramebuffer()!;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, dTex, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cTex, 0);
+  const OW = Math.min(n, 2048), OH = Math.ceil(n / OW);
+  const aTex = tex(gl.RGBA16F, OW, OH, gl.RGBA, gl.HALF_FLOAT);
+  const accFb = gl.createFramebuffer()!;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, accFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, aTex, 0);
+  gl.viewport(0, 0, OW, OH);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(bakeOccProg);
+  gl.uniform3fv(u(bakeOccProg, 'uAlb'), BAKE_ALB);
+  gl.useProgram(bakePtProg);
+  gl.uniform1i(u(bakePtProg, 'uDepth'), 3); gl.uniform1i(u(bakePtProg, 'uCol'), 4);
+  gl.uniform1f(u(bakePtProg, 'uDepthRange'), depth); gl.uniform1f(u(bakePtProg, 'uRange'), BAKE_RANGE);
+  gl.uniform2f(u(bakePtProg, 'uOut'), OW, OH); gl.uniform2f(u(bakePtProg, 'uMap'), BAKE_MAP, BAKE_MAP);
+  for (let d = 0; d < BAKE_DIRS.length / 3; d++) {
+    const dir: V3 = [BAKE_DIRS[d * 3], BAKE_DIRS[d * 3 + 1], BAKE_DIRS[d * 3 + 2]];
+    const lvp = ortho(c, dir, R, depth);
+    // (the course from this way: how far, and what colour)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, mapFb);
+    gl.viewport(0, 0, BAKE_MAP, BAKE_MAP);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+    gl.useProgram(bakeOccProg);
+    gl.uniformMatrix4fv(u(bakeOccProg, 'uLVP'), false, lvp);
+    gl.bindVertexArray(occVao);
+    gl.drawArrays(gl.TRIANGLES, 0, n);
+    // (each vertex: how much it's shut off that way, added in)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, accFb);
+    gl.viewport(0, 0, OW, OH);
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(bakePtProg);
+    gl.uniformMatrix4fv(u(bakePtProg, 'uLVP'), false, lvp);
+    gl.uniform3fv(u(bakePtProg, 'uDir'), dir);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, dTex);
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, cTex);
+    gl.bindVertexArray(ptVao);
+    gl.drawArrays(gl.POINTS, 0, n);
+  }
+  gl.disable(gl.BLEND);
+  const acc = new Float32Array(OW * OH * 4);
+  gl.readPixels(0, 0, OW, OH, gl.RGBA, gl.FLOAT, acc);
+  // (how much of all round it could be shut off at all, from its normal: the half of the ways it faces)
+  const out = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const b = i * VSTRIDE, nx = verts[b + 3], ny = verts[b + 4], nz = verts[b + 5], nl = Math.hypot(nx, ny, nz) || 1;
+    let ws = 0;
+    for (let d = 0; d < BAKE_DIRS.length; d += 3) ws += Math.max(0, (BAKE_DIRS[d] * nx + BAKE_DIRS[d + 1] * ny + BAKE_DIRS[d + 2] * nz) / nl);
+    const a = acc[i * 4];
+    out[i * 4] = ws > 0 ? Math.min(1, a / ws) : 0;
+    if (a > 1e-4) { out[i * 4 + 1] = acc[i * 4 + 1] / a; out[i * 4 + 2] = acc[i * 4 + 2] / a; out[i * 4 + 3] = acc[i * 4 + 3] / a; }
+  }
+  gl.bindVertexArray(null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.activeTexture(gl.TEXTURE0);
+  for (const t of [dTex, cTex, aTex]) gl.deleteTexture(t);
+  gl.deleteFramebuffer(mapFb); gl.deleteFramebuffer(accFb); gl.deleteBuffer(buf); gl.deleteVertexArray(occVao); gl.deleteVertexArray(ptVao);
+  bakeMs = performance.now() - t0;
+  { let sum = 0, mx = 0, raw = 0; for (let i = 0; i < n; i++) { sum += out[i * 4]; mx = Math.max(mx, out[i * 4]); raw = Math.max(raw, acc[i * 4]); } (window as unknown as { __squishyBake: unknown }).__squishyBake = { n, mean: sum / n, max: mx, raw, R, depth, err: gl.getError() }; }
+  return out;
+}
+let bakeMs = 0;
 /** ?perf: how long a frame takes (and the card's own time for it, where it'll say), what it's drawing into */
 const perfEl = params.has('perf') ? (() => { const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9;font:11px/1.3 ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.55);padding:4px 6px;border-radius:6px;pointer-events:none'; document.body.appendChild(d); return d; })() : null;
 const timerExt = perfEl ? gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null : null;
@@ -2152,7 +2324,7 @@ function perfEnd(dtMs: number, now: number) {
     }
   }
   perfMs += (dtMs - perfMs) * 0.1;
-  if (now - perfShown > 500) { perfShown = now; perfEl.textContent = `${(1000 / perfMs).toFixed(0)} fps · ${perfMs.toFixed(1)} ms${timerExt ? ` · gpu ${perfGpu.toFixed(1)} ms` : ''} · ${HDR ? 'hdr' : 'ldr'} ${SAMPLES}x · ${canvas.width}×${canvas.height}`; }
+  if (now - perfShown > 500) { perfShown = now; perfEl.textContent = `${(1000 / perfMs).toFixed(0)} fps · ${perfMs.toFixed(1)} ms${timerExt ? ` · gpu ${perfGpu.toFixed(1)} ms` : ''} · ${HDR ? 'hdr' : 'ldr'} ${SAMPLES}x · ${canvas.width}×${canvas.height} · bake ${bakeMs.toFixed(0)} ms`; }
 }
 
 let last = performance.now();
@@ -2244,6 +2416,7 @@ function frame(now: number) {
   gl.uniform3fv(u(prog, 'uEye'), eye);
   gl.uniform1f(u(prog, 'uTime'), simTime);
   gl.uniform1f(u(prog, 'uShadowSoft'), shadowSoft);
+  gl.uniform1f(u(prog, 'uBakeView'), params.has('bakeview') ? 1 + Number(params.get('bakeview') === 'colour') : 0);
   gl.uniform1i(u(prog, 'uShadowMap'), 0);
   gl.uniform1f(u(prog, 'uAlpha'), 1);
   gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
@@ -2274,6 +2447,12 @@ function frame(now: number) {
     const lift = Math.max(0, b.com[1] - ground.p[1] - REST_H);
     gl.uniform1f(u(prog, 'uAlpha'), Math.max(0, 1 - lift / 40));
     drawMesh(DISC, flatOn(add(ground.p, mul(ground.n, 0.05)), ground.n, RADIUS * (1.3 + lift * 0.04)), 15);
+    // (where it's touching: a tighter, darker core, as wide as what of it touches, wider as it squashes down)
+    if (b.contacts > 0 && lift < 1.5) {
+      const foot = Math.max(0.8, Math.min(RADIUS * 1.35, RADIUS * 0.85 * Math.sqrt(b.contacts / 150)));
+      gl.uniform1f(u(prog, 'uAlpha'), 0.7 * (1 - lift / 1.5));
+      drawMesh(DISC, flatOn(add(ground.p, mul(ground.n, 0.07)), ground.n, foot), 15);
+    }
   }
   // the aiming line: dots along where its middle will go, a ring where it lands
   aimLand = null;
