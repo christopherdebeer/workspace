@@ -26,7 +26,7 @@
 import { hash, seeded, type Rand } from '../kit/rng';
 import { FEELS } from './jelly';
 import { CHAPTER_AT, DUST, MAT, RADIUS, box, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Chapter, type Level, type Shape, type Top, type Tower, type V3 } from './level';
-import { box as drawBox, drawShapes, quad } from './mesh';
+import { box as drawBox, capsule, drawShapes, quad } from './mesh';
 import { drainer, smear, spoon, tiltPlate, towel } from './props';
 import { HOLDS, assemble, holder, tiered, type Holder } from './supports';
 
@@ -205,6 +205,13 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     const d: number[] = [];
     const bz = BACK - 28.5;
     const bin = box([x, 12, bz], [16, 12, 15.5], 0, MAT.enamel, 0.75);
+    // (drawn as a bread bin: its body; its lid, a little proud, a band of wood under its edge; a wooden knob on its front)
+    bin.ghost = true;
+    drawBox(d, [x, 10.4, bz], [15.7, 10.4, 15.2], 0, MAT.enamel);
+    drawBox(d, [x, 21.2, bz], [16.3, 0.45, 15.8], 0, MAT.board);
+    drawBox(d, [x, 22.8, bz], [16.1, 1.2, 15.6], 0, MAT.enamel);
+    drawBox(d, [x, 24, bz], [15.4, 0.12, 14.9], 0, MAT.enamel);
+    capsule(d, [x - 2.2, 18.5, bz - 15.6], [x + 2.2, 18.5, bz - 15.6], 0.75, MAT.board, 10, 3);
     const SY = Math.round(ramp(r, 72, 78)), SX = x + 6, SZ = BACK - 6;
     const shelf = box([SX, SY - 1, SZ], [26, 1, 6], 0, MAT.board, 0.85);
     const brackets = [-18, 18].map((dx) => box([SX + dx, SY - 6, BACK - 5], [0.6, 4, 5], 0, MAT.board, 0.8));

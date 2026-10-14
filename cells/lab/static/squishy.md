@@ -19,7 +19,7 @@ anywhere: the title is where to feel how each of them gives. Left alone a while,
 of them hops. New Game starts at the beginning; Continue, once you've got
 somewhere, where you left off; Settings has the sound, which dumpling (once the jelly's come),
 and any level you've reached to start at (a level's open once the one before it's been got home;
-the jelly's yours once level 12 has been). `?lab` opens everything, with a level back and on, and the
+the jelly's yours once the sink's last level, 12, has been). `?lab` opens everything, with a level back and on, and the
 dumpling either way, at the foot of the glass. In play, the word `menu` at the bottom comes back here. (A link to a
 level, `?level=3`, goes straight to it.)
 
@@ -73,20 +73,27 @@ and the table's or the counter's top beneath them is the fall, as the sink's wat
 until you're home, the count of falls beside it, and your best time for each level is kept. Each
 level opens with its place's name.
 
-Levels 1 and 2 are The Preparation Table; 3 and 4, The Counter by the Window; 5 and 6, The
-Sink (each below). Level 7 moves to the stovetop, a new kitchen with its own things (below); from
-11 on, the whole kitchen, mixed.
+Every level is laid fresh from its own seed by its place, four levels to a place: 1 to 4, The
+Preparation Table; 5 to 8, The Counter by the Window; 9 to 12, The Sink; 13 to 16, The Stovetop; from
+17 on, the whole kitchen, mixed. A place is its room, what things stand on there, how it starts and
+ends, and its pieces, from which each level is laid (kitchen.ts): a run of them, each where the last
+left off, every hop in it checked as it's laid, the next piece tried again if it won't do. A place's
+first level brings in what it's known by; each later one brings in one new thing, early, and the rest
+come from the place's own pool, a piece longer each level. No two levels are laid alike, and the next
+level in a place isn't the last again.
 
 ## The Preparation Table
 
-A wooden table, laid out by hand and varied a little each time, its top the fall. You start on a
-folded cloth on a stack of cookbooks. A ramekin, and a wooden spoon laid from it up to a painted tin
-bench: land in the spoon's bowl (it catches you) and go up its handle. The bench, its far end under a
-tea towel thrown over it and hanging down both sides: linen grips, and a throw at the towel's hanging
-side clings a moment or two before it lets go. Then the butter dish up on its tin (its butter slips,
-and stays on you), the floury paddle board laid across two jars (flour gives a buttered dumpling its
-grip back), a tea tin, and home. The second time the gaps are wider, the bench is taller, and a plate
-is tipped up on a teacup, up on a cake tin, on the way: a tilted top, glazed, a little slippery.
+A wooden table in the middle of a room, its top the fall. You start on a folded cloth on a stack of
+cookbooks. Its pieces: a ramekin, and a wooden spoon laid from it up onto a painted tin bench (land in
+the spoon's bowl, it catches you, and go up its handle), a tea towel thrown over one end of the bench
+and hanging down both sides (linen grips, and a throw at its hanging side clings a moment or two); the
+butter dish (its butter slips, and stays on you); the floury paddle board laid across two jars or on
+cookbooks (flour gives a buttered dumpling its grip back); a chopping board across jars; a plate tipped
+up on a teacup on a cake tin (a tilted top, glazed, a little slippery); plates, tea tins and steamers
+on stools, crates, cookbooks and upturned bowls; later a mango pudding, a lazy Susan, a tiered stand.
+The first level is the spoon, the butter and the paddle; the next brings the tipped plate; then the
+pudding; then the lazy Susan. Home is the golden steamer, on something.
 
 The spoon, the towel and the tipped plate are sheets: surfaces made of triangles, with a thickness
 under them, met exactly as they're drawn. The table, the bench, the board and the tins are the solid
@@ -94,32 +101,31 @@ shapes everything else is made of.
 
 ## The Counter by the Window
 
-A butcher-block counter against a tiled wall, a window in it, the counter the fall. From a folded
-cloth on a biscuit tin: a round loaf in a woven bread basket on two flour canisters, the loaf soft
-under its crust (a jelly, a dead one: it gives, and doesn't throw you) and crumby, the basket floured
-inside, so where you land decides what you pick up, and its rim catches a bounce; a baking tray on a
-cooling rack, butter melted across one corner of it, a lip all round to stop a slide; a tall cake stand,
-its plate sticky with hundreds and thousands; the bread bin, deep, out from the wall. Above it, out of
+A butcher-block counter against a tiled wall with windows in it, the counter the fall. You start on a
+folded cloth on a biscuit tin. Its pieces: a round loaf in a woven bread basket on two flour canisters
+(the loaf soft under its crust, a dead jelly that gives and doesn't throw you, and crumby; the basket
+floured inside, so where you land decides what you pick up, and its rim catches a bounce); a baking
+tray on a rack or a crate, butter melted across one corner of it, a lip all round to stop a slide; a
+tall cake stand, its plate sticky with hundreds and thousands; a tiered stand; things on cake stands
+and cookbooks; later a konjac jelly on something to bounce on, and two jellies in a row. Most of its
+levels end, and the first always does, at the bread bin, deep, out from the wall: above it, out of
 reach of any flick (a flick goes off at the one angle, so from below a high shelf by a wall, the arc
-meets the wall first), a shelf, a tea towel hung over its front edge: flick at the towel, it holds
-you, and climb up it and over onto the shelf. Fall off the towel and you're back on the bread bin, to
-try again. Home is the golden steamer on the window sill. A knife block and a crock of wooden spoons
-stand about. The second time, a konjac jelly on a tin to bounce on comes before the cake stand, and the
-shelf is higher.
-
-Every hop is checked as it's laid, the towel's too: a flick from the bread bin that lands against the
-towel, low enough to hold and high enough that a climb from there gets up and over.
+meets the wall first), a shelf, a tea towel hung over its front edge: flick at the towel, it holds you,
+and climb up it and over onto the shelf. Fall off the towel and you're back on the bread bin, to try
+again. Home is then the golden steamer on the window sill along from it, a knife block on the counter
+below. Every hop is checked as it's laid, the towel's too: a flick from the bread bin that lands
+against the towel, low enough to hold and high enough that a climb from there gets up and over.
 
 ## The Sink
 
-The counter round a steel sink, the window over it; the counter's the fall, and so's the water. From a
-folded dishcloth on an upturned pudding basin: a sponge up on a tin (soft, a dead jelly: it soaks up a
-landing), its green scourer up; a soap dish up on a tin, heaped round its rim with bubbles, which bounce
-you and hold nothing; a two-tier dish rack, its steel drip tray grooved and sloping down toward the
-sink, wet, so it slips, and above it the wire rack, its rails to land across, two plates stood up at its
-far end. Then across the sink, at the dishcloth hung over the window sill's edge: it holds you, and you
-climb it onto the sill. Home along the sill. The second time the rack and the sill are higher and the
-dishcloth shorter.
+The counter round a steel sink, the windows over it; the counter's the fall, and so's the water. You
+start on a folded dishcloth on an upturned pudding basin. Its pieces: a sponge up on something (soft,
+a dead jelly: it soaks up a landing); a soap dish up on something, heaped round its rim with bubbles,
+which bounce you and hold nothing; a two-tier dish rack, its steel drip tray grooved and sloping, wet,
+so it slips, and above it the wire rack, its rails to land across, two plates stood up at its far end;
+things on upturned bowls and wire racks; later a mango pudding, a bare rack, a konjac, a tiered stand.
+Most of its levels end, and the first always does, across the sink, at the dishcloth hung over the
+window sill's edge toward the water: it holds you, and you climb it onto the sill; home along the sill.
 
 ## The Breakfast Counter
 
@@ -193,7 +199,7 @@ little stools; past it, anything. `?bench=supports` is one of each, in a run ove
 
 ## The stovetop
 
-From level 7 the course is on the hob: brushed steel, burners under the steamers, the tiles behind.
+From level 13 the course is on the hob: brushed steel, burners under the steamers, the tiles behind.
 A pot, a pan or a jar is the size it is, and where it's wanted higher it stands on a stand: a
 wooden board on a stack of tea tins, now and then a celadon jar among them.
 
@@ -366,6 +372,6 @@ The lids move: they're drawn where the steam has them, with a puff of steam out 
 each jump and a rattle you hear when you're near. The honey jar is glass, drawn after
 everything else and seen through, the honey in it lit from within.
 
-`?level=3` starts a level (3 and 4 the counter, 5 and 6 the sink, 7 to 10 the stove); `?bench=jelly` the jelly bench; `?bench=supports` what things stand on; `?bench=coats` a row of each thing that comes off on it, to land
+`?level=5` starts a level (1 to 4 the table, 5 to 8 the counter, 9 to 12 the sink, 13 to 16 the stove); `?bench=jelly` the jelly bench; `?bench=supports` what things stand on; `?bench=coats` a row of each thing that comes off on it, to land
 in; `?skin=dough` the dough; `?auto` lets it play
 itself; `?view=ex,ey,ez,tx,ty,tz` holds the camera at an eye looking at a point (for a look at a place).
