@@ -294,7 +294,8 @@ export function bench(name: string): Level {
  *
  * - Along the front, quick and risky: a baking tray buttered all along, to land on and slide down to
  *   its far lip (topspin carries you; land too hard and it throws you off the side), a stack of
- *   pancakes beside its far end, then the bread bin, then home. Buttered, mind: honey won't hold you.
+ *   pancakes beside its far end, icing sugar on top that gives a buttered landing its grip back, then
+ *   the bread bin, then home. Buttered, or sugared, honey won't hold you.
  * - Along the back, slower and sure: a konjac jelly to bounce up off, a stack of steamers, the bin.
  * - Through the middle, a gamble: the cereal box, tall, its top a narrow ledge; from it, or from the
  *   jelly or the steamers, the honey jar against the wall: splat into its honey, stick, and from up
@@ -319,8 +320,9 @@ function breakfast(): Level {
   // 1. along the front, a baking tray, buttered all along its length, its lip all round
   const T: V3 = [36, 0, 9];
   const tray = box([T[0], 0.4, T[2]], [17, 0.4, 9], 0, MAT.pan, 0.6);
-  const lips = [box([T[0] - 17, 1.1, T[2]], [0.3, 0.7, 9], 0, MAT.pan, 0.6), box([T[0] + 17, 1.1, T[2]], [0.3, 0.7, 9], 0, MAT.pan, 0.6),
-    box([T[0], 1.1, T[2] - 9], [17, 0.7, 0.3], 0, MAT.pan, 0.6), box([T[0], 1.1, T[2] + 9], [17, 0.7, 0.3], 0, MAT.pan, 0.6)];
+  // (a roasting tray's: deep, so a slide stops against it rather than going over)
+  const lips = [box([T[0] - 17, 2.3, T[2]], [0.4, 1.9, 9], 0, MAT.pan, 0.6), box([T[0] + 17, 2.3, T[2]], [0.4, 1.9, 9], 0, MAT.pan, 0.6),
+    box([T[0], 2.3, T[2] - 9], [17, 1.9, 0.4], 0, MAT.pan, 0.6), box([T[0], 2.3, T[2] + 9], [17, 1.9, 0.4], 0, MAT.pan, 0.6)];
   free(tray, ...lips);
   const bt = prop(smear([T[0] - 13, 0.8, T[2]], [T[0] + 14, 0.8, T[2] + 1], 11, 71));
   for (const s of bt.shapes) { s.tack = 0; s.dust = DUST.butter; }
@@ -330,6 +332,9 @@ function breakfast(): Level {
   const P: V3 = [70, 0, 14];
   const plate = cyl(P[0], P[2], 11, 0, 0.8, MAT.porcelain, 0.5);
   const cakes = [0, 1, 2, 3, 4].map((i) => cyl(P[0] + Math.sin(i * 2.3) * 0.5, P[2] + Math.cos(i * 1.7) * 0.5, 8.5 - (i % 2) * 0.4, 0.8 + i * 2.2, 0.8 + (i + 1) * 2.2, MAT.bread, 0.9));
+  // (icing sugar on top: it dusts what lands in it as flour does, so a buttered landing gets its grip back; and,
+  // dry, it holds to honey no better than butter did)
+  cakes[4].dust = DUST.flour;
   free(plate, ...cakes);
   stop({ top: 'pancakes', at: [P[0], 11.8, P[2]], r: 7, yaw: 0, shapes: [plate, ...cakes], land: [cakes[4]] });
 
@@ -353,9 +358,9 @@ function breakfast(): Level {
 
   // 6. in the middle, the cereal box: tall, its top a narrow ledge
   const C: V3 = [44, 0, 27];
-  const cereal = box([C[0], 15, C[2]], [9, 15, 3.5], 0.15, MAT.floral, 0.85);
+  const cereal = box([C[0], 15, C[2]], [9, 15, 4.5], 0.15, MAT.floral, 0.85);
   free(cereal);
-  stop({ top: 'cereal', at: [C[0], 30, C[2]], r: 3, box: [8, 2.5], yaw: 0.15, shapes: [cereal] });
+  stop({ top: 'cereal', at: [C[0], 30, C[2]], r: 3.5, box: [8, 3.5], yaw: 0.15, shapes: [cereal] });
 
   // 7. the honey jar against the wall: land against its honey, and stick
   const H = tower('honey', [76, 30, 47], 8.5, 0, one);
@@ -364,11 +369,16 @@ function breakfast(): Level {
 
   // 8. home: the golden steamer on a tall tea tin by the wall
   const G: V3 = [130, 0, 40];
-  const tin = cyl(G[0], G[2], 7, 0, 44, MAT.tin);
-  const goal = cyl(G[0], G[2], 7.5, 44, 51, MAT.gold);
-  free(tin);
+  const tin = cyl(G[0], G[2], 8.5, 0, 44, MAT.tin);
+  const goal = cyl(G[0], G[2], 9.5, 44, 51, MAT.gold);
+  // (its rim, as a steamer basket's: it catches a landing that would go over the far side)
+  const rim = Array.from({ length: 16 }, (_, i) => {
+    const a0 = (i / 16) * Math.PI * 2, a1 = ((i + 1) / 16) * Math.PI * 2;
+    return cap([G[0] + Math.cos(a0) * 9.1, 51.9, G[2] + Math.sin(a0) * 9.1], [G[0] + Math.cos(a1) * 9.1, 51.9, G[2] + Math.sin(a1) * 9.1], 0.9, MAT.gold, 0.8);
+  });
+  free(tin, ...rim);
   drawShapes([goal], lv.decor);
-  stop({ top: 'goal', at: [G[0], 51, G[2]], r: 6, yaw: 0, shapes: [goal] });
+  stop({ top: 'goal', at: [G[0], 51, G[2]], r: 8, yaw: 0, shapes: [goal, ...rim], land: [goal] });
 
   lv.next = [1, 2, 3, 8, 5, 3, 7, 8, 8];
   lv.route = [0, 1, 2, 3, 8];

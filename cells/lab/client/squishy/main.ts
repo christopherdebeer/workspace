@@ -2334,7 +2334,8 @@ function tick(dt: number) {
     if (home >= 0 && still > 2.5) { startLevel(levelN); return; }
     // (from where it's ended up, which may be over a top's edge; and, with no way on from there, a hop to the middle of this top first)
     // (off any top, on the table: from where it is, on to the next after the last it stood on)
-    const near = k >= 0 ? k : towerAt(lv, body.com, 4), at = near >= 0 ? near : check;
+    // (in a place, down on the counter: the way again from its first hop, which the counter reaches)
+    const near = k >= 0 ? k : towerAt(lv, body.com, 4), at = near >= 0 ? near : lv.next && !body.clinging && body.com[1] < 8 ? 0 : check;
     if (still > 0.5 && body.canFlick && at >= 0 && at < lv.towers.length - 1 && simTime - aimedAt > 0.2) {
       aimedAt = simTime;
       const a = autoFlick(lv, body.com, at, simTime, body.coated[DUST.butter], body.clinging ? body.wallN : null);

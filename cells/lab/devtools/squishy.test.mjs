@@ -425,4 +425,32 @@ for (const kind of ['dough', 'jelly']) {
     console.log(`${kind}: level ${n} home in ${home.toFixed(1)} s`);
   }
 }
+// ─── the breakfast counter: a place, and each way through it gets home, for either dumpling ───────
+{
+  const WAYS = { front: [0, 1, 2, 3, 8], back: [0, 4, 5, 3, 8], middle: [0, 6, 7, 8], 'jelly to honey': [0, 4, 7, 8] };
+  for (const [a, b] of C.BREAKFAST_WAYS) assert.ok(L.hop(C.bench('breakfast'), a, b), `the breakfast counter: a way from ${a} to ${b}`);
+  for (const kind of ['dough', 'jelly']) for (const [name, r] of Object.entries(WAYS)) {
+    const lv = C.bench('breakfast');
+    // (the autopilot kept to this way: from each top on it, the next on it)
+    lv.next = lv.towers.map((_, k) => { const i = r.indexOf(k); return i >= 0 && i < r.length - 1 ? r[i + 1] : r[r.length - 1]; });
+    const s = lv.towers[0].at;
+    const d = new B.Dumpling([s[0], s[1] + L.REST_H + 2, s[2]], kind);
+    let home = -1, still = 0, check = 0;
+    for (let t = 0; t < 90 && home < 0; t += DT) {
+      d.step(lv, DT, t);
+      const k = L.towerAt(lv, d.com, 1);
+      if (k >= 0 && d.contacts > 0 && speed(d) < 30) check = k;
+      still = Math.hypot(...d.drift) < 6 && d.sinceContact < 0.12 ? still + DT : 0;
+      if (k === lv.towers.length - 1 && still > 0.4) { home = t; break; }
+      // (down on the counter: the way again from its first hop)
+      const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), at = near >= 0 ? near : !d.clinging && d.com[1] < 8 ? 0 : check;
+      if (still > 0.35 && d.canFlick && at >= 0 && at < lv.towers.length - 1) {
+        const a = L.autoFlick(lv, d.com, at, t, d.coated[L.DUST.butter], d.clinging ? d.wallN : null);
+        if (a) { d.flick(a.climb ? L.climbLaunch(a.power) : L.launch(a.yaw, a.power), 0, a.climb ?? null); still = 0; }
+      }
+    }
+    assert.ok(home >= 0, `${kind}: the breakfast counter, ${name}, home`);
+    console.log(`${kind}: the breakfast counter, ${name}, home in ${home.toFixed(1)} s`);
+  }
+}
 console.log('squishy ok');
