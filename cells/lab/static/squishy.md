@@ -78,6 +78,12 @@ tapped; a push along it, further, the harder you push. It stops short of either 
 From its far end, flick off on to the next spot; anywhere along it, you can. Buttered, you can't hold
 on. Fall after you've caught one and you're put back hanging from it where you caught it.
 
+Any edge holds a little, too: land half off a top and the dumpling drapes over its edge, gripping its
+top and its side with its own tack (which tires, on a side). A tap there shuffles it along the edge the
+same way, away from where you tapped. But clinging isn't standing: only on its feet on a top (its
+middle over what of it's on the top, and above it), or hanging from a rail that's a stop, does a spot
+count, as the spot you're put back on after a fall, or as home.
+
 Fall and it's a splat, and back to the last spot you stood on. There's no safe ground anywhere:
 every place is made of stations, things standing at their own sizes with a spot or two up on each,
 and the table's or the counter's top beneath them is the fall, as the sink's water is. The clock runs

@@ -422,9 +422,9 @@ for (const kind of ['dough', 'jelly']) {
       // (fallen: back to the last spot, as in play; a fall or two's allowed, more says a hop that doesn't hold)
       if (d.com[1] < lv.kill) { falls++; assert.ok(falls <= 2, `${kind}: level ${n}: ${falls} falls (at ${t.toFixed(1)} s)`); d.place(L.respawnAt(lv, check)); still = 0; continue; }
       const k = L.towerAt(lv, d.com, 1);
-      if (k >= 0 && d.contacts > 0 && d.moving < 30) check = Math.max(check, k);
+      if (k >= 0 && (lv.towers[k].rail ? !!d.onRail : d.onFeet) && d.contacts > 0 && d.moving < 30) check = Math.max(check, k);
       still = Math.hypot(...d.drift.map((v, i) => v - L.carried(lv, d.com)[i])) < 6 && d.sinceContact < 0.12 ? still + DT : 0;
-      if (k === lv.towers.length - 1 && still > 0.4) { home = t; break; }
+      if (k === lv.towers.length - 1 && d.onFeet && still > 0.4) { home = t; break; }
       // (off any top, on the table: on from the last it stood on; past home, off it: back on to it)
       const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), on = near >= 0 ? near : check, at = on === lv.towers.length - 1 && k !== on ? on - 1 : on;
       if (still > 0.35 && d.canFlick && at >= 0 && at < lv.towers.length - 1) {
@@ -454,9 +454,9 @@ for (const kind of ['dough', 'jelly']) {
       // (fallen: back to the last spot it stood on, as in play)
       if (d.com[1] < lv.kill) { falls++; d.place(L.respawnAt(lv, check)); still = 0; continue; }
       const k = L.towerAt(lv, d.com, 1);
-      if (k >= 0 && d.contacts > 0 && d.moving < 30) check = k;
+      if (k >= 0 && (lv.towers[k].rail ? !!d.onRail : d.onFeet) && d.contacts > 0 && d.moving < 30) check = k;
       still = Math.hypot(...d.drift.map((v, i) => v - L.carried(lv, d.com)[i])) < 6 && d.sinceContact < 0.12 ? still + DT : 0;
-      if (k === lv.towers.length - 1 && still > 0.4) { home = t; break; }
+      if (k === lv.towers.length - 1 && d.onFeet && still > 0.4) { home = t; break; }
       const near = k >= 0 ? k : L.towerAt(lv, d.com, 4), on = near >= 0 ? near : check, at = on === lv.towers.length - 1 && k !== on ? on - 1 : on;
       if (still > 0.35 && d.canFlick && at >= 0 && at < lv.towers.length - 1) {
         const a = L.autoFlick(lv, d.com, at, t, d.coated[L.DUST.butter], d.clinging ? d.wallN : null);

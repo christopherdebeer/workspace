@@ -1686,6 +1686,8 @@ function room(lv: Level): number[] {
   // (round a table, the room is nearer, and its floor is far below)
   const m = lv.chapter === 'table' ? 150 : 220, g = lv.ground;
   x0 -= m; x1 += m; z0 -= m; z1 += m;
+  // (in a kitchen, nothing past its wall: the room ends there)
+  if (lv.kitchen) z1 = lv.kitchen.zb + 1;
   const H = top + 260 - g;
   const wall = (a: V3, b: V3, n: V3, windows = true) => {
     const d = sub(b, a), L = Math.hypot(d[0], d[2]), t = mul(d, 1 / L);
@@ -3177,7 +3179,9 @@ function tick(dt: number) {
   });
   const k = towerAt(lv, body.com, 1);
   const speed = body.moving;
-  if (k >= 0 && body.contacts > 0 && speed < 30) { check = k; if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
+  // (stood on it: on its feet on its top, or hanging from it if it's a rail; not draped over its edge, nor clinging to its side)
+  const stood = k >= 0 && (lv.towers[k].rail ? !!body.onRail : body.onFeet);
+  if (stood && body.contacts > 0 && speed < 30) { check = k; if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
   // (sat still: not drifting, and touching, or only a moment off it, trembling on a jelly)
   const quiet = len(sub(body.drift, carried(lv, body.com))) < 6 && body.sinceContact < 0.12;
@@ -3193,7 +3197,7 @@ function tick(dt: number) {
   if (body.shook === DUST.flour) flourPuff(body.com, 0.6);
   else if (body.shook === DUST.crumbs || body.shook === DUST.sprinkles) crumbPuff(body.com);
   still = quiet ? still + dt : 0;
-  if (k === lv.towers.length - 1 && still > 0.5 && home < 0) {
+  if (k === lv.towers.length - 1 && stood && still > 0.5 && home < 0) {
     home = clock;
     chime();
     showHands();

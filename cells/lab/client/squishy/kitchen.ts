@@ -264,12 +264,12 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     return { stops: [{ top: 'paddle', at: [x, PY, z], r: 7, box: [11, 7.5], yaw: yw, shapes: [...sup, board, handle], land: [board] }], extra: [], decor, reach: 22 };
   }
   if (kind === 'tilt') {
-    // a plate tipped up on a teacup, the two on a cake tin
-    const TY = Math.round(ramp(r, LOW - 1, LOW + 2)), c: V3 = [x, TY + 2.4, z];
+    // a plate tipped up on a teacup, the two on a cake tin: its low edge on the tin, its underside on the cup's near rim
+    const TY = Math.round(ramp(r, LOW - 1, LOW + 2)), c: V3 = [x, TY + 2.6, z];
     const dir = Math.PI / 2 + ramp(r, -0.4, 0.4);
     const cake = cyl(x, z, 13, 0, TY, MAT.tin);
     const cup = cyl(x + Math.sin(dir) * 8, z + Math.cos(dir) * 8, 3.5, TY, TY + 3.6, MAT.porcelain, 0.6);
-    const pl = tiltPlate(c, 11, dir, 0.17);
+    const pl = tiltPlate(c, 11, dir, 0.3);
     return { stops: [{ top: 'tilt', at: c, r: 7, yaw: dir, shapes: [...pl.shapes, cup, cake], land: pl.shapes }], extra: [], decor: pl.verts, reach: 14 };
   }
   if (kind === 'loaf') {
@@ -288,10 +288,11 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     const h = hash(n, Math.round(x * 10), Math.round(z * 10), 0xb7ead);
     const which = (['boule', 'bloomer', 'ciabatta', 'rolls', 'boule', 'bloomer', 'rolls', 'ciabatta'] as const)[h % 8], y0 = UP + 1.2;
     const breads: Shape[] = [];
-    let land: Shape[], top: V3, rr = 5;
+    let land: Shape[], top: V3, rr = 5, span: [number, number] | undefined;
     if (which === 'rolls') {
       for (const k of [-1, 0, 1]) { const p = at1(k * 9.3, 0, y0); breads.push(bread(p[0], p[2], 'roll', y0)); }
-      land = breads; top = at1(0, 0, y0 + breadFor('roll').h); rr = 3.2;
+      // (a landing on any of them is a landing: the three of them, end to end)
+      land = breads; top = at1(0, 0, y0 + breadFor('roll').h); rr = 3.2; span = [13, 3.6];
     } else {
       const two = which !== 'boule' && (h >> 3) % 2 === 0, p = which === 'boule' ? at1(-4, 0, y0) : at1(0, two ? -3.2 : 0, y0);
       const main = bread(p[0], p[2], which, y0, -y1);
@@ -299,7 +300,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
       if (two) { const q = at1(0, 7.9, y0); breads.push(bread(q[0], q[2], 'baguette', y0, -y1)); }
     }
     for (const b of breads) b.dust = DUST.crumbs;
-    return { stops: [{ top: 'boule', at: top, r: rr, yaw: 0, shapes: [...cans, basket, ...rim, ...breads], land }], extra: [], decor: [], reach: 19 };
+    return { stops: [{ top: 'boule', at: top, r: rr, box: span, yaw: span ? y1 : 0, shapes: [...cans, basket, ...rim, ...breads], land }], extra: [], decor: [], reach: 19 };
   }
   if (kind === 'rail' || kind === 'sill' || kind === 'oven') {
     // what's hung from: caught from the air anywhere along its first part, hung from, prodded along hand over hand, let

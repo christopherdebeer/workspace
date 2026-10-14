@@ -254,6 +254,12 @@ export class Dumpling {
   private shim: { dir: number; left: number; rail: Shape } | null = null;
   /** flicked off a rail: what it hung from and against (the rail, a sill, an oven's door), let go of a moment, unsnagged */
   private letGo: Set<Shape> | null = null;
+  /** clinging to an edge (draped over it, gripping its top and its side) and a shuffle along it under way: which way, how far still */
+  private edgeShim: { t: V3; left: number } | null = null;
+  /** where its foot is (what of it is on a floor, its middle), and whether it's on its feet: its middle over its foot and above it;
+   * not draped over an edge, clinging to a side, hanging */
+  foot: V3 = [0, 0, 0];
+  onFeet = false;
   /**
    * Climbing: flicked up the wall it was clinging to (its normal, out of the wall), sliding up it;
    * once it's clear of the wall's top it's carried in over it. Whether it's been on the wall yet.
@@ -262,6 +268,8 @@ export class Dumpling {
   /** the wall it's against, if any: the way out of it, level (the touching particles' normals, averaged) */
   wallN: V3 = [0, 0, 0];
   /** Clinging: on something mostly by its side, little or nothing under it. */
+  /** clinging to an edge: touching a top and a side, not on its feet over the top, not hanging from a rail */
+  get onEdge() { return this.contacts > 0 && this.onWall && this.onFloor > 0.05 && !this.onFeet && !this.onRail && Math.hypot(this.wallN[0], this.wallN[2]) > 0.5; }
   get clinging() { return this.contacts > 0 && this.onWall && this.onFloor < 0.3 && Math.hypot(this.wallN[0], this.wallN[2]) > 0.5; }
   /** how long it can go on hanging by a grip that tires (linen's, sugar's): drained as it hangs, filled again on a floor (0–1) */
   grip = 1;
@@ -331,7 +339,7 @@ export class Dumpling {
     this.com = [...at] as V3;
     this.vcom = [0, 0, 0]; this.drift = [0, 0, 0]; this.comWas = [...at] as V3;
     this.tack = 1; this.sinceContact = 0; this.sinceFlick = 9; this.squeeze = null;
-    this.spinMode = 0; this.spinLeft = 0; this.held = 0; this.grip = 1; this.limp = 0; this.honeyT = -1; this.climb = null; this.onRail = null; this.shim = null; this.railHold.fill(null);
+    this.spinMode = 0; this.spinLeft = 0; this.held = 0; this.grip = 1; this.limp = 0; this.honeyT = -1; this.climb = null; this.onRail = null; this.shim = null; this.railHold.fill(null); this.edgeShim = null; this.onFeet = false;
     this.coat.fill(0); this.coatKind.fill(0); this.press.fill(0); this.coated = [0, 0, 0, 0, 0, 0]; this.coatMost = DUST.none; this.sneeze = 0;
   }
   /**
@@ -356,13 +364,21 @@ export class Dumpling {
    */
   poke(at: V3, dir: V3, roll = true) {
     const x = this.x, v = this.v;
-    // (hanging from a rail: prodded along it, away from the side it's prodded on)
+    // (hanging from a rail: prodded along it, away from the side it's prodded on; no more than that)
     const rl = this.onRail;
     if (rl && roll) {
       const ax = railAxis(rl), side = (at[0] - this.com[0]) * ax[0] + (at[1] - this.com[1]) * ax[1] + (at[2] - this.com[2]) * ax[2];
       const along = dir[0] * ax[0] + dir[1] * ax[1] + dir[2] * ax[2];
       this.shimmy(Math.abs(side) > 0.4 ? -Math.sign(side) : Math.sign(along) || 1);
-      roll = false;
+      return;
+    }
+    // (clinging to an edge: shuffled along it the same way, a hand's width, away from the side it's prodded on)
+    if (this.onEdge && roll) {
+      const tn: V3 = [-this.wallN[2], 0, this.wallN[0]];
+      const side = (at[0] - this.com[0]) * tn[0] + (at[2] - this.com[2]) * tn[2], along = dir[0] * tn[0] + dir[2] * tn[2];
+      const sg = Math.abs(side) > 0.4 ? -Math.sign(side) : Math.sign(along) || 1;
+      this.edgeShim = { t: [tn[0] * sg, 0, tn[2] * sg], left: SHIM_STEP };
+      return;
     }
     for (let j = 0; j < this.n; j++) {
       const d = Math.hypot(x[j * 3] - at[0], x[j * 3 + 1] - at[1], x[j * 3 + 2] - at[2]);
@@ -677,6 +693,7 @@ export class Dumpling {
     // (a landing into something dusty: where, how hard, and what)
     let spN = 0, spX = 0, spY = 0, spZ = 0, spK = 0, spV = 0;
     let contacts = 0, wall = false, impact = 0, nyS = 0, floor = 0, held = 0, onHoney = false, tire = 1, pinnedS = 0, fx = 0, fy = 0, fz = 0;
+    let footX = 0, footY = 0, footZ = 0, footN = 0, bedS = 0;
     const tackOn = this.sinceFlick > 0.12 && !this.climb;
     let wx = 0, wz = 0;
     // the spin's say on landing: topspin lets the roll live and eases the grip; backspin grips and holds at once
@@ -697,7 +714,7 @@ export class Dumpling {
       // (on a jelly: it gives under the whole of it, as a bed)
       this.bedFoot = 0;
       if (lv.jellies) for (const sh of this.nearby) if (sh.jel) this.bed(sh.jel, sh.mu, p, h);
-      contacts += this.bedFoot; floor += this.bedFoot; nyS += this.bedFoot; fy += this.bedFoot;
+      contacts += this.bedFoot; floor += this.bedFoot; nyS += this.bedFoot; fy += this.bedFoot; bedS += this.bedFoot;
       // each particle against the course
       for (let i = 0; i < n; i++) {
         cf[i] = 0; cd[i] = 0;
@@ -758,6 +775,15 @@ export class Dumpling {
         if ((ds < 0 && s0 + ds < SHIM_END) || (ds > 0 && s0 + ds > L - SHIM_END)) this.shim = null;
         else { sdx = ax[0] * ds; sdy = ax[1] * ds; sdz = ax[2] * ds; if ((this.shim.left -= Math.abs(ds)) <= 1e-6) this.shim = null; }
       }
+      // (shuffling along an edge: the whole of it slid along, its grip kept)
+      let ex = 0, ez = 0;
+      if (this.edgeShim) {
+        const ds = Math.min(this.edgeShim.left, SHIM_V * h);
+        ex = this.edgeShim.t[0] * ds; ez = this.edgeShim.t[2] * ds;
+        if ((this.edgeShim.left -= ds) <= 1e-6) this.edgeShim = null;
+        // (moved, not set going: where it was moves with it)
+        for (let i = 0; i < n; i++) { p[i * 3] += ex; p[i * 3 + 2] += ez; x[i * 3] += ex; x[i * 3 + 2] += ez; }
+      }
       let vx = 0, vy = 0, vz = 0, pinned = 0;
       for (let i = 0; i < n; i++) {
         const i3 = i * 3;
@@ -792,13 +818,14 @@ export class Dumpling {
           const holds = ctk[i] > 1 && tk0 > 1;
           // (touching; or held by honey, which is as good as)
           if (cf[i] === 1 || (holds && tackOn)) {
-            contacts++; nyS += ny; if (ny > 0.5) { floor++; fx += nx; fy += ny; fz += nz; }
+            contacts++; nyS += ny; if (ny > 0.5) { floor++; fx += nx; fy += ny; fz += nz; footX += p[i3]; footY += p[i3 + 1]; footZ += p[i3 + 2]; footN++; }
             if (tk0 > held) held = tk0;
             if (ctk[i] > 1 && ctr[i] === 0) onHoney = true;
             if (ny < 0.5) { wall = true; wx += nx; wz += nz; }
           }
           if (cf[i] === 1) {
-            if (-cv0[i] > impact) impact = -cv0[i];
+            // (what's held to a rail, drawn against it, isn't a landing)
+            if (!this.railHold[i] && -cv0[i] > impact) impact = -cv0[i];
             this.pressNow[i] = Math.max(this.pressNow[i], PRESS_REST + (1 - PRESS_REST) * Math.min(1, Math.max(0, -cv0[i]) / PRESS_HARD));
             if (cdust[i] && -cv0[i] > 60) { spN++; spX += p[i3]; spY += p[i3 + 1]; spZ += p[i3 + 2]; spK = cdust[i]; spV = Math.max(spV, -cv0[i]); }
             if (bn > 0 && cv0[i] < -40) vn = Math.max(vn, -cv0[i] * bn);
@@ -868,6 +895,10 @@ export class Dumpling {
     this.groundNy = contacts > 0 ? nyS / contacts : 1;
     { const l = Math.hypot(wx, wz); this.wallN = l > 1e-6 ? [wx / l, 0, wz / l] : [0, 0, 0]; }
     this.onFloor = contacts > 0 ? floor / contacts : 1;
+    // (on its feet: its middle over what of it is on a floor, and above it; in a jelly's bed, it is)
+    if (footN > 0) this.foot = [footX / footN, footY / footN, footZ / footN];
+    this.onFeet = bedS > 0 || (footN > 0 && Math.hypot(this.com[0] - this.foot[0], this.com[2] - this.foot[2]) < RADIUS * 0.75 && this.com[1] > this.foot[1] + 0.8);
+    if (!this.onEdge) this.edgeShim = null;
     {
       const l = Math.hypot(fx, fy, fz);
       this.upTo = l > 0 && fy / l > 0.75 ? [fx / l, fy / l, fz / l] : [0, 1, 0];
