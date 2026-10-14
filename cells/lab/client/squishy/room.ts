@@ -1,5 +1,6 @@
 /**
- * Squishy: the kitchen round the course, to look at, not to land on. A run of kitchen along a wall: the base
+ * Squishy: the kitchen round the course: drawn here, and what of it is over the counter solid (runSolids), to
+ * land on or be stopped by. A run of kitchen along a wall: the base
  * cupboards under the counter (a drawer over each door, shaker panels, bar handles, the kick board), the wall
  * cupboards over it with windows between them (their sills, herbs in pots on them), a range at one end (its hob,
  * its oven door with a window in it and a handle across, its knobs, a hood over it), and at the other the counter
@@ -19,9 +20,62 @@ export interface Run {
 }
 const CAB = 60, DOOR_GAP = 1.2;
 
+/** Where a run's things go: the range's and the fridge's ends, the counter's run on past the course, the wall cupboards' spans and the windows between them. */
+export interface RunLayout { ext: number; rx0: number; rx1: number; fx0: number; fx1: number; wy0: number; wy1: number; wf: number; windows: number[]; cupboards: Array<[number, number]> }
+export function runLayout(o: Run): RunLayout {
+  const { xa, xb, zb, yt } = o;
+  const ext = 64, fx0 = xb + ext + 2, fx1 = fx0 + 74, rx0 = xa - 76, rx1 = xa - 2;
+  const wy0 = yt + 76, wy1 = yt + 142, wf = zb - 33;
+  const windows: number[] = [];
+  for (let x = xa + 70; x < xb - 30; x += 240) if (!o.avoid.some((a) => Math.abs(a - x) < 100)) windows.push(x);
+  // (the cupboards, each as wide as it can be up to its slot, cut short by a window, the hood, or what the course
+  // has on the wall; not one too narrow to be a cupboard)
+  const gaps: Array<[number, number]> = [...windows.map((wx): [number, number] => [wx - 62, wx + 62]), ...o.avoid.map((a): [number, number] => [a - 45, a + 45]), [rx0, rx1]];
+  const cupboards: Array<[number, number]> = [];
+  for (let x = rx0 - 60; x < fx0 - 2; x += CAB) {
+    let segs: Array<[number, number]> = [[x, Math.min(fx0 - 2, x + CAB)]];
+    for (const [g0, g1] of gaps) {
+      const next: Array<[number, number]> = [];
+      for (const [a, b] of segs) {
+        if (b <= g0 || a >= g1) { next.push([a, b]); continue; }
+        if (g0 > a) next.push([a, g0]);
+        if (g1 < b) next.push([g1, b]);
+      }
+      segs = next;
+    }
+    for (const sg of segs) if (sg[1] - sg[0] >= 30) cupboards.push(sg);
+  }
+  return { ext, rx0, rx1, fx0, fx1, wy0, wy1, wf, windows, cupboards };
+}
+/** A box: its middle and half-sizes. */
+export type Block = { c: V3; h: V3; mat: number };
+/** A pot on a sill (and its herbs, a clump over it): x, z, its radius, its foot and its top, the clump's top. */
+export type Pot = { x: number; z: number; r: number; y0: number; y1: number; top: number };
+/**
+ * What's solid in a run, over the counter and round it (what's under the counter's top is the fall): the
+ * wall cupboards, the one over the fridge, the fridge, the microwave, the range's hood and chimney, each
+ * window's sill; and the pots on the sills.
+ */
+export function runSolids(o: Run): { blocks: Block[]; pots: Pot[] } {
+  const L = runLayout(o), { xb, zf, zb, yt, g } = o, blocks: Block[] = [], pots: Pot[] = [];
+  for (const [x, x1] of L.cupboards) blocks.push({ c: [(x + x1) / 2, (L.wy0 + L.wy1) / 2, (L.wf + zb) / 2], h: [(x1 - x) / 2 - 0.3, (L.wy1 - L.wy0) / 2, (zb - L.wf) / 2], mat: MAT.cabinet });
+  blocks.push(overFridge(L, zb, g), fridgeBody(L.fx0, L.fx1, zf - 3, zb, g), { c: [xb + L.ext / 2, yt + 14, zb - 21], h: [24, 14, 17], mat: MAT.fridge }, ...hood(L.rx0, L.rx1, zb, yt));
+  for (const wx of L.windows) { blocks.push(sillOf(wx, yt + 40, zb, 96)); pots.push(...potsOf(wx, yt + 40, zb, 96)); }
+  return { blocks, pots };
+}
+const overFridge = (L: RunLayout, zb: number, g: number): Block => ({ c: [(L.fx0 + L.fx1) / 2, (g + 192 + L.wy1) / 2, (L.wf + zb) / 2], h: [(L.fx1 - L.fx0) / 2, (L.wy1 - g - 192) / 2, (zb - L.wf) / 2], mat: MAT.cabinet });
+const fridgeBody = (x0: number, x1: number, zf: number, zb: number, g: number): Block => ({ c: [(x0 + x1) / 2, g + 94, (zf + 2 + zb) / 2], h: [(x1 - x0) / 2, 94, (zb - zf - 2) / 2], mat: MAT.fridge });
+const hood = (x0: number, x1: number, zb: number, yt: number): Block[] => [
+  { c: [(x0 + x1) / 2, yt + 72, zb - 24], h: [(x1 - x0) / 2 + 2, 5, 24], mat: MAT.steel },
+  { c: [(x0 + x1) / 2, yt + 112, zb - 14], h: [(x1 - x0) / 4, 35, 14], mat: MAT.steel },
+];
+const sillOf = (x: number, y0: number, zb: number, w: number): Block => ({ c: [x, y0 - 1.2, zb - 6], h: [w / 2 + 5, 1.2, 6], mat: MAT.porcelain });
+const potsOf = (x: number, y0: number, zb: number, w: number): Pot[] =>
+  ([[-0.3, 1], [0.05, 0.8], [0.33, 1.1]] as Array<[number, number]>).map(([px, s]) => ({ x: x + px * w, z: zb - 6, r: 4 * s, y0, y1: y0 + 7 * s, top: y0 + 13 * s }));
+
 export function kitchenRun(out: number[], o: Run) {
   const { xa, xb, zf, zb, yt, g } = o;
-  const ext = 64, fx0 = xb + ext + 2, fx1 = fx0 + 74, rx0 = xa - 76, rx1 = xa - 2;
+  const L = runLayout(o), { ext, fx0, fx1, rx0, rx1, wy0, wy1, wf } = L;
   // the counter's top, if it's ours, and on past the course's to the fridge, the microwave on it
   if (o.top !== undefined) box(out, [(xa + xb) / 2, yt - 2, (zf + zb) / 2], [(xb - xa) / 2, 2, (zb - zf) / 2], 0, o.top);
   box(out, [xb + ext / 2, yt - 2, (zf + zb) / 2], [ext / 2, 2, (zb - zf) / 2], 0, o.top ?? MAT.counter);
@@ -40,20 +94,15 @@ export function kitchenRun(out: number[], o: Run) {
   range(out, rx0, rx1, zf, zb, yt, g);
   fridge(out, fx0, fx1, zf - 3, zb, g);
   // the wall cupboards and the windows between them, from over the range to over the fridge
-  const wy0 = yt + 76, wy1 = yt + 142, wf = zb - 33;
-  const windows: number[] = [];
-  for (let x = xa + 70; x < xb - 30; x += 240) if (!o.avoid.some((a) => Math.abs(a - x) < 100)) windows.push(x);
-  const open = (x0: number, x1: number) => !windows.some((wx) => x1 > wx - 62 && x0 < wx + 62) && !o.avoid.some((a) => x1 > a - 45 && x0 < a + 45) && !(x1 > rx0 && x0 < rx1);
-  for (let x = rx0 - 60; x < fx0 - 2; x += CAB) {
-    const x1 = Math.min(fx0 - 2, x + CAB);
-    if (x1 - x < 30 || !open(x, x1)) continue;
+  for (const [x, x1] of L.cupboards) {
     box(out, [(x + x1) / 2, (wy0 + wy1) / 2, (wf + zb) / 2], [(x1 - x) / 2 - 0.3, (wy1 - wy0) / 2, (zb - wf) / 2], 0, MAT.cabinet);
     panel(out, (x + x1) / 2, (wy0 + wy1) / 2, wf, x1 - x - DOOR_GAP * 2, wy1 - wy0 - 2, false, true);
   }
   // (over the fridge, a short one)
-  box(out, [(fx0 + fx1) / 2, (g + 192 + wy1) / 2, (wf + zb) / 2], [(fx1 - fx0) / 2, (wy1 - g - 192) / 2, (zb - wf) / 2], 0, MAT.cabinet);
+  const of = overFridge(L, zb, g);
+  box(out, of.c, of.h, 0, MAT.cabinet);
   panel(out, (fx0 + fx1) / 2, (g + 192 + wy1) / 2, wf, fx1 - fx0 - 3, wy1 - g - 194, false, true);
-  for (const wx of windows) window(out, wx, yt + 40, yt + 138, zb, 96);
+  for (const wx of L.windows) window(out, wx, yt + 40, yt + 138, zb, 96);
 }
 
 /** A cupboard's front, centred at (cx, cy) on the plane z = f (facing -z), w by h: a frame, a raised panel in it, a bar handle (a drawer's across its middle; a door's up near its top, or, on a wall cupboard, near its foot). */
@@ -79,14 +128,13 @@ function range(out: number[], x0: number, x1: number, zf: number, zb: number, yt
   for (const s of [x0 + 8, x1 - 8]) capsule(out, [s, dy1 - 4, zf - 1], [s, dy1 - 4, zf - 4], 0.6, MAT.steel, 6, 2);
   for (let k = 0; k < 5; k++) capsule(out, [x0 + 10 + k * (w - 20) / 4, yt - 8, zf + 1], [x0 + 10 + k * (w - 20) / 4, yt - 8, zf - 1.4], 1.6, MAT.knob, 10, 3);
   // (its hood, and its chimney up the wall)
-  box(out, [cx, yt + 72, zb - 24], [w / 2 + 2, 5, 24], 0, MAT.steel);
-  box(out, [cx, yt + 112, zb - 14], [w / 4, 35, 14], 0, MAT.steel);
+  for (const b of hood(x0, x1, zb, yt)) box(out, b.c, b.h, 0, b.mat);
 }
 
 /** A tall retro fridge, x0 to x1, its doors' face at zf: a freezer over the fridge, long handles, a few magnets. */
 function fridge(out: number[], x0: number, x1: number, zf: number, zb: number, g: number) {
-  const cx = (x0 + x1) / 2, w = x1 - x0, H = 188, split = g + 128;
-  box(out, [cx, g + H / 2, (zf + 2 + zb) / 2], [w / 2, H / 2, (zb - zf - 2) / 2], 0, MAT.fridge);
+  const cx = (x0 + x1) / 2, w = x1 - x0, H = 188, split = g + 128, fb = fridgeBody(x0, x1, zf, zb, g);
+  box(out, fb.c, fb.h, 0, MAT.fridge);
   for (const [y0, y1] of [[g + 3, split - 0.8], [split + 0.8, g + H - 3]]) {
     box(out, [cx, (y0 + y1) / 2, zf + 1], [w / 2 - 0.5, (y1 - y0) / 2, 1.2], 0, MAT.fridge);
     const hx = x0 + 6, hy0 = y1 > split + 1 ? y0 + 6 : y1 - 46, hy1 = y1 > split + 1 ? y0 + 30 : y1 - 8;
@@ -115,7 +163,8 @@ export function window(out: number[], x: number, y0: number, y1: number, zb: num
     [[x, (y0 + y1) / 2, zb - 1], [0.8, (y1 - y0) / 2, 1]], [[x, y0 + (y1 - y0) * 0.62, zb - 1], [w / 2, 0.8, 1]]];
   for (const [c, h] of fr) box(out, c, h, 0, MAT.porcelain);
   // (its sill, deep enough for pots)
-  box(out, [x, y0 - 1.2, zb - 6], [w / 2 + 5, 1.2, 6], 0, MAT.porcelain);
+  const sl = sillOf(x, y0, zb, w);
+  box(out, sl.c, sl.h, 0, MAT.porcelain);
   for (const [px, s] of [[-0.3, 1], [0.05, 0.8], [0.33, 1.1]] as Array<[number, number]>) {
     const cx = x + px * w, r = 4 * s;
     cylinder(out, cx, zb - 6, r * 0.8, y0, y0 + 7 * s, MAT.terracotta, MAT.terracotta, 16, true, r);

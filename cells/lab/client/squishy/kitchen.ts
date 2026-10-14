@@ -28,6 +28,7 @@ import { FEELS, breadFor } from './jelly';
 import { CHAPTER_AT, DUST, MAT, RADIUS, box, bread, cap, chapterOf, cyl, hop, jelly, rail, serviette, tower, type Chapter, type Level, type Shape, type Top, type Tower, type V3 } from './level';
 import { box as drawBox, capsule, drawShapes, quad } from './mesh';
 import { drainer, smear, spoon, tiltPlate, towel } from './props';
+import { runSolids, type Run } from './room';
 import { HOLDS, assemble, holder, tiered, type Holder } from './supports';
 
 /** where the wall is (its face), and how far out from it a course may come */
@@ -109,7 +110,7 @@ const ONE: Partial<Record<Kind, { top: Top; y: [number, number]; rad: [number, n
 };
 
 /** a piece: its stops, what else is met about it, what's drawn besides, how far it reaches on past its last stop; and a hole it makes in the counter (the sink) */
-interface Piece { stops: Tower[]; extra: Shape[]; decor: number[]; reach: number; hole?: [number, number, number, number]; window?: number }
+interface Piece { stops: Tower[]; extra: Shape[]; decor: number[]; reach: number; hole?: [number, number, number, number]; /** where on the wall it takes (a window of its own, a shelf): the kitchen leaves it be */ wall?: number[] }
 
 /** What a top stands on, from what its kind can and what the room has. */
 function holderFor(top: Top, r: Rand, n: number): Holder | null {
@@ -224,7 +225,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
       stops: [
         { top: 'bin', at: [x, 24, bz], r: 9, box: [15, 14.5], yaw: 0, shapes: [bin] },
         { top: 'shelf', at: [SX, SY, SZ], r: 4, box: [24, 4.2], yaw: 0, shapes: [shelf, ...brackets, ...tw.shapes], land: [shelf, ...tw.shapes], wall: tw.shapes, wallAt: [SX - 1, (SY + hangTo) / 2, BACK - 12.8] },
-      ], extra: [], decor: d, reach: 30,
+      ], extra: [], decor: d, reach: 30, wall: [SX],
     };
   }
   if (kind === 'spoon') {
@@ -351,7 +352,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     const at: V3 = [a[0] + ax[0] * L * 0.35, a[1], a[2] + ax[2] * L * 0.35], to: V3 = [b[0] - ax[0] * 6, b[1], b[2] - ax[2] * 6];
     // (what's next is laid on past it: past the far end of what it hangs from, and past a little oven's side)
     const past = Math.max(to[0], ...shapes.map((sh) => sh.hi[0])) - at[0];
-    return { stops: [{ top: 'rail', at, r: 3, yaw: 0, shapes, land: [bar], rail: { shape: bar, to, out } }], extra: [], decor: d, reach: past + 6, window };
+    return { stops: [{ top: 'rail', at, r: 3, yaw: 0, shapes, land: [bar], rail: { shape: bar, to, out } }], extra: [], decor: d, reach: past + 6, wall: [window ?? (a[0] + b[0]) / 2] };
   }
   if (kind === 'konjac') {
     // a konjac jelly on its saucer, up on something: it throws you up
@@ -427,7 +428,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     kb.tack = 1.4; kb.tire = 0.6;
     const knives = [-2.5, 0, 2.5].map((dz, i) => cap([kb.c[0] - 1 + i, 26, kb.c[2] + dz], [kb.c[0] - 3 + i, 33, kb.c[2] + dz * 1.2], 0.9, MAT.chopstick));
     drawShapes([sill, kb, ...knives], d);
-    return { stops: [...p.stops, { top: 'goal', at: [GX, sillY + 7, BACK - 7], r: 5.5, yaw: 0, shapes: [basket, nap], land: [basket, nap] }], extra: [sill, kb, ...knives], decor: d, reach: 10, window: GX };
+    return { stops: [...p.stops, { top: 'goal', at: [GX, sillY + 7, BACK - 7], r: 5.5, yaw: 0, shapes: [basket, nap], land: [basket, nap] }], extra: [sill, kb, ...knives], decor: d, reach: 10, wall: [...p.wall!, GX] };
   }
   if (kind === 'sinkHome') {
     // the end, at the sink: across it, at the dishcloth hung over the window sill's edge toward the water; up
@@ -457,7 +458,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
       stops: [
         { top: 'sill', at: [BX - 10, SY, SZ], r: 4, box: [10, 4.2], yaw: 0, shapes: [sill, ...cloth.shapes], land: [sill, ...cloth.shapes], wall: cloth.shapes, wallAt: [BX - 12, (SY + hangTo) / 2, BACK - 12.8] },
         { top: 'goal', at: [GX, SY + 7, BACK - 7], r: 4.5, yaw: 0, shapes: [basket, nap], land: [basket, nap] },
-      ], extra: [...basin, ...tap], decor: d, reach: 10, hole: [BX - HX - 1, BX + HX + 1, BZ - HZ - 1, BZ + HZ + 1], window: BX + 6,
+      ], extra: [...basin, ...tap], decor: d, reach: 10, hole: [BX - HX - 1, BX + HX + 1, BZ - HZ - 1, BZ + HZ + 1], wall: [BX + 6],
     };
   }
   return null;
@@ -480,12 +481,14 @@ export function pieceAt(kind: Kind, x: number, z: number, seed: number): Piece |
 export type { Kind as PieceKind, Piece };
 
 /** Whether a piece stands clear of what's laid already (a hand's width between), and of the flights made sure of. */
-function clear(lv: Level, p: Piece, corridors: V3[][]): boolean {
+function clear(lv: Level, p: Piece, corridors: V3[][], solid: Set<Shape>): boolean {
   const mine = [...p.stops.flatMap((t) => t.shapes), ...p.extra];
   for (const s of mine) {
     for (const o of lv.shapes) {
       if (o === lv.shapes[0]) continue;
-      if (s.lo[0] - 5 < o.hi[0] && s.hi[0] + 5 > o.lo[0] && s.lo[2] - 5 < o.hi[2] && s.hi[2] + 5 > o.lo[2]) return false;
+      // (the kitchen's own things, over the counter and up the wall: clear of them all round, not only from above)
+      if (solid.has(o) ? s.lo[1] - 5 < o.hi[1] && s.hi[1] + 5 > o.lo[1] && s.lo[0] - 5 < o.hi[0] && s.hi[0] + 5 > o.lo[0] && s.lo[2] - 5 < o.hi[2] && s.hi[2] + 5 > o.lo[2]
+        : s.lo[0] - 5 < o.hi[0] && s.hi[0] + 5 > o.lo[0] && s.lo[2] - 5 < o.hi[2] && s.hi[2] + 5 > o.lo[2]) return false;
     }
     const m = RADIUS * 1.3;
     if (corridors.some((c) => c.some((q) => q[0] > s.lo[0] - m && q[0] < s.hi[0] + m && q[1] > s.lo[1] - m && q[1] < s.hi[1] + m && q[2] > s.lo[2] - m && q[2] < s.hi[2] + m))) return false;
@@ -493,9 +496,26 @@ function clear(lv: Level, p: Piece, corridors: V3[][]): boolean {
   return true;
 }
 
-/** Level n, from the stovetop on: a run of pieces along the counter, from a cloth to home. */
+/**
+ * Level n: a run of pieces along the counter, from a cloth to home. The kitchen round it is solid where it's
+ * over the counter (its wall cupboards, its windows' sills and their pots, the microwave, the fridge): each
+ * hop's made sure of with it there; if one laid before the room was all known doesn't hold once it is, laid
+ * again, afresh.
+ */
 export function buildKitchen(n: number): Level {
-  const r = seeded(hash(n, 0x6b17c4e));
+  let lv: Level | null = null;
+  for (let salt = 0; salt < 6; salt++) { const a = layLevel(n, salt); lv = a.lv; if (a.ok) break; }
+  return lv!;
+}
+/** The kitchen's solid things for a run, as shapes (the cupboards and the fridge, like the wall, can't be clung to). */
+function roomShapes(run: Run): Shape[] {
+  const { blocks, pots } = runSolids(run), out: Shape[] = [];
+  for (const b of blocks) { const s = box(b.c, b.h, 0, b.mat, 0.6); if (b.mat === MAT.cabinet || b.mat === MAT.fridge) s.tack = 0; out.push(s); }
+  for (const p of pots) out.push(cyl(p.x, p.z, p.r, p.y0, p.y1, MAT.terracotta, 0.7), cyl(p.x, p.z, p.r * 1.1, p.y1, p.top, MAT.plant, 0.9));
+  return out;
+}
+function layLevel(n: number, salt: number): { lv: Level; ok: boolean } {
+  const r = seeded(hash(n, 0x6b17c4e + salt * 0x9e37));
   const chapter = chapterOf(n), place = PLACE[chapter], i = Math.min(3, within(n));
   const stove = chapter === 'stove';
   const holes: Array<[number, number, number, number]> = [], windows: number[] = [];
@@ -520,7 +540,16 @@ export function buildKitchen(n: number): Level {
   const start = piece('cloth', 0, 22, r, n)!;
   add(start);
   append(lv.decor, start.decor);
-  const corridors: V3[][] = [];
+  const corridors: V3[][] = [], flown: V3[][][] = [];
+  // (the kitchen's solid things, as far as it's laid and on a way past it; laid again as it grows, and as a sill
+  // on the course takes a window's place)
+  const xa = Math.min(...start.stops.flatMap((t) => t.shapes).map((sh) => sh.lo[0])) - 40;
+  const solid = new Set<Shape>();
+  const furnish = (xb: number) => {
+    if (chapter === 'table') return;
+    lv.shapes = lv.shapes.filter((sh) => !solid.has(sh)); solid.clear();
+    for (const sh of roomShapes({ xa, xb, zf: -18, zb: BACK, yt: 0, g: lv.ground, avoid: windows })) { solid.add(sh); lv.shapes.push(sh); }
+  };
   // (a place's levels grow a piece longer each; past them, longer still)
   const count = chapter === 'mixed' ? 7 + Math.min(5, Math.floor((n - CHAPTER_AT.mixed) / 2)) : 5 + i;
   const hard = Math.min(1, (n - 1) / 18);
@@ -531,6 +560,7 @@ export function buildKitchen(n: number): Level {
   for (let b = 0; b < count; b++) {
     const goal = b === count - 1;
     let laid = false;
+    furnish(lv.towers[lv.towers.length - 1].at[0] + 250);
     for (let tries = 0; tries < 40 && !laid; tries++) {
       // (and if nothing will fit, a steamer close by, about as high, on something)
       const easy = tries >= 24;
@@ -546,24 +576,37 @@ export function buildKitchen(n: number): Level {
       // (home, and what's sure to fit when nothing else will: a steamer, on something)
       const sure = (top: Top, at: V3, rad: number): Piece => { const t = standOn(top, at, rad, 0, r, n); if (!t.on) onHob.add(t.stop); return { stops: [t.stop], extra: [], decor: t.decor, reach: rad + 2 }; };
       const p = goal && kind === 'stack' ? sure('goal', [x, Math.round(ramp(r, LOW + 3, LOW + 11)), z], 13) : easy ? sure('steamer', [x, y, z], 11) : piece(kind, x, z, r, n);
-      if (!p || !clear(lv, p, corridors)) continue;
+      if (!p) continue;
+      // (what it takes of the wall, the kitchen leaves it, before it's seen whether it fits; and has again if it doesn't)
+      const claims = p.wall ?? [], xb = prev.at[0] + 250;
+      const unclaim = () => { if (claims.length) { windows.length -= claims.length; furnish(xb); } };
+      if (claims.length) { windows.push(...claims); furnish(xb); }
+      if (!clear(lv, p, corridors, solid)) { unclaim(); continue; }
       const k0 = lv.towers.length;
       add(p);
       // (each hop into it and through it can be made; and the one before still can, with it stood by it)
       let ok = k0 < 2 || !!hop(lv, k0 - 2, k0 - 1);
       const flights: V3[][] = [];
-      for (let k = k0; ok && k < lv.towers.length; k++) { const h = hop(lv, k - 1, k); if (h) flights.push(...h.flights); else ok = false; }
-      if (!ok) { remove(p); continue; }
+      for (let k = k0; ok && k < lv.towers.length; k++) { const h = hop(lv, k - 1, k); if (h) { flights.push(...h.flights); flown[k] = h.flights; } else ok = false; }
+      if (!ok) { remove(p); unclaim(); continue; }
       corridors.push(...flights);
       append(lv.decor, p.decor);
       if (p.hole) holes.push(p.hole);
-      if (p.window !== undefined) windows.push(p.window);
       last = kind; reach = p.reach; laid = true;
       used.set(kind, (used.get(kind) ?? 0) + 1);
     }
   }
+  lv.shapes = lv.shapes.filter((sh) => !solid.has(sh));
   room(lv, chapter, holes, windows);
-  return lv;
+  // (and the kitchen as it is, all known now: each hop that flies near it still made, else laid afresh)
+  const k = lv.kitchen;
+  if (!k) return { lv, ok: true };
+  const final = roomShapes({ ...k, yt: 0, g: lv.ground });
+  lv.shapes.push(...final);
+  const m = RADIUS * 3;
+  const nearIt = (q: V3) => final.some((sh) => q[0] > sh.lo[0] - m && q[0] < sh.hi[0] + m && q[1] > sh.lo[1] - m && q[1] < sh.hi[1] + m && q[2] > sh.lo[2] - m && q[2] < sh.hi[2] + m);
+  for (let t = 1; t < lv.towers.length; t++) if (flown[t]?.some((f) => f.some(nearIt)) && !hop(lv, t - 1, t)) return { lv, ok: false };
+  return { lv, ok: true };
 }
 
 /**

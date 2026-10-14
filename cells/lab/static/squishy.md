@@ -367,6 +367,12 @@ a microwave on it, then a tall cream fridge, its freezer over it, long handles, 
 against the wall, a kitchen table with a gingham cloth, its chairs pulled up; underfoot, cream and
 sage checks. At the table, the same kitchen runs along the room's back wall (room.ts).
 
+What's over the counter is solid, as drawn (the same layout makes both): the wall cupboards stop a
+high arc and can't be clung to, nor the fridge; a window's sill can be landed on, among its pots, though
+it isn't a top (it's not where you start again from); the microwave, the hood. The aim's dots meet them
+as the dumpling does, and every hop's laid round them. Where the course has something of its own on the
+wall (a rail, a little oven, a towel's shelf, a sill), the kitchen leaves that stretch of wall to it.
+
 ## Drawing
 
 Light is worked in linear values: the scene's drawn into a multisampled target of its own, in half
