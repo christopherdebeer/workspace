@@ -10,7 +10,7 @@
  * the towers' are; if a jitter won't do, another is tried, and the set as drawn always does.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
-import { DUST, MAT, RADIUS, REST_H, aim, box, buildTowers, cap, chapterOf, cyl, hop, jelly, serviette, standing, tower, type Level, type Shape, type Tower, type V3 } from './level';
+import { DUST, MAT, box, buildTowers, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Level, type Shape, type Tower, type V3 } from './level';
 import { FEELS } from './jelly';
 import { buildKitchen } from './kitchen';
 import { box as drawBox, drawShapes, quad } from './mesh';
@@ -288,130 +288,98 @@ export function bench(name: string): Level {
 }
 
 /**
- * The Breakfast Counter: one place, not a run. A counter against a tiled wall, laid for breakfast,
- * and more than one way across it to home, a golden steamer on a tall tin by the wall, up where only
- * something already high can reach it. The counter's ground: miss, and you're on it, and go on from
- * there (nowhere on it reaches home, or the bread bin, straight).
+ * The Breakfast Counter: a place made of stations, things standing on the counter at their own sizes,
+ * each with a spot or two to land on, and between one and the next always a gap. There's no safe ground:
+ * the counter's well below every spot, and to touch it is to fall, back to the last spot you stood on.
  *
- * - Along the front, quick and risky: a baking tray buttered all along, to land on and slide down to
- *   its far lip (topspin carries you; land too hard and it throws you off the side), a stack of
- *   pancakes beside its far end, icing sugar on top that gives a buttered landing its grip back, then
- *   the bread bin, then home. Buttered, or sugared, honey won't hold you.
- * - Along the back, slower and sure: a konjac jelly to bounce up off, a stack of steamers, the bin.
- * - Through the middle, a gamble: the cereal box, tall, its top a narrow ledge; from it, or from the
- *   jelly or the steamers, the honey jar against the wall: splat into its honey, stick, and from up
- *   there home is one flick. Unless you came the buttered way.
- *
- * Every way it's meant to be gone is made sure of, as a run's hops are.
+ * From a tea towel folded on the toaster: either down to a roasting tray on a cooling rack, buttered
+ * (it slides), and up onto a konjac jelly on a cake tin (it throws you up); or across to the bread bin,
+ * enamel, sure. Both meet at a taller tin, its plate sticky with hundreds and thousands; then the
+ * tallest, a stack of pancakes on it, icing sugar on top; then the wall shelf, a jam jar on it to keep
+ * clear of; and home, the golden steamer, on the shelf above.
  */
-/**
- * Where a place's tiers leak: a top the counter reaches that's above the first tier (tried from all
- * over the counter's open ground), or a top reached from a tier two or more below it. Each as words;
- * none, and the tiers hold.
- */
-export function tierLeaks(lv: Level): string[] {
-  const out: string[] = [];
-  const tops = lv.towers.map((t, k) => ({ t, k })).filter(({ t }) => t.tier !== undefined);
-  // (the open ground: the counter's top, wherever nothing stands)
-  const ground: V3[] = [];
-  for (let x = -20; x <= 160; x += 10) for (let z = 4; z <= 60; z += 8) {
-    const p: V3 = [x, REST_H + 0.2, z];
-    if (lv.shapes.some((s) => s !== lv.shapes[0] && !(lv.walls ?? []).includes(s) && p[0] > s.lo[0] - RADIUS && p[0] < s.hi[0] + RADIUS && p[2] > s.lo[2] - RADIUS && p[2] < s.hi[2] + RADIUS)) continue;
-    ground.push(p);
-  }
-  for (const { t, k } of tops) if (t.tier! >= 2) for (const g of ground) if (aim(lv, g, k)) { out.push(`the counter at ${g[0]},${g[2]} reaches ${t.top} (tier ${t.tier})`); break; }
-  for (const a of tops) for (const b of tops) if (b.t.tier! >= a.t.tier! + 2 && aim(lv, standing(lv, a.k), b.k)) out.push(`${a.t.top} (tier ${a.t.tier}) reaches ${b.t.top} (tier ${b.t.tier})`);
-  return out;
-}
-export const BREAKFAST_WAYS: Array<[number, number]> = [[0, 1], [1, 2], [2, 3], [3, 8], [0, 4], [4, 5], [5, 3], [0, 6], [6, 7], [4, 7], [5, 7], [7, 3], [6, 3]];
+export const BREAKFAST_WAYS: Array<[number, number]> = [[0, 1], [1, 2], [2, 4], [0, 3], [3, 4], [4, 5], [5, 6], [6, 7]];
 function breakfast(): Level {
   const BACK = 66;
-  const lv: Level = { n: 0, chapter: 'counter', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -90, decor: [], floorMat: MAT.tiles };
+  // (the counter is the fall: anything that comes down on it has fallen)
+  const lv: Level = { n: 0, chapter: 'counter', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: 6, ground: -90, decor: [], floorMat: MAT.tiles };
   const free = (...ss: Shape[]) => { lv.shapes.push(...ss); drawShapes(ss, lv.decor); for (const s of ss) if (s.jel) lv.jellies!.push(s); };
   const prop = (p: Prop) => { lv.shapes.push(...p.shapes); lv.decor.push(...p.verts); return p; };
   const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) { lv.shapes.push(s); if (s.jel) lv.jellies!.push(s); } };
-  const one = () => 0.5;
 
-  // 0. the folded cloth it starts on, at the front
-  const pad = box([0, 0.5, 8], [8, 0.5, 7], 0, MAT.gingham, 0.9);
-  free(pad);
-  stop({ top: 'pad', at: [0, 1, 8], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pad] });
+  // 0. the toaster, a tea towel folded on top of it: where it starts
+  const toaster = box([0, 9.5, 22], [13, 9.5, 8], 0, MAT.steel, 0.6);
+  const pad = box([0, 19.5, 22], [8, 0.5, 6.5], 0, MAT.gingham, 0.9);
+  free(toaster, pad);
+  stop({ top: 'pad', at: [0, 20, 22], r: 6, box: [7.5, 6], yaw: 0, shapes: [toaster, pad], land: [pad] });
 
-  // 1. along the front, a baking tray, buttered all along its length, its lip all round
-  const T: V3 = [36, 0, 9];
-  const tray = box([T[0], 0.4, T[2]], [17, 0.4, 9], 0, MAT.pan, 0.6);
-  // (a roasting tray's: deep, so a slide stops against it rather than going over)
-  const lips = [box([T[0] - 17, 2.3, T[2]], [0.4, 1.9, 9], 0, MAT.pan, 0.6), box([T[0] + 17, 2.3, T[2]], [0.4, 1.9, 9], 0, MAT.pan, 0.6),
-    box([T[0], 2.3, T[2] - 9], [17, 1.9, 0.4], 0, MAT.pan, 0.6), box([T[0], 2.3, T[2] + 9], [17, 1.9, 0.4], 0, MAT.pan, 0.6)];
-  free(tray, ...lips);
-  const bt = prop(smear([T[0] - 13, 0.8, T[2]], [T[0] + 14, 0.8, T[2] + 1], 11, 71));
+  // 1. a roasting tray on a cooling rack on two tins, buttered all along: it slides, its deep lip stops you
+  const T: V3 = [34, 14, 12];
+  const legs = [-10, 10].map((dx) => cyl(T[0] + dx, T[2], 4, 0, T[1], MAT.tin));
+  const tray = box([T[0], T[1] + 0.4, T[2]], [15, 0.4, 8], 0, MAT.pan, 0.6);
+  const lips = [box([T[0] - 15, T[1] + 2.3, T[2]], [0.4, 1.9, 8], 0, MAT.pan, 0.6), box([T[0] + 15, T[1] + 2.3, T[2]], [0.4, 1.9, 8], 0, MAT.pan, 0.6),
+    box([T[0], T[1] + 2.3, T[2] - 8], [15, 1.9, 0.4], 0, MAT.pan, 0.6), box([T[0], T[1] + 2.3, T[2] + 8], [15, 1.9, 0.4], 0, MAT.pan, 0.6)];
+  free(...legs, tray, ...lips);
+  const bt = prop(smear([T[0] - 11, T[1] + 0.8, T[2]], [T[0] + 12, T[1] + 0.8, T[2] + 1], 10, 71));
   for (const s of bt.shapes) { s.tack = 0; s.dust = DUST.butter; }
-  stop({ top: 'tray', at: [T[0], 0.8, T[2]], r: 9, box: [15.5, 7.5], yaw: 0, shapes: [tray, ...lips, ...bt.shapes], land: [tray, ...bt.shapes] });
+  stop({ top: 'tray', at: [T[0], T[1] + 0.8, T[2]], r: 8, box: [13.5, 6.5], yaw: 0, shapes: [tray, ...lips, ...bt.shapes], land: [tray, ...bt.shapes] });
 
-  // ─── the first tier: what the counter reaches ───
-  // 2. a tall stack of pancakes on a plate, beside the tray's far end
-  const P: V3 = [66, 0, 11];
-  const plate = cyl(P[0], P[2], 11, 0, 0.8, MAT.porcelain, 0.5);
-  const cakes = [0, 1, 2, 3, 4, 5, 6].map((i) => cyl(P[0] + Math.sin(i * 2.3) * 0.5, P[2] + Math.cos(i * 1.7) * 0.5, 8.5 - (i % 2) * 0.4, 0.8 + i * 2.2, 0.8 + (i + 1) * 2.2, MAT.bread, 0.9));
-  // (icing sugar on top: it dusts what lands in it as flour does, so a buttered landing gets its grip back; and,
-  // dry, it holds to honey no better than butter did)
-  cakes[6].dust = DUST.flour;
-  free(plate, ...cakes);
-  stop({ top: 'pancakes', at: [P[0], 16.2, P[2]], r: 7, yaw: 0, shapes: [plate, ...cakes], land: [cakes[6]], tier: 1 });
+  // 2. a konjac jelly on a saucer, on a cake tin: it throws you up
+  const K: V3 = [64, 0, 24];
+  const tinK = cyl(K[0], K[2], 11, 0, 16, MAT.tin);
+  const saucer = cyl(K[0], K[2], 12, 16, 16.8, MAT.porcelain, 0.5);
+  const kj = jelly(K[0], K[2], 9, 16.8, 24.8, MAT.konjac, FEELS.konjac);
+  free(tinK, saucer, kj);
+  stop({ top: 'jelly', at: [K[0], 24.8, K[2]], r: 7, yaw: 0, shapes: [tinK, saucer, kj], land: [kj] });
 
-  // ─── the second tier: out of the counter's reach (higher than any flick from it goes), reached from the first ───
-  // 3. the bread bin, up on a big cake tin: the hub of the ways
-  const B: V3 = [118, 0, 26];
-  const cakeTin = cyl(B[0], B[2], 15, 0, 30, MAT.tin);
-  const bin = box([B[0], 39, B[2]], [13, 9, 12], 0, MAT.enamel, 0.75);
-  free(cakeTin, bin);
-  stop({ top: 'bin', at: [B[0], 48, B[2]], r: 9, box: [12, 11], yaw: 0, shapes: [cakeTin, bin], land: [bin], tier: 2 });
+  // 3. across from the toaster, the bread bin: enamel, sure
+  const B: V3 = [36, 0, 50];
+  const bin = box([B[0], 15, B[2]], [13, 15, 11], 0, MAT.enamel, 0.75);
+  free(bin);
+  stop({ top: 'bin', at: [B[0], 30, B[2]], r: 9, box: [12, 10], yaw: 0, shapes: [bin] });
 
-  // 4. along the back: a konjac jelly on a saucer up on a tin, to bounce up off (first tier)
-  const K: V3 = [20, 0, 44];
-  const stand = cyl(K[0], K[2], 6, 0, 10, MAT.tin);
-  const saucer = cyl(K[0], K[2], 12, 10, 10.8, MAT.porcelain, 0.5);
-  const kj = jelly(K[0], K[2], 9, 10.8, 18.8, MAT.konjac, FEELS.konjac);
-  free(stand, saucer, kj);
-  stop({ top: 'jelly', at: [K[0], 18.8, K[2]], r: 7, yaw: 0, shapes: [stand, saucer, kj], land: [kj], tier: 1 });
+  // 4. a taller tin, a plate on it sticky with hundreds and thousands: where the two ways meet
+  const S: V3 = [92, 0, 40];
+  const tinS = cyl(S[0], S[2], 9, 0, 34, MAT.tin);
+  const plateS = cyl(S[0], S[2], 11, 34, 35, MAT.porcelain, 0.6);
+  plateS.dust = DUST.sprinkles;
+  free(tinS, plateS);
+  stop({ top: 'stand', at: [S[0], 35, S[2]], r: 9, yaw: 0, shapes: [tinS, plateS], land: [plateS] });
 
-  // 5. a tall stack of steamers (second tier)
-  const S = tower('steamer', [58, 46, 50], 8, 0, one);
-  S.tier = 2;
-  drawShapes(S.shapes, lv.decor);
-  stop(S);
+  // 5. the tallest tin, a stack of pancakes on it, icing sugar on top
+  const P: V3 = [116, 0, 50];
+  const tinP = cyl(P[0], P[2], 8, 0, 38, MAT.tin);
+  const plateP = cyl(P[0], P[2], 10, 38, 38.8, MAT.porcelain, 0.5);
+  const cakes = [0, 1, 2, 3].map((i) => cyl(P[0] + Math.sin(i * 2.3) * 0.4, P[2] + Math.cos(i * 1.7) * 0.4, 8.5 - (i % 2) * 0.4, 38.8 + i * 2.2, 38.8 + (i + 1) * 2.2, MAT.bread, 0.9));
+  cakes[3].dust = DUST.flour;
+  free(tinP, plateP, ...cakes);
+  stop({ top: 'pancakes', at: [P[0], 47.6, P[2]], r: 7, yaw: 0, shapes: [tinP, plateP, ...cakes], land: [cakes[3]] });
 
-  // 6. in the middle, the cereal box: its top a narrow ledge (first tier, the highest of it)
-  const C: V3 = [44, 0, 27];
-  const cereal = box([C[0], 11, C[2]], [9, 11, 4.5], 0.15, MAT.floral, 0.85);
-  free(cereal);
-  stop({ top: 'cereal', at: [C[0], 22, C[2]], r: 3.5, box: [8, 3.5], yaw: 0.15, shapes: [cereal], tier: 1 });
+  // 6. the wall shelf, a jam jar on it toward its far end
+  const SH: V3 = [150, 56, BACK - 6];
+  const shelf = box([SH[0], SH[1] - 1, SH[2]], [18, 1, 6], 0, MAT.board, 0.85);
+  const brk = [-13, 13].map((dx) => box([SH[0] + dx, SH[1] - 6, BACK - 5], [0.6, 4, 5], 0, MAT.board, 0.8));
+  const jam = cyl(SH[0] + 11, SH[2], 3.5, SH[1], SH[1] + 9, MAT.jar);
+  free(shelf, ...brk, jam);
+  stop({ top: 'shelf', at: [SH[0] - 4, SH[1], SH[2]], r: 4, box: [12, 4.5], yaw: 0, shapes: [shelf, ...brk, jam], land: [shelf] });
 
-  // 7. the honey jar against the wall, high on its stand: land against its honey, and stick (second tier)
-  const H = tower('honey', [100, 58, 47], 8.5, 0, one);
-  H.tier = 2;
-  drawShapes(H.shapes, lv.decor);
-  stop(H);
-
-  // ─── home: on a shelf on the wall, out of the first tier's reach, reached from the second ───
-  // 8. the golden steamer on the shelf
-  const G: V3 = [146, 72, 59];
-  const shelf = box([G[0], G[1] - 1, BACK - 6], [16, 1, 6], 0, MAT.board, 0.85);
-  const brackets = [-11, 11].map((dx) => box([G[0] + dx, G[1] - 6, BACK - 5], [0.6, 4, 5], 0, MAT.board, 0.8));
+  // 7. home: the golden steamer on the shelf above, along from it (not over it: nothing overhangs the way)
+  const G: V3 = [190, 74, BACK - 7];
+  const shelf2 = box([G[0], G[1] - 1, BACK - 6], [14, 1, 6], 0, MAT.board, 0.85);
+  const brk2 = [-9, 9].map((dx) => box([G[0] + dx, G[1] - 6, BACK - 5], [0.6, 4, 5], 0, MAT.board, 0.8));
   const goal = cyl(G[0], G[2], 7.5, G[1], G[1] + 7, MAT.gold);
   // (no rim to catch you: come in badly and you're off the far side; only its serviette marks it)
   const nap = serviette(G[0], G[1] + 7, G[2], 7.5);
-  free(shelf, ...brackets);
+  free(shelf2, ...brk2);
   drawShapes([goal, nap], lv.decor);
-  stop({ top: 'goal', at: [G[0], G[1] + 7, G[2]], r: 6.5, yaw: 0, shapes: [goal, nap], land: [goal, nap], tier: 3 });
-  lv.towers[0].tier = 0; lv.towers[1].tier = 1;
+  stop({ top: 'goal', at: [G[0], G[1] + 7, G[2]], r: 6.5, yaw: 0, shapes: [goal, nap], land: [goal, nap] });
 
-  lv.next = [1, 2, 3, 8, 5, 3, 7, 3, 8];
-  lv.route = [0, 1, 2, 3, 8];
+  lv.next = [1, 2, 4, 4, 5, 6, 7, 7];
+  lv.route = [0, 1, 2, 4, 5, 6, 7];
 
-  // about it: a milk jug, a toast rack, a crock of spoons (none in the ways)
-  const jug = cyl(-14, BACK - 14, 5.5, 0, 16, MAT.porcelain, 0.5);
-  const crock = cyl(150, 22, 6, 0, 17, MAT.jar);
+  // about it: a milk jug, a crock of spoons (none in the ways)
+  const jug = cyl(-24, BACK - 14, 5.5, 0, 16, MAT.porcelain, 0.5);
+  const crock = cyl(206, 24, 6, 0, 17, MAT.jar);
   const spoons = [[-4, 2], [3, 3], [1, -4]].map(([dx, dz]) => cap([crock.c[0] + dx * 0.4, 14, crock.c[2] + dz * 0.4], [crock.c[0] + dx, 33, crock.c[2] + dz], 0.7, MAT.board));
   free(jug, crock, ...spoons);
 

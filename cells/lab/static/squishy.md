@@ -122,31 +122,24 @@ sill. The second time the rack and the sill are higher and the dishcloth shorter
 
 ## The Breakfast Counter
 
-`?bench=breakfast`: one place, not a run, to try whether the things the dumpling already does make
-for choices. A counter against the tiled wall, laid for breakfast, and the counter's ground: miss,
-and you're on it, and go on from where you are. But it's laid in tiers, so going along the counter
-gets you nowhere much:
+`?bench=breakfast`: a place made of stations. There's no safe ground in it: every spot is well
+above the counter, and the counter is the fall (touch it and you're back on the last spot you stood
+on). Each station is a thing standing on the counter at its own size, with a spot to land on; between
+one and the next there's always a gap.
 
-- **The first tier**, what the counter reaches: the buttered roasting tray, a tall stack of pancakes
-  (icing sugar on top, which gives a buttered landing its grip back), a konjac jelly up on a tin, the
-  cereal box's narrow ledge.
-- **The second tier**, higher than any flick from the counter goes, reached only from the first: the
-  bread bin up on a big cake tin, a tall stack of steamers, the honey jar high on its stand (splat into
-  its honey and stick; not if you're buttered, or sugared).
-- **Home**, on a shelf on the wall, out of the first tier's reach, reached from the second (from the
-  bin; from the steamers, a long one). No rim on it to catch you: come in badly and you go off.
+From a tea towel folded on the toaster, two ways: down to a roasting tray on a cooling rack, buttered
+all along (it slides; its deep lip stops you), then up onto a konjac jelly on a cake tin (it throws you
+up); or across to the bread bin, enamel, sure. They meet at a taller tin, its plate sticky with hundreds
+and thousands; then the tallest, a stack of pancakes on it with icing sugar on top (which gives a
+buttered landing its grip back); then the wall shelf, a jam jar on it to keep clear of; and home, the
+golden steamer, on the shelf above and along (nothing overhangs the way). No rim on home: come in badly
+and you go off.
 
-So the ways: along the front, the tray, the pancakes, the bin, home (quick, slippery); along the back,
-the konjac, the steamers, the bin, home; through the middle, the cereal box, the honey, the bin, home.
-Every way it's meant to be gone is made sure of (`hop`), and the tiers are too (`tierLeaks`: from all
-over the counter's open ground, nothing above the first tier is reached; no top reaches two tiers up).
-Played through, the jelly gets home every way; the dough, heavier and deader, finds the bigger steps
-hard, overshooting off the konjac.
-
-There's no count of tops here, only the clock; home, it says the way you came, and keeps it, and the
-panel at the top left shows the last few ways taken and how long each took (tap it to fold it). A place
-says, for each top, which to make for next (for the camera's look ahead and for playing itself), and the
-way the opening view goes over it.
+Every way is made sure of (`hop`, from each spot to each it leads to), and played through: both
+dumplings get home both ways. There's no count of spots here, only the clock; home, it says the way you
+came, and keeps it, and the panel at the top left shows the last few ways taken and how long each took
+(tap it to fold it). A place says, for each spot, which to make for next (for the camera's look ahead
+and for playing itself), and the way the opening view goes over it.
 
 ## The tops
 
