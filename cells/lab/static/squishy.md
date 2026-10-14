@@ -68,6 +68,16 @@ it (a mantle). The arc shows that too, up the wall and over to where it'll land,
 yours to judge: too soft and it slides back down to where it was; too hard and it goes over and
 off the far side.
 
+## Hung from a rail
+
+Some things are hung from, not landed on: a steel rail on the wall for the utensils (a ladle and a whisk
+on hooks at its near end), a window's sill, low on the wall, its rounded lip, a little oven's door
+handle on the counter. Fly at one and you catch it, and hang (dough droops more than jelly). Then prod
+your way along it: a tap on the dumpling shimmies it a hand's width along, away from the side you
+tapped; a push along it, further, the harder you push. It stops short of either end, never off it.
+From its far end, flick off on to the next spot; anywhere along it, you can. Buttered, you can't hold
+on. Fall after you've caught one and you're put back hanging from it where you caught it.
+
 Fall and it's a splat, and back to the last spot you stood on. There's no safe ground anywhere:
 every place is made of stations, things standing at their own sizes with a spot or two up on each,
 and the table's or the counter's top beneath them is the fall, as the sink's water is. The clock runs
@@ -328,6 +338,17 @@ crawl down it); a small lean it leaves alone. Sat still, it shuffles round to lo
 
 The face is drawn on its rest shape, so it turns, squashes and stretches with it: round eyes
 with a shine that blink, red cheeks, squeeze shut `> <` while you wind up, an `o` in the air, a happy `^ ^` at home.
+
+## The kitchen round it
+
+The course is on a counter in a kitchen, not in an empty room. Under the counter, sage-painted
+cupboards to the floor, a drawer over each door, shaker panels, bar handles, the kick board; over it,
+on the tiled wall, wall cupboards with tall windows between them, each with its sill and herbs in
+terracotta pots. At one end of the run, a range: its hob's four burners, its oven door with a window
+in it and a handle across, a row of knobs, a hood up the wall; at the other, the counter runs on with
+a microwave on it, then a tall cream fridge, its freezer over it, long handles, magnets. Behind you,
+against the wall, a kitchen table with a gingham cloth, its chairs pulled up; underfoot, cream and
+sage checks. At the table, the same kitchen runs along the room's back wall (room.ts).
 
 ## Drawing
 

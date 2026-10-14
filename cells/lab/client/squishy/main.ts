@@ -16,8 +16,9 @@
  * the hands, and the sounds.
  */
 import { hash, seeded } from '../kit/rng';
-import { Dumpling, ROLL_MAX, ROLL_MIN, rollReach, type Kind } from './body';
-import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, carried, chapterOf, nextTop, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { Dumpling, ROLL_MAX, ROLL_MIN, railAxis, rollReach, type Kind } from './body';
+import { kitchenRun, tableSet } from './room';
+import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, carried, chapterOf, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -497,6 +498,27 @@ void main() {
       base = vec3(.02, .008, .03) * (.9 + .2 * noise(vWorld * 5.));
       rough = mix(.12, .45, smoothstep(.4, .7, noise(vWorld * 3. + 2.))); coat = .9; coatRough = .05;
     }
+  } else if (id == ${MAT.cabinet}) {
+    // the cupboards: painted wood, a soft sage, satin, the brush's grain faint in it, up the doors
+    float br = noise(vec3(vWorld.x * .08, vWorld.y * 1.6, vWorld.z * .08)) * fine1;
+    base = vec3(.36, .5, .38) * (.95 + .08 * br);
+    relief = br * .006; rough = .45; coat = .25; coatRough = .2; coatSpec = .03;
+  } else if (id == ${MAT.fridge}) {
+    // a fridge, a range, a microwave: cream enamel, glossy, a little warm
+    base = vec3(.86, .78, .6); rough = .3; coat = .8; coatRough = .06; coatSpec = .2;
+  } else if (id == ${MAT.floor}) {
+    // the floor: cream and sage checks, glazed, the grout between them
+    vec2 q = uv / 30.;
+    float ch = mod(floor(q.x) + floor(q.y), 2.);
+    vec2 f = abs(fract(q) - .5);
+    float grout = smoothstep(.47, .49, max(f.x, f.y)) * fine1;
+    base = mix(vec3(.86, .8, .66), vec3(.42, .55, .44), ch) * (1. - .25 * grout);
+    relief = -grout * .02; rough = .35; coat = .35; coatRough = .1; coatSpec = .04;
+  } else if (id == ${MAT.plant}) {
+    // herbs: leafy green, lighter at their tips
+    base = mix(vec3(.08, .22, .05), vec3(.2, .42, .1), noise(vWorld * 2.)); rough = .6; emit = .1;
+  } else if (id == ${MAT.terracotta}) {
+    base = vec3(.55, .22, .1) * (.9 + .2 * noise(vWorld * 3.)); rough = .85;
   } else if (id == ${MAT.bread}) {
     // bread, baked: its crust golden, deepest on its crown where the heat was, paler down its side and at its foot,
     // finely crackled; and by which bread (its material's fraction): a boule, cross-cut, floured in the rings of the
@@ -1654,7 +1676,7 @@ function startLevel(n: number, quiet = false) {
   showTitle();
   if (benchName === 'breakfast') { hint('the breakfast counter: home is the golden steamer, up high. more than one way there: find yours', 7000); benchPanel(); return; }
   if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : benchName === 'look' ? 'a still life, to judge the light by' : benchName === 'supports' ? 'what things stand on: a stool, a cake stand, a board on jars, a crate, cookbooks, a bowl upturned, a tiered stand, a cooling rack' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
-  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.counter + 1 ? 'a rail: fly at it and you hang on. tap the dumpling to shimmy along; flick off at the end' : levelN === CHAPTER_AT.counter + 2 ? 'a sill\'s lip holds you too: catch it, shimmy along, flick off' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim; hang from the oven\'s handle' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -1665,7 +1687,7 @@ function room(lv: Level): number[] {
   const m = lv.chapter === 'table' ? 150 : 220, g = lv.ground;
   x0 -= m; x1 += m; z0 -= m; z1 += m;
   const H = top + 260 - g;
-  const wall = (a: V3, b: V3, n: V3) => {
+  const wall = (a: V3, b: V3, n: V3, windows = true) => {
     const d = sub(b, a), L = Math.hypot(d[0], d[2]), t = mul(d, 1 / L);
     const P = (s: number, y: number): V3 => add(add(a, mul(t, s)), [0, y, 0]);
     const q = (A: V3, B: V3, C: V3, D: V3, mat: number, ua: [number, number], ub: [number, number], uc: [number, number], ud: [number, number]) => {
@@ -1675,19 +1697,31 @@ function room(lv: Level): number[] {
     // windows, every so far, their panes a little in front
     // (their sills a little above the counter, or the table)
     const w0 = lv.chapter === 'table' ? 85 : 60, w1 = w0 + 140;
-    for (let s = 120; s + 90 < L - 60; s += 260) {
+    for (let s = 120; windows && s + 90 < L - 60; s += 260) {
       const o = mul(n, 0.5);
       q(add(P(s, w0), o), add(P(s, w1), o), add(P(s + 90, w1), o), add(P(s + 90, w0), o), 12, [0, 0], [0, 1], [1, 1], [1, 0]);
     }
   };
   wall([x0, g, z0], [x1, g, z0], [0, 0, 1]);
   wall([x1, g, z0], [x1, g, z1], [-1, 0, 0]);
-  wall([x1, g, z1], [x0, g, z1], [0, 0, -1]);
+  // (at the table, the kitchen's run along the back wall, its own windows)
+  wall([x1, g, z1], [x0, g, z1], [0, 0, -1], lv.chapter !== 'table');
   wall([x0, g, z1], [x0, g, z0], [1, 0, 0]);
   // the counter (or the floor, under a table), to the walls
   const n: V3 = [0, 1, 0];
   const floor = lv.floorMat ?? (lv.chapter === 'counter' || lv.chapter === 'table' ? MAT.counter : MAT.hob);
   for (const [p, uv] of [[[x0, g, z0], [x0, z0]], [[x0, g, z1], [x0, z1]], [[x1, g, z1], [x1, z1]], [[x0, g, z0], [x0, z0]], [[x1, g, z1], [x1, z1]], [[x1, g, z0], [x1, z0]]] as Array<[V3, [number, number]]>) out.push(p[0], p[1], p[2], n[0], n[1], n[2], floor, uv[0], uv[1]);
+  // the kitchen: along the counter the course is on, its cupboards, windows, range and fridge, and a table out in the
+  // room behind you; at the table, the run along the back wall
+  const k = lv.kitchen;
+  if (k) {
+    kitchenRun(out, { ...k, yt: 0, g });
+    // (against the wall behind you, its chairs toward the counter, well clear of it)
+    tableSet(out, (k.xa + k.xb) / 2 - 40, z0 + 44, g, 'front');
+  } else if (lv.chapter === 'table') {
+    const xm = (x0 + x1) / 2;
+    kitchenRun(out, { xa: xm - 130, xb: xm + 130, zf: z1 - 62, zb: z1, yt: g + 90, g, avoid: [], top: MAT.counter });
+  }
   return out;
 }
 
@@ -1747,7 +1781,10 @@ function release() {
   const push = pushAt(pull.x, pull.y);
   if (push) {
     pull = null; aimNow = null; pushNow = null; body.squeeze = null;
-    if (home < 0 && fallenAt < 0 && body.canFlick) { body.roll(push.dir, push.v); userCam = false; pop(0.25 + push.power * 0.3); }
+    // (hanging from a rail: a push along it shimmies it that way, the further the harder)
+    const rl = body.onRail;
+    if (rl && home < 0 && fallenAt < 0) { const ax = railAxis(rl); body.shimmy(Math.sign(push.dir[0] * ax[0] + push.dir[2] * ax[2]) || 1, 1 + 2 * push.power); pop(0.2); }
+    else if (home < 0 && fallenAt < 0 && body.canFlick) { body.roll(push.dir, push.v); userCam = false; pop(0.25 + push.power * 0.3); }
     return;
   }
   let a = aimAt(pull.x, pull.y), spin = 0;
@@ -3113,8 +3150,7 @@ function tick(dt: number) {
   }
   if (fallenAt >= 0) {
     if (simTime > fallenAt + 0.7) {
-      const at = lv.towers[check].at;
-      body.place([at[0], at[1] + REST_H + 2, at[2]]);
+      body.place(respawnAt(lv, check));
       prevX = new Float32Array(body.x);
       fallenAt = -1;
       pop(0.6);
@@ -3140,7 +3176,7 @@ function tick(dt: number) {
     lidWas[i] = on ? k : -1;
   });
   const k = towerAt(lv, body.com, 1);
-  const speed = len(body.vcom);
+  const speed = body.moving;
   if (k >= 0 && body.contacts > 0 && speed < 30) { check = k; if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
   // (sat still: not drifting, and touching, or only a moment off it, trembling on a jelly)
@@ -3188,7 +3224,8 @@ function tick(dt: number) {
     if (still > 0.5 && body.canFlick && at >= 0 && at < lv.towers.length - 1 && simTime - aimedAt > 0.2) {
       aimedAt = simTime;
       const a = autoFlick(lv, body.com, at, simTime, body.coated[DUST.butter], body.clinging ? body.wallN : null);
-      if (a) doFlick(a.climb ? climbLaunch(a.power) : launch(a.yaw, a.power), 0, a.climb);
+      if (a?.shimmy) body.shimmy(a.shimmy);
+      else if (a) doFlick(a.climb ? climbLaunch(a.power) : launch(a.yaw, a.power), 0, a.climb);
     }
   }
 }

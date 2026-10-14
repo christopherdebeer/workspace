@@ -40,6 +40,8 @@ export const MAT = {
   book: 45,
   // (on a pudding's top: a raspberry, a strawberry, a blackcurrant (its kind in the hundredths))
   berry: 46,
+  // (the kitchen round it: painted cupboards, a cream fridge and range, the floor's checks, herbs in terracotta pots)
+  cabinet: 47, fridge: 48, floor: 49, plant: 50, terracotta: 51,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -120,10 +122,13 @@ export interface Shape {
   hi: V3;
   /** met, but drawn by what it's part of (a crate's slats over its solid sides), not as itself */
   ghost?: boolean;
+  /** a capsule to hang from (a rail, a handle, a sill's lip): what touches it is held, as honey holds, and slides along
+   * it when it's prodded (see body.ts's `shimmy`) */
+  rail?: boolean;
 }
 export type Top = 'start' | 'steamer' | 'plate' | 'board' | 'pudding' | 'susan' | 'tin' | 'goal' | 'butter' | 'honey' | 'lid' | 'pan'
   | 'pad' | 'spoon' | 'bench' | 'paddle' | 'tilt'
-  | 'boule' | 'tray' | 'stand' | 'bin' | 'block' | 'shelf' | 'sill' | 'jelly'
+  | 'boule' | 'tray' | 'stand' | 'bin' | 'block' | 'shelf' | 'sill' | 'jelly' | 'rail'
   | 'sponge' | 'soap' | 'drainer' | 'rack'
   | 'pancakes' | 'cereal';
 export interface Tower {
@@ -149,6 +154,11 @@ export interface Tower {
    */
   wall?: Shape[];
   wallAt?: V3;
+  /**
+   * hung from: a rail (a handle, a sill's lip) caught from the air, anywhere along its first part, and shimmied along
+   * to its far end (`to`, where it hangs from to let go), on the side `out` (level, away from what it's on)
+   */
+  rail?: { shape: Shape; to: V3; out: V3 };
 }
 export interface Level {
   n: number;
@@ -173,6 +183,8 @@ export interface Level {
   floorMat?: number;
   /** the room's walls, which the camera stays on this side of */
   walls?: Shape[];
+  /** the counter the course is on, for the kitchen drawn round it (room.ts): from xa to xb, its front at zf, the wall at zb; where windows are already */
+  kitchen?: { xa: number; xb: number; zf: number; zb: number; avoid: number[] };
   /**
    * A place, not a run (one with more than one way through it): from each top, which to make for
    * next (for the camera's look ahead, and playing itself); and the way the opening view goes over it.
@@ -670,6 +682,13 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
   if (lv.movers.length) moveShapes(lv, t0);
   near(lv, from, R + 0.5, ns);
   for (const s of ns) if (touch(s, from[0], from[1], from[2], R + 0.5, o) && o.d > 0 && vel[0] * o.nx + vel[1] * o.ny + vel[2] * o.nz > 0) leaving.push(s);
+  // (a rail it's hanging from: let go of, it's not a hit as it leaves, whichever way it goes)
+  near(lv, from, RAIL_NEAR + 1, ns);
+  if (ns.some((s) => s.rail && railDist(s, from).d < RAIL_NEAR + 1)) {
+    // (and what it hangs against as it hangs there, the sill's face, the oven's door: it pushes off it)
+    near(lv, from, R + 1.5, ns);
+    for (const s of ns) if (s.rail || touch(s, from[0], from[1], from[2], R + 1.5, o)) leaving.push(s);
+  }
   for (let i = 0, t = 0; t < max; i++, t += h) {
     vy -= G * h;
     x += vx * h; y += vy * h; z += vz * h;
@@ -711,6 +730,8 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
 /** Whether a point is on a tower's top: within its landing reach, and resting on it (not below). */
 export function onTop(tw: Tower, p: V3, slack = 0): boolean {
   const dx = p[0] - tw.at[0], dz = p[2] - tw.at[2];
+  // (hanging from a rail: by it, anywhere along it)
+  if (tw.rail) return railDist(tw.rail.shape, p).d < RAIL_NEAR + slack;
   if (tw.jar) {
     // (against the honey on the jar's side, within its band)
     const d = Math.hypot(p[0] - tw.jar.c[0], p[2] - tw.jar.c[2]) - tw.jar.r;
@@ -736,6 +757,21 @@ export function carried(lv: Level, p: V3): V3 {
   return [s.spin * dz, 0, -s.spin * dx];
 }
 /** The tower whose top a point is on, or -1. */
+/** how near a rail its middle is when it hangs from it (cm), how far below it and out from it, and how far along a rail
+ * (of it) a catch counts: the rest is to shimmy along */
+const RAIL_NEAR = RADIUS * 1.8, RAIL_BELOW = 2.5, RAIL_OUT = 2, RAIL_CATCH = 0.7;
+/** How far a point is from a rail (cm), and how far along it it is (of it, 0–1). */
+export function railDist(r: Shape, p: V3): { d: number; f: number } {
+  const ax = r.b[0] - r.c[0], ay = r.b[1] - r.c[1], az = r.b[2] - r.c[2], L2 = ax * ax + ay * ay + az * az || 1;
+  const f = Math.max(0, Math.min(1, ((p[0] - r.c[0]) * ax + (p[1] - r.c[1]) * ay + (p[2] - r.c[2]) * az) / L2));
+  return { d: Math.hypot(p[0] - r.c[0] - ax * f, p[1] - r.c[1] - ay * f, p[2] - r.c[2] - az * f), f };
+}
+/** A rail: a capsule from a to b, r thick, of mat, to hang from (it holds as honey does; see body.ts). */
+export function rail(a: V3, b: V3, r: number, mat: number): Shape {
+  const s = cap(a, b, r, mat, 0.7);
+  s.rail = true; s.tack = 3; s.tire = 0;
+  return s;
+}
 export function towerAt(lv: Level, p: V3, slack = 0): number {
   for (let i = lv.towers.length - 1; i >= 0; i--) if (onTop(lv.towers[i], p, slack)) return i;
   return -1;
@@ -752,7 +788,8 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
     const pa = path(lv, from, launch(yaw, p), 3, t);
     // (on its top; or, for honey, against the honey, which holds)
     // (a touch as it leaves, on what it's leaving, isn't a landing)
-    const ok = pa.hit && pa.t > 0.06 && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5);
+    // (a rail: caught anywhere along its first part, from any side)
+    const ok = pa.hit && pa.t > 0.06 && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.rail ? pa.hit.shape === tw.rail.shape && railDist(tw.rail.shape, pa.hit.p).f < RAIL_CATCH : (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5));
     if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) break;
   }
   // (a little short of the middle of the band: it carries on a little after it lands)
@@ -765,7 +802,13 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
  */
 /** which top to make for next from top k: the place's own say, or, on a run, the one after */
 export function nextTop(lv: Level, k: number): number { return Math.min(lv.towers.length - 1, Math.max(0, lv.next ? lv.next[k] ?? k + 1 : k + 1)); }
-export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cling: V3 | null = null): { yaw: number; power: number; climb?: V3 } | null {
+export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cling: V3 | null = null): { yaw: number; power: number; climb?: V3; shimmy?: number } | null {
+  // (hanging from a rail, short of its far end: along it, first)
+  const rl = lv.towers[at]?.rail;
+  if (rl && onTop(lv.towers[at], from)) {
+    const L = Math.hypot(rl.shape.b[0] - rl.shape.c[0], rl.shape.b[1] - rl.shape.c[1], rl.shape.b[2] - rl.shape.c[2]);
+    if ((railDist(rl.shape, rl.to).f - railDist(rl.shape, from).f) * L > 1.5) return { yaw: 0, power: 0, shimmy: 1 };
+  }
   // (buttered, a jar's honey won't hold it: wait for the butter to wear off first)
   const n1 = nextTop(lv, at), n2 = nextTop(lv, n1);
   if (butter > 0.04 && lv.towers[n1]?.jar && lv.towers[at].top !== 'butter') return null;
@@ -780,7 +823,8 @@ export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cl
     const w = aimWall(lv, from, n1, t);
     if (w) return { yaw: w.yaw, power: w.power };
   }
-  const tries = [n1, lv.towers[at].jar ? -1 : at, n2].filter((k) => k >= 0 && k < lv.towers.length);
+  // (not back to a jar's side, nor back onto a rail it's hanging from)
+  const tries = [n1, lv.towers[at].jar || lv.towers[at].rail ? -1 : at, n2].filter((k) => k >= 0 && k < lv.towers.length);
   for (const k of tries) {
     const a = aim(lv, from, k, t);
     if (a) return rattles(k, t + path(lv, from, launch(a.yaw, a.power), 3, t).t) ? null : a;
@@ -845,9 +889,17 @@ function inside(s: Shape, p: V3, margin: number): boolean {
   }
   return true;
 }
+/** Where it's put back after a fall to tower k: just over its top; or, a rail, hanging from it where it's caught. */
+export function respawnAt(lv: Level, k: number): V3 {
+  const tw = lv.towers[k];
+  if (tw.rail) { const o = tw.rail.out; return [tw.at[0] + o[0] * RAIL_OUT, tw.at[1] - RAIL_BELOW, tw.at[2] + o[2] * RAIL_OUT]; }
+  return [tw.at[0], tw.at[1] + REST_H + 2, tw.at[2]];
+}
 /** Where the dumpling's middle is, sat on tower j at a time (on a lid, it rides with it). */
 export function standing(lv: Level, j: number, t = 0): V3 {
   const tw = lv.towers[j];
+  // (hanging from a rail: at its far end, below it and out from it)
+  if (tw.rail) { const o = tw.rail.out; return [tw.rail.to[0] + o[0] * RAIL_OUT, tw.rail.to[1] - RAIL_BELOW, tw.rail.to[2] + o[2] * RAIL_OUT]; }
   const l = tw.land?.[0];
   if (!l?.lift) return [tw.at[0], tw.at[1] + REST_H, tw.at[2]];
   return [tw.at[0], l.lift!.y0 + l.hh + l.lift!.amp * liftAt(l.lift!, t).k + REST_H, tw.at[2]];

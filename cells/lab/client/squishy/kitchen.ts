@@ -25,7 +25,7 @@
  */
 import { hash, seeded, type Rand } from '../kit/rng';
 import { FEELS, breadFor } from './jelly';
-import { CHAPTER_AT, DUST, MAT, RADIUS, box, bread, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Chapter, type Level, type Shape, type Top, type Tower, type V3 } from './level';
+import { CHAPTER_AT, DUST, MAT, RADIUS, box, bread, cap, chapterOf, cyl, hop, jelly, rail, serviette, tower, type Chapter, type Level, type Shape, type Top, type Tower, type V3 } from './level';
 import { box as drawBox, capsule, drawShapes, quad } from './mesh';
 import { drainer, smear, spoon, tiltPlate, towel } from './props';
 import { HOLDS, assemble, holder, tiered, type Holder } from './supports';
@@ -33,7 +33,8 @@ import { HOLDS, assemble, holder, tiered, type Holder } from './supports';
 /** where the wall is (its face), and how far out from it a course may come */
 const BACK = 66, FRONT = 2;
 type Kind = 'stack' | 'plate' | 'pudding' | 'susan' | 'tin' | 'butter' | 'pan' | 'lid' | 'honey' | 'board' | 'towel' | 'jellies' | 'tray' | 'cloth' | 'tiered' | 'rack'
-  | 'spoon' | 'paddle' | 'tilt' | 'loaf' | 'konjac' | 'stand' | 'sponge' | 'soap' | 'drainer' | 'shelfHome' | 'sinkHome';
+  | 'spoon' | 'paddle' | 'tilt' | 'loaf' | 'konjac' | 'stand' | 'sponge' | 'soap' | 'drainer' | 'shelfHome' | 'sinkHome'
+  | 'rail' | 'sill' | 'oven';
 /** the counter's this far below every top, at least: to touch it is to fall */
 const KILL = 6, LOW = 15;
 /** what things stand on, by place: the table's wooden and homely; the window's delicate; the sink's enamel and wire; the stove's sturdy and plain; the whole kitchen, anything */
@@ -56,23 +57,23 @@ const PLACE: Record<Chapter, { pool: (i: number) => Kind[]; intro: (i: number) =
     finale: () => null,
   },
   counter: {
-    pool: (i) => ['loaf', 'tray', 'stand', 'tin', 'plate', 'stack', 'tiered', 'loaf', ...(i >= 1 ? ['konjac', 'konjac'] as Kind[] : []), ...(i >= 2 ? ['jellies', 'rack'] as Kind[] : [])],
-    intro: (i) => (i === 0 ? ['loaf', 'tray', 'stand'] : i === 1 ? ['konjac'] : i === 2 ? ['tiered'] : ['jellies']),
+    pool: (i) => ['loaf', 'tray', 'stand', 'tin', 'plate', 'stack', 'tiered', 'loaf', ...(i >= 1 ? ['konjac', 'konjac', 'rail'] as Kind[] : []), ...(i >= 2 ? ['jellies', 'rack', 'sill'] as Kind[] : [])],
+    intro: (i) => (i === 0 ? ['loaf', 'tray', 'stand'] : i === 1 ? ['rail', 'konjac'] : i === 2 ? ['sill', 'tiered'] : ['jellies']),
     finale: (i, r) => (i === 0 || r() < 0.6 ? 'shelfHome' : null),
   },
   sink: {
-    pool: (i) => ['sponge', 'soap', 'drainer', 'plate', 'tin', 'stack', 'sponge', 'soap', ...(i >= 1 ? ['pudding', 'rack'] as Kind[] : []), ...(i >= 2 ? ['tiered', 'konjac'] as Kind[] : [])],
+    pool: (i) => ['sponge', 'soap', 'drainer', 'plate', 'tin', 'stack', 'sponge', 'soap', ...(i >= 1 ? ['pudding', 'rack', 'rail'] as Kind[] : []), ...(i >= 2 ? ['tiered', 'konjac', 'sill'] as Kind[] : [])],
     intro: (i) => (i === 0 ? ['sponge', 'soap', 'drainer'] : i === 1 ? ['rack'] : i === 2 ? ['konjac'] : ['tiered']),
     finale: (i, r) => (i === 0 || r() < 0.7 ? 'sinkHome' : null),
   },
   stove: {
-    pool: (i) => ['stack', 'pan', 'butter', 'pan', 'rack', 'tray', ...(i >= 1 ? ['honey', 'honey', 'jellies'] as Kind[] : []), ...(i >= 2 ? ['lid', 'lid', 'towel'] as Kind[] : []), ...(i >= 3 ? ['tin', 'lid', 'towel'] as Kind[] : [])],
-    intro: (i) => (i === 0 ? ['butter', 'pan'] : i === 1 ? ['honey'] : i === 2 ? ['lid'] : ['towel']),
+    pool: (i) => ['stack', 'pan', 'butter', 'pan', 'rack', 'tray', 'oven', ...(i >= 1 ? ['honey', 'honey', 'jellies'] as Kind[] : []), ...(i >= 2 ? ['lid', 'lid', 'towel'] as Kind[] : []), ...(i >= 3 ? ['tin', 'lid', 'towel', 'rail'] as Kind[] : [])],
+    intro: (i) => (i === 0 ? ['butter', 'oven', 'pan'] : i === 1 ? ['honey'] : i === 2 ? ['lid'] : ['towel']),
     finale: () => null,
   },
   mixed: {
     pool: () => ['stack', 'board', 'plate', 'pudding', 'tin', 'susan', 'pan', 'butter', 'honey', 'lid', 'jellies', 'towel', 'tray', 'tiered', 'rack', 'honey',
-      'spoon', 'paddle', 'tilt', 'loaf', 'konjac', 'stand', 'sponge', 'soap', 'drainer'],
+      'spoon', 'paddle', 'tilt', 'loaf', 'konjac', 'stand', 'sponge', 'soap', 'drainer', 'rail', 'sill', 'oven'],
     intro: () => [],
     finale: (_i, r) => (r() < 0.25 ? 'shelfHome' : r() < 0.3 ? 'sinkHome' : null),
   },
@@ -89,7 +90,7 @@ function pick(r: Rand, n: number, last: Kind | null, used: Map<Kind, number>): K
   // (not the same twice running; nor honey after butter, or after a buttered tray: honey won't hold butter)
   pool = pool.filter((k) => k !== last && !((last === 'butter' || last === 'tray') && k === 'honey'));
   // (two climbs, two jars, at most, a level; a big piece once)
-  pool = pool.filter((k) => !((k === 'towel' || k === 'honey') && (used.get(k) ?? 0) >= 2) && !(['spoon', 'drainer', 'jellies', 'loaf'].includes(k) && used.has(k)));
+  pool = pool.filter((k) => !((k === 'towel' || k === 'honey') && (used.get(k) ?? 0) >= 2) && !(['spoon', 'drainer', 'jellies', 'loaf', 'oven'].includes(k) && used.has(k)));
   return pool[Math.floor(r() * pool.length)];
 }
 
@@ -300,6 +301,57 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     for (const b of breads) b.dust = DUST.crumbs;
     return { stops: [{ top: 'boule', at: top, r: rr, yaw: 0, shapes: [...cans, basket, ...rim, ...breads], land }], extra: [], decor: [], reach: 19 };
   }
+  if (kind === 'rail' || kind === 'sill' || kind === 'oven') {
+    // what's hung from: caught from the air anywhere along its first part, hung from, prodded along hand over hand, let
+    // go of at its far end. A steel rail on the wall, for the utensils (a ladle and a whisk on hooks at its near end);
+    // a window's sill, low on the wall, its rounded lip; a little oven's door handle, on the counter
+    const d: number[] = [];
+    let a: V3, b: V3, bar: Shape, out: V3 = [0, 0, -1];
+    const shapes: Shape[] = [];
+    let window: number | undefined;
+    if (kind === 'rail') {
+      const RY = Math.round(ramp(r, LOW + 10, LOW + 17)), L = Math.round(ramp(r, 34, 48)), RZ = BACK - 6.5;
+      a = [x - 8, RY, RZ]; b = [x - 8 + L, RY, RZ];
+      bar = rail(a, b, 0.7, MAT.steel);
+      shapes.push(bar, ...[a, b].map((e) => box([e[0], RY, (RZ + BACK) / 2], [0.7, 0.9, (BACK - RZ) / 2], 0, MAT.steel, 0.6)));
+      // (the utensils, on a little more of it past its near end: a ladle and a whisk, on S-hooks)
+      drawShapes([cap([a[0] - 13, RY, RZ], a, 0.7, MAT.steel), box([a[0] - 13, RY, (RZ + BACK) / 2], [0.7, 0.9, (BACK - RZ) / 2], 0, MAT.steel)], d);
+      for (const [hx, len] of [[a[0] - 10, 16], [a[0] - 4.5, 13]] as Array<[number, number]>) {
+        drawShapes([cap([hx, RY - 0.4, RZ], [hx, RY - 2.2, RZ], 0.18, MAT.steel), cap([hx, RY - 2.4, RZ], [hx, RY - 2.4 - len, RZ - 0.5], 0.45, MAT.steel)], d);
+        if (len > 14) drawShapes([cyl(hx, RZ - 1.6, 2.3, RY - 2.4 - len - 2.2, RY - 2.4 - len, MAT.steel)], d);
+        else drawShapes([cap([hx - 1.4, RY - 2.4 - len, RZ], [hx, RY - 2.4 - len - 6, RZ], 0.25, MAT.steel), cap([hx + 1.4, RY - 2.4 - len, RZ], [hx, RY - 2.4 - len - 6, RZ], 0.25, MAT.steel)], d);
+      }
+    } else if (kind === 'sill') {
+      const SY = Math.round(ramp(r, LOW + 9, LOW + 15)), L = Math.round(ramp(r, 42, 56)), D = 7;
+      const x0 = x - 8, x1 = x0 + L, cx = (x0 + x1) / 2;
+      a = [x0 + 1.5, SY - 0.4, BACK - D]; b = [x1 - 1.5, SY - 0.4, BACK - D];
+      const sill = box([cx, SY - 1.4, BACK - D / 2], [L / 2, 1.4, D / 2], 0, MAT.board, 0.8);
+      bar = rail(a, b, 1, MAT.board);
+      shapes.push(sill, bar);
+      // (the window over it: its pane, its frame)
+      const wy0 = SY + 0.5, wy1 = SY + 52, wa = x0 + 3, wb = x1 - 3;
+      quad(d, [wa, wy0, BACK - 0.3], [wa, wy1, BACK - 0.3], [wb, wy1, BACK - 0.3], [wb, wy0, BACK - 0.3], [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1], 12, [0, 0], [0, 1], [1, 1], [1, 0]);
+      for (const [c, h] of [[[cx, wy1 + 1, BACK - 1], [L / 2 - 2, 1.2, 1]], [[wa - 1, (wy0 + wy1) / 2, BACK - 1], [1.2, (wy1 - wy0) / 2 + 2, 1]], [[wb + 1, (wy0 + wy1) / 2, BACK - 1], [1.2, (wy1 - wy0) / 2 + 2, 1]], [[cx, (wy0 + wy1) / 2, BACK - 0.8], [0.7, (wy1 - wy0) / 2, 0.7]]] as Array<[V3, V3]>) drawBox(d, c, h, 0, MAT.porcelain);
+      window = cx;
+    } else {
+      // (a little oven on the counter: cream enamel, a dark glass door, its handle a steel bar across the door's top)
+      // (set back from the counter's front, so what's after it isn't behind it; its door to the front)
+      const W = 46, H = Math.round(ramp(r, LOW + 9, LOW + 13)), D = 30, ox = x + 14, fz = Math.min(BACK - D - 2, Math.max(z, FRONT + 14) + 2.6), oz = fz + D / 2;
+      shapes.push(box([ox, H / 2, oz], [W / 2, H / 2, D / 2], 0, MAT.enamel, 0.6));
+      const HY = H - 4.5, HZ = fz - 2.6;
+      a = [ox - W / 2 + 4, HY, HZ]; b = [ox + W / 2 - 4, HY, HZ];
+      bar = rail(a, b, 0.85, MAT.steel);
+      shapes.push(bar, ...[a, b].map((e) => box([e[0], HY, (HZ + fz) / 2], [0.7, 0.7, (fz - HZ) / 2], 0, MAT.steel, 0.6)));
+      drawBox(d, [ox - 4, H / 2 - 1, fz - 0.15], [W / 2 - 9, H / 2 - 7, 0.15], 0, MAT.pan);
+      for (const ky of [H * 0.7, H * 0.4]) drawShapes([cyl(ox + W / 2 - 4, fz - 0.6, 1.6, ky - 0.6, ky + 0.6, MAT.knob)], d);
+      for (const fx of [ox - W / 2 + 3, ox + W / 2 - 3]) for (const fz2 of [oz - D / 2 + 3, oz + D / 2 - 3]) drawShapes([cyl(fx, fz2, 1.2, -0.01, 0.8, MAT.legs)], d);
+    }
+    const L = Math.hypot(b[0] - a[0], b[2] - a[2]), ax: V3 = [(b[0] - a[0]) / L, 0, (b[2] - a[2]) / L];
+    const at: V3 = [a[0] + ax[0] * L * 0.35, a[1], a[2] + ax[2] * L * 0.35], to: V3 = [b[0] - ax[0] * 6, b[1], b[2] - ax[2] * 6];
+    // (what's next is laid on past it: past the far end of what it hangs from, and past a little oven's side)
+    const past = Math.max(to[0], ...shapes.map((sh) => sh.hi[0])) - at[0];
+    return { stops: [{ top: 'rail', at, r: 3, yaw: 0, shapes, land: [bar], rail: { shape: bar, to, out } }], extra: [], decor: d, reach: past + 6, window };
+  }
   if (kind === 'konjac') {
     // a konjac jelly on its saucer, up on something: it throws you up
     const seat = Math.round(ramp(r, LOW - 6, LOW - 1));
@@ -447,7 +499,7 @@ export function buildKitchen(n: number): Level {
   const stove = chapter === 'stove';
   const holes: Array<[number, number, number, number]> = [], windows: number[] = [];
   // (the counter, long enough for anything, for the hops to be made sure of against; cut to the course at the end)
-  const lv: Level = { n, chapter, towers: [], shapes: [box([1400, -2, (BACK - 18) / 2], [1600, 2, (BACK + 18) / 2], 0, MAT.counter)], sticks: [], movers: [], jellies: [], kill: KILL, ground: -90, decor: [], floorMat: MAT.tiles };
+  const lv: Level = { n, chapter, towers: [], shapes: [box([1400, -2, (BACK - 18) / 2], [1600, 2, (BACK + 18) / 2], 0, MAT.counter)], sticks: [], movers: [], jellies: [], kill: KILL, ground: -90, decor: [], floorMat: MAT.floor };
   const add = (p: Piece) => {
     for (const t of p.stops) {
       lv.towers.push(t);
@@ -482,6 +534,8 @@ export function buildKitchen(n: number): Level {
       // (and if nothing will fit, a steamer close by, about as high, on something)
       const easy = tries >= 24;
       const kind: Kind = goal ? (finale && tries < 20 ? finale : 'stack') : easy ? 'stack' : b < intro.length && tries < 16 ? intro[b] : pick(r, n, last, used);
+      // (what's hung from, not the last thing before home: home's laid from where it's let go of, and must be reachable)
+      if (b >= count - 3 && !goal && (kind === 'rail' || kind === 'sill' || kind === 'oven')) continue;
       const prev = lv.towers[lv.towers.length - 1];
       const gap = easy ? ramp(r, 4, 9) : ramp(r, 6, 12 + 14 * hard) * (1 - tries * 0.02);
       const x = prev.at[0] + reach + gap + (kind === 'towel' || kind === 'tray' || kind === 'shelfHome' ? 18 : kind === 'honey' ? 2 : 12);
@@ -514,7 +568,7 @@ export function buildKitchen(n: number): Level {
 /**
  * The room about a run. At the table: the table under it all, to a margin past everything, its legs down
  * to the floor. Elsewhere: the counter (the hob, on the stove) from the wall to its front edge, a hole in it
- * where the sink is, the cupboards under it to the floor, the tiled wall behind with windows in it.
+ * where the sink is, the tiled wall behind; the kitchen round it (cupboards, windows, range, fridge) drawn by room.ts.
  */
 function room(lv: Level, chapter: Chapter, holes: Array<[number, number, number, number]>, windows: number[]) {
   if (chapter === 'table') { lv.shapes.shift(); lv.ground = -76; lv.floorMat = undefined; underTable(lv); return; }
@@ -535,13 +589,6 @@ function room(lv: Level, chapter: Chapter, holes: Array<[number, number, number,
   lv.shapes.push(wall);
   lv.walls = [wall];
   drawShapes([wall], lv.decor);
-  drawBox(lv.decor, [(x0 + x1) / 2, (lv.ground - 4) / 2, (BACK - 14) / 2], [(x1 - x0) / 2 - 1, (-4 - lv.ground) / 2, (BACK + 14) / 2], 0, MAT.enamel);
-  // (windows along the wall, high, clear of the shelves)
-  for (let wx = x0 + 70; wx < x1 - 70; wx += 190) {
-    // (not over a window that's there already, by a sill)
-    if (windows.some((w) => Math.abs(w - wx) < 110)) continue;
-    const wy0 = 84, wy1 = 140, a = wx - 30, b = wx + 30;
-    quad(lv.decor, [a, wy0, BACK - 0.2], [a, wy1, BACK - 0.2], [b, wy1, BACK - 0.2], [b, wy0, BACK - 0.2], [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1], 12, [0, 0], [0, 1], [1, 1], [1, 0]);
-    for (const [c, h] of [[[wx, wy1 + 1, BACK - 1], [32, 1, 1]], [[wx, wy0 - 1.5, BACK - 4], [33, 1.5, 4]], [[a - 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]], [[b + 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]]] as Array<[V3, V3]>) drawBox(lv.decor, c, h, 0, MAT.porcelain);
-  }
+  // (the cupboards under it, the wall cupboards and windows over it, the range, the fridge: drawn round it, room.ts)
+  lv.kitchen = { xa: x0, xb: x1, zf: F, zb: BACK, avoid: windows };
 }
