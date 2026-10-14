@@ -18,7 +18,9 @@ it'll go, and springs back when you let go; tap one and it dents and wobbles. Th
 anywhere: the title is where to feel how each of them gives. Left alone a while, now and then one
 of them hops. New Game starts at the beginning; Continue, once you've got
 somewhere, where you left off; Settings has the sound, which dumpling (once the jelly's come),
-and any level to start at. In play, the word `menu` at the bottom comes back here. (A link to a
+and any level you've reached to start at (a level's open once the one before it's been got home;
+the jelly's yours once level 12 has been). `?lab` opens everything, with a level back and on, and the
+dumpling either way, at the foot of the glass. In play, the word `menu` at the bottom comes back here. (A link to a
 level, `?level=3`, goes straight to it.)
 
 | | Touch | Mouse and keys |
@@ -117,6 +119,28 @@ the sink, wet, so it slips; the dish rack, its wire rails to land across, two pl
 its far end. Then across the sink, the water under you (in it is the fall), at the dishcloth
 hung over the window sill's edge: it holds you, and you climb it onto the sill. Home along the
 sill. The second time the rack and the sill are higher and the dishcloth shorter.
+
+## The Breakfast Counter
+
+`?bench=breakfast`: one place, not a run, to try whether the things the dumpling already does make
+for choices. A counter against the tiled wall, laid for breakfast, and home, the golden steamer, on
+a tall tea tin, up where only something already high can reach it. The counter's ground: miss, and
+you're on it, and go on from where you are (none of it reaches home, or the bread bin, in one).
+
+- **Along the front**, quick and risky: a baking tray buttered all along, to land on and slide to its
+  far lip (topspin carries you; too hard and you're off its side), a stack of pancakes by its far end,
+  the bread bin, home. You leave it buttered, and honey won't hold butter.
+- **Along the back**, slower and sure: a konjac jelly to bounce up off, a stack of steamers, the bin.
+  (A hard, long flick from the cloth reaches the steamers too.)
+- **Through the middle**, a gamble: the cereal box, tall, its top a narrow ledge. From it (or the
+  jelly, or the steamers, or a long flick from the cloth) the honey jar against the wall: splat into
+  its honey, stick, and home is one flick from there. Not if you came the buttered way.
+
+Every way it's meant to be gone is made sure of, as a run's hops are (`hop`, from each top to each it
+leads to). There's no count of tops here, only the clock; home, it says the way you came, and keeps it,
+and the panel at the top left shows the last few ways taken and how long each took (tap it to fold it).
+A place says, for each top, which to make for next (for the camera's look ahead and for playing
+itself), and the way the opening view goes over it.
 
 ## The tops
 
@@ -284,7 +308,8 @@ you're going before you go (a touch, or a key, cuts it short; started over, it d
 the clock waits for it).
 
 The camera follows easily, but if the dumpling nears the edge of the glass, or leaves it, the
-camera catches up at once. Sat still on a top, it stands back and looks a little toward the next,
+camera catches up at once. Winding up, it holds still under the finger, standing back only (slowly)
+if where it'll land would be off the glass. Sat still on a top, it stands back and looks a little toward the next,
 far enough off to have both in view, so you can judge the flick; once it's flown, it comes back in.
 Along a counter it looks down on the counter more than across it at the wall. Whatever stands
 between it and the dumpling (a loaf, a jar) dissolves round it in a soft round hole, so it's never

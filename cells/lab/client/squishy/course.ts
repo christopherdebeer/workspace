@@ -251,6 +251,7 @@ function underTable(lv: Level) {
  * pudding with hundreds and thousands, the butter dish.
  */
 export function bench(name: string): Level {
+  if (name === 'breakfast') return breakfast();
   const lv: Level = { n: 0, chapter: 'table', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -76, decor: [] };
   const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) lv.shapes.push(s); };
   const pad = box([0, 0.5, 0], [8, 0.5, 7], 0, MAT.gingham, 0.9);
@@ -282,6 +283,115 @@ export function bench(name: string): Level {
   const last = lv.towers[lv.towers.length - 1].at;
   stop(tower('goal', [last[0] + 6, 12, last[2] + 26], 13, 0, () => 0.5));
   underTable(lv);
+  return lv;
+}
+
+/**
+ * The Breakfast Counter: one place, not a run. A counter against a tiled wall, laid for breakfast,
+ * and more than one way across it to home, a golden steamer on a tall tin by the wall, up where only
+ * something already high can reach it. The counter's ground: miss, and you're on it, and go on from
+ * there (nowhere on it reaches home, or the bread bin, straight).
+ *
+ * - Along the front, quick and risky: a baking tray buttered all along, to land on and slide down to
+ *   its far lip (topspin carries you; land too hard and it throws you off the side), a stack of
+ *   pancakes beside its far end, then the bread bin, then home. Buttered, mind: honey won't hold you.
+ * - Along the back, slower and sure: a konjac jelly to bounce up off, a stack of steamers, the bin.
+ * - Through the middle, a gamble: the cereal box, tall, its top a narrow ledge; from it, or from the
+ *   jelly or the steamers, the honey jar against the wall: splat into its honey, stick, and from up
+ *   there home is one flick. Unless you came the buttered way.
+ *
+ * Every way it's meant to be gone is made sure of, as a run's hops are.
+ */
+export const BREAKFAST_WAYS: Array<[number, number]> = [[0, 1], [1, 2], [2, 3], [3, 8], [0, 4], [4, 5], [5, 3], [0, 6], [6, 7], [4, 7], [5, 7], [7, 8], [6, 3], [0, 7]];
+function breakfast(): Level {
+  const BACK = 66;
+  const lv: Level = { n: 0, chapter: 'counter', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -90, decor: [], floorMat: MAT.tiles };
+  const free = (...ss: Shape[]) => { lv.shapes.push(...ss); drawShapes(ss, lv.decor); for (const s of ss) if (s.jel) lv.jellies!.push(s); };
+  const prop = (p: Prop) => { lv.shapes.push(...p.shapes); lv.decor.push(...p.verts); return p; };
+  const stop = (t: Tower) => { lv.towers.push(t); for (const s of t.shapes) if (!lv.shapes.includes(s)) { lv.shapes.push(s); if (s.jel) lv.jellies!.push(s); } };
+  const one = () => 0.5;
+
+  // 0. the folded cloth it starts on, at the front
+  const pad = box([0, 0.5, 8], [8, 0.5, 7], 0, MAT.gingham, 0.9);
+  free(pad);
+  stop({ top: 'pad', at: [0, 1, 8], r: 6, box: [7.5, 6.5], yaw: 0, shapes: [pad] });
+
+  // 1. along the front, a baking tray, buttered all along its length, its lip all round
+  const T: V3 = [36, 0, 9];
+  const tray = box([T[0], 0.4, T[2]], [17, 0.4, 9], 0, MAT.pan, 0.6);
+  const lips = [box([T[0] - 17, 1.1, T[2]], [0.3, 0.7, 9], 0, MAT.pan, 0.6), box([T[0] + 17, 1.1, T[2]], [0.3, 0.7, 9], 0, MAT.pan, 0.6),
+    box([T[0], 1.1, T[2] - 9], [17, 0.7, 0.3], 0, MAT.pan, 0.6), box([T[0], 1.1, T[2] + 9], [17, 0.7, 0.3], 0, MAT.pan, 0.6)];
+  free(tray, ...lips);
+  const bt = prop(smear([T[0] - 13, 0.8, T[2]], [T[0] + 14, 0.8, T[2] + 1], 11, 71));
+  for (const s of bt.shapes) { s.tack = 0; s.dust = DUST.butter; }
+  stop({ top: 'tray', at: [T[0], 0.8, T[2]], r: 9, box: [15.5, 7.5], yaw: 0, shapes: [tray, ...lips, ...bt.shapes], land: [tray, ...bt.shapes] });
+
+  // 2. a stack of pancakes on a plate, beside the tray's far end
+  const P: V3 = [70, 0, 14];
+  const plate = cyl(P[0], P[2], 11, 0, 0.8, MAT.porcelain, 0.5);
+  const cakes = [0, 1, 2, 3, 4].map((i) => cyl(P[0] + Math.sin(i * 2.3) * 0.5, P[2] + Math.cos(i * 1.7) * 0.5, 8.5 - (i % 2) * 0.4, 0.8 + i * 2.2, 0.8 + (i + 1) * 2.2, MAT.bread, 0.9));
+  free(plate, ...cakes);
+  stop({ top: 'pancakes', at: [P[0], 11.8, P[2]], r: 7, yaw: 0, shapes: [plate, ...cakes], land: [cakes[4]] });
+
+  // 3. the bread bin, deep, high: out of reach from the counter, the hub of the ways
+  const B: V3 = [96, 0, 30];
+  const bin = box([B[0], 14, B[2]], [13, 14, 12], 0, MAT.enamel, 0.75);
+  free(bin);
+  stop({ top: 'bin', at: [B[0], 28, B[2]], r: 9, box: [12, 11], yaw: 0, shapes: [bin] });
+
+  // 4. along the back: a konjac jelly on a saucer, to bounce up off
+  const K: V3 = [20, 0, 44];
+  const saucer = cyl(K[0], K[2], 12, 0, 0.8, MAT.porcelain, 0.5);
+  const kj = jelly(K[0], K[2], 9, 0.8, 8.8, MAT.konjac, FEELS.konjac);
+  free(saucer, kj);
+  stop({ top: 'jelly', at: [K[0], 8.8, K[2]], r: 7, yaw: 0, shapes: [saucer, kj], land: [kj] });
+
+  // 5. a stack of steamers
+  const S = tower('steamer', [54, 25, 50], 8, 0, one);
+  drawShapes(S.shapes, lv.decor);
+  stop(S);
+
+  // 6. in the middle, the cereal box: tall, its top a narrow ledge
+  const C: V3 = [44, 0, 27];
+  const cereal = box([C[0], 15, C[2]], [9, 15, 3.5], 0.15, MAT.floral, 0.85);
+  free(cereal);
+  stop({ top: 'cereal', at: [C[0], 30, C[2]], r: 3, box: [8, 2.5], yaw: 0.15, shapes: [cereal] });
+
+  // 7. the honey jar against the wall: land against its honey, and stick
+  const H = tower('honey', [76, 30, 47], 8.5, 0, one);
+  drawShapes(H.shapes, lv.decor);
+  stop(H);
+
+  // 8. home: the golden steamer on a tall tea tin by the wall
+  const G: V3 = [130, 0, 40];
+  const tin = cyl(G[0], G[2], 7, 0, 44, MAT.tin);
+  const goal = cyl(G[0], G[2], 7.5, 44, 51, MAT.gold);
+  free(tin);
+  drawShapes([goal], lv.decor);
+  stop({ top: 'goal', at: [G[0], 51, G[2]], r: 6, yaw: 0, shapes: [goal] });
+
+  lv.next = [1, 2, 3, 8, 5, 3, 7, 8, 8];
+  lv.route = [0, 1, 2, 3, 8];
+
+  // about it: a milk jug, a toast rack, a crock of spoons (none in the ways)
+  const jug = cyl(-14, BACK - 14, 5.5, 0, 16, MAT.porcelain, 0.5);
+  const crock = cyl(150, 22, 6, 0, 17, MAT.jar);
+  const spoons = [[-4, 2], [3, 3], [1, -4]].map(([dx, dz]) => cap([crock.c[0] + dx * 0.4, 14, crock.c[2] + dz * 0.4], [crock.c[0] + dx, 33, crock.c[2] + dz], 0.7, MAT.board));
+  free(jug, crock, ...spoons);
+
+  // the wall, and the counter
+  let x0 = Infinity, x1 = -Infinity;
+  for (const s of lv.shapes) { x0 = Math.min(x0, s.lo[0]); x1 = Math.max(x1, s.hi[0]); }
+  x0 -= 30; x1 += 30;
+  const wall = box([(x0 + x1) / 2, 150, BACK + 1], [(x1 - x0) / 2 + 300, 150, 1], 0, MAT.tiles, 0.4);
+  wall.tack = 0;
+  lv.shapes.push(wall);
+  lv.walls = [wall];
+  drawShapes([wall], lv.decor);
+  const top = box([(x0 + x1) / 2, -2, (BACK - 18) / 2], [(x1 - x0) / 2, 2, (BACK + 18) / 2], 0, MAT.counter, 0.8);
+  lv.shapes.unshift(top);
+  drawShapes([top], lv.decor);
+  drawBox(lv.decor, [(x0 + x1) / 2, (lv.ground - 4) / 2, (BACK - 14) / 2], [(x1 - x0) / 2 - 1, (-4 - lv.ground) / 2, (BACK + 14) / 2], 0, MAT.enamel);
   return lv;
 }
 

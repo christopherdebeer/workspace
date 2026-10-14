@@ -126,7 +126,8 @@ export interface Shape {
 export type Top = 'start' | 'steamer' | 'plate' | 'board' | 'pudding' | 'susan' | 'tin' | 'goal' | 'butter' | 'honey' | 'lid' | 'pan'
   | 'pad' | 'spoon' | 'bench' | 'paddle' | 'tilt'
   | 'boule' | 'tray' | 'stand' | 'bin' | 'block' | 'shelf' | 'sill' | 'jelly'
-  | 'sponge' | 'soap' | 'drainer' | 'rack';
+  | 'sponge' | 'soap' | 'drainer' | 'rack'
+  | 'pancakes' | 'cereal';
 export interface Tower {
   top: Top;
   /** the middle of its top surface (for honey: the place against its side where you stick) */
@@ -174,6 +175,13 @@ export interface Level {
   floorMat?: number;
   /** the room's walls, which the camera stays on this side of */
   walls?: Shape[];
+  /**
+   * A place, not a run (one with more than one way through it): from each top, which to make for
+   * next (for the camera's look ahead, and playing itself); and the way the opening view goes over it.
+   * Without these, the tops are a run, each the way on from the one before.
+   */
+  next?: number[];
+  route?: number[];
 }
 
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
@@ -722,31 +730,34 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
  * back to the middle of this one (not a jar's); else on past the next; else, wedged somewhere
  * with no clear flick, a hop toward the next to get loose.
  */
+/** which top to make for next from top k: the place's own say, or, on a run, the one after */
+export function nextTop(lv: Level, k: number): number { return Math.min(lv.towers.length - 1, Math.max(0, lv.next ? lv.next[k] ?? k + 1 : k + 1)); }
 export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cling: V3 | null = null): { yaw: number; power: number; climb?: V3 } | null {
   // (buttered, a jar's honey won't hold it: wait for the butter to wear off first)
-  if (butter > 0.04 && lv.towers[at + 1]?.jar && lv.towers[at].top !== 'butter') return null;
+  const n1 = nextTop(lv, at), n2 = nextTop(lv, n1);
+  if (butter > 0.04 && lv.towers[n1]?.jar && lv.towers[at].top !== 'butter') return null;
   // (on a lid, or onto one, not while it's rattling: wait for it to settle)
   const rattles = (k: number, at: number) => { const l = lv.towers[k].land?.[0].lift; return !!l && liftAt(l, at).on; };
   if (rattles(at, t) && onTop(lv.towers[at], from, 1)) return null;
   // (the next is reached by its wall: clinging to it, up and over; else at it)
-  const nx0 = lv.towers[at + 1];
+  const nx0 = lv.towers[n1];
   if (nx0?.wall) {
-    if (cling) { const c = climbAim(lv, from, cling, at + 1, t); if (c) return { yaw: 0, power: c.power, climb: cling }; }
+    if (cling) { const c = climbAim(lv, from, cling, n1, t); if (c) return { yaw: 0, power: c.power, climb: cling }; }
     // (not on the wall, or held by something else: at the wall)
-    const w = aimWall(lv, from, at + 1, t);
+    const w = aimWall(lv, from, n1, t);
     if (w) return { yaw: w.yaw, power: w.power };
   }
-  const tries = [at + 1, lv.towers[at].jar ? -1 : at, at + 2].filter((k) => k >= 0 && k < lv.towers.length);
+  const tries = [n1, lv.towers[at].jar ? -1 : at, n2].filter((k) => k >= 0 && k < lv.towers.length);
   for (const k of tries) {
     const a = aim(lv, from, k, t);
     if (a) return rattles(k, t + path(lv, from, launch(a.yaw, a.power), 3, t).t) ? null : a;
   }
   // (clinging to the side of something, with no flick away that lands: up it, and over onto its top)
-  if (cling) for (const k of [at + 1, at].filter((k) => k >= 0 && k < lv.towers.length)) {
+  if (cling) for (const k of [n1, at].filter((k) => k >= 0 && k < lv.towers.length)) {
     const c = climbAim(lv, from, cling, k, t);
     if (c) return { yaw: 0, power: c.power, climb: cling };
   }
-  const nx = lv.towers[Math.min(at + 1, lv.towers.length - 1)].at;
+  const nx = lv.towers[n1].at;
   return { yaw: Math.atan2(nx[0] - from[0], nx[2] - from[2]), power: 0.3 };
 }
 /**

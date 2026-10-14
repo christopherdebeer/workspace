@@ -17,7 +17,7 @@
  */
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, type Kind } from './body';
-import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, chapterOf, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, chapterOf, nextTop, RADIUS, REST_H, aim, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -1065,6 +1065,16 @@ let check = 0;
 let falls = 0;
 let clock = 0;
 let home = -1;
+/**
+ * The way this run's gone: each top it's sat on in turn, and -1 where it fell. Kept, in a place (one
+ * with more than one way through it), with how long it took, so which ways get found, and where it
+ * goes wrong, can be looked at after (the bench's panel shows the last few).
+ */
+let way: number[] = [0];
+const WAY_WORDS: Record<string, string> = { pad: 'cloth', tray: 'tray', pancakes: 'pancakes', bin: 'bread bin', jelly: 'konjac', steamer: 'steamers', cereal: 'cereal box', honey: 'honey', goal: 'home' };
+const wayWords = (w: number[]) => w.map((k) => (k < 0 ? 'splat' : WAY_WORDS[lv.towers[k].top] ?? lv.towers[k].top)).join(' → ');
+const WAYS = () => `${STORE}:ways:${benchName ?? levelN}`;
+function waysKept(): Array<{ way: string; t: number; falls: number }> { try { return JSON.parse(localStorage.getItem(WAYS()) ?? '[]'); } catch { return []; } }
 let still = 0;
 /** fallen: when it comes back */
 let fallenAt = -1;
@@ -1083,6 +1093,7 @@ const coatSaid = new Set<Dust>();
  */
 let benchPick = 1, benchDrop = 25;
 function benchPanel() {
+  if (benchName === 'breakfast') { waysPanel(); return; }
   if (benchName !== 'jelly' && benchName !== 'coats') return;
   const jellyBench = benchName === 'jelly';
   let el = document.getElementById('bench');
@@ -1146,20 +1157,23 @@ function startLevel(n: number, quiet = false) {
   body = new Dumpling([at[0], at[1] + REST_H + 2, at[2]], skin);
   prevX = new Float32Array(body.x);
   check = 0; falls = 0; clock = 0; home = -1; still = 0; fallenAt = -1;
-  camYaw = lv.walls?.length ? wallYaw(lv.towers[1].at[0] - at[0]) : Math.atan2(lv.towers[1].at[0] - at[0], lv.towers[1].at[2] - at[2]);
+  way = [0];
+  const n1 = lv.towers[nextTop(lv, 0)].at;
+  camYaw = lv.walls?.length ? wallYaw(n1[0] - at[0]) : Math.atan2(n1[0] - at[0], n1[2] - at[2]);
   camTarget = [at[0], at[1] + 4, at[2]];
   steamSeed = 0;
   puffs.length = 0;
   ahead = 0;
   // (a level's first time: the way over it, from home back to the start; not when it's started over)
   fly = -1;
-  if (!quiet && !benchName && !preview && flown !== levelN && lv.towers.length > 1) { fly = 0; flyFor = Math.max(3, Math.min(6, 1.6 + 0.35 * lv.towers.length)); }
+  if (!quiet && (!benchName || lv.route) && !preview && flown !== levelN && lv.towers.length > 1) { fly = 0; flyFor = Math.max(3, Math.min(6, 1.6 + 0.35 * lv.towers.length)); }
   flown = levelN;
   if (quiet) return;
   try { if (!auto && !benchName) localStorage.setItem(STORE + ':level', String(levelN)); } catch { /* */ }
   if (!auto && !benchName) history.replaceState(null, '', `?level=${levelN}`);
   showHands();
   showTitle();
+  if (benchName === 'breakfast') { hint('the breakfast counter: home is the golden steamer, up high. more than one way there: find yours', 7000); benchPanel(); return; }
   if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
   hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'tap the dumpling to poke it: it rolls away from your finger' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
@@ -1278,7 +1292,7 @@ let fly = -1, flyFor = 0, flown = -1;
 const ease = (x: number) => x * x * (3 - 2 * x);
 function flyCamera(dt: number) {
   fly += dt;
-  const T = lv.towers, u = ease(Math.min(1, fly / flyFor));
+  const T = lv.route ? lv.route.map((k) => lv.towers[k]) : lv.towers, u = ease(Math.min(1, fly / flyFor));
   // (the course from home back to the start, as a path through its tops)
   const f = (1 - u) * (T.length - 1), i = Math.min(T.length - 2, Math.floor(f)), k = f - i, a = T[i].at, b = T[i + 1].at;
   const p: V3 = [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k + 3, a[2] + (b[2] - a[2]) * k];
@@ -1300,7 +1314,7 @@ function updateCamera(dt: number) {
   const off = !on || on[0] < innerWidth * 0.12 || on[0] > innerWidth * 0.88 || on[1] < innerHeight * 0.1 || on[1] > innerHeight * 0.82;
   const k = 1 - Math.exp(-dt * (off ? 22 : 5));
   // (sat still on a top, and not home: the camera looks a little toward the next, and stands back far enough to see it too)
-  const nxt = lv.towers[Math.min(check + 1, lv.towers.length - 1)];
+  const nxt = lv.towers[nextTop(lv, check)];
   const settled = body.contacts > 0 && len(body.vcom) < 8 && home < 0 && !userCam;
   ahead += ((settled ? 1 : 0) - ahead) * (1 - Math.exp(-dt * (settled ? 1.2 : 4)));
   const toNext = sub(nxt.at, body.com), sep = Math.hypot(toNext[0], toNext[2]);
@@ -1308,7 +1322,7 @@ function updateCamera(dt: number) {
   for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * (1 - Math.exp(-dt * (off ? 22 : ahead > 0.01 && ahead < 0.99 ? 3 : 5)));
   // (turned toward the next top, when it's sat still and no one's turning the camera)
   if (!pull && !userCam && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
-    const nx = lv.towers[Math.min(check + 1, lv.towers.length - 1)];
+    const nx = lv.towers[nextTop(lv, check)];
     const wantYaw = lv.walls?.length ? wallYaw(nx.at[0] - body.com[0]) : Math.atan2(nx.at[0] - body.com[0], nx.at[2] - body.com[2]);
     let dy = wantYaw - camYaw;
     dy = Math.atan2(Math.sin(dy), Math.cos(dy));
@@ -2180,6 +2194,22 @@ function drawBand() {
     ux.lineTo(ax - dx * 10 - dy * 7, ay - dy * 10 + dx * 7); ux.moveTo(ax, ay); ux.lineTo(ax - dx * 10 + dy * 7, ay - dy * 10 - dx * 7); ux.stroke();
   }
 }
+/** The breakfast counter's panel: the ways the last few runs went, and how long each took (tap to fold it away). */
+function waysPanel() {
+  let el = document.getElementById('ways');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'ways';
+    document.body.appendChild(el);
+    const st = document.createElement('style');
+    st.textContent = `#ways { position: fixed; left: 10px; top: calc(max(12px, env(safe-area-inset-top)) + 30px); max-width: 70vw; padding: 6px 9px; border-radius: 10px; background: rgba(30,22,14,.45); color: #fff; font: 11px/1.35 system-ui, sans-serif; z-index: 5; }
+      #ways.folded li { display: none; } #ways ol { margin: 2px 0 0; padding-left: 16px; } #ways b { font-weight: 600; }`;
+    document.head.appendChild(st);
+    el.addEventListener('click', () => el!.classList.toggle('folded'));
+  }
+  const kept = waysKept();
+  el.innerHTML = `<b>ways taken</b> ${kept.length ? '' : '· none yet'}<ol>${kept.slice(0, 6).map((w) => `<li>${w.t.toFixed(1)} s${w.falls ? ` · ${w.falls}✕` : ''} · ${w.way}</li>`).join('')}</ol>`;
+}
 /** The lazy Susans: their tops drawn turned, as they are. */
 const susanMeshes = new Map<object, Mesh>();
 function drawSusans() {
@@ -2248,6 +2278,7 @@ function tick(dt: number) {
   if (body.com[1] < lv.kill) {
     falls++;
     fallenAt = simTime;
+    if (way[way.length - 1] !== -1) way.push(-1);
     plop();
     hint('splat. back to the last top', 1800);
     return;
@@ -2263,7 +2294,7 @@ function tick(dt: number) {
   });
   const k = towerAt(lv, body.com, 1);
   const speed = len(body.vcom);
-  if (k >= 0 && body.contacts > 0 && speed < 30) check = k;
+  if (k >= 0 && body.contacts > 0 && speed < 30) { check = k; if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
   // (sat still: not drifting, and touching, or only a moment off it, trembling on a jelly)
   const quiet = len(body.drift) < 6 && body.sinceContact < 0.12;
@@ -2283,7 +2314,9 @@ function tick(dt: number) {
     home = clock;
     chime();
     showHands();
-    hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`, 9000);
+    if (way[way.length - 1] !== k) way.push(k);
+    hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}${lv.route ? ` · ${wayWords(way)}` : ''}`, 9000);
+    if (lv.route && !auto) { try { localStorage.setItem(WAYS(), JSON.stringify([{ way: wayWords(way), t: Math.round(clock * 10) / 10, falls }, ...waysKept()].slice(0, 30))); } catch { /* */ } benchPanel(); }
     try { const best = Number(localStorage.getItem(`${STORE}:best:${levelN}`)) || Infinity; if (clock < best) localStorage.setItem(`${STORE}:best:${levelN}`, String(clock)); } catch { /* */ }
     try { if (!auto && !benchName) localStorage.setItem(STORE + ':reached', String(Math.max(reachedNow(), levelN + 1))); } catch { /* */ }
     // (got home from the level before the jelly's: it's yours)
@@ -2314,7 +2347,7 @@ function showStatus() {
   if (performance.now() - statusAt < 100) return;
   statusAt = performance.now();
   const t = home >= 0 ? home : clock;
-  $('status').textContent = `${check}/${lv.towers.length - 1} · ${t.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`;
+  $('status').textContent = `${lv.route ? '' : `${check}/${lv.towers.length - 1} · `}${t.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`;
 }
 
 // ─── small maths ─────────────────────────────────────────────────────────────────────────────────
