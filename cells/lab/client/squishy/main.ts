@@ -239,18 +239,23 @@ flat in float vMat;
 out vec4 o;
 uniform vec3 uEye, uTint;
 uniform float uTime, uAlpha;
-/** the dumpling, seen through what's before it: where it is on the glass (px), how big a hole (px), where it is */
+/** the dumpling, seen through what's before it: whether to (z > 0), and where it is */
 uniform vec3 uHole, uHoleAt;
 ${COMMON}
 ${SHADOW_GLSL}
 ${COAT_GLSL}
 void main() {
-  // (what stands between the eye and the dumpling dissolves round it, in a soft round hole, so it's never lost behind a loaf)
-  // (not what it stands on, or anything lower: only what rises in front of it)
-  if (uHole.z > 0. && vWorld.y > uHoleAt.y - .6 && length(vWorld - uEye) < length(uHoleAt - uEye) - ${(3 * 1.6).toFixed(1)}) {
-    float k = 1. - smoothstep(uHole.z * .6, uHole.z, length(gl_FragCoord.xy - uHole.xy));
-    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715))));
-    if (ign < k * .9) discard;
+  // (whatever rises between the eye and the dumpling, anywhere on the glass, is screened: drawn at about half, a fine
+  // regular screen of it there and not, so the dumpling's never lost behind a loaf and the loaf's never gone; not what
+  // it stands on, nor anything lower, and coming in gently over the first few centimetres in front of it)
+  if (uHole.z > 0. && vWorld.y > uHoleAt.y - .6) {
+    float ahead = length(uHoleAt - uEye) - length(vWorld - uEye) - ${(3 * 1.6).toFixed(1)};
+    float k = .5 * smoothstep(0., 6., ahead);
+    // (a 4×4 ordered screen, Bayer's: at a half, a fine checker)
+    const int BAYER[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+    ivec2 b = ivec2(gl_FragCoord.xy) & 3;
+    float bayer = (float(BAYER[b.y * 4 + b.x]) + .5) / 16.;
+    if (bayer < k) discard;
   }
   vec3 n = normalize(vNor);
   if (!gl_FrontFacing) n = -n;
@@ -1993,10 +1998,8 @@ function frame(now: number) {
   gl.uniform1i(u(prog, 'uShadowMap'), 0);
   gl.uniform1f(u(prog, 'uAlpha'), 1);
   gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
-  // (the hole through what stands before the dumpling: where it is on the glass, in the canvas's pixels, and how big it looks)
-  const hc = mode === 'play' && fly < 0 ? screenOf(body.com) : null, he = hc && screenOf(add(body.com, mul(right, RADIUS)));
-  const dpr = W / innerWidth;
-  gl.uniform3fv(u(prog, 'uHole'), hc && he ? [hc[0] * dpr, (innerHeight - hc[1]) * dpr, Math.max(40 * dpr, Math.hypot(he[0] - hc[0], he[1] - hc[1]) * 2.1 * dpr)] : [0, 0, 0]);
+  // (the screen over what stands before the dumpling: on in play, once the way over's done)
+  gl.uniform3fv(u(prog, 'uHole'), mode === 'play' && fly < 0 ? [0, 0, 1] : [0, 0, 0]);
   gl.uniform3fv(u(prog, 'uHoleAt'), body.com);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, shadowTex);

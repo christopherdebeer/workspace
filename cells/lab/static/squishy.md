@@ -321,9 +321,10 @@ The camera follows easily, but if the dumpling nears the edge of the glass, or l
 camera catches up at once. Winding up, it holds still under the finger, standing back only (slowly)
 if where it'll land would be off the glass. Sat still on a top, it stands back and looks a little toward the one that comes after that top (the top it's on, not the last it sat on: gone on along the ground past some, it isn't turned back to them; on the ground, or hanging on something, it doesn't look ahead, it only follows),
 far enough off to have both in view, so you can judge the flick; once it's flown, it comes back in.
-Along a counter it looks down on the counter more than across it at the wall. Whatever stands
-between it and the dumpling (a loaf, a jar) dissolves round it in a soft round hole, so it's never
-lost behind something; not what it stands on, nor anything lower. It never goes behind a wall: if the way out from the dumpling to where the
+Along a counter it looks down on the counter more than across it at the wall. Whatever rises between it and the dumpling (a loaf, a jar), anywhere on the glass, is screened: drawn at
+about half, a fine checker of it there and not, so the dumpling's never lost behind something and the
+something's never gone; not what it stands on, nor anything lower, and easing in over the first few
+centimetres in front of it. It never goes behind a wall: if the way out from the dumpling to where the
 camera would be meets the tiled wall, it comes in short of it, and while it's held in like that
 it turns back round to the room's side, against a finger turning it too; so turned toward the
 wall, by mistake or on purpose, it slides along it and comes back round. (The walls run well
