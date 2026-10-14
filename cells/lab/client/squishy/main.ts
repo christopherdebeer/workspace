@@ -385,6 +385,20 @@ void main() {
     float cut = smoothstep(.985, 1., noise(vec3(uv.x * 9., uv.y * .4, 7.)));
     base = mix(vec3(.72, .55, .36), vec3(.88, .74, .54), g) * (1. - .25 * cut);
     relief = g * .025 - cut * .018; rough = .64;
+  } else if (id == ${MAT.napkin}) {
+    // home's serviette: white paper, quilted in a diamond, folded in four (its creases across), a red
+    // printed border near its edge and a red peach in one corner; its edges (uv 2) plain paper
+    bool edge = uv.x > 1.5;
+    vec2 q = edge ? vec2(0.) : uv;
+    float quilt = abs(fract((q.x + q.y) * 7.) - .5) + abs(fract((q.x - q.y) * 7.) - .5);
+    float crease = edge ? 0. : (1. - smoothstep(0., .025, abs(q.x))) + (1. - smoothstep(0., .025, abs(q.y)));
+    float m = max(abs(q.x), abs(q.y));
+    float border = edge ? 0. : smoothstep(.015, 0., abs(m - .82)) + smoothstep(.01, 0., abs(m - .76)) * .7;
+    vec2 pc = q - vec2(.58, .58);
+    float peach = edge ? 0. : 1. - smoothstep(.07, .085, length(pc * vec2(1., 1.15) + vec2(0., abs(pc.x) * .6)));
+    base = vec3(.97, .96, .93) * (.97 + .03 * quilt) * (1. - .08 * crease);
+    base = mix(base, vec3(.78, .14, .12), clamp(border + peach, 0., 1.));
+    relief = quilt * .015; rough = .85;
   } else if (id == ${MAT.gold}) {
     base = vec3(.96, .74, .34); metal = 1.; rough = .24;
   } else if (id == ${MAT.chopstick}) {
@@ -1314,15 +1328,18 @@ function updateCamera(dt: number) {
   const off = !on || on[0] < innerWidth * 0.12 || on[0] > innerWidth * 0.88 || on[1] < innerHeight * 0.1 || on[1] > innerHeight * 0.82;
   const k = 1 - Math.exp(-dt * (off ? 22 : 5));
   // (sat still on a top, and not home: the camera looks a little toward the next, and stands back far enough to see it too)
-  const nxt = lv.towers[nextTop(lv, check)];
-  const settled = body.contacts > 0 && len(body.vcom) < 8 && home < 0 && !userCam;
+  // (from the top it's on now, not the last it sat on: gone on along the ground past some, it isn't turned back to them;
+  // on the ground, or hanging on something, it doesn't look ahead at all, it only follows)
+  const onTop = towerAt(lv, body.com, 1);
+  const nxt = lv.towers[nextTop(lv, onTop >= 0 ? onTop : check)];
+  const settled = onTop >= 0 && body.contacts > 0 && len(body.vcom) < 8 && home < 0 && !userCam;
   ahead += ((settled ? 1 : 0) - ahead) * (1 - Math.exp(-dt * (settled ? 1.2 : 4)));
   const toNext = sub(nxt.at, body.com), sep = Math.hypot(toNext[0], toNext[2]);
   const want = add(add(body.com, [0, 3, 0]), mul(toNext, 0.5 * ahead * Math.min(1, 110 / Math.max(1, sep))));
   for (let i = 0; i < 3; i++) camTarget[i] += (want[i] - camTarget[i]) * (1 - Math.exp(-dt * (off ? 22 : ahead > 0.01 && ahead < 0.99 ? 3 : 5)));
   // (turned toward the next top, when it's sat still and no one's turning the camera)
-  if (!pull && !userCam && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
-    const nx = lv.towers[nextTop(lv, check)];
+  if (!pull && !userCam && onTop >= 0 && body.contacts > 0 && simTime - orbit.at > 2.5 && home < 0) {
+    const nx = lv.towers[nextTop(lv, onTop)];
     const wantYaw = lv.walls?.length ? wallYaw(nx.at[0] - body.com[0]) : Math.atan2(nx.at[0] - body.com[0], nx.at[2] - body.com[2]);
     let dy = wantYaw - camYaw;
     dy = Math.atan2(Math.sin(dy), Math.cos(dy));

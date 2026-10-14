@@ -63,6 +63,16 @@ export function box(out: number[], c: V3, h: V3, yaw: number, mat: number) {
   quad(out, W(hx, -hy, -hz), W(hx, hy, -hz), W(hx, hy, hz), W(hx, -hy, hz), N(1, 0, 0), N(1, 0, 0), N(1, 0, 0), N(1, 0, 0), mat, [-hz, -hy], [-hz, hy], [hz, hy], [hz, -hy]);
   quad(out, W(-hx, -hy, hz), W(-hx, hy, hz), W(-hx, hy, -hz), W(-hx, -hy, -hz), N(-1, 0, 0), N(-1, 0, 0), N(-1, 0, 0), N(-1, 0, 0), mat, [hz, -hy], [hz, hy], [-hz, hy], [-hz, -hy]);
 }
+/** Home's serviette: its top drawn with its own -1–1 across, so its printed border sits at its edge whatever its size; thin sides. */
+function serviette(out: number[], s: Shape) {
+  const [hx, hy, hz] = s.h, cy = Math.cos(s.yaw), sy = Math.sin(s.yaw);
+  const W = (x: number, y: number, z: number): V3 => [s.c[0] + cy * x + sy * z, s.c[1] + y, s.c[2] - sy * x + cy * z];
+  quad(out, W(-hx, hy, -hz), W(-hx, hy, hz), W(hx, hy, hz), W(hx, hy, -hz), [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], MAT.napkin, [-1, -1], [-1, 1], [1, 1], [1, -1]);
+  for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const n: V3 = [cy * ax + sy * az, 0, -sy * ax + cy * az], ex = ax ? 0 : hx, ez = az ? 0 : hz, ox = ax * hx, oz = az * hz;
+    quad(out, W(ox - ex, -hy, oz - ez), W(ox - ex, hy, oz - ez), W(ox + ex, hy, oz + ez), W(ox + ex, -hy, oz + ez), n, n, n, n, MAT.napkin, [2, 2], [2, 2], [2, 2], [2, 2]);
+  }
+}
 /** A capsule from a to b: (u along it, 0–1; v round it). */
 export function capsule(out: number[], a: V3, b: V3, r: number, mat: number, segs = 12, rings = 6) {
   const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
@@ -157,6 +167,7 @@ function drawShape(s: Shape, out: number[]) {
   if (s.kind === 'sheet' || s.kind === 'jelly') return;
   dustOn(s, out);
   {
+    if (s.mat === MAT.napkin) { serviette(out, s); return; }
     if (s.kind === 'box') { box(out, s.c, s.h, s.yaw, s.mat); return; }
     if (s.kind === 'cap') { capsule(out, s.c, s.b, s.r, s.mat, 12, 4); return; }
     const y0 = s.c[1] - s.hh, y1 = s.c[1] + s.hh;

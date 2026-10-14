@@ -136,7 +136,8 @@ you're on it, and go on from where you are (none of it reaches home, or the brea
   jelly, or the steamers, or a long flick from the cloth) the honey jar against the wall: splat into
   its honey, stick, and home is one flick from there. Not if you came the buttered way.
 
-Every way it's meant to be gone is made sure of, as a run's hops are (`hop`, from each top to each it
+Home has no rim to catch you: come in badly and you go off its far side, as you should. Every way
+it's meant to be gone is made sure of, as a run's hops are (`hop`, from each top to each it
 leads to). There's no count of tops here, only the clock; home, it says the way you came, and keeps it,
 and the panel at the top left shows the last few ways taken and how long each took (tap it to fold it).
 A place says, for each top, which to make for next (for the camera's look ahead and for playing
@@ -307,9 +308,13 @@ the course top by top, coming down to where the dumpling sits at the start, so y
 you're going before you go (a touch, or a key, cuts it short; started over, it doesn't come again;
 the clock waits for it).
 
+Home, in every level, is the golden steamer, steam always rising from it, and on it a paper
+serviette folded square, white with a red printed border and a peach in one corner: small enough to
+lie within the top (none of it overhangs, so it catches nothing), and paper, so it grips a little.
+
 The camera follows easily, but if the dumpling nears the edge of the glass, or leaves it, the
 camera catches up at once. Winding up, it holds still under the finger, standing back only (slowly)
-if where it'll land would be off the glass. Sat still on a top, it stands back and looks a little toward the next,
+if where it'll land would be off the glass. Sat still on a top, it stands back and looks a little toward the one that comes after that top (the top it's on, not the last it sat on: gone on along the ground past some, it isn't turned back to them; on the ground, or hanging on something, it doesn't look ahead, it only follows),
 far enough off to have both in view, so you can judge the flick; once it's flown, it comes back in.
 Along a counter it looks down on the counter more than across it at the wall. Whatever stands
 between it and the dumpling (a loaf, a jar) dissolves round it in a soft round hole, so it's never

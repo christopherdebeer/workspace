@@ -44,6 +44,8 @@ export const MAT = {
   bread: 38, enamel: 39,
   // (the sink: brushed steel, a sponge, soap bubbles, the water)
   steel: 40, sponge: 41, bubble: 42, water: 43,
+  // (home's paper serviette, folded square on its top)
+  napkin: 44,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -375,6 +377,16 @@ function stand(x: number, z: number, r: number, y1: number, yaw: number, coin: (
   return out;
 }
 /** A tower of a kind, its top at `at`: what holds it up from the counter, and what's on top. */
+/**
+ * Home's serviette: a paper napkin folded square and laid on its top, as small as fits inside the top
+ * (none of it overhangs, so it catches nothing: come in badly and you go off the far side, as you would
+ * without it); paper, so it grips a little better than the steamer's rim. It marks home as nothing else
+ * on the counter is marked, white and red-bordered on the gold.
+ */
+export function serviette(x: number, y: number, z: number, rad: number, yaw = 0.35): Shape {
+  const h = Math.min(6.5, rad * 0.66);
+  return box([x, y + 0.12, z], [h, 0.12, h], yaw, MAT.napkin, 0.95);
+}
 export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Tower {
   const [x, y, z] = at;
   // (what's on a top is decided from where it stands, not from the level's own dice, so it changes no layout)
@@ -390,6 +402,7 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand): Towe
     case 'goal':
       // a stack of bamboo steamers right down to the counter
       shapes.push(cyl(x, z, rad, 0, y, top === 'goal' ? MAT.gold : MAT.bamboo));
+      if (top === 'goal') { const n = serviette(x, y, z, rad); shapes.push(n); land = [shapes[0], n]; }
       break;
     case 'plate': {
       // a plate on a tea tin: glazed, and so a little slippery; now and then with crumbs on it, or pepper

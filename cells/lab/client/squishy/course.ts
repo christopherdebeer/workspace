@@ -10,7 +10,7 @@
  * the towers' are; if a jitter won't do, another is tried, and the set as drawn always does.
  */
 import { hash, seeded, type Rand } from '../kit/rng';
-import { DUST, MAT, box, buildTowers, cap, chapterOf, cyl, hop, jelly, tower, type Level, type Shape, type Tower, type V3 } from './level';
+import { DUST, MAT, box, buildTowers, cap, chapterOf, cyl, hop, jelly, serviette, tower, type Level, type Shape, type Tower, type V3 } from './level';
 import { FEELS } from './jelly';
 import { buildKitchen } from './kitchen';
 import { box as drawBox, drawShapes, quad } from './mesh';
@@ -120,9 +120,10 @@ function layCounter(n: number, jit: number, r: Rand): Level {
   const GX = SX + 64 + J(2), sillY = SY + 1;
   const sill = box([GX, sillY - 1.5, BACK - 6], [18, 1.5, 7], 0, MAT.porcelain, 0.7);
   const basket = cyl(GX, BACK - 7, 6.5, sillY, sillY + 7, MAT.gold);
+  const nap = serviette(GX, sillY + 7, BACK - 7, 6.5);
   free(sill);
-  stop({ top: 'goal', at: [GX, sillY + 7, BACK - 7], r: 5.5, yaw: 0, shapes: [basket] });
-  drawShapes([basket], lv.decor);
+  stop({ top: 'goal', at: [GX, sillY + 7, BACK - 7], r: 5.5, yaw: 0, shapes: [basket, nap], land: [basket, nap] });
+  drawShapes([basket, nap], lv.decor);
   const wy0 = sillY + 3, wy1 = sillY + 58, wx0 = GX - 24, wx1 = GX + 24;
   quad(lv.decor, [wx0, wy0, BACK - 0.2], [wx0, wy1, BACK - 0.2], [wx1, wy1, BACK - 0.2], [wx1, wy0, BACK - 0.2], [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1], 12, [0, 0], [0, 1], [1, 1], [1, 0]);
   for (const [c, h] of [[[GX, wy1 + 1, BACK - 1], [26, 1, 1]], [[wx0 - 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]], [[wx1 + 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]], [[GX, (wy0 + wy1) / 2, BACK - 0.8], [0.5, (wy1 - wy0) / 2, 0.6]]] as Array<[V3, V3]>) drawBox(lv.decor, c, h, 0, MAT.porcelain);
@@ -371,14 +372,11 @@ function breakfast(): Level {
   const G: V3 = [130, 0, 40];
   const tin = cyl(G[0], G[2], 8.5, 0, 44, MAT.tin);
   const goal = cyl(G[0], G[2], 9.5, 44, 51, MAT.gold);
-  // (its rim, as a steamer basket's: it catches a landing that would go over the far side)
-  const rim = Array.from({ length: 16 }, (_, i) => {
-    const a0 = (i / 16) * Math.PI * 2, a1 = ((i + 1) / 16) * Math.PI * 2;
-    return cap([G[0] + Math.cos(a0) * 9.1, 51.9, G[2] + Math.sin(a0) * 9.1], [G[0] + Math.cos(a1) * 9.1, 51.9, G[2] + Math.sin(a1) * 9.1], 0.9, MAT.gold, 0.8);
-  });
-  free(tin, ...rim);
-  drawShapes([goal], lv.decor);
-  stop({ top: 'goal', at: [G[0], 51, G[2]], r: 8, yaw: 0, shapes: [goal, ...rim], land: [goal] });
+  // (no rim to catch you: come in badly and you're off the far side; only its serviette marks it)
+  const nap = serviette(G[0], 51, G[2], 9.5);
+  free(tin);
+  drawShapes([goal, nap], lv.decor);
+  stop({ top: 'goal', at: [G[0], 51, G[2]], r: 8, yaw: 0, shapes: [goal, nap], land: [goal, nap] });
 
   lv.next = [1, 2, 3, 8, 5, 3, 7, 8, 8];
   lv.route = [0, 1, 2, 3, 8];
@@ -486,8 +484,9 @@ function laySink(n: number, jit: number, r: Rand): Level {
     wall: cloth.shapes, wallAt: [BX - 12, (SY + hangTo) / 2, BACK - 12.8] });
   const GX = BX + 26;
   const basket = cyl(GX, BACK - 7, 5.5, SY, SY + 7, MAT.gold);
-  stop({ top: 'goal', at: [GX, SY + 7, BACK - 7], r: 4.5, yaw: 0, shapes: [basket] });
-  drawShapes([basket], lv.decor);
+  const nap = serviette(GX, SY + 7, BACK - 7, 5.5);
+  stop({ top: 'goal', at: [GX, SY + 7, BACK - 7], r: 4.5, yaw: 0, shapes: [basket, nap], land: [basket, nap] });
+  drawShapes([basket, nap], lv.decor);
   // the window over it all
   const wy0 = SY + 3, wy1 = SY + 58, wx0 = BX - 26, wx1 = BX + 38;
   quad(lv.decor, [wx0, wy0, BACK - 0.2], [wx0, wy1, BACK - 0.2], [wx1, wy1, BACK - 0.2], [wx1, wy0, BACK - 0.2], [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1], 12, [0, 0], [0, 1], [1, 1], [1, 0]);
