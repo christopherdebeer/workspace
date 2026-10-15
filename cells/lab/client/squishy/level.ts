@@ -185,6 +185,11 @@ export interface Tower {
    * to its far end (`to`, where it hangs from to let go), on the side `out` (level, away from what it's on)
    */
   rail?: { shape: Shape; to: V3; out: V3 };
+  /**
+   * a springboard: a jelly bounced off on the way to the next top, more than landed on. The hop onto it is
+   * made by bouncing off it onto the one after; stopped on, it's a top like any other, and on from it
+   */
+  spring?: boolean;
 }
 export interface Level {
   n: number;
@@ -220,6 +225,8 @@ export interface Level {
    */
   next?: number[];
   route?: number[];
+  /** the ways between its tops, each made sure of (from, to); without them, each top to the next */
+  ways?: Array<[number, number]>;
 }
 
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
@@ -709,7 +716,7 @@ export function launch(yaw: number, power: number): V3 {
   const v = V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power));
   return [Math.sin(yaw) * Math.cos(LAUNCH) * v, Math.sin(LAUNCH) * v, Math.cos(yaw) * Math.cos(LAUNCH) * v];
 }
-export interface Path { pts: V3[]; hit: { p: V3; n: V3; shape: Shape; v: V3 } | null; t: number }
+export interface Path { pts: V3[]; hit: { p: V3; n: V3; shape: Shape; v: V3 } | null; t: number; /** the jellies it bounced off on the way */ via?: Shape[] }
 /**
  * Where the dumpling's middle goes from `from` at `vel`: a parabola (its middle flies one; the
  * squish is about it) until a ball the size of its middle meets something.
@@ -741,6 +748,7 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
   }
   // (how many times it's bounced off a jelly's top so far, and when it last left one)
   let bounces = 0, bounceT = 0;
+  const via: Shape[] = [];
   for (let i = 0, t = 0; t < max; i++, t += h) {
     vy -= G * h;
     x += vx * h; y += vy * h; z += vz * h;
@@ -780,7 +788,7 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
         const vin = Math.max(0, -vy), vout = givesBack(j, vin) * vin, vt = Math.hypot(vx, vz);
         // (after the first, it's rolling the way it's going: what its foot loses its roll gives back, mostly)
         const keep = vt > 1e-6 ? Math.max(0, vt - j.feel.slip * (vin + vout) * (1.15 + 0.6 * (1 - j.feel.e)) * (bounces ? SPUN : 1)) / vt : 0;
-        vx *= keep; vz *= keep; bounces++;
+        vx *= keep; vz *= keep; bounces++; via.push(s);
         // (thrown back out of its top as its top is there where it touches: off a domed or rounded shoulder, outward too)
         if (vout >= SETTLE) {
           const se = 0.5, sx = x - o.nx * Rt - j.cx, sz = z - o.nz * Rt - j.cz;
@@ -793,18 +801,18 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
         if (Math.hypot(x - j.cx, z - j.cz) < j.rad * shapeTo(j, x - j.cx, z - j.cz) - RADIUS * 0.4) {
           pts.push([x, top + Rt, z]);
           if (lv.movers.length) moveShapes(lv, t0);
-          return { pts, hit: { p: [x, top + Rt, z], n: [0, 1, 0], shape: s, v: [vx, 0, vz] }, t };
+          return { pts, hit: { p: [x, top + Rt, z], n: [0, 1, 0], shape: s, v: [vx, 0, vz] }, t, via };
         }
         // (carried off its edge: on from there, falling)
         y = Math.max(y, top + Rt); vy = 0; leaving.length = 0; leaving.push(s); bounceT = t; bounced = true; break;
       }
       if (lv.movers.length) moveShapes(lv, t0);
-      return { pts, hit: { p: [x, y, z], n: [o.nx, o.ny, o.nz], shape: s, v: [vx, vy, vz] }, t };
+      return { pts, hit: { p: [x, y, z], n: [o.nx, o.ny, o.nz], shape: s, v: [vx, vy, vz] }, t, via };
     }
     if (bounced) continue;
   }
   if (lv.movers.length) moveShapes(lv, t0);
-  return { pts, hit: null, t: max };
+  return { pts, hit: null, t: max, via };
 }
 /** Whether a point is on a tower's top: within its landing reach, and resting on it (not below). */
 /** a jelly's bounce, as the aim has it: so little up (cm/s) and it's settled; and how long its slide carries it on, settled (s) */
@@ -865,25 +873,45 @@ export function towerAt(lv: Level, p: V3, slack = 0): number {
 export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power: number } | null {
   const tw = lv.towers[k];
   const yaw = Math.atan2(tw.at[0] - from[0], tw.at[2] - from[2]);
-  // (onto a jelly, a band that holds, not a lucky strength among skids and bounces off it)
-  const glossy = !!(tw.land ?? tw.shapes).some((s) => s.jel);
-  let lo = -1, hi = -1;
-  for (let p = 0; p <= 1.0001; p += 0.01) {
-    const pa = path(lv, from, launch(yaw, p), 3, t);
-    // (on its top; or, for honey, against the honey, which holds: at its front, where the way on's from, not round its side)
-    // (a touch as it leaves, on what it's leaving, isn't a landing)
-    // (a rail: caught anywhere along its first part, from any side)
-    const ok = pa.hit && pa.t > 0.06 && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.rail ? pa.hit.shape === tw.rail.shape && railDist(tw.rail.shape, pa.hit.p).f < RAIL_CATCH : (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 && Math.hypot(pa.hit.p[0] - tw.at[0], pa.hit.p[2] - tw.at[2]) < 6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5));
-    if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) { if (!glossy || hi - lo > 0.005) break; lo = hi = -1; }
+  // (onto a springboard: off it, onto the one after; a top after it, or nothing to bounce on to yet)
+  const on = tw.spring ? nextTop(lv, k) : k;
+  if (tw.spring && on === k) return null;
+  // (onto a jelly, or off one, a band that holds, not a lucky strength among skids and bounces off it)
+  const glossy = tw.spring || !!(tw.land ?? tw.shapes).some((s) => s.jel);
+  // (at it; or, at a springboard, turned a little the way the one after it is, as a bounce keeps the way it's going)
+  const yn = Math.atan2(lv.towers[on].at[0] - from[0], lv.towers[on].at[2] - from[2]);
+  let dy = yn - yaw;
+  dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+  for (const f of tw.spring ? [0, 0.35, 0.7, 1] : [0]) {
+    const yw = yaw + dy * f;
+    let lo = -1, hi = -1;
+    for (let p = 0; p <= 1.0001; p += 0.01) {
+      const pa = path(lv, from, launch(yw, p), 3, t);
+      // (on its top; or, for honey, against the honey, which holds: at its front, where the way on's from, not round its side)
+      // (a touch as it leaves, on what it's leaving, isn't a landing)
+      // (a rail: caught anywhere along its first part, from any side)
+      const ok = pa.hit && pa.t > 0.06 && (!tw.spring || !!pa.via?.some((j) => (tw.land ?? tw.shapes).includes(j))) && landsOn(lv.towers[on], pa.hit);
+      if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) { if (!glossy || hi - lo > 0.005) break; lo = hi = -1; }
+    }
+    // (a little short of the middle of the band: it carries on a little after it lands)
+    if (lo >= 0 && !(glossy && hi - lo < 0.005)) return { yaw: yw, power: lo + (hi - lo) * 0.4 };
   }
-  // (a little short of the middle of the band: it carries on a little after it lands)
-  return lo < 0 || (glossy && hi - lo < 0.005) ? null : { yaw, power: lo + (hi - lo) * 0.4 };
+  return null;
 }
 /**
  * The autopilot's flick, from where it is, having last stood on tower `at` (null: wait); on to the next; else
  * back to the middle of this one (not a jar's); else on past the next; else, wedged somewhere
  * with no clear flick, a hop toward the next to get loose.
  */
+/** whether a flight's end is a landing on tower tw: on its top; against a jar's honey, at its front, about where the way on's from; caught by a rail near its start */
+function landsOn(tw: Tower, hit: NonNullable<Path['hit']>): boolean {
+  if (!(tw.land ?? tw.shapes).includes(hit.shape)) return false;
+  if (tw.rail) return hit.shape === tw.rail.shape && railDist(tw.rail.shape, hit.p).f < RAIL_CATCH && onTop(tw, hit.p, -1.5);
+  if (tw.jar) return hit.shape.tack > 1 && Math.abs(hit.n[1]) < 0.6 && Math.hypot(hit.p[0] - tw.at[0], hit.p[2] - tw.at[2]) < 3.5 && Math.abs(hit.p[1] - tw.at[1] - REST_H) < 5 && onTop(tw, hit.p, -1.5);
+  return hit.n[1] > 0.7 && onTop(tw, hit.p, -1.5);
+}
+/** the ways between a level's tops: as laid, or each to the next */
+export function waysOf(lv: Level): Array<[number, number]> { return lv.ways ?? lv.towers.slice(1).map((_, k): [number, number] => [k, k + 1]); }
 /** which top to make for next from top k: the place's own say, or, on a run, the one after */
 export function nextTop(lv: Level, k: number): number { return Math.min(lv.towers.length - 1, Math.max(0, lv.next ? lv.next[k] ?? k + 1 : k + 1)); }
 export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cling: V3 | null = null): { yaw: number; power: number; climb?: V3; shimmy?: number } | null {
@@ -918,6 +946,11 @@ export function autoFlick(lv: Level, from: V3, at: number, t = 0, butter = 0, cl
     const c = climbAim(lv, from, cling, k, t);
     if (c) return { yaw: 0, power: c.power, climb: cling };
   }
+  // (clinging to a side with no flick from it that lands, nor a climb: push off it, out from the wall, and drop, to
+  // start again from the last top, as a player would; else a hop toward the next to get loose)
+  if (cling) return { yaw: Math.atan2(cling[0], cling[2]), power: 0.35 };
+  // (on a ledge that isn't a top, with no flick from it that lands: off the front of the counter, to start again from the last)
+  if (towerAt(lv, from, 4) < 0) return { yaw: Math.PI, power: 0.45 };
   const nx = lv.towers[n1].at;
   return { yaw: Math.atan2(nx[0] - from[0], nx[2] - from[2]), power: 0.3 };
 }

@@ -1588,6 +1588,8 @@ let levelN = Math.max(1, Number(params.get('level')) || (() => { try { return Nu
 let lv!: Level;
 /** the tower last stood on (where a fall comes back to), falls, the clock, home (the time, or not yet) */
 let check = 0;
+/** whether it's been said, this time playing, that the way parts */
+let forkSaid = false;
 /** the tops stood on this go (not where it starts): for the score */
 const visited = new Set<number>();
 /**
@@ -1596,7 +1598,8 @@ const visited = new Set<number>();
  */
 interface Run { score: number; time: number; falls: number; tops: number }
 function scoreOf(time: number, falls: number, tops: number): Run {
-  const par = 8 * Math.max(1, lv.towers.length - 1);
+  // (par: by the way it's laid to go, the sure way where there's a choice)
+  const par = 8 * Math.max(1, (lv.route?.length ?? lv.towers.length) - 1);
   const score = Math.max(0, tops * 100 + Math.max(0, Math.round((par - time) * 10)) - falls * 60 + (falls ? 0 : 150));
   return { score, time, falls, tops };
 }
@@ -3259,6 +3262,8 @@ function tick(dt: number) {
   // (stood on it: on its feet on its top, or hanging from it if it's a rail; not draped over its edge, nor clinging to its side)
   const stood = k >= 0 && (lv.towers[k].rail ? !!body.onRail : body.onFeet);
   if (stood && body.contacts > 0 && speed < 30) { check = k; if (k > 0) visited.add(k); if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
+  // (on a top the way parts at, the first time: say so)
+  if (stood && !benchName && !forkSaid && lv.ways && lv.ways.filter(([a]) => a === k).length > 1 && still > 0.5) { forkSaid = true; hint('two ways on: the sure way along the front; along the back, one long hop, quicker', 5000); }
   // (sat still: its drift, not its speed, so a quiver on an edge counts as still)
   // (sat still: not drifting, and touching, or only a moment off it, trembling on a jelly)
   const quiet = len(sub(body.drift, carried(lv, body.com))) < 6 && body.sinceContact < 0.12;
@@ -3279,8 +3284,8 @@ function tick(dt: number) {
     chime();
     showHands();
     if (way[way.length - 1] !== k) way.push(k);
-    if (benchName || auto) hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}${lv.route ? ` · ${wayWords(way)}` : ''}`, 9000);
-    if (lv.route && !auto) { try { localStorage.setItem(WAYS(), JSON.stringify([{ way: wayWords(way), t: Math.round(clock * 10) / 10, falls }, ...waysKept()].slice(0, 30))); } catch { /* */ } benchPanel(); }
+    if (benchName || auto) hint(`home! ${clock.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}${lv.route && benchName ? ` · ${wayWords(way)}` : ''}`, 9000);
+    if (lv.route && benchName && !auto) { try { localStorage.setItem(WAYS(), JSON.stringify([{ way: wayWords(way), t: Math.round(clock * 10) / 10, falls }, ...waysKept()].slice(0, 30))); } catch { /* */ } benchPanel(); }
     // (scored; a card, a new best gold)
     if (!benchName && !auto) showDone(scoreOf(clock, falls, visited.size));
     try { if (!auto && !benchName) localStorage.setItem(STORE + ':reached', String(Math.max(reachedNow(), levelN + 1))); } catch { /* */ }
@@ -3316,7 +3321,8 @@ function showStatus() {
   if (performance.now() - statusAt < 100) return;
   statusAt = performance.now();
   const t = home >= 0 ? home : clock;
-  $('status').textContent = `${lv.route ? '' : `${check}/${lv.towers.length - 1} · `}${t.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`;
+  // (how far: where it stands now along a run; along ways that part and meet, how many tops it's been on, of the sure way's)
+  $('status').textContent = `${lv.route && benchName ? '' : lv.route ? `${visited.size}/${lv.route.length - 1} · ` : `${check}/${lv.towers.length - 1} · `}${t.toFixed(1)} s${falls ? ` · ${falls} fall${falls > 1 ? 's' : ''}` : ''}`;
 }
 
 // ─── small maths ─────────────────────────────────────────────────────────────────────────────────

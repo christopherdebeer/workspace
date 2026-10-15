@@ -105,9 +105,11 @@ if (!args.only) {
    * From top j, settled as a respawn leaves it, to the next: the autopilot's flick when it's ready, then that
    * flick changed by (dp, dy), played out to rest. Climbs (from a wall, up) are let finish.
    */
-  const probeOne = (lv, kind, j, dp, dy) => {
+  const probeOne = (lv, kind, j, target, dp, dy) => {
     calm(lv);
-    const target = L.nextTop(lv, j), s0 = lv.towers[0].at, d = new B.Dumpling([s0[0], s0[1] + L.REST_H + 2, s0[2]], kind);
+    const s0 = lv.towers[0].at, d = new B.Dumpling([s0[0], s0[1] + L.REST_H + 2, s0[2]], kind);
+    // (the way to its preferred next, as the autopilot goes; another way, aimed at that top itself)
+    const own = target === L.nextTop(lv, j);
     // (put there as a fall puts it back: on a rail, holding it)
     d.place(L.respawnAt(lv, j));
     let t = 0, still = 0, base = null;
@@ -117,7 +119,7 @@ if (!args.only) {
       if (d.com[1] < lv.kill) return { outcome: 'start-fall' };
       still = stillness(lv, d, still);
       if (still > 0.35 && d.canFlick) {
-        const a = L.autoFlick(lv, d.com, j, t, d.coated[L.DUST.butter], d.clinging ? d.wallN : null);
+        const a = own ? L.autoFlick(lv, d.com, j, t, d.coated[L.DUST.butter], d.clinging ? d.wallN : null) : L.aim(lv, d.com, target, t);
         if (a?.shimmy) { d.shimmy(a.shimmy); still = 0; } else if (a) base = a;
       }
     }
@@ -131,7 +133,8 @@ if (!args.only) {
       if (d.com[1] < lv.kill) return { outcome: 'fall', base };
       still = stillness(lv, d, still);
       const k = settledOn(lv, d, true);
-      if (k >= 0 && still > 0.5 && t - t1 > 0.3) return { outcome: k === target ? 'made' : k === j ? 'stayed' : k > target ? 'past' : 'back', base };
+      // (made: on it; onto a springboard, on it or bounced off it onto the one after)
+      if (k >= 0 && still > 0.5 && t - t1 > 0.3) return { outcome: k === target || (lv.towers[target].spring && k === L.nextTop(lv, target)) ? 'made' : k === j ? 'stayed' : k > target ? 'past' : 'back', base };
       // (against the next's wall, clinging: up it, as the autopilot would)
       if (lv.towers[target].wall && d.clinging && still > 0.35 && d.canFlick) {
         const a = L.autoFlick(lv, d.com, j, t, d.coated[L.DUST.butter], d.wallN);
@@ -142,10 +145,10 @@ if (!args.only) {
     return { outcome: 'stuck', base, where: { near: L.towerAt(lv, d.com, 4), feet: d.onFeet, cling: d.clinging, edge: !!d.onEdge, moving: Math.round(d.moving), com: d.com.map((v) => Math.round(v)) } };
   };
   const PS = [-0.06, -0.03, 0, 0.03, 0.06], YS = SAMPLES >= 15 ? [-0.05, 0, 0.05] : [0];
-  const probe = (n, seed, kind, j) => {
+  const probe = (n, seed, kind, j, k) => {
     const lv = C.buildLevel(n, seed);
     const res = [];
-    for (const dy of YS) for (const dp of PS) res.push({ dp, dy, ...probeOne(lv, kind, j, dp, dy) });
+    for (const dy of YS) for (const dp of PS) res.push({ dp, dy, ...probeOne(lv, kind, j, k, dp, dy) });
     const outcomes = {};
     for (const r of res) outcomes[r.outcome] = (outcomes[r.outcome] ?? 0) + 1;
     const own = res.find((r) => r.dp === 0 && r.dy === 0);
@@ -162,9 +165,9 @@ if (!args.only) {
     let lv;
     try { lv = C.buildLevel(+n, +seed); } catch (e) { console.log('R ' + JSON.stringify({ n: +n, seed: +seed, kind, made: null, error: String(e), tops: [], hops: [], witness: { home: -1, falls: 0, reached: 0 } })); continue; }
     const r = { n: +n, seed: +seed, kind, chapter: lv.chapter, made: lv.made, tops: lv.towers.map((t) => t.top), hops: [] };
-    for (let k = 1; k < lv.towers.length; k++) r.hops.push({ from: k - 1, to: k, toTop: lv.towers[k].top, ballistic: !!L.hop(lv, k - 1, k) });
+    for (const [j, k] of L.waysOf(lv)) r.hops.push({ from: j, to: k, toTop: lv.towers[k].top, ballistic: !!L.hop(lv, j, k) });
     r.witness = autopilot(lv, kind);
-    for (const h of r.hops) h.probe = probe(+n, +seed, kind, h.from);
+    for (const h of r.hops) h.probe = probe(+n, +seed, kind, h.from, h.to);
     console.log('R ' + JSON.stringify(r));
   }
 }

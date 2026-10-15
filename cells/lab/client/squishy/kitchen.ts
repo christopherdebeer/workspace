@@ -559,7 +559,7 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
   const start = piece('cloth', 0, 22, r, n)!;
   add(start);
   append(lv.decor, start.decor);
-  const corridors: V3[][] = [], flown: V3[][][] = [];
+  const corridors: V3[][] = [];
   // (the kitchen's solid things, as far as it's laid and on a way past it; laid again as it grows, and as a sill
   // on the course takes a window's place)
   const xa = Math.min(...start.stops.flatMap((t) => t.shapes).map((sh) => sh.lo[0])) - 40;
@@ -572,62 +572,155 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
   // (a place's levels grow a piece longer each; past them, longer still)
   const count = chapter === 'mixed' ? 7 + Math.min(5, Math.floor((n - CHAPTER_AT.mixed) / 2)) : 5 + i;
   const hard = Math.min(1, (n - 1) / 18);
-  let last: Kind | null = 'cloth', reach = 10;
+  let last: Kind | null = 'cloth';
   const used = new Map<Kind, number>();
   // (what the level brings in, as its hint says, comes early, for sure; and how it ends)
   const intro = place.intro(i), finale = place.finale(i, r);
-  for (let b = 0; b < count; b++) {
-    const goal = b === count - 1;
-    let laid = false;
-    furnish(lv.towers[lv.towers.length - 1].at[0] + 250);
-    for (let tries = 0; tries < 40 && !laid; tries++) {
+  // (the ways laid, each made sure of, from a top to a top; what each flies through, for the room's check at the end;
+  // which top each makes for next, kept as it's laid, so a springboard knows what's after it; how far past each its piece reaches)
+  const ways: Array<[number, number]> = [];
+  const flown = new Map<string, V3[][]>();
+  const nexts: number[] = [];
+  lv.next = nexts;
+  const reachOf: number[] = [start.reach];
+  let slot = 0;
+  type Got = { p: Piece; first: number; last: number; kind: Kind; ways: number; corridors: number; win: number; xb: number };
+  /**
+   * A piece laid on from the tops `from` (each a way into it, made sure of; the first, what it's laid on from):
+   * of these kinds (or the place's own), across the counter in this band (or about where the last was), this much
+   * further on than it'd be, home; up to forty tries, then nothing.
+   */
+  const layOne = (from: number[], o: { kinds?: Kind[]; z?: [number, number]; goal?: boolean; far?: number; spring?: boolean; notHang?: boolean } = {}): Got | null => {
+    const prev = lv.towers[from[0]];
+    const xb = Math.max(...from.map((f) => lv.towers[f].at[0])) + 250;
+    furnish(xb);
+    for (let tries = 0; tries < 40; tries++) {
       // (and if nothing will fit, a steamer close by, about as high, on something; laid plainly, only that)
       const easy = plain || tries >= 24;
-      const kind: Kind = goal ? (finale && tries < 20 ? finale : 'stack') : easy ? 'stack' : b < intro.length && tries < 16 ? intro[b] : pick(r, n, last, used);
+      const fresh = o.kinds && (() => { const least = Math.min(...o.kinds.map((q) => used.get(q) ?? 0)); return o.kinds.filter((q) => (used.get(q) ?? 0) <= least + (tries > 8 ? 9 : 0)); })();
+      const kind: Kind = o.goal ? (finale && tries < 20 ? finale : 'stack') : easy ? 'stack' : fresh ? fresh[Math.floor(r() * fresh.length)] : slot < intro.length && tries < 16 ? intro[slot] : pick(r, n, last, used);
       // (what's hung from, not the last thing before home: home's laid from where it's let go of, and must be reachable)
-      if (b >= count - 3 && !goal && (kind === 'rail' || kind === 'sill' || kind === 'oven')) continue;
-      const prev = lv.towers[lv.towers.length - 1];
-      const gap = easy && !goal ? ramp(r, 4, 9) : (tries < 20 ? ramp(r, 6, 12 + 14 * hard) * (1 - tries * 0.02) : ramp(r, 4, 8) + (tries - 20) * 1.5);
-      const x = prev.at[0] + reach + gap + (kind === 'towel' || kind === 'tray' || kind === 'shelfHome' ? 18 : kind === 'honey' ? 2 : 12);
-      // (from a jar's side, forward, away from the jar)
-      const z = prev.jar ? Math.max(FRONT + 12, prev.at[2] - ramp(r, 16, 26)) : Math.max(FRONT + 12, Math.min(BACK - 22, prev.at[2] + ramp(r, -22, 22) * (easy ? 0.4 : 1)));
+      if (o.notHang && (kind === 'rail' || kind === 'sill' || kind === 'oven')) continue;
+      const gap = easy && !o.goal ? ramp(r, 4, 9) : (tries < 20 ? ramp(r, 6, 12 + 14 * hard) * (1 - tries * 0.02) : ramp(r, 4, 8) + (tries - 20) * 1.5);
+      const x = Math.max(...from.map((f) => lv.towers[f].at[0] + reachOf[f])) + gap + (kind === 'towel' || kind === 'tray' || kind === 'shelfHome' ? 18 : kind === 'honey' ? 2 : 12) + (easy ? 0 : o.far ?? 0);
+      // (from a jar's side, forward, away from the jar; in its band, if it has one)
+      // (a jar: set back from where it's flown at from, so it's met at its front, where the honey's run, not round its flank)
+      const z = kind === 'honey' && !easy ? Math.min(BACK - 26, prev.at[2] + ramp(r, 14, 20)) : o.z && !easy ? ramp(r, o.z[0], o.z[1]) : prev.jar ? Math.max(FRONT + 12, prev.at[2] - ramp(r, 16, 26)) : Math.max(FRONT + 12, Math.min(BACK - 22, prev.at[2] + ramp(r, -22, 22) * (easy ? 0.4 : 1)));
       const y = Math.round(Math.max(LOW + 1, Math.min(30, prev.at[1] > 32 ? ramp(r, 18, 26) : prev.at[1] + ramp(r, -4, 6))));
       // (home, and what's sure to fit when nothing else will: a steamer, on something)
       const sure = (top: Top, at: V3, rad: number): Piece => { const t = standOn(top, at, rad, 0, r, n); if (!t.on) onHob.add(t.stop); return { stops: [t.stop], extra: [], decor: t.decor, reach: rad + 2 }; };
-      const p = goal && kind === 'stack' ? sure('goal', [x, Math.round(ramp(r, LOW + 3, LOW + 11)), z], 13) : easy ? sure('steamer', [x, y, z], 11) : piece(kind, x, z, r, n);
+      const p = o.goal && kind === 'stack' ? sure('goal', [x, Math.round(ramp(r, LOW + 3, LOW + 11)), z], 13) : easy ? sure('steamer', [x, y, z], 11) : piece(kind, x, z, r, n);
       if (!p) continue;
+      if (o.spring && !easy) p.stops[0].spring = true;
       // (what it takes of the wall, the kitchen leaves it, before it's seen whether it fits; and has again if it doesn't)
-      const claims = p.wall ?? [], xb = prev.at[0] + 250;
+      const claims = p.wall ?? [], win = windows.length;
       const unclaim = () => { if (claims.length) { windows.length -= claims.length; furnish(xb); } };
       if (claims.length) { windows.push(...claims); furnish(xb); }
       if (!clear(lv, p, corridors, solid)) { unclaim(); continue; }
       const k0 = lv.towers.length;
       add(p);
-      // (each hop into it and through it can be made; and the one before still can, with it stood by it)
-      let ok = k0 < 2 || !!hop(lv, k0 - 2, k0 - 1);
-      const flights: V3[][] = [];
-      for (let k = k0; ok && k < lv.towers.length; k++) { const h = hop(lv, k - 1, k); if (h) { flights.push(...h.flights); flown[k] = h.flights; } else ok = false; }
-      if (!ok) { remove(p); unclaim(); continue; }
-      corridors.push(...flights);
+      const kl = lv.towers.length - 1;
+      // (each way into it and through it can be made; and each way into where it's laid from still can, with it stood
+      // by it: onto a springboard, that's off it onto this, so it's made sure of now; into a springboard laid last, not
+      // until what's after it is)
+      const was = from.map((f) => nexts[f]);
+      for (const f of from) if (lv.towers[f].spring || nexts[f] === undefined) nexts[f] = k0;
+      const got: Array<[number, number, V3[][]]> = [];
+      let ok = true;
+      for (const f of from) for (const [a, b] of ways) if (ok && b === f) { const h = hop(lv, a, b); if (!h) ok = false; else if (lv.towers[f].spring) got.push([a, b, h.flights]); }
+      for (const f of from) if (ok && !(lv.towers[k0].spring && k0 === kl)) { const h = hop(lv, f, k0); if (h) got.push([f, k0, h.flights]); else ok = false; }
+      for (let k = k0 + 1; ok && k <= kl; k++) { const h = hop(lv, k - 1, k); if (h) got.push([k - 1, k, h.flights]); else ok = false; }
+      if (!ok) { remove(p); unclaim(); from.forEach((f, q) => { if (was[q] === undefined) delete nexts[f]; else nexts[f] = was[q]; }); continue; }
+      // (into a springboard laid last: a way, made sure of when what's after it is)
+      if (lv.towers[k0].spring && k0 === kl) for (const f of from) ways.push([f, k0]);
+      const c0 = corridors.length, w0 = ways.length;
+      for (const [a, b, fl] of got) { if (!ways.some(([q, w]) => q === a && w === b)) ways.push([a, b]); flown.set(`${a}>${b}`, fl); corridors.push(...fl); }
+      for (let k = k0; k < kl; k++) nexts[k] = k + 1;
+      for (let k = k0; k <= kl; k++) reachOf[k] = p.reach;
       append(lv.decor, p.decor);
       if (p.hole) holes.push(p.hole);
-      last = kind; reach = p.reach; laid = true;
-      used.set(kind, (used.get(kind) ?? 0) + 1);
+      return { p, first: k0, last: kl, kind, ways: w0, corridors: c0, win, xb };
     }
+    return null;
+  };
+  /** what layOne laid, unlaid (the last laid first) */
+  const undo = (g: Got) => {
+    remove(g.p);
+    for (let q = ways.length - 1; q >= 0; q--) if (ways[q][0] >= g.first || ways[q][1] >= g.first) { flown.delete(`${ways[q][0]}>${ways[q][1]}`); ways.splice(q, 1); }
+    corridors.length = g.corridors;
+    for (let k = 0; k < nexts.length; k++) if (nexts[k] !== undefined && (k >= g.first || nexts[k] >= g.first)) delete nexts[k];
+    lv.decor.length -= g.p.decor.length;
+    if (g.p.hole) holes.pop();
+    if (windows.length !== g.win) { windows.length = g.win; furnish(g.xb); }
+  };
+  const pool = place.pool(i);
+  /** the sure way: broad tops, one after another; the short way: a springboard, or a small top, one long hop */
+  const BROAD: Kind[] = ['stack', 'tray', 'rack', 'paddle', 'susan', 'pan', 'board', 'plate', 'drainer', 'sponge', 'tiered', 'loaf'];
+  const SMALL: Kind[] = ['tin', 'stand', 'tilt', 'spoon', 'soap', 'lid', 'loaf'];
+  const broad = BROAD.filter((k) => pool.includes(k)), small = SMALL.filter((k) => pool.includes(k));
+  /**
+   * A fork, at top F: two ways on, that meet again. Along the front, the sure way: two broad tops; along the back,
+   * the short way: one long hop, onto a small top or off a springboard; where they meet, laid on from both. If the
+   * short way won't hold, it's left out; if the sure way won't, no fork.
+   */
+  const fork = (F: number): number | null => {
+    const A1 = layOne([F], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 14], notHang: true });
+    if (!A1) return null;
+    nexts[F] = A1.first;
+    const A2 = layOne([A1.last], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 16], notHang: true });
+    if (!A2) { undo(A1); return null; }
+    // (the short way: off a springboard, or onto a small top; if one won't meet the sure way again, the other)
+    const order = small.length ? (r() < 0.5 ? [true, false] : [false, true]) : [true];
+    let B: Got | null = null, M: Got | null = null;
+    for (const viaSpring of order) {
+      B = layOne([F], { kinds: viaSpring ? ['konjac'] : small, z: [BACK - 20, BACK - 16], far: ramp(r, 8, 16), spring: viaSpring, notHang: true });
+      M = B ? layOne([A2.last, B.last], { z: [FRONT + 22, BACK - 30], notHang: true }) : null;
+      if (M) break;
+      if (B) { undo(B); B = null; }
+    }
+    nexts[F] = A1.first;
+    if (!M) M = layOne([A2.last], { notHang: true });
+    if (!M) { undo(A2); undo(A1); return null; }
+    nexts[A2.last] = M.first;
+    if (B) nexts[B.last] = M.first;
+    for (const g of [A1, A2, B, M]) if (g) used.set(g.kind, (used.get(g.kind) ?? 0) + 1);
+    last = M.kind;
+    return M.last;
+  };
+  // (forks from a place's second level on, and in the whole kitchen: a way to choose, now and then, not near either end)
+  const forks = chapter !== 'table' && (i >= 1 || chapter === 'mixed') && !plain;
+  let cur = 0;
+  for (let b = 0; b < count; b++) {
+    slot = b;
+    const goal = b === count - 1;
+    if (forks && b >= Math.max(2, intro.length) && b + 3 <= count - 1 && r() < 0.55) {
+      const m = fork(cur);
+      if (m !== null) { cur = m; b += 2; continue; }
+    }
+    const g = layOne([cur], { goal, notHang: b >= count - 3 && !goal });
     // (a piece that wouldn't go anywhere: not this layout)
-    if (!laid) return { lv, ok: false };
+    if (!g) return { lv, ok: false };
+    nexts[cur] = g.first;
+    cur = g.last; last = g.kind;
+    used.set(g.kind, (used.get(g.kind) ?? 0) + 1);
   }
+  // (every top's next, and the way the opening view goes over it: the sure way, from the start to home)
+  for (let k = 0; k < lv.towers.length - 1; k++) if (nexts[k] === undefined) nexts[k] = k + 1;
+  lv.ways = ways;
+  const route = [0];
+  while (route[route.length - 1] !== lv.towers.length - 1 && route.length <= lv.towers.length) route.push(nexts[route[route.length - 1]]);
+  lv.route = route;
   lv.shapes = lv.shapes.filter((sh) => !solid.has(sh));
   room(lv, chapter, holes, windows);
-  // (and the kitchen as it is, all known now: each hop that flies near it still made, else laid afresh)
+  // (and the kitchen as it is, all known now: each way that flies near it still made, else laid afresh)
   if (lv.towers[lv.towers.length - 1].top !== 'goal') return { lv, ok: false };
-  const k = lv.kitchen;
-  if (!k) return { lv, ok: true };
-  const final = roomShapes({ ...k, yt: 0, g: lv.ground });
+  const kz = lv.kitchen;
+  if (!kz) return { lv, ok: true };
+  const final = roomShapes({ ...kz, yt: 0, g: lv.ground });
   lv.shapes.push(...final);
   const m = RADIUS * 3;
   const nearIt = (q: V3) => final.some((sh) => q[0] > sh.lo[0] - m && q[0] < sh.hi[0] + m && q[1] > sh.lo[1] - m && q[1] < sh.hi[1] + m && q[2] > sh.lo[2] - m && q[2] < sh.hi[2] + m);
-  for (let t = 1; t < lv.towers.length; t++) if (flown[t]?.some((f) => f.some(nearIt)) && !hop(lv, t - 1, t)) return { lv, ok: false };
+  for (const [a, b] of ways) if (flown.get(`${a}>${b}`)?.some((f) => f.some(nearIt)) && !hop(lv, a, b)) return { lv, ok: false };
   return { lv, ok: true };
 }
 

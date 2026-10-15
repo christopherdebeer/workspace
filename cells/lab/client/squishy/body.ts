@@ -990,7 +990,8 @@ export class Dumpling {
     // tack tires on a wall (not on honey); comes back in the air and on the flat
     if (wall && this.onFloor < 0.3) { this.tack = Math.max(0, this.tack - dt * 0.9 * tire); this.grip = Math.max(0, this.grip - dt * tire); }
     else if (contacts === 0 || this.sinceFlick > 0.3) this.tack = Math.min(1, this.tack + dt * 1.5);
-    if (contacts > 0 && this.onFloor > 0.5) this.grip = Math.min(1, this.grip + dt * 1.5);
+    // (and fills again on its feet on something, not while it's still against a side)
+    if (contacts > 0 && this.onFloor > 0.5 && !wall) this.grip = Math.min(1, this.grip + dt * 1.5);
     // (on the flat it sorts itself out; stuck to a wall it hangs as it is)
     this.shuffle(dt, contacts > 0 && this.onFloor > 0.25);
   }

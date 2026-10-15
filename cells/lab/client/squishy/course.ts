@@ -178,12 +178,13 @@ function breakfast(): Level {
   stop({ top: 'tray', at: [T[0], T[1] + 0.8, T[2]], r: 8, box: [13.5, 6.5], yaw: 0, shapes: [tray, ...lips, ...bt.shapes], land: [tray, ...bt.shapes] });
 
   // 2. a konjac jelly on a saucer, on a cake tin: it throws you up
-  const K: V3 = [64, 0, 24];
-  const tinK = cyl(K[0], K[2], 11, 0, 16, MAT.tin);
-  const saucer = cyl(K[0], K[2], 12, 16, 16.8, MAT.porcelain, 0.5);
-  const kj = jelly(K[0], K[2], 9, 16.8, 24.8, MAT.konjac, FEELS.konjac);
+  const K: V3 = [74, 0, 24];
+  const tinK = cyl(K[0], K[2], 11, 0, 24, MAT.tin);
+  const saucer = cyl(K[0], K[2], 12, 24, 24.8, MAT.porcelain, 0.5);
+  const kj = jelly(K[0], K[2], 9, 24.8, 32.8, MAT.konjac, FEELS.konjac);
   free(tinK, saucer, kj);
-  stop({ top: 'jelly', at: [K[0], 24.8, K[2]], r: 7, yaw: 0, shapes: [tinK, saucer, kj], land: [kj] });
+  // (a springboard, on a tall tin: off it, up onto the cake stand)
+  stop({ top: 'jelly', at: [K[0], 32.8, K[2]], r: 7, yaw: 0, shapes: [tinK, saucer, kj], land: [kj], spring: true });
 
   // 3. across from the toaster, the bread bin: enamel, sure
   const B: V3 = [36, 0, 50];

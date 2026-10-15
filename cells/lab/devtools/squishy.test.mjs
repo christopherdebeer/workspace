@@ -381,10 +381,17 @@ for (const kind of ['dough', 'jelly']) {
     assert.ok(a.towers.length >= 6, `level ${n}: ${a.towers.length} tops`);
     for (const t of a.towers) kinds.add(t.top);
     // (every hop: from the middle of each top, a flick that lands on the next)
-    for (let k = 1; k < a.towers.length; k++) assert.ok(L.hop(a, k - 1, k), `level ${n}: hop ${k - 1}→${k} can be made`);
+    for (const [j, k] of L.waysOf(a)) assert.ok(L.hop(a, j, k), `level ${n}: hop ${j}→${k} can be made`);
+    // (every top a way on from it home: wherever it stands, and starts again from, it isn't stuck)
+    { const home = a.towers.length - 1, reach = new Set([home]); let grew = true;
+      while (grew) { grew = false; for (const [j, k] of L.waysOf(a)) if (reach.has(k) && !reach.has(j)) { reach.add(j); grew = true; } }
+      for (let k = 0; k < home; k++) assert.ok(reach.has(k), `level ${n}: from top ${k} (${a.towers[k].top}), a way home`); }
     // (no safe ground anywhere: the table's or the counter's top is the fall, and every spot's well up off it)
     assert.ok(a.kill > 3 && a.towers.every((t) => t.at[1] > a.kill + 8), `level ${n}: its top's the fall, every spot well above it`);
   }
+  // (ways that part and meet again: somewhere, a choice)
+  { let forks = 0; for (let n = 1; n <= 24; n++) { const ins = new Map(); for (const [, k] of L.waysOf(C.buildLevel(n))) ins.set(k, (ins.get(k) ?? 0) + 1); if ([...ins.values()].some((c) => c > 1)) forks++; }
+    assert.ok(forks >= 4, `ways that part and meet again, in ${forks} levels`); }
   for (const k of ['steamer', 'plate', 'board', 'pudding', 'susan', 'tin', 'butter', 'honey', 'lid', 'pan', 'pad', 'spoon', 'bench', 'paddle', 'tilt', 'boule', 'tray', 'stand', 'bin', 'shelf', 'jelly', 'sponge', 'soap', 'drainer', 'rack', 'sill']) assert.ok(kinds.has(k), `a ${k} somewhere`);
   // (several levels to a place, and each laid fresh: no two alike, and the next in a place not the last again)
   for (const [n, ch] of [[1, 'table'], [4, 'table'], [5, 'counter'], [8, 'counter'], [9, 'sink'], [12, 'sink'], [13, 'stove'], [16, 'stove'], [17, 'mixed']]) assert.equal(C.buildLevel(n).chapter, ch, `level ${n} is at ${ch}`);

@@ -204,6 +204,18 @@ counter's well below every top, and to touch it is to fall. What a level brings 
 on the stove's second level, the lids on its third, the towel on its fourth) comes early in it,
 for sure; no level has more than two climbs or two jars.
 
+Now and then, from a place's second level on and all through the whole kitchen, the way parts: from
+one top, the sure way runs along the front of the counter, two broad tops one after the other (a tray,
+a rack, steamers on something, a loaf); and the short way along the back, one long hop, onto a small top
+(a tin, a cake stand, a spoon) or off a springboard, a konjac you bounce off on to where the two meet
+again. Both are made sure of, every way into every top, so wherever you've stood there's a way on
+home; and the short way's harder (played for real, most of its flicks make it, fewer than the sure
+way's). The camera, the autopilot and the par go the sure way; the short way's yours to find.
+
+A springboard (a konjac at a fork; the Breakfast Counter's, on its tall tin, up to the cake stand) is
+made sure of by bouncing off it onto the top after it, the aim's dots showing the bounce; stop on it
+instead and it's a top like any other, and on from it.
+
 A level's laid whole or not at all: a piece that won't go anywhere, or no home at the end, and that
 layout's dropped and the level laid afresh (a dozen times; then plainly, steamers on things, which
 always fit); never a level short of a piece. Each says how it was laid (`made`), and the same level can
