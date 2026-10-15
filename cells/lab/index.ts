@@ -9,6 +9,7 @@ import { bench as squishyBench, buildLevel as squishyLevel } from './client/squi
 import { levelMesh as squishyMesh, VSTRIDE as squishyStride } from './client/squishy/mesh';
 import { MAT as squishyMaterials } from './client/squishy/level';
 import { jarStrainProbe } from './client/squishy-lab/jar-strain';
+import { bodyRegression } from './client/squishy-lab/body-regress';
 
 /**
  * `@c15r/lab` — 3D and GL experiments, one cell.
@@ -248,9 +249,16 @@ export const handler = async (event: { rawPath?: string; rawQueryString?: string
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/lab(?=\/|$)/, '') || '/';
   try {
     const b = build();
+    if (path.startsWith('/_squishy-body-regress/')) {
+      const parts=path.split('/'),mode=parts[2]==='edge'?'edge':'free';
+      const frames=Math.max(1,Math.min(100,Number(parts[3])||40));
+      return text(200,'application/json; charset=utf-8',JSON.stringify(bodyRegression(mode,frames,parts[4]!=='nostrain',parts[5]==='jelly'?'jelly':'dough')),'no-store');
+    }
     if (path.startsWith('/_squishy-jar-strain/')) {
-      const mode=path.endsWith('/glance')?'glance':'hang';
-      return text(200,'application/json; charset=utf-8',JSON.stringify(jarStrainProbe(mode)),'no-store');
+      const parts=path.split('/'),mode=parts[2]==='glance'?'glance':'hang';
+      const frames=parts[3] ? Math.max(1,Math.min(140,Number(parts[3])||1)) : undefined;
+      const t0=Date.now(),probe=jarStrainProbe(mode,frames,parts[4]!=='nostrain');
+      return text(200,'application/json; charset=utf-8',JSON.stringify({...probe,elapsedMs:Date.now()-t0}),'no-store');
     }
     if (path.startsWith('/_squishy-optics-check/')) {
       const parts = path.split('/');

@@ -614,3 +614,15 @@ The jar's **main honey volume** is now rendered separately from the opaque cours
 The butter smear is now a connected, smooth tapered surface: an earlier fractional power of a *negative sine* produced non-finite geometry near its trailing end. The shader also removes the large random holes and blends the film into its substrate at the boundary. This slightly changes the smear silhouette but leaves the coating/adhesion rules unchanged.
 
 User's bubble fix is preserved: face culling remains disabled and the fragment shader selects the front-facing film. The zero-length bubble capsule UV also no longer divides by zero. A headless diagnostic at `/_squishy-optics-check/look` and `/_squishy-optics-check/coats` checks finite generated geometry and separate material layers; it does not verify WebGL or on-device performance.
+
+### Soft-body local strain / compliant adhesion (XPBD experiment)
+
+This pass retains clustered shape matching and global volume preservation, but adds **one-sided, compliant XPBD stretch constraints on unique physics-mesh edges**. Compression remains free, allowing squash, sag and wrinkles. Multipliers accumulate across solver iterations within each physics substep; compliance is scaled by substep time. The global radial extent limit remains a safety guard, **not** the primary material model.
+
+Honey and other adhesive non-rail surfaces no longer rigidly anchor every contact vertex. Attachment sites are sampled once, deterministically and spaced in undeformed physical space. Active bonds are compliant, creep with the surface, accrue strain and **peel under overload**, followed by a brief cooldown. Mechanical rail attachments retain the old full-strength behaviour.
+
+Use `?nostrain` as an A/B switch: it disables local XPBD edge constraints **only**, not improved peel/creep adhesion. `?perf` measures actual on-device frame rate. Test endpoints reuse the same `Dumpling.step()`: `/_squishy-jar-strain/glance/32`, `/_squishy-jar-strain/hang/32`, `/_squishy-body-regress/edge/28`, and `/_squishy-body-regress/free/28`. Append `/nostrain` for no-strain baseline or `/nostrain/jelly` for jelly in body regressions.
+
+**Current deterministic evidence:** radial bounds alone allowed local edge strain **26.77×**. XPBD reduces measured maximum local stretch to approximately **1.5–1.63×** in the 32-frame jar trials; sampled adhesion sites yield approximately **38 bonds** when hanging and **48 bonds** on glancing contact, rather than 100+ before peeling. Plate-edge 28-frame regression peaks at **1.49×** with all positions finite and volume remaining approximately 0.979–1.000× rest. Free motion peaks near **1.68×** in its sampled trial. These are reproducible physics trials, not proof of on-screen appearance or human-level playability.
+
+**Performance caution:** the constraint pass has nontrivial CPU overhead in the headless server. Do not infer iPhone Safari performance from server timings. Compare with `?nostrain&perf` on the same camera/level before promoting this to a final tuning.

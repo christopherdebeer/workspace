@@ -215,6 +215,11 @@ export class Dumpling {
   private comWas: V3 = [0, 0, 0];
   restVolume: number;
   private restExtent = 0; // undeformed body reach used by the physical strain constraint
+  /** Unique rest-topology edges. XPBD multipliers warm-start solver iterations. */
+  private stretchEdges: Array<{a:number;b:number;rest:number;lambda:number}> = [];
+  private stretchBefore: Float32Array;
+  /** A/B diagnostic only; enabled for normal play. */
+  localStrainEnabled = true;
   // touching, per particle: normal, depth pushed out this step, grip, bounce, surface velocity, normal speed coming in, and how (0 not, 1 touching, 2 near)
   private cn: Float32Array;
   private cd: Float32Array;
@@ -232,6 +237,11 @@ export class Dumpling {
   private crail: Array<Shape | null>;
   private railHold: Array<Shape | null>;
   private pin: Uint8Array;
+  /** Adhesive stress integrates over time; after peeling a particle cannot reattach immediately. */
+  private bondLoad: Float32Array;
+  private peelCooldown: Float32Array;
+  /** Evenly spaced rest-surface bond sites, independent of vertex numbering. */
+  private adhesiveSites: Uint8Array;
   /** (scratch: each point's weight on a jelly's bed) */
   private bw: Float32Array;
   /** how hard each particle's pressed against what it's on (0–1): touching, more as it comes in hard or sinks into a jelly's
@@ -321,9 +331,9 @@ export class Dumpling {
     this.n = s.pos.length / 3;
     this.tris = s.tris;
     const n = this.n;
-    this.x = new Float32Array(n * 3); this.v = new Float32Array(n * 3); this.p = new Float32Array(n * 3); this.q = new Float32Array(n * 3);
+    this.x = new Float32Array(n * 3); this.v = new Float32Array(n * 3); this.p = new Float32Array(n * 3); this.q = new Float32Array(n * 3); this.stretchBefore = new Float32Array(n * 3);
     this.cn = new Float32Array(n * 3); this.cd = new Float32Array(n); this.cmu = new Float32Array(n); this.cb = new Float32Array(n);
-    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.ctr = new Float32Array(n); this.ccr = new Float32Array(n); this.pin = new Uint8Array(n); this.bw = new Float32Array(n); this.cdust = new Uint8Array(n); this.crail = new Array(n).fill(null); this.railHold = new Array(n).fill(null);
+    this.cvs = new Float32Array(n * 3); this.cv0 = new Float32Array(n); this.cf = new Uint8Array(n); this.ctk = new Float32Array(n); this.ctr = new Float32Array(n); this.ccr = new Float32Array(n); this.pin = new Uint8Array(n); this.bondLoad = new Float32Array(n); this.peelCooldown = new Float32Array(n); this.adhesiveSites = new Uint8Array(n); this.bw = new Float32Array(n); this.cdust = new Uint8Array(n); this.crail = new Array(n).fill(null); this.railHold = new Array(n).fill(null);
     this.coat = new Float32Array(n); this.coatKind = new Uint8Array(n); this.press = new Float32Array(n); this.pressNow = new Float32Array(n);
     let cx = 0, cy = 0, cz = 0;
     for (let i = 0; i < n; i++) { cx += s.pos[i * 3]; cy += s.pos[i * 3 + 1]; cz += s.pos[i * 3 + 2]; }
@@ -337,6 +347,30 @@ export class Dumpling {
     aqq[3] = aqq[1]; aqq[6] = aqq[2]; aqq[7] = aqq[5];
     inv3(aqq, this.aqqInv);
     for (let i = 0; i < n; i++) this.restExtent = Math.max(this.restExtent, Math.hypot(this.q[3*i],this.q[3*i+1],this.q[3*i+2]));
+    // Deterministic Poisson-like rest-space sampling: one compliant
+    // adhesive constraint per contact patch, not a dense sheet of pins.
+    const bondSites: number[] = [], minGap2 = (RADIUS * .22) ** 2;
+    for(let i=0;i<n;i++){
+      const a=i*3;let spaced=true;
+      for(const j of bondSites){
+        const b=j*3,dx=this.q[a]-this.q[b],dy=this.q[a+1]-this.q[b+1],dz=this.q[a+2]-this.q[b+2];
+        if(dx*dx+dy*dy+dz*dz<minGap2){spaced=false;break;}
+      }
+      if(spaced){this.adhesiveSites[i]=1;bondSites.push(i);}
+    }
+    // Unique local edges restrain spikes even when volume and silhouette
+    // shape-matching still prefer a globally plausible dumpling.
+    const seen = new Set<number>();
+    for (let k=0;k<this.tris.length;k+=3) {
+      const a=this.tris[k],b=this.tris[k+1],c=this.tris[k+2];
+      for (const [u,v] of [[a,b],[b,c],[c,a]]) {
+        const i=Math.min(u,v),j=Math.max(u,v),key=i*n+j;
+        if(seen.has(key))continue;
+        seen.add(key);
+        const d=Math.hypot(this.q[i*3]-this.q[j*3],this.q[i*3+1]-this.q[j*3+1],this.q[i*3+2]-this.q[j*3+2]);
+        if(d>1e-5)this.stretchEdges.push({a:i*3,b:j*3,rest:d,lambda:0});
+      }
+    }
     this.makePatches();
     this.place(at);
     this.restVolume = this.volume();
@@ -357,7 +391,7 @@ export class Dumpling {
     this.com = [...at] as V3;
     this.vcom = [0, 0, 0]; this.drift = [0, 0, 0]; this.comWas = [...at] as V3;
     this.tack = 1; this.sinceContact = 0; this.sinceFlick = 9; this.squeeze = null;
-    this.spinMode = 0; this.spinLeft = 0; this.held = 0; this.grip = 1; this.limp = 0; this.honeyT = -1; this.climb = null; this.onRail = null; this.shim = null; this.railHold.fill(null); this.edgeShim = null; this.onFeet = false;
+    this.spinMode = 0; this.spinLeft = 0; this.held = 0; this.grip = 1; this.limp = 0; this.honeyT = -1; this.climb = null; this.onRail = null; this.shim = null; this.railHold.fill(null); this.pin.fill(0); this.bondLoad.fill(0); this.peelCooldown.fill(0); this.edgeShim = null; this.onFeet = false;
     this.coat.fill(0); this.coatKind.fill(0); this.press.fill(0); this.coated = new Array(DUSTS_N).fill(0); this.coatMost = DUST.none; this.sneeze = 0;
   }
   /**
@@ -622,6 +656,37 @@ export class Dumpling {
     this.deform = Math.sqrt(dev / n) / RADIUS;
   }
 
+  /** One-sided XPBD edge strain: freely compress, resist excess extension.
+   * Compliant constraints accumulate multipliers across iterations and
+   * scale with substep time. Shape matching continues to provide wobble.
+   */
+  private solveStretch(pos:Float32Array,h:number,iterations:number) {
+    const es=this.stretchEdges;
+    const compliance=(this.kind==='dough'?1e-9:3e-9)/(h*h);
+    const maxRatio=this.kind==='dough'?1.48:1.66;
+    for(const e of es)e.lambda=0;
+    for(let pass=0;pass<iterations;pass++) {
+      let acted=false;
+      for(const e of es) {
+        const ia=e.a,ib=e.b,dx=pos[ib]-pos[ia],dy=pos[ib+1]-pos[ia+1],dz=pos[ib+2]-pos[ia+2];
+        const d2=dx*dx+dy*dy+dz*dz,limit=e.rest*maxRatio;
+        // Most constraints are inactive: avoid sqrt on slack edges.
+        if(d2<=limit*limit && e.lambda===0)continue;
+        const d=Math.sqrt(d2);
+        if(d<1e-6)continue;
+        const C=d-limit;
+        const dl=Math.min(-e.lambda,(-C-compliance*e.lambda)/(2+compliance));
+        if(dl===0)continue;
+        acted=true;
+        e.lambda+=dl;
+        const k=dl/d;
+        pos[ia]-=dx*k;pos[ia+1]-=dy*k;pos[ia+2]-=dz*k;
+        pos[ib]+=dx*k;pos[ib+1]+=dy*k;pos[ib+2]+=dz*k;
+      }
+      if(!acted)break;
+    }
+  }
+
   /** PBD inequality constraint: even if a nearly singular volume-conserving
    * affine fit or honey pinning pulls one skin particle into a needle,
    * the actual geometry cannot exceed a physically plausible radial reach.
@@ -776,6 +841,7 @@ export class Dumpling {
       if (this.grab) this.pullOut(p, this.grab.w, this.grab.pull);
       this.keepVolume(p);
       this.boundStrain(p);
+      if(this.localStrainEnabled && (this.nearby.length>0 || contacts>0 || this.contacts>0 || this.grab || this.squeeze || this.limp>.05)) this.solveStretch(p,h,1);
       // (on a jelly: it gives under the whole of it, as a bed)
       this.bedFoot = 0;
       if (lv.jellies) for (const sh of this.nearby) if (sh.jel) this.bed(sh.jel, sh.mu, p, h);
@@ -829,6 +895,8 @@ export class Dumpling {
       }
       // Collision correction also has to respect the physical strain bound.
       this.boundStrain(p);
+      // The post-adhesion XPBD pass already resolves contact-induced stretch;
+      // avoid a redundant extra solve before velocity/friction calculation.
       // velocities from where they went; friction, bounce and tack where they touch
       // (shimmying along a rail: what's held to it slides along it so far this small step, the rest drawn after, as
       // it hangs; short of either end, where it stops)
@@ -856,6 +924,7 @@ export class Dumpling {
         const i3 = i * 3;
         const was = this.pin[i];
         this.pin[i] = 0;
+        this.peelCooldown[i] = Math.max(0, this.peelCooldown[i] - h);
         let nvx = (p[i3] - x[i3]) / h, nvy = (p[i3 + 1] - x[i3 + 1]) / h, nvz = (p[i3 + 2] - x[i3 + 2]) / h;
         if (cf[i]) {
           const nx = cn[i3], ny = cn[i3 + 1], nz = cn[i3 + 2], sx = cvs[i3], sy = cvs[i3 + 1], sz = cvs[i3 + 2];
@@ -921,17 +990,36 @@ export class Dumpling {
           const patchFacing = facing < -RADIUS * 0.12;
           const patchWhole = Math.hypot(relX, relY, relZ) < RADIUS * 1.85;
           const adhesivePatch = !!crail[i] || (patchFacing && patchWhole);
-          if (holds && tackOn && adhesivePatch && (was || this.honeyT < SPLAT)) {
-            // (honey: what touches it is held where it touched, so a splat against it hangs there until it's flicked)
-            // (it stays put, but for being pushed out of the honey's surface; nothing draws it off. Or held but creeping:
-            // honey oozes, wood lets go slowly; down the side as it's drawn down, no faster than the hold allows)
-            const cr = crail[i] ? 0 : Math.max(ccr[i], honeyed ? 2 : 0), um = Math.hypot(ux, uy, uz), cf2 = cr > 0 && um > 1e-6 ? Math.min(1, cr / um) : 0;
-            tx = ux * cf2; ty = uy * cf2; tz = uz * cf2;
+          // Sparse surface-facing adhesive anchors; ordinary contacts still
+          // supply friction. Rails retain full mechanical anchoring.
+          const bondCandidate = !!crail[i] || this.adhesiveSites[i] !== 0;
+          if (holds && tackOn && adhesivePatch && bondCandidate && this.peelCooldown[i] <= 0 && (was || this.honeyT < SPLAT)) {
+            const cr = crail[i] ? 0 : Math.max(ccr[i], honeyed ? 2 : 0);
+            const um = Math.hypot(ux,uy,uz), cf2 = cr > 0 && um > 1e-6 ? Math.min(1,cr/um) : 0;
+            const creepX=ux*cf2, creepY=uy*cf2, creepZ=uz*cf2;
             const sl = sr && crail[i] === sr ? 1 : 0;
-            p[i3] = x[i3] + nx * cd[i] + sdx * sl + tx * h; p[i3 + 1] = x[i3 + 1] + ny * cd[i] + sdy * sl + ty * h; p[i3 + 2] = x[i3 + 2] + nz * cd[i] + sdz * sl + tz * h;
-            if (crail[i]) { railOn = crail[i]; railPins++; this.railHold[i] = crail[i]; }
-            vn = Math.min(vn, 0);
-            pinned++; this.pin[i] = 1;
+            const ax=x[i3]+nx*cd[i]+sdx*sl+creepX*h;
+            const ay=x[i3+1]+ny*cd[i]+sdy*sl+creepY*h;
+            const az=x[i3+2]+nz*cd[i]+sdz*sl+creepZ*h;
+            const mismatch=Math.hypot(p[i3]-ax,p[i3+1]-ay,p[i3+2]-az);
+            const peel = !crail[i] && (mismatch > RADIUS*.27 || (this.bondLoad[i] += Math.max(0,mismatch-.065)*h*18-h*.12) > .92);
+            if(peel){
+              // Peel from overload; never yank the body back to an impossible anchor.
+              this.bondLoad[i]=0;
+              this.peelCooldown[i]=.20;
+            }else{
+              this.bondLoad[i]=Math.max(0,this.bondLoad[i]);
+              const attach=crail[i]?1:.48;
+              p[i3]+=(ax-p[i3])*attach;
+              p[i3+1]+=(ay-p[i3+1])*attach;
+              p[i3+2]+=(az-p[i3+2])*attach;
+              tx=creepX;ty=creepY;tz=creepZ;
+              if(crail[i]){railOn=crail[i];railPins++;this.railHold[i]=crail[i];}
+              vn=Math.min(vn,0);
+              pinned++;this.pin[i]=1;
+            }
+          }else{
+            this.bondLoad[i]=Math.max(0,this.bondLoad[i]-h*.6);
           }
           nvx = sx + nx * vn + tx; nvy = sy + ny * vn + ty; nvz = sz + nz * vn + tz;
         }
@@ -939,9 +1027,12 @@ export class Dumpling {
         x[i3] = p[i3]; x[i3 + 1] = p[i3 + 1]; x[i3 + 2] = p[i3 + 2];
         vx += nvx; vy += nvy; vz += nvz;
       }
-      // Sticky pinning can rewrite positions after the initial projection.
-      // Bound the committed particle geometry as well, releasing overstressed pins.
+      // Contact and adhesion can rewrite committed vertices after prediction.
+      // Project the *actual* mesh edges and reconcile corrected velocities.
+      this.stretchBefore.set(x);
       this.boundStrain(x, v);
+      if(this.localStrainEnabled && (this.nearby.length>0 || contacts>0 || this.contacts>0 || pinned>0 || this.grab || this.squeeze || this.limp>.05)) this.solveStretch(x,h,2);
+      for(let k=0;k<n*3;k++)v[k]+=Math.max(-180,Math.min(180,(x[k]-this.stretchBefore[k])/h));
       vx=0;vy=0;vz=0;
       for(let i=0;i<n;i++){vx+=v[3*i];vy+=v[3*i+1];vz+=v[3*i+2];}
       vx /= n; vy /= n; vz /= n;

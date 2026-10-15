@@ -1952,6 +1952,7 @@ function startLevel(n: number, quiet = false) {
   const at = lv.towers[0].at;
   // (set down a little above, to drop on: on a lid, its knob is under it)
   body = new Dumpling([at[0], at[1] + REST_H + 2, at[2]], skin);
+  body.localStrainEnabled = !params.has('nostrain');
   prevX = new Float32Array(body.x);
   check = 0; falls = 0; clock = 0; home = -1; still = 0; fallenAt = -1; visited.clear(); $('done').classList.remove('on');
   way = [0];
@@ -2420,6 +2421,7 @@ btn('skin', () => {
   try { localStorage.setItem(STORE + ':skin', skin); } catch { /* */ }
   const at = body.com;
   body = new Dumpling([at[0], at[1] + 0.5, at[2]], skin);
+  body.localStrainEnabled = !params.has('nostrain');
   prevX = new Float32Array(body.x);
   showSkin();
 });
@@ -2460,6 +2462,7 @@ function startTitle() {
   const face = titleYaw + Math.PI;
   body.place([pad[0] - right[0] * 3.9, y, pad[2] - right[2] * 3.9], face);
   buddy = new Dumpling([0, 0, 0], skin === 'jelly' ? 'dough' : 'jelly');
+  buddy.localStrainEnabled = !params.has('nostrain');
   buddy.place([pad[0] + right[0] * 4.2, y, pad[2] + right[2] * 4.2], face);
   prevX = new Float32Array(body.x); buddyPrev = new Float32Array(buddy.x);
   seats = [{ b: body, at: [...body.com] as V3, face }, { b: buddy, at: [...buddy.com] as V3, face }];
@@ -3546,7 +3549,7 @@ function frame(now: number) {
   drawBand();
   showStatus();
   (window as unknown as { __squishy: unknown }).__squishy = {
-    visualBuild: 'honey-volume-v2', optics: { bubbles: params.has('oldbubbles') ? 'legacy' : 'thin-film', liquid: params.has('oldliquid') ? 'legacy' : 'transmission', honey: params.has('oldhoney') ? 'opaque' : 'ray-cylinder', honeyJars: honeyMeshes.length, liquidTriangles: liquidMesh ? liquidMesh.count / 3 : 0 },
+    visualBuild: 'xpbd-contact-v1', physics:{strain:!params.has('nostrain'),adhesion:'compliant-peel'}, optics: { bubbles: params.has('oldbubbles') ? 'legacy' : 'thin-film', liquid: params.has('oldliquid') ? 'legacy' : 'transmission', honey: params.has('oldhoney') ? 'opaque' : 'ray-cylinder', honeyJars: honeyMeshes.length, liquidTriangles: liquidMesh ? liquidMesh.count / 3 : 0 },
     level: levelN, towers: lv.towers.length, check, falls, clock, home, fly, ahead: Math.round(ahead * 100) / 100, com: body.com.map((v) => Math.round(v * 10) / 10),
     speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, pushing: !!pushNow, power: aimNow?.power ?? pushNow?.power ?? 0, framed: Math.round(framed * 100) / 100,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,
