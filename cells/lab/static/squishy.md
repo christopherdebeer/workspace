@@ -172,8 +172,10 @@ against the towel, low enough to hold and high enough that a climb from there ge
 
 The counter round a steel sink, the windows over it; the counter's the fall, and so's the water. You
 start on a folded dishcloth on an upturned pudding basin. Its pieces: a sponge up on something (soft,
-a dead jelly: it soaks up a landing); a soap dish up on something, heaped round its rim with bubbles,
-which bounce you and hold nothing; a two-tier dish rack, its steel drip tray grooved and sloping, wet,
+a dead jelly: it soaks up a landing); a soap dish up on something, foam on it in clusters, big bubbles
+with smaller round them, its middle clear: clear bubbles that bounce you and then pop (a hard landing
+beside one, or going by close and fast, knocks it loose to float off and pop a few seconds later, or
+when it's touched again), growing back a few seconds after; a two-tier dish rack, its steel drip tray grooved and sloping, wet,
 so it slips, and above it the wire rack, its rails to land across, two plates stood up at its far end;
 things on upturned bowls and wire racks; later a mango pudding, a bare rack, a konjac, a tiered stand.
 Most of its levels end, and the first always does, across the sink, at the dishcloth hung over the

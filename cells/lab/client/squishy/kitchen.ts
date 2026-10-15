@@ -386,15 +386,26 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number, yAt?: numbe
     // a soap dish up on something, heaped with bubbles round its rim: they bounce you, and hold nothing
     const hd = under(ROOM.sink, Math.round(ramp(r, LOW - 1, LOW + 3)), 9.5);
     const Y = hd.y, dish = cyl(x, z, 9, Y, Y + 1.2, MAT.porcelain, 0.5);
+    // (foam, in clusters over the dish, its middle and its rim: each a big bubble with smaller round it, mostly small,
+    // now and then one sat up on another; the very middle left clear, to land on)
     const bubbles: Shape[] = [];
-    const nb = 6 + Math.floor(r() * 3);
-    for (let i = 0; i < nb; i++) {
-      const a = (i / nb) * Math.PI * 2 + r() * 0.4, d = 6.8 + 1.2 * r(), br = 1.4 + r() * 0.9;
-      const c: V3 = [x + Math.cos(a) * d, Y + 1.2 + br * 0.75, z + Math.sin(a) * d];
-      const b = cap(c, c, br, MAT.bubble, 0.1);
-      b.bounce = 0.85; b.tack = 0;
-      bubbles.push(b);
+    const top = Y + 1.2, clusters = 2 + Math.floor(r() * 3);
+    for (let c = 0; c < clusters; c++) {
+      const a = r() * Math.PI * 2, d = ramp(r, 3.2, 7.8), cx = x + Math.cos(a) * d, cz = z + Math.sin(a) * d;
+      const big = 1.6 + r() * 1.1;
+      const lead = cap([cx, top + big * 0.8, cz], [cx, top + big * 0.8, cz], big, MAT.bubble, 0.1);
+      bubbles.push(lead);
+      const n = 2 + Math.floor(r() * 4);
+      for (let k = 0; k < n; k++) {
+        const br = 0.5 + 1.3 * r() ** 2, b = r() * Math.PI * 2, o = big + br * 0.7;
+        let bx = cx + Math.cos(b) * o, bz = cz + Math.sin(b) * o, by = top + br * 0.8;
+        // (sat up on the big one, now and then)
+        if (k === 0 && r() < 0.45) { bx = cx + Math.cos(b) * big * 0.4; bz = cz + Math.sin(b) * big * 0.4; by = top + big * 0.8 + big * 0.75 + br * 0.5; }
+        if (Math.hypot(bx - x, bz - z) < 2.6 || Math.hypot(bx - x, bz - z) > 9.8) continue;
+        bubbles.push(cap([bx, by, bz], [bx, by, bz], br, MAT.bubble, 0.1));
+      }
     }
+    for (const b of bubbles) { b.bounce = 0.85; b.tack = 0; }
     return { stops: [{ top: 'soap', at: [x, Y + 1.2, z], r: 5.5, yaw: 0, shapes: [...hd.shapes, dish, ...bubbles], land: [dish, ...bubbles] }], extra: [], decor: hd.decor, reach: 12 };
   }
   if (kind === 'drainer') {

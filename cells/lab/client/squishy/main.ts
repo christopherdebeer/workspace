@@ -881,6 +881,8 @@ void main() {
   c = mix(c, vec3(.62, .57, .5), smoothstep(250., 900., d) * .6);
   // (glass: seen through, but for its gloss and its edges)
   if (id == ${MAT.glass}) { float Fg = .04 + .96 * pow(1. - NoV, 4.); o = vec4(tonemap(c), clamp(.08 + Fg * .9 + length(spec) * .3, 0., 1.) * uAlpha); return; }
+  // (a soap bubble: hardly there face on, its film's colours toward its rim, bright where it catches the light)
+  if (id == ${MAT.bubble}) { float Fb = pow(1. - NoV, 2.5); o = vec4(tonemap(c), clamp(.05 + Fb * .75 + length(spec) * .5, 0., .9) * uAlpha); return; }
   o = vec4(tonemap(c), alpha);
 }`;
 
@@ -1383,6 +1385,10 @@ let glassMesh: Mesh | null = null;
 let roomMesh: Mesh | null = null;
 /** the lids: each its own mesh about its rest place, drawn where it is now */
 let movers: Array<{ shape: LevelMesh['movers'][number]['shape']; mesh: Mesh }> = [];
+/** the soap bubbles: each its own clear mesh; popped (when, in sim time; -1 whole) out of the course, till it grows back */
+let bubbles: Array<{ shape: Shape; mesh: Mesh; c0: V3; gone: number; drift: V3 | null; until: number }> = [];
+/** how long a popped bubble takes to grow back (s), so the way past it is never gone for good */
+const BUBBLE_BACK = 6;
 
 // ─── the dumpling on the card ────────────────────────────────────────────────────────────────────
 /**
@@ -1771,6 +1777,7 @@ function startLevel(n: number, quiet = false) {
   for (const m of susanMeshes.values()) drop(m);
   susanMeshes.clear();
   for (const m of movers) drop(m.mesh);
+  for (const b of bubbles) drop(b.mesh);
   for (const jm of jellyMeshes) drop(jm.mesh);
   jellyMeshes = (lv.jellies ?? []).map((shape) => {
     const data = new Float32Array(jelMeshSize(shape.jel!, shape.mat === MAT.bread ? 0 : shape.dust)), def = new Float32Array((data.length / VSTRIDE) * 2);
@@ -1781,6 +1788,7 @@ function startLevel(n: number, quiet = false) {
   courseMesh = upload(solid, gl.STATIC_DRAW, bakeLight(solid));
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
   movers = lm.movers.map((m) => ({ shape: m.shape, mesh: upload(m.verts) }));
+  bubbles = lm.bubbles.map((b) => ({ shape: b.shape, mesh: upload(b.verts), c0: [...b.shape.c] as V3, gone: -1, drift: null, until: 0 }));
   lidWas = movers.map(() => -1);
   drop(roomMesh);
   roomMesh = upload(room(lv));
@@ -1807,7 +1815,7 @@ function startLevel(n: number, quiet = false) {
   showTitle();
   if (benchName === 'breakfast') { hint('the breakfast counter: home is the golden steamer, up high. more than one way there: find yours', 7000); benchPanel(); return; }
   if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : benchName === 'look' ? 'a still life, to judge the light by' : benchName === 'supports' ? 'what things stand on: a stool, a cake stand, a board on jars, a crate, cookbooks, a bowl upturned, a tiered stand, a cooling rack' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
-  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.counter + 1 ? 'a rail: fly at it and you hang on. tap the dumpling to shimmy along; flick off at the end' : levelN === CHAPTER_AT.counter + 2 ? 'a sill\'s lip holds you too: catch it, shimmy along, flick off' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim; hang from the oven\'s handle' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam, then pops: don\'t sit on it long' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.counter + 1 ? 'a rail: fly at it and you hang on. tap the dumpling to shimmy along; flick off at the end' : levelN === CHAPTER_AT.counter + 2 ? 'a sill\'s lip holds you too: catch it, shimmy along, flick off' : levelN === CHAPTER_AT.sink ? 'bubbles bounce you, then pop; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim; hang from the oven\'s handle' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam, then pops: don\'t sit on it long' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -2575,6 +2583,56 @@ function updatePuffs(dt: number) {
   }
   for (let i = puffs.length - 1; i >= 0; i--) if (puffs[i].age > puffs[i].life) puffs.splice(i, 1);
 }
+/** A bubble touched pops: its bounce given, then it's gone, out of the course (so the flick's arc knows), a fine spray
+ * and a pop. One nearly hit — a hard landing beside it, the dumpling going by fast and close — is knocked loose: it
+ * floats off, up and away from the blow, bobbing, and pops in a few seconds, or when it's touched again. Popped a
+ * while, with nothing in its way, it grows back where it was. */
+function bubblesTick(dt: number) {
+  const fast = len(body.vcom);
+  for (const b of bubbles) {
+    const sh = b.shape, c = sh.c, d = len(sub(body.com, c));
+    if (b.gone >= 0) {
+      if (simTime - b.gone > BUBBLE_BACK && len(sub(body.com, b.c0)) > sh.r + RADIUS * 2.5) {
+        b.gone = -1; b.drift = null;
+        placeBubble(sh, b.c0);
+        lv.shapes.push(sh);
+      }
+      continue;
+    }
+    if (d < sh.r + RADIUS * 1.15) { burst(b); continue; }
+    if (b.drift) {
+      // (floating off: drifting, slowing, a little up, bobbing; till it's due)
+      for (let i = 0; i < 3; i++) b.drift[i] *= Math.exp(-dt * 0.6);
+      const bob = Math.sin(simTime * 5 + b.c0[0] * 0.37 + b.c0[2] * 0.21) * 1.5;
+      placeBubble(sh, [c[0] + b.drift[0] * dt, c[1] + (b.drift[1] + 3 + bob) * dt, c[2] + b.drift[2] * dt]);
+      if (simTime > b.until) burst(b);
+      continue;
+    }
+    // (nearly hit: a hard landing close by, or going by fast and close)
+    if (d < sh.r + RADIUS * 3 && (body.impact > 70 || (fast > 140 && d < sh.r + RADIUS * 2))) {
+      const away = norm(sub(c, body.com)), k = Math.min(1.5, Math.max(body.impact, fast) / 150);
+      b.drift = [away[0] * 14 * k, 6 + 6 * k, away[2] * 14 * k];
+      b.until = simTime + 2.5 + 1.5 * (Math.sin(b.c0[0] * 12.9 + b.c0[2] * 78.2) + 1);
+    }
+  }
+}
+/** a bubble's place: its middle, and its bounds with it */
+function placeBubble(sh: Shape, at: V3) {
+  sh.c[0] = sh.b[0] = at[0]; sh.c[1] = sh.b[1] = at[1]; sh.c[2] = sh.b[2] = at[2];
+  for (let i = 0; i < 3; i++) { sh.lo[i] = at[i] - sh.r; sh.hi[i] = at[i] + sh.r; }
+}
+function burst(b: { shape: Shape; gone: number; drift: V3 | null }) {
+  b.gone = simTime; b.drift = null;
+  const i = lv.shapes.indexOf(b.shape);
+  if (i >= 0) lv.shapes.splice(i, 1);
+  const at = b.shape.c, r = b.shape.r, q = seeded(hash(Math.floor(simTime * 1000), 7));
+  for (let k = 0; k < 8 + r * 6; k++) {
+    const a = q() * Math.PI * 2, e = q() * 1.2 - 0.3;
+    const dir: V3 = [Math.cos(a) * Math.cos(e), Math.sin(e), Math.sin(a) * Math.cos(e)];
+    puffs.push({ p: add(at, mul(dir, r)), v: mul(dir, 18 + 30 * q()), age: 0, life: 0.25 + q() * 0.25, size: 0.35 + q() * 0.4, a: 0.5 });
+  }
+  pop(0.12 + 0.05 * r);
+}
 function flourPuff(at: V3, k: number) {
   const r = seeded(hash(Math.floor(simTime * 1000), 3));
   for (let i = 0; i < 6 + 10 * k; i++) {
@@ -3208,7 +3266,8 @@ function frame(now: number) {
   }
 
   // (the glass: over everything, seen through)
-  if (glassMesh) {
+  const liveBubbles = bubbles.filter((b) => b.gone < 0);
+  if (glassMesh || liveBubbles.length) {
     gl.useProgram(prog);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -3216,8 +3275,13 @@ function frame(now: number) {
     gl.uniform1f(u(prog, 'uAlpha'), 1);
     gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
     gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.FRONT); drawMesh(glassMesh);
-    gl.cullFace(gl.BACK); drawMesh(glassMesh);
+    if (glassMesh) { gl.cullFace(gl.FRONT); drawMesh(glassMesh); gl.cullFace(gl.BACK); drawMesh(glassMesh); }
+    // (the bubbles, clear: their far side then their near, so the film's seen through on both)
+    for (const b of liveBubbles) {
+      // (wherever it's floated to)
+      const off = model(sub(b.shape.c, b.c0), 1);
+      gl.cullFace(gl.FRONT); drawMesh(b.mesh, off); gl.cullFace(gl.BACK); drawMesh(b.mesh, off);
+    }
     gl.disable(gl.CULL_FACE);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
@@ -3368,6 +3432,7 @@ function tick(dt: number) {
   if (mode === 'title') { titleTick(dt); return; }
   if (mode === 'pause') return;
   body.step(lv, dt, simTime);
+  bubblesTick(dt);
   simTime += dt;
   if (home < 0 && fly < 0) clock += dt;
   if (body.impact > 90) {

@@ -129,7 +129,7 @@ export function disc(out: number[], mat: number, segs = 28) {
 }
 
 /** What's drawn: the solid course; the glass, drawn after it and seen through; and each thing that moves, on its own, about its rest place. */
-export interface LevelMesh { solid: number[]; glass: number[]; movers: Array<{ shape: Shape; verts: number[] }> }
+export interface LevelMesh { solid: number[]; glass: number[]; movers: Array<{ shape: Shape; verts: number[] }>; bubbles: Array<{ shape: Shape; verts: number[] }> }
 /**
  * One tower, as it's made: a stack of steamers with their rims, a tin, jars and a board, a plate,
  * a pudding on a saucer, a lazy Susan; a butter dish, a honey jar (glass, the honey in it, the
@@ -141,6 +141,8 @@ function towerMesh(t: Tower, m: LevelMesh) {
   if (t.burner) cylinder(out, t.shapes[0].c[0], t.shapes[0].c[2], t.burner, 0, 0.5, MAT.burner, MAT.burner, 36);
   for (const s of t.shapes) {
     if (s.lift) { const v: number[] = []; drawShape(s, v); m.movers.push({ shape: s, verts: v }); continue; }
+    // (a soap bubble: on its own, drawn clear after everything, gone when it pops)
+    if (s.mat === MAT.bubble) { const v: number[] = []; drawShape(s, v); m.bubbles.push({ shape: s, verts: v }); continue; }
     if (s.mat === MAT.glass) {
       // (a jar: the honey in it, most of the way up, then the glass over everything)
       cylinder(out, s.c[0], s.c[2], s.r * 0.93, s.c[1] - s.hh, s.c[1] + s.hh * 0.55, MAT.honey, MAT.honey, 36);
@@ -272,7 +274,7 @@ function drawShape(s: Shape, out: number[]) {
 }
 /** The whole course: every tower, and the chopsticks. */
 export function levelMesh(lv: Level): LevelMesh {
-  const m: LevelMesh = { solid: [...lv.decor], glass: [], movers: [] };
+  const m: LevelMesh = { solid: [...lv.decor], glass: [], movers: [], bubbles: [] };
   for (const t of lv.towers) towerMesh(t, m);
   for (const s of lv.sticks) stick(s, m.solid);
   return m;
