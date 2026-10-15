@@ -24,9 +24,12 @@ dumpling either way, at the foot of the glass. In play, the word `menu` at the b
 level, `?level=3`, goes straight to it.)
 
 Settings also has the **aim**, on a continuum: *easy*, the arc (dots along the flick, all the way) and the
-ring where it'll land; *normal*, the arc only, up past its top and fading, the way it's going but not where
-it ends; *hard*, neither, by eye. *Default* goes as you go: easy to level 6, normal to 20, then hard
-(`?aim=` the same). And **benches**: every bench, each one thing to try over and over, listed
+ring where it'll land; *normal*, the arc only, strong where it leaves and fading to nothing a little past its top,
+the way it's going and how high but not where it ends (the camera still swings to take in where it'll come
+down); *hard*, neither, by eye. *Default* goes as you go: easy to level 6, normal to 20, then hard
+(`?aim=` the same). And **after a fall**: back on the *last top* you stood on (the default), or back where you
+made your *last jump* from, flicked, pushed or poked (`?reset=jump`), so a hard hop's tried again from
+where it was tried; hanging from a rail or stuck to a side, it's the last top all the same. And **benches**: every bench, each one thing to try over and over, listed
 with a line on what it is (`?bench=breakfast`, `jelly`, `puddings`, `breads`, `coats`, `supports`,
 `look`); from a bench, `menu` comes back to the title.
 

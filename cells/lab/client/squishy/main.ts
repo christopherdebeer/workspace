@@ -1607,6 +1607,16 @@ let aimMode: Aim = ((): Aim => {
   if (q) return q;
   try { return read(localStorage.getItem(STORE + ':aim')) ?? read(localStorage.getItem(STORE + ':ring')) ?? 'default'; } catch { return 'default'; }
 })();
+/** After a fall: back on the last top stood on (the default), or back where it was flicked, pushed or poked from
+ * last — a jump's tried again from where it was tried (unless that was hanging from a rail or stuck to a side:
+ * then the last top). */
+const RESETS = ['top', 'jump'] as const;
+type Reset = (typeof RESETS)[number];
+const RESET_WORDS: Record<Reset, string> = { top: 'last top', jump: 'last jump' };
+let resetMode: Reset = ((): Reset => { const ok = (v: string | null) => (v && (RESETS as readonly string[]).includes(v) ? (v as Reset) : null); try { return ok(params.get('reset')) ?? ok(localStorage.getItem(STORE + ':reset')) ?? 'top'; } catch { return ok(params.get('reset')) ?? 'top'; } })();
+/** where it was set going from last, if from somewhere it can be put back */
+let launchedFrom: V3 | null = null;
+const launching = () => { launchedFrom = body.contacts > 0 && !body.onRail && !body.clinging && body.held < 0.5 ? [...body.com] as V3 : null; };
 /** what of the aim shows now: the arc, and the ring */
 function aimShows(): { arc: boolean; ring: boolean } {
   const m: Aim = aimMode === 'default' ? (benchName || levelN <= 6 ? 'easy' : levelN <= 20 ? 'normal' : 'hard') : aimMode;
@@ -1731,6 +1741,7 @@ function benchPanel() {
   });
 }
 function startLevel(n: number, quiet = false) {
+  launchedFrom = null;
   levelN = Math.max(1, n);
   if (lab && levelN >= JELLY_AT && !jellyOpen) {
     jellyOpen = true;
@@ -1890,7 +1901,7 @@ function release() {
     // (hanging from a rail: a push along it shimmies it that way, the further the harder)
     const rl = body.onRail;
     if (rl && home < 0 && fallenAt < 0) { const ax = railAxis(rl); body.shimmy(Math.sign(push.dir[0] * ax[0] + push.dir[2] * ax[2]) || 1, 1 + 2 * push.power); pop(0.2); }
-    else if (home < 0 && fallenAt < 0 && body.canFlick) { body.roll(push.dir, push.v); userCam = false; pop(0.25 + push.power * 0.3); }
+    else if (home < 0 && fallenAt < 0 && body.canFlick) { launching(); body.roll(push.dir, push.v); userCam = false; pop(0.25 + push.power * 0.3); }
     return;
   }
   let a = aimAt(pull.x, pull.y), spin = 0;
@@ -1911,6 +1922,7 @@ function release() {
   else buffered = { vel: a.vel, spin, until: simTime + 0.35, climb: a.climb };
 }
 function doFlick(vel: V3, spin = 0, climb?: V3) {
+  launching();
   body.flick(vel, climb ? 0 : spin, climb ?? null);
   userCam = false;
   buffered = null;
@@ -2192,6 +2204,7 @@ const TOY_REACH = 6;
 /** A poke: at the bit of it touched, along the line from your eye through it. */
 function pokeAt(at: V3) {
   if (auto || home >= 0 || fallenAt >= 0 || !body.canFlick) return;
+  launching();
   body.poke(at, norm(sub(at, eye)));
   pop(0.3);
 }
@@ -2303,6 +2316,7 @@ function showMenu() {
   $('settings').hidden = card !== 'settings';
   $('benches').hidden = card !== 'benches';
   $('s-ring').textContent = AIM_WORDS[aimMode];
+  $('s-reset').textContent = RESET_WORDS[resetMode];
   $('s-aim').textContent = AIM_ABOUT[aimMode];
   const at = saved();
   const cont = $('cont');
@@ -2326,6 +2340,11 @@ btn('s-sound', toggleSound);
 btn('s-ring', () => {
   aimMode = AIMS[(AIMS.indexOf(aimMode) + 1) % AIMS.length];
   try { localStorage.setItem(STORE + ':aim', aimMode); } catch { /* */ }
+  showMenu();
+});
+btn('s-reset', () => {
+  resetMode = RESETS[(RESETS.indexOf(resetMode) + 1) % RESETS.length];
+  try { localStorage.setItem(STORE + ':reset', resetMode); } catch { /* */ }
   showMenu();
 });
 btn('s-benches', () => { card = 'benches'; showMenu(); });
@@ -2973,17 +2992,20 @@ function frame(now: number) {
   const shows = aimShows();
   if (aimNow && shows.arc) {
     const pa = path(lv, body.com, aimNow.vel, 3, simTime, aimNow.climb ?? null);
-    // (the camera frames the landing only when the ring shows it)
-    aimLand = shows.ring ? (pa.hit ? pa.hit.p : pa.pts[pa.pts.length - 1] ?? null) : null;
+    // (the camera frames the landing whether the ring's shown or not: it's where to look, not a promise)
+    aimLand = pa.hit ? pa.hit.p : pa.pts[pa.pts.length - 1] ?? null;
     aimTop = pa.pts.reduce<V3 | null>((m, p) => (!m || p[1] > m[1] ? p : m), null);
     const can = body.canFlick;
-    // (the arc alone: up past its top and a little way down, fading — the way it's going, not where it ends)
+    // (the arc alone: strong where it leaves, fading to nothing a little past its top and well short of where it
+    // comes down — the way it's going, how high, never where it ends; smaller as they fade)
     const top = pa.pts.reduce((m, p, i) => (p[1] > pa.pts[m][1] ? i : m), 0);
-    const upTo = shows.ring ? pa.pts.length : Math.min(pa.pts.length, top + Math.max(2, Math.round(top * 0.35)) + 1);
+    const gone = Math.max(top + 2, Math.min(pa.pts.length * 0.75, top * 1.45));
     gl.uniform3fv(u(prog, 'uTint'), can ? [1, 0.97, 0.88] : [1, 0.6, 0.5]);
-    pa.pts.slice(0, upTo).forEach((p, i) => {
-      gl.uniform1f(u(prog, 'uAlpha'), (can ? 0.95 : 0.5) * (shows.ring ? 1 - (i / pa.pts.length) * 0.5 : 1 - (i / upTo) * 0.85));
-      drawMesh(SPHERE, model(p, 0.55 + 0.25 * aimNow!.power), 13);
+    pa.pts.forEach((p, i) => {
+      const f = shows.ring ? 1 - (i / pa.pts.length) * 0.5 : Math.max(0, 1 - i / gone) ** 1.4;
+      if (f < 0.04) return;
+      gl.uniform1f(u(prog, 'uAlpha'), (can ? 0.95 : 0.5) * f);
+      drawMesh(SPHERE, model(p, (0.55 + 0.25 * aimNow!.power) * (shows.ring ? 1 : 0.55 + 0.45 * f)), 13);
     });
     // (onto a jelly's top, the dots go on: up as high as it's thrown back, on as far as it skids)
     if (pa.hit && shows.ring) {
@@ -3287,7 +3309,7 @@ function tick(dt: number) {
   }
   if (fallenAt >= 0) {
     if (simTime > fallenAt + 0.7) {
-      body.place(respawnAt(lv, check));
+      body.place(resetMode === 'jump' && launchedFrom ? [launchedFrom[0], launchedFrom[1] + 1.5, launchedFrom[2]] : respawnAt(lv, check));
       prevX = new Float32Array(body.x);
       fallenAt = -1;
       pop(0.6);
@@ -3301,7 +3323,7 @@ function tick(dt: number) {
     if (way[way.length - 1] !== -1) way.push(-1);
     settleFlick(-1, body.com);
     plop();
-    hint('splat. back to the last top', 1800);
+    hint(resetMode === 'jump' && launchedFrom ? 'splat. back to where you jumped from' : 'splat. back to the last top', 1800);
     return;
   }
   // the lids: as one starts to rattle, its rattle, and steam out from under it each time it jumps
