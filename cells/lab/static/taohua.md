@@ -496,3 +496,12 @@ Composition pass 2 broke crown edges into irregular sprays and brought clipped s
 lower tapered rocks, verse in parallel vertical columns and the large title at lower left. Pass 3
 keeps those and brings back what pass 2 flattened: the ink branches (through their own crowns
 only), the crowns' light and depth, and the starker stair; its camera sits between the two.
+
+
+## Poling and staff articulation
+
+Tap-to-pole retains deliberate individual strokes and the two-stroke queue. Recovery takes 0.7 seconds; the drive retains its previous timing and force. Water-relative drag is 0.22 per second, giving each stroke a longer glide without changing the river current or speed cap.
+
+The walker has articulated upper arms, forearms and hands. The walking staff plants on the ground for the support phase, then lifts forward outside the hat. Both hands grip the boat pole at separated points; its planted tip stays in world space while the boat moves past it. Fixed-length two-bone arm solves follow those contacts. A conservative clearance volume around the hat and arm reach limits end an impossible plant early. The poler and pole use the same boat-and-body transform through rocking and turns.
+
+The poling body now follows stroke position: reaching at the catch, moving through the drive and settling at the finish. Force peaks between those poses. A directional tap updates the next catch; the current plant keeps its committed direction. Steering torque acts during the push, with thrust kept near the bow direction to avoid sideways skating. Arms are proportioned at 0.34 m per segment, with downward elbow bends, smaller sleeves and hands, and a relaxed free arm beside the robe. The pole is held diagonally ahead of the shoulder so both hands can reach without elongated arms.

@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:e0c40ab4b1ec208f9e3aa7596f255592e67927789765c75d3c755f5da33bd74e",
-  "syncedAt": "2026-10-15T12:01:17.284Z",
+  "treeVersion": "tree:46800ee7b84c531d66f4c9534023f957817e8f93f398978256554bb35e919921",
+  "syncedAt": "2026-10-15T12:50:48.326Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -97,10 +97,11 @@
     "client/taohua/compose.ts": "sha256:eeb974a3ac14997cb3eddeeb4fbe1951e4d8a9e28e588fc511a5eceac01ef8b2",
     "client/taohua/deer.ts": "sha256:e6d792f0fe2c34e29f1a84e52c2fcc03cb91402d44bf04136134486ef2c32ae6",
     "client/taohua/herds.ts": "sha256:fa642d0664ac283b328efeeca5f3efb171373b27d874e1e831d29ea18eec327e",
-    "client/taohua/main.ts": "sha256:31427275d453e729a9e25655002cab44c950f719184a33130bab0711192a6e94",
+    "client/taohua/main.ts": "sha256:7b5102861fbf5db3bf2a1f1701023783b5493fa63ba07f0e55a1af6df3964174",
     "client/taohua/marks.ts": "sha256:adddf62b4f24b3c4a1cc8cd836ffcf125fde12517037ebecffe838ab09e810c4",
     "client/taohua/pathmarks.ts": "sha256:734ce7ab614686450b7338120e4429980d15614f4c5c65474bcaa753d7c7641d",
     "client/taohua/render.ts": "sha256:5aef6e046aae285fd331f86f2a638926df3468467001a5964ccc16f2ab245725",
+    "client/taohua/rig.ts": "sha256:23337c4c90371c941800a2ec90e93bfcbbb782c98d02aa200371ae1cbb9c75ee",
     "client/taohua/roam.ts": "sha256:88c0ea8a640dcf1fae5fb1946fee8cb288ed8f3297d5b457e59798e3c1edf03c",
     "client/taohua/surfaces.ts": "sha256:45b2d8188e46beba689fdd1fb949cabdb2c020c0197636a1db44e7d4c8db4dff",
     "client/taohua/water.ts": "sha256:b94b70103a2fa29a7453f6ceb7ef1dac72f7a636c819bc2d8a502c7809fdff37",
@@ -216,7 +217,7 @@
     "static/squishy.html": "sha256:32593f81c2d8018f666a1106b78a711ba6909cfd4cc2db961d7ff8e582b85b2e",
     "static/squishy.md": "sha256:fbb458967c584f8abbd45f9d69cc71b69e43fdb79964d1e62a83adb5028cf8de",
     "static/taohua.html": "sha256:b9a7e79efe3ae7599967f4da1941737cfe7ead55243f6977ad356254a88dfe6e",
-    "static/taohua.md": "sha256:ff3ef5a040d196f5f5222ac75296fab9a9e8c817a1af6214db71dd89952219c0",
+    "static/taohua.md": "sha256:9e6a87db85e4bd25ae77eaba0a83c33392c8194b16b06029f6a0a2a7a0822ab3",
     "static/technic.html": "sha256:2558d2e003449ac4f6b054415f3380d157e382c4e0876b6cb316d285088cec3a",
     "static/technic.md": "sha256:84a77ce3985d89ae04724584251e7766e469374920c0a862c7793f9bcc30b582",
     "tsconfig.json": "sha256:aa5d5858c9ae1e731fcb88d91b3a59c88e2ef4b249b3e5802baf7c9fae241a30"

@@ -9,6 +9,7 @@
  * ↑, W walk on up (at a fork, the way most nearly ahead), ↓, S back down. A drag looks about a little. The seed
  * and where the walker is are in the address (?seed=…&at=…). `?preview` climbs by itself, quietly.
  */
+import { elbow, shaft, shoulder, type Shaft } from './rig';
 import { hash, randomSeed, seedFrom, seedName, seeded } from '../kit/rng';
 import { RISE, WIDTH, Ways, type V3, type Way } from './ways';
 import { invert, lookAt, mulM, perspective, Renderer, type Drawn, type M4 } from './render';
@@ -207,9 +208,7 @@ const body = part((m) => {
   m.tube([0, 0.82, 0], [0, 1.34, 0], 0.21, 0.16, FIG.robe, M.robe, 12);
   m.tube([0, 0.76, 0], [0, 0.9, 0], 0.225, 0.22, FIG.sash, M.robe, 12);
   m.tube([0.05, 0.8, 0.2], [0.08, 0.45, 0.24], 0.04, 0.03, FIG.sash, M.robe, 4);
-  // (the arm to the staff, its wide sleeve, the hand)
-  m.tube([0.15, 1.28, 0], [0.36, 1.0, 0.12], 0.07, 0.13, FIG.robe, M.robe, 8);
-  m.tube([0.38, 0.99, 0.13], [0.43, 0.96, 0.15], 0.05, 0.045, FIG.skin, M.skin, 6);
+  // Arms are separate, articulated pieces; their hands follow the shaft contacts.
 });
 const head = part((m) => {
   // (the head, the black hair gathered behind under the hat; the hat a wide shallow cone)
@@ -217,7 +216,9 @@ const head = part((m) => {
   m.tube([0, 1.36, -0.05], [0, 1.56, -0.04], 0.095, 0.09, INK.dark, M.dark, 8);
   m.tube([0, 1.52, 0], [0, 1.76, 0], 0.44, 0.02, FIG.hat, M.hat, 16);
 });
-const freeArm = part((m) => m.tube([-0.15, 1.28, 0], [-0.25, 0.9, 0.02], 0.07, 0.14, FIG.robe, M.robe, 8));
+const upperArm = part((m) => m.tube([0,0,0], [0,1,0], .075, .085, FIG.robe, M.robe, 8));
+const foreArm = part((m) => m.tube([0,0,0], [0,1,0], .085, .055, FIG.robe, M.robe, 8));
+const handD = part((m) => m.tube([0,-.045,0], [0,.045,0], .035, .035, FIG.skin, M.skin, 8));
 const shadow = part((m) => {
   // (their shade, cast away from the sun as they stand, about as long as they're tall; deeper at their feet. In the
   // world's frame, not theirs: it doesn't turn as they do)
@@ -236,7 +237,7 @@ const shadow = part((m) => {
 });
 const shoe = (sx: number) => part((m) => m.tube([sx * 0.09, 0.03, -0.05], [sx * 0.09, 0.03, 0.12], 0.045, 0.04, INK.dark, M.dark, 6));
 const shoes = [shoe(-1), shoe(1)];
-const staff = part((m) => m.tube([0.46, 2.15, 0.15], [0.46, -0.02, 0.15], 0.024, 0.024, INK.trunk, M.trunk, 5));
+const staff = part((m) => m.tube([0,0,0], [0,1,0], .024, .024, INK.trunk, M.trunk, 5));
 /** where each turns: the hand that holds the staff; the neck; the free shoulder */
 const HAND: V3 = [0.46, 0.96, 0.15], NECK: V3 = [0, 1.32, 0], SHOULDER: V3 = [-0.15, 1.28, 0];
 /** matrices: a move; a turn about x (forward), y (about), z (sideways); about a point */
@@ -245,6 +246,40 @@ const Rx = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return n
 const Ry = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]); };
 const Rz = (a: number): M4 => { const c = Math.cos(a), s = Math.sin(a); return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]); };
 const about = (p: V3, r: M4): M4 => mulM(Tm(p[0], p[1], p[2]), mulM(r, Tm(-p[0], -p[1], -p[2])));
+
+/** Articulated sleeves with exact shoulder/elbow/hand contacts. Meshes are reused each frame. */
+function arms(model: M4, right: V3, left: V3): Array<{d: Drawn; model: M4}> {
+  const out: Array<{d: Drawn; model: M4}> = [];
+  for (const side of [-1,1]) {
+    const h = side === 1 ? right : left, sh = shoulder(side), el = elbow(sh,h,side);
+    out.push({d:upperArm,model:mulM(model,poleModel(sh,el))}, {d:foreArm,model:mulM(model,poleModel(el,h))}, {d:handD,model:mulM(model,Tm(...h))});
+  }
+  return out;
+}
+let staffPlant: V3 | null = null, staffLift: V3 | null = null, staffCycle = -1;
+function walkingRig(model: M4, headAt: M4, phase: number, stride: number): Shaft {
+  const inv = invert(model), head = apply(inv,apply(headAt,[0,1.54,0]));
+  const cycle = Math.floor(phase/(Math.PI*2)), f = phase/(Math.PI*2)-cycle;
+  const contact = f < .55 && stride > .1;
+  if (cycle !== staffCycle) { staffPlant=null; staffCycle=cycle; }
+  if (contact && !staffPlant && !staffLift) {
+    const q=apply(model,[.52,0,.36]); q[1]=ground(ways,q[0],q[2])+.025;
+    staffPlant=q;
+  }
+  if (!contact && staffPlant) { staffLift=staffPlant; staffPlant=null; }
+  let tip: V3;
+  if (staffPlant) tip=apply(inv,staffPlant);
+  else if (stride > .1) {
+    const t=Math.max(0,Math.min(1,(f-.55)/.45)), e=t*t*(3-2*t);
+    const from=staffLift?apply(inv,staffLift):[.52,0,-.3] as V3;
+    tip=[.52, from[1]*(1-e)+.16*Math.sin(Math.PI*t), from[2]*(1-e)+.36*e];
+    if(f<.55) tip=[.52,.12,.36]; // early release: carry until the next cycle
+  } else { tip=[.52,0,.15]; staffPlant=null; staffLift=null; }
+  let rig=shaft(tip,[.48,1.0,Math.max(.28,Math.min(.38,tip[2]*.25+.30))],2.17,false,head);
+  if(!rig.valid) { staffLift=staffPlant; staffPlant=null; rig=shaft([.52,.12,.32],[.48,1,.32],2.17,false,head); }
+  if(f>.95) staffLift=null;
+  return rig;
+}
 
 // ─── the boat, on the river (world.ts `boat`): moored at the jetty, the arrival in it, going about in it
 const boatD = part((m) => boat(m)), mooringsD = part((m) => moorings(m));
@@ -344,7 +379,7 @@ function rideOn(dt: number) {
  * A tap on a landing takes it there: brought in, it comes alongside by itself (or noses into the reeds,
  * and rests there, the walker sitting in it, until the next stroke).
  */
-interface Afloat { p: [number, number]; v: [number, number]; yaw: number; to: Landing | null; resting: boolean; s: number; sTo: number; aim: [number, number]; tip: V3 | null; lift: V3 | null }
+interface Afloat { p: [number, number]; v: [number, number]; yaw: number; to: Landing | null; resting: boolean; s: number; sTo: number; aim: [number, number]; nextAim: [number, number]; tip: V3 | null; lift: V3 | null }
 /** the next release of the stroke (its phase at .25), from s: s itself if it's at one */
 const nextRelease = (s: number) => Math.ceil(s - 0.25 - 1e-6) + 0.25;
 let afloat: Afloat | null = null;
@@ -368,29 +403,40 @@ const apply = (m: M4, l: V3): V3 => [m[0] * l[0] + m[4] * l[1] + m[8] * l[2] + m
 /** how far into the push of a stroke (0 not pushing; 1 its hardest), for the poler's lean */
 const pushing = () => (afloat?.tip ? Math.max(0, Math.cos(afloat.s * Math.PI * 2)) : 0);
 /** where the poler's hands hold the pole, in the world: at the stern, up and to the side they're poling on, lower as they lean on it */
+/** Boat and body share this transform, so rolling, turning and leaning cannot detach a grip. */
+function polerModel(time: number): M4 {
+  // Reach at the catch, work through the drive, settle at the finish. Position is
+  // phase-driven; force peaks between these endpoints, not at maximum lean.
+  const sweep = Math.sin((afloat?.s ?? .25) * Math.PI * 2);
+  return mulM(boatAt(time), mulM(Tm(POLER[0], POLER[1], POLER[2] - .045*sweep), Rx(.06 - .16*sweep)));
+}
 function handsAt(time: number): V3 {
-  const lean = pushing();
-  return apply(boatAt(time), [POLER[0] + 0.3, POLER[1] + 1.2 - 0.18 * lean, POLER[2] + 0.2 + 0.22 * lean]);
+  return apply(polerModel(time), [.27, 1.15, .43]);
 }
-/** where the pole goes in: on the bed beside the boat, by the poler, a little toward where it's to push */
+/** The catch stays on the working side; steering changes the push, not a sweep through the head. */
 function catchAt(time: number): V3 {
-  const a = afloat!, p = apply(boatAt(time), [POLER[0] + 0.62, 0, POLER[2] + 0.45]);
-  return [p[0] + a.aim[0] * 0.35, RIVER_L - 1.1, p[2] + a.aim[1] * 0.35];
+  const p = apply(polerModel(time), [.16, 0, .30]);
+  return [p[0], RIVER_L - 1.1, p[2]];
 }
-/** The pole, held: from the hands to its tip (planted on the bed through the push; swung forward through the air between; at rest, held upright, its foot in the water by the boat). */
-function poleNow(time: number): { top: V3; tip: V3 } {
-  const a = afloat!, h = handsAt(time), ph = ((a.s % 1) + 1) % 1, B = boatAt(time);
+function poleRig(time: number): Shaft {
+  const a = afloat!, model = polerModel(time), inv = invert(model);
+  const ph = ((a.s % 1) + 1) % 1;
   let tip: V3;
-  if (a.tip) tip = a.tip;
-  else if (a.sTo > a.s + 1e-3 && ph >= 0.25 && ph <= 0.75 && a.lift) {
-    // (swung forward through the air, from where it came out to where it'll go in, lifted on the way)
-    // (from where it came out as the boat has it, so it goes with the boat, not left behind on the water)
-    const f = (ph - 0.25) / 0.5, e = f * f * (3 - 2 * f), to = catchAt(time), from = apply(B, a.lift);
-    tip = [from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e + 1.1 * Math.sin(Math.PI * f), from[2] + (to[2] - from[2]) * e];
-  } else { const q = apply(B, [POLER[0] + 0.5, 0, POLER[2] + 0.3]); tip = [q[0], RIVER_L - 0.9, q[2]]; }
-  // (a pole of its own length, from its tip up through the hands, which slide along it as a poler's do)
-  const d: V3 = [h[0] - tip[0], h[1] - tip[1], h[2] - tip[2]], L = Math.hypot(d[0], d[1], d[2]) || 1;
-  return { top: [tip[0] + (d[0] / L) * POLE_L, tip[1] + (d[1] / L) * POLE_L, tip[2] + (d[2] / L) * POLE_L], tip };
+  if (a.tip) tip = apply(inv, a.tip);
+  else {
+    // Recovery goes along the outside of the body; never over the hat.
+    const f = Math.max(0, Math.min(1, (ph - .25) / .5)), e = f*f*(3-2*f);
+    const to = apply(inv, catchAt(time));
+    const from = a.lift ? apply(inv, apply(boatAt(time), a.lift)) : to;
+    tip = a.sTo > a.s + .001 ? [Math.min(.20, from[0]+(to[0]-from[0])*e), from[1]+(to[1]-from[1])*e+.7*Math.sin(Math.PI*f), from[2]+(to[2]-from[2])*e] : [.16,-.9,.30];
+  }
+  let rig = shaft(tip, [.27,1.15,.43], POLE_L, true, [0,1.54,0]);
+  if (!rig.valid && !a.tip) rig = shaft([.16,-.9,.30], [.27,1.15,.43], POLE_L, true, [0,1.54,0]);
+  return rig;
+}
+function poleNow(time: number): { top: V3; tip: V3 } {
+  const rig = poleRig(time), model = polerModel(time);
+  return { top: apply(model, rig.top), tip: apply(model, rig.tip) };
 }
 /** a matrix taking the pole's own (0,0,0)-(0,1,0) to the world, from its top to its tip */
 function poleModel(top: V3, tip: V3): M4 {
@@ -429,7 +475,7 @@ function board() {
     const pose = boatPoseNow();
     // (cast off, pushed off from the bank, out into the river)
     const out = Math.sign(ways.water.riverMid(pose.p[0]) - pose.p[2]) || -1;
-    afloat = { p: [pose.p[0], pose.p[2]], v: [moored.kind === 'jetty' ? 0.35 : 0, 0.55 * out], yaw: pose.yaw, to: null, resting: false, s: 0.25, sTo: 0.25, aim: [Math.sin(pose.yaw), Math.cos(pose.yaw)], tip: null, lift: null };
+    afloat = { p: [pose.p[0], pose.p[2]], v: [moored.kind === 'jetty' ? 0.35 : 0, 0.55 * out], yaw: pose.yaw, to: null, resting: false, s: 0.25, sTo: 0.25, aim: [Math.sin(pose.yaw), Math.cos(pose.yaw)], nextAim: [Math.sin(pose.yaw), Math.cos(pose.yaw)], tip: null, lift: null };
   } };
 }
 /** Alongside at a landing: moored there, the walker steps out (at the stone landing, then up its stones to the way). */
@@ -458,7 +504,7 @@ function release(a: Afloat, early: boolean) {
 /** A stroke asked for, toward (dx, dz): queued, two ahead of the one going at most; each ends with the pole out of the water. */
 function queueStroke(a: Afloat, dx: number, dz: number) {
   const d = Math.hypot(dx, dz) || 1;
-  a.to = null; a.resting = false; a.aim = [dx / d, dz / d];
+  a.to = null; a.resting = false; a.nextAim = [dx / d, dz / d];
   a.sTo = Math.min(nextRelease(a.s) + 2, Math.max(a.sTo, a.s) + 1);
 }
 /** The boat a step on, afloat. */
@@ -469,12 +515,16 @@ function sail(dt: number) {
   const before = a.s;
   if (a.sTo > a.s) {
     const ph = ((a.s % 1) + 1) % 1, driving = ph > 0.75 || ph < 0.25;
-    a.s = Math.min(a.sTo, a.s + dt * (driving ? 0.62 : 0.45));
+    a.s = Math.min(a.sTo, a.s + dt * (driving ? 0.62 : (0.5 / 0.7)));
   }
   const crossed = (at: number) => Math.floor(a.s - at) > Math.floor(before - at);
-  if (crossed(0.75)) { a.tip = catchAt(time); ripple('ring', a.tip[0], a.tip[2]); }
+  if (crossed(0.75)) { a.aim = [...a.nextAim]; a.tip = catchAt(time); ripple('ring', a.tip[0], a.tip[2]); }
   if (crossed(0.25)) release(a, false);
   const drive = pushing();
+  if (a.tip && !a.to) {
+    const turn = wrapA(Math.atan2(a.aim[0], a.aim[1]) - a.yaw);
+    a.yaw += Math.max(-1.4, Math.min(1.4, turn)) * drive * dt * 1.8;
+  }
   if (a.to) {
     // (brought in: to where it lies at the landing, slower as it comes)
     // (round the end of the pier, if it stands between: out past its end first)
@@ -491,8 +541,10 @@ function sail(dt: number) {
     a.v = [0, 0];
   } else {
     // (the push, through the water, toward where it's aimed; the water dragging on its way through it)
-    let rx = a.v[0] - cx + a.aim[0] * 1.5 * drive * dt, rz = a.v[1] - cz + a.aim[1] * 1.5 * drive * dt;
-    const k = Math.exp(-dt * 0.45);
+    const target = Math.atan2(a.aim[0], a.aim[1]);
+    const pushYaw = a.yaw + Math.max(-.35, Math.min(.35, wrapA(target-a.yaw)));
+    let rx = a.v[0] - cx + Math.sin(pushYaw) * 1.5 * drive * dt, rz = a.v[1] - cz + Math.cos(pushYaw) * 1.5 * drive * dt;
+    const k = Math.exp(-dt * 0.22);
     rx *= k; rz *= k;
     const rl = Math.hypot(rx, rz);
     if (rl > 1.5) { rx *= 1.5 / rl; rz *= 1.5 / rl; }
@@ -508,12 +560,13 @@ function sail(dt: number) {
   const px = a.p[0] - JETTY.x, lim = JETTY.hw + 0.15 + reachX;
   if (Math.abs(px) < lim && a.p[1] > JETTY.z0 - reachZ - 0.2 && a.p[1] < JETTY.z1 + 0.5 && a.to?.kind !== 'jetty') { const sd = px >= 0 ? 1 : -1; a.p[0] = JETTY.x + sd * lim; if (a.v[0] * sd < 0) a.v[0] *= -0.2; }
   // (planted, and the boat gone so far past it that the hands would come off its end: lifted out)
-  if (a.tip && Math.hypot(...(handsAt(time).map((v, i) => v - a.tip![i]) as V3)) > POLE_L - 0.5) release(a, true);
+  if (a.tip && (!poleRig(time).valid || Math.hypot(...(handsAt(time).map((v, i) => v - a.tip![i]) as V3)) > POLE_L - 0.5)) release(a, true);
   // (its heading: where it's going through the water, as fast as it's going; drifting, swinging slowly as the current has it)
   const rx = a.v[0] - cx, rz = a.v[1] - cz, rl = Math.hypot(rx, rz);
   let want = rl > 0.1 ? Math.atan2(rx, rz) : Math.atan2(cx, cz);
   if (a.to) { const dd = Math.hypot(a.to.boat[0] - a.p[0], a.to.boat[2] - a.p[1]), e = sm(3, 0.5, dd); want = a.yaw + wrapA(a.to.yaw - a.yaw) * e + wrapA(Math.atan2(a.v[0], a.v[1]) - a.yaw) * (1 - e); }
-  a.yaw += wrapA(want - a.yaw) * (1 - Math.exp(-dt * (a.to ? 1.1 : rl > 0.1 ? 0.25 + rl * 1.2 : 0.1)));
+  if (a.to || !a.tip) a.yaw += wrapA(want - a.yaw) * (1 - Math.exp(-dt * (a.to ? 1.1 : rl > 0.1 ? .12 : .1)));
+  if (a.tip && !poleRig(time).valid) release(a, true);
 }
 /** A tap while afloat: on a landing (or the water by it), there; on the water anywhere else, a stroke toward there. */
 function tapAfloat(px: number, py: number) {
@@ -1236,16 +1289,16 @@ function frame(now: number) {
   // (the body: a sway from foot to foot, a lean into the climb, a little twist with each step; still, it breathes)
   const sw = Math.sin(phase) * stride;
   const climbing = off ? 0 : Math.max(0, Math.min(1, (st.p[1] - stand({ w: here.w, u: Math.max(0, here.u - 0.5 * Math.sign(speed || 1)) }).p[1]) * 4 * Math.sign(speed || 1)));
-  const model: M4 = mulM(new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1], pos[2], 1]),
+  const model: M4 = poling ? polerModel(time) : mulM(new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1], pos[2], 1]),
     mulM(Ry(0.06 * sw), mulM(Rz(0.045 * sw), mulM(Rx(0.05 * stride + 0.06 * climbing * stride + poleLean), Tm(0, 0.006 * Math.sin(time * 1.7) * (1 - stride), 0)))));
   // (the head: turned back a little against the body's twist as they walk; standing, it looks about, now one way, now another)
   idleLook += ((1 - stride) * (0.5 * Math.sin(time * 0.31) + 0.35 * Math.sin(time * 0.53 + 1.3)) - idleLook) * (1 - Math.exp(-dt * 1.5));
   const headAt = mulM(model, about(NECK, mulM(Ry(-0.05 * sw + idleLook), Rx(0.03 * Math.sin(phase * 2) * stride))));
-  // (the free arm swings against the step)
-  const armAt = mulM(model, about(SHOULDER, poling ? mulM(Rz(-0.35), Rx(-0.95 - 0.5 * pushing())) : Rx(-0.4 * sw)));
-  // (each step a foot forward, the other back; the staff swung forward with one, planted, and the walker passing it)
-  const shoeAt = (k: number) => mulM(ground_, Tm(0, Math.max(0, Math.cos(phase) * (k ? 1 : -1)) * 0.05 * stride, (k ? 1 : -1) * sw * 0.15));
-  const staffAt = mulM(model, about(HAND, Rx(-0.42 * Math.sin(phase + 0.6) * stride)));
+  const shoeAt = (k: number) => poling ? mulM(boatAt(time),Tm(...POLER)) : mulM(ground_, Tm(0, Math.max(0, Math.cos(phase) * (k ? 1 : -1)) * 0.05 * stride, (k ? 1 : -1) * sw * 0.15));
+  const rig = poling ? poleRig(time) : walkingRig(model,headAt,phase,stride);
+  const restRight: V3=[.22,.62,.08], restLeft: V3=[-.22,.62,.08];
+  const armParts = arms(model, seated ? restRight : rig.right, poling ? rig.left : seated ? restLeft : [-.22,.62,-.10*sw]);
+  const staffAt = mulM(model,poleModel(rig.top,rig.tip));
   const bands = [...live.values()];
   lastVP = vp;
   // (the masses, and the ways brushed over them, come in as the camera finishes stepping back, and go first on the way in)
@@ -1262,7 +1315,7 @@ function frame(now: number) {
     mark.style.opacity = `${(0.95 * (1 - smoothstep(0.45, 1.1, ma))).toFixed(3)}`;
   } else mark.style.opacity = '0';
   R.frame({ vp, ivp: invert(vp), eye, right: v.right, up: v.up, fwd: v.fwd, near, far, dpr, ink: massT, time: review ? 0 : performance.now() / 1000, marks: params.has('marks'), oldRefl, oldShade },
-    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, { d: freeArm, model: armAt }, ...(intro >= 0 || afloat || hop ? [] : [{ d: shadow, model: Tm(pos[0], pos[1] - bob, pos[2]) }]), { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, ...(poling || seated ? [] : [{ d: staff, model: staffAt }])]), ...liveDeer(review ? 1 / 30 : dt, time, pos), ...boatDraw(dt, review ? 0 : time)],
+    [...bands.map((l) => ({ d: l.solid })), ...(firstT > 0.6 ? [] : [{ d: body, model }, { d: head, model: headAt }, ...armParts, ...(intro >= 0 || afloat || hop ? [] : [{ d: shadow, model: Tm(pos[0], pos[1] - bob, pos[2]) }]), { d: shoes[0], model: shoeAt(0) }, { d: shoes[1], model: shoeAt(1) }, ...(poling || seated ? [] : [{ d: staff, model: staffAt }])]), ...liveDeer(review ? 1 / 30 : dt, time, pos), ...boatDraw(dt, review ? 0 : time)],
     bands.map((l) => l.puffs), [...bands.map((l) => l.petals), fallDrawn]);
 
   // (the address keeps where they are: the seed, and how far along the path, so a reload, or the
