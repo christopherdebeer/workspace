@@ -596,3 +596,11 @@ everything else and seen through, the honey in it lit from within.
 `?level=5` starts a level (1 to 4 the table, 5 to 8 the counter, 9 to 12 the sink, 13 to 16 the stove); `?bench=jelly` the jelly bench; `?bench=supports` what things stand on; `?bench=coats` a row of each thing that comes off on it, to land
 in; `?skin=dough` the dough; `?auto` lets it play
 itself; `?view=ex,ey,ez,tx,ty,tz` holds the camera at an eye looking at a point (for a look at a place).
+
+### Thin-film optics refinement (2026-10-15)
+
+`?oldbubbles`: restores the previous two-sided alpha-blended bubble material. Default bubbles now use a **single front shell** with scene-colour refraction using the existing HDR resolve, a nearly transparent centre, a fine Fresnel rim and weak interference colours.
+
+`?oldliquid`: disables the new honey/butter absorption and scene-colour transmission for comparison (but retains the raised liquid geometry). Honey runs and pools, and melted butter smears, are now drawn over their substrate, outside the opaque course bake, using the shared scene-colour resolve. Honey runners have a real narrow raised cross-section and the pooled honey has a shallow geometric meniscus. These remain procedural creeping surface coatings, not free-flowing 3D fluids; collision and adhesion physics were not modified.
+
+Compare the same camera with and without these switches on relevant levels, and measure sustained GPU performance using `?perf` on iPhone Safari. A clean deployment cannot establish visual quality or mobile frame time.

@@ -129,7 +129,7 @@ export function disc(out: number[], mat: number, segs = 28) {
 }
 
 /** What's drawn: the solid course; the glass, drawn after it and seen through; and each thing that moves, on its own, about its rest place. */
-export interface LevelMesh { solid: number[]; glass: number[]; movers: Array<{ shape: Shape; verts: number[] }>; bubbles: Array<{ shape: Shape; verts: number[] }> }
+export interface LevelMesh { solid: number[]; glass: number[]; liquids: number[]; movers: Array<{ shape: Shape; verts: number[] }>; bubbles: Array<{ shape: Shape; verts: number[] }> }
 /**
  * One tower, as it's made: a stack of steamers with their rims, a tin, jars and a board, a plate,
  * a pudding on a saucer, a lazy Susan; a butter dish, a honey jar (glass, the honey in it, the
@@ -151,14 +151,20 @@ function towerMesh(t: Tower, m: LevelMesh) {
       // it as a liquid, creeping down as the level goes on (main.ts, MAT.honeyRun); u across it in cm, v down from the rim)
       if (t.jar) {
         const th0 = Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), top = s.c[1] + s.hh, foot = s.c[1] - s.hh, rr = s.r + 0.06;
-        const NU = 32, NV = 18, SPAN = 0.85;
+        const NU = 48, NV = 18, SPAN = 0.85;
         const at = (i: number, j: number): [V3, V3, UV] => {
           const th = th0 + (i / NU * 2 - 1) * SPAN, y = top - (j / NV) * (top - foot), c = Math.cos(th), sn = Math.sin(th);
-          return [[s.c[0] + c * rr, y, s.c[2] + sn * rr], [c, 0, sn], [(th - th0) * rr, top - y]];
+          const along = (th - th0) * rr, phase = along * Math.PI / 1.45;
+          const cos = Math.max(0, Math.cos(phase));
+          // Raised rivulets below the fragment's advancing drip mask.
+          const bulge = .025 + .10 * cos ** 8;
+          const slope = -.10 * 8 * cos ** 7 * Math.sin(phase) * Math.PI / 1.45;
+          return [[s.c[0] + c * (rr + bulge), y, s.c[2] + sn * (rr + bulge)],
+            norm([c + slope * sn, 0, sn - slope * c]), [along, top - y]];
         };
         for (let i = 0; i < NU; i++) for (let j = 0; j < NV; j++) {
           const A = at(i, j + 1), B = at(i, j), C = at(i + 1, j), D = at(i + 1, j + 1);
-          quad(out, A[0], B[0], C[0], D[0], A[1], B[1], C[1], D[1], MAT.honeyRun, A[2], B[2], C[2], D[2]);
+          quad(m.liquids, A[0], B[0], C[0], D[0], A[1], B[1], C[1], D[1], MAT.honeyRun, A[2], B[2], C[2], D[2]);
         }
       }
       continue;
@@ -169,13 +175,18 @@ function towerMesh(t: Tower, m: LevelMesh) {
       const glass = t.shapes.find((g) => g.mat === MAT.glass);
       if (glass) {
         const th0 = Math.atan2(t.at[2] - glass.c[2], t.at[0] - glass.c[0]), y = glass.c[1] - glass.hh + 0.08, NA = 64, NR = 6;
-        const at = (i: number, j: number): [V3, UV] => {
-          const th = th0 + (i / NA * 2 - 1) * Math.PI, out2 = -0.4 + (j / NR) * 1.9, rr = glass.r + out2;
-          return [[glass.c[0] + Math.cos(th) * rr, y, glass.c[2] + Math.sin(th) * rr], [out2, (i / NA * 2 - 1) * Math.PI]];
+        const at = (i: number, j: number): [V3, V3, UV] => {
+          const th = th0 + (i / NA * 2 - 1) * Math.PI, t = j / NR, out2 = -0.4 + t * 1.9, rr = glass.r + out2;
+          // Shallow raised pool; expanding leading edge stays procedural.
+          const swell = .025 + .17 * (1 - (2 * t - 1) ** 4);
+          const slope = (-.17 * 8 * (2 * t - 1) ** 3) / 1.9;
+          const c = Math.cos(th), sn = Math.sin(th);
+          return [[glass.c[0] + c * rr, y + swell, glass.c[2] + sn * rr],
+            norm([-c * slope, 1, -sn * slope]), [out2, (i / NA * 2 - 1) * Math.PI]];
         };
         for (let i = 0; i < NA; i++) for (let j = 0; j < NR; j++) {
           const A = at(i, j), B = at(i + 1, j), C = at(i + 1, j + 1), D = at(i, j + 1);
-          quad(out, A[0], B[0], C[0], D[0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], MAT.honeyPool, A[1], B[1], C[1], D[1]);
+          quad(m.liquids, A[0], B[0], C[0], D[0], A[1], B[1], C[1], D[1], MAT.honeyPool, A[2], B[2], C[2], D[2]);
         }
         continue;
       }
@@ -294,7 +305,12 @@ function drawShape(s: Shape, out: number[]) {
 }
 /** The whole course: every tower, and the chopsticks. */
 export function levelMesh(lv: Level): LevelMesh {
-  const m: LevelMesh = { solid: [...lv.decor], glass: [], movers: [], bubbles: [] };
+  const m: LevelMesh = { solid: [], glass: [], liquids: [], movers: [], bubbles: [] };
+  // Keep butter films out of the opaque baked course; they transmit its surface.
+  for (let i = 0; i < lv.decor.length; i += VSTRIDE) {
+    const dest = Math.round(lv.decor[i + 6]) === MAT.smear ? m.liquids : m.solid;
+    for (let k = 0; k < VSTRIDE; k++) dest.push(lv.decor[i + k]);
+  }
   for (const t of lv.towers) towerMesh(t, m);
   for (const s of lv.sticks) stick(s, m.solid);
   return m;

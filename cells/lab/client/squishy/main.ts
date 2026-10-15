@@ -314,6 +314,11 @@ uniform float uRun;
 uniform vec3 uHole, uHoleAt;
 /** the cookbooks' atlas (books.ts) */
 uniform sampler2D uBooks;
+// The same scene-colour attachment is used by jelly and soap bubbles.
+uniform sampler2D uScene;
+uniform vec3 uRight, uUp;
+uniform vec2 uRes;
+uniform float uLiquidOpt;
 ${COMMON}
 ${SHADOW_GLSL}
 ${COAT_GLSL}
@@ -351,7 +356,7 @@ void main() {
   vec3 V = normalize(uEye - vWorld);
   int id = int(vMat + .5);
   vec2 uv = vUV;
-  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1., contact = 0.;
+  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1., contact = 0., liquidDepth = 0.;
   // (the glaze over it, if any: how rough, and how bright the sun's caught in it)
   float coatRough = .08, coatSpec = .04;
   // (cloth: no glint, a soft sheen at a glance instead; and how small a centimetre is on the glass here, so fine
@@ -780,7 +785,8 @@ void main() {
       d = .25 + 1.15 * g * (.25 + .75 * front) + .45 * (noise(vec3(vWorld.xz * .55, 31.)) - .5) - uv.x;
     }
     if (d < 0.) discard;
-    liquid(d / (id == ${MAT.honeyRun} ? .3 : .45), id == ${MAT.honeyRun} ? .3 : .3, vWorld, vec3(.78, .42, .04), vec3(.34, .11, .004), .3, n, base, rough, coat, coatRough, coatSpec, emit);
+    liquidDepth = clamp(d / (id == ${MAT.honeyRun} ? .3 : .45), 0., 1.);
+    liquid(liquidDepth, .13, vWorld, vec3(.78, .42, .04), vec3(.34, .11, .004), .12, n, base, rough, coat, coatRough, coatSpec, emit);
     coat = .7;
   } else if (id == ${MAT.glass}) {
     base = vec3(.9, .95, .93); rough = .04; coat = 1.;
@@ -863,7 +869,8 @@ void main() {
     d = min(min(d, (.8 - noise(vec3(vWorld.xz * .9, 11.))) * 9.), min(uv.x - .07, .84 - uv.x) * 25.);
     if (d < 0.) discard;
     float swell = .8 + .4 * noise(vec3(vWorld.xz * .5, 5.));
-    liquid(d, .22 * swell, vWorld, vec3(1., .93, .68), vec3(.97, .74, .2), .14, n, base, rough, coat, coatRough, coatSpec, emit);
+    liquidDepth = clamp(d, 0., 1.);
+    liquid(liquidDepth, .14 * swell, vWorld, vec3(1., .93, .68), vec3(.97, .74, .2), .08, n, base, rough, coat, coatRough, coatSpec, emit);
   } else if ((id >= 25 && id <= 29) || id == ${MAT.glaze}) {
     // what's on a top: flour on a board, crumbs or pepper on a plate, hundreds and thousands on a pudding, honey spilt, over the top it's on
     int k = id == ${MAT.glaze} ? 6 : id - 24;
@@ -934,6 +941,27 @@ void main() {
   }
   float d = length(vWorld - uEye);
   c = mix(c, vec3(.62, .57, .5), smoothstep(250., 900., d) * .6);
+  // Soap and glass remain separate from this shallow, partially transmitting
+  // honey and butter film. Use physical colour loss in the tiny raised pool.
+  if (uLiquidOpt > .5 && (id == ${MAT.honeyRun} || id == ${MAT.honeyPool} || id == ${MAT.smear})) {
+    bool butterFilm = id == ${MAT.smear};
+    float depth = butterFilm ? (.025 + .23 * liquidDepth) : (.05 + .45 * liquidDepth);
+    vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : vec3(.30, 1.40, 4.5);
+    vec3 T = exp(-absorb * depth);
+    float F = .04 + .96 * pow(1. - NoV, 5.);
+    vec2 bend = vec2(dot(n, uRight), dot(n, uUp)) * (butterFilm ? .0009 : .0018) * liquidDepth;
+    vec3 scene = texture(uScene, clamp(gl_FragCoord.xy / uRes + bend, vec2(.001), vec2(.999))).rgb;
+    vec3 tint = butterFilm ? vec3(.97, .83, .33) : vec3(.74, .34, .045);
+    float reflectAmt = clamp(.13 + .68 * F, 0., .85);
+#ifdef HDR
+    vec3 transmitted = scene * T + tint * (vec3(1.) - T) * .16;
+    o = vec4(mix(transmitted, c, reflectAmt), 1.);
+#else
+    vec3 transmitted = scene * T + tonemap(tint) * (vec3(1.) - T) * .16;
+    o = vec4(mix(transmitted, tonemap(c), reflectAmt), 1.);
+#endif
+    return;
+  }
   // (glass: seen through, but for its gloss and its edges)
   if (id == ${MAT.glass}) { float Fg = .04 + .96 * pow(1. - NoV, 4.); o = vec4(tonemap(c), clamp(.08 + Fg * .9 + length(spec) * .3, 0., 1.) * uAlpha); return; }
   // (a soap bubble: hardly there face on, its film's colours toward its rim, bright where it catches the light)
@@ -1282,6 +1310,36 @@ void main() {
   o = vec4(c, vA * (1. - smoothstep(0., 1., r)) * (1. - smoothstep(0., 1., r)) * (.55 + .45 * br));
 }`;
 
+/** Thin soap film: scene-colour refraction, clear centre, iridescent grazing rim. */
+const BUBBLE_FS = `#version 300 es
+precision highp float;
+in vec3 vWorld, vNor;
+out vec4 o;
+uniform vec3 uEye, uRight, uUp;
+uniform vec2 uRes;
+uniform sampler2D uScene;
+${COMMON}
+void main() {
+  vec3 n = normalize(vNor), V = normalize(uEye - vWorld);
+  float nv = dot(n, V);
+  if (nv <= 0.) discard;
+  float edge = clamp(1. - nv, 0., 1.);
+  vec2 uv = gl_FragCoord.xy / uRes;
+  // A hollow soap film: nearly cancelling interfaces at the centre.
+  vec2 bend = vec2(dot(n, uRight), dot(n, uUp)) * (.003 + .006 * edge) * pow(edge, 1.35);
+  vec3 through = texture(uScene, clamp(uv + bend, vec2(.001), vec2(.999))).rgb;
+  float fresnel = .025 + .975 * pow(edge, 5.);
+  vec3 reflected = tonemap(env(reflect(-V, n)) * .8);
+  vec3 c = mix(through, reflected, clamp(fresnel * .77, .02, .82));
+  vec3 iridescence = .5 + .5 * cos(6.283185 * (nv * 1.55 + dot(n, uWin) * .12 + vec3(0., .34, .68)));
+  c += iridescence * .07 * pow(edge, 2.4);
+  vec3 R = reflect(-V, n);
+  float sun = pow(max(dot(R, uKey), 0.), 260.);
+  float window = pow(max(dot(R, uWin), 0.), 54.);
+  c += uKeyCol * (sun * .30 + window * .04) * (.3 + .7 * edge);
+  o = vec4(c, 1.);
+}`;
+
 /** the jelly's back, for how thick it is where it's seen: how far each of its far faces is from the eye */
 const BACK_FS = `#version 300 es
 precision highp float;
@@ -1369,6 +1427,7 @@ const glitterProg = program(GLITTER_VS, GLITTER_FS);
 const puffProg = program(PUFF_VS, PUFF_FS);
 const brightProg = program(QUAD_VS, BRIGHT_FS), blurProg = program(QUAD_VS, BLUR_FS), finishProg = program(QUAD_VS, FINISH_FS);
 const backProg = HDR ? program(DOUGH_VS, BACK_FS) : null;
+const bubbleProg = program(VS, BUBBLE_FS);
 const ul = new Map<string, WebGLUniformLocation | null>();
 const u = (p: WebGLProgram, n: string) => {
   const k = `${(p as { __id?: number }).__id ??= Math.random()}:${n}`;
@@ -1437,6 +1496,7 @@ function fillJellies() {
   }
 }
 let glassMesh: Mesh | null = null;
+let liquidMesh: Mesh | null = null;
 let roomMesh: Mesh | null = null;
 /** the lids: each its own mesh about its rest place, drawn where it is now */
 let movers: Array<{ shape: LevelMesh['movers'][number]['shape']; mesh: Mesh }> = [];
@@ -1832,7 +1892,7 @@ function startLevel(n: number, quiet = false) {
   }
   lv = benchName ? bench(benchName) : buildLevel(levelN, levelSeed);
   levelFp = fingerprint(lv);
-  drop(courseMesh); drop(glassMesh);
+  drop(courseMesh); drop(glassMesh); drop(liquidMesh);
   for (const m of susanMeshes.values()) drop(m);
   susanMeshes.clear();
   for (const m of movers) drop(m.mesh);
@@ -1846,6 +1906,7 @@ function startLevel(n: number, quiet = false) {
   const solid = new Float32Array(lm.solid);
   courseMesh = upload(solid, gl.STATIC_DRAW, bakeLight(solid));
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
+  liquidMesh = lm.liquids.length ? upload(lm.liquids) : null;
   movers = lm.movers.map((m) => ({ shape: m.shape, mesh: upload(m.verts) }));
   bubbles = lm.bubbles.map((b) => ({ shape: b.shape, mesh: upload(b.verts), c0: [...b.shape.c] as V3, gone: -1, drift: null, until: 0 }));
   lidWas = movers.map(() => -1);
@@ -3133,6 +3194,7 @@ function frame(now: number) {
   gl.uniform1i(u(prog, 'uShadowMap'), 0);
   gl.uniform1i(u(prog, 'uBooks'), 6);
   gl.uniform1f(u(prog, 'uAlpha'), 1);
+  gl.uniform1f(u(prog, 'uLiquidOpt'), 0); // only sample the resolved scene in the thin-film pass
   gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
   // (the screen over what stands before the dumpling: on in play, once the way over's done)
   gl.uniform3fv(u(prog, 'uHole'), mode === 'play' && fly < 0 && !fixedView ? [0, 0, 1] : [0, 0, 0]);
@@ -3327,7 +3389,7 @@ function frame(now: number) {
 
   // (the glass: over everything, seen through)
   const liveBubbles = bubbles.filter((b) => b.gone < 0);
-  if (glassMesh || liveBubbles.length) {
+  if (glassMesh || (params.has('oldbubbles') && liveBubbles.length)) {
     gl.useProgram(prog);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -3337,7 +3399,7 @@ function frame(now: number) {
     gl.enable(gl.CULL_FACE);
     if (glassMesh) { gl.cullFace(gl.FRONT); drawMesh(glassMesh); gl.cullFace(gl.BACK); drawMesh(glassMesh); }
     // (the bubbles, clear: their far side then their near, so the film's seen through on both)
-    for (const b of liveBubbles) {
+    for (const b of (params.has('oldbubbles') ? liveBubbles : [])) {
       // (wherever it's floated to)
       const off = model(sub(b.shape.c, b.c0), 1);
       gl.cullFace(gl.FRONT); drawMesh(b.mesh, off); gl.cullFace(gl.BACK); drawMesh(b.mesh, off);
@@ -3345,6 +3407,52 @@ function frame(now: number) {
     gl.disable(gl.CULL_FACE);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
+  }
+
+  // Thin honey and butter films use the same resolved scene as jelly.
+  if (liquidMesh) {
+    sceneCopy(W, H);
+    gl.useProgram(prog);
+    gl.uniform1i(u(prog, 'uScene'), 1);
+    gl.uniform3fv(u(prog, 'uRight'), right);
+    gl.uniform3fv(u(prog, 'uUp'), upv);
+    gl.uniform2f(u(prog, 'uRes'), W, H);
+    gl.uniform1f(u(prog, 'uLiquidOpt'), params.has('oldliquid') ? 0 : 1);
+    gl.uniform1f(u(prog, 'uAlpha'), 1);
+    gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
+    gl.uniform3fv(u(prog, 'uHole'), [0, 0, 0]);
+    gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.depthMask(false);
+    drawMesh(liquidMesh);
+    gl.depthMask(true);
+  }
+
+  // Refract the resolved scene through the bubble's front shell.
+  // The scene buffer is also shared with the jelly: no new render target.
+  if (liveBubbles.length && !params.has('oldbubbles')) {
+    sceneCopy(W, H);
+    gl.useProgram(bubbleProg);
+    lightUniforms(bubbleProg);
+    gl.uniformMatrix4fv(u(bubbleProg, 'uVP'), false, vp);
+    gl.uniformMatrix4fv(u(bubbleProg, 'uLightVP'), false, lightVP);
+    gl.uniform3fv(u(bubbleProg, 'uEye'), eye);
+    gl.uniform3fv(u(bubbleProg, 'uRight'), right);
+    gl.uniform3fv(u(bubbleProg, 'uUp'), upv);
+    gl.uniform2f(u(bubbleProg, 'uRes'), W, H);
+    gl.uniform1i(u(bubbleProg, 'uScene'), 1);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.disable(gl.BLEND);
+    gl.depthMask(false);
+    for (const b of liveBubbles) {
+      gl.uniformMatrix4fv(u(bubbleProg, 'uModel'), false, model(sub(b.shape.c, b.c0), 1));
+      gl.bindVertexArray(b.mesh.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, b.mesh.count);
+    }
+    gl.depthMask(true);
+    gl.disable(gl.CULL_FACE);
   }
 
   // 5. steam and flour
@@ -3373,7 +3481,7 @@ function frame(now: number) {
   drawBand();
   showStatus();
   (window as unknown as { __squishy: unknown }).__squishy = {
-    visualBuild: 'tactile-01',
+    visualBuild: 'thinfilm-honey-v1', optics: { bubbles: params.has('oldbubbles') ? 'legacy' : 'thin-film', liquid: params.has('oldliquid') ? 'legacy' : 'transmission', liquidTriangles: liquidMesh ? liquidMesh.count / 3 : 0 },
     level: levelN, towers: lv.towers.length, check, falls, clock, home, fly, ahead: Math.round(ahead * 100) / 100, com: body.com.map((v) => Math.round(v * 10) / 10),
     speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, pushing: !!pushNow, power: aimNow?.power ?? pushNow?.power ?? 0, framed: Math.round(framed * 100) / 100,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,

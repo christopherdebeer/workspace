@@ -257,13 +257,16 @@ function arms(model: M4, right: V3, left: V3): Array<{d: Drawn; model: M4}> {
   return out;
 }
 let staffPlant: V3 | null = null, staffLift: V3 | null = null, staffCycle = -1;
-function walkingRig(model: M4, headAt: M4, phase: number, stride: number): Shaft {
+function walkingRig(model: M4, headAt: M4, phase: number, stride: number, climb = 0): Shaft {
+  const reach = .36 + .24*climb;
   const inv = invert(model), head = apply(inv,apply(headAt,[0,1.54,0]));
   const cycle = Math.floor(phase/(Math.PI*2)), f = phase/(Math.PI*2)-cycle;
   const contact = f < .55 && stride > .1;
   if (cycle !== staffCycle) { staffPlant=null; staffCycle=cycle; }
   if (contact && !staffPlant && !staffLift) {
-    const q=apply(model,[.52,0,.36]); q[1]=ground(ways,q[0],q[2])+.025;
+    const q=apply(model,[.52,0,reach]);
+    const n=ways.nearest(q[0],q[2]);
+    q[1]=(n.d<WIDTH/2 ? ways.surface(n.w,n.u,q[2]) : ground(ways,q[0],q[2]))+.025;
     staffPlant=q;
   }
   if (!contact && staffPlant) { staffLift=staffPlant; staffPlant=null; }
@@ -272,8 +275,8 @@ function walkingRig(model: M4, headAt: M4, phase: number, stride: number): Shaft
   else if (stride > .1) {
     const t=Math.max(0,Math.min(1,(f-.55)/.45)), e=t*t*(3-2*t);
     const from=staffLift?apply(inv,staffLift):[.52,0,-.3] as V3;
-    tip=[.52, from[1]*(1-e)+.16*Math.sin(Math.PI*t), from[2]*(1-e)+.36*e];
-    if(f<.55) tip=[.52,.12,.36]; // early release: carry until the next cycle
+    tip=[.52, from[1]*(1-e)+.16*Math.sin(Math.PI*t), from[2]*(1-e)+reach*e];
+    if(f<.55) tip=[.52,.12,reach]; // early release: carry until the next cycle
   } else { tip=[.52,0,.15]; staffPlant=null; staffLift=null; }
   let rig=shaft(tip,[.48,1.0,Math.max(.28,Math.min(.38,tip[2]*.25+.30))],2.17,false,head);
   if(!rig.valid) { staffLift=staffPlant; staffPlant=null; rig=shaft([.52,.12,.32],[.48,1,.32],2.17,false,head); }
@@ -379,7 +382,7 @@ function rideOn(dt: number) {
  * A tap on a landing takes it there: brought in, it comes alongside by itself (or noses into the reeds,
  * and rests there, the walker sitting in it, until the next stroke).
  */
-interface Afloat { p: [number, number]; v: [number, number]; yaw: number; to: Landing | null; resting: boolean; s: number; sTo: number; aim: [number, number]; nextAim: [number, number]; tip: V3 | null; lift: V3 | null }
+interface Afloat { p: [number, number]; v: [number, number]; yaw: number; to: Landing | null; resting: boolean; s: number; sTo: number; aim: [number, number]; nextAim: [number, number]; tip: V3 | null; lift: V3 | null; liftPhase?: number; liftAt?: number }
 /** the next release of the stroke (its phase at .25), from s: s itself if it's at one */
 const nextRelease = (s: number) => Math.ceil(s - 0.25 - 1e-6) + 0.25;
 let afloat: Afloat | null = null;
@@ -401,7 +404,11 @@ function boatAt(time: number): M4 {
 }
 const apply = (m: M4, l: V3): V3 => [m[0] * l[0] + m[4] * l[1] + m[8] * l[2] + m[12], m[1] * l[0] + m[5] * l[1] + m[9] * l[2] + m[13], m[2] * l[0] + m[6] * l[1] + m[10] * l[2] + m[14]];
 /** how far into the push of a stroke (0 not pushing; 1 its hardest), for the poler's lean */
-const pushing = () => (afloat?.tip ? Math.max(0, Math.cos(afloat.s * Math.PI * 2)) : 0);
+const pushing = () => {
+  if (!afloat?.tip) return 0;
+  const d = ((afloat.s - .75) % 1 + 1) % 1 / .5;
+  return d <= 1 ? Math.pow(Math.max(0, Math.sin(Math.PI*d)), .65) * (1.3 - .3*d) : 0;
+};
 /** where the poler's hands hold the pole, in the world: at the stern, up and to the side they're poling on, lower as they lean on it */
 /** Boat and body share this transform, so rolling, turning and leaning cannot detach a grip. */
 function polerModel(time: number): M4 {
@@ -425,10 +432,14 @@ function poleRig(time: number): Shaft {
   if (a.tip) tip = apply(inv, a.tip);
   else {
     // Recovery goes along the outside of the body; never over the hat.
-    const f = Math.max(0, Math.min(1, (ph - .25) / .5)), e = f*f*(3-2*f);
-    const to = apply(inv, catchAt(time));
+    const start = a.liftPhase ?? (Math.floor(a.s-.25)+.25);
+    const end = Math.floor(start-.75+1e-6)+1.75;
+    const f = Math.max(0, Math.min(1, (a.s-start)/Math.max(.01,end-start))), e = f*f*(3-2*f);
+    const active = a.sTo > a.s + .001;
+    const to = active ? apply(inv, catchAt(time)) : [.16,-.9,.30] as V3;
     const from = a.lift ? apply(inv, apply(boatAt(time), a.lift)) : to;
-    tip = a.sTo > a.s + .001 ? [Math.min(.20, from[0]+(to[0]-from[0])*e), from[1]+(to[1]-from[1])*e+.7*Math.sin(Math.PI*f), from[2]+(to[2]-from[2])*e] : [.16,-.9,.30];
+    const blend = active ? e : sm(0,.35,time-(a.liftAt ?? time-.35));
+    tip = [from[0]+(to[0]-from[0])*blend, from[1]+(to[1]-from[1])*blend+(active?.7*Math.sin(Math.PI*f):0), from[2]+(to[2]-from[2])*blend];
   }
   let rig = shaft(tip, [.27,1.15,.43], POLE_L, true, [0,1.54,0]);
   if (!rig.valid && !a.tip) rig = shaft([.16,-.9,.30], [.27,1.15,.43], POLE_L, true, [0,1.54,0]);
@@ -497,13 +508,16 @@ function release(a: Afloat, early: boolean) {
   if (!a.tip) return;
   const B = boatAt(time), dx = a.tip[0] - B[12], dz = a.tip[2] - B[14], c = B[0], sn = B[8];
   // (in the boat's frame: across it and along it, at the water)
-  a.lift = [c * dx - sn * dz, 0, sn * dx + c * dz];
+  a.lift = apply(invert(B), a.tip);
+  a.liftPhase = a.s; a.liftAt = time;
   ripple('drip', a.tip[0], a.tip[2]); a.tip = null; dripsLeft = 3;
-  if (early) a.s = Math.min(a.sTo, nextRelease(a.s));
+  // An early release ends force, never skips animation phase (which snapped the torso).
+  void early;
 }
 /** A stroke asked for, toward (dx, dz): queued, two ahead of the one going at most; each ends with the pole out of the water. */
 function queueStroke(a: Afloat, dx: number, dz: number) {
   const d = Math.hypot(dx, dz) || 1;
+  if (a.sTo <= a.s + .001) { a.lift=apply(invert(boatAt(time)),poleNow(time).tip); a.liftPhase=a.s; a.liftAt=time; }
   a.to = null; a.resting = false; a.nextAim = [dx / d, dz / d];
   a.sTo = Math.min(nextRelease(a.s) + 2, Math.max(a.sTo, a.s) + 1);
 }
@@ -543,7 +557,7 @@ function sail(dt: number) {
     // (the push, through the water, toward where it's aimed; the water dragging on its way through it)
     const target = Math.atan2(a.aim[0], a.aim[1]);
     const pushYaw = a.yaw + Math.max(-.35, Math.min(.35, wrapA(target-a.yaw)));
-    let rx = a.v[0] - cx + Math.sin(pushYaw) * 1.5 * drive * dt, rz = a.v[1] - cz + Math.cos(pushYaw) * 1.5 * drive * dt;
+    let rx = a.v[0] - cx + Math.sin(pushYaw) * 1.8 * drive * dt, rz = a.v[1] - cz + Math.cos(pushYaw) * 1.8 * drive * dt;
     const k = Math.exp(-dt * 0.22);
     rx *= k; rz *= k;
     const rl = Math.hypot(rx, rz);
@@ -1180,7 +1194,10 @@ function frame(now: number) {
     } else want = preview ? 0.8 : keys.has('arrowup') || keys.has('w') ? 1 : keys.has('arrowdown') || keys.has('s') ? -0.7 : 0;
     if (Math.sign(want) !== Math.sign(speed) && Math.abs(speed) < 0.3) speed = Math.sign(want) * Math.abs(speed);
     speed += (want - speed) * (1 - Math.exp(-dt * 4));
-    let move = speed * WALK * dt * (1 + 0.14 * Math.sin(phase * 2 - 0.8) * stride);
+    const uphill = speed > 0 && ways.stairAt(here.w, here.u);
+    const support = ((phase/(Math.PI*2))%1+1)%1;
+    const pull = support < .55 ? Math.sin(Math.PI*support/.55) : 0;
+    let move = speed * WALK * dt * (uphill ? .82+.52*pull : 1 + .14*Math.sin(phase*2-.8)*stride);
     for (let guard = 0; guard < 4 && Math.abs(move) > 1e-6; guard++) {
       if (legs.length) {
         // (along the leg; at its end, on to the next, or there)
@@ -1290,12 +1307,12 @@ function frame(now: number) {
   const sw = Math.sin(phase) * stride;
   const climbing = off ? 0 : Math.max(0, Math.min(1, (st.p[1] - stand({ w: here.w, u: Math.max(0, here.u - 0.5 * Math.sign(speed || 1)) }).p[1]) * 4 * Math.sign(speed || 1)));
   const model: M4 = poling ? polerModel(time) : mulM(new Float32Array([c, 0, -sn, 0, 0, 1, 0, 0, sn, 0, c, 0, pos[0], pos[1], pos[2], 1]),
-    mulM(Ry(0.06 * sw), mulM(Rz(0.045 * sw), mulM(Rx(0.05 * stride + 0.06 * climbing * stride + poleLean), Tm(0, 0.006 * Math.sin(time * 1.7) * (1 - stride), 0)))));
+    mulM(Ry(0.06 * sw), mulM(Rz(0.045 * sw), mulM(Rx(0.05 * stride + climbing * stride * (.06 + .10*Math.cos(phase)) + poleLean), Tm(0, 0.006 * Math.sin(time * 1.7) * (1 - stride), 0)))));
   // (the head: turned back a little against the body's twist as they walk; standing, it looks about, now one way, now another)
   idleLook += ((1 - stride) * (0.5 * Math.sin(time * 0.31) + 0.35 * Math.sin(time * 0.53 + 1.3)) - idleLook) * (1 - Math.exp(-dt * 1.5));
   const headAt = mulM(model, about(NECK, mulM(Ry(-0.05 * sw + idleLook), Rx(0.03 * Math.sin(phase * 2) * stride))));
   const shoeAt = (k: number) => poling ? mulM(boatAt(time),Tm(...POLER)) : mulM(ground_, Tm(0, Math.max(0, Math.cos(phase) * (k ? 1 : -1)) * 0.05 * stride, (k ? 1 : -1) * sw * 0.15));
-  const rig = poling ? poleRig(time) : walkingRig(model,headAt,phase,stride);
+  const rig = poling ? poleRig(time) : walkingRig(model,headAt,phase,stride,climbing);
   const restRight: V3=[.22,.62,.08], restLeft: V3=[-.22,.62,.08];
   const armParts = arms(model, seated ? restRight : rig.right, poling ? rig.left : seated ? restLeft : [-.22,.62,-.10*sw]);
   const staffAt = mulM(model,poleModel(rig.top,rig.tip));
