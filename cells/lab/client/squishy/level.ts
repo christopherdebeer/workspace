@@ -1062,3 +1062,13 @@ export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[]
   }
   return null;
 }
+
+/** A level's fingerprint: its solid things and its tops, rounded to a millimetre, hashed. The same level and
+ * seed under a changed generator fingerprints differently, so a link or a logged flick can tell. */
+export function fingerprint(lv: Level): string {
+  let h = 0x811c9dc5;
+  const add = (v: number) => { h ^= Math.round(v * 10) | 0; h = Math.imul(h, 0x01000193) >>> 0; };
+  for (const s of lv.shapes) { add(s.mat ?? 0); for (let i = 0; i < 3; i++) { add(s.lo[i]); add(s.hi[i]); } }
+  for (const t of lv.towers) for (let i = 0; i < 3; i++) add(t.at[i]);
+  return h.toString(16).padStart(8, '0');
+}

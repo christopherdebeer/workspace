@@ -18,8 +18,9 @@
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, ROLL_MAX, ROLL_MIN, railAxis, rollReach, type Kind } from './body';
 import { kitchenRun, tableSet } from './room';
-import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, dustMat, carried, chapterOf, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, dustMat, carried, chapterOf, fingerprint, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
+import { logFlick, settleFlick } from './flicklog';
 import { logoSVG } from './title';
 import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -1588,6 +1589,9 @@ let levelN = Math.max(1, Number(params.get('level')) || (() => { try { return Nu
 let lv!: Level;
 /** the tower last stood on (where a fall comes back to), falls, the clock, home (the time, or not yet) */
 let check = 0;
+/** another layout of the level (?seed=), as the Level Lab names it; and the level's fingerprint, for the flick log */
+const levelSeed = Math.max(0, Math.floor(Number(params.get('seed')) || 0));
+let levelFp = '';
 /** whether it's been said, this time playing, that the way parts */
 let forkSaid = false;
 /** the tops stood on this go (not where it starts): for the score */
@@ -1709,7 +1713,8 @@ function startLevel(n: number, quiet = false) {
     if (!params.has('skin')) skin = 'jelly';
     showSkin();
   }
-  lv = benchName ? bench(benchName) : buildLevel(levelN);
+  lv = benchName ? bench(benchName) : buildLevel(levelN, levelSeed);
+  levelFp = fingerprint(lv);
   drop(courseMesh); drop(glassMesh);
   for (const m of susanMeshes.values()) drop(m);
   susanMeshes.clear();
@@ -1871,9 +1876,12 @@ function release() {
     const along = (vx * fx + vy * fy) / fl;
     if (held && Math.abs(along) > 350) { a = held; spin = Math.sign(along) * Math.min(1, (Math.abs(along) - 350) / 1100); }
   }
+  const dragged = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
   pull = null; aimNow = null; pushNow = null;
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
+  // (kept, for the Level Lab: from where, as dragged, and what the ring said)
+  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, ring: aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
   if (body.canFlick) doFlick(a.vel, spin, a.climb);
   else buffered = { vel: a.vel, spin, until: simTime + 0.35, climb: a.climb };
 }
@@ -3244,6 +3252,7 @@ function tick(dt: number) {
     falls++;
     fallenAt = simTime;
     if (way[way.length - 1] !== -1) way.push(-1);
+    settleFlick(-1, body.com);
     plop();
     hint('splat. back to the last top', 1800);
     return;
@@ -3261,6 +3270,7 @@ function tick(dt: number) {
   const speed = body.moving;
   // (stood on it: on its feet on its top, or hanging from it if it's a rail; not draped over its edge, nor clinging to its side)
   const stood = k >= 0 && (lv.towers[k].rail ? !!body.onRail : body.onFeet);
+  if (stood && body.contacts > 0 && speed < 30 && still > 0.3) settleFlick(k, body.com);
   if (stood && body.contacts > 0 && speed < 30) { check = k; if (k > 0) visited.add(k); if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
   // (on a top the way parts at, the first time: say so)
   if (stood && !benchName && !forkSaid && lv.ways && lv.ways.filter(([a]) => a === k).length > 1 && still > 0.5) { forkSaid = true; hint('two ways on: the sure way along the front; along the back, one long hop, quicker', 5000); }

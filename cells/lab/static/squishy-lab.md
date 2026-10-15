@@ -2,35 +2,28 @@
 
 A renderer-free sibling of [Squishy](/squishy). It uses exactly the same generated level, collision shapes, approximate trajectory physics and real soft-body simulator: `client/squishy/course.ts`, `level.ts`, `jelly.ts`, `body.ts`. No separate simulation rules, WebGL or shaders.
 
-## Using it
+## What it measures
 
-1. Choose a level number, seed and the character's material; **Build level** deterministically reuses the current Squishy `buildLevel(n,seed)`.
-2. **Discover routes** examines nearby forward pairs of stops with the existing `hop()` / `aim()` solvers and a multi-angle sweep. Results are ballistic witnesses (ochre). Grey dotted segments are the generator's own checked `lv.ways` graph, including fork/merge topology and have *not* been verified.
-3. Tap a connection. **Verify** performs three trials with the *actual* `Dumpling.step()` physics, from a fresh settled start at the source, including small yaw/power perturbations. Successful observed landings are green; unsuccessful validations red. Rails and wall climbs currently require a composite-action validator and stay predictions.
-4. **Verify all witnesses** runs soft-body trials for every discovered simple transition, leaving multi-action rail/climb cases as predictions.
-5. **Replay** moves a dot along the path captured by the simulation or ballistic solver. Choose plan, elevation or topological graph, and export SVG or JSON.
+General purpose: any level, any seed, either dumpling. The specimen is whatever a session is looking at; the link pins it — `fp=` is the level's fingerprint (its solids and tops, hashed), and the page warns when the generator has since changed what that level and seed lay.
 
-## Design and limitations
+A move is measured in the player's own units: **pixels of drag** on a 402×714 phone, where the game's flick is power = (L − 14) / (0.3 · min(w, h)), so 3 px ≈ 0.025 power. Not every level shows the aim ring, so the measure is what a thumb can do without it:
 
-This is an initial *analysis* laboratory, not yet an automatically repairing multi-path builder. The geometry and movement models are shared with Squishy; the generator is unchanged. The translucent outlines show actual playable stop/support colliders (including sheets as dotted bounding regions), while solid footprints depict logical landing areas. A generated layout may still be linear, even if the Lab discovers accidental alternatives.
+1. **Discover routes** finds moves between tops: the generator's own `hop()` for the moves it laid (the only solver for rails, climbs and jars), else a ballistic sweep taking the *middle* of the widest run of landing powers (not its end: a witness should have room either side).
+2. Tap a move, **Map in drag px**: every flick within ±24 px of the witness, across and along the drag, run through the real `Dumpling.step` at the game's fixed 1/60 — a coarse 8 px grid, then every 4 px wherever neighbours disagree. Each cell is what happened: lands, onto another top, falls (the game puts you back where you were), stops off any top, or still going.
+3. From the map, under **σ px of drag error** (the toolbar; a stated guess until play measures it): the best aim and its chance, the chance at the witness, the **tolerance** (the radius round the best aim that all lands), where the misses go, and, for levels that show it, how often the aim ring on the target means a landing.
+4. **Trials**: twelve flicks as a player makes them, the best aim off by σ, each through the real body, with a Wilson 95% interval — *confirmed* when its low end is at least a half, *marginal* below, *failed* when nothing landed; and the same aim after resting longer, because a learnt drag has to work whenever it's made.
+5. **Measure level** maps every single-flick move and prices the way home: a Markov chain over the tops, each move at its best aim, value-iterated for the **expected flicks home** (and falls), with each fork's options side by side. A fall costs the flick and puts you back; stopping off any top is counted as one more flick to get back on — an assumption, marked as one.
+6. **Play this level** opens the game on the same level and seed. The game keeps each flick made on this device (where from, the drag, what the ring showed, where it ended); back here, those on the same fingerprint are drawn over the maps — the evidence that comes from use.
 
-**Predicted is not confirmed.** The fast trajectory uses Squishy's simplified centre/ball model. Physically confirmed means at least one of three discrete full soft-body trials settled at the requested destination. This is not proof of human playability. A failed validation is evidence against the sampled controls, **not** that the edge is impossible.
+Headless, the same engine: `node devtools/squishy-map.mjs --level 7 --seed 2 [--sigma 4] [--edges 3-4,3-6]` prints each move's chance, tolerance, outcomes and trials, the expected flicks home, and writes `devtools/out/map-<level>-<seed>.json`.
 
-Search currently considers forward pairs up to five stops apart and within 125 cm horizontally, with limited sampled yaw and power. It does not enumerate backwards, indirect recovery, arbitrary launch locations, chained multi-action movements or every surface of decorative furniture. Dynamic timings are only partly sampled. `hop()` can witness wall/rail sequences, but composite real-body verification is future work. Edge counts and path counts are therefore **lower bounds on discovered routes**, not statements about the full reachable state space. Geometry plan axes are stretched independently to keep the diagram legible.
+## Limits
 
-## Next experiments
-
-- Discover stable contact states on every physically usable surface, not just `lv.towers`.
-- Measure entire connected control-space regions and actual landing distributions.
-- Support multi-step agents (rail shimmies, cling/climb, bounce chains, timed lids).
-- Connect failed launches to alternate landing, recoveries and terminal falls.
-- Produce an annotated directed state graph with verified checkpoint viability.
-- Add bounded deterministic repair of layouts until route/difficulty/recovery constraints are met.
-- Headless batch seed sweeps in a Node-compatible worker, pass-level timing and seed/version regression corpus.
-
-Lab entries: `client/squishy-lab/engine.ts` and `client/squishy-lab/main.ts`. The source game is deliberately not forked.
+Moves of more than one action (rail shimmies, climbs, letting go of a jar) are discovered but not mapped. The noise is a stated σ until enough logged flicks fit one. Stopping off any top is priced, not yet followed. Search is forward pairs up to five apart; a missing move is not an impossible one. The lab's simulation is the game's own physics and step; that it matches the game *as played* (the real loop, input and timing) is checked by replaying flicks in a browser — not yet done.
 
 ## Spatial composition case study — Level 7, seed 2
+
+*Measured on the generator as it was at the time (fingerprints were not yet recorded); the same level and seed now lay differently.*
 
 [Open the controlled composition study](/squishy-lab?study&level=7&seed=2). This is intentionally one generated encounter, not a gallery. It uses the existing `buildKitchen` generator, its real collision geometry, and an optional fork-composition parameter. The playable game defaults to its unchanged original `parallel` layout.
 

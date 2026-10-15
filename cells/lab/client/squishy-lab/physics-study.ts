@@ -15,5 +15,5 @@ export function validateFork(level:number,seed:number,composition:Composition='p
       physical:witness.validation&&{total:witness.validation.total,outcomes:witness.validation.outcomes,landedAt:witness.validation.landedAt}};
   });
   return {level,seed,composition,fork:fork.at,choices:fork.choices,merge:fork.merge,exits,
-    note:exitIndex>=0?'One actual soft-body witness per chosen edge; no claim of success tolerance or human difficulty.':'Three local controls per edge; no general impossibility or human difficulty claim.'};
+    note:exitIndex>=0?'One full-body flick at the witness; for tolerance and chance, map the move in the Level Lab.':'Three flicks per edge, the witness off by σ 4 px of drag; for tolerance and chance, map the move in the Level Lab.'};
 }

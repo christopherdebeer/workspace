@@ -73,6 +73,7 @@ body.preview{overflow:hidden}
 .preview #plot svg{min-height:0;height:100vh;object-fit:cover}
 @media(max-width:940px){main{padding:10px}.layout{grid-template-columns:1fr}.sidebar{display:grid;grid-template-columns:1fr 1fr}#edges{max-height:260px}}
 @media(max-width:560px){header{padding:12px}header h1{font-size:21px}.toolbar{padding:10px}.toolbar .sep{display:none}.sidebar{grid-template-columns:1fr}#metrics b{font-size:19px}#metrics small{font-size:9px}#metrics>div{padding:8px 4px}}
+.map{display:block;width:100%;max-width:340px;margin:6px auto 4px;border-radius:6px}.maplegend{display:flex;flex-wrap:wrap;gap:3px 10px;font-size:11px!important;color:var(--quiet);margin:4px 0 8px!important}.maplegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}.toolbar a{font-size:13px;color:#496e5b}
 #composition-panel{margin:8px 0 24px}#composition-panel[hidden],.preview #composition-panel{display:none}.study-head p,.study-note{color:var(--quiet);font-size:12px;line-height:1.5}.study-head p{max-width:850px}.study-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.study-card{background:var(--paper);border:1px solid var(--rule);border-radius:9px;padding:12px;min-width:0}.study-card.selected{border-color:#456d5b}.study-card h3{margin:0 0 9px;font-size:17px;font-weight:400;text-transform:capitalize}.study-card svg{display:block;width:100%;max-height:155px}.study-card dl{font-size:12px;gap:5px}.study-card button{width:100%;font-size:12px}.study-card small{color:var(--quiet)}.study-views{display:grid;grid-template-columns:1fr 94px;align-items:center;gap:8px}.study-views span{font-size:12px;color:var(--quiet)}@media(max-width:800px){.study-cards{grid-template-columns:1fr}}</style>
 </head>
 <body>
@@ -83,7 +84,7 @@ body.preview{overflow:hidden}
 <label>Seed <input id="seed" type="number" min="0" step="1" value="0"></label>
 <label>Body <select id="skin"><option value="dough">Dough</option><option value="jelly">Jelly</option></select></label>
 <button id="build">Build level</button><button id="nextseed">Next seed →</button><span class="sep"></span>
-<button class="primary" id="discover">Discover routes</button><button id="verifyall">Verify all witnesses</button><a href="/squishy-lab?study&level=7&seed=2">Spatial case study ↗</a>
+<label title="How far a thumb's drag is off, px (normal, across and along)">Drag error σ <input id="sigma" type="number" min="1" max="20" step="1" value="4"> px</label><span class="sep"></span><button class="primary" id="discover">Discover routes</button><button id="verifyall">Measure level</button><a id="play" href="/squishy">Play this level ↗</a><a href="/squishy-lab?study&level=7&seed=2">Spatial study ↗</a>
 </div>
 <section id="composition-panel" hidden></section>
 <div class="heading"><h2 id="headline">Level Lab</h2><div id="metadata"></div></div>
@@ -96,7 +97,7 @@ body.preview{overflow:hidden}
       </div>
       <div id="plot" aria-live="polite"></div>
       <div id="metrics"></div>
-      <div class="legend"><span><i style="background:#bf9258"></i> Ballistic witness</span><span><i style="background:#3e8065"></i> Physically confirmed</span><span><i style="background:#b45c5c"></i> Failed verification</span><span>Grey dashes = generator routes, not yet rediscovered</span></div>
+      <div class="legend"><span><i style="background:#bf9258"></i> Ballistic witness</span><span><i style="background:#3e8065"></i> Confirmed (interval ≥ ½)</span><span><i style="background:#c0763f"></i> Marginal</span><span><i style="background:#b45c5c"></i> Nothing landed</span><span>Grey dashes = generator routes, not yet rediscovered</span></div>
     </div>
     <div id="status">Preparing a headless level…</div>
   </div>
@@ -105,7 +106,7 @@ body.preview{overflow:hidden}
     <section><h3>Discovered transitions</h3><div id="edges"></div></section>
   </div>
 </div>
-<p class="footnote">Uses the same level generator, collision geometry, movement approximation and Dumpling.step() as the playable Squishy experiment. Predicted connections are discovered by sampling, not proof of reachability for a human player; a missing edge is not proof of impossibility. Full-body verification uses fresh dynamic states and is deliberately explicit. Neither WebGL nor the game's renderer is loaded. <a href="{{readme}}">Read the experiment notes →</a></p>
+<p class="footnote">Uses the same level generator, collision geometry, movement approximation and Dumpling.step() as the playable Squishy experiment. Moves are discovered by sampling (a missing one is not proof of impossibility), then measured in the player's own units: every flick within ±24 px of drag round the witness, run through the real body, gives where the move goes, the best aim, how far off it may be and still land, and its chance under σ px of drag error. Trials report Wilson 95% intervals. Measure level prices the way home as expected flicks. Flicks played in the game on this device, on this exact level (same fingerprint), are drawn over the maps. Neither WebGL nor the game's renderer is loaded. <a href="{{readme}}">Read the experiment notes →</a></p>
 </main>
 <script type="module" src="{{app}}"></script>
 </body>

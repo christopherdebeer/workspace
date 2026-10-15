@@ -1,7 +1,7 @@
 /** Squishy Level Lab — SVG-only sibling experiment.
  * Imports the game's actual generator and simulation core; never initialises WebGL.
  */
-import { candidatePairs, discover, makeLevel, routeStats, verify, type Analysis, type Edge } from './engine';
+import { candidatePairs, chain, composite, discover, makeLevel, mapEdge, readFlicks, routeStats, toPx, verify, type Analysis, type ControlMap, type Edge, type Flick } from './engine';
 import { type V3, type Tower, type Shape } from '../squishy/level';
 import { studyOne, assess, COMPOSITIONS, type SpatialStudy, type Composition } from './spatial';
 
@@ -17,11 +17,17 @@ let selectedNode=0;
 let selectedEdge=-1;
 let scanToken=0;
 let animation=0;
+let sigma=Math.max(1,Math.min(20,Number(params.get('sigma'))||4));
+const pinned=params.get('fp');
+let flicks:Flick[]=[];
 const W=1120,H=530,M=58;
 const esc=(v:unknown)=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 const f=(n:number)=>Math.round(n*100)/100;
 const colour=(top:string)=>top==='goal'?'#b18a48':top==='jelly'||top==='pudding'?'#b86d87':top==='rack'||top==='drainer'?'#759698':top==='honey'?'#b17c4b':top==='sill'||top==='shelf'?'#8b9a8c':top==='pad'?'#83a597':'#a58b71';
-const tint=(e:Edge)=>e.status==='confirmed'?'#3e8065':e.status==='failed'?'#b45c5c':'#bf9258';
+const tint=(e:Edge)=>e.status==='confirmed'?'#3e8065':e.status==='failed'?'#b45c5c':e.status==='marginal'?'#c0763f':'#bf9258';
+const pc=(n:number)=>Math.round(n*100)+'%';
+const OUT:Record<string,string>={target:'#3e8065',fall:'#b45c5c',rest:'#c9a24a',timeout:'#9a958a'};
+const outColour=(k:string)=>OUT[k]??'#6f8fb3';
 const target=(t:Tower)=>t.top==='goal'?'home':t.top;
 // Single-seed spatial composition: shared geometry, visibility, route morphology.
 type Variant=Composition;
@@ -133,7 +139,7 @@ function svg():string {
   const areas=ts.map(t=>outline(t,p)).join('');
   const nodes=ts.map((t,i)=>{
     const [x,y]=p(t.at),sel=i===selectedNode;
-    return '<g data-node="'+i+'" style="cursor:pointer"><circle cx="'+f(x)+'" cy="'+f(y)+'" r="'+(sel?15:11)+'" fill="'+(i===0?'#466f60':i===ts.length-1?'#b6914f':colour(t.top))+'" stroke="'+(sel?'#342b25':'#f8f4e9')+'" stroke-width="'+(sel?3:2)+'"/><text x="'+f(x)+'" y="'+f(y+4)+'" text-anchor="middle" font-size="11" font-weight="700" fill="#fffaf0">'+i+'</text><text x="'+f(x)+'" y="'+f(y-21)+'" font-size="11" font-family="Georgia,serif" text-anchor="middle" fill="#574b3f">'+esc(target(t))+'</text><title>'+esc('Stop '+i+' · '+target(t)+' · '+t.at.map(f).join(', '))+'</title></g>';
+    return '<g data-node="'+i+'" style="cursor:pointer"><circle cx="'+f(x)+'" cy="'+f(y)+'" r="'+(sel?15:11)+'" fill="'+(i===0?'#466f60':i===ts.length-1?'#b6914f':colour(t.top))+'" stroke="'+(sel?'#342b25':'#f8f4e9')+'" stroke-width="'+(sel?3:2)+'"/><text x="'+f(x)+'" y="'+f(y+4)+'" text-anchor="middle" font-size="11" font-weight="700" fill="#fffaf0">'+i+'</text><text x="'+f(x)+'" y="'+f(y-21)+'" font-size="11" font-family="Georgia,serif" text-anchor="middle" fill="#574b3f">'+esc(target(t))+'</text>'+(a.chain&&Number.isFinite(a.chain.flicks[i])&&i<ts.length-1?'<text x="'+f(x)+'" y="'+f(y+28)+'" font-size="10" text-anchor="middle" fill="#6d6250">≈'+a.chain.flicks[i].toFixed(1)+'</text>':'')+'<title>'+esc('Stop '+i+' · '+target(t)+' · '+t.at.map(f).join(', '))+'</title></g>';
   }).join('');
   const aid=view==='graph'?'Topological layout · edges remain predictions until physically validated':view==='plan'?'Plan X–Z · axes independently scaled for readability':'Elevation X–Y · axes independently scaled';
   const current=a.edges[selectedEdge];const pathPoints=current?.validation?.traces[0]??current?.trajectory??[];
@@ -147,20 +153,52 @@ function svg():string {
 }
 function edgeInfo(e:Edge,i:number) {
   const v=e.validation,chosen=i===selectedEdge?' chosen':'';
-  const detail=v?Object.entries(v.outcomes).filter(([,n])=>n>0).map(([k,n])=>k+': '+n).join(' · '):e.method==='hop'?'Special or adjacent solver witness':'Ballistic witness';
+  const m=e.map;
+  const detail=(m?'P '+pc(m.best.p)+' · ±'+(m.clipped?'≥':'')+m.tolerance+' px · ':'')+(v?v.outcomes.target+'/'+v.total+' landed ['+pc(v.wilson[0])+'–'+pc(v.wilson[1])+']':composite(a.lv,e)?'multi-action: not mapped':e.method==='hop'?'generator witness':'ballistic witness');
   return '<button class="edge-row'+chosen+'" data-edge="'+i+'"><span class="swatch" style="background:'+tint(e)+'"></span><b>'+e.from+' → '+e.to+'</b><small>'+esc(e.status)+'</small><em>'+esc(detail)+'</em></button>';
+}
+/** a move's neighbourhood, in px of drag about the witness: what each flick did, where the ring showed the target, the best aim and its σ, and flicks played from the same top */
+function mapSvg(e:Edge,m:ControlMap):string{
+  const S=240,pad=18,sc=(S-2*pad)/(2*m.span),cx=(u:number)=>S/2+u*sc,cy=(v:number)=>S/2-v*sc,h=m.step*sc;
+  const cells=m.cells.map(c=>{const k=c.out==='other'?'top '+c.at:c.out;return '<rect x="'+f(cx(c.u)-h/2)+'" y="'+f(cy(c.v)-h/2)+'" width="'+f(h)+'" height="'+f(h)+'" fill="'+outColour(k)+'" fill-opacity="'+(c.sampled?.88:.72)+'"><title>'+esc(k+' · '+c.u+', '+c.v+' px'+(c.sampled?'':' (between flicks that agree)'))+'</title></rect>';}).join('');
+  const ring=m.cells.filter(c=>c.ring===e.to).map(c=>'<circle cx="'+f(cx(c.u))+'" cy="'+f(cy(c.v))+'" r="1.3" fill="#fff" fill-opacity=".9"/>').join('');
+  const b=m.best;
+  const played=flicks.filter(q=>q.from===e.from).map(q=>{const [u,v]=toPx(m.centre,{...m.centre,yaw:q.yaw,power:q.power});if(Math.abs(u)>m.span*1.4||Math.abs(v)>m.span*1.4)return '';return '<circle cx="'+f(cx(u))+'" cy="'+f(cy(v))+'" r="3.2" fill="none" stroke="'+(q.to===e.to?'#1f5d45':q.to===-1?'#8c2f2f':'#333')+'" stroke-width="1.6"><title>played: '+(q.to===undefined?'unsettled':q.to===-1?'fell':'stood on '+q.to)+'</title></circle>';}).join('');
+  return '<svg class="map" viewBox="0 0 '+S+' '+S+'" aria-label="Outcome map in drag pixels"><rect width="'+S+'" height="'+S+'" fill="#f2eee3"/>'+cells+ring+
+    '<circle cx="'+f(cx(b.u))+'" cy="'+f(cy(b.v))+'" r="'+f(m.sigma*sc)+'" fill="none" stroke="#fff" stroke-width="1.5"/>'+
+    (m.tolerance?'<circle cx="'+f(cx(b.u))+'" cy="'+f(cy(b.v))+'" r="'+f(m.tolerance*sc)+'" fill="none" stroke="#fff" stroke-dasharray="3 3"/>':'')+
+    '<path d="M'+f(cx(0)-5)+' '+f(cy(0))+'h10M'+f(cx(0))+' '+f(cy(0)-5)+'v10" stroke="#222" stroke-width="1.4"/>'+played+
+    '<text x="'+(S/2)+'" y="'+(S-4)+'" font-size="9" text-anchor="middle" fill="#6b6253">← across the drag (px) →</text><text x="9" y="'+(S/2)+'" font-size="9" fill="#6b6253" transform="rotate(-90 9 '+(S/2)+')" text-anchor="middle">shorter · drag · longer</text></svg>';
+}
+function legend(m:ControlMap):string{
+  const keys=[...new Set(m.cells.map(c=>c.out==='other'?'top '+c.at:c.out))];
+  return '<p class="maplegend">'+keys.map(k=>'<span><i style="background:'+outColour(k)+'"></i>'+esc(k==='target'?'lands':k==='rest'?'stops off any top':k==='fall'?'falls (back where it was)':k==='timeout'?'still going':'onto '+k)+'</span>').join('')+'<span>white dots: the ring on the target · solid circle: σ round the best aim · dashed: tolerance · cross: witness · rings: flicks played</span></p>';
+}
+function edgeDetails(e:Edge):string{
+  const m=e.map,v=e.validation,multi=composite(a.lv,e);
+  const dest=m?Object.entries(m.best.dest).filter(([,p])=>p>.02).sort((x,y)=>y[1]-x[1]).map(([k,p])=>esc(k)+' '+pc(p)).join(' · '):'';
+  return '<h3>Move '+e.from+' → '+e.to+'</h3><p>'+esc(a.lv.towers[e.from].top)+' → '+esc(a.lv.towers[e.to].top)+' · '+esc(e.method==='hop'?'generator witness':'ballistic witness')+' · drag '+f(14+e.control.power*0.3*402)+' px</p>'+
+    (m?mapSvg(e,m)+legend(m)+'<dl><dt>Chance at the best aim (σ '+m.sigma+' px)</dt><dd>'+pc(m.best.p)+'</dd><dt>…at the witness</dt><dd>'+pc(m.atWitness)+'</dd><dt>Tolerance round the best aim</dt><dd>'+(m.clipped?'≥ ':'')+m.tolerance+' px</dd><dt>Area that lands</dt><dd>'+m.area+' px²</dd><dt>Where it goes</dt><dd>'+dest+'</dd><dt>Ring, where shown: green → lands</dt><dd>'+m.ring.greenLand+'/'+m.ring.green+'</dd><dt>Mapped</dt><dd>'+m.sims+' flicks · '+(m.ms/1000).toFixed(0)+' s</dd></dl>':
+      multi?'<p class="muted">A move of more than one action (a rail, a climb, a jar): not mapped as one flick yet.</p>':'')+
+    (v?'<dl><dt>Trials at the '+(m?'best aim':'witness')+', σ '+v.sigma+' px</dt><dd>'+v.outcomes.target+'/'+v.total+' · '+pc(v.wilson[0])+'–'+pc(v.wilson[1])+'</dd><dt>Same aim, after resting longer</dt><dd>'+v.timing[0]+'/'+v.timing[1]+'</dd><dt>Status</dt><dd>'+e.status+'</dd></dl>':'')+
+    (multi?'':'<button id="map" class="primary">'+(m?'Map again':'Map in drag px · real body')+'</button><button id="verify">Trials · 12 at σ '+sigma+' px</button>')+'<button id="replay">Replay witness</button>';
+}
+function stopDetails(i:number):string{
+  const k=a.chain?.forks.find(x=>x.at===i);
+  const n=a.chain?.flicks[i];
+  return (n!==undefined?'<p>Expected flicks home from here: <b>'+(Number.isFinite(n)?n.toFixed(2):'∞')+'</b>, falls '+(Number.isFinite(a.chain!.splats[i])?a.chain!.splats[i].toFixed(2):'∞')+'.</p>':'')+
+    (k?'<dl>'+k.options.map(o=>'<dt>→ '+o.to+' (P '+pc(o.p)+')</dt><dd>'+(Number.isFinite(o.flicks)?o.flicks.toFixed(2):'∞')+' flicks</dd>').join('')+'</dl>':'');
 }
 function render(){
   const stats=routeStats(a);
   $('headline').textContent='Level '+a.level+' · seed '+a.seed+' · '+composition;
-  $('metadata').textContent=a.lv.towers.length+' stops · '+a.lv.shapes.length+' physical shapes · '+(a.lv.made?.plain?'simplified fallback':'regular composition')+' · '+a.lv.made?.attempts+' generation attempt(s) · '+(a.lv.ways?.length??0)+' generator-checked hops';
-  $('metrics').innerHTML='<div><b>'+stats.ways+'</b><small>predicted paths *</small></div><div><b>'+stats.reached+'/'+stats.total+'</b><small>reachable stops *</small></div><div><b>'+stats.confirmed+'</b><small>soft-body confirmed</small></div><div><b>'+stats.dead.length+'</b><small>discovered dead ends *</small></div>';
+  $('metadata').textContent=a.lv.towers.length+' stops · '+a.lv.shapes.length+' physical shapes · '+(a.lv.made?.plain?'simplified fallback':'regular composition')+' · '+a.lv.made?.attempts+' generation attempt(s) · '+(a.lv.ways?.length??0)+' generator-checked hops · fingerprint '+a.fingerprint+(pinned&&pinned!==a.fingerprint?' — ⚠ not the level this link was made on ('+pinned+'): the generator has changed':'')+' · '+flicks.length+' logged flick(s) here';
+  $('metrics').innerHTML='<div><b>'+stats.ways+'</b><small>predicted paths *</small></div><div><b>'+stats.reached+'/'+stats.total+'</b><small>reachable stops *</small></div><div><b>'+stats.confirmed+(stats.marginal?' +'+stats.marginal:'')+'</b><small>confirmed (+ marginal)</small></div>'+(a.chain?'<div><b>'+(Number.isFinite(a.chain.flicks[0])?a.chain.flicks[0].toFixed(1):'∞')+'</b><small>expected flicks home · σ '+sigma+' px</small></div>':'<div><b>'+stats.dead.length+'</b><small>discovered dead ends *</small></div>');
   $('plot').innerHTML=svg();
   $('edges').innerHTML=a.edges.length?a.edges.map(edgeInfo).join(''):'<p class="muted">Discover transitions to build the approximate reachability graph.</p>';
   const e=a.edges[selectedEdge];
-  $('details').innerHTML=e?
-    '<h3>Transition '+e.from+' → '+e.to+'</h3><p>'+esc(a.lv.towers[e.from].top)+' → '+esc(a.lv.towers[e.to].top)+'</p><dl><dt>Solver</dt><dd>'+esc(e.method)+'</dd><dt>Yaw</dt><dd>'+f(e.control.yaw*180/Math.PI)+'°</dd><dt>Power</dt><dd>'+f(e.control.power*100)+'%</dd><dt>Status</dt><dd>'+e.status+'</dd><dt>Full-body trials</dt><dd>'+(e.validation?e.validation.total:'Not run')+'</dd></dl><button id="verify" class="primary">Verify · 3 soft-body trials</button><button id="replay">Replay witness</button>':
-    '<h3>Stop '+selectedNode+'</h3><p>'+esc(target(a.lv.towers[selectedNode]))+'</p><p class="muted">Tap an edge to inspect its witness and verify it using the real dumpling physics. Grey dashed links are the original proposed sequence; they are not proven.</p>';
+  $('details').innerHTML=e?edgeDetails(e):
+    '<h3>Stop '+selectedNode+'</h3><p>'+esc(target(a.lv.towers[selectedNode]))+'</p>'+stopDetails(selectedNode)+'<p class="muted">Tap a move to map it: every nearby flick, in pixels of drag, run through the real dumpling. Grey dashed links are the generator\'s own sequence, not proven.</p>';
   $('status').textContent=a.message;
   ($('level') as HTMLInputElement).value=String(level);($('seed') as HTMLInputElement).value=String(seed);($('skin') as HTMLSelectElement).value=skin;
   for(const b of document.querySelectorAll<HTMLButtonElement>('[data-view]'))b.classList.toggle('active',b.dataset.view===view);
@@ -171,10 +209,10 @@ function setState(refresh=true){
   skin=($('skin') as HTMLSelectElement).value==='jelly'?'jelly':'dough';
   scanToken++;cancelAnimationFrame(animation);
   selectedEdge=-1;selectedNode=0;
-  const query=new URLSearchParams({level:String(level),seed:String(seed),skin,composition});if(studyEnabled)query.set('study','');
+  const query=new URLSearchParams({level:String(level),seed:String(seed),skin,composition,sigma:String(sigma)});if(studyEnabled)query.set('study','');
   if(preview)query.set('preview','');
   history.replaceState(null,'','?'+query.toString());
-  try {a=makeLevel(level,seed,skin,composition);render();if(refresh)void computeStudy();}catch(err){
+  try {a=makeLevel(level,seed,skin,composition);flicks=readFlicks().filter(q=>q.level===level&&q.seed===seed&&q.fp===a.fingerprint);query.set('fp',a.fingerprint);history.replaceState(null,'','?'+query.toString());($('play') as HTMLAnchorElement).href='/squishy?level='+level+'&seed='+seed+'&skin='+skin;render();(window as unknown as {__squishyLab:unknown}).__squishyLab={level,seed,fingerprint:a.fingerprint};if(refresh)void computeStudy();}catch(err){
     $('status').textContent='Generation failed: '+String(err);
     $('plot').innerHTML='<p class="error">This seed failed to build. Try another, or inspect the generated error.</p>';
   }
@@ -201,20 +239,30 @@ async function scan() {
   a.message='Scan complete: '+a.edges.length+' ballistic witnesses, '+stats.ways+' predicted forward paths. *Sampled discovery; not proof of absence or human success.';
   render();
 }
-async function verifyAll(){
-  const id=++scanToken;
-  const pending=a.edges.filter(e=>!e.validation && e.status==='predicted');
-  let done=0;
-  a.message='Verifying '+pending.length+' witnessed transitions with the real soft body…';render();
-  for(const e of pending){
-    if(id!==scanToken)return;
-    try{verify(a,e,3);}catch(err){a.message='Verification exception at '+e.from+' → '+e.to+': '+String(err);}
-    done++;
-    if(done%1===0){a.message='Validated '+done+'/'+pending.length+' transition witnesses (3 perturbed trials where supported).';render();await new Promise<void>(r=>setTimeout(r,0));}
+const tick=()=>new Promise<void>(r=>setTimeout(r,0));
+async function mapOne(e:Edge,id:number):Promise<boolean>{
+  const g=mapEdge(a,e,{sigma});
+  for(;;){
+    const r=g.next();
+    if(id!==scanToken)return false;
+    if(r.done){e.map=r.value;return true;}
+    a.message='Mapping '+e.from+' → '+e.to+': flick '+r.value.done+' of about '+r.value.of+' (real body)…';
+    $('status').textContent=a.message;await tick();
   }
-  if(id!==scanToken)return;
-  const s=routeStats(a);
-  a.message='Verification complete: '+s.confirmed+' confirmed, '+s.failed+' failed at sampled controls. Multi-action climb/rail edges remain predicted.';
+}
+/** every single-flick move: mapped, tried, then the way home priced */
+async function measureLevel(){
+  if(!a.edges.length)await scan();
+  const id=++scanToken;
+  const todo=a.edges.filter(e=>!composite(a.lv,e)&&!e.map);
+  for(const [n,e] of todo.entries()){
+    if(!(await mapOne(e,id)))return;
+    verify(a,e,12,sigma);
+    a.message='Measured '+(n+1)+'/'+todo.length+' moves';render();await tick();
+  }
+  a.chain=chain(a.lv,a.edges.filter(e=>e.map).map(e=>e.map!));
+  const c=a.chain;
+  a.message='Expected flicks home: '+(Number.isFinite(c.flicks[0])?c.flicks[0].toFixed(2):'∞ (no mapped way from the start)')+' at σ '+sigma+' px. '+c.forks.map(k=>'At '+k.at+': '+k.options.map(o=>'→'+o.to+' '+(Number.isFinite(o.flicks)?o.flicks.toFixed(1):'∞')).join(' vs ')).join('. ')+(c.forks.length?'. ':'')+c.assumption;
   render();
 }
 function replay(){
@@ -242,14 +290,17 @@ function exportJson() {
   const output={level:a.level,seed:a.seed,skin:a.skin,made:a.lv.made,
     stops:a.lv.towers.map((t,i)=>({id:i,top:t.top,at:t.at,r:t.r,box:t.box,yaw:t.yaw})),
     edges:a.edges.map(e=>({from:e.from,to:e.to,control:e.control,status:e.status,method:e.method,trajectory:e.trajectory,validation:e.validation})),
-    metrics:stats,note:'Witnessed ballistic edges only; sampled search does not establish impossibility. Confirmed edges use three actual Dumpling.step simulations.'};
+    fingerprint:a.fingerprint,sigma,chain:a.chain,maps:a.edges.filter(e=>e.map).map(e=>e.map),
+    metrics:stats,note:'Maps: every nearby flick in px of drag run through Dumpling.step. Chances are under σ px of drag error; trials report Wilson 95% intervals. Sampled discovery does not establish impossibility.'};
   download('squishy-level-'+level+'-'+seed+'.json',JSON.stringify(output,null,2),'application/json');
 }
 function attach(){
   $('build').addEventListener('click',()=>setState());
   $('composition-panel').addEventListener('click',ev=>{const b=(ev.target as Element).closest('[data-composition]') as HTMLElement|null;if(!b)return;composition=b.dataset.composition as Composition;setState(false);viewStudy();});
   $('discover').addEventListener('click',()=>void scan());
-  $('verifyall').addEventListener('click',()=>void verifyAll());
+  $('verifyall').addEventListener('click',()=>void measureLevel());
+  ($('sigma') as HTMLInputElement).value=String(sigma);
+  $('sigma').addEventListener('change',()=>{sigma=Math.max(1,Math.min(20,Number(($('sigma') as HTMLInputElement).value)||4));for(const e of a.edges){e.map=undefined;e.validation=undefined;e.status='predicted';}a.chain=undefined;setState(false);});
   $('nextseed').addEventListener('click',()=>{($('seed') as HTMLInputElement).value=String(seed+1);setState();});
   $('exportsvg').addEventListener('click',()=>download('squishy-level-'+level+'-'+seed+'.svg',$('plot').querySelector('svg')?.outerHTML??'','image/svg+xml'));
   $('exportjson').addEventListener('click',exportJson);
@@ -265,8 +316,9 @@ function attach(){
   });
   $('details').addEventListener('click',ev=>{
     const el=ev.target as HTMLElement;
+    if(el.id==='map' && selectedEdge>=0){const e=a.edges[selectedEdge];void mapOne(e,++scanToken).then(ok=>{if(ok){a.message='Mapped '+e.from+' → '+e.to+' with '+e.map!.sims+' real flicks.';render();}});}
     if(el.id==='verify' && selectedEdge>=0){
-      try{verify(a,a.edges[selectedEdge],3);a.message='Verified using the real Dumpling.step simulator; inspect trial outcomes and the replay.';}
+      try{verify(a,a.edges[selectedEdge],12,sigma);a.message='Twelve flicks as a player makes them: the aim, off by σ '+sigma+' px of drag, each through the real Dumpling.step.';}
       catch(error){a.message='Full-body verification failed: '+String(error);}
       render();
     }
