@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:2939312010b12bbe9003778eadf089eceb48ce26406d8f90b04d7376015d17e2",
-  "syncedAt": "2026-10-15T19:48:49.334Z",
+  "treeVersion": "tree:c44038e9eeeb1f0236310313dfce85b5cbc4dc870cd9fecffec268aa6a7c0b58",
+  "syncedAt": "2026-10-15T20:21:41.764Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -91,7 +91,7 @@
     "client/squishy/level.ts": "sha256:53d52159eab44821a9ad27785f62488c227f7bbcb49345c65eeb568100771a1c",
     "client/squishy/main.ts": "sha256:0ae42f06e37189210f58e63582b4bc346b888294c0fac62ac5025a3a8781236e",
     "client/squishy/mesh.ts": "sha256:a0521ff7d8d538dbeac5505954a34e2245d65bbf60075d31d73848df849b63e1",
-    "client/squishy/props.ts": "sha256:8bcbb40db8bb1a7e973d32d21bff0a9756beec41dd2f0f4631001b4872c254a1",
+    "client/squishy/props.ts": "sha256:1eb477f37571eec227a77598a179955b415445762cd83b8d7c095ad65c8c05bd",
     "client/squishy/room.ts": "sha256:5b3899607fea5781f1061f5ee84c2dda8001654bda49dbd821879e00c2252f5f",
     "client/squishy/supports.ts": "sha256:8373d47430a2c86f201f80c1a8e7b5c982dea9ac7a10c9f12201d983c7ec90a6",
     "client/squishy/title.ts": "sha256:82fdd43d20e2cc40c70a5630053ae6db27adfb9f41797a591f1457c1647d9b4e",
