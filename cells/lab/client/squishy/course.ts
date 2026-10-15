@@ -96,7 +96,8 @@ export function bench(name: string): Level {
 /**
  * `look`: a still-life to judge the light and the materials by, the same each time, close together: the
  * dumpling on a cloth on cookbooks; a mango pudding on a cake stand; a konjac on a crate; a plate (crumbs on it)
- * on a stool; the painted bench, its tea towel over its end; home on a crate. With ?view, the same picture.
+ * on a stool; the painted bench, its tea towel over its end; home on a crate; and round them the honey jar, the
+ * soap dish's bubbles, a buttered tray, the butter dish, a pot and lid, a pan, a loaf, a sponge. With ?view, the same picture.
  */
 function lookBench(lv: Level, stop: (t: Tower) => void): Level {
   lv.kill = 6;
@@ -116,6 +117,19 @@ function lookBench(lv: Level, stop: (t: Tower) => void): Level {
   for (const v of sp.decor) lv.decor.push(v);
   for (const t of sp.stops) stop(t);
   put(assemble('goal', 'crate', [40, 22, 40], 12, 0.2, r));
+  // (and behind, and to the sides: what's live or wet or clear, to judge those by too: the honey jar, its runs
+  // and pool; the soap dish's bubbles; a buttered tray; the butter dish; a pot with its lid; a pan; a loaf; a sponge)
+  const more: Array<[Parameters<typeof pieceAt>[0], number, number, number]> = [
+    ['honey', -46, 62, 0x61], ['soap', -18, 66, 0x62], ['tray', 10, 70, 0x63], ['lid', 36, 70, 0x64],
+    ['butter', 62, 46, 0x65], ['pan', 64, 14, 0x66], ['loaf', -52, 22, 0x67], ['sponge', -50, -6, 0x68],
+  ];
+  for (const [kind, x, z, seed] of more) {
+    const p = pieceAt(kind, x, z, seed);
+    if (!p) continue;
+    for (const v of p.decor) lv.decor.push(v);
+    for (const t of p.stops) { stop(t); for (const s of t.shapes) { if (s.jel) lv.jellies!.push(s); if (s.lift) lv.movers.push(s); } }
+    lv.shapes.push(...p.extra);
+  }
   underTable(lv);
   return lv;
 }
