@@ -989,7 +989,10 @@ export class Dumpling {
           const adhesivePatch = !!crail[i] || (patchFacing && patchWhole);
           // Sparse surface-facing adhesive anchors; ordinary contacts still
           // supply friction. Rails retain full mechanical anchoring.
-          const bondCandidate = !!crail[i] || this.adhesiveSites[i] !== 0;
+          // (honey's hold is a few compliant bonds that peel when overloaded; every other sticky side (linen, wood,
+          // a rail) holds whole, as it did, which every way through the levels was laid and tested against)
+          const honeyBond = !crail[i] && (cdust[i] === DUST.honey || honeyed);
+          const bondCandidate = !honeyBond || this.adhesiveSites[i] !== 0;
           if (holds && tackOn && adhesivePatch && bondCandidate && this.peelCooldown[i] <= 0 && (was || this.honeyT < SPLAT)) {
             const cr = crail[i] ? 0 : Math.max(ccr[i], honeyed ? 2 : 0);
             const um = Math.hypot(ux,uy,uz), cf2 = cr > 0 && um > 1e-6 ? Math.min(1,cr/um) : 0;
@@ -999,14 +1002,14 @@ export class Dumpling {
             const ay=x[i3+1]+ny*cd[i]+sdy*sl+creepY*h;
             const az=x[i3+2]+nz*cd[i]+sdz*sl+creepZ*h;
             const mismatch=Math.hypot(p[i3]-ax,p[i3+1]-ay,p[i3+2]-az);
-            const peel = !crail[i] && (mismatch > RADIUS*.27 || (this.bondLoad[i] += Math.max(0,mismatch-.065)*h*18-h*.12) > .92);
+            const peel = honeyBond && (mismatch > RADIUS*.27 || (this.bondLoad[i] += Math.max(0,mismatch-.065)*h*18-h*.12) > .92);
             if(peel){
               // Peel from overload; never yank the body back to an impossible anchor.
               this.bondLoad[i]=0;
               this.peelCooldown[i]=.20;
             }else{
               this.bondLoad[i]=Math.max(0,this.bondLoad[i]);
-              const attach=crail[i]?1:.48;
+              const attach = honeyBond ? 0.48 : 1;
               p[i3]+=(ax-p[i3])*attach;
               p[i3+1]+=(ay-p[i3+1])*attach;
               p[i3+2]+=(az-p[i3+2])*attach;
