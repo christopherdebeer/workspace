@@ -214,6 +214,7 @@ export class Dumpling {
   drift: V3 = [0, 0, 0];
   private comWas: V3 = [0, 0, 0];
   restVolume: number;
+  private restExtent = 0; // undeformed body reach used by the physical strain constraint
   // touching, per particle: normal, depth pushed out this step, grip, bounce, surface velocity, normal speed coming in, and how (0 not, 1 touching, 2 near)
   private cn: Float32Array;
   private cd: Float32Array;
@@ -335,6 +336,7 @@ export class Dumpling {
     }
     aqq[3] = aqq[1]; aqq[6] = aqq[2]; aqq[7] = aqq[5];
     inv3(aqq, this.aqqInv);
+    for (let i = 0; i < n; i++) this.restExtent = Math.max(this.restExtent, Math.hypot(this.q[3*i],this.q[3*i+1],this.q[3*i+2]));
     this.makePatches();
     this.place(at);
     this.restVolume = this.volume();
@@ -546,9 +548,16 @@ export class Dumpling {
     for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) A[r * 3 + c] = apq[r * 3] * ai[c] + apq[r * 3 + 1] * ai[3 + c] + apq[r * 3 + 2] * ai[6 + c];
     const det = det3(A);
     if (det > 1e-6) { const s = 1 / Math.cbrt(det); for (let k = 0; k < 9; k++) A[k] *= s; } else A.set(R);
+    // When a body is glued against a jar, a nearly singular affine fit
+    // can preserve volume but amplify one axis without bound. Constrain
+    // only the affine strain goal, leaving collision and translation physical.
+    let shear2 = 0;
+    for (let k = 0; k < 9; k++) { const e = A[k] - R[k]; shear2 += e * e; }
+    const strainLimit = 1.55;
+    const stretchK = shear2 > strainLimit * strainLimit ? strainLimit / Math.sqrt(shear2) : 1;
     const T = new Float64Array(9);
     const beta = this.phys.beta;
-    for (let k = 0; k < 9; k++) T[k] = beta * A[k] + (1 - beta) * R[k];
+    for (let k = 0; k < 9; k++) T[k] = R[k] + beta * (A[k] - R[k]) * stretchK;
     // (held by honey: the whole of it carried so that what's stuck sits where the fitted shape
     // puts it; so it hangs from the patch, rather than sagging off it, a little more each step)
     if (this.pinned > 4) {
@@ -611,6 +620,36 @@ export class Dumpling {
       p[i * 3] += ex * alpha; p[i * 3 + 1] += ey * alpha; p[i * 3 + 2] += ez * alpha;
     }
     this.deform = Math.sqrt(dev / n) / RADIUS;
+  }
+
+  /** PBD inequality constraint: even if a nearly singular volume-conserving
+   * affine fit or honey pinning pulls one skin particle into a needle,
+   * the actual geometry cannot exceed a physically plausible radial reach.
+   * Apply to projected positions, not a draw-only mesh correction.
+   */
+  private boundStrain(p: Float32Array, velocities?: Float32Array) {
+    const n=this.n, limit=this.restExtent * (this.grab ? 1.95 : 1.60);
+    for (let pass=0;pass<3;pass++) {
+      let cx=0,cy=0,cz=0;
+      for (let i=0;i<n;i++) {cx+=p[3*i];cy+=p[3*i+1];cz+=p[3*i+2];}
+      cx/=n;cy/=n;cz/=n;
+      let corrected=false;
+      for (let i=0;i<n;i++) {
+        const k=i*3, dx=p[k]-cx,dy=p[k+1]-cy,dz=p[k+2]-cz;
+        const d=Math.hypot(dx,dy,dz);
+        if (d>limit) {
+          const s=limit/d, ux=dx/d,uy=dy/d,uz=dz/d;
+          p[k]=cx+dx*s; p[k+1]=cy+dy*s; p[k+2]=cz+dz*s;
+          if (velocities) {
+            const v=velocities[k]*ux+velocities[k+1]*uy+velocities[k+2]*uz;
+            if(v>0){velocities[k]-=v*ux;velocities[k+1]-=v*uy;velocities[k+2]-=v*uz;}
+            this.pin[i]=0; // overstretched surface particles peel from honey
+          }
+          corrected=true;
+        }
+      }
+      if(!corrected)break;
+    }
   }
 
   /**
@@ -736,6 +775,7 @@ export class Dumpling {
       // (held: the dough under the finger drawn out toward it, from where the shape would have it)
       if (this.grab) this.pullOut(p, this.grab.w, this.grab.pull);
       this.keepVolume(p);
+      this.boundStrain(p);
       // (on a jelly: it gives under the whole of it, as a bed)
       this.bedFoot = 0;
       if (lv.jellies) for (const sh of this.nearby) if (sh.jel) this.bed(sh.jel, sh.mu, p, h);
@@ -787,6 +827,8 @@ export class Dumpling {
           cx += o.nx * o.d; cy += o.ny * o.d; cz += o.nz * o.d;
         }
       }
+      // Collision correction also has to respect the physical strain bound.
+      this.boundStrain(p);
       // velocities from where they went; friction, bounce and tack where they touch
       // (shimmying along a rail: what's held to it slides along it so far this small step, the rest drawn after, as
       // it hangs; short of either end, where it stops)
@@ -871,7 +913,15 @@ export class Dumpling {
           if (cf[i] === 1 && k < 1) { const f = (1 - k) * h; p[i3] -= tx * f; p[i3 + 1] -= ty * f; p[i3 + 2] -= tz * f; }
           tx *= k; ty *= k; tz *= k;
           // (honey holds the splat: what touches it as it lands, and goes on holding that; dough that sags onto it later only sticks)
-          if (holds && tackOn && (was || this.honeyT < SPLAT)) {
+          // Only the contacting, surface-facing region should stay pinned.
+          // Previously the entire skin could become anchored to the honey
+          // strip, accumulating unbounded stress and needle-like geometry.
+          const relX = p[i3] - this.com[0], relY = p[i3 + 1] - this.com[1], relZ = p[i3 + 2] - this.com[2];
+          const facing = relX * nx + relY * ny + relZ * nz;
+          const patchFacing = facing < -RADIUS * 0.12;
+          const patchWhole = Math.hypot(relX, relY, relZ) < RADIUS * 1.85;
+          const adhesivePatch = !!crail[i] || (patchFacing && patchWhole);
+          if (holds && tackOn && adhesivePatch && (was || this.honeyT < SPLAT)) {
             // (honey: what touches it is held where it touched, so a splat against it hangs there until it's flicked)
             // (it stays put, but for being pushed out of the honey's surface; nothing draws it off. Or held but creeping:
             // honey oozes, wood lets go slowly; down the side as it's drawn down, no faster than the hold allows)
@@ -889,6 +939,11 @@ export class Dumpling {
         x[i3] = p[i3]; x[i3 + 1] = p[i3 + 1]; x[i3 + 2] = p[i3 + 2];
         vx += nvx; vy += nvy; vz += nvz;
       }
+      // Sticky pinning can rewrite positions after the initial projection.
+      // Bound the committed particle geometry as well, releasing overstressed pins.
+      this.boundStrain(x, v);
+      vx=0;vy=0;vz=0;
+      for(let i=0;i<n;i++){vx+=v[3*i];vy+=v[3*i+1];vz+=v[3*i+2];}
       vx /= n; vy /= n; vz /= n;
       // (held by honey: the whole of it slowed, hard, so what's still going doesn't tear it off the patch that's stuck)
       if (pinned > 4) { const k = 1 - Math.min(1, HONEY_DRAG * h); for (let i = 0; i < n * 3; i++) v[i] *= k; vx *= k; vy *= k; vz *= k; }

@@ -606,3 +606,11 @@ itself; `?view=ex,ey,ez,tx,ty,tz` holds the camera at an eye looking at a point 
 `?oldliquid`: disables the new honey/butter absorption and scene-colour transmission for comparison (but retains the raised liquid geometry). Honey runs and pools, and melted butter smears, are now drawn over their substrate, outside the opaque course bake, using the shared scene-colour resolve. Honey runners have a real narrow raised cross-section and the pooled honey has a shallow geometric meniscus. These remain procedural creeping surface coatings, not free-flowing 3D fluids; collision and adhesion physics were not modified.
 
 Compare the same camera with and without these switches on relevant levels, and measure sustained GPU performance using `?perf` on iPhone Safari. A clean deployment cannot establish visual quality or mobile frame time.
+
+### Honey fill and butter continuity — October 15
+
+The jar's **main honey volume** is now rendered separately from the opaque course. Each fill mesh uses an analytic ray–cylinder thickness estimate to attenuate the real background, producing pale amber on short paths and richer colour through the centre. The glass shell, external run and pool render subsequently. `?oldhoney` restores the original opaque fill for A/B comparison.
+
+The butter smear is now a connected, smooth tapered surface: an earlier fractional power of a *negative sine* produced non-finite geometry near its trailing end. The shader also removes the large random holes and blends the film into its substrate at the boundary. This slightly changes the smear silhouette but leaves the coating/adhesion rules unchanged.
+
+User's bubble fix is preserved: face culling remains disabled and the fragment shader selects the front-facing film. The zero-length bubble capsule UV also no longer divides by zero. A headless diagnostic at `/_squishy-optics-check/look` and `/_squishy-optics-check/coats` checks finite generated geometry and separate material layers; it does not verify WebGL or on-device performance.

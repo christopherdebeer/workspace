@@ -130,8 +130,11 @@ export function smear(a: V3, b: V3, wide: number, seed: number): Prop {
   const pr = surface((u, v) => {
     const s = u * len, c = v * 2 - 1;
     // (its width: blobby along it, a run of drips at its sides)
-    const w = (wide / 2) * Math.sin(Math.PI * Math.min(1, u * 1.15)) ** 0.6 * (0.75 + 0.25 * Math.sin(u * 17 + seed) + 0.12 * Math.sin(u * 41 + seed * 3));
-    const wander = 1.6 * Math.sin(u * 4 + seed);
+    // Continuous, rounded puddle: old sin(pi*min(1,u*1.15)) became
+    // negative beyond u≈0.87, giving NaNs under the fractional exponent.
+    const taper = Math.max(0, Math.sin(Math.PI * u)) ** 0.65;
+    const w = (wide / 2) * taper * (0.90 + 0.075 * Math.sin(u * 9 + seed) + 0.025 * Math.sin(u * 23 + seed * 3));
+    const wander = 0.65 * Math.sin(u * 3.5 + seed);
     return [a[0] + f[0] * s + r[0] * (c * w + wander), a[1] + 0.07 + 0.05 * (1 - c * c), a[2] + f[2] * s + r[2] * (c * w + wander)];
   }, 40, 6, 0.12, MAT.smear, 0.2, [0, 1, 0], (u, v) => [u, v]);
   return pr;
