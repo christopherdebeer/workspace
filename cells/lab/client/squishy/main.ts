@@ -110,6 +110,22 @@ vec3 reliefNormal(vec3 n, vec3 p, float h) {
   grad /= max(1., length(grad) / .55);
   return normalize(n - grad);
 }
+// A liquid lying out (butter, honey, a sauce), as Stillwater's dew is drawn: d how far in from its edge (0 there,
+// 1 where it's stood up to its full height), how tall it stands (cm); thin and deep its colour; how much light it
+// gathers. It stands up steeply at its edge (a meniscus) and flattens over, so its edge is a bright rim toward the
+// eye and a dark wet line where it meets what it's on; the light through it gathers on the far side of each swell
+// from the sun; and it's glossy, the sun a pinpoint in it. It sets n over its swell (relief stays 0).
+void liquid(float d, float tall, vec3 p, vec3 thin, vec3 deep, float glow, inout vec3 n, out vec3 base, out float rough, out float coat, out float coatRough, out float coatSpec, out float emit) {
+  float k = clamp(d, 0., 1.), h = 1. - (1. - k) * (1. - k);
+  vec3 n0 = n;
+  n = reliefNormal(n, p, h * tall);
+  vec3 tilt = n - n0 * dot(n, n0), sunOn = uKey - n0 * dot(uKey, n0);
+  float lee = max(0., -dot(tilt, sunOn / max(length(sunOn), 1e-3)));
+  base = mix(thin, deep, smoothstep(0., .9, h));
+  base *= .62 + .38 * smoothstep(0., .12, d);
+  rough = .05; coat = 1.; coatRough = .025; coatSpec = .3;
+  emit = glow * (.25 + .35 * h + 2.2 * lee);
+}
 // (in HDR, what's drawn stays linear light, tonemapped once at the end (FINISH_FS); without it, each thing as it's drawn)
 vec3 tonemapNow(vec3 x) {
   x *= .7;
@@ -805,10 +821,15 @@ void main() {
     base = mix(c2, vec3(.7, .7, .68), wear * .12);
     rough = mix(.35, .25, heart); metal = heart * .8 + wear * .4; coat = .5;
   } else if (id == ${MAT.smear}) {
-    // butter melted: a glossy yellow film, thicker in the middle of the run, thin and pale at its edges
-    float th2 = 1. - abs(uv.y * 2. - 1.);
-    base = mix(vec3(.98, .88, .55), vec3(.98, .78, .22), smoothstep(.1, .8, th2));
-    rough = .06; coat = 1.; emit = .12 * th2;
+    // butter melted and run: its edge ragged, lobed where it's crept on, an island or two left dry in it; stood up
+    // at its edge and pooled in its middle, pale where it's thin, golden where it's deep
+    float across = abs(uv.y * 2. - 1.);
+    float rag = .2 * noise(vec3(vWorld.xz * .7, 3.)) + .12 * noise(vec3(vWorld.xz * 2.1, 7.));
+    float d = (.92 - rag - across) * 3.2;
+    d = min(min(d, (.8 - noise(vec3(vWorld.xz * .9, 11.))) * 9.), min(uv.x - .07, .84 - uv.x) * 25.);
+    if (d < 0.) discard;
+    float swell = .8 + .4 * noise(vec3(vWorld.xz * .5, 5.));
+    liquid(d, .22 * swell, vWorld, vec3(1., .93, .68), vec3(.97, .74, .2), .14, n, base, rough, coat, coatRough, coatSpec, emit);
   } else if ((id >= 25 && id <= 29) || id == ${MAT.glaze}) {
     // what's on a top: flour on a board, crumbs or pepper on a plate, hundreds and thousands on a pudding, honey spilt, over the top it's on
     int k = id == ${MAT.glaze} ? 6 : id - 24;
