@@ -612,7 +612,8 @@ something see-through has drawn since. On a phone each copy is a whole screen's 
   under them shows through their thin edges. Butter's cloudy, so mostly its own gold; honey's runs mostly
   their own amber.
 - **Honey run over a rim** (a jar's or a pot's, `honey.ts`) is real shapes, rebuilt four times a second from how
-  long the level's been going: a thick collar of it under the lid, drooping where each drip leaves it; a dozen
+  long the level's been going: a thick collar of it under the lid, drooping where each drip leaves it; under
+  that a sheet of it over the top of the side, its hem low along each drip and drawn up between them; a dozen
   drips, most round the front, each its own width and pace, thinning as they creep down, a teardrop swelling at
   the end of each; most stall as they cool, a few reach the foot; and a few drops fallen beside the pool. Clear
   amber: what's behind them bent through them, darker at their edges, a bright stripe of the sun and the window

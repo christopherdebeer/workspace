@@ -1014,7 +1014,7 @@ void main() {
     bool drip = id == ${MAT.honeyDrip};
     bool butterFilm = id == ${MAT.smear};
     float depth = butterFilm ? (.025 + .23 * liquidDepth) : drip ? (1.1 + 2.4 * liquidDepth) : (.05 + .45 * liquidDepth);
-    vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : drip ? vec3(.16, 1.05, 3.4) : vec3(.15, .7, 2.4);
+    vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : drip ? vec3(.13, .85, 2.9) : vec3(.15, .7, 2.4);
     vec3 T = exp(-absorb * depth);
     float F = .04 + .96 * pow(1. - NoV, 5.);
     vec2 bend = vec2(dot(n, uRight), dot(n, uUp)) * (butterFilm ? .0009 : drip ? .03 : .0018) * (drip ? 1. : liquidDepth);
@@ -1023,7 +1023,7 @@ void main() {
     float reflectAmt = clamp(.13 + .68 * F, 0., .85);
     // (butter's cloudy, milk in it: mostly its own gold, lit, only its thin edge letting what's under show)
     // (honey's runs too, mostly their own amber: drawn before the jar's honey, what's behind them is the bare wall)
-    reflectAmt = max(reflectAmt, butterFilm ? mix(.45, .85, liquidDepth) : drip ? mix(.12, .24, liquidDepth) : mix(.35, .7, liquidDepth));
+    reflectAmt = max(reflectAmt, butterFilm ? mix(.45, .85, liquidDepth) : drip ? mix(.07, .17, liquidDepth) : mix(.35, .7, liquidDepth));
     // (and honey glows: the sun gone into it coming back out gold, most when it's behind it)
     vec3 honeyGlow = butterFilm ? vec3(0.) : vec3(1., .4, .03) * uKeyCol * (1. - T.g) * (.25 + 1.2 * pow(max(dot(-V, uKey), 0.), 2.));
 #ifdef HDR

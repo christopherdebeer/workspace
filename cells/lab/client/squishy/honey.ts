@@ -88,6 +88,35 @@ export function honeyOver(rim: HoneyRim, run: number, out: number[]) {
     }
     rings(out, P, N);
   }
+  // the sheet it's run down in, under the collar: a coat of it over the top of the side, its hem low along each
+  // drip and drawn up between them (a soft max of the drips under it), thickening into a rolled edge at the hem
+  {
+    const ARC = 192, ROWS = 12, ytop = top - 0.3, P: V3[][] = [], N: V3[][] = [];
+    const hem = (th: number) => {
+      let sum = 0;
+      for (const d of drips) {
+        const da = Math.abs(((th - d.a + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * side(ytop), spread = d.w * 3.2 + 1.6;
+        sum += Math.exp((d.L * 0.5 * Math.exp(-((da / spread) ** 2))) / 1.1);
+      }
+      // (never less than a little way down all round)
+      return Math.max(1.3, 1.1 * Math.log(sum + Math.exp(1.3 / 1.1)) - 0.9);
+    };
+    const depths = Array.from({ length: ARC + 1 }, (_, i) => hem((i / ARC) * Math.PI * 2));
+    for (let j = 0; j <= ROWS + 1; j++) {
+      const ring: V3[] = [], nr: V3[] = [];
+      for (let i = 0; i <= ARC; i++) {
+        const th = (i / ARC) * Math.PI * 2, er: V3 = [Math.cos(th), 0, Math.sin(th)], D = depths[i];
+        // (the last row turns in to the side: the hem's rounded under)
+        const v = Math.min(1, j / ROWS), y = j > ROWS ? ytop - D - 0.14 : ytop - D * v;
+        const thick = j > ROWS ? 0.02 : 0.12 + 0.24 * v ** 4;
+        const r = side(y) + thick;
+        ring.push([c[0] + er[0] * r, y, c[2] + er[2] * r]);
+        nr.push(norm([er[0], j > ROWS ? -1.2 : -0.9 * Math.max(0, v - 0.8) / 0.2 + 0.15, er[2]]));
+      }
+      P.push(ring); N.push(nr);
+    }
+    rings(out, P, N, false);
+  }
   // the drips: a tube down the side, pressed flat against it a little, thinning, a teardrop at its end
   for (const d of drips) {
     const er: V3 = [Math.cos(d.a), 0, Math.sin(d.a)], et: V3 = [-Math.sin(d.a), 0, Math.cos(d.a)];
