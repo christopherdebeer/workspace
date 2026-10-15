@@ -11,6 +11,8 @@ export interface Flick {
   from: number; yaw: number; power: number; spin: number;
   /** the drag as made: its length and the screen it was made on (CSS px), and the camera's heading */
   drag: number; vw: number; vh: number; camYaw: number;
+  /** how much aim was shown (easy: arc and ring; normal: the arc; hard: neither), and where a fall put it back */
+  aim?: 'easy' | 'normal' | 'hard'; reset?: 'top' | 'jump';
   /** the top the aim ring was on at release (−1 none; null when no ring was shown) */
   ring: number | null;
   /** the top it then stood on, or −1 for a fall; absent while unsettled or when it was flicked again first */

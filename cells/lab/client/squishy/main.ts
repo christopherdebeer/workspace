@@ -1618,8 +1618,12 @@ let resetMode: Reset = ((): Reset => { const ok = (v: string | null) => (v && (R
 let launchedFrom: V3 | null = null;
 const launching = () => { launchedFrom = body.contacts > 0 && !body.onRail && !body.clinging && body.held < 0.5 ? [...body.com] as V3 : null; };
 /** what of the aim shows now: the arc, and the ring */
+/** how much aim a level's played with: the setting, or by default, as you go */
+function aimFor(n: number): Exclude<Aim, 'default'> {
+  return aimMode === 'default' ? (benchName || n <= 6 ? 'easy' : n <= 20 ? 'normal' : 'hard') : aimMode;
+}
 function aimShows(): { arc: boolean; ring: boolean } {
-  const m: Aim = aimMode === 'default' ? (benchName || levelN <= 6 ? 'easy' : levelN <= 20 ? 'normal' : 'hard') : aimMode;
+  const m = aimFor(levelN);
   return { arc: m !== 'hard', ring: m === 'easy' };
 }
 /** said, the first time a lid's pop throws you */
@@ -1642,11 +1646,14 @@ function scoreOf(time: number, falls: number, tops: number): Run {
   const score = Math.max(0, tops * 100 + Math.max(0, Math.round((par - time) * 10)) - falls * 60 + (falls ? 0 : 150));
   return { score, time, falls, tops };
 }
-const RECORD = (n: number) => `${STORE}:record:${n}`;
+/** a level's record, kept for how much aim it was played with (a run with the ring's not one without it); those from
+ * before, all played with the ring, count as easy */
+const RECORD = (n: number, aim = aimFor(n)) => `${STORE}:record:${n}${aim === 'easy' ? '' : ':' + aim}`;
 function recordOf(n: number): (Run & { bestTime: number; fewestFalls: number }) | null {
   try {
     const r = JSON.parse(localStorage.getItem(RECORD(n)) ?? 'null');
     if (r) return r;
+    if (aimFor(n) !== 'easy') return null;
     // (from before scores: a best time alone)
     const t = Number(localStorage.getItem(`${STORE}:best:${n}`));
     return t ? { score: 0, time: t, falls: 0, tops: 0, bestTime: t, fewestFalls: Infinity } : null;
@@ -1657,7 +1664,7 @@ function showDone(r: Run) {
   const was = recordOf(levelN);
   const better = !was || r.score > was.score, fasterThan = !was || r.time < was.bestTime, cleaner = !was || r.falls < was.fewestFalls;
   const rec = { ...(better ? r : was!), bestTime: Math.min(r.time, was?.bestTime ?? Infinity), fewestFalls: Math.min(r.falls, was?.fewestFalls ?? Infinity) };
-  if (!auto && !benchName) try { localStorage.setItem(RECORD(levelN), JSON.stringify(rec)); localStorage.setItem(`${STORE}:best:${levelN}`, String(rec.bestTime)); } catch { /* */ }
+  if (!auto && !benchName) try { localStorage.setItem(RECORD(levelN), JSON.stringify(rec)); if (aimFor(levelN) === 'easy') localStorage.setItem(`${STORE}:best:${levelN}`, String(rec.bestTime)); } catch { /* */ }
   const el = $('done');
   const first = !was || !was.score;
   el.classList.toggle('best', better && !first);
@@ -1668,7 +1675,8 @@ function showDone(r: Run) {
     row('time', `${r.time.toFixed(1)} s`, was && !first ? (fasterThan ? `was ${was.bestTime.toFixed(1)}` : `best ${was.bestTime.toFixed(1)}`) : '', fasterThan && !first)
     + row('falls', `${r.falls}`, was && !first && Number.isFinite(was.fewestFalls) ? (cleaner ? `was ${was.fewestFalls}` : `fewest ${was.fewestFalls}`) : '', cleaner && !first)
     + row('tops', `${r.tops} of ${tops}`, '', false)
-    + row('score', `${r.score}`, was && !first ? (better ? `was ${was.score}` : `best ${was.score}`) : '', better && !first);
+    + row('score', `${r.score}`, was && !first ? (better ? `was ${was.score}` : `best ${was.score}`) : '', better && !first)
+    + row('aim', AIM_WORDS[aimFor(levelN)], 'records are kept for each', false);
   el.classList.add('on');
   if (better && !first) setTimeout(() => { if (ac) [990, 1320, 1760].forEach((f, i) => setTimeout(() => blop(f, f * 1.01, 0.4, 0.1), i * 90)); }, 520);
 }
@@ -1917,7 +1925,7 @@ function release() {
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
   // (kept, for the Level Lab: from where, as dragged, and what the ring said)
-  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, ring: !aimShows().ring ? null : aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
+  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, aim: aimFor(levelN), reset: resetMode, ring: !aimShows().ring ? null : aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
   if (body.canFlick) doFlick(a.vel, spin, a.climb);
   else buffered = { vel: a.vel, spin, until: simTime + 0.35, climb: a.climb };
 }
@@ -3308,8 +3316,13 @@ function tick(dt: number) {
     if (lv.shapes.some((s) => s.bounce > 0 && Math.hypot(s.c[0] - body.com[0], s.c[2] - body.com[2]) < s.r + 2) && body.impact > 120) boing();
   }
   if (fallenAt >= 0) {
-    if (simTime > fallenAt + 0.7) {
-      body.place(resetMode === 'jump' && launchedFrom ? [launchedFrom[0], launchedFrom[1] + 1.5, launchedFrom[2]] : respawnAt(lv, check));
+    // (back onto a lid: not while it's rattling, nor just before — wait for a quiet second on it)
+    const back: V3 = resetMode === 'jump' && launchedFrom ? [launchedFrom[0], launchedFrom[1] + 1.5, launchedFrom[2]] : respawnAt(lv, check);
+    const onto = resetMode === 'jump' && launchedFrom ? towerAt(lv, launchedFrom, 2) : check;
+    const lid = onto >= 0 ? lv.towers[onto].land?.[0]?.lift : null;
+    const noisy = !!lid && (liftAt(lid, simTime).on || liftAt(lid, simTime + 1).on);
+    if (simTime > fallenAt + 0.7 && !noisy) {
+      body.place(back);
       prevX = new Float32Array(body.x);
       fallenAt = -1;
       pop(0.6);

@@ -29,7 +29,9 @@ the way it's going and how high but not where it ends (the camera still swings t
 down); *hard*, neither, by eye. *Default* goes as you go: easy to level 6, normal to 20, then hard
 (`?aim=` the same). And **after a fall**: back on the *last top* you stood on (the default), or back where you
 made your *last jump* from, flicked, pushed or poked (`?reset=jump`), so a hard hop's tried again from
-where it was tried; hanging from a rail or stuck to a side, it's the last top all the same. And **benches**: every bench, each one thing to try over and over, listed
+where it was tried; hanging from a rail or stuck to a side, it's the last top all the same. Put back onto a lid, it waits for a quiet second on it, not into the
+rattle. A level's records (time, falls, score) are kept for each aim, easy, normal and hard, since a run with the
+ring isn't one without it (those from before count as easy); the card at home says which. And **benches**: every bench, each one thing to try over and over, listed
 with a line on what it is (`?bench=breakfast`, `jelly`, `puddings`, `breads`, `coats`, `supports`,
 `look`); from a bench, `menu` comes back to the title.
 
@@ -294,7 +296,8 @@ wooden board on a stack of tea tins, now and then a celadon jar among them.
   pot rattles it, five quick jumps of a centimetre or so on the rim, then it pops: one jump of
   about 3 cm, quick, lurching the way the steam gets out, and it settles again. Sat on it, you're
   thrown up and toward that side; a jelly's off it in about three pops, dough in five or six. Not
-  a place to wait. Flicked in the middle of a rattle, you go unsteadily. The arc knows the rattle.
+  a place to wait. (Flicked off it as it pops, a flick's no faster: it's thrown from a little higher, a few
+  centimetres further, that's all.) Flicked in the middle of a rattle, you go unsteadily. The arc knows the rattle.
 
 Every level is made from its number, so level 8 is always the same level, and every hop in it
 is checked when it's made: from the middle of each top there is a flick that lands on the next;
