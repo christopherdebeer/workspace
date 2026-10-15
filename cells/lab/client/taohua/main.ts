@@ -557,11 +557,11 @@ function sail(dt: number) {
     // (the push, through the water, toward where it's aimed; the water dragging on its way through it)
     const target = Math.atan2(a.aim[0], a.aim[1]);
     const pushYaw = a.yaw + Math.max(-.35, Math.min(.35, wrapA(target-a.yaw)));
-    let rx = a.v[0] - cx + Math.sin(pushYaw) * 1.8 * drive * dt, rz = a.v[1] - cz + Math.cos(pushYaw) * 1.8 * drive * dt;
+    let rx = a.v[0] - cx + Math.sin(pushYaw) * 4.5 * drive * dt, rz = a.v[1] - cz + Math.cos(pushYaw) * 4.5 * drive * dt;
     const k = Math.exp(-dt * 0.22);
     rx *= k; rz *= k;
     const rl = Math.hypot(rx, rz);
-    if (rl > 1.5) { rx *= 1.5 / rl; rz *= 1.5 / rl; }
+    if (rl > 2.8) { rx *= 2.8 / rl; rz *= 2.8 / rl; }
     a.v = [cx + rx, cz + rz];
   }
   if (a.resting) return;
