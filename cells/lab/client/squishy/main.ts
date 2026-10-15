@@ -1608,15 +1608,21 @@ let aimMode: Aim = ((): Aim => {
   try { return read(localStorage.getItem(STORE + ':aim')) ?? read(localStorage.getItem(STORE + ':ring')) ?? 'default'; } catch { return 'default'; }
 })();
 /** After a fall: back on the last top stood on (the default), or back where it was flicked, pushed or poked from
- * last — a jump's tried again from where it was tried (unless that was hanging from a rail or stuck to a side:
- * then the last top). */
+ * last — a jump's tried again from where it was tried, wherever that was: on a top, hanging from a rail, stuck to a
+ * side. But not for ever: put back at the jump TRIES times within TRIES_IN seconds, the next fall's back to the last
+ * top (somewhere it can't hold, or a jump it can't make, isn't tried over and over). */
 const RESETS = ['top', 'jump'] as const;
 type Reset = (typeof RESETS)[number];
 const RESET_WORDS: Record<Reset, string> = { top: 'last top', jump: 'last jump' };
 let resetMode: Reset = ((): Reset => { const ok = (v: string | null) => (v && (RESETS as readonly string[]).includes(v) ? (v as Reset) : null); try { return ok(params.get('reset')) ?? ok(localStorage.getItem(STORE + ':reset')) ?? 'top'; } catch { return ok(params.get('reset')) ?? 'top'; } })();
 /** where it was set going from last, if from somewhere it can be put back */
 let launchedFrom: V3 | null = null;
-const launching = () => { launchedFrom = body.contacts > 0 && !body.onRail && !body.clinging ? [...body.com] as V3 : null; };
+const launching = () => { launchedFrom = body.contacts > 0 ? [...body.com] as V3 : null; };
+const TRIES = 3, TRIES_IN = 20;
+/** where this fall puts it back: the jump (true), or the last top */
+let toJump = false;
+/** when it's been put back at the jump lately */
+let retries: number[] = [];
 /** what of the aim shows now: the arc, and the ring */
 /** how much aim a level's played with: the setting, or by default, as you go */
 function aimFor(n: number): Exclude<Aim, 'default'> {
@@ -1749,7 +1755,7 @@ function benchPanel() {
   });
 }
 function startLevel(n: number, quiet = false) {
-  launchedFrom = null;
+  launchedFrom = null; retries = [];
   levelN = Math.max(1, n);
   if (lab && levelN >= JELLY_AT && !jellyOpen) {
     jellyOpen = true;
@@ -3371,8 +3377,8 @@ function tick(dt: number) {
   }
   if (fallenAt >= 0) {
     // (back onto a lid: not while it's rattling, nor just before — wait for a quiet second on it)
-    const back: V3 = resetMode === 'jump' && launchedFrom ? [launchedFrom[0], launchedFrom[1] + 1.5, launchedFrom[2]] : respawnAt(lv, check);
-    const onto = resetMode === 'jump' && launchedFrom ? towerAt(lv, launchedFrom, 2) : check;
+    const back: V3 = toJump && launchedFrom ? [launchedFrom[0], launchedFrom[1] + 0.8, launchedFrom[2]] : respawnAt(lv, check);
+    const onto = toJump && launchedFrom ? towerAt(lv, launchedFrom, 2) : check;
     const lid = onto >= 0 ? lv.towers[onto].land?.[0]?.lift : null;
     const noisy = !!lid && (liftAt(lid, simTime).on || liftAt(lid, simTime + 1).on);
     if (simTime > fallenAt + 0.7 && !noisy) {
@@ -3390,7 +3396,13 @@ function tick(dt: number) {
     if (way[way.length - 1] !== -1) way.push(-1);
     settleFlick(-1, body.com);
     plop();
-    hint(resetMode === 'jump' && launchedFrom ? 'splat. back to where you jumped from' : 'splat. back to the last top', 1800);
+    // (back to the jump, unless it's been tried from there too often lately)
+    retries = retries.filter((t) => simTime - t < TRIES_IN);
+    toJump = resetMode === 'jump' && !!launchedFrom && retries.length < TRIES;
+    if (toJump) retries.push(simTime);
+    const often = resetMode === 'jump' && !!launchedFrom && !toJump;
+    if (often) retries = [];
+    hint(toJump ? 'splat. back to where you jumped from' : often ? 'splat. tried enough from there: back to the last top' : 'splat. back to the last top', 1800);
     return;
   }
   // the lids: as one starts to rattle, its rattle, and steam out from under it each time it jumps

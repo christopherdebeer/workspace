@@ -29,7 +29,7 @@ the way it's going and how high but not where it ends (the camera still swings t
 down); *hard*, neither, by eye. *Default* goes as you go: easy to level 6, normal to 20, then hard
 (`?aim=` the same). And **after a fall**: back on the *last top* you stood on (the default), or back where you
 made your *last jump* from, flicked, pushed or poked (`?reset=jump`), so a hard hop's tried again from
-where it was tried; hanging from a rail or stuck to a side, it's the last top all the same. A double tap on the time, top right, copies the flick log kept on this device (every flick: where from, as dragged, the aim it had, where it ended) to the clipboard as JSON, to paste wherever it's wanted. Put back onto a lid, it waits for a quiet second on it, not into the
+where it was tried; wherever that was, hanging from a rail or stuck to a side too; but put back there three times within twenty seconds, the next fall's back to the last top, so somewhere it can't hold, or a jump it can't make, isn't tried for ever. A double tap on the time, top right, copies the flick log kept on this device (every flick: where from, as dragged, the aim it had, where it ended) to the clipboard as JSON, to paste wherever it's wanted. Put back onto a lid, it waits for a quiet second on it, not into the
 rattle. A level's records (time, falls, score) are kept for each aim, easy, normal and hard, since a run with the
 ring isn't one without it (those from before count as easy); the card at home says which. And **benches**: every bench, each one thing to try over and over, listed
 with a line on what it is (`?bench=breakfast`, `jelly`, `puddings`, `breads`, `coats`, `supports`,
