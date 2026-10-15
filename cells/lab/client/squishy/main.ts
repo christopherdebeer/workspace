@@ -1589,13 +1589,29 @@ let levelN = Math.max(1, Number(params.get('level')) || (() => { try { return Nu
 let lv!: Level;
 /** the tower last stood on (where a fall comes back to), falls, the clock, home (the time, or not yet) */
 let check = 0;
-/** the aim ring (the dots of the flick and the ring where it lands): always, only while learning (the first place's
- * levels), or never — then a flick's judged by eye */
-const RING_MODES = ['always', 'early', 'never'] as const;
-type RingMode = (typeof RING_MODES)[number];
-const RING_WORDS: Record<RingMode, string> = { always: 'always', early: 'early levels', never: 'never' };
-let ringMode: RingMode = ((): RingMode => { const q = params.get('ring'); if (q && (RING_MODES as readonly string[]).includes(q)) return q as RingMode; try { const v = localStorage.getItem(STORE + ':ring'); return v && (RING_MODES as readonly string[]).includes(v) ? (v as RingMode) : 'always'; } catch { return 'always'; } })();
-const ringShown = () => ringMode === 'always' || (ringMode === 'early' && !benchName && levelN < CHAPTER_AT.counter) || (ringMode === 'early' && !!benchName);
+/**
+ * How much of the aim is shown, on a continuum: the arc (dots along the flick's first part, up past its top) and
+ * the ring (where it'll land, green on a top that's on). Easy, both; normal, the arc only; hard, neither, judged by
+ * eye. By default, as you go: both while learning (levels 1–6), the arc only through the middle (to 20), then
+ * neither. Benches show both.
+ */
+const AIMS = ['default', 'easy', 'normal', 'hard'] as const;
+type Aim = (typeof AIMS)[number];
+const AIM_WORDS: Record<Aim, string> = { default: 'default', easy: 'easy', normal: 'normal', hard: 'hard' };
+const AIM_ABOUT: Record<Aim, string> = { default: 'arc and ring to level 6, the arc to 20, then neither', easy: 'the arc and where it lands, always', normal: 'the arc, no ring, always', hard: 'no arc, no ring: by eye' };
+let aimMode: Aim = ((): Aim => {
+  // (as it was: a ring always, early, never)
+  const old: Record<string, Aim> = { always: 'easy', early: 'default', never: 'hard' };
+  const read = (v: string | null): Aim | null => (v && (AIMS as readonly string[]).includes(v) ? (v as Aim) : v && old[v] ? old[v] : null);
+  const q = read(params.get('aim') ?? params.get('ring'));
+  if (q) return q;
+  try { return read(localStorage.getItem(STORE + ':aim')) ?? read(localStorage.getItem(STORE + ':ring')) ?? 'default'; } catch { return 'default'; }
+})();
+/** what of the aim shows now: the arc, and the ring */
+function aimShows(): { arc: boolean; ring: boolean } {
+  const m: Aim = aimMode === 'default' ? (benchName || levelN <= 6 ? 'easy' : levelN <= 20 ? 'normal' : 'hard') : aimMode;
+  return { arc: m !== 'hard', ring: m === 'easy' };
+}
 /** said, the first time a lid's pop throws you */
 let popSaid = false;
 /** another layout of the level (?seed=), as the Level Lab names it; and the level's fingerprint, for the flick log */
@@ -1890,7 +1906,7 @@ function release() {
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
   // (kept, for the Level Lab: from where, as dragged, and what the ring said)
-  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, ring: !ringShown() ? null : aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
+  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, ring: !aimShows().ring ? null : aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
   if (body.canFlick) doFlick(a.vel, spin, a.climb);
   else buffered = { vel: a.vel, spin, until: simTime + 0.35, climb: a.climb };
 }
@@ -2286,7 +2302,8 @@ function showMenu() {
   $('main').hidden = card !== 'main';
   $('settings').hidden = card !== 'settings';
   $('benches').hidden = card !== 'benches';
-  $('s-ring').textContent = RING_WORDS[ringMode];
+  $('s-ring').textContent = AIM_WORDS[aimMode];
+  $('s-aim').textContent = AIM_ABOUT[aimMode];
   const at = saved();
   const cont = $('cont');
   cont.hidden = at <= 1;
@@ -2307,8 +2324,8 @@ btn('s-back', () => { card = 'main'; showMenu(); });
 btn('s-play', () => play(pickN));
 btn('s-sound', toggleSound);
 btn('s-ring', () => {
-  ringMode = RING_MODES[(RING_MODES.indexOf(ringMode) + 1) % RING_MODES.length];
-  try { localStorage.setItem(STORE + ':ring', ringMode); } catch { /* */ }
+  aimMode = AIMS[(AIMS.indexOf(aimMode) + 1) % AIMS.length];
+  try { localStorage.setItem(STORE + ':aim', aimMode); } catch { /* */ }
   showMenu();
 });
 btn('s-benches', () => { card = 'benches'; showMenu(); });
@@ -2953,18 +2970,23 @@ function frame(now: number) {
   }
   // the aiming line: dots along where its middle will go, a ring where it lands
   aimLand = null;
-  if (aimNow && ringShown()) {
+  const shows = aimShows();
+  if (aimNow && shows.arc) {
     const pa = path(lv, body.com, aimNow.vel, 3, simTime, aimNow.climb ?? null);
-    aimLand = pa.hit ? pa.hit.p : pa.pts[pa.pts.length - 1] ?? null;
+    // (the camera frames the landing only when the ring shows it)
+    aimLand = shows.ring ? (pa.hit ? pa.hit.p : pa.pts[pa.pts.length - 1] ?? null) : null;
     aimTop = pa.pts.reduce<V3 | null>((m, p) => (!m || p[1] > m[1] ? p : m), null);
     const can = body.canFlick;
+    // (the arc alone: up past its top and a little way down, fading — the way it's going, not where it ends)
+    const top = pa.pts.reduce((m, p, i) => (p[1] > pa.pts[m][1] ? i : m), 0);
+    const upTo = shows.ring ? pa.pts.length : Math.min(pa.pts.length, top + Math.max(2, Math.round(top * 0.35)) + 1);
     gl.uniform3fv(u(prog, 'uTint'), can ? [1, 0.97, 0.88] : [1, 0.6, 0.5]);
-    pa.pts.forEach((p, i) => {
-      gl.uniform1f(u(prog, 'uAlpha'), (can ? 0.95 : 0.5) * (1 - (i / pa.pts.length) * 0.5));
+    pa.pts.slice(0, upTo).forEach((p, i) => {
+      gl.uniform1f(u(prog, 'uAlpha'), (can ? 0.95 : 0.5) * (shows.ring ? 1 - (i / pa.pts.length) * 0.5 : 1 - (i / upTo) * 0.85));
       drawMesh(SPHERE, model(p, 0.55 + 0.25 * aimNow!.power), 13);
     });
     // (onto a jelly's top, the dots go on: up as high as it's thrown back, on as far as it skids)
-    if (pa.hit) {
+    if (pa.hit && shows.ring) {
       const lands = towerAt(lv, pa.hit.p, 0.5);
       gl.uniform3fv(u(prog, 'uTint'), lands > check ? [0.6, 1, 0.65] : lands >= 0 ? [1, 0.97, 0.88] : [1, 0.5, 0.45]);
       gl.uniform1f(u(prog, 'uAlpha'), 0.95);

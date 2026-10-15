@@ -23,9 +23,10 @@ the jelly's yours once the sink's last level, 12, has been). `?lab` opens everyt
 dumpling either way, at the foot of the glass. In play, the word `menu` at the bottom comes back here. (A link to a
 level, `?level=3`, goes straight to it.)
 
-Settings also has the **aim ring** (the dots of a flick and the ring where it'll land): *always*, *early
-levels* (only on the Preparation Table, while you're learning how far a drag throws; after that, by eye),
-or *never* (`?ring=` the same). And **benches**: every bench, each one thing to try over and over, listed
+Settings also has the **aim**, on a continuum: *easy*, the arc (dots along the flick, all the way) and the
+ring where it'll land; *normal*, the arc only, up past its top and fading, the way it's going but not where
+it ends; *hard*, neither, by eye. *Default* goes as you go: easy to level 6, normal to 20, then hard
+(`?aim=` the same). And **benches**: every bench, each one thing to try over and over, listed
 with a line on what it is (`?bench=breakfast`, `jelly`, `puddings`, `breads`, `coats`, `supports`,
 `look`); from a bench, `menu` comes back to the title.
 
