@@ -378,7 +378,7 @@ export class Dumpling {
    * of it a little, the way it's pushed along the ground (so a poke at its back rolls it on; at
    * its top, it dents and wobbles where it is).
    */
-  poke(at: V3, dir: V3, roll = true, k = 1) {
+  poke(at: V3, dir: V3, roll = true, k = 1, carry = 1) {
     const x = this.x, v = this.v;
     // (hanging from a rail: prodded along it, away from the side it's prodded on; no more than that)
     const rl = this.onRail;
@@ -406,8 +406,8 @@ export class Dumpling {
     const h = Math.hypot(dir[0], dir[2]);
     if (roll && h > 1e-3) {
       // (and pushed up from underneath, it hops a little: a poke low on its side lifts it as it rolls)
-      const ax = (dir[0] / h) * POKE_ROLL * h * k, az = (dir[2] / h) * POKE_ROLL * h * k;
-      this.flick([this.vcom[0] + ax, this.vcom[1] + (POKE_UP * h + POKE_ROLL * 1.3 * Math.max(0, dir[1])) * k, this.vcom[2] + az], 0.5 * h * k);
+      const m = k * carry, ax = (dir[0] / h) * POKE_ROLL * h * m, az = (dir[2] / h) * POKE_ROLL * h * m;
+      this.flick([this.vcom[0] + ax, this.vcom[1] + (POKE_UP * h + POKE_ROLL * 1.3 * Math.max(0, dir[1])) * m, this.vcom[2] + az], 0.5 * h * m);
     } else this.sinceFlick = 0;
   }
   /** Hanging from a rail: shimmied along it a hand's width (so many), `dir` (+1, toward its far end; -1, back), hand over hand. */

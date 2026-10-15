@@ -2221,7 +2221,8 @@ function pokeAt(at: V3) {
   // goes the other way; low on its near side, it lifts as it goes; its top, it's mostly squashed)
   const ray = norm(sub(at, eye)), inward = norm(sub(body.com, at));
   const square = 0.6 + 0.4 * Math.max(0, ray[0] * inward[0] + ray[1] * inward[1] + ray[2] * inward[2]);
-  body.poke(at, norm(add(mul(inward, 0.8), mul(ray, 0.2))), true, square);
+  // (the dent as it was; what it carries on with, half: a poke nudges, a push rolls)
+  body.poke(at, norm(add(mul(inward, 0.8), mul(ray, 0.2))), true, square, 0.5);
   pop(0.3);
 }
 /** Where a point is on the glass (pixels), if it's in front of the camera. */
