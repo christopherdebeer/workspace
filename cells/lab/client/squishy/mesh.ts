@@ -3,7 +3,7 @@
  * in the piece's own terms) for the course's things: stacks of bamboo steamers, tins, jars, a
  * chopping board, plates, a pudding, a lazy Susan, chopsticks; a unit sphere and a flat disc.
  */
-import { MAT, type Level, type Shape, type Tower, type V3 } from './level';
+import { MAT, dustMat, type Level, type Shape, type Tower, type V3 } from './level';
 import { bookFaces, slotOf } from './books';
 
 /** a vertex: position, normal, material, (u, v) */
@@ -145,6 +145,17 @@ function towerMesh(t: Tower, m: LevelMesh) {
       // (a jar: the honey in it, most of the way up, then the glass over everything)
       cylinder(out, s.c[0], s.c[2], s.r * 0.93, s.c[1] - s.hh, s.c[1] + s.hh * 0.55, MAT.honey, MAT.honey, 36);
       cylinder(m.glass, s.c[0], s.c[2], s.r, s.c[1] - s.hh, s.c[1] + s.hh, MAT.glass, MAT.glass, 40);
+      // (honey run down its front, toward where it's landed against: drips from the rim, each its own length, a bead at its end)
+      if (t.jar) {
+        const a0 = Math.atan2(t.at[0] - s.c[0], t.at[2] - s.c[2]), top = s.c[1] + s.hh - 0.5, foot = s.c[1] - s.hh;
+        for (let k = 0; k < 7; k++) {
+          const hk = (salt: number) => ((Math.imul(Math.round(s.c[0] * 10) + k * 7919, 2654435761) ^ salt) >>> 0) % 1000 / 1000;
+          const len = 5 + hk(23) * (top - foot - 5), w = 0.3 + hk(37) * 0.35;
+          const a = a0 + (k - 3) * 0.17 + (hk(11) - 0.5) * 0.08, nx = Math.sin(a), nz = Math.cos(a), rr = s.r + w * 0.75;
+          capsule(out, [s.c[0] + nx * rr, top, s.c[2] + nz * rr], [s.c[0] + nx * rr, top - len, s.c[2] + nz * rr], w, MAT.honey, 8, 3);
+          capsule(out, [s.c[0] + nx * (rr + 0.1), top - len, s.c[2] + nz * (rr + 0.1)], [s.c[0] + nx * (rr + 0.1), top - len - 0.3, s.c[2] + nz * (rr + 0.1)], w * 1.5, MAT.honey, 8, 3);
+        }
+      }
       continue;
     }
     drawShape(s, out);
@@ -154,7 +165,7 @@ function towerMesh(t: Tower, m: LevelMesh) {
 /** What's on a top (flour, crumbs, pepper, sprinkles): drawn as a skin just over it, in its own material. */
 function dustOn(s: Shape, out: number[]) {
   if (!s.dust || s.mat === MAT.butter) return;
-  const mat = 24 + s.dust;
+  const mat = dustMat(s.dust);
   if (s.kind === 'box') {
     const cy = Math.cos(s.yaw), sy = Math.sin(s.yaw);
     const W = (x: number, z: number): V3 => [s.c[0] + cy * x + sy * z, s.c[1] + s.h[1] + 0.06, s.c[2] - sy * x + cy * z];

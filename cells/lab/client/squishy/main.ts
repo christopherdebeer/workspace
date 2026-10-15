@@ -18,7 +18,7 @@
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, ROLL_MAX, ROLL_MIN, railAxis, rollReach, type Kind } from './body';
 import { kitchenRun, tableSet } from './room';
-import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, carried, chapterOf, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, dustMat, carried, chapterOf, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { bench, buildLevel } from './course';
 import { logoSVG } from './title';
 import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
@@ -168,6 +168,12 @@ vec3 coatColor(vec3 q, vec2 coat, vec3 base, inout float rough, inout float glos
     float bit = step(h, a * .95) * (1. - smoothstep(.22, .36, length(fract(q.xz * 26. + q.y * 5.) - .5)));
     c = mix(base, mix(vec3(.05), vec3(.35, .3, .25), hash3(g + 2.)), bit);
     rough = mix(rough, .7, bit);
+  } else if (k == 6) {
+    // honey: an amber glaze, glossy, thicker in runs where it's slid down, lit from within a little
+    float run = noise(vec3(q.x * 3., q.y * 9., q.z * 3.)) * .6 + noise(q * 11.) * .4;
+    float d = smoothstep(.05, .45, a * (.7 + .6 * run));
+    c = mix(base, base * vec3(.95, .62, .2) + vec3(.3, .13, 0.), d);
+    rough = mix(rough, .04, d); gloss += d * 1.1;
   } else if (k == 5) {
     // hundreds and thousands: little rods, each its own colour
     vec3 g = floor(q * 9.5);
@@ -721,8 +727,10 @@ void main() {
     // honey: deep amber, lit from within; run down a jar's side in drips that thin toward their ends
     float drip = noise(vec3(uv.x * .9, 1., 5.)) * .7 + noise(vec3(uv.x * 3.2, 2., 8.)) * .3;
     float thin = smoothstep(-5., 4., uv.y) * .35 + smoothstep(.5, .9, drip) * .4;
-    base = mix(vec3(.72, .34, .05), vec3(.95, .6, .15), thin);
-    rough = .06; coat = 1.; emit = .22 + .25 * thin;
+    // (deep, so it's amber still in the sun: bright and saturated, the tonemap would take it to cream)
+    base = mix(vec3(.34, .11, .004), vec3(.6, .27, .012), thin);
+    // (its own gloss, no clear coat over it: on a thin run or a bead, mostly seen at a slant, a clear coat goes white)
+    rough = .22; coat = 0.; emit = .1 + .08 * thin;
   } else if (id == ${MAT.glass}) {
     base = vec3(.9, .95, .93); rough = .04; coat = 1.;
   } else if (id == ${MAT.pot}) {
@@ -800,12 +808,13 @@ void main() {
     float th2 = 1. - abs(uv.y * 2. - 1.);
     base = mix(vec3(.98, .88, .55), vec3(.98, .78, .22), smoothstep(.1, .8, th2));
     rough = .06; coat = 1.; emit = .12 * th2;
-  } else if (id >= 25 && id <= 29) {
-    // what's on a top: flour on a board, crumbs or pepper on a plate, hundreds and thousands on a pudding, over the top it's on
-    int k = id - 24;
-    if (k == 1) base = vec3(.8, .64, .44); else if (k == 4 || k == 3) { float r = length(uv); base = mix(vec3(.94, .94, .92), vec3(.12, .25, .58), smoothstep(.78, .8, r) * (1. - smoothstep(.86, .88, r))); rough = .18; coat = 1.; } else { base = vec3(.62, .28, .06); rough = .12; coat = 1.; emit = .05; }
+  } else if ((id >= 25 && id <= 29) || id == ${MAT.glaze}) {
+    // what's on a top: flour on a board, crumbs or pepper on a plate, hundreds and thousands on a pudding, honey spilt, over the top it's on
+    int k = id == ${MAT.glaze} ? 6 : id - 24;
+    if (k == 6) { base = vec3(.85, .5, .1); rough = .05; coat = 1.; emit = .18; }
+    else if (k == 1) base = vec3(.8, .64, .44); else if (k == 4 || k == 3) { float r = length(uv); base = mix(vec3(.94, .94, .92), vec3(.12, .25, .58), smoothstep(.78, .8, r) * (1. - smoothstep(.86, .88, r))); rough = .18; coat = 1.; } else { base = vec3(.62, .28, .06); rough = .12; coat = 1.; emit = .05; }
     float gl = 0.;
-    float amount = k == 1 ? .55 : k == 3 ? .5 : k == 4 ? .45 : .6;
+    float amount = k == 1 ? .55 : k == 3 ? .5 : k == 4 ? .45 : k == 6 ? .9 : .6;
     // (thinner toward the edge, as a sprinkle or a dusting lies)
     float spread = k == 1 ? .8 + .4 * noise(vec3(vWorld.xz * .3, 1.)) : 1. - .5 * smoothstep(.5, 1., length(uv));
     base = coatColor(vWorld * .33, vec2(amount * spread, float(k)), base, rough, gl, n, n);
@@ -1358,7 +1367,7 @@ let jellyMeshes: Array<{ shape: Shape; mesh: Mesh; data: Float32Array; def: Floa
 function fillJellies() {
   for (const jm of jellyMeshes) {
     const j = jm.shape.jel!;
-    const n = jelMesh(j, jm.data, jm.shape.mat, jm.shape.dust && jm.shape.mat !== MAT.bread ? 24 + jm.shape.dust : 0, noDef ? undefined : jm.def);
+    const n = jelMesh(j, jm.data, jm.shape.mat, jm.shape.dust && jm.shape.mat !== MAT.bread ? dustMat(jm.shape.dust) : 0, noDef ? undefined : jm.def);
     gl.bindBuffer(gl.ARRAY_BUFFER, jm.mesh.buf);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, jm.data, 0, n);
     if (!noDef) { gl.bindBuffer(gl.ARRAY_BUFFER, jm.mesh.dbuf!); gl.bufferSubData(gl.ARRAY_BUFFER, 0, jm.def, 0, (n / VSTRIDE) * 2); }
@@ -3257,7 +3266,7 @@ function tick(dt: number) {
   heldWas = body.held > 1;
   // what it's picked up: a word the first time; a sneeze when it's peppered; what a hard landing shakes off
   if (body.coatMost !== coatWas) {
-    const said = ['', 'flour: dry and grippy, and no stick', 'butter: slippery, and honey won\'t hold it', 'crumbs: bouncy', 'pepper...', 'hundreds and thousands: sticky'][body.coatMost];
+    const said = ['', 'flour: dry and grippy, and no stick', 'butter: slippery, and honey won\'t hold it', 'crumbs: bouncy', 'pepper...', 'hundreds and thousands: sticky', 'honey: it sticks to the side of anything, a while'][body.coatMost];
     if (said && !coatSaid.has(body.coatMost)) { coatSaid.add(body.coatMost); hint(said, 2600); }
     coatWas = body.coatMost;
   }

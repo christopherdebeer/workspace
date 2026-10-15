@@ -42,6 +42,8 @@ export const MAT = {
   berry: 46,
   // (the kitchen round it: painted cupboards, a cream fridge and range, the floor's checks, herbs in terracotta pots)
   cabinet: 47, fridge: 48, floor: 49, plant: 50, terracotta: 51,
+  // (honey on a top, spilt: as a coating's drawn over what it's on (24 + a dust for the first five), but here)
+  glaze: 52,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -49,7 +51,11 @@ export const MAT = {
  * and won't settle), pepper (it sneezes: a hop, and the pepper's off), hundreds and thousands
  * (sweet and sticky: more tack). None is 0.
  */
-export const DUST = { none: 0, flour: 1, butter: 2, crumbs: 3, pepper: 4, sprinkles: 5 } as const;
+export const DUST = { none: 0, flour: 1, butter: 2, crumbs: 3, pepper: 4, sprinkles: 5, honey: 6 } as const;
+/** how many kinds of coating (and none) */
+export const DUSTS_N = 7;
+/** a coating as it's drawn over what it's on: its own material */
+export const dustMat = (d: number): number => (d === DUST.honey ? MAT.glaze : 24 + d);
 export type Dust = (typeof DUST)[keyof typeof DUST];
 /** each coating: how fast it comes off on what touches it (/s), how fast it wears off (/s), how much a hard landing shakes off */
 export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
@@ -59,6 +65,21 @@ export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
   [DUST.crumbs]: { on: 5, off: 0.1, shake: 0.7 },
   [DUST.pepper]: { on: 6, off: 0.12, shake: 0.3 },
   [DUST.sprinkles]: { on: 4, off: 0.04, shake: 0.4 },
+  // (honey: spilt, it's picked up where it's touched, and while it's on, anything it touches it sticks to a while; it wears off slowly)
+  [DUST.honey]: { on: 4, off: 0.06, shake: 0.1 },
+};
+/**
+ * How each thing holds the dumpling against its side (not under it: what it lands on, it slides on as it
+ * always has): how hard (over 1, it holds by itself; 1, only the dumpling's own tack, which soon tires), how
+ * fast that hold tires (a hold lasts about 1/tire s), and how fast it creeps down while it's held (cm/s).
+ * Glass and steel hardly hold; glazed and enamelled things, only the dumpling's own tack; wood holds a
+ * moment and creeps; terracotta, a cookbook's cloth, a loaf's crust a little longer; a sponge, soft, longest.
+ */
+export const GRIP: Partial<Record<number, { tack: number; tire: number; creep: number }>> = {
+  [MAT.glass]: { tack: 0.6, tire: 1, creep: 0 }, [MAT.steel]: { tack: 0.7, tire: 1, creep: 0 }, [MAT.spoon]: { tack: 0.7, tire: 1, creep: 0 },
+  [MAT.board]: { tack: 1.45, tire: 1.3, creep: 3 }, [MAT.bamboo]: { tack: 1.4, tire: 1.5, creep: 4 }, [MAT.legs]: { tack: 1.4, tire: 1.5, creep: 3.5 },
+  [MAT.weave]: { tack: 1.7, tire: 0.8, creep: 2 }, [MAT.book]: { tack: 1.35, tire: 1.4, creep: 3.5 }, [MAT.terracotta]: { tack: 1.6, tire: 1, creep: 2.5 },
+  [MAT.bread]: { tack: 1.7, tire: 0.8, creep: 2 }, [MAT.sponge]: { tack: 2.2, tire: 0.5, creep: 1 }, [MAT.chopstick]: { tack: 1.3, tire: 1.6, creep: 4 },
 };
 /** which kitchen a level is in: the preparation table, the counter, then the stovetop, then all of it mixed */
 export type Chapter = 'table' | 'counter' | 'sink' | 'stove' | 'mixed';
@@ -113,6 +134,9 @@ export interface Shape {
   /** how much the dumpling's tack holds here (0: none, butter; 3: honey), and how fast it tires on a wall of this (0: never) */
   tack: number;
   tire: number;
+  /** held by it, how fast it creeps down it (cm/s; honey oozes, wood lets go slowly); and whether it holds only against its sides (see GRIP) */
+  creep?: number;
+  wallGrip?: boolean;
   /** a lid that lifts: how far, its cycle, where in it it starts, and its rest height */
   lift: { amp: number; period: number; phase: number; y0: number } | null;
   /** what's on it that comes off on the dumpling (flour, crumbs, pepper, sprinkles; butter), if anything */
@@ -200,6 +224,9 @@ export interface Level {
 
 const ramp = (r: Rand, a: number, b: number) => a + r() * (b - a);
 function bounds(s: Shape): Shape {
+  // (how it holds, by what it's made of, unless it's been given its own say)
+  const g = GRIP[s.mat];
+  if (g && s.wallGrip === undefined && s.tack === 1 && s.kind !== 'jelly') { s.tack = g.tack; s.tire = g.tire; s.creep = g.creep; s.wallGrip = true; }
   if (s.kind === 'box') {
     const ex = Math.abs(Math.cos(s.yaw)) * s.h[0] + Math.abs(Math.sin(s.yaw)) * s.h[2], ez = Math.abs(Math.sin(s.yaw)) * s.h[0] + Math.abs(Math.cos(s.yaw)) * s.h[2];
     s.lo = [s.c[0] - ex, s.c[1] - s.h[1], s.c[2] - ez];
@@ -496,15 +523,28 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand, seat 
       break;
     }
     case 'honey': {
-      // a big honey jar on a stand, its top higher than a flick reaches: honey has run down its side, and that's where you land, against it, and stick
-      const jc: V3 = [x + Math.sin(yaw) * (rad + RADIUS * 0.82), 0, z + Math.cos(yaw) * (rad + RADIUS * 0.82)];
-      shapes.push(cyl(jc[0], jc[2], rad, y - JAR_UNDER, y + 15, MAT.glass, 0.45));
-      shapes.push(cyl(jc[0], jc[2], rad * 0.9, y + 15, y + 17.5, MAT.board, 0.7));
-      // (the honey has run well down: a splat slides a little before it holds, and stays on honey)
-      const h = cyl(jc[0], jc[2], rad + 0.45, y - JAR_UNDER + 0.3, y + 4.5, MAT.honey, 0.9);
-      h.tack = 3; h.tire = 0;
-      shapes.push(h);
-      shapes.push(...stand(jc[0], jc[2], rad, y - JAR_UNDER, yaw, coin, seat));
+      // a big jar of honey on a stand, its top higher than a flick reaches: clear glass (slippery), the honey in it two
+      // thirds up, a gingham cover on its lid; honey's run down its front, and that's where you land, against it,
+      // and stick (it oozes, slowly); and it's pooled on the stand round its foot, sticky, and gets on you
+      const dir: V3 = [Math.sin(yaw), 0, Math.cos(yaw)];
+      const jc: V3 = [x + dir[0] * (rad + RADIUS * 0.82), 0, z + dir[2] * (rad + RADIUS * 0.82)];
+      const foot = y - JAR_UNDER;
+      const glass = cyl(jc[0], jc[2], rad, foot, y + 15, MAT.glass, 0.3);
+      shapes.push(glass);
+      // (the honey in it, seen through the glass, and the drips down its front: drawn with it (mesh.ts), not met)
+      shapes.push(cyl(jc[0], jc[2], rad * 0.92, y + 15, y + 17, MAT.board, 0.7), cyl(jc[0], jc[2], rad * 0.97, y + 16.2, y + 17.3, MAT.gingham, 0.8));
+      // (down its front: a band of honey on the glass, where it's run; held, and oozing)
+      {
+        const a = Math.atan2(-dir[0], -dir[2]), nx = Math.sin(a), nz = Math.cos(a), w = rad * 0.4;
+        const band = box([jc[0] + nx * (rad + 0.2), (foot + 0.5 + y + 6) / 2, jc[2] + nz * (rad + 0.2)], [w, (y + 6 - foot - 0.5) / 2, 0.25], a, MAT.honey, 0.9);
+        band.tack = 3; band.tire = 0; band.creep = 0.5; band.wallGrip = false; band.dust = DUST.honey; band.ghost = true;
+        shapes.push(band);
+      }
+      // (pooled on the stand round its foot: sticky underfoot a while, and it gets on you)
+      const pool = cyl(jc[0], jc[2], rad + 1.1, foot, foot + 0.25, MAT.honey, 0.9);
+      pool.tack = 2.4; pool.tire = 0.5; pool.creep = 0; pool.wallGrip = false; pool.dust = DUST.honey;
+      shapes.push(pool);
+      shapes.push(...stand(jc[0], jc[2], rad, foot, yaw, coin, seat));
       jar = { c: [jc[0], y, jc[2]], r: rad + 0.45 };
       landR = 0;
       break;
@@ -688,8 +728,9 @@ export function path(lv: Level, from: V3, vel: V3, max = 3, t0 = 0, climb: V3 | 
   // (what it's squashed against and going away from, the top it's leaving, a jar it's stuck to: not a hit for the first moments; anything it's going toward is)
   const leaving: Shape[] = [];
   if (lv.movers.length) moveShapes(lv, t0);
-  near(lv, from, R + 0.5, ns);
-  for (const s of ns) if (touch(s, from[0], from[1], from[2], R + 0.5, o) && o.d > 0 && vel[0] * o.nx + vel[1] * o.ny + vel[2] * o.nz > 0) leaving.push(s);
+  // (as broad as it is as it leaves: anything that ball touches, it's going away from, isn't a hit)
+  near(lv, from, ballAt(0) + 0.5, ns);
+  for (const s of ns) if (touch(s, from[0], from[1], from[2], ballAt(0) + 0.5, o) && o.d > 0 && vel[0] * o.nx + vel[1] * o.ny + vel[2] * o.nz > 0) leaving.push(s);
   // (a rail it's hanging from: let go of, it's not a hit as it leaves, whichever way it goes)
   near(lv, from, RAIL_NEAR + 1, ns);
   if (ns.some((s) => s.rail && railDist(s, from).d < RAIL_NEAR + 1)) {
@@ -809,7 +850,8 @@ export function railDist(r: Shape, p: V3): { d: number; f: number } {
 /** A rail: a capsule from a to b, r thick, of mat, to hang from (it holds as honey does; see body.ts). */
 export function rail(a: V3, b: V3, r: number, mat: number): Shape {
   const s = cap(a, b, r, mat, 0.7);
-  s.rail = true; s.tack = 3; s.tire = 0;
+  // (held from any side, as honey holds: not by what it's made of)
+  s.rail = true; s.tack = 3; s.tire = 0; s.creep = 0; s.wallGrip = false;
   return s;
 }
 export function towerAt(lv: Level, p: V3, slack = 0): number {
@@ -957,12 +999,12 @@ export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[]
   const a = lv.towers[j], b = lv.towers[k];
   const lid = b.land?.[0].lift ?? a.land?.[0].lift;
   const times = lid ? [0, 1, 2, 3, 4, 5].map((i) => ((i / 6 + 1 - lid.phase) % 1) * lid.period) : [0];
-  // (from a jar: where a splat sticks, which is never just so: lower, as it slides; and a hand's width round either way)
+  // (from a jar: where a splat sticks, which is never just so: lower, as it slides; and round either way, as far as the honey's run)
   const round = (f: V3, d: number): V3 => {
     const c = a.jar!.c, ox = f[0] - c[0], oz = f[2] - c[2], r = Math.hypot(ox, oz), an = Math.atan2(oz, ox) + d / r;
     return [c[0] + Math.cos(an) * r, f[1] - 3, c[2] + Math.sin(an) * r];
   };
-  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3, round(f, 5), round(f, -5)] : a.rail ? [f, [f[0], f[1] + 3, f[2]] as V3] : [f]; };
+  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3, round(f, 3), round(f, -3)] : a.rail ? [f, [f[0], f[1] + 3, f[2]] as V3] : [f]; };
   // (onto a top reached by its wall: against the wall, and up)
   if (b.wall) {
     const f = standing(lv, j, 0), w = aimWall(lv, f, k, 0);

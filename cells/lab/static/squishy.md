@@ -59,6 +59,13 @@ until your next flick, when it goes back to following.
 
 ## Stuck to a wall
 
+Everything's side holds it a little, as what it's made of does, and lets go as it does: glass, tin,
+glazed porcelain and steel hardly at all (only the dumpling's own tack, a quarter of a second, and
+it slides off); wood, bamboo and a cookbook's cloth a second or so, creeping down a few centimetres a
+second; terracotta and a loaf's crust a little longer; a sponge, soft, longest; a towel's linen until
+its grip tires; honey for good, oozing down slowly. Only against a side: what it lands on, it slides
+on as ever. And only if it isn't skidding past fast: a graze at speed carries on.
+
 Stuck to something's side (honey's splat, or a towel's grip) it isn't held up stiff: it hangs.
 Held at the patch that's stuck, the rest of it goes limp and droops, slumping down off the patch,
 the dough longer (half as tall again as it stands) and the jelly less so; let go, it gathers itself
@@ -246,10 +253,14 @@ wooden board on a stack of tea tins, now and then a celadon jar among them.
 - **A butter dish**: the butter is slippery, so a landing slides, a long way at speed; the dish
   has a lip all round that stops you. Backspin bites instead. From against the lip, a flick over
   it catches on it (the arc shows the catch), so flick away from it, or hop to the middle first.
-- **A honey jar**, from level 8: a big one, high on its stand, its top higher than a flick reaches, with honey run down its side. You
-  don't land on it: you land *against* it, splat into the honey, and stick, hanging there,
-  until you flick on. The course turns sharply at a jar. Honey holds whatever touches it, so a
-  flick into the jar from the honey climbs it a little and sticks again, higher.
+- **A honey jar**, from level 8: a big jar of honey, clear glass, filled two thirds up, a gingham
+  cover on its lid, high on its stand, its top higher than a flick reaches. Honey's run down its
+  front in drips, and pooled on the stand round its foot. You don't land on it: you land *against*
+  its front, splat into the run honey, and stick, oozing slowly down, until you flick on; miss the
+  honey and it's glass, and you slide off it. The pool round its foot is sticky underfoot a while,
+  and gets on you. The course turns sharply at a jar.
+- **Honey on you** (a jar's pool, its drips): while it's on, whatever side you touch you stick to a
+  while, oozing down it, glass and steel as well as wood; it wears off slowly. Butter cancels it.
 - **A pot with its lid on**, from level 9: the lid's shut, but every few seconds the steam in the
   pot rattles it, six quick jumps of a centimetre or so on the rim, steam escaping round it, and
   it settles again. On the lid, you're jolted; flicked in the middle of a rattle, you go
