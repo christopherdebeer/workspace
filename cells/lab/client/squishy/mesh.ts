@@ -168,7 +168,7 @@ function towerMesh(t: Tower, m: LevelMesh) {
       rolledRim(out, s.c[0], y1, s.c[2], side(y1), 0.45, MAT.honeypot);
       // (the honey standing in its neck, under the cork)
       cylinder(m.liquids, s.c[0], s.c[2], side(y1) - 0.3, y1 - 1.2, y1 - 0.5, MAT.honeyDrip, MAT.honeyDrip, 40);
-      if (t.jar) m.honeyRims.push({ c: [s.c[0], y0, s.c[2]], top: y1, foot: y0, side, front: Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), seed: Math.round(s.c[0] * 10 + s.c[2]) });
+      if (t.jar) m.honeyRims.push({ c: [s.c[0], y0, s.c[2]], top: y1, foot: y0, side, lip: 0.5, front: Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), seed: Math.round(s.c[0] * 10 + s.c[2]) });
       continue;
     }
     // (its cork, sat a little askew on the dipper's handle; and the dipper, a turned wooden stick, out of its neck)

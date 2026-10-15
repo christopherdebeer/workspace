@@ -757,7 +757,8 @@ void main() {
     // honey as shapes (a collar over a rim, its drips, drops): thick through its middle, so deep there; thin at its
     // edges, pale and bright; very glossy, the sun a pinpoint in it
     liquidDepth = clamp(NoV0 * 1.15, 0., 1.);
-    base = mix(vec3(.7, .3, .03), vec3(.95, .55, .08), liquidDepth);
+    // (deep orange through its thick middle, a lighter gold at its thin edges)
+    base = mix(vec3(1., .55, .08), vec3(.8, .28, .01), liquidDepth);
     rough = .04; coat = 1.; coatRough = .018; coatSpec = .7; emit = .18 + .3 * (1. - liquidDepth);
   } else if (id == ${MAT.honeyRun} || id == ${MAT.honeyPool}) {
     // honey run down a jar's front and pooled round its foot: over the rim in a ragged collar, and from it runs, each
@@ -1012,19 +1013,19 @@ void main() {
   if (uLiquidOpt > .5 && (id == ${MAT.honeyRun} || id == ${MAT.honeyPool} || id == ${MAT.honeyDrip} || id == ${MAT.smear})) {
     bool drip = id == ${MAT.honeyDrip};
     bool butterFilm = id == ${MAT.smear};
-    float depth = butterFilm ? (.025 + .23 * liquidDepth) : drip ? (.8 + 2.2 * liquidDepth) : (.05 + .45 * liquidDepth);
-    vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : drip ? vec3(.22, .95, 3.) : vec3(.15, .7, 2.4);
+    float depth = butterFilm ? (.025 + .23 * liquidDepth) : drip ? (1.1 + 2.4 * liquidDepth) : (.05 + .45 * liquidDepth);
+    vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : drip ? vec3(.16, 1.05, 3.4) : vec3(.15, .7, 2.4);
     vec3 T = exp(-absorb * depth);
     float F = .04 + .96 * pow(1. - NoV, 5.);
     vec2 bend = vec2(dot(n, uRight), dot(n, uUp)) * (butterFilm ? .0009 : drip ? .03 : .0018) * (drip ? 1. : liquidDepth);
     vec3 scene = texture(uScene, clamp(gl_FragCoord.xy / uRes + bend, vec2(.001), vec2(.999))).rgb;
-    vec3 tint = butterFilm ? vec3(.97, .83, .33) : vec3(.95, .55, .08);
+    vec3 tint = butterFilm ? vec3(.97, .83, .33) : vec3(.9, .4, .03);
     float reflectAmt = clamp(.13 + .68 * F, 0., .85);
     // (butter's cloudy, milk in it: mostly its own gold, lit, only its thin edge letting what's under show)
     // (honey's runs too, mostly their own amber: drawn before the jar's honey, what's behind them is the bare wall)
-    reflectAmt = max(reflectAmt, butterFilm ? mix(.45, .85, liquidDepth) : drip ? mix(.22, .38, liquidDepth) : mix(.35, .7, liquidDepth));
+    reflectAmt = max(reflectAmt, butterFilm ? mix(.45, .85, liquidDepth) : drip ? mix(.12, .24, liquidDepth) : mix(.35, .7, liquidDepth));
     // (and honey glows: the sun gone into it coming back out gold, most when it's behind it)
-    vec3 honeyGlow = butterFilm ? vec3(0.) : vec3(1., .52, .07) * uKeyCol * (1. - T.g) * (.35 + 1.3 * pow(max(dot(-V, uKey), 0.), 2.));
+    vec3 honeyGlow = butterFilm ? vec3(0.) : vec3(1., .4, .03) * uKeyCol * (1. - T.g) * (.25 + 1.2 * pow(max(dot(-V, uKey), 0.), 2.));
 #ifdef HDR
     vec3 transmitted = scene * T + tint * (vec3(1.) - T) * .16 + honeyGlow;
     // (a drip's own edges: darker toward its sides, what's round it bent in; and a bright stripe down it, the sun
@@ -1033,6 +1034,8 @@ void main() {
       vec3 R = reflect(-V, n);
       transmitted *= mix(1., .2, pow(1. - NoV, .9));
       c += uKeyCol * (pow(max(dot(R, uKey), 0.), 70.) * 2.2 + pow(max(dot(R, uWin), 0.), 24.) * .9);
+      // (the light through it gathered low in it, where it's rounded under: a bead's bright bottom)
+      transmitted += vec3(1., .55, .06) * uKeyCol * smoothstep(.1, -.75, n.y) * (.5 + .5 * max(dot(-n, uKey), 0.)) * 1.1;
     }
     o = vec4(mix(scene, mix(transmitted, c, reflectAmt), liquidCover), 1.);
 #else

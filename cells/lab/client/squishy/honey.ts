@@ -15,6 +15,8 @@ export interface HoneyRim {
   top: number; foot: number;
   /** how far out the surface is at a height */
   side: (y: number) => number;
+  /** how far a lip stands out past the side at the rim (a pot's rolled lip): the collar sits out over it */
+  lip?: number;
   /** which way its front faces (radians, round from +x toward +z): most of the drips come down there */
   front: number;
   seed: number;
@@ -22,7 +24,7 @@ export interface HoneyRim {
 
 const hash = (k: number, salt: number) => {
   let h = Math.imul(k * 7919 + salt * 104729, 2654435761) >>> 0;
-  h ^= h >>> 15; h = Math.imul(h, 2246822519) >>> 0; h ^= h >>> 13;
+  h = (h ^ (h >>> 15)) >>> 0; h = Math.imul(h, 2246822519) >>> 0; h = (h ^ (h >>> 13)) >>> 0;
   return (h % 100000) / 100000;
 };
 const norm = (a: V3): V3 => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
@@ -50,8 +52,9 @@ function rings(out: number[], P: V3[][], N: V3[][], closed = true) {
 /** The drips' lengths at a time (s since the level began): most stall partway, a few reach the foot. */
 function dripLength(k: number, seed: number, run: number, H: number) {
   const h1 = hash(k, seed + 1), h4 = hash(k, seed + 4), h5 = hash(k, seed + 5);
-  const L0 = 1.5 + 4 * h1, tau = 70 + 200 * h4;
-  const reach = h5 < 0.18 ? H + 0.5 : L0 + (H * 0.55 - L0) * h5 * h5;
+  // (none runs to the foot: a few get two thirds of the way, most stop in the top third, fat at the end)
+  const L0 = 1.8 + 3.5 * h1, tau = 45 + 160 * h4;
+  const reach = h5 < 0.22 ? H * (0.55 + 0.15 * h1) : L0 + (H * 0.45 - L0) * h5;
   return Math.min(H, L0 + (reach - L0) * (1 - Math.exp(-run / tau)));
 }
 
@@ -62,7 +65,7 @@ export function honeyOver(rim: HoneyRim, run: number, out: number[]) {
   const drips: Array<{ a: number; w: number; L: number; k: number }> = [];
   for (let k = 0; k < 12; k++) {
     const a = k < 9 ? front + (k - 4) * 0.3 + (hash(k, seed) - 0.5) * 0.14 : front + Math.PI * (0.55 + 0.45 * (k - 9)) + (hash(k, seed + 9) - 0.5) * 0.4;
-    drips.push({ a, w: 0.55 + 0.5 * hash(k, seed + 2), L: dripLength(k, seed, run, H), k });
+    drips.push({ a, w: 0.32 + 0.5 * hash(k, seed + 2) ** 1.3, L: dripLength(k, seed, run, H), k });
   }
   // the collar: a thick roll of it round the rim, drooping where each drip leaves it
   {
@@ -72,7 +75,7 @@ export function honeyOver(rim: HoneyRim, run: number, out: number[]) {
       let droop = 0;
       for (const d of drips) { const da = Math.abs(((th - d.a + Math.PI * 3) % (Math.PI * 2)) - Math.PI); droop = Math.max(droop, Math.exp(-(((da * side(top)) / (d.w * 1.6)) ** 2))); }
       const rc = 0.5 + 0.08 * Math.sin(th * 3 + seed) ** 2 + 0.3 * droop;
-      const cy = top - 0.28 - 0.35 * droop, out2 = side(cy) + rc * 0.45;
+      const lip = rim.lip ?? 0, cy = top - 0.28 + lip * 0.4 - 0.35 * droop, out2 = Math.max(side(cy), side(top) + lip) + rc * 0.45;
       const er: V3 = [Math.cos(th), 0, Math.sin(th)];
       const ring: V3[] = [], nr: V3[] = [];
       for (let j = 0; j < SIDES; j++) {
@@ -88,9 +91,10 @@ export function honeyOver(rim: HoneyRim, run: number, out: number[]) {
   // the drips: a tube down the side, pressed flat against it a little, thinning, a teardrop at its end
   for (const d of drips) {
     const er: V3 = [Math.cos(d.a), 0, Math.sin(d.a)], et: V3 = [-Math.sin(d.a), 0, Math.cos(d.a)];
-    const reached = d.L >= H - 0.01, y0 = top - 0.35, rb = reached ? 0 : d.w * (1.45 + 0.35 * Math.min(1, d.L / H));
+    const reached = d.L >= H - 0.01, y0 = top - 0.35, rb = reached ? 0 : d.w * (1.25 + 0.4 * Math.min(1, d.L / (H * 0.5)));
     const radius = (s: number) => {
-      const stem = d.w * (1 - 0.18 * Math.min(1, s / Math.max(d.L, 1))) * (1 + 0.1 * Math.sin(s * 1.3 + d.k)) + d.w * 0.8 * Math.exp(-s / 0.7);
+      // (it swells as it goes down, the honey gathering toward its end, not thinning to a string)
+      const stem = d.w * (0.72 + 0.4 * Math.min(1, s / Math.max(d.L, 1))) * (1 + 0.08 * Math.sin(s * 1.3 + d.k)) + d.w * 0.9 * Math.exp(-s / 0.6);
       if (reached) return stem + d.w * 0.8 * Math.exp(-(d.L - s) / 0.6);
       const sb = d.L - rb, bead = s > sb - rb ? Math.sqrt(Math.max(0, rb * rb - (s - sb) ** 2)) : 0;
       // (a neck just over the bead)
