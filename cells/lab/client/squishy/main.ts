@@ -20,7 +20,7 @@ import { Dumpling, ROLL_MAX, ROLL_MIN, railAxis, rollReach, type Kind } from './
 import { kitchenRun, tableSet } from './room';
 import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, dustMat, carried, chapterOf, fingerprint, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { BENCHES, bench, buildLevel } from './course';
-import { logFlick, readFlicks, settleFlick } from './flicklog';
+import { logFlick, noteBack, readFlicks, settleFlick } from './flicklog';
 import { logoSVG } from './title';
 import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -1621,6 +1621,8 @@ const launching = () => { launchedFrom = body.contacts > 0 ? [...body.com] as V3
 const TRIES = 3, TRIES_IN = 20;
 /** where this fall puts it back: the jump (true), or the last top */
 let toJump = false;
+/** and by which rule, for the flick log */
+let backBy: 'top' | 'jump' | 'capped' = 'top';
 /** when it's been put back at the jump lately */
 let retries: number[] = [];
 /** what of the aim shows now: the arc, and the ring */
@@ -1931,7 +1933,7 @@ function release() {
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
   // (kept, for the Level Lab: from where, as dragged, and what the ring said)
-  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, aim: aimFor(levelN), reset: resetMode, ring: !aimShows().ring ? null : aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
+  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, aim: aimFor(levelN), reset: resetMode, ring: !aimShows().ring ? null : aimLand ? towerAt(lv, aimLand, 0.5) : -1 }, { to: ((k) => (k >= 0 ? k : -2))(towerAt(lv, body.com, 1)), at: body.com });
   if (body.canFlick) doFlick(a.vel, spin, a.climb);
   else buffered = { vel: a.vel, spin, until: simTime + 0.35, climb: a.climb };
 }
@@ -3383,6 +3385,7 @@ function tick(dt: number) {
     const noisy = !!lid && (liftAt(lid, simTime).on || liftAt(lid, simTime + 1).on);
     if (simTime > fallenAt + 0.7 && !noisy) {
       body.place(back);
+      noteBack(back, backBy);
       prevX = new Float32Array(body.x);
       fallenAt = -1;
       pop(0.6);
@@ -3401,6 +3404,7 @@ function tick(dt: number) {
     toJump = resetMode === 'jump' && !!launchedFrom && retries.length < TRIES;
     if (toJump) retries.push(simTime);
     const often = resetMode === 'jump' && !!launchedFrom && !toJump;
+    backBy = toJump ? 'jump' : often ? 'capped' : 'top';
     if (often) retries = [];
     hint(toJump ? 'splat. back to where you jumped from' : often ? 'splat. tried enough from there: back to the last top' : 'splat. back to the last top', 1800);
     return;
@@ -3420,7 +3424,7 @@ function tick(dt: number) {
   const speed = body.moving;
   // (stood on it: on its feet on its top, or hanging from it if it's a rail; not draped over its edge, nor clinging to its side)
   const stood = k >= 0 && (lv.towers[k].rail ? !!body.onRail : body.onFeet);
-  if (stood && body.contacts > 0 && speed < 30 && still > 0.3) settleFlick(k, body.com);
+  if (stood && body.contacts > 0 && speed < 30) settleFlick(k, body.com);
   if (stood && body.contacts > 0 && speed < 30) { check = k; if (k > 0) visited.add(k); if (way[way.length - 1] !== k && still > 0.2) way.push(k); }
   // (on a top the way parts at, the first time: say so)
   if (stood && !benchName && !forkSaid && lv.ways && lv.ways.filter(([a]) => a === k).length > 1 && still > 0.5) { forkSaid = true; hint('two ways on: the sure way along the front; along the back, one long hop, quicker', 5000); }
