@@ -205,7 +205,8 @@ console.log(`${kind} righting ok`);
       console.log(`${kind} jelly ok: konjac throws it ${kj.again.toFixed(1)} cm, panna cotta ${pc.again.toFixed(1)}; dents ${kj.dent.toFixed(2)}, ${pc.dent.toFixed(2)}`);
     }
   }
-  // a lid: shut, mostly; on its cycle the steam rattles it, and what's on it is jolted, and stays on
+  // a lid: shut, mostly; on its cycle the steam rattles it and it pops; what's on it is thrown up, and lands back on
+  // it once, but sat there through a few pops it's thrown off
   {
     const tw = L.tower('lid', [0, 40, 0], 11, 0, r);
     const lid = tw.land[0];
@@ -217,11 +218,14 @@ console.log(`${kind} righting ok`);
     run(d, lv, 1, () => {});
     run(d, lv, lid.lift.period * 1.5, () => { lo = Math.min(lo, d.com[1]); hi = Math.max(hi, d.com[1]); lidHi = Math.max(lidHi, lid.c[1]); frames++; if (d.contacts === 0) off++; if (lid.c[1] > lid.lift.y0 + 0.05) up++; });
     assert.ok(up < frames * 0.2, `the lid's shut most of the time: up ${up} of ${frames} frames`);
-    assert.ok(lidHi > lid.lift.y0 + 0.5 && lidHi < lid.lift.y0 + 1.5, `it rattles, a little: ${(lidHi - lid.lift.y0).toFixed(2)}`);
-    assert.ok(off < frames * 0.15 && d.contacts > 0, `stays on the lid: off it ${off} of ${frames} frames`);
-    assert.ok(hi - lo > 0.3, `jolted by it: ${(hi - lo).toFixed(2)}`);
+    assert.ok(lidHi > lid.lift.y0 + 2.5 && lidHi < lid.lift.y0 + 3.5, `it pops, about 3 cm: ${(lidHi - lid.lift.y0).toFixed(2)}`);
+    assert.ok(off < frames * 0.15, `on the lid, but for the pop: off it ${off} of ${frames} frames`);
+    assert.ok(hi - lo > 3, `thrown up by it: ${(hi - lo).toFixed(2)}`);
     assert.ok(L.onTop(tw, d.com, 1), 'still on the lid');
-    console.log(`lid ok: rattled ${(lidHi - lid.lift.y0).toFixed(2)}, jolted ${(hi - lo).toFixed(2)}`);
+    let gone = -1;
+    run(d, lv, lid.lift.period * 6, (t) => { if (gone < 0 && !L.onTop(tw, d.com, 2)) gone = t; });
+    assert.ok(gone >= 0, 'sat on it through six cycles, thrown off it');
+    console.log(`lid ok: popped ${(lidHi - lid.lift.y0).toFixed(2)}, threw it up ${(hi - lo).toFixed(2)}, threw it off in ${gone.toFixed(1)} s more`);
   }
 }
 

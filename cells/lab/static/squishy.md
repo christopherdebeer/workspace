@@ -207,8 +207,10 @@ for sure; no level has more than two climbs or two jars.
 Now and then, from a place's second level on and all through the whole kitchen, the way parts: from
 one top, the sure way runs along the front of the counter, two broad tops one after the other (a tray,
 a rack, steamers on something, a loaf); and the short way along the back, one long hop, onto a small top
-(a tin, a cake stand, a spoon) or off a springboard, a konjac you bounce off on to where the two meet
-again. Both are made sure of, every way into every top, so wherever you've stood there's a way on
+(a tin, a cake stand, a spoon), to where the two meet again. Or the short way's a springboard: a konjac
+on a narrow pedestal straight on along the counter, bounced off on to where they meet, in line with it
+(a bounce keeps its heading, and the counter's not deep enough for one to slant), and the sure way goes
+round it by one broad top, to the back or the front. Both are made sure of, every way into every top, so wherever you've stood there's a way on
 home; and the short way's harder (played for real, most of its flicks make it, fewer than the sure
 way's). The camera, the autopilot and the par go the sure way; the short way's yours to find.
 
@@ -279,9 +281,10 @@ wooden board on a stack of tea tins, now and then a celadon jar among them.
 - **Honey on you** (a jar's pool, its drips): while it's on, whatever side you touch you stick to a
   while, oozing down it, glass and steel as well as wood; it wears off slowly. Butter cancels it.
 - **A pot with its lid on**, from level 9: the lid's shut, but every few seconds the steam in the
-  pot rattles it, six quick jumps of a centimetre or so on the rim, steam escaping round it, and
-  it settles again. On the lid, you're jolted; flicked in the middle of a rattle, you go
-  unsteadily. The arc knows the rattle.
+  pot rattles it, five quick jumps of a centimetre or so on the rim, then it pops: one jump of
+  about 3 cm, quick, lurching the way the steam gets out, and it settles again. Sat on it, you're
+  thrown up and toward that side; a jelly's off it in about three pops, dough in five or six. Not
+  a place to wait. Flicked in the middle of a rattle, you go unsteadily. The arc knows the rattle.
 
 Every level is made from its number, so level 8 is always the same level, and every hop in it
 is checked when it's made: from the middle of each top there is a flick that lands on the next;

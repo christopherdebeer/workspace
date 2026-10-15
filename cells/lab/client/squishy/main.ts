@@ -1589,6 +1589,8 @@ let levelN = Math.max(1, Number(params.get('level')) || (() => { try { return Nu
 let lv!: Level;
 /** the tower last stood on (where a fall comes back to), falls, the clock, home (the time, or not yet) */
 let check = 0;
+/** said, the first time a lid's pop throws you */
+let popSaid = false;
 /** another layout of the level (?seed=), as the Level Lab names it; and the level's fingerprint, for the flick log */
 const levelSeed = Math.max(0, Math.floor(Number(params.get('seed')) || 0));
 let levelFp = '';
@@ -1755,7 +1757,7 @@ function startLevel(n: number, quiet = false) {
   showTitle();
   if (benchName === 'breakfast') { hint('the breakfast counter: home is the golden steamer, up high. more than one way there: find yours', 7000); benchPanel(); return; }
   if (benchName) { hint(benchName === 'jelly' ? 'land on each: a panna cotta, a mango pudding, a konjac jelly. tune them above' : benchName === 'look' ? 'a still life, to judge the light by' : benchName === 'supports' ? 'what things stand on: a stool, a cake stand, a board on jars, a crate, cookbooks, a bowl upturned, a tiered stand, a cooling rack' : 'flour, crumbs, pepper, sprinkles, butter: land hard on each, and look', 7000); benchPanel(); return; }
-  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.counter + 1 ? 'a rail: fly at it and you hang on. tap the dumpling to shimmy along; flick off at the end' : levelN === CHAPTER_AT.counter + 2 ? 'a sill\'s lip holds you too: catch it, shimmy along, flick off' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim; hang from the oven\'s handle' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam: it jolts you' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
+  hint(levelN === 1 ? 'take hold of the dumpling, drag back and let go: it flies the other way. drag anywhere else to look round' : levelN === 2 ? 'push the dumpling on, up the glass, and it rolls that way; tap it to poke it' : levelN === CHAPTER_AT.counter ? 'a shelf no flick reaches: land against the towel under it, and climb' : levelN === CHAPTER_AT.counter + 1 ? 'a rail: fly at it and you hang on. tap the dumpling to shimmy along; flick off at the end' : levelN === CHAPTER_AT.counter + 2 ? 'a sill\'s lip holds you too: catch it, shimmy along, flick off' : levelN === CHAPTER_AT.sink ? 'bubbles bounce; steel slips; the water\'s a fall' : levelN === CHAPTER_AT.stove ? 'the stovetop. butter slides; a pan has a rim; hang from the oven\'s handle' : levelN === CHAPTER_AT.stove + 1 ? 'honey: land against the jar, and you stick. flick to let go' : levelN === CHAPTER_AT.stove + 2 ? 'a pot\'s lid rattles on the steam, then pops: don\'t sit on it long' : levelN === JELLY_AT ? 'a treat: it\'s jelly from here' : `level ${levelN}`);
 }
 /** The kitchen about the course: tiled walls on all sides, with windows, a little way off. */
 function room(lv: Level): number[] {
@@ -3264,6 +3266,8 @@ function tick(dt: number) {
     const { k, on } = liftAt(l, simTime);
     if (on && lidWas[i] < 0 && len(sub(m.shape.c, body.com)) < 120) rattle();
     if (k > 0.3 && lidWas[i] <= 0.3) steamOut([m.shape.c[0], l.y0 - m.shape.hh, m.shape.c[2]], m.shape.r, 10);
+    // (the pop: a burst, and a word the first time it throws you)
+    if (k > 1.5 && lidWas[i] <= 1.5) { steamOut([m.shape.c[0], l.y0 - m.shape.hh, m.shape.c[2]], m.shape.r * 1.4, 28); rattle(); if (!popSaid && len(sub(m.shape.c, body.com)) < m.shape.r + 4) { popSaid = true; hint('pop! the lid throws you', 1600); } }
     lidWas[i] = on ? k : -1;
   });
   const k = towerAt(lv, body.com, 1);

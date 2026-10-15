@@ -138,7 +138,7 @@ export interface Shape {
   creep?: number;
   wallGrip?: boolean;
   /** a lid that lifts: how far, its cycle, where in it it starts, and its rest height */
-  lift: { amp: number; period: number; phase: number; y0: number } | null;
+  lift: { amp: number; period: number; phase: number; y0: number; dir?: number } | null;
   /** what's on it that comes off on the dumpling (flour, crumbs, pepper, sprinkles; butter), if anything */
   dust: Dust;
   mat: number;
@@ -563,7 +563,7 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand, seat 
       // (its two handles, out to the sides)
       for (const sd of [-1, 1]) { const a = yaw + Math.PI / 2; shapes.push(box([x + Math.sin(a) * sd * (rad + 1.5), y - 4.2, z + Math.cos(a) * sd * (rad + 1.5)], [0.6, 0.45, 1.6], a, MAT.pot, 0.7)); }
       const l = cyl(x, z, rad + 0.7, y - 1.6, y, MAT.pot, 0.7);
-      l.lift = { amp: 0.9, period: ramp(r, 4.5, 6.5), phase: r(), y0: l.c[1] };
+      l.lift = { amp: 0.9, period: ramp(r, 4.5, 6.5), phase: r(), y0: l.c[1], dir: r() * Math.PI * 2 };
       shapes.push(l);
       const k = cyl(x, z, 1.3, y, y + 1.2, MAT.knob, 0.7);
       k.lift = { ...l.lift, y0: k.c[1] };
@@ -653,7 +653,7 @@ export function touch(sh: Shape, px: number, py: number, pz: number, s: number, 
     }
     // (a turning top: its surface moves, ω × r; a lifting one goes up and down)
     if (sh.spin) { o.vx = sh.spin * dz; o.vz = -sh.spin * dx; }
-    if (sh.lift) o.vy = sh.b[1];
+    if (sh.lift) { o.vx = sh.b[0]; o.vy = sh.b[1]; o.vz = sh.b[2]; }
     return true;
   }
   const ax = sh.b[0] - sh.c[0], ay = sh.b[1] - sh.c[1], az = sh.b[2] - sh.c[2];
@@ -665,29 +665,40 @@ export function touch(sh: Shape, px: number, py: number, pz: number, s: number, 
   return true;
 }
 /**
- * A lid's cycle: shut most of the time; then the steam under it rattles it, a few quick jumps
- * on the pot's rim, the steam escaping round it, and it settles shut again. 0–1 of its jump,
- * how fast it's going (jumps a second), and whether it's rattling.
+ * A lid's cycle: shut most of the time; then the steam under it rattles it, a few quick jumps on the pot's rim, and
+ * then it pops — one jump of a few centimetres, quick, lurching the way the steam gets out — and settles shut again.
+ * Whatever's sat on it then is thrown: up, and toward that side. 0–1+ of its rise, how fast it's going up (rises a
+ * second), how fast it lurches (cm/s, the way `dir` says), and whether it's rattling.
  */
 export const RATTLE = 0.16;
-export function liftAt(l: NonNullable<Shape['lift']>, t: number): { k: number; v: number; on: boolean } {
+/** the pop: how high (in lifts), and where in the rattle and for how long (0–1 of it); and its lurch at the most (cm/s) */
+export const POP = { k: 3.4, at: 0.8, len: 0.1, shove: 70 };
+export function liftAt(l: NonNullable<Shape['lift']>, t: number): { k: number; v: number; s: number; on: boolean } {
   const ph = (((t / l.period + l.phase) % 1) + 1) % 1;
+  const x = (p: number) => (p - (1 - RATTLE)) / RATTLE;
   const f = (p: number) => {
-    const x = (p - (1 - RATTLE)) / RATTLE;
-    if (x <= 0 || x >= 1) return 0;
-    // (six jumps, the middle ones highest)
-    return Math.sin(Math.PI * x) ** 0.6 * Math.abs(Math.sin(6 * Math.PI * x));
+    const q = x(p);
+    if (q <= 0 || q >= 1) return 0;
+    // (the pop, near the end)
+    if (q > POP.at && q < POP.at + POP.len) return POP.k * Math.sin((Math.PI * (q - POP.at)) / POP.len);
+    if (q >= POP.at) return 0;
+    // (before it, jumps on the rim, the middle ones highest)
+    return Math.sin((Math.PI * q) / POP.at) ** 0.6 * Math.abs(Math.sin((5 * Math.PI * q) / POP.at)) ;
   };
-  const e = 1e-4;
-  return { k: f(ph), v: (f(ph + e) - f(ph - e)) / (2 * e * l.period), on: ph > 1 - RATTLE };
+  const e = 1e-4, q = x(ph);
+  const rising = q > POP.at && q < POP.at + POP.len / 2;
+  return { k: f(ph), v: (f(ph + e) - f(ph - e)) / (2 * e * l.period), s: rising ? POP.shove * Math.sin((2 * Math.PI * (q - POP.at)) / POP.len) : 0, on: ph > 1 - RATTLE };
 }
 /** The lids where they are at a time: moved, their bounds with them, their speed kept (in b[1]) for what rests on them. */
 export function moveShapes(lv: Level, t: number) {
   for (const s of lv.movers) {
     const l = s.lift!;
-    const { k, v } = liftAt(l, t);
+    const { k, v, s: sv } = liftAt(l, t);
     s.c[1] = l.y0 + l.amp * k;
+    // (its speed kept in b, which a lid, a cylinder, doesn't otherwise use: up, and its lurch)
     s.b[1] = l.amp * v;
+    s.b[0] = l.dir === undefined ? 0 : Math.sin(l.dir) * sv;
+    s.b[2] = l.dir === undefined ? 0 : Math.cos(l.dir) * sv;
     s.lo[1] = s.c[1] - s.hh; s.hi[1] = s.c[1] + s.hh;
   }
 }

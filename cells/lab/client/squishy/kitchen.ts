@@ -361,10 +361,11 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number, yAt?: numbe
     return { stops: [{ top: 'rail', at, r: 3, yaw: 0, shapes, land: [bar], rail: { shape: bar, to, out } }], extra: [], decor: d, reach: past + 6, wall: [window ?? (a[0] + b[0]) / 2] };
   }
   if (kind === 'konjac') {
-    // a konjac jelly on its saucer, up on something: it throws you up
+    // a konjac jelly on its saucer, up on a pedestal: it throws you up (a springboard, so kept narrow, to stand out
+    // between the two ways at a fork)
     const seat = Math.round(ramp(r, LOW - 6, LOW - 1));
-    const hd = holder((['pedestal', 'crate', 'stool', 'tins'] as Holder[])[Math.floor(r() * 4)], x, z, 0, seat, 12, ramp(r, 0, 3), coinAt(x, z));
-    const saucer = cyl(x, z, 12, hd.y, hd.y + 0.8, MAT.porcelain, 0.5);
+    const hd = holder('pedestal', x, z, 0, seat, 9.5, ramp(r, 0, 3), coinAt(x, z));
+    const saucer = cyl(x, z, 10, hd.y, hd.y + 0.8, MAT.porcelain, 0.5);
     const kj = jelly(x, z, 9, hd.y + 0.8, hd.y + 8.8, MAT.konjac, FEELS.konjac);
     return { stops: [{ top: 'jelly', at: [x, hd.y + 8.8, z], r: 7, yaw: 0, shapes: [...hd.shapes, saucer, kj], land: [kj] }], extra: [], decor: hd.decor, reach: 13 };
   }
@@ -596,7 +597,7 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean, composi
    * of these kinds (or the place's own), across the counter in this band (or about where the last was), this much
    * further on than it'd be, home; up to forty tries, then nothing.
    */
-  const layOne = (from: number[], o: { kinds?: Kind[]; z?: [number, number]; y?: [number, number]; goal?: boolean; far?: number; spring?: boolean; notHang?: boolean; tries?: number } = {}): Got | null => {
+  const layOne = (from: number[], o: { kinds?: Kind[]; z?: [number, number]; y?: [number, number]; goal?: boolean; far?: number; spring?: boolean; notHang?: boolean; tries?: number; line?: [V3, V3] } = {}): Got | null => {
     const prev = lv.towers[from[0]];
     const xb = Math.max(...from.map((f) => lv.towers[f].at[0])) + 250;
     furnish(xb);
@@ -611,7 +612,12 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean, composi
       const x = Math.max(...from.map((f) => lv.towers[f].at[0] + reachOf[f])) + gap + (kind === 'towel' || kind === 'tray' || kind === 'shelfHome' ? 18 : kind === 'honey' ? 2 : 12) + (easy ? 0 : o.far ?? 0);
       // (from a jar's side, forward, away from the jar; in its band, if it has one)
       // (a jar: set back from where it's flown at from, so it's met at its front, where the honey's run, not round its flank)
-      const z = kind === 'honey' && !easy ? Math.min(BACK - 26, prev.at[2] + ramp(r, 14, 20)) : o.z && !easy ? ramp(r, o.z[0], o.z[1]) : prev.jar ? Math.max(FRONT + 12, prev.at[2] - ramp(r, 16, 26)) : Math.max(FRONT + 12, Math.min(BACK - 22, prev.at[2] + ramp(r, -22, 22) * (easy ? 0.4 : 1)));
+      // (on along a line, if it's to be: off a springboard, the bounce keeps its heading, so on along from where it was flown at it from)
+      const onLine = o.line && !easy ? o.line[1][2] + (o.line[1][2] - o.line[0][2]) / Math.max(1, o.line[1][0] - o.line[0][0]) * (x - o.line[1][0]) : null;
+      // (a little off the line, held to the band: a glancing bounce turns that much, and the hop's made sure of)
+      if (onLine !== null && (onLine < FRONT + 6 || onLine > BACK - 8)) continue;
+      const onBand = onLine === null ? null : Math.max(FRONT + 10, Math.min(BACK - 12, onLine));
+      const z = onBand !== null ? onBand : kind === 'honey' && !easy ? Math.min(BACK - 26, prev.at[2] + ramp(r, 14, 20)) : o.z && !easy ? ramp(r, o.z[0], o.z[1]) : prev.jar ? Math.max(FRONT + 12, prev.at[2] - ramp(r, 16, 26)) : Math.max(FRONT + 12, Math.min(BACK - 22, prev.at[2] + ramp(r, -22, 22) * (easy ? 0.4 : 1)));
       // (as high as the last, about; down again from up high; up in its band, if it has one: the middle of the room)
       const y = o.y && !easy ? Math.round(ramp(r, o.y[0], o.y[1])) : Math.round(Math.max(LOW + 1, Math.min(30, prev.at[1] > 32 ? ramp(r, 18, 26) : prev.at[1] + ramp(r, -4, 6))));
       // (home, and what's sure to fit when nothing else will: a steamer, on something)
@@ -670,37 +676,53 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean, composi
   /** what can stand up in the middle of the room, on something tall: tops that sit on a stack of supports */
   const CLIMB: Kind[] = ['stack', 'plate', 'tin', 'susan', 'pan', 'lid'];
   /**
-   * A fork, at top F: two ways on, that meet again. Along the front, the sure way: two broad tops; along the back,
-   * the short way: one long hop, onto a small top or off a springboard; where they meet, laid on from both. If the
-   * short way won't hold, it's left out; if the sure way won't, no fork.
+   * A fork, at top F: two ways on, that meet again. The sure way: two broad tops. The short way: one long hop onto a
+   * small top, or off a springboard. Onto a small top, the short way's along the back and the sure way along the front.
+   * Off a springboard, the short way goes straight on along the counter — the bounce keeps its heading, and the room's
+   * not deep enough for it to slant — and the sure way goes round, by the back or the front, whichever has the room.
+   * Where they meet, laid on from both. If no short way holds, the sure way alone; if that won't, no fork.
    */
   const fork = (F: number): number | null => {
+    const Fz = lv.towers[F].at[2];
     const a1z: [number,number] = composition === 'convergent' ? [FRONT+17, FRONT+21] : [FRONT+10, FRONT+14];
     const a2z: [number,number] = composition === 'convergent' ? [FRONT+20, FRONT+24] : composition === 'offset' ? [FRONT+24, FRONT+30] : [FRONT+10, FRONT+16];
     const bz: [number,number] = composition === 'convergent' ? [BACK-29, BACK-25] : [BACK-20, BACK-16];
+    // (round a springboard: a broad top's breadth and more to one side of the line straight on)
+    const round: [number,number] = Fz < (FRONT + BACK) / 2 ? [Math.min(BACK - 18, Fz + 33), Math.min(BACK - 16, Fz + 36)] : [Math.max(FRONT + 10, Fz - 36), Math.max(FRONT + 12, Fz - 33)];
+    const order = small.length ? (r() < 0.6 ? [true, false] : [false, true]) : [true];
+    const done = (A1: Got, A2: Got, B: Got | null, M: Got) => {
+      nexts[F] = A1.first; nexts[A2.last] = M.first;
+      if (B) nexts[B.last] = M.first;
+      for (const g of new Set([A1, A2, B, M])) if (g) used.set(g.kind, (used.get(g.kind) ?? 0) + 1);
+      last = M.kind;
+      return M.last;
+    };
+    for (const viaSpring of order) {
+      const A1 = layOne([F], { kinds: broad.length ? broad : ['stack'], z: viaSpring ? round : a1z, notHang: true, tries: 16 });
+      if (!A1) continue;
+      nexts[F] = A1.first;
+      // (round a springboard, one broad top: so where they meet is a bounce away, not two tops on)
+      const A2 = viaSpring ? A1 : layOne([A1.last], { kinds: broad.length ? broad : ['stack'], z: a2z, notHang: true, tries: 16 });
+      if (!A2) { undo(A1); continue; }
+      const B = layOne([F], viaSpring
+        ? { kinds: ['konjac'], z: [Fz - 2, Fz + 2], far: ramp(r, 6, 14), spring: true, notHang: true, tries: 12 }
+        : { kinds: small, z: bz, far: ramp(r, 8, 16), notHang: true, tries: 12 });
+      // (where they meet: between them; after a springboard, on along the way the bounce goes)
+      const M = B ? layOne([A2.last, B.last], viaSpring ? { line: [lv.towers[F].at, lv.towers[B.last].at], notHang: true, tries: 12 } : { z: [FRONT + 22, BACK - 30], notHang: true, tries: 12 }) : null;
+      if (M) return done(A1, A2, B, M);
+      if (B) undo(B);
+      if (A2 !== A1) undo(A2);
+      undo(A1);
+    }
+    // (no short way holds: the sure way along the front, alone)
     const A1 = layOne([F], { kinds: broad.length ? broad : ['stack'], z: a1z, notHang: true, tries: 16 });
     if (!A1) return null;
     nexts[F] = A1.first;
     const A2 = layOne([A1.last], { kinds: broad.length ? broad : ['stack'], z: a2z, notHang: true, tries: 16 });
     if (!A2) { undo(A1); return null; }
-    // (the short way: off a springboard, or onto a small top; if one won't meet the sure way again, the other)
-    const order = small.length ? (r() < 0.75 ? [true, false] : [false, true]) : [true];
-    let B: Got | null = null, M: Got | null = null;
-    for (const viaSpring of order) {
-      B = layOne([F], { kinds: viaSpring ? ['konjac'] : small, z: bz, far: ramp(r, 8, 16), spring: viaSpring, notHang: true, tries: 12 });
-      // (where they meet: between them; after a springboard, on along the way the bounce goes, toward the back)
-      M = B ? layOne([A2.last, B.last], { z: viaSpring ? [BACK - 26, BACK - 18] : [FRONT + 22, BACK - 30], notHang: true, tries: 12 }) : null;
-      if (M) break;
-      if (B) { undo(B); B = null; }
-    }
-    nexts[F] = A1.first;
-    if (!M) M = layOne([A2.last], { notHang: true });
+    const M = layOne([A2.last], { notHang: true });
     if (!M) { undo(A2); undo(A1); return null; }
-    nexts[A2.last] = M.first;
-    if (B) nexts[B.last] = M.first;
-    for (const g of [A1, A2, B, M]) if (g) used.set(g.kind, (used.get(g.kind) ?? 0) + 1);
-    last = M.kind;
-    return M.last;
+    return done(A1, A2, null, M);
   };
   // (forks from a place's second level on, and in the whole kitchen: a way to choose, now and then, not near either end)
   const forks = chapter !== 'table' && (i >= 1 || chapter === 'mixed') && !plain;

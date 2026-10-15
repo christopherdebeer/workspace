@@ -221,7 +221,9 @@ function arrival(lv:Level,at:number,skin:'dough'|'jelly'):{body:Dumpling;t:numbe
 function startBody(lv:Level,from:number,phase:number,skin:'dough'|'jelly'):{body:Dumpling;t:number}{
   const got=arrival(lv,from,skin);
   if(got)return {body:cloneBody(got.body),t:got.t};
-  const body=new Dumpling(standing(lv,from,phase),skin);
+  // (set down a little above, as the game puts it back after a fall: set down at rest height, it would be in a lid's knob)
+  const at=standing(lv,from,phase);
+  const body=new Dumpling([at[0],at[1]+2,at[2]],skin);
   return {body,t:settleBody(lv,body,phase,20)};
 }
 /** where the dumpling stands to flick from a top, as startBody has it */
