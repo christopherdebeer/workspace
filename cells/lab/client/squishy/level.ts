@@ -121,6 +121,8 @@ export interface Shape {
   kind: 'box' | 'cyl' | 'cap' | 'sheet' | 'jelly';
   /** a sheet's triangles */
   sheet?: Sheet;
+  /** a cork sat askew in a pot's neck: drawn from the same triangles it's met as (askewCork) */
+  cork?: { tris: number[]; norms: number[] };
   /** a jelly's top, as it moves (see jelly.ts) */
   jel?: Jel;
   /** box and cylinder: the centre; capsule: one end */
@@ -375,6 +377,43 @@ export const box = (c: V3, h: V3, yaw: number, mat: number, mu = 0.8): Shape => 
 export const cyl = (x: number, z: number, r: number, y0: number, y1: number, mat: number, mu = 0.8): Shape =>
   bounds({ ...base(), kind: 'cyl', c: [x, (y0 + y1) / 2, z], r, hh: (y1 - y0) / 2, mat, mu });
 export const cap = (a: V3, b: V3, r: number, mat: number, mu = 0.7): Shape => bounds({ ...base(), kind: 'cap', c: a, b, r, mat, mu });
+/**
+ * A cork sat askew in a pot's neck: tapered (narrower at its foot, where it went in), its foot's middle at `c`,
+ * lifted on the side `dir` points (radians round from +x toward +z) by `tilt`, about the far edge of its foot,
+ * where it rests on the rim. Its surface, as triangles (nine numbers each) and a normal at each corner: met and
+ * drawn the same.
+ */
+export function askewCork(c: V3, rFoot: number, rTop: number, h: number, dir: number, tilt: number, segs = 36): { tris: number[]; norms: number[] } {
+  const dx = Math.cos(dir), dz = Math.sin(dir), ca = Math.cos(tilt), sa = Math.sin(tilt);
+  // (about the far edge: along d from there, and up; turned up by the tilt)
+  const place = (along: number, across: number, up: number): V3 => {
+    const a = along + rFoot, a2 = a * ca - up * sa, u2 = a * sa + up * ca;
+    return [c[0] + dx * (a2 - rFoot) - dz * across, c[1] + u2, c[2] + dz * (a2 - rFoot) + dx * across];
+  };
+  const turn = (along: number, across: number, up: number): V3 => {
+    const a2 = along * ca - up * sa, u2 = along * sa + up * ca, l = Math.hypot(a2, across, u2) || 1;
+    return [(dx * a2 - dz * across) / l, u2 / l, (dz * a2 + dx * across) / l];
+  };
+  const tris: number[] = [], norms: number[] = [];
+  // (along, across, up is a mirror of x, y, z: each triangle's wound the other way round to face out)
+  const tri = (p: Array<[number, number, number]>, n: Array<[number, number, number]>) => {
+    for (const k of [0, 2, 1]) tris.push(...place(p[k][0], p[k][1], p[k][2]));
+    for (const k of [0, 2, 1]) norms.push(...turn(n[k][0], n[k][1], n[k][2]));
+  };
+  const slope = (rFoot - rTop) / h;
+  for (let k = 0; k < segs; k++) {
+    const a0 = (k / segs) * Math.PI * 2, a1 = ((k + 1) / segs) * Math.PI * 2;
+    const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+    const n0: [number, number, number] = [c0, s0, slope], n1: [number, number, number] = [c1, s1, slope];
+    // (its side)
+    tri([[c0 * rFoot, s0 * rFoot, 0], [c1 * rTop, s1 * rTop, h], [c0 * rTop, s0 * rTop, h]], [n0, n1, n0]);
+    tri([[c0 * rFoot, s0 * rFoot, 0], [c1 * rFoot, s1 * rFoot, 0], [c1 * rTop, s1 * rTop, h]], [n0, n1, n1]);
+    // (its top and its foot)
+    tri([[0, 0, h], [c0 * rTop, s0 * rTop, h], [c1 * rTop, s1 * rTop, h]], [[0, 0, 1], [0, 0, 1], [0, 0, 1]]);
+    tri([[0, 0, 0], [c1 * rFoot, s1 * rFoot, 0], [c0 * rFoot, s0 * rFoot, 0]], [[0, 0, -1], [0, 0, -1], [0, 0, -1]]);
+  }
+  return { tris, norms };
+}
 /** a jelly from y0 up to y1, set in a mould (of a recipe, if wanted), its top a membrane that gives (see jelly.ts) */
 export function jelly(x: number, z: number, r: number, y0: number, y1: number, mat: number, feel: JellyFeel = FEELS.pudding, mu?: number, dome = 0, recipe?: number): Shape {
   // (a pudding, a panna cotta, a konjac: set in a mould of its own, from where it stands; not a loaf, nor a sponge)
@@ -550,7 +589,17 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand, seat 
       const glass = cyl(jc[0], jc[2], rad, base, y + 15, pot ? MAT.honeypot : MAT.glass, pot ? 0.35 : 0.3);
       shapes.push(glass);
       // (the honey in it, seen through the glass, and the drips down its front: drawn with it (mesh.ts), not met)
-      if (pot) shapes.push(cyl(jc[0], jc[2], rad * 0.8, y + 15, y + 17.6, MAT.cork, 0.8));
+      if (pot) {
+        // (its cork sat askew, lifted on one side by the dipper under it: met as it's drawn; and the dipper, a turned
+        // wooden stick, in the honey and out under the cork's lifted edge, leaning out, a knob at its end)
+        const lift = Math.atan2(z - jc[2], x - jc[0]) + 2.2, dx = Math.cos(lift), dz = Math.sin(lift), rim = y + 15;
+        const cork = askewCork([jc[0], rim, jc[2]], rad * 0.74, rad * 0.86, 2.6, lift, 0.26);
+        const sh = sheet(cork.tris, 0.3, MAT.cork, 0.8);
+        sh.cork = cork;
+        const base: V3 = [jc[0] + dx * rad * 0.45, rim - 2.5, jc[2] + dz * rad * 0.45], tip: V3 = [base[0] + dx * 9.4, rim + 7.8, base[2] + dz * 9.4];
+        const knob: V3 = [tip[0] + dx * 0.9, tip[1] + 1, tip[2] + dz * 0.9];
+        shapes.push(sh, cap(base, tip, 0.42, MAT.spoon, 0.7), cap(tip, knob, 0.62, MAT.spoon, 0.7));
+      }
       else shapes.push(cyl(jc[0], jc[2], rad * 0.92, y + 15, y + 17, MAT.board, 0.7), cyl(jc[0], jc[2], rad * 0.97, y + 16.2, y + 17.3, MAT.gingham, 0.8));
       // (down its front: a band of honey on the glass, where it's run; held, and oozing)
       {

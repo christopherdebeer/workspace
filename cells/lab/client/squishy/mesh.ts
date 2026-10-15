@@ -171,29 +171,11 @@ function towerMesh(t: Tower, m: LevelMesh) {
       if (t.jar) m.honeyRims.push({ c: [s.c[0], y0, s.c[2]], top: y1, foot: y0, side, lip: 0.5, front: Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), seed: Math.round(s.c[0] * 10 + s.c[2]) });
       continue;
     }
-    // (its cork, sat a little askew on the dipper's handle; and the dipper, a turned wooden stick, out of its neck)
-    if (s.mat === MAT.cork) {
-      const pot = t.shapes.find((g) => g.mat === MAT.honeypot);
-      if (pot) {
-        const y0 = s.c[1] - s.hh, a = Math.atan2(t.at[2] - pot.c[2], t.at[0] - pot.c[0]) + 2.2, dx = Math.cos(a), dz = Math.sin(a);
-        const lid: number[] = [];
-        cylinder(lid, s.c[0], s.c[2], s.r, y0, y0 + s.hh * 2, MAT.cork, MAT.cork, 36);
-        // (tipped up on the dipper's side, about its far edge)
-        const tilt = 0.2, ca = Math.cos(tilt), sa = Math.sin(tilt), px = s.c[0] - dx * s.r, pz = s.c[2] - dz * s.r;
-        const turn = (vx: number, vy: number, vz: number, origin: boolean): V3 => {
-          const ox = origin ? vx - px : vx, oy = origin ? vy - y0 : vy, oz = origin ? vz - pz : vz;
-          const along = ox * dx + oz * dz, across = -ox * dz + oz * dx, al2 = along * ca - oy * sa, y2 = along * sa + oy * ca;
-          return [(origin ? px : 0) + al2 * dx - across * dz, (origin ? y0 : 0) + y2, (origin ? pz : 0) + al2 * dz + across * dx];
-        };
-        for (let i = 0; i < lid.length; i += VSTRIDE) {
-          const p = turn(lid[i], lid[i + 1], lid[i + 2], true), n = turn(lid[i + 3], lid[i + 4], lid[i + 5], false);
-          out.push(p[0], p[1], p[2], n[0], n[1], n[2], lid[i + 6], lid[i + 7], lid[i + 8]);
-        }
-        const base: V3 = [pot.c[0] + dx * pot.r * 0.35, y0 - 4, pot.c[2] + dz * pot.r * 0.35], tip: V3 = [pot.c[0] + dx * pot.r * 1.05, y0 + 9, pot.c[2] + dz * pot.r * 1.05];
-        capsule(out, base, tip, 0.42, MAT.spoon, 10, 3);
-        capsule(out, tip, [tip[0] + dx * 0.3, tip[1] + 1.6, tip[2] + dz * 0.3], 0.62, MAT.spoon, 10, 3);
-        continue;
-      }
+    // (a pot's cork, askew: drawn from the same triangles it's met as)
+    if (s.cork) {
+      const { tris, norms } = s.cork;
+      for (let i = 0; i < tris.length; i += 3) out.push(tris[i], tris[i + 1], tris[i + 2], norms[i], norms[i + 1], norms[i + 2], MAT.cork, tris[i] * 0.5, tris[i + 2] * 0.5);
+      continue;
     }
     // (the honey pooled round a jar's foot: a ring on the stand, drawn as a liquid that spreads as the level goes on
     // (main.ts, MAT.honeyPool); u out from the glass in cm, v the angle from its front)
