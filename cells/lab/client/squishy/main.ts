@@ -1328,15 +1328,16 @@ void main() {
   // A hollow soap film: nearly cancelling interfaces at the centre.
   vec2 bend = vec2(dot(n, uRight), dot(n, uUp)) * (.003 + .006 * edge) * pow(edge, 1.35);
   vec3 through = texture(uScene, clamp(uv + bend, vec2(.001), vec2(.999))).rgb;
-  float fresnel = .025 + .975 * pow(edge, 5.);
+  float fresnel = .05 + .95 * pow(edge, 3.);
   vec3 reflected = tonemap(env(reflect(-V, n)) * .8);
-  vec3 c = mix(through, reflected, clamp(fresnel * .77, .02, .82));
+  vec3 c = mix(through, reflected, clamp(fresnel * .85, .05, .85));
   vec3 iridescence = .5 + .5 * cos(6.283185 * (nv * 1.55 + dot(n, uWin) * .12 + vec3(0., .34, .68)));
-  c += iridescence * .07 * pow(edge, 2.4);
+  // (enough of its film's colour and the room in it that it reads as a bubble, still mostly clear face on)
+  c += iridescence * (.03 + .26 * pow(edge, 1.6));
   vec3 R = reflect(-V, n);
   float sun = pow(max(dot(R, uKey), 0.), 260.);
   float window = pow(max(dot(R, uWin), 0.), 54.);
-  c += uKeyCol * (sun * .30 + window * .04) * (.3 + .7 * edge);
+  c += uKeyCol * (sun * .9 + window * .3) * (.4 + .6 * edge);
   o = vec4(c, 1.);
 }`;
 
@@ -3442,8 +3443,9 @@ function frame(now: number) {
     gl.uniform2f(u(bubbleProg, 'uRes'), W, H);
     gl.uniform1i(u(bubbleProg, 'uScene'), 1);
     gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.BACK);
+    // (no culling: a bubble's wound inside out for this; its near shell is the half whose normal faces the eye, and
+    // the shader keeps only that)
+    gl.disable(gl.CULL_FACE);
     gl.disable(gl.BLEND);
     gl.depthMask(false);
     for (const b of liveBubbles) {

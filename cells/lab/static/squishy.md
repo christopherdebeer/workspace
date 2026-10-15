@@ -539,7 +539,9 @@ shimmers far off. The counter's oiled, a faint sheen over it the dry chopping bo
 is crisper.
 
 `?bench=look` is a still life to judge all this by (the dumpling on a cloth on cookbooks, a mango
-pudding on a cake stand, a konjac on a crate, a plate on a stool, the painted bench and its towel);
+pudding on a cake stand, a konjac on a crate, a plate on a stool, the painted bench and its towel;
+and round them what's live, wet or clear: the honey jar with its runs and pool, the soap dish's bubbles, a
+buttered tray, the butter dish, a pot and its lid, a pan, a loaf, a sponge);
 `?light=morning|noon|shade` sets the light (low and warm, the default; high and white; the sun off
 the window, the room's light only); `?view=ex,ey,ez,tx,ty,tz` holds the camera; `?bakeview` shows
 only what's baked (`?bakeview=colour`, its colour too), `?nobake` leaves it out; `?perf` shows how
