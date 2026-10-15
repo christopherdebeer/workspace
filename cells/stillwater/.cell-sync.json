@@ -1,8 +1,8 @@
 {
   "cell": "c15r/stillwater",
   "cellId": "stillwater-558c2ef9",
-  "treeVersion": "tree:f3212290662615396919bf9040bc4b1e4e153f0cf8c29cb76876f5c16bc59b5d",
-  "syncedAt": "2026-09-30T18:44:58.402Z",
+  "treeVersion": "tree:5aea678292b90624baa2c436265df34379b397052266f7ed1488d396da8c31a9",
+  "syncedAt": "2026-10-15T14:27:09.881Z",
   "files": {
     "ENVIRONMENT-STATE.md": "sha256:f8fd9a3f3931d83488a6fc2612b7ef4c425f9d3b7a0c88c868c320421bcfdfe9",
     "INTERACTION.md": "sha256:9e662f8561006136cdabef65f19ece2f27164a517c16da04922db8a7cd77f792",
@@ -21,7 +21,7 @@
     "client/gl.ts": "sha256:7d472f7c58a3ce087fdfc6a5e50b60ddea8303cbb18e5ebd096a180972158450",
     "client/glyphs.ts": "sha256:bd8fbe107d7120c49275e57e032a3f7366f4fdb1686e10a8ea3949ebd6a723aa",
     "client/learning.ts": "sha256:829309c0c531ed88b18e57ad578e27518d7ca207ba27616970405261149cb1e0",
-    "client/main.ts": "sha256:924ec9756d93730025af28296be09d6d8b2b59a150ed7e946560b3367011e042",
+    "client/main.ts": "sha256:278ecfd78829f5deb840a6e5975224a1870560873eee2361e7f40ba86b4d7e4f",
     "client/notebook.ts": "sha256:6e37c6d8d5db29b05fd49dbb367626e523e28e611627f3a974269f7a4bca3b6e",
     "client/numeracy.ts": "sha256:0a80505236aebe4caab051fee6c836d8c46ab2e5897332e1400e1d8fc610364a",
     "client/perf.ts": "sha256:51304389169d2c6ce610180301eaac5e3b13443a5dff66d06352bd9a5c4a2d06",
@@ -32,7 +32,7 @@
     "client/ui.ts": "sha256:ba3f3c57f08a3508fd3956ba7660228158fd4216e4447a46e81511f06185e8cb",
     "client/world.ts": "sha256:163158ccc8cb415819d64240c3162fc04e73939b5337c2d836b679c6494d7a45",
     "index.ts": "sha256:1ff0dd274bf7f3f9858290c144d6acac14646a6be45ebf5f6ddd31333a1abbdc",
-    "static/index.html": "sha256:ac2e2e13df6c25fd13e7f5cd7a1c3143db864a4f5beb884e39fb82746d0e384e",
+    "static/index.html": "sha256:363e59ba6894a1cb5d7604e04b409076fa9525516a74a8fe72cd6abbd77ae26d",
     "tests/challenges.test.cjs": "sha256:9b374dfde78def9c257d9eebfccf3d3a28701d79ade0e6a844e99f8cae967f71",
     "tsconfig.json": "sha256:7f810c55dd1ac18c2cee979d7b1e5cf5a6f3233b8029b80c00e15602e284f0d0"
   }
