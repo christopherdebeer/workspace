@@ -56,6 +56,15 @@
     /* the title: the name, and what to do */
     #menu { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; padding-top: calc(max(12px, env(safe-area-inset-top)) + 8vh); pointer-events: none; }
     .title #menu { display: flex; animation: menuIn .9s ease-out both; }
+    /* (taller than the glass, on a phone: it scrolls; and past the first card, the name small, out of the way) */
+    #menu { overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(24px + env(safe-area-inset-bottom)); box-sizing: border-box; }
+    #menu.deep { pointer-events: auto; padding-top: calc(max(10px, env(safe-area-inset-top)) + 2vh); }
+    #menu.deep #logo { width: min(46vw, 220px); }
+    #menu .choices { flex-shrink: 0; }
+    /* (paused: a veil over the level, still behind it; the first button's to go back to it) */
+    .paused #menu { background: rgba(250,240,220,.35); pointer-events: auto; animation: none; }
+    .paused #menu #new.primary { width: min(76vw, 320px); height: 60px; line-height: 54px; font-size: 23px; border: 3px solid #4b2614; box-shadow: inset 0 3px 0 rgba(255,255,255,.9), inset 0 -4px 0 rgba(170,120,60,.22), 0 6px 16px rgba(60,30,10,.28); }
+    @media (max-height: 760px) { .card .row { padding: 6px 0; } .big { height: 52px; line-height: 46px; font-size: 21px; } .big.primary { height: 58px; line-height: 50px; } .choices { gap: 10px; margin-top: 2vh; } }
     .title #hands, .title #status, .title #top, .title #title { display: none; }
     @keyframes menuIn { from { opacity: 0; transform: translateY(10px); } }
     #logo { width: min(92vw, 480px); filter: drop-shadow(0 7px 10px rgba(60,30,10,.35)); animation: bob 4.5s ease-in-out infinite; transform-origin: 50% 80%; }
@@ -96,9 +105,11 @@
   <div id="menu">
     <div id="logo"></div>
     <div class="choices" id="main">
+      <button class="big primary" id="resume" hidden>Resume</button>
       <button class="big primary" id="new">New Game</button>
       <button class="big" id="cont" hidden>Continue</button>
       <button class="big" id="opts">Settings</button>
+      <button class="big" id="totitle" hidden>Leave the level</button>
     </div>
     <div class="choices" id="settings" hidden>
       <div class="card">

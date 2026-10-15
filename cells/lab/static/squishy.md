@@ -20,7 +20,7 @@ of them hops. New Game starts at the beginning; Continue, once you've got
 somewhere, where you left off; Settings has the sound, which dumpling (once the jelly's come),
 and any level you've reached to start at (a level's open once the one before it's been got home;
 the jelly's yours once the sink's last level, 12, has been). `?lab` opens everything, with a level back and on, and the
-dumpling either way, at the foot of the glass. In play, the word `menu` at the bottom comes back here. (A link to a
+dumpling either way, at the foot of the glass. In play, the word `menu` at the bottom pauses the level behind the menu (nothing moves, the clock stops): *Resume* goes back to it, Settings changes apply when you do, and *Leave the level* goes to the title. (A link to a
 level, `?level=3`, goes straight to it.)
 
 Settings also has the **aim**, on a continuum: *easy*, the arc (dots along the flick, all the way) and the

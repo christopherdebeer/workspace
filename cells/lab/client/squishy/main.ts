@@ -1977,6 +1977,7 @@ function flyCamera(dt: number) {
 }
 function updateCamera(dt: number) {
   if (mode === 'title') { titleCamera(dt); return; }
+  if (mode === 'pause') return;
   if (fly >= 0) { flyCamera(dt); return; }
   // (it follows easily; but if it's got near the edge of the glass, or off it, it catches up at once)
   const on = screenOf(body.com);
@@ -2102,6 +2103,7 @@ function pick(x: number, y: number, b: Dumpling = body): number {
 canvas.addEventListener('pointerdown', (e) => {
   wake();
   if (mode === 'title') { toyDown(e); return; }
+  if (mode === 'pause') return;
   // (the way over the level, cut short by a touch, which goes on to be what it would be: from there, play)
   if (fly >= 0) fly = -1;
   canvas.setPointerCapture(e.pointerId);
@@ -2229,6 +2231,7 @@ canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.5, Math.min(2.5, zoom * Math.exp(-e.deltaY * 0.0012))); }, { passive: false });
 addEventListener('keydown', (e) => {
   if (mode === 'title') { if (e.key === 'Enter') play(1); return; }
+  if (mode === 'pause') { if (e.key === 'Enter' || e.key === 'Escape') resume(); return; }
   if (fly >= 0) fly = -1;
   if (e.key === 'ArrowLeft') { camYaw += 0.15; orbit.at = simTime; }
   else if (e.key === 'ArrowRight') { camYaw -= 0.15; orbit.at = simTime; }
@@ -2263,7 +2266,7 @@ btn('sound', toggleSound);
 
 // ─── the title: the name, New Game, Continue, Settings; the place behind it, the dumpling and its friend ─────
 /** the title or playing; on the title, which way the camera looks (toward the course), the level the settings would start, and which card is up */
-let mode: 'title' | 'play' = auto || benchName || params.has('level') || params.has('skin') ? 'play' : 'title';
+let mode: 'title' | 'play' | 'pause' = auto || benchName || params.has('level') || params.has('skin') ? 'play' : 'title';
 let titleYaw = 0, pickN = 1, card: 'main' | 'settings' | 'benches' = 'main';
 let hopAt = 2.5, hopWho = 0;
 const saved = () => { try { return Number(localStorage.getItem(STORE + ':level')) || 0; } catch { return 0; } };
@@ -2314,12 +2317,17 @@ function keepSeated(dt: number) {
 function play(n: number) {
   mode = 'play';
   buddy = null; toy = null; seats = [];
-  document.body.classList.remove('title');
+  document.body.classList.remove('title', 'paused');
   startLevel(n);
 }
 /** The title's cards as they are: Continue only with somewhere to continue to; the settings' values. */
 function showMenu() {
-  if (mode !== 'title') return;
+  if (mode !== 'title' && mode !== 'pause') return;
+  const paused = mode === 'pause';
+  $('resume').hidden = !paused;
+  $('resume').innerHTML = `Resume<small>level ${levelN}</small>`;
+  $('totitle').hidden = !paused;
+  document.getElementById('menu')!.classList.toggle('deep', card !== 'main');
   $('main').hidden = card !== 'main';
   $('settings').hidden = card !== 'settings';
   $('benches').hidden = card !== 'benches';
@@ -2328,7 +2336,7 @@ function showMenu() {
   $('s-aim').textContent = AIM_ABOUT[aimMode];
   const at = saved();
   const cont = $('cont');
-  cont.hidden = at <= 1;
+  cont.hidden = at <= 1 || paused;
   cont.innerHTML = `Continue<small>level ${at}</small>`;
   $('s-sound').textContent = soundOn ? 'on' : 'off';
   const sk = $('s-skin');
@@ -2367,6 +2375,7 @@ btn('s-prev', () => { pickN = Math.max(1, pickN - 1); showMenu(); });
 btn('s-next', () => { pickN = Math.min(lab ? 24 : Math.min(24, reachedNow()), pickN + 1); showMenu(); });
 btn('s-skin', () => {
   if (!jellyOpen) return;
+  if (mode === 'pause') { $('skin').click(); showMenu(); return; }
   skin = skin === 'jelly' ? 'dough' : 'jelly';
   try { localStorage.setItem(STORE + ':skin', skin); } catch { /* */ }
   showSkin();
@@ -2374,8 +2383,26 @@ btn('s-skin', () => {
   card = 'settings';
   showMenu();
 });
-// (from a bench, the menu's the game's own title: the bench was a page of its own)
-btn('tomenu', () => { if (benchName) location.search = ''; else startTitle(); });
+/** The menu in play: the level held where it is behind it (nothing moves, the clock stops), to change a setting and
+ * come back to, or to leave. From a bench, the game's own title: the bench was a page of its own. */
+function pause() {
+  if (benchName) { location.search = ''; return; }
+  mode = 'pause';
+  pull = null; aimNow = null; pushNow = null; body.squeeze = null;
+  document.body.classList.add('title', 'paused');
+  card = 'main';
+  pickN = levelN;
+  showMenu();
+}
+function resume() {
+  if (mode !== 'pause') return;
+  mode = 'play';
+  document.body.classList.remove('title', 'paused');
+}
+btn('tomenu', pause);
+btn('resume', resume);
+// (from the paused menu, the title itself: the level left)
+btn('totitle', () => { document.body.classList.remove('paused'); startTitle(); });
 /** On the title: the two of them sat there, now and then one hopping, a little, where it is. */
 function titleTick(dt: number) {
   body.step(lv, dt, simTime);
@@ -3306,6 +3333,7 @@ function groundAlong(p: V3, d: V3, max = 160): { p: V3; n: V3 } | null {
 /** A step of the game: the dumpling; where it's stood, falling, home; a flick asked for in the air; the autopilot. */
 function tick(dt: number) {
   if (mode === 'title') { titleTick(dt); return; }
+  if (mode === 'pause') return;
   body.step(lv, dt, simTime);
   simTime += dt;
   if (home < 0 && fly < 0) clock += dt;
