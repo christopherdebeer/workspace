@@ -6,6 +6,11 @@
  * A new experiment: its folder under client/, a line here, a page in static/, an entry in
  * ../experiments.ts.
  */
+import { noPageZoom } from './kit/nozoom';
+
+// (the page itself never zooms: each experiment zooms its own way)
+noPageZoom();
+
 const experiments: Record<string, () => Promise<unknown>> = {
   mistwood: () => import('./mistwood/main'),
   plate: () => import('./plate/main'),
