@@ -378,7 +378,7 @@ export class Dumpling {
    * of it a little, the way it's pushed along the ground (so a poke at its back rolls it on; at
    * its top, it dents and wobbles where it is).
    */
-  poke(at: V3, dir: V3, roll = true) {
+  poke(at: V3, dir: V3, roll = true, k = 1) {
     const x = this.x, v = this.v;
     // (hanging from a rail: prodded along it, away from the side it's prodded on; no more than that)
     const rl = this.onRail;
@@ -399,14 +399,15 @@ export class Dumpling {
     for (let j = 0; j < this.n; j++) {
       const d = Math.hypot(x[j * 3] - at[0], x[j * 3 + 1] - at[1], x[j * 3 + 2] - at[2]);
       if (d >= POKE_R) continue;
-      const k = POKE * (1 - d / POKE_R) ** 2;
-      v[j * 3] += dir[0] * k; v[j * 3 + 1] += dir[1] * k; v[j * 3 + 2] += dir[2] * k;
+      const kk = k * POKE * (1 - d / POKE_R) ** 2;
+      v[j * 3] += dir[0] * kk; v[j * 3 + 1] += dir[1] * kk; v[j * 3 + 2] += dir[2] * kk;
     }
     // (along the ground, it goes as far as the poke is along the ground: a level poke, a roll; a poke from above, hardly any)
     const h = Math.hypot(dir[0], dir[2]);
     if (roll && h > 1e-3) {
-      const ax = (dir[0] / h) * POKE_ROLL * h, az = (dir[2] / h) * POKE_ROLL * h;
-      this.flick([this.vcom[0] + ax, this.vcom[1] + POKE_UP * h, this.vcom[2] + az], 0.5 * h);
+      // (and pushed up from underneath, it hops a little: a poke low on its side lifts it as it rolls)
+      const ax = (dir[0] / h) * POKE_ROLL * h * k, az = (dir[2] / h) * POKE_ROLL * h * k;
+      this.flick([this.vcom[0] + ax, this.vcom[1] + (POKE_UP * h + POKE_ROLL * 1.3 * Math.max(0, dir[1])) * k, this.vcom[2] + az], 0.5 * h * k);
     } else this.sinceFlick = 0;
   }
   /** Hanging from a rail: shimmied along it a hand's width (so many), `dir` (+1, toward its far end; -1, back), hand over hand. */
