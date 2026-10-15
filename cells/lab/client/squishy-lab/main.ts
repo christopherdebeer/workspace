@@ -27,7 +27,7 @@ const colour=(top:string)=>top==='goal'?'#b18a48':top==='jelly'||top==='pudding'
 const tint=(e:Edge)=>e.status==='confirmed'?'#3e8065':e.status==='failed'?'#b45c5c':e.status==='marginal'?'#c0763f':'#bf9258';
 const pc=(n:number)=>Math.round(n*100)+'%';
 const OUT:Record<string,string>={target:'#3e8065',fall:'#b45c5c',rest:'#c9a24a',timeout:'#9a958a'};
-const outColour=(k:string)=>OUT[k]??'#6f8fb3';
+const outColour=(k:string)=>OUT[k]??(k.startsWith('rim ')?'#8fb39c':'#6f8fb3');
 const target=(t:Tower)=>t.top==='goal'?'home':t.top;
 // Single-seed spatial composition: shared geometry, visibility, route morphology.
 type Variant=Composition;
@@ -160,7 +160,7 @@ function edgeInfo(e:Edge,i:number) {
 /** a move's neighbourhood, in px of drag about the witness: what each flick did, where the ring showed the target, the best aim and its σ, and flicks played from the same top */
 function mapSvg(e:Edge,m:ControlMap):string{
   const S=240,pad=18,sc=(S-2*pad)/(2*m.span),cx=(u:number)=>S/2+u*sc,cy=(v:number)=>S/2-v*sc,h=m.step*sc;
-  const cells=m.cells.map(c=>{const k=c.out==='other'?'top '+c.at:c.out;return '<rect x="'+f(cx(c.u)-h/2)+'" y="'+f(cy(c.v)-h/2)+'" width="'+f(h)+'" height="'+f(h)+'" fill="'+outColour(k)+'" fill-opacity="'+(c.sampled?.88:.72)+'"><title>'+esc(k+' · '+c.u+', '+c.v+' px'+(c.sampled?'':' (between flicks that agree)'))+'</title></rect>';}).join('');
+  const cells=m.cells.map(c=>{const k=c.out==='other'?'top '+c.at:c.out==='rest'&&c.at>=0?'rim '+c.at:c.out;return '<rect x="'+f(cx(c.u)-h/2)+'" y="'+f(cy(c.v)-h/2)+'" width="'+f(h)+'" height="'+f(h)+'" fill="'+outColour(k)+'" fill-opacity="'+(c.sampled?.88:.72)+'"><title>'+esc(k+' · '+c.u+', '+c.v+' px'+(c.sampled?'':' (between flicks that agree)'))+'</title></rect>';}).join('');
   const ring=m.cells.filter(c=>c.ring===e.to).map(c=>'<circle cx="'+f(cx(c.u))+'" cy="'+f(cy(c.v))+'" r="1.3" fill="#fff" fill-opacity=".9"/>').join('');
   const b=m.best;
   const played=flicks.filter(q=>q.from===e.from).map(q=>{const [u,v]=toPx(m.centre,{...m.centre,yaw:q.yaw,power:q.power});if(Math.abs(u)>m.span*1.4||Math.abs(v)>m.span*1.4)return '';return '<circle cx="'+f(cx(u))+'" cy="'+f(cy(v))+'" r="3.2" fill="none" stroke="'+(q.to===e.to?'#1f5d45':q.to===-1?'#8c2f2f':'#333')+'" stroke-width="1.6"><title>played: '+(q.to===undefined?'unsettled':q.to===-1?'fell':'stood on '+q.to)+'</title></circle>';}).join('');
@@ -171,8 +171,8 @@ function mapSvg(e:Edge,m:ControlMap):string{
     '<text x="'+(S/2)+'" y="'+(S-4)+'" font-size="9" text-anchor="middle" fill="#6b6253">← across the drag (px) →</text><text x="9" y="'+(S/2)+'" font-size="9" fill="#6b6253" transform="rotate(-90 9 '+(S/2)+')" text-anchor="middle">shorter · drag · longer</text></svg>';
 }
 function legend(m:ControlMap):string{
-  const keys=[...new Set(m.cells.map(c=>c.out==='other'?'top '+c.at:c.out))];
-  return '<p class="maplegend">'+keys.map(k=>'<span><i style="background:'+outColour(k)+'"></i>'+esc(k==='target'?'lands':k==='rest'?'stops off any top':k==='fall'?'falls (back where it was)':k==='timeout'?'still going':'onto '+k)+'</span>').join('')+'<span>white dots: the ring on the target · solid circle: σ round the best aim · dashed: tolerance · cross: witness · rings: flicks played</span></p>';
+  const keys=[...new Set(m.cells.map(c=>c.out==='other'?'top '+c.at:c.out==='rest'&&c.at>=0?'rim '+c.at:c.out))];
+  return '<p class="maplegend">'+keys.map(k=>'<span><i style="background:'+outColour(k)+'"></i>'+esc(k==='target'?'lands':k==='rest'?'stops off any top':k==='fall'?'falls (back where it was)':k==='timeout'?'still going':k.startsWith('rim ')?'on the rim of '+k.slice(4)+(Number(k.slice(4))===m.to?' (the target)':''):'onto '+k)+'</span>').join('')+'<span>white dots: the ring on the target · solid circle: σ round the best aim · dashed: tolerance · cross: witness · rings: flicks played</span></p>';
 }
 function edgeDetails(e:Edge):string{
   const m=e.map,v=e.validation,multi=composite(a.lv,e);
@@ -226,7 +226,7 @@ async function scan() {
     if(id!==scanToken)return;
     const [from,to]=candidates[k];
     try {
-      const e=discover(a.lv,from,to);
+      const e=discover(a.lv,from,to,a.skin);
       if(e&&!found.has(from+':'+to)){a.edges.push(e);found.add(from+':'+to);}
     }catch(err){a.message='Solver failed at '+from+' → '+to+': '+String(err);}
     a.tested=k+1;

@@ -97,15 +97,16 @@ export function candidatePairs(lv: Level): Array<[number, number]> {
  * dumpling actually stands; otherwise the plain sweep. In the sweep, the middle of the widest run of landing
  * powers, not its end: the witness should have room either side.
  */
-export function discover(lv: Level, from: number, to: number): Edge | null {
-  const a=lv.towers[from], b=lv.towers[to], origin=standing(lv,from);
+export function discover(lv: Level, from: number, to: number, skin: 'dough'|'jelly' = 'dough'): Edge | null {
+  // (aimed from where the dumpling really comes to rest on it — on a tilted or slippery top, not where it's set down)
+  const a=lv.towers[from], b=lv.towers[to], origin=settledAt(lv,from,0,skin);
   const special = !!(b.wall || b.rail || a.rail || a.jar || b.land?.[0]?.lift || a.land?.[0]?.lift);
   if (special || to===from+1 || !!lv.ways?.some(([i,j])=>i===from&&j===to)) {
     const witness=hop(lv,from,to);
     if (witness) {
-      const c=aim(lv,origin,to,witness.t);
+      const rest=witness.t?settledAt(lv,from,witness.t,skin):origin, c=aim(lv,rest,to,witness.t);
       if (c) return {from,to,control:{yaw:c.yaw,power:c.power,spin:0,phase:witness.t},trajectory:witness.flights[0] ?? [],status:'predicted',method:'hop'};
-      if (special) return {from,to,control:{yaw:Math.atan2(b.at[0]-origin[0],b.at[2]-origin[2]),power:.5,spin:0,phase:witness.t},trajectory:witness.flights[0] ?? [],status:'predicted',method:'hop'};
+      if (special) return {from,to,control:{yaw:Math.atan2(b.at[0]-rest[0],b.at[2]-rest[2]),power:.5,spin:0,phase:witness.t},trajectory:witness.flights[0] ?? [],status:'predicted',method:'hop'};
     }
     if (special) return null;
   }
@@ -136,18 +137,18 @@ function resetDynamics(lv:Level) {
   }
   moveShapes(lv,0);
 }
-/** Real Dumpling.step at the game's fixed 1/60, from a body settled on the source for `settle` frames; each
- * trial is reset so mutable jelly/lid state can't leak between them. Ends: settled on a top (target or
- * other), below the kill line (a fall: the game puts you back on the top you left), at rest somewhere that
- * isn't a top, or still going after 3.5 s.
+/** Real Dumpling.step at the game's fixed 1/60, from the dumpling at rest on the source as it would be there
+ * (see startBody), `wait` frames later; each trial is reset so mutable jelly/lid state can't leak between
+ * them. Ends: settled on a top (target or other), below the kill line (a fall: the game puts you back on the
+ * top you left), at rest off any top (on a top's rim, or nowhere), or still going after 3.5 s.
  */
-export function simulate(lv:Level, from:number, to:number, control:Control, skin:'dough'|'jelly', record=true, settle=20):Trial {
+export function simulate(lv:Level, from:number, to:number, control:Control, skin:'dough'|'jelly', record=true, wait=0):Trial {
   resetDynamics(lv);
-  const body=new Dumpling(standing(lv,from,control.phase),skin);
-  let t=control.phase;
-  const dt=1/60;
-  for(let i=0;i<settle;i++){body.step(lv,dt,t);t+=dt;}
-  const origin=body.com;
+  const start=startBody(lv,from,control.phase,skin);
+  const body=start.body,dt=1/60;
+  let t=start.t;
+  for(let i=0;i<wait;i++){body.step(lv,dt,t);t+=dt;}
+  const t0=t,origin=body.com;
   const trace:V3[]=record?[[...origin] as V3]:[];
   body.flick(launch(control.yaw,control.power),control.spin);
   let stable=0,still=0,last:Outcome='timeout',landedAt=-1;
@@ -160,22 +161,78 @@ export function simulate(lv:Level, from:number, to:number, control:Control, skin
     stable=quiet&&k>=0?stable+1:0;
     if(stable>=9 && i>=8){ last=k===to?'target':'other';landedAt=k;break; }
     still=quiet&&k<0&&body.moving<15?still+1:0;
-    if(still>=30){ last='rest';break; }
+    // (at rest off any top: on the rim of one, draped or clinging — flickable on from, though the game won't count it stood on — or nowhere)
+    if(still>=30){ last='rest';landedAt=towerAt(lv,body.com,4);break; }
   }
   const end=[...body.com] as V3;
   resetDynamics(lv);
-  return {outcome:last,landedAt,trace,duration:t-control.phase,end};
+  return {outcome:last,landedAt,trace,duration:t-t0,end};
 }
-/** where the dumpling would stand to flick this move from: the settled body, as the game has it */
+/** Let a body come to rest as the game waits for it: at least `min` frames, then until it has sat still
+ * (barely drifting, touching) for a fifth of a second — on a tilted or slippery top it slides first, and the
+ * game won't take a flick till it's done. At most four seconds. Returns the time reached. */
+function settleBody(lv:Level,body:Dumpling,t:number,min:number):number{
+  let still=0;
+  for(let i=0;i<240;i++){
+    body.step(lv,1/60,t);t+=1/60;
+    still=body.contacts>0&&body.moving<6&&body.sinceContact<.12?still+1:0;
+    if(i>=min&&still>=12)break;
+  }
+  return t;
+}
+/** a copy of a body, every particle and every state, so many flicks can start from one arrival */
+function cloneBody(b:Dumpling):Dumpling{
+  const c=Object.create(Object.getPrototypeOf(b)) as Dumpling;
+  for(const [k,v] of Object.entries(b)){
+    (c as unknown as Record<string,unknown>)[k]=ArrayBuffer.isView(v)?(v as unknown as Float32Array).slice():Array.isArray(v)?v.map(x=>Array.isArray(x)?[...x]:x):v;
+  }
+  return c;
+}
+/** How the dumpling comes to rest on a top matters (on a slope, a different place; on a jelly, a different
+ * give): so it's taken as it arrives — the move onto it from the top before (on the generator's sure route)
+ * played with the real body, at rest. The start, and where it's set down when there's no way on to it that
+ * lands (and where the game sets it down after a fall), placed and settled. Kept per level.
+ */
+const arrivals=new WeakMap<Level,Map<string,{body:Dumpling;t:number}|null>>();
+function arrival(lv:Level,at:number,skin:'dough'|'jelly'):{body:Dumpling;t:number}|null{
+  const memo=arrivals.get(lv)??new Map();arrivals.set(lv,memo);
+  const k=skin+':'+at;
+  if(memo.has(k))return memo.get(k)!;
+  memo.set(k,null);
+  const route=lv.route??lv.towers.map((_,i)=>i),ri=route.indexOf(at),pred=ri>0?route[ri-1]:at-1;
+  if(at===0||pred<0)return null;
+  const e=discover(lv,pred,at,skin);
+  if(!e||composite(lv,e))return null;
+  resetDynamics(lv);
+  const s=startBody(lv,pred,e.control.phase,skin),body=s.body;
+  let t=s.t,still=0,got:{body:Dumpling;t:number}|null=null;
+  body.flick(launch(e.control.yaw,e.control.power),e.control.spin);
+  for(let i=0;i<400;i++){
+    body.step(lv,1/60,t);t+=1/60;
+    if(body.com[1]<lv.kill)break;
+    still=body.contacts>0&&body.moving<6&&body.sinceContact<.12&&towerAt(lv,body.com,1)===at?still+1:0;
+    if(i>20&&still>=12){got={body:cloneBody(body),t};break;}
+  }
+  resetDynamics(lv);
+  memo.set(k,got);
+  return got;
+}
+/** the dumpling ready to flick from a top: as it arrives there, or set down and settled */
+function startBody(lv:Level,from:number,phase:number,skin:'dough'|'jelly'):{body:Dumpling;t:number}{
+  const got=arrival(lv,from,skin);
+  if(got)return {body:cloneBody(got.body),t:got.t};
+  const body=new Dumpling(standing(lv,from,phase),skin);
+  return {body,t:settleBody(lv,body,phase,20)};
+}
+/** where the dumpling stands to flick from a top, as startBody has it */
 export function settledAt(lv:Level, from:number, phase:number, skin:'dough'|'jelly'):V3 {
   resetDynamics(lv);
-  const body=new Dumpling(standing(lv,from,phase),skin);
-  let t=phase;
-  for(let i=0;i<20;i++){body.step(lv,1/60,t);t+=1/60;}
-  const at=[...body.com] as V3;
+  const at=[...startBody(lv,from,phase,skin).body.com] as V3;
   resetDynamics(lv);
   return at;
 }
+/** whether a top's start is the dumpling as it arrives (true) or as it's set down */
+export const arrived=(lv:Level,from:number,skin:'dough'|'jelly')=>!!arrival(lv,from,skin);
 
 /** Trials of a move as a player makes it: the aim, off by normally distributed drag error (σ px across and
  * along), each a real full-body flick; plus the aim itself after resting a different while. Confirmed when the
@@ -196,7 +253,7 @@ export function verify(a:Analysis,e:Edge,trials=12,sigma=4):Edge {
     outcomes[s.outcome]++;if(i<3)traces.push(s.trace);last=s.outcome;landedAt=s.landedAt;
   }
   let held=0;const waits=[45,90,180];
-  for(const w of waits)if(simulate(a.lv,e.from,e.to,{...centre,phase:centre.phase+w/60},a.skin,false,w).outcome==='target')held++;
+  for(const w of waits)if(simulate(a.lv,e.from,e.to,centre,a.skin,false,w).outcome==='target')held++;
   const iv=wilson(outcomes.target,trials);
   e.validation={outcomes,total:trials,traces,last,landedAt,rate:outcomes.target/trials,wilson:iv,sigma,timing:[held,waits.length]};
   e.status=iv[0]>=.5?'confirmed':outcomes.target===0?'failed':'marginal';
@@ -218,7 +275,7 @@ export interface ControlMap {
   /** what the aim ring (where it's shown) would have said: of cells where it shows on the target, how many land; of landings, how many it showed */
   ring: { green: number; greenLand: number; land: number };
 }
-const key = (o: Outcome, at: number) => (o === 'other' ? 'top ' + at : o);
+const key = (o: Outcome, at: number) => (o === 'other' ? 'top ' + at : o === 'rest' && at >= 0 ? 'rim ' + at : o);
 /** Map a move's neighbourhood in drag px with the real body. A generator: it yields after each flick so a page
  * can show progress; drain it in Node.
  */
@@ -326,7 +383,7 @@ export function chain(lv: Level, maps: ControlMap[]): Chain {
       if (!m) continue;
       let stay = 0, s = 0;
       for (const [k, p] of Object.entries(m.best.dest)) {
-        const to = k === 'target' ? m.to : k.startsWith('top ') ? Number(k.slice(4)) : i;
+        const to = k === 'target' ? m.to : k.startsWith('top ') || k.startsWith('rim ') ? Number(k.slice(4)) : i;
         if (k === 'fall') s += p;
         if (to === i) stay += p; else s += p * S[to];
       }
@@ -334,12 +391,12 @@ export function chain(lv: Level, maps: ControlMap[]): Chain {
     }
   }
   const forks = [...moves].filter(([, ms]) => ms.length > 1).map(([at, ms]) => ({ at, options: ms.map((m) => ({ to: m.to, flicks: solveOne(m, V, at), p: m.best.p })).sort((x, y) => x.flicks - y.flicks) }));
-  return { flicks: V, splats: S, policy: pol, forks, assumption: 'A fall puts you back on the top you left (the game); at rest off any top costs one more flick to get back (assumed, not yet measured). Each move at its best aim under the map\'s σ.' };
+  return { flicks: V, splats: S, policy: pol, forks, assumption: 'A fall puts you back on the top you left (the game); at rest on a top\'s rim counts as being there (flickable on, though no checkpoint); at rest nowhere near a top costs one more flick to get back (assumed, not yet measured). Each move at its best aim under the map\'s σ.' };
 }
 function solveOne(m: ControlMap, V: number[], i: number): number {
   let stay = 0, rest = 1;
   for (const [k, p] of Object.entries(m.best.dest)) {
-    const to = k === 'target' ? m.to : k.startsWith('top ') ? Number(k.slice(4)) : i;
+    const to = k === 'target' ? m.to : k.startsWith('top ') || k.startsWith('rim ') ? Number(k.slice(4)) : i;
     if (to === i) { stay += p; if (k === 'rest' || k === 'timeout') rest += p; } else rest += p * V[to];
   }
   return stay < 0.999 ? rest / (1 - stay) : Infinity;

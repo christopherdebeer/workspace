@@ -20,7 +20,7 @@ const a = E.makeLevel(level, seed, skin);
 console.log(`level ${level} seed ${seed} · fingerprint ${a.fingerprint} · ${a.lv.towers.length} tops · built in ${Date.now() - t0} ms`);
 for (const [f, t] of E.candidatePairs(a.lv)) {
   if (only?.length && !only.some(([x, y]) => x === f && y === t)) continue;
-  const e = E.discover(a.lv, f, t);
+  const e = E.discover(a.lv, f, t, skin);
   if (e) a.edges.push(e);
 }
 const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '∞');
