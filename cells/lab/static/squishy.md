@@ -38,7 +38,7 @@ with a line on what it is (`?bench=breakfast`, `jelly`, `puddings`, `breads`, `c
 | | Touch | Mouse and keys |
 |---|---|---|
 | flick | take hold of it, drag back (toward you, or to the side) and let go | the same |
-| spin | swipe as you let go: on, the way it will fly, for topspin; back, for backspin | the same |
+| spin | hold still, then snap and let go: on, toward the dumpling, for topspin; back, for backspin | the same |
 | poke | tap it: it dents where you tapped, and rolls away from your finger | click it |
 | roll | push it on, up the glass, the way you want it to go: it rolls that way, as hard as you pushed (dots along what it's on show how far; red, if it'd roll off an edge) | the same |
 | climb | stuck to a wall: take hold, aim into the wall and let go | the same |
@@ -55,11 +55,20 @@ the glass shows how hard. Its middle flies a true parabola, so the arc is exact 
 touches something. You can only flick from something, but a flick let go in the air waits a
 moment (a third of a second) and goes as it touches.
 
-A finger lifted still flicks just as aimed. A finger *swiped* as it lets go gives spin, and the
-aim is taken from before the swipe, so the swipe doesn't change where it goes. Swiped on, the
-way it will fly, it has topspin: it rolls on when it lands, two or three times as far, which is
-how you cross a pan or reach the far side of a board. Swiped back, it has backspin: it bites
-where it lands and stays, even on butter. A word at the bottom says which you gave it.
+A hold on the dumpling is one gesture or the other: once the finger's gone a little way (18 px),
+it's a pull (a flick) or a push (a roll), by which way it went first, and it stays that till you
+let go — a pull can come round to aim any way, toward you even, without turning into a push. Back
+into the middle where it began, it's undecided again. Let go before it's gone that far, soon, and
+it's a poke.
+
+A finger lifted flicks just as aimed, still or moving: a fast pull let go of on the move is a
+plain flick, from where you let go. Spin is a *snap*: hold still a moment (a tenth of a second),
+then snap away and let go, quickly (within about a sixth of a second, 25 px or more, fast). The
+flick is from where you held, so the snap doesn't change where it goes; the snap is its spin.
+Snapped on, toward the dumpling, the way it will fly: topspin — it spins forward in the air and
+rolls on when it lands, the grip eased. Snapped back, further from it: backspin — it spins back
+and bites where it lands and stays, even on butter. The harder the snap, the more spin. A word at
+the bottom says which you gave it.
 
 A tap on it is a poke: it dents where you touched it, the way your finger went into the glass,
 and rolls away from it, a hand's width and no more, with hardly a hop. Poked at its back, it rolls

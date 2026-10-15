@@ -1860,7 +1860,14 @@ function room(lv: Level): number[] {
 
 // ─── aiming and the flick ────────────────────────────────────────────────────────────────────────
 /** the pull: where the finger went down and where it is (and where it's been, lately); what it would do */
-let pull: { down: number; sx: number; sy: number; x: number; y: number; id: number; hist: Array<{ x: number; y: number; t: number }>; at: V3 } | null = null;
+/**
+ * A hold on the dumpling, as a gesture: pending till the finger's gone COMMIT px, then a pull (a flick) or a push (a
+ * roll), by which way it went first, and that it stays for the rest of the drag (a pull may come round to aim any
+ * way, toward you even; it doesn't turn into a push). Back into the middle, where it began: pending again, to start
+ * over. Let go still pending, soon: a poke.
+ */
+let pull: { down: number; sx: number; sy: number; x: number; y: number; id: number; hist: Array<{ x: number; y: number; t: number }>; at: V3; kind: 'pending' | 'pull' | 'push' } | null = null;
+const COMMIT = 18;
 /** a finger on the glass but not on the dumpling: turning the camera round; and whether you've turned it (then it stays as you left it, until the next flick) */
 let look: { id: number; x: number; y: number } | null = null;
 let userCam = false;
@@ -1872,7 +1879,7 @@ function aimAt(x: number, y: number): typeof aimNow {
   const dx = x - pull.sx, dy = y - pull.sy;
   const L = Math.hypot(dx, dy);
   // (a flick only if it's been pulled back, toward you or to the side; pushed on, up the glass, it's a roll: see pushAt)
-  if (L < 14 || dy < -PUSH_K * L) return null;
+  if (L < DEAD || pull.kind !== 'pull') return null;
   const fwd: V3 = [Math.sin(camYaw), 0, Math.cos(camYaw)];
   const right: V3 = [-fwd[2], 0, fwd[0]];
   const d = norm(sub(mul(fwd, dy), mul(right, dx)));
@@ -1883,6 +1890,8 @@ function aimAt(x: number, y: number): typeof aimNow {
   if (n && d[0] * n[0] + d[2] * n[2] < -0.35) return { yaw, power, vel: climbLaunch(power), climb: n };
   return { yaw, power, vel: launch(yaw, power) };
 }
+/** the dead middle of a drag (px): nothing's aimed till it's out of it */
+const DEAD = 14;
 /** how far up the glass a drag on the dumpling has to go (of its length) to be a push, not a pull */
 const PUSH_K = 0.15;
 /** A push: the dumpling pushed on, up the glass (the way the finger goes), to roll it that way, as hard as it's pushed. */
@@ -1890,7 +1899,7 @@ let pushNow: { dir: V3; power: number; v: number } | null = null;
 function pushAt(x: number, y: number): typeof pushNow {
   if (!pull) return null;
   const dx = x - pull.sx, dy = y - pull.sy, L = Math.hypot(dx, dy);
-  if (L < 14 || dy >= -PUSH_K * L) return null;
+  if (L < DEAD || pull.kind !== 'push') return null;
   const fwd: V3 = [Math.sin(camYaw), 0, Math.cos(camYaw)], right: V3 = [-fwd[2], 0, fwd[0]];
   const dir = norm(add(mul(fwd, -dy), mul(right, dx)));
   const power = Math.min(1, (L - 14) / (0.32 * Math.min(innerWidth, innerHeight)));
@@ -1902,14 +1911,30 @@ function aimFromPull() { aimNow = pull ? aimAt(pull.x, pull.y) : null; pushNow =
  * on, the way it will fly, topspin (it runs on when it lands); swiped back, backspin (it bites).
  * The aim is taken from before the swipe, so the swipe doesn't change where it goes.
  */
+/** a snap: how fast (px/s) a let-go has to leave where the finger was held, how soon (ms), how far (px); and how still
+ * (px/s, over HOLD_MS) the finger had to be, to have been held there */
+const SNAP_V = 600, SNAP_MS = 160, SNAP_PX = 25, HOLD_V = 150, HOLD_MS = 80;
+/** Looking back from a let-go: the last place the finger was held still, if it was snapped away from there just
+ * before it let go; how far and how fast. A steady pull let go of while moving isn't a snap: it was never held. */
+function snapOf(h: Array<{ x: number; y: number; t: number }>, now: number): { x: number; y: number; dx: number; dy: number; speed: number } | null {
+  const end = h[h.length - 1];
+  for (let k = h.length - 2; k >= 0; k--) {
+    const p = h[k];
+    if (now - p.t > SNAP_MS) return null;
+    // (still, about here: over the HOLD_MS before it, hardly moved)
+    let i = k;
+    while (i > 0 && p.t - h[i].t < HOLD_MS) i--;
+    const span = p.t - h[i].t;
+    if (span < HOLD_MS * 0.6) continue;
+    if (Math.hypot(p.x - h[i].x, p.y - h[i].y) / (span / 1000) > HOLD_V) continue;
+    const dx = end.x - p.x, dy = end.y - p.y, dist = Math.hypot(dx, dy), speed = dist / (Math.max(16, now - p.t) / 1000);
+    return dist >= SNAP_PX && speed >= SNAP_V ? { x: p.x, y: p.y, dx, dy, speed } : null;
+  }
+  return null;
+}
 function release() {
   if (!pull) return;
   const now = performance.now();
-  const h = pull.hist;
-  let old = h[h.length - 1];
-  for (let i = h.length - 1; i >= 0; i--) { old = h[i]; if (now - h[i].t > 90) break; }
-  const dt = Math.max(0.03, (now - old.t) / 1000);
-  const vx = (pull.x - old.x) / dt, vy = (pull.y - old.y) / dt;
   // (pushed on: a roll, that way, as hard as it was pushed)
   const push = pushAt(pull.x, pull.y);
   if (push) {
@@ -1920,13 +1945,15 @@ function release() {
     else if (home < 0 && fallenAt < 0 && body.canFlick) { launching(); body.roll(push.dir, push.v); userCam = false; pop(0.25 + push.power * 0.3); }
     return;
   }
+  // (let go: a flick from where the finger is — unless it was held still and then snapped away, just before: then the
+  // flick's from where it was held, and the snap's its spin, on the way it'll go, topspin; back, backspin)
   let a = aimAt(pull.x, pull.y), spin = 0;
-  if (Math.hypot(vx, vy) > 400) {
-    // (a swipe: the aim from where it was held; the spin from the swipe along the way it will go)
-    const held = aimAt(old.x, old.y);
-    const fx = pull.sx - old.x, fy = pull.sy - old.y, fl = Math.hypot(fx, fy) || 1;
-    const along = (vx * fx + vy * fy) / fl;
-    if (held && Math.abs(along) > 350) { a = held; spin = Math.sign(along) * Math.min(1, (Math.abs(along) - 350) / 1100); }
+  const snap = snapOf(pull.hist, now);
+  if (snap) {
+    const held = aimAt(snap.x, snap.y);
+    const fx = pull.sx - snap.x, fy = pull.sy - snap.y, fl = Math.hypot(fx, fy) || 1;
+    const along = (snap.dx * fx + snap.dy * fy) / fl;
+    if (held && Math.abs(along) > 0.5 * Math.hypot(snap.dx, snap.dy)) { a = held; spin = Math.sign(along) * Math.min(1, 0.5 + (snap.speed - SNAP_V) / 1200); }
   }
   const dragged = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
   pull = null; aimNow = null; pushNow = null;
@@ -2120,7 +2147,7 @@ canvas.addEventListener('pointerdown', (e) => {
     // on the dumpling: take hold of it (a drag is a flick, a tap a poke); anywhere else: the camera
     const i = home < 0 && fallenAt < 0 ? pick(e.clientX, e.clientY) : -1;
     if (i >= 0) {
-      pull = { down: e.timeStamp, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }], at: [body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]] };
+      pull = { down: e.timeStamp, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, hist: [{ x: e.clientX, y: e.clientY, t: performance.now() }], at: [body.x[i * 3], body.x[i * 3 + 1], body.x[i * 3 + 2]], kind: 'pending' };
       body.grab = { w: body.hold(i), pull: [0, 0, 0] };
       squish(0.15);
     } else look = { id: e.pointerId, x: e.clientX, y: e.clientY };
@@ -2154,7 +2181,11 @@ canvas.addEventListener('pointermove', (e) => {
   if (pull && pull.id === e.pointerId) {
     pull.x = e.clientX; pull.y = e.clientY;
     pull.hist.push({ x: e.clientX, y: e.clientY, t: performance.now() });
-    if (pull.hist.length > 24) pull.hist.shift();
+    while (pull.hist.length > 2 && performance.now() - pull.hist[0].t > 700) pull.hist.shift();
+    // (committed, once it's gone far enough, by which way; back to the middle, undecided again)
+    const dx = pull.x - pull.sx, dy = pull.y - pull.sy, L = Math.hypot(dx, dy);
+    if (pull.kind === 'pending' && L > COMMIT) pull.kind = dy < -PUSH_K * L ? 'push' : 'pull';
+    else if (pull.kind !== 'pending' && L < DEAD) pull.kind = 'pending';
   }
 });
 const up = (e: PointerEvent) => {
@@ -2166,7 +2197,7 @@ const up = (e: PointerEvent) => {
     // (a tap on it, not a pull: a poke, where it was touched, the way the finger was going into the glass)
     const moved = Math.hypot(pull.x - pull.sx, pull.y - pull.sy);
     body.grab = null;
-    if (e.type === 'pointerup' && moved < 12 && e.timeStamp - pull.down < 300 && two === null) { pokeAt(pull.at); pull = null; aimNow = null; pushNow = null; body.squeeze = null; }
+    if (e.type === 'pointerup' && pull.kind === 'pending' && moved < 12 && e.timeStamp - pull.down < 300 && two === null) { pokeAt(pull.at); pull = null; aimNow = null; pushNow = null; body.squeeze = null; }
     else if (e.type === 'pointerup') release(); else { pull = null; aimNow = null; pushNow = null; body.squeeze = null; }
   }
 };

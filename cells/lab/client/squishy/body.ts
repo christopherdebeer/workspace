@@ -449,7 +449,7 @@ export class Dumpling {
     this.climb = climb ? { n: climb, on: false, off: 0 } : null;
     const h = Math.hypot(vel[0], vel[2]) || 1;
     // (topspin is a real roll forward; backspin only a little back, its bite being in how it lands)
-    const w = 2 + 9 * Math.max(0, spin) - 2.5 * Math.max(0, -spin);
+    const w = 2 + 14 * Math.max(0, spin) - 7 * Math.max(0, -spin);
     const wx = (vel[2] / h) * w, wz = (-vel[0] / h) * w;
     this.spinMode = spin; this.spinLeft = Math.abs(spin) > 0.05 ? 1 : 0;
     for (let i = 0; i < this.n; i++) {
@@ -723,7 +723,7 @@ export class Dumpling {
     let wx = 0, wz = 0;
     // the spin's say on landing: topspin lets the roll live and eases the grip; backspin grips and holds at once
     const top = Math.max(0, this.spinMode) * this.spinLeft, back = Math.max(0, -this.spinMode) * this.spinLeft;
-    const muK = 1 - 0.5 * top + 1.5 * back, tackK = 1 + 2 * back, rollK = 1 - 0.75 * top + 3 * back;
+    const muK = 1 - 0.65 * top + 2.2 * back, tackK = 1 + 3 * back, rollK = 1 - 0.85 * top + 4.5 * back;
     for (let s = 0; s < SUB; s++) {
       const t = time + s * h;
       if (lv.movers.length) moveShapes(lv, t);
@@ -984,7 +984,7 @@ export class Dumpling {
         this.coated[DUST.pepper] = 0;
       }
     } else this.sneeze = Math.max(0, this.sneeze - dt * 0.5);
-    if (contacts > 0 && this.sinceFlick > 0.12) this.spinLeft = Math.max(0, this.spinLeft - dt * 2.2);
+    if (contacts > 0 && this.sinceFlick > 0.12) this.spinLeft = Math.max(0, this.spinLeft - dt * 1.5);
     this.impact = impact;
     this.sinceContact = contacts > 0 ? 0 : this.sinceContact + dt;
     this.sinceFlick += dt;
