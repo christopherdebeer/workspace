@@ -59,12 +59,12 @@ const PLACE: Record<Chapter, { pool: (i: number) => Kind[]; intro: (i: number) =
   },
   counter: {
     pool: (i) => ['loaf', 'tray', 'stand', 'tin', 'plate', 'stack', 'tiered', 'loaf', ...(i >= 1 ? ['konjac', 'konjac', 'rail'] as Kind[] : []), ...(i >= 2 ? ['jellies', 'rack', 'sill'] as Kind[] : [])],
-    intro: (i) => (i === 0 ? ['loaf', 'tray', 'stand'] : i === 1 ? ['rail', 'konjac'] : i === 2 ? ['sill', 'tiered'] : ['jellies']),
+    intro: (i) => (i === 0 ? ['loaf', 'tray', 'stand'] : i === 1 ? ['rail'] : i === 2 ? ['sill', 'tiered'] : ['rack']),
     finale: (i, r) => (i === 0 || r() < 0.6 ? 'shelfHome' : null),
   },
   sink: {
     pool: (i) => ['sponge', 'soap', 'drainer', 'plate', 'tin', 'stack', 'sponge', 'soap', ...(i >= 1 ? ['pudding', 'rack', 'rail'] as Kind[] : []), ...(i >= 2 ? ['tiered', 'konjac', 'sill'] as Kind[] : [])],
-    intro: (i) => (i === 0 ? ['sponge', 'soap', 'drainer'] : i === 1 ? ['rack'] : i === 2 ? ['sill', 'konjac'] : ['tiered']),
+    intro: (i) => (i === 0 ? ['sponge', 'soap', 'drainer'] : i === 1 ? ['rack'] : i === 2 ? ['sill'] : ['tiered']),
     finale: (i, r) => (i === 0 || r() < 0.7 ? 'sinkHome' : null),
   },
   stove: {
@@ -92,9 +92,13 @@ function pick(r: Rand, n: number, last: Kind | null, used: Map<Kind, number>): K
   pool = pool.filter((k) => k !== last && !((last === 'butter' || last === 'tray') && k === 'honey'));
   // (two climbs, two jars, at most, a level; a big piece once)
   pool = pool.filter((k) => !((k === 'towel' || k === 'honey') && (used.get(k) ?? 0) >= 2) && !(['spoon', 'drainer', 'jellies', 'loaf', 'oven'].includes(k) && used.has(k)));
+  // (no glossy jelly to stop on, on the way that's sure: a pudding or a konjac is the short way's, at a fork)
+  pool = pool.filter((k) => !GLOSSY.includes(k));
   return pool[Math.floor(r() * pool.length)];
 }
 
+/** the jellies landed on that skid and bounce: off the sure way, the short way's at a fork */
+const GLOSSY: Kind[] = ['konjac', 'jellies', 'pudding'];
 /** The tops of a kind of one thing: how high it stands (its top), how far out it reaches. */
 const ONE: Partial<Record<Kind, { top: Top; y: [number, number]; rad: [number, number] }>> = {
   stack: { top: 'steamer', y: [16, 30], rad: [10.5, 13] },
@@ -131,7 +135,7 @@ const onHob = new WeakSet<Tower>();
 const coinAt = (x: number, z: number) => (salt: number) => (hash(Math.round(x * 10), Math.round(z * 10), salt) % 1000) / 1000;
 
 /** A piece of a kind, its first stop's middle at x, z (a height of its own), from the dice. */
-function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | null {
+function piece(kind: Kind, x: number, z: number, r: Rand, n: number, yAt?: number): Piece | null {
   const one = ONE[kind];
   if (one) {
     // (a honey jar stands behind where you land against it, toward the wall)
@@ -139,7 +143,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     if (kind === 'honey' && (z > BACK - 26 || z < 26)) z = Math.max(26, Math.min(BACK - 26, z));
     const rad = ramp(r, ...one.rad);
     // (turned to the course, which runs along x: a pan's handle, a board's jars, out to the sides; a jar toward the wall)
-    const yaw = kind === 'honey' ? 0 : Math.PI / 2 + ramp(r, -0.4, 0.4), at: V3 = [x, Math.round(ramp(r, ...one.y)), z];
+    const yaw = kind === 'honey' ? 0 : Math.PI / 2 + ramp(r, -0.4, 0.4), at: V3 = [x, yAt ?? Math.round(ramp(r, ...one.y)), z];
     const t = kind === 'honey' || kind === 'board' ? { stop: tower(one.top, at, rad, yaw, r), decor: [], on: false } : standOn(one.top, at, rad, yaw, r, n);
     if (!t.on) onHob.add(t.stop);
     // (a plate: crumbs on it, or pepper, more often than not)
@@ -590,13 +594,13 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
    * of these kinds (or the place's own), across the counter in this band (or about where the last was), this much
    * further on than it'd be, home; up to forty tries, then nothing.
    */
-  const layOne = (from: number[], o: { kinds?: Kind[]; z?: [number, number]; goal?: boolean; far?: number; spring?: boolean; notHang?: boolean } = {}): Got | null => {
+  const layOne = (from: number[], o: { kinds?: Kind[]; z?: [number, number]; y?: [number, number]; goal?: boolean; far?: number; spring?: boolean; notHang?: boolean; tries?: number } = {}): Got | null => {
     const prev = lv.towers[from[0]];
     const xb = Math.max(...from.map((f) => lv.towers[f].at[0])) + 250;
     furnish(xb);
-    for (let tries = 0; tries < 40; tries++) {
+    for (let tries = 0; tries < (o.tries ?? 40); tries++) {
       // (and if nothing will fit, a steamer close by, about as high, on something; laid plainly, only that)
-      const easy = plain || tries >= 24;
+      const easy = plain || tries >= 24 || (o.tries !== undefined && tries >= o.tries - 4);
       const fresh = o.kinds && (() => { const least = Math.min(...o.kinds.map((q) => used.get(q) ?? 0)); return o.kinds.filter((q) => (used.get(q) ?? 0) <= least + (tries > 8 ? 9 : 0)); })();
       const kind: Kind = o.goal ? (finale && tries < 20 ? finale : 'stack') : easy ? 'stack' : fresh ? fresh[Math.floor(r() * fresh.length)] : slot < intro.length && tries < 16 ? intro[slot] : pick(r, n, last, used);
       // (what's hung from, not the last thing before home: home's laid from where it's let go of, and must be reachable)
@@ -606,10 +610,11 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
       // (from a jar's side, forward, away from the jar; in its band, if it has one)
       // (a jar: set back from where it's flown at from, so it's met at its front, where the honey's run, not round its flank)
       const z = kind === 'honey' && !easy ? Math.min(BACK - 26, prev.at[2] + ramp(r, 14, 20)) : o.z && !easy ? ramp(r, o.z[0], o.z[1]) : prev.jar ? Math.max(FRONT + 12, prev.at[2] - ramp(r, 16, 26)) : Math.max(FRONT + 12, Math.min(BACK - 22, prev.at[2] + ramp(r, -22, 22) * (easy ? 0.4 : 1)));
-      const y = Math.round(Math.max(LOW + 1, Math.min(30, prev.at[1] > 32 ? ramp(r, 18, 26) : prev.at[1] + ramp(r, -4, 6))));
+      // (as high as the last, about; down again from up high; up in its band, if it has one: the middle of the room)
+      const y = o.y && !easy ? Math.round(ramp(r, o.y[0], o.y[1])) : Math.round(Math.max(LOW + 1, Math.min(30, prev.at[1] > 32 ? ramp(r, 18, 26) : prev.at[1] + ramp(r, -4, 6))));
       // (home, and what's sure to fit when nothing else will: a steamer, on something)
       const sure = (top: Top, at: V3, rad: number): Piece => { const t = standOn(top, at, rad, 0, r, n); if (!t.on) onHob.add(t.stop); return { stops: [t.stop], extra: [], decor: t.decor, reach: rad + 2 }; };
-      const p = o.goal && kind === 'stack' ? sure('goal', [x, Math.round(ramp(r, LOW + 3, LOW + 11)), z], 13) : easy ? sure('steamer', [x, y, z], 11) : piece(kind, x, z, r, n);
+      const p = o.goal && kind === 'stack' ? sure('goal', [x, Math.round(ramp(r, LOW + 3, LOW + 11)), z], 13) : easy ? sure('steamer', [x, y, z], 11) : piece(kind, x, z, r, n, o.y ? y : undefined);
       if (!p) continue;
       if (o.spring && !easy) p.stops[0].spring = true;
       // (what it takes of the wall, the kitchen leaves it, before it's seen whether it fits; and has again if it doesn't)
@@ -627,9 +632,11 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
       for (const f of from) if (lv.towers[f].spring || nexts[f] === undefined) nexts[f] = k0;
       const got: Array<[number, number, V3[][]]> = [];
       let ok = true;
-      for (const f of from) for (const [a, b] of ways) if (ok && b === f) { const h = hop(lv, a, b); if (!h) ok = false; else if (lv.towers[f].spring) got.push([a, b, h.flights]); }
       for (const f of from) if (ok && !(lv.towers[k0].spring && k0 === kl)) { const h = hop(lv, f, k0); if (h) got.push([f, k0, h.flights]); else ok = false; }
       for (let k = k0 + 1; ok && k <= kl; k++) { const h = hop(lv, k - 1, k); if (h) got.push([k - 1, k, h.flights]); else ok = false; }
+      // (the ways into where it's laid from still hold, with it stood by them; onto a springboard, that's off it onto
+      // this, so made sure of now: the springboards last, being the dearest)
+      for (const f of [...from].sort((p, q) => Number(!!lv.towers[p].spring) - Number(!!lv.towers[q].spring))) for (const [a, b] of ways) if (ok && b === f) { const h = hop(lv, a, b); if (!h) ok = false; else if (lv.towers[f].spring) got.push([a, b, h.flights]); }
       if (!ok) { remove(p); unclaim(); from.forEach((f, q) => { if (was[q] === undefined) delete nexts[f]; else nexts[f] = was[q]; }); continue; }
       // (into a springboard laid last: a way, made sure of when what's after it is)
       if (lv.towers[k0].spring && k0 === kl) for (const f of from) ways.push([f, k0]);
@@ -656,25 +663,28 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
   const pool = place.pool(i);
   /** the sure way: broad tops, one after another; the short way: a springboard, or a small top, one long hop */
   const BROAD: Kind[] = ['stack', 'tray', 'rack', 'paddle', 'susan', 'pan', 'board', 'plate', 'drainer', 'sponge', 'tiered', 'loaf'];
-  const SMALL: Kind[] = ['tin', 'stand', 'tilt', 'spoon', 'soap', 'lid', 'loaf'];
-  const broad = BROAD.filter((k) => pool.includes(k)), small = SMALL.filter((k) => pool.includes(k));
+  const SMALL: Kind[] = ['tin', 'stand', 'tilt', 'spoon', 'soap', 'lid', 'loaf', 'pudding'];
+  const broad = BROAD.filter((k) => pool.includes(k)), small = SMALL.filter((k) => pool.includes(k) || k === 'pudding');
+  /** what can stand up in the middle of the room, on something tall: tops that sit on a stack of supports */
+  const CLIMB: Kind[] = ['stack', 'plate', 'tin', 'susan', 'pan', 'lid'];
   /**
    * A fork, at top F: two ways on, that meet again. Along the front, the sure way: two broad tops; along the back,
    * the short way: one long hop, onto a small top or off a springboard; where they meet, laid on from both. If the
    * short way won't hold, it's left out; if the sure way won't, no fork.
    */
   const fork = (F: number): number | null => {
-    const A1 = layOne([F], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 14], notHang: true });
+    const A1 = layOne([F], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 14], notHang: true, tries: 16 });
     if (!A1) return null;
     nexts[F] = A1.first;
-    const A2 = layOne([A1.last], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 16], notHang: true });
+    const A2 = layOne([A1.last], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 16], notHang: true, tries: 16 });
     if (!A2) { undo(A1); return null; }
     // (the short way: off a springboard, or onto a small top; if one won't meet the sure way again, the other)
-    const order = small.length ? (r() < 0.5 ? [true, false] : [false, true]) : [true];
+    const order = small.length ? (r() < 0.75 ? [true, false] : [false, true]) : [true];
     let B: Got | null = null, M: Got | null = null;
     for (const viaSpring of order) {
-      B = layOne([F], { kinds: viaSpring ? ['konjac'] : small, z: [BACK - 20, BACK - 16], far: ramp(r, 8, 16), spring: viaSpring, notHang: true });
-      M = B ? layOne([A2.last, B.last], { z: [FRONT + 22, BACK - 30], notHang: true }) : null;
+      B = layOne([F], { kinds: viaSpring ? ['konjac'] : small, z: [BACK - 20, BACK - 16], far: ramp(r, 8, 16), spring: viaSpring, notHang: true, tries: 12 });
+      // (where they meet: between them; after a springboard, on along the way the bounce goes, toward the back)
+      M = B ? layOne([A2.last, B.last], { z: viaSpring ? [BACK - 26, BACK - 18] : [FRONT + 22, BACK - 30], notHang: true, tries: 12 }) : null;
       if (M) break;
       if (B) { undo(B); B = null; }
     }
@@ -689,21 +699,28 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
   };
   // (forks from a place's second level on, and in the whole kitchen: a way to choose, now and then, not near either end)
   const forks = chapter !== 'table' && (i >= 1 || chapter === 'mixed') && !plain;
+  // (and from a place's third level on, a climb: two or three tops up in the middle of the room, on taller things,
+  // then down again)
+  const climbAt = chapter !== 'table' && (i >= 2 || chapter === 'mixed') && !plain && count >= 7 ? Math.max(intro.length, 2) + Math.floor(r() * Math.max(1, count - 5 - Math.max(intro.length, 2))) : -1;
+  const climbLen = 2 + Math.floor(r() * 2);
   let cur = 0;
   for (let b = 0; b < count; b++) {
     slot = b;
     const goal = b === count - 1;
-    if (forks && b >= Math.max(2, intro.length) && b + 3 <= count - 1 && r() < 0.55) {
+    const up = climbAt >= 0 && b >= climbAt && b < climbAt + climbLen && !goal;
+    if (forks && !up && !(climbAt >= 0 && b + 3 > climbAt && b < climbAt + climbLen) && b >= Math.max(2, intro.length) && b + 3 <= count - 1 && r() < 0.55) {
       const m = fork(cur);
       if (m !== null) { cur = m; b += 2; continue; }
     }
-    const g = layOne([cur], { goal, notHang: b >= count - 3 && !goal });
+    const g = layOne([cur], { goal, notHang: b >= count - 3 && !goal, ...(up ? { y: [34, 44] as [number, number], kinds: CLIMB.filter((k) => pool.includes(k) || k === 'stack') } : {}) });
     // (a piece that wouldn't go anywhere: not this layout)
     if (!g) return { lv, ok: false };
     nexts[cur] = g.first;
     cur = g.last; last = g.kind;
     used.set(g.kind, (used.get(g.kind) ?? 0) + 1);
   }
+  // (what the level brings in, as its hint says, there for sure: else, while there are tries to spare, not this layout)
+  if (!plain && salt < 8 && intro.some((k) => !used.has(k))) return { lv, ok: false };
   // (every top's next, and the way the opening view goes over it: the sure way, from the start to home)
   for (let k = 0; k < lv.towers.length - 1; k++) if (nexts[k] === undefined) nexts[k] = k + 1;
   lv.ways = ways;

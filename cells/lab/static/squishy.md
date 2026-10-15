@@ -212,6 +212,11 @@ again. Both are made sure of, every way into every top, so wherever you've stood
 home; and the short way's harder (played for real, most of its flicks make it, fewer than the sure
 way's). The camera, the autopilot and the par go the sure way; the short way's yours to find.
 
+And from a place's third level on, and in the whole kitchen, a climb: two or three tops one after
+another up in the middle of the room, 35 to 45 cm off the counter, about as high as the windows' sills,
+on taller things (stools on cookbooks, crates stacked, tins on tins), a hop up to the first and down
+again after; between the counter's tops and the shelves on the wall, a middle height to be at.
+
 A springboard (a konjac at a fork; the Breakfast Counter's, on its tall tin, up to the cake stand) is
 made sure of by bouncing off it onto the top after it, the aim's dots showing the bounce; stop on it
 instead and it's a top like any other, and on from it.

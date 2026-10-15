@@ -884,17 +884,25 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   for (const f of tw.spring ? [0, 0.35, 0.7, 1] : [0]) {
     const yw = yaw + dy * f;
-    let lo = -1, hi = -1;
-    for (let p = 0; p <= 1.0001; p += 0.01) {
+    // (on its top; or, for honey, against the honey, which holds: at its front, where the way on's from, not round its side)
+    // (a touch as it leaves, on what it's leaving, isn't a landing)
+    // (a rail: caught anywhere along its first part, from any side)
+    const ok = (p: number) => {
       const pa = path(lv, from, launch(yw, p), 3, t);
-      // (on its top; or, for honey, against the honey, which holds: at its front, where the way on's from, not round its side)
-      // (a touch as it leaves, on what it's leaving, isn't a landing)
-      // (a rail: caught anywhere along its first part, from any side)
-      const ok = pa.hit && pa.t > 0.06 && (!tw.spring || !!pa.via?.some((j) => (tw.land ?? tw.shapes).includes(j))) && landsOn(lv.towers[on], pa.hit);
-      if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) { if (!glossy || hi - lo > 0.005) break; lo = hi = -1; }
+      return !!pa.hit && pa.t > 0.06 && (!tw.spring || !!pa.via?.some((j) => (tw.land ?? tw.shapes).includes(j))) && landsOn(lv.towers[on], pa.hit);
+    };
+    // (strengths a few hundredths apart, then where one lands, its band found to the hundredth either way; onto a
+    // jelly, a band that's a band, else on to the next)
+    for (let c = 0; c <= 1.0001; c += 0.02) {
+      if (!ok(c)) continue;
+      let lo = c, hi = c;
+      while (lo - 0.01 >= -1e-6 && ok(lo - 0.01)) lo -= 0.01;
+      while (hi + 0.01 <= 1.0001 && ok(hi + 0.01)) hi += 0.01;
+      // (a little short of the middle of the band: it carries on a little after it lands; onto a jelly, the middle, clear
+      // of its near rim, which a body broader than the arc's ball catches)
+      if (!glossy || hi - lo > 0.005) return { yaw: yw, power: lo + (hi - lo) * (glossy ? 0.55 : 0.4) };
+      c = hi;
     }
-    // (a little short of the middle of the band: it carries on a little after it lands)
-    if (lo >= 0 && !(glossy && hi - lo < 0.005)) return { yaw: yw, power: lo + (hi - lo) * 0.4 };
   }
   return null;
 }
@@ -1032,12 +1040,13 @@ export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[]
   const a = lv.towers[j], b = lv.towers[k];
   const lid = b.land?.[0].lift ?? a.land?.[0].lift;
   const times = lid ? [0, 1, 2, 3, 4, 5].map((i) => ((i / 6 + 1 - lid.phase) % 1) * lid.period) : [0];
-  // (from a jar: where a splat sticks, which is never just so: lower, as it slides; and round either way, as far as the honey's run)
+  // (from a jar: where a splat sticks, which is never just so: lower, as it slides; and round either way, as far as the
+  // honey's run. From a rail: higher, as a firm one hangs; and nearer it, as a soft one does)
   const round = (f: V3, d: number): V3 => {
     const c = a.jar!.c, ox = f[0] - c[0], oz = f[2] - c[2], r = Math.hypot(ox, oz), an = Math.atan2(oz, ox) + d / r;
     return [c[0] + Math.cos(an) * r, f[1] - 3, c[2] + Math.sin(an) * r];
   };
-  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3, round(f, 3), round(f, -3)] : a.rail ? [f, [f[0], f[1] + 3, f[2]] as V3] : [f]; };
+  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3, round(f, 3), round(f, -3)] : a.rail ? [f, [f[0], f[1] + 3, f[2]] as V3, [f[0] - a.rail.out[0] * 0.7, f[1], f[2] - a.rail.out[2] * 0.7] as V3] : [f]; };
   // (onto a top reached by its wall: against the wall, and up)
   if (b.wall) {
     const f = standing(lv, j, 0), w = aimWall(lv, f, k, 0);
@@ -1046,8 +1055,10 @@ export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[]
     return { t: 0, flights: [path(lv, f, launch(w.yaw, w.power), 3, 0).pts, up.pts] };
   }
   for (const t of times) {
-    const fs = froms(t), aims = fs.map((f) => aim(lv, f, k, t));
-    if (aims.every(Boolean)) return { t, flights: fs.map((f, i) => path(lv, f, launch(aims[i]!.yaw, aims[i]!.power), 3, t).pts) };
+    // (each from where it might be; the first that won't, and not this moment)
+    const fs = froms(t), aims: Array<{ yaw: number; power: number }> = [];
+    for (const f of fs) { const a = aim(lv, f, k, t); if (!a) break; aims.push(a); }
+    if (aims.length === fs.length) return { t, flights: fs.map((f, i) => path(lv, f, launch(aims[i].yaw, aims[i].power), 3, t).pts) };
   }
   return null;
 }
