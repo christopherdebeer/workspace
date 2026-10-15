@@ -9,8 +9,9 @@ import { MAT, RADIUS, type V3 } from '../squishy/level';
 
 export function jarStrainProbe(mode:'hang'|'glance'='hang',frames?:number,strain=true) {
   const lv=bench('look');
-  const jar=lv.shapes.find(s=>s.mat===MAT.glass);
+  // (the honey band, and the jar or pot it's run down: the nearest)
   const strip=lv.shapes.find(s=>s.mat===MAT.honey && s.ghost);
+  const jar=strip && lv.shapes.filter(s=>s.mat===MAT.glass||s.mat===MAT.honeypot).sort((a,b)=>Math.hypot(a.c[0]-strip.c[0],a.c[2]-strip.c[2])-Math.hypot(b.c[0]-strip.c[0],b.c[2]-strip.c[2]))[0];
   if(!jar || !strip)return {error:'bench jar or honey contact strip missing'};
   const dx=strip.c[0]-jar.c[0], dz=strip.c[2]-jar.c[2], len=Math.hypot(dx,dz)||1;
   const n:V3=[dx/len,0,dz/len];
