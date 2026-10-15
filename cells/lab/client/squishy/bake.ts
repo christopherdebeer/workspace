@@ -20,7 +20,7 @@ export function albedos(): Float32Array {
     [MAT.towel, [0.85, 0.82, 0.76]], [MAT.gingham, [0.8, 0.45, 0.45]], [MAT.floral, [0.3, 0.6, 0.55]], [MAT.legs, [0.25, 0.18, 0.12]],
     [MAT.pannacotta, [0.92, 0.88, 0.8]], [MAT.konjac, [0.95, 0.45, 0.6]], [MAT.bread, [0.75, 0.5, 0.25]], [MAT.enamel, [0.88, 0.88, 0.85]],
     [MAT.steel, [0.6, 0.6, 0.62]], [MAT.sponge, [0.9, 0.8, 0.3]], [MAT.napkin, [0.92, 0.9, 0.88]], [MAT.book, [0.55, 0.6, 0.5]],
-    [MAT.berry, [0.6, 0.06, 0.14]],
+    [MAT.berry, [0.6, 0.06, 0.14]], [MAT.honeyRun, [0.85, 0.5, 0.1]], [MAT.honeyPool, [0.85, 0.5, 0.1]],
   ];
   for (const [m, c] of set) a.set(c, m * 3);
   return a;

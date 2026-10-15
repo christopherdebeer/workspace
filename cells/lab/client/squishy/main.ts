@@ -18,7 +18,7 @@
 import { hash, seeded } from '../kit/rng';
 import { Dumpling, ROLL_MAX, ROLL_MIN, railAxis, rollReach, type Kind } from './body';
 import { kitchenRun, tableSet } from './room';
-import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, dustMat, carried, chapterOf, fingerprint, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
+import { CHAPTER_AT, CHAPTER_NAME, DUST, JAR_UNDER, MAT, dustMat, carried, chapterOf, fingerprint, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { BENCHES, bench, buildLevel } from './course';
 import { logFlick, noteBack, readFlicks, settleFlick } from './flicklog';
 import { logoSVG } from './title';
@@ -308,6 +308,8 @@ flat in float vMat;
 out vec4 o;
 uniform vec3 uEye, uTint;
 uniform float uTime, uAlpha;
+// (how long this level's been going (s): honey creeps by it)
+uniform float uRun;
 /** the dumpling, seen through what's before it: whether to (z > 0), and where it is */
 uniform vec3 uHole, uHoleAt;
 /** the cookbooks' atlas (books.ts) */
@@ -748,6 +750,38 @@ void main() {
     base = mix(vec3(.34, .11, .004), vec3(.6, .27, .012), thin);
     // (its own gloss, no clear coat over it: on a thin run or a bead, mostly seen at a slant, a clear coat goes white)
     rough = .22; coat = 0.; emit = .1 + .08 * thin;
+  } else if (id == ${MAT.honeyRun} || id == ${MAT.honeyPool}) {
+    // honey run down a jar's front and pooled round its foot: over the rim in a ragged collar, and from it runs, each
+    // its own width and pace, creeping down as the level goes on, thinning as they go, a bead swelling at each end
+    // until it's reached the foot; and the pool there spreading, most where the runs come down. Distances in cm.
+    float d;
+    if (id == ${MAT.honeyRun}) {
+      float s = uv.x, y = uv.y, H = ${15 + JAR_UNDER}.;
+      d = 1.2 + 1.1 * noise(vec3(s * .55, 0., 21.)) - y;
+      float j0 = floor(s / 1.45);
+      for (int k = -1; k <= 1; k++) {
+        float c = j0 + float(k);
+        float h1 = hash3(vec3(c, 1., 7.)), h2 = hash3(vec3(c, 2., 7.)), h3 = hash3(vec3(c, 3., 7.)), h4 = hash3(vec3(c, 4., 7.));
+        if (h3 < .2) continue;
+        float w = .2 + .24 * h2, tau = 60. + 170. * h4, L0 = 2.5 + 9. * h1 * h3;
+        // (some go all the way, most stall somewhere on the way down as they cool and thicken)
+        float h5 = hash3(vec3(c, 5., 7.)), reach = h5 < .35 ? H * 1.15 : L0 + (H * .95 - L0) * h5 * h5;
+        float L = min(H + 1., L0 + (reach - L0) * (1. - exp(-uRun / tau)));
+        float cx = (c + .5) * 1.45 + (h1 - .5) * .5 + .12 * sin(y * .35 + c * 2.3);
+        float bead = L < H ? w * (1.35 + .35 * smoothstep(.3, 1., L / H)) : 0.;
+        float stem = min(w * (1. - .4 * clamp(y / H, 0., 1.)) - abs(s - cx), (L - bead - y) * 4.);
+        float ball = bead - length(vec2(s - cx, y - (L - bead)));
+        float drip = max(stem, ball) + .12 * exp(-4. * abs(stem - ball));
+        d = max(d, drip) + .1 * exp(-5. * abs(d - drip));
+      }
+    } else {
+      // (the ring round the foot: u out from the glass, v the angle from the jar's front)
+      float g = 1. - .75 * exp(-uRun / 120.), front = smoothstep(1.1, .1, abs(uv.y));
+      d = .25 + 1.15 * g * (.25 + .75 * front) + .45 * (noise(vec3(vWorld.xz * .55, 31.)) - .5) - uv.x;
+    }
+    if (d < 0.) discard;
+    liquid(d / (id == ${MAT.honeyRun} ? .3 : .45), id == ${MAT.honeyRun} ? .3 : .3, vWorld, vec3(.78, .42, .04), vec3(.34, .11, .004), .3, n, base, rough, coat, coatRough, coatSpec, emit);
+    coat = .7;
   } else if (id == ${MAT.glass}) {
     base = vec3(.9, .95, .93); rough = .04; coat = 1.;
   } else if (id == ${MAT.pot}) {
@@ -1732,6 +1766,9 @@ let still = 0;
 /** fallen: when it comes back */
 let fallenAt = -1;
 let simTime = 0;
+/** when this level began (simTime), for what creeps as it goes on (honey); ?honeyt=s to see it later on */
+let levelBorn = 0;
+const HONEY_AHEAD = Number(params.get('honeyt')) || 0;
 /** each lid's lift last step (for the steam as one starts up); whether it was stuck to honey; when the autopilot last looked */
 let lidWas: number[] = [];
 let heldWas = false;
@@ -1784,6 +1821,7 @@ function benchPanel() {
   });
 }
 function startLevel(n: number, quiet = false) {
+  levelBorn = simTime;
   launchedFrom = null; retries = [];
   levelN = Math.max(1, n);
   if (lab && levelN >= JELLY_AT && !jellyOpen) {
@@ -3089,6 +3127,7 @@ function frame(now: number) {
   gl.uniformMatrix4fv(u(prog, 'uLightVP'), false, lightVP);
   gl.uniform3fv(u(prog, 'uEye'), eye);
   gl.uniform1f(u(prog, 'uTime'), simTime);
+  gl.uniform1f(u(prog, 'uRun'), simTime - levelBorn + HONEY_AHEAD);
   gl.uniform1f(u(prog, 'uShadowSoft'), shadowSoft);
   gl.uniform1f(u(prog, 'uBakeView'), params.has('bakeview') ? 1 + Number(params.get('bakeview') === 'colour') : 0);
   gl.uniform1i(u(prog, 'uShadowMap'), 0);

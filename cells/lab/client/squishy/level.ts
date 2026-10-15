@@ -44,6 +44,8 @@ export const MAT = {
   cabinet: 47, fridge: 48, floor: 49, plant: 50, terracotta: 51,
   // (honey on a top, spilt: as a coating's drawn over what it's on (24 + a dust for the first five), but here)
   glaze: 52,
+  // (honey run down a jar's side and pooled round its foot: drawn as a liquid, live, over the shapes that hold you)
+  honeyRun: 53, honeyPool: 54,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter

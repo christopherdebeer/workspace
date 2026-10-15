@@ -147,18 +147,38 @@ function towerMesh(t: Tower, m: LevelMesh) {
       // (a jar: the honey in it, most of the way up, then the glass over everything)
       cylinder(out, s.c[0], s.c[2], s.r * 0.93, s.c[1] - s.hh, s.c[1] + s.hh * 0.55, MAT.honey, MAT.honey, 36);
       cylinder(m.glass, s.c[0], s.c[2], s.r, s.c[1] - s.hh, s.c[1] + s.hh, MAT.glass, MAT.glass, 40);
-      // (honey run down its front, toward where it's landed against: drips from the rim, each its own length, a bead at its end)
+      // (honey run down its front, toward where it's landed against: a ribbon just over the glass, the runs drawn on
+      // it as a liquid, creeping down as the level goes on (main.ts, MAT.honeyRun); u across it in cm, v down from the rim)
       if (t.jar) {
-        const a0 = Math.atan2(t.at[0] - s.c[0], t.at[2] - s.c[2]), top = s.c[1] + s.hh - 0.5, foot = s.c[1] - s.hh;
-        for (let k = 0; k < 7; k++) {
-          const hk = (salt: number) => ((Math.imul(Math.round(s.c[0] * 10) + k * 7919, 2654435761) ^ salt) >>> 0) % 1000 / 1000;
-          const len = 5 + hk(23) * (top - foot - 5), w = 0.3 + hk(37) * 0.35;
-          const a = a0 + (k - 3) * 0.17 + (hk(11) - 0.5) * 0.08, nx = Math.sin(a), nz = Math.cos(a), rr = s.r + w * 0.75;
-          capsule(out, [s.c[0] + nx * rr, top, s.c[2] + nz * rr], [s.c[0] + nx * rr, top - len, s.c[2] + nz * rr], w, MAT.honey, 8, 3);
-          capsule(out, [s.c[0] + nx * (rr + 0.1), top - len, s.c[2] + nz * (rr + 0.1)], [s.c[0] + nx * (rr + 0.1), top - len - 0.3, s.c[2] + nz * (rr + 0.1)], w * 1.5, MAT.honey, 8, 3);
+        const th0 = Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), top = s.c[1] + s.hh, foot = s.c[1] - s.hh, rr = s.r + 0.06;
+        const NU = 32, NV = 18, SPAN = 0.85;
+        const at = (i: number, j: number): [V3, V3, UV] => {
+          const th = th0 + (i / NU * 2 - 1) * SPAN, y = top - (j / NV) * (top - foot), c = Math.cos(th), sn = Math.sin(th);
+          return [[s.c[0] + c * rr, y, s.c[2] + sn * rr], [c, 0, sn], [(th - th0) * rr, top - y]];
+        };
+        for (let i = 0; i < NU; i++) for (let j = 0; j < NV; j++) {
+          const A = at(i, j + 1), B = at(i, j), C = at(i + 1, j), D = at(i + 1, j + 1);
+          quad(out, A[0], B[0], C[0], D[0], A[1], B[1], C[1], D[1], MAT.honeyRun, A[2], B[2], C[2], D[2]);
         }
       }
       continue;
+    }
+    // (the honey pooled round a jar's foot: a ring on the stand, drawn as a liquid that spreads as the level goes on
+    // (main.ts, MAT.honeyPool); u out from the glass in cm, v the angle from its front)
+    if (s.mat === MAT.honey && t.jar) {
+      const glass = t.shapes.find((g) => g.mat === MAT.glass);
+      if (glass) {
+        const th0 = Math.atan2(t.at[2] - glass.c[2], t.at[0] - glass.c[0]), y = glass.c[1] - glass.hh + 0.08, NA = 64, NR = 6;
+        const at = (i: number, j: number): [V3, UV] => {
+          const th = th0 + (i / NA * 2 - 1) * Math.PI, out2 = -0.4 + (j / NR) * 1.9, rr = glass.r + out2;
+          return [[glass.c[0] + Math.cos(th) * rr, y, glass.c[2] + Math.sin(th) * rr], [out2, (i / NA * 2 - 1) * Math.PI]];
+        };
+        for (let i = 0; i < NA; i++) for (let j = 0; j < NR; j++) {
+          const A = at(i, j), B = at(i + 1, j), C = at(i + 1, j + 1), D = at(i, j + 1);
+          quad(out, A[0], B[0], C[0], D[0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], MAT.honeyPool, A[1], B[1], C[1], D[1]);
+        }
+        continue;
+      }
     }
     drawShape(s, out);
   }

@@ -301,6 +301,12 @@ wooden board on a stack of tea tins, now and then a celadon jar among them.
   its front, splat into the run honey, and stick, oozing slowly down, until you flick on; miss the
   honey and it's glass, and you slide off it. The pool round its foot is sticky underfoot a while,
   and gets on you. The course turns sharply at a jar.
+  The honey's live: its runs creep down the glass as the level goes on, each its own width and pace,
+  a bead swelling at its end; most stall on the way as they thicken, a few reach the foot, and the
+  pool there spreads, most at the front where they come down (`?honeyt=300` shows it five minutes on).
+  It's drawn as a liquid, as Stillwater's dew is (a meniscus at its edge, a dark wet line where it
+  meets the glass, the light through it gathered on its far side from the sun); butter's drawn the same
+  way, a ragged pool with a dry island or two. What holds you is the shapes as before.
 - **Honey on you** (a jar's pool, its drips): while it's on, whatever side you touch you stick to a
   while, oozing down it, glass and steel as well as wood; it wears off slowly. Butter cancels it.
 - **A pot with its lid on**, from level 9: the lid's shut, but every few seconds the steam in the
