@@ -1277,9 +1277,11 @@ export function boat(mesh: Mesh) {
     mesh.tube([Math.cos(a0) * R, 0.36 + Math.sin(a0) * R * 0.95, z], [Math.cos(a1) * R, 0.36 + Math.sin(a1) * R * 0.95, z], 0.025, 0.025, INK.trunk, M.trunk, 4);
   }
   // (a pole laid along it; a post at its stern, a red lantern hung from it)
-  mesh.tube([0, 0.4, -L * 0.82], [0, 1.6, -L * 0.82], 0.03, 0.025, INK.trunk, M.trunk, 5);
-  mesh.tube([0, 1.55, -L * 0.82], [0, 1.58, -L * 0.82 + 0.32], 0.016, 0.014, INK.trunk, M.trunk, 4);
-  mesh.tube([0, 1.22, -L * 0.82 + 0.3], [0, 1.46, -L * 0.82 + 0.3], 0.11, 0.1, hex(0xc8412e), M.red, 8);
+  // Port rail mounting leaves the stern's centre and starboard poling side clear.
+  mesh.tube([-.42, .42, -L * .68], [-.42, 1.45, -L * .68], .03, .025, INK.trunk, M.trunk, 5);
+  mesh.tube([-.42, 1.45, -L * .68], [-.72, 1.45, -L * .68], .016, .014, INK.trunk, M.trunk, 4);
+  mesh.tube([-.72, 1.45, -L * .68], [-.72, 1.34, -L * .68], .009, .009, INK.trunk, M.trunk, 4);
+  mesh.tube([-.72, 1.08, -L * .68], [-.72, 1.32, -L * .68], .11, .1, hex(0xc8412e), M.red, 8);
 }
 /**
  * The boat's reflection on the water, as it lies turned so (yaw): as the prints have it, short level

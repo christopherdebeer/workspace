@@ -318,9 +318,13 @@ void main() {
       int n = vM == ${M.ring} ? 1 : 3;
       for (int i = 0; i < 3; i++) {
         if (i >= n) break;
-        float R = 1. + float(i) * .27 + .05 * sin(ang * 3. + float(i));
+        // Successive crests travel outward and fade at both ends of each cycle.
+        float phase = fract(uTime * .18 + float(i) / 3.);
+        float travel = vM == ${M.ripple} ? phase : 0.;
+        float envelope = vM == ${M.ripple} ? smoothstep(0., .14, phase) * (1. - smoothstep(.65, 1., phase)) : 1.;
+        float R = 1. + (vM == ${M.ripple} ? travel * .72 : float(i) * .27) + .04 * sin(ang * 3. + float(i) + uTime * .35);
         float on = step(.36 + float(i) * .1 + (vM == ${M.ring} ? .12 : 0.), noise(vec3(cos(ang) * 2.2, sin(ang) * 2.2, float(i) * 3.7 + vW.x)));
-        a = max(a, (1. - smoothstep(.4, 1.2, abs(r - R) / fr)) * on * (1. - float(i) * .25));
+        a = max(a, (1. - smoothstep(.4, 1.2, abs(r - R) / fr)) * on * envelope * (1. - travel * .55));
       }
       if (vM == ${M.ripple}) {
         float under = smoothstep(-.2, -.6, q.y / max(r, 1e-3)) * (1. - smoothstep(1.1, 2.4, abs(r - .9) / fr));
@@ -328,7 +332,7 @@ void main() {
       }
     } else if (vM == ${M.eddy}) {
       // an eddy: a small spiral, drawn in, broken
-      float sp = r / .28 - ang / 6.2832;
+      float sp = r / .28 - ang / 6.2832 - uTime * .12;
       float d = abs(fract(sp) - .5) / max(fwidth(sp), 1e-4);
       a = (1. - smoothstep(.4, 1.2, d)) * (1. - smoothstep(.7, 1., r)) * step(.3, noise(vec3(q * 3., 21.))) * .9;
     } else {
@@ -578,7 +582,7 @@ void main() {
     vec3 P = pw.xyz / pw.w, V = normalize(P - uEye), Rr = normalize(vec3(V.x, -V.y * .38, V.z));
     float t = .08, hitT = -1.;
     vec2 huv = vec2(0.);
-    for (int i = 0; i < 26; i++) {
+    for (int i = 0; i < 32; i++) {
       vec4 q = uVP * vec4(P + Rr * t, 1.);
       if (q.w <= 0.) break;
       vec3 nq = q.xyz / q.w;
@@ -597,7 +601,8 @@ void main() {
       bool pink = matAt(huv) == ${M.blossom};
       float lum = dot(ch, vec3(.3, .59, .11));
       vec3 inkR = pink ? vec3(.92, .7, .65) : mix(vec3(.19, .18, .17), vec3(.6, .58, .55), smoothstep(.25, .85, lum));
-      float strength = (pink ? .5 : mix(.92, .4, smoothstep(.25, .85, lum))) * (1. - smoothstep(.25, 2.6, hitT * Rr.y));
+      // Crowns sit well above the trunks: preserve their pale wash over a taller reflected span.
+      float strength = (pink ? .62 : mix(.92, .4, smoothstep(.25, .85, lum))) * (1. - smoothstep(pink ? 2. : .25, pink ? 12. : 2.6, hitT * Rr.y));
       float calm = c4.a;
       // (where it runs quick, broken up and fainter: running water holds a reflection badly)
       strength *= mix(.42, 1., calm);
