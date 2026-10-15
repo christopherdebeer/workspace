@@ -197,6 +197,20 @@ counter's well below every top, and to touch it is to fall. What a level brings 
 on the stove's second level, the lids on its third, the towel on its fourth) comes early in it,
 for sure; no level has more than two climbs or two jars.
 
+A level's laid whole or not at all: a piece that won't go anywhere, or no home at the end, and that
+layout's dropped and the level laid afresh (a dozen times; then plainly, steamers on things, which
+always fit); never a level short of a piece. Each says how it was laid (`made`), and the same level can
+be laid from another seed, to try many. Off a honey jar, a hop's made sure of from round either side
+of where it's landed against, and lower, as a splat never sticks just so; onto one, only at its front.
+
+How well they hold, played for real (`node cells/lab/devtools/squishy-seeds.mjs`): for each level and
+seed, whether every hop's arc lands, whether the autopilot gets home in the real simulation, and for
+each hop, from where it settles, its own flick and others a little stronger, weaker and to either side,
+each played out to rest: how many end stood on the next top, how much stronger or weaker straight on
+still does, and where the rest end (fallen, back where they left, further on, or nowhere a top is:
+draped on an edge, clinging to a side). A hop whose own flick doesn't hold is unwitnessed; one where
+under half do, fragile. Its table goes to devtools/out/seeds.md.
+
 ## What things stand on
 
 A kitchen's things aren't stood on towers of tins. Each top stands on something with a shape of its

@@ -502,10 +502,15 @@ function clear(lv: Level, p: Piece, corridors: V3[][], solid: Set<Shape>): boole
  * hop's made sure of with it there; if one laid before the room was all known doesn't hold once it is, laid
  * again, afresh.
  */
-export function buildKitchen(n: number): Level {
-  let lv: Level | null = null;
-  for (let salt = 0; salt < 6; salt++) { const a = layLevel(n, salt); lv = a.lv; if (a.ok) break; }
-  return lv!;
+export function buildKitchen(n: number, seed = 0): Level {
+  // (afresh, a dozen times; then plainly, steamers on things, which always fit; never a level short of a piece or of home)
+  let attempts = 0;
+  for (const plain of [false, true]) for (let salt = 0; salt < (plain ? 4 : 12); salt++) {
+    attempts++;
+    const a = layLevel(n, salt, seed, plain);
+    if (a.ok) { a.lv.made = { salt, plain, attempts, seed }; return a.lv; }
+  }
+  throw new Error(`level ${n} (seed ${seed}): no layout holds after ${attempts} attempts`);
 }
 /** The kitchen's solid things for a run, as shapes (the cupboards and the fridge, like the wall, can't be clung to). */
 function roomShapes(run: Run): Shape[] {
@@ -514,8 +519,8 @@ function roomShapes(run: Run): Shape[] {
   for (const p of pots) out.push(cyl(p.x, p.z, p.r, p.y0, p.y1, MAT.terracotta, 0.7), cyl(p.x, p.z, p.r * 1.1, p.y1, p.top, MAT.plant, 0.9));
   return out;
 }
-function layLevel(n: number, salt: number): { lv: Level; ok: boolean } {
-  const r = seeded(hash(n, 0x6b17c4e + salt * 0x9e37));
+function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: Level; ok: boolean } {
+  const r = seeded(hash(n, 0x6b17c4e + salt * 0x9e37 + seed * 0x3c6ef3));
   const chapter = chapterOf(n), place = PLACE[chapter], i = Math.min(3, within(n));
   const stove = chapter === 'stove';
   const holes: Array<[number, number, number, number]> = [], windows: number[] = [];
@@ -562,8 +567,8 @@ function layLevel(n: number, salt: number): { lv: Level; ok: boolean } {
     let laid = false;
     furnish(lv.towers[lv.towers.length - 1].at[0] + 250);
     for (let tries = 0; tries < 40 && !laid; tries++) {
-      // (and if nothing will fit, a steamer close by, about as high, on something)
-      const easy = tries >= 24;
+      // (and if nothing will fit, a steamer close by, about as high, on something; laid plainly, only that)
+      const easy = plain || tries >= 24;
       const kind: Kind = goal ? (finale && tries < 20 ? finale : 'stack') : easy ? 'stack' : b < intro.length && tries < 16 ? intro[b] : pick(r, n, last, used);
       // (what's hung from, not the last thing before home: home's laid from where it's let go of, and must be reachable)
       if (b >= count - 3 && !goal && (kind === 'rail' || kind === 'sill' || kind === 'oven')) continue;
@@ -595,10 +600,13 @@ function layLevel(n: number, salt: number): { lv: Level; ok: boolean } {
       last = kind; reach = p.reach; laid = true;
       used.set(kind, (used.get(kind) ?? 0) + 1);
     }
+    // (a piece that wouldn't go anywhere: not this layout)
+    if (!laid) return { lv, ok: false };
   }
   lv.shapes = lv.shapes.filter((sh) => !solid.has(sh));
   room(lv, chapter, holes, windows);
   // (and the kitchen as it is, all known now: each hop that flies near it still made, else laid afresh)
+  if (lv.towers[lv.towers.length - 1].top !== 'goal') return { lv, ok: false };
   const k = lv.kitchen;
   if (!k) return { lv, ok: true };
   const final = roomShapes({ ...k, yt: 0, g: lv.ground });

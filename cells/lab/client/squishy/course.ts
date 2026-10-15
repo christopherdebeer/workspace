@@ -12,9 +12,9 @@ import { buildKitchen, pieceAt, underTable } from './kitchen';
 import { box as drawBox, drawShapes } from './mesh';
 import { smear, type Prop } from './props';
 
-/** Level n, laid by its place. */
-export function buildLevel(n: number): Level {
-  return buildKitchen(n);
+/** Level n, laid by its place (another seed: another layout of the same level, for trying many). */
+export function buildLevel(n: number, seed = 0): Level {
+  return buildKitchen(n, seed);
 }
 
 /**

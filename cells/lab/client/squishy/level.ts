@@ -185,6 +185,8 @@ export interface Level {
   walls?: Shape[];
   /** the counter the course is on, for the kitchen drawn round it (room.ts): from xa to xb, its front at zf, the wall at zb; where windows are already */
   kitchen?: { xa: number; xb: number; zf: number; zb: number; avoid: number[] };
+  /** how it was laid: which attempt held (its salt), whether plainly, after how many, from which seed */
+  made?: { salt: number; plain: boolean; attempts: number; seed: number };
   /**
    * A place, not a run (one with more than one way through it): from each top, which to make for
    * next (for the camera's look ahead, and playing itself); and the way the opening view goes over it.
@@ -824,10 +826,10 @@ export function aim(lv: Level, from: V3, k: number, t = 0): { yaw: number; power
   let lo = -1, hi = -1;
   for (let p = 0; p <= 1.0001; p += 0.01) {
     const pa = path(lv, from, launch(yaw, p), 3, t);
-    // (on its top; or, for honey, against the honey, which holds)
+    // (on its top; or, for honey, against the honey, which holds: at its front, where the way on's from, not round its side)
     // (a touch as it leaves, on what it's leaving, isn't a landing)
     // (a rail: caught anywhere along its first part, from any side)
-    const ok = pa.hit && pa.t > 0.06 && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.rail ? pa.hit.shape === tw.rail.shape && railDist(tw.rail.shape, pa.hit.p).f < RAIL_CATCH : (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5));
+    const ok = pa.hit && pa.t > 0.06 && (tw.land ?? tw.shapes).includes(pa.hit.shape) && (tw.rail ? pa.hit.shape === tw.rail.shape && railDist(tw.rail.shape, pa.hit.p).f < RAIL_CATCH : (tw.jar ? pa.hit.shape.tack > 1 && Math.abs(pa.hit.n[1]) < 0.6 && Math.hypot(pa.hit.p[0] - tw.at[0], pa.hit.p[2] - tw.at[2]) < 6 : pa.hit.n[1] > 0.7) && onTop(tw, pa.hit.p, -1.5));
     if (ok) { if (lo < 0) lo = p; hi = p; } else if (lo >= 0) { if (!glossy || hi - lo > 0.005) break; lo = hi = -1; }
   }
   // (a little short of the middle of the band: it carries on a little after it lands)
@@ -930,7 +932,8 @@ function inside(s: Shape, p: V3, margin: number): boolean {
 /** Where it's put back after a fall to tower k: just over its top; or, a rail, hanging from it where it's caught. */
 export function respawnAt(lv: Level, k: number): V3 {
   const tw = lv.towers[k];
-  if (tw.rail) { const o = tw.rail.out; return [tw.at[0] + o[0] * RAIL_OUT, tw.at[1] - RAIL_BELOW, tw.at[2] + o[2] * RAIL_OUT]; }
+  // (back on a rail: put against it, a little into it, so it takes hold, whichever dumpling; then it hangs as it does)
+  if (tw.rail) { const o = tw.rail.out; return [tw.at[0] + o[0] * 1.2, tw.at[1] - 1.6, tw.at[2] + o[2] * 1.2]; }
   return [tw.at[0], tw.at[1] + REST_H + 2, tw.at[2]];
 }
 /** Where the dumpling's middle is, sat on tower j at a time (on a lid, it rides with it). */
@@ -952,7 +955,12 @@ export function hop(lv: Level, j: number, k: number): { t: number; flights: V3[]
   const a = lv.towers[j], b = lv.towers[k];
   const lid = b.land?.[0].lift ?? a.land?.[0].lift;
   const times = lid ? [0, 1, 2, 3, 4, 5].map((i) => ((i / 6 + 1 - lid.phase) % 1) * lid.period) : [0];
-  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3] : a.rail ? [f, [f[0], f[1] + 3, f[2]] as V3] : [f]; };
+  // (from a jar: where a splat sticks, which is never just so: lower, as it slides; and a hand's width round either way)
+  const round = (f: V3, d: number): V3 => {
+    const c = a.jar!.c, ox = f[0] - c[0], oz = f[2] - c[2], r = Math.hypot(ox, oz), an = Math.atan2(oz, ox) + d / r;
+    return [c[0] + Math.cos(an) * r, f[1] - 3, c[2] + Math.sin(an) * r];
+  };
+  const froms = (t: number) => { const f = standing(lv, j, t); return a.jar ? [f, [f[0], f[1] - 4, f[2]] as V3, [f[0], f[1] - 8, f[2]] as V3, round(f, 5), round(f, -5)] : a.rail ? [f, [f[0], f[1] + 3, f[2]] as V3] : [f]; };
   // (onto a top reached by its wall: against the wall, and up)
   if (b.wall) {
     const f = standing(lv, j, 0), w = aimWall(lv, f, k, 0);

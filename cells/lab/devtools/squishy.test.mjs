@@ -400,13 +400,20 @@ for (const kind of ['dough', 'jelly']) {
   assert.ok(C.buildLevel(15).movers.length > 0, 'level 15 has a lid');
   const dusts = new Set(); for (let n = 1; n <= 16; n++) for (const sh of C.buildLevel(n).shapes) if (sh.dust) dusts.add(sh.dust);
   for (const k of [L.DUST.flour, L.DUST.butter, L.DUST.crumbs, L.DUST.pepper, L.DUST.sprinkles]) assert.ok(dusts.has(k), `something with ${k} on it, in the first sixteen levels`);
-  // (what things stand on: each kind of support turns up, and the steamers are one among them)
+  // (what things stand on: each kind of support turns up, and the steamers are one among them; what hangs on the wall, a shelf, a sill, a rail, a jar's side, stands on nothing)
   { const mats = new Set(), tops = new Set(); let onCounter = 0, all = 0;
-    for (let n = 7; n <= 16; n++) for (const t of C.buildLevel(n).towers) { all++; tops.add(t.top); for (const sh of t.shapes) mats.add(`${sh.kind}:${sh.mat}`); if (t.shapes.every((sh) => sh.lo[1] < 0.5 ? sh.mat === L.MAT.tin || sh.mat === L.MAT.jar || sh.mat === L.MAT.bamboo || sh.mat === L.MAT.gold || sh.mat === L.MAT.pot : true) && !t.jar && !t.rail && t.top !== 'bin') onCounter++; }
+    for (let n = 7; n <= 16; n++) for (const t of C.buildLevel(n).towers) { all++; tops.add(t.top); for (const sh of t.shapes) mats.add(`${sh.kind}:${sh.mat}`); if (t.shapes.every((sh) => sh.lo[1] < 0.5 ? sh.mat === L.MAT.tin || sh.mat === L.MAT.jar || sh.mat === L.MAT.bamboo || sh.mat === L.MAT.gold || sh.mat === L.MAT.pot : true) && !t.jar && !t.rail && !t.wall && t.top !== 'sill' && t.top !== 'bin') onCounter++; }
     for (const [what, k] of [['a stool or a crate', `cap:${L.MAT.board}`], ['cookbooks', `box:${L.MAT.book}`], ['an upturned bowl or a cooling rack', `cap:${L.MAT.steel}`], ['a cake stand', `cyl:${L.MAT.porcelain}`]]) assert.ok(mats.has(k), `somewhere, ${what}`);
     assert.ok(tops.has('stand') && tops.has('rack'), 'somewhere, a tiered stand and a bare rack to land on');
     assert.ok(onCounter < all * 0.35, `most things stand on something: ${onCounter} of ${all} on tins or the counter`); }
   { const lv = C.bench('supports'); for (let k = 1; k < lv.towers.length; k++) assert.ok(L.hop(lv, k - 1, k), `the supports bench: hop ${k - 1}→${k}`); }
+  // (laid from other seeds too: never short of a piece or of home, and saying how it was laid)
+  for (const n of [3, 8, 12, 17, 22]) for (const seed of [1, 2]) { const lv = C.buildLevel(n, seed); assert.ok(lv.made && lv.towers.at(-1).top === 'goal', `level ${n} seed ${seed}: laid whole, home last`); }
+  // (back on a rail after a fall: it takes hold, whichever dumpling, and hangs; not a fall again, and again)
+  for (let n = 1; n <= 16; n++) { const lv = C.buildLevel(n); lv.towers.forEach((tw, k) => { if (!tw.rail) return; for (const kind of ['jelly', 'dough']) {
+    const d = new B.Dumpling([0, 30, 0], kind); d.place(L.respawnAt(lv, k));
+    run(d, lv, 2); assert.ok(d.com[1] > lv.kill && !!d.onRail, `level ${n}: ${kind} put back on the rail (${k}) holds it`);
+  } }); }
   console.log('levels ok');
 }
 
