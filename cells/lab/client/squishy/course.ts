@@ -24,6 +24,16 @@ export function buildLevel(n: number, seed = 0, composition: 'parallel' | 'conve
  * pudding with hundreds and thousands, the butter dish; `puddings`, each recipe in its mould, in rows; `breads`,
  * each bread on a board.
  */
+/** Every bench, by name (?bench=…), to list and open from the settings: what it is, in a few words. */
+export const BENCHES: ReadonlyArray<{ name: string; title: string; about: string }> = [
+  { name: 'breakfast', title: 'The Breakfast Counter', about: 'a hand-laid course: every kind of top, and its ways' },
+  { name: 'jelly', title: 'Three jellies', about: 'a panna cotta, a pudding and a konjac, to bounce on' },
+  { name: 'puddings', title: 'Puddings', about: 'each recipe in its mould, in rows' },
+  { name: 'breads', title: 'Breads', about: 'a boule, a bloomer, a baguette, a ciabatta, rolls' },
+  { name: 'coats', title: 'Coatings', about: 'flour, crumbs, pepper, sprinkles, butter, one after another' },
+  { name: 'supports', title: 'Supports', about: 'everything a top can stand on' },
+  { name: 'look', title: 'A still life', about: 'the light and the materials, the same each time' },
+];
 export function bench(name: string): Level {
   if (name === 'breakfast') return breakfast();
   const lv: Level = { n: 0, chapter: 'table', towers: [], shapes: [], sticks: [], movers: [], jellies: [], kill: -12, ground: -76, decor: [] };

@@ -19,7 +19,7 @@ import { hash, seeded } from '../kit/rng';
 import { Dumpling, ROLL_MAX, ROLL_MIN, railAxis, rollReach, type Kind } from './body';
 import { kitchenRun, tableSet } from './room';
 import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, dustMat, carried, chapterOf, fingerprint, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
-import { bench, buildLevel } from './course';
+import { BENCHES, bench, buildLevel } from './course';
 import { logFlick, settleFlick } from './flicklog';
 import { logoSVG } from './title';
 import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
@@ -1589,6 +1589,13 @@ let levelN = Math.max(1, Number(params.get('level')) || (() => { try { return Nu
 let lv!: Level;
 /** the tower last stood on (where a fall comes back to), falls, the clock, home (the time, or not yet) */
 let check = 0;
+/** the aim ring (the dots of the flick and the ring where it lands): always, only while learning (the first place's
+ * levels), or never — then a flick's judged by eye */
+const RING_MODES = ['always', 'early', 'never'] as const;
+type RingMode = (typeof RING_MODES)[number];
+const RING_WORDS: Record<RingMode, string> = { always: 'always', early: 'early levels', never: 'never' };
+let ringMode: RingMode = ((): RingMode => { const q = params.get('ring'); if (q && (RING_MODES as readonly string[]).includes(q)) return q as RingMode; try { const v = localStorage.getItem(STORE + ':ring'); return v && (RING_MODES as readonly string[]).includes(v) ? (v as RingMode) : 'always'; } catch { return 'always'; } })();
+const ringShown = () => ringMode === 'always' || (ringMode === 'early' && !benchName && levelN < CHAPTER_AT.counter) || (ringMode === 'early' && !!benchName);
 /** said, the first time a lid's pop throws you */
 let popSaid = false;
 /** another layout of the level (?seed=), as the Level Lab names it; and the level's fingerprint, for the flick log */
@@ -1883,7 +1890,7 @@ function release() {
   body.squeeze = null;
   if (!a || a.power < 0.02 || home >= 0 || fallenAt >= 0) return;
   // (kept, for the Level Lab: from where, as dragged, and what the ring said)
-  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, ring: aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
+  if (body.canFlick && !auto && !benchName) logFlick({ t: Date.now(), level: levelN, seed: levelSeed, fp: levelFp, skin, from: check, yaw: a.yaw, power: a.power, spin, drag: dragged, vw: innerWidth, vh: innerHeight, camYaw, ring: !ringShown() ? null : aimLand ? towerAt(lv, aimLand, 0.5) : -1 });
   if (body.canFlick) doFlick(a.vel, spin, a.climb);
   else buffered = { vel: a.vel, spin, until: simTime + 0.35, climb: a.climb };
 }
@@ -2220,7 +2227,7 @@ btn('sound', toggleSound);
 // ─── the title: the name, New Game, Continue, Settings; the place behind it, the dumpling and its friend ─────
 /** the title or playing; on the title, which way the camera looks (toward the course), the level the settings would start, and which card is up */
 let mode: 'title' | 'play' = auto || benchName || params.has('level') || params.has('skin') ? 'play' : 'title';
-let titleYaw = 0, pickN = 1, card: 'main' | 'settings' = 'main';
+let titleYaw = 0, pickN = 1, card: 'main' | 'settings' | 'benches' = 'main';
 let hopAt = 2.5, hopWho = 0;
 const saved = () => { try { return Number(localStorage.getItem(STORE + ':level')) || 0; } catch { return 0; } };
 $('logo').innerHTML = logoSVG();
@@ -2278,6 +2285,8 @@ function showMenu() {
   if (mode !== 'title') return;
   $('main').hidden = card !== 'main';
   $('settings').hidden = card !== 'settings';
+  $('benches').hidden = card !== 'benches';
+  $('s-ring').textContent = RING_WORDS[ringMode];
   const at = saved();
   const cont = $('cont');
   cont.hidden = at <= 1;
@@ -2297,6 +2306,19 @@ btn('opts', () => { card = 'settings'; showMenu(); });
 btn('s-back', () => { card = 'main'; showMenu(); });
 btn('s-play', () => play(pickN));
 btn('s-sound', toggleSound);
+btn('s-ring', () => {
+  ringMode = RING_MODES[(RING_MODES.indexOf(ringMode) + 1) % RING_MODES.length];
+  try { localStorage.setItem(STORE + ':ring', ringMode); } catch { /* */ }
+  showMenu();
+});
+btn('s-benches', () => { card = 'benches'; showMenu(); });
+btn('b-back', () => { card = 'settings'; showMenu(); });
+/** the benches, listed: each opens as a page of its own (?bench=…), with the dumpling as chosen */
+$('b-list').innerHTML = BENCHES.map((b) => `<button data-bench="${b.name}">${b.title}<small>${b.about}</small></button>`).join('');
+$('b-list').addEventListener('click', (ev) => {
+  const b = (ev.target as Element).closest('[data-bench]') as HTMLElement | null;
+  if (b) location.search = `?bench=${b.dataset.bench}${jellyOpen ? `&skin=${skin}` : ''}`;
+});
 btn('s-prev', () => { pickN = Math.max(1, pickN - 1); showMenu(); });
 btn('s-next', () => { pickN = Math.min(lab ? 24 : Math.min(24, reachedNow()), pickN + 1); showMenu(); });
 btn('s-skin', () => {
@@ -2308,7 +2330,8 @@ btn('s-skin', () => {
   card = 'settings';
   showMenu();
 });
-btn('tomenu', () => startTitle());
+// (from a bench, the menu's the game's own title: the bench was a page of its own)
+btn('tomenu', () => { if (benchName) location.search = ''; else startTitle(); });
 /** On the title: the two of them sat there, now and then one hopping, a little, where it is. */
 function titleTick(dt: number) {
   body.step(lv, dt, simTime);
@@ -2930,7 +2953,7 @@ function frame(now: number) {
   }
   // the aiming line: dots along where its middle will go, a ring where it lands
   aimLand = null;
-  if (aimNow) {
+  if (aimNow && ringShown()) {
     const pa = path(lv, body.com, aimNow.vel, 3, simTime, aimNow.climb ?? null);
     aimLand = pa.hit ? pa.hit.p : pa.pts[pa.pts.length - 1] ?? null;
     aimTop = pa.pts.reduce<V3 | null>((m, p) => (!m || p[1] > m[1] ? p : m), null);
