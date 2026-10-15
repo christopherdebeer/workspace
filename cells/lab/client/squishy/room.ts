@@ -66,7 +66,7 @@ export function runSolids(o: Run): { blocks: Block[]; pots: Pot[] } {
   const L = runLayout(o), { xb, zf, zb, yt, g } = o, blocks: Block[] = [], pots: Pot[] = [];
   for (const [x, x1] of L.cupboards) blocks.push({ c: [(x + x1) / 2, (L.wy0 + L.wy1) / 2, (L.wf + zb) / 2], h: [(x1 - x) / 2 - 0.3, (L.wy1 - L.wy0) / 2, (zb - L.wf) / 2], mat: MAT.cabinet });
   blocks.push(overFridge(L, zb, g), fridgeBody(L.fx0, L.fx1, zf - 3, zb, g), { c: [xb + L.ext / 2, yt + 14, zb - 21], h: [24, 14, 17], mat: MAT.fridge }, ...hood(L.rx0, L.rx1, zb, yt));
-  for (const wx of L.windows) { blocks.push(sillOf(wx, yt + 40, zb, 96)); pots.push(...potsOf(wx, yt + 40, zb, 96)); }
+  for (const wx of L.windows) { blocks.push(sillOf(wx, yt + 40, zb, 96)); pots.push(...potsOf(wx, yt + 40, zb, 96)); const sb = sillBooks(wx, yt + 40, zb, 96).block; if (sb) blocks.push(sb); }
   for (const [x, x1] of L.shelves) { const u = shelfUnit(x, x1, zb, L.wy0, L.wy1); blocks.push(...u.carcass, ...u.rows); }
   return { blocks, pots };
 }
@@ -108,6 +108,45 @@ export function shelfUnit(x0: number, x1: number, zb: number, y0: number, y1: nu
     if (books.length) rows.push({ c: [(x0 + 2 * T + Math.max(xEnd, end)) / 2, (b + hiY) / 2, zb - 1.5 - deep / 2], h: [(Math.max(xEnd, end) - x0 - 2 * T) / 2, (hiY - b) / 2, deep / 2], mat: MAT.book });
   });
   return { carcass, books, rows };
+}
+/**
+ * Cookbooks along a ledge from x0 to x1, standing on y, the wall (or a window's glass) at zb, no deeper than d
+ * nor taller than tall: a row stood up, spines out, or a few lying flat; and the room they take, as a block.
+ */
+export function ledgeBooks(x0: number, x1: number, y: number, zb: number, d: number, tall: number, key: number): { books: ShelfBook[]; block: Block | null } {
+  const coin = (...k: number[]) => (hash(Math.round(key * 10), ...k) % 1000) / 1000;
+  const books: ShelfBook[] = [], out: V3 = [0, 0, -1];
+  let hi = y, deep = 0, xe = x0;
+  if (coin(1) < 0.55) {
+    // (stood up, spines out: smaller books, a row of them)
+    let x = x0;
+    for (let i = 0; i < 9; i++) {
+      const t = 0.8 + coin(i, 2) * 0.8, h = Math.min(tall / 2, 5.5 + coin(i, 3) * 3.5), w = Math.min(d / 2, 3.8 + coin(i, 4) * 1.6);
+      if (x + 2 * t > x1) break;
+      const c: V3 = [x + t, y + h, zb - 0.8 - w];
+      books.push({ slot: slotOf(c[0], c[1], c[2]), c, S: out, Hd: [0, 1, 0], t, w, h });
+      hi = Math.max(hi, y + 2 * h); deep = Math.max(deep, 2 * w); x += 2 * t + 0.12; xe = x;
+    }
+  } else {
+    // (two or three lying flat, spines out, a little anyhow)
+    const n = 2 + Math.floor(coin(5) * 2), cx = (x0 + x1) / 2;
+    let sy = y;
+    for (let k = 0; k < n; k++) {
+      const t = 0.9 + coin(k, 6) * 0.7, h = Math.min((x1 - x0) / 2 - 0.5, 5.5 + coin(k, 7) * 2) - k * 0.4, w = Math.min(d / 2, 4.2 + coin(k, 8) * 1.3);
+      const c: V3 = [cx + (coin(k, 9) - 0.5) * 1.2, sy + t, zb - 0.8 - w];
+      books.push({ slot: slotOf(c[0], c[1], c[2]), c, S: out, Hd: [1, 0, 0], t, w, h });
+      sy += 2 * t; deep = Math.max(deep, 2 * w); xe = x1;
+    }
+    hi = sy;
+  }
+  if (!books.length) return { books, block: null };
+  return { books, block: { c: [(x0 + xe) / 2, (y + hi) / 2, zb - 0.8 - deep / 2], h: [(xe - x0) / 2, (hi - y) / 2, deep / 2], mat: MAT.book } };
+}
+/** a window sill's cookbooks: in one of the gaps its pots leave, which by where the window is */
+export function sillBooks(x: number, y0: number, zb: number, w: number) {
+  const gaps: Array<[number, number]> = [[x - 0.3 * w + 4.6, x + 0.05 * w - 3.8], [x - w / 2 - 4, x - 0.3 * w - 4.6], [x + 0.33 * w + 5, x + w / 2 + 4]];
+  const [a, b] = gaps[hash(Math.round(x), 0x5b0c) % 3];
+  return ledgeBooks(a + 0.5, b - 0.5, y0, zb, 10, 22, x);
 }
 const overFridge = (L: RunLayout, zb: number, g: number): Block => ({ c: [(L.fx0 + L.fx1) / 2, (g + 192 + L.wy1) / 2, (L.wf + zb) / 2], h: [(L.fx1 - L.fx0) / 2, (L.wy1 - g - 192) / 2, (zb - L.wf) / 2], mat: MAT.cabinet });
 const fridgeBody = (x0: number, x1: number, zf: number, zb: number, g: number): Block => ({ c: [(x0 + x1) / 2, g + 94, (zf + 2 + zb) / 2], h: [(x1 - x0) / 2, 94, (zb - zf - 2) / 2], mat: MAT.fridge });
@@ -223,6 +262,8 @@ export function window(out: number[], x: number, y0: number, y1: number, zb: num
     cylinder(out, cx, zb - 6, r * 0.8, y0, y0 + 7 * s, MAT.terracotta, MAT.terracotta, 16, true, r);
     for (let k = 0; k < 5; k++) { const an = k * 1.26 + px * 9; capsule(out, [cx, y0 + 6 * s, zb - 6], [cx + Math.cos(an) * 4 * s, y0 + (10 + (k % 3) * 2.5) * s, zb - 6 + Math.sin(an) * 3 * s], 1.5 * s, MAT.plant, 8, 3); }
   }
+  // (and cookbooks, between the pots or at an end)
+  for (const bk of sillBooks(x, y0, zb, w).books) book(out, bk.slot, bk.c, bk.S, bk.Hd, bk.t, bk.w, bk.h);
 }
 
 /** A kitchen table out in the room, centred at (x, z), its top at the floor + 76: a gingham cloth over it, chairs pulled up (all round; or, against a wall behind it, only on its +z side). */

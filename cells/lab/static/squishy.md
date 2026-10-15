@@ -388,7 +388,10 @@ as the dumpling does, and every hop's laid round them. Where the course has some
 wall (a rail, a little oven, a towel's shelf, a sill), the kitchen leaves that stretch of wall to it.
 
 Now and then a wall cupboard over the course is open shelves instead, cookbooks on them: stood up,
-spines out, a gap where one's been taken down, a few lying flat at a row's end. Every cookbook, on a
+spines out, a gap where one's been taken down, a few lying flat at a row's end. Every window sill
+has a few too, between its pots or at an end, a short row leant on the glass or a little stack; the
+towel's shelf runs on a little back the way you've come, cookbooks on that end, out of the way on;
+and home on the sill has a cookbook or two past it. All of them solid: in the way, not landed on. Every cookbook, on a
 shelf or in a stack something stands on, is one of a catalogue of forty-eight, made up by a grammar out
 of what the kitchen reads and has looked at (Tanizaki's praise of shadows, Alexander's pattern language
 and timeless way, Dunlop's grains, Julia Child's mastering, Totoro's neighbour, the animators' squash and

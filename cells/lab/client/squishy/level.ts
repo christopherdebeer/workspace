@@ -122,6 +122,8 @@ export interface Shape {
   hi: V3;
   /** met, but drawn by what it's part of (a crate's slats over its solid sides), not as itself */
   ghost?: boolean;
+  /** a cookbook (MAT.book box): which of its sides its spine's on (0 +x, 1 -x, 2 +z, 3 -z, turned by its yaw); else as it falls */
+  spine?: number;
   /** a capsule to hang from (a rail, a handle, a sill's lip): what touches it is held, as honey holds, and slides along
    * it when it's prodded (see body.ts's `shimmy`) */
   rail?: boolean;

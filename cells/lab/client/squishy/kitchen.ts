@@ -26,9 +26,9 @@
 import { hash, seeded, type Rand } from '../kit/rng';
 import { FEELS, breadFor } from './jelly';
 import { CHAPTER_AT, DUST, MAT, RADIUS, box, bread, cap, chapterOf, cyl, hop, jelly, rail, serviette, tower, type Chapter, type Level, type Shape, type Top, type Tower, type V3 } from './level';
-import { box as drawBox, capsule, drawShapes, quad } from './mesh';
+import { book, box as drawBox, capsule, drawShapes, quad } from './mesh';
 import { drainer, smear, spoon, tiltPlate, towel } from './props';
-import { runSolids, type Run } from './room';
+import { ledgeBooks, runSolids, type Run } from './room';
 import { HOLDS, assemble, holder, tiered, type Holder } from './supports';
 
 /** where the wall is (its face), and how far out from it a course may come */
@@ -215,8 +215,10 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     drawBox(d, [x, 24, bz], [15.4, 0.12, 14.9], 0, MAT.enamel);
     capsule(d, [x - 2.2, 18.5, bz - 15.6], [x + 2.2, 18.5, bz - 15.6], 0.75, MAT.board, 10, 3);
     const SY = Math.round(ramp(r, 72, 78)), SX = x + 6, SZ = BACK - 6;
-    const shelf = box([SX, SY - 1, SZ], [26, 1, 6], 0, MAT.board, 0.85);
-    const brackets = [-18, 18].map((dx) => box([SX + dx, SY - 6, BACK - 5], [0.6, 4, 5], 0, MAT.board, 0.8));
+    // (the shelf runs on a little back the way it's come, cookbooks on that end, out of the way on)
+    const shelf = box([SX - 7, SY - 1, SZ], [33, 1, 6], 0, MAT.board, 0.85);
+    const onShelf = ledge(d, SX - 39.5, SX - 27, SY, BACK, 11, 22);
+    const brackets = [-30, 18].map((dx) => box([SX + dx, SY - 6, BACK - 5], [0.6, 4, 5], 0, MAT.board, 0.8));
     const hangTo = 40;
     const tw = towel([SX - 13, SY, BACK - 12], [1, 0, 0], [0, 0, -1], 24,
       [[-4.5, 0.15], [-0.6, 0.35], [0.35, -0.5], [0.6, -4], [0.75, hangTo - SY + 6], [0.8, hangTo - SY]], n * 3 + Math.round(x));
@@ -224,7 +226,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     return {
       stops: [
         { top: 'bin', at: [x, 24, bz], r: 9, box: [15, 14.5], yaw: 0, shapes: [bin] },
-        { top: 'shelf', at: [SX, SY, SZ], r: 4, box: [24, 4.2], yaw: 0, shapes: [shelf, ...brackets, ...tw.shapes], land: [shelf, ...tw.shapes], wall: tw.shapes, wallAt: [SX - 1, (SY + hangTo) / 2, BACK - 12.8] },
+        { top: 'shelf', at: [SX, SY, SZ], r: 4, box: [24, 4.2], yaw: 0, shapes: [shelf, ...brackets, ...tw.shapes, ...onShelf], land: [shelf, ...tw.shapes], wall: tw.shapes, wallAt: [SX - 1, (SY + hangTo) / 2, BACK - 12.8] },
       ], extra: [], decor: d, reach: 30, wall: [SX],
     };
   }
@@ -420,6 +422,8 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     const basket = cyl(GX, BACK - 7, 6.5, sillY, sillY + 7, MAT.gold);
     const nap = serviette(GX, sillY + 7, BACK - 7, 6.5);
     const d = [...p.decor];
+    // (and on the sill past home, a cookbook or two)
+    const onSill = ledge(d, GX + 8, GX + 17.5, sillY, BACK, 10, 16);
     const wy0 = sillY + 3, wy1 = sillY + 58, wx0 = GX - 24, wx1 = GX + 24;
     quad(d, [wx0, wy0, BACK - 0.2], [wx0, wy1, BACK - 0.2], [wx1, wy1, BACK - 0.2], [wx1, wy0, BACK - 0.2], [0, 0, -1], [0, 0, -1], [0, 0, -1], [0, 0, -1], 12, [0, 0], [0, 1], [1, 1], [1, 0]);
     for (const [c, h] of [[[GX, wy1 + 1, BACK - 1], [26, 1, 1]], [[wx0 - 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]], [[wx1 + 1, (wy0 + wy1) / 2, BACK - 1], [1, (wy1 - wy0) / 2 + 2, 1]], [[GX, (wy0 + wy1) / 2, BACK - 0.8], [0.5, (wy1 - wy0) / 2, 0.6]]] as Array<[V3, V3]>) drawBox(d, c, h, 0, MAT.porcelain);
@@ -428,7 +432,7 @@ function piece(kind: Kind, x: number, z: number, r: Rand, n: number): Piece | nu
     kb.tack = 1.4; kb.tire = 0.6;
     const knives = [-2.5, 0, 2.5].map((dz, i) => cap([kb.c[0] - 1 + i, 26, kb.c[2] + dz], [kb.c[0] - 3 + i, 33, kb.c[2] + dz * 1.2], 0.9, MAT.chopstick));
     drawShapes([sill, kb, ...knives], d);
-    return { stops: [...p.stops, { top: 'goal', at: [GX, sillY + 7, BACK - 7], r: 5.5, yaw: 0, shapes: [basket, nap], land: [basket, nap] }], extra: [sill, kb, ...knives], decor: d, reach: 10, wall: [...p.wall!, GX] };
+    return { stops: [...p.stops, { top: 'goal', at: [GX, sillY + 7, BACK - 7], r: 5.5, yaw: 0, shapes: [basket, nap], land: [basket, nap] }], extra: [sill, kb, ...knives, ...onSill], decor: d, reach: 10, wall: [...p.wall!, GX] };
   }
   if (kind === 'sinkHome') {
     // the end, at the sink: across it, at the dishcloth hung over the window sill's edge toward the water; up
@@ -480,6 +484,15 @@ export function underTable(lv: Level) {
 export function pieceAt(kind: Kind, x: number, z: number, seed: number): Piece | null { return piece(kind, x, z, seeded(seed), 1); }
 export type { Kind as PieceKind, Piece };
 
+/** Cookbooks on a ledge of the course's own: drawn into d, and solid (as one block: what's on a ledge is in the way, not landed on). */
+function ledge(d: number[], x0: number, x1: number, y: number, zb: number, depth: number, tall: number): Shape[] {
+  const lb = ledgeBooks(x0, x1, y, zb, depth, tall, x0 * 7 + y);
+  for (const b of lb.books) book(d, b.slot, b.c, b.S, b.Hd, b.t, b.w, b.h);
+  if (!lb.block) return [];
+  const s = box(lb.block.c, lb.block.h, 0, MAT.book, 0.8);
+  s.ghost = true;
+  return [s];
+}
 /** Whether a piece stands clear of what's laid already (a hand's width between), and of the flights made sure of. */
 function clear(lv: Level, p: Piece, corridors: V3[][], solid: Set<Shape>): boolean {
   const mine = [...p.stops.flatMap((t) => t.shapes), ...p.extra];
@@ -487,7 +500,8 @@ function clear(lv: Level, p: Piece, corridors: V3[][], solid: Set<Shape>): boole
     for (const o of lv.shapes) {
       if (o === lv.shapes[0]) continue;
       // (the kitchen's own things, over the counter and up the wall: clear of them all round, not only from above)
-      if (solid.has(o) ? s.lo[1] - 5 < o.hi[1] && s.hi[1] + 5 > o.lo[1] && s.lo[0] - 5 < o.hi[0] && s.hi[0] + 5 > o.lo[0] && s.lo[2] - 5 < o.hi[2] && s.hi[2] + 5 > o.lo[2]
+      // (and what's high on the wall, a shelf, over what stands lower: by where they both are, not only from above)
+      if (solid.has(o) || s.lo[1] > 45 || o.lo[1] > 45 ? s.lo[1] - 5 < o.hi[1] && s.hi[1] + 5 > o.lo[1] && s.lo[0] - 5 < o.hi[0] && s.hi[0] + 5 > o.lo[0] && s.lo[2] - 5 < o.hi[2] && s.hi[2] + 5 > o.lo[2]
         : s.lo[0] - 5 < o.hi[0] && s.hi[0] + 5 > o.lo[0] && s.lo[2] - 5 < o.hi[2] && s.hi[2] + 5 > o.lo[2]) return false;
     }
     const m = RADIUS * 1.3;

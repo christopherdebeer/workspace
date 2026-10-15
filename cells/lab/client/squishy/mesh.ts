@@ -176,7 +176,7 @@ function dustOn(s: Shape, out: number[]) {
  */
 function bookBox(out: number[], s: Shape) {
   const cy = Math.cos(s.yaw), sy = Math.sin(s.yaw), X: V3 = [cy, 0, -sy], Z: V3 = [sy, 0, cy], [hx, hy, hz] = s.h;
-  const slot = slotOf(s.c[0], s.c[1], s.c[2]), k = slot % 4;
+  const slot = slotOf(s.c[0], s.c[1], s.c[2]), k = s.spine ?? slot % 4;
   const neg = (a: V3): V3 => [-a[0], -a[1], -a[2]];
   // (its spine on side k; its head the way that puts its cover up)
   const [S, Hd, w, h] = k === 0 ? [X, Z, hx, hz] : k === 1 ? [neg(X), neg(Z), hx, hz] : k === 2 ? [Z, neg(X), hz, hx] : [neg(Z), X, hz, hx];
