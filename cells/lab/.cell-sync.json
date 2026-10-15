@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:0fe94329d1b6e76461aed451992dfaad75ee247c0b7b321964aac9af6040eee4",
-  "syncedAt": "2026-10-15T22:42:07.882Z",
+  "treeVersion": "tree:61d4f66336e2b3f79f9f22d7f7318a9432a4c11a02e12af984de784f05f3addd",
+  "syncedAt": "2026-10-15T22:54:58.359Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -84,7 +84,7 @@
     "client/squishy-lab/probes.ts": "sha256:db45a18a7f852d4fcf40112db260fcf1e620120cd72ef75c803e70db10dfe390",
     "client/squishy-lab/spatial.ts": "sha256:8015575d462447a70708a48a327d323213167c9f9883c3e3edfee68fb89f2631",
     "client/squishy/bake.ts": "sha256:933271e6e476e47996121db9ebd6c8c53173ad4d18f3f3b9e3e07e5ce13a4164",
-    "client/squishy/body.ts": "sha256:a96328b81b5f076c3b526f95f1b616278632730509553191bb4647354f42abb6",
+    "client/squishy/body.ts": "sha256:2405a2e3a291d9718460f86ca813e23f045e39e0cb5ef5cf519c3e7269924e8f",
     "client/squishy/books.ts": "sha256:449758c180ce974a10978aad0100916bcbb5cca482a79bb18104f8e3034439d9",
     "client/squishy/course.ts": "sha256:e66cbcdf157514261ac7072e6c4f8e8bce521cce0507eb48e30d018110402e6e",
     "client/squishy/flicklog.ts": "sha256:248da2a1ccd1c77e941577f3436ea2b06fc557d0db7d43f99072f5d20f248e42",
