@@ -135,7 +135,7 @@ export interface LevelMesh { solid: number[]; glass: number[]; liquids: number[]
  * a pudding on a saucer, a lazy Susan; a butter dish, a honey jar (glass, the honey in it, the
  * honey down its side), a pot and its lid, a pan with its rim; and on the stove, its burner.
  */
-function towerMesh(t: Tower, m: LevelMesh, legacyHoney = false) {
+function towerMesh(t: Tower, m: LevelMesh) {
   const out = m.solid;
   const [x, , z] = t.at;
   if (t.burner) cylinder(out, t.shapes[0].c[0], t.shapes[0].c[2], t.burner, 0, 0.5, MAT.burner, MAT.burner, 36);
@@ -145,15 +145,10 @@ function towerMesh(t: Tower, m: LevelMesh, legacyHoney = false) {
     if (s.mat === MAT.bubble) { const v: number[] = []; drawShape(s, v); m.bubbles.push({ shape: s, verts: v }); continue; }
     if (s.mat === MAT.glass) {
       // (a jar: the honey in it, most of the way up, then the glass over everything)
-      const fillR = s.r * .93, fillBottom = s.c[1] - s.hh, fillTop = s.c[1] + s.hh * .55;
-      // Render the liquid volume separately, over a resolved scene. Retain
-      // the original opaque geometry for ?oldhoney comparisons.
-      if (legacyHoney) cylinder(out, s.c[0], s.c[2], fillR, fillBottom, fillTop, MAT.honey, MAT.honey, 36);
-      else {
-        const verts: number[] = [];
-        cylinder(verts, s.c[0], s.c[2], fillR, fillBottom, fillTop, MAT.honey, MAT.honey, 48);
-        m.honeyBodies.push({verts, center: [s.c[0], s.c[1], s.c[2]], radius: fillR, bottom: fillBottom, top: fillTop});
-      }
+      // (the honey in it drawn apart from the course, over what's behind it, as thick as the jar is where it's seen through)
+      const fillR = s.r * .93, fillBottom = s.c[1] - s.hh, fillTop = s.c[1] + s.hh * .55, verts: number[] = [];
+      cylinder(verts, s.c[0], s.c[2], fillR, fillBottom, fillTop, MAT.honey, MAT.honey, 48);
+      m.honeyBodies.push({ verts, center: [s.c[0], s.c[1], s.c[2]], radius: fillR, bottom: fillBottom, top: fillTop });
       cylinder(m.glass, s.c[0], s.c[2], s.r, s.c[1] - s.hh, s.c[1] + s.hh, MAT.glass, MAT.glass, 40);
       // (honey run down its front, toward where it's landed against: a ribbon just over the glass, the runs drawn on
       // it as a liquid, creeping down as the level goes on (main.ts, MAT.honeyRun); u across it in cm, v down from the rim)
@@ -312,14 +307,14 @@ function drawShape(s: Shape, out: number[]) {
   }
 }
 /** The whole course: every tower, and the chopsticks. */
-export function levelMesh(lv: Level, legacyHoney = false): LevelMesh {
+export function levelMesh(lv: Level): LevelMesh {
   const m: LevelMesh = { solid: [], glass: [], liquids: [], honeyBodies: [], movers: [], bubbles: [] };
   // Keep butter films out of the opaque baked course; they transmit its surface.
   for (let i = 0; i < lv.decor.length; i += VSTRIDE) {
     const dest = Math.round(lv.decor[i + 6]) === MAT.smear ? m.liquids : m.solid;
     for (let k = 0; k < VSTRIDE; k++) dest.push(lv.decor[i + k]);
   }
-  for (const t of lv.towers) towerMesh(t, m, legacyHoney);
+  for (const t of lv.towers) towerMesh(t, m);
   for (const s of lv.sticks) stick(s, m.solid);
   return m;
 }

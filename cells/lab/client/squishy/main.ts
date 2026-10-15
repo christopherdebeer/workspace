@@ -635,11 +635,6 @@ void main() {
     float pore = smoothstep(.55, .62, noise(vWorld * 2.6));
     base = top ? vec3(.16, .42, .2) * (.8 + .3 * noise(vWorld * 5.)) : vec3(.96, .8, .26) * (1. - .45 * pore);
     rough = 1.;
-  } else if (id == ${MAT.bubble}) {
-    // a soap bubble: clear, a film of colours swirling over it, bright where it catches the light
-    float film = fract(dot(n, vec3(1.3, 2.1, .7)) * 1.4 + noise(vWorld * 1.2) * .6);
-    vec3 hue = .5 + .5 * cos(6.2832 * (film + vec3(0., .33, .67)));
-    base = mix(vec3(.92, .94, .97), hue, .35); rough = .03; coat = 1.; emit = .25;
   } else if (id == ${MAT.water}) {
     // the water in the sink: grey-blue, a little cloudy with soap
     base = vec3(.16, .23, .27) * (.9 + .2 * noise(vec3(vWorld.xz * .2, uTime * .3))); rough = .04; coat = 1.;
@@ -864,17 +859,17 @@ void main() {
     base = mix(c2, vec3(.7, .7, .68), wear * .12);
     rough = mix(.35, .25, heart); metal = heart * .8 + wear * .4; coat = .5;
   } else if (id == ${MAT.smear}) {
-    // Connected translucent film, without shader-cut dry holes.
+    // butter melted and run: its edge ragged, lobed where it's crept on, an island or two left dry in it; stood up
+    // at its edge and pooled in its middle, pale where it's thin, golden where it's deep
     float across = abs(uv.y * 2. - 1.);
-    float irregularity = .040 * noise(vec3(vWorld.xz * .34, 3.))
-                      + .018 * noise(vec3(vWorld.xz * .8, 7.));
-    float d = (.975 - across - irregularity) * 3.5;
-    d = min(d, min(uv.x, 1. - uv.x) * 22.);
+    float rag = .2 * noise(vec3(vWorld.xz * .7, 3.)) + .12 * noise(vec3(vWorld.xz * 2.1, 7.));
+    float d = (.92 - rag - across) * 3.2;
+    d = min(min(d, (.8 - noise(vec3(vWorld.xz * .9, 11.))) * 9.), min(uv.x - .03, .86 - uv.x) * 25.);
     if (d <= 0.) discard;
     liquidCover = smoothstep(0., max(.09, fwidth(d) * 1.5), d);
-    float swell = .93 + .14 * noise(vec3(vWorld.xz * .35, 5.));
-    liquidDepth = clamp(d * .65, 0., 1.);
-    liquid(liquidDepth, .09 * swell, vWorld, vec3(1., .94, .71), vec3(.97, .78, .28), .035, n, base, rough, coat, coatRough, coatSpec, emit);
+    float swell = .8 + .4 * noise(vec3(vWorld.xz * .5, 5.));
+    liquidDepth = clamp(d, 0., 1.);
+    liquid(liquidDepth, .16 * swell, vWorld, vec3(1., .93, .68), vec3(.97, .74, .2), .08, n, base, rough, coat, coatRough, coatSpec, emit);
   } else if ((id >= 25 && id <= 29) || id == ${MAT.glaze}) {
     // what's on a top: flour on a board, crumbs or pepper on a plate, hundreds and thousands on a pudding, honey spilt, over the top it's on
     int k = id == ${MAT.glaze} ? 6 : id - 24;
@@ -961,12 +956,18 @@ void main() {
     if (ray.y < -1e-5) tCap = max(0., (uHoneyRange.y - vWorld.y) / ray.y);
     else if (ray.y > 1e-5) tCap = max(0., (uHoneyRange.z - vWorld.y) / ray.y);
     float thick = clamp(min(tSide, tCap), 0., rad * 3.);
-    vec3 T = exp(-vec3(.024, .093, .27) * thick);
+    // (seen down through its bottom: what's under it is lit through the honey too, so it's shut the more)
+    if (tCap < tSide && ray.y < 0.) thick = thick * 2. + rad * .6;
+    // (honey's dense: a few centimetres of it is deep amber, the jar's width of it nearly shut; and cloudy, the
+    // light that's gone into it coming back out amber, so it glows rather than shows the wall through it)
+    vec3 T = exp(-vec3(.12, .34, .9) * thick);
     vec2 offset = vec2(dot(n, uRight), dot(n, uUp)) * (.0018 + .0022 * thick / max(rad * 2., .01));
     vec3 scene = texture(uScene, clamp(gl_FragCoord.xy / uRes + offset, vec2(.001), vec2(.999))).rgb;
     float F = .035 + .965 * pow(1. - NoV, 5.);
-    vec3 transmitted = scene * T + vec3(.92, .42, .045) * (vec3(1.) - T) * .21;
+    vec3 transmitted = scene * T + vec3(.62, .25, .025) * (vec3(1.) - T) * (.5 + .35 * max(dot(n, uKey), 0.));
     vec3 glint = env(reflect(-V, n)) * (.26 + .08 * max(dot(n, uKey), 0.));
+    // (its top, where it meets the glass: drawn up the glass a little, a bright line round it)
+    if (n.y > .5) glint += vec3(1., .78, .4) * smoothstep(rad - .7, rad - .05, length(q.xz)) * .9;
     glint += uKeyCol * pow(max(dot(reflect(-V, n), uKey), 0.), 160.) * .18;
 #ifdef HDR
     o = vec4(mix(transmitted, glint, clamp(F * .65, .02, .76)), 1.);
@@ -987,6 +988,9 @@ void main() {
     vec3 scene = texture(uScene, clamp(gl_FragCoord.xy / uRes + bend, vec2(.001), vec2(.999))).rgb;
     vec3 tint = butterFilm ? vec3(.97, .83, .33) : vec3(.74, .34, .045);
     float reflectAmt = clamp(.13 + .68 * F, 0., .85);
+    // (butter's cloudy, milk in it: mostly its own gold, lit, only its thin edge letting what's under show)
+    // (honey's runs too, mostly their own amber: drawn before the jar's honey, what's behind them is the bare wall)
+    reflectAmt = max(reflectAmt, butterFilm ? mix(.45, .85, liquidDepth) : mix(.5, .9, liquidDepth));
 #ifdef HDR
     vec3 transmitted = scene * T + tint * (vec3(1.) - T) * .16;
     o = vec4(mix(scene, mix(transmitted, c, reflectAmt), liquidCover), 1.);
@@ -998,8 +1002,6 @@ void main() {
   }
   // (glass: seen through, but for its gloss and its edges)
   if (id == ${MAT.glass}) { float Fg = .04 + .96 * pow(1. - NoV, 4.); o = vec4(tonemap(c), clamp(.08 + Fg * .9 + length(spec) * .3, 0., 1.) * uAlpha); return; }
-  // (a soap bubble: hardly there face on, its film's colours toward its rim, bright where it catches the light)
-  if (id == ${MAT.bubble}) { float Fb = pow(1. - NoV, 2.5); o = vec4(tonemap(c), clamp(.05 + Fb * .75 + length(spec) * .5, 0., .9) * uAlpha); return; }
   o = vec4(tonemap(c), alpha);
 }`;
 
@@ -1938,7 +1940,7 @@ function startLevel(n: number, quiet = false) {
     const data = new Float32Array(jelMeshSize(shape.jel!, shape.mat === MAT.bread ? 0 : shape.dust)), def = new Float32Array((data.length / VSTRIDE) * 2);
     return { shape, data, def, mesh: upload(data, gl.DYNAMIC_DRAW, null, def), ripple: [0, 0, -99, 0], was: false };
   });
-  const lm = levelMesh(lv, params.has('oldhoney'));
+  const lm = levelMesh(lv);
   const solid = new Float32Array(lm.solid);
   courseMesh = upload(solid, gl.STATIC_DRAW, bakeLight(solid));
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
@@ -3201,6 +3203,8 @@ function frame(now: number) {
   gl.uniformMatrix4fv(u(shadowProg, 'uLightVP'), false, lightVP);
   gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, I4);
   if (courseMesh) { gl.bindVertexArray(courseMesh.svao); gl.drawArrays(gl.TRIANGLES, 0, courseMesh.count); }
+  // (the honey in a jar's drawn apart, over the scene, but it still stands in the sun)
+  for (const h of honeyMeshes) { gl.bindVertexArray(h.mesh.svao); gl.drawArrays(gl.TRIANGLES, 0, h.mesh.count); }
   for (const m of movers) { gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, model([0, m.shape.c[1] - m.shape.lift!.y0, 0], 1)); gl.bindVertexArray(m.mesh.svao); gl.drawArrays(gl.TRIANGLES, 0, m.mesh.count); }
   gl.uniformMatrix4fv(u(shadowProg, 'uModel'), false, I4);
   fillJellies();
@@ -3427,12 +3431,14 @@ function frame(now: number) {
 
   }
 
-  // Translucent jar volume, before its transparent glass and outer drips.
-  // The hero's existing depth ensures the honey cannot paint over foreground.
-  if (honeyMeshes.length) {
-    sceneCopy(W, H);
+  // What's seen through, after everything solid. One copy of the scene serves the films (butter, honey's runs and
+  // pool) and the honey in a jar: the films go first and keep their depth, so the honey behind a run can't paint over
+  // it. A bubble takes a fresh copy only if one of those (or the jelly, or the glass) has drawn since the last.
+  let fresh = false;
+  const seeThrough = () => { if (!fresh) { sceneCopy(W, H); fresh = true; } };
+  if (liquidMesh || honeyMeshes.length) {
+    seeThrough();
     gl.useProgram(prog);
-    gl.uniform1f(u(prog, 'uLiquidOpt'), 2);
     gl.uniform1i(u(prog, 'uScene'), 1);
     gl.uniform2f(u(prog, 'uRes'), W, H);
     gl.uniform3fv(u(prog, 'uRight'), right);
@@ -3441,22 +3447,28 @@ function frame(now: number) {
     gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
     gl.uniform3fv(u(prog, 'uHole'), [0, 0, 0]);
     gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
     gl.disable(gl.BLEND);
-    gl.depthMask(false);
-    for (const jar of honeyMeshes) {
-      gl.uniform3fv(u(prog, 'uHoneyC'), jar.center);
-      gl.uniform3f(u(prog, 'uHoneyRange'), jar.radius, jar.bottom, jar.top);
-      drawMesh(jar.mesh);
+    if (liquidMesh) { gl.uniform1f(u(prog, 'uLiquidOpt'), 1); drawMesh(liquidMesh); }
+    // (the honey in a jar: its thickness along the ray through it, from the jar's own cylinder, no back-face pass)
+    if (honeyMeshes.length) {
+      gl.uniform1f(u(prog, 'uLiquidOpt'), 2);
+      gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+      gl.depthMask(false);
+      for (const jar of honeyMeshes) {
+        gl.uniform3fv(u(prog, 'uHoneyC'), jar.center);
+        gl.uniform3f(u(prog, 'uHoneyRange'), jar.radius, jar.bottom, jar.top);
+        drawMesh(jar.mesh);
+      }
+      gl.depthMask(true);
+      gl.disable(gl.CULL_FACE);
     }
-    gl.depthMask(true);
-    gl.disable(gl.CULL_FACE);
     gl.uniform1f(u(prog, 'uLiquidOpt'), 0);
+    fresh = false;
   }
 
   // (the glass: over everything, seen through)
   const liveBubbles = bubbles.filter((b) => b.gone < 0);
-  if (glassMesh || (params.has('oldbubbles') && liveBubbles.length)) {
+  if (glassMesh) {
     gl.useProgram(prog);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -3464,41 +3476,16 @@ function frame(now: number) {
     gl.uniform1f(u(prog, 'uAlpha'), 1);
     gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
     gl.enable(gl.CULL_FACE);
-    if (glassMesh) { gl.cullFace(gl.FRONT); drawMesh(glassMesh); gl.cullFace(gl.BACK); drawMesh(glassMesh); }
-    // (the bubbles, clear: their far side then their near, so the film's seen through on both)
-    for (const b of (params.has('oldbubbles') ? liveBubbles : [])) {
-      // (wherever it's floated to)
-      const off = model(sub(b.shape.c, b.c0), 1);
-      gl.cullFace(gl.FRONT); drawMesh(b.mesh, off); gl.cullFace(gl.BACK); drawMesh(b.mesh, off);
-    }
+    gl.cullFace(gl.FRONT); drawMesh(glassMesh); gl.cullFace(gl.BACK); drawMesh(glassMesh);
     gl.disable(gl.CULL_FACE);
     gl.depthMask(true);
     gl.disable(gl.BLEND);
+    fresh = false;
   }
 
-  // Thin honey and butter films use the same resolved scene as jelly.
-  if (liquidMesh) {
-    sceneCopy(W, H);
-    gl.useProgram(prog);
-    gl.uniform1i(u(prog, 'uScene'), 1);
-    gl.uniform3fv(u(prog, 'uRight'), right);
-    gl.uniform3fv(u(prog, 'uUp'), upv);
-    gl.uniform2f(u(prog, 'uRes'), W, H);
-    gl.uniform1f(u(prog, 'uLiquidOpt'), params.has('oldliquid') ? 0 : 1);
-    gl.uniform1f(u(prog, 'uAlpha'), 1);
-    gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
-    gl.uniform3fv(u(prog, 'uHole'), [0, 0, 0]);
-    gl.enable(gl.DEPTH_TEST);
-    gl.disable(gl.BLEND);
-    gl.depthMask(false);
-    drawMesh(liquidMesh);
-    gl.depthMask(true);
-  }
-
-  // Refract the resolved scene through the bubble's front shell.
-  // The scene buffer is also shared with the jelly: no new render target.
-  if (liveBubbles.length && !params.has('oldbubbles')) {
-    sceneCopy(W, H);
+  // (the bubbles: the scene refracted through each one's near shell, its film's colours toward its rim)
+  if (liveBubbles.length) {
+    seeThrough();
     gl.useProgram(bubbleProg);
     lightUniforms(bubbleProg);
     gl.uniformMatrix4fv(u(bubbleProg, 'uVP'), false, vp);
@@ -3549,7 +3536,7 @@ function frame(now: number) {
   drawBand();
   showStatus();
   (window as unknown as { __squishy: unknown }).__squishy = {
-    visualBuild: 'xpbd-contact-v1', physics:{strain:!params.has('nostrain'),adhesion:'compliant-peel'}, optics: { bubbles: params.has('oldbubbles') ? 'legacy' : 'thin-film', liquid: params.has('oldliquid') ? 'legacy' : 'transmission', honey: params.has('oldhoney') ? 'opaque' : 'ray-cylinder', honeyJars: honeyMeshes.length, liquidTriangles: liquidMesh ? liquidMesh.count / 3 : 0 },
+    visualBuild: 'xpbd-contact-v1', physics:{strain:!params.has('nostrain'),adhesion:'compliant-peel'}, optics: { honeyJars: honeyMeshes.length, liquidTriangles: liquidMesh ? liquidMesh.count / 3 : 0 },
     level: levelN, towers: lv.towers.length, check, falls, clock, home, fly, ahead: Math.round(ahead * 100) / 100, com: body.com.map((v) => Math.round(v * 10) / 10),
     speed: Math.round(len(body.vcom)), contacts: body.contacts, canFlick: body.canFlick, aiming: !!aimNow, pushing: !!pushNow, power: aimNow?.power ?? pushNow?.power ?? 0, framed: Math.round(framed * 100) / 100,
     volume: Math.round((body.volume() / body.restVolume) * 1000) / 1000, deform: Math.round(body.deform * 1000) / 1000, squeeze: !!body.squeeze,

@@ -599,30 +599,42 @@ everything else and seen through, the honey in it lit from within.
 in; `?skin=dough` the dough; `?auto` lets it play
 itself; `?view=ex,ey,ez,tx,ty,tz` holds the camera at an eye looking at a point (for a look at a place).
 
-### Thin-film optics refinement (2026-10-15)
+### What's seen through
 
-`?oldbubbles`: restores the previous two-sided alpha-blended bubble material. Default bubbles now use a **single front shell** with scene-colour refraction using the existing HDR resolve, a nearly transparent centre, a fine Fresnel rim and weak interference colours.
+After everything solid, what's seen through is drawn over a copy of the scene: the jelly; the films (butter
+melted on a top, honey's runs down a jar and its pool round the foot); the honey in a jar; the glass; the
+bubbles. One copy serves the films and the jar's honey together (the films go first and keep their depth, so
+the honey behind a run can't paint over it); a bubble takes a fresh copy only if something see-through has
+drawn since. On a phone each copy is a whole screen's worth, so they're kept as few as that.
 
-`?oldliquid`: disables the new honey/butter absorption and scene-colour transmission for comparison (but retains the raised liquid geometry). Honey runs and pools, and melted butter smears, are now drawn over their substrate, outside the opaque course bake, using the shared scene-colour resolve. Honey runners have a real narrow raised cross-section and the pooled honey has a shallow geometric meniscus. These remain procedural creeping surface coatings, not free-flowing 3D fluids; collision and adhesion physics were not modified.
+- **Films** are drawn as liquids (the shared `liquid()` lighting: a meniscus at the edge, a dark wet line where
+  it meets what it's on, the light through it gathered on its far side from the sun), and a little of what's
+  under them shows through their thin edges. Butter's cloudy, so mostly its own gold; honey's runs mostly
+  their own amber.
+- **The honey in a jar** is as thick as the ray through it (the jar's cylinder, worked out in the shader, no
+  back-face pass): a few centimetres deep amber, the jar's width of it nearly shut, cloudy, so it glows rather
+  than shows the wall through it; what's under it, seen down through it, is lit through it too. A bright line
+  where its top meets the glass. It still stands in the sun: it's in the shadow pass.
+- **Bubbles** are the scene refracted through each one's near shell (no culling; the shader keeps the half
+  facing the eye), clear face on, their film's colours and the room toward the rim, a glint of the sun.
 
-Compare the same camera with and without these switches on relevant levels, and measure sustained GPU performance using `?perf` on iPhone Safari. A clean deployment cannot establish visual quality or mobile frame time.
+### The skin: how far it stretches, how honey holds
 
-### Honey fill and butter continuity — October 15
+While honey has hold of it, each edge of the dumpling's skin may stretch so far and no further (1.85× for
+dough, 2.05× for jelly); squashing is free. That's what stops the needles a body stuck to honey used to grow
+(2–3× before). Only then: everywhere else the body's as it was, which every way through the levels was laid and
+tested against (with the limit on everywhere, a dough leaving the buttered tray on the breakfast counter missed
+its next spot every time). A radial cap behind it is a safety net only: tight (1.6×) while honey holds it, loose
+(1.95×) otherwise, so splats keep their spread (about 1.7). The correction moves the skin, not its speed: fed
+back as velocity, it kept a body hanging on honey jittering.
 
-The jar's **main honey volume** is now rendered separately from the opaque course. Each fill mesh uses an analytic ray–cylinder thickness estimate to attenuate the real background, producing pale amber on short paths and richer colour through the centre. The glass shell, external run and pool render subsequently. `?oldhoney` restores the original opaque fill for A/B comparison.
+Honey holds by spaced sites over the skin, not every point that touches: each a compliant bond, creeping
+down with the honey, that peels when it's overloaded and can't take again for a moment; a rail's hold is
+still whole; it oozes down at the honey's own creep (2 cm/s). `?nostrain` turns the edge limits off, to compare.
 
-The butter smear is now a connected, smooth tapered surface: an earlier fractional power of a *negative sine* produced non-finite geometry near its trailing end. The shader also removes the large random holes and blends the film into its substrate at the boundary. This slightly changes the smear silhouette but leaves the coating/adhesion rules unchanged.
+### Probes
 
-User's bubble fix is preserved: face culling remains disabled and the fragment shader selects the front-facing film. The zero-length bubble capsule UV also no longer divides by zero. A headless diagnostic at `/_squishy-optics-check/look` and `/_squishy-optics-check/coats` checks finite generated geometry and separate material layers; it does not verify WebGL or on-device performance.
-
-### Soft-body local strain / compliant adhesion (XPBD experiment)
-
-This pass retains clustered shape matching and global volume preservation, but adds **one-sided, compliant XPBD stretch constraints on unique physics-mesh edges**. Compression remains free, allowing squash, sag and wrinkles. Multipliers accumulate across solver iterations within each physics substep; compliance is scaled by substep time. The global radial extent limit remains a safety guard, **not** the primary material model.
-
-Honey and other adhesive non-rail surfaces no longer rigidly anchor every contact vertex. Attachment sites are sampled once, deterministically and spaced in undeformed physical space. Active bonds are compliant, creep with the surface, accrue strain and **peel under overload**, followed by a brief cooldown. Mechanical rail attachments retain the old full-strength behaviour.
-
-Use `?nostrain` as an A/B switch: it disables local XPBD edge constraints **only**, not improved peel/creep adhesion. `?perf` measures actual on-device frame rate. Test endpoints reuse the same `Dumpling.step()`: `/_squishy-jar-strain/glance/32`, `/_squishy-jar-strain/hang/32`, `/_squishy-body-regress/edge/28`, and `/_squishy-body-regress/free/28`. Append `/nostrain` for no-strain baseline or `/nostrain/jelly` for jelly in body regressions.
-
-**Current deterministic evidence:** radial bounds alone allowed local edge strain **26.77×**. XPBD reduces measured maximum local stretch to approximately **1.5–1.63×** in the 32-frame jar trials; sampled adhesion sites yield approximately **38 bonds** when hanging and **48 bonds** on glancing contact, rather than 100+ before peeling. Plate-edge 28-frame regression peaks at **1.49×** with all positions finite and volume remaining approximately 0.979–1.000× rest. Free motion peaks near **1.68×** in its sampled trial. These are reproducible physics trials, not proof of on-screen appearance or human-level playability.
-
-**Performance caution:** the constraint pass has nontrivial CPU overhead in the headless server. Do not infer iPhone Safari performance from server timings. Compare with `?nostrain&perf` on the same camera/level before promoting this to a final tuning.
+The lab's server-side probes are deterministic trials on Squishy's own generator and physics, answered as
+JSON: `/_probe` lists them, `/_probe/<name>/<args>` runs one (`spatial`, `fork`, `jar-strain`, `body`,
+`optics`). They live in `client/squishy-lab/probes.ts`; a new one is an entry there, not a new route. The
+`devtools/` harnesses are local and never reach the cell.

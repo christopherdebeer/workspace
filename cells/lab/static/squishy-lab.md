@@ -72,7 +72,7 @@ The isolated headless checker reran the generated fork's first two exits with th
 
 Each row is **one successful physical trajectory** from a fresh settled state, not a percentage. These witnesses establish that both first jumps are achievable by the current simulated physics in both compared compositions. They do **not** prove that either route's later jumps are robust, that mistakes are recoverable, or that people can read or execute these controls comfortably. The alternative requires greater nominal launch power, but difficulty additionally depends on the width and continuity of its successful input region.
 
-The evidence endpoint can be reproduced for one edge at a time via `/_squishy-physical/7/2/parallel/0` (safe), `/_squishy-physical/7/2/parallel/1` (alternative), and the corresponding `offset` paths. These deliberately limit each invocation to one full-body trace to avoid the cell's short execution timeout.
+The evidence endpoint can be reproduced for one edge at a time via `/_probe/fork/7/2/parallel/0` (safe), `/_probe/fork/7/2/parallel/1` (alternative), and the corresponding `offset` paths. These deliberately limit each invocation to one full-body trace to avoid the cell's short execution timeout.
 
 ### Comparison outcome: added turning is not added discovery
 

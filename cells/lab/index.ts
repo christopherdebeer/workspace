@@ -3,13 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { EXPERIMENTS, groups, type Experiment } from './experiments';
 import { markdown } from './md';
-import { studyOne, studyVariants } from './client/squishy-lab/spatial';
-import { validateFork } from './client/squishy-lab/physics-study';
-import { bench as squishyBench, buildLevel as squishyLevel } from './client/squishy/course';
-import { levelMesh as squishyMesh, VSTRIDE as squishyStride } from './client/squishy/mesh';
-import { MAT as squishyMaterials } from './client/squishy/level';
-import { jarStrainProbe } from './client/squishy-lab/jar-strain';
-import { bodyRegression } from './client/squishy-lab/body-regress';
+import { probe } from './client/squishy-lab/probes';
 
 /**
  * `@c15r/lab` — 3D and GL experiments, one cell.
@@ -249,62 +243,9 @@ export const handler = async (event: { rawPath?: string; rawQueryString?: string
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/lab(?=\/|$)/, '') || '/';
   try {
     const b = build();
-    if (path.startsWith('/_squishy-body-regress/')) {
-      const parts=path.split('/'),mode=parts[2]==='edge'?'edge':'free';
-      const frames=Math.max(1,Math.min(100,Number(parts[3])||40));
-      return text(200,'application/json; charset=utf-8',JSON.stringify(bodyRegression(mode,frames,parts[4]!=='nostrain',parts[5]==='jelly'?'jelly':'dough')),'no-store');
-    }
-    if (path.startsWith('/_squishy-jar-strain/')) {
-      const parts=path.split('/'),mode=parts[2]==='glance'?'glance':'hang';
-      const frames=parts[3] ? Math.max(1,Math.min(140,Number(parts[3])||1)) : undefined;
-      const t0=Date.now(),probe=jarStrainProbe(mode,frames,parts[4]!=='nostrain');
-      return text(200,'application/json; charset=utf-8',JSON.stringify({...probe,elapsedMs:Date.now()-t0}),'no-store');
-    }
-    if (path.startsWith('/_squishy-optics-check/')) {
-      const parts = path.split('/');
-      const scene = parts[2] === 'coats' ? 'coats' : parts[2] === 'look' ? 'look' : '';
-      const lv = scene ? squishyBench(scene) : squishyLevel(Math.max(1, Math.min(30, Number(parts[2]) || 13)), Math.max(0, Number(parts[3]) || 0));
-      const mesh = squishyMesh(lv);
-      const layers = {
-        solid: mesh.solid, glass: mesh.glass, liquid: mesh.liquids,
-        fill: mesh.honeyBodies.flatMap(h => h.verts),
-        bubbles: mesh.bubbles.flatMap(b => b.verts),
-      };
-      const checks = Object.entries(layers).map(([name, data]) => {
-        let invalid = 0, first = -1, smear = 0, honey = 0;
-        for (let i = 0; i < data.length; i++) {
-          if (!Number.isFinite(data[i])) { invalid++; if (first < 0) first = i; }
-          if (i % squishyStride === 6) {
-            if (Math.round(data[i]) === squishyMaterials.smear) smear++;
-            if (Math.round(data[i]) === squishyMaterials.honey) honey++;
-          }
-        }
-        return {name, vertices: data.length / squishyStride, invalid, first, smearVertices: smear, honeyVertices: honey};
-      });
-      const passed = checks.every(k => k.invalid === 0);
-      return text(passed ? 200 : 422, 'application/json; charset=utf-8', JSON.stringify({
-        scene: scene || lv.n, stops: lv.towers.length,
-        jars: mesh.honeyBodies.map(h => ({radius:h.radius,bottom:h.bottom,top:h.top,vertices:h.verts.length/squishyStride})),
-        checks, finite: passed
-      }), 'no-store');
-    }
-    if (path.startsWith('/_squishy-physical/')) {
-      const parts=path.split('/');
-      const level=Math.max(1,Math.min(30,Number(parts[2])||7));
-      const seed=Math.max(0,Math.min(100000,Number(parts[3])||0));
-      const variant=(['parallel','convergent','offset'].includes(parts[4])?parts[4]:'parallel') as 'parallel'|'convergent'|'offset';
-      const exitIndex=parts[5]!==undefined?Number(parts[5]):-1;
-      return text(200,'application/json; charset=utf-8',JSON.stringify(validateFork(level,seed,variant,exitIndex)),'no-store');
-    }
-    if (path === '/_squishy-spatial' || path.startsWith('/_squishy-spatial/')) {
-      const q = new URLSearchParams(event.rawQueryString ?? '');
-      const parts = path.split('/');
-      const level = Math.max(1, Math.min(30, Number(parts[2] ?? q.get('level')) || 6));
-      const seed = Math.max(0, Math.min(100000, Number(parts[3] ?? q.get('seed')) || 0));
-      const variant = parts[4] as 'parallel' | 'convergent' | 'offset' | undefined;
-      const result = variant && ['parallel','convergent','offset'].includes(variant) ? studyOne(level,seed,variant) : studyVariants(level,seed);
-      return text(200, 'application/json; charset=utf-8', JSON.stringify(result), 'no-store');
-    }
+    // (the lab's probes, one route for them all: client/squishy-lab/probes.ts)
+    const pr = probe(path);
+    if (pr) return text(pr.status, 'application/json; charset=utf-8', JSON.stringify(pr.body), 'no-store');
     if (path === '/' || path === '/index.html') return text(200, 'text/html; charset=utf-8', b.index, 'no-cache');
     if (path.startsWith('/~/')) {
       const o = b.objects.get(path);
