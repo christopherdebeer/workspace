@@ -20,7 +20,7 @@ import { Dumpling, ROLL_MAX, ROLL_MIN, railAxis, rollReach, type Kind } from './
 import { kitchenRun, tableSet } from './room';
 import { CHAPTER_AT, CHAPTER_NAME, DUST, MAT, dustMat, carried, chapterOf, fingerprint, nextTop, RADIUS, REST_H, aim, respawnAt, autoFlick, climbLaunch, launch, liftAt, path, touch, towerAt, type Dust, type Level, type Shape, type V3 } from './level';
 import { BENCHES, bench, buildLevel } from './course';
-import { logFlick, settleFlick } from './flicklog';
+import { logFlick, readFlicks, settleFlick } from './flicklog';
 import { logoSVG } from './title';
 import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
@@ -1616,7 +1616,7 @@ const RESET_WORDS: Record<Reset, string> = { top: 'last top', jump: 'last jump' 
 let resetMode: Reset = ((): Reset => { const ok = (v: string | null) => (v && (RESETS as readonly string[]).includes(v) ? (v as Reset) : null); try { return ok(params.get('reset')) ?? ok(localStorage.getItem(STORE + ':reset')) ?? 'top'; } catch { return ok(params.get('reset')) ?? 'top'; } })();
 /** where it was set going from last, if from somewhere it can be put back */
 let launchedFrom: V3 | null = null;
-const launching = () => { launchedFrom = body.contacts > 0 && !body.onRail && !body.clinging && body.held < 0.5 ? [...body.com] as V3 : null; };
+const launching = () => { launchedFrom = body.contacts > 0 && !body.onRail && !body.clinging ? [...body.com] as V3 : null; };
 /** what of the aim shows now: the arc, and the ring */
 /** how much aim a level's played with: the setting, or by default, as you go */
 function aimFor(n: number): Exclude<Aim, 'default'> {
@@ -2400,6 +2400,32 @@ function resume() {
   document.body.classList.remove('title', 'paused');
 }
 btn('tomenu', pause);
+/** The flick log, copied: a double tap on the time up in the corner puts every flick kept on this device on the
+ * clipboard, as JSON, to paste wherever it's wanted; a word says so. */
+async function copyFlicks() {
+  const flicks = readFlicks();
+  const text = JSON.stringify({ kind: 'squishy-flicks', exported: new Date().toISOString(), level: levelN, seed: levelSeed, fp: levelFp, aim: aimFor(levelN), reset: resetMode, screen: [innerWidth, innerHeight, devicePixelRatio], agent: navigator.userAgent, flicks });
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch {
+    // (no clipboard access: the old way, through a selection)
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { ok = document.execCommand('copy'); } catch { /* */ }
+    ta.remove();
+  }
+  const st = $('status');
+  st.classList.remove('copied'); void st.offsetWidth; st.classList.add('copied');
+  hint(ok ? `flick log copied: ${flicks.length} flick${flicks.length === 1 ? '' : 's'}` : 'couldn\'t copy the flick log', 2600);
+}
+{
+  let lastTap = 0;
+  $('status').addEventListener('pointerup', (e) => {
+    e.stopPropagation();
+    const now = performance.now();
+    if (now - lastTap < 400) { lastTap = 0; void copyFlicks(); } else lastTap = now;
+  });
+}
 btn('resume', resume);
 // (from the paused menu, the title itself: the level left)
 btn('totitle', () => { document.body.classList.remove('paused'); startTitle(); });
