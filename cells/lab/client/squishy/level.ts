@@ -46,6 +46,10 @@ export const MAT = {
   glaze: 52,
   // (honey run down a jar's side and pooled round its foot: drawn as a liquid, live, over the shapes that hold you)
   honeyRun: 53, honeyPool: 54,
+  // (honey as shapes: a collar of it over a rim, its drips, drops beside its pool (honey.ts))
+  honeyDrip: 55,
+  // (a honey pot: cream glazed stoneware, and the cork in its neck)
+  honeypot: 56, cork: 57,
 } as const;
 /**
  * What coats the dumpling where it touches: flour (dry: it grips and loses its tack), butter
@@ -78,7 +82,7 @@ export const DUSTS: Record<Dust, { on: number; off: number; shake: number }> = {
  * moment and creeps; terracotta, a cookbook's cloth, a loaf's crust a little longer; a sponge, soft, longest.
  */
 export const GRIP: Partial<Record<number, { tack: number; tire: number; creep: number }>> = {
-  [MAT.glass]: { tack: 0.6, tire: 1, creep: 0 }, [MAT.steel]: { tack: 0.7, tire: 1, creep: 0 }, [MAT.spoon]: { tack: 0.7, tire: 1, creep: 0 },
+  [MAT.glass]: { tack: 0.6, tire: 1, creep: 0 }, [MAT.honeypot]: { tack: 0.65, tire: 1, creep: 0 }, [MAT.cork]: { tack: 1.6, tire: 1, creep: 2.5 }, [MAT.steel]: { tack: 0.7, tire: 1, creep: 0 }, [MAT.spoon]: { tack: 0.7, tire: 1, creep: 0 },
   [MAT.board]: { tack: 1.45, tire: 1.3, creep: 3 }, [MAT.bamboo]: { tack: 1.4, tire: 1.5, creep: 4 }, [MAT.legs]: { tack: 1.4, tire: 1.5, creep: 3.5 },
   [MAT.weave]: { tack: 1.7, tire: 0.8, creep: 2 }, [MAT.book]: { tack: 1.35, tire: 1.4, creep: 3.5 }, [MAT.terracotta]: { tack: 1.6, tire: 1, creep: 2.5 },
   [MAT.bread]: { tack: 1.7, tire: 0.8, creep: 2 }, [MAT.sponge]: { tack: 2.2, tire: 0.5, creep: 1 }, [MAT.chopstick]: { tack: 1.3, tire: 1.6, creep: 4 },
@@ -538,22 +542,28 @@ export function tower(top: Top, at: V3, rad: number, yaw: number, r: Rand, seat 
       const dir: V3 = [Math.sin(yaw), 0, Math.cos(yaw)];
       const jc: V3 = [x + dir[0] * (rad + RADIUS * 0.82), 0, z + dir[2] * (rad + RADIUS * 0.82)];
       const foot = y - JAR_UNDER;
-      const glass = cyl(jc[0], jc[2], rad, foot, y + 15, MAT.glass, 0.3);
+      // (or, half the time, a honey pot: cream glazed stoneware, bellied, a cork in its neck and a dipper in it; met
+      // as the jar is, its glaze as slippery as glass, the honey down its front where you land as sticky)
+      const pot = coin(61) < 0.5;
+      // (a pot's squat: it stands higher, on more of a stand, and comes up as high)
+      const base = pot ? foot + 6 : foot;
+      const glass = cyl(jc[0], jc[2], rad, base, y + 15, pot ? MAT.honeypot : MAT.glass, pot ? 0.35 : 0.3);
       shapes.push(glass);
       // (the honey in it, seen through the glass, and the drips down its front: drawn with it (mesh.ts), not met)
-      shapes.push(cyl(jc[0], jc[2], rad * 0.92, y + 15, y + 17, MAT.board, 0.7), cyl(jc[0], jc[2], rad * 0.97, y + 16.2, y + 17.3, MAT.gingham, 0.8));
+      if (pot) shapes.push(cyl(jc[0], jc[2], rad * 0.8, y + 15, y + 17.6, MAT.cork, 0.8));
+      else shapes.push(cyl(jc[0], jc[2], rad * 0.92, y + 15, y + 17, MAT.board, 0.7), cyl(jc[0], jc[2], rad * 0.97, y + 16.2, y + 17.3, MAT.gingham, 0.8));
       // (down its front: a band of honey on the glass, where it's run; held, and oozing)
       {
         const a = Math.atan2(-dir[0], -dir[2]), nx = Math.sin(a), nz = Math.cos(a), w = rad * 0.4;
-        const band = box([jc[0] + nx * (rad + 0.2), (foot + 0.5 + y + 6) / 2, jc[2] + nz * (rad + 0.2)], [w, (y + 6 - foot - 0.5) / 2, 0.25], a, MAT.honey, 0.9);
+        const band = box([jc[0] + nx * (rad + 0.2), (base + 0.5 + y + 6) / 2, jc[2] + nz * (rad + 0.2)], [w, (y + 6 - base - 0.5) / 2, 0.25], a, MAT.honey, 0.9);
         band.tack = 3; band.tire = 0; band.creep = 0.5; band.wallGrip = false; band.dust = DUST.honey; band.ghost = true;
         shapes.push(band);
       }
       // (pooled on the stand round its foot: sticky underfoot a while, and it gets on you)
-      const pool = cyl(jc[0], jc[2], rad + 1.1, foot, foot + 0.25, MAT.honey, 0.9);
+      const pool = cyl(jc[0], jc[2], rad + 1.1, base, base + 0.25, MAT.honey, 0.9);
       pool.tack = 2.4; pool.tire = 0.5; pool.creep = 0; pool.wallGrip = false; pool.dust = DUST.honey;
       shapes.push(pool);
-      shapes.push(...stand(jc[0], jc[2], rad, foot, yaw, coin, seat));
+      shapes.push(...stand(jc[0], jc[2], rad, base, yaw, coin, seat));
       jar = { c: [jc[0], y, jc[2]], r: rad + 0.45 };
       landR = 0;
       break;

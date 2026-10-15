@@ -120,7 +120,7 @@ function lookBench(lv: Level, stop: (t: Tower) => void): Level {
   // (and behind, and to the sides: what's live or wet or clear, to judge those by too: the honey jar, its runs
   // and pool; the soap dish's bubbles; a buttered tray; the butter dish; a pot with its lid; a pan; a loaf; a sponge)
   const more: Array<[Parameters<typeof pieceAt>[0], number, number, number]> = [
-    ['honey', -46, 62, 0x61], ['soap', -18, 66, 0x62], ['tray', 10, 70, 0x63], ['lid', 36, 70, 0x64],
+    ['honey', -46, 62, 0x61], ['honey', -76, 62, 0x69], ['soap', -18, 66, 0x62], ['tray', 10, 70, 0x63], ['lid', 36, 70, 0x64],
     ['butter', 62, 46, 0x65], ['pan', 64, 14, 0x66], ['loaf', -52, 22, 0x67], ['sponge', -50, -6, 0x68],
   ];
   for (const [kind, x, z, seed] of more) {

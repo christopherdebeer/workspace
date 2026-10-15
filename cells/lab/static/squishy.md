@@ -602,18 +602,27 @@ itself; `?view=ex,ey,ez,tx,ty,tz` holds the camera at an eye looking at a point 
 ### What's seen through
 
 After everything solid, what's seen through is drawn over a copy of the scene: the jelly; the films (butter
-melted on a top, honey's runs down a jar and its pool round the foot); the honey in a jar; the glass; the
-bubbles. One copy serves the films and the jar's honey together (the films go first and keep their depth, so
-the honey behind a run can't paint over it); a bubble takes a fresh copy only if something see-through has
-drawn since. On a phone each copy is a whole screen's worth, so they're kept as few as that.
+melted on a top, honey's pool round a jar's foot, its drips); the honey in a jar; the glass; the
+bubbles. One copy serves the films and the jar's honey; where honey's run down a jar, its drips take a second
+(the jar's honey first, keeping its depth, so the drips have it behind them); a bubble takes a fresh copy only if
+something see-through has drawn since. On a phone each copy is a whole screen's worth, so they're kept as few as that.
 
 - **Films** are drawn as liquids (the shared `liquid()` lighting: a meniscus at the edge, a dark wet line where
   it meets what it's on, the light through it gathered on its far side from the sun), and a little of what's
   under them shows through their thin edges. Butter's cloudy, so mostly its own gold; honey's runs mostly
   their own amber.
+- **Honey run over a rim** (a jar's or a pot's, `honey.ts`) is real shapes, rebuilt four times a second from how
+  long the level's been going: a thick collar of it under the lid, drooping where each drip leaves it; a dozen
+  drips, most round the front, each its own width and pace, thinning as they creep down, a teardrop swelling at
+  the end of each; most stall as they cool, a few reach the foot; and a few drops fallen beside the pool. Clear
+  amber: what's behind them bent through them, darker at their edges, a bright stripe of the sun and the window
+  down each. They go over the jar's honey, with a copy of the scene that has it.
+- **A honey pot**, half the time instead of the jar: cream stoneware, flecked, bellied and squat (on more of a
+  stand, its rim as high), its lip rolled, honey standing in its neck, a cork sat askew on a wooden dipper. Met
+  as the jar is: its glaze as slippery, the honey down its front where you land as sticky.
 - **The honey in a jar** is as thick as the ray through it (the jar's cylinder, worked out in the shader, no
-  back-face pass): a few centimetres deep amber, the jar's width of it nearly shut, cloudy, so it glows rather
-  than shows the wall through it; what's under it, seen down through it, is lit through it too. A bright line
+  back-face pass): clear and gold, the wall behind it coming through gold; it scatters, the sun gone into it
+  glowing back out, most when the sun's behind it; a few small bubbles held in it; what's under it, seen down through it, is lit through it too. A bright line
   where its top meets the glass. It still stands in the sun: it's in the shadow pass.
 - **Bubbles** are the scene refracted through each one's near shell (no culling; the shader keeps the half
   facing the eye), clear face on, their film's colours and the room toward the rim, a glint of the sun.

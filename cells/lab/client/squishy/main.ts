@@ -24,6 +24,7 @@ import { logFlick, noteBack, readFlicks, settleFlick } from './flicklog';
 import { logoSVG } from './title';
 import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
+import { honeyOver, type HoneyRim } from './honey';
 import { BAKE_RANGE, albedos, bakeDirs } from './bake';
 import { bounceOf, jelMesh, jelMeshSize, FEELS } from './jelly';
 
@@ -752,6 +753,12 @@ void main() {
     base = mix(vec3(.34, .11, .004), vec3(.6, .27, .012), thin);
     // (its own gloss, no clear coat over it: on a thin run or a bead, mostly seen at a slant, a clear coat goes white)
     rough = .22; coat = 0.; emit = .1 + .08 * thin;
+  } else if (id == ${MAT.honeyDrip}) {
+    // honey as shapes (a collar over a rim, its drips, drops): thick through its middle, so deep there; thin at its
+    // edges, pale and bright; very glossy, the sun a pinpoint in it
+    liquidDepth = clamp(NoV0 * 1.15, 0., 1.);
+    base = mix(vec3(.7, .3, .03), vec3(.95, .55, .08), liquidDepth);
+    rough = .04; coat = 1.; coatRough = .018; coatSpec = .7; emit = .18 + .3 * (1. - liquidDepth);
   } else if (id == ${MAT.honeyRun} || id == ${MAT.honeyPool}) {
     // honey run down a jar's front and pooled round its foot: over the rim in a ragged collar, and from it runs, each
     // its own width and pace, creeping down as the level goes on, thinning as they go, a bead swelling at each end
@@ -784,8 +791,8 @@ void main() {
     if (d < 0.) discard;
     liquidCover = smoothstep(0., max(.08, fwidth(d) * 1.3), d);
     liquidDepth = clamp(d / (id == ${MAT.honeyRun} ? .3 : .45), 0., 1.);
-    liquid(liquidDepth, .13, vWorld, vec3(.78, .42, .04), vec3(.34, .11, .004), .12, n, base, rough, coat, coatRough, coatSpec, emit);
-    coat = .7;
+    liquid(liquidDepth, .13, vWorld, vec3(1., .68, .17), vec3(.7, .3, .03), .2, n, base, rough, coat, coatRough, coatSpec, emit);
+    coatSpec = .6;
   } else if (id == ${MAT.glass}) {
     base = vec3(.9, .95, .93); rough = .04; coat = 1.;
   } else if (id == ${MAT.pot}) {
@@ -817,6 +824,17 @@ void main() {
     emit = 0.; base += flame * (1. - grate) * 1.4;
   } else if (id == ${MAT.knob}) {
     base = vec3(.06, .06, .065); rough = .18; coat = 1.;
+  } else if (id == ${MAT.honeypot}) {
+    // a honey pot's glaze: cream stoneware, flecked with iron where the clay comes through, glossy, a little
+    // uneven as a hand-thrown pot is
+    float fleck = step(.955, noise(vWorld * 6.5)) * .7 + step(.975, noise(vWorld * 13. + 3.)) * .5;
+    base = mix(vec3(.94, .88, .75), vec3(.5, .34, .2), fleck * .8) * (.95 + .07 * noise(vWorld * .4));
+    rough = .28; coat = .9; coatRough = .06; coatSpec = .3; relief = noise(vWorld * .9) * .02;
+  } else if (id == ${MAT.cork}) {
+    // cork: warm brown, pitted all over, matte
+    float pit = smoothstep(.66, .8, noise(vWorld * 2.6) * .6 + noise(vWorld * 7.3) * .4), grain = noise(vWorld * .9);
+    base = mix(vec3(.6, .42, .26), vec3(.36, .23, .13), pit * .8 + grain * .25);
+    rough = .95; relief = -pit * .035 + grain * .01; cavity = 1. - .35 * pit;
   } else if (id == ${MAT.spoon}) {
     // a wooden spoon: pale beech, its grain running along it, a little darker where it's been used
     float g = noise(vec3(uv.x * .35, uv.y * 3., 2.)) * .55 + noise(vec3(uv.x * 2.2, uv.y * 11., 6.)) * .25 + .2 * sin(uv.x * 1.3 + noise(vec3(uv * .8, 1.)) * 4.);
@@ -958,17 +976,30 @@ void main() {
     float thick = clamp(min(tSide, tCap), 0., rad * 3.);
     // (seen down through its bottom: what's under it is lit through the honey too, so it's shut the more)
     if (tCap < tSide && ray.y < 0.) thick = thick * 2. + rad * .6;
-    // (honey's dense: a few centimetres of it is deep amber, the jar's width of it nearly shut; and cloudy, the
-    // light that's gone into it coming back out amber, so it glows rather than shows the wall through it)
-    vec3 T = exp(-vec3(.12, .34, .9) * thick);
-    vec2 offset = vec2(dot(n, uRight), dot(n, uUp)) * (.0018 + .0022 * thick / max(rad * 2., .01));
+    // (honey's clear, and gold: blue's gone in a few centimetres, green over the jar's width, red hardly at all, so
+    // the wall behind comes through it gold; and it scatters, the sun that's gone into it glowing back out of it,
+    // brightest where the sun's behind it, as it is in a window, and toward the side the sun's on)
+    vec3 T = exp(-vec3(.04, .2, .7) * thick);
+    vec2 offset = vec2(dot(n, uRight), dot(n, uUp)) * (.0025 + .004 * thick / max(rad * 2., .01));
     vec3 scene = texture(uScene, clamp(gl_FragCoord.xy / uRes + offset, vec2(.001), vec2(.999))).rgb;
     float F = .035 + .965 * pow(1. - NoV, 5.);
-    vec3 transmitted = scene * T + vec3(.62, .25, .025) * (vec3(1.) - T) * (.5 + .35 * max(dot(n, uKey), 0.));
-    vec3 glint = env(reflect(-V, n)) * (.26 + .08 * max(dot(n, uKey), 0.));
-    // (its top, where it meets the glass: drawn up the glass a little, a bright line round it)
-    if (n.y > .5) glint += vec3(1., .78, .4) * smoothstep(rad - .7, rad - .05, length(q.xz)) * .9;
-    glint += uKeyCol * pow(max(dot(reflect(-V, n), uKey), 0.), 160.) * .18;
+    float back = pow(max(dot(ray, uKey), 0.), 2.), side = .5 + .5 * dot(normalize(q.xz + 1e-4), normalize(uKey.xz + 1e-4));
+    vec3 glow = vec3(1., .5, .06) * uKeyCol * (1. - T.g) * (.2 + .45 * side + 1.4 * back);
+    vec3 transmitted = scene * T * vec3(1., .8, .45) + glow;
+    // (a few small bubbles held in it, caught in the light: looked for at four depths along the ray through it)
+    float specks = 0.;
+    for (int k = 0; k < 4; k++) {
+      vec3 at = vWorld + ray * thick * (float(k) + .5) / 4.;
+      vec3 cell = floor(at * .9), c0 = (cell + vec3(hash3(cell), hash3(cell + 7.), hash3(cell + 13.))) / .9;
+      float r = .04 + .05 * hash3(cell + 3.), dd = length(cross(c0 - vWorld, ray));
+      specks += step(.93, hash3(cell + 21.)) * smoothstep(r, r * .3, dd) * exp(-float(k) * .5);
+    }
+    transmitted += vec3(1., .8, .45) * specks * .45;
+    vec3 glint = env(reflect(-V, n)) * (.3 + .1 * max(dot(n, uKey), 0.));
+    // (its top: the window in it, and a bright line round it where it's drawn up the glass)
+    if (n.y > .5) glint += vec3(1., .8, .45) * smoothstep(rad - .7, rad - .05, length(q.xz)) * 1.2;
+    else glint += vec3(1., .8, .45) * smoothstep(.6, .05, uHoneyRange.z - vWorld.y) * .9;
+    glint += uKeyCol * pow(max(dot(reflect(-V, n), uKey), 0.), 220.) * 1.5;
 #ifdef HDR
     o = vec4(mix(transmitted, glint, clamp(F * .65, .02, .76)), 1.);
 #else
@@ -978,24 +1009,35 @@ void main() {
   }
   // Soap and glass remain separate from this shallow, partially transmitting
   // honey and butter film. Use physical colour loss in the tiny raised pool.
-  if (uLiquidOpt > .5 && (id == ${MAT.honeyRun} || id == ${MAT.honeyPool} || id == ${MAT.smear})) {
+  if (uLiquidOpt > .5 && (id == ${MAT.honeyRun} || id == ${MAT.honeyPool} || id == ${MAT.honeyDrip} || id == ${MAT.smear})) {
+    bool drip = id == ${MAT.honeyDrip};
     bool butterFilm = id == ${MAT.smear};
-    float depth = butterFilm ? (.025 + .23 * liquidDepth) : (.05 + .45 * liquidDepth);
-    vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : vec3(.30, 1.40, 4.5);
+    float depth = butterFilm ? (.025 + .23 * liquidDepth) : drip ? (.8 + 2.2 * liquidDepth) : (.05 + .45 * liquidDepth);
+    vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : drip ? vec3(.22, .95, 3.) : vec3(.15, .7, 2.4);
     vec3 T = exp(-absorb * depth);
     float F = .04 + .96 * pow(1. - NoV, 5.);
-    vec2 bend = vec2(dot(n, uRight), dot(n, uUp)) * (butterFilm ? .0009 : .0018) * liquidDepth;
+    vec2 bend = vec2(dot(n, uRight), dot(n, uUp)) * (butterFilm ? .0009 : drip ? .03 : .0018) * (drip ? 1. : liquidDepth);
     vec3 scene = texture(uScene, clamp(gl_FragCoord.xy / uRes + bend, vec2(.001), vec2(.999))).rgb;
-    vec3 tint = butterFilm ? vec3(.97, .83, .33) : vec3(.74, .34, .045);
+    vec3 tint = butterFilm ? vec3(.97, .83, .33) : vec3(.95, .55, .08);
     float reflectAmt = clamp(.13 + .68 * F, 0., .85);
     // (butter's cloudy, milk in it: mostly its own gold, lit, only its thin edge letting what's under show)
     // (honey's runs too, mostly their own amber: drawn before the jar's honey, what's behind them is the bare wall)
-    reflectAmt = max(reflectAmt, butterFilm ? mix(.45, .85, liquidDepth) : mix(.5, .9, liquidDepth));
+    reflectAmt = max(reflectAmt, butterFilm ? mix(.45, .85, liquidDepth) : drip ? mix(.22, .38, liquidDepth) : mix(.35, .7, liquidDepth));
+    // (and honey glows: the sun gone into it coming back out gold, most when it's behind it)
+    vec3 honeyGlow = butterFilm ? vec3(0.) : vec3(1., .52, .07) * uKeyCol * (1. - T.g) * (.35 + 1.3 * pow(max(dot(-V, uKey), 0.), 2.));
 #ifdef HDR
-    vec3 transmitted = scene * T + tint * (vec3(1.) - T) * .16;
+    vec3 transmitted = scene * T + tint * (vec3(1.) - T) * .16 + honeyGlow;
+    // (a drip's own edges: darker toward its sides, what's round it bent in; and a bright stripe down it, the sun
+    // and the window caught along its length. That's how it reads against more honey behind it)
+    if (drip) {
+      vec3 R = reflect(-V, n);
+      transmitted *= mix(1., .2, pow(1. - NoV, .9));
+      c += uKeyCol * (pow(max(dot(R, uKey), 0.), 70.) * 2.2 + pow(max(dot(R, uWin), 0.), 24.) * .9);
+    }
     o = vec4(mix(scene, mix(transmitted, c, reflectAmt), liquidCover), 1.);
 #else
-    vec3 transmitted = scene * T + tonemap(tint) * (vec3(1.) - T) * .16;
+    vec3 transmitted = scene * T + tonemap(tint) * (vec3(1.) - T) * .16 + tonemap(honeyGlow);
+    if (drip) { vec3 R = reflect(-V, n); transmitted *= mix(1., .2, pow(1. - NoV, .9)); c += uKeyCol * (pow(max(dot(R, uKey), 0.), 70.) * 2.2 + pow(max(dot(R, uWin), 0.), 24.) * .9); }
     o = vec4(mix(scene, mix(transmitted, tonemap(c), reflectAmt), liquidCover), 1.);
 #endif
     return;
@@ -1534,6 +1576,8 @@ function fillJellies() {
 }
 let glassMesh: Mesh | null = null;
 let liquidMesh: Mesh | null = null;
+/** honey run over a rim (a jar's, a pot's): its collar, drips and drops, rebuilt a few times a second as it creeps */
+let honeyRims: HoneyRim[] = [], dripMesh: Mesh | null = null, dripAt = -1;
 let honeyMeshes: Array<{mesh: Mesh; center: V3; radius: number; bottom: number; top: number}> = [];
 let roomMesh: Mesh | null = null;
 /** the lids: each its own mesh about its rest place, drawn where it is now */
@@ -1930,7 +1974,7 @@ function startLevel(n: number, quiet = false) {
   }
   lv = benchName ? bench(benchName) : buildLevel(levelN, levelSeed);
   levelFp = fingerprint(lv);
-  drop(courseMesh); drop(glassMesh); drop(liquidMesh); for (const h of honeyMeshes) drop(h.mesh); honeyMeshes = [];
+  drop(courseMesh); drop(glassMesh); drop(liquidMesh); drop(dripMesh); dripMesh = null; dripAt = -1; for (const h of honeyMeshes) drop(h.mesh); honeyMeshes = [];
   for (const m of susanMeshes.values()) drop(m);
   susanMeshes.clear();
   for (const m of movers) drop(m.mesh);
@@ -1945,6 +1989,7 @@ function startLevel(n: number, quiet = false) {
   courseMesh = upload(solid, gl.STATIC_DRAW, bakeLight(solid));
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
   liquidMesh = lm.liquids.length ? upload(lm.liquids) : null;
+  honeyRims = lm.honeyRims;
   honeyMeshes = lm.honeyBodies.map(h => ({mesh: upload(h.verts), center: h.center, radius: h.radius, bottom: h.bottom, top: h.top}));
   movers = lm.movers.map((m) => ({ shape: m.shape, mesh: upload(m.verts) }));
   bubbles = lm.bubbles.map((b) => ({ shape: b.shape, mesh: upload(b.verts), c0: [...b.shape.c] as V3, gone: -1, drift: null, until: 0 }));
@@ -3431,12 +3476,17 @@ function frame(now: number) {
 
   }
 
-  // What's seen through, after everything solid. One copy of the scene serves the films (butter, honey's runs and
-  // pool) and the honey in a jar: the films go first and keep their depth, so the honey behind a run can't paint over
-  // it. A bubble takes a fresh copy only if one of those (or the jelly, or the glass) has drawn since the last.
+  // What's seen through, after everything solid. One copy of the scene serves the films (butter, honey's pool) and
+  // the honey in a jar; where there's a jar with honey run down it, the drips take a second, so they've the jar's
+  // honey behind them. A bubble takes a fresh copy only if one of those (or the jelly, or the glass) has drawn since.
   let fresh = false;
   const seeThrough = () => { if (!fresh) { sceneCopy(W, H); fresh = true; } };
-  if (liquidMesh || honeyMeshes.length) {
+  if (honeyRims.length && (dripAt < 0 || simTime - dripAt > 0.25 || simTime < dripAt)) {
+    const v: number[] = [];
+    for (const r of honeyRims) honeyOver(r, simTime - levelBorn + HONEY_AHEAD, v);
+    drop(dripMesh); dripMesh = upload(v, gl.DYNAMIC_DRAW); dripAt = simTime;
+  }
+  if (liquidMesh || dripMesh || honeyMeshes.length) {
     seeThrough();
     gl.useProgram(prog);
     gl.uniform1i(u(prog, 'uScene'), 1);
@@ -3448,20 +3498,24 @@ function frame(now: number) {
     gl.uniform3fv(u(prog, 'uHole'), [0, 0, 0]);
     gl.enable(gl.DEPTH_TEST);
     gl.disable(gl.BLEND);
-    if (liquidMesh) { gl.uniform1f(u(prog, 'uLiquidOpt'), 1); drawMesh(liquidMesh); }
-    // (the honey in a jar: its thickness along the ray through it, from the jar's own cylinder, no back-face pass)
+    gl.depthMask(true);
+    // (the honey in a jar first, keeping its depth: its thickness along the ray through it, from the jar's own
+    // cylinder, no back-face pass. What runs down the outside of the jar goes over it, and sees it behind)
     if (honeyMeshes.length) {
       gl.uniform1f(u(prog, 'uLiquidOpt'), 2);
       gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
-      gl.depthMask(false);
       for (const jar of honeyMeshes) {
         gl.uniform3fv(u(prog, 'uHoneyC'), jar.center);
         gl.uniform3f(u(prog, 'uHoneyRange'), jar.radius, jar.bottom, jar.top);
         drawMesh(jar.mesh);
       }
-      gl.depthMask(true);
       gl.disable(gl.CULL_FACE);
+      if (dripMesh) { sceneCopy(W, H); gl.useProgram(prog); }
     }
+    // (then the films and the honey's drips, over what's behind them now)
+    gl.uniform1f(u(prog, 'uLiquidOpt'), 1);
+    if (liquidMesh) drawMesh(liquidMesh);
+    if (dripMesh) drawMesh(dripMesh);
     gl.uniform1f(u(prog, 'uLiquidOpt'), 0);
     fresh = false;
   }

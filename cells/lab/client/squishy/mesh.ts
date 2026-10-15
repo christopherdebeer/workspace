@@ -5,6 +5,7 @@
  */
 import { MAT, dustMat, type Level, type Shape, type Tower, type V3 } from './level';
 import { bookFaces, slotOf } from './books';
+import { potSide, type HoneyRim } from './honey';
 
 /** a vertex: position, normal, material, (u, v) */
 export const VSTRIDE = 9;
@@ -129,7 +130,7 @@ export function disc(out: number[], mat: number, segs = 28) {
 }
 
 /** What's drawn: the solid course; the glass, drawn after it and seen through; and each thing that moves, on its own, about its rest place. */
-export interface LevelMesh { solid: number[]; glass: number[]; liquids: number[]; honeyBodies: Array<{ verts: number[]; center: V3; radius: number; bottom: number; top: number }>; movers: Array<{ shape: Shape; verts: number[] }>; bubbles: Array<{ shape: Shape; verts: number[] }> }
+export interface LevelMesh { solid: number[]; glass: number[]; liquids: number[]; honeyRims: HoneyRim[]; honeyBodies: Array<{ verts: number[]; center: V3; radius: number; bottom: number; top: number }>; movers: Array<{ shape: Shape; verts: number[] }>; bubbles: Array<{ shape: Shape; verts: number[] }> }
 /**
  * One tower, as it's made: a stack of steamers with their rims, a tin, jars and a board, a plate,
  * a pudding on a saucer, a lazy Susan; a butter dish, a honey jar (glass, the honey in it, the
@@ -150,36 +151,60 @@ function towerMesh(t: Tower, m: LevelMesh) {
       cylinder(verts, s.c[0], s.c[2], fillR, fillBottom, fillTop, MAT.honey, MAT.honey, 48);
       m.honeyBodies.push({ verts, center: [s.c[0], s.c[1], s.c[2]], radius: fillR, bottom: fillBottom, top: fillTop });
       cylinder(m.glass, s.c[0], s.c[2], s.r, s.c[1] - s.hh, s.c[1] + s.hh, MAT.glass, MAT.glass, 40);
-      // (honey run down its front, toward where it's landed against: a ribbon just over the glass, the runs drawn on
-      // it as a liquid, creeping down as the level goes on (main.ts, MAT.honeyRun); u across it in cm, v down from the rim)
+      // (honey run over its rim and down its side: real shapes, live, rebuilt as the level goes on (honey.ts))
       if (t.jar) {
-        const th0 = Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), top = s.c[1] + s.hh, foot = s.c[1] - s.hh, rr = s.r + 0.06;
-        const NU = 48, NV = 18, SPAN = 0.85;
-        const at = (i: number, j: number): [V3, V3, UV] => {
-          const th = th0 + (i / NU * 2 - 1) * SPAN, y = top - (j / NV) * (top - foot), c = Math.cos(th), sn = Math.sin(th);
-          const along = (th - th0) * rr, phase = along * Math.PI / 1.45;
-          const cos = Math.max(0, Math.cos(phase));
-          // Raised rivulets below the fragment's advancing drip mask.
-          const bulge = .025 + .10 * cos ** 8;
-          const slope = -.10 * 8 * cos ** 7 * Math.sin(phase) * Math.PI / 1.45;
-          return [[s.c[0] + c * (rr + bulge), y, s.c[2] + sn * (rr + bulge)],
-            norm([c + slope * sn, 0, sn - slope * c]), [along, top - y]];
-        };
-        for (let i = 0; i < NU; i++) for (let j = 0; j < NV; j++) {
-          const A = at(i, j + 1), B = at(i, j), C = at(i + 1, j), D = at(i + 1, j + 1);
-          quad(m.liquids, A[0], B[0], C[0], D[0], A[1], B[1], C[1], D[1], MAT.honeyRun, A[2], B[2], C[2], D[2]);
-        }
+        const r = s.r;
+        m.honeyRims.push({ c: [s.c[0], s.c[1] - s.hh, s.c[2]], top: s.c[1] + s.hh, foot: s.c[1] - s.hh, side: () => r, front: Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), seed: Math.round(s.c[0] * 10 + s.c[2]) });
       }
       continue;
+    }
+    // (a honey pot: bellied stoneware turned on a wheel, its lip rolled; honey in its neck, and run over its rim)
+    if (s.mat === MAT.honeypot) {
+      const y0 = s.c[1] - s.hh, y1 = s.c[1] + s.hh, side = potSide(s.r, y0, y1), N = 28;
+      for (let i = 0; i < N; i++) {
+        const ya = y0 + ((y1 - y0) * i) / N, yb = y0 + ((y1 - y0) * (i + 1)) / N;
+        cylinder(out, s.c[0], s.c[2], side(ya), ya, yb, MAT.honeypot, MAT.honeypot, 48, false, side(yb));
+      }
+      rolledRim(out, s.c[0], y1, s.c[2], side(y1), 0.45, MAT.honeypot);
+      // (the honey standing in its neck, under the cork)
+      cylinder(m.liquids, s.c[0], s.c[2], side(y1) - 0.3, y1 - 1.2, y1 - 0.5, MAT.honeyDrip, MAT.honeyDrip, 40);
+      if (t.jar) m.honeyRims.push({ c: [s.c[0], y0, s.c[2]], top: y1, foot: y0, side, front: Math.atan2(t.at[2] - s.c[2], t.at[0] - s.c[0]), seed: Math.round(s.c[0] * 10 + s.c[2]) });
+      continue;
+    }
+    // (its cork, sat a little askew on the dipper's handle; and the dipper, a turned wooden stick, out of its neck)
+    if (s.mat === MAT.cork) {
+      const pot = t.shapes.find((g) => g.mat === MAT.honeypot);
+      if (pot) {
+        const y0 = s.c[1] - s.hh, a = Math.atan2(t.at[2] - pot.c[2], t.at[0] - pot.c[0]) + 2.2, dx = Math.cos(a), dz = Math.sin(a);
+        const lid: number[] = [];
+        cylinder(lid, s.c[0], s.c[2], s.r, y0, y0 + s.hh * 2, MAT.cork, MAT.cork, 36);
+        // (tipped up on the dipper's side, about its far edge)
+        const tilt = 0.2, ca = Math.cos(tilt), sa = Math.sin(tilt), px = s.c[0] - dx * s.r, pz = s.c[2] - dz * s.r;
+        const turn = (vx: number, vy: number, vz: number, origin: boolean): V3 => {
+          const ox = origin ? vx - px : vx, oy = origin ? vy - y0 : vy, oz = origin ? vz - pz : vz;
+          const along = ox * dx + oz * dz, across = -ox * dz + oz * dx, al2 = along * ca - oy * sa, y2 = along * sa + oy * ca;
+          return [(origin ? px : 0) + al2 * dx - across * dz, (origin ? y0 : 0) + y2, (origin ? pz : 0) + al2 * dz + across * dx];
+        };
+        for (let i = 0; i < lid.length; i += VSTRIDE) {
+          const p = turn(lid[i], lid[i + 1], lid[i + 2], true), n = turn(lid[i + 3], lid[i + 4], lid[i + 5], false);
+          out.push(p[0], p[1], p[2], n[0], n[1], n[2], lid[i + 6], lid[i + 7], lid[i + 8]);
+        }
+        const base: V3 = [pot.c[0] + dx * pot.r * 0.35, y0 - 4, pot.c[2] + dz * pot.r * 0.35], tip: V3 = [pot.c[0] + dx * pot.r * 1.05, y0 + 9, pot.c[2] + dz * pot.r * 1.05];
+        capsule(out, base, tip, 0.42, MAT.spoon, 10, 3);
+        capsule(out, tip, [tip[0] + dx * 0.3, tip[1] + 1.6, tip[2] + dz * 0.3], 0.62, MAT.spoon, 10, 3);
+        continue;
+      }
     }
     // (the honey pooled round a jar's foot: a ring on the stand, drawn as a liquid that spreads as the level goes on
     // (main.ts, MAT.honeyPool); u out from the glass in cm, v the angle from its front)
     if (s.mat === MAT.honey && t.jar) {
-      const glass = t.shapes.find((g) => g.mat === MAT.glass);
+      const glass = t.shapes.find((g) => g.mat === MAT.glass || g.mat === MAT.honeypot);
       if (glass) {
+        // (round a pot, from its narrower foot)
+        const foot0 = glass.mat === MAT.honeypot ? potSide(glass.r, glass.c[1] - glass.hh, glass.c[1] + glass.hh)(glass.c[1] - glass.hh) : glass.r;
         const th0 = Math.atan2(t.at[2] - glass.c[2], t.at[0] - glass.c[0]), y = glass.c[1] - glass.hh + 0.08, NA = 64, NR = 6;
         const at = (i: number, j: number): [V3, V3, UV] => {
-          const th = th0 + (i / NA * 2 - 1) * Math.PI, t = j / NR, out2 = -0.4 + t * 1.9, rr = glass.r + out2;
+          const th = th0 + (i / NA * 2 - 1) * Math.PI, t = j / NR, out2 = -0.4 + t * 1.9, rr = foot0 + out2;
           // Shallow raised pool; expanding leading edge stays procedural.
           const swell = .025 + .17 * (1 - (2 * t - 1) ** 4);
           const slope = (-.17 * 8 * (2 * t - 1) ** 3) / 1.9;
@@ -308,7 +333,7 @@ function drawShape(s: Shape, out: number[]) {
 }
 /** The whole course: every tower, and the chopsticks. */
 export function levelMesh(lv: Level): LevelMesh {
-  const m: LevelMesh = { solid: [], glass: [], liquids: [], honeyBodies: [], movers: [], bubbles: [] };
+  const m: LevelMesh = { solid: [], glass: [], liquids: [], honeyRims: [], honeyBodies: [], movers: [], bubbles: [] };
   // Keep butter films out of the opaque baked course; they transmit its surface.
   for (let i = 0; i < lv.decor.length; i += VSTRIDE) {
     const dest = Math.round(lv.decor[i + 6]) === MAT.smear ? m.liquids : m.solid;
