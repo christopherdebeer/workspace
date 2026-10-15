@@ -128,6 +128,22 @@ export const EXPERIMENTS: Experiment[] = [
     ],
   },
   {
+    id: 'squishy-lab',
+    title: 'Squishy · Level Lab',
+    group: 'Play',
+    blurb: 'A renderer-free laboratory for generated Squishy levels: inspect physical geometry, discover route candidates, validate flicks with the actual soft-body simulator, replay witnesses and export spatial schematics. Shared physics; no WebGL.',
+    page: 'static/squishy-lab.html',
+    preview: 'preview&level=3&seed=0',
+    readme: 'static/squishy-lab.md',
+    presets: [
+      { label: 'spatial composition study', query: 'study&level=7&seed=2' },
+      { label: 'the preparation table', query: 'level=3&seed=0' },
+      { label: 'the sink', query: 'level=9&seed=1' },
+      { label: 'the whole kitchen', query: 'level=18&seed=4' },
+      { label: 'alternate seed', query: 'level=6&seed=13' },
+    ],
+  },
+  {
     id: 'squishy',
     title: 'Squishy',
     group: 'Play',

@@ -520,12 +520,14 @@ function clear(lv: Level, p: Piece, corridors: V3[][], solid: Set<Shape>): boole
  * hop's made sure of with it there; if one laid before the room was all known doesn't hold once it is, laid
  * again, afresh.
  */
-export function buildKitchen(n: number, seed = 0): Level {
+export type Composition = 'parallel' | 'convergent' | 'offset';
+/** Optional controlled spatial studies; the playable game's default remains unchanged. */
+export function buildKitchen(n: number, seed = 0, composition: Composition = 'parallel'): Level {
   // (afresh, a dozen times; then plainly, steamers on things, which always fit; never a level short of a piece or of home)
   let attempts = 0;
   for (const plain of [false, true]) for (let salt = 0; salt < (plain ? 4 : 12); salt++) {
     attempts++;
-    const a = layLevel(n, salt, seed, plain);
+    const a = layLevel(n, salt, seed, plain, composition);
     if (a.ok) { a.lv.made = { salt, plain, attempts, seed }; return a.lv; }
   }
   throw new Error(`level ${n} (seed ${seed}): no layout holds after ${attempts} attempts`);
@@ -537,7 +539,7 @@ function roomShapes(run: Run): Shape[] {
   for (const p of pots) out.push(cyl(p.x, p.z, p.r, p.y0, p.y1, MAT.terracotta, 0.7), cyl(p.x, p.z, p.r * 1.1, p.y1, p.top, MAT.plant, 0.9));
   return out;
 }
-function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: Level; ok: boolean } {
+function layLevel(n: number, salt: number, seed: number, plain: boolean, composition: Composition): { lv: Level; ok: boolean } {
   const r = seeded(hash(n, 0x6b17c4e + salt * 0x9e37 + seed * 0x3c6ef3));
   const chapter = chapterOf(n), place = PLACE[chapter], i = Math.min(3, within(n));
   const stove = chapter === 'stove';
@@ -673,16 +675,19 @@ function layLevel(n: number, salt: number, seed: number, plain: boolean): { lv: 
    * short way won't hold, it's left out; if the sure way won't, no fork.
    */
   const fork = (F: number): number | null => {
-    const A1 = layOne([F], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 14], notHang: true, tries: 16 });
+    const a1z: [number,number] = composition === 'convergent' ? [FRONT+17, FRONT+21] : [FRONT+10, FRONT+14];
+    const a2z: [number,number] = composition === 'convergent' ? [FRONT+20, FRONT+24] : composition === 'offset' ? [FRONT+24, FRONT+30] : [FRONT+10, FRONT+16];
+    const bz: [number,number] = composition === 'convergent' ? [BACK-29, BACK-25] : [BACK-20, BACK-16];
+    const A1 = layOne([F], { kinds: broad.length ? broad : ['stack'], z: a1z, notHang: true, tries: 16 });
     if (!A1) return null;
     nexts[F] = A1.first;
-    const A2 = layOne([A1.last], { kinds: broad.length ? broad : ['stack'], z: [FRONT + 10, FRONT + 16], notHang: true, tries: 16 });
+    const A2 = layOne([A1.last], { kinds: broad.length ? broad : ['stack'], z: a2z, notHang: true, tries: 16 });
     if (!A2) { undo(A1); return null; }
     // (the short way: off a springboard, or onto a small top; if one won't meet the sure way again, the other)
     const order = small.length ? (r() < 0.75 ? [true, false] : [false, true]) : [true];
     let B: Got | null = null, M: Got | null = null;
     for (const viaSpring of order) {
-      B = layOne([F], { kinds: viaSpring ? ['konjac'] : small, z: [BACK - 20, BACK - 16], far: ramp(r, 8, 16), spring: viaSpring, notHang: true, tries: 12 });
+      B = layOne([F], { kinds: viaSpring ? ['konjac'] : small, z: bz, far: ramp(r, 8, 16), spring: viaSpring, notHang: true, tries: 12 });
       // (where they meet: between them; after a springboard, on along the way the bounce goes, toward the back)
       M = B ? layOne([A2.last, B.last], { z: viaSpring ? [BACK - 26, BACK - 18] : [FRONT + 22, BACK - 30], notHang: true, tries: 12 }) : null;
       if (M) break;

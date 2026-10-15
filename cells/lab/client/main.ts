@@ -13,6 +13,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   technic: () => import('./technic/main'),
   marbles: () => import('./marbles/main'),
   squishy: () => import('./squishy/main'),
+  'squishy-lab': () => import('./squishy-lab/main'),
   fungi: () => import('./fungi/main'),
   markovs: () => import('./markovs/main'),
   crystals: () => import('./crystals/main'),

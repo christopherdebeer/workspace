@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" data-exp="squishy-lab">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f2eddf">
+<title>Squishy · Level Lab</title>
+<style>
+:root {color-scheme:light; --ink:#40392f;--quiet:#776e61;--paper:#f7f3e9;--rule:#dcd4c5;--accent:#496e5b}
+*{box-sizing:border-box}
+html,body{padding:0;margin:0;min-height:100%;background:#eee8dc;color:var(--ink);font-family:Georgia,"Iowan Old Style",serif}
+button,input,select{font:inherit}
+button{border:1px solid #bcb3a2;background:#fffaf0;color:var(--ink);border-radius:7px;padding:8px 12px;cursor:pointer}
+button:hover{border-color:#7b786d}
+button:active{transform:translateY(1px)}
+button.primary{background:#456d5b;color:#fff;border-color:#456d5b}
+button.active{background:#d9e3d9;border-color:#628f7c}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #497b6c;outline-offset:2px}
+input,select{border:1px solid #c7bdb0;border-radius:6px;background:#fffdf8;min-height:35px;color:var(--ink);padding:6px 8px}
+input[type=number]{width:78px;font-variant-numeric:tabular-nums}
+header{padding:16px 22px 12px;display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--rule)}
+header a{color:#6c6e5c;text-decoration:none;font-size:13px}
+header h1{margin:0;font-size:25px;font-weight:400;letter-spacing:.02em}
+header small{font-size:12px;color:var(--quiet)}
+main{max-width:1660px;margin:auto;padding:16px 20px 28px}
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:12px 14px;background:var(--paper);border:1px solid var(--rule);border-radius:10px}
+.toolbar label{display:flex;gap:6px;align-items:center;font-size:13px}
+.toolbar .sep{border-left:1px solid var(--rule);height:28px;margin:0 2px}
+h2{font-size:19px;font-weight:400;margin:0}
+#headline{font-size:17px}
+#metadata{color:var(--quiet);font-size:12px;line-height:1.6}
+.heading{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.layout{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(260px,1fr);gap:14px}
+.sheet{background:#fcfaf4;border:1px solid var(--rule);border-radius:12px;overflow:hidden}
+.viewbar{display:flex;gap:5px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:9px 13px;border-bottom:1px solid var(--rule)}
+.viewbar .group{display:flex;gap:5px;flex-wrap:wrap}
+.viewbar button{padding:6px 11px;font-size:12px}
+#plot{min-height:260px}
+#plot svg{width:100%;height:auto;display:block;min-height:250px;touch-action:pan-y}
+#plot [data-node],#plot [data-edge]{cursor:pointer}
+#plot [data-edge]:hover{stroke-width:5}
+#metrics{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--rule)}
+#metrics>div{padding:12px 10px;text-align:center;border-right:1px solid var(--rule)}
+#metrics>div:last-child{border-right:0}
+#metrics b{display:block;font-size:23px;font-weight:400;font-variant-numeric:tabular-nums}
+#metrics small{font-size:10px;color:var(--quiet);line-height:1.4}
+#status{padding:12px 15px;margin-top:9px;background:#e8e4d8;border-radius:8px;color:#554c41;font-size:13px;line-height:1.5}
+.sidebar{display:flex;flex-direction:column;gap:12px;min-width:0}
+.sidebar section{background:var(--paper);border:1px solid var(--rule);padding:14px;border-radius:10px}
+.sidebar h3{font-weight:400;font-size:17px;margin:0 0 10px}
+.sidebar p{font-size:13px;line-height:1.5;margin:6px 0 12px}
+#details button{display:block;width:100%;margin:8px 0;text-align:center}
+dl{display:grid;grid-template-columns:1fr auto;gap:8px;font-size:13px;padding:8px 0;margin:0 0 12px}
+dt{color:var(--quiet)}dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+.muted{color:var(--quiet)}
+#edges{max-height:470px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
+.edge-row{display:grid;grid-template-columns:9px 45px 1fr;align-items:center;gap:4px 9px;width:100%;text-align:left;background:transparent;border-color:transparent;padding:7px;border-radius:6px}
+.edge-row:hover,.edge-row.chosen{background:#e9e4d8;border-color:#d4cbbd}
+.edge-row b{font-size:14px;font-weight:400;font-variant-numeric:tabular-nums}
+.edge-row small{font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.edge-row em{grid-column:2/-1;font:11px/1.3 ui-monospace,SFMono-Regular,monospace;color:var(--quiet);font-style:normal}
+.swatch{width:8px;height:8px;border-radius:50%}
+.legend{display:flex;flex-wrap:wrap;gap:7px 15px;padding:10px 14px;color:var(--quiet);font-size:11px;border-top:1px solid var(--rule)}
+.legend i{display:inline-block;width:17px;height:3px;vertical-align:middle;margin-right:4px}
+.footnote{margin-top:16px;color:var(--quiet);font:12px/1.5 Georgia,serif;max-width:840px}
+.error{padding:40px 25px;color:#8d4141}
+body.preview{overflow:hidden}
+.preview header,.preview .toolbar,.preview .sidebar,.preview #metrics,.preview #status,.preview .footnote,.preview .viewbar,.preview .heading,.preview .legend{display:none!important}
+.preview main{padding:0;margin:0}
+.preview .layout{display:block}
+.preview .sheet{border:0;border-radius:0}
+.preview #plot{min-height:0}
+.preview #plot svg{min-height:0;height:100vh;object-fit:cover}
+@media(max-width:940px){main{padding:10px}.layout{grid-template-columns:1fr}.sidebar{display:grid;grid-template-columns:1fr 1fr}#edges{max-height:260px}}
+@media(max-width:560px){header{padding:12px}header h1{font-size:21px}.toolbar{padding:10px}.toolbar .sep{display:none}.sidebar{grid-template-columns:1fr}#metrics b{font-size:19px}#metrics small{font-size:9px}#metrics>div{padding:8px 4px}}
+#composition-panel{margin:8px 0 24px}#composition-panel[hidden],.preview #composition-panel{display:none}.study-head p,.study-note{color:var(--quiet);font-size:12px;line-height:1.5}.study-head p{max-width:850px}.study-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.study-card{background:var(--paper);border:1px solid var(--rule);border-radius:9px;padding:12px;min-width:0}.study-card.selected{border-color:#456d5b}.study-card h3{margin:0 0 9px;font-size:17px;font-weight:400;text-transform:capitalize}.study-card svg{display:block;width:100%;max-height:155px}.study-card dl{font-size:12px;gap:5px}.study-card button{width:100%;font-size:12px}.study-card small{color:var(--quiet)}.study-views{display:grid;grid-template-columns:1fr 94px;align-items:center;gap:8px}.study-views span{font-size:12px;color:var(--quiet)}@media(max-width:800px){.study-cards{grid-template-columns:1fr}}</style>
+</head>
+<body>
+<header><a href="/">← Lab</a><h1>Squishy · Level Lab</h1><small>Renderless generation, reachability and physics witnesses</small></header>
+<main>
+<div class="toolbar">
+<label>Level <input id="level" type="number" min="1" max="80" value="3"></label>
+<label>Seed <input id="seed" type="number" min="0" step="1" value="0"></label>
+<label>Body <select id="skin"><option value="dough">Dough</option><option value="jelly">Jelly</option></select></label>
+<button id="build">Build level</button><button id="nextseed">Next seed →</button><span class="sep"></span>
+<button class="primary" id="discover">Discover routes</button><button id="verifyall">Verify all witnesses</button><a href="/squishy-lab?study&level=7&seed=2">Spatial case study ↗</a>
+</div>
+<section id="composition-panel" hidden></section>
+<div class="heading"><h2 id="headline">Level Lab</h2><div id="metadata"></div></div>
+<div class="layout">
+  <div>
+    <div class="sheet">
+      <div class="viewbar">
+        <div class="group"><button data-view="plan" class="active">Plan X–Z</button><button data-view="elevation">Elevation X–Y</button><button data-view="graph">Route graph</button></div>
+        <div class="group"><button id="exportsvg">Export SVG</button><button id="exportjson">Export JSON</button></div>
+      </div>
+      <div id="plot" aria-live="polite"></div>
+      <div id="metrics"></div>
+      <div class="legend"><span><i style="background:#bf9258"></i> Ballistic witness</span><span><i style="background:#3e8065"></i> Physically confirmed</span><span><i style="background:#b45c5c"></i> Failed verification</span><span>Grey dashes = generator routes, not yet rediscovered</span></div>
+    </div>
+    <div id="status">Preparing a headless level…</div>
+  </div>
+  <div class="sidebar">
+    <section id="details"><h3>Inspector</h3><p>Choose a stop or transition.</p></section>
+    <section><h3>Discovered transitions</h3><div id="edges"></div></section>
+  </div>
+</div>
+<p class="footnote">Uses the same level generator, collision geometry, movement approximation and Dumpling.step() as the playable Squishy experiment. Predicted connections are discovered by sampling, not proof of reachability for a human player; a missing edge is not proof of impossibility. Full-body verification uses fresh dynamic states and is deliberately explicit. Neither WebGL nor the game's renderer is loaded. <a href="{{readme}}">Read the experiment notes →</a></p>
+</main>
+<script type="module" src="{{app}}"></script>
+</body>
+</html>

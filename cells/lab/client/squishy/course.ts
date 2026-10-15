@@ -13,8 +13,8 @@ import { box as drawBox, drawShapes } from './mesh';
 import { smear, type Prop } from './props';
 
 /** Level n, laid by its place (another seed: another layout of the same level, for trying many). */
-export function buildLevel(n: number, seed = 0): Level {
-  return buildKitchen(n, seed);
+export function buildLevel(n: number, seed = 0, composition: 'parallel' | 'convergent' | 'offset' = 'parallel'): Level {
+  return buildKitchen(n, seed, composition);
 }
 
 /**

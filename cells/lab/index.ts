@@ -3,6 +3,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { EXPERIMENTS, groups, type Experiment } from './experiments';
 import { markdown } from './md';
+import { studyOne, studyVariants } from './client/squishy-lab/spatial';
+import { validateFork } from './client/squishy-lab/physics-study';
 
 /**
  * `@c15r/lab` — 3D and GL experiments, one cell.
@@ -242,6 +244,23 @@ export const handler = async (event: { rawPath?: string; rawQueryString?: string
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/lab(?=\/|$)/, '') || '/';
   try {
     const b = build();
+    if (path.startsWith('/_squishy-physical/')) {
+      const parts=path.split('/');
+      const level=Math.max(1,Math.min(30,Number(parts[2])||7));
+      const seed=Math.max(0,Math.min(100000,Number(parts[3])||0));
+      const variant=(['parallel','convergent','offset'].includes(parts[4])?parts[4]:'parallel') as 'parallel'|'convergent'|'offset';
+      const exitIndex=parts[5]!==undefined?Number(parts[5]):-1;
+      return text(200,'application/json; charset=utf-8',JSON.stringify(validateFork(level,seed,variant,exitIndex)),'no-store');
+    }
+    if (path === '/_squishy-spatial' || path.startsWith('/_squishy-spatial/')) {
+      const q = new URLSearchParams(event.rawQueryString ?? '');
+      const parts = path.split('/');
+      const level = Math.max(1, Math.min(30, Number(parts[2] ?? q.get('level')) || 6));
+      const seed = Math.max(0, Math.min(100000, Number(parts[3] ?? q.get('seed')) || 0));
+      const variant = parts[4] as 'parallel' | 'convergent' | 'offset' | undefined;
+      const result = variant && ['parallel','convergent','offset'].includes(variant) ? studyOne(level,seed,variant) : studyVariants(level,seed);
+      return text(200, 'application/json; charset=utf-8', JSON.stringify(result), 'no-store');
+    }
     if (path === '/' || path === '/index.html') return text(200, 'text/html; charset=utf-8', b.index, 'no-cache');
     if (path.startsWith('/~/')) {
       const o = b.objects.get(path);
