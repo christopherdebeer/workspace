@@ -169,7 +169,7 @@ const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a: V3): V3 => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 // ─── the still things: figure, stand, bench, wall ──────────────────────────────────────────────
-function solidMesh(part: 'scene' | 'rail' | 'hanger' = 'scene'): number[] {
+function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' = 'scene'): number[] {
   const out: number[] = [];
   const put = (p: V3, n: V3, m: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], m);
   const quad = (a: [V3, V3], b: [V3, V3], c: [V3, V3], d: [V3, V3], m: number) => { for (const v of [a, b, c, a, c, d]) put(v[0], v[1], m); };
@@ -204,11 +204,17 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' = 'scene'): number[] {
     return out;
   }
   if (part === 'hanger') {
-    // (a skirt hanger: a beech bar with a clip at each end, and a chromed hook that goes over the rail. Its origin's
-    // the waist of the skirt it holds; the hook's centre (where it pivots on the rail) is HOOK above it)
+    // (a skirt hanger: a beech bar with a clip at each end. Its origin's the waist of the skirt it holds)
     out.length = 0;
     tube([-17, 4.5, 0], [17, 4.5, 0], 1.1, 1.1, 5); ball([-17, 4.5, 0], 1.1, 5); ball([17, 4.5, 0], 1.1, 5);
     for (const x of [-14.5, 14.5]) tube([x, 4.2, 0], [x, 1.4, 0], 1.2, 1, 4);
+    ball([0, 5.6, 0], 0.9, 4);
+    return out;
+  }
+  if (part === 'hook') {
+    // (its chromed hook, which swivels: it stays over the rail's bar (along x) however the hanger's turned. It pivots
+    // on the bar at HOOK above the skirt's waist)
+    out.length = 0;
     tube([0, 5.4, 0], [0, HOOK - 2, 0], 0.35, 0.35, 4);
     let prev: V3 = [0, HOOK - 2, 0];
     for (let k = 1; k <= 14; k++) { const a = -Math.PI / 2 + (k / 14) * Math.PI * 1.35, q: V3 = [0, HOOK + Math.sin(a) * 2, Math.cos(a) * 2]; tube(prev, q, 0.35, 0.35, 4); prev = q; }
@@ -239,7 +245,7 @@ export interface Look { fabric: Fabric; print: Print }
 /** a cloth to draw, where (its model matrix: none for the figure's own) */
 export interface Item { cloth: Cloth; look: Look; model?: Float32Array }
 /** the rails and hangers in the room: each a model matrix; a rail's tint its owner's colour */
-export interface Fittings { rails: Array<{ model: Float32Array; tint: V3 }>; hangers: Float32Array[] }
+export interface Fittings { rails: Array<{ model: Float32Array; tint: V3 }>; hangers: Float32Array[]; hooks: Float32Array[] }
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 const CHROME: V3 = [0.62, 0.62, 0.64];
 
@@ -265,12 +271,12 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     for (const [name, size, stride, off] of attrs) { const l = gl.getAttribLocation(p, name); if (l < 0) continue; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4); }
     return v;
   };
-  const mesh = (part: 'scene' | 'rail' | 'hanger') => {
+  const mesh = (part: 'scene' | 'rail' | 'hanger' | 'hook') => {
     const v = new Float32Array(solidMesh(part)), b = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
     return { draw: vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], b), shadow: vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], b), count: v.length / 7 };
   };
-  const scene = mesh('scene'), rail = mesh('rail'), hanger = mesh('hanger');
+  const scene = mesh('scene'), rail = mesh('rail'), hanger = mesh('hanger'), hook = mesh('hook');
 
   // (the shadow map)
   const SH = 2048, shTex = gl.createTexture()!, shFb = gl.createFramebuffer()!;
@@ -317,7 +323,7 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     return g;
   }
 
-  function frame(view: View, items: Item[], w: number, h: number, spin = 0, fit: Fittings = { rails: [], hangers: [] }) {
+  function frame(view: View, items: Item[], w: number, h: number, spin = 0, fit: Fittings = { rails: [], hangers: [], hooks: [] }) {
     tick++;
     const gs = items.map((it) => upload(it.cloth));
     for (const [c, g] of gpu) if (g.seen !== tick) { gl.deleteBuffer(g.dyn); gl.deleteBuffer(g.stat); gl.deleteBuffer(g.idx); gl.deleteVertexArray(g.draw); gl.deleteVertexArray(g.shadow); gpu.delete(c); }
@@ -333,6 +339,7 @@ export function createRenderer(gl: WebGL2RenderingContext) {
       m(scene, IDENTITY, spin, CHROME);
       for (const r of fit.rails) m(rail, r.model, 0, r.tint);
       for (const hm of fit.hangers) m(hanger, hm, 0, CHROME);
+      for (const hm of fit.hooks) m(hook, hm, 0, CHROME);
     };
     // (the shadow pass)
     gl.bindFramebuffer(gl.FRAMEBUFFER, shFb); gl.viewport(0, 0, SH, SH);
@@ -372,11 +379,15 @@ export function createRenderer(gl: WebGL2RenderingContext) {
   return { frame };
 }
 
-/** a model matrix: turned by `angle` about the z axis round `pivot` (local), and that pivot put at `at` */
-export function swingAt(at: V3, pivot: V3, angle: number, out: Float32Array = new Float32Array(16)): Float32Array {
-  const c = Math.cos(angle), s = Math.sin(angle);
-  // (x' = R(x − pivot) + at)
-  out.set([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, at[0] - (c * pivot[0] - s * pivot[1]), at[1] - (s * pivot[0] + c * pivot[1]), at[2] - pivot[2], 1]);
+/** a model matrix: turned `yaw` about the vertical, then swung `angle` about the z axis (along the rail, as a hanger
+ * swings when it's pushed along), both about `pivot` (local, on the vertical axis), and that pivot put at `at` */
+export function swingAt(at: V3, pivot: V3, angle: number, out: Float32Array = new Float32Array(16), yaw = 0): Float32Array {
+  const c = Math.cos(angle), s = Math.sin(angle), cy = Math.cos(yaw), sy = Math.sin(yaw);
+  // (M = Rz(angle)·Ry(yaw), columns; x' = M(x − pivot) + at)
+  const m = [c * cy, s * cy, -sy, -s, c, 0, c * sy, s * sy, cy];
+  const px = pivot[0], py = pivot[1], pz = pivot[2];
+  out.set([m[0], m[1], m[2], 0, m[3], m[4], m[5], 0, m[6], m[7], m[8], 0,
+    at[0] - (m[0] * px + m[3] * py + m[6] * pz), at[1] - (m[1] * px + m[4] * py + m[7] * pz), at[2] - (m[2] * px + m[5] * py + m[8] * pz), 1]);
   return out;
 }
 export const translate = (x: number, y: number, z: number) => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);

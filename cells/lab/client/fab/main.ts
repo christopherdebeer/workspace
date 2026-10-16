@@ -304,7 +304,7 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  if (mode === 'rails') { room.push(-(Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * 0.25, 0.016); return; }
+  if (mode === 'rails') { room.push(-(Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * 0.08, 0.016); return; }
   view.dist = Math.max(80, Math.min(360, view.dist * (1 + e.deltaY * 0.001)));
 }, { passive: false });
 canvas.addEventListener('touchstart', (e) => { if (e.touches.length === 2 && mode === 'bench') pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }, { passive: true });

@@ -2,8 +2,10 @@
  * The rails: along the workshop's wall, to the left of the bench, a clothes rail for the workshop and one for each
  * person, each hung with skirts on hangers.
  *
- * A rail's skirts slide along its bar like a real rail's: drag them along and they run on, slow and settle with one
- * in front. Toward the bar's ends they bunch up, and each swings on its hook as it's pushed. A person's rail starts
+ * A rail's skirts hang as on a real rail: each hanger across the bar, so they overlap, seen along the rail at an
+ * angle. Drag them along and they run on, slow and settle with one in front: that one's drawn out and turned to face
+ * you, the ones behind it fan away, the ones already passed are pushed together toward the near end. Each swings on
+ * its hook as it's pushed (the hook swivels: it stays over the bar). A person's rail starts
  * with a bare hanger, for a new skirt.
  *
  * Every skirt on a rail is the real thing: its pattern drafted from its design (coarser: a rail's skirts don't need a
@@ -20,9 +22,14 @@ type V3 = [number, number, number];
 /** where the rails stand: in a row along the wall, left of the bench */
 export const railX = (k: number) => -270 - k * 240;
 export const RAIL_Z = -20;
-const BAR_Y = FLOOR + 4.9 + RAIL_Y, SP = 30, GAP = 22, H = RAIL_W / 2 - 10, ELL = 26, SETTLE = 150;
+/** the rail's seen from this far round (radians): along it, at an angle */
+export const RAIL_AZ = 0.92;
+const BAR_Y = FLOOR + 4.9 + RAIL_Y, SP = 30, H = RAIL_W / 2 - 8, ELL = 26, SETTLE = 150;
+/** along the bar: cm between hangers, and the gaps either side of the one in front (the near side's wide, so what's
+ * been passed doesn't hide it) */
+const PER = 9, GAP_FAR = 20, GAP_NEAR = 44;
 
-interface Hung { g: Garment | null; x: number; vx: number; th: number; om: number; lastX: number; cloth: Cloth | null; frames: number; look: Look | null; key: string; model: Float32Array }
+interface Hung { g: Garment | null; x: number; vx: number; th: number; om: number; lastX: number; cloth: Cloth | null; frames: number; look: Look | null; key: string; model: Float32Array; hook: Float32Array; yaw: number }
 interface RailState { rail: Rail; scroll: number; vel: number; hung: Hung[] }
 
 const keyOf = (d: Design) => JSON.stringify(d);
@@ -47,22 +54,28 @@ export class Room {
       const hung = slots.map((g, i): Hung => {
         const was = prev?.hung.find((h) => (h.g?.id ?? null) === (g?.id ?? null));
         const key = g ? keyOf(g.design) : '';
-        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricById(g.design.fabric), print: makePrint(g.design.print, g.design.colour) } : null, key, model: new Float32Array(16) };
+        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricById(g.design.fabric), print: makePrint(g.design.print, g.design.colour) } : null, key, model: new Float32Array(16), hook: new Float32Array(16), yaw: Math.PI / 2 };
       });
       return { rail, scroll: prev?.scroll ?? 0, vel: 0, hung };
     });
     this.active = Math.min(this.active, this.states.length - 1);
   }
   // (along the bar: spaced, bunching toward its ends, and a gap either side of the one in front so it hangs clear)
-  private slotX(i: number, scroll: number) { const p = i * SP - scroll; return H * Math.tanh((p + Math.sign(p) * GAP * (1 - Math.exp(-Math.abs(p) / SP))) / H); }
+  private slotX(i: number, scroll: number) {
+    const p = i - scroll / SP, a = Math.abs(p), x = -Math.sign(p) * ((p > 0 ? GAP_FAR : GAP_NEAR) * (1 - Math.exp(-a * 2.5)) + a * PER);
+    return H * Math.tanh(x / H);
+  }
   /** the one at the front of a rail */
   front(k = this.active): number { const s = this.states[k]; return s ? Math.max(0, Math.min(s.hung.length - 1, Math.round(s.scroll / SP))) : 0; }
   frontHung(k = this.active): Hung | undefined { return this.states[k]?.hung[this.front(k)]; }
 
   /** a drag along the rail (screen pixels to centimetres along it) */
   push(dxCm: number, dt: number) {
+    // (the skirts move with the finger: the bar's seen at an angle, so a centimetre across the screen is more along
+    // it; and a slot's a scroll of SP but only about 12 cm along the bar, once they're bunched behind the front one)
     const s = this.states[this.active]; if (!s) return;
-    s.scroll -= dxCm; s.vel = -dxCm / Math.max(1e-3, dt);
+    const d = (dxCm * SP) / (12 * Math.cos(RAIL_AZ));
+    s.scroll += d; s.vel = d / Math.max(1e-3, dt);
   }
   /** bring garment i to the front */
   goTo(i: number) { const s = this.states[this.active]; if (s) { s.vel = 0; s.scroll = Math.max(0, Math.min(s.hung.length - 1, i)) * SP; } }
@@ -86,8 +99,12 @@ export class Room {
         // (each swings on its hook: a damped pendulum, pushed by how its hook's carried along)
         const w2 = 980 / ELL, acc = -w2 * Math.sin(h.th) - 2 * 0.22 * Math.sqrt(w2) * h.om - (Math.max(-500, Math.min(500, a)) / ELL) * Math.cos(h.th);
         h.om += acc * dt; h.th = Math.max(-0.35, Math.min(0.35, h.th + h.om * dt));
-        const z = RAIL_Z + (i % 2 ? -1.2 : 1.2) + (i === this.front(k) ? 3 : 0);
-        swingAt([railX(k) + h.x, BAR_Y, z], [0, HOOK, 0], h.th, h.model);
+        // (the one in front turned to face the viewer and drawn a little out from the rest; the others across the bar)
+        const p = Math.abs(i - s.scroll / SP), f = Math.max(0, 1 - p), w = f * f * (3 - 2 * f);
+        h.yaw = Math.PI / 2 + (RAIL_AZ - Math.PI / 2) * w;
+        const at: V3 = [railX(k) + h.x, BAR_Y, RAIL_Z + 7 * w];
+        swingAt(at, [0, HOOK, 0], h.th, h.model, h.yaw);
+        swingAt([at[0], at[1], RAIL_Z], [0, HOOK, 0], h.th, h.hook);
       });
     }
     // (settling, nearest the front of the rail being looked at first)
@@ -117,26 +134,33 @@ export class Room {
     return {
       rails: this.states.map((s, k) => ({ model: translate(railX(k), FLOOR + 4.9, RAIL_Z), tint: s.rail.workshop ? [0.6, 0.6, 0.62] as V3 : RAIL_COLOURS[s.rail.colour % RAIL_COLOURS.length].tint })),
       hangers: [this.active - 1, this.active, this.active + 1].flatMap((k) => (this.states[k]?.hung ?? []).map((h) => h.model)),
+      hooks: [this.active - 1, this.active, this.active + 1].flatMap((k) => (this.states[k]?.hung ?? []).map((h) => h.hook)),
     };
   }
-  /** where to look at rail k from */
+  /** where to look at rail k from: along it at an angle, the one in front filling most of the width */
   viewOf(k: number, aspect: number) {
-    // (near enough that the one in front fills a phone's width, with its neighbours either side)
-    const wide = Math.min(1.6, Math.max(0.4, aspect)), dist = Math.max(200, (wide < 0.8 ? 100 : 150) / (2 * Math.tan(0.3) * wide));
-    return { az: 0, el: 0.06, dist, target: [railX(k), BAR_Y - 40, RAIL_Z] as V3 };
+    // (from a child's eye height, below the bar: so the bar runs away from it on a slant, and the skirts behind the
+    // one in front grow smaller as they go)
+    const wide = Math.min(1.6, Math.max(0.4, aspect)), dist = Math.max(150, (wide < 0.8 ? 80 : 140) / (2 * Math.tan(0.3) * wide));
+    return { az: RAIL_AZ, el: -0.1, dist, target: [railX(k) - 4, BAR_Y - 36, RAIL_Z + 6] as V3 };
   }
-  /** which garment of the active rail is under a point on the screen (its hook to below its hem) */
+  /** which garment of the active rail is under a point on the screen: the one in front if it's on it, else the one
+   * nearest it along the rail whose outline (hook to hem, clip to clip) holds the point */
   pick(px: number, py: number, vp: Float32Array, w: number, h: number): number {
     const s = this.states[this.active]; if (!s) return -1;
-    const proj = (p: V3) => { const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], ww = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15]; return [(x / ww * 0.5 + 0.5) * w, (1 - (y / ww * 0.5 + 0.5)) * h]; };
-    let best = -1, bd = Infinity;
-    s.hung.forEach((hg, i) => {
-      if (hg.g?.id === this.onFigure && hg.g) return;
-      const len = hg.g?.design.length ?? 10, top = proj([railX(this.active) + hg.x, BAR_Y + 4, RAIL_Z]), bot = proj([railX(this.active) + hg.x, BAR_Y - HOOK - len, RAIL_Z]);
-      const half = Math.abs(proj([railX(this.active) + hg.x + 16, BAR_Y, RAIL_Z])[0] - top[0]);
-      if (py < top[1] - 10 || py > bot[1] + 10) return;
-      const dx = Math.abs(px - top[0]); if (dx < half && dx + (i === this.front() ? -8 : 0) < bd) { bd = dx; best = i; }
-    });
+    const screen = (m: Float32Array, l: V3) => {
+      const p = [m[0] * l[0] + m[4] * l[1] + m[8] * l[2] + m[12], m[1] * l[0] + m[5] * l[1] + m[9] * l[2] + m[13], m[2] * l[0] + m[6] * l[1] + m[10] * l[2] + m[14]];
+      const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12], y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13], ww = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+      return [(x / ww * 0.5 + 0.5) * w, (1 - (y / ww * 0.5 + 0.5)) * h];
+    };
+    const f = this.front(), inside = (i: number) => {
+      const hg = s.hung[i], len = hg.g?.design.length ?? 8, pts = [[-19, HOOK + 2, 0], [19, HOOK + 2, 0], [-24, -len, 0], [24, -len, 0]].map((q) => screen(hg.model, q as V3));
+      const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+      return px >= Math.min(...xs) - 6 && px <= Math.max(...xs) + 6 && py >= Math.min(...ys) - 6 && py <= Math.max(...ys) + 6;
+    };
+    if (s.hung[f] && inside(f)) return f;
+    let best = -1;
+    for (let d = 1; d < s.hung.length; d++) for (const i of [f + d, f - d]) if (best < 0 && s.hung[i] && inside(i)) best = i;
     return best;
   }
 }
