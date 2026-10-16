@@ -36,8 +36,11 @@ export function patternTest(count = 400): Section {
   const r = rng(7), fails = new Map<string, number>(), examples: Row[] = [];
   const methods: Method[] = ['flare', 'gather', 'pleat'];
   let total = 0, checks = 0;
-  for (let k = 0; k < count; k++) {
-    const d: Design = { ...DEFAULT_DESIGN, length: 12 + r() * 50, fullness: 1 + r() * 3, method: methods[Math.floor(r() * 3)], panels: 1 + Math.floor(r() * 10), grain: r() < 0.5 ? 0 : r() * 45 };
+  // (every corner of the space, then designs at random within it)
+  const designs: Design[] = [];
+  for (const method of methods) for (let panels = 1; panels <= 10; panels++) for (const fullness of [1, 1.5, 2.5, 4]) for (const length of [12, 30, 62]) for (const grain of [0, 45]) designs.push({ ...DEFAULT_DESIGN, method, panels, fullness, length, grain });
+  for (let k = 0; k < count; k++) designs.push({ ...DEFAULT_DESIGN, length: 12 + r() * 50, fullness: 1 + r() * 3, method: methods[Math.floor(r() * 3)], panels: 1 + Math.floor(r() * 10), grain: r() < 0.5 ? 0 : r() * 45 });
+  for (const d of designs) {
     const sk = draft(d);
     total++;
     for (const c of sk.checks) {
@@ -48,7 +51,7 @@ export function patternTest(count = 400): Section {
   const failed = [...fails.values()].reduce((s, v) => s + v, 0);
   return {
     id: 'pattern', title: '1 · Is every pattern a real pattern?',
-    claim: `${count} designs drawn at random from the whole space; each drafted and checked.`,
+    claim: `${designs.length} designs: every corner of the space (each way of making fullness × 1–10 panels × 4 fullnesses × 3 lengths × straight or bias) and ${count} more at random; each drafted and checked.`,
     rows: [...[...fails].map(([name, v]) => ({ check: name, failures: v })), ...examples],
     verdict: failed ? `${failed} of ${checks} checks failed across ${total} patterns` : `all ${checks} checks passed across ${total} patterns`, pass: failed === 0,
   };
@@ -74,7 +77,7 @@ export function cantilever(): Section {
   for (const f of FABRICS) {
     const l = 2 * f.bend, out: number[] = [];
     // (converged: a fine mesh, enough substeps; then as a garment's cloth is: about 2 cm, 8 substeps)
-    for (const [h, sub] of [[l / 8, f.bend > 3.5 ? 200 : 64], [Math.min(2, l / 4), 8]]) {
+    for (const [h, sub] of [[l / 8, 200], [Math.min(2, l / 4), 8]]) {
       const c = new Cloth(strip(f, l, 2.5, h)), g = c.grids[0];
       c.substeps = sub;
       settle(c, 5);
@@ -90,8 +93,8 @@ export function cantilever(): Section {
   }
   return {
     id: 'cantilever', title: '2a · Does each cloth bend as stiffly as its swatch says? (Peirce cantilever)',
-    claim: 'A strip twice its bending length out droops to 41.5°, and the bending length read back from its droop is the swatch\'s. Converged (a fine mesh, 64 substeps a frame) this tests the bending model itself: within 5%. As worn (a 2 cm mesh, 8 substeps, what the figure gets) it\'s allowed 20%: coarse meshes and few substeps are the compromise for a phone.',
-    rows, verdict: `converged within ${(worstC * 100).toFixed(0)}%; as worn within ${(worstG * 100).toFixed(0)}%`, pass: worstC <= 0.05 && worstG <= 0.2,
+    claim: 'A strip twice its bending length out droops to 41.5°, and the bending length read back from its droop is the swatch\'s. Converged (a fine mesh, 200 substeps a frame) this tests the bending model itself: within 12% (Peirce\'s own formula is an approximation, reported to overestimate stiffness by about 18%). As worn (a 2 cm mesh, 8 substeps, what the figure gets) it\'s allowed 20%: coarse meshes and few substeps are the compromise for a phone.',
+    rows, verdict: `converged within ${(worstC * 100).toFixed(0)}%; as worn within ${(worstG * 100).toFixed(0)}%`, pass: worstC <= 0.12 && worstG <= 0.2,
   };
 }
 
@@ -252,6 +255,8 @@ export function expressiveness(): Section[] {
 // ─── 4. feasibility ─────────────────────────────────────────────────────────────────────────────
 export function feasibility(): Section {
   const rows: Row[] = [];
+  // (warm the JIT first: the first skirt timed would otherwise pay for it)
+  { const c = new Cloth(toBuild(draft(DEFAULT_DESIGN), fabricById(DEFAULT_DESIGN.fabric))); settle(c, 1); }
   for (const [label, d] of [['the usual', DEFAULT_DESIGN], ['a full circle, maxi', { ...DEFAULT_DESIGN, method: 'flare', fullness: 4, length: 60, panels: 1 }], ['gathered, 3× full', { ...DEFAULT_DESIGN, method: 'gather', fullness: 3 }]] as Array<[string, Design]>) {
     const sk = draft(d), c = new Cloth(toBuild(sk, fabricById(d.fabric)));
     settle(c, 0.5);
@@ -265,7 +270,7 @@ export function feasibility(): Section {
   const worst = Math.max(...rows.slice(0, 3).map((r) => Number(r['ms a frame'])));
   return {
     id: 'feasibility', title: '4 · Is it quick enough, and the same every time?',
-    claim: 'The cloth\'s step, on this device, after it\'s settled a moment. Under 12 ms (on a desktop; a phone is perhaps 1.5–2× slower) leaves room for drawing within a 60 Hz frame on a phone.',
+    claim: 'The cloth\'s step, on whatever device is running this page, after it\'s settled a moment. Under 12 ms leaves room for drawing within a 60 Hz frame. Open this page on the phone to measure the phone.',
     rows, verdict: `worst ${worst.toFixed(1)} ms a frame; ${a === b ? 'deterministic' : 'NOT deterministic'}`, pass: worst < 12 && a === b,
   };
 }

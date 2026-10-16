@@ -53,8 +53,8 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrin
   ctx.fillStyle = '#f4efe2'; ctx.fillRect(0, 0, W, H);
   const n = sk.m.panels, shown = [sk.pieces[0], sk.pieces[sk.pieces.length - 1]];
   const label = (p: Piece) => (p.kind === 'band' ? 'waistband · cut 1' : n === 1 ? 'skirt · cut 1' : `${n === 2 ? 'front & back' : 'panel'} · cut ${n}`);
-  const head = mini ? 6 : 30, foot = mini ? 6 : Math.min(150, H * 0.34);
-  if (!mini) { ctx.fillStyle = '#5b4a36'; ctx.font = '700 14px ui-rounded, system-ui, sans-serif'; ctx.fillText('the pattern', 14, 21); }
+  const head = mini ? 6 : 104, foot = mini ? 6 : Math.min(170, H * 0.36);
+  if (!mini) { ctx.fillStyle = '#5b4a36'; ctx.font = '800 15px ui-rounded, system-ui, sans-serif'; ctx.fillText('the pattern', 14, 96); }
   const outs = shown.map(outline), boxes = outs.map((o) => {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (const [x, y] of o) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
@@ -82,29 +82,21 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrin
     ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = mini ? 1.2 : 1.8; ctx.stroke(path);
     ctx.clip(path); ctx.setLineDash([4, 3]); ctx.strokeStyle = 'rgba(40,30,20,.5)'; ctx.lineWidth = Math.max(1, 1.6 * sc); ctx.stroke(path);
     ctx.restore();
-    // (darts and pleats: their lines, from the pairs sewn on this piece)
+    // (darts: two legs to a point; pleats: the fold line and where it's laid to, stitched a little way down, and an
+    // arrow the way it folds)
     if (p.kind === 'panel') {
-      ctx.strokeStyle = '#b8323f'; ctx.lineWidth = mini ? 1 : 1.5;
-      let lastJ = Infinity, A: Array<[number, number]> = [], B: Array<[number, number]> = [], why = '';
-      const flush = () => {
-        if (A.length) {
-          const a0 = p.flat(A[0][0] / p.nu, 0), b0 = p.flat(B[0][0] / p.nu, 0);
-          ctx.beginPath();
-          if (why === 'dart') {
-            const tip = A[A.length - 1], tp = p.flat((tip[0] + 0.5) / p.nu, (tip[1] + 1) / p.nv);
-            ctx.moveTo(...to(a0)); ctx.lineTo(...to(tp)); ctx.lineTo(...to(b0));
-          } else for (const s of [A, B]) { const f0 = p.flat(s[0][0] / p.nu, 0), f1 = p.flat(s[0][0] / p.nu, s[s.length - 1][1] / p.nv); ctx.moveTo(...to(f0)); ctx.lineTo(...to(f1)); }
-          ctx.stroke();
-          if (why === 'pleat' && !mini) { const [x0, y0] = to(a0), [x1] = to(b0); ctx.beginPath(); ctx.moveTo(x1, y0 + 6); ctx.lineTo(x0 + 3, y0 + 6); ctx.lineTo(x0 + 7, y0 + 3); ctx.stroke(); }
+      ctx.strokeStyle = '#b8323f'; ctx.fillStyle = '#b8323f'; ctx.lineWidth = mini ? 1 : 1.6; ctx.setLineDash([]);
+      for (const mk of sk.marks) {
+        const v = Math.min(1, mk.down / sk.m.length), a0 = to(p.flat(mk.c / p.nu, 0)), b0 = to(p.flat((mk.c + mk.k) / p.nu, 0));
+        ctx.beginPath();
+        if (mk.kind === 'dart') { const tip = to(p.flat((mk.c + mk.k / 2) / p.nu, v)); ctx.moveTo(...a0); ctx.lineTo(...tip); ctx.lineTo(...b0); }
+        else {
+          const a1 = to(p.flat(mk.c / p.nu, v)), b1 = to(p.flat((mk.c + mk.k) / p.nu, v));
+          ctx.moveTo(...a0); ctx.lineTo(...a1); ctx.moveTo(...b0); ctx.lineTo(...b1);
+          if (!mini) { const y = a0[1] + (a1[1] - a0[1]) * 0.45; ctx.moveTo(b0[0] - 1, y); ctx.lineTo(a0[0] + 2, y); ctx.moveTo(a0[0] + 6, y - 3); ctx.lineTo(a0[0] + 2, y); ctx.lineTo(a0[0] + 6, y + 3); }
         }
-        A = []; B = [];
-      };
-      for (const pr2 of sk.pairs) {
-        if (pr2.why === 'side seam' || pr2.a[0] !== 0) continue;
-        if (pr2.a[2] < lastJ) flush();
-        lastJ = pr2.a[2]; why = pr2.why; A.push([pr2.a[1], pr2.a[2]]); B.push([pr2.b[1], pr2.b[2]]);
+        ctx.stroke();
       }
-      flush();
     }
     // (the grain line: a long arrow along the threads)
     const c0 = p.kind === 'band' ? p.flat(0.5, 0.5) : p.flat(0.5, 0.55), g = p.grain, len = Math.min(b.h, b.w) * 0.32 + 2;
@@ -129,9 +121,12 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrin
   const m = sk.m;
   ctx.fillText(`${m.length.toFixed(0)} cm long · hem ${m.hem.toFixed(0)} cm round · ${(m.area * 1e4).toFixed(0)} cm² of cloth`, 14, y); y += 17;
   if (sk.notes.length) { ctx.fillText(sk.notes.join(' · '), 14, y); y += 19; }
-  ctx.font = '500 11px ui-rounded, system-ui, sans-serif';
+  // (the checks: each one's name, then what it found, cut to fit)
   for (const c of sk.checks) {
-    ctx.fillStyle = c.ok ? '#3f7a4a' : '#b8323f'; ctx.fillText(`${c.ok ? '✓' : '✗'} ${c.name}`, 14, y);
-    ctx.fillStyle = '#7a6a56'; ctx.fillText(c.detail, 150, y); y += 15;
+    ctx.font = '700 11px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = c.ok ? '#3f7a4a' : '#b8323f';
+    const head2 = `${c.ok ? '✓' : '✗'} ${c.name}`; ctx.fillText(head2, 14, y);
+    const x = 18 + ctx.measureText(head2).width; ctx.font = '500 11px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = '#7a6a56';
+    let t = c.detail; while (t.length > 4 && ctx.measureText(t).width > W - x - 12) t = t.slice(0, -2);
+    ctx.fillText(t === c.detail ? t : `${t.trim()}…`, x, y); y += 15;
   }
 }

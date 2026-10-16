@@ -124,7 +124,8 @@ void main() {
   base *= 1. - uWeave * .08 * smoothstep(.3, .5, max(w.x, w.y));
   // (stitching along each piece's edges: a dashed line of thread just in from them)
   float e = min(vEdge.x, vEdge.y), along = vEdge.x < vEdge.y ? vFlat.y : vFlat.x;
-  if (abs(e - .8) < .09 && fract(along / .5) < .6) base = mix(base, pow(uInk2, vec3(2.2)) * .9 + .05, .85);
+  // (the thread: a darker shade of the cloth's own ground, as a dressmaker matches it)
+  if (abs(e - .8) < .07 && fract(along / .5) < .6) base = mix(base, pow(mix(uInk0, uInk1, .55), vec3(2.2)) * .55, .8 * (1. - uClear));
   if (back) base *= .78;
   float NoV = max(dot(n, V), 0.), NoL = dot(n, uKey), sh = shadowAt(vPos, n);
   // (cloth takes light round its folds: a wrapped diffuse)

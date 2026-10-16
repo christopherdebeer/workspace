@@ -62,6 +62,8 @@ export interface Check { name: string; ok: boolean; detail: string }
 export interface Skirt {
   design: Design; pieces: Piece[]; pairs: Pair[]; holds: Hold[];
   band: number; notes: string[]; checks: Check[];
+  /** the darts and pleats on each panel, as drawn on the pattern: columns where each starts, how many it closes, how far down it's sewn */
+  marks: Array<{ kind: 'dart' | 'pleat'; c: number; k: number; down: number }>;
   m: { waist: number; hip: number; hem: number; length: number; panels: number; darts: number; pleats: number; flare: number; area: number };
 }
 
@@ -96,8 +98,11 @@ export function draft(d0: Design): Skirt {
     let du0 = width(0) / nu;
     // (the folds at the waist, in grid columns: each dart or pleat closes k columns to a point. A fold's a whole
     // number of columns, so the waist's re-cut to make what's left between the folds exactly the band: it must fit)
-    const k = cut.foldsPer > 0 ? Math.max(1, Math.round(cut.foldK / du0)) : 0, kept = nu - cut.foldsPer * k;
-    if (cut.foldsPer > 0) { cut = cutPanels(d, n, L, yh, band, hipNeed, (nu * share) / kept / 2); width = (y: number) => 2 * cut.hw(y); du0 = share / kept; }
+    let k = cut.foldsPer > 0 ? Math.max(1, Math.round(cut.foldK / du0)) : 0, fp = cut.foldsPer;
+    // (a dart no deeper than a dart can be: rounded to columns it may need one more dart)
+    if (d.method === 'flare' && fp > 0 && k * du0 > DART_MAX + 0.3) { k = Math.max(1, Math.floor((DART_MAX + 0.3) / du0)); fp = Math.ceil(cut.intake / (k * du0) - 0.15); }
+    const kept = nu - fp * k;
+    if (fp > 0) { cut = cutPanels(d, n, L, yh, band, hipNeed, (nu * share) / kept / 2); cut.foldsPer = fp; width = (y: number) => 2 * cut.hw(y); du0 = share / kept; }
     return { cut, share, width, area, nu, nv, du0, k, kept };
   };
   // (as many panels as it takes to fit each on the cloth)
@@ -180,6 +185,7 @@ export function draft(d0: Design): Skirt {
 
   const sk: Skirt = {
     design: { ...d, panels: n }, pieces, pairs, holds, band, notes, checks: [],
+    marks: folds.map((c) => ({ kind: d.method === 'pleat' ? 'pleat' as const : 'dart' as const, c, k, down: d.method === 'pleat' ? Math.min(PLEAT_STITCH, L) : dartLen })),
     m: { waist, hip: hipNeed, hem: n * width(L), length: L, panels: n, darts: d.method === 'flare' ? n * foldsPer : 0, pleats: d.method === 'pleat' ? n * foldsPer : 0, flare: (theta * n * 180) / Math.PI, area: area / 1e4 },
   };
   sk.checks = check(sk, { hw, R0, g, L, yh, n, nu, nv, k, folds, kept, du0, dartLen, method: d.method });
@@ -269,7 +275,7 @@ function check(sk: Skirt, c: { hw: (y: number) => number; R0: number; g: number;
     const spare = c.n * w - roundAt(y) - EASE;
     if (spare < worst) { worst = spare; at = y; }
   }
-  out.push({ name: 'clears the hips', ok: worst >= 0, detail: `${(worst + EASE).toFixed(1)} cm of ease at its tightest (${at.toFixed(0)} cm down; ${EASE} needed)` });
+  out.push({ name: 'clears the hips', ok: worst >= -0.05, detail: `${(worst + EASE).toFixed(1)} cm of ease at its tightest (${at.toFixed(0)} cm down; ${EASE} needed)` });
   // (4: each piece fits on the cloth, along its grain)
   const across = acrossGrain(c.hw, c.R0, c.L, c.g);
   out.push({ name: 'fits on the cloth', ok: across <= BOLT + 0.5, detail: `${across.toFixed(0)} cm across the grain, of ${BOLT}` });

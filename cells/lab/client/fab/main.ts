@@ -190,7 +190,9 @@ function frame(now: number) {
 }
 if (preview) document.body.classList.add('preview');
 make();
+if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
+if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = { probe: () => ({ frames, particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain() }), view, twirl: () => { twirlUntil = performance.now() + 3200; } };
 addEventListener('resize', () => ui());
 requestAnimationFrame(frame);

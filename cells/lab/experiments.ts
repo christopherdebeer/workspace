@@ -26,9 +26,16 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'fab', title: 'Fab', group: 'Play',
-    blurb: 'A dressmaker\'s workbench for children: a little wooden figure, and for each thing it wears six dials (shape, silhouette, drape, pieces, fabric, print) that draft a real pattern, cut it, sew it round the figure and let it fall as that cloth would. Felt stands out where silk falls in folds; stripes chevron at the seams. See the pattern flat, as it\'s cut.',
-    page: 'static/fab.html', preview: 'preview', readme: 'static/fab.md',
-    presets: [{ label: 'dress it', query: '' }, { label: 'a circle skirt in silk', query: 'skirt=8cff3a1a3060&top=off&cape=off' }, { label: 'felt bell', query: 'skirt=70f0303ef0c8&top=4c304060cc02&cape=off' }, { label: 'a cape', query: 'skirt=6b8c4d61733c&top=4d3340737305&cape=80a04c33d9ca' }],
+    blurb: 'A dressmaking workbench for children, one garment family deep: skirts. Decide how long, how full, whether the fullness is flared, gathered or pleated, how many panels, which way on the grain, which cloth; a real pattern is drafted to the little wooden figure (darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that tests the patterns and the cloth against the textile lab\'s own tests.',
+    page: 'static/fab.html', preview: 'preview&fabric=lawn&print=2&colour=1', readme: 'static/fab.md',
+    presets: [
+      { label: 'a flared gingham', query: '' },
+      { label: 'felt bell', query: 'cut=flare&full=2.6&fabric=felt&print=0&colour=0' },
+      { label: 'chiffon, gathered', query: 'cut=gather&full=2.8&fabric=chiffon&print=4&colour=3' },
+      { label: 'pleated stripes', query: 'cut=pleat&full=2&panels=4&fabric=flannel&print=1&colour=4' },
+      { label: 'bias circle', query: 'cut=flare&full=3.6&panels=1&grain=45&fabric=satin&print=1&colour=0' },
+      { label: 'evidence bench', query: 'bench=evidence' },
+    ],
   },
   {
     id: 'changes', title: 'Changes', group: 'Contemplation',
