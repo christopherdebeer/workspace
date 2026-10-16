@@ -25,6 +25,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'fab', title: 'Fab', group: 'Play',
+    blurb: 'A dressmaker\'s workbench for children: a little wooden figure, and for each thing it wears six dials (shape, silhouette, drape, pieces, fabric, print) that draft a real pattern, cut it, sew it round the figure and let it fall as that cloth would. Felt stands out where silk falls in folds; stripes chevron at the seams. See the pattern flat, as it\'s cut.',
+    page: 'static/fab.html', preview: 'preview', readme: 'static/fab.md',
+    presets: [{ label: 'dress it', query: '' }, { label: 'a circle skirt in silk', query: 'skirt=8cff3a1a3060&top=off&cape=off' }, { label: 'felt bell', query: 'skirt=70f0303ef0c8&top=4c304060cc02&cape=off' }, { label: 'a cape', query: 'skirt=6b8c4d61733c&top=4d3340737305&cape=80a04c33d9ca' }],
+  },
+  {
     id: 'changes', title: 'Changes', group: 'Contemplation',
     blurb: 'Six blue lines, a moment of attention. Cast an I Ching hexagram, follow its changing lines, and keep a reflection. A quiet experiment in chance and interpretation, inspired by a minimal iOS app.',
     page: 'static/changes.html', preview: 'preview', readme: 'static/changes.md',

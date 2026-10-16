@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-exp="fab">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#ddd0bd">
+  <title>Fab</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #ddd0bd; overflow: hidden; touch-action: none; }
+    body { color: #4a3826; font-family: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, sans-serif; -webkit-user-select: none; user-select: none; display: flex; flex-direction: column; }
+    #stage { position: relative; flex: 1; min-height: 0; }
+    canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+    canvas#sheet { position: absolute; inset: 10px; width: calc(100% - 20px); height: calc(100% - 20px); border-radius: 14px; box-shadow: 0 8px 30px rgba(60,40,20,.25); display: none; }
+    body.sheet canvas#sheet { display: block; }
+    nav { position: absolute; top: max(10px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; gap: 8px; align-items: center; z-index: 2; }
+    nav a, nav button { all: unset; cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 999px; background: rgba(255,250,240,.82); box-shadow: 0 1px 4px rgba(60,40,20,.15); }
+    nav .title { font-size: 18px; font-weight: 800; letter-spacing: .02em; margin-right: auto; padding: 4px 6px; background: none; box-shadow: none; }
+    body.sheet nav #pattern { background: #4a3826; color: #fff6e6; }
+    #bench { flex: none; background: linear-gradient(#c79a6a, #b98a5a); padding: 10px 10px max(12px, env(safe-area-inset-bottom)); box-shadow: inset 0 3px 0 rgba(255,255,255,.18), 0 -6px 18px rgba(60,40,20,.18); }
+    #slots { display: flex; gap: 8px; margin-bottom: 10px; }
+    #slots button { all: unset; flex: 1; text-align: center; padding: 8px 4px 6px; border-radius: 14px; background: rgba(255,248,236,.55); cursor: pointer; }
+    #slots button span { display: block; font-weight: 800; font-size: 15px; }
+    #slots button em { display: block; font-style: normal; font-size: 10px; opacity: .65; letter-spacing: .04em; }
+    #slots button.active { background: #fff8ec; box-shadow: 0 2px 8px rgba(60,40,20,.25); }
+    #slots button.off span { opacity: .45; }
+    #dials { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+    @media (max-width: 560px) { #dials { grid-template-columns: repeat(3, 1fr); } }
+    #dials.off { opacity: .55; }
+    .knob { text-align: center; touch-action: none; cursor: grab; }
+    .knob svg { width: 58px; height: 58px; display: block; margin: 0 auto; overflow: visible; }
+    .knob .face { fill: #fff6e6; stroke: #8a6440; stroke-width: 2; }
+    .knob .track { fill: none; stroke: rgba(90,60,30,.18); stroke-width: 5; stroke-linecap: round; }
+    .knob .arc { fill: none; stroke: #e0566e; stroke-width: 5; stroke-linecap: round; }
+    .knob .dot { fill: #4a3826; }
+    .knob text { font-size: 18px; fill: #4a3826; }
+    .knob.turning svg { transform: scale(1.08); }
+    .knob b { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; margin-top: 2px; }
+    .knob i { display: block; font-style: normal; font-size: 12px; font-weight: 700; color: #fff8ec; min-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .preview nav, .preview #bench { display: none; }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="gl"></canvas>
+    <canvas id="sheet"></canvas>
+    <nav><a href="/">← lab</a><span class="title">Fab</span><button id="pattern">pattern</button><button id="surprise">surprise me</button><a href="{{readme}}">notes</a></nav>
+  </div>
+  <div id="bench">
+    <div id="slots"></div>
+    <div id="dials"></div>
+  </div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>
