@@ -25,6 +25,7 @@ import { logoSVG } from './title';
 import { CELL as BOOK_CELL, COLS as BOOK_COLS, ROWS as BOOK_ROWS, paintAtlas } from './books';
 import { VSTRIDE, disc, levelMesh, sphere, type LevelMesh } from './mesh';
 import { honeyOver, type HoneyRim } from './honey';
+import { honeyField } from './honeyfield';
 import { BAKE_RANGE, albedos, bakeDirs } from './bake';
 import { bounceOf, jelMesh, jelMeshSize, FEELS } from './jelly';
 
@@ -320,6 +321,8 @@ uniform sampler2D uScene;
 uniform vec3 uRight, uUp;
 uniform vec2 uRes;
 uniform float uLiquidOpt;
+// (honey's light: 1, from the honey's own thickness; 0, the old way, for comparing)
+uniform float uHoneyNew;
 // Jar fill geometry for physically thickness-dependent amber absorption.
 uniform vec3 uHoneyC, uHoneyRange;
 ${COMMON}
@@ -359,7 +362,7 @@ void main() {
   vec3 V = normalize(uEye - vWorld);
   int id = int(vMat + .5);
   vec2 uv = vUV;
-  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1., contact = 0., liquidDepth = 0., liquidCover = 1.;
+  vec3 base = vec3(.6); float rough = .6, metal = 0., coat = 0., emit = 0., relief = 0., cavity = 1., alpha = 1., contact = 0., liquidDepth = 0., liquidCover = 1., honeyPath = 0.;
   // (the glaze over it, if any: how rough, and how bright the sun's caught in it)
   float coatRough = .08, coatSpec = .04;
   // (cloth: no glint, a soft sheen at a glance instead; and how small a centimetre is on the glass here, so fine
@@ -753,6 +756,15 @@ void main() {
     base = mix(vec3(.34, .11, .004), vec3(.6, .27, .012), thin);
     // (its own gloss, no clear coat over it: on a thin run or a bead, mostly seen at a slant, a clear coat goes white)
     rough = .22; coat = 0.; emit = .1 + .08 * thin;
+  } else if (id == ${MAT.honeyDrip} && uHoneyNew > .5) {
+    // honey as one surface over a rim (honeyfield.ts): how far the light goes through it here is how thick it is
+    // (carried on the surface) over how squarely it's seen; none of its own colour, that's all in what comes
+    // through it. Nothing where there's no honey. (A tube from honey.ts: as thick as it is wide, about)
+    bool field = uv.y < -.5;
+    if (field && uv.x < .02) discard;
+    honeyPath = field ? min(uv.x * 1.6 / max(NoV0, .3), 4.) : 2. * NoV0;
+    liquidDepth = clamp(honeyPath / 3., 0., 1.);
+    base = vec3(.02, .012, .004); rough = .02; coat = 1.; coatRough = .012; coatSpec = .5;
   } else if (id == ${MAT.honeyDrip}) {
     // honey as shapes (a collar over a rim, its drips, drops): thick through its middle, so deep there; thin at its
     // edges, pale and bright; very glossy, the sun a pinpoint in it
@@ -1012,6 +1024,23 @@ void main() {
   // honey and butter film. Use physical colour loss in the tiny raised pool.
   if (uLiquidOpt > .5 && (id == ${MAT.honeyRun} || id == ${MAT.honeyPool} || id == ${MAT.honeyDrip} || id == ${MAT.smear})) {
     bool drip = id == ${MAT.honeyDrip};
+    if (drip && uHoneyNew > .5) {
+      // (the light through it: what's behind it, bent by its surface, losing blue fast, green slower, red hardly,
+      // over the honey's own path through it: pale gold where it's thin, deep amber where it's thick; a little
+      // scattered back out, more when the sun's behind it; and its surface's reflection over that, by Fresnel,
+      // the window and one sharp sun glint in it, from the kitchen's own light)
+      vec3 Th = exp(-vec3(.09, .38, 1.5) * honeyPath);
+      vec2 bendH = vec2(dot(n, uRight), dot(n, uUp)) * .012 * min(honeyPath, 2.);
+      vec3 behind = texture(uScene, clamp(gl_FragCoord.xy / uRes + bendH, vec2(.001), vec2(.999))).rgb;
+      float Fh = .04 + .96 * pow(1. - NoV, 5.);
+      vec3 scatter = vec3(1., .55, .12) * uKeyCol * (1. - Th.g) * (.05 + .3 * pow(max(dot(-V, uKey), 0.), 3.));
+#ifdef HDR
+      o = vec4((behind * Th + scatter) * (1. - Fh) + c, 1.);
+#else
+      o = vec4((behind * Th + tonemap(scatter)) * (1. - Fh) + tonemap(c), 1.);
+#endif
+      return;
+    }
     bool butterFilm = id == ${MAT.smear};
     float depth = butterFilm ? (.025 + .23 * liquidDepth) : drip ? (1.1 + 2.4 * liquidDepth) : (.05 + .45 * liquidDepth);
     vec3 absorb = butterFilm ? vec3(.12, .48, 1.6) : drip ? vec3(.13, .85, 2.9) : vec3(.15, .7, 2.4);
@@ -1914,6 +1943,8 @@ let simTime = 0;
 /** when this level began (simTime), for what creeps as it goes on (honey); ?honeyt=s to see it later on */
 let levelBorn = 0;
 const HONEY_AHEAD = Number(params.get('honeyt')) || 0;
+/** (for comparing, while the honey's being settled: ?honeygeo=old, the collar, sheet and tubes; ?honeyopt=old, the old light) */
+const HONEY_OLD_SHAPE = params.get('honeygeo') === 'old', HONEY_OLD_LIGHT = params.get('honeyopt') === 'old';
 /** each lid's lift last step (for the steam as one starts up); whether it was stuck to honey; when the autopilot last looked */
 let lidWas: number[] = [];
 let heldWas = false;
@@ -3287,6 +3318,7 @@ function frame(now: number) {
   gl.uniform1i(u(prog, 'uBooks'), 6);
   gl.uniform1f(u(prog, 'uAlpha'), 1);
   gl.uniform1f(u(prog, 'uLiquidOpt'), 0); // only sample the resolved scene in the thin-film pass
+  gl.uniform1f(u(prog, 'uHoneyNew'), HONEY_OLD_LIGHT ? 0 : 1);
   gl.uniform3fv(u(prog, 'uTint'), [1, 1, 1]);
   // (the screen over what stands before the dumpling: on in play, once the way over's done)
   gl.uniform3fv(u(prog, 'uHole'), mode === 'play' && fly < 0 && !fixedView ? [0, 0, 1] : [0, 0, 0]);
@@ -3484,9 +3516,9 @@ function frame(now: number) {
   // honey behind them. A bubble takes a fresh copy only if one of those (or the jelly, or the glass) has drawn since.
   let fresh = false;
   const seeThrough = () => { if (!fresh) { sceneCopy(W, H); fresh = true; } };
-  if (honeyRims.length && (dripAt < 0 || simTime - dripAt > 0.25 || simTime < dripAt)) {
+  if (honeyRims.length && (dripAt < 0 || simTime - dripAt > 0.5 || simTime < dripAt)) {
     const v: number[] = [];
-    for (const r of honeyRims) honeyOver(r, simTime - levelBorn + HONEY_AHEAD, v);
+    for (const r of honeyRims) (HONEY_OLD_SHAPE ? honeyOver : honeyField)(r, simTime - levelBorn + HONEY_AHEAD, v);
     drop(dripMesh); dripMesh = upload(v, gl.DYNAMIC_DRAW); dripAt = simTime;
   }
   if (liquidMesh || dripMesh || honeyMeshes.length) {

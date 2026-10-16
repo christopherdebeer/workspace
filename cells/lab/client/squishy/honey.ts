@@ -145,7 +145,12 @@ export function honeyOver(rim: HoneyRim, run: number, out: number[]) {
     }
     rings(out, P, N);
   }
-  // a few drops fallen beside the pool, toward the front: little flattened domes
+  honeyDrops(rim, out);
+}
+
+/** A few drops fallen beside the pool, toward the front: little flattened domes. */
+export function honeyDrops(rim: HoneyRim, out: number[]) {
+  const { c, foot, side, front, seed } = rim;
   for (let k = 0; k < 5; k++) {
     const a = front + (hash(k, seed + 30) - 0.5) * 1.6, dist = side(foot) + 2.2 + 1.4 * hash(k, seed + 31), r = 0.18 + 0.3 * hash(k, seed + 32) ** 2;
     const at: V3 = [c[0] + Math.cos(a) * dist, foot + 0.02, c[2] + Math.sin(a) * dist], P: V3[][] = [], N: V3[][] = [];
