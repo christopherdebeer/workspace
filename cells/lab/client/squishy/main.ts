@@ -2909,13 +2909,55 @@ const KEY_COL: V3 = LIGHT === 'noon' ? [2.3, 2.25, 2.15] : LIGHT === 'shade' ? [
 /** the room's own light, by the light: in shade, it's most of what there is, and a little cooler */
 const AMB: V3 = LIGHT === 'shade' ? [1.55, 1.6, 1.72] : LIGHT === 'noon' ? [1.05, 1.05, 1.05] : [1, 1, 1];
 let dpr = 1;
+/** `?fast=N`: N steps of the game a drawn frame (headless tests, where a frame takes seconds); drawn small and plain */
+const FAST = Math.max(0, Math.round(Number(params.get('fast')) || 0));
+/**
+ * Quality, by how long frames take: the resolution it's drawn at (a fraction of the screen's) and how many samples
+ * its edges are smoothed with. Slow (under ~42 fps for a second), it steps down: fewer samples first (4 → 2), then
+ * the resolution (to 0.85, 0.72, 0.6 of it), then no smoothing at all. Quick again (at or near the display's own rate
+ * for 8 s), it steps back up one; and if a step up is taken back within ten seconds, it stays where it is.
+ * `?scale=` and `?samples=` fix them; `?quality=fixed` keeps the best; `?perf` shows where it's got to.
+ */
+const QUALITY_STEPS: Array<{ scale: number; samples: number }> = [
+  { scale: 1, samples: 4 }, { scale: 1, samples: 2 }, { scale: 0.85, samples: 2 }, { scale: 0.72, samples: 2 }, { scale: 0.6, samples: 2 }, { scale: 0.6, samples: 1 },
+];
+const fixedQuality = FAST > 0 || params.has('scale') || params.has('samples') || params.get('quality') === 'fixed' || preview;
+let qStep = 0, renderScale = Number(params.get('scale')) || (FAST ? 0.5 : 1), samples = FAST ? 1 : 4;
+if (params.has('samples')) samples = Math.max(1, Math.round(Number(params.get('samples')) || 1));
+let qMs = 16.7, qVar = 0, qAt = 0, qSince = 0, qUpAt = -1e9, qLocked = false, qProbe = -1;
+function quality(dtMs: number) {
+  if (fixedQuality || document.hidden) return;
+  qAt += dtMs;
+  // (the first moments (shaders made, the level baked) aren't the frame rate; and a hitch counts as no worse than a
+  // slow frame, so one doesn't drop it, and frames that are all slow still do)
+  if (qAt < 2500) return;
+  const m = Math.min(dtMs, 100);
+  qMs += (m - qMs) * 0.08; qVar += ((m - qMs) ** 2 - qVar) * 0.08;
+  qSince += dtMs;
+  // (held at a steady 30 a second, to the frame, it's either too slow for 60 (and a step down may bring it back) or the
+  // display's capped (an iPhone saving power): one step down is tried, and if it's still a steady 30 two seconds on,
+  // it was the cap: back up, and left there)
+  const steady30 = qMs > 31 && qMs < 35.5 && qVar < 4;
+  const set = (k: number) => { qStep = k; renderScale = QUALITY_STEPS[k].scale; samples = QUALITY_STEPS[k].samples; qSince = 0; };
+  if (qProbe >= 0) {
+    if (qSince < 2000) return;
+    if (steady30) { const k = qProbe; qProbe = -1; qLocked = true; set(k); return; }
+    qProbe = -1;
+  }
+  if (steady30 && qSince > 1000) {
+    if (qLocked || qStep >= QUALITY_STEPS.length - 1) { qSince = 0; return; }
+    qProbe = qStep; set(qStep + 1); return;
+  }
+  if (qMs > 24 && qSince > 1000 && qStep < QUALITY_STEPS.length - 1) { if (qAt - qUpAt < 10000) qLocked = true; set(qStep + 1); }
+  else if (qMs < 18 && qSince > 8000 && qStep > 0 && !qLocked) { qUpAt = qAt; set(qStep - 1); }
+}
 function resize() {
-  dpr = Math.min(devicePixelRatio || 1, 2) * (preview ? 0.6 : 1);
+  dpr = Math.min(devicePixelRatio || 1, 2) * (preview ? 0.6 : 1) * renderScale;
   const w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
 }
 addEventListener('resize', resize);
-const SHADOW = preview ? 1024 : 2048;
+const SHADOW = preview ? 1024 : FAST ? 512 : 2048;
 // the cookbooks, every title lettered (books.ts): on texture 6, for good
 {
   const t = gl.createTexture()!;
@@ -2967,24 +3009,25 @@ function drawMesh(m: Mesh, M: Float32Array = I4, mat = -1) {
  * what's brightest, a quarter the size, spread; then tonemapped once onto the glass).
  */
 const FMT = HDR ? gl.RGBA16F : gl.RGBA8;
-const SAMPLES = Math.max(1, Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number));
+const MAX_SAMPLES = Math.max(1, gl.getParameter(gl.MAX_SAMPLES) as number);
 const msFb = gl.createFramebuffer()!, msColor = gl.createRenderbuffer()!, msDepth = gl.createRenderbuffer()!;
 const resFb = gl.createFramebuffer()!, resTex = gl.createTexture()!;
 const bloomFb = [gl.createFramebuffer()!, gl.createFramebuffer()!], bloomTex = [gl.createTexture()!, gl.createTexture()!];
 const backFb = gl.createFramebuffer()!, backTex = gl.createTexture()!;
-let tgtW = 0, tgtH = 0;
+let tgtW = 0, tgtH = 0, tgtS = 0;
 function blankTex(t: WebGLTexture, w: number, h: number) {
   gl.bindTexture(gl.TEXTURE_2D, t);
   gl.texImage2D(gl.TEXTURE_2D, 0, FMT, w, h, 0, gl.RGBA, HDR ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
   for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
 }
 function targets(W: number, H: number) {
-  if (W === tgtW && H === tgtH) return;
-  tgtW = W; tgtH = H;
+  const S = Math.min(samples, MAX_SAMPLES);
+  if (W === tgtW && H === tgtH && S === tgtS) return;
+  tgtW = W; tgtH = H; tgtS = S;
   gl.bindRenderbuffer(gl.RENDERBUFFER, msColor);
-  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, SAMPLES, FMT, W, H);
+  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, S, FMT, W, H);
   gl.bindRenderbuffer(gl.RENDERBUFFER, msDepth);
-  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, SAMPLES, gl.DEPTH_COMPONENT24, W, H);
+  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, S, gl.DEPTH_COMPONENT24, W, H);
   gl.bindFramebuffer(gl.FRAMEBUFFER, msFb);
   gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, msColor);
   gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, msDepth);
@@ -3098,7 +3141,8 @@ in vec4 vAcc;
 out vec4 o;
 void main() { o = vAcc; }`;
 const bakeOccProg = HDR ? program(BAKE_OCC_VS, BAKE_OCC_FS) : null, bakePtProg = HDR ? program(BAKE_PT_VS, BAKE_PT_FS) : null;
-const BAKE_ALB = albedos(), BAKE_DIRS = bakeDirs(48), BAKE_MAP = 2048;
+// (fast-forwarded for a test: a rougher bake, quicker)
+const BAKE_ALB = albedos(), BAKE_DIRS = bakeDirs(FAST ? 12 : 48), BAKE_MAP = FAST ? 512 : 2048;
 /**
  * The bake, drawn: the course seen from each of the ways out (its depth, and the colour of what's seen), then
  * each vertex, a point of its own in a row of them, adding up how much each way is shut off near it and in
@@ -3219,7 +3263,7 @@ function perfEnd(dtMs: number, now: number) {
     }
   }
   perfMs += (dtMs - perfMs) * 0.1;
-  if (now - perfShown > 500) { perfShown = now; perfEl.textContent = `${(1000 / perfMs).toFixed(0)} fps · ${perfMs.toFixed(1)} ms${timerExt ? ` · gpu ${perfGpu.toFixed(1)} ms` : ''} · ${HDR ? 'hdr' : 'ldr'} ${SAMPLES}x · ${canvas.width}×${canvas.height} · bake ${bakeMs.toFixed(0)} ms`; }
+  if (now - perfShown > 500) { perfShown = now; perfEl.textContent = `${(1000 / perfMs).toFixed(0)} fps · ${perfMs.toFixed(1)} ms${timerExt ? ` · gpu ${perfGpu.toFixed(1)} ms` : ''} · ${HDR ? 'hdr' : 'ldr'} ${tgtS}x · ${canvas.width}×${canvas.height} (${renderScale.toFixed(2)}${fixedQuality ? ', fixed' : qLocked ? ', settled' : ''}) · ${((courseMesh?.count ?? 0) / 3000).toFixed(0)}k triangles · bake ${bakeMs.toFixed(0)} ms`; }
 }
 
 let last = performance.now();
@@ -3233,8 +3277,15 @@ function frame(now: number) {
   const dtMs = now - last;
   last = now;
   perfStart();
-  time += dt;
+  quality(dtMs);
   resize();
+  // (`?fast=N`, for headless tests: N whole steps of the game a drawn frame, as though N frames had gone by)
+  for (let k = 0; k < (FAST || 1); k++) advance(FAST ? 1 / 60 : dt);
+  render(now, dtMs);
+}
+/** what a frame does before it's drawn: the game's clock, the dumpling's steps, the camera, the puffs, where it looks */
+function advance(dt: number) {
+  time += dt;
   // the dumpling, in fixed steps
   lag = Math.min(lag + dt, 0.1);
   while (lag >= 1 / 60) {
@@ -3260,7 +3311,9 @@ function frame(now: number) {
     const k = pushNow ? 0.6 + 1.6 * pushNow.power : aimNow ? 0.8 + 2.6 * aimNow.power : 0;
     body.grab.pull = aimNow?.climb ? [0, -k, 0] : [d[0] * k, 0.25 * k, d[2] * k];
   }
-
+}
+/** the frame, drawn */
+function render(now: number, dtMs: number) {
   const W = canvas.width, H = canvas.height;
   const fwd = norm(sub(camTarget, eye));
   const right = norm(cross(fwd, [0, 1, 0]));

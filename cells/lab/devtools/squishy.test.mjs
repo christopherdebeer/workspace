@@ -357,7 +357,8 @@ console.log(`${kind} righting ok`);
 for (const kind of ['dough', 'jelly']) {
   const tw = L.tower('honey', [0, 20, 0], 6.5, 0, () => 0.5);
   const lv = { n: 0, chapter: 'stove', towers: [tw], sticks: [], movers: [], kill: -50, ground: 0, decor: [], shapes: [L.box([0, -5, 0], [400, 5, 400], 0, 0), ...tw.shapes] };
-  const top = tw.shapes[1].c[1] + tw.shapes[1].hh;
+  // (the jar's own top: the pot's body, its first shape; the cork that sits askew on it is above that)
+  const top = tw.shapes[0].c[1] + tw.shapes[0].hh;
   const d = new B.Dumpling([0, 20, -30], kind);
   d.flick([0, 150, 110]);
   run(d, lv, 2.5);
@@ -370,7 +371,8 @@ for (const kind of ['dough', 'jelly']) {
   assert.ok(c, `${kind}: a climb onto the jar`);
   d.flick(L.climbLaunch(c.power), 0, d.wallN);
   run(d, lv, 3);
-  assert.ok(Math.hypot(d.com[0] - tw.jar.c[0], d.com[2] - tw.jar.c[2]) < 6.5 && d.com[1] > top && d.R[4] > 0.9, `${kind} climbed up and over onto the jar's top: at ${d.com.map((v) => v.toFixed(1))}`);
+  // (on top, it sits on the cork, which is set askew: upright as the cork lets it, and still)
+  assert.ok(Math.hypot(d.com[0] - tw.jar.c[0], d.com[2] - tw.jar.c[2]) < 6.5 && d.com[1] > top && d.R[4] > 0.75 && Math.hypot(...d.vcom) < 3, `${kind} climbed up and over onto the jar's top: at ${d.com.map((v) => v.toFixed(1))}, up ${d.R[4].toFixed(2)}`);
   console.log(`${kind} climb ok: droop ${(hi - lo).toFixed(1)} tall; up and over at power ${c.power.toFixed(2)}`);
 }
 

@@ -644,6 +644,28 @@ Honey holds by spaced sites over the skin, not every point that touches: each a 
 down with the honey, that peels when it's overloaded and can't take again for a moment; a rail's hold is
 still whole; it oozes down at the honey's own creep (2 cm/s). `?nostrain` turns the edge limits off, to compare.
 
+### Quality, by frame time
+
+What it's drawn at follows how long frames take. Slow (under about 42 a second, for a second), it steps down: fewer
+samples smoothing its edges first (4, then 2), then the resolution (to 0.85, 0.72, 0.6 of the screen's), then no
+smoothing at all. Quick again, at the display's own rate for 8 s, it steps back up one; a step up that's taken back
+within ten seconds isn't tried again. A steady 30 a second, to the frame, is either too slow for 60 (a step down may
+bring 60 back) or a display that's capped (an iPhone saving power): one step down is tried, and if it's still 30, it
+was the cap, and it goes back up and stays. `?perf` shows where it's got to: samples, size, the scale (and
+*settled* or *fixed*), the level's triangles. `?scale=`, `?samples=` or `?quality=fixed` fix it.
+
+The cost is in shading, not geometry: a level is 15 to 35 thousand triangles; it's the pixels, each of them shaded
+through the lit, see-through, glowing passes, that make a frame heavy.
+
+### Tests
+
+`node cells/lab/devtools/squishy.test.mjs`: the dumpling and the course on their own, no browser (about 10 minutes:
+every level played home by the autopilot, both kinds). `node cells/lab/devtools/squishy-shot.mjs --test`: the page in
+a browser (about 2 minutes). Without a graphics card a frame takes a second or more, so every page there is
+fast-forwarded: `?fast=N` plays N whole steps of the game (the dumpling, the camera, everything) a drawn frame, drawn
+small and plain, with a rougher bake and shadow; so what takes a player ten seconds takes the test ten frames. Each
+check prints when it was made, so a slow one shows.
+
 ### Probes
 
 The lab's server-side probes are deterministic trials on Squishy's own generator and physics, answered as
