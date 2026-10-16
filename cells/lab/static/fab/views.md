@@ -23,6 +23,16 @@ Made by `node cells/lab/views.mjs fab` from `client/fab/views.mjs`. The README i
 ![Your own palette: its three inks, each picked](v-custom-colour.jpg)
 ![The table's, expanded: the tool's gestures and what it's set to, under its history](v-table-full.jpg)
 
+## What can be made
+
+![A dress: a bodice to the waist, a gathered skirt sewn to its hem; the figure stands arms down to wear it](v-family-dress.jpg)
+![A top: front and back drafted from the figure, sleeves solved to their armholes](v-family-top.jpg)
+![Trousers: four panels, the crotch reaching the figure's own, an elastic waist](v-family-trousers.jpg)
+![A jumpsuit: a bodice, trousers gathered onto its hem](v-family-jumpsuit.jpg)
+![A tiered skirt: each tier a ring of straight panels gathered onto the hem above](v-family-tiers.jpg)
+![Choosing what to make: the drawer's Make: the family, and for a skirt or a dress its tiers](v-family-make.jpg)
+![A top at the table: its pieces on the paper (no moves for a bodice yet: the drawer is empty)](v-family-top-table.jpg)
+
 ## The hand
 
 ![The hand: the hem lit, its tab; the grain arrow's knob; a badge on the dart](v-hand.jpg)

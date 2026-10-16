@@ -276,7 +276,7 @@ function dial(parent: HTMLElement, label: string, lo: number, hi: number, get: (
 let customKey = '';
 function customPanel() {
   // (built again only when what it's for changes: not while a dial's being turned)
-  const key = `${figSec}|${rec.fabric}|${rec.print}|${rec.colour}|${!!rec.cloth}|${!!rec.inks}|${rec.printScale ?? ''}`;
+  const key = `${figSec}|${rec.fabric}|${rec.print}|${rec.colour}|${!!rec.cloth}|${!!rec.inks}|${rec.printScale ?? ''}|${figSec === 'what' || figSec === 'bodice' || figSec === 'legs' ? `${describeGarment(d)}|${g.notes.join()}` : ''}`;
   if (key === customKey && $('custom').childElementCount) return;
   customKey = key;
   const box = $('custom'); box.innerHTML = '';
@@ -980,10 +980,11 @@ const showPerf = () => { perfEl ??= Object.assign(document.createElement('div'),
 if (qs.has('perf')) showPerf();
 { let taps = 0, at = 0; document.querySelector('nav .title')!.addEventListener('click', () => { const t = performance.now(); taps = t - at < 500 ? taps + 1 : 1; at = t; if (taps >= 3) { if (perfEl?.isConnected) perfEl.remove(); else showPerf(); } }); }
 if (qs.get('at') === 'table' && mode === 'bench') { mode = 'table'; document.body.classList.add('table'); places(); }
-if (mode !== 'rails') make();
-// (opened at the table: start there, over the piece, rather than crossing the room to it)
-if (mode === 'table') { const g = tableGoal(); Object.assign(view, g, { target: [...g.target] }); }
-else { Object.assign(view, room.viewOf(room.active, aspect()), { target: [...room.viewOf(room.active, aspect()).target] }); if (qs.has('warm')) for (let k = 0; k < 4; k++) room.update(1 / 60, 1e9); railUI(); }
+if (mode !== 'rails') {
+  make();
+  // (opened at the table: start there, over the piece, rather than crossing the room to it)
+  if (mode === 'table') { const g = tableGoal(); Object.assign(view, g, { target: [...g.target] }); }
+} else { Object.assign(view, room.viewOf(room.active, aspect()), { target: [...room.viewOf(room.active, aspect()).target] }); if (qs.has('warm')) for (let k = 0; k < 4; k++) room.update(1 / 60, 1e9); railUI(); }
 if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;

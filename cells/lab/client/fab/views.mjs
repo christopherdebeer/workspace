@@ -52,6 +52,15 @@ export const views = [
   { name: 'table-up', group: 'The room', title: 'Looking up from the table', caption: 'drag (or pinch) off the piece to look up at the figure', query: TABLE, run: async (v) => { await v.page.mouse.move(200, 600); await v.page.mouse.wheel(0, 1000); await v.wait(2500); } },
   { name: 'sheet', group: 'The room', title: 'The whole pattern', caption: 'every piece, its grain, how much cloth, its checks', query: `${CIRCLE}&sheet` },
 
+  // ─── what can be made ───
+  { name: 'family-dress', group: 'What can be made', title: 'A dress', caption: 'a bodice to the waist, a gathered skirt sewn to its hem; the figure stands arms down to wear it', query: 'settle=60&fam=dress&len=40&cut=gather&full=2.2&fabric=lawn&print=4&colour=1&drawer=closed' },
+  { name: 'family-top', group: 'What can be made', title: 'A top', caption: 'front and back drafted from the figure, sleeves solved to their armholes', query: 'settle=60&fam=top&fabric=jersey&print=3&colour=2&drawer=closed' },
+  { name: 'family-trousers', group: 'What can be made', title: 'Trousers', caption: 'four panels, the crotch reaching the figure\'s own, an elastic waist', query: 'settle=60&fam=trousers&fabric=linen&print=0&colour=4&drawer=closed' },
+  { name: 'family-jumpsuit', group: 'What can be made', title: 'A jumpsuit', caption: 'a bodice, trousers gathered onto its hem', query: 'settle=60&fam=jumpsuit&fabric=lawn&print=2&colour=3&drawer=closed' },
+  { name: 'family-tiers', group: 'What can be made', title: 'A tiered skirt', caption: 'each tier a ring of straight panels gathered onto the hem above', query: 'settle=60&fam=skirt&tiers=3&len=40&fabric=chiffon&print=4&colour=3&drawer=closed' },
+  { name: 'family-make', group: 'What can be made', title: 'Choosing what to make', caption: 'the drawer\'s Make: the family, and for a skirt or a dress its tiers', query: 'settle=60&fam=dress&len=40&cut=gather&full=2.2&fabric=lawn&print=4&colour=1&sec=what' },
+  { name: 'family-top-table', group: 'What can be made', title: 'A top at the table', caption: 'its pieces on the paper (no moves for a bodice yet: the drawer is empty)', query: 'at=table&settle=30&fam=top&fabric=jersey&print=3&colour=2' },
+
   // ─── the room's layout ───
   ...[
     ['room-plan', 'From above', 'the rails at the top, the figure on its rug, the cutting table below it; the back wall and its windows down the right, the window light across the floor', { az: Math.PI / 2, el: 1.45, dist: 2100, target: [-260, 0, 180] }],

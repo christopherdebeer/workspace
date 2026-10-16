@@ -100,6 +100,53 @@
   ]
  },
  {
+  "group": "What can be made",
+  "views": [
+   {
+    "name": "family-dress",
+    "title": "A dress",
+    "caption": "a bodice to the waist, a gathered skirt sewn to its hem; the figure stands arms down to wear it",
+    "file": "v-family-dress.jpg"
+   },
+   {
+    "name": "family-top",
+    "title": "A top",
+    "caption": "front and back drafted from the figure, sleeves solved to their armholes",
+    "file": "v-family-top.jpg"
+   },
+   {
+    "name": "family-trousers",
+    "title": "Trousers",
+    "caption": "four panels, the crotch reaching the figure's own, an elastic waist",
+    "file": "v-family-trousers.jpg"
+   },
+   {
+    "name": "family-jumpsuit",
+    "title": "A jumpsuit",
+    "caption": "a bodice, trousers gathered onto its hem",
+    "file": "v-family-jumpsuit.jpg"
+   },
+   {
+    "name": "family-tiers",
+    "title": "A tiered skirt",
+    "caption": "each tier a ring of straight panels gathered onto the hem above",
+    "file": "v-family-tiers.jpg"
+   },
+   {
+    "name": "family-make",
+    "title": "Choosing what to make",
+    "caption": "the drawer's Make: the family, and for a skirt or a dress its tiers",
+    "file": "v-family-make.jpg"
+   },
+   {
+    "name": "family-top-table",
+    "title": "A top at the table",
+    "caption": "its pieces on the paper (no moves for a bodice yet: the drawer is empty)",
+    "file": "v-family-top-table.jpg"
+   }
+  ]
+ },
+ {
   "group": "The hand",
   "views": [
    {
