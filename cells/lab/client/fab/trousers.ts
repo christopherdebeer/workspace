@@ -69,7 +69,7 @@ export function trousers(cut: Cut, d: Design, h: number, o: { joined: boolean })
     const th0 = P.front ? (P.leg > 0 ? 0 : -Math.PI / 2) : P.leg > 0 ? Math.PI / 2 : Math.PI;
     const a0 = P.front ? -Math.PI / 2 : Math.PI / 2;
     const pc = patch({
-      name: P.name, top: P.s.top, left: P.s.left, right: P.s.right, foot: P.s.foot, h, label: P.label, cut: 2, drawn: !!P.label,
+      name: P.name, top: P.s.top, left: P.s.left, right: P.s.right, foot: P.s.foot, h, label: P.label, cut: 2, drawn: !!P.label, part: 'legs',
       start: (u, v): V3 => {
         const q = cut.pieces[k], [, y] = q.flat(u, v), rw = Math.max(6, q.flat(1, v)[0] - q.flat(0, v)[0]);
         const yb = CROTCH_Y - drop + y, w = clamp(y / (D * 0.45), 0, 1);

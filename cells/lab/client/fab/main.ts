@@ -31,7 +31,7 @@ import { Paper, SHEET_H, SHEET_W, TOOLS, moveWords } from './paper';
 import { RAIL_Z, Room, railX } from './rails';
 import { FLOOR, RAIL_W, RAIL_Y, TABLE, createRenderer, invert, placeTurned, type Item } from './render';
 import { RAIL_COLOURS, activeRail, addRail, designOf, hang, rails, recipeOf, removeRail, renameRail, setActive, takeOff, type Rail } from './store';
-import { drawSheet } from './sheet';
+import { drawSheet, type Laid } from './sheet';
 
 const qs = new URLSearchParams(location.search), preview = qs.has('preview');
 if (qs.get('bench') === 'evidence') { void import('./evidence').then((m) => m.mountEvidence()); throw new Error('evidence bench'); }
@@ -95,7 +95,10 @@ function makeFrom(r: Recipe, fresh = false) {
   g = draftGarment(d, 1600, skirted() ? r : undefined); sk = g.skirt ?? null;
   // (posed for it, then laid out and sewn: warm, from where the last cloth was, when it's the same kind of thing)
   poseFor(g);
-  const warm = !fresh && !!cloth && was.design.family === g.design.family;
+  // (warm only for a small change: the new cloth's laid where the old one was, piece for piece by where on each it is,
+  // which for a big jump (long legs to shorts) would stretch the new over the old and let it spring off; a jump is sewn
+  // afresh)
+  const warm = !fresh && !!cloth && was.design.family === g.design.family && Math.abs(g.m.area - was.m.area) < was.m.area * 0.15;
   const next = new Cloth(toBuild(g, fabricOf(r)), warm ? cloth : null);
   if (cloth && warm) { next.spin = cloth.spin; next.omega = cloth.omega; }
   cloth = next;
@@ -216,6 +219,14 @@ function choose(k: keyof Design, v: string | number) {
   make(k === 'family');
 }
 let garmentKey = '';
+/** the bodice's and the legs' dials: the drawer's expanded part, under their picks (kept, and moved in when expanded) */
+const bodiceDials = $('bodicedials'), legDials = $('legdials');
+/** the legs' quick picks: how long, how wide, what shape, each a preset of its dial */
+const LEG_PICKS: Array<{ key: keyof Design; label: string; opts: Array<[number, string]> }> = [
+  { key: 'legLen', label: 'length', opts: [[6, 'shorts'], [16, 'cropped'], [30, 'full']] },
+  { key: 'legWidth', label: 'width', opts: [[1.1, 'slim'], [1.4, 'straight'], [1.85, 'wide']] },
+  { key: 'flare', label: 'shape', opts: [[0.88, 'tapered'], [1, 'straight'], [1.45, 'flared']] },
+];
 /** the drawer's own sections for what's made: built again only when what it's for changes */
 function garmentPanel() {
   for (const b of Array.from($('figtabs').querySelectorAll('[data-sec]')) as HTMLElement[]) b.hidden = (b.dataset.sec === 'bodice' && !hasBodice()) || (b.dataset.sec === 'legs' && !hasLegs());
@@ -232,19 +243,30 @@ function garmentPanel() {
       ch.insertAdjacentHTML('beforeend', `<i>${c.label}</i>`);
       for (const o of c.opts) { const b = document.createElement('button'); b.dataset.k = c.key; b.dataset.v = String(o.v); b.innerHTML = `${o.icon ? `<svg viewBox="0 0 36 34">${o.icon}</svg>` : ''}<span>${o.label}</span>`; b.addEventListener('click', () => choose(c.key, o.v)); ch.appendChild(b); }
     }
-    const bd = $('bodicedials'); bd.innerHTML = '';
+    const bd = bodiceDials; bd.innerHTML = '';
     const num = (k: keyof Design) => () => d[k] as number, setTo = (k: keyof Design) => (v: number) => { (d as unknown as Record<string, number>)[k] = v; remake(); };
     if (d.family === 'top') dial(bd, 'length', -6, 30, num('bodyLen'), (v) => setTo('bodyLen')(Math.round(v)), (v) => (v < 0 ? `${(-v).toFixed(0)} cm cropped` : `${v.toFixed(0)} cm below`));
     dial(bd, 'room', 4, 16, num('ease'), (v) => setTo('ease')(+v.toFixed(1)), (v) => (v < 6 ? 'snug' : v > 12 ? 'roomy' : `${v.toFixed(0)} cm`));
     dial(bd, 'sleeves', 0, 34, num('sleeveLen'), (v) => setTo('sleeveLen')(Math.round(v)), (v) => (v < 2 ? 'none' : `${v.toFixed(0)} cm`));
     dial(bd, 'neck', -4, 8, num('neckDepth'), (v) => setTo('neckDepth')(+v.toFixed(1)), (v) => (Math.abs(v) < 0.6 ? 'as cut' : v > 0 ? `${v.toFixed(0)} cm lower` : `${(-v).toFixed(0)} cm higher`));
     if (d.family === 'top') dial(bd, 'swing', 1, 1.8, num('swing'), (v) => setTo('swing')(+v.toFixed(2)), (v) => (v < 1.05 ? 'straight' : `${v.toFixed(2)}× wide`));
-    const ld = $('legdials'); ld.innerHTML = '';
+    const lp = $('legpicks'); lp.innerHTML = '';
+    for (const c of LEG_PICKS) {
+      lp.insertAdjacentHTML('beforeend', `<i>${c.label}</i>`);
+      for (const [v, w] of c.opts) { const b = document.createElement('button'); b.dataset.lk = c.key; b.dataset.v = String(v); b.textContent = w; b.addEventListener('click', () => choose(c.key, v)); lp.appendChild(b); }
+    }
+    const ld = legDials; ld.innerHTML = '';
     dial(ld, 'legs', 3, 34, num('legLen'), (v) => setTo('legLen')(Math.round(v)), (v) => `${v.toFixed(0)} cm`);
     dial(ld, 'width', 1, 2, num('legWidth'), (v) => setTo('legWidth')(+v.toFixed(2)), (v) => (v < 1.15 ? 'slim' : v > 1.7 ? 'wide' : `${v.toFixed(1)}× room`));
     dial(ld, 'flare', 0.8, 1.8, num('flare'), (v) => setTo('flare')(+v.toFixed(2)), (v) => (v < 0.95 ? 'tapered' : v < 1.08 ? 'straight' : `${v.toFixed(1)}× flared`));
   }
   for (const b of Array.from($('families').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.f === d.family);
+  // (a leg pick's lit when its dial's near it)
+  for (const b of Array.from(document.querySelectorAll('#legpicks button')) as HTMLElement[]) {
+    const opts = LEG_PICKS.find((c) => c.key === b.dataset.lk)!.opts, v = d[b.dataset.lk as keyof Design] as number;
+    const nearest = opts.reduce((a, o) => (Math.abs(o[0] - v) < Math.abs(a[0] - v) ? o : a));
+    b.classList.toggle('on', String(nearest[0]) === b.dataset.v && Math.abs(nearest[0] - v) < (opts[1][0] - opts[0][0]) * 0.5);
+  }
   for (const b of Array.from(document.querySelectorAll('#choices button, #tierrow button')) as HTMLElement[]) {
     b.classList.toggle('on', String((d as unknown as Record<string, unknown>)[b.dataset.k!]) === b.dataset.v);
     // (a sleeve's cut means nothing without a sleeve)
@@ -287,6 +309,11 @@ function customPanel() {
     box.appendChild(h);
   };
   const live = () => remake();
+  // (the bodice and the legs: their dials, below their picks; what it is: what was made, in full)
+  if (figSec === 'bodice' || figSec === 'legs') {
+    head(figSec === 'bodice' ? 'the bodice, exactly' : 'the legs, exactly', figSec === 'bodice' ? 'how roomy, how long its sleeves, how low its neck' : 'how long, how wide, how they flare', false, () => {});
+    box.appendChild(figSec === 'bodice' ? bodiceDials : legDials);
+  }
   if (figSec === 'what' || figSec === 'bodice' || figSec === 'legs') { box.insertAdjacentHTML('beforeend', `<p class="note">${describeGarment(d)}: ${g.notes.join(' · ')}</p>`); return; }
   if (figSec === 'fabric') {
     const base = fabricById(rec.fabric), f = () => fabricOf(rec);
@@ -467,7 +494,13 @@ const PANEL: Record<string, { name: string; what: string; gestures: Array<[keyof
   fold: { name: 'Fold', what: 'fold the waist into a pleat', gestures: [['tap', 'touch the waist where it goes', 'anywhere along it'], ['side', 'drag sideways to fold it', 'further → deeper']] },
   thread: { name: 'Gather', what: 'add width at the waist and draw it in', gestures: [['tap', 'touch the waist where to add', 'anywhere along it'], ['side', 'drag sideways to add more', 'further → fuller']] },
 };
+/** the hand and the scissors on a top's, trousers' or a jumpsuit's pattern */
+const PANEL_WHOLE: Record<string, { name: string; what: string; gestures: Array<[keyof typeof G, string, string]> }> = {
+  hand: { name: 'Hand', what: 'make each part longer or shorter', gestures: [['updown', 'drag a lit hem by its tab', 'longer · shorter'], ['tap', 'the top\'s, the sleeves\', the legs\'', 'each its own']] },
+  scissors: { name: 'Slash', what: 'spread a hem open: it flares', gestures: [['side', 'drag along a lit hem', 'wider → more flare']] },
+};
 function toolPanel() {
+  if (!skirted()) { if (paper.tool === 'fold' || paper.tool === 'thread') paper.tool = 'hand'; return wholePanel(); }
   const t = PANEL[paper.tool];
   $('toolname').textContent = t.name; $('toolwhat').textContent = t.what;
   $('gestures').innerHTML = t.gestures.map(([g, w, i]) => `<div class="gest"><svg viewBox="0 0 24 24">${G[g]}</svg>${w}<i>${i}</i></div>`).join('');
@@ -496,6 +529,27 @@ function toolPanel() {
     box('so far', n ? `${n} ${n === 1 ? noun[0] : noun[1]} · ${cm.toFixed(cm < 10 ? 1 : 0)} cm ${noun[2]}` : `none yet`, []);
   }
 }
+function wholePanel() {
+  const t = PANEL_WHOLE[paper.tool] ?? PANEL_WHOLE.hand;
+  $('toolname').textContent = t.name; $('toolwhat').textContent = t.what;
+  $('gestures').innerHTML = t.gestures.map(([g2, w, i]) => `<div class="gest"><svg viewBox="0 0 24 24">${G[g2]}</svg>${w}<i>${i}</i></div>`).join('');
+  // (what each hem's set to, with steps: the same dials as at the figure)
+  const ctl = $('toolctl'); ctl.innerHTML = '';
+  const box = (label: string, key: keyof Design, step: number, lo: number, hi: number, word: (v: number) => string) => {
+    const el = document.createElement('div'); el.className = 'ctl'; el.append(label);
+    const v = document.createElement('b'); v.textContent = word(d[key] as number);
+    const btn = (w: string, dv: number) => { const b = document.createElement('button'); b.textContent = w; b.addEventListener('click', () => { (d as unknown as Record<string, number>)[key] = Math.max(lo, Math.min(hi, +((d[key] as number) + dv).toFixed(2))); make(); }); return b; };
+    el.append(btn('−', -step), v, btn('+', step)); ctl.appendChild(el);
+  };
+  if (paper.tool === 'scissors') {
+    if (d.family === 'top') box('swing', 'swing', 0.1, 1, 1.8, (v) => `${v.toFixed(1)}×`);
+    if (hasLegs()) box('flare', 'flare', 0.1, 0.8, 1.8, (v) => `${v.toFixed(1)}×`);
+  } else {
+    if (d.family === 'top') box('length', 'bodyLen', 1, -6, 30, (v) => `${v.toFixed(0)} cm`);
+    if (hasBodice()) box('sleeves', 'sleeveLen', 1, 0, 34, (v) => `${v.toFixed(0)} cm`);
+    if (hasLegs()) box('legs', 'legLen', 1, 3, 34, (v) => `${v.toFixed(0)} cm`);
+  }
+}
 $('panelsless').addEventListener('click', () => { rec = { ...rec, panels: Math.max(1, rec.panels - 1) }; make(); });
 $('panelsmore').addEventListener('click', () => { rec = { ...rec, panels: Math.min(10, rec.panels + 1) }; make(); });
 // (tiers: rings of straight cloth below the paper's own, each gathered onto the hem above)
@@ -508,7 +562,98 @@ function drawWhole() {
   // (drawSheet draws at the canvas's laid-out size: give it the sheet's)
   const dpr = Math.min(2, devicePixelRatio || 1);
   Object.defineProperty(wholeCv, 'clientWidth', { value: SHEET_W / dpr, configurable: true }); Object.defineProperty(wholeCv, 'clientHeight', { value: SHEET_H / dpr, configurable: true });
-  drawSheet(wholeCv, g, paper.cloth ? printOf(rec) : null); wholeVersion++;
+  // (on the table: laid in a column, as tall as it's wide, so a phone held upright sees it large; no notes on it)
+  laid = drawSheet(wholeCv, g, paper.cloth ? printOf(rec) : null, false, { width: SHEET_H / dpr * 0.82, bare: true }); wholeVersion++;
+  wholeMarks();
+}
+
+// ─── the whole pattern at the table (a top, trousers, a jumpsuit): its hems, worked by hand ─────────────────
+// (a piece's hem, dragged with the hand, makes its part longer or shorter: a top's body, its sleeves, the legs; spread
+// with the scissors, it flares: a top's swing, the legs' flare. What each does is the design's own dial, so the figure
+// wears it as it's dragged and the drawer's dials agree)
+let laid: Laid[] = [];
+interface Grip { at: number; key: keyof Design; lo: number; hi: number; label: string; word: (v: number) => string }
+/** what a piece's hem works, if anything, with the tool in hand */
+function gripOf(i: number): Grip | null {
+  const part = laid[i]?.piece.part;
+  if (paper.tool === 'hand') {
+    if (part === 'bodice' && d.family === 'top') return { at: i, key: 'bodyLen', lo: -6, hi: 30, label: 'its length', word: (v) => (v < 0 ? `${(-v).toFixed(0)} cm cropped` : `${v.toFixed(0)} cm below the waist`) };
+    if (part === 'sleeve') return { at: i, key: 'sleeveLen', lo: 0, hi: 34, label: 'the sleeves', word: (v) => (v < 2 ? 'no sleeves' : `sleeves ${v.toFixed(0)} cm`) };
+    if (part === 'legs') return { at: i, key: 'legLen', lo: 3, hi: 34, label: 'the legs', word: (v) => `legs ${v.toFixed(0)} cm` };
+  }
+  if (paper.tool === 'scissors') {
+    if (part === 'bodice' && d.family === 'top') return { at: i, key: 'swing', lo: 1, hi: 1.8, label: 'its swing', word: (v) => (v < 1.05 ? 'straight' : `${v.toFixed(2)}× at the hem`) };
+    if (part === 'legs') return { at: i, key: 'flare', lo: 0.8, hi: 1.8, label: 'the legs’ flare', word: (v) => (v < 0.95 ? 'tapered' : v < 1.08 ? 'straight' : `${v.toFixed(1)}× flared`) };
+  }
+  return null;
+}
+/** where the whole pattern's pieces lie on the sheet, in its pixels (the whole sheet, before they're laid) */
+function wholeBounds() {
+  if (!laid.length) return { x0: SHEET_W * 0.08, x1: SHEET_W * 0.92, y0: SHEET_H * 0.08, y1: SHEET_H * 0.92 };
+  const dpr = SHEET_W / Math.max(1, wholeCv.clientWidth), b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+  for (const l of laid) for (let k = 0; k <= 8; k++) for (const v of [0, 1]) for (const q of [l.to(l.piece.flat(k / 8, v)), l.to(l.piece.flat(v, k / 8))]) { b.x0 = Math.min(b.x0, q[0] * dpr); b.x1 = Math.max(b.x1, q[0] * dpr); b.y0 = Math.min(b.y0, q[1] * dpr); b.y1 = Math.max(b.y1, q[1] * dpr + 40); }
+  return b;
+}
+/** a piece's hem on the sheet, in its pixels */
+const hemOf = (l: Laid) => { const dpr = SHEET_W / Math.max(1, wholeCv.clientWidth); return Array.from({ length: 13 }, (_, k) => l.to(l.piece.flat(k / 12, 1)).map((x) => x * dpr) as [number, number]); };
+let wholeDrag: null | { grip: Grip; v0: number; x0: number; y0: number; cm: number; at: [number, number] } = null;
+/** the hems that can be worked, lit; the hand's tab on each; and how much, by the finger */
+function wholeMarks() {
+  const ctx = wholeCv.getContext('2d')!, dpr = SHEET_W / Math.max(1, wholeCv.clientWidth), K = Math.max(0.6, paper.k);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  laid.forEach((l, i) => {
+    const gp = gripOf(i);
+    if (!gp) return;
+    const hem = hemOf(l);
+    ctx.strokeStyle = 'rgba(217,83,107,.4)'; ctx.lineWidth = 14 * K; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); hem.forEach((q, k) => (k ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.stroke();
+    if (paper.tool === 'hand') {
+      const m = hem[6], hw = 22 * K, hh = 13 * K, y = m[1] + hh + 6 * K;
+      ctx.fillStyle = '#d9536b'; ctx.beginPath(); ctx.roundRect(m[0] - hw, y - hh, hw * 2, hh * 2, hh); ctx.fill();
+      ctx.strokeStyle = '#fff6ee'; ctx.lineWidth = 2.4 * Math.min(1.5, K); ctx.beginPath();
+      ctx.moveTo(m[0] - 5 * K, y - 2 * K); ctx.lineTo(m[0], y - 7 * K); ctx.lineTo(m[0] + 5 * K, y - 2 * K);
+      ctx.moveTo(m[0] - 5 * K, y + 2 * K); ctx.lineTo(m[0], y + 7 * K); ctx.lineTo(m[0] + 5 * K, y + 2 * K); ctx.stroke();
+    }
+  });
+  if (wholeDrag) {
+    const w = wholeDrag.grip.word(d[wholeDrag.grip.key] as number), fs = 20 * K;
+    ctx.font = `700 ${fs}px ui-rounded, system-ui, sans-serif`;
+    const tw = ctx.measureText(w).width, x = Math.max(tw / 2 + 8, Math.min(SHEET_W - tw / 2 - 8, wholeDrag.at[0])), up = wholeDrag.at[1] - 60 * K, y = up > fs + 8 ? up : wholeDrag.at[1] + 60 * K + fs;
+    ctx.fillStyle = 'rgba(66,52,42,.92)'; ctx.beginPath(); ctx.roundRect(x - tw / 2 - 10 * K, y - fs * 0.95, tw + 20 * K, fs * 1.45, fs * 0.7); ctx.fill();
+    ctx.fillStyle = '#fbf3e6'; ctx.textAlign = 'center'; ctx.fillText(w, x, y + fs * 0.05);
+  }
+  ctx.restore(); void dpr;
+}
+/** a touch on the sheet: on a hem that can be worked with the tool in hand? Then it's that hem's */
+function wholeDown(q: [number, number]): boolean {
+  const K = Math.max(0.6, paper.k);
+  let best: { i: number; d: number } | null = null;
+  laid.forEach((l, i) => {
+    if (!gripOf(i)) return;
+    const hem = hemOf(l), m = hem[6];
+    let dd = Math.hypot(q[0] - m[0], q[1] - (m[1] + 19 * K));
+    for (let k = 1; k < hem.length; k++) { const a = hem[k - 1], b = hem[k], dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / L)) : 0; dd = Math.min(dd, Math.hypot(q[0] - a[0] - dx * t, q[1] - a[1] - dy * t)); }
+    if (dd < 30 * K && (!best || dd < best.d)) best = { i, d: dd };
+  });
+  if (!best) return false;
+  const grip = gripOf((best as { i: number }).i)!, l = laid[grip.at], dpr = SHEET_W / Math.max(1, wholeCv.clientWidth);
+  wholeDrag = { grip, v0: d[grip.key] as number, x0: q[0], y0: q[1], cm: l.sc * dpr, at: q };
+  drawWhole(); return true;
+}
+function wholeMove(q: [number, number]) {
+  if (!wholeDrag) return;
+  const w = wholeDrag, dx = (q[0] - w.x0) / w.cm, dy = (q[1] - w.y0) / w.cm;
+  // (the hand: down is longer, a centimetre of paper a centimetre of cloth; the scissors: sideways opens it)
+  const spread = w.grip.key === 'swing' || w.grip.key === 'flare', v = spread ? w.v0 + dx * 0.02 : w.v0 + dy;
+  const c = Math.max(w.grip.lo, Math.min(w.grip.hi, spread ? +v.toFixed(2) : Math.round(v)));
+  w.at = q;
+  if (c !== d[w.grip.key]) { (d as unknown as Record<string, number>)[w.grip.key] = c; remake(); }
+  drawWhole();
+}
+function wholeUp(cancel = false) {
+  if (!wholeDrag) return;
+  if (cancel) (d as unknown as Record<string, number>)[wholeDrag.grip.key] = wholeDrag.v0;
+  wholeDrag = null; make();
 }
 $('undo').addEventListener('click', () => { if (rec.moves.length) { rec = { ...rec, moves: rec.moves.slice(0, -1) }; make(); } });
 if (dialsUI) document.body.classList.add('dials');
@@ -540,7 +685,9 @@ function railUI() {
   room.states.forEach((st, k) => {
     const b = document.createElement('button'); b.className = `tag${k === room.active ? ' on' : ''}`;
     b.style.setProperty('--c', st.rail.workshop ? '#9a9aa0' : RAIL_COLOURS[st.rail.colour % RAIL_COLOURS.length].css);
-    b.textContent = st.rail.workshop ? (st.rail.id === 'workshop' ? 'skirts' : st.rail.name.replace(/^the workshop: /, '')) : st.rail.name;
+    // (the workshop's own rails, one for each kind of thing, marked as the workshop's: a person's rail is just their name)
+    if (st.rail.workshop) { b.classList.add('ws'); b.innerHTML = `<small>workshop</small>${st.rail.id === 'workshop' ? 'skirts' : st.rail.name.replace(/^the workshop: /, '')}`; }
+    else b.textContent = st.rail.name;
     b.addEventListener('click', () => {
       // (tap your own rail's tag again to rename it; clear its name to take it away)
       if (k === room.active && !st.rail.workshop) {
@@ -713,7 +860,7 @@ const sheetModel = () => placeTurned(TABLE.x, TABLE.y + 0.12, TABLE.z, TABLE.rot
 function tableView() {
   // (sitting at the table: looking across it at the figure, down onto the paper; the piece filling the open part of the
   // screen above the drawer, the figure standing behind it)
-  const b = skirted() ? paper.bounds() : { x0: SHEET_W * 0.08, x1: SHEET_W * 0.92, y0: SHEET_H * 0.08, y1: SHEET_H * 0.92 }, lx = ((b.x0 + b.x1) / 2 - SHEET_W / 2) / paper.sc, lz = ((b.y0 + b.y1) / 2 - SHEET_H / 2) / paper.sc;
+  const b = skirted() ? paper.bounds() : wholeBounds(), lx = ((b.x0 + b.x1) / 2 - SHEET_W / 2) / paper.sc, lz = ((b.y0 + b.y1) / 2 - SHEET_H / 2) / paper.sc;
   const H = Math.max(1, canvas.clientHeight), open = Math.max(0.3, (H - RESERVE.table) / H);
   const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.3, (canvas.clientWidth - 76) / H);
   const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3) * open) * 1.5);
@@ -834,12 +981,14 @@ const touches = new Map<number, [number, number]>();
 canvas.addEventListener('pointerdown', (e) => {
   if (mode !== 'table') return;
   touches.set(e.pointerId, [e.clientX, e.clientY]);
-  if (touches.size > 1) { if (onPaper) { onPaper = false; paper.cancel(); } sceneDrag = null; return; }
+  if (touches.size > 1) { if (onPaper) { onPaper = false; if (wholeDrag) wholeUp(true); else paper.cancel(); } sceneDrag = null; return; }
   const q = onSheet(e.clientX, e.clientY), q2 = onSheet(e.clientX + 10, e.clientY);
   // (how many of the sheet's pixels a pixel of the screen is, there: so a fingertip's a fingertip)
   if (q && q2) paper.k = Math.max(0.2, Math.hypot(q2[0] - q[0], q2[1] - q[1]) / 10);
   canvas.setPointerCapture(e.pointerId);
   if (q && tableZoom < 0.5 && skirted() && paper.hits(q[0], q[1])) { onPaper = true; paper.downAt(q[0], q[1]); }
+  // (the whole pattern, a top's or trousers': only a hem that can be worked is the paper's)
+  else if (q && tableZoom < 0.5 && !skirted() && wholeDown(q)) onPaper = true;
   // (the figure across the room: tap it to go over to it; drag it round to spin it on its stand)
   else if (onFigure(e.clientX, e.clientY)) spinStart(e);
   else sceneDrag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() };
@@ -860,7 +1009,7 @@ canvas.addEventListener('pointermove', (e) => {
     }
     tablePinch = d; tableMid = mid; return;
   }
-  if (onPaper) { const q = onSheet(e.clientX, e.clientY); if (q) paper.moveAt(q[0], q[1]); return; }
+  if (onPaper) { const q = onSheet(e.clientX, e.clientY); if (q) { if (wholeDrag) wholeMove(q); else paper.moveAt(q[0], q[1]); } return; }
   if (figureDrag) { spinMove(e); return; }
   if (sceneDrag) {
     // (drag up to look up across the room at the figure, down to come back to the paper; sideways to look round)
@@ -872,7 +1021,7 @@ canvas.addEventListener('pointermove', (e) => {
 const tableUp = (e: PointerEvent) => {
   touches.delete(e.pointerId); if (touches.size < 2) { tablePinch = 0; tableMid = null; }
   if (mode !== 'table') return;
-  if (onPaper) { onPaper = false; if (e.type === 'pointercancel') paper.cancel(); else paper.upAt(); }
+  if (onPaper) { onPaper = false; if (wholeDrag) wholeUp(e.type === 'pointercancel'); else if (e.type === 'pointercancel') paper.cancel(); else paper.upAt(); }
   const tap = (d: { x0: number; y0: number; t0: number }) => e.type === 'pointerup' && performance.now() - d.t0 < 450 && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 10;
   if (figureDrag && spinEnd(e)) go('bench');
   // (a tap on the room, off the paper: if it's on another place (a rail), go there)
@@ -930,11 +1079,11 @@ function frame(now: number) {
   if (mode === 'rails') { room.update(dt, 7); if (room.front() !== lastFront) railInfo(); }
   // (at the table, now and then: how big a fingertip is on the sheet from here, so its handles and badges are drawn a
   // fingertip's size on the screen)
-  if (mode === 'table' && !paper.dragging && lastVP && now - kAt > 250) {
+  if (mode === 'table' && !paper.dragging && !wholeDrag && lastVP && now - kAt > 250) {
     kAt = now;
-    const b = paper.bounds(), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, s0 = sheetPx(cx - 50, cy), s1 = sheetPx(cx + 50, cy), px = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
+    const b = skirted() ? paper.bounds() : { x0: SHEET_W * 0.4, x1: SHEET_W * 0.6, y0: SHEET_H * 0.4, y1: SHEET_H * 0.6 }, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, s0 = sheetPx(cx - 50, cy), s1 = sheetPx(cx + 50, cy), px = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
     const k = px > 1 ? Math.max(0.2, Math.min(6, 100 / px)) : paper.k;
-    if (Math.abs(k - paper.k) / paper.k > 0.08) { paper.k = k; paper.draw(); }
+    if (Math.abs(k - paper.k) / paper.k > 0.08) { paper.k = k; if (skirted()) paper.draw(); else drawWhole(); }
   }
   if (cloth && mode !== 'rails') {
     // (a twirl: the figure spun up on its stand, held, and let run down)
@@ -990,6 +1139,8 @@ for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (c
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = {
   perf, probe: () => ({ mode, omega: cloth ? +cloth.omega.toFixed(2) : 0, cloth: paper.cloth, tableZoom: +tableZoom.toFixed(3), tableTurn: +tableTurn.toFixed(3), recipe: rec, design: d, family: d.family, what: describeGarment(d), moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: g.notes, checks: g.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), seams: cloth?.seams(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
+  // (for tests: the whole pattern's hems that can be worked with the tool in hand, where on the sheet)
+  wholeHems: () => laid.map((l, i) => ({ g: gripOf(i), l })).filter((x) => x.g).map((x) => ({ key: x.g!.key, mid: hemOf(x.l)[6] })),
   // (for tests: where a point in the room is on the screen; where a point of the paper's sheet is)
   roomToScreen: (q: [number, number, number]) => { const m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },
   sheetToScreen: (px: number, py: number) => { const q = sheetToRoom(px, py), m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },

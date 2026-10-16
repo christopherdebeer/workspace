@@ -36,16 +36,20 @@ export function tile(ctx: CanvasRenderingContext2D, pr: Print, px: number): Canv
   return ctx.createPattern(t, 'repeat') ?? g;
 }
 
-export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = makePrint(0, 0), mini = false) {
+/** where a piece was laid on the sheet: its flat pattern (cm) to the canvas's (css) pixels, and how many to the cm */
+export interface Laid { piece: Piece; to: (q: P2) => [number, number]; sc: number }
+/** `width`: lay the pieces out in a column this wide (css px), centred; `bare`: no title, notes or checks (on the
+ * cutting table, where the pieces are what's worked) */
+export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = makePrint(0, 0), mini = false, opts: { width?: number; bare?: boolean } = {}): Laid[] {
   const dpr = Math.min(2, devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
-  if (!W || !H) return;
+  if (!W || !H) return [];
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   const ctx = cv.getContext('2d')!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (mini) ctx.clearRect(0, 0, W, H); else { ctx.fillStyle = '#f4efe2'; ctx.fillRect(0, 0, W, H); }
   const shown = g.pieces.filter((p) => p.drawn !== false && (p.nu > 1 || p.nv > 1));
-  const head = mini ? 6 : 104, foot = mini ? 6 : Math.min(190, H * 0.38);
-  if (!mini) { ctx.fillStyle = '#5b4a36'; ctx.font = '800 15px ui-rounded, system-ui, sans-serif'; ctx.fillText('the pattern', 14, 96); }
+  const bare = !!opts.bare, LW = Math.min(W, opts.width ?? W), head = mini ? 6 : bare ? 24 : 104, foot = mini ? 6 : bare ? 16 : Math.min(190, H * 0.38);
+  if (!mini && !bare) { ctx.fillStyle = '#5b4a36'; ctx.font = '800 15px ui-rounded, system-ui, sans-serif'; ctx.fillText('the pattern', 14, 96); }
   const outs = shown.map(outline), boxes = outs.map((o) => {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (const [x, y] of o) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
@@ -54,7 +58,7 @@ export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = 
   // (laid out as on a cutting table: the biggest first, in rows across the paper, at the largest scale they all fit)
   const gap = 4, order = shown.map((_, k) => k).sort((a, b) => boxes[b].h * boxes[b].w - boxes[a].h * boxes[a].w);
   const pack = (sc: number) => {
-    const maxW = (W - 24) / sc, at: Array<[number, number]> = new Array(shown.length);
+    const maxW = (LW - 24) / sc, at: Array<[number, number]> = new Array(shown.length);
     let x = 0, y = 0, rowH = 0;
     for (const k of order) {
       const b = boxes[k];
@@ -64,7 +68,7 @@ export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = 
     return { at, h: y + rowH };
   };
   let lo = 0.2, hi = 30;
-  for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (pack(m).h * m <= H - head - foot - 10 && boxes.every((b) => b.w * m <= W - 24)) lo = m; else hi = m; }
+  for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (pack(m).h * m <= H - head - foot - 10 && boxes.every((b) => b.w * m <= LW - 24)) lo = m; else hi = m; }
   const sc = lo, { at } = pack(sc), oy = head + 4, used = Math.max(...shown.map((_, k) => at[k][0] + boxes[k].w)) * sc, ox0 = (W - used) / 2;
   // (the paper's centimetre grid)
   ctx.lineWidth = 1;
@@ -75,10 +79,11 @@ export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = 
     ctx.beginPath(); ctx.moveTo(12 + cm * sc, 0); ctx.lineTo(12 + cm * sc, H); ctx.moveTo(0, oy + cm * sc); ctx.lineTo(W, oy + cm * sc); ctx.stroke();
   }
   // (no print: the pieces as plain tissue)
-  const fill = pr ? tile(ctx, pr, sc) : '#fffcf4';
+  const fill = pr ? tile(ctx, pr, sc) : '#fffcf4', laid: Laid[] = [];
   shown.forEach((p, k) => {
     const b = boxes[k], ox = ox0 + at[k][0] * sc, py = oy + at[k][1] * sc;
     const to = (q: P2): [number, number] => [ox + (q[0] - b.x0) * sc, py + (b.y1 - q[1]) * sc];
+    laid.push({ piece: p, to, sc });
     const path = new Path2D(); outs[k].forEach((q, i) => { const [sx, sy] = to(q); if (i) path.lineTo(sx, sy); else path.moveTo(sx, sy); }); path.closePath();
     ctx.save();
     // (the print, on the grain: turned with it)
@@ -103,7 +108,7 @@ export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = 
       ctx.fillStyle = '#3b2f24'; ctx.fillText(p.label, cx, cy + 1); ctx.textAlign = 'left';
     }
   });
-  if (mini) return;
+  if (mini || bare) return laid;
   // (what the cut needed, and the pattern's checks)
   let y = H - foot + 16;
   ctx.font = '600 12px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = '#5b4a36';
@@ -126,6 +131,7 @@ export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = 
     let t = c.detail; while (t.length > 4 && ctx.measureText(t).width > W - x - 12) t = t.slice(0, -2);
     ctx.fillText(t === c.detail ? t : `${t.trim()}…`, x, y); y += 14;
   }
+  return laid;
 }
 
 /** a piece's marks: darts (two legs to a point), pleats (the fold line and where it's laid to, and an arrow the way it

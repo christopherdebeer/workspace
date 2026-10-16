@@ -47,7 +47,7 @@
     #note em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--rose); }
 
     /* what the cut found, over the scene: words with a soft halo, no card */
-    #notes { position: absolute; left: 14px; right: 90px; bottom: calc(var(--drawer, 180px) + 10px); text-align: center; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
+    #notes { position: absolute; left: 14px; right: 90px; bottom: calc(var(--drawer, 180px) + 10px); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
     #notes:empty { display: none; }
 
     /* the drawer: a sheet of paper drawn up over the room */
@@ -96,7 +96,8 @@
     #bodicedials, #legdials { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 8px 4px; margin-top: 4px; }
     #figtabs [hidden] { display: none; }
     /* at the table, a garment without a skirt to work: its pattern to look at, no tools */
-    body.table:not(.skirted) #palette, body.table:not(.skirted) #history, body.table:not(.skirted) #gestures, body.table:not(.skirted) #toolctl, body.table:not(.skirted) #toolhead, body.table:not(.skirted) #undo, body.table:not(.skirted) .stepper { display: none !important; }
+    /* (a top's, trousers' or a jumpsuit's whole pattern: the hand and the scissors, on its hems; no history of moves) */
+    body.table:not(.skirted) #palette .tool[data-tool=fold], body.table:not(.skirted) #palette .tool[data-tool=thread], body.table:not(.skirted) #history, body.table:not(.skirted) #undo, body.table:not(.skirted) .stepper { display: none !important; }
     .figsec .lab { display: none; }
     [data-tier="2"] { border-top: 1px dashed rgba(60,40,20,.15); padding-top: 10px; }
     .figsec .row { margin-bottom: 6px; }
@@ -166,6 +167,7 @@
     #railtags::-webkit-scrollbar { display: none; }
     .tag { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 15px; padding: 6px 14px 6px 11px; border-radius: 4px 12px 12px 4px; background: var(--glass); box-shadow: var(--lift); border-left: 6px solid var(--c, #999); }
     .tag.on { background: #fffdf8; box-shadow: 0 2px 10px rgba(60,40,20,.28); font-weight: 700; }
+    .tag small { display: block; font-family: var(--round); font-size: 8.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--ink3); line-height: 1; margin-bottom: 1px; }
     .tag.add { border: 1.5px dashed rgba(60,40,20,.3); border-radius: 12px; background: rgba(251,246,236,.45); box-shadow: none; }
     /* the one in front, named over the scene: no card, just words with a soft halo so they read on cloth or wall */
     #railcard { position: absolute; left: 14px; right: 14px; bottom: max(18px, env(safe-area-inset-bottom)); display: grid; gap: 4px; pointer-events: none; text-align: center; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 16px rgba(244,236,222,.85), 0 1px 0 rgba(255,250,240,.9); }
@@ -221,7 +223,7 @@
     <div id="figtabs" class="figdrawer"><button data-sec="what">Make</button><button data-sec="bodice">Bodice</button><button data-sec="legs">Legs</button><button data-sec="fabric">Fabric</button><button data-sec="print">Print</button><button data-sec="colour">Colour</button><button id="tune" aria-label="make it your own" title="make it your own">⚙</button></div>
     <div class="figsec figdrawer" data-sec="what"><div class="lab">what it is</div><div class="row" id="families"></div><div class="row choices" id="tierrow"></div></div>
     <div class="figsec figdrawer" data-sec="bodice"><div class="lab">the bodice</div><div class="row choices" id="choices"></div><div class="dials" id="bodicedials"></div></div>
-    <div class="figsec figdrawer" data-sec="legs"><div class="lab">the legs</div><div class="dials" id="legdials"></div></div>
+    <div class="figsec figdrawer" data-sec="legs"><div class="lab">the legs</div><div class="row choices" id="legpicks"></div><div class="dials" id="legdials"></div></div>
     <div class="figsec figdrawer" data-sec="fabric"><div class="lab">fabric</div><div class="row" id="fabrics"></div></div>
     <div class="figsec figdrawer" data-sec="print"><div class="lab">print</div><div class="row" id="prints"></div></div>
     <div class="figsec figdrawer" data-sec="colour"><div class="lab">colour</div><div class="row" id="colours"></div></div>

@@ -57,7 +57,7 @@ export const WORKSHOPS: Rail[] = [
     { family: 'dress', fabric: 'felt', method: 'flare', fullness: 3.4, panels: 2, sleeveLen: 4, neck: 'round', collar: 'band', length: 32, print: 0, colour: 0 },
     { family: 'dress', fabric: 'linen', method: 'pleat', fullness: 2, sleeveLen: 0, neck: 'square', length: 36, print: 2, colour: 2 },
   ]),
-  rail('workshop-trousers', 'the workshop: trousers', [
+  rail('workshop-trousers', 'the workshop: trousers & jumpsuits', [
     { family: 'trousers', fabric: 'linen', legLen: 30, legWidth: 1.3, print: 2, colour: 4 },
     { family: 'trousers', fabric: 'jersey', legLen: 5, legWidth: 1.5, print: 1, colour: 1 },
     { family: 'trousers', fabric: 'satin', legLen: 33, legWidth: 1.9, flare: 1.2, print: 0, colour: 3 },

@@ -20,6 +20,8 @@ export type At = [number, number, number];
 /** a dressmaker's mark on a piece: a dart (its two legs to a point), a pleat (fold, laid-to line), a slash spread open
  * (its two edges: the first half of the points one, the rest the other, back), gathering, buttons */
 export interface Mark { kind: 'dart' | 'pleat' | 'wedge' | 'gather' | 'button' | 'fold'; pts: P2[] }
+/** the parts a garment's pieces are of */
+export type Part = 'bodice' | 'sleeve' | 'legs';
 export interface Piece {
   name: string; kind: 'panel' | 'band';
   /** grid points across and down, less one */
@@ -32,6 +34,8 @@ export interface Piece {
   start: (u: number, v: number) => V3;
   /** on the pattern sheet: what it's called, how many to cut; pieces that are another's mirror or copy aren't drawn */
   label?: string; cut?: number; drawn?: boolean;
+  /** which part of the garment it's of, if one whose hem can be dragged at the cutting table */
+  part?: Part;
   /** the dressmaker's marks on it, in its flat coordinates */
   marks?: Mark[];
   /** meshed as ruled regions (a skirt's panel, cut.ts): slivers are meant (a dart's legs meet below its point), and its
@@ -163,6 +167,8 @@ export interface Patch {
   grain?: number;
   start: Piece['start'];
   label?: string; cut?: number; drawn?: boolean; marks?: Mark[];
+  /** which part of the garment it's of (what its hem, dragged at the cutting table, makes longer) */
+  part?: Part;
   /** at least this many steps across / down */
   minU?: number; minV?: number;
 }
@@ -191,7 +197,7 @@ export function patch(o: Patch): Piece {
     r.forEach((e, k) => { if (e.name) spans[e.name] = Array.from({ length: counts[k] + 1 }, (_, q) => pt(c + q)); c += counts[k]; });
   };
   name(T, cT, (i) => [i, 0]); name(F, cF, (i) => [i, nv]); name(Lr, cL, (j) => [0, j]); name(R, cR, (j) => [nu, j]);
-  return { name: o.name, kind: o.kind ?? 'panel', nu, nv, flat, grain: o.grain ?? 0, start: o.start, label: o.label, cut: o.cut, drawn: o.drawn, marks: o.marks, spans };
+  return { name: o.name, kind: o.kind ?? 'panel', nu, nv, flat, grain: o.grain ?? 0, start: o.start, label: o.label, cut: o.cut, drawn: o.drawn, marks: o.marks, part: o.part, spans };
 }
 
 /** the outline of a piece, round it: top, right side, foot back, left side up */

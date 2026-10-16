@@ -59,7 +59,14 @@ export const views = [
   { name: 'family-jumpsuit', group: 'What can be made', title: 'A jumpsuit', caption: 'a bodice, trousers gathered onto its hem', query: 'settle=60&fam=jumpsuit&fabric=lawn&print=2&colour=3&drawer=closed' },
   { name: 'family-tiers', group: 'What can be made', title: 'A tiered skirt', caption: 'each tier a ring of straight panels gathered onto the hem above', query: 'settle=60&fam=skirt&tiers=3&len=40&fabric=chiffon&print=4&colour=3&drawer=closed' },
   { name: 'family-make', group: 'What can be made', title: 'Choosing what to make', caption: 'the drawer\'s Make: the family, and for a skirt or a dress its tiers', query: 'settle=60&fam=dress&len=40&cut=gather&full=2.2&fabric=lawn&print=4&colour=1&sec=what' },
-  { name: 'family-top-table', group: 'What can be made', title: 'A top at the table', caption: 'its pieces on the paper (no moves for a bodice yet: the drawer is empty)', query: 'at=table&settle=30&fam=top&fabric=jersey&print=3&colour=2' },
+  { name: 'family-top-table', group: 'What can be made', title: 'A top at the table', caption: 'its pieces laid out, the hems that can be worked lit, a tab on each', query: 'at=table&settle=30&fam=top&fabric=jersey&print=3&colour=2' },
+  {
+    name: 'family-jumpsuit-table', group: 'What can be made', title: 'Lengthening the sleeves', caption: 'a jumpsuit\'s sleeve hem dragged at the table: how long, by the finger', query: 'at=table&settle=30&fam=jumpsuit&fabric=lawn&print=2&colour=3',
+    run: async (v) => { await v.still(); const h = (await v.eval(() => window.__fab.wholeHems())).find((x) => x.key === 'sleeveLen'); const a = await v.S(...h.mid); await v.drag(a, [a[0], a[1] + 40], { at: v.shot }); },
+  },
+  {
+    name: 'family-legs', group: 'What can be made', title: 'The legs, picked', caption: 'shorts, cropped or full; slim, straight or wide; tapered, straight or flared: the dials, expanded', query: 'settle=40&fam=trousers&fabric=linen&llen=6&sec=legs&drawer=full',
+  },
 
   // ─── the room's layout ───
   ...[

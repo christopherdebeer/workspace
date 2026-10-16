@@ -116,7 +116,7 @@ export function bodice(cut: Cut, d: Design, h: number, o: { toWaist: boolean; kn
     let k = -1;
     const lift = WAIST_Y + N[1] - topAt(xn) - 1.5;
     const pc = patch({
-      name: 'front', top: [shR, neckR, neckL, shL], left: [armR, sideR], right: [af, sideL], foot, h,
+      name: 'front', top: [shR, neckR, neckL, shL], left: [armR, sideR], right: [af, sideL], foot, h, part: 'bodice',
       start: (u, v) => bodiceStart(cut.pieces[k].flat, 1, lift)(u, v),
       label: 'front · cut 1 on the fold', cut: 1,
     });
@@ -134,7 +134,7 @@ export function bodice(cut: Cut, d: Design, h: number, o: { toWaist: boolean; kn
     const mk = (name: string, top: Edge[], left: Edge[], right: Edge[], foot: Edge[], half: boolean, label: string) => {
       let k = -1;
       const pc = patch({
-        name, top, left, right, foot, h, label, cut: 1, drawn: !half || name === 'back left',
+        name, top, left, right, foot, h, label, cut: 1, drawn: !half || name === 'back left', part: 'bodice',
         start: (u, v) => bodiceStart(cut.pieces[k].flat, -1, lift)(u, v),
       });
       k = cut.add(pc); backs.push(k);
@@ -202,7 +202,7 @@ function sleeve(cut: Cut, d: Design, s: 1 | -1, o: { af: number; ab: number; ws0
   let k = -1;
   const pc = patch({
     name: s > 0 ? 'left sleeve' : 'right sleeve', top: [capB, capF], left: [line(capB.a, hemL, 'under b')], right: [line(capF.b, hemR, 'under f')], foot, h: o.h,
-    label: s > 0 ? `sleeve · cut a pair` : '', cut: 2, drawn: s > 0,
+    label: s > 0 ? `sleeve · cut a pair` : '', cut: 2, drawn: s > 0, part: 'sleeve',
     start: (u, v) => {
       const q = cut.pieces[k], [x, y] = q.flat(u, v), rw = Math.max(4, q.flat(1, v)[0] - q.flat(0, v)[0]);
       // (the arm as the figure stands when it's laid out: posed for the garment after it's drafted)

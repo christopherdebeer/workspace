@@ -532,6 +532,10 @@ with it, and in the link):
 - **print**: how big it's printed;
 - **colour**: the palette's three inks (ground, ink, accent), each picked.
 
+At the figure, the **Bodice** and **Legs** tabs work the same way: focused, their picks (neck, sleeve, collar; the legs'
+length, width and shape: shorts · cropped · full, slim · straight · wide, tapered · straight · flared); expanded, their
+dials, exactly. The notes line over the figure is one line; the whole of it is in the expanded drawer.
+
 **as it was** puts the section back as its swatch has it, and choosing another swatch starts afresh from that one.
 
 ![your own print](fab/v-custom-print.jpg)
@@ -595,6 +599,16 @@ fold is touched, a dashed ghost shows where it'll go. While a finger's on the pa
 ![folding](fab/v-fold.jpg)
 ![gathering](fab/v-gather.jpg)
 
+**A top, trousers or a jumpsuit at the table.** Their pattern is laid out whole, larger, in a column, and their hems
+are what's worked. The hand drags a lit hem by its tab: a top's to make it longer or cropped, the sleeves' to make
+them longer or shorter (to none), the legs' from shorts to full length. The scissors drag along a lit hem to spread
+it: a top swings out, the legs flare. Each is the design's own dial, so the figure wears it as it's dragged, the
+drawer's dials agree, and the amount is by the finger. (The fold and the gather are a skirt's: they're not in the
+palette for these.)
+
+![a top at the table](fab/v-family-top-table.jpg)
+![a jumpsuit's sleeves lengthened](fab/v-family-jumpsuit-table.jpg)
+
 **Only the piece takes the tools.** A touch on the pattern (or within a fingertip of its edge) cuts, folds, gathers or
 pulls. A touch anywhere else (empty paper, the tabletop, the room) moves the eye:
 
@@ -630,6 +644,14 @@ so nothing jumps between one gesture and the next.
 - `?drawer=closed|focus|full` and `&sec=fabric|print|colour` open the drawer as a link left it; `&own=` carries what's
   been made your own (`{"c": {cloth qualities}, "i": [three inks], "s": print scale}`), and the page writes it as it
   changes.
+
+## Before a deploy
+
+`node cells/lab/devtools/fab-smoke.mjs` opens each family at the figure (in frame above the drawer, nothing thrown),
+the cutting table (the piece in frame, a hem drag that lengthens it; a top's and trousers' hems dragged and slashed),
+and the rails (a garment in front), and fails on anything wrong. Run it, and `node cells/lab/devtools/fab.test.mjs
+--quick`, before every deploy: two sessions deploy this cell, and a regression shipped once that this would have
+caught.
 
 ## How it's built
 

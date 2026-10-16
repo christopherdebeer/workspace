@@ -31,7 +31,9 @@ Made by `node cells/lab/views.mjs fab` from `client/fab/views.mjs`. The README i
 ![A jumpsuit: a bodice, trousers gathered onto its hem](v-family-jumpsuit.jpg)
 ![A tiered skirt: each tier a ring of straight panels gathered onto the hem above](v-family-tiers.jpg)
 ![Choosing what to make: the drawer's Make: the family, and for a skirt or a dress its tiers](v-family-make.jpg)
-![A top at the table: its pieces on the paper (no moves for a bodice yet: the drawer is empty)](v-family-top-table.jpg)
+![A top at the table: its pieces laid out, the hems that can be worked lit, a tab on each](v-family-top-table.jpg)
+![Lengthening the sleeves: a jumpsuit's sleeve hem dragged at the table: how long, by the finger](v-family-jumpsuit-table.jpg)
+![The legs, picked: shorts, cropped or full; slim, straight or wide; tapered, straight or flared: the dials, expanded](v-family-legs.jpg)
 
 ## The hand
 
