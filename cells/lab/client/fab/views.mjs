@@ -52,6 +52,16 @@ export const views = [
   { name: 'table-up', group: 'The room', title: 'Looking up from the table', caption: 'drag (or pinch) off the piece to look up at the figure', query: TABLE, run: async (v) => { await v.page.mouse.move(200, 600); await v.page.mouse.wheel(0, 1000); await v.wait(2500); } },
   { name: 'sheet', group: 'The room', title: 'The whole pattern', caption: 'every piece, its grain, how much cloth, its checks', query: `${CIRCLE}&sheet` },
 
+  // ─── the room's layout ───
+  ...[
+    ['room-plan', 'From above', 'the rails at the top, the figure on its rug, the cutting table below it; the back wall and its windows down the right, the window light across the floor', { az: Math.PI / 2, el: 1.45, dist: 2100, target: [-260, 0, 180] }],
+    ['room-wide', 'The room', 'from the corner: the window light falling across the floor, the stool and the plant by the figure, the bolts of cloth behind the table', { az: 0.55, el: 0.3, dist: 760, target: [-40, 70, 120] }],
+    ['room-along', 'Along the rails', 'down the room past the rails to the figure and the table', { az: -1.15, el: 0.18, dist: 900, target: [-260, 90, 60] }],
+  ].map(([name, title, caption, view]) => ({
+    name, group: 'The room', title, caption, query: `${CIRCLE}&drawer=closed`,
+    run: async (v) => { await v.eval((w) => { Object.assign(window.__fab.view, w, { target: w.target }); }, view); await v.wait(900); },
+  })),
+
   // ─── the hand ───
   { name: 'hand', group: 'The hand', title: 'The hand', caption: 'the hem lit, its tab; the grain arrow\'s knob; a badge on the dart', query: TABLE },
   {

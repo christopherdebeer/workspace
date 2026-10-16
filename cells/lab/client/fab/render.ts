@@ -24,6 +24,20 @@ float shadowAt(vec3 p, vec3 n) {
   for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += c.z - .0015 > texture(uShadow, c.xy + vec2(i, j) * px * 1.5).r ? 0. : 1.;
   return s / 9.;
 }
+// (the key light comes in through tall windows behind the viewer, high and to the left: where it falls, it's the
+// windows' shape, panes and glazing bars, and between them the wall's shade. Laid out across the light's own direction,
+// a window centred on the figure)
+float windowLight(vec3 p) {
+  vec3 a = normalize(cross(uKey, vec3(0., 1., 0.))), b = cross(a, uKey);
+  vec2 q = vec2(dot(p - vec3(0., 60., 0.), a), dot(p - vec3(0., 60., 0.), b));
+  float W = 150., GAP = 80., P = W + GAP, Hh = 230.;
+  float u = mod(q.x + W * .5, P), v = q.y + Hh * .5;
+  float inWin = smoothstep(0., 5., u) * smoothstep(0., 5., W - u) * smoothstep(-5., 5., v) * smoothstep(-5., 5., Hh - v);
+  // (glazing bars: three panes across, three up)
+  float mu = mod(u, W / 3.), mv = mod(v, Hh / 3.), du = min(mu, W / 3. - mu), dv = min(mv, Hh / 3. - mv);
+  float bars = 1. - .4 * (1. - smoothstep(1.5, 4., min(du, dv)));
+  return mix(.42, 1., inWin * bars);
+}
 vec3 ambient(vec3 n) {
   // (the room: a pale ceiling, warm walls, the bench's wood bouncing up)
   return mix(vec3(.42, .34, .26), vec3(.62, .64, .68), n.y * .5 + .5) * .55;
@@ -45,6 +59,8 @@ export const RAIL_Y = 140, RAIL_W = 170, FLOOR = -5;
 export const TABLE = { x: 112, y: 46, z: 62, w: 150, d: 96, near: 110, rot: 1.0 };
 /** a hanger's hook: how far above the skirt's waist it pivots on the bar */
 export const HOOK = 13;
+/** the room's size: wall to wall (x, z) and up to where the walls stop; the floor at FLOOR */
+export const ROOM = { x0: -1800, x1: 420, z0: -60, z1: 420, h: 330 };
 
 const SOLID_VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in float aMat;
@@ -66,6 +82,13 @@ ${COMMON}
 void main() {
   // (the walls are one-sided: seen from behind, they're not there, so they never stand between the eye and the room)
   if (vMat == 3 && dot(vNor, uEye - vPos) < 0.) discard;
+  // (the windows and their frames go with their wall: seen from outside the room, not there)
+  if ((vMat == 11 || vMat == 12) && ((uEye.z < ${ROOM.z0}. && vPos.z < ${ROOM.z0 + 14}.) || (uEye.x > ${ROOM.x1}. && vPos.x > ${ROOM.x1 - 14}.))) discard;
+  if (vMat == 11) {
+    // (frosted glass: the daylight through it, brighter toward the top, a little mottled)
+    float f = .9 + .1 * noise(vPos * .09) + .08 * smoothstep(0., 190., vPos.y - 70.);
+    o = vec4(finish(vec3(1.32, 1.3, 1.24) * f), 1.); return;
+  }
   vec3 n = normalize(vNor), V = normalize(uEye - vPos);
   vec3 base; float spec = .0, rough = 40.;
   if (vMat == 0 || vMat == 5) {
@@ -93,11 +116,30 @@ void main() {
   } else if (vMat == 4) {
     // (metal: a clothes rail's tube, powder-coated in its owner's colour, or a hanger's chromed hook)
     base = uTint; spec = 1.4; rough = 90.;
+  } else if (vMat == 8) {
+    // (cloth on the bolt: each its own colour, a fine weave)
+    float b = hash(vec3(floor(vPos.y / 9.), floor(vPos.z / 7.), 3.)) * 5.;
+    base = b < 1. ? vec3(.78, .42, .45) : b < 2. ? vec3(.5, .6, .52) : b < 3. ? vec3(.88, .84, .74) : b < 4. ? vec3(.28, .34, .52) : vec3(.86, .66, .3);
+    base = pow(base, vec3(2.2)) * 2.2 * (.92 + .08 * sin(vObj.x * 3.));
+    spec = .05; rough = 8.;
+  } else if (vMat == 9) {
+    // (terracotta)
+    base = mix(vec3(.66, .34, .22), vec3(.58, .29, .19), noise(vPos * .3)); spec = .05; rough = 8.;
+  } else if (vMat == 10) {
+    // (leaves)
+    base = mix(vec3(.22, .4, .2), vec3(.3, .5, .25), noise(vPos * .4)); spec = .3; rough = 30.;
+  } else if (vMat == 12) {
+    // (painted woodwork: the window frames, the skirting)
+    base = vec3(.93, .9, .84); spec = .2; rough = 30.;
+  } else if (vMat == 13) {
+    // (a round rug: rings of soft wool)
+    float r = length(vPos.xz);
+    base = mix(vec3(.82, .72, .62), vec3(.72, .52, .48), step(.5, fract(r / 14.))) * (.9 + .1 * noise(vPos * .8)); spec = 0.;
   } else {
-    // (the wall behind: warm plaster, a little light from the window across it)
+    // (the walls: warm plaster)
     base = vec3(.86, .8, .72) * (.9 + .1 * noise(vPos * .05));
   }
-  float NoL = max(dot(n, uKey), 0.), sh = shadowAt(vPos, n);
+  float NoL = max(dot(n, uKey), 0.), sh = shadowAt(vPos, n) * windowLight(vPos);
   vec3 H = normalize(uKey + V);
   vec3 c = base * (ambient(n) + uKeyCol * NoL * sh) + uKeyCol * spec * pow(max(dot(n, H), 0.), rough) * sh * NoL;
   o = vec4(finish(c), 1.);
@@ -149,7 +191,7 @@ void main() {
   // (the thread: a darker shade of the cloth's own ground, as a dressmaker matches it)
   if (abs(e - .8) < .07 && fract(along / .5) < .6) base = mix(base, pow(mix(uInk0, uInk1, .55), vec3(2.2)) * .55, .8 * (1. - uClear));
   if (back) base *= .78;
-  float NoV = max(dot(n, V), 0.), NoL = dot(n, uKey), sh = shadowAt(vPos, n);
+  float NoV = max(dot(n, V), 0.), NoL = dot(n, uKey), sh = shadowAt(vPos, n) * windowLight(vPos);
   // (cloth takes light round its folds: a wrapped diffuse)
   float wrap = max((NoL + .35) / 1.35, 0.);
   vec3 H = normalize(uKey + V);
@@ -183,7 +225,10 @@ const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a: V3): V3 => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 // ─── the still things: figure, stand, bench, wall ──────────────────────────────────────────────
-function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet' = 'scene'): number[] {
+/** its windows: on the back wall (x from, to) and on the right (z from, to); all from y 70 to 260 */
+const WINDOWS_BACK: Array<[number, number]> = [[-760, -620], [-430, -290], [-70, 70], [210, 330]], WINDOWS_RIGHT: Array<[number, number]> = [[40, 170], [250, 380]], WIN_Y: [number, number] = [70, 260];
+
+function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet' | 'walls' | 'furniture' = 'scene'): number[] {
   const out: number[] = [];
   const put = (p: V3, n: V3, m: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], m);
   const quad = (a: [V3, V3], b: [V3, V3], c: [V3, V3], d: [V3, V3], m: number) => { for (const v of [a, b, c, a, c, d]) put(v[0], v[1], m); };
@@ -205,6 +250,75 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet' = 'scene
     const P = (i: number, k: number): [V3, V3] => { const th = (i / 14) * Math.PI, ph = (k / 24) * Math.PI * 2, n: V3 = [Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)]; return [[c[0] + n[0] * r, c[1] + n[1] * r, c[2] + n[2] * r], n]; };
     for (let i = 0; i < 14; i++) for (let k = 0; k < 24; k++) quad(P(i, k), P(i + 1, k), P(i + 1, k + 1), P(i, k + 1), m);
   };
+  // (an upright box, square to the room)
+  const abox = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: number) => {
+    const P = (x: number, y: number, z: number): V3 => [x, y, z];
+    quad([P(x0, y1, z0), [0, 1, 0]], [P(x0, y1, z1), [0, 1, 0]], [P(x1, y1, z1), [0, 1, 0]], [P(x1, y1, z0), [0, 1, 0]], m);
+    quad([P(x0, y0, z1), [0, 0, 1]], [P(x1, y0, z1), [0, 0, 1]], [P(x1, y1, z1), [0, 0, 1]], [P(x0, y1, z1), [0, 0, 1]], m);
+    quad([P(x1, y0, z0), [0, 0, -1]], [P(x0, y0, z0), [0, 0, -1]], [P(x0, y1, z0), [0, 0, -1]], [P(x1, y1, z0), [0, 0, -1]], m);
+    quad([P(x1, y0, z1), [1, 0, 0]], [P(x1, y0, z0), [1, 0, 0]], [P(x1, y1, z0), [1, 0, 0]], [P(x1, y1, z1), [1, 0, 0]], m);
+    quad([P(x0, y0, z0), [-1, 0, 0]], [P(x0, y0, z1), [-1, 0, 0]], [P(x0, y1, z1), [-1, 0, 0]], [P(x0, y1, z0), [-1, 0, 0]], m);
+  };
+  // (an upright cylinder, capped)
+  const cyl = (x: number, z: number, y0: number, y1: number, r0: number, r1: number, m: number) => {
+    tube([x, y0, z], [x, y1, z], r0, r1, m);
+    for (let k = 0; k < 20; k++) { const a0 = (k / 20) * Math.PI * 2, a1 = ((k + 1) / 20) * Math.PI * 2; quad([[x, y1, z], [0, 1, 0]], [[x + Math.cos(a0) * r1, y1, z + Math.sin(a0) * r1], [0, 1, 0]], [[x + Math.cos(a1) * r1, y1, z + Math.sin(a1) * r1], [0, 1, 0]], [[x, y1, z], [0, 1, 0]], m); }
+  };
+  if (part === 'walls') {
+    // (the room: its floor, and four walls, each facing in (they're drawn from inside only, so from outside they're not
+    // there); frosted windows in the back wall and the right, in painted frames, with sills)
+    out.length = 0;
+    const { x0, x1, z0, z1, h } = ROOM, F = FLOOR;
+    quad([[x0, F, z0], [0, 1, 0]], [[x0, F, z1], [0, 1, 0]], [[x1, F, z1], [0, 1, 0]], [[x1, F, z0], [0, 1, 0]], 2);
+    quad([[x0, F, z0], [0, 0, 1]], [[x1, F, z0], [0, 0, 1]], [[x1, h, z0], [0, 0, 1]], [[x0, h, z0], [0, 0, 1]], 3);
+    quad([[x1, F, z1], [0, 0, -1]], [[x0, F, z1], [0, 0, -1]], [[x0, h, z1], [0, 0, -1]], [[x1, h, z1], [0, 0, -1]], 3);
+    quad([[x0, F, z1], [1, 0, 0]], [[x0, F, z0], [1, 0, 0]], [[x0, h, z0], [1, 0, 0]], [[x0, h, z1], [1, 0, 0]], 3);
+    quad([[x1, F, z0], [-1, 0, 0]], [[x1, F, z1], [-1, 0, 0]], [[x1, h, z1], [-1, 0, 0]], [[x1, h, z0], [-1, 0, 0]], 3);
+    // (a skirting board round the foot of the walls)
+    abox(x0, F, z0, x1, F + 9, z0 + 1.6, 12); abox(x1 - 1.6, F, z0, x1, F + 9, z1, 12);
+    const [y0, y1] = WIN_Y, ym = [y0 + (y1 - y0) / 3, y0 + (2 * (y1 - y0)) / 3];
+    for (const [a, b] of WINDOWS_BACK) {
+      const z = z0, xm = (a + b) / 2;
+      quad([[a, y0, z + 0.4], [0, 0, 1]], [[b, y0, z + 0.4], [0, 0, 1]], [[b, y1, z + 0.4], [0, 0, 1]], [[a, y1, z + 0.4], [0, 0, 1]], 11);
+      abox(a - 5, y0 - 5, z, a, y1 + 5, z + 4, 12); abox(b, y0 - 5, z, b + 5, y1 + 5, z + 4, 12);
+      abox(a, y1, z, b, y1 + 5, z + 4, 12); abox(a, y0 - 5, z, b, y0, z + 4, 12);
+      abox(xm - 1.5, y0, z, xm + 1.5, y1, z + 3, 12); for (const y of ym) abox(a, y - 1.5, z, b, y + 1.5, z + 3, 12);
+      abox(a - 9, y0 - 9, z, b + 9, y0 - 5, z + 11, 12);
+    }
+    for (const [a, b] of WINDOWS_RIGHT) {
+      const x = x1, zm = (a + b) / 2;
+      quad([[x - 0.4, y0, b], [-1, 0, 0]], [[x - 0.4, y0, a], [-1, 0, 0]], [[x - 0.4, y1, a], [-1, 0, 0]], [[x - 0.4, y1, b], [-1, 0, 0]], 11);
+      abox(x - 4, y0 - 5, a - 5, x, y1 + 5, a, 12); abox(x - 4, y0 - 5, b, x, y1 + 5, b + 5, 12);
+      abox(x - 4, y1, a, x, y1 + 5, b, 12); abox(x - 4, y0 - 5, a, x, y0, b, 12);
+      abox(x - 3, y0, zm - 1.5, x, y1, zm + 1.5, 12); for (const y of ym) abox(x - 3, y - 1.5, a, x, y + 1.5, b, 12);
+      abox(x - 11, y0 - 9, a - 9, x, y0 - 5, b + 9, 12);
+    }
+    return out;
+  }
+  if (part === 'furniture') {
+    // (a little of a workroom: a round rug under the stand, a stool beside it, a plant in a pot by the window, and a
+    // shelf of cloth on the bolt behind the cutting table)
+    out.length = 0;
+    const F = FLOOR;
+    for (let k = 0; k < 40; k++) { const a0 = (k / 40) * Math.PI * 2, a1 = ((k + 1) / 40) * Math.PI * 2, r = 78; quad([[0, F + 0.3, 0], [0, 1, 0]], [[Math.cos(a1) * r, F + 0.3, Math.sin(a1) * r], [0, 1, 0]], [[Math.cos(a0) * r, F + 0.3, Math.sin(a0) * r], [0, 1, 0]], [[0, F + 0.3, 0], [0, 1, 0]], 13); }
+    // (the stool: a round seat on three splayed legs, a ring between them)
+    const sx = -88, sz = -18, seat = F + 58;
+    cyl(sx, sz, seat - 3.5, seat, 17, 17, 7);
+    for (let k = 0; k < 3; k++) { const a = (k / 3) * Math.PI * 2 + 0.4; tube([sx + Math.cos(a) * 11, seat - 3.5, sz + Math.sin(a) * 11], [sx + Math.cos(a) * 17, F, sz + Math.sin(a) * 17], 1.6, 1.4, 7); }
+    for (let k = 0; k < 3; k++) { const a = (k / 3) * Math.PI * 2 + 0.4, b = ((k + 1) / 3) * Math.PI * 2 + 0.4, r = 14.5, y = F + 20; tube([sx + Math.cos(a) * r, y, sz + Math.sin(a) * r], [sx + Math.cos(b) * r, y, sz + Math.sin(b) * r], 0.9, 0.9, 7); }
+    // (the plant: a terracotta pot, and its leaves)
+    const px = -150, pz = -38;
+    cyl(px, pz, F, F + 26, 10, 13.5, 9); cyl(px, pz, F + 24, F + 28, 14.5, 14.5, 9);
+    for (let k = 0; k < 9; k++) { const a = k * 2.4, r = 6 + (k % 3) * 4, y = F + 34 + (k % 4) * 9; ball([px + Math.cos(a) * r, y, pz + Math.sin(a) * r * 0.7], 8 - (k % 3), 10); }
+    // (the shelf: two uprights, three boards; bolts of cloth lying along them)
+    const bx0 = 225, bx1 = 330, bz0 = ROOM.z0 + 1, bz1 = ROOM.z0 + 34;
+    abox(bx0, F, bz0, bx0 + 3, F + 150, bz1, 7); abox(bx1 - 3, F, bz0, bx1, F + 150, bz1, 7);
+    for (const y of [F + 12, F + 62, F + 112]) {
+      abox(bx0, y, bz0, bx1, y + 2.5, bz1, 7);
+      for (let k = 0; k < 4; k++) { const zc = bz0 + 6 + k * 7.5, r = 3.6; tube([bx0 + 5, y + 2.5 + r, zc], [bx1 - 5, y + 2.5 + r, zc], r, r, 8); }
+    }
+    return out;
+  }
   if (part === 'rail') {
     // (a clothes rail: two uprights on castored feet, a bar across the top; centred under the bar, on the floor)
     out.length = 0;
@@ -272,8 +386,6 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet' = 'scene
     box(x0, T.y - 3.5, z0, x1, T.y, z1, 7);
     for (const [lx, lz] of [[x0 + 4, z0 + 4], [x1 - 9, z0 + 4], [x0 + 4, z1 - 9], [x1 - 9, z1 - 9]]) box(lx, -5, lz, lx + 5, T.y - 3.5, lz + 5, 7);
   }
-  quad([[-2400, -5, -60], [0, 1, 0]], [[-2400, -5, 240], [0, 1, 0]], [[400, -5, 240], [0, 1, 0]], [[400, -5, -60], [0, 1, 0]], 2);
-  quad([[-2400, -5, -60], [0, 0, 1]], [[400, -5, -60], [0, 0, 1]], [[400, 400, -60], [0, 0, 1]], [[-2400, 400, -60], [0, 0, 1]], 3);
   return out;
 }
 
@@ -310,12 +422,12 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     for (const [name, size, stride, off] of attrs) { const l = gl.getAttribLocation(p, name); if (l < 0) continue; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4); }
     return v;
   };
-  const mesh = (part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet') => {
+  const mesh = (part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet' | 'walls' | 'furniture') => {
     const v = new Float32Array(solidMesh(part)), b = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
     return { draw: vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], b), shadow: vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], b), count: v.length / 7 };
   };
-  const scene = mesh('scene'), rail = mesh('rail'), hanger = mesh('hanger'), hook = mesh('hook'), sheet = mesh('sheet');
+  const scene = mesh('scene'), walls = mesh('walls'), furniture = mesh('furniture'), rail = mesh('rail'), hanger = mesh('hanger'), hook = mesh('hook'), sheet = mesh('sheet');
   // (the paper's drawing, taken again whenever it's redrawn)
   const paperTex = gl.createTexture()!; let paperVersion = -1;
   gl.bindTexture(gl.TEXTURE_2D, paperTex);
@@ -379,7 +491,9 @@ export function createRenderer(gl: WebGL2RenderingContext) {
         if (which === 'draw') gl.uniform3fv(u(p, 'uTint'), tint);
         gl.bindVertexArray(x[which]); gl.drawArrays(gl.TRIANGLES, 0, x.count);
       };
-      m(scene, IDENTITY, spin, CHROME);
+      m(scene, IDENTITY, spin, CHROME); m(furniture, IDENTITY, 0, CHROME);
+      // (the room itself only in the view: it casts no shadow, so the window's light comes in through where its windows are)
+      if (which === 'draw') m(walls, IDENTITY, 0, CHROME);
       for (const r of fit.rails) m(rail, r.model, 0, r.tint);
       for (const hm of fit.hangers) m(hanger, hm, 0, CHROME);
       for (const hm of fit.hooks) m(hook, hm, 0, CHROME);

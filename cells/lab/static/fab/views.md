@@ -10,6 +10,9 @@ Made by `node cells/lab/views.mjs fab` from `client/fab/views.mjs`. The README i
 ![The cutting table: the pattern at true size, the figure across the room](v-table.jpg)
 ![Looking up from the table: drag (or pinch) off the piece to look up at the figure](v-table-up.jpg)
 ![The whole pattern: every piece, its grain, how much cloth, its checks](v-sheet.jpg)
+![From above: the rails at the top, the figure on its rug, the cutting table below it; the back wall and its windows down the right, the window light across the floor](v-room-plan.jpg)
+![The room: from the corner: the window light falling across the floor, the stool and the plant by the figure, the bolts of cloth behind the table](v-room-wide.jpg)
+![Along the rails: down the room past the rails to the figure and the table](v-room-along.jpg)
 
 ## The drawer
 

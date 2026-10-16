@@ -37,6 +37,24 @@
     "title": "The whole pattern",
     "caption": "every piece, its grain, how much cloth, its checks",
     "file": "v-sheet.jpg"
+   },
+   {
+    "name": "room-plan",
+    "title": "From above",
+    "caption": "the rails at the top, the figure on its rug, the cutting table below it; the back wall and its windows down the right, the window light across the floor",
+    "file": "v-room-plan.jpg"
+   },
+   {
+    "name": "room-wide",
+    "title": "The room",
+    "caption": "from the corner: the window light falling across the floor, the stool and the plant by the figure, the bolts of cloth behind the table",
+    "file": "v-room-wide.jpg"
+   },
+   {
+    "name": "room-along",
+    "title": "Along the rails",
+    "caption": "down the room past the rails to the figure and the table",
+    "file": "v-room-along.jpg"
    }
   ]
  },
