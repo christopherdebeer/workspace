@@ -75,3 +75,14 @@ const rgb = (h: string): [number, number, number] => [parseInt(h.slice(1, 3), 16
 export function makePrint(kind: number, colour: number): Print {
   return { kind, ink: COLOURWAYS[colour % COLOURWAYS.length].inks.map(rgb), scale: 1 };
 }
+
+// ─── made one's own ───────────────────────────────────────────────────────────────────────────
+/** what a skirt's cut from, as its recipe says: a swatch, a print, a colourway, and what's been changed of each (the
+ * cloth's own qualities, the palette's three inks, the print's scale) */
+export interface Look { fabric: string; print: number; colour: number; cloth?: Partial<Fabric>; inks?: [string, string, string]; printScale?: number }
+/** the cloth itself: the swatch, with whatever's been changed of it */
+export const fabricOf = (r: Look): Fabric => (r.cloth ? { ...fabricById(r.fabric), ...r.cloth } : fabricById(r.fabric));
+/** the palette: the colourway's three inks, or the ones chosen instead */
+export const inksOf = (r: Look): [string, string, string] => r.inks ?? COLOURWAYS[r.colour % COLOURWAYS.length].inks;
+/** the print as it's printed: its kind, its inks, its scale */
+export const printOf = (r: Look): Print => ({ kind: r.print, ink: inksOf(r).map(rgb), scale: r.printScale ?? 1 });

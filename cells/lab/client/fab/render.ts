@@ -277,7 +277,9 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet' = 'scene
   return out;
 }
 
-export interface View { az: number; el: number; dist: number; target: V3 }
+/** where the eye is; `shift`, how far up the screen (in its own −1…1 units) what it looks at is drawn: the lens moved,
+ * not the eye, so a drawer over the bottom of the screen has the scene centred above it without the view changing */
+export interface View { az: number; el: number; dist: number; target: V3; shift?: number }
 export interface Look { fabric: Fabric; print: Print }
 /** a cloth to draw, where (its model matrix: none for the figure's own) */
 export interface Item { cloth: Cloth; look: Look; model?: Float32Array }
@@ -394,7 +396,8 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
     gl.clearColor(0.86, 0.8, 0.72, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const ce = Math.cos(view.el), eye: V3 = [t[0] + Math.sin(view.az) * ce * view.dist, t[1] + Math.sin(view.el) * view.dist, t[2] + Math.cos(view.az) * ce * view.dist];
-    const vp = mul(perspective(0.6, w / h, 5, 4000), lookAt(eye, t, [0, 1, 0]));
+    const proj = perspective(0.6, w / h, 5, 4000); proj[9] = -(view.shift ?? 0);
+    const vp = mul(proj, lookAt(eye, t, [0, 1, 0]));
     if (fit.paper && fit.paper.version !== paperVersion) {
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, paperTex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, fit.paper.canvas);

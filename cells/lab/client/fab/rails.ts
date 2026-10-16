@@ -13,7 +13,7 @@
  * at a time, nearest first, and then hangs still: only its swing moves it, drawn as a turn about its hook.
  */
 import { Cloth } from './cloth';
-import { fabricById, makePrint } from './fabric';
+import { fabricOf, printOf } from './fabric';
 import { draftRecipe, toHangerBuild, type Recipe } from './pattern';
 import { FLOOR, HOOK, RAIL_W, RAIL_Y, swingAt, translate, type Fittings, type Item, type Look } from './render';
 import { RAIL_COLOURS, rails, recipeOf, type Garment, type Rail } from './store';
@@ -54,7 +54,7 @@ export class Room {
       const hung = slots.map((g, i): Hung => {
         const was = prev?.hung.find((h) => (h.g?.id ?? null) === (g?.id ?? null));
         const key = g ? keyOf(recipeOf(g)) : '';
-        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricById(recipeOf(g).fabric), print: makePrint(recipeOf(g).print, recipeOf(g).colour) } : null, key, model: new Float32Array(16), hook: new Float32Array(16), yaw: Math.PI / 2 };
+        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricOf(recipeOf(g)), print: printOf(recipeOf(g)) } : null, key, model: new Float32Array(16), hook: new Float32Array(16), yaw: Math.PI / 2 };
       });
       return { rail, scroll: prev?.scroll ?? 0, vel: 0, hung };
     });
@@ -119,7 +119,7 @@ export class Room {
       if (!h.cloth) {
         const c = cache.get(h.key);
         if (c) { h.cloth = c.cloth; h.frames = c.frames; }
-        else { const r = recipeOf(h.g!), sk = draftRecipe(r, 650); h.cloth = new Cloth(toHangerBuild(sk, fabricById(r.fabric))); h.frames = 0; cache.set(h.key, { cloth: h.cloth, frames: 0 }); }
+        else { const r = recipeOf(h.g!), sk = draftRecipe(r, 650); h.cloth = new Cloth(toHangerBuild(sk, fabricOf(r))); h.frames = 0; cache.set(h.key, { cloth: h.cloth, frames: 0 }); }
       }
       while (h.frames < SETTLE && performance.now() - t0 < budget) { h.cloth.step(1 / 60); h.frames++; cache.get(h.key)!.frames = h.frames; }
       if (performance.now() - t0 >= budget) break;

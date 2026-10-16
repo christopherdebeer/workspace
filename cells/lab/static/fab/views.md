@@ -11,6 +11,15 @@ Made by `node cells/lab/views.mjs fab` from `client/fab/views.mjs`. The README i
 ![Looking up from the table: drag (or pinch) off the piece to look up at the figure](v-table-up.jpg)
 ![The whole pattern: every piece, its grain, how much cloth, its checks](v-sheet.jpg)
 
+## The drawer
+
+![Closed: its handle, and what's chosen in a line](v-drawer-closed.jpg)
+![Drawn up: the drawer follows the finger: what's below comes into view before it's let go](v-drawer-drag.jpg)
+![Your own cloth: expanded: the swatch's measured qualities, dial by dial; the skirt settles again](v-custom-fabric.jpg)
+![Your own print: how big it's printed](v-custom-print.jpg)
+![Your own palette: its three inks, each picked](v-custom-colour.jpg)
+![The table's, expanded: the tool's gestures and what it's set to, under its history](v-table-full.jpg)
+
 ## The hand
 
 ![The hand: the hem lit, its tab; the grain arrow's knob; a badge on the dart](v-hand.jpg)

@@ -319,11 +319,43 @@ The workshop is one room, and the camera walks between three places in it. They'
 ![the figure, its pattern pinned up](fab/v-figure.jpg)
 ![the cutting table](fab/v-table.jpg)
 
-**The drawer has three states.** Its handle taps it a step open (closed → one section → all of it) and back, and a
-drag on the handle opens it all (up) or closes it (down). Closed, it's only the handle and what's chosen, in a line
-("cotton lawn · stripes · strawberry"), and the room has the screen. At the figure, one section in focus is a row of
-tabs (**Fabric · Print · Colour**) over that section's swatches; all of it open is the three, labelled, one under
-another. The colours are the print's colourways, each drawn as the print chosen in it.
+**The drawer has three states, each the one before with more below it:**
+
+- **closed**: its handle, and what's chosen in a line ("cotton lawn · stripes · strawberry");
+- **focused**: at the figure, a section's tabs (**Fabric · Print · Colour**) and its swatches; at the table, the tool in
+  hand, panels, undo and the history;
+- **expanded**: at the figure, the section in focus made your own (below); at the table, the tool's gestures and what
+  it's set to.
+
+**Its handle is tactile.** The drawer follows a finger on its handle, so what's below comes into view before it's let
+go, and it gives a little past either end. When it's let go it settles, sliding there: dragged a quarter of the way to
+the next state it goes there (and on, past each further quarter); flicked, it goes one further the way it was flicked;
+short of a quarter, it springs back. A tap steps it: closed → focused → expanded → focused. (⚙ by the tabs expands the
+section in focus, and closes it again.)
+
+**The room never moves with it.** The drawer lies over the room rather than taking space from it, and each place keeps
+the bottom of the screen for its drawer whatever state it's in, the scene drawn centred above that by moving the lens.
+Opening, closing or dragging the drawer doesn't move or resize the scene.
+
+![closed](fab/v-drawer-closed.jpg)
+![drawn up](fab/v-drawer-drag.jpg)
+![expanded: your own cloth](fab/v-custom-fabric.jpg)
+
+**Expanded, a section is made your own.** What's changed is kept with the skirt (on its recipe, so it's on the rail
+with it, and in the link):
+
+- **cloth**: its measured qualities, dial by dial, starting from the swatch's: weight (gsm), stiffness (Peirce bending
+  length), firmness (tensile stiffness, warp and weft together), bias give (shear stiffness), grip (friction), and how
+  it takes the light (sheen, fuzz, sheer). The first five are what the skirt is simulated from: change one and it
+  settles again;
+- **print**: how big it's printed;
+- **colour**: the palette's three inks (ground, ink, accent), each picked.
+
+**as it was** puts the section back as its swatch has it, and choosing another swatch starts afresh from that one.
+
+![your own print](fab/v-custom-print.jpg)
+![your own palette](fab/v-custom-colour.jpg)
+![the table's drawer, expanded](fab/v-table-full.jpg)
 
 **At the figure, a drag on it spins it; a drag off it goes round it.** Spinning is the same as from the table: its
 front follows the finger, and a flick runs down on its own. A pinch, or scrolling, comes close or goes well back.
@@ -406,7 +438,7 @@ so nothing jumps between one gesture and the next.
 
 - **The paper** (on the cutting table: tap the pattern note, or **table** along the top) is one panel of the pattern. Pick a tool and work it (see the moves above); the figure
   wears every move as it's made, and follows while your finger is still on the paper.
-- **Turn the figure**: drag. **Come close**: pinch, or scroll.
+- **Spin the figure**: drag across it. **Go round it**: drag off it. **Come close or go back**: pinch, or scroll.
 - **Tap the title three times** (or `?perf`) for a frame readout: fps, frame, cloth and drawing time, and whether the
   cloth is keeping up with the clock. The cloth runs in fixed 1/60 s steps, at most two a frame: on a slow device it
   slows down, rather than falling further and further behind.
@@ -415,6 +447,9 @@ so nothing jumps between one gesture and the next.
 - `?sheet` opens the whole pattern: the pieces with their grain lines, darts and pleats, how
   many to cut, the notes the cut made, and the pattern's checks. (It's no longer a button: the pinned note and the
   table are the pattern now.)
+- `?drawer=closed|focus|full` and `&sec=fabric|print|colour` open the drawer as a link left it; `&own=` carries what's
+  been made your own (`{"c": {cloth qualities}, "i": [three inks], "s": print scale}`), and the page writes it as it
+  changes.
 
 ## How it's built
 

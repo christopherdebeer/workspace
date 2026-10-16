@@ -14,7 +14,7 @@
  * some may then do something different, or nothing, and say so).
  */
 import { ribAt, type Move, type Panel, type V2 } from './cut';
-import { makePrint } from './fabric';
+import { printOf } from './fabric';
 import { cutOf, type Recipe } from './pattern';
 import { tile } from './sheet';
 
@@ -212,7 +212,7 @@ export class Paper {
     for (let t = 9; t > 0; t--) add(ribAt(panel.ribs[0], t / 10), i++);
     path.closePath();
     if (this.cloth) {
-      const fill = tile(ctx, makePrint(r.print, r.colour), sc), g = (r.grain * Math.PI) / 180;
+      const fill = tile(ctx, printOf(r), sc), g = (r.grain * Math.PI) / 180;
       if (typeof fill !== 'string') { const o = this.toScreen([0, 0]); fill.setTransform(new DOMMatrix([Math.cos(-g), Math.sin(-g), -Math.sin(-g), Math.cos(-g), o[0], o[1]])); }
       ctx.save(); ctx.globalAlpha = 0.8; ctx.fillStyle = fill; ctx.fill(path); ctx.restore();
     } else {

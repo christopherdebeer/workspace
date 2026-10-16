@@ -38,6 +38,15 @@ export const views = [
   // ─── the room ───
   { name: 'rails', group: 'The room', title: 'The rails', caption: 'a rail per person; slide along, tap the front one to put it on', query: 'rails&warm', settle: 3500 },
   { name: 'figure', group: 'The room', title: 'The figure', caption: 'cloth and print in the drawer; the pattern pinned up, bottom right', query: CIRCLE },
+  { name: 'drawer-closed', group: 'The drawer', title: 'Closed', caption: 'its handle, and what\'s chosen in a line', query: `${CIRCLE}&drawer=closed` },
+  {
+    name: 'drawer-drag', group: 'The drawer', title: 'Drawn up', caption: 'the drawer follows the finger: what\'s below comes into view before it\'s let go', query: CIRCLE,
+    run: async (v) => { const g = await (await v.page.$('#grip')).boundingBox(), x = g.x + g.width / 2, y = g.y + 8; await v.drag([x, y], [x, y - 130], { at: v.shot }); },
+  },
+  { name: 'custom-fabric', group: 'The drawer', title: 'Your own cloth', caption: 'expanded: the swatch\'s measured qualities, dial by dial; the skirt settles again', query: `${CIRCLE}&drawer=full&sec=fabric` },
+  { name: 'custom-print', group: 'The drawer', title: 'Your own print', caption: 'how big it\'s printed', query: `${CIRCLE}&drawer=full&sec=print&own=${encodeURIComponent(JSON.stringify({ s: 2.2 }))}` },
+  { name: 'custom-colour', group: 'The drawer', title: 'Your own palette', caption: 'its three inks, each picked', query: `${CIRCLE}&drawer=full&sec=colour&own=${encodeURIComponent(JSON.stringify({ i: ['#f6c9cf', '#2f6f9f', '#fff4e2'] }))}` },
+  { name: 'table-full', group: 'The drawer', title: 'The table\'s, expanded', caption: 'the tool\'s gestures and what it\'s set to, under its history', query: `${TABLE}&drawer=full` },
   { name: 'figure-turned', group: 'The room', title: 'Turned round', caption: 'the cutting table behind it: tap it to go there', query: CIRCLE, run: async (v) => { await v.eval(() => { window.__fab.view.az = 0.9; }); await v.wait(600); } },
   { name: 'table', group: 'The room', title: 'The cutting table', caption: 'the pattern at true size, the figure across the room', query: TABLE },
   { name: 'table-up', group: 'The room', title: 'Looking up from the table', caption: 'drag (or pinch) off the piece to look up at the figure', query: TABLE, run: async (v) => { await v.page.mouse.move(200, 600); await v.page.mouse.wheel(0, 1000); await v.wait(2500); } },

@@ -18,6 +18,7 @@
     body { color: var(--ink); font-family: var(--round); -webkit-user-select: none; user-select: none; display: flex; flex-direction: column; }
     button, a { -webkit-tap-highlight-color: transparent; }
     #stage { position: relative; flex: 1; min-height: 0; }
+    body.rails { --drawer: 0px; }
     canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
     canvas#sheet { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); border-radius: 14px; box-shadow: 0 8px 30px rgba(60,40,20,.25); display: none; z-index: 5; }
     body.sheet canvas#sheet { display: block; }
@@ -39,31 +40,52 @@
     body.sheet #acts #pattern { background: var(--dark); color: #fbf3e6; }
 
     /* the pattern, pinned up beside the figure: tap it to go to the cutting table */
-    #note { all: unset; position: absolute; right: 12px; bottom: 34px; width: 64px; padding: 7px 6px 5px; background: #fbf7ee; border-radius: 2px; box-shadow: 0 2px 3px rgba(60,40,20,.12), 0 6px 16px rgba(60,40,20,.2); transform: rotate(3deg); cursor: pointer; z-index: 3; display: grid; gap: 1px; justify-items: center; background-image: linear-gradient(rgba(120,150,170,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(120,150,170,.09) 1px, transparent 1px); background-size: 6px 6px; transition: transform .15s; }
+    #note { all: unset; position: absolute; right: 12px; bottom: calc(var(--drawer, 180px) + 14px); width: 64px; padding: 7px 6px 5px; background: #fbf7ee; border-radius: 2px; box-shadow: 0 2px 3px rgba(60,40,20,.12), 0 6px 16px rgba(60,40,20,.2); transform: rotate(3deg); cursor: pointer; z-index: 3; display: grid; gap: 1px; justify-items: center; background-image: linear-gradient(rgba(120,150,170,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(120,150,170,.09) 1px, transparent 1px); background-size: 6px 6px; transition: transform .15s; }
     #note:active { transform: rotate(3deg) scale(.95); }
     #note .pin { position: absolute; top: -4px; left: 50%; width: 9px; height: 9px; margin-left: -4px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #f2c46a, #b07a28); box-shadow: 0 2px 2px rgba(60,40,20,.35); }
     #note canvas { width: 52px; height: 58px; display: block; }
     #note em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--rose); }
 
     /* what the cut found, over the scene: words with a soft halo, no card */
-    #notes { position: absolute; left: 14px; right: 90px; bottom: 30px; text-align: center; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
+    #notes { position: absolute; left: 14px; right: 90px; bottom: calc(var(--drawer, 180px) + 10px); text-align: center; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
     #notes:empty { display: none; }
 
     /* the drawer: a sheet of paper drawn up over the room */
-    #bench { flex: none; position: relative; z-index: 4; margin-top: -22px; background: var(--paper); border-radius: 22px 22px 0 0; padding: 14px 12px max(12px, env(safe-area-inset-bottom)); box-shadow: 0 -8px 26px rgba(60,40,20,.16); }
+    /* (over the room, not under it: the scene never changes size as the drawer opens and closes) */
+    #bench { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; max-height: 82vh; overflow: hidden; overscroll-behavior: contain; z-index: 4; transition: height .34s cubic-bezier(.2,.9,.25,1); will-change: height; background: var(--paper); border-radius: 22px 22px 0 0; padding: 14px 12px max(12px, env(safe-area-inset-bottom)); box-shadow: 0 -8px 26px rgba(60,40,20,.16); }
     #grip { all: unset; display: block; box-sizing: border-box; width: calc(100% + 24px); position: relative; margin: -14px -12px 6px; padding: 16px 12px 2px; cursor: pointer; touch-action: none; text-align: center; min-height: 6px; }
+    #bench.held { transition: none; }
+    body[data-drawer=full] #bench:not(.held) { overflow-y: auto; }
+    #grip:active::before, #bench.held #grip::before { background: rgba(60,40,20,.38); width: 48px; margin-left: -24px; }
     #grip::before { content: ""; position: absolute; top: 6px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 4px; background: rgba(60,40,20,.16); }
-    /* the drawer's three states: closed (its handle, and what's chosen in a line), one section in focus (tabs to
-       pick which), or everything open; the handle taps and drags between them */
-    #gripsum { display: none; font-family: var(--serif); font-size: 14px; color: var(--ink2); padding: 4px 0 2px; }
-    body[data-drawer=closed] #gripsum { display: block; }
-    body[data-drawer=closed] #bench > :not(#grip) { display: none !important; }
+    /* the drawer's three states, each the one before with more below it: closed (its handle, and what's chosen in a
+       line); focused (at the figure, a section's tabs and swatches; at the table, the tool, its panels, undo and history);
+       expanded (that section made your own, dial by dial; the tool's gestures and what it's set to). The drawer's only
+       ever clipped to a height: dragging its handle shows more or less of it, and it settles to a state when let go */
+    #gripsum { display: block; height: 20px; font-family: var(--serif); font-size: 14px; color: var(--ink2); padding: 2px 0 0; opacity: 0; transition: opacity .2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    body[data-drawer=closed] #gripsum { opacity: 1; }
     #figtabs { display: flex; padding: 3px; gap: 2px; border-radius: 14px; background: var(--paper2); margin-bottom: 10px; }
     #figtabs button { all: unset; flex: 1; text-align: center; cursor: pointer; padding: 6px 4px; border-radius: 11px; font-family: var(--serif); font-size: 14px; color: var(--ink2); }
     #figtabs button.on { background: #fffdf8; color: var(--ink); box-shadow: var(--lift); }
-    body[data-drawer=open] #figtabs { display: none; }
-    body:not([data-drawer=open]) .figsec:not(.on) { display: none; }
-    body:not([data-drawer=open]) .figsec .lab { display: none; }
+    #figtabs button#tune { flex: none; padding: 6px 10px; color: var(--rose); }
+    body[data-drawer=full] #figtabs button#tune { background: var(--rose); color: #fff6ee; }
+    /* customising: the one chosen, made one's own, dial by dial */
+    #custom { display: none; }
+    body:not(.table) #custom { display: block; }
+    #custom .chead { display: flex; align-items: baseline; gap: 8px; margin: 2px 2px 8px; }
+    #custom .chead b { font-family: var(--serif); font-size: 17px; }
+    #custom .chead span { font-size: 11.5px; font-weight: 600; color: var(--ink2); flex: 1; }
+    #custom .chead button { all: unset; cursor: pointer; font-family: var(--serif); font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--paper2); }
+    #custom .dials { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px 4px; }
+    #custom .inks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    #custom .ink { position: relative; display: grid; justify-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--ink2); }
+    #custom .ink span { width: 54px; height: 54px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(60,40,20,.15), var(--lift); }
+    #custom .ink input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+    #custom .ink i { font-style: normal; font-family: ui-monospace, monospace; font-size: 10px; color: var(--ink3); }
+    #custom .note { font-size: 11px; color: var(--ink3); margin: 8px 2px 0; }
+    .figsec:not(.on) { display: none; }
+    .figsec .lab { display: none; }
+    [data-tier="2"] { border-top: 1px dashed rgba(60,40,20,.15); padding-top: 10px; }
     .figsec .row { margin-bottom: 6px; }
     .row { display: flex; gap: 8px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
     .row::-webkit-scrollbar { display: none; }
@@ -99,12 +121,11 @@
     #toolhead { flex: 1; min-width: 0; display: grid; }
     #toolname { font-family: var(--serif); font-size: 20px; font-weight: 700; line-height: 1.1; }
     #toolwhat { font-size: 12px; font-weight: 600; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    /* (the same height whichever tool's in hand: so the room's view doesn't jump as the drawer would) */
-    #gestures { display: grid; gap: 4px; margin-bottom: 8px; min-height: 86px; align-content: start; }
+    #gestures { display: grid; gap: 4px; margin-bottom: 8px; }
     .gest { display: flex; align-items: center; gap: 8px; font-family: var(--serif); font-size: 14px; color: var(--ink); }
     .gest svg { flex: none; width: 26px; height: 26px; fill: none; stroke: var(--rose); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .gest i { font-style: normal; font-family: var(--round); font-size: 11px; font-weight: 700; color: var(--ink3); margin-left: auto; white-space: nowrap; }
-    #toolctl { display: flex; gap: 6px 8px; flex-wrap: wrap; align-content: start; margin-bottom: 8px; min-height: 70px; }
+    #toolctl { display: flex; gap: 6px 8px; flex-wrap: wrap; margin-bottom: 4px; }
     .ctl { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: 14px; background: var(--paper2); font-size: 11px; font-weight: 700; color: var(--ink3); }
     .ctl b { font-family: var(--serif); font-size: 15px; font-weight: 600; color: var(--ink); min-width: 46px; text-align: center; }
     .ctl b:empty { display: none; }
@@ -117,7 +138,7 @@
     .stepper b i { font-style: normal; font-family: var(--round); font-size: 9px; font-weight: 700; color: var(--ink3); margin-top: 2px; }
     #undo { flex: none; width: auto; height: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px; border-radius: 14px; font-family: var(--serif); font-size: 12px; line-height: 1.1; background: var(--paper2); box-shadow: none; }
     #undo svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    #history { margin-bottom: 0; min-height: 30px; align-items: center; }
+    #history { margin-bottom: 10px; min-height: 30px; align-items: center; }
     #history .chip { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 13px; padding: 5px 11px; border-radius: 999px; background: #fffdf8; box-shadow: inset 0 0 0 1px rgba(60,40,20,.14); }
     #history .chip:last-child { box-shadow: inset 0 0 0 1.5px var(--rose); }
     #history .chip i { font-style: normal; color: var(--ink3); margin-left: 4px; }
@@ -181,13 +202,14 @@
     <div class="row" id="methods"></div>
     <div id="knobs"></div>
     <div id="tools" class="cutonly"><div id="toolhead"><b id="toolname"></b><span id="toolwhat"></span></div><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo"><svg viewBox="0 0 24 24"><path d="M9 7L5 11l4 4"/><path d="M5 11h9a5 5 0 010 10h-2"/></svg>undo</button></div>
-    <div id="gestures" class="cutonly"></div>
-    <div id="toolctl" class="cutonly"></div>
     <div class="row cutonly" id="history"></div>
-    <div id="figtabs" class="figdrawer"><button data-sec="fabric">Fabric</button><button data-sec="print">Print</button><button data-sec="colour">Colour</button></div>
+    <div id="gestures" class="cutonly" data-tier="2"></div>
+    <div id="toolctl" class="cutonly"></div>
+    <div id="figtabs" class="figdrawer"><button data-sec="fabric">Fabric</button><button data-sec="print">Print</button><button data-sec="colour">Colour</button><button id="tune" aria-label="make it your own" title="make it your own">⚙</button></div>
     <div class="figsec figdrawer" data-sec="fabric"><div class="lab">fabric</div><div class="row" id="fabrics"></div></div>
     <div class="figsec figdrawer" data-sec="print"><div class="lab">print</div><div class="row" id="prints"></div></div>
     <div class="figsec figdrawer" data-sec="colour"><div class="lab">colour</div><div class="row" id="colours"></div></div>
+    <div id="custom" class="figdrawer" data-tier="2"></div>
   </div>
   <script type="module" src="{{app}}"></script>
 </body>

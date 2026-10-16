@@ -21,7 +21,7 @@
  * query starts at the bench) · `?warm` (the rails' skirts settled before the first frame) · `?bench=evidence`.
  */
 import { Cloth } from './cloth';
-import { FABRICS, COLOURWAYS, PRINTS, fabricById, makePrint } from './fabric';
+import { FABRICS, COLOURWAYS, PRINTS, fabricById, fabricOf, inksOf, printOf, type Fabric } from './fabric';
 import { DEFAULT_DESIGN, describe, draftRecipe, fromDesign, toBuild, type Design, type Method, type Move, type Recipe, type Skirt } from './pattern';
 import { Paper, SHEET_H, SHEET_W, TOOLS, moveWords } from './paper';
 import { RAIL_Z, Room, railX } from './rails';
@@ -62,12 +62,14 @@ const decodeMoves = (t: string): Move[] => t.split('_').filter(Boolean).flatMap(
   return [];
 });
 let rec: Recipe = qs.has('m') ? { length: d.length, panels: d.panels, grain: d.grain, fabric: d.fabric, print: d.print, colour: d.colour, moves: decodeMoves(qs.get('m') ?? '') } : fromDesign(d);
+// (what's been made one's own, from a link)
+try { const o = JSON.parse(qs.get('own') ?? 'null'); if (o) rec = { ...rec, cloth: o.c, inks: o.i, printScale: o.s }; } catch { /* a bad link: as the swatches are */ }
 /** the dials, kept to compare with the paper (`?ui=dials`): they write moves too */
 const dialsUI = qs.get('ui') === 'dials';
 let sk: Skirt = draftRecipe(rec), cloth: Cloth | null = null;
 function makeFrom(r: Recipe, fresh = false) {
   sk = draftRecipe(r);
-  const next = new Cloth(toBuild(sk, fabricById(r.fabric)), fresh ? null : cloth);
+  const next = new Cloth(toBuild(sk, fabricOf(r)), fresh ? null : cloth);
   if (cloth && !fresh) { next.spin = cloth.spin; next.omega = cloth.omega; }
   cloth = next;
 }
@@ -76,6 +78,8 @@ function make(fresh = false) {
   if (!preview && mode === 'bench') {
     const u = new URL(location.href);
     for (const k of ['full', 'cut']) u.searchParams.delete(k);
+    const own = rec.cloth || rec.inks || rec.printScale !== undefined ? JSON.stringify({ c: rec.cloth, i: rec.inks, s: rec.printScale }) : '';
+    if (own) u.searchParams.set('own', own); else u.searchParams.delete('own');
     for (const [k, v] of [['len', String(rec.length)], ['panels', String(rec.panels)], ['grain', String(rec.grain)], ['fabric', rec.fabric], ['print', String(rec.print)], ['colour', String(rec.colour)], ['m', encodeMoves(rec.moves)]]) u.searchParams.set(k, v);
     history.replaceState(null, '', u);
   }
@@ -140,53 +144,173 @@ for (const x of METHODS) {
 for (const f of FABRICS) {
   const b = document.createElement('button'); b.className = 'swatch'; b.dataset.f = f.id;
   b.innerHTML = `<span style="background:${f.card}"></span>${f.name}`;
-  b.addEventListener('click', () => { d.fabric = f.id; rec = { ...rec, fabric: f.id }; make(); });
+  b.addEventListener('click', () => { d.fabric = f.id; rec = { ...rec, fabric: f.id, cloth: undefined }; make(); });
   $('fabrics').appendChild(b);
 }
 for (let k = 0; k < PRINTS.length; k++) {
   const b = document.createElement('button'); b.className = 'print'; b.dataset.k = String(k);
   b.innerHTML = `<canvas width="56" height="40"></canvas>${PRINTS[k]}`;
-  b.addEventListener('click', () => { rec = { ...rec, print: k }; d.print = rec.print; make(); });
+  b.addEventListener('click', () => { rec = { ...rec, print: k, printScale: undefined }; d.print = rec.print; make(); });
   $('prints').appendChild(b);
 }
 // (the colourways: each drawn as the print chosen, in it)
 COLOURWAYS.forEach((c, k) => {
   const b = document.createElement('button'); b.className = 'print'; b.dataset.c = String(k);
   b.innerHTML = `<canvas width="56" height="40"></canvas>${c.name}`;
-  b.addEventListener('click', () => { rec = { ...rec, colour: k }; d.colour = k; make(); });
+  b.addEventListener('click', () => { rec = { ...rec, colour: k, inks: undefined }; d.colour = k; make(); });
   $('colours').appendChild(b);
 });
-// ─── the drawer: closed (its handle, and what's chosen in a line), one section in focus, or all of it open ───
-type DrawerState = 'closed' | 'focus' | 'open';
-let drawer: DrawerState = 'focus', figSec = 'fabric';
-function setDrawer(st: DrawerState) { drawer = st; document.body.dataset.drawer = st; ui(); }
-for (const b of Array.from($('figtabs').children) as HTMLElement[]) b.addEventListener('click', () => { figSec = b.dataset.sec!; ui(); });
-{
-  // (the handle: a tap opens it a step (closed → focus → open → focus); a drag up opens it all, down closes it)
-  let y0 = 0, moved = false;
-  const grip = $('grip');
-  grip.addEventListener('pointerdown', (e) => { y0 = e.clientY; moved = false; grip.setPointerCapture(e.pointerId); });
-  grip.addEventListener('pointermove', (e) => { if (grip.hasPointerCapture(e.pointerId) && Math.abs(e.clientY - y0) > 12) moved = true; });
-  grip.addEventListener('pointerup', (e) => {
-    const dy = e.clientY - y0;
-    if (moved) setDrawer(dy < 0 ? (drawer === 'closed' ? 'focus' : 'open') : drawer === 'open' ? 'focus' : 'closed');
-    else setDrawer(drawer === 'closed' ? 'focus' : drawer === 'focus' ? 'open' : 'focus');
+// ─── making it one's own: the one chosen in each section, dial by dial ─────────────────────────────
+/** a dial: drag round it (or up and down) between lo and hi (`log`: evenly in ratio, for what spans orders of magnitude) */
+function dial(parent: HTMLElement, label: string, lo: number, hi: number, get: () => number, set: (v: number) => void, word: (v: number) => string, log = false) {
+  const el = document.createElement('div'); el.className = 'knob';
+  el.innerHTML = `<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="25" class="face"/><path class="track" d="${arcPath(1)}"/><path class="arc" d=""/><circle class="dot" r="4.5"/></svg><b>${label}</b><i></i>`;
+  const arc = el.querySelector('.arc')!, dot = el.querySelector('.dot')!, w = el.querySelector('i')!;
+  const toT = (v: number) => Math.max(0, Math.min(1, log ? Math.log(v / lo) / Math.log(hi / lo) : (v - lo) / (hi - lo))), toV = (t: number) => (log ? lo * Math.pow(hi / lo, t) : lo + (hi - lo) * t);
+  const show = () => { const v = get(), t = toT(v), a = -2.36 + 4.71 * t; arc.setAttribute('d', arcPath(t)); dot.setAttribute('cx', `${32 + Math.sin(a) * 25}`); dot.setAttribute('cy', `${32 - Math.cos(a) * 25}`); w.textContent = word(v); };
+  let startA = 0, last = 0, acc = 0;
+  const angle = (ev: PointerEvent) => { const r = el.getBoundingClientRect(); return Math.atan2(ev.clientX - (r.left + r.width / 2), -(ev.clientY - (r.top + r.width / 2))); };
+  el.addEventListener('pointerdown', (ev) => { el.setPointerCapture(ev.pointerId); startA = angle(ev); last = ev.clientY - ev.clientX; acc = toT(get()); el.classList.add('turning'); ev.preventDefault(); });
+  el.addEventListener('pointermove', (ev) => {
+    if (!el.hasPointerCapture(ev.pointerId)) return;
+    const a = angle(ev); let da = a - startA; if (da > Math.PI) da -= Math.PI * 2; if (da < -Math.PI) da += Math.PI * 2; startA = a;
+    const lin = ev.clientY - ev.clientX, dl = (last - lin) / 240; last = lin;
+    acc = Math.max(0, Math.min(1, acc + Math.max(-0.2, Math.min(0.2, da / 4.7 + dl))));
+    set(toV(acc)); show();
   });
+  el.addEventListener('pointerup', () => { el.classList.remove('turning'); make(); });
+  show(); parent.appendChild(el);
+}
+let customKey = '';
+function customPanel() {
+  // (built again only when what it's for changes: not while a dial's being turned)
+  const key = `${figSec}|${rec.fabric}|${rec.print}|${rec.colour}|${!!rec.cloth}|${!!rec.inks}|${rec.printScale ?? ''}`;
+  if (key === customKey && $('custom').childElementCount) return;
+  customKey = key;
+  const box = $('custom'); box.innerHTML = '';
+  const head = (title: string, what: string, changed: boolean, reset: () => void) => {
+    const h = document.createElement('div'); h.className = 'chead';
+    h.innerHTML = `<b>${title}</b><span>${what}</span>`;
+    if (changed) { const b = document.createElement('button'); b.textContent = 'as it was'; b.addEventListener('click', () => { reset(); customKey = ''; make(); }); h.appendChild(b); }
+    box.appendChild(h);
+  };
+  const live = () => remake();
+  if (figSec === 'fabric') {
+    const base = fabricById(rec.fabric), f = () => fabricOf(rec);
+    const put = (k: keyof Fabric, v: number) => { rec = { ...rec, cloth: { ...rec.cloth, [k]: v } }; live(); };
+    head(`${base.name}, your own`, 'what it weighs, how it bends and stretches, how it takes the light', !!rec.cloth, () => { rec = { ...rec, cloth: undefined }; });
+    const g = document.createElement('div'); g.className = 'dials'; box.appendChild(g);
+    dial(g, 'weight', 20, 500, () => f().gsm, (v) => put('gsm', Math.round(v)), (v) => `${Math.round(v)} gsm`, true);
+    dial(g, 'stiffness', 0.6, 6, () => f().bend, (v) => put('bend', +v.toFixed(2)), (v) => (v < 1.5 ? 'drapes' : v > 3.5 ? 'stands' : `${v.toFixed(1)} cm`), true);
+    dial(g, 'firmness', 30, 6000, () => f().warp, (v) => { const r = base.weft / base.warp; rec = { ...rec, cloth: { ...rec.cloth, warp: Math.round(v), weft: Math.round(v * r) } }; live(); }, (v) => (v < 200 ? 'stretchy' : v > 2500 ? 'firm' : `${Math.round(v)} N/m`), true);
+    dial(g, 'bias give', 3, 600, () => f().shear, (v) => put('shear', Math.round(v)), (v) => (v < 12 ? 'clings' : v > 200 ? 'none' : `${Math.round(v)}`), true);
+    dial(g, 'grip', 0.1, 0.9, () => f().friction, (v) => put('friction', +v.toFixed(2)), (v) => (v < 0.25 ? 'slips' : v > 0.6 ? 'holds' : v.toFixed(2)));
+    // (how it takes the light: only drawing, so no new cloth to settle)
+    const look = (k: keyof Fabric, v: number) => { rec = { ...rec, cloth: { ...rec.cloth, [k]: v } }; ui(); };
+    dial(g, 'sheen', 0, 1, () => f().sheen, (v) => look('sheen', +v.toFixed(2)), (v) => `${Math.round(v * 100)}%`);
+    dial(g, 'fuzz', 0, 1, () => f().fuzz, (v) => look('fuzz', +v.toFixed(2)), (v) => `${Math.round(v * 100)}%`);
+    dial(g, 'sheer', 0, 0.6, () => f().clear, (v) => look('clear', +v.toFixed(2)), (v) => `${Math.round(v * 100)}%`);
+    box.insertAdjacentHTML('beforeend', '<p class="note">The cloth\'s measured qualities: what the figure\'s skirt is simulated from. Change one and it settles again.</p>');
+  } else if (figSec === 'print') {
+    head(`${PRINTS[rec.print]}, your own`, 'how big it\'s printed on the cloth', rec.printScale !== undefined, () => { rec = { ...rec, printScale: undefined }; });
+    const g = document.createElement('div'); g.className = 'dials'; box.appendChild(g);
+    dial(g, 'scale', 0.4, 3, () => rec.printScale ?? 1, (v) => { rec = { ...rec, printScale: +v.toFixed(2) }; ui(); }, (v) => `${v.toFixed(1)}×`, true);
+  } else {
+    head(`${COLOURWAYS[rec.colour % COLOURWAYS.length].name}, your own`, 'the three inks it\'s printed in', !!rec.inks, () => { rec = { ...rec, inks: undefined }; });
+    const g = document.createElement('div'); g.className = 'inks'; box.appendChild(g);
+    ['ground', 'ink', 'accent'].forEach((name, i) => {
+      const el = document.createElement('label'); el.className = 'ink';
+      const sw = document.createElement('span'), inp = document.createElement('input'), code = document.createElement('i');
+      inp.type = 'color'; inp.value = inksOf(rec)[i]; sw.style.background = inp.value; code.textContent = inp.value;
+      inp.addEventListener('input', () => { const inks = [...inksOf(rec)] as [string, string, string]; inks[i] = inp.value; rec = { ...rec, inks }; sw.style.background = inp.value; code.textContent = inp.value; ui(); });
+      inp.addEventListener('change', () => make());
+      el.append(sw, inp, name, code); g.appendChild(el);
+    });
+  }
+}
+
+// ─── the drawer: closed (its handle, and what's chosen in a line), focused, or expanded ───────────────────────
+// (each state is the one before with more below it, so the drawer's only ever clipped to a height: its handle drags
+// that height as a preview, and on letting go it settles to the state nearest where the drag (and its flick) was
+// heading; a tap steps it closed → focused → expanded → focused. Expanded is the section in focus made your own at the
+// figure; at the table, the tool's gestures and what it's set to)
+type DrawerState = 'closed' | 'focus' | 'full';
+// (`?drawer=closed|focus|full` and `&sec=fabric|print|colour`: the drawer as a link left it)
+let drawer: DrawerState = qs.get('drawer') === 'closed' ? 'closed' : qs.get('drawer') === 'full' || qs.get('drawer') === 'open' ? 'full' : 'focus', figSec = ['fabric', 'print', 'colour'].includes(qs.get('sec') ?? '') ? qs.get('sec')! : 'fabric';
+function setDrawer(st: DrawerState) { drawer = st; document.body.dataset.drawer = st; ui(); }
+for (const b of Array.from($('figtabs').querySelectorAll('[data-sec]')) as HTMLElement[]) b.addEventListener('click', () => { figSec = b.dataset.sec!; ui(); });
+/** how tall the drawer is in each state: to the foot of its handle; to where its expanded part starts; all of it */
+function drawerHeights(): Record<DrawerState, number> {
+  const bench = $('bench'), grip = $('grip'), pad = parseFloat(getComputedStyle(bench).paddingBottom) || 12;
+  const kids = (Array.from(bench.children) as HTMLElement[]).filter((el) => el !== grip && el.offsetParent !== null);
+  const closed = grip.offsetTop + grip.offsetHeight + pad;
+  const end = kids.length ? Math.max(...kids.map((el) => el.offsetTop + el.offsetHeight)) + pad : closed;
+  const t2 = kids.find((el) => el.dataset.tier === '2');
+  const focus = t2 ? t2.offsetTop + pad - 6 : end;
+  const full = Math.min(end, innerHeight * 0.82);
+  return { closed, focus: Math.max(closed, Math.min(focus, full)), full: Math.max(closed, full) };
+}
+let drawerHeld = false;
+function layoutDrawer() {
+  if (drawerHeld || mode === 'rails') return;
+  const bench = $('bench'), h = drawerHeights()[drawer];
+  bench.style.height = `${h}px`;
+  if (drawer !== 'full') bench.scrollTop = 0;
+}
+{
+  const grip = $('grip'), bench = $('bench');
+  let y0 = 0, h0 = 0, lastY = 0, lastT = 0, v = 0, moved = false, H = drawerHeights();
+  grip.addEventListener('pointerdown', (e) => {
+    grip.setPointerCapture(e.pointerId); H = drawerHeights();
+    y0 = lastY = e.clientY; lastT = performance.now(); v = 0; moved = false; h0 = bench.getBoundingClientRect().height;
+    drawerHeld = true; bench.classList.add('held'); bench.scrollTop = 0;
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!grip.hasPointerCapture(e.pointerId)) return;
+    if (Math.abs(e.clientY - y0) > 6) moved = true;
+    const t = performance.now(); v = v * 0.6 + (-(e.clientY - lastY) / Math.max(1, t - lastT)) * 0.4; lastY = e.clientY; lastT = t;
+    // (it follows the finger; past either end it gives, a little)
+    let h = h0 - (e.clientY - y0);
+    if (h > H.full) h = H.full + (h - H.full) * 0.25;
+    if (h < H.closed) h = H.closed - (H.closed - h) * 0.25;
+    bench.style.height = `${h}px`;
+    document.body.dataset.drawer = h < (H.closed + H.focus) / 2 ? 'closed' : drawer === 'full' && h > (H.focus + H.full) / 2 ? 'full' : document.body.dataset.drawer === 'closed' ? 'focus' : document.body.dataset.drawer!;
+  });
+  const up = () => {
+    if (!drawerHeld) return;
+    drawerHeld = false; bench.classList.remove('held');
+    if (!moved) { setDrawer(drawer === 'closed' ? 'focus' : drawer === 'focus' ? 'full' : 'focus'); return; }
+    // (commits: dragged a quarter of the way to the next state, it goes there (and on, past each quarter); a flick goes
+    // one further the way it was flicked; short of a quarter, it springs back)
+    const order: DrawerState[] = ['closed', 'focus', 'full'], hs = order.map((o) => H[o]), h = bench.getBoundingClientRect().height, i0 = order.indexOf(drawer);
+    let i = i0;
+    if (h >= hs[i0]) { while (i < 2 && h > hs[i] + (hs[i + 1] - hs[i]) * 0.25) i++; if (v > 0.35 && i < 2 && i === i0) i++; }
+    else { while (i > 0 && h < hs[i] - (hs[i] - hs[i - 1]) * 0.25) i--; if (v < -0.35 && i > 0 && i === i0) i--; }
+    setDrawer(order[i]);
+  };
+  grip.addEventListener('pointerup', up);
+  grip.addEventListener('pointercancel', up);
 }
 document.body.dataset.drawer = drawer;
+// (⚙: the section in focus made your own; again, back)
+$('tune').addEventListener('click', () => setDrawer(drawer === 'full' ? 'focus' : 'full'));
+addEventListener('resize', () => layoutDrawer());
+// (how tall the drawer is, for what sits just above it: the pinned note, the notes line. Not the scene: that's fixed)
+new ResizeObserver(() => document.body.style.setProperty('--drawer', `${$('bench').getBoundingClientRect().height}px`)).observe($('bench'));
 function ui() {
   for (const k of KNOBS) knob(k);
   for (const b of Array.from($('methods').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.m === d.method);
   for (const b of Array.from($('fabrics').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.f === rec.fabric);
   for (const b of Array.from($('prints').children) as HTMLElement[]) {
     const k = Number(b.dataset.k); b.classList.toggle('on', k === rec.print);
-    drawSwatch(b.querySelector('canvas')!, k, rec.colour);
+    drawSwatch(b.querySelector('canvas')!, k, inksOf(rec));
   }
   for (const b of Array.from($('colours').children) as HTMLElement[]) {
     const k = Number(b.dataset.c); b.classList.toggle('on', k === rec.colour);
-    drawSwatch(b.querySelector('canvas')!, rec.print || 1, k);
+    drawSwatch(b.querySelector('canvas')!, rec.print || 1, COLOURWAYS[k].inks);
   }
-  for (const b of Array.from($('figtabs').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.sec === figSec);
+  for (const b of Array.from($('figtabs').children) as HTMLElement[]) if (b.dataset.sec) b.classList.toggle('on', b.dataset.sec === figSec);
+  if (mode === 'bench') customPanel();
   for (const sec of Array.from(document.querySelectorAll('.figsec')) as HTMLElement[]) sec.classList.toggle('on', sec.dataset.sec === figSec);
   // (closed, the handle says what's chosen)
   $('gripsum').textContent = mode === 'table' ? `${TOOLS.find((t) => t.id === paper.tool)!.label} · ${rec.moves.length ? `${rec.moves.length} move${rec.moves.length > 1 ? 's' : ''}` : 'the block'}` : `${fabricById(rec.fabric).name} · ${PRINTS[rec.print]} · ${COLOURWAYS[rec.colour % COLOURWAYS.length].name}`;
@@ -208,16 +332,17 @@ function ui() {
   const bad = sk.checks.filter((c) => !c.ok);
   if (bad.length) notes.textContent += ` · ✗ ${bad.map((c) => c.name).join(', ')}`;
   // (the pattern pinned up by the figure: the cloth on it only if it's shown on the table too)
-  const pr = makePrint(rec.print, rec.colour);
+  const pr = printOf(rec);
   if (mode === 'bench') {
     drawSheet(card, sk, paper.cloth ? pr : null, true);
     $('note').title = `${describe(rec)}: ${sk.m.length.toFixed(0)} cm long, hem ${sk.m.hem.toFixed(0)} cm round. Take it to the cutting table`;
   }
   $('cloth').classList.toggle('on', paper.cloth);
   if (sheetOn) drawSheet(sheet, sk, paper.cloth ? pr : null);
+  layoutDrawer();
 }
-function drawSwatch(cv: HTMLCanvasElement, kind: number, colour: number) {
-  const c = cv.getContext('2d')!, inks = COLOURWAYS[colour].inks;
+function drawSwatch(cv: HTMLCanvasElement, kind: number, inks: readonly string[]) {
+  const c = cv.getContext('2d')!;
   c.fillStyle = inks[0]; c.fillRect(0, 0, 56, 40); c.fillStyle = inks[1];
   if (kind === 1) for (let x = 0; x < 56; x += 12) c.fillRect(x, 0, 4, 40);
   if (kind === 2) { c.globalAlpha = 0.5; for (let x = 0; x < 56; x += 12) { c.fillRect(x, 0, 6, 40); c.fillRect(0, x, 56, 6); } c.globalAlpha = 1; }
@@ -402,8 +527,11 @@ $('note').addEventListener('click', toTable);
 $('hang').addEventListener('click', () => hangUp());
 
 // ─── turning round it, and along the rails ─────────────────────────────────────────────────────
-const BENCH_VIEW = { az: Number(qs.get('az') ?? -0.5), el: Number(qs.get('el') ?? 0.1), dist: Number(qs.get('dist') ?? 290), target: [0, Number(qs.get('ty') ?? 62), 0] as [number, number, number] };
-const view = { ...BENCH_VIEW, target: [...BENCH_VIEW.target] as [number, number, number] };
+const BENCH_VIEW = { az: Number(qs.get('az') ?? -0.5), el: Number(qs.get('el') ?? 0.1), dist: Number(qs.get('dist') ?? 330), target: [0, Number(qs.get('ty') ?? 62), 0] as [number, number, number] };
+/** how much of the bottom of the screen each place keeps for its drawer (css px), whatever state it's in: the scene's
+ * drawn centred above that, by moving the lens, so opening or closing the drawer never moves or resizes the room */
+const RESERVE: Record<Mode, number> = { rails: 0, bench: 170, table: 300 };
+const view = { ...BENCH_VIEW, target: [...BENCH_VIEW.target] as [number, number, number], shift: RESERVE[qs.get('at') === 'table' && mode === 'bench' ? 'table' : mode] / Math.max(1, innerHeight) };
 /** crossing the room, between the rails and the bench: where from, and when it set off (1.2 s, eased) */
 let flying = 0, flyFrom = { ...view, target: [...view.target] as [number, number, number] }, flyT0 = 0;
 const aspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
@@ -477,8 +605,9 @@ function tableView() {
   // (sitting at the table: looking across it at the figure, down onto the paper; the piece filling the open part of the
   // screen above the drawer, the figure standing behind it)
   const b = paper.bounds(), lx = ((b.x0 + b.x1) / 2 - SHEET_W / 2) / paper.sc, lz = ((b.y0 + b.y1) / 2 - SHEET_H / 2) / paper.sc;
-  const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.4, (canvas.clientWidth - 76) / Math.max(1, canvas.clientHeight));
-  const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3)) * 1.5);
+  const H = Math.max(1, canvas.clientHeight), open = Math.max(0.3, (H - RESERVE.table) / H);
+  const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.3, (canvas.clientWidth - 76) / H);
+  const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3) * open) * 1.5);
   // (and over to the right, by half the palette's width: so the piece sits in the open part of the screen, left of it)
   const pal = ($('palette').getBoundingClientRect().width || 0) + 10, shift = (pal / 2) * ((2 * dist * Math.tan(0.3)) / Math.max(1, canvas.clientHeight));
   return { az: TABLE.rot, el, dist, target: tableToRoom(lx + shift, lz - d * 0.35) };
@@ -710,10 +839,12 @@ function frame(now: number) {
   const dpr = Math.min(devicePixelRatio || 1, 2), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const items: Item[] = room.items();
-  if (cloth) items.push({ cloth, look: { fabric: fabricById(rec.fabric), print: makePrint(rec.print, rec.colour) } });
+  if (cloth) items.push({ cloth, look: { fabric: fabricOf(rec), print: printOf(rec) } });
   const r0 = performance.now();
   const fit = room.fittings();
   if (paper.version > 0) fit.paper = { canvas: paper.cv, version: paper.version, model: sheetModel() };
+  const shiftGoal = RESERVE[mode] / Math.max(1, canvas.clientHeight);
+  view.shift += (shiftGoal - view.shift) * Math.min(1, dt * 6);
   lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, fit).vp;
   renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
   frames++; framesWindow++; wallWindow += raw; wallTime += raw;

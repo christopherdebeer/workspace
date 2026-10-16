@@ -41,6 +41,47 @@
   ]
  },
  {
+  "group": "The drawer",
+  "views": [
+   {
+    "name": "drawer-closed",
+    "title": "Closed",
+    "caption": "its handle, and what's chosen in a line",
+    "file": "v-drawer-closed.jpg"
+   },
+   {
+    "name": "drawer-drag",
+    "title": "Drawn up",
+    "caption": "the drawer follows the finger: what's below comes into view before it's let go",
+    "file": "v-drawer-drag.jpg"
+   },
+   {
+    "name": "custom-fabric",
+    "title": "Your own cloth",
+    "caption": "expanded: the swatch's measured qualities, dial by dial; the skirt settles again",
+    "file": "v-custom-fabric.jpg"
+   },
+   {
+    "name": "custom-print",
+    "title": "Your own print",
+    "caption": "how big it's printed",
+    "file": "v-custom-print.jpg"
+   },
+   {
+    "name": "custom-colour",
+    "title": "Your own palette",
+    "caption": "its three inks, each picked",
+    "file": "v-custom-colour.jpg"
+   },
+   {
+    "name": "table-full",
+    "title": "The table's, expanded",
+    "caption": "the tool's gestures and what it's set to, under its history",
+    "file": "v-table-full.jpg"
+   }
+  ]
+ },
+ {
   "group": "The hand",
   "views": [
    {

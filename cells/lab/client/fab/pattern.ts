@@ -60,7 +60,11 @@ export interface Pair { a: At; b: At; why: 'side seam' | 'dart' | 'pleat' }
 export interface Hold { at: At; s: number; y: number }
 export interface Check { name: string; ok: boolean; detail: string }
 /** a skirt as made: its length, panels, grain (degrees off straight), cloth, print, and the moves made on a panel */
-export interface Recipe { length: number; panels: number; grain: number; fabric: string; print: number; colour: number; moves: Move[] }
+export interface Recipe {
+  length: number; panels: number; grain: number; fabric: string; print: number; colour: number; moves: Move[];
+  /** made one's own: the cloth's qualities changed from its swatch's, the palette's inks, the print's scale */
+  cloth?: Partial<import('./fabric').Fabric>; inks?: [string, string, string]; printScale?: number;
+}
 export interface Skirt {
   recipe: Recipe; pieces: Piece[]; pairs: Pair[]; holds: Hold[];
   band: number; notes: string[]; checks: Check[];
