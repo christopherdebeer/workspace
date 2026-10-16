@@ -1,0 +1,112 @@
+[
+ {
+  "group": "The title",
+  "views": [
+   {
+    "name": "title",
+    "title": "The title",
+    "caption": "its name in dough over the first place; the dumpling and the jelly, to play with",
+    "file": "v-title.jpg"
+   },
+   {
+    "name": "title-stretch",
+    "title": "Pulled, on the title",
+    "caption": "it stretches after the finger and springs back: where to feel how each gives",
+    "file": "v-title-stretch.jpg"
+   }
+  ]
+ },
+ {
+  "group": "A flick",
+  "views": [
+   {
+    "name": "start",
+    "title": "At the start",
+    "caption": "the dumpling on its cloth; the next top ahead",
+    "file": "v-start.jpg"
+   },
+   {
+    "name": "aim",
+    "title": "Pulled back",
+    "caption": "drawn out where it's held, wound up; the arc and the ring where it'll land",
+    "file": "v-aim.jpg"
+   },
+   {
+    "name": "air",
+    "title": "In the air",
+    "caption": "its middle flies the arc it was shown",
+    "file": "v-air.jpg"
+   },
+   {
+    "name": "landed",
+    "title": "Landed",
+    "caption": "squashed wide where it came down, and righting itself",
+    "file": "v-landed.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The places",
+  "views": [
+   {
+    "name": "place-1",
+    "title": "The Preparation Table",
+    "caption": "level 1, as it opens",
+    "file": "v-place-1.jpg"
+   },
+   {
+    "name": "place-5",
+    "title": "The Counter by the Window",
+    "caption": "level 5, as it opens",
+    "file": "v-place-5.jpg"
+   },
+   {
+    "name": "place-9",
+    "title": "The Sink",
+    "caption": "level 9, as it opens",
+    "file": "v-place-9.jpg"
+   },
+   {
+    "name": "place-13",
+    "title": "The Stovetop",
+    "caption": "level 13, as it opens",
+    "file": "v-place-13.jpg"
+   },
+   {
+    "name": "place-17",
+    "title": "The Whole Kitchen",
+    "caption": "level 17, as it opens",
+    "file": "v-place-17.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Benches",
+  "views": [
+   {
+    "name": "bench-jelly",
+    "title": "Three jellies",
+    "caption": "?bench=jelly",
+    "file": "v-bench-jelly.jpg"
+   },
+   {
+    "name": "bench-coats",
+    "title": "Coatings",
+    "caption": "?bench=coats",
+    "file": "v-bench-coats.jpg"
+   },
+   {
+    "name": "bench-look",
+    "title": "A still life",
+    "caption": "?bench=look",
+    "file": "v-bench-look.jpg"
+   },
+   {
+    "name": "bench-breakfast",
+    "title": "The Breakfast Counter",
+    "caption": "?bench=breakfast",
+    "file": "v-bench-breakfast.jpg"
+   }
+  ]
+ }
+]

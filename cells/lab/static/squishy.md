@@ -23,6 +23,9 @@ the jelly's yours once the sink's last level, 12, has been). `?lab` opens everyt
 dumpling either way, at the foot of the glass. In play, the word `menu` at the bottom pauses the level behind the menu (nothing moves, the clock stops): *Resume* goes back to it, Settings changes apply when you do, and *Leave the level* goes to the title. (A link to a
 level, `?level=3`, goes straight to it.)
 
+![the title](squishy/v-title.jpg)
+![pulled, on the title: it stretches after the finger](squishy/v-title-stretch.jpg)
+
 Settings also has the **aim**, on a continuum: *easy*, the arc (dots along the flick, all the way) and the
 ring where it'll land; *normal*, the arc only, strong where it leaves and fading to nothing a little past its top,
 the way it's going and how high but not where it ends (the camera still swings to take in where it'll come
@@ -54,6 +57,11 @@ for a top further on, cream for one already reached, red for nowhere (the floor)
 the glass shows how hard. Its middle flies a true parabola, so the arc is exact up to where it
 touches something. You can only flick from something, but a flick let go in the air waits a
 moment (a third of a second) and goes as it touches.
+
+![at the start: the dumpling on its cloth, the jelly ahead](squishy/v-start.jpg)
+![pulled back: drawn out where it's held, the arc and the ring](squishy/v-aim.jpg)
+![in the air, on the arc it was shown](squishy/v-air.jpg)
+![landed on the jelly](squishy/v-landed.jpg)
 
 A hold on the dumpling is one gesture or the other: once the finger's gone a little way (18 px),
 it's a pull (a flick) or a push (a roll), by which way it went first, and it stays that till you
@@ -133,6 +141,8 @@ level in a place isn't the last again.
 
 ## The Preparation Table
 
+![The Preparation Table, level 1](squishy/v-place-1.jpg)
+
 A wooden table in the middle of a room, its top the fall. You start on a folded cloth on a stack of
 cookbooks. Its pieces: a ramekin, and a wooden spoon laid from it up onto a painted tin bench (land in
 the spoon's bowl, it catches you, and go up its handle), a tea towel thrown over one end of the bench
@@ -149,6 +159,8 @@ under them, met exactly as they're drawn. The table, the bench, the board and th
 shapes everything else is made of.
 
 ## The Counter by the Window
+
+![The Counter by the Window, level 5](squishy/v-place-5.jpg)
 
 A butcher-block counter against a tiled wall with windows in it, the counter the fall. You start on a
 folded cloth on a biscuit tin. Its pieces: bread in a woven bread basket on two flour canisters (a
@@ -169,6 +181,8 @@ below. Every hop is checked as it's laid, the towel's too: a flick from the brea
 against the towel, low enough to hold and high enough that a climb from there gets up and over.
 
 ## The Sink
+
+![The Sink, level 9](squishy/v-place-9.jpg)
 
 The counter round a steel sink, the windows over it; the counter's the fall, and so's the water. You
 start on a folded dishcloth on an upturned pudding basin. Its pieces: a sponge up on something (soft,
@@ -214,6 +228,9 @@ and for playing itself), and the way the opening view goes over it.
 - **Chopsticks**, now and then, laid as a bridge between two tops near the same height.
 
 ## The kitchen, from the stovetop on
+
+![The Stovetop, level 13](squishy/v-place-13.jpg)
+![The Whole Kitchen, level 17](squishy/v-place-17.jpg)
 
 From the stovetop on, a level is a run along a counter (the hob, on the stove) against a tiled
 wall with windows in it, made of pieces, each laid where the last left off: one thing at the
@@ -656,6 +673,24 @@ was the cap, and it goes back up and stays. `?perf` shows where it's got to: sam
 
 The cost is in shading, not geometry: a level is 15 to 35 thousand triangles; it's the pixels, each of them shaded
 through the lit, see-through, glowing passes, that make a frame heavy.
+
+### Pictures
+
+Every picture here is made by playing the page: `node cells/lab/views.mjs squishy` (or name some), from the views
+registered in `client/squishy/views.mjs`. Each is fast-forwarded (`?fast=`) and drawn at full size; a flick's taken
+with the finger still down, or the moment it's off the ground. The whole set is under **pictures** at the top of this
+page; here, each is where it's talked about. (The benches: `?bench=jelly`, `coats`, `look`, `breakfast`.)
+
+![three jellies](squishy/v-bench-jelly.jpg)
+![coatings](squishy/v-bench-coats.jpg)
+![a still life](squishy/v-bench-look.jpg)
+![the breakfast counter](squishy/v-bench-breakfast.jpg)
+
+### Before a deploy
+
+`node cells/lab/devtools/squishy-smoke.mjs` (about a minute): the title, the first level of every place (the
+flythrough cut short, the dumpling at rest on its start, on the screen, able to be flicked) and a bench, each opened
+and nothing thrown. Then, when the physics or the page has changed, the two below.
 
 ### Tests
 
