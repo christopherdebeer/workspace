@@ -87,9 +87,16 @@ function top(d: Dials): Garment {
       flat: (u, v) => { const y = yTop - dip(u) - v * (L - dip(u)); return [(u - 0.5) * half(y), y - yTop]; },
       start: (u, v) => {
         // (above the underarm, its sides drawn round to the front and back of the shoulder, clear of the arm)
-        const y = yTop - dip(u) - v * (L - dip(u)), span = Math.PI * lerp(1, 0.62, clamp01((y - (yTop - arm)) / arm));
+        // (the armhole an oval round the arm's root: its sides meet the back's at the shoulder point and under the arm,
+        // and bow out to the front and back between)
+        const y = yTop - dip(u) - v * (L - dip(u)), t = clamp01((yTop - y) / arm), span = Math.PI * (1 - 0.36 * Math.sin(Math.PI * t));
         const a = front ? (u - 0.5) * span : Math.PI - (0.5 - u) * span;
-        return around(Math.min(y, 90), a, 2.2 + d.silhouette * 3 * v);
+        const p = around(Math.min(y, 90), a, 2.2 + d.silhouette * 3 * v);
+        // (and its shoulders laid over the shoulders, front and back meeting on top, where they're held)
+        const w = clamp01((Math.abs(u - 0.5) - 0.14) / 0.06) * clamp01(1 - (yTop - y) / 4);
+        if (w <= 0) return p;
+        const r = onShoulder(front ? (u - 0.5) * shoulderW : (0.5 - u) * shoulderW, front, 1.4);
+        return [lerp(p[0], r[0], w), lerp(p[1], r[1], w), lerp(p[2], r[2], w)];
       },
       // (held at its shoulder seams, on the shoulders, as on a hanger; the neckline and the rest hang from there)
       pin: (u, v) => (v === 0 && (u <= 0.3 || u >= 0.7) ? onShoulder(front ? (u - 0.5) * shoulderW : (0.5 - u) * shoulderW, front, 1.4) : null),
