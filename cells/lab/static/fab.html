@@ -78,19 +78,34 @@
     .swatch.on span, .print.on canvas { outline-color: var(--rose); }
 
     /* the paper, its tools, its history (and the dials instead, with ?ui=dials) */
-    body:not(.dials) #methods, body:not(.dials) #knobs, body.dials #tools, body.dials #toolhint, body.dials #history { display: none !important; }
-    #tools { display: flex; gap: 6px; align-items: stretch; margin-bottom: 8px; }
-    #toolset { display: flex; flex: 1; padding: 3px; gap: 2px; border-radius: 14px; background: var(--paper2); }
-    .tool { all: unset; flex: 1; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 5px 2px 4px; border-radius: 11px; font-family: var(--serif); font-size: 12px; color: var(--ink2); }
-    .tool svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    body:not(.dials) #methods, body:not(.dials) #knobs, body.dials #tools, body.dials #gestures, body.dials #toolctl, body.dials #palette, body.dials #history { display: none !important; }
+    /* the tools: a palette down the right of the table; the drawer, what the one in hand does and what it's set to */
+    #palette { position: absolute; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 96px); display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 18px; background: var(--glass); box-shadow: var(--lift); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); z-index: 4; }
+    .tool { all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; width: 56px; padding: 7px 0 5px; border-radius: 14px; font-family: var(--serif); font-size: 12px; color: var(--ink2); }
+    .tool svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .tool.on { background: var(--rose2); color: #8a2638; }
-    .stepper { display: flex; align-items: center; gap: 2px; background: var(--paper2); border-radius: 14px; padding: 3px; }
+    #tools { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+    #toolhead { flex: 1; min-width: 0; display: grid; }
+    #toolname { font-family: var(--serif); font-size: 20px; font-weight: 700; line-height: 1.1; }
+    #toolwhat { font-size: 12px; font-weight: 600; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* (the same height whichever tool's in hand: so the room's view doesn't jump as the drawer would) */
+    #gestures { display: grid; gap: 4px; margin-bottom: 8px; min-height: 86px; align-content: start; }
+    .gest { display: flex; align-items: center; gap: 8px; font-family: var(--serif); font-size: 14px; color: var(--ink); }
+    .gest svg { flex: none; width: 26px; height: 26px; fill: none; stroke: var(--rose); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .gest i { font-style: normal; font-family: var(--round); font-size: 11px; font-weight: 700; color: var(--ink3); margin-left: auto; white-space: nowrap; }
+    #toolctl { display: flex; gap: 6px 8px; flex-wrap: wrap; align-content: start; margin-bottom: 8px; min-height: 70px; }
+    .ctl { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: 14px; background: var(--paper2); font-size: 11px; font-weight: 700; color: var(--ink3); }
+    .ctl b { font-family: var(--serif); font-size: 15px; font-weight: 600; color: var(--ink); min-width: 46px; text-align: center; }
+    .ctl b:empty { display: none; }
+    .ctl button { all: unset; cursor: pointer; width: 26px; height: 26px; border-radius: 999px; text-align: center; line-height: 26px; font-size: 16px; background: #fffdf8; box-shadow: var(--lift); color: var(--ink); }
+    .ctl button.word { width: auto; padding: 0 9px; font-family: var(--serif); font-size: 13px; }
+    .ctl button.on { background: var(--dark); color: #fbf3e6; }
+    .stepper { flex: none; display: flex; align-items: center; gap: 2px; background: var(--paper2); border-radius: 14px; padding: 3px; }
     .stepper button, #undo { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 999px; text-align: center; line-height: 28px; font-size: 18px; background: #fffdf8; box-shadow: var(--lift); }
     .stepper b { display: flex; flex-direction: column; align-items: center; font-family: var(--serif); font-size: 17px; font-weight: 600; line-height: 1; min-width: 34px; }
     .stepper b i { font-style: normal; font-family: var(--round); font-size: 9px; font-weight: 700; color: var(--ink3); margin-top: 2px; }
-    #undo { width: auto; height: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px; border-radius: 14px; font-family: var(--serif); font-size: 12px; line-height: 1.1; background: var(--paper2); box-shadow: none; }
+    #undo { flex: none; width: auto; height: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px; border-radius: 14px; font-family: var(--serif); font-size: 12px; line-height: 1.1; background: var(--paper2); box-shadow: none; }
     #undo svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    #toolhint { font-family: var(--serif); font-size: 13px; color: var(--ink2); text-align: center; margin: 2px 0 8px; min-height: 16px; }
     #history { margin-bottom: 0; min-height: 30px; align-items: center; }
     #history .chip { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 13px; padding: 5px 11px; border-radius: 999px; background: #fffdf8; box-shadow: inset 0 0 0 1px rgba(60,40,20,.14); }
     #history .chip:last-child { box-shadow: inset 0 0 0 1.5px var(--rose); }
@@ -149,13 +164,15 @@
         <div class="hints"><span><svg viewBox="0 0 20 20"><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3"/></svg>slide along the rail</span><span><svg viewBox="0 0 20 20"><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3"/></svg>swipe for another rail</span><span><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2"/></svg>tap the front one</span></div>
       </div>
     </div>
+    <div id="palette" class="tableonly"></div>
     <div id="toast"></div>
   </div>
   <div id="bench">
     <div class="row" id="methods"></div>
     <div id="knobs"></div>
-    <div id="tools" class="cutonly"><div id="toolset"></div><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo"><svg viewBox="0 0 24 24"><path d="M9 7L5 11l4 4"/><path d="M5 11h9a5 5 0 010 10h-2"/></svg>undo</button></div>
-    <div id="toolhint" class="cutonly"></div>
+    <div id="tools" class="cutonly"><div id="toolhead"><b id="toolname"></b><span id="toolwhat"></span></div><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo"><svg viewBox="0 0 24 24"><path d="M9 7L5 11l4 4"/><path d="M5 11h9a5 5 0 010 10h-2"/></svg>undo</button></div>
+    <div id="gestures" class="cutonly"></div>
+    <div id="toolctl" class="cutonly"></div>
     <div class="row cutonly" id="history"></div>
     <div class="lab figdrawer">fabric</div>
     <div class="row figdrawer" id="fabrics"></div>

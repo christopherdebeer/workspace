@@ -306,7 +306,7 @@ The workshop is one room, and the camera walks between three places in it. They'
 |---|---|---|---|
 | **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure | |
 | **the figure** | on its stand, in the middle | cloth and print | **twirl** and **sew** (icons), **save to rail** |
-| **the cutting table** | to one side, facing the figure | the tools, panels, undo, the history | **cloth**, **pattern**, **save to rail**, notes |
+| **the cutting table** | to one side, facing the figure | the tool in hand: what it does, the gestures it answers to, what it's set to; panels, undo, the history (the tools themselves are a palette down the right) | **cloth**, **pattern**, **save to rail**, notes |
 
 **Every place can be reached by tapping it.** From any of the three, tap another where it stands in the room (a
 rail, the figure, the cutting table) and the camera walks there. It's one list in the code (`PLACES` in `main.ts`):

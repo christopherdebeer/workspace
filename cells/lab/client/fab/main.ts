@@ -160,9 +160,9 @@ function ui() {
     drawSwatch(cv, k, rec.colour);
   }
   // (the paper, its tools, and the history of what's been done to it)
-  for (const b of Array.from($('tools').querySelectorAll('[data-tool]')) as HTMLElement[]) b.classList.toggle('on', b.dataset.tool === paper.tool);
+  for (const b of Array.from($('palette').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.tool === paper.tool);
   $('panelsn').textContent = String(rec.panels);
-  $('toolhint').textContent = TOOLS.find((t) => t.id === paper.tool)!.hint;
+  toolPanel();
   const hist = $('history'); hist.innerHTML = '';
   if (!rec.moves.length) hist.innerHTML = '<span class="none">the block, as drafted: nothing done to it yet</span>';
   rec.moves.forEach((m, i) => {
@@ -201,7 +201,48 @@ for (const t of TOOLS) {
   const b = document.createElement('button'); b.dataset.tool = t.id; b.className = 'tool';
   b.innerHTML = `<svg viewBox="0 0 40 40">${t.icon}</svg><span>${t.label}</span>`;
   b.addEventListener('click', () => { paper.tool = t.id; ui(); });
-  $('toolset').appendChild(b);
+  $('palette').appendChild(b);
+}
+// (the drawer at the table: the tool in hand, what it does, the gestures it answers to, and what it's set to)
+const G = {
+  tap: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5" stroke-dasharray="2.5 2.5"/>',
+  updown: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v4M9.5 5l2.5-2.5L14.5 5M12 21.5v-4M9.5 19l2.5 2.5 2.5-2.5"/>',
+  side: '<circle cx="12" cy="12" r="3"/><path d="M2.5 12h4M5 9.5L2.5 12 5 14.5M21.5 12h-4M19 9.5l2.5 2.5-2.5 2.5"/>',
+  turn: '<circle cx="12" cy="17" r="2.5"/><path d="M5 13a8 8 0 0114 0"/><path d="M16.5 10.5L19 13l2.5-2"/>',
+};
+const PANEL: Record<string, { name: string; what: string; gestures: Array<[keyof typeof G, string, string]> }> = {
+  hand: { name: 'Hand', what: 'shape the piece as it is', gestures: [['updown', 'drag the hem', 'longer · shorter'], ['turn', 'turn the grain arrow by its knob', 'straight → bias'], ['tap', 'tap a dart', 'flare → gathers → sewn']] },
+  scissors: { name: 'Slash', what: 'cut up from the hem and spread it open: flare', gestures: [['tap', 'touch the hem where to cut', 'anywhere along it'], ['side', 'drag sideways to open it', 'wider → fuller']] },
+  fold: { name: 'Fold', what: 'fold the waist into a pleat', gestures: [['tap', 'touch the waist where it goes', 'anywhere along it'], ['side', 'drag sideways to fold it', 'further → deeper']] },
+  thread: { name: 'Gather', what: 'add width at the waist and draw it in', gestures: [['tap', 'touch the waist where to add', 'anywhere along it'], ['side', 'drag sideways to add more', 'further → fuller']] },
+};
+function toolPanel() {
+  const t = PANEL[paper.tool];
+  $('toolname').textContent = t.name; $('toolwhat').textContent = t.what;
+  $('gestures').innerHTML = t.gestures.map(([g, w, i]) => `<div class="gest"><svg viewBox="0 0 24 24">${G[g]}</svg>${w}<i>${i}</i></div>`).join('');
+  // (what it's set to: the hand's length and grain, with steps; the others, what they've done so far)
+  const ctl = $('toolctl'); ctl.innerHTML = '';
+  // (a label and its value; − and + either side of it, or words to pick after it)
+  const box = (label: string, value: string, buttons: Array<[string, () => void, boolean?]>) => {
+    const el = document.createElement('div'); el.className = 'ctl'; el.append(label);
+    const btn = ([w, f, on]: [string, () => void, boolean?]) => { const b = document.createElement('button'); b.textContent = w; if (w.length > 1) b.className = `word${on ? ' on' : ''}`; b.addEventListener('click', () => { f(); make(); }); return b; };
+    const v = document.createElement('b'); v.textContent = value;
+    if (buttons.length === 2 && buttons[0][0] === '−') el.append(btn(buttons[0]), v, btn(buttons[1]));
+    else el.append(v, ...buttons.map(btn));
+    ctl.appendChild(el);
+  };
+  const ms = rec.moves, made = (k: Move['kind']) => ms.filter((m) => m.kind === k);
+  if (paper.tool === 'hand') {
+    box('length', `${rec.length} cm`, [['−', () => { rec = { ...rec, length: Math.max(12, rec.length - 1) }; }], ['+', () => { rec = { ...rec, length: Math.min(62, rec.length + 1) }; }]]);
+    box('grain', rec.grain === 0 || rec.grain === 45 ? '' : `${rec.grain}°`, [['straight', () => { rec = { ...rec, grain: 0 }; }, rec.grain === 0], ['bias', () => { rec = { ...rec, grain: 45 }; }, rec.grain === 45]]);
+    const sewn = sk.cut.strips.filter((x) => x.kind === 'dart').length, closed = made('close-dart').length, gathered = made('release-dart').length;
+    if (sewn + closed + gathered) box('darts', [sewn && `${sewn} sewn`, closed && `${closed} flared`, gathered && `${gathered} gathered`].filter(Boolean).join(' · '), []);
+  } else {
+    const k = paper.tool === 'scissors' ? 'spread' : paper.tool === 'fold' ? 'pleat' : 'gather', n = made(k).length;
+    const cm = made(k).reduce((a, m) => a + (m.kind === 'spread' ? m.open : m.kind === 'pleat' ? m.depth * 2 : m.kind === 'gather' ? m.add : 0), 0);
+    const noun = k === 'spread' ? ['slash', 'slashes', 'opened at the hem'] : k === 'pleat' ? ['pleat', 'pleats', 'folded in'] : ['gather', 'gathers', 'added'];
+    box('so far', n ? `${n} ${n === 1 ? noun[0] : noun[1]} · ${cm.toFixed(cm < 10 ? 1 : 0)} cm ${noun[2]}` : `none yet`, []);
+  }
 }
 $('panelsless').addEventListener('click', () => { rec = { ...rec, panels: Math.max(1, rec.panels - 1) }; make(); });
 $('panelsmore').addEventListener('click', () => { rec = { ...rec, panels: Math.min(10, rec.panels + 1) }; make(); });
@@ -399,9 +440,11 @@ function tableView() {
   // (sitting at the table: looking across it at the figure, down onto the paper; the piece filling the open part of the
   // screen above the drawer, the figure standing behind it)
   const b = paper.bounds(), lx = ((b.x0 + b.x1) / 2 - SHEET_W / 2) / paper.sc, lz = ((b.y0 + b.y1) / 2 - SHEET_H / 2) / paper.sc;
-  const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.4, aspect());
+  const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.4, (canvas.clientWidth - 76) / Math.max(1, canvas.clientHeight));
   const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3)) * 1.5);
-  return { az: TABLE.rot, el, dist, target: tableToRoom(lx, lz - d * 0.35) };
+  // (and over to the right, by half the palette's width: so the piece sits in the open part of the screen, left of it)
+  const pal = ($('palette').getBoundingClientRect().width || 0) + 10, shift = (pal / 2) * ((2 * dist * Math.tan(0.3)) / Math.max(1, canvas.clientHeight));
+  return { az: TABLE.rot, el, dist, target: tableToRoom(lx + shift, lz - d * 0.35) };
 }
 /** a touch on the screen as a ray into the room: from the near plane, `t` = 1 at the far one */
 type Ray = { o: [number, number, number]; d: [number, number, number] };
