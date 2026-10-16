@@ -276,13 +276,13 @@ Using the rails:
 - Drag the skirts along a rail and they slide like real hangers. They run on, slow down, and settle with one in front.
   They bunch up toward the bar's ends, and each swings on its hook as it's pushed.
 - Swipe up or down, or tap a name tag, to move to another rail.
-- Tap the skirt in front, or **put it on the figure**. It comes off its hanger, the camera crosses the room to the
+- Tap the skirt in front to put it on the figure. (On a bare hanger, **A New Creation** starts a new skirt from the block.) It comes off its hanger, the camera crosses the room to the
   bench, and the skirt is laid out flat and sewn onto the figure.
 - A person's rail starts with a bare hanger, for a new skirt.
 
 Saving:
 
-- **hang up** at the bench hangs the skirt back on its owner's rail. A skirt that came from the workshop's rail goes
+- **save to rail** at the bench hangs the skirt back on its owner's rail. A skirt that came from the workshop's rail goes
   on the rail in use instead, and if nobody has a rail yet, Fab asks whose it is.
 - Going back to the **rails** hangs it up too, if it's changed.
 - Long-press one of your own skirts to take it off the rail.
@@ -305,11 +305,12 @@ The workshop is one room, and the camera walks between three places in it. They'
 | place | where | its drawer | along the top |
 |---|---|---|---|
 | **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure | |
-| **the figure** | on its stand, in the middle | cloth and print | **twirl**, **sew**, **pattern**, **hang up** |
-| **the cutting table** | to one side, facing the figure | the tools, panels, undo, the history | **cloth**, **pattern**, **hang up** |
+| **the figure** | on its stand, in the middle | cloth and print | **twirl** and **sew** (icons), **save to rail** |
+| **the cutting table** | to one side, facing the figure | the tools, panels, undo, the history | **cloth**, **pattern**, **save to rail**, notes |
 
-**The pattern is pinned up beside the figure.** It's a little note with the pieces drawn on it, what the skirt is, how
-long, and how far round its hem is. Tap it to take it to the cutting table. It's redrawn with every change.
+**The pattern is pinned up beside the figure,** bottom right. It's a little note with the pieces drawn on it, what the skirt is, how
+long, and how far round its hem is. Tap it, or tap the cutting table itself where it stands in the room, to go to the table. It's redrawn with every
+change, and stays by the figure.
 
 **At the table, the figure's still across the room.** Tap it to go over to it. Drag across it to spin it on its stand: its
 front follows your finger, and a flick runs down on its own.

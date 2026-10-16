@@ -32,12 +32,14 @@
     #acts { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 46px); right: 10px; left: 10px; display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; z-index: 4; pointer-events: none; }
     #acts > * { all: unset; pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-family: var(--serif); font-size: 14px; padding: 6px 12px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); color: var(--ink); }
     #acts svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #acts > .icon { width: 34px; height: 34px; padding: 0; justify-content: center; }
+    #acts > .icon svg { width: 20px; height: 20px; }
     #acts #twirl { background: var(--rose); color: #fff6ee; }
     #acts #cloth.on { background: var(--dark); color: #fbf3e6; }
     body.sheet #acts #pattern { background: var(--dark); color: #fbf3e6; }
 
     /* the pattern, pinned up beside the figure: tap it to go to the cutting table */
-    #note { all: unset; position: absolute; right: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 92px); width: 116px; padding: 10px 10px 9px; background: #fbf7ee; border-radius: 3px; box-shadow: 0 2px 3px rgba(60,40,20,.12), 0 10px 24px rgba(60,40,20,.2); transform: rotate(2deg); cursor: pointer; z-index: 3; display: grid; gap: 2px; background-image: linear-gradient(rgba(120,150,170,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(120,150,170,.09) 1px, transparent 1px); background-size: 8px 8px; transition: transform .15s; }
+    #note { all: unset; position: absolute; right: 12px; bottom: 34px; width: 116px; padding: 10px 10px 9px; background: #fbf7ee; border-radius: 3px; box-shadow: 0 2px 3px rgba(60,40,20,.12), 0 10px 24px rgba(60,40,20,.2); transform: rotate(2deg); cursor: pointer; z-index: 3; display: grid; gap: 2px; background-image: linear-gradient(rgba(120,150,170,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(120,150,170,.09) 1px, transparent 1px); background-size: 8px 8px; transition: transform .15s; }
     #note:active { transform: rotate(2deg) scale(.97); }
     #note .pin { position: absolute; top: -5px; left: 50%; width: 11px; height: 11px; margin-left: -5px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #f2c46a, #b07a28); box-shadow: 0 2px 2px rgba(60,40,20,.35); }
     #note canvas { width: 96px; height: 104px; display: block; justify-self: center; }
@@ -46,7 +48,7 @@
     #note em { font-style: normal; font-size: 10.5px; font-weight: 800; color: var(--rose); margin-top: 3px; }
 
     /* what the cut found, over the scene: words with a soft halo, no card */
-    #notes { position: absolute; left: 14px; right: 14px; bottom: 30px; text-align: center; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
+    #notes { position: absolute; left: 14px; right: 140px; bottom: 30px; text-align: center; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
     #notes:empty { display: none; }
 
     /* the drawer: a sheet of paper drawn up over the room */
@@ -109,6 +111,7 @@
     #railcard { position: absolute; left: 14px; right: 14px; bottom: max(18px, env(safe-area-inset-bottom)); display: grid; gap: 4px; pointer-events: none; text-align: center; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 16px rgba(244,236,222,.85), 0 1px 0 rgba(255,250,240,.9); }
     #railcard b { font-family: var(--serif); font-size: 26px; font-weight: 700; color: #2e231a; letter-spacing: -.01em; }
     #railcard > span { font-family: var(--serif); font-size: 16px; color: #4f3f30; min-height: 20px; }
+    #railcard button[hidden] { display: none; }
     #railcard button { all: unset; pointer-events: auto; cursor: pointer; justify-self: center; display: inline-flex; align-items: center; gap: 10px; margin: 10px 0 6px; padding: 12px 24px; border-radius: 999px; background: var(--rose); color: #fff6ee; font-family: var(--serif); font-size: 18px; text-shadow: none; box-shadow: 0 4px 16px rgba(140,40,55,.32); }
     #railcard button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     #railcard .hints { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; font-size: 11.5px; font-weight: 700; color: #5d4b38; }
@@ -120,8 +123,8 @@
     /* three places in the room: the rails, the figure, the cutting table; each its own drawer */
     body.rails .figonly, body.table .figonly, body:not(.table) .tableonly, body:not(.table) .cutonly { display: none !important; }
     body.table canvas#gl { cursor: crosshair; }
-    body.table .figdrawer { display: none !important; }
-    body.table #notes { bottom: 30px; }
+    body.table .figdrawer, body.table #note { display: none !important; }
+    body.table #notes { right: 14px; }
     #perf { position: absolute; left: 10px; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 84px); z-index: 6; font: 600 11px ui-monospace, Menlo, monospace; color: #3b2f24; background: rgba(255,250,240,.8); border-radius: 8px; padding: 4px 8px; pointer-events: none; }
   </style>
 </head>
@@ -133,16 +136,16 @@
     <div id="notes"></div>
     <nav><a href="/" class="back railsonly">←</a><span class="title">Fab</span><div id="places"><button data-place="rails">rails</button><button data-place="bench">figure</button><button data-place="table">table</button></div></nav>
     <div id="acts" class="benchonly">
-      <button id="twirl" class="figonly">twirl</button>
-      <button id="sew" class="figonly">sew</button>
+      <button id="twirl" class="figonly icon" aria-label="twirl" title="twirl"><svg viewBox="0 0 20 20"><path d="M10 3.5a2 2 0 110 .01M7 17l1.5-6h3L13 17M8.5 11L6 8M11.5 11L14 8"/><path d="M3.5 13.5c-1.5-2.5.5-5 3-5.8M16.5 13.5c1.5-2.5-.5-5-3-5.8"/><path d="M15.2 15.8l1.3-2.3 1.8 1.8"/></svg></button>
+      <button id="sew" class="figonly icon" aria-label="sew it up again" title="sew it up again"><svg viewBox="0 0 20 20"><path d="M15.5 2.5L5 13l-1.5 4.5L8 16 18.5 5.5z"/><circle cx="15.2" cy="4.8" r=".9"/><path d="M3.5 17.5c2 0 2-2 4-2s2 2 4 2 2-2 4-2"/></svg></button>
       <button id="cloth" class="tableonly" title="show the cloth on the pattern"><svg viewBox="0 0 20 20"><path d="M3 5l7-2 7 2v10l-7 2-7-2z"/><path d="M3 5l7 2 7-2M10 7v10"/></svg>cloth</button>
-      <button id="pattern"><svg viewBox="0 0 20 20"><rect x="3" y="2.5" width="14" height="15" rx="1.5"/><path d="M6 6h8M6 9.5h8M6 13h5"/></svg>pattern</button>
-      <button id="hang"><svg viewBox="0 0 20 20"><path d="M10 6.5a2 2 0 112-2M10 6.5v1.5L2.5 14h15L10 8"/></svg>hang up</button>
-      <a href="{{readme}}"><svg viewBox="0 0 20 20"><path d="M4 3h9l3 3v11H4z"/><path d="M7 8h6M7 11h6M7 14h4"/></svg>notes</a>
+      <button id="pattern" class="tableonly"><svg viewBox="0 0 20 20"><rect x="3" y="2.5" width="14" height="15" rx="1.5"/><path d="M6 6h8M6 9.5h8M6 13h5"/></svg>pattern</button>
+      <button id="hang"><svg viewBox="0 0 20 20"><path d="M10 6.5a2 2 0 112-2M10 6.5v1.5L2.5 14h15L10 8"/></svg>save to rail</button>
+      <a href="{{readme}}" class="tableonly"><svg viewBox="0 0 20 20"><path d="M4 3h9l3 3v11H4z"/><path d="M7 8h6M7 11h6M7 14h4"/></svg>notes</a>
     </div>
     <div id="railui">
       <div id="railtags"></div>
-      <div id="railcard"><b id="railname"></b><span id="railwhat"></span><button id="wear"><svg viewBox="0 0 24 24"><path d="M12 8a2.4 2.4 0 112.4-2.4M12 8v1.6L3 17h18l-9-7.4"/></svg><span id="wearword">put it on the figure</span><svg viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></svg></button>
+      <div id="railcard"><b id="railname"></b><span id="railwhat"></span><button id="wear" hidden><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/></svg><span>A New Creation</span><svg viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></svg></button>
         <div class="hints"><span><svg viewBox="0 0 20 20"><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3"/></svg>slide along the rail</span><span><svg viewBox="0 0 20 20"><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3"/></svg>swipe for another rail</span><span><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2"/></svg>tap the front one</span></div>
       </div>
     </div>

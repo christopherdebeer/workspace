@@ -258,11 +258,12 @@ function railInfo() {
   const st = room.states[room.active], h = room.frontHung();
   lastFront = room.front();
   $('railname').textContent = st ? railName(st.rail) : '';
+  // (the button's only for a bare hanger, to start something new; a skirt's put on by tapping it)
+  $('wear').hidden = !h || !!h.g;
   if (!h) { $('railwhat').textContent = ''; return; }
-  if (!h.g) { $('railwhat').textContent = 'a bare hanger: start a new skirt'; $('wearword').textContent = 'start one'; return; }
+  if (!h.g) { $('railwhat').textContent = 'a bare hanger: start a new skirt'; return; }
   const g = recipeOf(h.g);
   $('railwhat').textContent = `${describe(g)} in ${fabricById(g.fabric).name}${g.print ? `, ${PRINTS[g.print]}` : ''}`;
-  $('wearword').textContent = 'put it on the figure';
 }
 function showRail(k: number) {
   if (!room.states.length) return;
@@ -366,6 +367,8 @@ canvas.addEventListener('pointermove', (e) => {
 });
 canvas.addEventListener('pointerup', (e) => {
   drag = false; clearTimeout(press);
+  // (at the figure, a tap on the cutting table (its paper, or the top it lies on) goes over to it)
+  if (mode === 'bench' && performance.now() - st0 < 450 && Math.hypot(e.clientX - sx, e.clientY - sy) < 10 && onTable(e.clientX, e.clientY)) { toTable(); return; }
   if (mode !== 'rails') return;
   if (room.dragging) { room.dragging = false; if (performance.now() - lastMove > 90) room.states[room.active].vel = 0; return; }
   if (axis === 'y') { const dy = e.clientY - sy; if (Math.abs(dy) > 40) showRail(room.active + (dy < 0 ? 1 : -1)); return; }
@@ -399,6 +402,13 @@ function tableView() {
   const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.4, aspect());
   const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3)) * 1.5);
   return { az: TABLE.rot, el, dist, target: tableToRoom(lx, lz - d * 0.35) };
+}
+/** is a touch on the tabletop (seen from anywhere)? */
+function onTable(clientX: number, clientY: number) {
+  const q = onSheet(clientX, clientY);
+  if (!q) return false;
+  const lx = (q[0] - SHEET_W / 2) / paper.sc, lz = (q[1] - SHEET_H / 2) / paper.sc;
+  return Math.abs(lx) < TABLE.w / 2 && lz > -TABLE.d / 2 && lz < TABLE.d / 2 + TABLE.near;
 }
 /** a touch on the screen, cast down onto the table: where it lands on the paper's sheet, in its pixels */
 function onSheet(clientX: number, clientY: number): [number, number] | null {
