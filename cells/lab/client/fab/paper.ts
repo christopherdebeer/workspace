@@ -52,6 +52,8 @@ export class Paper {
   k = 1;
   /** goes up whenever it's drawn: whoever shows it knows to take it again */
   version = 0;
+  /** the cloth's print laid on the piece (off: the piece as plain pattern paper, its marks easier to see) */
+  cloth = false;
   private drag: null | { kind: 'hem' | 'grain' | 'spread' | 'pleat' | 'gather'; x0: number; y0: number; at: number; start: Recipe } = null;
   /** the move being made, drawn and worn before it's let go */
   preview: Recipe | null = null;
@@ -192,9 +194,14 @@ export class Paper {
     for (let j = n - 1; j >= 0; j--) add(panel.ribs[j].bottom, i++);
     for (let t = 9; t > 0; t--) add(ribAt(panel.ribs[0], t / 10), i++);
     path.closePath();
-    const fill = tile(ctx, makePrint(r.print, r.colour), sc), g = (r.grain * Math.PI) / 180;
-    if (typeof fill !== 'string') { const o = this.toScreen([0, 0]); fill.setTransform(new DOMMatrix([Math.cos(-g), Math.sin(-g), -Math.sin(-g), Math.cos(-g), o[0], o[1]])); }
-    ctx.save(); ctx.globalAlpha = 0.8; ctx.fillStyle = fill; ctx.fill(path); ctx.restore();
+    if (this.cloth) {
+      const fill = tile(ctx, makePrint(r.print, r.colour), sc), g = (r.grain * Math.PI) / 180;
+      if (typeof fill !== 'string') { const o = this.toScreen([0, 0]); fill.setTransform(new DOMMatrix([Math.cos(-g), Math.sin(-g), -Math.sin(-g), Math.cos(-g), o[0], o[1]])); }
+      ctx.save(); ctx.globalAlpha = 0.8; ctx.fillStyle = fill; ctx.fill(path); ctx.restore();
+    } else {
+      // (plain tissue, a shade lighter than the sheet and lifted off it a little)
+      ctx.save(); ctx.shadowColor = 'rgba(60,40,20,.22)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4; ctx.fillStyle = '#fffcf4'; ctx.fill(path); ctx.restore();
+    }
     ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = 4; ctx.stroke(path);
     // (how it was made: wedges shaded with their slashes dashed; pleats' fold lines; darts' legs; gathers' running stitch)
     const R = (k: number, s: number) => this.toScreen(ribAt(panel.ribs[k], s));

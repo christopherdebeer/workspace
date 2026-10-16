@@ -6,103 +6,157 @@
   <meta name="theme-color" content="#ddd0bd">
   <title>Fab</title>
   <style>
+    :root {
+      --ink: #3b2f24; --ink2: #6b5a46; --ink3: #9a8770;
+      --paper: #fbf6ec; --paper2: #f3ebdd; --glass: rgba(251,246,236,.86);
+      --rose: #d9536b; --rose2: #f6d6d9; --dark: #42342a;
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+      --round: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, sans-serif;
+      --lift: 0 1px 2px rgba(60,40,20,.12), 0 4px 14px rgba(60,40,20,.12);
+    }
     html, body { margin: 0; height: 100%; background: #ddd0bd; overflow: hidden; touch-action: none; }
-    body { color: #4a3826; font-family: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, sans-serif; -webkit-user-select: none; user-select: none; display: flex; flex-direction: column; }
+    body { color: var(--ink); font-family: var(--round); -webkit-user-select: none; user-select: none; display: flex; flex-direction: column; }
+    button, a { -webkit-tap-highlight-color: transparent; }
     #stage { position: relative; flex: 1; min-height: 0; }
     canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
-    canvas#card { position: absolute; right: 10px; bottom: 30px; width: 92px; height: 120px; border-radius: 6px; box-shadow: 0 3px 10px rgba(60,40,20,.28); transform: rotate(2.5deg); cursor: pointer; z-index: 2; }
-    canvas#sheet { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); border-radius: 12px; box-shadow: 0 8px 30px rgba(60,40,20,.25); display: none; z-index: 3; }
+    canvas#sheet { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); border-radius: 14px; box-shadow: 0 8px 30px rgba(60,40,20,.25); display: none; z-index: 5; }
     body.sheet canvas#sheet { display: block; }
-    #notes { position: absolute; left: 12px; right: 112px; bottom: 8px; font-size: 12px; font-weight: 700; color: #5b4a36; text-shadow: 0 1px 0 rgba(255,250,240,.6); z-index: 2; }
-    nav { position: absolute; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; display: flex; gap: 6px; align-items: center; z-index: 4; flex-wrap: wrap; }
-    nav a, nav button { all: unset; cursor: pointer; font-size: 13px; font-weight: 700; padding: 7px 11px; border-radius: 999px; background: rgba(255,250,240,.85); box-shadow: 0 1px 4px rgba(60,40,20,.15); }
-    nav .title { font-size: 18px; font-weight: 800; margin-right: auto; padding: 4px 4px; background: none; box-shadow: none; }
-    nav #twirl { background: #e0566e; color: #fff6ea; }
-    body.sheet nav #pattern { background: #4a3826; color: #fff6e6; }
-    #bench { flex: none; background: linear-gradient(#c79a6a, #b98a5a); padding: 8px 10px max(10px, env(safe-area-inset-bottom)); box-shadow: inset 0 3px 0 rgba(255,255,255,.18), 0 -6px 18px rgba(60,40,20,.18); }
-    .row { display: flex; gap: 6px; margin-bottom: 8px; overflow-x: auto; scrollbar-width: none; }
+
+    /* the top: Fab, and the room's three places (where you are, dark); under it, what can be done here */
+    nav { position: absolute; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; display: flex; gap: 8px; align-items: center; z-index: 4; }
+    nav .title { font-family: var(--serif); font-size: 26px; font-weight: 700; letter-spacing: -.01em; margin-right: auto; padding: 0 4px; color: #2e231a; text-shadow: 0 0 10px rgba(251,246,236,.8); cursor: default; }
+    nav a.back { all: unset; cursor: pointer; font-family: var(--serif); font-size: 15px; padding: 7px 12px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); }
+    #places { display: flex; padding: 3px; gap: 2px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+    #places button { all: unset; cursor: pointer; font-family: var(--serif); font-size: 15px; padding: 6px 13px; border-radius: 999px; color: var(--ink2); transition: background .2s, color .2s; }
+    #places button.on { background: var(--dark); color: #fbf3e6; }
+    #acts { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 46px); right: 10px; left: 10px; display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; z-index: 4; pointer-events: none; }
+    #acts > * { all: unset; pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-family: var(--serif); font-size: 14px; padding: 6px 12px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); color: var(--ink); }
+    #acts svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #acts #twirl { background: var(--rose); color: #fff6ee; }
+    #acts #cloth.on { background: var(--dark); color: #fbf3e6; }
+    body.sheet #acts #pattern { background: var(--dark); color: #fbf3e6; }
+
+    /* the pattern, pinned up beside the figure: tap it to go to the cutting table */
+    #note { all: unset; position: absolute; right: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 92px); width: 116px; padding: 10px 10px 9px; background: #fbf7ee; border-radius: 3px; box-shadow: 0 2px 3px rgba(60,40,20,.12), 0 10px 24px rgba(60,40,20,.2); transform: rotate(2deg); cursor: pointer; z-index: 3; display: grid; gap: 2px; background-image: linear-gradient(rgba(120,150,170,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(120,150,170,.09) 1px, transparent 1px); background-size: 8px 8px; transition: transform .15s; }
+    #note:active { transform: rotate(2deg) scale(.97); }
+    #note .pin { position: absolute; top: -5px; left: 50%; width: 11px; height: 11px; margin-left: -5px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #f2c46a, #b07a28); box-shadow: 0 2px 2px rgba(60,40,20,.35); }
+    #note canvas { width: 96px; height: 104px; display: block; justify-self: center; }
+    #note b { font-family: var(--serif); font-size: 13px; font-weight: 700; line-height: 1.15; margin-top: 3px; }
+    #note span { font-size: 10.5px; font-weight: 600; color: var(--ink2); line-height: 1.3; }
+    #note em { font-style: normal; font-size: 10.5px; font-weight: 800; color: var(--rose); margin-top: 3px; }
+
+    /* what the cut found, over the scene: words with a soft halo, no card */
+    #notes { position: absolute; left: 14px; right: 14px; bottom: 30px; text-align: center; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
+    #notes:empty { display: none; }
+
+    /* the drawer: a sheet of paper drawn up over the room */
+    #bench { flex: none; position: relative; z-index: 4; margin-top: -22px; background: var(--paper); border-radius: 22px 22px 0 0; padding: 14px 12px max(12px, env(safe-area-inset-bottom)); box-shadow: 0 -8px 26px rgba(60,40,20,.16); }
+    #bench::before { content: ""; position: absolute; top: 6px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 4px; background: rgba(60,40,20,.16); }
+    .row { display: flex; gap: 8px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
     .row::-webkit-scrollbar { display: none; }
-    #methods button { all: unset; flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 4px; border-radius: 12px; background: rgba(255,248,236,.5); cursor: pointer; font-weight: 800; font-size: 13px; }
-    #methods svg { width: 26px; height: 24px; fill: none; stroke: #4a3826; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    #methods button.on { background: #fff8ec; box-shadow: 0 2px 8px rgba(60,40,20,.25); }
-    #knobs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 6px; }
+    .lab { font-size: 10px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--ink3); margin: 2px 2px 6px; }
+    #methods { padding: 3px; border-radius: 14px; background: var(--paper2); gap: 2px; }
+    #methods button { all: unset; flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 4px; border-radius: 11px; cursor: pointer; font-family: var(--serif); font-size: 14px; color: var(--ink2); }
+    #methods svg { width: 24px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #methods button.on { background: #fffdf8; color: var(--ink); box-shadow: var(--lift); }
+    #knobs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 10px; }
     .knob { text-align: center; touch-action: none; cursor: grab; }
     .knob svg { width: 52px; height: 52px; display: block; margin: 0 auto; overflow: visible; }
-    .knob .face { fill: #fff6e6; stroke: #8a6440; stroke-width: 2; }
-    .knob .track { fill: none; stroke: rgba(90,60,30,.18); stroke-width: 5; stroke-linecap: round; }
-    .knob .arc { fill: none; stroke: #e0566e; stroke-width: 5; stroke-linecap: round; }
-    .knob .dot { fill: #4a3826; }
+    .knob .face { fill: #fffdf8; stroke: rgba(60,40,20,.15); stroke-width: 1.5; }
+    .knob .track { fill: none; stroke: rgba(90,60,30,.12); stroke-width: 5; stroke-linecap: round; }
+    .knob .arc { fill: none; stroke: var(--rose); stroke-width: 5; stroke-linecap: round; }
+    .knob .dot { fill: var(--ink); }
     .knob.turning svg { transform: scale(1.08); }
-    .knob b { display: block; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; margin-top: 1px; }
-    .knob i { display: block; font-style: normal; font-size: 12px; font-weight: 800; color: #fff8ec; min-height: 15px; white-space: nowrap; }
-    .swatch, .print { all: unset; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; font-weight: 700; padding: 4px 6px; border-radius: 10px; cursor: pointer; min-width: 44px; }
-    .swatch span { width: 30px; height: 22px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.25), 0 1px 2px rgba(60,40,20,.2); background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.04) 0 2px, transparent 2px 4px) !important; }
-    .print canvas { border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.25), 0 1px 2px rgba(60,40,20,.2); }
-    .swatch.on, .print.on { background: #fff8ec; box-shadow: 0 2px 6px rgba(60,40,20,.25); }
+    .knob b { display: block; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; margin-top: 3px; color: var(--ink3); }
+    .knob i { display: block; font-style: normal; font-family: var(--serif); font-size: 15px; color: var(--ink); min-height: 18px; white-space: nowrap; }
+    .swatch, .print { all: unset; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--ink2); padding: 3px; border-radius: 12px; cursor: pointer; min-width: 52px; }
+    .swatch span, .print canvas { width: 50px !important; height: 34px !important; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.14), 0 1px 3px rgba(60,40,20,.14); outline: 2px solid transparent; outline-offset: 2px; }
+    .swatch span { background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.04) 0 2px, transparent 2px 4px) !important; }
+    .swatch.on, .print.on { color: var(--ink); font-weight: 800; }
+    .swatch.on span, .print.on canvas { outline-color: var(--rose); }
+
     /* the paper, its tools, its history (and the dials instead, with ?ui=dials) */
-    body:not(.dials) #methods, body:not(.dials) #knobs, body:not(.dials) #card, body.dials #tools, body.dials #toolhint, body.dials #history { display: none !important; }
-    #tools { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
-    .tool { all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 3px 6px; border-radius: 10px; font-size: 10px; font-weight: 800; min-width: 40px; }
-    .tool svg { width: 26px; height: 26px; fill: none; stroke: #4a3826; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-    .tool.on { background: #fff8ec; box-shadow: 0 2px 6px rgba(60,40,20,.28); }
-    #toolsend { flex: 1; }
-    .stepper { display: flex; align-items: center; gap: 2px; background: rgba(255,248,236,.55); border-radius: 999px; padding: 2px; }
-    .stepper button, #undo { all: unset; cursor: pointer; width: 26px; height: 26px; border-radius: 999px; text-align: center; line-height: 26px; font-weight: 900; font-size: 16px; background: #fff8ec; }
-    .stepper b { display: flex; flex-direction: column; align-items: center; font-size: 14px; line-height: 1; min-width: 34px; }
-    .stepper b i { font-style: normal; font-size: 9px; font-weight: 700; opacity: .7; }
-    #undo { width: auto; padding: 0 10px; font-size: 12px; font-weight: 800; margin-left: 4px; }
-    #toolhint { font-size: 11px; font-weight: 700; color: #fff8ec; text-align: center; margin: 4px 0 4px; min-height: 14px; }
-    #history { margin-bottom: 6px; min-height: 24px; }
-    #history .chip { all: unset; flex: none; cursor: pointer; font-size: 11px; font-weight: 800; padding: 4px 9px; border-radius: 999px; background: #fff8ec; box-shadow: 0 1px 3px rgba(60,40,20,.2); }
+    body:not(.dials) #methods, body:not(.dials) #knobs, body.dials #tools, body.dials #toolhint, body.dials #history { display: none !important; }
+    #tools { display: flex; gap: 6px; align-items: stretch; margin-bottom: 8px; }
+    #toolset { display: flex; flex: 1; padding: 3px; gap: 2px; border-radius: 14px; background: var(--paper2); }
+    .tool { all: unset; flex: 1; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 5px 2px 4px; border-radius: 11px; font-family: var(--serif); font-size: 12px; color: var(--ink2); }
+    .tool svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .tool.on { background: var(--rose2); color: #8a2638; }
+    .stepper { display: flex; align-items: center; gap: 2px; background: var(--paper2); border-radius: 14px; padding: 3px; }
+    .stepper button, #undo { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 999px; text-align: center; line-height: 28px; font-size: 18px; background: #fffdf8; box-shadow: var(--lift); }
+    .stepper b { display: flex; flex-direction: column; align-items: center; font-family: var(--serif); font-size: 17px; font-weight: 600; line-height: 1; min-width: 34px; }
+    .stepper b i { font-style: normal; font-family: var(--round); font-size: 9px; font-weight: 700; color: var(--ink3); margin-top: 2px; }
+    #undo { width: auto; height: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px; border-radius: 14px; font-family: var(--serif); font-size: 12px; line-height: 1.1; background: var(--paper2); box-shadow: none; }
+    #undo svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    #toolhint { font-family: var(--serif); font-size: 13px; color: var(--ink2); text-align: center; margin: 2px 0 8px; min-height: 16px; }
+    #history { margin-bottom: 0; min-height: 30px; align-items: center; }
+    #history .chip { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 13px; padding: 5px 11px; border-radius: 999px; background: #fffdf8; box-shadow: inset 0 0 0 1px rgba(60,40,20,.14); }
+    #history .chip:last-child { box-shadow: inset 0 0 0 1.5px var(--rose); }
+    #history .chip i { font-style: normal; color: var(--ink3); margin-left: 4px; }
     #history .chip.dud { opacity: .5; text-decoration: line-through; }
-    #history .none { font-size: 11px; font-weight: 600; color: #fff1dc; opacity: .8; padding: 4px 2px; }
-    .preview nav, .preview #bench, .preview #card, .preview #notes, .preview #railui { display: none; }
+    #history .none { font-family: var(--serif); font-size: 13px; color: var(--ink3); padding: 4px 2px; }
+    .preview nav, .preview #acts, .preview #bench, .preview #note, .preview #notes, .preview #railui { display: none; }
+
     /* the rails */
-    body.rails #bench, body.rails #card, body.rails #notes, body.rails .benchonly, body:not(.rails) .railsonly, body:not(.rails) #railui { display: none; }
+    body.rails #bench, body.rails #note, body.rails #notes, body.rails .benchonly, body:not(.rails) .railsonly, body:not(.rails) #railui { display: none !important; }
     #railui { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
-    #railtags { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 42px); left: 10px; right: 10px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; pointer-events: auto; }
+    #railtags { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 50px); left: 10px; right: 10px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; pointer-events: auto; padding: 2px 2px 6px; }
     #railtags::-webkit-scrollbar { display: none; }
-    .tag { all: unset; flex: none; cursor: pointer; font-size: 13px; font-weight: 800; padding: 6px 12px 6px 10px; border-radius: 6px 999px 999px 6px; background: rgba(255,250,240,.85); box-shadow: 0 1px 4px rgba(60,40,20,.18); border-left: 7px solid var(--c, #999); }
-    .tag.on { background: #fff8ec; box-shadow: 0 2px 8px rgba(60,40,20,.3); transform: translateY(1px); }
-    .tag.add { border-left-color: transparent; background: rgba(255,250,240,.5); font-weight: 700; }
+    .tag { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 15px; padding: 6px 14px 6px 11px; border-radius: 4px 12px 12px 4px; background: var(--glass); box-shadow: var(--lift); border-left: 6px solid var(--c, #999); }
+    .tag.on { background: #fffdf8; box-shadow: 0 2px 10px rgba(60,40,20,.28); font-weight: 700; }
+    .tag.add { border: 1.5px dashed rgba(60,40,20,.3); border-radius: 12px; background: rgba(251,246,236,.45); box-shadow: none; }
     /* the one in front, named over the scene: no card, just words with a soft halo so they read on cloth or wall */
-    #railcard { position: absolute; left: 12px; right: 12px; bottom: max(16px, env(safe-area-inset-bottom)); display: grid; gap: 3px; pointer-events: none; text-align: center; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8), 0 1px 0 rgba(255,250,240,.9); }
-    #railcard b { font-size: 19px; font-weight: 800; color: #3b2f24; }
-    #railcard span { font-size: 14px; font-weight: 700; color: #5b4632; min-height: 18px; }
-    #railcard button { all: unset; pointer-events: auto; cursor: pointer; justify-self: center; margin-top: 6px; padding: 9px 20px; border-radius: 999px; background: rgba(224,86,110,.92); color: #fff6ea; font-weight: 800; font-size: 15px; text-shadow: none; box-shadow: 0 2px 10px rgba(120,30,45,.3); }
-    #railcard i { font-style: normal; font-size: 11px; font-weight: 600; color: #7a6650; }
-    #toast { position: absolute; left: 50%; top: 96px; transform: translate(-50%, -8px); padding: 8px 14px; border-radius: 999px; background: #4a3826; color: #fff6e6; font-weight: 700; font-size: 13px; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; z-index: 5; white-space: nowrap; }
+    #railcard { position: absolute; left: 14px; right: 14px; bottom: max(18px, env(safe-area-inset-bottom)); display: grid; gap: 4px; pointer-events: none; text-align: center; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 16px rgba(244,236,222,.85), 0 1px 0 rgba(255,250,240,.9); }
+    #railcard b { font-family: var(--serif); font-size: 26px; font-weight: 700; color: #2e231a; letter-spacing: -.01em; }
+    #railcard > span { font-family: var(--serif); font-size: 16px; color: #4f3f30; min-height: 20px; }
+    #railcard button { all: unset; pointer-events: auto; cursor: pointer; justify-self: center; display: inline-flex; align-items: center; gap: 10px; margin: 10px 0 6px; padding: 12px 24px; border-radius: 999px; background: var(--rose); color: #fff6ee; font-family: var(--serif); font-size: 18px; text-shadow: none; box-shadow: 0 4px 16px rgba(140,40,55,.32); }
+    #railcard button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #railcard .hints { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; font-size: 11.5px; font-weight: 700; color: #5d4b38; }
+    #railcard .hints span { all: unset; display: inline-flex; align-items: center; gap: 4px; }
+    #railcard .hints svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    #toast { position: absolute; left: 50%; top: 104px; transform: translate(-50%, -8px); padding: 8px 14px; border-radius: 999px; background: var(--dark); color: #fbf3e6; font-family: var(--serif); font-size: 14px; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; z-index: 6; white-space: nowrap; }
     #toast.show { opacity: 1; transform: translate(-50%, 0); }
-    nav #hang { background: #4a3826; color: #fff6e6; }
-    nav #totable { background: #4a3826; color: #fff6e6; }
+
     /* three places in the room: the rails, the figure, the cutting table; each its own drawer */
     body.rails .figonly, body.table .figonly, body:not(.table) .tableonly, body:not(.table) .cutonly { display: none !important; }
     body.table canvas#gl { cursor: crosshair; }
     body.table .figdrawer { display: none !important; }
-    body.table #history { margin-bottom: 0; }
+    body.table #notes { bottom: 30px; }
     #perf { position: absolute; left: 10px; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 84px); z-index: 6; font: 600 11px ui-monospace, Menlo, monospace; color: #3b2f24; background: rgba(255,250,240,.8); border-radius: 8px; padding: 4px 8px; pointer-events: none; }
   </style>
 </head>
 <body>
   <div id="stage">
     <canvas id="gl"></canvas>
-    <canvas id="card" title="the pattern"></canvas>
+    <button id="note" class="figonly" title="the pattern: take it to the cutting table"><i class="pin"></i><canvas id="card"></canvas><b id="notename"></b><span id="notewhat"></span><em>cut it out ✂</em></button>
     <canvas id="sheet"></canvas>
     <div id="notes"></div>
-    <nav><a href="/" class="railsonly">← lab</a><button id="torails" class="benchonly">rails</button><span class="title">Fab</span><button id="totable" class="figonly">cut ✂</button><button id="tofigure" class="tableonly">figure</button><button id="twirl" class="figonly">twirl</button><button id="sew" class="figonly">sew</button><button id="pattern" class="benchonly">pattern</button><button id="hang" class="benchonly">hang up</button><a href="{{readme}}">notes</a></nav>
+    <nav><a href="/" class="back railsonly">←</a><span class="title">Fab</span><div id="places"><button data-place="rails">rails</button><button data-place="bench">figure</button><button data-place="table">table</button></div></nav>
+    <div id="acts" class="benchonly">
+      <button id="twirl" class="figonly">twirl</button>
+      <button id="sew" class="figonly">sew</button>
+      <button id="cloth" class="tableonly" title="show the cloth on the pattern"><svg viewBox="0 0 20 20"><path d="M3 5l7-2 7 2v10l-7 2-7-2z"/><path d="M3 5l7 2 7-2M10 7v10"/></svg>cloth</button>
+      <button id="pattern"><svg viewBox="0 0 20 20"><rect x="3" y="2.5" width="14" height="15" rx="1.5"/><path d="M6 6h8M6 9.5h8M6 13h5"/></svg>pattern</button>
+      <button id="hang"><svg viewBox="0 0 20 20"><path d="M10 6.5a2 2 0 112-2M10 6.5v1.5L2.5 14h15L10 8"/></svg>hang up</button>
+      <a href="{{readme}}"><svg viewBox="0 0 20 20"><path d="M4 3h9l3 3v11H4z"/><path d="M7 8h6M7 11h6M7 14h4"/></svg>notes</a>
+    </div>
     <div id="railui">
       <div id="railtags"></div>
-      <div id="railcard"><b id="railname"></b><span id="railwhat"></span><button id="wear">put it on the figure</button><i>slide the skirts along · swipe up or down for another rail · tap the front one</i></div>
+      <div id="railcard"><b id="railname"></b><span id="railwhat"></span><button id="wear"><svg viewBox="0 0 24 24"><path d="M12 8a2.4 2.4 0 112.4-2.4M12 8v1.6L3 17h18l-9-7.4"/></svg><span id="wearword">put it on the figure</span><svg viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></svg></button>
+        <div class="hints"><span><svg viewBox="0 0 20 20"><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3"/></svg>slide along the rail</span><span><svg viewBox="0 0 20 20"><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3"/></svg>swipe for another rail</span><span><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2"/></svg>tap the front one</span></div>
+      </div>
     </div>
     <div id="toast"></div>
   </div>
   <div id="bench">
     <div class="row" id="methods"></div>
     <div id="knobs"></div>
-    <div id="tools" class="cutonly"><span id="toolsend"></span><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo">undo</button></div>
+    <div id="tools" class="cutonly"><div id="toolset"></div><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo"><svg viewBox="0 0 24 24"><path d="M9 7L5 11l4 4"/><path d="M5 11h9a5 5 0 010 10h-2"/></svg>undo</button></div>
     <div id="toolhint" class="cutonly"></div>
     <div class="row cutonly" id="history"></div>
+    <div class="lab figdrawer">fabric</div>
     <div class="row figdrawer" id="fabrics"></div>
+    <div class="lab figdrawer">print</div>
     <div class="row figdrawer" id="prints" style="margin-bottom:0"></div>
   </div>
   <script type="module" src="{{app}}"></script>

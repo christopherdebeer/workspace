@@ -299,13 +299,24 @@ static lab cell doesn't have.
 
 ## Three places in one room
 
-The workshop is one room, and the camera walks between three places in it:
+The workshop is one room, and the camera walks between three places in it. They're the three buttons along the top
+(**rails · figure · table**), and the one you're at is dark. What can be done there sits in a row under them.
 
-| place | where | its drawer |
-|---|---|---|
-| **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure |
-| **the figure** | on its stand, in the middle | cloth and print; **twirl**, **sew**; **cut ✂** goes to the table |
-| **the cutting table** | to one side, facing the figure | the tools, panels, undo, the history; **figure** goes back |
+| place | where | its drawer | along the top |
+|---|---|---|---|
+| **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure | |
+| **the figure** | on its stand, in the middle | cloth and print | **twirl**, **sew**, **pattern**, **hang up** |
+| **the cutting table** | to one side, facing the figure | the tools, panels, undo, the history | **cloth**, **pattern**, **hang up** |
+
+**The pattern is pinned up beside the figure.** It's a little note with the pieces drawn on it, what the skirt is, how
+long, and how far round its hem is. Tap it to take it to the cutting table. It's redrawn with every change.
+
+**At the table, the figure's still across the room.** Tap it to go over to it. Drag across it to spin it on its stand: its
+front follows your finger, and a flick runs down on its own.
+
+**The paper is plain by default.** A piece is drawn as pattern tissue, so its marks (slashes, folds, darts, gathers)
+stand out. **cloth** lays the chosen cloth and print on it, running with the grain, as it'll be cut. The note by the
+figure follows the same choice. (`?cloth` starts with it on.)
 
 **At the table, the pattern lies on it at true size.** A centimetre of the paper is a centimetre on the figure, so a piece
 that's spread grows on the table. The figure stands across the room behind it, wearing each move as it's made.
@@ -328,7 +339,7 @@ so nothing jumps between one gesture and the next.
 
 ## Using it
 
-- **The paper** (on the cutting table: **cut ✂**) is one panel of the pattern. Pick a tool and work it (see the moves above); the figure
+- **The paper** (on the cutting table: tap the pattern note, or **table** along the top) is one panel of the pattern. Pick a tool and work it (see the moves above); the figure
   wears every move as it's made, and follows while your finger is still on the paper.
 - **Turn the figure**: drag. **Come close**: pinch, or scroll.
 - **Tap the title three times** (or `?perf`) for a frame readout: fps, frame, cloth and drawing time, and whether the

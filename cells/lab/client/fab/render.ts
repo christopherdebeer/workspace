@@ -40,7 +40,9 @@ vec3 finish(vec3 c) { c = c / (1. + c * .35); return pow(clamp(c, 0., 1.), vec3(
 /** the clothes rails' size (cm): the bar's height above the floor (y = −5 is the floor), its length */
 export const RAIL_Y = 140, RAIL_W = 170, FLOOR = -5;
 /** the cutting table: where its top's centre is, how wide (x) and deep (z) */
-export const TABLE = { x: 112, y: 46, z: 62, w: 150, d: 96, rot: 1.0 };
+/** the cutting table: its centre (where the paper lies), size, and how it's turned; `near`, how much further it reaches
+ * toward whoever sits at it (so looking down at the paper, there's table under it, not floor) */
+export const TABLE = { x: 112, y: 46, z: 62, w: 150, d: 96, near: 110, rot: 1.0 };
 /** a hanger's hook: how far above the skirt's waist it pivots on the bar */
 export const HOOK = 13;
 
@@ -264,7 +266,7 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' | 'sheet' = 'scene
     quad([P(x0, y0, z0), [-1, 0, 0]], [P(x0, y0, z1), [-1, 0, 0]], [P(x0, y1, z1), [-1, 0, 0]], [P(x0, y1, z0), [-1, 0, 0]], m);
   };
   {
-    const T = TABLE, x0 = T.x - T.w / 2, x1 = T.x + T.w / 2, z0 = T.z - T.d / 2, z1 = T.z + T.d / 2;
+    const T = TABLE, x0 = T.x - T.w / 2, x1 = T.x + T.w / 2, z0 = T.z - T.d / 2, z1 = T.z + T.d / 2 + T.near;
     box(x0, T.y - 3.5, z0, x1, T.y, z1, 7);
     for (const [lx, lz] of [[x0 + 4, z0 + 4], [x1 - 9, z0 + 4], [x0 + 4, z1 - 9], [x1 - 9, z1 - 9]]) box(lx, -5, lz, lx + 5, T.y - 3.5, lz + 5, 7);
   }

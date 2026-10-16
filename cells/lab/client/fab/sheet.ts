@@ -4,7 +4,7 @@
  * its stitching just in from the edge; the print laid on it as it'll be cut, running with the grain. Below, the notes
  * the cut made and the pattern's own checks.
  *
- * `mini`: the little card on the bench, pieces only.
+ * `mini`: the little card on the bench, pieces only. No print (`null`): the pieces as plain tissue.
  */
 import { makePrint, type Print } from './fabric';
 import { ribAt } from './cut';
@@ -45,13 +45,13 @@ export function tile(ctx: CanvasRenderingContext2D, pr: Print, px: number): Canv
   return ctx.createPattern(t, 'repeat') ?? g;
 }
 
-export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrint(0, 0), mini = false) {
+export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print | null = makePrint(0, 0), mini = false) {
   const dpr = Math.min(2, devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
   if (!W || !H) return;
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   const ctx = cv.getContext('2d')!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#f4efe2'; ctx.fillRect(0, 0, W, H);
+  if (mini) ctx.clearRect(0, 0, W, H); else { ctx.fillStyle = '#f4efe2'; ctx.fillRect(0, 0, W, H); }
   const n = sk.m.panels, shown = [sk.pieces[0], sk.pieces[sk.pieces.length - 1]];
   const label = (p: Piece) => (p.kind === 'band' ? 'waistband · cut 1' : n === 1 ? 'skirt · cut 1' : `${n === 2 ? 'front & back' : 'panel'} · cut ${n}`);
   const head = mini ? 6 : 104, foot = mini ? 6 : Math.min(170, H * 0.36);
@@ -67,10 +67,13 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrin
   // (the paper's centimetre grid)
   ctx.lineWidth = 1;
   for (let cm = 0; cm * sc < Math.max(W, H); cm++) {
+    // (none on the little card: it's pinned on squared paper already)
+    if (mini) break;
     ctx.strokeStyle = cm % 5 ? 'rgba(120,150,170,.12)' : 'rgba(120,150,170,.28)';
     ctx.beginPath(); ctx.moveTo(12 + cm * sc, 0); ctx.lineTo(12 + cm * sc, H); ctx.moveTo(0, oy + cm * sc); ctx.lineTo(W, oy + cm * sc); ctx.stroke();
   }
-  const fill = tile(ctx, pr, sc);
+  // (no print: the pieces as plain tissue)
+  const fill = pr ? tile(ctx, pr, sc) : '#fffcf4';
   let top = oy;
   shown.forEach((p, k) => {
     const b = boxes[k], ox = (W - b.w * sc) / 2, py = top;
@@ -79,7 +82,7 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrin
     ctx.save();
     // (the print, on the grain: turned with it)
     if (typeof fill !== 'string') { const [cx, cy] = to([0, 0]), g = p.grain; fill.setTransform(new DOMMatrix([Math.cos(-g), Math.sin(-g), -Math.sin(-g), Math.cos(-g), cx, cy])); }
-    ctx.fillStyle = fill; ctx.globalAlpha = 0.85; ctx.fill(path); ctx.globalAlpha = 1;
+    ctx.fillStyle = fill; ctx.globalAlpha = pr ? 0.85 : 1; ctx.fill(path); ctx.globalAlpha = 1;
     ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = mini ? 1.2 : 1.8; ctx.stroke(path);
     ctx.clip(path); ctx.setLineDash([4, 3]); ctx.strokeStyle = 'rgba(40,30,20,.5)'; ctx.lineWidth = Math.max(1, 1.6 * sc); ctx.stroke(path);
     ctx.restore();
