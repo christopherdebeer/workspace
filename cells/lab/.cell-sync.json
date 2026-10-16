@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:a9385cbd7a1d8f86c48a57108c966c6919b903b5667d741dea5270d1ccca9101",
-  "syncedAt": "2026-10-16T12:56:27.014Z",
+  "treeVersion": "tree:2eda99de301088b948aed4fe24ace8c7e47b98259f9d77c22765312f839477d6",
+  "syncedAt": "2026-10-16T13:06:17.381Z",
   "files": {
     "README.md": "sha256:5eec728c7fa3e1d37f305ba314622b57b4399f8002da32aadf56d4a651252b67",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -20,7 +20,7 @@
     "client/fab/cut.ts": "sha256:bb34daac2f11864c640947a88486665346f0e2c94b7b867a24c5def17f677e4c",
     "client/fab/evidence.ts": "sha256:a0cbacc9390757aaf2dcae1ff856cb5be3e7ef9d3fe253e3ba11e27f1bfdcafd",
     "client/fab/fabric.ts": "sha256:acaf0504aeba9e204eb2ccee1b2d5b8ab521d366ebf78097efb9fab45cad4bec",
-    "client/fab/main.ts": "sha256:b7b5edbea8c56955bcb1b8b9f3e87c9dfa1f06e9d1cc1ea136ad4d7a966b6c4e",
+    "client/fab/main.ts": "sha256:c8d1279112d60cb0ea411808ad5583ce37e6b5cd4e4de3cba415e511adeedc74",
     "client/fab/paper.ts": "sha256:26a97cca18f490aacf04232107f17e261cdcd9520c02a2b4e9b9e1c48ea8553c",
     "client/fab/pattern.ts": "sha256:04bad33d7e3aab53b3ca69e4fd184d7e5b8b3d139c300c46914beeffb8a496dd",
     "client/fab/rails.ts": "sha256:74561d38aa51e56fb9bf13cd78a49e03e1a0428b6b84df6d4d39922b649ac87e",
@@ -139,7 +139,7 @@
     "static/crystals.html": "sha256:c8617c9cfbe9936c49205b007dda1786dcda3ecd5db96694b31ea3cb51ac6045",
     "static/crystals.md": "sha256:8e65118b75dbc04959d15e5830ced15357e10bf6b4a361380630ff5fd0cb8a36",
     "static/fab.html": "sha256:268017ce3afd42de23c9db92feef1ae1753799906a0b3b65bafe976783da4506",
-    "static/fab.md": "sha256:4bcf84a36bac1077496dee6a46a601771d17f56cd36072f812280a91e0195fc1",
+    "static/fab.md": "sha256:1785a71b9c48dfa5ac72a36e8ca4c1a8187cb2e1701a5fbdce29e77eb4a993c8",
     "static/field.html": "sha256:9041137e973648eb6f6e8b6a171cb2c742f9da0b163ada849d210f8dfba28193",
     "static/field.md": "sha256:e5078b5c64b957806a1cb310b17ebdd5e013ae4fe202bd165e1548f2c7865187",
     "static/fungi.html": "sha256:8e39e5d920614154f35bf965807e178d39162c651dabc0d3dc3e2627c57f3d07",
