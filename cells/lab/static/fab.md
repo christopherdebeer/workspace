@@ -42,62 +42,111 @@ first Fab's failures are now checks every pattern has to pass:
 - **Jumpsuits**: a bodice sewn to trousers.
 - **Tiers** on any skirt or dress.
 
-## The skirt's grammar
 
-A skirt is a **waistband** and **n panels** round it, each sewn to the next.
+The skirt's made by hand, on its paper, at the cutting table. The others are decided at the figure, in its drawer,
+with choices and dials. Moves on their paper are next (see *Known limitations*).
 
-### What you decide (intentions)
+## The cutting table: a grammar of moves
 
-| control | what it is | range |
+A skirt is a **waistband** and **n panels** round it, each sewn to the next, every panel cut the same. A panel isn't
+chosen from a family of shapes. It's the dressmaker's **straight skirt block**, drafted to the figure, plus the
+**moves** made on its paper, in order (`cut.ts`).
+
+### The block
+
+Straight down from the hips. Its side seams curve in toward the waist as far as a seam can (2 cm). Darts take in the
+rest, as many as it needs, none deeper than 3 cm. Fewer panels means fewer seams, so more darts: a straight skirt in
+one piece needs darts all round.
+
+### The moves
+
+| move | what a cutter does | gesture on the paper |
 |---|---|---|
-| **length** | down from the waist | 12–62 cm |
-| **fullness** | the hem's round ÷ the hips' round | 1–4 |
-| **flared / gathered / pleated** | where the fullness comes from: cut into the panels' shape as a sector, or cut as straight width and taken in at the waist (eased evenly or folded and stitched down) | three ways |
-| **panels** | how many pieces round | 1–10 |
-| **grain** | where on the cloth's threads the panels are cut | straight → bias (45°) |
-| **cloth**, **print** | swatches | 8 cloths, 6 prints × 5 colourways |
+| **spread** | slash from the hem up to the waist, leaving a hinge, and open the hem | **slash**: touch the hem, drag sideways |
+| **pleat** | slash down from the waist, spread it parallel, fold the new cloth into a knife pleat, stitched 5 cm down | **fold**: touch the waist, drag sideways |
+| **gather** | slash and spread parallel, and ease the new width into the band where it was added | **gather**: touch the waist, drag sideways |
+| **close a dart** | pivot the cloth beside it about its point until its legs meet: the waist's taken in the same, the hem below opens | **hand**: tap the dart |
+| **release a dart** | don't sew it; gather its width into the band instead | **hand**: tap it again (a third tap sews it again) |
 
-### What follows (structure), as it does on a cutting table
+![a slash spread open](fab/v-slash-made.jpg)
+![a pleat folded in](fab/v-fold-made.jpg)
+![gathers](fab/v-gather-made.jpg)
+![a dart closed into flare](fab/v-hand-dart.jpg)
 
-- **The waist is smaller than the hips, so something must take in the difference.** A wide enough flare already does.
-  Otherwise each side seam curves in, but no more than a seam can (2 cm). Darts take the rest, as many as needed and
-  none deeper than 3 cm. Fewer panels means fewer seams, and so more darts: cut a straight skirt in one piece and it
-  needs darts all round.
-- **Gathered or pleated, the extra width is taken in at the waist.** Gathered, it's eased in evenly. Pleated, it's
-  folded into knife pleats, one about every 4.5 cm of band and stitched down 5 cm.
-- **Nothing sewn closed is tighter than the body plus 4 cm of wearing ease.** A pleat's stitching lets it out as the
-  hips widen, and a dart stops where the body needs the room.
-- **A dart or pleat closes a whole number of the cloth's grid columns.** So the waist is re-cut to make what's left
-  between them *exactly* the band. The waist always fits.
-- **Each panel must fit across the cloth's width (140 cm) along its grain.** A panel that doesn't fit is cut in more
-  panels. A child's circle skirt fits in one piece; a maxi doesn't. Turn a panel to the bias and it gets wider across
-  the grain.
-- **A flare can't be fuller than a full circle.**
+The rest are parameters on the same paper:
+
+- **length**: drag the hem;
+- **grain**: turn the grain arrow's handle;
+- **panels**: the − / + beside the tools;
+- **cloth** and **print**: the swatches.
+
+**Every move is a chip in the history under the paper.** Tap one to take it back: the rest are made again, in order,
+and a move that now does nothing is struck through and says so. **undo** takes back the last.
+
+**The moves don't commute, and that's the point.** A pleat folded and then slashed through opens toward the hem with the
+flare. Slashed first and then pleated, it hangs straight. Closing a dart first and then spreading isn't the same as the
+other way round. Positions are on the paper *as it is when the move is made*. Even the shortcuts below have to account
+for that: placing three pleats "a third of the way along each" bunched them up, because each one lengthens the waist the
+next is measured on.
+
+### How a panel is represented
+
+A panel is a row of **ribs**: lines from waist to hem, bent once, at the hips at its sides or at a dart's point. Between
+the ribs are **strips**: cloth, a wedge someone spread, a pleat, a dart, or eased width. Moves insert ribs, and turn or
+slide everything to one side of them, so a strip is always exactly the paper it was. Each strip records the move that
+made it, so the history is the pattern's **provenance**.
+
+What's sewn, and how the waist meets the band, follow from the strips:
+
+- side seams;
+- darts, tapering to their points;
+- pleats' stitching, let out where the hips need the room;
+- the waist: cloth sewn flat to the band; folds and darts closed to a point; eased width gathered in, the ease declared
+  on that seam;
+- a waist cut longer than its band with nothing to take it in is eased all round, and the check says so ("gather it,
+  pleat it or dart it?").
+
+Paper that's one piece (cloth, and what's been slashed and spread or a dart closed into it: a cutter tapes these back
+into one) is meshed as a single region, with rulings evenly spaced along the waist and the hem. Folds and darts still
+sewn keep their own columns, so their edges can be sewn.
+
+### What we took from GarmentCode, and what we didn't
+
+GarmentCode (Korosteleva & Sorkine-Hornung 2023) programs parametric sewing patterns as panels of edges joined by
+stitches between named **interfaces**.
+
+Taken:
+
+- **Seams as contracts between named edges**, not point pairs: a panel's sides, its waist.
+- **Ease declared on the seam** (GarmentCode's "ruffle" coefficient) rather than built into the cloth's shape.
+- **Every operation reports how old edges became new ones**: a rib is copied before it's cut.
+
+Not taken: its sampling of designs for datasets, its 3D placement, and its edges shared by reference between edits. That
+last is fragile under sequences of edits, as its own code comments note.
+
+Where Fab goes beyond it, because the gestures need it:
+
+- **An operation history as the source of truth.** GarmentCode regenerates a garment from its parameters and keeps no
+  history.
+- **Pleats as folds with stitching.** GarmentCode lists pleats and folds as future work.
+
+### The dials, kept as shortcuts (and as the comparison)
+
+The first Fab's controls are still there (`?ui=dials`): length, fullness, flared/gathered/pleated, panels, grain. They
+no longer draw anything themselves; they **write moves**:
+
+- **flared**: close the darts into the hem, then slash and spread the rest, evenly, as far as the paper lies flat;
+- **gathered**: release the darts and add width at three places;
+- **pleated**: fold pleats evenly along the waist.
+
+The workshop's rail and the evidence bench go through the same shortcuts, so they exercise the same cutting. The dials
+stay as the other half of the comparison the next step needs: do children who make a skirt on the paper understand it
+better than children who turn dials?
 
 ### What's never set (outcomes)
 
 Silhouette, how many folds and how deep, whether the hem is level, how far it swings out in a twirl. These are what
 the simulated cloth does with the cut.
-
-### Dependency model
-
-```
-intentions                 structure (pattern.ts)                      material (fabric.ts)       outcomes (cloth.ts)
-length ───────────────┐    panel outline (polar: sector ↔ rectangle)   weight (gsm)               silhouette
-fullness ─────────────┼──▶ flare angle, or straight width          ──▶ bending rigidity B = w·g·c³ ─▶ folds: count, depth
-flared/gathered/pleated┤   darts / side-seam curve / pleats / ease      warp, weft, shear (N/m)    hem level
-panels ───────────────┤    panels needed to fit the bolt (140 cm)       grain (woven or not)       stretch, cling
-grain ────────────────┘    grain angle on each piece                    friction                   swing in a twirl
-                     body: waist & hip rounds at every depth
-```
-
-Couplings exist only where the cut or the physics makes them:
-
-- panels and flare → whether darts are needed;
-- grain and flare → how many panels it takes to fit the cloth;
-- grain and fabric → how much it stretches and clings.
-
-None are invented to make the dials feel richer.
 
 ## The other families
 
@@ -141,8 +190,9 @@ What follows from those choices:
 
 ### Dresses
 
-A bodice cut to the waist, with a skirt sewn round its hem. The skirt is drafted as before, but its "band" is the
-bodice's hem. Its darts, pleats or gathers close into the hem: each point of the skirt's waist is sewn to its own place
+A bodice cut to the waist, with a skirt sewn round its hem. The skirt is cut at the table like any skirt, but to the
+bodice's hem instead of a waistband: its recipe carries that round (`band`), so its paper, its dials and the dress all
+cut the same skirt. Its darts, pleats or gathers close into the hem: each point of the skirt's waist is sewn to its own place
 round it.
 
 ### Trousers (`trousers.ts`)
@@ -179,7 +229,8 @@ so a curve keeps its shape whatever its ends do.
 
 A piece is four runs of edges round it, with its cloth's grid laid over them as a **Coons patch**. Every corner between
 two edges falls on a grid point. So a bodice with its armholes and neckline, a sleeve with its head and a trouser leg
-with its crotch curve are all the same kind of grid the skirt's panels always were. The cloth needed only one new thing.
+with its crotch curve are all grids, as a skirt's panel is. (A skirt's panel is meshed as ruled regions from its paper's strips: see *How a
+panel is represented*. A piece cut from curves is a Coons patch.) The cloth needed only one new thing.
 
 **A seam sews two runs by length**, as GarmentCode's stitches do. Every point of each run is sewn to the place the same
 fraction along the other: between two of its points, by a new interpolated XPBD stitch constraint in `cloth.ts`. Two
@@ -260,139 +311,103 @@ can turn by hand.
 
 ## Evidence
 
-Each test could show Fab is wrong. Run them at `?bench=evidence` (`&converged` re-measures the slow converged drape
-references). The numbers below are from a headless run.
+Each test states a narrow claim and, as plainly, **what it doesn't establish**. A verdict covers only its claim. None of
+the tests yet compares with real cloth, real sewn skirts or children. Run them at `?bench=evidence` (`&converged`
+re-measures the slow converged drape references). The numbers below are from a headless run on the cutting engine.
 
-**1 · Is every pattern a real pattern?** Pass. 1,120 designs were tested: every corner of the space (3 ways × 1–10
-panels × 4 fullnesses × 3 lengths × straight or bias) plus 400 at random. Each was put through the pattern's own
-checks:
-
-- every side seam meets one its own length;
-- the waist, folds closed, fits the band to within 4%;
-- it clears the body with 4 cm of ease everywhere down to the hips;
-- every piece fits on the cloth;
-- every dart is sewable (≤ 3 cm deep, ending above the hips);
-- every outline is simple.
-
-All 5,632 checks pass. Getting there found real bugs:
-
-- pleat waists up to 21% too long, from rounding to grid columns;
-- stitched pleats tighter than the hips;
-- darts rounded to 3.6 cm;
-- a circle cut in one piece wrapping past itself.
-
-**2a · Does each cloth bend as stiffly as its swatch says? (Peirce cantilever)** Pass. A strip held twice its bending
-length out should droop to 41.5°. Converged (a fine mesh, 200 substeps), the bending length read back is within 10% of
-every swatch (the test allows 12%; Peirce's formula is itself approximate), so the bending model is right. As worn (a 2 cm mesh, 8 substeps), it's within 18%.
-
-**2b · Does each cloth drape as such cloth does? (Cusick drape test)** Pass, with a measured compromise. The test is a
-30 cm disc on an 18 cm pedestal.
-
-| cloth | bending length | drape coefficient, as worn | converged | nodes |
-|---|---|---|---|---|
-| chiffon | 1.1 cm | 0.18 | 0.29 | 12 |
-| silk satin | 1.4 cm | 0.23 | | 9 |
-| jersey | 1.6 cm | 0.25 | | 10 |
-| cotton lawn | 2.0 cm | 0.35 | 0.57 | 7 |
-| wool flannel | 2.3 cm | 0.41 | | 6 |
-| linen | 2.8 cm | 0.50 | 0.77 | 6 |
-| organza | 3.2 cm | 0.58 | | 5 |
-| felt | 4.5 cm | 0.83 | 0.94 | 5 |
-
-- Converged, the coefficients run 0.29–0.94, inside the 0.3–0.98 range drape testers report, and they're ordered by
-  stiffness. The fold count falls as stiffness rises (12 → 5), as on real drapemeters.
-- As worn, the order holds but the cloth is limper by up to 0.27. That is the cost of 8 substeps on a phone.
-- Getting here found a measuring bug (empty bearings in the shadow), a solver bug (repeated passes without carried
-  multipliers stiffened the cloth), and a data bug (felt's in-plane stiffness was 6× too low).
-
-**2c · Does cloth cut on the bias stretch as bias-cut cloth does?** Pass. A 30 × 6 cm strip hung for 3 s:
-
-| cloth | straight grain | bias | ratio |
+| test | claim | result | doesn't establish |
 |---|---|---|---|
-| chiffon | +0.12% | +0.43% | 3.5 |
-| cotton lawn | +0.11% | +0.23% | 2.1 |
-| jersey | +0.39% | +1.01% | 2.6 |
-| felt (no grain) | +0.15% | +0.16% | 1.0 |
+| **1** pattern | 1,120 designs (every corner of the space, plus 400 at random), 6,824 checks: seams match, the waist fits its band, hips cleared with 4 cm of ease, pieces fit across the cloth, darts sewable, paper doesn't overlap itself, every move made | **holds**: all pass | makeability: no seam allowances, notches, opening or fastening, or order of construction; not cut and sewn by a dressmaker |
+| **2a** cantilever | the cloth reproduces each swatch's bending length | **holds**: converged within 10%, at the figure's settings within 18% | that the swatches' figures describe real silk or felt (they're representative); bending is one stiffness every way |
+| **2b** Cusick | the model drapes in the order, and over the range, drape testers find | **holds**: converged 0.29–0.94, ordered by stiffness; folds 12 → 5 | agreement with the same specimens measured |
+| **2b′** real time | the cloth on the figure drapes as its converged self, within 0.10 | **fails**: gap up to 0.27 (lawn 0.35 vs 0.57) | how much that gap matters to a child's predictions |
+| **2c** bias | woven cloth stretches more on the bias than on the grain | **holds**: 2–3.5× more; felt the same either way | the size of real bias growth (creep isn't modelled) |
+| **3a/3b** expressiveness | one cut in four cloths, and one cloth in five cuts, are measurably distinct, and sound | **holds**: nearest pairs ≥ 1.02 apart; all sound | that a child sees them as different, or that they match real skirts |
+| **4** speed | the cloth step under 12 ms, the same every time | **fails here**: 11–13 ms on this container's CPU; deterministic | the whole frame on a phone: use `?perf` on the phone |
 
-Real bias growth under its own weight is bigger than this linear model gives. Woven cloth creeps on the bias, which is
-why dressmakers hang bias skirts overnight before hemming. The direction is right; the magnitude is a known gap.
+"Sound" now means more than not exploding:
 
-**3 · Is the design space really expressive?** Pass. Each skirt was settled from flat on the figure, then twirled at
-0.9 turns a second.
+- finite;
+- 99% of springs within 12% stretch, and within 35% squash;
+- under 1% of triangles collapsed (not counting ones held flat on purpose: a fold held to the band, or a dart's legs
+  sewn together);
+- no point inside the figure;
+- every seam closed to 5 mm.
+
+On the cutting engine the worst sound skirt (pleated) has 11% stretch at the 99th percentile and a 4.6 mm seam gap.
 
 One construction (flared, 4 panels, 2.2× full) in contrasting cloths:
 
 | cloth | hem out | fold depth | folds | hem level (sd) | swing |
 |---|---|---|---|---|---|
-| chiffon | 14.3 cm | 1.8 | 22 | 0.18 | +15.2 |
-| cotton lawn | 15.4 | 3.4 | 10 | 0.59 | +12.3 |
-| linen | 16.8 | 3.6 | 8 | 0.82 | +13.5 |
-| felt | 15.7 | 5.9 | 4 | 2.07 | +14.4 |
+| chiffon | 14.2 cm | 2.2 | 16 | 0.75 | +12.2 |
+| cotton lawn | 15.1 | 2.4 | 13 | 0.85 | +11.8 |
+| linen | 16.4 | 4.1 | 7 | 1.50 | +12.2 |
+| felt | 14.3 | 5.1 | 4 | 1.31 | +14.3 |
 
 One cloth (cotton lawn) in contrasting constructions:
 
 | construction | hem out | fold depth | folds | swing |
 |---|---|---|---|---|
-| straight (darted) | 12.6 | 1.3 | 2 | +0.2 |
-| flared | 15.4 | 3.4 | 10 | +12.3 |
-| gathered | 17.5 | 2.1 | 9 | +10.3 |
-| pleated | 15.8 | 2.8 | 13 | +11.9 |
-| one piece, bias | 16.1 | 4.0 | 9 | +10.4 |
+| straight (the block, darted) | 12.2 | 1.3 | 3 | +0.5 |
+| flared (darts closed, slashed and spread) | 15.1 | 2.4 | 13 | +11.8 |
+| gathered (darts released, width added) | 17.5 | 2.2 | 13 | +10.9 |
+| pleated | 15.9 | 2.8 | 11 | +12.8 |
+| one piece, bias | 16.0 | 3.5 | 9 | +11.0 |
 
-Every skirt in each set is measurably apart from its nearest neighbour (≥ 1.16 in the bench's scaled units). All are
-stable: 99% of the cloth is within 9% of its cut length.
+Building the cutting engine, the bench caught:
 
-**4 · Is it quick enough, and the same every time?** Partly. On this container's CPU a skirt of about 1,800 points
-takes 11–15 ms a frame, a little over the 12 ms target. Sewn twice, it lands in exactly the same place. To measure a
-phone, open the evidence page on it.
+- slashes whose hinges added waist length;
+- a waist-ease rule wrong for dirndls;
+- a block whose hips came up 1.4 cm short of their ease;
+- pleats bunched by order-dependent placement (7 mm of cloth between two folds, stretched 90%);
+- a spring between two collapsed triangles with infinite compliance (NaN);
+- a minimum mass that silently made fine test meshes 30% too floppy.
 
-**5 · Do children understand it?** Not yet tested; it can't be tested here. The protocol:
+### Children: paper or dials?
 
-- **Sessions**: children aged 6–11, alone or in pairs, 20 minutes, no instructions beyond "this is a skirt-making bench".
-- **Predict, then try.** Show a skirt, name a change ("more panels", "cut on the bias", "felt instead of chiffon"), and
-  ask: *will it stand out more or less? Will the hem be wavy?* Then make the change. Record predictions before and after
-  an hour of play: does accuracy rise?
-- **Explain.** Show two skirts made from the same pattern in different cloths, and two cloths cut to different patterns,
-  and ask why they differ. Code each answer: names a material property / a construction / only the look.
-- **Intention.** Ask for "a skirt that twirls out wide" or "one that's straight and neat". Count steps to success, and
-  note whether they use the pattern card.
-- **Observe** what they open (the pattern, the sew replay), what surprises them (look for laughter or a "wait…"), and
-  what they try twice.
+Not yet tested; it can't be tested here. The protocol is unchanged (predict, then try; explain; intention; observe),
+now as a **comparison**. Half the children use the paper (the default), half `?ui=dials`, with the same skirts and
+questions.
 
-Success would be predictions improving with play, and explanations naming construction or material rather than looks.
+The hypothesis to test: children who slash, fold and close darts on the paper predict and explain better (naming a
+construction, not a look) than children who turn dials to the same skirts.
 
-**5 · Is every garment a real pattern?** Pass. 752 garments were drafted and put through every check, 4,011 checks
-in all:
+### Every garment
 
-- every neckline × sleeve length × sleeve × collar of a top, a dress and a jumpsuit, at both ends of their room and
-  length;
-- the corners of trousers' legs;
-- tiered skirts and dresses;
-- 300 more at random across everything.
+| test | claim | result | doesn't establish |
+|---|---|---|---|
+| **5** garments | 752 garments (every neckline × sleeve length × sleeve × collar of a top, a dress and a jumpsuit at both ends of their room and length; trousers' corners; tiered skirts and dresses; 300 at random), 4,308 checks: seams meet as they're meant to (eased, or gathered by as much as meant), pieces cut from curves lie flat, fit across the cloth, clear the body, go on (over the head, past the hand, past the foot) | **holds**: all pass | makeability, as test 1; that a sleeve set in this way hangs as a dressmaker's would |
+| **6** sewn | every garment on the workshop's rails sews up on the figure: seams to within 2.5 cm (0.25 on average), finite, nothing inside it | **holds**: all 27 | that it's sound (6′) |
+| **6′** sound | the same garments, by the skirt's bar for "sound" (above) | **fails**: 12 of 27 (every plain skirt; 4 of 5 trousers) | how much the stretch under a bodice matters to how it looks or to a child |
 
-Getting there found real bugs, each caught by the checks:
+Under a bodice, under tiers and where gathers crowd the cloth it stretches more: 13–33% at the 99th percentile, seams
+within 1.1 cm rather than 5 mm. Building the families, the checks caught:
 
 - sleeve heads split 24/8 cm between their halves (a bisection the wrong way round);
 - grid cells crushed to 0° wherever an armhole, neckline or crotch curve ran level or upright;
 - a shoulder seam at 45° when it should be 17°, from measuring the shoulder's point up the figure's side;
-- tiers gathered 1.45× when they should be 1.5×, from loops that dropped each panel's last step.
-
-**6 · Does every garment sew up?** Pass. Each of the 27 garments on the workshop's rails was laid out, sewn and let
-settle for 2.5 s. Every seam closed to within 1.6 cm, mostly to a few millimetres. The cloth stayed whole and nothing
-was left inside the figure. Each took 1.6–4.7 ms a frame here.
-
-The cloth stretches more at its 99th percentile under a bodice (18–34%) than in a skirt (6–7%). That stretch sits where
-gathers and set-in sleeve heads crowd it.
+- tiers gathered 1.45× when they should be 1.5×, from loops that dropped each panel's last step;
+- merging with the cutting table: a dress whose paper was cut to a waistband while it wore a skirt cut to its bodice
+  (now the recipe carries the round), and a seam-gap measure that read a gathered seam as open.
 
 ## Known limitations
 
 - **The real-time cloth is limper than its own converged self** in drape: coefficients up to 0.27 lower, from too few
   substeps for stiff bending. The next step is more substeps on capable devices, or WebGPU.
-- **About 6% stretch at the 99th percentile** of springs near the waist, where gathers and darts crowd the cloth. Real
-  woven cloth would buckle more and stretch less.
+- **Up to 11% stretch at the 99th percentile** of springs near the waist in pleated skirts (4–8% elsewhere), where
+  folds and darts crowd the cloth. Real woven cloth would buckle more and stretch less.
+- **The grain's laid along the panel's middle as it is after the moves.** After one slash on one side, the block's own
+  part ends up slightly off-grain. A cutter might keep the grain on the block's centre instead. The arrow can be
+  turned either way.
 - **The swatch figures are representative, not measured.** Measuring real swatches (a cantilever, a drapemeter, a strip
   tensile test) and putting the numbers into `fabric.ts` would make test 2 a comparison with reality rather than with
   the literature's ranges.
+- **Only a skirt is made by hand on its paper.** A top's, a dress's bodice, trousers are decided by choices and dials in
+  the figure's drawer: the gap the cutting table was built to close. The next step is moves on every piece, as the
+  pattern books make them: slash and spread a sleeve into a puff or a bell, turn a bodice's dart, fold a trouser leg's
+  waist. The garments' blocks (bodice.ts, trousers.ts) are where that paper starts.
+- **Tiers are a stepper, not a move** on the paper.
 - **Only knife pleats, a single layer.** Box pleats, petticoats and linings are natural next operations in the same
   grammar.
 - **Under a bodice the cloth stretches more** at its 99th percentile (18–34%, against 6–7% in a skirt). Gathered heads
@@ -409,6 +424,8 @@ gathers and set-in sleeve heads crowd it.
 
 Fab opens on the workshop's wall: a row of clothes rails, each hung with garments on hangers.
 
+![the workshop’s rail, the one in front named over the scene](fab/v-rails.jpg)
+
 - **The workshop's rails** are chromed: one each for skirts, tops, dresses, and trousers and jumpsuits, with one of each
   way of making them in contrasting cloths, to start from.
 - **Each person has their own rail**, powder-coated in their own colour, with what they've made. Tap **+ a rail** and
@@ -416,19 +433,21 @@ Fab opens on the workshop's wall: a row of clothes rails, each hung with garment
 
 Using the rails:
 
-- Drag the skirts along a rail and they slide like real hangers. They run on, slow down, and settle with one in front.
+- Drag the garments along a rail and they slide like real hangers (a skirt or trousers on clips, anything with a bodice
+  on a coat hanger). They run on, slow down, and settle with one in front.
   They bunch up toward the bar's ends, and each swings on its hook as it's pushed.
 - Swipe up or down, or tap a name tag, to move to another rail.
-- Tap the skirt in front, or **put it on the figure**. It comes off its hanger, the camera crosses the room to the
-  bench, and the skirt is laid out flat and sewn onto the figure.
-- A person's rail starts with a bare hanger, for a new skirt.
+- Tap the one in front to put it on the figure. (On a bare hanger, **A New Creation** starts a new skirt from the block.)
+  It comes off its hanger, the camera crosses the room to the bench, and it's laid out flat and sewn onto the figure.
+- A person's rail starts with a bare hanger, for something new.
 
 Saving:
 
-- **hang up** at the bench hangs the skirt back on its owner's rail. A skirt that came from the workshop's rail goes
+- **save to rail** at the bench hangs it back on its owner's rail, its design and its paper's recipe both. One that came
+  from the workshop's rails goes
   on the rail in use instead, and if nobody has a rail yet, Fab asks whose it is.
 - Going back to the **rails** hangs it up too, if it's changed.
-- Long-press one of your own skirts to take it off the rail.
+- Long-press one of your own to take it off the rail.
 - Tap your own rail's name tag to rename it. Clear the name to take the rail away.
 
 Every skirt on a rail is the real thing. Its pattern is drafted from its design, a little coarser than at the bench
@@ -440,15 +459,162 @@ The rails live in this browser (localStorage), so a rail is a person on this dev
 classroom's. Nothing leaves the device. Sharing rails between devices would need storage behind the cell, which this
 static lab cell doesn't have.
 
+## Three places in one room
+
+The workshop is one room, and the camera walks between three places in it. They're the three buttons along the top
+(**rails · figure · table**), and the one you're at is dark. What can be done there sits in a row under them.
+
+| place | where | its drawer | along the top |
+|---|---|---|---|
+| **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure | |
+| **the figure** | on its stand, in the middle | what it is (**make**: skirt, top, dress, trousers, jumpsuit; tiers), the **bodice** (neckline, sleeves, collar; length, room, swing) and the **legs**, when it has them; fabric, print and colour | **twirl** and **sew** (icons), **save to rail** |
+| **the cutting table** | to one side, facing the figure | the tool in hand: what it does, the gestures it answers to, what it's set to; panels, tiers, undo, the history (the tools themselves are a palette down the right). A top's or trousers' whole pattern lies there to be looked at, without tools | **cloth** (an icon), **save to rail** |
+
+![the rails](fab/v-rails.jpg)
+![the figure, its pattern pinned up](fab/v-figure.jpg)
+![the cutting table](fab/v-table.jpg)
+
+**The drawer has three states, each the one before with more below it:**
+
+- **closed**: its handle, and what's chosen in a line ("cotton lawn · stripes · strawberry");
+- **focused**: at the figure, a section's tabs (**Make · Bodice · Legs · Fabric · Print · Colour**) and its choices; at the table, the tool in
+  hand, panels, undo and the history;
+- **expanded**: at the figure, the section in focus made your own (below); at the table, the tool's gestures and what
+  it's set to.
+
+**Its handle is tactile.** The drawer follows a finger on its handle, so what's below comes into view before it's let
+go, and it gives a little past either end. When it's let go it settles, sliding there: dragged a quarter of the way to
+the next state it goes there (and on, past each further quarter); flicked, it goes one further the way it was flicked;
+short of a quarter, it springs back. A tap steps it: closed → focused → expanded → focused. (⚙ by the tabs expands the
+section in focus, and closes it again.)
+
+**The room never moves with it.** The drawer lies over the room rather than taking space from it, and each place keeps
+the bottom of the screen for its drawer whatever state it's in, the scene drawn centred above that by moving the lens.
+Opening, closing or dragging the drawer doesn't move or resize the scene.
+
+![closed](fab/v-drawer-closed.jpg)
+![drawn up](fab/v-drawer-drag.jpg)
+![expanded: your own cloth](fab/v-custom-fabric.jpg)
+
+**Expanded, a section is made your own.** What's changed is kept with the skirt (on its recipe, so it's on the rail
+with it, and in the link):
+
+- **cloth**: its measured qualities, dial by dial, starting from the swatch's: weight (gsm), stiffness (Peirce bending
+  length), firmness (tensile stiffness, warp and weft together), bias give (shear stiffness), grip (friction), and how
+  it takes the light (sheen, fuzz, sheer). The first five are what the skirt is simulated from: change one and it
+  settles again;
+- **print**: how big it's printed;
+- **colour**: the palette's three inks (ground, ink, accent), each picked.
+
+**as it was** puts the section back as its swatch has it, and choosing another swatch starts afresh from that one.
+
+![your own print](fab/v-custom-print.jpg)
+![your own palette](fab/v-custom-colour.jpg)
+![the table's drawer, expanded](fab/v-table-full.jpg)
+
+**At the figure, a drag on it spins it; a drag off it goes round it.** Spinning is the same as from the table: its
+front follows the finger, and a flick runs down on its own. A pinch, or scrolling, comes close or goes well back.
+
+**Every place can be reached by tapping it.** From any of the three, tap another where it stands in the room (a
+rail, the figure, the cutting table) and the camera walks there. It's one list in the code (`PLACES` in `main.ts`):
+each place says how a touch finds it (a box round each rail and what hangs on it; the figure out to its arms and the
+reach of its skirt; the tabletop), and the nearest one along the touch wins, so whatever's in front hides what's behind
+it. A tap the place you're at uses itself (a garment on the rails, the paper's piece at the table) is never passed on.
+A new place in the room is one more entry.
+
+![from the figure, the table behind it: tap to go](fab/v-figure-turned.jpg)
+![from the table, the figure (and a rail) across the room](fab/v-table-up.jpg)
+
+**The pattern is pinned up beside the figure,** bottom right. It's a little note with the pieces drawn on it, what the skirt is, how
+long, and how far round its hem is. Tap it, or tap the cutting table itself where it stands in the room, to go to the table. It's redrawn with every
+change, and stays by the figure.
+
+**At the table, the figure's still across the room.** Tap it to go over to it. Drag across it to spin it on its stand: its
+front follows your finger, and a flick runs down on its own.
+
+**The paper is plain by default.** A piece is drawn as pattern tissue, so its marks (slashes, folds, darts, gathers)
+stand out. The **cloth** icon lays the chosen cloth and print on it, running with the grain, as it'll be cut. The note by the
+figure follows the same choice. (`?cloth` starts with it on.)
+
+![plain paper](fab/v-table.jpg)
+![the cloth laid on](fab/v-cloth.jpg)
+![the whole pattern (`?sheet`)](fab/v-sheet.jpg)
+
+**At the table, the pattern lies on it at true size.** A centimetre of the paper is a centimetre on the figure, so a piece
+that's spread grows on the table. The figure stands across the room behind it, wearing each move as it's made.
+
+A touch on the screen is cast down onto the tabletop and lands on the paper. Every gesture works on the paper there, and
+a fingertip is a fingertip's size wherever the paper is seen from.
+
+**The paper shows what the tool in hand can do.** The edge it works lights up: the hem for the hand and the scissors,
+the waist for fold and gather. The hand also gets a tab on the hem to drag, a ring at the foot of the grain arrow to
+turn it, and a badge on each dart to tap (white while it's sewn, rose once it's flared or gathered). The moment a cut or
+fold is touched, a dashed ghost shows where it'll go. While a finger's on the paper, a label beside it says how much
+("+4.5 cm", "37 cm (+3)", "22°"), and the drawer keeps up with it.
+
+![the hand: hem tab, grain knob, dart badge](fab/v-hand.jpg)
+![dragging the hem](fab/v-hand-hem.jpg)
+![turning the grain](fab/v-hand-grain.jpg)
+![a slash touched: its ghost](fab/v-slash-touch.jpg)
+
+**Each move is marked as a dressmaker marks it:**
+
+- a slash: its two edges dashed and the opening shaded, the point it swung open about ringed, an arrow across the opening;
+- a pleat: the fold line solid and where it's laid dashed, an arrow from one to the other (the way it's folded), and
+  its stitching down from the waist boxed off at a bar;
+- gathers: a notch either side on the waist, a wavy running stitch between them, and arrows drawing it in;
+- a dart: its two legs to a dot at its point.
+
+![spreading](fab/v-slash-open.jpg)
+![folding](fab/v-fold.jpg)
+![gathering](fab/v-gather.jpg)
+
+**Only the piece takes the tools.** A touch on the pattern (or within a fingertip of its edge) cuts, folds, gathers or
+pulls. A touch anywhere else (empty paper, the tabletop, the room) moves the eye:
+
+- **drag up**, **pinch together** or **scroll** to look up from the paper, across the room, to the figure;
+- **drag down**, **pinch apart** or **scroll back** to come back down to the paper;
+- **drag sideways** to look a little round;
+- **two fingers moved together** slide the view across the table, for working close in on one part of the piece.
+
+It goes further than over the piece both ways: down close to the paper (to a third of the distance), and back past
+the figure to see the room round it.
+
+**The room's wall is one-sided.** Seen from behind it isn't there, so wherever the view goes round to, nothing stands
+between it and the room.
+
+Looking past halfway, the paper is just part of the view, and a touch on it moves the eye too. Come back down to cut.
+
+The paper stays where it was laid. The piece is only moved, and the sheet re-cut, when it no longer fits on its sheet
+or has shrunk into a corner of it. That never happens while a finger is on it. The camera follows the piece smoothly,
+so nothing jumps between one gesture and the next.
+
 ## Using it
 
-- **Turn the figure**: drag. **Come close**: pinch, or scroll.
+- **The paper** (on the cutting table: tap the pattern note, or **table** along the top) is one panel of the pattern. Pick a tool and work it (see the moves above); the figure
+  wears every move as it's made, and follows while your finger is still on the paper.
+- **Spin the figure**: drag across it. **Go round it**: drag off it. **Come close or go back**: pinch, or scroll.
+- **Tap the title three times** (or `?perf`) for a frame readout: fps, frame, cloth and drawing time, and whether the
+  cloth is keeping up with the clock. The cloth runs in fixed 1/60 s steps, at most two a frame: on a slow device it
+  slows down, rather than falling further and further behind.
 - **twirl**: spins the figure on its stand.
 - **sew**: lays the pieces out flat and sews them up again.
-- **The pattern card** (bottom right) opens the whole pattern: the pieces with their grain lines, darts and pleats, how
-  many to cut, the notes the cut made, and the pattern's checks.
+- `?sheet` opens the whole pattern: the pieces with their grain lines, darts and pleats, how
+  many to cut, the notes the cut made, and the pattern's checks. (It's no longer a button: the pinned note and the
+  table are the pattern now.)
+- `?drawer=closed|focus|full` and `&sec=fabric|print|colour` open the drawer as a link left it; `&own=` carries what's
+  been made your own (`{"c": {cloth qualities}, "i": [three inks], "s": print scale}`), and the page writes it as it
+  changes.
 
 ## How it's built
+
+**The pictures are made, not taken.** Every one in this page is made by driving the page as a child would, and the
+whole set is made again with one command: `node cells/lab/views.mjs fab` (name some, or a group, to make only those;
+`--list` for what's registered). Each view is registered in `client/fab/views.mjs`: a name, a group, a title and
+caption, the page's query, and the steps that drive it (pick up a tool, touch the hem, drag), the shot taken at the
+right moment, often with the finger still down. They're `static/fab/v-<name>.jpg`, committed and deployed with the
+page. The whole set is under **pictures** at the top of this page, apart from the prose (and `static/fab/views.md`
+on GitHub); here, a view goes where it's talked about.
 
 All of it is in `client/fab/`:
 
@@ -456,10 +622,12 @@ All of it is in `client/fab/`:
 |---|---|
 | `garment.ts` | every garment from one design: its family, its components, how they're sewn together, the shared checks |
 | `edges.ts` | the geometry: lines, arcs, Béziers (chord-relative), Coons-patch pieces, sewing runs by length |
-| `cut.ts` | what every cut shares: the figure measured, waistbands, holds, hangers, the shared checks |
-| `pattern.ts` | the skirt: its grammar and its checks |
+| `shared.ts` | what every garment's cut shares: the figure measured, waistbands, holds, hangers, the shared checks |
 | `bodice.ts` | tops: bodice, necklines, sleeves, collars |
 | `trousers.ts` | trousers |
+| `cut.ts` | the cutting table: the block, and the moves made on it |
+| `pattern.ts` | from a recipe (block + moves) to what's sewn and held, and the pattern's checks; the dials' shortcuts |
+| `paper.ts` | the paper on the cutting table: its sheet, tools and gestures |
 | `fabric.ts` | the swatches |
 | `cloth.ts` | the XPBD cloth |
 | `body.ts` | the figure and its distance field |
@@ -474,9 +642,12 @@ All of it is in `client/fab/`:
 | parameter | values |
 |---|---|
 | `fam` | `skirt`, `top`, `dress`, `trousers` or `jumpsuit` |
-| `len` | skirt length, cm |
-| `full` | fullness |
-| `cut` | `flare`, `gather` or `pleat` |
+| `len` | a skirt's length, cm |
+| `m` | the moves, e.g. `c0_s500.150_p250.15` (close dart 0; spread at 0.5 of the hem by 15.0 cm; pleat at 0.25 of the waist, 1.5 cm deep) |
+| `full`, `cut` | an older link's fullness and `flare`, `gather` or `pleat`: written as moves |
+| `ui` | `dials`: the dials instead of the paper |
+| `at` | `table`: start at the cutting table |
+| `perf` | the frame readout |
 | `panels` | number of panels |
 | `grain` | degrees |
 | `tiers` | 1–3 |

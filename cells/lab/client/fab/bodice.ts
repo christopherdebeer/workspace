@@ -15,7 +15,7 @@
  * - a top that comes below the hips is cut wide enough to clear them.
  */
 import { CHEST_Y, WAIST_Y, arm, type V3 } from './body';
-import { CHEST, Cut, HEAD_ROUND, TAU, WAIST, bodiceStart, coatAt, shoulderAt, surfaceLen, topAt } from './cut';
+import { CHEST, Cut, HEAD_ROUND, TAU, WAIST, bodiceStart, coatAt, shoulderAt, surfaceLen, topAt } from './shared';
 import { buttons, clamp, cubic, curve, flipX, fractions, line, mirror, patch, run, backwards, type At, type Edge, type P2 } from './edges';
 import { roundAt, type Design, type Neck } from './pattern';
 
@@ -30,6 +30,9 @@ export const NECKS: Record<Neck, { w: number; front: number; back: number; label
 /** round the upper arm, and the hand (a long sleeve's end must pass it) */
 const ARM = TAU * 3.9, HAND = TAU * 3.4;
 const named = (e: Edge, name: string): Edge => ({ ...e, name });
+
+/** a dress's bodice's hem, round: the waist and its ease (what its skirt is cut to) */
+export const bodiceHemRound = (d: Design) => WAIST + 3 + 0.3 * clamp(d.ease, 4, 16);
 
 export interface Bodice {
   /** the hem, a loop round from the centre front (to sew a skirt or trousers on) */
@@ -56,7 +59,7 @@ export function bodice(cut: Cut, d: Design, h: number, o: { toWaist: boolean; kn
   // (the hem: at the waist for a dress, else as long as asked; wide enough to clear the hips if it comes below them)
   const len = o.toWaist ? 0 : clamp(d.bodyLen, -6, 30), yh = -len;
   let hw: number;
-  if (o.toWaist) hw = (WAIST + 3 + 0.3 * ease) / 4;
+  if (o.toWaist) hw = bodiceHemRound(d) / 4;
   else {
     let need = 0;
     for (let y = Math.max(0, -len); y <= Math.max(0, len); y += 0.5) need = Math.max(need, len >= 0 ? roundAt(y) : 0);

@@ -14,11 +14,10 @@
  * at a time, nearest first, and then hangs still: only its swing moves it, drawn as a turn about its hook.
  */
 import { Cloth } from './cloth';
-import { fabricById, makePrint } from './fabric';
+import { fabricOf, printOf } from './fabric';
 import { draftGarment, toHangerBuild } from './garment';
-import type { Design } from './pattern';
 import { FLOOR, HOOK, RAIL_W, RAIL_Y, swingAt, translate, type Fittings, type Item, type Look } from './render';
-import { RAIL_COLOURS, rails, type Garment, type Rail } from './store';
+import { RAIL_COLOURS, designOf, lookOf, rails, type Garment, type Rail } from './store';
 
 type V3 = [number, number, number];
 /** where the rails stand: in a row along the wall, left of the bench */
@@ -34,7 +33,7 @@ const PER = 9, GAP_FAR = 20, GAP_NEAR = 44;
 interface Hung { g: Garment | null; x: number; vx: number; th: number; om: number; lastX: number; cloth: Cloth | null; frames: number; look: Look | null; key: string; model: Float32Array; hook: Float32Array; yaw: number; coat: boolean; hang: number }
 interface RailState { rail: Rail; scroll: number; vel: number; hung: Hung[] }
 
-const keyOf = (d: Design) => JSON.stringify(d);
+const keyOf = (x: unknown) => JSON.stringify(x);
 /** settled skirts, kept by design: going back to the rails is instant, and a skirt on two rails is settled once */
 const cache = new Map<string, { cloth: Cloth; frames: number; hang: number }>();
 
@@ -55,8 +54,9 @@ export class Room {
       const slots: Array<Garment | null> = rail.workshop ? rail.garments : [null, ...rail.garments];
       const hung = slots.map((g, i): Hung => {
         const was = prev?.hung.find((h) => (h.g?.id ?? null) === (g?.id ?? null));
-        const key = g ? keyOf(g.design) : '';
-        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricById(g.design.fabric), print: makePrint(g.design.print, g.design.colour) } : null, key, model: new Float32Array(16), hook: new Float32Array(16), yaw: Math.PI / 2, coat: !!g && g.design.family !== 'skirt' && g.design.family !== 'trousers', hang: g?.design.length ?? 8 };
+        const key = g ? keyOf({ design: designOf(g), recipe: g.recipe }) : '';
+        const dg = g ? designOf(g) : null;
+        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricOf(lookOf(g)), print: printOf(lookOf(g)) } : null, key, model: new Float32Array(16), hook: new Float32Array(16), yaw: Math.PI / 2, coat: !!dg && dg.family !== 'skirt' && dg.family !== 'trousers', hang: dg?.length ?? 8 };
       });
       return { rail, scroll: prev?.scroll ?? 0, vel: 0, hung };
     });
@@ -101,12 +101,13 @@ export class Room {
         // (each swings on its hook: a damped pendulum, pushed by how its hook's carried along)
         const w2 = 980 / ELL, acc = -w2 * Math.sin(h.th) - 2 * 0.22 * Math.sqrt(w2) * h.om - (Math.max(-500, Math.min(500, a)) / ELL) * Math.cos(h.th);
         h.om += acc * dt; h.th = Math.max(-0.35, Math.min(0.35, h.th + h.om * dt));
-        // (the one in front turned to face the viewer and drawn a little out from the rest; the others across the bar)
+        // (the one in front turned to face the viewer; the others across the bar. Each hangs from its hook, on the bar,
+        // the hook swivelling with it: hanger and hook share the one point they meet at)
         const p = Math.abs(i - s.scroll / SP), f = Math.max(0, 1 - p), w = f * f * (3 - 2 * f);
         h.yaw = Math.PI / 2 + (RAIL_AZ - Math.PI / 2) * w;
-        const at: V3 = [railX(k) + h.x, BAR_Y, RAIL_Z + 7 * w];
+        const at: V3 = [railX(k) + h.x, BAR_Y, RAIL_Z];
         swingAt(at, [0, HOOK, 0], h.th, h.model, h.yaw);
-        swingAt([at[0], at[1], RAIL_Z], [0, HOOK, 0], h.th, h.hook);
+        swingAt(at, [0, HOOK, 0], h.th, h.hook);
       });
     }
     // (settling, nearest the front of the rail being looked at first)
@@ -122,7 +123,7 @@ export class Room {
         if (c) { h.cloth = c.cloth; h.frames = c.frames; h.hang = c.hang; }
         else {
           // (a garment that won't draft (it can't: every design that can be saved is made whole) hangs as a bare hanger)
-          try { const g = draftGarment(h.g!.design, 650); h.cloth = new Cloth(toHangerBuild(g, fabricById(h.g!.design.fabric))); h.hang = g.m.hang; }
+          try { const g = draftGarment(designOf(h.g!), 650, h.g!.recipe); h.cloth = new Cloth(toHangerBuild(g, fabricOf(lookOf(h.g!)))); h.hang = g.m.hang; }
           catch { h.g = null; continue; }
           h.frames = 0; cache.set(h.key, { cloth: h.cloth, frames: 0, hang: h.hang });
         }

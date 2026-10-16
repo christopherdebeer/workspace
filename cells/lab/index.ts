@@ -51,6 +51,7 @@ function build(): Built {
   objects.set(appPath, { body: app, type: 'application/javascript; charset=utf-8' });
   const pageOf = new Map<string, string>();
   const readmeOf = new Map<string, string>();
+  const assetsOf = new Map<string, string>();
   const TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', woff2: 'font/woff2', json: 'application/json' };
   for (const e of EXPERIMENTS) {
     // (the experiment's assets, if it has a folder of them: one hash for the set)
@@ -61,6 +62,7 @@ function build(): Built {
       assets = `/~/a/${e.id}/${hash(Buffer.concat(files.map(([, b]) => b)))}/`;
       for (const [f, b] of files) objects.set(assets + f, { body: b, type: TYPES[f.split('.').pop()!] });
     }
+    assetsOf.set(e.id, assets);
     // (its address shown as the stable `/<id>?…`, not the hashed path it was served from: a reload
     // then asks for the experiment as it is now, not this deploy's copy forever)
     const stable = `<script>history.replaceState(null, '', '/${e.id}' + location.search + location.hash)</script>`;
@@ -77,7 +79,9 @@ function build(): Built {
   }
   for (const e of EXPERIMENTS) {
     if (!existsSync(here(e.readme))) continue;
-    const doc = html(readmePage(e, readFileSync(here(e.readme), 'utf8'), pageOf.get(e.id)!));
+    // (its pictures, the whole set, if it registers views: static/<id>/views.json, written by views.mjs)
+    const vj = here(`static/${e.id}/views.json`), views = existsSync(vj) ? (JSON.parse(readFileSync(vj, 'utf8')) as ViewGroup[]) : [];
+    const doc = html(readmePage(e, readFileSync(here(e.readme), 'utf8'), pageOf.get(e.id)!, assetsOf.get(e.id) ?? '', views));
     const p = `/~/r/${e.id}/${hash(doc)}/`;
     objects.set(p, { body: doc, type: 'text/html; charset=utf-8' });
     readmeOf.set(e.id, p);
@@ -176,8 +180,23 @@ ${body}
 </html>`;
 }
 
-function readmePage(e: Experiment, src: string, page: string): string {
-  const doc = markdown(src);
+interface ViewGroup { group: string; views: Array<{ name: string; title: string; caption: string; file: string }> }
+/** the whole set of an experiment's pictures, apart from its prose: an overlay, opened by a button (or `#pictures`) */
+function picturesOf(views: ViewGroup[], assets: string): { button: string; dialog: string } {
+  const n = views.reduce((a, g) => a + g.views.length, 0);
+  if (!n || !assets) return { button: '', dialog: '' };
+  const groups = views.map((g) => `${g.group ? `<h3>${esc(g.group)}</h3>` : ''}<div class="gallery">${g.views.map((v) => `<figure id="v-${esc(v.name)}"><a href="${assets}${esc(v.file)}" target="_blank" rel="noopener"><img src="${assets}${esc(v.file)}" alt="${esc(v.title)}" loading="lazy"></a><figcaption><strong>${esc(v.title)}</strong>${v.caption ? `: ${esc(v.caption)}` : ''}</figcaption></figure>`).join('')}</div>`).join('');
+  return {
+    button: `<button class="pics" type="button" onclick="document.getElementById('pictures').showModal()">pictures · ${n}</button>`,
+    dialog: `<dialog id="pictures"><header><b>Every picture (${n})</b><button type="button" onclick="this.closest('dialog').close()">close ✕</button></header>${groups}</dialog>
+<script>(function(){var d=document.getElementById('pictures');if(location.hash==='#pictures')d.showModal();d.addEventListener('click',function(e){if(e.target===d)d.close();});})()</script>`,
+  };
+}
+
+function readmePage(e: Experiment, src: string, page: string, assets: string, views: ViewGroup[] = []): string {
+  const pics = picturesOf(views, assets);
+  // (its pictures are relative to it, `<id>/…` as in the repo: here, its deployed assets)
+  const doc = markdown(src, { resolve: (p) => (assets && p.startsWith(`${e.id}/`) ? assets + p.slice(e.id.length + 1) : p) });
   const toc = doc.headings.filter((h) => h.level === 2).map((h) => `<a href="#${h.id}">${esc(h.text.replace(/`/g, ''))}</a>`).join('');
   return `${HEAD(`${doc.title || e.title} — readme`)}
 <style>
@@ -197,17 +216,30 @@ function readmePage(e: Experiment, src: string, page: string): string {
   table { border-collapse: collapse; margin: 10px 0; display: block; overflow-x: auto; }
   th, td { border: 1px solid var(--rule); padding: 3px 8px; text-align: left; vertical-align: top; }
   hr { border: 0; border-top: 1px dashed var(--soft); margin: 24px 0; }
+  img { max-width: 100%; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin: 12px 0; }
+  .gallery figure { margin: 0; }
+  .gallery img { width: 100%; display: block; border: 1px solid var(--rule); }
+  .gallery figcaption { font-size: 11px; line-height: 1.35; margin-top: 4px; color: var(--soft); }
+  button.pics { font: inherit; background: none; border: 1px solid var(--rule); padding: 1px 8px; cursor: pointer; color: var(--ink); }
+  button.pics:hover { border-color: var(--ink); }
+  dialog#pictures { width: min(1100px, 96vw); max-height: 92vh; padding: 0 18px 18px; border: 1px solid var(--rule); background: var(--paper); color: var(--ink); }
+  dialog#pictures::backdrop { background: rgba(0,0,0,.45); }
+  dialog#pictures header { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; padding: 12px 0 8px; background: inherit; border-bottom: 1px solid var(--rule); z-index: 1; }
+  dialog#pictures header button { font: inherit; background: none; border: 1px solid var(--rule); padding: 1px 8px; cursor: pointer; color: inherit; }
+  dialog#pictures .gallery { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
   nav.toc { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 10px 0 0; }
   nav.toc a { color: var(--soft); text-decoration: none; }
   nav.toc a:hover { color: var(--ink); }
 </style>
 </head>
 <body>
-<header class="bar"><a class="px" href="/">&larr; lab</a><a href="/${e.id}">open ${esc(e.title.toLowerCase())} &rarr;</a></header>
+<header class="bar"><a class="px" href="/">&larr; lab</a>${pics.button}<a href="/${e.id}">open ${esc(e.title.toLowerCase())} &rarr;</a></header>
 <main>
 ${toc ? `<nav class="toc">${toc}</nav>` : ''}
 ${doc.html}
 </main>
+${pics.dialog}
 </body>
 </html>`;
 }

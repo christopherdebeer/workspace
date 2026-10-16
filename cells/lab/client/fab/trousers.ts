@@ -10,7 +10,7 @@
  * - the waist, cut as wide as the hips, gathers into a band the waist's round (it must go over the hips).
  */
 import { WAIST_Y, around, section, type V3 } from './body';
-import { Cut, TAU, WAIST, clipAt, waistband } from './cut';
+import { Cut, TAU, WAIST, clipAt, waistband } from './shared';
 import { clamp, cubic, flipX, line, mirror, patch, type At, type Edge, type P2 } from './edges';
 import { bandAt } from './pattern';
 import { roundAt, type Design } from './pattern';

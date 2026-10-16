@@ -1,0 +1,187 @@
+[
+ {
+  "group": "The room",
+  "views": [
+   {
+    "name": "rails",
+    "title": "The rails",
+    "caption": "a rail per person; slide along, tap the front one to put it on",
+    "file": "v-rails.jpg"
+   },
+   {
+    "name": "figure",
+    "title": "The figure",
+    "caption": "cloth and print in the drawer; the pattern pinned up, bottom right",
+    "file": "v-figure.jpg"
+   },
+   {
+    "name": "figure-turned",
+    "title": "Turned round",
+    "caption": "the cutting table behind it: tap it to go there",
+    "file": "v-figure-turned.jpg"
+   },
+   {
+    "name": "table",
+    "title": "The cutting table",
+    "caption": "the pattern at true size, the figure across the room",
+    "file": "v-table.jpg"
+   },
+   {
+    "name": "table-up",
+    "title": "Looking up from the table",
+    "caption": "drag (or pinch) off the piece to look up at the figure",
+    "file": "v-table-up.jpg"
+   },
+   {
+    "name": "sheet",
+    "title": "The whole pattern",
+    "caption": "every piece, its grain, how much cloth, its checks",
+    "file": "v-sheet.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The drawer",
+  "views": [
+   {
+    "name": "drawer-closed",
+    "title": "Closed",
+    "caption": "its handle, and what's chosen in a line",
+    "file": "v-drawer-closed.jpg"
+   },
+   {
+    "name": "drawer-drag",
+    "title": "Drawn up",
+    "caption": "the drawer follows the finger: what's below comes into view before it's let go",
+    "file": "v-drawer-drag.jpg"
+   },
+   {
+    "name": "custom-fabric",
+    "title": "Your own cloth",
+    "caption": "expanded: the swatch's measured qualities, dial by dial; the skirt settles again",
+    "file": "v-custom-fabric.jpg"
+   },
+   {
+    "name": "custom-print",
+    "title": "Your own print",
+    "caption": "how big it's printed",
+    "file": "v-custom-print.jpg"
+   },
+   {
+    "name": "custom-colour",
+    "title": "Your own palette",
+    "caption": "its three inks, each picked",
+    "file": "v-custom-colour.jpg"
+   },
+   {
+    "name": "table-full",
+    "title": "The table's, expanded",
+    "caption": "the tool's gestures and what it's set to, under its history",
+    "file": "v-table-full.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The hand",
+  "views": [
+   {
+    "name": "hand",
+    "title": "The hand",
+    "caption": "the hem lit, its tab; the grain arrow's knob; a badge on the dart",
+    "file": "v-hand.jpg"
+   },
+   {
+    "name": "hand-hem",
+    "title": "Dragging the hem",
+    "caption": "how long, by the finger",
+    "file": "v-hand-hem.jpg"
+   },
+   {
+    "name": "hand-grain",
+    "title": "Turning the grain",
+    "caption": "the knob follows the finger, straight to bias",
+    "file": "v-hand-grain.jpg"
+   },
+   {
+    "name": "hand-dart",
+    "title": "A dart, tapped",
+    "caption": "closed into flare: the badge goes rose",
+    "file": "v-hand-dart.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Slash",
+  "views": [
+   {
+    "name": "slash",
+    "title": "Scissors in hand",
+    "caption": "the hem lit: where a slash starts",
+    "file": "v-slash.jpg"
+   },
+   {
+    "name": "slash-touch",
+    "title": "Touched",
+    "caption": "a ghost of the cut, hem to waist, before it opens",
+    "file": "v-slash-touch.jpg"
+   },
+   {
+    "name": "slash-open",
+    "title": "Spread open",
+    "caption": "the wedge of new cloth, how much by the finger",
+    "file": "v-slash-open.jpg"
+   },
+   {
+    "name": "slash-made",
+    "title": "Slashed",
+    "caption": "its hinge ringed, an arrow across the opening; the figure flares",
+    "file": "v-slash-made.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Fold",
+  "views": [
+   {
+    "name": "fold",
+    "title": "Folding a pleat",
+    "caption": "the waist lit; how much is folded in, by the finger",
+    "file": "v-fold.jpg"
+   },
+   {
+    "name": "fold-made",
+    "title": "A pleat",
+    "caption": "fold line, where it's laid, the way it folds, stitched down to a bar",
+    "file": "v-fold-made.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Gather",
+  "views": [
+   {
+    "name": "gather",
+    "title": "Gathering",
+    "caption": "width added at the waist, by the finger",
+    "file": "v-gather.jpg"
+   },
+   {
+    "name": "gather-made",
+    "title": "Gathered",
+    "caption": "notched either side, a running stitch, drawn in",
+    "file": "v-gather-made.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Cloth",
+  "views": [
+   {
+    "name": "cloth",
+    "title": "The cloth on the paper",
+    "caption": "off by default; laid on along the grain, as it'll be cut",
+    "file": "v-cloth.jpg"
+   }
+  ]
+ }
+]

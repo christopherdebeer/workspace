@@ -13,11 +13,12 @@
  * each piece hangs from) and gets the same checks as well as its own.
  */
 import { WAIST_Y, setPose, type Pose, type V3 } from './body';
-import { bodice } from './bodice';
-import { Cut, SHOULDER_TOP, TAU, clipAt, commonChecks } from './cut';
-import { fractions, outline, patch, line, type At, type Check, type Pair, type Piece } from './edges';
+import { bodice, bodiceHemRound } from './bodice';
+import { Cut, SHOULDER_TOP, TAU, clipAt, commonChecks } from './shared';
+import { fractions, outline, patch, line, type At, type Check, type Mark, type Pair, type Piece } from './edges';
 import { FABRICS, COLOURWAYS, PRINTS, type Fabric } from './fabric';
-import { DEFAULT_DESIGN, HIP_DEPTH, bandAt, describe as describeSkirt, draft, type Design, type Family } from './pattern';
+import { ribAt } from './cut';
+import { DEFAULT_DESIGN, HIP_DEPTH, bandAt, describe as describeSkirt, draftRecipe, fromDesign, type Design, type Family, type Recipe, type Skirt } from './pattern';
 import { trousers } from './trousers';
 import type { Seam } from './edges';
 
@@ -31,6 +32,8 @@ export interface Garment {
   notes: string[]; checks: Check[];
   /** how the figure stands to wear it */
   pose: Pose;
+  /** its skirt, as drafted, if it has one (a skirt, a dress): its paper, what each move made */
+  skirt?: Skirt;
   m: { hang: number; area: number };
 }
 
@@ -59,22 +62,24 @@ export function sanitize(x: Partial<Design> | null | undefined): Design {
 }
 const poseOf = (f: Family): Pose => (f === 'skirt' || f === 'trousers' ? 'twirl' : 'dress');
 
-/** draft a garment: first coarsely to learn how much cloth it is, then at the spacing that brings it to `budget` points */
-export function draftGarment(d0: Partial<Design>, budget = 1600): Garment {
+/** draft a garment: first coarsely to learn how much cloth it is, then at the spacing that brings it to `budget` points.
+ * `recipe`: its skirt's paper as worked (moves and all), if it has a skirt; else the skirt's written from the design */
+export function draftGarment(d0: Partial<Design>, budget = 1600, recipe?: Recipe): Garment {
   const d = sanitize(d0);
-  const first = build(d, 3.4, budget);
+  const first = build(d, 3.4, budget, recipe);
   const h = Math.max(1.9, Math.sqrt(first.m.area * 1e4 / budget));
-  return build(d, h, budget);
+  return build(d, h, budget, recipe);
 }
 
-function build(d: Design, h: number, budget: number): Garment {
+function build(d: Design, h: number, budget: number, recipe?: Recipe): Garment {
   const cut = new Cut(), knit = d.fabric === 'jersey';
+  let skirtOf: Skirt | undefined;
   let hangerKind: Garment['hangerKind'] = 'clips', hang = 0;
-  if (d.family === 'skirt') { skirt(cut, d, h, budget, null); hang = d.length; }
+  if (d.family === 'skirt') { skirtOf = skirt(cut, d, h, budget, null, recipe); hang = recipe?.length ?? d.length; }
   else if (d.family === 'top') { bodice(cut, d, h, { toWaist: false, knit }); hangerKind = 'shoulders'; hang = SHOULDER_TOP - WAIST_Y + d.bodyLen; }
   else if (d.family === 'dress') {
     const b = bodice(cut, d, h, { toWaist: true, knit });
-    skirt(cut, d, h, budget, { hem: b.hem, round: b.hemRound });
+    skirtOf = skirt(cut, d, h, budget, { hem: b.hem, round: b.hemRound }, recipe);
     hangerKind = 'shoulders'; hang = SHOULDER_TOP - WAIST_Y + d.length;
   } else if (d.family === 'trousers') { trousers(cut, d, h, { joined: false }); hang = WAIST_Y - (41 - d.legLen); }
   else {
@@ -88,31 +93,30 @@ function build(d: Design, h: number, budget: number): Garment {
   const checks = [...commonChecks(cut), ...cut.checks];
   return {
     design: d, pieces: cut.pieces, pairs: cut.pairs, seams: cut.seams, holds: cut.holds, hanger: cut.hanger, hangerKind, anchors: cut.anchors,
-    notes: cut.notes, checks, pose: poseOf(d.family), m: { hang, area: cut.area() / 1e4 },
+    notes: cut.notes, checks, pose: poseOf(d.family), skirt: skirtOf, m: { hang, area: cut.area() / 1e4 },
   };
 }
 
 /** a skirt into the cut: on its own waistband, or sewn round a bodice's hem; and its tiers */
-function skirt(cut: Cut, d: Design, h: number, budget: number, onto: { hem: At[]; round: number } | null) {
-  const tiers = d.tiers, total = d.length;
+function skirt(cut: Cut, d: Design, h: number, budget: number, onto: { hem: At[]; round: number } | null, recipe?: Recipe): Skirt {
+  const tiers = d.tiers, total = recipe?.length ?? d.length;
   // (with tiers, the first comes past the hips and the rest share what's left)
   const first = tiers > 1 ? Math.max(HIP_DEPTH + 3, total * 0.42) : total, rest = tiers > 1 ? Math.max(6, (total - first) / (tiers - 1)) : 0;
   const sd: Design = { ...d, length: first };
   // (its budget: as dense as the rest of the garment)
-  const sk0 = draft(sd, budget, onto ? { band: onto.round } : {});
-  const sk = draft(sd, Math.max(200, (sk0.m.area * 1e4) / (h * h)), onto ? { band: onto.round } : {});
+  // (its paper: as worked, if it was (its first tier's length, if it's tiered), else written from the dials)
+  const o = onto ? { band: onto.round } : {}, rec: Recipe = recipe ? { ...recipe, length: tiers > 1 ? first : recipe.length, ...(onto ? { band: onto.round } : {}) } : fromDesign(sd, o.band);
+  const sk0 = draftRecipe(rec, budget, o);
+  const sk = draftRecipe(rec, Math.max(200, (sk0.m.area * 1e4) / (h * h)), o);
   const base = cut.pieces.length, n = sk.m.panels;
   sk.pieces.forEach((p, k) => {
     // (a dress's skirt has no band of its own: it's sewn to the bodice. The band's the last piece: nothing shifts)
     if (onto && p.kind === 'band') return;
     const panel = p.kind === 'panel';
     cut.add({
-      ...p, drawn: panel ? k === 0 : true, cut: panel ? n : 1,
+      ...p, drawn: panel ? k === 0 : true, cut: panel ? n : 1, ruled: panel,
       label: panel ? (n === 1 ? 'skirt · cut 1' : n === 2 ? 'front & back · cut 2' : `panel · cut ${n}`) : 'waistband · cut 1',
-      marks: panel && k === 0 ? sk.marks.map((mk) => {
-        const v = Math.min(1, mk.down / sk.m.length), f = (c: number, vv: number) => p.flat(c / p.nu, vv);
-        return mk.kind === 'dart' ? { kind: 'dart' as const, pts: [f(mk.c, 0), f(mk.c + mk.k / 2, v), f(mk.c + mk.k, 0)] } : { kind: 'pleat' as const, pts: [f(mk.c, 0), f(mk.c, v), f(mk.c + mk.k, v), f(mk.c + mk.k, 0)] };
-      }) : undefined,
+      marks: panel && k === 0 ? stripMarks(sk) : undefined,
       spans: undefined,
     });
   });
@@ -130,7 +134,7 @@ function skirt(cut: Cut, d: Design, h: number, budget: number, onto: { hem: At[]
   // (the skirt's own checks, but not the cloth's width: every piece's is checked once for the whole garment)
   for (const c of sk.checks) if (c.name !== 'fits on the cloth') cut.checks.push(onto && c.name === 'waist fits the band' ? { ...c, name: 'skirt fits the bodice' } : c);
   cut.notes.push(...sk.notes.map((x) => (onto ? x.replace('the band, gathered in', 'the bodice, gathered into it') : x)));
-  if (tiers < 2) return;
+  if (tiers < 2) return sk;
   // ─── tiers: each a ring of straight panels, 1.5 times the round of the hem above, gathered onto it ───
   let prev: At[] = [];
   // (round the hem: every panel's whole edge in turn; where two meet they're sewn, so that step has no length)
@@ -163,6 +167,20 @@ function skirt(cut: Cut, d: Design, h: number, budget: number, onto: { hem: At[]
     prevRound = fractions(cut.pieces, prev).len; y0 = y0 - L * 0.92;
   }
   cut.notes.push(`${tiers} tiers, each gathered 1.5× onto the one above`);
+  return sk;
+}
+
+/** a skirt panel's marks, from the strips of its paper: darts to their points, pleats stitched a little way, slashes
+ * spread open, gathers along the waist */
+function stripMarks(sk: Skirt): Mark[] {
+  const P = sk.cut, L = sk.m.length, R = (k: number, f: number) => ribAt(P.ribs[k], f), out: Mark[] = [];
+  P.strips.forEach((st, k) => {
+    if (st.kind === 'dart') out.push({ kind: 'dart', pts: [P.ribs[k].top, P.ribs[k].knee, P.ribs[k + 1].top] });
+    if (st.kind === 'pleat') { const s1 = Math.min(1, (st.stitch ?? 0) / L); out.push({ kind: 'pleat', pts: [R(k, 0), R(k, s1), R(k + 1, s1), R(k + 1, 0)] }); }
+    if (st.kind === 'wedge') out.push({ kind: 'wedge', pts: [...Array.from({ length: 9 }, (_, i) => R(k, i / 8)), ...Array.from({ length: 9 }, (_, i) => R(k + 1, 1 - i / 8))] });
+    if (st.kind === 'ease') out.push({ kind: 'gather', pts: [[R(k, 0.02)[0], R(k, 0.02)[1] - 0.6], [R(k + 1, 0.02)[0], R(k + 1, 0.02)[1] - 0.6]] });
+  });
+  return out;
 }
 
 /** what the cloth needs: its pieces, what's sewn, held, and hung from (a dress's skirt's unused band left out) */
@@ -180,6 +198,13 @@ export function toHangerBuild(g: Garment, fabric: Fabric) {
 }
 /** pose the figure for it, before its cloth is made */
 export function poseFor(g: Garment) { setPose(g.pose); }
+/** a skirt's recipe as its garment cuts it: a dress's to its bodice's hem, a skirt's to its own band */
+export const recipeFor = (d: Design, r?: Recipe): Recipe => {
+  const band = d.family === 'dress' ? bodiceHemRound(d) : undefined;
+  if (!r) return fromDesign(d, band);
+  const { band: _, ...rest } = r; void _;
+  return band ? { ...rest, band } : rest;
+};
 
 /** a garment in plain words: "a knee-length flared skirt", "a short-sleeved round-neck top" */
 export function describe(d0: Partial<Design>): string {

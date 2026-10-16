@@ -17,7 +17,9 @@ import type { V3 } from './body';
 export type P2 = [number, number];
 /** a point of a piece's grid: piece, column, row */
 export type At = [number, number, number];
-export interface Mark { kind: 'dart' | 'pleat' | 'gather' | 'button' | 'fold'; pts: P2[] }
+/** a dressmaker's mark on a piece: a dart (its two legs to a point), a pleat (fold, laid-to line), a slash spread open
+ * (its two edges: the first half of the points one, the rest the other, back), gathering, buttons */
+export interface Mark { kind: 'dart' | 'pleat' | 'wedge' | 'gather' | 'button' | 'fold'; pts: P2[] }
 export interface Piece {
   name: string; kind: 'panel' | 'band';
   /** grid points across and down, less one */
@@ -32,6 +34,9 @@ export interface Piece {
   label?: string; cut?: number; drawn?: boolean;
   /** the dressmaker's marks on it, in its flat coordinates */
   marks?: Mark[];
+  /** meshed as ruled regions (a skirt's panel, cut.ts): slivers are meant (a dart's legs meet below its point), and its
+   * paper's checked by its own checks, not the grid's */
+  ruled?: boolean;
   /** its named edges: the grid points along each, in order */
   spans?: Record<string, Array<[number, number]>>;
 }

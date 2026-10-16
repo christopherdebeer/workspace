@@ -32,7 +32,9 @@ at all: CloudFront and S3, never the Lambda.
 ```
 index.ts          the Lambda: the index, the redirects, the namespace's misses
 experiments.ts    the registry: id, title, group, blurb, page, preview query, README, presets
-md.ts             markdown to HTML (the READMEs)
+md.ts             markdown to HTML (the READMEs: images, and a paragraph of only images is a gallery)
+views.mjs         makes an experiment's README pictures: `node cells/lab/views.mjs <id>` runs the views it
+                  registers in client/<id>/views.mjs, writes static/<id>/v-<name>.jpg, rewrites the README's gallery
 client/main.ts    the one bundle: picks the experiment its page names, imports it lazily
 client/<id>/      an experiment's source
 client/kit/       what experiments share: seeded randomness (rng.ts), the pencil (pencil.ts)

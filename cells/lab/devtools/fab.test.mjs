@@ -61,12 +61,13 @@ const t0 = Date.now(), ok = (what) => console.log(`ok    ${what}`);
 
 // ─── the evidence bench's sections ───────────────────────────────────────────────────────────
 const sections = [V.garmentTest(quick ? 60 : 300)];
-if (!quick) sections.push(V.patternTest(), V.sewnTest());
+if (!quick) sections.push(V.patternTest(), ...V.sewnTest());
 for (const s of sections) {
   console.log(`${s.pass ? 'ok  ' : 'FAIL'}  ${s.title}: ${s.verdict}`);
-  if (s.id === 'sewn') for (const r of s.rows) console.log(`        ${r.ok ? ' ' : '✗'} ${String(r.garment).padEnd(64)} seams ${r['widest seam (cm)']} cm, p99 ${r['stretch p99']}, ${r['ms a frame']} ms`);
+  if (s.id === 'sewn') for (const r of s.rows) console.log(`        ${r['sews up'] === 'yes' ? ' ' : '✗'}${r.sound === 'yes' ? '·' : ' '} ${String(r.garment).padEnd(64)} seams ${r['widest seam']}, p99 ${r.stretch}, ${r['ms a frame']} ms`);
   if (!s.pass) for (const r of s.rows.slice(0, 10)) console.log('       ', JSON.stringify(r));
 }
-const failed = sections.filter((s) => !s.pass);
+// (6′ is reported, not required: like the bench's 2b′ and 4, it says plainly where the cloth falls short)
+const failed = sections.filter((s) => !s.pass && s.id !== 'sound');
 console.log(failed.length ? `\n${failed.length} failed` : `\nall passed (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
 process.exit(failed.length ? 1 : 0);

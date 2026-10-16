@@ -3,10 +3,19 @@
  * hung with garments to start from, and one for each person who makes things here, with what they've made. Kept in this browser (localStorage), so a rail is a person on this device: a family's tablet, a
  * classroom's. (Nothing leaves it; a private window keeps them only for the visit.)
  */
-import { type Design } from './pattern';
-import { sanitize } from './garment';
+import { fromDesign, type Design, type Recipe } from './pattern';
+import { recipeFor, sanitize } from './garment';
 
-export interface Garment { id: string; design: Design; at: number }
+/** a garment on a rail: its design (what kind of thing, and its dials) and, if it has a skirt (a skirt, a dress), that
+ * skirt's recipe: its paper as worked, moves and all. One kept from before recipes has only its design; one kept from
+ * before there were tops has only its recipe (a skirt) */
+export interface Garment { id: string; design?: Design; recipe?: Recipe; at: number }
+/** a garment's design, made whole (a skirt's length, panels, grain and cloth read from its recipe, which is the truth) */
+export const designOf = (g: Garment): Design => sanitize(g.recipe ? { ...g.design, length: g.recipe.length, panels: g.recipe.panels, grain: g.recipe.grain, fabric: g.recipe.fabric, print: g.recipe.print, colour: g.recipe.colour } : g.design);
+/** its skirt's recipe: as kept, or written from its design */
+export const recipeOf = (g: Garment): Recipe => recipeFor(designOf(g), g.recipe);
+/** how it looks: its recipe's cloth, print and inks (made one's own), or its design's */
+export const lookOf = (g: Garment) => g.recipe ?? designOf(g);
 export interface Rail { id: string; name: string; colour: number; garments: Garment[]; workshop?: boolean }
 
 /** the rails' powder-coat colours, and how their name tags are drawn */
@@ -19,7 +28,7 @@ export const RAIL_COLOURS: Array<{ tint: [number, number, number]; css: string }
   { tint: [0.15, 0.6, 0.58], css: '#26998f' },
 ];
 const d = (x: Partial<Design>): Design => sanitize(x);
-const rail = (id: string, name: string, designs: Array<Partial<Design>>): Rail => ({ id, name, colour: -1, workshop: true, garments: designs.map((x, k) => ({ id: `${id}${k}`, design: d(x), at: 0 })) });
+const rail = (id: string, name: string, designs: Array<Partial<Design>>): Rail => ({ id, name, colour: -1, workshop: true, garments: designs.map((x, k) => { const dd = d(x); return { id: `${id}${k}`, design: dd, ...(dd.family === 'skirt' ? { recipe: fromDesign(dd) } : {}), at: 0 }; }) });
 /** the workshop's rails: one of each way of making each kind of thing, in contrasting cloths, to start from */
 export const WORKSHOPS: Rail[] = [
   rail('workshop', 'the workshop', [
@@ -70,7 +79,8 @@ try {
   if (s && Array.isArray(s.rails)) saved = {
     rails: s.rails.filter((r) => r && typeof r === 'object' && typeof r.name === 'string' && typeof r.id === 'string' && Array.isArray(r.garments)).map((r) => ({
       id: r.id, name: r.name.slice(0, 24), colour: Number.isInteger(r.colour) && r.colour >= 0 ? r.colour % RAIL_COLOURS.length : 0,
-      garments: r.garments.filter((g) => g && typeof g === 'object' && typeof g.id === 'string' && g.design && typeof g.design === 'object').map((g) => ({ id: g.id, design: sanitize(g.design), at: Number(g.at) || 0 })),
+      garments: r.garments.filter((g) => g && typeof g === 'object' && typeof g.id === 'string' && ((g.design && typeof g.design === 'object') || (g.recipe && typeof g.recipe === 'object' && Array.isArray(g.recipe.moves))))
+        .map((g) => ({ id: g.id, design: sanitize(g.design), ...(g.recipe ? { recipe: g.recipe } : {}), at: Number(g.at) || 0 })),
     })),
     active: typeof s.active === 'string' ? s.active : 'workshop',
   };
@@ -91,13 +101,14 @@ export function addRail(name: string): Rail {
 }
 export function renameRail(id: string, name: string) { const r = saved.rails.find((x) => x.id === id); if (r && name.trim()) { r.name = name.trim().slice(0, 24); persist(); } }
 export function removeRail(id: string) { saved.rails = saved.rails.filter((r) => r.id !== id); if (saved.active === id) saved.active = 'workshop'; persist(); }
-/** hang a skirt on a person's rail: back where it came from if it's theirs, else at the front */
-export function hang(railId: string, design: Design, garmentId?: string): Garment | null {
+/** hang a garment on a person's rail: back where it came from if it's theirs, else at the front */
+export function hang(railId: string, item: { design: Design; recipe?: Recipe }, garmentId?: string): Garment | null {
   const r = saved.rails.find((x) => x.id === railId);
   if (!r) return null;
   const g = garmentId ? r.garments.find((x) => x.id === garmentId) : undefined;
-  if (g) { g.design = { ...design }; g.at = Date.now(); persist(); return g; }
-  const ng: Garment = { id: uid(), design: { ...design }, at: Date.now() };
+  const keep = (x: Garment) => { x.design = structuredClone(item.design); if (item.recipe) x.recipe = structuredClone(item.recipe); else delete x.recipe; x.at = Date.now(); };
+  if (g) { keep(g); persist(); return g; }
+  const ng: Garment = { id: uid(), at: 0 }; keep(ng);
   r.garments.unshift(ng); persist();
   return ng;
 }

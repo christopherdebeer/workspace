@@ -40,6 +40,10 @@ vec3 finish(vec3 c) { c = c / (1. + c * .35); return pow(clamp(c, 0., 1.), vec3(
 
 /** the clothes rails' size (cm): the bar's height above the floor (y = −5 is the floor), its length */
 export const RAIL_Y = 140, RAIL_W = 170, FLOOR = -5;
+/** the cutting table: where its top's centre is, how wide (x) and deep (z) */
+/** the cutting table: its centre (where the paper lies), size, and how it's turned; `near`, how much further it reaches
+ * toward whoever sits at it (so looking down at the paper, there's table under it, not floor) */
+export const TABLE = { x: 112, y: 46, z: 62, w: 150, d: 96, near: 110, rot: 1.0 };
 /** a hanger's hook: how far above the skirt's waist it pivots on the bar */
 export const HOOK = 13;
 
@@ -57,9 +61,12 @@ const SOLID_FS = `#version 300 es
 precision highp float;
 in vec3 vPos; in vec3 vNor; in vec3 vObj; flat in int vMat;
 uniform vec3 uEye, uTint;
+uniform sampler2D uPaper;
 out vec4 o;
 ${COMMON}
 void main() {
+  // (the walls are one-sided: seen from behind, they're not there, so they never stand between the eye and the room)
+  if (vMat == 3 && dot(vNor, uEye - vPos) < 0.) discard;
   vec3 n = normalize(vNor), V = normalize(uEye - vPos);
   vec3 base; float spec = .0, rough = 40.;
   if (vMat == 0 || vMat == 5) {
@@ -77,6 +84,13 @@ void main() {
     float board = floor(vPos.z / 18.), g = noise(vec3(vPos.x * .05, board * 7.3, vPos.z * 1.2)) * .7 + noise(vPos * .3) * .3;
     base = mix(vec3(.66, .5, .34), vec3(.56, .41, .27), g) * (1. - .25 * smoothstep(.45, .5, abs(fract(vPos.z / 18.) - .5)));
     spec = .12; rough = 20.;
+  } else if (vMat == 6) {
+    // (the pattern paper on the cutting table: what's drawn on it, a sheet a unit square in its own frame)
+    base = pow(texture(uPaper, vObj.xz + .5).rgb, vec3(2.2)); spec = .04; rough = 12.;
+  } else if (vMat == 7) {
+    // (the cutting table: pale birch, its grain long)
+    float g = noise(vec3(vObj.x * .04, vObj.y * .5, vObj.z * 1.4)) * .7 + noise(vObj * .25) * .3;
+    base = mix(vec3(.82, .68, .5), vec3(.72, .57, .4), g); spec = .2; rough = 30.;
   } else if (vMat == 4) {
     // (metal: a clothes rail's tube, powder-coated in its owner's colour, or a hanger's chromed hook)
     base = uTint; spec = 1.4; rough = 90.;
@@ -170,7 +184,7 @@ const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a: V3): V3 => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 // ─── the still things: figure, stand, bench, wall ──────────────────────────────────────────────
-function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' = 'scene'): number[] {
+function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' | 'sheet' = 'scene'): number[] {
   const out: number[] = [];
   const put = (p: V3, n: V3, m: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], m);
   const quad = (a: [V3, V3], b: [V3, V3], c: [V3, V3], d: [V3, V3], m: number) => { for (const v of [a, b, c, a, c, d]) put(v[0], v[1], m); };
@@ -221,6 +235,12 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' = 'scene'
     tube([0, 4.6, 0], [0, 6.4, 0], 0.5, 0.5, 4);
     return out;
   }
+  if (part === 'sheet') {
+    // (a unit square, lying flat, facing up: the paper, scaled and placed by its model)
+    out.length = 0;
+    quad([[-0.5, 0, -0.5], [0, 1, 0]], [[-0.5, 0, 0.5], [0, 1, 0]], [[0.5, 0, 0.5], [0, 1, 0]], [[0.5, 0, -0.5], [0, 1, 0]], 6);
+    return out;
+  }
   if (part === 'hook') {
     // (its chromed hook, which swivels: it stays over the rail's bar (along x) however the hanger's turned. It pivots
     // on the bar at HOOK above the skirt's waist)
@@ -245,17 +265,36 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' = 'scene'
   };
   disc(-5, -3, 27, 27.5, 1); disc(-3, -1, 27.5, 26, 1); disc(-1, 0, 26, 25, 1);
   // (the bench, and the wall behind it)
+  // (the cutting table, to the figure's left as you face it: a top and four legs)
+  // (turned about its centre to face the figure: you sit at it with the figure across the room behind it)
+  const tc = Math.cos(TABLE.rot), ts = Math.sin(TABLE.rot), tr = (x: number, z: number): [number, number] => [TABLE.x + (x - TABLE.x) * tc + (z - TABLE.z) * ts, TABLE.z - (x - TABLE.x) * ts + (z - TABLE.z) * tc];
+  const quadT = (a: [V3, V3], b: [V3, V3], c: [V3, V3], d: [V3, V3], m: number) => quad(...([a, b, c, d].map(([p, n]) => { const q = tr(p[0], p[2]); return [[q[0], p[1], q[1]] as V3, [n[0] * tc + n[2] * ts, n[1], -n[0] * ts + n[2] * tc] as V3]; }) as [[V3, V3], [V3, V3], [V3, V3], [V3, V3]]), m);
+  const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: number) => {
+    const quad = quadT, P = (x: number, y: number, z: number): V3 => [x, y, z];
+    quad([P(x0, y1, z0), [0, 1, 0]], [P(x0, y1, z1), [0, 1, 0]], [P(x1, y1, z1), [0, 1, 0]], [P(x1, y1, z0), [0, 1, 0]], m);
+    quad([P(x0, y0, z1), [0, 0, 1]], [P(x1, y0, z1), [0, 0, 1]], [P(x1, y1, z1), [0, 0, 1]], [P(x0, y1, z1), [0, 0, 1]], m);
+    quad([P(x1, y0, z0), [0, 0, -1]], [P(x0, y0, z0), [0, 0, -1]], [P(x0, y1, z0), [0, 0, -1]], [P(x1, y1, z0), [0, 0, -1]], m);
+    quad([P(x1, y0, z1), [1, 0, 0]], [P(x1, y0, z0), [1, 0, 0]], [P(x1, y1, z0), [1, 0, 0]], [P(x1, y1, z1), [1, 0, 0]], m);
+    quad([P(x0, y0, z0), [-1, 0, 0]], [P(x0, y0, z1), [-1, 0, 0]], [P(x0, y1, z1), [-1, 0, 0]], [P(x0, y1, z0), [-1, 0, 0]], m);
+  };
+  {
+    const T = TABLE, x0 = T.x - T.w / 2, x1 = T.x + T.w / 2, z0 = T.z - T.d / 2, z1 = T.z + T.d / 2 + T.near;
+    box(x0, T.y - 3.5, z0, x1, T.y, z1, 7);
+    for (const [lx, lz] of [[x0 + 4, z0 + 4], [x1 - 9, z0 + 4], [x0 + 4, z1 - 9], [x1 - 9, z1 - 9]]) box(lx, -5, lz, lx + 5, T.y - 3.5, lz + 5, 7);
+  }
   quad([[-2400, -5, -60], [0, 1, 0]], [[-2400, -5, 240], [0, 1, 0]], [[400, -5, 240], [0, 1, 0]], [[400, -5, -60], [0, 1, 0]], 2);
   quad([[-2400, -5, -60], [0, 0, 1]], [[400, -5, -60], [0, 0, 1]], [[400, 400, -60], [0, 0, 1]], [[-2400, 400, -60], [0, 0, 1]], 3);
   return out;
 }
 
-export interface View { az: number; el: number; dist: number; target: V3 }
+/** where the eye is; `shift`, how far up the screen (in its own −1…1 units) what it looks at is drawn: the lens moved,
+ * not the eye, so a drawer over the bottom of the screen has the scene centred above it without the view changing */
+export interface View { az: number; el: number; dist: number; target: V3; shift?: number }
 export interface Look { fabric: Fabric; print: Print }
 /** a cloth to draw, where (its model matrix: none for the figure's own) */
 export interface Item { cloth: Cloth; look: Look; model?: Float32Array }
 /** the rails and hangers in the room: each a model matrix; a rail's tint its owner's colour */
-export interface Fittings { rails: Array<{ model: Float32Array; tint: V3 }>; hangers: Float32Array[]; hooks: Float32Array[]; coats?: Float32Array[] }
+export interface Fittings { rails: Array<{ model: Float32Array; tint: V3 }>; hangers: Float32Array[]; hooks: Float32Array[]; coats?: Float32Array[]; paper?: { canvas: HTMLCanvasElement; version: number; model: Float32Array } }
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 const CHROME: V3 = [0.62, 0.62, 0.64];
 
@@ -281,14 +320,18 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     for (const [name, size, stride, off] of attrs) { const l = gl.getAttribLocation(p, name); if (l < 0) continue; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4); }
     return v;
   };
-  const mesh = (part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook') => {
+  const mesh = (part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' | 'sheet') => {
     const v = new Float32Array(solidMesh(part)), b = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
     return { draw: vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], b), shadow: vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], b), count: v.length / 7, buf: b };
   };
   // (the figure's drawn again whenever it's posed differently: arms up to twirl a skirt, down to wear a top)
   let scene = mesh('scene'), scenePose = body.poseVersion;
-  const rail = mesh('rail'), hanger = mesh('hanger'), coat = mesh('coat'), hook = mesh('hook');
+  const rail = mesh('rail'), hanger = mesh('hanger'), coat = mesh('coat'), hook = mesh('hook'), sheet = mesh('sheet');
+  // (the paper's drawing, taken again whenever it's redrawn)
+  const paperTex = gl.createTexture()!; let paperVersion = -1;
+  gl.bindTexture(gl.TEXTURE_2D, paperTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([244, 239, 226, 255]));
 
   // (the shadow map)
   const SH = 2048, shTex = gl.createTexture()!, shFb = gl.createFramebuffer()!;
@@ -357,6 +400,7 @@ export function createRenderer(gl: WebGL2RenderingContext) {
       for (const hm of fit.hangers) m(hanger, hm, 0, CHROME);
       for (const hm of fit.coats ?? []) m(coat, hm, 0, CHROME);
       for (const hm of fit.hooks) m(hook, hm, 0, CHROME);
+      if (fit.paper) m(sheet, fit.paper.model, 0, CHROME);
     };
     // (the shadow pass)
     gl.bindFramebuffer(gl.FRAMEBUFFER, shFb); gl.viewport(0, 0, SH, SH);
@@ -369,14 +413,24 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
     gl.clearColor(0.86, 0.8, 0.72, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const ce = Math.cos(view.el), eye: V3 = [t[0] + Math.sin(view.az) * ce * view.dist, t[1] + Math.sin(view.el) * view.dist, t[2] + Math.cos(view.az) * ce * view.dist];
-    const vp = mul(perspective(0.6, w / h, 5, 4000), lookAt(eye, t, [0, 1, 0]));
+    const proj = perspective(0.6, w / h, 5, 4000); proj[9] = -(view.shift ?? 0);
+    const vp = mul(proj, lookAt(eye, t, [0, 1, 0]));
+    if (fit.paper && fit.paper.version !== paperVersion) {
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, paperTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, fit.paper.canvas);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      paperVersion = fit.paper.version;
+    }
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, paperTex);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, shTex);
     for (const p of [solid, cloth]) {
       gl.useProgram(p);
       gl.uniformMatrix4fv(u(p, 'uVP'), false, vp); gl.uniformMatrix4fv(u(p, 'uLightVP'), false, lightVP);
       gl.uniform3fv(u(p, 'uKey'), key); gl.uniform3fv(u(p, 'uKeyCol'), keyCol); gl.uniform3fv(u(p, 'uEye'), eye); gl.uniform1i(u(p, 'uShadow'), 0);
     }
-    gl.useProgram(solid); solids(solid, 'draw');
+    gl.useProgram(solid); gl.uniform1i(u(solid, 'uPaper'), 1); solids(solid, 'draw');
     // (cloth: opaque first, see-through after, blended)
     gl.useProgram(cloth);
     const order = items.map((it, k) => k).sort((a, b) => items[a].look.fabric.clear - items[b].look.fabric.clear);
@@ -408,3 +462,24 @@ export function swingAt(at: V3, pivot: V3, angle: number, out: Float32Array = ne
   return out;
 }
 export const translate = (x: number, y: number, z: number) => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
+
+/** a model matrix: scaled (x, y, z), then put at (tx, ty, tz) */
+export const placeScaled = (tx: number, ty: number, tz: number, sx: number, sy: number, sz: number) => new Float32Array([sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, sz, 0, tx, ty, tz, 1]);
+/** a 4×4 matrix's inverse (column-major), for casting a touch on the screen into the room */
+export function invert(m: Float32Array): Float32Array {
+  const a = m, o = new Float32Array(16);
+  const b00 = a[0] * a[5] - a[1] * a[4], b01 = a[0] * a[6] - a[2] * a[4], b02 = a[0] * a[7] - a[3] * a[4], b03 = a[1] * a[6] - a[2] * a[5], b04 = a[1] * a[7] - a[3] * a[5], b05 = a[2] * a[7] - a[3] * a[6];
+  const b06 = a[8] * a[13] - a[9] * a[12], b07 = a[8] * a[14] - a[10] * a[12], b08 = a[8] * a[15] - a[11] * a[12], b09 = a[9] * a[14] - a[10] * a[13], b10 = a[9] * a[15] - a[11] * a[13], b11 = a[10] * a[15] - a[11] * a[14];
+  const det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06, d = 1 / det;
+  o[0] = (a[5] * b11 - a[6] * b10 + a[7] * b09) * d; o[1] = (a[2] * b10 - a[1] * b11 - a[3] * b09) * d; o[2] = (a[13] * b05 - a[14] * b04 + a[15] * b03) * d; o[3] = (a[10] * b04 - a[9] * b05 - a[11] * b03) * d;
+  o[4] = (a[6] * b08 - a[4] * b11 - a[7] * b07) * d; o[5] = (a[0] * b11 - a[2] * b08 + a[3] * b07) * d; o[6] = (a[14] * b02 - a[12] * b05 - a[15] * b01) * d; o[7] = (a[8] * b05 - a[10] * b02 + a[11] * b01) * d;
+  o[8] = (a[4] * b10 - a[5] * b08 + a[7] * b06) * d; o[9] = (a[1] * b08 - a[0] * b10 - a[3] * b06) * d; o[10] = (a[12] * b04 - a[13] * b02 + a[15] * b00) * d; o[11] = (a[9] * b02 - a[8] * b04 - a[11] * b00) * d;
+  o[12] = (a[5] * b07 - a[4] * b09 - a[6] * b06) * d; o[13] = (a[0] * b09 - a[1] * b07 + a[2] * b06) * d; o[14] = (a[13] * b01 - a[12] * b03 - a[14] * b00) * d; o[15] = (a[8] * b03 - a[9] * b01 + a[10] * b00) * d;
+  return o;
+}
+
+/** a model matrix: scaled (x, y, z), turned `a` about the vertical (as the figure turns), and put at (tx, ty, tz) */
+export function placeTurned(tx: number, ty: number, tz: number, a: number, sx: number, sy: number, sz: number) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return new Float32Array([c * sx, 0, -s * sx, 0, 0, sy, 0, 0, s * sz, 0, c * sz, 0, tx, ty, tz, 1]);
+}

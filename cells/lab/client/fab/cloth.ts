@@ -131,6 +131,8 @@ export class Cloth {
       const [a, bb, c] = [tris[t], tris[t + 1], tris[t + 2]], A = Math.abs(cross2(sub(F[bb], F[a]), sub(F[c], F[a]))) / 2;
       triA.push(A); area[a] += A / 3; area[bb] += A / 3; area[c] += A / 3;
       // (cotangent weights, for bending: each corner's cot to the edge across from it)
+      // (a sliver of a triangle has no bending to speak of: its cotangents would be enormous)
+      if (A < 0.02) continue;
       for (const [p, q, r] of [[a, bb, c], [bb, c, a], [c, a, bb]]) {
         const e1 = sub(F[q], F[p]), e2 = sub(F[r], F[p]), ct = dot2(e1, e2) / Math.max(1e-9, Math.abs(cross2(e1, e2)));
         const key = q < r ? q * n + r : r * n + q;
@@ -138,7 +140,9 @@ export class Cloth {
       }
     }
     this.inv = new Float32Array(n);
-    for (let i = 0; i < n; i++) this.inv[i] = 1 / Math.max(1e-6, area[i] * ph.rho);
+    // (a point on a sliver (a hinge, a dart's point) still has some mass: a twentieth of a usual point's)
+    let meanA = 0; for (let i = 0; i < n; i++) meanA += area[i] / n;
+    for (let i = 0; i < n; i++) this.inv[i] = 1 / (Math.max(area[i], 0.05 * meanA) * ph.rho);
 
     // (springs, along every edge, by the cloth's stiffness in its direction)
     const la: number[] = [], lb: number[] = [], lr: number[] = [], lc: number[] = [], seen = new Set<number>(), edgeA = new Map<number, number>();
@@ -153,6 +157,9 @@ export class Cloth {
       // (the angle to the warp: the warp runs down the piece's centre line, turned by its grain)
       const phi = Math.atan2(d[0], -d[1]) - gr;
       const E = b.fabric.grain ? stiffAt(ph.E1, ph.E2, ph.G, phi) : stiffAt(ph.E1, ph.E1, ph.G, phi);
+      // (an edge with no length (a dart's legs below its point, a hinge) is held by its seam, not a spring)
+      // (nor does an edge with no cloth either side of it)
+      if (l < 0.05 || edgeA.get(key)! < 1e-3) continue;
       const k = (E * edgeA.get(key)!) / (l * l);
       la.push(p); lb.push(q); lr.push(l); lc.push(1 / k);
     }
@@ -410,6 +417,54 @@ export class Cloth {
         }
       }
     }
+  }
+
+  /**
+   * How sound the cloth is, beyond its stretch: what a stability verdict ought to look at.
+   * - stretch: the 99th percentile and worst of every spring's strain; squash: the 1st percentile (in-plane
+   *   compression real cloth would buckle out of rather than take);
+   * - collapsed: the share of triangles squashed to under a tenth of their cut area;
+   * - inside: how many points are inside the figure (more than 2 mm), and the deepest;
+   * - seamGap: the widest any seam's still open (cm), once it's had time to be sewn.
+   */
+  health() {
+    // (springs between two held points aren't simulated: a gathered or pleated edge is held squeezed into its band
+    // on purpose)
+    const live: number[] = [];
+    let finite = true;
+    for (let c = 0; c < this.la.length; c++) {
+      if (this.inv[this.la[c]] === 0 && this.inv[this.lb[c]] === 0) continue;
+      const v = dist(this.pos, this.la[c], this.lb[c]) / this.lr[c] - 1; if (!Number.isFinite(v)) finite = false; live.push(v);
+    }
+    const e = Float32Array.from(live).sort();
+    const q = (f: number) => e[Math.min(e.length - 1, Math.floor(e.length * f))] ?? 0;
+    let collapsed = 0;
+    const { pos, flat, tris } = this;
+    // (a triangle across two points sewn to each other (a dart's legs, a pleat's fold) is meant to close up)
+    const sewn = new Set<number>(); for (let c = 0; c < this.sa.length; c++) for (const b of [this.sb[c], this.sc[c]]) { sewn.add(this.sa[c] * this.n + b); sewn.add(b * this.n + this.sa[c]); }
+    for (let t = 0; t < tris.length; t += 3) {
+      const a = tris[t], b = tris[t + 1], c = tris[t + 2];
+      // (a triangle with two held corners is held to its shape (a pleat's fold held to one point of the band is meant to be flat))
+      if ((this.inv[a] === 0 ? 1 : 0) + (this.inv[b] === 0 ? 1 : 0) + (this.inv[c] === 0 ? 1 : 0) >= 2) continue;
+      if (sewn.has(a * this.n + b) || sewn.has(b * this.n + c) || sewn.has(c * this.n + a)) continue;
+      const fa = Math.abs((flat[b * 2] - flat[a * 2]) * (flat[c * 2 + 1] - flat[a * 2 + 1]) - (flat[b * 2 + 1] - flat[a * 2 + 1]) * (flat[c * 2] - flat[a * 2])) / 2;
+      const ux = pos[b * 3] - pos[a * 3], uy = pos[b * 3 + 1] - pos[a * 3 + 1], uz = pos[b * 3 + 2] - pos[a * 3 + 2], vx = pos[c * 3] - pos[a * 3], vy = pos[c * 3 + 1] - pos[a * 3 + 1], vz = pos[c * 3 + 2] - pos[a * 3 + 2];
+      const A = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+      if (A < 0.1 * fa) collapsed++;
+    }
+    let inside = 0, deepest = 0;
+    if (this.collider) {
+      const cs = Math.cos(this.spin), sn = Math.sin(this.spin);
+      for (let i = 0; i < this.n; i++) {
+        if (this.inv[i] === 0) continue;
+        const x = pos[i * 3], z = pos[i * 3 + 2], d = this.collider.distance(x * cs - z * sn, pos[i * 3 + 1], x * sn + z * cs, 1);
+        if (d < -0.2) { inside++; deepest = Math.max(deepest, -d); }
+      }
+    }
+    let seamGap = 0;
+    // (to where each point's sewn: a place along the other edge, for a stitch between two of its points)
+    for (let c = 0; c < this.sa.length; c++) seamGap = Math.max(seamGap, this.gap(c));
+    return { finite, stretch99: q(0.99), stretchMax: e[e.length - 1] ?? 0, squash1: q(0.01), collapsed: collapsed / Math.max(1, tris.length / 3), inside, deepest, seamGap };
   }
 
   normals() {
