@@ -40,7 +40,7 @@
     .print canvas { border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.25), 0 1px 2px rgba(60,40,20,.2); }
     .swatch.on, .print.on { background: #fff8ec; box-shadow: 0 2px 6px rgba(60,40,20,.25); }
     /* the paper, its tools, its history (and the dials instead, with ?ui=dials) */
-    body:not(.dials) #methods, body:not(.dials) #knobs, body:not(.dials) #card, body.dials #tools, body.dials #paper, body.dials #toolhint, body.dials #history { display: none !important; }
+    body:not(.dials) #methods, body:not(.dials) #knobs, body:not(.dials) #card, body.dials #tools, body.dials #toolhint, body.dials #history { display: none !important; }
     #tools { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
     .tool { all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 3px 6px; border-radius: 10px; font-size: 10px; font-weight: 800; min-width: 40px; }
     .tool svg { width: 26px; height: 26px; fill: none; stroke: #4a3826; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -51,7 +51,6 @@
     .stepper b { display: flex; flex-direction: column; align-items: center; font-size: 14px; line-height: 1; min-width: 34px; }
     .stepper b i { font-style: normal; font-size: 9px; font-weight: 700; opacity: .7; }
     #undo { width: auto; padding: 0 10px; font-size: 12px; font-weight: 800; margin-left: 4px; }
-    canvas#paper { display: block; width: 100%; height: 150px; border-radius: 10px; box-shadow: 0 2px 10px rgba(60,40,20,.25), inset 0 0 0 1px rgba(60,40,20,.12); touch-action: none; cursor: crosshair; }
     #toolhint { font-size: 11px; font-weight: 700; color: #fff8ec; text-align: center; margin: 4px 0 4px; min-height: 14px; }
     #history { margin-bottom: 6px; min-height: 24px; }
     #history .chip { all: unset; flex: none; cursor: pointer; font-size: 11px; font-weight: 800; padding: 4px 9px; border-radius: 999px; background: #fff8ec; box-shadow: 0 1px 3px rgba(60,40,20,.2); }
@@ -75,6 +74,12 @@
     #toast { position: absolute; left: 50%; top: 96px; transform: translate(-50%, -8px); padding: 8px 14px; border-radius: 999px; background: #4a3826; color: #fff6e6; font-weight: 700; font-size: 13px; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; z-index: 5; white-space: nowrap; }
     #toast.show { opacity: 1; transform: translate(-50%, 0); }
     nav #hang { background: #4a3826; color: #fff6e6; }
+    nav #totable { background: #4a3826; color: #fff6e6; }
+    /* three places in the room: the rails, the figure, the cutting table; each its own drawer */
+    body.rails .figonly, body.table .figonly, body:not(.table) .tableonly, body:not(.table) .cutonly { display: none !important; }
+    body.table canvas#gl { cursor: crosshair; }
+    body.table .figdrawer { display: none !important; }
+    body.table #history { margin-bottom: 0; }
     #perf { position: absolute; left: 10px; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 84px); z-index: 6; font: 600 11px ui-monospace, Menlo, monospace; color: #3b2f24; background: rgba(255,250,240,.8); border-radius: 8px; padding: 4px 8px; pointer-events: none; }
   </style>
 </head>
@@ -84,7 +89,7 @@
     <canvas id="card" title="the pattern"></canvas>
     <canvas id="sheet"></canvas>
     <div id="notes"></div>
-    <nav><a href="/" class="railsonly">← lab</a><button id="torails" class="benchonly">rails</button><span class="title">Fab</span><button id="twirl" class="benchonly">twirl</button><button id="sew" class="benchonly">sew</button><button id="pattern" class="benchonly">pattern</button><button id="hang" class="benchonly">hang up</button><a href="{{readme}}">notes</a></nav>
+    <nav><a href="/" class="railsonly">← lab</a><button id="torails" class="benchonly">rails</button><span class="title">Fab</span><button id="totable" class="figonly">cut ✂</button><button id="tofigure" class="tableonly">figure</button><button id="twirl" class="figonly">twirl</button><button id="sew" class="figonly">sew</button><button id="pattern" class="benchonly">pattern</button><button id="hang" class="benchonly">hang up</button><a href="{{readme}}">notes</a></nav>
     <div id="railui">
       <div id="railtags"></div>
       <div id="railcard"><b id="railname"></b><span id="railwhat"></span><button id="wear">put it on the figure</button><i>slide the skirts along · swipe up or down for another rail · tap the front one</i></div>
@@ -94,12 +99,11 @@
   <div id="bench">
     <div class="row" id="methods"></div>
     <div id="knobs"></div>
-    <div id="tools"><span id="toolsend"></span><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo">undo</button></div>
-    <canvas id="paper"></canvas>
-    <div id="toolhint"></div>
-    <div class="row" id="history"></div>
-    <div class="row" id="fabrics"></div>
-    <div class="row" id="prints" style="margin-bottom:0"></div>
+    <div id="tools" class="cutonly"><span id="toolsend"></span><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo">undo</button></div>
+    <div id="toolhint" class="cutonly"></div>
+    <div class="row cutonly" id="history"></div>
+    <div class="row figdrawer" id="fabrics"></div>
+    <div class="row figdrawer" id="prints" style="margin-bottom:0"></div>
   </div>
   <script type="module" src="{{app}}"></script>
 </body>

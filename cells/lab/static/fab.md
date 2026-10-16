@@ -297,9 +297,29 @@ The rails live in this browser (localStorage), so a rail is a person on this dev
 classroom's. Nothing leaves the device. Sharing rails between devices would need storage behind the cell, which this
 static lab cell doesn't have.
 
+## Three places in one room
+
+The workshop is one room, and the camera walks between three places in it:
+
+| place | where | its drawer |
+|---|---|---|
+| **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure |
+| **the figure** | on its stand, in the middle | cloth and print; **twirl**, **sew**; **cut ✂** goes to the table |
+| **the cutting table** | to one side, facing the figure | the tools, panels, undo, the history; **figure** goes back |
+
+**At the table, the pattern lies on it at true size.** A centimetre of the paper is a centimetre on the figure, so a piece
+that's spread grows on the table. The figure stands across the room behind it, wearing each move as it's made.
+
+A touch on the screen is cast down onto the tabletop and lands on the paper. Every gesture works on the paper there, and
+a fingertip is a fingertip's size wherever the paper is seen from.
+
+The paper stays where it was laid. The piece is only moved, and the sheet re-cut, when it no longer fits on its sheet
+or has shrunk into a corner of it. That never happens while a finger is on it. The camera follows the piece smoothly,
+so nothing jumps between one gesture and the next.
+
 ## Using it
 
-- **The paper** (under the figure) is one panel of the pattern. Pick a tool and work it (see the moves above); the figure
+- **The paper** (on the cutting table: **cut ✂**) is one panel of the pattern. Pick a tool and work it (see the moves above); the figure
   wears every move as it's made, and follows while your finger is still on the paper.
 - **Turn the figure**: drag. **Come close**: pinch, or scroll.
 - **Tap the title three times** (or `?perf`) for a frame readout: fps, frame, cloth and drawing time, and whether the
@@ -318,7 +338,7 @@ All of it is in `client/fab/`:
 |---|---|
 | `cut.ts` | the cutting table: the block, and the moves made on it |
 | `pattern.ts` | from a recipe (block + moves) to what's sewn and held, and the pattern's checks; the dials' shortcuts |
-| `paper.ts` | the paper on the bench, its tools and gestures |
+| `paper.ts` | the paper on the cutting table: its sheet, tools and gestures |
 | `fabric.ts` | the swatches |
 | `cloth.ts` | the XPBD cloth |
 | `body.ts` | the figure and its distance field |
@@ -336,6 +356,7 @@ All of it is in `client/fab/`:
 | `m` | the moves, e.g. `c0_s500.150_p250.15` (close dart 0; spread at 0.5 of the hem by 15.0 cm; pleat at 0.25 of the waist, 1.5 cm deep) |
 | `full`, `cut` | an older link's fullness and `flare`, `gather` or `pleat`: written as moves |
 | `ui` | `dials`: the dials instead of the paper |
+| `at` | `table`: start at the cutting table |
 | `perf` | the frame readout |
 | `panels` | number of panels |
 | `grain` | degrees |

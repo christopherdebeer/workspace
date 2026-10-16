@@ -40,25 +40,41 @@ function onLine(q: V2[], p: V2) {
   return { at, d: best };
 }
 
+/** a touch on the paper, in its own pixels */
+interface Touch { clientX: number; clientY: number }
+/** the paper's sheet: a fixed size, in its own pixels; the piece drawn on it at `sc` pixels a centimetre */
+export const SHEET_W = 1024, SHEET_H = 768;
 export class Paper {
   tool: Tool = 'hand';
-  private sc = 1; private ox = 0; private oy = 0; private frozen = false;
+  sc = 1; ox = 0; oy = 0; private frozen = false; private fitted = false;
+  /** the sheet's pixels per pixel of the screen where it's being touched (so a fingertip's the same size wherever the
+   * paper's seen from) */
+  k = 1;
+  /** goes up whenever it's drawn: whoever shows it knows to take it again */
+  version = 0;
   private drag: null | { kind: 'hem' | 'grain' | 'spread' | 'pleat' | 'gather'; x0: number; y0: number; at: number; start: Recipe } = null;
   /** the move being made, drawn and worn before it's let go */
   preview: Recipe | null = null;
+  get dragging() { return !!this.drag; }
 
-  constructor(private cv: HTMLCanvasElement, private get: () => Recipe, private live: (r: Recipe) => void, private commit: (r: Recipe) => void, private tap: (r: Recipe, what: string) => void) {
-    cv.addEventListener('pointerdown', (e) => this.down(e));
-    cv.addEventListener('pointermove', (e) => this.move(e));
-    cv.addEventListener('pointerup', (e) => this.up(e));
-    cv.addEventListener('pointercancel', () => { this.drag = null; this.preview = null; this.frozen = false; this.draw(); });
+  constructor(readonly cv: HTMLCanvasElement, private get: () => Recipe, private live: (r: Recipe) => void, private commit: (r: Recipe) => void, private tap: (r: Recipe, what: string) => void) {
+    cv.width = SHEET_W; cv.height = SHEET_H;
   }
-  private toFlat(e: PointerEvent): V2 { const r = this.cv.getBoundingClientRect(); return [(e.clientX - r.left - this.ox) / this.sc, -(e.clientY - r.top - this.oy) / this.sc]; }
+  /** touches, in the sheet's own pixels (the host maps the screen onto it) */
+  downAt(x: number, y: number) { this.down({ clientX: x, clientY: y }); }
+  moveAt(x: number, y: number) { this.move({ clientX: x, clientY: y }); }
+  upAt() { this.up(); }
+  cancel() { this.drag = null; this.preview = null; this.frozen = false; this.draw(); }
+  private toFlat(e: Touch): V2 { return [(e.clientX - this.ox) / this.sc, -(e.clientY - this.oy) / this.sc]; }
   private toScreen(p: V2): V2 { return [this.ox + p[0] * this.sc, this.oy - p[1] * this.sc]; }
+  /** the piece's extent on the sheet, in its pixels */
+  bounds() {
+    const { panel } = cutOf(this.preview ?? this.get()), pts = panel.ribs.flatMap((rb) => [rb.top, rb.knee, rb.bottom]).map((q) => this.toScreen(q));
+    return { x0: Math.min(...pts.map((q) => q[0])), x1: Math.max(...pts.map((q) => q[0])), y0: Math.min(...pts.map((q) => q[1])), y1: Math.max(...pts.map((q) => q[1])) };
+  }
 
-  private down(e: PointerEvent) {
-    const r = this.get(), { panel } = cutOf(r), p = this.toFlat(e), tol = 16 / this.sc;
-    this.cv.setPointerCapture(e.pointerId); e.preventDefault();
+  private down(e: Touch) {
+    const r = this.get(), { panel } = cutOf(r), p = this.toFlat(e), tol = (16 * this.k) / this.sc;
     const hem = panel.ribs.map((rb) => rb.bottom), waist = panel.ribs.map((rb) => rb.top);
     const base = { x0: e.clientX, y0: e.clientY, start: r };
     if (this.tool === 'hand') {
@@ -67,7 +83,7 @@ export class Paper {
       const dart = this.dartAt(panel, p);
       if (dart !== null) { this.tap(this.cycleDart(r, panel, dart), 'dart'); return; }
       const g = this.grainArrow(panel, r.grain);
-      if (Math.hypot(p[0] - g.tip[0], p[1] - g.tip[1]) < 16 / this.sc) { this.drag = { kind: 'grain', at: 0, ...base }; this.frozen = true; return; }
+      if (Math.hypot(p[0] - g.tip[0], p[1] - g.tip[1]) < (18 * this.k) / this.sc) { this.drag = { kind: 'grain', at: 0, ...base }; this.frozen = true; return; }
       if (onLine(hem, p).d < tol * 1.6 || p[1] < Math.min(...hem.map((q) => q[1])) + tol) { this.drag = { kind: 'hem', at: 0, ...base }; this.frozen = true; }
       return;
     }
@@ -75,7 +91,7 @@ export class Paper {
     this.drag = { kind: this.tool === 'fold' ? 'pleat' : 'gather', at: onLine(waist, p).at, ...base };
     this.frozen = true;
   }
-  private move(e: PointerEvent) {
+  private move(e: Touch) {
     if (!this.drag) return;
     const d = this.drag, dx = (e.clientX - d.x0) / this.sc, dy = (e.clientY - d.y0) / this.sc, r = d.start;
     let next: Recipe;
@@ -88,7 +104,7 @@ export class Paper {
     }
     this.preview = next; this.draw(); this.live(next);
   }
-  private up(_e: PointerEvent) {
+  private up() {
     if (!this.drag) return;
     const next = this.preview; this.drag = null; this.preview = null; this.frozen = false;
     if (next && next !== this.get()) this.commit(next); else this.draw();
@@ -111,7 +127,7 @@ export class Paper {
       const a = panel.ribs[k], b = panel.ribs[k + 1], tip = a.knee;
       // (its triangle, generously: a child's finger's wider than a dart)
       const c: V2 = [(a.top[0] + b.top[0] + tip[0]) / 3, (a.top[1] + b.top[1] + tip[1]) / 3];
-      if (Math.hypot(p[0] - c[0], p[1] - c[1]) < Math.max(3, 20 / this.sc) || near(p, a.top, tip) < 12 / this.sc || near(p, b.top, tip) < 12 / this.sc) return k;
+      if (Math.hypot(p[0] - c[0], p[1] - c[1]) < Math.max(3, (22 * this.k) / this.sc) || near(p, a.top, tip) < (14 * this.k) / this.sc || near(p, b.top, tip) < (14 * this.k) / this.sc) return k;
     }
     return null;
   }
@@ -125,17 +141,25 @@ export class Paper {
   }
 
   draw() {
-    const cv = this.cv, dpr = Math.min(2, devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
-    if (!W || !H) return;
-    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
-    const ctx = cv.getContext('2d')!; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const cv = this.cv, W = SHEET_W, H = SHEET_H;
+    const ctx = cv.getContext('2d')!; ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.version++;
     const r = this.preview ?? this.get(), { panel, ok } = cutOf(r);
     // (pattern paper)
     ctx.fillStyle = '#f4efe2'; ctx.fillRect(0, 0, W, H);
-    // (fitted to the paper, but held still while a hand's on it, so it doesn't slide away under the finger)
+    // (the piece laid on the sheet, and left where it lies: it's moved and the sheet re-cut only when the piece no longer
+    // fits on it, or has shrunk to a corner of it; never while a hand's on it)
     const pts = panel.ribs.flatMap((rb) => [rb.top, rb.knee, rb.bottom]);
     const x0 = Math.min(...pts.map((q) => q[0])), x1 = Math.max(...pts.map((q) => q[0])), y0 = Math.min(...pts.map((q) => q[1])), y1 = Math.max(...pts.map((q) => q[1]));
-    if (!this.frozen) { this.sc = Math.min((W - 40) / Math.max(10, x1 - x0), (H - 38) / Math.max(10, y1 - y0)); this.ox = W / 2 - ((x0 + x1) / 2) * this.sc; this.oy = 18 - y1 * this.sc; }
+    if (!this.frozen) {
+      const px0 = this.ox + x0 * this.sc, px1 = this.ox + x1 * this.sc, py0 = this.oy - y1 * this.sc, py1 = this.oy - y0 * this.sc, m = 40;
+      const out = px0 < m || px1 > W - m || py0 < m || py1 > H - m, small = px1 - px0 < W * 0.4 && py1 - py0 < H * 0.4;
+      if (!this.fitted || out || small) {
+        this.sc = Math.min(24, (W - 2 * m - 60) / Math.max(10, x1 - x0), (H - 2 * m - 60) / Math.max(10, y1 - y0));
+        this.ox = W / 2 - ((x0 + x1) / 2) * this.sc; this.oy = H / 2 + ((y0 + y1) / 2) * this.sc;
+        this.fitted = true;
+      }
+    }
     const sc = this.sc;
     ctx.lineWidth = 1;
     for (let cm = -200; cm < 200; cm++) {
@@ -156,28 +180,28 @@ export class Paper {
     const fill = tile(ctx, makePrint(r.print, r.colour), sc), g = (r.grain * Math.PI) / 180;
     if (typeof fill !== 'string') { const o = this.toScreen([0, 0]); fill.setTransform(new DOMMatrix([Math.cos(-g), Math.sin(-g), -Math.sin(-g), Math.cos(-g), o[0], o[1]])); }
     ctx.save(); ctx.globalAlpha = 0.8; ctx.fillStyle = fill; ctx.fill(path); ctx.restore();
-    ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = 2; ctx.stroke(path);
+    ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = 4; ctx.stroke(path);
     // (how it was made: wedges shaded with their slashes dashed; pleats' fold lines; darts' legs; gathers' running stitch)
     const R = (k: number, s: number) => this.toScreen(ribAt(panel.ribs[k], s));
     panel.strips.forEach((st, k) => {
-      ctx.setLineDash([]); ctx.lineWidth = 1.6; ctx.strokeStyle = '#b8323f';
+      ctx.setLineDash([]); ctx.lineWidth = 3.2; ctx.strokeStyle = '#b8323f';
       const strip = () => { const p2 = new Path2D(); for (let t = 0; t <= 10; t++) p2.lineTo(...R(k, t / 10)); for (let t = 10; t >= 0; t--) p2.lineTo(...R(k + 1, t / 10)); p2.closePath(); return p2; };
-      if (st.kind === 'wedge') { ctx.fillStyle = 'rgba(224,86,110,.16)'; ctx.fill(strip()); ctx.setLineDash([5, 4]); ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k, t / 10)); ctx.stroke(); ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k + 1, t / 10)); ctx.stroke(); }
-      if (st.kind === 'pleat') { ctx.fillStyle = 'rgba(60,110,180,.14)'; ctx.fill(strip()); ctx.strokeStyle = '#2f5f9f'; ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k, t / 10)); ctx.stroke(); ctx.setLineDash([4, 3]); ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k + 1, t / 10)); ctx.stroke(); }
-      if (st.kind === 'ease') { ctx.fillStyle = 'rgba(90,150,80,.14)'; ctx.fill(strip()); ctx.strokeStyle = '#3f7a4a'; ctx.setLineDash([2, 3]); const a = R(k, 0.03), b = R(k + 1, 0.03); ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
+      if (st.kind === 'wedge') { ctx.fillStyle = 'rgba(224,86,110,.16)'; ctx.fill(strip()); ctx.setLineDash([10, 8]); ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k, t / 10)); ctx.stroke(); ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k + 1, t / 10)); ctx.stroke(); }
+      if (st.kind === 'pleat') { ctx.fillStyle = 'rgba(60,110,180,.14)'; ctx.fill(strip()); ctx.strokeStyle = '#2f5f9f'; ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k, t / 10)); ctx.stroke(); ctx.setLineDash([8, 6]); ctx.beginPath(); for (let t = 0; t <= 10; t++) ctx.lineTo(...R(k + 1, t / 10)); ctx.stroke(); }
+      if (st.kind === 'ease') { ctx.fillStyle = 'rgba(90,150,80,.14)'; ctx.fill(strip()); ctx.strokeStyle = '#3f7a4a'; ctx.setLineDash([4, 6]); const a = R(k, 0.03), b = R(k + 1, 0.03); ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
       if (st.kind === 'dart') { const a = this.toScreen(panel.ribs[k].top), t = this.toScreen(panel.ribs[k].knee), b = this.toScreen(panel.ribs[k + 1].top); ctx.fillStyle = 'rgba(184,50,63,.18)'; ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...t); ctx.lineTo(...b); ctx.closePath(); ctx.fill(); ctx.stroke(); }
     });
     ctx.setLineDash([]);
     // (the grain arrow, with a handle to turn it by)
     const ga = this.grainArrow(panel, r.grain), ta = this.toScreen(ga.tail), tb = this.toScreen(ga.tip);
-    ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(...ta); ctx.lineTo(...tb);
-    for (const [p, q] of [[tb, ta], [ta, tb]]) { const an = Math.atan2(p[1] - q[1], p[0] - q[0]); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] - Math.cos(an - 0.45) * 8, p[1] - Math.sin(an - 0.45) * 8); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] - Math.cos(an + 0.45) * 8, p[1] - Math.sin(an + 0.45) * 8); }
+    ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = 3.4; ctx.beginPath(); ctx.moveTo(...ta); ctx.lineTo(...tb);
+    for (const [p, q] of [[tb, ta], [ta, tb]]) { const an = Math.atan2(p[1] - q[1], p[0] - q[0]); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] - Math.cos(an - 0.45) * 18, p[1] - Math.sin(an - 0.45) * 18); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] - Math.cos(an + 0.45) * 18, p[1] - Math.sin(an + 0.45) * 18); }
     ctx.stroke();
-    if (this.tool === 'hand') { ctx.fillStyle = 'rgba(59,47,36,.85)'; ctx.beginPath(); ctx.arc(tb[0], tb[1], 5, 0, 7); ctx.fill(); }
+    if (this.tool === 'hand') { ctx.fillStyle = 'rgba(59,47,36,.85)'; ctx.beginPath(); ctx.arc(tb[0], tb[1], 11, 0, 7); ctx.fill(); }
     // (what it is, and a move that did nothing)
-    ctx.font = '700 11px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = '#5b4a36'; ctx.textAlign = 'left';
-    ctx.fillText(`${r.panels === 1 ? 'the skirt' : `one panel · cut ${r.panels}`} · ${r.length} cm${r.grain > 2 ? ` · ${r.grain}° off the grain` : ''}`, 8, H - 8);
-    if (ok.some((x) => !x)) { ctx.fillStyle = '#b8323f'; ctx.textAlign = 'right'; ctx.fillText('a move did nothing here', W - 8, H - 8); }
+    ctx.font = '700 26px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = '#5b4a36'; ctx.textAlign = 'left';
+    ctx.fillText(`${r.panels === 1 ? 'the skirt' : `one panel · cut ${r.panels}`} · ${r.length} cm${r.grain > 2 ? ` · ${r.grain}° off the grain` : ''}`, 24, H - 24);
+    if (ok.some((x) => !x)) { ctx.fillStyle = '#b8323f'; ctx.textAlign = 'right'; ctx.fillText('a move did nothing here', W - 24, H - 24); }
     ctx.textAlign = 'left';
   }
 }

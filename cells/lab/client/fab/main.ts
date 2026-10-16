@@ -22,9 +22,9 @@
 import { Cloth } from './cloth';
 import { FABRICS, COLOURWAYS, PRINTS, fabricById, makePrint } from './fabric';
 import { DEFAULT_DESIGN, describe, draftRecipe, fromDesign, toBuild, type Design, type Method, type Move, type Recipe, type Skirt } from './pattern';
-import { Paper, TOOLS, moveWords } from './paper';
+import { Paper, SHEET_H, SHEET_W, TOOLS, moveWords } from './paper';
 import { Room } from './rails';
-import { createRenderer, type Item } from './render';
+import { TABLE, createRenderer, invert, placeTurned, type Item } from './render';
 import { RAIL_COLOURS, activeRail, addRail, hang, rails, recipeOf, removeRail, renameRail, setActive, takeOff, type Rail } from './store';
 import { drawSheet } from './sheet';
 
@@ -188,7 +188,7 @@ function drawSwatch(cv: HTMLCanvasElement, kind: number, colour: number) {
   if (kind === 5) for (const [x, y] of [[12, 12], [36, 26], [50, 10]]) { c.beginPath(); for (let p = 0; p < 10; p++) { const a = -1.57 + (p / 10) * 6.28, r = p % 2 ? 2.5 : 6; c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } c.fill(); }
 }
 // (the paper and its tools)
-const paper = new Paper($('paper') as HTMLCanvasElement, () => rec, (r) => remake(r), (r) => { rec = r; make(); }, (r) => { rec = r; make(); });
+const paper = new Paper(document.createElement('canvas'), () => rec, (r) => remake(r), (r) => { rec = r; make(); }, (r) => { rec = r; make(); });
 for (const t of TOOLS) {
   const b = document.createElement('button'); b.dataset.tool = t.id; b.className = 'tool';
   b.innerHTML = `<svg viewBox="0 0 40 40">${t.icon}</svg><span>${t.label}</span>`;
@@ -209,7 +209,7 @@ let twirlUntil = 0;
 $('twirl').addEventListener('click', () => { twirlUntil = performance.now() + 3200; });
 
 // ─── the rails: where every skirt starts and ends ──────────────────────────────────────────────
-type Mode = 'rails' | 'bench';
+type Mode = 'rails' | 'bench' | 'table';
 const hasDesign = ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour', 'm'].some((k) => qs.has(k));
 let mode: Mode = qs.has('rails') || (!hasDesign && !preview && !qs.has('settle') && !qs.has('sheet')) ? 'rails' : 'bench';
 const room = new Room();
@@ -296,6 +296,7 @@ function backToRails() {
 function setMode(m: Mode) {
   mode = m; flying = 1; flyT0 = performance.now(); flyFrom = { ...view, target: [...view.target] as [number, number, number] };
   document.body.classList.toggle('rails', m === 'rails');
+  document.body.classList.toggle('table', m === 'table');
   if (m === 'rails') {
     if (sheetOn) toggleSheet();
     if (!preview) { const u = new URL(location.href); for (const k of ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour', 'm']) u.searchParams.delete(k); history.replaceState(null, '', u); }
@@ -304,10 +305,12 @@ function setMode(m: Mode) {
 }
 $('wear').addEventListener('click', () => wear(room.front()));
 $('torails').addEventListener('click', backToRails);
+$('totable').addEventListener('click', () => setMode('table'));
+$('tofigure').addEventListener('click', () => setMode('bench'));
 $('hang').addEventListener('click', () => hangUp());
 
 // ─── turning round it, and along the rails ─────────────────────────────────────────────────────
-const BENCH_VIEW = { az: Number(qs.get('az') ?? 0.55), el: Number(qs.get('el') ?? 0.1), dist: Number(qs.get('dist') ?? 200), target: [0, Number(qs.get('ty') ?? 52), 0] as [number, number, number] };
+const BENCH_VIEW = { az: Number(qs.get('az') ?? -0.5), el: Number(qs.get('el') ?? 0.1), dist: Number(qs.get('dist') ?? 200), target: [0, Number(qs.get('ty') ?? 52), 0] as [number, number, number] };
 const view = { ...BENCH_VIEW, target: [...BENCH_VIEW.target] as [number, number, number] };
 /** crossing the room, between the rails and the bench: where from, and when it set off (1.2 s, eased) */
 let flying = 0, flyFrom = { ...view, target: [...view.target] as [number, number, number] }, flyT0 = 0;
@@ -338,6 +341,7 @@ canvas.addEventListener('pointermove', (e) => {
     if (axis === 'x') { room.dragging = true; const now = performance.now(); room.push(dx * cmPerPx(), Math.max(0.008, (now - lastMove) / 1000)); lastMove = now; }
     return;
   }
+  if (mode === 'table') return;
   view.az -= dx * 0.008; view.el = Math.max(-0.2, Math.min(1.2, view.el + dy * 0.004));
 });
 canvas.addEventListener('pointerup', (e) => {
@@ -360,6 +364,46 @@ canvas.addEventListener('touchstart', (e) => { if (e.touches.length === 2 && mod
 canvas.addEventListener('touchmove', (e) => { if (e.touches.length === 2 && pinch) { const p = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); view.dist = Math.max(80, Math.min(360, view.dist * pinch / p)); pinch = p; } }, { passive: true });
 canvas.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = 0; });
 
+// ─── the cutting table ─────────────────────────────────────────────────────────────────────────
+// (the paper lies on the table at true size: a pixel of its sheet is 1/sc cm)
+// (on the table's own axes: x across it, z toward you; turned with the table to face the figure)
+const tcos = Math.cos(TABLE.rot), tsin = Math.sin(TABLE.rot);
+const tableToRoom = (lx: number, lz: number): [number, number, number] => [TABLE.x + lx * tcos + lz * tsin, TABLE.y + 0.12, TABLE.z - lx * tsin + lz * tcos];
+const sheetToRoom = (px: number, py: number) => tableToRoom((px - SHEET_W / 2) / paper.sc, (py - SHEET_H / 2) / paper.sc);
+const sheetModel = () => placeTurned(TABLE.x, TABLE.y + 0.12, TABLE.z, TABLE.rot, SHEET_W / paper.sc, 1, SHEET_H / paper.sc);
+/** where to look at the table from: down onto the piece, from in front and a little to the side, the figure behind */
+function tableView() {
+  // (sitting at the table: looking across it at the figure, down onto the paper; the piece filling the open part of the
+  // screen above the drawer, the figure standing behind it)
+  const b = paper.bounds(), lx = ((b.x0 + b.x1) / 2 - SHEET_W / 2) / paper.sc, lz = ((b.y0 + b.y1) / 2 - SHEET_H / 2) / paper.sc;
+  const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.4, aspect());
+  const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3)) * 1.5);
+  return { az: TABLE.rot, el, dist, target: tableToRoom(lx, lz - d * 0.28) };
+}
+/** a touch on the screen, cast down onto the table: where it lands on the paper's sheet, in its pixels */
+function onSheet(clientX: number, clientY: number): [number, number] | null {
+  if (!lastVP) return null;
+  const r = canvas.getBoundingClientRect(), x = ((clientX - r.left) / r.width) * 2 - 1, y = 1 - ((clientY - r.top) / r.height) * 2, inv = invert(lastVP);
+  const un = (z: number) => { const v = [x, y, z, 1], o = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) for (let k = 0; k < 4; k++) o[i] += inv[k * 4 + i] * v[k]; return [o[0] / o[3], o[1] / o[3], o[2] / o[3]]; };
+  const p0 = un(-1), p1 = un(1), t = (TABLE.y + 0.12 - p0[1]) / (p1[1] - p0[1]);
+  if (!(t > 0)) return null;
+  const dx = p0[0] + (p1[0] - p0[0]) * t - TABLE.x, dz = p0[2] + (p1[2] - p0[2]) * t - TABLE.z;
+  const lx = dx * tcos - dz * tsin, lz = dx * tsin + dz * tcos;
+  return [lx * paper.sc + SHEET_W / 2, lz * paper.sc + SHEET_H / 2];
+}
+let onPaper = false;
+canvas.addEventListener('pointerdown', (e) => {
+  if (mode !== 'table') return;
+  const q = onSheet(e.clientX, e.clientY), q2 = onSheet(e.clientX + 10, e.clientY);
+  if (!q) return;
+  // (how many of the sheet's pixels a pixel of the screen is, there: so a fingertip's a fingertip)
+  if (q2) paper.k = Math.max(0.2, Math.hypot(q2[0] - q[0], q2[1] - q[1]) / 10);
+  onPaper = true; canvas.setPointerCapture(e.pointerId); paper.downAt(q[0], q[1]);
+});
+canvas.addEventListener('pointermove', (e) => { if (mode !== 'table' || !onPaper) return; const q = onSheet(e.clientX, e.clientY); if (q) paper.moveAt(q[0], q[1]); });
+canvas.addEventListener('pointerup', () => { if (mode !== 'table' || !onPaper) return; onPaper = false; paper.upAt(); });
+canvas.addEventListener('pointercancel', () => { if (onPaper) { onPaper = false; paper.cancel(); } });
+
 // ─── the frame ─────────────────────────────────────────────────────────────────────────────────
 let frames = 0, last = performance.now(), stepMs = 0;
 // (the cloth's clock: it runs in fixed 1/60 s steps, as many as wall-clock time has gone by (at most two a frame: a
@@ -374,18 +418,19 @@ function frame(now: number) {
   frameMs = frameMs * 0.9 + raw * 1000 * 0.1;
   // (the camera: at the rails it rests in front of the one in use; crossing the room, it eases from one to the other)
   if (flying > 0) {
-    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : BENCH_VIEW, p = Math.min(1, (now - flyT0) / 1200), e = p * p * (3 - 2 * p);
+    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : mode === 'table' ? tableView() : BENCH_VIEW, p = Math.min(1, (now - flyT0) / 1200), e = p * p * (3 - 2 * p);
     // (up and over a little as it crosses, as a walk across a room would look)
     view.az = flyFrom.az + (goal.az - flyFrom.az) * e; view.el = flyFrom.el + (goal.el - flyFrom.el) * e + Math.sin(Math.PI * p) * 0.08; view.dist = flyFrom.dist + (goal.dist - flyFrom.dist) * e + Math.sin(Math.PI * p) * 60;
     for (let c = 0; c < 3; c++) view.target[c] = flyFrom.target[c] + (goal.target[c] - flyFrom.target[c]) * e;
     if (p >= 1) flying = 0;
-  } else if (mode === 'rails') {
-    const goal = room.viewOf(room.active, aspect()), k = 1 - Math.exp(-dt * 5);
+  } else if (mode === 'rails' || (mode === 'table' && !paper.dragging)) {
+    // (at the rails, in front of the one in use; at the table, over the piece, following it as it grows or shrinks)
+    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : tableView(), k = 1 - Math.exp(-dt * (mode === 'table' ? 3 : 5));
     view.az += (goal.az - view.az) * k; view.el += (goal.el - view.el) * k; view.dist += (goal.dist - view.dist) * k;
     for (let c = 0; c < 3; c++) view.target[c] += (goal.target[c] - view.target[c]) * k;
-  } else if (!drag) { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
+  } else if (!drag && mode === 'bench') { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
   if (mode === 'rails') { room.update(dt, 7); if (room.front() !== lastFront) railInfo(); }
-  if (cloth && mode === 'bench') {
+  if (cloth && mode !== 'rails') {
     // (a twirl: the figure spun up on its stand, held, and let run down)
     const want = now < twirlUntil ? Math.PI * 2 * 0.9 : 0, acc = now < twirlUntil ? 7 : 3.5;
     cloth.omega += Math.max(-acc * dt, Math.min(acc * dt, want - cloth.omega));
@@ -404,7 +449,9 @@ function frame(now: number) {
   const items: Item[] = room.items();
   if (cloth) items.push({ cloth, look: { fabric: fabricById(rec.fabric), print: makePrint(rec.print, rec.colour) } });
   const r0 = performance.now();
-  lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, room.fittings()).vp;
+  const fit = room.fittings();
+  if (paper.version > 0) fit.paper = { canvas: paper.cv, version: paper.version, model: sheetModel() };
+  lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, fit).vp;
   renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
   frames++; framesWindow++; wallWindow += raw; wallTime += raw;
   // (once a second: the whole frame on this device, not only the cloth's part of it)
@@ -422,14 +469,17 @@ let perfEl: HTMLElement | null = null;
 const showPerf = () => { perfEl ??= Object.assign(document.createElement('div'), { id: 'perf' }); document.getElementById('stage')!.appendChild(perfEl); };
 if (qs.has('perf')) showPerf();
 { let taps = 0, at = 0; document.querySelector('nav .title')!.addEventListener('click', () => { const t = performance.now(); taps = t - at < 500 ? taps + 1 : 1; at = t; if (taps >= 3) { if (perfEl?.isConnected) perfEl.remove(); else showPerf(); } }); }
-if (mode === 'bench') make();
+if (qs.get('at') === 'table' && mode === 'bench') { mode = 'table'; document.body.classList.add('table'); }
+if (mode !== 'rails') make();
 else { Object.assign(view, room.viewOf(room.active, aspect()), { target: [...room.viewOf(room.active, aspect()).target] }); if (qs.has('warm')) for (let k = 0; k < 4; k++) room.update(1 / 60, 1e9); railUI(); }
 if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = {
   perf, probe: () => ({ mode, recipe: rec, moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
+  // (for tests: where a point of the paper's sheet is on the screen)
+  sheetToScreen: (px: number, py: number) => { const q = sheetToRoom(px, py), m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },
   view, room, wear, backToRails, hangUp, paper, setRecipe: (r: Recipe) => { rec = r; make(); }, twirl: () => { twirlUntil = performance.now() + 3200; },
 };
-addEventListener('resize', () => (mode === 'bench' ? ui() : railUI()));
+addEventListener('resize', () => (mode === 'rails' ? railUI() : ui()));
 requestAnimationFrame(frame);
