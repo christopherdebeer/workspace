@@ -1,27 +1,32 @@
 /**
- * Fab: a dressmaking workbench for children. A little wooden figure on its stand, and a skirt: not chosen, made. The
- * bench holds what a dressmaker decides (how long; how full; whether that fullness is cut in as flare, gathered or
- * pleated; how many panels; where on the cloth's grain they're cut; which cloth, which print) and the pattern that
- * follows from it, drafted to the figure (pattern.ts), lies on the bench beside it. Every change re-cuts the pattern,
- * which is sewn up and falls as that cloth falls (cloth.ts): its silhouette, its folds and how it swings are never
- * set, only found.
+ * Fab: a dressmaking workbench for children. A little wooden figure on its stand, and something to wear: not chosen,
+ * made. A skirt, a top, a dress, trousers or a jumpsuit, and the bench holds what a dressmaker decides about each part
+ * of it: a skirt's length, fullness, whether that fullness is cut in as flare, gathered or pleated, how many panels and
+ * tiers, where on the grain; a bodice's length and room, its neckline, sleeves and collar; trousers' legs, their width
+ * and flare; which cloth, which print. The pattern that follows, drafted to the figure (garment.ts), lies on the bench
+ * beside it. Every change re-cuts the pattern, which is sewn up and falls as that cloth falls (cloth.ts): its
+ * silhouette, its folds and how it swings are never set, only found.
  *
- * It starts at the rails (rails.ts): along the workshop's wall, a clothes rail for the workshop and one for each person,
- * hung with skirts. Slide a rail's skirts along it, swipe up or down for the next rail, tap the one in front to put it
- * on the figure; it's taken off its hanger and sewn on, and the camera crosses the room to the bench. **hang up**
- * hangs it back on its owner's rail (or a new rail, asking whose); going back to the **rails** does too, if it's
- * changed.
+ * It starts at the rails (rails.ts): along the workshop's wall, the workshop's rails (one for each kind of thing) and one
+ * for each person, hung with what's been made. Slide a rail's garments along it, swipe up or down for the next rail, tap
+ * the one in front to put it on the figure; it's taken off its hanger and sewn on, and the camera crosses the room to
+ * the bench. **hang up** hangs it back on its owner's rail (or a new rail, asking whose); going back to the **rails**
+ * does too, if it's changed.
  *
  * At the bench, drag the figure round, pinch to come close. **twirl** turns the figure on its stand; **sew** lays the
  * pieces out flat round it and sews them up again. The little pattern card opens the whole pattern.
  *
- * `?len=` `&full=` `&cut=flare|gather|pleat` `&panels=` `&grain=` (degrees) `&fabric=` `&print=` `&colour=` ·
- * `?settle=N` (frames of cloth before the first's drawn) · `?preview` · `?rails` (start at the rails; a design in the
- * query starts at the bench) · `?warm` (the rails' skirts settled before the first frame) · `?bench=evidence`.
+ * The design's in the address (see PARAMS): `?fam=skirt|top|dress|trousers|jumpsuit` · skirts `&len=` `&full=`
+ * `&cut=flare|gather|pleat` `&panels=` `&grain=` (degrees) `&tiers=` · bodices `&blen=` `&ease=` `&swing=`
+ * `&neck=round|v|square|boat|scoop` `&ndepth=` `&slen=` `&sleeve=plain|puff|bell` `&collar=none|peterpan|band|frill` ·
+ * trousers `&llen=` `&lwidth=` `&flare=` · `&fabric=` `&print=` `&colour=` · `?settle=N` (frames of cloth before the
+ * first's drawn) · `?preview` · `?rails` (start at the rails; a design in the query starts at the bench) · `?warm` (the
+ * rails' garments settled before the first frame) · `?bench=evidence`.
  */
 import { Cloth } from './cloth';
 import { FABRICS, COLOURWAYS, PRINTS, fabricById, makePrint } from './fabric';
-import { DEFAULT_DESIGN, describe, draft, toBuild, type Design, type Method, type Skirt } from './pattern';
+import { FAMILIES, describe, draftGarment, poseFor, sanitize, toBuild, type Garment } from './garment';
+import { DEFAULT_DESIGN, type Design, type Family } from './pattern';
 import { Room } from './rails';
 import { createRenderer, type Item } from './render';
 import { RAIL_COLOURS, activeRail, addRail, hang, rails, removeRail, renameRail, setActive, takeOff, type Rail } from './store';
@@ -35,26 +40,32 @@ if (!gl) throw new Error('WebGL2 needed');
 const R = createRenderer(gl);
 
 // ─── the design ────────────────────────────────────────────────────────────────────────────────
-const d: Design = { ...DEFAULT_DESIGN };
-const num = (k: string) => (qs.has(k) ? Number(qs.get(k)) : NaN);
-if (Number.isFinite(num('len'))) d.length = num('len');
-if (Number.isFinite(num('full'))) d.fullness = num('full');
-if (['flare', 'gather', 'pleat'].includes(qs.get('cut') ?? '')) d.method = qs.get('cut') as Method;
-if (Number.isFinite(num('panels'))) d.panels = num('panels');
-if (Number.isFinite(num('grain'))) d.grain = num('grain');
-if (qs.get('fabric')) d.fabric = fabricById(qs.get('fabric')!).id;
-if (Number.isFinite(num('print'))) d.print = num('print');
-if (Number.isFinite(num('colour'))) d.colour = num('colour');
+/** the design in the address: each field and the name it goes by there */
+const PARAMS: Array<[keyof Design, string]> = [
+  ['family', 'fam'], ['length', 'len'], ['fullness', 'full'], ['method', 'cut'], ['panels', 'panels'], ['grain', 'grain'], ['tiers', 'tiers'],
+  ['bodyLen', 'blen'], ['ease', 'ease'], ['swing', 'swing'], ['neck', 'neck'], ['neckDepth', 'ndepth'], ['sleeveLen', 'slen'], ['sleeve', 'sleeve'], ['collar', 'collar'],
+  ['legLen', 'llen'], ['legWidth', 'lwidth'], ['flare', 'flare'], ['fabric', 'fabric'], ['print', 'print'], ['colour', 'colour'],
+];
+const fromQuery = (): Design => {
+  const x: Record<string, unknown> = {};
+  for (const [k, q] of PARAMS) if (qs.has(q)) { const v = qs.get(q)!; x[k] = typeof DEFAULT_DESIGN[k] === 'number' ? Number(v) : v; }
+  return sanitize(x as Partial<Design>);
+};
+const d: Design = fromQuery();
 
-let sk: Skirt = draft(d), cloth: Cloth | null = null;
+let g: Garment = draftGarment(d), cloth: Cloth | null = null;
 function make(fresh = false) {
-  sk = draft(d);
-  const next = new Cloth(toBuild(sk, fabricById(d.fabric)), fresh ? null : cloth);
-  if (cloth && !fresh) { next.spin = cloth.spin; next.omega = cloth.omega; }
+  const was = g;
+  g = draftGarment(d);
+  // (posed for it, then laid out and sewn: warm, from where the last cloth was, when it's the same kind of thing)
+  poseFor(g);
+  const warm = !fresh && !!cloth && was.design.family === g.design.family && was.pose === g.pose;
+  const next = new Cloth(toBuild(g, fabricById(d.fabric)), warm ? cloth : null);
+  if (cloth && warm) { next.spin = cloth.spin; next.omega = cloth.omega; }
   cloth = next;
   if (!preview && mode === 'bench') {
     const u = new URL(location.href);
-    for (const [k, v] of [['len', d.length.toFixed(0)], ['full', d.fullness.toFixed(2)], ['cut', d.method], ['panels', String(d.panels)], ['grain', d.grain.toFixed(0)], ['fabric', d.fabric], ['print', String(d.print)], ['colour', String(d.colour)]]) u.searchParams.set(k, v);
+    for (const [k, q] of PARAMS) { const v = d[k]; u.searchParams.set(q, typeof v === 'number' ? String(+v.toFixed(2)) : String(v)); }
     history.replaceState(null, '', u);
   }
   ui();
@@ -65,54 +76,122 @@ function remake() { if (pending) return; pending = window.setTimeout(() => { pen
 // ─── the bench ─────────────────────────────────────────────────────────────────────────────────
 const $ = (id: string) => document.getElementById(id)!;
 const card = $('card') as HTMLCanvasElement, sheet = $('sheet') as HTMLCanvasElement, notes = $('notes');
-interface Knob { key: 'length' | 'fullness' | 'panels' | 'grain'; label: string; lo: number; hi: number; step: number; word: (v: number) => string }
-const KNOBS: Knob[] = [
-  { key: 'length', label: 'length', lo: 12, hi: 62, step: 1, word: (v) => `${v.toFixed(0)} cm` },
-  { key: 'fullness', label: 'fullness', lo: 1, hi: 4, step: 0.05, word: (v) => `${v.toFixed(1)}× round` },
-  { key: 'panels', label: 'panels', lo: 1, hi: 10, step: 1, word: (v) => `${v.toFixed(0)}` },
-  { key: 'grain', label: 'grain', lo: 0, hi: 45, step: 1, word: (v) => (v < 4 ? 'straight' : v > 41 ? 'bias' : `${v.toFixed(0)}° off`) },
-];
-const knobs = new Map<string, { arc: SVGPathElement; dot: SVGCircleElement; word: HTMLElement }>();
+/** what's being worked on: a garment's parts (a dress is a bodice and a skirt) each have their own dials */
+type Part = 'skirt' | 'bodice' | 'trousers';
+const PARTS: Record<Family, Part[]> = { skirt: ['skirt'], top: ['bodice'], dress: ['bodice', 'skirt'], trousers: ['trousers'], jumpsuit: ['bodice', 'trousers'] };
+let part: Part = PARTS[d.family][0];
+type NumKey = { [K in keyof Design]: Design[K] extends number ? K : never }[keyof Design];
+interface Knob { key: NumKey; label: string; lo: number; hi: number; step: number; word: (v: number) => string; only?: Family[] }
+const KNOBS: Record<Part, Knob[]> = {
+  skirt: [
+    { key: 'length', label: 'length', lo: 12, hi: 62, step: 1, word: (v) => `${v.toFixed(0)} cm` },
+    { key: 'fullness', label: 'fullness', lo: 1, hi: 4, step: 0.05, word: (v) => `${v.toFixed(1)}× round` },
+    { key: 'panels', label: 'panels', lo: 1, hi: 10, step: 1, word: (v) => `${v.toFixed(0)}` },
+    { key: 'grain', label: 'grain', lo: 0, hi: 45, step: 1, word: (v) => (v < 4 ? 'straight' : v > 41 ? 'bias' : `${v.toFixed(0)}° off`) },
+  ],
+  bodice: [
+    { key: 'bodyLen', label: 'length', lo: -6, hi: 30, step: 1, word: (v) => (v < 0 ? `${(-v).toFixed(0)} cm cropped` : `${v.toFixed(0)} cm below`), only: ['top'] },
+    { key: 'ease', label: 'room', lo: 4, hi: 16, step: 0.5, word: (v) => (v < 6 ? 'snug' : v > 12 ? 'roomy' : `${v.toFixed(0)} cm`) },
+    { key: 'sleeveLen', label: 'sleeves', lo: 0, hi: 34, step: 1, word: (v) => (v < 2 ? 'none' : `${v.toFixed(0)} cm`) },
+    { key: 'neckDepth', label: 'neck', lo: -4, hi: 8, step: 0.5, word: (v) => (Math.abs(v) < 0.6 ? 'as cut' : v > 0 ? `${v.toFixed(0)} cm lower` : `${(-v).toFixed(0)} cm higher`) },
+    { key: 'swing', label: 'swing', lo: 1, hi: 1.8, step: 0.05, word: (v) => (v < 1.05 ? 'straight' : `${v.toFixed(2)}× wide`), only: ['top'] },
+  ],
+  trousers: [
+    { key: 'legLen', label: 'legs', lo: 3, hi: 34, step: 1, word: (v) => `${v.toFixed(0)} cm` },
+    { key: 'legWidth', label: 'width', lo: 1, hi: 2, step: 0.05, word: (v) => (v < 1.15 ? 'slim' : v > 1.7 ? 'wide' : `${v.toFixed(1)}× room`) },
+    { key: 'flare', label: 'flare', lo: 0.8, hi: 1.8, step: 0.05, word: (v) => (v < 0.95 ? 'tapered' : v < 1.08 ? 'straight' : `${v.toFixed(1)}× flared`) },
+  ],
+};
+/** the choices on each part, in one row: each group's options, drawn or named */
+interface Choice { key: keyof Design; label: string; opts: Array<{ v: string | number; label: string; icon?: string }> }
+const CHOICES: Record<Part, Choice[]> = {
+  skirt: [
+    { key: 'method', label: '', opts: [
+      { v: 'flare', label: 'flared', icon: '<path d="M14 6h8l8 22H6z"/>' },
+      { v: 'gather', label: 'gathered', icon: '<path d="M8 6h20M8 6q2 4 0 8t0 8M14 6q2 4 0 8t0 8M20 6q2 4 0 8t0 8M26 6q2 4 0 8t0 8M6 28h24"/>' },
+      { v: 'pleat', label: 'pleated', icon: '<path d="M6 6h24M9 6v22M15 6v22M21 6v22M27 6v22M6 28h24"/>' },
+    ] },
+    { key: 'tiers', label: 'tiers', opts: [{ v: 1, label: 'one' }, { v: 2, label: 'two' }, { v: 3, label: 'three' }] },
+  ],
+  bodice: [
+    { key: 'neck', label: 'neck', opts: [
+      { v: 'round', label: 'round', icon: '<path d="M6 8h7q5 9 10 0h7"/>' }, { v: 'v', label: 'V', icon: '<path d="M6 8h7l5 12 5-12h7"/>' },
+      { v: 'square', label: 'square', icon: '<path d="M6 8h6l1 10h10l1-10h6"/>' }, { v: 'boat', label: 'boat', icon: '<path d="M6 8h3q9 6 18 0h3"/>' },
+      { v: 'scoop', label: 'scoop', icon: '<path d="M6 8h5q7 16 14 0h5"/>' },
+    ] },
+    { key: 'sleeve', label: 'sleeve', opts: [
+      { v: 'plain', label: 'plain', icon: '<path d="M8 8l-4 12h10l1-8"/>' }, { v: 'puff', label: 'puff', icon: '<path d="M8 10q-6-6-6 4t6 6h6q2-8-6-10z"/>' },
+      { v: 'bell', label: 'bell', icon: '<path d="M8 8l-6 14h14l-4-12"/>' },
+    ] },
+    { key: 'collar', label: 'collar', opts: [
+      { v: 'none', label: 'none' }, { v: 'peterpan', label: 'Peter Pan', icon: '<path d="M6 8q2 10 11 8l1-6 1 6q9 2 11-8"/>' },
+      { v: 'band', label: 'band', icon: '<path d="M8 6h20v6H8z"/>' }, { v: 'frill', label: 'frill', icon: '<path d="M6 10q3 4 6 0t6 0 6 0 6 0"/>' },
+    ] },
+  ],
+  trousers: [],
+};
+const knobs = new Map<string, { arc: SVGPathElement; dot: SVGCircleElement; word: HTMLElement; k: Knob }>();
 const arcPath = (t: number) => {
   const a0 = -2.36, a1 = a0 + 4.71 * Math.max(0.001, t), p = (a: number) => `${32 + Math.sin(a) * 25} ${32 - Math.cos(a) * 25}`;
   return `M ${p(a0)} A 25 25 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${p(a1)}`;
 };
-for (const k of KNOBS) {
-  const el = document.createElement('div'); el.className = 'knob';
-  el.innerHTML = `<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="25" class="face"/><path class="track" d="${arcPath(1)}"/><path class="arc" d=""/><circle class="dot" r="4.5"/></svg><b>${k.label}</b><i></i>`;
-  $('knobs').appendChild(el);
-  knobs.set(k.key, { arc: el.querySelector('.arc')!, dot: el.querySelector('.dot')!, word: el.querySelector('i')! });
-  // (turned by dragging round it, or up and down)
-  let startA = 0, last = 0, acc = 0;
-  const angle = (ev: PointerEvent) => { const r = el.getBoundingClientRect(); return Math.atan2(ev.clientX - (r.left + r.width / 2), -(ev.clientY - (r.top + r.width / 2))); };
-  el.addEventListener('pointerdown', (ev) => { el.setPointerCapture(ev.pointerId); startA = angle(ev); last = ev.clientY - ev.clientX; acc = (d[k.key] - k.lo) / (k.hi - k.lo); el.classList.add('turning'); ev.preventDefault(); });
-  el.addEventListener('pointermove', (ev) => {
-    if (!el.hasPointerCapture(ev.pointerId)) return;
-    const a = angle(ev); let da = a - startA; if (da > Math.PI) da -= Math.PI * 2; if (da < -Math.PI) da += Math.PI * 2; startA = a;
-    const lin = ev.clientY - ev.clientX, dl = (last - lin) / 240; last = lin;
-    acc = Math.max(0, Math.min(1, acc + Math.max(-0.2, Math.min(0.2, da / 4.7 + dl))));
-    const v = Math.round((k.lo + acc * (k.hi - k.lo)) / k.step) * k.step;
-    if (v !== d[k.key]) { d[k.key] = v; knob(k); remake(); }
-  });
-  el.addEventListener('pointerup', () => el.classList.remove('turning'));
+/** the dials and choices for the part being worked on (built again when it changes) */
+let builtFor = '';
+function bench() {
+  const key = `${d.family}/${part}`;
+  if (key === builtFor) return;
+  builtFor = key;
+  // (what's made, and which part of it)
+  const fam = $('families'); fam.innerHTML = '';
+  for (const f of FAMILIES) {
+    const b = document.createElement('button'); b.className = `fam${f.f === d.family ? ' on' : ''}`; b.textContent = f.label;
+    b.addEventListener('click', () => { if (d.family === f.f) return; d.family = f.f; part = PARTS[f.f][0]; make(true); });
+    fam.appendChild(b);
+  }
+  const parts = $('parts'); parts.innerHTML = ''; parts.style.display = PARTS[d.family].length > 1 ? '' : 'none';
+  for (const p of PARTS[d.family]) {
+    const b = document.createElement('button'); b.className = `fam part${p === part ? ' on' : ''}`; b.textContent = `the ${p}`;
+    b.addEventListener('click', () => { part = p; bench(); ui(); });
+    parts.appendChild(b);
+  }
+  const ch = $('choices'); ch.innerHTML = ''; ch.style.display = CHOICES[part].length ? '' : 'none';
+  for (const c of CHOICES[part]) {
+    if (c.label) { const l = document.createElement('i'); l.textContent = c.label; ch.appendChild(l); }
+    for (const o of c.opts) {
+      const b = document.createElement('button'); b.dataset.k = c.key; b.dataset.v = String(o.v);
+      b.innerHTML = `${o.icon ? `<svg viewBox="0 0 36 34">${o.icon}</svg>` : ''}<span>${o.label}</span>`;
+      b.addEventListener('click', () => { (d as unknown as Record<string, unknown>)[c.key] = o.v; make(); });
+      ch.appendChild(b);
+    }
+  }
+  const kn = $('knobs'); kn.innerHTML = ''; knobs.clear();
+  for (const k of KNOBS[part].filter((x) => !x.only || x.only.includes(d.family))) {
+    const el = document.createElement('div'); el.className = 'knob';
+    el.innerHTML = `<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="25" class="face"/><path class="track" d="${arcPath(1)}"/><path class="arc" d=""/><circle class="dot" r="4.5"/></svg><b>${k.label}</b><i></i>`;
+    kn.appendChild(el);
+    knobs.set(k.key, { arc: el.querySelector('.arc')!, dot: el.querySelector('.dot')!, word: el.querySelector('i')!, k });
+    // (turned by dragging round it, or up and down)
+    let startA = 0, last = 0, acc = 0;
+    const angle = (ev: PointerEvent) => { const r = el.getBoundingClientRect(); return Math.atan2(ev.clientX - (r.left + r.width / 2), -(ev.clientY - (r.top + r.width / 2))); };
+    el.addEventListener('pointerdown', (ev) => { el.setPointerCapture(ev.pointerId); startA = angle(ev); last = ev.clientY - ev.clientX; acc = (d[k.key] - k.lo) / (k.hi - k.lo); el.classList.add('turning'); ev.preventDefault(); });
+    el.addEventListener('pointermove', (ev) => {
+      if (!el.hasPointerCapture(ev.pointerId)) return;
+      const a = angle(ev); let da = a - startA; if (da > Math.PI) da -= Math.PI * 2; if (da < -Math.PI) da += Math.PI * 2; startA = a;
+      const lin = ev.clientY - ev.clientX, dl = (last - lin) / 240; last = lin;
+      acc = Math.max(0, Math.min(1, acc + Math.max(-0.2, Math.min(0.2, da / 4.7 + dl))));
+      const v = +(Math.round((k.lo + acc * (k.hi - k.lo)) / k.step) * k.step).toFixed(3);
+      if (v !== d[k.key]) { (d as unknown as Record<string, number>)[k.key] = v; knob(k); remake(); }
+    });
+    el.addEventListener('pointerup', () => el.classList.remove('turning'));
+  }
 }
 function knob(k: Knob) {
-  const kb = knobs.get(k.key)!, t = (d[k.key] - k.lo) / (k.hi - k.lo), a = -2.36 + 4.71 * t;
+  const kb = knobs.get(k.key); if (!kb) return;
+  const t = Math.max(0, Math.min(1, (d[k.key] - k.lo) / (k.hi - k.lo))), a = -2.36 + 4.71 * t;
   kb.arc.setAttribute('d', arcPath(t));
   kb.dot.setAttribute('cx', `${32 + Math.sin(a) * 25}`); kb.dot.setAttribute('cy', `${32 - Math.cos(a) * 25}`);
-  kb.word.textContent = k.key === 'panels' && sk.m.panels !== d.panels ? `${sk.m.panels} (needs)` : k.word(d[k.key]);
-}
-// (how the fullness is made: three ways, each drawn as it's cut)
-const METHODS: Array<{ m: Method; label: string; icon: string }> = [
-  { m: 'flare', label: 'flared', icon: '<path d="M14 6h8l8 22H6z"/>' },
-  { m: 'gather', label: 'gathered', icon: '<path d="M8 6h20M8 6q2 4 0 8t0 8M14 6q2 4 0 8t0 8M20 6q2 4 0 8t0 8M26 6q2 4 0 8t0 8M6 28h24"/>' },
-  { m: 'pleat', label: 'pleated', icon: '<path d="M6 6h24M9 6v22M15 6v22M21 6v22M27 6v22M6 28h24"/>' },
-];
-for (const x of METHODS) {
-  const b = document.createElement('button'); b.dataset.m = x.m;
-  b.innerHTML = `<svg viewBox="0 0 36 34">${x.icon}</svg><span>${x.label}</span>`;
-  b.addEventListener('click', () => { d.method = x.m; make(); });
-  $('methods').appendChild(b);
+  const cutPanels = Number(/cut in (\d+) panels/.exec(g.notes.join(' '))?.[1] ?? NaN);
+  kb.word.textContent = k.key === 'panels' && Number.isFinite(cutPanels) && cutPanels !== d.panels ? `${cutPanels} (needs)` : k.word(d[k.key]);
 }
 for (const f of FABRICS) {
   const b = document.createElement('button'); b.className = 'swatch'; b.dataset.f = f.id;
@@ -128,23 +207,30 @@ for (let k = 0; k < PRINTS.length; k++) {
   $('prints').appendChild(b);
 }
 function ui() {
-  for (const k of KNOBS) knob(k);
-  for (const b of Array.from($('methods').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.m === d.method);
+  if (!PARTS[d.family].includes(part)) part = PARTS[d.family][0];
+  bench();
+  for (const kb of knobs.values()) knob(kb.k);
+  for (const b of Array.from($('choices').querySelectorAll('button')) as HTMLElement[]) {
+    const v = (d as unknown as Record<string, unknown>)[b.dataset.k!];
+    b.classList.toggle('on', String(v) === b.dataset.v);
+    // (a sleeve's cut means nothing without a sleeve)
+    b.classList.toggle('off', b.dataset.k === 'sleeve' && d.sleeveLen < 2);
+  }
   for (const b of Array.from($('fabrics').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.f === d.fabric);
   for (const b of Array.from($('prints').children) as HTMLElement[]) {
     const k = Number(b.dataset.k); b.classList.toggle('on', k === d.print);
     const cv = b.querySelector('canvas')!; cv.style.width = '28px'; cv.style.height = '20px';
-    drawSwatch(cv, k, k === d.print ? d.colour : d.colour);
+    drawSwatch(cv, k, d.colour);
   }
-  notes.textContent = sk.notes.join(' · ');
-  const bad = sk.checks.filter((c) => !c.ok);
+  notes.textContent = `${describe(d)} · ${g.notes.join(' · ')}`;
+  const bad = g.checks.filter((c) => !c.ok);
   if (bad.length) notes.textContent += ` · ✗ ${bad.map((c) => c.name).join(', ')}`;
   const pr = makePrint(d.print, d.colour);
-  drawSheet(card, sk, pr, true);
-  if (sheetOn) drawSheet(sheet, sk, pr);
+  drawSheet(card, g, pr, true);
+  if (sheetOn) drawSheet(sheet, g, pr);
 }
 function drawSwatch(cv: HTMLCanvasElement, kind: number, colour: number) {
-  const c = cv.getContext('2d')!, inks = COLOURWAYS[colour].inks;
+  const c = cv.getContext('2d')!, inks = COLOURWAYS[((colour % COLOURWAYS.length) + COLOURWAYS.length) % COLOURWAYS.length].inks;
   c.fillStyle = inks[0]; c.fillRect(0, 0, 56, 40); c.fillStyle = inks[1];
   if (kind === 1) for (let x = 0; x < 56; x += 12) c.fillRect(x, 0, 4, 40);
   if (kind === 2) { c.globalAlpha = 0.5; for (let x = 0; x < 56; x += 12) { c.fillRect(x, 0, 6, 40); c.fillRect(0, x, 56, 6); } c.globalAlpha = 1; }
@@ -163,7 +249,7 @@ $('twirl').addEventListener('click', () => { twirlUntil = performance.now() + 32
 
 // ─── the rails: where every skirt starts and ends ──────────────────────────────────────────────
 type Mode = 'rails' | 'bench';
-const hasDesign = ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour'].some((k) => qs.has(k));
+const hasDesign = PARAMS.some(([, q]) => qs.has(q));
 let mode: Mode = qs.has('rails') || (!hasDesign && !preview && !qs.has('settle') && !qs.has('sheet')) ? 'rails' : 'bench';
 const room = new Room();
 room.active = Math.max(0, room.states.findIndex((st) => st.rail.id === activeRail()));
@@ -171,14 +257,14 @@ room.active = Math.max(0, room.states.findIndex((st) => st.rail.id === activeRai
 let origin: { rail: string; garment: string | null; design: Design } | null = null;
 let lastVP: Float32Array | null = null, toastT = 0, lastFront = -1;
 const toast = (t: string) => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = window.setTimeout(() => el.classList.remove('show'), 2400); };
-const railName = (r: Rail) => (r.workshop ? 'the workshop’s rail' : /rail/i.test(r.name) ? r.name : `${r.name}’s rail`);
+const railName = (r: Rail) => (r.workshop ? (r.id === 'workshop' ? 'the workshop’s skirts' : `the workshop’s ${r.name.replace(/^the workshop: /, '')}`) : /rail/i.test(r.name) ? r.name : `${r.name}’s rail`);
 
 function railUI() {
   const tags = $('railtags'); tags.innerHTML = '';
   room.states.forEach((st, k) => {
     const b = document.createElement('button'); b.className = `tag${k === room.active ? ' on' : ''}`;
     b.style.setProperty('--c', st.rail.workshop ? '#9a9aa0' : RAIL_COLOURS[st.rail.colour % RAIL_COLOURS.length].css);
-    b.textContent = st.rail.workshop ? 'workshop' : st.rail.name;
+    b.textContent = st.rail.workshop ? (st.rail.id === 'workshop' ? 'skirts' : st.rail.name.replace(/^the workshop: /, '')) : st.rail.name;
     b.addEventListener('click', () => {
       // (tap your own rail's tag again to rename it; clear its name to take it away)
       if (k === room.active && !st.rail.workshop) {
@@ -201,7 +287,7 @@ function railInfo() {
   lastFront = room.front();
   $('railname').textContent = st ? railName(st.rail) : '';
   if (!h) { $('railwhat').textContent = ''; return; }
-  if (!h.g) { $('railwhat').textContent = 'a bare hanger: start a new skirt'; $('wear').textContent = 'start one'; return; }
+  if (!h.g) { $('railwhat').textContent = 'a bare hanger: start something new'; $('wear').textContent = 'start one'; return; }
   const g = h.g.design;
   $('railwhat').textContent = `${describe(g)} in ${fabricById(g.fabric).name}${g.print ? `, ${PRINTS[g.print]}` : ''}`;
   $('wear').textContent = 'put it on the figure';
@@ -215,7 +301,7 @@ function showRail(k: number) {
 function wear(i: number) {
   const st = room.states[room.active], h = st?.hung[i];
   if (!st || !h) return;
-  Object.assign(d, h.g ? h.g.design : DEFAULT_DESIGN);
+  Object.assign(d, sanitize(h.g?.design)); part = PARTS[d.family][0];
   origin = { rail: st.rail.id, garment: h.g?.id ?? null, design: { ...d } };
   room.onFigure = h.g?.id ?? null;
   setMode('bench');
@@ -249,7 +335,7 @@ function setMode(m: Mode) {
   document.body.classList.toggle('rails', m === 'rails');
   if (m === 'rails') {
     if (sheetOn) toggleSheet();
-    if (!preview) { const u = new URL(location.href); for (const k of ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour']) u.searchParams.delete(k); history.replaceState(null, '', u); }
+    if (!preview) { const u = new URL(location.href); for (const [, q] of PARAMS) u.searchParams.delete(q); history.replaceState(null, '', u); }
     railUI();
   } else ui();
 }
@@ -275,7 +361,7 @@ canvas.addEventListener('pointerdown', (e) => {
       if (!lastVP || axis) return;
       const [px, py] = local({ clientX: sx, clientY: sy }), i = room.pick(px, py, lastVP, canvas.clientWidth, canvas.clientHeight), stt = room.states[room.active], h = stt?.hung[i];
       if (!h?.g) return;
-      if (stt.rail.workshop) { toast('the workshop’s skirts stay: put one on the figure, and hang up your own'); return; }
+      if (stt.rail.workshop) { toast('the workshop’s things stay: put one on the figure, and hang up your own'); return; }
       drag = false;
       if (confirm(`Take ${describe(h.g.design)} off ${railName(stt.rail)}? It’ll be gone.`)) { takeOff(stt.rail.id, h.g.id); room.refresh(); railInfo(); }
     }, 650);
@@ -326,7 +412,12 @@ function frame(now: number) {
     const goal = room.viewOf(room.active, aspect()), k = 1 - Math.exp(-dt * 5);
     view.az += (goal.az - view.az) * k; view.el += (goal.el - view.el) * k; view.dist += (goal.dist - view.dist) * k;
     for (let c = 0; c < 3; c++) view.target[c] += (goal.target[c] - view.target[c]) * k;
-  } else if (!drag) { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
+  } else {
+    // (looking at what's made: a skirt's or trousers' middle, a top's chest)
+    const ty = qs.has('ty') ? BENCH_VIEW.target[1] : { skirt: 52, top: 80, dress: 68, trousers: 42, jumpsuit: 62 }[d.family];
+    view.target[1] += (ty - view.target[1]) * (1 - Math.exp(-dt * 4));
+    if (!drag) { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
+  }
   if (mode === 'rails') { room.update(dt, 7); if (room.front() !== lastFront) railInfo(); }
   if (cloth && mode === 'bench') {
     // (a twirl: the figure spun up on its stand, held, and let run down)
@@ -350,7 +441,7 @@ if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = {
-  probe: () => ({ mode, frames, particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
+  probe: () => ({ mode, frames, family: d.family, what: describe(d), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: g.notes, checks: g.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), seams: cloth?.seams(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
   view, room, wear, backToRails, hangUp, twirl: () => { twirlUntil = performance.now() + 3200; },
 };
 addEventListener('resize', () => (mode === 'bench' ? ui() : railUI()));

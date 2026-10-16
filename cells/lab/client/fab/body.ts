@@ -53,25 +53,45 @@ export function around(y: number, th: number, out = 0): V3 {
 
 export interface Capsule { a: V3; b: V3; ra: number; rb: number }
 const L = (x: number, y: number, z: number): V3 => [x, y, z];
-/** the limbs and neck (capsules), the joints and head (balls), each side mirrored */
+/**
+ * How it stands. `twirl`: its arms up in a dancer's curve over its head, ready to twirl, clear of whatever it wears
+ * below the waist. `dress`: its arms let down and out, 45° below the shoulders' line (as GarmentCode's bodies stand, so
+ * a sleeve has an arm to hang on and an armhole room under it). It's a jointed artist's figure: the same wood either way.
+ */
+export type Pose = 'twirl' | 'dress';
+/** the limbs and neck (capsules), the joints and head (balls), each side mirrored: rebuilt in place by `setPose` */
 export const LIMBS: Capsule[] = [];
 export const BALLS: Array<{ c: V3; r: number }> = [];
-for (const s of [-1, 1]) {
-    // (its arms up in a dancer's curve over its head, ready to twirl: clear of whatever it wears below the waist)
-  const sh = L(s * 15.6, 89.5, -0.6), el = L(s * 26.5, 101.5, 1.2), wr = L(s * 15, 118.5, 2.4);
-  LIMBS.push({ a: sh, b: el, ra: 3.9, rb: 3.2 }, { a: el, b: wr, ra: 3.1, rb: 2.6 });
-  BALLS.push({ c: sh, r: 4.6 }, { c: el, r: 3.5 }, { c: L(s * 11.8, 122, 2.8), r: 3.4 });
-  const hp = L(s * 6.6, 55, -0.2), kn = L(s * 7, 30, 0.6), an = L(s * 7, 6, -0.2);
-  LIMBS.push({ a: hp, b: kn, ra: 5.6, rb: 4.4 }, { a: kn, b: an, ra: 4.2, rb: 3.2 });
-  BALLS.push({ c: kn, r: 4.6 }, { c: an, r: 3.4 });
-  // (a foot: a short capsule forward)
-  LIMBS.push({ a: L(s * 7, 2.6, -1.5), b: L(s * 7.4, 2.6, 7), ra: 2.8, rb: 2.4 });
+export const SHOULDERS: V3[] = [];
+export let pose: Pose = 'twirl';
+/** goes up whenever the figure's posed differently: whoever draws it knows to build it again */
+export let poseVersion = 0;
+function limbs(p: Pose) {
+  LIMBS.length = 0; BALLS.length = 0; SHOULDERS.length = 0;
+  for (const s of [-1, 1]) {
+    const sh = L(s * 15.6, 89.5, -0.6);
+    let el: V3, wr: V3, hand: V3;
+    if (p === 'twirl') { el = L(s * 26.5, 101.5, 1.2); wr = L(s * 15, 118.5, 2.4); hand = L(s * 11.8, 122, 2.8); }
+    else {
+      // (the upper arm 16.3 cm at 45° below the line of the shoulders; the forearm 20.6 cm, a little nearer upright)
+      el = L(s * (15.6 + 11.5), 89.5 - 11.5, 0.2); wr = L(s * (27.1 + 13.2), 78 - 15.8, 1.4); hand = L(s * (40.3 + 2.5), 62.2 - 3.4, 1.8);
+    }
+    LIMBS.push({ a: sh, b: el, ra: 3.9, rb: 3.2 }, { a: el, b: wr, ra: 3.1, rb: 2.6 });
+    BALLS.push({ c: sh, r: 4.6 }, { c: el, r: 3.5 }, { c: hand, r: 3.4 });
+    const hp = L(s * 6.6, 55, -0.2), kn = L(s * 7, 30, 0.6), an = L(s * 7, 6, -0.2);
+    LIMBS.push({ a: hp, b: kn, ra: 5.6, rb: 4.4 }, { a: kn, b: an, ra: 4.2, rb: 3.2 });
+    BALLS.push({ c: kn, r: 4.6 }, { c: an, r: 3.4 });
+    // (a foot: a short capsule forward)
+    LIMBS.push({ a: L(s * 7, 2.6, -1.5), b: L(s * 7.4, 2.6, 7), ra: 2.8, rb: 2.4 });
+    SHOULDERS.push(sh);
+  }
+  LIMBS.push({ a: L(0, 95, -0.4), b: L(0, 101, 0.2), ra: 3.8, rb: 3.6 });
 }
-LIMBS.push({ a: L(0, 95, -0.4), b: L(0, 101, 0.2), ra: 3.8, rb: 3.6 });
 export const HEAD = { c: L(0, 110, 0.4) as V3, r: 9.6 };
 /** the pelvis: a ball rounding off the torso's foot, between the legs */
 export const PELVIS = { c: L(0, 52, -0.3) as V3, r: 11.4 };
-export const SHOULDERS: V3[] = [LIMBS[0].a, LIMBS[5].a];
+/** the arm's capsules on one side (s = ±1): upper arm, forearm */
+export const arm = (s: number): [Capsule, Capsule] => { const k = s < 0 ? 0 : 5; return [LIMBS[k], LIMBS[k + 1]]; };
 
 // (the sections tabulated every millimetre, read without allocating)
 const ST = new Float32Array(((TORSO_TOP - TORSO_FOOT) * 10 + 2) * 3), S3 = new Float32Array(3);
@@ -82,12 +102,20 @@ function sec(y: number) {
 }
 // ─── meeting it ─────────────────────────────────────────────────────────────────────────────────
 // (flat arrays, read without allocating: a cloth asks this of every particle several times a frame)
-const CAP = new Float32Array(LIMBS.length * 10);
-LIMBS.forEach((c, k) => {
-  const ab = [c.b[0] - c.a[0], c.b[1] - c.a[1], c.b[2] - c.a[2]], ll = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-  CAP.set([c.a[0], c.a[1], c.a[2], ab[0], ab[1], ab[2], ll, c.ra, c.rb, (Math.sqrt(ll) / 2 + Math.max(c.ra, c.rb)) ** 2], k * 10);
-});
-const SPH = new Float32Array([...BALLS, HEAD, PELVIS].flatMap((b) => [b.c[0], b.c[1], b.c[2], b.r]));
+let CAP = new Float32Array(0), SPH = new Float32Array(0);
+/** pose the figure (its arms): the distance field and anything drawn from LIMBS follow */
+export function setPose(p: Pose) {
+  if (p === pose && LIMBS.length) return;
+  pose = p; poseVersion++;
+  limbs(p);
+  CAP = new Float32Array(LIMBS.length * 10);
+  LIMBS.forEach((c, k) => {
+    const ab = [c.b[0] - c.a[0], c.b[1] - c.a[1], c.b[2] - c.a[2]], ll = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    CAP.set([c.a[0], c.a[1], c.a[2], ab[0], ab[1], ab[2], ll, c.ra, c.rb, (Math.sqrt(ll) / 2 + Math.max(c.ra, c.rb)) ** 2], k * 10);
+  });
+  SPH = new Float32Array([...BALLS, HEAD, PELVIS].flatMap((b) => [b.c[0], b.c[1], b.c[2], b.r]));
+}
+limbs('twirl'); pose = 'dress'; setPose('twirl'); poseVersion = 0;
 /** the last answer: how far out of the body (negative inside), and which way's out */
 export const hit = { d: 0, nx: 0, ny: 1, nz: 0 };
 /** how far a point is from the body, into `hit` (and returned); only what's nearer than `near` is worked out exactly */

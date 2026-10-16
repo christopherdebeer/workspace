@@ -14,7 +14,9 @@
  *   interior point, the cotangent Laplacian of the positions, which is zero on the flat pattern, weighted by the
  *   fabric's flexural rigidity (from its Peirce bending length and weight) over the point's area. As a constraint, so
  *   stiff felt is as stable as limp chiffon;
- * - seams: zero-length constraints, drawn closed over the first moment (sewing);
+ * - seams: zero-length constraints, drawn closed over the first moment (sewing). A stitch joins a point to a place on
+ *   another edge, between two of its points (GarmentCode's stitches match edges by length, not by vertex): so two edges
+ *   of different lengths sewn end to end gather the longer onto the shorter, as a dressmaker eases or gathers it;
  * - held points (a waistband): moved, not simulated, eased to where they're held, turning with the figure;
  * - air: drag on each point's speed through the cloth's normal, by its area over its mass, so chiffon floats and felt
  *   falls;
@@ -30,7 +32,10 @@ type V3 = [number, number, number];
 export interface Collider { distance(x: number, y: number, z: number, near?: number): number; hit: { nx: number; ny: number; nz: number } }
 export interface Build {
   pieces: Array<Pick<Piece, 'nu' | 'nv' | 'flat' | 'grain' | 'start'>>;
-  pairs: Array<{ a: At; b: At }>;
+  /** what's sewn: a point to another, or to a place `t` of the way from `b` to `b1` */
+  pairs: Array<{ a: At; b: At; b1?: At; t?: number }>;
+  /** points a piece hangs from without being held (where it's sewn to what holds it): its tethers tie to these too */
+  anchors?: At[];
   /** held points, where in the figure's own frame */
   holds: Array<{ at: At; p: V3 }>;
   fabric: Fabric;
@@ -54,8 +59,8 @@ export class Cloth {
   la!: Int32Array; lb!: Int32Array; lr!: Float32Array; lc!: Float32Array;
   // (bending: per interior point, its stencil (points and weights), and compliance)
   bs!: Int32Array; bi!: Int32Array; bw!: Float32Array; bc!: Float32Array; bp!: Int32Array;
-  // (seams: ends, their gap when laid out)
-  sa!: Int32Array; sb!: Int32Array; s0!: Float32Array;
+  // (seams: a point, the two it's sewn between and how far along, their gap when laid out)
+  sa!: Int32Array; sb!: Int32Array; sc!: Int32Array; st!: Float32Array; s0!: Float32Array;
   // (tethers: each free point to its nearest held point on its own piece, no further than along the cloth)
   ti!: Int32Array; tt!: Int32Array; tr!: Float32Array;
   // (held: which, from where, to where in the figure's frame)
@@ -168,14 +173,18 @@ export class Cloth {
     this.bs = new Int32Array(bs); this.bi = new Int32Array(bi); this.bw = new Float32Array(bw); this.bc = new Float32Array(bc); this.bp = new Int32Array(bp);
 
     // (seams, and what's held)
-    const sa: number[] = [], sb: number[] = [];
+    const sa: number[] = [], sb: number[] = [], sc: number[] = [], st: number[] = [];
     this.lone = new Uint8Array(n);
-    for (const p of b.pairs) { const x = idx(p.a), y = idx(p.b); if (x === y) continue; sa.push(x); sb.push(y); }
-    this.sa = new Int32Array(sa); this.sb = new Int32Array(sb);
+    for (const p of b.pairs) {
+      const x = idx(p.a), y = idx(p.b), z = p.b1 && (p.t ?? 0) > 1e-4 ? idx(p.b1) : y, t = z === y ? 0 : p.t!;
+      if (x === y && z === y) continue;
+      sa.push(x); sb.push(y); sc.push(z); st.push(t);
+    }
+    this.sa = new Int32Array(sa); this.sb = new Int32Array(sb); this.sc = new Int32Array(sc); this.st = new Float32Array(st);
     this.hi = new Int32Array(b.holds.map((h) => idx(h.at))); this.hAt = new Float32Array(b.holds.flatMap((h) => h.p));
     for (const i of this.hi) this.inv[i] = 0;
     // (near a seam or a fold, cloth's meant to meet cloth: not kept apart there)
-    for (const i of [...sa, ...sb, ...this.hi]) {
+    for (const i of [...sa, ...sb, ...sc, ...this.hi]) {
       this.lone[i] = 1;
       for (const [q] of nb[i]) this.lone[q] = 1;
     }
@@ -185,7 +194,7 @@ export class Cloth {
     // that direction (on the bias, more))
     const ti: number[] = [], tt: number[] = [], tr: number[] = [];
     const heldBy = new Map<number, number[]>();
-    for (const i of this.hi) { const k = piece[i]; if (!heldBy.has(k)) heldBy.set(k, []); heldBy.get(k)!.push(i); }
+    for (const i of [...this.hi, ...(b.anchors ?? []).map(idx)]) { const k = piece[i]; if (!heldBy.has(k)) heldBy.set(k, []); heldBy.get(k)!.push(i); }
     for (let i = 0; i < n; i++) {
       const hs = heldBy.get(piece[i]);
       if (!hs || this.inv[i] === 0) continue;
@@ -206,7 +215,7 @@ export class Cloth {
     if (this.collider) for (let i = 0; i < n; i++) if (this.inv[i] > 0) this.pushOut(i, 0, false);
     this.prev.set(this.pos);
     this.s0 = new Float32Array(sa.length);
-    for (let c = 0; c < sa.length; c++) this.s0[c] = warm ? 0 : dist(this.pos, sa[c], sb[c]);
+    for (let c = 0; c < sa.length; c++) this.s0[c] = warm ? 0 : this.gap(c);
     this.hFrom = new Float32Array(this.hi.length * 3);
     for (let k = 0; k < this.hi.length; k++) this.hFrom.set(this.toBody(this.hi[k]), k * 3);
     this.wait = new Uint8Array(n);
@@ -259,7 +268,7 @@ export class Cloth {
       this.tethers();
       // (sewing: each seam's gap closed over the first 0.8 s)
       const sw = Math.min(1, this.age / 0.8), sew = 1 - sw * sw * (3 - 2 * sw);
-      for (let c = 0; c < this.sa.length; c++) this.distance(this.sa[c], this.sb[c], this.s0[c] * sew, 1e-8 / h2);
+      for (let c = 0; c < this.sa.length; c++) this.stitch(c, this.s0[c] * sew, 1e-8 / h2);
       if (this.self && s % 4 === 3) this.selfCollide();
       if (this.collider || this.floor) for (let i = 0; i < n; i++) if (inv[i] > 0) { if (this.wait[i] > 0) this.wait[i]--; else this.pushOut(i, h, true); }
     }
@@ -274,6 +283,32 @@ export class Cloth {
     const f = (d - rest) / d / w;
     pos[a3] += dx * f * wa; pos[a3 + 1] += dy * f * wa; pos[a3 + 2] += dz * f * wa;
     pos[b3] -= dx * f * wb; pos[b3 + 1] -= dy * f * wb; pos[b3 + 2] -= dz * f * wb;
+  }
+  /** how far a seam's point is from where it's sewn to */
+  gap(c: number): number {
+    const p = this.pos, a3 = this.sa[c] * 3, b3 = this.sb[c] * 3, c3 = this.sc[c] * 3, t = this.st[c];
+    return Math.hypot(p[b3] + (p[c3] - p[b3]) * t - p[a3], p[b3 + 1] + (p[c3 + 1] - p[b3 + 1]) * t - p[a3 + 1], p[b3 + 2] + (p[c3 + 2] - p[b3 + 2]) * t - p[a3 + 2]);
+  }
+  /** a seam: its point drawn to its place on the other edge (between two points, by `t`), to `rest` apart */
+  private stitch(c: number, rest: number, at: number) {
+    const { pos, inv } = this, a = this.sa[c], b = this.sb[c], k = this.sc[c], t = this.st[c];
+    if (t === 0) { this.distance(a, b, rest, at); return; }
+    const wa = inv[a], wb = inv[b] * (1 - t) * (1 - t), wk = inv[k] * t * t, w = wa + wb + wk + at;
+    if (wa + wb + wk === 0) return;
+    const a3 = a * 3, b3 = b * 3, k3 = k * 3;
+    const qx = pos[b3] + (pos[k3] - pos[b3]) * t, qy = pos[b3 + 1] + (pos[k3 + 1] - pos[b3 + 1]) * t, qz = pos[b3 + 2] + (pos[k3 + 2] - pos[b3 + 2]) * t;
+    const dx = qx - pos[a3], dy = qy - pos[a3 + 1], dz = qz - pos[a3 + 2], d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (d < 1e-7) return;
+    const f = (d - rest) / d / w, fb = f * inv[b] * (1 - t), fk = f * inv[k] * t;
+    pos[a3] += dx * f * wa; pos[a3 + 1] += dy * f * wa; pos[a3 + 2] += dz * f * wa;
+    pos[b3] -= dx * fb; pos[b3 + 1] -= dy * fb; pos[b3 + 2] -= dz * fb;
+    pos[k3] -= dx * fk; pos[k3 + 1] -= dy * fk; pos[k3 + 2] -= dz * fk;
+  }
+  /** the widest any seam's still open (cm), and the mean: a garment that's sewn up has none */
+  seams(): { max: number; mean: number } {
+    let max = 0, sum = 0;
+    for (let c = 0; c < this.sa.length; c++) { const g = this.gap(c); if (g > max) max = g; sum += g; }
+    return { max, mean: sum / Math.max(1, this.sa.length) };
   }
   private sl = new Float32Array(0);
   private springs(h2: number, first: boolean) {

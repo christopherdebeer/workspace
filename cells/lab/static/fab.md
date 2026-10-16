@@ -1,7 +1,7 @@
 # Fab
 
-A dressmaking workbench for children. A little wooden figure stands on a turned stand, and beside it lies a skirt's
-paper pattern. Nothing is chosen from a list. A child decides what a dressmaker decides, the pattern that follows is
+A dressmaking workbench for children. A little wooden figure stands on a turned stand, and beside it lies a garment's
+paper pattern: a skirt, a top, a dress, trousers or a jumpsuit. Nothing is chosen from a list. A child decides what a dressmaker decides, the pattern that follows is
 drafted to the figure, and the cut cloth is sewn up round it and falls as that cloth falls.
 
 The aim is for a child to find out that clothes are made, and can be reasoned about, constructed and transformed.
@@ -9,7 +9,7 @@ The aim is for a child to find out that clothes are made, and can be reasoned ab
 This page sets out what Fab claims, how it's built, and the evidence for and against it. The evidence comes from the
 **evidence bench** (`?bench=evidence`), which runs the same tests in the page as it does headless.
 
-## One garment family, deep
+## One garment family, deep, then five
 
 The first Fab tried to dress the figure in a skirt, a top and a cape, each with the same six dials. The skirt worked.
 The top's sleeves never sat properly. Its pieces weren't real pattern pieces:
@@ -20,7 +20,7 @@ The top's sleeves never sat properly. Its pieces weren't real pattern pieces:
 so no simulation could have made a garment of them. And dials like *silhouette* and *drape* claimed to set what should
 only ever be found.
 
-So Fab now goes deep into one family: **the skirt**. It's the simplest thing that's truly *made*: flat pieces cut,
+So Fab went deep into one family first: **the skirt**. It's the simplest thing that's truly *made*: flat pieces cut,
 joined round a body and hung from one line, the waist. Nearly every move a dressmaker has shows in it:
 
 - **extend** (length);
@@ -31,10 +31,18 @@ joined round a body and hung from one line, the waist. Nearly every move a dress
 - **cut on the grain or the bias**;
 - **join** (side seams, waistband).
 
-A child can go from a straight darted skirt to a full circle, a dirndl or a kilt-like pleat, and the reasons each one
-hangs as it does are all in view.
+With the skirt sound, the same grammar now makes four more families. It follows GarmentCode (Korosteleva &
+Sorkine-Hornung 2023): a garment is components drafted to the body's measurements and sewn edge to edge by length. The
+first Fab's failures are now checks every pattern has to pass:
 
-## The grammar
+- **Tops**: a bodice whose armholes are cut, five necklines, sleeves whose heads are solved to their armholes, and three
+  collars.
+- **Dresses**: a bodice sewn to any skirt at the waist.
+- **Trousers**: four panels with a crotch curve solved to the figure.
+- **Jumpsuits**: a bodice sewn to trousers.
+- **Tiers** on any skirt or dress.
+
+## The skirt's grammar
 
 A skirt is a **waistband** and **n panels** round it, each sewn to the next.
 
@@ -90,6 +98,115 @@ Couplings exist only where the cut or the physics makes them:
 - grain and fabric → how much it stretches and clings.
 
 None are invented to make the dials feel richer.
+
+## The other families
+
+Every family is drafted from the figure itself, measured from its own shapes in `body.ts`, and every one passes the
+same checks: seams meet, pieces lie flat, pieces fit on the cloth. Each also has checks of its own.
+
+### Tops (`bodice.ts`)
+
+A **front** and a **back**, each half the chest's round and its ease. The ease runs from snug (4 cm) to roomy (16 cm).
+
+| control | what it is |
+|---|---|
+| **length** | cm below the waist; less than 0 is cropped above it |
+| **room** | wearing ease round the chest |
+| **sleeves** | cm down the arm, 0 for sleeveless; **plain**, **puff** or **bell** |
+| **neck** | **round**, **V**, **square**, **boat** or **scoop**, and how much lower or higher than usual |
+| **swing** | how much wider the hem is than the chest |
+| **collar** | none, **Peter Pan**, **band** or **frill** |
+
+What follows from those choices:
+
+- **The front is as long as the figure's surface.** It runs as far as the figure's front does from the waist to the
+  neck. The shoulder seam falls as the figure's shoulder does across its top, about 17°. The back's shoulder seam is
+  cut to the front's length.
+- **The armhole** runs from the shoulder's point straight down and meets the side seam under the arm.
+- **A sleeve is as wide as the arm plus its ease.** Its head's height is *solved* so the head is 3% longer than its
+  armhole (eased in), or 45% longer for a puff (gathered in).
+  - Each half of the head fits its own armhole, back and front. GarmentCode solves its sleeve caps the same way.
+  - An armhole too short for the sleeve is cut deeper, and the notes say by how much.
+  - A long sleeve must pass the hand.
+  - A puff is gathered into a cuff as round as the arm there.
+  - A bell flares, but no faster than its seams can lean.
+- **It has to go over the head.** If the neckline won't, it opens down the back with buttons. A knit (jersey) stretches
+  half again, and often needs no opening.
+- **A top that comes below the hips** is cut wide enough to clear them.
+- **Collars:**
+  - A **Peter Pan collar** is two flat ring sectors whose inner edge is the neckline. It's a small circle skirt, rounded
+    at the front.
+  - A **band collar** is a strip as long as the neckline.
+  - A **frill** is 1.8 times as long, gathered on.
+
+### Dresses
+
+A bodice cut to the waist, with a skirt sewn round its hem. The skirt is drafted as before, but its "band" is the
+bodice's hem. Its darts, pleats or gathers close into the hem: each point of the skirt's waist is sewn to its own place
+round it.
+
+### Trousers (`trousers.ts`)
+
+Four panels, after GarmentCode's PantPanel: a front and a back for each leg.
+
+| control | what it is |
+|---|---|
+| **legs** | cm of leg below the crotch: shorts (5) to full length (33) |
+| **width** | room in the leg, slim to wide (culottes, palazzos) |
+| **flare** | the hem over the knee: tapered, straight, flared |
+
+What follows from those choices:
+
+- **Each panel** is a quarter of the hips' round and its ease, straight up to the waist.
+- **The crotch curve's reach is solved.** Each crotch seam must be as long as the figure's own surface from the waist,
+  down under it, to between its legs, plus 2 cm.
+- **The waist** is as wide as the hips and gathers into an elastic band, so it goes over them.
+- **A full-length leg** must pass the foot.
+
+### Jumpsuits
+
+A bodice to the waist, with trousers gathered onto its hem.
+
+### Tiers
+
+Any skirt or dress can have two or three **tiers**. Each is a ring of straight panels 1.5 times the round of the hem
+above, gathered onto it, as GarmentCode's SkirtLevels are. The first tier still comes past the hips.
+
+### How it's represented
+
+GarmentCode's edges are lines, circle arcs and Béziers whose control points are *relative to their chord* (`edges.ts`),
+so a curve keeps its shape whatever its ends do.
+
+A piece is four runs of edges round it, with its cloth's grid laid over them as a **Coons patch**. Every corner between
+two edges falls on a grid point. So a bodice with its armholes and neckline, a sleeve with its head and a trouser leg
+with its crotch curve are all the same kind of grid the skirt's panels always were. The cloth needed only one new thing.
+
+**A seam sews two runs by length**, as GarmentCode's stitches do. Every point of each run is sewn to the place the same
+fraction along the other: between two of its points, by a new interpolated XPBD stitch constraint in `cloth.ts`. Two
+runs of different lengths gather the longer onto the shorter. Gathered waists, puffed sleeve heads, tiers and frills are
+all that one rule.
+
+The grid runs down each piece, so no edge along a piece's top or side may run in the grid's own direction. That would
+crush the cells. So:
+
+- the armhole meets the side seam steeply, not level;
+- a round neckline meets the shoulder at 45°, not straight up;
+- a square neck's sides lean, as GarmentCode's trapezoid neck allows;
+- the crotch curve meets the inseam at 45°.
+
+Under an arm or a leg the difference is a few millimetres. The **pieces lie flat** check catches any grid that crushes.
+
+**The figure is posed for what it wears.** Its arms stay up in a dancer's curve for skirts and trousers. For anything
+with a bodice they come down to 45° below its shoulders, as GarmentCode's bodies stand.
+
+Pieces start laid out as GarmentCodeData lays its panels:
+
+- flat and unstretched, on a gentle curve in front of the figure and behind it;
+- sleeves as tubes on the arms;
+- trouser panels round the legs.
+
+The sewing and the shoulders' holds then draw them round. Tops hang from the tops of their shoulders. Pieces that
+aren't held, like sleeves, a dress's skirt and collars, are tethered to what they're sewn to.
 
 ## The physical representation
 
@@ -244,6 +361,29 @@ phone, open the evidence page on it.
 
 Success would be predictions improving with play, and explanations naming construction or material rather than looks.
 
+**5 · Is every garment a real pattern?** Pass. 752 garments were drafted and put through every check, 4,011 checks
+in all:
+
+- every neckline × sleeve length × sleeve × collar of a top, a dress and a jumpsuit, at both ends of their room and
+  length;
+- the corners of trousers' legs;
+- tiered skirts and dresses;
+- 300 more at random across everything.
+
+Getting there found real bugs, each caught by the checks:
+
+- sleeve heads split 24/8 cm between their halves (a bisection the wrong way round);
+- grid cells crushed to 0° wherever an armhole, neckline or crotch curve ran level or upright;
+- a shoulder seam at 45° when it should be 17°, from measuring the shoulder's point up the figure's side;
+- tiers gathered 1.45× when they should be 1.5×, from loops that dropped each panel's last step.
+
+**6 · Does every garment sew up?** Pass. Each of the 27 garments on the workshop's rails was laid out, sewn and let
+settle for 2.5 s. Every seam closed to within 1.6 cm, mostly to a few millimetres. The cloth stayed whole and nothing
+was left inside the figure. Each took 1.6–4.7 ms a frame here.
+
+The cloth stretches more at its 99th percentile under a bodice (18–34%) than in a skirt (6–7%). That stretch sits where
+gathers and set-in sleeve heads crowd it.
+
 ## Known limitations
 
 - **The real-time cloth is limper than its own converged self** in drape: coefficients up to 0.27 lower, from too few
@@ -253,17 +393,24 @@ Success would be predictions improving with play, and explanations naming constr
 - **The swatch figures are representative, not measured.** Measuring real swatches (a cantilever, a drapemeter, a strip
   tensile test) and putting the numbers into `fabric.ts` would make test 2 a comparison with reality rather than with
   the literature's ranges.
-- **Only knife pleats, a single tier, a single layer.** Box pleats, tiers (a second ring of panels gathered onto the
-  first) and petticoats are natural next operations in the same grammar.
+- **Only knife pleats, a single layer.** Box pleats, petticoats and linings are natural next operations in the same
+  grammar.
+- **Under a bodice the cloth stretches more** at its 99th percentile (18–34%, against 6–7% in a skirt). Gathered heads
+  and the shoulders' holds crowd it. More substeps, or a finer grid at seams, would let it buckle instead.
+- **The grid can't follow every curve.** Armholes, necklines and crotch curves meet their neighbours at an angle rather
+  than level (see *How it's represented*). GarmentCode meshes its panels freely; a grid can't.
+- **No fitted darts in bodices yet**, and no princess seams. A child's figure barely needs them; a grown one would.
+- **A dress on its hanger** settles a little crumpled where its gathered skirt meets the bodice.
+- **The Peter Pan collar is hard to see in the same cloth.** A contrast collar would show it.
 - **Seams are hinges.** A real seam allowance stiffens the cloth along it.
 - **See-through cloth** (chiffon) shows a faint ladder where folds meet at a seam behind it.
 
 ## The rails
 
-Fab opens on the workshop's wall: a row of clothes rails, each hung with skirts on hangers.
+Fab opens on the workshop's wall: a row of clothes rails, each hung with garments on hangers.
 
-- **The workshop's rail** is chromed. It holds one of each way of making a skirt, in contrasting cloths, to start
-  from.
+- **The workshop's rails** are chromed: one each for skirts, tops, dresses, and trousers and jumpsuits, with one of each
+  way of making them in contrasting cloths, to start from.
 - **Each person has their own rail**, powder-coated in their own colour, with what they've made. Tap **+ a rail** and
   give it a name.
 
@@ -307,7 +454,12 @@ All of it is in `client/fab/`:
 
 | file | what it does |
 |---|---|
-| `pattern.ts` | the grammar and its checks |
+| `garment.ts` | every garment from one design: its family, its components, how they're sewn together, the shared checks |
+| `edges.ts` | the geometry: lines, arcs, Béziers (chord-relative), Coons-patch pieces, sewing runs by length |
+| `cut.ts` | what every cut shares: the figure measured, waistbands, holds, hangers, the shared checks |
+| `pattern.ts` | the skirt: its grammar and its checks |
+| `bodice.ts` | tops: bodice, necklines, sleeves, collars |
+| `trousers.ts` | trousers |
 | `fabric.ts` | the swatches |
 | `cloth.ts` | the XPBD cloth |
 | `body.ts` | the figure and its distance field |
@@ -321,11 +473,18 @@ All of it is in `client/fab/`:
 
 | parameter | values |
 |---|---|
-| `len` | cm |
+| `fam` | `skirt`, `top`, `dress`, `trousers` or `jumpsuit` |
+| `len` | skirt length, cm |
 | `full` | fullness |
 | `cut` | `flare`, `gather` or `pleat` |
 | `panels` | number of panels |
 | `grain` | degrees |
+| `tiers` | 1–3 |
+| `blen`, `ease`, `swing` | a top's length below the waist, its room round the chest (cm), its swing |
+| `neck`, `ndepth` | `round`, `v`, `square`, `boat` or `scoop`; cm lower (or higher, below 0) |
+| `slen`, `sleeve` | sleeve length (cm; 0 sleeveless); `plain`, `puff` or `bell` |
+| `collar` | `none`, `peterpan`, `band` or `frill` |
+| `llen`, `lwidth`, `flare` | trousers' leg below the crotch (cm), room (1–2), hem over knee (0.8–1.8) |
 | `fabric` | `chiffon`, `satin`, `lawn`, `jersey`, `linen`, `flannel`, `organza` or `felt` |
 | `print` | 0–5 |
 | `colour` | 0–4 |

@@ -26,17 +26,21 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'fab', title: 'Fab', group: 'Play',
-    blurb: 'A dressmaking workbench for children, one garment family deep: skirts. Start at the rails (the workshop\'s, and one for each person) and slide through the skirts on them; put one on the little wooden figure and decide how long, how full, whether the fullness is flared, gathered or pleated, how many panels, which way on the grain, which cloth; a real pattern is drafted to the little wooden figure (darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that tests the patterns and the cloth against the textile lab\'s own tests.',
+    blurb: 'A dressmaking workbench for children. Start at the rails (the workshop\'s, one for each kind of thing, and one for each person), put something on the little wooden figure, and decide what a dressmaker decides: a skirt\'s length, fullness, flare, gathers or pleats, panels and tiers; a bodice\'s neckline, sleeves (plain, puffed, bell) and collar; trousers\' legs; a dress or a jumpsuit is a bodice sewn to a skirt or trousers. A real pattern is drafted to the figure, after GarmentCode (armholes, sleeve heads solved to fit them, crotch curves, darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that tests every pattern and the cloth against the textile lab\'s own tests.',
     page: 'static/fab.html', preview: 'preview&fabric=lawn&print=2&colour=1', readme: 'static/fab.md',
     presets: [
       { label: 'the rails', query: '' },
       { label: 'a flared gingham', query: 'cut=flare&full=2.2&fabric=lawn&print=2&colour=1' },
-      { label: 'felt bell', query: 'cut=flare&full=2.6&fabric=felt&print=0&colour=0' },
       { label: 'chiffon, gathered', query: 'cut=gather&full=2.8&fabric=chiffon&print=4&colour=3' },
-      { label: 'pleated stripes', query: 'cut=pleat&full=2&panels=4&fabric=flannel&print=1&colour=4' },
-      { label: 'bias circle', query: 'cut=flare&full=3.6&panels=1&grain=45&fabric=satin&print=1&colour=0' },
-      { label: 'evidence bench', query: 'bench=evidence' },
-    ],
+      { label: 'three tiers', query: 'cut=gather&full=1.8&len=44&tiers=3&fabric=lawn&print=4&colour=2' },
+      { label: 'a puff-sleeved blouse', query: 'fam=top&sleeve=puff&slen=8&collar=peterpan&fabric=lawn&print=3&colour=0' },
+      { label: 'a T-shirt', query: 'fam=top&fabric=jersey&slen=8&print=1&colour=1' },
+      { label: 'a party dress', query: 'fam=dress&cut=gather&full=2.4&sleeve=puff&slen=8&collar=peterpan&fabric=lawn&print=2&colour=0' },
+      { label: 'a tiered maxi', query: 'fam=dress&cut=gather&full=2&tiers=3&sleeve=bell&slen=12&neck=v&len=50&fabric=chiffon&print=4&colour=3' },
+      { label: 'trousers', query: 'fam=trousers&fabric=linen&print=2&colour=4' },
+      { label: 'a jumpsuit', query: 'fam=jumpsuit&llen=30&slen=8&neck=v&collar=band&fabric=jersey&print=1&colour=4' },
+      { label: 'the evidence', query: 'bench=evidence' },
+],
   },
   {
     id: 'changes', title: 'Changes', group: 'Contemplation',

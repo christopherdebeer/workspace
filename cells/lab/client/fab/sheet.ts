@@ -1,22 +1,14 @@
 /**
- * The pattern: a skirt's pieces laid flat on pattern paper as a dressmaker draws them. One panel (with how many to cut),
- * the waistband; on each its grain line (the arrow that's laid along the cloth's threads), its darts or pleat lines,
- * its stitching just in from the edge; the print laid on it as it'll be cut, running with the grain. Below, the notes
- * the cut made and the pattern's own checks.
+ * The pattern: a garment's pieces laid flat on pattern paper as a dressmaker draws them, each once with how many to cut
+ * (a skirt's panels, a pair of sleeves); on each its grain line (the arrow that's laid along the cloth's threads), its
+ * marks (darts, pleat lines, where it's gathered, buttons), its stitching just in from the edge; the print laid on it as
+ * it'll be cut, running with the grain. Below, the notes the cut made and the pattern's own checks.
  *
  * `mini`: the little card on the bench, pieces only.
  */
 import { makePrint, type Print } from './fabric';
-import type { Piece, Skirt } from './pattern';
-
-function outline(p: Piece): Array<[number, number]> {
-  const o: Array<[number, number]> = [];
-  for (let i = 0; i <= p.nu; i++) o.push(p.flat(i / p.nu, 0));
-  for (let j = 1; j <= p.nv; j++) o.push(p.flat(1, j / p.nv));
-  for (let i = p.nu - 1; i >= 0; i--) o.push(p.flat(i / p.nu, 1));
-  for (let j = p.nv - 1; j > 0; j--) o.push(p.flat(0, j / p.nv));
-  return o;
-}
+import { outline, type P2, type Piece } from './edges';
+import type { Garment } from './garment';
 
 const css = (c: [number, number, number]) => `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)})`;
 /** the print as a tile, `px` pixels to the centimetre (as the cloth's shader draws it, near enough) */
@@ -44,25 +36,36 @@ function tile(ctx: CanvasRenderingContext2D, pr: Print, px: number): CanvasPatte
   return ctx.createPattern(t, 'repeat') ?? g;
 }
 
-export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrint(0, 0), mini = false) {
+export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print = makePrint(0, 0), mini = false) {
   const dpr = Math.min(2, devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
   if (!W || !H) return;
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   const ctx = cv.getContext('2d')!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#f4efe2'; ctx.fillRect(0, 0, W, H);
-  const n = sk.m.panels, shown = [sk.pieces[0], sk.pieces[sk.pieces.length - 1]];
-  const label = (p: Piece) => (p.kind === 'band' ? 'waistband · cut 1' : n === 1 ? 'skirt · cut 1' : `${n === 2 ? 'front & back' : 'panel'} · cut ${n}`);
-  const head = mini ? 6 : 104, foot = mini ? 6 : Math.min(170, H * 0.36);
+  const shown = g.pieces.filter((p) => p.drawn !== false && (p.nu > 1 || p.nv > 1));
+  const head = mini ? 6 : 104, foot = mini ? 6 : Math.min(190, H * 0.38);
   if (!mini) { ctx.fillStyle = '#5b4a36'; ctx.font = '800 15px ui-rounded, system-ui, sans-serif'; ctx.fillText('the pattern', 14, 96); }
   const outs = shown.map(outline), boxes = outs.map((o) => {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (const [x, y] of o) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
     return { x0, x1, y0, y1, w: x1 - x0, h: y1 - y0 };
   });
-  // (the panel above, the band under it, both centred)
-  const gap = 5, usedW = Math.max(boxes[0].w, boxes[1].w), usedH = boxes[0].h + gap + boxes[1].h;
-  const sc = Math.min((W - 24) / usedW, (H - head - foot - 10) / usedH), oy = head + 4;
+  // (laid out as on a cutting table: the biggest first, in rows across the paper, at the largest scale they all fit)
+  const gap = 4, order = shown.map((_, k) => k).sort((a, b) => boxes[b].h * boxes[b].w - boxes[a].h * boxes[a].w);
+  const pack = (sc: number) => {
+    const maxW = (W - 24) / sc, at: Array<[number, number]> = new Array(shown.length);
+    let x = 0, y = 0, rowH = 0;
+    for (const k of order) {
+      const b = boxes[k];
+      if (x > 0 && x + b.w > maxW) { x = 0; y += rowH + gap; rowH = 0; }
+      at[k] = [x, y]; x += b.w + gap; rowH = Math.max(rowH, b.h);
+    }
+    return { at, h: y + rowH };
+  };
+  let lo = 0.2, hi = 30;
+  for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (pack(m).h * m <= H - head - foot - 10 && boxes.every((b) => b.w * m <= W - 24)) lo = m; else hi = m; }
+  const sc = lo, { at } = pack(sc), oy = head + 4, used = Math.max(...shown.map((_, k) => at[k][0] + boxes[k].w)) * sc, ox0 = (W - used) / 2;
   // (the paper's centimetre grid)
   ctx.lineWidth = 1;
   for (let cm = 0; cm * sc < Math.max(W, H); cm++) {
@@ -70,63 +73,73 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrin
     ctx.beginPath(); ctx.moveTo(12 + cm * sc, 0); ctx.lineTo(12 + cm * sc, H); ctx.moveTo(0, oy + cm * sc); ctx.lineTo(W, oy + cm * sc); ctx.stroke();
   }
   const fill = tile(ctx, pr, sc);
-  let top = oy;
   shown.forEach((p, k) => {
-    const b = boxes[k], ox = (W - b.w * sc) / 2, py = top;
-    const to = (q: [number, number]): [number, number] => [ox + (q[0] - b.x0) * sc, py + (b.y1 - q[1]) * sc];
+    const b = boxes[k], ox = ox0 + at[k][0] * sc, py = oy + at[k][1] * sc;
+    const to = (q: P2): [number, number] => [ox + (q[0] - b.x0) * sc, py + (b.y1 - q[1]) * sc];
     const path = new Path2D(); outs[k].forEach((q, i) => { const [sx, sy] = to(q); if (i) path.lineTo(sx, sy); else path.moveTo(sx, sy); }); path.closePath();
     ctx.save();
     // (the print, on the grain: turned with it)
-    if (typeof fill !== 'string') { const [cx, cy] = to([0, 0]), g = p.grain; fill.setTransform(new DOMMatrix([Math.cos(-g), Math.sin(-g), -Math.sin(-g), Math.cos(-g), cx, cy])); }
+    if (typeof fill !== 'string') { const [cx, cy] = to([0, 0]), gr = p.grain; fill.setTransform(new DOMMatrix([Math.cos(-gr), Math.sin(-gr), -Math.sin(-gr), Math.cos(-gr), cx, cy])); }
     ctx.fillStyle = fill; ctx.globalAlpha = 0.85; ctx.fill(path); ctx.globalAlpha = 1;
     ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = mini ? 1.2 : 1.8; ctx.stroke(path);
     ctx.clip(path); ctx.setLineDash([4, 3]); ctx.strokeStyle = 'rgba(40,30,20,.5)'; ctx.lineWidth = Math.max(1, 1.6 * sc); ctx.stroke(path);
     ctx.restore();
-    // (darts: two legs to a point; pleats: the fold line and where it's laid to, stitched a little way down, and an
-    // arrow the way it folds)
-    if (p.kind === 'panel') {
-      ctx.strokeStyle = '#b8323f'; ctx.fillStyle = '#b8323f'; ctx.lineWidth = mini ? 1 : 1.6; ctx.setLineDash([]);
-      for (const mk of sk.marks) {
-        const v = Math.min(1, mk.down / sk.m.length), a0 = to(p.flat(mk.c / p.nu, 0)), b0 = to(p.flat((mk.c + mk.k) / p.nu, 0));
-        ctx.beginPath();
-        if (mk.kind === 'dart') { const tip = to(p.flat((mk.c + mk.k / 2) / p.nu, v)); ctx.moveTo(...a0); ctx.lineTo(...tip); ctx.lineTo(...b0); }
-        else {
-          const a1 = to(p.flat(mk.c / p.nu, v)), b1 = to(p.flat((mk.c + mk.k) / p.nu, v));
-          ctx.moveTo(...a0); ctx.lineTo(...a1); ctx.moveTo(...b0); ctx.lineTo(...b1);
-          if (!mini) { const y = a0[1] + (a1[1] - a0[1]) * 0.45; ctx.moveTo(b0[0] - 1, y); ctx.lineTo(a0[0] + 2, y); ctx.moveTo(a0[0] + 6, y - 3); ctx.lineTo(a0[0] + 2, y); ctx.lineTo(a0[0] + 6, y + 3); }
-        }
-        ctx.stroke();
-      }
-    }
+    marks(ctx, p, to, mini);
     // (the grain line: a long arrow along the threads)
-    const c0 = p.kind === 'band' ? p.flat(0.5, 0.5) : p.flat(0.5, 0.55), g = p.grain, len = Math.min(b.h, b.w) * 0.32 + 2;
-    const dx = -Math.sin(g), dy = Math.cos(g), [ax, ay] = to([c0[0] - dx * len, c0[1] - dy * len]), [bx, by] = to([c0[0] + dx * len, c0[1] + dy * len]);
+    const c0 = p.flat(0.5, 0.55), gr = p.grain, len = Math.min(b.h, b.w) * 0.32 + 2;
+    const dx = -Math.sin(gr), dy = Math.cos(gr), [ax, ay] = to([c0[0] - dx * len, c0[1] - dy * len]), [bx, by] = to([c0[0] + dx * len, c0[1] + dy * len]);
     ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = mini ? 1 : 1.4; ctx.setLineDash([]);
     ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
     for (const [px2, py2, sx, sy] of [[bx, by, ax, ay], [ax, ay, bx, by]]) { const an = Math.atan2(py2 - sy, px2 - sx); ctx.moveTo(px2, py2); ctx.lineTo(px2 - Math.cos(an - 0.4) * 7, py2 - Math.sin(an - 0.4) * 7); ctx.moveTo(px2, py2); ctx.lineTo(px2 - Math.cos(an + 0.4) * 7, py2 - Math.sin(an + 0.4) * 7); }
     ctx.stroke();
-    if (!mini || p.kind === 'panel') {
-      const [cx, cy] = to(p.kind === 'band' ? p.flat(0.5, 0.5) : p.flat(0.5, 0.2));
-      ctx.font = `600 ${mini ? 9 : 12}px ui-rounded, system-ui, sans-serif`; ctx.textAlign = 'center';
-      const tw = ctx.measureText(label(p)).width + 10;
-      ctx.fillStyle = 'rgba(255,250,240,.9)'; ctx.fillRect(cx - tw / 2, cy - (mini ? 7 : 10), tw, mini ? 12 : 16);
-      ctx.fillStyle = '#3b2f24'; ctx.fillText(label(p), cx, cy + (mini ? 2 : 2)); ctx.textAlign = 'left';
+    if (p.label && (!mini || shown.length <= 3)) {
+      const [cx, cy] = to(p.flat(0.5, p.kind === 'band' ? 0.5 : 0.3));
+      ctx.font = `600 ${mini ? 8 : 11}px ui-rounded, system-ui, sans-serif`; ctx.textAlign = 'center';
+      const tw = ctx.measureText(p.label).width + 8;
+      ctx.fillStyle = 'rgba(255,250,240,.9)'; ctx.fillRect(cx - tw / 2, cy - (mini ? 7 : 9), tw, mini ? 11 : 14);
+      ctx.fillStyle = '#3b2f24'; ctx.fillText(p.label, cx, cy + 1); ctx.textAlign = 'left';
     }
-    top += b.h * sc + gap * sc;
   });
   if (mini) return;
   // (what the cut needed, and the pattern's checks)
   let y = H - foot + 16;
   ctx.font = '600 12px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = '#5b4a36';
-  const m = sk.m;
-  ctx.fillText(`${m.length.toFixed(0)} cm long · hem ${m.hem.toFixed(0)} cm round · ${(m.area * 1e4).toFixed(0)} cm² of cloth`, 14, y); y += 17;
-  if (sk.notes.length) { ctx.fillText(sk.notes.join(' · '), 14, y); y += 19; }
+  const pieces = g.pieces.filter((p) => p.nu > 1 || p.nv > 1).length;
+  ctx.fillText(`${pieces} pieces · ${(g.m.area * 1e4).toFixed(0)} cm² of cloth · ${g.seams.length} seams`, 14, y); y += 17;
+  if (g.notes.length) {
+    // (the notes, wrapped)
+    let line = '';
+    for (const w of g.notes.join(' · ').split(' ')) { if (ctx.measureText(`${line} ${w}`).width > W - 28 && line) { ctx.fillText(line, 14, y); y += 15; line = w; } else line = line ? `${line} ${w}` : w; }
+    if (line) { ctx.fillText(line, 14, y); y += 19; }
+  }
   // (the checks: each one's name, then what it found, cut to fit)
-  for (const c of sk.checks) {
+  for (const c of g.checks) {
+    if (y > H - 6) break;
     ctx.font = '700 11px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = c.ok ? '#3f7a4a' : '#b8323f';
     const head2 = `${c.ok ? '✓' : '✗'} ${c.name}`; ctx.fillText(head2, 14, y);
     const x = 18 + ctx.measureText(head2).width; ctx.font = '500 11px ui-rounded, system-ui, sans-serif'; ctx.fillStyle = '#7a6a56';
     let t = c.detail; while (t.length > 4 && ctx.measureText(t).width > W - x - 12) t = t.slice(0, -2);
-    ctx.fillText(t === c.detail ? t : `${t.trim()}…`, x, y); y += 15;
+    ctx.fillText(t === c.detail ? t : `${t.trim()}…`, x, y); y += 14;
+  }
+}
+
+/** a piece's marks: darts (two legs to a point), pleats (the fold line and where it's laid to, and an arrow the way it
+ * folds), gathering (a wavy line), buttons */
+function marks(ctx: CanvasRenderingContext2D, p: Piece, to: (q: P2) => [number, number], mini: boolean) {
+  ctx.strokeStyle = '#b8323f'; ctx.fillStyle = '#b8323f'; ctx.lineWidth = mini ? 1 : 1.6; ctx.setLineDash([]);
+  for (const mk of p.marks ?? []) {
+    const q = mk.pts.map(to);
+    ctx.beginPath();
+    if (mk.kind === 'dart') { ctx.moveTo(...q[0]); ctx.lineTo(...q[1]); ctx.lineTo(...q[2]); }
+    else if (mk.kind === 'pleat') {
+      ctx.moveTo(...q[0]); ctx.lineTo(...q[1]); ctx.moveTo(...q[3]); ctx.lineTo(...q[2]);
+      if (!mini) { const yy = q[0][1] + (q[1][1] - q[0][1]) * 0.45; ctx.moveTo(q[3][0] - 1, yy); ctx.lineTo(q[0][0] + 2, yy); ctx.moveTo(q[0][0] + 6, yy - 3); ctx.lineTo(q[0][0] + 2, yy); ctx.lineTo(q[0][0] + 6, yy + 3); }
+    } else if (mk.kind === 'gather') {
+      for (let k = 0; k + 1 < q.length; k++) {
+        const [x0, y0] = q[k], [x1, y1] = q[k + 1], n = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / 5));
+        for (let i = 0; i <= n * 4; i++) { const t = i / (n * 4), x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t + Math.sin(t * n * Math.PI * 2) * 2; if (i || k) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+      }
+    } else if (mk.kind === 'button') { for (const [x, y] of q) { ctx.moveTo(x + 3.2, y); ctx.arc(x, y, 3.2, 0, 7); } }
+    ctx.stroke();
   }
 }

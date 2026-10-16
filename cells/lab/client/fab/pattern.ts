@@ -27,9 +27,38 @@
  */
 import { TORSO_FOOT, WAIST_Y, girth, section, type V3 } from './body';
 import type { Fabric } from './fabric';
+import type { At as At0, Check as Check0, Piece as Piece0 } from './edges';
 
 export type Method = 'flare' | 'gather' | 'pleat';
+/** what's made: a skirt; a top (a bodice, its neckline, sleeves and collar); a dress (a bodice sewn to a skirt at the
+ * waist); trousers; a jumpsuit (a bodice sewn to trousers) */
+export type Family = 'skirt' | 'top' | 'dress' | 'trousers' | 'jumpsuit';
+export type Neck = 'round' | 'v' | 'square' | 'boat' | 'scoop';
+export type SleeveCut = 'plain' | 'puff' | 'bell';
+export type Collar = 'none' | 'peterpan' | 'band' | 'frill';
 export interface Design {
+  family: Family;
+  /** skirts: tiers, each gathered onto the hem of the one above (1: none) */
+  tiers: number;
+  /** tops: cm below the waist the hem comes (less than 0: cropped above it) */
+  bodyLen: number;
+  /** tops: wearing ease round the chest, cm (snug 4 → roomy 16) */
+  ease: number;
+  /** tops: how much wider the hem is than the chest (1 straight, 1.6 a swing top) */
+  swing: number;
+  neck: Neck;
+  /** tops: cm lower (or higher, below 0) the front neckline is than its own shape's usual */
+  neckDepth: number;
+  /** tops: cm of sleeve down the arm from the armhole (0: sleeveless) */
+  sleeveLen: number;
+  sleeve: SleeveCut;
+  collar: Collar;
+  /** trousers: cm of leg below the crotch (shorts 5 → full length 33) */
+  legLen: number;
+  /** trousers: room in the leg (1 slim → 2 wide) */
+  legWidth: number;
+  /** trousers: the hem's width over the knee's (0.8 tapered → 1.8 flared) */
+  flare: number;
   /** cm down from the waist */
   length: number;
   /** hem round ÷ hips round, 1 → 4 */
@@ -40,25 +69,21 @@ export interface Design {
   grain: number;
   fabric: string; print: number; colour: number;
 }
-export const DEFAULT_DESIGN: Design = { length: 34, fullness: 2.2, method: 'flare', panels: 4, grain: 0, fabric: 'lawn', print: 2, colour: 1 };
+export const DEFAULT_DESIGN: Design = {
+  family: 'skirt', length: 34, fullness: 2.2, method: 'flare', panels: 4, grain: 0, fabric: 'lawn', print: 2, colour: 1, tiers: 1,
+  bodyLen: 8, ease: 8, swing: 1.15, neck: 'round', neckDepth: 0, sleeveLen: 8, sleeve: 'plain', collar: 'none',
+  legLen: 26, legWidth: 1.3, flare: 1,
+};
 
 /** a point of a piece's grid: piece, column, row */
-export type At = [number, number, number];
-export interface Piece {
-  name: string; kind: 'panel' | 'band';
-  /** grid points across and down, less one */
-  nu: number; nv: number;
-  /** the flat pattern, cm (x across, y up: down the skirt is negative) */
-  flat: (u: number, v: number) => [number, number];
-  /** the warp's direction on the piece: radians from its centre line (straight down) */
-  grain: number;
-  /** where it's laid out round the figure before it's sewn: on a surface it lies on without stretching */
-  start: (u: number, v: number) => V3;
-}
+export type At = At0;
+/** a piece: a grid over its flat shape (x across, y up: down the skirt is negative), its grain, and where it's laid out
+ * round the figure before it's sewn (for a skirt's panels, on a surface they lie on without stretching) */
+export type Piece = Piece0;
 export interface Pair { a: At; b: At; why: 'side seam' | 'dart' | 'pleat' }
 /** a point held on the waistband: `s` cm round it from the front, `y` its height */
 export interface Hold { at: At; s: number; y: number }
-export interface Check { name: string; ok: boolean; detail: string }
+export type Check = Check0;
 export interface Skirt {
   design: Design; pieces: Piece[]; pairs: Pair[]; holds: Hold[];
   band: number; notes: string[]; checks: Check[];
@@ -74,14 +99,15 @@ const TAU = Math.PI * 2;
 const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 
 /** the body's round at a depth below the waist (the widest it gets from there up is what a skirt must clear) */
-const roundAt = (y: number) => girth(WAIST_Y - y);
-const HIP_DEPTH = (() => { let best = 0, at = 0; for (let y = 0; y <= WAIST_Y - TORSO_FOOT; y += 0.5) { const g = roundAt(y); if (g > best) { best = g; at = y; } } return at; })();
+export const roundAt = (y: number) => girth(WAIST_Y - y);
+export const HIP_DEPTH = (() => { let best = 0, at = 0; for (let y = 0; y <= WAIST_Y - TORSO_FOOT; y += 0.5) { const g = roundAt(y); if (g > best) { best = g; at = y; } } return at; })();
 
-/** `budget`: about how many points of cloth it should come to (fewer for one hanging on a rail) */
-export function draft(d0: Design, budget = 1600): Skirt {
+/** `budget`: about how many points of cloth it should come to (fewer for one hanging on a rail). `band`: the round its
+ * waist is sewn to, if not its own waistband's (a dress's bodice hem) */
+export function draft(d0: Design, budget = 1600, o: { band?: number } = {}): Skirt {
   const d: Design = { ...d0, length: clamp(d0.length, 10, 62), fullness: clamp(d0.fullness, 1, 4), panels: clamp(Math.round(d0.panels), 1, 12), grain: clamp(d0.grain, 0, 45) };
   const notes: string[] = [];
-  const L = d.length, yh = Math.min(HIP_DEPTH, L - 2), waist = roundAt(0), band = waist + 1.5;
+  const L = d.length, yh = Math.min(HIP_DEPTH, L - 2), waist = roundAt(0), band = o.band ?? waist + 1.5;
   const hipNeed = Math.max(...Array.from({ length: Math.ceil(yh) + 1 }, (_, y) => roundAt(y))) + 4;
   const g = (d.grain * Math.PI) / 180;
 

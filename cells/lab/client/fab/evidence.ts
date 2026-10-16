@@ -23,6 +23,9 @@
 import { Cloth, type Build } from './cloth';
 import { FABRICS, fabricById, type Fabric } from './fabric';
 import { DEFAULT_DESIGN, draft, toBuild, type Design, type Method } from './pattern';
+import { describe as describeGarment, draftGarment, poseFor, toBuild as garmentBuild } from './garment';
+import { WORKSHOPS } from './store';
+import { setPose, distance } from './body';
 
 type V3 = [number, number, number];
 export interface Row { [k: string]: string | number | boolean }
@@ -275,6 +278,63 @@ export function feasibility(): Section {
   };
 }
 
+// ─── 5. every garment, as a pattern ─────────────────────────────────────────────────────────────
+/** tops, dresses, trousers and jumpsuits: every corner of their own dials, and more at random, each drafted and put
+ * through its checks (seams meet as they should, pieces lie flat, fit on the cloth, clear the body, go on) */
+export function garmentTest(count = 300): Section {
+  const r = rng(11), designs: Array<Partial<Design>> = [], fails = new Map<string, number>(), examples: Row[] = [];
+  const necks = ['round', 'v', 'square', 'boat', 'scoop'] as const, sleeves = ['plain', 'puff', 'bell'] as const, collars = ['none', 'peterpan', 'band', 'frill'] as const;
+  for (const family of ['top', 'dress', 'jumpsuit'] as const) for (const neck of necks) for (const sleeveLen of [0, 5, 30]) for (const sleeve of sleeves) for (const collar of collars) {
+    if (!sleeveLen && sleeve !== 'plain') continue;
+    designs.push({ family, neck, sleeveLen, sleeve, collar, ease: designs.length % 2 ? 4 : 16, bodyLen: designs.length % 3 ? -6 : 30, fabric: designs.length % 4 ? 'lawn' : 'jersey' });
+  }
+  for (const legLen of [3, 34]) for (const legWidth of [1, 2]) for (const flare of [0.8, 1.8]) designs.push({ family: 'trousers', legLen, legWidth, flare });
+  for (const method of ['flare', 'gather', 'pleat'] as const) for (const tiers of [2, 3]) for (const length of [20, 62]) designs.push({ family: 'skirt', method, tiers, length }, { family: 'dress', method, tiers, length });
+  const pick = <T,>(xs: readonly T[]) => xs[Math.floor(r() * xs.length)];
+  for (let k = 0; k < count; k++) designs.push({
+    family: pick(['top', 'dress', 'trousers', 'jumpsuit', 'skirt'] as const), neck: pick(necks), sleeve: pick(sleeves), collar: pick(collars), sleeveLen: r() * 34, ease: 4 + r() * 12, bodyLen: -6 + r() * 36,
+    swing: 1 + r() * 0.8, neckDepth: -4 + r() * 12, legLen: 3 + r() * 31, legWidth: 1 + r(), flare: 0.8 + r(), method: pick(['flare', 'gather', 'pleat'] as const), fullness: 1 + r() * 3, length: 12 + r() * 50, tiers: 1 + Math.floor(r() * 3), panels: 1 + Math.floor(r() * 10),
+    fabric: pick(['lawn', 'jersey', 'linen', 'chiffon', 'felt']),
+  });
+  let checks = 0;
+  for (const d of designs) {
+    let cs;
+    try { cs = draftGarment(d).checks; } catch (e) { cs = [{ name: 'drafts', ok: false, detail: String(e) }]; }
+    for (const c of cs) { checks++; if (!c.ok) { fails.set(c.name, (fails.get(c.name) ?? 0) + 1); if (examples.length < 8) examples.push({ check: c.name, detail: c.detail, design: describeGarment(d) }); } }
+  }
+  const failed = [...fails.values()].reduce((a, b) => a + b, 0);
+  return {
+    id: 'garments', title: '5 · Is every garment a real pattern?',
+    claim: `${designs.length} garments: every neckline × sleeve length × sleeve × collar of a top, a dress and a jumpsuit at both ends of their room and length, the corners of trousers' legs, tiered skirts and dresses, and ${count} more at random across everything; each drafted and put through its own checks.`,
+    rows: [...[...fails].map(([name, v]) => ({ check: name, failures: v })), ...examples],
+    verdict: failed ? `${failed} of ${checks} checks failed across ${designs.length} garments` : `all ${checks} checks passed across ${designs.length} garments`, pass: failed === 0,
+  };
+}
+
+// ─── 6. every garment, sewn ─────────────────────────────────────────────────────────────────────
+/** the workshop's own garments, each laid out, sewn and settled on the figure for 2.5 s: are its seams closed, is the
+ * cloth whole and unstretched, is it out of the figure */
+export function sewnTest(): Section {
+  const rows: Row[] = [];
+  let pass = true;
+  for (const rail of WORKSHOPS) for (const gm of rail.garments) {
+    const g = draftGarment(gm.design); poseFor(g);
+    const c = new Cloth(garmentBuild(g, fabricById(g.design.fabric)) as Build);
+    const t0 = performance.now(); settle(c, 2.5); const ms = (performance.now() - t0) / 150;
+    const se = c.seams(), st = c.strain();
+    let inside = 0; for (let i = 0; i < c.n; i++) if (distance(c.pos[i * 3], c.pos[i * 3 + 1], c.pos[i * 3 + 2]) < -0.5) inside++;
+    const ok = st.ok && se.max < 2.5 && se.mean < 0.25 && inside < c.n * 0.002;
+    pass &&= ok;
+    rows.push({ garment: describeGarment(g.design), points: c.n, 'widest seam (cm)': +se.max.toFixed(2), 'mean seam': +se.mean.toFixed(3), 'stretch p99': `${(st.p99 * 100).toFixed(0)}%`, inside, 'ms a frame': +ms.toFixed(1), ok });
+  }
+  setPose('twirl');
+  return {
+    id: 'sewn', title: '6 · Does every garment sew up?',
+    claim: 'Every garment on the workshop\'s rails, laid out flat round the figure, sewn and let settle (2.5 s): every seam closed to within 2.5 cm (0.25 cm on average), the cloth unbroken, nothing left inside the figure.',
+    rows, verdict: pass ? `all ${rows.length} sew up` : `${rows.filter((r) => !r.ok).length} of ${rows.length} don't`, pass,
+  };
+}
+
 export function* runAll(): Generator<Section | Section[]> {
   yield patternTest();
   yield cantilever();
@@ -282,13 +342,15 @@ export function* runAll(): Generator<Section | Section[]> {
   yield bias();
   yield expressiveness();
   yield feasibility();
+  yield garmentTest();
+  yield sewnTest();
 }
 
 // ─── the page ───────────────────────────────────────────────────────────────────────────────────
 export function mountEvidence() {
   document.body.innerHTML = `<main style="max-width:860px;margin:0 auto;padding:16px;font:14px/1.45 ui-rounded,system-ui,sans-serif;color:#3b2f24;background:#f4efe2;min-height:100vh;overflow:auto;height:100vh;box-sizing:border-box;touch-action:pan-y">
     <p><a href="?" style="color:#b8323f">← Fab</a></p><h1 style="margin:.2em 0">Fab · evidence bench</h1>
-    <p style="color:#7a6a56">Tests that could show the skirt workbench is wrong: the patterns, the cloth against the textile lab's own tests, how far apart its skirts really are, and whether it's quick enough. Running…</p><div id="out"></div></main>`;
+    <p style="color:#7a6a56">Tests that could show the workbench is wrong: the patterns, the cloth against the textile lab's own tests, how far apart its skirts really are, whether it's quick enough, and whether every garment it makes is a real pattern that sews up. Running…</p><div id="out"></div></main>`;
   document.body.style.overflow = 'auto';
   const out = document.getElementById('out')!, it = runAll(), all: Section[] = [];
   const next = () => {

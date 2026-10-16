@@ -8,6 +8,7 @@
  * at a bias seam. Fabric changes the light: silk's sheen, wool's soft fuzz at a glance, a weave you can just see,
  * tulle you can see through. Every piece is stitched near its edges.
  */
+import * as body from './body';
 import { BALLS, HEAD, LIMBS, PELVIS, TORSO_FOOT, TORSO_TOP, section, type V3 } from './body';
 import type { Cloth } from './cloth';
 import type { Fabric, Print } from './fabric';
@@ -169,7 +170,7 @@ const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a: V3): V3 => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 // ─── the still things: figure, stand, bench, wall ──────────────────────────────────────────────
-function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' = 'scene'): number[] {
+function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' = 'scene'): number[] {
   const out: number[] = [];
   const put = (p: V3, n: V3, m: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], m);
   const quad = (a: [V3, V3], b: [V3, V3], c: [V3, V3], d: [V3, V3], m: number) => { for (const v of [a, b, c, a, c, d]) put(v[0], v[1], m); };
@@ -211,6 +212,15 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'hook' = 'scene'): number
     ball([0, 5.6, 0], 0.9, 4);
     return out;
   }
+  if (part === 'coat') {
+    // (a coat hanger, for what hangs from its shoulders: a beech bar sloping down each way from the hook, rounded at its
+    // ends where the shoulders sit. Its origin's the top of the shoulders it holds)
+    out.length = 0;
+    for (const s of [-1, 1]) { tube([0, 4.4, 0], [s * 15.5, -1.2, 0], 1.25, 1.05, 5); ball([s * 15.5, -1.2, 0], 1.6, 5); }
+    ball([0, 4.6, 0], 1.3, 5);
+    tube([0, 4.6, 0], [0, 6.4, 0], 0.5, 0.5, 4);
+    return out;
+  }
   if (part === 'hook') {
     // (its chromed hook, which swivels: it stays over the rail's bar (along x) however the hanger's turned. It pivots
     // on the bar at HOOK above the skirt's waist)
@@ -245,7 +255,7 @@ export interface Look { fabric: Fabric; print: Print }
 /** a cloth to draw, where (its model matrix: none for the figure's own) */
 export interface Item { cloth: Cloth; look: Look; model?: Float32Array }
 /** the rails and hangers in the room: each a model matrix; a rail's tint its owner's colour */
-export interface Fittings { rails: Array<{ model: Float32Array; tint: V3 }>; hangers: Float32Array[]; hooks: Float32Array[] }
+export interface Fittings { rails: Array<{ model: Float32Array; tint: V3 }>; hangers: Float32Array[]; hooks: Float32Array[]; coats?: Float32Array[] }
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 const CHROME: V3 = [0.62, 0.62, 0.64];
 
@@ -271,12 +281,14 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     for (const [name, size, stride, off] of attrs) { const l = gl.getAttribLocation(p, name); if (l < 0) continue; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4); }
     return v;
   };
-  const mesh = (part: 'scene' | 'rail' | 'hanger' | 'hook') => {
+  const mesh = (part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook') => {
     const v = new Float32Array(solidMesh(part)), b = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
-    return { draw: vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], b), shadow: vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], b), count: v.length / 7 };
+    return { draw: vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], b), shadow: vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], b), count: v.length / 7, buf: b };
   };
-  const scene = mesh('scene'), rail = mesh('rail'), hanger = mesh('hanger'), hook = mesh('hook');
+  // (the figure's drawn again whenever it's posed differently: arms up to twirl a skirt, down to wear a top)
+  let scene = mesh('scene'), scenePose = body.poseVersion;
+  const rail = mesh('rail'), hanger = mesh('hanger'), coat = mesh('coat'), hook = mesh('hook');
 
   // (the shadow map)
   const SH = 2048, shTex = gl.createTexture()!, shFb = gl.createFramebuffer()!;
@@ -325,6 +337,10 @@ export function createRenderer(gl: WebGL2RenderingContext) {
 
   function frame(view: View, items: Item[], w: number, h: number, spin = 0, fit: Fittings = { rails: [], hangers: [], hooks: [] }) {
     tick++;
+    if (scenePose !== body.poseVersion) {
+      gl.deleteBuffer(scene.buf); gl.deleteVertexArray(scene.draw); gl.deleteVertexArray(scene.shadow);
+      scene = mesh('scene'); scenePose = body.poseVersion;
+    }
     const gs = items.map((it) => upload(it.cloth));
     for (const [c, g] of gpu) if (g.seen !== tick) { gl.deleteBuffer(g.dyn); gl.deleteBuffer(g.stat); gl.deleteBuffer(g.idx); gl.deleteVertexArray(g.draw); gl.deleteVertexArray(g.shadow); gpu.delete(c); }
     // (the window's light, its shadow centred on what's being looked at)
@@ -339,6 +355,7 @@ export function createRenderer(gl: WebGL2RenderingContext) {
       m(scene, IDENTITY, spin, CHROME);
       for (const r of fit.rails) m(rail, r.model, 0, r.tint);
       for (const hm of fit.hangers) m(hanger, hm, 0, CHROME);
+      for (const hm of fit.coats ?? []) m(coat, hm, 0, CHROME);
       for (const hm of fit.hooks) m(hook, hm, 0, CHROME);
     };
     // (the shadow pass)
