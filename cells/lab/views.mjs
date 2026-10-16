@@ -19,15 +19,17 @@
  *
  * Each view is a fresh page at its query; `run` (if any) drives it, through the page and the verbs below, and calls
  * `v.shot()` at the moment the picture's to be taken (mid-gesture, say); if it doesn't, the shot's taken when it's done.
- * Each is written to `static/<id>/v-<name>.jpg` (an experiment's assets: committed, deployed, served with its page) and
- * the README's gallery is rewritten between `<!-- views -->` and `<!-- /views -->`: every view, by group, as
- * `![title: caption](<id>/v-<name>.jpg)`. The same line embeds one anywhere else in the README's prose. (The pictures
- * are relative to the README, so they show on GitHub too; the lab's README page points them at the deployed assets.)
+ * Each is written to `static/<id>/v-<name>.jpg` (an experiment's assets: committed, deployed, served with its page).
+ * The whole set, every view registered by group, is written beside them twice: `views.json`, from which the lab's
+ * README page builds its **pictures** button (the set in an overlay, apart from the prose; `#pictures` opens it), and
+ * `views.md`, the same as a page of its own for GitHub. In the README's prose, a view goes where it's talked about:
+ * `![caption](<id>/v-<name>.jpg)`, a line of its own (several such lines together are a row). (Relative to the README,
+ * so they show on GitHub too; the lab's README page points them at the deployed assets.)
  *
  * The verbs every view gets: `v.page` (Playwright), `v.wait(ms)`, `v.tap([x, y])`, `v.drag(from, to, { steps, at })`
  * (`at` is called with the finger still down at `to`), `v.eval(fn, arg)`, `v.shot()`, and the experiment's helpers.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -78,15 +80,10 @@ await withWood(async (lab) => {
   }
 });
 
-// (the README's gallery: every view registered, by group, whether or not this run remade it)
-const readme = join(CELL, 'static', `${id}.md`);
-if (existsSync(readme)) {
-  const src = readFileSync(readme, 'utf8'), a = src.indexOf('<!-- views -->'), b = src.indexOf('<!-- /views -->');
-  if (a >= 0 && b > a) {
-    const groups = [...new Set(all.map((v) => v.group ?? ''))];
-    const body = groups.map((g) => `${g ? `#### ${g}\n\n` : ''}${all.filter((v) => (v.group ?? '') === g).map((v) => `![${v.title}${v.caption ? `: ${v.caption}` : ''}](${id}/v-${v.name}.jpg)`).join('\n')}`).join('\n\n');
-    writeFileSync(readme, `${src.slice(0, a)}<!-- views -->\n\n${body}\n\n${src.slice(b)}`);
-    console.log(`gallery: static/${id}.md (${all.length} views)`);
-  } else console.log(`(no <!-- views --> … <!-- /views --> in static/${id}.md: the gallery wasn't written)`);
-}
+// (the whole set, every view registered, whether or not this run remade it: for the README's pictures button, and as
+// a page of its own)
+const groups = [...new Set(all.map((v) => v.group ?? ''))];
+writeFileSync(join(dir, 'views.json'), `${JSON.stringify(groups.map((g) => ({ group: g, views: all.filter((v) => (v.group ?? '') === g).map((v) => ({ name: v.name, title: v.title, caption: v.caption ?? '', file: `v-${v.name}.jpg` })) })), null, 1)}\n`);
+writeFileSync(join(dir, 'views.md'), `# ${id}: every view\n\nMade by \`node cells/lab/views.mjs ${id}\` from \`client/${id}/views.mjs\`. The README is \`../${id}.md\`.\n\n${groups.map((g) => `${g ? `## ${g}\n\n` : ''}${all.filter((v) => (v.group ?? '') === g).map((v) => `![${v.title}${v.caption ? `: ${v.caption}` : ''}](v-${v.name}.jpg)`).join('\n')}`).join('\n\n')}\n`);
+console.log(`the set: static/${id}/views.json, static/${id}/views.md (${all.length} views)`);
 if (failed) { console.log(`${failed} view(s) had errors`); process.exit(1); }

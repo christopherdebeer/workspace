@@ -9,62 +9,6 @@ The aim is for a child to find out that clothes are made, and can be reasoned ab
 This page sets out what Fab claims, how it's built, and the evidence for and against it. The evidence comes from the
 **evidence bench** (`?bench=evidence`), which runs the same tests in the page as it does headless.
 
-## In pictures
-
-Every picture here is made by driving the page as a child would, and they're all made again with one command:
-
-```
-node cells/lab/views.mjs fab            # all of them (or name some, or a group)
-node cells/lab/views.mjs fab --list     # what's registered
-```
-
-Each view is registered in `client/fab/views.mjs`. A view has a name, a group, a title and caption, the page's query,
-and the steps that drive it (pick up a tool, touch the hem, drag), taking the shot at the right moment, often with
-the finger still down. The pictures are `static/fab/v-<name>.jpg`. They're committed and deployed with the page, and
-the gallery below is rewritten between its markers each time. To use one in the prose, give its line on its own:
-`![caption](fab/v-slash-open.jpg)`.
-
-<!-- views -->
-
-#### The room
-
-![The rails: a rail per person; slide along, tap the front one to put it on](fab/v-rails.jpg)
-![The figure: cloth and print in the drawer; the pattern pinned up, bottom right](fab/v-figure.jpg)
-![Turned round: the cutting table behind it: tap it to go there](fab/v-figure-turned.jpg)
-![The cutting table: the pattern at true size, the figure across the room](fab/v-table.jpg)
-![Looking up from the table: drag (or pinch) off the piece to look up at the figure](fab/v-table-up.jpg)
-![The whole pattern: every piece, its grain, how much cloth, its checks](fab/v-sheet.jpg)
-
-#### The hand
-
-![The hand: the hem lit, its tab; the grain arrow's knob; a badge on the dart](fab/v-hand.jpg)
-![Dragging the hem: how long, by the finger](fab/v-hand-hem.jpg)
-![Turning the grain: the knob follows the finger, straight to bias](fab/v-hand-grain.jpg)
-![A dart, tapped: closed into flare: the badge goes rose](fab/v-hand-dart.jpg)
-
-#### Slash
-
-![Scissors in hand: the hem lit: where a slash starts](fab/v-slash.jpg)
-![Touched: a ghost of the cut, hem to waist, before it opens](fab/v-slash-touch.jpg)
-![Spread open: the wedge of new cloth, how much by the finger](fab/v-slash-open.jpg)
-![Slashed: its hinge ringed, an arrow across the opening; the figure flares](fab/v-slash-made.jpg)
-
-#### Fold
-
-![Folding a pleat: the waist lit; how much is folded in, by the finger](fab/v-fold.jpg)
-![A pleat: fold line, where it's laid, the way it folds, stitched down to a bar](fab/v-fold-made.jpg)
-
-#### Gather
-
-![Gathering: width added at the waist, by the finger](fab/v-gather.jpg)
-![Gathered: notched either side, a running stitch, drawn in](fab/v-gather-made.jpg)
-
-#### Cloth
-
-![The cloth on the paper: off by default; laid on along the grain, as it'll be cut](fab/v-cloth.jpg)
-
-<!-- /views -->
-
 ## One garment family, deep
 
 The first Fab tried to dress the figure in a skirt, a top and a cape, each with the same six dials. The skirt worked.
@@ -111,6 +55,11 @@ one piece needs darts all round.
 | **gather** | slash and spread parallel, and ease the new width into the band where it was added | **gather**: touch the waist, drag sideways |
 | **close a dart** | pivot the cloth beside it about its point until its legs meet: the waist's taken in the same, the hem below opens | **hand**: tap the dart |
 | **release a dart** | don't sew it; gather its width into the band instead | **hand**: tap it again (a third tap sews it again) |
+
+![a slash spread open](fab/v-slash-made.jpg)
+![a pleat folded in](fab/v-fold-made.jpg)
+![gathers](fab/v-gather-made.jpg)
+![a dart closed into flare](fab/v-hand-dart.jpg)
 
 The rest are parameters on the same paper:
 
@@ -322,6 +271,8 @@ construction, not a look) than children who turn dials to the same skirts.
 
 Fab opens on the workshop's wall: a row of clothes rails, each hung with skirts on hangers.
 
+![the workshop’s rail, the one in front named over the scene](fab/v-rails.jpg)
+
 - **The workshop's rail** is chromed. It holds one of each way of making a skirt, in contrasting cloths, to start
   from.
 - **Each person has their own rail**, powder-coated in their own colour, with what they've made. Tap **+ a rail** and
@@ -364,12 +315,19 @@ The workshop is one room, and the camera walks between three places in it. They'
 | **the figure** | on its stand, in the middle | cloth and print | **twirl** and **sew** (icons), **save to rail** |
 | **the cutting table** | to one side, facing the figure | the tool in hand: what it does, the gestures it answers to, what it's set to; panels, undo, the history (the tools themselves are a palette down the right) | **cloth**, **pattern**, **save to rail**, notes |
 
+![the rails](fab/v-rails.jpg)
+![the figure, its pattern pinned up](fab/v-figure.jpg)
+![the cutting table](fab/v-table.jpg)
+
 **Every place can be reached by tapping it.** From any of the three, tap another where it stands in the room (a
 rail, the figure, the cutting table) and the camera walks there. It's one list in the code (`PLACES` in `main.ts`):
 each place says how a touch finds it (a box round each rail and what hangs on it; the figure out to its arms and the
 reach of its skirt; the tabletop), and the nearest one along the touch wins, so whatever's in front hides what's behind
 it. A tap the place you're at uses itself (a garment on the rails, the paper's piece at the table) is never passed on.
 A new place in the room is one more entry.
+
+![from the figure, the table behind it: tap to go](fab/v-figure-turned.jpg)
+![from the table, the figure (and a rail) across the room](fab/v-table-up.jpg)
 
 **The pattern is pinned up beside the figure,** bottom right. It's a little note with the pieces drawn on it, what the skirt is, how
 long, and how far round its hem is. Tap it, or tap the cutting table itself where it stands in the room, to go to the table. It's redrawn with every
@@ -381,6 +339,10 @@ front follows your finger, and a flick runs down on its own.
 **The paper is plain by default.** A piece is drawn as pattern tissue, so its marks (slashes, folds, darts, gathers)
 stand out. **cloth** lays the chosen cloth and print on it, running with the grain, as it'll be cut. The note by the
 figure follows the same choice. (`?cloth` starts with it on.)
+
+![plain paper](fab/v-table.jpg)
+![the cloth laid on](fab/v-cloth.jpg)
+![the whole pattern (**pattern**)](fab/v-sheet.jpg)
 
 **At the table, the pattern lies on it at true size.** A centimetre of the paper is a centimetre on the figure, so a piece
 that's spread grows on the table. The figure stands across the room behind it, wearing each move as it's made.
@@ -394,6 +356,11 @@ turn it, and a badge on each dart to tap (white while it's sewn, rose once it's 
 fold is touched, a dashed ghost shows where it'll go. While a finger's on the paper, a label beside it says how much
 ("+4.5 cm", "37 cm (+3)", "22°"), and the drawer keeps up with it.
 
+![the hand: hem tab, grain knob, dart badge](fab/v-hand.jpg)
+![dragging the hem](fab/v-hand-hem.jpg)
+![turning the grain](fab/v-hand-grain.jpg)
+![a slash touched: its ghost](fab/v-slash-touch.jpg)
+
 **Each move is marked as a dressmaker marks it:**
 
 - a slash: its two edges dashed and the opening shaded, the point it swung open about ringed, an arrow across the opening;
@@ -401,6 +368,10 @@ fold is touched, a dashed ghost shows where it'll go. While a finger's on the pa
   its stitching down from the waist boxed off at a bar;
 - gathers: a notch either side on the waist, a wavy running stitch between them, and arrows drawing it in;
 - a dart: its two legs to a dot at its point.
+
+![spreading](fab/v-slash-open.jpg)
+![folding](fab/v-fold.jpg)
+![gathering](fab/v-gather.jpg)
 
 **Only the piece takes the tools.** A touch on the pattern (or within a fingertip of its edge) cuts, folds, gathers or
 pulls. A touch anywhere else (empty paper, the tabletop, the room) moves the eye:
@@ -429,6 +400,14 @@ so nothing jumps between one gesture and the next.
   many to cut, the notes the cut made, and the pattern's checks.
 
 ## How it's built
+
+**The pictures are made, not taken.** Every one in this page is made by driving the page as a child would, and the
+whole set is made again with one command: `node cells/lab/views.mjs fab` (name some, or a group, to make only those;
+`--list` for what's registered). Each view is registered in `client/fab/views.mjs`: a name, a group, a title and
+caption, the page's query, and the steps that drive it (pick up a tool, touch the hem, drag), the shot taken at the
+right moment, often with the finger still down. They're `static/fab/v-<name>.jpg`, committed and deployed with the
+page. The whole set is under **pictures** at the top of this page, apart from the prose (and `static/fab/views.md`
+on GitHub); here, a view goes where it's talked about.
 
 All of it is in `client/fab/`:
 
