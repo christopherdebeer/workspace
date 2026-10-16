@@ -24,8 +24,8 @@ import { Cloth } from './cloth';
 import { FABRICS, COLOURWAYS, PRINTS, fabricById, makePrint } from './fabric';
 import { DEFAULT_DESIGN, describe, draftRecipe, fromDesign, toBuild, type Design, type Method, type Move, type Recipe, type Skirt } from './pattern';
 import { Paper, SHEET_H, SHEET_W, TOOLS, moveWords } from './paper';
-import { Room } from './rails';
-import { TABLE, createRenderer, invert, placeTurned, type Item } from './render';
+import { RAIL_Z, Room, railX } from './rails';
+import { FLOOR, RAIL_W, RAIL_Y, TABLE, createRenderer, invert, placeTurned, type Item } from './render';
 import { RAIL_COLOURS, activeRail, addRail, hang, rails, recipeOf, removeRail, renameRail, setActive, takeOff, type Rail } from './store';
 import { drawSheet } from './sheet';
 
@@ -367,14 +367,14 @@ canvas.addEventListener('pointermove', (e) => {
 });
 canvas.addEventListener('pointerup', (e) => {
   drag = false; clearTimeout(press);
-  // (at the figure, a tap on the cutting table (its paper, or the top it lies on) goes over to it)
-  if (mode === 'bench' && performance.now() - st0 < 450 && Math.hypot(e.clientX - sx, e.clientY - sy) < 10 && onTable(e.clientX, e.clientY)) { toTable(); return; }
+  // (at the figure, a tap on another place in the room (the table, a rail) goes over to it)
+  if (mode === 'bench' && performance.now() - st0 < 450 && Math.hypot(e.clientX - sx, e.clientY - sy) < 10 && tapPlace(e.clientX, e.clientY)) return;
   if (mode !== 'rails') return;
   if (room.dragging) { room.dragging = false; if (performance.now() - lastMove > 90) room.states[room.active].vel = 0; return; }
   if (axis === 'y') { const dy = e.clientY - sy; if (Math.abs(dy) > 40) showRail(room.active + (dy < 0 ? 1 : -1)); return; }
   if (!axis && performance.now() - st0 < 600 && lastVP) {
     const [px, py] = local(e), i = room.pick(px, py, lastVP, canvas.clientWidth, canvas.clientHeight);
-    if (i < 0) return;
+    if (i < 0) { tapPlace(e.clientX, e.clientY); return; }
     if (i === room.front()) wear(i); else { room.nudge(i, i > room.front() ? -1 : 1); room.goTo(i); }
   }
 });
@@ -403,43 +403,93 @@ function tableView() {
   const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3)) * 1.5);
   return { az: TABLE.rot, el, dist, target: tableToRoom(lx, lz - d * 0.35) };
 }
-/** is a touch on the tabletop (seen from anywhere)? */
-function onTable(clientX: number, clientY: number) {
-  const q = onSheet(clientX, clientY);
-  if (!q) return false;
-  const lx = (q[0] - SHEET_W / 2) / paper.sc, lz = (q[1] - SHEET_H / 2) / paper.sc;
-  return Math.abs(lx) < TABLE.w / 2 && lz > -TABLE.d / 2 && lz < TABLE.d / 2 + TABLE.near;
+/** a touch on the screen as a ray into the room: from the near plane, `t` = 1 at the far one */
+type Ray = { o: [number, number, number]; d: [number, number, number] };
+function rayAt(clientX: number, clientY: number): Ray | null {
+  if (!lastVP) return null;
+  const r = canvas.getBoundingClientRect(), x = ((clientX - r.left) / r.width) * 2 - 1, y = 1 - ((clientY - r.top) / r.height) * 2, inv = invert(lastVP);
+  const un = (z: number) => { const v = [x, y, z, 1], o = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) for (let k = 0; k < 4; k++) o[i] += inv[k * 4 + i] * v[k]; return [o[0] / o[3], o[1] / o[3], o[2] / o[3]] as [number, number, number]; };
+  const p0 = un(-1), p1 = un(1);
+  return { o: p0, d: [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]] };
+}
+/** where a ray meets the tabletop, on the table's own axes (and how far along the ray) */
+function tableHit(ray: Ray): { lx: number; lz: number; t: number } | null {
+  const t = (TABLE.y + 0.12 - ray.o[1]) / ray.d[1];
+  if (!(t > 0)) return null;
+  const dx = ray.o[0] + ray.d[0] * t - TABLE.x, dz = ray.o[2] + ray.d[2] * t - TABLE.z;
+  return { lx: dx * tcos - dz * tsin, lz: dx * tsin + dz * tcos, t };
 }
 /** a touch on the screen, cast down onto the table: where it lands on the paper's sheet, in its pixels */
 function onSheet(clientX: number, clientY: number): [number, number] | null {
-  if (!lastVP) return null;
-  const r = canvas.getBoundingClientRect(), x = ((clientX - r.left) / r.width) * 2 - 1, y = 1 - ((clientY - r.top) / r.height) * 2, inv = invert(lastVP);
-  const un = (z: number) => { const v = [x, y, z, 1], o = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) for (let k = 0; k < 4; k++) o[i] += inv[k * 4 + i] * v[k]; return [o[0] / o[3], o[1] / o[3], o[2] / o[3]]; };
-  const p0 = un(-1), p1 = un(1), t = (TABLE.y + 0.12 - p0[1]) / (p1[1] - p0[1]);
-  if (!(t > 0)) return null;
-  const dx = p0[0] + (p1[0] - p0[0]) * t - TABLE.x, dz = p0[2] + (p1[2] - p0[2]) * t - TABLE.z;
-  const lx = dx * tcos - dz * tsin, lz = dx * tsin + dz * tcos;
-  return [lx * paper.sc + SHEET_W / 2, lz * paper.sc + SHEET_H / 2];
+  const ray = rayAt(clientX, clientY), h = ray && tableHit(ray);
+  return h ? [h.lx * paper.sc + SHEET_W / 2, h.lz * paper.sc + SHEET_H / 2] : null;
+}
+/** how far along a ray it meets the figure (its body, its arms over its head, and as far out as its skirt reaches) */
+function figureHit(ray: Ray): number | null {
+  const [dx, dy, dz] = ray.d, p0 = ray.o, dd = dx * dx + dz * dz;
+  if (dd < 1e-9) return null;
+  // (where the ray passes closest to the figure's upright axis, and how far from it)
+  const t = -(p0[0] * dx + p0[2] * dz) / dd, h = p0[1] + dy * t, gap = Math.hypot(p0[0] + dx * t, p0[2] + dz * t);
+  if (t < 0 || h < -4 || h > 124) return null;
+  let reach = h > 86 ? 30 : 17;
+  if (cloth && h < 74) { const P = cloth.pos; let m = 0; for (let i = 0; i < cloth.n; i += 3) m = Math.max(m, Math.hypot(P[i * 3], P[i * 3 + 2])); reach = Math.max(reach, m + 2); }
+  return gap < reach ? t : null;
+}
+const onFigure = (clientX: number, clientY: number) => { const ray = rayAt(clientX, clientY); return !!ray && figureHit(ray) !== null; };
+/** how far along a ray it meets a box (axis-aligned), if it does */
+function boxHit(ray: Ray, lo: [number, number, number], hi: [number, number, number]): number | null {
+  let t0 = 0, t1 = Infinity;
+  for (let c = 0; c < 3; c++) {
+    if (Math.abs(ray.d[c]) < 1e-12) { if (ray.o[c] < lo[c] || ray.o[c] > hi[c]) return null; continue; }
+    let a = (lo[c] - ray.o[c]) / ray.d[c], b = (hi[c] - ray.o[c]) / ray.d[c];
+    if (a > b) [a, b] = [b, a];
+    t0 = Math.max(t0, a); t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+  return t0;
+}
+
+// ─── the room's places ─────────────────────────────────────────────────────────────────────────
+/** The three places in the room, each something you can see from the others: tap it, wherever you are, and you go
+ * there (the nearest along the touch wins, so what's in front hides what's behind it). Each says how a touch finds it
+ * and how to arrive; its view and drawer are its mode's. */
+interface Place { id: Mode; hit: (ray: Ray) => { t: number; go: () => void } | null }
+const PLACES: Place[] = [
+  {
+    id: 'rails',
+    // (each rail: its stand, the bar, and what hangs from it; tap one to go to it)
+    hit: (ray) => {
+      let best: { t: number; go: () => void } | null = null;
+      room.states.forEach((_, k) => {
+        const x = railX(k), t = boxHit(ray, [x - RAIL_W / 2 - 6, FLOOR, RAIL_Z - 26], [x + RAIL_W / 2 + 6, FLOOR + RAIL_Y + 10, RAIL_Z + 26]);
+        if (t !== null && (!best || t < best.t)) best = { t, go: () => { go('rails'); showRail(k); } };
+      });
+      return best;
+    },
+  },
+  { id: 'bench', hit: (ray) => { const t = figureHit(ray); return t === null ? null : { t, go: () => go('bench') }; } },
+  {
+    id: 'table',
+    hit: (ray) => {
+      const h = tableHit(ray);
+      return h && Math.abs(h.lx) < TABLE.w / 2 && h.lz > -TABLE.d / 2 && h.lz < TABLE.d / 2 + TABLE.near ? { t: h.t, go: () => go('table') } : null;
+    },
+  },
+];
+/** a tap that the place you're at didn't take: if it's on another place, go there. True if it went. */
+function tapPlace(clientX: number, clientY: number): boolean {
+  const ray = rayAt(clientX, clientY);
+  if (!ray) return false;
+  let best: { t: number; go: () => void; id: Mode } | null = null;
+  for (const p of PLACES) { const h = p.hit(ray); if (h && (!best || h.t < best.t)) best = { ...h, id: p.id }; }
+  if (!best || best.id === mode) return false;
+  best.go();
+  return true;
 }
 // (only a touch on the piece is the paper's; anywhere else at the table moves the view: from the paper, close, out to
 // the figure across the room (`tableZoom` 0 → 1), and a little round)
 let figureDrag: { x: number; y: number; t: number; x0: number; y0: number; t0: number } | null = null;
-/** a touch at the table, cast into the room: does it land on the figure across it (its body, its arms over its head,
- * and as far out as its skirt reaches)? */
-function onFigure(clientX: number, clientY: number): boolean {
-  if (!lastVP) return false;
-  const r = canvas.getBoundingClientRect(), x = ((clientX - r.left) / r.width) * 2 - 1, y = 1 - ((clientY - r.top) / r.height) * 2, inv = invert(lastVP);
-  const un = (z: number) => { const v = [x, y, z, 1], o = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) for (let k = 0; k < 4; k++) o[i] += inv[k * 4 + i] * v[k]; return [o[0] / o[3], o[1] / o[3], o[2] / o[3]]; };
-  const p0 = un(-1), p1 = un(1), dx = p1[0] - p0[0], dy = p1[1] - p0[1], dz = p1[2] - p0[2], dd = dx * dx + dz * dz;
-  if (dd < 1e-9) return false;
-  // (where the ray passes closest to the figure's upright axis, and how far from it)
-  const t = -(p0[0] * dx + p0[2] * dz) / dd, h = p0[1] + dy * t, gap = Math.hypot(p0[0] + dx * t, p0[2] + dz * t);
-  if (h < -4 || h > 124) return false;
-  let reach = h > 86 ? 30 : 17;
-  if (cloth && h < 74) { const P = cloth.pos; let m = 0; for (let i = 0; i < cloth.n; i += 3) m = Math.max(m, Math.hypot(P[i * 3], P[i * 3 + 2])); reach = Math.max(reach, m + 2); }
-  return gap < reach;
-}
-let onPaper = false, tableZoom = 0, tableTurn = 0, sceneDrag: { x: number; y: number } | null = null, tablePinch = 0;
+let onPaper = false, tableZoom = 0, tableTurn = 0, sceneDrag: { x: number; y: number; x0: number; y0: number; t0: number } | null = null, tablePinch = 0;
 const touches = new Map<number, [number, number]>();
 canvas.addEventListener('pointerdown', (e) => {
   if (mode !== 'table') return;
@@ -452,7 +502,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (q && tableZoom < 0.5 && paper.hits(q[0], q[1])) { onPaper = true; paper.downAt(q[0], q[1]); }
   // (the figure across the room: tap it to go over to it; drag it round to spin it on its stand)
   else if (onFigure(e.clientX, e.clientY)) { const t = performance.now(); figureDrag = { x: e.clientX, y: e.clientY, t, x0: e.clientX, y0: e.clientY, t0: t }; }
-  else sceneDrag = { x: e.clientX, y: e.clientY };
+  else sceneDrag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() };
 });
 canvas.addEventListener('pointermove', (e) => {
   if (mode !== 'table') return;
@@ -475,14 +525,17 @@ canvas.addEventListener('pointermove', (e) => {
     // (drag up to look up across the room at the figure, down to come back to the paper; sideways to look round)
     tableZoom = Math.max(0, Math.min(1, tableZoom - (e.clientY - sceneDrag.y) * 0.004));
     tableTurn = Math.max(-0.5, Math.min(0.5, tableTurn - (e.clientX - sceneDrag.x) * 0.004));
-    sceneDrag = { x: e.clientX, y: e.clientY };
+    sceneDrag.x = e.clientX; sceneDrag.y = e.clientY;
   }
 });
 const tableUp = (e: PointerEvent) => {
   touches.delete(e.pointerId); if (touches.size < 2) tablePinch = 0;
   if (mode !== 'table') return;
   if (onPaper) { onPaper = false; if (e.type === 'pointercancel') paper.cancel(); else paper.upAt(); }
-  if (figureDrag && e.type === 'pointerup' && performance.now() - figureDrag.t0 < 450 && Math.hypot(e.clientX - figureDrag.x0, e.clientY - figureDrag.y0) < 10) setMode('bench');
+  const tap = (d: { x0: number; y0: number; t0: number }) => e.type === 'pointerup' && performance.now() - d.t0 < 450 && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 10;
+  if (figureDrag && tap(figureDrag)) go('bench');
+  // (a tap on the room, off the paper: if it's on another place (a rail), go there)
+  else if (sceneDrag && tap(sceneDrag)) tapPlace(e.clientX, e.clientY);
   // (a flick's let run down on the stand; a drag that stopped, stops)
   else if (figureDrag && cloth && performance.now() - figureDrag.t > 80) cloth.omega *= 0.3;
   figureDrag = null; sceneDrag = null;

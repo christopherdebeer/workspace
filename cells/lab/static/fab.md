@@ -308,6 +308,13 @@ The workshop is one room, and the camera walks between three places in it. They'
 | **the figure** | on its stand, in the middle | cloth and print | **twirl** and **sew** (icons), **save to rail** |
 | **the cutting table** | to one side, facing the figure | the tools, panels, undo, the history | **cloth**, **pattern**, **save to rail**, notes |
 
+**Every place can be reached by tapping it.** From any of the three, tap another where it stands in the room (a
+rail, the figure, the cutting table) and the camera walks there. It's one list in the code (`PLACES` in `main.ts`):
+each place says how a touch finds it (a box round each rail and what hangs on it; the figure out to its arms and the
+reach of its skirt; the tabletop), and the nearest one along the touch wins, so whatever's in front hides what's behind
+it. A tap the place you're at uses itself (a garment on the rails, the paper's piece at the table) is never passed on.
+A new place in the room is one more entry.
+
 **The pattern is pinned up beside the figure,** bottom right. It's a little note with the pieces drawn on it, what the skirt is, how
 long, and how far round its hem is. Tap it, or tap the cutting table itself where it stands in the room, to go to the table. It's redrawn with every
 change, and stays by the figure.
