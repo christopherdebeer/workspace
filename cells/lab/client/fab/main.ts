@@ -146,19 +146,50 @@ for (const f of FABRICS) {
 for (let k = 0; k < PRINTS.length; k++) {
   const b = document.createElement('button'); b.className = 'print'; b.dataset.k = String(k);
   b.innerHTML = `<canvas width="56" height="40"></canvas>${PRINTS[k]}`;
-  // (tap a print to choose it; tap it again for its next colourway)
-  b.addEventListener('click', () => { if (rec.print === k) rec = { ...rec, colour: (rec.colour + 1) % COLOURWAYS.length }; rec = { ...rec, print: k }; d.print = rec.print; d.colour = rec.colour; make(); });
+  b.addEventListener('click', () => { rec = { ...rec, print: k }; d.print = rec.print; make(); });
   $('prints').appendChild(b);
 }
+// (the colourways: each drawn as the print chosen, in it)
+COLOURWAYS.forEach((c, k) => {
+  const b = document.createElement('button'); b.className = 'print'; b.dataset.c = String(k);
+  b.innerHTML = `<canvas width="56" height="40"></canvas>${c.name}`;
+  b.addEventListener('click', () => { rec = { ...rec, colour: k }; d.colour = k; make(); });
+  $('colours').appendChild(b);
+});
+// ─── the drawer: closed (its handle, and what's chosen in a line), one section in focus, or all of it open ───
+type DrawerState = 'closed' | 'focus' | 'open';
+let drawer: DrawerState = 'focus', figSec = 'fabric';
+function setDrawer(st: DrawerState) { drawer = st; document.body.dataset.drawer = st; ui(); }
+for (const b of Array.from($('figtabs').children) as HTMLElement[]) b.addEventListener('click', () => { figSec = b.dataset.sec!; ui(); });
+{
+  // (the handle: a tap opens it a step (closed → focus → open → focus); a drag up opens it all, down closes it)
+  let y0 = 0, moved = false;
+  const grip = $('grip');
+  grip.addEventListener('pointerdown', (e) => { y0 = e.clientY; moved = false; grip.setPointerCapture(e.pointerId); });
+  grip.addEventListener('pointermove', (e) => { if (grip.hasPointerCapture(e.pointerId) && Math.abs(e.clientY - y0) > 12) moved = true; });
+  grip.addEventListener('pointerup', (e) => {
+    const dy = e.clientY - y0;
+    if (moved) setDrawer(dy < 0 ? (drawer === 'closed' ? 'focus' : 'open') : drawer === 'open' ? 'focus' : 'closed');
+    else setDrawer(drawer === 'closed' ? 'focus' : drawer === 'focus' ? 'open' : 'focus');
+  });
+}
+document.body.dataset.drawer = drawer;
 function ui() {
   for (const k of KNOBS) knob(k);
   for (const b of Array.from($('methods').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.m === d.method);
   for (const b of Array.from($('fabrics').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.f === rec.fabric);
   for (const b of Array.from($('prints').children) as HTMLElement[]) {
     const k = Number(b.dataset.k); b.classList.toggle('on', k === rec.print);
-    const cv = b.querySelector('canvas')!; cv.style.width = '28px'; cv.style.height = '20px';
-    drawSwatch(cv, k, rec.colour);
+    drawSwatch(b.querySelector('canvas')!, k, rec.colour);
   }
+  for (const b of Array.from($('colours').children) as HTMLElement[]) {
+    const k = Number(b.dataset.c); b.classList.toggle('on', k === rec.colour);
+    drawSwatch(b.querySelector('canvas')!, rec.print || 1, k);
+  }
+  for (const b of Array.from($('figtabs').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.sec === figSec);
+  for (const sec of Array.from(document.querySelectorAll('.figsec')) as HTMLElement[]) sec.classList.toggle('on', sec.dataset.sec === figSec);
+  // (closed, the handle says what's chosen)
+  $('gripsum').textContent = mode === 'table' ? `${TOOLS.find((t) => t.id === paper.tool)!.label} · ${rec.moves.length ? `${rec.moves.length} move${rec.moves.length > 1 ? 's' : ''}` : 'the block'}` : `${fabricById(rec.fabric).name} · ${PRINTS[rec.print]} · ${COLOURWAYS[rec.colour % COLOURWAYS.length].name}`;
   // (the paper, its tools, and the history of what's been done to it)
   for (const b of Array.from($('palette').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.tool === paper.tool);
   $('panelsn').textContent = String(rec.panels);
@@ -180,8 +211,7 @@ function ui() {
   const pr = makePrint(rec.print, rec.colour);
   if (mode === 'bench') {
     drawSheet(card, sk, paper.cloth ? pr : null, true);
-    $('notename').textContent = describe(rec).replace(/^./, (c) => c.toUpperCase());
-    $('notewhat').textContent = `${sk.m.length.toFixed(0)} cm long · hem ${sk.m.hem.toFixed(0)} cm round${rec.panels > 1 ? ` · ${rec.panels} panels` : ''}`;
+    $('note').title = `${describe(rec)}: ${sk.m.length.toFixed(0)} cm long, hem ${sk.m.hem.toFixed(0)} cm round. Take it to the cutting table`;
   }
   $('cloth').classList.toggle('on', paper.cloth);
   if (sheetOn) drawSheet(sheet, sk, paper.cloth ? pr : null);
@@ -255,7 +285,6 @@ sheet.addEventListener('click', toggleSheet);
 // (the cloth laid on the paper, or not: off, the paper's plain and its marks easier to see)
 paper.cloth = qs.has('cloth');
 $('cloth').addEventListener('click', () => { paper.cloth = !paper.cloth; ui(); });
-$('pattern').addEventListener('click', toggleSheet);
 $('sew').addEventListener('click', () => make(true));
 let twirlUntil = 0;
 $('twirl').addEventListener('click', () => { twirlUntil = performance.now() + 3200; });
@@ -360,7 +389,7 @@ function setMode(m: Mode) {
 $('wear').addEventListener('click', () => wear(room.front()));
 /** the room's three places, along the top: where you are, dark */
 function places() { for (const b of Array.from($('places').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.place === mode); }
-function toTable() { tableZoom = 0; tableTurn = 0; setMode('table'); }
+function toTable() { tableZoom = 0; tableTurn = 0; tablePan[0] = tablePan[1] = 0; setMode('table'); }
 function go(m: Mode) {
   if (m === mode) return;
   if (m === 'rails') { backToRails(); return; }
@@ -383,6 +412,8 @@ let drag = false, lx = 0, ly = 0, pinch = 0, idle = 0, sx = 0, sy = 0, st0 = 0, 
 const local = (e: { clientX: number; clientY: number }) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] as const; };
 canvas.addEventListener('pointerdown', (e) => {
   drag = true; lx = sx = e.clientX; ly = sy = e.clientY; st0 = performance.now(); axis = ''; canvas.setPointerCapture(e.pointerId); idle = 0;
+  // (at the figure: a drag on it spins it on its stand (as from the table); off it, the view goes round it)
+  if (mode === 'bench' && !pinch && onFigure(e.clientX, e.clientY)) { drag = false; spinStart(e); return; }
   if (mode === 'rails') {
     // (a long press on one of your own: take it off the rail)
     clearTimeout(press);
@@ -397,6 +428,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (mode === 'bench' && figureDrag) { spinMove(e); return; }
   if (!drag || pinch) return;
   const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY; idle = 0;
   if (mode === 'rails') {
@@ -409,6 +441,7 @@ canvas.addEventListener('pointermove', (e) => {
 });
 canvas.addEventListener('pointerup', (e) => {
   drag = false; clearTimeout(press);
+  if (mode === 'bench' && figureDrag) { spinEnd(e); return; }
   // (at the figure, a tap on another place in the room (the table, a rail) goes over to it)
   if (mode === 'bench' && performance.now() - st0 < 450 && Math.hypot(e.clientX - sx, e.clientY - sy) < 10 && tapPlace(e.clientX, e.clientY)) return;
   if (mode !== 'rails') return;
@@ -423,10 +456,13 @@ canvas.addEventListener('pointerup', (e) => {
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   if (mode === 'rails') { room.push(-(Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * 0.08, 0.016); return; }
-  view.dist = Math.max(80, Math.min(360, view.dist * (1 + e.deltaY * 0.001)));
+  view.dist = Math.max(70, Math.min(720, view.dist * (1 + e.deltaY * 0.001)));
 }, { passive: false });
-canvas.addEventListener('touchstart', (e) => { if (e.touches.length === 2 && mode === 'bench') pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }, { passive: true });
-canvas.addEventListener('touchmove', (e) => { if (e.touches.length === 2 && pinch) { const p = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); view.dist = Math.max(80, Math.min(360, view.dist * pinch / p)); pinch = p; } }, { passive: true });
+canvas.addEventListener('touchstart', (e) => {
+  // (a second finger: a pinch, whatever the first was doing)
+  if (e.touches.length === 2 && mode === 'bench') { figureDrag = null; drag = false; pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }
+}, { passive: true });
+canvas.addEventListener('touchmove', (e) => { if (e.touches.length === 2 && pinch) { const p = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); view.dist = Math.max(70, Math.min(720, view.dist * pinch / p)); pinch = p; } }, { passive: true });
 canvas.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = 0; });
 
 // ─── the cutting table ─────────────────────────────────────────────────────────────────────────
@@ -533,6 +569,28 @@ function tapPlace(clientX: number, clientY: number): boolean {
 // (only a touch on the piece is the paper's; anywhere else at the table moves the view: from the paper, close, out to
 // the figure across the room (`tableZoom` 0 → 1), and a little round)
 let figureDrag: { x: number; y: number; t: number; x0: number; y0: number; t0: number } | null = null;
+/** spinning the figure on its stand by hand (from the figure, or the table): its front follows the finger */
+function spinStart(e: PointerEvent) { const t = performance.now(); figureDrag = { x: e.clientX, y: e.clientY, t, x0: e.clientX, y0: e.clientY, t0: t }; }
+function spinMove(e: PointerEvent) {
+  if (!figureDrag) return;
+  // (right is the way its front turns, seen from here)
+  const t = performance.now(), dt = Math.max(0.008, (t - figureDrag.t) / 1000), v = (e.clientX - figureDrag.x) / dt;
+  if (cloth && Math.hypot(e.clientX - figureDrag.x0, e.clientY - figureDrag.y0) > 8) cloth.omega = cloth.omega * 0.5 + Math.max(-9, Math.min(9, v * 0.02)) * 0.5;
+  figureDrag.x = e.clientX; figureDrag.y = e.clientY; figureDrag.t = t;
+}
+/** let go: a flick's let run down on the stand, a drag that stopped stops. True if it was only a tap */
+function spinEnd(e: PointerEvent): boolean {
+  const d = figureDrag; figureDrag = null;
+  if (!d) return false;
+  const tap = e.type === 'pointerup' && performance.now() - d.t0 < 450 && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 10;
+  if (!tap && cloth && performance.now() - d.t > 80) cloth.omega *= 0.3;
+  return tap;
+}
+/** how far out from the paper: 0 over the piece, 1 out to the figure; below 0 closer in (to −1, a third of the
+ * distance), above 1 further out (to 2); `tablePan`, cm across the table the view's been moved, two fingers at a time */
+const ZOOM_IN = -1, ZOOM_OUT = 2, tablePan: [number, number] = [0, 0];
+const zoomTo = (z: number) => { tableZoom = Math.max(ZOOM_IN, Math.min(ZOOM_OUT, z)); };
+let tableMid: [number, number] | null = null;
 let onPaper = false, tableZoom = 0, tableTurn = 0, sceneDrag: { x: number; y: number; x0: number; y0: number; t0: number } | null = null, tablePinch = 0;
 const touches = new Map<number, [number, number]>();
 canvas.addEventListener('pointerdown', (e) => {
@@ -545,7 +603,7 @@ canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   if (q && tableZoom < 0.5 && paper.hits(q[0], q[1])) { onPaper = true; paper.downAt(q[0], q[1]); }
   // (the figure across the room: tap it to go over to it; drag it round to spin it on its stand)
-  else if (onFigure(e.clientX, e.clientY)) { const t = performance.now(); figureDrag = { x: e.clientX, y: e.clientY, t, x0: e.clientX, y0: e.clientY, t0: t }; }
+  else if (onFigure(e.clientX, e.clientY)) spinStart(e);
   else sceneDrag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() };
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -554,44 +612,48 @@ canvas.addEventListener('pointermove', (e) => {
   if (touches.size === 2) {
     // (pinch: fingers apart, in to the paper; together, out to the figure)
     const [a, b] = [...touches.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
-    if (tablePinch) tableZoom = Math.max(0, Math.min(1, tableZoom + (tablePinch - d) * 0.004));
-    tablePinch = d; return;
+    // (and both together, moved: the paper slides with them, the view across the table)
+    const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    if (tablePinch) zoomTo(tableZoom + (tablePinch - d) * 0.005);
+    if (tableMid) {
+      const cm = (2 * view.dist * Math.tan(0.3)) / Math.max(1, canvas.clientHeight), el = Math.max(0.3, Math.sin(view.el));
+      tablePan[0] = Math.max(-120, Math.min(120, tablePan[0] - (mid[0] - tableMid[0]) * cm));
+      tablePan[1] = Math.max(-90, Math.min(90, tablePan[1] - ((mid[1] - tableMid[1]) * cm) / el));
+    }
+    tablePinch = d; tableMid = mid; return;
   }
   if (onPaper) { const q = onSheet(e.clientX, e.clientY); if (q) paper.moveAt(q[0], q[1]); return; }
-  if (figureDrag) {
-    // (the front of it follows the finger: right is the way its front turns, seen from here)
-    const t = performance.now(), dt = Math.max(0.008, (t - figureDrag.t) / 1000), v = (e.clientX - figureDrag.x) / dt;
-    if (cloth && Math.hypot(e.clientX - figureDrag.x0, e.clientY - figureDrag.y0) > 8) cloth.omega = cloth.omega * 0.5 + Math.max(-9, Math.min(9, v * 0.02)) * 0.5;
-    figureDrag.x = e.clientX; figureDrag.y = e.clientY; figureDrag.t = t;
-    return;
-  }
+  if (figureDrag) { spinMove(e); return; }
   if (sceneDrag) {
     // (drag up to look up across the room at the figure, down to come back to the paper; sideways to look round)
-    tableZoom = Math.max(0, Math.min(1, tableZoom - (e.clientY - sceneDrag.y) * 0.004));
+    zoomTo(tableZoom - (e.clientY - sceneDrag.y) * 0.005);
     tableTurn = Math.max(-0.5, Math.min(0.5, tableTurn - (e.clientX - sceneDrag.x) * 0.004));
     sceneDrag.x = e.clientX; sceneDrag.y = e.clientY;
   }
 });
 const tableUp = (e: PointerEvent) => {
-  touches.delete(e.pointerId); if (touches.size < 2) tablePinch = 0;
+  touches.delete(e.pointerId); if (touches.size < 2) { tablePinch = 0; tableMid = null; }
   if (mode !== 'table') return;
   if (onPaper) { onPaper = false; if (e.type === 'pointercancel') paper.cancel(); else paper.upAt(); }
   const tap = (d: { x0: number; y0: number; t0: number }) => e.type === 'pointerup' && performance.now() - d.t0 < 450 && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 10;
-  if (figureDrag && tap(figureDrag)) go('bench');
+  if (figureDrag && spinEnd(e)) go('bench');
   // (a tap on the room, off the paper: if it's on another place (a rail), go there)
   else if (sceneDrag && tap(sceneDrag)) tapPlace(e.clientX, e.clientY);
-  // (a flick's let run down on the stand; a drag that stopped, stops)
-  else if (figureDrag && cloth && performance.now() - figureDrag.t > 80) cloth.omega *= 0.3;
-  figureDrag = null; sceneDrag = null;
+  sceneDrag = null;
 };
 canvas.addEventListener('pointerup', tableUp);
 canvas.addEventListener('pointercancel', tableUp);
-canvas.addEventListener('wheel', (e) => { if (mode === 'table') tableZoom = Math.max(0, Math.min(1, tableZoom + e.deltaY * 0.002)); });
+canvas.addEventListener('wheel', (e) => { if (mode === 'table') zoomTo(tableZoom + e.deltaY * 0.002); });
 /** from the table, out to the figure: across the table and up to it, the table and its paper in the foreground */
 const FIGURE_FROM_TABLE = { az: TABLE.rot, el: 0.2, dist: 300, target: [18, 60, 12] as [number, number, number] };
 function tableGoal() {
-  const a = tableView(), b = FIGURE_FROM_TABLE, t = tableZoom * tableZoom * (3 - 2 * tableZoom), mix = (x: number, y: number) => x + (y - x) * t;
-  return { az: mix(a.az, b.az) + tableTurn, el: mix(a.el, b.el), dist: mix(a.dist, b.dist), target: [mix(a.target[0], b.target[0]), mix(a.target[1], b.target[1]), mix(a.target[2], b.target[2])] as [number, number, number] };
+  // (0 → 1: from over the piece out to the figure; below 0, down closer to the paper; above 1, further back from the
+  // figure, the room round it; the two-finger pan, faded out as the view goes up to the figure)
+  const a = tableView(), b = FIGURE_FROM_TABLE, z = Math.max(0, Math.min(1, tableZoom)), t = z * z * (3 - 2 * z), mix = (x: number, y: number) => x + (y - x) * t;
+  const near = tableZoom < 0 ? 1 + tableZoom * 0.68 : 1, far = tableZoom > 1 ? 1 + (tableZoom - 1) * 1.4 : 1;
+  const pan = tableToRoom(tablePan[0], tablePan[1]), keep = 1 - t;
+  const target = [0, 1, 2].map((c) => mix(a.target[c], b.target[c]) + (pan[c] - (c === 1 ? TABLE.y + 0.12 : c === 0 ? TABLE.x : TABLE.z)) * keep) as [number, number, number];
+  return { az: mix(a.az, b.az) + tableTurn, el: mix(a.el, b.el) + (tableZoom > 1 ? (tableZoom - 1) * 0.15 : 0), dist: mix(a.dist, b.dist) * near * far, target };
 }
 
 // ─── the frame ─────────────────────────────────────────────────────────────────────────────────

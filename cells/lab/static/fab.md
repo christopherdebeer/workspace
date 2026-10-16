@@ -312,12 +312,21 @@ The workshop is one room, and the camera walks between three places in it. They'
 | place | where | its drawer | along the top |
 |---|---|---|---|
 | **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure | |
-| **the figure** | on its stand, in the middle | cloth and print | **twirl** and **sew** (icons), **save to rail** |
-| **the cutting table** | to one side, facing the figure | the tool in hand: what it does, the gestures it answers to, what it's set to; panels, undo, the history (the tools themselves are a palette down the right) | **cloth**, **pattern**, **save to rail**, notes |
+| **the figure** | on its stand, in the middle | fabric, print and colour | **twirl** and **sew** (icons), **save to rail** |
+| **the cutting table** | to one side, facing the figure | the tool in hand: what it does, the gestures it answers to, what it's set to; panels, undo, the history (the tools themselves are a palette down the right) | **cloth** (an icon), **save to rail** |
 
 ![the rails](fab/v-rails.jpg)
 ![the figure, its pattern pinned up](fab/v-figure.jpg)
 ![the cutting table](fab/v-table.jpg)
+
+**The drawer has three states.** Its handle taps it a step open (closed → one section → all of it) and back, and a
+drag on the handle opens it all (up) or closes it (down). Closed, it's only the handle and what's chosen, in a line
+("cotton lawn · stripes · strawberry"), and the room has the screen. At the figure, one section in focus is a row of
+tabs (**Fabric · Print · Colour**) over that section's swatches; all of it open is the three, labelled, one under
+another. The colours are the print's colourways, each drawn as the print chosen in it.
+
+**At the figure, a drag on it spins it; a drag off it goes round it.** Spinning is the same as from the table: its
+front follows the finger, and a flick runs down on its own. A pinch, or scrolling, comes close or goes well back.
 
 **Every place can be reached by tapping it.** From any of the three, tap another where it stands in the room (a
 rail, the figure, the cutting table) and the camera walks there. It's one list in the code (`PLACES` in `main.ts`):
@@ -337,12 +346,12 @@ change, and stays by the figure.
 front follows your finger, and a flick runs down on its own.
 
 **The paper is plain by default.** A piece is drawn as pattern tissue, so its marks (slashes, folds, darts, gathers)
-stand out. **cloth** lays the chosen cloth and print on it, running with the grain, as it'll be cut. The note by the
+stand out. The **cloth** icon lays the chosen cloth and print on it, running with the grain, as it'll be cut. The note by the
 figure follows the same choice. (`?cloth` starts with it on.)
 
 ![plain paper](fab/v-table.jpg)
 ![the cloth laid on](fab/v-cloth.jpg)
-![the whole pattern (**pattern**)](fab/v-sheet.jpg)
+![the whole pattern (`?sheet`)](fab/v-sheet.jpg)
 
 **At the table, the pattern lies on it at true size.** A centimetre of the paper is a centimetre on the figure, so a piece
 that's spread grows on the table. The figure stands across the room behind it, wearing each move as it's made.
@@ -378,7 +387,14 @@ pulls. A touch anywhere else (empty paper, the tabletop, the room) moves the eye
 
 - **drag up**, **pinch together** or **scroll** to look up from the paper, across the room, to the figure;
 - **drag down**, **pinch apart** or **scroll back** to come back down to the paper;
-- **drag sideways** to look a little round.
+- **drag sideways** to look a little round;
+- **two fingers moved together** slide the view across the table, for working close in on one part of the piece.
+
+It goes further than over the piece both ways: down close to the paper (to a third of the distance), and back past
+the figure to see the room round it.
+
+**The room's wall is one-sided.** Seen from behind it isn't there, so wherever the view goes round to, nothing stands
+between it and the room.
 
 Looking past halfway, the paper is just part of the view, and a touch on it moves the eye too. Come back down to cut.
 
@@ -396,8 +412,9 @@ so nothing jumps between one gesture and the next.
   slows down, rather than falling further and further behind.
 - **twirl**: spins the figure on its stand.
 - **sew**: lays the pieces out flat and sews them up again.
-- **pattern** opens the whole pattern: the pieces with their grain lines, darts and pleats, how
-  many to cut, the notes the cut made, and the pattern's checks.
+- `?sheet` opens the whole pattern: the pieces with their grain lines, darts and pleats, how
+  many to cut, the notes the cut made, and the pattern's checks. (It's no longer a button: the pinned note and the
+  table are the pattern now.)
 
 ## How it's built
 

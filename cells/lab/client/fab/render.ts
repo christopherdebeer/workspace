@@ -64,6 +64,8 @@ uniform sampler2D uPaper;
 out vec4 o;
 ${COMMON}
 void main() {
+  // (the walls are one-sided: seen from behind, they're not there, so they never stand between the eye and the room)
+  if (vMat == 3 && dot(vNor, uEye - vPos) < 0.) discard;
   vec3 n = normalize(vNor), V = normalize(uEye - vPos);
   vec3 base; float spec = .0, rough = 40.;
   if (vMat == 0 || vMat == 5) {

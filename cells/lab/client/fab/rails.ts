@@ -99,12 +99,13 @@ export class Room {
         // (each swings on its hook: a damped pendulum, pushed by how its hook's carried along)
         const w2 = 980 / ELL, acc = -w2 * Math.sin(h.th) - 2 * 0.22 * Math.sqrt(w2) * h.om - (Math.max(-500, Math.min(500, a)) / ELL) * Math.cos(h.th);
         h.om += acc * dt; h.th = Math.max(-0.35, Math.min(0.35, h.th + h.om * dt));
-        // (the one in front turned to face the viewer and drawn a little out from the rest; the others across the bar)
+        // (the one in front turned to face the viewer; the others across the bar. Each hangs from its hook, on the bar,
+        // the hook swivelling with it: hanger and hook share the one point they meet at)
         const p = Math.abs(i - s.scroll / SP), f = Math.max(0, 1 - p), w = f * f * (3 - 2 * f);
         h.yaw = Math.PI / 2 + (RAIL_AZ - Math.PI / 2) * w;
-        const at: V3 = [railX(k) + h.x, BAR_Y, RAIL_Z + 7 * w];
+        const at: V3 = [railX(k) + h.x, BAR_Y, RAIL_Z];
         swingAt(at, [0, HOOK, 0], h.th, h.model, h.yaw);
-        swingAt([at[0], at[1], RAIL_Z], [0, HOOK, 0], h.th, h.hook);
+        swingAt(at, [0, HOOK, 0], h.th, h.hook);
       });
     }
     // (settling, nearest the front of the rail being looked at first)

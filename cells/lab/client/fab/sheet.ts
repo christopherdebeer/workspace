@@ -122,7 +122,7 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print | null = m
     ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
     for (const [px2, py2, sx, sy] of [[bx, by, ax, ay], [ax, ay, bx, by]]) { const an = Math.atan2(py2 - sy, px2 - sx); ctx.moveTo(px2, py2); ctx.lineTo(px2 - Math.cos(an - 0.4) * 7, py2 - Math.sin(an - 0.4) * 7); ctx.moveTo(px2, py2); ctx.lineTo(px2 - Math.cos(an + 0.4) * 7, py2 - Math.sin(an + 0.4) * 7); }
     ctx.stroke();
-    if (!mini || p.kind === 'panel') {
+    if (!mini) {
       const [cx, cy] = to(p.kind === 'band' ? p.flat(0.5, 0.5) : p.flat(0.5, 0.2));
       ctx.font = `600 ${mini ? 9 : 12}px ui-rounded, system-ui, sans-serif`; ctx.textAlign = 'center';
       const tw = ctx.measureText(label(p)).width + 10;
