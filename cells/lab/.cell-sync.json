@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:2f5d50e3020d782df881c829efa29d1d913c4450101fb4b9e3919c387f0cbc08",
-  "syncedAt": "2026-10-16T13:44:28.556Z",
+  "treeVersion": "tree:d3e39d0e84b6c76388adc7046b1eed071b8caa386c61a37a9a7d5e4521455e1a",
+  "syncedAt": "2026-10-16T13:54:57.364Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -131,7 +131,7 @@
     "client/technic/pieces.ts": "sha256:2f5af9566fbbd19422ab1c94e171e4c1d35a96f34662085c29ae3c8d4efd0a61",
     "client/technic/sim.ts": "sha256:69dcc3339b6fffc7c7ee89667714ecfbe87077e02d67d1455b1d78d5e4fe15f4",
     "experiments.ts": "sha256:c046119a7d365f65c07f6374d9bc01faee683231b3b5a4e29bce54cbb0165010",
-    "index.ts": "sha256:fe895f26f433e46d7aa69a85008baf9acc67d55ed2a4422ab2d432a7f5d15616",
+    "index.ts": "sha256:ab6a93902d80b27d1bbf963fd813fd956ca79dc4a813d9b7db10490f29a67ca9",
     "md.ts": "sha256:789ba0fa8bc21f0206f2c2d7baf24c64613e6ea5606b8fb398bb24f49158b99e",
     "static/bricks.html": "sha256:cabb2ba7cf244bab7ff20aa2471b50897f073ddf2f609d4b2e8d8a0cff61787a",
     "static/bricks.md": "sha256:c14590220920b1f605b7104423224bf8f397acdcbc7a4b3c83fa65068583a933",
@@ -140,8 +140,8 @@
     "static/crystals.html": "sha256:c8617c9cfbe9936c49205b007dda1786dcda3ecd5db96694b31ea3cb51ac6045",
     "static/crystals.md": "sha256:8e65118b75dbc04959d15e5830ced15357e10bf6b4a361380630ff5fd0cb8a36",
     "static/fab.html": "sha256:6de4e3deac8fa5892ad786e36687efcb6de772fc0a1d66f862f25b52eb0b3c1c",
-    "static/fab.md": "sha256:c7b943d421961ecf22fe5ed3c2c2d2d585d0f41e141cef880491f3997426dc98",
-    "static/fab/v-cloth.jpg": "sha256:ea0dba476df2c7edeb88a4447b0516caf954a3d7b59fd33ecaeaa6a98382e95c",
+    "static/fab.md": "sha256:cb3d20dc051c2f99a96a2f3d8434df046463ba6e909dbfa623b6fc202229f718",
+    "static/fab/v-cloth.jpg": "sha256:47f728a9e48ca1302865d41017127c93b7e4a3d78c0145041addbc136cff31d1",
     "static/fab/v-figure-turned.jpg": "sha256:206d9de3a1fded43dd6cfd73e35b3fb81d237303d0b59ce6aec7b8e04410985c",
     "static/fab/v-figure.jpg": "sha256:d892e218e015ebb7505905389c35f2018374726930b3022e43f88f897492582b",
     "static/fab/v-fold-made.jpg": "sha256:ea89fbcfbbb35703df133125a3ab354c2fd5ef9845239ffd2b62f13e49db84bb",
@@ -160,6 +160,8 @@
     "static/fab/v-slash.jpg": "sha256:6f3305a12533a01a064d5ad6e761ee5fb833d7c2a384e67099a897a022b2dcb8",
     "static/fab/v-table-up.jpg": "sha256:d8be72b4b58c4c4fcd8f33d8de7abccf979fb7a016aba3d227fb847201bc854b",
     "static/fab/v-table.jpg": "sha256:f21c2fe7284960d0d1bb7d5bd2dfd51417bc47164b2b7e4c2661810c75adb9a3",
+    "static/fab/views.json": "sha256:1b2a28660c68d06fda0a50fd1f89133d92a74f9fe9ec7b639ab8505046c1ff1c",
+    "static/fab/views.md": "sha256:eec658018c7840a276a5607db2ae5004471c89cabb48e4880f860702e8623cdc",
     "static/field.html": "sha256:9041137e973648eb6f6e8b6a171cb2c742f9da0b163ada849d210f8dfba28193",
     "static/field.md": "sha256:e5078b5c64b957806a1cb310b17ebdd5e013ae4fe202bd165e1548f2c7865187",
     "static/fungi.html": "sha256:8e39e5d920614154f35bf965807e178d39162c651dabc0d3dc3e2627c57f3d07",
@@ -261,6 +263,6 @@
     "static/technic.html": "sha256:7e2c7613c8c296a757627d79f85d235708645b4871ea524134c3c13b050d53f5",
     "static/technic.md": "sha256:84a77ce3985d89ae04724584251e7766e469374920c0a862c7793f9bcc30b582",
     "tsconfig.json": "sha256:aa5d5858c9ae1e731fcb88d91b3a59c88e2ef4b249b3e5802baf7c9fae241a30",
-    "views.mjs": "sha256:5013d25516836dab2bfabd831c053c21d3cba6b856dded1f18797fdc73b3d70a"
+    "views.mjs": "sha256:e09da547447212374099e7b00e5441dd57ac43e48c09b2227a2a305b346546cb"
   }
 }
