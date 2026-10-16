@@ -21,7 +21,8 @@ import { RAIL_COLOURS, designOf, lookOf, rails, type Garment, type Rail } from '
 
 type V3 = [number, number, number];
 /** where the rails stand: in a row along the wall, left of the bench */
-export const railX = (k: number) => -270 - k * 240;
+/** (205 cm apart, a rail being 170 across: the workshop's four and four people's fit before the room's far wall) */
+export const railX = (k: number) => -270 - k * 205;
 export const RAIL_Z = -20;
 /** the rail's seen from this far round (radians): along it, at an angle */
 export const RAIL_AZ = 0.92;

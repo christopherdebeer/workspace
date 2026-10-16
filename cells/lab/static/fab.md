@@ -459,6 +459,32 @@ The rails live in this browser (localStorage), so a rail is a person on this dev
 classroom's. Nothing leaves the device. Sharing rails between devices would need storage behind the cell, which this
 static lab cell doesn't have.
 
+## The room
+
+The workshop is one room, closed on all four sides. Each wall faces in and is drawn only from inside, so wherever
+the view goes, even out past a wall, nothing stands between it and what's in the room.
+
+**The light comes in through windows.** Tall frosted windows in painted frames, with sills, are set in the back wall
+(behind the rails, the figure and the cutting table) and the right wall. They glow with the daylight through them.
+The key light, the one that casts shadows, comes from windows behind the viewer, high and to the left. It falls as
+those windows' shape, panes and glazing bars and all, with the wall's shade between them. So there are patches of
+window light across the floor, the rug, the figure and the paper. (`windowLight` in `render.ts`: the key light's
+shadow map times the windows' pattern, laid out across the light's own direction, a window centred on the figure.) The
+walls and windows cast no shadow of their own, so the light comes in where the windows are.
+
+**A little furniture, for context:**
+
+- a round wool rug under the figure's stand;
+- a stool beside it, three splayed legs and a ring;
+- a plant in a terracotta pot by the window;
+- a shelf of cloth on the bolt, behind the cutting table.
+
+The furniture casts shadows and catches the light like everything else.
+
+![from above](fab/v-room-plan.jpg)
+![the room](fab/v-room-wide.jpg)
+![along the rails](fab/v-room-along.jpg)
+
 ## Three places in one room
 
 The workshop is one room, and the camera walks between three places in it. They're the three buttons along the top
@@ -580,8 +606,7 @@ pulls. A touch anywhere else (empty paper, the tabletop, the room) moves the eye
 It goes further than over the piece both ways: down close to the paper (to a third of the distance), and back past
 the figure to see the room round it.
 
-**The room's wall is one-sided.** Seen from behind it isn't there, so wherever the view goes round to, nothing stands
-between it and the room.
+**The room's walls are one-sided** (see The room).
 
 Looking past halfway, the paper is just part of the view, and a touch on it moves the eye too. Come back down to cut.
 
