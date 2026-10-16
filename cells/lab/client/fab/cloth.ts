@@ -126,6 +126,8 @@ export class Cloth {
       const [a, bb, c] = [tris[t], tris[t + 1], tris[t + 2]], A = Math.abs(cross2(sub(F[bb], F[a]), sub(F[c], F[a]))) / 2;
       triA.push(A); area[a] += A / 3; area[bb] += A / 3; area[c] += A / 3;
       // (cotangent weights, for bending: each corner's cot to the edge across from it)
+      // (a sliver of a triangle has no bending to speak of: its cotangents would be enormous)
+      if (A < 0.02) continue;
       for (const [p, q, r] of [[a, bb, c], [bb, c, a], [c, a, bb]]) {
         const e1 = sub(F[q], F[p]), e2 = sub(F[r], F[p]), ct = dot2(e1, e2) / Math.max(1e-9, Math.abs(cross2(e1, e2)));
         const key = q < r ? q * n + r : r * n + q;
@@ -133,7 +135,7 @@ export class Cloth {
       }
     }
     this.inv = new Float32Array(n);
-    for (let i = 0; i < n; i++) this.inv[i] = 1 / Math.max(1e-6, area[i] * ph.rho);
+    for (let i = 0; i < n; i++) this.inv[i] = 1 / (Math.max(area[i], 0.25) * ph.rho);
 
     // (springs, along every edge, by the cloth's stiffness in its direction)
     const la: number[] = [], lb: number[] = [], lr: number[] = [], lc: number[] = [], seen = new Set<number>(), edgeA = new Map<number, number>();
@@ -148,6 +150,9 @@ export class Cloth {
       // (the angle to the warp: the warp runs down the piece's centre line, turned by its grain)
       const phi = Math.atan2(d[0], -d[1]) - gr;
       const E = b.fabric.grain ? stiffAt(ph.E1, ph.E2, ph.G, phi) : stiffAt(ph.E1, ph.E1, ph.G, phi);
+      // (an edge with no length (a dart's legs below its point, a hinge) is held by its seam, not a spring)
+      // (nor does an edge with no cloth either side of it)
+      if (l < 0.05 || edgeA.get(key)! < 1e-3) continue;
       const k = (E * edgeA.get(key)!) / (l * l);
       la.push(p); lb.push(q); lr.push(l); lc.push(1 / k);
     }
@@ -398,10 +403,13 @@ export class Cloth {
     const q = (f: number) => e[Math.min(e.length - 1, Math.floor(e.length * f))] ?? 0;
     let collapsed = 0;
     const { pos, flat, tris } = this;
+    // (a triangle across two points sewn to each other (a dart's legs, a pleat's fold) is meant to close up)
+    const sewn = new Set<number>(); for (let c = 0; c < this.sa.length; c++) { sewn.add(this.sa[c] * this.n + this.sb[c]); sewn.add(this.sb[c] * this.n + this.sa[c]); }
     for (let t = 0; t < tris.length; t += 3) {
       const a = tris[t], b = tris[t + 1], c = tris[t + 2];
       // (a triangle with two held corners is held to its shape (a pleat's fold held to one point of the band is meant to be flat))
       if ((this.inv[a] === 0 ? 1 : 0) + (this.inv[b] === 0 ? 1 : 0) + (this.inv[c] === 0 ? 1 : 0) >= 2) continue;
+      if (sewn.has(a * this.n + b) || sewn.has(b * this.n + c) || sewn.has(c * this.n + a)) continue;
       const fa = Math.abs((flat[b * 2] - flat[a * 2]) * (flat[c * 2 + 1] - flat[a * 2 + 1]) - (flat[b * 2 + 1] - flat[a * 2 + 1]) * (flat[c * 2] - flat[a * 2])) / 2;
       const ux = pos[b * 3] - pos[a * 3], uy = pos[b * 3 + 1] - pos[a * 3 + 1], uz = pos[b * 3 + 2] - pos[a * 3 + 2], vx = pos[c * 3] - pos[a * 3], vy = pos[c * 3 + 1] - pos[a * 3 + 1], vz = pos[c * 3 + 2] - pos[a * 3 + 2];
       const A = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;

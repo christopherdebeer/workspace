@@ -7,6 +7,7 @@
  * `mini`: the little card on the bench, pieces only.
  */
 import { makePrint, type Print } from './fabric';
+import { ribAt } from './cut';
 import type { Piece, Skirt } from './pattern';
 
 function outline(p: Piece): Array<[number, number]> {
@@ -82,21 +83,34 @@ export function drawSheet(cv: HTMLCanvasElement, sk: Skirt, pr: Print = makePrin
     ctx.strokeStyle = '#3b2f24'; ctx.lineWidth = mini ? 1.2 : 1.8; ctx.stroke(path);
     ctx.clip(path); ctx.setLineDash([4, 3]); ctx.strokeStyle = 'rgba(40,30,20,.5)'; ctx.lineWidth = Math.max(1, 1.6 * sc); ctx.stroke(path);
     ctx.restore();
-    // (darts: two legs to a point; pleats: the fold line and where it's laid to, stitched a little way down, and an
-    // arrow the way it folds)
+    // (the marks of how it was made, from the panel's strips: darts, two legs to a point; pleats, the fold and where it's
+    // laid, stitched a little way, an arrow the way it folds; a slash spread open, its two edges dashed and the wedge
+    // between shaded; gathers, a running stitch along the waist)
     if (p.kind === 'panel') {
-      ctx.strokeStyle = '#b8323f'; ctx.fillStyle = '#b8323f'; ctx.lineWidth = mini ? 1 : 1.6; ctx.setLineDash([]);
-      for (const mk of sk.marks) {
-        const v = Math.min(1, mk.down / sk.m.length), a0 = to(p.flat(mk.c / p.nu, 0)), b0 = to(p.flat((mk.c + mk.k) / p.nu, 0));
-        ctx.beginPath();
-        if (mk.kind === 'dart') { const tip = to(p.flat((mk.c + mk.k / 2) / p.nu, v)); ctx.moveTo(...a0); ctx.lineTo(...tip); ctx.lineTo(...b0); }
-        else {
-          const a1 = to(p.flat(mk.c / p.nu, v)), b1 = to(p.flat((mk.c + mk.k) / p.nu, v));
-          ctx.moveTo(...a0); ctx.lineTo(...a1); ctx.moveTo(...b0); ctx.lineTo(...b1);
-          if (!mini) { const y = a0[1] + (a1[1] - a0[1]) * 0.45; ctx.moveTo(b0[0] - 1, y); ctx.lineTo(a0[0] + 2, y); ctx.moveTo(a0[0] + 6, y - 3); ctx.lineTo(a0[0] + 2, y); ctx.lineTo(a0[0] + 6, y + 3); }
+      const P = sk.cut, R = (k: number, s: number) => to(ribAt(P.ribs[k], s));
+      ctx.lineWidth = mini ? 1 : 1.6;
+      P.strips.forEach((st, k) => {
+        ctx.setLineDash([]); ctx.strokeStyle = '#b8323f'; ctx.fillStyle = 'rgba(184,50,63,.12)';
+        const L = sk.m.length, top = (q: number) => to(P.ribs[q].top), knee = (q: number) => to(P.ribs[q].knee);
+        if (st.kind === 'dart') { ctx.beginPath(); ctx.moveTo(...top(k)); ctx.lineTo(...knee(k)); ctx.lineTo(...top(k + 1)); ctx.stroke(); }
+        if (st.kind === 'pleat') {
+          const s1 = Math.min(1, (st.stitch ?? 0) / L);
+          ctx.beginPath(); ctx.moveTo(...R(k, 0)); ctx.lineTo(...R(k, s1)); ctx.moveTo(...R(k + 1, 0)); ctx.lineTo(...R(k + 1, s1)); ctx.stroke();
+          if (!mini) { const a = R(k, s1 * 0.45), b = R(k + 1, s1 * 0.45); ctx.beginPath(); ctx.moveTo(b[0] - 1, b[1]); ctx.lineTo(a[0] + 2, a[1]); ctx.moveTo(a[0] + 6, a[1] - 3); ctx.lineTo(a[0] + 2, a[1]); ctx.lineTo(a[0] + 6, a[1] + 3); ctx.stroke(); }
         }
-        ctx.stroke();
-      }
+        if (st.kind === 'wedge') {
+          const path = new Path2D(); for (let i = 0; i <= 8; i++) path.lineTo(...R(k, i / 8)); for (let i = 8; i >= 0; i--) path.lineTo(...R(k + 1, i / 8)); path.closePath();
+          ctx.fill(path); ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(184,50,63,.7)';
+          ctx.beginPath(); for (let i = 0; i <= 8; i++) ctx.lineTo(...R(k, i / 8)); ctx.stroke();
+          ctx.beginPath(); for (let i = 0; i <= 8; i++) ctx.lineTo(...R(k + 1, i / 8)); ctx.stroke();
+        }
+        if (st.kind === 'ease') {
+          ctx.setLineDash([2, 3]); ctx.beginPath();
+          const a = R(k, 0.02), b = R(k + 1, 0.02); ctx.moveTo(a[0], a[1] + 3); ctx.lineTo(b[0], b[1] + 3); ctx.stroke();
+          ctx.fillStyle = 'rgba(184,50,63,.08)'; const path = new Path2D(); for (let i = 0; i <= 8; i++) path.lineTo(...R(k, i / 8)); for (let i = 8; i >= 0; i--) path.lineTo(...R(k + 1, i / 8)); path.closePath(); ctx.fill(path);
+        }
+      });
+      ctx.setLineDash([]);
     }
     // (the grain line: a long arrow along the threads)
     const c0 = p.kind === 'band' ? p.flat(0.5, 0.5) : p.flat(0.5, 0.55), g = p.grain, len = Math.min(b.h, b.w) * 0.32 + 2;
