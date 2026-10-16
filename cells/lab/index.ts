@@ -51,6 +51,7 @@ function build(): Built {
   objects.set(appPath, { body: app, type: 'application/javascript; charset=utf-8' });
   const pageOf = new Map<string, string>();
   const readmeOf = new Map<string, string>();
+  const assetsOf = new Map<string, string>();
   const TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', woff2: 'font/woff2', json: 'application/json' };
   for (const e of EXPERIMENTS) {
     // (the experiment's assets, if it has a folder of them: one hash for the set)
@@ -61,6 +62,7 @@ function build(): Built {
       assets = `/~/a/${e.id}/${hash(Buffer.concat(files.map(([, b]) => b)))}/`;
       for (const [f, b] of files) objects.set(assets + f, { body: b, type: TYPES[f.split('.').pop()!] });
     }
+    assetsOf.set(e.id, assets);
     // (its address shown as the stable `/<id>?…`, not the hashed path it was served from: a reload
     // then asks for the experiment as it is now, not this deploy's copy forever)
     const stable = `<script>history.replaceState(null, '', '/${e.id}' + location.search + location.hash)</script>`;
@@ -77,7 +79,7 @@ function build(): Built {
   }
   for (const e of EXPERIMENTS) {
     if (!existsSync(here(e.readme))) continue;
-    const doc = html(readmePage(e, readFileSync(here(e.readme), 'utf8'), pageOf.get(e.id)!));
+    const doc = html(readmePage(e, readFileSync(here(e.readme), 'utf8'), pageOf.get(e.id)!, assetsOf.get(e.id) ?? ''));
     const p = `/~/r/${e.id}/${hash(doc)}/`;
     objects.set(p, { body: doc, type: 'text/html; charset=utf-8' });
     readmeOf.set(e.id, p);
@@ -176,8 +178,9 @@ ${body}
 </html>`;
 }
 
-function readmePage(e: Experiment, src: string, page: string): string {
-  const doc = markdown(src);
+function readmePage(e: Experiment, src: string, page: string, assets: string): string {
+  // (its pictures are relative to it, `<id>/…` as in the repo: here, its deployed assets)
+  const doc = markdown(src, { resolve: (p) => (assets && p.startsWith(`${e.id}/`) ? assets + p.slice(e.id.length + 1) : p) });
   const toc = doc.headings.filter((h) => h.level === 2).map((h) => `<a href="#${h.id}">${esc(h.text.replace(/`/g, ''))}</a>`).join('');
   return `${HEAD(`${doc.title || e.title} — readme`)}
 <style>
@@ -197,6 +200,11 @@ function readmePage(e: Experiment, src: string, page: string): string {
   table { border-collapse: collapse; margin: 10px 0; display: block; overflow-x: auto; }
   th, td { border: 1px solid var(--rule); padding: 3px 8px; text-align: left; vertical-align: top; }
   hr { border: 0; border-top: 1px dashed var(--soft); margin: 24px 0; }
+  img { max-width: 100%; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin: 12px 0; }
+  .gallery figure { margin: 0; }
+  .gallery img { width: 100%; display: block; border: 1px solid var(--rule); }
+  .gallery figcaption { font-size: 11px; line-height: 1.35; margin-top: 4px; color: var(--soft); }
   nav.toc { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 10px 0 0; }
   nav.toc a { color: var(--soft); text-decoration: none; }
   nav.toc a:hover { color: var(--ink); }

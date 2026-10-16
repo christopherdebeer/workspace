@@ -9,6 +9,62 @@ The aim is for a child to find out that clothes are made, and can be reasoned ab
 This page sets out what Fab claims, how it's built, and the evidence for and against it. The evidence comes from the
 **evidence bench** (`?bench=evidence`), which runs the same tests in the page as it does headless.
 
+## In pictures
+
+Every picture here is made by driving the page as a child would, and they're all made again with one command:
+
+```
+node cells/lab/views.mjs fab            # all of them (or name some, or a group)
+node cells/lab/views.mjs fab --list     # what's registered
+```
+
+Each view is registered in `client/fab/views.mjs`. A view has a name, a group, a title and caption, the page's query,
+and the steps that drive it (pick up a tool, touch the hem, drag), taking the shot at the right moment, often with
+the finger still down. The pictures are `static/fab/v-<name>.jpg`. They're committed and deployed with the page, and
+the gallery below is rewritten between its markers each time. To use one in the prose, give its line on its own:
+`![caption](fab/v-slash-open.jpg)`.
+
+<!-- views -->
+
+#### The room
+
+![The rails: a rail per person; slide along, tap the front one to put it on](fab/v-rails.jpg)
+![The figure: cloth and print in the drawer; the pattern pinned up, bottom right](fab/v-figure.jpg)
+![Turned round: the cutting table behind it: tap it to go there](fab/v-figure-turned.jpg)
+![The cutting table: the pattern at true size, the figure across the room](fab/v-table.jpg)
+![Looking up from the table: drag (or pinch) off the piece to look up at the figure](fab/v-table-up.jpg)
+![The whole pattern: every piece, its grain, how much cloth, its checks](fab/v-sheet.jpg)
+
+#### The hand
+
+![The hand: the hem lit, its tab; the grain arrow's knob; a badge on the dart](fab/v-hand.jpg)
+![Dragging the hem: how long, by the finger](fab/v-hand-hem.jpg)
+![Turning the grain: the knob follows the finger, straight to bias](fab/v-hand-grain.jpg)
+![A dart, tapped: closed into flare: the badge goes rose](fab/v-hand-dart.jpg)
+
+#### Slash
+
+![Scissors in hand: the hem lit: where a slash starts](fab/v-slash.jpg)
+![Touched: a ghost of the cut, hem to waist, before it opens](fab/v-slash-touch.jpg)
+![Spread open: the wedge of new cloth, how much by the finger](fab/v-slash-open.jpg)
+![Slashed: its hinge ringed, an arrow across the opening; the figure flares](fab/v-slash-made.jpg)
+
+#### Fold
+
+![Folding a pleat: the waist lit; how much is folded in, by the finger](fab/v-fold.jpg)
+![A pleat: fold line, where it's laid, the way it folds, stitched down to a bar](fab/v-fold-made.jpg)
+
+#### Gather
+
+![Gathering: width added at the waist, by the finger](fab/v-gather.jpg)
+![Gathered: notched either side, a running stitch, drawn in](fab/v-gather-made.jpg)
+
+#### Cloth
+
+![The cloth on the paper: off by default; laid on along the grain, as it'll be cut](fab/v-cloth.jpg)
+
+<!-- /views -->
+
 ## One garment family, deep
 
 The first Fab tried to dress the figure in a skirt, a top and a cape, each with the same six dials. The skirt worked.
