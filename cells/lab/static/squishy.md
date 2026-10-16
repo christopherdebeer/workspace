@@ -701,6 +701,15 @@ fast-forwarded: `?fast=N` plays N whole steps of the game (the dumpling, the cam
 small and plain, with a rougher bake and shadow; so what takes a player ten seconds takes the test ten frames. Each
 check prints when it was made, so a slow one shows.
 
+### The code
+
+`client/squishy/`. Pure and tested on their own: the dumpling (`body.ts`), the course and its generator (`level.ts`,
+`course.ts`, `supports.ts`, `room.ts`, `kitchen.ts`), the jellies (`jelly.ts`), the meshes (`mesh.ts`, `honey.ts`,
+`honeyfield.ts`). The page: `main.ts` is the game (its state, the levels and the title, the aim and the flick, the
+camera, the hands, each frame drawn); beside it the GLSL (`shaders.ts`), the context, programs and meshes on the card
+(`gpu.ts`), the targets it's drawn into and the finish (`post.ts`), the bake drawn (`bakegl.ts`), quality by frame
+time (`quality.ts`), the sounds (`sound.ts`), small maths (`vmath.ts`) and the page's switches (`env.ts`).
+
 ### Probes
 
 The lab's server-side probes are deterministic trials on Squishy's own generator and physics, answered as
