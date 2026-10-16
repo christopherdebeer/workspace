@@ -8,7 +8,7 @@
  * at a bias seam. Fabric changes the light: silk's sheen, wool's soft fuzz at a glance, a weave you can just see,
  * tulle you can see through. Every piece is stitched near its edges.
  */
-import { BALLS, HEAD, LIMBS, TORSO_FOOT, TORSO_TOP, section, type V3 } from './body';
+import { BALLS, HEAD, LIMBS, PELVIS, TORSO_FOOT, TORSO_TOP, section, type V3 } from './body';
 import type { Cloth } from './cloth';
 import type { Fabric, Print } from './fabric';
 
@@ -39,12 +39,17 @@ vec3 finish(vec3 c) { c = c / (1. + c * .35); return pow(clamp(c, 0., 1.), vec3(
 
 const SOLID_VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in float aMat;
-uniform mat4 uVP;
-out vec3 vPos; out vec3 vNor; flat out int vMat;
-void main() { vPos = aPos; vNor = aNor; vMat = int(aMat + .5); gl_Position = uVP * vec4(aPos, 1.); }`;
+uniform mat4 uVP; uniform float uSpin;
+out vec3 vPos; out vec3 vNor; out vec3 vObj; flat out int vMat;
+// (the figure and its stand turn; the bench and wall don't)
+vec3 turn(vec3 p, float a) { float c = cos(a), s = sin(a); return vec3(p.x * c + p.z * s, p.y, -p.x * s + p.z * c); }
+void main() {
+  float a = aMat < 1.5 ? uSpin : 0.;
+  vObj = aPos; vPos = turn(aPos, a); vNor = turn(aNor, a); vMat = int(aMat + .5); gl_Position = uVP * vec4(vPos, 1.);
+}`;
 const SOLID_FS = `#version 300 es
 precision highp float;
-in vec3 vPos; in vec3 vNor; flat in int vMat;
+in vec3 vPos; in vec3 vNor; in vec3 vObj; flat in int vMat;
 uniform vec3 uEye;
 out vec4 o;
 ${COMMON}
@@ -53,13 +58,13 @@ void main() {
   vec3 base; float spec = .0, rough = 40.;
   if (vMat == 0) {
     // (the figure: beech, varnished; its grain running along it, a turned piece's rings)
-    float g = noise(vec3(vPos.x * .9, vPos.y * .06, vPos.z * .9)) * .6 + noise(vPos * vec3(2.2, .25, 2.2)) * .4;
-    float ring = .5 + .5 * sin(length(vPos.xz) * 2.4 + g * 6.);
+    float g = noise(vec3(vObj.x * .9, vObj.y * .06, vObj.z * .9)) * .6 + noise(vObj * vec3(2.2, .25, 2.2)) * .4;
+    float ring = .5 + .5 * sin(length(vObj.xz) * 2.4 + g * 6.);
     base = mix(vec3(.80, .60, .40), vec3(.70, .49, .30), ring * .5 + g * .3);
     spec = .35; rough = 60.;
   } else if (vMat == 1) {
     // (the stand: the same wood, darker, turned)
-    float ring = .5 + .5 * sin(length(vPos.xz) * 3. + noise(vPos * .5) * 4.);
+    float ring = .5 + .5 * sin(length(vObj.xz) * 3. + noise(vObj * .5) * 4.);
     base = mix(vec3(.52, .34, .2), vec3(.42, .26, .15), ring); spec = .4; rough = 50.;
   } else if (vMat == 2) {
     // (the workbench: oak boards, worn)
@@ -134,8 +139,11 @@ void main() {
 }`;
 
 const SHADOW_VS = `#version 300 es
-in vec3 aPos; uniform mat4 uLightVP;
-void main() { gl_Position = uLightVP * vec4(aPos, 1.); }`;
+in vec3 aPos; in float aMat; uniform mat4 uLightVP; uniform float uSpin;
+void main() {
+  float a = aMat < 1.5 ? uSpin : 0., c = cos(a), s = sin(a);
+  gl_Position = uLightVP * vec4(aPos.x * c + aPos.z * s, aPos.y, -aPos.x * s + aPos.z * c, 1.);
+}`;
 const SHADOW_FS = `#version 300 es
 precision highp float; out vec4 o; void main() { o = vec4(1.); }`;
 
@@ -177,7 +185,7 @@ function solidMesh(): number[] {
   for (const c of LIMBS) { tube(c.a, c.b, c.ra, c.rb, 0); ball(c.a, c.ra, 0); ball(c.b, c.rb, 0); }
   for (const b of BALLS) ball(b.c, b.r, 0);
   ball(HEAD.c, HEAD.r, 0);
-  ball([0, 52, -0.3], 11.4, 0);
+  ball(PELVIS.c, PELVIS.r, 0);
   // (the stand: a turned disc, a little rounded at its edge, and the post up into the figure)
   const disc = (y0: number, y1: number, r0: number, r1: number, m: number) => {
     for (let k = 0; k < 48; k++) {
@@ -196,6 +204,7 @@ function solidMesh(): number[] {
 
 export interface View { az: number; el: number; dist: number; target: V3 }
 export interface Look { fabric: Fabric; print: Print }
+const SEE = (f: Fabric) => f.clear;
 
 export function createRenderer(gl: WebGL2RenderingContext) {
   const compile = (vs: string, fs: string) => {
@@ -221,7 +230,7 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     for (const [name, size, stride, off] of attrs) { const l = gl.getAttribLocation(p, name); if (l < 0) continue; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4); }
     return v;
   };
-  const sVao = vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], sBuf), sShadow = vao(shadow, [['aPos', 3, 7, 0]], sBuf), sCount = sv.length / 7;
+  const sVao = vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], sBuf), sShadow = vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], sBuf), sCount = sv.length / 7;
 
   // (the shadow map)
   const SH = 2048, shTex = gl.createTexture()!, shFb = gl.createFramebuffer()!;
@@ -257,7 +266,7 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     gl.bindVertexArray(null);
   }
 
-  function frame(view: View, looks: Look[], w: number, h: number) {
+  function frame(view: View, look: Look | null, w: number, h: number, spin = 0) {
     if (c && cDyn) {
       for (let i = 0; i < c.n; i++) { dyn[i * 6] = c.pos[i * 3]; dyn[i * 6 + 1] = c.pos[i * 3 + 1]; dyn[i * 6 + 2] = c.pos[i * 3 + 2]; dyn[i * 6 + 3] = c.nor[i * 3]; dyn[i * 6 + 4] = c.nor[i * 3 + 1]; dyn[i * 6 + 5] = c.nor[i * 3 + 2]; }
       gl.bindBuffer(gl.ARRAY_BUFFER, cDyn); gl.bufferSubData(gl.ARRAY_BUFFER, 0, dyn);
@@ -265,8 +274,10 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     // (the shadow pass)
     gl.bindFramebuffer(gl.FRAMEBUFFER, shFb); gl.viewport(0, 0, SH, SH);
     gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.disable(gl.CULL_FACE);
-    gl.useProgram(shadow); gl.uniformMatrix4fv(u(shadow, 'uLightVP'), false, lightVP);
+    gl.useProgram(shadow); gl.uniformMatrix4fv(u(shadow, 'uLightVP'), false, lightVP); gl.uniform1f(u(shadow, 'uSpin'), spin);
     gl.bindVertexArray(sShadow); gl.drawArrays(gl.TRIANGLES, 0, sCount);
+    // (the cloth's already where it is: its aMat reads 0, so it's not turned again)
+    gl.uniform1f(u(shadow, 'uSpin'), 0);
     if (c && cShVao) { gl.bindVertexArray(cShVao); gl.drawElements(gl.TRIANGLES, c.tris.length, gl.UNSIGNED_INT, 0); }
     // (the view)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
@@ -279,21 +290,16 @@ export function createRenderer(gl: WebGL2RenderingContext) {
       gl.uniformMatrix4fv(u(p, 'uVP'), false, vp); gl.uniformMatrix4fv(u(p, 'uLightVP'), false, lightVP);
       gl.uniform3fv(u(p, 'uKey'), key); gl.uniform3fv(u(p, 'uKeyCol'), keyCol); gl.uniform3fv(u(p, 'uEye'), eye); gl.uniform1i(u(p, 'uShadow'), 0);
     }
-    gl.useProgram(solid); gl.bindVertexArray(sVao); gl.drawArrays(gl.TRIANGLES, 0, sCount);
-    if (c && cVao) {
+    gl.useProgram(solid); gl.uniform1f(u(solid, 'uSpin'), spin); gl.bindVertexArray(sVao); gl.drawArrays(gl.TRIANGLES, 0, sCount);
+    if (c && cVao && look) {
       gl.useProgram(cloth); gl.bindVertexArray(cVao);
-      // (opaque cloth first; see-through after, blended, in the order it's worn)
-      const order = c.parts.map((p, k) => ({ p, k })).sort((a, b) => (looks[a.k]?.fabric.clear ?? 0) - (looks[b.k]?.fabric.clear ?? 0));
-      for (const { p, k } of order) {
-        const lk = looks[k]; if (!lk) continue;
-        const f = lk.fabric, pr = lk.print, see = f.clear > 0.05;
-        if (see) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
-        gl.uniform3fv(u(cloth, 'uInk0'), pr.ink[0]); gl.uniform3fv(u(cloth, 'uInk1'), pr.ink[1]); gl.uniform3fv(u(cloth, 'uInk2'), pr.ink[2]);
-        gl.uniform1f(u(cloth, 'uKind'), pr.kind); gl.uniform1f(u(cloth, 'uScale'), pr.scale);
-        gl.uniform1f(u(cloth, 'uSheen'), f.sheen); gl.uniform1f(u(cloth, 'uFuzz'), f.fuzz); gl.uniform1f(u(cloth, 'uClear'), f.clear); gl.uniform1f(u(cloth, 'uWeave'), f.weave);
-        gl.drawElements(gl.TRIANGLES, p.tn, gl.UNSIGNED_INT, p.t0 * 4);
-        if (see) { gl.disable(gl.BLEND); gl.depthMask(true); }
-      }
+      const f = look.fabric, pr = look.print, see = SEE(f) > 0.05;
+      if (see) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
+      gl.uniform3fv(u(cloth, 'uInk0'), pr.ink[0]); gl.uniform3fv(u(cloth, 'uInk1'), pr.ink[1]); gl.uniform3fv(u(cloth, 'uInk2'), pr.ink[2]);
+      gl.uniform1f(u(cloth, 'uKind'), pr.kind); gl.uniform1f(u(cloth, 'uScale'), pr.scale);
+      gl.uniform1f(u(cloth, 'uSheen'), f.sheen); gl.uniform1f(u(cloth, 'uFuzz'), f.fuzz); gl.uniform1f(u(cloth, 'uClear'), f.clear); gl.uniform1f(u(cloth, 'uWeave'), f.weave);
+      gl.drawElements(gl.TRIANGLES, c.tris.length, gl.UNSIGNED_INT, 0);
+      if (see) { gl.disable(gl.BLEND); gl.depthMask(true); }
     }
     gl.bindVertexArray(null);
   }

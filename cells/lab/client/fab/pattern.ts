@@ -1,201 +1,291 @@
 /**
- * Pattern making: from a slot's six dials, the pieces of a garment as they'd be cut from cloth (flat, in
- * centimetres, drafted to the mannequin's own measurements), where each is laid round the figure to be sewn, which
- * edges are sewn to which, and what's held (a waistband, a neckband).
+ * Pattern making, for one family of garment: the skirt. A skirt's the simplest thing that's truly made: flat pieces,
+ * cut, joined round a body and hung from one line (the waist); and nearly every move a dressmaker has shows in it.
  *
- * The dials, the same six for every slot, and how they meet in the cut:
- * - shape: how long (a skirt's length, a top's, a cape's);
- * - silhouette: how it stands away (a skirt's flare, pencil to full circle; a top's ease, fitted to trapeze; a cape's
- *   sweep, half a circle to a whole one);
- * - drape: how much more cloth than the body needs, gathered in (at a waist, a sleeve's head, a neck);
- * - pieces: how it's divided (a skirt's gores, a top's sleeves, a cape's panels): more seams, more shaping;
- * - fabric: what it's cut from (tulle, silk, cotton, wool, felt), which sets how it falls;
- * - print: what's on the cloth, laid on the flat pieces, so it meets itself at seams as a real print would.
+ * The grammar. A skirt is a waistband and n panels round it, side by side, each joined to the next along a side seam.
+ * The design's intentions:
+ * - length (cm, down from the waist);
+ * - fullness: how much wider the hem is than the hips (1: no wider; 3: three times round);
+ * - where that fullness comes from (the method): cut into the panels' shape as flare (each panel a sector, its hem
+ *   longer than its top), or cut as straight width and taken in at the waist, gathered (eased in evenly) or pleated
+ *   (folded, stitched down a little way);
+ * - how many panels, and where on the cloth's grain they're cut (straight, or toward the bias);
+ * - which cloth, and what's printed on it.
  *
- * Each piece is a grid (u across, v down) over a flat shape; the grid's spacing is about the cloth's resolution.
+ * What follows, as it does on a cutting table:
+ * - the waist is smaller than the hips, so something must take the difference in: a flare wide enough already does;
+ *   else each side seam curves in a little (no more than a seam can: 2 cm); what's left is taken in by darts, as many
+ *   as needed, none deeper than 3 cm (fewer panels, so fewer seams: more darts);
+ * - each panel must fit across the cloth's width (140 cm) along its grain; one that doesn't is cut in more panels;
+ * - a circle can't be fuller than a circle: flare stops at a full circle.
+ * Silhouette, the folds, how it swings, are never set: they're what the simulated cloth does with the cut.
+ *
+ * Out of it: the pieces (each a grid over its flat shape, in centimetres, with its grain), which grid points are sewn
+ * to which (side seams, darts, pleats), where the waist edge is held along the band, notes on what the cut needed,
+ * and checks of the pattern itself (does every seam meet a seam its length; does the waist edge, darts and pleats
+ * closed, fit the band; does it clear the hips; does each piece fit on the cloth).
  */
-import { CHEST_Y, LIMBS, SHOULDER_Y, WAIST_Y, around, girth, onShoulder, type V3 } from './body';
+import { TORSO_FOOT, WAIST_Y, girth, section, type V3 } from './body';
+import type { Fabric } from './fabric';
 
-export interface Dials { shape: number; silhouette: number; drape: number; pieces: number; fabric: number; print: number }
-export type SlotId = 'skirt' | 'top' | 'cape';
-export const DIALS: Array<keyof Dials> = ['shape', 'silhouette', 'drape', 'pieces', 'fabric', 'print'];
-
-export interface Piece {
-  name: string;
-  /** grid points across (u) and down (v), less one */
-  nu: number; nv: number;
-  /** the flat pattern: centimetres, y down negative */
-  flat: (u: number, v: number) => [number, number];
-  /** where it's laid round the figure before it's sewn */
-  start: (u: number, v: number) => V3;
-  /** where it's held, if it is (a waistband's points) */
-  pin?: (u: number, v: number) => V3 | null;
+export type Method = 'flare' | 'gather' | 'pleat';
+export interface Design {
+  /** cm down from the waist */
+  length: number;
+  /** hem round ÷ hips round, 1 → 4 */
+  fullness: number;
+  method: Method;
+  panels: number;
+  /** degrees off the straight grain: 0 straight, 45 the true bias */
+  grain: number;
+  fabric: string; print: number; colour: number;
 }
-/** an edge of a piece: which side, and the stretch of it (0–1 along it), in the order it's walked */
-export interface Edge { piece: number; side: 'u0' | 'u1' | 'v0' | 'v1'; from: number; to: number }
-export interface Garment { slot: SlotId; pieces: Piece[]; seams: Array<[Edge, Edge]>; layer: number; label: string }
+export const DEFAULT_DESIGN: Design = { length: 34, fullness: 2.2, method: 'flare', panels: 4, grain: 0, fabric: 'lawn', print: 2, colour: 1 };
 
+/** a point of a piece's grid: piece, column, row */
+export type At = [number, number, number];
+export interface Piece {
+  name: string; kind: 'panel' | 'band';
+  /** grid points across and down, less one */
+  nu: number; nv: number;
+  /** the flat pattern, cm (x across, y up: down the skirt is negative) */
+  flat: (u: number, v: number) => [number, number];
+  /** the warp's direction on the piece: radians from its centre line (straight down) */
+  grain: number;
+  /** where it's laid out round the figure before it's sewn: on a surface it lies on without stretching */
+  start: (u: number, v: number) => V3;
+}
+export interface Pair { a: At; b: At; why: 'side seam' | 'dart' | 'pleat' }
+/** a point held on the waistband: `s` cm round it from the front, `y` its height */
+export interface Hold { at: At; s: number; y: number }
+export interface Check { name: string; ok: boolean; detail: string }
+export interface Skirt {
+  design: Design; pieces: Piece[]; pairs: Pair[]; holds: Hold[];
+  band: number; notes: string[]; checks: Check[];
+  m: { waist: number; hip: number; hem: number; length: number; panels: number; darts: number; pleats: number; flare: number; area: number };
+}
+
+/** wearing ease: how much bigger round than the body a skirt must be anywhere it's sewn closed (its own thickness off
+ * the body, and room to move) */
+export const BOLT = 140, SEAM_CURVE = 2, DART_MAX = 3, PLEAT_STITCH = 5, BAND_H = 2.5, EASE = 4;
 const TAU = Math.PI * 2;
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-/** how many grid steps for a length (about 2.2 cm each) */
-const steps = (len: number, min = 3) => Math.max(min, Math.round(len / 2.2));
+const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 
-// ─── a skirt: gores ────────────────────────────────────────────────────────────────────────────
-function skirt(d: Dials): Garment {
-  const n = 2 + Math.round(d.pieces * 8), gather = d.drape * 1.1, L = 16 + d.shape * 40, f = d.silhouette;
-  const Wc = girth(WAIST_Y) + 2.5, top = (Wc * (1 + gather)) / n;
-  // (flared toward a full circle: the hem as long as a circle's round the waist's own radius plus the length)
-  const hem = top + (f * TAU * L) / n, th = (hem - top) / L;
-  const flat = (u: number, v: number): [number, number] => {
-    if (th < 1e-3) return [(u - 0.5) * lerp(top, hem, v), -v * L];
-    const Ri = top / th, phi = (u - 0.5) * th, r = Ri + v * L;
-    return [r * Math.sin(phi), -(r * Math.cos(phi) - Ri)];
+/** the body's round at a depth below the waist (the widest it gets from there up is what a skirt must clear) */
+const roundAt = (y: number) => girth(WAIST_Y - y);
+const HIP_DEPTH = (() => { let best = 0, at = 0; for (let y = 0; y <= WAIST_Y - TORSO_FOOT; y += 0.5) { const g = roundAt(y); if (g > best) { best = g; at = y; } } return at; })();
+
+export function draft(d0: Design): Skirt {
+  const d: Design = { ...d0, length: clamp(d0.length, 10, 62), fullness: clamp(d0.fullness, 1, 4), panels: clamp(Math.round(d0.panels), 1, 12), grain: clamp(d0.grain, 0, 45) };
+  const notes: string[] = [];
+  const L = d.length, yh = Math.min(HIP_DEPTH, L - 2), waist = roundAt(0), band = waist + 1.5;
+  const hipNeed = Math.max(...Array.from({ length: Math.ceil(yh) + 1 }, (_, y) => roundAt(y))) + 4;
+  const g = (d.grain * Math.PI) / 180;
+
+  // (the cut: each panel's half-width at a depth, its flare, and what's taken in at the waist; with as many panels as
+  // it takes to fit each on the cloth)
+  const lay = (n: number) => {
+    let cut = cutPanels(d, n, L, yh, band, hipNeed);
+    const share = band / n;
+    // (the grid: about 2 cm, coarser for a big skirt so the cloth stays a size a phone can move)
+    let width = (y: number) => 2 * cut.hw(y);
+    const maxW = Math.max(width(0), width(L));
+    const area = n * Array.from({ length: 21 }, (_, k) => width((k / 20) * L)).reduce((s, w) => s + w, 0) * (L / 21);
+    const h = Math.max(1.9, Math.sqrt((n * maxW * L) / 1600));
+    const nv = Math.max(6, Math.round(L / h)), nu = Math.max(4, Math.round(maxW / h));
+    let du0 = width(0) / nu;
+    // (the folds at the waist, in grid columns: each dart or pleat closes k columns to a point. A fold's a whole
+    // number of columns, so the waist's re-cut to make what's left between the folds exactly the band: it must fit)
+    const k = cut.foldsPer > 0 ? Math.max(1, Math.round(cut.foldK / du0)) : 0, kept = nu - cut.foldsPer * k;
+    if (cut.foldsPer > 0) { cut = cutPanels(d, n, L, yh, band, hipNeed, (nu * share) / kept / 2); width = (y: number) => 2 * cut.hw(y); du0 = share / kept; }
+    return { cut, share, width, area, nu, nv, du0, k, kept };
   };
+  // (as many panels as it takes to fit each on the cloth)
+  let n = d.panels, lo = lay(n);
+  while (n < 12 && acrossGrain(lo.cut.hw, lo.cut.R0, L, g) > BOLT) lo = lay(++n);
+  if (n > d.panels) notes.push(`too wide for the cloth in ${d.panels}: cut in ${n} panels`);
+  const { cut, share, width, area, nu, nv, du0, k, kept } = lo, { foldsPer, hw, R0, theta, intake, dartLen } = cut;
+  const folds: number[] = [];
+  for (let p = 0; p < foldsPer; p++) folds.push(clamp(Math.round(((p + 0.5) / foldsPer) * nu - k / 2), 1, nu - k - 1));
+
+  const flat = (u: number, v: number): [number, number] => {
+    const y = v * L, r = R0 + y, phi = ((u - 0.5) * width(y)) / r;
+    return [r * Math.sin(phi), -(r * Math.cos(phi) - R0)];
+  };
+  // (laid out round the figure: a surface of revolution whose round at each depth is the panels' width there, and
+  // whose height falls by as much as the cloth's length down it allows: nothing's stretched to start with)
+  const rho = (y: number) => (n * width(y)) / TAU;
+  const drop: number[] = [0];
+  for (let j = 1; j <= nv; j++) { const y0 = ((j - 1) / nv) * L, y1 = (j / nv) * L, dr = rho(y1) - rho(y0); drop.push(drop[j - 1] + Math.sqrt(Math.max(0.15 * (y1 - y0) ** 2, (y1 - y0) ** 2 - dr * dr))); }
+  const dropAt = (v: number) => { const x = v * nv, j = Math.min(nv - 1, Math.floor(x)); return drop[j] + (drop[j + 1] - drop[j]) * (x - j); };
+
   const pieces: Piece[] = [];
-  for (let k = 0; k < n; k++) {
-    const ang = (u: number) => ((k + u) / n) * TAU;
+  const names = n === 1 ? ['skirt'] : n === 2 ? ['front', 'back'] : Array.from({ length: n }, (_, p) => `panel ${p + 1}`);
+  for (let p = 0; p < n; p++) {
     pieces.push({
-      name: n === 2 ? (k === 0 ? 'front' : 'back') : `gore ${k + 1}`,
-      nu: steps(hem), nv: steps(L, 4), flat,
-      start: (u, v) => around(WAIST_Y - v * L * 0.92, ang(u), 1.4 + f * v * L * 0.55),
-      pin: (u, v) => (v === 0 ? around(WAIST_Y, ang(u), 0.5) : null),
+      name: names[p], kind: 'panel', nu, nv, flat, grain: g,
+      start: (u, v) => { const a = (TAU * (p + u - 0.5)) / n, r = rho(v * L) + 0.8; return [Math.sin(a) * r, WAIST_Y - dropAt(v), Math.cos(a) * r]; },
     });
   }
-  const seams: Array<[Edge, Edge]> = [];
-  for (let k = 0; k < n; k++) seams.push([{ piece: k, side: 'u1', from: 0, to: 1 }, { piece: (k + 1) % n, side: 'u0', from: 0, to: 1 }]);
-  return { slot: 'skirt', pieces, seams, layer: 0, label: `${n} ${n === 2 ? 'pieces' : 'gores'}` };
-}
+  // (the waistband: a straight strip on the straight grain, held round the waist, the panels sewn to it)
+  const bu = Math.max(8, Math.round(band / 1.5));
+  pieces.push({
+    name: 'waistband', kind: 'band', nu: bu, nv: 1, flat: (u, v) => [(u - 0.5) * band, BAND_H * (1 - v)], grain: Math.PI / 2,
+    start: (u, v) => bandAt((u - 0.5) * band, WAIST_Y + BAND_H * (1 - v), band),
+  });
 
-// ─── a top: a front, a back, and sleeves ───────────────────────────────────────────────────────
-const SLEEVES = ['no sleeves', 'cap sleeves', 'short sleeves', 'three-quarter sleeves', 'long sleeves'];
-function top(d: Dials): Garment {
-  const yTop = SHOULDER_Y + 1.2, hemY = lerp(76, 50, d.shape), L = yTop - hemY, ease = 1.07 + 0.12 * d.drape, arm = 12;
-  const shoulderW = 30.5;
-  // (the half-width of a panel at a height: the body's own, eased; then flaring toward the hem as the silhouette
-  // opens; and above the chest, in toward the shoulders)
-  const half = (y: number) => {
-    const body = (girth(Math.max(y, 50)) / 2) * ease, open = d.silhouette * 16 * clamp01((CHEST_Y - y) / (CHEST_Y - hemY)) ** 1.4;
-    const w = body + open;
-    return y > CHEST_Y + 2 ? lerp(w, shoulderW, clamp01((y - CHEST_Y - 2) / (yTop - CHEST_Y - 2))) : w;
-  };
-  const neck = (front: boolean) => (u: number) => (front ? 5.5 : 1.8) * Math.max(0, 1 - ((u - 0.5) / 0.21) ** 2);
-  const panel = (front: boolean): Piece => {
-    const dip = neck(front);
-    return {
-      name: front ? 'front' : 'back', nu: steps(half(CHEST_Y)), nv: steps(L, 5),
-      flat: (u, v) => { const y = yTop - dip(u) - v * (L - dip(u)); return [(u - 0.5) * half(y), y - yTop]; },
-      start: (u, v) => {
-        // (above the underarm, its sides drawn round to the front and back of the shoulder, clear of the arm)
-        // (the armhole an oval round the arm's root: its sides meet the back's at the shoulder point and under the arm,
-        // and bow out to the front and back between)
-        const y = yTop - dip(u) - v * (L - dip(u)), t = clamp01((yTop - y) / arm), span = Math.PI * (1 - 0.36 * Math.sin(Math.PI * t));
-        const a = front ? (u - 0.5) * span : Math.PI - (0.5 - u) * span;
-        const p = around(Math.min(y, 90), a, 2.2 + d.silhouette * 3 * v);
-        // (and its shoulders laid over the shoulders, front and back meeting on top, where they're held)
-        const w = clamp01((Math.abs(u - 0.5) - 0.14) / 0.06) * clamp01(1 - (yTop - y) / 4);
-        if (w <= 0) return p;
-        const r = onShoulder(front ? (u - 0.5) * shoulderW : (0.5 - u) * shoulderW, front, 1.4);
-        return [lerp(p[0], r[0], w), lerp(p[1], r[1], w), lerp(p[2], r[2], w)];
-      },
-      // (held at its shoulder seams, on the shoulders, as on a hanger; the neckline and the rest hang from there)
-      pin: (u, v) => (v === 0 && (u <= 0.3 || u >= 0.7) ? onShoulder(front ? (u - 0.5) * shoulderW : (0.5 - u) * shoulderW, front, 1.4) : null),
-    };
-  };
-  const pieces: Piece[] = [panel(true), panel(false)];
-  const seams: Array<[Edge, Edge]> = [];
-  const a = arm / L, sleeve = Math.min(4, Math.floor(d.pieces * 5));
-  // (the sides, under the armholes; the shoulders, either side of the neck)
-  seams.push([{ piece: 0, side: 'u0', from: a, to: 1 }, { piece: 1, side: 'u1', from: a, to: 1 }]);
-  seams.push([{ piece: 0, side: 'u1', from: a, to: 1 }, { piece: 1, side: 'u0', from: a, to: 1 }]);
-  seams.push([{ piece: 0, side: 'v0', from: 0, to: 0.29 }, { piece: 1, side: 'v0', from: 1, to: 0.71 }]);
-  seams.push([{ piece: 0, side: 'v0', from: 1, to: 0.71 }, { piece: 1, side: 'v0', from: 0, to: 0.29 }]);
-  if (sleeve > 0) {
-    const len = [0, 7, 13, 23, 33][sleeve], puff = 1 + d.drape * 0.9;
-    for (const side of [-1, 1] as const) {
-      // (round its arm: the shoulder's capsule and the forearm's, down from the shoulder)
-      const up = LIMBS[side < 0 ? 0 : 5], low = LIMBS[side < 0 ? 1 : 6];
-      const along = (t: number): { c: V3; r: number; dir: V3 } => {
-        const s = t * len, l1 = Math.hypot(up.b[0] - up.a[0], up.b[1] - up.a[1], up.b[2] - up.a[2]);
-        const seg = s < l1 ? up : low, f2 = s < l1 ? s / l1 : Math.min(1, (s - l1) / Math.hypot(low.b[0] - low.a[0], low.b[1] - low.a[1], low.b[2] - low.a[2]));
-        const dir: V3 = [seg.b[0] - seg.a[0], seg.b[1] - seg.a[1], seg.b[2] - seg.a[2]], dl = Math.hypot(...dir);
-        return { c: [seg.a[0] + dir[0] * f2, seg.a[1] + dir[1] * f2, seg.a[2] + dir[2] * f2], r: seg.ra + (seg.rb - seg.ra) * f2, dir: [dir[0] / dl, dir[1] / dl, dir[2] / dl] };
-      };
-      // (a ring round the arm, down it from the shoulder; u = 0 and 1 under the arm, toward the body)
-      const tube = (u: number, v: number): V3 => {
-        const { c, r, dir } = along(v), ax: V3 = [0, 0, 1], b1: V3 = [dir[1] * ax[2] - dir[2] * ax[1], dir[2] * ax[0] - dir[0] * ax[2], dir[0] * ax[1] - dir[1] * ax[0]];
-        const bl = Math.hypot(...b1) || 1, e1: V3 = [b1[0] / bl, b1[1] / bl, b1[2] / bl], e2: V3 = [dir[1] * e1[2] - dir[2] * e1[1], dir[2] * e1[0] - dir[0] * e1[2], dir[0] * e1[1] - dir[1] * e1[0]];
-        const ph = u * TAU, ca = Math.cos(ph) * side, sa = -Math.sin(ph) * side, rr = r + 2.4;
-        return [c[0] + (e1[0] * ca + e2[0] * sa) * rr, c[1] + (e1[1] * ca + e2[1] * sa) * rr, c[2] + (e1[2] * ca + e2[2] * sa) * rr];
-      };
-      const w0 = 2 * arm * 1.08 * puff, w1 = TAU * (along(1).r + 1.6) * (1 + d.silhouette * 0.5);
-      pieces.push({
-        name: side < 0 ? 'right sleeve' : 'left sleeve', nu: steps(w0), nv: steps(len, 3),
-        // (its head rounded up over the shoulder)
-        flat: (u, v) => [(u - 0.5) * lerp(w0, w1, v), -v * len + 2.6 * Math.sin(Math.PI * u) * (1 - v)],
-        start: (u, v) => {
-          // (its head laid round the armhole it's sewn to, easing into a tube round the arm further down)
-          const hole = (): V3 => {
-            const front = side < 0 ? u >= 0.5 : u <= 0.5, t = side < 0 ? (front ? (u - 0.5) / 0.5 : (0.5 - u) / 0.5) : (front ? (0.5 - u) / 0.5 : (u - 0.5) / 0.5);
-            const pc = pieces[front ? 0 : 1], edgeU = side < 0 ? (front ? 0 : 1) : (front ? 1 : 0);
-            return pc.start(edgeU, t * a);
-          };
-          const ring = tube(u, v), f = Math.min(1, Math.max(0, v / 0.35)), k = f * f * (3 - 2 * f);
-          if (k >= 1) return ring;
-          const h = hole();
-          return [h[0] + (ring[0] - h[0]) * k, h[1] + (ring[1] - h[1]) * k, h[2] + (ring[2] - h[2]) * k];
-        },
-      });
-      const k = pieces.length - 1;
-      // (its underarm seam; and its head, round the armhole: down the front's side, up the back's)
-      seams.push([{ piece: k, side: 'u0', from: 0, to: 1 }, { piece: k, side: 'u1', from: 0, to: 1 }]);
-      if (side < 0) {
-        seams.push([{ piece: k, side: 'v0', from: 0.5, to: 1 }, { piece: 0, side: 'u0', from: 0, to: a }]);
-        seams.push([{ piece: k, side: 'v0', from: 0, to: 0.5 }, { piece: 1, side: 'u1', from: a, to: 0 }]);
-      } else {
-        seams.push([{ piece: k, side: 'v0', from: 0.5, to: 0 }, { piece: 0, side: 'u1', from: 0, to: a }]);
-        seams.push([{ piece: k, side: 'v0', from: 1, to: 0.5 }, { piece: 1, side: 'u0', from: a, to: 0 }]);
+  // (what's sewn: side seams; and in each panel, its darts (tapering to nothing) or pleats (stitched down a little))
+  const pairs: Pair[] = [];
+  for (let p = 0; p < n; p++) for (let j = 0; j <= nv; j++) pairs.push({ a: [p, nu, j], b: [(p + 1) % n, 0, j], why: 'side seam' });
+  // (no fold closes so far that what's left won't go round the body there: a pleat's stitching lets it out as the
+  // hips widen; a dart narrows to nothing)
+  for (let j = 1; j <= nv; j++) {
+    const y = (j / nv) * L, duj = width(y) / nu;
+    const room = Math.floor((n * width(y) - (roundAt(y) + EASE)) / (n * Math.max(1, folds.length) * duj));
+    for (const c of folds) {
+      if (d.method === 'pleat') {
+        const kj = Math.min(k, room);
+        if (y <= PLEAT_STITCH + 0.01 && kj >= 1) for (let p = 0; p < n; p++) pairs.push({ a: [p, c, j], b: [p, c + kj, j], why: 'pleat' });
+      } else if (y < dartLen) {
+        // (its legs sewn together, and what's between them folded flat against the seam, as a dart's pressed)
+        const kj = Math.min(Math.round(k * (1 - y / dartLen)), room), a = c + Math.floor((k - kj) / 2);
+        if (kj >= 1) for (let p = 0; p < n; p++) for (let q = 1; q <= kj; q++) pairs.push({ a: [p, a, j], b: [p, a + q, j], why: 'dart' });
       }
     }
   }
-  return { slot: 'top', pieces, seams, layer: 1, label: SLEEVES[sleeve] };
-}
-
-// ─── a cape: sectors hung from the neck ────────────────────────────────────────────────────────
-function cape(d: Dials): Garment {
-  const p = 1 + Math.round(d.pieces * 5), L = 22 + d.shape * 40, sweep = lerp(0.5, 1, d.silhouette), gather = 1 + d.drape * 0.9;
-  const neckY = 96.2, neckR = 6.3, cover = TAU * (1 - 0.08) * neckR, Th = sweep * TAU, Ri = (cover * gather) / Th, per = Th / p;
-  const pieces: Piece[] = [];
-  // (round the neck from just right of the front, round the back, to just left of it)
-  const ang = (k: number, u: number) => TAU * 0.04 + ((k + u) / p) * TAU * 0.92;
-  for (let k = 0; k < p; k++) {
-    pieces.push({
-      name: p === 1 ? 'cape' : `panel ${k + 1}`, nu: steps(per * (Ri + L)), nv: steps(L, 4),
-      flat: (u, v) => { const phi = (u - 0.5) * per, r = Ri + v * L; return [r * Math.sin(phi), -(r * Math.cos(phi) - Ri)]; },
-      start: (u, v) => {
-        const a = ang(k, u), out = neckR + 1 + v * L * 0.75, y = neckY - v * L * 0.8;
-        return [Math.sin(a) * out, Math.max(y, 20), Math.cos(a) * out - 0.4];
-      },
-      pin: (u, v) => { if (v !== 0) return null; const a = ang(k, u); return [Math.sin(a) * neckR, neckY, Math.cos(a) * neckR - 0.4]; },
-    });
+  // (what's held: each panel's waist edge along its share of the band, its folds closed to a point; the band itself)
+  const holds: Hold[] = [];
+  for (let p = 0; p < n; p++) {
+    let col = 0;
+    for (let i = 0; i <= nu; i++) {
+      const f = folds.find((c) => i > c && i <= c + k);
+      if (f === undefined && i > 0) col++;
+      const at = d.method === 'gather' ? (i / nu) * share : (col / kept) * share;
+      holds.push({ at: [p, i, 0], s: (p - 0.5) * share + at, y: WAIST_Y });
+    }
   }
-  const seams: Array<[Edge, Edge]> = [];
-  for (let k = 0; k + 1 < p; k++) seams.push([{ piece: k, side: 'u1', from: 0, to: 1 }, { piece: k + 1, side: 'u0', from: 0, to: 1 }]);
-  return { slot: 'cape', pieces, seams, layer: 2, label: `${p} ${p === 1 ? 'piece' : 'panels'}` };
+  for (let i = 0; i <= bu; i++) for (let j = 0; j <= 1; j++) holds.push({ at: [n, i, j], s: (i / bu - 0.5) * band, y: WAIST_Y + BAND_H * (1 - j) });
+
+  // (what the cut needed)
+  if (d.method === 'flare') {
+    const deg = (theta * n * 180) / Math.PI;
+    if (deg >= 359) notes.push('a full circle: as full as a flare can be');
+    else if (deg > 2) notes.push(`flared through ${Math.round(deg)}° in all`);
+    else notes.push('straight: no flare');
+  }
+  if (intake > 0.05 && d.method === 'flare') notes.push(`${n * foldsPer} dart${n * foldsPer > 1 ? 's' : ''} take in the waist`);
+  if (d.method === 'gather') notes.push(`${(width(0) * n / band).toFixed(1)}× the band, gathered in`);
+  if (d.method === 'pleat') notes.push(`${n * foldsPer} pleats, stitched down ${PLEAT_STITCH} cm`);
+  if (d.grain >= 30) notes.push('cut on the bias'); else if (d.grain >= 8) notes.push('cut off the grain');
+
+  const sk: Skirt = {
+    design: { ...d, panels: n }, pieces, pairs, holds, band, notes, checks: [],
+    m: { waist, hip: hipNeed, hem: n * width(L), length: L, panels: n, darts: d.method === 'flare' ? n * foldsPer : 0, pleats: d.method === 'pleat' ? n * foldsPer : 0, flare: (theta * n * 180) / Math.PI, area: area / 1e4 },
+  };
+  sk.checks = check(sk, { hw, R0, g, L, yh, n, nu, nv, k, folds, kept, du0, dartLen, method: d.method });
+  return sk;
 }
 
-export function draft(slot: SlotId, d: Dials): Garment {
-  return slot === 'skirt' ? skirt(d) : slot === 'top' ? top(d) : cape(d);
+/** each panel's shape for n panels: its half-width down it, the radius its flat rows are arcs of, flare, and its folds */
+function cutPanels(d: Design, n: number, L: number, yh: number, band: number, hipNeed: number, waistHalf?: number) {
+  const shareB = band / n, shareH = hipNeed / n;
+  let hw: (y: number) => number, theta = 0, R0 = 1e5, intake = 0, foldsPer = 0, foldK = 0, dartLen = 0;
+  if (d.method === 'flare') {
+    // (the flare: the hem `fullness` times the hips; a sector from the waist (its apex above), no more than a circle)
+    theta = Math.min(TAU / n, ((d.fullness - 1) * hipNeed) / Math.max(4, L - yh) / n);
+    const sector = (y: number) => shareB / 2 + (y * theta) / 2;
+    // (what it must clear: the hips; a side seam curves in up to SEAM_CURVE, darts take the rest)
+    const hipHalf = Math.max(sector(yh), shareH / 2);
+    const top = waistHalf ?? Math.max(shareB / 2, hipHalf - SEAM_CURVE - (yh * theta) / 2);
+    intake = 2 * (top - shareB / 2);
+    if (intake > 0.05) { foldsPer = Math.ceil(intake / DART_MAX); foldK = intake / foldsPer; dartLen = Math.min(yh * 0.85, 7 + foldK * 1.5); }
+    hw = (y: number) => {
+      if (y >= yh) return hipHalf + ((y - yh) * theta) / 2;
+      const t = y / yh, curve = 1 - (1 - t) * (1 - t);
+      // (a piece can't wrap past a whole circle: a one-piece circle skirt's rows stop at it)
+      return Math.min(Math.max(sector(y), top + (hipHalf - top) * curve, y > 1.5 ? (roundAt(y) + EASE) / (2 * n) : 0), (R0 + y) * Math.PI * 0.999);
+    };
+    if (theta > 1e-4) R0 = shareB / theta;
+  } else {
+    // (straight width, `fullness` times the hips, taken in at the waist)
+    const W = waistHalf ? 2 * waistHalf : Math.max(shareH, d.fullness * shareH);
+    hw = () => W / 2;
+    intake = W - shareB;
+    if (d.method === 'pleat' && intake > 0.5) {
+      foldsPer = Math.max(1, Math.round(shareB / 4.5));
+      foldK = intake / foldsPer;
+    }
+  }
+  return { hw, theta, R0, intake, foldsPer, foldK, dartLen };
 }
 
-// ─── what the dials say ────────────────────────────────────────────────────────────────────────
-export const FABRICS = ['tulle', 'silk', 'cotton', 'linen', 'wool', 'felt'];
-export const PRINTS = ['plain', 'stripes', 'gingham', 'spots', 'flowers', 'stars'];
-export function fabricName(t: number) { return FABRICS[Math.min(FABRICS.length - 1, Math.floor(t * FABRICS.length))]; }
-export function printName(t: number) { const k = Math.min(23, Math.floor(t * 24)); return PRINTS[k % 6]; }
-export function words(slot: SlotId, d: Dials, g: Garment): Record<keyof Dials, string> {
-  const len = slot === 'skirt' ? ['mini', 'knee', 'midi', 'maxi'] : slot === 'top' ? ['cropped', 'waist', 'hip', 'tunic'] : ['short', 'elbow', 'long', 'floor'];
-  const sil = slot === 'skirt' ? ['pencil', 'A-line', 'flared', 'circle'] : slot === 'top' ? ['fitted', 'easy', 'swing', 'trapeze'] : ['half circle', 'three-quarter', 'full', 'full circle'];
-  const q = (t: number, a: string[]) => a[Math.min(a.length - 1, Math.floor(t * a.length))];
-  return { shape: q(d.shape, len), silhouette: q(d.silhouette, sil), drape: q(d.drape, ['smooth', 'eased', 'gathered', 'ruffled']), pieces: g.label, fabric: fabricName(d.fabric), print: printName(d.print) };
+/** the widest a panel is across its grain (the cloth's width runs across the warp) */
+function acrossGrain(hw: (y: number) => number, R0: number, L: number, g: number) {
+  let lo = Infinity, hi = -Infinity;
+  for (let j = 0; j <= 24; j++) for (let i = 0; i <= 24; i++) {
+    const y = (j / 24) * L, r = R0 + y, phi = ((i / 24 - 0.5) * 2 * hw(y)) / r, x = r * Math.sin(phi), yy = -(r * Math.cos(phi) - R0);
+    const a = x * Math.cos(g) - yy * Math.sin(g);
+    lo = Math.min(lo, a); hi = Math.max(hi, a);
+  }
+  return hi - lo;
+}
+
+/** a point on the waistband, `s` cm round it from the front centre (round the waist's own ellipse, by arc length) */
+const ARC: number[] = [];
+const ARC_N = 256;
+{
+  const s0 = sectionAtWaist();
+  let acc = 0; ARC.push(0);
+  for (let k = 1; k <= ARC_N; k++) { const a0 = ((k - 1) / ARC_N) * TAU, a1 = (k / ARC_N) * TAU; acc += Math.hypot(Math.sin(a1) * s0.rx - Math.sin(a0) * s0.rx, Math.cos(a1) * s0.rz - Math.cos(a0) * s0.rz); ARC.push(acc); }
+}
+function sectionAtWaist() { return section(WAIST_Y); }
+export function bandAt(s: number, y: number, band: number, out = 0.75): V3 {
+  const total = ARC[ARC_N], t = (((s / band) % 1) + 1) % 1 * total;
+  let lo = 0, hi = ARC_N;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (ARC[m] <= t) lo = m; else hi = m; }
+  const a = ((lo + (t - ARC[lo]) / Math.max(1e-6, ARC[lo + 1] - ARC[lo])) / ARC_N) * TAU, s0 = sectionAtWaist();
+  return [Math.sin(a) * (s0.rx + out), y, s0.cz + Math.cos(a) * (s0.rz + out)];
+}
+
+// ─── checking the pattern ──────────────────────────────────────────────────────────────────────
+function check(sk: Skirt, c: { hw: (y: number) => number; R0: number; g: number; L: number; yh: number; n: number; nu: number; nv: number; k: number; folds: number[]; kept: number; du0: number; dartLen: number; method: Method }): Check[] {
+  const out: Check[] = [], P = sk.pieces[0];
+  const len = (pts: Array<[number, number]>) => pts.slice(1).reduce((s, q, i) => s + Math.hypot(q[0] - pts[i][0], q[1] - pts[i][1]), 0);
+  const edge = (u: number) => Array.from({ length: 41 }, (_, j) => P.flat(u, j / 40));
+  // (1: every side seam's two edges the same length, so they can be sewn without easing)
+  const l0 = len(edge(0)), l1 = len(edge(1));
+  out.push({ name: 'side seams match', ok: Math.abs(l0 - l1) / l1 < 0.01, detail: `${l1.toFixed(1)} cm and ${l0.toFixed(1)} cm` });
+  // (2: the waist edge, its folds closed, fits the band)
+  const closed = c.n * (c.method === 'gather' ? 0 : 1) * c.kept * c.du0, fit = c.method === 'gather' ? 1 : closed / sk.band;
+  out.push({ name: 'waist fits the band', ok: Math.abs(fit - 1) < 0.04, detail: c.method === 'gather' ? `${(c.n * c.nu * c.du0).toFixed(1)} cm eased into ${sk.band.toFixed(1)} cm` : `${closed.toFixed(1)} cm sewn to ${sk.band.toFixed(1)} cm (${((fit - 1) * 100).toFixed(1)}%)` });
+  // (3: it clears the body all the way down to the hips: its round at each row, with what's sewn closed there taken
+  // out, at least the body's)
+  let worst = Infinity, at = 0;
+  for (let j = 1; j <= c.nv; j++) {
+    const y = (j / c.nv) * c.L;
+    if (y > c.yh + 0.01) break;
+    let w = 2 * c.hw(y);
+    for (const q of sk.pairs) if (q.why !== 'side seam' && q.a[0] === 0 && q.a[2] === j) w -= ((q.b[1] - q.a[1]) * 2 * c.hw(y)) / c.nu;
+    const spare = c.n * w - roundAt(y) - EASE;
+    if (spare < worst) { worst = spare; at = y; }
+  }
+  out.push({ name: 'clears the hips', ok: worst >= 0, detail: `${(worst + EASE).toFixed(1)} cm of ease at its tightest (${at.toFixed(0)} cm down; ${EASE} needed)` });
+  // (4: each piece fits on the cloth, along its grain)
+  const across = acrossGrain(c.hw, c.R0, c.L, c.g);
+  out.push({ name: 'fits on the cloth', ok: across <= BOLT + 0.5, detail: `${across.toFixed(0)} cm across the grain, of ${BOLT}` });
+  // (5: darts a dressmaker could sew: no deeper than 3 cm, ending above the hips)
+  if (c.method === 'flare' && c.folds.length) {
+    const deep = c.k * c.du0;
+    out.push({ name: 'darts sewable', ok: deep <= DART_MAX + 0.6 && c.dartLen <= c.yh + 0.01, detail: `${c.folds.length * c.n} darts, ${deep.toFixed(1)} cm deep, ${c.dartLen.toFixed(1)} cm long` });
+  }
+  // (6: the piece is a simple shape: rows widen and keep their order, no row wraps past a full circle)
+  let simple = true;
+  for (let j = 0; j <= c.nv; j++) { const y = (j / c.nv) * c.L; if (!(c.hw(y) > 0) || (2 * c.hw(y)) / (c.R0 + y) > TAU * 1.001) simple = false; }
+  out.push({ name: 'a simple outline', ok: simple, detail: simple ? 'no row folds back on itself' : 'a row overlaps itself' });
+  return out;
+}
+
+/** what the cloth needs of a skirt: its pieces, what's sewn, and where its held points are on the figure */
+export function toBuild(sk: Skirt, fabric: Fabric) {
+  return { pieces: sk.pieces, pairs: sk.pairs, holds: sk.holds.map((h) => ({ at: h.at, p: bandAt(h.s, h.y, sk.band) })), fabric };
 }

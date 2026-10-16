@@ -57,10 +57,10 @@ const L = (x: number, y: number, z: number): V3 => [x, y, z];
 export const LIMBS: Capsule[] = [];
 export const BALLS: Array<{ c: V3; r: number }> = [];
 for (const s of [-1, 1]) {
-  // (the arms held a little out from the sides, as a dressmaker's figure's are: room under them for a sleeve's seam)
-  const sh = L(s * 15.6, 89.5, -0.6), el = L(s * 22.4, 72, -0.8), wr = L(s * 26.2, 57, 0.6);
+    // (its arms up in a dancer's curve over its head, ready to twirl: clear of whatever it wears below the waist)
+  const sh = L(s * 15.6, 89.5, -0.6), el = L(s * 26.5, 101.5, 1.2), wr = L(s * 15, 118.5, 2.4);
   LIMBS.push({ a: sh, b: el, ra: 3.9, rb: 3.2 }, { a: el, b: wr, ra: 3.1, rb: 2.6 });
-  BALLS.push({ c: sh, r: 4.6 }, { c: el, r: 3.5 }, { c: L(s * 27.2, 53.2, 1.2), r: 3.6 });
+  BALLS.push({ c: sh, r: 4.6 }, { c: el, r: 3.5 }, { c: L(s * 11.8, 122, 2.8), r: 3.4 });
   const hp = L(s * 6.6, 55, -0.2), kn = L(s * 7, 30, 0.6), an = L(s * 7, 6, -0.2);
   LIMBS.push({ a: hp, b: kn, ra: 5.6, rb: 4.4 }, { a: kn, b: an, ra: 4.2, rb: 3.2 });
   BALLS.push({ c: kn, r: 4.6 }, { c: an, r: 3.4 });
@@ -69,8 +69,17 @@ for (const s of [-1, 1]) {
 }
 LIMBS.push({ a: L(0, 95, -0.4), b: L(0, 101, 0.2), ra: 3.8, rb: 3.6 });
 export const HEAD = { c: L(0, 110, 0.4) as V3, r: 9.6 };
+/** the pelvis: a ball rounding off the torso's foot, between the legs */
+export const PELVIS = { c: L(0, 52, -0.3) as V3, r: 11.4 };
 export const SHOULDERS: V3[] = [LIMBS[0].a, LIMBS[5].a];
 
+// (the sections tabulated every millimetre, read without allocating)
+const ST = new Float32Array(((TORSO_TOP - TORSO_FOOT) * 10 + 2) * 3), S3 = new Float32Array(3);
+for (let k = 0; k * 3 < ST.length; k++) { const q = section(TORSO_FOOT + k / 10); ST[k * 3] = q.rx; ST[k * 3 + 1] = q.rz; ST[k * 3 + 2] = q.cz; }
+function sec(y: number) {
+  const x = Math.max(0, Math.min((TORSO_TOP - TORSO_FOOT) * 10, (y - TORSO_FOOT) * 10)), k = Math.min(Math.floor(x), (TORSO_TOP - TORSO_FOOT) * 10 - 1), f = x - k;
+  for (let c = 0; c < 3; c++) S3[c] = ST[k * 3 + c] + (ST[k * 3 + 3 + c] - ST[k * 3 + c]) * f;
+}
 // ─── meeting it ─────────────────────────────────────────────────────────────────────────────────
 // (flat arrays, read without allocating: a cloth asks this of every particle several times a frame)
 const CAP = new Float32Array(LIMBS.length * 10);
@@ -78,7 +87,7 @@ LIMBS.forEach((c, k) => {
   const ab = [c.b[0] - c.a[0], c.b[1] - c.a[1], c.b[2] - c.a[2]], ll = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
   CAP.set([c.a[0], c.a[1], c.a[2], ab[0], ab[1], ab[2], ll, c.ra, c.rb, (Math.sqrt(ll) / 2 + Math.max(c.ra, c.rb)) ** 2], k * 10);
 });
-const SPH = new Float32Array([...BALLS, HEAD].flatMap((b) => [b.c[0], b.c[1], b.c[2], b.r]));
+const SPH = new Float32Array([...BALLS, HEAD, PELVIS].flatMap((b) => [b.c[0], b.c[1], b.c[2], b.r]));
 /** the last answer: how far out of the body (negative inside), and which way's out */
 export const hit = { d: 0, nx: 0, ny: 1, nz: 0 };
 /** how far a point is from the body, into `hit` (and returned); only what's nearer than `near` is worked out exactly */
@@ -88,10 +97,11 @@ export function distance(px: number, py: number, pz: number, near = 1e9): number
   if (py >= TORSO_FOOT && py <= TORSO_TOP) {
     // (k: how far out in the section's own scale, 1 on its surface; its gradient, up and down too, so where the torso
     // narrows (its shoulders' slope) the way out is upward and a garment rests on it)
-    const kAt = (y: number) => { const q = section(y); return Math.hypot(px / q.rx, (pz - q.cz) / q.rz); };
-    const { rx, rz, cz } = section(py), z = pz - cz, k = Math.hypot(px / rx, z / rz);
+    const kAt = (y: number) => { sec(y); const a = px / S3[0], b = (pz - S3[2]) / S3[1]; return Math.sqrt(a * a + b * b); };
+    sec(py);
+    const rx = S3[0], rz = S3[1], cz = S3[2], z = pz - cz, k = Math.sqrt((px / rx) ** 2 + (z / rz) ** 2);
     if (k > 1e-4) {
-      const gx = px / (rx * rx * k), gz = z / (rz * rz * k), gy = (kAt(py + 0.4) - kAt(py - 0.4)) / 0.8, gl = Math.hypot(gx, gy, gz);
+      const gx = px / (rx * rx * k), gz = z / (rz * rz * k), gy = (kAt(py + 0.4) - kAt(py - 0.4)) / 0.8, gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
       hit.d = k > 0.5 ? (k - 1) / gl : (k - 1) * Math.min(rx, rz);
       hit.nx = gx / gl; hit.ny = gy / gl; hit.nz = gz / gl;
     } else { hit.d = -Math.min(rx, rz); hit.nx = 0; hit.ny = 0; hit.nz = 1; }
