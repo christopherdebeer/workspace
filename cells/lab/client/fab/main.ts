@@ -21,10 +21,11 @@
  */
 import { Cloth } from './cloth';
 import { FABRICS, COLOURWAYS, PRINTS, fabricById, makePrint } from './fabric';
-import { DEFAULT_DESIGN, describe, draft, toBuild, type Design, type Method, type Skirt } from './pattern';
+import { DEFAULT_DESIGN, describe, draftRecipe, fromDesign, toBuild, type Design, type Method, type Move, type Recipe, type Skirt } from './pattern';
+import { Paper, TOOLS, moveWords } from './paper';
 import { Room } from './rails';
 import { createRenderer, type Item } from './render';
-import { RAIL_COLOURS, activeRail, addRail, hang, rails, removeRail, renameRail, setActive, takeOff, type Rail } from './store';
+import { RAIL_COLOURS, activeRail, addRail, hang, rails, recipeOf, removeRail, renameRail, setActive, takeOff, type Rail } from './store';
 import { drawSheet } from './sheet';
 
 const qs = new URLSearchParams(location.search), preview = qs.has('preview');
@@ -46,21 +47,42 @@ if (qs.get('fabric')) d.fabric = fabricById(qs.get('fabric')!).id;
 if (Number.isFinite(num('print'))) d.print = num('print');
 if (Number.isFinite(num('colour'))) d.colour = num('colour');
 
-let sk: Skirt = draft(d), cloth: Cloth | null = null;
-function make(fresh = false) {
-  sk = draft(d);
-  const next = new Cloth(toBuild(sk, fabricById(d.fabric)), fresh ? null : cloth);
+// (the skirt as made: a recipe. From a link's moves (`m=`), or written from an older link's design, as the dials
+// write it)
+const NEW: Recipe = { length: 34, panels: 4, grain: 0, fabric: 'lawn', print: 0, colour: 0, moves: [] };
+const encodeMoves = (ms: Move[]) => ms.map((m) => m.kind === 'spread' ? `s${Math.round(m.at * 1000)}.${Math.round(m.open * 10)}` : m.kind === 'pleat' ? `p${Math.round(m.at * 1000)}.${Math.round(m.depth * 10)}` : m.kind === 'gather' ? `g${Math.round(m.at * 1000)}.${Math.round(m.add * 10)}` : m.kind === 'close-dart' ? `c${m.dart}` : `r${m.dart}`).join('_');
+const decodeMoves = (t: string): Move[] => t.split('_').filter(Boolean).flatMap((x): Move[] => {
+  const k = x[0], [a, b] = x.slice(1).split('.').map(Number);
+  if (k === 's') return [{ kind: 'spread', at: a / 1000, open: b / 10 }];
+  if (k === 'p') return [{ kind: 'pleat', at: a / 1000, depth: b / 10 }];
+  if (k === 'g') return [{ kind: 'gather', at: a / 1000, add: b / 10 }];
+  if (k === 'c') return [{ kind: 'close-dart', dart: a }];
+  if (k === 'r') return [{ kind: 'release-dart', dart: a }];
+  return [];
+});
+let rec: Recipe = qs.has('m') ? { length: d.length, panels: d.panels, grain: d.grain, fabric: d.fabric, print: d.print, colour: d.colour, moves: decodeMoves(qs.get('m') ?? '') } : fromDesign(d);
+/** the dials, kept to compare with the paper (`?ui=dials`): they write moves too */
+const dialsUI = qs.get('ui') === 'dials';
+let sk: Skirt = draftRecipe(rec), cloth: Cloth | null = null;
+function makeFrom(r: Recipe, fresh = false) {
+  sk = draftRecipe(r);
+  const next = new Cloth(toBuild(sk, fabricById(r.fabric)), fresh ? null : cloth);
   if (cloth && !fresh) { next.spin = cloth.spin; next.omega = cloth.omega; }
   cloth = next;
+}
+function make(fresh = false) {
+  makeFrom(rec, fresh);
   if (!preview && mode === 'bench') {
     const u = new URL(location.href);
-    for (const [k, v] of [['len', d.length.toFixed(0)], ['full', d.fullness.toFixed(2)], ['cut', d.method], ['panels', String(d.panels)], ['grain', d.grain.toFixed(0)], ['fabric', d.fabric], ['print', String(d.print)], ['colour', String(d.colour)]]) u.searchParams.set(k, v);
+    for (const k of ['full', 'cut']) u.searchParams.delete(k);
+    for (const [k, v] of [['len', String(rec.length)], ['panels', String(rec.panels)], ['grain', String(rec.grain)], ['fabric', rec.fabric], ['print', String(rec.print)], ['colour', String(rec.colour)], ['m', encodeMoves(rec.moves)]]) u.searchParams.set(k, v);
     history.replaceState(null, '', u);
   }
   ui();
 }
-let pending = 0;
-function remake() { if (pending) return; pending = window.setTimeout(() => { pending = 0; make(); }, 120); }
+// (while a hand's on the paper or a dial: the figure follows, a few times a second, without the move being made yet)
+let pending = 0, pendingRec: Recipe | null = null;
+function remake(r?: Recipe) { pendingRec = r ?? null; if (pending) return; pending = window.setTimeout(() => { pending = 0; if (pendingRec) makeFrom(pendingRec); else make(); }, 90); }
 
 // ─── the bench ─────────────────────────────────────────────────────────────────────────────────
 const $ = (id: string) => document.getElementById(id)!;
@@ -92,7 +114,7 @@ for (const k of KNOBS) {
     const lin = ev.clientY - ev.clientX, dl = (last - lin) / 240; last = lin;
     acc = Math.max(0, Math.min(1, acc + Math.max(-0.2, Math.min(0.2, da / 4.7 + dl))));
     const v = Math.round((k.lo + acc * (k.hi - k.lo)) / k.step) * k.step;
-    if (v !== d[k.key]) { d[k.key] = v; knob(k); remake(); }
+    if (v !== d[k.key]) { d[k.key] = v; knob(k); rec = fromDesign(d); remake(); }
   });
   el.addEventListener('pointerup', () => el.classList.remove('turning'));
 }
@@ -111,35 +133,48 @@ const METHODS: Array<{ m: Method; label: string; icon: string }> = [
 for (const x of METHODS) {
   const b = document.createElement('button'); b.dataset.m = x.m;
   b.innerHTML = `<svg viewBox="0 0 36 34">${x.icon}</svg><span>${x.label}</span>`;
-  b.addEventListener('click', () => { d.method = x.m; make(); });
+  b.addEventListener('click', () => { d.method = x.m; rec = fromDesign(d); make(); });
   $('methods').appendChild(b);
 }
 for (const f of FABRICS) {
   const b = document.createElement('button'); b.className = 'swatch'; b.dataset.f = f.id;
   b.innerHTML = `<span style="background:${f.card}"></span>${f.name}`;
-  b.addEventListener('click', () => { d.fabric = f.id; make(); });
+  b.addEventListener('click', () => { d.fabric = f.id; rec = { ...rec, fabric: f.id }; make(); });
   $('fabrics').appendChild(b);
 }
 for (let k = 0; k < PRINTS.length; k++) {
   const b = document.createElement('button'); b.className = 'print'; b.dataset.k = String(k);
   b.innerHTML = `<canvas width="56" height="40"></canvas>${PRINTS[k]}`;
   // (tap a print to choose it; tap it again for its next colourway)
-  b.addEventListener('click', () => { if (d.print === k) d.colour = (d.colour + 1) % COLOURWAYS.length; d.print = k; make(); });
+  b.addEventListener('click', () => { if (rec.print === k) rec = { ...rec, colour: (rec.colour + 1) % COLOURWAYS.length }; rec = { ...rec, print: k }; d.print = rec.print; d.colour = rec.colour; make(); });
   $('prints').appendChild(b);
 }
 function ui() {
   for (const k of KNOBS) knob(k);
   for (const b of Array.from($('methods').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.m === d.method);
-  for (const b of Array.from($('fabrics').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.f === d.fabric);
+  for (const b of Array.from($('fabrics').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.f === rec.fabric);
   for (const b of Array.from($('prints').children) as HTMLElement[]) {
-    const k = Number(b.dataset.k); b.classList.toggle('on', k === d.print);
+    const k = Number(b.dataset.k); b.classList.toggle('on', k === rec.print);
     const cv = b.querySelector('canvas')!; cv.style.width = '28px'; cv.style.height = '20px';
-    drawSwatch(cv, k, k === d.print ? d.colour : d.colour);
+    drawSwatch(cv, k, rec.colour);
   }
+  // (the paper, its tools, and the history of what's been done to it)
+  for (const b of Array.from($('tools').querySelectorAll('[data-tool]')) as HTMLElement[]) b.classList.toggle('on', b.dataset.tool === paper.tool);
+  $('panelsn').textContent = String(rec.panels);
+  $('toolhint').textContent = TOOLS.find((t) => t.id === paper.tool)!.hint;
+  const hist = $('history'); hist.innerHTML = '';
+  if (!rec.moves.length) hist.innerHTML = '<span class="none">the block, as drafted: nothing done to it yet</span>';
+  rec.moves.forEach((m, i) => {
+    const c = document.createElement('button'); c.className = `chip${sk.made[i] === false ? ' dud' : ''}`; c.textContent = `${moveWords(m)} ×`;
+    c.title = 'take this back';
+    c.addEventListener('click', () => { rec = { ...rec, moves: rec.moves.filter((_, j) => j !== i) }; make(); });
+    hist.appendChild(c);
+  });
+  paper.draw();
   notes.textContent = sk.notes.join(' · ');
   const bad = sk.checks.filter((c) => !c.ok);
   if (bad.length) notes.textContent += ` · ✗ ${bad.map((c) => c.name).join(', ')}`;
-  const pr = makePrint(d.print, d.colour);
+  const pr = makePrint(rec.print, rec.colour);
   drawSheet(card, sk, pr, true);
   if (sheetOn) drawSheet(sheet, sk, pr);
 }
@@ -152,6 +187,18 @@ function drawSwatch(cv: HTMLCanvasElement, kind: number, colour: number) {
   if (kind === 4) for (const [x, y] of [[12, 12], [36, 26], [52, 8]]) for (let p = 0; p < 5; p++) { const a = (p / 5) * 6.28; c.beginPath(); c.arc(x + Math.cos(a) * 4, y + Math.sin(a) * 4, 3, 0, 7); c.fill(); }
   if (kind === 5) for (const [x, y] of [[12, 12], [36, 26], [50, 10]]) { c.beginPath(); for (let p = 0; p < 10; p++) { const a = -1.57 + (p / 10) * 6.28, r = p % 2 ? 2.5 : 6; c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } c.fill(); }
 }
+// (the paper and its tools)
+const paper = new Paper($('paper') as HTMLCanvasElement, () => rec, (r) => remake(r), (r) => { rec = r; make(); }, (r) => { rec = r; make(); });
+for (const t of TOOLS) {
+  const b = document.createElement('button'); b.dataset.tool = t.id; b.className = 'tool';
+  b.innerHTML = `<svg viewBox="0 0 40 40">${t.icon}</svg><span>${t.label}</span>`;
+  b.addEventListener('click', () => { paper.tool = t.id; ui(); });
+  $('tools').insertBefore(b, $('toolsend'));
+}
+$('panelsless').addEventListener('click', () => { rec = { ...rec, panels: Math.max(1, rec.panels - 1) }; make(); });
+$('panelsmore').addEventListener('click', () => { rec = { ...rec, panels: Math.min(10, rec.panels + 1) }; make(); });
+$('undo').addEventListener('click', () => { if (rec.moves.length) { rec = { ...rec, moves: rec.moves.slice(0, -1) }; make(); } });
+if (dialsUI) document.body.classList.add('dials');
 let sheetOn = false;
 const toggleSheet = () => { sheetOn = !sheetOn; document.body.classList.toggle('sheet', sheetOn); ui(); };
 card.addEventListener('click', toggleSheet);
@@ -163,12 +210,13 @@ $('twirl').addEventListener('click', () => { twirlUntil = performance.now() + 32
 
 // ─── the rails: where every skirt starts and ends ──────────────────────────────────────────────
 type Mode = 'rails' | 'bench';
-const hasDesign = ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour'].some((k) => qs.has(k));
+const hasDesign = ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour', 'm'].some((k) => qs.has(k));
 let mode: Mode = qs.has('rails') || (!hasDesign && !preview && !qs.has('settle') && !qs.has('sheet')) ? 'rails' : 'bench';
 const room = new Room();
 room.active = Math.max(0, room.states.findIndex((st) => st.rail.id === activeRail()));
-/** where the skirt on the figure came from: a rail and the garment on it, and its design as it was then */
-let origin: { rail: string; garment: string | null; design: Design } | null = null;
+/** where the skirt on the figure came from: a rail and the garment on it, and its recipe as it was then */
+let origin: { rail: string; garment: string | null; recipe: Recipe } | null = null;
+const same = (a: Recipe, b: Recipe) => JSON.stringify(a) === JSON.stringify(b);
 let lastVP: Float32Array | null = null, toastT = 0, lastFront = -1;
 const toast = (t: string) => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = window.setTimeout(() => el.classList.remove('show'), 2400); };
 const railName = (r: Rail) => (r.workshop ? 'the workshop’s rail' : /rail/i.test(r.name) ? r.name : `${r.name}’s rail`);
@@ -202,7 +250,7 @@ function railInfo() {
   $('railname').textContent = st ? railName(st.rail) : '';
   if (!h) { $('railwhat').textContent = ''; return; }
   if (!h.g) { $('railwhat').textContent = 'a bare hanger: start a new skirt'; $('wear').textContent = 'start one'; return; }
-  const g = h.g.design;
+  const g = recipeOf(h.g);
   $('railwhat').textContent = `${describe(g)} in ${fabricById(g.fabric).name}${g.print ? `, ${PRINTS[g.print]}` : ''}`;
   $('wear').textContent = 'put it on the figure';
 }
@@ -215,8 +263,9 @@ function showRail(k: number) {
 function wear(i: number) {
   const st = room.states[room.active], h = st?.hung[i];
   if (!st || !h) return;
-  Object.assign(d, h.g ? h.g.design : DEFAULT_DESIGN);
-  origin = { rail: st.rail.id, garment: h.g?.id ?? null, design: { ...d } };
+  // (a bare hanger starts a new skirt from the block itself: nothing done to it yet)
+  rec = structuredClone(h.g ? recipeOf(h.g) : NEW);
+  origin = { rail: st.rail.id, garment: h.g?.id ?? null, recipe: structuredClone(rec) };
   room.onFigure = h.g?.id ?? null;
   setMode('bench');
   make(true);
@@ -225,18 +274,18 @@ function wear(i: number) {
  * nobody has a rail yet). Nothing's hung if it's unchanged and already someone's. */
 function hangUp(): boolean {
   const own = origin ? rails().find((r) => r.id === origin!.rail && !r.workshop) : undefined;
-  if (own && origin?.garment && JSON.stringify(origin.design) === JSON.stringify(d)) { toast(`it’s on ${railName(own)} already`); return false; }
+  if (own && origin?.garment && same(origin.recipe, rec)) { toast(`it’s on ${railName(own)} already`); return false; }
   let id = own?.id ?? (rails().find((r) => r.id === activeRail() && !r.workshop) ?? rails().find((r) => !r.workshop))?.id;
   if (!id) { const n = prompt('Hang it on whose rail? (a name)'); if (!n || !n.trim()) return false; id = addRail(n).id; }
-  const g = hang(id, d, own ? origin?.garment ?? undefined : undefined);
+  const g = hang(id, rec, own ? origin?.garment ?? undefined : undefined);
   if (!g) return false;
-  origin = { rail: id, garment: g.id, design: { ...d } };
+  origin = { rail: id, garment: g.id, recipe: structuredClone(rec) };
   room.refresh(); room.onFigure = g.id;
   toast(`hung on ${railName(rails().find((r) => r.id === id)!)}`);
   return true;
 }
 function backToRails() {
-  if (!origin || JSON.stringify(origin.design) !== JSON.stringify(d)) hangUp();
+  if (!origin || !same(origin.recipe, rec)) hangUp();
   room.onFigure = null; room.refresh();
   if (origin) {
     const k = room.states.findIndex((st) => st.rail.id === origin!.rail);
@@ -249,7 +298,7 @@ function setMode(m: Mode) {
   document.body.classList.toggle('rails', m === 'rails');
   if (m === 'rails') {
     if (sheetOn) toggleSheet();
-    if (!preview) { const u = new URL(location.href); for (const k of ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour']) u.searchParams.delete(k); history.replaceState(null, '', u); }
+    if (!preview) { const u = new URL(location.href); for (const k of ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour', 'm']) u.searchParams.delete(k); history.replaceState(null, '', u); }
     railUI();
   } else ui();
 }
@@ -277,7 +326,7 @@ canvas.addEventListener('pointerdown', (e) => {
       if (!h?.g) return;
       if (stt.rail.workshop) { toast('the workshop’s skirts stay: put one on the figure, and hang up your own'); return; }
       drag = false;
-      if (confirm(`Take ${describe(h.g.design)} off ${railName(stt.rail)}? It’ll be gone.`)) { takeOff(stt.rail.id, h.g.id); room.refresh(); railInfo(); }
+      if (confirm(`Take ${describe(recipeOf(h.g))} off ${railName(stt.rail)}? It’ll be gone.`)) { takeOff(stt.rail.id, h.g.id); room.refresh(); railInfo(); }
     }, 650);
   }
 });
@@ -353,7 +402,7 @@ function frame(now: number) {
   const dpr = Math.min(devicePixelRatio || 1, 2), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const items: Item[] = room.items();
-  if (cloth) items.push({ cloth, look: { fabric: fabricById(d.fabric), print: makePrint(d.print, d.colour) } });
+  if (cloth) items.push({ cloth, look: { fabric: fabricById(rec.fabric), print: makePrint(rec.print, rec.colour) } });
   const r0 = performance.now();
   lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, room.fittings()).vp;
   renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
@@ -379,8 +428,8 @@ if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = {
-  perf, probe: () => ({ mode, frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
-  view, room, wear, backToRails, hangUp, twirl: () => { twirlUntil = performance.now() + 3200; },
+  perf, probe: () => ({ mode, recipe: rec, moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
+  view, room, wear, backToRails, hangUp, paper, setRecipe: (r: Recipe) => { rec = r; make(); }, twirl: () => { twirlUntil = performance.now() + 3200; },
 };
 addEventListener('resize', () => (mode === 'bench' ? ui() : railUI()));
 requestAnimationFrame(frame);

@@ -21,7 +21,7 @@ function outline(p: Piece): Array<[number, number]> {
 
 const css = (c: [number, number, number]) => `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)})`;
 /** the print as a tile, `px` pixels to the centimetre (as the cloth's shader draws it, near enough) */
-function tile(ctx: CanvasRenderingContext2D, pr: Print, px: number): CanvasPattern | string {
+export function tile(ctx: CanvasRenderingContext2D, pr: Print, px: number): CanvasPattern | string {
   const [g, a, b] = pr.ink.map(css), s = pr.scale * px;
   if (pr.kind === 0) return g;
   const size = pr.kind === 1 ? 3.2 : pr.kind === 2 ? 5.2 : pr.kind === 3 ? 5.6 : pr.kind === 4 ? 8.4 : 8;

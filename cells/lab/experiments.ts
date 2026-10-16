@@ -26,7 +26,7 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'fab', title: 'Fab', group: 'Play',
-    blurb: 'A dressmaking workbench for children, one garment family deep: skirts. Start at the rails (the workshop\'s, and one for each person) and slide through the skirts on them; put one on the little wooden figure and decide how long, how full, whether the fullness is flared, gathered or pleated, how many panels, which way on the grain, which cloth; a real pattern is drafted to the little wooden figure (darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that tests the patterns and the cloth against the textile lab\'s own tests.',
+    blurb: 'A dressmaking workbench for children, one garment family deep: skirts. Start at the rails (the workshop\'s, and one for each person) and put a skirt on the little wooden figure; then work its paper pattern by hand, as a cutter does: slash and spread it, fold pleats, gather, close darts into flare. Every move is recorded and the figure wears it as it\'s made, sewn and falling as that cloth falls. With an evidence bench that says what it does and doesn\'t establish.',
     page: 'static/fab.html', preview: 'preview&fabric=lawn&print=2&colour=1', readme: 'static/fab.md',
     presets: [
       { label: 'the rails', query: '' },

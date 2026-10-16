@@ -39,6 +39,24 @@
     .swatch span { width: 30px; height: 22px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.25), 0 1px 2px rgba(60,40,20,.2); background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.04) 0 2px, transparent 2px 4px) !important; }
     .print canvas { border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.25), 0 1px 2px rgba(60,40,20,.2); }
     .swatch.on, .print.on { background: #fff8ec; box-shadow: 0 2px 6px rgba(60,40,20,.25); }
+    /* the paper, its tools, its history (and the dials instead, with ?ui=dials) */
+    body:not(.dials) #methods, body:not(.dials) #knobs, body:not(.dials) #card, body.dials #tools, body.dials #paper, body.dials #toolhint, body.dials #history { display: none !important; }
+    #tools { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
+    .tool { all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; padding: 3px 6px; border-radius: 10px; font-size: 10px; font-weight: 800; min-width: 40px; }
+    .tool svg { width: 26px; height: 26px; fill: none; stroke: #4a3826; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+    .tool.on { background: #fff8ec; box-shadow: 0 2px 6px rgba(60,40,20,.28); }
+    #toolsend { flex: 1; }
+    .stepper { display: flex; align-items: center; gap: 2px; background: rgba(255,248,236,.55); border-radius: 999px; padding: 2px; }
+    .stepper button, #undo { all: unset; cursor: pointer; width: 26px; height: 26px; border-radius: 999px; text-align: center; line-height: 26px; font-weight: 900; font-size: 16px; background: #fff8ec; }
+    .stepper b { display: flex; flex-direction: column; align-items: center; font-size: 14px; line-height: 1; min-width: 34px; }
+    .stepper b i { font-style: normal; font-size: 9px; font-weight: 700; opacity: .7; }
+    #undo { width: auto; padding: 0 10px; font-size: 12px; font-weight: 800; margin-left: 4px; }
+    canvas#paper { display: block; width: 100%; height: 150px; border-radius: 10px; box-shadow: 0 2px 10px rgba(60,40,20,.25), inset 0 0 0 1px rgba(60,40,20,.12); touch-action: none; cursor: crosshair; }
+    #toolhint { font-size: 11px; font-weight: 700; color: #fff8ec; text-align: center; margin: 4px 0 4px; min-height: 14px; }
+    #history { margin-bottom: 6px; min-height: 24px; }
+    #history .chip { all: unset; flex: none; cursor: pointer; font-size: 11px; font-weight: 800; padding: 4px 9px; border-radius: 999px; background: #fff8ec; box-shadow: 0 1px 3px rgba(60,40,20,.2); }
+    #history .chip.dud { opacity: .5; text-decoration: line-through; }
+    #history .none { font-size: 11px; font-weight: 600; color: #fff1dc; opacity: .8; padding: 4px 2px; }
     .preview nav, .preview #bench, .preview #card, .preview #notes, .preview #railui { display: none; }
     /* the rails */
     body.rails #bench, body.rails #card, body.rails #notes, body.rails .benchonly, body:not(.rails) .railsonly, body:not(.rails) #railui { display: none; }
@@ -76,6 +94,10 @@
   <div id="bench">
     <div class="row" id="methods"></div>
     <div id="knobs"></div>
+    <div id="tools"><span id="toolsend"></span><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><button id="undo">undo</button></div>
+    <canvas id="paper"></canvas>
+    <div id="toolhint"></div>
+    <div class="row" id="history"></div>
     <div class="row" id="fabrics"></div>
     <div class="row" id="prints" style="margin-bottom:0"></div>
   </div>

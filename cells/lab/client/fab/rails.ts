@@ -14,9 +14,9 @@
  */
 import { Cloth } from './cloth';
 import { fabricById, makePrint } from './fabric';
-import { draft, toHangerBuild, type Design } from './pattern';
+import { draftRecipe, toHangerBuild, type Recipe } from './pattern';
 import { FLOOR, HOOK, RAIL_W, RAIL_Y, swingAt, translate, type Fittings, type Item, type Look } from './render';
-import { RAIL_COLOURS, rails, type Garment, type Rail } from './store';
+import { RAIL_COLOURS, rails, recipeOf, type Garment, type Rail } from './store';
 
 type V3 = [number, number, number];
 /** where the rails stand: in a row along the wall, left of the bench */
@@ -32,7 +32,7 @@ const PER = 9, GAP_FAR = 20, GAP_NEAR = 44;
 interface Hung { g: Garment | null; x: number; vx: number; th: number; om: number; lastX: number; cloth: Cloth | null; frames: number; look: Look | null; key: string; model: Float32Array; hook: Float32Array; yaw: number }
 interface RailState { rail: Rail; scroll: number; vel: number; hung: Hung[] }
 
-const keyOf = (d: Design) => JSON.stringify(d);
+const keyOf = (r: Recipe) => JSON.stringify(r);
 /** settled skirts, kept by design: going back to the rails is instant, and a skirt on two rails is settled once */
 const cache = new Map<string, { cloth: Cloth; frames: number }>();
 
@@ -53,8 +53,8 @@ export class Room {
       const slots: Array<Garment | null> = rail.workshop ? rail.garments : [null, ...rail.garments];
       const hung = slots.map((g, i): Hung => {
         const was = prev?.hung.find((h) => (h.g?.id ?? null) === (g?.id ?? null));
-        const key = g ? keyOf(g.design) : '';
-        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricById(g.design.fabric), print: makePrint(g.design.print, g.design.colour) } : null, key, model: new Float32Array(16), hook: new Float32Array(16), yaw: Math.PI / 2 };
+        const key = g ? keyOf(recipeOf(g)) : '';
+        return was && was.key === key ? { ...was, g } : { g, x: this.slotX(i, prev?.scroll ?? 0), vx: 0, th: 0, om: 0, lastX: 0, cloth: null, frames: 0, look: g ? { fabric: fabricById(recipeOf(g).fabric), print: makePrint(recipeOf(g).print, recipeOf(g).colour) } : null, key, model: new Float32Array(16), hook: new Float32Array(16), yaw: Math.PI / 2 };
       });
       return { rail, scroll: prev?.scroll ?? 0, vel: 0, hung };
     });
@@ -118,7 +118,7 @@ export class Room {
       if (!h.cloth) {
         const c = cache.get(h.key);
         if (c) { h.cloth = c.cloth; h.frames = c.frames; }
-        else { const sk = draft(h.g!.design, 650); h.cloth = new Cloth(toHangerBuild(sk, fabricById(h.g!.design.fabric))); h.frames = 0; cache.set(h.key, { cloth: h.cloth, frames: 0 }); }
+        else { const r = recipeOf(h.g!), sk = draftRecipe(r, 650); h.cloth = new Cloth(toHangerBuild(sk, fabricById(r.fabric))); h.frames = 0; cache.set(h.key, { cloth: h.cloth, frames: 0 }); }
       }
       while (h.frames < SETTLE && performance.now() - t0 < budget) { h.cloth.step(1 / 60); h.frames++; cache.get(h.key)!.frames = h.frames; }
       if (performance.now() - t0 >= budget) break;
@@ -154,7 +154,7 @@ export class Room {
       return [(x / ww * 0.5 + 0.5) * w, (1 - (y / ww * 0.5 + 0.5)) * h];
     };
     const f = this.front(), inside = (i: number) => {
-      const hg = s.hung[i], len = hg.g?.design.length ?? 8, pts = [[-19, HOOK + 2, 0], [19, HOOK + 2, 0], [-24, -len, 0], [24, -len, 0]].map((q) => screen(hg.model, q as V3));
+      const hg = s.hung[i], len = hg.g ? recipeOf(hg.g).length : 8, pts = [[-19, HOOK + 2, 0], [19, HOOK + 2, 0], [-24, -len, 0], [24, -len, 0]].map((q) => screen(hg.model, q as V3));
       const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
       return px >= Math.min(...xs) - 6 && px <= Math.max(...xs) + 6 && py >= Math.min(...ys) - 6 && py <= Math.max(...ys) + 6;
     };

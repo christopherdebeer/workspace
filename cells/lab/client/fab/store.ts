@@ -3,9 +3,11 @@
  * what they've made. Kept in this browser (localStorage), so a rail is a person on this device: a family's tablet, a
  * classroom's. (Nothing leaves it; a private window keeps them only for the visit.)
  */
-import { DEFAULT_DESIGN, type Design } from './pattern';
+import { DEFAULT_DESIGN, fromDesign, type Design, type Recipe } from './pattern';
 
-export interface Garment { id: string; design: Design; at: number }
+/** a skirt on a rail: its recipe (how it was made); one kept from before recipes has its design, written as moves */
+export interface Garment { id: string; recipe?: Recipe; design?: Design; at: number }
+export const recipeOf = (g: Garment): Recipe => g.recipe ?? fromDesign(g.design ?? DEFAULT_DESIGN);
 export interface Rail { id: string; name: string; colour: number; garments: Garment[]; workshop?: boolean }
 
 /** the rails' powder-coat colours, and how their name tags are drawn */
@@ -30,7 +32,7 @@ export const WORKSHOP: Rail = {
     d({ method: 'flare', fullness: 3.8, length: 44, panels: 1, grain: 45, fabric: 'satin', print: 1, colour: 0 }),
     d({ method: 'gather', fullness: 2, length: 52, panels: 3, fabric: 'jersey', print: 5, colour: 1 }),
     d({ method: 'flare', fullness: 1.8, length: 20, panels: 8, fabric: 'organza', print: 3, colour: 3 }),
-  ].map((design, k) => ({ id: `w${k}`, design, at: 0 })),
+  ].map((design, k) => ({ id: `w${k}`, recipe: fromDesign(design), at: 0 })),
 };
 
 const KEY = 'fab.rails.v1';
@@ -55,12 +57,12 @@ export function addRail(name: string): Rail {
 export function renameRail(id: string, name: string) { const r = saved.rails.find((x) => x.id === id); if (r && name.trim()) { r.name = name.trim().slice(0, 24); persist(); } }
 export function removeRail(id: string) { saved.rails = saved.rails.filter((r) => r.id !== id); if (saved.active === id) saved.active = 'workshop'; persist(); }
 /** hang a skirt on a person's rail: back where it came from if it's theirs, else at the front */
-export function hang(railId: string, design: Design, garmentId?: string): Garment | null {
+export function hang(railId: string, recipe: Recipe, garmentId?: string): Garment | null {
   const r = saved.rails.find((x) => x.id === railId);
   if (!r) return null;
   const g = garmentId ? r.garments.find((x) => x.id === garmentId) : undefined;
-  if (g) { g.design = { ...design }; g.at = Date.now(); persist(); return g; }
-  const ng: Garment = { id: uid(), design: { ...design }, at: Date.now() };
+  if (g) { g.recipe = structuredClone(recipe); delete g.design; g.at = Date.now(); persist(); return g; }
+  const ng: Garment = { id: uid(), recipe: structuredClone(recipe), at: Date.now() };
   r.garments.unshift(ng); persist();
   return ng;
 }

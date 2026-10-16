@@ -135,7 +135,9 @@ export class Cloth {
       }
     }
     this.inv = new Float32Array(n);
-    for (let i = 0; i < n; i++) this.inv[i] = 1 / (Math.max(area[i], 0.25) * ph.rho);
+    // (a point on a sliver (a hinge, a dart's point) still has some mass: a twentieth of a usual point's)
+    let meanA = 0; for (let i = 0; i < n; i++) meanA += area[i] / n;
+    for (let i = 0; i < n; i++) this.inv[i] = 1 / (Math.max(area[i], 0.05 * meanA) * ph.rho);
 
     // (springs, along every edge, by the cloth's stiffness in its direction)
     const la: number[] = [], lb: number[] = [], lr: number[] = [], lc: number[] = [], seen = new Set<number>(), edgeA = new Map<number, number>();
