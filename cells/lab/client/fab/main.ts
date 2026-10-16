@@ -305,7 +305,7 @@ function setMode(m: Mode) {
 }
 $('wear').addEventListener('click', () => wear(room.front()));
 $('torails').addEventListener('click', backToRails);
-$('totable').addEventListener('click', () => setMode('table'));
+$('totable').addEventListener('click', () => { tableZoom = 0; tableTurn = 0; setMode('table'); });
 $('tofigure').addEventListener('click', () => setMode('bench'));
 $('hang').addEventListener('click', () => hangUp());
 
@@ -391,18 +391,53 @@ function onSheet(clientX: number, clientY: number): [number, number] | null {
   const lx = dx * tcos - dz * tsin, lz = dx * tsin + dz * tcos;
   return [lx * paper.sc + SHEET_W / 2, lz * paper.sc + SHEET_H / 2];
 }
-let onPaper = false;
+// (only a touch on the piece is the paper's; anywhere else at the table moves the view: from the paper, close, out to
+// the figure across the room (`tableZoom` 0 → 1), and a little round)
+let onPaper = false, tableZoom = 0, tableTurn = 0, sceneDrag: { x: number; y: number } | null = null, tablePinch = 0;
+const touches = new Map<number, [number, number]>();
 canvas.addEventListener('pointerdown', (e) => {
   if (mode !== 'table') return;
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (touches.size > 1) { if (onPaper) { onPaper = false; paper.cancel(); } sceneDrag = null; return; }
   const q = onSheet(e.clientX, e.clientY), q2 = onSheet(e.clientX + 10, e.clientY);
-  if (!q) return;
   // (how many of the sheet's pixels a pixel of the screen is, there: so a fingertip's a fingertip)
-  if (q2) paper.k = Math.max(0.2, Math.hypot(q2[0] - q[0], q2[1] - q[1]) / 10);
-  onPaper = true; canvas.setPointerCapture(e.pointerId); paper.downAt(q[0], q[1]);
+  if (q && q2) paper.k = Math.max(0.2, Math.hypot(q2[0] - q[0], q2[1] - q[1]) / 10);
+  canvas.setPointerCapture(e.pointerId);
+  if (q && tableZoom < 0.5 && paper.hits(q[0], q[1])) { onPaper = true; paper.downAt(q[0], q[1]); }
+  else sceneDrag = { x: e.clientX, y: e.clientY };
 });
-canvas.addEventListener('pointermove', (e) => { if (mode !== 'table' || !onPaper) return; const q = onSheet(e.clientX, e.clientY); if (q) paper.moveAt(q[0], q[1]); });
-canvas.addEventListener('pointerup', () => { if (mode !== 'table' || !onPaper) return; onPaper = false; paper.upAt(); });
-canvas.addEventListener('pointercancel', () => { if (onPaper) { onPaper = false; paper.cancel(); } });
+canvas.addEventListener('pointermove', (e) => {
+  if (mode !== 'table') return;
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (touches.size === 2) {
+    // (pinch: fingers apart, in to the paper; together, out to the figure)
+    const [a, b] = [...touches.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (tablePinch) tableZoom = Math.max(0, Math.min(1, tableZoom + (tablePinch - d) * 0.004));
+    tablePinch = d; return;
+  }
+  if (onPaper) { const q = onSheet(e.clientX, e.clientY); if (q) paper.moveAt(q[0], q[1]); return; }
+  if (sceneDrag) {
+    // (drag up to look up across the room at the figure, down to come back to the paper; sideways to look round)
+    tableZoom = Math.max(0, Math.min(1, tableZoom - (e.clientY - sceneDrag.y) * 0.004));
+    tableTurn = Math.max(-0.5, Math.min(0.5, tableTurn - (e.clientX - sceneDrag.x) * 0.004));
+    sceneDrag = { x: e.clientX, y: e.clientY };
+  }
+});
+const tableUp = (e: PointerEvent) => {
+  touches.delete(e.pointerId); if (touches.size < 2) tablePinch = 0;
+  if (mode !== 'table') return;
+  if (onPaper) { onPaper = false; if (e.type === 'pointercancel') paper.cancel(); else paper.upAt(); }
+  sceneDrag = null;
+};
+canvas.addEventListener('pointerup', tableUp);
+canvas.addEventListener('pointercancel', tableUp);
+canvas.addEventListener('wheel', (e) => { if (mode === 'table') tableZoom = Math.max(0, Math.min(1, tableZoom + e.deltaY * 0.002)); });
+/** from the table, out to the figure: across the table and up to it, the table and its paper in the foreground */
+const FIGURE_FROM_TABLE = { az: TABLE.rot, el: 0.2, dist: 300, target: [18, 60, 12] as [number, number, number] };
+function tableGoal() {
+  const a = tableView(), b = FIGURE_FROM_TABLE, t = tableZoom * tableZoom * (3 - 2 * tableZoom), mix = (x: number, y: number) => x + (y - x) * t;
+  return { az: mix(a.az, b.az) + tableTurn, el: mix(a.el, b.el), dist: mix(a.dist, b.dist), target: [mix(a.target[0], b.target[0]), mix(a.target[1], b.target[1]), mix(a.target[2], b.target[2])] as [number, number, number] };
+}
 
 // ─── the frame ─────────────────────────────────────────────────────────────────────────────────
 let frames = 0, last = performance.now(), stepMs = 0;
@@ -418,14 +453,14 @@ function frame(now: number) {
   frameMs = frameMs * 0.9 + raw * 1000 * 0.1;
   // (the camera: at the rails it rests in front of the one in use; crossing the room, it eases from one to the other)
   if (flying > 0) {
-    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : mode === 'table' ? tableView() : BENCH_VIEW, p = Math.min(1, (now - flyT0) / 1200), e = p * p * (3 - 2 * p);
+    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : mode === 'table' ? tableGoal() : BENCH_VIEW, p = Math.min(1, (now - flyT0) / 1200), e = p * p * (3 - 2 * p);
     // (up and over a little as it crosses, as a walk across a room would look)
     view.az = flyFrom.az + (goal.az - flyFrom.az) * e; view.el = flyFrom.el + (goal.el - flyFrom.el) * e + Math.sin(Math.PI * p) * 0.08; view.dist = flyFrom.dist + (goal.dist - flyFrom.dist) * e + Math.sin(Math.PI * p) * 60;
     for (let c = 0; c < 3; c++) view.target[c] = flyFrom.target[c] + (goal.target[c] - flyFrom.target[c]) * e;
     if (p >= 1) flying = 0;
   } else if (mode === 'rails' || (mode === 'table' && !paper.dragging)) {
     // (at the rails, in front of the one in use; at the table, over the piece, following it as it grows or shrinks)
-    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : tableView(), k = 1 - Math.exp(-dt * (mode === 'table' ? 3 : 5));
+    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : tableGoal(), k = 1 - Math.exp(-dt * (mode === 'table' ? 5 : 5));
     view.az += (goal.az - view.az) * k; view.el += (goal.el - view.el) * k; view.dist += (goal.dist - view.dist) * k;
     for (let c = 0; c < 3; c++) view.target[c] += (goal.target[c] - view.target[c]) * k;
   } else if (!drag && mode === 'bench') { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
@@ -476,7 +511,7 @@ if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = {
-  perf, probe: () => ({ mode, recipe: rec, moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
+  perf, probe: () => ({ mode, tableZoom: +tableZoom.toFixed(3), tableTurn: +tableTurn.toFixed(3), recipe: rec, moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
   // (for tests: where a point of the paper's sheet is on the screen)
   sheetToScreen: (px: number, py: number) => { const q = sheetToRoom(px, py), m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },
   view, room, wear, backToRails, hangUp, paper, setRecipe: (r: Recipe) => { rec = r; make(); }, twirl: () => { twirlUntil = performance.now() + 3200; },

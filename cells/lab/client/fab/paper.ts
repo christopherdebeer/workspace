@@ -73,6 +73,21 @@ export class Paper {
     return { x0: Math.min(...pts.map((q) => q[0])), x1: Math.max(...pts.map((q) => q[0])), y0: Math.min(...pts.map((q) => q[1])), y1: Math.max(...pts.map((q) => q[1])) };
   }
 
+  /** is a touch on the piece (or within a fingertip of its edge)? Only then is it the paper's: elsewhere it's the room's */
+  hits(x: number, y: number): boolean {
+    const { panel } = cutOf(this.get()), n = panel.ribs.length - 1, o: V2[] = [];
+    for (let j = 0; j <= n; j++) o.push(panel.ribs[j].top);
+    for (let t = 1; t <= 10; t++) o.push(ribAt(panel.ribs[n], t / 10));
+    for (let j = n - 1; j >= 0; j--) o.push(panel.ribs[j].bottom);
+    for (let t = 9; t > 0; t--) o.push(ribAt(panel.ribs[0], t / 10));
+    const q = o.map((p) => this.toScreen(p));
+    let inside = false;
+    for (let i = 0, j = q.length - 1; i < q.length; j = i++) if ((q[i][1] > y) !== (q[j][1] > y) && x < ((q[j][0] - q[i][0]) * (y - q[i][1])) / (q[j][1] - q[i][1]) + q[i][0]) inside = !inside;
+    if (inside) return true;
+    const tol = 24 * this.k;
+    for (let i = 0, j = q.length - 1; i < q.length; j = i++) if (near([x, y], q[j], q[i]) < tol) return true;
+    return false;
+  }
   private down(e: Touch) {
     const r = this.get(), { panel } = cutOf(r), p = this.toFlat(e), tol = (16 * this.k) / this.sc;
     const hem = panel.ribs.map((rb) => rb.bottom), waist = panel.ribs.map((rb) => rb.top);

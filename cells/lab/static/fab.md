@@ -313,6 +313,15 @@ that's spread grows on the table. The figure stands across the room behind it, w
 A touch on the screen is cast down onto the tabletop and lands on the paper. Every gesture works on the paper there, and
 a fingertip is a fingertip's size wherever the paper is seen from.
 
+**Only the piece takes the tools.** A touch on the pattern (or within a fingertip of its edge) cuts, folds, gathers or
+pulls. A touch anywhere else (empty paper, the tabletop, the room) moves the eye:
+
+- **drag up**, **pinch together** or **scroll** to look up from the paper, across the room, to the figure;
+- **drag down**, **pinch apart** or **scroll back** to come back down to the paper;
+- **drag sideways** to look a little round.
+
+Looking past halfway, the paper is just part of the view, and a touch on it moves the eye too. Come back down to cut.
+
 The paper stays where it was laid. The piece is only moved, and the sheet re-cut, when it no longer fits on its sheet
 or has shrunk into a corner of it. That never happens while a finger is on it. The camera follows the piece smoothly,
 so nothing jumps between one gesture and the next.
