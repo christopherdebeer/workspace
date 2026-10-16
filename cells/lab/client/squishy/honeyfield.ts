@@ -149,8 +149,12 @@ export function honeyField(rim: HoneyRim, run: number, out: number[]) {
     const i1 = i + 1;
     // (only where there's honey: a quad with none at any corner isn't drawn)
     if (Math.max(Hh[j][i], Hh[j][i1 % N], Hh[j + 1][i], Hh[j + 1][i1 % N]) < 0.02) continue;
-    put(i, j); put(i, j + 1); put(i1, j + 1);
-    put(i, j); put(i1, j + 1); put(i1, j);
+    // (wound to face out, along its normals: the drawing flips what it sees from behind)
+    const a = P[j][i], b = P[j][i1 % N], d = P[j + 1][i], n = NR[j][i] ?? (NR[j][i] = nrm(i, j));
+    const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    const outward = (e1[1] * e2[2] - e1[2] * e2[1]) * n[0] + (e1[2] * e2[0] - e1[0] * e2[2]) * n[1] + (e1[0] * e2[1] - e1[1] * e2[0]) * n[2] > 0;
+    if (outward) { put(i, j); put(i1, j); put(i1, j + 1); put(i, j); put(i1, j + 1); put(i, j + 1); }
+    else { put(i, j); put(i, j + 1); put(i1, j + 1); put(i, j); put(i1, j + 1); put(i1, j); }
   }
   honeyDrops(rim, out);
   void top;
