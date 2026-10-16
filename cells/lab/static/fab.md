@@ -332,6 +332,20 @@ that's spread grows on the table. The figure stands across the room behind it, w
 A touch on the screen is cast down onto the tabletop and lands on the paper. Every gesture works on the paper there, and
 a fingertip is a fingertip's size wherever the paper is seen from.
 
+**The paper shows what the tool in hand can do.** The edge it works lights up: the hem for the hand and the scissors,
+the waist for fold and gather. The hand also gets a tab on the hem to drag, a ring at the foot of the grain arrow to
+turn it, and a badge on each dart to tap (white while it's sewn, rose once it's flared or gathered). The moment a cut or
+fold is touched, a dashed ghost shows where it'll go. While a finger's on the paper, a label beside it says how much
+("+4.5 cm", "37 cm (+3)", "22°"), and the drawer keeps up with it.
+
+**Each move is marked as a dressmaker marks it:**
+
+- a slash: its two edges dashed and the opening shaded, the point it swung open about ringed, an arrow across the opening;
+- a pleat: the fold line solid and where it's laid dashed, an arrow from one to the other (the way it's folded), and
+  its stitching down from the waist boxed off at a bar;
+- gathers: a notch either side on the waist, a wavy running stitch between them, and arrows drawing it in;
+- a dart: its two legs to a dot at its point.
+
 **Only the piece takes the tools.** A touch on the pattern (or within a fingertip of its edge) cuts, folds, gathers or
 pulls. A touch anywhere else (empty paper, the tabletop, the room) moves the eye:
 

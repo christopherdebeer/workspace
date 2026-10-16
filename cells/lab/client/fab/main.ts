@@ -196,7 +196,7 @@ function drawSwatch(cv: HTMLCanvasElement, kind: number, colour: number) {
   if (kind === 5) for (const [x, y] of [[12, 12], [36, 26], [50, 10]]) { c.beginPath(); for (let p = 0; p < 10; p++) { const a = -1.57 + (p / 10) * 6.28, r = p % 2 ? 2.5 : 6; c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } c.fill(); }
 }
 // (the paper and its tools)
-const paper = new Paper(document.createElement('canvas'), () => rec, (r) => remake(r), (r) => { rec = r; make(); }, (r) => { rec = r; make(); });
+const paper = new Paper(document.createElement('canvas'), () => rec, (r) => { remake(r); toolPanel(); }, (r) => { rec = r; make(); }, (r) => { rec = r; make(); });
 for (const t of TOOLS) {
   const b = document.createElement('button'); b.dataset.tool = t.id; b.className = 'tool';
   b.innerHTML = `<svg viewBox="0 0 40 40">${t.icon}</svg><span>${t.label}</span>`;
@@ -231,10 +231,11 @@ function toolPanel() {
     else el.append(v, ...buttons.map(btn));
     ctl.appendChild(el);
   };
-  const ms = rec.moves, made = (k: Move['kind']) => ms.filter((m) => m.kind === k);
+  // (while a move's being made, what it'll be: the drawer keeps up with the finger)
+  const now = paper.preview ?? rec, ms = now.moves, made = (k: Move['kind']) => ms.filter((m) => m.kind === k);
   if (paper.tool === 'hand') {
-    box('length', `${rec.length} cm`, [['−', () => { rec = { ...rec, length: Math.max(12, rec.length - 1) }; }], ['+', () => { rec = { ...rec, length: Math.min(62, rec.length + 1) }; }]]);
-    box('grain', rec.grain === 0 || rec.grain === 45 ? '' : `${rec.grain}°`, [['straight', () => { rec = { ...rec, grain: 0 }; }, rec.grain === 0], ['bias', () => { rec = { ...rec, grain: 45 }; }, rec.grain === 45]]);
+    box('length', `${now.length} cm`, [['−', () => { rec = { ...rec, length: Math.max(12, rec.length - 1) }; }], ['+', () => { rec = { ...rec, length: Math.min(62, rec.length + 1) }; }]]);
+    box('grain', now.grain === 0 || now.grain === 45 ? '' : `${now.grain}°`, [['straight', () => { rec = { ...rec, grain: 0 }; }, now.grain === 0], ['bias', () => { rec = { ...rec, grain: 45 }; }, now.grain === 45]]);
     const sewn = sk.cut.strips.filter((x) => x.kind === 'dart').length, closed = made('close-dart').length, gathered = made('release-dart').length;
     if (sewn + closed + gathered) box('darts', [sewn && `${sewn} sewn`, closed && `${closed} flared`, gathered && `${gathered} gathered`].filter(Boolean).join(' · '), []);
   } else {
@@ -599,6 +600,9 @@ let frames = 0, last = performance.now(), stepMs = 0;
 // slow device sees the cloth slow down rather than fall ever further behind), and the time it couldn't keep up with
 // is counted, not hidden)
 const STEP = 1 / 60;
+let kAt = 0;
+/** a point of the paper's sheet, on the screen (css pixels) */
+function sheetPx(px: number, py: number): [number, number] { const q = sheetToRoom(px, py), m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15]; return [(x / w * 0.5 + 0.5) * canvas.clientWidth, (1 - (y / w * 0.5 + 0.5)) * canvas.clientHeight]; }
 let owed = 0, simTime = 0, wallTime = 0, renderMs = 0, frameMs = 16.7, perfAt = 0;
 const perf = { fps: 0, frameMs: 0, simMs: 0, renderMs: 0, stepsPerFrame: 0, simSpeed: 1, particles: 0 };
 let stepsWindow = 0, framesWindow = 0, simWindow = 0, wallWindow = 0;
@@ -619,6 +623,14 @@ function frame(now: number) {
     for (let c = 0; c < 3; c++) view.target[c] += (goal.target[c] - view.target[c]) * k;
   } else if (!drag && mode === 'bench') { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
   if (mode === 'rails') { room.update(dt, 7); if (room.front() !== lastFront) railInfo(); }
+  // (at the table, now and then: how big a fingertip is on the sheet from here, so its handles and badges are drawn a
+  // fingertip's size on the screen)
+  if (mode === 'table' && !paper.dragging && lastVP && now - kAt > 250) {
+    kAt = now;
+    const b = paper.bounds(), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, s0 = sheetPx(cx - 50, cy), s1 = sheetPx(cx + 50, cy), px = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
+    const k = px > 1 ? Math.max(0.2, Math.min(6, 100 / px)) : paper.k;
+    if (Math.abs(k - paper.k) / paper.k > 0.08) { paper.k = k; paper.draw(); }
+  }
   if (cloth && mode !== 'rails') {
     // (a twirl: the figure spun up on its stand, held, and let run down)
     const want = now < twirlUntil ? Math.PI * 2 * 0.9 : 0, acc = now < twirlUntil ? 7 : 3.5;
