@@ -616,8 +616,10 @@ something see-through has drawn since. On a phone each copy is a whole screen's 
   that a sheet of it over the top of the side, its hem low along each drip and drawn up between them; a dozen
   drips, most round the front, each its own width and pace, thinning as they creep down, a teardrop swelling at
   the end of each; most stall as they cool, a few reach the foot; and a few drops fallen beside the pool. Clear
-  amber: what's behind them bent through them, darker at their edges, a bright stripe of the sun and the window
-  down each. They go over the jar's honey, with a copy of the scene that has it.
+  amber: the light through them by how far it goes through the honey (blue lost fast, green slower, red hardly),
+  pale gold where it's thin, deep amber through a bead; what's behind bent through them; their surface's
+  reflection by Fresnel, the window and one sharp sun glint, and only a little scattered glow. (`?honeyopt=old`
+  the earlier, glowing light; `?honeygeo=field` a one-surface version, a thickness field over the rim, being worked on.) They go over the jar's honey, with a copy of the scene that has it.
 - **A honey pot**, half the time instead of the jar: cream stoneware, flecked, bellied and squat (on more of a
   stand, its rim as high), its lip rolled, honey standing in its neck, a cork sat askew on a wooden dipper. Met
   as the jar is: its glaze as slippery, the honey down its front where you land as sticky.

@@ -1029,7 +1029,7 @@ void main() {
       // over the honey's own path through it: pale gold where it's thin, deep amber where it's thick; a little
       // scattered back out, more when the sun's behind it; and its surface's reflection over that, by Fresnel,
       // the window and one sharp sun glint in it, from the kitchen's own light)
-      vec3 Th = exp(-vec3(.09, .38, 1.5) * honeyPath);
+      vec3 Th = exp(-vec3(.22, .95, 3.) * honeyPath);
       vec2 bendH = vec2(dot(n, uRight), dot(n, uUp)) * .012 * min(honeyPath, 2.);
       vec3 behind = texture(uScene, clamp(gl_FragCoord.xy / uRes + bendH, vec2(.001), vec2(.999))).rgb;
       float Fh = .04 + .96 * pow(1. - NoV, 5.);
@@ -1943,8 +1943,9 @@ let simTime = 0;
 /** when this level began (simTime), for what creeps as it goes on (honey); ?honeyt=s to see it later on */
 let levelBorn = 0;
 const HONEY_AHEAD = Number(params.get('honeyt')) || 0;
-/** (for comparing, while the honey's being settled: ?honeygeo=old, the collar, sheet and tubes; ?honeyopt=old, the old light) */
-const HONEY_OLD_SHAPE = params.get('honeygeo') === 'old', HONEY_OLD_LIGHT = params.get('honeyopt') === 'old';
+/** (while the honey's being settled: the collar, sheet and tubes for now, ?honeygeo=field the one-surface field
+ * (honeyfield.ts) being worked on; the light through it by its thickness, ?honeyopt=old the old light, to compare) */
+const HONEY_OLD_SHAPE = params.get('honeygeo') !== 'field', HONEY_OLD_LIGHT = params.get('honeyopt') === 'old';
 /** each lid's lift last step (for the steam as one starts up); whether it was stuck to honey; when the autopilot last looked */
 let lidWas: number[] = [];
 let heldWas = false;

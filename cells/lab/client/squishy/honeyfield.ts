@@ -40,16 +40,19 @@ function runs(rim: HoneyRim, run: number, H: number): Run[] {
   for (let k = 0; k < 11; k++) {
     const u = hash(k, seed + 3), main = k < 5;
     // (the ones that matter round the front, not evenly; the rest anywhere)
-    const a = main ? front + (hash(k, seed) - 0.5) * 2.4 : front + Math.PI * 2 * hash(k, seed + 11);
+    const a = main ? front + (hash(k, seed) - 0.5) * 1.8 : front + Math.PI * 2 * hash(k, seed + 11);
     // (two in three short, a quarter medium, one in ten long)
-    const kind = u < 0.65 ? 0 : u < 0.9 ? 1 : 2;
-    const target = kind === 0 ? 0.8 + 2 * hash(k, seed + 5) : kind === 1 ? H * (0.24 + 0.16 * hash(k, seed + 5)) : H * (0.55 + 0.15 * hash(k, seed + 5));
+    // (the main five: two short, two medium, one long, in an order of the pot's own; the rest short)
+    const order = [0, 0, 1, 1, 2], pick = Math.floor(hash(0, seed + 13) * 5);
+    const kind = main ? order[(k + pick) % 5] : 0;
+    void u;
+    const target = kind === 0 ? 1 + 2.2 * hash(k, seed + 5) : kind === 1 ? H * (0.3 + 0.15 * hash(k, seed + 5)) : H * (0.6 + 0.12 * hash(k, seed + 5));
     const tau = 50 + 150 * hash(k, seed + 4), L0 = Math.min(target, 0.6 + 1.2 * hash(k, seed + 1));
     const L = L0 + (target - L0) * (1 - Math.exp(-run / tau));
     const w = main ? 0.65 + 0.6 * hash(k, seed + 2) : 0.3 + 0.3 * hash(k, seed + 2);
     const e = hash(k, seed + 6);
     const end: End = kind === 0 ? (e < 0.6 ? 'tongue' : 'taper') : kind === 1 ? (e < 0.5 ? 'bead' : e < 0.8 ? 'tongue' : 'taper') : e < 0.6 ? 'bead' : 'taper';
-    out.push({ a, w, t: w * (0.45 + 0.2 * hash(k, seed + 7)), L, end, k });
+    out.push({ a, w, t: w * (0.6 + 0.25 * hash(k, seed + 7)), L, end, k });
   }
   return out;
 }
@@ -92,7 +95,7 @@ export function honeyField(rim: HoneyRim, run: number, out: number[]) {
   };
   const field = (th: number, s: number, g: number, R: number) => {
     // (the reservoir: over the lip, thicker where it's gathering; its hem lower under the runs, rounded)
-    const res = 0.12 + 0.28 * g, hem = 0.35 + 1.5 * g ** 0.8, e = 0.45;
+    const res = 0.2 + 0.4 * g, hem = 0.35 + 1.5 * g ** 0.8, e = 0.45;
     let h = s < hem - e ? res : res * Math.sqrt(Math.max(0, 1 - ((s - (hem - e)) / e) ** 2));
     for (const r of rs) {
       if (s < -0.2 || s > r.L + r.w * 2) continue;
@@ -106,7 +109,9 @@ export function honeyField(rim: HoneyRim, run: number, out: number[]) {
       else { w *= 0.7; t *= 0.7; len = r.L - r.w * 1.2; }
       // (a rounded end: its last stretch closing as an ellipse's quarter)
       const cap = r.end === 'taper' ? 1 : Math.sqrt(Math.max(0, 1 - Math.max(0, (s - (len - w)) / w) ** 2));
-      let hr = s > len ? 0 : t * cap * Math.sqrt(Math.max(0, 1 - (dx / w) ** 2));
+      // (a rivulet's section: rounded over the top, meeting the side at a shallow angle, as honey wets glaze)
+      const q = Math.max(0, 1 - (dx / w) ** 2);
+      let hr = s > len ? 0 : t * cap * q * (1.2 - 0.2 * q);
       if (r.end === 'bead') {
         // (a bead: a rounded swelling of it at the end, hanging off the run's narrowed neck)
         const rb = r.w * 1.15, sb = r.L - rb, d2 = dx * dx + (s - sb) * (s - sb);
@@ -117,7 +122,7 @@ export function honeyField(rim: HoneyRim, run: number, out: number[]) {
     return h;
   };
 
-  const N = 220, M = sec.length, P: V3[][] = [], Hh: number[][] = [];
+  const N = 300, M = sec.length, P: V3[][] = [], Hh: number[][] = [];
   const gs = Array.from({ length: N }, (_, i) => gather((i / N) * Math.PI * 2));
   for (let j = 0; j < M; j++) {
     const q = sec[j], row: V3[] = [], hr: number[] = [];
