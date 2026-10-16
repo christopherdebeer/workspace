@@ -26,7 +26,8 @@ import { DEFAULT_DESIGN, draft, toBuild, type Design, type Method } from './patt
 
 type V3 = [number, number, number];
 export interface Row { [k: string]: string | number | boolean }
-export interface Section { id: string; title: string; claim: string; rows: Row[]; verdict: string; pass: boolean; shapes?: Array<{ label: string; pts: Array<[number, number]>; r0?: number }> }
+/** a claim, the evidence, and what the evidence does not establish (`limits`): a verdict covers only the claim */
+export interface Section { id: string; title: string; claim: string; limits?: string; rows: Row[]; verdict: string; pass: boolean; shapes?: Array<{ label: string; pts: Array<[number, number]>; r0?: number }> }
 
 /** a seeded random: the same designs every run */
 function rng(seed: number) { return () => ((seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x9e3779b9) >>> 0) / 4294967296); }
@@ -50,7 +51,8 @@ export function patternTest(count = 400): Section {
   }
   const failed = [...fails.values()].reduce((s, v) => s + v, 0);
   return {
-    id: 'pattern', title: '1 · Is every pattern a real pattern?',
+    id: 'pattern', title: '1 · Does every pattern satisfy its own geometric constraints?',
+    limits: 'Geometry only, checked by the code that drew it. Not checked: seam and hem allowances, notches, an opening and fastening to get it on, an order of construction, or a dressmaker cutting and sewing one. A pattern that passes is drawable, not yet makeable.',
     claim: `${designs.length} designs: every corner of the space (each way of making fullness × 1–10 panels × 4 fullnesses × 3 lengths × straight or bias) and ${count} more at random; each drafted and checked.`,
     rows: [...[...fails].map(([name, v]) => ({ check: name, failures: v })), ...examples],
     verdict: failed ? `${failed} of ${checks} checks failed across ${total} patterns` : `all ${checks} checks passed across ${total} patterns`, pass: failed === 0,
@@ -92,7 +94,8 @@ export function cantilever(): Section {
     rows.push({ fabric: f.name, 'c, swatch': `${f.bend.toFixed(1)} cm`, 'droop, converged': `${((out[0] * 180) / Math.PI).toFixed(1)}°`, 'c, converged': `${out[1].toFixed(2)} cm (${pc(ec)})`, 'droop, as worn': `${((out[2] * 180) / Math.PI).toFixed(1)}°`, 'c, as worn': `${out[3].toFixed(2)} cm (${pc(eg)})` });
   }
   return {
-    id: 'cantilever', title: '2a · Does each cloth bend as stiffly as its swatch says? (Peirce cantilever)',
+    id: 'cantilever', title: '2a · Does the simulated cloth reproduce the bending length it was given? (Peirce cantilever)',
+    limits: 'The solver reproducing its inputs, not the inputs being right: each swatch\'s bending length is representative of its kind, not measured from real cloth. Bending is one stiffness for every direction (no separate warp and weft bending).',
     claim: 'A strip twice its bending length out droops to 41.5°, and the bending length read back from its droop is the swatch\'s. Converged (a fine mesh, 200 substeps a frame) this tests the bending model itself: within 12% (Peirce\'s own formula is an approximation, reported to overestimate stiffness by about 18%). As worn (a 2 cm mesh, 8 substeps, what the figure gets) it\'s allowed 20%: coarse meshes and few substeps are the compromise for a phone.',
     rows, verdict: `converged within ${(worstC * 100).toFixed(0)}%; as worn within ${(worstG * 100).toFixed(0)}%`, pass: worstC <= 0.12 && worstG <= 0.2,
   };
@@ -154,7 +157,7 @@ export function shadow(c: Cloth) {
 }
 /** converged drape coefficients (a 1 cm mesh, 64 substeps a frame): `?bench=evidence&converged` measures them again */
 const CONVERGED: Record<string, number> = { chiffon: 0.29, lawn: 0.57, linen: 0.77, felt: 0.94 };
-export function cusick(converged = false): Section {
+export function cusick(converged = false): Section[] {
   const rows: Row[] = [], shapes: Section['shapes'] = [], res: Array<{ f: Fabric; dc: number }> = [];
   for (const f of FABRICS) {
     const c = new Cloth(disc(f));
@@ -170,12 +173,21 @@ export function cusick(converged = false): Section {
   const byBend = [...res].sort((a, b) => a.f.bend - b.f.bend);
   let inversions = 0; for (let k = 1; k < byBend.length; k++) if (byBend[k].dc < byBend[k - 1].dc - 0.03) inversions++;
   const lo = Math.min(...res.map((r) => r.dc)), hi = Math.max(...res.map((r) => r.dc));
-  return {
-    id: 'cusick', title: '2b · Does each cloth drape as such cloth does? (Cusick drape test)',
-    claim: 'A 30 cm disc on an 18 cm pedestal, as the figure\'s cloth is simulated (a 1.8 cm mesh). Its drape coefficient should rise with bending length (stiffness for weight), span the range drape testers report (about 0.3 for limp cloth to near 1 for stiff), and stay near the converged answer (a fine mesh, many substeps); limp cloth should fall in more folds (nodes).',
-    rows, shapes, pass: inversions === 0 && hi - lo >= 0.5 && Math.min(...Object.values(CONVERGED)) <= 0.35 && Math.max(...Object.values(CONVERGED)) >= 0.85,
-    verdict: `converged ${Math.min(...Object.values(CONVERGED)).toFixed(2)}–${Math.max(...Object.values(CONVERGED)).toFixed(2)}, in the range drape testers report; as worn ${lo.toFixed(2)}–${hi.toFixed(2)}, ${inversions} out of order with stiffness, limper than converged by up to ${Math.max(...res.filter((r) => CONVERGED[r.f.id] !== undefined).map((r) => CONVERGED[r.f.id] - r.dc)).toFixed(2)} (the real-time compromise)`,
-  };
+  const conv = Object.values(CONVERGED), gaps = res.filter((r) => CONVERGED[r.f.id] !== undefined).map((r) => ({ f: r.f, gap: CONVERGED[r.f.id] - r.dc }));
+  const worstGap = Math.max(...gaps.map((g) => Math.abs(g.gap)));
+  return [{
+    id: 'cusick', title: '2b · Does the cloth model drape in the order, and over the range, real drape testers find? (Cusick)',
+    claim: 'A 30 cm disc on an 18 cm pedestal. Converged (a 1 cm mesh, 64 substeps a frame), the drape coefficients should run from about 0.3 (limp) to near 1 (stiff), as drapemeters report across fabrics; at the figure\'s settings they should keep the same order by bending length, and limp cloth should fall in more folds (nodes).',
+    limits: 'Against the literature\'s range across many fabrics, not the same specimens measured: the swatches are representative. The order and range are what\'s shown, not that this chiffon drapes as a particular chiffon does.',
+    rows, shapes, pass: inversions === 0 && Math.min(...conv) <= 0.35 && Math.max(...conv) >= 0.85,
+    verdict: `converged ${Math.min(...conv).toFixed(2)}–${Math.max(...conv).toFixed(2)}; at the figure's settings ${lo.toFixed(2)}–${hi.toFixed(2)}, ${inversions} out of order with stiffness`,
+  }, {
+    id: 'cusick-realtime', title: '2b′ · Does the cloth as simulated on the figure drape as its own converged self?',
+    claim: 'The same discs, at the figure\'s settings (a 1.8 cm mesh, 8 substeps), against the converged answer: within 0.10 in drape coefficient.',
+    limits: 'A gap here is the real-time compromise: too few substeps for stiff bending. It changes how far a skirt stands out, so a child\'s prediction from the bench could be off by it.',
+    rows: gaps.map((g) => ({ fabric: g.f.name, 'as on the figure': (CONVERGED[g.f.id] - g.gap).toFixed(2), converged: CONVERGED[g.f.id].toFixed(2), gap: g.gap.toFixed(2) })),
+    pass: worstGap <= 0.1, verdict: `largest gap ${worstGap.toFixed(2)} (allowed 0.10): the cloth on the figure is limper than the model it approximates`,
+  }];
 }
 
 // ─── 2c. the bias ───────────────────────────────────────────────────────────────────────────────
@@ -193,14 +205,15 @@ export function bias(): Section {
     rows.push({ fabric: f.name, 'straight grain': `+${grow[0].toFixed(2)}%`, 'on the bias': `+${grow[1].toFixed(2)}%`, ratio: (grow[1] / Math.max(1e-6, grow[0])).toFixed(1) });
   }
   return {
-    id: 'bias', title: '2c · Does cloth cut on the bias stretch as bias-cut cloth does?',
+    id: 'bias', title: '2c · Does the simulated cloth stretch more on the bias than on the grain?',
+    limits: 'Direction only. The amounts are a linear model\'s; real bias cloth also creeps (grows over hours), which this doesn\'t model, and nothing here was compared with a real hung strip.',
     claim: 'A 30 × 6 cm strip hung from its top for 3 s, cut along the warp and at 45° to it. A woven bias strip should grow markedly more (it\'s held only by shear); felt, which has no grain, the same either way.',
     rows, verdict: ok ? 'every woven cloth grows more on the bias' : 'a woven cloth did not grow more on the bias', pass: ok,
   };
 }
 
 // ─── 3. expressiveness ─────────────────────────────────────────────────────────────────────────
-export interface Hem { out: number; folds: number; depth: number; level: number; swing: number; strain: number; p99: number; ok: boolean; pts: Array<[number, number]> }
+export interface Hem { out: number; folds: number; depth: number; level: number; swing: number; strain: number; p99: number; ok: boolean; why: string[]; health: ReturnType<Cloth['health']>; pts: Array<[number, number]> }
 export function hemOf(d: Design, twirl = true): Hem {
   const sk = draft(d), c = new Cloth(toBuild(sk, fabricById(d.fabric)));
   settle(c, 4);
@@ -219,10 +232,13 @@ export function hemOf(d: Design, twirl = true): Hem {
     const ym = ys.reduce((s, v) => s + v, 0) / ys.length, ysd = Math.sqrt(ys.reduce((s, v) => s + (v - ym) ** 2, 0) / ys.length);
     return { mean, sd, folds, ysd, pts: Array.from(r, (v, b) => { const a = ((b + 0.5) / B) * Math.PI * 2 - Math.PI; return [Math.sin(a) * v, Math.cos(a) * v] as [number, number]; }) };
   };
-  const still = measure(), st = c.strain();
+  const still = measure(), st = c.strain(), hl = c.health();
   let swing = 0;
   if (twirl) { c.omega = Math.PI * 2 * 0.9; settle(c, 1.5); swing = measure().mean - still.mean; }
-  return { out: still.mean, folds: still.folds, depth: still.sd, level: still.ysd, swing, strain: st.max, p99: st.p99, ok: st.ok && st.p99 < 0.15, pts: still.pts };
+  // (sound: finite; 99% of springs within 12% stretch and 35% squash; under 1% of triangles collapsed; nothing inside
+  // the figure; every seam closed to 5 mm)
+  const why = [!hl.finite && 'not finite', hl.stretch99 > 0.12 && 'stretched', hl.squash1 < -0.35 && 'squashed', hl.collapsed > 0.01 && 'collapsed', hl.inside > 0 && 'inside the figure', hl.seamGap > 0.5 && 'seam open'].filter(Boolean) as string[];
+  return { out: still.mean, folds: still.folds, depth: still.sd, level: still.ysd, swing, strain: st.max, p99: st.p99, ok: why.length === 0, why, health: hl, pts: still.pts };
 }
 const describe = (d: Design) => `${d.method === 'flare' ? (d.fullness <= 1.01 ? 'straight' : 'flared') : d.method === 'gather' ? 'gathered' : 'pleated'}, ${d.panels} panel${d.panels > 1 ? 's' : ''}${d.grain > 30 ? ', bias' : ''}, ${fabricById(d.fabric).name}`;
 function spread(hs: Hem[]) {
@@ -244,10 +260,11 @@ export function expressiveness(): Section[] {
     const hs = s.designs.map((d) => hemOf(d)), least = spread(hs);
     return {
       id: s.id, title: s.title,
-      claim: 'Each settled from flat on the figure for 4 s, then twirled at 0.9 turns a second. Their hems: how far out (cm from the stand\'s axis), how deeply folded (spread of that, cm), how many folds, how level (spread of hem height, cm), how far they swing out in the twirl (cm), and how stretched the cloth is (stable: 99% of it within 15% of its cut length).',
-      rows: hs.map((h, k) => ({ skirt: describe(s.designs[k]), 'hem out': h.out.toFixed(1), 'fold depth': h.depth.toFixed(2), folds: h.folds, level: h.level.toFixed(2), swing: `+${h.swing.toFixed(1)}`, 'stretch (99th %ile / worst)': `${(h.p99 * 100).toFixed(1)}% / ${(h.strain * 100).toFixed(0)}%`, stable: h.ok })),
+      claim: 'Each settled from flat on the figure for 4 s, then twirled at 0.9 turns a second. Their hems: how far out (cm from the stand\'s axis), how deeply folded (spread of that, cm), how many folds, how level (spread of hem height, cm), how far they swing out in the twirl (cm). And whether each is sound: finite, 99% of springs within 12% stretch and 35% squash (1st percentile), under 1% of triangles collapsed, no point inside the figure, every seam closed to 5 mm.',
+      limits: 'Distinct by these measures of the hem, not shown distinct to a child\'s eye or matched to real sewn skirts. "Sound" catches stretch, squash, collapse, cloth inside the body and open seams; it doesn\'t catch cloth passing through itself between points.',
+      rows: hs.map((h, k) => ({ skirt: describe(s.designs[k]), 'hem out': h.out.toFixed(1), 'fold depth': h.depth.toFixed(2), folds: h.folds, level: h.level.toFixed(2), swing: `+${h.swing.toFixed(1)}`, stretch: `${(h.health.stretch99 * 100).toFixed(1)}%`, squash: `${(h.health.squash1 * 100).toFixed(0)}%`, collapsed: `${(h.health.collapsed * 100).toFixed(1)}%`, inside: h.health.inside, 'seam gap': `${h.health.seamGap.toFixed(2)} cm`, sound: h.ok ? 'yes' : h.why.join(', ') })),
       shapes: hs.map((h, k) => ({ label: describe(s.designs[k]), pts: h.pts })),
-      verdict: `nearest two differ by ${least.toFixed(2)} (scaled units); ${hs.every((h) => h.ok) ? 'all stable' : 'one or more unstable'}`, pass: least > 0.5 && hs.every((h) => h.ok),
+      verdict: `nearest two differ by ${least.toFixed(2)} (scaled units); ${hs.every((h) => h.ok) ? 'all sound' : 'one or more not sound'}`, pass: least > 0.5 && hs.every((h) => h.ok),
     };
   });
 }
@@ -269,7 +286,8 @@ export function feasibility(): Section {
   rows.push({ skirt: 'determinism', points: a === b ? 'same twice' : 'differs', springs: a, 'ms a frame': b });
   const worst = Math.max(...rows.slice(0, 3).map((r) => Number(r['ms a frame'])));
   return {
-    id: 'feasibility', title: '4 · Is it quick enough, and the same every time?',
+    id: 'feasibility', title: '4 · Is the cloth step quick enough on this device, and the same every time?',
+    limits: 'The cloth\'s step only, on whatever runs this page: not the whole frame (drawing, the page). For that, open Fab with ?perf on the phone itself: it reads out frame, cloth and drawing time and whether the cloth is keeping up with the clock.',
     claim: 'The cloth\'s step, on whatever device is running this page, after it\'s settled a moment. Under 12 ms leaves room for drawing within a 60 Hz frame. Open this page on the phone to measure the phone.',
     rows, verdict: `worst ${worst.toFixed(1)} ms a frame; ${a === b ? 'deterministic' : 'NOT deterministic'}`, pass: worst < 12 && a === b,
   };
@@ -293,7 +311,7 @@ export function mountEvidence() {
   const out = document.getElementById('out')!, it = runAll(), all: Section[] = [];
   const next = () => {
     const r = it.next();
-    if (r.done) { (window as unknown as { __evidence: unknown }).__evidence = all; out.insertAdjacentHTML('beforeend', `<p><b>${all.filter((s) => s.pass).length} of ${all.length} pass.</b></p>`); return; }
+    if (r.done) { (window as unknown as { __evidence: unknown }).__evidence = all; out.insertAdjacentHTML('beforeend', `<p><b>${all.filter((s) => s.pass).length} of ${all.length} claims hold, each only as far as it says.</b> None yet compares with real cloth or real sewn skirts, or with children.</p>`); return; }
     for (const s of Array.isArray(r.value) ? r.value : [r.value]) { all.push(s); out.insertAdjacentHTML('beforeend', html(s)); }
     setTimeout(next, 30);
   };
@@ -303,7 +321,7 @@ function html(s: Section) {
   const cols = [...new Set(s.rows.flatMap((r) => Object.keys(r)))];
   const table = `<table style="border-collapse:collapse;width:100%;font-size:12px;margin:.4em 0">${'<tr>' + cols.map((c) => `<th style="text-align:left;border-bottom:1px solid #cdbfa8;padding:3px 6px">${c}</th>`).join('') + '</tr>'}${s.rows.map((r) => '<tr>' + cols.map((c) => `<td style="border-bottom:1px solid #e6dccb;padding:3px 6px">${r[c] ?? ''}</td>`).join('') + '</tr>').join('')}</table>`;
   const shapes = s.shapes ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${s.shapes.map((sh) => svg(sh)).join('')}</div>` : '';
-  return `<section style="margin:1.2em 0;padding:12px;border-radius:12px;background:#fffaf0;box-shadow:0 1px 4px rgba(60,40,20,.12)"><h3 style="margin:0 0 .3em">${s.title}</h3><p style="margin:0;color:#7a6a56">${s.claim}</p><div style="overflow-x:auto">${table}</div>${shapes}<p style="margin:.4em 0 0;font-weight:700;color:${s.pass ? '#3f7a4a' : '#b8323f'}">${s.pass ? '✓' : '✗'} ${s.verdict}</p></section>`;
+  return `<section style="margin:1.2em 0;padding:12px;border-radius:12px;background:#fffaf0;box-shadow:0 1px 4px rgba(60,40,20,.12)"><h3 style="margin:0 0 .3em">${s.title}</h3><p style="margin:0;color:#7a6a56">${s.claim}</p>${s.limits ? `<p style="margin:.3em 0 0;color:#9a7a50;font-style:italic">Doesn’t establish: ${s.limits}</p>` : ''}<div style="overflow-x:auto">${table}</div>${shapes}<p style="margin:.4em 0 0;font-weight:700;color:${s.pass ? '#3f7a4a' : '#b8323f'}">${s.pass ? '✓' : '✗'} ${s.verdict}</p></section>`;
 }
 function svg(sh: { label: string; pts: Array<[number, number]>; r0?: number }) {
   const R = Math.max(16, ...sh.pts.map((p) => Math.hypot(p[0], p[1]))) * 1.05;

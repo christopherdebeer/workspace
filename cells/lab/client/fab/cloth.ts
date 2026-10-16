@@ -377,6 +377,50 @@ export class Cloth {
     }
   }
 
+  /**
+   * How sound the cloth is, beyond its stretch: what a stability verdict ought to look at.
+   * - stretch: the 99th percentile and worst of every spring's strain; squash: the 1st percentile (in-plane
+   *   compression real cloth would buckle out of rather than take);
+   * - collapsed: the share of triangles squashed to under a tenth of their cut area;
+   * - inside: how many points are inside the figure (more than 2 mm), and the deepest;
+   * - seamGap: the widest any seam's still open (cm), once it's had time to be sewn.
+   */
+  health() {
+    // (springs between two held points aren't simulated: a gathered or pleated edge is held squeezed into its band
+    // on purpose)
+    const live: number[] = [];
+    let finite = true;
+    for (let c = 0; c < this.la.length; c++) {
+      if (this.inv[this.la[c]] === 0 && this.inv[this.lb[c]] === 0) continue;
+      const v = dist(this.pos, this.la[c], this.lb[c]) / this.lr[c] - 1; if (!Number.isFinite(v)) finite = false; live.push(v);
+    }
+    const e = Float32Array.from(live).sort();
+    const q = (f: number) => e[Math.min(e.length - 1, Math.floor(e.length * f))] ?? 0;
+    let collapsed = 0;
+    const { pos, flat, tris } = this;
+    for (let t = 0; t < tris.length; t += 3) {
+      const a = tris[t], b = tris[t + 1], c = tris[t + 2];
+      // (a triangle with two held corners is held to its shape (a pleat's fold held to one point of the band is meant to be flat))
+      if ((this.inv[a] === 0 ? 1 : 0) + (this.inv[b] === 0 ? 1 : 0) + (this.inv[c] === 0 ? 1 : 0) >= 2) continue;
+      const fa = Math.abs((flat[b * 2] - flat[a * 2]) * (flat[c * 2 + 1] - flat[a * 2 + 1]) - (flat[b * 2 + 1] - flat[a * 2 + 1]) * (flat[c * 2] - flat[a * 2])) / 2;
+      const ux = pos[b * 3] - pos[a * 3], uy = pos[b * 3 + 1] - pos[a * 3 + 1], uz = pos[b * 3 + 2] - pos[a * 3 + 2], vx = pos[c * 3] - pos[a * 3], vy = pos[c * 3 + 1] - pos[a * 3 + 1], vz = pos[c * 3 + 2] - pos[a * 3 + 2];
+      const A = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+      if (A < 0.1 * fa) collapsed++;
+    }
+    let inside = 0, deepest = 0;
+    if (this.collider) {
+      const cs = Math.cos(this.spin), sn = Math.sin(this.spin);
+      for (let i = 0; i < this.n; i++) {
+        if (this.inv[i] === 0) continue;
+        const x = pos[i * 3], z = pos[i * 3 + 2], d = this.collider.distance(x * cs - z * sn, pos[i * 3 + 1], x * sn + z * cs, 1);
+        if (d < -0.2) { inside++; deepest = Math.max(deepest, -d); }
+      }
+    }
+    let seamGap = 0;
+    for (let c = 0; c < this.sa.length; c++) seamGap = Math.max(seamGap, dist(pos, this.sa[c], this.sb[c]));
+    return { finite, stretch99: q(0.99), stretchMax: e[e.length - 1] ?? 0, squash1: q(0.01), collapsed: collapsed / Math.max(1, tris.length / 3), inside, deepest, seamGap };
+  }
+
   normals() {
     const { pos, nor, tris } = this;
     nor.fill(0);

@@ -313,8 +313,16 @@ canvas.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = 0
 
 // ─── the frame ─────────────────────────────────────────────────────────────────────────────────
 let frames = 0, last = performance.now(), stepMs = 0;
+// (the cloth's clock: it runs in fixed 1/60 s steps, as many as wall-clock time has gone by (at most two a frame: a
+// slow device sees the cloth slow down rather than fall ever further behind), and the time it couldn't keep up with
+// is counted, not hidden)
+const STEP = 1 / 60;
+let owed = 0, simTime = 0, wallTime = 0, renderMs = 0, frameMs = 16.7, perfAt = 0;
+const perf = { fps: 0, frameMs: 0, simMs: 0, renderMs: 0, stepsPerFrame: 0, simSpeed: 1, particles: 0 };
+let stepsWindow = 0, framesWindow = 0, simWindow = 0, wallWindow = 0;
 function frame(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
+  frameMs = frameMs * 0.9 + raw * 1000 * 0.1;
   // (the camera: at the rails it rests in front of the one in use; crossing the room, it eases from one to the other)
   if (flying > 0) {
     const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : BENCH_VIEW, p = Math.min(1, (now - flyT0) / 1200), e = p * p * (3 - 2 * p);
@@ -332,25 +340,46 @@ function frame(now: number) {
     // (a twirl: the figure spun up on its stand, held, and let run down)
     const want = now < twirlUntil ? Math.PI * 2 * 0.9 : 0, acc = now < twirlUntil ? 7 : 3.5;
     cloth.omega += Math.max(-acc * dt, Math.min(acc * dt, want - cloth.omega));
-    const t0 = performance.now(); cloth.step(1 / 60); stepMs = stepMs * 0.95 + (performance.now() - t0) * 0.05;
+    owed = Math.min(owed + raw, 0.25);
+    let n = 0;
+    const t0 = performance.now();
+    while (owed >= STEP * 0.999 && n < 2) { cloth.step(STEP); owed -= STEP; simTime += STEP; n++; }
+    // (whatever's still owed after two steps is let go: the cloth runs slow, it doesn't run away)
+    if (n === 2 && owed > STEP) owed = 0;
+    const took = performance.now() - t0;
+    if (n) stepMs = stepMs * 0.9 + (took / n) * 0.1;
+    simWindow += n * STEP; stepsWindow += n;
   }
   const dpr = Math.min(devicePixelRatio || 1, 2), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const items: Item[] = room.items();
   if (cloth) items.push({ cloth, look: { fabric: fabricById(d.fabric), print: makePrint(d.print, d.colour) } });
+  const r0 = performance.now();
   lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, room.fittings()).vp;
-  frames++;
+  renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
+  frames++; framesWindow++; wallWindow += raw; wallTime += raw;
+  // (once a second: the whole frame on this device, not only the cloth's part of it)
+  if (now - perfAt > 1000) {
+    Object.assign(perf, { fps: Math.round(framesWindow / Math.max(1e-3, wallWindow)), frameMs: +frameMs.toFixed(1), simMs: +(stepMs * (stepsWindow / Math.max(1, framesWindow))).toFixed(1), renderMs: +renderMs.toFixed(1), stepsPerFrame: +(stepsWindow / Math.max(1, framesWindow)).toFixed(2), simSpeed: mode === 'bench' && wallWindow > 0 ? +(simWindow / wallWindow).toFixed(2) : 1, particles: cloth?.n ?? 0 });
+    if (perfEl) perfEl.textContent = `${perf.fps} fps · frame ${perf.frameMs} ms · cloth ${perf.simMs} ms (${perf.stepsPerFrame} steps) · draw ${perf.renderMs} ms · cloth at ${Math.round(perf.simSpeed * 100)}% speed · ${perf.particles} pts`;
+    perfAt = now; framesWindow = stepsWindow = 0; simWindow = wallWindow = 0;
+  }
   requestAnimationFrame(frame);
 }
 if (preview) document.body.classList.add('preview');
 document.body.classList.toggle('rails', mode === 'rails');
+// (the frame readout: `?perf`, or tap the title three times)
+let perfEl: HTMLElement | null = null;
+const showPerf = () => { perfEl ??= Object.assign(document.createElement('div'), { id: 'perf' }); document.getElementById('stage')!.appendChild(perfEl); };
+if (qs.has('perf')) showPerf();
+{ let taps = 0, at = 0; document.querySelector('nav .title')!.addEventListener('click', () => { const t = performance.now(); taps = t - at < 500 ? taps + 1 : 1; at = t; if (taps >= 3) { if (perfEl?.isConnected) perfEl.remove(); else showPerf(); } }); }
 if (mode === 'bench') make();
 else { Object.assign(view, room.viewOf(room.active, aspect()), { target: [...room.viewOf(room.active, aspect()).target] }); if (qs.has('warm')) for (let k = 0; k < 4; k++) room.update(1 / 60, 1e9); railUI(); }
 if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = {
-  probe: () => ({ mode, frames, particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
+  perf, probe: () => ({ mode, frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
   view, room, wear, backToRails, hangUp, twirl: () => { twirlUntil = performance.now() + 3200; },
 };
 addEventListener('resize', () => (mode === 'bench' ? ui() : railUI()));
