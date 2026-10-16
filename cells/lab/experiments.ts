@@ -26,10 +26,11 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'fab', title: 'Fab', group: 'Play',
-    blurb: 'A dressmaking workbench for children, one garment family deep: skirts. Decide how long, how full, whether the fullness is flared, gathered or pleated, how many panels, which way on the grain, which cloth; a real pattern is drafted to the little wooden figure (darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that tests the patterns and the cloth against the textile lab\'s own tests.',
+    blurb: 'A dressmaking workbench for children, one garment family deep: skirts. Start at the rails (the workshop\'s, and one for each person) and slide through the skirts on them; put one on the little wooden figure and decide how long, how full, whether the fullness is flared, gathered or pleated, how many panels, which way on the grain, which cloth; a real pattern is drafted to the little wooden figure (darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that tests the patterns and the cloth against the textile lab\'s own tests.',
     page: 'static/fab.html', preview: 'preview&fabric=lawn&print=2&colour=1', readme: 'static/fab.md',
     presets: [
-      { label: 'a flared gingham', query: '' },
+      { label: 'the rails', query: '' },
+      { label: 'a flared gingham', query: 'cut=flare&full=2.2&fabric=lawn&print=2&colour=1' },
       { label: 'felt bell', query: 'cut=flare&full=2.6&fabric=felt&print=0&colour=0' },
       { label: 'chiffon, gathered', query: 'cut=gather&full=2.8&fabric=chiffon&print=4&colour=3' },
       { label: 'pleated stripes', query: 'cut=pleat&full=2&panels=4&fabric=flannel&print=1&colour=4' },

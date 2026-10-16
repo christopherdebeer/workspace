@@ -37,27 +37,32 @@ float noise(vec3 p) {
 vec3 finish(vec3 c) { c = c / (1. + c * .35); return pow(clamp(c, 0., 1.), vec3(1. / 2.2)); }
 `;
 
+/** the clothes rails' size (cm): the bar's height above the floor (y = −5 is the floor), its length */
+export const RAIL_Y = 140, RAIL_W = 170, FLOOR = -5;
+/** a hanger's hook: how far above the skirt's waist it pivots on the bar */
+export const HOOK = 13;
+
 const SOLID_VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in float aMat;
-uniform mat4 uVP; uniform float uSpin;
+uniform mat4 uVP, uModel; uniform float uSpin;
 out vec3 vPos; out vec3 vNor; out vec3 vObj; flat out int vMat;
 // (the figure and its stand turn; the bench and wall don't)
 vec3 turn(vec3 p, float a) { float c = cos(a), s = sin(a); return vec3(p.x * c + p.z * s, p.y, -p.x * s + p.z * c); }
 void main() {
   float a = aMat < 1.5 ? uSpin : 0.;
-  vObj = aPos; vPos = turn(aPos, a); vNor = turn(aNor, a); vMat = int(aMat + .5); gl_Position = uVP * vec4(vPos, 1.);
+  vObj = aPos; vPos = (uModel * vec4(turn(aPos, a), 1.)).xyz; vNor = mat3(uModel) * turn(aNor, a); vMat = int(aMat + .5); gl_Position = uVP * vec4(vPos, 1.);
 }`;
 const SOLID_FS = `#version 300 es
 precision highp float;
 in vec3 vPos; in vec3 vNor; in vec3 vObj; flat in int vMat;
-uniform vec3 uEye;
+uniform vec3 uEye, uTint;
 out vec4 o;
 ${COMMON}
 void main() {
   vec3 n = normalize(vNor), V = normalize(uEye - vPos);
   vec3 base; float spec = .0, rough = 40.;
-  if (vMat == 0) {
-    // (the figure: beech, varnished; its grain running along it, a turned piece's rings)
+  if (vMat == 0 || vMat == 5) {
+    // (the figure, and the hangers: beech, varnished; its grain running along it, a turned piece's rings)
     float g = noise(vec3(vObj.x * .9, vObj.y * .06, vObj.z * .9)) * .6 + noise(vObj * vec3(2.2, .25, 2.2)) * .4;
     float ring = .5 + .5 * sin(length(vObj.xz) * 2.4 + g * 6.);
     base = mix(vec3(.80, .60, .40), vec3(.70, .49, .30), ring * .5 + g * .3);
@@ -71,6 +76,9 @@ void main() {
     float board = floor(vPos.z / 18.), g = noise(vec3(vPos.x * .05, board * 7.3, vPos.z * 1.2)) * .7 + noise(vPos * .3) * .3;
     base = mix(vec3(.66, .5, .34), vec3(.56, .41, .27), g) * (1. - .25 * smoothstep(.45, .5, abs(fract(vPos.z / 18.) - .5)));
     spec = .12; rough = 20.;
+  } else if (vMat == 4) {
+    // (metal: a clothes rail's tube, powder-coated in its owner's colour, or a hanger's chromed hook)
+    base = uTint; spec = 1.4; rough = 90.;
   } else {
     // (the wall behind: warm plaster, a little light from the window across it)
     base = vec3(.86, .8, .72) * (.9 + .1 * noise(vPos * .05));
@@ -83,9 +91,9 @@ void main() {
 
 const CLOTH_VS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in vec2 aFlat; in vec2 aEdge;
-uniform mat4 uVP;
+uniform mat4 uVP, uModel;
 out vec3 vPos; out vec3 vNor; out vec2 vFlat; out vec2 vEdge;
-void main() { vPos = aPos; vNor = aNor; vFlat = aFlat; vEdge = aEdge; gl_Position = uVP * vec4(aPos, 1.); }`;
+void main() { vPos = (uModel * vec4(aPos, 1.)).xyz; vNor = mat3(uModel) * aNor; vFlat = aFlat; vEdge = aEdge; gl_Position = uVP * vec4(vPos, 1.); }`;
 const CLOTH_FS = `#version 300 es
 precision highp float;
 in vec3 vPos; in vec3 vNor; in vec2 vFlat; in vec2 vEdge;
@@ -140,10 +148,10 @@ void main() {
 }`;
 
 const SHADOW_VS = `#version 300 es
-in vec3 aPos; in float aMat; uniform mat4 uLightVP; uniform float uSpin;
+in vec3 aPos; in float aMat; uniform mat4 uLightVP, uModel; uniform float uSpin;
 void main() {
   float a = aMat < 1.5 ? uSpin : 0., c = cos(a), s = sin(a);
-  gl_Position = uLightVP * vec4(aPos.x * c + aPos.z * s, aPos.y, -aPos.x * s + aPos.z * c, 1.);
+  gl_Position = uLightVP * uModel * vec4(aPos.x * c + aPos.z * s, aPos.y, -aPos.x * s + aPos.z * c, 1.);
 }`;
 const SHADOW_FS = `#version 300 es
 precision highp float; out vec4 o; void main() { o = vec4(1.); }`;
@@ -161,7 +169,7 @@ const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a: V3): V3 => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 // ─── the still things: figure, stand, bench, wall ──────────────────────────────────────────────
-function solidMesh(): number[] {
+function solidMesh(part: 'scene' | 'rail' | 'hanger' = 'scene'): number[] {
   const out: number[] = [];
   const put = (p: V3, n: V3, m: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], m);
   const quad = (a: [V3, V3], b: [V3, V3], c: [V3, V3], d: [V3, V3], m: number) => { for (const v of [a, b, c, a, c, d]) put(v[0], v[1], m); };
@@ -183,6 +191,29 @@ function solidMesh(): number[] {
     const P = (i: number, k: number): [V3, V3] => { const th = (i / 14) * Math.PI, ph = (k / 24) * Math.PI * 2, n: V3 = [Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)]; return [[c[0] + n[0] * r, c[1] + n[1] * r, c[2] + n[2] * r], n]; };
     for (let i = 0; i < 14; i++) for (let k = 0; k < 24; k++) quad(P(i, k), P(i + 1, k), P(i + 1, k + 1), P(i, k + 1), m);
   };
+  if (part === 'rail') {
+    // (a clothes rail: two uprights on castored feet, a bar across the top; centred under the bar, on the floor)
+    out.length = 0;
+    for (const x of [-RAIL_W / 2, RAIL_W / 2]) {
+      tube([x, -2, 0], [x, RAIL_Y + 1.5, 0], 1.4, 1.4, 4); ball([x, RAIL_Y + 1.5, 0], 1.5, 4);
+      tube([x, 1, -24], [x, 1, 24], 1.5, 1.5, 4);
+      for (const z of [-24, 24]) { ball([x, 1, z], 1.6, 4); ball([x, -2.6, z], 2.3, 4); }
+    }
+    tube([-RAIL_W / 2 - 3, RAIL_Y, 0], [RAIL_W / 2 + 3, RAIL_Y, 0], 1.3, 1.3, 4);
+    tube([-RAIL_W / 2, 9, 0], [RAIL_W / 2, 9, 0], 1, 1, 4);
+    return out;
+  }
+  if (part === 'hanger') {
+    // (a skirt hanger: a beech bar with a clip at each end, and a chromed hook that goes over the rail. Its origin's
+    // the waist of the skirt it holds; the hook's centre (where it pivots on the rail) is HOOK above it)
+    out.length = 0;
+    tube([-17, 4.5, 0], [17, 4.5, 0], 1.1, 1.1, 5); ball([-17, 4.5, 0], 1.1, 5); ball([17, 4.5, 0], 1.1, 5);
+    for (const x of [-14.5, 14.5]) tube([x, 4.2, 0], [x, 1.4, 0], 1.2, 1, 4);
+    tube([0, 5.4, 0], [0, HOOK - 2, 0], 0.35, 0.35, 4);
+    let prev: V3 = [0, HOOK - 2, 0];
+    for (let k = 1; k <= 14; k++) { const a = -Math.PI / 2 + (k / 14) * Math.PI * 1.35, q: V3 = [0, HOOK + Math.sin(a) * 2, Math.cos(a) * 2]; tube(prev, q, 0.35, 0.35, 4); prev = q; }
+    return out;
+  }
   for (const c of LIMBS) { tube(c.a, c.b, c.ra, c.rb, 0); ball(c.a, c.ra, 0); ball(c.b, c.rb, 0); }
   for (const b of BALLS) ball(b.c, b.r, 0);
   ball(HEAD.c, HEAD.r, 0);
@@ -198,14 +229,19 @@ function solidMesh(): number[] {
   };
   disc(-5, -3, 27, 27.5, 1); disc(-3, -1, 27.5, 26, 1); disc(-1, 0, 26, 25, 1);
   // (the bench, and the wall behind it)
-  quad([[-400, -5, -60], [0, 1, 0]], [[-400, -5, 140], [0, 1, 0]], [[400, -5, 140], [0, 1, 0]], [[400, -5, -60], [0, 1, 0]], 2);
-  quad([[-400, -5, -60], [0, 0, 1]], [[400, -5, -60], [0, 0, 1]], [[400, 400, -60], [0, 0, 1]], [[-400, 400, -60], [0, 0, 1]], 3);
+  quad([[-2400, -5, -60], [0, 1, 0]], [[-2400, -5, 240], [0, 1, 0]], [[400, -5, 240], [0, 1, 0]], [[400, -5, -60], [0, 1, 0]], 2);
+  quad([[-2400, -5, -60], [0, 0, 1]], [[400, -5, -60], [0, 0, 1]], [[400, 400, -60], [0, 0, 1]], [[-2400, 400, -60], [0, 0, 1]], 3);
   return out;
 }
 
 export interface View { az: number; el: number; dist: number; target: V3 }
 export interface Look { fabric: Fabric; print: Print }
-const SEE = (f: Fabric) => f.clear;
+/** a cloth to draw, where (its model matrix: none for the figure's own) */
+export interface Item { cloth: Cloth; look: Look; model?: Float32Array }
+/** the rails and hangers in the room: each a model matrix; a rail's tint its owner's colour */
+export interface Fittings { rails: Array<{ model: Float32Array; tint: V3 }>; hangers: Float32Array[] }
+const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+const CHROME: V3 = [0.62, 0.62, 0.64];
 
 export function createRenderer(gl: WebGL2RenderingContext) {
   const compile = (vs: string, fs: string) => {
@@ -220,18 +256,21 @@ export function createRenderer(gl: WebGL2RenderingContext) {
     return p;
   };
   const solid = compile(SOLID_VS, SOLID_FS), cloth = compile(CLOTH_VS, CLOTH_FS), shadow = compile(SHADOW_VS, SHADOW_FS);
-  const U = new Map<string, WebGLUniformLocation | null>();
-  const u = (p: WebGLProgram, n: string) => { const k = `${(p as { id?: number }).id ??= Math.random()}${n}`; if (!U.has(k)) U.set(k, gl.getUniformLocation(p, n)); return U.get(k)!; };
+  const U = new Map<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
+  const u = (p: WebGLProgram, n: string) => { let m = U.get(p); if (!m) U.set(p, (m = new Map())); if (!m.has(n)) m.set(n, gl.getUniformLocation(p, n)); return m.get(n)!; };
 
-  // (the still things)
-  const sv = new Float32Array(solidMesh()), sBuf = gl.createBuffer()!;
-  gl.bindBuffer(gl.ARRAY_BUFFER, sBuf); gl.bufferData(gl.ARRAY_BUFFER, sv, gl.STATIC_DRAW);
+  // (the still things: the room, a rail, a hanger; each a buffer, drawn with a model matrix)
   const vao = (p: WebGLProgram, attrs: Array<[string, number, number, number]>, buf: WebGLBuffer) => {
     const v = gl.createVertexArray()!; gl.bindVertexArray(v); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     for (const [name, size, stride, off] of attrs) { const l = gl.getAttribLocation(p, name); if (l < 0) continue; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4); }
     return v;
   };
-  const sVao = vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], sBuf), sShadow = vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], sBuf), sCount = sv.length / 7;
+  const mesh = (part: 'scene' | 'rail' | 'hanger') => {
+    const v = new Float32Array(solidMesh(part)), b = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW);
+    return { draw: vao(solid, [['aPos', 3, 7, 0], ['aNor', 3, 7, 3], ['aMat', 1, 7, 6]], b), shadow: vao(shadow, [['aPos', 3, 7, 0], ['aMat', 1, 7, 6]], b), count: v.length / 7 };
+  };
+  const scene = mesh('scene'), rail = mesh('rail'), hanger = mesh('hanger');
 
   // (the shadow map)
   const SH = 2048, shTex = gl.createTexture()!, shFb = gl.createFramebuffer()!;
@@ -241,68 +280,103 @@ export function createRenderer(gl: WebGL2RenderingContext) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, shFb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shTex, 0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   const key = norm([-0.55, 0.75, 0.6]), keyCol: V3 = [1.9, 1.75, 1.5];
-  const lightVP = mul(ortho(-62, 62, -62, 62, 1, 400), lookAt([key[0] * 200, 60 + key[1] * 200, key[2] * 200], [0, 60, 0], [0, 1, 0]));
 
-  // (the cloth: its flat place and edge distance don't change; where it is does, every frame)
-  let c: Cloth | null = null, cDyn: WebGLBuffer | null = null, cStat: WebGLBuffer | null = null, cIdx: WebGLBuffer | null = null, cVao: WebGLVertexArrayObject | null = null, cShVao: WebGLVertexArrayObject | null = null, dyn = new Float32Array(0);
-  function setCloth(next: Cloth | null) {
-    for (const b of [cDyn, cStat, cIdx]) if (b) gl.deleteBuffer(b);
-    if (cVao) gl.deleteVertexArray(cVao); if (cShVao) gl.deleteVertexArray(cShVao);
-    c = next; cDyn = cStat = cIdx = null; cVao = cShVao = null;
-    if (!c || c.n === 0) return;
-    dyn = new Float32Array(c.n * 6);
-    cDyn = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, cDyn); gl.bufferData(gl.ARRAY_BUFFER, dyn.byteLength, gl.DYNAMIC_DRAW);
-    const st = new Float32Array(c.n * 4);
-    for (let i = 0; i < c.n; i++) st.set([c.flat[i * 2], c.flat[i * 2 + 1], c.edge[i * 2], c.edge[i * 2 + 1]], i * 4);
-    cStat = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, cStat); gl.bufferData(gl.ARRAY_BUFFER, st, gl.STATIC_DRAW);
-    cVao = gl.createVertexArray()!; gl.bindVertexArray(cVao);
-    for (const [name, size, buf, stride, off] of [['aPos', 3, cDyn, 6, 0], ['aNor', 3, cDyn, 6, 3], ['aFlat', 2, cStat, 4, 0], ['aEdge', 2, cStat, 4, 2]] as const) {
-      const l = gl.getAttribLocation(cloth, name); if (l < 0) continue;
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4);
+  // (each cloth's buffers, made when it's first drawn and let go when it's no longer asked for; its flat place and
+  // edge distance don't change, where it is does)
+  interface G { dyn: WebGLBuffer; stat: WebGLBuffer; idx: WebGLBuffer; draw: WebGLVertexArrayObject; shadow: WebGLVertexArrayObject; version: number; data: Float32Array; seen: number }
+  const gpu = new Map<Cloth, G>();
+  let tick = 0;
+  function upload(c: Cloth): G {
+    let g = gpu.get(c);
+    if (!g) {
+      const dyn = gl.createBuffer()!, stat = gl.createBuffer()!, idx = gl.createBuffer()!, data = new Float32Array(c.n * 6);
+      gl.bindBuffer(gl.ARRAY_BUFFER, dyn); gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
+      const st = new Float32Array(c.n * 4);
+      for (let i = 0; i < c.n; i++) st.set([c.flat[i * 2], c.flat[i * 2 + 1], c.edge[i * 2], c.edge[i * 2 + 1]], i * 4);
+      gl.bindBuffer(gl.ARRAY_BUFFER, stat); gl.bufferData(gl.ARRAY_BUFFER, st, gl.STATIC_DRAW);
+      const draw = gl.createVertexArray()!; gl.bindVertexArray(draw);
+      for (const [name, size, buf, stride, off] of [['aPos', 3, dyn, 6, 0], ['aNor', 3, dyn, 6, 3], ['aFlat', 2, stat, 4, 0], ['aEdge', 2, stat, 4, 2]] as const) {
+        const l = gl.getAttribLocation(cloth, name); if (l < 0) continue;
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride * 4, off * 4);
+      }
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, c.tris, gl.STATIC_DRAW);
+      const sh = gl.createVertexArray()!; gl.bindVertexArray(sh);
+      gl.bindBuffer(gl.ARRAY_BUFFER, dyn); const l = gl.getAttribLocation(shadow, 'aPos'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 24, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idx);
+      gl.bindVertexArray(null);
+      g = { dyn, stat, idx, draw, shadow: sh, version: -1, data, seen: tick };
+      gpu.set(c, g);
     }
-    cIdx = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cIdx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, c.tris, gl.STATIC_DRAW);
-    cShVao = gl.createVertexArray()!; gl.bindVertexArray(cShVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cDyn); const l = gl.getAttribLocation(shadow, 'aPos'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 24, 0);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cIdx);
-    gl.bindVertexArray(null);
+    g.seen = tick;
+    if (g.version !== c.version) {
+      const d = g.data;
+      for (let i = 0; i < c.n; i++) { d[i * 6] = c.pos[i * 3]; d[i * 6 + 1] = c.pos[i * 3 + 1]; d[i * 6 + 2] = c.pos[i * 3 + 2]; d[i * 6 + 3] = c.nor[i * 3]; d[i * 6 + 4] = c.nor[i * 3 + 1]; d[i * 6 + 5] = c.nor[i * 3 + 2]; }
+      gl.bindBuffer(gl.ARRAY_BUFFER, g.dyn); gl.bufferSubData(gl.ARRAY_BUFFER, 0, d);
+      g.version = c.version;
+    }
+    return g;
   }
 
-  function frame(view: View, look: Look | null, w: number, h: number, spin = 0) {
-    if (c && cDyn) {
-      for (let i = 0; i < c.n; i++) { dyn[i * 6] = c.pos[i * 3]; dyn[i * 6 + 1] = c.pos[i * 3 + 1]; dyn[i * 6 + 2] = c.pos[i * 3 + 2]; dyn[i * 6 + 3] = c.nor[i * 3]; dyn[i * 6 + 4] = c.nor[i * 3 + 1]; dyn[i * 6 + 5] = c.nor[i * 3 + 2]; }
-      gl.bindBuffer(gl.ARRAY_BUFFER, cDyn); gl.bufferSubData(gl.ARRAY_BUFFER, 0, dyn);
-    }
+  function frame(view: View, items: Item[], w: number, h: number, spin = 0, fit: Fittings = { rails: [], hangers: [] }) {
+    tick++;
+    const gs = items.map((it) => upload(it.cloth));
+    for (const [c, g] of gpu) if (g.seen !== tick) { gl.deleteBuffer(g.dyn); gl.deleteBuffer(g.stat); gl.deleteBuffer(g.idx); gl.deleteVertexArray(g.draw); gl.deleteVertexArray(g.shadow); gpu.delete(c); }
+    // (the window's light, its shadow centred on what's being looked at)
+    const t = view.target, R2 = Math.max(70, view.dist * 0.5);
+    const lightVP = mul(ortho(-R2, R2, -R2, R2, 1, 900), lookAt([t[0] + key[0] * 400, t[1] + key[1] * 400, t[2] + key[2] * 400], t, [0, 1, 0]));
+    const solids = (p: WebGLProgram, which: 'draw' | 'shadow') => {
+      const m = (x: { draw: WebGLVertexArrayObject; shadow: WebGLVertexArrayObject; count: number }, model: Float32Array, sp: number, tint: V3) => {
+        gl.uniformMatrix4fv(u(p, 'uModel'), false, model); gl.uniform1f(u(p, 'uSpin'), sp);
+        if (which === 'draw') gl.uniform3fv(u(p, 'uTint'), tint);
+        gl.bindVertexArray(x[which]); gl.drawArrays(gl.TRIANGLES, 0, x.count);
+      };
+      m(scene, IDENTITY, spin, CHROME);
+      for (const r of fit.rails) m(rail, r.model, 0, r.tint);
+      for (const hm of fit.hangers) m(hanger, hm, 0, CHROME);
+    };
     // (the shadow pass)
     gl.bindFramebuffer(gl.FRAMEBUFFER, shFb); gl.viewport(0, 0, SH, SH);
     gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.disable(gl.CULL_FACE);
-    gl.useProgram(shadow); gl.uniformMatrix4fv(u(shadow, 'uLightVP'), false, lightVP); gl.uniform1f(u(shadow, 'uSpin'), spin);
-    gl.bindVertexArray(sShadow); gl.drawArrays(gl.TRIANGLES, 0, sCount);
-    // (the cloth's already where it is: its aMat reads 0, so it's not turned again)
+    gl.useProgram(shadow); gl.uniformMatrix4fv(u(shadow, 'uLightVP'), false, lightVP);
+    solids(shadow, 'shadow');
     gl.uniform1f(u(shadow, 'uSpin'), 0);
-    if (c && cShVao) { gl.bindVertexArray(cShVao); gl.drawElements(gl.TRIANGLES, c.tris.length, gl.UNSIGNED_INT, 0); }
+    items.forEach((it, k) => { gl.uniformMatrix4fv(u(shadow, 'uModel'), false, it.model ?? IDENTITY); gl.bindVertexArray(gs[k].shadow); gl.drawElements(gl.TRIANGLES, it.cloth.tris.length, gl.UNSIGNED_INT, 0); });
     // (the view)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
     gl.clearColor(0.86, 0.8, 0.72, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const ce = Math.cos(view.el), eye: V3 = [view.target[0] + Math.sin(view.az) * ce * view.dist, view.target[1] + Math.sin(view.el) * view.dist, view.target[2] + Math.cos(view.az) * ce * view.dist];
-    const vp = mul(perspective(0.6, w / h, 5, 2000), lookAt(eye, view.target, [0, 1, 0]));
+    const ce = Math.cos(view.el), eye: V3 = [t[0] + Math.sin(view.az) * ce * view.dist, t[1] + Math.sin(view.el) * view.dist, t[2] + Math.cos(view.az) * ce * view.dist];
+    const vp = mul(perspective(0.6, w / h, 5, 4000), lookAt(eye, t, [0, 1, 0]));
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, shTex);
     for (const p of [solid, cloth]) {
       gl.useProgram(p);
       gl.uniformMatrix4fv(u(p, 'uVP'), false, vp); gl.uniformMatrix4fv(u(p, 'uLightVP'), false, lightVP);
       gl.uniform3fv(u(p, 'uKey'), key); gl.uniform3fv(u(p, 'uKeyCol'), keyCol); gl.uniform3fv(u(p, 'uEye'), eye); gl.uniform1i(u(p, 'uShadow'), 0);
     }
-    gl.useProgram(solid); gl.uniform1f(u(solid, 'uSpin'), spin); gl.bindVertexArray(sVao); gl.drawArrays(gl.TRIANGLES, 0, sCount);
-    if (c && cVao && look) {
-      gl.useProgram(cloth); gl.bindVertexArray(cVao);
-      const f = look.fabric, pr = look.print, see = SEE(f) > 0.05;
+    gl.useProgram(solid); solids(solid, 'draw');
+    // (cloth: opaque first, see-through after, blended)
+    gl.useProgram(cloth);
+    const order = items.map((it, k) => k).sort((a, b) => items[a].look.fabric.clear - items[b].look.fabric.clear);
+    for (const k of order) {
+      const it = items[k], f = it.look.fabric, pr = it.look.print, see = f.clear > 0.05;
       if (see) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
+      gl.uniformMatrix4fv(u(cloth, 'uModel'), false, it.model ?? IDENTITY);
       gl.uniform3fv(u(cloth, 'uInk0'), pr.ink[0]); gl.uniform3fv(u(cloth, 'uInk1'), pr.ink[1]); gl.uniform3fv(u(cloth, 'uInk2'), pr.ink[2]);
       gl.uniform1f(u(cloth, 'uKind'), pr.kind); gl.uniform1f(u(cloth, 'uScale'), pr.scale);
       gl.uniform1f(u(cloth, 'uSheen'), f.sheen); gl.uniform1f(u(cloth, 'uFuzz'), f.fuzz); gl.uniform1f(u(cloth, 'uClear'), f.clear); gl.uniform1f(u(cloth, 'uWeave'), f.weave);
-      gl.drawElements(gl.TRIANGLES, c.tris.length, gl.UNSIGNED_INT, 0);
+      gl.bindVertexArray(gs[k].draw); gl.drawElements(gl.TRIANGLES, it.cloth.tris.length, gl.UNSIGNED_INT, 0);
       if (see) { gl.disable(gl.BLEND); gl.depthMask(true); }
     }
     gl.bindVertexArray(null);
+    return { vp, eye };
   }
-  return { setCloth, frame };
+  return { frame };
 }
+
+/** a model matrix: turned by `angle` about the z axis round `pivot` (local), and that pivot put at `at` */
+export function swingAt(at: V3, pivot: V3, angle: number, out: Float32Array = new Float32Array(16)): Float32Array {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  // (x' = R(x − pivot) + at)
+  out.set([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, at[0] - (c * pivot[0] - s * pivot[1]), at[1] - (s * pivot[0] + c * pivot[1]), at[2] - pivot[2], 1]);
+  return out;
+}
+export const translate = (x: number, y: number, z: number) => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);

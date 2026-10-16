@@ -77,7 +77,8 @@ const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 const roundAt = (y: number) => girth(WAIST_Y - y);
 const HIP_DEPTH = (() => { let best = 0, at = 0; for (let y = 0; y <= WAIST_Y - TORSO_FOOT; y += 0.5) { const g = roundAt(y); if (g > best) { best = g; at = y; } } return at; })();
 
-export function draft(d0: Design): Skirt {
+/** `budget`: about how many points of cloth it should come to (fewer for one hanging on a rail) */
+export function draft(d0: Design, budget = 1600): Skirt {
   const d: Design = { ...d0, length: clamp(d0.length, 10, 62), fullness: clamp(d0.fullness, 1, 4), panels: clamp(Math.round(d0.panels), 1, 12), grain: clamp(d0.grain, 0, 45) };
   const notes: string[] = [];
   const L = d.length, yh = Math.min(HIP_DEPTH, L - 2), waist = roundAt(0), band = waist + 1.5;
@@ -93,7 +94,7 @@ export function draft(d0: Design): Skirt {
     let width = (y: number) => 2 * cut.hw(y);
     const maxW = Math.max(width(0), width(L));
     const area = n * Array.from({ length: 21 }, (_, k) => width((k / 20) * L)).reduce((s, w) => s + w, 0) * (L / 21);
-    const h = Math.max(1.9, Math.sqrt((n * maxW * L) / 1600));
+    const h = Math.max(1.9, Math.sqrt((n * maxW * L) / budget));
     const nv = Math.max(6, Math.round(L / h)), nu = Math.max(4, Math.round(maxW / h));
     let du0 = width(0) / nu;
     // (the folds at the waist, in grid columns: each dart or pleat closes k columns to a point. A fold's a whole
@@ -294,4 +295,36 @@ function check(sk: Skirt, c: { hw: (y: number) => number; R0: number; g: number;
 /** what the cloth needs of a skirt: its pieces, what's sewn, and where its held points are on the figure */
 export function toBuild(sk: Skirt, fabric: Fabric) {
   return { pieces: sk.pieces, pairs: sk.pairs, holds: sk.holds.map((h) => ({ at: h.at, p: bandAt(h.s, h.y, sk.band) })), fabric };
+}
+
+/** a skirt hung up: its waistband held flat in a hanger's two clips, the skirt below it, the waist at y = 0 */
+export function toHangerBuild(sk: Skirt, fabric: Fabric) {
+  // (the band, flattened: an ellipse 1.6 cm deep whose round is the band's)
+  const rz = 1.6, round = (a: number) => { const h = ((a - rz) / (a + rz)) ** 2; return Math.PI * (a + rz) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h))); };
+  let lo = rz, hi = sk.band; for (let k = 0; k < 40; k++) { const m = (lo + hi) / 2; if (round(m) < sk.band) lo = m; else hi = m; }
+  const loop = byArc(lo, rz), at = (s: number, y: number): V3 => { const [x, z] = loop(s / sk.band); return [x, y, z]; };
+  return {
+    pieces: sk.pieces.map((p) => ({ ...p, start: (u: number, v: number): V3 => { const q = p.start(u, v); return [q[0], q[1] - WAIST_Y, q[2]]; } })),
+    pairs: sk.pairs, holds: sk.holds.map((h) => ({ at: h.at, p: at(h.s, h.y - WAIST_Y) })), fabric, collider: null, floor: false,
+  };
+}
+
+/** a skirt in plain words: "a knee-length flared skirt" */
+export function describe(d: Design): string {
+  const len = d.length < 22 ? 'mini' : d.length < 36 ? 'knee-length' : d.length < 50 ? 'midi' : 'maxi';
+  const how = d.method === 'gather' ? 'gathered' : d.method === 'pleat' ? 'pleated' : d.fullness <= 1.05 ? 'straight' : d.fullness >= 3.4 ? 'circle' : 'flared';
+  return `a ${len} ${how}${d.grain > 30 ? ', bias-cut' : ''} skirt`;
+}
+
+/** a point on an ellipse (half-widths rx across, rz deep) a fraction of the way round it by length, from the front */
+function byArc(rx: number, rz: number) {
+  const N = 256, acc = [0];
+  for (let k = 1; k <= N; k++) { const a0 = ((k - 1) / N) * TAU, a1 = (k / N) * TAU; acc.push(acc[k - 1] + Math.hypot((Math.sin(a1) - Math.sin(a0)) * rx, (Math.cos(a1) - Math.cos(a0)) * rz)); }
+  return (f: number): [number, number] => {
+    const t = (((f % 1) + 1) % 1) * acc[N];
+    let lo = 0, hi = N;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (acc[m] <= t) lo = m; else hi = m; }
+    const a = ((lo + (t - acc[lo]) / Math.max(1e-9, acc[lo + 1] - acc[lo])) / N) * TAU;
+    return [Math.sin(a) * rx, Math.cos(a) * rz];
+  };
 }

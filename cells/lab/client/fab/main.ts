@@ -6,16 +6,25 @@
  * which is sewn up and falls as that cloth falls (cloth.ts): its silhouette, its folds and how it swings are never
  * set, only found.
  *
- * Drag the figure round, pinch to come close. **twirl** turns the figure on its stand; **sew** lays the pieces out
- * flat round it and sews them up again. The little pattern card opens the whole pattern.
+ * It starts at the rails (rails.ts): along the workshop's wall, a clothes rail for the workshop and one for each person,
+ * hung with skirts. Slide a rail's skirts along it, swipe up or down for the next rail, tap the one in front to put it
+ * on the figure; it's taken off its hanger and sewn on, and the camera crosses the room to the bench. **hang up**
+ * hangs it back on its owner's rail (or a new rail, asking whose); going back to the **rails** does too, if it's
+ * changed.
+ *
+ * At the bench, drag the figure round, pinch to come close. **twirl** turns the figure on its stand; **sew** lays the
+ * pieces out flat round it and sews them up again. The little pattern card opens the whole pattern.
  *
  * `?len=` `&full=` `&cut=flare|gather|pleat` `&panels=` `&grain=` (degrees) `&fabric=` `&print=` `&colour=` ·
- * `?settle=N` (frames of cloth before the first's drawn) · `?preview` · `?bench=evidence` (the evidence bench).
+ * `?settle=N` (frames of cloth before the first's drawn) · `?preview` · `?rails` (start at the rails; a design in the
+ * query starts at the bench) · `?warm` (the rails' skirts settled before the first frame) · `?bench=evidence`.
  */
 import { Cloth } from './cloth';
 import { FABRICS, COLOURWAYS, PRINTS, fabricById, makePrint } from './fabric';
-import { DEFAULT_DESIGN, draft, toBuild, type Design, type Method, type Skirt } from './pattern';
-import { createRenderer } from './render';
+import { DEFAULT_DESIGN, describe, draft, toBuild, type Design, type Method, type Skirt } from './pattern';
+import { Room } from './rails';
+import { createRenderer, type Item } from './render';
+import { RAIL_COLOURS, activeRail, addRail, hang, rails, removeRail, renameRail, setActive, takeOff, type Rail } from './store';
 import { drawSheet } from './sheet';
 
 const qs = new URLSearchParams(location.search), preview = qs.has('preview');
@@ -43,8 +52,7 @@ function make(fresh = false) {
   const next = new Cloth(toBuild(sk, fabricById(d.fabric)), fresh ? null : cloth);
   if (cloth && !fresh) { next.spin = cloth.spin; next.omega = cloth.omega; }
   cloth = next;
-  R.setCloth(cloth);
-  if (!preview) {
+  if (!preview && mode === 'bench') {
     const u = new URL(location.href);
     for (const [k, v] of [['len', d.length.toFixed(0)], ['full', d.fullness.toFixed(2)], ['cut', d.method], ['panels', String(d.panels)], ['grain', d.grain.toFixed(0)], ['fabric', d.fabric], ['print', String(d.print)], ['colour', String(d.colour)]]) u.searchParams.set(k, v);
     history.replaceState(null, '', u);
@@ -152,22 +160,154 @@ $('pattern').addEventListener('click', toggleSheet);
 $('sew').addEventListener('click', () => make(true));
 let twirlUntil = 0;
 $('twirl').addEventListener('click', () => { twirlUntil = performance.now() + 3200; });
-$('surprise').addEventListener('click', () => {
-  d.length = 14 + Math.round(Math.random() * 44); d.fullness = Math.round((1 + Math.random() * 3) * 20) / 20;
-  d.method = (['flare', 'gather', 'pleat'] as Method[])[Math.floor(Math.random() * 3)]; d.panels = 1 + Math.floor(Math.random() * 8);
-  d.grain = Math.random() < 0.3 ? 45 : 0; d.fabric = FABRICS[Math.floor(Math.random() * FABRICS.length)].id;
-  d.print = Math.floor(Math.random() * PRINTS.length); d.colour = Math.floor(Math.random() * COLOURWAYS.length);
-  make();
-});
 
-// ─── turning round it ──────────────────────────────────────────────────────────────────────────
-const view = { az: Number(qs.get('az') ?? 0.55), el: Number(qs.get('el') ?? 0.1), dist: Number(qs.get('dist') ?? 200), target: [0, Number(qs.get('ty') ?? 52), 0] as [number, number, number] };
-let drag = false, lx = 0, ly = 0, pinch = 0, idle = 0;
-canvas.addEventListener('pointerdown', (e) => { drag = true; lx = e.clientX; ly = e.clientY; canvas.setPointerCapture(e.pointerId); idle = 0; });
-canvas.addEventListener('pointermove', (e) => { if (!drag || pinch) return; view.az -= (e.clientX - lx) * 0.008; view.el = Math.max(-0.2, Math.min(1.2, view.el + (e.clientY - ly) * 0.004)); lx = e.clientX; ly = e.clientY; idle = 0; });
-canvas.addEventListener('pointerup', () => { drag = false; });
-canvas.addEventListener('wheel', (e) => { view.dist = Math.max(80, Math.min(360, view.dist * (1 + e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
-canvas.addEventListener('touchstart', (e) => { if (e.touches.length === 2) pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }, { passive: true });
+// ─── the rails: where every skirt starts and ends ──────────────────────────────────────────────
+type Mode = 'rails' | 'bench';
+const hasDesign = ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour'].some((k) => qs.has(k));
+let mode: Mode = qs.has('rails') || (!hasDesign && !preview && !qs.has('settle') && !qs.has('sheet')) ? 'rails' : 'bench';
+const room = new Room();
+room.active = Math.max(0, room.states.findIndex((st) => st.rail.id === activeRail()));
+/** where the skirt on the figure came from: a rail and the garment on it, and its design as it was then */
+let origin: { rail: string; garment: string | null; design: Design } | null = null;
+let lastVP: Float32Array | null = null, toastT = 0, lastFront = -1;
+const toast = (t: string) => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = window.setTimeout(() => el.classList.remove('show'), 2400); };
+const railName = (r: Rail) => (r.workshop ? 'the workshop’s rail' : /rail/i.test(r.name) ? r.name : `${r.name}’s rail`);
+
+function railUI() {
+  const tags = $('railtags'); tags.innerHTML = '';
+  room.states.forEach((st, k) => {
+    const b = document.createElement('button'); b.className = `tag${k === room.active ? ' on' : ''}`;
+    b.style.setProperty('--c', st.rail.workshop ? '#9a9aa0' : RAIL_COLOURS[st.rail.colour % RAIL_COLOURS.length].css);
+    b.textContent = st.rail.workshop ? 'workshop' : st.rail.name;
+    b.addEventListener('click', () => {
+      // (tap your own rail's tag again to rename it; clear its name to take it away)
+      if (k === room.active && !st.rail.workshop) {
+        const n = prompt('A new name for this rail (clear it to take the rail away)', st.rail.name);
+        if (n === null) return;
+        if (!n.trim()) { if (confirm(`Take away ${railName(st.rail)}, and everything on it?`)) { removeRail(st.rail.id); room.refresh(); showRail(room.active - 1); } return; }
+        renameRail(st.rail.id, n); room.refresh(); railUI(); return;
+      }
+      showRail(k);
+    });
+    tags.appendChild(b);
+  });
+  const add = document.createElement('button'); add.className = 'tag add'; add.textContent = '+ a rail';
+  add.addEventListener('click', () => { const n = prompt('Whose rail is it? (a name)'); if (!n || !n.trim()) return; addRail(n); room.refresh(); showRail(room.states.length - 1); });
+  tags.appendChild(add);
+  railInfo();
+}
+function railInfo() {
+  const st = room.states[room.active], h = room.frontHung();
+  lastFront = room.front();
+  $('railname').textContent = st ? railName(st.rail) : '';
+  if (!h) { $('railwhat').textContent = ''; return; }
+  if (!h.g) { $('railwhat').textContent = 'a bare hanger: start a new skirt'; $('wear').textContent = 'start one'; return; }
+  const g = h.g.design;
+  $('railwhat').textContent = `${describe(g)} in ${fabricById(g.fabric).name}${g.print ? `, ${PRINTS[g.print]}` : ''}`;
+  $('wear').textContent = 'put it on the figure';
+}
+function showRail(k: number) {
+  if (!room.states.length) return;
+  room.active = Math.max(0, Math.min(room.states.length - 1, k));
+  setActive(room.states[room.active].rail.id); railUI();
+}
+/** take garment i off the rail and sew it onto the figure */
+function wear(i: number) {
+  const st = room.states[room.active], h = st?.hung[i];
+  if (!st || !h) return;
+  Object.assign(d, h.g ? h.g.design : DEFAULT_DESIGN);
+  origin = { rail: st.rail.id, garment: h.g?.id ?? null, design: { ...d } };
+  room.onFigure = h.g?.id ?? null;
+  setMode('bench');
+  make(true);
+}
+/** hang what's on the figure up: back on its own hanger if it's someone's, else on the rail in use (asking whose, if
+ * nobody has a rail yet). Nothing's hung if it's unchanged and already someone's. */
+function hangUp(): boolean {
+  const own = origin ? rails().find((r) => r.id === origin!.rail && !r.workshop) : undefined;
+  if (own && origin?.garment && JSON.stringify(origin.design) === JSON.stringify(d)) { toast(`it’s on ${railName(own)} already`); return false; }
+  let id = own?.id ?? (rails().find((r) => r.id === activeRail() && !r.workshop) ?? rails().find((r) => !r.workshop))?.id;
+  if (!id) { const n = prompt('Hang it on whose rail? (a name)'); if (!n || !n.trim()) return false; id = addRail(n).id; }
+  const g = hang(id, d, own ? origin?.garment ?? undefined : undefined);
+  if (!g) return false;
+  origin = { rail: id, garment: g.id, design: { ...d } };
+  room.refresh(); room.onFigure = g.id;
+  toast(`hung on ${railName(rails().find((r) => r.id === id)!)}`);
+  return true;
+}
+function backToRails() {
+  if (!origin || JSON.stringify(origin.design) !== JSON.stringify(d)) hangUp();
+  room.onFigure = null; room.refresh();
+  if (origin) {
+    const k = room.states.findIndex((st) => st.rail.id === origin!.rail);
+    if (k >= 0) { room.active = k; setActive(origin.rail); const i = room.states[k].hung.findIndex((h) => (h.g?.id ?? null) === origin!.garment); if (i >= 0) room.goTo(i); }
+  }
+  setMode('rails');
+}
+function setMode(m: Mode) {
+  mode = m; flying = 1; flyT0 = performance.now(); flyFrom = { ...view, target: [...view.target] as [number, number, number] };
+  document.body.classList.toggle('rails', m === 'rails');
+  if (m === 'rails') {
+    if (sheetOn) toggleSheet();
+    if (!preview) { const u = new URL(location.href); for (const k of ['len', 'full', 'cut', 'panels', 'grain', 'fabric', 'print', 'colour']) u.searchParams.delete(k); history.replaceState(null, '', u); }
+    railUI();
+  } else ui();
+}
+$('wear').addEventListener('click', () => wear(room.front()));
+$('torails').addEventListener('click', backToRails);
+$('hang').addEventListener('click', () => hangUp());
+
+// ─── turning round it, and along the rails ─────────────────────────────────────────────────────
+const BENCH_VIEW = { az: Number(qs.get('az') ?? 0.55), el: Number(qs.get('el') ?? 0.1), dist: Number(qs.get('dist') ?? 200), target: [0, Number(qs.get('ty') ?? 52), 0] as [number, number, number] };
+const view = { ...BENCH_VIEW, target: [...BENCH_VIEW.target] as [number, number, number] };
+/** crossing the room, between the rails and the bench: where from, and when it set off (1.2 s, eased) */
+let flying = 0, flyFrom = { ...view, target: [...view.target] as [number, number, number] }, flyT0 = 0;
+const aspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
+const cmPerPx = () => (2 * view.dist * Math.tan(0.3) * aspect()) / Math.max(1, canvas.clientWidth);
+let drag = false, lx = 0, ly = 0, pinch = 0, idle = 0, sx = 0, sy = 0, st0 = 0, axis: '' | 'x' | 'y' = '', press = 0, lastMove = 0;
+const local = (e: { clientX: number; clientY: number }) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top] as const; };
+canvas.addEventListener('pointerdown', (e) => {
+  drag = true; lx = sx = e.clientX; ly = sy = e.clientY; st0 = performance.now(); axis = ''; canvas.setPointerCapture(e.pointerId); idle = 0;
+  if (mode === 'rails') {
+    // (a long press on one of your own: take it off the rail)
+    clearTimeout(press);
+    press = window.setTimeout(() => {
+      if (!lastVP || axis) return;
+      const [px, py] = local({ clientX: sx, clientY: sy }), i = room.pick(px, py, lastVP, canvas.clientWidth, canvas.clientHeight), stt = room.states[room.active], h = stt?.hung[i];
+      if (!h?.g) return;
+      if (stt.rail.workshop) { toast('the workshop’s skirts stay: put one on the figure, and hang up your own'); return; }
+      drag = false;
+      if (confirm(`Take ${describe(h.g.design)} off ${railName(stt.rail)}? It’ll be gone.`)) { takeOff(stt.rail.id, h.g.id); room.refresh(); railInfo(); }
+    }, 650);
+  }
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag || pinch) return;
+  const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY; idle = 0;
+  if (mode === 'rails') {
+    if (!axis && Math.hypot(e.clientX - sx, e.clientY - sy) > 8) { axis = Math.abs(e.clientX - sx) > Math.abs(e.clientY - sy) ? 'x' : 'y'; clearTimeout(press); }
+    if (axis === 'x') { room.dragging = true; const now = performance.now(); room.push(dx * cmPerPx(), Math.max(0.008, (now - lastMove) / 1000)); lastMove = now; }
+    return;
+  }
+  view.az -= dx * 0.008; view.el = Math.max(-0.2, Math.min(1.2, view.el + dy * 0.004));
+});
+canvas.addEventListener('pointerup', (e) => {
+  drag = false; clearTimeout(press);
+  if (mode !== 'rails') return;
+  if (room.dragging) { room.dragging = false; if (performance.now() - lastMove > 90) room.states[room.active].vel = 0; return; }
+  if (axis === 'y') { const dy = e.clientY - sy; if (Math.abs(dy) > 40) showRail(room.active + (dy < 0 ? 1 : -1)); return; }
+  if (!axis && performance.now() - st0 < 600 && lastVP) {
+    const [px, py] = local(e), i = room.pick(px, py, lastVP, canvas.clientWidth, canvas.clientHeight);
+    if (i < 0) return;
+    if (i === room.front()) wear(i); else { room.nudge(i, i > room.front() ? -1 : 1); room.goTo(i); }
+  }
+});
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (mode === 'rails') { room.push(-(Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * 0.25, 0.016); return; }
+  view.dist = Math.max(80, Math.min(360, view.dist * (1 + e.deltaY * 0.001)));
+}, { passive: false });
+canvas.addEventListener('touchstart', (e) => { if (e.touches.length === 2 && mode === 'bench') pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }, { passive: true });
 canvas.addEventListener('touchmove', (e) => { if (e.touches.length === 2 && pinch) { const p = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); view.dist = Math.max(80, Math.min(360, view.dist * pinch / p)); pinch = p; } }, { passive: true });
 canvas.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = 0; });
 
@@ -175,8 +315,20 @@ canvas.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = 0
 let frames = 0, last = performance.now(), stepMs = 0;
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (!drag) { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
-  if (cloth) {
+  // (the camera: at the rails it rests in front of the one in use; crossing the room, it eases from one to the other)
+  if (flying > 0) {
+    const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : BENCH_VIEW, p = Math.min(1, (now - flyT0) / 1200), e = p * p * (3 - 2 * p);
+    // (up and over a little as it crosses, as a walk across a room would look)
+    view.az = flyFrom.az + (goal.az - flyFrom.az) * e; view.el = flyFrom.el + (goal.el - flyFrom.el) * e + Math.sin(Math.PI * p) * 0.08; view.dist = flyFrom.dist + (goal.dist - flyFrom.dist) * e + Math.sin(Math.PI * p) * 60;
+    for (let c = 0; c < 3; c++) view.target[c] = flyFrom.target[c] + (goal.target[c] - flyFrom.target[c]) * e;
+    if (p >= 1) flying = 0;
+  } else if (mode === 'rails') {
+    const goal = room.viewOf(room.active, aspect()), k = 1 - Math.exp(-dt * 5);
+    view.az += (goal.az - view.az) * k; view.el += (goal.el - view.el) * k; view.dist += (goal.dist - view.dist) * k;
+    for (let c = 0; c < 3; c++) view.target[c] += (goal.target[c] - view.target[c]) * k;
+  } else if (!drag) { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
+  if (mode === 'rails') { room.update(dt, 7); if (room.front() !== lastFront) railInfo(); }
+  if (cloth && mode === 'bench') {
     // (a twirl: the figure spun up on its stand, held, and let run down)
     const want = now < twirlUntil ? Math.PI * 2 * 0.9 : 0, acc = now < twirlUntil ? 7 : 3.5;
     cloth.omega += Math.max(-acc * dt, Math.min(acc * dt, want - cloth.omega));
@@ -184,15 +336,22 @@ function frame(now: number) {
   }
   const dpr = Math.min(devicePixelRatio || 1, 2), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-  R.frame(view, cloth ? { fabric: fabricById(d.fabric), print: makePrint(d.print, d.colour) } : null, w, h, cloth?.spin ?? 0);
+  const items: Item[] = room.items();
+  if (cloth) items.push({ cloth, look: { fabric: fabricById(d.fabric), print: makePrint(d.print, d.colour) } });
+  lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, room.fittings()).vp;
   frames++;
   requestAnimationFrame(frame);
 }
 if (preview) document.body.classList.add('preview');
-make();
+document.body.classList.toggle('rails', mode === 'rails');
+if (mode === 'bench') make();
+else { Object.assign(view, room.viewOf(room.active, aspect()), { target: [...room.viewOf(room.active, aspect()).target] }); if (qs.has('warm')) for (let k = 0; k < 4; k++) room.update(1 / 60, 1e9); railUI(); }
 if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
-(window as unknown as { __fab: unknown }).__fab = { probe: () => ({ frames, particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain() }), view, twirl: () => { twirlUntil = performance.now() + 3200; } };
-addEventListener('resize', () => ui());
+(window as unknown as { __fab: unknown }).__fab = {
+  probe: () => ({ mode, frames, particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: sk.notes, checks: sk.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
+  view, room, wear, backToRails, hangUp, twirl: () => { twirlUntil = performance.now() + 3200; },
+};
+addEventListener('resize', () => (mode === 'bench' ? ui() : railUI()));
 requestAnimationFrame(frame);

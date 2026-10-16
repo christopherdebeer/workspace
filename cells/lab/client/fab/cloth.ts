@@ -65,6 +65,8 @@ export class Cloth {
   rad!: Float32Array;
   collider: Collider | null; self: boolean; floor: boolean;
   age = 0;
+  /** goes up every step: whoever draws it knows when it's moved */
+  version = 0;
   /** the figure's turn (radians) and how fast it's turning */
   spin = 0; omega = 0;
   substeps = 8;
@@ -228,6 +230,7 @@ export class Cloth {
 
   /** one frame */
   step(dt: number) {
+    this.version++;
     const S = this.substeps, h = dt / S, { pos, prev, inv, nor } = this, n = this.n;
     for (let s = 0; s < S; s++) {
       this.age += h; this.spin += this.omega * h;

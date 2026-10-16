@@ -39,7 +39,23 @@
     .swatch span { width: 30px; height: 22px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.25), 0 1px 2px rgba(60,40,20,.2); background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.04) 0 2px, transparent 2px 4px) !important; }
     .print canvas { border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.25), 0 1px 2px rgba(60,40,20,.2); }
     .swatch.on, .print.on { background: #fff8ec; box-shadow: 0 2px 6px rgba(60,40,20,.25); }
-    .preview nav, .preview #bench, .preview #card, .preview #notes { display: none; }
+    .preview nav, .preview #bench, .preview #card, .preview #notes, .preview #railui { display: none; }
+    /* the rails */
+    body.rails #bench, body.rails #card, body.rails #notes, body.rails .benchonly, body:not(.rails) .railsonly, body:not(.rails) #railui { display: none; }
+    #railui { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+    #railtags { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 42px); left: 10px; right: 10px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; pointer-events: auto; }
+    #railtags::-webkit-scrollbar { display: none; }
+    .tag { all: unset; flex: none; cursor: pointer; font-size: 13px; font-weight: 800; padding: 6px 12px 6px 10px; border-radius: 6px 999px 999px 6px; background: rgba(255,250,240,.85); box-shadow: 0 1px 4px rgba(60,40,20,.18); border-left: 7px solid var(--c, #999); }
+    .tag.on { background: #fff8ec; box-shadow: 0 2px 8px rgba(60,40,20,.3); transform: translateY(1px); }
+    .tag.add { border-left-color: transparent; background: rgba(255,250,240,.5); font-weight: 700; }
+    #railcard { position: absolute; left: 12px; right: 12px; bottom: max(14px, env(safe-area-inset-bottom)); padding: 12px 14px; border-radius: 16px; background: rgba(255,250,240,.9); box-shadow: 0 6px 20px rgba(60,40,20,.22); display: grid; gap: 4px; pointer-events: auto; text-align: center; }
+    #railcard b { font-size: 18px; font-weight: 800; }
+    #railcard span { font-size: 14px; font-weight: 600; color: #6b5640; min-height: 18px; }
+    #railcard button { all: unset; cursor: pointer; justify-self: center; margin-top: 4px; padding: 10px 22px; border-radius: 999px; background: #e0566e; color: #fff6ea; font-weight: 800; font-size: 15px; box-shadow: 0 2px 8px rgba(160,40,60,.35); }
+    #railcard i { font-style: normal; font-size: 11px; color: #9a8670; }
+    #toast { position: absolute; left: 50%; top: 96px; transform: translate(-50%, -8px); padding: 8px 14px; border-radius: 999px; background: #4a3826; color: #fff6e6; font-weight: 700; font-size: 13px; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; z-index: 5; white-space: nowrap; }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+    nav #hang { background: #4a3826; color: #fff6e6; }
   </style>
 </head>
 <body>
@@ -48,7 +64,12 @@
     <canvas id="card" title="the pattern"></canvas>
     <canvas id="sheet"></canvas>
     <div id="notes"></div>
-    <nav><a href="/">← lab</a><span class="title">Fab</span><button id="twirl">twirl</button><button id="sew">sew</button><button id="pattern">pattern</button><button id="surprise">surprise</button><a href="{{readme}}">notes</a></nav>
+    <nav><a href="/" class="railsonly">← lab</a><button id="torails" class="benchonly">rails</button><span class="title">Fab</span><button id="twirl" class="benchonly">twirl</button><button id="sew" class="benchonly">sew</button><button id="pattern" class="benchonly">pattern</button><button id="hang" class="benchonly">hang up</button><a href="{{readme}}">notes</a></nav>
+    <div id="railui">
+      <div id="railtags"></div>
+      <div id="railcard"><b id="railname"></b><span id="railwhat"></span><button id="wear">put it on the figure</button><i>slide the skirts along · swipe up or down for another rail · tap the front one</i></div>
+    </div>
+    <div id="toast"></div>
   </div>
   <div id="bench">
     <div class="row" id="methods"></div>

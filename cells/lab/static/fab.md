@@ -258,6 +258,41 @@ Success would be predictions improving with play, and explanations naming constr
 - **Seams are hinges.** A real seam allowance stiffens the cloth along it.
 - **See-through cloth** (chiffon) shows a faint ladder where folds meet at a seam behind it.
 
+## The rails
+
+Fab opens on the workshop's wall: a row of clothes rails, each hung with skirts on hangers.
+
+- **The workshop's rail** is chromed. It holds one of each way of making a skirt, in contrasting cloths, to start
+  from.
+- **Each person has their own rail**, powder-coated in their own colour, with what they've made. Tap **+ a rail** and
+  give it a name.
+
+Using the rails:
+
+- Drag the skirts along a rail and they slide like real hangers. They run on, slow down, and settle with one in front.
+  They bunch up toward the bar's ends, and each swings on its hook as it's pushed.
+- Swipe up or down, or tap a name tag, to move to another rail.
+- Tap the skirt in front, or **put it on the figure**. It comes off its hanger, the camera crosses the room to the
+  bench, and the skirt is laid out flat and sewn onto the figure.
+- A person's rail starts with a bare hanger, for a new skirt.
+
+Saving:
+
+- **hang up** at the bench hangs the skirt back on its owner's rail. A skirt that came from the workshop's rail goes
+  on the rail in use instead, and if nobody has a rail yet, Fab asks whose it is.
+- Going back to the **rails** hangs it up too, if it's changed.
+- Long-press one of your own skirts to take it off the rail.
+- Tap your own rail's name tag to rename it. Clear the name to take the rail away.
+
+Every skirt on a rail is the real thing. Its pattern is drafted from its design, a little coarser than at the bench
+(about 650 points). It's sewn and let fall from the hanger's two clips, which hold its waistband flat, by the same
+cloth simulation. Each one settles once, a few at a time, nearest first. After that it hangs still, and only its swing
+moves it.
+
+The rails live in this browser (localStorage), so a rail is a person on this device: a family's tablet, or a
+classroom's. Nothing leaves the device. Sharing rails between devices would need storage behind the cell, which this
+static lab cell doesn't have.
+
 ## Using it
 
 - **Turn the figure**: drag. **Come close**: pinch, or scroll.
@@ -278,6 +313,8 @@ All of it is in `client/fab/`:
 | `body.ts` | the figure and its distance field |
 | `render.ts` | WebGL2, shadow-mapped, the print laid on the flat pieces along the grain |
 | `sheet.ts` | the pattern, drawn as a dressmaker would |
+| `rails.ts` | the rails: the carousel, the swing, hanging skirts settled on their hangers |
+| `store.ts` | the rails kept in this browser, and the workshop's own skirts |
 | `evidence.ts` | the evidence bench |
 
 ### URL parameters
@@ -296,6 +333,8 @@ All of it is in `client/fab/`:
 | `twirl` | spin the figure on load |
 | `sheet` | open the pattern on load |
 | `preview` | no controls |
+| `rails` | start at the rails (a design in the query starts at the bench) |
+| `warm` | settle the rails' skirts before the first frame |
 | `bench` | `evidence` opens the evidence bench |
 
 ## Sources
