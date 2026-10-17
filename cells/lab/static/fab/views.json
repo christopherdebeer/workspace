@@ -141,13 +141,19 @@
    {
     "name": "family-top-table",
     "title": "A top at the table",
-    "caption": "its pieces laid out, the hems that can be worked lit, a tab on each",
+    "caption": "its pieces laid out: tap one to work it",
     "file": "v-family-top-table.jpg"
+   },
+   {
+    "name": "piece-front",
+    "title": "A piece, picked",
+    "caption": "tapped on the paper: its edges lit; the drawer lists what each does, then what it's set to and its own choices",
+    "file": "v-piece-front.jpg"
    },
    {
     "name": "family-jumpsuit-table",
     "title": "Lengthening the sleeves",
-    "caption": "a jumpsuit's sleeve hem dragged at the table: how long, by the finger",
+    "caption": "a jumpsuit's sleeve picked, its hem dragged: how long, by the finger",
     "file": "v-family-jumpsuit-table.jpg"
    },
    {
