@@ -67,6 +67,8 @@ export class Cloth {
   ti!: Int32Array; tt!: Int32Array; tr!: Float32Array;
   // (held: which, from where, to where in the figure's frame)
   hi!: Int32Array; hFrom!: Float32Array; hAt!: Float32Array;
+  /** where they're held as the figure's posed (on the figure, its chest bent with whatever's held on it), and for which pose */
+  private hPosed: Float32Array = new Float32Array(0); private hPose = -1;
   fabric: Fabric; drag: number; mu: number; margin: number;
   /** each point's half-thickness against the cloth itself: under half its nearest neighbour's distance */
   rad!: Float32Array;
@@ -117,7 +119,8 @@ export class Cloth {
       this.grids.push({ base, nu: pc.nu, nv: pc.nv });
       for (let j = 0; j <= pc.nv; j++) for (let i = 0; i <= pc.nu; i++) {
         const u = i / pc.nu, v = j / pc.nv, f = pc.flat(u, v);
-        const s = warm ? from!.sample(from!.names.indexOf(this.names[k]), u, v) : pc.start(u, v);
+        // (laid out on the figure as it's drafted, unbent, and bent with it as it's posed)
+        const s = warm ? from!.sample(from!.names.indexOf(this.names[k]), u, v) : this.collider === body ? body.posedPoint(pc.start(u, v)) : pc.start(u, v);
         pos.push(s[0], s[1], s[2]);
         // (the print's along the warp: the piece's flat place turned by its grain)
         flat.push(f[0] * wx + f[1] * wy, -f[0] * wy + f[1] * wx);
@@ -294,6 +297,10 @@ export class Cloth {
 
   /** one frame */
   step(dt: number) {
+    if (this.hPose !== body.poseVersion || this.hPosed.length !== this.hAt.length) {
+      this.hPose = body.poseVersion; this.hPosed = this.collider === body ? new Float32Array(this.hi.length * 3) : this.hAt;
+      if (this.collider === body) for (let k = 0; k < this.hi.length; k++) this.hPosed.set(body.posedPoint([this.hAt[k * 3], this.hAt[k * 3 + 1], this.hAt[k * 3 + 2]]), k * 3);
+    }
     this.version++;
     const S = this.substeps, h = dt / S, { pos, prev, inv, nor } = this, n = this.n;
     if(Math.abs(h-this.lastH)>1e-10)for(let i=0;i<pos.length;i++)prev[i]=pos[i]-(pos[i]-prev[i])*h/this.lastH;
@@ -314,10 +321,10 @@ export class Cloth {
         pos[i3] += vx * damp * h; pos[i3 + 1] += (vy * damp - 980 * h * fall) * h; pos[i3 + 2] += vz * damp * h;
       }
       // (held: eased over half a second from where it was laid to where it's held, and turned with the figure)
-      const e0 = Math.min(1, this.age / 0.6), e = e0 * e0 * (3 - 2 * e0), cs = Math.cos(this.spin), sn = Math.sin(this.spin);
+      const e0 = Math.min(1, this.age / 0.6), e = e0 * e0 * (3 - 2 * e0), cs = Math.cos(this.spin), sn = Math.sin(this.spin), hAt = this.hPosed;
       for (let k = 0; k < this.hi.length; k++) {
         const i3 = this.hi[k] * 3, k3 = k * 3;
-        const x = this.hFrom[k3] + (this.hAt[k3] - this.hFrom[k3]) * e, y = this.hFrom[k3 + 1] + (this.hAt[k3 + 1] - this.hFrom[k3 + 1]) * e, z = this.hFrom[k3 + 2] + (this.hAt[k3 + 2] - this.hFrom[k3 + 2]) * e;
+        const x = this.hFrom[k3] + (hAt[k3] - this.hFrom[k3]) * e, y = this.hFrom[k3 + 1] + (hAt[k3 + 1] - this.hFrom[k3 + 1]) * e, z = this.hFrom[k3 + 2] + (hAt[k3 + 2] - this.hFrom[k3 + 2]) * e;
         prev[i3] = pos[i3]; prev[i3 + 1] = pos[i3 + 1]; prev[i3 + 2] = pos[i3 + 2];
         pos[i3] = x * cs + z * sn; pos[i3 + 1] = y; pos[i3 + 2] = -x * sn + z * cs;
       }

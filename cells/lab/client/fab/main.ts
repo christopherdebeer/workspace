@@ -656,7 +656,7 @@ const POSE_KEY = 'fab.pose.v1';
 try { const o = JSON.parse(localStorage.getItem(POSE_KEY) ?? 'null'); if (o && typeof o === 'object') restorePoses(o); } catch { /* */ }
 const keepPoses = () => { try { localStorage.setItem(POSE_KEY, JSON.stringify(ownPoses())); } catch { /* */ } };
 let posing = qs.has('pose'), poseDrag: { grip: Grip; side: 0 | 1; x: number; y: number; id: number } | null = null;
-const jointEls = GRIPS.map(() => { const el = document.createElement('div'); el.className = 'joint'; $('stage').appendChild(el); return el; });
+const jointEls = GRIPS.map((j) => { const el = document.createElement('div'); el.className = j.grip === 'waist' ? 'joint torso' : 'joint'; $('stage').appendChild(el); return el; });
 function setPosing(on: boolean) {
   posing = on; poseDrag = null;
   document.body.classList.toggle('posing', on);

@@ -9,7 +9,7 @@
  * tulle you can see through. Every piece is stitched near its edges.
  */
 import * as body from './body';
-import { BALLS, HEAD, LIMBS, PELVIS, TORSO_FOOT, TORSO_TOP, section, type V3 } from './body';
+import { BALLS, HEAD, LIMBS, POLE, TORSO_FOOT, TORSO_TOP, posedDir, posedPoint, section, type V3 } from './body';
 import type { Cloth } from './cloth';
 import type { Fabric, Print } from './fabric';
 
@@ -240,7 +240,9 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' | 'sheet'
     const p = R[i][k], s = section(p[1]), d0 = section(p[1] - 0.3), d1 = section(p[1] + 0.3), a = (k / SEG) * Math.PI * 2;
     return norm([Math.sin(a) / s.rx, -((d1.rx + d1.rz) - (d0.rx + d0.rz)) / 1.2 / ((s.rx + s.rz) / 2), Math.cos(a) / s.rz]);
   };
-  for (let i = 0; i < RINGS; i++) for (let k = 0; k < SEG; k++) quad([R[i][k], nAt(i, k)], [R[i][k + 1], nAt(i, k + 1)], [R[i + 1][k + 1], nAt(i + 1, k + 1)], [R[i + 1][k], nAt(i + 1, k)], 0);
+  // (bent at the waist as it's posed)
+  const at = (i: number, k: number): [V3, V3] => [posedPoint(R[i][k]), posedDir(nAt(i, k), R[i][k][1])];
+  for (let i = 0; i < RINGS; i++) for (let k = 0; k < SEG; k++) quad(at(i, k), at(i, k + 1), at(i + 1, k + 1), at(i + 1, k), 0);
   // (limbs: capsules; joints and head: balls)
   const tube = (a: V3, b: V3, ra: number, rb: number, m: number) => {
     const ax = norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]]), t = Math.abs(ax[1]) < 0.9 ? [0, 1, 0] as V3 : [1, 0, 0] as V3, e1 = norm(cross(ax, t)), e2 = cross(ax, e1);
@@ -367,7 +369,10 @@ function solidMesh(part: 'scene' | 'rail' | 'hanger' | 'coat' | 'hook' | 'sheet'
   for (const c of LIMBS) { tube(c.a, c.b, c.ra, c.rb, 0); ball(c.a, c.ra, 0); ball(c.b, c.rb, 0); }
   for (const b of BALLS) ball(b.c, b.r, 0);
   ball(HEAD.c, HEAD.r, 0);
-  ball(PELVIS.c, PELVIS.r, 0);
+  // (the pole it's mounted on, chromed, in a turned collar on the stand)
+  tube(POLE.a, POLE.b, POLE.ra, POLE.rb, 4);
+  tube([POLE.a[0], -0.2, POLE.a[2]], [POLE.a[0], 1.4, POLE.a[2]], 2, 1.5, 1);
+  ball([POLE.a[0], 1.4, POLE.a[2]], 1.5, 1);
   // (the stand: a turned disc, a little rounded at its edge, and the post up into the figure)
   const disc = (y0: number, y1: number, r0: number, r1: number, m: number) => {
     for (let k = 0; k < 48; k++) {

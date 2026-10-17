@@ -15,8 +15,10 @@ import { clamp, cubic, flipX, line, mirror, patch, type At, type Edge, type P2 }
 import { bandAt } from './pattern';
 import { roundAt, type Design } from './pattern';
 
+// (the rise is drafted for a seat a little fuller than the figure's own, which closes slimmer between its legs: round a
+// ball under the hips, as the figure was first turned. The trousers' patterns stay as they were drafted, with that ease)
 const PELVIS_Y = 52, PELVIS_R = 11.4, PELVIS_Z = -0.3, CROTCH_Y = PELVIS_Y - PELVIS_R;
-/** the figure's surface down its middle, from the waist under it to between the legs: front (+1) or back (−1) */
+/** the figure's surface down its middle, from the waist under it to between the legs (with that seat): front (+1) or back (−1) */
 export function crotchPath(side: 1 | -1): number {
   const zAt = (y: number) => {
     const s = section(Math.max(PELVIS_Y, y)), torso = y >= PELVIS_Y ? s.cz + side * s.rz : NaN;

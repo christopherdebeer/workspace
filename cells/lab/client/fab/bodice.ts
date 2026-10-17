@@ -14,7 +14,7 @@
  * - it must go over the head: a neckline that won't (less a knit's stretch) gets an opening down the back, buttoned;
  * - a top that comes below the hips is cut wide enough to clear them.
  */
-import { CHEST_Y, WAIST_Y, arm, type V3 } from './body';
+import { CHEST_Y, WAIST_Y, arm, restPoint, type V3 } from './body';
 import { CHEST, Cut, HEAD_ROUND, TAU, WAIST, bodiceStart, coatAt, shoulderAt, surfaceLen, topAt } from './shared';
 import { buttons, clamp, cubic, curve, flipX, fractions, line, mirror, patch, run, backwards, type At, type Edge, type P2 } from './edges';
 import { roundAt, type Design, type Neck } from './pattern';
@@ -215,7 +215,8 @@ function sleeve(cut: Cut, d: Design, s: 1 | -1, o: { af: number; ab: number; ws0
       let e2 = cross3(ax, upw); if (e2[2] < 0) e2 = [-e2[0], -e2[1], -e2[2]];
       const ph = (x / Math.max(rw, 1)) * TAU, r = (y > 0 ? W : rw) / TAU + 0.25 + (y > 0 ? 0.25 * y : 0);
       const c: V3 = [p0[0] + (p1[0] - p0[0]) * dl, p0[1] + (p1[1] - p0[1]) * dl, p0[2] + (p1[2] - p0[2]) * dl];
-      return [c[0] + r * (Math.cos(ph) * upw[0] + Math.sin(ph) * e2[0]), c[1] + r * (Math.cos(ph) * upw[1] + Math.sin(ph) * e2[1]), c[2] + r * (Math.cos(ph) * upw[2] + Math.sin(ph) * e2[2])];
+      // (round the arm as it's posed: given as where that is on the figure unbent, as everything's laid out, and bent with it)
+      return restPoint([c[0] + r * (Math.cos(ph) * upw[0] + Math.sin(ph) * e2[0]), c[1] + r * (Math.cos(ph) * upw[1] + Math.sin(ph) * e2[1]), c[2] + r * (Math.cos(ph) * upw[2] + Math.sin(ph) * e2[2])]);
     },
   });
   k = cut.add(pc);

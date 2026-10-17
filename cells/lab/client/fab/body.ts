@@ -1,15 +1,20 @@
 /**
- * The mannequin: a little wooden figure, a child's proportions, standing on a turned stand. Centimetres, y up, its
- * feet on the stand's top at y = 0, facing +z.
+ * The mannequin: a little wooden figure, a child's proportions, mounted on a chromed pole up from a turned stand into
+ * its pelvis. Centimetres, y up, its feet resting on the stand's top at y = 0, facing +z.
  *
- * Its torso's a stack of ellipses (hips, waist, chest, shoulders), lathed; its neck, arms and legs are capsules
- * between turned joints (balls); its head a ball. The same shapes are what the cloth meets: `push` moves a point out
+ * Its torso's a stack of ellipses (from between its legs up through hips, waist, chest, shoulders), lathed, and jointed
+ * at the waist: above it, the chest (and the arms, neck and head with it) bends and turns over the hips. Its neck, arms
+ * and legs are capsules between turned joints (balls); its head a ball. The same shapes are what the cloth meets: `push` moves a point out
  * of the body (and some way clear of it, a garment's own layer), and says which way out.
  */
 export type V3 = [number, number, number];
 
 /** the torso's section at a height: half-widths across (x) and front-to-back (z), and how far its middle sits forward */
 const TORSO: Array<[y: number, rx: number, rz: number, cz: number]> = [
+  [40.8, 0.6, 0.6, -0.4],  // between the legs: the torso closes here, where the pole goes in
+  [41.8, 3.6, 3.2, -0.4],
+  [44, 7.4, 5.8, -0.4],
+  [47.5, 10, 7.6, -0.3],
   [52, 11.5, 8.6, -0.3],   // under the hips
   [58, 14.2, 10.2, -0.6],  // hips
   [64, 13.2, 9.4, -0.4],
@@ -21,7 +26,7 @@ const TORSO: Array<[y: number, rx: number, rz: number, cz: number]> = [
   [95, 8.5, 5.4, -0.4],
   [97, 4.4, 4.0, -0.2],    // into the neck
 ];
-export const TORSO_TOP = 97, TORSO_FOOT = 52;
+export const TORSO_TOP = 97, TORSO_FOOT = 40.8;
 export const WAIST_Y = 70, HIP_Y = 58, CHEST_Y = 82, SHOULDER_Y = 91;
 
 /** the torso's section at a height (smoothly, between the stations) */
@@ -70,8 +75,14 @@ export let poseVersion = 0;
  * Where its joints are, each side (0 its right, at -x; 1 its left): the shoulder and hip are fixed in the torso; the
  * elbow, wrist and hand down an arm; the knee, ankle and the foot's two ends down a leg; and the head, on its neck.
  */
-export interface Posed { sh: [V3, V3]; el: [V3, V3]; wr: [V3, V3]; hand: [V3, V3]; hp: [V3, V3]; kn: [V3, V3]; an: [V3, V3]; heel: [V3, V3]; toe: [V3, V3]; head: V3 }
+export interface Posed { sh: [V3, V3]; el: [V3, V3]; wr: [V3, V3]; hand: [V3, V3]; hp: [V3, V3]; kn: [V3, V3]; an: [V3, V3]; heel: [V3, V3]; toe: [V3, V3]; head: V3; neck: V3; tk: V3; ta: number }
 const NECK: V3 = [0, 95, -0.4];
+/** the waist's joint, and the handle the chest's taken hold of by (the middle of its front) */
+const WAIST_PIVOT: V3 = [0, WAIST_Y, -0.2], CHEST_HANDLE: V3 = [0, 83, 10.6];
+/** the most the chest bends over the hips (rad) */
+const BEND_MAX = 0.6;
+/** the pole the figure's mounted on: up from the stand's top, between its feet, into its pelvis */
+export const POLE: Capsule = { a: [0, 0, -0.4], b: [0, 46, -0.4], ra: 0.8, rb: 0.8 };
 function preset(p: Pose): Posed {
   const P = { sh: [], el: [], wr: [], hand: [], hp: [], kn: [], an: [], heel: [], toe: [] } as unknown as Posed;
   for (const [k, s] of [[0, -1], [1, 1]] as const) {
@@ -87,7 +98,7 @@ function preset(p: Pose): Posed {
     // (a foot: a short capsule forward)
     P.heel[k] = L(s * 7, 2.6, -1.5); P.toe[k] = L(s * 7.4, 2.6, 7);
   }
-  P.head = L(0, 110, 0.4);
+  P.head = L(0, 110, 0.4); P.neck = [...NECK]; P.tk = [1, 0, 0]; P.ta = 0;
   return P;
 }
 let posed: Posed = preset('twirl');
@@ -106,13 +117,49 @@ function limbs() {
     SHOULDERS.push(P.sh[k]);
   }
   // (the neck, from the shoulders up toward the head, however it's tilted)
-  const h = P.head, d = [h[0] - NECK[0], h[1] - NECK[1], h[2] - NECK[2]], l = Math.hypot(d[0], d[1], d[2]) || 1;
-  LIMBS.push({ a: NECK, b: [NECK[0] + (d[0] / l) * 6, NECK[1] + (d[1] / l) * 6, NECK[2] + (d[2] / l) * 6], ra: 3.8, rb: 3.6 });
+  const h = P.head, N = P.neck, d = [h[0] - N[0], h[1] - N[1], h[2] - N[2]], l = Math.hypot(d[0], d[1], d[2]) || 1;
+  LIMBS.push({ a: N, b: [N[0] + (d[0] / l) * 6, N[1] + (d[1] / l) * 6, N[2] + (d[2] / l) * 6], ra: 3.8, rb: 3.6 });
   HEAD.c = h;
+  TK = P.tk; TA = P.ta; TC = Math.cos(TA); TS = Math.sin(TA);
 }
 export const HEAD = { c: L(0, 110, 0.4) as V3, r: 9.6 };
-/** the pelvis: a ball rounding off the torso's foot, between the legs */
-export const PELVIS = { c: L(0, 52, -0.3) as V3, r: 11.4 };
+
+// ─── the waist's bend ──────────────────────────────────────────────────────────────────────────
+// (the chest's bend, about an axis through the waist's joint: TA radians about TK. The torso takes it gradually through
+// the waist (none of it below, all of it a little above), so it bends as a piece of turned wood can't but a figure does)
+let TK: V3 = [1, 0, 0], TA = 0, TC = 1, TS = 0;
+const BEND_LO = WAIST_Y - 4, BEND_HI = WAIST_Y + 5;
+/** how much of the bend a height on the (unbent) torso takes */
+const bendW = (y: number) => { const t = Math.max(0, Math.min(1, (y - BEND_LO) / (BEND_HI - BEND_LO))); return t * t * (3 - 2 * t); };
+// (v turned by an angle (its cosine and sine) about TK, through `c` if it's a point: into R3, without allocating)
+const R3 = [0, 0, 0];
+function turn(x: number, y: number, z: number, c: number, s: number, pt: boolean) {
+  if (pt) { x -= WAIST_PIVOT[0]; y -= WAIST_PIVOT[1]; z -= WAIST_PIVOT[2]; }
+  const k = TK, kd = (k[0] * x + k[1] * y + k[2] * z) * (1 - c);
+  R3[0] = x * c + (k[1] * z - k[2] * y) * s + k[0] * kd; R3[1] = y * c + (k[2] * x - k[0] * z) * s + k[1] * kd; R3[2] = z * c + (k[0] * y - k[1] * x) * s + k[2] * kd;
+  if (pt) { R3[0] += WAIST_PIVOT[0]; R3[1] += WAIST_PIVOT[1]; R3[2] += WAIST_PIVOT[2]; }
+}
+/** where a point on the figure as it's drafted (unbent, upright) is, as it's posed: what's laid round its torso and
+ * held on it goes with its chest. (Its limbs are posed already: see `restPoint`) */
+export function posedPoint(p: V3): V3 {
+  if (!TA) return p;
+  const w = bendW(p[1]);
+  if (w <= 0) return p;
+  if (w >= 1) turn(p[0], p[1], p[2], TC, TS, true); else turn(p[0], p[1], p[2], Math.cos(TA * w), Math.sin(TA * w), true);
+  return [R3[0], R3[1], R3[2]];
+}
+/** a direction at a height of the unbent torso, as it's posed */
+export function posedDir(v: V3, y: number): V3 { if (!TA) return v; const w = bendW(y); turn(v[0], v[1], v[2], Math.cos(TA * w), Math.sin(TA * w), false); return [R3[0], R3[1], R3[2]]; }
+/** where a point as it's posed was on the unbent figure (posedPoint's inverse, near enough) */
+export function restPoint(p: V3): V3 {
+  if (!TA) return p;
+  turn(p[0], p[1], p[2], TC, -TS, true);
+  if (R3[1] >= BEND_HI) return [R3[0], R3[1], R3[2]];
+  if (p[1] <= BEND_LO) return p;
+  let y = p[1];
+  for (let i = 0; i < 4; i++) { const w = bendW(y); turn(p[0], p[1], p[2], Math.cos(TA * w), -Math.sin(TA * w), true); y = R3[1]; }
+  return [R3[0], R3[1], R3[2]];
+}
 /** the arm's capsules on one side (s = ±1): upper arm, forearm */
 export const arm = (s: number): [Capsule, Capsule] => { const k = s < 0 ? 0 : 5; return [LIMBS[k], LIMBS[k + 1]]; };
 /** the leg's capsules on one side (s = ±1): thigh, shin */
@@ -135,7 +182,9 @@ function field() {
     const ab = [c.b[0] - c.a[0], c.b[1] - c.a[1], c.b[2] - c.a[2]], ll = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
     CAP.set([c.a[0], c.a[1], c.a[2], ab[0], ab[1], ab[2], ll, c.ra, c.rb, (Math.sqrt(ll) / 2 + Math.max(c.ra, c.rb)) ** 2], k * 10);
   });
-  SPH = new Float32Array([...BALLS, HEAD, PELVIS].flatMap((b) => [b.c[0], b.c[1], b.c[2], b.r]));
+  // (and the pole it's mounted on, which the cloth meets as it does a limb)
+  CAP = new Float32Array([...CAP, ...(() => { const c = POLE, ab = [c.b[0] - c.a[0], c.b[1] - c.a[1], c.b[2] - c.a[2]], ll = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2; return [c.a[0], c.a[1], c.a[2], ab[0], ab[1], ab[2], ll, c.ra, c.rb, (Math.sqrt(ll) / 2 + c.ra) ** 2]; })()]);
+  SPH = new Float32Array([...BALLS, HEAD].flatMap((b) => [b.c[0], b.c[1], b.c[2], b.r]));
   poseVersion++;
 }
 /** pose the figure for what it wears (arms up to twirl, down for a bodice), as it was last posed by hand for that, if
@@ -146,24 +195,26 @@ export function setPose(p: Pose) {
   limbs(); field();
 }
 /** the joints that can be taken hold of: each pivots at the one above it, and what's below it goes with it */
-export type Grip = 'el' | 'hand' | 'kn' | 'an' | 'head';
+export type Grip = 'el' | 'hand' | 'kn' | 'an' | 'head' | 'waist';
 export const GRIPS: ReadonlyArray<{ grip: Grip; side: 0 | 1 }> = [
-  ...(['el', 'hand', 'kn', 'an'] as const).flatMap((grip) => [{ grip, side: 0 as const }, { grip, side: 1 as const }]), { grip: 'head', side: 0 },
+  ...(['el', 'hand', 'kn', 'an'] as const).flatMap((grip) => [{ grip, side: 0 as const }, { grip, side: 1 as const }]), { grip: 'head', side: 0 }, { grip: 'waist', side: 0 },
 ];
 /** where a joint is now (the figure's own frame) */
-export const gripAt = (g: Grip, side: 0 | 1): V3 => (g === 'head' ? posed.head : posed[g][side]);
+export const gripAt = (g: Grip, side: 0 | 1): V3 => (g === 'head' ? posed.head : g === 'waist' ? posedPoint(CHEST_HANDLE) : posed[g][side]);
 /** whether it's been posed by hand, for what it wears now */
 export const posedByHand = () => !!own[pose];
 /**
  * Turn a joint toward a point (the figure's own frame): its bone pivots where it joins the one above (an elbow at the
- * shoulder, a hand at the elbow, a knee at the hip, an ankle at the knee, the head on its neck), at most `step` radians
- * at a time, so the cloth on it has time to move with it. Nothing goes below the stand's top; the head only nods.
+ * shoulder, a hand at the elbow, a knee at the hip, an ankle at the knee, the head on its neck, the chest at the waist:
+ * and with it the arms, neck and head), at most `step` radians at a time, so the cloth on it has time to move with it.
+ * Nothing goes below the stand's top; the head only nods; the chest bends no further than BEND_MAX.
  */
 export function bend(g: Grip, side: 0 | 1, to: V3, step = 0.06): boolean {
   const P = posed, k = side;
   const [pivot, moving]: [V3, V3[]] = g === 'el' ? [P.sh[k], [P.el[k], P.wr[k], P.hand[k]]] : g === 'hand' ? [P.el[k], [P.wr[k], P.hand[k]]]
-    : g === 'kn' ? [P.hp[k], [P.kn[k], P.an[k], P.heel[k], P.toe[k]]] : g === 'an' ? [P.kn[k], [P.an[k], P.heel[k], P.toe[k]]] : [NECK, [P.head]];
-  const q = g === 'head' ? P.head : P[g][k];
+    : g === 'kn' ? [P.hp[k], [P.kn[k], P.an[k], P.heel[k], P.toe[k]]] : g === 'an' ? [P.kn[k], [P.an[k], P.heel[k], P.toe[k]]]
+    : g === 'waist' ? [WAIST_PIVOT, [...P.sh, ...P.el, ...P.wr, ...P.hand, P.head, P.neck]] : [P.neck, [P.head]];
+  const q = gripAt(g, side);
   const a = norm3([q[0] - pivot[0], q[1] - pivot[1], q[2] - pivot[2]]), b = norm3([to[0] - pivot[0], to[1] - pivot[1], to[2] - pivot[2]]);
   if (!a || !b) return false;
   let ang = Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
@@ -172,10 +223,14 @@ export function bend(g: Grip, side: 0 | 1, to: V3, step = 0.06): boolean {
   if (!ax) ax = [0, 0, 1];
   ang = Math.min(ang, step);
   const moved = moving.map((p) => rotAbout(p, pivot, ax!, ang));
-  // (the head nods and turns, a little: no further than 40° off upright)
-  if (g === 'head') { const h = norm3([moved[0][0] - NECK[0], moved[0][1] - NECK[1], moved[0][2] - NECK[2]])!; if (h[1] < Math.cos(0.7)) return false; }
+  // (the head nods and turns, a little: no further than 40° off the chest's upright)
+  if (g === 'head') { const h = norm3([moved[0][0] - P.neck[0], moved[0][1] - P.neck[1], moved[0][2] - P.neck[2]])!, up = posedDir([0, 1, 0], NECK[1]); if (h[0] * up[0] + h[1] * up[1] + h[2] * up[2] < Math.cos(0.7)) return false; }
+  // (the chest: its bend so far, and this, as one turn about one axis)
+  let bent: [V3, number] | null = null;
+  if (g === 'waist') { bent = compose(P.tk, P.ta, ax, ang); if (bent[1] > BEND_MAX) return false; }
   if (moved.some((p) => p[1] < 1.2)) return false;
   moving.forEach((p, i) => { p[0] = moved[i][0]; p[1] = moved[i][1]; p[2] = moved[i][2]; });
+  if (bent) { P.tk = bent[0]; P.ta = bent[1]; }
   own[pose] = copyPosed(P);
   limbs(); field();
   return true;
@@ -184,7 +239,17 @@ export function bend(g: Grip, side: 0 | 1, to: V3, step = 0.06): boolean {
 export function unpose() { delete own[pose]; posed = preset(pose); limbs(); field(); }
 /** a pose of one's own, to keep and to give back */
 export const ownPoses = (): Partial<Record<Pose, Posed>> => JSON.parse(JSON.stringify(own));
-export function restorePoses(o: Partial<Record<Pose, Posed>>) { for (const k of ['twirl', 'dress'] as const) { if (o[k]) own[k] = o[k]; else delete own[k]; } posed = copyPosed(own[pose] ?? preset(pose)); limbs(); field(); }
+export function restorePoses(o: Partial<Record<Pose, Posed>>) { for (const k of ['twirl', 'dress'] as const) { if (o[k]) own[k] = { ...preset(k), ...o[k] }; else delete own[k]; } posed = copyPosed(own[pose] ?? preset(pose)); limbs(); field(); }
+/** a turn of `a` about `k`, then one of `b` about `j`, as one turn (by quaternions): its axis, and its angle (0 to π) */
+function compose(k: V3, a: number, j: V3, b: number): [V3, number] {
+  const q = [Math.cos(a / 2), ...k.map((x) => x * Math.sin(a / 2))], r = [Math.cos(b / 2), ...j.map((x) => x * Math.sin(b / 2))];
+  // (r·q: q first)
+  const w = r[0] * q[0] - r[1] * q[1] - r[2] * q[2] - r[3] * q[3];
+  const v: V3 = [r[0] * q[1] + r[1] * q[0] + r[2] * q[3] - r[3] * q[2], r[0] * q[2] - r[1] * q[3] + r[2] * q[0] + r[3] * q[1], r[0] * q[3] + r[1] * q[2] - r[2] * q[1] + r[3] * q[0]];
+  const sgn = w < 0 ? -1 : 1, l = Math.hypot(...v);
+  if (l < 1e-9) return [[1, 0, 0], 0];
+  return [[(v[0] / l) * sgn, (v[1] / l) * sgn, (v[2] / l) * sgn], 2 * Math.atan2(l, Math.abs(w))];
+}
 function norm3(v: number[]): V3 | null { const l = Math.hypot(v[0], v[1], v[2]); return l > 1e-9 ? [v[0] / l, v[1] / l, v[2] / l] : null; }
 /** p turned about an axis through c by `ang` (Rodrigues) */
 function rotAbout(p: V3, c: V3, k: V3, ang: number): V3 {
@@ -192,23 +257,43 @@ function rotAbout(p: V3, c: V3, k: V3, ang: number): V3 {
   const x = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]];
   return [0, 1, 2].map((i) => c[i] + v[i] * cs + x[i] * sn + k[i] * kd * (1 - cs)) as V3;
 }
+/** the torso's distance at a point of its own unbent frame, into `hit` if nearer; its way out turned back by (c, s) */
+function torsoD(px: number, py: number, pz: number, c: number, s: number) {
+  if (py < TORSO_FOOT || py > TORSO_TOP) return;
+  // (k: how far out in the section's own scale, 1 on its surface; its gradient, up and down too, so where the torso
+  // narrows (its shoulders' slope) the way out is upward and a garment rests on it)
+  const kAt = (y: number) => { sec(y); const a = px / S3[0], b = (pz - S3[2]) / S3[1]; return Math.sqrt(a * a + b * b); };
+  sec(py);
+  const rx = S3[0], rz = S3[1], cz = S3[2], z = pz - cz, k = Math.sqrt((px / rx) ** 2 + (z / rz) ** 2);
+  let d: number, nx: number, ny: number, nz: number;
+  if (k > 1e-4) {
+    const gx = px / (rx * rx * k), gz = z / (rz * rz * k), gy = (kAt(py + 0.4) - kAt(py - 0.4)) / 0.8, gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
+    d = k > 0.5 ? (k - 1) / gl : (k - 1) * Math.min(rx, rz);
+    nx = gx / gl; ny = gy / gl; nz = gz / gl;
+  } else { d = -Math.min(rx, rz); nx = 0; ny = 0; nz = 1; }
+  if (d >= hit.d) return;
+  hit.d = d;
+  if (s) { turn(nx, ny, nz, c, s, false); nx = R3[0]; ny = R3[1]; nz = R3[2]; }
+  hit.nx = nx; hit.ny = ny; hit.nz = nz;
+}
 /** the last answer: how far out of the body (negative inside), and which way's out */
 export const hit = { d: 0, nx: 0, ny: 1, nz: 0 };
 /** how far a point is from the body, into `hit` (and returned); only what's nearer than `near` is worked out exactly */
 export function distance(px: number, py: number, pz: number, near = 1e9): number {
   hit.d = 1e9;
-  // (the torso, between its foot and top: an ellipse's distance, near enough)
-  if (py >= TORSO_FOOT && py <= TORSO_TOP) {
-    // (k: how far out in the section's own scale, 1 on its surface; its gradient, up and down too, so where the torso
-    // narrows (its shoulders' slope) the way out is upward and a garment rests on it)
-    const kAt = (y: number) => { sec(y); const a = px / S3[0], b = (pz - S3[2]) / S3[1]; return Math.sqrt(a * a + b * b); };
-    sec(py);
-    const rx = S3[0], rz = S3[1], cz = S3[2], z = pz - cz, k = Math.sqrt((px / rx) ** 2 + (z / rz) ** 2);
-    if (k > 1e-4) {
-      const gx = px / (rx * rx * k), gz = z / (rz * rz * k), gy = (kAt(py + 0.4) - kAt(py - 0.4)) / 0.8, gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
-      hit.d = k > 0.5 ? (k - 1) / gl : (k - 1) * Math.min(rx, rz);
-      hit.nx = gx / gl; hit.ny = gy / gl; hit.nz = gz / gl;
-    } else { hit.d = -Math.min(rx, rz); hit.nx = 0; hit.ny = 0; hit.nz = 1; }
+  // (the torso, in its own unbent frame: below the waist as it is; above, turned back by the chest's bend; through the
+  // waist, by as much of it as that height takes. Where a point could be either (bent well over), it's both)
+  if (!TA) torsoD(px, py, pz, 1, 0);
+  else {
+    let done = false;
+    turn(px, py, pz, TC, -TS, true);
+    if (R3[1] >= BEND_HI) { torsoD(R3[0], R3[1], R3[2], TC, TS); done = true; }
+    if (py <= BEND_LO) { torsoD(px, py, pz, 1, 0); done = true; }
+    if (!done) {
+      let y = py, c = 1, s = 0;
+      for (let i = 0; i < 4; i++) { const w = bendW(y); c = Math.cos(TA * w); s = Math.sin(TA * w); turn(px, py, pz, c, -s, true); y = R3[1]; }
+      torsoD(R3[0], R3[1], R3[2], c, s);
+    }
   }
   for (let o = 0; o < CAP.length; o += 10) {
     const qx = px - CAP[o], qy = py - CAP[o + 1], qz = pz - CAP[o + 2];

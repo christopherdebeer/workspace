@@ -14,7 +14,7 @@ Regression sources: `devtools/fab-operations.test.ts`, `devtools/fab-ui.test.cjs
 
 # Fab
 
-A dressmaking workbench for children. A little wooden figure stands on a turned stand, and beside it lies a garment's
+A dressmaking workbench for children. A little wooden figure stands on a turned stand, mounted on a chromed pole up into its pelvis, and beside it lies a garment's
 paper pattern: a skirt, a top, a dress, trousers or a jumpsuit. Nothing is chosen from a list. A child decides what a dressmaker decides, the pattern that follows is
 drafted to the figure, and the cut cloth is sewn up round it and falls as that cloth falls.
 
@@ -261,7 +261,14 @@ crush the cells. So:
 
 Under an arm or a leg the difference is a few millimetres. The **pieces lie flat** check catches any grid that crushes.
 
-**The figure is posed for what it wears.** Its arms stay up in a dancer's curve for skirts and trousers. For anything
+**The figure.** Its torso is lathed through ellipses from between its legs up to its neck, and closes smoothly between
+its thighs where the pole goes in (it used to sit on a ball there, which stood out at the front as a bulge). The
+trousers' rise is still drafted for that fuller seat, so their patterns are unchanged and sit with a little ease. It's
+jointed at the waist: the chest, and the arms, neck and head with it, bends and turns over the hips, up to about 35°,
+taken gradually through the waist. Everything laid round the torso and held on it (a bodice's shoulders, a waistband) is
+placed on the figure as it's drafted and then bent with it; the cloth meets the torso in its own unbent frame.
+
+**It's posed for what it wears.** Its arms stay up in a dancer's curve for skirts and trousers. For anything
 with a bodice they come down to 45° below its shoulders, as GarmentCode's bodies stand.
 
 Pieces start laid out as GarmentCodeData lays its panels:
@@ -660,13 +667,14 @@ so nothing jumps between one gesture and the next.
   slows down, rather than falling further and further behind.
 - **twirl**: spins the figure on its stand.
 - **pose**: a mode (lit while it's on; twirl is only lit while it turns). Its joints are marked: take hold of an elbow, a
-  hand, a knee, an ankle or the head and move it, and the limb turns where it joins the one above (an elbow at the
-  shoulder, a hand at the elbow, a knee at the hip, an ankle at the knee; the head nods on its neck), a little at a
+  hand, a knee, an ankle, the head, or the chest (the larger ring) and move it, and the limb turns where it joins the
+  one above (an elbow at the shoulder, a hand at the elbow, a knee at the hip, an ankle at the knee; the head nods on
+  its neck; the chest bends and turns at the waist, taking the arms and head with it), a little at a
   time, so what it wears is pushed along with it. Nothing goes below the stand. A pose is kept on this device for each
   way it stands (arms up for a skirt, down for a bodice); the arrow beside it stands it as it was.
 
 ![posed: an arm out, a knee up, the dress moving with them](fab/v-pose.jpg)
-- **sew**: lays the pieces out flat and sews them up again.
+- **sew**: pins the pieces round the figure as it's posed, sews them up, and takes the pins out.
 - `?sheet` opens the whole pattern: the pieces with their grain lines, darts and pleats, how
   many to cut, the notes the cut made, and the pattern's checks. (It's no longer a button: the pinned note and the
   table are the pattern now.)
