@@ -10,13 +10,23 @@ export function setSound(on: boolean) {
   try { localStorage.setItem(STORE + ':sound', soundOn ? '1' : '0'); } catch { /* */ }
   if (master && ac) master.gain.setTargetAtTime(soundOn ? 1 : 0, ac.currentTime, 0.2);
 }
+/**
+ * Sound on, from a touch: made the first time; and if it's not running, started again. (A phone makes it stopped
+ * when it's made outside what counts as a touch (a finger going down doesn't; one lifting does), and stops it when
+ * another app or a call takes the sound; only a touch starts it again.)
+ */
 export function wake() {
-  if (ac || auto) return;
-  try { ac = new AudioContext(); } catch { return; }
-  master = ac.createGain();
-  master.gain.value = soundOn ? 1 : 0;
-  master.connect(ac.destination);
+  if (auto) return;
+  if (!ac) {
+    try { ac = new AudioContext(); } catch { return; }
+    master = ac.createGain();
+    master.gain.value = soundOn ? 1 : 0;
+    master.connect(ac.destination);
+  }
+  if (ac.state !== 'running') ac.resume().catch(() => { /* (not from a touch: the next one) */ });
 }
+// (from whatever's touched, the glass or the menus: a finger lifted, a key)
+for (const ev of ['pointerup', 'touchend', 'keydown']) addEventListener(ev, wake, { capture: true, passive: true });
 /** a soft blop: a sine that drops in pitch, with a little wet noise */
 export function blop(f0: number, f1: number, dur: number, loud: number) {
   if (!ac || !master) return;

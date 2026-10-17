@@ -35,7 +35,7 @@ import { FAST, STORE, auto, params, preview } from './env';
 import { HDR, SHADOW, backProg, bubbleProg, canvas, doughProg, drop, gl, glitterProg, jellyProg, prog, puffProg, shadowProg, skyProg, u, upload, type Mesh } from './gpu';
 import { backFb, backTex, finish, msFb, sceneCopy, skyVao, targets, tgtS } from './post';
 import { bakeLight, bakeMs } from './bakegl';
-import { fixedQuality, qLocked, quality, renderScale, samples } from './quality';
+import { fixedQuality, holdQuality, qLocked, qStep, quality, renderScale, samples } from './quality';
 import { ac, blop, boing, chime, plop, pop, rattle, setSound, sneezeSound, soundOn, squish, wake } from './sound';
 import { add, cross, dot, invert, len, mul, norm, ortho, sub, viewProj } from './vmath';
 
@@ -498,6 +498,8 @@ function startLevel(n: number, quiet = false) {
   const lm = levelMesh(lv);
   const solid = new Float32Array(lm.solid);
   courseMesh = upload(solid, gl.STATIC_DRAW, bakeLight(solid));
+  // (the bake's a long frame or two, and what's just been laid is drawn for the first time: not the frame rate)
+  holdQuality();
   glassMesh = lm.glass.length ? upload(lm.glass) : null;
   liquidMesh = lm.liquids.length ? upload(lm.liquids) : null;
   honeyRims = lm.honeyRims;
@@ -1377,11 +1379,15 @@ function drawMesh(m: Mesh, M: Float32Array = I4, mat = -1) {
   gl.drawArrays(gl.TRIANGLES, 0, m.count);
 }
 
-/** ?perf: how long a frame takes (and the card's own time for it, where it'll say), what it's drawing into */
-const perfEl = params.has('perf') ? (() => { const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9;font:11px/1.3 ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.55);padding:4px 6px;border-radius:6px;pointer-events:none'; document.body.appendChild(d); return d; })() : null;
+/**
+ * ?perf: how long a frame takes (and the card's own time for it, where it'll say); how much of it is the page's own
+ * work (sim: the game's steps, the camera; draw: telling the card what to draw); what it's drawing into, and at what
+ * step of quality.ts's.
+ */
+const perfEl = params.has('perf') ? (() => { const d = document.createElement('div'); d.style.cssText = 'white-space:pre-line;position:fixed;left:8px;max-width:calc(100vw - 16px);box-sizing:border-box;bottom:calc(max(12px, env(safe-area-inset-bottom)) + 34px);z-index:9;font:11px/1.3 ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.55);padding:4px 6px;border-radius:6px;pointer-events:none'; document.body.appendChild(d); return d; })() : null;
 const timerExt = perfEl ? gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null : null;
 const queries: WebGLQuery[] = [];
-let perfMs = 16, perfGpu = -1, perfShown = 0;
+let perfMs = 16, perfGpu = -1, perfShown = 0, perfSim = 0, perfDraw = 0;
 function perfStart() { if (!timerExt) return; const q = gl.createQuery()!; gl.beginQuery(timerExt.TIME_ELAPSED_EXT, q); queries.push(q); }
 function perfEnd(dtMs: number, now: number) {
   if (!perfEl) return;
@@ -1394,7 +1400,7 @@ function perfEnd(dtMs: number, now: number) {
     }
   }
   perfMs += (dtMs - perfMs) * 0.1;
-  if (now - perfShown > 500) { perfShown = now; perfEl.textContent = `${(1000 / perfMs).toFixed(0)} fps · ${perfMs.toFixed(1)} ms${timerExt ? ` · gpu ${perfGpu.toFixed(1)} ms` : ''} · ${HDR ? 'hdr' : 'ldr'} ${tgtS}x · ${canvas.width}×${canvas.height} (${renderScale.toFixed(2)}${fixedQuality ? ', fixed' : qLocked ? ', settled' : ''}) · ${((courseMesh?.count ?? 0) / 3000).toFixed(0)}k triangles · bake ${bakeMs.toFixed(0)} ms`; }
+  if (now - perfShown > 500) { perfShown = now; perfEl.textContent = `${(1000 / perfMs).toFixed(0)} fps · ${perfMs.toFixed(1)} ms · sim ${perfSim.toFixed(1)} · draw ${perfDraw.toFixed(1)}${timerExt ? ` · gpu ${perfGpu.toFixed(1)}` : ''}\n${HDR ? 'hdr' : 'ldr'} ${tgtS}x · ${canvas.width}×${canvas.height} · step ${qStep} (${renderScale.toFixed(2)}${fixedQuality ? ', fixed' : qLocked ? ', settled' : ''}) · ${((courseMesh?.count ?? 0) / 3000).toFixed(0)}k tris · bake ${bakeMs.toFixed(0)} ms`; }
 }
 
 let last = performance.now();
@@ -1411,8 +1417,11 @@ function frame(now: number) {
   quality(dtMs);
   resize();
   // (`?fast=N`, for headless tests: N whole steps of the game a drawn frame, as though N frames had gone by)
+  const t0 = performance.now();
   for (let k = 0; k < (FAST || 1); k++) advance(FAST ? 1 / 60 : dt);
+  const t1 = performance.now();
   render(now, dtMs);
+  if (perfEl) { perfSim += (t1 - t0 - perfSim) * 0.1; perfDraw += (performance.now() - t1 - perfDraw) * 0.1; }
 }
 /** what a frame does before it's drawn: the game's clock, the dumpling's steps, the camera, the puffs, where it looks */
 function advance(dt: number) {

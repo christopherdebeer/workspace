@@ -663,13 +663,16 @@ still whole; it oozes down at the honey's own creep (2 cm/s). `?nostrain` turns 
 
 ### Quality, by frame time
 
-What it's drawn at follows how long frames take. Slow (under about 42 a second, for a second), it steps down: fewer
-samples smoothing its edges first (4, then 2), then the resolution (to 0.85, 0.72, 0.6 of the screen's), then no
-smoothing at all. Quick again, at the display's own rate for 8 s, it steps back up one; a step up that's taken back
-within ten seconds isn't tried again. A steady 30 a second, to the frame, is either too slow for 60 (a step down may
-bring 60 back) or a display that's capped (an iPhone saving power): one step down is tried, and if it's still 30, it
-was the cap, and it goes back up and stays. `?perf` shows where it's got to: samples, size, the scale (and
-*settled* or *fixed*), the level's triangles. `?scale=`, `?samples=` or `?quality=fixed` fix it.
+What it's drawn at follows how long frames take. Short of the display's 60 (under about 52 a second, for a second
+and a half), it steps down: fewer samples smoothing its edges first (4, then 2), then the resolution (to 0.85, 0.72,
+0.6 of the screen's), then no smoothing at all. Each step down is a try: if over its next two seconds frames aren't
+some 7% quicker than before it, what held them back wasn't the drawing (the game's own work, or a display capped at
+30, an iPhone saving power), so it goes back, stays, and doesn't try again unless frames get slower still. Quick
+again, at the display's own rate for 8 s, it steps back up one; a step up that's taken back within ten seconds isn't
+tried again. A level's first moments, while it's baked and first drawn, aren't counted. `?perf` shows where it's got
+to: frames a second and their time; how much of that is the page's own work (*sim*: the game's steps and the camera;
+*draw*: telling the card what to draw); samples, size, the step and scale (*settled*, *fixed*); the level's
+triangles. `?scale=`, `?samples=` or `?quality=fixed` fix it.
 
 The cost is in shading, not geometry: a level is 15 to 35 thousand triangles; it's the pixels, each of them shaded
 through the lit, see-through, glowing passes, that make a frame heavy.

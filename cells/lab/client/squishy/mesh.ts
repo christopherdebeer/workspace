@@ -238,7 +238,10 @@ function bookBox(out: number[], s: Shape) {
 }
 /** A cookbook (books.ts): which one, its middle, its spine's way out and its head's, half its thickness, width and height. */
 export function book(out: number[], slot: number, c: V3, S: V3, Hd: V3, t: number, w: number, h: number) {
-  bookFaces((p, n, mat, uv) => push(out, p, n, mat, uv), MAT.book, slot, c, S, Hd, t, w, h);
+  // (drawn a hair thinner than it is, half a millimetre a side: so its covers aren't in the same plane as the book it
+  // lies on, the table under it, or what's laid on it, which, where a stack's screened before the dumpling, would show
+  // flickering one through the other)
+  bookFaces((p, n, mat, uv) => push(out, p, n, mat, uv), MAT.book, slot, c, S, Hd, t - Math.min(0.05, t * 0.1), w, h);
 }
 /** Shapes as they draw themselves (the sets' free things: a bench, a pad, a board), into out. */
 export function drawShapes(shapes: Shape[], out: number[]) { for (const s of shapes) drawShape(s, out); }
