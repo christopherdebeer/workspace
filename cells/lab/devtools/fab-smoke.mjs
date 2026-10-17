@@ -44,6 +44,21 @@ await withWood(async (lab) => {
     c.ok('table: nothing thrown', !p.errors.length, p.errors);
     await p.close();
   }
+  {
+    // (posing: its joints marked; an elbow taken hold of and moved, the arm goes with it; stood as it was again)
+    const p = await open('settle=20&fam=dress&fabric=lawn&drawer=closed');
+    await p.click('#posing'); await p.waitForTimeout(500);
+    const a = await p.evaluate(() => window.__fab.jointOnScreen('el', 0));
+    await p.mouse.move(a[0], a[1]); await p.mouse.down();
+    for (let k = 1; k <= 10; k++) { await p.mouse.move(a[0], a[1] - 8 * k); await p.waitForTimeout(50); }
+    await p.waitForTimeout(1200); await p.mouse.up();
+    const b = await p.evaluate(() => window.__fab.jointOnScreen('el', 0));
+    c.ok('posing: an elbow taken hold of and lifted, the arm goes up', b[1] < a[1] - 20 && (await p.evaluate(() => window.__fab.posedByHand())), [a, b]);
+    await p.click('#unpose'); await p.waitForTimeout(500);
+    c.ok('posing: stood as it was again', !(await p.evaluate(() => window.__fab.posedByHand())));
+    c.ok('posing: nothing thrown', !p.errors.length, p.errors);
+    await p.close();
+  }
   for (const [fam, key, sk] of [['top', 'bodyLen', 'swing'], ['trousers', 'legLen', 'flare']]) {
     // (a top's or trousers' whole pattern at the table: a tap on a piece picks it, its edges lit; its hem dragged makes it
     // longer, its corner dragged out flares it; a tap on the paper round it, back to the whole pattern)

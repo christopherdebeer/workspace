@@ -49,6 +49,14 @@ export const views = [
   { name: 'custom-print', group: 'The drawer', title: 'Your own print', caption: 'how big it\'s printed', query: `${CIRCLE}&drawer=full&sec=print&own=${encodeURIComponent(JSON.stringify({ s: 2.2 }))}` },
   { name: 'custom-colour', group: 'The drawer', title: 'Your own palette', caption: 'its three inks, each picked', query: `${CIRCLE}&drawer=full&sec=colour&own=${encodeURIComponent(JSON.stringify({ i: ['#f6c9cf', '#2f6f9f', '#fff4e2'] }))}` },
   { name: 'table-full', group: 'The drawer', title: 'The table\'s, expanded', caption: 'the tool\'s gestures and what it\'s set to, under its history', query: `${TABLE}&drawer=full` },
+  {
+    name: 'pose', group: 'The room', title: 'Posed', caption: 'pose mode: its joints marked; an elbow and a knee taken hold of and moved, the dress pushed along with them', query: 'settle=40&fam=dress&len=40&cut=gather&full=2.2&fabric=lawn&print=4&colour=1&drawer=closed',
+    run: async (v) => {
+      await v.page.click('#posing'); await v.wait(600);
+      for (const [g, s, dx, dy] of [['el', 0, -10, -90], ['kn', 1, 50, -40]]) { const a = await v.eval(([g2, s2]) => window.__fab.jointOnScreen(g2, s2), [g, s]); await v.drag(a, [a[0] + dx, a[1] + dy], { steps: 12, at: () => v.wait(1500) }); }
+      await v.wait(2500);
+    },
+  },
   { name: 'figure-turned', group: 'The room', title: 'Turned round', caption: 'the cutting table behind it: tap it to go there', query: CIRCLE, run: async (v) => { await v.eval(() => { window.__fab.view.az = 0.9; }); await v.wait(600); } },
   { name: 'table', group: 'The room', title: 'The cutting table', caption: 'the pattern at true size, the figure across the room', query: TABLE },
   { name: 'table-up', group: 'The room', title: 'Looking up from the table', caption: 'drag (or pinch) off the piece to look up at the figure', query: TABLE, run: async (v) => { await v.page.mouse.move(200, 600); await v.page.mouse.wheel(0, 1000); await v.wait(2500); } },

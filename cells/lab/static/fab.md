@@ -507,7 +507,7 @@ The workshop is one room, and the camera walks between three places in it. They'
 | place | where | its drawer | along the top |
 |---|---|---|---|
 | **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure | |
-| **the figure** | on its stand, in the middle | what it is (**make**: skirt, top, dress, trousers, jumpsuit; tiers), the **bodice** (neckline, sleeves, collar; length, room, swing) and the **legs**, when it has them; fabric, print and colour | **twirl** and **sew** (icons), **save to rail** |
+| **the figure** | on its stand, in the middle | what it is (**make**: skirt, top, dress, trousers, jumpsuit; tiers), the **bodice** (neckline, sleeves, collar; length, room, swing) and the **legs**, when it has them; fabric, print and colour | **twirl**, **pose** and **sew** (icons), **save to rail** (icon) |
 | **the cutting table** | to one side, facing the figure | the tool in hand: what it does, the gestures it answers to, what it's set to; panels, tiers, undo, the history (the tools themselves are a palette down the right). A top's or trousers' whole pattern lies there to be looked at, without tools | **cloth** (an icon), **save to rail** |
 
 ![the rails](fab/v-rails.jpg)
@@ -653,6 +653,13 @@ so nothing jumps between one gesture and the next.
   cloth is keeping up with the clock. The cloth runs in fixed 1/60 s steps, at most two a frame: on a slow device it
   slows down, rather than falling further and further behind.
 - **twirl**: spins the figure on its stand.
+- **pose**: a mode (lit while it's on; twirl is only lit while it turns). Its joints are marked: take hold of an elbow, a
+  hand, a knee, an ankle or the head and move it, and the limb turns where it joins the one above (an elbow at the
+  shoulder, a hand at the elbow, a knee at the hip, an ankle at the knee; the head nods on its neck), a little at a
+  time, so what it wears is pushed along with it. Nothing goes below the stand. A pose is kept on this device for each
+  way it stands (arms up for a skirt, down for a bodice); the arrow beside it stands it as it was.
+
+![posed: an arm out, a knee up, the dress moving with them](fab/v-pose.jpg)
 - **sew**: lays the pieces out flat and sews them up again.
 - `?sheet` opens the whole pattern: the pieces with their grain lines, darts and pleats, how
   many to cut, the notes the cut made, and the pattern's checks. (It's no longer a button: the pinned note and the

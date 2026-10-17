@@ -15,6 +15,12 @@
     "file": "v-figure.jpg"
    },
    {
+    "name": "pose",
+    "title": "Posed",
+    "caption": "pose mode: its joints marked; an elbow and a knee taken hold of and moved, the dress pushed along with them",
+    "file": "v-pose.jpg"
+   },
+   {
     "name": "figure-turned",
     "title": "Turned round",
     "caption": "the cutting table behind it: tap it to go there",

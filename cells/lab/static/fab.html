@@ -35,7 +35,12 @@
     #acts svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     #acts > .icon { width: 34px; height: 34px; padding: 0; justify-content: center; }
     #acts > .icon svg { width: 20px; height: 20px; }
-    #acts #twirl { background: var(--rose); color: #fff6ee; }
+    /* (twirl's a moment, not a mode: lit only while it turns. Posing's a mode: lit while it's on, its joints marked) */
+    #acts #twirl.on, #acts #posing.on { background: var(--rose); color: #fff6ee; }
+    body:not(.posing) #acts #unpose { display: none; }
+    .joint { position: absolute; left: 0; top: 0; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; border: 2px solid var(--rose); background: rgba(255,250,240,.3); box-shadow: 0 1px 6px rgba(60,30,20,.25); pointer-events: none; z-index: 3; transition: transform .05s linear, background .15s; }
+    .joint.held { background: var(--rose); }
+    body:not(.posing) .joint, body.table .joint, body.rails .joint { display: none; }
     #acts #cloth.on { background: var(--dark); color: #fbf3e6; }
     body.sheet #acts #pattern { background: var(--dark); color: #fbf3e6; }
 
@@ -218,6 +223,8 @@
     <nav><a href="/" class="back railsonly">←</a><span class="title">Fab</span><div id="places"><button data-place="rails">rails</button><button data-place="bench">figure</button><button data-place="table">table</button></div></nav>
     <div id="acts" class="benchonly">
       <button id="twirl" class="figonly icon" aria-label="twirl" title="twirl"><svg viewBox="0 0 20 20"><path d="M10 3.5a2 2 0 110 .01M7 17l1.5-6h3L13 17M8.5 11L6 8M11.5 11L14 8"/><path d="M3.5 13.5c-1.5-2.5.5-5 3-5.8M16.5 13.5c1.5-2.5-.5-5-3-5.8"/><path d="M15.2 15.8l1.3-2.3 1.8 1.8"/></svg></button>
+      <button id="posing" class="figonly icon" aria-label="pose the figure" title="pose the figure: drag a joint" aria-pressed="false"><svg viewBox="0 0 20 20"><path d="M4 16.5l5-7 7.5-3"/><circle cx="4" cy="16.5" r="1.8"/><circle cx="9" cy="9.5" r="1.8"/><circle cx="16.5" cy="6.5" r="1.8"/></svg></button>
+      <button id="unpose" class="figonly icon" aria-label="stand it as it was" title="stand it as it was"><svg viewBox="0 0 20 20"><path d="M6 6L3 9l3 3"/><path d="M3 9h9a4.5 4.5 0 010 9H9"/></svg></button>
       <button id="sew" class="figonly icon" aria-label="sew it up again" title="sew it up again"><svg viewBox="0 0 20 20"><path d="M15.5 2.5L5 13l-1.5 4.5L8 16 18.5 5.5z"/><circle cx="15.2" cy="4.8" r=".9"/><path d="M3.5 17.5c2 0 2-2 4-2s2 2 4 2 2-2 4-2"/></svg></button>
       <button id="cloth" class="tableonly icon" aria-label="the cloth on the paper" title="the cloth on the paper"><svg viewBox="0 0 20 20"><path d="M3 5l7-2 7 2v10l-7 2-7-2z"/><path d="M3 5l7 2 7-2M10 7v10"/></svg></button>
       <button id="hang" class="icon" aria-label="save to rail" title="save to rail"><svg viewBox="0 0 20 20"><path d="M10 6.5a2 2 0 112-2M10 6.5v1.5L2.5 14h15L10 8"/></svg></button>
