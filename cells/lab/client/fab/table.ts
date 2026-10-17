@@ -4,6 +4,33 @@ import type { Design } from './pattern';
 import type { Garment } from './garment';
 import type { Print } from './fabric';
 export interface Handle { piece: string; edge: string; key: keyof Design; x:number;y:number; axis:'x'|'y'; lo:number;hi:number; gain:number; label:string }
+/** An edge of a piece that can be dragged: which dial it works, where on the piece (u, v), which way, its range, how
+ * far a pixel takes it; what it's called, and (for the drawer's list) what dragging it does, one way and the other. */
+export interface Edge { key: keyof Design; u:number; v:number; axis:'x'|'y'; lo:number; hi:number; gain:number; label:string; edge:string; verb:string; range:string }
+/** the edges a piece offers, as it is in this design */
+export function edgesOf(p: Garment['pieces'][number], d: Design): Edge[] {
+  const out: Edge[] = [];
+  const add=(key:keyof Design,u:number,v:number,axis:'x'|'y',lo:number,hi:number,gain:number,label:string,edge:string,verb:string,range:string)=>out.push({key,u,v,axis,lo,hi,gain,label,edge,verb,range});
+  if(p.part==='bodice'){
+    if(d.family==='top')add('bodyLen',.5,1,'y',-6,30,1,'length','hem','drag the hem','longer · shorter');
+    add('ease',1,.4,'x',4,16,4,'room','side','drag the side','roomier · closer');
+    if(p.name==='front')add('neckDepth',.5,0,'y',-4,8,1,'neck depth','neck','drag the neck','deeper · higher');
+    if(d.family==='top')add('swing',1,1,'x',1,1.8,.035,'spread hem','hem','drag the hem\'s corner out','straight → swung');
+  }
+  if(p.part==='sleeve'){
+    add('sleeveLen',.5,1,'y',2,34,1,'length','hem','drag the hem','longer · shorter');
+    if(d.sleeve==='puff') add('sleeveFullness',.5,0,'x',1.03,1.8,.04,'gather head','cap','drag the head out','plain → gathered');
+  }
+  if(p.part==='legs'){
+    add('legLen',.5,1,'y',3,34,1,'length','hem','drag the hem','longer · shorter');
+    add('legWidth',1,.35,'x',1,2,.05,'width','outseam','drag the side','slim → wide');
+    add('flare',1,1,'x',.8,1.8,.04,'flare','hem','drag the hem\'s corner out','tapered → flared');
+  }
+  if(/collar|frill/.test(p.name))add('collarWidth',.5,1,'y',1.5,8,1,'collar width','edge','drag its edge','narrow → wide');
+  if(/^tier /.test(p.name)){add('length',.5,1,'y',20,62,1,'garment length','hem','drag the hem','longer · shorter');add('tierRatio',1,0,'x',1.05,2,.025,'gather join','top','drag the top corner out','flat → gathered');}
+  add('grain',.5,.6,'x',0,45,2,'grain','grain','drag the grain arrow','straight → bias');
+  return out;
+}
 export class PatternTable {
   selected = ''; laid: Laid[]=[]; handles:Handle[]=[];
   drag: null | {h:Handle;x:number;y:number;value:number;layout:Laid[];before:Design}=null;
@@ -17,27 +44,7 @@ export class PatternTable {
     ctx.save();ctx.setTransform(1,0,0,1,0,0);this.handles=[];
     if(this.selected) for(const l of this.laid){
       const p=l.piece, at=(u:number,v:number)=>l.to(p.flat(u,v)).map(x=>x*dpr) as [number,number];
-      const add=(key:keyof Design,u:number,v:number,axis:'x'|'y',lo:number,hi:number,gain:number,label:string,edge:string)=>{
-        const [x,y]=at(u,v);this.handles.push({piece:p.name,edge,key,x,y,axis,lo,hi,gain:gain/(l.sc*dpr),label});
-      };
-      if(p.part==='bodice'){
-        if(d.family==='top')add('bodyLen',.5,1,'y',-6,30,1,'length','hem');
-        add('ease',1,.4,'x',4,16,4,'room','side');
-        if(p.name==='front')add('neckDepth',.5,0,'y',-4,8,1,'neck depth','neck');
-        if(d.family==='top')add('swing',1,1,'x',1,1.8,.035,'spread hem','hem');
-      }
-      if(p.part==='sleeve'){
-        add('sleeveLen',.5,1,'y',2,34,1,'length','hem');
-        if(d.sleeve==='puff') add('sleeveFullness',.5,0,'x',1.03,1.8,.04,'gather head','cap');
-      }
-      if(p.part==='legs'){
-        add('legLen',.5,1,'y',3,34,1,'length','hem');
-        add('legWidth',1,.35,'x',1,2,.05,'width','outseam');
-        add('flare',1,1,'x',.8,1.8,.04,'flare','hem');
-      }
-      if(/collar|frill/.test(p.name))add('collarWidth',.5,1,'y',1.5,8,1,'collar width','edge');
-      if(/^tier /.test(p.name)){add('length',.5,1,'y',20,62,1,'garment length','hem');add('tierRatio',1,0,'x',1.05,2,.025,'gather join','top');}
-      add('grain',.5,.6,'x',0,45,2,'grain','grain');
+      for(const s of edgesOf(p,d)){const [x,y]=at(s.u,s.v);this.handles.push({piece:p.name,edge:s.edge,key:s.key,x,y,axis:s.axis,lo:s.lo,hi:s.hi,gain:s.gain/(l.sc*dpr),label:s.label});}
     }
     const R=18*Math.max(.5,k);
     for(const h of this.handles){ctx.fillStyle='#fffaf0';ctx.strokeStyle='#b13f59';ctx.lineWidth=2*Math.max(.5,k);ctx.beginPath();ctx.arc(h.x,h.y,R,0,7);ctx.fill();ctx.stroke();ctx.fillStyle='#883044';ctx.font=`${18*Math.max(.5,k)}px sans-serif`;ctx.textAlign='center';ctx.fillText(h.axis==='x'?'↔':'↕',h.x,h.y+6*Math.max(.5,k));}

@@ -28,6 +28,8 @@ export const helpers = (page, v) => {
     tool: async (t) => { await page.click(`.tool[data-tool="${t}"]`); await page.waitForTimeout(600); },
     /** the hem (or the waist) at a fraction across the piece, on the screen */
     edge: async (which, f = 0.5, inset = 4) => { const b = await h.bounds(); return h.S(b.x0 + (b.x1 - b.x0) * f, which === 'hem' ? b.y1 - inset : b.y0 + inset + 2); },
+    /** a piece of the whole pattern, picked by a tap on it */
+    pick: async (re) => { const L = await page.evaluate(() => window.__fab.pieces()), l = L.find((x) => re.test(x.name)) ?? L[0]; const a = await h.S(...l.mid); await page.mouse.click(a[0], a[1]); await page.waitForTimeout(800); },
     /** the camera's had time to settle on the piece */
     still: () => v.wait(1800),
   };
@@ -59,10 +61,14 @@ export const views = [
   { name: 'family-jumpsuit', group: 'What can be made', title: 'A jumpsuit', caption: 'a bodice, trousers gathered onto its hem', query: 'settle=60&fam=jumpsuit&fabric=lawn&print=2&colour=3&drawer=closed' },
   { name: 'family-tiers', group: 'What can be made', title: 'A tiered skirt', caption: 'each tier a ring of straight panels gathered onto the hem above', query: 'settle=60&fam=skirt&tiers=3&len=40&fabric=chiffon&print=4&colour=3&drawer=closed' },
   { name: 'family-make', group: 'What can be made', title: 'Choosing what to make', caption: 'the drawer\'s Make: the family, and for a skirt or a dress its tiers', query: 'settle=60&fam=dress&len=40&cut=gather&full=2.2&fabric=lawn&print=4&colour=1&sec=what' },
-  { name: 'family-top-table', group: 'What can be made', title: 'A top at the table', caption: 'its pieces laid out, the hems that can be worked lit, a tab on each', query: 'at=table&settle=30&fam=top&fabric=jersey&print=3&colour=2' },
+  { name: 'family-top-table', group: 'What can be made', title: 'A top at the table', caption: 'its pieces laid out: tap one to work it', query: 'at=table&settle=30&fam=top&fabric=jersey&print=3&colour=2' },
   {
-    name: 'family-jumpsuit-table', group: 'What can be made', title: 'Lengthening the sleeves', caption: 'a jumpsuit\'s sleeve hem dragged at the table: how long, by the finger', query: 'at=table&settle=30&fam=jumpsuit&fabric=lawn&print=2&colour=3',
-    run: async (v) => { await v.still(); const h = (await v.eval(() => window.__fab.wholeHems())).find((x) => x.key === 'sleeveLen'); const a = await v.S(...h.mid); await v.drag(a, [a[0], a[1] + 40], { at: v.shot }); },
+    name: 'piece-front', group: 'What can be made', title: 'A piece, picked', caption: 'tapped on the paper: its edges lit; the drawer lists what each does, then what it\'s set to and its own choices', query: 'at=table&settle=30&fam=top&fabric=jersey&print=3&colour=2&drawer=full',
+    run: async (v) => { await v.still(); await v.pick(/^front/); await v.still(); },
+  },
+  {
+    name: 'family-jumpsuit-table', group: 'What can be made', title: 'Lengthening the sleeves', caption: 'a jumpsuit\'s sleeve picked, its hem dragged: how long, by the finger', query: 'at=table&settle=30&fam=jumpsuit&fabric=lawn&print=2&colour=3',
+    run: async (v) => { await v.still(); await v.pick(/sleeve/); await v.still(); const h = (await v.eval(() => window.__fab.wholeHems())).find((x) => x.key === 'sleeveLen'); const a = await v.S(...h.mid); await v.drag(a, [a[0], a[1] + 40], { at: v.shot }); },
   },
   {
     name: 'family-legs', group: 'What can be made', title: 'The legs, picked', caption: 'shorts, cropped or full; slim, straight or wide; tapered, straight or flared: the dials, expanded', query: 'settle=40&fam=trousers&fabric=linen&llen=6&sec=legs&drawer=full',

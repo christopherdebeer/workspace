@@ -5,7 +5,9 @@
  *
  * - each family, at the figure: the figure's on the screen, above the drawer, and nothing's thrown;
  * - at the table, opened there: the piece is on the screen above the drawer, and a drag on its hem makes it longer;
- * - at the rails: there's a garment in front;
+ * - a top's and trousers' pattern: a tap picks a piece, its hem and corner dragged lengthen and flare it, the drawer lists
+ *   what each edge does, and a tap on the paper round it goes back to the whole pattern;
+ * - at the rails: there's a garment in front; with one on, another as well makes two, instead one;
  * - a tap on the table from the figure goes there, and on the figure from the table comes back.
  * Exits 1 on any failure. (Slow software GL: a minute or two.)
  */
@@ -42,22 +44,36 @@ await withWood(async (lab) => {
     c.ok('table: nothing thrown', !p.errors.length, p.errors);
     await p.close();
   }
-  for (const [fam, key] of [['top', 'bodyLen'], ['trousers', 'legLen']]) {
-    // (a top's or trousers' whole pattern at the table: the hand drags a lit hem longer; the scissors spread it)
+  for (const [fam, key, sk] of [['top', 'bodyLen', 'swing'], ['trousers', 'legLen', 'flare']]) {
+    // (a top's or trousers' whole pattern at the table: a tap on a piece picks it, its edges lit; its hem dragged makes it
+    // longer, its corner dragged out flares it; a tap on the paper round it, back to the whole pattern)
     const p = await open(`at=table&settle=10&fam=${fam}&fabric=lawn`);
-    const drag = async (dx, dy) => {
-      const h = (await p.evaluate(() => window.__fab.wholeHems()))[0];
-      const a = await p.evaluate(([x, y]) => window.__fab.sheetToScreen(x, y), h.mid), z = await p.evaluate(([x, y]) => window.__fab.sheetToScreen(x, y), [h.mid[0] + dx, h.mid[1] + dy]);
+    const S = (x, y) => p.evaluate(([a, b]) => window.__fab.sheetToScreen(a, b), [x, y]);
+    const piece = (await p.evaluate(() => window.__fab.pieces())).find((x) => x.name === 'front') ?? (await p.evaluate(() => window.__fab.pieces()))[0];
+    const at = await S(...piece.mid);
+    await p.mouse.click(at[0], at[1]); await p.waitForTimeout(600);
+    const picked = await p.evaluate(() => window.__fab.editor.selected);
+    c.ok(`${fam} at the table: a tap on a piece picks it, its edges to drag`, !!picked && (await p.evaluate(() => window.__fab.wholeHems().length)) > 0, picked);
+    const drag = async (k, dx, dy) => {
+      const h = (await p.evaluate(() => window.__fab.wholeHems())).find((x) => x.key === k);
+      if (!h) return null;
+      const a = await S(...h.mid), z = await S(h.mid[0] + dx, h.mid[1] + dy);
       await p.mouse.move(a[0], a[1]); await p.mouse.down();
-      for (let k = 1; k <= 10; k++) { await p.mouse.move(a[0] + ((z[0] - a[0]) * k) / 10, a[1] + ((z[1] - a[1]) * k) / 10); await p.waitForTimeout(30); }
+      for (let k2 = 1; k2 <= 10; k2++) { await p.mouse.move(a[0] + ((z[0] - a[0]) * k2) / 10, a[1] + ((z[1] - a[1]) * k2) / 10); await p.waitForTimeout(30); }
       await p.mouse.up(); await p.waitForTimeout(500);
       return p.evaluate(() => window.__fab.probe().design);
     };
-    const d0 = await p.evaluate(() => window.__fab.probe().design), d1 = await drag(0, 60);
-    c.ok(`${fam} at the table: dragging a hem makes it longer`, d1[key] > d0[key], [d0[key], d1[key]]);
-    await p.click('.tool[data-tool="scissors"]'); await p.waitForTimeout(500);
-    const sk = fam === 'top' ? 'swing' : 'flare', d2 = await drag(120, 0);
-    c.ok(`${fam} at the table: slashing a hem flares it`, d2[sk] > d1[sk], [d1[sk], d2[sk]]);
+    const d0 = await p.evaluate(() => window.__fab.probe().design), d1 = await drag(key, 0, 60);
+    c.ok(`${fam} at the table: dragging its hem makes it longer`, d1 && d1[key] > d0[key], [d0[key], d1?.[key]]);
+    const d2 = await drag(sk, 120, 0);
+    c.ok(`${fam} at the table: dragging its hem's corner out flares it`, d2 && d2[sk] > (d1 ?? d0)[sk], [(d1 ?? d0)[sk], d2?.[sk]]);
+    const gest = await p.evaluate(() => [...document.querySelectorAll('#gestures .gest')].map((e) => e.textContent));
+    c.ok(`${fam} at the table: the drawer lists what each edge does`, gest.some((t) => /drag the hem/.test(t)), gest);
+    // (off the piece, on the paper: the whole pattern again)
+    // (beside the piece, low on the screen above the drawer: the table, or the paper round it)
+    const off = [16, (await top(p)) - 40];
+    await p.mouse.click(off[0], off[1]); await p.waitForTimeout(600);
+    c.ok(`${fam} at the table: a tap on the paper round it, the whole pattern again`, (await p.evaluate(() => window.__fab.editor.selected)) === '');
     c.ok(`${fam} at the table: nothing thrown`, !p.errors.length, p.errors);
     await p.close();
   }
@@ -65,6 +81,26 @@ await withWood(async (lab) => {
     const p = await open('rails&warm');
     const s = await p.evaluate(() => window.__fab.probe());
     c.ok('rails: opens at the rails, a garment in front', s.mode === 'rails' && s.onRail > 0 && s.front >= 0, s);
+    // (put one on; then another, as well: two worn; then another instead: one)
+    await p.evaluate(() => window.__fab.wear(window.__fab.room.front())); await p.waitForTimeout(1500);
+    await p.evaluate(() => window.__fab.backToRails()); await p.waitForTimeout(1500);
+    c.ok('rails: with something on, it asks: instead, or as well', await p.evaluate(() => !document.getElementById('railwith').hidden));
+    await p.click('#railwith [data-with=also]');
+    await p.evaluate(() => { const r = window.__fab.room; r.goTo(Math.min(r.states[r.active].hung.length - 1, r.front() + 1)); });
+    await p.waitForTimeout(1500);
+    await p.evaluate(() => window.__fab.wear(window.__fab.room.front())); await p.waitForTimeout(1500);
+    const two = await p.evaluate(() => window.__fab.outfit().length);
+    c.ok('as well: two on the figure', two === 2, two);
+    // (a tap on the figure finds what's worn there)
+    const hit = await p.evaluate(() => { const [x, y] = window.__fab.roomToScreen([0, 62, 0]); return window.__fab.pickWorn(x, y); });
+    c.ok('two on: a tap on the figure finds a garment there', !!hit, hit);
+    await p.evaluate(() => window.__fab.backToRails()); await p.waitForTimeout(1500);
+    await p.click('#railwith [data-with=instead]');
+    await p.evaluate(() => { const r = window.__fab.room; r.goTo(Math.max(0, r.front() - 1)); });
+    await p.waitForTimeout(1500);
+    await p.evaluate(() => window.__fab.wear(window.__fab.room.front())); await p.waitForTimeout(1500);
+    const one = await p.evaluate(() => window.__fab.outfit().length);
+    c.ok('instead: one on the figure', one === 1, one);
     c.ok('rails: nothing thrown', !p.errors.length, p.errors);
     await p.close();
   }

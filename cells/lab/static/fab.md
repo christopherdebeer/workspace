@@ -1,8 +1,8 @@
 ## 17 October: pattern table and outfits
 
-Construction now lives on the table: select a named pattern piece, drag its edge handles, or use its contextual neckline, sleeve, collar and tier join controls. The skirt keeps its existing cut/fold tools. A versioned journal in `recipe.journal` records construction and material deltas with semantic targets, undo and redo; legacy `recipe.moves` remains the skirt compiler input. This is replayable parameter editing, not yet an arbitrary cut grammar for bodices or trousers.
+Construction now lives on the table: tap a piece on the paper to pick it (a tap on the paper round it, the whole pattern again), and drag its lit edges. The drawer speaks as it always did for the skirt's paper: what's picked and what it is in its header, with undo and redo; then, expanded, each edge it offers and what dragging it does, what each is set to, and its own choices (a neck, a collar, its sleeves; a sleeve's head; a skirt's tiers) as words to tap. A skirt panel tapped is the skirt's paper, with its cut, fold and gather tools. A versioned journal in `recipe.journal` records construction and material deltas with semantic targets, undo and redo; legacy `recipe.moves` remains the skirt compiler input. This is replayable parameter editing, not yet an arbitrary cut grammar for bodices or trousers.
 
-Use **+ garment** to return to the rails and add another item without replacing the current outfit. Select a worn item to edit it independently; **take off** removes the selected item when there is another to keep. Outfits and operation histories persist locally, including reloads of the active design URL. Saving to a rail remains explicit. Ordered inter-garment contacts keep outer vertices off nearby inner surfaces; this is discrete contact, not continuous collision detection, and does not guarantee every possible outfit is intersection-free.
+At the rails, with something already on the figure, the card asks whether to put the next one on **instead** or **as well**. With more than one on, a tap on a garment on the figure is the one worked; the drawer lists what's worn, and takes the one in hand off. Outfits and operation histories persist locally, including reloads of the active design URL. Saving to a rail remains explicit. Ordered inter-garment contacts keep outer vertices off nearby inner surfaces; this is discrete contact, not continuous collision detection, and does not guarantee every possible outfit is intersection-free.
 
 Cloth changes: 16 substeps, interleaved stretch/bending/seam constraints, mass-weighted tethers, velocity-aware body collision checks, and velocity-preserving warm starts matched by piece name. Print and colour edits no longer rebuild cloth. Large topology changes still resew.
 
@@ -613,14 +613,16 @@ fold is touched, a dashed ghost shows where it'll go. While a finger's on the pa
 ![folding](fab/v-fold.jpg)
 ![gathering](fab/v-gather.jpg)
 
-**A top, trousers or a jumpsuit at the table.** Their pattern is laid out whole, larger, in a column, and their hems
-are what's worked. The hand drags a lit hem by its tab: a top's to make it longer or cropped, the sleeves' to make
-them longer or shorter (to none), the legs' from shorts to full length. The scissors drag along a lit hem to spread
-it: a top swings out, the legs flare. Each is the design's own dial, so the figure wears it as it's dragged, the
-drawer's dials agree, and the amount is by the finger. (The fold and the gather are a skirt's: they're not in the
-palette for these.)
+**A top, trousers, a dress or a jumpsuit at the table.** The pattern is laid out whole; a tap on a piece picks it,
+and it's drawn alone, larger, its edges lit: a hem to drag longer or shorter (a top's, a sleeve's, a leg's), a side
+to drag roomier or slimmer, a neck deeper, a hem's corner out to swing or flare it, the grain arrow round to bias.
+Each is the design's own dial, so the figure wears it as it's dragged, and the amount is by the finger. The drawer
+says what's picked; expanded, it lists each edge and what it does, each value with a step either way, and the piece's
+own choices as words (a front's neck, collar and sleeves; a sleeve's head; a tier's count). A tap on the paper round
+it, or anywhere off it, is the whole pattern again. A dress's skirt panel tapped is the skirt's paper, with its tools.
 
 ![a top at the table](fab/v-family-top-table.jpg)
+![a piece picked: the drawer lists its edges](fab/v-piece-front.jpg)
 ![a jumpsuit's sleeves lengthened](fab/v-family-jumpsuit-table.jpg)
 
 **Only the piece takes the tools.** A touch on the pattern (or within a fingertip of its edge) cuts, folds, gathers or

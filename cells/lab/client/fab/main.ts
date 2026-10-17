@@ -24,7 +24,7 @@
  * `?preview` · `?rails` · `?warm` · `?ui=dials` (a skirt's dials, for comparison) · `?bench=evidence`.
  */
 import { Cloth } from './cloth';
-import { PatternTable } from './table';
+import { PatternTable, edgesOf } from './table';
 import { begin, record, replay, restore, state, travel, type Journal } from './journal';
 import { setPose } from './body';
 import { collideLayers } from './layers';
@@ -88,7 +88,9 @@ const dialsUI = qs.get('ui') === 'dials';
 // its cloth)
 const sync = (r: Recipe): Design => sanitize({ ...d, length: r.length, panels: r.panels, grain: r.grain, fabric: r.fabric, print: r.print, colour: r.colour });
 let journal: Journal = rec.journal ?? begin(state(d,rec)), recording = true, editTarget = 'garment', shapeKey = '';
-let tableSkirt = false;
+// (at the table, a skirt's paper with its tools, or the whole pattern (a piece of it picked by a tap): a skirt opened
+// there starts on its paper, as it always has)
+let tableSkirt = qs.get('at') === 'table' && d.family === 'skirt';
 const skirtPaper = () => skirted() && tableSkirt;
 let g: Garment = draftGarment(sync(rec), 1600, skirted() ? rec : undefined), cloth: Cloth | null = null;
 /** the skirt as drafted, if there is one (the paper's moves, what they made); a garment without one has none */
@@ -452,7 +454,8 @@ function ui() {
   if (mode === 'bench') { garmentPanel(); customPanel(); }
   for (const sec of Array.from(document.querySelectorAll('.figsec')) as HTMLElement[]) sec.classList.toggle('on', sec.dataset.sec === figSec);
   // (closed, the handle says what's chosen)
-  $('gripsum').textContent = mode === 'table' ? (skirted() ? `${TOOLS.find((t) => t.id === paper.tool)!.label} · ${rec.moves.length ? `${rec.moves.length} move${rec.moves.length > 1 ? 's' : ''}` : 'the block'}` : `the pattern of ${describeGarment(d).replace(/^an? /, 'a ')}`) : `${describeGarment(d)} · ${fabricById(rec.fabric).name} · ${PRINTS[rec.print]}`;
+  const sel = g.pieces.find((p) => p.name === editor.selected);
+  $('gripsum').textContent = mode === 'table' ? (skirtPaper() ? `${TOOLS.find((t) => t.id === paper.tool)!.label} · ${rec.moves.length ? `${rec.moves.length} move${rec.moves.length > 1 ? 's' : ''}` : 'the block'}` : sel ? `${pieceName(sel)} · ${describeGarment(d)}` : `the pattern of ${describeGarment(d).replace(/^an? /, 'a ')}`) : `${describeGarment(d)} · ${fabricById(rec.fabric).name} · ${PRINTS[rec.print]}${worn.length > 1 ? ` · ${worn.findIndex((w) => w.id === activeItem) + 1} of ${worn.length} worn` : ''}`;
   document.body.classList.toggle('skirted', skirted());
   $('tiersn').textContent = String(d.tiers);
   // (the paper, its tools, and the history of what's been done to it)
@@ -460,7 +463,7 @@ function ui() {
   $('panelsn').textContent = String(rec.panels);
   toolPanel();
   const hist = $('history'); hist.innerHTML = '';
-  if(!journal.cursor) hist.textContent = 'the original pattern';
+  if (!journal.cursor) { const n = document.createElement('span'); n.className = 'none'; n.textContent = 'the block, as drafted: nothing done to it yet'; hist.appendChild(n); }
   journal.operations.slice(0,journal.cursor).forEach((op,i)=>{
     const c=document.createElement('button'); c.className='chip';c.textContent=op.label;c.title=`${op.target} · return to after this edit`;
     c.onclick=()=>{ journal={...journal,cursor:i+1}; restoreEdit(); };hist.appendChild(c);
@@ -513,13 +516,8 @@ const PANEL: Record<string, { name: string; what: string; gestures: Array<[keyof
   fold: { name: 'Fold', what: 'fold the waist into a pleat', gestures: [['tap', 'touch the waist where it goes', 'anywhere along it'], ['side', 'drag sideways to fold it', 'further → deeper']] },
   thread: { name: 'Gather', what: 'add width at the waist and draw it in', gestures: [['tap', 'touch the waist where to add', 'anywhere along it'], ['side', 'drag sideways to add more', 'further → fuller']] },
 };
-/** the hand and the scissors on a top's, trousers' or a jumpsuit's pattern */
-const PANEL_WHOLE: Record<string, { name: string; what: string; gestures: Array<[keyof typeof G, string, string]> }> = {
-  hand: { name: 'Hand', what: 'make each part longer or shorter', gestures: [['updown', 'drag a lit hem by its tab', 'longer · shorter'], ['tap', 'the top\'s, the sleeves\', the legs\'', 'each its own']] },
-  scissors: { name: 'Slash', what: 'spread a hem open: it flares', gestures: [['side', 'drag along a lit hem', 'wider → more flare']] },
-};
 function toolPanel() {
-  if (!skirtPaper()) { $('toolname').textContent=editor.selected || 'Whole pattern'; $('toolwhat').textContent='select a piece · drag a marked edge'; $('gestures').innerHTML=''; $('toolctl').innerHTML=''; return; }
+  if (!skirtPaper()) { wholePanel(); return; }
   const t = PANEL[paper.tool];
   $('toolname').textContent = t.name; $('toolwhat').textContent = t.what;
   $('gestures').innerHTML = t.gestures.map(([g, w, i]) => `<div class="gest"><svg viewBox="0 0 24 24">${G[g]}</svg>${w}<i>${i}</i></div>`).join('');
@@ -548,26 +546,56 @@ function toolPanel() {
     box('so far', n ? `${n} ${n === 1 ? noun[0] : noun[1]} · ${cm.toFixed(cm < 10 ? 1 : 0)} cm ${noun[2]}` : `none yet`, []);
   }
 }
+const pieceName = (p: Garment['pieces'][number]) => p.label?.replace(/ · cut.*/, '') || p.name;
+const PART_WHAT: Record<string, string> = { bodice: 'the bodice: its neck, its sides, its hem', sleeve: 'a sleeve, set into the armhole', legs: 'a leg: its hem, its side, its flare' };
+/** a dial's step and how it reads */
+const DIAL: Partial<Record<keyof Design, [number, (v: number) => string]>> = {
+  swing: [0.1, (v) => `${v.toFixed(1)}×`], flare: [0.1, (v) => `${v.toFixed(1)}×`], legWidth: [0.1, (v) => `${v.toFixed(1)}×`],
+  sleeveFullness: [0.1, (v) => `${v.toFixed(1)}×`], tierRatio: [0.1, (v) => `${v.toFixed(1)}×`], collarWidth: [0.5, (v) => `${v.toFixed(1)} cm`],
+};
+/**
+ * The whole pattern, or the piece of it a tap picked (as the skirt's paper has its tool): what it is, in the header; the
+ * edges it offers, each with what dragging it does, as the paper marks them; then what it's set to, with steps, and its
+ * own choices (a neck, a collar, its sleeves; a sleeve's head; a skirt's tiers); last, how its seams meet.
+ */
 function wholePanel() {
-  const t = PANEL_WHOLE[paper.tool] ?? PANEL_WHOLE.hand;
-  $('toolname').textContent = t.name; $('toolwhat').textContent = t.what;
-  $('gestures').innerHTML = t.gestures.map(([g2, w, i]) => `<div class="gest"><svg viewBox="0 0 24 24">${G[g2]}</svg>${w}<i>${i}</i></div>`).join('');
-  // (what each hem's set to, with steps: the same dials as at the figure)
-  const ctl = $('toolctl'); ctl.innerHTML = '';
-  const box = (label: string, key: keyof Design, step: number, lo: number, hi: number, word: (v: number) => string) => {
-    const el = document.createElement('div'); el.className = 'ctl'; el.append(label);
-    const v = document.createElement('b'); v.textContent = word(d[key] as number);
-    const btn = (w: string, dv: number) => { const b = document.createElement('button'); b.textContent = w; b.addEventListener('click', () => { (d as unknown as Record<string, number>)[key] = Math.max(lo, Math.min(hi, +((d[key] as number) + dv).toFixed(2))); make(); }); return b; };
-    el.append(btn('−', -step), v, btn('+', step)); ctl.appendChild(el);
-  };
-  if (paper.tool === 'scissors') {
-    if (d.family === 'top') box('swing', 'swing', 0.1, 1, 1.8, (v) => `${v.toFixed(1)}×`);
-    if (hasLegs()) box('flare', 'flare', 0.1, 0.8, 1.8, (v) => `${v.toFixed(1)}×`);
-  } else {
-    if (d.family === 'top') box('length', 'bodyLen', 1, -6, 30, (v) => `${v.toFixed(0)} cm`);
-    if (hasBodice()) box('sleeves', 'sleeveLen', 1, 0, 34, (v) => `${v.toFixed(0)} cm`);
-    if (hasLegs()) box('legs', 'legLen', 1, 3, 34, (v) => `${v.toFixed(0)} cm`);
+  const p = g.pieces.find((x) => x.name === editor.selected), ges = $('gestures'), ctl = $('toolctl');
+  const row = (icon: keyof typeof G, w: string, i: string) => `<div class="gest"><svg viewBox="0 0 24 24">${G[icon]}</svg>${w}<i>${i}</i></div>`;
+  ctl.innerHTML = '';
+  if (!p) {
+    $('toolname').textContent = 'The pattern'; $('toolwhat').textContent = 'tap a piece to work it';
+    ges.innerHTML = row('tap', 'tap a piece', 'its edges, to drag') + (skirted() ? row('tap', 'tap a skirt panel', 'cut · fold · gather') : '');
+    // (what it's drafted as, from its blocks; and a skirt's tiers)
+    const pickRow = (label: string, key: keyof Design, opts: ReadonlyArray<readonly [string | number, string]>) => { const el = document.createElement('div'); el.className = 'ctl'; el.append(label); for (const [v, w] of opts) { const b = document.createElement('button'); b.textContent = w; b.className = `word${String(d[key]) === String(v) ? ' on' : ''}`; b.addEventListener('click', () => { editTarget = `garment/${String(key)}`; choose(key, v); }); el.append(b); } ctl.appendChild(el); };
+    pickRow('blocks', 'family', FAMILY_LABELS);
+    if (skirted()) pickRow('tiers', 'tiers', [[1, 'one'], [2, 'two'], [3, 'three']]);
+    return;
   }
+  const edges = edgesOf(p, d);
+  $('toolname').textContent = pieceName(p); $('toolwhat').textContent = PART_WHAT[p.part ?? ''] ?? 'shape it as it is';
+  ges.innerHTML = edges.map((e) => row(e.key === 'grain' ? 'turn' : e.axis === 'y' ? 'updown' : 'side', e.verb, e.range)).join('') + row('tap', 'tap the paper round it', 'the whole pattern');
+  const set = (key: keyof Design, v: string | number, edge: string) => { editTarget = `${p.name}/${edge}`; choose(key, v); };
+  const box = (label: string) => { const el = document.createElement('div'); el.className = 'ctl'; el.append(label); ctl.appendChild(el); return el; };
+  const btn = (w: string, f: () => void, on?: boolean, word = w.length > 1) => { const b = document.createElement('button'); b.textContent = w; if (word) b.className = `word${on ? ' on' : ''}`; b.addEventListener('click', f); return b; };
+  for (const e of edges) {
+    const v = Number(d[e.key]);
+    if (e.key === 'grain') { box('grain').append(...[[0, 'straight'], [45, 'bias']].map(([g2, w]) => btn(w as string, () => set('grain', g2 as number, e.edge), v === g2))); continue; }
+    const [step, word] = DIAL[e.key] ?? [1, (x: number) => `${Math.round(x)} cm`], b = document.createElement('b'); b.textContent = word(v);
+    const to = (dv: number) => () => set(e.key, Math.max(e.lo, Math.min(e.hi, +(v + dv).toFixed(2))), e.edge);
+    box(e.label).append(btn('−', to(-step)), b, btn('+', to(step)));
+  }
+  const words = (label: string, key: keyof Design, opts: Array<[string | number, string]>) => box(label).append(...opts.map(([v, w]) => btn(w, () => set(key, v, String(key)), String(d[key]) === String(v), true)));
+  if (p.part === 'bodice') {
+    words('neck', 'neck', [['round', 'round'], ['v', 'V'], ['square', 'square'], ['boat', 'boat'], ['scoop', 'scoop']]);
+    words('collar', 'collar', [['none', 'none'], ['peterpan', 'Peter Pan'], ['band', 'band'], ['frill', 'frill']]);
+    words('sleeves', 'sleeveLen', [[0, 'none'], [8, 'short'], [18, 'elbow'], [30, 'long']]);
+  }
+  if (p.part === 'sleeve') words('head', 'sleeve', [['plain', 'plain'], ['puff', 'puff'], ['bell', 'bell']]);
+  if (p.ruled || /^tier /.test(p.name)) words('tiers', 'tiers', [[1, 'one'], [2, 'two'], [3, 'three']]);
+  // (how its seams meet: each once, though a pair of them has two)
+  const why = p.part === 'sleeve' ? 'sleeve' : /collar|frill/.test(p.name) ? 'collar' : p.part === 'legs' ? 'seam' : 'shoulder', seen = new Set<string>();
+  const joins = g.seams.filter((x) => x.why.includes(why) && !seen.has(x.why) && seen.add(x.why));
+  if (joins.length) { const n = document.createElement('span'); n.className = 'join-note'; n.textContent = joins.slice(0, 2).map((x) => `${x.why}: ${x.a.toFixed(1)} → ${x.b.toFixed(1)} cm${x.want > 1.05 ? ', gathered' : ''}`).join(' · '); ctl.appendChild(n); }
 }
 $('panelsless').addEventListener('click', () => { rec = { ...rec, panels: Math.max(1, rec.panels - 1) }; make(); });
 $('panelsmore').addEventListener('click', () => { rec = { ...rec, panels: Math.min(10, rec.panels + 1) }; make(); });
@@ -593,37 +621,24 @@ function wholeBounds(){
   if(!pts.length)return {x0:80,x1:SHEET_W-80,y0:80,y1:SHEET_H-80};
   return {x0:Math.min(...pts.map(p=>p[0]))*dpr,x1:Math.max(...pts.map(p=>p[0]))*dpr,y0:Math.min(...pts.map(p=>p[1]))*dpr,y1:Math.max(...pts.map(p=>p[1]))*dpr};
 }
-function wholeDown(q:[number,number]){ const hit=editor.down(q,Math.max(.5,paper.k)); if(hit){drawWhole();tableUI();}return hit; }
+function wholeDown(q: [number, number]) {
+  const was = editor.selected, hit = editor.down(q, Math.max(.5, paper.k));
+  if (!hit || editor.drag) { if (hit) drawWhole(); return hit; }
+  const p = g.pieces.find((x) => x.name === editor.selected);
+  if (p && skirted() && p.ruled) { editor.selected = ''; tableSkirt = true; }
+  if (editor.selected !== was || tableSkirt) { if (drawer === 'closed') drawer = 'focus'; document.body.dataset.drawer = drawer; ui(); }
+  return hit;
+}
+/** a tap on the paper round what's picked: back to the whole pattern */
+function unpick(): boolean { if (!editor.selected && !tableSkirt) return false; editor.selected = ''; tableSkirt = false; ui(); return true; }
 function wholeMove(q:[number,number]){editor.move(q);drawWhole();}
 function wholeUp(cancel=false){editor.up(cancel);if(cancel){clearTimeout(pending);pending=0;pendingRec=null;makeFrom(rec);}else if(!editor.drag)make();ui();}
 function restoreEdit(){clearTimeout(pending);pending=0;pendingRec=null;const x=restore(journal);d=x.design;rec=x.recipe;recording=false;make();recording=true;}
 $('undo').addEventListener('click',()=>{journal=travel(journal,-1);restoreEdit();});
 $('redo').addEventListener('click',()=>{journal=travel(journal,1);restoreEdit();});
 if(dialsUI)document.body.classList.add('dials');
-function tableUI(){
-  document.body.classList.toggle('skirtpaper',skirtPaper());
-  const bar=$('pieces');bar.innerHTML='';
-  const btn=(label:string,selected:boolean,fn:()=>void)=>{const b=document.createElement('button');b.textContent=label;b.className=selected?'on':'';b.setAttribute('aria-pressed',String(selected));b.onclick=fn;bar.appendChild(b);};
-  btn('whole pattern',!tableSkirt&&!editor.selected,()=>{tableSkirt=false;editor.selected='';ui();});
-  if(skirted())btn('skirt · cut & fold',tableSkirt,()=>{tableSkirt=true;editor.selected='';drawer='focus';document.body.dataset.drawer=drawer;ui();});
-  for(const p of g.pieces.filter(p=>p.drawn!==false&&!(skirted()&&p.ruled))){btn(p.label?.replace(/ · cut.*/,'')||p.name,!tableSkirt&&editor.selected===p.name,()=>{tableSkirt=false;editor.selected=p.name;drawer='focus';document.body.dataset.drawer=drawer;ui();});}
-  const box=$('pattern-actions');box.innerHTML='';
-  const choice=(label:string,key:keyof Design,opts:Array<[string|number,string]>)=>{
-    const wrap=document.createElement('label');wrap.textContent=label;const select=document.createElement('select');select.setAttribute('aria-label',label);
-    for(const [v,w] of opts){const o=document.createElement('option');o.value=String(v);o.textContent=w;o.selected=String(d[key])===String(v);select.appendChild(o);}
-    select.onchange=()=>{editTarget=`${editor.selected||'garment'}/${key}`;choose(key,typeof d[key]==='number'?Number(select.value):select.value);};wrap.appendChild(select);box.appendChild(wrap);
-  };
-  const p=g.pieces.find(p=>p.name===editor.selected);
-  if(!editor.selected&&!tableSkirt)choice('blocks','family',FAMILY_LABELS);
-  if(p?.part==='bodice'){
-    choice('neckline','neck',[['round','round'],['v','V'],['square','square'],['boat','boat'],['scoop','scoop']]);
-    choice('neck join','collar',[['none','no collar'],['peterpan','Peter Pan'],['band','band'],['frill','gathered frill']]);
-    choice('armhole','sleeveLen',[[0,'sleeveless'],[8,'attach short sleeve'],[18,'elbow sleeve'],[30,'long sleeve']]);
-  }
-  if(p?.part==='sleeve')choice('construction','sleeve',[['plain','plain'],['puff','spread & gather head'],['bell','spread hem']]);
-  if(tableSkirt)choice('panels','panels',Array.from({length:10},(_,i)=>[i+1,String(i+1)]));
-  if(tableSkirt||p?.ruled||/^tier /.test(p?.name??''))choice('hem joins','tiers',[[1,'one tier'],[2,'two tiers'],[3,'three tiers']]);
-  if(p){const join=g.seams.filter(x=>x.why.includes(p.part==='sleeve'?'sleeve':/collar|frill/.test(p.name)?'collar':p.part==='legs'?'seam':'shoulder'));const info=document.createElement('span');info.className='join-note';info.textContent=join.slice(0,2).map(x=>`${x.why}: ${x.a.toFixed(1)} → ${x.b.toFixed(1)} cm${x.want>1.05?' · gathered':''}`).join(' · ');box.appendChild(info);}
+function tableUI() {
+  document.body.classList.toggle('skirtpaper', skirtPaper());
 }
 let sheetOn = false;
 const toggleSheet = () => { sheetOn = !sheetOn; document.body.classList.toggle('sheet', sheetOn); ui(); };
@@ -659,11 +674,39 @@ function selectItem(id:string){
  if(id===activeItem)return;stashOutfit();const w=worn.find(w=>w.id===id);if(!w)return;
  activeItem=id;d=structuredClone(w.d);rec=structuredClone(w.rec);g=w.g;sk=g.skirt??null;cloth=w.cloth;shapeKey=w.shapeKey;origin=w.origin; journal=rec.journal??begin(state(d,rec));tableSkirt=false;editor.selected='';garmentKey='';customKey='';make();
 }
-function outfitUI(){
- const bar=$('outfit');bar.innerHTML='';
- for(const w of worn){const b=document.createElement('button');b.textContent=w.d.family;b.className=w.id===activeItem?'on':'';b.setAttribute('aria-pressed',String(w.id===activeItem));b.onclick=()=>selectItem(w.id);bar.appendChild(b);}
- const add=document.createElement('button');add.textContent='+ garment';add.onclick=()=>go('rails');bar.appendChild(add);
- if(worn.length>1){const remove=document.createElement('button');remove.textContent='take off';remove.onclick=()=>{const id=activeItem;selectItem(worn.find(w=>w.id!==id)!.id);worn=worn.filter(w=>w.id!==id);stashOutfit();setPose(hasOutfitBodice()?'dress':g.pose);ui();};bar.appendChild(remove);}
+function outfitUI() {
+  const bar = $('wearing'); bar.innerHTML = '';
+  if (worn.length < 2) return;
+  bar.insertAdjacentHTML('beforeend', '<i>wearing</i>');
+  for (const w of worn) { const b = document.createElement('button'); b.className = w.id === activeItem ? 'on' : ''; b.textContent = worn.filter((x) => x.d.family === w.d.family).length > 1 ? `${w.d.family}, ${fabricById(w.rec.fabric).name}` : w.d.family; b.setAttribute('aria-pressed', String(w.id === activeItem)); b.onclick = () => selectItem(w.id); bar.appendChild(b); }
+  const off = document.createElement('button'); off.textContent = `take the ${d.family} off`;
+  off.onclick = () => { const id = activeItem, gone = d.family; selectItem(worn.find((w) => w.id !== id)!.id); worn = worn.filter((w) => w.id !== id); stashOutfit(); setPose(hasOutfitBodice() ? 'dress' : g.pose); ui(); toast(`the ${gone} taken off`); };
+  bar.appendChild(off);
+}
+/** a garment on the figure, picked by a tap on it: the nearest of what's worn along the touch */
+function pickWorn(clientX: number, clientY: number): string | null {
+  const ray = rayAt(clientX, clientY);
+  if (!ray) return null;
+  let best: { t: number; id: string } | null = null;
+  for (const w of worn) {
+    const c = w.id === activeItem ? cloth : w.cloth;
+    if (!c) continue;
+    const P = c.pos, T = c.tris, [ox, oy, oz] = ray.o, [dx, dy, dz] = ray.d;
+    for (let k = 0; k < T.length; k += 3) {
+      // (Möller–Trumbore)
+      const a = T[k] * 3, b = T[k + 1] * 3, e = T[k + 2] * 3;
+      const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2], e2x = P[e] - P[a], e2y = P[e + 1] - P[a + 1], e2z = P[e + 2] - P[a + 2];
+      const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x, det = e1x * px + e1y * py + e1z * pz;
+      if (Math.abs(det) < 1e-12) continue;
+      const tx = ox - P[a], ty = oy - P[a + 1], tz = oz - P[a + 2], u = (tx * px + ty * py + tz * pz) / det;
+      if (u < 0 || u > 1) continue;
+      const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x, v = (dx * qx + dy * qy + dz * qz) / det;
+      if (v < 0 || u + v > 1) continue;
+      const t = (e2x * qx + e2y * qy + e2z * qz) / det;
+      if (t > 0 && (!best || t < best.t)) best = { t, id: w.id };
+    }
+  }
+  return best?.id ?? null;
 }
 function loadOutfit(){
  try{const x=JSON.parse(localStorage.getItem(OUTFIT_KEY)??'null');if(x?.version!==1||!Array.isArray(x.items))return;
@@ -711,6 +754,9 @@ function railInfo() {
   $('railname').textContent = st ? railName(st.rail) : '';
   // (the button's only for a bare hanger, to start something new; a skirt's put on by tapping it)
   $('wear').hidden = !h || !!h.g;
+  // (something on the figure already: put this on instead of it, or as well)
+  $('railwith').hidden = !worn.length || !h;
+  for (const b of Array.from($('railwith').querySelectorAll('button')) as HTMLElement[]) b.classList.toggle('on', b.dataset.with === wearWith);
   if (!h) { $('railwhat').textContent = ''; return; }
   if (!h.g) { $('railwhat').textContent = 'a bare hanger: start something new'; return; }
   const dg = designOf(h.g);
@@ -721,11 +767,15 @@ function showRail(k: number) {
   room.active = Math.max(0, Math.min(room.states.length - 1, k));
   setActive(room.states[room.active].rail.id); railUI();
 }
+let wearWith: 'instead' | 'also' = 'instead';
+for (const b of Array.from($('railwith').querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', (e) => { e.stopPropagation(); wearWith = b.dataset.with as 'instead' | 'also'; railInfo(); });
 /** take garment i off the rail and sew it onto the figure */
 function wear(i: number) {
   const st = room.states[room.active], h = st?.hung[i];
   if (!st || !h) return;
   if(cloth)stashOutfit();
+  // (instead: what's worn comes off first; as well: it's added to)
+  if (wearWith === 'instead' && worn.length) { worn = []; activeItem = ''; room.wornIds = new Set(); }
   const existing=h.g&&worn.find(w=>w.origin?.garment===h.g!.id&&w.origin?.rail===st.rail.id);
   if(existing){selectItem(existing.id);setMode('bench');return;}
   if(worn.length>=8){toast('Take off an item before adding another (eight at a time)');return;}
@@ -777,7 +827,7 @@ function setMode(m: Mode) {
 $('wear').addEventListener('click', () => wear(room.front()));
 /** the room's three places, along the top: where you are, dark */
 function places() { for (const b of Array.from($('places').children) as HTMLElement[]) b.classList.toggle('on', b.dataset.place === mode); }
-function toTable() { tableZoom = 0; tableTurn = 0; tablePan[0] = tablePan[1] = 0; setMode('table'); }
+function toTable() { tableZoom = 0; tableTurn = 0; tablePan[0] = tablePan[1] = 0; editor.selected = ''; tableSkirt = d.family === 'skirt'; setMode('table'); }
 function go(m: Mode) {
   if (m === mode) return;
   if (m === 'rails') { backToRails(); return; }
@@ -832,7 +882,11 @@ canvas.addEventListener('pointermove', (e) => {
 });
 canvas.addEventListener('pointerup', (e) => {
   drag = false; clearTimeout(press);
-  if (mode === 'bench' && figureDrag) { spinEnd(e); return; }
+  if (mode === 'bench' && figureDrag) {
+    // (a tap on the figure, with more than one thing on: the one tapped is the one worked)
+    if (spinEnd(e) && worn.length > 1) { const id = pickWorn(e.clientX, e.clientY); if (id && id !== activeItem) { selectItem(id); toast(`the ${d.family}`); } }
+    return;
+  }
   // (at the figure, a tap on another place in the room (the table, a rail) goes over to it)
   if (mode === 'bench' && performance.now() - st0 < 450 && Math.hypot(e.clientX - sx, e.clientY - sy) < 10 && tapPlace(e.clientX, e.clientY)) return;
   if (mode !== 'rails') return;
@@ -1032,7 +1086,8 @@ const tableUp = (e: PointerEvent) => {
   const tap = (d: { x0: number; y0: number; t0: number }) => e.type === 'pointerup' && performance.now() - d.t0 < 450 && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 10;
   if (figureDrag && spinEnd(e)) go('bench');
   // (a tap on the room, off the paper: if it's on another place (a rail), go there)
-  else if (sceneDrag && tap(sceneDrag)) tapPlace(e.clientX, e.clientY);
+  // (or anywhere else at the table, off what's picked: back to the whole pattern)
+  else if (sceneDrag && tap(sceneDrag)) { if (!tapPlace(e.clientX, e.clientY)) unpick(); }
   sceneDrag = null;
 };
 canvas.addEventListener('pointerup', tableUp);
@@ -1120,7 +1175,8 @@ function frame(now: number) {
   if (cloth) items.push({ cloth, look: { fabric: fabricOf(rec), print: printOf(rec) } });
   const r0 = performance.now();
   const fit = room.fittings();
-  if (!skirtPaper()) fit.paper = { canvas: wholeCv, version: 1e6 + wholeVersion, model: sheetModel() };
+  if (mode === 'rails') { /* (the paper's on the table, out of sight) */ }
+  else if (!skirtPaper()) fit.paper = { canvas: wholeCv, version: 1e6 + wholeVersion, model: sheetModel() };
   else if (paper.version > 0) fit.paper = { canvas: paper.cv, version: paper.version, model: sheetModel() };
   const shiftGoal = mode==='rails'?0: Math.min(canvas.clientHeight*.6,$('bench').getBoundingClientRect().height) / Math.max(1,canvas.clientHeight);
   view.shift += (shiftGoal - view.shift) * Math.min(1, dt * 6);
@@ -1157,6 +1213,8 @@ if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
   perf, probe: () => ({ mode, omega: cloth ? +cloth.omega.toFixed(2) : 0, cloth: paper.cloth, tableZoom: +tableZoom.toFixed(3), tableTurn: +tableTurn.toFixed(3), recipe: rec, design: d, family: d.family, what: describeGarment(d), moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: g.notes, checks: g.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), seams: cloth?.seams(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
   // (for tests: the whole pattern's hems that can be worked with the tool in hand, where on the sheet)
   wholeHems: () => editor.handles.map(h=>({key:h.key,mid:[h.x,h.y]})),
+  pieces: () => { const dpr = SHEET_W / Math.max(1, wholeCv.clientWidth); return laid.map((l) => ({ name: l.piece.name, mid: l.to(l.piece.flat(0.5, 0.5)).map((x) => x * dpr) })); },
+  pickWorn,
   editor, journal:()=>journal, outfit:()=>worn.map(w=>({id:w.id,family:w.d.family,active:w.id===activeItem,health:w.cloth?.health()})),selectItem,
   // (for tests: where a point in the room is on the screen; where a point of the paper's sheet is)
   roomToScreen: (q: [number, number, number]) => { const m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },
