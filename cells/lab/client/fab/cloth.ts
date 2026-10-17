@@ -25,6 +25,8 @@
  *   to meet.
  */
 import * as body from './body';
+/** how long the pins hold (s) while the seams close (they're drawn closed over the first 0.8 s), and how long they take to come out */
+const PIN_HOLD = 1.1, PIN_OUT = 0.5;
 import { physical, stiffAt, type Fabric } from './fabric';
 import type { At, Piece } from './pattern';
 
@@ -70,6 +72,22 @@ export class Cloth {
   rad!: Float32Array;
   collider: Collider | null; self: boolean; floor: boolean;
   age = 0;
+  /**
+   * Pinned, as a dressmaker pins the pieces on a stand before sewing: a few points inside each piece (clear of its
+   * edges, which the seams need) held where it was laid round the figure, in the figure's own frame, and the cloth
+   * weightless, while the seams are drawn closed; then the pins come out and it falls into its drape. So a sleeve's
+   * sewn round the arm it was laid on, however the arm's posed, and can't slip off it before it's a tube.
+   */
+  pinI = new Int32Array(0); pinAt = new Float32Array(0);
+  /** how pinned it still is, 1 → 0 */
+  pinned(): number { if (!this.pinI.length) return 0; const t = (this.age - PIN_HOLD) / PIN_OUT; return t <= 0 ? 1 : t >= 1 ? 0 : 1 - t * t * (3 - 2 * t); }
+  /** where its pins' heads are now (the room's frame), while it's pinned: a few a piece, for the figure to show */
+  pinHeads(): V3[] {
+    if (!this.pinned()) return [];
+    const out: V3[] = [];
+    for (let k = 0; k < this.pinI.length; k += 3) { const i3 = this.pinI[k] * 3; out.push([this.pos[i3], this.pos[i3 + 1], this.pos[i3 + 2]]); }
+    return out;
+  }
   /** goes up every step: whoever draws it knows when it's moved */
   version = 0;
   /** the figure's turn (radians) and how fast it's turning */
@@ -235,12 +253,30 @@ export class Cloth {
     }
     this.s0 = new Float32Array(sa.length);
     for (let c = 0; c < sa.length; c++) this.s0[c] = warm ? 0 : this.gap(c);
+    // (pins: inside each piece, clear of its edges; only for a garment sewn afresh, not one carried on warm)
+    if (!warm) {
+      const pi: number[] = [];
+      for (let k = 0; k < this.grids.length; k++) {
+        const g = this.grids[k];
+        for (const v of [0.3, 0.55, 0.8]) for (const u of [0.3, 0.5, 0.7]) { const i = g.base + Math.round(u * g.nu) + Math.round(v * g.nv) * (g.nu + 1); if (this.inv[i] > 0 && !pi.includes(i)) pi.push(i); }
+      }
+      this.pinI = new Int32Array(pi); this.pinAt = new Float32Array(pi.length * 3);
+      pi.forEach((i, k) => this.pinAt.set(this.toBody(i), k * 3));
+    }
     this.hFrom = new Float32Array(this.hi.length * 3);
     for (let k = 0; k < this.hi.length; k++) this.hFrom.set(this.toBody(this.hi[k]), k * 3);
     this.wait = new Uint8Array(n);
     this.normals();
   }
 
+  /** each pin draws its point back to where it was laid (in the figure's frame, so they turn with it), as firmly as it's still pinned */
+  private pins(pw: number) {
+    const cs = Math.cos(this.spin), sn = Math.sin(this.spin), { pos, pinI, pinAt } = this, k0 = 0.6 * pw;
+    for (let k = 0; k < pinI.length; k++) {
+      const i3 = pinI[k] * 3, x = pinAt[k * 3], y = pinAt[k * 3 + 1], z = pinAt[k * 3 + 2];
+      pos[i3] += (x * cs + z * sn - pos[i3]) * k0; pos[i3 + 1] += (y - pos[i3 + 1]) * k0; pos[i3 + 2] += (-x * sn + z * cs - pos[i3 + 2]) * k0;
+    }
+  }
   /** where a place on a piece is (u, v across and down it), between its four nearest points */
   sample(k: number, u: number, v: number, positions = this.pos): V3 {
     const g = this.grids[k], x = u * g.nu, y = v * g.nv, i = Math.min(g.nu - 1, Math.floor(x)), j = Math.min(g.nv - 1, Math.floor(y)), fx = x - i, fy = y - j, W = g.nu + 1;
@@ -264,6 +300,8 @@ export class Cloth {
     this.lastH=h;
     for (let s = 0; s < S; s++) {
       this.age += h; this.spin += this.omega * h;
+      // (pinned, it's weightless: it falls as the pins come out)
+      const pw = this.pinned(), fall = 1 - pw;
       // (predict: what it's moving, less the air's drag through it, and gravity)
       for (let i = 0; i < n; i++) {
         if (inv[i] === 0) continue;
@@ -273,7 +311,7 @@ export class Cloth {
         vx -= nor[i3] * vn * k; vy -= nor[i3 + 1] * vn * k; vz -= nor[i3 + 2] * vn * k;
         const damp = 1 - 0.6 * h;
         prev[i3] = pos[i3]; prev[i3 + 1] = pos[i3 + 1]; prev[i3 + 2] = pos[i3 + 2];
-        pos[i3] += vx * damp * h; pos[i3 + 1] += (vy * damp - 980 * h) * h; pos[i3 + 2] += vz * damp * h;
+        pos[i3] += vx * damp * h; pos[i3 + 1] += (vy * damp - 980 * h * fall) * h; pos[i3 + 2] += vz * damp * h;
       }
       // (held: eased over half a second from where it was laid to where it's held, and turned with the figure)
       const e0 = Math.min(1, this.age / 0.6), e = e0 * e0 * (3 - 2 * e0), cs = Math.cos(this.spin), sn = Math.sin(this.spin);
@@ -293,6 +331,7 @@ export class Cloth {
         if(it<this.bendIters)this.bending(h2,it===0);
         this.tethers();
         for(let c=0;c<this.sa.length;c++)this.stitch(c,this.s0[c]*sew,1e-8/h2);
+        if (pw > 0) this.pins(pw);
       }
       if (this.self && s % 4 === 3) this.selfCollide();
       if (this.collider || this.floor) for (let i = 0; i < n; i++) if (inv[i] > 0) { if (this.wait[i] > 0) this.wait[i]--; else this.pushOut(i, h, true); }

@@ -115,6 +115,8 @@ export const HEAD = { c: L(0, 110, 0.4) as V3, r: 9.6 };
 export const PELVIS = { c: L(0, 52, -0.3) as V3, r: 11.4 };
 /** the arm's capsules on one side (s = ±1): upper arm, forearm */
 export const arm = (s: number): [Capsule, Capsule] => { const k = s < 0 ? 0 : 5; return [LIMBS[k], LIMBS[k + 1]]; };
+/** the leg's capsules on one side (s = ±1): thigh, shin */
+export const leg = (s: number): [Capsule, Capsule] => { const k = s < 0 ? 0 : 5; return [LIMBS[k + 2], LIMBS[k + 3]]; };
 
 // (the sections tabulated every millimetre, read without allocating)
 const ST = new Float32Array(((TORSO_TOP - TORSO_FOOT) * 10 + 2) * 3), S3 = new Float32Array(3);

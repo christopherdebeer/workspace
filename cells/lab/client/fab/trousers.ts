@@ -9,7 +9,7 @@
  * - the leg's as wide as the leg there and its room, wider at the hem as it flares; a full-length leg must pass the foot;
  * - the waist, cut as wide as the hips, gathers into a band the waist's round (it must go over the hips).
  */
-import { WAIST_Y, around, section, type V3 } from './body';
+import { WAIST_Y, around, leg as legOf, section, type V3 } from './body';
 import { Cut, TAU, WAIST, clipAt, waistband } from './shared';
 import { clamp, cubic, flipX, line, mirror, patch, type At, type Edge, type P2 } from './edges';
 import { bandAt } from './pattern';
@@ -74,9 +74,11 @@ export function trousers(cut: Cut, d: Design, h: number, o: { joined: boolean })
         const q = cut.pieces[k], [, y] = q.flat(u, v), rw = Math.max(6, q.flat(1, v)[0] - q.flat(0, v)[0]);
         const yb = CROTCH_Y - drop + y, w = clamp(y / (D * 0.45), 0, 1);
         const a = a0 + Math.PI * u, r = rw / Math.PI / 2 + 1.4 + legR(Math.max(6, Math.min(55, yb))) * 0.35;
-        const leg: V3 = [P.leg * 7 + Math.sin(a) * r, yb, Math.cos(a) * r];
+        // (round the leg as it's posed: so far down it from the hip as this height is below the hip standing, on the thigh
+        // or the shin, a ring about the bone with its front to the front, as a dressmaker pins a leg on a stand)
+        const leg = aroundLeg(P.leg, 55 - yb, a, r);
         const t = around(Math.max(PELVIS_Y, yb), th0 + (Math.PI / 2) * u, 1.6);
-        return [leg[0] + (t[0] - leg[0]) * w, yb, leg[2] + (t[2] - leg[2]) * w];
+        return [leg[0] + (t[0] - leg[0]) * w, leg[1] + (yb - leg[1]) * w, leg[2] + (t[2] - leg[2]) * w];
       },
     });
     k = cut.add(pc); idx.push(k);
@@ -114,3 +116,18 @@ export function trousers(cut: Cut, d: Design, h: number, o: { joined: boolean })
 }
 const sub = (a: P2, b: P2): [number, number] => [a[0] - b[0], a[1] - b[1]];
 export type { Edge };
+
+/** a point on a ring of radius r about a posed leg (side ±1), d cm down it from the hip, at angle a round it (0 the front,
+ * +x to the figure's left): standing straight, exactly the ring about a straight leg at x = ±7 */
+function aroundLeg(side: number, d: number, a: number, r: number): V3 {
+  const [th, sh] = legOf(side), sub = (p: V3, q: V3): V3 => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+  const lt = Math.hypot(...sub(th.b, th.a)), ls = Math.hypot(...sub(sh.b, sh.a));
+  const [p0, p1, t] = d <= lt ? [th.a, th.b, d / lt] : [sh.a, sh.b, Math.min(1.25, (d - lt) / ls)];
+  const ab = sub(p1, p0), l = Math.hypot(...ab) || 1, ax: V3 = [ab[0] / l, ab[1] / l, ab[2] / l];
+  // (the hip joint sits a little above where the standing leg's cloth starts: measured from the joint, as the bone is)
+  const c: V3 = [p0[0] + ab[0] * t, p0[1] + ab[1] * t, p0[2] + ab[2] * t];
+  const unit = (v: V3): V3 => { const n = Math.hypot(...v) || 1; return [v[0] / n, v[1] / n, v[2] / n]; };
+  const front = unit([-ax[0] * ax[2], -ax[1] * ax[2], 1 - ax[2] * ax[2]]);
+  const side2 = unit([1 - ax[0] * ax[0] - front[0] * front[0], -ax[0] * ax[1] - front[0] * front[1], -ax[0] * ax[2] - front[0] * front[2]]);
+  return [c[0] + r * (Math.cos(a) * front[0] + Math.sin(a) * side2[0]), c[1] + r * (Math.cos(a) * front[1] + Math.sin(a) * side2[1]), c[2] + r * (Math.cos(a) * front[2] + Math.sin(a) * side2[2])];
+}

@@ -304,9 +304,13 @@ All units are centimetres, grams and seconds.
 - **The cloth against itself**: a spatial hash, with each point's radius under half its nearest neighbour's distance.
   Points near seams and folds are exempt, since there they're meant to meet.
 
-**Assembly is shown, not hidden.** The pieces are first laid on a surface of revolution where nothing is stretched:
-its round at each depth is the panels' width there. Then the seams are sewn and the waist is drawn into the band. Press
-**sew** to watch it again.
+**Assembly is shown, not hidden: pinned, then sewn.** Each piece is first put round the figure as it stands, not as
+it would stand: the bodice and skirt round the torso on a surface of revolution where nothing is stretched (its round
+at each depth is the panels' width there), each sleeve round its own arm and each trouser leg round its own leg, along
+the bones wherever they've been posed. So an arm raised over the head still goes through its armhole, and a leg lifted
+at the knee through its leg. Nine pins (the coloured heads) hold each piece where it's placed, weightless, while the
+seams are drawn closed and the waist into the band; at 1.1 s the pins come out over half a second and the cloth falls.
+Press **sew** to watch it again. (A garment changed in place, by a dial or a move, carries its cloth on unpinned.)
 
 ### Why XPBD, and what else was considered
 
@@ -392,7 +396,7 @@ construction, not a look) than children who turn dials to the same skirts.
 | test | claim | result | doesn't establish |
 |---|---|---|---|
 | **5** garments | 752 garments (every neckline × sleeve length × sleeve × collar of a top, a dress and a jumpsuit at both ends of their room and length; trousers' corners; tiered skirts and dresses; 300 at random), 4,308 checks: seams meet as they're meant to (eased, or gathered by as much as meant), pieces cut from curves lie flat, fit across the cloth, clear the body, go on (over the head, past the hand, past the foot) | **holds**: all pass | makeability, as test 1; that a sleeve set in this way hangs as a dressmaker's would |
-| **6** sewn | every garment on the workshop's rails sews up on the figure: seams to within 2.5 cm (0.25 on average), finite, nothing inside it | **holds**: all 27 | that it's sound (6′) |
+| **6** sewn | every garment the workshop makes sews up on the figure: seams to within 2.5 cm (0.25 on average), finite, nothing inside it | **holds**: all 27 | that it's sound (6′) |
 | **6′** sound | the same garments, by the skirt's bar for "sound" (above) | **fails**: 12 of 27 (every plain skirt; 4 of 5 trousers) | how much the stretch under a bodice matters to how it looks or to a child |
 
 Under a bodice, under tiers and where gathers crowd the cloth it stretches more: 13–33% at the 99th percentile, seams
@@ -436,12 +440,14 @@ within 1.1 cm rather than 5 mm. Building the families, the checks caught:
 
 ## The rails
 
-Fab opens on the workshop's wall: a row of clothes rails, each hung with garments on hangers.
+Fab opens on the workshop's wall: a row of clothes rails, each hung with garments on hangers. The figure itself only
+turns when it's turned (by a drag, or **twirl**); it doesn't drift round on its own.
 
 ![the workshop’s rail, the one in front named over the scene](fab/v-rails.jpg)
 
-- **The workshop's rails** are chromed: one each for skirts, tops, dresses, and trousers and jumpsuits, with one of each
-  way of making them in contrasting cloths, to start from.
+- **The workshop's rail** is chromed, and there's one: fourteen garments to start from, a few of each kind (skirts,
+  dresses, tops, trousers and a jumpsuit), each made a different way in a contrasting cloth. (The evidence bench still
+  sews all 27 of the workshop's makes.)
 - **Each person has their own rail**, powder-coated in their own colour, with what they've made. Tap **+ a rail** and
   give it a name.
 
@@ -458,7 +464,7 @@ Using the rails:
 Saving:
 
 - **save to rail** at the bench hangs it back on its owner's rail, its design and its paper's recipe both. One that came
-  from the workshop's rails goes
+  from the workshop's rail goes
   on the rail in use instead, and if nobody has a rail yet, Fab asks whose it is.
 - Going back to the **rails** hangs it up too, if it's changed.
 - Long-press one of your own to take it off the rail.

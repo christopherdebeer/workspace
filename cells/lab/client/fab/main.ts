@@ -3,16 +3,17 @@
  * made. A skirt, a top, a dress, trousers or a jumpsuit, drafted to the figure (garment.ts), sewn up round it and let
  * fall as that cloth falls (cloth.ts): its silhouette, its folds and how it swings are never set, only found.
  *
- * It starts at the rails (rails.ts): along the workshop's wall, the workshop's rails (one for each kind of thing) and one
- * for each person, hung with what's been made. Slide a rail's garments along it, swipe up or down for the next rail,
+ * It starts at the rails (rails.ts): along the workshop's wall, the workshop's own rail (a few of each kind of thing) and
+ * one for each person, hung with what's been made. Slide a rail's garments along it, swipe up or down for the next rail,
  * tap the one in front to put it on the figure; it's taken off its hanger and sewn on, and the camera crosses the room.
  * **save to rail** hangs it back on its owner's rail (or a new rail, asking whose); going back to the **rails** does
  * too, if it's changed.
  *
  * At the figure, drag it round, pinch to come close; the drawer holds what it is (**make**: the kind of thing, and a
  * skirt's tiers), a bodice's neckline, sleeves and collar (**bodice**), trousers' legs (**legs**), and its cloth, print
- * and colour (each made your own with ⚙). **twirl** turns the figure on its stand; **sew** lays the pieces out flat
- * round it and sews them up again. The pattern's pinned up beside it: tap it to take it to the cutting table, where a
+ * and colour (each made your own with ⚙). **twirl** turns the figure on its stand; **sew** pins the pieces in place
+ * round it, as it stands (sleeves round its arms, legs round its legs, whatever the pose), sews them up, then takes
+ * the pins out and lets the cloth fall. The pattern's pinned up beside it: tap it to take it to the cutting table, where a
  * skirt (a dress's too) is made by hand on its paper: slash and spread, fold, gather, close or release a dart, every
  * move recorded. (A top's or trousers' pattern lies on the table to be looked at: moves on those pieces are next.)
  * Across the top, the room's three places: the rails, the figure, the table.
@@ -665,6 +666,21 @@ function setPosing(on: boolean) {
 $('posing').addEventListener('click', () => setPosing(!posing));
 $('unpose').addEventListener('click', () => { unpose(); keepPoses(); toast('standing as it was'); });
 setPosing(posing);
+// (the pins, while a garment's pinned to the figure to be sewn: glass heads, a few to a piece)
+const PIN_COLOURS = ['#d23a4a', '#f2c230', '#3a78c8', '#3f9a5a', '#f4f0e6', '#7a4bb0'];
+const pinEls: HTMLElement[] = [];
+function pinFrame() {
+  const heads = mode === 'bench' && lastVP ? [cloth, ...worn.filter((w) => w.id !== activeItem).map((w) => w.cloth)].flatMap((c) => c?.pinHeads() ?? []) : [];
+  const m = lastVP!;
+  heads.forEach((q, k) => {
+    let el = pinEls[k];
+    if (!el) { el = document.createElement('i'); el.className = 'pinhead'; el.style.background = PIN_COLOURS[k % PIN_COLOURS.length]; $('stage').appendChild(el); pinEls.push(el); }
+    const x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15];
+    el.style.display = w > 0 ? '' : 'none';
+    el.style.transform = `translate(${((x / w * 0.5 + 0.5) * canvas.clientWidth).toFixed(1)}px, ${((1 - (y / w * 0.5 + 0.5)) * canvas.clientHeight).toFixed(1)}px)`;
+  });
+  for (let k = heads.length; k < pinEls.length; k++) pinEls[k].style.display = 'none';
+}
 /** the figure's own frame to the room's: turned on its stand */
 const turned = (p: [number, number, number], a: number): [number, number, number] => { const c = Math.cos(a), s2 = Math.sin(a); return [p[0] * c + p[2] * s2, p[1], -p[0] * s2 + p[2] * c]; };
 /** where a joint is on the screen (css pixels), or null */
@@ -773,15 +789,15 @@ function loadOutfit(){
 const madeNow = () => JSON.stringify({ d, rec });
 let lastVP: Float32Array | null = null, toastT = 0, lastFront = -1;
 const toast = (t: string) => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = window.setTimeout(() => el.classList.remove('show'), 2400); };
-const railName = (r: Rail) => (r.workshop ? (r.id === 'workshop' ? 'the workshop’s skirts' : `the workshop’s ${r.name.replace(/^the workshop: /, '')}`) : /rail/i.test(r.name) ? r.name : `${r.name}’s rail`);
+const railName = (r: Rail) => (r.workshop ? 'the workshop’s rail' : /rail/i.test(r.name) ? r.name : `${r.name}’s rail`);
 
 function railUI() {
   const tags = $('railtags'); tags.innerHTML = '';
   room.states.forEach((st, k) => {
     const b = document.createElement('button'); b.className = `tag${k === room.active ? ' on' : ''}`;
     b.style.setProperty('--c', st.rail.workshop ? '#9a9aa0' : RAIL_COLOURS[st.rail.colour % RAIL_COLOURS.length].css);
-    // (the workshop's own rails, one for each kind of thing, marked as the workshop's: a person's rail is just their name)
-    if (st.rail.workshop) { b.classList.add('ws'); b.innerHTML = `<small>workshop</small>${st.rail.id === 'workshop' ? 'skirts' : st.rail.name.replace(/^the workshop: /, '')}`; }
+    // (the workshop's own rail, marked as the workshop's: a person's rail is just their name)
+    if (st.rail.workshop) { b.classList.add('ws'); b.innerHTML = '<small>the</small>workshop'; }
     else b.textContent = st.rail.name;
     b.addEventListener('click', () => {
       // (tap your own rail's tag again to rename it; clear its name to take it away)
@@ -1193,7 +1209,8 @@ function frame(now: number) {
     // (looking at what's made: a skirt's or trousers' middle, a top's chest)
     const ty = qs.has('ty') ? BENCH_VIEW.target[1] : { skirt: 62, top: 82, dress: 70, trousers: 50, jumpsuit: 66 }[d.family];
     view.target[1] += (ty - view.target[1]) * (1 - Math.exp(-dt * 4));
-    if (!drag && !posing) { idle += dt; if (preview || idle > 8) view.az += dt * 0.1; }
+    // (it turns by itself only as the index's preview: at the figure, it stays where it's left)
+    if (preview) view.az += dt * 0.1;
   }
   if (mode === 'rails') { room.update(dt, 7); if (room.front() !== lastFront) railInfo(); }
   // (at the table, now and then: how big a fingertip is on the sheet from here, so its handles and badges are drawn a
@@ -1239,7 +1256,7 @@ function frame(now: number) {
   const shiftGoal = mode==='rails'?0: Math.min(canvas.clientHeight*.6,$('bench').getBoundingClientRect().height) / Math.max(1,canvas.clientHeight);
   view.shift += (shiftGoal - view.shift) * Math.min(1, dt * 6);
   lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, fit).vp;
-  poseFrame();
+  poseFrame(); pinFrame();
   renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
   frames++; framesWindow++; wallWindow += raw; wallTime += raw;
   // (once a second: the whole frame on this device, not only the cloth's part of it)
@@ -1273,7 +1290,7 @@ if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
   // (for tests: the whole pattern's hems that can be worked with the tool in hand, where on the sheet)
   wholeHems: () => editor.handles.map(h=>({key:h.key,mid:[h.x,h.y]})),
   pieces: () => { const dpr = SHEET_W / Math.max(1, wholeCv.clientWidth); return laid.map((l) => ({ name: l.piece.name, mid: l.to(l.piece.flat(0.5, 0.5)).map((x) => x * dpr) })); },
-  pickWorn, jointOnScreen, setPosing, posedByHand,
+  pickWorn, jointOnScreen, setPosing, posedByHand, bend, gripAt, age: () => cloth?.age ?? 0,
   editor, journal:()=>journal, outfit:()=>worn.map(w=>({id:w.id,family:w.d.family,active:w.id===activeItem,health:w.cloth?.health()})),selectItem,
   // (for tests: where a point in the room is on the screen; where a point of the paper's sheet is)
   roomToScreen: (q: [number, number, number]) => { const m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },

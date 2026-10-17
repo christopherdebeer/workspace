@@ -24,7 +24,7 @@ import { Cloth, type Build } from './cloth';
 import { FABRICS, fabricById, type Fabric } from './fabric';
 import { DEFAULT_DESIGN, draft, toBuild, type Design, type Method } from './pattern';
 import { describe as describeGarment, draftGarment, poseFor, toBuild as garmentBuild } from './garment';
-import { WORKSHOPS, designOf } from './store';
+import { ALL_WORKSHOP, designOf } from './store';
 import { setPose, distance } from './body';
 
 type V3 = [number, number, number];
@@ -336,7 +336,7 @@ export function garmentTest(count = 300): Section {
 export function sewnTest(): Section[] {
   const rows: Row[] = [];
   let sewn = 0, sound = 0;
-  for (const rail of WORKSHOPS) for (const gm of rail.garments) {
+  for (const rail of ALL_WORKSHOP) for (const gm of rail.garments) {
     const g = draftGarment(designOf(gm), 1600, gm.recipe); poseFor(g);
     const c = new Cloth(garmentBuild(g, fabricById(g.design.fabric)) as Build);
     const t0 = performance.now(); settle(c, 2.5); const ms = (performance.now() - t0) / 150;

@@ -1,6 +1,6 @@
 /**
- * The rails: the workshop's own (one for each kind of thing it makes: skirts, tops, dresses, trousers and jumpsuits),
- * hung with garments to start from, and one for each person who makes things here, with what they've made. Kept in this browser (localStorage), so a rail is a person on this device: a family's tablet, a
+ * The rails: the workshop's own (one, hung with a few of each kind of thing it makes: skirts, dresses, tops, trousers
+ * and jumpsuits), to start from, and one for each person who makes things here, with what they've made. Kept in this browser (localStorage), so a rail is a person on this device: a family's tablet, a
  * classroom's. (Nothing leaves it; a private window keeps them only for the visit.)
  */
 import { fromDesign, type Design, type Recipe } from './pattern';
@@ -29,8 +29,8 @@ export const RAIL_COLOURS: Array<{ tint: [number, number, number]; css: string }
 ];
 const d = (x: Partial<Design>): Design => sanitize(x);
 const rail = (id: string, name: string, designs: Array<Partial<Design>>): Rail => ({ id, name, colour: -1, workshop: true, garments: designs.map((x, k) => { const dd = d(x); return { id: `${id}${k}`, design: dd, ...(dd.family === 'skirt' ? { recipe: fromDesign(dd) } : {}), at: 0 }; }) });
-/** the workshop's rails: one of each way of making each kind of thing, in contrasting cloths, to start from */
-export const WORKSHOPS: Rail[] = [
+/** every garment the workshop has drafted, by kind: the evidence bench sews them all */
+export const ALL_WORKSHOP: Rail[] = [
   rail('workshop', 'the workshop', [
     {},
     { method: 'flare', fullness: 1, length: 30, panels: 4, fabric: 'flannel', print: 1, colour: 4 },
@@ -67,6 +67,10 @@ export const WORKSHOPS: Rail[] = [
     { family: 'jumpsuit', fabric: 'jersey', legLen: 30, sleeveLen: 8, neck: 'v', collar: 'band', print: 1, colour: 4 },
   ]),
 ];
+/** the workshop's one rail: a few of each kind, in contrasting cloths, to start from (each keeps its id, so whatever was
+ * taken from the old rails still knows where it came from) */
+const pick: Array<[number, number[]]> = [[0, [0, 2, 5, 8]], [2, [0, 2, 3]], [1, [0, 1, 3]], [3, [0, 1, 5, 6]]];
+export const WORKSHOPS: Rail[] = [{ id: 'workshop', name: 'the workshop', colour: -1, workshop: true, garments: pick.flatMap(([r, ks]) => ks.map((k) => ALL_WORKSHOP[r].garments[k])) }];
 export const WORKSHOP = WORKSHOPS[0];
 
 const KEY = 'fab.rails.v1';
