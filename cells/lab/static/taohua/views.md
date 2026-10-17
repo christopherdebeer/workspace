@@ -9,7 +9,6 @@ Made by `node cells/lab/views.mjs taohua` from `client/taohua/views.mjs`. The RE
 ![The jetty: the pier of stone, its lantern, the boat moored across it; the gate up to the first way](v-jetty.jpg)
 ![From the far bank: back across the river to the hill: its banks held by black rocks, reeds between](v-far-bank.jpg)
 ![Along the near bank: the current drawn as the prints draw it: trails of small crests, few where it's slack](v-near-bank.jpg)
-![Out on the water: the broad water upstream, its far bank lost to the eye](v-open-water.jpg)
 
 ## The hill
 
@@ -22,7 +21,7 @@ Made by `node cells/lab/views.mjs taohua` from `client/taohua/views.mjs`. The RE
 
 ## Changes along the way
 
-![A cast where a branch ends: six lines in the paper kept open, the moving lines vermilion, its name in a column beside them](v-cast.jpg)
+![A cast beside a way: seed 1, beside the first way: six lines in the paper kept open, the moving lines vermilion, its name in a column beside them](v-cast.jpg)
 ![Its page: tapped: the figure, its names, Legge's Judgment and Image, its changing lines, a question to sit with](v-cast-page.jpg)
 ![Travel notes: the seal 記: the temples, casts and landings nearby, nearest first; the journal; settings and the benches](v-notes.jpg)
 ![Casting a reading: the drawer: a question, then three coins thrown six times, the figure built from the bottom](v-cast-own.jpg)

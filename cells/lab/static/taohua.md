@@ -116,7 +116,6 @@ hill (seed 1): on the jetty by the boat; on the far bank, looking back across th
 the near bank a way along; the arrival held part way; its beginning, out on the broad water; and the
 start, waiting. `?intro=t` holds the arrival t seconds in; `?splash` holds the start.
 
-![out on the broad water](taohua/v-open-water.jpg)
 
 The title belongs to the water where the journey starts, not to the screen, so it moves with the
 water and is left behind, and doesn't come back unless you come back up the river to it.
@@ -469,7 +468,7 @@ read (a tap on them walks, like a tap on the hillside). Beside it, a small built
 flat stones, each smaller than the last (always where Mountain or Earth is in the cast), or a
 wayside shrine, a stone post with a little white niche under a roof of teal tiles.
 
-![a cast where a branch ends](taohua/v-cast.jpg)
+![a cast beside a way](taohua/v-cast.jpg)
 
 A tap on a cast's words opens its page: a sheet of paper over the painting, near the whole screen, to
 read it by (the painting set aside under it, not drawn, and the walker staying where they are). On it,

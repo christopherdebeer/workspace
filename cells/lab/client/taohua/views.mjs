@@ -24,7 +24,6 @@ export const views = [
   { name: 'jetty', group: 'The river', title: 'The jetty', caption: 'the pier of stone, its lantern, the boat moored across it; the gate up to the first way', query: 'bench=river&scene=jetty&review', settle: 5000 },
   { name: 'far-bank', group: 'The river', title: 'From the far bank', caption: 'back across the river to the hill: its banks held by black rocks, reeds between', query: 'bench=river&scene=far&review', settle: 5000 },
   { name: 'near-bank', group: 'The river', title: 'Along the near bank', caption: 'the current drawn as the prints draw it: trails of small crests, few where it\'s slack', query: 'bench=river&scene=bank&review', settle: 5000 },
-  { name: 'open-water', group: 'The river', title: 'Out on the water', caption: 'the broad water upstream, its far bank lost to the eye', query: 'bench=river&scene=open&review', settle: 5000 },
 
   // ─── the hill and its ways, seed 1 ───
   { name: 'climb', group: 'The hill', title: 'On the way up', caption: 'seed 1, a way among the blossom: stone steps where it\'s steep, a trail where it\'s gentle', query: AT('w3:40') },
@@ -33,10 +32,10 @@ export const views = [
   { name: 'pagoda', group: 'The hill', title: 'A pagoda', caption: 'storeys of teal eaves over the crowns', query: AT('w11:22') },
   { name: 'gate', group: 'The hill', title: 'A gate', caption: 'two red columns and a roof over the way, and the way going on through it', query: AT('w13:61') },
   { name: 'hall', group: 'The hill', title: 'A hall', caption: 'where a branch ends at a building', query: AT('w64:9') },
-  { name: 'cast', group: 'Changes along the way', title: 'A cast where a branch ends', caption: 'six lines in the paper kept open, the moving lines vermilion, its name in a column beside them', query: AT('w19:44') },
-  { name: 'cast-page', group: 'Changes along the way', title: 'Its page', caption: 'tapped: the figure, its names, Legge\'s Judgment and Image, its changing lines, a question to sit with', query: AT('w19:44'), run: async (v) => { await v.eval(() => window.__taohua.read()); await v.wait(1500); } },
-  { name: 'notes', group: 'Changes along the way', title: 'Travel notes', caption: 'the seal 記: the temples, casts and landings nearby, nearest first; the journal; settings and the benches', query: AT('w3:40'), run: async (v) => { await v.eval(() => window.__taohua.sheet('side')); await v.wait(1500); } },
-  { name: 'cast-own', group: 'Changes along the way', title: 'Casting a reading', caption: 'the drawer: a question, then three coins thrown six times, the figure built from the bottom', query: AT('w3:40'), run: async (v) => { await v.eval(() => window.__taohua.sheet('drawer')); await v.wait(1500); } },
+  { name: 'cast', group: 'Changes along the way', title: 'A cast beside a way', caption: 'seed 1, beside the first way: six lines in the paper kept open, the moving lines vermilion, its name in a column beside them', query: AT('w0:26') },
+  { name: 'cast-page', group: 'Changes along the way', title: 'Its page', caption: 'tapped: the figure, its names, Legge\'s Judgment and Image, its changing lines, a question to sit with', query: AT('w0:26'), run: async (v) => { await v.eval(() => window.__taohua.read()); await v.wait(1500); } },
+  { name: 'notes', group: 'Changes along the way', title: 'Travel notes', caption: 'the seal 記: the temples, casts and landings nearby, nearest first; the journal; settings and the benches', query: AT('w3:40'), run: async (v) => { await v.eval(() => window.__taohua.sheet('side')); await v.wait(3000); } },
+  { name: 'cast-own', group: 'Changes along the way', title: 'Casting a reading', caption: 'the drawer: a question, then three coins thrown six times, the figure built from the bottom', query: AT('w3:40'), run: async (v) => { await v.eval(() => window.__taohua.sheet('drawer')); await v.wait(3000); } },
 
   // ─── the water ───
   { name: 'waterfall', group: 'The water', title: 'A waterfall\'s pool', caption: 'seed 1: the fall, its pool, stepping stones below', query: AT('w8:8') },

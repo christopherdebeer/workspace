@@ -31,12 +31,6 @@
     "title": "Along the near bank",
     "caption": "the current drawn as the prints draw it: trails of small crests, few where it's slack",
     "file": "v-near-bank.jpg"
-   },
-   {
-    "name": "open-water",
-    "title": "Out on the water",
-    "caption": "the broad water upstream, its far bank lost to the eye",
-    "file": "v-open-water.jpg"
    }
   ]
  },
@@ -86,8 +80,8 @@
   "views": [
    {
     "name": "cast",
-    "title": "A cast where a branch ends",
-    "caption": "six lines in the paper kept open, the moving lines vermilion, its name in a column beside them",
+    "title": "A cast beside a way",
+    "caption": "seed 1, beside the first way: six lines in the paper kept open, the moving lines vermilion, its name in a column beside them",
     "file": "v-cast.jpg"
    },
    {
