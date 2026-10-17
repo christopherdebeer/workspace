@@ -26,6 +26,8 @@ right before the eye thinning away in dabs); there, it looks along their way as 
 drag looks about; in
 the composition view, to stand further off still, up to twice as far. Each view keeps its own. The steps climbed are counted at the top.
 
+![on the way up, seed 1](taohua/v-climb.jpg)
+
 The journey starts on the river, as 桃花源记 has it: a fisherman, rowing up a stream, comes on a forest
 of peach blossom lining its banks, and leaves his boat to go in. Across the foot of the hill runs a
 river in long bends, so its banks run across the picture, not along it; upstream it opens out into
@@ -44,6 +46,8 @@ lines in the current: pushed down the river as the current comes and goes in slo
 hand's breadth and back, swinging a little about them. The walker, too, is a figure in ink: robe and
 sash nearly black, the hat a mid grey so it reads.
 
+![the jetty, the boat moored across it, the gate up to the first way](taohua/v-jetty.jpg)
+
 The river runs: its current (`Water.riverFlow`) goes down it along its course, quick in the narrows,
 slow on the broad water above (the same water through a wider way), quickest down its middle and slack
 along its banks, and behind the pier an eddy, where it idles and turns a little back on itself. Its
@@ -57,6 +61,8 @@ title, in ink: the name of the first temple up the hill, in vermilion, over 桃�
 Continue (back to where it was left: its seed and its place, kept as it goes, as the address keeps them).
 Taps on the print do nothing yet; Enter sets out.
 
+![the start: the boat on the broad water, the title in ink](taohua/v-title.jpg)
+
 Set out, and the boat gets under way: down the broad water quickly, then through the narrows at about
 the river's own pace, a metre a second; the banks come in, rocks first, then the blossom; it eases over
 its last few metres, turns in and comes alongside the jetty, and the walker steps off onto its deck,
@@ -65,6 +71,8 @@ water where it began, and beside it now, as the prints set a verse, the lines it
 路之远近。忽逢桃花林，夹岸数百步。 (晋 · 陶渊明); both are left behind. Where the address says where to
 be (a link, a reload, Continue), there's no title: it's of the start. The walker can come back down to
 the jetty's deck (it's open ground, over the water).
+
+![arriving: the banks coming in](taohua/v-arrive.jpg)
 
 The river's drawn as the hill's water is, the paper and marks where something happens. Its current as
 the prints draw a river's: long trails of small crests, each a little arc of its own with the paper
@@ -82,6 +90,9 @@ the water: long and calm on still water, short, broken and fainter where it runs
 the thing meets the water, fading going down. So whatever moves (the boat, the walker on the pier, a
 deer at a pond) has its reflection with it, and anything new has one. (`?refl=old` brings back the
 old, hand-laid reflections, to compare.)
+
+![along the near bank: the current in trails of crests](taohua/v-near-bank.jpg)
+![from the far bank, back to the hill](taohua/v-far-bank.jpg)
 
 Ripples come of what happens: where the pole goes in, rings spreading, broken into arcs, one inside
 another; while the boat's moving through the water, its wake, crests off either side of its bow,
@@ -104,6 +115,8 @@ river. Every hill keeps the same ways it had: the river lies below where they st
 hill (seed 1): on the jetty by the boat; on the far bank, looking back across the river to the hill; on
 the near bank a way along; the arrival held part way; its beginning, out on the broad water; and the
 start, waiting. `?intro=t` holds the arrival t seconds in; `?splash` holds the start.
+
+![out on the broad water](taohua/v-open-water.jpg)
 
 The title belongs to the water where the journey starts, not to the screen, so it moves with the
 water and is left behind, and doesn't come back unless you come back up the river to it.
@@ -139,6 +152,8 @@ ends, turning as the way bends, now and then a short wall of squared blocks besi
 gentle, it's a trail, a few flat stones and a worn line of grey strokes. The ground just downhill
 of a way is kept open of trees, so a way running across the hill isn't lost under the crowns in
 front of it. All of it from the seed: the same seed, the same hillside.
+
+![a fork, seed 1](taohua/v-fork.jpg)
 
 The world is made in tiles, sixteen metres across and twelve deep, about wherever the walker is,
 as far across as the view reaches, as they come into view and dropped as they're left, each from
@@ -186,6 +201,13 @@ what made them: edge teal, cut magenta, bank brown, wear blue, tread orange, run
 `?bench=ways&scene=flight|rock|timber|cut|bend|steep` (best with `review`) shows a place on one hill
 (seed 1) where a kind of way can be studied, looking up it, with the trees left out: the longest
 flight of each kind of stair, the deepest cut beside a trail, its sharpest bend, its steepest stretch.
+
+![a flight of steps](taohua/v-ways-flight.jpg)
+![cut into the rock](taohua/v-ways-rock.jpg)
+![timber treads](taohua/v-ways-timber.jpg)
+![cut into the bank](taohua/v-ways-cut.jpg)
+![a bend](taohua/v-ways-bend.jpg)
+![steep](taohua/v-ways-steep.jpg)
 
 ## The water
 
@@ -252,6 +274,14 @@ opening over the water, its faces of squared stone, a low parapet either side; o
 reflection rounds the opening into a ring. In the composition view, water's open paper, faintly
 cooler.
 
+![a waterfall's pool, stepping stones below](taohua/v-waterfall.jpg)
+![a stone arch](taohua/v-arch.jpg)
+![stepping stones, still-ford-7](taohua/v-stepping.jpg)
+![still water](taohua/v-water-pond.jpg)
+![a bend](taohua/v-water-bend.jpg)
+![running fast](taohua/v-water-rapid.jpg)
+![a fall](taohua/v-water-fall.jpg)
+
 ## The deer
 
 Now and then, not often (in about two stretches of three, each some three hundred metres up the
@@ -289,6 +319,11 @@ panels of teal and blue under it, a row of brackets; a red door, lattice windows
 the temple's name in gold on dark wood. Every roof's tiles are drawn, barrel tiles in rows down
 whichever way each slope falls, round tile-ends along the eaves, ridges down the hips with knobs
 along them, curled ridge ends or a finial at the peak.
+
+![a pavilion](taohua/v-pavilion.jpg)
+![a pagoda](taohua/v-pagoda.jpg)
+![a gate](taohua/v-gate.jpg)
+![a hall](taohua/v-hall.jpg)
 
 ## The trees
 
@@ -340,6 +375,13 @@ chooses which): one tree alone; the same tree twice, as the orchard draws it (ri
 standing alone (left); a grove, crowns among crowns; a tree with an outcrop behind it; a tree above a
 still pond, close enough to the shore that its blossom shows in the water; and three side by side, each its own. The same trees every time, so the drawing of a tree
 can be changed and compared against itself, and against what stands about it.
+
+![a tree alone](taohua/v-tree-lone.jpg)
+![a pair](taohua/v-tree-pair.jpg)
+![a grove](taohua/v-tree-grove.jpg)
+![among rocks](taohua/v-tree-rocks.jpg)
+![by water](taohua/v-tree-water.jpg)
+![the kinds, side by side](taohua/v-tree-lineup.jpg)
 
 ## The print
 
@@ -427,12 +469,16 @@ read (a tap on them walks, like a tap on the hillside). Beside it, a small built
 flat stones, each smaller than the last (always where Mountain or Earth is in the cast), or a
 wayside shrine, a stone post with a little white niche under a roof of teal tiles.
 
+![a cast where a branch ends](taohua/v-cast.jpg)
+
 A tap on a cast's words opens its page: a sheet of paper over the painting, near the whole screen, to
 read it by (the painting set aside under it, not drawn, and the walker staying where they are). On it,
 the figure (its moving lines vermilion), its number, its name and, if it moves, 之 and the name of
 what it becomes, in English and pinyin; Legge's Judgment and Image (1882); its changing lines, from
 the bottom up, and all six behind a fold; a question to sit with; and where on the hill it was cast,
 the hill's own, the same each time it's read.
+
+![its page](taohua/v-cast-page.jpg)
 
 The page is one of three paper surfaces (surfaces.ts), each a sheet of the same paper (warm ivory, a
 fine fibre in it, its edge rough as handmade paper's is, cut afresh to each sheet's size, its shadow
@@ -449,12 +495,16 @@ this browser only; a tap reads it again. Settings: the composition view, the ste
 notes, and Benches: each bench (water, ways, trees, river) with a link to each of its scenes, so
 that every scene a bench sets out can be found without knowing its name.
 
+![travel notes: nearby, the journal, settings](taohua/v-notes.jpg)
+
 Cast a reading opens the drawer: a question (or none), then three coins (開元通寶, the Tang's), thrown
 six times, the figure built line by line from the bottom; each line the coins' sum, a face two and a
 plain back three, so a six is three faces and a nine three backs. It's cast as the Changes experiment
 casts: the question and the hour give the lines, so the same question in the same hour casts the same
 figure. Then its names, and Read it opens its page (the question at its head, and when it was cast);
 it's kept in the journal. A cast of one's own is its own, apart from the hill's.
+
+![casting a reading](taohua/v-cast-own.jpg)
 
 The cast shapes its space too. Its upper trigram is what stands behind it: Mountain, standing
 stones along its upper edge; Wind, a grove close behind; Thunder, one tree well out at its far
@@ -479,6 +529,9 @@ over the masses it sits on; each station is marked by its hexagram, small, in it
 so the forks and meetings read at a glance. It works with `review` and
 while walking, for judging how the arrangement holds as it unrolls, and for deciding where
 things along the way should fall.
+
+![the composition view](taohua/v-ink.jpg)
+![a fork, in masses](taohua/v-ink-fork.jpg)
 
 `?seed=…` a hillside; `?preview` climbs by itself, quietly; `?pace=…` times the walker's pace (for trying things out quickly). The address keeps the seed and where the walker
 is (`?at=way:metres`), updated as they go, so a reload or a shared link comes back to the same
