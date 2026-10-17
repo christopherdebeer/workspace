@@ -44,6 +44,7 @@ export class Room {
   dragging = false;
   /** the garment that's on the figure: its hanger's left empty on the rail */
   onFigure: string | null = null;
+  wornIds = new Set<string>();
 
   constructor() { this.refresh(); }
 
@@ -136,7 +137,7 @@ export class Room {
 
   items(): Item[] {
     const out: Item[] = [];
-    for (const k of [this.active - 1, this.active, this.active + 1]) for (const h of this.states[k]?.hung ?? []) if (h.cloth && h.look && h.g?.id !== this.onFigure) out.push({ cloth: h.cloth, look: h.look, model: h.model });
+    for (const k of [this.active - 1, this.active, this.active + 1]) for (const h of this.states[k]?.hung ?? []) if (h.cloth && h.look && h.g?.id !== this.onFigure && !this.wornIds.has(h.g?.id??'')) out.push({ cloth: h.cloth, look: h.look, model: h.model });
     return out;
   }
   fittings(): Fittings {

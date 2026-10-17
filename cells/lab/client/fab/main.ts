@@ -24,6 +24,10 @@
  * `?preview` · `?rails` · `?warm` · `?ui=dials` (a skirt's dials, for comparison) · `?bench=evidence`.
  */
 import { Cloth } from './cloth';
+import { PatternTable } from './table';
+import { begin, record, replay, restore, state, travel, type Journal } from './journal';
+import { setPose } from './body';
+import { collideLayers } from './layers';
 import { FABRICS, COLOURWAYS, PRINTS, fabricById, fabricOf, inksOf, printOf, type Fabric } from './fabric';
 import { DEFAULT_DESIGN, type Design, type Method, type Move, type Recipe, type Skirt } from './pattern';
 import { describe as describeGarment, draftGarment, poseFor, recipeFor, sanitize, toBuild, type Garment } from './garment';
@@ -53,7 +57,7 @@ if (Number.isFinite(num('print'))) d.print = num('print');
 if (Number.isFinite(num('colour'))) d.colour = num('colour');
 /** what's made beyond a skirt's own, in the address: the field, and the name it goes by there */
 const PARAMS: Array<[keyof Design, string]> = [
-  ['family', 'fam'], ['tiers', 'tiers'], ['bodyLen', 'blen'], ['ease', 'ease'], ['swing', 'swing'], ['neck', 'neck'], ['neckDepth', 'ndepth'],
+  ['collarWidth', 'cw'], ['sleeveFullness', 'sf'], ['tierRatio', 'tr'], ['family', 'fam'], ['tiers', 'tiers'], ['bodyLen', 'blen'], ['ease', 'ease'], ['swing', 'swing'], ['neck', 'neck'], ['neckDepth', 'ndepth'],
   ['sleeveLen', 'slen'], ['sleeve', 'sleeve'], ['collar', 'collar'], ['legLen', 'llen'], ['legWidth', 'lwidth'], ['flare', 'flare'],
 ];
 for (const [k, q] of PARAMS) if (qs.has(q)) (d as unknown as Record<string, unknown>)[k] = typeof DEFAULT_DESIGN[k] === 'number' ? Number(qs.get(q)) : qs.get(q);
@@ -83,18 +87,25 @@ const dialsUI = qs.get('ui') === 'dials';
 // (the design and the recipe agree on what they share: the recipe's the truth for a skirt's length, panels, grain and
 // its cloth)
 const sync = (r: Recipe): Design => sanitize({ ...d, length: r.length, panels: r.panels, grain: r.grain, fabric: r.fabric, print: r.print, colour: r.colour });
+let journal: Journal = rec.journal ?? begin(state(d,rec)), recording = true, editTarget = 'garment', shapeKey = '';
+let tableSkirt = false;
+const skirtPaper = () => skirted() && tableSkirt;
 let g: Garment = draftGarment(sync(rec), 1600, skirted() ? rec : undefined), cloth: Cloth | null = null;
 /** the skirt as drafted, if there is one (the paper's moves, what they made); a garment without one has none */
 let sk: Skirt | null = g.skirt ?? null;
 function makeFrom(r: Recipe, fresh = false) {
   const was = g;
+  const fd = sync(r), f = fabricOf(r);
+  const key = JSON.stringify({ d:{...fd, print:0,colour:0}, moves:r.moves, band:r.band, physical:[f.gsm,f.bend,f.warp,f.weft,f.shear,f.friction,f.grain] });
+  if (!fresh && cloth && key === shapeKey) { d=fd; return; }
+  shapeKey=key;
   d = sync(r);
   // (a dress's skirt is cut to its bodice's hem: its recipe says so, so its paper's the skirt it wears)
   // (and the recipe in hand takes it too; a preview, mid-drag, isn't made yet)
   const asked = r; r = recipeFor(d, r); if (asked === rec) rec = r;
   g = draftGarment(d, 1600, skirted() ? r : undefined); sk = g.skirt ?? null;
   // (posed for it, then laid out and sewn: warm, from where the last cloth was, when it's the same kind of thing)
-  poseFor(g);
+  setPose(hasOutfitBodice() ? 'dress' : g.pose);
   // (warm only for a small change: the new cloth's laid where the old one was, piece for piece by where on each it is,
   // which for a big jump (long legs to shorts) would stretch the new over the old and let it spring off; a jump is sewn
   // afresh)
@@ -104,21 +115,27 @@ function makeFrom(r: Recipe, fresh = false) {
   cloth = next;
 }
 function make(fresh = false) {
+  clearTimeout(pending); pending = 0; pendingRec = null;
+  if (recording) journal = record(journal, state(sync(rec),rec), editTarget);
+  rec = {...rec,journal};
   makeFrom(rec, fresh);
-  if (!preview && mode === 'bench') {
+  stashOutfit();
+  if (!preview && mode !== 'rails') {
     const u = new URL(location.href);
     for (const k of ['full', 'cut']) u.searchParams.delete(k);
     const own = rec.cloth || rec.inks || rec.printScale !== undefined ? JSON.stringify({ c: rec.cloth, i: rec.inks, s: rec.printScale }) : '';
     if (own) u.searchParams.set('own', own); else u.searchParams.delete('own');
     for (const [k, v] of [['len', String(rec.length)], ['panels', String(rec.panels)], ['grain', String(rec.grain)], ['fabric', rec.fabric], ['print', String(rec.print)], ['colour', String(rec.colour)], ['m', encodeMoves(rec.moves)]]) u.searchParams.set(k, v);
     for (const [k, q] of PARAMS) { const v = d[k]; u.searchParams.set(q, typeof v === 'number' ? String(+v.toFixed(2)) : String(v)); }
+    u.searchParams.set('at', mode === 'table' ? 'table' : 'figure');
+    u.searchParams.set('outfit',activeItem);
     history.replaceState(null, '', u);
   }
   ui();
 }
 // (while a hand's on the paper or a dial: the figure follows, a few times a second, without the move being made yet)
 let pending = 0, pendingRec: Recipe | null = null;
-function remake(r?: Recipe) { pendingRec = r ?? null; if (pending) return; pending = window.setTimeout(() => { pending = 0; if (pendingRec) makeFrom(pendingRec); else make(); }, 90); }
+function remake(r?: Recipe) { pendingRec = r ?? null; if (pending) return; pending = window.setTimeout(() => { pending = 0; makeFrom(pendingRec ?? rec); if(!paper.dragging && !editor.drag) ui(); }, 90); }
 
 // ─── the bench ─────────────────────────────────────────────────────────────────────────────────
 const $ = (id: string) => document.getElementById(id)!;
@@ -215,7 +232,8 @@ const hasLegs = () => d.family === 'trousers' || d.family === 'jumpsuit';
 /** choose a design field (a family, a neckline): its skirt's paper kept, a bare one started if it hadn't one */
 function choose(k: keyof Design, v: string | number) {
   (d as unknown as Record<string, unknown>)[k] = v;
-  if (k === 'family') { if (!skirted()) rec = { ...rec, moves: [] }; else if (!rec.moves.length) rec = { ...recipeFor(d), fabric: rec.fabric, print: rec.print, colour: rec.colour, cloth: rec.cloth, inks: rec.inks, printScale: rec.printScale }; else rec = recipeFor(d, rec); }
+  if(['length','panels','grain'].includes(k))rec={...rec,[k]:v};
+  if (k === 'family') { if (!skirted()) rec = { ...rec }; else if (!rec.moves.length) rec = { ...recipeFor(d), fabric: rec.fabric, print: rec.print, colour: rec.colour, cloth: rec.cloth, inks: rec.inks, printScale: rec.printScale }; else rec = recipeFor(d, rec); }
   make(k === 'family');
 }
 let garmentKey = '';
@@ -229,7 +247,7 @@ const LEG_PICKS: Array<{ key: keyof Design; label: string; opts: Array<[number, 
 ];
 /** the drawer's own sections for what's made: built again only when what it's for changes */
 function garmentPanel() {
-  for (const b of Array.from($('figtabs').querySelectorAll('[data-sec]')) as HTMLElement[]) b.hidden = (b.dataset.sec === 'bodice' && !hasBodice()) || (b.dataset.sec === 'legs' && !hasLegs());
+  for (const b of Array.from($('figtabs').querySelectorAll('[data-sec]')) as HTMLElement[]) b.hidden = ['what','bodice','legs'].includes(b.dataset.sec!) || (b.dataset.sec === 'bodice' && !hasBodice()) || (b.dataset.sec === 'legs' && !hasLegs());
   if (!['what', 'fabric', 'print', 'colour'].includes(figSec) && !(figSec === 'bodice' && hasBodice()) && !(figSec === 'legs' && hasLegs())) figSec = 'what';
   const key = `${d.family}`;
   if (key !== garmentKey) {
@@ -297,8 +315,9 @@ function dial(parent: HTMLElement, label: string, lo: number, hi: number, get: (
 }
 let customKey = '';
 function customPanel() {
+  if(document.querySelector('.knob.turning')) return;
   // (built again only when what it's for changes: not while a dial's being turned)
-  const key = `${figSec}|${rec.fabric}|${rec.print}|${rec.colour}|${!!rec.cloth}|${!!rec.inks}|${rec.printScale ?? ''}|${figSec === 'what' || figSec === 'bodice' || figSec === 'legs' ? `${describeGarment(d)}|${g.notes.join()}` : ''}`;
+  const key = `${figSec}|${rec.fabric}|${rec.print}|${rec.colour}|${!!rec.cloth}|${!!rec.inks}|${figSec === 'what' || figSec === 'bodice' || figSec === 'legs' ? `${describeGarment(d)}|${g.notes.join()}` : ''}`;
   if (key === customKey && $('custom').childElementCount) return;
   customKey = key;
   const box = $('custom'); box.innerHTML = '';
@@ -356,7 +375,7 @@ function customPanel() {
 // figure; at the table, the tool's gestures and what it's set to)
 type DrawerState = 'closed' | 'focus' | 'full';
 // (`?drawer=closed|focus|full` and `&sec=fabric|print|colour`: the drawer as a link left it)
-let drawer: DrawerState = qs.get('drawer') === 'closed' ? 'closed' : qs.get('drawer') === 'full' || qs.get('drawer') === 'open' ? 'full' : 'focus', figSec = ['what', 'bodice', 'legs', 'fabric', 'print', 'colour'].includes(qs.get('sec') ?? '') ? qs.get('sec')! : 'what';
+let drawer: DrawerState = qs.get('drawer') === 'closed' ? 'closed' : qs.get('drawer') === 'full' || qs.get('drawer') === 'open' ? 'full' : 'closed', figSec = ['what', 'bodice', 'legs', 'fabric', 'print', 'colour'].includes(qs.get('sec') ?? '') ? qs.get('sec')! : 'fabric';
 function setDrawer(st: DrawerState) { drawer = st; document.body.dataset.drawer = st; ui(); }
 for (const b of Array.from($('figtabs').querySelectorAll('[data-sec]')) as HTMLElement[]) b.addEventListener('click', () => { figSec = b.dataset.sec!; ui(); });
 /** how tall the drawer is in each state: to the foot of its handle; to where its expanded part starts; all of it */
@@ -441,15 +460,15 @@ function ui() {
   $('panelsn').textContent = String(rec.panels);
   toolPanel();
   const hist = $('history'); hist.innerHTML = '';
-  if (!rec.moves.length) hist.innerHTML = '<span class="none">the block, as drafted: nothing done to it yet</span>';
-  rec.moves.forEach((m, i) => {
-    const c = document.createElement('button'); c.className = `chip${sk?.made[i] === false ? ' dud' : ''}`; c.textContent = moveWords(m);
-    c.appendChild(Object.assign(document.createElement('i'), { textContent: '×' }));
-    c.title = 'take this back';
-    c.addEventListener('click', () => { rec = { ...rec, moves: rec.moves.filter((_, j) => j !== i) }; make(); });
-    hist.appendChild(c);
+  if(!journal.cursor) hist.textContent = 'the original pattern';
+  journal.operations.slice(0,journal.cursor).forEach((op,i)=>{
+    const c=document.createElement('button'); c.className='chip';c.textContent=op.label;c.title=`${op.target} · return to after this edit`;
+    c.onclick=()=>{ journal={...journal,cursor:i+1}; restoreEdit(); };hist.appendChild(c);
   });
+  ($('undo') as HTMLButtonElement).disabled=!journal.cursor;
+  ($('redo') as HTMLButtonElement).disabled=journal.cursor===journal.operations.length;
   paper.draw();
+  tableUI(); outfitUI();
   notes.textContent = g.notes.join(' · ');
   const bad = g.checks.filter((c) => !c.ok);
   if (bad.length) notes.textContent += ` · ✗ ${bad.map((c) => c.name).join(', ')}`;
@@ -461,7 +480,7 @@ function ui() {
   }
   $('cloth').classList.toggle('on', paper.cloth);
   if (sheetOn) drawSheet(sheet, g, paper.cloth ? pr : null);
-  if (!skirted()) drawWhole();
+  if (!skirtPaper()) drawWhole();
   layoutDrawer();
 }
 function drawSwatch(cv: HTMLCanvasElement, kind: number, inks: readonly string[]) {
@@ -474,7 +493,7 @@ function drawSwatch(cv: HTMLCanvasElement, kind: number, inks: readonly string[]
   if (kind === 5) for (const [x, y] of [[12, 12], [36, 26], [50, 10]]) { c.beginPath(); for (let p = 0; p < 10; p++) { const a = -1.57 + (p / 10) * 6.28, r = p % 2 ? 2.5 : 6; c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); } c.fill(); }
 }
 // (the paper and its tools)
-const paper = new Paper(document.createElement('canvas'), () => rec, (r) => { remake(r); toolPanel(); }, (r) => { rec = r; make(); }, (r) => { rec = r; make(); });
+const paper = new Paper(document.createElement('canvas'), () => rec, (r) => { editTarget='skirt/paper'; remake(r); toolPanel(); }, (r) => { rec = r; make(); }, (r) => { rec = r; make(); });
 for (const t of TOOLS) {
   const b = document.createElement('button'); b.dataset.tool = t.id; b.className = 'tool';
   b.innerHTML = `<svg viewBox="0 0 40 40">${t.icon}</svg><span>${t.label}</span>`;
@@ -500,7 +519,7 @@ const PANEL_WHOLE: Record<string, { name: string; what: string; gestures: Array<
   scissors: { name: 'Slash', what: 'spread a hem open: it flares', gestures: [['side', 'drag along a lit hem', 'wider → more flare']] },
 };
 function toolPanel() {
-  if (!skirted()) { if (paper.tool === 'fold' || paper.tool === 'thread') paper.tool = 'hand'; return wholePanel(); }
+  if (!skirtPaper()) { $('toolname').textContent=editor.selected || 'Whole pattern'; $('toolwhat').textContent='select a piece · drag a marked edge'; $('gestures').innerHTML=''; $('toolctl').innerHTML=''; return; }
   const t = PANEL[paper.tool];
   $('toolname').textContent = t.name; $('toolwhat').textContent = t.what;
   $('gestures').innerHTML = t.gestures.map(([g, w, i]) => `<div class="gest"><svg viewBox="0 0 24 24">${G[g]}</svg>${w}<i>${i}</i></div>`).join('');
@@ -555,108 +574,57 @@ $('panelsmore').addEventListener('click', () => { rec = { ...rec, panels: Math.m
 // (tiers: rings of straight cloth below the paper's own, each gathered onto the hem above)
 $('tiersless').addEventListener('click', () => { d.tiers = Math.max(1, d.tiers - 1); make(); });
 $('tiersmore').addEventListener('click', () => { d.tiers = Math.min(3, d.tiers + 1); make(); });
-/** a garment without a skirt to work: its whole pattern, drawn on the table's paper to be looked at */
 const wholeCv = Object.assign(document.createElement('canvas'), { width: SHEET_W, height: SHEET_H });
-let wholeVersion = 0;
-function drawWhole() {
-  // (drawSheet draws at the canvas's laid-out size: give it the sheet's)
-  const dpr = Math.min(2, devicePixelRatio || 1);
-  Object.defineProperty(wholeCv, 'clientWidth', { value: SHEET_W / dpr, configurable: true }); Object.defineProperty(wholeCv, 'clientHeight', { value: SHEET_H / dpr, configurable: true });
-  // (on the table: laid in a column, as tall as it's wide, so a phone held upright sees it large; no notes on it)
-  laid = drawSheet(wholeCv, g, paper.cloth ? printOf(rec) : null, false, { width: SHEET_H / dpr * 0.82, bare: true }); wholeVersion++;
-  wholeMarks();
+let wholeVersion = 0, laid: Laid[] = [];
+const editor = new PatternTable(wholeCv,()=>({g,d}),(key,value,commit,target)=>{
+  editTarget=target;
+  (d as unknown as Record<string,unknown>)[key]=value;
+  if(key==='grain'||key==='length') rec={...rec,[key]:value};
+  if(commit) make(); else remake();
+});
+function drawWhole(){
+  const dpr=Math.min(2,devicePixelRatio||1);
+  Object.defineProperty(wholeCv,'clientWidth',{value:SHEET_W/dpr,configurable:true});
+  Object.defineProperty(wholeCv,'clientHeight',{value:SHEET_H/dpr,configurable:true});
+  laid=editor.draw(paper.cloth?printOf(rec):null,Math.max(.5,paper.k));wholeVersion++;
 }
-
-// ─── the whole pattern at the table (a top, trousers, a jumpsuit): its hems, worked by hand ─────────────────
-// (a piece's hem, dragged with the hand, makes its part longer or shorter: a top's body, its sleeves, the legs; spread
-// with the scissors, it flares: a top's swing, the legs' flare. What each does is the design's own dial, so the figure
-// wears it as it's dragged and the drawer's dials agree)
-let laid: Laid[] = [];
-interface Grip { at: number; key: keyof Design; lo: number; hi: number; label: string; word: (v: number) => string }
-/** what a piece's hem works, if anything, with the tool in hand */
-function gripOf(i: number): Grip | null {
-  const part = laid[i]?.piece.part;
-  if (paper.tool === 'hand') {
-    if (part === 'bodice' && d.family === 'top') return { at: i, key: 'bodyLen', lo: -6, hi: 30, label: 'its length', word: (v) => (v < 0 ? `${(-v).toFixed(0)} cm cropped` : `${v.toFixed(0)} cm below the waist`) };
-    if (part === 'sleeve') return { at: i, key: 'sleeveLen', lo: 0, hi: 34, label: 'the sleeves', word: (v) => (v < 2 ? 'no sleeves' : `sleeves ${v.toFixed(0)} cm`) };
-    if (part === 'legs') return { at: i, key: 'legLen', lo: 3, hi: 34, label: 'the legs', word: (v) => `legs ${v.toFixed(0)} cm` };
+function wholeBounds(){
+  const dpr=SHEET_W/Math.max(1,wholeCv.clientWidth),pts=laid.flatMap(l=>Array.from({length:17},(_,k)=>[l.to(l.piece.flat(k/16,0)),l.to(l.piece.flat(k/16,1)),l.to(l.piece.flat(0,k/16)),l.to(l.piece.flat(1,k/16))]).flat());
+  if(!pts.length)return {x0:80,x1:SHEET_W-80,y0:80,y1:SHEET_H-80};
+  return {x0:Math.min(...pts.map(p=>p[0]))*dpr,x1:Math.max(...pts.map(p=>p[0]))*dpr,y0:Math.min(...pts.map(p=>p[1]))*dpr,y1:Math.max(...pts.map(p=>p[1]))*dpr};
+}
+function wholeDown(q:[number,number]){ const hit=editor.down(q,Math.max(.5,paper.k)); if(hit){drawWhole();tableUI();}return hit; }
+function wholeMove(q:[number,number]){editor.move(q);drawWhole();}
+function wholeUp(cancel=false){editor.up(cancel);if(cancel){clearTimeout(pending);pending=0;pendingRec=null;makeFrom(rec);}else if(!editor.drag)make();ui();}
+function restoreEdit(){clearTimeout(pending);pending=0;pendingRec=null;const x=restore(journal);d=x.design;rec=x.recipe;recording=false;make();recording=true;}
+$('undo').addEventListener('click',()=>{journal=travel(journal,-1);restoreEdit();});
+$('redo').addEventListener('click',()=>{journal=travel(journal,1);restoreEdit();});
+if(dialsUI)document.body.classList.add('dials');
+function tableUI(){
+  document.body.classList.toggle('skirtpaper',skirtPaper());
+  const bar=$('pieces');bar.innerHTML='';
+  const btn=(label:string,selected:boolean,fn:()=>void)=>{const b=document.createElement('button');b.textContent=label;b.className=selected?'on':'';b.setAttribute('aria-pressed',String(selected));b.onclick=fn;bar.appendChild(b);};
+  btn('whole pattern',!tableSkirt&&!editor.selected,()=>{tableSkirt=false;editor.selected='';ui();});
+  if(skirted())btn('skirt · cut & fold',tableSkirt,()=>{tableSkirt=true;editor.selected='';drawer='focus';document.body.dataset.drawer=drawer;ui();});
+  for(const p of g.pieces.filter(p=>p.drawn!==false&&!(skirted()&&p.ruled))){btn(p.label?.replace(/ · cut.*/,'')||p.name,!tableSkirt&&editor.selected===p.name,()=>{tableSkirt=false;editor.selected=p.name;drawer='focus';document.body.dataset.drawer=drawer;ui();});}
+  const box=$('pattern-actions');box.innerHTML='';
+  const choice=(label:string,key:keyof Design,opts:Array<[string|number,string]>)=>{
+    const wrap=document.createElement('label');wrap.textContent=label;const select=document.createElement('select');select.setAttribute('aria-label',label);
+    for(const [v,w] of opts){const o=document.createElement('option');o.value=String(v);o.textContent=w;o.selected=String(d[key])===String(v);select.appendChild(o);}
+    select.onchange=()=>{editTarget=`${editor.selected||'garment'}/${key}`;choose(key,typeof d[key]==='number'?Number(select.value):select.value);};wrap.appendChild(select);box.appendChild(wrap);
+  };
+  const p=g.pieces.find(p=>p.name===editor.selected);
+  if(!editor.selected&&!tableSkirt)choice('blocks','family',FAMILY_LABELS);
+  if(p?.part==='bodice'){
+    choice('neckline','neck',[['round','round'],['v','V'],['square','square'],['boat','boat'],['scoop','scoop']]);
+    choice('neck join','collar',[['none','no collar'],['peterpan','Peter Pan'],['band','band'],['frill','gathered frill']]);
+    choice('armhole','sleeveLen',[[0,'sleeveless'],[8,'attach short sleeve'],[18,'elbow sleeve'],[30,'long sleeve']]);
   }
-  if (paper.tool === 'scissors') {
-    if (part === 'bodice' && d.family === 'top') return { at: i, key: 'swing', lo: 1, hi: 1.8, label: 'its swing', word: (v) => (v < 1.05 ? 'straight' : `${v.toFixed(2)}× at the hem`) };
-    if (part === 'legs') return { at: i, key: 'flare', lo: 0.8, hi: 1.8, label: 'the legs’ flare', word: (v) => (v < 0.95 ? 'tapered' : v < 1.08 ? 'straight' : `${v.toFixed(1)}× flared`) };
-  }
-  return null;
+  if(p?.part==='sleeve')choice('construction','sleeve',[['plain','plain'],['puff','spread & gather head'],['bell','spread hem']]);
+  if(tableSkirt)choice('panels','panels',Array.from({length:10},(_,i)=>[i+1,String(i+1)]));
+  if(tableSkirt||p?.ruled||/^tier /.test(p?.name??''))choice('hem joins','tiers',[[1,'one tier'],[2,'two tiers'],[3,'three tiers']]);
+  if(p){const join=g.seams.filter(x=>x.why.includes(p.part==='sleeve'?'sleeve':/collar|frill/.test(p.name)?'collar':p.part==='legs'?'seam':'shoulder'));const info=document.createElement('span');info.className='join-note';info.textContent=join.slice(0,2).map(x=>`${x.why}: ${x.a.toFixed(1)} → ${x.b.toFixed(1)} cm${x.want>1.05?' · gathered':''}`).join(' · ');box.appendChild(info);}
 }
-/** where the whole pattern's pieces lie on the sheet, in its pixels (the whole sheet, before they're laid) */
-function wholeBounds() {
-  if (!laid.length) return { x0: SHEET_W * 0.08, x1: SHEET_W * 0.92, y0: SHEET_H * 0.08, y1: SHEET_H * 0.92 };
-  const dpr = SHEET_W / Math.max(1, wholeCv.clientWidth), b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
-  for (const l of laid) for (let k = 0; k <= 8; k++) for (const v of [0, 1]) for (const q of [l.to(l.piece.flat(k / 8, v)), l.to(l.piece.flat(v, k / 8))]) { b.x0 = Math.min(b.x0, q[0] * dpr); b.x1 = Math.max(b.x1, q[0] * dpr); b.y0 = Math.min(b.y0, q[1] * dpr); b.y1 = Math.max(b.y1, q[1] * dpr + 40); }
-  return b;
-}
-/** a piece's hem on the sheet, in its pixels */
-const hemOf = (l: Laid) => { const dpr = SHEET_W / Math.max(1, wholeCv.clientWidth); return Array.from({ length: 13 }, (_, k) => l.to(l.piece.flat(k / 12, 1)).map((x) => x * dpr) as [number, number]); };
-let wholeDrag: null | { grip: Grip; v0: number; x0: number; y0: number; cm: number; at: [number, number] } = null;
-/** the hems that can be worked, lit; the hand's tab on each; and how much, by the finger */
-function wholeMarks() {
-  const ctx = wholeCv.getContext('2d')!, dpr = SHEET_W / Math.max(1, wholeCv.clientWidth), K = Math.max(0.6, paper.k);
-  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
-  laid.forEach((l, i) => {
-    const gp = gripOf(i);
-    if (!gp) return;
-    const hem = hemOf(l);
-    ctx.strokeStyle = 'rgba(217,83,107,.4)'; ctx.lineWidth = 14 * K; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath(); hem.forEach((q, k) => (k ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.stroke();
-    if (paper.tool === 'hand') {
-      const m = hem[6], hw = 22 * K, hh = 13 * K, y = m[1] + hh + 6 * K;
-      ctx.fillStyle = '#d9536b'; ctx.beginPath(); ctx.roundRect(m[0] - hw, y - hh, hw * 2, hh * 2, hh); ctx.fill();
-      ctx.strokeStyle = '#fff6ee'; ctx.lineWidth = 2.4 * Math.min(1.5, K); ctx.beginPath();
-      ctx.moveTo(m[0] - 5 * K, y - 2 * K); ctx.lineTo(m[0], y - 7 * K); ctx.lineTo(m[0] + 5 * K, y - 2 * K);
-      ctx.moveTo(m[0] - 5 * K, y + 2 * K); ctx.lineTo(m[0], y + 7 * K); ctx.lineTo(m[0] + 5 * K, y + 2 * K); ctx.stroke();
-    }
-  });
-  if (wholeDrag) {
-    const w = wholeDrag.grip.word(d[wholeDrag.grip.key] as number), fs = 20 * K;
-    ctx.font = `700 ${fs}px ui-rounded, system-ui, sans-serif`;
-    const tw = ctx.measureText(w).width, x = Math.max(tw / 2 + 8, Math.min(SHEET_W - tw / 2 - 8, wholeDrag.at[0])), up = wholeDrag.at[1] - 60 * K, y = up > fs + 8 ? up : wholeDrag.at[1] + 60 * K + fs;
-    ctx.fillStyle = 'rgba(66,52,42,.92)'; ctx.beginPath(); ctx.roundRect(x - tw / 2 - 10 * K, y - fs * 0.95, tw + 20 * K, fs * 1.45, fs * 0.7); ctx.fill();
-    ctx.fillStyle = '#fbf3e6'; ctx.textAlign = 'center'; ctx.fillText(w, x, y + fs * 0.05);
-  }
-  ctx.restore(); void dpr;
-}
-/** a touch on the sheet: on a hem that can be worked with the tool in hand? Then it's that hem's */
-function wholeDown(q: [number, number]): boolean {
-  const K = Math.max(0.6, paper.k);
-  let best: { i: number; d: number } | null = null;
-  laid.forEach((l, i) => {
-    if (!gripOf(i)) return;
-    const hem = hemOf(l), m = hem[6];
-    let dd = Math.hypot(q[0] - m[0], q[1] - (m[1] + 19 * K));
-    for (let k = 1; k < hem.length; k++) { const a = hem[k - 1], b = hem[k], dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / L)) : 0; dd = Math.min(dd, Math.hypot(q[0] - a[0] - dx * t, q[1] - a[1] - dy * t)); }
-    if (dd < 30 * K && (!best || dd < best.d)) best = { i, d: dd };
-  });
-  if (!best) return false;
-  const grip = gripOf((best as { i: number }).i)!, l = laid[grip.at], dpr = SHEET_W / Math.max(1, wholeCv.clientWidth);
-  wholeDrag = { grip, v0: d[grip.key] as number, x0: q[0], y0: q[1], cm: l.sc * dpr, at: q };
-  drawWhole(); return true;
-}
-function wholeMove(q: [number, number]) {
-  if (!wholeDrag) return;
-  const w = wholeDrag, dx = (q[0] - w.x0) / w.cm, dy = (q[1] - w.y0) / w.cm;
-  // (the hand: down is longer, a centimetre of paper a centimetre of cloth; the scissors: sideways opens it)
-  const spread = w.grip.key === 'swing' || w.grip.key === 'flare', v = spread ? w.v0 + dx * 0.02 : w.v0 + dy;
-  const c = Math.max(w.grip.lo, Math.min(w.grip.hi, spread ? +v.toFixed(2) : Math.round(v)));
-  w.at = q;
-  if (c !== d[w.grip.key]) { (d as unknown as Record<string, number>)[w.grip.key] = c; remake(); }
-  drawWhole();
-}
-function wholeUp(cancel = false) {
-  if (!wholeDrag) return;
-  if (cancel) (d as unknown as Record<string, number>)[wholeDrag.grip.key] = wholeDrag.v0;
-  wholeDrag = null; make();
-}
-$('undo').addEventListener('click', () => { if (rec.moves.length) { rec = { ...rec, moves: rec.moves.slice(0, -1) }; make(); } });
-if (dialsUI) document.body.classList.add('dials');
 let sheetOn = false;
 const toggleSheet = () => { sheetOn = !sheetOn; document.body.classList.toggle('sheet', sheetOn); ui(); };
 sheet.addEventListener('click', toggleSheet);
@@ -675,6 +643,38 @@ const room = new Room();
 room.active = Math.max(0, room.states.findIndex((st) => st.rail.id === activeRail()));
 /** where what's on the figure came from: a rail and the garment on it, and its design and recipe as they were then */
 let origin: { rail: string; garment: string | null; made: string } | null = null;
+interface Worn { id:string; d:Design; rec:Recipe; g:Garment; cloth:Cloth|null; origin:{rail:string;garment:string|null;made:string}|null; shapeKey:string }
+let worn:Worn[]=[], activeItem='', restoringOutfit=false;
+const OUTFIT_KEY='fab.outfit.v1';
+function hasOutfitBodice(){return ['top','dress','jumpsuit'].includes(d.family)||worn.some(w=>w.id!==activeItem&&['top','dress','jumpsuit'].includes(w.d.family));}
+function stashOutfit(){
+ if(restoringOutfit)return;
+ if(!activeItem)activeItem=crypto.randomUUID();
+ const item:Worn={id:activeItem,d:structuredClone(d),rec:structuredClone(rec),g,cloth,origin:origin?{...origin}:null,shapeKey};
+ const i=worn.findIndex(w=>w.id===activeItem);if(i<0)worn.push(item);else worn[i]=item;
+ room.wornIds=new Set(worn.flatMap(w=>w.origin?.garment?[w.origin.garment]:[]));
+ try{localStorage.setItem(OUTFIT_KEY,JSON.stringify({version:1,active:activeItem,items:worn.map(({id,d,rec,origin})=>({id,d,rec,origin}))}));}catch{toast('Outfit stays for this visit: device storage is unavailable');}
+}
+function selectItem(id:string){
+ if(id===activeItem)return;stashOutfit();const w=worn.find(w=>w.id===id);if(!w)return;
+ activeItem=id;d=structuredClone(w.d);rec=structuredClone(w.rec);g=w.g;sk=g.skirt??null;cloth=w.cloth;shapeKey=w.shapeKey;origin=w.origin; journal=rec.journal??begin(state(d,rec));tableSkirt=false;editor.selected='';garmentKey='';customKey='';make();
+}
+function outfitUI(){
+ const bar=$('outfit');bar.innerHTML='';
+ for(const w of worn){const b=document.createElement('button');b.textContent=w.d.family;b.className=w.id===activeItem?'on':'';b.setAttribute('aria-pressed',String(w.id===activeItem));b.onclick=()=>selectItem(w.id);bar.appendChild(b);}
+ const add=document.createElement('button');add.textContent='+ garment';add.onclick=()=>go('rails');bar.appendChild(add);
+ if(worn.length>1){const remove=document.createElement('button');remove.textContent='take off';remove.onclick=()=>{const id=activeItem;selectItem(worn.find(w=>w.id!==id)!.id);worn=worn.filter(w=>w.id!==id);stashOutfit();setPose(hasOutfitBodice()?'dress':g.pose);ui();};bar.appendChild(remove);}
+}
+function loadOutfit(){
+ try{const x=JSON.parse(localStorage.getItem(OUTFIT_KEY)??'null');if(x?.version!==1||!Array.isArray(x.items))return;
+  if(hasDesign&&!x.items.some((w:any)=>w.id===qs.get('outfit')))return;
+  restoringOutfit=true;
+  const items=x.items.filter((w:any)=>w&&typeof w.id==='string'&&w.rec&&Array.isArray(w.rec.moves)).slice(0,8);
+  setPose(items.some((w:any)=>['top','dress','jumpsuit'].includes(w.d?.family))?'dress':'twirl');
+  worn=items.map((w:any)=>{const dd=sanitize(w.d),rr=recipeFor(dd,w.rec),gg=draftGarment(dd,1600,dd.family==='skirt'||dd.family==='dress'?rr:undefined);return {id:w.id,d:dd,rec:rr,g:gg,cloth:new Cloth(toBuild(gg,fabricOf(rr))),origin:w.origin??null,shapeKey:''};});
+  const w=worn.find(w=>w.id===x.active)??worn[0];if(w){activeItem=w.id;d=w.d;rec=w.rec;g=w.g;sk=g.skirt??null;cloth=w.cloth;origin=w.origin;journal=rec.journal??begin(state(d,rec));}
+ }catch{worn=[];}finally{restoringOutfit=false;}
+}
 const madeNow = () => JSON.stringify({ d, rec });
 let lastVP: Float32Array | null = null, toastT = 0, lastFront = -1;
 const toast = (t: string) => { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastT); toastT = window.setTimeout(() => el.classList.remove('show'), 2400); };
@@ -725,8 +725,14 @@ function showRail(k: number) {
 function wear(i: number) {
   const st = room.states[room.active], h = st?.hung[i];
   if (!st || !h) return;
+  if(cloth)stashOutfit();
+  const existing=h.g&&worn.find(w=>w.origin?.garment===h.g!.id&&w.origin?.rail===st.rail.id);
+  if(existing){selectItem(existing.id);setMode('bench');return;}
+  if(worn.length>=8){toast('Take off an item before adding another (eight at a time)');return;}
+  activeItem=crypto.randomUUID();cloth=null;shapeKey='';
   // (a bare hanger starts a new skirt from the block itself: nothing done to it yet)
   d = h.g ? designOf(h.g) : sanitize({}); rec = structuredClone(h.g ? recipeOf(h.g) : NEW); garmentKey = '';
+  journal=rec.journal??begin(state(d,rec));
   origin = { rail: st.rail.id, garment: h.g?.id ?? null, made: madeNow() };
   room.onFigure = h.g?.id ?? null;
   setMode('bench');
@@ -744,11 +750,12 @@ function hangUp(): boolean {
   if (!hg) return false;
   origin = { rail: id, garment: hg.id, made: madeNow() };
   room.refresh(); room.onFigure = hg.id;
+  stashOutfit();
   toast(`hung on ${railName(rails().find((r) => r.id === id)!)}`);
   return true;
 }
 function backToRails() {
-  if (!origin || origin.made !== madeNow()) hangUp();
+  stashOutfit(); // drafts are retained independently; returning to the rail never implicitly overwrites a saved garment
   room.onFigure = null; room.refresh();
   if (origin) {
     const k = room.states.findIndex((st) => st.rail.id === origin!.rail);
@@ -786,7 +793,7 @@ $('hang').addEventListener('click', () => hangUp());
 const BENCH_VIEW = { az: Number(qs.get('az') ?? -0.5), el: Number(qs.get('el') ?? 0.1), dist: Number(qs.get('dist') ?? 330), target: [0, Number(qs.get('ty') ?? 62), 0] as [number, number, number] };
 /** how much of the bottom of the screen each place keeps for its drawer (css px), whatever state it's in: the scene's
  * drawn centred above that, by moving the lens, so opening or closing the drawer never moves or resizes the room */
-const RESERVE: Record<Mode, number> = { rails: 0, bench: 170, table: 300 };
+const RESERVE: Record<Mode, number> = { rails: 0, bench: 90, table: 180 };
 const view = { ...BENCH_VIEW, target: [...BENCH_VIEW.target] as [number, number, number], shift: RESERVE[qs.get('at') === 'table' && mode === 'bench' ? 'table' : mode] / Math.max(1, innerHeight) };
 /** crossing the room, between the rails and the bench: where from, and when it set off (1.2 s, eased) */
 let flying = 0, flyFrom = { ...view, target: [...view.target] as [number, number, number] }, flyT0 = 0;
@@ -860,13 +867,13 @@ const sheetModel = () => placeTurned(TABLE.x, TABLE.y + 0.12, TABLE.z, TABLE.rot
 function tableView() {
   // (sitting at the table: looking across it at the figure, down onto the paper; the piece filling the open part of the
   // screen above the drawer, the figure standing behind it)
-  const b = skirted() ? paper.bounds() : wholeBounds(), lx = ((b.x0 + b.x1) / 2 - SHEET_W / 2) / paper.sc, lz = ((b.y0 + b.y1) / 2 - SHEET_H / 2) / paper.sc;
+  const b = skirtPaper() ? paper.bounds() : wholeBounds(), lx = ((b.x0 + b.x1) / 2 - SHEET_W / 2) / paper.sc, lz = ((b.y0 + b.y1) / 2 - SHEET_H / 2) / paper.sc;
   const H = Math.max(1, canvas.clientHeight), open = Math.max(0.3, (H - RESERVE.table) / H);
-  const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 0.5, asp = Math.max(0.3, (canvas.clientWidth - 76) / H);
+  const w = Math.max(30, (b.x1 - b.x0) / paper.sc) * 1.35, d = Math.max(24, (b.y1 - b.y0) / paper.sc) * 1.2, el = 1.05, asp = Math.max(0.3, (canvas.clientWidth - 76) / H);
   const dist = Math.max(75, w / (2 * Math.tan(0.3) * asp), (d * Math.sin(el)) / (2 * Math.tan(0.3) * open) * 1.5);
   // (and over to the right, by half the palette's width: so the piece sits in the open part of the screen, left of it)
   const pal = ($('palette').getBoundingClientRect().width || 0) + 10, shift = (pal / 2) * ((2 * dist * Math.tan(0.3)) / Math.max(1, canvas.clientHeight));
-  return { az: TABLE.rot, el, dist, target: tableToRoom(lx + shift, lz - d * 0.35) };
+  return { az: TABLE.rot, el, dist, target: tableToRoom(lx + shift, lz) };
 }
 /** a touch on the screen as a ray into the room: from the near plane, `t` = 1 at the far one */
 type Ray = { o: [number, number, number]; d: [number, number, number] };
@@ -981,14 +988,14 @@ const touches = new Map<number, [number, number]>();
 canvas.addEventListener('pointerdown', (e) => {
   if (mode !== 'table') return;
   touches.set(e.pointerId, [e.clientX, e.clientY]);
-  if (touches.size > 1) { if (onPaper) { onPaper = false; if (wholeDrag) wholeUp(true); else paper.cancel(); } sceneDrag = null; return; }
+  if (touches.size > 1) { if (onPaper) { onPaper = false; if (!skirtPaper()) wholeUp(true); else { paper.cancel();clearTimeout(pending);pending=0;makeFrom(rec); } } sceneDrag = null; return; }
   const q = onSheet(e.clientX, e.clientY), q2 = onSheet(e.clientX + 10, e.clientY);
   // (how many of the sheet's pixels a pixel of the screen is, there: so a fingertip's a fingertip)
   if (q && q2) paper.k = Math.max(0.2, Math.hypot(q2[0] - q[0], q2[1] - q[1]) / 10);
   canvas.setPointerCapture(e.pointerId);
-  if (q && tableZoom < 0.5 && skirted() && paper.hits(q[0], q[1])) { onPaper = true; paper.downAt(q[0], q[1]); }
+  if (q && tableZoom < 0.5 && skirtPaper() && paper.hits(q[0], q[1])) { onPaper = true; paper.downAt(q[0], q[1]); }
   // (the whole pattern, a top's or trousers': only a hem that can be worked is the paper's)
-  else if (q && tableZoom < 0.5 && !skirted() && wholeDown(q)) onPaper = true;
+  else if (q && tableZoom < 0.5 && !skirtPaper() && wholeDown(q)) onPaper = true;
   // (the figure across the room: tap it to go over to it; drag it round to spin it on its stand)
   else if (onFigure(e.clientX, e.clientY)) spinStart(e);
   else sceneDrag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() };
@@ -1009,7 +1016,7 @@ canvas.addEventListener('pointermove', (e) => {
     }
     tablePinch = d; tableMid = mid; return;
   }
-  if (onPaper) { const q = onSheet(e.clientX, e.clientY); if (q) { if (wholeDrag) wholeMove(q); else paper.moveAt(q[0], q[1]); } return; }
+  if (onPaper) { const q = onSheet(e.clientX, e.clientY); if (q) { if (!skirtPaper()) wholeMove(q); else paper.moveAt(q[0], q[1]); } return; }
   if (figureDrag) { spinMove(e); return; }
   if (sceneDrag) {
     // (drag up to look up across the room at the figure, down to come back to the paper; sideways to look round)
@@ -1021,7 +1028,7 @@ canvas.addEventListener('pointermove', (e) => {
 const tableUp = (e: PointerEvent) => {
   touches.delete(e.pointerId); if (touches.size < 2) { tablePinch = 0; tableMid = null; }
   if (mode !== 'table') return;
-  if (onPaper) { onPaper = false; if (wholeDrag) wholeUp(e.type === 'pointercancel'); else if (e.type === 'pointercancel') paper.cancel(); else paper.upAt(); }
+  if (onPaper) { onPaper = false; if (!skirtPaper()) wholeUp(e.type === 'pointercancel'); else if (e.type === 'pointercancel') {paper.cancel();clearTimeout(pending);pending=0;makeFrom(rec);} else paper.upAt(); }
   const tap = (d: { x0: number; y0: number; t0: number }) => e.type === 'pointerup' && performance.now() - d.t0 < 450 && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 10;
   if (figureDrag && spinEnd(e)) go('bench');
   // (a tap on the room, off the paper: if it's on another place (a rail), go there)
@@ -1065,7 +1072,7 @@ function frame(now: number) {
     view.az = flyFrom.az + (goal.az - flyFrom.az) * e; view.el = flyFrom.el + (goal.el - flyFrom.el) * e + Math.sin(Math.PI * p) * 0.08; view.dist = flyFrom.dist + (goal.dist - flyFrom.dist) * e + Math.sin(Math.PI * p) * 60;
     for (let c = 0; c < 3; c++) view.target[c] = flyFrom.target[c] + (goal.target[c] - flyFrom.target[c]) * e;
     if (p >= 1) flying = 0;
-  } else if (mode === 'rails' || (mode === 'table' && !paper.dragging)) {
+  } else if (mode === 'rails' || (mode === 'table' && !paper.dragging && !editor.drag)) {
     // (at the rails, in front of the one in use; at the table, over the piece, following it as it grows or shrinks)
     const goal = mode === 'rails' ? room.viewOf(room.active, aspect()) : tableGoal(), k = 1 - Math.exp(-dt * (mode === 'table' ? 5 : 5));
     view.az += (goal.az - view.az) * k; view.el += (goal.el - view.el) * k; view.dist += (goal.dist - view.dist) * k;
@@ -1079,11 +1086,11 @@ function frame(now: number) {
   if (mode === 'rails') { room.update(dt, 7); if (room.front() !== lastFront) railInfo(); }
   // (at the table, now and then: how big a fingertip is on the sheet from here, so its handles and badges are drawn a
   // fingertip's size on the screen)
-  if (mode === 'table' && !paper.dragging && !wholeDrag && lastVP && now - kAt > 250) {
+  if (mode === 'table' && !paper.dragging && !editor.drag && lastVP && now - kAt > 250) {
     kAt = now;
-    const b = skirted() ? paper.bounds() : { x0: SHEET_W * 0.4, x1: SHEET_W * 0.6, y0: SHEET_H * 0.4, y1: SHEET_H * 0.6 }, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, s0 = sheetPx(cx - 50, cy), s1 = sheetPx(cx + 50, cy), px = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
+    const b = skirtPaper() ? paper.bounds() : { x0: SHEET_W * 0.4, x1: SHEET_W * 0.6, y0: SHEET_H * 0.4, y1: SHEET_H * 0.6 }, cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, s0 = sheetPx(cx - 50, cy), s1 = sheetPx(cx + 50, cy), px = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
     const k = px > 1 ? Math.max(0.2, Math.min(6, 100 / px)) : paper.k;
-    if (Math.abs(k - paper.k) / paper.k > 0.08) { paper.k = k; if (skirted()) paper.draw(); else drawWhole(); }
+    if (Math.abs(k - paper.k) / paper.k > 0.08) { paper.k = k; if (skirtPaper()) paper.draw(); else drawWhole(); }
   }
   if (cloth && mode !== 'rails') {
     // (a twirl: the figure spun up on its stand, held, and let run down)
@@ -1092,7 +1099,14 @@ function frame(now: number) {
     owed = Math.min(owed + raw, 0.25);
     let n = 0;
     const t0 = performance.now();
-    while (owed >= STEP * 0.999 && n < 2) { cloth.step(STEP); owed -= STEP; simTime += STEP; n++; }
+    const others=worn.filter(w=>w.id!==activeItem&&w.cloth);
+    while (owed >= STEP * 0.999 && n < 2) {
+      const startSpin=cloth.spin;cloth.step(STEP);
+      for(const w of others){w.cloth!.omega=cloth.omega;w.cloth!.spin=startSpin;w.cloth!.step(STEP);}
+      const layers=[...others.map(w=>({c:w.cloth!,family:w.d.family})),{c:cloth,family:d.family}].sort((a,b)=>(a.family==='trousers'?0:a.family==='skirt'?1:2)-(b.family==='trousers'?0:b.family==='skirt'?1:2));
+      for(let i=0;i<layers.length;i++)for(let j=i+1;j<layers.length;j++)collideLayers(layers[i].c,layers[j].c);
+      owed -= STEP; simTime += STEP; n++;
+    }
     // (whatever's still owed after two steps is let go: the cloth runs slow, it doesn't run away)
     if (n === 2 && owed > STEP) owed = 0;
     const took = performance.now() - t0;
@@ -1102,12 +1116,13 @@ function frame(now: number) {
   const dpr = Math.min(devicePixelRatio || 1, 2), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const items: Item[] = room.items();
+  for(const w of worn)if(w.id!==activeItem&&w.cloth)items.push({cloth:w.cloth,look:{fabric:fabricOf(w.rec),print:printOf(w.rec)}});
   if (cloth) items.push({ cloth, look: { fabric: fabricOf(rec), print: printOf(rec) } });
   const r0 = performance.now();
   const fit = room.fittings();
-  if (!skirted()) fit.paper = { canvas: wholeCv, version: 1e6 + wholeVersion, model: sheetModel() };
+  if (!skirtPaper()) fit.paper = { canvas: wholeCv, version: 1e6 + wholeVersion, model: sheetModel() };
   else if (paper.version > 0) fit.paper = { canvas: paper.cv, version: paper.version, model: sheetModel() };
-  const shiftGoal = RESERVE[mode] / Math.max(1, canvas.clientHeight);
+  const shiftGoal = mode==='rails'?0: Math.min(canvas.clientHeight*.6,$('bench').getBoundingClientRect().height) / Math.max(1,canvas.clientHeight);
   view.shift += (shiftGoal - view.shift) * Math.min(1, dt * 6);
   lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, fit).vp;
   renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
@@ -1129,6 +1144,7 @@ const showPerf = () => { perfEl ??= Object.assign(document.createElement('div'),
 if (qs.has('perf')) showPerf();
 { let taps = 0, at = 0; document.querySelector('nav .title')!.addEventListener('click', () => { const t = performance.now(); taps = t - at < 500 ? taps + 1 : 1; at = t; if (taps >= 3) { if (perfEl?.isConnected) perfEl.remove(); else showPerf(); } }); }
 if (qs.get('at') === 'table' && mode === 'bench') { mode = 'table'; document.body.classList.add('table'); places(); }
+loadOutfit();
 if (mode !== 'rails') {
   make();
   // (opened at the table: start there, over the piece, rather than crossing the room to it)
@@ -1140,7 +1156,8 @@ if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
 (window as unknown as { __fab: unknown }).__fab = {
   perf, probe: () => ({ mode, omega: cloth ? +cloth.omega.toFixed(2) : 0, cloth: paper.cloth, tableZoom: +tableZoom.toFixed(3), tableTurn: +tableTurn.toFixed(3), recipe: rec, design: d, family: d.family, what: describeGarment(d), moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: g.notes, checks: g.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), seams: cloth?.seams(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
   // (for tests: the whole pattern's hems that can be worked with the tool in hand, where on the sheet)
-  wholeHems: () => laid.map((l, i) => ({ g: gripOf(i), l })).filter((x) => x.g).map((x) => ({ key: x.g!.key, mid: hemOf(x.l)[6] })),
+  wholeHems: () => editor.handles.map(h=>({key:h.key,mid:[h.x,h.y]})),
+  editor, journal:()=>journal, outfit:()=>worn.map(w=>({id:w.id,family:w.d.family,active:w.id===activeItem,health:w.cloth?.health()})),selectItem,
   // (for tests: where a point in the room is on the screen; where a point of the paper's sheet is)
   roomToScreen: (q: [number, number, number]) => { const m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },
   sheetToScreen: (px: number, py: number) => { const q = sheetToRoom(px, py), m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },

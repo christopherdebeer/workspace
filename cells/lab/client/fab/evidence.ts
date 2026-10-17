@@ -186,7 +186,7 @@ export function cusick(converged = false): Section[] {
     verdict: `converged ${Math.min(...conv).toFixed(2)}–${Math.max(...conv).toFixed(2)}; at the figure's settings ${lo.toFixed(2)}–${hi.toFixed(2)}, ${inversions} out of order with stiffness`,
   }, {
     id: 'cusick-realtime', title: '2b′ · Does the cloth as simulated on the figure drape as its own converged self?',
-    claim: 'The same discs, at the figure\'s settings (a 1.8 cm mesh, 8 substeps), against the converged answer: within 0.10 in drape coefficient.',
+    claim: 'The same discs, at the figure\'s settings (a 1.8 cm mesh, 16 substeps), against the converged answer: within 0.10 in drape coefficient.',
     limits: 'A gap here is the real-time compromise: too few substeps for stiff bending. It changes how far a skirt stands out, so a child\'s prediction from the bench could be off by it.',
     rows: gaps.map((g) => ({ fabric: g.f.name, 'as on the figure': (CONVERGED[g.f.id] - g.gap).toFixed(2), converged: CONVERGED[g.f.id].toFixed(2), gap: g.gap.toFixed(2) })),
     pass: worstGap <= 0.1, verdict: `largest gap ${worstGap.toFixed(2)} (allowed 0.10): the cloth on the figure is limper than the model it approximates`,

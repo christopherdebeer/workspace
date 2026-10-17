@@ -41,6 +41,7 @@ export type SleeveCut = 'plain' | 'puff' | 'bell';
 export type Collar = 'none' | 'peterpan' | 'band' | 'frill';
 export interface Design {
   family: Family;
+  collarWidth: number; sleeveFullness: number; tierRatio: number;
   /** skirts: tiers, each gathered onto the hem of the one above (1: none) */
   tiers: number;
   /** tops: cm below the waist the hem comes (less than 0: cropped above it) */
@@ -73,6 +74,7 @@ export interface Design {
   fabric: string; print: number; colour: number;
 }
 export const DEFAULT_DESIGN: Design = {
+  collarWidth: 4.6, sleeveFullness: 1.45, tierRatio: 1.5,
   family: 'skirt', length: 34, fullness: 2.2, method: 'flare', panels: 4, grain: 0, fabric: 'lawn', print: 2, colour: 1, tiers: 1,
   bodyLen: 8, ease: 8, swing: 1.15, neck: 'round', neckDepth: 0, sleeveLen: 8, sleeve: 'plain', collar: 'none',
   legLen: 26, legWidth: 1.3, flare: 1,
@@ -89,6 +91,7 @@ export interface Hold { at: At; s: number; y: number }
 export type Check = Check0;
 /** a skirt as made: its length, panels, grain (degrees off straight), cloth, print, and the moves made on a panel */
 export interface Recipe {
+  journal?: import('./journal').Journal;
   length: number; panels: number; grain: number; fabric: string; print: number; colour: number; moves: Move[];
   /** the round its waist is sewn to, if not its own waistband's: a dress's skirt, cut to its bodice's hem (so the paper,
    * the dials and the garment all cut the same skirt) */

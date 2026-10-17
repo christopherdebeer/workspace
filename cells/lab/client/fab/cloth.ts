@@ -31,7 +31,7 @@ import type { At, Piece } from './pattern';
 type V3 = [number, number, number];
 export interface Collider { distance(x: number, y: number, z: number, near?: number): number; hit: { nx: number; ny: number; nz: number } }
 export interface Build {
-  pieces: Array<Pick<Piece, 'nu' | 'nv' | 'flat' | 'grain' | 'start'>>;
+  pieces: Array<Pick<Piece, 'nu' | 'nv' | 'flat' | 'grain' | 'start'> & {name?:string}>;
   /** what's sewn: a point to another, or to a place `t` of the way from `b` to `b1` */
   pairs: Array<{ a: At; b: At; b1?: At; t?: number }>;
   /** points a piece hangs from without being held (where it's sewn to what holds it): its tethers tie to these too */
@@ -74,9 +74,11 @@ export class Cloth {
   version = 0;
   /** the figure's turn (radians) and how fast it's turning */
   spin = 0; omega = 0;
-  substeps = 8;
+  substeps = 16;
+  private lastH = 1 / 960;
+  names: string[] = [];
   /** passes over the springs each substep */
-  iters = 2;
+  iters = 3;
   /** passes over bending each substep */
   bendIters = 3;
   /** substeps before each point's worth asking the body about again (it was far enough off it) */
@@ -88,7 +90,8 @@ export class Cloth {
     const ph = physical(b.fabric);
     // (air: ½·ρ_air·C_d over the cloth's own weight a cm²)
     this.drag = (0.5 * 0.0012 * 1.0) / ph.rho;
-    const warm = !!from && from.grids.length === b.pieces.length;
+    this.names=b.pieces.map((p,k)=>p.name??`piece ${k}`);
+    const warm = !!from && this.names.every(n=>from.names.includes(n));
     const pos: number[] = [], flat: number[] = [], edge: number[] = [], piece: number[] = [], gi: number[] = [], gj: number[] = [];
     let base = 0;
     for (let k = 0; k < b.pieces.length; k++) {
@@ -96,7 +99,7 @@ export class Cloth {
       this.grids.push({ base, nu: pc.nu, nv: pc.nv });
       for (let j = 0; j <= pc.nv; j++) for (let i = 0; i <= pc.nu; i++) {
         const u = i / pc.nu, v = j / pc.nv, f = pc.flat(u, v);
-        const s = warm ? from!.sample(k, u, v) : pc.start(u, v);
+        const s = warm ? from!.sample(from!.names.indexOf(this.names[k]), u, v) : pc.start(u, v);
         pos.push(s[0], s[1], s[2]);
         // (the print's along the warp: the piece's flat place turned by its grain)
         flat.push(f[0] * wx + f[1] * wy, -f[0] * wy + f[1] * wx);
@@ -221,6 +224,15 @@ export class Cloth {
     // (laid out, nothing starts inside the figure)
     if (this.collider) for (let i = 0; i < n; i++) if (this.inv[i] > 0) this.pushOut(i, 0, false);
     this.prev.set(this.pos);
+    if(warm) for(let k=0;k<b.pieces.length;k++){
+      const grid=this.grids[k],old=from!.names.indexOf(this.names[k]);
+      for(let j=0;j<=grid.nv;j++)for(let i=0;i<=grid.nu;i++){
+        const previous=from!.sample(old,i/grid.nu,j/grid.nv,from!.prev),current=from!.sample(old,i/grid.nu,j/grid.nv);
+        const at=(grid.base+i+j*(grid.nu+1))*3;
+        for(let c=0;c<3;c++)this.prev[at+c]=this.pos[at+c]-(current[c]-previous[c]);
+      }
+      this.lastH=from!.lastH;
+    }
     this.s0 = new Float32Array(sa.length);
     for (let c = 0; c < sa.length; c++) this.s0[c] = warm ? 0 : this.gap(c);
     this.hFrom = new Float32Array(this.hi.length * 3);
@@ -230,11 +242,11 @@ export class Cloth {
   }
 
   /** where a place on a piece is (u, v across and down it), between its four nearest points */
-  sample(k: number, u: number, v: number): V3 {
+  sample(k: number, u: number, v: number, positions = this.pos): V3 {
     const g = this.grids[k], x = u * g.nu, y = v * g.nv, i = Math.min(g.nu - 1, Math.floor(x)), j = Math.min(g.nv - 1, Math.floor(y)), fx = x - i, fy = y - j, W = g.nu + 1;
     const o: V3 = [0, 0, 0];
     for (let c = 0; c < 3; c++) {
-      const at = (a: number, bb: number) => this.pos[(g.base + a + bb * W) * 3 + c];
+      const at = (a: number, bb: number) => positions[(g.base + a + bb * W) * 3 + c];
       o[c] = (at(i, j) * (1 - fx) + at(i + 1, j) * fx) * (1 - fy) + (at(i, j + 1) * (1 - fx) + at(i + 1, j + 1) * fx) * fy;
     }
     return o;
@@ -248,6 +260,8 @@ export class Cloth {
   step(dt: number) {
     this.version++;
     const S = this.substeps, h = dt / S, { pos, prev, inv, nor } = this, n = this.n;
+    if(Math.abs(h-this.lastH)>1e-10)for(let i=0;i<pos.length;i++)prev[i]=pos[i]-(pos[i]-prev[i])*h/this.lastH;
+    this.lastH=h;
     for (let s = 0; s < S; s++) {
       this.age += h; this.spin += this.omega * h;
       // (predict: what it's moving, less the air's drag through it, and gravity)
@@ -270,12 +284,16 @@ export class Cloth {
         pos[i3] = x * cs + z * sn; pos[i3 + 1] = y; pos[i3 + 2] = -x * sn + z * cs;
       }
       const h2 = h * h;
-      for (let it = 0; it < this.iters; it++) this.springs(h2, it === 0);
-      for (let it = 0; it < this.bendIters; it++) this.bending(h2, it === 0);
-      this.tethers();
-      // (sewing: each seam's gap closed over the first 0.8 s)
       const sw = Math.min(1, this.age / 0.8), sew = 1 - sw * sw * (3 - 2 * sw);
-      for (let c = 0; c < this.sa.length; c++) this.stitch(c, this.s0[c] * sew, 1e-8 / h2);
+      if(this.seamLambda.length!==this.sa.length)this.seamLambda=new Float32Array(this.sa.length);
+      this.seamLambda.fill(0);
+      const sweeps=Math.max(this.iters,this.bendIters);
+      for(let it=0;it<sweeps;it++){
+        if(it<this.iters)this.springs(h2,it===0);
+        if(it<this.bendIters)this.bending(h2,it===0);
+        this.tethers();
+        for(let c=0;c<this.sa.length;c++)this.stitch(c,this.s0[c]*sew,1e-8/h2);
+      }
       if (this.self && s % 4 === 3) this.selfCollide();
       if (this.collider || this.floor) for (let i = 0; i < n; i++) if (inv[i] > 0) { if (this.wait[i] > 0) this.wait[i]--; else this.pushOut(i, h, true); }
     }
@@ -297,16 +315,18 @@ export class Cloth {
     return Math.hypot(p[b3] + (p[c3] - p[b3]) * t - p[a3], p[b3 + 1] + (p[c3 + 1] - p[b3 + 1]) * t - p[a3 + 1], p[b3 + 2] + (p[c3 + 2] - p[b3 + 2]) * t - p[a3 + 2]);
   }
   /** a seam: its point drawn to its place on the other edge (between two points, by `t`), to `rest` apart */
+  private seamLambda = new Float32Array(0);
   private stitch(c: number, rest: number, at: number) {
     const { pos, inv } = this, a = this.sa[c], b = this.sb[c], k = this.sc[c], t = this.st[c];
-    if (t === 0) { this.distance(a, b, rest, at); return; }
+
     const wa = inv[a], wb = inv[b] * (1 - t) * (1 - t), wk = inv[k] * t * t, w = wa + wb + wk + at;
     if (wa + wb + wk === 0) return;
     const a3 = a * 3, b3 = b * 3, k3 = k * 3;
     const qx = pos[b3] + (pos[k3] - pos[b3]) * t, qy = pos[b3 + 1] + (pos[k3 + 1] - pos[b3 + 1]) * t, qz = pos[b3 + 2] + (pos[k3 + 2] - pos[b3 + 2]) * t;
     const dx = qx - pos[a3], dy = qy - pos[a3 + 1], dz = qz - pos[a3 + 2], d = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (d < 1e-7) return;
-    const f = (d - rest) / d / w, fb = f * inv[b] * (1 - t), fk = f * inv[k] * t;
+    const dl=(d-rest-at*this.seamLambda[c])/w;this.seamLambda[c]+=dl;
+    const f = dl / d, fb = f * inv[b] * (1 - t), fk = f * inv[k] * t;
     pos[a3] += dx * f * wa; pos[a3 + 1] += dy * f * wa; pos[a3 + 2] += dz * f * wa;
     pos[b3] -= dx * fb; pos[b3 + 1] -= dy * fb; pos[b3 + 2] -= dz * fb;
     pos[k3] -= dx * fk; pos[k3 + 1] -= dy * fk; pos[k3 + 2] -= dz * fk;
@@ -336,12 +356,14 @@ export class Cloth {
     }
   }
   private tethers() {
-    const { pos, ti, tt, tr } = this;
+    const { pos, ti, tt, tr, inv } = this;
     for (let c = 0; c < ti.length; c++) {
       const a3 = ti[c] * 3, b3 = tt[c] * 3, dx = pos[a3] - pos[b3], dy = pos[a3 + 1] - pos[b3 + 1], dz = pos[a3 + 2] - pos[b3 + 2], d2 = dx * dx + dy * dy + dz * dz, r = tr[c];
       if (d2 <= r * r) continue;
-      const f = r / Math.sqrt(d2);
-      pos[a3] = pos[b3] + dx * f; pos[a3 + 1] = pos[b3 + 1] + dy * f; pos[a3 + 2] = pos[b3 + 2] + dz * f;
+      const wa=inv[ti[c]],wb=inv[tt[c]],sum=wa+wb;if(!sum)continue;
+      const f=(1-r/Math.sqrt(d2))/sum;
+      pos[a3]-=dx*f*wa;pos[a3+1]-=dy*f*wa;pos[a3+2]-=dz*f*wa;
+      pos[b3]+=dx*f*wb;pos[b3+1]+=dy*f*wb;pos[b3+2]+=dz*f*wb;
     }
   }
   /** XPBD's multipliers for bending (three a point), kept across the passes within a substep so more passes converge
@@ -376,7 +398,7 @@ export class Cloth {
     const x = pos[i3], y = pos[i3 + 1], z = pos[i3 + 2], bx = x * cs - z * sn, bz = x * sn + z * cs;
     const m = this.margin, d = col.distance(bx, y, bz, m + 6);
     // (far off: nothing moves 0.5 cm a substep, so it needn't ask again for a while)
-    if (d >= m) { if (friction) this.wait[i] = Math.min(12, Math.floor((d - m) / 0.5)); return; }
+    if (d >= m) { if (friction) this.wait[i] = Math.min(4, Math.floor((d - m) / Math.max(.5, Math.hypot(pos[i3]-prev[i3],pos[i3+1]-prev[i3+1],pos[i3+2]-prev[i3+2])*4))); return; }
     const hn = col.hit, nx = hn.nx * cs + hn.nz * sn, ny = hn.ny, nz = -hn.nx * sn + hn.nz * cs, push = m - d;
     pos[i3] += nx * push; pos[i3 + 1] += ny * push; pos[i3 + 2] += nz * push;
     if (!friction) return;

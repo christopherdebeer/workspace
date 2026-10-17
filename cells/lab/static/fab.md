@@ -1,3 +1,17 @@
+## 17 October: pattern table and outfits
+
+Construction now lives on the table: select a named pattern piece, drag its edge handles, or use its contextual neckline, sleeve, collar and tier join controls. The skirt keeps its existing cut/fold tools. A versioned journal in `recipe.journal` records construction and material deltas with semantic targets, undo and redo; legacy `recipe.moves` remains the skirt compiler input. This is replayable parameter editing, not yet an arbitrary cut grammar for bodices or trousers.
+
+Use **+ garment** to return to the rails and add another item without replacing the current outfit. Select a worn item to edit it independently; **take off** removes the selected item when there is another to keep. Outfits and operation histories persist locally, including reloads of the active design URL. Saving to a rail remains explicit. Ordered inter-garment contacts keep outer vertices off nearby inner surfaces; this is discrete contact, not continuous collision detection, and does not guarantee every possible outfit is intersection-free.
+
+Cloth changes: 16 substeps, interleaved stretch/bending/seam constraints, mass-weighted tethers, velocity-aware body collision checks, and velocity-preserving warm starts matched by piece name. Print and colour edits no longer rebuild cloth. Large topology changes still resew.
+
+Validation against the preceding build: pattern and garment checks pass; all 27 workshop garments still sew up; the stricter soundness count improves from 12/27 to 14/27. Maximum Cusick drape discrepancy falls from 0.27 to 0.15, still above the 0.10 acceptance target. Physics is improved, not declared settled. These are numerical harness results, not an iPhone performance or visual approval. Multiple garments increase simulation and contact cost.
+
+Regression sources: `devtools/fab-operations.test.ts`, `devtools/fab-ui.test.cjs`, `devtools/fab-evidence.ts`. The UI harness uses jsdom with mocked canvas/WebGL; it checks interaction/state transitions and actual local-storage reload, not rendering quality.
+
+---
+
 # Fab
 
 A dressmaking workbench for children. A little wooden figure stands on a turned stand, and beside it lies a garment's

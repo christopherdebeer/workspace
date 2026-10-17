@@ -56,6 +56,7 @@ export function sanitize(x: Partial<Design> | null | undefined): Design {
     else if (k === 'fabric') { if (typeof v === 'string' && FABRICS.some((f) => f.id === v)) d.fabric = v; }
   }
   const c = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+  d.collarWidth = c(d.collarWidth, 1.5, 8); d.sleeveFullness = c(d.sleeveFullness, 1.03, 1.8); d.tierRatio = c(d.tierRatio, 1.05, 2);
   d.print = Math.round(c(d.print, 0, PRINTS.length - 1)); d.colour = Math.round(c(d.colour, 0, COLOURWAYS.length - 1));
   d.tiers = Math.round(c(d.tiers, 1, 3)); d.panels = Math.round(c(d.panels, 1, 12));
   return d;
@@ -143,7 +144,7 @@ function skirt(cut: Cut, d: Design, h: number, budget: number, onto: { hem: At[]
   // (each tier's as wide as the hem above it as cut, measured round its edge)
   let prevRound = fractions(cut.pieces, prev).len, y0 = sk.pieces[0].start(0.5, 1)[1], a0 = -Math.PI / n;
   for (let t = 1; t < tiers; t++) {
-    const round = prevRound * 1.5, nt = Math.max(2, Math.ceil(round / 120)), w = round / nt, L = rest;
+    const round = prevRound * d.tierRatio, nt = Math.max(2, Math.ceil(round / 120)), w = round / nt, L = rest;
     const first = cut.pieces.length;
     for (let p = 0; p < nt; p++) {
       const yTop = y0;
@@ -159,14 +160,14 @@ function skirt(cut: Cut, d: Design, h: number, budget: number, onto: { hem: At[]
     const top: At[] = [];
     for (let p = 0; p < nt; p++) top.push(...cut.pts(first + p, 'top'));
     top.push(cut.pts(first, 'top')[0]);
-    cut.sew(top, prev, 'tier, gathered', { want: 1.5, tol: 0.03 });
+    cut.sew(top, prev, 'tier, gathered', { want: d.tierRatio, tol: 0.03 });
     for (let p = 0; p < nt; p++) cut.anchors.push(...cut.pts(first + p, 'top'));
     prev = [];
     for (let p = 0; p < nt; p++) prev.push(...cut.pts(first + p, 'hem'));
     prev.push(cut.pts(first, 'hem')[0]);
     prevRound = fractions(cut.pieces, prev).len; y0 = y0 - L * 0.92;
   }
-  cut.notes.push(`${tiers} tiers, each gathered 1.5× onto the one above`);
+  cut.notes.push(`${tiers} tiers, each gathered ${d.tierRatio.toFixed(2)}× onto the one above`);
   return sk;
 }
 

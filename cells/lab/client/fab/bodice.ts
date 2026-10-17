@@ -55,7 +55,7 @@ export function bodice(cut: Cut, d: Design, h: number, o: { toWaist: boolean; kn
   const ease = clamp(d.ease, 4, 16), W = (CHEST + ease) / 2, sleeved = d.sleeveLen >= 2;
   const nk = NECKS[d.neck] ?? NECKS.round;
   const xs = sleeved ? 14.2 : 13.2, xn = Math.min(nk.w, xs - 4.5);
-  const puff = sleeved && d.sleeve === 'puff', ratio = puff ? 1.45 : 1.03;
+  const puff = sleeved && d.sleeve === 'puff', ratio = puff ? d.sleeveFullness : 1.03;
   // (the hem: at the waist for a dress, else as long as asked; wide enough to clear the hips if it comes below them)
   const len = o.toWaist ? 0 : clamp(d.bodyLen, -6, 30), yh = -len;
   let hw: number;
@@ -259,7 +259,7 @@ function collar(cut: Cut, d: Design, neck: At[], cf: number, opening: boolean, h
   const half = fr.f[cf];
   if (d.collar === 'peterpan') {
     // (a flat collar: two halves, each a ring's sector whose inner edge is its half of the neckline, rounded at the front)
-    const w = 4.6;
+    const w = d.collarWidth;
     for (const side of [0, 1]) {
       const Lh = side === 0 ? half * L : (1 - half) * L, th = Math.PI * 0.9, r = Lh / th, R0 = r;
       const inner = (f: number): P2 => { const a = (f - 0.5) * th; return [r * Math.sin(a), R0 - r * Math.cos(a)]; };
@@ -281,7 +281,7 @@ function collar(cut: Cut, d: Design, neck: At[], cf: number, opening: boolean, h
     return;
   }
   // (a band collar stands up round the neck; a frill's twice as long, gathered on, and lies out over the shoulders)
-  const frill = d.collar === 'frill', lc = frill ? L * 1.8 : L, hc = frill ? 4.4 : 3;
+  const frill = d.collar === 'frill', lc = frill ? L * 1.8 : L, hc = d.collarWidth * (frill ? 1 : 0.65);
   let k = -1;
   const pc = patch({
     name: frill ? 'frill' : 'collar band', kind: frill ? 'panel' : 'band',

@@ -40,7 +40,7 @@ export function tile(ctx: CanvasRenderingContext2D, pr: Print, px: number): Canv
 export interface Laid { piece: Piece; to: (q: P2) => [number, number]; sc: number }
 /** `width`: lay the pieces out in a column this wide (css px), centred; `bare`: no title, notes or checks (on the
  * cutting table, where the pieces are what's worked) */
-export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = makePrint(0, 0), mini = false, opts: { width?: number; bare?: boolean } = {}): Laid[] {
+export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = makePrint(0, 0), mini = false, opts: { width?: number; bare?: boolean; frozen?: Laid[] } = {}): Laid[] {
   const dpr = Math.min(2, devicePixelRatio || 1), W = cv.clientWidth, H = cv.clientHeight;
   if (!W || !H) return [];
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
@@ -82,8 +82,9 @@ export function drawSheet(cv: HTMLCanvasElement, g: Garment, pr: Print | null = 
   const fill = pr ? tile(ctx, pr, sc) : '#fffcf4', laid: Laid[] = [];
   shown.forEach((p, k) => {
     const b = boxes[k], ox = ox0 + at[k][0] * sc, py = oy + at[k][1] * sc;
-    const to = (q: P2): [number, number] => [ox + (q[0] - b.x0) * sc, py + (b.y1 - q[1]) * sc];
-    laid.push({ piece: p, to, sc });
+    const old = opts.frozen?.find(l => l.piece.name === p.name);
+    const to = old?.to ?? ((q: P2): [number, number] => [ox + (q[0] - b.x0) * sc, py + (b.y1 - q[1]) * sc]);
+    laid.push({ piece: p, to, sc: old?.sc ?? sc });
     const path = new Path2D(); outs[k].forEach((q, i) => { const [sx, sy] = to(q); if (i) path.lineTo(sx, sy); else path.moveTo(sx, sy); }); path.closePath();
     ctx.save();
     // (the print, on the grain: turned with it)

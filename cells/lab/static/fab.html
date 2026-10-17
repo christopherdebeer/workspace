@@ -188,6 +188,24 @@
     body.table .figdrawer, body.table #note { display: none !important; }
     body.table #notes { right: 14px; }
     #perf { position: absolute; left: 10px; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 84px); z-index: 6; font: 600 11px ui-monospace, Menlo, monospace; color: #3b2f24; background: rgba(255,250,240,.8); border-radius: 8px; padding: 4px 8px; pointer-events: none; }
+
+    #outfit {position:absolute;top:100px;left:12px;right:12px;z-index:4;display:flex;gap:5px;overflow:auto}
+    #pieces {position:absolute;top:150px;left:12px;right:12px;z-index:4;display:flex;gap:5px;overflow:auto}
+    #outfit button,#pieces button,#redo {all:unset;box-sizing:border-box;cursor:pointer;flex:none;min-height:44px;padding:8px 12px;border-radius:10px;background:var(--paper);font-size:13px;box-shadow:var(--lift)}
+    #outfit button.on,#pieces button.on{background:var(--dark);color:var(--paper)}
+    body.table:not(.skirtpaper) #palette,body.table:not(.skirtpaper) .stepper{display:none!important}
+    body.table #undo,body.table #history{display:flex!important}
+    #pattern-actions{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;margin:8px 0}
+    #pattern-actions label{display:grid;gap:3px;color:var(--ink2)}
+    #pattern-actions select{min-height:44px;border:1px solid #d6c6b2;border-radius:8px;background:var(--paper2);color:var(--ink);max-width:180px}
+    .join-note{font-size:11px;color:var(--ink2);width:100%}
+    body.table #palette{top:205px}
+    body.table #tools .stepper{display:none!important}
+    body:not(.table) #outfit{top:100px}
+    #acts>.icon,.stepper button,.ctl button{min-width:44px;min-height:44px}
+    button:focus-visible,select:focus-visible{outline:3px solid var(--rose);outline-offset:2px}
+    button:disabled{opacity:.35;cursor:default}
+    @media(prefers-reduced-motion:reduce){*{transition:none!important}}
   </style>
 </head>
 <body>
@@ -209,6 +227,7 @@
         <div class="hints"><span><svg viewBox="0 0 20 20"><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3"/></svg>slide along the rail</span><span><svg viewBox="0 0 20 20"><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3"/></svg>swipe for another rail</span><span><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2"/></svg>tap the front one</span></div>
       </div>
     </div>
+    <div id="outfit" class="benchonly"></div><div id="pieces" class="tableonly"></div>
     <div id="palette" class="tableonly"></div>
     <div id="toast"></div>
   </div>
@@ -217,7 +236,8 @@
     <div class="row" id="methods"></div>
     <div id="knobs"></div>
     <div id="tools" class="cutonly"><div id="toolhead"><b id="toolname"></b><span id="toolwhat"></span></div><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><div class="stepper"><button id="tiersless" aria-label="fewer tiers">−</button><b><span id="tiersn">1</span><i>tiers</i></b><button id="tiersmore" aria-label="more tiers">+</button></div><button id="undo"><svg viewBox="0 0 24 24"><path d="M9 7L5 11l4 4"/><path d="M5 11h9a5 5 0 010 10h-2"/></svg>undo</button></div>
-    <div class="row cutonly" id="history"></div>
+    <button id="redo" class="cutonly">redo ↷</button><div class="row cutonly" id="history"></div>
+    <div id="pattern-actions" class="tableonly"></div>
     <div id="gestures" class="cutonly" data-tier="2"></div>
     <div id="toolctl" class="cutonly"></div>
     <div id="figtabs" class="figdrawer"><button data-sec="what">Make</button><button data-sec="bodice">Bodice</button><button data-sec="legs">Legs</button><button data-sec="fabric">Fabric</button><button data-sec="print">Print</button><button data-sec="colour">Colour</button><button id="tune" aria-label="make it your own" title="make it your own">⚙</button></div>
