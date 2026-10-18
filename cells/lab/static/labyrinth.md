@@ -12,11 +12,24 @@ Architecture that follows the hand. A travertine slab on a table in the sun, and
 |---|---|---|
 | **hand** | says what it is, and what it's part of | turns the view |
 | **auto** | raises | builds a wall, reaches out, climbs (below) |
-| **piece** (hold it, or touch it again, for the sheet) | puts one piece, or dresses a stone | a run of pieces, or dresses every stone passed over |
+| **piece** (hold it, or touch it again, for the sheet; it's always called piece, and its picture is what it holds) | puts one piece, or dresses a stone | a run of pieces, or dresses every stone passed over |
 | **take** | takes a piece away (a lantern or pot on it first) | carves through: what's over the cut is carried on an arch |
 | **select** | takes up a piece; again, the whole it's part of | turns the view |
 
-Two fingers, from any brush, turn the view and pinch it closer.
+Two fingers, from any brush, turn the view (across), tilt it (up and down), and pinch closer to where they are.
+
+### What the hand is asking for, while it's asking
+
+While a stroke is under the finger:
+- **where it started** is marked with a dot on the surface it started from;
+- **the route** it's asking for is drawn along the heights it will be walked, apart from the stone the rules put under it to hold it up;
+- **the top it's going to** is outlined, dashed while it's only being considered and solid once it's taken;
+- **a label by the finger** says what it is: *a gated wall*, *a bridge, on one great arch*, *climbing 2 levels*, *a flight of 3 steps*, *carving through 2*;
+- **where it can't go on** is marked with a cross, and the label says why (too steep, or joining the stone it meets).
+
+What kind of wall a stroke makes is chosen once, where it starts, and kept as it grows. Its openings count from its start, so drawing it on never moves them.
+
+![mid-stroke: where it started, the route along the wall's top, the terrace it's going to, and "climbing 1 level"](labyrinth/v-trace-guides.jpg)
 
 The balance between them: **auto is for painting, select is for correcting, the piece brush is the fallback.** You paint with auto, and where it read you wrong, select what came out and switch it to another reading. The piece brush is for when you already know exactly what you want. Everything it makes is something auto understands, so the two mix freely, and every brush is an operation on the same stone, undone and resolved the same way.
 
@@ -61,9 +74,9 @@ Dressing changes how stone looks, never what stands. Tap a stone, or stroke over
 | Dressing | |
 |---|---|
 | **travertine**, **brick**, **marble** | what the stone is. Brick is laid in narrow courses, each brick its own shade, with pavers on top; marble is white and veined, in large blocks |
-| **moss** | soft patches low down and in the shade, a few brighter flecks in them |
-| **ivy** | leaves, each its own, clumped where it's thick and thinning to a few at its edges |
-| **parapet** | a low wall round the open edges of a top, with a coping a little proud of it |
+| **moss** | where it has a reason: on faces turned from the sun, at the damp foot of a course, in the joints and along the edges of a top (not across it), soft patches with a few brighter flecks |
+| **ivy** | real leaves: a few trailing strands hanging from the top of each open side, every leaf its own size, tilt and shade; some lean out over the top edge, so the ivy breaks the stone's outline |
+| **parapet** | a low wall round the open edges of a top, a wall's thickness all along, with a coping a little proud of it, and a capped post where it ends |
 | **lantern**, **pot** | on a top with room over it: a lantern on a post, lit; a terracotta pot with a clipped shrub |
 
 A stroke that starts on a stone that already has the dressing takes it off everything it passes over. Take, tapped on a lantern or a pot, takes that first. The rules dress a little of their own accord: a bridge, or an arch two levels up or more, gets a parapet along its open sides.
@@ -74,9 +87,10 @@ A stroke that starts on a stone that already has the dressing takes it off every
 
 ### select: taking something up, and reading it another way
 
-Tap a piece and it's taken up, outlined in warm ink, with a card saying what it is. Tap it again (or **the whole** on the card) and the whole it's part of is taken up instead: the arcade an arch is in, the flight a stair is in, the wall, the tower, the court. The card then offers:
-- **→ the next reading.** Each time it's touched it switches to the next way of reading the thing, replacing the last switch rather than piling up, and coming round to how it started (which takes the switch away altogether);
-- **dress** it whole, with the last dressing chosen;
+Tap a piece and it's taken up: its own surfaces faintly warmed and its outline drawn round it, in the picture itself (not a box round its cells). A card says what it is, with:
+- **its scope**: *piece*, then each whole it's part of (the arcade an arch is in, the flight, the wall, the tower, the court), then the whole *structure* joined to it. Tap one, or tap the thing again for the next one out;
+- **every reading at once**, each with a little drawing, the current one marked. Touch one to read it that way. Switching replaces the last switch rather than piling up, and touching the first again takes the switch away altogether;
+- **dressing**, all of it, to dress what's taken up in one touch;
 - **take it away**.
 
 | Taken up | Its readings |
@@ -101,13 +115,12 @@ There's no cap on how high it goes: tap a column up as far as you like, and the 
 
 ### Moving round it
 
-- Two fingers, the hand brush, or one finger starting on the background, turn the view. It settles on a corner when you let go.
-- Pinch, or scroll, to come closer.
-- **Undo**, **print** (draw it as a lithograph) and **clear** are at the top right.
-- While a finger is down:
-  - a trace shows its stroke as a faint dotted line, and the stone is laid behind the finger as it goes;
-  - stone that settles puffs a little dust.
-- The view never moves while a hand is on the stone, so what's under the finger stays under it.
+- Two fingers, the hand brush, or one finger starting on the background, turn the view. Let go near a corner and it settles on it; anywhere else, it stays where you left it.
+- Two fingers moving up and down tilt it.
+- Pinch, or scroll, to come closer to where the fingers (or the pointer) are.
+- **Undo**, **frame it all**, **print** (draw it as a lithograph) and **clear** are at the top right.
+- The view frames the whole build at the start, when you touch *frame it all*, and when what's built reaches the edge of the screen. Otherwise it stays where you put it, so the work doesn't shrink away from the hand as it grows. It never moves while a hand is on the stone.
+- Stone that settles puffs a little dust.
 - What's built is kept on this device.
 
 ## The storyboard
@@ -119,6 +132,9 @@ The brief's first test asks whether someone, without instruction, can build this
 ![3: an elevated connection](labyrinth/v-story-3.jpg)
 ![4: a resolved labyrinth](labyrinth/v-story-4.jpg)
 
+![8: a labyrinth: a cloister with a gallery on its walls, a stair half hidden behind a wall, a bridge over a passage, a tall slot](labyrinth/v-story-8.jpg)
+![8, from the other side](labyrinth/v-story-8-turned.jpg)
+
 1. **First touch.** Tap the stone, tap its top, tap a side: a platform, two courses high.
 2. **A traced wall.** Trace across the stone from beside it, and a wall grows along the stroke.
 3. **An elevated connection.** Tap a terrace up three courses. Then trace from the platform's top along the wall's top, and up to the terrace. The landings rest on the wall. The step up comes on the last straight run, and where the route turns off the wall, piers come up under it.
@@ -127,6 +143,8 @@ The brief's first test asks whether someone, without instruction, can build this
    - Trace a wall round in front, and the court is closed: paved, with a cypress in its corner.
    - Tap up a tower, and trace from its top to the terrace's top at the same height. The rules choose one great arch for this bridge (another stroke might get an arcade of even bays).
    - None of it is dressed by hand: the brick tower and its lantern, the ivy and moss round the court, the pots, the parapets are all the rules' own (below). `?plain` shows it bare.
+
+And `?story=8` is **a labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a gallery of arches on its walls from corner tower to corner tower, a gate through each side, one framing the stair beyond). A stair climbing behind a wall, its foot hidden and its head showing over the wall, to a landing tower. From there a bridge over the passage below to the cloister's corner, so one way crosses another. And a tall, narrow slot between two towers, bridged high up.
 
 ## How it's built
 
@@ -237,14 +255,17 @@ Nothing is drawn from it yet. The tests use it to check that every connection th
 
 From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
-- **Blocks** have their faces where nothing hides them, darker at the foot.
-- **Stairs** have six steps.
-- **Arches** have spandrels and a deck over an elliptical soffit, lit warm from within.
+- **Blocks** have their faces where nothing hides them, darker at the foot, and their exposed edges **bevelled**: a narrow chamfer along each top edge over an open side and down each corner where two open sides meet, so edges catch the light. Where a block meets stone of its own kind there's no edge, and the courses run on.
+- **Where the stone changes kind** from the course below, a string course marks it. **Brick is capped in stone**: its top is a travertine coping.
+- **Stairs** have six steps, each tread with a **nosing** a little proud of its riser.
+- **Arches** have spandrels and a deck over an elliptical soffit, and are built, not cut: a **ring of voussoirs** a little proud of the face, a keystone at the crown, and an **impost** where each side springs. Small archways have their ring too. The light under an arch is what bounces up from the sunlit ground: warm near its mouth, little where it's deep.
 - **Piers** are slender columns, a little tapered, with a base and a capital. The higher they stand and the taller they run, the slimmer they are. On open ground a pier stands in the middle of its cell. Where it lands on a way (a walkway, a landing, a bridge's deck) it stands aside at the edge of its cell, across the way, so the way past it stays open. A figure walks past it, and the hand can build where it stands: the hand's stone takes over what it carried.
 - **Thin walls** are a wall's thickness, full height, running out to the stone beside them. They're the middle tier between a block wall and a parapet, and they close a court as a wall does.
 - **Courtyards** are travertine flags with their joints.
 - **The stone** is dressed travertine laid in courses (a joint every third of a level, the upright joints staggered course to course), banded, pitted with pores, and each block a shade of its own.
-- **Light**: a low warm sun with soft shadows. The dappled shade of a tree out of the picture falls across one side, near the build.
+- **The stone's detail** is kept quiet: the travertine is banded with a few pores, and its fine detail fades with distance rather than shimmering. Marble has a few broad, connected veins. Each material has its own sheen: polished marble most, travertine a little, brick and terracotta hardly.
+- **Light**: a low warm sun. Shadows are crisp where what casts them is close (at the foot of a pier, a parapet, a stair) and softer the further it is. The dappled shade of a tree out of the picture falls across one side, near the build.
+- **Drawn multisampled** (4×), so its edges are clean.
 - **No outlines**: barely a line where the depth folds.
 - **Rising**: the stone rises as it's laid, arches come down from their deck, and courtyard things grow when the court closes.
 - **Print** (kept from before) turns the light into hatching on paper, with the edges in ink. It's next to take what Taohua learned about drawing.
@@ -254,6 +275,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
 ## Checked
 
+- `node cells/lab/devtools/labyrinth-shaders.mjs` compiles the shaders in a bare page, so a shader that won't compile says why at once.
 - `node cells/lab/devtools/labyrinth.test.mjs` builds 60 worlds from 60 random actions each (taps, traces between surfaces, carving, and palette pieces), read by `gesture.ts` and `palette.ts`. It checks:
   - whatever the hand built stands: on what's below it, on an arch of three cells at most whose sides are stone, or on a pier that itself stands and carries something;
   - every connection that reached where it was going can be walked from its start to its end (`nav.ts`);
@@ -264,6 +286,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - the hand's dressing wins over the rules';
   - there's no cap: a column tapped up fourteen times is fourteen high, read as a tower, climbed by a fourteen-step flight that can be walked, and drawn to the top;
   - a gate in a wall is walked through, along its way only;
+  - a wall keeps its kind as the stroke grows, and its openings stay where they are; walls come in all three kinds;
   - a high walkway's free end comes down on a pier onto a walkway below: the pier is slim, stands aside, and the walkway below can still be walked past it, and built on;
   - the wall piece run round makes thin walls, which close a court; a tap on a thin wall goes on as one, up or out along its way; struck where it is, not beside it;
   - the random worlds also switch readings on what select would take up, dress stones, and run pieces; every arcade's bays spring alike;
@@ -275,8 +298,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - each storyboard stage is what it says it is.
 - `node cells/lab/devtools/labyrinth-smoke.mjs` does the palette on a fresh stone (each piece where it's touched: block; arch; arch on arch, making one tall arch; stair against a block; a bridge across a three-cell gap on one arch; cypress; pool; take). It also does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall; what was shown before letting go is exactly what's built), a climb too steep for its stroke (refused, and the hint says why), and a take-stroke carving under the walkway (an arch carries it). On storyboard 6 it uses the brushes:
   - the hand says what an arch is and that it's part of an arcade;
-  - select takes up the arch, then the arcade, switches it to lintels and round its readings back, leaving no operations behind;
-  - the piece brush, touched again, opens its sheet; brick from it is held and shown on the brush, and dresses a stone;
+  - select takes up the arch, then the arcade; the card shows every reading, the current one marked; it switches to lintels, on to another, and back to arches, leaving no operations behind; the structure scope takes up everything joined; the card's dressing dresses it whole;
+  - the piece brush, touched again, opens its sheet; brick from it is held and shown on the brush (still called piece), and dresses a stone;
   - blocks traced make a run; the wall piece traced makes a thin wall;
   - take, tapped, takes a piece away. Then undo, a turn from the background, print, what's built kept across a reload, and clear.
 
@@ -284,7 +307,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
 ## Links
 
-- `?story=1` … `?story=4` is the storyboard; `?story=5` adds pieces; `?story=6` motifs and dressing by hand; `?story=7` auto alone, no cap.
+- `?story=1` … `?story=4` is the storyboard; `?story=5` adds pieces; `?story=6` motifs and dressing by hand; `?story=7` auto alone, no cap; `?story=8` a labyrinth.
+- `?nomsaa` draws it without multisampling.
 - `?plain` draws it without the rules' dressing.
 - `?brush=select` (or any brush, piece or dressing) starts with it in hand. `?sheet` opens the piece brush's sheet; `?select=k.i.j` takes up what's at that cell, and `&whole` its whole.
 - `?ops=` builds from operations, as the model writes them.
@@ -297,6 +321,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 - **Stamps**: whole motifs put at once (a gate, a cloister, a loggia).
 - **More readings**: a court's water or none; a flight with a landing halfway.
 - **The walk drawn**: the places and stairs from `nav.ts`, shown faintly while a trace is under the finger.
+- **Spatial grammar**: the rules making sequences, not only supports: galleries round courts, a passage lined up on a far stair, a stair turned behind a wall, of their own accord.
+- **Worn stone**: a worn centre to a stair's treads, a darker edge to a pool.
 
 - **Snapping on relationships**: geometric (a stroke ending near an edge or a terrace joins it), topological (two walkways meeting make a junction you can walk), architectural (a buttress under an exposed terrace edge).
 - **Strokes off the grid**: diagonals kept as diagonals, with slight irregularity in the masonry.

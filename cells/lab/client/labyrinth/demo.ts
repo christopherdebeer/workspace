@@ -12,6 +12,10 @@
  * 7. **Auto alone, no cap**: the same as 4, and a tower tapped up ten high, a walkway from the terrace to it, a long wall
  *    round the far side, and a high walkway from halfway up the tower out over the ways below (its slim piers stand aside
  *    where they land on them); each made and dressed as the rules choose, nothing dressed by hand.
+ * 8. **A labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a
+ *    gallery of arches on its walls between corner towers, a gate through each side); a stair climbing behind a wall
+ *    (its foot hidden, its head showing over the wall) to a landing tower; from there a bridge over the passage below it
+ *    to the cloister's corner, so one way crosses another; and a tall, narrow slot between two towers bridged high up.
  * 6. **Motifs and dressing**: the same as 4, and a trace from the terrace to a new tower further off (an arcade of three
  *    bays, alike, a parapet along it of its own accord); a flight run up to the terrace with the stair brush; the passage under the
  *    walkway read as a lintel; and dressed: a marble tower with a lantern, the court's wall in brick, moss on the
@@ -27,6 +31,7 @@ const top = (w: World, i: number, j: number): Pick => { let k = 0; while (w.occu
 const side = (k: number, i: number, j: number, di: number, dj: number): Pick => ({ face: 'side', hit: [k, i, j], to: [k, i + di, j + dj] });
 
 export function story(stage: number): World {
+  if (stage === 8) return labyrinth();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op) w.apply(op, t); };
@@ -89,5 +94,35 @@ export function story(stage: number): World {
   put('bridge', side(2, 10, 8, 0, 1));
   put('pool', ground(6, 2)); put('pool', ground(7, 2));
   put('cypress', top(w, 10, 4)); put('cypress', top(w, 3, 3)); put('cypress', ground(1, 9));
+  return w;
+}
+
+/** storyboard 8: a labyrinth, made to show routes crossing at different heights, a stair hidden then seen, a gate
+ * framing it, a gallery round a court, and a tall narrow void */
+function labyrinth(): World {
+  const w = new World(11), t = -100;
+  const add = (cells: Array<[number, number, number]>) => w.apply({ add: cells.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  const col = (i: number, j: number, h: number) => add(Array.from({ length: h }, (_, k) => [k, i, j] as [number, number, number]));
+  // (the cloister: corner towers three high, a wall round between them with a gate through the middle of each side, and
+  // a gallery on the wall, carried on arches from tower to tower)
+  for (const [i, j] of [[3, 3], [8, 3], [3, 8], [8, 8]]) col(i, j, 3);
+  const ring: Array<[number, number]> = [];
+  for (let q = 4; q <= 7; q++) ring.push([q, 3], [q, 8], [3, q], [8, q]);
+  const gates = new Set(['5.3', '6.8', '3.6', '8.5']);
+  add(ring.filter(([i, j]) => !gates.has(`${i}.${j}`)).map(([i, j]) => [0, i, j]));
+  w.apply({ arches: ring.filter(([i, j]) => gates.has(`${i}.${j}`)).map(([i, j]) => [0, i, j, j === 3 || j === 8 ? 1 : 0, t] as [number, number, number, number, number]) }, t);
+  add(ring.map(([i, j]) => [2, i, j]));
+  // (a stair climbing behind a wall to a landing tower; the wall in front hides its foot)
+  col(8, 10, 3);
+  const ground = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+  const top = (i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+  const go = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t, t); if (op && !('refused' in op)) w.apply(op, t); };
+  go(ground(4, 10), [[4, 10], [5, 10], [6, 10], [7, 10]], top(8, 10));
+  for (let i = 3; i <= 8; i++) { col(i, 11, 2); }
+  // (from the landing, a bridge over the passage below it to the cloister's corner: one way crosses another)
+  go(top(8, 10), [[8, 10], [8, 9], [8, 8]], top(8, 8));
+  // (a tall slot: two towers five high, bridged at the top)
+  col(0, 4, 5); col(0, 6, 5);
+  add([[4, 0, 5]]);
   return w;
 }

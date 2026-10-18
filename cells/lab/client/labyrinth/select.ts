@@ -105,3 +105,19 @@ export function selectMotif(w: World, m: Motif, now: number): Selection {
   }
   return { ...base, readings: [{ label: m.label, op: null }], at: 0, remove: m.kind === 'court' || m.kind === 'terrace' ? null : base.remove };
 }
+
+/** everything joined to a cell, stone to stone (piers and stairs too): the whole structure it's part of */
+export function selectStructure(w: World, c: Cell): Selection | null {
+  const part = (k: number, i: number, j: number) => w.occupied(k, i, j);
+  if (!part(...c)) return null;
+  const seen = new Set([c.join('.')]), cells: Cell[] = [c], st: Cell[] = [c];
+  while (st.length) {
+    const [k, i, j] = st.pop()!;
+    for (const [a, b, d] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      const n: Cell = [k + d, i + a, j + b], id = n.join('.');
+      if (!seen.has(id) && part(...n)) { seen.add(id); cells.push(n); st.push(n); }
+    }
+  }
+  const hand = cells.filter((q) => w.stone(...q) || w.stair(...q) >= 0);
+  return { title: `a structure of ${hand.length} stone${hand.length === 1 ? '' : 's'}, all joined`, cells, readings: [{ label: 'as built', op: null }], at: 0, remove: hand.length ? { cut: hand, why: 'take' } : null, stone: cells.filter((q) => w.stone(...q) || w.pier(...q)) };
+}

@@ -20,7 +20,7 @@ import { carve, surface, tap, trace, type Pick } from './gesture';
 import { story } from './demo';
 import { DRESSINGS, PIECES, dress, dressAt, place, run, type Dressing, type Hand, type Piece } from './palette';
 import { around, motifs, type Motif } from './motifs';
-import { selectCell, selectMotif, type Selection } from './select';
+import { selectCell, selectMotif, selectStructure, type Selection } from './select';
 import { DIRS } from './model';
 
 const qs = new URLSearchParams(location.search);
@@ -30,6 +30,7 @@ const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
 R.print = qs.has('print');
 R.shadows = !qs.has('noshadow');
+R.msaa = !qs.has('nomsaa');
 
 // ─── what's built ───
 const KEY = 'labyrinth.v3';
@@ -43,7 +44,10 @@ const keep = () => { if (fixed) return; try { localStorage.setItem(KEY, world.en
 let meshVersion = -1;
 /** `?plain`: without the rules' own dressing (character.ts), only the hand's */
 const plain = qs.has('plain');
-function remesh() { R.upload(buildMesh(world, plain)); meshVersion = world.version; }
+/** the mesh, as the world is now and with what's taken up marked on it (worked out again when either changes) */
+let meshSel = '';
+const selKeys = () => (sel ? new Set(sel.s.cells.map((c) => key(...c))) : new Set<number>());
+function remesh() { const ks = selKeys(); R.upload(buildMesh(world, plain, ks)); meshVersion = world.version; meshSel = [...ks].join(','); }
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
@@ -153,17 +157,19 @@ type Gesture = {
   /** a stroke: the world as it was before it (what it's read against), the height it started from, the columns crossed
    * (each fixed once passed), where it's going (and what might be next, and for how many moves), what it last laid */
   before?: World; h0?: number; cells: Array<[number, number]>; target: Pick | null; cand: string; candPick: Pick | null; count: number; laid: string; said: string; born: number;
+  /** what the stroke builds now (or why it can't), for the guides */
+  op?: Op | null;
 };
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
-let pinch0 = 0, zoom0 = 1, mid0 = 0;
+let pinch0 = 0, zoom0 = 1, mid0 = 0, midY0 = 0;
 const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', wall: 'a wall stands on the stone, or on stone, or runs out from a side', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the stone itself', take: 'nothing of yours there to take' };
 const bar = document.getElementById('hands')!, sheet = document.getElementById('sheet')!, pieceB = bar.querySelector('[data-brush="piece"]') as HTMLElement;
 function showBrush() {
   for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) { const on = b.dataset.brush === brush; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
-  // (the piece brush shows what it holds)
+  // (the piece brush is always 'piece'; it shows what it holds as its picture)
   const src = sheet.querySelector(`[data-held="${held}"]`) as HTMLElement | null;
-  if (src) { pieceB.querySelector('svg')!.outerHTML = src.querySelector('svg')!.outerHTML; pieceB.querySelector('i')!.textContent = src.querySelector('i')!.textContent; }
+  if (src) { pieceB.querySelector('svg')!.outerHTML = src.querySelector('svg')!.outerHTML; pieceB.setAttribute('aria-label', `piece: ${held} (hold for all the pieces and dressing)`); pieceB.dataset.held = held; }
   for (const b of Array.from(sheet.querySelectorAll('button')) as HTMLElement[]) b.classList.toggle('on', b.dataset.held === held);
 }
 const openSheet = (on: boolean) => { sheet.classList.toggle('on', on); pieceB.setAttribute('aria-expanded', String(on)); };
@@ -205,52 +211,88 @@ const motifsNow = () => { if (found.v !== world.version) found = { v: world.vers
 let sel: { cell: Cell; whole: Motif[]; idx: number; s: Selection; switched: Op | null } | null = null;
 const card = document.getElementById('card')!;
 const cellOf = (p: Pick): Cell => (p.face === 'ground' ? [0, p.hit[1], p.hit[2]] : p.hit);
+/** the ways a cell can be taken up, smallest first: the piece itself (if it's one), each motif it's part of, and all
+ * that's joined to it (−1 the piece, then the motifs, then the structure) */
+function scopeAt(c: Cell, whole: Motif[], idx: number): Selection | null {
+  if (idx < 0) return selectCell(world, c, looking(), now());
+  if (idx < whole.length) return selectMotif(world, whole[idx], now());
+  return selectStructure(world, c);
+}
 function selectAt(p: Pick) {
   const c = cellOf(p), same = sel && sel.cell.every((v, q) => v === c[q]);
   if (same && sel) {
-    // (again: the whole it's part of, then the whole that's part of, then back to the piece)
-    const idx = sel.idx + 1 < sel.whole.length ? sel.idx + 1 : -1;
-    const s = idx < 0 ? selectCell(world, c, looking(), now()) : selectMotif(world, sel.whole[idx], now());
-    if (s) { sel = { ...sel, idx, s, switched: null }; showSel(); return; }
+    // (again: the next scope out, round to the piece)
+    for (let n = 1; n <= sel.whole.length + 2; n++) {
+      const idx = ((sel.idx + 1 + n) % (sel.whole.length + 2)) - 1, s = scopeAt(c, sel.whole, idx);
+      if (s) { sel = { ...sel, idx, s, switched: null }; showSel(); return; }
+    }
   }
-  const whole = around(motifsNow(), c), piece = p.face === 'ground' ? null : selectCell(world, c, looking(), now());
-  const s = piece ?? (whole[0] ? selectMotif(world, whole[0], now()) : null);
-  if (!s) { unselect(); say('nothing there to take up'); return; }
-  sel = { cell: c, whole, idx: piece ? -1 : 0, s, switched: null };
-  showSel();
+  const whole = around(motifsNow(), c);
+  for (let idx = p.face === 'ground' ? 0 : -1; idx <= whole.length; idx++) {
+    const s = scopeAt(c, whole, idx);
+    if (s) { sel = { cell: c, whole, idx, s, switched: null }; showSel(); return; }
+  }
+  unselect(); say('nothing there to take up');
 }
+function scopeTo(idx: number) { if (!sel) return; const s = scopeAt(sel.cell, sel.whole, idx); if (s) { sel = { ...sel, idx, s, switched: null }; showSel(); } }
 function unselect() { sel = null; showSel(); }
+/** a small drawing of each reading, so they can be told apart at a glance */
+const READING_ICONS: Array<[RegExp, string]> = [
+  [/lintel/, '<path d="M3 7h18M5 7v13M19 7v13"/>'],
+  [/two bays/, '<path d="M3 20V6h18v14"/><path d="M5 20v-6a3 3 0 016 0v6M13 20v-6a3 3 0 016 0v6"/>'],
+  [/solid/, '<rect x="4" y="6" width="16" height="14" fill="currentColor" opacity=".35"/><rect x="4" y="6" width="16" height="14"/>'],
+  [/arcaded/, '<path d="M3 20V7h18v13"/><path d="M5 20v-5a2 2 0 014 0v5M10 20v-5a2 2 0 014 0v5M15 20v-5a2 2 0 014 0v5"/>'],
+  [/thin wall/, '<path d="M10 4h4v16h-4z"/>'],
+  [/arch/, '<path d="M3 20V6h18v14"/><path d="M7 20v-7a5 5 0 0110 0v7"/>'],
+  [/pier/, '<path d="M9 21h6M10 21V6M14 21V6M8 6h8"/>'],
+  [/block|wall$/, '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>'],
+  [/climbing|stair/, '<path d="M3 21h4v-4h4v-4h4V9h4V5h2"/>'],
+];
+const icon = (label: string) => `<svg viewBox="0 0 24 24">${READING_ICONS.find(([r]) => r.test(label))?.[1] ?? '<circle cx="12" cy="12" r="3"/>'}</svg>`;
 function showSel() {
   document.body.classList.toggle('selecting', !!sel);
   card.classList.toggle('on', !!sel);
   if (!sel) return;
-  const { s } = sel, next = s.readings[(s.at + 1) % s.readings.length];
-  const more = sel.idx + 1 < sel.whole.length ? sel.whole[sel.idx + 1].label : '';
+  const { s } = sel;
   (card.querySelector('#what') as HTMLElement).textContent = s.title;
-  (card.querySelector('#reading') as HTMLElement).textContent = s.readings.length > 1 ? `read as ${s.readings[s.at].label}` : '';
-  const sw = card.querySelector('#switch') as HTMLButtonElement, wh = card.querySelector('#whole') as HTMLButtonElement, tk = card.querySelector('#takeaway') as HTMLButtonElement, dr = card.querySelector('#dressit') as HTMLButtonElement;
-  sw.hidden = s.readings.length < 2; sw.textContent = `→ ${next.label}`;
-  wh.hidden = !more; wh.textContent = `the whole: ${more}`;
-  tk.hidden = !s.remove;
-  dr.hidden = !s.stone.length; dr.textContent = `dress: ${lastDress}`;
+  // (its scope: the piece, each whole it's part of, all that's joined to it)
+  const scopes = card.querySelector('#scope') as HTMLElement;
+  const opts: Array<[number, string]> = [];
+  if (selectCell(world, sel.cell, looking(), now())) opts.push([-1, 'piece']);
+  sel.whole.forEach((m, n) => opts.push([n, m.kind]));
+  opts.push([sel.whole.length, 'structure']);
+  scopes.innerHTML = opts.map(([n, l]) => `<button data-scope="${n}" class="${n === sel!.idx ? 'on' : ''}">${l}</button>`).join('');
+  for (const b of Array.from(scopes.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => scopeTo(Number(b.dataset.scope)));
+  // (every reading at once, the one it is now marked; a touch reads it that way)
+  const rd = card.querySelector('#readings') as HTMLElement;
+  rd.hidden = s.readings.length < 2;
+  rd.innerHTML = s.readings.map((r, n) => `<button data-reading="${n}" class="${n === s.at ? 'on' : ''}" aria-pressed="${n === s.at}">${icon(r.label)}<i>${r.label}</i></button>`).join('');
+  for (const b of Array.from(rd.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => switchTo(Number(b.dataset.reading)));
+  // (dressing it, whole, straight from here)
+  const dr = card.querySelector('#dressrow') as HTMLElement;
+  dr.hidden = !s.stone.length;
+  if (!dr.childElementCount) {
+    dr.innerHTML = DRESSINGS.map((d) => `<button data-dress="${d}" aria-label="dress it: ${d}">${(sheet.querySelector(`[data-held="${d}"] svg`) as SVGElement | null)?.outerHTML ?? ''}<i>${d}</i></button>`).join('');
+    for (const b of Array.from(dr.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => dressSel(b.dataset.dress as Dressing));
+  }
+  (card.querySelector('#takeaway') as HTMLElement).hidden = !s.remove;
 }
-/** read what's taken up the next way: replacing the last switch if that's still the last thing done */
-function switchReading() {
-  if (!sel) return;
-  const { s } = sel, at = (s.at + 1) % s.readings.length, op = s.readings[at].op;
+/** read what's taken up a given way: replacing the last switch if that's still the last thing done */
+function switchTo(at: number) {
+  if (!sel || at === sel.s.at) return;
+  const { s } = sel, op = s.readings[at].op;
   const again = !!sel.switched && world.ops[world.ops.length - 1] === sel.switched;
   if (again) { if (op) world.replaceLast(op, now()); else world.undo(now()); }
   else if (op) world.apply(op, now());
-  sel.switched = again && !op ? null : op;
+  else return;
+  sel.switched = op;
   s.at = at;
   kept(); showSel();
 }
+const switchReading = () => { if (sel) switchTo((sel.s.at + 1) % sel.s.readings.length); };
 function takeAway() { if (!sel?.s.remove) return; world.apply(sel.s.remove, now()); kept(); unselect(); }
-function dressSel() { if (!sel) return; const op = dress(world, lastDress, sel.s.stone); if (op) { world.apply(op, now()); kept(); } }
-card.querySelector('#switch')!.addEventListener('click', switchReading);
-card.querySelector('#whole')!.addEventListener('click', () => { if (sel) selectAt({ face: sel.cell[0] < 0 ? 'ground' : 'top', hit: sel.cell, to: sel.cell }); });
+function dressSel(kind: Dressing = lastDress) { if (!sel) return; lastDress = kind; const op = dress(world, kind, sel.s.stone); if (op) { world.apply(op, now()); kept(); } }
 card.querySelector('#takeaway')!.addEventListener('click', takeAway);
-card.querySelector('#dressit')!.addEventListener('click', dressSel);
 card.querySelector('#close')!.addEventListener('click', unselect);
 /** what a touch is on, said plainly (the hand brush's tap) */
 function describe(p: Pick): string {
@@ -272,7 +314,7 @@ function lay(built: Op | null) {
   if (sig === g.laid) return;
   if (world.ops.length > g.base) { if (built) world.replaceLast(built, now()); else { world.ops.length = g.base; world.rebuild(now()); } }
   else if (built) world.apply(built, now());
-  g.laid = sig;
+  g.laid = sig; g.op = built;
 }
 /** a stroke under the finger (auto's trace, or a run of pieces): its columns, and what it builds, read again */
 function traceStep(cx: number, cy: number, final: boolean) {
@@ -289,7 +331,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (c && (c[0] !== last[0] || c[1] !== last[1])) g.cells.push(c);
   if (g.mode === 'run') {
     const op = run(before, held as Piece, g.start, g.cells, looking(), g.born);
-    lay(op);
+    lay(op); g.op = op;
     if (final && op) { settle([...(op.add ?? []), ...(op.arches ?? [])].map((q) => [q[0], q[1], q[2]])); kept(); }
     return;
   }
@@ -309,6 +351,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
   g.said = refused;
   const built = op && !('refused' in op) ? op : null;
   lay(built);
+  if (!built) g.op = null;
   if (final && built) {
     const r = world.reached.get(world.ops[world.ops.length - 1]);
     settle(r?.cells ?? (built.add ?? []).map((q) => [q[0], q[1], q[2]])); kept();
@@ -341,7 +384,7 @@ canvas.addEventListener('pointerdown', (e) => {
     // (a second finger: whatever the first was doing is let go; the two turn it and pinch)
     if (g && g.mode !== 'turn' && g.mode !== 'look' && world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); }
     g = null;
-    const [p, q] = [...fingers.values()]; pinch0 = Math.hypot(p.x - q.x, p.y - q.y); zoom0 = zoomK; mid0 = (p.x + q.x) / 2;
+    const [p, q] = [...fingers.values()]; pinch0 = Math.hypot(p.x - q.x, p.y - q.y); zoom0 = zoomK; mid0 = (p.x + q.x) / 2; midY0 = (p.y + q.y) / 2;
     return;
   }
   const start = pick(e.clientX, e.clientY);
@@ -352,9 +395,11 @@ canvas.addEventListener('pointermove', (e) => {
   if (!f) return;
   const dx = e.clientX - f.x; f.x = e.clientX; f.y = e.clientY;
   if (fingers.size === 2) {
-    const [p, q] = [...fingers.values()], d = Math.hypot(p.x - q.x, p.y - q.y), mid = (p.x + q.x) / 2;
-    if (pinch0 > 0) zoomK = Math.max(0.25, Math.min(1.3, zoom0 * (pinch0 / d)));
+    // (two fingers: across turns it, up and down tilts it, a pinch comes closer to where the fingers are)
+    const [p, q] = [...fingers.values()], d = Math.hypot(p.x - q.x, p.y - q.y), mid = (p.x + q.x) / 2, midY = (p.y + q.y) / 2;
+    if (pinch0 > 0) zoomAt(mid, midY, Math.max(0.25, Math.min(1.3, zoom0 * (pinch0 / d))));
     view.az -= (mid - mid0) * 0.008; mid0 = mid;
+    view.el = Math.max(0.3, Math.min(1.2, view.el + (midY - midY0) * 0.004)); midY0 = midY;
     return;
   }
   if (!g || g.id !== e.pointerId) return;
@@ -372,7 +417,8 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const up = (e: PointerEvent) => {
   fingers.delete(e.pointerId);
-  if (fingers.size === 0) azGoal = corner(Math.round((view.az - Math.PI / 4) / (Math.PI / 2)));
+  // (let go near a corner, it settles on it; anywhere else, it stays where it was left)
+  if (fingers.size === 0) { const c = corner(Math.round((view.az - Math.PI / 4) / (Math.PI / 2))); azGoal = Math.abs(c - view.az) < 0.22 ? c : null; }
   if (!g || g.id !== e.pointerId) return;
   const cancelled = e.type !== 'pointerup', m = g.mode, start = g.start;
   if (cancelled && m !== 'turn' && m !== 'look') { if (world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); } g = null; return; }
@@ -395,7 +441,7 @@ const up = (e: PointerEvent) => {
   g = null;
 };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomK = Math.max(0.25, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001))); }, { passive: false });
+canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.max(0.25, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001)))); }, { passive: false });
 { const h = qs.get('hand') ?? qs.get('brush'); if (h) setBrush(h); }
 // (for looking at them: `?sheet` opens the piece brush's sheet; `?select=k.i.j` takes up what's there, `&whole` the whole)
 if (qs.has('sheet')) { setBrush('piece'); openSheet(true); }
@@ -413,48 +459,124 @@ document.getElementById('again')!.addEventListener('click', () => { if (!world.o
 showPrint(); showBrush(); hint();
 if (preview) document.body.classList.add('preview');
 
+// ─── what the hand is asking for, while it's asking ───
+const sayEl = document.getElementById('say')!;
+const INK = 'rgba(43,36,32,', WARM = 'rgba(176,92,30,';
+/** a point of the room (cell coordinates: i, j, at height y) on the screen */
+const at3 = (i: number, j: number, y: number) => screenOf(i - CENTER, y, j - CENTER);
+/**
+ * The stroke's guides: the stroke itself, faint; where it started (a dot on the surface it started from); the route
+ * it's asking for, along the heights it will walk (the intent, apart from the stone that holds it up); the top it's
+ * going to (outlined; dashed while it's only being considered); and, if it stops short, where.
+ */
+function guides() {
+  if (!g || !g.start || !(g.mode === 'trace' || g.mode === 'run' || g.mode === 'paint' || g.mode === 'carve')) return;
+  if (g.pts.length > 1) {
+    g2.strokeStyle = INK + '.28)'; g2.lineWidth = 1.5; g2.setLineDash([2, 5]); g2.lineCap = 'round';
+    g2.beginPath(); g2.moveTo(g.pts[0][0], g.pts[0][1]); for (const [x, y] of g.pts) g2.lineTo(x, y); g2.stroke(); g2.setLineDash([]);
+  }
+  // (where it started)
+  const st = g.start, [sk, si, sj] = st.hit;
+  const sp = st.face === 'ground' ? at3(si + 0.5, sj + 0.5, 0) : st.face === 'top' ? at3(si + 0.5, sj + 0.5, sk + 1) : at3(si + 0.5 + (st.to[1] - si) * 0.5, sj + 0.5 + (st.to[2] - sj) * 0.5, sk + 0.5);
+  g2.fillStyle = WARM + '.9)'; g2.beginPath(); g2.arc(sp[0], sp[1], 3.5, 0, Math.PI * 2); g2.fill();
+  g2.strokeStyle = WARM + '.5)'; g2.lineWidth = 1.2; g2.beginPath(); g2.arc(sp[0], sp[1], 8, 0, Math.PI * 2); g2.stroke();
+  const op = g.op, c = op?.connect, r = op && c ? world.reached.get(world.ops[world.ops.length - 1]) : undefined;
+  if (c) {
+    // (the route: each column at the height it's walked)
+    const walk = new Map<string, number>();
+    for (const [k, i, j] of r?.cells ?? []) { const h = world.stair(k, i, j) >= 0 ? k + 0.5 : k + 1; walk.set(`${i}.${j}`, Math.max(walk.get(`${i}.${j}`) ?? -1, h)); }
+    const cols = c.to ? [...c.path, [c.to[1], c.to[2]] as [number, number]] : c.path;
+    g2.strokeStyle = WARM + '.75)'; g2.lineWidth = 2; g2.lineJoin = 'round';
+    g2.beginPath();
+    cols.forEach(([i, j], q) => { const h = q === 0 ? c.from[0] : q === cols.length - 1 && c.to ? c.to[0] : walk.get(`${i}.${j}`) ?? c.from[0]; const p = at3(i + 0.5, j + 0.5, h + 0.02); if (q) g2.lineTo(p[0], p[1]); else g2.moveTo(p[0], p[1]); });
+    g2.stroke();
+    // (where it stopped short, if it did)
+    if (r && !r.reached && r.stopped >= 0 && c.path[r.stopped + 1]) {
+      const [i, j] = c.path[r.stopped + 1], h = walk.get(`${c.path[r.stopped][0]}.${c.path[r.stopped][1]}`) ?? c.from[0], p = at3(i + 0.5, j + 0.5, h);
+      g2.strokeStyle = WARM + '.95)'; g2.lineWidth = 2; g2.beginPath(); g2.moveTo(p[0] - 6, p[1] - 6); g2.lineTo(p[0] + 6, p[1] + 6); g2.moveTo(p[0] + 6, p[1] - 6); g2.lineTo(p[0] - 6, p[1] + 6); g2.stroke();
+    }
+  }
+  // (the top it's going to; dashed while it's only being considered)
+  const top = (p: Pick, dashed: boolean) => {
+    const [, i, j] = p.hit, h = surface(g!.before ?? world, p), q = [at3(i, j, h), at3(i + 1, j, h), at3(i + 1, j + 1, h), at3(i, j + 1, h)];
+    g2.strokeStyle = WARM + (dashed ? '.55)' : '.95)'); g2.lineWidth = dashed ? 1.4 : 2; g2.setLineDash(dashed ? [4, 4] : []);
+    g2.beginPath(); q.forEach((v, n) => (n ? g2.lineTo(v[0], v[1]) : g2.moveTo(v[0], v[1]))); g2.closePath(); g2.stroke(); g2.setLineDash([]);
+  };
+  if (g.mode === 'trace') {
+    if (g.target) top(g.target, false);
+    if (g.cand && g.candPick && g.cand !== goal(g.target) && g.count > 0) top(g.candPick, true);
+  }
+}
+/** what it is, said plainly by the finger: a wall, a bridge, climbing two levels, or why it can't be */
+function label() {
+  const f = g && fingers.get(g.id);
+  let text = '', warn = false;
+  if (g && f && (g.mode === 'trace' || g.mode === 'run' || g.mode === 'paint' || g.mode === 'carve')) {
+    if (g.said) { text = g.said; warn = true; }
+    else if (g.mode === 'carve') text = g.cut.length ? `carving through ${g.cut.length}` : 'carving';
+    else text = g.op?.note ?? (g.mode === 'run' ? `${held}` : '');
+    const rr = g.op?.connect && world.reached.get(world.ops[world.ops.length - 1]);
+    if (rr && !rr.reached && rr.stopped > 0) text += ' · joining what it meets';
+  }
+  sayEl.textContent = text;
+  sayEl.classList.toggle('on', !!text); sayEl.classList.toggle('warn', warn);
+  if (text && f) { const wd = sayEl.offsetWidth; sayEl.style.transform = `translate(${Math.max(8, Math.min(innerWidth - wd - 8, f.x - wd / 2))}px, ${Math.max(70, f.y - 74)}px)`; }
+}
+
+// ─── where the eye is ───
+/** whether the view frames what's built (and goes on doing so till it does), and the world it last checked */
+let follow = true, edgeChecked = -1;
+/** where a point on the screen is on the level plane through what the eye's looking at */
+function groundAt(cx: number, cy: number): [number, number] | null {
+  const { a, d } = ray(cx, cy), y = view.target[1];
+  if (Math.abs(d[1]) < 1e-6) return null;
+  const t = (y - a[1]) / d[1];
+  return [a[0] + d[0] * t, a[2] + d[2] * t];
+}
+/** come closer (or stand back), keeping the point under the fingers (or the pointer) where it is */
+function zoomAt(cx: number, cy: number, k: number) {
+  const A = groundAt(cx, cy);
+  zoomK = k; view.zoom = zoomFit * zoomK;
+  const B = groundAt(cx, cy);
+  if (A && B) { view.target[0] += A[0] - B[0]; view.target[2] += A[1] - B[1]; }
+  follow = false;
+}
+/** whether what's built has reached the edge of the screen (or past it): the slab's corners, and as high as it goes */
+function offScreen() {
+  const e = world.extent(), top = world.top(), r = canvas.getBoundingClientRect();
+  for (const i of [e.i0, e.i1 + 1]) for (const j of [e.j0, e.j1 + 1]) for (const y of [0, top]) {
+    const [x, z] = screenOf(i - CENTER, y, j - CENTER);
+    if (x < r.left + 12 || x > r.right - 12 || z < r.top + 64 || z > r.bottom - 84) return true;
+  }
+  return false;
+}
+document.getElementById('frame')!.addEventListener('click', () => { zoomK = Number(qs.get('zoom') ?? 0.64); follow = true; });
+
 // ─── each frame ───
 let last = performance.now(), zoomFit = framing().fit;
 function frame() {
   const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000); last = t;
-  if (world.version !== meshVersion) remesh();
+  if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) remesh();
   if (preview && !still) view.az += dt * 0.12;
   else if (azGoal !== null) { const k = 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
-  // (it frames what's built, but never while a hand's on it: what's under the finger stays under it)
+  // (it frames what's built when asked to (at the start, the frame button, or when what's built reaches the edge of the
+  // screen), and then stays put: the work doesn't shrink away from the hand as it grows, and never moves under a finger)
   const fr = framing();
-  if (!g || g.mode === 'turn') {
-    const top = world.top(), q = 1 - Math.exp(-dt * 3);
+  if (!g && world.version !== edgeChecked) { edgeChecked = world.version; if (offScreen()) follow = true; }
+  if (follow && (!g || g.mode === 'turn')) {
+    const top = world.top(), q = 1 - Math.exp(-dt * 3), ty = top * 0.35;
     view.target[0] += (fr.cx - view.target[0]) * q; view.target[2] += (fr.cz - view.target[2]) * q;
-    view.target[1] += (top * 0.35 - view.target[1]) * q;
+    view.target[1] += (ty - view.target[1]) * q;
     zoomFit += (fr.fit - zoomFit) * q;
+    if (Math.abs(fr.cx - view.target[0]) + Math.abs(fr.cz - view.target[2]) + Math.abs(ty - view.target[1]) + Math.abs(fr.fit - zoomFit) < 0.01) follow = preview;
   }
   R.area = [fr.cx, fr.cz, fr.half + 2]; R.top = world.top();
   view.zoom = zoomFit * zoomK;
   R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
   g2.clearRect(0, 0, guide.clientWidth, guide.clientHeight);
-  if (g && g.mode === 'trace' && g.pts.length > 1) {
-    g2.strokeStyle = 'rgba(43,36,32,.35)'; g2.lineWidth = 1.5; g2.setLineDash([2, 5]); g2.lineCap = 'round';
-    g2.beginPath(); g2.moveTo(g.pts[0][0], g.pts[0][1]); for (const [x, y] of g.pts) g2.lineTo(x, y); g2.stroke(); g2.setLineDash([]);
-  }
-  // (what's taken up: the edges of its cells, in a warm ink)
-  if (sel) {
-    g2.strokeStyle = 'rgba(176,92,30,.85)'; g2.lineWidth = 1.4;
-    const seen = new Set<string>();
-    g2.beginPath();
-    for (const [k, i, j] of sel.s.cells) {
-      const x = i - CENTER, z = j - CENTER;
-      const P = (a: number, b: number, c: number) => screenOf(x + a, k + b, z + c);
-      for (const [p, q] of [[[0, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 1]], [[1, 0, 1], [0, 0, 1]], [[0, 0, 1], [0, 0, 0]], [[0, 1, 0], [1, 1, 0]], [[1, 1, 0], [1, 1, 1]], [[1, 1, 1], [0, 1, 1]], [[0, 1, 1], [0, 1, 0]], [[0, 0, 0], [0, 1, 0]], [[1, 0, 0], [1, 1, 0]], [[1, 0, 1], [1, 1, 1]], [[0, 0, 1], [0, 1, 1]]] as Array<[number[], number[]]>) {
-        const id = [x + p[0], k + p[1], z + p[2], x + q[0], k + q[1], z + q[2]].join(',');
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const A = P(p[0], p[1], p[2]), B = P(q[0], q[1], q[2]);
-        g2.moveTo(A[0], A[1]); g2.lineTo(B[0], B[1]);
-      }
-    }
-    g2.stroke();
-  }
+  guides();
+  label();
   for (let q = dust.length - 1; q >= 0; q--) {
     const p = dust[q];
     p.life += dt;

@@ -58,7 +58,7 @@ await withWood(async (lab) => {
   // (a drag from the background turns it)
   const az0 = await p.evaluate(() => window.__labyrinth.view.az);
   await p.mouse.move(40, 140); await p.mouse.down();
-  for (let k = 1; k <= 10; k++) { await p.mouse.move(40 + 18 * k, 140); await p.waitForTimeout(30); }
+  for (let k = 1; k <= 10; k++) { await p.mouse.move(40 + 19.6 * k, 140); await p.waitForTimeout(30); }
   await p.mouse.up(); await p.waitForTimeout(600);
   await p.waitForFunction(() => { const a = window.__labyrinth.view.az, q = (a - Math.PI / 4) / (Math.PI / 2); return Math.abs(q - Math.round(q)) < 1e-3; }, null, { timeout: 8000 }).catch(() => {});
   const az = await p.evaluate(() => window.__labyrinth.view.az), q = (az - Math.PI / 4) / (Math.PI / 2);
@@ -133,16 +133,23 @@ await withWood(async (lab) => {
     const s2 = await L((L) => L.selection());
     c.ok('and again, the whole it\'s part of', s2 && /arcade/.test(s2.title) && s2.cells > s1.cells, s2);
     const n0 = await L((L) => L.world.ops.length);
-    await q.click('#switch');
+    c.ok('the card shows every reading at once, the current one marked', await q.locator('#readings button').count() === s2.readings.length && await q.locator('#readings button.on').count() === 1);
+    await q.click('#readings button:nth-child(2)');
     c.ok('switched: the arcade read as lintels', await L((L) => L.world.spans.filter((sp) => sp.k === 2 && sp.i === 10).every((sp) => sp.flat)) && await L((L) => L.world.ops.length) === n0 + 1);
-    for (let k = 1; k < s2.readings.length; k++) await q.click('#switch');
-    c.ok('and round its readings back to arches, leaving nothing behind', await L((L) => L.world.spans.filter((sp) => sp.k === 2 && sp.i === 10).every((sp) => !sp.flat)) && await L((L) => L.world.ops.length) === n0, await L((L) => L.selection()));
+    await q.click('#readings button:nth-child(3)');
+    await q.click('#readings button:nth-child(1)');
+    c.ok('and on to another, then back to arches, leaving nothing behind', await L((L) => L.world.spans.filter((sp) => sp.k === 2 && sp.i === 10).every((sp) => !sp.flat)) && await L((L) => L.world.ops.length) === n0, await L((L) => L.selection()));
+    await q.click('#scope button:last-child');
+    const s3 = await L((L) => L.selection());
+    c.ok('scope: the whole structure it\'s joined to', /structure/.test(s3?.title) && s3.cells > s2.cells, s3);
+    await q.click('#dressrow [data-dress="marble"]');
+    c.ok('dressed whole, straight from the card', await L((L) => L.world.dressed(2, 10, 7)?.mat === 2));
     await q.click('#close');
     // (the piece brush: touched again, the sheet; brick from it, a stone dressed)
     await q.click('[data-brush="piece"]'); await q.click('[data-brush="piece"]');
     c.ok('the piece brush, touched again, opens its sheet', await q.isVisible('#sheet.on'));
     await q.click('#sheet [data-held="brick"]');
-    c.ok('a dressing from the sheet is held, and shown on the brush', await L((L) => L.held) === 'brick' && /brick/.test(await q.textContent('[data-brush="piece"]')));
+    c.ok('a dressing from the sheet is held, and shown on the brush', await L((L) => L.held) === 'brick' && /brick/.test(await q.getAttribute('[data-brush="piece"]', 'aria-label')) && /piece/.test(await q.textContent('[data-brush="piece"]')));
     await tap(9, 4, 3);
     c.ok('a tap dresses the stone touched', await L((L) => L.world.dressed(2, 9, 4)?.mat === 1));
     // (a run: blocks traced across the stone, a wall)

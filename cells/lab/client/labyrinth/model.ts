@@ -55,6 +55,8 @@ export interface Op {
   connect?: Connect;
   /** when it was made (a connection's stone is laid behind the finger from then) */
   born?: number;
+  /** what it is, said plainly, while it's under the finger (not kept) */
+  note?: string;
   /** what the rules made, read another way by hand (`RULE`), at a cell: a flat lintel for an arch, a pier forced under
    * a run (splitting its arch into bays); none puts it back to the rules' own */
   rule?: Array<[number, number, number, number]>;

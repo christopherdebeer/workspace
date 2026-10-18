@@ -12,6 +12,7 @@
  * - **terraces**: pots at a corner or two; a lantern sometimes;
  * - **courts**: ivy, now and then, up a few of the walls round them (a cell or two high); moss at their foot;
  * - **anything high with a drop at its edge**: a parapet round it, taken a top at a time;
+ * - **the edge of water**: moss on the stone beside a pool;
  * - **the stone at the foot of things**: a little moss, here and there.
  *
  * Dressing is kept sparing: a few things dressed well read better than everything dressed.
@@ -58,7 +59,7 @@ function dressUp(w: World): Map<number, Dress> {
       if (mat >= 0) for (const c of m.cells) if (stone(c)) put(c, { mat });
       const tops = m.cells.filter(roomy).filter((c) => c[0] === Math.max(...m.cells.map((q) => q[0])));
       if (tops.length && chance(0.65, n, 2)) put(tops[hash(w.seed, n, 3) % tops.length], { prop: DRESS.lantern });
-      if (chance(0.4, n, 4)) for (const c of tops) put(c, { parapet: true });
+      if (chance(0.25, n, 4)) for (const c of tops) put(c, { parapet: true });
     } else if (m.kind === 'wall') {
       if (chance(0.25, n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
       if (chance(0.4, n, 2)) for (const c of m.cells) if (c[0] === 0 && stone(c)) put(c, { moss: true });
@@ -100,7 +101,12 @@ function dressUp(w: World): Map<number, Dress> {
       for (const [a, b] of DIRS) { const q = key(k, i + a, j + b); if (tops.has(q) && !seen.has(q)) { seen.add(q); st.push(q); } }
     }
     const drop = region.some(([, i, j]) => DIRS.some(([a, b]) => height(w, i + a, j + b) <= k - 1));
-    if (drop && region.length >= 2 && chance(0.6, id(region), 9)) for (const c of region) put(c, { parapet: true });
+    if (drop && region.length >= 3 && chance(0.35, id(region), 9)) for (const c of region) put(c, { parapet: true });
+  }
+  // (moss at the damp edges of water: the stone beside a pool)
+  for (let j = w.extent().j0; j <= w.extent().j1; j++) for (let i = w.extent().i0; i <= w.extent().i1; i++) {
+    if (!w.pool(i, j)) continue;
+    for (const [a, b] of DIRS) if (w.stone(0, i + a, j + b)) put([0, i + a, j + b], { moss: true });
   }
   // (a little moss at the foot of things)
   for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k === 0 && chance(0.06, i, j, 11)) put([0, i, j], { moss: true }); }

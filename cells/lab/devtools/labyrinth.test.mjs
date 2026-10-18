@@ -214,6 +214,25 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   const M = await load('../client/labyrinth/mesh.ts');
   ok('thin walls are drawn, and struck where they are, not between', M.buildMesh(w).count > 0 && M.inStone(w, 4 - 6 + 0.5, 0.5, 3 - 6 + 0.5) && !M.inStone(w, 4 - 6 + 0.5, 0.5, 3 - 6 + 0.9));
 }
+// (a wall's kind is chosen once, where the stroke starts, and kept as it grows; its openings never move)
+{
+  let moved = 0, kinds = new Set();
+  for (let seed = 1; seed <= 40; seed++) {
+    const w = new World(seed), start = { face: 'ground', hit: [-1, 2, 2 + (seed % 5)], to: [0, 2, 2 + (seed % 5)] };
+    let prev = null, note = null;
+    for (let n = 2; n <= 14; n++) {
+      const cells = Array.from({ length: n }, (_, q) => [2 + q, start.hit[2]]), op = G.trace(w, start, cells, null, () => 0);
+      const open = new Set((op.arches ?? []).map((c) => c[1]));
+      if (n >= 3 && note && op.note !== note) moved++;
+      if (n >= 3) note = op.note;
+      if (prev) for (const i of prev) if (!open.has(i)) moved++;
+      prev = open;
+    }
+    kinds.add(note);
+  }
+  ok('a wall keeps its kind as the stroke grows, and its openings stay where they are', moved === 0, moved);
+  ok('and walls come in all three kinds', kinds.size === 3, [...kinds]);
+}
 // (a gate in a wall is walked through)
 {
   const w = new World(3);

@@ -39,6 +39,12 @@ export function tap(w: World, p: Pick, now: number): Op | null {
   return { add: [[k, i, j, now]], why: p.face === 'side' ? 'extend' : k === 0 ? 'raise' : 'course' };
 }
 
+/** what kind of wall a stroke from here makes: plain, gated or arcaded (the rules' choice, seeded by where it starts) */
+export function wallKind(w: World, i: number, j: number): 'plain' | 'gated' | 'arcaded' {
+  const r = hash(w.seed, i, j, 31) % 100;
+  return r < 25 ? 'arcaded' : r < 60 ? 'gated' : 'plain';
+}
+
 /** cells, in order, 4-connected: a diagonal step taken as two, the way the stroke leaned */
 export function connect(path: Array<[number, number]>): Array<[number, number]> {
   const out: Array<[number, number]> = [];
@@ -81,34 +87,32 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
   }
   if (cells.length < 2) return null;
   if (h0 === 0 && (!to || to[0] === 0)) {
-    // (a wall along it: the hand's own stone. What kind of wall is the rules' choice, seeded by where it runs, so the
-    // same stroke always makes the same wall: plain; gated, a way through it near its middle (and every six cells or so,
-    // if it's long); or arcaded, a way through every other cell. A long wall is never left plain)
+    // (a wall along it: the hand's own stone. What kind of wall is the rules' choice, seeded by where it starts, so it's
+    // chosen once and kept as the stroke goes on: plain; gated, a way through it two cells in and every six after; or
+    // arcaded, a way through every other cell. Its openings count from the start, so going on never moves them)
     const free = cells.filter(([i, j]) => !w.stone(0, i, j) && w.stair(0, i, j) < 0 && !w.tree(0, i, j));
     if (!free.length) return null;
-    const [a0, a1] = cells[0], [b0, b1] = cells[cells.length - 1], r = hash(w.seed, a0, a1, b0, b1, cells.length) % 100;
-    const kind = cells.length >= 5 && r < 30 ? 'arcaded' : (cells.length >= 3 && r < 60) || cells.length >= 8 ? 'gated' : 'plain';
+    const kind = wallKind(w, cells[0][0], cells[0][1]);
     const across = (q: number) => { const n = cells[Math.min(cells.length - 1, q + 1)], p = cells[Math.max(0, q - 1)]; return n[0] !== p[0] ? 1 : 0; };
     const straight = (q: number) => q > 0 && q < cells.length - 1 && cells[q - 1][0] - cells[q][0] === cells[q][0] - cells[q + 1][0] && cells[q - 1][1] - cells[q][1] === cells[q][1] - cells[q + 1][1];
     const gate = new Set<number>();
-    if (kind === 'gated') {
-      const n = Math.max(1, Math.round(cells.length / 6));
-      for (let g = 0; g < n; g++) { const at = Math.floor(((g + 0.5) * cells.length) / n); for (const q of [at, at - 1, at + 1, at - 2, at + 2]) if (straight(q)) { gate.add(q); break; } }
-    }
+    if (kind === 'gated') for (let q = 2; q < cells.length - 1; q += 6) if (straight(q)) gate.add(q);
     if (kind === 'arcaded') for (let q = 1; q < cells.length - 1; q += 2) if (straight(q)) gate.add(q);
     const add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [];
     cells.forEach(([i, j], q) => {
       if (!free.some((c) => c[0] === i && c[1] === j)) return;
       if (gate.has(q)) arches.push([0, i, j, across(q), born(i, j)]); else add.push([0, i, j, born(i, j)]);
     });
-    return { add, ...(arches.length ? { arches } : {}), why: 'wall' };
+    return { add, ...(arches.length ? { arches } : {}), why: 'wall', note: kind === 'plain' ? 'a wall' : `${kind === 'gated' ? 'a gated' : 'an arcaded'} wall` };
   }
   const path2 = to ? cells.slice(0, -1) : cells, climb = to ? Math.abs(to[0] - h0) : 0, room = straights(path2, to).length;
   if (climb > room) return { refused: `too steep: ${climb} level${climb > 1 ? 's' : ''} to climb, and room for ${room} step${room === 1 ? '' : 's'}; draw it longer, or straighter` };
   if (path2.length < 2 && !to) return null;
   // (a bridge four to seven long: one great arch, or an arcade, as the rules choose for where it runs)
   const great = !!to && to[0] === h0 && path2.length >= 5 && path2.length <= 8 && hash(w.seed, cells[0][0], cells[0][1], to[1], to[2]) % 100 < 50;
-  return { connect: { from: [h0, cells[0][0], cells[0][1]], to, path: path2 }, born: now, why: !to ? 'walkway' : to[0] === h0 ? 'bridge' : 'stairs', ...(great ? { bridge: true } : {}) };
+  const levels = to ? Math.abs(to[0] - h0) : 0;
+  const note = !to ? 'a walkway' : to[0] === h0 ? (great ? 'a bridge, on one great arch' : 'a bridge') : `${to[0] > h0 ? 'climbing' : 'going down'} ${levels} level${levels > 1 ? 's' : ''}`;
+  return { connect: { from: [h0, cells[0][0], cells[0][1]], to, path: path2 }, born: now, why: !to ? 'walkway' : to[0] === h0 ? 'bridge' : 'stairs', note, ...(great ? { bridge: true } : {}) };
 }
 
 /** what carving takes where it touches: the stone (or stair) struck, if it's the hand's (piers and arches are the rules') */

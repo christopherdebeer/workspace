@@ -75,6 +75,23 @@
   ]
  },
  {
+  "group": "A labyrinth",
+  "views": [
+   {
+    "name": "story-8",
+    "title": "8 · A labyrinth",
+    "caption": "a cloister with a gallery of arches on its walls; a gate framing the stair beyond; the stair climbing behind a wall, its head showing over it; a bridge from its landing over the passage below to the cloister; a tall narrow slot bridged high up",
+    "file": "v-story-8.jpg"
+   },
+   {
+    "name": "story-8-turned",
+    "title": "From the other side",
+    "caption": "the slot between the towers, the gallery, and the court inside",
+    "file": "v-story-8-turned.jpg"
+   }
+  ]
+ },
+ {
   "group": "Auto, with character",
   "views": [
    {

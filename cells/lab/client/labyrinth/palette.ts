@@ -96,15 +96,15 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
       out.push([h0, i, j, a, now + s * 0.05]);
     });
     if (!out.length) return null;
-    if (piece === 'wall') return { walls: out.map(([k, i, j, a, b]) => [k, i, j, 1 - a, b]), why: 'thin wall' };
-    return piece === 'block' ? { add: out.map(([k, i, j, , b]) => [k, i, j, b]), why: 'wall' } : { arches: out, why: 'arcade' };
+    if (piece === 'wall') return { walls: out.map(([k, i, j, a, b]) => [k, i, j, 1 - a, b]), why: 'thin wall', note: `a thin wall, ${out.length} long` };
+    return piece === 'block' ? { add: out.map(([k, i, j, , b]) => [k, i, j, b]), why: 'wall', note: `a wall of blocks, ${out.length} long` } : { arches: out, why: 'arcade', note: `an arcaded wall, ${out.length} long` };
   }
   if (piece === 'stair') {
     // (a flight: every straight cell a step, to wherever its last step leads)
     const last = cells[cells.length - 1], prev = cells[cells.length - 2], ahead: [number, number] = [2 * last[0] - prev[0], 2 * last[1] - prev[1]];
     const m = straights(cells, [0, ahead[0], ahead[1]]).length;
     if (!m || h0 + m >= CEIL) return null;
-    return { connect: { from: [h0, cells[0][0], cells[0][1]], to: [h0 + m, ahead[0], ahead[1]], path: cells }, born: now, why: 'flight' };
+    return { connect: { from: [h0, cells[0][0], cells[0][1]], to: [h0 + m, ahead[0], ahead[1]], path: cells }, born: now, why: 'flight', note: `a flight of ${m} step${m > 1 ? 's' : ''}` };
   }
   return place(w, piece, start, view, now);
 }
@@ -132,5 +132,5 @@ export function dress(w: World, kind: Dressing, cells: Cell[]): Op | null {
     if ((id === DRESS.lantern || id === DRESS.pot) && on && (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || !w.stone(k, i, j))) continue;
     out.push([k, i, j, id, on]);
   }
-  return out.length ? { dress: out, why: 'dress' } : null;
+  return out.length ? { dress: out, why: 'dress', note: `${on ? '' : 'no '}${kind}, ${out.length} stone${out.length > 1 ? 's' : ''}` } : null;
 }

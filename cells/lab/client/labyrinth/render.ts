@@ -37,16 +37,19 @@ float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f)
              mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
 float fbm(vec3 p) { return .5 * noise(p) + .25 * noise(p * 2.1) + .125 * noise(p * 4.3) + .125 * noise(p * 8.7); }
 // (travertine: cream, banded as it was laid down, pitted with its little pores, each block a shade of its own)
+// (how much fine detail at a frequency survives at this distance: none once a cycle is smaller than a pixel or so)
+float keep(float f) { return 1. - smoothstep(.25, .6, length(fwidth(vPos)) * f); }
 vec3 travertine(vec3 p, float tone) {
-  vec3 c = vec3(.86, .82, .74) * (.95 + .08 * tone);
-  float band = fbm(vec3(p.x * .7, p.y * 7., p.z * .7) + tone * 9.);
-  c *= 1. - .07 * smoothstep(.5, .75, band);
-  c = mix(c, vec3(.80, .70, .56), .25 * smoothstep(.62, .8, fbm(vec3(p.x * 1.6, p.y * 14., p.z * 1.6) + 3.)));
+  // (quiet over a large face: banded as it was laid down, a few pores, softer as it goes away)
+  vec3 c = vec3(.86, .82, .74) * (.96 + .06 * tone);
+  float band = fbm(vec3(p.x * .6, p.y * 6., p.z * .6) + tone * 9.);
+  c *= 1. - .05 * smoothstep(.5, .75, band);
+  c = mix(c, vec3(.80, .71, .58), .18 * smoothstep(.64, .8, fbm(vec3(p.x * 1.4, p.y * 12., p.z * 1.4) + 3.)));
   float pore = noise(vec3(p.x * 13., p.y * 30., p.z * 13.) + tone * 17.);
-  c *= 1. - .32 * smoothstep(.8, .9, pore);
+  c *= 1. - .2 * smoothstep(.84, .92, pore) * keep(30.);
   float pit = noise(p * 41. + tone * 5.);
-  c *= 1. - .22 * smoothstep(.86, .93, pit);
-  return c * (.97 + .05 * noise(p * 90.));
+  c *= 1. - .12 * smoothstep(.88, .94, pit) * keep(41.);
+  return c * (.98 + .03 * noise(p * 90.) * keep(90.));
 }
 // (brick: narrow courses, each brick a shade of its own (now and then a burnt one, or a pale), its edges a little worn
 // so it sits proud of a recessed mortar; on a top, laid as pavers; a little darker toward the foot, where the wet gets)
@@ -55,7 +58,7 @@ vec3 brick(vec3 p, vec3 n, float tone) {
   float cy = top ? p.z * 4. : p.y * 6., course = floor(cy);
   float u = (top ? p.x * 2. : (abs(n.x) > .5 ? p.z : p.x) * 2.) + course * .5, b = floor(u);
   float shade = hash(vec3(b, course, tone * 7.)), odd = hash(vec3(b, course, 5.));
-  vec3 c = mix(vec3(.60, .32, .22), vec3(.76, .48, .33), shade);
+  vec3 c = mix(vec3(.58, .37, .29), vec3(.72, .52, .40), shade);
   c = odd > .93 ? c * .62 : odd < .05 ? mix(c, vec3(.84, .66, .50), .5) : c;
   c *= .93 + .1 * noise(p * 24.) - .06 * smoothstep(.55, .9, noise(p * 60.));
   float jy = min(fract(cy), 1. - fract(cy)) / (top ? 4. : 6.), ju = min(fract(u), 1. - fract(u)) / 2., jt = min(jy, ju);
@@ -63,40 +66,26 @@ vec3 brick(vec3 p, vec3 n, float tone) {
   if (!top) c *= .9 + .1 * smoothstep(0., .45, fract(p.y));
   return mix(vec3(.70, .65, .57) * (.9 + .1 * noise(p * 40.)), c, smoothstep(.005, .011, jt));
 }
-// (ivy: leaves, each its own, clumped where the ivy's thick and thinning to a few at its edges, hanging from above)
-vec4 ivyLeaves(vec3 p, vec3 n) {
-  vec2 uv = (abs(n.x) > .5 ? p.zy : p.xy) * vec2(11., 11.);
-  vec2 g = floor(uv), f = fract(uv);
-  float best = 9., shade = 0.;
-  for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) {
-    vec2 o = vec2(a, b), cell = g + o, r = vec2(hash(vec3(cell, 1.)), hash(vec3(cell, 2.)));
-    vec2 d = o + r - f; d.y *= 1.25;
-    float l = length(d);
-    if (l < best) { best = l; shade = hash(vec3(cell, 3.)); }
-  }
-  vec2 w = abs(n.x) > .5 ? p.zy : p.xy;
-  float clump = fbm(vec3(w.x * 1.6, w.y * .9, 3.)) + .25 * (fract(p.y) - .35);
-  float leaf = (1. - smoothstep(.34, .42, best)) * smoothstep(.36, .52, clump);
-  return vec4(mix(vec3(.07, .13, .05), vec3(.20, .30, .11), shade) * (.75 + .5 * (1. - best)), leaf);
-}
-// (marble: white, veined grey, in large blocks)
+// (marble: white, a few broad veins, connected, soft at their edges; a faint cloud in it; in large blocks)
 vec3 marble(vec3 p, vec3 n, float tone) {
-  vec3 c = vec3(.93, .92, .89) * (.97 + .04 * tone);
-  float v = abs(sin((p.x * .8 + p.y * 1.3 + p.z * .6) * 3. + fbm(p * 1.4 + tone * 5.) * 7.));
-  c = mix(vec3(.55, .55, .56), c, smoothstep(.0, .09, v));
-  c = mix(c, vec3(.78, .76, .74), .35 * smoothstep(.5, .8, fbm(p * 3. + 2.)));
+  vec3 c = vec3(.93, .92, .89) * (.97 + .03 * tone);
+  vec3 q = p * .55 + vec3(fbm(p * .7 + 1.), fbm(p * .7 + 7.), fbm(p * .7 + 13.)) * 1.6;
+  float v = abs(fbm(q + tone * 3.) * 2. - 1.);
+  c = mix(vec3(.66, .65, .66), c, mix(1., smoothstep(.0, .07, v), .75 * keep(6.)));
+  c = mix(c, vec3(.83, .81, .79), .25 * smoothstep(.55, .8, fbm(p * 1.6 + 2.)));
   float jt;
   if (abs(n.y) < .5) { float u = abs(n.x) > .5 ? p.z : p.x, cy = p.y * 2.; jt = min(min(fract(cy), 1. - fract(cy)) / 2., min(fract(u + floor(cy) * .5), 1. - fract(u + floor(cy) * .5))); }
   else { vec2 f = fract(p.xz), g = min(f, 1. - f); jt = min(g.x, g.y); }
-  return c * (1. - .12 * (1. - smoothstep(.003, .009, jt)));
+  return c * (1. - .1 * (1. - smoothstep(.003, .009, jt)));
 }
 void main() {
   vec3 n = normalize(vNrm);
-  int m = int(vMat + .5), mat = m % 16, kind = (m / 64) % 4;
+  int m0 = int(vMat + .5), m = m0 % 256, mat = m % 16, kind = (m / 64) % 4;
+  bool sel = m0 >= 256;
   bool moss = (m / 16) % 2 == 1, ivy = (m / 32) % 2 == 1;
   vec3 base; float spec = 0., wrap = 0.;
   if (mat == 2) base = vec3(.13, .25, .25);
-  else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)); wrap = .35; }
+  else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)) * (.8 + .4 * vTone); wrap = .35; }
   else if (mat == 4) base = vec3(.32, .24, .17);
   else if (mat == 9) base = vec3(1.);
   else if (mat == 10) base = vec3(.70, .40, .27) * (.9 + .15 * noise(vPos * 18.));
@@ -127,21 +116,25 @@ void main() {
   }
   // (moss: in the joints and the shade, thicker on tops and low down; ivy: hanging leaves over a side)
   if (moss) {
-    // (moss: low down and in the shade, in soft patches, a few flecks of brighter green in it)
-    float lo = n.y > .5 ? .55 : .7 * (1. - smoothstep(.0, .4, fract(vPos.y)));
-    float spot = smoothstep(.5, .72, fbm(vPos * 2.6 + 2.) + .15 * noise(vPos * 18.));
+    // (moss where it has a reason: in the shade (faces turned from the sun), at the damp foot of a course, and in the
+    // joints and along the edges of a top, not across it)
+    float shade = 1. - smoothstep(-.1, .45, dot(n, uSun));
+    vec2 fe = fract(vPos.xz), ge = min(fe, 1. - fe);
+    float where = n.y > .5 ? (1. - smoothstep(.02, .14, min(ge.x, ge.y))) * .8 : (1. - smoothstep(.0, .35, fract(vPos.y))) * (.35 + .65 * shade);
+    float spot = smoothstep(.48, .7, fbm(vPos * 2.6 + 2.) + .18 * noise(vPos * 18.));
     vec3 mc = mix(vec3(.30, .35, .18), vec3(.44, .48, .24), smoothstep(.6, .9, noise(vPos * 40.)));
-    base = mix(base, mc * (.8 + .3 * noise(vPos * 26.)), lo * spot * .7);
+    base = mix(base, mc * (.8 + .3 * noise(vPos * 26.)), where * spot * .65);
   }
-  if (ivy && abs(n.y) < .5) {
-    vec4 iv = ivyLeaves(vPos, n);
-    base = mix(base, iv.rgb, iv.a);
-    wrap = max(wrap, .3 * iv.a);
-  }
+  // (ivy's leaves are its own geometry (mesh.ts); under them, where it grows, the stone is a little stained)
+  if (ivy && abs(n.y) < .5) base *= .93 - .05 * noise(vPos * 6.);
   // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;
   float sh = 0., bias = .0012 + .0025 * (1. - abs(dot(n, uSun)));
-  for (int a = -2; a <= 2; a++) for (int b = -2; b <= 2; b++) sh += step(ls.z - bias, texture(uShadow, ls.xy + vec2(a, b) * 1.3 / 2048.).r);
+  // (soft where what casts it is far off, crisp where it's close: how far the casters are, then filtered that wide)
+  float bsum = 0., bn = 0.;
+  for (int a = -2; a <= 2; a += 2) for (int b = -2; b <= 2; b += 2) { float d = texture(uShadow, ls.xy + vec2(a, b) * 3. / 2048.).r; if (d < ls.z - bias) { bsum += d; bn += 1.; } }
+  float pen = bn > 0. ? clamp((ls.z - bsum / bn) * 380., .7, 3.6) : 1.;
+  for (int a = -2; a <= 2; a++) for (int b = -2; b <= 2; b++) sh += step(ls.z - bias, texture(uShadow, ls.xy + vec2(a, b) * 1.1 * pen / 2048.).r);
   // (out past the sun's map: lit)
   if (any(lessThan(ls, vec3(0.))) || any(greaterThan(ls, vec3(1.)))) sh = 25.;
   sh = mix(1., sh / 25., uShadows);
@@ -153,8 +146,16 @@ void main() {
   float nl = dot(n, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh;
   vec3 sun = vec3(1.0, .86, .68) * 1.05, sky = mix(vec3(.50, .43, .36), vec3(.62, .62, .64), n.y * .5 + .5);
   vec3 c = base * (sky * (.25 + .45 * vAo) + sun * key * (.65 + .35 * vAo));
+  // (a sheen that differs by what it is: polished marble most, travertine a little, brick and clay hardly, leaves some)
+  {
+    vec3 hv = normalize(uSun - normalize(uDir));
+    float glo = mat == 3 ? 18. : mat == 10 ? 8. : kind == 2 ? 60. : kind == 1 ? 8. : 14.;
+    float ks = mat == 3 ? .06 : mat == 10 ? .03 : kind == 2 ? .22 : kind == 1 ? .015 : .045;
+    if (mat == 0 || mat == 1 || mat == 3 || mat == 10) c += sun * ks * pow(max(dot(n, hv), 0.), glo) * sh * (.5 + .5 * vAo);
+  }
   // (light gathers in the archways)
-  if (mat == 1) c += base * vec3(1., .7, .4) * .42 * (.4 + .6 * vAo);
+  // (light bounced up into an arch from the sunlit ground: warm near its mouth, little where it's deep)
+  if (mat == 1) c += base * vec3(1., .74, .48) * .26 * vAo * vAo;
   // (a lamp: lit from within)
   if (mat == 9) c = vec3(1.25, .92, .55);
   if (mat == 2) {
@@ -167,8 +168,10 @@ void main() {
   // (a filmic shoulder, warm)
   c = c / (c + .7) * 1.62;
   c = pow(c, vec3(1.03, 1.04, 1.07));
+  // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
+  if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   oCol = vec4(c, 1.);
-  oNrm = vec4(n * .5 + .5, 1.);
+  oNrm = vec4(n * .5 + .5, sel ? 1. : .5);
 }`;
 const SHADOW_FS = `#version 300 es
 precision highp float; out vec4 o; void main() { o = vec4(1.); }`;
@@ -196,6 +199,9 @@ void main() {
   if (sky < .5 && skyN > 0.) edge = 1.;
   vec3 c = texture(uCol, vUv).rgb;
   vec2 q = gl_FragCoord.xy;
+  // (what's taken up, outlined: where the selection mask changes, on the side that's selected)
+  float m = texture(uNrm, vUv).a, ring = 0.;
+  if (m > .75) for (int a = 0; a < 8; a++) { float t = float(a) * .785398; vec2 o = vec2(cos(t), sin(t)) * px * 2.; ring = max(ring, step(texture(uNrm, vUv + o).a, .75)); }
   if (sky > .5) {
     // (the paper behind it, a little darker toward the corners)
     float v = length(vUv - .5);
@@ -214,11 +220,12 @@ void main() {
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h2)) * smoothstep(.55, .4, L));
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h3)) * smoothstep(.36, .24, L));
     c = mix(paper, ink, hatch * .85);
-  o = vec4(mix(c, ink, edge * .85), 1.);
+  o = vec4(mix(mix(c, ink, edge * .85), vec3(.69, .36, .12), ring * .9), 1.);
     return;
   }
   // (as it is: barely a line, only where the depth folds)
-  o = vec4(mix(c, ink * 1.6, smoothstep(.04, .14, lap) * .16), 1.);
+  // (not against the sky: the table's far edge isn't drawn)
+  o = vec4(mix(mix(c, ink * 1.6, smoothstep(.04, .14, lap) * .16 * (1. - step(.5, skyN))), vec3(.69, .36, .12), ring * .9), 1.);
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
@@ -262,7 +269,7 @@ export function camera(v: View, aspect: number): { vp: M4; eye: number[]; dir: n
   const d = [Math.cos(v.el) * Math.sin(v.az), Math.sin(v.el), Math.cos(v.el) * Math.cos(v.az)], R = 120;
   const eye = [v.target[0] + d[0] * R, v.target[1] + d[1] * R, v.target[2] + d[2] * R];
   const h = v.zoom, w = h * aspect;
-  return { vp: mul(ortho(-w, w, -h, h, 1, 2 * R), lookAt(eye, v.target, [0, 1, 0])), eye, dir: [-d[0], -d[1], -d[2]], range: 2 * R - 1 };
+  return { vp: mul(ortho(-w, w, -h, h, 1, 4 * R), lookAt(eye, v.target, [0, 1, 0])), eye, dir: [-d[0], -d[1], -d[2]], range: 4 * R - 1 };
 }
 
 export class Renderer {
@@ -270,7 +277,10 @@ export class Renderer {
   private main: WebGLProgram; private shadow: WebGLProgram; private post: WebGLProgram;
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
   private shadowFb: WebGLFramebuffer; private shadowTex: WebGLTexture;
-  private fb: WebGLFramebuffer | null = null; private col: WebGLTexture | null = null; private nrm: WebGLTexture | null = null; private dep: WebGLTexture | null = null; private size = [0, 0];
+  private fb: WebGLFramebuffer | null = null;
+  /** drawn multisampled (4×), then resolved into the textures the ink reads */
+  private ms: WebGLFramebuffer | null = null; private msBufs: WebGLRenderbuffer[] = [];
+  msaa = true; private col: WebGLTexture | null = null; private nrm: WebGLTexture | null = null; private dep: WebGLTexture | null = null; private size = [0, 0];
   /** the sun: low, from over the left shoulder of the first view */
   sun = norm([-0.62, 0.72, -0.3]);
   print = false;
@@ -332,6 +342,19 @@ export class Renderer {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.nrm, 0);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.dep, 0);
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    // (and its multisampled twin)
+    for (const r of this.msBufs) gl.deleteRenderbuffer(r);
+    if (this.ms) gl.deleteFramebuffer(this.ms);
+    this.ms = null; this.msBufs = [];
+    const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
+    if (this.msaa && samples > 1) {
+      this.ms = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.ms);
+      const rb = (fmt: number, at: number) => { const r = gl.createRenderbuffer()!; gl.bindRenderbuffer(gl.RENDERBUFFER, r); gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, fmt, w, h); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, at, gl.RENDERBUFFER, r); this.msBufs.push(r); };
+      rb(gl.RGBA8, gl.COLOR_ATTACHMENT0); rb(gl.RGBA8, gl.COLOR_ATTACHMENT1); rb(gl.DEPTH_COMPONENT24, gl.DEPTH_ATTACHMENT);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) { gl.deleteFramebuffer(this.ms); this.ms = null; }
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.size = [w, h];
   }
@@ -356,8 +379,8 @@ export class Renderer {
     gl.bindVertexArray(this.vao); gl.drawArrays(gl.TRIANGLES, 0, this.count);
     gl.cullFace(gl.BACK);
     // (the stone, lit)
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb); gl.viewport(0, 0, w, h);
-    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.ms ?? this.fb); gl.viewport(0, 0, w, h);
+    gl.clearBufferfv(gl.COLOR, 0, [0.9, 0.87, 0.81, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 0]); gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.useProgram(this.main);
     const U = (n: string) => gl.getUniformLocation(this.main, n);
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
@@ -365,6 +388,17 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(U('uShadow'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     gl.bindVertexArray(null);
+    if (this.ms) {
+      // (resolved: each colour, then the depth)
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.ms); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.fb);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0); gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+      gl.readBuffer(gl.COLOR_ATTACHMENT1); gl.drawBuffers([gl.NONE, gl.COLOR_ATTACHMENT1]);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    }
     // (ink, and paper)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
     gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);

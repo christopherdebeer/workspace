@@ -21,8 +21,8 @@
     #hands svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
     #hands i { font-style: normal; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
     #hands button.on { background: #2b2420; color: #f3ede1; }
-    #acts { position: fixed; top: max(10px, env(safe-area-inset-top)); right: 10px; display: flex; gap: 6px; z-index: 2; }
-    #acts button { appearance: none; border: 0; background: rgba(246,241,231,.86); box-shadow: 0 1px 8px rgba(70,50,30,.12); color: #2b2420; width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #acts { position: fixed; top: max(10px, env(safe-area-inset-top)); right: 10px; display: flex; gap: 5px; z-index: 2; }
+    #acts button { appearance: none; border: 0; background: rgba(246,241,231,.86); box-shadow: 0 1px 8px rgba(70,50,30,.12); color: #2b2420; width: 40px; height: 40px; border-radius: 20px; display: grid; place-items: center; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     #acts svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
     #acts button.on { background: #2b2420; color: #f3ede1; }
     #hands button { position: relative; }
@@ -39,16 +39,28 @@
     #card.on { display: block; }
     #card .row { display: flex; align-items: center; gap: 8px; }
     #card b { flex: 1; font-weight: 400; font-size: 15px; font-style: italic; }
-    #card small { display: block; font-size: 11px; letter-spacing: .08em; opacity: .6; margin: 2px 0 6px; }
-    #card small:empty { display: none; }
-    #card .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+    #card .acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
     #card button { appearance: none; border: 0; font: inherit; font-size: 13px; color: #2b2420; background: rgba(43,36,32,.07); border-radius: 14px; min-height: 36px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-    #card button[hidden] { display: none; }
-    #card #switch { background: #2b2420; color: #f3ede1; }
+    #card [hidden] { display: none !important; }
     #card #close { background: none; font-size: 22px; min-height: 36px; width: 36px; padding: 0; }
-    body.selecting #hint { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 190px); }
+    #card .chips { display: flex; gap: 4px; margin: 6px 0 8px; flex-wrap: wrap; }
+    #card .chips button { min-height: 28px; padding: 0 10px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; background: none; box-shadow: inset 0 0 0 1px rgba(43,36,32,.18); }
+    #card .chips button.on { background: #2b2420; color: #f3ede1; box-shadow: none; }
+    #card .readings, #card .dressrow { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin-bottom: 6px; }
+    #card .readings::-webkit-scrollbar, #card .dressrow::-webkit-scrollbar { display: none; }
+    #card .readings button, #card .dressrow button { flex: 0 0 auto; display: grid; justify-items: center; gap: 3px; padding: 6px 8px; min-width: 62px; border-radius: 12px; background: none; }
+    #card .readings button.on { background: #2b2420; color: #f3ede1; }
+    #card .readings svg, #card .dressrow svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #card .readings i, #card .dressrow i { font-style: normal; font-size: 9.5px; letter-spacing: .06em; }
+    #card .dressrow { border-top: 1px solid rgba(43,36,32,.1); padding-top: 6px; }
+    #card .dressrow button { min-width: 54px; opacity: .85; }
+    body.selecting #hint { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 300px); }
     .preview #sheet, .preview #card { display: none; }
-    nav { right: 170px; }
+    #say { position: fixed; left: 0; top: 0; z-index: 3; pointer-events: none; padding: 5px 11px; border-radius: 14px; background: rgba(246,241,231,.92); box-shadow: 0 1px 8px rgba(70,50,30,.15); font-size: 13px; font-style: italic; color: #2b2420; opacity: 0; transition: opacity .15s; white-space: nowrap; }
+    #say.on { opacity: 1; }
+    #say.warn { color: #8a3b12; box-shadow: 0 1px 8px rgba(70,50,30,.15), inset 0 0 0 1px rgba(176,92,30,.45); }
+    nav { right: 190px; gap: 10px; }
+    nav a { white-space: nowrap; }
     nav small { display: block; font-size: 10px; letter-spacing: .3em; text-transform: uppercase; opacity: .6; margin-top: 4px; }
     .preview nav, .preview #acts, .preview #hint, .preview #hands { display: none; }
   </style>
@@ -59,14 +71,18 @@
   <nav><a href="/">← lab</a><h1>Labyrinth<small>touch to build</small></h1></nav>
   <div id="acts">
     <button id="undo" aria-label="undo" title="undo"><svg viewBox="0 0 20 20"><path d="M7 5L3.5 8.5 7 12"/><path d="M3.5 8.5h8a4.5 4.5 0 010 9H9"/></svg></button>
+    <button id="frame" aria-label="frame it all" title="frame it all"><svg viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/><rect x="7" y="7" width="6" height="6"/></svg></button>
     <button id="print" aria-pressed="false" aria-label="as a print" title="as a print"><svg viewBox="0 0 20 20"><path d="M3 17L17 3M3 11L11 3M9 17L17 9M3 5l2-2M15 17l2-2"/></svg></button>
     <button id="again" aria-label="clear the stone" title="clear the stone"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5"/><path d="M3.5 3v3.5H7"/></svg></button>
   </div>
   <div id="hint"></div>
+  <div id="say" aria-live="polite"></div>
   <div id="card" role="dialog" aria-label="what's taken up">
     <div class="row"><b id="what"></b><button id="close" aria-label="put it down">×</button></div>
-    <small id="reading"></small>
-    <div class="acts"><button id="switch"></button><button id="whole"></button><button id="dressit"></button><button id="takeaway">take it away</button></div>
+    <div id="scope" class="chips" aria-label="how much of it"></div>
+    <div id="readings" class="readings" aria-label="read it as"></div>
+    <div id="dressrow" class="dressrow" aria-label="dress it"></div>
+    <div class="acts"><button id="takeaway">take it away</button></div>
   </div>
   <div id="sheet" role="menu" aria-label="what the piece brush holds">
     <h2>pieces</h2>
@@ -94,7 +110,7 @@
   <div id="hands" role="toolbar" aria-label="brushes">
     <button data-brush="hand" aria-label="hand: turn it, and ask what something is"><svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6 7-2.5 0-4-1.2-5.5-3.5L3.8 15a1.4 1.4 0 012.3-1.6L8 15.5"/></svg><i>hand</i></button>
     <button data-brush="auto" aria-label="auto: tap raises, trace builds"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" opacity=".5"/></svg><i>auto</i></button>
-    <button data-brush="piece" aria-haspopup="menu" aria-expanded="false" aria-label="one piece, or dressing: hold for the sheet"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/></svg><i>block</i><u></u></button>
+    <button data-brush="piece" aria-haspopup="menu" aria-expanded="false" aria-label="one piece, or dressing: hold for the sheet"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/></svg><i>piece</i><u></u></button>
     <button data-brush="take" aria-label="take: tap takes away, trace carves"><svg viewBox="0 0 24 24"><path d="M5 19L19 5M7 5h10M5 9v10h10"/></svg><i>take</i></button>
     <button data-brush="select" aria-label="select: take something up, and read it another way"><svg viewBox="0 0 24 24"><path d="M5 3l12 8-5.5 1.2L15 19l-2.4 1.2-3.4-6.8L5 17z"/></svg><i>select</i></button>
   </div>
