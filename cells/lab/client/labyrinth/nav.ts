@@ -3,7 +3,8 @@
  * A connection the hand drew is meant to be walked, so this is how it's checked that one was.
  *
  * - **A place to stand** is a cell with a floor under it (the slab, the top of stone, the deck over an arch) and nothing
- *   in it: not stone, a stair, a pier or a tree. The air under an arch counts, so a passage cut under stone is walked.
+ *   in it: not stone, a stair or a tree. A pier's slender column stands aside, so it's walked past. The air under an
+ *   arch counts, so a passage cut under stone is walked.
  * - **A stair** is a place too, between its foot (the cell behind it, at its level) and its head (the cell ahead, a
  *   level up), or the next stair of a flight.
  * - **A way through an arch** (stone with a way through it, a gate in a wall) is a place too, walked only along its way.
@@ -16,7 +17,7 @@ import { CEIL, DIRS, inGrid, key, unkey, type Cell, type World } from './model';
 export interface Nav { places: Set<number>; next: Map<number, number[]> }
 
 /** a place to stand at height k on a column */
-export const standing = (w: World, k: number, i: number, j: number) => k >= 0 && k < CEIL && inGrid(i, j) && w.floor(k, i, j) && !w.occupied(k, i, j) && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && (k > 0 || !w.pool(i, j));
+export const standing = (w: World, k: number, i: number, j: number) => k >= 0 && k < CEIL && inGrid(i, j) && w.floor(k, i, j) && !w.stone(k, i, j) && w.stair(k, i, j) < 0 && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && (k > 0 || !w.pool(i, j));
 
 /** a way through an arch at height k: stone with a way through it, with a floor under it */
 export const through = (w: World, k: number, i: number, j: number) => w.archway(k, i, j) >= 0 && !w.span(k, i, j) && (k === 0 ? !w.pool(i, j) : w.stone(k - 1, i, j) && w.archway(k - 1, i, j) < 0);

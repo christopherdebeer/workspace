@@ -48,15 +48,36 @@ vec3 travertine(vec3 p, float tone) {
   c *= 1. - .22 * smoothstep(.86, .93, pit);
   return c * (.97 + .05 * noise(p * 90.));
 }
-// (brick: narrow courses, each brick a shade of its own, pale mortar; on a top, laid as pavers)
+// (brick: narrow courses, each brick a shade of its own (now and then a burnt one, or a pale), its edges a little worn
+// so it sits proud of a recessed mortar; on a top, laid as pavers; a little darker toward the foot, where the wet gets)
 vec3 brick(vec3 p, vec3 n, float tone) {
   bool top = abs(n.y) > .5;
   float cy = top ? p.z * 4. : p.y * 6., course = floor(cy);
   float u = (top ? p.x * 2. : (abs(n.x) > .5 ? p.z : p.x) * 2.) + course * .5, b = floor(u);
-  float shade = hash(vec3(b, course, tone * 7.));
-  vec3 c = mix(vec3(.62, .33, .23), vec3(.78, .50, .34), shade) * (.92 + .1 * noise(p * 20.));
-  float jy = min(fract(cy), 1. - fract(cy)) / (top ? 4. : 6.), ju = min(fract(u), 1. - fract(u)) / 2.;
-  return mix(vec3(.80, .74, .64), c, smoothstep(.006, .013, min(jy, ju)));
+  float shade = hash(vec3(b, course, tone * 7.)), odd = hash(vec3(b, course, 5.));
+  vec3 c = mix(vec3(.60, .32, .22), vec3(.76, .48, .33), shade);
+  c = odd > .93 ? c * .62 : odd < .05 ? mix(c, vec3(.84, .66, .50), .5) : c;
+  c *= .93 + .1 * noise(p * 24.) - .06 * smoothstep(.55, .9, noise(p * 60.));
+  float jy = min(fract(cy), 1. - fract(cy)) / (top ? 4. : 6.), ju = min(fract(u), 1. - fract(u)) / 2., jt = min(jy, ju);
+  c *= .86 + .14 * smoothstep(.006, .03, jt);
+  if (!top) c *= .9 + .1 * smoothstep(0., .45, fract(p.y));
+  return mix(vec3(.70, .65, .57) * (.9 + .1 * noise(p * 40.)), c, smoothstep(.005, .011, jt));
+}
+// (ivy: leaves, each its own, clumped where the ivy's thick and thinning to a few at its edges, hanging from above)
+vec4 ivyLeaves(vec3 p, vec3 n) {
+  vec2 uv = (abs(n.x) > .5 ? p.zy : p.xy) * vec2(11., 11.);
+  vec2 g = floor(uv), f = fract(uv);
+  float best = 9., shade = 0.;
+  for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) {
+    vec2 o = vec2(a, b), cell = g + o, r = vec2(hash(vec3(cell, 1.)), hash(vec3(cell, 2.)));
+    vec2 d = o + r - f; d.y *= 1.25;
+    float l = length(d);
+    if (l < best) { best = l; shade = hash(vec3(cell, 3.)); }
+  }
+  vec2 w = abs(n.x) > .5 ? p.zy : p.xy;
+  float clump = fbm(vec3(w.x * 1.6, w.y * .9, 3.)) + .25 * (fract(p.y) - .35);
+  float leaf = (1. - smoothstep(.34, .42, best)) * smoothstep(.36, .52, clump);
+  return vec4(mix(vec3(.07, .13, .05), vec3(.20, .30, .11), shade) * (.75 + .5 * (1. - best)), leaf);
 }
 // (marble: white, veined grey, in large blocks)
 vec3 marble(vec3 p, vec3 n, float tone) {
@@ -106,15 +127,16 @@ void main() {
   }
   // (moss: in the joints and the shade, thicker on tops and low down; ivy: hanging leaves over a side)
   if (moss) {
-    float lo = n.y > .5 ? .85 : .6 * (1. - smoothstep(0., .6, fract(vPos.y)));
-    float a = lo * smoothstep(.42, .62, fbm(vPos * 3.1 + 2.));
-    base = mix(base, vec3(.30, .37, .17) * (.75 + .5 * noise(vPos * 34.)), a * .85);
+    // (moss: low down and in the shade, in soft patches, a few flecks of brighter green in it)
+    float lo = n.y > .5 ? .55 : .7 * (1. - smoothstep(.0, .4, fract(vPos.y)));
+    float spot = smoothstep(.5, .72, fbm(vPos * 2.6 + 2.) + .15 * noise(vPos * 18.));
+    vec3 mc = mix(vec3(.30, .35, .18), vec3(.44, .48, .24), smoothstep(.6, .9, noise(vPos * 40.)));
+    base = mix(base, mc * (.8 + .3 * noise(vPos * 26.)), lo * spot * .7);
   }
   if (ivy && abs(n.y) < .5) {
-    float cov = smoothstep(.38, .5, fbm(vec3(vPos.x * 2.4, vPos.y * 1.5, vPos.z * 2.4) + 7.) + .12 * (fract(vPos.y) - .5));
-    float leaf = noise(vPos * 26.), lf = smoothstep(.3, .5, leaf);
-    base = mix(base, mix(vec3(.09, .16, .06), vec3(.22, .32, .12), leaf), cov * lf);
-    wrap = max(wrap, .25 * cov);
+    vec4 iv = ivyLeaves(vPos, n);
+    base = mix(base, iv.rgb, iv.a);
+    wrap = max(wrap, .3 * iv.a);
   }
   // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;

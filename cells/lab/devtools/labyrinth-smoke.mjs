@@ -147,12 +147,16 @@ await withWood(async (lab) => {
     c.ok('a tap dresses the stone touched', await L((L) => L.world.dressed(2, 9, 4)?.mat === 1));
     // (a run: blocks traced across the stone, a wall)
     await L((L) => L.setBrush('block'));
-    await stroke([[13, 8, 0], [13, 9, 0], [13, 10, 0]]);
-    c.ok('the block brush, traced: a run of blocks', await L((L) => [8, 9, 10].every((j) => L.world.block(0, 13, j))), await L((L) => L.world.ops.at(-1)));
+    await stroke([[13, 12, 0], [13, 13, 0], [13, 14, 0]]);
+    c.ok('the block brush, traced: a run of blocks', await L((L) => [12, 13, 14].every((j) => L.world.block(0, 13, j))), await L((L) => L.world.ops.at(-1)));
+    // (the wall piece, traced: a thin wall)
+    await L((L) => L.setBrush('wall'));
+    await stroke([[15, 12, 0], [15, 13, 0], [15, 14, 0]]);
+    c.ok('the wall piece, traced: a thin wall along it', await L((L) => [12, 13, 14].every((j) => L.world.wall(0, 15, j) >= 0)), await L((L) => L.world.ops.at(-1)));
     // (take: a tap takes the piece away)
     await q.click('[data-brush="take"]');
-    await tap(13, 10, 1);
-    c.ok('take: a tap takes it away', await L((L) => !L.world.stone(0, 13, 10)));
+    await tap(13, 14, 1);
+    c.ok('take: a tap takes it away', await L((L) => !L.world.stone(0, 13, 14)));
     c.ok('the brushes: nothing thrown', !q.errors.length, q.errors);
     await q.close();
   }

@@ -10,11 +10,13 @@
  *    with water and a cypress), and a second tower bridged to the first.
  * 5. **With the palette**: the same, and pieces put by hand: a tall arch, a long bridge, a pool, cypresses on a terrace.
  * 7. **Auto alone, no cap**: the same as 4, and a tower tapped up ten high, a walkway from the terrace to it, a long wall
- *    round the far side; each made and dressed as the rules choose, nothing dressed by hand.
+ *    round the far side, and a high walkway from halfway up the tower out over the ways below (its slim piers stand aside
+ *    where they land on them); each made and dressed as the rules choose, nothing dressed by hand.
  * 6. **Motifs and dressing**: the same as 4, and a trace from the terrace to a new tower further off (an arcade of three
  *    bays, alike, a parapet along it of its own accord); a flight run up to the terrace with the stair brush; the passage under the
  *    walkway read as a lintel; and dressed: a marble tower with a lantern, the court's wall in brick, moss on the
- *    platform and the old wall, ivy on the terrace, a parapet on the walkway, pots on the terrace.
+ *    platform and the old wall, ivy on the terrace, a parapet on the walkway, pots on the terrace; and a garden of thin
+ *    walls run with the wall piece.
  */
 import { DRESS, RULE, World, type Cell, type Op } from './model';
 import { carve, tap, trace, type Pick } from './gesture';
@@ -52,6 +54,9 @@ export function story(stage: number): World {
     for (let q = 0; q < 10; q++) tapAt(q ? top(w, 13, 4) : ground(13, 4));
     traceAt(top(w, 10, 4), [[10, 4], [11, 4], [12, 4], [13, 4]], null);
     traceAt(ground(12, 7), [[12, 7], [12, 8], [12, 9], [12, 10], [12, 11], [12, 12], [11, 12], [10, 12], [9, 12], [8, 12], [7, 12], [6, 12], [5, 12]], null);
+    // (and from halfway up the tower, a high walkway west over the terrace and the bridge: its piers come down slim, and
+    // stand aside where they land on the ways below)
+    traceAt(side(4, 13, 4, -1, 0), [[13, 4], [12, 4], [11, 4], [10, 4], [9, 4], [8, 4], [7, 4], [6, 4]], null);
     return w;
   }
   if (stage >= 6) {
@@ -73,6 +78,8 @@ export function story(stage: number): World {
     dress(DRESS.parapet, cells(1, 1, [[5, 7], [6, 7], [7, 7]]));
     dress(DRESS.lantern, [[2, 3, 3], [2, 10, 14]]);
     dress(DRESS.pot, [[2, 9, 5], [2, 9, 4]]);
+    // (a garden of thin walls east of the court, run with the wall piece)
+    apply(run(w, 'wall', ground(12, 7), [[12, 7], [13, 7], [14, 7], [15, 7], [15, 8], [15, 9], [15, 10], [14, 10], [13, 10], [12, 10]], 1, t));
     return w;
   }
   // 5: pieces from the palette, put where a touch would put them

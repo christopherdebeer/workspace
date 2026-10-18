@@ -6,7 +6,9 @@
  * - **stairs**: six steps up a level;
  * - **arches**: under a run of stone carried over nothing, an arch from the stone each side, springing as low as the
  *   resolution let it; the stone over it is spandrels each side and a deck, its underside lit from within;
- * - **piers**: square columns under what has nothing else to stand on, with a cap;
+ * - **piers**: slender columns under what has nothing else to stand on, with a base and a capital; stepped aside to the
+ *   edge of their cell when they stand on a way, so it stays open;
+ * - **thin walls**: a wall's thickness, full height, running out to the stone beside them;
  * - **courtyards**: paved; water where the rules put it, a rim round it; cypresses;
  * - **the stone and the table**: the travertine slab, on a table in the sun;
  * - **dressing**: each stone's kind (travertine, brick, marble), moss and ivy (drawn over it, in the shader), parapets
@@ -35,7 +37,32 @@ export function soffit(sp: Span) {
   return { half, rise, ys, at: (u: number) => ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2)) };
 }
 export const MARGIN = 0.6, SLAB = 0.42;
-const STEPS = 6, CURVE = 14, PIER = 0.3, HW = 0.3;
+const STEPS = 6, CURVE = 14, HW = 0.3;
+/** a thin wall's half-thickness */
+export const TH = 0.15;
+/**
+ * A pier's column: slender (the higher it stands and the taller it runs, the slimmer), and where it stands in its cell:
+ * in the middle on open ground, but stepped aside to the cell's edge when it stands on a way (a walkway, a landing), so
+ * the way past it stays open.
+ */
+export function pierShape(w: World, k: number, i: number, j: number): { ox: number; oz: number; r: number; foot: number; top: number } {
+  let foot = k; while (w.pier(foot - 1, i, j)) foot--;
+  let top = k; while (w.pier(top + 1, i, j)) top++;
+  const r = Math.max(0.1, 0.17 - 0.012 * foot - 0.006 * (top - foot));
+  const way = DIRS.map(([a, b]) => w.floor(foot, i + a, j + b) && !w.stone(foot, i + a, j + b) && w.stair(foot, i + a, j + b) < 0);
+  const n = way.filter(Boolean).length;
+  if (n === 0 || n === 4 || (foot === 0 && n >= 3)) return { ox: 0, oz: 0, r, foot, top };
+  // (to the side that isn't the way: across it if the way runs straight through, else away from where it comes in)
+  const side = [0, 1, 2, 3].filter((d) => !way[d]).sort((p, q) => Number(way[(q + 2) % 4]) - Number(way[(p + 2) % 4]))[0];
+  const o = 0.5 - r - 0.05;
+  return { ox: DIRS[side][0] * o, oz: DIRS[side][1] * o, r, foot, top };
+}
+/** which ways a thin wall runs out from its middle: toward stone beside it at its level, or, with none, along its axis */
+export function wallArms(w: World, k: number, i: number, j: number): boolean[] {
+  const arms = DIRS.map(([a, b]) => w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0);
+  if (!arms.some(Boolean)) { const a = Math.max(0, w.wall(k, i, j)); arms[a] = arms[a + 2] = true; }
+  return arms;
+}
 
 export interface Mesh { data: Float32Array; count: number }
 type V3 = [number, number, number];
@@ -119,8 +146,11 @@ export function buildMesh(w: World, plain = false): Mesh {
       cur = at(w.born(k, i, j), y0, k, i, j);
       sides(k, i, j, y0, y1, MAT.stone);
       topFace(k, i, j, y1);
+      // (over a thin wall, its underside shows either side of it)
+      if (w.wall(k - 1, i, j) >= 0) quad([x0, y0, z0], [x0, y0, z0 + 1], [x0 + 1, y0, z0 + 1], [x0 + 1, y0, z0], [0, -1, 0], 0.55, MAT.stone);
       continue;
     }
+    if (w.wall(k, i, j) >= 0) { cur = at(w.born(k, i, j), y0, k, i, j); thinWall(k, i, j); continue; }
     if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { cur = at(w.born(k, i, j), y0, k, i, j); archCell(k, i, j, w.archway(k, i, j)); continue; }
     const d = w.stair(k, i, j);
     if (d >= 0) {
@@ -142,16 +172,19 @@ export function buildMesh(w: World, plain = false): Mesh {
       continue;
     }
     if (w.pier(k, i, j)) {
-      // (a pier: a square column; a cap where it meets what it carries)
+      // (a pier: a slender column, a little tapered; a base where it stands, a capital where it meets what it carries)
       cur = at(w.born(k, i, j), 0, k, i, j);
-      const cx = x0 + 0.5, cz = z0 + 0.5, capped = !w.pier(k + 1, i, j), r = PIER, rc = PIER + 0.08;
-      const yTop = capped ? y1 - 0.12 : y1;
-      for (let d = 0; d < 4; d++) {
-        const [a, b] = DIRS[d], P = (s: number, y: number, rr: number): V3 => (a ? [cx + a * rr, y, cz + s * rr] : [cx + s * rr, y, cz + b * rr]);
-        quad(P(-1, y0, r), P(1, y0, r), P(1, yTop, r), P(-1, yTop, r), [a, 0, b], [k === 0 ? 0.6 : 0.9, k === 0 ? 0.6 : 0.9, 1, 1], MAT.stone);
-        if (capped) quad(P(-1, yTop, rc), P(1, yTop, rc), P(1, y1, rc), P(-1, y1, rc), [a, 0, b], 0.85, MAT.stone);
+      const ps = pierShape(w, k, i, j), cx = x0 + 0.5 + ps.ox, cz = z0 + 0.5 + ps.oz, H = ps.top + 1 - ps.foot;
+      const rAt = (y: number) => ps.r * (1.06 - 0.12 * ((y - ps.foot) / H));
+      const ya = k === ps.foot ? y0 + 0.09 : y0, yb = k === ps.top ? y1 - 0.11 : y1;
+      lathe(cx, cz, [[rAt(ya), ya], [rAt(yb), yb]], MAT.stone, 8);
+      if (k === ps.foot) { box(cx - ps.r - 0.05, cx + ps.r + 0.05, y0, y0 + 0.06, cz - ps.r - 0.05, cz + ps.r + 0.05, MAT.stone, 0.7); box(cx - ps.r - 0.025, cx + ps.r + 0.025, y0 + 0.06, y0 + 0.09, cz - ps.r - 0.025, cz + ps.r + 0.025, MAT.stone, 0.8); }
+      if (k === ps.top) {
+        const rc = ps.r + 0.07;
+        box(cx - ps.r - 0.02, cx + ps.r + 0.02, y1 - 0.11, y1 - 0.06, cz - ps.r - 0.02, cz + ps.r + 0.02, MAT.stone, 0.85);
+        box(cx - rc, cx + rc, y1 - 0.06, y1, cz - rc, cz + rc, MAT.stone, 0.9);
+        quad([cx - rc, y1 - 0.06, cz - rc], [cx + rc, y1 - 0.06, cz - rc], [cx + rc, y1 - 0.06, cz + rc], [cx - rc, y1 - 0.06, cz + rc], [0, -1, 0], 0.6, MAT.stone);
       }
-      if (capped) for (const [x, z, xx, zz] of [[-rc, -rc, rc, -r], [-rc, r, rc, rc], [-rc, -r, -r, r], [r, -r, rc, r]]) quad([cx + x, yTop, cz + z], [cx + xx, yTop, cz + z], [cx + xx, yTop, cz + zz], [cx + x, yTop, cz + zz], [0, -1, 0], 0.7, MAT.stone);
     }
   }
   for (const sp of w.spans) span(sp);
@@ -187,9 +220,12 @@ export function buildMesh(w: World, plain = false): Mesh {
         if (!d?.parapet && q % 2 === sp!.a) continue;
         if (w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0) continue;
         // (a low wall along that edge, a coping on it)
-        const x0 = X(i), z0 = Z(j), T = 0.12, y0 = k + 1, y1 = y0 + 0.3;
+        const x0 = X(i), z0 = Z(j), T = 0.11, y0 = k + 1, y1 = y0 + 0.3, C = 0.025;
         const [bx0, bx1, bz0, bz1] = a > 0 ? [x0 + 1 - T, x0 + 1, z0, z0 + 1] : a < 0 ? [x0, x0 + T, z0, z0 + 1] : b > 0 ? [x0, x0 + 1, z0 + 1 - T, z0 + 1] : [x0, x0 + 1, z0, z0 + T];
         box(bx0, bx1, y0, y1, bz0, bz1, MAT.stone, [0.75, 0.75, 1, 1]);
+        // (its coping: a little proud of it either side)
+        const [cx0, cx1, cz0, cz1] = a ? [bx0 - C, bx1 + C, bz0, bz1] : [bx0, bx1, bz0 - C, bz1 + C];
+        box(cx0, cx1, y1, y1 + 0.05, cz0, cz1, MAT.stone, 0.95);
       }
     }
     if (d?.prop === DRESS.lantern) lantern(i, j, k + 1, w.born(k, i, j));
@@ -197,6 +233,25 @@ export function buildMesh(w: World, plain = false): Mesh {
   }
   return { data: new Float32Array(out), count: out.length / STRIDE };
 
+  /** a thin wall: a wall's thickness, full height, running out from its middle to the stone beside it */
+  function thinWall(k: number, i: number, j: number) {
+    const cx = X(i) + 0.5, cz = Z(j) + 0.5, y0 = k, y1 = k + 1, arms = wallArms(w, k, i, j), lid = !w.stone(k + 1, i, j) && w.stair(k + 1, i, j) < 0;
+    const ao = floored(k, i, j) || k === 0 ? [0.6, 0.6, 1, 1] : 1;
+    // (its middle, then each arm out to the cell's edge; faces only where nothing's against them)
+    const part = (x0: number, x1: number, z0: number, z1: number, open: boolean[]) => {
+      if (open[0]) quad([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [0, 0, -1], ao, MAT.stone);
+      if (open[1]) quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1], ao, MAT.stone);
+      if (open[2]) quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [-1, 0, 0], ao, MAT.stone);
+      if (open[3]) quad([x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], [1, 0, 0], ao, MAT.stone);
+      if (lid) quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1], [0, 1, 0], 1, MAT.stone);
+    };
+    part(cx - TH, cx + TH, cz - TH, cz + TH, [!arms[3], !arms[1], !arms[2], !arms[0]]);
+    const end = (d: number) => { const [a, b] = DIRS[d]; return !(w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0); };
+    if (arms[0]) part(cx + TH, cx + 0.5, cz - TH, cz + TH, [true, true, false, end(0)]);
+    if (arms[2]) part(cx - 0.5, cx - TH, cz - TH, cz + TH, [true, true, end(2), false]);
+    if (arms[1]) part(cx - TH, cx + TH, cz + TH, cz + 0.5, [false, end(1), true, true]);
+    if (arms[3]) part(cx - TH, cx + TH, cz - 0.5, cz - TH, [end(3), false, true, true]);
+  }
   /** a box's sides and top */
   function box(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, mat: number, ao: number[] | number = 1) {
     quad([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [0, 0, -1], ao, mat);
@@ -217,9 +272,12 @@ export function buildMesh(w: World, plain = false): Mesh {
   function lantern(i: number, j: number, y: number, born: number) {
     cur = { born, pivot: y, how: 1, tone: 0.5, dress: 0 };
     const cx = X(i) + 0.5, cz = Z(j) + 0.5;
-    box(cx - 0.035, cx + 0.035, y, y + 0.34, cz - 0.035, cz + 0.035, MAT.bark, 0.8);
-    box(cx - 0.08, cx + 0.08, y + 0.34, y + 0.5, cz - 0.08, cz + 0.08, MAT.lamp);
-    box(cx - 0.11, cx + 0.11, y + 0.5, y + 0.54, cz - 0.11, cz + 0.11, MAT.bark, 0.9);
+    box(cx - 0.06, cx + 0.06, y, y + 0.04, cz - 0.06, cz + 0.06, MAT.bark, 0.7);
+    lathe(cx, cz, [[0.028, y + 0.04], [0.022, y + 0.33]], MAT.bark, 6);
+    box(cx - 0.065, cx + 0.065, y + 0.33, y + 0.35, cz - 0.065, cz + 0.065, MAT.bark, 0.8);
+    box(cx - 0.055, cx + 0.055, y + 0.35, y + 0.49, cz - 0.055, cz + 0.055, MAT.lamp);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) box(cx + sx * 0.058 - 0.01, cx + sx * 0.058 + 0.01, y + 0.35, y + 0.49, cz + sz * 0.058 - 0.01, cz + sz * 0.058 + 0.01, MAT.bark, 0.85);
+    lathe(cx, cz, [[0.09, y + 0.49], [0.075, y + 0.51], [0.0, y + 0.58]], MAT.bark, 4);
   }
   /** a terracotta pot with a clipped shrub in it */
   function pot(i: number, j: number, y: number, born: number) {
@@ -321,6 +379,10 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER), k = Math.floor(y);
   if (k >= w.levels || !w.onSlab(i, j)) return false;
   const fx = x + CENTER - i - 0.5, fz = z + CENTER - j - 0.5, fy = y - k;
+  if (w.wall(k, i, j) >= 0) {
+    const arms = wallArms(w, k, i, j);
+    return (Math.abs(fx) < TH && Math.abs(fz) < TH) || (Math.abs(fz) < TH && ((arms[0] && fx > 0) || (arms[2] && fx < 0))) || (Math.abs(fx) < TH && ((arms[1] && fz > 0) || (arms[3] && fz < 0)));
+  }
   if (w.stone(k, i, j)) {
     const sp = w.span(k, i, j), aw = w.archway(k, i, j);
     if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > 0.5 + Math.sqrt(Math.max(0, HW * HW - wv * wv))); }
@@ -331,7 +393,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   }
   const d = w.stair(k, i, j);
   if (d >= 0) { const [a, b] = DIRS[d], u = 0.5 + (a ? a * fx : b * fz); return fy < Math.ceil(Math.max(0.001, u) * STEPS) / STEPS; }
-  if (w.pier(k, i, j)) return Math.abs(fx) < PIER && Math.abs(fz) < PIER;
+  if (w.pier(k, i, j)) { const ps = pierShape(w, k, i, j); return Math.abs(fx - ps.ox) < ps.r + 0.04 && Math.abs(fz - ps.oz) < ps.r + 0.04; }
   if (w.tree(k, i, j) || w.tree(k - 1, i, j)) return Math.hypot(fx, fz) < 0.26;
   // (the air under an arch over this cell: its upper part's the arch's stone)
   for (let kk = k + 1; kk < w.levels; kk++) {

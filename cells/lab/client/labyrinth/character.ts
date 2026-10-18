@@ -10,9 +10,11 @@
  * - **arcades and bridges**: now and then in brick, piers and all;
  * - **flights**: a lantern where they arrive, often;
  * - **terraces**: pots at a corner or two; a lantern sometimes;
- * - **courts**: ivy up the walls round them, moss at their foot;
+ * - **courts**: ivy, now and then, up a few of the walls round them (a cell or two high); moss at their foot;
  * - **anything high with a drop at its edge**: a parapet round it, taken a top at a time;
  * - **the stone at the foot of things**: a little moss, here and there.
+ *
+ * Dressing is kept sparing: a few things dressed well read better than everything dressed.
  */
 import { hash } from '../kit/rng';
 import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './model';
@@ -74,12 +76,13 @@ function dressUp(w: World): Map<number, Dress> {
       if (free.length && chance(0.3, n, 2)) put(free[0], { prop: DRESS.lantern });
     } else if (m.kind === 'court') {
       // (the walls round it: ivy climbing them, moss at their foot)
-      const ivy = chance(0.45, n, 1), moss = chance(0.5, n, 2);
+      const ivy = chance(0.3, n, 1), moss = chance(0.4, n, 2);
       for (const [, i, j] of m.cells) for (const [a, b] of DIRS) {
         const x = i + a, z = j + b, h = height(w, x, z);
         if (!w.stone(0, x, z)) continue;
         if (moss) put([0, x, z], { moss: true });
-        if (ivy) { const up = 1 + (hash(w.seed, x, z, 5) % Math.max(1, h)); for (let k = 0; k < Math.min(h, up); k++) if (w.stone(k, x, z)) put([k, x, z], { ivy: true }); }
+        // (on a few columns of the wall, in a clump, a cell or two up from the foot)
+        if (ivy && hash(w.seed, Math.floor(x / 3), Math.floor(z / 3), 5) % 100 < 45) { const up = 1 + (hash(w.seed, x, z, 6) % 2); for (let k = 0; k < Math.min(h, up); k++) if (w.stone(k, x, z)) put([k, x, z], { ivy: true }); }
       }
     }
   }
@@ -100,6 +103,6 @@ function dressUp(w: World): Map<number, Dress> {
     if (drop && region.length >= 2 && chance(0.6, id(region), 9)) for (const c of region) put(c, { parapet: true });
   }
   // (a little moss at the foot of things)
-  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k === 0 && chance(0.12, i, j, 11)) put([0, i, j], { moss: true }); }
+  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k === 0 && chance(0.06, i, j, 11)) put([0, i, j], { moss: true }); }
   return map;
 }

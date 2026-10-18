@@ -68,7 +68,7 @@ function find(w: World): Motif[] {
     if (cells.length >= 2) out.push({ kind: 'flight', label: `a flight of ${cells.length} steps`, cells, hand: cells, spans: [] });
   }
   // (walls: a run of columns on the stone, one cell thick)
-  const footed = (i: number, j: number) => w.block(0, i, j) || w.archway(0, i, j) >= 0;
+  const footed = (i: number, j: number) => w.block(0, i, j) || w.archway(0, i, j) >= 0 || w.wall(0, i, j) >= 0;
   for (const a of [0, 1]) {
     const [di, dj] = DIRS[a], [pi, pj] = DIRS[1 - a];
     const thin = (i: number, j: number) => footed(i, j) && !footed(i + pi, j + pj) && !footed(i - pi, j - pj);

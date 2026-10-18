@@ -2,6 +2,8 @@
  * The palette: a piece in hand, put where it's touched (the free cell on the touched face's side), as an operation on
  * the same solid the gestures build (model.ts), resolved by the same rules. **auto** is the gestures (gesture.ts).
  *
+ * - **wall**: a thin wall, a wall's thickness and full height, running away from what it's put against (or across the
+ *   view), and on to the stone beside it;
  * - **block**: stone, there; against a side, out from it even over nothing (as a tap does: the rules carry it).
  * - **arch**: stone with a way through it, running where it's open either side (on an arch, the same way: one tall arch).
  * - **stair**: a flight up a level, climbing toward the stone it was put against (or onto a neighbour's top).
@@ -16,10 +18,10 @@ import { connect, surface, type Pick } from './gesture';
 import { look } from './character';
 
 /** the pieces a specific brush can hold, and the dressing */
-export type Piece = 'block' | 'arch' | 'stair' | 'bridge' | 'cypress' | 'pool';
+export type Piece = 'block' | 'wall' | 'arch' | 'stair' | 'bridge' | 'cypress' | 'pool';
 export type Dressing = keyof typeof DRESS;
 export type Hand = 'auto' | Piece | 'take';
-export const PIECES: Piece[] = ['block', 'arch', 'stair', 'bridge', 'cypress', 'pool'];
+export const PIECES: Piece[] = ['block', 'wall', 'arch', 'stair', 'bridge', 'cypress', 'pool'];
 export const DRESSINGS: Dressing[] = ['travertine', 'brick', 'marble', 'moss', 'ivy', 'parapet', 'lantern', 'pot'];
 
 /** a bridge across level k through a cell: along an axis, the free cells between stone either side (the shorter way) */
@@ -62,6 +64,7 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   if (!w.free(k, i, j)) return null;
   // (a block against a side goes out that way as an auto tap does, carried by the rules if there's nothing under it)
   if (hand === 'block' && (side || w.floor(k, i, j))) return { add: [[k, i, j, now]], why: 'block' };
+  if (hand === 'wall' && (side || w.floor(k, i, j))) return { walls: [[k, i, j, side ? toward % 2 : w.wall(k - 1, i, j) >= 0 ? w.wall(k - 1, i, j) : (view + 1) % 2, now]], why: 'wall piece' };
   if (!w.floor(k, i, j)) return null;
   if (hand === 'cypress') return w.free(k + 1, i, j) ? { trees: [[k, i, j, now]], why: 'cypress' } : null;
   if (hand === 'stair') {
@@ -79,13 +82,13 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
 
 /**
  * A piece traced rather than tapped: a run of it along the stroke, at the height it started from (`cells`, the start's
- * column first). Blocks, a wall; arches, an arcaded wall, each way through across the stroke; stairs, a flight climbing
+ * column first). Blocks, a wall; walls, a thin wall along it; arches, an arcaded wall, each way through across the stroke; stairs, a flight climbing
  * a level a cell along the straight of it. The rest are put once, where the stroke began.
  */
 export function run(w: World, piece: Piece, start: Pick, path: Array<[number, number]>, view: number, now: number): Op | null {
   const cells = connect(path), h0 = surface(w, start);
   if (cells.length < 2) return place(w, piece, start, view, now);
-  if (piece === 'block' || piece === 'arch') {
+  if (piece === 'block' || piece === 'arch' || piece === 'wall') {
     const out: Array<[number, number, number, number, number]> = [];
     cells.forEach(([i, j], s) => {
       if (!w.free(h0, i, j)) return;
@@ -93,6 +96,7 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
       out.push([h0, i, j, a, now + s * 0.05]);
     });
     if (!out.length) return null;
+    if (piece === 'wall') return { walls: out.map(([k, i, j, a, b]) => [k, i, j, 1 - a, b]), why: 'thin wall' };
     return piece === 'block' ? { add: out.map(([k, i, j, , b]) => [k, i, j, b]), why: 'wall' } : { arches: out, why: 'arcade' };
   }
   if (piece === 'stair') {

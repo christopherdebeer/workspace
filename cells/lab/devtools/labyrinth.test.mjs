@@ -39,7 +39,7 @@ const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] 
  * piers are respaced along its whole run, so a little more) */
 const LOCAL = 9;
 const spanCells = (sp) => Array.from({ length: sp.n }, (_, q) => key(sp.k, sp.i + q * DIRS[sp.a][0], sp.j + q * DIRS[sp.a][1]));
-const opCells = (op) => [...(op.add ?? []), ...(op.stairs ?? []), ...(op.cut ?? []), ...(op.arches ?? []), ...(op.trees ?? [])].map((c) => [c[1], c[2]]).concat((op.pools ?? []).map((c) => [c[0], c[1]]), op.connect ? op.connect.path : [], op.connect?.to ? [[op.connect.to[1], op.connect.to[2]]] : []);
+const opCells = (op) => [...(op.add ?? []), ...(op.stairs ?? []), ...(op.cut ?? []), ...(op.arches ?? []), ...(op.walls ?? []), ...(op.trees ?? [])].map((c) => [c[1], c[2]]).concat((op.pools ?? []).map((c) => [c[0], c[1]]), op.connect ? op.connect.path : [], op.connect?.to ? [[op.connect.to[1], op.connect.to[2]]] : []);
 for (let s = 1; s <= 60; s++) {
   const w = new World(s);
   let r = s * 7919;
@@ -71,11 +71,11 @@ for (let s = 1; s <= 60; s++) {
       } else {
         const cells = [[i, j]], d = DIRS[Math.floor(rnd() * 4)];
         for (let q = 1; q < 2 + Math.floor(rnd() * 4); q++) cells.push([i + q * d[0], j + q * d[1]]);
-        op = P.run(w, ['block', 'arch', 'stair'][Math.floor(rnd() * 3)], pk, cells, 1, t);
+        op = P.run(w, ['block', 'arch', 'stair', 'wall'][Math.floor(rnd() * 4)], pk, cells, 1, t);
       }
     } else if (what < 0.96) {
       // (a piece from the palette, where a touch would put it)
-      const hand = ['block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take'][Math.floor(rnd() * 7)];
+      const hand = ['block', 'wall', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take'][Math.floor(rnd() * 8)];
       const pk = pickAt(i, j), d = DIRS[Math.floor(rnd() * 4)];
       const pp = rnd() < 0.4 && pk.face === 'top' ? { face: 'side', hit: pk.hit, to: [pk.hit[0], i + d[0], j + d[1]] } : pk;
       op = P.place(w, hand, pp, Math.floor(rnd() * 4), t);
@@ -187,6 +187,33 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   let top = 0; for (let q = 1; q < mesh.data.length; q += 12) top = Math.max(top, mesh.data[q]);
   ok('drawn to the top', top >= H - 0.01, top);
 }
+// (a pier landing on a walkway below stands aside, slim, and the walkway past it stays open)
+{
+  const M = await load('../client/labyrinth/mesh.ts');
+  const w = new World(3);
+  w.apply({ add: [2, 3, 4, 5, 6, 7, 8].map((i) => [0, i, 5, 0]) });
+  for (let k = 0; k < 4; k++) w.apply({ add: [[k, 5, 1, 0]] });
+  w.apply({ add: [2, 3, 4, 5].map((j) => [3, 5, j, 0]) });
+  ok('the high walkway\'s free end stands on a pier down to the walkway below', w.pier(2, 5, 5) && w.pier(1, 5, 5) && !w.pier(0, 5, 5));
+  const ps = M.pierShape(w, 1, 5, 5);
+  ok('the pier is slim, and stands aside off the walkway', ps.r <= 0.17 && Math.abs(ps.oz) > 0.2 && ps.ox === 0, ps);
+  ok('and the walkway can be walked past it', NAV.reaches(NAV.navigate(w), [1, 2, 5], [1, 8, 5]));
+  ok('the hand can still build where a pier stands', w.free(1, 5, 5));
+}
+// (thin walls: a wall's thickness; they close a court as walls do, and a tap on one goes on as one)
+{
+  const w = new World(3);
+  const ring = [[3, 3], [4, 3], [5, 3], [6, 3], [6, 4], [6, 5], [6, 6], [5, 6], [4, 6], [3, 6], [3, 5], [3, 4]];
+  w.apply(P.run(w, 'wall', { face: 'ground', hit: [-1, 3, 3], to: [0, 3, 3] }, ring, 1, 0));
+  ok('a run of the wall piece: thin walls', ring.every(([i, j]) => w.wall(0, i, j) >= 0 && !w.block(0, i, j)));
+  ok('thin walls close a court', [[4, 4], [5, 4], [4, 5], [5, 5]].every(([i, j]) => w.courts.has(key(0, i, j))));
+  const up = G.tap(w, { face: 'top', hit: [0, 4, 3], to: [1, 4, 3] }, 0), out = G.tap(w, { face: 'side', hit: [0, 6, 4], to: [0, 7, 4] }, 0);
+  ok('a tap on a thin wall goes on as one: up, and out along its way', up?.walls?.[0]?.[0] === 1 && out?.walls?.[0]?.[3] === 0, { up, out });
+  w.apply(up); w.apply({ add: [[2, 4, 3, 0]] });
+  stands(w, 'thin walls');
+  const M = await load('../client/labyrinth/mesh.ts');
+  ok('thin walls are drawn, and struck where they are, not between', M.buildMesh(w).count > 0 && M.inStone(w, 4 - 6 + 0.5, 0.5, 3 - 6 + 0.5) && !M.inStone(w, 4 - 6 + 0.5, 0.5, 3 - 6 + 0.9));
+}
 // (a gate in a wall is walked through)
 {
   const w = new World(3);
@@ -220,7 +247,7 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   w.apply(r2.op);
   ok('read as two bays: a pier under its middle, two arches either side, alike', w.pier(0, 6, 5) && w.spans.filter((sp) => sp.k === 1).length === 2 && new Set(w.spans.map((sp) => sp.low)).size === 1, w.spans);
 }
-for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take', 'reading', 'dress', 'arcade', 'flight']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
+for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take', 'reading', 'dress', 'arcade', 'flight', 'thin wall', 'wall piece']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
 // (the storyboard: what each stage says it is)
 const s1 = story(1), s2 = story(2), s3 = story(3), s4 = story(4);
 ok('story 1: a small raised platform', s1.topFrom(0, 3, 7) === 2 && s1.topFrom(0, 4, 7) === 2);

@@ -73,12 +73,14 @@ export function selectCell(w: World, c: Cell, view: number, now: number): Select
   if (w.stone(k, i, j)) {
     const aw = w.archway(k, i, j), laid = w.laidBy(k, i, j);
     const block: Reading = { label: 'a block', op: { cut: [c], add: [[k, i, j, now]], why: 'reading' } };
+    const thin: Reading = { label: 'a thin wall', op: { walls: [[k, i, j, Math.max(0, w.wall(k, i, j) >= 0 ? w.wall(k, i, j) : (view + 1) % 2), now]], why: 'reading' } };
     const arch = (a: number): Reading => ({ label: a === 0 ? 'an arch, east to west' : 'an arch, north to south', op: { arches: [[k, i, j, a, now]], why: 'reading' } });
     const stair: Reading = { label: 'a stair', op: { stairs: [[k, i, j, (view + 2) % 4, now]], why: 'reading' } };
-    const readings = aw >= 0 ? [arch(aw), arch(1 - aw), block, stair] : [block, arch(view % 2), arch(1 - (view % 2)), stair];
+    const tw = w.wall(k, i, j);
+    const readings = aw >= 0 ? [arch(aw), arch(1 - aw), block, thin, stair] : tw >= 0 ? [thin, block, arch(view % 2), stair] : [block, thin, arch(view % 2), arch(1 - (view % 2)), stair];
     readings[0].op = null;
     const who = laid ? 'stone a connection laid' : 'stone you laid';
-    return { title: aw >= 0 ? `an arch, ${who}` : who, cells: [c], readings, at: 0, remove: { cut: [c], why: 'take' }, stone: [c] };
+    return { title: aw >= 0 ? `an arch, ${who}` : tw >= 0 ? `a thin wall, ${who}` : who, cells: [c], readings, at: 0, remove: { cut: [c], why: 'take' }, stone: [c] };
   }
   return null;
 }
@@ -90,12 +92,14 @@ export function selectMotif(w: World, m: Motif, now: number): Selection {
   if (m.kind === 'wall') {
     // (its foot as an arcade: a way through each cell of it, across it)
     const foot = m.cells.filter((c) => c[0] === 0), a = foot.length > 1 && foot[0][1] === foot[1][1] ? 0 : 1;
-    const arched = foot.every((c) => w.archway(...c) >= 0);
+    const arched = foot.every((c) => w.archway(...c) >= 0), thin = m.hand.every((c) => w.wall(...c) >= 0);
+    const stoneOf = m.hand.filter((c) => w.stone(...c));
     const readings: Reading[] = [
-      { label: 'a wall', op: { cut: foot, add: foot.map(([k, i, j]) => [k, i, j, now] as [number, number, number, number]), why: 'reading' } },
+      { label: 'a wall', op: { cut: stoneOf, add: stoneOf.map(([k, i, j]) => [k, i, j, now] as [number, number, number, number]), why: 'reading' } },
+      { label: 'a thin wall', op: { walls: stoneOf.map(([k, i, j]) => [k, i, j, 1 - a, now] as [number, number, number, number, number]), why: 'reading' } },
       { label: 'an arcaded wall', op: { arches: foot.map(([k, i, j]) => [k, i, j, a, now] as [number, number, number, number, number]), why: 'reading' } },
     ];
-    const at = arched ? 1 : 0;
+    const at = arched ? 2 : thin ? 1 : 0;
     readings[at].op = null;
     return { ...base, readings, at };
   }

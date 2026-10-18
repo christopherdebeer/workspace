@@ -39,6 +39,7 @@ The balance between them: **auto is for painting, select is for correcting, the 
 | Piece | Where it's touched | Puts down |
 |---|---|---|
 | **block** | the stone, a top, a side | stone in the free cell on that side. Against a side, out over nothing too, as a tap does (the rules carry it) |
+| **wall** | the same | a **thin wall**: a wall's thickness, full height, running away from what it's put against (or across the view), and on to the stone beside it. Tapped on its top, it goes up as a thin wall; on its side, out along its way |
 | **arch** | the same | stone with a way through it, running where it's open either side; on an arch, the same way, making one tall arch |
 | **stair** | a floor, or beside stone | a flight up a level, climbing toward the stone it was put against (or onto a neighbour's top) |
 | **bridge** | a gap at a level, from beside stone | stone laid across the whole span at once (up to seven cells), marked as a bridge so the rules carry it on one arch |
@@ -47,6 +48,7 @@ The balance between them: **auto is for painting, select is for correcting, the 
 
 Traced, a piece makes a run along the stroke, at the height the stroke started from:
 - **blocks**: a wall;
+- **walls**: a thin wall along the stroke, turning its corners;
 - **arches**: an arcaded wall, each way through running across the stroke;
 - **stairs**: a flight, a step up for every cell where the stroke runs straight, carried on piers or small arches where there's nothing under it.
 
@@ -59,9 +61,9 @@ Dressing changes how stone looks, never what stands. Tap a stone, or stroke over
 | Dressing | |
 |---|---|
 | **travertine**, **brick**, **marble** | what the stone is. Brick is laid in narrow courses, each brick its own shade, with pavers on top; marble is white and veined, in large blocks |
-| **moss** | in the joints and the shade, thicker on tops and low down |
-| **ivy** | leaves hanging over a stone's sides |
-| **parapet** | a low wall round the open edges of a top |
+| **moss** | soft patches low down and in the shade, a few brighter flecks in them |
+| **ivy** | leaves, each its own, clumped where it's thick and thinning to a few at its edges |
+| **parapet** | a low wall round the open edges of a top, with a coping a little proud of it |
 | **lantern**, **pot** | on a top with room over it: a lantern on a post, lit; a terracotta pot with a clipped shrub |
 
 A stroke that starts on a stone that already has the dressing takes it off everything it passes over. Take, tapped on a lantern or a pot, takes that first. The rules dress a little of their own accord: a bridge, or an arch two levels up or more, gets a parapet along its open sides.
@@ -82,10 +84,10 @@ Tap a piece and it's taken up, outlined in warm ink, with a card saying what it 
 | an arch the rules made | an arch · a lintel (flat, on its piers) · two bays (a pier forced under its middle, if it's three or more long) · solid (stone under it, down to what's below) |
 | an arcade, or a bridge | the same, for all its arches at once. Solid fills over its piers too |
 | a pier | a pier · solid |
-| a block (yours, or laid by a connection) | a block · an arch either way · a stair |
+| a block (yours, or laid by a connection) | a block · a thin wall · an arch either way · a stair |
 | an arch you put | an arch · turned · a block · a stair |
 | a stair | each of the four ways it could climb · a block |
-| a wall | a wall · an arcaded wall (a way through each cell of its foot) |
+| a wall | a wall · a thin wall · an arcaded wall (a way through each cell of its foot) |
 
 A switched reading is an operation like any other: undone, written down, replayed. From then on it's the hand's. The rules don't decide it again.
 
@@ -178,14 +180,28 @@ Auto doesn't only make what the hand asked for. Where there's a choice, the rule
 | an arcade or bridge | brick, piers and all |
 | a flight | a lantern where it arrives |
 | a terrace | pots at its corners, a lantern |
-| a court | ivy up the walls round it, moss at their foot; pots in its corners besides the cypress |
+| a court | ivy now and then, in a clump up a few of the walls round it (a cell or two high); moss at their foot; pots in its corners besides the cypress |
 | anything high with a drop at its edge | a parapet round it |
 | the stone at the foot of things | a little moss |
 
+Dressing is kept sparing on purpose: a few things dressed well read better than everything dressed.
+
 **The hand's dressing always wins**, part by part. Brick over the rules' marble is brick; a lantern taken off stays off. A stroke with a dressing starts from how the stone looks now, the rules' dressing included, so stroking ivy over the rules' ivy takes it off.
 
-![auto alone, no cap: a ten-high tower, a walkway to it, a long gated wall; everything as the rules chose](labyrinth/v-story-7.jpg)
+![auto alone, no cap: a ten-high tower, a walkway to it, a long gated wall, and a high walkway from halfway up the tower whose slim piers stand aside on the ways below; everything as the rules chose](labyrinth/v-story-7.jpg)
 ![storyboard 4 with ?plain: the same stone, without the rules' dressing](labyrinth/v-story-4-plain.jpg)
+
+## Three tiers of wall
+
+| | How thick | How high | Made by |
+|---|---|---|---|
+| **a block wall** | a whole cell | a level a course | auto's trace on the stone, the block piece |
+| **a thin wall** | a wall's thickness | a level a course | the wall piece; select's reading of a block, or of a wall |
+| **a parapet** | thinner, with a coping | low | dressing; the rules, round a high drop |
+
+Select reads a wall three ways: a wall, a thin wall, an arcaded wall. A block reads as a thin wall too.
+
+![a garden of thin walls, run with the wall piece, beside the brick court](labyrinth/v-motifs.jpg)
 
 ## Motifs
 
@@ -224,7 +240,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 - **Blocks** have their faces where nothing hides them, darker at the foot.
 - **Stairs** have six steps.
 - **Arches** have spandrels and a deck over an elliptical soffit, lit warm from within.
-- **Piers** are square columns with a cap.
+- **Piers** are slender columns, a little tapered, with a base and a capital. The higher they stand and the taller they run, the slimmer they are. On open ground a pier stands in the middle of its cell. Where it lands on a way (a walkway, a landing, a bridge's deck) it stands aside at the edge of its cell, across the way, so the way past it stays open. A figure walks past it, and the hand can build where it stands: the hand's stone takes over what it carried.
+- **Thin walls** are a wall's thickness, full height, running out to the stone beside them. They're the middle tier between a block wall and a parapet, and they close a court as a wall does.
 - **Courtyards** are travertine flags with their joints.
 - **The stone** is dressed travertine laid in courses (a joint every third of a level, the upright joints staggered course to course), banded, pitted with pores, and each block a shade of its own.
 - **Light**: a low warm sun with soft shadows. The dappled shade of a tree out of the picture falls across one side, near the build.
@@ -247,6 +264,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - the hand's dressing wins over the rules';
   - there's no cap: a column tapped up fourteen times is fourteen high, read as a tower, climbed by a fourteen-step flight that can be walked, and drawn to the top;
   - a gate in a wall is walked through, along its way only;
+  - a high walkway's free end comes down on a pier onto a walkway below: the pier is slim, stands aside, and the walkway below can still be walked past it, and built on;
+  - the wall piece run round makes thin walls, which close a court; a tap on a thin wall goes on as one, up or out along its way; struck where it is, not beside it;
   - the random worlds also switch readings on what select would take up, dress stones, and run pieces; every arcade's bays spring alike;
   - storyboard 6: the arcade is two alike bays, the flight is three steps and can be climbed to the terrace, towers and the court are found, the lintel and the dressing are there and written down; every reading of the arcade stands; a bridge of five read as two bays gets a pier under its middle;
   - every arch's air is clear;
@@ -258,7 +277,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - the hand says what an arch is and that it's part of an arcade;
   - select takes up the arch, then the arcade, switches it to lintels and round its readings back, leaving no operations behind;
   - the piece brush, touched again, opens its sheet; brick from it is held and shown on the brush, and dresses a stone;
-  - blocks traced make a run;
+  - blocks traced make a run; the wall piece traced makes a thin wall;
   - take, tapped, takes a piece away. Then undo, a turn from the background, print, what's built kept across a reload, and clear.
 
 **What the tests don't establish** is the brief's real criterion: whether someone can anticipate a result, correct it and repeat it on purpose. That needs a person with the phone.
