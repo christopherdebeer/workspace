@@ -15,7 +15,8 @@
  * - **Carving** (the take brush's stroke): each piece of stone it passes over is cut away (a top lowered a course; a
  *   side cut through, so what's over it is carried on an arch).
  */
-import { LEVELS, inGrid, straights, type Cell, type Op, type World } from './model';
+import { hash } from '../kit/rng';
+import { CEIL, inGrid, straights, type Cell, type Op, type World } from './model';
 
 /** what a touch struck: the stone slab (`hit[0]` −1), a top, or a side; `hit` the cell struck, `to` the free cell on that
  * face's side; `inset`, how squarely */
@@ -31,7 +32,7 @@ export function surface(w: World, p: Pick): number {
 
 export function tap(w: World, p: Pick, now: number): Op | null {
   const [k, i, j] = p.face === 'ground' ? [0, p.hit[1], p.hit[2]] : p.face === 'top' ? [w.topFrom(p.hit[0], p.hit[1], p.hit[2]), p.hit[1], p.hit[2]] : p.to;
-  if (k >= LEVELS || !inGrid(i, j) || w.stone(k, i, j) || w.stair(k, i, j) >= 0) return null;
+  if (k >= CEIL || !inGrid(i, j) || w.stone(k, i, j) || w.stair(k, i, j) >= 0) return null;
   return { add: [[k, i, j, now]], why: p.face === 'side' ? 'extend' : k === 0 ? 'raise' : 'course' };
 }
 
@@ -77,15 +78,34 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
   }
   if (cells.length < 2) return null;
   if (h0 === 0 && (!to || to[0] === 0)) {
-    // (a wall along it: the hand's own stone)
-    const add: Array<[number, number, number, number]> = [];
-    for (const [i, j] of cells) if (!w.stone(0, i, j) && w.stair(0, i, j) < 0 && !w.tree(0, i, j)) add.push([0, i, j, born(i, j)]);
-    return add.length ? { add, why: 'wall' } : null;
+    // (a wall along it: the hand's own stone. What kind of wall is the rules' choice, seeded by where it runs, so the
+    // same stroke always makes the same wall: plain; gated, a way through it near its middle (and every six cells or so,
+    // if it's long); or arcaded, a way through every other cell. A long wall is never left plain)
+    const free = cells.filter(([i, j]) => !w.stone(0, i, j) && w.stair(0, i, j) < 0 && !w.tree(0, i, j));
+    if (!free.length) return null;
+    const [a0, a1] = cells[0], [b0, b1] = cells[cells.length - 1], r = hash(w.seed, a0, a1, b0, b1, cells.length) % 100;
+    const kind = cells.length >= 5 && r < 30 ? 'arcaded' : (cells.length >= 3 && r < 60) || cells.length >= 8 ? 'gated' : 'plain';
+    const across = (q: number) => { const n = cells[Math.min(cells.length - 1, q + 1)], p = cells[Math.max(0, q - 1)]; return n[0] !== p[0] ? 1 : 0; };
+    const straight = (q: number) => q > 0 && q < cells.length - 1 && cells[q - 1][0] - cells[q][0] === cells[q][0] - cells[q + 1][0] && cells[q - 1][1] - cells[q][1] === cells[q][1] - cells[q + 1][1];
+    const gate = new Set<number>();
+    if (kind === 'gated') {
+      const n = Math.max(1, Math.round(cells.length / 6));
+      for (let g = 0; g < n; g++) { const at = Math.floor(((g + 0.5) * cells.length) / n); for (const q of [at, at - 1, at + 1, at - 2, at + 2]) if (straight(q)) { gate.add(q); break; } }
+    }
+    if (kind === 'arcaded') for (let q = 1; q < cells.length - 1; q += 2) if (straight(q)) gate.add(q);
+    const add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [];
+    cells.forEach(([i, j], q) => {
+      if (!free.some((c) => c[0] === i && c[1] === j)) return;
+      if (gate.has(q)) arches.push([0, i, j, across(q), born(i, j)]); else add.push([0, i, j, born(i, j)]);
+    });
+    return { add, ...(arches.length ? { arches } : {}), why: 'wall' };
   }
   const path2 = to ? cells.slice(0, -1) : cells, climb = to ? Math.abs(to[0] - h0) : 0, room = straights(path2, to).length;
   if (climb > room) return { refused: `too steep: ${climb} level${climb > 1 ? 's' : ''} to climb, and room for ${room} step${room === 1 ? '' : 's'}; draw it longer, or straighter` };
   if (path2.length < 2 && !to) return null;
-  return { connect: { from: [h0, cells[0][0], cells[0][1]], to, path: path2 }, born: now, why: !to ? 'walkway' : to[0] === h0 ? 'bridge' : 'stairs' };
+  // (a bridge four to seven long: one great arch, or an arcade, as the rules choose for where it runs)
+  const great = !!to && to[0] === h0 && path2.length >= 5 && path2.length <= 8 && hash(w.seed, cells[0][0], cells[0][1], to[1], to[2]) % 100 < 50;
+  return { connect: { from: [h0, cells[0][0], cells[0][1]], to, path: path2 }, born: now, why: !to ? 'walkway' : to[0] === h0 ? 'bridge' : 'stairs', ...(great ? { bridge: true } : {}) };
 }
 
 /** what carving takes where it touches: the stone (or stair) struck, if it's the hand's (piers and arches are the rules') */

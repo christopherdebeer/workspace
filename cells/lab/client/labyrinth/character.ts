@@ -1,0 +1,105 @@
+/**
+ * The rules' own dressing: what the stone gets of its own accord, so auto builds come out with some character, not bare.
+ * Worked out from the resolved world and its motifs (motifs.ts), never kept as operations: it follows whatever's built.
+ * Seeded (by the world's seed and where things are), so the same build is always dressed the same way; decided a whole
+ * motif at a time, so it's coherent (a tower is all marble or none of it; a terrace's parapet runs all round or not at
+ * all). The hand's dressing always wins, part by part: what the hand set on stays on, what it set off stays off.
+ *
+ * - **towers**: marble now and then, or brick; a lantern on top, often; sometimes a parapet round the top;
+ * - **walls**: brick now and then; moss along their foot;
+ * - **arcades and bridges**: now and then in brick, piers and all;
+ * - **flights**: a lantern where they arrive, often;
+ * - **terraces**: pots at a corner or two; a lantern sometimes;
+ * - **courts**: ivy up the walls round them, moss at their foot;
+ * - **anything high with a drop at its edge**: a parapet round it, taken a top at a time;
+ * - **the stone at the foot of things**: a little moss, here and there.
+ */
+import { hash } from '../kit/rng';
+import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './model';
+import { height, motifs } from './motifs';
+
+const cache = new WeakMap<World, { v: number; map: Map<number, Dress> }>();
+
+/** the rules' dressing for a world (worked out once for each state of it) */
+export function character(w: World): Map<number, Dress> {
+  const c = cache.get(w);
+  if (c && c.v === w.version) return c.map;
+  const map = dressUp(w);
+  cache.set(w, { v: w.version, map });
+  return map;
+}
+
+/** how a cell's dressed: the rules' dressing, and over it whatever the hand set (`plain`: the hand's alone) */
+export function look(w: World, k: number, i: number, j: number, plain = false): Dress | null {
+  const hand = w.dressed(k, i, j), auto = plain ? undefined : character(w).get(key(k, i, j));
+  if (!hand) return auto ?? null;
+  if (!auto) return hand;
+  const out: Dress = { ...auto };
+  for (const [f, v] of Object.entries(hand)) if (v !== undefined) (out as Record<string, unknown>)[f] = v;
+  return out;
+}
+
+function dressUp(w: World): Map<number, Dress> {
+  const map = new Map<number, Dress>();
+  /** a chance, the same every time for the same things */
+  const chance = (p: number, ...n: number[]) => hash(w.seed, ...n) % 1000 < p * 1000;
+  const put = (c: Cell, d: Dress) => { const v = key(...c), o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };
+  const stone = (c: Cell) => w.stone(...c) || w.pier(...c);
+  /** a top with room over it (for a lantern or a pot) */
+  const roomy = (c: Cell) => w.stone(...c) && !w.occupied(c[0] + 1, c[1], c[2]) && !w.tree(c[0] + 1, c[1], c[2]);
+  const id = (cells: Cell[]) => cells.reduce((m, c) => Math.min(m, key(...c)), Infinity);
+
+  for (const m of motifs(w)) {
+    const n = id(m.cells);
+    if (m.kind === 'tower') {
+      const r = hash(w.seed, n, 1) % 100, mat = r < 35 ? DRESS.marble : r < 50 ? DRESS.brick : -1;
+      if (mat >= 0) for (const c of m.cells) if (stone(c)) put(c, { mat });
+      const tops = m.cells.filter(roomy).filter((c) => c[0] === Math.max(...m.cells.map((q) => q[0])));
+      if (tops.length && chance(0.65, n, 2)) put(tops[hash(w.seed, n, 3) % tops.length], { prop: DRESS.lantern });
+      if (chance(0.4, n, 4)) for (const c of tops) put(c, { parapet: true });
+    } else if (m.kind === 'wall') {
+      if (chance(0.25, n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
+      if (chance(0.4, n, 2)) for (const c of m.cells) if (c[0] === 0 && stone(c)) put(c, { moss: true });
+    } else if (m.kind === 'arcade' || m.kind === 'bridge') {
+      if (chance(0.2, n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
+    } else if (m.kind === 'flight') {
+      // (where it arrives: the stone under the place at its head)
+      const [k, i, j] = m.cells[m.cells.length - 1], d = w.stair(k, i, j), head: Cell = [k, i + DIRS[d][0], j + DIRS[d][1]];
+      if (roomy(head) && chance(0.6, n, 1)) put(head, { prop: DRESS.lantern });
+    } else if (m.kind === 'terrace') {
+      const open = (c: Cell) => DIRS.filter(([a, b]) => height(w, c[1] + a, c[2] + b) < c[0] + 1).length;
+      const corners = m.cells.filter((c) => roomy(c) && open(c) >= 2);
+      corners.forEach((c, q) => { if (q < 3 && chance(0.5, n, 10 + q)) put(c, { prop: DRESS.pot }); });
+      const free = corners.filter((c) => !map.get(key(...c))?.prop);
+      if (free.length && chance(0.3, n, 2)) put(free[0], { prop: DRESS.lantern });
+    } else if (m.kind === 'court') {
+      // (the walls round it: ivy climbing them, moss at their foot)
+      const ivy = chance(0.45, n, 1), moss = chance(0.5, n, 2);
+      for (const [, i, j] of m.cells) for (const [a, b] of DIRS) {
+        const x = i + a, z = j + b, h = height(w, x, z);
+        if (!w.stone(0, x, z)) continue;
+        if (moss) put([0, x, z], { moss: true });
+        if (ivy) { const up = 1 + (hash(w.seed, x, z, 5) % Math.max(1, h)); for (let k = 0; k < Math.min(h, up); k++) if (w.stone(k, x, z)) put([k, x, z], { ivy: true }); }
+      }
+    }
+  }
+
+  // (anything high with a drop at its edge: a parapet round it, a top at a time, all of it or none)
+  const tops = new Set<number>(), seen = new Set<number>();
+  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k >= 1 && !w.occupied(k + 1, i, j) && !w.tree(k + 1, i, j)) tops.add(v); }
+  for (const v of tops) {
+    if (seen.has(v)) continue;
+    const [k] = unkey(v), region: Cell[] = [], st = [v];
+    seen.add(v);
+    while (st.length) {
+      const u = st.pop()!, [, i, j] = unkey(u);
+      region.push([k, i, j]);
+      for (const [a, b] of DIRS) { const q = key(k, i + a, j + b); if (tops.has(q) && !seen.has(q)) { seen.add(q); st.push(q); } }
+    }
+    const drop = region.some(([, i, j]) => DIRS.some(([a, b]) => height(w, i + a, j + b) <= k - 1));
+    if (drop && region.length >= 2 && chance(0.6, id(region), 9)) for (const c of region) put(c, { parapet: true });
+  }
+  // (a little moss at the foot of things)
+  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k === 0 && chance(0.12, i, j, 11)) put([0, i, j], { moss: true }); }
+  return map;
+}

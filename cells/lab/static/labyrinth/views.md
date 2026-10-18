@@ -21,6 +21,11 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ![From the other side: the flight up to the ivied terrace, and the arcade beyond it](v-motifs-turned.jpg)
 ![Dressing, close: brick and moss, the lantern on the marble tower](v-dressing-close.jpg)
 
+## Auto, with character
+
+![Auto alone, no cap: a tower tapped up ten high (no cap on height), a walkway to it, a long wall traced round: every motif and all the dressing the rules' own choice](v-story-7.jpg)
+![Without the rules' dressing: storyboard 4 as the hand built it, with ?plain: the stone bare](v-story-4-plain.jpg)
+
 ## The brushes
 
 ![The piece brush's sheet: hold the piece brush (or touch it again): the pieces, and the dressing](v-sheet.jpg)

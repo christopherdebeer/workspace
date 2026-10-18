@@ -5,19 +5,20 @@
 // undo undoes; what's written down makes the same world again. And the storyboard is what it says.
 import { build } from 'esbuild';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
-const { World, replay, LEVELS, DIRS, LO, HI, START, key, unkey } = await load('../client/labyrinth/model.ts');
+const { World, replay, CEIL, DIRS, LO, HI, START, key, unkey } = await load('../client/labyrinth/model.ts');
 const G = await load('../client/labyrinth/gesture.ts');
 const { story } = await load('../client/labyrinth/demo.ts');
 const P = await load('../client/labyrinth/palette.ts');
 const NAV = await load('../client/labyrinth/nav.ts');
 const MO = await load('../client/labyrinth/motifs.ts');
 const SEL = await load('../client/labyrinth/select.ts');
+const CH = await load('../client/labyrinth/character.ts');
 
 let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
 
 function stands(w, tag) {
-  for (let k = 0; k < LEVELS; k++) for (let j = LO; j <= HI; j++) for (let i = LO; i <= HI; i++) {
+  for (let k = 0; k < w.levels; k++) for (let j = LO; j <= HI; j++) for (let i = LO; i <= HI; i++) {
     const mine = w.stone(k, i, j) || w.stair(k, i, j) >= 0, pier = w.pier(k, i, j);
     if (!mine && !pier) continue;
     const where = `${tag} ${k}.${i}.${j}`;
@@ -27,13 +28,13 @@ function stands(w, tag) {
     ok(`${where}: with nothing under it, it's carried on an arch`, !!sp);
     if (!sp) continue;
     const [di, dj] = DIRS[sp.a];
-    ok(`${where}: its arch springs from stone either side`, w.occupied(k, sp.i - di, sp.j - dj) && w.occupied(k, sp.i + sp.n * di, sp.j + sp.n * dj) && sp.n <= 3);
+    ok(`${where}: its arch springs from stone either side (three cells at most, or seven for a bridge)`, w.occupied(k, sp.i - di, sp.j - dj) && w.occupied(k, sp.i + sp.n * di, sp.j + sp.n * dj) && sp.n <= (Array.from({ length: sp.n }, (_, q) => w.bridge(k, sp.i + q * di, sp.j + q * dj)).every(Boolean) ? 7 : 3), sp);
     for (let s = 0; s < sp.n; s++) for (let kk = sp.low; kk < k; kk++) ok(`${where}: its air is clear`, !w.occupied(kk, sp.i + s * di, sp.j + s * dj));
   }
 }
 
 const made = {};
-const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] };
+const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set() };
 /** how far from what an edit touched its effect on piers and arches may go (an arch spans seven at most; an arcade's
  * piers are respaced along its whole run, so a little more) */
 const LOCAL = 9;
@@ -43,7 +44,7 @@ for (let s = 1; s <= 60; s++) {
   const w = new World(s);
   let r = s * 7919;
   const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
-  const pickAt = (i, j) => { let k = -1; while (k + 1 < LEVELS && w.occupied(k + 1, i, j)) k++; return k < 0 ? { face: 'ground', hit: [-1, i, j], to: [0, i, j] } : { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+  const pickAt = (i, j) => { let k = -1; while (k + 1 < CEIL && w.occupied(k + 1, i, j)) k++; return k < 0 ? { face: 'ground', hit: [-1, i, j], to: [0, i, j] } : { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
   for (let t = 0; t < 60; t++) {
     // (somewhere on the slab, as it's grown)
     const e = w.extent(), i = e.i0 + Math.floor(rnd() * (e.i1 - e.i0 + 1)), j = e.j0 + Math.floor(rnd() * (e.j1 - e.j0 + 1)), what = rnd();
@@ -107,6 +108,15 @@ for (let s = 1; s <= 60; s++) {
     local.tried++; if (changed.every((v) => !far(v))) local.ok++; else if (local.saw.length < 3) local.saw.push({ s, t, why: op.why, far: changed.filter(far).map(unkey) });
   }
   stands(w, `seed ${s}`);
+  // (the rules' own dressing: the same for the same world, and a motif dressed all of a piece)
+  {
+    const ch = CH.character(w), again = CH.character(replay(w.encode(), w.seed));
+    ok(`seed ${s}: the rules dress it the same every time`, JSON.stringify([...ch]) === JSON.stringify([...again]));
+    for (const m of MO.motifs(w).filter((m) => m.kind === 'tower')) { const mats = new Set(m.cells.filter((c) => w.stone(...c)).map((c) => ch.get(key(...c))?.mat ?? 0)); ok(`seed ${s}: a tower's all one stone`, mats.size === 1, [...mats]); }
+    lively.worlds++; if (ch.size >= 3) lively.dressed++;
+    for (const d of ch.values()) for (const [f, v] of Object.entries(d)) if (v) lively.kinds.add(f === 'mat' ? `mat${v}` : f === 'prop' ? `prop${v}` : f);
+    lively.gates += w.ops.filter((o) => o.why === 'wall' && o.arches?.length).length;
+  }
   // (an arcade's bays alike: every arch of it springs from the same height)
   for (const m of MO.motifs(w).filter((m) => m.kind === 'arcade')) ok(`seed ${s}: an arcade's bays spring alike`, m.spans.every((sp) => sp.low === m.spans[0].low), m.spans);
   const again = replay(w.encode());
@@ -146,10 +156,48 @@ ok(`an edit changes what holds things up only near it (${local.ok} of ${local.tr
   w.apply(wk);
   ok('a walkway meeting stone stops at it, and cuts nothing', w.stone(3, 4, 8) && w.reached.get(wk)?.stopped >= 0, w.reached.get(wk));
 }
+// (auto comes out with character: most worlds dressed by the rules, in every kind of dressing; walls with gates and arcades)
+ok(`most worlds are dressed by the rules (${lively.dressed} of ${lively.worlds})`, lively.dressed >= lively.worlds * 0.6, lively);
+ok(`the rules use every kind of dressing (${[...lively.kinds].sort().join(' ')})`, ['mat1', 'mat2', 'moss', 'ivy', 'parapet', 'prop6', 'prop7'].every((k) => lively.kinds.has(k)), [...lively.kinds]);
+ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gates >= 20, lively.gates);
+// (the hand's dressing wins over the rules', part by part)
+{
+  const w = new World(2);
+  for (let k = 0; k < 4; k++) w.apply({ add: [[k, 5, 5, 0]] });
+  let seed = 2, auto = null;
+  for (; seed < 60 && !auto; seed++) { w.seed = seed; w.rebuild(); const d = CH.look(w, 3, 5, 5); if (d?.mat === 2 || d?.prop) auto = d; }
+  ok('somewhere, the rules dress a lone tower (marble, or a lantern on top)', !!auto, auto);
+  w.apply({ dress: [[3, 5, 5, 0, 1], [3, 5, 5, 6, 0]] });
+  ok('the hand\'s travertine, and its lantern taken off, win over the rules\'', (CH.look(w, 3, 5, 5)?.mat ?? 0) === 0 && !CH.look(w, 3, 5, 5)?.prop, CH.look(w, 3, 5, 5));
+}
+// (there's no cap on how high it goes)
+{
+  const w = new World(4), H = 14;
+  for (let k = 0; k < H; k++) { const op = G.tap(w, k ? { face: 'top', hit: [k - 1, 5, 5], to: [k, 5, 5] } : { face: 'ground', hit: [-1, 5, 5], to: [0, 5, 5] }, 0); if (op) w.apply(op); }
+  ok(`tapped up ${H} times: ${H} high`, w.topFrom(0, 5, 5) === H && w.top() === H && w.levels > H, { top: w.top(), levels: w.levels });
+  ok('and read as a tower that high', MO.motifs(w).some((m) => m.kind === 'tower' && m.label.includes(`${H} high`)));
+  // (a long straight trace from the stone climbs all the way up it)
+  const path = Array.from({ length: H + 2 }, (_, q) => [5 - (H + 1) + q, 5]);
+  const op = G.trace(w, { face: 'ground', hit: [-1, path[0][0], 5], to: [0, path[0][0], 5] }, path, { face: 'top', hit: [H - 1, 5, 5], to: [H, 5, 5] }, () => 0);
+  w.apply(op);
+  ok(`a flight all the way up: ${H} steps, reaching the top, walkable`, op.why === 'stairs' && w.reached.get(op)?.reached && NAV.reaches(NAV.navigate(w), [0, path[0][0], 5], [H, 5, 5]), w.reached.get(op));
+  stands(w, 'tall');
+  // (and drawn: every level of it)
+  const M = await load('../client/labyrinth/mesh.ts'), mesh = M.buildMesh(w);
+  let top = 0; for (let q = 1; q < mesh.data.length; q += 12) top = Math.max(top, mesh.data[q]);
+  ok('drawn to the top', top >= H - 0.01, top);
+}
+// (a gate in a wall is walked through)
+{
+  const w = new World(3);
+  w.apply({ add: [[0, 3, 5, 0], [0, 5, 5, 0]], arches: [[0, 4, 5, 1, 0]] });
+  const n = NAV.navigate(w), nx = (n.next.get(key(0, 4, 5)) ?? []).map((v) => unkey(v).join('.')).sort();
+  ok('a gate in a wall is walked through, along its way only', nx.join() === '0.4.4,0.4.6', nx);
+}
 // (motifs and dressing, as the storyboard has them)
 {
   const s6 = story(6), ms = MO.motifs(s6), arc = ms.find((m) => m.kind === 'arcade' && m.spans.every((sp) => sp.k === 2 && sp.a === 1));
-  ok('story 6: the trace from the terrace to the tower is an arcade of two bays, alike', !!arc && arc.spans.length === 2 && arc.spans[0].n === arc.spans[1].n && arc.spans[0].low === arc.spans[1].low, arc?.spans);
+  ok('story 6: the trace from the terrace to the far tower is an arcade of three bays, alike', !!arc && arc.spans.length === 3 && arc.spans.every((sp) => sp.n === arc.spans[0].n && sp.low === arc.spans[0].low), arc?.spans);
   const fl = ms.find((m) => m.kind === 'flight');
   ok('story 6: the stair brush\'s run is a flight of three, up to the terrace, and it can be climbed', fl?.cells.length === 3 && NAV.reaches(NAV.navigate(s6), [0, 14, 4], [3, 10, 4]), fl);
   ok('story 6: towers and the court are found', ms.filter((m) => m.kind === 'tower').length >= 2 && ms.some((m) => m.kind === 'court'), ms.map((m) => m.label));
@@ -180,9 +228,9 @@ ok('story 2: a wall traced from it', [5, 6, 7, 8, 9].every((i) => s2.stone(0, i,
 ok('story 3: a connection up to the higher terrace, with steps', s3.stairs.size >= 1 && s3.stone(1, 6, 7));
 ok('story 4: a passage beneath the walkway, on an arch', !s4.stone(0, 6, 7) && !!s4.span(1, 6, 7));
 ok('story 4: the court closed, with something growing in it', s4.courts.size > 0 && s4.decor.length > 0);
-{ const bay = s4.spans.filter((sp) => sp.k === 2 && sp.a === 0 && sp.j === 4); ok('story 4: the tower bridged to the terrace on an arcade of even bays', bay.length === 2 && bay.every((sp) => sp.n === bay[0].n), bay); }
+{ const bay = s4.spans.filter((sp) => sp.k === 2 && sp.a === 0 && sp.j === 4); ok('story 4: the tower bridged to the terrace on one great arch, or an arcade of even bays (the rules\' choice)', (bay.length === 1 && bay[0].n === 5) || (bay.length === 2 && bay.every((sp) => sp.n === bay[0].n)), bay); }
 stands(s4, 'story 4');
 if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
-console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)}`);
+console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exitCode = fails ? 1 : 0;

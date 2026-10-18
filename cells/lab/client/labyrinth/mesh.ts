@@ -14,7 +14,8 @@
  *
  * x and z are centred on the slab; y up, the slab's top at 0.
  */
-import { CENTER, DECK, DIRS, DRESS, LEVELS, key, unkey, type Span, type World } from './model';
+import { look } from './character';
+import { CENTER, DECK, DIRS, DRESS, key, unkey, type Span, type World } from './model';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
@@ -41,11 +42,13 @@ type V3 = [number, number, number];
 const X = (i: number) => i - CENTER, Z = (j: number) => j - CENTER;
 const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 19349663) ^ (j * 83492791)) >>> 0) / 4294967296;
 
-export function buildMesh(w: World): Mesh {
+export function buildMesh(w: World, plain = false): Mesh {
+  /** how a cell's dressed: the rules' dressing and the hand's (`plain`: the hand's alone) */
+  const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const out: number[] = [];
   let cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0 };
   /** a cell's dressing, as it's drawn over its stone */
-  const dressOf = (k: number, i: number, j: number) => { const d = w.dressed(k, i, j); return d ? d.mat * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
+  const dressOf = (k: number, i: number, j: number) => { const d = dressed(k, i, j); return d ? (d.mat ?? 0) * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
   const at = (born: number, pivot: number, k: number, i: number, j: number, how = 1) => ({ born, pivot, how, tone: tone(k, i, j), dress: dressOf(k, i, j) });
   const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat, cur.born, cur.pivot, cur.how, cur.tone);
   const quad = (a: V3, b: V3, c: V3, d: V3, n: V3, ao: number[] | number, mat: number) => {
@@ -110,7 +113,7 @@ export function buildMesh(w: World): Mesh {
 
   // ─── the hand's stone: blocks and stairs ───
   const ext = w.extent();
-  for (let k = 0; k < LEVELS; k++) for (let j = ext.j0; j <= ext.j1; j++) for (let i = ext.i0; i <= ext.i1; i++) {
+  for (let k = 0; k < w.levels; k++) for (let j = ext.j0; j <= ext.j1; j++) for (let i = ext.i0; i <= ext.i1; i++) {
     const x0 = X(i), z0 = Z(j), y0 = k, y1 = k + 1;
     if (w.block(k, i, j)) {
       cur = at(w.born(k, i, j), y0, k, i, j);
@@ -167,12 +170,13 @@ export function buildMesh(w: World): Mesh {
         const A: V3 = a ? [a > 0 ? x0 + 1 : x0, lv, z0] : [x0, lv, b > 0 ? z0 + 1 : z0], B: V3 = a ? [A[0], lv, z0 + 1] : [x0 + 1, lv, A[2]];
         quad(A, B, [B[0], 0, B[2]], [A[0], 0, A[2]], [-a, 0, -b], [0.6, 0.6, 0.9, 0.9], MAT.court);
       }
-    } else cypress(dc.i, dc.j, dc.k, dc.born);
+    } else if (dc.kind === 'pot') pot(dc.i, dc.j, 0, dc.born);
+    else cypress(dc.i, dc.j, dc.k, dc.born);
   }
 
   // ─── dressing: parapets (by hand, and along a bridge of its own accord), lanterns and pots ───
   for (const v of [...w.mass.keys()]) {
-    const [k, i, j] = unkey(v), d = w.dressed(k, i, j), sp = w.span(k, i, j);
+    const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
     if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j)) continue;
     // (a parapet of its own accord along anything carried high: a bridge, or an arch two levels up or more)
     const bridge = !!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j));
@@ -315,7 +319,7 @@ export function buildMesh(w: World): Mesh {
 export function inStone(w: World, x: number, y: number, z: number): boolean {
   if (y < 0) { const ex = w.extent(); return y > -SLAB && x > X(ex.i0) - MARGIN && x < X(ex.i1 + 1) + MARGIN && z > Z(ex.j0) - MARGIN && z < Z(ex.j1 + 1) + MARGIN; }
   const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER), k = Math.floor(y);
-  if (k >= LEVELS || !w.onSlab(i, j)) return false;
+  if (k >= w.levels || !w.onSlab(i, j)) return false;
   const fx = x + CENTER - i - 0.5, fz = z + CENTER - j - 0.5, fy = y - k;
   if (w.stone(k, i, j)) {
     const sp = w.span(k, i, j), aw = w.archway(k, i, j);
@@ -330,7 +334,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   if (w.pier(k, i, j)) return Math.abs(fx) < PIER && Math.abs(fz) < PIER;
   if (w.tree(k, i, j) || w.tree(k - 1, i, j)) return Math.hypot(fx, fz) < 0.26;
   // (the air under an arch over this cell: its upper part's the arch's stone)
-  for (let kk = k + 1; kk < LEVELS; kk++) {
+  for (let kk = k + 1; kk < w.levels; kk++) {
     const sp = w.span(kk, i, j);
     if (!sp) { if (w.occupied(kk, i, j)) break; continue; }
     const so = soffit(sp), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;

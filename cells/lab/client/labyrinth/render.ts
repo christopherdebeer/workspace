@@ -7,8 +7,6 @@
  * Everything rises as it's built: each vertex knows when it was built and the height it grows from, and the vertex
  * shader draws it that far grown.
  */
-import { LEVELS } from './model';
-const H = 1;
 import { STRIDE, type Mesh } from './mesh';
 
 export interface View { az: number; el: number; zoom: number; target: [number, number, number] }
@@ -256,6 +254,8 @@ export class Renderer {
   print = false;
   /** what the sun must cover: the middle of the slab (x, z), and how far out from it */
   area: [number, number, number] = [0, 0, 10];
+  /** how high it's built (the sun's view reaches over it) */
+  top = 8;
   /** (for looking at it: the sun's shadows, or none) */
   shadows = true;
   constructor(public canvas: HTMLCanvasElement) {
@@ -315,7 +315,7 @@ export class Renderer {
   }
   /** the sun's view: square on to it, over the whole slab and as high as it can be built */
   private lightVP(): M4 {
-    const [ax, az, e] = this.area, top = LEVELS * H, c = [ax, top / 2, az], s = this.sun;
+    const [ax, az, e] = this.area, top = Math.max(4, this.top + 2), c = [ax, top / 2, az], s = this.sun;
     const eye = [c[0] + s[0] * 60, c[1] + s[1] * 60, c[2] + s[2] * 60], r = Math.hypot(e * 1.42, top / 2) + 1;
     return mul(ortho(-r, r, -r, r, 60 - r - 2, 60 + r + 2), lookAt(eye, c, [0, 1, 0]));
   }

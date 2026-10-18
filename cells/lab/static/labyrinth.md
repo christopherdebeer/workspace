@@ -95,7 +95,7 @@ A switched reading is an operation like any other: undone, written down, replaye
 
 ### The stone grows
 
-The slab starts as an 8 × 8 square. After that it is only as big as what's built, plus two cells all round. Build on its edge cell and it grows two cells further; undo, and it goes back. There's always room to go on, and the view follows, framing the whole slab. The grid underneath is 48 × 48 cells.
+There's no cap on how high it goes: tap a column up as far as you like, and the view stands back to keep it all in. The slab starts as an 8 × 8 square. After that it is only as big as what's built, plus two cells all round. Build on its edge cell and it grows two cells further; undo, and it goes back. There's always room to go on, and the view follows, framing the whole slab. The grid underneath is 48 × 48 cells.
 
 ### Moving round it
 
@@ -123,7 +123,8 @@ The brief's first test asks whether someone, without instruction, can build this
 4. **A resolved labyrinth.**
    - With take, stroke the wall beneath the walkway. The wall is cut through, and the walkway over the cut stands on an arch.
    - Trace a wall round in front, and the court is closed: paved, with a cypress in its corner.
-   - Tap up a tower, and trace from its top to the terrace's top at the same height. The bridge is resolved into an arcade of two even bays.
+   - Tap up a tower, and trace from its top to the terrace's top at the same height. The rules choose one great arch for this bridge (another stroke might get an arcade of even bays).
+   - None of it is dressed by hand: the brick tower and its lantern, the ivy and moss round the court, the pots, the parapets are all the rules' own (below). `?plain` shows it bare.
 
 ## How it's built
 
@@ -160,6 +161,32 @@ Three layers, in order of authority (`model.ts`):
 - **Letting go changes nothing.** What was shown under the finger is what's built. If a connection stopped short to join stone it met, the hint says so.
 - **What it struck** is found by marching the ray in coarse steps through the air, then fine ones back from the first stone.
 
+## Auto, with character
+
+Auto doesn't only make what the hand asked for. Where there's a choice, the rules make it, so builds come out with some architecture and some life, not bare stone. Every choice is **seeded** (by the world's seed and where the thing is), so the same strokes always come out the same, and undo and replay give the same world. Every choice can be **corrected**: switch it with select, or dress over it by hand.
+
+**What auto makes** (kept in the operation, so it's what you saw while drawing):
+- **a wall** traced on the stone comes out plain, **gated** (a way through near its middle, and every six cells or so on a long one) or **arcaded** (a way through every other cell). A wall eight or more long is never plain. A gate is a way a figure can walk through;
+- **a bridge** from a top to a top at the same height, four to seven long, is one great arch about half the time, and otherwise an arcade of even bays.
+
+**What the rules dress** (`character.ts`), worked out afresh from what's built and never kept. It's decided a whole motif at a time, so it's coherent: a tower is all marble or none of it, and a terrace's parapet runs all round or not at all.
+
+| On | Now and then |
+|---|---|
+| a tower | marble, or brick; a lantern on top, often; a parapet round its top |
+| a wall | brick; moss along its foot |
+| an arcade or bridge | brick, piers and all |
+| a flight | a lantern where it arrives |
+| a terrace | pots at its corners, a lantern |
+| a court | ivy up the walls round it, moss at their foot; pots in its corners besides the cypress |
+| anything high with a drop at its edge | a parapet round it |
+| the stone at the foot of things | a little moss |
+
+**The hand's dressing always wins**, part by part. Brick over the rules' marble is brick; a lantern taken off stays off. A stroke with a dressing starts from how the stone looks now, the rules' dressing included, so stroking ivy over the rules' ivy takes it off.
+
+![auto alone, no cap: a ten-high tower, a walkway to it, a long gated wall; everything as the rules chose](labyrinth/v-story-7.jpg)
+![storyboard 4 with ?plain: the same stone, without the rules' dressing](labyrinth/v-story-4-plain.jpg)
+
 ## Motifs
 
 The rules work cell by cell, but what's built is read as bigger things (`motifs.ts`), so it can be taken up whole and kept coherent:
@@ -171,7 +198,7 @@ The rules work cell by cell, but what's built is read as bigger things (`motifs.
 | **flight** | stairs one after another, each a level up the same way |
 | **wall** | a run of three or more columns on the stone, one cell thick |
 | **tower** | a solid column, or a few together, three or more high, over everything round it |
-| **terrace** | four or more solid columns side by side at the same height |
+| **terrace** | four or more solid columns side by side at the same height, two or more deep each way (not a wall's top) |
 | **court** | ground walled in |
 
 Coherence comes from the rules:
@@ -185,6 +212,7 @@ Coherence comes from the rules:
 
 - **A place** is a cell with a floor under it (the slab, the top of stone, the deck over an arch) and nothing in it. The air under an arch counts, so a passage cut under stone is walked.
 - **A stair** joins its foot (behind it, at its level) to its head (ahead, a level up), or to the next stair of a flight.
+- **A way through an arch** (a gate in a wall) is a place too, walked only along its way.
 - **Places beside each other** at the same height join.
 
 Nothing is drawn from it yet. The tests use it to check that every connection that reached where it was going can be walked, end to end.
@@ -215,6 +243,10 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - a connection never cuts the hand's stone, and it either reaches or stops where it met something;
   - an edit changes piers and arches only within nine cells of what it touched;
   - a climb too steep for its stroke is refused, saying why; drawn longer it's built, reaches the top, and can be climbed;
+  - the rules dress every random world, the same way every time (replayed, the dressing is identical), using every kind of dressing; a tower is all one stone; about half the walls come out gated or arcaded;
+  - the hand's dressing wins over the rules';
+  - there's no cap: a column tapped up fourteen times is fourteen high, read as a tower, climbed by a fourteen-step flight that can be walked, and drawn to the top;
+  - a gate in a wall is walked through, along its way only;
   - the random worlds also switch readings on what select would take up, dress stones, and run pieces; every arcade's bays spring alike;
   - storyboard 6: the arcade is two alike bays, the flight is three steps and can be climbed to the terrace, towers and the court are found, the lintel and the dressing are there and written down; every reading of the arcade stands; a bridge of five read as two bays gets a pier under its middle;
   - every arch's air is clear;
@@ -233,7 +265,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
 ## Links
 
-- `?story=1` … `?story=4` is the storyboard; `?story=5` adds pieces; `?story=6` motifs and dressing.
+- `?story=1` … `?story=4` is the storyboard; `?story=5` adds pieces; `?story=6` motifs and dressing by hand; `?story=7` auto alone, no cap.
+- `?plain` draws it without the rules' dressing.
 - `?brush=select` (or any brush, piece or dressing) starts with it in hand. `?sheet` opens the piece brush's sheet; `?select=k.i.j` takes up what's at that cell, and `&whole` its whole.
 - `?ops=` builds from operations, as the model writes them.
 - `?print`, `?turn=1` (a quarter turn), `?zoom=0.4` (closer).

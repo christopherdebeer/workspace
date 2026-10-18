@@ -7,24 +7,33 @@
  * - **flight**: stairs one after another, each a level up the same way;
  * - **wall**: a run of three or more columns on the stone, one cell thick;
  * - **tower**: one column, or a few together, three or more high, standing over everything round it;
- * - **terrace**: four or more tops side by side at the same height;
+ * - **terrace**: four or more tops side by side at the same height, two or more deep each way (not a wall's top);
  * - **court**: the ground walled in.
  *
  * Each has the cells it covers (what's drawn round it when it's selected), and which of them are the hand's (what
  * taking it away cuts).
  */
-import { DIRS, LEVELS, inGrid, key, unkey, type Cell, type Span, type World } from './model';
+import { DIRS, inGrid, key, unkey, type Cell, type Span, type World } from './model';
 
 export type MotifKind = 'arcade' | 'bridge' | 'flight' | 'wall' | 'tower' | 'terrace' | 'court';
 export interface Motif { kind: MotifKind; label: string; cells: Cell[]; hand: Cell[]; spans: Span[] }
 
 const spanCells = (sp: Span): Cell[] => Array.from({ length: sp.n }, (_, s) => [sp.k, sp.i + s * DIRS[sp.a][0], sp.j + s * DIRS[sp.a][1]] as Cell);
 /** how high a column's stone (or stair) reaches: the level over the highest */
-export function height(w: World, i: number, j: number) { for (let k = LEVELS - 1; k >= 0; k--) if (w.stone(k, i, j) || w.stair(k, i, j) >= 0) return k + 1; return 0; }
-const column = (w: World, i: number, j: number): Cell[] => { const out: Cell[] = []; for (let k = 0; k < LEVELS; k++) if (w.occupied(k, i, j)) out.push([k, i, j]); return out; };
+export function height(w: World, i: number, j: number) { for (let k = w.levels - 1; k >= 0; k--) if (w.stone(k, i, j) || w.stair(k, i, j) >= 0) return k + 1; return 0; }
+const column = (w: World, i: number, j: number): Cell[] => { const out: Cell[] = []; for (let k = 0; k < w.levels; k++) if (w.occupied(k, i, j)) out.push([k, i, j]); return out; };
 const mine = (w: World, c: Cell) => w.stone(...c) || w.stair(...c) >= 0;
 
+const found = new WeakMap<World, { v: number; list: Motif[] }>();
+/** the motifs in a world (found once for each state of it) */
 export function motifs(w: World): Motif[] {
+  const c = found.get(w);
+  if (c && c.v === w.version) return c.list;
+  const list = find(w);
+  found.set(w, { v: w.version, list });
+  return list;
+}
+function find(w: World): Motif[] {
   const out: Motif[] = [];
   const e = w.extent();
   // (arcades: arches end to end over piers; what's left over, if it's long, a bridge)
@@ -89,7 +98,7 @@ export function motifs(w: World): Motif[] {
     const over = group.every(([x, z]) => DIRS.every(([a, b]) => inside.has(key(0, x + a, z + b)) || height(w, x + a, z + b) < h || !w.stone(0, x + a, z + b)));
     const cells = group.flatMap(([x, z]) => column(w, x, z));
     if (h >= 3 && group.length <= 4 && over) out.push({ kind: 'tower', label: `a tower, ${h} high`, cells, hand: cells.filter((c) => mine(w, c)), spans: [] });
-    else if (group.length >= 4) out.push({ kind: 'terrace', label: `a terrace of ${group.length} at ${h} high`, cells: group.map(([x, z]) => [h - 1, x, z] as Cell), hand: [], spans: [] });
+    else if (group.length >= 4 && Math.min(Math.max(...group.map((c) => c[0])) - Math.min(...group.map((c) => c[0])), Math.max(...group.map((c) => c[1])) - Math.min(...group.map((c) => c[1]))) >= 1) out.push({ kind: 'terrace', label: `a terrace of ${group.length} at ${h} high`, cells: group.map(([x, z]) => [h - 1, x, z] as Cell), hand: [], spans: [] });
   }
   // (courts)
   const inCourt = new Set<number>();

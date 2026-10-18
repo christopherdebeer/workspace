@@ -41,7 +41,9 @@ else { let kept = ''; try { kept = localStorage.getItem(KEY) ?? ''; } catch { /*
 const fixed = preview || qs.has('story') || qs.has('ops');
 const keep = () => { if (fixed) return; try { localStorage.setItem(KEY, world.encode()); } catch { /* */ } };
 let meshVersion = -1;
-function remesh() { R.upload(buildMesh(world)); meshVersion = world.version; }
+/** `?plain`: without the rules' own dressing (character.ts), only the hand's */
+const plain = qs.has('plain');
+function remesh() { R.upload(buildMesh(world, plain)); meshVersion = world.version; }
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
@@ -57,8 +59,10 @@ function resize() {
 let aspect = 1;
 /** what the view frames: the slab, however big it's grown (its middle, and how far to stand back to see it) */
 function framing() {
-  const e = world.extent(), half = (Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2 + 1.5) * Math.SQRT2;
-  return { cx: (e.i0 + e.i1 + 1) / 2 - CENTER, cz: (e.j0 + e.j1 + 1) / 2 - CENTER, fit: Math.max(half / aspect, half * 0.75) * 1.04, half };
+  const e = world.extent(), half = (Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2 + 1.5) * Math.SQRT2, top = world.top();
+  // (as wide as the slab, and as tall as what's on it: there's no cap on how high it goes)
+  const fit = Math.max(Math.max(half / aspect, half * 0.75) * 1.04 + top * 0.25, (half * Math.sin(view.el) + top * Math.cos(view.el)) * 0.55 + 1);
+  return { cx: (e.i0 + e.i1 + 1) / 2 - CENTER, cz: (e.j0 + e.j1 + 1) / 2 - CENTER, fit, half };
 }
 addEventListener('resize', resize); resize();
 
@@ -89,7 +93,7 @@ function pick(cx: number, cy: number, w: World = world): Pick | null {
     if (p[1] < 0) return { face: 'ground', hit: [-1, hit[1], hit[2]], to: [0, hit[1], hit[2]] };
     // (struck in the stone over an arch, from below its own cell: it's that cell's)
     if (!w.occupied(hit[0], hit[1], hit[2]) && !w.tree(hit[0], hit[1], hit[2]) && !w.tree(hit[0] - 1, hit[1], hit[2])) {
-      for (let k = hit[0] + 1; k < 8; k++) if (w.span(k, hit[1], hit[2])) { hit[0] = k; break; }
+      for (let k = hit[0] + 1; k < w.levels; k++) if (w.span(k, hit[1], hit[2])) { hit[0] = k; break; }
     }
     const to = prev ? cell(prev) : [hit[0] + 1, hit[1], hit[2]] as [number, number, number];
     const face = to[1] === hit[1] && to[2] === hit[2] ? 'top' : 'side';
@@ -422,9 +426,9 @@ function frame() {
     const top = world.top(), q = 1 - Math.exp(-dt * 3);
     view.target[0] += (fr.cx - view.target[0]) * q; view.target[2] += (fr.cz - view.target[2]) * q;
     view.target[1] += (top * 0.35 - view.target[1]) * q;
-    zoomFit += (fr.fit + top * 0.25 - zoomFit) * q;
+    zoomFit += (fr.fit - zoomFit) * q;
   }
-  R.area = [fr.cx, fr.cz, fr.half + 2];
+  R.area = [fr.cx, fr.cz, fr.half + 2]; R.top = world.top();
   view.zoom = zoomFit * zoomK;
   R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
   // (the guides, only while a finger's down: the stroke traced, in faint ink)

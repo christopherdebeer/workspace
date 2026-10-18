@@ -24,13 +24,16 @@
  * the same way, one tall arch), a stair, a bridge (stone laid across a gap and marked so: carried on one arch, up to
  * seven cells), a cypress, a pool. Both are operations on the same solid, resolved by the same rules.
  *
- * The grid is N × N cells (LO to HI each way, the first stone's square round 0 to 11), each 1 across and 1 high, LEVELS
- * high. The slab under it is only as big as it needs to be: what's built, and MARGIN cells more all round, never less
+ * The grid is N × N cells (LO to HI each way, the first stone's square round 0 to 11), each 1 across and 1 high, and as
+ * high as it's built: there's no cap (CEIL is only a guard against the absurd), and everything that goes up through the
+ * levels goes only as far as `levels`, what's built and the air over it. The slab under it is only as big as it needs to be: what's built, and MARGIN cells more all round, never less
  * than the square it starts as (`extent`). Build at its edge and it grows.
  */
 import { hash } from '../kit/rng';
 
-export const N = 48, LEVELS = 8, LO = -18, HI = LO + N - 1;
+export const N = 48, LO = -18, HI = LO + N - 1;
+/** far over anything a hand would build: only a guard */
+export const CEIL = 512;
 /** the cell the slab's centred on to start with (x = i − CENTER), the square it starts as, and how far it reaches past
  * what's built */
 export const CENTER = 6, START: [number, number] = [2, 9], MARGIN_CELLS = 2;
@@ -63,7 +66,9 @@ export interface Op {
 export const RULE = { none: 0, lintel: 1, pier: 2 } as const;
 /** dressing: three stones (travertine is the stone's own), then what's on it */
 export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7 } as const;
-export interface Dress { mat: number; moss: boolean; ivy: boolean; parapet: boolean; prop: number }
+/** a cell's dressing: each part set (by the hand, or by the rules' own dressing, character.ts) or not; a part set off
+ * by hand stays off whatever the rules would put */
+export interface Dress { mat?: number; moss?: boolean; ivy?: boolean; parapet?: boolean; prop?: number }
 /**
  * A connection: from a surface (the height stood on, and the column), along the columns the stroke crossed (the start's
  * first), to a surface (a top it reached), or out into the air (a walkway, `to` null). What it takes is worked out when
@@ -75,7 +80,7 @@ export interface Connect { from: Cell; to: Cell | null; path: Array<[number, num
 export interface Reached { reached: boolean; stopped: number; cells: Cell[] }
 /** an arch, carrying a run of stone along an axis (0 x, 1 z): its level, first cell, length, and the level it springs from */
 export interface Span { k: number; a: number; i: number; j: number; n: number; low: number; born: number; /** a flat lintel, not an arch */ flat?: boolean }
-export interface Decor { kind: 'pool' | 'cypress'; i: number; j: number; born: number }
+export interface Decor { kind: 'pool' | 'cypress' | 'pot'; i: number; j: number; born: number }
 
 /** how big a court has to be for water in it, and for a cypress */
 export const POOL_COURT = 6, TREE_COURT = 4;
@@ -143,7 +148,7 @@ export class World {
   pier(k: number, i: number, j: number) { return inGrid(i, j) && this.piers.has(key(k, i, j)); }
   span(k: number, i: number, j: number): Span | null { return inGrid(i, j) ? this.spanOf.get(key(k, i, j)) ?? null : null; }
   /** anything at a cell: stone, a stair, a pier */
-  occupied(k: number, i: number, j: number) { return k >= 0 && k < LEVELS && inGrid(i, j) && (this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.piers.has(key(k, i, j))); }
+  occupied(k: number, i: number, j: number) { return k >= 0 && k < CEIL && inGrid(i, j) && (this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.piers.has(key(k, i, j))); }
   /** the air under an arch */
   arched(k: number, i: number, j: number) { return this.under.has(key(k, i, j)); }
   /** a plain block: stone not carried on an arch */
@@ -160,11 +165,15 @@ export class World {
   /** a floor to stand on at the foot of level k: the stone (not a pool), or the top of stone */
   floor(k: number, i: number, j: number) { return inGrid(i, j) && (k === 0 ? !this.pool(i, j) : this.stone(k - 1, i, j)); }
   /** a cell free to build in */
-  free(k: number, i: number, j: number) { return k >= 0 && k < LEVELS && inGrid(i, j) && !this.occupied(k, i, j) && !this.tree(k, i, j) && !this.tree(k - 1, i, j) && !(k === 0 && this.pool(i, j)); }
+  free(k: number, i: number, j: number) { return k >= 0 && k < CEIL && inGrid(i, j) && !this.occupied(k, i, j) && !this.tree(k, i, j) && !this.tree(k - 1, i, j) && !(k === 0 && this.pool(i, j)); }
   /** how high a column's stone (or stair) goes, up from a level, without a gap */
-  topFrom(k: number, i: number, j: number) { while (k + 1 < LEVELS && (this.stone(k + 1, i, j) || this.stair(k + 1, i, j) >= 0)) k++; return k + 1; }
+  topFrom(k: number, i: number, j: number) { while (k + 1 < CEIL && (this.stone(k + 1, i, j) || this.stair(k + 1, i, j) >= 0)) k++; return k + 1; }
   /** the highest anything reaches */
-  top() { let t = 0; for (const v of [...this.mass.keys(), ...this.stairs.keys()]) t = Math.max(t, unkey(v)[0] + 1); for (const v of this.trees.keys()) t = Math.max(t, unkey(v)[0] + 2); return Math.max(t, this.decor.some((d) => d.kind === 'cypress') ? 2 : 0); }
+  top() { return this.tall; }
+  private tall = 0;
+  /** how many levels there are to look through: what's built, and the air over it */
+  levels = 1;
+  private measureTop() { let t = 0; for (const v of [...this.mass.keys(), ...this.stairs.keys()]) t = Math.max(t, unkey(v)[0] + 1); for (const v of this.trees.keys()) t = Math.max(t, unkey(v)[0] + 2); return t; }
   born(k: number, i: number, j: number) { return this.mass.get(key(k, i, j)) ?? this.stairs.get(key(k, i, j))?.born ?? this.piers.get(key(k, i, j)) ?? this.trees.get(key(k, i, j)) ?? -1e3; }
 
   // ─── what the hand did ───
@@ -186,25 +195,27 @@ export class World {
         for (const m of [this.mass, this.stairs, this.archways, this.trees, this.dress]) m.delete(key(k, i, j));
         this.bridged.delete(key(k, i, j)); this.laid.delete(key(k, i, j));
       }
-      for (const [k, i, j, a, b] of op.arches ?? []) if (k >= 0 && k < LEVELS && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.archways.set(key(k, i, j), a); }
+      for (const [k, i, j, a, b] of op.arches ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.archways.set(key(k, i, j), a); }
       for (const [k, i, j, b] of op.trees ?? []) if (inGrid(i, j)) this.trees.set(key(k, i, j), b);
       for (const [i, j, b] of op.pools ?? []) if (inGrid(i, j)) this.pools.set(key(0, i, j), b);
       if (op.bridge) for (const [k, i, j] of op.add ?? []) this.bridged.add(key(k, i, j));
-      for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < LEVELS && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
-      for (const [k, i, j, d, b] of op.stairs ?? []) if (k >= 0 && k < LEVELS && inGrid(i, j)) { this.mass.delete(key(k, i, j)); this.stairs.set(key(k, i, j), { d, born: b }); }
+      for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
+      for (const [k, i, j, d, b] of op.stairs ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.mass.delete(key(k, i, j)); this.stairs.set(key(k, i, j), { d, born: b }); }
       for (const [k, i, j, r] of op.rule ?? []) if (inGrid(i, j)) { if (r) this.rules.set(key(k, i, j), r); else this.rules.delete(key(k, i, j)); }
       for (const [k, i, j, kind, on] of op.dress ?? []) {
-        if (!inGrid(i, j) || k < 0 || k >= LEVELS) continue;
-        const v = key(k, i, j), d = this.dress.get(v) ?? { mat: 0, moss: false, ivy: false, parapet: false, prop: 0 };
+        if (!inGrid(i, j) || k < 0 || k >= CEIL) continue;
+        const v = key(k, i, j), d = this.dress.get(v) ?? {};
         if (kind <= DRESS.marble) d.mat = kind;
         else if (kind === DRESS.moss) d.moss = !!on;
         else if (kind === DRESS.ivy) d.ivy = !!on;
         else if (kind === DRESS.parapet) d.parapet = !!on;
-        else d.prop = on ? kind : d.prop === kind ? 0 : d.prop;
+        else d.prop = on ? kind : 0;
         this.dress.set(v, d);
       }
     }
+    this.tall = this.measureTop(); this.levels = this.tall + 2;
     this.resolve();
+    if (this.decor.some((d) => d.kind === 'cypress')) this.tall = Math.max(this.tall, 2);
     this.ext = this.measure();
     this.version++;
   }
@@ -220,7 +231,7 @@ export class World {
     const taken = (k: number, i: number, j: number) => k >= 0 && (this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.trees.has(key(k, i, j)) || (k > 0 && this.trees.has(key(k - 1, i, j))));
     // (and nothing to stand on but a stair or a tree beneath: it can't rest there)
     const unsteady = (k: number, i: number, j: number) => k > 0 && (this.stairs.has(key(k - 1, i, j)) || this.trees.has(key(k - 1, i, j)));
-    const lay = (k: number, i: number, j: number, s: number) => { if (k < 0 || taken(k, i, j)) return; this.mass.set(key(k, i, j), born + s * 0.05); this.laid.add(key(k, i, j)); cells.push([k, i, j]); };
+    const lay = (k: number, i: number, j: number, s: number) => { if (k < 0 || taken(k, i, j)) return; this.mass.set(key(k, i, j), born + s * 0.05); this.laid.add(key(k, i, j)); if (op.bridge) this.bridged.add(key(k, i, j)); cells.push([k, i, j]); };
     const dirTo = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]) => x === b[0] - a[0] && z === b[1] - a[1]);
     const dz = h1 - h0, steps = Math.abs(dz);
     // (the steps go where the way runs straight, together in flights: the last straight run takes as many as it can,
@@ -260,7 +271,7 @@ export class World {
     const raisePier = (k: number, i: number, j: number, born: number) => {
       for (let kk = k - 1; kk >= 0 && !this.occupied(kk, i, j) && !this.under.has(key(kk, i, j)); kk--) this.piers.set(key(kk, i, j), this.first(`p${kk}.${i}.${j}`, born - 0.15));
     };
-    for (let k = 1; k < LEVELS; k++) {
+    for (let k = 1; k < this.levels; k++) {
       // (what's at this level with nothing under it)
       const loose = new Set<number>();
       for (const v of [...this.mass.keys(), ...this.stairs.keys()]) { const [kk, i, j] = unkey(v); if (kk === k && !below(k, i, j)) loose.add(v); }
@@ -361,7 +372,7 @@ export class World {
     this.courts.clear(); this.decor = [];
     // (the ground under a low arch, a passage a level or so high, is a gateway: it closes a court as a wall does; a bridge
     // high over the ground doesn't)
-    const gate = (i: number, j: number) => { for (let k = 0; k < LEVELS; k++) { const sp = this.span(k, i, j); if (sp) return sp.k <= 1; if (this.occupied(k, i, j)) return false; } return false; };
+    const gate = (i: number, j: number) => { for (let k = 0; k < this.levels; k++) { const sp = this.span(k, i, j); if (sp) return sp.k <= 1; if (this.occupied(k, i, j)) return false; } return false; };
     const open = (i: number, j: number) => !this.occupied(0, i, j) && !this.under.has(key(0, i, j)) && !gate(i, j);
     const out = new Set<number>(), st: Array<[number, number]> = [];
     for (let t = LO; t <= HI; t++) for (const [i, j] of [[t, LO], [t, HI], [LO, t], [HI, t]]) if (open(i, j) && !out.has(key(0, i, j))) { out.add(key(0, i, j)); st.push([i, j]); }
@@ -387,7 +398,12 @@ export class World {
       for (const [x, z] of pools) this.decor.push({ kind: 'pool', i: x, j: z, born: this.first(`w${x}.${z}`, when) });
       if (region.length >= TREE_COURT) {
         const corners = region.filter(([x, z]) => !pools.some((p) => p[0] === x && p[1] === z) && DIRS.filter(([a, b]) => !inside.has(key(0, x + a, z + b))).length >= 2);
-        if (corners.length) { const [x, z] = corners[hash(this.seed, id) % corners.length]; this.decor.push({ kind: 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) }); }
+        if (corners.length) {
+          const q = hash(this.seed, id) % corners.length, [x, z] = corners[q];
+          this.decor.push({ kind: 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) });
+          // (and, as it happens, pots in the other corners)
+          for (const [n, [px, pz]] of corners.entries()) if (n !== q && hash(this.seed, px, pz, 77) % 100 < 45) this.decor.push({ kind: 'pot', i: px, j: pz, born: this.first(`o${px}.${pz}`, when) });
+        }
       }
     }
   }

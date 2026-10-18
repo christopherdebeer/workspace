@@ -11,8 +11,9 @@
  * - **pool**: let into the stone itself.
  * - **take**: what was touched, taken away (the rules then carry what was on it, on an arch or a pier).
  */
-import { DIRS, DRESS, LEVELS, inGrid, key, straights, type Cell, type Op, type World } from './model';
+import { CEIL, DIRS, DRESS, inGrid, key, straights, type Cell, type Op, type World } from './model';
 import { connect, surface, type Pick } from './gesture';
+import { look } from './character';
 
 /** the pieces a specific brush can hold, and the dressing */
 export type Piece = 'block' | 'arch' | 'stair' | 'bridge' | 'cypress' | 'pool';
@@ -43,14 +44,14 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   if (hand === 'take') {
     if (p.face === 'ground') return w.pools.has(key(0, hi, hj)) ? { cut: [[-1, hi, hj]], why: 'take' } : null;
     // (a lantern or a pot on what was touched, before the stone itself)
-    const prop = w.dressed(hk, hi, hj)?.prop;
+    const prop = look(w, hk, hi, hj)?.prop;
     if (prop && p.face === 'top') return { dress: [[hk, hi, hj, prop, 0]], why: 'take' };
     for (let k = hk; k >= 0; k--) if (w.stone(k, hi, hj) || w.stair(k, hi, hj) >= 0 || w.tree(k, hi, hj)) return { cut: [[k, hi, hj]], why: 'take' };
     return null;
   }
   if (hand === 'pool') return p.face === 'ground' && !w.pool(hi, hj) && w.free(0, hi, hj) ? { pools: [[hi, hj, now]], why: 'pool' } : null;
   const [k, i, j] = p.face === 'ground' ? [0, hi, hj] : p.face === 'top' ? [w.topFrom(hk, hi, hj), hi, hj] : p.to;
-  if (k >= LEVELS || !inGrid(i, j)) return null;
+  if (k >= CEIL || !inGrid(i, j)) return null;
   const side = p.face === 'side', toward = side ? DIRS.findIndex(([a, b]) => a === hi - i && b === hj - j) : -1;
   if (hand === 'bridge') {
     const s = (side ? span(w, k, i, j, toward % 2) : null) ?? span(w, k, i, j);
@@ -62,7 +63,7 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   // (a block against a side goes out that way as an auto tap does, carried by the rules if there's nothing under it)
   if (hand === 'block' && (side || w.floor(k, i, j))) return { add: [[k, i, j, now]], why: 'block' };
   if (!w.floor(k, i, j)) return null;
-  if (hand === 'cypress') return k + 1 >= LEVELS || w.free(k + 1, i, j) ? { trees: [[k, i, j, now]], why: 'cypress' } : null;
+  if (hand === 'cypress') return w.free(k + 1, i, j) ? { trees: [[k, i, j, now]], why: 'cypress' } : null;
   if (hand === 'stair') {
     let d = toward;
     if (d < 0) for (let q = 0; q < 4 && d < 0; q++) if (w.stone(k, i + DIRS[q][0], j + DIRS[q][1]) && w.free(k + 1, i + DIRS[q][0], j + DIRS[q][1])) d = q;
@@ -87,7 +88,7 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
   if (piece === 'block' || piece === 'arch') {
     const out: Array<[number, number, number, number, number]> = [];
     cells.forEach(([i, j], s) => {
-      if (!w.free(h0, i, j) || h0 >= LEVELS) return;
+      if (!w.free(h0, i, j)) return;
       const n = cells[Math.min(cells.length - 1, s + 1)], p = cells[Math.max(0, s - 1)], a = n[0] !== p[0] ? 1 : 0;
       out.push([h0, i, j, a, now + s * 0.05]);
     });
@@ -98,7 +99,7 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
     // (a flight: every straight cell a step, to wherever its last step leads)
     const last = cells[cells.length - 1], prev = cells[cells.length - 2], ahead: [number, number] = [2 * last[0] - prev[0], 2 * last[1] - prev[1]];
     const m = straights(cells, [0, ahead[0], ahead[1]]).length;
-    if (!m || h0 + m > LEVELS) return null;
+    if (!m || h0 + m >= CEIL) return null;
     return { connect: { from: [h0, cells[0][0], cells[0][1]], to: [h0 + m, ahead[0], ahead[1]], path: cells }, born: now, why: 'flight' };
   }
   return place(w, piece, start, view, now);
@@ -117,8 +118,8 @@ export function dressAt(w: World, p: Pick): Cell | null {
  */
 export function dress(w: World, kind: Dressing, cells: Cell[]): Op | null {
   const id = DRESS[kind], seen = new Set<number>(), out: Array<[number, number, number, number, number]> = [];
-  const first = cells[0] && w.dressed(...cells[0]);
-  const has = (d: ReturnType<World['dressed']>) => !!d && (id === DRESS.moss ? d.moss : id === DRESS.ivy ? d.ivy : id === DRESS.parapet ? d.parapet : d.prop === id);
+  const first = cells[0] && look(w, ...cells[0]);
+  const has = (d: ReturnType<typeof look>) => !!d && (id === DRESS.moss ? d.moss : id === DRESS.ivy ? d.ivy : id === DRESS.parapet ? d.parapet : d.prop === id);
   const on = id <= DRESS.marble ? 1 : has(first) ? 0 : 1;
   for (const [k, i, j] of cells) {
     const v = key(k, i, j);
