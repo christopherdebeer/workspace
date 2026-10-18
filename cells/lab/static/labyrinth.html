@@ -17,7 +17,7 @@
     #hint.on { opacity: .85; }
     #hands { position: fixed; left: 10px; right: 10px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 2; display: flex; gap: 2px; justify-content: space-between; padding: 6px; border-radius: 26px; background: rgba(246,241,231,.86); box-shadow: 0 2px 14px rgba(70,50,30,.12), inset 0 0 0 1px rgba(70,50,30,.08); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); overflow-x: auto; scrollbar-width: none; }
     #hands::-webkit-scrollbar { display: none; }
-    #hands button { appearance: none; border: 0; background: none; color: #4a3f36; flex: 1 0 auto; min-width: 42px; min-height: 52px; border-radius: 20px; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
+    #hands button { appearance: none; border: 0; background: none; color: #4a3f36; flex: 1 1 0; min-width: 52px; min-height: 52px; border-radius: 20px; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
     #hands svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
     #hands i { font-style: normal; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
     #hands button.on { background: #2b2420; color: #f3ede1; }
@@ -25,6 +25,29 @@
     #acts button { appearance: none; border: 0; background: rgba(246,241,231,.86); box-shadow: 0 1px 8px rgba(70,50,30,.12); color: #2b2420; width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     #acts svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
     #acts button.on { background: #2b2420; color: #f3ede1; }
+    #hands button { position: relative; }
+    #hands u { position: absolute; right: 9px; bottom: 9px; width: 0; height: 0; border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .5; }
+    #sheet { position: fixed; left: 10px; right: 10px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 74px); z-index: 3; padding: 10px 12px 12px; border-radius: 22px; background: rgba(246,241,231,.96); box-shadow: 0 4px 22px rgba(70,50,30,.18), inset 0 0 0 1px rgba(70,50,30,.08); transform: translateY(12px); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
+    #sheet.on { transform: none; opacity: 1; pointer-events: auto; }
+    #sheet h2 { margin: 4px 4px 4px; font-weight: 400; font-size: 10px; letter-spacing: .3em; text-transform: uppercase; opacity: .55; }
+    #sheet .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+    #sheet button { appearance: none; border: 0; background: none; color: #4a3f36; min-height: 56px; border-radius: 16px; display: grid; justify-items: center; align-content: center; gap: 4px; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #sheet svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #sheet i { font-style: normal; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
+    #sheet button.on { background: #2b2420; color: #f3ede1; }
+    #card { position: fixed; left: 10px; right: 10px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 74px); z-index: 2; padding: 10px 12px; border-radius: 20px; background: rgba(246,241,231,.94); box-shadow: 0 3px 16px rgba(70,50,30,.15), inset 0 0 0 1px rgba(176,92,30,.35); display: none; }
+    #card.on { display: block; }
+    #card .row { display: flex; align-items: center; gap: 8px; }
+    #card b { flex: 1; font-weight: 400; font-size: 15px; font-style: italic; }
+    #card small { display: block; font-size: 11px; letter-spacing: .08em; opacity: .6; margin: 2px 0 6px; }
+    #card small:empty { display: none; }
+    #card .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+    #card button { appearance: none; border: 0; font: inherit; font-size: 13px; color: #2b2420; background: rgba(43,36,32,.07); border-radius: 14px; min-height: 36px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #card button[hidden] { display: none; }
+    #card #switch { background: #2b2420; color: #f3ede1; }
+    #card #close { background: none; font-size: 22px; min-height: 36px; width: 36px; padding: 0; }
+    body.selecting #hint { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 190px); }
+    .preview #sheet, .preview #card { display: none; }
     nav { right: 170px; }
     nav small { display: block; font-size: 10px; letter-spacing: .3em; text-transform: uppercase; opacity: .6; margin-top: 4px; }
     .preview nav, .preview #acts, .preview #hint, .preview #hands { display: none; }
@@ -40,15 +63,39 @@
     <button id="again" aria-label="clear the stone" title="clear the stone"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5"/><path d="M3.5 3v3.5H7"/></svg></button>
   </div>
   <div id="hint"></div>
-  <div id="hands" role="toolbar" aria-label="what a touch builds">
-    <button data-hand="auto" aria-label="auto: tap raises, trace builds, hold carves"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" opacity=".5"/></svg><i>auto</i></button>
-    <button data-hand="block" aria-label="a block"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg><i>block</i></button>
-    <button data-hand="arch" aria-label="an arch"><svg viewBox="0 0 24 24"><path d="M4 21V4h16v17"/><path d="M9 21v-7a3 3 0 016 0v7"/></svg><i>arch</i></button>
-    <button data-hand="stair" aria-label="a stair"><svg viewBox="0 0 24 24"><path d="M3 21h4v-4h4v-4h4V9h4V5h2"/><path d="M3 21h18"/></svg><i>stair</i></button>
-    <button data-hand="bridge" aria-label="a bridge"><svg viewBox="0 0 24 24"><path d="M2 8h20M2 11h20M3 20v-9M21 20v-9"/><path d="M6 20a6 6 0 0112 0"/></svg><i>bridge</i></button>
-    <button data-hand="cypress" aria-label="a cypress"><svg viewBox="0 0 24 24"><path d="M12 2c-3 5-3.5 11-2 16h4c1.5-5 1-11-2-16z"/><path d="M12 18v4"/></svg><i>tree</i></button>
-    <button data-hand="pool" aria-label="a pool"><svg viewBox="0 0 24 24"><path d="M3 9h18v9H3z"/><path d="M6 13c1.5-1 3 1 4.5 0s3-1 4.5 0 3 1 3 0"/></svg><i>pool</i></button>
-    <button data-hand="take" aria-label="take a piece away"><svg viewBox="0 0 24 24"><path d="M5 19L19 5M7 5h10M5 9v10h10"/></svg><i>take</i></button>
+  <div id="card" role="dialog" aria-label="what's taken up">
+    <div class="row"><b id="what"></b><button id="close" aria-label="put it down">×</button></div>
+    <small id="reading"></small>
+    <div class="acts"><button id="switch"></button><button id="whole"></button><button id="dressit"></button><button id="takeaway">take it away</button></div>
+  </div>
+  <div id="sheet" role="menu" aria-label="what the piece brush holds">
+    <h2>pieces</h2>
+    <div class="grid">
+      <button data-held="block"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg><i>block</i></button>
+      <button data-held="arch"><svg viewBox="0 0 24 24"><path d="M4 21V4h16v17"/><path d="M9 21v-7a3 3 0 016 0v7"/></svg><i>arch</i></button>
+      <button data-held="stair"><svg viewBox="0 0 24 24"><path d="M3 21h4v-4h4v-4h4V9h4V5h2"/><path d="M3 21h18"/></svg><i>stair</i></button>
+      <button data-held="bridge"><svg viewBox="0 0 24 24"><path d="M2 8h20M2 11h20M3 20v-9M21 20v-9"/><path d="M6 20a6 6 0 0112 0"/></svg><i>bridge</i></button>
+      <button data-held="cypress"><svg viewBox="0 0 24 24"><path d="M12 2c-3 5-3.5 11-2 16h4c1.5-5 1-11-2-16z"/><path d="M12 18v4"/></svg><i>tree</i></button>
+      <button data-held="pool"><svg viewBox="0 0 24 24"><path d="M3 9h18v9H3z"/><path d="M6 13c1.5-1 3 1 4.5 0s3-1 4.5 0 3 1 3 0"/></svg><i>pool</i></button>
+    </div>
+    <h2>dressing</h2>
+    <div class="grid">
+      <button data-held="travertine"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/><path d="M4 10h16M4 15h16M11 4v6M15 10v5M9 15v5"/></svg><i>travertine</i></button>
+      <button data-held="brick"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14"/><path d="M3 9.7h18M3 14.3h18M9 5v4.7M15 5v4.7M6 9.7v4.6M12 9.7v4.6M18 9.7v4.6M9 14.3V19M15 14.3V19"/></svg><i>brick</i></button>
+      <button data-held="marble"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/><path d="M5 17c3-2 4-6 7-7s4-4 7-5M9 20c1-3 4-4 5-7"/></svg><i>marble</i></button>
+      <button data-held="moss"><svg viewBox="0 0 24 24"><path d="M3 19h18"/><path d="M5 19c0-3 2-4 3-4s2 2 3 1 1-4 3-4 3 3 3 4 1 1 2 3"/></svg><i>moss</i></button>
+      <button data-held="ivy"><svg viewBox="0 0 24 24"><path d="M12 2v20"/><path d="M12 6c-3-1-5 0-6 2 2 1 4 1 6-2zM12 11c3-1 5 0 6 2-2 1-4 1-6-2zM12 16c-3-1-5 0-6 2 2 1 4 1 6-2z"/></svg><i>ivy</i></button>
+      <button data-held="parapet"><svg viewBox="0 0 24 24"><path d="M3 20h18M3 20v-7h18v7"/><path d="M3 10h18M3 10V8h18v2"/></svg><i>parapet</i></button>
+      <button data-held="lantern"><svg viewBox="0 0 24 24"><path d="M12 21v-9M9 12h6v-6H9zM8 6h8M12 3v3"/></svg><i>lantern</i></button>
+      <button data-held="pot"><svg viewBox="0 0 24 24"><path d="M7 14h10l-1.5 7h-7z"/><circle cx="12" cy="9" r="4.5"/></svg><i>pot</i></button>
+    </div>
+  </div>
+  <div id="hands" role="toolbar" aria-label="brushes">
+    <button data-brush="hand" aria-label="hand: turn it, and ask what something is"><svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6 7-2.5 0-4-1.2-5.5-3.5L3.8 15a1.4 1.4 0 012.3-1.6L8 15.5"/></svg><i>hand</i></button>
+    <button data-brush="auto" aria-label="auto: tap raises, trace builds"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" opacity=".5"/></svg><i>auto</i></button>
+    <button data-brush="piece" aria-haspopup="menu" aria-expanded="false" aria-label="one piece, or dressing: hold for the sheet"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/></svg><i>block</i><u></u></button>
+    <button data-brush="take" aria-label="take: tap takes away, trace carves"><svg viewBox="0 0 24 24"><path d="M5 19L19 5M7 5h10M5 9v10h10"/></svg><i>take</i></button>
+    <button data-brush="select" aria-label="select: take something up, and read it another way"><svg viewBox="0 0 24 24"><path d="M5 3l12 8-5.5 1.2L15 19l-2.4 1.2-3.4-6.8L5 17z"/></svg><i>select</i></button>
   </div>
   <script src="{{app}}"></script>
 </body>

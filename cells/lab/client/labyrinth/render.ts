@@ -50,13 +50,37 @@ vec3 travertine(vec3 p, float tone) {
   c *= 1. - .22 * smoothstep(.86, .93, pit);
   return c * (.97 + .05 * noise(p * 90.));
 }
+// (brick: narrow courses, each brick a shade of its own, pale mortar; on a top, laid as pavers)
+vec3 brick(vec3 p, vec3 n, float tone) {
+  bool top = abs(n.y) > .5;
+  float cy = top ? p.z * 4. : p.y * 6., course = floor(cy);
+  float u = (top ? p.x * 2. : (abs(n.x) > .5 ? p.z : p.x) * 2.) + course * .5, b = floor(u);
+  float shade = hash(vec3(b, course, tone * 7.));
+  vec3 c = mix(vec3(.62, .33, .23), vec3(.78, .50, .34), shade) * (.92 + .1 * noise(p * 20.));
+  float jy = min(fract(cy), 1. - fract(cy)) / (top ? 4. : 6.), ju = min(fract(u), 1. - fract(u)) / 2.;
+  return mix(vec3(.80, .74, .64), c, smoothstep(.006, .013, min(jy, ju)));
+}
+// (marble: white, veined grey, in large blocks)
+vec3 marble(vec3 p, vec3 n, float tone) {
+  vec3 c = vec3(.93, .92, .89) * (.97 + .04 * tone);
+  float v = abs(sin((p.x * .8 + p.y * 1.3 + p.z * .6) * 3. + fbm(p * 1.4 + tone * 5.) * 7.));
+  c = mix(vec3(.55, .55, .56), c, smoothstep(.0, .09, v));
+  c = mix(c, vec3(.78, .76, .74), .35 * smoothstep(.5, .8, fbm(p * 3. + 2.)));
+  float jt;
+  if (abs(n.y) < .5) { float u = abs(n.x) > .5 ? p.z : p.x, cy = p.y * 2.; jt = min(min(fract(cy), 1. - fract(cy)) / 2., min(fract(u + floor(cy) * .5), 1. - fract(u + floor(cy) * .5))); }
+  else { vec2 f = fract(p.xz), g = min(f, 1. - f); jt = min(g.x, g.y); }
+  return c * (1. - .12 * (1. - smoothstep(.003, .009, jt)));
+}
 void main() {
   vec3 n = normalize(vNrm);
-  int mat = int(vMat + .5);
+  int m = int(vMat + .5), mat = m % 16, kind = (m / 64) % 4;
+  bool moss = (m / 16) % 2 == 1, ivy = (m / 32) % 2 == 1;
   vec3 base; float spec = 0., wrap = 0.;
   if (mat == 2) base = vec3(.13, .25, .25);
   else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)); wrap = .35; }
   else if (mat == 4) base = vec3(.32, .24, .17);
+  else if (mat == 9) base = vec3(1.);
+  else if (mat == 10) base = vec3(.70, .40, .27) * (.9 + .15 * noise(vPos * 18.));
   else if (mat == 7) base = vec3(.90, .89, .86) * (.98 + .03 * noise(vPos * 3.));
   else if (mat == 6) base = travertine(vPos, .6) * .9;
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
@@ -66,6 +90,8 @@ void main() {
     base = travertine(vPos * 1.3 + 5., fract(floor(vPos.x * 2.) * .37 + floor(vPos.z * 2.) * .61)) * 1.02;
     base *= 1. - .16 * (1. - smoothstep(.0, .045, min(g.x, g.y)));
   }
+  else if (kind == 1) base = brick(vPos, n, vTone);
+  else if (kind == 2) base = marble(vPos, n, vTone);
   else {
     base = travertine(vPos, vTone);
     // (dressed stone, laid in courses: a joint every third of a level, the upright joints staggered course to course;
@@ -79,6 +105,18 @@ void main() {
       } else { vec2 f = fract(vPos.xz + uN * .5), g = min(f, 1. - f); jt = min(g.x, g.y); }
       base *= 1. - .14 * (1. - smoothstep(.004, .016 + .006 * noise(vPos * 31.), jt));
     }
+  }
+  // (moss: in the joints and the shade, thicker on tops and low down; ivy: hanging leaves over a side)
+  if (moss) {
+    float lo = n.y > .5 ? .85 : .6 * (1. - smoothstep(0., .6, fract(vPos.y)));
+    float a = lo * smoothstep(.42, .62, fbm(vPos * 3.1 + 2.));
+    base = mix(base, vec3(.30, .37, .17) * (.75 + .5 * noise(vPos * 34.)), a * .85);
+  }
+  if (ivy && abs(n.y) < .5) {
+    float cov = smoothstep(.38, .5, fbm(vec3(vPos.x * 2.4, vPos.y * 1.5, vPos.z * 2.4) + 7.) + .12 * (fract(vPos.y) - .5));
+    float leaf = noise(vPos * 26.), lf = smoothstep(.3, .5, leaf);
+    base = mix(base, mix(vec3(.09, .16, .06), vec3(.22, .32, .12), leaf), cov * lf);
+    wrap = max(wrap, .25 * cov);
   }
   // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;
@@ -97,6 +135,8 @@ void main() {
   vec3 c = base * (sky * (.25 + .45 * vAo) + sun * key * (.65 + .35 * vAo));
   // (light gathers in the archways)
   if (mat == 1) c += base * vec3(1., .7, .4) * .42 * (.4 + .6 * vAo);
+  // (a lamp: lit from within)
+  if (mat == 9) c = vec3(1.25, .92, .55);
   if (mat == 2) {
     // (water: dark, the sky and the sun on it, a little stirred)
     vec3 w = normalize(vec3(.06 * (noise(vec3(vPos.xz * 6., uTime * .4)) - .5), 1., .06 * (noise(vec3(vPos.zx * 6., uTime * .4 + 3.)) - .5)));

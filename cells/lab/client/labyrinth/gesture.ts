@@ -12,8 +12,8 @@
  *   Each of those is kept as a connection (model.ts): the intent, its stone worked out on replay, never cutting the
  *   hand's stone (it stops where it meets it). Steps go only where the way runs straight (a stair is climbed from its
  *   foot), so a climb with more levels than straight cells isn't built short: it's refused, and says why.
- * - **Hold, then trace** carves: each piece of stone it passes over is cut away (a top lowered a course; a side cut
- *   through, so what's over it is carried on an arch).
+ * - **Carving** (the take brush's stroke): each piece of stone it passes over is cut away (a top lowered a course; a
+ *   side cut through, so what's over it is carried on an arch).
  */
 import { LEVELS, inGrid, straights, type Cell, type Op, type World } from './model';
 

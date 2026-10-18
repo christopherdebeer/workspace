@@ -9,10 +9,14 @@
  * 4. **A resolved labyrinth**: a walkway out over the court, a passage cut beneath it, the court closed (so it's paved,
  *    with water and a cypress), and a second tower bridged to the first.
  * 5. **With the palette**: the same, and pieces put by hand: a tall arch, a long bridge, a pool, cypresses on a terrace.
+ * 6. **Motifs and dressing**: the same as 4, and a trace from the terrace to a new tower (an arcade, its bays alike, a
+ *    parapet along it of its own accord); a flight run up to the terrace with the stair brush; the passage under the
+ *    walkway read as a lintel; and dressed: a marble tower with a lantern, the court's wall in brick, moss on the
+ *    platform and the old wall, ivy on the terrace, a parapet on the walkway, pots on the terrace.
  */
-import { World, type Cell } from './model';
+import { DRESS, RULE, World, type Cell, type Op } from './model';
 import { carve, tap, trace, type Pick } from './gesture';
-import { place, type Hand } from './palette';
+import { place, run, type Hand } from './palette';
 
 const ground = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
 const top = (w: World, i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
@@ -40,6 +44,27 @@ export function story(stage: number): World {
   for (const [i, j] of [[3, 3], [3, 4]]) { tapAt(ground(i, j)); tapAt(top(w, i, j)); tapAt(top(w, i, j)); }
   traceAt(top(w, 3, 4), [[3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4]], top(w, 9, 4));
   if (stage <= 4) return w;
+  if (stage >= 6) {
+    const apply = (op: Op | null) => { if (op) w.apply(op, t); };
+    // (a tower east of the terrace's far side, and a trace from the terrace to it: an arcade)
+    for (let q = 0; q < 3; q++) tapAt(q ? top(w, 10, 11) : ground(10, 11));
+    traceAt(top(w, 10, 5), [[10, 5], [10, 6], [10, 7], [10, 8], [10, 9], [10, 10], [10, 11]], top(w, 10, 11));
+    // (a flight up to the terrace, run with the stair brush)
+    apply(run(w, 'stair', ground(14, 4), [[14, 4], [13, 4], [12, 4], [11, 4]], 1, t));
+    // (the passage under the walkway, read as a lintel)
+    apply({ rule: [[1, 6, 7, RULE.lintel]], why: 'reading' });
+    // (dressed)
+    const cells = (k0: number, k1: number, cols: Array<[number, number]>) => cols.flatMap(([i, j]) => Array.from({ length: k1 - k0 + 1 }, (_, q) => [k0 + q, i, j] as Cell)).filter((c) => w.stone(...c));
+    const dress = (kind: number, cs: Cell[]) => apply({ dress: cs.map(([k, i, j]) => [k, i, j, kind, 1]), why: 'dress' });
+    dress(DRESS.marble, cells(0, 2, [[3, 3], [3, 4], [10, 11]]));
+    dress(DRESS.brick, cells(0, 0, [[3, 8], [3, 9], [3, 10], [4, 10], [5, 10], [6, 10], [7, 10], [8, 10], [9, 10], [9, 9], [9, 8]]));
+    dress(DRESS.moss, cells(0, 1, [[3, 7], [4, 7], [5, 7], [7, 7], [8, 7]]));
+    dress(DRESS.ivy, cells(0, 2, [[9, 4], [10, 4], [9, 5], [10, 5]]));
+    dress(DRESS.parapet, cells(1, 1, [[5, 7], [6, 7], [7, 7]]));
+    dress(DRESS.lantern, [[2, 3, 3], [2, 10, 11]]);
+    dress(DRESS.pot, [[2, 9, 5], [2, 9, 4]]);
+    return w;
+  }
   // 5: pieces from the palette, put where a touch would put them
   const put = (h: Exclude<Hand, 'auto'>, p: Pick) => { const op = place(w, h, p, 1, t); if (op) w.apply(op, t); };
   put('arch', ground(10, 8)); put('arch', top(w, 10, 8)); put('block', top(w, 10, 8));

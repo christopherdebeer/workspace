@@ -13,6 +13,11 @@ export const views = [
   { name: 'story-4', group: 'The storyboard', title: '4 · A resolved labyrinth', caption: 'a passage carved under the walkway (an arch carries it); the court walled in (paved, water, a cypress); a tower, and a trace from its top to the terrace: a bridge on one great arch', query: 'story=4&zoom=0.5' },
   { name: 'story-4-turned', group: 'The storyboard', title: 'From the other side', caption: 'the bridge\'s great arch, the passage under the walkway, the court', query: 'story=4&zoom=0.5&turn=3' },
   { name: 'palette', group: 'The palette', title: 'With the palette', caption: 'the same, and pieces put by hand: a tall arch, a long bridge from its top, a pool, cypresses on the terraces', query: 'story=5&zoom=0.5&turn=3' },
+  { name: 'motifs', group: 'Motifs and dressing', title: 'Motifs and dressing', caption: 'an arcade from the terrace to a marble tower (its bays alike, a parapet along it of its own accord); a flight run up to the terrace; the passage read as a lintel; brick, moss, ivy, lanterns and pots', query: 'story=6&zoom=0.55' },
+  { name: 'motifs-turned', group: 'Motifs and dressing', title: 'From the other side', caption: 'the flight up to the ivied terrace, and the arcade beyond it', query: 'story=6&zoom=0.55&turn=1' },
+  { name: 'dressing-close', group: 'Motifs and dressing', title: 'Dressing, close', caption: 'brick and moss, the lantern on the marble tower', query: 'story=6&zoom=0.32&turn=3' },
+  { name: 'sheet', group: 'The brushes', title: 'The piece brush\'s sheet', caption: 'hold the piece brush (or touch it again): the pieces, and the dressing', query: 'story=6&zoom=0.55&sheet' },
+  { name: 'select', group: 'The brushes', title: 'Taken up whole', caption: 'select: a tap takes up an arch, a second its whole arcade; read it as lintels, or solid; dress it; take it away', query: 'story=6&zoom=0.55&select=2.10.7&whole' },
   { name: 'close', group: 'Close to', title: 'The stone, close', caption: 'dressed travertine in courses, its joints staggered; pitted and banded; the light gathered under an arch', query: 'story=4&zoom=0.3&turn=3' },
   { name: 'print', group: 'Print', title: 'As a print', caption: 'print: the light hatched, closer and crossed as it darkens', query: 'story=4&print&zoom=0.5&turn=3' },
 ];

@@ -46,9 +46,11 @@ await withWood(async (lab) => {
   { const n0 = (await probe()).ops; let said = '';
     await drag([[9, 6, 0], [9, 5, 0], [9, 4, 3]], 0, async () => { said = await p.textContent('#hint'); });
     c.ok('a climb too steep for its stroke is refused, saying why', (await probe()).ops === n0 && /steep/.test(said), { said, n0, pr: await probe(), last: await W((w) => JSON.stringify(w.ops.at(-1))), s: await Promise.all([[11, 4, 0], [9, 4, 3]].map(([i, j, y]) => at(i, j, y))) }); }
-  // (hold on the wall under the walkway, then carve)
-  await drag([[6, 7, 0.5], [6, 7, 0.5]], 600);
-  c.ok('hold, then carve: the wall cut through beneath the walkway', await W((w) => !w.stone(0, 6, 7) && w.stone(1, 6, 7)), await probe());
+  // (the take brush: a stroke over the wall under the walkway carves it)
+  await p.evaluate(() => window.__labyrinth.setBrush('take'));
+  await drag([[5.8, 7, 0.5], [6.3, 7, 0.5]]);
+  c.ok('take, traced: the wall carved through beneath the walkway', await W((w) => !w.stone(0, 6, 7) && w.stone(1, 6, 7)), await probe());
+  await p.evaluate(() => window.__labyrinth.setBrush('auto'));
   c.ok('and what\'s over the cut stands on an arch', await W((w) => !!w.span(1, 6, 7)), await probe());
   const n = (await probe()).ops;
   await p.click('#undo'); await p.waitForTimeout(200);
@@ -101,6 +103,57 @@ await withWood(async (lab) => {
     await piece('block', e1.i1, 5, 0);
     c.ok('and on its new edge, again', (await W2((w) => w.extent())).i1 === e1.i1 + 2);
     c.ok('the palette: nothing thrown', !q.errors.length, q.errors);
+    await q.close();
+  }
+  {
+    // (the brushes, on the storyboard's motifs and dressing)
+    const q = await lab.open('zoom=0.55&story=6');
+    await q.waitForTimeout(900);
+    const L = (f, ...a) => q.evaluate(([src, args]) => new Function('L', 'a', `return (${src})(L, ...a)`)(window.__labyrinth, args), [f.toString(), a]);
+    const tap = async (i, j, y) => { await q.waitForTimeout(400); const s = await L((L, a, b, d) => L.screenOf(a, b, d), i, j, y); await q.mouse.click(s[0], s[1]); await q.waitForTimeout(250); };
+    const stroke = async (pts) => {
+      await q.waitForTimeout(400);
+      const s = await Promise.all(pts.map(([i, j, y]) => L((L, a, b, d) => L.screenOf(a, b, d), i, j, y)));
+      await q.mouse.move(s[0][0], s[0][1]); await q.mouse.down();
+      for (let n = 1; n < s.length; n++) for (let t = 1; t <= 6; t++) { await q.mouse.move(s[n - 1][0] + ((s[n][0] - s[n - 1][0]) * t) / 6, s[n - 1][1] + ((s[n][1] - s[n - 1][1]) * t) / 6); await q.waitForTimeout(25); }
+      await q.mouse.up(); await q.waitForTimeout(300);
+    };
+    const ms = await L((L) => L.motifs());
+    c.ok('motifs found: an arcade, a flight, a court, a tower', ['arcade', 'flight', 'court', 'tower'].every((k) => ms.some((m) => m.kind === k)), ms);
+    // (hand: a tap asks what it is)
+    await q.click('[data-brush="hand"]');
+    await tap(10, 7, 3);
+    c.ok('hand: a tap says what it is, and what it\'s part of', /arch/.test(await q.textContent('#hint')) && /arcade/.test(await q.textContent('#hint')), await q.textContent('#hint'));
+    // (select: the arch, then the whole arcade; its readings switched, and back)
+    await q.click('[data-brush="select"]');
+    await tap(10, 7, 3);
+    const s1 = await L((L) => L.selection());
+    c.ok('select: a tap takes up the piece', s1 && /arch/.test(s1.title) && await q.isVisible('#card'), s1);
+    await tap(10, 7, 3);
+    const s2 = await L((L) => L.selection());
+    c.ok('and again, the whole it\'s part of', s2 && /arcade/.test(s2.title) && s2.cells > s1.cells, s2);
+    const n0 = await L((L) => L.world.ops.length);
+    await q.click('#switch');
+    c.ok('switched: the arcade read as lintels', await L((L) => L.world.spans.filter((sp) => sp.k === 2 && sp.i === 10).every((sp) => sp.flat)) && await L((L) => L.world.ops.length) === n0 + 1);
+    for (let k = 1; k < s2.readings.length; k++) await q.click('#switch');
+    c.ok('and round its readings back to arches, leaving nothing behind', await L((L) => L.world.spans.filter((sp) => sp.k === 2 && sp.i === 10).every((sp) => !sp.flat)) && await L((L) => L.world.ops.length) === n0, await L((L) => L.selection()));
+    await q.click('#close');
+    // (the piece brush: touched again, the sheet; brick from it, a stone dressed)
+    await q.click('[data-brush="piece"]'); await q.click('[data-brush="piece"]');
+    c.ok('the piece brush, touched again, opens its sheet', await q.isVisible('#sheet.on'));
+    await q.click('#sheet [data-held="brick"]');
+    c.ok('a dressing from the sheet is held, and shown on the brush', await L((L) => L.held) === 'brick' && /brick/.test(await q.textContent('[data-brush="piece"]')));
+    await tap(9, 4, 3);
+    c.ok('a tap dresses the stone touched', await L((L) => L.world.dressed(2, 9, 4)?.mat === 1));
+    // (a run: blocks traced across the stone, a wall)
+    await L((L) => L.setBrush('block'));
+    await stroke([[13, 8, 0], [13, 9, 0], [13, 10, 0]]);
+    c.ok('the block brush, traced: a run of blocks', await L((L) => [8, 9, 10].every((j) => L.world.block(0, 13, j))), await L((L) => L.world.ops.at(-1)));
+    // (take: a tap takes the piece away)
+    await q.click('[data-brush="take"]');
+    await tap(13, 10, 1);
+    c.ok('take: a tap takes it away', await L((L) => !L.world.stone(0, 13, 10)));
+    c.ok('the brushes: nothing thrown', !q.errors.length, q.errors);
     await q.close();
   }
 });

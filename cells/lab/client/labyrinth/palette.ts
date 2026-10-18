@@ -11,10 +11,15 @@
  * - **pool**: let into the stone itself.
  * - **take**: what was touched, taken away (the rules then carry what was on it, on an arch or a pier).
  */
-import { DIRS, LEVELS, inGrid, key, type Op, type World } from './model';
-import type { Pick } from './gesture';
+import { DIRS, DRESS, LEVELS, inGrid, key, straights, type Cell, type Op, type World } from './model';
+import { connect, surface, type Pick } from './gesture';
 
-export type Hand = 'auto' | 'block' | 'arch' | 'stair' | 'bridge' | 'cypress' | 'pool' | 'take';
+/** the pieces a specific brush can hold, and the dressing */
+export type Piece = 'block' | 'arch' | 'stair' | 'bridge' | 'cypress' | 'pool';
+export type Dressing = keyof typeof DRESS;
+export type Hand = 'auto' | Piece | 'take';
+export const PIECES: Piece[] = ['block', 'arch', 'stair', 'bridge', 'cypress', 'pool'];
+export const DRESSINGS: Dressing[] = ['travertine', 'brick', 'marble', 'moss', 'ivy', 'parapet', 'lantern', 'pot'];
 
 /** a bridge across level k through a cell: along an axis, the free cells between stone either side (the shorter way) */
 export function span(w: World, k: number, i: number, j: number, only?: number): { a: number; i: number; j: number; n: number } | null {
@@ -37,6 +42,9 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   const [hk, hi, hj] = p.hit;
   if (hand === 'take') {
     if (p.face === 'ground') return w.pools.has(key(0, hi, hj)) ? { cut: [[-1, hi, hj]], why: 'take' } : null;
+    // (a lantern or a pot on what was touched, before the stone itself)
+    const prop = w.dressed(hk, hi, hj)?.prop;
+    if (prop && p.face === 'top') return { dress: [[hk, hi, hj, prop, 0]], why: 'take' };
     for (let k = hk; k >= 0; k--) if (w.stone(k, hi, hj) || w.stair(k, hi, hj) >= 0 || w.tree(k, hi, hj)) return { cut: [[k, hi, hj]], why: 'take' };
     return null;
   }
@@ -66,4 +74,58 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   const want = side ? toward % 2 : view % 2;
   const a = under >= 0 ? under : open(want) ? want : 1 - want;
   return { arches: [[k, i, j, a, now]], why: 'arch' };
+}
+
+/**
+ * A piece traced rather than tapped: a run of it along the stroke, at the height it started from (`cells`, the start's
+ * column first). Blocks, a wall; arches, an arcaded wall, each way through across the stroke; stairs, a flight climbing
+ * a level a cell along the straight of it. The rest are put once, where the stroke began.
+ */
+export function run(w: World, piece: Piece, start: Pick, path: Array<[number, number]>, view: number, now: number): Op | null {
+  const cells = connect(path), h0 = surface(w, start);
+  if (cells.length < 2) return place(w, piece, start, view, now);
+  if (piece === 'block' || piece === 'arch') {
+    const out: Array<[number, number, number, number, number]> = [];
+    cells.forEach(([i, j], s) => {
+      if (!w.free(h0, i, j) || h0 >= LEVELS) return;
+      const n = cells[Math.min(cells.length - 1, s + 1)], p = cells[Math.max(0, s - 1)], a = n[0] !== p[0] ? 1 : 0;
+      out.push([h0, i, j, a, now + s * 0.05]);
+    });
+    if (!out.length) return null;
+    return piece === 'block' ? { add: out.map(([k, i, j, , b]) => [k, i, j, b]), why: 'wall' } : { arches: out, why: 'arcade' };
+  }
+  if (piece === 'stair') {
+    // (a flight: every straight cell a step, to wherever its last step leads)
+    const last = cells[cells.length - 1], prev = cells[cells.length - 2], ahead: [number, number] = [2 * last[0] - prev[0], 2 * last[1] - prev[1]];
+    const m = straights(cells, [0, ahead[0], ahead[1]]).length;
+    if (!m || h0 + m > LEVELS) return null;
+    return { connect: { from: [h0, cells[0][0], cells[0][1]], to: [h0 + m, ahead[0], ahead[1]], path: cells }, born: now, why: 'flight' };
+  }
+  return place(w, piece, start, view, now);
+}
+
+/** the cell a dressing goes on, where a touch struck: the stone (or stair, or pier) struck */
+export function dressAt(w: World, p: Pick): Cell | null {
+  if (p.face === 'ground') return null;
+  const [k, i, j] = p.hit;
+  return w.stone(k, i, j) || w.stair(k, i, j) >= 0 || w.pier(k, i, j) ? [k, i, j] : null;
+}
+/**
+ * Dressing, over the cells a stroke struck (or one tapped): a stone for them all; or moss, ivy, a parapet, a lantern or
+ * a pot, put on if the first cell hasn't one and taken off if it has (so a stroke over what's dressed undresses it).
+ * A lantern or a pot only goes on a top with room over it.
+ */
+export function dress(w: World, kind: Dressing, cells: Cell[]): Op | null {
+  const id = DRESS[kind], seen = new Set<number>(), out: Array<[number, number, number, number, number]> = [];
+  const first = cells[0] && w.dressed(...cells[0]);
+  const has = (d: ReturnType<World['dressed']>) => !!d && (id === DRESS.moss ? d.moss : id === DRESS.ivy ? d.ivy : id === DRESS.parapet ? d.parapet : d.prop === id);
+  const on = id <= DRESS.marble ? 1 : has(first) ? 0 : 1;
+  for (const [k, i, j] of cells) {
+    const v = key(k, i, j);
+    if (seen.has(v)) continue;
+    seen.add(v);
+    if ((id === DRESS.lantern || id === DRESS.pot) && on && (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || !w.stone(k, i, j))) continue;
+    out.push([k, i, j, id, on]);
+  }
+  return out.length ? { dress: out, why: 'dress' } : null;
 }

@@ -10,6 +10,8 @@ const G = await load('../client/labyrinth/gesture.ts');
 const { story } = await load('../client/labyrinth/demo.ts');
 const P = await load('../client/labyrinth/palette.ts');
 const NAV = await load('../client/labyrinth/nav.ts');
+const MO = await load('../client/labyrinth/motifs.ts');
+const SEL = await load('../client/labyrinth/select.ts');
 
 let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
@@ -55,7 +57,22 @@ for (let s = 1; s <= 60; s++) {
       for (let q = 0, L = 2 + Math.floor(rnd() * 6); q < L; q++) { if (rnd() < 0.25) d = (d + (rnd() < 0.5 ? 1 : 3)) % 4; x = Math.max(e.i0, Math.min(e.i1, x + DIRS[d][0])); z = Math.max(e.j0, Math.min(e.j1, z + DIRS[d][1])); cells.push([x, z]); }
       const [ex, ez] = cells[cells.length - 1];
       op = G.trace(w, pickAt(i, j), cells, pickAt(ex, ez), () => t);
-    } else if (what < 0.93) {
+    } else if (what < 0.91) {
+      // (a brush's other work: a reading switched on what's taken up, dressing, a run of pieces)
+      const pk = pickAt(i, j), r2 = rnd();
+      if (r2 < 0.45 && pk.face === 'top') {
+        const sl = rnd() < 0.5 ? SEL.selectCell(w, pk.hit, 1, t) : (() => { const m = MO.around(MO.motifs(w), pk.hit)[0]; return m ? SEL.selectMotif(w, m, t) : null; })();
+        const rd = sl?.readings.filter((x) => x.op);
+        if (rd?.length) op = rd[Math.floor(rnd() * rd.length)].op;
+      } else if (r2 < 0.75) {
+        const kind = P.DRESSINGS[Math.floor(rnd() * P.DRESSINGS.length)], c = P.dressAt(w, pk);
+        if (c) op = P.dress(w, kind, [c]);
+      } else {
+        const cells = [[i, j]], d = DIRS[Math.floor(rnd() * 4)];
+        for (let q = 1; q < 2 + Math.floor(rnd() * 4); q++) cells.push([i + q * d[0], j + q * d[1]]);
+        op = P.run(w, ['block', 'arch', 'stair'][Math.floor(rnd() * 3)], pk, cells, 1, t);
+      }
+    } else if (what < 0.96) {
       // (a piece from the palette, where a touch would put it)
       const hand = ['block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take'][Math.floor(rnd() * 7)];
       const pk = pickAt(i, j), d = DIRS[Math.floor(rnd() * 4)];
@@ -90,6 +107,8 @@ for (let s = 1; s <= 60; s++) {
     local.tried++; if (changed.every((v) => !far(v))) local.ok++; else if (local.saw.length < 3) local.saw.push({ s, t, why: op.why, far: changed.filter(far).map(unkey) });
   }
   stands(w, `seed ${s}`);
+  // (an arcade's bays alike: every arch of it springs from the same height)
+  for (const m of MO.motifs(w).filter((m) => m.kind === 'arcade')) ok(`seed ${s}: an arcade's bays spring alike`, m.spans.every((sp) => sp.low === m.spans[0].low), m.spans);
   const again = replay(w.encode());
   ok(`seed ${s}: what's written makes the same world`, again.encode() === w.encode() && again.mass.size === w.mass.size && again.piers.size === w.piers.size && again.spans.length === w.spans.length);
   const before = w.encode(), n = w.ops.length, last = w.ops[n - 1];
@@ -127,7 +146,33 @@ ok(`an edit changes what holds things up only near it (${local.ok} of ${local.tr
   w.apply(wk);
   ok('a walkway meeting stone stops at it, and cuts nothing', w.stone(3, 4, 8) && w.reached.get(wk)?.stopped >= 0, w.reached.get(wk));
 }
-for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
+// (motifs and dressing, as the storyboard has them)
+{
+  const s6 = story(6), ms = MO.motifs(s6), arc = ms.find((m) => m.kind === 'arcade' && m.spans.every((sp) => sp.k === 2 && sp.a === 1));
+  ok('story 6: the trace from the terrace to the tower is an arcade of two bays, alike', !!arc && arc.spans.length === 2 && arc.spans[0].n === arc.spans[1].n && arc.spans[0].low === arc.spans[1].low, arc?.spans);
+  const fl = ms.find((m) => m.kind === 'flight');
+  ok('story 6: the stair brush\'s run is a flight of three, up to the terrace, and it can be climbed', fl?.cells.length === 3 && NAV.reaches(NAV.navigate(s6), [0, 14, 4], [3, 10, 4]), fl);
+  ok('story 6: towers and the court are found', ms.filter((m) => m.kind === 'tower').length >= 2 && ms.some((m) => m.kind === 'court'), ms.map((m) => m.label));
+  ok('story 6: the passage read as a lintel', s6.span(1, 6, 7)?.flat === true);
+  ok('story 6: dressed (marble, brick, moss, ivy, a parapet, lanterns, pots)', s6.dressed(0, 3, 3)?.mat === 2 && s6.dressed(0, 3, 9)?.mat === 1 && s6.dressed(0, 3, 7)?.moss && s6.dressed(1, 9, 4)?.ivy && s6.dressed(1, 6, 7)?.parapet && s6.dressed(2, 3, 3)?.prop === 6 && s6.dressed(2, 9, 5)?.prop === 7);
+  stands(s6, 'story 6');
+  const again = replay(s6.encode());
+  ok('story 6: its readings and dressing are written down, and made again', again.encode() === s6.encode() && again.span(1, 6, 7)?.flat && again.dressed(0, 3, 9)?.mat === 1);
+  // (every reading of the arcade, each one standing, and switching back leaves it as it was)
+  const sel = SEL.selectMotif(s6, arc, 0);
+  ok('the arcade taken up: arches, lintels, solid', sel.readings.map((r) => r.label).join() === 'arches,lintels,solid', sel.readings.map((r) => r.label));
+  for (const r of sel.readings) if (r.op) { const w = replay(s6.encode()); w.apply(r.op); stands(w, `arcade read as ${r.label}`); if (r.label === 'solid') ok('read solid: stone under it all', !w.spans.some((sp) => sp.k === 2 && sp.a === 1 && sp.i === 10)); }
+  // (a long arch, taken up, read as two bays: a pier under its middle)
+  const w = new World(5);
+  for (const i of [3, 9]) for (let k = 0; k < 2; k++) w.apply({ add: [[k, i, 5, 0]] });
+  w.apply({ add: [4, 5, 6, 7, 8].map((i) => [1, i, 5, 0]), bridge: true });
+  const one = w.span(1, 6, 5);
+  ok('a bridge of five on one arch', one?.n === 5, one);
+  const r2 = SEL.selectCell(w, [1, 6, 5], 0, 0).readings.find((r) => r.label === 'two bays');
+  w.apply(r2.op);
+  ok('read as two bays: a pier under its middle, two arches either side, alike', w.pier(0, 6, 5) && w.spans.filter((sp) => sp.k === 1).length === 2 && new Set(w.spans.map((sp) => sp.low)).size === 1, w.spans);
+}
+for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take', 'reading', 'dress', 'arcade', 'flight']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
 // (the storyboard: what each stage says it is)
 const s1 = story(1), s2 = story(2), s3 = story(3), s4 = story(4);
 ok('story 1: a small raised platform', s1.topFrom(0, 3, 7) === 2 && s1.topFrom(0, 4, 7) === 2);

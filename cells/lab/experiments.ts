@@ -26,9 +26,9 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',
-    blurb: 'Architecture that follows the hand. A travertine slab and a palette: auto is three gestures (tap raises, trace builds a wall or a walkway or joins two places, hold-and-trace carves) and the stone works out what it takes to stand; or a block, an arch, a stair, a bridge, a cypress, a pool, where it\'s touched. Arches and arcades under what has nothing beneath it, arched ways where stone is cut from under stone, steps and landings where a trace climbs, courtyards (paved, water, a cypress) where walls close round the ground. Or as a print.',
+    blurb: 'Architecture that follows the hand. A travertine slab and five brushes: auto reads gestures (tap raises, trace builds a wall, reaches out or climbs) and the stone works out what it takes to stand; a piece brush for one thing exactly, or dressing (brick, marble, moss, ivy, parapets, lanterns, pots); take; and select, to take up a piece or a whole arcade, flight or tower and read it another way. Arches and arcades under what has nothing beneath it, courtyards where walls close round the ground. Kept as a print, too.',
     page: 'static/labyrinth.html', preview: 'preview', readme: 'static/labyrinth.md',
-    presets: [{ label: 'the stone', query: '' }, { label: '1 · first touch', query: 'story=1' }, { label: '2 · a traced wall', query: 'story=2' }, { label: '3 · an elevated connection', query: 'story=3' }, { label: '4 · a resolved labyrinth', query: 'story=4' }, { label: 'as a print', query: 'story=4&print' }],
+    presets: [{ label: 'the stone', query: '' }, { label: '1 · first touch', query: 'story=1' }, { label: '2 · a traced wall', query: 'story=2' }, { label: '3 · an elevated connection', query: 'story=3' }, { label: '4 · a resolved labyrinth', query: 'story=4' }, { label: 'motifs and dressing', query: 'story=6' }, { label: 'as a print', query: 'story=4&print' }],
   },
   {
     id: 'fab', title: 'Fab', group: 'Play',

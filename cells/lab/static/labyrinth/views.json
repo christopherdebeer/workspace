@@ -52,6 +52,46 @@
   ]
  },
  {
+  "group": "Motifs and dressing",
+  "views": [
+   {
+    "name": "motifs",
+    "title": "Motifs and dressing",
+    "caption": "an arcade from the terrace to a marble tower (its bays alike, a parapet along it of its own accord); a flight run up to the terrace; the passage read as a lintel; brick, moss, ivy, lanterns and pots",
+    "file": "v-motifs.jpg"
+   },
+   {
+    "name": "motifs-turned",
+    "title": "From the other side",
+    "caption": "the flight up to the ivied terrace, and the arcade beyond it",
+    "file": "v-motifs-turned.jpg"
+   },
+   {
+    "name": "dressing-close",
+    "title": "Dressing, close",
+    "caption": "brick and moss, the lantern on the marble tower",
+    "file": "v-dressing-close.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The brushes",
+  "views": [
+   {
+    "name": "sheet",
+    "title": "The piece brush's sheet",
+    "caption": "hold the piece brush (or touch it again): the pieces, and the dressing",
+    "file": "v-sheet.jpg"
+   },
+   {
+    "name": "select",
+    "title": "Taken up whole",
+    "caption": "select: a tap takes up an arch, a second its whole arcade; read it as lintels, or solid; dress it; take it away",
+    "file": "v-select.jpg"
+   }
+  ]
+ },
+ {
   "group": "Close to",
   "views": [
    {

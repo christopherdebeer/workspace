@@ -8,16 +8,31 @@
  *   resolution let it; the stone over it is spandrels each side and a deck, its underside lit from within;
  * - **piers**: square columns under what has nothing else to stand on, with a cap;
  * - **courtyards**: paved; water where the rules put it, a rim round it; cypresses;
- * - **the stone and the table**: the travertine slab, on a table in the sun.
+ * - **the stone and the table**: the travertine slab, on a table in the sun;
+ * - **dressing**: each stone's kind (travertine, brick, marble), moss and ivy (drawn over it, in the shader), parapets
+ *   (by hand, and along a bridge or a high arcade of their own accord), lanterns, pots with a shrub in them. Lintels: an arch read flat.
  *
  * x and z are centred on the slab; y up, the slab's top at 0.
  */
-import { CENTER, DECK, DIRS, LEVELS, key, unkey, type Span, type World } from './model';
+import { CENTER, DECK, DIRS, DRESS, LEVELS, key, unkey, type Span, type World } from './model';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
 export const STRIDE = 12;
-export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8 };
+export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8, lamp: 9, clay: 10 };
+/** a stone's dressing, over its material (stone, or the light within an arch): 16 moss, 32 ivy, 64 × which stone
+ * (travertine, brick, marble) */
+export const MOSS = 16, IVY = 32, KIND = 64;
+/** how deep a flat lintel is */
+export const LINTEL = 0.34;
+/** where an arch's underside is, across it (`u` from its middle): its crown's height `ys`, its rise, its half-width;
+ * a lintel's is flat */
+export function soffit(sp: Span) {
+  const half = sp.n / 2, yD = sp.k + 1 - DECK;
+  if (sp.flat) return { half, rise: 0, ys: sp.k + 1 - LINTEL, at: () => sp.k + 1 - LINTEL };
+  const rise = Math.min(half, yD - sp.low), ys = yD - rise;
+  return { half, rise, ys, at: (u: number) => ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2)) };
+}
 export const MARGIN = 0.6, SLAB = 0.42;
 const STEPS = 6, CURVE = 14, PIER = 0.3, HW = 0.3;
 
@@ -28,8 +43,11 @@ const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 193496
 
 export function buildMesh(w: World): Mesh {
   const out: number[] = [];
-  let cur = { born: -1e3, pivot: 0, how: 1, tone: 0 };
-  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, mat, cur.born, cur.pivot, cur.how, cur.tone);
+  let cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0 };
+  /** a cell's dressing, as it's drawn over its stone */
+  const dressOf = (k: number, i: number, j: number) => { const d = w.dressed(k, i, j); return d ? d.mat * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
+  const at = (born: number, pivot: number, k: number, i: number, j: number, how = 1) => ({ born, pivot, how, tone: tone(k, i, j), dress: dressOf(k, i, j) });
+  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat, cur.born, cur.pivot, cur.how, cur.tone);
   const quad = (a: V3, b: V3, c: V3, d: V3, n: V3, ao: number[] | number, mat: number) => {
     const A = typeof ao === 'number' ? [ao, ao, ao, ao] : ao;
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -95,15 +113,15 @@ export function buildMesh(w: World): Mesh {
   for (let k = 0; k < LEVELS; k++) for (let j = ext.j0; j <= ext.j1; j++) for (let i = ext.i0; i <= ext.i1; i++) {
     const x0 = X(i), z0 = Z(j), y0 = k, y1 = k + 1;
     if (w.block(k, i, j)) {
-      cur = { born: w.born(k, i, j), pivot: y0, how: 1, tone: tone(k, i, j) };
+      cur = at(w.born(k, i, j), y0, k, i, j);
       sides(k, i, j, y0, y1, MAT.stone);
       topFace(k, i, j, y1);
       continue;
     }
-    if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { cur = { born: w.born(k, i, j), pivot: y0, how: 1, tone: tone(k, i, j) }; archCell(k, i, j, w.archway(k, i, j)); continue; }
+    if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { cur = at(w.born(k, i, j), y0, k, i, j); archCell(k, i, j, w.archway(k, i, j)); continue; }
     const d = w.stair(k, i, j);
     if (d >= 0) {
-      cur = { born: w.born(k, i, j), pivot: y0, how: 1, tone: tone(k, i, j) };
+      cur = at(w.born(k, i, j), y0, k, i, j);
       const [a, b] = DIRS[d];
       const pt = (u: number, wv: number, y: number): V3 => { const cx = x0 + 0.5, cz = z0 + 0.5; return a ? [cx + a * (u - 0.5), y, cz + (wv - 0.5)] : [cx + (wv - 0.5), y, cz + b * (u - 0.5)]; };
       const across = [(d + 1) % 4, (d + 3) % 4];
@@ -122,7 +140,7 @@ export function buildMesh(w: World): Mesh {
     }
     if (w.pier(k, i, j)) {
       // (a pier: a square column; a cap where it meets what it carries)
-      cur = { born: w.born(k, i, j), pivot: 0, how: 1, tone: tone(k, i, j) };
+      cur = at(w.born(k, i, j), 0, k, i, j);
       const cx = x0 + 0.5, cz = z0 + 0.5, capped = !w.pier(k + 1, i, j), r = PIER, rc = PIER + 0.08;
       const yTop = capped ? y1 - 0.12 : y1;
       for (let d = 0; d < 4; d++) {
@@ -138,7 +156,7 @@ export function buildMesh(w: World): Mesh {
   // ─── what grows in the courtyards ───
   const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: 0 }; }), ...[...w.trees.entries()].map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
   for (const dc of [...w.decor.map((d) => ({ ...d, k: 0 })), ...hand]) {
-    cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5 };
+    cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5, dress: 0 };
     const x0 = X(dc.i), z0 = Z(dc.j);
     if (dc.kind === 'pool') {
       const lv = -0.1;
@@ -151,7 +169,62 @@ export function buildMesh(w: World): Mesh {
       }
     } else cypress(dc.i, dc.j, dc.k, dc.born);
   }
+
+  // ─── dressing: parapets (by hand, and along a bridge of its own accord), lanterns and pots ───
+  for (const v of [...w.mass.keys()]) {
+    const [k, i, j] = unkey(v), d = w.dressed(k, i, j), sp = w.span(k, i, j);
+    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j)) continue;
+    // (a parapet of its own accord along anything carried high: a bridge, or an arch two levels up or more)
+    const bridge = !!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j));
+    if (d?.parapet || bridge) {
+      cur = at(w.born(k, i, j), k + 1, k, i, j);
+      for (let q = 0; q < 4; q++) {
+        const [a, b] = DIRS[q];
+        if (!d?.parapet && q % 2 === sp!.a) continue;
+        if (w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0) continue;
+        // (a low wall along that edge, a coping on it)
+        const x0 = X(i), z0 = Z(j), T = 0.12, y0 = k + 1, y1 = y0 + 0.3;
+        const [bx0, bx1, bz0, bz1] = a > 0 ? [x0 + 1 - T, x0 + 1, z0, z0 + 1] : a < 0 ? [x0, x0 + T, z0, z0 + 1] : b > 0 ? [x0, x0 + 1, z0 + 1 - T, z0 + 1] : [x0, x0 + 1, z0, z0 + T];
+        box(bx0, bx1, y0, y1, bz0, bz1, MAT.stone, [0.75, 0.75, 1, 1]);
+      }
+    }
+    if (d?.prop === DRESS.lantern) lantern(i, j, k + 1, w.born(k, i, j));
+    if (d?.prop === DRESS.pot) pot(i, j, k + 1, w.born(k, i, j));
+  }
   return { data: new Float32Array(out), count: out.length / STRIDE };
+
+  /** a box's sides and top */
+  function box(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, mat: number, ao: number[] | number = 1) {
+    quad([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [0, 0, -1], ao, mat);
+    quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1], ao, mat);
+    quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [-1, 0, 0], ao, mat);
+    quad([x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], [1, 0, 0], ao, mat);
+    quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1], [0, 1, 0], 1, mat);
+  }
+  /** a turned shape round an upright through (cx, cz): rings of (radius, height) */
+  function lathe(cx: number, cz: number, rings: Array<[number, number]>, mat: number, seg = 10) {
+    for (let q = 0; q + 1 < rings.length; q++) for (let s = 0; s < seg; s++) {
+      const a0 = (s / seg) * Math.PI * 2, a1 = ((s + 1) / seg) * Math.PI * 2, [r0, y0] = rings[q], [r1, y1] = rings[q + 1];
+      const am = (a0 + a1) / 2, dr = r1 - r0, dy = y1 - y0, l = Math.hypot(dr, dy) || 1;
+      quad([cx + Math.cos(a0) * r0, y0, cz + Math.sin(a0) * r0], [cx + Math.cos(a1) * r0, y0, cz + Math.sin(a1) * r0], [cx + Math.cos(a1) * r1, y1, cz + Math.sin(a1) * r1], [cx + Math.cos(a0) * r1, y1, cz + Math.sin(a0) * r1], [(Math.cos(am) * dy) / l, -dr / l, (Math.sin(am) * dy) / l], 0.6 + 0.4 * (q / rings.length), mat);
+    }
+  }
+  /** a lantern on a post: a dark post and cap, the lamp lit */
+  function lantern(i: number, j: number, y: number, born: number) {
+    cur = { born, pivot: y, how: 1, tone: 0.5, dress: 0 };
+    const cx = X(i) + 0.5, cz = Z(j) + 0.5;
+    box(cx - 0.035, cx + 0.035, y, y + 0.34, cz - 0.035, cz + 0.035, MAT.bark, 0.8);
+    box(cx - 0.08, cx + 0.08, y + 0.34, y + 0.5, cz - 0.08, cz + 0.08, MAT.lamp);
+    box(cx - 0.11, cx + 0.11, y + 0.5, y + 0.54, cz - 0.11, cz + 0.11, MAT.bark, 0.9);
+  }
+  /** a terracotta pot with a clipped shrub in it */
+  function pot(i: number, j: number, y: number, born: number) {
+    cur = { born, pivot: y, how: 2, tone: 0.5, dress: 0 };
+    const cx = X(i) + 0.5, cz = Z(j) + 0.5;
+    lathe(cx, cz, [[0.11, y], [0.13, y + 0.05], [0.17, y + 0.22], [0.19, y + 0.25], [0.15, y + 0.25]], MAT.clay, 12);
+    const r = 0.21, c = y + 0.25 + r * 0.8;
+    lathe(cx, cz, Array.from({ length: 9 }, (_, q) => { const t = (q / 8) * Math.PI; return [Math.sin(t) * r * (1 + 0.06 * Math.sin(q * 2.7)), c - Math.cos(t) * r] as [number, number]; }), MAT.leaves, 12);
+  }
 
   /** stone with a way through it along an axis; tall, with an arch the same way under or over it */
   function archCell(k: number, i: number, j: number, a: number) {
@@ -191,13 +264,12 @@ export function buildMesh(w: World): Mesh {
 
   /** an arch under a run of stone, and the stone over it: spandrels, deck, its underside lit from within */
   function span(sp: Span) {
-    const { k, a, n } = sp, [di, dj] = DIRS[a], yT = k + 1, yD = yT - DECK;
-    const half = n / 2, rise = Math.min(half, yD - sp.low), ys = yD - rise;
-    cur = { born: sp.born, pivot: yT, how: 1, tone: tone(k, sp.i, sp.j) };
+    const { k, a, n } = sp, [di, dj] = DIRS[a], yT = k + 1;
+    const { half, rise, ys, at: arc } = soffit(sp);
+    cur = at(sp.born, yT, k, sp.i, sp.j);
     const cx = X(sp.i) + 0.5 + (di * (n - 1)) / 2, cz = Z(sp.j) + 0.5 + (dj * (n - 1)) / 2;
     const P = (u: number, wv: number, y: number): V3 => (a === 0 ? [cx + u, y, cz + wv] : [cx + wv, y, cz + u]);
     const nW = (s: number): V3 => (a === 0 ? [0, 0, s] : [s, 0, 0]);
-    const arc = (u: number) => ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2));
     const S = Math.max(CURVE, n * 10);
     // (which cell of the run a point along it is in, and whether a side's hidden there)
     const cellAt = (u: number) => Math.min(n - 1, Math.max(0, Math.floor(u + half)));
@@ -210,13 +282,13 @@ export function buildMesh(w: World): Mesh {
       const ao = 0.55 + 0.45 * Math.min(1, (arc(um) - ys) / Math.max(0.2, rise));
       quad(P(u0, -0.5, arc(u0)), P(u1, -0.5, arc(u1)), P(u1, 0.5, arc(u1)), P(u0, 0.5, arc(u0)), nu, ao, MAT.within);
     }
-    for (let s = 0; s < n; s++) topFace(k, sp.i + s * di, sp.j + s * dj, yT);
+    for (let s = 0; s < n; s++) { cur = at(sp.born, yT, k, sp.i + s * di, sp.j + s * dj); topFace(k, sp.i + s * di, sp.j + s * dj, yT); }
   }
 
   /** a cypress: a dark spindle of leaves on a short trunk */
   function cypress(i: number, j: number, y0: number, born: number) {
     const cx = X(i) + 0.5, cz = Z(j) + 0.5, Ht = 1.85, SEG = 12, RINGS = 16, seed = i * 31 + j * 17;
-    cur = { born, pivot: y0, how: 2, tone: 0.5 };
+    cur = { born, pivot: y0, how: 2, tone: 0.5, dress: 0 };
     const rnd = (q: number) => { const x = Math.sin((seed * 97 + q) * 12.9898) * 43758.5453; return x - Math.floor(x); };
     for (let s = 0; s < 6; s++) {
       const a0 = (s / 6) * Math.PI * 2, a1 = ((s + 1) / 6) * Math.PI * 2, r = 0.05;
@@ -250,9 +322,8 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
     if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > 0.5 + Math.sqrt(Math.max(0, HW * HW - wv * wv))); }
     if (!sp) return true;
     // (over an arch: stone above its curve)
-    const half = sp.n / 2, yD = k + 1 - DECK, rise = Math.min(half, yD - sp.low), ys = yD - rise;
-    const u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - half;
-    return y > ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2));
+    const so = soffit(sp), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
+    return y > so.at(u);
   }
   const d = w.stair(k, i, j);
   if (d >= 0) { const [a, b] = DIRS[d], u = 0.5 + (a ? a * fx : b * fz); return fy < Math.ceil(Math.max(0.001, u) * STEPS) / STEPS; }
@@ -262,9 +333,8 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   for (let kk = k + 1; kk < LEVELS; kk++) {
     const sp = w.span(kk, i, j);
     if (!sp) { if (w.occupied(kk, i, j)) break; continue; }
-    const half = sp.n / 2, yD = kk + 1 - DECK, rise = Math.min(half, yD - sp.low), ys = yD - rise;
-    const u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - half;
-    return y > ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2));
+    const so = soffit(sp), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
+    return y > so.at(u);
   }
   return false;
 }

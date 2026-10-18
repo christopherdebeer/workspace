@@ -15,6 +15,17 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 
 ![With the palette: the same, and pieces put by hand: a tall arch, a long bridge from its top, a pool, cypresses on the terraces](v-palette.jpg)
 
+## Motifs and dressing
+
+![Motifs and dressing: an arcade from the terrace to a marble tower (its bays alike, a parapet along it of its own accord); a flight run up to the terrace; the passage read as a lintel; brick, moss, ivy, lanterns and pots](v-motifs.jpg)
+![From the other side: the flight up to the ivied terrace, and the arcade beyond it](v-motifs-turned.jpg)
+![Dressing, close: brick and moss, the lantern on the marble tower](v-dressing-close.jpg)
+
+## The brushes
+
+![The piece brush's sheet: hold the piece brush (or touch it again): the pieces, and the dressing](v-sheet.jpg)
+![Taken up whole: select: a tap takes up an arch, a second its whole arcade; read it as lintels, or solid; dress it; take it away](v-select.jpg)
+
 ## Close to
 
 ![The stone, close: dressed travertine in courses, its joints staggered; pitted and banded; the light gathered under an arch](v-close.jpg)
