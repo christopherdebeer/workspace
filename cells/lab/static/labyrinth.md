@@ -37,6 +37,10 @@ With a piece in hand, a drag turns the view rather than tracing. Both ways of bu
 
 ![with the palette: a tall arch, a long bridge from its top, a pool, cypresses on the terraces](labyrinth/v-palette.jpg)
 
+### The stone grows
+
+The slab starts as an 8 × 8 square. After that it is only as big as what's built, plus two cells all round. Build on its edge cell and it grows two cells further; undo, and it goes back. There's always room to go on, and the view follows, framing the whole slab. The grid underneath is 48 × 48 cells.
+
 ### Moving round it
 
 - Two fingers, or one finger starting on the background, turn the view. It settles on a corner when you let go.

@@ -12,7 +12,7 @@
  *
  * x and z are centred on the slab; y up, the slab's top at 0.
  */
-import { DECK, DIRS, LEVELS, N, type Span, type World } from './model';
+import { CENTER, DECK, DIRS, LEVELS, key, unkey, type Span, type World } from './model';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
@@ -23,7 +23,7 @@ const STEPS = 6, CURVE = 14, PIER = 0.3, HW = 0.3;
 
 export interface Mesh { data: Float32Array; count: number }
 type V3 = [number, number, number];
-const X = (i: number) => i - N / 2, Z = (j: number) => j - N / 2;
+const X = (i: number) => i - CENTER, Z = (j: number) => j - CENTER;
 const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 19349663) ^ (j * 83492791)) >>> 0) / 4294967296;
 
 export function buildMesh(w: World): Mesh {
@@ -70,27 +70,29 @@ export function buildMesh(w: World): Mesh {
 
   // ─── the stone, and the table it's on ───
   {
-    const e = N / 2 + MARGIN;
-    for (let j = -1; j <= N; j++) for (let i = -1; i <= N; i++) {
-      const inside = i >= 0 && j >= 0 && i < N && j < N;
+    const ex = w.extent(), xa = X(ex.i0) - MARGIN, xb = X(ex.i1 + 1) + MARGIN, za = Z(ex.j0) - MARGIN, zb = Z(ex.j1 + 1) + MARGIN;
+    for (let j = ex.j0 - 1; j <= ex.j1 + 1; j++) for (let i = ex.i0 - 1; i <= ex.i1 + 1; i++) {
+      const inside = i >= ex.i0 && j >= ex.j0 && i <= ex.i1 && j <= ex.j1;
       if (inside && (w.pool(i, j) || w.block(0, i, j) || w.stair(0, i, j) >= 0)) continue;
-      const x0 = i < 0 ? -e : X(i), x1 = i >= N ? e : X(i + 1), z0 = j < 0 ? -e : Z(j), z1 = j >= N ? e : Z(j + 1);
-      const court = inside && w.courts.has((0 * N + j) * N + i);
+      const x0 = i < ex.i0 ? xa : X(i), x1 = i > ex.i1 ? xb : X(i + 1), z0 = j < ex.j0 ? za : Z(j), z1 = j > ex.j1 ? zb : Z(j + 1);
+      const court = inside && w.courts.has(key(0, i, j));
       quad([x0, 0, z0], [x1, 0, z0], [x1, 0, z1], [x0, 0, z1], [0, 1, 0], inside ? cornerAo(0, i, j) : 1, court ? MAT.court : MAT.slab);
     }
-    const T = 70, R = 1.6;
-    for (let d = 0; d < 4; d++) {
-      const [a, b] = DIRS[d], n: V3 = [a, 0, b];
-      const c0: V3 = a ? [a * e, 0, -e] : [-e, 0, b * e], c1: V3 = a ? [a * e, 0, e] : [e, 0, b * e];
-      quad(c0, c1, [c1[0], -SLAB, c1[2]], [c0[0], -SLAB, c0[2]], n, [1, 1, 0.7, 0.7], MAT.slabSide);
-      const o0: V3 = a ? [a * (e + R), -SLAB, -(e + R)] : [-(e + R), -SLAB, b * (e + R)], o1: V3 = a ? [a * (e + R), -SLAB, e + R] : [e + R, -SLAB, b * (e + R)];
-      quad([c0[0], -SLAB, c0[2]], [c1[0], -SLAB, c1[2]], o1, o0, [0, 1, 0], [0.5, 0.5, 1, 1], MAT.table);
+    const T = 90, R = 1.6;
+    // (its sides, and the table round it, shut in close to its foot)
+    const cs: V3[] = [[xa, 0, za], [xb, 0, za], [xb, 0, zb], [xa, 0, zb]], os: V3[] = [[xa - R, -SLAB, za - R], [xb + R, -SLAB, za - R], [xb + R, -SLAB, zb + R], [xa - R, -SLAB, zb + R]];
+    const ns: V3[] = [[0, 0, -1], [1, 0, 0], [0, 0, 1], [-1, 0, 0]];
+    for (let q = 0; q < 4; q++) {
+      const c0 = cs[q], c1 = cs[(q + 1) % 4];
+      quad(c0, c1, [c1[0], -SLAB, c1[2]], [c0[0], -SLAB, c0[2]], ns[q], [1, 1, 0.7, 0.7], MAT.slabSide);
+      quad([c0[0], -SLAB, c0[2]], [c1[0], -SLAB, c1[2]], os[(q + 1) % 4], os[q], [0, 1, 0], [0.5, 0.5, 1, 1], MAT.table);
     }
-    for (const [x0, z0, x1, z1] of [[-T, -T, T, -(e + R)], [-T, e + R, T, T], [-T, -(e + R), -(e + R), e + R], [e + R, -(e + R), T, e + R]]) quad([x0, -SLAB, z0], [x1, -SLAB, z0], [x1, -SLAB, z1], [x0, -SLAB, z1], [0, 1, 0], 1, MAT.table);
+    for (const [x0, z0, x1, z1] of [[-T, -T, T, za - R], [-T, zb + R, T, T], [-T, za - R, xa - R, zb + R], [xb + R, za - R, T, zb + R]]) quad([x0, -SLAB, z0], [x1, -SLAB, z0], [x1, -SLAB, z1], [x0, -SLAB, z1], [0, 1, 0], 1, MAT.table);
   }
 
   // ─── the hand's stone: blocks and stairs ───
-  for (let k = 0; k < LEVELS; k++) for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+  const ext = w.extent();
+  for (let k = 0; k < LEVELS; k++) for (let j = ext.j0; j <= ext.j1; j++) for (let i = ext.i0; i <= ext.i1; i++) {
     const x0 = X(i), z0 = Z(j), y0 = k, y1 = k + 1;
     if (w.block(k, i, j)) {
       cur = { born: w.born(k, i, j), pivot: y0, how: 1, tone: tone(k, i, j) };
@@ -134,7 +136,7 @@ export function buildMesh(w: World): Mesh {
   for (const sp of w.spans) span(sp);
 
   // ─── what grows in the courtyards ───
-  const hand = [...[...w.pools.entries()].map(([v, b]) => ({ kind: 'pool' as const, i: v % N, j: Math.floor(v / N) % N, born: b, k: 0 })), ...[...w.trees.entries()].map(([v, b]) => ({ kind: 'cypress' as const, i: v % N, j: Math.floor(v / N) % N, born: b, k: Math.floor(v / (N * N)) }))];
+  const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: 0 }; }), ...[...w.trees.entries()].map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
   for (const dc of [...w.decor.map((d) => ({ ...d, k: 0 })), ...hand]) {
     cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5 };
     const x0 = X(dc.i), z0 = Z(dc.j);
@@ -239,11 +241,10 @@ export function buildMesh(w: World): Mesh {
 
 /** Whether a point's in stone (anything a touch would strike), and so where a ray meets the build */
 export function inStone(w: World, x: number, y: number, z: number): boolean {
-  const e = N / 2 + MARGIN;
-  if (y < 0) return y > -SLAB && Math.abs(x) < e && Math.abs(z) < e;
-  const i = Math.floor(x + N / 2), j = Math.floor(z + N / 2), k = Math.floor(y);
-  if (k >= LEVELS || i < 0 || j < 0 || i >= N || j >= N) return false;
-  const fx = x + N / 2 - i - 0.5, fz = z + N / 2 - j - 0.5, fy = y - k;
+  if (y < 0) { const ex = w.extent(); return y > -SLAB && x > X(ex.i0) - MARGIN && x < X(ex.i1 + 1) + MARGIN && z > Z(ex.j0) - MARGIN && z < Z(ex.j1 + 1) + MARGIN; }
+  const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER), k = Math.floor(y);
+  if (k >= LEVELS || !w.onSlab(i, j)) return false;
+  const fx = x + CENTER - i - 0.5, fz = z + CENTER - j - 0.5, fy = y - k;
   if (w.stone(k, i, j)) {
     const sp = w.span(k, i, j), aw = w.archway(k, i, j);
     if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > 0.5 + Math.sqrt(Math.max(0, HW * HW - wv * wv))); }

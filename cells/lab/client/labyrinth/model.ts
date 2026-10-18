@@ -24,11 +24,16 @@
  * the same way, one tall arch), a stair, a bridge (stone laid across a gap and marked so: carried on one arch, up to
  * seven cells), a cypress, a pool. Both are operations on the same solid, resolved by the same rules.
  *
- * The grid is N × N cells on a stone slab, each 1 across and 1 high, LEVELS high.
+ * The grid is N × N cells (LO to HI each way, the first stone's square round 0 to 11), each 1 across and 1 high, LEVELS
+ * high. The slab under it is only as big as it needs to be: what's built, and MARGIN cells more all round, never less
+ * than the square it starts as (`extent`). Build at its edge and it grows.
  */
 import { hash } from '../kit/rng';
 
-export const N = 12, LEVELS = 8;
+export const N = 48, LEVELS = 8, LO = -18, HI = LO + N - 1;
+/** the cell the slab's centred on to start with (x = i − CENTER), the square it starts as, and how far it reaches past
+ * what's built */
+export const CENTER = 6, START: [number, number] = [2, 9], MARGIN_CELLS = 2;
 /** a span's deck: how thick the stone is over its arch's crown */
 export const DECK = 0.24;
 export const DIRS: ReadonlyArray<[number, number]> = [[1, 0], [0, 1], [-1, 0], [0, -1]];
@@ -48,9 +53,9 @@ export interface Op {
 export interface Span { k: number; a: number; i: number; j: number; n: number; low: number; born: number }
 export interface Decor { kind: 'pool' | 'cypress'; i: number; j: number; born: number }
 
-export const inGrid = (i: number, j: number) => i >= 0 && j >= 0 && i < N && j < N;
-export const key = (k: number, i: number, j: number) => (k * N + j) * N + i;
-const unkey = (v: number): Cell => [Math.floor(v / (N * N)), v % N, Math.floor(v / N) % N];
+export const inGrid = (i: number, j: number) => i >= LO && j >= LO && i <= HI && j <= HI;
+export const key = (k: number, i: number, j: number) => (k * N + (j - LO)) * N + (i - LO);
+export const unkey = (v: number): Cell => [Math.floor(v / (N * N)), (v % N) + LO, (Math.floor(v / N) % N) + LO];
 
 export class World {
   ops: Op[] = [];
@@ -124,6 +129,7 @@ export class World {
       for (const [k, i, j, d, b] of op.stairs ?? []) if (k >= 0 && k < LEVELS && inGrid(i, j)) { this.mass.delete(key(k, i, j)); this.stairs.set(key(k, i, j), { d, born: b }); }
     }
     this.resolve();
+    this.ext = this.measure();
     this.version++;
   }
 
@@ -204,10 +210,10 @@ export class World {
     const gate = (i: number, j: number) => { for (let k = 0; k < LEVELS; k++) { if (this.span(k, i, j)) return true; if (this.occupied(k, i, j)) return false; } return false; };
     const open = (i: number, j: number) => !this.occupied(0, i, j) && !this.under.has(key(0, i, j)) && !gate(i, j);
     const out = new Set<number>(), st: Array<[number, number]> = [];
-    for (let t = 0; t < N; t++) for (const [i, j] of [[t, 0], [t, N - 1], [0, t], [N - 1, t]]) if (open(i, j) && !out.has(key(0, i, j))) { out.add(key(0, i, j)); st.push([i, j]); }
+    for (let t = LO; t <= HI; t++) for (const [i, j] of [[t, LO], [t, HI], [LO, t], [HI, t]]) if (open(i, j) && !out.has(key(0, i, j))) { out.add(key(0, i, j)); st.push([i, j]); }
     while (st.length) { const [i, j] = st.pop()!; for (const [a, b] of DIRS) { const x = i + a, z = j + b; if (inGrid(x, z) && open(x, z) && !out.has(key(0, x, z))) { out.add(key(0, x, z)); st.push([x, z]); } } }
     const seen = new Set<number>();
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    for (let j = LO; j <= HI; j++) for (let i = LO; i <= HI; i++) {
       if (!open(i, j) || out.has(key(0, i, j)) || seen.has(key(0, i, j))) continue;
       const region: Array<[number, number]> = [[i, j]], q: Array<[number, number]> = [[i, j]];
       seen.add(key(0, i, j));
@@ -229,6 +235,19 @@ export class World {
       }
     }
   }
+  /** the slab: the cells it covers (first and last each way): what's built and MARGIN_CELLS more, at least its start */
+  extent() { return this.ext; }
+  private ext = { i0: START[0], i1: START[1], j0: START[0], j1: START[1] };
+  private measure(): { i0: number; i1: number; j0: number; j1: number } {
+    let i0 = START[0], i1 = START[1], j0 = START[0], j1 = START[1];
+    for (const m of [this.mass, this.stairs, this.piers, this.trees, this.pools]) for (const v of m.keys()) {
+      const [, i, j] = unkey(v);
+      i0 = Math.min(i0, i - MARGIN_CELLS); i1 = Math.max(i1, i + MARGIN_CELLS); j0 = Math.min(j0, j - MARGIN_CELLS); j1 = Math.max(j1, j + MARGIN_CELLS);
+    }
+    return { i0: Math.max(LO, i0), i1: Math.min(HI, i1), j0: Math.max(LO, j0), j1: Math.min(HI, j1) };
+  }
+  /** a cell on the slab */
+  onSlab(i: number, j: number) { const e = this.extent(); return i >= e.i0 && i <= e.i1 && j >= e.j0 && j <= e.j1; }
   /** a pool at a cell of the ground */
   pool(i: number, j: number) { return this.pools.has(key(0, i, j)) || this.decor.some((d) => d.kind === 'pool' && d.i === i && d.j === j); }
 

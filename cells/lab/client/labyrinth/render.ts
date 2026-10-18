@@ -7,9 +7,9 @@
  * Everything rises as it's built: each vertex knows when it was built and the height it grows from, and the vertex
  * shader draws it that far grown.
  */
-import { LEVELS, N } from './model';
+import { LEVELS } from './model';
 const H = 1;
-import { MARGIN, STRIDE, type Mesh } from './mesh';
+import { STRIDE, type Mesh } from './mesh';
 
 export interface View { az: number; el: number; zoom: number; target: [number, number, number] }
 
@@ -31,7 +31,7 @@ void main() {
 }`;
 const FS = COMMON + `
 in vec3 vPos, vNrm; in float vAo, vMat, vTone; in vec4 vLs;
-uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir; uniform float uN, uShadows;
+uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
@@ -91,7 +91,7 @@ void main() {
   vec2 lp = vLs.xy / vLs.w;
   float leafy = fbm(vec3(lp * vec2(9., 11.), uTime * .05));
   float leaves = smoothstep(.48, .6, leafy) * smoothstep(-.35, -.85, lp.x * .75 - lp.y * .45);
-  sh *= 1. - .38 * leaves * (1. - smoothstep(uN * .5, uN * .5 + 3., max(abs(vPos.x), abs(vPos.z))));
+  sh *= 1. - .38 * leaves * (1. - smoothstep(uArea.z - 3., uArea.z, max(abs(vPos.x - uArea.x), abs(vPos.z - uArea.y))));
   float nl = dot(n, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh;
   vec3 sun = vec3(1.0, .86, .68) * 1.05, sky = mix(vec3(.50, .43, .36), vec3(.62, .62, .64), n.y * .5 + .5);
   vec3 c = base * (sky * (.25 + .45 * vAo) + sun * key * (.65 + .35 * vAo));
@@ -214,6 +214,8 @@ export class Renderer {
   /** the sun: low, from over the left shoulder of the first view */
   sun = norm([-0.62, 0.72, -0.3]);
   print = false;
+  /** what the sun must cover: the middle of the slab (x, z), and how far out from it */
+  area: [number, number, number] = [0, 0, 10];
   /** (for looking at it: the sun's shadows, or none) */
   shadows = true;
   constructor(public canvas: HTMLCanvasElement) {
@@ -273,7 +275,7 @@ export class Renderer {
   }
   /** the sun's view: square on to it, over the whole slab and as high as it can be built */
   private lightVP(): M4 {
-    const e = N / 2 + MARGIN + 1, top = LEVELS * H, c = [0, top / 2, 0], s = this.sun;
+    const [ax, az, e] = this.area, top = LEVELS * H, c = [ax, top / 2, az], s = this.sun;
     const eye = [c[0] + s[0] * 60, c[1] + s[1] * 60, c[2] + s[2] * 60], r = Math.hypot(e * 1.42, top / 2) + 1;
     return mul(ortho(-r, r, -r, r, 60 - r - 2, 60 + r + 2), lookAt(eye, c, [0, 1, 0]));
   }
@@ -297,7 +299,7 @@ export class Renderer {
     gl.useProgram(this.main);
     const U = (n: string) => gl.getUniformLocation(this.main, n);
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
-    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), N); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0);
+    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(U('uShadow'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     gl.bindVertexArray(null);

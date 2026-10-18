@@ -86,6 +86,13 @@ await withWood(async (lab) => {
     c.ok('cypress and pool where they\'re touched', await W2((w) => w.tree(0, 9, 8) && w.pool(8, 8)));
     await piece('take', 4, 4, 1);
     c.ok('take: the piece touched, gone', await W2((w) => !w.stone(0, 4, 4)));
+    // (the slab grows: a block on its last cell, and it reaches two cells past it)
+    const e0 = await W2((w) => w.extent());
+    await piece('block', e0.i1, 5, 0);
+    const e1 = await W2((w) => w.extent());
+    c.ok('built at the slab\'s edge, the slab grows past it', e1.i1 === e0.i1 + 2, { e0, e1 });
+    await piece('block', e1.i1, 5, 0);
+    c.ok('and on its new edge, again', (await W2((w) => w.extent())).i1 === e1.i1 + 2);
     c.ok('the palette: nothing thrown', !q.errors.length, q.errors);
     await q.close();
   }

@@ -11,7 +11,7 @@
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
  * `?ops=` (operations, as the model writes them) · `?print` · `?turn=` · `?zoom=` · `?preview` · `?still`
  */
-import { N, World, replay } from './model';
+import { CENTER, World, inGrid, replay } from './model';
 import { buildMesh, inStone } from './mesh';
 import { Renderer, camera, invert, type View } from './render';
 import { carve, surface, tap, trace, type Pick } from './gesture';
@@ -42,14 +42,19 @@ function remesh() { R.upload(buildMesh(world)); meshVersion = world.version; }
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
 const view: View = { az: corner(Number(qs.get('turn') ?? 0)), el: 0.6, zoom: 1, target: [0, 0, 0] };
-let fit = 1, zoomK = Number(qs.get('zoom') ?? 0.64), azGoal: number | null = null;
+let zoomK = Number(qs.get('zoom') ?? 0.64), azGoal: number | null = null;
 function resize() {
   const dpr = Math.min(2, devicePixelRatio || 1);
   canvas.width = Math.round(canvas.clientWidth * dpr); canvas.height = Math.round(canvas.clientHeight * dpr);
   guide.width = Math.round(guide.clientWidth * dpr); guide.height = Math.round(guide.clientHeight * dpr);
   g2.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight), half = (N / 2 + 1) * Math.SQRT2;
-  fit = Math.max(half / aspect, half * 0.75) * 1.04;
+  aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
+}
+let aspect = 1;
+/** what the view frames: the slab, however big it's grown (its middle, and how far to stand back to see it) */
+function framing() {
+  const e = world.extent(), half = (Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2 + 1.5) * Math.SQRT2;
+  return { cx: (e.i0 + e.i1 + 1) / 2 - CENTER, cz: (e.j0 + e.j1 + 1) / 2 - CENTER, fit: Math.max(half / aspect, half * 0.75) * 1.04, half };
 }
 addEventListener('resize', resize); resize();
 
@@ -67,13 +72,13 @@ function ray(cx: number, cy: number) {
 function pick(cx: number, cy: number): Pick | null {
   const { a, d, L } = ray(cx, cy), topY = world.top() + 1;
   let t = d[1] < 0 ? Math.max(0, (a[1] - topY) / -d[1]) : 0, prev: number[] | null = null;
-  const cell = (p: number[]) => [Math.floor(p[1]), Math.floor(p[0] + N / 2), Math.floor(p[2] + N / 2)] as [number, number, number];
+  const cell = (p: number[]) => [Math.floor(p[1]), Math.floor(p[0] + CENTER), Math.floor(p[2] + CENTER)] as [number, number, number];
   for (; t < L; t += 0.012) {
     const p = [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t];
     if (p[1] < -1) return null;
     if (!inStone(world, p[0], p[1], p[2])) { prev = p; continue; }
     const hit = cell(p);
-    if (hit[1] < 0 || hit[2] < 0 || hit[1] >= N || hit[2] >= N) return null;
+    if (!world.onSlab(hit[1], hit[2])) return null;
     if (p[1] < 0) return { face: 'ground', hit: [-1, hit[1], hit[2]], to: [0, hit[1], hit[2]] };
     // (struck in the stone over an arch, from below its own cell: it's that cell's)
     if (!world.occupied(hit[0], hit[1], hit[2]) && !world.tree(hit[0], hit[1], hit[2]) && !world.tree(hit[0] - 1, hit[1], hit[2])) {
@@ -90,8 +95,8 @@ function onPlane(cx: number, cy: number, y: number): [number, number] | null {
   const { a, d } = ray(cx, cy);
   if (Math.abs(d[1]) < 1e-6) return null;
   const t = (y - a[1]) / d[1], x = a[0] + d[0] * t, z = a[2] + d[2] * t;
-  const i = Math.floor(x + N / 2), j = Math.floor(z + N / 2);
-  return i >= 0 && j >= 0 && i < N && j < N ? [i, j] : null;
+  const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER);
+  return inGrid(i, j) ? [i, j] : null;
 }
 /** where a point of the room is on the screen (css pixels) */
 function screenOf(x: number, y: number, z: number): [number, number] {
@@ -104,7 +109,7 @@ function screenOf(x: number, y: number, z: number): [number, number] {
 const dust: Array<{ x: number; y: number; vx: number; vy: number; life: number; r: number }> = [];
 function settle(cells: Array<[number, number, number]>, at = 0.85) {
   for (const [k, i, j] of cells.slice(0, 30)) {
-    const [sx, sy] = screenOf(i - N / 2 + 0.5, k, j - N / 2 + 0.5);
+    const [sx, sy] = screenOf(i - CENTER + 0.5, k, j - CENTER + 0.5);
     for (let q = 0; q < 9; q++) dust.push({ x: sx + (Math.random() - 0.5) * 14, y: sy + (Math.random() - 0.5) * 6, vx: (Math.random() - 0.5) * 30, vy: -8 - Math.random() * 14, life: -at - Math.random() * 0.15, r: 0.6 + Math.random() * 1.2 });
   }
 }
@@ -217,18 +222,21 @@ showPrint(); showHand(); hint();
 if (preview) document.body.classList.add('preview');
 
 // ─── each frame ───
-let last = performance.now(), zoomFit = fit;
+let last = performance.now(), zoomFit = framing().fit;
 function frame() {
   const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000); last = t;
   if (world.version !== meshVersion) remesh();
   if (preview && !still) view.az += dt * 0.12;
   else if (azGoal !== null) { const k = 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
   // (it frames what's built, but never while a hand's on it: what's under the finger stays under it)
+  const fr = framing();
   if (!g || g.mode === 'turn') {
-    const top = world.top();
-    view.target[1] += (top * 0.35 - view.target[1]) * (1 - Math.exp(-dt * 3));
-    zoomFit += (fit + top * 0.25 - zoomFit) * (1 - Math.exp(-dt * 3));
+    const top = world.top(), q = 1 - Math.exp(-dt * 3);
+    view.target[0] += (fr.cx - view.target[0]) * q; view.target[2] += (fr.cz - view.target[2]) * q;
+    view.target[1] += (top * 0.35 - view.target[1]) * q;
+    zoomFit += (fr.fit + top * 0.25 - zoomFit) * q;
   }
+  R.area = [fr.cx, fr.cz, fr.half + 2];
   view.zoom = zoomFit * zoomK;
   R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
   // (the guides, only while a finger's down: the stroke traced, in faint ink; the ring a hold fills before it carves)
@@ -261,5 +269,5 @@ requestAnimationFrame(frame);
   get world() { return world; }, view, R, pick, onPlane, setHand: (h: Hand) => { hand = h; showHand(); },
   probe: () => ({ ops: world.ops.length, top: world.top(), stone: world.mass.size, stairs: world.stairs.size, piers: world.piers.size, arches: world.spans.length, courts: world.courts.size, decor: world.decor.length, whys: world.ops.map((o) => o.why ?? '') }),
   /** where a point of the room is on the screen (css pixels): a cell (i, j), at height y, fractions toward its sides */
-  screenOf: (i: number, j: number, y: number) => screenOf(i - N / 2 + 0.5, y, j - N / 2 + 0.5),
+  screenOf: (i: number, j: number, y: number) => screenOf(i - CENTER + 0.5, y, j - CENTER + 0.5),
 };

@@ -5,7 +5,7 @@
 // undo undoes; what's written down makes the same world again. And the storyboard is what it says.
 import { build } from 'esbuild';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
-const { World, replay, N, LEVELS, DIRS } = await load('../client/labyrinth/model.ts');
+const { World, replay, LEVELS, DIRS, LO, HI, START } = await load('../client/labyrinth/model.ts');
 const G = await load('../client/labyrinth/gesture.ts');
 const { story } = await load('../client/labyrinth/demo.ts');
 const P = await load('../client/labyrinth/palette.ts');
@@ -14,7 +14,7 @@ let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
 
 function stands(w, tag) {
-  for (let k = 0; k < LEVELS; k++) for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+  for (let k = 0; k < LEVELS; k++) for (let j = LO; j <= HI; j++) for (let i = LO; i <= HI; i++) {
     const mine = w.stone(k, i, j) || w.stair(k, i, j) >= 0, pier = w.pier(k, i, j);
     if (!mine && !pier) continue;
     const where = `${tag} ${k}.${i}.${j}`;
@@ -36,7 +36,8 @@ for (let s = 1; s <= 60; s++) {
   const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
   const pickAt = (i, j) => { let k = -1; while (k + 1 < LEVELS && w.occupied(k + 1, i, j)) k++; return k < 0 ? { face: 'ground', hit: [-1, i, j], to: [0, i, j] } : { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
   for (let t = 0; t < 60; t++) {
-    const i = Math.floor(rnd() * N), j = Math.floor(rnd() * N), what = rnd();
+    // (somewhere on the slab, as it's grown)
+    const e = w.extent(), i = e.i0 + Math.floor(rnd() * (e.i1 - e.i0 + 1)), j = e.j0 + Math.floor(rnd() * (e.j1 - e.j0 + 1)), what = rnd();
     let op = null;
     if (what < 0.45) {
       const p = rnd() < 0.3 && w.occupied(0, i, j) ? (() => { const d = DIRS[Math.floor(rnd() * 4)], k = Math.floor(rnd() * w.topFrom(0, i, j)); return { face: 'side', hit: [k, i, j], to: [k, i + d[0], j + d[1]] }; })() : pickAt(i, j);
@@ -44,7 +45,7 @@ for (let s = 1; s <= 60; s++) {
     } else if (what < 0.85) {
       // (a stroke: wandering from here a few cells, ending on whatever's there)
       const cells = [[i, j]]; let [x, z] = [i, j], d = Math.floor(rnd() * 4);
-      for (let q = 0, L = 2 + Math.floor(rnd() * 6); q < L; q++) { if (rnd() < 0.25) d = (d + (rnd() < 0.5 ? 1 : 3)) % 4; x = Math.max(0, Math.min(N - 1, x + DIRS[d][0])); z = Math.max(0, Math.min(N - 1, z + DIRS[d][1])); cells.push([x, z]); }
+      for (let q = 0, L = 2 + Math.floor(rnd() * 6); q < L; q++) { if (rnd() < 0.25) d = (d + (rnd() < 0.5 ? 1 : 3)) % 4; x = Math.max(e.i0, Math.min(e.i1, x + DIRS[d][0])); z = Math.max(e.j0, Math.min(e.j1, z + DIRS[d][1])); cells.push([x, z]); }
       const [ex, ez] = cells[cells.length - 1];
       op = G.trace(w, pickAt(i, j), cells, pickAt(ex, ez), () => t);
     } else if (what < 0.93) {
@@ -66,6 +67,18 @@ for (let s = 1; s <= 60; s++) {
   const before = w.encode(), n = w.ops.length, last = w.ops[n - 1];
   w.undo(); ok(`seed ${s}: undo takes the last back`, w.ops.length === n - 1);
   if (last) { w.apply(last); ok(`seed ${s}: and doing it again is the same`, w.encode() === before); }
+}
+// (the slab grows with what's built: it reaches MARGIN cells past every piece, and never shrinks below its start)
+{
+  const w = new World(1), e0 = w.extent();
+  ok('the slab starts as its square', e0.i0 === START[0] && e0.i1 === START[1]);
+  w.apply({ add: [[0, START[1], START[1], 0]] });
+  const e1 = w.extent();
+  ok('built at its edge, it grows past what\'s built', e1.i1 === START[1] + 2 && e1.j1 === START[1] + 2, e1);
+  w.apply({ add: [[0, START[1] + 2, START[1], 0]] });
+  ok('and again', w.extent().i1 === START[1] + 4);
+  w.undo(); w.undo();
+  ok('undone, it goes back', w.extent().i1 === START[1]);
 }
 for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
 // (the storyboard: what each stage says it is)
