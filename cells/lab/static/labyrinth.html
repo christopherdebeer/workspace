@@ -12,22 +12,42 @@
     nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 16px; right: 16px; display: flex; align-items: baseline; gap: 14px; z-index: 2; pointer-events: none; }
     nav a { pointer-events: auto; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; color: #2b2420; text-decoration: none; opacity: .75; min-height: 44px; display: flex; align-items: center; }
     nav h1 { margin: 0; font-weight: 400; font-size: 15px; letter-spacing: .32em; text-transform: uppercase; }
-    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 70px); text-align: center; font-style: italic; font-size: 16px; opacity: 0; transition: opacity .6s; pointer-events: none; text-shadow: 0 0 8px #efe8da, 0 0 3px #efe8da; }
+    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 92px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity .6s; pointer-events: none; text-shadow: 0 0 8px #efe8da, 0 0 3px #efe8da; }
     #hint.on { opacity: .85; }
-    #acts { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); display: flex; justify-content: center; gap: 10px; z-index: 2; }
-    #acts button { appearance: none; border: 1px solid rgba(43,36,32,.35); background: rgba(239,232,218,.82); color: #2b2420; font: inherit; font-size: 15px; letter-spacing: .06em; min-height: 44px; padding: 0 18px; border-radius: 22px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-    #acts button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-    #acts button.on { background: #2b2420; color: #efe8da; border-color: #2b2420; }
-    .preview nav, .preview #acts, .preview #hint { display: none; }
+    /* (what's at hand: a row of pieces along the bottom, the one in hand lit) */
+    #hands { position: fixed; left: 10px; right: 10px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 2; display: flex; gap: 2px; justify-content: space-between; padding: 6px; border-radius: 26px; background: rgba(246,241,231,.86); box-shadow: 0 2px 14px rgba(70,50,30,.12), inset 0 0 0 1px rgba(70,50,30,.08); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); overflow-x: auto; scrollbar-width: none; }
+    #hands::-webkit-scrollbar { display: none; }
+    #hands button { appearance: none; border: 0; background: none; color: #4a3f36; flex: 1 0 auto; min-width: 42px; min-height: 52px; border-radius: 20px; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
+    #hands svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #hands i { font-style: normal; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    #hands button.on { background: #2b2420; color: #f3ede1; }
+    #acts { position: fixed; top: max(10px, env(safe-area-inset-top)); right: 10px; display: flex; gap: 6px; z-index: 2; }
+    #acts button { appearance: none; border: 0; background: rgba(246,241,231,.86); box-shadow: 0 1px 8px rgba(70,50,30,.12); color: #2b2420; width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #acts svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    #acts button.on { background: #2b2420; color: #f3ede1; }
+    nav { right: 170px; }
+    nav small { display: block; font-size: 10px; letter-spacing: .3em; text-transform: uppercase; opacity: .6; margin-top: 4px; }
+    .preview nav, .preview #acts, .preview #hint, .preview #hands { display: none; }
   </style>
 </head>
 <body>
   <canvas id="stone"></canvas>
-  <nav><a href="/">← lab</a><h1>Labyrinth</h1></nav>
-  <div id="hint"></div>
+  <nav><a href="/">← lab</a><h1>Labyrinth<small>touch to build</small></h1></nav>
   <div id="acts">
-    <button id="print" aria-pressed="false" title="draw it as a print"><svg viewBox="0 0 20 20"><path d="M3 17L17 3M3 11L11 3M9 17L17 9M3 5l2-2M15 17l2-2"/></svg>print</button>
-    <button id="again" title="clear the stone"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5"/><path d="M3.5 3v3.5H7"/></svg>again</button>
+    <button id="undo" aria-label="undo" title="undo"><svg viewBox="0 0 20 20"><path d="M7 5L3.5 8.5 7 12"/><path d="M3.5 8.5h8a4.5 4.5 0 010 9H9"/></svg></button>
+    <button id="print" aria-pressed="false" aria-label="as a print" title="as a print"><svg viewBox="0 0 20 20"><path d="M3 17L17 3M3 11L11 3M9 17L17 9M3 5l2-2M15 17l2-2"/></svg></button>
+    <button id="again" aria-label="clear the stone" title="clear the stone"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5"/><path d="M3.5 3v3.5H7"/></svg></button>
+  </div>
+  <div id="hint"></div>
+  <div id="hands" role="toolbar" aria-label="what a touch builds">
+    <button data-hand="auto" aria-label="auto: build what the place wants"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" opacity=".5"/></svg><i>auto</i></button>
+    <button data-hand="block" aria-label="a block"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg><i>block</i></button>
+    <button data-hand="arch" aria-label="an arch"><svg viewBox="0 0 24 24"><path d="M4 21V4h16v17"/><path d="M9 21v-7a3 3 0 016 0v7"/></svg><i>arch</i></button>
+    <button data-hand="stair" aria-label="a stair"><svg viewBox="0 0 24 24"><path d="M3 21h4v-4h4v-4h4V9h4V5h2"/><path d="M3 21h18"/></svg><i>stair</i></button>
+    <button data-hand="bridge" aria-label="a bridge"><svg viewBox="0 0 24 24"><path d="M2 8h20M2 11h20M3 20v-9M21 20v-9"/><path d="M6 20a6 6 0 0112 0"/></svg><i>bridge</i></button>
+    <button data-hand="cypress" aria-label="a cypress"><svg viewBox="0 0 24 24"><path d="M12 2c-3 5-3.5 11-2 16h4c1.5-5 1-11-2-16z"/><path d="M12 18v4"/></svg><i>tree</i></button>
+    <button data-hand="pool" aria-label="a pool"><svg viewBox="0 0 24 24"><path d="M3 9h18v9H3z"/><path d="M6 13c1.5-1 3 1 4.5 0s3-1 4.5 0 3 1 3 0"/></svg><i>pool</i></button>
+    <button data-hand="erase" aria-label="take a piece away"><svg viewBox="0 0 24 24"><path d="M5 19L19 5M7 5h10M5 9v10h10"/></svg><i>take</i></button>
   </div>
   <script src="{{app}}"></script>
 </body>

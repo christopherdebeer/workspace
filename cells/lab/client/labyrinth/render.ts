@@ -19,48 +19,74 @@ uniform float uTime;
 float grown(float born) { float t = clamp((uTime - born) / 0.9, 0., 1.); return 1. - pow(1. - t, 3.); }
 `;
 const VS = COMMON + `
-layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNrm; layout(location=2) in vec2 aAoMat; layout(location=3) in vec3 aRise;
+layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNrm; layout(location=2) in vec2 aAoMat; layout(location=3) in vec3 aRise; layout(location=4) in float aTone;
 uniform mat4 uVP, uLight;
-out vec3 vPos, vNrm; out float vAo, vMat; out vec4 vLs;
+out vec3 vPos, vNrm; out float vAo, vMat, vTone; out vec4 vLs;
 void main() {
   float s = grown(aRise.x);
   vec3 p = vec3(aPos.x, aRise.y + (aPos.y - aRise.y) * s, aPos.z);
-  vPos = p; vNrm = aNrm; vAo = aAoMat.x; vMat = aAoMat.y; vLs = uLight * vec4(p, 1.);
+  vPos = p; vNrm = aNrm; vAo = aAoMat.x; vMat = aAoMat.y; vTone = aTone; vLs = uLight * vec4(p, 1.);
   gl_Position = s <= 0. ? vec4(2., 2., 2., 1.) : uVP * vec4(p, 1.);
 }`;
 const FS = COMMON + `
-in vec3 vPos, vNrm; in float vAo, vMat; in vec4 vLs;
-uniform sampler2D uShadow; uniform vec3 uSun, uEye; uniform float uN, uShadows;
+in vec3 vPos, vNrm; in float vAo, vMat, vTone; in vec4 vLs;
+uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir; uniform float uN, uShadows;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
   return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
              mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
-// (one stone, each level a shade apart: barely, so the levels can be told apart close to, and it's one stone from afar)
-const vec3 STONE[7] = vec3[7](vec3(.85,.81,.74), vec3(.84,.80,.74), vec3(.83,.80,.75), vec3(.84,.81,.75), vec3(.83,.80,.74), vec3(.82,.80,.76), vec3(.84,.80,.75));
+float fbm(vec3 p) { return .5 * noise(p) + .25 * noise(p * 2.1) + .125 * noise(p * 4.3) + .125 * noise(p * 8.7); }
+// (travertine: cream, banded as it was laid down, pitted with its little pores, each block a shade of its own)
+vec3 travertine(vec3 p, float tone) {
+  vec3 c = vec3(.86, .82, .74) * (.95 + .08 * tone);
+  float band = fbm(vec3(p.x * .7, p.y * 7., p.z * .7) + tone * 9.);
+  c *= 1. - .07 * smoothstep(.5, .75, band);
+  c = mix(c, vec3(.80, .70, .56), .25 * smoothstep(.62, .8, fbm(vec3(p.x * 1.6, p.y * 14., p.z * 1.6) + 3.)));
+  float pore = noise(vec3(p.x * 13., p.y * 30., p.z * 13.) + tone * 17.);
+  c *= 1. - .32 * smoothstep(.8, .9, pore);
+  float pit = noise(p * 41. + tone * 5.);
+  c *= 1. - .22 * smoothstep(.86, .93, pit);
+  return c * (.97 + .05 * noise(p * 90.));
+}
 void main() {
   vec3 n = normalize(vNrm);
-  vec3 base;
-  if (vMat < -2.5) base = vec3(.42,.38,.34);
-  else if (vMat < -1.5) base = vec3(.64,.6,.54);
-  else if (vMat < -.5) {
-    // (the slab: a paler stone, a faint seam where each voxel's square is, worn)
-    vec2 g = abs(fract(vPos.xz + uN * .5) - .5);
-    float seam = smoothstep(.47, .5, max(g.x, g.y)) * step(abs(vPos.x), uN * .5) * step(abs(vPos.z), uN * .5);
-    base = vec3(.88,.85,.79) * (1. - .06 * seam);
-  } else base = STONE[int(clamp(vMat, 0., 6.))];
-  // (the stone's grain: a little, so a face isn't flat colour)
-  // (each block of it a little different, as dressed stone is; and a fine grain)
-  if (vMat > -.5) base *= .95 + .07 * hash(floor(vPos - n * .02 + vec3(uN * .5, 0., uN * .5)) + vMat * 13.);
-  base *= .975 + .035 * noise(vPos * 5.3) + .02 * noise(vPos * 29.);
-  // (the sun, and its shadows: a few taps round where this is in its map)
+  int mat = int(vMat + .5);
+  vec3 base; float spec = 0., wrap = 0.;
+  if (mat == 2) base = vec3(.13, .25, .25);
+  else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)); wrap = .35; }
+  else if (mat == 4) base = vec3(.32, .24, .17);
+  else if (mat == 7) base = vec3(.90, .89, .86) * (.98 + .03 * noise(vPos * 3.));
+  else if (mat == 6) base = travertine(vPos, .6) * .9;
+  else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
+  else base = travertine(vPos, vTone);
+  // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;
-  float sh = 0., bias = .0015 + .002 * (1. - abs(dot(n, uSun)));
-  for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) sh += step(ls.z - bias, texture(uShadow, ls.xy + vec2(a, b) / 2048.).r);
-  sh /= 9.;
-  float key = max(dot(n, uSun), 0.) * mix(1., sh, uShadows);
-  vec3 sky = mix(vec3(.58,.55,.52), vec3(.78,.82,.88), n.y * .5 + .5);
-  vec3 c = base * (sky * (.38 + .5 * vAo) + vec3(1.,.93,.82) * key * (.55 + .35 * vAo));
+  float sh = 0., bias = .0012 + .0025 * (1. - abs(dot(n, uSun)));
+  for (int a = -2; a <= 2; a++) for (int b = -2; b <= 2; b++) sh += step(ls.z - bias, texture(uShadow, ls.xy + vec2(a, b) * 1.3 / 2048.).r);
+  // (out past the sun's map: lit)
+  if (any(lessThan(ls, vec3(0.))) || any(greaterThan(ls, vec3(1.)))) sh = 25.;
+  sh = mix(1., sh / 25., uShadows);
+  // (and the leaves of a tree out of the picture, between the sun and one side of it, stirring)
+  vec2 lp = vLs.xy / vLs.w;
+  float leafy = fbm(vec3(lp * vec2(9., 11.), uTime * .05));
+  float leaves = smoothstep(.48, .6, leafy) * smoothstep(-.35, -.85, lp.x * .75 - lp.y * .45);
+  sh *= 1. - .45 * leaves;
+  float nl = dot(n, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh;
+  vec3 sun = vec3(1.0, .86, .68) * 1.05, sky = mix(vec3(.50, .43, .36), vec3(.62, .62, .64), n.y * .5 + .5);
+  vec3 c = base * (sky * (.25 + .45 * vAo) + sun * key * (.65 + .35 * vAo));
+  // (light gathers in the archways)
+  if (mat == 1) c += base * vec3(1., .7, .4) * .42 * (.4 + .6 * vAo);
+  if (mat == 2) {
+    // (water: dark, the sky and the sun on it, a little stirred)
+    vec3 w = normalize(vec3(.06 * (noise(vec3(vPos.xz * 6., uTime * .4)) - .5), 1., .06 * (noise(vec3(vPos.zx * 6., uTime * .4 + 3.)) - .5)));
+    vec3 v = -normalize(uDir), r = reflect(-v, w);
+    float fr = .08 + .9 * pow(1. - max(dot(w, v), 0.), 4.);
+    c = mix(base * (.5 + .5 * sh), vec3(.86, .84, .8), fr * .7) + vec3(1., .9, .75) * pow(max(dot(reflect(-uSun, w), v), 0.), 120.) * 2. * sh;
+  }
+  // (a filmic shoulder, warm)
+  c = c / (c + .7) * 1.62;
+  c = pow(c, vec3(1.03, 1.04, 1.07));
   oCol = vec4(c, 1.);
   oNrm = vec4(n * .5 + .5, 1.);
 }`;
@@ -108,8 +134,11 @@ void main() {
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h2)) * smoothstep(.55, .4, L));
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h3)) * smoothstep(.36, .24, L));
     c = mix(paper, ink, hatch * .85);
-  } else c = mix(c, paper, .06);
   o = vec4(mix(c, ink, edge * .85), 1.);
+    return;
+  }
+  // (as it is: barely a line, only where the depth folds)
+  o = vec4(mix(c, ink * 1.6, smoothstep(.04, .14, lap) * .16), 1.);
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
@@ -163,7 +192,7 @@ export class Renderer {
   private shadowFb: WebGLFramebuffer; private shadowTex: WebGLTexture;
   private fb: WebGLFramebuffer | null = null; private col: WebGLTexture | null = null; private nrm: WebGLTexture | null = null; private dep: WebGLTexture | null = null; private size = [0, 0];
   /** the sun: low, from over the left shoulder of the first view */
-  sun = norm([-0.55, 0.78, 0.42]);
+  sun = norm([-0.62, 0.72, -0.3]);
   print = false;
   /** (for looking at it: the sun's shadows, or none) */
   shadows = true;
@@ -179,6 +208,7 @@ export class Renderer {
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, STRIDE * F, 3 * F);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, STRIDE * F, 6 * F);
     gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, STRIDE * F, 8 * F);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, STRIDE * F, 11 * F);
     gl.bindVertexArray(null);
     this.shadowTex = this.depthTex(2048, 2048);
     this.shadowFb = gl.createFramebuffer()!;
@@ -247,7 +277,7 @@ export class Renderer {
     gl.useProgram(this.main);
     const U = (n: string) => gl.getUniformLocation(this.main, n);
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
-    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform1f(U('uN'), N); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0);
+    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), N); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(U('uShadow'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     gl.bindVertexArray(null);

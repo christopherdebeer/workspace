@@ -26,9 +26,9 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',
-    blurb: 'A flat stone, and touches that build on it. Each touch raises the stone round it a level: walls of a block maze rise, and touched again, the next level stands on arches over the passages below, its grid offset from theirs so its rooms sit on the posts beneath and its posts on cross vaults. Every level a perfect maze; dead ends with stairs up onto the walls, whose tops are walkways. Drawn as the prints draw such things: square to nothing, in ink, or hatched as a lithograph.',
+    blurb: 'A flat travertine stone on a table in the sun, built up a piece at a touch: blocks, arches (an arch on an arch is one tall arch, lit from within), stairs, bridges (the whole gap at a touch, on one arch as round as the towers let it be), cypresses, pools. Auto reads where it\'s touched: a block on the stone or a top, a stair up a side, a bridge across a gap. Or as a print.',
     page: 'static/labyrinth.html', preview: 'preview', readme: 'static/labyrinth.md',
-    presets: [{ label: 'the stone', query: '' }, { label: 'a labyrinth, built', query: 'seed=7&taps=8.8,8.8,8.8,4.12,12.4,8.8,12.12,4.4,8.8' }, { label: 'as a print', query: 'seed=7&taps=8.8,8.8,8.8,4.12,12.4,8.8,12.12,4.4,8.8&print' }],
+    presets: [{ label: 'the stone', query: '' }, { label: 'a labyrinth', query: 'demo' }, { label: 'as a print', query: 'demo&print' }],
   },
   {
     id: 'fab', title: 'Fab', group: 'Play',

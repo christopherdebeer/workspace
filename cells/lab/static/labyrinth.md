@@ -1,92 +1,105 @@
 # Labyrinth
 
-A flat stone, and touches that build on it. Each touch raises the stone around it by a level. Walls of a maze rise first. Touch again and the next level stands on arches over the passages below. Dead ends grow stairs up onto the walls, and the walls' tops are walkways. It is drawn the way Escher's prints draw such things: from above at an angle, square to nothing, in ink. It can also be hatched as a lithograph.
+A flat travertine stone on a table in the sun, built up one piece at a touch: blocks, arches, stairs, bridges, cypresses and pools. It's modelled on a sketch of the idea: chunky cream stone, tall arches with the light gathered in them, long stairs, a bridge on one great arch between two towers, water in the court, dark cypresses. It can also be drawn as a print.
 
-![nine touches: a mound of levels, each a maze, each on arches over the one below](labyrinth/v-built.jpg)
+![a labyrinth: towers with tall arches, a bridge on a great arch, an arcade, stairs, pools, cypresses](labyrinth/v-demo.jpg)
 
 ## Using it
 
-- **Touch the stone** to build. Where nothing stands, the walls of a maze rise around the touch in a ripple. Touch something already built and the next level goes up there. The levels below spread a little wider than the one above, so it climbs as a stepped mound of up to seven levels.
-- **Drag sideways** to turn it. When you let go, it settles on the nearest corner, looking down a diagonal as the prints do.
-- **Pinch**, or scroll, to come closer or go back.
-- **print** draws it as a lithograph. **again** clears the stone.
-- What you've built is kept on this device: its seed and the columns you touched, in order.
+- **Touch to build.** The row along the bottom says what a touch puts down:
+  - **auto** reads the place you touch:
+    - the stone gets a block;
+    - a block's top gets another block;
+    - a block's side gets a stair up onto it, where there's a floor to start from;
+    - a block's side over a gap gets a bridge across to the stone on the other side.
+  - **block**: a cube of stone, standing on the stone or on stone.
+  - **arch**: a block with an arched way through it, running where it's open. An arch on an arch the same way makes one tall arch.
+  - **stair**: a flight up one level, climbing toward the stone you touched (or onto a neighbour's top).
+  - **bridge**: touch a gap between two pieces of stone at the same level, and the whole span is built at once.
+  - **tree**: a cypress, on a floor with room above it.
+  - **pool**: water let into the stone itself.
+  - **take** removes a piece, if nothing rests on it.
+- **Drag sideways** to turn it. When you let go, it settles on a corner.
+- **Pinch**, or scroll, to come closer.
+- Top right: **undo**, **print** (draw it as a lithograph), and **clear**.
+- What you've built is kept on this device.
 
-![where it starts](labyrinth/v-stone.jpg)
-![one touch](labyrinth/v-one.jpg)
-![three touches in one place](labyrinth/v-three.jpg)
+![the stone](labyrinth/v-stone.jpg)
+![the first pieces](labyrinth/v-first.jpg)
+![a bridge](labyrinth/v-bridge.jpg)
 
 ## How it's built
 
-The stone is a square of 17 × 17 voxels: 8 rooms each way, with walls between them as thick as the rooms. It holds up to seven levels, each 1.25 voxels high (`model.ts`).
+The stone is 12 × 12 cells, each one unit across and one high, up to eight levels (`model.ts`). Each piece takes a cell, or a bridge takes its span. Every piece stands on something: the stone, or the top of a block, an arch, or a bridge's deck. Nothing is ever in mid-air.
 
-**Each level is a block maze.** Its rooms and passages are one voxel wide, its walls one voxel thick, and there is a post wherever walls cross. Each level is a perfect maze: there is exactly one way between any two of its rooms. A touch adds rooms to the level and joins them in with a randomised Kruskal, opening walls only between rooms that aren't yet connected. Where new rooms meet part of the level that's already built, one gate opens into each such part.
+- **Arches** stand like blocks, with a way through along one axis. An arch on an arch the same way joins it into a single tall arch, its head in the upper cell.
+- **Bridges** span a straight run of free cells at one level, between a block or arch at each end. The arch under the deck springs as low as stone goes at both ends, down to where a round arch fits. So between two tall towers it is a great semicircle; between two low ones, a flatter arch. The air under the arch belongs to the bridge, so nothing is built through it.
+- **Stairs** climb one level toward a side.
+- A piece can be taken away only if nothing rests on it, including a bridge resting against it.
+- Every piece is an action, kept in order. Undo takes back the last one. What's built is written down as text (`?p=`) and makes the same stone again.
 
-**Each level's grid is offset by a voxel from the one below.** Its rooms and posts swap places. That one choice settles how every level stands on the one below:
-
-- a room sits on a post below, so it has a floor;
-- a post stands over a room below, on a **cross vault** springing from that room's four corner posts;
-- a wall, or a walkway, over a wall below sits on it;
-- over a passage below, the passage is spanned by an **arch**, a barrel vault between the posts either side. Whatever is above (a wall or a walkway) stands on that.
-
-So any open voxel with something built over it has a vault, and the lower labyrinth runs on beneath the upper one. Where a vaulted passage opens onto a passage with nothing over it, the arch shows in the face between them.
-
-![the passages below run on under the level above](labyrinth/v-arches.jpg)
-
-**A touch raises a stepped mound.** The touch builds the next level up from the column it lands on. Each level below it spreads a little wider than the one above, so the upper levels have something to stand on. The ground level is broad. Each level above it is a small **core** over the touch, which a later touch can build on again, with **arms** reaching out from the core: walled walkways that walk outward room by room, mostly straight on.
-
-**Arms can go on as bridges.** An arm that walks past the edge of the level below carries on over open air. It stands on **piers** that rise from the stone, or from stone below, at its posts, with arches between them. A pier is a column of stone standing alone, not part of any level's maze.
-
-**Stairs are not stored.** They follow from the maze. About half of the dead ends with nothing built over them have a stair. Each stair climbs onto the wall at the end of its dead end, and the tops of walls are walkways. Build over a stair, or open the wall at its end, and the stair goes. A level above the first also opens a gate out onto the wall tops of the level below.
-
-![dead ends climb onto the wall at their end](labyrinth/v-stairs.jpg)
-![touched five times in the same place](labyrinth/v-tower.jpg)
+**auto** is a small reading of the place (`decide` in `model.ts`). It knows what was struck (the stone, a top, or a side) and the free cell on that face's side. From that it chooses the piece the place most wants: on the stone, a block; on a top, a block; on a side with a floor below, a stair onto it (or a block, if the stair would climb into a wall); on a side over air, a bridge to whatever is level with it across the gap.
 
 ## How it's drawn
 
-Everything is built from the model each time it changes (`mesh.ts`):
+From the model, each time it changes (`mesh.ts`):
 
-- **blocks** are drawn with their faces where nothing solid is against them, darkened at the foot where they meet a floor;
-- **vaults** are surfaces `y = f(x, z)` under a deck: a barrel `ys + √(r² − d²)` across the span, or for a room, a groin vault that takes the higher of the two barrels at each point. Where the two barrels meet, the groins are sharp creases. A spandrel face carries the arch where a vault opens onto the sky;
-- **stairs** have five steps each;
-- **the stone** has a faint seam where each voxel's square lies.
+- **blocks** have faces where nothing is against them, darker at the foot where they meet a floor;
+- **arches** have jambs and a semicircular head, lit from within;
+- **stairs** have six steps;
+- **bridges** have an elliptical arch with spandrels, a deck and a low parapet each side;
+- **cypresses** are lathed spindles, lumpy with foliage;
+- **pools** are water a little below the stone, with a rim;
+- **the slab** sits on a table, which darkens near the slab's foot.
 
-It is rendered with WebGL2 (`render.ts`):
+Then in WebGL2 (`render.ts`):
 
-- the camera is orthographic;
-- a shadow map gives the shadows of a low sun, with sky light weighted by how shut in each surface is (ambient occlusion, baked per vertex);
-- a post pass draws the ink where the depth folds (a Laplacian, so a sloping face doesn't draw a line) or where the surface turns sharply.
+- **travertine**: cream stone, banded as it was laid down and pitted with pores, each block a shade of its own;
+- **a low warm sun** with soft shadows (25 taps of a shadow map), and the dappled shade of a tree out of the picture falling across one side, stirring;
+- **light in the archways**: their insides glow warm;
+- **water** that is dark, with the sky and the sun's glint on it, a little stirred;
+- **a filmic shoulder** on the light, and barely a line where the depth folds.
 
-In **print**, the light becomes hatching on paper: one direction of lines, then crossed, then a third direction as it gets darker.
+In **print**, the light becomes hatching on paper: one direction of lines, then crossed, then a third direction as it gets darker, with the edges in ink. The next step for print is to take what Taohua learned about drawing.
 
-Everything rises as it's built. Each vertex knows when its voxel was built and the height it grows from, and the vertex shader draws it grown that far: walls rise from their floor, and vaults come down from the deck above.
+Everything rises as it's built: blocks from their floor, bridges down from their deck, trees up from their foot.
 
+![close](labyrinth/v-close.jpg)
 ![as a print](labyrinth/v-print.jpg)
 ![close, as a print](labyrinth/v-print-close.jpg)
 
 ## Checked
 
-`node cells/lab/devtools/labyrinth.test.mjs` builds 60 labyrinths of 40 touches each and checks every voxel, about 94,000 checks in all:
-
-- every level is a perfect maze, with as many passages as rooms less its separate parts;
-- every built voxel stands on something: the stone, what's built below it, or an arch whose springing is stone or a pier;
-- every pier stands on stone and carries something;
-- every stair is in a dead end with nothing built over it, and climbs onto a wall;
-- the same seed and the same touches make the same stone;
-- most labyrinths reach the fourth level, and there are stairs, vaults and bridges.
-
-These are the model's promises, checked on the model itself. Whether it *looks* Escheresque is judged from the pictures.
+- `node cells/lab/devtools/labyrinth.test.mjs` builds 80 labyrinths of 120 random touches each, with every piece and auto, removing a piece now and then. About 7,800 checks:
+  - everything stands on something;
+  - every bridge spans from stone to stone;
+  - nothing that carries something is taken away;
+  - undo takes back the last piece;
+  - what's written down makes the same stone again;
+  - every kind of piece gets built.
+- `node cells/lab/devtools/labyrinth-smoke.mjs` uses it in a browser:
+  - auto's block on the stone, block on a block, stair onto a side, and bridge between towers;
+  - each piece in the palette going where it's touched;
+  - undo and take;
+  - turning;
+  - print;
+  - what's built kept across a reload;
+  - clearing.
 
 ## Links
 
-- `?seed=7&taps=8.8,8.8,8.8,4.12,12.4,8.8,12.12,4.4,8.8` builds that labyrinth at once (each tap is a column `i.j`, in order). Add `&print` to see it as a print.
-- `?turn=1` turns it a quarter; `?zoom=0.45` comes closer.
-- `?preview` is the index's card: a labyrinth built, turning slowly.
+- `?demo` is the labyrinth above; `?p=` builds a labyrinth from its pieces (each `kind.level.i.j.axis.length`, where kind is `b` block, `a` arch, `s` stair, `br` bridge, `cy` cypress or `p` pool).
+- `?print`, `?turn=1` (a quarter turn), `?zoom=0.45` (closer), `?hand=bridge` (start with a piece in hand).
+- `?preview` is the index's card: the demo, turning slowly.
 
 Every picture: [views](labyrinth/views.md), made by `node cells/lab/views.mjs labyrinth`.
 
+## Before this
+
+The first Labyrinth built whole levels at a touch: each level a perfect block maze on arches over the one below. That's in the history (`git log -- cells/lab/client/labyrinth`). This one builds a piece at a time instead.
+
 ## Next
 
-- A walker: someone small who goes through it, up the stairs and over the arches. The model already says where the floors, wall tops and stairs are.
-- Escher's own impossibilities: from one corner, a walkway that meets a wall it can't reach, or a stair that climbs forever.
-- Masonry: courses and joints on the stone, as the prints cut them.
+- Print, after Taohua: its ink, its strokes, its few tones.
+- A walker who goes up the stairs and over the bridges.
+- Wider pieces: an arch two cells wide, a long flight over two cells.

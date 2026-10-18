@@ -1,236 +1,198 @@
 /**
- * The labyrinth, as stone: a square of voxels (N across, one unit each), in levels (each H high), on a flat stone.
+ * The labyrinth, piece by piece: a travertine stone, a grid of cells on it (N across, one unit each, one unit high, up
+ * to LEVELS high), and what's been built there, one piece at a touch.
  *
- * Each level is a block maze: its rooms one voxel, its walls one voxel thick, posts at the walls' crossings. A level's
- * rooms and posts change places from the level below (its grid is offset by a voxel each way), so:
+ * - **block**: a cube of stone. On the stone, or on stone.
+ * - **arch**: a block with an arched way through it, along x or z; an arch on an arch the same way makes one tall arch.
+ * - **stair**: a flight up one level, toward a side (it lands on whatever's there: best, a block's top).
+ * - **bridge**: across a gap at a level, between two pieces of stone either side of it: a deck on one arch, the whole
+ *   gap wide. Made at one touch, the whole span.
+ * - **cypress**: a tree, on a floor (the stone, or the top of something).
+ * - **pool**: water let into the stone.
  *
- * - a room sits on a post below: it has a floor;
- * - a post stands over a room below, on a cross vault springing from that room's four corner posts;
- * - a wall or a passage over a wall below sits on it; over a passage below, the passage is spanned by an arch (a barrel
- *   vault between the posts either side), and what's above stands on that: a wall on an arch, or a walkway over one.
- *
- * So every open voxel with anything built over it is vaulted, and the lower labyrinth runs on under the upper. Each level
- * is a perfect maze (one way between any two of its rooms): a touch adds rooms round it, joined into the level's maze by
- * a randomised Kruskal, with one gate into each part of the level it meets. A level above the first gets a gate out
- * onto the wall tops of the one below; and dead ends nothing's built over may have a stair, climbing onto the wall at
- * the end: the tops of the walls are walkways too.
+ * Every piece stands on something: the stone, or the top of a block, an arch, a bridge's deck. Each is an action, kept
+ * in order, so it can be undone, kept, and made again (`replay`). What may be built where is here; what it looks like is
+ * mesh.ts's.
  */
-import { seeded, hash, type Rand } from '../kit/rng';
-
-/** rooms each way, voxels each way (2n + 1), the most levels */
-export const ROOMS = 8, N = 2 * ROOMS + 1, LEVELS = 7;
-/** a level's height (a voxel's width is 1) */
-export const H = 1.25;
-
-/** what a voxel is, at a level: not built, stone, open (a room, a passage: a floor, and maybe a stair; see `stair`),
- * or a pier (stone, standing alone: one of the columns a bridge stands on, not part of this level's maze) */
-export const EMPTY = 0, SOLID = 1, OPEN = 2, PIER = 3;
-/** the four ways, as voxel steps: +x, +z, −x, −z */
+export const N = 12, LEVELS = 8;
+/** a level's height (a cell's width is 1) */
+export const H = 1;
+/** a bridge's deck: how thick it is over its arch's crown */
+export const DECK = 0.24;
 export const DIRS: ReadonlyArray<[number, number]> = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 
-export interface Level {
-  kind: Uint8Array;
-  /** when each voxel was built (s) */
-  born: Float32Array;
-}
+export type Kind = 'block' | 'arch' | 'stair' | 'bridge' | 'cypress' | 'pool';
+/** one piece, as it was put down: where, which way (an arch's or a bridge's axis, 0 x or 1 z; a stair's DIRS index),
+ * a bridge's length, and when */
+export interface Piece { kind: Kind; k: number; i: number; j: number; a: number; n: number; born: number; id: number;
+  /** a bridge's arch: the level it springs from (as low as stone goes on both sides, when it's built); the air under
+   * it is the bridge's too, so nothing's built through it */
+  low?: number }
+/** what a cell holds: the piece, and (a bridge's) which of its cells */
+interface Cell { p: Piece; at: number }
 
-/** a room of level k? (k even: both odd; k odd: both even) */
-export const isRoom = (k: number, i: number, j: number) => (k % 2 === 0 ? (i & 1) === 1 && (j & 1) === 1 : (i & 1) === 0 && (j & 1) === 0);
-/** a post of level k: the rooms of the level above and below */
-export const isPost = (k: number, i: number, j: number) => isRoom(k + 1, i, j);
 export const inGrid = (i: number, j: number) => i >= 0 && j >= 0 && i < N && j < N;
-const at = (i: number, j: number) => i + j * N;
+const key = (k: number, i: number, j: number) => (k * N + j) * N + i;
 
 export class Labyrinth {
-  levels: Level[] = [];
-  /** every touch so far, as the column touched (for the address, and to make it again) */
-  taps: Array<[number, number]> = [];
-  /** goes up with every change, for whoever draws it */
+  pieces: Piece[] = [];
+  private cells = new Map<number, Cell>();
+  /** the ground's pools, by cell */
+  private pools = new Set<number>();
   version = 0;
-  constructor(public seed: number) {
-    for (let k = 0; k < LEVELS; k++) this.levels.push({ kind: new Uint8Array(N * N), born: new Float32Array(N * N) });
-  }
-  kind(k: number, i: number, j: number): number { return k < 0 || k >= LEVELS || !inGrid(i, j) ? EMPTY : this.levels[k].kind[at(i, j)]; }
-  born(k: number, i: number, j: number): number { return this.levels[k].born[at(i, j)]; }
-  solid(k: number, i: number, j: number) { const c = this.kind(k, i, j); return c === SOLID || c === PIER; }
-  built(k: number, i: number, j: number) { return this.kind(k, i, j) !== EMPTY; }
-  /** an open voxel carrying what's built over it: an arch, a vault */
-  vaulted(k: number, i: number, j: number) { return this.kind(k, i, j) === OPEN && this.built(k + 1, i, j); }
-  /** nothing here, but a bridge over it: an arch from pier to pier, the open air beneath */
-  arched(k: number, i: number, j: number) { return this.kind(k, i, j) === EMPTY && k + 1 < LEVELS && this.kind(k + 1, i, j) !== EMPTY && this.kind(k + 1, i, j) !== PIER; }
-  /** a ceiling here: a vault over a room or passage, or a bridge's arch */
-  ceiled(k: number, i: number, j: number) { return this.vaulted(k, i, j) || this.arched(k, i, j); }
-  /**
-   * A stair, if a room has one: which way it climbs (an index into DIRS), or −1. Not every dead end has one, but about
-   * half of those with nothing built over them do, climbing onto the wall at the end: the walls' tops are walkways. Build
-   * over it, or open the wall at its end, and it's gone.
-   */
-  stair(k: number, i: number, j: number): number {
-    if (!isRoom(k, i, j) || this.kind(k, i, j) !== OPEN || this.built(k + 1, i, j)) return -1;
-    let open = -1;
-    for (let d = 0; d < 4; d++) if (this.kind(k, i + DIRS[d][0], j + DIRS[d][1]) === OPEN) { if (open >= 0) return -1; open = d; }
-    if (open < 0) return -1;
-    const d = (open + 2) % 4;
-    if (!this.solid(k, i + DIRS[d][0], j + DIRS[d][1]) || (hash(this.seed, k, i, j, 31) & 1023) > 520) return -1;
-    return d;
-  }
-  /** how many levels stand on a column */
-  height(i: number, j: number): number { let k = 0; while (k < LEVELS && this.built(k, i, j)) k++; return k; }
-  /** the highest level built anywhere */
-  top(): number { let t = 0; for (let k = 0; k < LEVELS; k++) if (this.levels[k].kind.some((c) => c !== EMPTY)) t = k + 1; return t; }
+  private nextId = 1;
+  constructor(public seed = 1) {}
 
-  /**
-   * A touch on a column: the stone raised round it a level, as a stepped mound. The next level up from the column's own
-   * is built round it, and every level below it spreads a little wider than the one above, so there's something for it
-   * to stand on. `now` is when (for the stone's rising), `spread` how far round the top level reaches (in voxels; a
-   * touch's own when not given). Returns how many rooms it made.
-   */
-  touch(ci: number, cj: number, now = 0, spread?: number): number {
-    const top = this.height(ci, cj);
-    if (top >= LEVELS) return 0;
-    const rnd = seeded(hash(this.seed, this.taps.length, ci, cj, 77));
-    const R = spread ?? 3.4 + rnd() * 2;
-    let made = 0;
-    // (the ground level a broad labyrinth; above it, a core over the touch (wider the lower it is, so the one above has
-    // something to stand on) and arms out from it: walled walkways on arches, over the labyrinth below)
-    for (let L = 0; L <= top; L++) {
-      const shape = L === 0 ? { core: R + top * 2.1, arms: 0 } : { core: 1.5 + (top - L) * 2.1, arms: L === top ? 3 : 2 };
-      made += this.grow(L, ci, cj, shape.core, shape.arms, now + L * 0.35, rnd);
-    }
-    if (made) { this.taps.push([ci, cj]); this.version++; }
-    return made;
+  at(k: number, i: number, j: number): Cell | undefined { return k < 0 || k >= LEVELS || !inGrid(i, j) ? undefined : this.cells.get(key(k, i, j)); }
+  kindAt(k: number, i: number, j: number): Kind | null { return this.at(k, i, j)?.p.kind ?? null; }
+  pool(i: number, j: number) { return this.pools.has(key(0, i, j)); }
+  /** stone a thing can stand on or against: a block or an arch */
+  solid(k: number, i: number, j: number) { const c = this.kindAt(k, i, j); return c === 'block' || c === 'arch'; }
+  /** something to stand on at the foot of level k: the stone (not a pool), or the top of a block, an arch, a bridge */
+  floor(k: number, i: number, j: number): boolean {
+    if (!inGrid(i, j)) return false;
+    if (k === 0) return !this.pool(i, j);
+    const c = this.at(k - 1, i, j);
+    return !!c && (c.p.kind === 'block' || c.p.kind === 'arch' || (c.p.kind === 'bridge' && c.at >= 0));
   }
-  /** can a room of level L stand here: all round it (the room, its walls, its posts) on what's below */
-  private stands(L: number, i: number, j: number): boolean {
-    if (i < 1 || j < 1 || i > N - 2 || j > N - 2 || !isRoom(L, i, j)) return false;
-    if (L === 0) return true;
-    const below = this.levels[L - 1].kind;
-    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) if (below[at(i + di, j + dj)] === EMPTY) return false;
+  free(k: number, i: number, j: number) { return k >= 0 && k < LEVELS && inGrid(i, j) && !this.cells.has(key(k, i, j)) && !(k === 0 && this.pool(i, j)); }
+  /** the highest level anything reaches */
+  top(): number { let t = 0; for (const p of this.pieces) t = Math.max(t, p.k + (p.kind === 'cypress' ? 2 : 1)); return t; }
+
+  // ─── what may go where ───
+  /** a bridge across level k through a cell: along an axis, the cells free between stone either side, if there's stone
+   * both sides within reach (the shorter way, if both axes span it); its first cell and length */
+  span(k: number, i: number, j: number, only?: number): { a: number; i: number; j: number; n: number } | null {
+    let best: { a: number; i: number; j: number; n: number } | null = null;
+    if (!this.free(k, i, j)) return null;
+    for (const a of only === undefined ? [0, 1] : [only]) {
+      const [di, dj] = DIRS[a];
+      let lo = 0, hi = 0;
+      while (lo < 7 && this.free(k, i - (lo + 1) * di, j - (lo + 1) * dj)) lo++;
+      while (hi < 7 && this.free(k, i + (hi + 1) * di, j + (hi + 1) * dj)) hi++;
+      const n = lo + hi + 1;
+      if (!this.solid(k, i - (lo + 1) * di, j - (lo + 1) * dj) || !this.solid(k, i + (hi + 1) * di, j + (hi + 1) * dj) || n > 7) continue;
+      if (!best || n < best.n) best = { a, i: i - lo * di, j: j - lo * dj, n };
+    }
+    return best;
+  }
+  /** can a piece go here (as it'd be put down) */
+  can(kind: Kind, k: number, i: number, j: number, a = 0, n = 1): boolean {
+    if (kind === 'pool') return k === 0 && inGrid(i, j) && !this.pool(i, j) && !this.cells.has(key(0, i, j));
+    if (kind === 'bridge') {
+      const [di, dj] = DIRS[a];
+      for (let s = 0; s < n; s++) if (!this.free(k, i + s * di, j + s * dj)) return false;
+      return this.solid(k, i - di, j - dj) && this.solid(k, i + n * di, j + n * dj);
+    }
+    if (!this.free(k, i, j) || !this.floor(k, i, j)) return false;
+    if (kind === 'cypress') return this.free(k + 1, i, j) || k + 1 >= LEVELS;
     return true;
   }
-  /** could a pier rise to level L−1 at a column: down through nothing to the stone, or to stone to stand on */
-  private pierable(L: number, i: number, j: number): boolean {
-    let k = L - 1;
-    while (k >= 0 && this.kind(k, i, j) === EMPTY) k--;
-    return k < 0 || this.solid(k, i, j);
-  }
-  /**
-   * Can a room of level L stand here as a bridge, where some of what's under it is open air: on piers at its posts (to
-   * the stone, or to stone below), and arches between them. Each post of it over nothing must have a pier to stand on;
-   * each wall or floor over nothing, posts either side of it that are stone or piers (not an open room's floor).
-   */
-  private bridges(L: number, i: number, j: number): boolean {
-    if (L === 0 || i < 1 || j < 1 || i > N - 2 || j > N - 2 || !isRoom(L, i, j)) return false;
-    const below = (a: number, b: number) => this.kind(L - 1, a, b);
-    const postOk = (a: number, b: number) => (below(a, b) === EMPTY ? this.pierable(L, a, b) : this.solid(L - 1, a, b));
-    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
-      const a = i + di, b = j + dj;
-      // (a post over a room below stands on that room's vault, as any post does; over nothing, on a pier)
-      if (isPost(L, a, b)) { if (below(a, b) === EMPTY && !this.pierable(L, a, b)) return false; continue; }
-      if (below(a, b) !== EMPTY) continue;
-      for (const [x, z] of [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]]) if (inGrid(a + x, b + z) && isPost(L, a + x, b + z) && Math.abs(a + x - i) <= 1 && Math.abs(b + z - j) <= 1 && !postOk(a + x, b + z)) return false;
+  /** put a piece down, if it can go there; it's built `now` */
+  place(kind: Kind, k: number, i: number, j: number, a = 0, n = 1, now = 0): Piece | null {
+    if (!this.can(kind, k, i, j, a, n)) return null;
+    const p: Piece = { kind, k, i, j, a, n: kind === 'bridge' ? n : 1, born: now, id: this.nextId++ };
+    if (kind === 'bridge') {
+      const [di, dj] = DIRS[a];
+      let low = k;
+      const clear = (kk: number) => { for (let s = 0; s < n; s++) if (!this.free(kk, i + s * di, j + s * dj)) return false; return true; };
+      while (low > 0 && this.solid(low - 1, i - di, j - dj) && this.solid(low - 1, i + n * di, j + n * dj) && clear(low - 1) && low > k + 1 - DECK - n / 2) low--;
+      p.low = low;
     }
+    this.pieces.push(p);
+    this.occupy(p);
+    this.version++;
+    return p;
+  }
+  private occupy(p: Piece) {
+    if (p.kind === 'pool') { this.pools.add(key(0, p.i, p.j)); return; }
+    if (p.kind === 'bridge') {
+      const [di, dj] = DIRS[p.a];
+      for (let s = 0; s < p.n; s++) for (let kk = p.low ?? p.k; kk <= p.k; kk++) this.cells.set(key(kk, p.i + s * di, p.j + s * dj), { p, at: kk === p.k ? s : -1 });
+      return;
+    }
+    this.cells.set(key(p.k, p.i, p.j), { p, at: 0 });
+    if (p.kind === 'cypress' && p.k + 1 < LEVELS) this.cells.set(key(p.k + 1, p.i, p.j), { p, at: 1 });
+  }
+  private vacate(p: Piece) {
+    if (p.kind === 'pool') { this.pools.delete(key(0, p.i, p.j)); return; }
+    for (const [kk, c] of [...this.cells]) if (c.p === p) this.cells.delete(kk);
+  }
+  /** whether anything rests on a piece (and so would fall if it went) */
+  carries(p: Piece): boolean {
+    const cells = p.kind === 'bridge' ? Array.from({ length: p.n }, (_, s) => [p.i + s * DIRS[p.a][0], p.j + s * DIRS[p.a][1]]) : p.kind === 'pool' ? [] : [[p.i, p.j]];
+    for (const [i, j] of cells) { const up = this.at(p.k + 1, i, j); if (up && up.p !== p) return true; }
+    // (a bridge resting against it)
+    if (p.kind === 'block' || p.kind === 'arch') for (const q of this.pieces) if (q.kind === 'bridge' && q.k === p.k) {
+      const [di, dj] = DIRS[q.a];
+      if ((q.i - di === p.i && q.j - dj === p.j) || (q.i + q.n * di === p.i && q.j + q.n * dj === p.j)) return true;
+    }
+    return false;
+  }
+  /** take a piece away (if nothing rests on it) */
+  remove(p: Piece): boolean {
+    if (this.carries(p)) return false;
+    this.vacate(p);
+    this.pieces = this.pieces.filter((q) => q !== p);
+    this.version++;
     return true;
   }
-  /** a bridge's piers: stone up from what it stands on, at its posts over nothing */
-  private raisePiers(L: number, i: number, j: number, born: number) {
-    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
-      const a = i + di, b = j + dj;
-      if (!isPost(L, a, b)) continue;
-      for (let k = L - 1; k >= 0 && this.kind(k, a, b) === EMPTY; k--) { this.levels[k].kind[at(a, b)] = PIER; this.levels[k].born[at(a, b)] = born; }
-    }
-  }
-  /** one level spread round a column: every room it can have within `core` voxels, and `arms` walkways reaching out */
-  private grow(L: number, ci: number, cj: number, core: number, arms: number, now: number, rnd: () => number): number {
-    const lev = this.levels[L], below = L > 0 ? this.levels[L - 1] : null;
-    const fresh: number[] = [], chosen = new Set<number>();
-    const bridged = new Set<number>();
-    const take = (i: number, j: number, bridge = false) => {
-      const v = at(i, j);
-      if (chosen.has(v) || !inGrid(i, j) || lev.kind[v] !== EMPTY) return false;
-      if (!this.stands(L, i, j)) { if (!bridge || !this.bridges(L, i, j)) return false; bridged.add(v); }
-      chosen.add(v); fresh.push(v); return true;
-    };
-    for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) if (Math.hypot(i - ci, j - cj) <= core + 0.01) take(i, j);
-    // (each arm a walk from the core, room by room, mostly straight on, as far as there's stone under it to stand on)
-    const starts = fresh.length ? fresh.slice() : [];
-    if (!starts.length) { for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) if (isRoom(L, i, j) && lev.kind[at(i, j)] !== EMPTY && Math.hypot(i - ci, j - cj) <= core + 2.1) starts.push(at(i, j)); }
-    for (let a = 0; a < arms && starts.length; a++) {
-      const s0 = starts[Math.floor(rnd() * starts.length)];
-      let i = s0 % N, j = (s0 / N) | 0, d = Math.floor(rnd() * 4);
-      const len = 2 + Math.floor(rnd() * 4);
-      for (let step = 0; step < len; step++) {
-        if (rnd() < 0.3) d = (d + (rnd() < 0.5 ? 1 : 3)) % 4;
-        const [di, dj] = DIRS[d], ni = i + 2 * di, nj = j + 2 * dj;
-        if (!inGrid(ni, nj)) break;
-        // (an arm may go on as a bridge, over open air)
-        if (!take(ni, nj, true) && lev.kind[at(ni, nj)] === EMPTY) break;
-        i = ni; j = nj;
-      }
-    }
-    if (!fresh.length) return 0;
-    // (rising in a ripple out from the touch)
-    const when = (i: number, j: number) => now + Math.hypot(i - ci, j - cj) * 0.07;
-    const isFresh = new Set(fresh);
-    for (const r of bridged) this.raisePiers(L, r % N, (r / N) | 0, when(r % N, (r / N) | 0) - 0.25);
-    for (const r of fresh) {
-      const i = r % N, j = (r / N) | 0;
-      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
-        const v = at(i + di, j + dj);
-        if (lev.kind[v] !== EMPTY) continue;
-        lev.kind[v] = di === 0 && dj === 0 ? OPEN : SOLID;
-        lev.born[v] = when(i + di, j + dj);
-      }
-    }
-    // (the level's maze: what's already open joined up as it is, then walls opened at random between rooms not yet joined)
-    const parent = new Map<number, number>();
-    const find = (a: number): number => { let p = parent.get(a) ?? a; if (p !== a) { p = find(p); parent.set(a, p); } return p; };
-    const union = (a: number, b: number) => { const x = find(a), y = find(b); if (x === y) return false; parent.set(x, y); return true; };
-    // (an old gate out of the level the new rooms land on is a join already)
-    for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
-      if (!isRoom(L, i, j) || lev.kind[at(i, j)] === EMPTY) continue;
-      for (const [di, dj] of [[1, 0], [0, 1]]) if (lev.kind[at(i + di, j + dj)] === OPEN && inGrid(i + 2 * di, j + 2 * dj)) union(at(i, j), at(i + 2 * di, j + 2 * dj));
-    }
-    const walls: Array<[number, number, number]> = [];
-    for (const r of fresh) {
-      const i = r % N, j = (r / N) | 0;
-      for (const [di, dj] of DIRS) {
-        const i2 = i + 2 * di, j2 = j + 2 * dj;
-        if (!inGrid(i2, j2) || lev.kind[at(i2, j2)] === EMPTY) continue;
-        const e = at(i + di, j + dj);
-        // (a wall something's already built on stays a wall)
-        if (lev.kind[e] !== SOLID || (L + 1 < LEVELS && this.levels[L + 1].kind[e] !== EMPTY)) continue;
-        if (isFresh.has(at(i2, j2)) && at(i2, j2) < r) continue;
-        walls.push([e, r, at(i2, j2)]);
-      }
-    }
-    for (let k = walls.length - 1; k > 0; k--) { const m = Math.floor(rnd() * (k + 1)); [walls[k], walls[m]] = [walls[m], walls[k]]; }
-    for (const [e, a, b] of walls) if (union(a, b)) { lev.kind[e] = OPEN; lev.born[e] = Math.max(lev.born[e], now); }
-    // (above the first: a gate out of it onto the tops of the walls below, where they're not built over)
-    if (L > 0) {
-      const gates: number[] = [];
-      for (const r of fresh) {
-        const i = r % N, j = (r / N) | 0;
-        for (const [di, dj] of DIRS) {
-          const e = at(i + di, j + dj), oi = i + 2 * di, oj = j + 2 * dj;
-          if (!inGrid(oi, oj) || lev.kind[at(oi, oj)] !== EMPTY || lev.kind[e] !== SOLID) continue;
-          if (L + 1 < LEVELS && this.levels[L + 1].kind[e] !== EMPTY) continue;
-          if (below!.kind[at(oi, oj)] !== SOLID) continue;
-          // (and not where another gate already leads: when that's built on, it'd make a loop)
-          if (DIRS.some(([a2, b2]) => inGrid(oi + a2, oj + b2) && lev.kind[at(oi + a2, oj + b2)] === OPEN)) continue;
-          gates.push(e);
-        }
-      }
-      if (gates.length) { const e = gates[Math.floor(rnd() * gates.length)]; lev.kind[e] = OPEN; }
-    }
-    return fresh.length;
-  }
+  undo(): Piece | null { const p = this.pieces[this.pieces.length - 1]; if (!p) return null; this.vacate(p); this.pieces.pop(); this.version++; return p; }
+  /** the piece a cell holds (a pool's, at the ground) */
+  pieceAt(k: number, i: number, j: number): Piece | null { return this.at(k, i, j)?.p ?? (k === 0 && this.pool(i, j) ? this.pieces.find((p) => p.kind === 'pool' && p.i === i && p.j === j) ?? null : null); }
+
+  /** as text, to keep and to make again: `kind.k.i.j.a.n` each, comma between */
+  encode(): string { return this.pieces.map((p) => `${CODES[p.kind]}.${p.k}.${p.i}.${p.j}.${p.a}.${p.n}`).join(','); }
 }
 
-/** a labyrinth made again from its seed and its touches */
-export function replay(seed: number, taps: Array<[number, number]>): Labyrinth {
+const CODES: Record<Kind, string> = { block: 'b', arch: 'a', stair: 's', bridge: 'br', cypress: 'cy', pool: 'p' };
+const KINDS = Object.fromEntries(Object.entries(CODES).map(([k, v]) => [v, k])) as Record<string, Kind>;
+/** a labyrinth made again from its pieces, as `encode` wrote them (built long ago: grown) */
+export function replay(text: string, seed = 1): Labyrinth {
   const m = new Labyrinth(seed);
-  for (const [i, j] of taps) m.touch(i, j, -100);
+  for (const t of text.split(',').filter(Boolean)) {
+    const [h, k, i, j, a, n] = t.split('.');
+    const kind = KINDS[h];
+    if (kind) m.place(kind, +k, +i, +j, +a || 0, +n || 1, -100);
+  }
   return m;
 }
-export type { Rand };
+
+/**
+ * What a touch builds, given what it touched: `hit` the cell it struck (k = −1: the stone), `to` the free cell on the
+ * touched face's side, and the piece in hand. 'auto' reads the place: the stone takes a block; a block's top, a block on
+ * it; a block's side, a stair up onto it where there's a floor, or a bridge out from it where there isn't.
+ * `view` is the way the eye looks (a DIRS index), for a stair or an arch with nothing else to go by.
+ */
+export function decide(m: Labyrinth, hand: Kind | 'auto', hit: [number, number, number], to: [number, number, number], view: number): { kind: Kind; k: number; i: number; j: number; a: number; n: number } | null {
+  const [hk, hi, hj] = hit, [k, i, j] = to;
+  const side = hk === k && (hi !== i || hj !== j);
+  const toward = side ? DIRS.findIndex(([a, b]) => a === hi - i && b === hj - j) : -1;
+  // (a stair climbs toward the stone it's against; failing that, onto a neighbour's top; failing that, away from the eye)
+  const stairDir = () => {
+    if (toward >= 0) return toward;
+    for (let d = 0; d < 4; d++) if (m.solid(k, i + DIRS[d][0], j + DIRS[d][1]) && m.free(k + 1, i + DIRS[d][0], j + DIRS[d][1])) return d;
+    return view;
+  };
+  // (an arch's way through runs where it's open either side: an arch on an arch keeps its way)
+  const archAxis = () => {
+    const below = m.at(k - 1, i, j)?.p;
+    if (below?.kind === 'arch') return below.a;
+    const open = (a: number) => [1, -1].every((s) => !m.solid(k, i + s * DIRS[a][0], j + s * DIRS[a][1]));
+    const want = side ? toward % 2 : view % 2;
+    return open(want) ? want : 1 - want;
+  };
+  const bridge = () => { const s = (side ? m.span(k, i, j, toward % 2) : null) ?? m.span(k, i, j); return s ? { kind: 'bridge' as Kind, k, i: s.i, j: s.j, a: s.a, n: s.n } : null; };
+  const one = (kind: Kind, a = 0) => (m.can(kind, k, i, j, a) ? { kind, k, i, j, a, n: 1 } : null);
+  if (hand === 'pool') return hk < 0 ? one('pool') : null;
+  if (hand === 'bridge') return bridge();
+  if (hand === 'stair') return one('stair', stairDir());
+  if (hand === 'arch') return one('arch', archAxis());
+  if (hand === 'block' || hand === 'cypress') return one(hand);
+  // (auto)
+  if (side) {
+    if (m.floor(k, i, j)) return (m.free(k + 1, hi, hj) ? one('stair', toward) : null) ?? one('block');
+    return bridge();
+  }
+  return one('block');
+}
