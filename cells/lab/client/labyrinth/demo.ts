@@ -1,32 +1,41 @@
 /**
- * A labyrinth to show (the index's card, and the README's views): towers with tall arches, a bridge on a great arch
- * between two of them, an arcade, stairs up onto the tops, pools and cypresses, after the sketch it's modelled on. Put
- * down piece by piece, as a hand would, through the same rules.
+ * The storyboard (the index's card, and the README's views): the brief's first test, made with the same gestures a
+ * hand would make, read by the same rules.
+ *
+ * 1. **First touch**: a small raised platform: the stone tapped, tapped again, pushed out a side.
+ * 2. **A traced wall**: a wall drawn across the stone from it, and on round the court.
+ * 3. **An elevated connection**: a terrace higher up, and a trace from the platform's top to it: steps and landings,
+ *    carried on an arcade where there's nothing under them.
+ * 4. **A resolved labyrinth**: a walkway out over the court, a passage cut beneath it, the court closed (so it's paved,
+ *    with water and a cypress), and a second tower bridged to the first.
  */
-import { Labyrinth, type Kind } from './model';
+import { World, type Cell } from './model';
+import { carve, tap, trace, type Pick } from './gesture';
 
-export function demo(): Labyrinth {
-  const m = new Labyrinth(7);
-  const put = (kind: Kind, k: number, i: number, j: number, a = 0, n = 1) => m.place(kind, k, i, j, a, n, -100);
-  const stack = (i: number, j: number, h: number, kinds: Array<Kind | [Kind, number]> = []) => { for (let k = 0; k < h; k++) { const c = kinds[k] ?? 'block'; Array.isArray(c) ? put(c[0], k, i, j, c[1]) : put(c, k, i, j); } };
-  // (the tall tower at the back, its tall arch looking out, and the one across the court from it)
-  stack(7, 2, 4, [['arch', 1], ['arch', 1], 'block', 'block']);
-  stack(8, 2, 4); stack(7, 3, 3); stack(8, 3, 3, ['block', ['arch', 0], ['arch', 0]]);
-  stack(2, 3, 3, ['block', ['arch', 0], 'block']); stack(3, 3, 3); stack(2, 4, 2); stack(3, 4, 3, [['arch', 1], 'block', 'block']);
-  // (a bridge on one great arch between them, at the third level)
-  put('bridge', 2, 4, 3, 0, 3);
-  // (an arcade along the front)
-  for (let i = 2; i <= 6; i++) put(i % 2 ? 'arch' : 'block', 0, i, 8, 1);
-  for (let i = 2; i <= 6; i++) put('block', 1, i, 8);
-  // (the block at the right, with its tall arch, and a stair up to it)
-  stack(9, 7, 2, [['arch', 0], ['arch', 0]]); stack(9, 8, 2); stack(10, 7, 1); stack(10, 8, 2);
-  put('stair', 0, 8, 8, 0); put('stair', 1, 9, 9, 3);
-  put('block', 0, 9, 9);
-  // (stairs up onto the arcade, and from the court onto the low tower)
-  put('stair', 0, 1, 8, 0); put('stair', 0, 2, 5, 3); put('stair', 1, 2, 5, 3);
-  put('stair', 0, 6, 3, 0); put('block', 0, 6, 4); put('stair', 1, 6, 4, 3);
-  // (pools in the court, cypresses about it)
-  for (const [i, j] of [[4, 5], [5, 5], [4, 6], [5, 6]]) put('pool', 0, i, j);
-  for (const [k, i, j] of [[0, 6, 6], [2, 2, 4], [2, 10, 8], [0, 1, 2], [3, 7, 3], [0, 3, 6]]) put('cypress', k, i, j);
-  return m;
+const ground = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+const top = (w: World, i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+const side = (k: number, i: number, j: number, di: number, dj: number): Pick => ({ face: 'side', hit: [k, i, j], to: [k, i + di, j + dj] });
+
+export function story(stage: number): World {
+  const w = new World(7);
+  const t = -100;
+  const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op) w.apply(op, t); };
+  const traceAt = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t); if (op) w.apply(op, t); };
+  const carveAt = (cells: Cell[]) => { const cut = cells.filter((c) => carve(w, { face: 'side', hit: c, to: c })); if (cut.length) w.apply({ cut, why: 'carve' }, t); };
+  // 1: a small raised platform
+  tapAt(ground(3, 7)); tapAt(top(w, 3, 7)); tapAt(side(0, 3, 7, 1, 0)); tapAt(side(1, 3, 7, 1, 0));
+  if (stage <= 1) return w;
+  // 2: a wall extending from it, traced across the stone
+  traceAt(ground(5, 7), [[5, 7], [6, 7], [7, 7], [8, 7], [9, 7]], null);
+  if (stage <= 2) return w;
+  // 3: a terrace higher up, and a trace from the platform's top along the wall and up to it
+  for (const [i, j] of [[9, 4], [10, 4], [9, 5], [10, 5]]) { tapAt(ground(i, j)); tapAt(top(w, i, j)); tapAt(top(w, i, j)); }
+  traceAt(top(w, 4, 7), [[4, 7], [5, 7], [6, 7], [7, 7], [8, 7], [8, 6], [8, 5]], top(w, 9, 5));
+  if (stage <= 3) return w;
+  // 4: a passage cut through the wall beneath the walkway; the court closed in front; a tower, bridged to the terrace
+  carveAt([[0, 6, 7]]);
+  traceAt(ground(3, 8), [[3, 8], [3, 9], [3, 10], [4, 10], [5, 10], [6, 10], [7, 10], [8, 10], [9, 10], [9, 9], [9, 8]], null);
+  for (const [i, j] of [[3, 3], [3, 4]]) { tapAt(ground(i, j)); tapAt(top(w, i, j)); tapAt(top(w, i, j)); }
+  traceAt(top(w, 3, 4), [[3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4]], top(w, 9, 4));
+  return w;
 }

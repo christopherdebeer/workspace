@@ -1,105 +1,120 @@
 # Labyrinth
 
-A flat travertine stone on a table in the sun, built up one piece at a touch: blocks, arches, stairs, bridges, cypresses and pools. It's modelled on a sketch of the idea: chunky cream stone, tall arches with the light gathered in them, long stairs, a bridge on one great arch between two towers, water in the court, dark cypresses. It can also be drawn as a print.
+Architecture that follows the hand. A travertine slab on a table in the sun, and three gestures. There is no palette of parts: the hand decides the shape, and the stone works out what it takes to stand. That means arches, arcades and piers under anything with nothing beneath it, arched ways where stone is cut out from under stone, steps and landings where a trace climbs, and courtyards where walls close round the ground.
 
-![a labyrinth: towers with tall arches, a bridge on a great arch, an arcade, stairs, pools, cypresses](labyrinth/v-demo.jpg)
+> Townscaper interprets where you place blocks. Labyrinth should interpret what you're trying to construct.
 
-## Using it
+![a resolved labyrinth: a passage under a walkway, a court, a bridge on one great arch](labyrinth/v-story-4-turned.jpg)
 
-- **Touch to build.** The row along the bottom says what a touch puts down:
-  - **auto** reads the place you touch:
-    - the stone gets a block;
-    - a block's top gets another block;
-    - a block's side gets a stair up onto it, where there's a floor to start from;
-    - a block's side over a gap gets a bridge across to the stone on the other side.
-  - **block**: a cube of stone, standing on the stone or on stone.
-  - **arch**: a block with an arched way through it, running where it's open. An arch on an arch the same way makes one tall arch.
-  - **stair**: a flight up one level, climbing toward the stone you touched (or onto a neighbour's top).
-  - **bridge**: touch a gap between two pieces of stone at the same level, and the whole span is built at once.
-  - **tree**: a cypress, on a floor with room above it.
-  - **pool**: water let into the stone itself.
-  - **take** removes a piece, if nothing rests on it.
-- **Drag sideways** to turn it. When you let go, it settles on a corner.
-- **Pinch**, or scroll, to come closer.
-- Top right: **undo**, **print** (draw it as a lithograph), and **clear**.
-- What you've built is kept on this device.
+## The hand
 
-![the stone](labyrinth/v-stone.jpg)
-![the first pieces](labyrinth/v-first.jpg)
-![a bridge](labyrinth/v-bridge.jpg)
+| Gesture | On… | Builds |
+|---|---|---|
+| **tap** | bare stone | a plinth |
+| | a top | another course |
+| | a side | the stone pushed out that way (on an arch or a pier, if there's nothing under it) |
+| **trace** | from the stone, across the stone | a wall along the stroke |
+| | from a top, out over anything | a walkway at that height, cut through any wall in its way (what's left over the cut stands on an arch) |
+| | from a top to another top at the same height | a walkway joining them: a bridge where it crosses the air |
+| | from the stone or a top to a top at another height | steps and landings, climbing evenly along the stroke |
+| **hold, then trace** | stone | carves: a top lowered a course; a side cut through, so what's over it stands on an arch |
+
+- Two fingers, or one finger starting on the background, turn the view. It settles on a corner when you let go.
+- Pinch, or scroll, to come closer.
+- **Undo**, **print** (draw it as a lithograph) and **clear** are at the top right.
+- While a finger is down:
+  - a trace shows its stroke as a faint dotted line, and the stone is laid behind the finger as it goes;
+  - a hold fills a ring before it starts carving;
+  - stone that settles puffs a little dust.
+- The view never moves while a hand is on the stone, so what's under the finger stays under it.
+- What's built is kept on this device.
+
+## The storyboard
+
+The brief's first test asks whether someone, without instruction, can build this: a small raised platform, a wall extending from it, a terrace higher up, a connection between them that resolves into stairs, and a passage cut beneath the walkway. Each picture is made with the gestures a hand would use (`demo.ts`), read by the same rules. The smoke test makes the same structure with real pointer events.
+
+![1: first touch: a small raised platform](labyrinth/v-story-1.jpg)
+![2: a traced wall](labyrinth/v-story-2.jpg)
+![3: an elevated connection](labyrinth/v-story-3.jpg)
+![4: a resolved labyrinth](labyrinth/v-story-4.jpg)
+
+1. **First touch.** Tap the stone, tap its top, tap a side: a platform, two courses high.
+2. **A traced wall.** Trace across the stone from beside it, and a wall grows along the stroke.
+3. **An elevated connection.** Tap a terrace up three courses. Then trace from the platform's top along the wall's top, and up to the terrace. The landings rest on the wall. The step up comes at the end, and where the route turns off the wall, piers come up under it.
+4. **A resolved labyrinth.**
+   - Hold on the wall beneath the walkway, then carve. The wall is cut through, and the walkway over the cut stands on an arch.
+   - Trace a wall round in front, and the court is closed: paved, with a cypress in its corner.
+   - Tap up a tower, and trace from its top to the terrace's top at the same height. The bridge is resolved onto one great arch, springing as low as both sides go.
 
 ## How it's built
 
-The stone is 12 × 12 cells, each one unit across and one high, up to eight levels (`model.ts`). Each piece takes a cell, or a bridge takes its span. Every piece stands on something: the stone, or the top of a block, an arch, or a bridge's deck. Nothing is ever in mid-air.
+Three layers, in order of authority (`model.ts`):
 
-- **Arches** stand like blocks, with a way through along one axis. An arch on an arch the same way joins it into a single tall arch, its head in the upper cell.
-- **Bridges** span a straight run of free cells at one level, between a block or arch at each end. The arch under the deck springs as low as stone goes at both ends, down to where a round arch fits. So between two tall towers it is a great semicircle; between two low ones, a flatter arch. The air under the arch belongs to the bridge, so nothing is built through it.
-- **Stairs** climb one level toward a side.
-- A piece can be taken away only if nothing rests on it, including a bridge resting against it.
-- Every piece is an action, kept in order. Undo takes back the last one. What's built is written down as text (`?p=`) and makes the same stone again.
+1. **Operations.** Each gesture is recorded as what it changes in the intended solid: stone added (a cell at a level, and when it was laid), stairs added (which way each climbs), stone cut away. Undo takes the last operation back. The world is always these operations replayed, so a new edit never redesigns an earlier one except through the rules below.
+2. **The intended solid.** The stone and stairs the operations add up to. The hand decides this, and nothing below changes it.
+3. **The resolution.** What the stone has to do so the intended solid stands. It is worked out afresh after every edit, the same every time:
+   - stone with nothing under it, between stone either side along x or z, is carried on an **arch** (three cells at most). The arch springs as low as both sides go, down to where a round arch fits, and the air under it is kept clear;
+   - a longer run becomes an **arcade**: a **pier** every three cells, with arches between;
+   - a free end, or a stair over nothing, stands on a pier;
+   - so cutting under stone opens an arched way through it, and a walkway drawn out over the court comes with what holds it up;
+   - ground walled in all round is a **courtyard**: paved, with water where it's open on every side (or at its heart, if it's big enough), and a cypress in a corner. An arched passage counts as a wall.
 
-**auto** is a small reading of the place (`decide` in `model.ts`). It knows what was struck (the stone, a top, or a side) and the free cell on that face's side. From that it chooses the piece the place most wants: on the stone, a block; on a top, a block; on a side with a floor below, a stair onto it (or a block, if the stair would climb into a wall); on a side over air, a bridge to whatever is level with it across the gap.
+**Reading a gesture** (`gesture.ts`) takes where the gesture started, the cells the stroke crossed, and where it ended:
+
+- **Where it ended counts** if it's a top at another height. From high up, ending over bare stone, the trace makes a walkway rather than stairs down: tracing *up* to a top is how you climb.
+- **Steps are spread evenly**, a level per step, along the stroke.
+- **A diagonal stroke** is walked a cell at a time, the way it leans.
+- **A stroke that doubles back** keeps only what it covered once.
+
+**The page** (`main.ts`) turns a touch into those terms:
+
+- **What it struck** is found by marching the ray through the actual stone. That includes the stone above an arch's curve, so a touch there is that cell's, not the air's.
+- **The stroke's cells** come from projecting the finger onto the level plane it started on, or blended toward the height it's reaching.
+- **While a trace is under the finger**, it's re-read every move against the world as it was before the trace began, and the stone is laid behind the finger in the order it was crossed.
 
 ## How it's drawn
 
-From the model, each time it changes (`mesh.ts`):
+From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
-- **blocks** have faces where nothing is against them, darker at the foot where they meet a floor;
-- **arches** have jambs and a semicircular head, lit from within;
-- **stairs** have six steps;
-- **bridges** have an elliptical arch with spandrels, a deck and a low parapet each side;
-- **cypresses** are lathed spindles, lumpy with foliage;
-- **pools** are water a little below the stone, with a rim;
-- **the slab** sits on a table, which darkens near the slab's foot.
+- **Blocks** have their faces where nothing hides them, darker at the foot.
+- **Stairs** have six steps.
+- **Arches** have spandrels and a deck over an elliptical soffit, lit warm from within.
+- **Piers** are square columns with a cap.
+- **Courtyards** are travertine flags with their joints.
+- **The stone** is dressed travertine laid in courses (a joint every third of a level, the upright joints staggered course to course), banded, pitted with pores, and each block a shade of its own.
+- **Light**: a low warm sun with soft shadows. The dappled shade of a tree out of the picture falls across one side, near the build.
+- **No outlines**: barely a line where the depth folds.
+- **Rising**: the stone rises as it's laid, arches come down from their deck, and courtyard things grow when the court closes.
+- **Print** (kept from before) turns the light into hatching on paper, with the edges in ink. It's next to take what Taohua learned about drawing.
 
-Then in WebGL2 (`render.ts`):
-
-- **travertine**: cream stone, banded as it was laid down and pitted with pores, each block a shade of its own;
-- **a low warm sun** with soft shadows (25 taps of a shadow map), and the dappled shade of a tree out of the picture falling across one side, stirring;
-- **light in the archways**: their insides glow warm;
-- **water** that is dark, with the sky and the sun's glint on it, a little stirred;
-- **a filmic shoulder** on the light, and barely a line where the depth folds.
-
-In **print**, the light becomes hatching on paper: one direction of lines, then crossed, then a third direction as it gets darker, with the edges in ink. The next step for print is to take what Taohua learned about drawing.
-
-Everything rises as it's built: blocks from their floor, bridges down from their deck, trees up from their foot.
-
-![close](labyrinth/v-close.jpg)
+![close: the stone, its courses, the light under an arch](labyrinth/v-close.jpg)
 ![as a print](labyrinth/v-print.jpg)
-![close, as a print](labyrinth/v-print-close.jpg)
 
 ## Checked
 
-- `node cells/lab/devtools/labyrinth.test.mjs` builds 80 labyrinths of 120 random touches each, with every piece and auto, removing a piece now and then. About 7,800 checks:
-  - everything stands on something;
-  - every bridge spans from stone to stone;
-  - nothing that carries something is taken away;
-  - undo takes back the last piece;
-  - what's written down makes the same stone again;
-  - every kind of piece gets built.
-- `node cells/lab/devtools/labyrinth-smoke.mjs` uses it in a browser:
-  - auto's block on the stone, block on a block, stair onto a side, and bridge between towers;
-  - each piece in the palette going where it's touched;
-  - undo and take;
-  - turning;
-  - print;
-  - what's built kept across a reload;
-  - clearing.
+- `node cells/lab/devtools/labyrinth.test.mjs` builds 60 worlds from 60 random gestures each (taps, traces between surfaces, carving), read by `gesture.ts`. It checks:
+  - whatever the hand built stands: on what's below it, on an arch of three cells at most whose sides are stone, or on a pier that itself stands and carries something;
+  - every arch's air is clear;
+  - every way of reading a gesture occurs;
+  - undo, and doing it again, gives the same world;
+  - what's written down makes the same world again;
+  - each storyboard stage is what it says it is.
+- `node cells/lab/devtools/labyrinth-smoke.mjs` does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall), and a hold-and-carve under the walkway (an arch carries it). Then undo, a turn from the background, print, what's built kept across a reload, and clear.
+
+**What the tests don't establish** is the brief's real criterion: whether someone can anticipate a result, correct it and repeat it on purpose. That needs a person with the phone.
 
 ## Links
 
-- `?demo` is the labyrinth above; `?p=` builds a labyrinth from its pieces (each `kind.level.i.j.axis.length`, where kind is `b` block, `a` arch, `s` stair, `br` bridge, `cy` cypress or `p` pool).
-- `?print`, `?turn=1` (a quarter turn), `?zoom=0.45` (closer), `?hand=bridge` (start with a piece in hand).
-- `?preview` is the index's card: the demo, turning slowly.
-
-Every picture: [views](labyrinth/views.md), made by `node cells/lab/views.mjs labyrinth`.
-
-## Before this
-
-The first Labyrinth built whole levels at a touch: each level a perfect block maze on arches over the one below. That's in the history (`git log -- cells/lab/client/labyrinth`). This one builds a piece at a time instead.
+- `?story=1` … `?story=4` is the storyboard.
+- `?ops=` builds from operations, as the model writes them.
+- `?print`, `?turn=1` (a quarter turn), `?zoom=0.4` (closer).
+- `?preview` is the index's card: stage 4, turning slowly.
 
 ## Next
 
-- Print, after Taohua: its ink, its strokes, its few tones.
-- A walker who goes up the stairs and over the bridges.
-- Wider pieces: an arch two cells wide, a long flight over two cells.
+- **Snapping on relationships**: geometric (a stroke ending near an edge or a terrace joins it), topological (two walkways meeting make a junction you can walk), architectural (a buttress under an exposed terrace edge).
+- **Strokes off the grid**: diagonals kept as diagonals, with slight irregularity in the masonry.
+- **Constraint resolution for transitions**: where stairs meet arcades, corners, intersections.
+- **Escher, as a separate authored layer**: first impossible-*looking* space (deep arcades, conflicting stairs), later impossible topology (connections that are valid only from one view).
+
+Every picture: [views](labyrinth/views.md), made by `node cells/lab/views.mjs labyrinth`.

@@ -7,7 +7,8 @@
  * Everything rises as it's built: each vertex knows when it was built and the height it grows from, and the vertex
  * shader draws it that far grown.
  */
-import { H, LEVELS, N } from './model';
+import { LEVELS, N } from './model';
+const H = 1;
 import { MARGIN, STRIDE, type Mesh } from './mesh';
 
 export interface View { az: number; el: number; zoom: number; target: [number, number, number] }
@@ -59,7 +60,26 @@ void main() {
   else if (mat == 7) base = vec3(.90, .89, .86) * (.98 + .03 * noise(vPos * 3.));
   else if (mat == 6) base = travertine(vPos, .6) * .9;
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
-  else base = travertine(vPos, vTone);
+  else if (mat == 8) {
+    // (a courtyard's paving: travertine flags, half a cell each, their joints)
+    vec2 f = fract(vPos.xz * 2. + uN), g = min(f, 1. - f);
+    base = travertine(vPos * 1.3 + 5., fract(floor(vPos.x * 2.) * .37 + floor(vPos.z * 2.) * .61)) * 1.02;
+    base *= 1. - .16 * (1. - smoothstep(.0, .045, min(g.x, g.y)));
+  }
+  else {
+    base = travertine(vPos, vTone);
+    // (dressed stone, laid in courses: a joint every third of a level, the upright joints staggered course to course;
+    // on a top, a joint at each cell's edge. Not on what's curved)
+    if (mat == 0) {
+      float jt;
+      if (abs(n.y) < .5) {
+        float u = abs(n.x) > .5 ? vPos.z : vPos.x, cy = vPos.y * 3., course = floor(cy);
+        float hy = min(fract(cy), 1. - fract(cy)) / 3., ux = fract((u + course * .43 + vTone) / .62), hu = min(ux, 1. - ux) * .62;
+        jt = min(hy, hu);
+      } else { vec2 f = fract(vPos.xz + uN * .5), g = min(f, 1. - f); jt = min(g.x, g.y); }
+      base *= 1. - .14 * (1. - smoothstep(.004, .016 + .006 * noise(vPos * 31.), jt));
+    }
+  }
   // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;
   float sh = 0., bias = .0012 + .0025 * (1. - abs(dot(n, uSun)));
@@ -71,7 +91,7 @@ void main() {
   vec2 lp = vLs.xy / vLs.w;
   float leafy = fbm(vec3(lp * vec2(9., 11.), uTime * .05));
   float leaves = smoothstep(.48, .6, leafy) * smoothstep(-.35, -.85, lp.x * .75 - lp.y * .45);
-  sh *= 1. - .45 * leaves;
+  sh *= 1. - .38 * leaves * (1. - smoothstep(uN * .5, uN * .5 + 3., max(abs(vPos.x), abs(vPos.z))));
   float nl = dot(n, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh;
   vec3 sun = vec3(1.0, .86, .68) * 1.05, sky = mix(vec3(.50, .43, .36), vec3(.62, .62, .64), n.y * .5 + .5);
   vec3 c = base * (sky * (.25 + .45 * vAo) + sun * key * (.65 + .35 * vAo));

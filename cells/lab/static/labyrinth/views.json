@@ -1,46 +1,52 @@
 [
  {
-  "group": "Building",
+  "group": "The storyboard",
   "views": [
    {
     "name": "stone",
     "title": "The stone",
-    "caption": "where it starts: a flat travertine stone, on a table in the sun",
+    "caption": "where it starts: a travertine slab, on a table in the sun",
     "file": "v-stone.jpg"
    },
    {
-    "name": "first",
-    "title": "The first pieces",
-    "caption": "a block on the stone, another on it, a stair up onto its neighbour, a cypress",
-    "file": "v-first.jpg"
+    "name": "story-1",
+    "title": "1 · First touch",
+    "caption": "tap the stone, tap its top, tap a side: a small raised platform",
+    "file": "v-story-1.jpg"
    },
    {
-    "name": "bridge",
-    "title": "A bridge",
-    "caption": "two towers, and one touch between them: a bridge on one arch, as low as both towers let it spring",
-    "file": "v-bridge.jpg"
+    "name": "story-2",
+    "title": "2 · A traced wall",
+    "caption": "trace across the stone from it: a wall grows along the stroke",
+    "file": "v-story-2.jpg"
+   },
+   {
+    "name": "story-3",
+    "title": "3 · An elevated connection",
+    "caption": "a terrace tapped up higher; a trace from the platform's top along the wall's and up to it: landings on the wall, a step up at the end, piers where there's nothing under it",
+    "file": "v-story-3.jpg"
+   },
+   {
+    "name": "story-4",
+    "title": "4 · A resolved labyrinth",
+    "caption": "a passage carved under the walkway (an arch carries it); the court walled in (paved, water, a cypress); a tower, and a trace from its top to the terrace: a bridge on one great arch",
+    "file": "v-story-4.jpg"
+   },
+   {
+    "name": "story-4-turned",
+    "title": "From the other side",
+    "caption": "the bridge's great arch, the passage under the walkway, the court",
+    "file": "v-story-4-turned.jpg"
    }
   ]
  },
  {
-  "group": "A labyrinth",
+  "group": "Close to",
   "views": [
    {
-    "name": "demo",
-    "title": "A labyrinth",
-    "caption": "towers with tall arches, a bridge on a great arch between two of them, an arcade, stairs, pools, cypresses",
-    "file": "v-demo.jpg"
-   },
-   {
-    "name": "demo-turned",
-    "title": "From another corner",
-    "caption": "turned a quarter: it settles on a corner",
-    "file": "v-demo-turned.jpg"
-   },
-   {
     "name": "close",
-    "title": "Close",
-    "caption": "the light gathered in the arches; the travertine, banded and pitted",
+    "title": "The stone, close",
+    "caption": "dressed travertine in courses, its joints staggered; pitted and banded; the light gathered under an arch",
     "file": "v-close.jpg"
    }
   ]
@@ -53,12 +59,6 @@
     "title": "As a print",
     "caption": "print: the light hatched, closer and crossed as it darkens",
     "file": "v-print.jpg"
-   },
-   {
-    "name": "print-close",
-    "title": "Close, as a print",
-    "caption": "the arches and stairs, in lines",
-    "file": "v-print-close.jpg"
    }
   ]
  }

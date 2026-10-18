@@ -1,166 +1,248 @@
 /**
- * Labyrinth: a flat travertine stone, and touches that build on it, one piece at a time (model.ts): blocks, arches (an
- * arch on an arch makes one tall arch), stairs, bridges (the whole gap at once, on one arch), cypresses, pools. **auto**
- * reads where it's touched: the stone takes a block; a block's top, a block on it; a block's side, a stair up onto it,
- * or a bridge out from it to whatever's across the gap. Drawn as a model in the sun on a table, in travertine, with
- * light gathering in its arches (render.ts); or as a print.
+ * Labyrinth: architecture that follows the hand. A travertine slab on a table in the sun, and three gestures
+ * (gesture.ts): **tap** raises stone; **trace** builds a wall, extends a walkway, or joins two places (in steps and
+ * landings if they're at different heights); **hold, then trace** carves. The hand decides the shape; the rules
+ * (model.ts) work out what it takes to stand: arches, arcades and piers under what has nothing beneath it, arched ways
+ * where stone's cut from under stone, courtyards (paved, with water and a cypress) where walls close round the ground.
  *
- * Touch to build. Drag sideways to turn it (it settles on a corner); pinch to come close. Undo; the eraser takes a
- * piece away (if nothing rests on it). What's built is kept on this device.
+ * One finger on the stone builds; one finger on the background, or two anywhere, turns it (it settles on a corner);
+ * pinch to come close. Undo, print, clear. What's built is kept on this device.
  *
- * `?p=` (pieces, as the model writes them) · `?demo` · `?print` · `?turn=` (quarter turns) · `?zoom=` · `?hand=` ·
- * `?preview` (the index's card: the demo, turning slowly) · `?still`
+ * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
+ * `?ops=` (operations, as the model writes them) · `?print` · `?turn=` · `?zoom=` · `?preview` · `?still`
  */
-import { DIRS, Labyrinth, N, H, decide, replay, type Kind } from './model';
+import { N, World, replay } from './model';
 import { buildMesh, inStone } from './mesh';
 import { Renderer, camera, invert, type View } from './render';
-import { demo } from './demo';
+import { carve, surface, tap, trace, type Pick } from './gesture';
+import { story } from './demo';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview'), still = qs.has('still');
-const canvas = document.getElementById('stone') as HTMLCanvasElement;
+const canvas = document.getElementById('stone') as HTMLCanvasElement, guide = document.getElementById('guide') as HTMLCanvasElement;
+const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
 R.print = qs.has('print');
 R.shadows = !qs.has('noshadow');
 
 // ─── what's built ───
-const KEY = 'labyrinth.v2';
-let model: Labyrinth;
-if (preview || qs.has('demo')) model = demo();
-else if (qs.has('p')) model = replay(qs.get('p')!);
-else { let kept = ''; try { kept = localStorage.getItem(KEY) ?? ''; } catch { /* */ } model = replay(kept); }
-const fixed = preview || qs.has('demo') || qs.has('p');
-const keep = () => { if (fixed) return; try { localStorage.setItem(KEY, model.encode()); } catch { /* */ } };
+const KEY = 'labyrinth.v3';
+let world: World;
+if (preview) world = story(4);
+else if (qs.has('story')) world = story(Number(qs.get('story')));
+else if (qs.has('ops')) world = replay(qs.get('ops')!);
+else { let kept = ''; try { kept = localStorage.getItem(KEY) ?? ''; } catch { /* */ } world = replay(kept); }
+const fixed = preview || qs.has('story') || qs.has('ops');
+const keep = () => { if (fixed) return; try { localStorage.setItem(KEY, world.encode()); } catch { /* */ } };
 let meshVersion = -1;
-function remesh() { R.upload(buildMesh(model)); meshVersion = model.version; }
+function remesh() { R.upload(buildMesh(world)); meshVersion = world.version; }
 
 // ─── how it's seen ───
-/** the four corners it settles on: a quarter turn apart, each looking down a diagonal */
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
 const view: View = { az: corner(Number(qs.get('turn') ?? 0)), el: 0.6, zoom: 1, target: [0, 0, 0] };
 let fit = 1, zoomK = Number(qs.get('zoom') ?? 0.64), azGoal: number | null = null;
 function resize() {
   const dpr = Math.min(2, devicePixelRatio || 1);
   canvas.width = Math.round(canvas.clientWidth * dpr); canvas.height = Math.round(canvas.clientHeight * dpr);
+  guide.width = Math.round(guide.clientWidth * dpr); guide.height = Math.round(guide.clientHeight * dpr);
+  g2.setTransform(dpr, 0, 0, dpr, 0, 0);
   const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight), half = (N / 2 + 1) * Math.SQRT2;
   fit = Math.max(half / aspect, half * 0.75) * 1.04;
 }
 addEventListener('resize', resize); resize();
-/** the way the eye looks, along the ground: the nearest of the four ways */
-const looking = () => { const dx = -Math.sin(view.az), dz = -Math.cos(view.az); return DIRS.findIndex(([a, b]) => a === (Math.abs(dx) > Math.abs(dz) ? Math.sign(dx) : 0) && b === (Math.abs(dx) > Math.abs(dz) ? 0 : Math.sign(dz))); };
 
-// ─── touching it ───
 let t0 = performance.now();
 const now = () => (performance.now() - t0) / 1000;
-/** what a point on the screen touches: the cell it strikes (k −1: the stone) and the free cell on that face's side */
-function pick(cx: number, cy: number): { hit: [number, number, number]; to: [number, number, number] } | null {
+/** a point on the screen as a ray into the room */
+function ray(cx: number, cy: number) {
   const r = canvas.getBoundingClientRect(), x = ((cx - r.left) / r.width) * 2 - 1, y = 1 - ((cy - r.top) / r.height) * 2;
-  const cam = camera(view, r.width / r.height), inv = invert(cam.vp);
+  const inv = invert(camera(view, r.width / r.height).vp);
   const un = (z: number) => { const v = [x, y, z, 1], o = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) for (let k = 0; k < 4; k++) o[i] += inv[k * 4 + i] * v[k]; return [o[0] / o[3], o[1] / o[3], o[2] / o[3]]; };
-  const a = un(-1), b = un(1), L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]), d = [(b[0] - a[0]) / L, (b[1] - a[1]) / L, (b[2] - a[2]) / L];
-  const topY = model.top() * H + 1;
+  const a = un(-1), b = un(1), L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  return { a, d: [(b[0] - a[0]) / L, (b[1] - a[1]) / L, (b[2] - a[2]) / L], L };
+}
+/** what a point on the screen touches: the slab, a top, or a side; the cell struck and the free cell on that face's side */
+function pick(cx: number, cy: number): Pick | null {
+  const { a, d, L } = ray(cx, cy), topY = world.top() + 1;
   let t = d[1] < 0 ? Math.max(0, (a[1] - topY) / -d[1]) : 0, prev: number[] | null = null;
   const cell = (p: number[]) => [Math.floor(p[1]), Math.floor(p[0] + N / 2), Math.floor(p[2] + N / 2)] as [number, number, number];
-  for (; t < L; t += 0.015) {
+  for (; t < L; t += 0.012) {
     const p = [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t];
     if (p[1] < -1) return null;
-    if (!inStone(model, p[0], p[1], p[2])) { prev = p; continue; }
+    if (!inStone(world, p[0], p[1], p[2])) { prev = p; continue; }
     const hit = cell(p);
     if (hit[1] < 0 || hit[2] < 0 || hit[1] >= N || hit[2] >= N) return null;
-    if (p[1] < 0) return { hit: [-1, hit[1], hit[2]], to: [0, hit[1], hit[2]] };
-    let to = prev ? cell(prev) : [hit[0] + 1, hit[1], hit[2]] as [number, number, number];
-    if (to[0] === hit[0] && to[1] === hit[1] && to[2] === hit[2]) to = [hit[0] + 1, hit[1], hit[2]];
-    return { hit, to: [Math.max(0, to[0]), to[1], to[2]] };
+    if (p[1] < 0) return { face: 'ground', hit: [-1, hit[1], hit[2]], to: [0, hit[1], hit[2]] };
+    // (struck in the stone over an arch, from below its own cell: it's that cell's)
+    while (!world.occupied(hit[0], hit[1], hit[2]) && hit[0] + 1 < 8) hit[0]++;
+    const to = prev ? cell(prev) : [hit[0] + 1, hit[1], hit[2]] as [number, number, number];
+    const face = to[1] === hit[1] && to[2] === hit[2] ? 'top' : 'side';
+    return { face, hit, to: face === 'top' ? [hit[0] + 1, hit[1], hit[2]] : [hit[0], to[1], to[2]] };
   }
   return null;
 }
-type Hand = Kind | 'auto' | 'erase';
-let hand: Hand = (qs.get('hand') as Hand) ?? 'auto';
-const SAYS: Partial<Record<Hand, string>> = { bridge: 'a bridge goes across a gap, from stone to stone level with it', pool: 'a pool is let into the stone itself', cypress: 'a cypress wants a floor, and room above it', stair: 'a stair wants a floor to start from', arch: 'an arch stands on the stone, or on stone', block: 'a block stands on the stone, or on stone', auto: 'nothing to build there' };
-function touch(cx: number, cy: number): boolean {
-  const at = pick(cx, cy);
-  if (!at) return false;
-  if (hand === 'erase') {
-    const p = model.pieceAt(Math.max(0, at.hit[0]), at.hit[1], at.hit[2]);
-    if (!p || (at.hit[0] < 0 && p.kind !== 'pool')) return false;
-    if (!model.remove(p)) { say('something rests on it: take that away first'); return false; }
-    keep(); hint(); return true;
-  }
-  const d = decide(model, hand, at.hit, at.to, looking());
-  const p = d && model.place(d.kind, d.k, d.i, d.j, d.a, d.n, now());
-  if (!p) { say(SAYS[hand] ?? ''); return false; }
-  keep(); hint();
-  return true;
+/** where a point on the screen is on the level plane at height y (a cell) */
+function onPlane(cx: number, cy: number, y: number): [number, number] | null {
+  const { a, d } = ray(cx, cy);
+  if (Math.abs(d[1]) < 1e-6) return null;
+  const t = (y - a[1]) / d[1], x = a[0] + d[0] * t, z = a[2] + d[2] * t;
+  const i = Math.floor(x + N / 2), j = Math.floor(z + N / 2);
+  return i >= 0 && j >= 0 && i < N && j < N ? [i, j] : null;
 }
-let hintT = 0;
-function say(text: string) { const el = document.getElementById('hint')!; el.textContent = text; el.classList.add('on'); clearTimeout(hintT); hintT = window.setTimeout(hint, 2400); }
-function hint() {
-  const el = document.getElementById('hint')!, n = model.pieces.length;
-  el.textContent = n === 0 ? 'touch the stone to build' : n < 4 && hand === 'auto' ? 'touch a block’s top to raise it, its side to climb it' : '';
-  el.classList.toggle('on', !!el.textContent);
+/** where a point of the room is on the screen (css pixels) */
+function screenOf(x: number, y: number, z: number): [number, number] {
+  const r = canvas.getBoundingClientRect(), m = camera(view, r.width / r.height).vp, p = [x, y, z, 1];
+  const o = [0, 1, 3].map((row) => m[row] * p[0] + m[4 + row] * p[1] + m[8 + row] * p[2] + m[12 + row] * p[3]);
+  return [r.left + (o[0] / o[2] * 0.5 + 0.5) * r.width, r.top + (1 - (o[1] / o[2] * 0.5 + 0.5)) * r.height];
 }
 
-// (a touch that doesn't move builds; a drag sideways turns it; two fingers, a pinch)
-const fingers = new Map<number, { x: number; y: number; x0: number; y0: number; t0: number }>();
-let pinch0 = 0, zoom0 = 1, turned = false;
+// ─── dust, as stone settles ───
+const dust: Array<{ x: number; y: number; vx: number; vy: number; life: number; r: number }> = [];
+function settle(cells: Array<[number, number, number]>, at = 0.85) {
+  for (const [k, i, j] of cells.slice(0, 30)) {
+    const [sx, sy] = screenOf(i - N / 2 + 0.5, k, j - N / 2 + 0.5);
+    for (let q = 0; q < 9; q++) dust.push({ x: sx + (Math.random() - 0.5) * 14, y: sy + (Math.random() - 0.5) * 6, vx: (Math.random() - 0.5) * 30, vy: -8 - Math.random() * 14, life: -at - Math.random() * 0.15, r: 0.6 + Math.random() * 1.2 });
+  }
+}
+
+// ─── the hand ───
+type Gesture = { id: number; start: Pick | null; x0: number; y0: number; t0: number; mode: 'pending' | 'trace' | 'carve' | 'turn'; pts: Array<[number, number]>; base: number; seen: Map<string, number>; hold: number; cut: Array<[number, number, number]> };
+let g: Gesture | null = null;
+const fingers = new Map<number, { x: number; y: number }>();
+let pinch0 = 0, zoom0 = 1, mid0 = 0;
+function hint(text?: string) {
+  const el = document.getElementById('hint')!;
+  el.textContent = text ?? (world.ops.length === 0 ? 'tap the stone to raise it · trace to build · hold to carve' : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
+  el.classList.toggle('on', !!el.textContent);
+}
+let hintT = 0;
+const say = (t: string) => { hint(t); clearTimeout(hintT); hintT = window.setTimeout(() => hint(), 2400); };
+const kept = () => { keep(); hint(); };
+
+function traceStep(cx: number, cy: number, final: boolean) {
+  if (!g?.start) return;
+  // (read against the world as it was before this trace)
+  if (world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); }
+  const h0 = surface(world, g.start), end = pick(cx, cy);
+  const h1 = end && end.face !== 'ground' ? surface(world, end) : h0;
+  const pts = g.pts, cells: Array<[number, number]> = [[g.start.hit[1], g.start.hit[2]]];
+  pts.forEach(([x, y], q) => { const c = onPlane(x, y, h0 + ((h1 - h0) * q) / Math.max(1, pts.length - 1)); if (c) cells.push(c); });
+  for (const [i, j] of cells) if (!g.seen.has(`${i}.${j}`)) g.seen.set(`${i}.${j}`, now());
+  const op = trace(world, g.start, cells, end, (i, j) => g!.seen.get(`${i}.${j}`) ?? now());
+  if (op) world.apply(op, now());
+  if (final && op) { settle((op.add ?? []).map((c) => [c[0], c[1], c[2]])); kept(); }
+}
+function carveAt(cx: number, cy: number) {
+  if (!g) return;
+  const p = pick(cx, cy), c = p && carve(world, p);
+  if (!c || g.cut.some((q) => q[0] === c[0] && q[1] === c[1] && q[2] === c[2])) return;
+  g.cut.push(c);
+  if (world.ops.length > g.base) world.replaceLast({ cut: g.cut.slice(), why: 'carve' }, now()); else world.apply({ cut: g.cut.slice(), why: 'carve' }, now());
+}
+
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
-  fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now() });
-  if (fingers.size === 2) { const [p, q] = [...fingers.values()]; pinch0 = Math.hypot(p.x - q.x, p.y - q.y); zoom0 = zoomK; }
-  azGoal = null; turned = false;
+  fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  azGoal = null;
+  if (fingers.size === 2) {
+    // (a second finger: whatever the first was doing is let go; the two turn it and pinch)
+    if (g && g.mode !== 'turn' && world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); }
+    if (g) clearTimeout(g.hold);
+    g = null;
+    const [p, q] = [...fingers.values()]; pinch0 = Math.hypot(p.x - q.x, p.y - q.y); zoom0 = zoomK; mid0 = (p.x + q.x) / 2;
+    return;
+  }
+  const start = pick(e.clientX, e.clientY);
+  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: start ? 'pending' : 'turn', pts: [], base: world.ops.length, seen: new Map(), hold: 0, cut: [] };
+  if (start) g.hold = window.setTimeout(() => { if (g && g.mode === 'pending') { g.mode = 'carve'; navigator.vibrate?.(8); carveAt(g.x0, g.y0); } }, 420);
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId);
   if (!f) return;
   const dx = e.clientX - f.x; f.x = e.clientX; f.y = e.clientY;
-  if (fingers.size === 2) { const [p, q] = [...fingers.values()], d = Math.hypot(p.x - q.x, p.y - q.y); if (pinch0 > 0) zoomK = Math.max(0.25, Math.min(1.3, zoom0 * (pinch0 / d))); turned = true; return; }
-  if (Math.hypot(e.clientX - f.x0, e.clientY - f.y0) > 8) { turned = true; view.az -= dx * 0.008; }
+  if (fingers.size === 2) {
+    const [p, q] = [...fingers.values()], d = Math.hypot(p.x - q.x, p.y - q.y), mid = (p.x + q.x) / 2;
+    if (pinch0 > 0) zoomK = Math.max(0.25, Math.min(1.3, zoom0 * (pinch0 / d)));
+    view.az -= (mid - mid0) * 0.008; mid0 = mid;
+    return;
+  }
+  if (!g || g.id !== e.pointerId) return;
+  const moved = Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > 9;
+  if (g.mode === 'turn') { view.az -= dx * 0.008; return; }
+  if (g.mode === 'pending' && moved) { g.mode = 'trace'; clearTimeout(g.hold); g.pts.push([g.x0, g.y0]); }
+  if (g.mode === 'trace') { g.pts.push([e.clientX, e.clientY]); traceStep(e.clientX, e.clientY, false); }
+  if (g.mode === 'carve') carveAt(e.clientX, e.clientY);
 });
 const up = (e: PointerEvent) => {
-  const f = fingers.get(e.pointerId);
   fingers.delete(e.pointerId);
-  if (!f) return;
-  if (!turned && e.type === 'pointerup' && performance.now() - f.t0 < 500) touch(e.clientX, e.clientY);
   if (fingers.size === 0) azGoal = corner(Math.round((view.az - Math.PI / 4) / (Math.PI / 2)));
+  if (!g || g.id !== e.pointerId) return;
+  clearTimeout(g.hold);
+  const cancelled = e.type !== 'pointerup';
+  if (g.mode === 'pending' && !cancelled && g.start) {
+    const op = tap(world, g.start, now());
+    if (op) { world.apply(op, now()); settle(op.add!.map((c) => [c[0], c[1], c[2]])); kept(); } else say('nothing more will stand there');
+  } else if (g.mode === 'trace') {
+    if (cancelled) { world.ops.length = g.base; world.rebuild(now()); } else traceStep(e.clientX, e.clientY, true);
+  } else if (g.mode === 'carve') kept();
+  g = null;
 };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomK = Math.max(0.25, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001))); }, { passive: false });
 
 // ─── its buttons ───
-const hands = document.getElementById('hands')!;
-function showHand() { for (const b of Array.from(hands.querySelectorAll('button')) as HTMLElement[]) { b.classList.toggle('on', b.dataset.hand === hand); b.setAttribute('aria-pressed', String(b.dataset.hand === hand)); } }
-for (const b of Array.from(hands.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => { hand = b.dataset.hand as Hand; showHand(); hint(); });
 const printB = document.getElementById('print')!;
 const showPrint = () => { printB.classList.toggle('on', R.print); printB.setAttribute('aria-pressed', String(R.print)); };
 printB.addEventListener('click', () => { R.print = !R.print; showPrint(); });
-document.getElementById('undo')!.addEventListener('click', () => { if (model.undo()) { keep(); hint(); } });
-document.getElementById('again')!.addEventListener('click', () => { if (!model.pieces.length || confirm('Clear the stone?')) { model = new Labyrinth(); keep(); hint(); } });
-showHand(); showPrint(); hint();
+document.getElementById('undo')!.addEventListener('click', () => { if (world.undo(now())) kept(); });
+document.getElementById('again')!.addEventListener('click', () => { if (!world.ops.length || confirm('Clear the stone?')) { world.clear(); kept(); } });
+showPrint(); hint();
 if (preview) document.body.classList.add('preview');
 
 // ─── each frame ───
-let last = performance.now();
+let last = performance.now(), zoomFit = fit;
 function frame() {
   const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000); last = t;
-  if (model.version !== meshVersion) remesh();
+  if (world.version !== meshVersion) remesh();
   if (preview && !still) view.az += dt * 0.12;
   else if (azGoal !== null) { const k = 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
-  const top = model.top() * H;
-  view.target[1] += (top * 0.4 - view.target[1]) * (1 - Math.exp(-dt * 3));
-  view.zoom = (fit + top * 0.3) * zoomK;
+  // (it frames what's built, but never while a hand's on it: what's under the finger stays under it)
+  if (!g || g.mode === 'turn') {
+    const top = world.top();
+    view.target[1] += (top * 0.35 - view.target[1]) * (1 - Math.exp(-dt * 3));
+    zoomFit += (fit + top * 0.25 - zoomFit) * (1 - Math.exp(-dt * 3));
+  }
+  view.zoom = zoomFit * zoomK;
   R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
+  // (the guides, only while a finger's down: the stroke traced, in faint ink; the ring a hold fills before it carves)
+  g2.clearRect(0, 0, guide.clientWidth, guide.clientHeight);
+  if (g && g.mode === 'trace' && g.pts.length > 1) {
+    g2.strokeStyle = 'rgba(43,36,32,.35)'; g2.lineWidth = 1.5; g2.setLineDash([2, 5]); g2.lineCap = 'round';
+    g2.beginPath(); g2.moveTo(g.pts[0][0], g.pts[0][1]); for (const [x, y] of g.pts) g2.lineTo(x, y); g2.stroke(); g2.setLineDash([]);
+  }
+  if (g && (g.mode === 'pending' || g.mode === 'carve') && g.start) {
+    const held = Math.min(1, (performance.now() - g.t0) / 420), f = fingers.get(g.id), x = f?.x ?? g.x0, y = f?.y ?? g.y0;
+    if (held > 0.35 || g.mode === 'carve') {
+      g2.strokeStyle = g.mode === 'carve' ? 'rgba(43,36,32,.55)' : 'rgba(43,36,32,.3)'; g2.lineWidth = 1.5;
+      g2.beginPath(); g2.arc(x, y, 30, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (g.mode === 'carve' ? 1 : (held - 0.35) / 0.65)); g2.stroke();
+    }
+  }
+  for (let q = dust.length - 1; q >= 0; q--) {
+    const p = dust[q];
+    p.life += dt;
+    if (p.life > 1.1) { dust.splice(q, 1); continue; }
+    if (p.life < 0) continue;
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 12 * dt; p.vx *= 0.97;
+    g2.fillStyle = `rgba(150,128,100,${(0.45 * (1 - p.life / 1.1)).toFixed(3)})`;
+    g2.beginPath(); g2.arc(p.x, p.y, p.r, 0, Math.PI * 2); g2.fill();
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
-  get model() { return model; }, view, R, pick, touch,
-  setHand: (h: Hand) => { hand = h; showHand(); },
-  probe: () => ({ pieces: model.pieces.length, top: model.top(), version: model.version, encoded: model.encode(), hand }),
-  /** where a point of the room is on the screen (css pixels); (i, j) a cell, y a height */
-  screenOf: (i: number, j: number, y: number) => {
-    const r = canvas.getBoundingClientRect(), cam = camera(view, r.width / r.height), p = [i - N / 2 + 0.5, y, j - N / 2 + 0.5, 1], m = cam.vp;
-    const o = [0, 1, 3].map((row) => m[row] * p[0] + m[4 + row] * p[1] + m[8 + row] * p[2] + m[12 + row] * p[3]);
-    return [r.left + (o[0] / o[2] * 0.5 + 0.5) * r.width, r.top + (1 - (o[1] / o[2] * 0.5 + 0.5)) * r.height];
-  },
+  get world() { return world; }, view, R, pick, onPlane,
+  probe: () => ({ ops: world.ops.length, top: world.top(), stone: world.mass.size, stairs: world.stairs.size, piers: world.piers.size, arches: world.spans.length, courts: world.courts.size, decor: world.decor.length, whys: world.ops.map((o) => o.why ?? '') }),
+  /** where a point of the room is on the screen (css pixels): a cell (i, j), at height y, fractions toward its sides */
+  screenOf: (i: number, j: number, y: number) => screenOf(i - N / 2 + 0.5, y, j - N / 2 + 0.5),
 };
