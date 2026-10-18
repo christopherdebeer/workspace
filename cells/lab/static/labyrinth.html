@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-exp="labyrinth">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#efe8da">
+  <title>Labyrinth</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #efe8da; overflow: hidden; touch-action: none; }
+    body { color: #2b2420; font-family: "Iowan Old Style", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 16px; right: 16px; display: flex; align-items: baseline; gap: 14px; z-index: 2; pointer-events: none; }
+    nav a { pointer-events: auto; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; color: #2b2420; text-decoration: none; opacity: .75; min-height: 44px; display: flex; align-items: center; }
+    nav h1 { margin: 0; font-weight: 400; font-size: 15px; letter-spacing: .32em; text-transform: uppercase; }
+    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 70px); text-align: center; font-style: italic; font-size: 16px; opacity: 0; transition: opacity .6s; pointer-events: none; text-shadow: 0 0 8px #efe8da, 0 0 3px #efe8da; }
+    #hint.on { opacity: .85; }
+    #acts { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); display: flex; justify-content: center; gap: 10px; z-index: 2; }
+    #acts button { appearance: none; border: 1px solid rgba(43,36,32,.35); background: rgba(239,232,218,.82); color: #2b2420; font: inherit; font-size: 15px; letter-spacing: .06em; min-height: 44px; padding: 0 18px; border-radius: 22px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #acts button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    #acts button.on { background: #2b2420; color: #efe8da; border-color: #2b2420; }
+    .preview nav, .preview #acts, .preview #hint { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="stone"></canvas>
+  <nav><a href="/">← lab</a><h1>Labyrinth</h1></nav>
+  <div id="hint"></div>
+  <div id="acts">
+    <button id="print" aria-pressed="false" title="draw it as a print"><svg viewBox="0 0 20 20"><path d="M3 17L17 3M3 11L11 3M9 17L17 9M3 5l2-2M15 17l2-2"/></svg>print</button>
+    <button id="again" title="clear the stone"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5"/><path d="M3.5 3v3.5H7"/></svg>again</button>
+  </div>
+  <script src="{{app}}"></script>
+</body>
+</html>

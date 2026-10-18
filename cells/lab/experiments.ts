@@ -25,8 +25,14 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'labyrinth', title: 'Labyrinth', group: 'Play',
+    blurb: 'A flat stone, and touches that build on it. Each touch raises the stone round it a level: walls of a block maze rise, and touched again, the next level stands on arches over the passages below, its grid offset from theirs so its rooms sit on the posts beneath and its posts on cross vaults. Every level a perfect maze; dead ends with stairs up onto the walls, whose tops are walkways. Drawn as the prints draw such things: square to nothing, in ink, or hatched as a lithograph.',
+    page: 'static/labyrinth.html', preview: 'preview', readme: 'static/labyrinth.md',
+    presets: [{ label: 'the stone', query: '' }, { label: 'a labyrinth, built', query: 'seed=7&taps=8.8,8.8,8.8,4.12,12.4,8.8,12.12,4.4,8.8' }, { label: 'as a print', query: 'seed=7&taps=8.8,8.8,8.8,4.12,12.4,8.8,12.12,4.4,8.8&print' }],
+  },
+  {
     id: 'fab', title: 'Fab', group: 'Play',
-    blurb: 'A dressmaking workbench for children. Start at the rails (the workshop\'s, one for each kind of thing, and one for each person) and put something on the little wooden figure: a skirt, a top, a dress, trousers or a jumpsuit. Work a skirt\'s paper pattern by hand, as a cutter does (slash and spread it, fold pleats, gather, close darts into flare; every move recorded), and decide what a dressmaker decides about the rest: a bodice\'s neckline, sleeves (plain, puffed, bell) and collar, trousers\' legs, tiers. Every pattern is drafted to the figure after GarmentCode (armholes, sleeve heads solved to fit them, crotch curves, darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that says what it does and doesn\'t establish.',
+    blurb: 'A dressmaking workbench for children. Start at the rails (the workshop\'s, and one for each person) and put something on the little wooden figure: a skirt, a top, a dress, trousers or a jumpsuit. Work a skirt\'s paper pattern by hand, as a cutter does (slash and spread it, fold pleats, gather, close darts into flare; every move recorded), and decide what a dressmaker decides about the rest: a bodice\'s neckline, sleeves (plain, puffed, bell) and collar, trousers\' legs, tiers. Every pattern is drafted to the figure after GarmentCode (armholes, sleeve heads solved to fit them, crotch curves, darts and all), sewn up round it, and falls as that cloth falls: its silhouette, folds and swing are found, never set. With an evidence bench that says what it does and doesn\'t establish.',
     page: 'static/fab.html', preview: 'preview&fabric=lawn&print=2&colour=1', readme: 'static/fab.md',
     presets: [
       { label: 'the rails', query: '' },

@@ -1,0 +1,77 @@
+[
+ {
+  "group": "Building",
+  "views": [
+   {
+    "name": "stone",
+    "title": "The stone",
+    "caption": "where it starts: a flat stone, and nothing on it",
+    "file": "v-stone.jpg"
+   },
+   {
+    "name": "one",
+    "title": "A touch",
+    "caption": "the walls of a maze rise round where it was touched",
+    "file": "v-one.jpg"
+   },
+   {
+    "name": "three",
+    "title": "Three touches, in one place",
+    "caption": "each touch builds a level higher there, and spreads the ones below",
+    "file": "v-three.jpg"
+   },
+   {
+    "name": "built",
+    "title": "A labyrinth",
+    "caption": "nine touches: a mound of levels, each a maze, each on arches over the one below",
+    "file": "v-built.jpg"
+   },
+   {
+    "name": "built-turned",
+    "title": "From another corner",
+    "caption": "turned a quarter: it settles on a corner, looking down a diagonal",
+    "file": "v-built-turned.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Arches and stairs",
+  "views": [
+   {
+    "name": "arches",
+    "title": "Arches",
+    "caption": "the passages below run on under the level above: its walls and walkways stand on arches",
+    "file": "v-arches.jpg"
+   },
+   {
+    "name": "stairs",
+    "title": "Stairs",
+    "caption": "dead ends nothing's built over climb onto the wall at their end: the walls' tops are walkways",
+    "file": "v-stairs.jpg"
+   },
+   {
+    "name": "tower",
+    "title": "A tower",
+    "caption": "touched five times in the same place",
+    "file": "v-tower.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Print",
+  "views": [
+   {
+    "name": "print",
+    "title": "As a print",
+    "caption": "print: the light hatched, closer and crossed as it darkens",
+    "file": "v-print.jpg"
+   },
+   {
+    "name": "print-close",
+    "title": "Close, as a print",
+    "caption": "the arches and stairs, in lines",
+    "file": "v-print-close.jpg"
+   }
+  ]
+ }
+]
