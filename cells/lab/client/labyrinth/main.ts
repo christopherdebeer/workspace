@@ -16,6 +16,8 @@ import { buildMesh, inStone } from './mesh';
 import { Renderer, camera, invert, type View } from './render';
 import { carve, surface, tap, trace, type Pick } from './gesture';
 import { story } from './demo';
+import { place, type Hand } from './palette';
+import { DIRS } from './model';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview'), still = qs.has('still');
@@ -74,7 +76,9 @@ function pick(cx: number, cy: number): Pick | null {
     if (hit[1] < 0 || hit[2] < 0 || hit[1] >= N || hit[2] >= N) return null;
     if (p[1] < 0) return { face: 'ground', hit: [-1, hit[1], hit[2]], to: [0, hit[1], hit[2]] };
     // (struck in the stone over an arch, from below its own cell: it's that cell's)
-    while (!world.occupied(hit[0], hit[1], hit[2]) && hit[0] + 1 < 8) hit[0]++;
+    if (!world.occupied(hit[0], hit[1], hit[2]) && !world.tree(hit[0], hit[1], hit[2]) && !world.tree(hit[0] - 1, hit[1], hit[2])) {
+      for (let k = hit[0] + 1; k < 8; k++) if (world.span(k, hit[1], hit[2])) { hit[0] = k; break; }
+    }
     const to = prev ? cell(prev) : [hit[0] + 1, hit[1], hit[2]] as [number, number, number];
     const face = to[1] === hit[1] && to[2] === hit[2] ? 'top' : 'side';
     return { face, hit, to: face === 'top' ? [hit[0] + 1, hit[1], hit[2]] : [hit[0], to[1], to[2]] };
@@ -106,13 +110,20 @@ function settle(cells: Array<[number, number, number]>, at = 0.85) {
 }
 
 // ─── the hand ───
-type Gesture = { id: number; start: Pick | null; x0: number; y0: number; t0: number; mode: 'pending' | 'trace' | 'carve' | 'turn'; pts: Array<[number, number]>; base: number; seen: Map<string, number>; hold: number; cut: Array<[number, number, number]> };
+let hand: Hand = (qs.get('hand') as Hand) ?? 'auto';
+/** the way the eye looks, along the ground: the nearest of the four ways */
+const looking = () => { const dx = -Math.sin(view.az), dz = -Math.cos(view.az); return DIRS.findIndex(([a, b]) => a === (Math.abs(dx) > Math.abs(dz) ? Math.sign(dx) : 0) && b === (Math.abs(dx) > Math.abs(dz) ? 0 : Math.sign(dz))); };
+type Gesture = { id: number; start: Pick | null; x0: number; y0: number; t0: number; mode: 'pending' | 'trace' | 'carve' | 'turn' | 'piece'; pts: Array<[number, number]>; base: number; seen: Map<string, number>; hold: number; cut: Array<[number, number, number]> };
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
 let pinch0 = 0, zoom0 = 1, mid0 = 0;
+const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the stone itself', take: 'nothing of yours there to take' };
+const hands = document.getElementById('hands')!;
+function showHand() { for (const b of Array.from(hands.querySelectorAll('button')) as HTMLElement[]) { b.classList.toggle('on', b.dataset.hand === hand); b.setAttribute('aria-pressed', String(b.dataset.hand === hand)); } }
+for (const b of Array.from(hands.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => { hand = b.dataset.hand as Hand; showHand(); hint(); });
 function hint(text?: string) {
   const el = document.getElementById('hint')!;
-  el.textContent = text ?? (world.ops.length === 0 ? 'tap the stone to raise it · trace to build · hold to carve' : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
+  el.textContent = text ?? (hand !== 'auto' ? '' : world.ops.length === 0 ? 'tap the stone to raise it · trace to build · hold to carve' : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
   el.classList.toggle('on', !!el.textContent);
 }
 let hintT = 0;
@@ -153,8 +164,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   const start = pick(e.clientX, e.clientY);
-  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: start ? 'pending' : 'turn', pts: [], base: world.ops.length, seen: new Map(), hold: 0, cut: [] };
-  if (start) g.hold = window.setTimeout(() => { if (g && g.mode === 'pending') { g.mode = 'carve'; navigator.vibrate?.(8); carveAt(g.x0, g.y0); } }, 420);
+  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: !start ? 'turn' : hand === 'auto' ? 'pending' : 'piece', pts: [], base: world.ops.length, seen: new Map(), hold: 0, cut: [] };
+  if (start && hand === 'auto') g.hold = window.setTimeout(() => { if (g && g.mode === 'pending') { g.mode = 'carve'; navigator.vibrate?.(8); carveAt(g.x0, g.y0); } }, 420);
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId);
@@ -169,6 +180,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (!g || g.id !== e.pointerId) return;
   const moved = Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > 9;
   if (g.mode === 'turn') { view.az -= dx * 0.008; return; }
+  // (a piece in hand: a drag turns it)
+  if (g.mode === 'piece' && moved) { g.mode = 'turn'; view.az -= (e.clientX - g.x0) * 0.008; return; }
   if (g.mode === 'pending' && moved) { g.mode = 'trace'; clearTimeout(g.hold); g.pts.push([g.x0, g.y0]); }
   if (g.mode === 'trace') { g.pts.push([e.clientX, e.clientY]); traceStep(e.clientX, e.clientY, false); }
   if (g.mode === 'carve') carveAt(e.clientX, e.clientY);
@@ -179,7 +192,11 @@ const up = (e: PointerEvent) => {
   if (!g || g.id !== e.pointerId) return;
   clearTimeout(g.hold);
   const cancelled = e.type !== 'pointerup';
-  if (g.mode === 'pending' && !cancelled && g.start) {
+  if (g.mode === 'piece' && !cancelled && g.start && hand !== 'auto') {
+    const op = place(world, hand, g.start, looking(), now());
+    if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); }
+    else say(SAYS[hand]);
+  } else if (g.mode === 'pending' && !cancelled && g.start) {
     const op = tap(world, g.start, now());
     if (op) { world.apply(op, now()); settle(op.add!.map((c) => [c[0], c[1], c[2]])); kept(); } else say('nothing more will stand there');
   } else if (g.mode === 'trace') {
@@ -196,7 +213,7 @@ const showPrint = () => { printB.classList.toggle('on', R.print); printB.setAttr
 printB.addEventListener('click', () => { R.print = !R.print; showPrint(); });
 document.getElementById('undo')!.addEventListener('click', () => { if (world.undo(now())) kept(); });
 document.getElementById('again')!.addEventListener('click', () => { if (!world.ops.length || confirm('Clear the stone?')) { world.clear(); kept(); } });
-showPrint(); hint();
+showPrint(); showHand(); hint();
 if (preview) document.body.classList.add('preview');
 
 // ─── each frame ───
@@ -241,7 +258,7 @@ function frame() {
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
-  get world() { return world; }, view, R, pick, onPlane,
+  get world() { return world; }, view, R, pick, onPlane, setHand: (h: Hand) => { hand = h; showHand(); },
   probe: () => ({ ops: world.ops.length, top: world.top(), stone: world.mass.size, stairs: world.stairs.size, piers: world.piers.size, arches: world.spans.length, courts: world.courts.size, decor: world.decor.length, whys: world.ops.map((o) => o.why ?? '') }),
   /** where a point of the room is on the screen (css pixels): a cell (i, j), at height y, fractions toward its sides */
   screenOf: (i: number, j: number, y: number) => screenOf(i - N / 2 + 0.5, y, j - N / 2 + 0.5),

@@ -12,6 +12,7 @@ export const views = [
   { name: 'story-3', group: 'The storyboard', title: '3 · An elevated connection', caption: 'a terrace tapped up higher; a trace from the platform\'s top along the wall\'s and up to it: landings on the wall, a step up at the end, piers where there\'s nothing under it', query: 'story=3&zoom=0.5' },
   { name: 'story-4', group: 'The storyboard', title: '4 · A resolved labyrinth', caption: 'a passage carved under the walkway (an arch carries it); the court walled in (paved, water, a cypress); a tower, and a trace from its top to the terrace: a bridge on one great arch', query: 'story=4&zoom=0.5' },
   { name: 'story-4-turned', group: 'The storyboard', title: 'From the other side', caption: 'the bridge\'s great arch, the passage under the walkway, the court', query: 'story=4&zoom=0.5&turn=3' },
+  { name: 'palette', group: 'The palette', title: 'With the palette', caption: 'the same, and pieces put by hand: a tall arch, a long bridge from its top, a pool, cypresses on the terraces', query: 'story=5&zoom=0.5&turn=3' },
   { name: 'close', group: 'Close to', title: 'The stone, close', caption: 'dressed travertine in courses, its joints staggered; pitted and banded; the light gathered under an arch', query: 'story=4&zoom=0.3&turn=3' },
   { name: 'print', group: 'Print', title: 'As a print', caption: 'print: the light hatched, closer and crossed as it darkens', query: 'story=4&print&zoom=0.5&turn=3' },
 ];

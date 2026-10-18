@@ -65,5 +65,29 @@ await withWood(async (lab) => {
   c.ok('clear clears the stone', (await probe()).ops === 0);
   c.ok('nothing thrown', !p.errors.length, p.errors);
   await p.close();
+  {
+    // (the palette, on a fresh stone: each piece put where it's touched, on the same stone the gestures build)
+    const q = await lab.open('zoom=0.55&ops=[]');
+    await q.waitForTimeout(800);
+    const W2 = (f, ...a) => q.evaluate(([src, args]) => new Function('w', 'a', `return (${src})(w, ...a)`)(window.__labyrinth.world, args), [f.toString(), a]);
+    const piece = async (h, i, j, y) => { await q.evaluate((hh) => window.__labyrinth.setHand(hh), h); await q.waitForTimeout(700); const s = await q.evaluate(([a, b, d]) => window.__labyrinth.screenOf(a, b, d), [i, j, y]); await q.mouse.click(s[0], s[1]); await q.waitForTimeout(200); };
+    await piece('block', 4, 4, 0);
+    c.ok('block: on the stone where it\'s touched', await W2((w) => w.block(0, 4, 4)));
+    await piece('arch', 4, 5, 0);
+    c.ok('arch: stone with a way through it', await W2((w) => w.archway(0, 4, 5) >= 0));
+    await piece('arch', 4, 5, 1);
+    c.ok('arch on an arch: one tall arch, the same way', await W2((w) => w.archway(1, 4, 5) === w.archway(0, 4, 5)));
+    await piece('stair', 4.55, 4, 0.4);
+    c.ok('stair: against the block, climbing onto it', await W2((w) => w.stair(0, 5, 4) === 2));
+    for (const y of [0, 1]) { await piece('block', 7, 2, y); await piece('block', 7, 6, y); }
+    await piece('bridge', 7, 2.55, 1.5);
+    c.ok('bridge: across the gap, the whole span, on one arch', await W2((w) => [3, 4, 5].every((j) => w.stone(1, 7, j)) && w.span(1, 7, 4)?.n === 3), await W2((w) => JSON.stringify(w.spans)));
+    await piece('cypress', 9, 8, 0); await piece('pool', 8, 8, 0);
+    c.ok('cypress and pool where they\'re touched', await W2((w) => w.tree(0, 9, 8) && w.pool(8, 8)));
+    await piece('take', 4, 4, 1);
+    c.ok('take: the piece touched, gone', await W2((w) => !w.stone(0, 4, 4)));
+    c.ok('the palette: nothing thrown', !q.errors.length, q.errors);
+    await q.close();
+  }
 });
 c.done?.();

@@ -8,9 +8,11 @@
  *    carried on an arcade where there's nothing under them.
  * 4. **A resolved labyrinth**: a walkway out over the court, a passage cut beneath it, the court closed (so it's paved,
  *    with water and a cypress), and a second tower bridged to the first.
+ * 5. **With the palette**: the same, and pieces put by hand: a tall arch, a long bridge, a pool, cypresses on a terrace.
  */
 import { World, type Cell } from './model';
 import { carve, tap, trace, type Pick } from './gesture';
+import { place, type Hand } from './palette';
 
 const ground = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
 const top = (w: World, i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
@@ -37,5 +39,13 @@ export function story(stage: number): World {
   traceAt(ground(3, 8), [[3, 8], [3, 9], [3, 10], [4, 10], [5, 10], [6, 10], [7, 10], [8, 10], [9, 10], [9, 9], [9, 8]], null);
   for (const [i, j] of [[3, 3], [3, 4]]) { tapAt(ground(i, j)); tapAt(top(w, i, j)); tapAt(top(w, i, j)); }
   traceAt(top(w, 3, 4), [[3, 4], [4, 4], [5, 4], [6, 4], [7, 4], [8, 4]], top(w, 9, 4));
+  if (stage <= 4) return w;
+  // 5: pieces from the palette, put where a touch would put them
+  const put = (h: Exclude<Hand, 'auto'>, p: Pick) => { const op = place(w, h, p, 1, t); if (op) w.apply(op, t); };
+  put('arch', ground(10, 8)); put('arch', top(w, 10, 8)); put('block', top(w, 10, 8));
+  put('block', ground(10, 10)); put('block', top(w, 10, 10)); put('block', top(w, 10, 10));
+  put('bridge', side(2, 10, 8, 0, 1));
+  put('pool', ground(6, 2)); put('pool', ground(7, 2));
+  put('cypress', top(w, 10, 4)); put('cypress', top(w, 3, 3)); put('cypress', ground(1, 9));
   return w;
 }

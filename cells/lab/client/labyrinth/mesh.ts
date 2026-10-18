@@ -19,7 +19,7 @@ import { DECK, DIRS, LEVELS, N, type Span, type World } from './model';
 export const STRIDE = 12;
 export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8 };
 export const MARGIN = 0.6, SLAB = 0.42;
-const STEPS = 6, CURVE = 14, PIER = 0.3;
+const STEPS = 6, CURVE = 14, PIER = 0.3, HW = 0.3;
 
 export interface Mesh { data: Float32Array; count: number }
 type V3 = [number, number, number];
@@ -41,6 +41,8 @@ export function buildMesh(w: World): Mesh {
   const hides = (k: number, i: number, j: number, d: number) => {
     const ni = i + DIRS[d][0], nj = j + DIRS[d][1];
     if (w.block(k, ni, nj)) return true;
+    const aw = w.archway(k, ni, nj);
+    if (aw >= 0) return aw !== d % 2;
     const s = w.stair(k, ni, nj);
     return s >= 0 && (s + 2) % 4 === d;
   };
@@ -61,6 +63,7 @@ export function buildMesh(w: World): Mesh {
   };
   const topFace = (k: number, i: number, j: number, y: number) => {
     if (w.block(k + 1, i, j) || w.stair(k + 1, i, j) >= 0) return;
+    if (w.archway(k + 1, i, j) >= 0 && w.archway(k, i, j) === w.archway(k + 1, i, j)) return;
     const x0 = X(i), z0 = Z(j);
     quad([x0, y, z0], [x0 + 1, y, z0], [x0 + 1, y, z0 + 1], [x0, y, z0 + 1], [0, 1, 0], cornerAo(k + 1, i, j), MAT.stone);
   };
@@ -95,6 +98,7 @@ export function buildMesh(w: World): Mesh {
       topFace(k, i, j, y1);
       continue;
     }
+    if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { cur = { born: w.born(k, i, j), pivot: y0, how: 1, tone: tone(k, i, j) }; archCell(k, i, j, w.archway(k, i, j)); continue; }
     const d = w.stair(k, i, j);
     if (d >= 0) {
       cur = { born: w.born(k, i, j), pivot: y0, how: 1, tone: tone(k, i, j) };
@@ -130,7 +134,8 @@ export function buildMesh(w: World): Mesh {
   for (const sp of w.spans) span(sp);
 
   // ─── what grows in the courtyards ───
-  for (const dc of w.decor) {
+  const hand = [...[...w.pools.entries()].map(([v, b]) => ({ kind: 'pool' as const, i: v % N, j: Math.floor(v / N) % N, born: b, k: 0 })), ...[...w.trees.entries()].map(([v, b]) => ({ kind: 'cypress' as const, i: v % N, j: Math.floor(v / N) % N, born: b, k: Math.floor(v / (N * N)) }))];
+  for (const dc of [...w.decor.map((d) => ({ ...d, k: 0 })), ...hand]) {
     cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5 };
     const x0 = X(dc.i), z0 = Z(dc.j);
     if (dc.kind === 'pool') {
@@ -142,9 +147,45 @@ export function buildMesh(w: World): Mesh {
         const A: V3 = a ? [a > 0 ? x0 + 1 : x0, lv, z0] : [x0, lv, b > 0 ? z0 + 1 : z0], B: V3 = a ? [A[0], lv, z0 + 1] : [x0 + 1, lv, A[2]];
         quad(A, B, [B[0], 0, B[2]], [A[0], 0, A[2]], [-a, 0, -b], [0.6, 0.6, 0.9, 0.9], MAT.court);
       }
-    } else cypress(dc.i, dc.j, 0, dc.born);
+    } else cypress(dc.i, dc.j, dc.k, dc.born);
   }
   return { data: new Float32Array(out), count: out.length / STRIDE };
+
+  /** stone with a way through it along an axis; tall, with an arch the same way under or over it */
+  function archCell(k: number, i: number, j: number, a: number) {
+    const y0 = k, y1 = k + 1, lower = w.archway(k + 1, i, j) === a, upper = w.archway(k - 1, i, j) === a;
+    const ys = y0 + (upper ? 0.55 : 0.5), cx = X(i) + 0.5, cz = Z(j) + 0.5;
+    const P = (u: number, wv: number, y: number): V3 => (a === 0 ? [cx + u, y, cz + wv] : [cx + wv, y, cz + u]);
+    const nU = (s: number): V3 => (a === 0 ? [s, 0, 0] : [0, 0, s]), nW = (s: number): V3 => (a === 0 ? [0, 0, s] : [s, 0, 0]);
+    // (its solid sides, across the way)
+    const x0 = X(i), z0 = Z(j);
+    for (let d = 0; d < 4; d++) {
+      if (d % 2 === a || hides(k, i, j, d)) continue;
+      const [da, db] = DIRS[d], foot = floored(k, i + da, j + db) ? 0.6 : 1;
+      const A: V3 = da ? [da > 0 ? x0 + 1 : x0, y0, z0] : [x0, y0, db > 0 ? z0 + 1 : z0], B: V3 = da ? [A[0], y0, z0 + 1] : [x0 + 1, y0, A[2]];
+      quad(A, B, [B[0], y1, B[2]], [A[0], y1, A[2]], [da, 0, db], [foot, foot, 1, 1], MAT.stone);
+    }
+    const head = (t: number) => (lower ? y1 : ys + Math.sqrt(Math.max(0, HW * HW - t * t)));
+    for (const s of [-1, 1]) {
+      const d = a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3;
+      if (hides(k, i, j, d)) continue;
+      const foot = floored(k, i + DIRS[d][0], j + DIRS[d][1]) && !upper ? 0.6 : 1;
+      quad(P(s * 0.5, -0.5, y0), P(s * 0.5, -HW, y0), P(s * 0.5, -HW, y1), P(s * 0.5, -0.5, y1), nU(s), [foot, foot, 1, 1], MAT.stone);
+      quad(P(s * 0.5, HW, y0), P(s * 0.5, 0.5, y0), P(s * 0.5, 0.5, y1), P(s * 0.5, HW, y1), nU(s), [foot, foot, 1, 1], MAT.stone);
+      if (!lower) for (let q = 0; q < CURVE; q++) {
+        const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE;
+        quad(P(s * 0.5, t0, head(t0)), P(s * 0.5, t1, head(t1)), P(s * 0.5, t1, y1), P(s * 0.5, t0, y1), nU(s), 1, MAT.stone);
+      }
+    }
+    for (const s of [-1, 1]) quad(P(-0.5, s * HW, y0), P(0.5, s * HW, y0), P(0.5, s * HW, lower ? y1 : ys), P(-0.5, s * HW, lower ? y1 : ys), nW(-s), upper ? 0.85 : [0.7, 0.7, 0.95, 0.95], MAT.within);
+    if (!lower) for (let q = 0; q < CURVE; q++) {
+      const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE, tm = (t0 + t1) / 2;
+      const n = nW(-tm / HW); n[1] = -Math.sqrt(Math.max(0, HW * HW - tm * tm)) / HW;
+      quad(P(-0.5, t0, head(t0)), P(0.5, t0, head(t0)), P(0.5, t1, head(t1)), P(-0.5, t1, head(t1)), n, 0.95, MAT.within);
+    }
+    if (lower) { if (!w.block(k + 1, i, j)) for (const [w0, w1] of [[-0.5, -HW], [HW, 0.5]]) quad(P(-0.5, w0, y1), P(0.5, w0, y1), P(0.5, w1, y1), P(-0.5, w1, y1), [0, 1, 0], 1, MAT.stone); }
+    else topFace(k, i, j, y1);
+  }
 
   /** an arch under a run of stone, and the stone over it: spandrels, deck, its underside lit from within */
   function span(sp: Span) {
@@ -204,7 +245,8 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   if (k >= LEVELS || i < 0 || j < 0 || i >= N || j >= N) return false;
   const fx = x + N / 2 - i - 0.5, fz = z + N / 2 - j - 0.5, fy = y - k;
   if (w.stone(k, i, j)) {
-    const sp = w.span(k, i, j);
+    const sp = w.span(k, i, j), aw = w.archway(k, i, j);
+    if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > 0.5 + Math.sqrt(Math.max(0, HW * HW - wv * wv))); }
     if (!sp) return true;
     // (over an arch: stone above its curve)
     const half = sp.n / 2, yD = k + 1 - DECK, rise = Math.min(half, yD - sp.low), ys = yD - rise;
@@ -214,6 +256,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   const d = w.stair(k, i, j);
   if (d >= 0) { const [a, b] = DIRS[d], u = 0.5 + (a ? a * fx : b * fz); return fy < Math.ceil(Math.max(0.001, u) * STEPS) / STEPS; }
   if (w.pier(k, i, j)) return Math.abs(fx) < PIER && Math.abs(fz) < PIER;
+  if (w.tree(k, i, j) || w.tree(k - 1, i, j)) return Math.hypot(fx, fz) < 0.26;
   // (the air under an arch over this cell: its upper part's the arch's stone)
   for (let kk = k + 1; kk < LEVELS; kk++) {
     const sp = w.span(kk, i, j);

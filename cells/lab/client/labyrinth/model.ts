@@ -19,6 +19,11 @@
  *    - ground walled in all round (a gate under an arch still counts as a wall) is a **courtyard**: paved, with water
  *      in it if it's big enough, and a cypress in a corner.
  *
+ * Operations come from the hand two ways (main.ts): **auto**, the gestures read (gesture.ts); or a piece from the
+ * palette, put where it's touched (palette.ts): a block, an arch (stone with a way through it along an axis; on an arch
+ * the same way, one tall arch), a stair, a bridge (stone laid across a gap and marked so: carried on one arch, up to
+ * seven cells), a cypress, a pool. Both are operations on the same solid, resolved by the same rules.
+ *
  * The grid is N × N cells on a stone slab, each 1 across and 1 high, LEVELS high.
  */
 import { hash } from '../kit/rng';
@@ -30,7 +35,15 @@ export const DIRS: ReadonlyArray<[number, number]> = [[1, 0], [0, 1], [-1, 0], [
 /** a cell: its level, then i (x) and j (z) */
 export type Cell = [number, number, number];
 /** an operation: stone added (and when each was laid), stairs added (which way each climbs, a DIRS index), stone cut */
-export interface Op { add?: Array<[number, number, number, number]>; stairs?: Array<[number, number, number, number, number]>; cut?: Cell[]; why?: string }
+export interface Op {
+  add?: Array<[number, number, number, number]>; stairs?: Array<[number, number, number, number, number]>; cut?: Cell[]; why?: string;
+  /** stone with a way through it: its cell, axis (0 x, 1 z), when */
+  arches?: Array<[number, number, number, number, number]>;
+  /** cypresses (on a floor) and pools (let into the stone): cell, when */
+  trees?: Array<[number, number, number, number]>; pools?: Array<[number, number, number]>;
+  /** the stone it adds is a bridge's: carried on one arch, however long the gap (to seven cells) */
+  bridge?: boolean;
+}
 /** an arch, carrying a run of stone along an axis (0 x, 1 z): its level, first cell, length, and the level it springs from */
 export interface Span { k: number; a: number; i: number; j: number; n: number; low: number; born: number }
 export interface Decor { kind: 'pool' | 'cypress'; i: number; j: number; born: number }
@@ -45,6 +58,11 @@ export class World {
   /** the intended solid: stone (when laid), and stairs (which way, when) */
   mass = new Map<number, number>();
   stairs = new Map<number, { d: number; born: number }>();
+  /** which stone has a way through it (and which way), what's a bridge's, cypresses and pools put there by hand */
+  archways = new Map<number, number>();
+  private bridged = new Set<number>();
+  trees = new Map<number, number>();
+  pools = new Map<number, number>();
   /** what it takes to stand: piers (when raised), arches, the air under arches, courtyards, what grows in them */
   piers = new Map<number, number>();
   spans: Span[] = [];
@@ -67,12 +85,19 @@ export class World {
   /** the air under an arch */
   arched(k: number, i: number, j: number) { return this.under.has(key(k, i, j)); }
   /** a plain block: stone not carried on an arch */
-  block(k: number, i: number, j: number) { return this.stone(k, i, j) && !this.span(k, i, j); }
+  block(k: number, i: number, j: number) { return this.stone(k, i, j) && !this.span(k, i, j) && !this.archways.has(key(k, i, j)); }
+  /** stone with a way through it: which way (0 x, 1 z), or −1 */
+  archway(k: number, i: number, j: number): number { return inGrid(i, j) ? this.archways.get(key(k, i, j)) ?? -1 : -1; }
+  tree(k: number, i: number, j: number) { return inGrid(i, j) && this.trees.has(key(k, i, j)); }
+  /** a floor to stand on at the foot of level k: the stone (not a pool), or the top of stone */
+  floor(k: number, i: number, j: number) { return inGrid(i, j) && (k === 0 ? !this.pool(i, j) : this.stone(k - 1, i, j)); }
+  /** a cell free to build in */
+  free(k: number, i: number, j: number) { return k >= 0 && k < LEVELS && inGrid(i, j) && !this.occupied(k, i, j) && !this.tree(k, i, j) && !this.tree(k - 1, i, j) && !(k === 0 && this.pool(i, j)); }
   /** how high a column's stone (or stair) goes, up from a level, without a gap */
   topFrom(k: number, i: number, j: number) { while (k + 1 < LEVELS && (this.stone(k + 1, i, j) || this.stair(k + 1, i, j) >= 0)) k++; return k + 1; }
   /** the highest anything reaches */
-  top() { let t = 0; for (const v of [...this.mass.keys(), ...this.stairs.keys()]) t = Math.max(t, unkey(v)[0] + 1); return t + (this.decor.some((d) => d.kind === 'cypress') ? 1 : 0); }
-  born(k: number, i: number, j: number) { return this.mass.get(key(k, i, j)) ?? this.stairs.get(key(k, i, j))?.born ?? this.piers.get(key(k, i, j)) ?? -1e3; }
+  top() { let t = 0; for (const v of [...this.mass.keys(), ...this.stairs.keys()]) t = Math.max(t, unkey(v)[0] + 1); for (const v of this.trees.keys()) t = Math.max(t, unkey(v)[0] + 2); return Math.max(t, this.decor.some((d) => d.kind === 'cypress') ? 2 : 0); }
+  born(k: number, i: number, j: number) { return this.mass.get(key(k, i, j)) ?? this.stairs.get(key(k, i, j))?.born ?? this.piers.get(key(k, i, j)) ?? this.trees.get(key(k, i, j)) ?? -1e3; }
 
   // ─── what the hand did ───
   apply(op: Op, now = 0) { this.ops.push(op); this.rebuild(now); }
@@ -84,9 +109,17 @@ export class World {
   /** the operations replayed into the intended solid, and that resolved */
   rebuild(now = 0) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear();
     for (const op of this.ops) {
-      for (const [k, i, j] of op.cut ?? []) { this.mass.delete(key(k, i, j)); this.stairs.delete(key(k, i, j)); }
+      for (const [k, i, j] of op.cut ?? []) {
+        if (k < 0) { this.pools.delete(key(0, i, j)); continue; }
+        for (const m of [this.mass, this.stairs, this.archways, this.trees]) m.delete(key(k, i, j));
+        this.bridged.delete(key(k, i, j));
+      }
+      for (const [k, i, j, a, b] of op.arches ?? []) if (k >= 0 && k < LEVELS && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.archways.set(key(k, i, j), a); }
+      for (const [k, i, j, b] of op.trees ?? []) if (inGrid(i, j)) this.trees.set(key(k, i, j), b);
+      for (const [i, j, b] of op.pools ?? []) if (inGrid(i, j)) this.pools.set(key(0, i, j), b);
+      if (op.bridge) for (const [k, i, j] of op.add ?? []) this.bridged.add(key(k, i, j));
       for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < LEVELS && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
       for (const [k, i, j, d, b] of op.stairs ?? []) if (k >= 0 && k < LEVELS && inGrid(i, j)) { this.mass.delete(key(k, i, j)); this.stairs.set(key(k, i, j), { d, born: b }); }
     }
@@ -123,7 +156,9 @@ export class World {
       while (loose.size && guard++ < 400) {
         // (arches first: the shortest bounded run there is, three cells at most)
         let best: ReturnType<typeof run> | null = null;
-        for (const v of loose) { const [, i, j] = unkey(v); for (const a of [0, 1]) { const r = run(i, j, a); if (r.startBound && r.endBound && r.n <= 3 && (!best || r.n < best.n)) best = r; } }
+        // (a bridge's stone, all of a run: one arch, to seven cells)
+        const most = (r: ReturnType<typeof run>) => { const [di, dj] = DIRS[r.a]; for (let q = 0; q < r.n; q++) if (!this.bridged.has(key(k, r.s[0] + q * di, r.s[1] + q * dj))) return 3; return 7; };
+        for (const v of loose) { const [, i, j] = unkey(v); for (const a of [0, 1]) { const r = run(i, j, a); if (r.startBound && r.endBound && r.n <= most(r) && (!best || r.n < best.n)) best = r; } }
         if (best) { this.arch(k, best.a, best.s[0], best.s[1], best.n, loose); continue; }
         // (else a pier: at a free end, or three cells into a long run, so arches can span the rest)
         let at: [number, number] | null = null;
@@ -195,10 +230,10 @@ export class World {
     }
   }
   /** a pool at a cell of the ground */
-  pool(i: number, j: number) { return this.decor.some((d) => d.kind === 'pool' && d.i === i && d.j === j); }
+  pool(i: number, j: number) { return this.pools.has(key(0, i, j)) || this.decor.some((d) => d.kind === 'pool' && d.i === i && d.j === j); }
 
   /** the operations, as text (to keep, and to make again: when they were laid isn't kept) */
-  encode(): string { return JSON.stringify(this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0])); }
+  encode(): string { return JSON.stringify(this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0])); }
 }
 
 /** a world made again from its operations (as `encode` wrote them), all laid long ago */
@@ -207,9 +242,13 @@ export function replay(text: string, seed = 1): World {
   let raw: unknown = [];
   try { raw = JSON.parse(text || '[]'); } catch { raw = []; }
   if (!Array.isArray(raw)) raw = [];
-  for (const o of raw as Array<[Cell[] | 0, Array<[number, number, number, number]> | 0, Cell[] | 0]>) {
+  for (const o of raw as unknown[][]) {
     if (!Array.isArray(o)) continue;
-    w.ops.push({ add: o[0] ? o[0].map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]) : undefined, stairs: o[1] ? o[1].map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]) : undefined, cut: o[2] || undefined });
+    const at = (q: number) => (Array.isArray(o[q]) ? (o[q] as number[][]) : null);
+    w.ops.push({
+      add: at(0)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), stairs: at(1)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), cut: (at(2) as Cell[] | null) ?? undefined,
+      arches: at(3)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), trees: at(4)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), pools: at(5)?.map((c) => [c[0], c[1], -100] as [number, number, number]), bridge: o[6] === 1,
+    });
   }
   w.rebuild(-100);
   return w;

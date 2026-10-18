@@ -8,6 +8,7 @@ const load = async (f) => { const o = await build({ entryPoints: [new URL(f, imp
 const { World, replay, N, LEVELS, DIRS } = await load('../client/labyrinth/model.ts');
 const G = await load('../client/labyrinth/gesture.ts');
 const { story } = await load('../client/labyrinth/demo.ts');
+const P = await load('../client/labyrinth/palette.ts');
 
 let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
@@ -46,6 +47,12 @@ for (let s = 1; s <= 60; s++) {
       for (let q = 0, L = 2 + Math.floor(rnd() * 6); q < L; q++) { if (rnd() < 0.25) d = (d + (rnd() < 0.5 ? 1 : 3)) % 4; x = Math.max(0, Math.min(N - 1, x + DIRS[d][0])); z = Math.max(0, Math.min(N - 1, z + DIRS[d][1])); cells.push([x, z]); }
       const [ex, ez] = cells[cells.length - 1];
       op = G.trace(w, pickAt(i, j), cells, pickAt(ex, ez), () => t);
+    } else if (what < 0.93) {
+      // (a piece from the palette, where a touch would put it)
+      const hand = ['block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take'][Math.floor(rnd() * 7)];
+      const pk = pickAt(i, j), d = DIRS[Math.floor(rnd() * 4)];
+      const pp = rnd() < 0.4 && pk.face === 'top' ? { face: 'side', hit: pk.hit, to: [pk.hit[0], i + d[0], j + d[1]] } : pk;
+      op = P.place(w, hand, pp, Math.floor(rnd() * 4), t);
     } else {
       const k = Math.floor(rnd() * Math.max(1, w.topFrom(0, i, j)));
       const c = G.carve(w, { face: 'side', hit: [k, i, j], to: [k, i, j] });
@@ -60,7 +67,7 @@ for (let s = 1; s <= 60; s++) {
   w.undo(); ok(`seed ${s}: undo takes the last back`, w.ops.length === n - 1);
   if (last) { w.apply(last); ok(`seed ${s}: and doing it again is the same`, w.encode() === before); }
 }
-for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 10, made);
+for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
 // (the storyboard: what each stage says it is)
 const s1 = story(1), s2 = story(2), s3 = story(3), s4 = story(4);
 ok('story 1: a small raised platform', s1.topFrom(0, 3, 7) === 2 && s1.topFrom(0, 4, 7) === 2);
