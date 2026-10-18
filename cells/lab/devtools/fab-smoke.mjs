@@ -47,7 +47,7 @@ await withWood(async (lab) => {
   {
     // (posing: its joints marked; an elbow taken hold of and moved, the arm goes with it; stood as it was again)
     const p = await open('settle=20&fam=dress&fabric=lawn&drawer=closed');
-    await p.click('#posing'); await p.waitForTimeout(500);
+    await p.click('[data-tool=pose]'); await p.waitForTimeout(500);
     const a = await p.evaluate(() => window.__fab.jointOnScreen('el', 0));
     await p.mouse.move(a[0], a[1]); await p.mouse.down();
     for (let k = 1; k <= 10; k++) { await p.mouse.move(a[0], a[1] - 8 * k); await p.waitForTimeout(50); }
@@ -57,6 +57,30 @@ await withWood(async (lab) => {
     await p.click('#unpose'); await p.waitForTimeout(500);
     c.ok('posing: stood as it was again', !(await p.evaluate(() => window.__fab.posedByHand())));
     c.ok('posing: nothing thrown', !p.errors.length, p.errors);
+    await p.close();
+  }
+  {
+    // (the figure's tools: the hand by default; save to rail says so; the tug takes hold of the cloth and pulls it, and
+    // let go it falls back; a double tap on the figure twirls it)
+    const p = await open('settle=200&fam=skirt&fabric=lawn&drawer=closed');
+    c.ok('tools: the hand in hand to start with', await p.evaluate(() => document.querySelector('#figtools [data-tool=hand]').classList.contains('on')));
+    c.ok('tools: save to rail is a button that says so', (await p.textContent('#hang')).includes('save to rail'));
+    await p.click('[data-tool=tug]'); await p.waitForTimeout(300);
+    const hem = await p.evaluate(() => window.__fab.roomToScreen([0, 52, 14]));
+    const at = await p.evaluate(([x, y]) => { const h = window.__fab.hitWorn(x, y); return h && [...h.c.pos.slice(h.i * 3, h.i * 3 + 3)]; }, hem);
+    await p.mouse.move(hem[0], hem[1]); await p.mouse.down();
+    for (let k = 1; k <= 10; k++) { await p.mouse.move(hem[0] + 9 * k, hem[1] - 4 * k); await p.waitForTimeout(60); }
+    await p.waitForTimeout(600);
+    const held = await p.evaluate(() => window.__fab.tugging());
+    const now = await p.evaluate(() => window.__fab.tugPoint());
+    await p.mouse.up();
+    c.ok('tug: the cloth taken hold of and pulled out', !!at && held && !!now && Math.hypot(now[0] - at[0], now[2] - at[2]) > 6, { at, now });
+    c.ok('tug: let go', !(await p.evaluate(() => window.__fab.tugging())));
+    await p.click('[data-tool=hand]'); await p.waitForTimeout(200);
+    const f = await p.evaluate(() => window.__fab.roomToScreen([0, 85, 0]));
+    await p.mouse.click(f[0], f[1]); await p.waitForTimeout(120); await p.mouse.click(f[0], f[1]); await p.waitForTimeout(1500);
+    { const w = await p.evaluate(() => window.__fab.probe().omega); c.ok('hand: a double tap on the figure twirls it', Math.abs(w) > 0.5, w); }
+    c.ok('tools: nothing thrown', !p.errors.length, p.errors);
     await p.close();
   }
   for (const [fam, key, sk] of [['top', 'bodyLen', 'swing'], ['trousers', 'legLen', 'flare']]) {

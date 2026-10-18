@@ -11,7 +11,8 @@
  *
  * At the figure, drag it round, pinch to come close; the drawer holds what it is (**make**: the kind of thing, and a
  * skirt's tiers), a bodice's neckline, sleeves and collar (**bodice**), trousers' legs (**legs**), and its cloth, print
- * and colour (each made your own with ⚙). **twirl** turns the figure on its stand; **sew** pins the pieces in place
+ * and colour (each made your own with ⚙). Down the right, the tools: **hand** turns the figure (a flick or a double tap
+ * twirls it), **pose** takes hold of its joints, **tug** of its cloth; **pin and sew it on again** pins the pieces in place
  * round it, as it stands (sleeves round its arms, legs round its legs, whatever the pose), sews them up, then takes
  * the pins out and lets the cloth fall. The pattern's pinned up beside it: tap it to take it to the cutting table, where a
  * skirt (a dress's too) is made by hand on its paper: slash and spread, fold, gather, close or release a dart, every
@@ -251,7 +252,9 @@ const LEG_PICKS: Array<{ key: keyof Design; label: string; opts: Array<[number, 
 /** the drawer's own sections for what's made: built again only when what it's for changes */
 function garmentPanel() {
   for (const b of Array.from($('figtabs').querySelectorAll('[data-sec]')) as HTMLElement[]) b.hidden = ['what','bodice','legs'].includes(b.dataset.sec!) || (b.dataset.sec === 'bodice' && !hasBodice()) || (b.dataset.sec === 'legs' && !hasLegs());
-  if (!['what', 'fabric', 'print', 'colour'].includes(figSec) && !(figSec === 'bodice' && hasBodice()) && !(figSec === 'legs' && hasLegs())) figSec = 'what';
+  // (the pose and the tug have a section of their own while they're in hand)
+  if (figTool !== 'hand') figSec = figTool === 'pose' ? 'figure' : 'tug';
+  else if (!['what', 'fabric', 'print', 'colour'].includes(figSec) && !(figSec === 'bodice' && hasBodice()) && !(figSec === 'legs' && hasLegs())) figSec = garmentSec;
   const key = `${d.family}`;
   if (key !== garmentKey) {
     garmentKey = key;
@@ -319,6 +322,7 @@ function dial(parent: HTMLElement, label: string, lo: number, hi: number, get: (
 let customKey = '';
 function customPanel() {
   if(document.querySelector('.knob.turning')) return;
+  if (figSec === 'figure' || figSec === 'tug') return;
   // (built again only when what it's for changes: not while a dial's being turned)
   const key = `${figSec}|${rec.fabric}|${rec.print}|${rec.colour}|${!!rec.cloth}|${!!rec.inks}|${figSec === 'what' || figSec === 'bodice' || figSec === 'legs' ? `${describeGarment(d)}|${g.notes.join()}` : ''}`;
   if (key === customKey && $('custom').childElementCount) return;
@@ -647,9 +651,38 @@ sheet.addEventListener('click', toggleSheet);
 // (the cloth laid on the paper, or not: off, the paper's plain and its marks easier to see)
 paper.cloth = qs.has('cloth');
 $('cloth').addEventListener('click', () => { paper.cloth = !paper.cloth; ui(); });
-$('sew').addEventListener('click', () => make(true));
+for (const b of Array.from(document.querySelectorAll('.resew')) as HTMLElement[]) b.addEventListener('click', () => make(true));
 let twirlUntil = 0;
-$('twirl').addEventListener('click', () => { twirlUntil = performance.now() + 3200; });
+// ─── the figure's tools: what a finger on the scene does ───────────────────────────────────────────
+// hand: turn the figure on its stand (a flick, or a double tap, twirls it), go round it off it, pinch to come close;
+// pose: take hold of its joints; tug: take hold of the cloth and pull. The drawer follows: the garment for the hand,
+// the figure for the pose, the cloth for the tug.
+type FigTool = 'hand' | 'pose' | 'tug';
+let figTool: FigTool = qs.has('pose') ? 'pose' : qs.get('tool') === 'tug' ? 'tug' : 'hand', garmentSec = 'what';
+function setFigTool(t: FigTool) {
+  if (figTool === 'hand' && t !== 'hand') garmentSec = figSec;
+  if (t === 'hand' && figTool !== 'hand') figSec = garmentSec;
+  figTool = t; tug = null;
+  document.body.dataset.tool = t;
+  for (const b of Array.from($('figtools').children) as HTMLElement[]) { b.classList.toggle('on', b.dataset.tool === t); b.setAttribute('aria-pressed', String(b.dataset.tool === t)); }
+  setPosing(t === 'pose');
+  if (t !== 'hand' && drawer === 'closed') setDrawer('focus'); else ui();
+  if (t === 'tug') toast('take hold of the cloth and pull it');
+}
+for (const b of Array.from($('figtools').children) as HTMLElement[]) b.addEventListener('click', () => setFigTool(b.dataset.tool as FigTool));
+/** the cloth in hand: which, which point of it, and where the finger is */
+let tug: { c: Cloth; i: number; x: number; y: number; id: number } | null = null;
+/** each frame while tugging: the point held drawn toward the finger, at its own depth */
+function tugFrame() {
+  if (!tug) return;
+  const ray = rayAt(tug.x, tug.y), P = tug.c.pos, i3 = tug.i * 3;
+  if (!ray) return;
+  const n = ray.d, dn = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+  const t = ((P[i3] - ray.o[0]) * n[0] + (P[i3 + 1] - ray.o[1]) * n[1] + (P[i3 + 2] - ray.o[2]) * n[2]) / dn;
+  const at: [number, number, number] = [ray.o[0] + n[0] * t, ray.o[1] + n[1] * t, ray.o[2] + n[2] * t];
+  if (tug.c.tug?.i === tug.i) tug.c.tug.at = at; else tug.c.grab(tug.i, at);
+}
+const letGo = () => { if (tug) tug.c.tug = null; tug = null; };
 // ─── posing it: a mode, its joints marked; take hold of one and it turns where it joins the limb above ─────────────
 // (the poses of one's own, kept on this device: one for arms up (to twirl a skirt), one for arms down (to wear a top))
 const POSE_KEY = 'fab.pose.v1';
@@ -658,14 +691,12 @@ const keepPoses = () => { try { localStorage.setItem(POSE_KEY, JSON.stringify(ow
 let posing = qs.has('pose'), poseDrag: { grip: Grip; side: 0 | 1; x: number; y: number; id: number } | null = null;
 const jointEls = GRIPS.map((j) => { const el = document.createElement('div'); el.className = j.grip === 'waist' ? 'joint torso' : 'joint'; $('stage').appendChild(el); return el; });
 function setPosing(on: boolean) {
+  if (on === posing && document.body.classList.contains('posing') === on) return;
   posing = on; poseDrag = null;
   document.body.classList.toggle('posing', on);
-  $('posing').classList.toggle('on', on); $('posing').setAttribute('aria-pressed', String(on));
   if (on) toast('take hold of a joint and move it');
 }
-$('posing').addEventListener('click', () => setPosing(!posing));
 $('unpose').addEventListener('click', () => { unpose(); keepPoses(); toast('standing as it was'); });
-setPosing(posing);
 // (the pins, while a garment's pinned to the figure to be sewn: glass heads, a few to a piece)
 const PIN_COLOURS = ['#d23a4a', '#f2c230', '#3a78c8', '#3f9a5a', '#f4f0e6', '#7a4bb0'];
 const pinEls: HTMLElement[] = [];
@@ -752,10 +783,12 @@ function outfitUI() {
   bar.appendChild(off);
 }
 /** a garment on the figure, picked by a tap on it: the nearest of what's worn along the touch */
-function pickWorn(clientX: number, clientY: number): string | null {
+function pickWorn(clientX: number, clientY: number): string | null { return hitWorn(clientX, clientY)?.id ?? null; }
+/** what's worn under a point on the screen, nearest the eye: which garment, its cloth, and the point of it nearest */
+function hitWorn(clientX: number, clientY: number): { id: string; c: Cloth; i: number } | null {
   const ray = rayAt(clientX, clientY);
   if (!ray) return null;
-  let best: { t: number; id: string } | null = null;
+  let best: { t: number; id: string; c: Cloth; i: number } | null = null;
   for (const w of worn) {
     const c = w.id === activeItem ? cloth : w.cloth;
     if (!c) continue;
@@ -771,10 +804,10 @@ function pickWorn(clientX: number, clientY: number): string | null {
       const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x, v = (dx * qx + dy * qy + dz * qz) / det;
       if (v < 0 || u + v > 1) continue;
       const t = (e2x * qx + e2y * qy + e2z * qz) / det;
-      if (t > 0 && (!best || t < best.t)) best = { t, id: w.id };
+      if (t > 0 && (!best || t < best.t)) best = { t, id: w.id, c, i: T[u > v ? (u > 1 - u - v ? k + 1 : k) : v > 1 - u - v ? k + 2 : k] };
     }
   }
-  return best?.id ?? null;
+  return best ? { id: best.id, c: best.c, i: best.i } : null;
 }
 function loadOutfit(){
  try{const x=JSON.parse(localStorage.getItem(OUTFIT_KEY)??'null');if(x?.version!==1||!Array.isArray(x.items))return;
@@ -924,6 +957,8 @@ canvas.addEventListener('pointerdown', (e) => {
   // (at the figure: a drag on it spins it on its stand (as from the table); off it, the view goes round it)
   // (posing: a touch on a joint takes hold of it)
   if (mode === 'bench' && posing && !pinch) { const j = jointNear(e.clientX, e.clientY); if (j) { drag = false; poseDrag = { ...j, x: e.clientX, y: e.clientY, id: e.pointerId }; return; } }
+  // (tugging: a touch on the cloth takes hold of the point of it nearest)
+  if (mode === 'bench' && figTool === 'tug' && !pinch) { const h = hitWorn(e.clientX, e.clientY); if (h) { drag = false; tug = { c: h.c, i: h.i, x: e.clientX, y: e.clientY, id: e.pointerId }; tugFrame(); return; } }
   if (mode === 'bench' && !pinch && onFigure(e.clientX, e.clientY)) { drag = false; spinStart(e); return; }
   if (mode === 'rails') {
     // (a long press on one of your own: take it off the rail)
@@ -940,6 +975,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   if (poseDrag && e.pointerId === poseDrag.id) { poseDrag.x = e.clientX; poseDrag.y = e.clientY; idle = 0; return; }
+  if (tug && e.pointerId === tug.id) { tug.x = e.clientX; tug.y = e.clientY; idle = 0; return; }
   if (mode === 'bench' && figureDrag) { spinMove(e); return; }
   if (!drag || pinch) return;
   const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY; idle = 0;
@@ -954,9 +990,15 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerup', (e) => {
   drag = false; clearTimeout(press);
   if (poseDrag && e.pointerId === poseDrag.id) { poseDrag = null; keepPoses(); return; }
+  if (tug && e.pointerId === tug.id) { letGo(); return; }
   if (mode === 'bench' && figureDrag) {
-    // (a tap on the figure, with more than one thing on: the one tapped is the one worked)
-    if (spinEnd(e) && worn.length > 1) { const id = pickWorn(e.clientX, e.clientY); if (id && id !== activeItem) { selectItem(id); toast(`the ${d.family}`); } }
+    // (a tap on the figure, with more than one thing on: the one tapped is the one worked; tapped twice, it twirls)
+    if (spinEnd(e)) {
+      const now = performance.now();
+      if (now - lastTap < 350) { twirlUntil = now + 3200; lastTap = 0; return; }
+      lastTap = now;
+      if (worn.length > 1) { const id = pickWorn(e.clientX, e.clientY); if (id && id !== activeItem) { selectItem(id); toast(`the ${d.family}`); } }
+    }
     return;
   }
   // (at the figure, a tap on another place in the room (the table, a rail) goes over to it)
@@ -970,7 +1012,8 @@ canvas.addEventListener('pointerup', (e) => {
     if (i === room.front()) wear(i); else { room.nudge(i, i > room.front() ? -1 : 1); room.goTo(i); }
   }
 });
-canvas.addEventListener('pointercancel', (e) => { if (poseDrag && e.pointerId === poseDrag.id) { poseDrag = null; keepPoses(); } });
+canvas.addEventListener('pointercancel', (e) => { if (poseDrag && e.pointerId === poseDrag.id) { poseDrag = null; keepPoses(); } if (tug && e.pointerId === tug.id) letGo(); });
+let lastTap = 0;
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   if (mode === 'rails') { room.push(-(Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * 0.08, 0.016); return; }
@@ -978,7 +1021,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 canvas.addEventListener('touchstart', (e) => {
   // (a second finger: a pinch, whatever the first was doing)
-  if (e.touches.length === 2 && mode === 'bench') { figureDrag = null; drag = false; pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }
+  if (e.touches.length === 2 && mode === 'bench') { figureDrag = null; drag = false; letGo(); pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }
 }, { passive: true });
 canvas.addEventListener('touchmove', (e) => { if (e.touches.length === 2 && pinch) { const p = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); view.dist = Math.max(70, Math.min(720, view.dist * pinch / p)); pinch = p; } }, { passive: true });
 canvas.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = 0; });
@@ -1252,11 +1295,10 @@ function frame(now: number) {
   if (mode === 'rails') { /* (the paper's on the table, out of sight) */ }
   else if (!skirtPaper()) fit.paper = { canvas: wholeCv, version: 1e6 + wholeVersion, model: sheetModel() };
   else if (paper.version > 0) fit.paper = { canvas: paper.cv, version: paper.version, model: sheetModel() };
-  $('twirl').classList.toggle('on', now < twirlUntil);
   const shiftGoal = mode==='rails'?0: Math.min(canvas.clientHeight*.6,$('bench').getBoundingClientRect().height) / Math.max(1,canvas.clientHeight);
   view.shift += (shiftGoal - view.shift) * Math.min(1, dt * 6);
   lastVP = R.frame(view, items, w, h, cloth?.spin ?? 0, fit).vp;
-  poseFrame(); pinFrame();
+  poseFrame(); pinFrame(); tugFrame();
   renderMs = renderMs * 0.9 + (performance.now() - r0) * 0.1;
   frames++; framesWindow++; wallWindow += raw; wallTime += raw;
   // (once a second: the whole frame on this device, not only the cloth's part of it)
@@ -1285,12 +1327,13 @@ if (mode !== 'rails') {
 if (qs.has('sheet')) toggleSheet();
 for (let i = 0, n = Math.min(900, Number(qs.get('settle')) || 0); i < n; i++) (cloth as Cloth | null)?.step(1 / 60);
 if (qs.has('twirl')) twirlUntil = performance.now() + 3200;
+setFigTool(figTool);
 (window as unknown as { __fab: unknown }).__fab = {
   perf, probe: () => ({ mode, omega: cloth ? +cloth.omega.toFixed(2) : 0, cloth: paper.cloth, tableZoom: +tableZoom.toFixed(3), tableTurn: +tableTurn.toFixed(3), recipe: rec, design: d, family: d.family, what: describeGarment(d), moves: encodeMoves(rec.moves), frames, perf, simTime: +simTime.toFixed(2), wallTime: +wallTime.toFixed(2), particles: cloth?.n ?? 0, stepMs: +stepMs.toFixed(2), notes: g.notes, checks: g.checks.map((c) => `${c.ok ? 'ok' : 'BAD'} ${c.name}: ${c.detail}`), strain: cloth?.strain(), seams: cloth?.seams(), rail: room.states[room.active]?.rail.name, front: room.front(), onRail: room.states[room.active]?.hung.length }),
   // (for tests: the whole pattern's hems that can be worked with the tool in hand, where on the sheet)
   wholeHems: () => editor.handles.map(h=>({key:h.key,mid:[h.x,h.y]})),
   pieces: () => { const dpr = SHEET_W / Math.max(1, wholeCv.clientWidth); return laid.map((l) => ({ name: l.piece.name, mid: l.to(l.piece.flat(0.5, 0.5)).map((x) => x * dpr) })); },
-  pickWorn, jointOnScreen, setPosing, posedByHand, bend, gripAt, age: () => cloth?.age ?? 0,
+  pickWorn, hitWorn, jointOnScreen, setPosing: (on: boolean) => setFigTool(on ? 'pose' : 'hand'), setFigTool, tugging: () => !!tug, tugPoint: () => (tug ? [...tug.c.pos.slice(tug.i * 3, tug.i * 3 + 3)] : null), onFigure: (x: number, y: number) => onFigure(x, y), posedByHand, bend, gripAt, age: () => cloth?.age ?? 0,
   editor, journal:()=>journal, outfit:()=>worn.map(w=>({id:w.id,family:w.d.family,active:w.id===activeItem,health:w.cloth?.health()})),selectItem,
   // (for tests: where a point in the room is on the screen; where a point of the paper's sheet is)
   roomToScreen: (q: [number, number, number]) => { const m = lastVP!, x = m[0] * q[0] + m[4] * q[1] + m[8] * q[2] + m[12], y = m[1] * q[0] + m[5] * q[1] + m[9] * q[2] + m[13], w = m[3] * q[0] + m[7] * q[1] + m[11] * q[2] + m[15], r = canvas.getBoundingClientRect(); return [r.left + (x / w * 0.5 + 0.5) * r.width, r.top + (1 - (y / w * 0.5 + 0.5)) * r.height]; },

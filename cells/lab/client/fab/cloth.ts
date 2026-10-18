@@ -69,6 +69,19 @@ export class Cloth {
   hi!: Int32Array; hFrom!: Float32Array; hAt!: Float32Array;
   /** where they're held as the figure's posed (on the figure, its chest bent with whatever's held on it), and for which pose */
   private hPosed: Float32Array = new Float32Array(0); private hPose = -1;
+  /** a pinch of it in hand, pulled toward where the finger is (the room's frame, as the cloth is): or none. Each point of
+   * the pinch is drawn the way the one touched is, less the further it is from it */
+  tug: { i: number; at: V3; near: Int32Array; w: Float32Array } | null = null;
+  /** take hold of it at a point: that, and the cloth within 3 cm of it on the same piece */
+  grab(i: number, at: V3) {
+    const near: number[] = [], w: number[] = [], R = 3, fx = this.flat[i * 2], fy = this.flat[i * 2 + 1];
+    for (let j = 0; j < this.n; j++) {
+      if (this.piece[j] !== this.piece[i] || this.inv[j] === 0) continue;
+      const dd = Math.hypot(this.flat[j * 2] - fx, this.flat[j * 2 + 1] - fy);
+      if (dd < R) { near.push(j); w.push(1 - (dd / R) ** 2); }
+    }
+    this.tug = { i, at, near: new Int32Array(near), w: new Float32Array(w) };
+  }
   fabric: Fabric; drag: number; mu: number; margin: number;
   /** each point's half-thickness against the cloth itself: under half its nearest neighbour's distance */
   rad!: Float32Array;
@@ -339,6 +352,10 @@ export class Cloth {
         this.tethers();
         for(let c=0;c<this.sa.length;c++)this.stitch(c,this.s0[c]*sew,1e-8/h2);
         if (pw > 0) this.pins(pw);
+        if (this.tug) {
+          const t = this.tug, i3 = t.i * 3, dx = t.at[0] - pos[i3], dy = t.at[1] - pos[i3 + 1], dz = t.at[2] - pos[i3 + 2];
+          for (let k = 0; k < t.near.length; k++) { const j3 = t.near[k] * 3, f = t.w[k]; pos[j3] += dx * f; pos[j3 + 1] += dy * f; pos[j3 + 2] += dz * f; }
+        }
       }
       if (this.self && s % 4 === 3) this.selfCollide();
       if (this.collider || this.floor) for (let i = 0; i < n; i++) if (inv[i] > 0) { if (this.wait[i] > 0) this.wait[i]--; else this.pushOut(i, h, true); }

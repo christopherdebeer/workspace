@@ -317,7 +317,7 @@ at each depth is the panels' width there), each sleeve round its own arm and eac
 the bones wherever they've been posed. So an arm raised over the head still goes through its armhole, and a leg lifted
 at the knee through its leg. Nine pins (the coloured heads) hold each piece where it's placed, weightless, while the
 seams are drawn closed and the waist into the band; at 1.1 s the pins come out over half a second and the cloth falls.
-Press **sew** to watch it again. (A garment changed in place, by a dial or a move, carries its cloth on unpinned.)
+Press **pin and sew it on again** (in the pose's or the tug's drawer) to watch it again. (A garment changed in place, by a dial or a move, carries its cloth on unpinned.)
 
 ### Why XPBD, and what else was considered
 
@@ -448,7 +448,7 @@ within 1.1 cm rather than 5 mm. Building the families, the checks caught:
 ## The rails
 
 Fab opens on the workshop's wall: a row of clothes rails, each hung with garments on hangers. The figure itself only
-turns when it's turned (by a drag, or **twirl**); it doesn't drift round on its own.
+turns when it's turned (by a drag, a flick, or a double tap); it doesn't drift round on its own.
 
 ![the workshop’s rail, the one in front named over the scene](fab/v-rails.jpg)
 
@@ -520,7 +520,7 @@ The workshop is one room, and the camera walks between three places in it. They'
 | place | where | its drawer | along the top |
 |---|---|---|---|
 | **the rails** | along the wall, to the left | the rails' name tags; put a skirt on the figure | |
-| **the figure** | on its stand, in the middle | what it is (**make**: skirt, top, dress, trousers, jumpsuit; tiers), the **bodice** (neckline, sleeves, collar; length, room, swing) and the **legs**, when it has them; fabric, print and colour | **twirl**, **pose** and **sew** (icons), **save to rail** (icon) |
+| **the figure** | on its stand, in the middle | what it is (**make**: skirt, top, dress, trousers, jumpsuit; tiers), the **bodice** (neckline, sleeves, collar; length, room, swing) and the **legs**, when it has them; fabric, print and colour | the tools down the right (**hand**, **pose**, **tug**), each with its own drawer; **save to rail** |
 | **the cutting table** | to one side, facing the figure | the tool in hand: what it does, the gestures it answers to, what it's set to; panels, tiers, undo, the history (the tools themselves are a palette down the right). A top's or trousers' whole pattern lies there to be looked at, without tools | **cloth** (an icon), **save to rail** |
 
 ![the rails](fab/v-rails.jpg)
@@ -661,20 +661,31 @@ so nothing jumps between one gesture and the next.
 
 - **The paper** (on the cutting table: tap the pattern note, or **table** along the top) is one panel of the pattern. Pick a tool and work it (see the moves above); the figure
   wears every move as it's made, and follows while your finger is still on the paper.
-- **Spin the figure**: drag across it. **Go round it**: drag off it. **Come close or go back**: pinch, or scroll.
+- **At the figure, the tools down the right** say what a finger on the scene does; the one in hand is lit, and the
+  drawer follows it.
+  - **hand** (to start with): drag across the figure to spin it on its stand; flick it, or tap it twice, to twirl it;
+    drag off it to go round it; pinch, or scroll, to come close or go back. With more than one thing on, a tap on one
+    is the one worked. The drawer is the garment's: what it is, its bodice or legs, fabric, print and colour.
+  - **pose**: the figure's joints are marked (see below). Its drawer: **stand it as it was**, and **pin and sew it on
+    again** (to dress it afresh in the pose it's in).
+  - **tug**: take hold of the cloth anywhere and pull. A pinch of it (what's within 3 cm of where it's touched, on the
+    same piece) follows the finger; let go, and it falls as it would. Its drawer: **pin and sew it on again**.
+
+  ![the tug in hand: the skirt's hem taken hold of and pulled out](fab/v-tug.jpg)
+
+- **save to rail**, along the top, is the one action: it says so.
 - **Tap the title three times** (or `?perf`) for a frame readout: fps, frame, cloth and drawing time, and whether the
   cloth is keeping up with the clock. The cloth runs in fixed 1/60 s steps, at most two a frame: on a slow device it
   slows down, rather than falling further and further behind.
-- **twirl**: spins the figure on its stand.
-- **pose**: a mode (lit while it's on; twirl is only lit while it turns). Its joints are marked: take hold of an elbow, a
+- **pose**: its joints are marked: take hold of an elbow, a
   hand, a knee, an ankle, the head, or the chest (the larger ring) and move it, and the limb turns where it joins the
   one above (an elbow at the shoulder, a hand at the elbow, a knee at the hip, an ankle at the knee; the head nods on
   its neck; the chest bends and turns at the waist, taking the arms and head with it), a little at a
   time, so what it wears is pushed along with it. Nothing goes below the stand. A pose is kept on this device for each
-  way it stands (arms up for a skirt, down for a bodice); the arrow beside it stands it as it was.
+  way it stands (arms up for a skirt, down for a bodice); **stand it as it was** in the drawer undoes it.
 
 ![posed: an arm out, a knee up, the dress moving with them](fab/v-pose.jpg)
-- **sew**: pins the pieces round the figure as it's posed, sews them up, and takes the pins out.
+- **pin and sew it on again**: pins the pieces round the figure as it's posed, sews them up, and takes the pins out.
 - `?sheet` opens the whole pattern: the pieces with their grain lines, darts and pleats, how
   many to cut, the notes the cut made, and the pattern's checks. (It's no longer a button: the pinned note and the
   table are the pattern now.)

@@ -6,6 +6,7 @@ Made by `node cells/lab/views.mjs fab` from `client/fab/views.mjs`. The README i
 
 ![The rails: a rail per person; slide along, tap the front one to put it on](v-rails.jpg)
 ![The figure: cloth and print in the drawer; the pattern pinned up, bottom right](v-figure.jpg)
+![Tugged: the tug in hand: the skirt's hem taken hold of and pulled out](v-tug.jpg)
 ![Posed: pose mode: its joints marked; an elbow and a knee taken hold of and moved, the dress pushed along with them](v-pose.jpg)
 ![Turned round: the cutting table behind it: tap it to go there](v-figure-turned.jpg)
 ![The cutting table: the pattern at true size, the figure across the room](v-table.jpg)
