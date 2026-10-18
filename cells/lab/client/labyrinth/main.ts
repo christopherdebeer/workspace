@@ -69,24 +69,30 @@ function ray(cx: number, cy: number) {
   return { a, d: [(b[0] - a[0]) / L, (b[1] - a[1]) / L, (b[2] - a[2]) / L], L };
 }
 /** what a point on the screen touches: the slab, a top, or a side; the cell struck and the free cell on that face's side */
-function pick(cx: number, cy: number): Pick | null {
-  const { a, d, L } = ray(cx, cy), topY = world.top() + 1;
+function pick(cx: number, cy: number, w: World = world): Pick | null {
+  const { a, d, L } = ray(cx, cy), topY = w.top() + 1;
   let t = d[1] < 0 ? Math.max(0, (a[1] - topY) / -d[1]) : 0, prev: number[] | null = null;
   const cell = (p: number[]) => [Math.floor(p[1]), Math.floor(p[0] + CENTER), Math.floor(p[2] + CENTER)] as [number, number, number];
-  for (; t < L; t += 0.012) {
+  // (coarse steps through the air, then fine ones back from the first stone struck)
+  let step = 0.06;
+  for (; t < L; t += step) {
     const p = [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t];
     if (p[1] < -1) return null;
-    if (!inStone(world, p[0], p[1], p[2])) { prev = p; continue; }
+    if (!inStone(w, p[0], p[1], p[2])) { prev = p; continue; }
+    if (step > 0.012) { t -= step; step = 0.012; continue; }
     const hit = cell(p);
-    if (!world.onSlab(hit[1], hit[2])) return null;
+    if (!w.onSlab(hit[1], hit[2])) return null;
     if (p[1] < 0) return { face: 'ground', hit: [-1, hit[1], hit[2]], to: [0, hit[1], hit[2]] };
     // (struck in the stone over an arch, from below its own cell: it's that cell's)
-    if (!world.occupied(hit[0], hit[1], hit[2]) && !world.tree(hit[0], hit[1], hit[2]) && !world.tree(hit[0] - 1, hit[1], hit[2])) {
-      for (let k = hit[0] + 1; k < 8; k++) if (world.span(k, hit[1], hit[2])) { hit[0] = k; break; }
+    if (!w.occupied(hit[0], hit[1], hit[2]) && !w.tree(hit[0], hit[1], hit[2]) && !w.tree(hit[0] - 1, hit[1], hit[2])) {
+      for (let k = hit[0] + 1; k < 8; k++) if (w.span(k, hit[1], hit[2])) { hit[0] = k; break; }
     }
     const to = prev ? cell(prev) : [hit[0] + 1, hit[1], hit[2]] as [number, number, number];
     const face = to[1] === hit[1] && to[2] === hit[2] ? 'top' : 'side';
-    return { face, hit, to: face === 'top' ? [hit[0] + 1, hit[1], hit[2]] : [hit[0], to[1], to[2]] };
+    // (how squarely: the struck point's distance from the face's nearest edge, in the face's two directions)
+    const f = (v: number) => Math.min(v - Math.floor(v), Math.ceil(v) - v), [fx, fy, fz] = [f(p[0]), f(p[1]), f(p[2])];
+    const inset = face === 'top' ? Math.min(fx, fz) : to[1] !== hit[1] ? Math.min(fy, fz) : Math.min(fx, fy);
+    return { face, hit, to: face === 'top' ? [hit[0] + 1, hit[1], hit[2]] : [hit[0], to[1], to[2]], inset };
   }
   return null;
 }
@@ -118,7 +124,13 @@ function settle(cells: Array<[number, number, number]>, at = 0.85) {
 let hand: Hand = (qs.get('hand') as Hand) ?? 'auto';
 /** the way the eye looks, along the ground: the nearest of the four ways */
 const looking = () => { const dx = -Math.sin(view.az), dz = -Math.cos(view.az); return DIRS.findIndex(([a, b]) => a === (Math.abs(dx) > Math.abs(dz) ? Math.sign(dx) : 0) && b === (Math.abs(dx) > Math.abs(dz) ? 0 : Math.sign(dz))); };
-type Gesture = { id: number; start: Pick | null; x0: number; y0: number; t0: number; mode: 'pending' | 'trace' | 'carve' | 'turn' | 'piece'; pts: Array<[number, number]>; base: number; seen: Map<string, number>; hold: number; cut: Array<[number, number, number]> };
+type Gesture = {
+  id: number; start: Pick | null; x0: number; y0: number; t0: number; mode: 'pending' | 'trace' | 'carve' | 'turn' | 'piece';
+  pts: Array<[number, number]>; base: number; seen: Map<string, number>; hold: number; cut: Array<[number, number, number]>;
+  /** a trace: the world as it was before it (what it's read against), the height it started from, the columns crossed
+   * (each fixed once passed), where it's going (and what might be next, and for how many moves), what it last laid */
+  before?: World; h0?: number; cells: Array<[number, number]>; target: Pick | null; cand: string; candPick: Pick | null; count: number; laid: string; said: string; born: number;
+};
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
 let pinch0 = 0, zoom0 = 1, mid0 = 0;
@@ -135,18 +147,51 @@ let hintT = 0;
 const say = (t: string) => { hint(t); clearTimeout(hintT); hintT = window.setTimeout(() => hint(), 2400); };
 const kept = () => { keep(); hint(); };
 
+/** where a trace might be going: a top (or a side) other than the column it started on; else nowhere ('') */
+const goal = (p: Pick | null) => !p || p.face === 'ground' || !g?.start || (p.hit[1] === g.start.hit[1] && p.hit[2] === g.start.hit[2]) ? '' : `${surface(g.before!, p)}.${p.hit[1]}.${p.hit[2]}`;
+/** moves in a row a new destination has to be under the finger before the trace goes there instead */
+const SURE = 3;
+/** how far inside a top (from its edge, of a cell's 0.5) a touch counts as meaning it at once */
+const SQUARE = 0.18;
 function traceStep(cx: number, cy: number, final: boolean) {
   if (!g?.start) return;
-  // (read against the world as it was before this trace)
-  if (world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); }
-  const h0 = surface(world, g.start), end = pick(cx, cy);
-  const h1 = end && end.face !== 'ground' ? surface(world, end) : h0;
-  const pts = g.pts, cells: Array<[number, number]> = [[g.start.hit[1], g.start.hit[2]]];
-  pts.forEach(([x, y], q) => { const c = onPlane(x, y, h0 + ((h1 - h0) * q) / Math.max(1, pts.length - 1)); if (c) cells.push(c); });
-  for (const [i, j] of cells) if (!g.seen.has(`${i}.${j}`)) g.seen.set(`${i}.${j}`, now());
-  const op = trace(world, g.start, cells, end, (i, j) => g!.seen.get(`${i}.${j}`) ?? now());
-  if (op) world.apply(op, now());
-  if (final && op) { settle((op.add ?? []).map((c) => [c[0], c[1], c[2]])); kept(); }
+  if (!g.before) {
+    // (read against the world as it was before this trace: a copy, so picking never strikes the trace's own stone)
+    g.before = new World(world.seed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now());
+    g.h0 = surface(g.before, g.start); g.cells = [[g.start.hit[1], g.start.hit[2]]]; g.born = now();
+  }
+  const before = g.before;
+  g.pts.push([cx, cy]);
+  // (the columns crossed: on the plane the trace starts from, each fixed once the finger's passed it)
+  const c = onPlane(cx, cy, g.h0!), last = g.cells[g.cells.length - 1];
+  if (c && (c[0] !== last[0] || c[1] !== last[1])) g.cells.push(c);
+  // (where it's going: a new destination only once it's held under the finger a few moves; letting go changes nothing,
+  // so what was shown under the finger is what's built)
+  const end = final ? null : pick(cx, cy, before), k = goal(end);
+  if (final) { /* (letting go isn't a move) */ } else if (k === goal(g.target)) g.count = 0;
+  else if (k === g.cand) { g.count++; g.candPick = end; }
+  else { g.cand = k; g.candPick = end; g.count = 1; }
+  // (a top touched squarely is meant at once; near its edge, or leaving it, only once the finger stays)
+  if (!final && k && k !== goal(g.target) && (end?.inset ?? 0) >= SQUARE) g.count = SURE;
+  if (g.count >= SURE) { g.target = k ? g.candPick : null; g.count = 0; }
+  for (const [i, j] of g.cells) if (!g.seen.has(`${i}.${j}`)) g.seen.set(`${i}.${j}`, now());
+  const op = trace(before, g.start, g.cells, g.target, (i, j) => g!.seen.get(`${i}.${j}`) ?? now(), g.born);
+  const refused = op && 'refused' in op ? op.refused : '';
+  if (refused && refused !== g.said) say(refused);
+  g.said = refused;
+  const built = op && !('refused' in op) ? op : null, sig = built ? JSON.stringify(built) : '';
+  // (only when what it builds has changed is the world worked out again)
+  if (sig !== g.laid) {
+    if (world.ops.length > g.base) { if (built) world.replaceLast(built, now()); else { world.ops.length = g.base; world.rebuild(now()); } }
+    else if (built) world.apply(built, now());
+    g.laid = sig;
+  }
+  if (final && built) {
+    const r = world.reached.get(world.ops[world.ops.length - 1]);
+    settle(r?.cells ?? (built.add ?? []).map((q) => [q[0], q[1], q[2]])); kept();
+    // (never quietly short: if it stopped on the way, it says where it joined)
+    if (r && !r.reached) say(r.stopped > 0 ? 'it joins the stone it meets on the way' : 'nothing to build there');
+  }
 }
 function carveAt(cx: number, cy: number) {
   if (!g) return;
@@ -169,7 +214,7 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   const start = pick(e.clientX, e.clientY);
-  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: !start ? 'turn' : hand === 'auto' ? 'pending' : 'piece', pts: [], base: world.ops.length, seen: new Map(), hold: 0, cut: [] };
+  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: !start ? 'turn' : hand === 'auto' ? 'pending' : 'piece', pts: [], base: world.ops.length, seen: new Map(), hold: 0, cut: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0 };
   if (start && hand === 'auto') g.hold = window.setTimeout(() => { if (g && g.mode === 'pending') { g.mode = 'carve'; navigator.vibrate?.(8); carveAt(g.x0, g.y0); } }, 420);
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -187,8 +232,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (g.mode === 'turn') { view.az -= dx * 0.008; return; }
   // (a piece in hand: a drag turns it)
   if (g.mode === 'piece' && moved) { g.mode = 'turn'; view.az -= (e.clientX - g.x0) * 0.008; return; }
-  if (g.mode === 'pending' && moved) { g.mode = 'trace'; clearTimeout(g.hold); g.pts.push([g.x0, g.y0]); }
-  if (g.mode === 'trace') { g.pts.push([e.clientX, e.clientY]); traceStep(e.clientX, e.clientY, false); }
+  if (g.mode === 'pending' && moved) { g.mode = 'trace'; clearTimeout(g.hold); traceStep(g.x0, g.y0, false); }
+  if (g.mode === 'trace') traceStep(e.clientX, e.clientY, false);
   if (g.mode === 'carve') carveAt(e.clientX, e.clientY);
 });
 const up = (e: PointerEvent) => {

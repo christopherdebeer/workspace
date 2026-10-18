@@ -16,12 +16,13 @@ await withWood(async (lab) => {
   const W = (f, ...a) => p.evaluate(([src, args]) => new Function('w', 'a', `return (${src})(w, ...a)`)(window.__labyrinth.world, args), [f.toString(), a]);
   const at = (i, j, y) => p.evaluate(([a, b, d]) => window.__labyrinth.screenOf(a, b, d), [i, j, y]);
   const tapAt = async (i, j, y) => { await p.waitForTimeout(900); const s = await at(i, j, y); await p.mouse.click(s[0], s[1]); await p.waitForTimeout(200); };
-  const drag = async (pts, hold = 0) => {
+  const drag = async (pts, hold = 0, peek = null) => {
     await p.waitForTimeout(1500);
     const s = await Promise.all(pts.map(([i, j, y]) => at(i, j, y)));
     await p.mouse.move(s[0][0], s[0][1]); await p.mouse.down();
     if (hold) await p.waitForTimeout(hold);
     for (let q = 1; q < s.length; q++) for (let t = 1; t <= 6; t++) { await p.mouse.move(s[q - 1][0] + ((s[q][0] - s[q - 1][0]) * t) / 6, s[q - 1][1] + ((s[q][1] - s[q - 1][1]) * t) / 6); await p.waitForTimeout(25); }
+    if (peek) await peek();
     await p.mouse.up(); await p.waitForTimeout(300);
   };
   c.ok('opens on a bare stone, saying what a hand can do', (await probe()).ops === 0 && (await p.textContent('#hint')).includes('trace'));
@@ -35,10 +36,16 @@ await withWood(async (lab) => {
   for (const y of [0, 1, 2]) await tapAt(9, 4, y);
   c.ok('tap, tap, tap: a terrace three high', await W((w) => w.topFrom(0, 9, 4) === 3));
   // (from the platform's top, along the wall's top, up to the terrace)
-  await drag([[3, 7, 2], [5, 7, 2], [7, 7, 2], [8, 6, 2.4], [9, 4, 3]]);
+  let shown = '';
+  await drag([[3, 7, 2], [5, 7, 2], [7, 7, 2], [8, 6, 2.4], [9, 4, 3]], 0, async () => { shown = await p.evaluate(() => window.__labyrinth.world.encode()); });
+  { const after = await p.evaluate(() => window.__labyrinth.world.encode()); c.ok('what the trace showed under the finger is what was built', shown === after, { shown: shown.slice(-300), after: after.slice(-300) }); }
   const pr = await probe();
   c.ok('trace from a top up to a higher top: steps and landings', pr.whys.at(-1) === 'stairs' && pr.stairs >= 1, pr);
   c.ok('and the landings along the wall rest on it', await W((w) => w.stone(1, 5, 7) && w.stone(1, 6, 7)));
+  // (too steep for the stroke: nothing built, and it says why)
+  { const n0 = (await probe()).ops; let said = '';
+    await drag([[9, 6, 0], [9, 5, 0], [9, 4, 3]], 0, async () => { said = await p.textContent('#hint'); });
+    c.ok('a climb too steep for its stroke is refused, saying why', (await probe()).ops === n0 && /steep/.test(said), { said, n0, pr: await probe(), last: await W((w) => JSON.stringify(w.ops.at(-1))), s: await Promise.all([[11, 4, 0], [9, 4, 3]].map(([i, j, y]) => at(i, j, y))) }); }
   // (hold on the wall under the walkway, then carve)
   await drag([[6, 7, 0.5], [6, 7, 0.5]], 600);
   c.ok('hold, then carve: the wall cut through beneath the walkway', await W((w) => !w.stone(0, 6, 7) && w.stone(1, 6, 7)), await probe());

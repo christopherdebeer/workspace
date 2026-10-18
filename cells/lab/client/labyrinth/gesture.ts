@@ -6,22 +6,26 @@
  *   nothing under it, the rules carry it on an arch or a pier).
  * - **Trace** extends or joins, by where it starts and where it ends:
  *   - from the bare stone to the bare stone: a wall along it;
- *   - from a top, out over anything: a walkway at that height (cut through any wall in its way: what's left over the
- *     cut stands on an arch);
+ *   - from a top (or a side: the course touched), out over anything: a walkway at that height;
  *   - to a top of another height (from the stone, or from a top): steps and landings along it, climbing evenly,
  *     resting on what's beneath or on arches and piers.
+ *   Each of those is kept as a connection (model.ts): the intent, its stone worked out on replay, never cutting the
+ *   hand's stone (it stops where it meets it). Steps go only where the way runs straight (a stair is climbed from its
+ *   foot), so a climb with more levels than straight cells isn't built short: it's refused, and says why.
  * - **Hold, then trace** carves: each piece of stone it passes over is cut away (a top lowered a course; a side cut
  *   through, so what's over it is carried on an arch).
  */
-import { DIRS, LEVELS, inGrid, type Cell, type Op, type World } from './model';
+import { LEVELS, inGrid, straights, type Cell, type Op, type World } from './model';
 
 /** what a touch struck: the stone slab (`hit[0]` −1), a top, or a side; `hit` the cell struck, `to` the free cell on that
- * face's side */
-export interface Pick { face: 'ground' | 'top' | 'side'; hit: Cell; to: Cell }
+ * face's side; `inset`, how squarely */
+export interface Pick { face: 'ground' | 'top' | 'side'; hit: Cell; to: Cell; /** how far inside the face struck the touch is, from its nearest edge (0 at an edge, 0.5 at its middle) */ inset?: number }
 
-/** the height of the surface a touch is on: the slab is 0, a top is the level above its stone */
+/** the height of the surface a touch is on: the slab is 0, a top is the level above its stone, a side is the course
+ * touched (what's built from it goes out at that course, not from the top of the column) */
 export function surface(w: World, p: Pick): number {
   if (p.face === 'ground') return 0;
+  if (p.face === 'side') return p.hit[0] + 1;
   return w.topFrom(p.hit[0], p.hit[1], p.hit[2]);
 }
 
@@ -55,67 +59,33 @@ export function connect(path: Array<[number, number]>): Array<[number, number]> 
 }
 
 /**
- * A trace: from where it started (`start`), over cells (`path`, the start's own column first), to where it ended
- * (`end`: a top it reached, or null). `born(i, j)` says when each cell along it was first passed over (the stone is laid
- * behind the finger). Returns the operation, and what it read the trace as.
+ * A trace: from where it started (`start`), over the columns the stroke crossed (`path`, the start's own first), to
+ * where it ended (`end`: a top it reached, or null). `born(i, j)` says when a wall's cells were passed over (laid behind
+ * the finger). Returns the operation (a wall, or a connection), or why it can't be built.
  */
-export function trace(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number): Op | null {
+export function trace(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0): Op | { refused: string } | null {
   const cells = connect(path);
-  if (cells.length < 2) return null;
   const h0 = surface(w, start);
-  // (where it ends counts if it's a top of another height, not the bare stone from up high)
-  let h1 = h0, endCell: [number, number] | null = null;
-  if (end && end.face !== 'ground') {
-    const c: [number, number] = [end.hit[1], end.hit[2]], h = surface(w, end);
-    if (!(c[0] === cells[0][0] && c[1] === cells[0][1])) { endCell = c; h1 = h; }
-  } else if (end && end.face === 'ground' && h0 === 0) endCell = null;
-  if (endCell) {
-    // (the path runs on to the cell it ended on, which it doesn't build on)
-    const last = cells[cells.length - 1];
-    if (last[0] !== endCell[0] || last[1] !== endCell[1]) cells.push(...connect([last, endCell]).slice(1));
-    cells.pop();
+  // (where it ends counts if it's a top, not its own start)
+  let to: Cell | null = null;
+  if (end && end.face !== 'ground' && !(end.hit[1] === cells[0][0] && end.hit[2] === cells[0][1])) {
+    to = [surface(w, end), end.hit[1], end.hit[2]];
+    // (the way goes in at the first column it passes beside the destination, not on round it)
+    const at = cells.findIndex((c) => Math.abs(c[0] - to![1]) + Math.abs(c[1] - to![2]) <= 1);
+    if (at >= 0) { cells.length = at + 1; if (cells[at][0] !== to[1] || cells[at][1] !== to[2]) cells.push([to[1], to[2]]); }
+    else cells.push(...connect([cells[cells.length - 1], [to[1], to[2]]]).slice(1));
   }
-  const add: Array<[number, number, number, number]> = [], stairs: Array<[number, number, number, number, number]> = [], cut: Cell[] = [];
-  const free = (k: number, i: number, j: number) => !w.stone(k, i, j) && w.stair(k, i, j) < 0;
-  const dirTo = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]) => x === b[0] - a[0] && z === b[1] - a[1]);
-  if (h0 === 0 && h1 === 0) {
-    // (a wall along it)
-    for (const [i, j] of cells) if (free(0, i, j)) add.push([0, i, j, born(i, j)]);
+  if (cells.length < 2) return null;
+  if (h0 === 0 && (!to || to[0] === 0)) {
+    // (a wall along it: the hand's own stone)
+    const add: Array<[number, number, number, number]> = [];
+    for (const [i, j] of cells) if (!w.stone(0, i, j) && w.stair(0, i, j) < 0 && !w.tree(0, i, j)) add.push([0, i, j, born(i, j)]);
     return add.length ? { add, why: 'wall' } : null;
   }
-  const along = cells.slice(1);
-  if (h1 === h0) {
-    // (a walkway at its height, through whatever wall's in the way)
-    for (const [i, j] of along) {
-      if (free(h0 - 1, i, j)) add.push([h0 - 1, i, j, born(i, j)]);
-      if (h0 < LEVELS && !free(h0, i, j)) cut.push([h0, i, j]);
-    }
-    return add.length || cut.length ? { add, cut, why: endCell ? 'bridge' : 'walkway' } : null;
-  }
-  // (steps and landings: climbing (or going down) evenly along it, a level a step)
-  const L = along.length, dz = h1 - h0, steps = Math.min(Math.abs(dz), L);
-  let h = h0;
-  for (let s = 0; s < L; s++) {
-    const [i, j] = along[s], step = Math.floor(((s + 1) * steps) / L) > Math.floor((s * steps) / L);
-    const next = s + 1 < L ? along[s + 1] : endCell ?? along[s], prev = s > 0 ? along[s - 1] : cells[0];
-    if (step && dz > 0) {
-      // (a step up: its floor is where we are, it climbs toward the next cell)
-      stairs.push([h, i, j, dirTo([i, j], next) >= 0 ? dirTo([i, j], next) : dirTo(prev, [i, j]), born(i, j)]);
-      if (h > 0 && free(h - 1, i, j)) add.push([h - 1, i, j, born(i, j)]);
-      for (let k = h + 1; k <= h + 1 && k < LEVELS; k++) if (!free(k, i, j)) cut.push([k, i, j]);
-      h++;
-    } else if (step) {
-      // (a step down: it climbs back toward where we came from)
-      h--;
-      stairs.push([h, i, j, dirTo([i, j], prev), born(i, j)]);
-      if (h > 0 && free(h - 1, i, j)) add.push([h - 1, i, j, born(i, j)]);
-    } else {
-      // (a landing)
-      if (h > 0 && free(h - 1, i, j)) add.push([h - 1, i, j, born(i, j)]);
-      if (h < LEVELS && !free(h, i, j)) cut.push([h, i, j]);
-    }
-  }
-  return { add, stairs, cut, why: 'stairs' };
+  const path2 = to ? cells.slice(0, -1) : cells, climb = to ? Math.abs(to[0] - h0) : 0, room = straights(path2, to).length;
+  if (climb > room) return { refused: `too steep: ${climb} level${climb > 1 ? 's' : ''} to climb, and room for ${room} step${room === 1 ? '' : 's'}; draw it longer, or straighter` };
+  if (path2.length < 2 && !to) return null;
+  return { connect: { from: [h0, cells[0][0], cells[0][1]], to, path: path2 }, born: now, why: !to ? 'walkway' : to[0] === h0 ? 'bridge' : 'stairs' };
 }
 
 /** what carving takes where it touches: the stone (or stair) struck, if it's the hand's (piers and arches are the rules') */

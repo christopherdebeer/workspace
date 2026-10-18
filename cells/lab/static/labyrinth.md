@@ -16,16 +16,16 @@ Architecture that follows the hand. A travertine slab on a table in the sun, and
 | | a top | another course |
 | | a side | the stone pushed out that way (on an arch or a pier, if there's nothing under it) |
 | **trace** | from the stone, across the stone | a wall along the stroke |
-| | from a top, out over anything | a walkway at that height, cut through any wall in its way (what's left over the cut stands on an arch) |
+| | from a top, out over anything | a walkway at that height, on stone laid under it. Where it meets stone at that height it stops and joins it: it never cuts what you built |
 | | from a top to another top at the same height | a walkway joining them: a bridge where it crosses the air |
-| | from the stone or a top to a top at another height | steps and landings, climbing evenly along the stroke |
+| | from the stone or a top to a top at another height | steps and landings, climbing evenly along the straight parts of the stroke. Too steep for the stroke, and nothing is built: it says why (draw it longer, or straighter) |
 | **hold, then trace** | stone | carves: a top lowered a course; a side cut through, so what's over it stands on an arch |
 
 ### The palette: one piece, where it's touched
 
 | Piece | Where it's touched | Puts down |
 |---|---|---|
-| **block** | the stone, a top, a side | stone in the free cell on that side |
+| **block** | the stone, a top, a side | stone in the free cell on that side. Against a side, out over nothing too, as a tap does (the rules carry it) |
 | **arch** | the same | stone with a way through it, running where it's open either side; on an arch, the same way, making one tall arch |
 | **stair** | a floor, or beside stone | a flight up a level, climbing toward the stone it was put against (or onto a neighbour's top) |
 | **bridge** | a gap at a level, from beside stone | stone laid across the whole span at once (up to seven cells), marked as a bridge so the rules carry it on one arch |
@@ -64,37 +64,55 @@ The brief's first test asks whether someone, without instruction, can build this
 
 1. **First touch.** Tap the stone, tap its top, tap a side: a platform, two courses high.
 2. **A traced wall.** Trace across the stone from beside it, and a wall grows along the stroke.
-3. **An elevated connection.** Tap a terrace up three courses. Then trace from the platform's top along the wall's top, and up to the terrace. The landings rest on the wall. The step up comes at the end, and where the route turns off the wall, piers come up under it.
+3. **An elevated connection.** Tap a terrace up three courses. Then trace from the platform's top along the wall's top, and up to the terrace. The landings rest on the wall. The step up comes on the last straight run, and where the route turns off the wall, piers come up under it.
 4. **A resolved labyrinth.**
    - Hold on the wall beneath the walkway, then carve. The wall is cut through, and the walkway over the cut stands on an arch.
    - Trace a wall round in front, and the court is closed: paved, with a cypress in its corner.
-   - Tap up a tower, and trace from its top to the terrace's top at the same height. The bridge is resolved onto one great arch, springing as low as both sides go.
+   - Tap up a tower, and trace from its top to the terrace's top at the same height. The bridge is resolved into an arcade of two even bays.
 
 ## How it's built
 
 Three layers, in order of authority (`model.ts`):
 
-1. **Operations.** Each gesture or piece is recorded as what it changes in the intended solid: stone added (a cell at a level, and when it was laid), stairs added (which way each climbs), stone with a way through it, cypresses, pools, and stone cut away. A bridge's stone is marked as a bridge's. Undo takes the last operation back. The world is always these operations replayed, so a new edit never redesigns an earlier one except through the rules below.
-2. **The intended solid.** The stone and stairs the operations add up to. The hand decides this, and nothing below changes it.
+1. **Operations.** Each tap, wall or piece is recorded as what it changes in the intended solid: stone added (a cell at a level, and when it was laid), stairs added (which way each climbs), stone with a way through it, cypresses, pools, and stone cut away. A bridge's stone is marked as a bridge's. A trace that reaches out or climbs is recorded as a **connection**: where it starts (the height and the column), the columns it crosses, and where it's going. That is the intent; its stone and steps are worked out when it's replayed. Undo takes the last operation back. The world is always these operations replayed, so a new edit never redesigns an earlier one except through the rules below.
+2. **The intended solid.** The stone and stairs the operations add up to. The hand decides this, and nothing below changes it. A connection works itself out around it:
+   - a landing or walkway is laid on stone under it, at the height it walks;
+   - steps go only where the way runs straight through a cell (in and out the same way, so each stair is climbed from its foot), spread evenly along those, the last on the last straight run;
+   - where it meets anything at the height it walks (stone, a stair, a tree), or would stand on only a stair, it stops there and joins it. It never cuts what the hand built.
 3. **The resolution.** What the stone has to do so the intended solid stands. It is worked out afresh after every edit, the same every time:
    - stone with nothing under it, between stone either side along x or z, is carried on an **arch** (three cells at most, or seven for a bridge put by hand). The arch springs as low as both sides go, down to where a round arch fits, and the air under it is kept clear;
-   - a longer run becomes an **arcade**: a **pier** every three cells, with arches between;
+   - a longer run between stone becomes an **arcade**: piers spaced evenly, the bays as alike as they can be (any longer ones in the middle);
    - a free end, or a stair over nothing, stands on a pier;
    - so cutting under stone opens an arched way through it, and a walkway drawn out over the court comes with what holds it up;
-   - ground walled in all round is a **courtyard**: paved, with water where it's open on every side (or at its heart, if it's big enough), and a cypress in a corner. An arched passage counts as a wall.
+   - ground walled in all round is a **courtyard**: paved. If it's six cells or more, water where it's open on every side (four pools at most, nearest its heart), or at its heart; if it's four or more, a cypress in a corner. A low arched passage (a level or so high) counts as a wall; a bridge high over the ground doesn't.
 
 **Reading a gesture** (`gesture.ts`) takes where the gesture started, the cells the stroke crossed, and where it ended:
 
+- **Where it started**: the slab is height 0, a top the level above its stone, and a side the course touched (so a walkway drawn from halfway up a tower goes out at that course).
 - **Where it ended counts** if it's a top at another height. From high up, ending over bare stone, the trace makes a walkway rather than stairs down: tracing *up* to a top is how you climb.
-- **Steps are spread evenly**, a level per step, along the stroke.
+- **The way goes in** at the first column it passes beside its destination, not on round it.
+- **A climb too steep** (more levels than straight cells to put steps in) is refused, with the reason in the hint, rather than built short.
 - **A diagonal stroke** is walked a cell at a time, the way it leans.
 - **A stroke that doubles back** keeps only what it covered once.
 
 **The page** (`main.ts`) turns a touch into those terms:
 
 - **What it struck** is found by marching the ray through the actual stone. That includes the stone above an arch's curve, so a touch there is that cell's, not the air's.
-- **The stroke's cells** come from projecting the finger onto the level plane it started on, or blended toward the height it's reaching.
-- **While a trace is under the finger**, it's re-read every move against the world as it was before the trace began, and the stone is laid behind the finger in the order it was crossed.
+- **The stroke's cells** come from projecting the finger onto the level plane it started on. Each is fixed once the finger has passed it: reaching for a higher top later doesn't shift the cells already crossed.
+- **Where it's going** is held steady. A top touched squarely is taken at once; near its edge, or moving off it, the finger has to stay a few moves before the trace goes there instead. So a wobble across an edge doesn't flip the trace between a walkway and stairs.
+- **While a trace is under the finger**, it's read against a copy of the world as it was before the trace began, so picking never strikes the trace's own stone. The world is only worked out again when what the trace would build changes. The stone is laid behind the finger in the order it was crossed.
+- **Letting go changes nothing.** What was shown under the finger is what's built. If a connection stopped short to join stone it met, the hint says so.
+- **What it struck** is found by marching the ray in coarse steps through the air, then fine ones back from the first stone.
+
+## Where you could walk
+
+`nav.ts` works out, from the resolved world, where a figure could stand and walk:
+
+- **A place** is a cell with a floor under it (the slab, the top of stone, the deck over an arch) and nothing in it. The air under an arch counts, so a passage cut under stone is walked.
+- **A stair** joins its foot (behind it, at its level) to its head (ahead, a level up), or to the next stair of a flight.
+- **Places beside each other** at the same height join.
+
+Nothing is drawn from it yet. The tests use it to check that every connection that reached where it was going can be walked, end to end.
 
 ## How it's drawn
 
@@ -118,12 +136,16 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
 - `node cells/lab/devtools/labyrinth.test.mjs` builds 60 worlds from 60 random actions each (taps, traces between surfaces, carving, and palette pieces), read by `gesture.ts` and `palette.ts`. It checks:
   - whatever the hand built stands: on what's below it, on an arch of three cells at most whose sides are stone, or on a pier that itself stands and carries something;
+  - every connection that reached where it was going can be walked from its start to its end (`nav.ts`);
+  - a connection never cuts the hand's stone, and it either reaches or stops where it met something;
+  - an edit changes piers and arches only within nine cells of what it touched;
+  - a climb too steep for its stroke is refused, saying why; drawn longer it's built, reaches the top, and can be climbed;
   - every arch's air is clear;
   - every way of reading a gesture occurs;
   - undo, and doing it again, gives the same world;
   - what's written down makes the same world again;
   - each storyboard stage is what it says it is.
-- `node cells/lab/devtools/labyrinth-smoke.mjs` does the palette on a fresh stone (each piece where it's touched: block; arch; arch on arch, making one tall arch; stair against a block; a bridge across a three-cell gap on one arch; cypress; pool; take). It also does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall), and a hold-and-carve under the walkway (an arch carries it). Then undo, a turn from the background, print, what's built kept across a reload, and clear.
+- `node cells/lab/devtools/labyrinth-smoke.mjs` does the palette on a fresh stone (each piece where it's touched: block; arch; arch on arch, making one tall arch; stair against a block; a bridge across a three-cell gap on one arch; cypress; pool; take). It also does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall; what was shown before letting go is exactly what's built), a climb too steep for its stroke (refused, and the hint says why), and a hold-and-carve under the walkway (an arch carries it). Then undo, a turn from the background, print, what's built kept across a reload, and clear.
 
 **What the tests don't establish** is the brief's real criterion: whether someone can anticipate a result, correct it and repeat it on purpose. That needs a person with the phone.
 
@@ -136,6 +158,9 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 - `?preview` is the index's card: stage 4, turning slowly.
 
 ## Next
+
+- **Motifs**: whole arcades, coherent stairways and landings recognised as one thing, rather than cell by cell.
+- **The walk drawn**: the places and stairs from `nav.ts`, shown faintly while a trace is under the finger.
 
 - **Snapping on relationships**: geometric (a stroke ending near an edge or a terrace joins it), topological (two walkways meeting make a junction you can walk), architectural (a buttress under an exposed terrace edge).
 - **Strokes off the grid**: diagonals kept as diagonals, with slight irregularity in the masonry.

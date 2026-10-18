@@ -5,10 +5,11 @@
 // undo undoes; what's written down makes the same world again. And the storyboard is what it says.
 import { build } from 'esbuild';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
-const { World, replay, LEVELS, DIRS, LO, HI, START } = await load('../client/labyrinth/model.ts');
+const { World, replay, LEVELS, DIRS, LO, HI, START, key, unkey } = await load('../client/labyrinth/model.ts');
 const G = await load('../client/labyrinth/gesture.ts');
 const { story } = await load('../client/labyrinth/demo.ts');
 const P = await load('../client/labyrinth/palette.ts');
+const NAV = await load('../client/labyrinth/nav.ts');
 
 let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
@@ -30,6 +31,12 @@ function stands(w, tag) {
 }
 
 const made = {};
+const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] };
+/** how far from what an edit touched its effect on piers and arches may go (an arch spans seven at most; an arcade's
+ * piers are respaced along its whole run, so a little more) */
+const LOCAL = 9;
+const spanCells = (sp) => Array.from({ length: sp.n }, (_, q) => key(sp.k, sp.i + q * DIRS[sp.a][0], sp.j + q * DIRS[sp.a][1]));
+const opCells = (op) => [...(op.add ?? []), ...(op.stairs ?? []), ...(op.cut ?? []), ...(op.arches ?? []), ...(op.trees ?? [])].map((c) => [c[1], c[2]]).concat((op.pools ?? []).map((c) => [c[0], c[1]]), op.connect ? op.connect.path : [], op.connect?.to ? [[op.connect.to[1], op.connect.to[2]]] : []);
 for (let s = 1; s <= 60; s++) {
   const w = new World(s);
   let r = s * 7919;
@@ -59,7 +66,28 @@ for (let s = 1; s <= 60; s++) {
       const c = G.carve(w, { face: 'side', hit: [k, i, j], to: [k, i, j] });
       if (c) op = { cut: [c], why: 'carve' };
     }
-    if (op) { w.apply(op, t); made[op.why] = (made[op.why] ?? 0) + 1; }
+    if (op && op.refused) { made.refused = (made.refused ?? 0) + 1; op = null; }
+    if (!op) continue;
+    const mass0 = new Set(w.mass.keys()), stairs0 = new Set(w.stairs.keys()), piers0 = new Set(w.piers.keys()), spans0 = new Set(w.spans.map(spanCells).flat());
+    w.apply(op, t); made[op.why] = (made[op.why] ?? 0) + 1;
+    if (op.connect) {
+      const c = op.connect, r = w.reached.get(op), tag = `seed ${s} op ${t} (${op.why})`;
+      // (the hand's stone is never cut to make a connection)
+      ok(`${tag}: a connection cuts nothing`, [...mass0].every((v) => w.mass.has(v) || w.stairs.has(v)) && [...stairs0].every((v) => w.stairs.has(v)));
+      // (it reaches where it was going, or it stopped where it met something: never short for nothing)
+      ok(`${tag}: it reaches, or it joins what it met`, r && (r.reached || r.stopped >= 0), r);
+      if (r?.reached) {
+        // (and what it built can be walked, end to end)
+        const n = NAV.navigate(w), place = (k, i, j) => n.places.has(key(k, i, j));
+        const a = place(c.from[0], ...c.path[0]) ? [c.from[0], ...c.path[0]] : [c.from[0], ...c.path[1]];
+        const last = c.path[c.path.length - 1], b = c.to ? (place(...c.to) ? c.to : null) : [c.from[0], ...last];
+        if (place(...a) && b && place(...b)) { walked.tried++; if (NAV.reaches(n, a, b)) walked.ok++; else if (walked.saw.length < 3) walked.saw.push({ s, t, c, a, b, enc: process.env.DEBUG ? w.encode() : undefined }); }
+      }
+    }
+    // (an edit changes what holds things up only near it)
+    const near = opCells(op), far = (v) => { const [, i, j] = unkey(v); return near.every(([x, z]) => Math.max(Math.abs(x - i), Math.abs(z - j)) > LOCAL); };
+    const changed = [...[...w.piers.keys()].filter((v) => !piers0.has(v)), ...[...piers0].filter((v) => !w.piers.has(v)), ...w.spans.map(spanCells).flat().filter((v) => !spans0.has(v))];
+    local.tried++; if (changed.every((v) => !far(v))) local.ok++; else if (local.saw.length < 3) local.saw.push({ s, t, why: op.why, far: changed.filter(far).map(unkey) });
   }
   stands(w, `seed ${s}`);
   const again = replay(w.encode());
@@ -80,6 +108,25 @@ for (let s = 1; s <= 60; s++) {
   w.undo(); w.undo();
   ok('undone, it goes back', w.extent().i1 === START[1]);
 }
+ok(`connections that reached can be walked end to end (${walked.ok} of ${walked.tried})`, walked.tried > 50 && walked.ok === walked.tried, walked.saw);
+ok(`an edit changes what holds things up only near it (${local.ok} of ${local.tried})`, local.ok === local.tried, local.saw);
+// (a climb too steep for its stroke is refused, saying why; drawn longer, it's built, and walked)
+{
+  const w = new World(3), top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] }), ground = (i, j) => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+  for (let k = 0; k < 3; k++) w.apply({ add: [[k, 6, 5, 0]] });
+  const short = G.trace(w, ground(4, 5), [[4, 5], [5, 5]], top(6, 5), () => 0);
+  ok('too steep for the stroke: refused, saying why', !!short?.refused && /steep/.test(short.refused), short);
+  const long = G.trace(w, ground(2, 5), [[2, 5], [3, 5], [4, 5], [5, 5]], top(6, 5), () => 0);
+  ok('drawn longer: stairs', long?.why === 'stairs', long);
+  w.apply(long);
+  ok('which reach the top', w.reached.get(long)?.reached, w.reached.get(long));
+  ok('and can be climbed', NAV.reaches(NAV.navigate(w), [0, 2, 5], [3, 6, 5]));
+  // (a connection through the hand's stone stops there and joins it, and the stone stays)
+  w.apply({ add: [[3, 4, 8, 0]] });
+  const wk = G.trace(w, top(6, 5), [[6, 5], [6, 6], [6, 7], [6, 8], [5, 8], [4, 8], [3, 8]], null, () => 0);
+  w.apply(wk);
+  ok('a walkway meeting stone stops at it, and cuts nothing', w.stone(3, 4, 8) && w.reached.get(wk)?.stopped >= 0, w.reached.get(wk));
+}
 for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
 // (the storyboard: what each stage says it is)
 const s1 = story(1), s2 = story(2), s3 = story(3), s4 = story(4);
@@ -88,8 +135,9 @@ ok('story 2: a wall traced from it', [5, 6, 7, 8, 9].every((i) => s2.stone(0, i,
 ok('story 3: a connection up to the higher terrace, with steps', s3.stairs.size >= 1 && s3.stone(1, 6, 7));
 ok('story 4: a passage beneath the walkway, on an arch', !s4.stone(0, 6, 7) && !!s4.span(1, 6, 7));
 ok('story 4: the court closed, with something growing in it', s4.courts.size > 0 && s4.decor.length > 0);
-ok('story 4: the tower bridged to the terrace on an arch', s4.spans.some((sp) => sp.k === 2 && sp.n === 3));
+{ const bay = s4.spans.filter((sp) => sp.k === 2 && sp.a === 0 && sp.j === 4); ok('story 4: the tower bridged to the terrace on an arcade of even bays', bay.length === 2 && bay.every((sp) => sp.n === bay[0].n), bay); }
 stands(s4, 'story 4');
+if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exitCode = fails ? 1 : 0;

@@ -22,7 +22,7 @@ export function story(stage: number): World {
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op) w.apply(op, t); };
-  const traceAt = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t); if (op) w.apply(op, t); };
+  const traceAt = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t, t); if (op && !('refused' in op)) w.apply(op, t); };
   const carveAt = (cells: Cell[]) => { const cut = cells.filter((c) => carve(w, { face: 'side', hit: c, to: c })); if (cut.length) w.apply({ cut, why: 'carve' }, t); };
   // 1: a small raised platform
   tapAt(ground(3, 7)); tapAt(top(w, 3, 7)); tapAt(side(0, 3, 7, 1, 0)); tapAt(side(1, 3, 7, 1, 0));

@@ -2,7 +2,7 @@
  * The palette: a piece in hand, put where it's touched (the free cell on the touched face's side), as an operation on
  * the same solid the gestures build (model.ts), resolved by the same rules. **auto** is the gestures (gesture.ts).
  *
- * - **block**: stone, there.
+ * - **block**: stone, there; against a side, out from it even over nothing (as a tap does: the rules carry it).
  * - **arch**: stone with a way through it, running where it's open either side (on an arch, the same way: one tall arch).
  * - **stair**: a flight up a level, climbing toward the stone it was put against (or onto a neighbour's top).
  * - **bridge**: across the gap at that level, from stone to stone, the whole span at once (up to seven cells), carried
@@ -50,8 +50,10 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
     const [di, dj] = DIRS[s.a];
     return { add: Array.from({ length: s.n }, (_, q) => [k, s.i + q * di, s.j + q * dj, now + q * 0.06] as [number, number, number, number]), bridge: true, why: 'bridge' };
   }
-  if (!w.free(k, i, j) || !w.floor(k, i, j)) return null;
-  if (hand === 'block') return { add: [[k, i, j, now]], why: 'block' };
+  if (!w.free(k, i, j)) return null;
+  // (a block against a side goes out that way as an auto tap does, carried by the rules if there's nothing under it)
+  if (hand === 'block' && (side || w.floor(k, i, j))) return { add: [[k, i, j, now]], why: 'block' };
+  if (!w.floor(k, i, j)) return null;
   if (hand === 'cypress') return k + 1 >= LEVELS || w.free(k + 1, i, j) ? { trees: [[k, i, j, now]], why: 'cypress' } : null;
   if (hand === 'stair') {
     let d = toward;
