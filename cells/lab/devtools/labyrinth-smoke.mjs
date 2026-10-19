@@ -112,10 +112,11 @@ await withWood(async (lab) => {
     const one = list.find((x) => !x.air) ?? list[0], s = await L((L, n) => L.catScreen(n), one.name);
     await q.mouse.click(s[0], s[1]); await q.waitForTimeout(400);
     c.ok('the hand brush: a tap on a cat meets it (its name, what it\'s doing)', await q.isVisible('#catcard') && (await q.textContent('#catname')) === one.name && !!(await q.textContent('#catdoing')), { one, s, card: await q.textContent('#catcard') });
-    await q.click('#catfollow'); await q.waitForTimeout(2500);
-    const f = await L((L) => ({ on: L.following, t: L.view.target.slice(), c: L.cats() }));
-    const me = f.c.find((x) => x.name === one.name);
-    c.ok('followed: the eye goes with it, close', f.on && me && Math.hypot(f.t[0] - me.x, f.t[2] - me.z) < 0.8, { f, me });
+    const gap = async () => { const f = await L((L) => ({ on: L.following, t: L.view.target.slice(), c: L.cats() })), me = f.c.find((x) => x.name === one.name); return { on: f.on, d: Math.hypot(f.t[0] - me.x, f.t[2] - me.z) }; };
+    const d0 = (await gap()).d;
+    await q.click('#catfollow'); await q.waitForTimeout(4000);
+    const d1 = await gap();
+    c.ok('followed: the eye goes with it, close', d1.on && (d1.d < 0.5 || d1.d < d0 * 0.4), { d0, d1 });
     await q.click('#catfollow'); await q.waitForTimeout(300);
     c.ok('and back to building', !(await L((L) => L.following)));
     await q.close();

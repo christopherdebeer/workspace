@@ -780,7 +780,7 @@ document.getElementById('catclose')!.addEventListener('click', () => meet(null))
 function followCat(dt: number) {
   if (!met || !following) return;
   if (met.gone) { meet(null); return; }
-  const q = 1 - Math.exp(-dt * 2.5), y = met.y + 0.15;
+  const q = 1 - Math.exp(-dt * 4), y = met.y + 0.15;
   view.target[0] += (met.x - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z - view.target[2]) * q;
   zoomK += (0.24 - zoomK) * q;
   follow = false;
