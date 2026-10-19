@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:78fd6b12fd9c9038e1658edec729e6642984fa794ae07466e8dae372255ca1de",
-  "syncedAt": "2026-10-19T14:23:58.987Z",
+  "treeVersion": "tree:77920bab41dcc57bf60b85b60af1bf4e6316b9f9ed38d6d253bfddc878b982cb",
+  "syncedAt": "2026-10-19T14:24:25.537Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -68,7 +68,7 @@
     "client/labyrinth/form.ts": "sha256:cbd41c4f1638eb27a6996231324960c3a7066df03eff771270b0453f2cac3a17",
     "client/labyrinth/gesture.ts": "sha256:9855034f11a7fe73123a92e568ed31eb3287092505c18855e4be4083d30eb3f0",
     "client/labyrinth/land.ts": "sha256:601f1300f26f43f1a512fecb39a150dbe3dff5b6ec03ad910ca74efb12e04bb8",
-    "client/labyrinth/main.ts": "sha256:aa0db1bd1d0ac0e5b68954919450af85bebc4b6f4d62d328a0731712e99e70e5",
+    "client/labyrinth/main.ts": "sha256:ae05f782e06474b101528282078c70fd5ea0e1dcb94faf4dc79689c881bebd1c",
     "client/labyrinth/mesh.ts": "sha256:7d4106328f66feda4f2aa5cb226a3b12fb7a9ba2a60ddaa38f866c6c1caa15e6",
     "client/labyrinth/model.ts": "sha256:41a546e84af0ee34acbb92010f4fcf6a3ccaf7b27c78c182bbb5f99d050318d3",
     "client/labyrinth/motifs.ts": "sha256:cd2e3c656aace111edc7ff61ec683fe5646cf19bf7330a4d2f59234bf768a5e2",
@@ -224,7 +224,7 @@
     "static/fungi.html": "sha256:8e39e5d920614154f35bf965807e178d39162c651dabc0d3dc3e2627c57f3d07",
     "static/fungi.md": "sha256:342a0ab1181a2e4064f83f89535ab21bdcb193d4f82de266eb731cf4434f492a",
     "static/labyrinth.html": "sha256:0f54d987e5693fb5f705f568920b36fd07fcb5288681c91278d91becf5c9b353",
-    "static/labyrinth.md": "sha256:3105094510c52f460ea6c2cb9d7d2ccdde349a97e314146a652eaccf5b23bb02",
+    "static/labyrinth.md": "sha256:6d740ad0db58ce58cfba3e06cb1b60050134cb70b0abfa437dd72cfeb9881e83",
     "static/labyrinth/v-close.jpg": "sha256:f94b4a471e8480c89f2329a0e81b8f119283b74733a06615239ebc59d039e94b",
     "static/labyrinth/v-colonnade.jpg": "sha256:588881adfee998584a0227b06198ce84fde27709df227400e89bc643b139a100",
     "static/labyrinth/v-diagonal-close.jpg": "sha256:afa8e8adf3aa5affe7c803da4b1e1dc34002e26b1959f3c678272a22e3039291",
