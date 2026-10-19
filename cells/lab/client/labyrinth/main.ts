@@ -24,6 +24,8 @@ import { DRESSINGS, PIECES, dress, dressAt, place, run, type Dressing, type Hand
 import { around, motifs, type Motif } from './motifs';
 import { selectCell, selectMotif, selectStructure, type Selection } from './select';
 import { DIRS } from './model';
+import { Out, POSES, cat, gait, type PoseName } from './catbody';
+import { COATS, Cats, type Cat } from './cats';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview'), still = qs.has('still');
@@ -50,6 +52,9 @@ else {
   if (qs.has('flat') && world.land) world = new World(1);
 }
 const fixed = preview || qs.has('story') || qs.has('ops') || qs.has('land');
+/** `?hold=n`: the last n things done kept back, to be done in front of the cats (`release()`) */
+const held_back: Op[] = qs.has('hold') ? world.ops.splice(world.ops.length - Number(qs.get('hold')), Number(qs.get('hold'))) : [];
+if (held_back.length) world.rebuild(0);
 const keep = () => { if (fixed) return; try { localStorage.setItem(KEY, world.encode()); } catch { /* */ } };
 let meshVersion = -1;
 /** `?plain`: without the rules' own dressing (character.ts), only the hand's */
@@ -61,7 +66,7 @@ function remesh() { const ks = selKeys(); R.upload(buildMesh(world, plain, ks));
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
-const view: View = { az: corner(Number(qs.get('turn') ?? 0)), el: 0.6, zoom: 1, target: [0, 0, 0] };
+const view: View = { az: corner(Number(qs.get('turn') ?? 0)), el: Number(qs.get('el') ?? 0.6), zoom: 1, target: [0, 0, 0] };
 let zoomK = Number(qs.get('zoom') ?? 0.64), azGoal: number | null = null;
 function resize() {
   const dpr = Math.min(2, devicePixelRatio || 1);
@@ -220,7 +225,7 @@ for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) {
 }
 for (const b of Array.from(sheet.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => { setBrush(b.dataset.held!); openSheet(false); say(BRUSH_SAYS.piece()); });
 const BRUSH_SAYS: Record<Brush, () => string> = {
-  hand: () => 'drag to turn it · tap to ask what something is',
+  hand: () => 'drag to turn it · tap to ask what something is, or to meet a cat',
   auto: () => (intent === 'way' ? 'way: a stroke connects places; paving, flights and bridges as the land asks' : 'mass: tap raises · trace builds, reaches out and climbs'),
   piece: () => (isDress(held) ? `${held}: tap a stone, or stroke over stones, to dress them` : `${held}: tap to put one · trace for a run of them`),
   take: () => 'tap takes a piece away · trace carves through',
@@ -502,7 +507,9 @@ const up = (e: PointerEvent) => {
   if (!g || g.id !== e.pointerId) return;
   const cancelled = e.type !== 'pointerup', m = g.mode, start = g.start;
   if (cancelled && m !== 'turn' && m !== 'look') { if (world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); } g = null; return; }
-  if (m === 'look' && start) say(describe(start));
+  const pet = m === 'look' ? catAt(e.clientX, e.clientY) : null;
+  if (pet) meet(pet);
+  else if (m === 'look' && start) say(describe(start));
   else if (m === 'pending' && start) {
     // (a tap: what it does depends on the brush)
     if (brush === 'select') selectAt(start);
@@ -674,6 +681,12 @@ function frame() {
     R.built = i0 <= i1 ? [i0 - CENTER, j0 - CENTER, i1 + 1 - CENTER, j1 + 1 - CENTER] : [mid - 3.5 - CENTER, mid - 3.5 - CENTER, mid + 3.5 - CENTER, mid + 3.5 - CENTER];
   }
   R.landBox = world.land ? [LAND.i0 - CENTER, LAND.j0 - CENTER, LAND.i1 + 1 - CENTER, LAND.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3];
+  if (catsOn) {
+    catMemory();
+    cats.update(world, dt, !!g && g.mode !== 'turn' && g.mode !== 'look' && g.mode !== 'pending');
+    followCat(dt); showCat(); keepCats(now());
+  }
+  moving(now());
   view.zoom = zoomFit * zoomK;
   R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
@@ -691,6 +704,90 @@ function frame() {
   }
   requestAnimationFrame(frame);
 }
+// ─── what moves ───
+/** `?cats=study`: every pose, side by side (the motion sheet); `?cats=0`: none */
+const study = qs.get('cats') === 'study';
+const movingOut = new Out();
+function moving(t: number) {
+  const out = movingOut;
+  out.n = 0;
+  if (study) {
+    const names = Object.keys(POSES) as PoseName[];
+    names.forEach((nm, q) => {
+      const p = nm === 'walk' ? gait(POSES.walk, t * 1.4) : POSES[nm];
+      // (in rows across the screen, side on to it)
+      const c = (q % 4) - 1.5, r = Math.floor(q / 4) - 1, sp = Number(qs.get('space') ?? 0.75), ax = Math.SQRT1_2;
+      cat(out, { x: c * sp * ax - r * sp * ax, y: 0, z: -c * sp * ax - r * sp * ax, yaw: Number(qs.get('yaw') ?? -Math.PI / 4), pitch: 0, coat: q % 8, tone: 0.5 }, p, { t, breath: t / 3, twitch: 0, flick: 0 });
+    });
+  }
+  // (larger when seen from far off, so they read; as they are, close to)
+  if (catsOn) cats.draw(out, Math.max(1, Math.min(1.7, zoomK / 0.3)));
+  R.moving(out.data, out.count);
+}
+
+// ─── the cats ───
+/**
+ * The residents (cats.ts): as many as what's built is home for, each with its own ways and favourite places, kept on
+ * this device for each piece of land. With the hand brush, a tap on one says who it is and what it's doing, and it can
+ * be followed (the eye goes with it, close) until you return to building.
+ */
+const catsOn = !study && qs.get('cats') !== '0';
+const cats = new Cats(1);
+const catKey = () => `labyrinth.cats.${world.landSeed || 'flat'}`;
+let catMemFor = '';
+function catMemory() {
+  if (catMemFor === catKey() || fixed) return;
+  catMemFor = catKey();
+  try { cats.remember(JSON.parse(localStorage.getItem(catMemFor) ?? 'null')); } catch { cats.remember(null); }
+}
+let catSaved = 0;
+function keepCats(t: number) { if (fixed || t - catSaved < 12) return; catSaved = t; try { localStorage.setItem(catKey(), JSON.stringify(cats.remembered())); } catch { /* */ } }
+const catCard = document.getElementById('catcard')!, catFollowB = document.getElementById('catfollow')!;
+/** the cat met (its card showing), and whether the eye's following it */
+let met: Cat | null = null, following = false, zoomBefore = 0.64;
+const COAT_CSS = ['#c98a4b', '#6d6f73', '#e4d7bf', '#87705a', '#252120', 'linear-gradient(160deg,#c98a4b 45%,#f1ece2 46%)', '#b3b2ae', 'linear-gradient(160deg,#252120 50%,#f1ece2 51%)'];
+/** the cat under a point on the screen, if one's close to it */
+function catAt(cx: number, cy: number): Cat | null {
+  if (!catsOn) return null;
+  let best: Cat | null = null, bd = Math.max(16, 26 * (0.5 / Math.max(0.15, zoomK)));
+  for (const c of cats.list) {
+    if (c.hidden || c.gone) continue;
+    const h = cats.headOf(c), [hx, hy] = screenOf(h[0], h[1], h[2]), [bx, by] = screenOf(c.x, c.y + 0.1, c.z);
+    const d = Math.min(Math.hypot(hx - cx, hy - cy), Math.hypot(bx - cx, by - cy));
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+function meet(c: Cat | null) {
+  met = c;
+  catCard.classList.toggle('on', !!c);
+  if (!c) { if (following) unfollow(); return; }
+  (catCard.querySelector('.coat') as HTMLElement).style.background = COAT_CSS[c.coat];
+  (catCard.querySelector('.coat') as HTMLElement).title = COATS[c.coat];
+  document.getElementById('catname')!.textContent = c.name;
+  showCat();
+}
+function showCat() {
+  if (!met) return;
+  const el = document.getElementById('catdoing')!, t = met.doing || 'about';
+  if (el.textContent !== t) el.textContent = t;
+  catFollowB.textContent = following ? '‹ Return to building' : 'Follow ›';
+}
+function unfollow() { following = false; document.body.classList.remove('following'); zoomK = zoomBefore; follow = true; showCat(); }
+catFollowB.addEventListener('click', () => { if (following) { unfollow(); return; } following = true; zoomBefore = zoomK; document.body.classList.add('following'); showCat(); });
+document.getElementById('catclose')!.addEventListener('click', () => meet(null));
+/** while following: the eye goes with the cat, close */
+function followCat(dt: number) {
+  if (!met || !following) return;
+  if (met.gone) { meet(null); return; }
+  const q = 1 - Math.exp(-dt * 2.5), y = met.y + 0.15;
+  view.target[0] += (met.x - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z - view.target[2]) * q;
+  zoomK += (0.24 - zoomK) * q;
+  follow = false;
+}
+// (`?catsat=s`: the cats' lives run on that long before it's shown, for a picture)
+if (catsOn) { catMemory(); if (qs.has('catsat')) cats.run(world, Number(qs.get('catsat'))); }
+
 // (`?at=i.j`: looking at that cell, not framing it all)
 if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.target = [i + 0.5 - CENTER, world.top() * 0.35, j + 0.5 - CENTER]; zoomFit = framing().fit; follow = false; }
 requestAnimationFrame(frame);
@@ -698,6 +795,9 @@ requestAnimationFrame(frame);
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
   get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
+  cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
+  release: () => { const op = held_back.shift(); if (op) world.apply(op, now()); return !!op; }, catsRun: (s: number) => cats.run(world, s),
+  meet: (name: string) => meet(cats.list.find((c) => c.name === name) ?? null), get following() { return following; }, follow: () => { if (met && !following) catFollowB.click(); }, catAt,
   selection: () => (sel ? { title: sel.s.title, readings: sel.s.readings.map((r) => r.label), at: sel.s.at, whole: sel.idx, cells: sel.s.cells.length } : null),
   switchReading, takeAway, dressSel, alts: () => (altsNow ? { labels: altsNow.list.map((a) => a.label), at: altsNow.at } : null), readAs, declines: () => declines.slice(), motifs: () => motifsNow().map((m) => ({ kind: m.kind, label: m.label, cells: m.cells.length })),
   probe: () => ({ ops: world.ops.length, top: world.top(), stone: world.mass.size, stairs: world.stairs.size, piers: world.piers.size, arches: world.spans.length, courts: world.courts.size, decor: world.decor.length, whys: world.ops.map((o) => o.why ?? '') }),

@@ -449,22 +449,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
 
   // ─── dressing: parapets (by hand, and along a bridge of its own accord), lanterns and pots ───
   // (first, which edges of which tops have one: open edges, with nothing at that height beyond them)
-  const edges = new Map<number, boolean[]>(), rails = new Map<number, number>(), flowRails = new Map<number, number>(), roofed = new Set<number>();
-  for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
-  for (const v of [...w.mass.keys()]) {
-    const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
-    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v)) continue;
-    // (a parapet of its own accord along anything carried high: a bridge, or an arch two levels up or more; along a
-    // colonnade, a balustrade)
-    const colonnade = sp?.order === 'colonnade' || onColumn(w, k, i, j);
-    const bridge = (!!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j))) || colonnade;
-    if (!d?.parapet && !bridge) continue;
-    // (on a flowing wall, round its curve or along its diagonal)
-    if (w.block(k, i, j) && outline(w, k, i, j).flow) { flowRails.set(v, d?.parapet && d.rail ? d.rail : DRESS.parapet); continue; }
-    const along = sp ? sp.a : colonnade ? (w.span(k, i + 1, j) || w.span(k, i - 1, j) ? 0 : 1) : -1;
-    edges.set(v, DIRS.map(([a, b], q) => (!!d?.parapet || q % 2 !== along) && !(w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0)));
-    rails.set(v, d?.parapet && d.rail ? d.rail : colonnade ? DRESS.balustrade : DRESS.parapet);
-  }
+  const { edges, rails, flowRails, roofed } = parapets(w, plain);
   const T = 0.12, PH = 0.3, C = 0.025, PP = 0.1;
   for (const [v, es] of edges) {
     const [k, i, j] = unkey(v), y0 = k + 1, y1 = y0 + PH, cx = X(i) + 0.5, cz = Z(j) + 0.5, kind = rails.get(v)!;
@@ -1054,6 +1039,32 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       quad(a, b, c, d, [Math.cos(ang) / l, -dr / l, Math.sin(ang) / l], 0.55 + 0.45 * t, MAT.leaves);
     }
   }
+}
+
+/**
+ * Which tops have a parapet round them (by hand, or along a bridge or a high arcade of their own accord; a balustrade
+ * along a colonnade), and on which edges (open edges, with nothing at that height beyond them); on a flowing wall, round
+ * it as its form has it. Not on a roofed top.
+ */
+export function parapets(w: World, plain = false) {
+  const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
+  const edges = new Map<number, boolean[]>(), rails = new Map<number, number>(), flowRails = new Map<number, number>(), roofed = new Set<number>();
+  for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
+  for (const v of [...w.mass.keys()]) {
+    const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
+    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v)) continue;
+    // (a parapet of its own accord along anything carried high: a bridge, or an arch two levels up or more; along a
+    // colonnade, a balustrade)
+    const colonnade = sp?.order === 'colonnade' || onColumn(w, k, i, j);
+    const bridge = (!!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j))) || colonnade;
+    if (!d?.parapet && !bridge) continue;
+    // (on a flowing wall, round its curve or along its diagonal)
+    if (w.block(k, i, j) && outline(w, k, i, j).flow) { flowRails.set(v, d?.parapet && d.rail ? d.rail : DRESS.parapet); continue; }
+    const along = sp ? sp.a : colonnade ? (w.span(k, i + 1, j) || w.span(k, i - 1, j) ? 0 : 1) : -1;
+    edges.set(v, DIRS.map(([a, b], q) => (!!d?.parapet || q % 2 !== along) && !(w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0)));
+    rails.set(v, d?.parapet && d.rail ? d.rail : colonnade ? DRESS.balustrade : DRESS.parapet);
+  }
+  return { edges, rails, flowRails, roofed };
 }
 
 /** Whether a point's in stone (anything a touch would strike), and so where a ray meets the build */

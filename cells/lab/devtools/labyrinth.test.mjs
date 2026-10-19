@@ -542,6 +542,76 @@ ok('story 4: a passage beneath the walkway, on an arch', !s4.stone(0, 6, 7) && !
 ok('story 4: the court closed, with something growing in it', s4.courts.size > 0 && s4.decor.length > 0);
 { const bay = s4.spans.filter((sp) => sp.k === 2 && sp.a === 0 && sp.j === 4); ok('story 4: the tower bridged to the terrace on one great arch, or an arcade of even bays (the rules\' choice)', (bay.length === 1 && bay[0].n === 5) || (bay.length === 2 && bay.every((sp) => sp.n === bay[0].n)), bay); }
 stands(s4, 'story 4');
+// ─── the cats (perches.ts, cats.ts): where they can be, and their lives over what's built and what's built in front of them ───
+{
+  const CT = await load('../client/labyrinth/cats.ts');
+  const PE = await load('../client/labyrinth/perches.ts');
+  const PZ = await load('../client/labyrinth/model.ts');
+  const IN = (w, x, y, z) => ME.inStone(w, x, y, z);
+  for (const n of [4, 8, 9, 12, 13]) {
+    const w = story(n), P = PE.perches(w);
+    ok(`story ${n}: places for cats, each with room for one and something under it`, P.spots.length > 20 && P.spots.every((s) => !IN(w, s.x, s.y + 0.08, s.z) && (s.kind === 'rail' || s.ground || IN(w, s.x, s.y - (s.kind === 'stair' ? 0.2 : 0.04), s.z))), P.spots.filter((s) => IN(w, s.x, s.y + 0.08, s.z)).map((s) => s.name).slice(0, 5));
+    ok(`story ${n}: every walk between places goes both ways`, P.spots.every((s) => s.links.every((l) => l.kind !== 'walk' || P.spots[l.to].links.some((m) => m.to === s.id))));
+    ok(`story ${n}: a jump's arc is clear of the stone`, P.spots.every((s) => s.links.every((l) => !l.from || [0.25, 0.5, 0.75].every((t) => { const a = l.from, b = l.land, dy = b[1] - a[1], h = dy > 0 ? dy / 2 + 0.18 : l.kind === 'leap' ? 0.32 : 0.15; return !IN(w, a[0] + (b[0] - a[0]) * t, a[1] + dy * t + h * 4 * t * (1 - t) + 0.1, a[2] + (b[2] - a[2]) * t); }))));
+    ok(`story ${n}: home for a few cats, not a crowd`, P.capacity >= 1 && P.capacity <= 6, P.capacity);
+  }
+  ok('bare land, and the bare stone: home for no cats', PE.perches(new PZ.World(1, 6)).capacity === 0 && PE.perches(new PZ.World(1)).capacity === 0);
+  // (their lives: never in stone, never left in the air, one to a narrow place and to a place to rest, as many as it's home for)
+  const watch = (w, C, secs, tag, build) => {
+    let inStone = 0, floating = 0, crowded = 0, over = 0;
+    const air = new Map();
+    for (let t = 0; t < secs; t += 0.1) {
+      if (build && Math.abs(t - build.at) < 0.05) w.apply(build.op, t);
+      C.update(w, 0.1);
+      for (const c of C.list) {
+        if (c.hidden || c.air || c.gone) { air.set(c.name, 0); continue; }
+        if (IN(w, c.x, c.y + 0.12, c.z) && t - (build?.at ?? -9) > 2.5) { inStone++; if (inStone < 3) console.log('  in stone:', tag, t.toFixed(1), c.name, c.at, c.doing, c.want, c.x.toFixed(2), c.y.toFixed(2), c.z.toFixed(2)); }
+        const s = C.place(c.at), on = s && Math.hypot(s.x - c.x, s.y - c.y, s.z - c.z) < 0.25;
+        const held = on || IN(w, c.x, c.y - 0.06, c.z) || (w.land && c.y < 0.06 + w.ground(Math.floor(c.x + 6), Math.floor(c.z + 6))) || (!w.land && c.y < 0.05) || c.moving > 0;
+        air.set(c.name, held ? 0 : (air.get(c.name) ?? 0) + 0.1);
+        if ((air.get(c.name) ?? 0) > 2) floating++;
+      }
+      const rests = C.list.filter((c) => c.resting && !c.gone).map((c) => c.resting);
+      if (new Set(rests).size !== rests.length) crowded++;
+      const narrow = C.list.filter((c) => !c.gone && !c.air && C.place(c.at)?.narrow && C.place(c.at) && Math.hypot(C.place(c.at).x - c.x, C.place(c.at).z - c.z) < 0.05).map((c) => c.at);
+      if (new Set(narrow).size !== narrow.length) crowded++;
+      if (C.list.filter((c) => !c.leaving).length > C.P.capacity + 1) over++;
+    }
+    ok(`${tag}: no cat in the stone`, inStone === 0, inStone);
+    ok(`${tag}: no cat left in the air`, floating === 0, floating);
+    ok(`${tag}: one cat to a place to rest, one to a narrow place`, crowded === 0, crowded);
+    ok(`${tag}: as many as it's home for`, over === 0, over);
+  };
+  for (const n of [8, 12, 13]) { const w = story(n), C = new CT.Cats(1); watch(w, C, 240, `story ${n}'s cats, four minutes`); }
+  {
+    // (story 13: the bridge built last, in front of them: they go and see it, and cross onto it)
+    const w = story(13), bridge = w.ops.pop(); w.rebuild(0);
+    const C = new CT.Cats(1);
+    let saw = false, onIt = false;
+    for (let t = 0; t < 90; t += 0.1) {
+      if (Math.abs(t - 30) < 0.05) w.apply(bridge, t);
+      C.update(w, 0.1);
+      if (t > 30) for (const c of C.list) { if (/new stone/.test(c.doing)) saw = true; if (/^(floor|ledge|rail)\.2\.(6|7)\.5\./.test(c.at)) onIt = true; }
+    }
+    ok('story 13: a bridge built in front of the cats: one goes to see it', saw);
+    ok('story 13: and onto it, a new way', onIt);
+  }
+  {
+    // (building over and under them: walls traced through them, stone taken from under them; they move, never stuck)
+    const w = story(12), C = new CT.Cats(3);
+    C.run(w, 20);
+    const ops = [];
+    for (const c of C.list.slice(0, 2)) { const s = C.place(c.at); if (s) ops.push({ add: [[s.k, s.i, s.j, 0]] }); }
+    const s0 = C.place(C.list[2]?.at ?? '');
+    if (s0 && !s0.ground) ops.push({ cut: [[s0.k - 1, s0.i, s0.j]] });
+    let t = 20;
+    for (const op of ops) { w.apply(op, t); t += 0.1; }
+    watch(w, C, 60, 'story 12: stone built on the cats, and taken from under one', { at: 0, op: {} });
+  }
+  // (who they are: the same every visit; their favourite places kept)
+  { const a = new CT.Cats(1), b = new CT.Cats(1); a.run(story(13), 5); b.run(story(13), 5); ok('the same cats every visit', JSON.stringify(a.list.map((c) => [c.name, c.coat])) === JSON.stringify(b.list.map((c) => [c.name, c.coat]))); }
+  { const a = new CT.Cats(1); a.run(story(13), 200); const m = a.remembered(); ok('they come to have favourite places', m.fav.some((f) => f.length > 0 && f[0][1] > 0.3), m.fav.map((f) => f[0])); }
+}
 if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
