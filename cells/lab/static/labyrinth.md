@@ -233,7 +233,7 @@ Each opening is set back in the wall: its reveals, its head (arched, or square),
 | long | gabled along it, the ends walled up in stone (now and then hipped) |
 | leaning on taller stone along one side | a shed roof, falling away from it |
 
-Roofs are terracotta tiles in courses up the slope, each tile its own shade, over an eave with its underside showing, and a ridge along the top. Domes are lead in standing seams, with a finial. Nothing the rules dress goes on a roofed top.
+Roofs are terracotta tiles in courses up the slope, each tile its own shade. Each slope is a slab with a thickness, its edges closed, so where it overhangs a wall (at the eaves, and a little at a gable's verge) it reads as a roof rather than a cut. A gable's end is walled up in stone, with a band at its foot along the eaves' line. There's a ridge along the top. Domes are lead in standing seams, with a finial. Nothing the rules dress goes on a roofed top.
 
 **Select** a building (its tower, or its terrace) to read its roof another way: *as the rules choose*, *no roof*, *hipped*, *gable*, *shed*, *dome*. The choice is kept as a rule, and from then on it's the hand's.
 

@@ -424,8 +424,20 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const O = 0.12, y = b.h, ye = y + 0.02;
     const xa = X(b.i0), xb = X(b.i1 + 1), za = Z(b.j0), zb = Z(b.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
     cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.2, pivot: y, how: 1, tone: 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
-    const slope = (p: V3[]) => { face(p, MAT.tile, 1, true); face(p, MAT.tile, 0.45, false); };
-    const X0 = xa - O, X1 = xb + O, Z0 = za - O, Z1 = zb + O, cx = (xa + xb) / 2, cz = (za + zb) / 2;
+    // (each slope a slab of tiles with a thickness: its top, its underside a little below, and its edges (the eaves, the
+    // verges over a gable, the hips) closed, so where it overhangs a wall it reads as a roof, not a cut)
+    const RT = 0.07;
+    const slope = (p: V3[]) => {
+      const u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]], v = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+      let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const l = Math.hypot(n[0], n[1], n[2]) || 1; n = n.map((x) => x / l); if (n[1] < 0) n = n.map((x) => -x);
+      const q = p.map((c) => [c[0] - n[0] * RT, c[1] - n[1] * RT, c[2] - n[2] * RT] as V3), mid = p.reduce((a, c) => [a[0] + c[0] / p.length, a[1] + c[1] / p.length, a[2] + c[2] / p.length], [0, 0, 0]) as V3;
+      face(p, MAT.tile, 1, true); face(q, MAT.tile, 0.45, false);
+      for (let e = 0; e < p.length; e++) { const a = p[e], b = p[(e + 1) % p.length]; face([a, b, q[(e + 1) % p.length], q[e]], MAT.tile, 0.8, true, [mid[0] - n[0] * RT / 2, mid[1] - n[1] * RT / 2, mid[2] - n[2] * RT / 2]); }
+    };
+    // (over a gable's ends, only a little past the wall: the verge)
+    const OG = b.roof === 'gable' ? 0.05 : O;
+    const X0 = xa - (along === 0 ? OG : O), X1 = xb + (along === 0 ? OG : O), Z0 = za - (along === 1 ? OG : O), Z1 = zb + (along === 1 ? OG : O), cx = (xa + xb) / 2, cz = (za + zb) / 2;
     if (b.roof === 'dome') {
       const r = Math.min(xb - xa, zb - za) * 0.42;
       lathe(cx, cz, [[r + 0.04, y], [r + 0.04, y + 0.06], [r, y + 0.06], [r, y + 0.2]], MAT.stone, 16);
@@ -453,11 +465,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (b.roof === 'hipped') {
       if (along === 0) { slope([A, D, r0]); slope([B, C, r1]); } else { slope([A, B, r0]); slope([D, C, r1]); }
     } else {
-      // (the gable ends: walled up in stone, in the plane of the wall)
+      // (the gable ends: walled up in stone, in the plane of the wall, a band at their foot along the eaves' line)
       const hAt = (d: number) => ye + H * (1 - d / (S / 2));
       const mid: V3 = [cx, y, cz];
-      if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hAt(O), zb], [x, hAt(O), za]], MAT.stone, 0.9, true, mid); face([[x, hAt(O), za], [x, hAt(O), zb], [x, ye + H, cz]], MAT.stone, 0.9, true, mid); }
-      else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hAt(O), z], [xa, hAt(O), z]], MAT.stone, 0.9, true, mid); face([[xa, hAt(O), z], [xb, hAt(O), z], [cx, ye + H, z]], MAT.stone, 0.9, true, mid); }
+      if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hAt(O), zb], [x, hAt(O), za]], MAT.stone, 0.85, true, mid); face([[x, hAt(O), za], [x, hAt(O), zb], [x, ye + H, cz]], MAT.stone, 0.85, true, mid); const o = x === xa ? -0.03 : 0.03; box(Math.min(x, x + o), Math.max(x, x + o), y - 0.02, y + 0.04, za, zb, MAT.stone, 0.9); }
+      else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hAt(O), z], [xa, hAt(O), z]], MAT.stone, 0.85, true, mid); face([[xa, hAt(O), z], [xb, hAt(O), z], [cx, ye + H, z]], MAT.stone, 0.85, true, mid); const o = z === za ? -0.03 : 0.03; box(xa, xb, y - 0.02, y + 0.04, Math.min(z, z + o), Math.max(z, z + o), MAT.stone, 0.9); }
     }
     // (the ridge)
     const RW = 0.035;
