@@ -104,6 +104,35 @@
   ]
  },
  {
+  "group": "Features and rhythms",
+  "views": [
+   {
+    "name": "story-9",
+    "title": "9 · Features, placements and rhythms",
+    "caption": "a colonnade along the plaza (massive columns, wide and even, an entablature, a balustrade on top); a terrace and its flight balustraded (the quick rhythm of balusters); a court screened by a jali; a house with mashrabiya at its upper windows, colonnettes at its doors and windows, a pergola over the yard before it",
+    "file": "v-story-9.jpg"
+   },
+   {
+    "name": "colonnade",
+    "title": "The colonnade, close",
+    "caption": "columns with a swell to their shafts, a moulded base and a cushioned capital; the entablature run on over them; a balustrade along the top, a jali round the tower",
+    "file": "v-colonnade.jpg"
+   },
+   {
+    "name": "house-features",
+    "title": "Mashrabiya, colonnettes, a pergola",
+    "caption": "lattice boxes on corbels at the upper windows, the light through them in points; slim shafts framing the arches; posts, beams, close-set rafters and a vine over the yard",
+    "file": "v-house-features.jpg"
+   },
+   {
+    "name": "jali",
+    "title": "A jali and balustrades",
+    "caption": "the court's west side a screen of pierced stone; the terrace and its flight railed with turned balusters",
+    "file": "v-jali.jpg"
+   }
+  ]
+ },
+ {
   "group": "Auto, with character",
   "views": [
    {

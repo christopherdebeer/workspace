@@ -8,10 +8,16 @@
  * - **towers**: marble now and then, or brick; a lantern on top, often; sometimes a parapet round the top;
  * - **walls**: brick now and then; moss along their foot;
  * - **arcades and bridges**: now and then in brick, piers and all;
- * - **flights**: a lantern where they arrive, often;
+ * - **flights**: a lantern where they arrive, often; a balustrade climbing a long or high one, now and then (a jali's
+ *   pierced stone, rarely);
  * - **terraces**: pots at a corner or two; a lantern sometimes;
  * - **courts**: ivy, now and then, up a few of the walls round them (a cell or two high); moss at their foot;
- * - **anything high with a drop at its edge**: a parapet round it, taken a top at a time;
+ * - **anything high with a drop at its edge**: a parapet round it, taken a top at a time: a plain one, a balustrade
+ *   (the dense, quick rhythm of its balusters), or a jali (a pierced stone screen);
+ * - **thin walls beside a court**: now and then pierced, a jali, so the court is screened rather than shut off;
+ * - **houses**: now and then mashrabiya over their upper windows (a lattice box out from the wall, on corbels); where a
+ *   house's windows are arched, now and then colonnettes framing them and its doors; at its door, now and then a
+ *   pergola over the way out (the house giving on to the yard; more often on to a court);
  * - **the edge of water**: moss on the stone beside a pool;
  * - **the stone at the foot of things**: a little moss, here and there.
  *
@@ -73,6 +79,8 @@ function dressUp(w: World): Map<number, Dress> {
       // (where it arrives: the stone under the place at its head)
       const [k, i, j] = m.cells[m.cells.length - 1], d = w.stair(k, i, j), head: Cell = [k, i + DIRS[d][0], j + DIRS[d][1]];
       if (roomy(head) && chance(0.6, n, 1)) put(head, { prop: DRESS.lantern });
+      const stairs = m.cells.filter((c) => w.stair(...c) >= 0);
+      if ((stairs.length >= 3 || k >= 2) && chance(0.4, n, 2)) { const rail = chance(0.2, n, 3) ? DRESS.jali : DRESS.balustrade; for (const c of stairs) put(c, { parapet: true, rail }); }
     } else if (m.kind === 'terrace') {
       const open = (c: Cell) => DIRS.filter(([a, b]) => height(w, c[1] + a, c[2] + b) < c[0] + 1).length;
       const corners = m.cells.filter((c) => roomy(c) && open(c) >= 2);
@@ -105,7 +113,31 @@ function dressUp(w: World): Map<number, Dress> {
       for (const [a, b] of DIRS) { const q = key(k, i + a, j + b); if (tops.has(q) && !seen.has(q)) { seen.add(q); st.push(q); } }
     }
     const drop = region.some(([, i, j]) => DIRS.some(([a, b]) => height(w, i + a, j + b) <= k - 1));
-    if (drop && region.length >= 3 && chance(0.35, id(region), 9)) for (const c of region) put(c, { parapet: true });
+    if (drop && region.length >= 3 && chance(0.35, id(region), 9)) {
+      const r = hash(w.seed, id(region), 10) % 100, rail = r < 40 ? DRESS.balustrade : r < 55 ? DRESS.jali : DRESS.parapet;
+      for (const c of region) put(c, { parapet: true, rail });
+    }
+  }
+  // (thin walls beside a court, now and then a jali, a stretch at a time)
+  for (const v of w.thin.keys()) {
+    const [k, i, j] = unkey(v);
+    if (DIRS.some(([a, b]) => w.courts.has(key(0, i + a, j + b))) && chance(0.45, Math.floor(i / 3), Math.floor(j / 3), k, 12)) put([k, i, j], { screen: true });
+  }
+  // (houses: mashrabiya at the upper windows; colonnettes where the windows are arched; a pergola where a door gives on a court)
+  const kept = new Set(w.decor.map((d) => key(0, d.i, d.j)));
+  for (const b of buildings(w).list) {
+    const all = b.cols.flatMap(([x, z]) => Array.from({ length: b.h }, (_, k) => [k, x, z] as Cell));
+    const upper = b.openings.some((o) => o.kind === 'window' && o.k >= 1 && o.style !== 'slit');
+    if (b.roof && upper && chance(0.3, b.id, 21)) for (const c of all) if (c[0] >= 1) put(c, { oriel: true });
+    if (b.openings.some((o) => o.style === 'arched' && o.kind === 'window') && chance(0.4, b.id, 22)) for (const c of all) put(c, { colonnettes: true });
+    for (const o of b.openings) {
+      if (o.kind !== 'door' || o.k !== 0) continue;
+      const [a, bb] = DIRS[o.d], x = o.i + a, z = o.j + bb;
+      // (a house's door on to a court, or on to open ground: the way out from it, now and then shaded)
+      if (!b.roof || !chance(w.courts.has(key(0, x, z)) ? 0.5 : 0.3, b.id, o.i, o.j, 23)) continue;
+      const [ta, tb] = DIRS[(o.d + 1) % 4], fit = (p: number, q: number) => w.free(0, p, q) && !w.arched(0, p, q) && !w.pier(0, p, q) && !kept.has(key(0, p, q)) && w.free(1, p, q);
+      for (const s of [0, -1, 1]) if (fit(x + ta * s, z + tb * s)) put([0, x + ta * s, z + tb * s], { pergola: true }); else if (s === 0) break;
+    }
   }
   // (moss at the damp edges of water: the stone beside a pool)
   for (let j = w.extent().j0; j <= w.extent().j1; j++) for (let i = w.extent().i0; i <= w.extent().i1; i++) {

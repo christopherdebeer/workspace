@@ -5,7 +5,7 @@
 // undo undoes; what's written down makes the same world again. And the storyboard is what it says.
 import { build } from 'esbuild';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
-const { World, replay, CEIL, DIRS, LO, HI, START, key, unkey } = await load('../client/labyrinth/model.ts');
+const { World, replay, CEIL, DIRS, DRESS, LO, HI, START, key, unkey } = await load('../client/labyrinth/model.ts');
 const G = await load('../client/labyrinth/gesture.ts');
 const { story } = await load('../client/labyrinth/demo.ts');
 const P = await load('../client/labyrinth/palette.ts');
@@ -297,6 +297,50 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   ok('and with no roof, none', BU.buildings(s8).list.find((b) => b.id === hip.id)?.roof === null);
   const M = await load('../client/labyrinth/mesh.ts');
   ok('story 8 is drawn, roofs and openings and all', M.buildMesh(story(8)).count > 0);
+  // (features: storyboard 9 has each where it belongs)
+  const s9 = story(9);
+  stands(s9, 'story 9');
+  const row = s9.spans.filter((sp) => sp.k === 2 && sp.j === 1);
+  ok('story 9: the colonnade, every bay flat on columns', row.length >= 2 && row.every((sp) => sp.order === 'colonnade') && [...s9.piers.keys()].every((v) => { const [k, i, j] = unkey(v); return j !== 1 || M.pierShape(s9, k, i, j).column; }), row.length);
+  ok('story 9: over each column, only an entablature', [...s9.mass.keys()].filter((v) => { const [k, i, j] = unkey(v); return M.onColumn(s9, k, i, j); }).length === row.length - 1);
+  ok('story 9: the terrace and its flight balustraded', CH.look(s9, 1, 3, 6)?.rail === DRESS.balustrade && CH.look(s9, 0, 3, 9)?.rail === DRESS.balustrade && s9.stair(0, 3, 9) >= 0);
+  ok('story 9: the court\'s west side a jali', [6, 7, 8, 9].every((j) => s9.wall(0, 6, j) >= 0 && CH.look(s9, 0, 6, j)?.screen));
+  const house9 = BU.buildings(s9).list.find((b) => b.cols.some(([i, j]) => i === 13 && j === 9));
+  ok('story 9: the house, its windows arched (for its colonnettes), mashrabiya above', !!house9 && house9.openings.filter((o) => o.kind === 'window').every((o) => o.style === 'arched') && CH.look(s9, 1, 13, 9)?.oriel && CH.look(s9, 0, 13, 9)?.colonnettes);
+  ok('story 9: a pergola over the yard, the yard still walked', CH.look(s9, 0, 13, 6)?.pergola && NAV.navigate(s9).places.has(key(0, 13, 6)));
+  ok('story 9 is drawn, every feature and all', M.buildMesh(s9).count > M.buildMesh(story(9), true).count * 0.5);
+  // (the dressing toggles: on, then a stroke starting on it takes it off; a jali on a thin wall pierces it)
+  {
+    const w = replay(s9.encode());
+    const on = P.dress(w, 'balustrade', [[1, 12, 1]]); w.apply(on);
+    ok('balustrade on a top', CH.look(w, 1, 12, 1)?.parapet && CH.look(w, 1, 12, 1)?.rail === DRESS.balustrade);
+    w.apply(P.dress(w, 'balustrade', [[1, 12, 1]]));
+    ok('and off again', !CH.look(w, 1, 12, 1)?.parapet);
+    w.apply(P.dress(w, 'pergola', [[1, 4, 6]]));
+    ok('a pergola, put on a top, goes over it', CH.look(w, 2, 4, 6)?.pergola);
+    w.apply(P.place(w, 'take', { face: 'top', hit: [1, 4, 6], to: [2, 4, 6] }, 0, 0));
+    ok('take, on a top under a pergola, takes the pergola first', !CH.look(w, 2, 4, 6)?.pergola && w.stone(1, 4, 6));
+  }
+  // (the rules' own features, over many worlds: each kind put somewhere, and only where it belongs)
+  {
+    const seen = { balustrade: 0, jali: 0, screen: 0, pergola: 0, oriel: 0, colonnettes: 0, colonnade: 0 };
+    let wrong = 0;
+    for (let seed = 1; seed <= 40; seed++) for (const n of [4, 6, 7, 8]) {
+      const w = replay(story(n).encode());
+      w.seed = seed; w.rebuild(0);
+      for (const [v, d] of CH.character(w)) {
+        const [k, i, j] = unkey(v);
+        if (d.rail === DRESS.balustrade) seen.balustrade++;
+        if (d.rail === DRESS.jali) seen.jali++;
+        if (d.screen) { seen.screen++; if (w.wall(k, i, j) < 0) wrong++; }
+        if (d.pergola) { seen.pergola++; if (!w.free(k, i, j) || !w.floor(k, i, j)) wrong++; }
+        if (d.oriel) seen.oriel++;
+        if (d.colonnettes) seen.colonnettes++;
+      }
+      seen.colonnade += w.spans.filter((sp) => sp.order === 'colonnade').length;
+    }
+    ok('the rules put each feature somewhere, and only where it belongs', wrong === 0 && seen.balustrade && seen.pergola && seen.oriel && seen.colonnettes, { wrong, ...seen });
+  }
 }
 // (form: a run a cell thick is a wall's thickness, with posts where it turns and buttresses along it; a mass fills its
 // cells, its outside corners rounded; a wall runs on to a gate in it)
@@ -335,7 +379,15 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   ok('story 6: its readings and dressing are written down, and made again', again.encode() === s6.encode() && again.span(1, 6, 7)?.flat && again.dressed(0, 3, 9)?.mat === 1);
   // (every reading of the arcade, each one standing, and switching back leaves it as it was)
   const sel = SEL.selectMotif(s6, arc, 0);
-  ok('the arcade taken up: arches, lintels, solid', sel.readings.map((r) => r.label).join() === 'arches,lintels,solid', sel.readings.map((r) => r.label));
+  ok('the arcade taken up: arches, lintels, a colonnade, solid', sel.readings.map((r) => r.label).join() === 'arches,lintels,a colonnade,solid', sel.readings.map((r) => r.label));
+  {
+    // (read as a colonnade: flat, on columns; read back as arches, kept arches, never made a colonnade of its own accord)
+    const w = replay(s6.encode()); w.apply(sel.readings[2].op);
+    const row = w.spans.filter((sp) => sp.k === 2 && sp.a === 1 && sp.i === 10);
+    ok('read as a colonnade: every bay flat, under an entablature', row.length >= 3 && row.every((sp) => sp.flat && sp.order === 'colonnade'), row.length);
+    const back = replay(s6.encode()); back.apply(SEL.selectMotif(w, arc, 0).readings[0].op ?? {});
+    ok('read as arches: none a colonnade', !back.spans.some((sp) => sp.order === 'colonnade'));
+  }
   for (const r of sel.readings) if (r.op) { const w = replay(s6.encode()); w.apply(r.op); stands(w, `arcade read as ${r.label}`); if (r.label === 'solid') ok('read solid: stone under it all', !w.spans.some((sp) => sp.k === 2 && sp.a === 1 && sp.i === 10)); }
   // (a long arch, taken up, read as two bays: a pier under its middle)
   const w = new World(5);

@@ -69,12 +69,19 @@ export interface Op {
 }
 /** readings of the rules' work a hand can switch to: an arch read as a lintel, a pier asked for; a building's roof (none, or
  * which kind), kept at the lowest cell of its top */
-export const RULE = { none: 0, lintel: 1, pier: 2, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14 } as const;
+export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14 } as const;
 /** dressing: three stones (travertine is the stone's own), then what's on it */
-export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7 } as const;
+export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7, balustrade: 8, jali: 9, pergola: 10, mashrabiya: 11, colonnettes: 12 } as const;
 /** a cell's dressing: each part set (by the hand, or by the rules' own dressing, character.ts) or not; a part set off
  * by hand stays off whatever the rules would put */
-export interface Dress { mat?: number; moss?: boolean; ivy?: boolean; parapet?: boolean; prop?: number }
+export interface Dress {
+  mat?: number; moss?: boolean; ivy?: boolean; parapet?: boolean; prop?: number;
+  /** what the edge round a top is, if it has one (DRESS.parapet, balustrade or jali) */
+  rail?: number;
+  /** a thin wall pierced as a jali screen; a pergola over a place (kept at the place, not the stone); a building's upper
+   * windows behind mashrabiya; its doors and arched windows framed with colonnettes */
+  screen?: boolean; pergola?: boolean; oriel?: boolean; colonnettes?: boolean;
+}
 /**
  * A connection: from a surface (the height stood on, and the column), along the columns the stroke crossed (the start's
  * first), to a surface (a top it reached), or out into the air (a walkway, `to` null). What it takes is worked out when
@@ -85,7 +92,7 @@ export interface Connect { from: Cell; to: Cell | null; path: Array<[number, num
 /** how a connection came out when it was worked out: whether it reached where it was going, where it stopped */
 export interface Reached { reached: boolean; stopped: number; cells: Cell[] }
 /** an arch, carrying a run of stone along an axis (0 x, 1 z): its level, first cell, length, and the level it springs from */
-export interface Span { k: number; a: number; i: number; j: number; n: number; low: number; born: number; /** a flat lintel, not an arch */ flat?: boolean }
+export interface Span { k: number; a: number; i: number; j: number; n: number; low: number; born: number; /** a flat lintel, not an arch */ flat?: boolean; /** carried as part of a colonnade: on columns, under an entablature */ order?: 'colonnade' }
 export interface Decor { kind: 'pool' | 'cypress' | 'pot'; i: number; j: number; born: number }
 
 /** how big a court has to be for water in it, and for a cypress */
@@ -220,7 +227,11 @@ export class World {
         if (kind <= DRESS.marble) d.mat = kind;
         else if (kind === DRESS.moss) d.moss = !!on;
         else if (kind === DRESS.ivy) d.ivy = !!on;
-        else if (kind === DRESS.parapet) d.parapet = !!on;
+        else if (kind === DRESS.parapet || kind === DRESS.balustrade) { d.parapet = !!on; d.rail = on ? kind : 0; }
+        else if (kind === DRESS.jali) { if (this.thin.has(v)) d.screen = !!on; else { d.parapet = !!on; d.rail = on ? kind : 0; } }
+        else if (kind === DRESS.pergola) d.pergola = !!on;
+        else if (kind === DRESS.mashrabiya) d.oriel = !!on;
+        else if (kind === DRESS.colonnettes) d.colonnettes = !!on;
         else d.prop = on ? kind : 0;
         this.dress.set(v, d);
       }
@@ -333,6 +344,7 @@ export class World {
       this.alike(k);
     }
     this.courtyards();
+    this.colonnades();
   }
 
   /** an arch under a run of stone: springing as low as the stone each side goes, and the air under it kept clear (or,
@@ -340,13 +352,13 @@ export class World {
   private arch(k: number, a: number, i: number, j: number, n: number, loose: Set<number>) {
     const [di, dj] = DIRS[a];
     const clear = (kk: number) => { for (let s = 0; s < n; s++) if (this.occupied(kk, i + s * di, j + s * dj)) return false; return true; };
-    let flat = false;
-    for (let s = 0; s < n; s++) if (this.rules.get(key(k, i + s * di, j + s * dj)) === RULE.lintel) flat = true;
+    let flat = false, order: 'colonnade' | undefined;
+    for (let s = 0; s < n; s++) { const r = this.rules.get(key(k, i + s * di, j + s * dj)); if (r === RULE.lintel) flat = true; if (r === RULE.colonnade) { flat = true; order = 'colonnade'; } }
     let low = k;
     while (!flat && low > 0 && this.occupied(low - 1, i - di, j - dj) && this.occupied(low - 1, i + n * di, j + n * dj) && clear(low - 1) && low > k + 1 - DECK - n / 2) low--;
     let born = -1e3;
     for (let s = 0; s < n; s++) born = Math.max(born, this.born(k, i + s * di, j + s * dj));
-    const sp: Span = { k, a, i, j, n, low, born: this.first(`a${k}.${a}.${i}.${j}.${n}`, born), flat };
+    const sp: Span = { k, a, i, j, n, low, born: this.first(`a${k}.${a}.${i}.${j}.${n}`, born), flat, ...(order ? { order } : {}) };
     this.spans.push(sp);
     for (let s = 0; s < n; s++) {
       const v = key(k, i + s * di, j + s * dj);
@@ -368,15 +380,39 @@ export class World {
         r++;
       }
       if (r - q > 1) {
-        const low = Math.max(...row.slice(q, r).map((sp) => sp.low));
-        for (const sp of row.slice(q, r)) {
-          const [di, dj] = DIRS[sp.a];
-          for (let s = 0; s < sp.n; s++) for (let kk = sp.low; kk < low; kk++) this.under.delete(key(kk, sp.i + s * di, sp.j + s * dj));
-          sp.low = low;
-        }
+        const group = row.slice(q, r), cells = group.flatMap((sp) => Array.from({ length: sp.n }, (_, s) => key(k, sp.i + s * DIRS[sp.a][0], sp.j + s * DIRS[sp.a][1])));
+        const low = Math.max(...group.map((sp) => sp.low));
+        this.lower(group, low);
+        // (a long raised row, nobody having said otherwise: now and then, once the courts are known, a colonnade)
+        if (group.length >= 3 && k >= 1 && cells.every((v) => !this.rules.has(v))) this.rows.push({ group, cells });
       }
       q = r;
     }
+  }
+
+  /** the bays of a row all springing from the same height, the air under each down to it kept clear */
+  private lower(group: Span[], low: number) {
+    for (const sp of group) {
+      const [di, dj] = DIRS[sp.a];
+      for (let s = 0; s < sp.n; s++) for (let kk = sp.low; kk < low; kk++) this.under.delete(key(kk, sp.i + s * di, sp.j + s * dj));
+      sp.low = low;
+    }
+  }
+  /** raised rows, alike, that might be colonnades */
+  private rows: Array<{ group: Span[]; cells: number[] }> = [];
+  /**
+   * Colonnades: a raised row of wide bays along a plaza or a facade (not by a court: a court's is a cloister's arcade,
+   * rolling), now and then made a colonnade by the rules, flat on massive columns: the grand, slow rhythm, rather than the arcade's.
+   */
+  private colonnades() {
+    for (const { group, cells } of this.rows) {
+      const byCourt = cells.some((v) => { const [, i, j] = unkey(v); return [[0, 0], ...DIRS].some(([a, b]) => this.courts.has(key(0, i + a, j + b))); });
+      // (wide bays only, three cells or more: a colonnade's spacing is slow)
+      if (byCourt || group.some((sp) => sp.n < 3) || hash(this.seed, cells[0], 41) % 100 >= 35) continue;
+      this.lower(group, group[0].k);
+      for (const sp of group) { sp.flat = true; sp.order = 'colonnade'; }
+    }
+    this.rows = [];
   }
 
   /** ground walled in all round: a courtyard, paved, with water and a cypress if there's room */

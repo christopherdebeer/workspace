@@ -251,6 +251,7 @@ const READING_ICONS: Array<[RegExp, string]> = [
   [/shed/, '<path d="M4 20V11h16v9"/><path d="M2 13l20-6v4"/>'],
   [/dome/, '<path d="M6 20v-8h12v8"/><path d="M6 12a6 6 0 0112 0"/><path d="M12 6V3"/>'],
   [/roof as/, '<path d="M4 20V12h16v8"/><path d="M2 12l10-8 10 8"/><circle cx="12" cy="16" r="1.5"/>'],
+  [/colonnade|column/, '<path d="M2 5h20M3 8h18"/><path d="M5 8v12M9.7 8v12M14.3 8v12M19 8v12M3 20h18"/>'],
   [/lintel/, '<path d="M3 7h18M5 7v13M19 7v13"/>'],
   [/two bays/, '<path d="M3 20V6h18v14"/><path d="M5 20v-6a3 3 0 016 0v6M13 20v-6a3 3 0 016 0v6"/>'],
   [/solid/, '<rect x="4" y="6" width="16" height="14" fill="currentColor" opacity=".35"/><rect x="4" y="6" width="16" height="14"/>'],
@@ -283,7 +284,7 @@ function showSel() {
   for (const b of Array.from(rd.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => switchTo(Number(b.dataset.reading)));
   // (dressing it, whole, straight from here)
   const dr = card.querySelector('#dressrow') as HTMLElement;
-  dr.hidden = !s.stone.length;
+  dr.hidden = !s.stone.length && s.motif?.kind !== 'court';
   if (!dr.childElementCount) {
     dr.innerHTML = DRESSINGS.map((d) => `<button data-dress="${d}" aria-label="dress it: ${d}">${(sheet.querySelector(`[data-held="${d}"] svg`) as SVGElement | null)?.outerHTML ?? ''}<i>${d}</i></button>`).join('');
     for (const b of Array.from(dr.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => dressSel(b.dataset.dress as Dressing));
@@ -304,7 +305,7 @@ function switchTo(at: number) {
 }
 const switchReading = () => { if (sel) switchTo((sel.s.at + 1) % sel.s.readings.length); };
 function takeAway() { if (!sel?.s.remove) return; world.apply(sel.s.remove, now()); kept(); unselect(); }
-function dressSel(kind: Dressing = lastDress) { if (!sel) return; lastDress = kind; const op = dress(world, kind, sel.s.stone); if (op) { world.apply(op, now()); kept(); } }
+function dressSel(kind: Dressing = lastDress) { if (!sel) return; lastDress = kind; const op = dress(world, kind, kind === 'pergola' && sel.s.motif?.kind === 'court' ? sel.s.cells : sel.s.stone); if (op) { world.apply(op, now()); kept(); } }
 card.querySelector('#takeaway')!.addEventListener('click', takeAway);
 card.querySelector('#close')!.addEventListener('click', unselect);
 /** what a touch is on, said plainly (the hand brush's tap) */
@@ -375,7 +376,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
 /** dressing, stroked over stone: each stone the finger passes over */
 function paintAt(cx: number, cy: number) {
   if (!g) return;
-  const p = pick(cx, cy), c = p && dressAt(world, p);
+  const p = pick(cx, cy), c = p && dressAt(g.before ?? world, p, held as Dressing);
   if (c && !g.painted.some((q) => q.every((v, n) => v === c[n]))) g.painted.push(c);
   if (!g.before) { g.before = new World(world.seed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now()); }
   lay(g.painted.length ? dress(g.before, held as Dressing, g.painted) : null);
@@ -444,10 +445,10 @@ const up = (e: PointerEvent) => {
       let op: Op | null = null;
       if (brush === 'auto') op = tap(world, start, now());
       else if (brush === 'take') op = place(world, 'take', start, looking(), now());
-      else if (isDress(held)) { const c = dressAt(world, start); op = c ? dress(world, held, [c]) : null; }
+      else if (isDress(held)) { const c = dressAt(world, start, held); op = c ? dress(world, held, [c]) : null; }
       else op = place(world, held, start, looking(), now());
       if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); }
-      else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
+      else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
     }
   } else if (m === 'trace' || m === 'run') { unselect(); traceStep(e.clientX, e.clientY, true); }
   else if (m === 'carve' || m === 'paint') { unselect(); kept(); }

@@ -33,16 +33,19 @@ const fill = (w: World, cells: Cell[], now: number): Op => {
   for (const [k, i, j] of cells) for (let kk = k - 1; kk >= 0 && !w.stone(kk, i, j) && w.stair(kk, i, j) < 0; kk--) add.push([kk, i, j, now]);
   return { add, why: 'solid' };
 };
-/** readings of arches the rules made: as they are, lintels, two bays each (if long enough), solid */
+/** readings of arches the rules made: arches (an arcade's rolling rhythm), lintels, a colonnade (a row of three or more:
+ * massive columns under an entablature, the slow wide rhythm), two bays each (if long enough), solid */
 function arches(w: World, spans: Span[], now: number, between: Cell[] = []): { readings: Reading[]; at: number } {
-  const cells = spans.flatMap(spanCells), clear: Op['rule'] = cells.map(([k, i, j]) => [k, i, j, RULE.none]);
+  const cells = spans.flatMap(spanCells), as = (r: number): Op => ({ rule: cells.map(([k, i, j]) => [k, i, j, r] as [number, number, number, number]), why: 'reading' });
   const readings: Reading[] = [
-    { label: spans.length > 1 ? 'arches' : 'an arch', op: { rule: clear, why: 'reading' } },
-    { label: spans.length > 1 ? 'lintels' : 'a lintel', op: { rule: cells.map(([k, i, j]) => [k, i, j, RULE.lintel]), why: 'reading' } },
+    { label: spans.length > 1 ? 'arches' : 'an arch', op: as(RULE.arch) },
+    { label: spans.length > 1 ? 'lintels' : 'a lintel', op: as(RULE.lintel) },
   ];
+  const row = spans.length >= 3 && spans[0].k >= 1;
+  if (row) readings.push({ label: 'a colonnade', op: as(RULE.colonnade) });
   if (spans.every((sp) => sp.n >= 3)) readings.push({ label: spans.length > 1 ? 'two bays each' : 'two bays', op: { rule: spans.map((sp) => { const m = Math.floor(sp.n / 2); return [sp.k, sp.i + m * DIRS[sp.a][0], sp.j + m * DIRS[sp.a][1], RULE.pier]; }), why: 'reading' } });
   readings.push({ label: 'solid', op: { ...fill(w, [...cells, ...between], now), why: 'reading' } });
-  const at = spans.every((sp) => sp.flat) ? 1 : 0;
+  const at = row && spans.every((sp) => sp.order === 'colonnade') ? 2 : spans.every((sp) => sp.flat) ? 1 : 0;
   readings[at].op = null;
   return { readings, at };
 }
@@ -52,14 +55,15 @@ export function selectCell(w: World, c: Cell, view: number, now: number): Select
   const sp = w.span(k, i, j);
   if (sp) {
     const r = arches(w, [sp], now);
-    return { title: `${sp.flat ? 'a lintel' : 'an arch'} of ${sp.n}, carrying what's over it`, cells: spanCells(sp), ...r, remove: { cut: spanCells(sp), why: 'take' }, stone: spanCells(sp) };
+    return { title: `${sp.order === 'colonnade' ? 'a bay of a colonnade' : sp.flat ? 'a lintel' : 'an arch'} of ${sp.n}, carrying what's over it`, cells: spanCells(sp), ...r, remove: { cut: spanCells(sp), why: 'take' }, stone: spanCells(sp) };
   }
   if (w.pier(k, i, j)) {
     const col: Cell[] = [];
     let top = k; while (w.pier(top + 1, i, j)) top++;
     for (let kk = top; kk >= 0 && w.pier(kk, i, j); kk--) col.push([kk, i, j]);
-    const readings: Reading[] = [{ label: 'a pier', op: null }, { label: 'solid', op: { add: col.map(([kk]) => [kk, i, j, now] as [number, number, number, number]), why: 'reading' } }];
-    return { title: 'a pier, the rules\' own, carrying what has nothing else under it', cells: col, readings, at: 0, remove: null, stone: col };
+    const column = DIRS.some(([a, b]) => w.span(top + 1, i + a, j + b)?.order === 'colonnade');
+    const readings: Reading[] = [{ label: column ? 'a column' : 'a pier', op: null }, { label: 'solid', op: { add: col.map(([kk]) => [kk, i, j, now] as [number, number, number, number]), why: 'reading' } }];
+    return { title: column ? 'a column of a colonnade, the rules\' own' : 'a pier, the rules\' own, carrying what has nothing else under it', cells: col, readings, at: 0, remove: null, stone: col };
   }
   const d = w.stair(k, i, j);
   if (d >= 0) {

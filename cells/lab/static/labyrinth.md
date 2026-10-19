@@ -77,7 +77,12 @@ Dressing changes how stone looks, never what stands. Tap a stone, or stroke over
 | **moss** | where it has a reason: on faces turned from the sun, at the damp foot of a course, in the joints and along the edges of a top (not across it), soft patches with a few brighter flecks |
 | **ivy** | real leaves: a few trailing strands hanging from the top of each open side, every leaf its own size, tilt and shade; some lean out over the top edge, so the ivy breaks the stone's outline |
 | **parapet** | a low wall round the open edges of a top, a wall's thickness all along, with a coping a little proud of it, and a capped post where it ends |
+| **balustrade** | the same edges railed with turned balusters, close set, on a plinth under a rail, a pedestal at each end and corner. On a stair, it climbs with the flight, a baluster on each tread, a newel at its foot and head |
+| **jali** | a screen of pierced stone: round a top, up a stair, or (on a thin wall) the wall itself pierced through |
 | **lantern**, **pot** | on a top with room over it: a lantern on a post, lit; a terracotta pot with a clipped shrub |
+| **pergola** | over a place (the ground, or a top, touched): posts, beams, rafters, a vine |
+| **mashrabiya** | a building's upper windows, each in a box of turned lattice out from the wall |
+| **colonnettes** | a building's doors and arched windows framed with slim shafts (and its windows made arched) |
 
 A stroke that starts on a stone that already has the dressing takes it off everything it passes over. Take, tapped on a lantern or a pot, takes that first. The rules dress a little of their own accord: a bridge, or an arch two levels up or more, gets a parapet along its open sides.
 
@@ -95,9 +100,9 @@ Tap a piece and it's taken up: its own surfaces faintly warmed and its outline d
 
 | Taken up | Its readings |
 |---|---|
-| an arch the rules made | an arch · a lintel (flat, on its piers) · two bays (a pier forced under its middle, if it's three or more long) · solid (stone under it, down to what's below) |
+| an arch the rules made | an arch · a lintel (flat, on its piers) · a colonnade (a raised row of three or more) · two bays (a pier forced under its middle, if it's three or more long) · solid (stone under it, down to what's below) |
 | an arcade, or a bridge | the same, for all its arches at once. Solid fills over its piers too |
-| a pier | a pier · solid |
+| a pier | a pier (a column, under a colonnade) · solid |
 | a block (yours, or laid by a connection) | a block · a thin wall · an arch either way · a stair |
 | an arch you put | an arch · turned · a block · a stair |
 | a stair | each of the four ways it could climb · a block |
@@ -146,6 +151,8 @@ The brief's first test asks whether someone, without instruction, can build this
    - None of it is dressed by hand: the brick tower and its lantern, the ivy and moss round the court, the pots, the parapets are all the rules' own (below). `?plain` shows it bare.
 
 And `?story=8` is **a labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a gallery of arches on its walls from corner tower to corner tower, a gate through each side, one framing the stair beyond). A stair climbing behind a wall, its foot hidden and its head showing over the wall, to a landing tower. From there a bridge over the passage below to the cloister's corner, so one way crosses another. A tall, narrow slot between two towers, bridged high up. And houses under roofs, their doors, windows and stairs inside the rules' own.
+
+And `?story=9` is **features, placements and rhythms**: a colonnade along the plaza between two towers, a jali round one tower's top; a terrace and the flight up to it, balustraded; a court screened on one side by a jali; a house with mashrabiya at its upper windows and colonnettes at its openings, and a pergola over the yard in front of it.
 
 ## How it's built
 
@@ -240,6 +247,27 @@ Roofs are terracotta tiles in courses up the slope, each tile its own shade. Eac
 ![houses: hipped, a lean-to falling away from it, gabled, a marble tower's lead dome](labyrinth/v-houses.jpg)
 ![doors where ways meet walls: the cloister's corner towers, a door at the foot, slit windows](labyrinth/v-doors.jpg)
 
+## Features, placements and rhythms
+
+Each feature goes where it belongs, at its own rhythm. The rules put them of their own accord (`character.ts`, `model.ts`), and the hand puts them as dressing or switches them with select.
+
+| Feature | Where it goes | Its rhythm | How it comes |
+|---|---|---|---|
+| **balustrade** | the edges of terraces, roofs that are walked, stairs, a colonnade's top | dense and quick: a turned baluster every ninth of a cell, a pedestal at each end and corner | the rules, on a high top with a drop (a balustrade about four times in ten when they rail one), on a long or high flight now and then, along every colonnade; dressing |
+| **colonnade** | a raised run along a plaza or a facade | slow and wide: massive columns, evenly spaced, with a swell to the shaft (entasis), a moulded base and a cushioned capital, under an entablature (an architrave, a cornice) run on over them | the rules, about a third of the time on a raised row of three bays or more, each bay three cells wide or more, not beside a court; select's *a colonnade* reading |
+| **arcade** | courts, cloisters, walks under a gallery | fluid: arches rolling from pier to pier | the rules (as before); select's *arches* reading keeps it arches |
+| **colonnettes** | doors and arched windows | tight and paired: two slim shafts each side of a door, one each side of a window, on little bases, under little capitals where the arch springs | the rules, on some buildings whose windows are arched; dressing (which makes a building's windows arched) |
+| **mashrabiya** | the upper-floor windows of a house | fine: a box of turned lattice out from the wall on two corbels, solid at its foot and head, under a little lean-to roof; the sun comes through it in points | the rules, on some roofed houses; dressing |
+| **jali** | court partitions, railings round a top or up a stair | a pierced stone screen of circles and stars, framed at its foot, its head and each cell's edge | the rules, on some thin walls beside a court, and on some high edges; dressing |
+| **pergola** | the yard in front of a house's door, a court, a terrace | posts at its corners (and along a long side, every other cell; none where a wall takes the beam), beams round it, rafters across the short way, a vine up the posts and over the top | the rules, over the court in front of some houses' doors; dressing (on a place) |
+
+Pierced things (a jali, a mashrabiya's lattice) are cut through in the shader, in the picture and in the sun's view alike, so their shadows are dappled.
+
+![9 · features, placements and rhythms](labyrinth/v-story-9.jpg)
+![the colonnade, close](labyrinth/v-colonnade.jpg)
+![mashrabiya, colonnettes, a pergola](labyrinth/v-house-features.jpg)
+![a jali and balustrades](labyrinth/v-jali.jpg)
+
 ## Form: the shape inside each cell
 
 The cells are what's built, selected and walked. How each is drawn is worked out from what's round it (`form.ts`), so blocks that meet join as architecture rather than sitting side by side as cubes. A touch strikes the same shape (`inStone` reads the same outline the mesh is drawn from), so what you see is what you touch.
@@ -256,7 +284,7 @@ Next for the form: junctions by kind (a wall into a tower with a buttress at the
 |---|---|---|---|
 | **a block wall** | a wall's thickness (a whole cell where it's part of a mass) | a level a course | auto's trace on the stone, the block piece |
 | **a thin wall** | a wall's thickness | a level a course | the wall piece; select's reading of a block, or of a wall |
-| **a parapet** | thinner, with a coping | low | dressing; the rules, round a high drop |
+| **a parapet** (or a balustrade, or a jali) | thinner, with a coping (or a rail) | low | dressing; the rules, round a high drop |
 
 Select reads a wall three ways: a wall, a thin wall, an arcaded wall. A block reads as a thin wall too.
 
@@ -337,7 +365,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - a high walkway's free end comes down on a pier onto a walkway below: the pier is slim, stands aside, and the walkway below can still be walked past it, and built on;
   - the wall piece run round makes thin walls, which close a court; a tap on a thin wall goes on as one, up or out along its way; struck where it is, not beside it;
   - the random worlds also switch readings on what select would take up, dress stones, and run pieces; every arcade's bays spring alike;
-  - storyboard 6: the arcade is two alike bays, the flight is three steps and can be climbed to the terrace, towers and the court are found, the lintel and the dressing are there and written down; every reading of the arcade stands; a bridge of five read as two bays gets a pier under its middle;
+  - the arcade read as a colonnade: every bay flat, under an entablature; read back as arches, none a colonnade;
+  - storyboard 6: the arcade is alike bays, the flight is three steps and can be climbed to the terrace, towers and the court are found, the lintel and the dressing are there and written down; every reading of the arcade stands; a bridge of five read as two bays gets a pier under its middle;
   - every arch's air is clear;
   - every way of reading a gesture occurs;
   - undo, and doing it again, gives the same world;
@@ -373,6 +402,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 - **Worn stone**: a worn centre to a stair's treads, a darker edge to a pool.
 - **Roofs on any plan**: an L or a T as joined roofs (valleys and hips), a roof stepping down a building of two heights; roofs over walks (a loggia's roof on columns).
 - **Doors and windows by hand**: a door or window as a piece, and select reading a building's openings (none, more, another style).
+- **Features, further**: a loggia (a colonnade on the stone, roofed); a balcony out from an upper door on corbels, with a balustrade or a mashrabiya; a pergola with its vine in leaf or bare by season; a colonnade's order chosen (plain, or fluted).
 - **Interiors**: a building opened up (a cut through it shows its floors and its stair).
 
 - **Snapping on relationships**: geometric (a stroke ending near an edge or a terrace joins it), topological (two walkways meeting make a junction you can walk), architectural (a buttress under an exposed terrace edge).

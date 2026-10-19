@@ -97,7 +97,9 @@ function find(w: World): Buildings {
     const unreached = upper.some((f) => !ground.has(placeAt(f.out))) || (arrives && tops.some((v) => !ground.has(v)));
     const foot = faces.filter((f) => f.k === 0 && standing(w, ...f.out) && ground.has(placeAt(f.out)));
     const court = foot.filter((f) => w.courts.has(key(0, f.out[1], f.out[2])));
-    const style = (['arched', 'square', 'slit'] as const)[hash(w.seed, id, 1) % 3];
+    // (one style to a building; framed with colonnettes by hand, arched, so there's an arch for them to carry)
+    const framed = cols.some(([x, z]) => Array.from({ length: h }, (_, k) => w.dressed(k, x, z)?.colonnettes).some(Boolean));
+    const style = framed ? 'arched' : (['arched', 'square', 'slit'] as const)[hash(w.seed, id, 1) % 3];
     const doors: typeof faces = [...upper];
     // (a house (its top not walked, so lived in under a roof) has a door at its foot too, as a rule)
     if (foot.length && (unreached || (!arrives && chance(0.85, id, 7)) || ((upper.length || court.length) && chance(0.4, id, 2)))) {

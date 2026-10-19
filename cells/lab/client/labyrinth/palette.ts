@@ -22,7 +22,7 @@ export type Piece = 'block' | 'wall' | 'arch' | 'stair' | 'bridge' | 'cypress' |
 export type Dressing = keyof typeof DRESS;
 export type Hand = 'auto' | Piece | 'take';
 export const PIECES: Piece[] = ['block', 'wall', 'arch', 'stair', 'bridge', 'cypress', 'pool'];
-export const DRESSINGS: Dressing[] = ['travertine', 'brick', 'marble', 'moss', 'ivy', 'parapet', 'lantern', 'pot'];
+export const DRESSINGS: Dressing[] = ['travertine', 'brick', 'marble', 'moss', 'ivy', 'parapet', 'balustrade', 'jali', 'lantern', 'pot', 'pergola', 'mashrabiya', 'colonnettes'];
 
 /** a bridge across level k through a cell: along an axis, the free cells between stone either side (the shorter way) */
 export function span(w: World, k: number, i: number, j: number, only?: number): { a: number; i: number; j: number; n: number } | null {
@@ -44,6 +44,9 @@ export function span(w: World, k: number, i: number, j: number, only?: number): 
 export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: number, now: number): Op | null {
   const [hk, hi, hj] = p.hit;
   if (hand === 'take') {
+    // (a pergola over the place touched, before anything else there)
+    const over: Cell = p.face === 'ground' ? [0, hi, hj] : [hk + 1, hi, hj];
+    if (p.face !== 'side' && look(w, ...over)?.pergola) return { dress: [[...over, DRESS.pergola, 0]], why: 'take' };
     if (p.face === 'ground') return w.pools.has(key(0, hi, hj)) ? { cut: [[-1, hi, hj]], why: 'take' } : null;
     // (a lantern or a pot on what was touched, before the stone itself)
     const prop = look(w, hk, hi, hj)?.prop;
@@ -109,10 +112,12 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
   return place(w, piece, start, view, now);
 }
 
-/** the cell a dressing goes on, where a touch struck: the stone (or stair, or pier) struck */
-export function dressAt(w: World, p: Pick): Cell | null {
-  if (p.face === 'ground') return null;
+/** the cell a dressing goes on, where a touch struck: the stone (or stair, or pier) struck; a pergola, the place over
+ * the ground or the top struck */
+export function dressAt(w: World, p: Pick, kind?: Dressing): Cell | null {
   const [k, i, j] = p.hit;
+  if (kind === 'pergola') { const c: Cell = p.face === 'ground' ? [0, i, j] : p.face === 'top' ? [k + 1, i, j] : p.to; return w.free(...c) && w.floor(...c) ? c : null; }
+  if (p.face === 'ground') return null;
   return w.stone(k, i, j) || w.stair(k, i, j) >= 0 || w.pier(k, i, j) ? [k, i, j] : null;
 }
 /**
@@ -123,14 +128,20 @@ export function dressAt(w: World, p: Pick): Cell | null {
 export function dress(w: World, kind: Dressing, cells: Cell[]): Op | null {
   const id = DRESS[kind], seen = new Set<number>(), out: Array<[number, number, number, number, number]> = [];
   const first = cells[0] && look(w, ...cells[0]);
-  const has = (d: ReturnType<typeof look>) => !!d && (id === DRESS.moss ? d.moss : id === DRESS.ivy ? d.ivy : id === DRESS.parapet ? d.parapet : d.prop === id);
+  const thin = cells[0] && w.wall(...cells[0]) >= 0;
+  const has = (d: ReturnType<typeof look>) => !!d && (id === DRESS.moss ? d.moss : id === DRESS.ivy ? d.ivy
+    : id === DRESS.parapet ? d.parapet && (!d.rail || d.rail === DRESS.parapet) : id === DRESS.balustrade ? d.parapet && d.rail === id
+    : id === DRESS.jali ? (thin ? d.screen : d.parapet && d.rail === id) : id === DRESS.pergola ? d.pergola
+    : id === DRESS.mashrabiya ? d.oriel : id === DRESS.colonnettes ? d.colonnettes : d.prop === id);
   const on = id <= DRESS.marble ? 1 : has(first) ? 0 : 1;
   for (const [k, i, j] of cells) {
     const v = key(k, i, j);
     if (seen.has(v)) continue;
     seen.add(v);
     if ((id === DRESS.lantern || id === DRESS.pot) && on && (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || !w.stone(k, i, j))) continue;
+    // (a pergola over a place; whatever else is dressed, a stone over a place, by the select brush, means the place over it)
+    if (id === DRESS.pergola && !w.free(k, i, j)) { if (w.free(k + 1, i, j) && !seen.has(key(k + 1, i, j))) { seen.add(key(k + 1, i, j)); out.push([k + 1, i, j, id, on]); } continue; }
     out.push([k, i, j, id, on]);
   }
-  return out.length ? { dress: out, why: 'dress', note: `${on ? '' : 'no '}${kind}, ${out.length} stone${out.length > 1 ? 's' : ''}` } : null;
+  return out.length ? { dress: out, why: 'dress', note: `${on ? '' : 'no '}${kind}, ${out.length} ${id === DRESS.pergola ? 'place' : 'stone'}${out.length > 1 ? 's' : ''}` } : null;
 }

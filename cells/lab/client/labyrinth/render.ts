@@ -27,7 +27,28 @@ void main() {
   vPos = p; vNrm = aNrm; vAo = aAoMat.x; vMat = aAoMat.y; vTone = aTone; vLs = uLight * vec4(p, 1.);
   gl_Position = s <= 0. ? vec4(2., 2., 2., 1.) : uVP * vec4(p, 1.);
 }`;
-const FS = COMMON + `
+/** what's cut through (a jali's stone, a mashrabiya's lattice): holes in its upright faces, in the picture and in the
+ * sun's view both, so the light falls through them in points */
+const PIERCE = `
+bool pierced(vec3 p, vec3 n, float m) {
+  int mi = int(m + .5) % 256;
+  if ((mi / 64) % 4 != 3 || abs(n.y) > .5) return false;
+  float u = abs(n.x) > .5 ? p.z : p.x, v = p.y;
+  if (mi % 16 == 15) {
+    // (a mashrabiya's lattice: fine turned spindles in a grid, small square lights between)
+    vec2 q = abs(fract(vec2(u, v) / .045) - .5);
+    return q.x < .3 && q.y < .3;
+  }
+  // (a jali: stone pierced in stars and circles, framed: whole at its foot and head and at each cell's edge, and a band
+  // across a little above a railing's height)
+  float fu = min(fract(u), 1. - fract(u)), fv = fract(v);
+  if (fu < .07 || fv < .07 || fv > .9 || (fv > .25 && fv < .33)) return false;
+  vec2 q = fract(vec2(u, v) / .09) - .5;
+  float r = length(q), star = abs(q.x) + abs(q.y);
+  return r < .27 || (star < .43 && abs(abs(q.x) - abs(q.y)) < .07);
+}
+`;
+const FS = COMMON + PIERCE + `
 in vec3 vPos, vNrm; in float vAo, vMat, vTone; in vec4 vLs;
 uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
@@ -80,6 +101,7 @@ vec3 marble(vec3 p, vec3 n, float tone) {
 }
 void main() {
   vec3 n = normalize(vNrm);
+  if (pierced(vPos, n, vMat)) discard;
   int m0 = int(vMat + .5), m = m0 % 256, mat = m % 16, kind = (m / 64) % 4;
   bool sel = m0 >= 256;
   bool moss = (m / 16) % 2 == 1, ivy = (m / 32) % 2 == 1;
@@ -105,6 +127,11 @@ void main() {
     base *= .7 + .3 * smoothstep(.0, .25, fr);
     base = mix(base, vec3(.45, .47, .38), .18 * smoothstep(.55, .8, fbm(vPos * 2.)));
   }
+  else if (mat == 15) {
+    // (timber: weathered, its grain along it)
+    float g = noise(vec3(vPos.x * 3. + vPos.z * 3., vPos.y * 40., 1.));
+    base = vec3(.52, .40, .29) * (.85 + .2 * g) * (.9 + .1 * vTone);
+  }
   else if (mat == 14) {
     // (lead: grey-green, in standing seams)
     float u = atan(vPos.z - floor(vPos.z) - .5, vPos.x - floor(vPos.x) - .5) * 4., su = fract(u);
@@ -123,10 +150,10 @@ void main() {
   else if (kind == 1) base = brick(vPos, n, vTone);
   else if (kind == 2) base = marble(vPos, n, vTone);
   else {
-    base = travertine(vPos, vTone);
+    base = travertine(vPos, vTone) * (kind == 3 ? 1.04 : 1.);
     // (dressed stone, laid in courses: a joint every third of a level, the upright joints staggered course to course;
     // on a top, a joint at each cell's edge. Not on what's curved)
-    if (mat == 0) {
+    if (mat == 0 && kind != 3) {
       float jt;
       if (abs(n.y) < .5) {
         float u = abs(n.x) > .5 ? vPos.z : vPos.x, cy = vPos.y * 3., course = floor(cy);
@@ -196,7 +223,10 @@ void main() {
   oNrm = vec4(n * .5 + .5, sel ? 1. : .5);
 }`;
 const SHADOW_FS = `#version 300 es
-precision highp float; out vec4 o; void main() { o = vec4(1.); }`;
+precision highp float;
+in vec3 vPos, vNrm; in float vAo, vMat, vTone; in vec4 vLs;
+` + PIERCE + `
+out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat)) discard; o = vec4(1.); }`;
 const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es

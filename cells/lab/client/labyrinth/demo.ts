@@ -33,6 +33,7 @@ const side = (k: number, i: number, j: number, di: number, dj: number): Pick => 
 
 export function story(stage: number): World {
   if (stage === 8) return labyrinth();
+  if (stage === 9) return features();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op) w.apply(op, t); };
@@ -132,5 +133,44 @@ function labyrinth(): World {
   for (const [i, j] of [[11, 2], [12, 2], [13, 2], [11, 3], [12, 3], [13, 3]]) col(i, j, 2);
   col(14, 6, 4);
   w.apply({ dress: [0, 1, 2, 3].map((k) => [k, 14, 6, DRESS.marble, 1] as [number, number, number, number, number]), rule: [[3, 14, 6, RULE.dome]] }, t);
+  return w;
+}
+
+/** storyboard 9: the features, each where it belongs, at its own rhythm */
+function features(): World {
+  const w = new World(13), t = -100;
+  const add = (cells: Array<[number, number, number]>) => w.apply({ add: cells.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  const col = (i: number, j: number, h: number) => add(Array.from({ length: h }, (_, k) => [k, i, j] as [number, number, number]));
+  const dress = (cells: Array<[number, number, number]>, kind: number) => w.apply({ dress: cells.map(([k, i, j]) => [k, i, j, kind, 1] as [number, number, number, number, number]) }, t);
+  // (a colonnade along the plaza's north: a run carried high between two towers, read as a colonnade (massive columns,
+  // wide and even, under an entablature), a balustrade along its top of its own accord; a jali round one tower's top)
+  col(2, 1, 3); col(12, 1, 3);
+  const run: Array<[number, number, number]> = Array.from({ length: 9 }, (_, q) => [2, 3 + q, 1]);
+  add(run);
+  w.apply({ rule: run.map(([k, i, j]) => [k, i, j, RULE.colonnade] as [number, number, number, number]) }, t);
+  dress([[2, 12, 1]], DRESS.jali);
+  // (a terrace with a balustrade round it, and a flight up to it, balustraded too)
+  for (const [i, j] of [[2, 6], [3, 6], [4, 6], [2, 7], [3, 7], [4, 7]]) col(i, j, 2);
+  dress([[1, 2, 6], [1, 3, 6], [1, 4, 6], [1, 2, 7], [1, 3, 7], [1, 4, 7]], DRESS.balustrade);
+  add([[0, 3, 8]]);
+  w.apply({ stairs: [[0, 3, 9, 3, t], [1, 3, 8, 3, t]] }, t);
+  dress([[0, 3, 9], [1, 3, 8]], DRESS.balustrade);
+  // (a court walled round, a gate on its north; its west side a partition of pierced stone, a jali)
+  const ring: Array<[number, number]> = [];
+  for (let i = 6; i <= 10; i++) ring.push([i, 5], [i, 10]);
+  for (let j = 6; j <= 9; j++) ring.push([6, j], [10, j]);
+  const screen = ring.filter(([i, j]) => i === 6 && j >= 6 && j <= 9);
+  add(ring.filter(([i, j]) => !(i === 8 && j === 5) && !screen.some(([a, b]) => a === i && b === j)).flatMap(([i, j]) => [[0, i, j], [1, i, j]] as Array<[number, number, number]>));
+  w.apply({ arches: [[0, 8, 5, 1, t]], walls: screen.flatMap(([i, j]) => [[0, i, j, 1, t], [1, i, j, 1, t]] as Array<[number, number, number, number, number]>) }, t);
+  dress(screen.flatMap(([i, j]) => [[0, i, j], [1, i, j]] as Array<[number, number, number]>), DRESS.jali);
+  // (a house, three high under its roof: mashrabiya at its upper windows, colonnettes framing its windows and doors; a
+  // pergola over the yard in front of it)
+  const house: Array<[number, number]> = [];
+  for (let i = 12; i <= 14; i++) for (let j = 8; j <= 10; j++) { col(i, j, 3); house.push([i, j]); }
+  const all = house.flatMap(([i, j]) => [[0, i, j], [1, i, j], [2, i, j]] as Array<[number, number, number]>);
+  dress(all, DRESS.colonnettes); dress(all.filter(([k]) => k >= 1), DRESS.mashrabiya);
+  const yard: Array<[number, number, number]> = [];
+  for (let i = 12; i <= 14; i++) for (let j = 6; j <= 7; j++) yard.push([0, i, j]);
+  dress(yard, DRESS.pergola);
   return w;
 }

@@ -28,6 +28,13 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ![Doors where ways meet walls: the cloister's corner towers: doors where the gallery arrives, a door at the foot, a stair inside; slit windows](v-doors.jpg)
 ![From the other side: the slot between the towers, the gallery, and the court inside](v-story-8-turned.jpg)
 
+## Features and rhythms
+
+![9 · Features, placements and rhythms: a colonnade along the plaza (massive columns, wide and even, an entablature, a balustrade on top); a terrace and its flight balustraded (the quick rhythm of balusters); a court screened by a jali; a house with mashrabiya at its upper windows, colonnettes at its doors and windows, a pergola over the yard before it](v-story-9.jpg)
+![The colonnade, close: columns with a swell to their shafts, a moulded base and a cushioned capital; the entablature run on over them; a balustrade along the top, a jali round the tower](v-colonnade.jpg)
+![Mashrabiya, colonnettes, a pergola: lattice boxes on corbels at the upper windows, the light through them in points; slim shafts framing the arches; posts, beams, close-set rafters and a vine over the yard](v-house-features.jpg)
+![A jali and balustrades: the court's west side a screen of pierced stone; the terrace and its flight railed with turned balusters](v-jali.jpg)
+
 ## Auto, with character
 
 ![Auto alone, no cap: a tower tapped up ten high (no cap on height), a walkway to it, a long wall traced round, a high walkway from halfway up the tower (its slim piers stand aside on the ways below): every motif and all the dressing the rules' own choice](v-story-7.jpg)
