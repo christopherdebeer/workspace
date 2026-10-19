@@ -30,7 +30,7 @@
  * than the square it starts as (`extent`). Build at its edge and it grows.
  */
 import { hash } from '../kit/rng';
-import { LAND, groundOf, makeLand, type Land } from './land';
+import { DOMAIN, LAND, groundOf, makeLand, type Land } from './land';
 
 export const N = 48, LO = -18, HI = LO + N - 1;
 /** far over anything a hand would build: only a guard */
@@ -50,6 +50,9 @@ export interface Op {
   arches?: Array<[number, number, number, number, number]>;
   /** cypresses (on a floor) and pools (let into the stone): cell, when */
   trees?: Array<[number, number, number, number]>; pools?: Array<[number, number, number]>;
+  /** water let into a top, up off the ground: a basin; its cell (the level of the water, over the stone it's let into),
+   * when */
+  basins?: Array<[number, number, number, number]>;
   /** the stone it adds is a bridge's: carried on one arch, however long the gap (to seven cells) */
   bridge?: boolean;
   /** a connection asked for: the intent, kept as the hand gave it; its stone is worked out on replay (`realise`) */
@@ -109,6 +112,9 @@ export interface Reached { reached: boolean; stopped: number; cells: Cell[] }
 /** an arch, carrying a run of stone along an axis (0 x, 1 z): its level, first cell, length, and the level it springs from */
 export interface Span { k: number; a: number; i: number; j: number; n: number; low: number; born: number; /** a flat lintel, not an arch */ flat?: boolean; /** carried as part of a colonnade: on columns, under an entablature */ order?: 'colonnade' }
 export interface Decor { kind: 'pool' | 'cypress' | 'pot'; i: number; j: number; born: number }
+/** water falling: from a basin's spout (its cell, the way it spills), down to where it lands (that column's surface,
+ * and whether that's water, or a bowl the rules put there to catch it) */
+export interface Fall { k: number; i: number; j: number; d: number; land: number; into: 'water' | 'bowl' | 'stone'; born: number }
 
 /** how big a court has to be for water in it, and for a cypress */
 export const POOL_COURT = 6, TREE_COURT = 4;
@@ -157,6 +163,10 @@ export class World {
   private bridged = new Set<number>();
   trees = new Map<number, number>();
   pools = new Map<number, number>();
+  basins = new Map<number, number>();
+  /** where basins spill (one spout each, over the deepest drop), and the bowls the rules put where they land */
+  falls: Fall[] = [];
+  bowls = new Map<number, number>();
   /** readings of the rules' work switched by hand (RULE), and dressing (by cell) */
   rules = new Map<number, number>();
   dress = new Map<number, Dress>();
@@ -207,7 +217,11 @@ export class World {
   /** a cell's dressing, if it has any */
   dressed(k: number, i: number, j: number): Dress | null { return inGrid(i, j) ? this.dress.get(key(k, i, j)) ?? null : null; }
   /** a floor to stand on at the foot of level k: the stone (not a pool), or the top of stone */
-  floor(k: number, i: number, j: number) { if (!inGrid(i, j)) return false; const g = this.ground(i, j); return k === g ? !this.pool(i, j) : k > g && this.stone(k - 1, i, j); }
+  floor(k: number, i: number, j: number) { if (!inGrid(i, j)) return false; const g = this.ground(i, j); return k === g ? !this.pool(i, j) && !this.bowl(k, i, j) : k > g && this.stone(k - 1, i, j) && !this.basin(k, i, j) && !this.bowl(k, i, j); }
+  /** water let into the top of the stone under a cell (a basin) */
+  basin(k: number, i: number, j: number) { return inGrid(i, j) && this.basins.has(key(k, i, j)) && this.stone(k - 1, i, j) && !this.stone(k, i, j); }
+  /** a bowl the rules put where falling water lands */
+  bowl(k: number, i: number, j: number) { return inGrid(i, j) && this.bowls.has(key(k, i, j)); }
   /**
    * A cell a stair needs kept open: the place at its foot, the place at its head, and the headroom over it and over its
    * head. Auto never builds into one (a tap there is refused, a wall traced across one leaves a way through it, a
@@ -221,7 +235,7 @@ export class World {
     return this.stair(k - 1, i, j) >= 0;
   }
   /** a cell free to build in (a pier there gives way: it's the rules', and the hand's stone carries what it carried) */
-  free(k: number, i: number, j: number) { return k >= 0 && k < CEIL && inGrid(i, j) && !this.stone(k, i, j) && this.stair(k, i, j) < 0 && !this.tree(k, i, j) && !this.tree(k - 1, i, j) && !this.earth(k, i, j) && !(k === this.ground(i, j) && this.pool(i, j)); }
+  free(k: number, i: number, j: number) { return k >= 0 && k < CEIL && inGrid(i, j) && !this.stone(k, i, j) && this.stair(k, i, j) < 0 && !this.tree(k, i, j) && !this.tree(k - 1, i, j) && !this.earth(k, i, j) && !(k === this.ground(i, j) && this.pool(i, j)) && !this.basin(k, i, j) && !this.bowl(k, i, j); }
   /** how high a column's stone (or stair) goes, up from a level, without a gap */
   topFrom(k: number, i: number, j: number) { while (k + 1 < CEIL && (this.stone(k + 1, i, j) || this.stair(k + 1, i, j) >= 0)) k++; return k + 1; }
   /** the highest anything reaches */
@@ -242,7 +256,7 @@ export class World {
   /** the operations replayed into the intended solid, and that resolved */
   rebuild(now = 0) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
     for (const op of this.ops) {
       if (op.connect) {
@@ -253,13 +267,14 @@ export class World {
       }
       for (const [k, i, j] of op.cut ?? []) {
         if (k < 0) { this.pools.delete(key(0, i, j)); continue; }
-        for (const m of [this.mass, this.stairs, this.archways, this.thin, this.trees, this.dress]) m.delete(key(k, i, j));
+        for (const m of [this.mass, this.stairs, this.archways, this.thin, this.trees, this.dress, this.basins]) m.delete(key(k, i, j));
         this.bridged.delete(key(k, i, j)); this.laid.delete(key(k, i, j));
       }
       for (const [k, i, j, a, b] of op.arches ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.thin.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.archways.set(key(k, i, j), a); }
       for (const [k, i, j, a, b] of op.walls ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.archways.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.thin.set(key(k, i, j), a); }
       for (const [k, i, j, b] of op.trees ?? []) if (inGrid(i, j)) this.trees.set(key(k, i, j), b);
       for (const [i, j, b] of op.pools ?? []) if (inGrid(i, j)) this.pools.set(key(0, i, j), b);
+      for (const [k, i, j, b] of op.basins ?? []) if (inGrid(i, j) && k > 0 && k < CEIL) this.basins.set(key(k, i, j), b);
       if (op.bridge) for (const [k, i, j] of op.add ?? []) this.bridged.add(key(k, i, j));
       for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
       for (const [k, i, j, d, b] of op.stairs ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.mass.delete(key(k, i, j)); this.thin.delete(key(k, i, j)); this.stairs.set(key(k, i, j), { d, born: b }); }
@@ -281,6 +296,7 @@ export class World {
     }
     this.tall = this.measureTop(); this.levels = this.tall + 2;
     this.resolve();
+    this.spill();
     if (this.decor.some((d) => d.kind === 'cypress')) this.tall = Math.max(this.tall, 2);
     this.ext = this.measure();
     this.version++;
@@ -624,14 +640,63 @@ export class World {
       }
     }
   }
+  /**
+   * Where the water goes: each basin (cells of water let in at one level, side by side) spills from one spout, at the
+   * edge over water if there's water below one, else over the deepest drop (where there's no stone beside it at its level, nor a floor there to run out onto),
+   * and falls to what's below that edge: into water if it's water (a pool, the stream, a lower basin, which spills in
+   * turn), else into a bowl the rules put there to catch it, on the ground or a top; onto a stair or a way, it just
+   * lands. A basin walled all round holds its water.
+   */
+  private spill() {
+    this.falls = []; this.bowls.clear();
+    const seen = new Set<number>();
+    for (const v of [...this.basins.keys()].sort((a, b) => a - b)) {
+      const [k0, i0, j0] = unkey(v);
+      if (seen.has(v) || !this.basin(k0, i0, j0)) continue;
+      const region: Array<[number, number]> = [], q: Array<[number, number]> = [[i0, j0]];
+      seen.add(v);
+      while (q.length) { const [i, j] = q.pop()!; region.push([i, j]); for (const [a, b] of DIRS) { const u = key(k0, i + a, j + b); if (!seen.has(u) && this.basin(k0, i + a, j + b)) { seen.add(u); q.push([i + a, j + b]); } } }
+      let best: { i: number; j: number; d: number; land: number; h: number; into: Fall['into'] } | null = null, bestScore = -Infinity;
+      for (const [i, j] of region) for (let d = 0; d < 4; d++) {
+        const [a, b] = DIRS[d], x = i + a, z = j + b;
+        if (!inGrid(x, z) || this.basin(k0, x, z) || this.stone(k0, x, z) || this.stair(k0, x, z) >= 0 || this.stone(k0 - 1, x, z) || this.stair(k0 - 1, x, z) >= 0) continue;
+        // (what's under that edge: the first thing down the column)
+        let h = k0 - 1;
+        while (h > this.ground(x, z) && !this.stone(h - 1, x, z) && this.stair(h - 1, x, z) < 0) h--;
+        if (this.stair(h - 1, x, z) >= 0 || this.occupied(h, x, z)) continue;
+        const water = h === this.ground(x, z) ? this.pool(x, z) : this.basin(h, x, z);
+        // (water finds water: a spout over water first, then over the deepest drop)
+        const score = (water ? 10 : 0) + k0 - h + (hash(this.seed, i, j, d) % 100) / 1000;
+        if (score > bestScore) { bestScore = score; best = { i, j, d, land: h, h, into: water ? 'water' : this.way(h, x, z) || this.paved(x, z) ? 'stone' : 'bowl' }; }
+      }
+      if (!best) continue;
+      const born = Math.max(...region.map(([i, j]) => this.basins.get(key(k0, i, j)) ?? -1e3));
+      this.falls.push({ k: k0, i: best.i, j: best.j, d: best.d, land: best.land, into: best.into, born });
+      if (best.into === 'bowl') this.bowls.set(key(best.land, best.i + DIRS[best.d][0], best.j + DIRS[best.d][1]), born);
+    }
+  }
   /** the slab: the cells it covers (first and last each way): what's built and MARGIN_CELLS more, at least its start */
   extent() { return this.ext; }
   private ext = { i0: START[0], i1: START[1], j0: START[0], j1: START[1] };
   private measure(): { i0: number; i1: number; j0: number; j1: number } {
-    // (on the land: the land, and no more)
-    if (this.land) return { i0: LAND.i0, i1: LAND.i1, j0: LAND.j0, j1: LAND.j1 };
+    // (on the land: as much of it as is shown: its first square, and more of it, from the same seed, four cells at a
+    // time toward what's built within two of its edge, as far as the grid goes)
+    if (this.land) {
+      const b: { i0: number; i1: number; j0: number; j1: number } = { i0: LAND.i0, i1: LAND.i1, j0: LAND.j0, j1: LAND.j1 }, cells: Array<[number, number]> = [];
+      for (const m of [this.mass, this.stairs, this.piers, this.paving, this.trees]) for (const v of m.keys()) { const [, i, j] = unkey(v); cells.push([i, j]); }
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const [i, j] of cells) {
+          if (i <= b.i0 + 1 && b.i0 > DOMAIN.i0) { b.i0 = Math.max(DOMAIN.i0, b.i0 - 4); grew = true; }
+          if (i >= b.i1 - 1 && b.i1 < DOMAIN.i1) { b.i1 = Math.min(DOMAIN.i1, b.i1 + 4); grew = true; }
+          if (j <= b.j0 + 1 && b.j0 > DOMAIN.j0) { b.j0 = Math.max(DOMAIN.j0, b.j0 - 4); grew = true; }
+          if (j >= b.j1 - 1 && b.j1 < DOMAIN.j1) { b.j1 = Math.min(DOMAIN.j1, b.j1 + 4); grew = true; }
+        }
+      }
+      return b;
+    }
     let i0 = START[0], i1 = START[1], j0 = START[0], j1 = START[1];
-    for (const m of [this.mass, this.stairs, this.piers, this.trees, this.pools]) for (const v of m.keys()) {
+    for (const m of [this.mass, this.stairs, this.piers, this.trees, this.pools, this.basins]) for (const v of m.keys()) {
       const [, i, j] = unkey(v);
       i0 = Math.min(i0, i - MARGIN_CELLS); i1 = Math.max(i1, i + MARGIN_CELLS); j0 = Math.min(j0, j - MARGIN_CELLS); j1 = Math.max(j1, j + MARGIN_CELLS);
     }
@@ -644,7 +709,7 @@ export class World {
 
   /** the operations, as text (to keep, and to make again: when they were laid isn't kept) */
   /** what's been done, written down (on the land, with the land's seed) */
-  encode(): string { const ops = this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0]); return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops); }
+  encode(): string { const ops = this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0, ...(o.basins?.length ? [o.basins.map((c) => c.slice(0, 3))] : [])]); return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops); }
 }
 
 /** a world made again from its operations (as `encode` wrote them), all laid long ago */
@@ -663,7 +728,7 @@ export function replay(text: string, seed = 1): World {
       add: at(0)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), stairs: at(1)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), cut: (at(2) as Cell[] | null) ?? undefined,
       connect: Array.isArray(o[7]) ? { from: (o[7] as unknown[])[0] as Cell, to: ((o[7] as unknown[])[1] as Cell | null) ?? null, path: (o[7] as unknown[])[2] as Array<[number, number]>, ...(Array.isArray((o[7] as unknown[])[3]) ? { rest: (o[7] as unknown[])[3] as number[] } : {}), ...((o[7] as unknown[])[4] ? { follow: true } : {}) } : undefined, born: -100,
       dress: (at(8) as Op['dress'] | null) ?? undefined, rule: (at(9) as Op['rule'] | null) ?? undefined, walls: at(10)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]),
-      arches: at(3)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), trees: at(4)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), pools: at(5)?.map((c) => [c[0], c[1], -100] as [number, number, number]), bridge: o[6] === 1,
+      arches: at(3)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), trees: at(4)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), pools: at(5)?.map((c) => [c[0], c[1], -100] as [number, number, number]), bridge: o[6] === 1, basins: at(11)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]),
     });
   }
   w.rebuild(-100);

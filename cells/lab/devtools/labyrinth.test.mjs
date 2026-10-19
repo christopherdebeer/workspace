@@ -542,6 +542,33 @@ ok('story 4: a passage beneath the walkway, on an arch', !s4.stone(0, 6, 7) && !
 ok('story 4: the court closed, with something growing in it', s4.courts.size > 0 && s4.decor.length > 0);
 { const bay = s4.spans.filter((sp) => sp.k === 2 && sp.a === 0 && sp.j === 4); ok('story 4: the tower bridged to the terrace on one great arch, or an arcade of even bays (the rules\' choice)', (bay.length === 1 && bay[0].n === 5) || (bay.length === 2 && bay.every((sp) => sp.n === bay[0].n)), bay); }
 stands(s4, 'story 4');
+// ─── the land carried on past its first square; water let into tops, spilling; strokes drawn round that fill ───
+{
+  const LA = await load('../client/labyrinth/land.ts');
+  for (const seed of [6, 1, 2, 23]) {
+    const L = LA.makeLand(seed), s = L.stream;
+    ok(`land ${seed}: its stream runs on past its first square, each cell beside the next`, s.length > 20 && s.every((c, q) => q === 0 || Math.abs(c[0] - s[q - 1][0]) + Math.abs(c[1] - s[q - 1][1]) === 1), s.length);
+    ok(`land ${seed}: and never climbs on its way down`, s.every((c, q) => q === 0 || LA.groundOf(L, ...c) <= LA.groundOf(L, ...s[q - 1])));
+    const w = new World(1, seed), e0 = w.extent(), g = w.ground(12, 5);
+    w.apply({ add: [[g, 12, 5, 0]] });
+    const e1 = w.extent();
+    ok(`land ${seed}: built at its edge, more of it, that way only`, e1.i1 === e0.i1 + 4 && e1.i0 === e0.i0 && e1.j0 === e0.j0 && e1.j1 === e0.j1, { e0, e1 });
+    ok(`land ${seed}: and the more is the same land, from the same seed`, [13, 14, 15, 16].every((i) => w.ground(i, 5) === LA.groundOf(L, i, 5)));
+    w.undo(); ok(`land ${seed}: undone, back as it was`, JSON.stringify(w.extent()) === JSON.stringify(e0));
+  }
+  const s14 = story(14);
+  ok('story 14: basins let into the tops of the tower, the terrace and the wall', s14.basins.size >= 4 + 4 + 6);
+  ok('story 14: the tower\'s spills onto the terrace\'s (water finds water)', s14.falls.some((f) => f.k === 3 && f.into === 'water' && f.land === 2), s14.falls);
+  ok('story 14: the terrace\'s and the channel\'s spill to the ground, into bowls', s14.falls.filter((f) => f.into === 'bowl' && f.land === 0).length >= 2 && s14.bowls.size >= 2, s14.falls);
+  ok('story 14: one spout to a basin', s14.falls.length === 3, s14.falls.length);
+  ok('story 14: no roof over water', !BU.buildings(s14).list.some((b) => b.roof && b.cols.some(([x, z]) => s14.basin(b.h, x, z))));
+  ok('story 14: water isn\'t stood on, nor a bowl', [...s14.basins.keys()].every((v) => { const [k, i, j] = unkey(v); return !s14.floor(k, i, j); }) && [...s14.bowls.keys()].every((v) => { const [k, i, j] = unkey(v); return !s14.floor(k, i, j); }));
+  ok('story 14: written down and made again, it spills the same', JSON.stringify(replay(s14.encode(), s14.seed).falls.map((f) => [f.k, f.i, f.j, f.d, f.into])) === JSON.stringify(s14.falls.map((f) => [f.k, f.i, f.j, f.d, f.into])));
+  ok('story 14: a stroke of the pool brush drawn round fills what it closed round (a pond)', [10].every((i) => [3, 4].every((j) => s14.pool(i, j))) && s14.pool(9, 2) && s14.pool(11, 5));
+  { const w = replay(s14.encode(), s14.seed), op = P.place(w, 'take', { face: 'top', hit: [2, 3, 3], to: [3, 3, 3] }, 0, 0); ok('take: a basin before the stone it\'s let into', op?.cut?.[0]?.[0] === 3 && op.cut[0][1] === 3, op); }
+  { const ring = [[2, 2], [3, 2], [4, 2], [4, 3], [4, 4], [3, 4], [2, 4], [2, 3]]; ok('a stroke drawn round: what it closes round', JSON.stringify(P.closed(ring)) === '[[3,3]]'); ok('a stroke that doesn\'t close: nothing', P.closed(ring.slice(0, 5)) === null); }
+  { const w = new World(9); w.apply({ add: [[0, 3, 3, 0]] }); const op = P.place(w, 'pool', { face: 'top', hit: [0, 3, 3], to: [1, 3, 3] }, 0, 0); ok('pool on a top: a basin let into it', !!op?.basins?.length); w.apply(op); ok('and a lone basin on a block spills over its deepest edge, into a bowl', w.falls.length === 1 && w.falls[0].into === 'bowl', w.falls); }
+}
 // ─── the cats (perches.ts, cats.ts): where they can be, and their lives over what's built and what's built in front of them ───
 {
   const CT = await load('../client/labyrinth/cats.ts');

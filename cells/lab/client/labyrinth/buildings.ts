@@ -17,7 +17,7 @@
  *   that the stone doesn't show (`walkable`).
  * - **Windows**, one style to a building (arched, square, or a slit): on its open faces, alternating along a front and
  *   from one level to the next; on a tower with a stair inside, a slit a level, climbing round it as the stair does.
- * - **A roof** where the top isn't walked and has nothing put on it: hipped on a square plan (a pyramid on a tower),
+ * - **A roof** where the top isn't walked and has nothing put on it (nor water let into it): hipped on a square plan (a pyramid on a tower),
  *   gabled along a long one, a shed roof falling away from taller stone it leans on, now and then a dome on a marble
  *   tower. Only on a plan that's a plain rectangle, for now. The hand can switch it (select), kept as a rule.
  */
@@ -138,7 +138,9 @@ function find(w: World): Buildings {
     // (a roof, where the top isn't walked and nothing's been put on it)
     const rule = w.rules.get(id) ?? 0;
     const dressedTop = cols.some(([x, z]) => { const d = w.dressed(h - 1, x, z); return !!(d?.prop || d?.parapet); });
-    if (rule === RULE.noRoof || (!rule && (b.walked || dressedTop || !b.rect))) b.roof = null;
+    // (and never over water let into its top)
+    const watered = cols.some(([x, z]) => w.basin(h, x, z));
+    if (rule === RULE.noRoof || watered || (!rule && (b.walked || dressedTop || !b.rect))) b.roof = null;
     else if (rule >= RULE.hipped && rule <= RULE.dome) b.roof = (['hipped', 'gable', 'shed', 'dome'] as const)[rule - RULE.hipped];
     else {
       // (the rules' choice: leaning on taller stone, a shed roof falling away from it; square, hipped (now and then a dome

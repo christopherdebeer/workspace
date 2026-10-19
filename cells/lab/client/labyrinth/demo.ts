@@ -38,6 +38,7 @@ export function story(stage: number): World {
   if (stage === 11) return gestures();
   if (stage === 12) return onTheLand();
   if (stage === 13) return forCats();
+  if (stage === 14) return water();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -287,5 +288,30 @@ function forCats(): World {
   // (last: a bridge from the higher terrace to the court's tall corner)
   const op = trace(w, top(8, 5), [[8, 5], [7, 5], [6, 5], [5, 5]], top(5, 5), () => t, t);
   if (op && !('refused' in op)) w.apply({ ...op, alts: undefined }, t);
+  return w;
+}
+
+/**
+ * storyboard 14: water. A tower with a basin let into its top, beside a lower terrace with one in its: the tower's
+ * spills onto the terrace's (water finds water), and the terrace's over its far edge to the ground, into a bowl the
+ * rules put there to catch it. A wall with a channel along its top, spilling at its end. And a pond: a stroke of the
+ * pool brush drawn round, filling what it closed round.
+ */
+function water(): World {
+  const w = new World(31), t = -100;
+  const g = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+  const top = (i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+  const add = (cells: Array<[number, number, number]>) => w.apply({ add: cells.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  const apply = (op: Op | null) => { if (op) w.apply(op, t); };
+  // (the tower and the terrace, and a basin let into each top)
+  add([3, 4].flatMap((i) => [3, 4].flatMap((j) => [0, 1, 2].map((k) => [k, i, j] as [number, number, number]))));
+  add([5, 6].flatMap((i) => [3, 4].flatMap((j) => [0, 1].map((k) => [k, i, j] as [number, number, number]))));
+  apply(run(w, 'pool', top(3, 3), [[3, 3], [4, 3], [4, 4], [3, 4]], 0, t));
+  apply(run(w, 'pool', top(5, 3), [[5, 3], [6, 3], [6, 4], [5, 4]], 0, t));
+  // (a wall a level high with a channel along its top)
+  add([2, 3, 4, 5, 6, 7, 8].map((i) => [0, i, 8] as [number, number, number]));
+  apply(run(w, 'pool', top(2, 8), [[2, 8], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8]], 0, t));
+  // (a pond: the pool brush drawn round, back to its start)
+  apply(run(w, 'pool', g(9, 2), [[9, 2], [10, 2], [11, 2], [11, 3], [11, 4], [11, 5], [10, 5], [9, 5], [9, 4], [9, 3]], 0, t));
   return w;
 }

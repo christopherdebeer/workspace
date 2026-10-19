@@ -190,7 +190,7 @@ type Gesture = {
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
 let pinch0 = 0, zoom0 = 1, mid0 = 0, midY0 = 0;
-const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', wall: 'a wall stands on the stone, or on stone, or runs out from a side', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the stone itself', take: 'nothing of yours there to take' };
+const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', wall: 'a wall stands on the stone, or on stone, or runs out from a side', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the ground, or into a top', take: 'nothing of yours there to take' };
 const bar = document.getElementById('hands')!, sheet = document.getElementById('sheet')!, pieceB = bar.querySelector('[data-brush="piece"]') as HTMLElement;
 /**
  * What auto's strokes are for: mass (a stroke on the ground is a wall; from a top, it reaches out or climbs, as ever) or
@@ -484,7 +484,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (fingers.size === 2) {
     // (two fingers: across turns it, up and down tilts it, a pinch comes closer to where the fingers are)
     const [p, q] = [...fingers.values()], d = Math.hypot(p.x - q.x, p.y - q.y), mid = (p.x + q.x) / 2, midY = (p.y + q.y) / 2;
-    if (pinch0 > 0) zoomAt(mid, midY, Math.max(0.1, Math.min(1.3, zoom0 * (pinch0 / d))));
+    if (pinch0 > 0) zoomAt(mid, midY, Math.max(0.06, Math.min(1.3, zoom0 * (pinch0 / d))));
     view.az -= (mid - mid0) * 0.008; mid0 = mid;
     view.el = Math.max(0.3, Math.min(1.2, view.el + (midY - midY0) * 0.004)); midY0 = midY;
     return;
@@ -535,7 +535,7 @@ const up = (e: PointerEvent) => {
   g = null;
 };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.max(0.1, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001)))); }, { passive: false });
+canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.max(0.06, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001)))); }, { passive: false });
 { const h = qs.get('hand') ?? qs.get('brush'); if (h) setBrush(h); }
 // (for looking at them: `?sheet` opens the piece brush's sheet; `?select=k.i.j` takes up what's there, `&whole` the whole)
 if (qs.has('sheet')) { setBrush('piece'); openSheet(true); }
@@ -682,7 +682,7 @@ function frame() {
     const mid = world.land ? (LAND.i0 + LAND.i1 + 1) / 2 : CENTER;
     R.built = i0 <= i1 ? [i0 - CENTER, j0 - CENTER, i1 + 1 - CENTER, j1 + 1 - CENTER] : [mid - 3.5 - CENTER, mid - 3.5 - CENTER, mid + 3.5 - CENTER, mid + 3.5 - CENTER];
   }
-  R.landBox = world.land ? [LAND.i0 - CENTER, LAND.j0 - CENTER, LAND.i1 + 1 - CENTER, LAND.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3];
+  { const e = world.extent(); R.landBox = world.land ? [e.i0 - CENTER, e.j0 - CENTER, e.i1 + 1 - CENTER, e.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3]; }
   { const b = bleedOn && !!world.land; if (b !== R.bleed) { R.bleed = b; setBleed(b); meshVersion = -1; } }
   if (catsOn) {
     catMemory();
@@ -751,7 +751,7 @@ const COAT_CSS = ['#c98a4b', '#6d6f73', '#e4d7bf', '#87705a', '#252120', 'linear
 /** the cat under a point on the screen, if one's close to it */
 function catAt(cx: number, cy: number): Cat | null {
   if (!catsOn) return null;
-  let best: Cat | null = null, bd = Math.max(18, 26 * (0.3 / Math.max(0.1, zoomK)));
+  let best: Cat | null = null, bd = Math.max(20, 26 * (0.2 / Math.max(0.06, zoomK)));
   for (const c of cats.list) {
     if (c.hidden || c.gone) continue;
     const h = cats.headOf(c), [hx, hy] = screenOf(h[0], h[1], h[2]), [bx, by] = screenOf(c.x, c.y + 0.1, c.z);
@@ -784,7 +784,7 @@ function followCat(dt: number) {
   if (met.gone) { meet(null); return; }
   const q = 1 - Math.exp(-dt * 4), y = met.y + 0.15;
   view.target[0] += (met.x - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z - view.target[2]) * q;
-  zoomK += (0.12 - zoomK) * q;
+  zoomK += (0.08 - zoomK) * q;
   follow = false;
 }
 // (`?catsat=s`: the cats' lives run on that long before it's shown, for a picture)

@@ -181,7 +181,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       if (ol.pairs) for (let q = 0; q + 1 < ol.pairs.length; q++) { const [a0, b0] = ol.pairs[q], [a1, b1] = ol.pairs[q + 1]; quad(L(pts[a0], y), L(pts[a1], y), L(pts[b1], y), L(pts[b0], y), [0, up ? 1 : -1, 0], ao, MAT.stone); }
       else pts.forEach((p, q) => tri(L([0, 0], y), L(p, y), L(pts[(q + 1) % pts.length], y), [0, up ? 1 : -1, 0], ao, MAT.stone));
     };
-    if (lid) { cap(); flat(inner.map((e) => e.a), y1, true, 0.95); cur.dress = keep; }
+    if (lid && w.basin(k + 1, i, j)) { cap(); basinTop(k, i, j); cur.dress = keep; }
+    else if (lid) { cap(); flat(inner.map((e) => e.a), y1, true, 0.95); cur.dress = keep; }
     if (k > 0 && !w.stone(k - 1, i, j) && w.stair(k - 1, i, j) < 0) flat(E.map((e) => e.a), y0, false, 0.5);
     // (a band round its open sides, out a little from them: front, top and underside)
     const band = (ya: number, yb: number, out: number, slope = 0) => {
@@ -447,6 +448,81 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     else cypress(dc.i, dc.j, dc.k, dc.born);
   }
 
+  // ─── water falling: from a basin's spout to what's below it, a splash where it lands, a bowl to catch it ───
+  for (const f of w.falls) {
+    const [a, b] = DIRS[f.d], [ta, tb] = DIRS[(f.d + 1) % 4], cx = X(f.i) + 0.5, cz = Z(f.j) + 0.5, x = f.i + a, z = f.j + b;
+    const y0 = f.k - 0.07, y1 = f.into === 'water' ? f.land - (f.land === w.ground(x, z) ? (w.land?.water.has(z * 1000 + x) ? 0.17 : 0.1) : 0.07) : f.into === 'bowl' ? f.land + 0.12 : f.land + 0.01;
+    cur = { born: f.born, pivot: y1, how: 1, tone: 0.5, dress: 0, sel: false };
+    fall(cx + a * 0.66, cz + b * 0.66, a, b, ta, tb, y0, y1, 0.34);
+    if (f.into === 'bowl') bowl(X(x) + 0.5, Z(z) + 0.5, f.land, f.born);
+    foam(cx + a * 1.0, y1 + 0.012, cz + b * 1.0, f.i * 7 + f.j * 13 + f.d);
+  }
+  /**
+   * A sheet of falling water: from a lip (x, z, at y0) out the way (a, b) and down to y1, curving out as it falls,
+   * spreading a little; seen from either side
+   */
+  function fall(x: number, z: number, a: number, b: number, ta: number, tb: number, y0: number, y1: number, wd: number) {
+    const N = 9, drop = y0 - y1, P = (t: number, s: number): V3 => { const o = 0.34 * Math.sqrt(t) * Math.min(1, 0.5 + drop * 0.3), w2 = (wd + 0.08 * t) / 2; return [x + a * o + ta * s * w2, y0 - drop * t, z + b * o + tb * s * w2]; };
+    for (let q = 0; q < N; q++) {
+      const t0 = q / N, t1 = (q + 1) / N, A = P(t0, -1), B = P(t0, 1), C = P(t1, 1), D = P(t1, -1);
+      const nx = a * 0.95, nz = b * 0.95;
+      quad(A, B, C, D, [nx, 0.3, nz], 1, MAT.water);
+      quad(A, D, C, B, [-nx, 0.3, -nz], 0.8, MAT.water);
+    }
+  }
+  /** where falling water lands: a few patches of white */
+  function foam(x: number, y: number, z: number, seed: number) {
+    const keep = cur.tone;
+    cur.tone = 0.995;
+    for (let n = 0; n < 7; n++) {
+      const r = (q: number) => { const v = Math.sin((seed * 31 + n * 7 + q) * 12.9898) * 43758.5453; return v - Math.floor(v); };
+      const px = x + (r(1) - 0.5) * 0.42, pz = z + (r(2) - 0.5) * 0.42, rad = 0.035 + 0.06 * r(3), seg = 6;
+      for (let s = 0; s < seg; s++) {
+        const a0 = (s / seg) * Math.PI * 2, a1 = ((s + 1) / seg) * Math.PI * 2;
+        tri([px, y, pz], [px + Math.cos(a0) * rad, y, pz + Math.sin(a0) * rad], [px + Math.cos(a1) * rad, y, pz + Math.sin(a1) * rad], [0, 1, 0], 1, MAT.water);
+      }
+    }
+    cur.tone = keep;
+  }
+  /** a round stone bowl where the rules catch falling water: a moulded rim, the water in it */
+  function bowl(cx: number, cz: number, y: number, born: number) {
+    cur = { born, pivot: y, how: 1, tone: 0.5, dress: 0, sel: false };
+    lathe(cx, cz, [[0.3, y], [0.4, y + 0.03], [0.43, y + 0.15], [0.45, y + 0.17], [0.37, y + 0.18], [0.35, y + 0.08]], MAT.stone, 14);
+    for (let s = 0; s < 14; s++) { const a0 = (s / 14) * Math.PI * 2, a1 = ((s + 1) / 14) * Math.PI * 2; tri([cx, y + 0.12, cz], [cx + Math.cos(a0) * 0.36, y + 0.12, cz + Math.sin(a0) * 0.36], [cx + Math.cos(a1) * 0.36, y + 0.12, cz + Math.sin(a1) * 0.36], [0, 1, 0], 1, MAT.water); }
+  }
+  /**
+   * A basin let into a top: a stone rim round it (none where it runs on into the next basin), its water a little under;
+   * at its spout, the rim cut and a lip run out over the edge for the water to leave by
+   */
+  function basinTop(k: number, i: number, j: number) {
+    const y1 = k + 1, wl = y1 - 0.07, cx = X(i) + 0.5, cz = Z(j) + 0.5, R = 0.1;
+    const spout = w.falls.find((f) => f.k === k + 1 && f.i === i && f.j === j);
+    const open = DIRS.map(([a, b]) => w.basin(k + 1, i + a, j + b));
+    const r = (d: number) => (open[d] ? 0 : R);
+    // (its water)
+    quad([cx - 0.5 + r(2), wl, cz - 0.5 + r(3)], [cx + 0.5 - r(0), wl, cz - 0.5 + r(3)], [cx + 0.5 - r(0), wl, cz + 0.5 - r(1)], [cx - 0.5 + r(2), wl, cz + 0.5 - r(1)], [0, 1, 0], 1, MAT.water);
+    for (let d = 0; d < 4; d++) {
+      if (open[d]) continue;
+      const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4];
+      // (the rim along this side: its top, its inner face down to the water; cut where the spout is)
+      const seg = (s0: number, s1: number) => {
+        const P = (s: number, inset: number, y: number): V3 => [cx + a * (0.5 - inset) + ta * s, y, cz + b * (0.5 - inset) + tb * s];
+        quad(P(s0, 0, y1), P(s1, 0, y1), P(s1, R, y1), P(s0, R, y1), [0, 1, 0], 0.95, MAT.stone);
+        quad(P(s0, R, y1), P(s1, R, y1), P(s1, R, wl), P(s0, R, wl), [-a, 0, -b], 0.7, MAT.stone);
+      };
+      if (spout && spout.d === d) {
+        seg(-0.5, -0.17); seg(0.17, 0.5);
+        // (the lip: a trough of stone out over the edge, the water running in it)
+        const P = (s: number, out: number, y: number): V3 => [cx + a * (0.5 + out) + ta * s, y, cz + b * (0.5 + out) + tb * s];
+        quad(P(-0.17, -R, wl - 0.03), P(0.17, -R, wl - 0.03), P(0.17, 0.16, wl - 0.03), P(-0.17, 0.16, wl - 0.03), [0, 1, 0], 0.8, MAT.stone);
+        quad(P(-0.17, -R, wl), P(0.17, -R, wl), P(0.17, 0.16, wl), P(-0.17, 0.16, wl), [0, 1, 0], 1, MAT.water);
+        quad(P(-0.17, 0.16, wl - 0.1), P(0.17, 0.16, wl - 0.1), P(0.17, 0.16, wl - 0.03), P(-0.17, 0.16, wl - 0.03), [a, 0, b], 0.75, MAT.stone);
+        quad(P(-0.17, 0, wl - 0.1), P(0.17, 0, wl - 0.1), P(0.17, 0.16, wl - 0.1), P(-0.17, 0.16, wl - 0.1), [0, -1, 0], 0.5, MAT.stone);
+        for (const s of [-0.17, 0.17]) quad(P(s, 0, wl - 0.1), P(s, 0.16, wl - 0.1), P(s, 0.16, wl - 0.03), P(s, 0, wl - 0.03), [ta * Math.sign(s), 0, tb * Math.sign(s)], 0.75, MAT.stone);
+      } else seg(-0.5, 0.5);
+    }
+  }
+
   // ─── dressing: parapets (by hand, and along a bridge of its own accord), lanterns and pots ───
   // (first, which edges of which tops have one: open edges, with nothing at that height beyond them)
   const { edges, rails, flowRails, roofed } = parapets(w, plain);
@@ -538,7 +614,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   for (const v of [...w.mass.keys()]) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j);
     if (d?.ivy) ivy(k, i, j, w.born(k, i, j));
-    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v)) continue;
+    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v) || w.basin(k + 1, i, j)) continue;
     // (on a flowing wall, at the middle of its stone, not of its cell)
     const ol = w.block(k, i, j) ? outline(w, k, i, j) : null, mid = ol?.flow ? ol.edges.reduce((m, e) => [m[0] + e.a[0] / ol.edges.length, m[1] + e.a[1] / ol.edges.length], [0, 0]) : [0, 0];
     if (d?.prop === DRESS.lantern) lantern(i + mid[0], j + mid[1], k + 1, w.born(k, i, j));
@@ -625,7 +701,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    * banks; a cypress or two. None of them where anything's built.
    */
   function landMesh() {
-    const land = w.land!, RES = 4, x0 = LAND.i0, x1 = LAND.i1 + 1, z0 = LAND.j0, z1 = LAND.j1 + 1;
+    const land = w.land!, B = w.extent(), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1, RES = (x1 - x0) * (z1 - z0) > 500 ? 3 : 4;
     const Y = (gx: number, gz: number) => surfaceY(land, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     const nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
@@ -652,6 +728,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     // (the stream: its water a little under its banks, a fall where its bed steps down to the next)
     const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
     for (const [i, j] of land.stream) {
+      if (!w.onSlab(i, j)) continue;
       const g = w.ground(i, j), y = g - 0.17, cx = X(i), cz = Z(j);
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
       quad([cx - 0.05, y, cz - 0.05], [cx + 1.05, y, cz - 0.05], [cx + 1.05, y, cz + 1.05], [cx - 0.05, y, cz + 1.05], [0, 1, 0], 1, MAT.water);
@@ -660,10 +737,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         if (!wet(i + a, j + b) || w.ground(i + a, j + b) >= g) continue;
         const y1 = w.ground(i + a, j + b) - 0.17, [ta, tb] = DIRS[(d + 1) % 4], ex = cx + 0.5 + a * 0.5, ez = cz + 0.5 + b * 0.5;
         quad([ex - ta * 0.42, y1, ez - tb * 0.42], [ex + ta * 0.42, y1, ez + tb * 0.42], [ex + ta * 0.42, y, ez + tb * 0.42], [ex - ta * 0.42, y, ez - tb * 0.42], [a, 0.3, b], 1, MAT.water);
+        foam(ex + a * 0.22, y1 + 0.012, ez + b * 0.22, i * 5 + j * 11 + d);
       }
     }
     // (a court's paving, and a way's on the ground: flags laid on the land's level middles)
-    for (let j = LAND.j0; j <= LAND.j1; j++) for (let i = LAND.i0; i <= LAND.i1; i++) {
+    for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       const court = w.courts.has(key(0, i, j)), paved = w.paved(i, j);
       if (!court && !paved) continue;
       const g = w.ground(i, j), y = g + 0.012, cx = X(i), cz = Z(j), e = (d: number) => { const [a, b] = DIRS[d]; return w.ground(i + a, j + b) === g && (w.courts.has(key(0, i + a, j + b)) || w.paved(i + a, j + b) || w.occupied(g, i + a, j + b)) ? 0 : 0.12; };
@@ -691,7 +769,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       lathe(p[0], p[2], Array.from({ length: 6 }, (_, n) => { const t = (n / 5) * Math.PI; return [Math.sin(t) * s * (1 + 0.1 * Math.sin(n * 2.3 + q)), p[1] - 0.02 + s * 0.7 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 8);
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     };
-    for (let j = LAND.j0; j <= LAND.j1; j++) for (let i = LAND.i0; i <= LAND.i1; i++) {
+    for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       if (!bare(i, j)) continue;
       const g = w.ground(i, j), q = (j - LAND.j0) * 100 + (i - LAND.i0);
       const higher = DIRS.map(([a, b]) => w.ground(i + a, j + b) - g), cliff = higher.findIndex((h) => h >= 2), bank = higher.some((h) => h !== 0);
@@ -1108,6 +1186,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
 /** whether a point's under the land's ground, as it's drawn (the same surface it's drawn from) */
 export function inLand(w: World, x: number, y: number, z: number): boolean {
   if (!w.land) return false;
+  if (!w.onSlab(Math.floor(x + CENTER), Math.floor(z + CENTER))) return false;
   const sy = surfaceY(w.land, x + CENTER, z + CENTER);
   return sy >= 0 && y < sy;
 }

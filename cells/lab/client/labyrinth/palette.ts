@@ -10,7 +10,8 @@
  * - **bridge**: across the gap at that level, from stone to stone, the whole span at once (up to seven cells), carried
  *   on one arch.
  * - **cypress**: on a floor, with room above it.
- * - **pool**: let into the stone itself.
+ * - **pool**: let into the stone itself: into the ground, or (touched on a top) into that top, a basin, up off the ground,
+ *   which spills over its edge where there's a drop (model.ts's `spill`).
  * - **take**: what was touched, taken away (the rules then carry what was on it, on an arch or a pier).
  */
 import { CEIL, DIRS, DRESS, inGrid, key, straights, type Cell, type Op, type World } from './model';
@@ -48,13 +49,18 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
     const over: Cell = p.face === 'ground' ? p.to : [hk + 1, hi, hj];
     if (p.face !== 'side' && look(w, ...over)?.pergola) return { dress: [[...over, DRESS.pergola, 0]], why: 'take' };
     if (p.face === 'ground') return w.pools.has(key(0, hi, hj)) ? { cut: [[-1, hi, hj]], why: 'take' } : null;
+    // (a basin in the top touched, before the stone it's let into)
+    if (p.face === 'top' && w.basin(hk + 1, hi, hj)) return { cut: [[hk + 1, hi, hj]], why: 'take' };
     // (a lantern or a pot on what was touched, before the stone itself)
     const prop = look(w, hk, hi, hj)?.prop;
     if (prop && p.face === 'top') return { dress: [[hk, hi, hj, prop, 0]], why: 'take' };
     for (let k = hk; k >= 0; k--) if (w.stone(k, hi, hj) || w.stair(k, hi, hj) >= 0 || w.tree(k, hi, hj)) return { cut: [[k, hi, hj]], why: 'take' };
     return null;
   }
-  if (hand === 'pool') return p.face === 'ground' && !w.pool(hi, hj) && w.free(...p.to) ? { pools: [[hi, hj, now]], why: 'pool' } : null;
+  if (hand === 'pool') {
+    if (p.face === 'ground') return !w.pool(hi, hj) && w.free(...p.to) ? { pools: [[hi, hj, now]], why: 'pool' } : null;
+    return p.face === 'top' && w.stone(hk, hi, hj) && w.free(hk + 1, hi, hj) ? { basins: [[hk + 1, hi, hj, now]], why: 'basin', note: 'a basin let into the top' } : null;
+  }
   const [k, i, j] = p.face === 'ground' ? p.to : p.face === 'top' ? [w.topFrom(hk, hi, hj), hi, hj] : p.to;
   if (k >= CEIL || !inGrid(i, j)) return null;
   const side = p.face === 'side', toward = side ? DIRS.findIndex(([a, b]) => a === hi - i && b === hj - j) : -1;
@@ -89,8 +95,21 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
  * a level a cell along the straight of it. The rest are put once, where the stroke began.
  */
 export function run(w: World, piece: Piece, start: Pick, path: Array<[number, number]>, view: number, now: number): Op | null {
-  const cells = connect(path), h0 = surface(w, start);
-  if (cells.length < 2) return place(w, piece, start, view, now);
+  const ring = connect(path), h0 = surface(w, start);
+  if (ring.length < 2) return place(w, piece, start, view, now);
+  // (a stroke drawn round, back to where it began: water or blocks fill what it closes round; the rest go round it)
+  const inside = closed(ring), filled = piece === 'pool' || piece === 'block';
+  const cells = filled && inside ? [...ring, ...inside] : ring;
+  if (piece === 'pool') {
+    const out = cells.filter(([i, j]) => (start.face === 'ground' ? w.ground(i, j) === h0 && !w.pool(i, j) && w.free(h0, i, j) : w.stone(h0 - 1, i, j) && w.free(h0, i, j)));
+    if (!out.length) return null;
+    const what = inside ? (start.face === 'ground' ? 'a pond, filling what the stroke closed round' : 'a basin, filling what the stroke closed round') : start.face === 'ground' ? `a channel of water, ${out.length} long` : `a basin along the top, ${out.length} long`;
+    return start.face === 'ground' ? { pools: out.map(([i, j], s) => [i, j, now + s * 0.03]), why: 'pool', note: what } : { basins: out.map(([i, j], s) => [h0, i, j, now + s * 0.03]), why: 'basin', note: what };
+  }
+  if (piece === 'block' && inside) {
+    const out = cells.filter(([i, j]) => w.free(h0, i, j));
+    return out.length ? { add: out.map(([i, j], s) => [h0, i, j, now + s * 0.02]), why: 'wall', note: `a platform, ${out.length} cells, filling what the stroke closed round` } : null;
+  }
   if (piece === 'block' || piece === 'arch' || piece === 'wall') {
     const out: Array<[number, number, number, number, number]> = [];
     cells.forEach(([i, j], s) => {
@@ -144,4 +163,28 @@ export function dress(w: World, kind: Dressing, cells: Cell[]): Op | null {
     out.push([k, i, j, id, on]);
   }
   return out.length ? { dress: out, why: 'dress', note: `${on ? '' : 'no '}${kind}, ${out.length} ${id === DRESS.pergola ? 'place' : 'stone'}${out.length > 1 ? 's' : ''}` } : null;
+}
+
+/** what a stroke drawn round back to where it began closes round (the cells inside it), or null if it doesn't close */
+export function closed(ring: Array<[number, number]>): Array<[number, number]> | null {
+  if (ring.length < 6) return null;
+  const [a, b] = [ring[0], ring[ring.length - 1]];
+  if (Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) > 1) return null;
+  const on = new Set(ring.map(([i, j]) => `${i}.${j}`));
+  let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity;
+  for (const [i, j] of ring) { i0 = Math.min(i0, i); i1 = Math.max(i1, i); j0 = Math.min(j0, j); j1 = Math.max(j1, j); }
+  // (outside: everything reached from beyond its bounds without crossing the stroke)
+  const out = new Set<string>(), q: Array<[number, number]> = [[i0 - 1, j0 - 1]];
+  out.add(`${i0 - 1}.${j0 - 1}`);
+  while (q.length) {
+    const [i, j] = q.pop()!;
+    for (const [x, z] of DIRS) {
+      const p = i + x, r = j + z, k = `${p}.${r}`;
+      if (p < i0 - 1 || p > i1 + 1 || r < j0 - 1 || r > j1 + 1 || out.has(k) || on.has(k)) continue;
+      out.add(k); q.push([p, r]);
+    }
+  }
+  const inside: Array<[number, number]> = [];
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (!on.has(`${i}.${j}`) && !out.has(`${i}.${j}`)) inside.push([i, j]);
+  return inside.length ? inside : null;
 }

@@ -8,13 +8,15 @@ Architecture that follows the hand. A piece of land on a table in the sun (or, w
 
 ## The land
 
-The labyrinth is built on a piece of land (`land.ts`): small, composed, seeded, and fixed once made. It's made to give the architecture reasons:
+The labyrinth is built on a piece of land (`land.ts`): small, composed, seeded, and fixed once made (nothing built changes it). It's made to give the architecture reasons:
 - it **rises toward a back corner in shelves**, so there are levels to connect;
 - **a ravine runs down it with a stream in its bed**, so there's something to cross;
 - **a rocky outcrop** stands in the way of the obvious line;
 - **a shelf is kept flat**, five cells by five, room for a court.
 
-**It's drawn as Taohua draws its hill**, bleeding into the page: the open ground is the paper itself, only its features drawn (a cliff's rock, a bank's dashes, the stream, the shade cast on it), and away from what's built and toward its edge it gives way to the paper, with no plinth under it. `?plinth` puts it back on its plinth; the flat slab is always a slab on its table.
+**It's drawn as Taohua draws its hill**, bleeding into the page: the open ground is the paper itself, only its features drawn, in marks. A bank is hatched in short tapered strokes down its fall; a cliff is washed grey as a dry brush lays it, streaked down its face, with strokes dragged down it and a broken ink line along its top; the shade cast on the ground is laid on in dry strokes. Away from what's built, and toward the land's edge, there are fewer and fewer marks, each as dark as ever: the dry brush reaches less far, the strokes are fewer, the stream breaks into strokes and then a line or two, and what lies on the land (a rock, a shrub, a cypress) is drawn whole or left out, more of them left out the further they are. It isn't faded out; it's drawn less, until there's only the page. No plinth under it. `?plinth` puts it back on its plinth; the flat slab is always a slab on its table.
+
+**It goes on past its first square.** Build within two cells of its edge and four more cells of it appear that way, the same land from the same seed: the rise going on rising, the ravine and its stream running on (never lower upstream, never higher downstream, banked either side), the low ground in front going on low. It goes as far as the grid does. Its first square is exactly as it's composed; undo what asked for more of it, and it's gone again.
 
 **Start again** clears what's built, back to the land it was on; pressed again on bare land, it makes a new piece of land. `?land=<seed>` opens a particular one, and `?flat` keeps to the flat slab.
 
@@ -61,6 +63,38 @@ Next for the land:
 - spatial composition: sheltered courts, framed views, ways crossing over and under;
 - keeping open: a passage, view or court protected from what auto builds later;
 - the land shaped by hand.
+
+## Water
+
+**The pool brush lets water into whatever it touches**: the ground (a pool), or a top, up off the ground (a basin, let into the stone, a rim round it). Traced, it runs a channel along the stroke, along the ground or along a top. **A stroke drawn round, back to where it began, fills what it closes round**: a pond on the ground, a basin across a terrace. (With the block brush the same: a platform, filled.)
+
+**A basin spills.** Cells of water side by side at one level are one basin, and it spills from one spout: at the edge over water if there's water below any edge (water finds water), else over the deepest drop; never where stone stands beside it at its level, or a floor runs out level from it. A basin walled in all round holds its water. At the spout the rim is cut and a lip runs out over the edge; the water falls from it in a sheet, curving out as it falls, white streaks running down it, foam where it lands. It lands in water (a pool, the stream, a lower basin, which spills in turn: a cascade), or, on the ground or a top, **in a bowl the rules put there to catch it**, a round moulded stone bowl. Onto a stair or a way it just lands. No roof is put over water, nor a pot or a lantern in it; it's neither stood on nor walked through. The land's stream falls where its bed steps, with foam at the foot of each.
+
+![water: a tower's basin spilling onto a terrace's, that one into a bowl on the ground; a channel along a wall spilling at its end; a pond filled by a stroke drawn round](labyrinth/v-water.jpg)
+![close: the spout's lip, the sheet, the foam, the bowl](labyrinth/v-water-close.jpg)
+
+## The cats
+
+What's built has residents (`cats.ts`). They show how a place can be lived in: a warm ledge becomes a bed, a coping a way to balance along, a court somewhere to play.
+
+**Who they are.** Each is a little individual that stays: a name, a coat (ginger tabby, grey, cream, brown tabby, black, ginger and white, silver tabby, black and white), how it's inclined (to the sun, to height, to shelter, to play; how curious, how bold, how sleepy), and its favourite places, which it comes to by resting in them (kept on the device for each piece of land). Who the nth to come is follows from the land's seed, so it's the same cat every visit.
+
+**How many.** As many as what's built is home for: worked out from its habitable places (raised terraces, ledges, copings, sheltered corners, courts), not from how much stone there is, so a solid tower is home to fewer than the same stone in terraces. Bare land, or the bare stone, is home to none. When there's room for another, one arrives, walking in from the edge of the land; when there's less, the newest leaves.
+
+**Where they can be** (`perches.ts`, a second reading of what's built beside the walk, checked against the stone as it's drawn): every place a figure could stand, and more a cat finds: the top of a thin wall (a coping, one cat at a time, walked only the way its wall runs), the edge of a top over a drop (a ledge, looking out), the top of a parapet. Between them, the walk's own ways (up stairs along their noses, through arches, through a building from door to door, unseen, taking the time it would), up and down the land's banks, and a cat's own: a hop up a level or onto a parapet, down as much as two, a leap across a gap a cell wide (a slot, the stream), each only where the air it would pass through is clear. Each place is known for whether it's in the sun (a ray toward it through the stone), sheltered, high, looking out, by water, in a court.
+
+**How they live.** Mostly resting or quietly watching. Now and then one wanders off somewhere it doesn't know, or out over a drop; one washes; sometimes two play: a crouch, a short chase, a pounce, then both sit and wash. They rest where they're inclined to: sun, height, shelter, a view, a favourite. One to a resting place, one to a coping or a ledge, so none overlap. A jump is approached, weighed (the head lowered toward where it'll land), gathered for (the haunches dropped), reached across, and landed forepaws first.
+
+**What building does to them.** Stone going up nearby, they look; close by, they get up and move aside; then, when it's settled, the curious go to see, sniff it, and may claim it as a new place to rest. Build a bridge in front of them and one will find the new way. Stone rising under a cat lifts it; stone taken from under one, it jumps clear. They never fall, and never stand in the hand's way: a tap with a building brush builds, cat or no cat.
+
+**Meeting one.** With the hand brush, a tap on a cat says who it is and what it's doing; **Follow ›** brings the eye close and keeps it with the cat until **‹ Return to building**.
+
+**How they're drawn** (`catbody.ts`): to a cat's scale against a storey, so a balustrade's rail is a rail to them. Soft, rounded, a few facets left, hardly a face; a coat's markings kept on the body as it moves (a tabby's bands round body, legs and tail; paler underneath). Twelve poses (stand, walk, sit, loaf, curl, groom, stretch, gather, reach, land, assess, sniff), blended from one to the next; the legs found from where the feet are (a cat's knees and elbows); walking, the feet in a cat's order, each planted while the body passes over it. They breathe, a tail's tip twitches, an ear flicks. Drawn with the stone: its shadows, an inked contour.
+
+![story 13: a court, two terraces, a thin wall and an arch; cats resting in the sun](labyrinth/v-cats.jpg)
+![the motion sheet: every pose](labyrinth/v-cats-study.jpg)
+
+`?story=13` is a place for cats (a court with a gate, a terrace, a stair up to a higher one, a thin wall, and a bridge built last); `?hold=1` keeps the last thing back, for building in front of them. `?catsat=60` runs their lives on a minute before showing them; `?cats=study` is the motion sheet; `?cats=0`, none.
 
 ## The brushes
 
@@ -508,6 +542,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
 ## Next
 
+- **Cats, further**: tails and ears answering each other; a mother and kittens; cats on roofs; a cat followed into a building's door; more of a cat's own places (a sill, a pot, a sunny step).
+- **Water, further**: fountains (a jet in a court's pool), runnels along a way, water through an arch (a mill-race), a basin read as a cistern; a stream turned aside by what's built.
 - **Intent brushes**: a *path* (say where you want to walk, and the walk graph makes it walkable), *keep open* (nothing is to go here).
 - **Stamps**: whole motifs put at once (a gate, a cloister, a loggia).
 - **More readings**: a court's water or none; a flight with a landing halfway.

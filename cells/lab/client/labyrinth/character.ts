@@ -60,7 +60,7 @@ function dressUp(w: World): Map<number, Dress> {
   for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
   // (and nothing stands in a stair's way (its foot, its head, the room over them), nor before a door)
   const doorways = new Set(buildings(w).list.flatMap((b) => b.openings.filter((o) => o.kind === 'door').map((o) => key(o.k, o.i + DIRS[o.d][0], o.j + DIRS[o.d][1]))));
-  const put = (c: Cell, d: Dress) => { const v = key(...c); if (roofed.has(v) && (d.prop || d.parapet)) return; if (d.prop && (w.way(c[0] + 1, c[1], c[2]) || doorways.has(key(c[0] + 1, c[1], c[2])))) return; if (d.pergola && w.way(...c)) return; const o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };
+  const put = (c: Cell, d: Dress) => { const v = key(...c); if (roofed.has(v) && (d.prop || d.parapet)) return; if (d.prop && (w.way(c[0] + 1, c[1], c[2]) || doorways.has(key(c[0] + 1, c[1], c[2])) || w.basin(c[0] + 1, c[1], c[2]))) return; if (d.pergola && w.way(...c)) return; const o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };
   const stone = (c: Cell) => w.stone(...c) || w.pier(...c);
   /** a top with room over it (for a lantern or a pot) */
   const roomy = (c: Cell) => w.stone(...c) && !w.occupied(c[0] + 1, c[1], c[2]) && !w.tree(c[0] + 1, c[1], c[2]) && !(w.block(...c) && outline(w, ...c).flow);

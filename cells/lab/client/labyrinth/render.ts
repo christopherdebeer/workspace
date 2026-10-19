@@ -312,6 +312,13 @@ void main() {
     float fr = .08 + .9 * pow(1. - max(dot(w, v), 0.), 4.);
     c = mix(base * (.5 + .5 * sh), vec3(.86, .84, .8), fr * .7) + vec3(1., .9, .75) * pow(max(dot(reflect(-uSun, w), v), 0.), 120.) * 2. * sh;
   }
+  // (falling water: white streaks running down it; where it lands, foam)
+  if (mat == 2 && abs(n.y) < .6) {
+    float u = dot(vPos.xz, normalize(vec2(-n.z, n.x) + 1e-4));
+    float st = noise(vec3(u * 26., vPos.y * 3. + uTime * 2.6, 1.)) * .7 + noise(vec3(u * 60., vPos.y * 7. + uTime * 4.2, 3.)) * .3;
+    c = mix(vec3(.4, .5, .51), vec3(.93, .95, .94), smoothstep(.38, .78, st)) * (.82 + .18 * sh);
+  }
+  if (mat == 2 && vTone > .99) c = vec3(.93, .94, .91) * (.86 + .14 * noise(vPos * 40. + uTime));
   // (a filmic shoulder, warm)
   c = c / (c + .7) * 1.62;
   c = pow(c, vec3(1.03, 1.04, 1.07));

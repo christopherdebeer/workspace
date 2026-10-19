@@ -204,6 +204,46 @@
     "title": "Another",
     "caption": "another seed: another piece of land",
     "file": "v-land-2.jpg"
+   },
+   {
+    "name": "land-grown",
+    "title": "Built at its edge",
+    "caption": "a house built at the land's edge: four more cells of the same land appear that way, from the same seed",
+    "file": "v-land-grown.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Water",
+  "views": [
+   {
+    "name": "water",
+    "title": "14 · Water",
+    "caption": "a tower's basin spilling onto a terrace's (water finds water), that one into a bowl on the ground; a channel along a wall spilling at its end; a pond, a stroke of the pool brush drawn round",
+    "file": "v-water.jpg"
+   },
+   {
+    "name": "water-close",
+    "title": "Spouts, falls, a bowl",
+    "caption": "the rim cut at the spout and a lip run out; the sheet curving out as it falls; foam; the bowl the rules put there to catch it",
+    "file": "v-water-close.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The cats",
+  "views": [
+   {
+    "name": "cats",
+    "title": "13 · A place for cats",
+    "caption": "a court with a gate, a terrace, a stair up to a higher one, a thin wall, a bridge: the cats resting where they're inclined to",
+    "file": "v-cats.jpg"
+   },
+   {
+    "name": "cats-study",
+    "title": "The motion sheet",
+    "caption": "stand, walk, sit, loaf; curl, groom, stretch, gather; reach, land, assess, sniff",
+    "file": "v-cats-study.jpg"
    }
   ]
  },

@@ -14,8 +14,12 @@
  */
 import { hash, smooth } from '../kit/rng';
 
-/** the land's cells (first and last each way) */
+/** the land's cells as it's first seen (first and last each way): what it's composed in */
 export const LAND = { i0: -1, i1: 12, j0: -1, j1: 12 } as const;
+/** as far as it goes: the whole grid (model.ts's LO..HI each way). Past its first square it's the same land, from the
+ * same seed, carried on: the rise going on rising, the ravine and its stream running on, the low ground in front going
+ * on low; it's shown only as far as what's built near its edge has asked for (`World.extent`) */
+export const DOMAIN = { i0: -18, i1: 29, j0: -18, j1: 29 } as const;
 /** how wide a cell's flat middle is (of its half-width); the rest is the band its ground meets its neighbours' across */
 export const FLAT = 0.38;
 /** how high the land goes, at most */
@@ -33,9 +37,12 @@ export interface Land {
   shelf: [number, number];
 }
 
-const W = LAND.i1 - LAND.i0 + 1, H = LAND.j1 - LAND.j0 + 1;
+const W = LAND.i1 - LAND.i0 + 1, H = LAND.j1 - LAND.j0 + 1, DW = DOMAIN.i1 - DOMAIN.i0 + 1;
+/** a cell's place in the first square's columns, and in the whole land's */
 const at = (i: number, j: number) => (j - LAND.j0) * W + (i - LAND.i0);
-export const onLand = (i: number, j: number) => i >= LAND.i0 && i <= LAND.i1 && j >= LAND.j0 && j <= LAND.j1;
+const atD = (i: number, j: number) => (j - DOMAIN.j0) * DW + (i - DOMAIN.i0);
+const inFirst = (i: number, j: number) => i >= LAND.i0 && i <= LAND.i1 && j >= LAND.j0 && j <= LAND.j1;
+export const onLand = (i: number, j: number) => i >= DOMAIN.i0 && i <= DOMAIN.i1 && j >= DOMAIN.j0 && j <= DOMAIN.j1;
 
 /** smooth value noise in 2D, 0..1 */
 export function noise2(seed: number, x: number, y: number): number {
@@ -83,7 +90,7 @@ export function makeLand(seed: number): Land {
   }
   // (a clean shelf: a court's floor and the walls round it, all at one level)
   const [si, sj] = cellOf(shelfU, shelfV), level = g[at(si, sj)];
-  for (let j = sj - 2; j <= sj + 2; j++) for (let i = si - 2; i <= si + 2; i++) if (onLand(i, j)) g[at(i, j)] = level;
+  for (let j = sj - 2; j <= sj + 2; j++) for (let i = si - 2; i <= si + 2; i++) if (inFirst(i, j)) g[at(i, j)] = level;
   // (the stream: down the ravine's bed, a cell at a time, never climbing, from the top edge to the bottom)
   const stream: Array<[number, number]> = [];
   const steps = 60;
@@ -101,18 +108,59 @@ export function makeLand(seed: number): Land {
   }
   for (const [i, j] of stream) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     const x = i + a, z = j + b;
-    if (onLand(x, z) && !stream.some((c) => c[0] === x && c[1] === z) && g[at(x, z)] <= g[at(i, j)]) g[at(x, z)] = Math.min(PEAK, g[at(i, j)] + 1);
+    if (inFirst(x, z) && !stream.some((c) => c[0] === x && c[1] === z) && g[at(x, z)] <= g[at(i, j)]) g[at(x, z)] = Math.min(PEAK, g[at(i, j)] + 1);
   }
   // (and the shelf kept flat, whatever the stream's banks did to it)
   const water = new Set(stream.map(([i, j]) => j * 1000 + i));
   let flat = level;
   for (const [i, j] of stream) if (Math.abs(i - si) <= 3 && Math.abs(j - sj) <= 3) flat = Math.max(flat, g[at(i, j)]);
-  for (let j = sj - 2; j <= sj + 2; j++) for (let i = si - 2; i <= si + 2; i++) if (onLand(i, j) && !water.has(j * 1000 + i)) g[at(i, j)] = flat;
-  return { seed, g, stream, water, rock: cellOf(rockU, rockV), shelf: [si, sj] };
+  for (let j = sj - 2; j <= sj + 2; j++) for (let i = si - 2; i <= si + 2; i++) if (inFirst(i, j) && !water.has(j * 1000 + i)) g[at(i, j)] = flat;
+  // ─── and on past it: the same rise, ravine and stream, carried on over the whole grid ───
+  // (the first square exactly as it's composed; the rest from the same height, its stream run on up the ravine
+  // (never lower than the water below it) and on down it (never higher than the water above), banks either side)
+  const D = new Int8Array(DW * (DOMAIN.j1 - DOMAIN.j0 + 1));
+  for (let j = DOMAIN.j0; j <= DOMAIN.j1; j++) for (let i = DOMAIN.i0; i <= DOMAIN.i1; i++) {
+    if (inFirst(i, j)) { D[atD(i, j)] = g[at(i, j)]; continue; }
+    const [u, v] = uv(i, j);
+    D[atD(i, j)] = Math.max(0, Math.min(PEAK, Math.round(height(u, v))));
+  }
+  const cellAny = (u: number, v: number): [number, number] => {
+    const [a, b] = turn === 0 ? [u, v] : turn === 1 ? [v, 1 - u] : turn === 2 ? [1 - u, 1 - v] : [1 - v, u];
+    return [Math.floor(a * W) + LAND.i0, Math.floor(b * H) + LAND.j0];
+  };
+  const runOn = (from: [number, number], v0: number, dv: number) => {
+    const out: Array<[number, number]> = [];
+    let last = from;
+    for (let v = v0; Math.abs(v - v0) < 4.5; v += dv) {
+      const c = cellAny(ravine(v), v);
+      if (!onLand(c[0], c[1])) break;
+      if (inFirst(c[0], c[1]) || (c[0] === last[0] && c[1] === last[1])) continue;
+      // (each beside the last: round a corner a cell at a time)
+      while (Math.abs(last[0] - c[0]) + Math.abs(last[1] - c[1]) > 1) {
+        const step: [number, number] = last[0] !== c[0] ? [last[0] + Math.sign(c[0] - last[0]), last[1]] : [last[0], last[1] + Math.sign(c[1] - last[1])];
+        if (!inFirst(...step)) out.push(step);
+        last = step;
+      }
+      out.push(c); last = c;
+    }
+    return out;
+  };
+  const up = runOn(stream[0], 1 + 1 / steps, 1 / steps), down = runOn(stream[stream.length - 1], -1 / steps, -1 / steps);
+  let hi = D[atD(...stream[0])];
+  for (const [i, j] of up) { hi = Math.max(hi, D[atD(i, j)]); D[atD(i, j)] = hi; }
+  let lo = D[atD(...stream[stream.length - 1])];
+  for (const [i, j] of down) { lo = Math.min(lo, D[atD(i, j)]); D[atD(i, j)] = lo; }
+  const more = [...up, ...down];
+  for (const [i, j] of more) water.add(j * 1000 + i);
+  for (const [i, j] of more) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const x = i + a, z = j + b;
+    if (onLand(x, z) && !inFirst(x, z) && !water.has(z * 1000 + x) && D[atD(x, z)] <= D[atD(i, j)]) D[atD(x, z)] = Math.min(PEAK, D[atD(i, j)] + 1);
+  }
+  return { seed, g: D, stream: [...up.reverse(), ...stream, ...down], water, rock: cellOf(rockU, rockV), shelf: [si, sj] };
 }
 
 /** the ground's level in a column (0 off the land) */
-export const groundOf = (land: Land, i: number, j: number) => (onLand(i, j) ? land.g[at(i, j)] : 0);
+export const groundOf = (land: Land, i: number, j: number) => (onLand(i, j) ? land.g[atD(i, j)] : 0);
 
 /**
  * The ground as it's drawn, at a point (x, z: cells, from the land's grid origin, so cell (i, j) spans i..i+1): flat at
@@ -123,7 +171,7 @@ export function surfaceY(land: Land, x: number, z: number): number {
   const i = Math.floor(x), j = Math.floor(z);
   if (!onLand(i, j)) return -1;
   // (the stream's bed a little under its banks)
-  const G = (a: number, b: number) => { const x = Math.max(LAND.i0, Math.min(LAND.i1, a)), y = Math.max(LAND.j0, Math.min(LAND.j1, b)); return land.g[at(x, y)] - (land.water.has(y * 1000 + x) ? 0.3 : 0); };
+  const G = (a: number, b: number) => { const x = Math.max(DOMAIN.i0, Math.min(DOMAIN.i1, a)), y = Math.max(DOMAIN.j0, Math.min(DOMAIN.j1, b)); return land.g[atD(x, y)] - (land.water.has(y * 1000 + x) ? 0.3 : 0); };
   const fx = x - i - 0.5, fz = z - j - 0.5, sx = Math.sign(fx) || 1, sz = Math.sign(fz) || 1;
   // (how far into the band toward the neighbour each way: none through the flat middle, a half at the cell's edge)
   const wx = 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fx)), wz = 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fz));

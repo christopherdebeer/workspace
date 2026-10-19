@@ -53,6 +53,17 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ![12 · On the land: four gestures make a place: a court walled round on the shelf (a stroke drawn round it); a way up to its gate from the low ground (flights where the land rises, through the gate); a house raised across the ravine; a way over the stream to it](v-story-12.jpg)
 ![On the land, close: the way climbing to the court's gate; the stream under the way to the house](v-land-close.jpg)
 ![Another: another seed: another piece of land](v-land-2.jpg)
+![Built at its edge: a house built at the land's edge: four more cells of the same land appear that way, from the same seed](v-land-grown.jpg)
+
+## Water
+
+![14 · Water: a tower's basin spilling onto a terrace's (water finds water), that one into a bowl on the ground; a channel along a wall spilling at its end; a pond, a stroke of the pool brush drawn round](v-water.jpg)
+![Spouts, falls, a bowl: the rim cut at the spout and a lip run out; the sheet curving out as it falls; foam; the bowl the rules put there to catch it](v-water-close.jpg)
+
+## The cats
+
+![13 · A place for cats: a court with a gate, a terrace, a stair up to a higher one, a thin wall, a bridge: the cats resting where they're inclined to](v-cats.jpg)
+![The motion sheet: stand, walk, sit, loaf; curl, groom, stretch, gather; reach, land, assess, sniff](v-cats-study.jpg)
 
 ## Auto, with character
 
