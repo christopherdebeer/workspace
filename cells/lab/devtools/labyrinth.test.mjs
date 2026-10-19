@@ -203,7 +203,7 @@ ok(`auto never builds into a stair's way (${ways.ok} of ${ways.tried})`, ways.ok
     for (let k = 0; k < 2; k++) w.apply({ add: [[k, 5, 8, 0]] });
     w.apply({ trees: [[0, 5, 7, 0]] });
     const steep = G.trace(w, ground(5, 6), [[5, 6], [5, 7]], top(5, 8), () => 0);
-    ok('too steep, and no room for a tower: refused, saying why', !!steep?.refused && /steep/.test(steep.refused), steep);
+    ok('too steep, and no room for a tower: a walkway out toward it, saying why', !steep?.refused && steep?.why === 'walkway' && /steep/.test(steep.note), steep);
   }
   const long = G.trace(w, ground(2, 5), [[2, 5], [3, 5], [4, 5], [5, 5]], top(6, 5), () => 0);
   ok('drawn longer: stairs', long?.why === 'stairs', long);
@@ -340,7 +340,7 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   ok('story 10: the court\'s corners sweep round (where no other wall meets them)', [[9, 1], [13, 1], [13, 6]].every(([i, j]) => FO.outline(s10, 0, i, j).flow === 'curve'));
   ok('story 10: neither is a building', !BU.buildings(s10).of.has(key(0, 3, 2)) && !BU.buildings(s10).of.has(key(0, 9, 1)));
   ok('story 10: the wall traced across the stair\'s foot leaves it open', s10.stair(0, 7, 9) === 2 && !s10.stone(0, 8, 9) && s10.stone(0, 8, 8) && s10.stone(0, 8, 10));
-  { const r = G.tap(s10, { face: 'ground', hit: [-1, 8, 9], to: [0, 8, 9] }, 0); ok('story 10: and auto won\'t build there, but offers to', !!r?.refused && r.alts?.[0]?.label === 'raise it anyway' && r.alts[0].op.add?.length === 1, r); }
+  { const r = G.tap(s10, { face: 'ground', hit: [-1, 8, 9], to: [0, 8, 9] }, 0); ok('story 10: a tap there raises the cell beside it instead, the way kept open, and offers to raise it anyway', !r?.refused && r.add?.length === 1 && !s10.way(...r.add[0].slice(0, 3)) && r.alts?.[0]?.label === 'raise it anyway' && r.alts[0].op.add?.length === 1, r); }
   // (the dressing toggles: on, then a stroke starting on it takes it off; a jali on a thin wall pierces it)
   {
     const w = replay(s9.encode());
@@ -584,6 +584,14 @@ stands(s4, 'story 4');
   ok('story 15: and it\'s come into from the hill above', cliff?.openings.some((o) => o.kind === 'door' && o.k === w.ground(2, 6) && o.d === 3), cliff?.openings);
   ok('story 15: no window or door into the earth', bs.every((b) => b.openings.every((o) => !w.earth(o.k, o.i + DIRS[o.d][0], o.j + DIRS[o.d][1]))));
   ok('the flat slab: no retaining walls', CX.retaining(story(8)).size === 0);
+  // (how cells answer their neighbours)
+  for (const n of [3, 8, 9, 11]) {
+    const w2 = story(n), unrailed = [...w2.stairs.keys()].map(unkey).filter(([k, i, j]) => DIRS.some(([a, b]) => !w2.occupied(k, i + a, j + b) && w2.stair(k, i + a, j + b) < 0 && Math.max(MO.height(w2, i + a, j + b), w2.ground(i + a, j + b)) < k) && !CH.look(w2, k, i, j)?.parapet);
+    ok(`story ${n}: every stair with a drop beside it railed`, unrailed.length === 0, unrailed);
+    ok(`story ${n}: no parapet on a thin wall`, [...ME.parapets(w2).edges.keys()].every((v) => w2.wall(...unkey(v)) < 0));
+  }
+  { const w2 = story(4), sp = w2.spans[0], op = P.place(w2, 'pool', { face: 'top', hit: [sp.k, sp.i, sp.j], to: [sp.k + 1, sp.i, sp.j] }, 0, 0); ok('a basin only in a plain block: not in an arch\'s deck', !op?.basins, op); }
+  { const w2 = story(15); ok('a block built against a bank has no face into it', [...w2.mass.keys()].map(unkey).every(([k, i, j]) => DIRS.every((_, d) => !w2.earth(k, i + DIRS[d][0], j + DIRS[d][1]) || FO.covered(w2, k, i, j, d)))); }
 }
 // ─── the cats (perches.ts, cats.ts): where they can be, and their lives over what's built and what's built in front of them ───
 {

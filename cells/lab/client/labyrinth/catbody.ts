@@ -24,7 +24,7 @@ export type V3 = [number, number, number];
 export const FUR = 512;
 /** how big a cat is in the room, against a cell (1 across, 1 high, a storey): as a cat is against a storey, so it walks a
  * balustrade's rail (0.17 wide, a third of a level up) as a cat walks a rail */
-export const S = 0.14;
+export const S = 0.28;
 
 export interface Pose {
   /** the spine: rump, middle, chest, the neck's base; and the head's middle */
@@ -289,7 +289,7 @@ export function cat(out: Out, at: Place, pose: Pose, stir: Stir): void {
     const n = 9, seg = 0.66 / n, pts: V3[] = [root];
     let pitch = pose.tl, yaw = Math.atan2(back[2], back[0]);
     for (let q = 0; q < n; q++) {
-      const tip = q >= n - 3 ? pose.tk / 3 : 0, wave = Math.sin(stir.t * 1.3 + q * 0.55) * 0.05 + (q >= n - 3 ? Math.sin(stir.t * 11) * 0.22 * stir.twitch : 0);
+      const tip = q >= n - 3 ? pose.tk / 3 : 0, wave = (Math.sin(stir.t * 1.3 + q * 0.55) * 0.05 + Math.sin(stir.t * 0.47 + q * 0.3) * 0.04) * (0.6 + 0.5 * Math.sin(stir.t * 0.19)) + (q >= n - 3 ? Math.sin(stir.t * 11) * 0.22 * stir.twitch : 0);
       pitch += pose.tc / n + tip; yaw += pose.ts / n + wave;
       const p = pts[pts.length - 1], d: V3 = [Math.cos(pitch) * Math.cos(yaw), Math.sin(pitch), Math.cos(pitch) * Math.sin(yaw)];
       const nx = add(p, scale(d, seg));
@@ -301,11 +301,11 @@ export function cat(out: Out, at: Place, pose: Pose, stir: Stir): void {
   }
 
   // ─── into the room: turned, tipped, scaled, placed; each triangle's three corners ───
-  const sc = S * (at.scale ?? 1), cy = Math.cos(at.yaw), sy = Math.sin(at.yaw), cp = Math.cos(at.pitch), spt = Math.sin(at.pitch), mat = FUR + at.coat;
+  const sc = S * (at.scale ?? 1), cy = Math.cos(at.yaw), sy = Math.sin(at.yaw), cp = Math.cos(at.pitch), spt = Math.sin(at.pitch), mat = FUR + at.coat, lift = 0.012;
   const WP = new Float32Array(nv * 3), WN = new Float32Array(nv * 3), AO = new Float32Array(nv);
   for (let v = 0; v < nv; v++) {
     const px = VP[v * 3], py = VP[v * 3 + 1], pz = VP[v * 3 + 2], x = px * cp - py * spt, y = px * spt + py * cp;
-    WP[v * 3] = at.x + (x * cy - pz * sy) * sc; WP[v * 3 + 1] = at.y + y * sc; WP[v * 3 + 2] = at.z + (x * sy + pz * cy) * sc;
+    WP[v * 3] = at.x + (x * cy - pz * sy) * sc; WP[v * 3 + 1] = at.y + lift + y * sc; WP[v * 3 + 2] = at.z + (x * sy + pz * cy) * sc;
     const nx0 = VN[v * 3], ny0 = VN[v * 3 + 1], nz = VN[v * 3 + 2], nx = nx0 * cp - ny0 * spt, ny = nx0 * spt + ny0 * cp;
     WN[v * 3] = nx * cy - nz * sy; WN[v * 3 + 1] = ny; WN[v * 3 + 2] = nx * sy + nz * cy;
     // (shut in underneath; open on top)

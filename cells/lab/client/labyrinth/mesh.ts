@@ -115,6 +115,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** a face toward a neighbour hidden against it: a plain block, or a stair's back */
   const hides = (k: number, i: number, j: number, d: number) => {
     const ni = i + DIRS[d][0], nj = j + DIRS[d][1];
+    // (against the land itself: no face)
+    if (w.earth(k, ni, nj)) return true;
     if (w.block(k, ni, nj)) return !wallCell(w, k, ni, nj);
     const aw = w.archway(k, ni, nj);
     if (aw >= 0) return aw !== d % 2;
@@ -377,6 +379,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         }
       }
       if (!hides(k, i, j, d)) quad(pt(1, 0, y0), pt(1, 1, y0), pt(1, 1, y1), pt(1, 0, y1), [a, 0, b], [0.7, 0.7, 1, 1], MAT.stone);
+      // (its underside, where it's over nothing: carried on a pier, or out over a drop)
+      if (k > w.ground(i, j) && !w.occupied(k - 1, i, j)) quad(pt(0, 0, y0), pt(0, 1, y0), pt(1, 1, y0), pt(1, 0, y0), [0, -1, 0], 0.5, MAT.stone);
       // (on the land, its foundation down into it)
       if (founded(k, i, j)) for (let q = 0; q < 4; q++) { const [qa, qb] = DIRS[q]; if (w.occupied(k, i + qa, j + qb)) continue; const A: V3 = qa ? [qa > 0 ? x0 + 1 : x0, y0 - FOUND, z0] : [x0, y0 - FOUND, qb > 0 ? z0 + 1 : z0], B: V3 = qa ? [A[0], y0 - FOUND, z0 + 1] : [x0 + 1, y0 - FOUND, A[2]]; quad(A, B, [B[0], y0, B[2]], [A[0], y0, A[2]], [qa, 0, qb], [0.35, 0.35, 0.6, 0.6], MAT.stone); }
       continue;
@@ -423,7 +427,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const P = (u: number, sv: number, y: number): V3 => [cx + a * (0.5 - u) + ta * sv, y, cz + b * (0.5 - u) + tb * sv];
     const prof: Array<[number, number]> = [[0, y0], [U, y0], [U, y0 - 0.1]];
     for (let q = 6; q >= 0; q--) { const th = (q / 6) * (Math.PI / 2); prof.push([U * (1 - Math.cos(th)), y0 - 0.75 + 0.65 * Math.sin(th)]); }
-    for (const sc of [-0.32, 0, 0.32]) {
+    // (as many brackets as what they carry is wide: one under a thin wall, closer under a wall, three under a block)
+    const thinW = w.wall(k, i, j) >= 0, spread = thinW ? [0] : wallCell(w, k, i, j) ? [-0.2, 0.2] : [-0.32, 0, 0.32];
+    for (const sc of spread) {
       const inside = P(0.25, sc, y0 - 0.1);
       for (let q = 1; q + 1 < prof.length; q++) for (const sv of [sc - HW2, sc + HW2]) face([P(prof[0][0], sv, prof[0][1]), P(prof[q][0], sv, prof[q][1]), P(prof[q + 1][0], sv, prof[q + 1][1])], MAT.stone, 0.8, true, inside);
       for (let q = 1; q + 1 < prof.length; q++) face([P(prof[q][0], sc - HW2, prof[q][1]), P(prof[q + 1][0], sc - HW2, prof[q + 1][1]), P(prof[q + 1][0], sc + HW2, prof[q + 1][1]), P(prof[q][0], sc + HW2, prof[q][1])], MAT.stone, 0.55 + 0.35 * (q / prof.length), true, inside);
@@ -601,7 +607,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const pt = (u: number, wv: number, y: number): V3 => { const cx = x0 + 0.5, cz = z0 + 0.5; return a ? [cx + a * (u - 0.5), y, cz + (wv - 0.5)] : [cx + (wv - 0.5), y, cz + b * (u - 0.5)]; };
     for (const q of [(dir + 1) % 4, (dir + 3) % 4]) {
       const [qa, qb] = DIRS[q];
-      if (w.stone(k, i + qa, j + qb) || w.stair(k, i + qa, j + qb) >= 0 || w.stone(k + 1, i + qa, j + qb)) continue;
+      if (w.stone(k, i + qa, j + qb) || w.earth(k, i + qa, j + qb) || w.stair(k, i + qa, j + qb) >= 0 || w.stone(k + 1, i + qa, j + qb)) continue;
       const wv = (a ? qb : qa) > 0 ? 0.95 : 0.05, rise = (u: number) => k + u;
       if (kind === DRESS.jali) {
         cur.dress = (keep % KIND) + PIERCED;
@@ -1162,7 +1168,8 @@ export function parapets(w: World, plain = false) {
   for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
   for (const v of [...w.mass.keys()]) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
-    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v)) continue;
+    // (not on a thin wall: it's too thin to carry one)
+    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v) || w.wall(k, i, j) >= 0) continue;
     // (a parapet of its own accord along anything carried high: a bridge, or an arch two levels up or more; along a
     // colonnade, a balustrade)
     const colonnade = sp?.order === 'colonnade' || onColumn(w, k, i, j);
@@ -1171,7 +1178,7 @@ export function parapets(w: World, plain = false) {
     // (on a flowing wall, round its curve or along its diagonal)
     if (w.block(k, i, j) && outline(w, k, i, j).flow) { flowRails.set(v, d?.parapet && d.rail ? d.rail : DRESS.parapet); continue; }
     const along = sp ? sp.a : colonnade ? (w.span(k, i + 1, j) || w.span(k, i - 1, j) ? 0 : 1) : -1;
-    edges.set(v, DIRS.map(([a, b], q) => (!!d?.parapet || q % 2 !== along) && !(w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0)));
+    edges.set(v, DIRS.map(([a, b], q) => (!!d?.parapet || q % 2 !== along) && !(w.stone(k, i + a, j + b) || w.earth(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0)));
     rails.set(v, d?.parapet && d.rail ? d.rail : colonnade ? DRESS.balustrade : DRESS.parapet);
   }
   return { edges, rails, flowRails, roofed };

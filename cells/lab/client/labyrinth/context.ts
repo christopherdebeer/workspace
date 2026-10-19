@@ -40,6 +40,10 @@ function worked(w: World) {
         if (drop < 1 || drop > 3 || !(used(i, j) || used(x, z))) continue;
         // (not where a stair climbs it: its steps hold it)
         if (w.stair(lo, x, z) === (d + 2) % 4 || w.stair(hi - 1, x, z) === (d + 2) % 4) continue;
+        // (nor where what's built below fills the bank's face, ground to top: that's its own wall)
+        let filled = true;
+        for (let k = lo; k < hi; k++) if (!w.block(k, x, z)) { filled = false; break; }
+        if (filled) continue;
         const it = { i, j, d, lo, hi };
         r.set(`${i}.${j}.${d}`, it); r.set(`${x}.${z}.${(d + 2) % 4}`, it);
       }

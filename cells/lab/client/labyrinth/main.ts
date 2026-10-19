@@ -20,7 +20,7 @@ import { Renderer, camera, invert, type View } from './render';
 import { carve, surface, tap, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
 import { randomSeed } from '../kit/rng';
-import { DRESSINGS, PIECES, dress, dressAt, place, run, type Dressing, type Hand, type Piece } from './palette';
+import { DRESSINGS, PIECES, dress, dressAt, place, placeOr, run, type Dressing, type Hand, type Piece } from './palette';
 import { around, motifs, type Motif } from './motifs';
 import { selectCell, selectMotif, selectStructure, type Selection } from './select';
 import { DIRS } from './model';
@@ -186,6 +186,8 @@ type Gesture = {
   op?: Op | null;
   /** where the finger paused on the way, and when it last moved */
   rest: Array<[number, number]>; moved: number;
+  /** where the finger last came to rest, and when (for holding still to choose); whether it's been offered */
+  still: { x: number; y: number; t: number }; offered?: boolean;
 };
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
@@ -363,7 +365,7 @@ function showAlts(first: Op | null, alts: Alt[] | undefined, base: number) {
   drawAlts();
 }
 function drawAlts() {
-  if (!altsNow) return;
+  if (!altsNow || !qs.has('chips')) return;
   altsEl.innerHTML = `<i>read as</i>${altsNow.list.map((a, n) => `<button data-alt="${n}" class="${n === altsNow!.at ? 'on' : ''}" aria-pressed="${n === altsNow!.at}">${a.label}</button>`).join('')}`;
   altsEl.classList.add('on');
   for (const b of Array.from(altsEl.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => readAs(Number(b.dataset.alt)));
@@ -376,6 +378,80 @@ function readAs(n: number) {
   say(op.note ?? altsNow.list[n].label);
 }
 function hideAlts() { altsNow = null; altsEl.classList.remove('on'); altsEl.innerHTML = ''; }
+/**
+ * Choosing by going on with the gesture: hold still at the end of a stroke (or on a tap) and, if it could be read
+ * another way, the readings fan out above the finger; lean toward one and it's built that way at once; let go to keep
+ * it. Lean far away instead (on a stroke) and the stroke simply goes on, as if nothing were offered.
+ */
+type Fan = { x: number; y: number; list: Array<{ label: string; op: Op }>; at: number; tap: boolean };
+let fan: Fan | null = null, heldHints = 0;
+const HOLD = 650, LEAN = 28, BEYOND = 170;
+function readingsNow(): Array<{ label: string; op: Op }> | null {
+  if (!g) return null;
+  const strip = (o: Op): Op => ({ ...o, alts: undefined });
+  if (g.mode === 'trace' && g.op?.alts?.length) return [{ label: g.op.reading ?? g.op.note ?? 'as drawn', op: strip(g.op) }, ...g.op.alts.map((a) => ({ label: a.label, op: strip(a.op) }))];
+  if (g.mode === 'pending' && g.start && brush === 'auto') {
+    const r = tap(world, g.start, now());
+    if (!r) return null;
+    const first = 'refused' in r ? null : r, list = [...(first ? [{ label: first.reading ?? first.note ?? 'raised', op: strip(first) }] : []), ...(r.alts ?? []).map((a) => ({ label: a.label, op: strip(a.op) }))];
+    return list.length > 1 || (!first && list.length) ? list : null;
+  }
+  return null;
+}
+function openFan() {
+  if (!g) return;
+  g.offered = true;
+  const list = readingsNow(), f = fingers.get(g.id);
+  if (!list || !f) return;
+  const tapped = g.mode === 'pending';
+  if (tapped) world.apply(list[0].op, now());
+  fan = { x: f.x, y: f.y, list, at: 0, tap: tapped };
+  say('lean toward another reading · let go to keep it');
+}
+const fanAngle = (q: number, n: number) => -Math.PI / 2 + (n <= 2 ? 0 : ((q - 1) / (n - 2) - 0.5) * Math.PI * 0.85);
+function choose(at: number) {
+  if (!fan || at === fan.at) return;
+  fan.at = at;
+  world.replaceLast(fan.list[at].op, now());
+  if (g) { g.laid = JSON.stringify(fan.list[at].op); g.op = fan.list[at].op; }
+}
+/** the finger moved while the readings are out: which it leans toward; false if it's gone on past them */
+function leanFan(cx: number, cy: number): boolean {
+  if (!fan) return false;
+  const dx = cx - fan.x, dy = cy - fan.y, d = Math.hypot(dx, dy);
+  let at = 0, best = Infinity;
+  const a = Math.atan2(dy, dx);
+  for (let q = 1; q < fan.list.length; q++) { const e = Math.abs(Math.atan2(Math.sin(a - fanAngle(q, fan.list.length)), Math.cos(a - fanAngle(q, fan.list.length)))); if (e < best) { best = e; at = q; } }
+  // (gone on past them, or off another way than toward any: the stroke goes on)
+  if (!fan.tap && (d > BEYOND || (d > 60 && best > 0.6))) { choose(0); fan = null; if (g) g.still = { x: cx, y: cy, t: performance.now() }; return false; }
+  if (d < LEAN || best > 0.6) at = 0;
+  choose(at);
+  return true;
+}
+function keepFan() {
+  if (!fan) return;
+  const op = fan.list[fan.at].op;
+  settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]]));
+  say(op.note ?? fan.list[fan.at].label);
+  altsNow = { list: fan.list, at: fan.at, base: world.ops.length - 1 };
+  fan = null; kept();
+}
+/** the readings, drawn round where the finger held */
+function drawFan() {
+  if (!fan) return;
+  const n = fan.list.length;
+  g2.font = 'italic 12.5px "Iowan Old Style", Palatino, Georgia, serif'; g2.textAlign = 'center'; g2.textBaseline = 'middle';
+  const pill = (x: number, y: number, label: string, on: boolean) => {
+    const wd = g2.measureText(label).width + 18, h = 26;
+    g2.fillStyle = on ? 'rgba(43,36,32,.92)' : 'rgba(246,241,231,.94)'; g2.strokeStyle = 'rgba(43,36,32,.25)'; g2.lineWidth = 1;
+    g2.beginPath(); g2.roundRect(x - wd / 2, y - h / 2, wd, h, 13); g2.fill(); if (!on) g2.stroke();
+    g2.fillStyle = on ? '#f3ede1' : '#2b2420'; g2.fillText(label, x, y + 0.5);
+  };
+  g2.strokeStyle = 'rgba(176,92,30,.35)'; g2.lineWidth = 1.2; g2.setLineDash([2, 4]);
+  g2.beginPath(); g2.arc(fan.x, fan.y, LEAN, 0, Math.PI * 2); g2.stroke(); g2.setLineDash([]);
+  for (let q = 1; q < n; q++) { const a = fanAngle(q, n), r = 92; pill(fan.x + Math.cos(a) * r, fan.y + Math.sin(a) * r - 6, fan.list[q].label, fan.at === q); }
+  pill(fan.x, fan.y + 46, fan.list[0].label, fan.at === 0);
+}
 /** gestures that came to nothing, or less than was asked: what, why (kept, for looking at what's still left unread) */
 const declines: Array<{ what: string; why: string; t: number }> = [];
 const declined = (what: string, why: string) => { declines.push({ what, why, t: Date.now() }); if (declines.length > 200) declines.shift(); };
@@ -441,7 +517,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
     settle(r?.cells ?? (built.add ?? []).map((q) => [q[0], q[1], q[2]])); kept();
     // (never quietly short: if it stopped on the way, it says where it joined)
     if (r && !r.reached && built.connect?.to) { say(r.stopped > 0 ? 'it joins the stone it meets on the way' : 'nothing to build there'); declined(built.why ?? 'trace', 'stopped short'); }
-    else if (built.note) say(built.note);
+    else if (built.note) say(built.alts?.length && heldHints++ < 4 ? `${built.note} · hold at the end to read it otherwise` : built.note);
     showAlts(built, built.alts, g.base);
   }
 }
@@ -475,7 +551,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   const start = pick(e.clientX, e.clientY);
   if (brush !== 'hand') hideAlts();
-  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0 };
+  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0, still: { x: e.clientX, y: e.clientY, t: performance.now() } };
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId);
@@ -490,6 +566,8 @@ canvas.addEventListener('pointermove', (e) => {
     return;
   }
   if (!g || g.id !== e.pointerId) return;
+  if (fan) { if (leanFan(e.clientX, e.clientY)) return; }
+  if (Math.hypot(e.clientX - g.still.x, e.clientY - g.still.y) > 7) g.still = { x: e.clientX, y: e.clientY, t: performance.now() };
   const moved = Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > 9;
   if (g.mode === 'turn') { view.az -= dx * 0.008; return; }
   if ((g.mode === 'look' || (g.mode === 'pending' && brush === 'select')) && moved) { g.mode = 'turn'; view.az -= (e.clientX - g.x0) * 0.008; return; }
@@ -508,6 +586,8 @@ const up = (e: PointerEvent) => {
   if (fingers.size === 0) { const c = corner(Math.round((view.az - Math.PI / 4) / (Math.PI / 2))); azGoal = Math.abs(c - view.az) < 0.22 ? c : null; }
   if (!g || g.id !== e.pointerId) return;
   const cancelled = e.type !== 'pointerup', m = g.mode, start = g.start;
+  if (fan && !cancelled) { keepFan(); g = null; return; }
+  fan = null;
   if (cancelled && m !== 'turn' && m !== 'look') { if (world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); } g = null; return; }
   const pet = m === 'look' ? catAt(e.clientX, e.clientY) : null;
   if (pet) meet(pet);
@@ -520,14 +600,15 @@ const up = (e: PointerEvent) => {
       let op: Op | null = null;
       if (brush === 'auto') {
         const r = tap(world, start, now());
-        if (r && 'refused' in r) { say(r.refused); declined('tap', r.refused); showAlts(null, r.alts, world.ops.length); g = null; return; }
+        // (refused outright (rare now): its first other reading, if it has one, is what's built)
+        if (r && 'refused' in r) { declined('tap', r.refused); say(r.alts?.length ? `${r.refused} · hold to ${r.alts[0].label}` : r.refused); g = null; return; }
         op = r;
         if (!op) declined('tap', 'nothing more will stand there');
       }
       else if (brush === 'take') op = place(world, 'take', start, looking(), now());
       else if (isDress(held)) { const c = dressAt(world, start, held); op = c ? dress(world, held, [c]) : null; }
-      else op = place(world, held, start, looking(), now());
-      if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); }
+      else op = placeOr(world, held, start, looking(), now());
+      if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); if (op.note) say(op.alts?.length ? `${op.note} · hold to read it otherwise` : op.note); }
       else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
     }
   } else if (m === 'trace' || m === 'run') { unselect(); traceStep(e.clientX, e.clientY, true); }
@@ -694,7 +775,10 @@ function frame() {
   R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
   g2.clearRect(0, 0, guide.clientWidth, guide.clientHeight);
+  // (held still long enough on a stroke, or a tap, that could be read another way: the readings fan out)
+  if (g && !fan && !g.offered && fingers.size === 1 && (g.mode === 'trace' || (g.mode === 'pending' && brush === 'auto')) && performance.now() - g.still.t > HOLD) openFan();
   guides();
+  drawFan();
   label();
   for (let q = dust.length - 1; q >= 0; q--) {
     const p = dust[q];
@@ -784,7 +868,7 @@ function followCat(dt: number) {
   if (met.gone) { meet(null); return; }
   const q = 1 - Math.exp(-dt * 4), y = met.y + 0.15;
   view.target[0] += (met.x - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z - view.target[2]) * q;
-  zoomK += (0.08 - zoomK) * q;
+  zoomK += (0.13 - zoomK) * q;
   follow = false;
 }
 // (`?catsat=s`: the cats' lives run on that long before it's shown, for a picture)
@@ -798,6 +882,7 @@ requestAnimationFrame(frame);
   get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
   cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
+  fan: () => (fan ? { labels: fan.list.map((f) => f.label), at: fan.at } : null),
   release: () => { const op = held_back.shift(); if (op) world.apply(op, now()); return !!op; }, catsRun: (s: number) => cats.run(world, s),
   meet: (name: string) => meet(cats.list.find((c) => c.name === name) ?? null), get following() { return following; }, follow: () => { if (met && !following) catFollowB.click(); }, catAt,
   selection: () => (sel ? { title: sel.s.title, readings: sel.s.readings.map((r) => r.label), at: sel.s.at, whole: sel.idx, cells: sel.s.cells.length } : null),

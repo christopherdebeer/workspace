@@ -65,6 +65,8 @@ export function wallCell(w: World, k: number, i: number, j: number): boolean {
 /** whether the stone beside a block, the way d, covers that whole side (so there's no face there) */
 export function covered(w: World, k: number, i: number, j: number, d: number) {
   const x = i + DIRS[d][0], z = j + DIRS[d][1];
+  // (the land itself: a block built against a bank has no face into it)
+  if (w.earth(k, x, z)) return true;
   if (w.block(k, x, z)) return !wallCell(w, k, x, z);
   const aw = w.archway(k, x, z);
   if (aw >= 0) return aw !== d % 2;

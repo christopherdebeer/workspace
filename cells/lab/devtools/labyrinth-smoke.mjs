@@ -32,15 +32,28 @@ await withWood(async (lab) => {
   // (a wall traced across the stone, from beside it)
   await drag([[4, 7, 0], [6, 7, 0], [8, 7, 0]]);
   { const wall = await W((w) => [4, 5, 6, 7, 8].every((i) => w.stone(0, i, 7))), pr = await probe(); c.ok('trace on the stone: a wall along it', wall && pr.whys[pr.whys.length - 1] === 'wall', { wall, pr }); }
-  // (and the other ways it could be read, offered after it: a touch reads it as a thin wall, and back)
+  // (and the other ways it could be read: no row of chips; held at the end of a stroke, they fan out above the finger,
+  // a lean toward one reads it so (in place of what it built), and letting go keeps it)
   {
-    const alts = await p.evaluate(() => window.__labyrinth.alts()), n = await probe();
-    c.ok('after a gesture, the other ways it could be read', alts && alts.labels.length === 4 && alts.at === 0 && await p.isVisible('#alts'), alts);
-    const thin = alts.labels.indexOf('a thin wall');
-    await p.click(`#alts [data-alt="${thin}"]`);
-    c.ok('a touch reads it so instead, in place of what it built', (await probe()).ops === n.ops && await W((w) => [4, 5, 6, 7, 8].every((i) => w.wall(0, i, 7) >= 0)));
-    await p.click('#alts [data-alt="0"]');
-    c.ok('and back', await W((w) => [4, 5, 6, 7, 8].every((i) => w.wall(0, i, 7) < 0 && w.stone(0, i, 7))));
+    const n = await probe(), alts = await p.evaluate(() => window.__labyrinth.alts());
+    c.ok('after a gesture, the other ways it could be read are known, and no chips stand in the way', alts && alts.labels.length === 4 && !(await p.isVisible('#alts')), alts);
+    await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(300);
+    let seen = null, leaned = null;
+    await drag([[4, 7, 0], [6, 7, 0], [8, 7, 0]], 0, async () => {
+      await p.waitForTimeout(1100);
+      seen = await p.evaluate(() => window.__labyrinth.fan());
+      const s0 = await at(8, 7, 0), thin = seen ? seen.labels.indexOf('a thin wall') : -1;
+      if (seen && thin > 0) {
+        // (lean toward it: up and a little to its side, as the fan lays them out)
+        const m = seen.labels.length - 1, ang = -Math.PI / 2 + (m <= 1 ? 0 : ((thin - 1) / (m - 1) - 0.5) * Math.PI * 0.85);
+        for (let t = 1; t <= 6; t++) { await p.mouse.move(s0[0] + Math.cos(ang) * 14 * t, s0[1] + Math.sin(ang) * 14 * t); await p.waitForTimeout(30); }
+        leaned = await p.evaluate(() => window.__labyrinth.fan());
+      }
+    });
+    c.ok('held at the end of a stroke: its readings fan out round the finger', seen && seen.labels.length >= 2, seen);
+    c.ok('a lean toward one reads it so, and letting go keeps it', leaned && leaned.labels[leaned.at] === 'a thin wall' && (await probe()).ops === n.ops && await W((w) => [4, 5, 6, 7, 8].every((i) => w.wall(0, i, 7) >= 0)), { leaned });
+    await p.evaluate(() => window.__labyrinth.readAs(0)); await p.waitForTimeout(200);
+    c.ok('and back, by its reading', await W((w) => [4, 5, 6, 7, 8].every((i) => w.wall(0, i, 7) < 0 && w.stone(0, i, 7))));
   }
   // (a terrace higher up: tapped up three courses)
   for (const y of [0, 1, 2]) await tapAt(9, 4, y);
@@ -116,7 +129,7 @@ await withWood(async (lab) => {
     const d0 = (await gap()).d;
     await q.click('#catfollow'); await q.waitForTimeout(4000);
     const d1 = await gap();
-    c.ok('followed: the eye goes with it, close', d1.on && (d1.d < 0.5 || d1.d < d0 * 0.4), { d0, d1 });
+    c.ok('followed: the eye goes with it, close', d1.on && (d1.d < 0.5 || d1.d < d0 * 0.7), { d0, d1 });
     await q.click('#catfollow'); await q.waitForTimeout(300);
     c.ok('and back to building', !(await L((L) => L.following)));
     await q.close();

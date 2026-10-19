@@ -86,9 +86,17 @@ function dressUp(w: World): Map<number, Dress> {
       const beside = ([1, -1] as const).map((s): Cell => [k, i + a + ta * s, j + b + tb * s]).filter((c) => roomy(c) && !w.way(c[0] + 1, c[1], c[2]));
       if (beside.length && chance(0.6, n, 1)) put(beside[hash(w.seed, n, 4) % beside.length], { prop: DRESS.lantern });
       const stairs = m.cells.filter((c) => w.stair(...c) >= 0);
-      if ((stairs.length >= 3 || k >= 2) && chance(0.4, n, 2)) { const rail = chance(0.2, n, 3) ? DRESS.jali : DRESS.balustrade; for (const c of stairs) put(c, { parapet: true, rail }); }
+      // (a flight with a drop beside it is railed, always, and the landings between its stairs with it; a long or high one
+      // with none, now and then)
+      const over = (c: Cell) => DIRS.some(([a, b]) => { const x = c[1] + a, z = c[2] + b; return !w.occupied(c[0], x, z) && w.stair(c[0], x, z) < 0 && Math.max(height(w, x, z), w.ground(x, z)) < c[0]; });
+      const drop = stairs.some(over);
+      if (drop || ((stairs.length >= 3 || k >= 2) && chance(0.4, n, 2))) {
+        const rail = chance(0.2, n, 3) ? DRESS.jali : DRESS.balustrade;
+        for (const c of stairs) put(c, { parapet: true, rail });
+        for (const c of m.cells) if (w.stone(...c) && !w.occupied(c[0] + 1, c[1], c[2]) && w.laidBy(...c)) put(c, { parapet: true, rail });
+      }
     } else if (m.kind === 'terrace') {
-      const open = (c: Cell) => DIRS.filter(([a, b]) => height(w, c[1] + a, c[2] + b) < c[0] + 1).length;
+      const open = (c: Cell) => DIRS.filter(([a, b]) => Math.max(height(w, c[1] + a, c[2] + b), w.ground(c[1] + a, c[2] + b)) < c[0] + 1).length;
       const corners = m.cells.filter((c) => roomy(c) && open(c) >= 2);
       corners.forEach((c, q) => { if (q < 3 && chance(0.5, n, 10 + q)) put(c, { prop: DRESS.pot }); });
       const free = corners.filter((c) => !map.get(key(...c))?.prop);
@@ -107,9 +115,15 @@ function dressUp(w: World): Map<number, Dress> {
     }
   }
 
+  // (any stair with a drop beside it, flight or no: railed)
+  for (const v of w.stairs.keys()) {
+    const c = unkey(v);
+    if (map.get(v)?.parapet) continue;
+    if (DIRS.some(([a, b]) => { const x = c[1] + a, z = c[2] + b; return !w.occupied(c[0], x, z) && w.stair(c[0], x, z) < 0 && Math.max(height(w, x, z), w.ground(x, z)) < c[0]; })) put(c, { parapet: true, rail: DRESS.balustrade });
+  }
   // (anything high with a drop at its edge: a parapet round it, a top at a time, all of it or none)
   const tops = new Set<number>(), seen = new Set<number>();
-  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k >= 1 && !w.occupied(k + 1, i, j) && !w.tree(k + 1, i, j)) tops.add(v); }
+  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k >= 1 && !w.occupied(k + 1, i, j) && !w.tree(k + 1, i, j) && w.wall(k, i, j) < 0) tops.add(v); }
   for (const v of tops) {
     if (seen.has(v)) continue;
     const [k] = unkey(v), region: Cell[] = [], st = [v];
@@ -119,7 +133,7 @@ function dressUp(w: World): Map<number, Dress> {
       region.push([k, i, j]);
       for (const [a, b] of DIRS) { const q = key(k, i + a, j + b); if (tops.has(q) && !seen.has(q)) { seen.add(q); st.push(q); } }
     }
-    const drop = region.some(([, i, j]) => DIRS.some(([a, b]) => height(w, i + a, j + b) <= k - 1));
+    const drop = region.some(([, i, j]) => DIRS.some(([a, b]) => Math.max(height(w, i + a, j + b), w.ground(i + a, j + b)) <= k - 1));
     if (drop && region.length >= 3 && chance(0.35, id(region), 9)) {
       const r = hash(w.seed, id(region), 10) % 100, rail = r < 40 ? DRESS.balustrade : r < 55 ? DRESS.jali : DRESS.parapet;
       for (const c of region) put(c, { parapet: true, rail });

@@ -16,7 +16,7 @@
  * - **Never just refused**: each gesture comes with the other ways it could have been meant (`Op.alts`), shown after
  *   it, so reading it otherwise is a touch, not a redraw; and where the plain reading can't be built, the nearest that
  *   can is built instead: a climb too steep for a flight is a stair tower, a way blocked at its height goes round,
- *   a tap in a stair's way is refused but offers itself anyway.
+ *   a tap in a stair's way raises the cell beside it instead (the way kept open), and offers itself anyway.
  * - **More of the stroke is read**: one that comes back to where it began walls in a court (a gate where it started);
  *   where the finger paused, a gate in a wall, or a landing in a flight.
  * - **Carving** (the take brush's stroke): each piece of stone it passes over is cut away (a top lowered a course; a
@@ -48,7 +48,16 @@ export function tap(w: World, p: Pick, now: number, anyway = false): Op | Refusa
   const [k, i, j] = tapCell(w, p);
   if (k >= CEIL || !inGrid(i, j) || w.stone(k, i, j) || w.stair(k, i, j) >= 0) return null;
   // (never into a stair's way (its foot, its head, the room over them): refused, but offered anyway)
-  if (!anyway && w.way(k, i, j)) { const op = tap(w, p, now, true); return { refused: 'that\'s a stair\'s way: kept open', alts: op && !('refused' in op) ? [{ label: 'raise it anyway', op }] : [] }; }
+  // (never into a stair's way (its foot, its head, the room over them): raised beside it instead, keeping the way open;
+  // in it anyway, another reading)
+  if (!anyway && w.way(k, i, j)) {
+    const op = tap(w, p, now, true), anyOp = op && !('refused' in op) ? op : null;
+    const alts: Alt[] = anyOp ? [{ label: 'raise it anyway', op: { ...anyOp, note: 'raised in the stair\'s way', reading: 'raise it anyway' } }] : [];
+    const beside = DIRS.map(([a, b]) => [k, i + a, j + b] as Cell).filter(([kk, x, z]) => inGrid(x, z) && w.free(kk, x, z) && !w.way(kk, x, z) && w.floor(kk, x, z));
+    if (beside.length) return { add: [[...beside[0], now]], why: 'raise', note: 'raised beside it: the stair\'s way kept open', reading: 'beside the stair', alts };
+    // (nowhere beside it: kept open, the one refusal left; held, it can still be raised anyway)
+    return { refused: 'that\'s a stair\'s way: kept open', alts };
+  }
   // (a thin wall touched goes on as a thin wall: up, or out along its way)
   const thin = p.face === 'top' ? w.wall(k - 1, i, j) : p.face === 'side' ? w.wall(...p.hit) : -1;
   if (thin >= 0) return { walls: [[k, i, j, p.face === 'side' ? (p.hit[1] !== i ? 0 : 1) : thin, now]], why: p.face === 'side' ? 'extend' : 'course' };
@@ -122,7 +131,9 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
   if (climb > room) {
     // (too steep for a flight along it: a stair tower, climbing inside, if one will stand; else it's refused, saying why)
     if (tower) return tower;
-    return { refused: `too steep: ${climb} level${climb > 1 ? 's' : ''} to climb, and room for ${room} step${room === 1 ? '' : 's'}; draw it longer, or straighter` };
+    // (and if no tower will stand: a walkway out toward it at the height it starts from, to climb from later)
+    const said = `too steep to climb here (${climb} level${climb > 1 ? 's' : ''}, room for ${room} step${room === 1 ? '' : 's'}): a walkway out toward it`;
+    return path2.length >= 2 ? { connect: { from: [h0, path2[0][0], path2[0][1]], to: null, path: path2 }, born: now, why: 'walkway', note: said, reading: 'a walkway toward it' } : { refused: `too steep: ${climb} level${climb > 1 ? 's' : ''} to climb, and room for ${room} step${room === 1 ? '' : 's'}; draw it longer, or straighter` };
   }
   if (path2.length < 2 && !to) return null;
   const levels = climb;

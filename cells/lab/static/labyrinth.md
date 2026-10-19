@@ -101,7 +101,9 @@ What's built has residents (`cats.ts`). They show how a place can be lived in: a
 
 **Meeting one.** With the hand brush, a tap on a cat says who it is and what it's doing; **Follow ›** brings the eye close and keeps it with the cat until **‹ Return to building**.
 
-**How they're drawn** (`catbody.ts`): to a cat's scale against a storey, so a balustrade's rail is a rail to them. Soft, rounded, a few facets left, hardly a face; a coat's markings kept on the body as it moves (a tabby's bands round body, legs and tail; paler underneath). Twelve poses (stand, walk, sit, loaf, curl, groom, stretch, gather, reach, land, assess, sniff), blended from one to the next; the legs found from where the feet are (a cat's knees and elbows); walking, the feet in a cat's order, each planted while the body passes over it. They breathe, a tail's tip twitches, an ear flicks. Drawn with the stone: its shadows, an inked contour.
+**How they move.** Not from middle to middle: a walk over open places goes wherever in each it happens to pass, a little to one side or the other, its corners cut in easy curves; its pace drifts, quickening and slowing, easing in and to a stop; now and then it stops on the way to look round, or sits a moment; its head leads, the body following. A narrow place is taken slowly. Idle, a head drifts, looking about; before it lies down a cat turns round once or so on the spot; a playful one sometimes dashes off for no reason anyone can see, then washes as if it never happened.
+
+**How they're drawn** (`catbody.ts`): to a cat's scale against a storey, a little larger than life, so it reads. Soft, rounded, a few facets left, hardly a face; a coat's markings kept on the body as it moves (a tabby's bands round body, legs and tail; paler underneath). Twelve poses (stand, walk, sit, loaf, curl, groom, stretch, gather, reach, land, assess, sniff), blended from one to the next; the legs found from where the feet are (a cat's knees and elbows); walking, the feet in a cat's order, each planted while the body passes over it. They breathe, a tail's tip twitches, an ear flicks. Drawn with the stone: its shadows, an inked contour.
 
 ![story 13: a court, two terraces, a thin wall and an arch; cats resting in the sun](labyrinth/v-cats.jpg)
 ![the motion sheet: every pose](labyrinth/v-cats-study.jpg)
@@ -282,7 +284,7 @@ Three layers, in order of authority (`model.ts`):
 - **Where it started**: the slab is height 0, a top the level above its stone, and a side the course touched (so a walkway drawn from halfway up a tower goes out at that course).
 - **Where it ended counts** if it's a top at another height. From high up, ending over bare stone, the trace makes a walkway rather than stairs down: tracing *up* to a top is how you climb.
 - **The way goes in** at the first column it passes beside its destination, not on round it.
-- **A climb too steep** (more levels than straight cells to put steps in) is refused, with the reason in the hint, rather than built short.
+- **A climb too steep** (more levels than straight cells to put steps in) is a stair tower if one will stand, else a walkway out toward it, saying why, rather than built short.
 - **A diagonal stroke** is walked a cell at a time, the way it leans.
 - **A stroke that doubles back** keeps only what it covered once.
 
@@ -391,7 +393,9 @@ Next for the form: junctions by kind (a wall into a tower with a buttress at the
 
 ## Gestures read for more than their ends
 
-A gesture used to be read as "join where it started to where it ended", and refused when that couldn't be built. Now it's read for more of what was drawn, the nearest buildable thing is built when the plain reading can't be, and **the other ways it could have been read are offered after it**: a row of chips over the brushes, the one it is now marked. A touch reads it so instead, in place of what it built (it's undone and redone as one thing). The row goes with the next touch on the stone.
+A gesture used to be read as "join where it started to where it ended", and refused when that couldn't be built. Now it's read for more of what was drawn, and **something is always built** where anything can be: the plain reading if it stands, else the nearest thing that does (a stair tower, a way round, a walkway out toward a top too steep to reach, a block raised beside a stair's way rather than in it).
+
+**Choosing another reading is a matter of going on with the gesture**, not a row of buttons. Hold still at the end of a stroke, or on a tap, and if it could be read another way the readings fan out above the finger, the one it is now below it; lean toward one and it's built that way at once, in place of what was; let go to keep it. Lean back to the middle for the first again. On a stroke, going on past them (or off another way) just carries on the stroke, as if nothing had been offered; a short pause on the way is still a pause (a gate, a landing). (`?chips` brings back the old row of chips.)
 
 | Drawn | Read as | Also offered |
 |---|---|---|
@@ -403,12 +407,35 @@ A gesture used to be read as "join where it started to where it ended", and refu
 | a bridge four to seven long | one great arch, or an arcade, the rules' choice | the other |
 | a bridge or walkway with something in the way at its height | round it, the shortest way | joining what it meets |
 | a climb that would make it | a flight | a stair tower |
-| a tap in a stair's way | refused, saying why | raise it anyway |
+| a tap in a stair's way | the cell beside it raised instead, the way kept open (refused only if nothing beside it would stand) | raise it anyway |
+| a climb too steep, and no room for a tower | a walkway out toward it, at the height it starts from, to climb from later | |
+| a piece where it can't go (a stair, a cypress or water against a side; a bridge with no gap) | on the top of what was touched; a block out from it | |
 
 Declines are counted: the page keeps the last 200 gestures that came to nothing or less than was asked (`__labyrinth.declines()`), and the random-gesture check reports them. Over 60 worlds of random strokes, connections that stop short of where they were going fell from 48 in 175 to 8 in 172; ten climbs are still too steep with no room for a tower.
 
 ![11 · gestures read: a loop walls in a court; pauses make gates; a stair tower where a climb was too steep; a bridge round a tower in its way; a climb round a block to a straight flight](labyrinth/v-story-11.jpg)
 ![a stair tower, and ways round](labyrinth/v-gestures-close.jpg)
+
+## How cells answer their neighbours
+
+Every kind of cell reads the six cells round it (four sides, above, below) and answers them. In outline:
+
+| Cell | Reads | Answers |
+|---|---|---|
+| **block** | stone, wall, arch, stair, the land beside it; what's above and below | drawn as a wall or a mass by its run; no face against stone, a stair's back, an arch across it, or **the land itself**; a lid unless something stands on it (or a basin in it); an underside over air; a plinth, foundation, cornice, string course, post cap |
+| **thin wall** | stone beside it (its arms), what's above | runs out to what's beside it; an end where nothing is; no parapet (too thin to carry one) |
+| **arched way** | an arch the same way above or below | one tall arch; walked only along its way |
+| **arch (span)** | what its ends stand on; what fills under its ends (how low it springs); its readings | spandrels, deck, soffit; a parapet of its own accord when it's high or a bridge |
+| **pier** | its column; a colonnade over it; a way beside its foot | slimmer the higher it is; stepped aside off a way; a cove under a block; a column under a colonnade |
+| **corbel** | stone to hold it from, the far side open | brackets out of that face: **as many as what it carries is wide** (one under a thin wall, two under a wall, three under a block) |
+| **stair** | what's beside it, its head and foot, the room over them | its way kept open by everything; **a balustrade wherever there's a drop beside it**, flight or not, and the landings of a railed flight railed with it; **an underside where it's over nothing**; no face into the land |
+| **basin** | **a plain block under it**; basins beside it; the drops at its edges | a rim, open toward the next basin; one spout; no roof over it, nothing put in it |
+| **court** | what walls it round; its level | paved; water, a cypress, pots by its size, **never in a stair's way or a pier's cell** |
+| **the land** | what's used beside a bank | a retaining wall; flat to it either side |
+| **building** | its solid columns, what reaches it, the hill, taller stone, water on its top | doors, a stair inside, windows, a roof (or a lean-to on the hill, or none) |
+| **parapet** | open edges of a top: no stone, no stair, **no land** at its height beyond | posts at true ends, pedestals at corners |
+
+Still to answer (found by going through every kind): a wall, an arched way and an arch in one run aren't the same thickness where they meet; a building's windows can look straight onto a neighbour's roof; buttresses are spaced by the grid, not the run; a pool rim across a step in the land; a sideways change of stone gets no joint; an arched way has no plinth or cornice where it's in a run of walls.
 
 ## Corbels
 
@@ -418,7 +445,7 @@ Stone pushed out a cell from stone that stands, with nothing beyond it, is held 
 
 A stair needs its way: the place at its foot, the place at its head, and the headroom over it and over its head (`World.way`). Nothing auto does builds into one:
 
-- **a tap** there is refused ("that's a stair's way: kept open");
+- **a tap** there raises the cell beside it instead; only where nothing beside it would stand is it refused ("that's a stair's way: kept open"), and held, it can still be raised anyway;
 - **a wall traced** across one leaves a gap there;
 - **a connection** stops short of one, and a stair that would climb straight into what stopped it isn't laid at all, so no stair ever leads into a wall;
 - **the rules' dressing** (lanterns, pots, pergolas) never stands in one, nor before a door. A flight's lantern goes beside where it arrives;
@@ -503,7 +530,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - every connection that reached where it was going can be walked from its start to its end (`nav.ts`);
   - a connection never cuts the hand's stone, and it either reaches or stops where it met something;
   - an edit changes piers and arches only within nine cells of what it touched;
-  - a climb too steep for its stroke is refused, saying why; drawn longer it's built, reaches the top, and can be climbed;
+  - a climb too steep for its stroke, with no room for a tower, is a walkway out toward it, saying why; drawn longer it's built, reaches the top, and can be climbed;
   - the rules dress every random world, the same way every time (replayed, the dressing is identical), using every kind of dressing; a tower is all one stone; about half the walls come out gated or arcaded;
   - the hand's dressing wins over the rules';
   - there's no cap: a column tapped up fourteen times is fourteen high, read as a tower, climbed by a fourteen-step flight that can be walked, and drawn to the top;

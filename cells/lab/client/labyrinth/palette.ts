@@ -59,7 +59,7 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   }
   if (hand === 'pool') {
     if (p.face === 'ground') return !w.pool(hi, hj) && w.free(...p.to) ? { pools: [[hi, hj, now]], why: 'pool' } : null;
-    return p.face === 'top' && w.stone(hk, hi, hj) && w.free(hk + 1, hi, hj) ? { basins: [[hk + 1, hi, hj, now]], why: 'basin', note: 'a basin let into the top' } : null;
+    return p.face === 'top' && w.block(hk, hi, hj) && w.free(hk + 1, hi, hj) ? { basins: [[hk + 1, hi, hj, now]], why: 'basin', note: 'a basin let into the top' } : null;
   }
   const [k, i, j] = p.face === 'ground' ? p.to : p.face === 'top' ? [w.topFrom(hk, hi, hj), hi, hj] : p.to;
   if (k >= CEIL || !inGrid(i, j)) return null;
@@ -101,7 +101,7 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
   const inside = closed(ring), filled = piece === 'pool' || piece === 'block';
   const cells = filled && inside ? [...ring, ...inside] : ring;
   if (piece === 'pool') {
-    const out = cells.filter(([i, j]) => (start.face === 'ground' ? w.ground(i, j) === h0 && !w.pool(i, j) && w.free(h0, i, j) : w.stone(h0 - 1, i, j) && w.free(h0, i, j)));
+    const out = cells.filter(([i, j]) => (start.face === 'ground' ? w.ground(i, j) === h0 && !w.pool(i, j) && w.free(h0, i, j) : w.block(h0 - 1, i, j) && w.free(h0, i, j)));
     if (!out.length) return null;
     const what = inside ? (start.face === 'ground' ? 'a pond, filling what the stroke closed round' : 'a basin, filling what the stroke closed round') : start.face === 'ground' ? `a channel of water, ${out.length} long` : `a basin along the top, ${out.length} long`;
     return start.face === 'ground' ? { pools: out.map(([i, j], s) => [i, j, now + s * 0.03]), why: 'pool', note: what } : { basins: out.map(([i, j], s) => [h0, i, j, now + s * 0.03]), why: 'basin', note: what };
@@ -187,4 +187,19 @@ export function closed(ring: Array<[number, number]>): Array<[number, number]> |
   const inside: Array<[number, number]> = [];
   for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (!on.has(`${i}.${j}`) && !out.has(`${i}.${j}`)) inside.push([i, j]);
   return inside.length ? inside : null;
+}
+
+/**
+ * A piece put where it's touched, and where it can't go as touched, the nearest thing it can be: on the top of what was
+ * touched, rather than out from its side over nothing (a stair, a cypress, water); a block out from it where there's no
+ * gap to bridge. Says what it did instead (`note`).
+ */
+export function placeOr(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: number, now: number): Op | null {
+  const op = place(w, hand, p, view, now);
+  if (op || hand === 'take' || p.face === 'ground') return op;
+  const [hk, hi, hj] = p.hit, tk = w.topFrom(hk, hi, hj);
+  const onTop: Pick = { face: 'top', hit: [tk - 1, hi, hj], to: [tk, hi, hj] };
+  if (hand === 'bridge') { const b = place(w, 'block', p, view, now); return b ? { ...b, note: 'no gap to bridge there: a block out from it' } : null; }
+  if (p.face === 'side' && (hand === 'stair' || hand === 'cypress' || hand === 'pool')) { const t = place(w, hand, onTop, view, now); return t ? { ...t, note: `on its top instead` } : null; }
+  return null;
 }

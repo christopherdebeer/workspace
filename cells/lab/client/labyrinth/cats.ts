@@ -210,7 +210,11 @@ export class Cats {
     if (c.gaze && this.t < c.gaze.until && !c.asleep) {
       hy = Math.max(-1.5, Math.min(1.5, wrap(Math.atan2(c.gaze.z - c.z, c.gaze.x - c.x) - c.yaw)));
       hp = Math.max(-0.6, Math.min(0.5, Math.atan2(c.gaze.y - c.y - 0.15, Math.hypot(c.gaze.x - c.x, c.gaze.z - c.z)) * 0.8));
-    } else c.gaze = null;
+    } else {
+      c.gaze = null;
+      // (awake and idle, its head drifts, looking about; walking, a little)
+      if (!c.asleep) { const t = c.stir.t, n = c.n * 1.7; hy = (c.moving > 0.02 ? 0.15 : 0.4) * Math.sin(t * 0.21 + n) * Math.sin(t * 0.13 + n * 0.6) + 0.1 * Math.sin(t * 0.71 + n * 2); hp = (c.moving > 0.02 ? 0 : 0.12) * Math.sin(t * 0.29 + n * 0.9); }
+    }
     const k = 1 - Math.exp(-dt * 5);
     c.head.yaw += (hy - c.head.yaw) * k; c.head.pitch += (hp - c.head.pitch) * k;
   }
@@ -255,7 +259,13 @@ export class Cats {
         const s = this.chooseRest(c, here);
         if (s) { c.resting = s.name; c.doing = 'on its way'; if (yield* this.goTo(c, s, WALK)) yield* this.settle(c, s, false); c.resting = ''; continue; }
       }
-      if (r < 0.9) { yield* this.wander(c); continue; }
+      if (r < 0.88) { yield* this.explore(c); continue; }
+      if (r < 0.91 && c.likes.play > 0.4) {
+        // (a sudden dash, for no reason anyone can see; then a wash, as if it never happened)
+        const here2 = this.place(c.at)!, d = reachable(this.P!, here2.id);
+        const far = this.P!.spots.filter((s) => isFinite(d[s.id]) && d[s.id] > 3 && d[s.id] < 9 && !this.taken(s, c));
+        if (far.length) { c.doing = 'dashing about'; yield* this.goTo(c, far[Math.floor(c.rng() * far.length)], RUN); yield* this.recover(c); continue; }
+      }
       c.doing = 'grooming';
       c.want = 'sit'; c.rate = 5; yield* this.wait(c, 1);
       c.want = 'groom'; yield* this.wait(c, 3 + c.rng() * 4);
@@ -294,7 +304,8 @@ export class Cats {
     }
     c.moving = 0; c.pitch = 0;
   }
-  /** along the perch graph to a place: false if there's no way, or the world changed under it on the way */
+  /** along the perch graph to a place: false if there's no way, or the world changed under it on the way. Runs of
+   * walking over open places go as one easy way through them (`wander`); the rest a link at a time */
   private *goTo(c: Cat, dest: Spot, speed: number): Task {
     const epoch = this.epoch;
     const from = this.place(c.at);
@@ -302,19 +313,118 @@ export class Cats {
     const path = route(this.P!, from.id, dest.id, (s) => this.taken(s, c) && s.name !== dest.name, (l) => (l.kind === 'hop' || l.kind === 'leap' ? 1.6 - c.likes.bold : 1));
     if (!path) return false;
     let a = from;
-    for (const l of path) {
+    for (let q = 0; q < path.length;) {
       if (this.epoch !== epoch) return false;
-      const b = this.P!.spots[l.to];
+      const run: Spot[] = [a];
+      for (let r = q; r < path.length && path[r].kind === 'walk' && !this.P!.spots[path[r].to].narrow; r++) run.push(this.P!.spots[path[r].to]);
+      if (run.length > 1) {
+        if (!(yield* this.wander(c, run, speed, epoch, run[run.length - 1] === dest))) return false;
+        a = run[run.length - 1]; q += run.length - 1;
+        continue;
+      }
+      const l = path[q], b = this.P!.spots[l.to];
       // (one at a time on what's narrow: it waits a little, then thinks again)
       for (let t = 0; b.narrow && this.list.some((o) => o !== c && !o.gone && (o.at === b.name || o.next === b.name)); t += this.dt) {
         if (t > 2.5) return false;
         c.want = 'stand'; c.moving = 0; yield;
       }
       c.next = b.name;
-      yield* this.traverse(c, a, b, l, speed);
+      yield* this.traverse(c, a, b, l, b.narrow ? Math.min(speed, WALK * 0.7) : speed);
       if (this.epoch !== epoch) { c.next = ''; return false; }
-      c.at = b.name; c.next = ''; a = b;
+      c.at = b.name; c.next = ''; a = b; q++;
     }
+    return true;
+  }
+  /** how high the ground is between two places, at a point along the way from one to the other */
+  private heightAlong(a: Spot, b: Spot): (x: number, z: number, f: number) => number {
+    const land = this.w!.land, w = this.w!;
+    const stairs = [a, b].filter((s) => s.kind === 'stair');
+    if (stairs.length) {
+      const u = (s: Spot, x: number, z: number) => 0.5 + (x - s.x) * DIRS[s.d][0] + (z - s.z) * DIRS[s.d][1];
+      return (x, z) => { const s = stairs.find((q) => { const v = u(q, x, z); return v >= 0 && v <= 1; }) ?? stairs[0]; return stairY(s.k, u(s, x, z)); };
+    }
+    if (a.ground && b.ground && land) return (x, z) => groundY(w, x + CENTER, z + CENTER);
+    return (_x, _z, f) => a.y + (b.y - a.y) * f;
+  }
+  /**
+   * A walk over open places as a cat walks it: not from middle to middle, but wherever in each it happens to pass (a
+   * little to one side or the other), corners cut in easy curves; its pace drifting, quickening and slowing; now and
+   * then a stop to look round, or to sit a moment; turning through its head first. Stairs are walked straight.
+   */
+  private *wander(c: Cat, run: Spot[], speed: number, epoch: number, last: boolean): Task {
+    const n = run.length, stairy = (s: Spot | undefined) => !!s && s.kind === 'stair';
+    // (where it passes through each: off the middle a little, where it's open; exactly on stairs, and where it stops)
+    const pts = run.map((s, q) => {
+      if (q === 0) return [c.x, c.z] as [number, number];
+      const free = s.kind === 'floor' && !s.narrow && !stairy(run[q - 1]) && !stairy(run[q + 1]) && !(q === n - 1 && last);
+      return [s.x + (free ? (c.rng() - 0.5) * 0.34 : 0), s.z + (free ? (c.rng() - 0.5) * 0.34 : 0)] as [number, number];
+    });
+    const along = run.slice(1).map((b, q) => this.heightAlong(run[q], b));
+    // (a sampled way: straight between corners, each corner cut on a curve inside its own place)
+    const sm: Array<{ x: number; z: number; seg: number }> = [];
+    const r = (q: number) => {
+      if (q <= 0 || q >= n - 1 || stairy(run[q]) || stairy(run[q - 1]) || stairy(run[q + 1]) || run[q].kind !== 'floor') return 0;
+      const l0 = Math.hypot(pts[q][0] - pts[q - 1][0], pts[q][1] - pts[q - 1][1]), l1 = Math.hypot(pts[q + 1][0] - pts[q][0], pts[q + 1][1] - pts[q][1]);
+      return Math.min(0.3, l0 * 0.45, l1 * 0.45);
+    };
+    for (let q = 0; q + 1 < n; q++) {
+      const [x0, z0] = pts[q], [x1, z1] = pts[q + 1], L = Math.hypot(x1 - x0, z1 - z0) || 1e-6, dx = (x1 - x0) / L, dz = (z1 - z0) / L;
+      const s0 = r(q), s1 = r(q + 1);
+      for (let t = s0; t <= L - s1 + 1e-6; t += 0.05) sm.push({ x: x0 + dx * t, z: z0 + dz * t, seg: q });
+      if (s1 > 0) {
+        const [x2, z2] = pts[q + 2], L2 = Math.hypot(x2 - x1, z2 - z1) || 1e-6;
+        const A = [x1 - dx * s1, z1 - dz * s1], B = [x1 + ((x2 - x1) / L2) * s1, z1 + ((z2 - z1) / L2) * s1];
+        for (let t = 0.1; t < 1; t += 0.1) { const u = 1 - t; sm.push({ x: u * u * A[0] + 2 * u * t * x1 + t * t * B[0], z: u * u * A[1] + 2 * u * t * z1 + t * t * B[1], seg: t < 0.5 ? q : q + 1 }); }
+      }
+    }
+    sm.push({ x: pts[n - 1][0], z: pts[n - 1][1], seg: n - 2 });
+    const cum = [0];
+    for (let q = 1; q < sm.length; q++) cum.push(cum[q - 1] + Math.hypot(sm[q].x - sm[q - 1].x, sm[q].z - sm[q - 1].z));
+    const total = cum[cum.length - 1];
+    const at = (d: number) => {
+      let q = 1; while (q < sm.length - 1 && cum[q] < d) q++;
+      const f = Math.max(0, Math.min(1, (d - cum[q - 1]) / Math.max(1e-6, cum[q] - cum[q - 1])));
+      const x = sm[q - 1].x + (sm[q].x - sm[q - 1].x) * f, z = sm[q - 1].z + (sm[q].z - sm[q - 1].z) * f, seg = f < 0.5 ? sm[q - 1].seg : sm[q].seg;
+      const [ax, az] = pts[seg], [bx, bz] = pts[seg + 1], ll = (bx - ax) ** 2 + (bz - az) ** 2;
+      const g = ll > 1e-9 ? Math.max(0, Math.min(1, ((x - ax) * (bx - ax) + (z - az) * (bz - az)) / ll)) : 1;
+      return { x, z, seg, y: along[seg](x, z, g) };
+    };
+    // (turned the way it's going first, if it's facing well away)
+    if (total > 0.05) { const p = at(Math.min(total, 0.2)); if (Math.abs(wrap(Math.atan2(p.z - c.z, p.x - c.x) - c.yaw)) > 1.6) yield* this.face(c, Math.atan2(p.z - c.z, p.x - c.x)); }
+    c.want = 'walk'; c.rate = 8;
+    let d = 0, v = 0, seg = -1;
+    const seed = c.n * 7.31;
+    while (d < total - 1e-4) {
+      if (this.epoch !== epoch) return false;
+      const t = c.stir.t;
+      // (its pace: drifting about what it means, easing in, slowing to stop)
+      const mood = 0.78 + 0.22 * Math.sin(t * 0.53 + seed) + 0.14 * Math.sin(t * 1.37 + seed * 2.1);
+      const goal = speed * mood * Math.min(1, (total - d) / 0.35 + 0.25);
+      v += (goal - v) * Math.min(1, this.dt * 3.5);
+      c.stride = v > 0.8 ? 0.46 : v > 0.5 ? 0.38 : 0.3;
+      const step = Math.min(total - d, v * this.dt);
+      d += step;
+      const p = at(d), py = c.y;
+      if (p.seg !== seg) { seg = p.seg; c.at = run[seg].name; c.next = run[seg + 1].name; }
+      // (heading: toward a little way ahead, the body following its head)
+      const ahead = at(Math.min(total, d + 0.22)), want = Math.atan2(ahead.z - p.z, ahead.x - p.x);
+      if (Math.hypot(ahead.x - p.x, ahead.z - p.z) > 0.02) c.yaw += wrap(want - c.yaw) * Math.min(1, this.dt * 6);
+      c.x = p.x; c.z = p.z; c.y = p.y;
+      c.pitch += (Math.atan2(c.y - py, step || 1e-3) * 0.5 - c.pitch) * Math.min(1, this.dt * 8);
+      c.phase += step / (c.stride * S); c.moving = v;
+      // (now and then a stop on the way: a look round; once in a while it sits a moment)
+      if (speed < 0.5 && d > 0.3 && total - d > 0.5 && c.rng() < this.dt * 0.05) {
+        c.moving = 0; v = 0; c.pitch = 0;
+        const sit = c.rng() < 0.25, a = c.yaw + (c.rng() - 0.5) * 2.6;
+        c.want = sit ? 'sit' : 'stand'; c.rate = 5;
+        c.gaze = { x: c.x + Math.cos(a) * 2, y: c.y + (c.rng() - 0.6) * 0.8, z: c.z + Math.sin(a) * 2, until: this.t + 1.4 };
+        yield* this.wait(c, (sit ? 1.6 : 0.6) + c.rng() * 1.2);
+        c.want = 'walk'; c.rate = 8;
+      }
+      yield;
+    }
+    c.at = run[n - 1].name; c.next = '';
+    c.moving = 0; c.pitch = 0;
     return true;
   }
   /** one link: a walk, a jump, or a way through a building unseen */
@@ -386,6 +496,8 @@ export class Cats {
     // (sleep, or watch)
     const sleep = c.want === 'curl' || c.rng() < 0.3 + 0.5 * c.likes.sleepy;
     if (sleep && !(s.narrow && s.kind === 'rail')) {
+      // (round once or so on the spot, first, as a cat does before it lies down)
+      if (c.want !== 'curl' && !s.narrow) { c.want = 'stand'; c.rate = 6; yield* this.wait(c, 0.3); yield* this.face(c, c.yaw + Math.PI * (1.2 + c.rng() * 0.8)); }
       c.want = 'curl'; c.rate = 1.6; c.asleep = true; c.awake = false;
       c.doing = `curled up asleep ${where}`.trim();
       const T = 40 + c.rng() * 90;
@@ -414,7 +526,7 @@ export class Cats {
     c.resting = '';
   }
   /** off somewhere it doesn't know well, or that looks out: a look, a sniff */
-  private *wander(c: Cat): Task {
+  private *explore(c: Cat): Task {
     const here = this.place(c.at)!, d = reachable(this.P!, here.id);
     let best: Spot | null = null, bs = -Infinity;
     for (const s of this.P!.spots) {

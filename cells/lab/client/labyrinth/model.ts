@@ -218,8 +218,9 @@ export class World {
   dressed(k: number, i: number, j: number): Dress | null { return inGrid(i, j) ? this.dress.get(key(k, i, j)) ?? null : null; }
   /** a floor to stand on at the foot of level k: the stone (not a pool), or the top of stone */
   floor(k: number, i: number, j: number) { if (!inGrid(i, j)) return false; const g = this.ground(i, j); return k === g ? !this.pool(i, j) && !this.bowl(k, i, j) : k > g && this.stone(k - 1, i, j) && !this.basin(k, i, j) && !this.bowl(k, i, j); }
-  /** water let into the top of the stone under a cell (a basin) */
-  basin(k: number, i: number, j: number) { return inGrid(i, j) && this.basins.has(key(k, i, j)) && this.stone(k - 1, i, j) && !this.stone(k, i, j); }
+  /** water let into the top of the stone under a cell (a basin): only a plain block takes one (an arch's deck, a thin
+   * wall, an arched way through haven't the depth) */
+  basin(k: number, i: number, j: number) { return inGrid(i, j) && this.basins.has(key(k, i, j)) && this.block(k - 1, i, j) && !this.stone(k, i, j); }
   /** a bowl the rules put where falling water lands */
   bowl(k: number, i: number, j: number) { return inGrid(i, j) && this.bowls.has(key(k, i, j)); }
   /**
@@ -627,10 +628,11 @@ export class World {
         pools = [region.reduce((b, c) => (Math.hypot(c[0] - cx, c[1] - cz) < Math.hypot(b[0] - cx, b[1] - cz) ? c : b))];
       }
       // (nothing the rules put in a court stands in a stair's way)
-      pools = pools.filter(([x, z]) => !this.way(this.ground(x, z), x, z));
+      // (nor in a pier's cell: a cloister's columns stand in it)
+      pools = pools.filter(([x, z]) => !this.way(this.ground(x, z), x, z) && !this.pier(this.ground(x, z), x, z));
       for (const [x, z] of pools) this.decor.push({ kind: 'pool', i: x, j: z, born: this.first(`w${x}.${z}`, when) });
       if (region.length >= TREE_COURT) {
-        const corners = region.filter(([x, z]) => !this.way(this.ground(x, z), x, z) && !pools.some((p) => p[0] === x && p[1] === z) && DIRS.filter(([a, b]) => !inside.has(key(0, x + a, z + b))).length >= 2);
+        const corners = region.filter(([x, z]) => !this.way(this.ground(x, z), x, z) && !this.pier(this.ground(x, z), x, z) && !pools.some((p) => p[0] === x && p[1] === z) && DIRS.filter(([a, b]) => !inside.has(key(0, x + a, z + b))).length >= 2);
         if (corners.length) {
           const q = hash(this.seed, id) % corners.length, [x, z] = corners[q];
           this.decor.push({ kind: 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) });
