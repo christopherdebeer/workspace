@@ -22,7 +22,7 @@ import { navigate } from './nav';
 import { buildings } from './buildings';
 import { inStone, parapets, wallArms } from './mesh';
 import { reach } from './form';
-import { surfaceY } from './land';
+import { groundY, retaining } from './context';
 import { SUN } from './render';
 
 export type SpotKind = 'floor' | 'stair' | 'arch' | 'coping' | 'ledge' | 'rail';
@@ -91,7 +91,7 @@ export function perches(w: World): Perches {
     if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { const s = add('arch', k, i, j, x, k, z, w.archway(k, i, j)); if (s) atCell.set(v, s.id); continue; }
     if (roofTop.has(v)) continue;
     if (k === g && decor.has(j * 1000 + i)) continue;
-    const y = w.land && k === g ? surfaceY(w.land, i + 0.5, j + 0.5) : k;
+    const y = w.land && k === g ? groundY(w, i + 0.5, j + 0.5) : k;
     if (k > g && !solid(x, y - 0.04, z)) continue;
     if (!roomy(x, y, z)) continue;
     const coping = k > 0 && w.wall(k - 1, i, j) >= 0;
@@ -124,7 +124,7 @@ export function perches(w: World): Perches {
     if (!a.ground) continue;
     for (const [p, q] of DIRS) {
       const b = spotAt(w.ground(a.i + p, a.j + q), a.i + p, a.j + q);
-      if (b?.ground && Math.abs(b.k - a.k) === 1) link(a, b, 'walk', 1.7);
+      if (b?.ground && Math.abs(b.k - a.k) === 1 && !retaining(w).has(`${a.i}.${a.j}.${DIRS.findIndex(([x, z]) => x === p && z === q)}`)) link(a, b, 'walk', 1.7);
     }
   }
 

@@ -64,6 +64,18 @@ Next for the land:
 - keeping open: a passage, view or court protected from what auto builds later;
 - the land shaped by hand.
 
+## Forms chosen by their surroundings
+
+What's built and the land it's on ask things of each other (`context.ts`, `buildings.ts`), worked out afresh each time:
+
+- **Retaining walls.** Where the land steps down a bank (one to three levels) and either side of it is used (a way, paving, a court, something built at the ground, a pool, a bowl), the bank is held by a wall of dressed stone instead of falling away: the ground flat to it either side, its face battered (thicker at its foot), coped along its top, a low upstand where the ground above is open, an end where it doesn't run on. Not where a stair climbs the bank (its steps hold it), nor along the stream. The walk, the picking and the cats all take the ground as held.
+- **Buildings stepping with the slope.** A mass built across ground at different levels, so many storeys each side, is read as steps: each its own building at its own height (the whole deep enough to be lived in, even where a step is a single cell deep), the lower leaning on the higher under a lean-to. Its downhill side stands on the wall that holds the bank under it.
+- **Set into a hill.** A house whose ground behind it comes up to its eaves leans on the hill: its roof falls away from it (leaning on more than one side, away from the highest), and it's come into from the hill above, a door at the hill's level, as well as from below. No window or door looks into the earth; none opens onto another building's roof.
+- **Water** asks for its own: a bowl where it falls, a lip at its spout, no roof over it (below).
+
+![story 15: a house built across a bank, two steps under lean-tos falling downhill; a tower set into the cliff, its roof falling away from the hill, a door from the hill above; a way up the slope, its banks held by walls](labyrinth/v-slope.jpg)
+![close: the steps, the walls holding the bank beside the way](labyrinth/v-slope-close.jpg)
+
 ## Water
 
 **The pool brush lets water into whatever it touches**: the ground (a pool), or a top, up off the ground (a basin, let into the stone, a rim round it). Traced, it runs a channel along the stroke, along the ground or along a top. **A stroke drawn round, back to where it began, fills what it closes round**: a pond on the ground, a basin across a terrace. (With the block brush the same: a platform, filled.)
@@ -543,6 +555,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 ## Next
 
 - **Cats, further**: tails and ears answering each other; a mother and kittens; cats on roofs; a cat followed into a building's door; more of a cat's own places (a sill, a pot, a sunny step).
+- **Surroundings, further**: terraces cut into a hill as a gesture (a way's stroke that levels the ground it crosses); a building's windows turned to the view and its blank wall to the hill; a garden wall following the slope in steps; a bridge's abutments built into the banks.
 - **Water, further**: fountains (a jet in a court's pool), runnels along a way, water through an arch (a mill-race), a basin read as a cistern; a stream turned aside by what's built.
 - **Intent brushes**: a *path* (say where you want to walk, and the walk graph makes it walkable), *keep open* (nothing is to go here).
 - **Stamps**: whole motifs put at once (a gate, a cloister, a loggia).

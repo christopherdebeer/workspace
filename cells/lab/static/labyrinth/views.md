@@ -55,6 +55,11 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ![Another: another seed: another piece of land](v-land-2.jpg)
 ![Built at its edge: a house built at the land's edge: four more cells of the same land appear that way, from the same seed](v-land-grown.jpg)
 
+## Forms chosen by their surroundings
+
+![15 · On the slope: a house across a bank, read as two steps under lean-tos falling downhill; a tower set into the cliff, its roof falling away from the hill, a door from the hill above; a way up the slope, its banks held by walls](v-slope.jpg)
+![Steps, and walls holding the banks: the house in two steps, its lean-tos; the paving beside the way held by a battered, coped wall](v-slope-close.jpg)
+
 ## Water
 
 ![14 · Water: a tower's basin spilling onto a terrace's (water finds water), that one into a bowl on the ground; a channel along a wall spilling at its end; a pond, a stroke of the pool brush drawn round](v-water.jpg)

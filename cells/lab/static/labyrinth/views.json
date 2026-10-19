@@ -214,6 +214,23 @@
   ]
  },
  {
+  "group": "Forms chosen by their surroundings",
+  "views": [
+   {
+    "name": "slope",
+    "title": "15 · On the slope",
+    "caption": "a house across a bank, read as two steps under lean-tos falling downhill; a tower set into the cliff, its roof falling away from the hill, a door from the hill above; a way up the slope, its banks held by walls",
+    "file": "v-slope.jpg"
+   },
+   {
+    "name": "slope-close",
+    "title": "Steps, and walls holding the banks",
+    "caption": "the house in two steps, its lean-tos; the paving beside the way held by a battered, coped wall",
+    "file": "v-slope-close.jpg"
+   }
+  ]
+ },
+ {
   "group": "Water",
   "views": [
    {

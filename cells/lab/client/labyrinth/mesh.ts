@@ -22,6 +22,7 @@ import { buildings, opening, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, key, unkey, type Span, type World } from './model';
 import { LAND, surfaceY } from './land';
+import { groundY, retaining } from './context';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
@@ -702,7 +703,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    */
   function landMesh() {
     const land = w.land!, B = w.extent(), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1, RES = (x1 - x0) * (z1 - z0) > 500 ? 3 : 4;
-    const Y = (gx: number, gz: number) => surfaceY(land, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
+    const Y = (gx: number, gz: number) => groundY(w, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     const nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
     const P = (a: number, b: number): V3 => { const gx = x0 + a / RES, gz = z0 + b / RES; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
@@ -748,6 +749,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: selected.has(key(g, i, j)) };
       quad([cx + e(2), y, cz + e(3)], [cx + 1 - e(0), y, cz + e(3)], [cx + 1 - e(0), y, cz + 1 - e(1)], [cx + e(2), y, cz + 1 - e(1)], [0, 1, 0], 0.95, MAT.court);
     }
+    // (banks held by walls, where what's beside them is used: context.ts)
+    for (const r of new Set(retaining(w).values())) retainingWall(r);
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     // (what grows and lies on it, sparing, where nothing's built)
     const r = (...n: number[]) => hash(land.seed, ...n) / 4294967296;
@@ -787,6 +790,33 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       else if (!bank && r(q, 30) < 0.035) cypress(i, j, g, -1e3, 3 + 0.999 * r(q, 42));
     }
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
+  }
+  /**
+   * A retaining wall, holding a bank where it's used: along the edge between the high cell and the low, its face out
+   * into the low one, battered (thicker at its foot), from a little under the low ground up to the high, coped; a low
+   * upstand over the coping where the ground above is open; an end where it doesn't run on
+   */
+  function retainingWall(r: { i: number; j: number; d: number; lo: number; hi: number }) {
+    const [a, b] = DIRS[r.d], [ta, tb] = DIRS[(r.d + 1) % 4], bx = X(r.i) + 0.5 + a * 0.5, bz = Z(r.j) + 0.5 + b * 0.5;
+    const up = w.occupied(r.hi, r.i, r.j) ? 0 : 0.1, yb = r.lo - 0.35, yt = r.hi + up, TB = 0.24, TT = 0.13, C = 0.05;
+    const P = (s: number, u: number, y: number): V3 => [bx + ta * s + a * u, y, bz + tb * s + b * u];
+    const on = (sg: number) => retaining(w).has(`${r.i + sg * ta}.${r.j + sg * tb}.${r.d}`);
+    cur = { born: -1e3, pivot: yb, how: 1, tone: (((r.i * 73856093) ^ (r.j * 19349663) ^ (r.d * 83492791)) >>> 0) / 4294967296, dress: 0, sel: false };
+    const n = Math.hypot(yt - yb, TB - TT);
+    quad(P(-0.5, TB, yb), P(0.5, TB, yb), P(0.5, TT, yt), P(-0.5, TT, yt), [a * (yt - yb) / n, (TB - TT) / n, b * (yt - yb) / n], [0.55, 0.55, 0.9, 0.9], MAT.stone);
+    // (its coping: out a little either side, its top, its edges)
+    const c0 = -0.07, c1 = TT + 0.04;
+    quad(P(-0.5, c0, yt + C), P(0.5, c0, yt + C), P(0.5, c1, yt + C), P(-0.5, c1, yt + C), [0, 1, 0], 1, MAT.stone);
+    quad(P(-0.5, c1, yt), P(0.5, c1, yt), P(0.5, c1, yt + C), P(-0.5, c1, yt + C), [a, 0, b], 0.9, MAT.stone);
+    quad(P(-0.5, c1, yt), P(0.5, c1, yt), P(0.5, TT, yt), P(-0.5, TT, yt), [0, -1, 0], 0.5, MAT.stone);
+    if (up > 0) quad(P(-0.5, c0, r.hi), P(0.5, c0, r.hi), P(0.5, c0, yt + C), P(-0.5, c0, yt + C), [-a, 0, -b], 0.85, MAT.stone);
+    for (const sg of [-1, 1]) {
+      if (on(sg)) continue;
+      const s = sg * 0.5;
+      quad(P(s, 0, yb), P(s, TB, yb), P(s, TT, yt), P(s, 0, yt), [ta * sg, 0, tb * sg], 0.8, MAT.stone);
+      quad(P(s, c0, yt), P(s, c1, yt), P(s, c1, yt + C), P(s, c0, yt + C), [ta * sg, 0, tb * sg], 0.9, MAT.stone);
+      if (up > 0) quad(P(s, c0, r.hi), P(s, 0, r.hi), P(s, 0, yt), P(s, c0, yt), [ta * sg, 0, tb * sg], 0.85, MAT.stone);
+    }
   }
   /** a thin wall: a wall's thickness, full height, running out from its middle to the stone beside it */
   function thinWall(k: number, i: number, j: number) {
@@ -1187,6 +1217,6 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
 export function inLand(w: World, x: number, y: number, z: number): boolean {
   if (!w.land) return false;
   if (!w.onSlab(Math.floor(x + CENTER), Math.floor(z + CENTER))) return false;
-  const sy = surfaceY(w.land, x + CENTER, z + CENTER);
+  const sy = groundY(w, x + CENTER, z + CENTER);
   return sy >= 0 && y < sy;
 }

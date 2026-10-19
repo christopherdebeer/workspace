@@ -167,14 +167,15 @@ export const groundOf = (land: Land, i: number, j: number) => (onLand(i, j) ? la
  * its column's level through its middle, meeting its neighbours' across the band at its edge, roughened where it slopes.
  * Off the land, nothing (−1).
  */
-export function surfaceY(land: Land, x: number, z: number): number {
+export function surfaceY(land: Land, x: number, z: number, sharp?: (i: number, j: number, d: number) => boolean): number {
   const i = Math.floor(x), j = Math.floor(z);
   if (!onLand(i, j)) return -1;
   // (the stream's bed a little under its banks)
   const G = (a: number, b: number) => { const x = Math.max(DOMAIN.i0, Math.min(DOMAIN.i1, a)), y = Math.max(DOMAIN.j0, Math.min(DOMAIN.j1, b)); return land.g[atD(x, y)] - (land.water.has(y * 1000 + x) ? 0.3 : 0); };
   const fx = x - i - 0.5, fz = z - j - 0.5, sx = Math.sign(fx) || 1, sz = Math.sign(fz) || 1;
   // (how far into the band toward the neighbour each way: none through the flat middle, a half at the cell's edge)
-  const wx = 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fx)), wz = 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fz));
+  // (where a bank's held by a wall (`sharp`, toward a neighbour: 0 +x, 1 +z, 2 −x, 3 −z), each side flat to the wall)
+  const wx = sharp?.(i, j, sx > 0 ? 0 : 2) ? 0 : 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fx)), wz = sharp?.(i, j, sz > 0 ? 1 : 3) ? 0 : 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fz));
   const g0 = G(i, j), gx = G(i + sx, j), gz = G(i, j + sz), gd = G(i + sx, j + sz);
   let y = g0 + wx * (gx - g0) + wz * (gz - g0) + wx * wz * (gd - gx - gz + g0);
   // (rough where it slopes: a bank's not a ramp)

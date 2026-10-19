@@ -569,6 +569,22 @@ stands(s4, 'story 4');
   { const ring = [[2, 2], [3, 2], [4, 2], [4, 3], [4, 4], [3, 4], [2, 4], [2, 3]]; ok('a stroke drawn round: what it closes round', JSON.stringify(P.closed(ring)) === '[[3,3]]'); ok('a stroke that doesn\'t close: nothing', P.closed(ring.slice(0, 5)) === null); }
   { const w = new World(9); w.apply({ add: [[0, 3, 3, 0]] }); const op = P.place(w, 'pool', { face: 'top', hit: [0, 3, 3], to: [1, 3, 3] }, 0, 0); ok('pool on a top: a basin let into it', !!op?.basins?.length); w.apply(op); ok('and a lone basin on a block spills over its deepest edge, into a bowl', w.falls.length === 1 && w.falls[0].into === 'bowl', w.falls); }
 }
+// ─── forms chosen by their surroundings (context.ts, buildings.ts) ───
+{
+  const CX = await load('../client/labyrinth/context.ts');
+  const w = story(15), R = CX.retaining(w), bs = BU.buildings(w).list;
+  ok('story 15: banks beside the way held by retaining walls', R.size >= 2 && [...R.values()].every((r) => r.hi - r.lo >= 1 && r.hi - r.lo <= 3), R.size);
+  ok('story 15: a held bank is flat to its wall either side', [...R.values()].every((r) => { const [a, b] = DIRS[r.d], x = r.i + 0.5 + a * 0.49, z = r.j + 0.5 + b * 0.49, x2 = r.i + 0.5 + a * 0.51, z2 = r.j + 0.5 + b * 0.51; return Math.abs(CX.groundY(w, x, z) - r.hi) < 0.01 && Math.abs(CX.groundY(w, x2, z2) - r.lo) < 0.01; }));
+  ok('story 15: no wall where a stair climbs the bank', [...R.values()].every((r) => { const [a, b] = DIRS[r.d]; return w.stair(r.lo, r.i + a, r.j + b) !== (r.d + 2) % 4; }));
+  const step = (i, j) => bs.find((b) => b.cols.some((c) => c[0] === i && c[1] === j));
+  const up = step(10, 4), low = step(10, 7), cliff = step(2, 7);
+  ok('story 15: a house across a bank read as two steps, each its own building', up && low && up !== low && up.h === low.h + 1, { up: up?.h, low: low?.h });
+  ok('story 15: each step under a lean-to falling downhill', up?.roof === 'shed' && low?.roof === 'shed' && up.fall === 1 && low.fall === 1, { up: [up?.roof, up?.fall], low: [low?.roof, low?.fall] });
+  ok('story 15: the house set into the cliff: its roof falls away from the hill', cliff?.roof === 'shed' && cliff.fall === 1, [cliff?.roof, cliff?.fall]);
+  ok('story 15: and it\'s come into from the hill above', cliff?.openings.some((o) => o.kind === 'door' && o.k === w.ground(2, 6) && o.d === 3), cliff?.openings);
+  ok('story 15: no window or door into the earth', bs.every((b) => b.openings.every((o) => !w.earth(o.k, o.i + DIRS[o.d][0], o.j + DIRS[o.d][1]))));
+  ok('the flat slab: no retaining walls', CX.retaining(story(8)).size === 0);
+}
 // ─── the cats (perches.ts, cats.ts): where they can be, and their lives over what's built and what's built in front of them ───
 {
   const CT = await load('../client/labyrinth/cats.ts');

@@ -39,6 +39,7 @@ export function story(stage: number): World {
   if (stage === 12) return onTheLand();
   if (stage === 13) return forCats();
   if (stage === 14) return water();
+  if (stage === 15) return onTheSlope();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -313,5 +314,25 @@ function water(): World {
   apply(run(w, 'pool', top(2, 8), [[2, 8], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8]], 0, t));
   // (a pond: the pool brush drawn round, back to its start)
   apply(run(w, 'pool', g(9, 2), [[9, 2], [10, 2], [11, 2], [11, 3], [11, 4], [11, 5], [10, 5], [9, 5], [9, 4], [9, 3]], 0, t));
+  return w;
+}
+
+/**
+ * storyboard 15: forms chosen by their surroundings, on the land. A house built across a bank, two storeys on each
+ * side of it: read as two steps, each under a lean-to, the lower against the higher, the higher's falling away from the
+ * hill. A house set into a cliff, three storeys: its roof falls away from the hill and it's come into from the hill
+ * above as well as from below. A way up the slope: where it runs along a bank, the bank's held by a wall.
+ */
+function onTheSlope(): World {
+  const w = new World(41, 6), t = -100;
+  const g = (i: number, j: number): Pick => { const k = w.ground(i, j); return { face: 'ground', hit: [k - 1, i, j], to: [k, i, j] }; };
+  const raise = (i: number, j: number, n: number) => w.apply({ add: Array.from({ length: n }, (_, k) => [w.ground(i, j) + k, i, j, t] as [number, number, number, number]) }, t);
+  // (across the bank: two storeys on each side of it)
+  for (const i of [10, 11]) for (const j of [4, 5, 6, 7]) raise(i, j, 2);
+  // (set into the cliff: three storeys, the hill at its back two storeys up)
+  for (const i of [2, 3]) raise(i, 7, 3);
+  // (a way from the low ground up past them)
+  const op = trace(w, g(7, 10), [[7, 10], [7, 9], [7, 8], [7, 7], [7, 6], [7, 5], [7, 4], [8, 4], [8, 3], [8, 2]], g(8, 2), () => t, t, [], 'way');
+  if (op && !('refused' in op)) w.apply({ ...op, alts: undefined }, t);
   return w;
 }

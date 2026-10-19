@@ -20,7 +20,7 @@
 import { hash, seeded, type Rand } from '../kit/rng';
 import { CENTER, DIRS, unkey, type World } from './model';
 import { inStone } from './mesh';
-import { surfaceY } from './land';
+import { groundY } from './context';
 import { perches, route, reachable, stairY, type Link, type Perches, type Spot } from './perches';
 import { POSES, S, cat as body, gait, look, mix, type Out, type Pose, type PoseName } from './catbody';
 
@@ -226,7 +226,7 @@ export class Cats {
     // (on a place that's still there, it's held (a parapet's top isn't stone a touch strikes, but it's stood on))
     const s = this.place(c.at);
     if (s && Math.hypot(s.x - c.x, s.y - c.y, s.z - c.z) < 0.2) return;
-    const ground = w.land ? surfaceY(w.land, c.x + CENTER, c.z + CENTER) : 0;
+    const ground = groundY(w, c.x + CENTER, c.z + CENTER);
     if (c.y > ground + 0.05 && !solid(c.y - 0.06) && !solid(c.y - 0.2) && c.moving < 0.02 && this.t - this.built > 1) this.stale = true;
   }
 
@@ -320,14 +320,14 @@ export class Cats {
   /** one link: a walk, a jump, or a way through a building unseen */
   private *traverse(c: Cat, a: Spot, b: Spot, l: Link, speed: number): Task {
     const land = this.w!.land;
-    const groundY = (x: number, z: number) => (land ? surfaceY(land, x + CENTER, z + CENTER) : 0);
+    const onGroundY = (x: number, z: number) => (land ? groundY(this.w!, x + CENTER, z + CENTER) : 0);
     if (l.kind === 'walk') {
       const y0 = c.y, onGround = a.ground && b.ground;
       // (on a stair: along its steps' noses, by where it is in the stair's cell)
       const u = (s: Spot, x: number, z: number) => 0.5 + (x - s.x) * DIRS[s.d][0] + (z - s.z) * DIRS[s.d][1];
       const stairs = [a, b].filter((s) => s.kind === 'stair');
       const onStair = (x: number, z: number) => { const s = stairs.find((q) => { const v = u(q, x, z); return v >= 0 && v <= 1; }) ?? stairs[0]; return stairY(s.k, u(s, x, z)); };
-      yield* this.walkTo(c, b.x, b.z, speed, (f, x, z) => (stairs.length ? onStair(x, z) : onGround ? groundY(x, z) : y0 + (b.y - y0) * f));
+      yield* this.walkTo(c, b.x, b.z, speed, (f, x, z) => (stairs.length ? onStair(x, z) : onGround ? onGroundY(x, z) : y0 + (b.y - y0) * f));
       return;
     }
     if (l.kind === 'inside') {

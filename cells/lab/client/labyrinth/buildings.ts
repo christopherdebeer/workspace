@@ -66,9 +66,22 @@ function find(w: World): Buildings {
   const seen = new Set<number>();
   // (the walk as the stone shows it, and what of it can be reached from the slab)
   const nav = navigate(w), ground = new Set<number>(), st: number[] = [];
-  for (const v of nav.places) if (unkey(v)[0] === 0) { ground.add(v); st.push(v); }
+  // (on the land, its ground at each column's own level)
+  for (const v of nav.places) { const [k, i, j] = unkey(v); if (k === w.ground(i, j)) { ground.add(v); st.push(v); } }
   while (st.length) { const v = st.pop()!; for (const u of nav.next.get(v) ?? []) if (!ground.has(u)) { ground.add(u); st.push(u); } }
   const chance = (p: number, ...n: number[]) => hash(w.seed, ...n) % 1000 < p * 1000;
+  // (masses as a whole, whatever height each column of them reaches: one built across a slope, steps of it at
+  // different heights, is read as stepping, each step a building of its own if the whole is deep)
+  const anyH = (i: number, j: number) => solid(i, j, height(i, j));
+  const massOf = new Map<string, { deep: boolean; heights: Set<number> }>();
+  for (let j = e.j0; j <= e.j1; j++) for (let i = e.i0; i <= e.i1; i++) {
+    if (!anyH(i, j) || massOf.has(`${i}.${j}`)) continue;
+    const m = { deep: false, heights: new Set<number>() }, q: Array<[number, number]> = [[i, j]], cs: Array<[number, number]> = [];
+    massOf.set(`${i}.${j}`, m);
+    while (q.length) { const [x, z] = q.pop()!; cs.push([x, z]); m.heights.add(height(x, z)); for (const [a, b] of DIRS) if (anyH(x + a, z + b) && !massOf.has(`${x + a}.${z + b}`)) { massOf.set(`${x + a}.${z + b}`, m); q.push([x + a, z + b]); } }
+    const has = new Set(cs.map(([x, z]) => `${x}.${z}`));
+    m.deep = cs.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`));
+  }
 
   for (let j = e.j0; j <= e.j1; j++) for (let i = e.i0; i <= e.i1; i++) {
     const h = height(i, j);
@@ -82,7 +95,8 @@ function find(w: World): Buildings {
     // (a stair tower, put where a climb was too steep for a flight: a building however slim, two high or more)
     const stairTower = cols.find(([x, z]) => isTower(w.rules.get(key(0, x, z))));
     const deep = cols.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`)), tower = (cols.length <= 2 && h >= 3) || !!stairTower;
-    if (!deep && !tower) continue;
+    const whole = massOf.get(`${i}.${j}`);
+    if (!deep && !tower && !(whole?.deep && whole.heights.size > 1)) continue;
     const mine = new Set(cols.map(([x, z]) => `${x}.${z}`)), id = Math.min(...cols.map(([x, z]) => key(h - 1, x, z)));
     const b: Building = { cols, h, i0, i1, j0, j1, rect: cols.length === (i1 - i0 + 1) * (j1 - j0 + 1), tower, openings: [], inside: false, walked: false, roof: null, id, fall: -1 };
     // (its faces: each column's sides that look out, at each level, and what's outside them)
@@ -90,7 +104,7 @@ function find(w: World): Buildings {
     for (const [x, z] of cols) for (let d = 0; d < 4; d++) {
       const [a, bb] = DIRS[d];
       if (mine.has(`${x + a}.${z + bb}`)) continue;
-      for (let k = w.ground(x, z); k < h; k++) if (!w.stone(k, x + a, z + bb) && w.stair(k, x + a, z + bb) < 0) faces.push({ k, i: x, j: z, d, out: [k, x + a, z + bb] });
+      for (let k = w.ground(x, z); k < h; k++) if (!w.stone(k, x + a, z + bb) && w.stair(k, x + a, z + bb) < 0 && !w.earth(k, x + a, z + bb)) faces.push({ k, i: x, j: z, d, out: [k, x + a, z + bb] });
     }
     // (its top: walked if a way arrives there from beyond it)
     const tops = cols.map(([x, z]) => key(h, x, z)).filter((v) => nav.places.has(v)), topSet = new Set(tops);
@@ -98,7 +112,9 @@ function find(w: World): Buildings {
     const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u))) || (!!stairTower && tops.length > 0);
     // (doors where ways arrive against its walls, at height)
     const placeAt = (c: Cell) => key(...c);
-    const upper = faces.filter((f) => f.k >= 1 && standing(w, ...f.out));
+    // (above its own foot: a door from a way at height, or (set into a bank) from the hill above)
+    // (not out onto another building's top: that's under its roof)
+    const upper = faces.filter((f) => f.k > w.ground(f.i, f.j) && standing(w, ...f.out) && !(anyH(f.out[1], f.out[2]) && height(f.out[1], f.out[2]) === f.k));
     // (a stair inside, if a way at one of those doors, or on its top, can't be reached from the slab otherwise)
     const unreached = upper.some((f) => !ground.has(placeAt(f.out))) || (arrives && tops.some((v) => !ground.has(v)));
     const foot = faces.filter((f) => f.k === w.ground(f.i, f.j) && standing(w, ...f.out) && ground.has(placeAt(f.out)));
@@ -146,9 +162,13 @@ function find(w: World): Buildings {
       // (the rules' choice: leaning on taller stone, a shed roof falling away from it; square, hipped (now and then a dome
       // on a tower); long, a gable along it)
       const W = i1 - i0 + 1, D = j1 - j0 + 1;
-      const taller = [0, 1, 2, 3].filter((d) => { const [a, bb] = DIRS[d]; return cols.every(([x, z]) => mine.has(`${x + a}.${z + bb}`) || height(x + a, z + bb) > h) && cols.some(([x, z]) => !mine.has(`${x + a}.${z + bb}`)); });
-      b.roof = taller.length === 1 ? 'shed' : W === D ? (tower && chance(0.35, id, 4) ? 'dome' : 'hipped') : chance(0.25, id, 5) ? 'hipped' : 'gable';
-      if (taller.length === 1) b.fall = (taller[0] + 2) % 4;
+      // (against taller stone, or set into a bank whose ground comes up to its eaves: the hill)
+      const taller = [0, 1, 2, 3].filter((d) => { const [a, bb] = DIRS[d]; const out = cols.filter(([x, z]) => !mine.has(`${x + a}.${z + bb}`)); return out.length > 0 && out.filter(([x, z]) => height(x + a, z + bb) > h || (!!w.land && w.ground(x + a, z + bb) >= h - 1)).length * 2 >= out.length; });
+      // (leaning on more than one side, it falls away from the highest)
+      const rise = (d: number) => { const [a, bb] = DIRS[d], o = cols.filter(([x, z]) => !mine.has(`${x + a}.${z + bb}`)); return o.reduce((t, [x, z]) => t + Math.max(height(x + a, z + bb), w.ground(x + a, z + bb)), 0) / Math.max(1, o.length); };
+      const lean = taller.sort((p, q) => rise(q) - rise(p) || p - q)[0];
+      b.roof = taller.length ? 'shed' : W === D ? (tower && chance(0.35, id, 4) ? 'dome' : 'hipped') : chance(0.25, id, 5) ? 'hipped' : 'gable';
+      if (taller.length) b.fall = (lean + 2) % 4;
     }
     if (b.roof === 'shed' && b.fall < 0) b.fall = (hash(w.seed, id, 6) % 4);
     if (b.roof && b.roof !== 'shed') b.fall = -1;
