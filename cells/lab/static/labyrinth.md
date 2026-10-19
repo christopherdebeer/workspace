@@ -152,6 +152,8 @@ The brief's first test asks whether someone, without instruction, can build this
 
 And `?story=8` is **a labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a gallery of arches on its walls from corner tower to corner tower, a gate through each side, one framing the stair beyond). A stair climbing behind a wall, its foot hidden and its head showing over the wall, to a landing tower. From there a bridge over the passage below to the cloister's corner, so one way crosses another. A tall, narrow slot between two towers, bridged high up. And houses under roofs, their doors, windows and stairs inside the rules' own.
 
+And `?story=11` is **gestures read**: a stroke drawn round back to its start (a court walled in, a gate where it began), a wall traced with two pauses (a gate at each), a climb too steep for its stroke (a stair tower beside the terrace), a bridge traced through a taller tower (round it), and a climb with a block in its way (round it to a straight flight).
+
 And `?story=10` is **flow**: a wall traced on the diagonal (drawn as one straight diagonal wall), a court whose corners sweep round, a terrace out from a tower and stone pushed out over nothing (carried on piers that meet it in coves), and a wall traced across a stair's foot, which leaves the stair's way open.
 
 And `?story=9` is **features, placements and rhythms**: a colonnade along the plaza between two towers, a jali round one tower's top; a terrace and the flight up to it, balustraded; a court screened on one side by a jali; a house with mashrabiya at its upper windows and colonnettes at its openings, and a pergola over the yard in front of it.
@@ -285,6 +287,31 @@ The cells are what's built, selected and walked. How each is drawn is worked out
 
 Next for the form: junctions by kind (a wall into a tower with a buttress at the joint; a stair against a wall with its side wall; a parapet into a tower), and a few variants of each corner, chosen alike along a run.
 
+## Gestures read for more than their ends
+
+A gesture used to be read as "join where it started to where it ended", and refused when that couldn't be built. Now it's read for more of what was drawn, the nearest buildable thing is built when the plain reading can't be, and **the other ways it could have been read are offered after it**: a row of chips over the brushes, the one it is now marked. A touch reads it so instead, in place of what it built (it's undone and redone as one thing). The row goes with the next touch on the stone.
+
+| Drawn | Read as | Also offered |
+|---|---|---|
+| a stroke on the stone | a wall, its kind the rules' choice | the other kinds: a wall, a gated wall, an arcaded wall, a thin wall |
+| a stroke drawn round, back to where it began (a ring of eight cells or more) | a court, walled round, a gate where it began | a ring of wall, an arcaded court, a thin wall |
+| a pause on the way (the finger still a moment) | a gate there, in a wall; a landing there, on a climb (if the climb leaves room) | |
+| a climb too steep for a flight along the stroke | a stair tower beside the destination (an octagonal turret, its door at its foot facing the way it was come to, a stair inside, its top joined to the top it's beside) | |
+| a climb whose flight would stop short on something in the way | round it, to a straight flight into the destination; or a stair tower | the flight as drawn, joining what it meets |
+| a bridge four to seven long | one great arch, or an arcade, the rules' choice | the other |
+| a bridge or walkway with something in the way at its height | round it, the shortest way | joining what it meets |
+| a climb that would make it | a flight | a stair tower |
+| a tap in a stair's way | refused, saying why | raise it anyway |
+
+Declines are counted: the page keeps the last 200 gestures that came to nothing or less than was asked (`__labyrinth.declines()`), and the random-gesture check reports them. Over 60 worlds of random strokes, connections that stop short of where they were going fell from 48 in 175 to 8 in 172; ten climbs are still too steep with no room for a tower.
+
+![11 · gestures read: a loop walls in a court; pauses make gates; a stair tower where a climb was too steep; a bridge round a tower in its way; a climb round a block to a straight flight](labyrinth/v-story-11.jpg)
+![a stair tower, and ways round](labyrinth/v-gestures-close.jpg)
+
+## Corbels
+
+Stone pushed out a cell from stone that stands, with nothing beyond it, is held out on corbels rather than carried on piers to the ground: three brackets out of the face it's held from, curving up and out to the outer edge, so the way under it stays open. A pier asked for there (select's *two bays* reading puts one) still stands. Deeper projections are still carried on piers, which meet them in coves.
+
 ## Ways kept open
 
 A stair needs its way: the place at its foot, the place at its head, and the headroom over it and over its head (`World.way`). Nothing auto does builds into one:
@@ -389,6 +416,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - a high walkway's free end comes down on a pier onto a walkway below: the pier is slim, stands aside, and the walkway below can still be walked past it, and built on;
   - the wall piece run round makes thin walls, which close a court; a tap on a thin wall goes on as one, up or out along its way; struck where it is, not beside it;
   - the random worlds also switch readings on what select would take up, dress stones, and run pieces; every arcade's bays spring alike;
+  - gestures read: a loop walls in a court (and is one), a wall offers its other kinds, a pause makes a gate in a wall and a landing in a climb (kept when written down), a bridge blocked at its height goes round and reaches, a climb too steep is a stair tower with a door at its foot and a stair inside that reaches the top, and where there's no room for one it's refused, saying why;
+  - corbels: stone pushed out a cell is held out on corbels, from stone that stands, with nothing beyond; a pier asked for there still stands;
   - over 60 random worlds of gestures, auto never builds into a stair's way, and never lays a stair that climbs into stone;
   - form: a wall that turns once is a curve, a stair-step of turns is a diagonal that meets a straight wall at its thickness, a T is a post; a touch strikes the curve where it's drawn; storyboard 10 is what it says, its diagonal and its court not taken for buildings;
   - the arcade read as a colonnade: every bay flat, under an entablature; read back as arches, none a colonnade;
@@ -398,7 +427,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - undo, and doing it again, gives the same world;
   - what's written down makes the same world again;
   - each storyboard stage is what it says it is.
-- `node cells/lab/devtools/labyrinth-smoke.mjs` does the palette on a fresh stone (each piece where it's touched: block; arch; arch on arch, making one tall arch; stair against a block; a bridge across a three-cell gap on one arch; cypress; pool; take). It also does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall; what was shown before letting go is exactly what's built), a climb too steep for its stroke (refused, and the hint says why), and a take-stroke carving under the walkway (an arch carries it). On storyboard 6 it uses the brushes:
+- `node cells/lab/devtools/labyrinth-smoke.mjs` does the palette on a fresh stone (each piece where it's touched: block; arch; arch on arch, making one tall arch; stair against a block; a bridge across a three-cell gap on one arch; cypress; pool; take). It also does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall; what was shown before letting go is exactly what's built), the chips after the wall (read it as a thin wall, and back), a climb too steep for a flight (a stair tower), and a take-stroke carving under the walkway (an arch carries it). On storyboard 6 it uses the brushes:
   - the hand says what an arch is and that it's part of an arcade;
   - select takes up the arch, then the arcade; the card shows every reading, the current one marked; it switches to lintels, on to another, and back to arches, leaving no operations behind; the structure scope takes up everything joined; the card's dressing dresses it whole;
   - the piece brush, touched again, opens its sheet; brick from it is held and shown on the brush (still called piece), and dresses a stone;

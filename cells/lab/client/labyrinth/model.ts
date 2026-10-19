@@ -66,10 +66,15 @@ export interface Op {
   /** dressing (`DRESS`) at a cell of stone: what it's made of, moss, ivy, a parapet round its top, a lantern or a pot on
    * it; on (1) or off (0). It never changes what stands */
   dress?: Array<[number, number, number, number, number]>;
+  /** what it is as a reading of the gesture that made it, and the other ways that gesture could have been read (a
+   * touch after it reads it so instead); neither kept */
+  reading?: string; alts?: Alt[];
 }
 /** readings of the rules' work a hand can switch to: an arch read as a lintel, a pier asked for; a building's roof (none, or
  * which kind), kept at the lowest cell of its top */
-export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14 } as const;
+export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14, tower: 20 } as const;
+/** a stair tower (kept at its foot): a building however slim, its door at its foot facing the way `tower + d` says */
+export const isTower = (r: number | undefined) => r !== undefined && r >= RULE.tower && r < RULE.tower + 4;
 /** dressing: three stones (travertine is the stone's own), then what's on it */
 export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7, balustrade: 8, jali: 9, pergola: 10, mashrabiya: 11, colonnettes: 12 } as const;
 /** a cell's dressing: each part set (by the hand, or by the rules' own dressing, character.ts) or not; a part set off
@@ -88,7 +93,13 @@ export interface Dress {
  * it's replayed, against what's there then: landings and walkways on stone under them, steps spread evenly where it
  * climbs. It never cuts the hand's stone: meeting stone at the height it's walking, it stops there and joins it.
  */
-export interface Connect { from: Cell; to: Cell | null; path: Array<[number, number]> }
+export interface Connect {
+  from: Cell; to: Cell | null; path: Array<[number, number]>;
+  /** where the stroke paused (indices along it, after its start): landings there, if the climb leaves room */
+  rest?: number[];
+}
+/** another way a gesture could have been meant */
+export interface Alt { label: string; op: Op }
 /** how a connection came out when it was worked out: whether it reached where it was going, where it stopped */
 export interface Reached { reached: boolean; stopped: number; cells: Cell[] }
 /** an arch, carrying a run of stone along an axis (0 x, 1 z): its level, first cell, length, and the level it springs from */
@@ -147,6 +158,7 @@ export class World {
   dress = new Map<number, Dress>();
   /** what it takes to stand: piers (when raised), arches, the air under arches, courtyards, what grows in them */
   piers = new Map<number, number>();
+  corbels = new Map<number, number>();
   spans: Span[] = [];
   private spanOf = new Map<number, Span>();
   private under = new Set<number>();
@@ -164,6 +176,8 @@ export class World {
   span(k: number, i: number, j: number): Span | null { return inGrid(i, j) ? this.spanOf.get(key(k, i, j)) ?? null : null; }
   /** anything at a cell: stone, a stair, a pier */
   occupied(k: number, i: number, j: number) { return k >= 0 && k < CEIL && inGrid(i, j) && (this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.piers.has(key(k, i, j))); }
+  /** stone held out on corbels: the way to the stone it's held from, or −1 */
+  corbel(k: number, i: number, j: number): number { return inGrid(i, j) ? this.corbels.get(key(k, i, j)) ?? -1 : -1; }
   /** the air under an arch */
   arched(k: number, i: number, j: number) { return this.under.has(key(k, i, j)); }
   /** a plain block: stone not carried on an arch */
@@ -218,7 +232,12 @@ export class World {
     this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear();
     for (const op of this.ops) {
-      if (op.connect) { this.realise(op); continue; }
+      if (op.connect) {
+        // (stone and rules laid with it, first: a stair tower it walks to)
+        for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
+        for (const [k, i, j, r] of op.rule ?? []) if (inGrid(i, j)) { if (r) this.rules.set(key(k, i, j), r); else this.rules.delete(key(k, i, j)); }
+        this.realise(op); continue;
+      }
       for (const [k, i, j] of op.cut ?? []) {
         if (k < 0) { this.pools.delete(key(0, i, j)); continue; }
         for (const m of [this.mass, this.stairs, this.archways, this.thin, this.trees, this.dress]) m.delete(key(k, i, j));
@@ -275,6 +294,9 @@ export class World {
     // ending where it ends, then the run before it; landings between)
     const straight = straights(c.path, c.to), C = straight.length, step = new Set<number>(), runs: number[][] = [];
     for (const s of straight) { const r = runs[runs.length - 1]; if (r && r[r.length - 1] === s - 1) r.push(s); else runs.push([s]); }
+    // (where the stroke paused, a landing, if there's room for the steps without it)
+    const rest = new Set(c.rest ?? []), spare = straight.filter((s) => !rest.has(s));
+    if (rest.size && spare.length >= steps) { runs.length = 0; for (const s of spare) { const r = runs[runs.length - 1]; if (r && r[r.length - 1] === s - 1) r.push(s); else runs.push([s]); } }
     for (let q = runs.length - 1, left = steps; q >= 0 && left > 0; q--) { const r = runs[q], n = Math.min(left, r.length); for (let t = 0; t < n; t++) step.add(r[r.length - 1 - t]); left -= n; }
     let stopped = steps > C ? 0 : -1;
     let h = h0;
@@ -320,7 +342,7 @@ export class World {
 
   // ─── what it takes to stand ───
   private resolve() {
-    this.piers.clear(); this.spans = []; this.spanOf.clear(); this.under.clear();
+    this.piers.clear(); this.spans = []; this.spanOf.clear(); this.under.clear(); this.corbels.clear();
     const below = (k: number, i: number, j: number) => k === 0 || this.occupied(k - 1, i, j);
     const raisePier = (k: number, i: number, j: number, born: number) => {
       for (let kk = k - 1; kk >= 0 && !this.occupied(kk, i, j) && !this.under.has(key(kk, i, j)); kk--) this.piers.set(key(kk, i, j), this.first(`p${kk}.${i}.${j}`, born - 0.15));
@@ -349,6 +371,17 @@ export class World {
         const most = (r: ReturnType<typeof run>) => { const [di, dj] = DIRS[r.a]; for (let q = 0; q < r.n; q++) if (!this.bridged.has(key(k, r.s[0] + q * di, r.s[1] + q * dj))) return 3; return 7; };
         for (const v of loose) { const [, i, j] = unkey(v); for (const a of [0, 1]) { const r = run(i, j, a); if (r.startBound && r.endBound && r.n <= most(r) && (!best || r.n < best.n)) best = r; } }
         if (best) { this.arch(k, best.a, best.s[0], best.s[1], best.n, loose); continue; }
+        // (stone pushed out a cell from stone that stands, with nothing beyond it: held out on corbels from that stone,
+        // not on piers to the ground, so the way under it stays open)
+        let corbelled = false;
+        for (const v of [...loose]) {
+          if (!this.mass.has(v) || this.bridged.has(v) || this.rules.get(v) === RULE.pier) continue;
+          const [, i, j] = unkey(v);
+          const d = [0, 1, 2, 3].find((q) => { const [a, b] = DIRS[q]; return this.stone(k, i + a, j + b) && !loose.has(key(k, i + a, j + b)) && below(k, i + a, j + b) && !this.occupied(k, i - a, j - b); });
+          if (d === undefined) continue;
+          this.corbels.set(v, d); loose.delete(v); corbelled = true;
+        }
+        if (corbelled) continue;
         // (a long run with stone either end: an arcade, its piers spaced evenly, the bays as alike as they can be)
         let arcade: ReturnType<typeof run> | null = null;
         for (const v of loose) { const [, i, j] = unkey(v); for (const a of [0, 1]) { const r = run(i, j, a); if (r.startBound && r.endBound && (!arcade || r.n < arcade.n)) arcade = r; } }
@@ -506,7 +539,7 @@ export class World {
   pool(i: number, j: number) { return this.pools.has(key(0, i, j)) || this.decor.some((d) => d.kind === 'pool' && d.i === i && d.j === j); }
 
   /** the operations, as text (to keep, and to make again: when they were laid isn't kept) */
-  encode(): string { return JSON.stringify(this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0])); }
+  encode(): string { return JSON.stringify(this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length ? [o.connect.rest] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0])); }
 }
 
 /** a world made again from its operations (as `encode` wrote them), all laid long ago */
@@ -520,7 +553,7 @@ export function replay(text: string, seed = 1): World {
     const at = (q: number) => (Array.isArray(o[q]) ? (o[q] as number[][]) : null);
     w.ops.push({
       add: at(0)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), stairs: at(1)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), cut: (at(2) as Cell[] | null) ?? undefined,
-      connect: Array.isArray(o[7]) ? { from: (o[7] as unknown[])[0] as Cell, to: ((o[7] as unknown[])[1] as Cell | null) ?? null, path: (o[7] as unknown[])[2] as Array<[number, number]> } : undefined, born: -100,
+      connect: Array.isArray(o[7]) ? { from: (o[7] as unknown[])[0] as Cell, to: ((o[7] as unknown[])[1] as Cell | null) ?? null, path: (o[7] as unknown[])[2] as Array<[number, number]>, ...(Array.isArray((o[7] as unknown[])[3]) ? { rest: (o[7] as unknown[])[3] as number[] } : {}) } : undefined, born: -100,
       dress: (at(8) as Op['dress'] | null) ?? undefined, rule: (at(9) as Op['rule'] | null) ?? undefined, walls: at(10)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]),
       arches: at(3)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), trees: at(4)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), pools: at(5)?.map((c) => [c[0], c[1], -100] as [number, number, number]), bridge: o[6] === 1,
     });

@@ -35,9 +35,10 @@ export function story(stage: number): World {
   if (stage === 8) return labyrinth();
   if (stage === 9) return features();
   if (stage === 10) return flow();
+  if (stage === 11) return gestures();
   const w = new World(7);
   const t = -100;
-  const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op) w.apply(op, t); };
+  const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
   const traceAt = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t, t); if (op && !('refused' in op)) w.apply(op, t); };
   const carveAt = (cells: Cell[]) => { const cut = cells.filter((c) => carve(w, { face: 'side', hit: c, to: c })); if (cut.length) w.apply({ cut, why: 'carve' }, t); };
   // 1: a small raised platform
@@ -206,5 +207,33 @@ function flow(): World {
   // between them, rather than a box on stilts)
   col(11, 9, 3); col(11, 10, 3);
   add([[1, 12, 9], [1, 12, 10], [2, 12, 9], [2, 12, 10]]);
+  return w;
+}
+
+/** storyboard 11: gestures read for more than their ends: a loop, a pause, a climb too steep, a way blocked */
+function gestures(): World {
+  const w = new World(19), t = -100;
+  const ground = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+  const top = (i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+  const go = (start: Pick, cells: Array<[number, number]>, end: Pick | null, rest: Array<[number, number]> = []) => { const op = trace(w, start, cells, end, () => t, t, rest); if (op && !('refused' in op)) w.apply({ ...op, alts: undefined }, t); };
+  const col = (i: number, j: number, h: number) => w.apply({ add: Array.from({ length: h }, (_, k) => [k, i, j, t] as [number, number, number, number]) }, t);
+  // (a stroke drawn round, back to where it began: a court walled in, a gate where it started)
+  const ring: Array<[number, number]> = [];
+  for (let i = 1; i <= 5; i++) ring.push([i, 1]);
+  for (let j = 2; j <= 5; j++) ring.push([5, j]);
+  for (let i = 4; i >= 1; i--) ring.push([i, 5]);
+  for (let j = 4; j >= 1; j--) ring.push([1, j]);
+  go(ground(3, 1), [...ring.slice(2), ...ring.slice(0, 3)], null);
+  // (a wall traced with two pauses: a gate at each)
+  go(ground(8, 1), [[8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 6], [8, 7]], null, [[8, 3], [8, 6]]);
+  // (a terrace three high, and a stroke from the stone too short to climb it: a stair tower beside it, a stair inside)
+  for (const [i, j] of [[11, 2], [12, 2], [11, 3], [12, 3]]) col(i, j, 3);
+  go(ground(11, 5), [[11, 5], [11, 4]], top(11, 3));
+  // (two towers and a third between them, taller: a bridge traced straight through it goes round)
+  col(4, 8, 2); col(4, 12, 2); col(4, 10, 3);
+  go(top(4, 8), [[4, 8], [4, 9], [4, 10], [4, 11]], top(4, 12));
+  // (a block in the way of a climb: round it to a straight flight up)
+  col(9, 11, 2); w.apply({ add: [[0, 8, 11, t]] }, t);
+  go(ground(6, 11), [[6, 11], [7, 11], [8, 11]], top(9, 11));
   return w;
 }

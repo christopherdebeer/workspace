@@ -13,10 +13,10 @@
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?turn=` ·
  * `?zoom=` · `?preview` · `?still`
  */
-import { CENTER, World, inGrid, key, replay, type Cell, type Op } from './model';
+import { CENTER, World, inGrid, key, replay, type Alt, type Cell, type Op } from './model';
 import { buildMesh, inStone } from './mesh';
 import { Renderer, camera, invert, type View } from './render';
-import { carve, surface, tap, tapCell, trace, type Pick } from './gesture';
+import { carve, surface, tap, trace, type Pick } from './gesture';
 import { story } from './demo';
 import { DRESSINGS, PIECES, dress, dressAt, place, run, type Dressing, type Hand, type Piece } from './palette';
 import { around, motifs, type Motif } from './motifs';
@@ -166,6 +166,8 @@ type Gesture = {
   before?: World; h0?: number; cells: Array<[number, number]>; target: Pick | null; cand: string; candPick: Pick | null; count: number; laid: string; said: string; born: number;
   /** what the stroke builds now (or why it can't), for the guides */
   op?: Op | null;
+  /** where the finger paused on the way, and when it last moved */
+  rest: Array<[number, number]>; moved: number;
 };
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
@@ -317,6 +319,39 @@ function describe(p: Pick): string {
 
 /** where a trace might be going: a top (or a side) other than the column it started on; else nowhere ('') */
 const goal = (p: Pick | null) => !p || p.face === 'ground' || !g?.start || (p.hit[1] === g.start.hit[1] && p.hit[2] === g.start.hit[2]) ? '' : `${surface(g.before!, p)}.${p.hit[1]}.${p.hit[2]}`;
+/**
+ * The other ways the last gesture could have been read: a row of chips over the brushes after it, the one it is now
+ * marked. A touch reads it so instead (in place of what it built, as one more thing done); the row goes with the next
+ * touch on the stone. A gesture refused offers what it could be instead the same way.
+ */
+const altsEl = document.getElementById('alts') as HTMLElement;
+let altsNow: { list: Array<{ label: string; op: Op }>; at: number; base: number } | null = null;
+function showAlts(first: Op | null, alts: Alt[] | undefined, base: number) {
+  if (!alts?.length) { hideAlts(); return; }
+  const list = [...(first ? [{ label: first.reading ?? first.note ?? 'as drawn', op: first }] : []), ...alts.map((a) => ({ label: a.label, op: { ...a.op, alts: undefined } }))];
+  altsNow = { list, at: first ? 0 : -1, base };
+  drawAlts();
+}
+function drawAlts() {
+  if (!altsNow) return;
+  altsEl.innerHTML = `<i>read as</i>${altsNow.list.map((a, n) => `<button data-alt="${n}" class="${n === altsNow!.at ? 'on' : ''}" aria-pressed="${n === altsNow!.at}">${a.label}</button>`).join('')}`;
+  altsEl.classList.add('on');
+  for (const b of Array.from(altsEl.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => readAs(Number(b.dataset.alt)));
+}
+function readAs(n: number) {
+  if (!altsNow || n === altsNow.at) return;
+  const op = { ...altsNow.list[n].op, alts: undefined };
+  if (altsNow.at >= 0 && world.ops.length === altsNow.base + 1) world.replaceLast(op, now()); else { world.apply(op, now()); altsNow.base = world.ops.length - 1; }
+  altsNow.at = n; drawAlts(); kept();
+  say(op.note ?? altsNow.list[n].label);
+}
+function hideAlts() { altsNow = null; altsEl.classList.remove('on'); altsEl.innerHTML = ''; }
+/** gestures that came to nothing, or less than was asked: what, why (kept, for looking at what's still left unread) */
+const declines: Array<{ what: string; why: string; t: number }> = [];
+const declined = (what: string, why: string) => { declines.push({ what, why, t: Date.now() }); if (declines.length > 200) declines.shift(); };
+/** how long the finger stays still on a stroke before it's a pause (a gate in a wall, a landing on a flight) */
+const PAUSE = 450;
+
 /** moves in a row a new destination has to be under the finger before the trace goes there instead */
 const SURE = 3;
 /** how far inside a top (from its edge, of a cell's 0.5) a touch counts as meaning it at once */
@@ -342,6 +377,10 @@ function traceStep(cx: number, cy: number, final: boolean) {
   g.pts.push([cx, cy]);
   // (the columns crossed: on the plane the stroke starts from, each fixed once the finger's passed it)
   const c = onPlane(cx, cy, g.h0!), last = g.cells[g.cells.length - 1];
+  // (the finger still a while, on the way: a pause where it is)
+  const t = performance.now();
+  if (!final && g.moved && t - g.moved > PAUSE && g.cells.length > 1 && !g.rest.some((r) => r[0] === last[0] && r[1] === last[1])) { g.rest.push(last); say('a pause: a gate here, or a landing'); }
+  g.moved = t;
   if (c && (c[0] !== last[0] || c[1] !== last[1])) g.cells.push(c);
   if (g.mode === 'run') {
     const op = run(before, held as Piece, g.start, g.cells, looking(), g.born);
@@ -359,9 +398,10 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (!final && k && k !== goal(g.target) && (end?.inset ?? 0) >= SQUARE) g.count = SURE;
   if (g.count >= SURE) { g.target = k ? g.candPick : null; g.count = 0; }
   for (const [i, j] of g.cells) if (!g.seen.has(`${i}.${j}`)) g.seen.set(`${i}.${j}`, now());
-  const op = trace(before, g.start, g.cells, g.target, (i, j) => g!.seen.get(`${i}.${j}`) ?? now(), g.born);
+  const op = trace(before, g.start, g.cells, g.target, (i, j) => g!.seen.get(`${i}.${j}`) ?? now(), g.born, g.rest);
   const refused = op && 'refused' in op ? op.refused : '';
   if (refused && refused !== g.said) say(refused);
+  if (final && refused) declined('trace', refused);
   g.said = refused;
   const built = op && !('refused' in op) ? op : null;
   lay(built);
@@ -370,7 +410,9 @@ function traceStep(cx: number, cy: number, final: boolean) {
     const r = world.reached.get(world.ops[world.ops.length - 1]);
     settle(r?.cells ?? (built.add ?? []).map((q) => [q[0], q[1], q[2]])); kept();
     // (never quietly short: if it stopped on the way, it says where it joined)
-    if (r && !r.reached) say(r.stopped > 0 ? 'it joins the stone it meets on the way' : 'nothing to build there');
+    if (r && !r.reached && built.connect?.to) { say(r.stopped > 0 ? 'it joins the stone it meets on the way' : 'nothing to build there'); declined(built.why ?? 'trace', 'stopped short'); }
+    else if (built.note) say(built.note);
+    showAlts(built, built.alts, g.base);
   }
 }
 /** dressing, stroked over stone: each stone the finger passes over */
@@ -402,7 +444,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   const start = pick(e.clientX, e.clientY);
-  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0 };
+  if (brush !== 'hand') hideAlts();
+  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0 };
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId);
@@ -443,12 +486,17 @@ const up = (e: PointerEvent) => {
     else {
       unselect();
       let op: Op | null = null;
-      if (brush === 'auto') op = tap(world, start, now());
+      if (brush === 'auto') {
+        const r = tap(world, start, now());
+        if (r && 'refused' in r) { say(r.refused); declined('tap', r.refused); showAlts(null, r.alts, world.ops.length); g = null; return; }
+        op = r;
+        if (!op) declined('tap', 'nothing more will stand there');
+      }
       else if (brush === 'take') op = place(world, 'take', start, looking(), now());
       else if (isDress(held)) { const c = dressAt(world, start, held); op = c ? dress(world, held, [c]) : null; }
       else op = place(world, held, start, looking(), now());
       if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); }
-      else say(brush === 'auto' ? (world.way(...tapCell(world, start)) ? 'that\'s a stair\'s way: kept open' : 'nothing more will stand there') : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
+      else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
     }
   } else if (m === 'trace' || m === 'run') { unselect(); traceStep(e.clientX, e.clientY, true); }
   else if (m === 'carve' || m === 'paint') { unselect(); kept(); }
@@ -610,7 +658,7 @@ requestAnimationFrame(frame);
   get world() { return world; }, view, R, pick, onPlane, setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; },
   selection: () => (sel ? { title: sel.s.title, readings: sel.s.readings.map((r) => r.label), at: sel.s.at, whole: sel.idx, cells: sel.s.cells.length } : null),
-  switchReading, takeAway, dressSel, motifs: () => motifsNow().map((m) => ({ kind: m.kind, label: m.label, cells: m.cells.length })),
+  switchReading, takeAway, dressSel, alts: () => (altsNow ? { labels: altsNow.list.map((a) => a.label), at: altsNow.at } : null), readAs, declines: () => declines.slice(), motifs: () => motifsNow().map((m) => ({ kind: m.kind, label: m.label, cells: m.cells.length })),
   probe: () => ({ ops: world.ops.length, top: world.top(), stone: world.mass.size, stairs: world.stairs.size, piers: world.piers.size, arches: world.spans.length, courts: world.courts.size, decor: world.decor.length, whys: world.ops.map((o) => o.why ?? '') }),
   /** where a point of the room is on the screen (css pixels): a cell (i, j), at height y, fractions toward its sides */
   screenOf: (i: number, j: number, y: number) => screenOf(i - CENTER + 0.5, y, j - CENTER + 0.5),

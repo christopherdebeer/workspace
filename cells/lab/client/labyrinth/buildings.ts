@@ -5,7 +5,8 @@
  *
  * - **A building** is a mass of solid columns (stone from the slab up, nothing carried on arches) all the same height,
  *   two or more high: two cells by two somewhere in it, or a tower of one or two cells three or more high. A wall a cell
- *   thick isn't one, however it runs (round a court, on the diagonal).
+ *   thick isn't one, however it runs (round a court, on the diagonal). A stair tower (the rules' answer to a climb too
+ *   steep for a flight, `RULE.tower`) is one however slim: its door at its foot facing the way it was come to.
  * - **Doors** go where they mean something:
  *   - where a way arrives against a building's wall at height (a walkway, a landing, a bridge's end): a door into it;
  *   - at its foot, facing ground a figure can reach, when a stair inside is needed: when a way up there (at a door, or
@@ -21,7 +22,7 @@
  *   tower. Only on a plan that's a plain rectangle, for now. The hand can switch it (select), kept as a rule.
  */
 import { hash } from '../kit/rng';
-import { DIRS, RULE, key, unkey, type Cell, type World } from './model';
+import { DIRS, RULE, isTower, key, unkey, type Cell, type World } from './model';
 import { navigate, standing, type Nav } from './nav';
 
 export type Roof = 'hipped' | 'gable' | 'shed' | 'dome';
@@ -78,7 +79,9 @@ function find(w: World): Buildings {
     const i0 = Math.min(...cols.map((c) => c[0])), i1 = Math.max(...cols.map((c) => c[0])), j0 = Math.min(...cols.map((c) => c[1])), j1 = Math.max(...cols.map((c) => c[1]));
     // (deep: a true mass, two by two somewhere in it; a ring of wall, or a wall on the diagonal, spans as wide but isn't)
     const has = new Set(cols.map(([x, z]) => `${x}.${z}`));
-    const deep = cols.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`)), tower = cols.length <= 2 && h >= 3;
+    // (a stair tower, put where a climb was too steep for a flight: a building however slim, two high or more)
+    const stairTower = cols.find(([x, z]) => isTower(w.rules.get(key(0, x, z))));
+    const deep = cols.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`)), tower = (cols.length <= 2 && h >= 3) || !!stairTower;
     if (!deep && !tower) continue;
     const mine = new Set(cols.map(([x, z]) => `${x}.${z}`)), id = Math.min(...cols.map(([x, z]) => key(h - 1, x, z)));
     const b: Building = { cols, h, i0, i1, j0, j1, rect: cols.length === (i1 - i0 + 1) * (j1 - j0 + 1), tower, openings: [], inside: false, walked: false, roof: null, id, fall: -1 };
@@ -91,7 +94,8 @@ function find(w: World): Buildings {
     }
     // (its top: walked if a way arrives there from beyond it)
     const tops = cols.map(([x, z]) => key(h, x, z)).filter((v) => nav.places.has(v)), topSet = new Set(tops);
-    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u)));
+    // (a stair tower's top is always come to: that's what it's for, even where it's become part of what it climbs to)
+    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u))) || (!!stairTower && tops.length > 0);
     // (doors where ways arrive against its walls, at height)
     const placeAt = (c: Cell) => key(...c);
     const upper = faces.filter((f) => f.k >= 1 && standing(w, ...f.out));
@@ -103,8 +107,13 @@ function find(w: World): Buildings {
     const framed = cols.some(([x, z]) => Array.from({ length: h }, (_, k) => w.dressed(k, x, z)?.colonnettes).some(Boolean));
     const style = framed ? 'arched' : (['arched', 'square', 'slit'] as const)[hash(w.seed, id, 1) % 3];
     const doors: typeof faces = [...upper];
+    // (a stair tower's door at its foot, facing the way it was come to)
+    if (stairTower) {
+      const d = w.rules.get(key(0, ...stairTower))! - RULE.tower, f = faces.find((q) => q.k === 0 && q.i === stairTower[0] && q.j === stairTower[1] && q.d === d && standing(w, ...q.out));
+      if (f) doors.push(f);
+    }
     // (a house (its top not walked, so lived in under a roof) has a door at its foot too, as a rule)
-    if (foot.length && (unreached || (!arrives && chance(0.85, id, 7)) || ((upper.length || court.length) && chance(0.4, id, 2)))) {
+    if (!stairTower && foot.length && (unreached || (!arrives && chance(0.85, id, 7)) || ((upper.length || court.length) && chance(0.4, id, 2)))) {
       const pickFrom = court.length ? court : foot;
       doors.push(pickFrom[hash(w.seed, id, 3) % pickFrom.length]);
     }

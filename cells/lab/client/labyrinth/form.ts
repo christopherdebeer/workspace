@@ -9,6 +9,7 @@
  *   the run, and what's on it is wall too) is a wall's thickness, not a cell's. Where the run goes straight on, just that; where it turns, meets
  *   another, or ends, a post a little wider, capped. On the stone, a long straight run has a buttress every third cell
  *   either side.
+ * - **A stair tower** (`RULE.tower`): its open corners cut back on the diagonal, an octagonal turret.
  * - **Flowing walls**: a wall that turns once sweeps round a quarter circle from one side of its cell to the other,
  *   rather than meeting at a post; a run of turns one after another (a stair-step, as a diagonal stroke lays it) is
  *   one straight diagonal wall, each cell of it a band from one side's middle to the next. Either meets a straight wall
@@ -17,12 +18,14 @@
  * An outline is a loop round the cell's shape (x, z from its middle), each edge with the way it faces (a DIRS index, or
  * −1 on a curve), how far out it lies, and whether it's open (drawn) or runs on into the stone beside it.
  */
-import { DIRS, key, type World } from './model';
+import { DIRS, isTower, key, type World } from './model';
 import { buildings } from './buildings';
 
 /** a wall's half-thickness, a post's, how round an outside corner is, and a buttress (how far out from the wall, half
  * its width, how high before its slope) */
 export const WT = 0.34, POST = 0.4, ROUND = 0.1, BUT = 0.12, BUTW = 0.09, BUTH = 0.6;
+/** how far back a stair tower's corners are cut */
+export const TURRET = 0.2;
 
 export interface Edge { a: [number, number]; b: [number, number]; face: number; dist: number; open: boolean }
 export interface Outline {
@@ -129,10 +132,13 @@ export function outline(w: World, k: number, i: number, j: number): Outline {
     const open = [0, 1, 2, 3].map((d) => !covered(w, k, i, j, d));
     const air = (d: number) => !w.stone(k, i + DIRS[d][0], j + DIRS[d][1]) && w.stair(k, i + DIRS[d][0], j + DIRS[d][1]) < 0;
     const round = [0, 1, 2, 3].map((d) => air(d) && air((d + 1) % 4));
+    // (a stair tower: its open corners cut back on the diagonal, an octagonal turret)
+    const turret = isTower(w.rules.get(key(0, i, j))), RC = turret ? TURRET : ROUND;
     for (let d = 0; d < 4; d++) {
-      const prev = (d + 3) % 4, s0 = round[prev] ? -0.5 + ROUND : -0.5, s1 = round[d] ? 0.5 - ROUND : 0.5;
+      const prev = (d + 3) % 4, s0 = round[prev] ? -0.5 + RC : -0.5, s1 = round[d] ? 0.5 - RC : 0.5;
       add(at(d, s0, 0.5), at(d, s1, 0.5), open[d]);
-      if (round[d]) {
+      if (round[d] && turret) add(at(d, s1, 0.5), at((d + 1) % 4, -0.5 + RC, 0.5), true);
+      else if (round[d]) {
         // (round the corner to the next side, a quarter at a time)
         const [a, b] = N(d), [ta, tb] = N((d + 1) % 4), cx = (a + ta) * (0.5 - ROUND), cz = (b + tb) * (0.5 - ROUND), S = 4;
         for (let q = 0; q < S; q++) {

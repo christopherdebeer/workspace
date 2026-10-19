@@ -5,7 +5,7 @@
 // undo undoes; what's written down makes the same world again. And the storyboard is what it says.
 import { build } from 'esbuild';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
-const { World, replay, CEIL, DIRS, DRESS, LO, HI, START, key, unkey } = await load('../client/labyrinth/model.ts');
+const { World, replay, CEIL, DIRS, DRESS, RULE, LO, HI, START, key, unkey } = await load('../client/labyrinth/model.ts');
 const G = await load('../client/labyrinth/gesture.ts');
 const { story } = await load('../client/labyrinth/demo.ts');
 const P = await load('../client/labyrinth/palette.ts');
@@ -27,6 +27,8 @@ function stands(w, tag) {
     const where = `${tag} ${k}.${i}.${j}`;
     if (pier) { ok(`${where}: a pier stands on something`, k === 0 || w.occupied(k - 1, i, j)); ok(`${where}: and carries something`, w.occupied(k + 1, i, j)); continue; }
     if (k === 0 || w.occupied(k - 1, i, j)) continue;
+    const cb = w.corbel(k, i, j);
+    if (cb >= 0) { const [a, b] = DIRS[cb]; ok(`${where}: held out on corbels from stone that stands, a cell out, nothing beyond`, w.stone(k, i + a, j + b) && (k === 0 || w.occupied(k - 1, i + a, j + b)) && !w.occupied(k, i - a, j - b)); continue; }
     const sp = w.span(k, i, j);
     ok(`${where}: with nothing under it, it's carried on an arch`, !!sp);
     if (!sp) continue;
@@ -36,7 +38,7 @@ function stands(w, tag) {
   }
 }
 
-const made = {};
+const made = {}, declines = {};
 const ways = { tried: 0, ok: 0, saw: [] }, walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set(), roofs: 0, doors: 0, form: 0 };
 /** how far from what an edit touched its effect on piers and arches may go (an arch spans seven at most; an arcade's
  * piers are respaced along its whole run, so a little more) */
@@ -87,7 +89,7 @@ for (let s = 1; s <= 60; s++) {
       const c = G.carve(w, { face: 'side', hit: [k, i, j], to: [k, i, j] });
       if (c) op = { cut: [c], why: 'carve' };
     }
-    if (op && op.refused) { made.refused = (made.refused ?? 0) + 1; op = null; }
+    if (op && op.refused) { made.refused = (made.refused ?? 0) + 1; declines[op.refused.split(':')[0]] = (declines[op.refused.split(':')[0]] ?? 0) + 1; op = null; }
     if (!op) continue;
     const mass0 = new Set(w.mass.keys()), stairs0 = new Set(w.stairs.keys()), piers0 = new Set(w.piers.keys()), spans0 = new Set(w.spans.map(spanCells).flat());
     w.apply(op, t); made[op.why] = (made[op.why] ?? 0) + 1;
@@ -103,6 +105,8 @@ for (let s = 1; s <= 60; s++) {
       ok(`${tag}: a connection cuts nothing`, [...mass0].every((v) => w.mass.has(v) || w.stairs.has(v)) && [...stairs0].every((v) => w.stairs.has(v)));
       // (it reaches where it was going, or it stopped where it met something: never short for nothing)
       ok(`${tag}: it reaches, or it joins what it met`, r && (r.reached || r.stopped >= 0), r);
+      if (c.to && !r?.reached) declines['stopped short'] = (declines['stopped short'] ?? 0) + 1;
+      if (c.to) declines.tried = (declines.tried ?? 0) + 1;
       if (r?.reached) {
         // (and what it built can be walked, end to end)
         const n = NAV.navigate(w), place = (k, i, j) => n.places.has(key(k, i, j));
@@ -190,7 +194,17 @@ ok(`auto never builds into a stair's way (${ways.ok} of ${ways.tried})`, ways.ok
   const w = new World(3), top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] }), ground = (i, j) => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
   for (let k = 0; k < 3; k++) w.apply({ add: [[k, 6, 5, 0]] });
   const short = G.trace(w, ground(4, 5), [[4, 5], [5, 5]], top(6, 5), () => 0);
-  ok('too steep for the stroke: refused, saying why', !!short?.refused && /steep/.test(short.refused), short);
+  ok('too steep for a flight: a stair tower instead', short?.why === 'tower' && !short.refused, short);
+  {
+    const t = replay(w.encode()); t.apply(short);
+    const b = BU.buildings(t).list.find((x) => x.cols.some(([i, j]) => i === 5 && j === 5));
+    ok('the stair tower: a building, a door at its foot facing the way it was come to, a stair inside', !!b && b.inside && b.openings.some((o) => o.kind === 'door' && o.k === 0 && o.d === 2), b && { inside: b.inside, openings: b.openings });
+    ok('and it reaches the top', NAV.reaches(BU.walkable(t), [0, 4, 5], [3, 6, 5]));
+    for (let k = 0; k < 2; k++) w.apply({ add: [[k, 5, 8, 0]] });
+    w.apply({ trees: [[0, 5, 7, 0]] });
+    const steep = G.trace(w, ground(5, 6), [[5, 6], [5, 7]], top(5, 8), () => 0);
+    ok('too steep, and no room for a tower: refused, saying why', !!steep?.refused && /steep/.test(steep.refused), steep);
+  }
   const long = G.trace(w, ground(2, 5), [[2, 5], [3, 5], [4, 5], [5, 5]], top(6, 5), () => 0);
   ok('drawn longer: stairs', long?.why === 'stairs', long);
   w.apply(long);
@@ -240,7 +254,10 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   w.apply({ add: [2, 3, 4, 5, 6, 7, 8].map((i) => [0, i, 5, 0]) });
   for (let k = 0; k < 4; k++) w.apply({ add: [[k, 5, 1, 0]] });
   w.apply({ add: [2, 3, 4, 5].map((j) => [3, 5, j, 0]) });
-  ok('the high walkway\'s free end stands on a pier down to the walkway below', w.pier(2, 5, 5) && w.pier(1, 5, 5) && !w.pier(0, 5, 5));
+  ok('the high walkway\'s free end is held out on corbels, the walkway below left open', w.corbel(3, 5, 5) >= 0 && !w.pier(2, 5, 5) && !w.pier(1, 5, 5));
+  // (a pier asked for there: it stands on the walkway below, aside)
+  w.apply({ rule: [[3, 5, 5, RULE.pier]] });
+  ok('a pier asked for at the free end stands on a pier down to the walkway below', w.pier(2, 5, 5) && w.pier(1, 5, 5) && !w.pier(0, 5, 5));
   const ps = M.pierShape(w, 1, 5, 5);
   ok('the pier is slim, and stands aside off the walkway', ps.r <= 0.17 && Math.abs(ps.oz) > 0.2 && ps.ox === 0, ps);
   ok('and the walkway can be walked past it', NAV.reaches(NAV.navigate(w), [1, 2, 5], [1, 8, 5]));
@@ -323,7 +340,7 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   ok('story 10: the court\'s corners sweep round (where no other wall meets them)', [[9, 1], [13, 1], [13, 6]].every(([i, j]) => FO.outline(s10, 0, i, j).flow === 'curve'));
   ok('story 10: neither is a building', !BU.buildings(s10).of.has(key(0, 3, 2)) && !BU.buildings(s10).of.has(key(0, 9, 1)));
   ok('story 10: the wall traced across the stair\'s foot leaves it open', s10.stair(0, 7, 9) === 2 && !s10.stone(0, 8, 9) && s10.stone(0, 8, 8) && s10.stone(0, 8, 10));
-  ok('story 10: and auto won\'t build there', G.tap(s10, { face: 'ground', hit: [-1, 8, 9], to: [0, 8, 9] }, 0) === null);
+  { const r = G.tap(s10, { face: 'ground', hit: [-1, 8, 9], to: [0, 8, 9] }, 0); ok('story 10: and auto won\'t build there, but offers to', !!r?.refused && r.alts?.[0]?.label === 'raise it anyway' && r.alts[0].op.add?.length === 1, r); }
   // (the dressing toggles: on, then a stroke starting on it takes it off; a jali on a thin wall pierces it)
   {
     const w = replay(s9.encode());
@@ -356,6 +373,36 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
     }
     ok('the rules put each feature somewhere, and only where it belongs', wrong === 0 && seen.balustrade && seen.pergola && seen.oriel && seen.colonnettes, { wrong, ...seen });
   }
+}
+// (more of the stroke read: a loop walls in a court; a pause, a gate; a way blocked at its height goes round; every
+// wall offers its other kinds)
+{
+  const w = new World(5), ground = (i, j) => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+  const ring = [[2, 2], [3, 2], [4, 2], [5, 2], [5, 3], [5, 4], [5, 5], [4, 5], [3, 5], [2, 5], [2, 4], [2, 3], [2, 2]];
+  ok('a stroke round: closed', G.walk(ring).closed && G.walk(ring).cells.length === 12, G.walk(ring));
+  const court = G.trace(w, ground(2, 2), ring, null, () => 0);
+  ok('a loop walls in a court, a gate where it began, the other kinds offered', court?.note === 'a court, walled round' && court.arches?.length === 1 && court.add.length === 11 && court.alts.map((a) => a.label).join() === 'a ring of wall,an arcaded court,a thin wall', court);
+  w.apply(court);
+  ok('and it is a court', w.courts.has(key(0, 3, 3)) && w.courts.has(key(0, 4, 4)));
+  const line = [[8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 6]], plain = G.trace(w, ground(8, 1), line, null, () => 0);
+  ok('a wall offers its other kinds', plain?.why === 'wall' && plain.alts.length === 3 && plain.alts.some((a) => a.label === 'a thin wall' && a.op.walls?.length === 6), plain?.alts?.map((a) => a.label));
+  const paused = G.trace(w, ground(8, 1), line, null, () => 0, 0, [[8, 3]]);
+  const asWall = [paused, ...paused.alts.map((a) => a.op)].find((o) => o.note.startsWith('a wall'));
+  ok('where the finger paused, a gate', (asWall?.arches ?? []).some(([, i, j]) => i === 8 && j === 3) && /paused/.test(asWall.note), asWall);
+  // (a bridge between two towers, the stroke straight through a third in the way: it goes round)
+  for (const [i, j, h] of [[11, 1, 2], [11, 5, 2], [11, 3, 3]]) for (let k = 0; k < h; k++) w.apply({ add: [[k, i, j, 0]] });
+  const top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] });
+  const br = G.trace(w, top(11, 1), [[11, 1], [11, 2], [11, 3], [11, 4]], top(11, 5), () => 0);
+  ok('blocked at its height: round it, the way through offered', br?.why === 'bridge' && !br.connect.path.some(([i, j]) => i === 11 && j === 3) && br.alts?.[0]?.label === 'joining what it meets', br?.connect);
+  w.apply(br);
+  ok('and round it reaches', w.reached.get(br)?.reached && NAV.reaches(NAV.navigate(w), [2, 11, 1], [2, 11, 5]), w.reached.get(br));
+  // (a pause on a climb: a landing there, if there's room)
+  const v = new World(5); for (let k = 0; k < 2; k++) v.apply({ add: [[k, 6, 5, 0]] });
+  const vt = (i, j) => ({ face: 'top', hit: [v.topFrom(0, i, j) - 1, i, j], to: [v.topFrom(0, i, j), i, j] });
+  const climb = G.trace(v, ground(1, 5), [[1, 5], [2, 5], [3, 5], [4, 5], [5, 5]], vt(6, 5), () => 0, 0, [[3, 5]]);
+  v.apply(climb);
+  ok('a pause on a climb: a landing there', climb.connect.rest?.length === 1 && v.stair(0, 3, 5) < 0 && v.stair(1, 3, 5) < 0 && v.reached.get(climb)?.reached, { rest: climb.connect.rest, stairs: [...v.stairs.keys()].map(unkey) });
+  ok('kept when it\'s written down', replay(v.encode()).encode() === v.encode() && JSON.parse(v.encode()).at(-1)[7][3]?.length === 1);
 }
 // (form: a run a cell thick is a wall's thickness, curving where it turns, on the diagonal where it steps, with posts
 // where walls meet and buttresses along it; a mass fills its cells, its outside corners rounded; a wall runs on to a
@@ -433,6 +480,6 @@ ok('story 4: the court closed, with something growing in it', s4.courts.size > 0
 { const bay = s4.spans.filter((sp) => sp.k === 2 && sp.a === 0 && sp.j === 4); ok('story 4: the tower bridged to the terrace on one great arch, or an arcade of even bays (the rules\' choice)', (bay.length === 1 && bay[0].n === 5) || (bay.length === 2 && bay.every((sp) => sp.n === bay[0].n)), bay); }
 stands(s4, 'story 4');
 if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
-console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
+console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exitCode = fails ? 1 : 0;

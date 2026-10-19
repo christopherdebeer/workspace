@@ -397,6 +397,20 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
   }
   for (const sp of w.spans) span(sp);
+  // (corbels: under stone held out from the stone beside it, two brackets out of that stone's face, curving up and out
+  // to carry it, so the way under it stays open)
+  for (const [v, d] of w.corbels) {
+    const [k, i, j] = unkey(v), y0 = k, cx = X(i) + 0.5, cz = Z(j) + 0.5, [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4], U = 0.86, HW2 = 0.075;
+    cur = at(w.born(k, i, j), y0, k, i, j);
+    const P = (u: number, sv: number, y: number): V3 => [cx + a * (0.5 - u) + ta * sv, y, cz + b * (0.5 - u) + tb * sv];
+    const prof: Array<[number, number]> = [[0, y0], [U, y0], [U, y0 - 0.1]];
+    for (let q = 6; q >= 0; q--) { const th = (q / 6) * (Math.PI / 2); prof.push([U * (1 - Math.cos(th)), y0 - 0.75 + 0.65 * Math.sin(th)]); }
+    for (const sc of [-0.32, 0, 0.32]) {
+      const inside = P(0.25, sc, y0 - 0.1);
+      for (let q = 1; q + 1 < prof.length; q++) for (const sv of [sc - HW2, sc + HW2]) face([P(prof[0][0], sv, prof[0][1]), P(prof[q][0], sv, prof[q][1]), P(prof[q + 1][0], sv, prof[q + 1][1])], MAT.stone, 0.8, true, inside);
+      for (let q = 1; q + 1 < prof.length; q++) face([P(prof[q][0], sc - HW2, prof[q][1]), P(prof[q + 1][0], sc - HW2, prof[q + 1][1]), P(prof[q + 1][0], sc + HW2, prof[q + 1][1]), P(prof[q][0], sc + HW2, prof[q][1])], MAT.stone, 0.55 + 0.35 * (q / prof.length), true, inside);
+    }
+  }
   for (const b of buildings(w).list) if (b.roof) roof(b);
 
   // ─── what grows in the courtyards ───

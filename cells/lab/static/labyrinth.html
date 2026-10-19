@@ -58,6 +58,13 @@
     .preview #sheet, .preview #card { display: none; }
     #say { position: fixed; left: 0; top: 0; z-index: 3; pointer-events: none; padding: 5px 11px; border-radius: 14px; background: rgba(246,241,231,.92); box-shadow: 0 1px 8px rgba(70,50,30,.15); font-size: 13px; font-style: italic; color: #2b2420; opacity: 0; transition: opacity .15s; white-space: nowrap; }
     #say.on { opacity: 1; }
+    #alts { position: fixed; left: 10px; right: 10px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px); z-index: 2; display: none; gap: 5px; align-items: center; overflow-x: auto; scrollbar-width: none; padding: 6px 8px; border-radius: 18px; background: rgba(246,241,231,.9); box-shadow: 0 2px 10px rgba(70,50,30,.13); }
+    #alts.on { display: flex; }
+    #alts::-webkit-scrollbar { display: none; }
+    #alts i { flex: 0 0 auto; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; opacity: .6; padding: 0 4px; }
+    #alts button { flex: 0 0 auto; appearance: none; border: 0; font: inherit; font-size: 12.5px; font-style: italic; color: #2b2420; background: none; box-shadow: inset 0 0 0 1px rgba(43,36,32,.18); border-radius: 14px; min-height: 32px; padding: 0 11px; cursor: pointer; -webkit-tap-highlight-color: transparent; white-space: nowrap; }
+    #alts button.on { background: #2b2420; color: #f3ede1; box-shadow: none; }
+    .selecting #alts, .preview #alts { display: none; }
     #say.warn { color: #8a3b12; box-shadow: 0 1px 8px rgba(70,50,30,.15), inset 0 0 0 1px rgba(176,92,30,.45); }
     nav { right: 190px; gap: 10px; }
     nav a { white-space: nowrap; }
@@ -77,6 +84,7 @@
   </div>
   <div id="hint"></div>
   <div id="say" aria-live="polite"></div>
+  <div id="alts" role="toolbar" aria-label="read it as"></div>
   <div id="card" role="dialog" aria-label="what's taken up">
     <div class="row"><b id="what"></b><button id="close" aria-label="put it down">×</button></div>
     <div id="scope" class="chips" aria-label="how much of it"></div>

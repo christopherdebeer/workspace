@@ -42,6 +42,11 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ![A wall on the diagonal: traced across the grid, laid as a stair-step of cells, drawn as one straight wall](v-diagonal-close.jpg)
 ![Piers that carry: stone pushed out from a tower over nothing, on piers that meet it in coves (a round arch between them, not a box on stilts); the terrace's piers beyond](v-piers-close.jpg)
 
+## Gestures read
+
+![11 · Gestures read: a stroke drawn round back to its start: a court walled in, a gate where it began; a wall traced with two pauses: a gate at each; a climb too steep for its stroke: a stair tower, a door at its foot and a stair inside; a bridge traced through a taller tower: round it; a climb with a block in the way: round it to a straight flight](v-story-11.jpg)
+![A stair tower, and ways round: the stair tower beside the terrace; the bridge going round the tower in its way](v-gestures-close.jpg)
+
 ## Auto, with character
 
 ![Auto alone, no cap: a tower tapped up ten high (no cap on height), a walkway to it, a long wall traced round, a high walkway from halfway up the tower (its slim piers stand aside on the ways below): every motif and all the dressing the rules' own choice](v-story-7.jpg)

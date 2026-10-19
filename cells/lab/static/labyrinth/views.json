@@ -162,6 +162,23 @@
   ]
  },
  {
+  "group": "Gestures read",
+  "views": [
+   {
+    "name": "story-11",
+    "title": "11 · Gestures read",
+    "caption": "a stroke drawn round back to its start: a court walled in, a gate where it began; a wall traced with two pauses: a gate at each; a climb too steep for its stroke: a stair tower, a door at its foot and a stair inside; a bridge traced through a taller tower: round it; a climb with a block in the way: round it to a straight flight",
+    "file": "v-story-11.jpg"
+   },
+   {
+    "name": "gestures-close",
+    "title": "A stair tower, and ways round",
+    "caption": "the stair tower beside the terrace; the bridge going round the tower in its way",
+    "file": "v-gestures-close.jpg"
+   }
+  ]
+ },
+ {
   "group": "Auto, with character",
   "views": [
    {
