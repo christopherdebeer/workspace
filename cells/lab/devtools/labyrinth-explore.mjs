@@ -102,7 +102,9 @@ function judge(w0, w1, g, op) {
   const flags = [];
   if (!op) { flags.push('silent'); return flags; }
   if ('refused' in op) { flags.push('refused'); return flags; }
-  const a = state(w0), b = state(w1), added = [...b.keys()].filter((k) => !a.has(k)), removed = [...a.keys()].filter((k) => !b.has(k));
+  const a = state(w0), b = state(w1), added = [...b.keys()].filter((k) => !a.has(k));
+  // (gone, and nothing in its place: a pier become solid stone, a stair become a landing, is a change, not a loss)
+  const held = new Set([...b.keys()].map((k) => k.slice(1))), removed = [...a.keys()].filter((k) => !b.has(k) && !held.has(k.slice(1)));
   if (!added.length && !removed.length) flags.push('no-change');
   const meant = g.kind === 'lift' && g.by < 0;
   if (removed.length && !meant) flags.push('destroyed');

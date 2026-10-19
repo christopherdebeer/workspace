@@ -38,6 +38,10 @@ export function iso(w, { focus = [], stroke = null, rests = [], tap = null, titl
   const cells = [];
   for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) cells.push([i, j]);
   cells.sort((a, b) => a[0] + a[1] - (b[0] + b[1]) || a[0] - b[0]);
+  // (the cells under the stroke, tinted on their tops as they're drawn: what's in front hides them, as it should; a line
+  // alone, drawn over everything, reads as crossing whatever's painted over its true place)
+  const under = new Set((stroke ?? (tap ? [tap] : [])).map(([i, j]) => `${Math.round(i)}.${Math.round(j)}`));
+  const tint = (i, j, k) => { if (under.has(`${i}.${j}`)) out.push(`<polygon points="${[pt(i, j, k + 0.02), pt(i + 1, j, k + 0.02), pt(i + 1, j + 1, k + 0.02), pt(i, j + 1, k + 0.02)].join(' ')}" fill="#c0392b" opacity=".35"/>`); };
   for (const [i, j] of cells) {
     const g = w.ground(i, j);
     if (w.land) box(i, j, Math.min(0, g), Math.max(0.15, g - Math.min(0, g)), w.pool(i, j) ? '#8fb7c4' : g >= 3 ? '#cfc6b0' : '#d9d3bf');
@@ -49,12 +53,13 @@ export function iso(w, { focus = [], stroke = null, rests = [], tap = null, titl
       else if (w.stair(k, i, j) >= 0) ramp(i, j, k, w.stair(k, i, j), '#e9b979');
       else if (w.pier(k, i, j)) box(i + 0.3, j + 0.3, k, 1, '#c8bca2');
     }
+    tint(i, j, Math.max(hi, w.land ? g : 0));
   }
   // (the stroke, over the tops it crossed)
   const surf = (i, j) => { let k = w.ground(i, j); while (w.stone(k, i, j) || w.stair(k, i, j) >= 0) k++; return k; };
   const at = ([i, j], s) => pt(i + 0.5, j + 0.5, s ?? surf(i, j));
   if (stroke?.length) {
-    out.push(`<polyline points="${stroke.map((c) => at(c)).join(' ')}" fill="none" stroke="#c0392b" stroke-width="2.5" stroke-linejoin="round" opacity=".85"/>`);
+    out.push(`<polyline points="${stroke.map((c) => at(c)).join(' ')}" fill="none" stroke="#c0392b" stroke-width="1.5" stroke-linejoin="round" opacity=".6" stroke-dasharray="4 2"/>`);
     const [sx, sy] = at(stroke[0]).split(',').map(Number), [ex, ey] = at(stroke.at(-1)).split(',').map(Number);
     out.push(`<circle cx="${sx}" cy="${sy}" r="5" fill="#fff" stroke="#c0392b" stroke-width="2"/><circle cx="${ex}" cy="${ey}" r="4" fill="#c0392b"/>`);
     for (const r of rests) { const [x, y] = at(r).split(',').map(Number); out.push(`<circle cx="${x}" cy="${y}" r="8" fill="none" stroke="#c0392b" stroke-dasharray="2 2"/>`); }
