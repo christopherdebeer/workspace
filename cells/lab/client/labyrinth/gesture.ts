@@ -276,7 +276,13 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
   // (at one height, and something in the way: round it, the way through it offered)
   if (to && to[0] === h0) {
     const round = around(w, h0, path2, to);
-    if (round) { const through = op; op = make(round, false, 'a bridge, round what\'s in the way'); alts.unshift({ label: 'joining what it meets', op: { ...through, note: 'joining what it meets', reading: 'joining what it meets' } }); }
+    if (round) {
+      const through = op; op = make(round, false, 'a bridge, round what\'s in the way');
+      // (its arch offered round the same way, not through what's in it)
+      const arch = alts.findIndex((a) => a.label.startsWith('a bridge on'));
+      if (arch >= 0) alts.splice(arch, 1, ...(round.length >= 5 && round.length <= 8 ? [{ label: 'a bridge round it, on one great arch', op: make(round, true, 'a bridge, round what\'s in the way, on one great arch') }] : []));
+      alts.unshift({ label: 'joining what it meets', op: { ...through, note: 'joining what it meets', reading: 'joining what it meets' } });
+    }
   }
   if (to && to[0] !== h0) {
     // (a climb that would stop short of where it's going, on something in its way: round it to a straight flight into
@@ -436,7 +442,17 @@ function wall(w: World, cells: Array<[number, number]>, closed: boolean, born: (
   const first: Kind = closed ? 'court' : wallKind(w, cells[0][0], cells[0][1]);
   const kinds: Kind[] = closed ? ['court', 'ring', 'arcaded', 'thin'] : [first, ...(['plain', 'gated', 'arcaded', 'thin'] as Kind[]).filter((k) => k !== first)];
   const op = build(first);
-  return { ...op, alts: kinds.slice(1).map((k) => ({ label: label[k] === label.arcaded && closed ? 'an arcaded court' : label[k], op: build(k) })) };
+  const alts: Alt[] = kinds.slice(1).map((k) => ({ label: label[k] === label.arcaded && closed ? 'an arcaded court' : label[k], op: build(k) }));
+  // (drawn round: filled, too, the other reading of a ring: a terrace, what it was drawn round raised with it)
+  if (closed) {
+    const xs = cells.map((c) => c[0]), zs = cells.map((c) => c[1]), x0 = Math.min(...xs) - 1, x1 = Math.max(...xs) + 1, z0 = Math.min(...zs) - 1, z1 = Math.max(...zs) + 1;
+    const ring = new Set(cells.map(([i, j]) => `${i}.${j}`)), out = new Set<string>([`${x0}.${z0}`]), todo: Array<[number, number]> = [[x0, z0]];
+    while (todo.length) { const [i, j] = todo.pop()!; for (const [a, b] of DIRS) { const x = i + a, z = j + b, k = `${x}.${z}`; if (x < x0 || x > x1 || z < z0 || z > z1 || out.has(k) || ring.has(k)) continue; out.add(k); todo.push([x, z]); } }
+    const fill: Array<[number, number, number, number]> = [];
+    for (let i = x0; i <= x1; i++) for (let j = z0; j <= z1; j++) if (!out.has(`${i}.${j}`) && inGrid(i, j) && !w.stone(G(i, j), i, j) && w.stair(G(i, j), i, j) < 0 && !w.pool(i, j) && !w.way(G(i, j), i, j)) fill.push([G(i, j), i, j, born(i, j)]);
+    if (fill.length > cells.length) alts.push({ label: 'a terrace, filled', op: { add: fill, why: 'wall', note: 'a terrace: what it was drawn round, filled', reading: 'a terrace, filled' } });
+  }
+  return { ...op, alts };
 }
 
 /**

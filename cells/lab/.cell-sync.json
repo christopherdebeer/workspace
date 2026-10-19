@@ -2,7 +2,7 @@
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
   "treeVersion": "tree:410fddba9a8f62ddad8d201b938efbcaf027f7814592d1b2bcbc8736ecbb0133",
-  "syncedAt": "2026-10-19T22:01:49.088Z",
+  "syncedAt": "2026-10-19T22:02:28.666Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -194,7 +194,7 @@
     "devtools/labyrinth-intent-review.mjs": "sha256:fe4a580c3cc16aa3f65eecffd6314945837296d0d356a8b1e8cc2d8f626614bc",
     "devtools/labyrinth-intent-review.test.mjs": "sha256:609f7095435c83ac885dad172e8bb52602ccb296d6f9216523491f75facc796b",
     "devtools/labyrinth-intent.md": "sha256:2daa26a43f0b6020a307c28427bac05e1fc8b6e904d041ebb76090d876a98d66",
-    "devtools/labyrinth-intent.mjs": "sha256:2980139f6c38faa6d00daa36f0bdaff7ea33d382b9115d748d78559449a169bf",
+    "devtools/labyrinth-intent.mjs": "sha256:25506884c37183d99114ecc9a896b0bb805302a8b6fad0fa77b40bf6c4160620",
     "devtools/labyrinth-node.mjs": "sha256:7e0314eb76a17589a6463a6c94e1018dc3719361cb32e73bed1b93f8d6b58727",
     "devtools/labyrinth-shaders.mjs": "sha256:be983bdd94582a86252529b7ca35a98eb5d7d396a6d551485eaf9c8023b4106b",
     "devtools/labyrinth-smoke.mjs": "sha256:85f8a706fd7ef18beab9fadce8a07e082535e3413e51e00073cf78072ad3e11d",

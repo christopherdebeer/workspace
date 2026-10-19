@@ -381,7 +381,7 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   const ring = [[2, 2], [3, 2], [4, 2], [5, 2], [5, 3], [5, 4], [5, 5], [4, 5], [3, 5], [2, 5], [2, 4], [2, 3], [2, 2]];
   ok('a stroke round: closed', G.walk(ring).closed && G.walk(ring).cells.length === 12, G.walk(ring));
   const court = G.trace(w, ground(2, 2), ring, null, () => 0);
-  ok('a loop walls in a court, a gate where it began, the other kinds offered', court?.note === 'a court, walled round' && court.arches?.length === 1 && court.add.length === 11 && court.alts.map((a) => a.label).join() === 'a ring of wall,an arcaded court,a thin wall', court);
+  ok('a loop walls in a court, a gate where it began, the other kinds offered', court?.note === 'a court, walled round' && court.arches?.length === 1 && court.add.length === 11 && court.alts.map((a) => a.label).join() === 'a ring of wall,an arcaded court,a thin wall,a terrace, filled', court);
   w.apply(court);
   ok('and it is a court', w.courts.has(key(0, 3, 3)) && w.courts.has(key(0, 4, 4)));
   const line = [[8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 6]], plain = G.trace(w, ground(8, 1), line, null, () => 0);
@@ -780,6 +780,13 @@ stands(s4, 'story 4');
     if (water) { const cells = G.connect([[water[0] - 4, water[1]], water]); const op = G.trace(w, { face: 'ground', hit: [w.ground(...cells[0]) - 1, ...cells[0]], to: [w.ground(...cells[0]), ...cells[0]] }, cells, { face: 'ground', hit: [w.ground(...water) - 1, ...water], to: [w.ground(...water), ...water] }, () => 0, 0, [], 'way');
       ok('a way drawn into the water: to its edge, or said why, never nothing', op !== null, op); }
   }
+  // (a way climbing, paused on the way: a landing where it paused, never a stair (the headless review's paused-climb))
+  { const w = new World(7);
+    for (let k = 0; k < 3; k++) w.apply({ add: [[k, 8, 5, 0]] });
+    const cells = G.connect([[2, 5], [8, 5]]);
+    const op = G.trace(w, { face: 'ground', hit: [-1, 2, 5], to: [0, 2, 5] }, cells, { face: 'top', hit: [2, 8, 5], to: [3, 8, 5] }, () => 0, 0, [[6, 5]], 'way');
+    const sim = new World(7); sim.ops = [...w.ops, op]; sim.rebuild();
+    ok('a way climbing, paused on the way: it reaches, with a landing (no stair) where it paused', op && !op.refused && sim.reached.get(op)?.reached && [0, 1, 2, 3].every((k) => sim.stair(k, 6, 5) < 0), { op: op?.connect, r: sim.reached.get(op) }); }
   // (a stroke's wobble, a cell aside and back, taken out)
   ok('a wobble taken out of a stroke', JSON.stringify(G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]])) === JSON.stringify([[0, 0], [1, 0], [2, 0], [3, 0]]), G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]]));
 }

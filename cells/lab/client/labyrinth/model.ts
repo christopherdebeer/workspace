@@ -409,8 +409,11 @@ export class World {
      * level, or a step up or down): a flight turns about only after a landing, so it can always be walked. Where there's
      * no way to make it reach as drawn, as far along it as it can go, on the level, and it stops there.
      */
+    // (where the finger paused: a landing, never a stair; by the cells paused over, so a stroke straightened keeps them)
+    const restAt = new Set((c.rest ?? []).map((q) => c.path[q + 1]).filter(Boolean).map(([i, j]) => `${i}.${j}`));
     const search = (path: Array<[number, number]>) => {
-      const along = path.slice(1), n = along.length, straight = new Set(straights(path, c.to));
+      const along = path.slice(1), n = along.length, rested = new Set(along.map(([i, j], s) => (restAt.has(`${i}.${j}`) ? s : -1)).filter((s) => s >= 0));
+      const straight = new Set(straights(path, c.to).filter((s) => !rested.has(s)));
       // (a level a cell can be walked at, or a stair stand at: over the ground, nothing in it, not in water, and the
       // stone under it not in another stair's way; and what it costs to raise it there)
       const at = (k: number, i: number, j: number, s = -1) => {

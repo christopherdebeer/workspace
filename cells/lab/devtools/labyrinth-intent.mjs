@@ -1,18 +1,29 @@
-// Gestures as a hand might make them, for reading intent (node cells/lab/devtools/labyrinth-intent.mjs --out=DIR):
-// on several seeds of land (and the bare stone), random organic strokes (taps, sweeps, loops, meanders, strokes with a
-// pause, strokes from a top), each pictured twice: before, with the stroke drawn over the world as the hand
-// will make it (start ring, end arrow, pauses dotted) and nothing built yet; and after, let go and settled. And a log of what each was read as. The before picture is for guessing the
-// intent from; the after, for comparing.
-//   --cases=a,b   just these (by name)   --n=3   gestures per case
-import { mkdirSync, writeFileSync } from 'node:fs';
+// Blind review workflow: see labyrinth-intent.md. Capture requires GL; review uses saved images only.
+// Capture seeded gestures to a fresh directory, withholding outcomes from console and review packets.
+// node cells/lab/devtools/labyrinth-intent.mjs --out=DIR --cases=land3,stone --n=3
+// Then: node cells/lab/devtools/labyrinth-intent-review.mjs next DIR
+// See labyrinth-intent.md for the expectation -> reveal -> delta critique workflow.
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { digest, writeJSON } from './labyrinth-intent-review.mjs';
 import { join } from 'node:path';
-import { withWood } from './harness.mjs';
 process.env.EXPERIMENT = 'labyrinth';
 process.env.READY = '__labyrinth';
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
+// Load the browser harness only for browser capture; headless mode has no GL dependencies.
+if (opt.headless) {
+  process.argv = [process.argv[0], new URL('./labyrinth-intent-headless.mjs', import.meta.url).pathname, String(opt.headless), String(opt.out ?? 'intent-headless'), ...(opt.spec ? [String(opt.spec)] : [])];
+  await import('./labyrinth-intent-headless.mjs');
+  process.exit(0);
+}
+const { withWood } = await import('./harness.mjs');
 const OUT = opt.out ?? 'intent-out';
+if (existsSync(OUT) && readdirSync(OUT).length) throw new Error('Use a fresh --out directory: never mix blind captures or overwrite reviews');
 mkdirSync(OUT, { recursive: true });
-const N = Number(opt.n) || 3;
+const manifest = { schema: 'labyrinth-intent/2', createdAt: new Date().toISOString(), complete: false, ids: [], captureSourceHash: digest(readFileSync(new URL(import.meta.url))) };
+writeJSON(join(OUT, 'manifest.json'), manifest, true);
+writeFileSync(join(OUT, 'README.md'), '# Blind intent review\n\nDo not inspect sealed/ before committing expectations. It contains results and subsequent scenes which can reveal earlier outcomes.\n\nUse `node devtools/labyrinth-intent-review.mjs next OUT`, then expect, reveal, critique, next. The review CLI needs only Node and saved images; WebGL is needed only for capture.\n');
+const N = opt.n === undefined ? 3 : Number(opt.n);
+if (!Number.isInteger(N) || N < 1 || N > 100) throw new Error('--n must be an integer from 1 to 100');
 
 const SETS = {};
 SETS[1] = [
@@ -24,7 +35,7 @@ SETS[1] = [
   { name: 'story12', q: 'story=12&zoom=0.62', seed: 12 },
 ];
 // (a second set, unseen by the first round's readings: other lands, the slope, and longer runs, so the later gestures
-// are made on what the earlier ones built)
+// are made on what the earlier ones built; --set=2)
 SETS[2] = [
   { name: 'land4', q: 'land=4&zoom=0.62', seed: 41, n: 4 },
   { name: 'land9', q: 'land=9&zoom=0.62&turn=1', seed: 93, n: 4 },
@@ -32,7 +43,8 @@ SETS[2] = [
   { name: 'flat', q: 'ops=[]&zoom=0.55', seed: 77, n: 5 },
   { name: 'story15', q: 'story=15&zoom=0.5', seed: 15, n: 3 },
 ];
-const CASES = SETS[Number(opt.set) || 1].filter((c) => !opt.cases || opt.cases.split(',').includes(c.name));
+const CASES = (SETS[Number(opt.set) || 1] ?? []).filter((c) => !opt.cases || String(opt.cases).split(',').includes(c.name));
+if (!CASES.length) throw new Error('No matching cases');
 
 const rng = (s) => () => { s |= 0; s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 const SAFE = { x0: 24, x1: 406, y0: 120, y1: 730 };
@@ -52,7 +64,7 @@ const spline = (P, n = 14) => {
 };
 
 await withWood(async (lab) => {
-  const log = [];
+  // Outcomes remain in sealed/<id>; the review CLI exposes one gesture at a time.
   for (const cs of CASES) {
     const R = rng(cs.seed);
     const p = await lab.open(`${cs.q}&instant`, { width: 430, height: 900 });
@@ -60,12 +72,13 @@ await withWood(async (lab) => {
     await p.waitForTimeout(2500);
     if (cs.intent) { await p.evaluate((i) => window.__labyrinth.setIntent(i), cs.intent); await p.waitForTimeout(300); }
     // (the view settled: nothing gliding under the hand when the picture's taken)
-    // (and drawn: frames counted as they're asked for; a slow (software) renderer can take
-    // seconds over one after a build, and a picture taken before then shows the last one)
+    // (and drawn: frames counted as they're asked for (not by any canvas's clearing: other canvases clear too, and count
+    // frames that never came); a slow (software) renderer can take seconds over one after a build, and a picture taken
+    // before then shows the last one)
     await p.evaluate(() => { const raf = window.requestAnimationFrame.bind(window); window.__frames = 0; window.requestAnimationFrame = (f) => raf((t) => { window.__frames++; f(t); }); });
-    const frames = async (n) => { const f0 = await p.evaluate(() => window.__frames); for (let t = 0; t < 240; t++) { await p.waitForTimeout(250); if ((await p.evaluate(() => window.__frames)) - f0 >= n) return; } };
-    const settle = async () => { let a = null; for (let t = 0; t < 60; t++) { await frames(2); const b = await p.evaluate(() => window.__labyrinth.screenOf(0, 0, 0)); if (a && Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.3) return; a = b; } };
-    for (let n = 1; n <= (cs.n ?? N); n++) {
+    const frames = async (n) => { const f0 = await p.evaluate(() => window.__frames); for (let t = 0; t < 240; t++) { await p.waitForTimeout(250); if ((await p.evaluate(() => window.__frames)) - f0 >= n) return; } throw new Error('Timed out waiting for rendered frames'); };
+    const settle = async () => { let a = null; for (let t = 0; t < 60; t++) { await frames(2); const b = await p.evaluate(() => window.__labyrinth.screenOf(0, 0, 0)); if (a && Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.3) return; a = b; } throw new Error('Timed out waiting for camera to settle'); };
+    for (let n = 1; n <= (opt.n === undefined ? cs.n ?? N : N); n++) {
       await settle();
       // (what's there to touch: each cell's top. Chosen, and the stroke made, in the room's own cells, not the screen's
       // pixels, so the same seed makes the same gestures however the view frames them; projected only to be made)
@@ -81,6 +94,7 @@ await withWood(async (lab) => {
       });
       const topAt = new Map(cells.map((c) => [`${c.i}.${c.j}`, c.top]));
       const ok = cells, built = ok.filter((c) => c.built);
+      if (!ok.length) throw new Error(`No gesture targets in ${cs.name}`);
       const pickC = (from = ok) => from[Math.floor(R() * from.length)];
       const near = (c, d0, d1) => ok.filter((q) => { const d = Math.hypot(q.i - c.i, q.j - c.j); return d >= d0 && d <= d1; });
       // (made again, the next way the seed goes, if it would run off the screen: a stroke must be made where it's drawn)
@@ -117,7 +131,26 @@ await withWood(async (lab) => {
         if (off <= proj.length * 0.1) break;
       }
       if (kind === 'tap' || kind === 'tapTop') { tap = pts[0]; pts = []; }
-      const id = `${cs.name}-${n}`, f = (s) => join(OUT, `${id}-${s}.jpg`);
+      const id = `${cs.name}-${n}`, dir = join(OUT, 'sealed', id);
+      mkdirSync(dir, { recursive: true });
+      const pace = tap ? null : 8 + R() * 14;
+      const delays = pts.map((_, q) => q ? pace * (0.6 + 0.8 * Math.sin((q / pts.length) * Math.PI)) + (pauses.includes(q) ? 560 : 0) : 0);
+      const before = await p.evaluate(({ pts, tap }) => {
+        const L = window.__labyrinth, w = L.world, points = tap ? [tap] : pts;
+        return { world: w.encode(), view: JSON.parse(JSON.stringify(L.view)), brush: L.brush, intent: L.intent,
+          ops: w.ops.length, probe: L.probe(), declines: L.declines(),
+          picks: points.map(([x, y]) => L.pick(x, y)),
+          geometry: { mass: [...w.mass.keys()], stairs: [...w.stairs.entries()], paving: [...w.paving], spans: w.spans, courts: [...w.courts] } };
+      }, { pts, tap });
+      // Only visible information in the BEFORE packet. Generator targets/picks/world are sealed diagnostics.
+      writeJSON(join(dir, 'before.json'), { schema: 'labyrinth-intent-before/1', id,
+        viewport: { width: 430, height: 900, dpr: 1 }, brush: before.brush, mode: before.intent,
+        gesture: { kind, points: tap ? [tap] : pts, pauses, delayAfterPointMs: delays, releaseDelayMs: tap ? 0 : 60, input: tap ? 'mouse' : 'touch, dispatched in the page at its own pace' },
+        legend: 'White ring: start; arrow: finish; dotted rings: 560ms pauses; small filled dot: tap. Coordinates are CSS pixels.',
+        question: 'What might this hand mean in this visible scene? List plausible expectations before inspecting any result.' });
+      writeJSON(join(dir, 'replay.json'), { schema: 'labyrinth-intent-replay/1', id, query: cs.q + '&instant', generatorSeed: cs.seed,
+        description: desc, before, points: pts, tap, pauses, delays,
+        capture: { instant: true, cats: false, viewport: { width: 430, height: 900, dpr: 1 } } });
       // (before: the world, and the stroke over it as it will be made)
       await p.evaluate(({ pts, tap, pauses }) => {
         const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
@@ -133,30 +166,40 @@ await withWood(async (lab) => {
         }
         document.body.appendChild(svg);
       }, { pts, tap, pauses });
-      await p.screenshot({ path: f('a-before'), type: 'jpeg', quality: 80 });
+      await p.screenshot({ path: join(dir, 'before.jpg'), type: 'jpeg', quality: 80 });
       await p.evaluate(() => document.getElementById('intent-overlay')?.remove());
-      const [ops0, enc0] = await p.evaluate(() => [window.__labyrinth.world.ops.length, window.__labyrinth.world.encode()]);
+      const ops0 = before.ops;
+      // Observe delivered browser events without extra per-move protocol round trips or screenshot pauses.
+      await p.evaluate(() => {
+        const L = window.__labyrinth;
+        window.__intentEvents = [];
+        let t0 = null;
+        window.__intentListener = (e) => {
+          if (t0 === null) t0 = performance.now();
+          const op = L.world.ops.at(-1);
+          window.__intentEvents.push({ type: e.type, x: e.clientX, y: e.clientY, t: performance.now() - t0,
+            hint: document.getElementById('hint')?.textContent ?? '', fan: L.fan(),
+            why: op?.why ?? null, reading: op?.reading ?? null,
+            reached: op ? L.world.reached.get(op) ?? null : null });
+        };
+        for (const k of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) document.addEventListener(k, window.__intentListener);
+      });
       let during = null;
       if (tap) { await p.mouse.click(tap[0], tap[1]); }
       else {
         // (the stroke dispatched inside the page, in one go, its pace kept by the clock: through Playwright each move
         // waits on a frame, and a slow renderer's second-long frames would read as pauses all along it)
-        const pace = 8 + R() * 14;
-        during = await p.evaluate(({ pts, pauses, pace }) => {
+        during = await p.evaluate(({ pts, delays }) => {
           const c = document.getElementById('stone'), busy = (ms) => { const t = performance.now() + ms; while (performance.now() < t) { /* the hand moving */ } };
           c.setPointerCapture = () => {};
           const ev = (type, [x, y]) => c.dispatchEvent(new PointerEvent(type, { pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y, bubbles: true, cancelable: true, buttons: type === 'pointerup' ? 0 : 1 }));
           ev('pointerdown', pts[0]);
-          for (let q = 1; q < pts.length; q++) {
-            busy(pace * (0.6 + 0.8 * Math.sin((q / pts.length) * Math.PI)));
-            ev('pointermove', pts[q]);
-            if (pauses.includes(q)) busy(560);
-          }
+          for (let q = 1; q < pts.length; q++) { busy(delays[q]); ev('pointermove', pts[q]); }
           busy(60);
           const d = { hint: document.getElementById('hint')?.textContent ?? '', fan: window.__labyrinth.fan() };
           ev('pointerup', pts[pts.length - 1]);
           return d;
-        }, { pts, pauses, pace });
+        }, { pts, delays });
       }
       await p.waitForTimeout(400);
       const said = await p.evaluate(() => document.getElementById('hint')?.textContent ?? '');
@@ -164,13 +207,29 @@ await withWood(async (lab) => {
       // (and the stroke's guides gone: they're drawn only while the finger's down, but a slow frame can still be showing them)
       for (let t = 0; t < 80; t++) { if (!(await p.evaluate(() => { const c = document.getElementById('guide'), x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < x.length; i += 4) if (x[i]) return true; return false; }))) break; await p.waitForTimeout(250); }
       await frames(1);
-      await p.screenshot({ path: f('c-after'), type: 'jpeg', quality: 80 });
-      const res = await p.evaluate((ops0) => { const L = window.__labyrinth, w = L.world; return { built: w.ops.length > ops0, why: w.ops.slice(ops0).map((o) => o.why ?? ''), rests: w.ops.slice(ops0).map((o) => o.connect?.rest?.length ?? 0), note: w.ops.slice(ops0).map((o) => o.note ?? ''), alts: L.alts(), declines: L.declines().slice(-1), intent: L.intent, ops: w.ops.slice(ops0).map((o) => { const r = w.reached.get(o); return { why: o.why, note: o.note, connect: o.connect ? { from: o.connect.from, to: o.connect.to, path: o.connect.path, follow: o.connect.follow } : undefined, add: o.add?.length, stairs: o.stairs?.length, walls: o.walls?.length, reached: r ? { reached: r.reached, stopped: r.stopped, cells: r.cells.length } : undefined }; }), gesture: L.gesture, frames: window.__frames, guidePx: (() => { const c = document.getElementById('guide'); const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < x.length; i += 4) if (x[i]) n++; return n; })() }; }, ops0);
-      const entry = { id, kind, desc, ...res, said, during, before: enc0, errors: p.errors.slice() };
-      log.push(entry);
-      console.log(`${id.padEnd(10)} ${desc.padEnd(52)} → ${res.why.join(',') || '(nothing)'} · "${said}"`);
+      await p.screenshot({ path: join(dir, 'after.jpg'), type: 'jpeg', quality: 80 });
+      const res = await p.evaluate(({ ops0, oldDeclines }) => {
+        const L = window.__labyrinth, w = L.world;
+        for (const k of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) document.removeEventListener(k, window.__intentListener);
+        const prior = new Set(oldDeclines.map(d => JSON.stringify(d)));
+        return { operationAppended: w.ops.length > ops0,
+          operations: w.ops.slice(ops0).map(o => ({ op: o, reached: w.reached.get(o) ?? null })),
+          alts: L.alts(), declines: L.declines().filter(d => !prior.has(JSON.stringify(d))), intent: L.intent,
+          probe: L.probe(), world: w.encode(), view: JSON.parse(JSON.stringify(L.view)),
+          events: window.__intentEvents,
+          geometry: { mass: [...w.mass.keys()], stairs: [...w.stairs.entries()], paving: [...w.paving], spans: w.spans, courts: [...w.courts] } };
+      }, { ops0, oldDeclines: before.declines });
+      const difference = (a, b) => { const A = new Set(a.map(x => JSON.stringify(x))), B = new Set(b.map(x => JSON.stringify(x))); return { added: b.filter(x => !A.has(JSON.stringify(x))), removed: a.filter(x => !B.has(JSON.stringify(x))) }; };
+      const geometryDelta = Object.fromEntries(['mass', 'stairs', 'paving', 'courts'].map(k => [k, difference(before.geometry[k], res.geometry[k])]));
+      writeJSON(join(dir, 'result.json'), { schema: 'labyrinth-intent-result/1', id, ...res, geometryDelta, said, during,
+        errors: p.errors.slice(), limitations: ['Synthetic pointer events (strokes dispatched in-page; taps by mouse), DPR 1; not an iPhone touch test', 'Instant growth; cats disabled', 'Event diagnostics are not a video of live feedback', 'reached is a solver diagnostic, not a judgment of intent', 'replay.json records the exact pre-world, camera, planned input; actual timing is in events'] });
+      manifest.ids.push(id);
+      writeJSON(join(OUT, 'manifest.json'), manifest);
+      console.log(`${id}: captured and sealed (outcome withheld)`);
     }
     await p.close();
   }
-  writeFileSync(join(OUT, 'log.json'), `${JSON.stringify(log, null, 1)}\n`);
+  manifest.complete = true;
+  writeJSON(join(OUT, 'manifest.json'), manifest);
+  console.log(`Blind review ready. Run: node devtools/labyrinth-intent-review.mjs next ${OUT}`);
 });

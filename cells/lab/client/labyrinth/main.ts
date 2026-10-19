@@ -213,7 +213,7 @@ type Gesture = {
   /** whether it's lifting (or lowering) the stone it started on: drawn straight up or down the screen from it */
   lifting?: boolean;
   /** where the finger last came to rest, and when (for holding still to choose); whether it's been offered */
-  still: { x: number; y: number; t: number }; offered?: boolean;
+  still: { x: number; y: number; t: number; f?: number }; offered?: boolean;
 };
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
@@ -449,7 +449,9 @@ function leanFan(cx: number, cy: number): boolean {
   const a = Math.atan2(dy, dx);
   for (let q = 1; q < fan.list.length; q++) { const e = Math.abs(Math.atan2(Math.sin(a - fanAngle(q, fan.list.length)), Math.cos(a - fanAngle(q, fan.list.length)))); if (e < best) { best = e; at = q; } }
   // (gone on past them, or off another way than toward any: the stroke goes on)
-  if (!fan.tap && (d > BEYOND || (d > 60 && best > 0.6))) { choose(0); fan = null; if (g) g.still = { x: cx, y: cy, t: performance.now() }; return false; }
+  if (!fan.tap && (d > BEYOND || (d > 60 && best > 0.6))) { choose(0); fan = null; if (g) g.still = { x: cx, y: cy, t: performance.now(), f: frameNo }; return false; }
+  // (a touch held, its readings fanned out, then drawn away well past them: it wasn't a touch, it's a stroke)
+  if (fan.tap && d > BEYOND) { if (g && world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); } fan = null; if (g) { g.offered = true; g.laid = ''; g.still = { x: cx, y: cy, t: performance.now(), f: frameNo }; } return false; }
   if (d < LEAN || best > 0.6) at = 0;
   choose(at);
   return true;
@@ -607,7 +609,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   const start = pick(e.clientX, e.clientY);
   if (brush !== 'hand') hideAlts();
-  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0, still: { x: e.clientX, y: e.clientY, t: performance.now() } };
+  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0, still: { x: e.clientX, y: e.clientY, t: performance.now(), f: frameNo } };
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId);
@@ -623,7 +625,7 @@ canvas.addEventListener('pointermove', (e) => {
   }
   if (!g || g.id !== e.pointerId) return;
   if (fan) { if (leanFan(e.clientX, e.clientY)) return; }
-  if (Math.hypot(e.clientX - g.still.x, e.clientY - g.still.y) > 7) g.still = { x: e.clientX, y: e.clientY, t: performance.now() };
+  if (Math.hypot(e.clientX - g.still.x, e.clientY - g.still.y) > 7) g.still = { x: e.clientX, y: e.clientY, t: performance.now(), f: frameNo };
   const moved = Math.hypot(e.clientX - g.x0, e.clientY - g.y0) > 9;
   if (g.mode === 'turn') { view.az -= dx * 0.008; return; }
   if ((g.mode === 'look' || (g.mode === 'pending' && brush === 'select')) && moved) { g.mode = 'turn'; view.az -= (e.clientX - g.x0) * 0.008; return; }
@@ -795,7 +797,10 @@ document.getElementById('frame')!.addEventListener('click', () => { zoomK = Numb
 
 // ─── each frame ───
 let last = performance.now(), zoomFit = framing().fit;
+/** frames drawn: a hold is a finger still over several of them as well as for long enough (a slow frame isn't a hold) */
+let frameNo = 0;
 function frame() {
+  frameNo++;
   const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000); last = t;
   if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) remesh();
   if (preview && !still) view.az += dt * 0.12;
@@ -828,7 +833,7 @@ function frame() {
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
   g2.clearRect(0, 0, guide.clientWidth, guide.clientHeight);
   // (held still long enough on a stroke, or a tap, that could be read another way: the readings fan out)
-  if (g && !fan && !g.offered && fingers.size === 1 && (g.mode === 'trace' || (g.mode === 'pending' && brush === 'auto')) && performance.now() - g.still.t > HOLD) openFan();
+  if (g && !fan && !g.offered && fingers.size === 1 && (g.mode === 'trace' || (g.mode === 'pending' && brush === 'auto')) && performance.now() - g.still.t > HOLD && frameNo - (g.still.f ?? 0) >= 3) openFan();
   guides();
   drawFan();
   label();

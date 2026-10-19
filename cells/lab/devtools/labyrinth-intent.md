@@ -16,6 +16,13 @@ Use a fresh output directory. Capture writes an incomplete manifest first, check
 
 The new output layout replaces the old mixed before/after images and log.json. Do not make contact sheets of the entire batch for a blind reviewer: later before frames contain earlier outcomes. Copy the complete output directory to the machine running the offline commands if needed, keeping `sealed/` out of the reviewer's browsing context.
 
+Capture details that matter for honest pictures on a slow (software-GL) renderer:
+
+- Gestures are generated in the land's own cells and projected only to be made, so the same seed makes the same gestures however the view frames them (a fix that moves the camera doesn't change the test). A gesture that would run off the screen is drawn again from the seed.
+- Strokes are dispatched inside the page at their own pace (taps by mouse). Driven move by move through Playwright, each move waits on a frame, and second-long frames read as pauses all along the stroke.
+- Frames are counted by `requestAnimationFrame`, not by canvas clears (other canvases clear too); the after picture waits for the stroke's guides to clear.
+- `--set=2`: other lands, the slope, and longer runs (`n` per case), so later gestures are made on what earlier ones built.
+
 ## Judge one gesture at a time
 
 ```sh
