@@ -84,6 +84,18 @@
     "file": "v-story-8.jpg"
    },
    {
+    "name": "houses",
+    "title": "Houses, close",
+    "caption": "roofs where they belong: hipped, a lean-to falling away from it, gabled, a marble tower's lead dome; doors and windows the rules' own",
+    "file": "v-houses.jpg"
+   },
+   {
+    "name": "doors",
+    "title": "Doors where ways meet walls",
+    "caption": "the cloister's corner towers: doors where the gallery arrives, a door at the foot, a stair inside; slit windows",
+    "file": "v-doors.jpg"
+   },
+   {
     "name": "story-8-turned",
     "title": "From the other side",
     "caption": "the slot between the towers, the gallery, and the court inside",

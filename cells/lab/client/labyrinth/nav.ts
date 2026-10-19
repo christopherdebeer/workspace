@@ -22,7 +22,9 @@ export const standing = (w: World, k: number, i: number, j: number) => k >= 0 &&
 /** a way through an arch at height k: stone with a way through it, with a floor under it */
 export const through = (w: World, k: number, i: number, j: number) => w.archway(k, i, j) >= 0 && !w.span(k, i, j) && (k === 0 ? !w.pool(i, j) : w.stone(k - 1, i, j) && w.archway(k - 1, i, j) < 0);
 
-export function navigate(w: World): Nav {
+/** where a figure could walk; `inside`, ways the rules know of that the stone doesn't show (a stair inside a building,
+ * from one of its doors to another, or up to its top) */
+export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
   const places = new Set<number>(), next = new Map<number, number[]>();
   const link = (a: number, b: number) => { if (!places.has(a) || !places.has(b)) return; (next.get(a) ?? next.set(a, []).get(a)!).push(b); (next.get(b) ?? next.set(b, []).get(b)!).push(a); };
   const e = w.extent();
@@ -46,6 +48,7 @@ export function navigate(w: World): Nav {
     }
     for (const [a, b] of DIRS.slice(0, 2)) if (standing(w, k, i + a, j + b)) link(v, key(k, i + a, j + b));
   }
+  for (const [a, b] of inside) link(key(...a), key(...b));
   return { places, next };
 }
 

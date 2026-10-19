@@ -238,6 +238,12 @@ function scopeTo(idx: number) { if (!sel) return; const s = scopeAt(sel.cell, se
 function unselect() { sel = null; showSel(); }
 /** a small drawing of each reading, so they can be told apart at a glance */
 const READING_ICONS: Array<[RegExp, string]> = [
+  [/no roof/, '<path d="M4 20V10h16v10"/><path d="M3 10h18" stroke-dasharray="2 2"/>'],
+  [/hipped/, '<path d="M4 20V12h16v8"/><path d="M2 12l7-6h6l7 6z"/>'],
+  [/gable/, '<path d="M4 20V12h16v8"/><path d="M2 12l10-8 10 8z"/>'],
+  [/shed/, '<path d="M4 20V11h16v9"/><path d="M2 13l20-6v4"/>'],
+  [/dome/, '<path d="M6 20v-8h12v8"/><path d="M6 12a6 6 0 0112 0"/><path d="M12 6V3"/>'],
+  [/roof as/, '<path d="M4 20V12h16v8"/><path d="M2 12l10-8 10 8"/><circle cx="12" cy="16" r="1.5"/>'],
   [/lintel/, '<path d="M3 7h18M5 7v13M19 7v13"/>'],
   [/two bays/, '<path d="M3 20V6h18v14"/><path d="M5 20v-6a3 3 0 016 0v6M13 20v-6a3 3 0 016 0v6"/>'],
   [/solid/, '<rect x="4" y="6" width="16" height="14" fill="currentColor" opacity=".35"/><rect x="4" y="6" width="16" height="14"/>'],
@@ -588,6 +594,8 @@ function frame() {
   }
   requestAnimationFrame(frame);
 }
+// (`?at=i.j`: looking at that cell, not framing it all)
+if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.target = [i + 0.5 - CENTER, world.top() * 0.35, j + 0.5 - CENTER]; zoomFit = framing().fit; follow = false; }
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {

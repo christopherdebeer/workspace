@@ -18,12 +18,13 @@
  */
 import { hash } from '../kit/rng';
 import { look } from './character';
+import { buildings, opening, type Building, type Opening } from './buildings';
 import { CENTER, DECK, DIRS, DRESS, key, unkey, type Span, type World } from './model';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
 export const STRIDE = 12;
-export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8, lamp: 9, clay: 10 };
+export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8, lamp: 9, clay: 10, door: 11, glass: 12, tile: 13, lead: 14 };
 /** a stone's dressing, over its material (stone, or the light within an arch): 16 moss, 32 ivy, 64 × which stone
  * (travertine, brick, marble) */
 export const MOSS = 16, IVY = 32, KIND = 64;
@@ -133,7 +134,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       if (!e[d]) continue;
       const [a, b] = DIRS[d], prev = (d + 3) % 4, next = (d + 1) % 4, foot = floored(k, i + a, j + b) ? 0.6 : 1;
       const s0 = -0.5 + (e[prev] ? B : 0), s1 = 0.5 - (e[next] ? B : 0);
-      quad(P(d, s0, y0), P(d, s1, y0), P(d, s1, y1 - bt), P(d, s0, y1 - bt), [a, 0, b], [foot, foot, 1, 1], MAT.stone);
+      const op = opening(w, k, i, j, d);
+      if (op) holed(d, s0, s1, y0, y1 - bt, op, P, [a, 0, b], foot);
+      else quad(P(d, s0, y0), P(d, s1, y0), P(d, s1, y1 - bt), P(d, s0, y1 - bt), [a, 0, b], [foot, foot, 1, 1], MAT.stone);
       if (e[next]) {
         // (down the corner)
         const [ta, tb] = DIRS[next], nn = Math.SQRT1_2;
@@ -161,6 +164,46 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       for (let d = 0; d < 4; d++) if (e[d]) { const [a, b] = DIRS[d], pr = 0.025; quad(P(d, -0.5, y0 - 0.02, -pr), P(d, 0.5, y0 - 0.02, -pr), P(d, 0.5, y0 + 0.05, -pr), P(d, -0.5, y0 + 0.05, -pr), [a, 0, b], 0.9, MAT.stone); quad(P(d, -0.5, y0 + 0.05, -pr), P(d, 0.5, y0 + 0.05, -pr), P(d, 0.5, y0 + 0.05), P(d, -0.5, y0 + 0.05), [0, 1, 0], 1, MAT.stone); quad(P(d, -0.5, y0 - 0.02, -pr), P(d, 0.5, y0 - 0.02, -pr), P(d, 0.5, y0 - 0.02), P(d, -0.5, y0 - 0.02), [0, -1, 0], 0.6, MAT.stone); }
       cur.dress = keep;
     }
+  };
+  /**
+   * A face with an opening in it: a door (an arched way in, its leaf of planks set back in the wall, a step at its
+   * foot), or a window (arched, square, or a slit; its glass set back, a sill under it). The wall round it, the opening's
+   * reveals and head, and what's at the back of it.
+   */
+  const holed = (d: number, s0: number, s1: number, y0: number, yt: number, op: Opening, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, foot: number) => {
+    const k = Math.floor(y0 + 0.001);
+    const door = op.kind === 'door', slit = op.style === 'slit', arched = door || op.style === 'arched' || slit;
+    const hw = door ? 0.17 : slit ? 0.04 : op.style === 'square' ? 0.12 : 0.11;
+    const yb = door ? k : k + (slit ? 0.28 : 0.38), sp = door ? k + 0.5 : slit ? k + 0.7 : k + (op.style === 'square' ? 0.72 : 0.62);
+    const head = (t: number) => (arched ? sp + Math.sqrt(Math.max(0, hw * hw - t * t)) : sp), top = arched ? sp + hw : sp, r = door ? 0.13 : 0.09;
+    const [ta, tb] = DIRS[(d + 1) % 4];
+    // (the wall round it)
+    quad(P(d, s0, y0), P(d, -hw, y0), P(d, -hw, yt), P(d, s0, yt), n, [foot, foot, 1, 1], MAT.stone);
+    quad(P(d, hw, y0), P(d, s1, y0), P(d, s1, yt), P(d, hw, yt), n, [foot, foot, 1, 1], MAT.stone);
+    if (yb > y0 + 0.001) quad(P(d, -hw, y0), P(d, hw, y0), P(d, hw, yb), P(d, -hw, yb), n, [foot, foot, 1, 1], MAT.stone);
+    const N = arched ? 8 : 1;
+    for (let q = 0; q < N; q++) {
+      const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N;
+      quad(P(d, t0, head(t0)), P(d, t1, head(t1)), P(d, t1, yt), P(d, t0, yt), n, 1, MAT.stone);
+      // (its head, set back)
+      const tm = (t0 + t1) / 2, hn = arched ? [-(tm / hw), -Math.sqrt(Math.max(0, 1 - (tm / hw) ** 2))] : [0, -1];
+      quad(P(d, t0, head(t0)), P(d, t1, head(t1)), P(d, t1, head(t1), r), P(d, t0, head(t0), r), [ta * hn[0], hn[1], tb * hn[0]], 0.6, MAT.stone);
+      // (and the back of it, under the head)
+      quad(P(d, t0, sp, r), P(d, t1, sp, r), P(d, t1, head(t1), r), P(d, t0, head(t0), r), n, 0.7, door ? MAT.door : MAT.glass);
+    }
+    // (its reveals, its sill or threshold, and what's at the back: the door's planks, or glass)
+    quad(P(d, -hw, yb), P(d, -hw, yb, r), P(d, -hw, sp, r), P(d, -hw, sp), [ta, 0, tb], 0.65, MAT.stone);
+    quad(P(d, hw, yb), P(d, hw, yb, r), P(d, hw, sp, r), P(d, hw, sp), [-ta, 0, -tb], 0.65, MAT.stone);
+    quad(P(d, -hw, yb), P(d, hw, yb), P(d, hw, yb, r), P(d, -hw, yb, r), [0, 1, 0], 0.8, MAT.stone);
+    quad(P(d, -hw, yb, r), P(d, hw, yb, r), P(d, hw, sp, r), P(d, -hw, sp, r), n, 0.7, door ? MAT.door : MAT.glass);
+    const ledge = (s: number, y: number, h: number, out: number) => {
+      quad(P(d, -s, y, -out), P(d, s, y, -out), P(d, s, y + h, -out), P(d, -s, y + h, -out), n, 0.9, MAT.stone);
+      quad(P(d, -s, y + h, -out), P(d, s, y + h, -out), P(d, s, y + h), P(d, -s, y + h), [0, 1, 0], 1, MAT.stone);
+      quad(P(d, -s, y, -out), P(d, s, y, -out), P(d, s, y), P(d, -s, y), [0, -1, 0], 0.5, MAT.stone);
+      quad(P(d, -s, y, -out), P(d, -s, y), P(d, -s, y + h), P(d, -s, y + h, -out), [-ta, 0, -tb], 0.8, MAT.stone);
+      quad(P(d, s, y, -out), P(d, s, y), P(d, s, y + h), P(d, s, y + h, -out), [ta, 0, tb], 0.8, MAT.stone);
+    };
+    if (door) ledge(hw + 0.05, k, 0.03, 0.06); else if (!slit) ledge(hw + 0.03, yb - 0.04, 0.04, 0.035);
   };
   const topFace = (k: number, i: number, j: number, y: number) => {
     if (w.block(k + 1, i, j) || w.stair(k + 1, i, j) >= 0) return;
@@ -245,6 +288,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
   }
   for (const sp of w.spans) span(sp);
+  for (const b of buildings(w).list) if (b.roof) roof(b);
 
   // ─── what grows in the courtyards ───
   const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: 0 }; }), ...[...w.trees.entries()].map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
@@ -266,10 +310,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
 
   // ─── dressing: parapets (by hand, and along a bridge of its own accord), lanterns and pots ───
   // (first, which edges of which tops have one: open edges, with nothing at that height beyond them)
-  const edges = new Map<number, boolean[]>();
+  const edges = new Map<number, boolean[]>(), roofed = new Set<number>();
+  for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
   for (const v of [...w.mass.keys()]) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
-    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j)) continue;
+    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v)) continue;
     // (a parapet of its own accord along anything carried high: a bridge, or an arch two levels up or more)
     const bridge = !!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j));
     if (!d?.parapet && !bridge) continue;
@@ -301,7 +346,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   for (const v of [...w.mass.keys()]) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j);
     if (d?.ivy) ivy(k, i, j, w.born(k, i, j));
-    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j)) continue;
+    if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v)) continue;
     if (d?.prop === DRESS.lantern) lantern(i, j, k + 1, w.born(k, i, j));
     if (d?.prop === DRESS.pot) pot(i, j, k + 1, w.born(k, i, j));
   }
@@ -358,6 +403,65 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         }
       }
     }
+  }
+  /** a face of any shape (three or four corners), its normal worked out from them: turned up (or down), or, given a point
+   * inside, turned away from it */
+  function face(p: V3[], mat: number, ao = 1, up = true, from?: V3) {
+    const u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]], v = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+    let n: V3 = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const l = Math.hypot(...n) || 1; n = [n[0] / l, n[1] / l, n[2] / l];
+    if (from) { const c = p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length, a[2] + q[2] / p.length], [0, 0, 0]); if (n[0] * (c[0] - from[0]) + n[1] * (c[1] - from[1]) + n[2] * (c[2] - from[2]) < 0) n = [-n[0], -n[1], -n[2]]; }
+    else if ((n[1] < 0) === up) n = [-n[0], -n[1], -n[2]];
+    if (p.length === 3) tri(p[0], p[1], p[2], n, ao, mat); else quad(p[0], p[1], p[2], p[3], n, ao, mat);
+  }
+  /**
+   * A roof over a building (buildings.ts says which): hipped (a pyramid on a square plan, a ridge along a long one),
+   * gabled (two slopes, the ends walled up in stone), a shed roof (one slope, falling away from the taller stone it
+   * leans on), or a dome on a drum. Tiled in terracotta (the dome in lead), out over the walls at the eaves, its
+   * underside showing; a ridge along the top.
+   */
+  function roof(b: Building) {
+    const O = 0.12, y = b.h, ye = y + 0.02;
+    const xa = X(b.i0), xb = X(b.i1 + 1), za = Z(b.j0), zb = Z(b.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
+    cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.2, pivot: y, how: 1, tone: 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
+    const slope = (p: V3[]) => { face(p, MAT.tile, 1, true); face(p, MAT.tile, 0.45, false); };
+    const X0 = xa - O, X1 = xb + O, Z0 = za - O, Z1 = zb + O, cx = (xa + xb) / 2, cz = (za + zb) / 2;
+    if (b.roof === 'dome') {
+      const r = Math.min(xb - xa, zb - za) * 0.42;
+      lathe(cx, cz, [[r + 0.04, y], [r + 0.04, y + 0.06], [r, y + 0.06], [r, y + 0.2]], MAT.stone, 16);
+      cur.dress = 0;
+      lathe(cx, cz, Array.from({ length: 9 }, (_, q) => { const t = (q / 8) * (Math.PI / 2); return [r * Math.cos(t), y + 0.2 + r * 0.95 * Math.sin(t)] as [number, number]; }), MAT.lead, 16);
+      lathe(cx, cz, [[0.03, y + 0.2 + r * 0.95], [0.02, y + 0.32 + r * 0.95], [0.045, y + 0.36 + r * 0.95], [0, y + 0.42 + r * 0.95]], MAT.lead, 6);
+      return;
+    }
+    if (b.roof === 'shed') {
+      // (high against what it leans on, falling to the eave the other side)
+      const f = b.fall, H = 0.45, hy = (x: number, z: number) => { const t = f === 0 ? (x - X0) / (X1 - X0) : f === 2 ? (X1 - x) / (X1 - X0) : f === 1 ? (z - Z0) / (Z1 - Z0) : (Z1 - z) / (Z1 - Z0); return ye + H * (1 - t); };
+      const c: V3[] = [[X0, 0, Z0], [X1, 0, Z0], [X1, 0, Z1], [X0, 0, Z1]].map(([x, , z]) => [x, hy(x, z), z] as V3);
+      slope(c);
+      // (its two sides walled up under the slope, in the planes of the walls across the fall)
+      const mid: V3 = [cx, y, cz], sides: Array<[V3, V3]> = f % 2 === 0 ? [[[xa, 0, za], [xb, 0, za]], [[xa, 0, zb], [xb, 0, zb]]] : [[[xa, 0, za], [xa, 0, zb]], [[xb, 0, za], [xb, 0, zb]]];
+      for (const [p, q] of sides) face([[p[0], y, p[2]], [q[0], y, q[2]], [q[0], hy(q[0], q[2]), q[2]], [p[0], hy(p[0], p[2]), p[2]]], MAT.stone, 0.9, true, mid);
+      return;
+    }
+    // (hipped, or gabled: a ridge along the long way, at a pitch a little under half the short span)
+    const S = along === 0 ? Z1 - Z0 : X1 - X0, H = S * 0.42;
+    const r0: V3 = along === 0 ? [b.roof === 'hipped' ? X0 + S / 2 : X0, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z0 + S / 2 : Z0];
+    const r1: V3 = along === 0 ? [b.roof === 'hipped' ? X1 - S / 2 : X1, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z1 - S / 2 : Z1];
+    const A: V3 = [X0, ye, Z0], B: V3 = [X1, ye, Z0], C: V3 = [X1, ye, Z1], D: V3 = [X0, ye, Z1];
+    if (along === 0) { slope([A, B, r1, r0]); slope([D, C, r1, r0]); } else { slope([A, D, r1, r0]); slope([B, C, r1, r0]); }
+    if (b.roof === 'hipped') {
+      if (along === 0) { slope([A, D, r0]); slope([B, C, r1]); } else { slope([A, B, r0]); slope([D, C, r1]); }
+    } else {
+      // (the gable ends: walled up in stone, in the plane of the wall)
+      const hAt = (d: number) => ye + H * (1 - d / (S / 2));
+      const mid: V3 = [cx, y, cz];
+      if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hAt(O), zb], [x, hAt(O), za]], MAT.stone, 0.9, true, mid); face([[x, hAt(O), za], [x, hAt(O), zb], [x, ye + H, cz]], MAT.stone, 0.9, true, mid); }
+      else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hAt(O), z], [xa, hAt(O), z]], MAT.stone, 0.9, true, mid); face([[xa, hAt(O), z], [xb, hAt(O), z], [cx, ye + H, z]], MAT.stone, 0.9, true, mid); }
+    }
+    // (the ridge)
+    const RW = 0.035;
+    if (along === 0) box(r0[0], r1[0], ye + H - 0.01, ye + H + 0.04, cz - RW, cz + RW, MAT.tile, 0.9); else box(cx - RW, cx + RW, ye + H - 0.01, ye + H + 0.04, r0[2], r1[2], MAT.tile, 0.9);
   }
   /** a box's sides and top */
   function box(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, mat: number, ao: number[] | number = 1) {

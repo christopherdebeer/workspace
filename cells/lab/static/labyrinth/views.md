@@ -24,6 +24,8 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ## A labyrinth
 
 ![8 · A labyrinth: a cloister with a gallery of arches on its walls; a gate framing the stair beyond; the stair climbing behind a wall, its head showing over it; a bridge from its landing over the passage below to the cloister; a tall narrow slot bridged high up](v-story-8.jpg)
+![Houses, close: roofs where they belong: hipped, a lean-to falling away from it, gabled, a marble tower's lead dome; doors and windows the rules' own](v-houses.jpg)
+![Doors where ways meet walls: the cloister's corner towers: doors where the gallery arrives, a door at the foot, a stair inside; slit windows](v-doors.jpg)
 ![From the other side: the slot between the towers, the gallery, and the court inside](v-story-8-turned.jpg)
 
 ## Auto, with character

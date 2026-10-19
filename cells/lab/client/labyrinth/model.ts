@@ -67,8 +67,9 @@ export interface Op {
    * it; on (1) or off (0). It never changes what stands */
   dress?: Array<[number, number, number, number, number]>;
 }
-/** readings of the rules' work a hand can switch to */
-export const RULE = { none: 0, lintel: 1, pier: 2 } as const;
+/** readings of the rules' work a hand can switch to: an arch read as a lintel, a pier asked for; a building's roof (none, or
+ * which kind), kept at the lowest cell of its top */
+export const RULE = { none: 0, lintel: 1, pier: 2, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14 } as const;
 /** dressing: three stones (travertine is the stone's own), then what's on it */
 export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7 } as const;
 /** a cell's dressing: each part set (by the hand, or by the rules' own dressing, character.ts) or not; a part set off

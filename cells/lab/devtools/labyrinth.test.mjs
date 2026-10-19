@@ -13,6 +13,7 @@ const NAV = await load('../client/labyrinth/nav.ts');
 const MO = await load('../client/labyrinth/motifs.ts');
 const SEL = await load('../client/labyrinth/select.ts');
 const CH = await load('../client/labyrinth/character.ts');
+const BU = await load('../client/labyrinth/buildings.ts');
 
 let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
@@ -34,7 +35,7 @@ function stands(w, tag) {
 }
 
 const made = {};
-const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set() };
+const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set(), roofs: 0, doors: 0 };
 /** how far from what an edit touched its effect on piers and arches may go (an arch spans seven at most; an arcade's
  * piers are respaced along its whole run, so a little more) */
 const LOCAL = 9;
@@ -108,6 +109,23 @@ for (let s = 1; s <= 60; s++) {
     local.tried++; if (changed.every((v) => !far(v))) local.ok++; else if (local.saw.length < 3) local.saw.push({ s, t, why: op.why, far: changed.filter(far).map(unkey) });
   }
   stands(w, `seed ${s}`);
+  // (buildings: every opening is in a building's own face and looks out on air; a door looks out on a place to stand;
+  // a roof only over a top that isn't walked; the same every time)
+  {
+    const bs = BU.buildings(w), nav = NAV.navigate(w);
+    for (const b of bs.list) {
+      for (const o of b.openings) {
+        const [a, c] = DIRS[o.d];
+        ok(`seed ${s}: an opening is in a building's own stone, looking out on air`, w.block(o.k, o.i, o.j) && !w.stone(o.k, o.i + a, o.j + c) && w.stair(o.k, o.i + a, o.j + c) < 0, o);
+        if (o.kind === 'door') ok(`seed ${s}: a door looks out on a place to stand`, NAV.standing(w, o.k, o.i + a, o.j + c), o);
+      }
+      if (b.roof) ok(`seed ${s}: a roof only over a top nothing arrives at`, !b.walked && b.rect, b);
+      lively.roofs += b.roof ? 1 : 0; lively.doors += b.openings.filter((o) => o.kind === 'door').length;
+    }
+    const again = BU.buildings(replay(w.encode(), w.seed));
+    ok(`seed ${s}: buildings come out the same every time`, JSON.stringify(again.list.map((b) => [b.roof, b.openings])) === JSON.stringify(bs.list.map((b) => [b.roof, b.openings])));
+    void nav;
+  }
   // (the rules' own dressing: the same for the same world, and a motif dressed all of a piece)
   {
     const ch = CH.character(w), again = CH.character(replay(w.encode(), w.seed));
@@ -232,6 +250,31 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   }
   ok('a wall keeps its kind as the stroke grows, and its openings stay where they are', moved === 0, moved);
   ok('and walls come in all three kinds', kinds.size === 3, [...kinds]);
+}
+// (buildings: a stair inside where one's needed; doors where ways meet walls; roofs where they belong, and switched)
+ok(`the random worlds have buildings with doors and roofs (${lively.doors} doors, ${lively.roofs} roofs)`, lively.doors > 0 && lively.roofs > 0, lively);
+{
+  const s4 = story(4), base = NAV.navigate(s4), full = BU.walkable(s4);
+  ok('story 4: the terrace\'s top can\'t be reached from the stone by the stone alone', !NAV.reaches(base, [0, 9, 3], [3, 9, 4]));
+  ok('story 4: so the terrace has a door at its foot and a stair inside, and it can', NAV.reaches(full, [0, 9, 3], [3, 9, 4]) && BU.buildings(s4).list.some((b) => b.inside && b.openings.some((o) => o.kind === 'door' && o.k === 0)), BU.buildings(s4).list.map((b) => b.openings));
+  ok('story 4: and from there, the platform\'s top, along the connection', NAV.reaches(full, [0, 9, 3], [2, 3, 7]));
+  const s7 = story(7);
+  ok('story 7: a door where the high walkway leaves the tower, halfway up', !!BU.opening(s7, 4, 13, 4, 2) || !!BU.opening(s7, 5, 13, 4, 2), BU.buildings(s7).list.map((b) => b.openings.filter((o) => o.kind === 'door')));
+  const s8 = story(8), roofs = BU.buildings(s8).list.filter((b) => b.roof).map((b) => b.roof).sort();
+  ok('story 8: the houses roofed, each its own way (dome, gable, hipped, shed)', JSON.stringify(roofs) === JSON.stringify(['dome', 'gable', 'hipped', 'shed']), roofs);
+  ok('story 8: and none over a top that\'s walked', BU.buildings(s8).list.every((b) => !b.roof || !b.walked));
+  ok('story 8: every house has a door', BU.buildings(s8).list.filter((b) => b.roof).every((b) => b.openings.some((o) => o.kind === 'door')));
+  ok('story 8: the slot\'s towers have stairs inside, up to the bridge between them', NAV.reaches(BU.walkable(s8), [0, -1, 4], [5, 0, 6]));
+  // (a roof switched by hand, and back)
+  const hip = BU.buildings(s8).list.find((b) => b.roof === 'hipped'), m = MO.motifs(s8).find((q) => q.cells.some((c) => c[1] === hip.cols[0][0] && c[2] === hip.cols[0][1] && c[0] === hip.h - 1));
+  const sel = SEL.selectMotif(s8, m, 0), gable = sel.readings.find((r) => r.label === 'gable roof');
+  ok('a building taken up reads its roof every way', sel.readings.length === 6 && !!gable, sel.readings.map((r) => r.label));
+  s8.apply(gable.op);
+  ok('read as a gable, it\'s gabled', BU.buildings(s8).list.find((b) => b.id === hip.id)?.roof === 'gable');
+  s8.apply(SEL.selectMotif(s8, m, 0).readings.find((r) => r.label === 'no roof').op);
+  ok('and with no roof, none', BU.buildings(s8).list.find((b) => b.id === hip.id)?.roof === null);
+  const M = await load('../client/labyrinth/mesh.ts');
+  ok('story 8 is drawn, roofs and openings and all', M.buildMesh(story(8)).count > 0);
 }
 // (a gate in a wall is walked through)
 {

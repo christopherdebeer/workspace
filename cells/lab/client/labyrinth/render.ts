@@ -88,6 +88,28 @@ void main() {
   else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)) * (.8 + .4 * vTone); wrap = .35; }
   else if (mat == 4) base = vec3(.32, .24, .17);
   else if (mat == 9) base = vec3(1.);
+  else if (mat == 11) {
+    // (a door: planks, upright, weathered dark, with a darker line between each)
+    float u = abs(n.x) > .5 ? vPos.z : vPos.x, pl = fract(u * 14.);
+    base = vec3(.30, .21, .14) * (.85 + .25 * hash(vec3(floor(u * 14.), 3., 1.))) * (.8 + .2 * noise(vec3(u * 40., vPos.y * 3., 0.)));
+    base *= .75 + .25 * smoothstep(.0, .12, min(pl, 1. - pl));
+  }
+  else if (mat == 12) base = vec3(.09, .10, .11);
+  else if (mat == 13) {
+    // (roof tiles: terracotta, in courses up the slope, each a curved tile a shade of its own, the next course's lip
+    // shading the one under it)
+    float row = vPos.y * 9., r = floor(row), fr = fract(row);
+    float u = (abs(n.x) > abs(n.z) ? vPos.z : vPos.x) * 7. + r * .5, cu = floor(u), fu = fract(u);
+    float tint = hash(vec3(cu, r, 7.));
+    base = mix(vec3(.62, .34, .23), vec3(.74, .47, .32), tint) * (.82 + .18 * sin(fu * 3.14159));
+    base *= .7 + .3 * smoothstep(.0, .25, fr);
+    base = mix(base, vec3(.45, .47, .38), .18 * smoothstep(.55, .8, fbm(vPos * 2.)));
+  }
+  else if (mat == 14) {
+    // (lead: grey-green, in standing seams)
+    float u = atan(vPos.z - floor(vPos.z) - .5, vPos.x - floor(vPos.x) - .5) * 4., su = fract(u);
+    base = vec3(.42, .47, .45) * (.9 + .1 * noise(vPos * 12.)) * (.85 + .15 * smoothstep(.0, .08, min(su, 1. - su)));
+  }
   else if (mat == 10) base = vec3(.70, .40, .27) * (.9 + .15 * noise(vPos * 18.));
   else if (mat == 7) base = vec3(.90, .89, .86) * (.98 + .03 * noise(vPos * 3.));
   else if (mat == 6) base = travertine(vPos, .6) * .9;
@@ -149,9 +171,9 @@ void main() {
   // (a sheen that differs by what it is: polished marble most, travertine a little, brick and clay hardly, leaves some)
   {
     vec3 hv = normalize(uSun - normalize(uDir));
-    float glo = mat == 3 ? 18. : mat == 10 ? 8. : kind == 2 ? 60. : kind == 1 ? 8. : 14.;
-    float ks = mat == 3 ? .06 : mat == 10 ? .03 : kind == 2 ? .22 : kind == 1 ? .015 : .045;
-    if (mat == 0 || mat == 1 || mat == 3 || mat == 10) c += sun * ks * pow(max(dot(n, hv), 0.), glo) * sh * (.5 + .5 * vAo);
+    float glo = mat == 12 ? 90. : mat == 14 ? 30. : mat == 3 ? 18. : mat == 10 || mat == 13 ? 8. : kind == 2 ? 60. : kind == 1 ? 8. : 14.;
+    float ks = mat == 12 ? .6 : mat == 14 ? .2 : mat == 3 ? .06 : mat == 10 || mat == 13 ? .03 : kind == 2 ? .22 : kind == 1 ? .015 : .045;
+    if (mat == 0 || mat == 1 || mat == 3 || mat == 10 || mat >= 12) c += sun * ks * pow(max(dot(n, hv), 0.), glo) * sh * (.5 + .5 * vAo);
   }
   // (light gathers in the archways)
   // (light bounced up into an arch from the sunlit ground: warm near its mouth, little where it's deep)

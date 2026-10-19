@@ -102,6 +102,7 @@ Tap a piece and it's taken up: its own surfaces faintly warmed and its outline d
 | an arch you put | an arch · turned · a block · a stair |
 | a stair | each of the four ways it could climb · a block |
 | a wall | a wall · a thin wall · an arcaded wall (a way through each cell of its foot) |
+| a building (a tower, a terrace) | its roof as the rules choose · no roof · hipped · gable · shed · dome |
 
 A switched reading is an operation like any other: undone, written down, replayed. From then on it's the hand's. The rules don't decide it again.
 
@@ -144,7 +145,7 @@ The brief's first test asks whether someone, without instruction, can build this
    - Tap up a tower, and trace from its top to the terrace's top at the same height. The rules choose one great arch for this bridge (another stroke might get an arcade of even bays).
    - None of it is dressed by hand: the brick tower and its lantern, the ivy and moss round the court, the pots, the parapets are all the rules' own (below). `?plain` shows it bare.
 
-And `?story=8` is **a labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a gallery of arches on its walls from corner tower to corner tower, a gate through each side, one framing the stair beyond). A stair climbing behind a wall, its foot hidden and its head showing over the wall, to a landing tower. From there a bridge over the passage below to the cloister's corner, so one way crosses another. And a tall, narrow slot between two towers, bridged high up.
+And `?story=8` is **a labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a gallery of arches on its walls from corner tower to corner tower, a gate through each side, one framing the stair beyond). A stair climbing behind a wall, its foot hidden and its head showing over the wall, to a landing tower. From there a bridge over the passage below to the cloister's corner, so one way crosses another. A tall, narrow slot between two towers, bridged high up. And houses under roofs, their doors, windows and stairs inside the rules' own.
 
 ## How it's built
 
@@ -208,6 +209,36 @@ Dressing is kept sparing on purpose: a few things dressed well read better than 
 
 ![auto alone, no cap: a ten-high tower, a walkway to it, a long gated wall, and a high walkway from halfway up the tower whose slim piers stand aside on the ways below; everything as the rules chose](labyrinth/v-story-7.jpg)
 ![storyboard 4 with ?plain: the same stone, without the rules' dressing](labyrinth/v-story-4-plain.jpg)
+
+## Buildings: doors, windows, a stair inside, roofs
+
+A solid mass of stone is read as a building (`buildings.ts`), worked out afresh from what's built, like the rules' dressing, and seeded so the same build always comes out the same. A building is solid columns all the same height, two or more high: two cells or more deep each way, or a tower of one or two cells three or more high. A wall a cell thick isn't one.
+
+**Doors** go where they mean something:
+- **where a way arrives against a building's wall at height** (a walkway, a landing, a bridge's end, the walk under a gallery): a door into it;
+- **at its foot, when a stair inside is needed**, facing ground a figure can reach: when a way at one of its doors, or on its top, can't be reached from the stone any other way;
+- **at the foot of a house** (a building whose top isn't walked) as a rule, and now and then at the foot of others facing a court.
+
+**A stair inside** joins a building's doors to each other, and to its top if its top is walked. It's a way the stone doesn't show, so the walk graph knows of it (`walkable`). In storyboard 4, nothing on the stone climbs to the terrace, the platform or the walkway between them. The terrace has a door at its foot, so its stair inside is how they're reached.
+
+**Windows**, one style to a building (arched, square, or a slit), go on its open faces, alternating along a front and from one level to the next. A tower with a stair inside has a slit a level, climbing round it as the stair does.
+
+Each opening is set back in the wall: its reveals, its head (arched, or square), a sill under a window, a step at a door. A door has a leaf of weathered planks; a window has dark glass that catches the sun.
+
+**A roof** goes where the top isn't walked, nothing has been put on it, and the plan is a plain rectangle (other plans are next):
+
+| Plan | Roof |
+|---|---|
+| square | hipped (a pyramid, on a tower); now and then a dome on a drum, on a tower |
+| long | gabled along it, the ends walled up in stone (now and then hipped) |
+| leaning on taller stone along one side | a shed roof, falling away from it |
+
+Roofs are terracotta tiles in courses up the slope, each tile its own shade, over an eave with its underside showing, and a ridge along the top. Domes are lead in standing seams, with a finial. Nothing the rules dress goes on a roofed top.
+
+**Select** a building (its tower, or its terrace) to read its roof another way: *as the rules choose*, *no roof*, *hipped*, *gable*, *shed*, *dome*. The choice is kept as a rule, and from then on it's the hand's.
+
+![houses: hipped, a lean-to falling away from it, gabled, a marble tower's lead dome](labyrinth/v-houses.jpg)
+![doors where ways meet walls: the cloister's corner towers, a door at the foot, slit windows](labyrinth/v-doors.jpg)
 
 ## Three tiers of wall
 
@@ -286,6 +317,10 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - the hand's dressing wins over the rules';
   - there's no cap: a column tapped up fourteen times is fourteen high, read as a tower, climbed by a fourteen-step flight that can be walked, and drawn to the top;
   - a gate in a wall is walked through, along its way only;
+  - every opening is in a building's own stone and looks out on air; every door looks out on a place to stand; a roof only over a top nothing arrives at; buildings come out the same every time;
+  - storyboard 4: the terrace's top can't be reached from the stone by the stone alone; so it has a door at its foot and a stair inside, and it can; and from there, the platform's top along the connection;
+  - storyboard 7: a door where the high walkway leaves the tower, halfway up;
+  - storyboard 8: the houses roofed each their own way (dome, gable, hipped, shed), none over a walked top, every house with a door; the slot's towers climbed inside to the bridge between them; a building's roof read every way, gabled, then none;
   - a wall keeps its kind as the stroke grows, and its openings stay where they are; walls come in all three kinds;
   - a high walkway's free end comes down on a pier onto a walkway below: the pier is slim, stands aside, and the walkway below can still be walked past it, and built on;
   - the wall piece run round makes thin walls, which close a court; a tap on a thin wall goes on as one, up or out along its way; struck where it is, not beside it;
@@ -309,6 +344,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 
 - `?story=1` … `?story=4` is the storyboard; `?story=5` adds pieces; `?story=6` motifs and dressing by hand; `?story=7` auto alone, no cap; `?story=8` a labyrinth.
 - `?nomsaa` draws it without multisampling.
+- `?at=i.j` looks at that cell rather than framing it all.
 - `?plain` draws it without the rules' dressing.
 - `?brush=select` (or any brush, piece or dressing) starts with it in hand. `?sheet` opens the piece brush's sheet; `?select=k.i.j` takes up what's at that cell, and `&whole` its whole.
 - `?ops=` builds from operations, as the model writes them.
@@ -323,6 +359,9 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 - **The walk drawn**: the places and stairs from `nav.ts`, shown faintly while a trace is under the finger.
 - **Spatial grammar**: the rules making sequences, not only supports: galleries round courts, a passage lined up on a far stair, a stair turned behind a wall, of their own accord.
 - **Worn stone**: a worn centre to a stair's treads, a darker edge to a pool.
+- **Roofs on any plan**: an L or a T as joined roofs (valleys and hips), a roof stepping down a building of two heights; roofs over walks (a loggia's roof on columns).
+- **Doors and windows by hand**: a door or window as a piece, and select reading a building's openings (none, more, another style).
+- **Interiors**: a building opened up (a cut through it shows its floors and its stair).
 
 - **Snapping on relationships**: geometric (a stroke ending near an edge or a terrace joins it), topological (two walkways meeting make a junction you can walk), architectural (a buttress under an exposed terrace edge).
 - **Strokes off the grid**: diagonals kept as diagonals, with slight irregularity in the masonry.

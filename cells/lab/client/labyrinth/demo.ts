@@ -15,7 +15,8 @@
  * 8. **A labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a
  *    gallery of arches on its walls between corner towers, a gate through each side); a stair climbing behind a wall
  *    (its foot hidden, its head showing over the wall) to a landing tower; from there a bridge over the passage below it
- *    to the cloister's corner, so one way crosses another; and a tall, narrow slot between two towers bridged high up.
+ *    to the cloister's corner, so one way crosses another; a tall, narrow slot between two towers bridged high up; and
+ *    houses under roofs (hipped, a lean-to, gabled, a marble tower's dome), their doors and windows the rules' own.
  * 6. **Motifs and dressing**: the same as 4, and a trace from the terrace to a new tower further off (an arcade of three
  *    bays, alike, a parapet along it of its own accord); a flight run up to the terrace with the stair brush; the passage under the
  *    walkway read as a lintel; and dressed: a marble tower with a lantern, the court's wall in brick, moss on the
@@ -124,5 +125,12 @@ function labyrinth(): World {
   // (a tall slot: two towers five high, bridged at the top)
   col(0, 4, 5); col(0, 6, 5);
   add([[4, 0, 5]]);
+  // (and houses east of the cloister, under roofs: a square one hipped, a lean-to falling away from it, a long one gabled,
+  // and a marble tower read with a dome)
+  for (const [i, j] of [[11, 6], [12, 6], [11, 7], [12, 7]]) col(i, j, 3);
+  for (const [i, j] of [[11, 8], [12, 8], [11, 9], [12, 9]]) col(i, j, 2);
+  for (const [i, j] of [[11, 2], [12, 2], [13, 2], [11, 3], [12, 3], [13, 3]]) col(i, j, 2);
+  col(14, 6, 4);
+  w.apply({ dress: [0, 1, 2, 3].map((k) => [k, 14, 6, DRESS.marble, 1] as [number, number, number, number, number]), rule: [[3, 14, 6, RULE.dome]] }, t);
   return w;
 }

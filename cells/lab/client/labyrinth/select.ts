@@ -8,7 +8,8 @@
  * where there was air, a block turned arch or stair), so it's undone, replayed and resolved like any other, and it's
  * the hand's from then on.
  */
-import { DIRS, RULE, type Cell, type Op, type Span, type World } from './model';
+import { buildings } from './buildings';
+import { DIRS, RULE, key, unkey, type Cell, type Op, type Span, type World } from './model';
 import type { Motif } from './motifs';
 
 export interface Reading { label: string; op: Op | null }
@@ -102,6 +103,15 @@ export function selectMotif(w: World, m: Motif, now: number): Selection {
     const at = arched ? 2 : thin ? 1 : 0;
     readings[at].op = null;
     return { ...base, readings, at };
+  }
+  // (a building: its roof, as the rules choose it, none, or each kind)
+  const b = (m.kind === 'tower' || m.kind === 'terrace') && buildings(w).of.get(key(...m.cells.find((c) => w.block(...c)) ?? m.cells[0]));
+  if (b) {
+    const rule = w.rules.get(b.id) ?? 0, at = rule >= RULE.noRoof && rule <= RULE.dome ? rule - RULE.noRoof + 1 : 0;
+    const roofs: Array<[string, number]> = [[`roof as the rules choose (${b.roof && !rule ? `${b.roof}` : 'none'})`, RULE.none], ['no roof', RULE.noRoof], ['hipped roof', RULE.hipped], ['gable roof', RULE.gable], ['shed roof', RULE.shed], ['dome', RULE.dome]];
+    const readings: Reading[] = roofs.map(([label, r], n) => ({ label, op: n === at ? null : { rule: [[...unkey(b.id), r] as [number, number, number, number]], why: 'reading' } }));
+    const title = `${m.label}${b.openings.some((o) => o.kind === 'door') ? `, ${b.inside ? 'a stair inside' : 'a door'}` : ''}${b.roof ? `, a ${b.roof === 'dome' ? 'dome' : `${b.roof} roof`}` : ''}`;
+    return { ...base, title, readings, at, remove: m.kind === 'terrace' ? null : base.remove };
   }
   return { ...base, readings: [{ label: m.label, op: null }], at: 0, remove: m.kind === 'court' || m.kind === 'terrace' ? null : base.remove };
 }

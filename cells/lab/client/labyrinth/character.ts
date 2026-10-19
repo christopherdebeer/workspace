@@ -20,6 +20,7 @@
 import { hash } from '../kit/rng';
 import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './model';
 import { height, motifs } from './motifs';
+import { buildings } from './buildings';
 
 const cache = new WeakMap<World, { v: number; map: Map<number, Dress> }>();
 
@@ -46,7 +47,10 @@ function dressUp(w: World): Map<number, Dress> {
   const map = new Map<number, Dress>();
   /** a chance, the same every time for the same things */
   const chance = (p: number, ...n: number[]) => hash(w.seed, ...n) % 1000 < p * 1000;
-  const put = (c: Cell, d: Dress) => { const v = key(...c), o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };
+  // (nothing goes on a top that has a roof over it)
+  const roofed = new Set<number>();
+  for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
+  const put = (c: Cell, d: Dress) => { const v = key(...c); if (roofed.has(v) && (d.prop || d.parapet)) return; const o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };
   const stone = (c: Cell) => w.stone(...c) || w.pier(...c);
   /** a top with room over it (for a lantern or a pot) */
   const roomy = (c: Cell) => w.stone(...c) && !w.occupied(c[0] + 1, c[1], c[2]) && !w.tree(c[0] + 1, c[1], c[2]);
