@@ -49,7 +49,11 @@ await withWood(async (lab) => {
     await p.waitForTimeout(2500);
     if (cs.intent) { await p.evaluate((i) => window.__labyrinth.setIntent(i), cs.intent); await p.waitForTimeout(300); }
     // (the view settled: nothing gliding under the hand when the picture's taken)
-    const settle = async () => { let a = null; for (let t = 0; t < 60; t++) { await p.waitForTimeout(400); const b = await p.evaluate(() => window.__labyrinth.screenOf(0, 0, 0)); if (a && Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.3) return; a = b; } };
+    // (and drawn: frames counted by the guide layer's clearing, once a frame; a slow (software) renderer can take
+    // seconds over one after a build, and a picture taken before then shows the last one)
+    await p.evaluate(() => { const C = CanvasRenderingContext2D.prototype, cr = C.clearRect; window.__frames = 0; C.clearRect = function (...a) { window.__frames++; return cr.apply(this, a); }; });
+    const frames = async (n) => { const f0 = await p.evaluate(() => window.__frames); for (let t = 0; t < 240; t++) { await p.waitForTimeout(250); if ((await p.evaluate(() => window.__frames)) - f0 >= n) return; } };
+    const settle = async () => { let a = null; for (let t = 0; t < 60; t++) { await frames(2); const b = await p.evaluate(() => window.__labyrinth.screenOf(0, 0, 0)); if (a && Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.3) return; a = b; } };
     for (let n = 1; n <= N; n++) {
       await settle();
       // (what's there to touch: each cell's top, where it is on the screen)
@@ -126,7 +130,7 @@ await withWood(async (lab) => {
       }
       await p.waitForTimeout(400);
       const said = await p.evaluate(() => document.getElementById('hint')?.textContent ?? '');
-      await p.waitForTimeout(2600); await settle();
+      await p.waitForTimeout(1500); await frames(3); await settle();
       await p.screenshot({ path: f('c-after'), type: 'jpeg', quality: 80 });
       const res = await p.evaluate((ops0) => { const L = window.__labyrinth, w = L.world; return { built: w.ops.length > ops0, why: w.ops.slice(ops0).map((o) => o.why ?? ''), rests: w.ops.slice(ops0).map((o) => o.connect?.rest?.length ?? 0), note: w.ops.slice(ops0).map((o) => o.note ?? ''), alts: L.alts(), declines: L.declines().slice(-1), intent: L.intent }; }, ops0);
       const entry = { id, kind, desc, ...res, said, during, errors: p.errors.slice() };
