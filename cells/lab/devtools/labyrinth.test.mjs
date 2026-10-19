@@ -663,6 +663,86 @@ stands(s4, 'story 4');
   { const a = new CT.Cats(1), b = new CT.Cats(1); a.run(story(13), 5); b.run(story(13), 5); ok('the same cats every visit', JSON.stringify(a.list.map((c) => [c.name, c.coat])) === JSON.stringify(b.list.map((c) => [c.name, c.coat]))); }
   { const a = new CT.Cats(1); a.run(story(13), 200); const m = a.remembered(); ok('they come to have favourite places', m.fav.some((f) => f.length > 0 && f[0][1] > 0.3), m.fav.map((f) => f[0])); }
 }
+// ─── gestures read for what a hand meant (the intent exercise: devtools/labyrinth-intent.mjs) ───
+{
+  const groundPick = (w, i, j) => { const g = w.ground(i, j); return { face: 'ground', hit: [g - 1, i, j], to: [g, i, j] }; };
+  const path = (pts) => G.connect(pts);
+  // (a zigzag across the grid gathered into straight runs: same ends, and room for a stair where it had none)
+  { const z = [[0, 0], [1, 0], [1, 1], [2, 1], [2, 2], [3, 2], [3, 3], [4, 3], [4, 4]], s4 = (await load('../client/labyrinth/model.ts')).straighten(z, 4);
+    ok('a zigzag gathered into straight runs: it starts and ends where it did', JSON.stringify(s4[0]) === '[0,0]' && JSON.stringify(s4.at(-1)) === '[4,4]' && s4.length === z.length, s4);
+    const ST = (await load('../client/labyrinth/model.ts')).straights;
+    ok('and has room for stairs where the zigzag had none', ST(z, null).length === 0 && ST(s4, null).length >= 2, ST(s4, null)); }
+  // (ways on the land, drawn as a hand draws them (diagonal, curving): never an empty way. Each builds something, or
+  // says why not)
+  { let tried = 0, empty = 0, reached = 0;
+    for (const seed of [3, 5, 8]) {
+      const w = new World(1, seed);
+      for (let n = 0; n < 60; n++) {
+        const i0 = 1 + (n * 7) % 9, j0 = 1 + (n * 5) % 9, di = n % 2 ? 1 : -1, dj = n % 3 ? 1 : -1, L = 4 + (n % 4);
+        const pts = []; for (let t = 0; t <= L; t++) pts.push([i0 + Math.round(t * di * (0.6 + 0.4 * Math.sin(t + n))), j0 + Math.round(t * dj)]);
+        const cells = path(pts), end = cells.at(-1);
+        if (!w.onSlab(...end) || !w.onSlab(...cells[0])) continue;
+        const op = G.trace(w, groundPick(w, ...cells[0]), cells, groundPick(w, ...end), () => 0, 0, [], 'way');
+        if (!op || op.refused) continue;
+        tried++;
+        const sim = new World(1, seed); sim.ops = [op]; sim.rebuild();
+        const r = sim.reached.get(op);
+        if (op.connect?.follow && r && !r.cells.length) empty++;
+        if (r?.reached) reached++;
+      }
+    }
+    ok('ways drawn across the land as a hand draws them: none comes to an empty way', tried > 40 && empty === 0, { tried, empty, reached });
+    ok('and most reach where they were drawn to', reached > tried * 0.6, { tried, reached }); }
+  // (a touch on the land with a way in hand: a place to stand, paved; near a way's end, the way brought on to it)
+  { const w = new World(1, 3);
+    let spot = null; for (let i = 2; i < 10 && !spot; i++) for (let j = 2; j < 10 && !spot; j++) if (NAV.standing(w, w.ground(i, j), i, j) && [[1, 0], [0, 1], [-1, 0], [0, -1]].every(([a, b]) => w.ground(i + a, j + b) === w.ground(i, j))) spot = [i, j];
+    const op = G.tap(w, groundPick(w, ...spot), 0, false, 'way');
+    ok('way in hand, a touch on the land: a place to stand, paved, not a block', op && !op.refused && op.pave?.length >= 1 && !op.add?.length && op.alts?.[0]?.label === 'raise a block', op);
+    w.apply(op);
+    ok('and the ground there is paved', w.paved(...spot));
+    ok('kept when written down', replay(w.encode()).paved(...spot));
+    const two = [spot[0] + 2, spot[1]];
+    if (NAV.standing(w, w.ground(...two), ...two)) { const on = G.tap(w, groundPick(w, ...two), 0, false, 'way'); ok('a touch near it: the way brought on to it', on && (on.connect?.follow || on.pave?.length) && /brought on/.test(on.note), on); }
+    const mass = G.tap(w, groundPick(w, 5, 5), 0, false, 'mass');
+    ok('mass in hand, the same touch raises a block', mass && mass.add?.length === 1); }
+  // (a way drawn round: a walk all the way round, or a court; never nothing)
+  { let tried = 0, nothing = 0;
+    for (const seed of [3, 5, 8]) {
+      const w = new World(1, seed);
+      for (const [ci, cj] of [[4, 4], [6, 6], [8, 3], [3, 8]]) {
+        const ring = []; for (let t = 0; t < 16; t++) { const a = (t / 16) * Math.PI * 2 * 0.92; ring.push([Math.round(ci + Math.cos(a) * 2.4), Math.round(cj + Math.sin(a) * 2.4)]); }
+        const cells = path(ring);
+        tried++;
+        const op = G.trace(w, groundPick(w, ...cells[0]), cells, groundPick(w, ...cells.at(-1)), () => 0, 0, [], 'way');
+        if (!op || op.refused) nothing++;
+      }
+    }
+    ok('a way drawn round on the land: a walk round, or a court, never nothing', nothing === 0, { tried, nothing }); }
+  // (from a top down to lower ground, mass in hand: going down to it, a flight, not a walkway out at the top's height)
+  { const w = new World(1);
+    for (let k = 0; k < 3; k++) w.apply({ add: [[k, 5, 5, 0]] });
+    const cells = path([[5, 5], [5, 11]]);
+    const op = G.trace(w, { face: 'top', hit: [2, 5, 5], to: [3, 5, 5] }, cells, { face: 'ground', hit: [-1, 5, 11], to: [0, 5, 11] }, () => 0, 0, [], 'mass');
+    ok('from a top down to the ground: going down, a flight', op && !op.refused && op.why === 'stairs' && op.connect?.to?.[0] === 0, op);
+    ok('the walkway at its height still offered', op?.alts?.some((a) => a.label === 'a walkway at the height it starts')); }
+  // (a wall traced over uneven land: one line of coping, no cell dropping out of it between its neighbours)
+  { let walls = 0, dips = 0;
+    for (const seed of [3, 5, 8, 11]) {
+      const w = new World(1, seed);
+      for (const j of [3, 6, 9]) {
+        const cells = path([[1, j], [10, j]]);
+        const op = G.trace(w, groundPick(w, ...cells[0]), cells, groundPick(w, ...cells.at(-1)), () => 0, 0, [], 'mass');
+        if (!op || op.refused || op.why !== 'wall') continue;
+        walls++;
+        const sim = new World(1, seed); sim.ops = [op]; sim.rebuild();
+        const top = (i) => { const g = sim.ground(i, j); let k = g; while (sim.stone(k, i, j)) k++; return k > g ? k : null; };
+        for (let i = 2; i < 10; i++) { const a = top(i - 1), b = top(i), c = top(i + 1); if (a !== null && b !== null && c !== null && b < a && b < c) dips++; }
+      }
+    }
+    ok('a wall over uneven land keeps one line of coping: no cell dips out of it', walls >= 8 && dips === 0, { walls, dips }); }
+  // (a stroke's wobble, a cell aside and back, taken out)
+  ok('a wobble taken out of a stroke', JSON.stringify(G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]])) === JSON.stringify([[0, 0], [1, 0], [2, 0], [3, 0]]), G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]]));
+}
 if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');

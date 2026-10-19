@@ -14,14 +14,25 @@ const OUT = opt.out ?? 'intent-out';
 mkdirSync(OUT, { recursive: true });
 const N = Number(opt.n) || 3;
 
-const CASES = [
+const SETS = {};
+SETS[1] = [
   { name: 'land3', q: 'land=3&zoom=0.62', seed: 31 },
   { name: 'land5', q: 'land=5&zoom=0.62&turn=1', seed: 52 },
   { name: 'land8', q: 'land=8&zoom=0.62', seed: 83 },
   { name: 'land11', q: 'land=11&zoom=0.62&turn=2', seed: 114, intent: 'mass' },
   { name: 'stone', q: 'ops=[]&zoom=0.55', seed: 7 },
   { name: 'story12', q: 'story=12&zoom=0.62', seed: 12 },
-].filter((c) => !opt.cases || opt.cases.split(',').includes(c.name));
+];
+// (a second set, unseen by the first round's readings: other lands, the slope, and longer runs, so the later gestures
+// are made on what the earlier ones built)
+SETS[2] = [
+  { name: 'land4', q: 'land=4&zoom=0.62', seed: 41, n: 4 },
+  { name: 'land9', q: 'land=9&zoom=0.62&turn=1', seed: 93, n: 4 },
+  { name: 'land13', q: 'land=13&zoom=0.62', seed: 137, intent: 'mass', n: 4 },
+  { name: 'flat', q: 'ops=[]&zoom=0.55', seed: 77, n: 5 },
+  { name: 'story15', q: 'story=15&zoom=0.5', seed: 15, n: 3 },
+];
+const CASES = SETS[Number(opt.set) || 1].filter((c) => !opt.cases || opt.cases.split(',').includes(c.name));
 
 const rng = (s) => () => { s |= 0; s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 const SAFE = { x0: 24, x1: 406, y0: 120, y1: 730 };
@@ -54,47 +65,58 @@ await withWood(async (lab) => {
     await p.evaluate(() => { const raf = window.requestAnimationFrame.bind(window); window.__frames = 0; window.requestAnimationFrame = (f) => raf((t) => { window.__frames++; f(t); }); });
     const frames = async (n) => { const f0 = await p.evaluate(() => window.__frames); for (let t = 0; t < 240; t++) { await p.waitForTimeout(250); if ((await p.evaluate(() => window.__frames)) - f0 >= n) return; } };
     const settle = async () => { let a = null; for (let t = 0; t < 60; t++) { await frames(2); const b = await p.evaluate(() => window.__labyrinth.screenOf(0, 0, 0)); if (a && Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.3) return; a = b; } };
-    for (let n = 1; n <= N; n++) {
+    for (let n = 1; n <= (cs.n ?? N); n++) {
       await settle();
-      // (what's there to touch: each cell's top, where it is on the screen)
+      // (what's there to touch: each cell's top. Chosen, and the stroke made, in the room's own cells, not the screen's
+      // pixels, so the same seed makes the same gestures however the view frames them; projected only to be made)
       const cells = await p.evaluate(() => {
         const L = window.__labyrinth, w = L.world, e = w.extent(), out = [];
-        for (let i = e.i0; i <= e.i1; i++) for (let j = e.j0; j <= e.j1; j++) {
+        // (on land, the first piece of it: where the hand first looked)
+        const b = w.land ? { i0: Math.max(e.i0, -1), i1: Math.min(e.i1, 12), j0: Math.max(e.j0, -1), j1: Math.min(e.j1, 12) } : e;
+        for (let i = b.i0; i <= b.i1; i++) for (let j = b.j0; j <= b.j1; j++) {
           const g = w.ground(i, j); let k = g; while (w.stone(k, i, j) || w.stair(k, i, j) >= 0) k++;
-          out.push({ i, j, g, top: k, built: k > g, s: L.screenOf(i, j, k) });
+          out.push({ i, j, g, top: k, built: k > g });
         }
         return out;
       });
-      const ok = cells.filter((c) => safe(c.s)), built = ok.filter((c) => c.built);
+      const topAt = new Map(cells.map((c) => [`${c.i}.${c.j}`, c.top]));
+      const ok = cells, built = ok.filter((c) => c.built);
       const pickC = (from = ok) => from[Math.floor(R() * from.length)];
       const near = (c, d0, d1) => ok.filter((q) => { const d = Math.hypot(q.i - c.i, q.j - c.j); return d >= d0 && d <= d1; });
-      // (the kind of gesture: weighted, and from a top only if there's one)
-      const kinds = [['tap', 2], ['sweep', 3], ['meander', 1.5], ['loop', 1.5], ['pause', 1], ...(built.length ? [['tapTop', 1.5], ['fromTop', 2.5]] : [])];
-      let r = R() * kinds.reduce((a, k) => a + k[1], 0), kind = kinds[0][0];
-      for (const [k, wgt] of kinds) { if ((r -= wgt) <= 0) { kind = k; break; } }
-      let pts = [], pauses = [], tap = null, desc = '';
-      const jitter = (s, a) => [s[0] + (R() - 0.5) * a, s[1] + (R() - 0.5) * a];
-      if (kind === 'tap' || kind === 'tapTop') {
-        const c = pickC(kind === 'tapTop' ? built : ok); tap = jitter(c.s, 10); desc = `tap at ${c.i},${c.j}`;
-      } else if (kind === 'loop') {
-        const c = pickC(ok), rad = 1.6 + R() * 1.6, m = 7, a0 = R() * 6.28, close = R() < 0.6 ? 0.95 + R() * 0.12 : 0.8;
-        const ring = [];
-        for (let q = 0; q <= m; q++) { const a = a0 + (q / m) * 6.28 * close, rr = rad * (0.8 + R() * 0.4); ring.push(await p.evaluate(([i, j, y]) => window.__labyrinth.screenOf(i, j, y), [c.i + Math.cos(a) * rr, c.j + Math.sin(a) * rr, c.top])); }
-        pts = spline(ring, 8); desc = `loop round ${c.i},${c.j} r~${rad.toFixed(1)} ${close >= 0.95 ? 'closed' : 'left open'}`;
-      } else {
-        const a = kind === 'fromTop' ? pickC(built) : pickC(ok);
-        const far = near(a, kind === 'meander' ? 4 : 2.5, kind === 'meander' ? 9 : 7);
-        const b = far.length ? pickC(far) : pickC(ok);
-        const A = a.s, B = b.s, L = Math.hypot(B[0] - A[0], B[1] - A[1]), nx = -(B[1] - A[1]) / (L || 1), ny = (B[0] - A[0]) / (L || 1);
-        const mids = kind === 'meander' ? 3 : 1 + (R() < 0.5 ? 1 : 0), ctl = [A];
-        for (let q = 1; q <= mids; q++) { const t = q / (mids + 1), off = (R() - 0.5) * L * (kind === 'meander' ? 0.5 : 0.22); ctl.push([A[0] + (B[0] - A[0]) * t + nx * off, A[1] + (B[1] - A[1]) * t + ny * off]); }
-        ctl.push(B);
-        pts = spline(ctl, 10);
-        if (kind === 'pause') pauses = [Math.floor(pts.length * (0.35 + R() * 0.3))];
-        desc = `${kind} from ${a.i},${a.j} (top ${a.top}) to ${b.i},${b.j} (top ${b.top})`;
+      // (made again, the next way the seed goes, if it would run off the screen: a stroke must be made where it's drawn)
+      let kind, wpts, pauses, tap, desc, pts;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        // (the kind of gesture: weighted, and from a top only if there's one)
+        const kinds = [['tap', 2], ['sweep', 3], ['meander', 1.5], ['loop', 1.5], ['pause', 1], ...(built.length ? [['tapTop', 1.5], ['fromTop', 2.5]] : [])];
+        let r = R() * kinds.reduce((a, k) => a + k[1], 0); kind = kinds[0][0];
+        for (const [k, wgt] of kinds) { if ((r -= wgt) <= 0) { kind = k; break; } }
+        wpts = []; pauses = []; tap = null; desc = '';
+        if (kind === 'tap' || kind === 'tapTop') {
+          const c = pickC(kind === 'tapTop' ? built : ok); wpts = [[c.i + (R() - 0.5) * 0.4, c.j + (R() - 0.5) * 0.4]]; desc = `tap at ${c.i},${c.j}`;
+        } else if (kind === 'loop') {
+          const c = pickC(ok), rad = 1.6 + R() * 1.6, m = 7, a0 = R() * 6.28, close = R() < 0.6 ? 0.95 + R() * 0.12 : 0.8;
+          const ring = [];
+          for (let q = 0; q <= m; q++) { const a = a0 + (q / m) * 6.28 * close, rr = rad * (0.8 + R() * 0.4); ring.push([c.i + Math.cos(a) * rr, c.j + Math.sin(a) * rr]); }
+          wpts = spline(ring, 8); desc = `loop round ${c.i},${c.j} r~${rad.toFixed(1)} ${close >= 0.95 ? 'closed' : 'left open'}`;
+        } else {
+          const a = kind === 'fromTop' ? pickC(built) : pickC(ok);
+          const far = near(a, kind === 'meander' ? 4 : 2.5, kind === 'meander' ? 9 : 7);
+          const b = far.length ? pickC(far) : pickC(ok);
+          const A = [a.i, a.j], B = [b.i, b.j], L = Math.hypot(B[0] - A[0], B[1] - A[1]), nx = -(B[1] - A[1]) / (L || 1), ny = (B[0] - A[0]) / (L || 1);
+          const mids = kind === 'meander' ? 3 : 1 + (R() < 0.5 ? 1 : 0), ctl = [A];
+          for (let q = 1; q <= mids; q++) { const t = q / (mids + 1), off = (R() - 0.5) * L * (kind === 'meander' ? 0.5 : 0.22); ctl.push([A[0] + (B[0] - A[0]) * t + nx * off, A[1] + (B[1] - A[1]) * t + ny * off]); }
+          ctl.push(B);
+          wpts = spline(ctl, 10);
+          if (kind === 'pause') pauses = [Math.floor(wpts.length * (0.35 + R() * 0.3))];
+          desc = `${kind} from ${a.i},${a.j} (top ${a.top}) to ${b.i},${b.j} (top ${b.top})`;
+        }
+        // (onto the screen, each point on the top it's over; with a hand's tremor, and kept on the screen)
+        const proj = await p.evaluate((q) => q.map(([i, j, y]) => window.__labyrinth.screenOf(i, j, y)), wpts.map(([i, j]) => [i, j, topAt.get(`${Math.round(i)}.${Math.round(j)}`) ?? 0]));
+        pts = proj.map((s, q) => [Math.min(SAFE.x1, Math.max(SAFE.x0, s[0] + Math.sin(q * 1.7 + R()) * 1.2)), Math.min(SAFE.y1, Math.max(SAFE.y0, s[1] + Math.cos(q * 1.3 + R()) * 1.2))]);
+        const off = proj.filter(([x, y]) => !safe([x, y])).length;
+        if (off <= proj.length * 0.1) break;
       }
-      // (a hand's tremor, and kept on the screen)
-      pts = pts.map((s, q) => [Math.min(SAFE.x1, Math.max(SAFE.x0, s[0] + Math.sin(q * 1.7 + R()) * 1.2)), Math.min(SAFE.y1, Math.max(SAFE.y0, s[1] + Math.cos(q * 1.3 + R()) * 1.2))]);
+      if (kind === 'tap' || kind === 'tapTop') { tap = pts[0]; pts = []; }
       const id = `${cs.name}-${n}`, f = (s) => join(OUT, `${id}-${s}.jpg`);
       // (before: the world, and the stroke over it as it will be made)
       await p.evaluate(({ pts, tap, pauses }) => {
@@ -113,7 +135,7 @@ await withWood(async (lab) => {
       }, { pts, tap, pauses });
       await p.screenshot({ path: f('a-before'), type: 'jpeg', quality: 80 });
       await p.evaluate(() => document.getElementById('intent-overlay')?.remove());
-      const ops0 = await p.evaluate(() => window.__labyrinth.world.ops.length);
+      const [ops0, enc0] = await p.evaluate(() => [window.__labyrinth.world.ops.length, window.__labyrinth.world.encode()]);
       let during = null;
       if (tap) { await p.mouse.click(tap[0], tap[1]); }
       else {
@@ -143,8 +165,8 @@ await withWood(async (lab) => {
       for (let t = 0; t < 80; t++) { if (!(await p.evaluate(() => { const c = document.getElementById('guide'), x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < x.length; i += 4) if (x[i]) return true; return false; }))) break; await p.waitForTimeout(250); }
       await frames(1);
       await p.screenshot({ path: f('c-after'), type: 'jpeg', quality: 80 });
-      const res = await p.evaluate((ops0) => { const L = window.__labyrinth, w = L.world; return { built: w.ops.length > ops0, why: w.ops.slice(ops0).map((o) => o.why ?? ''), rests: w.ops.slice(ops0).map((o) => o.connect?.rest?.length ?? 0), note: w.ops.slice(ops0).map((o) => o.note ?? ''), alts: L.alts(), declines: L.declines().slice(-1), intent: L.intent, gesture: L.gesture, frames: window.__frames, guidePx: (() => { const c = document.getElementById('guide'); const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < x.length; i += 4) if (x[i]) n++; return n; })() }; }, ops0);
-      const entry = { id, kind, desc, ...res, said, during, errors: p.errors.slice() };
+      const res = await p.evaluate((ops0) => { const L = window.__labyrinth, w = L.world; return { built: w.ops.length > ops0, why: w.ops.slice(ops0).map((o) => o.why ?? ''), rests: w.ops.slice(ops0).map((o) => o.connect?.rest?.length ?? 0), note: w.ops.slice(ops0).map((o) => o.note ?? ''), alts: L.alts(), declines: L.declines().slice(-1), intent: L.intent, ops: w.ops.slice(ops0).map((o) => { const r = w.reached.get(o); return { why: o.why, note: o.note, connect: o.connect ? { from: o.connect.from, to: o.connect.to, path: o.connect.path, follow: o.connect.follow } : undefined, add: o.add?.length, stairs: o.stairs?.length, walls: o.walls?.length, reached: r ? { reached: r.reached, stopped: r.stopped, cells: r.cells.length } : undefined }; }), gesture: L.gesture, frames: window.__frames, guidePx: (() => { const c = document.getElementById('guide'); const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < x.length; i += 4) if (x[i]) n++; return n; })() }; }, ops0);
+      const entry = { id, kind, desc, ...res, said, during, before: enc0, errors: p.errors.slice() };
       log.push(entry);
       console.log(`${id.padEnd(10)} ${desc.padEnd(52)} → ${res.why.join(',') || '(nothing)'} · "${said}"`);
     }

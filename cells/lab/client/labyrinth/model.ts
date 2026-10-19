@@ -53,6 +53,9 @@ export interface Op {
   /** water let into a top, up off the ground: a basin; its cell (the level of the water, over the stone it's let into),
    * when */
   basins?: Array<[number, number, number, number]>;
+  /** ground paved, where it can be stood on: a place to stand made by a touch (a way's own paving is worked out from
+   * its connection); cells */
+  pave?: Array<[number, number]>;
   /** the stone it adds is a bridge's: carried on one arch, however long the gap (to seven cells) */
   bridge?: boolean;
   /** a connection asked for: the intent, kept as the hand gave it; its stone is worked out on replay (`realise`) */
@@ -139,6 +142,23 @@ export function straights(path: Array<[number, number]>, to: Cell | null): numbe
   for (let s = 1; s < path.length; s++) {
     const p = path[s - 1], c = path[s], n = s + 1 < path.length ? path[s + 1] : to ? [to[1], to[2]] : null;
     if (n && c[0] - p[0] === n[0] - c[0] && c[1] - p[1] === n[1] - c[1]) out.push(s - 1);
+  }
+  return out;
+}
+/**
+ * A path across the grid with its zigzags gathered into straight runs: each stretch of `w` steps that goes only two
+ * ways (a stroke drawn across the grid's axes) re-ordered to go all one way, then all the other, in the order the
+ * stroke first went them. It starts and ends where it did, and strays from it by at most half the stretch.
+ */
+export function straighten(path: Array<[number, number]>, w: number): Array<[number, number]> {
+  const steps: Array<[number, number]> = [];
+  for (let s = 1; s < path.length; s++) steps.push([path[s][0] - path[s - 1][0], path[s][1] - path[s - 1][1]]);
+  const out: Array<[number, number]> = [path[0]];
+  for (let a = 0; a < steps.length; a += w) {
+    const win = steps.slice(a, a + w), kinds: string[] = [];
+    for (const d of win) if (!kinds.includes(d.join())) kinds.push(d.join());
+    const order = kinds.length === 2 ? kinds.flatMap((k) => win.filter((d) => d.join() === k)) : win;
+    for (const d of order) { const p = out[out.length - 1]; out.push([p[0] + d[0], p[1] + d[1]]); }
   }
   return out;
 }
@@ -276,6 +296,7 @@ export class World {
       for (const [k, i, j, b] of op.trees ?? []) if (inGrid(i, j)) this.trees.set(key(k, i, j), b);
       for (const [i, j, b] of op.pools ?? []) if (inGrid(i, j)) this.pools.set(key(0, i, j), b);
       for (const [k, i, j, b] of op.basins ?? []) if (inGrid(i, j) && k > 0 && k < CEIL) this.basins.set(key(k, i, j), b);
+      for (const [i, j] of op.pave ?? []) if (inGrid(i, j) && !this.pool(i, j) && !this.occupied(this.ground(i, j), i, j)) this.paving.add(key(0, i, j));
       if (op.bridge) for (const [k, i, j] of op.add ?? []) this.bridged.add(key(k, i, j));
       for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
       for (const [k, i, j, d, b] of op.stairs ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.mass.delete(key(k, i, j)); this.thin.delete(key(k, i, j)); this.stairs.set(key(k, i, j), { d, born: b }); }
@@ -378,56 +399,72 @@ export class World {
    * goes as far along the stroke as it can, and stops on the level there.
    */
   private follow(op: Op): boolean {
-    const c = op.connect!, born = op.born ?? -100, h0 = c.from[0], h1 = c.to![0], along = c.path.slice(1), n = along.length;
-    if (!n) return false;
+    const c = op.connect!, born = op.born ?? -100, h0 = c.from[0], h1 = c.to![0];
+    if (c.path.length < 2) return false;
     const taken = (k: number, i: number, j: number) => k >= 0 && (this.earth(k, i, j) || this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.trees.has(key(k, i, j)) || (k > 0 && this.trees.has(key(k - 1, i, j))));
     const unsteady = (k: number, i: number, j: number) => k > 0 && (this.stairs.has(key(k - 1, i, j)) || this.trees.has(key(k - 1, i, j)));
-    const straight = new Set(straights(c.path, c.to));
-    // (a level a cell can be walked at, or a stair stand at: over the ground, nothing in it, not in water, and the stone
-    // under it not in another stair's way; and what it costs to raise it there)
-    const at = (k: number, i: number, j: number, s = -1) => {
-      const g = this.ground(i, j);
-      // (through a gate: stone with a way through it the way the way goes)
-      if (s >= 0 && this.archways.has(key(k, i, j)) && !this.stairs.has(key(k, i, j))) { const prev = s > 0 ? along[s - 1] : c.path[0]; return this.archways.get(key(k, i, j)) === (prev[0] !== i ? 0 : 1) && this.floor(k, i, j) ? 0 : -1; }
-      if (k < g || taken(k, i, j) || unsteady(k, i, j) || (k === g && this.pool(i, j))) return -1;
-      if (k > g && !taken(k - 1, i, j) && this.way(k - 1, i, j)) return -1;
-      return (k - g) * 0.45;
-    };
-    // (the search: by cell along it, the height walked at after it and how it was last moved (on the level, or a step up
-    // or down): a flight turns about only after a landing, so it can always be walked)
     const top = this.levels + 4, INF = 1e9, idx = (h: number, m: number) => h * 3 + m + 1;
-    const cost: number[][] = Array.from({ length: n + 1 }, () => new Array((top + 1) * 3).fill(INF));
-    const from: Array<Array<{ h: number; m: number }>> = Array.from({ length: n + 1 }, () => new Array((top + 1) * 3));
-    cost[0][idx(h0, 0)] = 0;
-    for (let s = 0; s < n; s++) {
-      const [i, j] = along[s];
-      for (let p = 0; p <= top; p++) for (let m = -1; m <= 1; m++) {
-        const here = cost[s][idx(p, m)];
-        if (here >= INF) continue;
-        const go = (h: number, kind: number, extra: number) => { if (h < 0 || h > top) return; const v = here + extra, q = idx(h, kind); if (v < cost[s + 1][q]) { cost[s + 1][q] = v; from[s + 1][q] = { h: p, m }; } };
-        const walk = at(p, i, j, s);
-        if (walk >= 0) go(p, 0, walk);
-        if (straight.has(s)) {
-          // (a stair needs room over it: the level it climbs into, or comes down from)
-          const up = m === -1 || taken(p + 1, i, j) ? -1 : at(p, i, j);
-          if (up >= 0) go(p + 1, 1, 1 + up);
-          const down = m === 1 || p < 1 || taken(p, i, j) ? -1 : at(p - 1, i, j);
-          if (down >= 0) go(p - 1, -1, 1 + down);
+    /**
+     * The search along one path: by cell along it, the height walked at after it and how it was last moved (on the
+     * level, or a step up or down): a flight turns about only after a landing, so it can always be walked. Where there's
+     * no way to make it reach as drawn, as far along it as it can go, on the level, and it stops there.
+     */
+    const search = (path: Array<[number, number]>) => {
+      const along = path.slice(1), n = along.length, straight = new Set(straights(path, c.to));
+      // (a level a cell can be walked at, or a stair stand at: over the ground, nothing in it, not in water, and the
+      // stone under it not in another stair's way; and what it costs to raise it there)
+      const at = (k: number, i: number, j: number, s = -1) => {
+        const g = this.ground(i, j);
+        // (through a gate: stone with a way through it the way the way goes)
+        if (s >= 0 && this.archways.has(key(k, i, j)) && !this.stairs.has(key(k, i, j))) { const prev = s > 0 ? along[s - 1] : path[0]; return this.archways.get(key(k, i, j)) === (prev[0] !== i ? 0 : 1) && this.floor(k, i, j) ? 0 : -1; }
+        if (k < g || taken(k, i, j) || unsteady(k, i, j) || (k === g && this.pool(i, j))) return -1;
+        if (k > g && !taken(k - 1, i, j) && this.way(k - 1, i, j)) return -1;
+        // (raised over the ground costs more than a step down and back up again: a way on the land goes with the
+        // ground, and stands up off it only where it must (low ground, water), not as a causeway over every dip)
+        return (k - g) * 1.2;
+      };
+      const cost: number[][] = Array.from({ length: n + 1 }, () => new Array((top + 1) * 3).fill(INF));
+      const from: Array<Array<{ h: number; m: number }>> = Array.from({ length: n + 1 }, () => new Array((top + 1) * 3));
+      cost[0][idx(h0, 0)] = 0;
+      for (let s = 0; s < n; s++) {
+        const [i, j] = along[s];
+        for (let p = 0; p <= top; p++) for (let m = -1; m <= 1; m++) {
+          const here = cost[s][idx(p, m)];
+          if (here >= INF) continue;
+          const go = (h: number, kind: number, extra: number) => { if (h < 0 || h > top) return; const v = here + extra, q = idx(h, kind); if (v < cost[s + 1][q]) { cost[s + 1][q] = v; from[s + 1][q] = { h: p, m }; } };
+          const walk = at(p, i, j, s);
+          if (walk >= 0) go(p, 0, walk);
+          if (straight.has(s)) {
+            // (a stair needs room over it: the level it climbs into, or comes down from)
+            const up = m === -1 || taken(p + 1, i, j) ? -1 : at(p, i, j);
+            if (up >= 0) go(p + 1, 1, 1 + up);
+            const down = m === 1 || p < 1 || taken(p, i, j) ? -1 : at(p - 1, i, j);
+            if (down >= 0) go(p - 1, -1, 1 + down);
+          }
         }
       }
+      let end = -1, last = n, endH = h1;
+      for (const m of [0, 1, -1]) if (cost[n][idx(h1, m)] < INF && (end < 0 || cost[n][idx(h1, m)] < cost[n][idx(h1, end)])) end = m;
+      if (end < 0) {
+        for (last = n - 1; last > 0 && end < 0; last--) for (let h = 0; h <= top; h++) if (cost[last][idx(h, 0)] < INF && (end < 0 || cost[last][idx(h, 0)] < cost[last][idx(endH, 0)])) { end = 0; endH = h; }
+        if (end < 0) return { path, along, plan: [] as Array<{ h: number; kind: 0 | 1 | -1 }>, last: 0, n, cost: 0 };
+        last++;
+      }
+      const plan: Array<{ h: number; kind: 0 | 1 | -1 }> = new Array(last);
+      for (let s = last, h = endH, m = end; s > 0; s--) { const f = from[s][idx(h, m)]; plan[s - 1] = { h: f.h, kind: m as 0 | 1 | -1 }; h = f.h; m = f.m; }
+      return { path, along, plan, last, n, cost: cost[last][idx(endH, end)] };
+    };
+    // (as drawn; and drawn again with its zigzags gathered into short straight runs, never more than a cell or two off
+    // the stroke (a stair wants a straight run to its foot, and a hand's stroke across the grid is a zigzag of cells
+    // with none): whichever goes furthest, then costs clearly least, the stroke as drawn kept where it's as good)
+    let best = search(c.path);
+    for (const w of [4, 6, 8]) {
+      const t = search(straighten(c.path, w));
+      if (t.last / t.n > best.last / best.n + 1e-9 || (t.last === t.n && best.last === best.n && t.cost < best.cost - 0.5)) best = t;
     }
-    let end = -1, last = n, endH = h1;
-    for (const m of [0, 1, -1]) if (cost[n][idx(h1, m)] < INF && (end < 0 || cost[n][idx(h1, m)] < cost[n][idx(h1, end)])) end = m;
-    if (end < 0) {
-      // (no way to make it reach as drawn: as far along it as it can go, on the level, and it stops there, joining what
-      // it meets)
-      for (last = n - 1; last > 0 && end < 0; last--) for (let h = 0; h <= top; h++) if (cost[last][idx(h, 0)] < INF && (end < 0 || cost[last][idx(h, 0)] < cost[last][idx(endH, 0)])) { end = 0; endH = h; }
-      if (end < 0) { this.reached.set(op, { reached: false, stopped: 0, cells: [] }); return true; }
-      last++;
-    }
+    const { path, along, plan, last, n } = best;
+    if (!last) { this.reached.set(op, { reached: false, stopped: 0, cells: [] }); return true; }
     // (laid as it was chosen)
-    const plan: Array<{ h: number; kind: 0 | 1 | -1 }> = new Array(last);
-    for (let s = last, h = endH, m = end; s > 0; s--) { const f = from[s][idx(h, m)]; plan[s - 1] = { h: f.h, kind: m as 0 | 1 | -1 }; h = f.h; m = f.m; }
     const cells: Cell[] = [];
     const dirTo = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]) => x === b[0] - a[0] && z === b[1] - a[1]);
     const lay = (k: number, i: number, j: number, s: number) => {
@@ -437,7 +474,7 @@ export class World {
       if (k > this.ground(i, j)) this.bridged.add(key(k, i, j));
     };
     plan.forEach(({ h, kind }, s) => {
-      const [i, j] = along[s], prev = s > 0 ? along[s - 1] : c.path[0];
+      const [i, j] = along[s], prev = s > 0 ? along[s - 1] : path[0];
       const k = kind === -1 ? h - 1 : h;
       if (kind !== 0) { this.stairs.set(key(k, i, j), { d: kind === 1 ? dirTo(prev, [i, j]) : dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(k, i, j)); cells.push([k, i, j]); }
       if (this.archways.has(key(k, i, j))) return;
@@ -711,7 +748,7 @@ export class World {
 
   /** the operations, as text (to keep, and to make again: when they were laid isn't kept) */
   /** what's been done, written down (on the land, with the land's seed) */
-  encode(): string { const ops = this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0, ...(o.basins?.length ? [o.basins.map((c) => c.slice(0, 3))] : [])]); return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops); }
+  encode(): string { const ops = this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0, ...(o.basins?.length || o.pave?.length ? [o.basins?.map((c) => c.slice(0, 3)) ?? 0] : []), ...(o.pave?.length ? [o.pave] : [])]); return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops); }
 }
 
 /** a world made again from its operations (as `encode` wrote them), all laid long ago */
@@ -731,6 +768,7 @@ export function replay(text: string, seed = 1): World {
       connect: Array.isArray(o[7]) ? { from: (o[7] as unknown[])[0] as Cell, to: ((o[7] as unknown[])[1] as Cell | null) ?? null, path: (o[7] as unknown[])[2] as Array<[number, number]>, ...(Array.isArray((o[7] as unknown[])[3]) ? { rest: (o[7] as unknown[])[3] as number[] } : {}), ...((o[7] as unknown[])[4] ? { follow: true } : {}) } : undefined, born: -100,
       dress: (at(8) as Op['dress'] | null) ?? undefined, rule: (at(9) as Op['rule'] | null) ?? undefined, walls: at(10)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]),
       arches: at(3)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), trees: at(4)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), pools: at(5)?.map((c) => [c[0], c[1], -100] as [number, number, number]), bridge: o[6] === 1, basins: at(11)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]),
+      pave: (at(12) as Array<[number, number]> | null) ?? undefined,
     });
   }
   w.rebuild(-100);

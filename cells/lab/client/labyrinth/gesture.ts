@@ -44,7 +44,9 @@ export const tapCell = (w: World, p: Pick): Cell => (p.face === 'ground' ? [w.gr
 /** a gesture that can't be built as it was meant: why, and what it could be instead */
 export interface Refusal { refused: string; alts?: Alt[] }
 
-export function tap(w: World, p: Pick, now: number, anyway = false): Op | Refusal | null {
+export function tap(w: World, p: Pick, now: number, anyway = false, intent: Intent = 'mass'): Op | Refusal | null {
+  // (a way's touch on the land's ground: a place to stand, not a block)
+  if (intent === 'way' && w.land && p.face === 'ground' && !anyway) { const op = placeToStand(w, p, now); if (op) return op; }
   const [k, i, j] = tapCell(w, p);
   if (k >= CEIL || !inGrid(i, j) || w.stone(k, i, j) || w.stair(k, i, j) >= 0) return null;
   // (never into a stair's way (its foot, its head, the room over them): refused, but offered anyway)
@@ -64,10 +66,45 @@ export function tap(w: World, p: Pick, now: number, anyway = false): Op | Refusa
   return { add: [[k, i, j, now]], why: p.face === 'side' ? 'extend' : p.face === 'ground' ? 'raise' : 'course' };
 }
 
+/**
+ * A touch on the land with a way in hand: somewhere to stand. Near the end of a way already made (three cells or less),
+ * the way brought on to it; anywhere else, the ground there paved, and round it where it's as level. Raising a block is
+ * the other reading.
+ */
+function placeToStand(w: World, p: Pick, now: number): Op | null {
+  const [, i, j] = p.hit, g = w.ground(i, j);
+  if (!standing(w, g, i, j)) return null;
+  const raise = tap(w, p, now, true), alts: Alt[] = raise && !('refused' in raise) ? [{ label: 'raise a block', op: { ...raise, note: 'a block raised', reading: 'raise a block' } }] : [];
+  if (w.paved(i, j)) return null;
+  // (the nearest paving within reach: the way brought on to here)
+  let near: [number, number] | null = null, d0 = 4;
+  for (let x = i - 3; x <= i + 3; x++) for (let z = j - 3; z <= j + 3; z++) { const d = Math.abs(x - i) + Math.abs(z - j); if (d && d < d0 && w.paved(x, z)) { near = [x, z]; d0 = d; } }
+  if (near && d0 === 1) return { pave: [[i, j]], born: now, why: 'place', note: 'the way brought on to here', reading: 'the way brought on to here', alts };
+  if (near) {
+    const cells = connect([near, [i, j]]), op = way(w, w.ground(near[0], near[1]), cells, null, now, () => false);
+    if (op && !('refused' in op)) { const note = 'the way brought on to here'; return { ...op, note, reading: note, alts: [...alts, ...(op.alts ?? [])] }; }
+  }
+  const pave: Array<[number, number]> = [[i, j], ...DIRS.map(([a, b]) => [i + a, j + b] as [number, number]).filter(([x, z]) => inGrid(x, z) && w.ground(x, z) === g && standing(w, g, x, z) && !w.paved(x, z))];
+  return { pave, born: now, why: 'place', note: 'a place to stand, paved', reading: 'a place to stand', alts };
+}
+
 /** what kind of wall a stroke from here makes: plain, gated or arcaded (the rules' choice, seeded by where it starts) */
 export function wallKind(w: World, i: number, j: number): 'plain' | 'gated' | 'arcaded' {
   const r = hash(w.seed, i, j, 31) % 100;
   return r < 25 ? 'arcaded' : r < 60 ? 'gated' : 'plain';
+}
+
+/**
+ * A stroke's cells with its jogs taken out: a step aside and straight back again (a hand's wobble, a cell off the line
+ * and back) gone, so it runs straight on there. What it was drawn round, and its turns that stay turned, it keeps.
+ */
+export function unjog(cells: Array<[number, number]>): Array<[number, number]> {
+  const out = cells.slice();
+  for (let q = 0; q + 3 < out.length; ) {
+    const [a, d] = [out[q], out[q + 3]];
+    if (Math.abs(a[0] - d[0]) + Math.abs(a[1] - d[1]) === 1) { out.splice(q + 1, 2); q = Math.max(0, q - 2); } else q++;
+  }
+  return out;
 }
 
 /** cells, in order, 4-connected: a diagonal step taken as two, the way the stroke leaned */
@@ -110,19 +147,33 @@ export function walk(path: Array<[number, number]>): { cells: Array<[number, num
  * the other ways it could be read, or why it can't be built.
  */
 export function trace(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | Refusal | null {
-  const { cells, closed } = walk(path);
+  const walked = walk(path), cells = walked.closed ? walked.cells : unjog(walked.cells);
+  // (a way drawn round, back to within a cell or two of its start: round, too; the gap closed)
+  const nearly = intent === 'way' && !walked.closed && cells.length >= 10 && Math.max(Math.abs(cells[cells.length - 1][0] - cells[0][0]), Math.abs(cells[cells.length - 1][1] - cells[0][1])) <= 3;
+  if (nearly) cells.push(...connect([cells[cells.length - 1], cells[0]]).slice(1, -1));
+  const closed = walked.closed || nearly;
   const h0 = surface(w, start);
   const resting = (i: number, j: number) => rest.some((r) => r[0] === i && r[1] === j);
   // (where it ends counts if it's a top, not its own start)
   let to: Cell | null = null;
-  if (!closed && end && (end.face !== 'ground' || intent === 'way') && !(end.hit[1] === cells[0][0] && end.hit[2] === cells[0][1])) {
+  // (from a top down to lower ground: going down to it, not out at the top's height)
+  const descent = intent === 'mass' && start.face === 'top' && end?.face === 'ground' && surface(w, end) < h0;
+  if (!closed && end && (end.face !== 'ground' || intent === 'way' || descent) && !(end.hit[1] === cells[0][0] && end.hit[2] === cells[0][1])) {
     to = [surface(w, end), end.hit[1], end.hit[2]];
+    // (climbing to a top it crossed onto earlier: it arrives where it first reached it, from the side it came)
+    if (to[0] > h0) {
+      const top = (i: number, j: number) => w.topFrom(w.ground(i, j) - 1, i, j);
+      const q = cells.findIndex(([i, j], n) => n > 0 && n < cells.length - 1 && top(i, j) === to![0] && w.stone(to![0] - 1, i, j));
+      // (only if, so shortened, it still has the room to climb there)
+      if (q > 0 && straights(cells.slice(0, q), [to[0], cells[q][0], cells[q][1]]).length >= to[0] - h0) { to = [to[0], cells[q][0], cells[q][1]]; cells.length = q + 1; }
+    }
     // (the way goes in at the first column it passes beside the destination, not on round it)
     const at = cells.findIndex((c) => Math.abs(c[0] - to![1]) + Math.abs(c[1] - to![2]) <= 1);
     if (at >= 0) { cells.length = at + 1; if (cells[at][0] !== to[1] || cells[at][1] !== to[2]) cells.push([to[1], to[2]]); }
     else cells.push(...connect([cells[cells.length - 1], [to[1], to[2]]]).slice(1));
   }
   if (cells.length < 2) return null;
+  if (intent === 'way' && closed) return circuit(w, h0, cells, born, now, resting);
   if (intent === 'way') return way(w, h0, cells, to, now, resting);
   // (on the ground, to the ground: a wall along it, each cell on its own column's ground)
   if (start.face === 'ground' && (!to || to[0] === w.ground(to[1], to[2]) && end?.face === 'ground')) return wall(w, cells, closed, born, resting);
@@ -131,6 +182,8 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
   if (climb > room) {
     // (too steep for a flight along it: a stair tower, climbing inside, if one will stand; else it's refused, saying why)
     if (tower) return tower;
+    // (going down from a top, too steep for a flight here: out at the top's height, as it would be read without the drop)
+    if (descent) return { connect: { from: [h0, cells[0][0], cells[0][1]], to: null, path: cells }, born: now, why: 'walkway', note: `too steep to go down here (${climb} level${climb > 1 ? 's' : ''}): a walkway out at its height`, reading: 'a walkway' };
     // (and if no tower will stand: a walkway out toward it at the height it starts from, to climb from later)
     const said = `too steep to climb here (${climb} level${climb > 1 ? 's' : ''}, room for ${room} step${room === 1 ? '' : 's'}): a walkway out toward it`;
     return path2.length >= 2 ? { connect: { from: [h0, path2[0][0], path2[0][1]], to: null, path: path2 }, born: now, why: 'walkway', note: said, reading: 'a walkway toward it' } : { refused: `too steep: ${climb} level${climb > 1 ? 's' : ''} to climb, and room for ${room} step${room === 1 ? '' : 's'}; draw it longer, or straighter` };
@@ -147,6 +200,7 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
   const great = spans && hash(w.seed, cells[0][0], cells[0][1], to![1], to![2]) % 100 < 50;
   const alts: Alt[] = [];
   let op = make(path2, great);
+  if (descent) alts.push({ label: 'a walkway at the height it starts', op: { connect: { from: [h0, cells[0][0], cells[0][1]], to: null, path: cells }, born: now, why: 'walkway', note: 'a walkway', reading: 'a walkway' } });
   if (spans) alts.push({ label: great ? 'a bridge on an arcade' : 'a bridge on one great arch', op: make(path2, !great, great ? 'a bridge, on an arcade' : 'a bridge, on one great arch') });
   // (at one height, and something in the way: round it, the way through it offered)
   if (to && to[0] === h0) {
@@ -178,6 +232,14 @@ export type Intent = 'mass' | 'way';
  * reach as drawn, the tower is what's offered first.
  */
 function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | null, now: number, resting: (i: number, j: number) => boolean): Op | Refusal | null {
+  // (it starts at the first place along it that can be stood on, and ends at the last: begun in the water, or run off
+  // into it, it's the way to and from its banks)
+  if (h0 === w.ground(cells[0][0], cells[0][1]) && !standing(w, h0, cells[0][0], cells[0][1])) {
+    const q = cells.findIndex(([i, j]) => standing(w, w.ground(i, j), i, j));
+    if (q < 0) return { refused: 'that\'s all water: a way wants somewhere to stand' };
+    cells = cells.slice(q); h0 = w.ground(cells[0][0], cells[0][1]);
+  }
+  if (!to) while (cells.length > 2) { const [i, j] = cells[cells.length - 1]; if (standing(w, w.ground(i, j), i, j)) break; cells = cells.slice(0, -1); }
   const last = cells[cells.length - 1];
   const dest: Cell = to ?? [w.ground(last[0], last[1]), last[0], last[1]];
   const path = cells.slice(0, -1);
@@ -196,9 +258,42 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   const tower = dest[0] !== h0 ? stairTower(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;
   const walkway: Op = { connect: { from: [h0, path[0][0], path[0][1]], to: dest[0] === h0 ? dest : null, path: dest[0] === h0 ? path : cells }, born: now, why: 'walkway', note: 'a walkway at the height it starts', reading: 'a walkway at the height it starts' };
   if (!r?.reached && tower) return { ...tower, alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, { label: 'a walkway at the height it starts', op: walkway }] };
+  // (nothing of it can be made from where it starts (begun on a rock, or the foot of a bank too steep to climb there):
+  // begun a cell or two on, where it can; and if nothing at all, said, not built empty)
+  if (!r?.cells.length) {
+    for (let q = 1; q <= 3 && q < cells.length - 1; q++) {
+      const [i, j] = cells[q], g = w.ground(i, j);
+      if (!standing(w, g, i, j)) continue;
+      const on = way(w, g, cells.slice(q), to, now, resting);
+      if (on && !('refused' in on)) { const sim2 = new World(w.seed, w.landSeed); sim2.ops = [...w.ops, on]; sim2.rebuild(); if (sim2.reached.get(on)?.cells.length) return { ...on, note: `${on.note}, begun a step on`, reading: `${on.reading ?? on.note}, begun a step on` }; }
+    }
+    return { refused: 'no way along that: it climbs too steeply for its length' };
+  }
   if (tower) alts.push({ label: 'a stair tower', op: tower });
   if (h0 > w.ground(path[0][0], path[0][1])) alts.push({ label: 'a walkway at the height it starts', op: walkway });
+  // (ending on a top well above the ground there: on the ground to its foot instead, the other reading)
+  if (to && to[0] > w.ground(to[1], to[2]) + 1) {
+    const low = way(w, h0, [...path, [to[1], to[2]]], null, now, resting);
+    if (low && !('refused' in low)) alts.push({ label: 'on the ground, to its foot', op: { ...low, alts: undefined, note: 'a way on the ground, to its foot', reading: 'on the ground, to its foot' } });
+  }
   return { ...op, note, reading: note, ...(alts.length ? { alts } : {}) };
+}
+
+/**
+ * A way drawn round, back to where it began: a walk all the way round, following the ground, back to its start; walled
+ * round, a court, the other reading. (Begun in the water, it's begun at the first place on it that can be stood on.)
+ */
+function circuit(w: World, h0: number, cells: Array<[number, number]>, born: (i: number, j: number) => number, now: number, resting: (i: number, j: number) => boolean): Op | Refusal | null {
+  const q = cells.findIndex(([i, j]) => standing(w, w.ground(i, j), i, j));
+  const court = wall(w, cells, true, born, resting), alts: Alt[] = court ? [{ label: 'a court, walled round', op: { ...court, alts: undefined } }] : [];
+  if (q < 0) return court ? { ...court, alts: undefined } : null;
+  const ring = [...cells.slice(q), ...cells.slice(0, q)], [i0, j0] = ring[0], g0 = w.ground(i0, j0);
+  const op = way(w, q ? g0 : h0, [...ring, [i0, j0]], [g0, i0, j0], now, resting);
+  // (a walk that can't get most of the way round isn't round at all: the court, then)
+  const sim = op && !('refused' in op) ? (() => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild(); return v.reached.get(op); })() : null;
+  if (!op || 'refused' in op || !sim || (!sim.reached && sim.stopped < ring.length * 0.6)) return court ? { ...court, alts: op && !('refused' in op) ? [{ label: 'as far round as a walk will go', op: { ...op, alts: undefined } }] : undefined, note: 'a court, walled round (no walk round it would stand)', reading: 'a court, walled round' } : op;
+  const note = 'a walk all the way round';
+  return { ...op, note, reading: note, alts: [...alts, ...(op.alts ?? [])] };
 }
 
 const DIR = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]) => a[0] + x === b[0] && a[1] + z === b[1]);
@@ -225,13 +320,31 @@ function wall(w: World, cells: Array<[number, number]>, closed: boolean, born: (
     if (kind === 'court') { const q = Array.from({ length: n }, (_, q2) => q2).find(straight); if (q !== undefined) gate.add(q); }
     if (kind !== 'thin' && kind !== 'arcaded') cells.forEach(([i, j], q) => { if (resting(i, j) && straight(q)) gate.add(q); });
     const add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [], walls: Array<[number, number, number, number, number]> = [];
+    // (where it stands: not in a stair's way (a gap in it there: the wall never shuts a stair off), nor where it can't)
+    const stands = cells.map(([i, j]) => free.some((c) => c[0] === i && c[1] === j) && !w.way(G(i, j), i, j));
+    // (on the land, one line of coping along it: where it dips between its neighbours (the ground falling away a cell
+    // or two), it stands taller there, up to the lower of them, so it reads as one wall stepping with the ground and
+    // not a row of blocks at odd heights)
+    const tops = cells.map(([i, j]) => G(i, j) + 1);
+    if (w.land) for (let pass = 0; pass < n; pass++) {
+      let moved = false;
+      for (let q = 0; q < n; q++) {
+        if (!stands[q]) continue;
+        const a = closed ? (q - 1 + n) % n : q - 1, b = closed ? (q + 1) % n : q + 1;
+        if (a < 0 || b >= n || !stands[a] || !stands[b]) continue;
+        const want = Math.min(tops[a], tops[b], G(...cells[q]) + 3);
+        if (want > tops[q]) { tops[q] = want; moved = true; }
+      }
+      if (!moved) break;
+    }
     cells.forEach(([i, j], q) => {
-      if (!free.some((c) => c[0] === i && c[1] === j)) return;
-      // (a stair's way it leaves open, a gap in it: the wall never shuts a stair off)
-      if (w.way(G(i, j), i, j)) return;
-      if (gate.has(q)) arches.push([G(i, j), i, j, across(q), born(i, j)]);
-      else if (kind === 'thin') walls.push([G(i, j), i, j, 1 - across(q), born(i, j)]);
-      else add.push([G(i, j), i, j, born(i, j)]);
+      if (!stands[q]) return;
+      for (let k = G(i, j); k < tops[q]; k++) {
+        if (w.occupied(k, i, j) && k > G(i, j)) break;
+        if (k === G(i, j) && gate.has(q)) arches.push([k, i, j, across(q), born(i, j)]);
+        else if (kind === 'thin') walls.push([k, i, j, 1 - across(q), born(i, j)]);
+        else add.push([k, i, j, born(i, j)]);
+      }
     });
     const note = label[kind] + (gate.size && kind !== 'gated' && kind !== 'arcaded' && kind !== 'court' ? ', a gate where you paused' : '');
     return { add, ...(arches.length ? { arches } : {}), ...(walls.length ? { walls } : {}), why: 'wall', note, reading: note };

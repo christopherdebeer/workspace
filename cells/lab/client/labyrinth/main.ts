@@ -79,9 +79,31 @@ function resize() {
   aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
 }
 let aspect = 1;
-/** what the view frames: the slab, however big it's grown (its middle, and how far to stand back to see it) */
+/**
+ * What's drawn (cells, as a box [i0, j0, i1, j1], its far sides exclusive): what's built, and never less than the piece
+ * of land the bare land showed round its middle. (The land drawn only round what's built would shrink the place to
+ * the first thing built in it: the shelves and the water a hand was reading, gone the moment it touched them.)
+ */
+let shownOf: World | null = null, shownAt = -1, shownBox: [number, number, number, number] = [0, 0, 0, 0];
+function shown(): [number, number, number, number] {
+  if (shownOf === world && shownAt === world.version) return shownBox;
+  shownOf = world; shownAt = world.version;
+  const mid = world.land ? (LAND.i0 + LAND.i1 + 1) / 2 : CENTER;
+  let i0 = mid - 3.5, i1 = mid + 3.5, j0 = mid - 3.5, j1 = mid + 3.5;
+  for (const m of [world.mass, world.stairs, world.piers]) for (const v of m.keys()) { const [, i, j] = unkey(v); i0 = Math.min(i0, i); i1 = Math.max(i1, i + 1); j0 = Math.min(j0, j); j1 = Math.max(j1, j + 1); }
+  return (shownBox = [i0, j0, i1, j1]);
+}
+/** the box the view frames (cells, far sides exclusive): on land, what's drawn and the drawing's fade round it; on the slab, the slab */
+function frameBox(): [number, number, number, number] {
+  const e = world.extent();
+  if (!world.land) return [e.i0, e.j0, e.i1 + 1, e.j1 + 1];
+  const [i0, j0, i1, j1] = shown(), m = 3;
+  return [Math.max(e.i0, i0 - m), Math.max(e.j0, j0 - m), Math.min(e.i1 + 1, i1 + m), Math.min(e.j1 + 1, j1 + m)];
+}
+/** what the view frames: the slab, however big it's grown, or on land what's drawn of it (its middle, and how far to stand back to see it) */
 function framing() {
-  const e = world.extent(), half = (Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2 + 1.5) * Math.SQRT2, top = world.top();
+  const [bi0, bj0, bi1, bj1] = frameBox(), e = { i0: bi0, i1: bi1 - 1, j0: bj0, j1: bj1 - 1 };
+  const half = (Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2 + 1.5) * Math.SQRT2, top = world.top();
   // (as wide as the slab, and as tall as what's on it: there's no cap on how high it goes)
   const fit = Math.max(Math.max(half / aspect, half * 0.75) * 1.04 + top * 0.25, (half * Math.sin(view.el) + top * Math.cos(view.el)) * 0.55 + 1);
   return { cx: (e.i0 + e.i1 + 1) / 2 - CENTER, cz: (e.j0 + e.j1 + 1) / 2 - CENTER, fit, half };
@@ -393,7 +415,7 @@ function readingsNow(): Array<{ label: string; op: Op }> | null {
   const strip = (o: Op): Op => ({ ...o, alts: undefined });
   if (g.mode === 'trace' && g.op?.alts?.length) return [{ label: g.op.reading ?? g.op.note ?? 'as drawn', op: strip(g.op) }, ...g.op.alts.map((a) => ({ label: a.label, op: strip(a.op) }))];
   if (g.mode === 'pending' && g.start && brush === 'auto') {
-    const r = tap(world, g.start, now());
+    const r = tap(world, g.start, now(), false, intent);
     if (!r) return null;
     const first = 'refused' in r ? null : r, list = [...(first ? [{ label: first.reading ?? first.note ?? 'raised', op: strip(first) }] : []), ...(r.alts ?? []).map((a) => ({ label: a.label, op: strip(a.op) }))];
     return list.length > 1 || (!first && list.length) ? list : null;
@@ -601,7 +623,7 @@ const up = (e: PointerEvent) => {
       unselect();
       let op: Op | null = null;
       if (brush === 'auto') {
-        const r = tap(world, start, now());
+        const r = tap(world, start, now(), false, intent);
         // (refused outright (rare now): its first other reading, if it has one, is what's built)
         if (r && 'refused' in r) { declined('tap', r.refused); say(r.alts?.length ? `${r.refused} · hold to ${r.alts[0].label}` : r.refused); g = null; return; }
         op = r;
@@ -664,7 +686,7 @@ function guides() {
   }
   // (where it started)
   const st = g.start, [sk, si, sj] = st.hit;
-  const sp = st.face === 'ground' ? at3(si + 0.5, sj + 0.5, 0) : st.face === 'top' ? at3(si + 0.5, sj + 0.5, sk + 1) : at3(si + 0.5 + (st.to[1] - si) * 0.5, sj + 0.5 + (st.to[2] - sj) * 0.5, sk + 0.5);
+  const sp = st.face === 'ground' ? at3(si + 0.5, sj + 0.5, sk + 1) : st.face === 'top' ? at3(si + 0.5, sj + 0.5, sk + 1) : at3(si + 0.5 + (st.to[1] - si) * 0.5, sj + 0.5 + (st.to[2] - sj) * 0.5, sk + 0.5);
   g2.fillStyle = WARM + '.9)'; g2.beginPath(); g2.arc(sp[0], sp[1], 3.5, 0, Math.PI * 2); g2.fill();
   g2.strokeStyle = WARM + '.5)'; g2.lineWidth = 1.2; g2.beginPath(); g2.arc(sp[0], sp[1], 8, 0, Math.PI * 2); g2.stroke();
   const op = g.op, c = op?.connect, r = op && c ? world.reached.get(world.ops[world.ops.length - 1]) : undefined;
@@ -730,8 +752,8 @@ function zoomAt(cx: number, cy: number, k: number) {
 }
 /** whether what's built has reached the edge of the screen (or past it): the slab's corners, and as high as it goes */
 function offScreen() {
-  const e = world.extent(), top = world.top(), r = canvas.getBoundingClientRect();
-  for (const i of [e.i0, e.i1 + 1]) for (const j of [e.j0, e.j1 + 1]) for (const y of [0, top]) {
+  const [i0, j0, i1, j1] = frameBox(), top = world.top(), r = canvas.getBoundingClientRect();
+  for (const i of [i0, i1]) for (const j of [j0, j1]) for (const y of [0, top]) {
     const [x, z] = screenOf(i - CENTER, y, j - CENTER);
     if (x < r.left + 12 || x > r.right - 12 || z < r.top + 64 || z > r.bottom - 84) return true;
   }
@@ -758,13 +780,8 @@ function frame() {
     if (Math.abs(fr.cx - view.target[0]) + Math.abs(fr.cz - view.target[2]) + Math.abs(ty - view.target[1]) + Math.abs(fr.fit - zoomFit) < 0.01) follow = preview;
   }
   R.area = [fr.cx, fr.cz, fr.half + 2]; R.top = world.top();
-  // (what's built, as far as it goes; bare, a little piece round the middle of the land)
-  {
-    let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity;
-    for (const m of [world.mass, world.stairs, world.piers]) for (const v of m.keys()) { const [, i, j] = unkey(v); i0 = Math.min(i0, i); i1 = Math.max(i1, i); j0 = Math.min(j0, j); j1 = Math.max(j1, j); }
-    const mid = world.land ? (LAND.i0 + LAND.i1 + 1) / 2 : CENTER;
-    R.built = i0 <= i1 ? [i0 - CENTER, j0 - CENTER, i1 + 1 - CENTER, j1 + 1 - CENTER] : [mid - 3.5 - CENTER, mid - 3.5 - CENTER, mid + 3.5 - CENTER, mid + 3.5 - CENTER];
-  }
+  // (what's drawn of the land: what's built, and never less than the bare land's piece)
+  { const [i0, j0, i1, j1] = shown(); R.built = [i0 - CENTER, j0 - CENTER, i1 - CENTER, j1 - CENTER]; }
   { const e = world.extent(); R.landBox = world.land ? [e.i0 - CENTER, e.j0 - CENTER, e.i1 + 1 - CENTER, e.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3]; }
   { const b = bleedOn && !!world.land; if (b !== R.bleed) { R.bleed = b; setBleed(b); meshVersion = -1; } }
   if (catsOn) {
