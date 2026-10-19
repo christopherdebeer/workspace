@@ -14,6 +14,8 @@ The labyrinth is built on a piece of land (`land.ts`): small, composed, seeded, 
 - **a rocky outcrop** stands in the way of the obvious line;
 - **a shelf is kept flat**, five cells by five, room for a court.
 
+**It's drawn as Taohua draws its hill**, bleeding into the page: the open ground is the paper itself, only its features drawn (a cliff's rock, a bank's dashes, the stream, the shade cast on it), and away from what's built and toward its edge it gives way to the paper, with no plinth under it. `?plinth` puts it back on its plinth; the flat slab is always a slab on its table.
+
 **Start again** clears what's built, back to the land it was on; pressed again on bare land, it makes a new piece of land. `?land=<seed>` opens a particular one, and `?flat` keeps to the flat slab.
 
 **It's held two ways that never disagree.**

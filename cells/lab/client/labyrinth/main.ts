@@ -34,8 +34,9 @@ const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
 R.print = qs.has('print');
 R.shadows = !qs.has('noshadow');
-// (`?bleed`: the land as Taohua draws its hill: the open ground the paper itself, only its features drawn, bleeding into the page; no plinth)
-R.bleed = qs.has('bleed'); setBleed(R.bleed);
+// (the land as Taohua draws its hill: the open ground the paper itself, only its features drawn, bleeding into the page,
+// no plinth; `?plinth`: on its plinth instead. The flat slab is always a slab on its table)
+const bleedOn = !qs.has('plinth') || qs.has('bleed');
 R.msaa = !qs.has('nomsaa');
 
 // ─── what's built ───
@@ -56,6 +57,7 @@ const fixed = preview || qs.has('story') || qs.has('ops') || qs.has('land');
 const held_back: Op[] = qs.has('hold') ? world.ops.splice(world.ops.length - Number(qs.get('hold')), Number(qs.get('hold'))) : [];
 if (held_back.length) world.rebuild(0);
 const keep = () => { if (fixed) return; try { localStorage.setItem(KEY, world.encode()); } catch { /* */ } };
+R.bleed = bleedOn && !!world.land; setBleed(R.bleed);
 let meshVersion = -1;
 /** `?plain`: without the rules' own dressing (character.ts), only the hand's */
 const plain = qs.has('plain');
@@ -681,6 +683,7 @@ function frame() {
     R.built = i0 <= i1 ? [i0 - CENTER, j0 - CENTER, i1 + 1 - CENTER, j1 + 1 - CENTER] : [mid - 3.5 - CENTER, mid - 3.5 - CENTER, mid + 3.5 - CENTER, mid + 3.5 - CENTER];
   }
   R.landBox = world.land ? [LAND.i0 - CENTER, LAND.j0 - CENTER, LAND.i1 + 1 - CENTER, LAND.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3];
+  { const b = bleedOn && !!world.land; if (b !== R.bleed) { R.bleed = b; setBleed(b); meshVersion = -1; } }
   if (catsOn) {
     catMemory();
     cats.update(world, dt, !!g && g.mode !== 'turn' && g.mode !== 'look' && g.mode !== 'pending');
