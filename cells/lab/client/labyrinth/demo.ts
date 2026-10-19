@@ -24,7 +24,7 @@
  *    walls run with the wall piece.
  */
 import { DRESS, RULE, World, type Cell, type Op } from './model';
-import { carve, tap, trace, type Pick } from './gesture';
+import { carve, tap, trace, type Intent, type Pick } from './gesture';
 import { place, run, type Hand } from './palette';
 
 const ground = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
@@ -36,6 +36,7 @@ export function story(stage: number): World {
   if (stage === 9) return features();
   if (stage === 10) return flow();
   if (stage === 11) return gestures();
+  if (stage === 12) return onTheLand();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -235,5 +236,26 @@ function gestures(): World {
   // (a block in the way of a climb: round it to a straight flight up)
   col(9, 11, 2); w.apply({ add: [[0, 8, 11, t]] }, t);
   go(ground(6, 11), [[6, 11], [7, 11], [8, 11]], top(9, 11));
+  return w;
+}
+
+/**
+ * storyboard 12: on the land. Four gestures make a place: a court walled round on the shelf (a stroke drawn round it,
+ * mass); a way up to its gate from the low ground in front (it climbs where the land does, through the gate); a house
+ * raised across the ravine; and a way over the stream to it (a bridge where it crosses the water).
+ */
+function onTheLand(): World {
+  const w = new World(23, 6), t = -100;
+  const ground = (i: number, j: number): Pick => { const g = w.ground(i, j); return { face: 'ground', hit: [g - 1, i, j], to: [g, i, j] }; };
+  const go = (start: Pick, cells: Array<[number, number]>, end: Pick | null, intent: Intent) => { const op = trace(w, start, cells, end, () => t, t, [], intent); if (op && !('refused' in op)) w.apply({ ...op, alts: undefined }, t); };
+  // (1. a court: a stroke drawn round the shelf, back to where it began: a gate there, facing down the land)
+  const ring: Array<[number, number]> = [[1, 6], [2, 6], [3, 6], [3, 5], [3, 4], [3, 3], [3, 2], [2, 2], [1, 2], [0, 2], [-1, 2], [-1, 3], [-1, 4], [-1, 5], [-1, 6], [0, 6], [1, 6]];
+  go(ground(1, 6), ring, null, 'mass');
+  // (2. a way from the low ground up to its gate and in: flights where the land rises, through the gate)
+  go(ground(1, 11), [[1, 11], [1, 10], [1, 9], [1, 8], [1, 7], [1, 6], [1, 5]], ground(1, 5), 'way');
+  // (3. a house across the ravine, raised two courses on the level ground there)
+  w.apply({ add: [[7, 2], [8, 2], [7, 3], [8, 3]].flatMap(([i, j]) => [0, 1].map((k) => [w.ground(i, j) + k, i, j, t] as [number, number, number, number])) }, t);
+  // (4. a way from in front of the court over the stream to the house: a bridge where it crosses the water)
+  go(ground(2, 7), [[2, 7], [3, 7], [4, 7], [5, 7], [6, 7], [7, 7], [7, 6], [7, 5], [7, 4]], ground(7, 4), 'way');
   return w;
 }

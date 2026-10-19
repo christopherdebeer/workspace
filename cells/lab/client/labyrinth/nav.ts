@@ -17,10 +17,10 @@ import { CEIL, DIRS, inGrid, key, unkey, type Cell, type World } from './model';
 export interface Nav { places: Set<number>; next: Map<number, number[]> }
 
 /** a place to stand at height k on a column */
-export const standing = (w: World, k: number, i: number, j: number) => k >= 0 && k < CEIL && inGrid(i, j) && w.floor(k, i, j) && !w.stone(k, i, j) && w.stair(k, i, j) < 0 && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && (k > 0 || !w.pool(i, j));
+export const standing = (w: World, k: number, i: number, j: number) => k >= 0 && k < CEIL && inGrid(i, j) && w.floor(k, i, j) && !w.stone(k, i, j) && w.stair(k, i, j) < 0 && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && !(k === w.ground(i, j) && w.pool(i, j));
 
 /** a way through an arch at height k: stone with a way through it, with a floor under it */
-export const through = (w: World, k: number, i: number, j: number) => w.archway(k, i, j) >= 0 && !w.span(k, i, j) && (k === 0 ? !w.pool(i, j) : w.stone(k - 1, i, j) && w.archway(k - 1, i, j) < 0);
+export const through = (w: World, k: number, i: number, j: number) => w.archway(k, i, j) >= 0 && !w.span(k, i, j) && (k === w.ground(i, j) ? !w.pool(i, j) : w.stone(k - 1, i, j) && w.archway(k - 1, i, j) < 0);
 
 /** where a figure could walk; `inside`, ways the rules know of that the stone doesn't show (a stair inside a building,
  * from one of its doors to another, or up to its top) */
@@ -35,9 +35,11 @@ export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
     if (d >= 0) {
       const [di, dj] = DIRS[d];
       // (its foot: a place at its level behind it, or a stair of the same flight below; its head: the next place up)
-      if (standing(w, k, i - di, j - dj)) link(v, key(k, i - di, j - dj));
+      // (or a way through an arch, along its way)
+      const gate = (kk: number, x: number, z: number) => through(w, kk, x, z) && w.archway(kk, x, z) === d % 2;
+      if (standing(w, k, i - di, j - dj) || gate(k, i - di, j - dj)) link(v, key(k, i - di, j - dj));
       if (w.stair(k - 1, i - di, j - dj) === d) link(v, key(k - 1, i - di, j - dj));
-      if (standing(w, k + 1, i + di, j + dj) || w.stair(k + 1, i + di, j + dj) === d) link(v, key(k + 1, i + di, j + dj));
+      if (standing(w, k + 1, i + di, j + dj) || w.stair(k + 1, i + di, j + dj) === d || gate(k + 1, i + di, j + dj)) link(v, key(k + 1, i + di, j + dj));
       continue;
     }
     if (through(w, k, i, j)) {

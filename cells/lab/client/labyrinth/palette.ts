@@ -45,7 +45,7 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   const [hk, hi, hj] = p.hit;
   if (hand === 'take') {
     // (a pergola over the place touched, before anything else there)
-    const over: Cell = p.face === 'ground' ? [0, hi, hj] : [hk + 1, hi, hj];
+    const over: Cell = p.face === 'ground' ? p.to : [hk + 1, hi, hj];
     if (p.face !== 'side' && look(w, ...over)?.pergola) return { dress: [[...over, DRESS.pergola, 0]], why: 'take' };
     if (p.face === 'ground') return w.pools.has(key(0, hi, hj)) ? { cut: [[-1, hi, hj]], why: 'take' } : null;
     // (a lantern or a pot on what was touched, before the stone itself)
@@ -54,8 +54,8 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
     for (let k = hk; k >= 0; k--) if (w.stone(k, hi, hj) || w.stair(k, hi, hj) >= 0 || w.tree(k, hi, hj)) return { cut: [[k, hi, hj]], why: 'take' };
     return null;
   }
-  if (hand === 'pool') return p.face === 'ground' && !w.pool(hi, hj) && w.free(0, hi, hj) ? { pools: [[hi, hj, now]], why: 'pool' } : null;
-  const [k, i, j] = p.face === 'ground' ? [0, hi, hj] : p.face === 'top' ? [w.topFrom(hk, hi, hj), hi, hj] : p.to;
+  if (hand === 'pool') return p.face === 'ground' && !w.pool(hi, hj) && w.free(...p.to) ? { pools: [[hi, hj, now]], why: 'pool' } : null;
+  const [k, i, j] = p.face === 'ground' ? p.to : p.face === 'top' ? [w.topFrom(hk, hi, hj), hi, hj] : p.to;
   if (k >= CEIL || !inGrid(i, j)) return null;
   const side = p.face === 'side', toward = side ? DIRS.findIndex(([a, b]) => a === hi - i && b === hj - j) : -1;
   if (hand === 'bridge') {
@@ -116,7 +116,7 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
  * the ground or the top struck */
 export function dressAt(w: World, p: Pick, kind?: Dressing): Cell | null {
   const [k, i, j] = p.hit;
-  if (kind === 'pergola') { const c: Cell = p.face === 'ground' ? [0, i, j] : p.face === 'top' ? [k + 1, i, j] : p.to; return w.free(...c) && w.floor(...c) ? c : null; }
+  if (kind === 'pergola') { const c: Cell = p.face === 'ground' ? p.to : p.face === 'top' ? [k + 1, i, j] : p.to; return w.free(...c) && w.floor(...c) ? c : null; }
   if (p.face === 'ground') return null;
   return w.stone(k, i, j) || w.stair(k, i, j) >= 0 || w.pier(k, i, j) ? [k, i, j] : null;
 }

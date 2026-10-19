@@ -21,11 +21,16 @@ import { character, look } from './character';
 import { buildings, opening, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, key, unkey, type Span, type World } from './model';
+import { LAND, surfaceY } from './land';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
 export const STRIDE = 12;
 export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8, lamp: 9, clay: 10, door: 11, glass: 12, tile: 13, lead: 14, wood: 15 };
+/** the land (the slab's own, marked: drawn barely, its steep faces rock) */
+export const LANDMAT = MAT.slab + 16;
+/** how far a foundation goes down into the land under what's built on it */
+export const FOUND = 0.75;
 /** a material cut through (with KIND × 3 over stone: a jali; over wood: a mashrabiya's lattice) */
 export const PIERCED = 3 * 64;
 /** a stone's dressing, over its material (stone, or the light within an arch): 16 moss, 32 ivy, 64 × which stone
@@ -112,7 +117,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const s = w.stair(k, ni, nj);
     return s >= 0 && (s + 2) % 4 === d;
   };
-  const floored = (k: number, i: number, j: number) => !w.occupied(k, i, j) && (k === 0 ? !w.pool(i, j) : w.stone(k - 1, i, j));
+  const floored = (k: number, i: number, j: number) => !w.occupied(k, i, j) && w.floor(k, i, j);
+  /** on the land, at its column's ground: what's built there goes down into it, so it meets the slope */
+  const founded = (k: number, i: number, j: number) => !!w.land && k === w.ground(i, j);
   const cornerAo = (k: number, i: number, j: number) => {
     // (only a mass shuts the ground in by cells: a wall's thickness, curve or diagonal doesn't follow them)
     const s = (a: number, b: number) => (w.block(k, i + a, j + b) && !wallCell(w, k, i + a, j + b) ? 1 : 0);
@@ -185,7 +192,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       });
     };
     // (its plinth on the stone, its cornice under a high mass's top, a string course where the stone changes kind)
-    if (k === 0) band(0, 0.09, 0.03, 0.05);
+    if (k === w.ground(i, j)) band(k, k + 0.09, 0.03, 0.05);
+    // (its foundation: on the land, down into it under each open side, rougher, shut in)
+    if (founded(k, i, j)) { const keep2 = cur.dress; cur.dress = keep2 % KIND; E.forEach((e) => { if (e.open) quad(L(e.a, y0 - FOUND), L(e.b, y0 - FOUND), L(e.b, y0), L(e.a, y0), nOf(e), [0.35, 0.35, 0.6, 0.6], MAT.stone); }); cur.dress = keep2; }
     if (lid && !ol.wall && k >= 1) { cur.dress = 0; band(y1 - 0.15, y1 - 0.09, 0.035); cur.dress = keep; }
     const under = w.block(k - 1, i, j) ? dressOf(k - 1, i, j) : -1;
     if (under >= 0 && Math.floor(under / KIND) !== Math.floor(keep / KIND)) { cur.dress = 0; band(y0 - 0.02, y0 + 0.05, 0.025); cur.dress = keep; }
@@ -290,8 +299,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     quad([x0, y, z0], [x0 + 1, y, z0], [x0 + 1, y, z0 + 1], [x0, y, z0 + 1], [0, 1, 0], cornerAo(k + 1, i, j), MAT.stone);
   };
 
+  // ─── the land, and the table it's on ───
+  if (w.land) landMesh();
   // ─── the stone, and the table it's on ───
-  {
+  else {
     const ex = w.extent(), xa = X(ex.i0) - MARGIN, xb = X(ex.i1 + 1) + MARGIN, za = Z(ex.j0) - MARGIN, zb = Z(ex.j1 + 1) + MARGIN;
     for (let j = ex.j0 - 1; j <= ex.j1 + 1; j++) for (let i = ex.i0 - 1; i <= ex.i1 + 1; i++) {
       const inside = i >= ex.i0 && j >= ex.j0 && i <= ex.i1 && j <= ex.j1;
@@ -361,6 +372,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         }
       }
       if (!hides(k, i, j, d)) quad(pt(1, 0, y0), pt(1, 1, y0), pt(1, 1, y1), pt(1, 0, y1), [a, 0, b], [0.7, 0.7, 1, 1], MAT.stone);
+      // (on the land, its foundation down into it)
+      if (founded(k, i, j)) for (let q = 0; q < 4; q++) { const [qa, qb] = DIRS[q]; if (w.occupied(k, i + qa, j + qb)) continue; const A: V3 = qa ? [qa > 0 ? x0 + 1 : x0, y0 - FOUND, z0] : [x0, y0 - FOUND, qb > 0 ? z0 + 1 : z0], B: V3 = qa ? [A[0], y0 - FOUND, z0 + 1] : [x0 + 1, y0 - FOUND, A[2]]; quad(A, B, [B[0], y0, B[2]], [A[0], y0, A[2]], [qa, 0, qb], [0.35, 0.35, 0.6, 0.6], MAT.stone); }
       continue;
     }
     if (w.pier(k, i, j)) {
@@ -374,7 +387,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const coved = k === ps.top && !ps.ox && !ps.oz && w.block(k + 1, i, j), CH = ps.top > ps.foot ? 0.6 : 0.42;
       const ya = k === ps.foot ? y0 + 0.09 : y0, yb = k === ps.top ? (coved ? y1 - CH - 0.05 : y1 - 0.11) : y1;
       lathe(cx, cz, [[rAt(ya), ya], [rAt(yb), yb]], MAT.stone, 8);
-      if (k === ps.foot) { box(cx - ps.r - 0.05, cx + ps.r + 0.05, y0, y0 + 0.06, cz - ps.r - 0.05, cz + ps.r + 0.05, MAT.stone, 0.7); box(cx - ps.r - 0.025, cx + ps.r + 0.025, y0 + 0.06, y0 + 0.09, cz - ps.r - 0.025, cz + ps.r + 0.025, MAT.stone, 0.8); }
+      if (k === ps.foot) { box(cx - ps.r - 0.05, cx + ps.r + 0.05, founded(k, i, j) ? y0 - FOUND : y0, y0 + 0.06, cz - ps.r - 0.05, cz + ps.r + 0.05, MAT.stone, 0.7); box(cx - ps.r - 0.025, cx + ps.r + 0.025, y0 + 0.06, y0 + 0.09, cz - ps.r - 0.025, cz + ps.r + 0.025, MAT.stone, 0.8); }
       if (coved) {
         // (toward an arch springing from it, it rises straight: the arch makes the curve there)
         const s0 = ps.r + 0.04, yc = y1 - CH, R = [0, 1, 2, 3].map((d) => (w.span(k + 1, i + DIRS[d][0], j + DIRS[d][1]) ? s0 : reach(w, k + 1, i, j, d)));
@@ -414,20 +427,20 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   for (const b of buildings(w).list) if (b.roof) roof(b);
 
   // ─── what grows in the courtyards ───
-  const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: 0 }; }), ...[...w.trees.entries()].map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
-  for (const dc of [...w.decor.map((d) => ({ ...d, k: 0 })), ...hand]) {
+  const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: w.ground(i, j) }; }), ...[...w.trees.entries()].map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
+  for (const dc of [...w.decor.map((d) => ({ ...d, k: w.ground(d.i, d.j) })), ...hand]) {
     cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5, dress: 0, sel: false };
     const x0 = X(dc.i), z0 = Z(dc.j);
     if (dc.kind === 'pool') {
-      const lv = -0.1;
+      const lv = dc.k - 0.1, g0 = dc.k;
       quad([x0, lv, z0], [x0 + 1, lv, z0], [x0 + 1, lv, z0 + 1], [x0, lv, z0 + 1], [0, 1, 0], 1, MAT.water);
       for (let d = 0; d < 4; d++) {
         const [a, b] = DIRS[d];
         if (w.pool(dc.i + a, dc.j + b)) continue;
         const A: V3 = a ? [a > 0 ? x0 + 1 : x0, lv, z0] : [x0, lv, b > 0 ? z0 + 1 : z0], B: V3 = a ? [A[0], lv, z0 + 1] : [x0 + 1, lv, A[2]];
-        quad(A, B, [B[0], 0, B[2]], [A[0], 0, A[2]], [-a, 0, -b], [0.6, 0.6, 0.9, 0.9], MAT.court);
+        quad(A, B, [B[0], g0, B[2]], [A[0], g0, A[2]], [-a, 0, -b], [0.6, 0.6, 0.9, 0.9], MAT.court);
       }
-    } else if (dc.kind === 'pot') pot(dc.i, dc.j, 0, dc.born);
+    } else if (dc.kind === 'pot') pot(dc.i, dc.j, dc.k, dc.born);
     else cypress(dc.i, dc.j, dc.k, dc.born);
   }
 
@@ -617,10 +630,97 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
   }
 
+  /**
+   * The land (land.ts): its ground as a surface, fine enough to show its banks and shelves, drawn barely (the shader);
+   * its sides, rock, down to the table it stands on; the stream in its bed, falling where its bed steps; and a few
+   * things of its own, sparing: rocks at the foot of its cliffs, on the outcrop and along the stream; low shrubs on its
+   * banks; a cypress or two. None of them where anything's built.
+   */
+  function landMesh() {
+    const land = w.land!, RES = 4, x0 = LAND.i0, x1 = LAND.i1 + 1, z0 = LAND.j0, z1 = LAND.j1 + 1;
+    const Y = (gx: number, gz: number) => surfaceY(land, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
+    cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+    const nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
+    const P = (a: number, b: number): V3 => { const gx = x0 + a / RES, gz = z0 + b / RES; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
+    const Nrm = (a: number, b: number): V3 => {
+      const gx = x0 + a / RES, gz = z0 + b / RES, e = 0.5 / RES, dx = Y(gx + e, gz) - Y(gx - e, gz), dz = Y(gx, gz + e) - Y(gx, gz - e), l = Math.hypot(dx, 2 * e, dz);
+      return [-dx / l, (2 * e) / l, -dz / l];
+    };
+    const pts: V3[][] = [], nrm: V3[][] = [];
+    for (let a = 0; a <= nx; a++) { pts.push([]); nrm.push([]); for (let b = 0; b <= nz; b++) { pts[a].push(P(a, b)); nrm[a].push(Nrm(a, b)); } }
+    const v = (a: number, b: number, ao = 1) => vert(pts[a][b], nrm[a][b], ao, LANDMAT);
+    for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) { v(a, b); v(a, b + 1); v(a + 1, b); v(a, b + 1); v(a + 1, b + 1); v(a + 1, b); }
+    // (its sides: rock, down from its edge to the table)
+    const foot = -SLAB;
+    const side = (p: V3[], n: V3) => { for (let q = 0; q + 1 < p.length; q++) quad(p[q], p[q + 1], [p[q + 1][0], foot, p[q + 1][2]], [p[q][0], foot, p[q][2]], n, [1, 1, 0.6, 0.6], LANDMAT); };
+    side(pts.map((c) => c[0]), [0, 0, -1]); side(pts.map((c) => c[nz]), [0, 0, 1]); side(pts[0], [-1, 0, 0]); side(pts[nx], [1, 0, 0]);
+    // (the table round it)
+    const T = 90, R = 1.6, xa = x0 - CENTER, xb = x1 - CENTER, za = z0 - CENTER, zb = z1 - CENTER;
+    quad([xa - R, foot, za - R], [xb + R, foot, za - R], [xb + R, foot, zb + R], [xa - R, foot, zb + R], [0, 1, 0], 1, MAT.table);
+    for (const [qa, qb, qc, qd] of [[-T, -T, T, za - R], [-T, zb + R, T, T], [-T, za - R, xa - R, zb + R], [xb + R, za - R, T, zb + R]]) quad([qa, foot, qb], [qc, foot, qb], [qc, foot, qd], [qa, foot, qd], [0, 1, 0], 1, MAT.table);
+    // (the stream: its water a little under its banks, a fall where its bed steps down to the next)
+    const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
+    for (const [i, j] of land.stream) {
+      const g = w.ground(i, j), y = g - 0.17, cx = X(i), cz = Z(j);
+      cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+      quad([cx - 0.05, y, cz - 0.05], [cx + 1.05, y, cz - 0.05], [cx + 1.05, y, cz + 1.05], [cx - 0.05, y, cz + 1.05], [0, 1, 0], 1, MAT.water);
+      for (let d = 0; d < 4; d++) {
+        const [a, b] = DIRS[d];
+        if (!wet(i + a, j + b) || w.ground(i + a, j + b) >= g) continue;
+        const y1 = w.ground(i + a, j + b) - 0.17, [ta, tb] = DIRS[(d + 1) % 4], ex = cx + 0.5 + a * 0.5, ez = cz + 0.5 + b * 0.5;
+        quad([ex - ta * 0.42, y1, ez - tb * 0.42], [ex + ta * 0.42, y1, ez + tb * 0.42], [ex + ta * 0.42, y, ez + tb * 0.42], [ex - ta * 0.42, y, ez - tb * 0.42], [a, 0.3, b], 1, MAT.water);
+      }
+    }
+    // (a court's paving, and a way's on the ground: flags laid on the land's level middles)
+    for (let j = LAND.j0; j <= LAND.j1; j++) for (let i = LAND.i0; i <= LAND.i1; i++) {
+      const court = w.courts.has(key(0, i, j)), paved = w.paved(i, j);
+      if (!court && !paved) continue;
+      const g = w.ground(i, j), y = g + 0.012, cx = X(i), cz = Z(j), e = (d: number) => { const [a, b] = DIRS[d]; return w.ground(i + a, j + b) === g && (w.courts.has(key(0, i + a, j + b)) || w.paved(i + a, j + b) || w.occupied(g, i + a, j + b)) ? 0 : 0.12; };
+      cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: selected.has(key(g, i, j)) };
+      quad([cx + e(2), y, cz + e(3)], [cx + 1 - e(0), y, cz + e(3)], [cx + 1 - e(0), y, cz + 1 - e(1)], [cx + e(2), y, cz + 1 - e(1)], [0, 1, 0], 0.95, MAT.court);
+    }
+    cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+    // (what grows and lies on it, sparing, where nothing's built)
+    const r = (...n: number[]) => hash(land.seed, ...n) / 4294967296;
+    const bare = (i: number, j: number) => { const g = w.ground(i, j); return !w.occupied(g, i, j) && !w.occupied(g + 1, i, j) && !w.pool(i, j) && !w.courts.has(key(0, i, j)) && !w.way(g, i, j) && !w.paved(i, j); };
+    const at = (i: number, j: number, fx: number, fz: number): V3 => { const gx = i + 0.5 + fx, gz = j + 0.5 + fz; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
+    const boulder = (p: V3, s: number, q: number) => {
+      const seg = 6 + (q % 3), turn = r(q, 2) * 6.28;
+      for (let n = 0; n < seg; n++) {
+        const a0 = turn + (n / seg) * 6.28, a1 = turn + ((n + 1) / seg) * 6.28, k0 = 0.75 + 0.5 * r(q, n, 3), k1 = 0.75 + 0.5 * r(q, (n + 1) % seg, 3);
+        const lo = (a: number, k: number): V3 => [p[0] + Math.cos(a) * s * k, p[1] - 0.05, p[2] + Math.sin(a) * s * k * 0.85];
+        const mid = (a: number, k: number): V3 => [p[0] + Math.cos(a) * s * k * 0.8, p[1] + s * 0.55, p[2] + Math.sin(a) * s * k * 0.7];
+        const top: V3 = [p[0] + s * 0.1, p[1] + s * 0.8, p[2]];
+        face([lo(a0, k0), lo(a1, k1), mid(a1, k1), mid(a0, k0)], LANDMAT, 0.8, true, [p[0], p[1] + s * 0.3, p[2]]);
+        face([mid(a0, k0), mid(a1, k1), top], LANDMAT, 1, true, [p[0], p[1] + s * 0.3, p[2]]);
+      }
+    };
+    const shrub = (p: V3, s: number, q: number) => {
+      cur = { born: -1e3, pivot: p[1], how: 2, tone: r(q, 5), dress: 0, sel: false };
+      lathe(p[0], p[2], Array.from({ length: 6 }, (_, n) => { const t = (n / 5) * Math.PI; return [Math.sin(t) * s * (1 + 0.1 * Math.sin(n * 2.3 + q)), p[1] - 0.02 + s * 0.7 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 8);
+      cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+    };
+    for (let j = LAND.j0; j <= LAND.j1; j++) for (let i = LAND.i0; i <= LAND.i1; i++) {
+      if (!bare(i, j)) continue;
+      const g = w.ground(i, j), q = (j - LAND.j0) * 100 + (i - LAND.i0);
+      const higher = DIRS.map(([a, b]) => w.ground(i + a, j + b) - g), cliff = higher.findIndex((h) => h >= 2), bank = higher.some((h) => h !== 0);
+      const nearRock = Math.abs(i - land.rock[0]) + Math.abs(j - land.rock[1]) <= 1, byWater = DIRS.some(([a, b]) => land.water.has((j + b) * 1000 + i + a));
+      // (rocks: at a cliff's foot, on the outcrop, by the stream)
+      if ((cliff >= 0 && r(q, 1) < 0.45) || (nearRock && r(q, 6) < 0.7) || (byWater && r(q, 7) < 0.3)) {
+        const [a, b] = cliff >= 0 ? DIRS[cliff] : [r(q, 8) - 0.5, r(q, 9) - 0.5];
+        boulder(at(i, j, a * 0.28, b * 0.28), 0.16 + 0.14 * r(q, 10), q);
+        if (r(q, 11) < 0.5) boulder(at(i, j, a * 0.1 + (r(q, 12) - 0.5) * 0.4, b * 0.1 + (r(q, 13) - 0.5) * 0.4), 0.08 + 0.06 * r(q, 14), q + 7);
+      }
+      // (shrubs on the banks; a cypress now and then on open ground)
+      if (bank && r(q, 20) < 0.18) for (let n = 0; n < 1 + Math.floor(r(q, 21) * 3); n++) shrub(at(i, j, (r(q, 22, n) - 0.5) * 0.7, (r(q, 23, n) - 0.5) * 0.7), 0.1 + 0.08 * r(q, 24, n), q + n);
+      else if (!bank && r(q, 30) < 0.035) cypress(i, j, g, -1e3);
+    }
+    cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
+  }
   /** a thin wall: a wall's thickness, full height, running out from its middle to the stone beside it */
   function thinWall(k: number, i: number, j: number) {
-    const cx = X(i) + 0.5, cz = Z(j) + 0.5, y0 = k, y1 = k + 1, arms = wallArms(w, k, i, j), lid = !w.stone(k + 1, i, j) && w.stair(k + 1, i, j) < 0;
-    const ao = floored(k, i, j) || k === 0 ? [0.6, 0.6, 1, 1] : 1;
+    const cx = X(i) + 0.5, cz = Z(j) + 0.5, y0 = founded(k, i, j) ? k - FOUND : k, y1 = k + 1, arms = wallArms(w, k, i, j), lid = !w.stone(k + 1, i, j) && w.stair(k + 1, i, j) < 0;
+    const ao = floored(k, i, j) || k === w.ground(i, j) ? [0.6, 0.6, 1, 1] : 1;
     // (a jali: the screen pierced through)
     if (dressed(k, i, j)?.screen) cur.dress = (cur.dress % KIND) + PIERCED;
     // (its middle, then each arm out to the cell's edge; faces only where nothing's against them)
@@ -817,8 +917,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
 
   /** stone with a way through it along an axis; tall, with an arch the same way under or over it */
   function archCell(k: number, i: number, j: number, a: number) {
-    const y0 = k, y1 = k + 1, lower = w.archway(k + 1, i, j) === a, upper = w.archway(k - 1, i, j) === a;
-    const ys = y0 + (upper ? 0.55 : 0.5), cx = X(i) + 0.5, cz = Z(j) + 0.5;
+    const y1 = k + 1, lower = w.archway(k + 1, i, j) === a, upper = w.archway(k - 1, i, j) === a;
+    const ys = k + (upper ? 0.55 : 0.5), cx = X(i) + 0.5, cz = Z(j) + 0.5, y0 = founded(k, i, j) ? k - FOUND : k;
     const P = (u: number, wv: number, y: number): V3 => (a === 0 ? [cx + u, y, cz + wv] : [cx + wv, y, cz + u]);
     const nU = (s: number): V3 => (a === 0 ? [s, 0, 0] : [0, 0, s]), nW = (s: number): V3 => (a === 0 ? [0, 0, s] : [s, 0, 0]);
     // (its solid sides, across the way)
@@ -955,6 +1055,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   if (y < 0) { const ex = w.extent(); return y > -SLAB && x > X(ex.i0) - MARGIN && x < X(ex.i1 + 1) + MARGIN && z > Z(ex.j0) - MARGIN && z < Z(ex.j1 + 1) + MARGIN; }
   const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER), k = Math.floor(y);
   if (k >= w.levels || !w.onSlab(i, j)) return false;
+  if (inLand(w, x, y, z)) return true;
   const fx = x + CENTER - i - 0.5, fz = z + CENTER - j - 0.5, fy = y - k;
   // (a block: as its form has it, the same outline it's drawn from)
   if (onColumn(w, k, i, j)) return fy > 1 - LINTEL || Math.hypot(fx, fz) < pierShape(w, k - 1, i, j).r + 0.04;
@@ -983,4 +1084,11 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
     return y > so.at(u);
   }
   return false;
+}
+
+/** whether a point's under the land's ground, as it's drawn (the same surface it's drawn from) */
+export function inLand(w: World, x: number, y: number, z: number): boolean {
+  if (!w.land) return false;
+  const sy = surfaceY(w.land, x + CENTER, z + CENTER);
+  return sy >= 0 && y < sy;
 }

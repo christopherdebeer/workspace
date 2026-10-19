@@ -140,6 +140,24 @@ void main() {
   else if (mat == 10) base = vec3(.70, .40, .27) * (.9 + .15 * noise(vPos * 18.));
   else if (mat == 7) base = vec3(.90, .89, .86) * (.98 + .03 * noise(vPos * 3.));
   else if (mat == 6) base = travertine(vPos, .6) * .9;
+  else if (mat == 5 && moss) {
+    // (the land: barely there. Its open ground the paper's own warm pale, a faint grain in it; where it slopes, a few
+    // dashes down the fall of it; where it's steep (a cliff, the land's edge), rock: a grey wash, mottled, cracked)
+    float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
+    base = vec3(.88, .84, .76) * (.97 + .05 * noise(vPos * vec3(3., 1., 3.)));
+    float steep = smoothstep(.97, .7, up), cliff = smoothstep(.5, .32, up + (rough - .5) * .14);
+    if (steep > 0. && cliff < 1.) {
+      vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
+      float a = dot(vPos.xz, con) * 9., b = dot(vPos.xz, fall) * 3. - vPos.y * 3.;
+      float row = floor(a), lane = abs(fract(a) - .5);
+      float on = step(hash(vec3(row, floor(b), 3.)), .16 + .22 * steep) * step(lane, .05 + .03 * steep) * step(.35, fract(b + hash(vec3(row, 1., 9.))));
+      base = mix(base, vec3(.55, .52, .47), on * .5 * steep * (1. - cliff));
+    }
+    vec3 rock = mix(vec3(.62, .60, .56), vec3(.80, .77, .71), rough) * (.9 + .1 * vTone);
+    float crack = smoothstep(.47, .5, noise(vPos * vec3(5., 9., 5.))) * smoothstep(.53, .5, noise(vPos * vec3(5., 9., 5.)));
+    rock = mix(rock, vec3(.36, .34, .31), crack * .7);
+    base = mix(base, rock, cliff);
+  }
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
   else if (mat == 8) {
     // (a courtyard's paving: travertine flags, half a cell each, their joints)
@@ -164,7 +182,7 @@ void main() {
     }
   }
   // (moss: in the joints and the shade, thicker on tops and low down; ivy: hanging leaves over a side)
-  if (moss) {
+  if (moss && mat != 5) {
     // (moss where it has a reason: in the shade (faces turned from the sun), at the damp foot of a course, and in the
     // joints and along the edges of a top, not across it)
     float shade = 1. - smoothstep(-.1, .45, dot(n, uSun));
@@ -217,10 +235,13 @@ void main() {
   // (a filmic shoulder, warm)
   c = c / (c + .7) * 1.62;
   c = pow(c, vec3(1.03, 1.04, 1.07));
+  // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
+  bool land = mat == 5 && moss;
+  if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   oCol = vec4(c, 1.);
-  oNrm = vec4(n * .5 + .5, sel ? 1. : .5);
+  oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .25 : .5);
 }`;
 const SHADOW_FS = `#version 300 es
 precision highp float;
@@ -272,12 +293,13 @@ void main() {
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h2)) * smoothstep(.55, .4, L));
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h3)) * smoothstep(.36, .24, L));
     c = mix(paper, ink, hatch * .85);
-  o = vec4(mix(mix(c, ink, edge * .85), vec3(.69, .36, .12), ring * .9), 1.);
+  o = vec4(mix(mix(c, ink, edge * .85 * (1. - step(.1, m) * step(m, .4) * .8)), vec3(.69, .36, .12), ring * .9), 1.);
     return;
   }
-  // (as it is: barely a line, only where the depth folds)
+  // (as it is: barely a line, only where the depth folds; never on the land itself, whose folds are its own)
   // (not against the sky: the table's far edge isn't drawn)
-  o = vec4(mix(mix(c, ink * 1.6, smoothstep(.04, .14, lap) * .16 * (1. - step(.5, skyN))), vec3(.69, .36, .12), ring * .9), 1.);
+  float onLand = step(.1, m) * step(m, .4);
+  o = vec4(mix(mix(c, ink * 1.6, smoothstep(.04, .14, lap) * .16 * (1. - step(.5, skyN)) * (1. - onLand)), vec3(.69, .36, .12), ring * .9), 1.);
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {

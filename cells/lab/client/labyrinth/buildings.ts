@@ -61,8 +61,8 @@ function find(w: World): Buildings {
   const list: Building[] = [], at = new Map<string, Opening>(), inside: Array<[Cell, Cell]> = [], of = new Map<number, Building>();
   const e = w.extent();
   /** a column of solid stone from the slab up, h high */
-  const height = (i: number, j: number) => { let k = 0; while (w.block(k, i, j)) k++; return k; };
-  const solid = (i: number, j: number, h: number) => h >= 2 && height(i, j) === h && !w.stone(h, i, j) && w.stair(h, i, j) < 0;
+  const height = (i: number, j: number) => { let k = w.ground(i, j); while (w.block(k, i, j)) k++; return k; };
+  const solid = (i: number, j: number, h: number) => h - w.ground(i, j) >= 2 && height(i, j) === h && !w.stone(h, i, j) && w.stair(h, i, j) < 0;
   const seen = new Set<number>();
   // (the walk as the stone shows it, and what of it can be reached from the slab)
   const nav = navigate(w), ground = new Set<number>(), st: number[] = [];
@@ -90,7 +90,7 @@ function find(w: World): Buildings {
     for (const [x, z] of cols) for (let d = 0; d < 4; d++) {
       const [a, bb] = DIRS[d];
       if (mine.has(`${x + a}.${z + bb}`)) continue;
-      for (let k = 0; k < h; k++) if (!w.stone(k, x + a, z + bb) && w.stair(k, x + a, z + bb) < 0) faces.push({ k, i: x, j: z, d, out: [k, x + a, z + bb] });
+      for (let k = w.ground(x, z); k < h; k++) if (!w.stone(k, x + a, z + bb) && w.stair(k, x + a, z + bb) < 0) faces.push({ k, i: x, j: z, d, out: [k, x + a, z + bb] });
     }
     // (its top: walked if a way arrives there from beyond it)
     const tops = cols.map(([x, z]) => key(h, x, z)).filter((v) => nav.places.has(v)), topSet = new Set(tops);
@@ -101,7 +101,7 @@ function find(w: World): Buildings {
     const upper = faces.filter((f) => f.k >= 1 && standing(w, ...f.out));
     // (a stair inside, if a way at one of those doors, or on its top, can't be reached from the slab otherwise)
     const unreached = upper.some((f) => !ground.has(placeAt(f.out))) || (arrives && tops.some((v) => !ground.has(v)));
-    const foot = faces.filter((f) => f.k === 0 && standing(w, ...f.out) && ground.has(placeAt(f.out)));
+    const foot = faces.filter((f) => f.k === w.ground(f.i, f.j) && standing(w, ...f.out) && ground.has(placeAt(f.out)));
     const court = foot.filter((f) => w.courts.has(key(0, f.out[1], f.out[2])));
     // (one style to a building; framed with colonnettes by hand, arched, so there's an arch for them to carry)
     const framed = cols.some(([x, z]) => Array.from({ length: h }, (_, k) => w.dressed(k, x, z)?.colonnettes).some(Boolean));
@@ -109,7 +109,7 @@ function find(w: World): Buildings {
     const doors: typeof faces = [...upper];
     // (a stair tower's door at its foot, facing the way it was come to)
     if (stairTower) {
-      const d = w.rules.get(key(0, ...stairTower))! - RULE.tower, f = faces.find((q) => q.k === 0 && q.i === stairTower[0] && q.j === stairTower[1] && q.d === d && standing(w, ...q.out));
+      const d = w.rules.get(key(0, ...stairTower))! - RULE.tower, f = faces.find((q) => q.k === w.ground(q.i, q.j) && q.i === stairTower[0] && q.j === stairTower[1] && q.d === d && standing(w, ...q.out));
       if (f) doors.push(f);
     }
     // (a house (its top not walked, so lived in under a roof) has a door at its foot too, as a rule)
@@ -130,7 +130,7 @@ function find(w: World): Buildings {
     // with a stair inside, a slit a level)
     const isDoor = (f: (typeof faces)[number]) => doors.some((g) => g.k === f.k && g.i === f.i && g.j === f.j && g.d === f.d);
     for (const f of faces) {
-      if (isDoor(f) || (f.k === 0 && arrives && !w.courts.has(key(0, f.out[1], f.out[2])))) continue;
+      if (isDoor(f) || (f.k === w.ground(f.i, f.j) && arrives && !w.courts.has(key(0, f.out[1], f.out[2])))) continue;
       const along = f.d % 2 ? f.i : f.j;
       const want = b.tower && b.inside ? f.d === f.k % 4 : (along + f.k) % 2 === 0 && (f.k < h - 1 || h <= 2 || hash(w.seed, f.i, f.j, f.k, f.d) % 3 > 0);
       if (want) b.openings.push({ kind: 'window', style: b.tower && b.inside ? 'slit' : style, k: f.k, i: f.i, j: f.j, d: f.d });
@@ -151,7 +151,7 @@ function find(w: World): Buildings {
     if (b.roof === 'shed' && b.fall < 0) b.fall = (hash(w.seed, id, 6) % 4);
     if (b.roof && b.roof !== 'shed') b.fall = -1;
     for (const o of b.openings) at.set(`${o.k}.${o.i}.${o.j}.${o.d}`, o);
-    for (const [x, z] of cols) for (let k = 0; k < h; k++) of.set(key(k, x, z), b);
+    for (const [x, z] of cols) for (let k = w.ground(x, z); k < h; k++) of.set(key(k, x, z), b);
     list.push(b);
   }
   return { list, at, inside, of };

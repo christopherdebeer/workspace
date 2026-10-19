@@ -14,10 +14,11 @@
  * `?zoom=` · `?preview` · `?still`
  */
 import { CENTER, World, inGrid, key, replay, type Alt, type Cell, type Op } from './model';
-import { buildMesh, inStone } from './mesh';
+import { buildMesh, inLand, inStone } from './mesh';
 import { Renderer, camera, invert, type View } from './render';
-import { carve, surface, tap, trace, type Pick } from './gesture';
+import { carve, surface, tap, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
+import { randomSeed } from '../kit/rng';
 import { DRESSINGS, PIECES, dress, dressAt, place, run, type Dressing, type Hand, type Piece } from './palette';
 import { around, motifs, type Motif } from './motifs';
 import { selectCell, selectMotif, selectStructure, type Selection } from './select';
@@ -38,8 +39,14 @@ let world: World;
 if (preview) world = story(4);
 else if (qs.has('story')) world = story(Number(qs.get('story')));
 else if (qs.has('ops')) world = replay(qs.get('ops')!);
-else { let kept = ''; try { kept = localStorage.getItem(KEY) ?? ''; } catch { /* */ } world = replay(kept); }
-const fixed = preview || qs.has('story') || qs.has('ops');
+else if (qs.has('land')) world = new World(1, Number(qs.get('land')) || 1);
+// (what was built here last, kept; or, the first time, a new piece of land (`?flat`: the flat slab, kept the same way))
+else {
+  let kept = ''; try { kept = localStorage.getItem(KEY) ?? ''; } catch { /* */ }
+  world = kept ? replay(kept) : new World(1, qs.has('flat') ? 0 : randomSeed());
+  if (qs.has('flat') && world.land) world = new World(1);
+}
+const fixed = preview || qs.has('story') || qs.has('ops') || qs.has('land');
 const keep = () => { if (fixed) return; try { localStorage.setItem(KEY, world.encode()); } catch { /* */ } };
 let meshVersion = -1;
 /** `?plain`: without the rules' own dressing (character.ts), only the hand's */
@@ -94,7 +101,8 @@ function pick(cx: number, cy: number, w: World = world): Pick | null {
     if (step > 0.012) { t -= step; step = 0.012; continue; }
     const hit = cell(p);
     if (!w.onSlab(hit[1], hit[2])) return null;
-    if (p[1] < 0) return { face: 'ground', hit: [-1, hit[1], hit[2]], to: [0, hit[1], hit[2]] };
+    // (the ground: the slab, or the land where nothing built is struck there: its column's ground)
+    if (p[1] < 0 || (inLand(w, p[0], p[1], p[2]) && !(w.occupied(hit[0], hit[1], hit[2]) && !w.earth(hit[0], hit[1], hit[2])))) { const g0 = w.ground(hit[1], hit[2]); return { face: 'ground', hit: [g0 - 1, hit[1], hit[2]], to: [g0, hit[1], hit[2]] }; }
     // (struck in the stone over an arch, from below its own cell: it's that cell's)
     if (!w.occupied(hit[0], hit[1], hit[2]) && !w.tree(hit[0], hit[1], hit[2]) && !w.tree(hit[0] - 1, hit[1], hit[2])) {
       for (let k = hit[0] + 1; k < w.levels; k++) if (w.span(k, hit[1], hit[2])) { hit[0] = k; break; }
@@ -174,7 +182,19 @@ const fingers = new Map<number, { x: number; y: number }>();
 let pinch0 = 0, zoom0 = 1, mid0 = 0, midY0 = 0;
 const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', wall: 'a wall stands on the stone, or on stone, or runs out from a side', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the stone itself', take: 'nothing of yours there to take' };
 const bar = document.getElementById('hands')!, sheet = document.getElementById('sheet')!, pieceB = bar.querySelector('[data-brush="piece"]') as HTMLElement;
+/**
+ * What auto's strokes are for: mass (a stroke on the ground is a wall; from a top, it reaches out or climbs, as ever) or
+ * a way (a stroke connects where it starts to where it ends, and the land says how: paving, flights, a bridge). Taps
+ * raise either way. Kept between visits; on the land, a way, the first time.
+ */
+let intent: Intent = (() => { try { const v = localStorage.getItem('labyrinth.intent'); if (v === 'mass' || v === 'way') return v; } catch { /* */ } return world.land ? 'way' : 'mass'; })();
+if (qs.get('intent') === 'mass' || qs.get('intent') === 'way') intent = qs.get('intent') as Intent;
+const intentEl = document.getElementById('intent') as HTMLElement;
+function setIntent(v: Intent) { intent = v; try { localStorage.setItem('labyrinth.intent', v); } catch { /* */ } showBrush(); hint(); }
+for (const b of Array.from(intentEl.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => setIntent(b.dataset.intent as Intent));
 function showBrush() {
+  document.body.classList.toggle('auto', brush === 'auto');
+  for (const b of Array.from(intentEl.querySelectorAll('button')) as HTMLElement[]) { const on = b.dataset.intent === intent; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
   for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) { const on = b.dataset.brush === brush; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
   // (the piece brush is always 'piece'; it shows what it holds as its picture)
   const src = sheet.querySelector(`[data-held="${held}"]`) as HTMLElement | null;
@@ -198,14 +218,14 @@ for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) {
 for (const b of Array.from(sheet.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => { setBrush(b.dataset.held!); openSheet(false); say(BRUSH_SAYS.piece()); });
 const BRUSH_SAYS: Record<Brush, () => string> = {
   hand: () => 'drag to turn it · tap to ask what something is',
-  auto: () => 'tap raises · trace builds, reaches out and climbs',
+  auto: () => (intent === 'way' ? 'way: a stroke connects places; paving, flights and bridges as the land asks' : 'mass: tap raises · trace builds, reaches out and climbs'),
   piece: () => (isDress(held) ? `${held}: tap a stone, or stroke over stones, to dress them` : `${held}: tap to put one · trace for a run of them`),
   take: () => 'tap takes a piece away · trace carves through',
   select: () => 'tap something to take it up · tap again for the whole of it',
 };
 function hint(text?: string) {
   const el = document.getElementById('hint')!;
-  el.textContent = text ?? (brush !== 'auto' ? '' : world.ops.length === 0 ? 'tap the stone to raise it · trace to build' : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
+  el.textContent = text ?? (brush !== 'auto' ? '' : intent === 'way' ? (world.ops.length < 3 ? 'way: trace from one place to another · the land says how' : '') : world.ops.length === 0 ? (world.land ? 'tap the ground to raise it · trace to wall' : 'tap the stone to raise it · trace to build') : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
   el.classList.toggle('on', !!el.textContent);
 }
 let hintT = 0;
@@ -219,7 +239,7 @@ const motifsNow = () => { if (found.v !== world.version) found = { v: world.vers
  * last switched it to (so switching again replaces that, rather than piling up) */
 let sel: { cell: Cell; whole: Motif[]; idx: number; s: Selection; switched: Op | null } | null = null;
 const card = document.getElementById('card')!;
-const cellOf = (p: Pick): Cell => (p.face === 'ground' ? [0, p.hit[1], p.hit[2]] : p.hit);
+const cellOf = (p: Pick): Cell => (p.face === 'ground' ? p.to : p.hit);
 /** the ways a cell can be taken up, smallest first: the piece itself (if it's one), each motif it's part of, and all
  * that's joined to it (−1 the piece, then the motifs, then the structure) */
 function scopeAt(c: Cell, whole: Motif[], idx: number): Selection | null {
@@ -313,7 +333,7 @@ card.querySelector('#close')!.addEventListener('click', unselect);
 /** what a touch is on, said plainly (the hand brush's tap) */
 function describe(p: Pick): string {
   const c = cellOf(p), s = p.face === 'ground' ? null : selectCell(world, c, looking(), now()), whole = around(motifsNow(), c);
-  const what = s?.title ?? (p.face === 'ground' ? (world.courts.has(key(0, c[1], c[2])) ? 'the paving of a court' : 'the stone slab') : '');
+  const what = s?.title ?? (p.face === 'ground' ? (world.courts.has(key(0, c[1], c[2])) ? 'the paving of a court' : world.land ? (world.pool(c[1], c[2]) ? 'the stream' : 'the ground') : 'the stone slab') : '');
   return [what, ...whole.slice(0, 1).map((m) => `part of ${m.label}`)].filter(Boolean).join(' · ');
 }
 
@@ -370,7 +390,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (!g?.start) return;
   if (!g.before) {
     // (read against the world as it was before this stroke: a copy, so picking never strikes the stroke's own stone)
-    g.before = new World(world.seed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now());
+    g.before = new World(world.seed, world.landSeed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now());
     g.h0 = surface(g.before, g.start); g.cells = [[g.start.hit[1], g.start.hit[2]]]; g.born = now();
   }
   const before = g.before;
@@ -398,7 +418,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (!final && k && k !== goal(g.target) && (end?.inset ?? 0) >= SQUARE) g.count = SURE;
   if (g.count >= SURE) { g.target = k ? g.candPick : null; g.count = 0; }
   for (const [i, j] of g.cells) if (!g.seen.has(`${i}.${j}`)) g.seen.set(`${i}.${j}`, now());
-  const op = trace(before, g.start, g.cells, g.target, (i, j) => g!.seen.get(`${i}.${j}`) ?? now(), g.born, g.rest);
+  const op = trace(before, g.start, g.cells, g.target, (i, j) => g!.seen.get(`${i}.${j}`) ?? now(), g.born, g.rest, intent);
   const refused = op && 'refused' in op ? op.refused : '';
   if (refused && refused !== g.said) say(refused);
   if (final && refused) declined('trace', refused);
@@ -420,7 +440,7 @@ function paintAt(cx: number, cy: number) {
   if (!g) return;
   const p = pick(cx, cy), c = p && dressAt(g.before ?? world, p, held as Dressing);
   if (c && !g.painted.some((q) => q.every((v, n) => v === c[n]))) g.painted.push(c);
-  if (!g.before) { g.before = new World(world.seed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now()); }
+  if (!g.before) { g.before = new World(world.seed, world.landSeed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now()); }
   lay(g.painted.length ? dress(g.before, held as Dressing, g.painted) : null);
 }
 function carveAt(cx: number, cy: number) {
@@ -517,7 +537,17 @@ const printB = document.getElementById('print')!;
 const showPrint = () => { printB.classList.toggle('on', R.print); printB.setAttribute('aria-pressed', String(R.print)); };
 printB.addEventListener('click', () => { R.print = !R.print; showPrint(); });
 document.getElementById('undo')!.addEventListener('click', () => { if (world.undo(now())) { unselect(); kept(); } });
-document.getElementById('again')!.addEventListener('click', () => { if (!world.ops.length || confirm('Clear the stone?')) { world.clear(); unselect(); kept(); } });
+/**
+ * Start again: what's built cleared away, back to the land it was on; on bare land already, a new piece of land.
+ * (`?flat`, the flat slab, stays flat.)
+ */
+function startAgain() {
+  if (world.ops.length) { if (!confirm(world.land ? 'Clear what\'s built, back to the land?' : 'Clear the stone?')) return; world = new World(world.seed, qs.has('flat') ? 0 : world.landSeed || randomSeed()); }
+  else world = new World(world.seed, qs.has('flat') ? 0 : randomSeed());
+  meshVersion = -1; unselect(); hideAlts(); kept(); follow = true;
+  say(world.ops.length ? '' : world.land ? 'a new piece of land' : 'the stone, bare');
+}
+document.getElementById('again')!.addEventListener('click', startAgain);
 showPrint(); showBrush(); hint();
 if (preview) document.body.classList.add('preview');
 
@@ -655,8 +685,8 @@ if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.ta
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
-  get world() { return world; }, view, R, pick, onPlane, setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
-  get brush() { return brush; }, get held() { return held; },
+  get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
+  get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
   selection: () => (sel ? { title: sel.s.title, readings: sel.s.readings.map((r) => r.label), at: sel.s.at, whole: sel.idx, cells: sel.s.cells.length } : null),
   switchReading, takeAway, dressSel, alts: () => (altsNow ? { labels: altsNow.list.map((a) => a.label), at: altsNow.at } : null), readAs, declines: () => declines.slice(), motifs: () => motifsNow().map((m) => ({ kind: m.kind, label: m.label, cells: m.cells.length })),
   probe: () => ({ ops: world.ops.length, top: world.top(), stone: world.mass.size, stairs: world.stairs.size, piers: world.piers.size, arches: world.spans.length, courts: world.courts.size, decor: world.decor.length, whys: world.ops.map((o) => o.why ?? '') }),

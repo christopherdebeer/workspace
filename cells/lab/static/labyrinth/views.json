@@ -179,6 +179,35 @@
   ]
  },
  {
+  "group": "The land",
+  "views": [
+   {
+    "name": "land",
+    "title": "The land",
+    "caption": "a piece of land to build on: shelves rising to the back, a ravine with a stream down it, a rocky outcrop, a shelf flat enough for a court; drawn barely",
+    "file": "v-land.jpg"
+   },
+   {
+    "name": "story-12",
+    "title": "12 · On the land",
+    "caption": "four gestures make a place: a court walled round on the shelf (a stroke drawn round it); a way up to its gate from the low ground (flights where the land rises, through the gate); a house raised across the ravine; a way over the stream to it",
+    "file": "v-story-12.jpg"
+   },
+   {
+    "name": "land-close",
+    "title": "On the land, close",
+    "caption": "the way climbing to the court's gate; the stream under the way to the house",
+    "file": "v-land-close.jpg"
+   },
+   {
+    "name": "land-2",
+    "title": "Another",
+    "caption": "another seed: another piece of land",
+    "file": "v-land-2.jpg"
+   }
+  ]
+ },
+ {
   "group": "Auto, with character",
   "views": [
    {

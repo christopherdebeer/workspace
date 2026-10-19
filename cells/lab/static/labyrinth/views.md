@@ -47,6 +47,13 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ![11 · Gestures read: a stroke drawn round back to its start: a court walled in, a gate where it began; a wall traced with two pauses: a gate at each; a climb too steep for its stroke: a stair tower, a door at its foot and a stair inside; a bridge traced through a taller tower: round it; a climb with a block in the way: round it to a straight flight](v-story-11.jpg)
 ![A stair tower, and ways round: the stair tower beside the terrace; the bridge going round the tower in its way](v-gestures-close.jpg)
 
+## The land
+
+![The land: a piece of land to build on: shelves rising to the back, a ravine with a stream down it, a rocky outcrop, a shelf flat enough for a court; drawn barely](v-land.jpg)
+![12 · On the land: four gestures make a place: a court walled round on the shelf (a stroke drawn round it); a way up to its gate from the low ground (flights where the land rises, through the gate); a house raised across the ravine; a way over the stream to it](v-story-12.jpg)
+![On the land, close: the way climbing to the court's gate; the stream under the way to the house](v-land-close.jpg)
+![Another: another seed: another piece of land](v-land-2.jpg)
+
 ## Auto, with character
 
 ![Auto alone, no cap: a tower tapped up ten high (no cap on height), a walkway to it, a long wall traced round, a high walkway from halfway up the tower (its slim piers stand aside on the ways below): every motif and all the dressing the rules' own choice](v-story-7.jpg)

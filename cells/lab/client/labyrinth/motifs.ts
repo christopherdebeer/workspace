@@ -21,7 +21,7 @@ export interface Motif { kind: MotifKind; label: string; cells: Cell[]; hand: Ce
 const spanCells = (sp: Span): Cell[] => Array.from({ length: sp.n }, (_, s) => [sp.k, sp.i + s * DIRS[sp.a][0], sp.j + s * DIRS[sp.a][1]] as Cell);
 /** how high a column's stone (or stair) reaches: the level over the highest */
 export function height(w: World, i: number, j: number) { for (let k = w.levels - 1; k >= 0; k--) if (w.stone(k, i, j) || w.stair(k, i, j) >= 0) return k + 1; return 0; }
-const column = (w: World, i: number, j: number): Cell[] => { const out: Cell[] = []; for (let k = 0; k < w.levels; k++) if (w.occupied(k, i, j)) out.push([k, i, j]); return out; };
+const column = (w: World, i: number, j: number): Cell[] => { const out: Cell[] = []; for (let k = w.ground(i, j); k < w.levels; k++) if (w.occupied(k, i, j)) out.push([k, i, j]); return out; };
 const mine = (w: World, c: Cell) => w.stone(...c) || w.stair(...c) >= 0;
 
 const found = new WeakMap<World, { v: number; list: Motif[] }>();
@@ -68,7 +68,7 @@ function find(w: World): Motif[] {
     if (cells.length >= 2) out.push({ kind: 'flight', label: `a flight of ${cells.length} steps`, cells, hand: cells, spans: [] });
   }
   // (walls: a run of columns on the stone, one cell thick)
-  const footed = (i: number, j: number) => w.block(0, i, j) || w.archway(0, i, j) >= 0 || w.wall(0, i, j) >= 0;
+  const footed = (i: number, j: number) => { const g = w.ground(i, j); return w.block(g, i, j) || w.archway(g, i, j) >= 0 || w.wall(g, i, j) >= 0; };
   for (const a of [0, 1]) {
     const [di, dj] = DIRS[a], [pi, pj] = DIRS[1 - a];
     const thin = (i: number, j: number) => footed(i, j) && !footed(i + pi, j + pj) && !footed(i - pi, j - pj);
@@ -84,7 +84,7 @@ function find(w: World): Motif[] {
   // (towers and terraces: solid columns, up from the stone, side by side at the same height; over what's round them, or
   // many of them. What's carried on arches between them isn't part of them)
   const seen = new Set<number>();
-  const solid = (i: number, j: number, h: number) => height(w, i, j) === h && w.topFrom(0, i, j) === h && w.stone(0, i, j) && w.stone(h - 1, i, j);
+  const solid = (i: number, j: number, h: number) => { const g = w.ground(i, j); return height(w, i, j) === h && w.topFrom(g, i, j) === h && w.stone(g, i, j) && w.stone(h - 1, i, j); };
   for (let j = e.j0; j <= e.j1; j++) for (let i = e.i0; i <= e.i1; i++) {
     const h = height(w, i, j);
     if (h < 1 || seen.has(key(0, i, j)) || !solid(i, j, h)) continue;
@@ -95,10 +95,11 @@ function find(w: World): Motif[] {
       for (const [a, b] of DIRS) { const x2 = x + a, z2 = z + b; if (inGrid(x2, z2) && !seen.has(key(0, x2, z2)) && solid(x2, z2, h)) { seen.add(key(0, x2, z2)); group.push([x2, z2]); st.push([x2, z2]); } }
     }
     const inside = new Set(group.map(([x, z]) => key(0, x, z)));
-    const over = group.every(([x, z]) => DIRS.every(([a, b]) => inside.has(key(0, x + a, z + b)) || height(w, x + a, z + b) < h || !w.stone(0, x + a, z + b)));
+    const over = group.every(([x, z]) => DIRS.every(([a, b]) => inside.has(key(0, x + a, z + b)) || height(w, x + a, z + b) < h || !w.stone(w.ground(x + a, z + b), x + a, z + b)));
     const cells = group.flatMap(([x, z]) => column(w, x, z));
-    if (h >= 3 && group.length <= 4 && over) out.push({ kind: 'tower', label: `a tower, ${h} high`, cells, hand: cells.filter((c) => mine(w, c)), spans: [] });
-    else if (group.length >= 4 && Math.min(Math.max(...group.map((c) => c[0])) - Math.min(...group.map((c) => c[0])), Math.max(...group.map((c) => c[1])) - Math.min(...group.map((c) => c[1]))) >= 1) out.push({ kind: 'terrace', label: `a terrace of ${group.length} at ${h} high`, cells: group.map(([x, z]) => [h - 1, x, z] as Cell), hand: [], spans: [] });
+    const tall = h - Math.min(...group.map(([x, z]) => w.ground(x, z)));
+    if (tall >= 3 && group.length <= 4 && over) out.push({ kind: 'tower', label: `a tower, ${tall} high`, cells, hand: cells.filter((c) => mine(w, c)), spans: [] });
+    else if (group.length >= 4 && Math.min(Math.max(...group.map((c) => c[0])) - Math.min(...group.map((c) => c[0])), Math.max(...group.map((c) => c[1])) - Math.min(...group.map((c) => c[1]))) >= 1) out.push({ kind: 'terrace', label: `a terrace of ${group.length} at ${tall} high`, cells: group.map(([x, z]) => [h - 1, x, z] as Cell), hand: [], spans: [] });
   }
   // (courts)
   const inCourt = new Set<number>();
@@ -108,7 +109,7 @@ function find(w: World): Motif[] {
     inCourt.add(v);
     while (st.length) {
       const u = st.pop()!, [, x, z] = unkey(u);
-      cells.push([0, x, z]);
+      cells.push([w.ground(x, z), x, z]);
       for (const [a, b] of DIRS) { const n = key(0, x + a, z + b); if (inGrid(x + a, z + b) && w.courts.has(n) && !inCourt.has(n)) { inCourt.add(n); st.push(n); } }
     }
     out.push({ kind: 'court', label: `a court of ${cells.length}`, cells, hand: [], spans: [] });

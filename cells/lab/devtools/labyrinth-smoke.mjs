@@ -8,7 +8,7 @@ process.env.EXPERIMENT = 'labyrinth';
 process.env.READY = '__labyrinth';
 const c = checks();
 await withWood(async (lab) => {
-  const p = await lab.open('zoom=0.55');
+  const p = await lab.open('zoom=0.55&flat&intent=mass');
   await p.evaluate(() => { localStorage.clear(); });
   await p.reload(); await p.waitForFunction(() => window.__labyrinth);
   await p.waitForTimeout(500);
@@ -86,6 +86,19 @@ await withWood(async (lab) => {
   c.ok('clear clears the stone', (await probe()).ops === 0);
   c.ok('nothing thrown', !p.errors.length, p.errors);
   await p.close();
+  {
+    // (on the land, as a way: a stroke from the low ground up to the shelf, drawn with the pointer: the land says how)
+    const q = await lab.open('zoom=1&land=6&intent=way');
+    await q.waitForTimeout(1200);
+    const at2 = (i, j) => q.evaluate(([a, b]) => { const L = window.__labyrinth; return L.screenOf(a, b, L.world.ground(a, b)); }, [i, j]);
+    const pts = await Promise.all([[1, 11], [1, 10], [1, 9], [1, 8], [1, 7], [1, 6], [1, 5]].map(([i, j]) => at2(i, j)));
+    await q.mouse.move(pts[0][0], pts[0][1]); await q.mouse.down();
+    for (let n = 1; n < pts.length; n++) for (let t = 1; t <= 6; t++) { await q.mouse.move(pts[n - 1][0] + ((pts[n][0] - pts[n - 1][0]) * t) / 6, pts[n - 1][1] + ((pts[n][1] - pts[n - 1][1]) * t) / 6); await q.waitForTimeout(20); }
+    await q.mouse.up(); await q.waitForTimeout(500);
+    const got = await q.evaluate(() => { const w = window.__labyrinth.world, o = w.ops.at(-1); return o && { why: o.why, follow: !!o.connect?.follow, reached: w.reached.get(o)?.reached, stairs: w.stairs.size, intent: window.__labyrinth.intent }; });
+    c.ok('on the land, as a way: a stroke up the land, paved and climbing as it rises, reaching', got?.why === 'way' && got.follow && got.reached && got.stairs >= 2, got);
+    await q.close();
+  }
   {
     // (the palette, on a fresh stone: each piece put where it's touched, on the same stone the gestures build)
     const q = await lab.open('zoom=0.55&ops=[]');

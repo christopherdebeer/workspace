@@ -28,7 +28,7 @@ function stands(w, tag) {
     if (pier) { ok(`${where}: a pier stands on something`, k === 0 || w.occupied(k - 1, i, j)); ok(`${where}: and carries something`, w.occupied(k + 1, i, j)); continue; }
     if (k === 0 || w.occupied(k - 1, i, j)) continue;
     const cb = w.corbel(k, i, j);
-    if (cb >= 0) { const [a, b] = DIRS[cb]; ok(`${where}: held out on corbels from stone that stands, a cell out, nothing beyond`, w.stone(k, i + a, j + b) && (k === 0 || w.occupied(k - 1, i + a, j + b)) && !w.occupied(k, i - a, j - b)); continue; }
+    if (cb >= 0) { const [a, b] = DIRS[cb]; ok(`${where}: held out on corbels from stone that stands (or the land), a cell out, nothing beyond`, ((w.stone(k, i + a, j + b) && (k === 0 || w.occupied(k - 1, i + a, j + b))) || w.earth(k, i + a, j + b)) && !w.occupied(k, i - a, j - b)); continue; }
     const sp = w.span(k, i, j);
     ok(`${where}: with nothing under it, it's carried on an arch`, !!sp);
     if (!sp) continue;
@@ -403,6 +403,69 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   v.apply(climb);
   ok('a pause on a climb: a landing there', climb.connect.rest?.length === 1 && v.stair(0, 3, 5) < 0 && v.stair(1, 3, 5) < 0 && v.reached.get(climb)?.reached, { rest: climb.connect.rest, stairs: [...v.stairs.keys()].map(unkey) });
   ok('kept when it\'s written down', replay(v.encode()).encode() === v.encode() && JSON.parse(v.encode()).at(-1)[7][3]?.length === 1);
+}
+// (the land: seeded, composed, and what's built on it stands on it, walks, and keeps its ways open)
+{
+  const LA = await load('../client/labyrinth/land.ts');
+  const a = LA.makeLand(6), b = LA.makeLand(6), c = LA.makeLand(7);
+  ok('the land: the same seed, the same land; another, another', a.g.join() === b.g.join() && a.g.join() !== c.g.join());
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    const l = LA.makeLand(seed), G = (i, j) => LA.groundOf(l, i, j);
+    ok(`land ${seed}: its stream falls all the way, a cell at a time, and its bed is under its banks`, l.stream.every(([i, j], q) => q === 0 || (Math.abs(i - l.stream[q - 1][0]) + Math.abs(j - l.stream[q - 1][1]) === 1 && G(i, j) <= G(...l.stream[q - 1]))) && l.stream.every(([i, j]) => DIRS.every(([x, z]) => !LA.onLand(i + x, j + z) || l.water.has((j + z) * 1000 + i + x) || G(i + x, j + z) >= G(i, j))));
+    const flat = [-1, 0, 1].every((dj) => [-1, 0, 1].every((di) => !LA.onLand(l.shelf[0] + di, l.shelf[1] + dj) || l.water.has((l.shelf[1] + dj) * 1000 + l.shelf[0] + di) || G(l.shelf[0] + di, l.shelf[1] + dj) === G(...l.shelf)));
+    ok(`land ${seed}: a shelf flat enough for a court (its middle all one level, but where the stream runs)`, flat);
+    ok(`land ${seed}: its surface is flat at each column's level through its middle`, [[2, 3], [5, 5], [8, 1]].every(([i, j]) => Math.abs(LA.surfaceY(l, i + 0.5, j + 0.5) - G(i, j) + (l.water.has(j * 1000 + i) ? 0.3 : 0)) < 1e-9));
+  }
+  // (storyboard 12: four gestures make a place)
+  const s12 = story(12);
+  stands(s12, 'story 12');
+  ok('story 12: written down with its land, and made again the same', replay(s12.encode()).encode() === s12.encode() && replay(s12.encode()).landSeed === 6);
+  ok('story 12: a court walled round on the shelf, by a stroke drawn round it', s12.courts.has(key(0, 1, 4)) && s12.archway(3, 1, 6) >= 0);
+  const ways12 = s12.ops.filter((o) => o.connect?.follow);
+  ok('story 12: both ways reach', ways12.length === 2 && ways12.every((o) => s12.reached.get(o)?.reached));
+  ok('story 12: the first climbs where the land does, by flights, through the gate', s12.stair(1, 1, 8) >= 0 && s12.stair(2, 1, 7) >= 0 && s12.paved(1, 9));
+  ok('story 12: the second crosses the stream on an arch, the water under it', s12.spans.some((sp) => sp.k === 0 && s12.pool(sp.i, sp.j)));
+  const n12 = BU.walkable(s12);
+  ok('story 12: from the low ground into the court, and over the stream to the house, on foot', NAV.reaches(n12, [1, 1, 10], [3, 1, 5]) && NAV.reaches(n12, [1, 1, 10], [3, 7, 4]), { court: NAV.reaches(n12, [1, 1, 10], [3, 1, 5]), house: NAV.reaches(n12, [1, 1, 10], [3, 7, 4]) });
+  ok('story 12: the house across the ravine is a house', BU.buildings(s12).list.some((x) => x.cols.some(([i, j]) => i === 7 && j === 2) && x.roof));
+  ok('story 12: drawn', ME.buildMesh(s12).count > 0);
+  // (random gestures on the land, mass and way: what stands, stands; nothing's built into the land; ways reach or join
+  // what they meet, and what reached can be walked; auto never builds into a stair's way)
+  let tried = 0, walkedOk = 0, wayTried = 0, reached = 0, inLand = 0, intoWays = 0;
+  for (let seed = 1; seed <= 24; seed++) {
+    const w = new World(seed, 1 + (seed % 5));
+    let r = seed * 104729;
+    const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
+    const e = w.extent();
+    const pickAt = (i, j) => { const g = w.ground(i, j); let k = g - 1; while (k + 1 < CEIL && (w.stone(k + 1, i, j) || w.stair(k + 1, i, j) >= 0)) k++; return k < g ? { face: 'ground', hit: [g - 1, i, j], to: [g, i, j] } : { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+    for (let t = 0; t < 40; t++) {
+      const i = e.i0 + Math.floor(rnd() * (e.i1 - e.i0 + 1)), j = e.j0 + Math.floor(rnd() * (e.j1 - e.j0 + 1)), what = rnd();
+      let op = null;
+      if (what < 0.35) op = G.tap(w, pickAt(i, j), t);
+      else {
+        const cells = [[i, j]]; let [x, z] = [i, j], d = Math.floor(rnd() * 4);
+        for (let q = 0, L = 2 + Math.floor(rnd() * 7); q < L; q++) { if (rnd() < 0.25) d = (d + (rnd() < 0.5 ? 1 : 3)) % 4; x = Math.max(e.i0, Math.min(e.i1, x + DIRS[d][0])); z = Math.max(e.j0, Math.min(e.j1, z + DIRS[d][1])); cells.push([x, z]); }
+        op = G.trace(w, pickAt(i, j), cells, pickAt(...cells[cells.length - 1]), () => t, t, [], what < 0.75 ? 'way' : 'mass');
+      }
+      if (!op || op.refused) continue;
+      const mass0 = new Set(w.mass.keys());
+      w.apply({ ...op, alts: undefined }, t);
+      for (const v of w.mass.keys()) if (!mass0.has(v) && w.earth(...unkey(v))) inLand++;
+      if (['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'bridge', 'way'].includes(op.why)) intoWays += [...w.mass.keys()].filter((v) => !mass0.has(v) && w.way(...unkey(v))).length;
+      if (op.connect?.follow) {
+        wayTried++; const rr = w.reached.get(w.ops[w.ops.length - 1]);
+        if (rr?.reached) {
+          reached++;
+          const c = op.connect, n = BU.walkable(w);
+          tried++; if (NAV.reaches(n, [c.from[0], ...c.path[0]], c.to)) walkedOk++;
+        }
+      }
+    }
+    stands(w, `land world ${seed}`);
+  }
+  ok('on the land, nothing built goes into the land', inLand === 0, inLand);
+  ok('on the land, auto never builds into a stair\'s way', intoWays === 0, intoWays);
+  ok(`on the land, ways that reach can be walked, end to end (${walkedOk} of ${tried}; ${reached} of ${wayTried} reached)`, tried > 20 && walkedOk === tried && reached >= wayTried * 0.4, { tried, walkedOk, reached, wayTried });
 }
 // (form: a run a cell thick is a wall's thickness, curving where it turns, on the diagonal where it steps, with posts
 // where walls meet and buttresses along it; a mass fills its cells, its outside corners rounded; a wall runs on to a

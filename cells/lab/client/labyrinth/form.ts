@@ -171,12 +171,12 @@ function staircase(w: World, k: number, i: number, j: number, [d1, d2]: [number,
 
 /** whether a straight run of wall has a buttress here (every third cell along it, on the stone), and on which sides */
 export function buttresses(w: World, k: number, i: number, j: number): number[] {
-  if (k !== 0 || !wallCell(w, k, i, j)) return [];
+  if (k !== w.ground(i, j) || !wallCell(w, k, i, j)) return [];
   const o = outline(w, k, i, j);
   if (!o.straight) return [];
   const along = o.arms[0] ? i : j;
   if (((along % 3) + 3) % 3 !== 0) return [];
-  return [0, 1, 2, 3].filter((d) => !o.arms[d] && !w.stone(0, i + DIRS[d][0], j + DIRS[d][1]) && w.stair(0, i + DIRS[d][0], j + DIRS[d][1]) < 0);
+  return [0, 1, 2, 3].filter((d) => !o.arms[d] && !w.occupied(k, i + DIRS[d][0], j + DIRS[d][1]) && w.ground(i + DIRS[d][0], j + DIRS[d][1]) === k);
 }
 
 /** whether a point of a block's cell (x, z from its middle, y up from its floor) is in its stone */

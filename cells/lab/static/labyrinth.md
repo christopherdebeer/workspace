@@ -1,10 +1,64 @@
 # Labyrinth
 
-Architecture that follows the hand. A travertine slab on a table in the sun, and five brushes along the bottom. **auto** (where it starts) reads gestures: the hand decides the shape, and the stone works out what it takes to stand. That means arches, arcades and piers under anything with nothing beneath it, arched ways where stone is cut out from under stone, steps and landings where a trace climbs, and courtyards where walls close round the ground. The other brushes are for when auto isn't what you meant: one piece exactly, dressing, taking away, and **select**, which takes up what was built and reads it another way.
+Architecture that follows the hand. A piece of land on a table in the sun (or, with `?flat`, the travertine slab), and five brushes along the bottom. **auto** (where it starts) reads gestures: the hand decides the shape, and the stone works out what it takes to stand. That means arches, arcades and piers under anything with nothing beneath it, arched ways where stone is cut out from under stone, steps and landings where a trace climbs, and courtyards where walls close round the ground. The other brushes are for when auto isn't what you meant: one piece exactly, dressing, taking away, and **select**, which takes up what was built and reads it another way.
 
 > Townscaper interprets where you place blocks. Labyrinth should interpret what you're trying to construct.
 
 ![a resolved labyrinth: a passage under a walkway, a court, a bridge on one great arch](labyrinth/v-story-4-turned.jpg)
+
+## The land
+
+The labyrinth is built on a piece of land (`land.ts`): small, composed, seeded, and fixed once made. It's made to give the architecture reasons:
+- it **rises toward a back corner in shelves**, so there are levels to connect;
+- **a ravine runs down it with a stream in its bed**, so there's something to cross;
+- **a rocky outcrop** stands in the way of the obvious line;
+- **a shelf is kept flat**, five cells by five, room for a court.
+
+**Start again** clears what's built, back to the land it was on; pressed again on bare land, it makes a new piece of land. `?land=<seed>` opens a particular one, and `?flat` keeps to the flat slab.
+
+**It's held two ways that never disagree.**
+- **By column**, the level the ground is at in each cell. That's what stands, walks and is struck: earth fills each column under it, and its top is a floor. Everything that resolves what's built takes it in: what stands on it, what an arch springs from (a bridge from bank to bank), what a corbel is held from (a cliff), where a court can be, where a figure can walk.
+- **As a surface**, the ground as it's drawn: each cell flat at its own level through its middle, meeting its neighbours across a band at its edge. That's a bank where they differ by a level and a cliff where they differ by more, roughened where it slopes. Its flat middles are exactly the columns' levels, so what's built sits on the ground as drawn. Picking strikes the same surface it's drawn from.
+
+**It's barely drawn, after Taohua.**
+- Its open ground is the paper's own warm pale, held back from the light, with the shade still on it.
+- A few dashes run down the fall of a bank; rock (a grey wash, mottled, cracked) appears only where it's steep: its cliffs, its edges.
+- Ground meeting ground is never inked: the land's folds are its own.
+- The stream sits a little under its banks, falling where its bed steps.
+- What lies on the land is sparing: rocks at the foot of its cliffs, on the outcrop and along the stream; low shrubs on its banks; a cypress or two. Nothing grows where anything is built, or where a way goes.
+
+**What's built on it meets the slope.** Each block, wall, stair and pier at its column's ground goes down into the land as a foundation, and the plinth runs along the ground's line. A court's paving and a way's paving are laid on the land's flat middles.
+
+![the land: shelves rising to the back, a ravine with a stream, an outcrop, a shelf flat enough for a court](labyrinth/v-land.jpg)
+
+### Mass, or a way
+
+Over the brushes, while auto is held, two choices say what a stroke is for. The land decides how a stroke is built, never what it's for.
+- **Mass**: raise, extend and enclose. A tap raises, a stroke on the ground is a wall (each cell on its own column's ground), and a stroke drawn round walls in a court. From a top, as ever, it reaches out or climbs.
+- **Way**: a stroke connects where it starts to where it ends, a top or the ground, and the land says how. It follows the stroke as drawn, never routed elsewhere unasked, and is worked out by the cheapest heights along it:
+  - walking on the ground costs nothing, and it's paved there;
+  - raised over the ground costs by how high, with stone laid under it, carried on arches over anything low: a bridge;
+  - a step up or down costs more, and goes only where the way runs straight. A flight turns about only after a landing, so it can always be walked.
+
+  A way never goes into the land or into what's built, never stands in water (stone over the stream is carried on an arch, the water under it), and never lays stone in another stair's way. It passes through a gate along its way. Where it can't reach as drawn, it goes as far as it can and stops on the level there; a stair tower is offered first, and a walkway at the height it started. What it comes to ("a way: 3 paved, a flight of 2, a bridge of 1") is said before it's let go. On the land a way is the choice the first time, and on the slab, mass; it's kept between visits after that.
+
+![12 · on the land: a court walled round on the shelf, a way up to its gate, a house across the ravine, a way over the stream to it](labyrinth/v-story-12.jpg)
+![on the land, close: the way climbing to the court's gate; the arch over the stream](labyrinth/v-land-close.jpg)
+
+`?story=12` is four gestures making a place on land 6:
+1. a court walled round on the shelf (a stroke drawn round it, mass);
+2. a way up to its gate from the low ground in front (flights where the land rises, through the gate);
+3. a house raised two courses across the ravine;
+4. a way from in front of the court over the stream to the house (an arch over the water, a flight up to the house's level).
+
+You can walk from the low ground into the court, and over the stream to the house.
+
+Next for the land:
+- terraces and retaining walls, where a way or a court is cut into a slope or built out from it;
+- a walk through what's built, following a way from the inside;
+- spatial composition: sheltered courts, framed views, ways crossing over and under;
+- keeping open: a passage, view or court protected from what auto builds later;
+- the land shaped by hand.
 
 ## The brushes
 
@@ -416,6 +470,9 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - a high walkway's free end comes down on a pier onto a walkway below: the pier is slim, stands aside, and the walkway below can still be walked past it, and built on;
   - the wall piece run round makes thin walls, which close a court; a tap on a thin wall goes on as one, up or out along its way; struck where it is, not beside it;
   - the random worlds also switch readings on what select would take up, dress stones, and run pieces; every arcade's bays spring alike;
+  - the land: the same seed, the same land; its stream falls all the way under its banks; its shelf is flat; its surface is flat at each column's level through its middle;
+  - storyboard 12 stands, is written down with its land and made again the same, has its court, both its ways reach (the first by flights through the gate, the second over the stream on an arch), can be walked from the low ground into the court and over to the house, and the house is a house;
+  - random gestures on 24 pieces of land, mass and way: what stands, stands; nothing's built into the land; auto never builds into a stair's way; every way that reaches can be walked, end to end;
   - gestures read: a loop walls in a court (and is one), a wall offers its other kinds, a pause makes a gate in a wall and a landing in a climb (kept when written down), a bridge blocked at its height goes round and reaches, a climb too steep is a stair tower with a door at its foot and a stair inside that reaches the top, and where there's no room for one it's refused, saying why;
   - corbels: stone pushed out a cell is held out on corbels, from stone that stands, with nothing beyond; a pier asked for there still stands;
   - over 60 random worlds of gestures, auto never builds into a stair's way, and never lays a stair that climbs into stone;
@@ -427,7 +484,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - undo, and doing it again, gives the same world;
   - what's written down makes the same world again;
   - each storyboard stage is what it says it is.
-- `node cells/lab/devtools/labyrinth-smoke.mjs` does the palette on a fresh stone (each piece where it's touched: block; arch; arch on arch, making one tall arch; stair against a block; a bridge across a three-cell gap on one arch; cypress; pool; take). It also does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall; what was shown before letting go is exactly what's built), the chips after the wall (read it as a thin wall, and back), a climb too steep for a flight (a stair tower), and a take-stroke carving under the walkway (an arch carries it). On storyboard 6 it uses the brushes:
+- `node cells/lab/devtools/labyrinth-smoke.mjs` does the palette on a fresh stone (each piece where it's touched: block; arch; arch on arch, making one tall arch; stair against a block; a bridge across a three-cell gap on one arch; cypress; pool; take). It also does the brief's scenario with pointer events: the platform from taps, a wall from a trace, a terrace from taps, the connection traced up to it (stairs, with landings on the wall; what was shown before letting go is exactly what's built), the chips after the wall (read it as a thin wall, and back), a climb too steep for a flight (a stair tower), a way drawn up land 6 with the pointer (paved, climbing as the land rises, reaching), and a take-stroke carving under the walkway (an arch carries it). On storyboard 6 it uses the brushes:
   - the hand says what an arch is and that it's part of an arcade;
   - select takes up the arch, then the arcade; the card shows every reading, the current one marked; it switches to lintels, on to another, and back to arches, leaving no operations behind; the structure scope takes up everything joined; the card's dressing dresses it whole;
   - the piece brush, touched again, opens its sheet; brick from it is held and shown on the brush (still called piece), and dresses a stone;

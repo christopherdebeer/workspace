@@ -98,8 +98,9 @@ function dressUp(w: World): Map<number, Dress> {
       const ivy = chance(0.3, n, 1), moss = chance(0.4, n, 2);
       for (const [, i, j] of m.cells) for (const [a, b] of DIRS) {
         const x = i + a, z = j + b, h = height(w, x, z);
-        if (!w.stone(0, x, z)) continue;
-        if (moss) put([0, x, z], { moss: true });
+        const gx = w.ground(x, z);
+        if (!w.stone(gx, x, z)) continue;
+        if (moss) put([gx, x, z], { moss: true });
         // (on a few columns of the wall, in a clump, a cell or two up from the foot)
         if (ivy && hash(w.seed, Math.floor(x / 3), Math.floor(z / 3), 5) % 100 < 45) { const up = 1 + (hash(w.seed, x, z, 6) % 2); for (let k = 0; k < Math.min(h, up); k++) if (w.stone(k, x, z)) put([k, x, z], { ivy: true }); }
       }
@@ -141,16 +142,16 @@ function dressUp(w: World): Map<number, Dress> {
       const [a, bb] = DIRS[o.d], x = o.i + a, z = o.j + bb;
       // (a house's door on to a court, or on to open ground: the way out from it, now and then shaded)
       if (!b.roof || !chance(w.courts.has(key(0, x, z)) ? 0.5 : 0.3, b.id, o.i, o.j, 23)) continue;
-      const [ta, tb] = DIRS[(o.d + 1) % 4], fit = (p: number, q: number) => w.free(0, p, q) && !w.arched(0, p, q) && !w.pier(0, p, q) && !kept.has(key(0, p, q)) && w.free(1, p, q);
-      for (const s of [0, -1, 1]) if (fit(x + ta * s, z + tb * s)) put([0, x + ta * s, z + tb * s], { pergola: true }); else if (s === 0) break;
+      const [ta, tb] = DIRS[(o.d + 1) % 4], fit = (p: number, q: number) => { const g = w.ground(p, q); return w.ground(x, z) === g && w.free(g, p, q) && !w.arched(g, p, q) && !w.pier(g, p, q) && !kept.has(key(0, p, q)) && w.free(g + 1, p, q); };
+      for (const s of [0, -1, 1]) if (fit(x + ta * s, z + tb * s)) put([w.ground(x + ta * s, z + tb * s), x + ta * s, z + tb * s], { pergola: true }); else if (s === 0) break;
     }
   }
   // (moss at the damp edges of water: the stone beside a pool)
   for (let j = w.extent().j0; j <= w.extent().j1; j++) for (let i = w.extent().i0; i <= w.extent().i1; i++) {
     if (!w.pool(i, j)) continue;
-    for (const [a, b] of DIRS) if (w.stone(0, i + a, j + b)) put([0, i + a, j + b], { moss: true });
+    for (const [a, b] of DIRS) { const gx = w.ground(i + a, j + b); if (w.stone(gx, i + a, j + b)) put([gx, i + a, j + b], { moss: true }); }
   }
   // (a little moss at the foot of things)
-  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k === 0 && chance(0.06, i, j, 11)) put([0, i, j], { moss: true }); }
+  for (const v of w.mass.keys()) { const [k, i, j] = unkey(v); if (k === w.ground(i, j) && chance(0.06, i, j, 11)) put([k, i, j], { moss: true }); }
   return map;
 }
