@@ -49,9 +49,9 @@ await withWood(async (lab) => {
     await p.waitForTimeout(2500);
     if (cs.intent) { await p.evaluate((i) => window.__labyrinth.setIntent(i), cs.intent); await p.waitForTimeout(300); }
     // (the view settled: nothing gliding under the hand when the picture's taken)
-    // (and drawn: frames counted by the guide layer's clearing, once a frame; a slow (software) renderer can take
+    // (and drawn: frames counted as they're asked for; a slow (software) renderer can take
     // seconds over one after a build, and a picture taken before then shows the last one)
-    await p.evaluate(() => { const C = CanvasRenderingContext2D.prototype, cr = C.clearRect; window.__frames = 0; C.clearRect = function (...a) { window.__frames++; return cr.apply(this, a); }; });
+    await p.evaluate(() => { const raf = window.requestAnimationFrame.bind(window); window.__frames = 0; window.requestAnimationFrame = (f) => raf((t) => { window.__frames++; f(t); }); });
     const frames = async (n) => { const f0 = await p.evaluate(() => window.__frames); for (let t = 0; t < 240; t++) { await p.waitForTimeout(250); if ((await p.evaluate(() => window.__frames)) - f0 >= n) return; } };
     const settle = async () => { let a = null; for (let t = 0; t < 60; t++) { await frames(2); const b = await p.evaluate(() => window.__labyrinth.screenOf(0, 0, 0)); if (a && Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.3) return; a = b; } };
     for (let n = 1; n <= N; n++) {
@@ -117,22 +117,33 @@ await withWood(async (lab) => {
       let during = null;
       if (tap) { await p.mouse.click(tap[0], tap[1]); }
       else {
-        await p.mouse.move(pts[0][0], pts[0][1]); await p.mouse.down();
+        // (the stroke dispatched inside the page, in one go, its pace kept by the clock: through Playwright each move
+        // waits on a frame, and a slow renderer's second-long frames would read as pauses all along it)
         const pace = 8 + R() * 14;
-        for (let q = 1; q < pts.length; q++) {
-          await p.mouse.move(pts[q][0], pts[q][1]);
-          await p.waitForTimeout(pace * (0.6 + 0.8 * Math.sin((q / pts.length) * Math.PI)));
-          if (pauses.includes(q)) await p.waitForTimeout(560);
-        }
-        await p.waitForTimeout(60);
-        during = await p.evaluate(() => ({ hint: document.getElementById('hint')?.textContent ?? '', fan: window.__labyrinth.fan() }));
-        await p.mouse.up();
+        during = await p.evaluate(({ pts, pauses, pace }) => {
+          const c = document.getElementById('stone'), busy = (ms) => { const t = performance.now() + ms; while (performance.now() < t) { /* the hand moving */ } };
+          c.setPointerCapture = () => {};
+          const ev = (type, [x, y]) => c.dispatchEvent(new PointerEvent(type, { pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y, bubbles: true, cancelable: true, buttons: type === 'pointerup' ? 0 : 1 }));
+          ev('pointerdown', pts[0]);
+          for (let q = 1; q < pts.length; q++) {
+            busy(pace * (0.6 + 0.8 * Math.sin((q / pts.length) * Math.PI)));
+            ev('pointermove', pts[q]);
+            if (pauses.includes(q)) busy(560);
+          }
+          busy(60);
+          const d = { hint: document.getElementById('hint')?.textContent ?? '', fan: window.__labyrinth.fan() };
+          ev('pointerup', pts[pts.length - 1]);
+          return d;
+        }, { pts, pauses, pace });
       }
       await p.waitForTimeout(400);
       const said = await p.evaluate(() => document.getElementById('hint')?.textContent ?? '');
       await frames(3); await settle();
+      // (and the stroke's guides gone: they're drawn only while the finger's down, but a slow frame can still be showing them)
+      for (let t = 0; t < 80; t++) { if (!(await p.evaluate(() => { const c = document.getElementById('guide'), x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < x.length; i += 4) if (x[i]) return true; return false; }))) break; await p.waitForTimeout(250); }
+      await frames(1);
       await p.screenshot({ path: f('c-after'), type: 'jpeg', quality: 80 });
-      const res = await p.evaluate((ops0) => { const L = window.__labyrinth, w = L.world; return { built: w.ops.length > ops0, why: w.ops.slice(ops0).map((o) => o.why ?? ''), rests: w.ops.slice(ops0).map((o) => o.connect?.rest?.length ?? 0), note: w.ops.slice(ops0).map((o) => o.note ?? ''), alts: L.alts(), declines: L.declines().slice(-1), intent: L.intent }; }, ops0);
+      const res = await p.evaluate((ops0) => { const L = window.__labyrinth, w = L.world; return { built: w.ops.length > ops0, why: w.ops.slice(ops0).map((o) => o.why ?? ''), rests: w.ops.slice(ops0).map((o) => o.connect?.rest?.length ?? 0), note: w.ops.slice(ops0).map((o) => o.note ?? ''), alts: L.alts(), declines: L.declines().slice(-1), intent: L.intent, gesture: L.gesture, frames: window.__frames, guidePx: (() => { const c = document.getElementById('guide'); const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < x.length; i += 4) if (x[i]) n++; return n; })() }; }, ops0);
       const entry = { id, kind, desc, ...res, said, during, errors: p.errors.slice() };
       log.push(entry);
       console.log(`${id.padEnd(10)} ${desc.padEnd(52)} → ${res.why.join(',') || '(nothing)'} · "${said}"`);

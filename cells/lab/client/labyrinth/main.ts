@@ -885,7 +885,7 @@ requestAnimationFrame(frame);
   get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
   cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
-  fan: () => (fan ? { labels: fan.list.map((f) => f.label), at: fan.at } : null),
+  fan: () => (fan ? { labels: fan.list.map((f) => f.label), at: fan.at } : null), get gesture() { return g ? { mode: g.mode, id: g.id, rest: g.rest.length } : null; },
   release: () => { const op = held_back.shift(); if (op) world.apply(op, now()); return !!op; }, catsRun: (s: number) => cats.run(world, s),
   meet: (name: string) => meet(cats.list.find((c) => c.name === name) ?? null), get following() { return following; }, follow: () => { if (met && !following) catFollowB.click(); }, catAt,
   selection: () => (sel ? { title: sel.s.title, readings: sel.s.readings.map((r) => r.label), at: sel.s.at, whole: sel.idx, cells: sel.s.cells.length } : null),
