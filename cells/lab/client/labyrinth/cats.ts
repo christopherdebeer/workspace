@@ -585,7 +585,7 @@ export class Cats {
   }
 
   // ─── seen ───
-  /** the cats as they are now, into the moving buffer (`scale`: drawn larger when seen from far off, so they still read) */
+  /** the cats as they are now, into the moving buffer */
   draw(out: Out, scale = 1) {
     for (const c of this.list) {
       if (c.gone || c.hidden) continue;
@@ -593,5 +593,5 @@ export class Cats {
     }
   }
   /** where a cat's head is (for touching it, and for following it) */
-  headOf(c: Cat): [number, number, number] { return [c.x + Math.cos(c.yaw) * 0.12, c.y + 0.16, c.z + Math.sin(c.yaw) * 0.12]; }
+  headOf(c: Cat): [number, number, number] { return [c.x + Math.cos(c.yaw) * 0.45 * S, c.y + 0.55 * S, c.z + Math.sin(c.yaw) * 0.45 * S]; }
 }

@@ -687,7 +687,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
     };
     const shrub = (p: V3, s: number, q: number) => {
-      cur = { born: -1e3, pivot: p[1], how: 2, tone: r(q, 5), dress: 0, sel: false };
+      cur = { born: -1e3, pivot: p[1], how: 3 + 0.999 * r(q, 41), tone: r(q, 5), dress: 0, sel: false };
       lathe(p[0], p[2], Array.from({ length: 6 }, (_, n) => { const t = (n / 5) * Math.PI; return [Math.sin(t) * s * (1 + 0.1 * Math.sin(n * 2.3 + q)), p[1] - 0.02 + s * 0.7 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 8);
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     };
@@ -699,12 +699,14 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // (rocks: at a cliff's foot, on the outcrop, by the stream)
       if ((cliff >= 0 && r(q, 1) < 0.45) || (nearRock && r(q, 6) < 0.7) || (byWater && r(q, 7) < 0.3)) {
         const [a, b] = cliff >= 0 ? DIRS[cliff] : [r(q, 8) - 0.5, r(q, 9) - 0.5];
+        // (each thing on the land marked as such, with its own chance of being drawn where the land bleeds away)
+        cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * r(q, 40), tone: 0.5, dress: 0, sel: false };
         boulder(at(i, j, a * 0.28, b * 0.28), 0.16 + 0.14 * r(q, 10), q);
         if (r(q, 11) < 0.5) boulder(at(i, j, a * 0.1 + (r(q, 12) - 0.5) * 0.4, b * 0.1 + (r(q, 13) - 0.5) * 0.4), 0.08 + 0.06 * r(q, 14), q + 7);
       }
       // (shrubs on the banks; a cypress now and then on open ground)
       if (bank && r(q, 20) < 0.18) for (let n = 0; n < 1 + Math.floor(r(q, 21) * 3); n++) shrub(at(i, j, (r(q, 22, n) - 0.5) * 0.7, (r(q, 23, n) - 0.5) * 0.7), 0.1 + 0.08 * r(q, 24, n), q + n);
-      else if (!bank && r(q, 30) < 0.035) cypress(i, j, g, -1e3);
+      else if (!bank && r(q, 30) < 0.035) cypress(i, j, g, -1e3, 3 + 0.999 * r(q, 42));
     }
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
   }
@@ -1016,9 +1018,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   }
 
   /** a cypress: a dark spindle of leaves on a short trunk */
-  function cypress(i: number, j: number, y0: number, born: number) {
+  function cypress(i: number, j: number, y0: number, born: number, how = 2) {
     const cx = X(i) + 0.5, cz = Z(j) + 0.5, Ht = 1.85, SEG = 12, RINGS = 16, seed = i * 31 + j * 17;
-    cur = { born, pivot: y0, how: 2, tone: 0.5, dress: 0, sel: selected.has(key(y0, i, j)) };
+    cur = { born, pivot: y0, how, tone: 0.5, dress: 0, sel: selected.has(key(y0, i, j)) };
     const rnd = (q: number) => { const x = Math.sin((seed * 97 + q) * 12.9898) * 43758.5453; return x - Math.floor(x); };
     for (let s = 0; s < 6; s++) {
       const a0 = (s / 6) * Math.PI * 2, a1 = ((s + 1) / 6) * Math.PI * 2, r = 0.05;

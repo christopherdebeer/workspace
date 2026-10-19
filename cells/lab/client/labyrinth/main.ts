@@ -484,7 +484,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (fingers.size === 2) {
     // (two fingers: across turns it, up and down tilts it, a pinch comes closer to where the fingers are)
     const [p, q] = [...fingers.values()], d = Math.hypot(p.x - q.x, p.y - q.y), mid = (p.x + q.x) / 2, midY = (p.y + q.y) / 2;
-    if (pinch0 > 0) zoomAt(mid, midY, Math.max(0.25, Math.min(1.3, zoom0 * (pinch0 / d))));
+    if (pinch0 > 0) zoomAt(mid, midY, Math.max(0.1, Math.min(1.3, zoom0 * (pinch0 / d))));
     view.az -= (mid - mid0) * 0.008; mid0 = mid;
     view.el = Math.max(0.3, Math.min(1.2, view.el + (midY - midY0) * 0.004)); midY0 = midY;
     return;
@@ -535,7 +535,7 @@ const up = (e: PointerEvent) => {
   g = null;
 };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.max(0.25, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001)))); }, { passive: false });
+canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.max(0.1, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001)))); }, { passive: false });
 { const h = qs.get('hand') ?? qs.get('brush'); if (h) setBrush(h); }
 // (for looking at them: `?sheet` opens the piece brush's sheet; `?select=k.i.j` takes up what's there, `&whole` the whole)
 if (qs.has('sheet')) { setBrush('piece'); openSheet(true); }
@@ -723,8 +723,7 @@ function moving(t: number) {
       cat(out, { x: c * sp * ax - r * sp * ax, y: 0, z: -c * sp * ax - r * sp * ax, yaw: Number(qs.get('yaw') ?? -Math.PI / 4), pitch: 0, coat: q % 8, tone: 0.5 }, p, { t, breath: t / 3, twitch: 0, flick: 0 });
     });
   }
-  // (larger when seen from far off, so they read; as they are, close to)
-  if (catsOn) cats.draw(out, Math.max(1, Math.min(1.7, zoomK / 0.3)));
+  if (catsOn) cats.draw(out);
   R.moving(out.data, out.count);
 }
 
@@ -752,7 +751,7 @@ const COAT_CSS = ['#c98a4b', '#6d6f73', '#e4d7bf', '#87705a', '#252120', 'linear
 /** the cat under a point on the screen, if one's close to it */
 function catAt(cx: number, cy: number): Cat | null {
   if (!catsOn) return null;
-  let best: Cat | null = null, bd = Math.max(16, 26 * (0.5 / Math.max(0.15, zoomK)));
+  let best: Cat | null = null, bd = Math.max(18, 26 * (0.3 / Math.max(0.1, zoomK)));
   for (const c of cats.list) {
     if (c.hidden || c.gone) continue;
     const h = cats.headOf(c), [hx, hy] = screenOf(h[0], h[1], h[2]), [bx, by] = screenOf(c.x, c.y + 0.1, c.z);
@@ -785,7 +784,7 @@ function followCat(dt: number) {
   if (met.gone) { meet(null); return; }
   const q = 1 - Math.exp(-dt * 4), y = met.y + 0.15;
   view.target[0] += (met.x - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z - view.target[2]) * q;
-  zoomK += (0.24 - zoomK) * q;
+  zoomK += (0.12 - zoomK) * q;
   follow = false;
 }
 // (`?catsat=s`: the cats' lives run on that long before it's shown, for a picture)

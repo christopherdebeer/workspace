@@ -66,7 +66,7 @@ export function perches(w: World): Perches {
   const spots: Spot[] = [], byName = new Map<string, number>(), atCell = new Map<number, number>();
   const solid = (x: number, y: number, z: number) => inStone(w, x, y, z);
   /** room for a cat: nothing in the way of its body over where it stands */
-  const roomy = (x: number, y: number, z: number) => !solid(x, y + 0.07, z) && !solid(x, y + 0.2, z);
+  const roomy = (x: number, y: number, z: number) => !solid(x, y + 0.04, z) && !solid(x, y + 0.11, z);
   const nav = navigate(w), B = buildings(w), rails = parapets(w);
   const roofTop = new Set<number>();
   for (const b of B.list) if (b.roof) for (const [x, z] of b.cols) roofTop.add(key(b.h, x, z));
@@ -152,7 +152,7 @@ export function perches(w: World): Perches {
         link(rail, s, 'hop', 1.2, [x, y, z], [s.x + p * 0.12, s.y, s.z + q * 0.12]);
         continue;
       }
-      const x = s.x + p * 0.32, z = s.z + q * 0.32;
+      const x = s.x + p * 0.38, z = s.z + q * 0.38;
       if (!solid(x, s.y - 0.04, z) || !roomy(x, s.y, z)) continue;
       const ledge = add('ledge', s.k, s.i, s.j, x, s.y, z, d, true)!;
       ledge.out = 1;

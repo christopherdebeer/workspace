@@ -22,8 +22,9 @@ import { STRIDE } from './mesh';
 export type V3 = [number, number, number];
 /** a cat's material: marked over the stone's (render.ts reads `FUR + coat`) */
 export const FUR = 512;
-/** how big a cat is in the room, against a cell (1 across, 1 high): larger than life, so it reads from the usual view */
-export const S = 0.5;
+/** how big a cat is in the room, against a cell (1 across, 1 high, a storey): as a cat is against a storey, so it walks a
+ * balustrade's rail (0.17 wide, a third of a level up) as a cat walks a rail */
+export const S = 0.21;
 
 export interface Pose {
   /** the spine: rump, middle, chest, the neck's base; and the head's middle */
