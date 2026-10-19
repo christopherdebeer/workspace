@@ -20,9 +20,10 @@ float grown(float born) { float t = clamp((uTime - born) / 0.9, 0., 1.); return 
 const VS = COMMON + `
 layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNrm; layout(location=2) in vec2 aAoMat; layout(location=3) in vec3 aRise; layout(location=4) in float aTone;
 uniform mat4 uVP, uLight;
-out vec3 vPos, vNrm; out float vAo, vMat, vTone; out vec4 vLs;
+out vec3 vPos, vNrm; out float vAo, vMat, vTone, vU; out vec4 vLs;
 void main() {
   float s = grown(aRise.x);
+  vU = aRise.z;
   vec3 p = vec3(aPos.x, aRise.y + (aPos.y - aRise.y) * s, aPos.z);
   vPos = p; vNrm = aNrm; vAo = aAoMat.x; vMat = aAoMat.y; vTone = aTone; vLs = uLight * vec4(p, 1.);
   gl_Position = s <= 0. ? vec4(2., 2., 2., 1.) : uVP * vec4(p, 1.);
@@ -49,7 +50,7 @@ bool pierced(vec3 p, vec3 n, float m) {
 }
 `;
 const FS = COMMON + PIERCE + `
-in vec3 vPos, vNrm; in float vAo, vMat, vTone; in vec4 vLs;
+in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
 uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -99,14 +100,46 @@ vec3 marble(vec3 p, vec3 n, float tone) {
   else { vec2 f = fract(p.xz), g = min(f, 1. - f); jt = min(g.x, g.y); }
   return c * (1. - .1 * (1. - smoothstep(.003, .009, jt)));
 }
+// (a cat's coat: its colour, its markings (a tabby's bands round its body, legs and tail, darker along its back), paler
+// underneath and at the muzzle; where on the body (h: part × 10 + along it) keeps the markings on the cat as it moves.
+// Parts: 0 body, 1 head, 2 tail, 3 legs, 4 ears, 5 muzzle)
+vec3 coat(int c, float h, vec3 n, float tone) {
+  float part = floor(h / 10. + .001), u = h - part * 10.;
+  vec3 base = vec3(.80, .50, .25), mark = vec3(.60, .33, .15), pale = vec3(.93, .84, .66);
+  float stripes = .8, white = 0.;
+  if (c == 1) { base = vec3(.40, .41, .43); mark = vec3(.33, .34, .36); pale = vec3(.52, .52, .53); stripes = .1; }
+  else if (c == 2) { base = vec3(.90, .83, .70); mark = vec3(.80, .68, .52); pale = vec3(.96, .93, .86); stripes = .35; }
+  else if (c == 3) { base = vec3(.52, .43, .32); mark = vec3(.23, .19, .15); pale = vec3(.80, .72, .58); stripes = .9; }
+  else if (c == 4) { base = vec3(.11, .10, .10); mark = base; pale = vec3(.16, .15, .14); stripes = 0.; }
+  else if (c == 5) { base = vec3(.80, .50, .25); mark = vec3(.66, .38, .18); pale = vec3(.95, .93, .89); stripes = .5; white = 1.; }
+  else if (c == 6) { base = vec3(.70, .70, .68); mark = vec3(.30, .30, .30); pale = vec3(.88, .87, .84); stripes = .9; }
+  else if (c == 7) { base = vec3(.12, .11, .11); mark = base; pale = vec3(.94, .92, .88); stripes = 0.; white = 1.; }
+  base *= .94 + .1 * tone;
+  // (bands: round the body, closer round the tail and legs; broken along the back)
+  float freq = part == 0. ? 9. : part == 2. ? 7. : part == 3. ? 5. : 0.;
+  float band = freq > 0. ? smoothstep(.62, .9, .5 + .5 * sin(u * 6.2832 * freq + tone * 3. + sin(u * 23.) * .6)) * .75 : 0.;
+  float back = smoothstep(-.2, .5, n.y);
+  vec3 c0 = mix(base, mark, band * stripes * (.5 + .5 * back));
+  if (part == 2. && u > .86) c0 = mix(c0, mark, stripes * .8);
+  // (paler underneath, at the muzzle and the chest; a bicolour's white further up, and on its paws)
+  float under = smoothstep(-.05, -.6, n.y) * (part == 0. || part == 1. ? 1. : 0.);
+  if (part == 5.) under = 1.;
+  if (white > 0.) { under = max(under, smoothstep(.2, -.35, n.y) * (part == 0. ? 1. : 0.)); if (part == 3. && u > .55) under = 1.; if (part == 5.) under = 1.; }
+  c0 = mix(c0, pale, under * (white > 0. ? 1. : .75));
+  if (part == 4.) c0 *= .82;
+  return c0;
+}
 void main() {
   vec3 n = normalize(vNrm);
   if (pierced(vPos, n, vMat)) discard;
   int m0 = int(vMat + .5), m = m0 % 256, mat = m % 16, kind = (m / 64) % 4;
-  bool sel = m0 >= 256;
+  bool fur = m0 >= 512;
+  bool sel = m0 >= 256 && !fur;
+  if (fur) { mat = 16; kind = 0; m = 0; }
   bool moss = (m / 16) % 2 == 1, ivy = (m / 32) % 2 == 1;
   vec3 base; float spec = 0., wrap = 0.;
-  if (mat == 2) base = vec3(.13, .25, .25);
+  if (fur) { base = coat(m0 - 512, vU, n, vTone); wrap = .5; }
+  else if (mat == 2) base = vec3(.13, .25, .25);
   else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)) * (.8 + .4 * vTone); wrap = .35; }
   else if (mat == 4) base = vec3(.32, .24, .17);
   else if (mat == 9) base = vec3(1.);
@@ -218,8 +251,10 @@ void main() {
     vec3 hv = normalize(uSun - normalize(uDir));
     float glo = mat == 12 ? 90. : mat == 14 ? 30. : mat == 3 ? 18. : mat == 10 || mat == 13 ? 8. : kind == 2 ? 60. : kind == 1 ? 8. : 14.;
     float ks = mat == 12 ? .6 : mat == 14 ? .2 : mat == 3 ? .06 : mat == 10 || mat == 13 ? .03 : kind == 2 ? .22 : kind == 1 ? .015 : .045;
-    if (mat == 0 || mat == 1 || mat == 3 || mat == 10 || mat >= 12) c += sun * ks * pow(max(dot(n, hv), 0.), glo) * sh * (.5 + .5 * vAo);
+    if (mat == 0 || mat == 1 || mat == 3 || mat == 10 || (mat >= 12 && mat <= 15)) c += sun * ks * pow(max(dot(n, hv), 0.), glo) * sh * (.5 + .5 * vAo);
   }
+  // (a coat's soft sheen where it turns from the eye, lit)
+  if (fur) c += base * vec3(1., .9, .75) * .35 * pow(1. - abs(dot(n, normalize(uDir))), 2.5) * (.4 + .6 * sh);
   // (light gathers in the archways)
   // (light bounced up into an arch from the sunlit ground: warm near its mouth, little where it's deep)
   if (mat == 1) c += base * vec3(1., .74, .48) * .26 * vAo * vAo;
@@ -241,7 +276,7 @@ void main() {
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   oCol = vec4(c, 1.);
-  oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .25 : .5);
+  oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .25 : fur ? .6 : .5);
 }`;
 const SHADOW_FS = `#version 300 es
 precision highp float;
@@ -274,6 +309,9 @@ void main() {
   vec2 q = gl_FragCoord.xy;
   // (what's taken up, outlined: where the selection mask changes, on the side that's selected)
   float m = texture(uNrm, vUv).a, ring = 0.;
+  // (a cat's contour: drawn where its coat meets anything else, on its own side)
+  float furOn = step(.55, m) * step(m, .7), rim = 0.;
+  if (furOn > .5) for (int a = 0; a < 4; a++) { float t = float(a) * 1.5708; float mm = texture(uNrm, vUv + vec2(cos(t), sin(t)) * px).a; rim = max(rim, 1. - step(.55, mm) * step(mm, .7)); }
   if (m > .75) for (int a = 0; a < 8; a++) { float t = float(a) * .785398; vec2 o = vec2(cos(t), sin(t)) * px * 2.; ring = max(ring, step(texture(uNrm, vUv + o).a, .75)); }
   if (sky > .5) {
     // (the paper behind it, a little darker toward the corners)
@@ -293,13 +331,13 @@ void main() {
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h2)) * smoothstep(.55, .4, L));
     hatch = max(hatch, (1. - smoothstep(w, w + 1., h3)) * smoothstep(.36, .24, L));
     c = mix(paper, ink, hatch * .85);
-  o = vec4(mix(mix(c, ink, edge * .85 * (1. - step(.1, m) * step(m, .4) * .8)), vec3(.69, .36, .12), ring * .9), 1.);
+  o = vec4(mix(mix(c, ink, max(edge * .85 * (1. - step(.1, m) * step(m, .4) * .8), rim * .9)), vec3(.69, .36, .12), ring * .9), 1.);
     return;
   }
   // (as it is: barely a line, only where the depth folds; never on the land itself, whose folds are its own)
   // (not against the sky: the table's far edge isn't drawn)
   float onLand = step(.1, m) * step(m, .4);
-  o = vec4(mix(mix(c, ink * 1.6, smoothstep(.04, .14, lap) * .16 * (1. - step(.5, skyN)) * (1. - onLand)), vec3(.69, .36, .12), ring * .9), 1.);
+  o = vec4(mix(mix(c, ink * 1.6, max(smoothstep(.04, .14, lap) * (furOn > .5 ? .4 : .16) * (1. - step(.5, skyN)) * (1. - onLand), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
@@ -337,6 +375,8 @@ export function invert(m: M4): M4 {
 const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+/** the sun: low, from over the left shoulder of the first view */
+export const SUN = norm([-0.62, 0.72, -0.3]);
 
 /** the camera: square-on to nothing, looking down at `el` from `az` round, orthographic (as the prints draw it) */
 export function camera(v: View, aspect: number): { vp: M4; eye: number[]; dir: number[]; range: number } {
@@ -350,13 +390,14 @@ export class Renderer {
   gl: WebGL2RenderingContext;
   private main: WebGLProgram; private shadow: WebGLProgram; private post: WebGLProgram;
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
+  /** what moves (the cats): its own buffer, filled again each frame, drawn with the stone */
+  private dvao: WebGLVertexArrayObject; private dbuf: WebGLBuffer; private dcount = 0;
   private shadowFb: WebGLFramebuffer; private shadowTex: WebGLTexture;
   private fb: WebGLFramebuffer | null = null;
   /** drawn multisampled (4×), then resolved into the textures the ink reads */
   private ms: WebGLFramebuffer | null = null; private msBufs: WebGLRenderbuffer[] = [];
   msaa = true; private col: WebGLTexture | null = null; private nrm: WebGLTexture | null = null; private dep: WebGLTexture | null = null; private size = [0, 0];
-  /** the sun: low, from over the left shoulder of the first view */
-  sun = norm([-0.62, 0.72, -0.3]);
+  sun = SUN;
   print = false;
   /** what the sun must cover: the middle of the slab (x, z), and how far out from it */
   area: [number, number, number] = [0, 0, 10];
@@ -369,14 +410,18 @@ export class Renderer {
     if (!gl) throw new Error('no WebGL2');
     this.gl = gl;
     this.main = compile(gl, VS, FS); this.shadow = compile(gl, VS, SHADOW_FS); this.post = compile(gl, POST_VS, POST_FS);
+    const layout = () => {
+      const F = 4;
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE * F, 0);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, STRIDE * F, 3 * F);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, STRIDE * F, 6 * F);
+      gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, STRIDE * F, 8 * F);
+      gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, STRIDE * F, 11 * F);
+    };
     this.vao = gl.createVertexArray()!; this.buf = gl.createBuffer()!;
-    gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
-    const F = 4;
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE * F, 0);
-    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, STRIDE * F, 3 * F);
-    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, STRIDE * F, 6 * F);
-    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, STRIDE * F, 8 * F);
-    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, STRIDE * F, 11 * F);
+    gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buf); layout();
+    this.dvao = gl.createVertexArray()!; this.dbuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.dvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.dbuf); layout();
     gl.bindVertexArray(null);
     this.shadowTex = this.depthTex(2048, 2048);
     this.shadowFb = gl.createFramebuffer()!;
@@ -403,6 +448,14 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.bufferData(gl.ARRAY_BUFFER, m.data, gl.STATIC_DRAW);
     this.count = m.count;
+  }
+  /** what moves, as it is this frame (STRIDE floats a vertex) */
+  moving(data: Float32Array, count: number) {
+    const gl = this.gl;
+    this.dcount = count;
+    if (!count) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dbuf);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, count * STRIDE), gl.DYNAMIC_DRAW);
   }
   private targets(w: number, h: number) {
     if (this.size[0] === w && this.size[1] === h && this.fb) return;
@@ -451,6 +504,7 @@ export class Renderer {
     gl.uniform1f(gl.getUniformLocation(this.shadow, 'uTime'), time);
     gl.cullFace(gl.FRONT);
     gl.bindVertexArray(this.vao); gl.drawArrays(gl.TRIANGLES, 0, this.count);
+    if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); gl.bindVertexArray(this.vao); }
     gl.cullFace(gl.BACK);
     // (the stone, lit)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.ms ?? this.fb); gl.viewport(0, 0, w, h);
@@ -461,6 +515,7 @@ export class Renderer {
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(U('uShadow'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
+    if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); }
     gl.bindVertexArray(null);
     if (this.ms) {
       // (resolved: each colour, then the depth)

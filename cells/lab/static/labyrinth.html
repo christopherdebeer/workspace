@@ -78,6 +78,16 @@
     nav a { white-space: nowrap; }
     nav small { display: block; font-size: 10px; letter-spacing: .3em; text-transform: uppercase; opacity: .6; margin-top: 4px; }
     .preview nav, .preview #acts, .preview #hint, .preview #hands { display: none; }
+    #catcard { position: fixed; left: 50%; top: calc(max(12px, env(safe-area-inset-top)) + 54px); transform: translateX(-50%); z-index: 3; display: none; align-items: center; gap: 9px; padding: 6px 6px 6px 7px; border-radius: 24px; background: rgba(246,241,231,.94); box-shadow: 0 3px 16px rgba(70,50,30,.16), inset 0 0 0 1px rgba(43,36,32,.06); max-width: calc(100vw - 24px); }
+    #catcard.on { display: flex; }
+    #catcard .coat { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; box-shadow: inset 0 -3px 6px rgba(0,0,0,.18), inset 0 0 0 1px rgba(43,36,32,.12); }
+    #catcard .who { min-width: 0; display: grid; line-height: 1.15; }
+    #catcard b { font-weight: 400; font-size: 15px; }
+    #catcard span { font-size: 12.5px; font-style: italic; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #catcard button { appearance: none; border: 0; font: inherit; font-size: 12.5px; color: #f3ede1; background: #6e5a49; border-radius: 16px; min-height: 34px; padding: 0 13px; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+    #catcard #catclose { background: none; color: #2b2420; font-size: 20px; width: 34px; padding: 0; }
+    .following #hint, .following #intent, .following #alts { display: none !important; }
+    .preview #catcard { display: none !important; }
   </style>
 </head>
 <body>
@@ -96,6 +106,10 @@
   <div id="intent" role="radiogroup" aria-label="what a stroke is for">
     <button data-intent="mass" role="radio" aria-label="mass: a stroke on the ground is a wall; taps raise"><svg viewBox="0 0 24 24"><path d="M4 19h16M6 19V9h12v10M6 13h12"/></svg><i>mass</i></button>
     <button data-intent="way" role="radio" aria-label="way: a stroke connects places; the land says how"><svg viewBox="0 0 24 24"><path d="M4 20c3 0 4-3 6-3h2v-3h3v-3h3c1.5 0 2-2 2-4"/><circle cx="4" cy="20" r="1.3"/><circle cx="20" cy="7" r="1.3"/></svg><i>way</i></button>
+  </div>
+  <div id="catcard" role="dialog" aria-label="a cat">
+    <i class="coat"></i><div class="who"><b id="catname"></b><span id="catdoing"></span></div>
+    <button id="catfollow">Follow ›</button><button id="catclose" aria-label="let it be">×</button>
   </div>
   <div id="card" role="dialog" aria-label="what's taken up">
     <div class="row"><b id="what"></b><button id="close" aria-label="put it down">×</button></div>

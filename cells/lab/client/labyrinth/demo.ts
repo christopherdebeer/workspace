@@ -37,6 +37,7 @@ export function story(stage: number): World {
   if (stage === 10) return flow();
   if (stage === 11) return gestures();
   if (stage === 12) return onTheLand();
+  if (stage === 13) return forCats();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -257,5 +258,34 @@ function onTheLand(): World {
   w.apply({ add: [[7, 2], [8, 2], [7, 3], [8, 3]].flatMap(([i, j]) => [0, 1].map((k) => [w.ground(i, j) + k, i, j, t] as [number, number, number, number])) }, t);
   // (4. a way from in front of the court over the stream to the house: a bridge where it crosses the water)
   go(ground(2, 7), [[2, 7], [3, 7], [4, 7], [5, 7], [6, 7], [7, 7], [7, 6], [7, 5], [7, 4]], ground(7, 4), 'way');
+  return w;
+}
+
+/**
+ * storyboard 13: a place for cats (cats.ts). A court walled round low, a gate through its south wall, a taller corner
+ * at its south-east; a terrace beside it, a stair up from it to a higher terrace, a thin wall running on from that; and,
+ * last, a bridge traced from the higher terrace to the court's tall corner, over a gap too wide to leap: a new way,
+ * for the cats to find (`?hold=1` keeps it back, so it can be built in front of them).
+ */
+function forCats(): World {
+  const w = new World(29), t = -100;
+  const top = (i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+  const add = (cells: Array<[number, number, number]>) => w.apply({ add: cells.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  // (the court: walls a level high round it, a gate through the south wall, the south-east corner a level taller)
+  const ring: Array<[number, number, number]> = [];
+  for (let i = 1; i <= 5; i++) ring.push([0, i, 1], [0, i, 5]);
+  for (let j = 2; j <= 4; j++) ring.push([0, 1, j], [0, 5, j]);
+  add(ring);
+  w.apply({ arches: [[0, 3, 5, 1, t]] }, t);
+  add([[1, 5, 5]]);
+  // (a terrace beside it; a stair up from it to a higher terrace; a thin wall running on from that)
+  add([8, 9, 10].flatMap((i) => [1, 2, 3].map((j) => [0, i, j] as [number, number, number])));
+  add([[0, 9, 4]]);
+  w.apply({ stairs: [[1, 9, 4, 1, t]] }, t);
+  add([8, 9, 10].flatMap((i) => [5, 6, 7].flatMap((j) => [[0, i, j], [1, i, j]] as Array<[number, number, number]>)));
+  w.apply({ walls: [11, 12, 13].flatMap((i) => [[0, i, 6, 0, t], [1, i, 6, 0, t]] as Array<[number, number, number, number, number]>) }, t);
+  // (last: a bridge from the higher terrace to the court's tall corner)
+  const op = trace(w, top(8, 5), [[8, 5], [7, 5], [6, 5], [5, 5]], top(5, 5), () => t, t);
+  if (op && !('refused' in op)) w.apply({ ...op, alts: undefined }, t);
   return w;
 }

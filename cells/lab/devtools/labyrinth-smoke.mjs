@@ -100,6 +100,32 @@ await withWood(async (lab) => {
     await q.close();
   }
   {
+    // (the cats: residents as many as it's home for; the hand brush meets one, and the eye can follow it, and come back;
+    // a bridge built in front of them, they go and see it)
+    const q = await lab.open('zoom=0.5&story=13&catsat=20');
+    await q.waitForTimeout(1200);
+    const L = (f, a) => q.evaluate(([src, arg]) => new Function('L', 'a', `return (${src})(L, a)`)(window.__labyrinth, arg), [f.toString(), a]);
+    const list = await L((L) => L.cats());
+    c.ok('cats: as many as what\'s built is home for', list.length >= 2 && list.length === await L((L) => L.catsHome()), list.map((x) => `${x.name} ${x.doing}`));
+    await L((L) => L.setBrush('hand'));
+    await q.waitForTimeout(300);
+    const one = list.find((x) => !x.air) ?? list[0], s = await L((L, n) => L.catScreen(n), one.name);
+    await q.mouse.click(s[0], s[1]); await q.waitForTimeout(400);
+    c.ok('the hand brush: a tap on a cat meets it (its name, what it\'s doing)', await q.isVisible('#catcard') && (await q.textContent('#catname')) === one.name && !!(await q.textContent('#catdoing')), { one, s, card: await q.textContent('#catcard') });
+    await q.click('#catfollow'); await q.waitForTimeout(2500);
+    const f = await L((L) => ({ on: L.following, t: L.view.target.slice(), c: L.cats() }));
+    const me = f.c.find((x) => x.name === one.name);
+    c.ok('followed: the eye goes with it, close', f.on && me && Math.hypot(f.t[0] - me.x, f.t[2] - me.z) < 0.8, { f, me });
+    await q.click('#catfollow'); await q.waitForTimeout(300);
+    c.ok('and back to building', !(await L((L) => L.following)));
+    await q.close();
+    const r = await lab.open('zoom=0.5&story=13&hold=1&catsat=25');
+    await r.waitForTimeout(800);
+    const went = await r.evaluate(() => { const L = window.__labyrinth; L.release(); let saw = false; for (let n = 0; n < 300 && !saw; n++) { L.catsRun(0.2); saw = L.cats().some((x) => /new stone/.test(x.doing) || /^(floor|ledge|rail)\.2\.(6|7)\.5\./.test(x.at)); } return saw; });
+    c.ok('a bridge built in front of them: they go and see it', went);
+    await r.close();
+  }
+  {
     // (the palette, on a fresh stone: each piece put where it's touched, on the same stone the gestures build)
     const q = await lab.open('zoom=0.55&ops=[]');
     await q.waitForTimeout(800);
