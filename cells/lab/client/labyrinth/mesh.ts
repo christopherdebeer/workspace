@@ -87,6 +87,9 @@ type V3 = [number, number, number];
 const X = (i: number) => i - CENTER, Z = (j: number) => j - CENTER;
 const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 19349663) ^ (j * 83492791)) >>> 0) / 4294967296;
 
+/** the land drawn bleeding into the page (no sides, no table under it): see the renderer's `bleed` */
+let bleed = false;
+export const setBleed = (b: boolean) => { bleed = b; };
 export function buildMesh(w: World, plain = false, selected: Set<number> = new Set()): Mesh {
   /** how a cell's dressed: the rules' dressing and the hand's (`plain`: the hand's alone) */
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
@@ -650,14 +653,17 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (let a = 0; a <= nx; a++) { pts.push([]); nrm.push([]); for (let b = 0; b <= nz; b++) { pts[a].push(P(a, b)); nrm[a].push(Nrm(a, b)); } }
     const v = (a: number, b: number, ao = 1) => vert(pts[a][b], nrm[a][b], ao, LANDMAT);
     for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) { v(a, b); v(a, b + 1); v(a + 1, b); v(a, b + 1); v(a + 1, b + 1); v(a + 1, b); }
-    // (its sides: rock, down from its edge to the table)
+    // (its sides: rock, down from its edge to the table; bleeding into the page, after Taohua, neither: the land's
+    // ground is all there is of it)
     const foot = -SLAB;
+    if (!bleed) {
     const side = (p: V3[], n: V3) => { for (let q = 0; q + 1 < p.length; q++) quad(p[q], p[q + 1], [p[q + 1][0], foot, p[q + 1][2]], [p[q][0], foot, p[q][2]], n, [1, 1, 0.6, 0.6], LANDMAT); };
     side(pts.map((c) => c[0]), [0, 0, -1]); side(pts.map((c) => c[nz]), [0, 0, 1]); side(pts[0], [-1, 0, 0]); side(pts[nx], [1, 0, 0]);
     // (the table round it)
     const T = 90, R = 1.6, xa = x0 - CENTER, xb = x1 - CENTER, za = z0 - CENTER, zb = z1 - CENTER;
     quad([xa - R, foot, za - R], [xb + R, foot, za - R], [xb + R, foot, zb + R], [xa - R, foot, zb + R], [0, 1, 0], 1, MAT.table);
     for (const [qa, qb, qc, qd] of [[-T, -T, T, za - R], [-T, zb + R, T, T], [-T, za - R, xa - R, zb + R], [xb + R, za - R, T, zb + R]]) quad([qa, foot, qb], [qc, foot, qb], [qc, foot, qd], [qa, foot, qd], [0, 1, 0], 1, MAT.table);
+    }
     // (the stream: its water a little under its banks, a fall where its bed steps down to the next)
     const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
     for (const [i, j] of land.stream) {

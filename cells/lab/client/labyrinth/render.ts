@@ -50,7 +50,7 @@ bool pierced(vec3 p, vec3 n, float m) {
 `;
 const FS = COMMON + PIERCE + `
 in vec3 vPos, vNrm; in float vAo, vMat, vTone; in vec4 vLs;
-uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
+uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows, uBleed; uniform vec4 uLand, uBuilt;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
@@ -106,6 +106,8 @@ void main() {
   bool sel = m0 >= 256;
   bool moss = (m / 16) % 2 == 1, ivy = (m / 32) % 2 == 1;
   vec3 base; float spec = 0., wrap = 0.;
+  // (how much of the land here is a feature of it (a cliff's rock, a bank's dashes), not its open ground)
+  float landFeat = 0.;
   if (mat == 2) base = vec3(.13, .25, .25);
   else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)) * (.8 + .4 * vTone); wrap = .35; }
   else if (mat == 4) base = vec3(.32, .24, .17);
@@ -144,14 +146,16 @@ void main() {
     // (the land: barely there. Its open ground the paper's own warm pale, a faint grain in it; where it slopes, a few
     // dashes down the fall of it; where it's steep (a cliff, the land's edge), rock: a grey wash, mottled, cracked)
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
+    landFeat = smoothstep(.5, .32, up + (rough - .5) * .14);
     base = vec3(.88, .84, .76) * (.97 + .05 * noise(vPos * vec3(3., 1., 3.)));
     float steep = smoothstep(.97, .7, up), cliff = smoothstep(.5, .32, up + (rough - .5) * .14);
     if (steep > 0. && cliff < 1.) {
       vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
-      float a = dot(vPos.xz, con) * 9., b = dot(vPos.xz, fall) * 3. - vPos.y * 3.;
+      float a = dot(vPos.xz, con) * mix(9., 5., uBleed), b = dot(vPos.xz, fall) * mix(3., 1.4, uBleed) - vPos.y * mix(3., 1.4, uBleed);
       float row = floor(a), lane = abs(fract(a) - .5);
-      float on = step(hash(vec3(row, floor(b), 3.)), .16 + .22 * steep) * step(lane, .05 + .03 * steep) * step(.35, fract(b + hash(vec3(row, 1., 9.))));
+      float on = step(hash(vec3(row, floor(b), 3.)), mix(.16 + .22 * steep, .1 + .16 * steep, uBleed)) * step(lane, .05 + .03 * steep) * step(mix(.35, .55, uBleed), fract(b + hash(vec3(row, 1., 9.))));
       base = mix(base, vec3(.55, .52, .47), on * .5 * steep * (1. - cliff));
+      landFeat = max(landFeat, on * steep * (1. - cliff));
     }
     vec3 rock = mix(vec3(.62, .60, .56), vec3(.80, .77, .71), rough) * (.9 + .1 * vTone);
     float crack = smoothstep(.47, .5, noise(vPos * vec3(5., 9., 5.))) * smoothstep(.53, .5, noise(vPos * vec3(5., 9., 5.)));
@@ -237,7 +241,30 @@ void main() {
   c = pow(c, vec3(1.03, 1.04, 1.07));
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
   bool land = mat == 5 && moss;
-  if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
+  // (bleeding: how far this is given back to the paper: away from what's built (at least a little piece of land round
+  // the middle of a bare one), and toward the land's own edge, raggedly. What's built is inside it; what lies on the
+  // land (its rocks and shrubs, its stream) goes with its ground)
+  float dB = max(max(uBuilt.x - vPos.x, vPos.x - uBuilt.z), max(uBuilt.y - vPos.z, vPos.z - uBuilt.w));
+  float dE = min(min(vPos.x - uLand.x, uLand.z - vPos.x), min(vPos.z - uLand.y, uLand.w - vPos.z));
+  float ragged = (noise(vPos * vec3(.35, 1., .35)) - .5) * 2.5;
+  // (from a cell out from what's built, gone three and a half further; and toward the land's edge, for anything not
+  // built. What's built itself is never given back)
+  float giveBack = uBleed * max(smoothstep(1., 4.5, dB + ragged * .8), land || dB > 0. ? 1. - smoothstep(.5, 4., dE + ragged) : 0.);
+  if (land && uBleed > .5) {
+    // (after Taohua: the open ground is the paper itself, unlit; only its features are drawn (a cliff's rock, a bank's
+    // dashes, as lit as anything), and the shade cast on it, laid on as a dry brush lays grey, breaking up at its edge.
+    // Away from what's built, and toward the land's own edge, it all gives way to the paper: the land bleeds into the
+    // page instead of standing on a plinth)
+    vec3 PAP = vec3(.94, .91, .85), GREY = vec3(.62, .58, .53);
+    float shade = (1. - sh) * (.75 + .25 * (1. - vAo));
+    float brush = noise(vec3(vPos.x * 1.1, vPos.z * 9., 2.)) * .75 + noise(vec3(vPos.x * 4., vPos.z * 24., 5.)) * .25;
+    float laid = smoothstep(1. - shade * 1.2, 1.05 - shade * 1.2, brush);
+    vec3 g = mix(PAP, GREY, .42 * laid * smoothstep(.05, .3, shade));
+    g = mix(g, c, landFeat);
+    c = mix(g, PAP, giveBack);
+  }
+  else if (uBleed > .5 && giveBack > 0.) c = mix(c, vec3(.94, .91, .85), giveBack);
+  else if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   oCol = vec4(c, 1.);
@@ -252,7 +279,7 @@ const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed;
 out vec4 o;
 float D(vec2 uv) { return texture(uDepth, uv).r * uRange; }
 vec3 Nn(vec2 uv) { return texture(uNrm, uv).xyz * 2. - 1.; }
@@ -269,7 +296,9 @@ void main() {
   float edge = max(smoothstep(.04, .12, lap), smoothstep(.25, .5, turn));
   // (and round the stone against the sky)
   float skyN = step(.9999 * uRange, dl) + step(.9999 * uRange, dr) + step(.9999 * uRange, dd) + step(.9999 * uRange, du);
-  if (sky < .5 && skyN > 0.) edge = 1.;
+  // (but not round the land, bleeding into the page: it has no edge to draw)
+  float m0 = texture(uNrm, vUv).a;
+  if (sky < .5 && skyN > 0. && !(uBleed > .5 && m0 > .1 && m0 < .4)) edge = 1.;
   vec3 c = texture(uCol, vUv).rgb;
   vec2 q = gl_FragCoord.xy;
   // (what's taken up, outlined: where the selection mask changes, on the side that's selected)
@@ -278,7 +307,7 @@ void main() {
   if (sky > .5) {
     // (the paper behind it, a little darker toward the corners)
     float v = length(vUv - .5);
-    o = vec4(paper * (1. - .12 * v * v), 1.);
+    o = vec4(paper * (1. - .12 * v * v * (1. - uBleed)) * (1. - .06 * uBleed * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)))), 1.);
     return;
   }
   vec3 ink = vec3(.17,.14,.12);
@@ -300,6 +329,8 @@ void main() {
   // (not against the sky: the table's far edge isn't drawn)
   float onLand = step(.1, m) * step(m, .4);
   o = vec4(mix(mix(c, ink * 1.6, smoothstep(.04, .14, lap) * .16 * (1. - step(.5, skyN)) * (1. - onLand)), vec3(.69, .36, .12), ring * .9), 1.);
+  // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
+  if (uBleed > .5) o.rgb *= 1. - .06 * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)));
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
@@ -360,6 +391,10 @@ export class Renderer {
   print = false;
   /** what the sun must cover: the middle of the slab (x, z), and how far out from it */
   area: [number, number, number] = [0, 0, 10];
+  /** the land bleeding into the page (after Taohua), and the land's extent in the scene (x0, z0, x1, z1) */
+  bleed = false; landBox: [number, number, number, number] = [-1e3, -1e3, 1e3, 1e3];
+  /** what's built, its extent in the scene (x0, z0, x1, z1): bleeding, the land's given back to the paper away from it */
+  built: [number, number, number, number] = [-5, -5, 5, 5];
   /** how high it's built (the sun's view reaches over it) */
   top = 8;
   /** (for looking at it: the sun's shadows, or none) */
@@ -458,7 +493,7 @@ export class Renderer {
     gl.useProgram(this.main);
     const U = (n: string) => gl.getUniformLocation(this.main, n);
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
-    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0);
+    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); gl.uniform4fv(U('uBuilt'), this.built);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(U('uShadow'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     gl.bindVertexArray(null);
@@ -481,7 +516,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.col); gl.uniform1i(P('uCol'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
-    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uDpr'), dpr);
+    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     return cam;
   }

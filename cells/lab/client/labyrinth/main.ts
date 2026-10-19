@@ -13,8 +13,9 @@
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?turn=` ·
  * `?zoom=` · `?preview` · `?still`
  */
-import { CENTER, World, inGrid, key, replay, type Alt, type Cell, type Op } from './model';
-import { buildMesh, inLand, inStone } from './mesh';
+import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
+import { buildMesh, inLand, inStone, setBleed } from './mesh';
+import { LAND } from './land';
 import { Renderer, camera, invert, type View } from './render';
 import { carve, surface, tap, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
@@ -31,6 +32,8 @@ const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
 R.print = qs.has('print');
 R.shadows = !qs.has('noshadow');
+// (`?bleed`: the land as Taohua draws its hill: the open ground the paper itself, only its features drawn, bleeding into the page; no plinth)
+R.bleed = qs.has('bleed'); setBleed(R.bleed);
 R.msaa = !qs.has('nomsaa');
 
 // ─── what's built ───
@@ -663,6 +666,14 @@ function frame() {
     if (Math.abs(fr.cx - view.target[0]) + Math.abs(fr.cz - view.target[2]) + Math.abs(ty - view.target[1]) + Math.abs(fr.fit - zoomFit) < 0.01) follow = preview;
   }
   R.area = [fr.cx, fr.cz, fr.half + 2]; R.top = world.top();
+  // (what's built, as far as it goes; bare, a little piece round the middle of the land)
+  {
+    let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity;
+    for (const m of [world.mass, world.stairs, world.piers]) for (const v of m.keys()) { const [, i, j] = unkey(v); i0 = Math.min(i0, i); i1 = Math.max(i1, i); j0 = Math.min(j0, j); j1 = Math.max(j1, j); }
+    const mid = world.land ? (LAND.i0 + LAND.i1 + 1) / 2 : CENTER;
+    R.built = i0 <= i1 ? [i0 - CENTER, j0 - CENTER, i1 + 1 - CENTER, j1 + 1 - CENTER] : [mid - 3.5 - CENTER, mid - 3.5 - CENTER, mid + 3.5 - CENTER, mid + 3.5 - CENTER];
+  }
+  R.landBox = world.land ? [LAND.i0 - CENTER, LAND.j0 - CENTER, LAND.i1 + 1 - CENTER, LAND.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3];
   view.zoom = zoomFit * zoomK;
   R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
