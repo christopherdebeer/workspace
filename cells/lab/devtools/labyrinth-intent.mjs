@@ -44,7 +44,7 @@ await withWood(async (lab) => {
   const log = [];
   for (const cs of CASES) {
     const R = rng(cs.seed);
-    const p = await lab.open(cs.q, { width: 430, height: 900 });
+    const p = await lab.open(`${cs.q}&instant`, { width: 430, height: 900 });
     await p.evaluate(() => { try { localStorage.removeItem('labyrinth.intent'); } catch { /* */ } });
     await p.waitForTimeout(2500);
     if (cs.intent) { await p.evaluate((i) => window.__labyrinth.setIntent(i), cs.intent); await p.waitForTimeout(300); }
@@ -130,7 +130,7 @@ await withWood(async (lab) => {
       }
       await p.waitForTimeout(400);
       const said = await p.evaluate(() => document.getElementById('hint')?.textContent ?? '');
-      await p.waitForTimeout(1500); await frames(3); await settle();
+      await frames(3); await settle();
       await p.screenshot({ path: f('c-after'), type: 'jpeg', quality: 80 });
       const res = await p.evaluate((ops0) => { const L = window.__labyrinth, w = L.world; return { built: w.ops.length > ops0, why: w.ops.slice(ops0).map((o) => o.why ?? ''), rests: w.ops.slice(ops0).map((o) => o.connect?.rest?.length ?? 0), note: w.ops.slice(ops0).map((o) => o.note ?? ''), alts: L.alts(), declines: L.declines().slice(-1), intent: L.intent }; }, ops0);
       const entry = { id, kind, desc, ...res, said, during, errors: p.errors.slice() };

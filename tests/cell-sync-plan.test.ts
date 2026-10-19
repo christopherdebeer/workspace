@@ -48,22 +48,35 @@ describe('cell-sync plan', () => {
     expect(paths(p.conflict)).toEqual(['a.ts']);
   });
 
-  it('never pulls ignored or generated paths (devtools/ no longer comes back)', () => {
+  it('never pulls ignored or generated paths', () => {
     const p = sync.plan({}, {
-      'devtools/old.mjs': '1',
       'native/x.json': '2',
       'scratchpad/probe.log': '3',
       'vendor/cell-jobs.js': '4',
       'sync-staging/r1/main.ts': '5',
-    }, { 'devtools/old.mjs': '0', 'scratchpad/probe.log': '0' });
+    }, { 'scratchpad/probe.log': '0' });
     expect(p.pull).toEqual([]);
     expect(p.push).toEqual([]);
     expect(p.ignoredRemote).toEqual([
-      'devtools/old.mjs',
       'native/x.json',
       'scratchpad/probe.log',
       'sync-staging/r1/main.ts',
     ]);
+  });
+
+  it('mirrors devtools/ up, push-only: git wins, nothing comes back, the cell\'s strays are left', () => {
+    const p = sync.plan(
+      { 'devtools/a.test.mjs': '2', 'devtools/new.mjs': '1', 'devtools/same.mjs': '5' },
+      { 'devtools/a.test.mjs': '9', 'devtools/stale.mjs': '3', 'devtools/dropped.mjs': '4', 'devtools/same.mjs': '5' },
+      { 'devtools/a.test.mjs': '1', 'devtools/dropped.mjs': '4' },
+    );
+    // (both moved: git's copy goes up, no conflict; new: up; dropped from git after being sent: deleted on the cell)
+    expect(paths(p.push)).toEqual(['devtools/a.test.mjs', 'devtools/dropped.mjs', 'devtools/new.mjs']);
+    expect(p.pull).toEqual([]);
+    expect(p.conflict).toEqual([]);
+    expect(p.inSync).toEqual(['devtools/same.mjs']);
+    // (on the cell only, never sent by this sync: left alone)
+    expect(p.ignoredRemote).toEqual(['devtools/stale.mjs']);
   });
 
   it('a base inferred from git history survives into the next base (a git-deleted file stays deleted)', () => {

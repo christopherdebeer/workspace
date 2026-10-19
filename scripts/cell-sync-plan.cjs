@@ -41,7 +41,21 @@ function treeVersionOf(files) {
 }
 
 /** Top-level directories that are repo-side only and never cell source. */
-const SKIP = new Set(['node_modules', 'devtools', 'native']);
+const SKIP = new Set(['node_modules', 'native']);
+
+/**
+ * Mirrored, push-only: a cell's `devtools/` (its tests and harnesses) goes up
+ * with its source so the cell holds what checks it, but git is its only
+ * source of truth. Only files git tracks are sent (`cell-sync.mjs` asks git;
+ * so `devtools/out/` and the like, gitignored, never go), and nothing is ever
+ * pulled back: the cell still holds stale `devtools/` copies from before this
+ * rule, and a pull used to write them over the working tree on every cycle.
+ * A file the cell holds that git doesn't (and this sync never sent) is left
+ * where it is, listed as ignored.
+ */
+function isMirrored(path) {
+  return path.split('/')[0] === 'devtools';
+}
 
 /**
  * Paths the sync never moves in either direction. Applied to BOTH sides now:
@@ -83,6 +97,13 @@ function plan(local, remote, base) {
     const r = remote[path];
     const b = base ? base[path] : undefined;
     const entry = { path, ...(b ? { base: b } : {}), ...(l ? { local: l } : {}), ...(r ? { remote: r } : {}) };
+    if (isMirrored(path)) {
+      // (git's copy wins; one this sync once sent and git has since dropped goes too)
+      if (l === r) { if (l !== undefined) out.inSync.push(path); }
+      else if (l !== undefined || b !== undefined) out.push.push(entry);
+      else out.ignoredRemote.push(path);
+      continue;
+    }
     if (l === r) out.inSync.push(path);
     else if (l === b) out.pull.push(entry);
     else if (r === b) out.push.push(entry);
@@ -112,4 +133,4 @@ function nextBase(local, remote, base) {
   return next;
 }
 
-module.exports = { contentVersion, treeVersionOf, isIgnored, isGenerated, plan, nextBase, SKIP };
+module.exports = { contentVersion, treeVersionOf, isIgnored, isGenerated, isMirrored, plan, nextBase, SKIP };

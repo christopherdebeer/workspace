@@ -48,7 +48,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { contentVersion, treeVersionOf, isIgnored, isGenerated, plan, nextBase, SKIP } = require('./cell-sync-plan.cjs');
+const { contentVersion, treeVersionOf, isIgnored, isGenerated, isMirrored, plan, nextBase, SKIP } = require('./cell-sync-plan.cjs');
 
 const BASE = process.env.PARC_BASE ?? 'https://parc.land';
 
@@ -133,8 +133,9 @@ const BATCH_BYTES = 700000;
 const BATCH_CHANGES = 200;
 
 /** Repo-side entries that are not cell source: dot-files (the cells service
- *  rejects them as path segments anyway), dependency trees, each cell's
- *  devtools/ (local harnesses — e.g. canvas's headless-repro), and native/.
+ *  rejects them as path segments anyway), dependency trees, and native/.
+ *  (Each cell's devtools/ is mirrored up push-only, the files git tracks —
+ *  cell-sync-plan.cjs `isMirrored`.)
  *
  *  NATIVE IS NOT SERVABLE, AND CANNOT BE STORED EITHER. Electron and Capacitor
  *  scaffolding is built locally and shipped through the app stores; the cell
@@ -143,9 +144,7 @@ const BATCH_CHANGES = 200;
  *  [A-Za-z0-9._-] in a path segment. So every deploy failed outright the
  *  moment the packaging landed — not for one cell, for anyone deploying it.
  *
- *  The same set now also guards PULL (cell-sync-plan.cjs `isIgnored`): the
- *  cell still holds `devtools/` copies from before this rule, and a pull used
- *  to write them over the working tree on every cycle. */
+ *  The same set now also guards PULL (cell-sync-plan.cjs `isIgnored`). */
 function* walk(dir, top = true) {
   for (const name of readdirSync(dir)) {
     if (name.startsWith('.') || (top && SKIP.has(name)) || name === 'node_modules') continue;
@@ -162,13 +161,23 @@ function storedBytes(abs, path) {
 
 // ─── the three states ────────────────────────────────────────────────
 
+/** The cell's `devtools/` files git tracks (relative to the cell), the only ones mirrored up; none if git can't say. */
+function trackedDevtools(localRoot) {
+  try {
+    const out = execFileSync('git', ['ls-files', '-z', '--', 'devtools'], { cwd: localRoot, encoding: 'utf8', maxBuffer: 64 << 20 });
+    return new Set(out.split('\0').filter(Boolean));
+  } catch { return new Set(); }
+}
+
 /** The working tree: path → version, for every file a push would send. */
 function localState(localRoot) {
   const files = {};
   if (!existsSync(localRoot)) return files;
+  const tracked = trackedDevtools(localRoot);
   for (const abs of walk(localRoot)) {
     const path = relative(localRoot, abs).split('\\').join('/');
     if (isIgnored(path) || isGenerated(path)) continue;
+    if (isMirrored(path) && !tracked.has(path)) continue;
     files[path] = contentVersion(storedBytes(abs, path));
   }
   return files;

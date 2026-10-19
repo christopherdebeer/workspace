@@ -11,7 +11,8 @@
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?turn=` ·
- * `?zoom=` · `?preview` · `?still`
+ * `?zoom=` · `?preview` · `?still` · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
+ * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
 import { buildMesh, inLand, inStone, setBleed } from './mesh';
@@ -28,7 +29,7 @@ import { Out, POSES, cat, gait, type PoseName } from './catbody';
 import { COATS, Cats, type Cat } from './cats';
 
 const qs = new URLSearchParams(location.search);
-const preview = qs.has('preview'), still = qs.has('still');
+const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant');
 const canvas = document.getElementById('stone') as HTMLCanvasElement, guide = document.getElementById('guide') as HTMLCanvasElement;
 const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
@@ -151,6 +152,7 @@ function screenOf(x: number, y: number, z: number): [number, number] {
 // ─── dust, as stone settles ───
 const dust: Array<{ x: number; y: number; vx: number; vy: number; life: number; r: number }> = [];
 function settle(cells: Array<[number, number, number]>, at = 0.85) {
+  if (instant) return;
   for (const [k, i, j] of cells.slice(0, 30)) {
     const [sx, sy] = screenOf(i - CENTER + 0.5, k, j - CENTER + 0.5);
     for (let q = 0; q < 9; q++) dust.push({ x: sx + (Math.random() - 0.5) * 14, y: sy + (Math.random() - 0.5) * 6, vx: (Math.random() - 0.5) * 30, vy: -8 - Math.random() * 14, life: -at - Math.random() * 0.15, r: 0.6 + Math.random() * 1.2 });
@@ -743,13 +745,13 @@ function frame() {
   const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000); last = t;
   if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) remesh();
   if (preview && !still) view.az += dt * 0.12;
-  else if (azGoal !== null) { const k = 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
+  else if (azGoal !== null) { const k = instant ? 1 : 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
   // (it frames what's built when asked to (at the start, the frame button, or when what's built reaches the edge of the
   // screen), and then stays put: the work doesn't shrink away from the hand as it grows, and never moves under a finger)
   const fr = framing();
   if (!g && world.version !== edgeChecked) { edgeChecked = world.version; if (offScreen()) follow = true; }
   if (follow && (!g || g.mode === 'turn')) {
-    const top = world.top(), q = 1 - Math.exp(-dt * 3), ty = top * 0.35;
+    const top = world.top(), q = instant ? 1 : 1 - Math.exp(-dt * 3), ty = top * 0.35;
     view.target[0] += (fr.cx - view.target[0]) * q; view.target[2] += (fr.cz - view.target[2]) * q;
     view.target[1] += (ty - view.target[1]) * q;
     zoomFit += (fr.fit - zoomFit) * q;
@@ -772,7 +774,8 @@ function frame() {
   }
   moving(now());
   view.zoom = zoomFit * zoomK;
-  R.draw(view, now(), Math.min(2, devicePixelRatio || 1));
+  // (instant: drawn as if long after, so everything's already risen)
+  R.draw(view, now() + (instant ? 1e3 : 0), Math.min(2, devicePixelRatio || 1));
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
   g2.clearRect(0, 0, guide.clientWidth, guide.clientHeight);
   // (held still long enough on a stroke, or a tap, that could be read another way: the readings fan out)
@@ -817,7 +820,7 @@ function moving(t: number) {
  * this device for each piece of land. With the hand brush, a tap on one says who it is and what it's doing, and it can
  * be followed (the eye goes with it, close) until you return to building.
  */
-const catsOn = !study && qs.get('cats') !== '0';
+const catsOn = !study && qs.get('cats') !== '0' && !instant;
 const cats = new Cats(1);
 const catKey = () => `labyrinth.cats.${world.landSeed || 'flat'}`;
 let catMemFor = '';
