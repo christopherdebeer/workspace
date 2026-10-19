@@ -35,6 +35,13 @@ Made by `node cells/lab/views.mjs labyrinth` from `client/labyrinth/views.mjs`. 
 ![Mashrabiya, colonnettes, a pergola: lattice boxes on corbels at the upper windows, the light through them in points; slim shafts framing the arches; posts, beams, close-set rafters and a vine over the yard](v-house-features.jpg)
 ![A jali and balustrades: the court's west side a screen of pierced stone; the terrace and its flight railed with turned balusters](v-jali.jpg)
 
+## Flow
+
+![10 · Flow: a wall traced on the diagonal, drawn as one straight diagonal wall; a court whose corners sweep round; a terrace out from a tower on piers that meet it in coves, arches between them; a wall traced across a stair's foot, leaving its way open](v-story-10.jpg)
+![Curves and diagonals, close: the court's swept corners, and the diagonal wall running on into them](v-flow-close.jpg)
+![A wall on the diagonal: traced across the grid, laid as a stair-step of cells, drawn as one straight wall](v-diagonal-close.jpg)
+![Piers that carry: stone pushed out from a tower over nothing, on piers that meet it in coves (a round arch between them, not a box on stilts); the terrace's piers beyond](v-piers-close.jpg)
+
 ## Auto, with character
 
 ![Auto alone, no cap: a tower tapped up ten high (no cap on height), a walkway to it, a long wall traced round, a high walkway from halfway up the tower (its slim piers stand aside on the ways below): every motif and all the dressing the rules' own choice](v-story-7.jpg)

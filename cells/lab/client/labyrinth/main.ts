@@ -16,7 +16,7 @@
 import { CENTER, World, inGrid, key, replay, type Cell, type Op } from './model';
 import { buildMesh, inStone } from './mesh';
 import { Renderer, camera, invert, type View } from './render';
-import { carve, surface, tap, trace, type Pick } from './gesture';
+import { carve, surface, tap, tapCell, trace, type Pick } from './gesture';
 import { story } from './demo';
 import { DRESSINGS, PIECES, dress, dressAt, place, run, type Dressing, type Hand, type Piece } from './palette';
 import { around, motifs, type Motif } from './motifs';
@@ -448,7 +448,7 @@ const up = (e: PointerEvent) => {
       else if (isDress(held)) { const c = dressAt(world, start, held); op = c ? dress(world, held, [c]) : null; }
       else op = place(world, held, start, looking(), now());
       if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); }
-      else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
+      else say(brush === 'auto' ? (world.way(...tapCell(world, start)) ? 'that\'s a stair\'s way: kept open' : 'nothing more will stand there') : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
     }
   } else if (m === 'trace' || m === 'run') { unselect(); traceStep(e.clientX, e.clientY, true); }
   else if (m === 'carve' || m === 'paint') { unselect(); kept(); }

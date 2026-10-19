@@ -4,8 +4,8 @@
  * could walk (nav.ts), never kept: they follow whatever's built, seeded so the same build always comes out the same.
  *
  * - **A building** is a mass of solid columns (stone from the slab up, nothing carried on arches) all the same height,
- *   two or more high: two cells or more deep each way, or a tower of one or two cells three or more high. A wall a cell
- *   thick isn't one.
+ *   two or more high: two cells by two somewhere in it, or a tower of one or two cells three or more high. A wall a cell
+ *   thick isn't one, however it runs (round a court, on the diagonal).
  * - **Doors** go where they mean something:
  *   - where a way arrives against a building's wall at height (a walkway, a landing, a bridge's end): a door into it;
  *   - at its foot, facing ground a figure can reach, when a stair inside is needed: when a way up there (at a door, or
@@ -76,7 +76,9 @@ function find(w: World): Buildings {
     seen.add(key(0, i, j));
     while (q.length) { const [x, z] = q.pop()!; for (const [a, b] of DIRS) { const x2 = x + a, z2 = z + b; if (!seen.has(key(0, x2, z2)) && solid(x2, z2, h)) { seen.add(key(0, x2, z2)); cols.push([x2, z2]); q.push([x2, z2]); } } }
     const i0 = Math.min(...cols.map((c) => c[0])), i1 = Math.max(...cols.map((c) => c[0])), j0 = Math.min(...cols.map((c) => c[1])), j1 = Math.max(...cols.map((c) => c[1]));
-    const deep = Math.min(i1 - i0, j1 - j0) >= 1, tower = cols.length <= 2 && h >= 3;
+    // (deep: a true mass, two by two somewhere in it; a ring of wall, or a wall on the diagonal, spans as wide but isn't)
+    const has = new Set(cols.map(([x, z]) => `${x}.${z}`));
+    const deep = cols.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`)), tower = cols.length <= 2 && h >= 3;
     if (!deep && !tower) continue;
     const mine = new Set(cols.map(([x, z]) => `${x}.${z}`)), id = Math.min(...cols.map(([x, z]) => key(h - 1, x, z)));
     const b: Building = { cols, h, i0, i1, j0, j1, rect: cols.length === (i1 - i0 + 1) * (j1 - j0 + 1), tower, openings: [], inside: false, walked: false, roof: null, id, fall: -1 };

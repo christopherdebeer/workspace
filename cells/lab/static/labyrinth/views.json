@@ -133,6 +133,35 @@
   ]
  },
  {
+  "group": "Flow",
+  "views": [
+   {
+    "name": "story-10",
+    "title": "10 · Flow",
+    "caption": "a wall traced on the diagonal, drawn as one straight diagonal wall; a court whose corners sweep round; a terrace out from a tower on piers that meet it in coves, arches between them; a wall traced across a stair's foot, leaving its way open",
+    "file": "v-story-10.jpg"
+   },
+   {
+    "name": "flow-close",
+    "title": "Curves and diagonals, close",
+    "caption": "the court's swept corners, and the diagonal wall running on into them",
+    "file": "v-flow-close.jpg"
+   },
+   {
+    "name": "diagonal-close",
+    "title": "A wall on the diagonal",
+    "caption": "traced across the grid, laid as a stair-step of cells, drawn as one straight wall",
+    "file": "v-diagonal-close.jpg"
+   },
+   {
+    "name": "piers-close",
+    "title": "Piers that carry",
+    "caption": "stone pushed out from a tower over nothing, on piers that meet it in coves (a round arch between them, not a box on stilts); the terrace's piers beyond",
+    "file": "v-piers-close.jpg"
+   }
+  ]
+ },
+ {
   "group": "Auto, with character",
   "views": [
    {

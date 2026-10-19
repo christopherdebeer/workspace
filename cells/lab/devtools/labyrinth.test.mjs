@@ -37,7 +37,7 @@ function stands(w, tag) {
 }
 
 const made = {};
-const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set(), roofs: 0, doors: 0, form: 0 };
+const ways = { tried: 0, ok: 0, saw: [] }, walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set(), roofs: 0, doors: 0, form: 0 };
 /** how far from what an edit touched its effect on piers and arches may go (an arch spans seven at most; an arcade's
  * piers are respaced along its whole run, so a little more) */
 const LOCAL = 9;
@@ -91,6 +91,12 @@ for (let s = 1; s <= 60; s++) {
     if (!op) continue;
     const mass0 = new Set(w.mass.keys()), stairs0 = new Set(w.stairs.keys()), piers0 = new Set(w.piers.keys()), spans0 = new Set(w.spans.map(spanCells).flat());
     w.apply(op, t); made[op.why] = (made[op.why] ?? 0) + 1;
+    if (['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'bridge'].includes(op.why)) {
+      // (auto never builds into a stair's way, and never lays a stair that climbs into stone)
+      const into = [...w.mass.keys()].filter((v) => !mass0.has(v) && w.way(...unkey(v)));
+      ways.tried++; if (!into.length) ways.ok++; else if (ways.saw.length < 3) ways.saw.push({ s, t, why: op.why, into: into.map(unkey) });
+      for (const v of w.stairs.keys()) if (!stairs0.has(v)) { const [k, i, j] = unkey(v), d = w.stair(k, i, j), [a, b] = DIRS[d]; ok(`seed ${s} op ${t}: a stair laid by auto climbs into the open`, !w.stone(k + 1, i + a, j + b) && !w.stone(k, i - a, j - b) && !w.stone(k + 1, i, j), [k, i, j, d]); }
+    }
     if (op.connect) {
       const c = op.connect, r = w.reached.get(op), tag = `seed ${s} op ${t} (${op.why})`;
       // (the hand's stone is never cut to make a connection)
@@ -178,6 +184,7 @@ for (let s = 1; s <= 60; s++) {
 }
 ok(`connections that reached can be walked end to end (${walked.ok} of ${walked.tried})`, walked.tried > 50 && walked.ok === walked.tried, walked.saw);
 ok(`an edit changes what holds things up only near it (${local.ok} of ${local.tried})`, local.ok === local.tried, local.saw);
+ok(`auto never builds into a stair's way (${ways.ok} of ${ways.tried})`, ways.ok === ways.tried, ways.saw);
 // (a climb too steep for its stroke is refused, saying why; drawn longer, it's built, and walked)
 {
   const w = new World(3), top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] }), ground = (i, j) => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
@@ -309,6 +316,14 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   ok('story 9: the house, its windows arched (for its colonnettes), mashrabiya above', !!house9 && house9.openings.filter((o) => o.kind === 'window').every((o) => o.style === 'arched') && CH.look(s9, 1, 13, 9)?.oriel && CH.look(s9, 0, 13, 9)?.colonnettes);
   ok('story 9: a pergola over the yard, the yard still walked', CH.look(s9, 0, 13, 6)?.pergola && NAV.navigate(s9).places.has(key(0, 13, 6)));
   ok('story 9 is drawn, every feature and all', M.buildMesh(s9).count > M.buildMesh(story(9), true).count * 0.5);
+  // (flow: storyboard 10)
+  const s10 = story(10);
+  stands(s10, 'story 10');
+  ok('story 10: the wall traced on the diagonal is drawn on the diagonal', [[2, 1], [3, 2], [4, 3], [5, 4]].every(([i, j]) => FO.outline(s10, 0, i, j).flow === 'diagonal' && FO.outline(s10, 1, i, j).flow === 'diagonal'));
+  ok('story 10: the court\'s corners sweep round (where no other wall meets them)', [[9, 1], [13, 1], [13, 6]].every(([i, j]) => FO.outline(s10, 0, i, j).flow === 'curve'));
+  ok('story 10: neither is a building', !BU.buildings(s10).of.has(key(0, 3, 2)) && !BU.buildings(s10).of.has(key(0, 9, 1)));
+  ok('story 10: the wall traced across the stair\'s foot leaves it open', s10.stair(0, 7, 9) === 2 && !s10.stone(0, 8, 9) && s10.stone(0, 8, 8) && s10.stone(0, 8, 10));
+  ok('story 10: and auto won\'t build there', G.tap(s10, { face: 'ground', hit: [-1, 8, 9], to: [0, 8, 9] }, 0) === null);
   // (the dressing toggles: on, then a stroke starting on it takes it off; a jali on a thin wall pierces it)
   {
     const w = replay(s9.encode());
@@ -342,8 +357,9 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
     ok('the rules put each feature somewhere, and only where it belongs', wrong === 0 && seen.balustrade && seen.pergola && seen.oriel && seen.colonnettes, { wrong, ...seen });
   }
 }
-// (form: a run a cell thick is a wall's thickness, with posts where it turns and buttresses along it; a mass fills its
-// cells, its outside corners rounded; a wall runs on to a gate in it)
+// (form: a run a cell thick is a wall's thickness, curving where it turns, on the diagonal where it steps, with posts
+// where walls meet and buttresses along it; a mass fills its cells, its outside corners rounded; a wall runs on to a
+// gate in it)
 {
   const w = new World(3);
   w.apply({ add: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => [0, i, 2, 0]).concat([[0, 7, 3, 0], [0, 7, 4, 0]]) });
@@ -351,7 +367,14 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   w.apply({ add: [[0, 9, 9, 0], [0, 11, 9, 0]], arches: [[0, 10, 9, 1, 0]] });
   const st = FO.outline(w, 0, 3, 2), corner = FO.outline(w, 0, 7, 2), mass = FO.outline(w, 0, 2, 7);
   ok('a straight run is a wall\'s thickness', FO.wallCell(w, 0, 3, 2) && st.straight && st.edges.filter((e) => e.open && e.face % 2 === 1).every((e) => Math.abs(e.dist - FO.WT) < 1e-9), st);
-  ok('where it turns, a post', corner.wall && !corner.straight && corner.post === FO.POST);
+  // (a wall that turns once sweeps round a curve; a stair-step of turns is a diagonal; where walls meet, a post)
+  ok('where it turns once, a curve', corner.wall && corner.flow === 'curve' && corner.edges.some((e) => e.open && e.face < 0), corner.flow);
+  ok('struck on its curve, not across the corner it cuts', ME.inStone(w, 7 - 6 + 0.5 - 0.146, 0.5, 2 - 6 + 0.5 + 0.146) && !ME.inStone(w, 7 - 6 + 0.5 + 0.4, 0.5, 2 - 6 + 0.5 - 0.4));
+  w.apply({ add: [[0, 5, 3, 0]] });
+  ok('where walls meet, a post', FO.outline(w, 0, 5, 2).post === FO.POST && !FO.outline(w, 0, 5, 2).flow);
+  w.apply({ add: [[0, 1, 10, 0], [0, 2, 10, 0], [0, 2, 11, 0], [0, 3, 11, 0], [0, 3, 12, 0], [0, 4, 12, 0]] });
+  ok('a stair-step of turns: one wall on the diagonal', ['2.10', '2.11', '3.11', '3.12'].every((c) => { const [i, j] = c.split('.').map(Number); return FO.outline(w, 0, i, j).flow === 'diagonal'; }));
+  ok('and it meets a straight wall at a straight wall\'s thickness', FO.outline(w, 0, 2, 10).edges.filter((e) => !e.open).every((e) => Math.abs(Math.hypot(e.b[0] - e.a[0], e.b[1] - e.a[1]) - 2 * FO.WT) < 1e-9));
   ok('along a long run on the stone, buttresses', FO.buttresses(w, 0, 3, 2).length === 2 || FO.buttresses(w, 0, 6, 2).length === 2 || FO.buttresses(w, 0, 0, 2).length === 2);
   ok('a mass fills its cells, its outside corners rounded', !mass.wall && mass.edges.some((e) => e.face < 0) && mass.edges.filter((e) => e.face >= 0).every((e) => Math.abs(e.dist - 0.5) < 1e-9));
   ok('a wall runs on to a gate in it', FO.wallCell(w, 0, 9, 9) && FO.wallCell(w, 0, 11, 9));

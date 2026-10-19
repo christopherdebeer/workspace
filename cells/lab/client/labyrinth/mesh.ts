@@ -114,7 +114,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   };
   const floored = (k: number, i: number, j: number) => !w.occupied(k, i, j) && (k === 0 ? !w.pool(i, j) : w.stone(k - 1, i, j));
   const cornerAo = (k: number, i: number, j: number) => {
-    const s = (a: number, b: number) => (w.block(k, i + a, j + b) ? 1 : 0);
+    // (only a mass shuts the ground in by cells: a wall's thickness, curve or diagonal doesn't follow them)
+    const s = (a: number, b: number) => (w.block(k, i + a, j + b) && !wallCell(w, k, i + a, j + b) ? 1 : 0);
     const c = (a: number, b: number) => { const s1 = s(a, 0), s2 = s(0, b), d = s(a, b); return s1 && s2 ? 0 : 3 - s1 - s2 - d; };
     return [c(-1, -1), c(1, -1), c(1, 1), c(-1, 1)].map((v) => 0.55 + v * 0.15);
   };
@@ -165,7 +166,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       else quad(L(e.a, y0), L(e.b, y0), L(e.b, y1 - bt), L(e.a, y1 - bt), nv, [foot, foot, 1, 1], MAT.stone);
       if (lid) { cap(); quad(L(e.a, y1 - B), L(e.b, y1 - B), L(inner[n].b, y1), L(inner[n].a, y1), [nv[0] * Math.SQRT1_2, Math.SQRT1_2, nv[2] * Math.SQRT1_2], 1, MAT.stone); cur.dress = keep; }
     });
-    if (lid) { cap(); for (const e of inner) tri(L([0, 0], y1), L(e.a, y1), L(e.b, y1), [0, 1, 0], 0.95, MAT.stone); cur.dress = keep; }
+    // (its top: a strip across a flowing wall, else a fan from its middle; and its underside, where it's over air)
+    const flat = (pts: Array<[number, number]>, y: number, up: boolean, ao: number) => {
+      if (ol.pairs) for (let q = 0; q + 1 < ol.pairs.length; q++) { const [a0, b0] = ol.pairs[q], [a1, b1] = ol.pairs[q + 1]; quad(L(pts[a0], y), L(pts[a1], y), L(pts[b1], y), L(pts[b0], y), [0, up ? 1 : -1, 0], ao, MAT.stone); }
+      else pts.forEach((p, q) => tri(L([0, 0], y), L(p, y), L(pts[(q + 1) % pts.length], y), [0, up ? 1 : -1, 0], ao, MAT.stone));
+    };
+    if (lid) { cap(); flat(inner.map((e) => e.a), y1, true, 0.95); cur.dress = keep; }
+    if (k > 0 && !w.stone(k - 1, i, j) && w.stair(k - 1, i, j) < 0) flat(E.map((e) => e.a), y0, false, 0.5);
     // (a band round its open sides, out a little from them: front, top and underside)
     const band = (ya: number, yb: number, out: number, slope = 0) => {
       const o = shift(E, (e) => (e.open ? -out : 0));
@@ -183,7 +190,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const under = w.block(k - 1, i, j) ? dressOf(k - 1, i, j) : -1;
     if (under >= 0 && Math.floor(under / KIND) !== Math.floor(keep / KIND)) { cur.dress = 0; band(y0 - 0.02, y0 + 0.05, 0.025); cur.dress = keep; }
     // (a wall's post where it turns, meets another, or ends: capped a little above it)
-    if (ol.wall && !ol.straight && lid) { cap(); const h = ol.post + 0.02; box(cx - h, cx + h, y1, y1 + 0.045, cz - h, cz + h, MAT.stone, 0.95); cur.dress = keep; }
+    if (ol.wall && !ol.straight && !ol.flow && lid) { cap(); const h = ol.post + 0.02; box(cx - h, cx + h, y1, y1 + 0.045, cz - h, cz + h, MAT.stone, 0.95); cur.dress = keep; }
     // (buttresses along a long run on the stone: out from the wall, up, and sloped back into it)
     for (const d of buttresses(w, k, i, j)) {
       const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4];
@@ -288,7 +295,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const ex = w.extent(), xa = X(ex.i0) - MARGIN, xb = X(ex.i1 + 1) + MARGIN, za = Z(ex.j0) - MARGIN, zb = Z(ex.j1 + 1) + MARGIN;
     for (let j = ex.j0 - 1; j <= ex.j1 + 1; j++) for (let i = ex.i0 - 1; i <= ex.i1 + 1; i++) {
       const inside = i >= ex.i0 && j >= ex.j0 && i <= ex.i1 && j <= ex.j1;
-      if (inside && (w.pool(i, j) || w.block(0, i, j) || w.stair(0, i, j) >= 0)) continue;
+      // (under a mass, or a stair, no stone shows; round a wall's thickness, it does)
+      if (inside && (w.pool(i, j) || (w.block(0, i, j) && !wallCell(w, 0, i, j)) || w.stair(0, i, j) >= 0)) continue;
       const x0 = i < ex.i0 ? xa : X(i), x1 = i > ex.i1 ? xb : X(i + 1), z0 = j < ex.j0 ? za : Z(j), z1 = j > ex.j1 ? zb : Z(j + 1);
       const court = inside && w.courts.has(key(0, i, j));
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: inside && selected.has(key(0, i, j)) };
@@ -361,9 +369,25 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const ps = pierShape(w, k, i, j), cx = x0 + 0.5 + ps.ox, cz = z0 + 0.5 + ps.oz, H = ps.top + 1 - ps.foot;
       if (ps.column) { column(cx, cz, k, ps); continue; }
       const rAt = (y: number) => ps.r * (1.06 - 0.12 * ((y - ps.foot) / H));
-      const ya = k === ps.foot ? y0 + 0.09 : y0, yb = k === ps.top ? y1 - 0.11 : y1;
+      // (under a block, standing in the middle of its cell, with no arch beside it: it meets what it carries in a cove,
+      // curving out from its head to the block's edges, so piers side by side make round arches between them)
+      const coved = k === ps.top && !ps.ox && !ps.oz && w.block(k + 1, i, j), CH = ps.top > ps.foot ? 0.6 : 0.42;
+      const ya = k === ps.foot ? y0 + 0.09 : y0, yb = k === ps.top ? (coved ? y1 - CH - 0.05 : y1 - 0.11) : y1;
       lathe(cx, cz, [[rAt(ya), ya], [rAt(yb), yb]], MAT.stone, 8);
       if (k === ps.foot) { box(cx - ps.r - 0.05, cx + ps.r + 0.05, y0, y0 + 0.06, cz - ps.r - 0.05, cz + ps.r + 0.05, MAT.stone, 0.7); box(cx - ps.r - 0.025, cx + ps.r + 0.025, y0 + 0.06, y0 + 0.09, cz - ps.r - 0.025, cz + ps.r + 0.025, MAT.stone, 0.8); }
+      if (coved) {
+        // (toward an arch springing from it, it rises straight: the arch makes the curve there)
+        const s0 = ps.r + 0.04, yc = y1 - CH, R = [0, 1, 2, 3].map((d) => (w.span(k + 1, i + DIRS[d][0], j + DIRS[d][1]) ? s0 : reach(w, k + 1, i, j, d)));
+        box(cx - s0 - 0.01, cx + s0 + 0.01, yc - 0.05, yc, cz - s0 - 0.01, cz + s0 + 0.01, MAT.stone, 0.85);
+        const corner = (d: number, r: (q: number) => number): [number, number] => { const e = (d + 1) % 4; return [DIRS[d][0] * r(d) + DIRS[e][0] * r(e), DIRS[d][1] * r(d) + DIRS[e][1] * r(e)]; };
+        const M = 6, inside: V3 = [cx, y1 - 0.01, cz];
+        for (let d = 0; d < 4; d++) {
+          const c0i = corner((d + 3) % 4, () => s0), c1i = corner(d, () => s0), c0o = corner((d + 3) % 4, (q) => R[q]), c1o = corner(d, (q) => R[q]);
+          const pt = (ci: [number, number], co: [number, number], t: number): V3 => { const th = (t * Math.PI) / 2, f = 1 - Math.cos(th); return [cx + ci[0] + (co[0] - ci[0]) * f, yc + CH * Math.sin(th), cz + ci[1] + (co[1] - ci[1]) * f]; };
+          for (let m = 0; m < M; m++) face([pt(c0i, c0o, m / M), pt(c1i, c1o, m / M), pt(c1i, c1o, (m + 1) / M), pt(c0i, c0o, (m + 1) / M)], MAT.stone, 0.55 + 0.4 * (m / M), true, inside);
+        }
+        continue;
+      }
       if (k === ps.top) {
         const rc = ps.r + 0.07;
         box(cx - ps.r - 0.02, cx + ps.r + 0.02, y1 - 0.11, y1 - 0.06, cz - ps.r - 0.02, cz + ps.r + 0.02, MAT.stone, 0.85);
@@ -395,7 +419,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
 
   // ─── dressing: parapets (by hand, and along a bridge of its own accord), lanterns and pots ───
   // (first, which edges of which tops have one: open edges, with nothing at that height beyond them)
-  const edges = new Map<number, boolean[]>(), rails = new Map<number, number>(), roofed = new Set<number>();
+  const edges = new Map<number, boolean[]>(), rails = new Map<number, number>(), flowRails = new Map<number, number>(), roofed = new Set<number>();
   for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
   for (const v of [...w.mass.keys()]) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
@@ -405,6 +429,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const colonnade = sp?.order === 'colonnade' || onColumn(w, k, i, j);
     const bridge = (!!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j))) || colonnade;
     if (!d?.parapet && !bridge) continue;
+    // (on a flowing wall, round its curve or along its diagonal)
+    if (w.block(k, i, j) && outline(w, k, i, j).flow) { flowRails.set(v, d?.parapet && d.rail ? d.rail : DRESS.parapet); continue; }
     const along = sp ? sp.a : colonnade ? (w.span(k, i + 1, j) || w.span(k, i - 1, j) ? 0 : 1) : -1;
     edges.set(v, DIRS.map(([a, b], q) => (!!d?.parapet || q % 2 !== along) && !(w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0)));
     rails.set(v, d?.parapet && d.rail ? d.rail : colonnade ? DRESS.balustrade : DRESS.parapet);
@@ -447,6 +473,32 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
     }
   }
+  for (const [v, kind] of flowRails) {
+    const [k, i, j] = unkey(v), E = outline(w, k, i, j).edges, y0 = k + 1, y1 = y0 + PH, cx = X(i) + 0.5, cz = Z(j) + 0.5, th = kind === DRESS.jali ? 0.07 : T;
+    cur = at(w.born(k, i, j), y0, k, i, j);
+    const keep = cur.dress, inn = shift(E, (e) => (e.open ? th : 0)), L = (p: [number, number], y: number): V3 => [cx + p[0], y, cz + p[1]];
+    E.forEach((e, n) => {
+      if (!e.open) return;
+      const dx = e.b[0] - e.a[0], dz = e.b[1] - e.a[1], l = Math.hypot(dx, dz) || 1, nv: V3 = [dz / l, 0, -dx / l];
+      // (a ribbon of stone along the edge: its outer face, its inner, its top)
+      const ribbon = (ya: number, yb: number) => {
+        quad(L(e.a, ya), L(e.b, ya), L(e.b, yb), L(e.a, yb), nv, [0.6, 0.6, 1, 1], MAT.stone);
+        quad(L(inn[n].a, ya), L(inn[n].b, ya), L(inn[n].b, yb), L(inn[n].a, yb), [-nv[0], 0, -nv[2]], 0.8, MAT.stone);
+        quad(L(e.a, yb), L(e.b, yb), L(inn[n].b, yb), L(inn[n].a, yb), [0, 1, 0], 0.95, MAT.stone);
+      };
+      if (kind === DRESS.balustrade) {
+        ribbon(y0, y0 + 0.05); ribbon(y1 - 0.04, y1 + 0.03);
+        const m = (t: number): [number, number] => [(e.a[0] + inn[n].a[0]) / 2 + t * ((e.b[0] + inn[n].b[0]) / 2 - (e.a[0] + inn[n].a[0]) / 2), (e.a[1] + inn[n].a[1]) / 2 + t * ((e.b[1] + inn[n].b[1]) / 2 - (e.a[1] + inn[n].a[1]) / 2)];
+        const N = Math.max(1, Math.round(l / 0.11));
+        for (let q = 0; q < N; q++) { const p = m((q + 0.5) / N); baluster(cx + p[0], cz + p[1], y0 + 0.05, y1 - 0.04); }
+      } else {
+        if (kind === DRESS.jali) cur.dress = (keep % KIND) + PIERCED;
+        ribbon(y0, y1);
+        cur.dress = keep;
+        ribbon(y1, y1 + 0.05);
+      }
+    });
+  }
   // (a stair's open sides, where it's dressed so: a balustrade (or a jali) climbing with it, a newel at its foot and head)
   for (const v of w.stairs.keys()) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j);
@@ -472,8 +524,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const [k, i, j] = unkey(v), d = dressed(k, i, j);
     if (d?.ivy) ivy(k, i, j, w.born(k, i, j));
     if (w.occupied(k + 1, i, j) || w.tree(k + 1, i, j) || roofed.has(v)) continue;
-    if (d?.prop === DRESS.lantern) lantern(i, j, k + 1, w.born(k, i, j));
-    if (d?.prop === DRESS.pot) pot(i, j, k + 1, w.born(k, i, j));
+    // (on a flowing wall, at the middle of its stone, not of its cell)
+    const ol = w.block(k, i, j) ? outline(w, k, i, j) : null, mid = ol?.flow ? ol.edges.reduce((m, e) => [m[0] + e.a[0] / ol.edges.length, m[1] + e.a[1] / ol.edges.length], [0, 0]) : [0, 0];
+    if (d?.prop === DRESS.lantern) lantern(i + mid[0], j + mid[1], k + 1, w.born(k, i, j));
+    if (d?.prop === DRESS.pot) pot(i + mid[0], j + mid[1], k + 1, w.born(k, i, j));
   }
   pergolas();
   return { data: new Float32Array(out), count: out.length / STRIDE };
@@ -576,6 +630,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    * the ivy breaks the stone's outline rather than being painted on it.
    */
   function ivy(k: number, i: number, j: number, born: number) {
+    if (w.block(k, i, j) && outline(w, k, i, j).flow) return;
     const cx = X(i) + 0.5, cz = Z(j) + 0.5, y1 = k + 1, more = !!dressed(k + 1, i, j)?.ivy, below = w.stone(k - 1, i, j);
     for (let d = 0; d < 4; d++) {
       const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4];

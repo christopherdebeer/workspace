@@ -8,7 +8,7 @@
  * - **towers**: marble now and then, or brick; a lantern on top, often; sometimes a parapet round the top;
  * - **walls**: brick now and then; moss along their foot;
  * - **arcades and bridges**: now and then in brick, piers and all;
- * - **flights**: a lantern where they arrive, often; a balustrade climbing a long or high one, now and then (a jali's
+ * - **flights**: a lantern beside where they arrive (never in the way), often; a balustrade climbing a long or high one, now and then (a jali's
  *   pierced stone, rarely);
  * - **terraces**: pots at a corner or two; a lantern sometimes;
  * - **courts**: ivy, now and then, up a few of the walls round them (a cell or two high); moss at their foot;
@@ -21,12 +21,14 @@
  * - **the edge of water**: moss on the stone beside a pool;
  * - **the stone at the foot of things**: a little moss, here and there.
  *
- * Dressing is kept sparing: a few things dressed well read better than everything dressed.
+ * Dressing is kept sparing: a few things dressed well read better than everything dressed. And nothing the rules put
+ * stands in a stair's way (`World.way`).
  */
 import { hash } from '../kit/rng';
 import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './model';
 import { height, motifs } from './motifs';
 import { buildings } from './buildings';
+import { outline } from './form';
 
 const cache = new WeakMap<World, { v: number; map: Map<number, Dress> }>();
 
@@ -56,10 +58,12 @@ function dressUp(w: World): Map<number, Dress> {
   // (nothing goes on a top that has a roof over it)
   const roofed = new Set<number>();
   for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
-  const put = (c: Cell, d: Dress) => { const v = key(...c); if (roofed.has(v) && (d.prop || d.parapet)) return; const o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };
+  // (and nothing stands in a stair's way (its foot, its head, the room over them), nor before a door)
+  const doorways = new Set(buildings(w).list.flatMap((b) => b.openings.filter((o) => o.kind === 'door').map((o) => key(o.k, o.i + DIRS[o.d][0], o.j + DIRS[o.d][1]))));
+  const put = (c: Cell, d: Dress) => { const v = key(...c); if (roofed.has(v) && (d.prop || d.parapet)) return; if (d.prop && (w.way(c[0] + 1, c[1], c[2]) || doorways.has(key(c[0] + 1, c[1], c[2])))) return; if (d.pergola && w.way(...c)) return; const o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };
   const stone = (c: Cell) => w.stone(...c) || w.pier(...c);
   /** a top with room over it (for a lantern or a pot) */
-  const roomy = (c: Cell) => w.stone(...c) && !w.occupied(c[0] + 1, c[1], c[2]) && !w.tree(c[0] + 1, c[1], c[2]);
+  const roomy = (c: Cell) => w.stone(...c) && !w.occupied(c[0] + 1, c[1], c[2]) && !w.tree(c[0] + 1, c[1], c[2]) && !(w.block(...c) && outline(w, ...c).flow);
   const id = (cells: Cell[]) => cells.reduce((m, c) => Math.min(m, key(...c)), Infinity);
 
   for (const m of motifs(w)) {
@@ -77,8 +81,10 @@ function dressUp(w: World): Map<number, Dress> {
       if (chance(0.2, n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
     } else if (m.kind === 'flight') {
       // (where it arrives: the stone under the place at its head)
-      const [k, i, j] = m.cells[m.cells.length - 1], d = w.stair(k, i, j), head: Cell = [k, i + DIRS[d][0], j + DIRS[d][1]];
-      if (roomy(head) && chance(0.6, n, 1)) put(head, { prop: DRESS.lantern });
+      // (beside where it arrives, not in the way: on the stone to one side of the place at its head)
+      const [k, i, j] = m.cells[m.cells.length - 1], d = w.stair(k, i, j), [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4];
+      const beside = ([1, -1] as const).map((s): Cell => [k, i + a + ta * s, j + b + tb * s]).filter((c) => roomy(c) && !w.way(c[0] + 1, c[1], c[2]));
+      if (beside.length && chance(0.6, n, 1)) put(beside[hash(w.seed, n, 4) % beside.length], { prop: DRESS.lantern });
       const stairs = m.cells.filter((c) => w.stair(...c) >= 0);
       if ((stairs.length >= 3 || k >= 2) && chance(0.4, n, 2)) { const rail = chance(0.2, n, 3) ? DRESS.jali : DRESS.balustrade; for (const c of stairs) put(c, { parapet: true, rail }); }
     } else if (m.kind === 'terrace') {

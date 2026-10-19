@@ -34,6 +34,7 @@ const side = (k: number, i: number, j: number, di: number, dj: number): Pick => 
 export function story(stage: number): World {
   if (stage === 8) return labyrinth();
   if (stage === 9) return features();
+  if (stage === 10) return flow();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op) w.apply(op, t); };
@@ -172,5 +173,38 @@ function features(): World {
   const yard: Array<[number, number, number]> = [];
   for (let i = 12; i <= 14; i++) for (let j = 6; j <= 7; j++) yard.push([0, i, j]);
   dress(yard, DRESS.pergola);
+  return w;
+}
+
+/** storyboard 10: flow: walls that curve and run on the diagonal, piers that carry, and stairs whose ways stay open */
+function flow(): World {
+  const w = new World(17), t = -100;
+  const ground = (i: number, j: number): Pick => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+  const top = (i: number, j: number): Pick => { let k = 0; while (w.occupied(k + 1, i, j)) k++; return { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+  const go = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t, t); if (op && !('refused' in op)) w.apply(op, t); };
+  const add = (cells: Array<[number, number, number]>) => w.apply({ add: cells.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  const col = (i: number, j: number, h: number) => add(Array.from({ length: h }, (_, k) => [k, i, j] as [number, number, number]));
+  // (a wall traced on the diagonal: laid as a stair-step of cells, drawn as one straight diagonal wall, two courses)
+  const diag: Array<[number, number]> = [[1, 1], [2, 1], [2, 2], [3, 2], [3, 3], [4, 3], [4, 4], [5, 4], [5, 5], [6, 5]];
+  add(diag.flatMap(([i, j]) => [[0, i, j], [1, i, j]] as Array<[number, number, number]>));
+  // (a court walled round a cell thick: its corners sweep round, a gate on its west)
+  const ring: Array<[number, number]> = [];
+  for (let i = 9; i <= 13; i++) ring.push([i, 1], [i, 6]);
+  for (let j = 2; j <= 5; j++) ring.push([9, j], [13, j]);
+  add(ring.filter(([i, j]) => !(i === 9 && j === 3)).flatMap(([i, j]) => [[0, i, j], [1, i, j]] as Array<[number, number, number]>));
+  w.apply({ arches: [[0, 9, 3, 0, t], [1, 9, 3, 0, t]] }, t);
+  // (a tower, and a terrace out from it on piers: the piers meet it in coves, arches between them)
+  col(2, 9, 3);
+  add([[2, 3, 8], [2, 3, 9], [2, 3, 10], [2, 4, 8], [2, 4, 9], [2, 4, 10], [2, 2, 8], [2, 2, 10]]);
+  col(1, 9, 2);
+  // (a stair up to the terrace, and a wall traced across its foot afterwards: the wall leaves its way open)
+  go(top(1, 9), [[1, 9], [1, 10], [1, 11], [1, 12]], null);
+  add([[0, 6, 9], [0, 5, 9], [1, 5, 9]]);
+  w.apply({ stairs: [[0, 7, 9, 2, t], [1, 6, 9, 2, t], [2, 5, 9, 2, t]] }, t);
+  go(ground(8, 6), [[8, 6], [8, 7], [8, 8], [8, 9], [8, 10], [8, 11], [8, 12]], null);
+  // (stone two courses high pushed out from a tower over nothing: carried on piers that meet it in coves, an arch
+  // between them, rather than a box on stilts)
+  col(11, 9, 3); col(11, 10, 3);
+  add([[1, 12, 9], [1, 12, 10], [2, 12, 9], [2, 12, 10]]);
   return w;
 }

@@ -152,6 +152,8 @@ The brief's first test asks whether someone, without instruction, can build this
 
 And `?story=8` is **a labyrinth**: a compact build made to show what's hidden and what crosses. A cloister (a court walled round, a gallery of arches on its walls from corner tower to corner tower, a gate through each side, one framing the stair beyond). A stair climbing behind a wall, its foot hidden and its head showing over the wall, to a landing tower. From there a bridge over the passage below to the cloister's corner, so one way crosses another. A tall, narrow slot between two towers, bridged high up. And houses under roofs, their doors, windows and stairs inside the rules' own.
 
+And `?story=10` is **flow**: a wall traced on the diagonal (drawn as one straight diagonal wall), a court whose corners sweep round, a terrace out from a tower and stone pushed out over nothing (carried on piers that meet it in coves), and a wall traced across a stair's foot, which leaves the stair's way open.
+
 And `?story=9` is **features, placements and rhythms**: a colonnade along the plaza between two towers, a jali round one tower's top; a terrace and the flight up to it, balustraded; a court screened on one side by a jali; a house with mashrabiya at its upper windows and colonnettes at its openings, and a pergola over the yard in front of it.
 
 ## How it's built
@@ -276,7 +278,29 @@ The cells are what's built, selected and walked. How each is drawn is worked out
 - **A wall** (a block in a run a cell thick: its neighbours at its level are only blocks, thin walls, or a gate through the run, and what's on it is wall too) is a wall's thickness, not a cell's. Where it goes straight on, just that. Where it turns, meets another, or ends, a post a little wider, capped. It runs on to a gate in it, and the gate stands a little proud, like a gatehouse. On the stone, a long straight run has a buttress every third cell either side, sloped back into the wall.
 - **Along every open side**: the top edge bevelled, the top capped, a plinth splayed at the foot on the stone, a cornice under a mass's top up high, a string course where the stone changes kind. The courses and copings run on from cell to cell without a seam.
 
+- **Flowing walls**: a wall that turns once sweeps round a quarter circle, from the middle of one side of its cell to the middle of the next, instead of meeting at a post. A run of turns one after another (the stair-step of cells a diagonal stroke lays) is drawn as one straight diagonal wall: each cell a band from one side's middle to the next. Either meets a straight wall beside it at exactly a straight wall's thickness, so the run flows on without a seam. Copings, plinths, parapets and balustrades follow the curve or the diagonal. Where walls meet (a T, a cross), a post.
+- **Piers that carry**: a pier standing in the middle of its cell under a block meets it in a cove, curving out from its head to the block's edges. Piers side by side make a round arch between them, and toward the open air the cove reads as a corbel, so stone pushed out over nothing is carried, not a box on stilts. Toward an arch springing from it, a pier rises straight and the arch makes the curve. A block over air shows its underside.
+- **The ground** is shaded by masses, not by walls: the ground round a curve or a diagonal isn't darkened cell by cell.
+- **Buildings** need real mass, two cells by two somewhere in them (or a tower). A ring of wall round a court, or a wall on the diagonal, is a wall, however wide it spans.
+
 Next for the form: junctions by kind (a wall into a tower with a buttress at the joint; a stair against a wall with its side wall; a parapet into a tower), and a few variants of each corner, chosen alike along a run.
+
+## Ways kept open
+
+A stair needs its way: the place at its foot, the place at its head, and the headroom over it and over its head (`World.way`). Nothing auto does builds into one:
+
+- **a tap** there is refused ("that's a stair's way: kept open");
+- **a wall traced** across one leaves a gap there;
+- **a connection** stops short of one, and a stair that would climb straight into what stopped it isn't laid at all, so no stair ever leads into a wall;
+- **the rules' dressing** (lanterns, pots, pergolas) never stands in one, nor before a door. A flight's lantern goes beside where it arrives;
+- **a court's** water, cypress and pots keep clear of them.
+
+The piece brush still puts exactly what it's asked to, where it's asked. It's the explicit brush.
+
+![10 · flow: a wall on the diagonal, a court with swept corners, piers that carry, a stair's way kept open through a wall](labyrinth/v-story-10.jpg)
+![curves and diagonals, close](labyrinth/v-flow-close.jpg)
+![a wall on the diagonal](labyrinth/v-diagonal-close.jpg)
+![piers that carry](labyrinth/v-piers-close.jpg)
 
 ## Three tiers of wall
 
@@ -365,6 +389,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - a high walkway's free end comes down on a pier onto a walkway below: the pier is slim, stands aside, and the walkway below can still be walked past it, and built on;
   - the wall piece run round makes thin walls, which close a court; a tap on a thin wall goes on as one, up or out along its way; struck where it is, not beside it;
   - the random worlds also switch readings on what select would take up, dress stones, and run pieces; every arcade's bays spring alike;
+  - over 60 random worlds of gestures, auto never builds into a stair's way, and never lays a stair that climbs into stone;
+  - form: a wall that turns once is a curve, a stair-step of turns is a diagonal that meets a straight wall at its thickness, a T is a post; a touch strikes the curve where it's drawn; storyboard 10 is what it says, its diagonal and its court not taken for buildings;
   - the arcade read as a colonnade: every bay flat, under an entablature; read back as arches, none a colonnade;
   - storyboard 6: the arcade is alike bays, the flight is three steps and can be climbed to the terrace, towers and the court are found, the lintel and the dressing are there and written down; every reading of the arcade stands; a bridge of five read as two bays gets a pier under its middle;
   - every arch's air is clear;
@@ -406,7 +432,7 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
 - **Interiors**: a building opened up (a cut through it shows its floors and its stair).
 
 - **Snapping on relationships**: geometric (a stroke ending near an edge or a terrace joins it), topological (two walkways meeting make a junction you can walk), architectural (a buttress under an exposed terrace edge).
-- **Strokes off the grid**: diagonals kept as diagonals, with slight irregularity in the masonry.
+- **Strokes off the grid, further**: diagonals at other slopes (a knight's move), curves of a longer radius across several cells, a wall bending round a tower; masses with diagonal faces where a trace cut a corner.
 - **Constraint resolution for transitions**: where stairs meet arcades, corners, intersections.
 - **Escher, as a separate authored layer**: first impossible-*looking* space (deep arcades, conflicting stairs), later impossible topology (connections that are valid only from one view).
 

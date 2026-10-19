@@ -181,7 +181,18 @@ export class World {
   dressed(k: number, i: number, j: number): Dress | null { return inGrid(i, j) ? this.dress.get(key(k, i, j)) ?? null : null; }
   /** a floor to stand on at the foot of level k: the stone (not a pool), or the top of stone */
   floor(k: number, i: number, j: number) { return inGrid(i, j) && (k === 0 ? !this.pool(i, j) : this.stone(k - 1, i, j)); }
-  /** a cell free to build in */
+  /**
+   * A cell a stair needs kept open: the place at its foot, the place at its head, and the headroom over it and over its
+   * head. Auto never builds into one (a tap there is refused, a wall traced across one leaves a way through it, a
+   * connection stops short of one), and the rules' dressing never stands in one.
+   */
+  way(k: number, i: number, j: number): boolean {
+    for (let d = 0; d < 4; d++) {
+      const [a, b] = DIRS[d];
+      if (this.stair(k, i + a, j + b) === d || this.stair(k - 1, i - a, j - b) === d || this.stair(k - 2, i - a, j - b) === d) return true;
+    }
+    return this.stair(k - 1, i, j) >= 0;
+  }
   /** a cell free to build in (a pier there gives way: it's the rules', and the hand's stone carries what it carried) */
   free(k: number, i: number, j: number) { return k >= 0 && k < CEIL && inGrid(i, j) && !this.stone(k, i, j) && this.stair(k, i, j) < 0 && !this.tree(k, i, j) && !this.tree(k - 1, i, j) && !(k === 0 && this.pool(i, j)); }
   /** how high a column's stone (or stair) goes, up from a level, without a gap */
@@ -253,8 +264,11 @@ export class World {
     const along = c.path.slice(1), cells: Cell[] = [];
     const taken = (k: number, i: number, j: number) => k >= 0 && (this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.trees.has(key(k, i, j)) || (k > 0 && this.trees.has(key(k - 1, i, j))));
     // (and nothing to stand on but a stair or a tree beneath: it can't rest there)
+    // (stone it would lay where another stair needs its way open: it stops short)
+    const blocks = (k: number, i: number, j: number) => k >= 0 && !taken(k, i, j) && this.way(k, i, j);
     const unsteady = (k: number, i: number, j: number) => k > 0 && (this.stairs.has(key(k - 1, i, j)) || this.trees.has(key(k - 1, i, j)));
-    const lay = (k: number, i: number, j: number, s: number) => { if (k < 0 || taken(k, i, j)) return; this.mass.set(key(k, i, j), born + s * 0.05); this.laid.add(key(k, i, j)); if (op.bridge) this.bridged.add(key(k, i, j)); cells.push([k, i, j]); };
+    const stairAt = new Map<number, number>(), laidHere = new Set<number>();
+    const lay = (k: number, i: number, j: number, s: number) => { if (k < 0 || taken(k, i, j)) return; laidHere.add(key(k, i, j)); this.mass.set(key(k, i, j), born + s * 0.05); this.laid.add(key(k, i, j)); if (op.bridge) this.bridged.add(key(k, i, j)); cells.push([k, i, j]); };
     const dirTo = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]) => x === b[0] - a[0] && z === b[1] - a[1]);
     const dz = h1 - h0, steps = Math.abs(dz);
     // (the steps go where the way runs straight, together in flights: the last straight run takes as many as it can,
@@ -267,20 +281,37 @@ export class World {
     for (let s = 0; s < along.length && stopped < 0; s++) {
       const [i, j] = along[s], prev = s > 0 ? along[s - 1] : c.path[0];
       if (step.has(s) && dz > 0) {
-        if (taken(h, i, j) || unsteady(h, i, j)) { stopped = s; break; }
-        this.stairs.set(key(h, i, j), { d: dirTo(prev, [i, j]), born: born + s * 0.05 }); this.laid.add(key(h, i, j)); cells.push([h, i, j]);
+        if (taken(h, i, j) || unsteady(h, i, j) || blocks(h - 1, i, j)) { stopped = s; break; }
+        this.stairs.set(key(h, i, j), { d: dirTo(prev, [i, j]), born: born + s * 0.05 }); this.laid.add(key(h, i, j)); cells.push([h, i, j]); stairAt.set(key(h, i, j), s);
         lay(h - 1, i, j, s);
         h++;
       } else if (step.has(s)) {
-        if (taken(h - 1, i, j) || unsteady(h - 1, i, j)) { stopped = s; break; }
+        if (taken(h - 1, i, j) || unsteady(h - 1, i, j) || blocks(h - 2, i, j)) { stopped = s; break; }
         h--;
-        this.stairs.set(key(h, i, j), { d: dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(h, i, j)); cells.push([h, i, j]);
+        this.stairs.set(key(h, i, j), { d: dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(h, i, j)); cells.push([h, i, j]); stairAt.set(key(h, i, j), s);
         lay(h - 1, i, j, s);
       } else {
         // (a landing, or the walkway: nothing in the way at the height it walks, nor only a stair to stand on)
-        if (taken(h, i, j) || unsteady(h, i, j)) { stopped = s; break; }
+        if (taken(h, i, j) || unsteady(h, i, j) || blocks(h - 1, i, j)) { stopped = s; break; }
         lay(h - 1, i, j, s);
       }
+    }
+    // (a stair that would lead straight into what stopped the way is no stair: it's taken back, and the stone laid under
+    // it, so no stair ever climbs into a wall)
+    for (let n = cells.length - 1; stopped > 0 && n >= 0; n--) {
+      const v = key(...cells[n]);
+      if (!this.stairs.has(v)) continue;
+      const [x, z] = along[stopped];
+      if (n >= cells.length - 2 && stairAt.get(v) === stopped - 1 && (taken(h, x, z) || unsteady(h, x, z))) {
+        for (const c of cells.splice(n)) {
+          const u = key(...c);
+          if (this.stairs.has(u)) this.stairs.delete(u);
+          else if (laidHere.has(u)) { this.mass.delete(u); this.bridged.delete(u); }
+          this.laid.delete(u);
+        }
+        stopped--;
+      }
+      break;
     }
     this.reached.set(op, { reached: stopped < 0 && (!c.to || h === h1), stopped, cells });
   }
@@ -444,9 +475,11 @@ export class World {
         const cx = region.reduce((s, c) => s + c[0], 0) / region.length, cz = region.reduce((s, c) => s + c[1], 0) / region.length;
         pools = [region.reduce((b, c) => (Math.hypot(c[0] - cx, c[1] - cz) < Math.hypot(b[0] - cx, b[1] - cz) ? c : b))];
       }
+      // (nothing the rules put in a court stands in a stair's way)
+      pools = pools.filter(([x, z]) => !this.way(0, x, z));
       for (const [x, z] of pools) this.decor.push({ kind: 'pool', i: x, j: z, born: this.first(`w${x}.${z}`, when) });
       if (region.length >= TREE_COURT) {
-        const corners = region.filter(([x, z]) => !pools.some((p) => p[0] === x && p[1] === z) && DIRS.filter(([a, b]) => !inside.has(key(0, x + a, z + b))).length >= 2);
+        const corners = region.filter(([x, z]) => !this.way(0, x, z) && !pools.some((p) => p[0] === x && p[1] === z) && DIRS.filter(([a, b]) => !inside.has(key(0, x + a, z + b))).length >= 2);
         if (corners.length) {
           const q = hash(this.seed, id) % corners.length, [x, z] = corners[q];
           this.decor.push({ kind: 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) });

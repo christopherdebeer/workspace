@@ -3,7 +3,8 @@
  * (model.ts), and the model's rules work out what it takes to stand.
  *
  * - **Tap** raises: bare stone, a plinth; a top, another course; a side, the stone pushed out that way (if there's
- *   nothing under it, the rules carry it on an arch or a pier).
+ *   nothing under it, the rules carry it on an arch or a pier). Never into a stair's way (`World.way`): a wall traced
+ *   across one leaves a gap there, a connection stops short of one.
  * - **Trace** extends or joins, by where it starts and where it ends:
  *   - from the bare stone to the bare stone: a wall along it;
  *   - from a top (or a side: the course touched), out over anything: a walkway at that height;
@@ -30,9 +31,13 @@ export function surface(w: World, p: Pick): number {
   return w.topFrom(p.hit[0], p.hit[1], p.hit[2]);
 }
 
+/** the cell a tap would raise */
+export const tapCell = (w: World, p: Pick): Cell => (p.face === 'ground' ? [0, p.hit[1], p.hit[2]] : p.face === 'top' ? [w.topFrom(p.hit[0], p.hit[1], p.hit[2]), p.hit[1], p.hit[2]] : p.to);
+
 export function tap(w: World, p: Pick, now: number): Op | null {
-  const [k, i, j] = p.face === 'ground' ? [0, p.hit[1], p.hit[2]] : p.face === 'top' ? [w.topFrom(p.hit[0], p.hit[1], p.hit[2]), p.hit[1], p.hit[2]] : p.to;
-  if (k >= CEIL || !inGrid(i, j) || w.stone(k, i, j) || w.stair(k, i, j) >= 0) return null;
+  const [k, i, j] = tapCell(w, p);
+  // (never into a stair's way: its foot, its head, the room over them)
+  if (k >= CEIL || !inGrid(i, j) || w.stone(k, i, j) || w.stair(k, i, j) >= 0 || w.way(k, i, j)) return null;
   // (a thin wall touched goes on as a thin wall: up, or out along its way)
   const thin = p.face === 'top' ? w.wall(k - 1, i, j) : p.face === 'side' ? w.wall(...p.hit) : -1;
   if (thin >= 0) return { walls: [[k, i, j, p.face === 'side' ? (p.hit[1] !== i ? 0 : 1) : thin, now]], why: p.face === 'side' ? 'extend' : 'course' };
@@ -101,6 +106,8 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
     const add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [];
     cells.forEach(([i, j], q) => {
       if (!free.some((c) => c[0] === i && c[1] === j)) return;
+      // (a stair's way it leaves open, a gap in it: the wall never shuts a stair off)
+      if (w.way(0, i, j)) return;
       if (gate.has(q)) arches.push([0, i, j, across(q), born(i, j)]); else add.push([0, i, j, born(i, j)]);
     });
     return { add, ...(arches.length ? { arches } : {}), why: 'wall', note: kind === 'plain' ? 'a wall' : `${kind === 'gated' ? 'a gated' : 'an arcaded'} wall` };

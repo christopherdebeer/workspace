@@ -9,6 +9,10 @@
  *   the run, and what's on it is wall too) is a wall's thickness, not a cell's. Where the run goes straight on, just that; where it turns, meets
  *   another, or ends, a post a little wider, capped. On the stone, a long straight run has a buttress every third cell
  *   either side.
+ * - **Flowing walls**: a wall that turns once sweeps round a quarter circle from one side of its cell to the other,
+ *   rather than meeting at a post; a run of turns one after another (a stair-step, as a diagonal stroke lays it) is
+ *   one straight diagonal wall, each cell of it a band from one side's middle to the next. Either meets a straight wall
+ *   beside it at exactly its thickness, so the run flows on without a seam.
  *
  * An outline is a loop round the cell's shape (x, z from its middle), each edge with the way it faces (a DIRS index, or
  * −1 on a curve), how far out it lies, and whether it's open (drawn) or runs on into the stone beside it.
@@ -21,7 +25,11 @@ import { buildings } from './buildings';
 export const WT = 0.34, POST = 0.4, ROUND = 0.1, BUT = 0.12, BUTW = 0.09, BUTH = 0.6;
 
 export interface Edge { a: [number, number]; b: [number, number]; face: number; dist: number; open: boolean }
-export interface Outline { edges: Edge[]; wall: boolean; straight: boolean; arms: boolean[]; post: number }
+export interface Outline {
+  edges: Edge[]; wall: boolean; straight: boolean; arms: boolean[]; post: number;
+  /** a flowing wall: round a curve, or on the diagonal; and its top as a strip, pairs of its corners across it */
+  flow?: 'curve' | 'diagonal'; pairs?: Array<[number, number]>;
+}
 
 const cache = new WeakMap<World, { v: number; wall: Map<number, boolean>; out: Map<number, Outline> }>();
 const store = (w: World) => { let c = cache.get(w); if (!c || c.v !== w.version) { c = { v: w.version, wall: new Map(), out: new Map() }; cache.set(w, c); } return c; };
@@ -76,7 +84,34 @@ export function outline(w: World, k: number, i: number, j: number): Outline {
   const N = (d: number): [number, number] => [DIRS[d][0], DIRS[d][1]];
   const at = (d: number, s: number, r: number): [number, number] => { const [a, b] = N(d), [ta, tb] = N((d + 1) % 4); return [a * r + ta * s, b * r + tb * s]; };
   let o: Outline;
-  if (wallCell(w, k, i, j)) {
+  const turn = turnOf(w, k, i, j);
+  if (turn) {
+    // (a flowing wall: its loop worked out as points, each edge open or not, turned the way the others go round)
+    const [d1, d2] = turn, P: Array<[number, number]> = [], O: boolean[] = [];
+    const n1 = N(d1), n2 = N(d2), C: [number, number] = [(n1[0] + n2[0]) / 2, (n1[1] + n2[1]) / 2];
+    const diagonal = staircase(w, k, i, j, turn);
+    if (diagonal) {
+      // (a band from the middle of one side to the next, as thick across each side as a straight wall)
+      P.push([n1[0] / 2 + n2[0] * WT, n1[1] / 2 + n2[1] * WT], [n2[0] / 2 + n1[0] * WT, n2[1] / 2 + n1[1] * WT], [n2[0] / 2 - n1[0] * WT, n2[1] / 2 - n1[1] * WT], [n1[0] / 2 - n2[0] * WT, n1[1] / 2 - n2[1] * WT]);
+      O.push(true, false, true, false);
+    } else {
+      // (a quarter circle round the corner between its arms, from the middle of one side to the middle of the other)
+      const S = 8, at2 = (t: number, r: number): [number, number] => { const a = (t * Math.PI) / 2, c = Math.cos(a), sn = Math.sin(a); return [C[0] - r * (c * n2[0] + sn * n1[0]), C[1] - r * (c * n2[1] + sn * n1[1])]; };
+      for (let q = 0; q <= S; q++) { P.push(at2(q / S, 0.5 + WT)); O.push(q < S); }
+      O[S] = false;
+      for (let q = S; q >= 0; q--) { P.push(at2(q / S, 0.5 - WT)); O.push(q > 0); }
+      O[2 * S + 1] = false;
+    }
+    const n = P.length;
+    let area = 0;
+    for (let q = 0; q < n; q++) area += P[q][0] * P[(q + 1) % n][1] - P[(q + 1) % n][0] * P[q][1];
+    const flip = area < 0, Pts = flip ? [...P].reverse() : P, Op = flip ? Pts.map((_, q) => O[(2 * n - 2 - q) % n]) : O;
+    Pts.forEach((p, q) => add(p, Pts[(q + 1) % n], Op[q]));
+    const at = (q: number) => (flip ? n - 1 - q : q);
+    const pairs: Array<[number, number]> = diagonal ? [[at(0), at(3)], [at(1), at(2)]] : Array.from({ length: n / 2 }, (_, q) => [at(q), at(n - 1 - q)] as [number, number]);
+    const arms = DIRS.map(([a, b]) => w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0);
+    o = { edges, wall: true, straight: false, arms, post: WT, flow: diagonal ? 'diagonal' : 'curve', pairs };
+  } else if (wallCell(w, k, i, j)) {
     const arms = DIRS.map(([a, b]) => w.stone(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0);
     const straight = (arms[0] && arms[2] && !arms[1] && !arms[3]) || (arms[1] && arms[3] && !arms[0] && !arms[2]);
     const h = straight ? WT : POST;
@@ -111,6 +146,21 @@ export function outline(w: World, k: number, i: number, j: number): Outline {
   }
   c.out.set(v, o);
   return o;
+}
+
+/** a wall that turns once in its cell (two arms, at right angles): the two ways, or null */
+export function turnOf(w: World, k: number, i: number, j: number): [number, number] | null {
+  if (!wallCell(w, k, i, j)) return null;
+  const arms = [0, 1, 2, 3].filter((d) => w.stone(k, i + DIRS[d][0], j + DIRS[d][1]) || w.stair(k, i + DIRS[d][0], j + DIRS[d][1]) >= 0);
+  return arms.length === 2 && arms[1] - arms[0] !== 2 ? [arms[0], arms[1]] : null;
+}
+/** whether a turn is one of a run of turns, each the other way about (a stair-step: a diagonal) */
+function staircase(w: World, k: number, i: number, j: number, [d1, d2]: [number, number]): boolean {
+  for (const [d, e] of [[d1, d2], [d2, d1]]) {
+    const t = turnOf(w, k, i + DIRS[d][0], j + DIRS[d][1]);
+    if (t && t.includes((d + 2) % 4) && t.includes((e + 2) % 4)) return true;
+  }
+  return false;
 }
 
 /** whether a straight run of wall has a buttress here (every third cell along it, on the stone), and on which sides */
