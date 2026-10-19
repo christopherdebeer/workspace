@@ -240,11 +240,21 @@ Roofs are terracotta tiles in courses up the slope, each tile its own shade. Eac
 ![houses: hipped, a lean-to falling away from it, gabled, a marble tower's lead dome](labyrinth/v-houses.jpg)
 ![doors where ways meet walls: the cloister's corner towers, a door at the foot, slit windows](labyrinth/v-doors.jpg)
 
+## Form: the shape inside each cell
+
+The cells are what's built, selected and walked. How each is drawn is worked out from what's round it (`form.ts`), so blocks that meet join as architecture rather than sitting side by side as cubes. A touch strikes the same shape (`inStone` reads the same outline the mesh is drawn from), so what you see is what you touch.
+
+- **A mass** (a block that's part of something two or more deep, or of a building, or a pillar on its own) fills its cell. Its outside corners are rounded where open air meets on both sides.
+- **A wall** (a block in a run a cell thick: its neighbours at its level are only blocks, thin walls, or a gate through the run, and what's on it is wall too) is a wall's thickness, not a cell's. Where it goes straight on, just that. Where it turns, meets another, or ends, a post a little wider, capped. It runs on to a gate in it, and the gate stands a little proud, like a gatehouse. On the stone, a long straight run has a buttress every third cell either side, sloped back into the wall.
+- **Along every open side**: the top edge bevelled, the top capped, a plinth splayed at the foot on the stone, a cornice under a mass's top up high, a string course where the stone changes kind. The courses and copings run on from cell to cell without a seam.
+
+Next for the form: junctions by kind (a wall into a tower with a buttress at the joint; a stair against a wall with its side wall; a parapet into a tower), and a few variants of each corner, chosen alike along a run.
+
 ## Three tiers of wall
 
 | | How thick | How high | Made by |
 |---|---|---|---|
-| **a block wall** | a whole cell | a level a course | auto's trace on the stone, the block piece |
+| **a block wall** | a wall's thickness (a whole cell where it's part of a mass) | a level a course | auto's trace on the stone, the block piece |
 | **a thin wall** | a wall's thickness | a level a course | the wall piece; select's reading of a block, or of a wall |
 | **a parapet** | thinner, with a coping | low | dressing; the rules, round a high drop |
 
@@ -317,6 +327,8 @@ From the resolved world (`mesh.ts`), then WebGL2 (`render.ts`):
   - the hand's dressing wins over the rules';
   - there's no cap: a column tapped up fourteen times is fourteen high, read as a tower, climbed by a fourteen-step flight that can be walked, and drawn to the top;
   - a gate in a wall is walked through, along its way only;
+  - blocks are struck where they're drawn: just inside each open side of every block's outline it's stone, just outside it isn't (over a thousand sides tried);
+  - a straight run is a wall's thickness, with a post where it turns and buttresses along it; a mass fills its cells with its outside corners rounded; a wall runs on to a gate in it;
   - every opening is in a building's own stone and looks out on air; every door looks out on a place to stand; a roof only over a top nothing arrives at; buildings come out the same every time;
   - storyboard 4: the terrace's top can't be reached from the stone by the stone alone; so it has a door at its foot and a stair inside, and it can; and from there, the platform's top along the connection;
   - storyboard 7: a door where the high walkway leaves the tower, halfway up;

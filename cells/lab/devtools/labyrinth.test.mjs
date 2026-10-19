@@ -14,6 +14,8 @@ const MO = await load('../client/labyrinth/motifs.ts');
 const SEL = await load('../client/labyrinth/select.ts');
 const CH = await load('../client/labyrinth/character.ts');
 const BU = await load('../client/labyrinth/buildings.ts');
+const FO = await load('../client/labyrinth/form.ts');
+const ME = await load('../client/labyrinth/mesh.ts');
 
 let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
@@ -35,7 +37,7 @@ function stands(w, tag) {
 }
 
 const made = {};
-const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set(), roofs: 0, doors: 0 };
+const walked = { tried: 0, ok: 0, saw: [] }, local = { tried: 0, ok: 0, saw: [] }, lively = { worlds: 0, dressed: 0, gates: 0, kinds: new Set(), roofs: 0, doors: 0, form: 0 };
 /** how far from what an edit touched its effect on piers and arches may go (an arch spans seven at most; an arcade's
  * piers are respaced along its whole run, so a little more) */
 const LOCAL = 9;
@@ -109,6 +111,25 @@ for (let s = 1; s <= 60; s++) {
     local.tried++; if (changed.every((v) => !far(v))) local.ok++; else if (local.saw.length < 3) local.saw.push({ s, t, why: op.why, far: changed.filter(far).map(unkey) });
   }
   stands(w, `seed ${s}`);
+  // (form: a touch strikes a block where it's drawn: just inside each open side of its outline it's stone, just outside
+  // it isn't, unless what's outside is more stone)
+  {
+    let tried = 0, wrong = 0, saw = null;
+    for (const v of w.mass.keys()) {
+      const [k, i, j] = unkey(v);
+      if (!w.block(k, i, j) || FO.buttresses(w, k, i, j).length) continue;
+      for (const e of FO.outline(w, k, i, j).edges) {
+        if (!e.open) continue;
+        const dx = e.b[0] - e.a[0], dz = e.b[1] - e.a[1], l = Math.hypot(dx, dz), nx = dz / l, nz = -dx / l, mx = (e.a[0] + e.b[0]) / 2, mz = (e.a[1] + e.b[1]) / 2;
+        const X = (f) => i - 6 + 0.5 + mx + nx * f, Z = (f) => j - 6 + 0.5 + mz + nz * f, y = k + 0.5;
+        const inn = ME.inStone(w, X(-0.02), y, Z(-0.02)), out = ME.inStone(w, X(0.02), y, Z(0.02));
+        const beyond = Math.floor(X(0.02) + 6) !== i || Math.floor(Z(0.02) + 6) !== j;
+        tried++;
+        if (!inn || (out && !beyond)) { wrong++; saw = saw ?? { k, i, j, e, inn, out }; }
+      }
+    }
+    lively.form += tried; ok(`seed ${s}: blocks are struck where they're drawn`, wrong === 0, saw);
+  }
   // (buildings: every opening is in a building's own face and looks out on air; a door looks out on a place to stand;
   // a roof only over a top that isn't walked; the same every time)
   {
@@ -253,6 +274,7 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
 }
 // (buildings: a stair inside where one's needed; doors where ways meet walls; roofs where they belong, and switched)
 ok(`the random worlds have buildings with doors and roofs (${lively.doors} doors, ${lively.roofs} roofs)`, lively.doors > 0 && lively.roofs > 0, lively);
+ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`, lively.form > 1000, lively.form);
 {
   const s4 = story(4), base = NAV.navigate(s4), full = BU.walkable(s4);
   ok('story 4: the terrace\'s top can\'t be reached from the stone by the stone alone', !NAV.reaches(base, [0, 9, 3], [3, 9, 4]));
@@ -275,6 +297,22 @@ ok(`the random worlds have buildings with doors and roofs (${lively.doors} doors
   ok('and with no roof, none', BU.buildings(s8).list.find((b) => b.id === hip.id)?.roof === null);
   const M = await load('../client/labyrinth/mesh.ts');
   ok('story 8 is drawn, roofs and openings and all', M.buildMesh(story(8)).count > 0);
+}
+// (form: a run a cell thick is a wall's thickness, with posts where it turns and buttresses along it; a mass fills its
+// cells, its outside corners rounded; a wall runs on to a gate in it)
+{
+  const w = new World(3);
+  w.apply({ add: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => [0, i, 2, 0]).concat([[0, 7, 3, 0], [0, 7, 4, 0]]) });
+  w.apply({ add: [[0, 2, 7, 0], [0, 3, 7, 0], [0, 2, 8, 0], [0, 3, 8, 0], [1, 2, 7, 0], [1, 3, 7, 0], [1, 2, 8, 0], [1, 3, 8, 0]] });
+  w.apply({ add: [[0, 9, 9, 0], [0, 11, 9, 0]], arches: [[0, 10, 9, 1, 0]] });
+  const st = FO.outline(w, 0, 3, 2), corner = FO.outline(w, 0, 7, 2), mass = FO.outline(w, 0, 2, 7);
+  ok('a straight run is a wall\'s thickness', FO.wallCell(w, 0, 3, 2) && st.straight && st.edges.filter((e) => e.open && e.face % 2 === 1).every((e) => Math.abs(e.dist - FO.WT) < 1e-9), st);
+  ok('where it turns, a post', corner.wall && !corner.straight && corner.post === FO.POST);
+  ok('along a long run on the stone, buttresses', FO.buttresses(w, 0, 3, 2).length === 2 || FO.buttresses(w, 0, 6, 2).length === 2 || FO.buttresses(w, 0, 0, 2).length === 2);
+  ok('a mass fills its cells, its outside corners rounded', !mass.wall && mass.edges.some((e) => e.face < 0) && mass.edges.filter((e) => e.face >= 0).every((e) => Math.abs(e.dist - 0.5) < 1e-9));
+  ok('a wall runs on to a gate in it', FO.wallCell(w, 0, 9, 9) && FO.wallCell(w, 0, 11, 9));
+  ok('struck in its middle, not beside its face', ME.inStone(w, 4 - 6 + 0.5, 0.5, 2 - 6 + 0.5) && !ME.inStone(w, 4 - 6 + 0.5, 0.5, 2 - 6 + 0.5 + FO.WT + 0.05));
+  stands(w, 'form');
 }
 // (a gate in a wall is walked through)
 {

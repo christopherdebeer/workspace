@@ -99,7 +99,14 @@ function pick(cx: number, cy: number, w: World = world): Pick | null {
     if (!w.occupied(hit[0], hit[1], hit[2]) && !w.tree(hit[0], hit[1], hit[2]) && !w.tree(hit[0] - 1, hit[1], hit[2])) {
       for (let k = hit[0] + 1; k < w.levels; k++) if (w.span(k, hit[1], hit[2])) { hit[0] = k; break; }
     }
-    const to = prev ? cell(prev) : [hit[0] + 1, hit[1], hit[2]] as [number, number, number];
+    let to = prev ? cell(prev) : [hit[0] + 1, hit[1], hit[2]] as [number, number, number];
+    // (struck from the air inside its own cell (a wall's thinner than its cell): from above, its top; else the side the
+    // air was on)
+    if (prev && to[0] === hit[0] && to[1] === hit[1] && to[2] === hit[2]) {
+      const fx = prev[0] + CENTER - hit[1] - 0.5, fz = prev[2] + CENTER - hit[2] - 0.5, fy = prev[1] - hit[0];
+      if (fy > 0.97) to = [hit[0] + 1, hit[1], hit[2]];
+      else { const d = Math.abs(fx) > Math.abs(fz) ? (fx > 0 ? 0 : 2) : fz > 0 ? 1 : 3; to = [hit[0], hit[1] + DIRS[d][0], hit[2] + DIRS[d][1]]; }
+    }
     const face = to[1] === hit[1] && to[2] === hit[2] ? 'top' : 'side';
     // (how squarely: the struck point's distance from the face's nearest edge, in the face's two directions)
     const f = (v: number) => Math.min(v - Math.floor(v), Math.ceil(v) - v), [fx, fy, fz] = [f(p[0]), f(p[1]), f(p[2])];

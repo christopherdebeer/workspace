@@ -19,6 +19,7 @@
 import { hash } from '../kit/rng';
 import { look } from './character';
 import { buildings, opening, type Building, type Opening } from './buildings';
+import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, key, unkey, type Span, type World } from './model';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
@@ -99,7 +100,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** a face toward a neighbour hidden against it: a plain block, or a stair's back */
   const hides = (k: number, i: number, j: number, d: number) => {
     const ni = i + DIRS[d][0], nj = j + DIRS[d][1];
-    if (w.block(k, ni, nj)) return true;
+    if (w.block(k, ni, nj)) return !wallCell(w, k, ni, nj);
     const aw = w.archway(k, ni, nj);
     if (aw >= 0) return aw !== d % 2;
     const s = w.stair(k, ni, nj);
@@ -120,49 +121,71 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       quad(A, B, [B[0], y1, B[2]], [A[0], y1, A[2]], [a, 0, b], [foot, foot, 1, 1], mat);
     }
   };
+  /** a loop's corners moved in (or out, given less than nothing) along each edge's normal by as much as it says, each
+   * corner where its two edges' new lines meet */
+  const shift = (E: Edge[], by: (e: Edge) => number): Array<{ a: [number, number]; b: [number, number] }> => {
+    const nOf = (e: Edge) => { const dx = e.b[0] - e.a[0], dz = e.b[1] - e.a[1], l = Math.hypot(dx, dz) || 1; return [dz / l, -dx / l, dx / l, dz / l]; };
+    const pts = E.map((e2, n) => {
+      const e1 = E[(n + E.length - 1) % E.length], [n1x, n1z, d1x, d1z] = nOf(e1), [n2x, n2z, d2x, d2z] = nOf(e2), o1 = by(e1), o2 = by(e2), v = e2.a;
+      const cr = d1x * d2z - d1z * d2x;
+      if (Math.abs(cr) < 1e-6) return [v[0] - n2x * Math.max(o1, o2), v[1] - n2z * Math.max(o1, o2)] as [number, number];
+      // (t·d1 − s·d2 = n1·o1 − n2·o2)
+      const rx = n1x * o1 - n2x * o2, rz = n1z * o1 - n2z * o2, t = (rx * -d2z - rz * -d2x) / (d1x * -d2z - d1z * -d2x);
+      return [v[0] - n1x * o1 + t * d1x, v[1] - n1z * o1 + t * d1z] as [number, number];
+    });
+    return E.map((_, n) => ({ a: pts[n], b: pts[(n + 1) % E.length] }));
+  };
   /**
-   * A block's faces, with its exposed edges bevelled: a narrow chamfer along each top edge over an open side, and down
-   * each corner where two open sides meet, so the edges catch the light. Where it meets stone of its own kind there's
-   * no edge to bevel, and the courses run on. Brick is capped in stone: its top is a travertine coping.
+   * A block, as its form says (form.ts): its outline drawn up from its floor, open sides only, an opening where a
+   * building has one; its top edges bevelled and its top capped (in stone, over brick); a plinth splayed at its foot on
+   * the stone, a cornice under a mass's top up high, a string course where the stone changes kind; a post's cap on a
+   * wall where it turns or ends; buttresses along a long run.
    */
   const blockFaces = (k: number, i: number, j: number) => {
     const y0 = k, y1 = k + 1, B = BEVEL, cx = X(i) + 0.5, cz = Z(j) + 0.5;
-    const e = [0, 1, 2, 3].map((d) => !hides(k, i, j, d)), lid = !(w.block(k + 1, i, j) || w.stair(k + 1, i, j) >= 0), bt = lid ? B : 0;
+    const ol = outline(w, k, i, j), E = ol.edges;
+    const lid = !(w.stair(k + 1, i, j) >= 0) && !(w.block(k + 1, i, j) && wallCell(w, k + 1, i, j) === ol.wall), bt = lid ? B : 0;
+    const L = (p: [number, number], y: number): V3 => [cx + p[0], y, cz + p[1]];
     const P = (d: number, s: number, y: number, inset = 0): V3 => { const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4]; return [cx + a * (0.5 - inset) + ta * s, y, cz + b * (0.5 - inset) + tb * s]; };
-    const brick = cur.dress >= KIND && Math.floor(cur.dress / KIND) === 1, keep = cur.dress;
-    for (let d = 0; d < 4; d++) {
-      if (!e[d]) continue;
-      const [a, b] = DIRS[d], prev = (d + 3) % 4, next = (d + 1) % 4, foot = floored(k, i + a, j + b) ? 0.6 : 1;
-      const s0 = -0.5 + (e[prev] ? B : 0), s1 = 0.5 - (e[next] ? B : 0);
-      const op = opening(w, k, i, j, d);
-      if (op) holed(d, s0, s1, y0, y1 - bt, op, P, [a, 0, b], foot);
-      else quad(P(d, s0, y0), P(d, s1, y0), P(d, s1, y1 - bt), P(d, s0, y1 - bt), [a, 0, b], [foot, foot, 1, 1], MAT.stone);
-      if (e[next]) {
-        // (down the corner)
-        const [ta, tb] = DIRS[next], nn = Math.SQRT1_2;
-        quad(P(d, s1, y0), P(next, -0.5 + B, y0), P(next, -0.5 + B, y1 - bt), P(d, s1, y1 - bt), [(a + ta) * nn, 0, (b + tb) * nn], [foot, foot, 1, 1], MAT.stone);
-      }
-      if (lid) {
-        if (brick) cur.dress = keep - KIND;
-        // (along the top edge, and the corner's little facet)
-        const n2: V3 = [a * Math.SQRT1_2, Math.SQRT1_2, b * Math.SQRT1_2];
-        quad(P(d, s0, y1 - B), P(d, s1, y1 - B), P(d, s1, y1, B), P(d, s0, y1, B), n2, 1, MAT.stone);
-        if (e[next]) { const [ta, tb] = DIRS[next], n3 = 1 / Math.sqrt(3); tri(P(d, s1, y1 - B), P(next, -0.5 + B, y1 - B), P(d, s1, y1, B), [(a + ta) * n3, n3, (b + tb) * n3], 1, MAT.stone); }
-        cur.dress = keep;
-      }
-    }
-    if (lid) {
-      if (brick) cur.dress = keep - KIND;
-      const xa = X(i) + (e[2] ? B : 0), xb = X(i) + 1 - (e[0] ? B : 0), za = Z(j) + (e[3] ? B : 0), zb = Z(j) + 1 - (e[1] ? B : 0);
-      quad([xa, y1, za], [xb, y1, za], [xb, y1, zb], [xa, y1, zb], [0, 1, 0], cornerAo(k + 1, i, j), MAT.stone);
-      cur.dress = keep;
-    }
-    // (where the stone changes kind from the course below, a string course marks it)
+    const brick = cur.dress >= KIND && Math.floor(cur.dress / KIND) === 1, keep = cur.dress, cap = () => { if (brick) cur.dress = keep - KIND; };
+    const nOf = (e: Edge): V3 => { const dx = e.b[0] - e.a[0], dz = e.b[1] - e.a[1], l = Math.hypot(dx, dz) || 1; return [dz / l, 0, -dx / l]; };
+    const footOf = (e: Edge) => (e.face >= 0 && floored(k, i + DIRS[e.face][0], j + DIRS[e.face][1]) ? 0.6 : e.face < 0 ? 0.8 : 1);
+    const inner = shift(E, (e) => (lid && e.open ? B : 0));
+    E.forEach((e, n) => {
+      if (!e.open) return;
+      const nv = nOf(e), foot = footOf(e);
+      const op = e.face >= 0 && Math.abs(e.dist - 0.5) < 1e-6 ? opening(w, k, i, j, e.face) : null;
+      if (op) { const [ta, tb] = DIRS[(e.face + 1) % 4]; holed(e.face, e.a[0] * ta + e.a[1] * tb, e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, op, P, nv, foot); }
+      else quad(L(e.a, y0), L(e.b, y0), L(e.b, y1 - bt), L(e.a, y1 - bt), nv, [foot, foot, 1, 1], MAT.stone);
+      if (lid) { cap(); quad(L(e.a, y1 - B), L(e.b, y1 - B), L(inner[n].b, y1), L(inner[n].a, y1), [nv[0] * Math.SQRT1_2, Math.SQRT1_2, nv[2] * Math.SQRT1_2], 1, MAT.stone); cur.dress = keep; }
+    });
+    if (lid) { cap(); for (const e of inner) tri(L([0, 0], y1), L(e.a, y1), L(e.b, y1), [0, 1, 0], 0.95, MAT.stone); cur.dress = keep; }
+    // (a band round its open sides, out a little from them: front, top and underside)
+    const band = (ya: number, yb: number, out: number, slope = 0) => {
+      const o = shift(E, (e) => (e.open ? -out : 0));
+      E.forEach((e, n) => {
+        if (!e.open) return;
+        const nv = nOf(e);
+        quad(L(o[n].a, ya), L(o[n].b, ya), L(o[n].b, yb), L(o[n].a, yb), nv, 0.85, MAT.stone);
+        quad(L(o[n].a, yb), L(o[n].b, yb), L(e.b, yb + slope), L(e.a, yb + slope), [nv[0] * 0.6, 0.8, nv[2] * 0.6], 1, MAT.stone);
+        if (ya > k + 0.01) quad(L(o[n].a, ya), L(o[n].b, ya), L(e.b, ya), L(e.a, ya), [0, -1, 0], 0.55, MAT.stone);
+      });
+    };
+    // (its plinth on the stone, its cornice under a high mass's top, a string course where the stone changes kind)
+    if (k === 0) band(0, 0.09, 0.03, 0.05);
+    if (lid && !ol.wall && k >= 1) { cur.dress = 0; band(y1 - 0.15, y1 - 0.09, 0.035); cur.dress = keep; }
     const under = w.block(k - 1, i, j) ? dressOf(k - 1, i, j) : -1;
-    if (under >= 0 && Math.floor(under / KIND) !== Math.floor(keep / KIND)) {
-      cur.dress = 0;
-      for (let d = 0; d < 4; d++) if (e[d]) { const [a, b] = DIRS[d], pr = 0.025; quad(P(d, -0.5, y0 - 0.02, -pr), P(d, 0.5, y0 - 0.02, -pr), P(d, 0.5, y0 + 0.05, -pr), P(d, -0.5, y0 + 0.05, -pr), [a, 0, b], 0.9, MAT.stone); quad(P(d, -0.5, y0 + 0.05, -pr), P(d, 0.5, y0 + 0.05, -pr), P(d, 0.5, y0 + 0.05), P(d, -0.5, y0 + 0.05), [0, 1, 0], 1, MAT.stone); quad(P(d, -0.5, y0 - 0.02, -pr), P(d, 0.5, y0 - 0.02, -pr), P(d, 0.5, y0 - 0.02), P(d, -0.5, y0 - 0.02), [0, -1, 0], 0.6, MAT.stone); }
-      cur.dress = keep;
+    if (under >= 0 && Math.floor(under / KIND) !== Math.floor(keep / KIND)) { cur.dress = 0; band(y0 - 0.02, y0 + 0.05, 0.025); cur.dress = keep; }
+    // (a wall's post where it turns, meets another, or ends: capped a little above it)
+    if (ol.wall && !ol.straight && lid) { cap(); const h = ol.post + 0.02; box(cx - h, cx + h, y1, y1 + 0.045, cz - h, cz + h, MAT.stone, 0.95); cur.dress = keep; }
+    // (buttresses along a long run on the stone: out from the wall, up, and sloped back into it)
+    for (const d of buttresses(w, k, i, j)) {
+      const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4];
+      const Q = (s: number, r: number, y: number): V3 => [cx + a * r + ta * s, y, cz + b * r + tb * s];
+      const r0 = WT, r1 = WT + BUT, yT = y0 + BUTH, yS = yT + 0.25;
+      quad(Q(-BUTW, r1, y0), Q(BUTW, r1, y0), Q(BUTW, r1, yT), Q(-BUTW, r1, yT), [a, 0, b], [0.6, 0.6, 1, 1], MAT.stone);
+      quad(Q(-BUTW, r1, yT), Q(BUTW, r1, yT), Q(BUTW, r0, yS), Q(-BUTW, r0, yS), [a * 0.9, 0.44, b * 0.9], 1, MAT.stone);
+      for (const sg of [-1, 1]) { face([Q(sg * BUTW, r0, y0), Q(sg * BUTW, r1, y0), Q(sg * BUTW, r1, yT), Q(sg * BUTW, r0, yS)], MAT.stone, 0.8, true, Q(0, (r0 + r1) / 2, y0 + 0.3)); }
     }
   };
   /**
@@ -328,7 +351,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       if (!es[q]) continue;
       const [a, b] = DIRS[q];
       // (a low wall along that edge, a wall's thickness all along, and its coping a little proud of it either side)
-      const [bx0, bx1, bz0, bz1] = a > 0 ? [cx + 0.5 - T, cx + 0.5, cz - 0.5, cz + 0.5] : a < 0 ? [cx - 0.5, cx - 0.5 + T, cz - 0.5, cz + 0.5] : b > 0 ? [cx - 0.5, cx + 0.5, cz + 0.5 - T, cz + 0.5] : [cx - 0.5, cx + 0.5, cz - 0.5, cz - 0.5 + T];
+      // (on its face as its form has it: a wall's is nearer its middle)
+      const r = reach(w, k, i, j, q);
+      const [bx0, bx1, bz0, bz1] = a > 0 ? [cx + r - T, cx + r, cz - 0.5, cz + 0.5] : a < 0 ? [cx - r, cx - r + T, cz - 0.5, cz + 0.5] : b > 0 ? [cx - 0.5, cx + 0.5, cz + r - T, cz + r] : [cx - 0.5, cx + 0.5, cz - r, cz - r + T];
       box(bx0, bx1, y0, y1, bz0, bz1, MAT.stone, [0.6, 0.6, 1, 1]);
       const [cx0, cx1, cz0, cz1] = a ? [bx0 - C, bx1 + C, bz0, bz1] : [bx0, bx1, bz0 - C, bz1 + C];
       box(cx0, cx1, y1, y1 + 0.05, cz0, cz1, MAT.stone, 0.95);
@@ -337,7 +362,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         // (only where it truly ends: running on, or turning a corner, it needs no post)
         const [ta, tb] = DIRS[t], on = edges.get(key(k, i + ta, j + tb))?.[q], turns = es[t];
         if (on || turns) continue;
-        const px = cx + a * (0.5 - T / 2) + ta * (0.5 - PP), pz = cz + b * (0.5 - T / 2) + tb * (0.5 - PP);
+        const px = cx + a * (r - T / 2) + ta * (0.5 - PP), pz = cz + b * (r - T / 2) + tb * (0.5 - PP);
         box(px - PP, px + PP, y0, y1 + 0.1, pz - PP, pz + PP, MAT.stone, [0.6, 0.6, 1, 1]);
         box(px - PP - C, px + PP + C, y1 + 0.1, y1 + 0.15, pz - PP - C, pz + PP + C, MAT.stone, 0.95);
       }
@@ -393,7 +418,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
           // (at the top, some lean out over the edge)
           const over = !more && y > y1 - 0.06 && rnd(s, n, 8) > 0.4;
           const lu = u + side * 0.022, ang = (rnd(s, n, 9) - 0.5) * 1.6 + side * 0.5;
-          const c: V3 = [cx + a * (0.5 + off) + ta * lu, y, cz + b * (0.5 + off) + tb * lu];
+          const rr = reach(w, k, i, j, d), c: V3 = [cx + a * (rr + off) + ta * lu, y, cz + b * (rr + off) + tb * lu];
           // (the leaf: a diamond, pointing down and out a little, turned)
           const dx = Math.sin(ang), dy = -Math.cos(ang), up = over ? 0.6 : 0.15;
           const along: V3 = [ta * dx * sz + a * up * sz, dy * sz * (over ? 0.4 : 1) + (over ? sz * 0.5 : 0), tb * dx * sz + b * up * sz], across: V3 = [ta * -dy * sz * 0.6, dx * sz * 0.6, tb * -dy * sz * 0.6];
@@ -635,6 +660,9 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER), k = Math.floor(y);
   if (k >= w.levels || !w.onSlab(i, j)) return false;
   const fx = x + CENTER - i - 0.5, fz = z + CENTER - j - 0.5, fy = y - k;
+  // (a block: as its form has it, the same outline it's drawn from)
+  if (w.block(k, i, j)) return inBlock(w, k, i, j, fx, fz, fy);
+  if (w.block(k, i, j)) return inBlock(w, k, i, j, fx, fz, fy);
   if (w.wall(k, i, j) >= 0) {
     const arms = wallArms(w, k, i, j);
     return (Math.abs(fx) < TH && Math.abs(fz) < TH) || (Math.abs(fz) < TH && ((arms[0] && fx > 0) || (arms[2] && fx < 0))) || (Math.abs(fx) < TH && ((arms[1] && fz > 0) || (arms[3] && fz < 0)));
