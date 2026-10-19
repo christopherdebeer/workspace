@@ -114,7 +114,7 @@ async function call(verb, target, input) {
  *  service's own BINARY_TYPES table — anything here must be a type the service
  *  will store with a non-text content type, or the round trip breaks in the
  *  middle: pushed as base64, read back as UTF-8. */
-const BINARY_RE = /\.(png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|mp3|ogg|wav|mp4|webm|pdf|zip|wasm)$/i;
+const BINARY_RE = /\.(png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|mp3|ogg|wav|mp4|webm|pdf|zip|gz|tgz|tar|wasm)$/i;
 
 /**
  * A BIG FILE GOES UP IN PIECES. A tool call carries its whole body in one

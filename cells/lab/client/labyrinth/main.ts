@@ -426,9 +426,10 @@ function readingsNow(): Array<{ label: string; op: Op }> | null {
 }
 function openFan() {
   if (!g) return;
-  g.offered = true;
+  // (offered once a gesture; nothing to offer yet (a touch with one reading, say) isn't the offer)
   const list = readingsNow(), f = fingers.get(g.id);
   if (!list || !f) return;
+  g.offered = true;
   const tapped = g.mode === 'pending';
   if (tapped) world.apply(list[0].op, now());
   fan = { x: f.x, y: f.y, list, at: 0, tap: tapped };
@@ -451,7 +452,7 @@ function leanFan(cx: number, cy: number): boolean {
   // (gone on past them, or off another way than toward any: the stroke goes on)
   if (!fan.tap && (d > BEYOND || (d > 60 && best > 0.6))) { choose(0); fan = null; if (g) g.still = { x: cx, y: cy, t: performance.now(), f: frameNo }; return false; }
   // (a touch held, its readings fanned out, then drawn away well past them: it wasn't a touch, it's a stroke)
-  if (fan.tap && d > BEYOND) { if (g && world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); } fan = null; if (g) { g.offered = true; g.laid = ''; g.still = { x: cx, y: cy, t: performance.now(), f: frameNo }; } return false; }
+  if (fan.tap && d > 90) { if (g && world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); } fan = null; if (g) { g.offered = true; g.laid = ''; g.still = { x: cx, y: cy, t: performance.now(), f: frameNo }; } return false; }
   if (d < LEAN || best > 0.6) at = 0;
   choose(at);
   return true;
@@ -833,7 +834,7 @@ function frame() {
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
   g2.clearRect(0, 0, guide.clientWidth, guide.clientHeight);
   // (held still long enough on a stroke, or a tap, that could be read another way: the readings fan out)
-  if (g && !fan && !g.offered && fingers.size === 1 && (g.mode === 'trace' || (g.mode === 'pending' && brush === 'auto')) && performance.now() - g.still.t > HOLD && frameNo - (g.still.f ?? 0) >= 3) openFan();
+  if (g && !fan && !g.offered && fingers.size === 1 && (g.mode === 'trace' || (g.mode === 'pending' && brush === 'auto')) && performance.now() - g.still.t > HOLD) openFan();
   guides();
   drawFan();
   label();

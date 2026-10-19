@@ -16,14 +16,28 @@ await withWood(async (lab) => {
   const W = (f, ...a) => p.evaluate(([src, args]) => new Function('w', 'a', `return (${src})(w, ...a)`)(window.__labyrinth.world, args), [f.toString(), a]);
   const at = (i, j, y) => p.evaluate(([a, b, d]) => window.__labyrinth.screenOf(a, b, d), [i, j, y]);
   const tapAt = async (i, j, y) => { await p.waitForTimeout(900); const s = await at(i, j, y); await p.mouse.click(s[0], s[1]); await p.waitForTimeout(200); };
+  // (a finger, dispatched inside the page: a run of moves made in one go at a hand's pace by the page's own clock. Driven
+  // move by move from here, each would wait on a frame, and a software renderer's slow frames read as pauses and holds
+  // the hand never made. Holds the tests mean are made by waiting between runs)
+  const finger = (moves, { down = false, up = false } = {}) => p.evaluate(({ moves, down, up }) => {
+    const c = document.getElementById('stone'), busy = (ms) => { const t = performance.now() + ms; while (performance.now() < t) { /* the hand moving */ } };
+    c.setPointerCapture = () => {};
+    const ev = (type, [x, y]) => c.dispatchEvent(new PointerEvent(type, { pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y, bubbles: true, cancelable: true, buttons: type === 'pointerup' ? 0 : 1 }));
+    if (down) ev('pointerdown', moves[0]);
+    // (let go where it is: a release alone moves nothing)
+    for (const m of down ? moves.slice(1) : up ? [] : moves) { busy(25); ev('pointermove', m); }
+    if (up) ev('pointerup', moves[moves.length - 1]);
+  }, { moves, down, up });
   const drag = async (pts, hold = 0, peek = null) => {
     await p.waitForTimeout(1500);
     const s = await Promise.all(pts.map(([i, j, y]) => at(i, j, y)));
-    await p.mouse.move(s[0][0], s[0][1]); await p.mouse.down();
+    await finger([s[0]], { down: true });
     if (hold) await p.waitForTimeout(hold);
-    for (let q = 1; q < s.length; q++) for (let t = 1; t <= 6; t++) { await p.mouse.move(s[q - 1][0] + ((s[q][0] - s[q - 1][0]) * t) / 6, s[q - 1][1] + ((s[q][1] - s[q - 1][1]) * t) / 6); await p.waitForTimeout(25); }
+    const moves = [];
+    for (let q = 1; q < s.length; q++) for (let t = 1; t <= 6; t++) moves.push([s[q - 1][0] + ((s[q][0] - s[q - 1][0]) * t) / 6, s[q - 1][1] + ((s[q][1] - s[q - 1][1]) * t) / 6]);
+    await finger(moves);
     if (peek) await peek();
-    await p.mouse.up(); await p.waitForTimeout(300);
+    await finger([moves.at(-1) ?? s[0]], { up: true }); await p.waitForTimeout(300);
   };
   c.ok('opens on a bare stone, saying what a hand can do', (await probe()).ops === 0 && (await p.textContent('#hint')).includes('trace'));
   // (a small raised platform: the stone tapped, its top tapped)
@@ -33,9 +47,7 @@ await withWood(async (lab) => {
   {
     await p.waitForTimeout(900);
     const a = await at(3, 7, 2), b = await at(3, 7, 3), per = Math.hypot(a[0] - b[0], a[1] - b[1]);
-    await p.mouse.move(a[0], a[1]); await p.mouse.down();
-    for (let t = 1; t <= 10; t++) { await p.mouse.move(a[0] + 1, a[1] - (per * 2.1 * t) / 10); await p.waitForTimeout(25); }
-    await p.mouse.up(); await p.waitForTimeout(300);
+    await finger([a, ...Array.from({ length: 10 }, (_, t) => [a[0] + 1, a[1] - (per * 2.1 * (t + 1)) / 10])], { down: true, up: true }); await p.waitForTimeout(300);
     const pr = await probe();
     c.ok('drawn straight up from a top: lifted two courses', pr.whys.at(-1) === 'lift' && await W((w) => w.stone(2, 3, 7) && w.stone(3, 3, 7) && !w.stone(4, 3, 7)), pr);
     await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(300);
@@ -51,18 +63,19 @@ await withWood(async (lab) => {
     await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(300);
     let seen = null, leaned = null;
     await drag([[4, 7, 0], [6, 7, 0], [8, 7, 0]], 0, async () => {
-      await p.waitForTimeout(1100);
+      // (held still: as long as the hold takes, and a slow (software) renderer's first frames after a stroke can outlast it)
+      await p.waitForTimeout(1100); for (let t = 0; t < 32 && !(await p.evaluate(() => window.__labyrinth.fan())); t++) await p.waitForTimeout(250);
       seen = await p.evaluate(() => window.__labyrinth.fan());
       const s0 = await at(8, 7, 0), thin = seen ? seen.labels.indexOf('a thin wall') : -1;
       if (seen && thin > 0) {
         // (lean toward it: up and a little to its side, as the fan lays them out)
         const m = seen.labels.length - 1, ang = -Math.PI / 2 + (m <= 1 ? 0 : ((thin - 1) / (m - 1) - 0.5) * Math.PI * 0.85);
-        for (let t = 1; t <= 6; t++) { await p.mouse.move(s0[0] + Math.cos(ang) * 14 * t, s0[1] + Math.sin(ang) * 14 * t); await p.waitForTimeout(30); }
+        await finger(Array.from({ length: 6 }, (_, t) => [s0[0] + Math.cos(ang) * 14 * (t + 1), s0[1] + Math.sin(ang) * 14 * (t + 1)]));
         leaned = await p.evaluate(() => window.__labyrinth.fan());
       }
     });
     c.ok('held at the end of a stroke: its readings fan out round the finger', seen && seen.labels.length >= 2, seen);
-    c.ok('a lean toward one reads it so, and letting go keeps it', leaned && leaned.labels[leaned.at] === 'a thin wall' && (await probe()).ops === n.ops && await W((w) => [4, 5, 6, 7, 8].every((i) => w.wall(0, i, 7) >= 0)), { leaned });
+    c.ok('a lean toward one reads it so, and letting go keeps it', leaned && leaned.labels[leaned.at] === 'a thin wall' && (await probe()).ops === n.ops && await W((w) => [4, 5, 6, 7, 8].every((i) => w.wall(0, i, 7) >= 0)), { leaned, ops: [(await probe()).ops, n.ops], walls: await W((w) => [4, 5, 6, 7, 8].map((i) => [w.wall(0, i, 7), w.stone(0, i, 7), w.archway(0, i, 7)])) });
     await p.evaluate(() => window.__labyrinth.readAs(0)); await p.waitForTimeout(200);
     c.ok('and back, by its reading', await W((w) => [4, 5, 6, 7, 8].every((i) => w.wall(0, i, 7) < 0 && w.stone(0, i, 7))));
   }
