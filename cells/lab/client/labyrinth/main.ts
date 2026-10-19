@@ -18,7 +18,7 @@ import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op
 import { buildMesh, inLand, inStone, setBleed } from './mesh';
 import { LAND } from './land';
 import { Renderer, camera, invert, type View } from './render';
-import { carve, surface, tap, trace, type Intent, type Pick } from './gesture';
+import { carve, lift, surface, tap, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
 import { randomSeed } from '../kit/rng';
 import { DRESSINGS, PIECES, dress, dressAt, place, placeOr, run, type Dressing, type Hand, type Piece } from './palette';
@@ -210,6 +210,8 @@ type Gesture = {
   op?: Op | null;
   /** where the finger paused on the way, and when it last moved */
   rest: Array<[number, number]>; moved: number;
+  /** whether it's lifting (or lowering) the stone it started on: drawn straight up or down the screen from it */
+  lifting?: boolean;
   /** where the finger last came to rest, and when (for holding still to choose); whether it's been offered */
   still: { x: number; y: number; t: number }; offered?: boolean;
 };
@@ -512,6 +514,27 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (!final && g.moved && t - g.moved > PAUSE && g.cells.length > 1 && !g.rest.some((r) => r[0] === last[0] && r[1] === last[1])) { g.rest.push(last); say('a pause: a gate here, or a landing'); }
   g.moved = t;
   if (c && (c[0] !== last[0] || c[1] !== last[1])) g.cells.push(c);
+  // (stone touched and drawn straight up or down the screen, the way no stroke across the ground goes: it's lifted, or
+  // lowered, a course for each course's height the finger's gone, there under the finger as it goes)
+  if (g.mode === 'trace' && g.start.face !== 'ground') {
+    const [k0, i0, j0] = g.start.hit, a = at3(i0 + 0.5, j0 + 0.5, k0 + 1), b = at3(i0 + 0.5, j0 + 0.5, k0 + 2), per = Math.max(8, Math.hypot(a[0] - b[0], a[1] - b[1]));
+    const dx = cx - g.x0, dy = cy - g.y0, upright = Math.abs(dy) >= per * 0.6 && Math.abs(dx) <= Math.abs(dy) * 0.3;
+    // (a side grabbed is always lifted; from a top, only with mass in hand, and not if it's come to rest on another top:
+    // that's a stroke to it. A way drawn up the screen from a top goes somewhere)
+    const there = final ? null : pick(cx, cy, before), other = !!goal(there) && (there?.inset ?? 0) >= SQUARE;
+    const may = g.start.face === 'side' || (intent === 'mass' && !other);
+    if (may && (upright || g.lifting)) {
+      const n = Math.round(-dy / per);
+      g.lifting = upright || Math.abs(dx) <= Math.abs(dy) * 0.45;
+      if (g.lifting) {
+        const r = lift(before, g.start, n, g.born), op = r && !('refused' in r) ? r : null;
+        g.said = r && 'refused' in r ? r.refused : '';
+        lay(op); g.op = op;
+        if (final && op) { settle([...(op.add ?? []), ...(op.walls ?? [])].map((q) => [q[0], q[1], q[2]])); kept(); say(op.alts?.length && heldHints++ < 4 ? `${op.note} · hold at the end to read it otherwise` : op.note ?? ''); showAlts(op, op.alts, g.base); }
+        return;
+      }
+    }
+  }
   if (g.mode === 'run') {
     const op = run(before, held as Piece, g.start, g.cells, looking(), g.born);
     lay(op); g.op = op;
@@ -533,7 +556,16 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (refused && refused !== g.said) say(refused);
   if (final && refused) declined('trace', refused);
   g.said = refused;
-  const built = op && !('refused' in op) ? op : null;
+  let built = op && !('refused' in op) ? op : null;
+  // (drawn up or down the screen from stone, but read as going somewhere: lifting it, the other reading)
+  if (built && g.start.face !== 'ground') {
+    const [k0, i0, j0] = g.start.hit, a = at3(i0 + 0.5, j0 + 0.5, k0 + 1), b = at3(i0 + 0.5, j0 + 0.5, k0 + 2), per = Math.max(8, Math.hypot(a[0] - b[0], a[1] - b[1]));
+    const dx = cx - g.x0, dy = cy - g.y0;
+    if (Math.abs(dy) >= per * 0.6 && Math.abs(dx) <= Math.abs(dy) * 0.3) {
+      const n = Math.round(-dy / per), l = lift(before, g.start, n, g.born);
+      if (l && !('refused' in l)) built = { ...built, alts: [...(built.alts ?? []), { label: n > 0 ? 'raise it instead' : 'lower it instead', op: { ...l, alts: undefined } }] };
+    }
+  }
   lay(built);
   if (!built) g.op = null;
   if (final && built) {

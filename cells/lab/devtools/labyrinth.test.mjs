@@ -740,6 +740,46 @@ stands(s4, 'story 4');
       }
     }
     ok('a wall over uneven land keeps one line of coping: no cell dips out of it', walls >= 8 && dips === 0, { walls, dips }); }
+  // (stone drawn straight up the screen: the piece it's part of raised; down, lowered, never below the ground)
+  { const w = new World(1);
+    for (const i of [4, 5, 6]) w.apply({ add: [[0, i, 5, 0], [1, i, 5, 0]] });
+    w.apply({ add: [[0, 9, 9, 0]] });
+    const p = { face: 'top', hit: [1, 5, 5], to: [2, 5, 5] };
+    const up = G.lift(w, p, 2, 0);
+    ok('drawn up from a top: the whole run raised, two courses', up && !up.refused && up.add?.length === 6 && up.add.every((c) => c[0] === 2 || c[0] === 3) && up.why === 'lift', up);
+    ok('and just the column, the other reading', up?.alts?.[0]?.label === 'just this column' && up.alts[0].op.add?.length === 2);
+    ok('the block apart from it untouched', !up.add.some((c) => c[1] === 9));
+    const down = G.lift(w, p, -5, 0);
+    ok('drawn down: courses taken off, to the ground and no further', down && down.cut?.length === 6 && down.cut.every((c) => c[0] >= 0) && down.why === 'lower', down);
+    w.apply(up); ok('raised, it stands four high', w.topFrom(0, 5, 5) === 4 && w.topFrom(0, 4, 5) === 4);
+    ok('a tap still adds a course (no drag, no lift)', G.lift(w, p, 0, 0) === null); }
+  // (a wall drawn a cell alongside one already there, the same way: joined to it, not doubled into a slab)
+  { const w = new World(1);
+    w.apply({ add: [4, 5, 6, 7, 8].map((i) => [0, i, 5, 0]) });
+    const op = G.trace(w, { face: 'ground', hit: [-1, 3, 6], to: [0, 3, 6] }, G.connect([[3, 6], [9, 6]]), null, () => 0, 0, [], 'mass');
+    ok('a wall drawn alongside a wall: no cell laid beside the old one', op && !op.refused && !(op.add ?? []).some((c) => c[1] >= 5 && c[1] <= 7 && c[2] === 6), op); }
+  // (from a top, mass in hand, out to open ground and let go there: going down to it)
+  { const w = new World(1);
+    for (let k = 0; k < 2; k++) w.apply({ add: [[k, 5, 5, 0]] });
+    const op = G.trace(w, { face: 'top', hit: [1, 5, 5], to: [2, 5, 5] }, G.connect([[5, 5], [5, 10]]), null, () => 0, 0, [], 'mass');
+    ok('from a top out over open ground, let go there: a flight down', op && !op.refused && op.why === 'stairs' && op.connect?.to?.[0] === 0, op); }
+  // (a way begun on a house's roof: from the ground beside it, the roof kept)
+  { const w = story(15), BUm = BU;
+    const house = BUm.buildings(w).list.find((b) => b.roof && !b.tower);
+    if (house) {
+      const [i, j] = house.cols[0], k = house.h - 1;
+      const out = [house.i1 + 1, j], far = [house.i1 + 4, j];
+      const cells = G.connect([[i, j], out, far]);
+      const op = G.trace(w, { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }, cells, null, () => 0, 0, [], 'way');
+      ok('a way begun on a roofed house starts on the ground beside it', op && !op.refused && op.connect && op.connect.from[0] === w.ground(op.connect.from[1], op.connect.from[2]) && !house.cols.some((c) => c[0] === op.connect.from[1] && c[1] === op.connect.from[2]), op?.connect?.from);
+    } else ok('story 15 has a roofed house to begin a way on', false);
+  }
+  // (a way begun on the land that ends where nothing can stand: it ends where something can, not nothing at all)
+  { const w = new World(1, 9);
+    let water = null; for (let i = 0; i < 12 && !water; i++) for (let j = 0; j < 12 && !water; j++) if (w.pool(i, j) && !w.pool(i - 4, j) && NAV.standing(w, w.ground(i - 4, j), i - 4, j)) water = [i, j];
+    if (water) { const cells = G.connect([[water[0] - 4, water[1]], water]); const op = G.trace(w, { face: 'ground', hit: [w.ground(...cells[0]) - 1, ...cells[0]], to: [w.ground(...cells[0]), ...cells[0]] }, cells, { face: 'ground', hit: [w.ground(...water) - 1, ...water], to: [w.ground(...water), ...water] }, () => 0, 0, [], 'way');
+      ok('a way drawn into the water: to its edge, or said why, never nothing', op !== null, op); }
+  }
   // (a stroke's wobble, a cell aside and back, taken out)
   ok('a wobble taken out of a stroke', JSON.stringify(G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]])) === JSON.stringify([[0, 0], [1, 0], [2, 0], [3, 0]]), G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]]));
 }

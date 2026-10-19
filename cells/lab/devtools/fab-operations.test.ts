@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {begin,state,record,restore,travel} from '../client/fab/journal';
+import {DEFAULT_DESIGN as DEFAULT} from '../client/fab/pattern';
+import {recipeFor} from '../client/fab/garment';
+const d={...DEFAULT},r=recipeFor(d);r.printScale=2;
+let j=begin(state(d,r));const next={...r};delete next.printScale;
+j=record(j,state(d,next),'cloth/print');assert.equal(j.cursor,1);assert.equal(restore(j).recipe.printScale,undefined);
+assert.equal(record(j,state(d,next)).cursor,1,'clears are idempotent');
+assert.equal(restore(travel(j,-1)).recipe.printScale,2);
+j=record(travel(j,-1),state({...d,neck:'v'},r),'front/neck');assert.equal(j.operations.length,1);assert.equal(restore(j).design.neck,'v');
+const restored=restore(JSON.parse(JSON.stringify(j)));assert.equal(restored.design.neck,'v');
+console.log('PASS journal clears, undo, branching, serialized replay');

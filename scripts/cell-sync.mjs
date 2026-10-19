@@ -134,7 +134,7 @@ const BATCH_CHANGES = 200;
 
 /** Repo-side entries that are not cell source: dot-files (the cells service
  *  rejects them as path segments anyway), dependency trees, and native/.
- *  (Each cell's devtools/ is mirrored up push-only, the files git tracks —
+ *  (Each cell's devtools/ syncs both ways, the files git would keep —
  *  cell-sync-plan.cjs `isMirrored`.)
  *
  *  NATIVE IS NOT SERVABLE, AND CANNOT BE STORED EITHER. Electron and Capacitor
@@ -161,10 +161,11 @@ function storedBytes(abs, path) {
 
 // ─── the three states ────────────────────────────────────────────────
 
-/** The cell's `devtools/` files git tracks (relative to the cell), the only ones mirrored up; none if git can't say. */
+/** The cell's `devtools/` files git would keep (tracked, or new and not ignored), relative to the cell: the only ones
+ *  synced; none if git can't say. */
 function trackedDevtools(localRoot) {
   try {
-    const out = execFileSync('git', ['ls-files', '-z', '--', 'devtools'], { cwd: localRoot, encoding: 'utf8', maxBuffer: 64 << 20 });
+    const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'devtools'], { cwd: localRoot, encoding: 'utf8', maxBuffer: 64 << 20 });
     return new Set(out.split('\0').filter(Boolean));
   } catch { return new Set(); }
 }
