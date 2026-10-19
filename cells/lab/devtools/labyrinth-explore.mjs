@@ -7,7 +7,7 @@
 // where the finger paused; a ring drawn round and not read as one. What's flagged is written case by case, its before
 // and after apart (plans, and the world to replay in the browser), for reading blind: the before first, what the hand
 // must have meant written down, then the after. Only cases where seeing it drawn could matter go to WebGL.
-//   --worlds=N   --runs=N (runs a world)   --n=N (gestures a run)   --seed=N   --sample=N (cases written per flag)
+//   --worlds=N   --runs=N (runs a world)   --n=N (gestures a run)   --seed=N   --sample=N (cases written per flag)   --cases=id,id (written too)
 import './labyrinth-node.mjs';
 import { mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -65,7 +65,7 @@ function gesture(w, R, intent) {
   for (let i = box.i0; i <= box.i1; i++) for (let j = box.j0; j <= box.j1; j++) cells.push({ i, j, ...column(w, i, j) });
   const built = cells.filter((c) => c.built), pickC = (from = cells) => from[Math.floor(R() * from.length)];
   const near = (c, d0, d1) => cells.filter((q) => { const d = Math.hypot(q.i - c.i, q.j - c.j); return d >= d0 && d <= d1; });
-  const kinds = [['tap', 2], ['sweep', 3], ['meander', 1.5], ['loop', 1.5], ['pause', 1], ...(built.length ? [['tapTop', 1.5], ['fromTop', 2.5], ['lift', 0.8]] : [])];
+  const kinds = [['tap', 2], ['sweep', 3], ['meander', 1.5], ['loop', 1.5], ['pause', 1], ...(built.length ? [['tapTop', 1.5], ['fromTop', 2.5], ...(intent === 'mass' ? [['lift', 0.8]] : [])] : [])];
   let r = R() * kinds.reduce((a, k) => a + k[1], 0), kind = kinds[0][0];
   for (const [k, wgt] of kinds) { if ((r -= wgt) <= 0) { kind = k; break; } }
   if (kind === 'tap' || kind === 'tapTop' || kind === 'lift') { const c = pickC(kind === 'tap' ? cells : built); return { kind, intent, at: [c.i, c.j], ...(kind === 'lift' ? { by: R() < 0.7 ? 1 + Math.floor(R() * 3) : -1 - Math.floor(R() * 2) } : {}) }; }
@@ -156,6 +156,8 @@ writeFileSync(join(OUT, 'summary.json'), `${JSON.stringify(summary, null, 1)}\n`
 // (a sample of each flag, written apart: what's to be read blind, and what's revealed after)
 const picked = new Set();
 for (const f of Object.keys(tally)) for (const c of flagged.filter((c) => c.flags.includes(f)).slice(0, SAMPLE)) picked.add(c);
+// (and any asked for by name: --cases=land2-r0-g1,story8-r0-g4)
+for (const c of flagged) if ((opt.cases ?? '').split(',').includes(c.id)) picked.add(c);
 for (const c of picked) {
   const dir = join(OUT, 'cases', c.id); mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'before.json'), `${JSON.stringify({ id: c.id, world: c.before, gesture: c.gesture }, null, 1)}\n`);

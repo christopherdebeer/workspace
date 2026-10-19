@@ -531,7 +531,9 @@ function traceStep(cx: number, cy: number, final: boolean) {
       g.lifting = upright || Math.abs(dx) <= Math.abs(dy) * 0.45;
       if (g.lifting) {
         const r = lift(before, g.start, n, g.born), op = r && !('refused' in r) ? r : null;
-        g.said = r && 'refused' in r ? r.refused : '';
+        const said = r && 'refused' in r ? r.refused : '';
+        if (said && said !== g.said) say(said);
+        g.said = said;
         lay(op); g.op = op;
         if (final && op) { settle([...(op.add ?? []), ...(op.walls ?? [])].map((q) => [q[0], q[1], q[2]])); kept(); say(op.alts?.length && heldHints++ < 4 ? `${op.note} · hold at the end to read it otherwise` : op.note ?? ''); showAlts(op, op.alts, g.base); }
         return;

@@ -203,7 +203,7 @@ ok(`auto never builds into a stair's way (${ways.ok} of ${ways.tried})`, ways.ok
     for (let k = 0; k < 2; k++) w.apply({ add: [[k, 5, 8, 0]] });
     w.apply({ trees: [[0, 5, 7, 0]] });
     const steep = G.trace(w, ground(5, 6), [[5, 6], [5, 7]], top(5, 8), () => 0);
-    ok('too steep, and no room for a tower: a walkway out toward it, saying why', !steep?.refused && steep?.why === 'walkway' && /steep/.test(steep.note), steep);
+    ok('too steep, and no room for a tower: a walkway out toward it if one lays anything, else refused, saying why', (!steep?.refused && steep?.why === 'walkway' && /steep/.test(steep.note)) || /steep/.test(steep?.refused), steep);
   }
   const long = G.trace(w, ground(2, 5), [[2, 5], [3, 5], [4, 5], [5, 5]], top(6, 5), () => 0);
   ok('drawn longer: stairs', long?.why === 'stairs', long);
