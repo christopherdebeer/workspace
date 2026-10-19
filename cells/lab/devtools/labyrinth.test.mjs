@@ -674,7 +674,7 @@ stands(s4, 'story 4');
     ok('and has room for stairs where the zigzag had none', ST(z, null).length === 0 && ST(s4, null).length >= 2, ST(s4, null)); }
   // (ways on the land, drawn as a hand draws them (diagonal, curving): never an empty way. Each builds something, or
   // says why not)
-  { let tried = 0, empty = 0, reached = 0;
+  { let tried = 0, empty = 0, reached = 0, refused = 0;
     for (const seed of [3, 5, 8]) {
       const w = new World(1, seed);
       for (let n = 0; n < 60; n++) {
@@ -683,15 +683,22 @@ stands(s4, 'story 4');
         const cells = path(pts), end = cells.at(-1);
         if (!w.onSlab(...end) || !w.onSlab(...cells[0])) continue;
         const op = G.trace(w, groundPick(w, ...cells[0]), cells, groundPick(w, ...end), () => 0, 0, [], 'way');
-        if (!op || op.refused) continue;
+        if (!op) continue;
         tried++;
+        if (op.refused) { refused++; continue; }
         const sim = new World(1, seed); sim.ops = [op]; sim.rebuild();
         const r = sim.reached.get(op);
-        if (op.connect?.follow && r && !r.cells.length) empty++;
+        if (op.connect?.follow && r && !r.reached && !r.cells.length && !cells.slice(1).some(([i, j]) => sim.paved(i, j))) empty++;
         if (r?.reached) reached++;
       }
     }
     ok('ways drawn across the land as a hand draws them: none comes to an empty way', tried > 40 && empty === 0, { tried, empty, reached });
+    ok('and few are refused (a level way is paving, and paving is something)', refused <= tried * 0.1, { tried, refused });
+    // (a way on level ground: all paving, no stone, and that's a way built, not "no way along that")
+    { const w = new World(1, 2); let flat = null;
+      for (let j = 1; j < 11 && !flat; j++) for (let i = 1; i < 8 && !flat; i++) if ([0, 1, 2, 3].every((d) => w.ground(i + d, j) === w.ground(i, j) && NAV.standing(w, w.ground(i + d, j), i + d, j))) flat = [i, j];
+      const cells = G.connect([flat, [flat[0] + 3, flat[1]]]), op = G.trace(w, groundPick(w, ...cells[0]), cells, null, () => 0, 0, [], 'way');
+      ok('a way over level ground: paved, not refused', op && !op.refused && op.connect?.follow, op); }
     ok('and most reach where they were drawn to', reached > tried * 0.6, { tried, reached }); }
   // (a touch on the land with a way in hand: a place to stand, paved; near a way's end, the way brought on to it)
   { const w = new World(1, 3);

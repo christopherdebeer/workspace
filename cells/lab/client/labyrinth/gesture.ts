@@ -312,6 +312,13 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   // (it starts at the first place along it that can be stood on, and ends at the last: begun in the water, or run off
   // into it, it's the way to and from its banks)
   if (h0 === w.ground(cells[0][0], cells[0][1]) && !standing(w, h0, cells[0][0], cells[0][1])) {
+    // (begun in the water at its edge: from the bank behind it, across it, the way the stroke went)
+    const [i0, j0] = cells[0], next = cells[1], back = DIRS.map(([a, b]) => [i0 + a, j0 + b] as [number, number])
+      .filter(([x, z]) => inGrid(x, z) && standing(w, w.ground(x, z), x, z) && !cells.some((c) => c[0] === x && c[1] === z))
+      .sort((p, q) => (next ? Math.hypot(q[0] - next[0], q[1] - next[1]) - Math.hypot(p[0] - next[0], p[1] - next[1]) : 0));
+    if (back.length) { cells = [back[0], ...cells]; h0 = w.ground(...back[0]); }
+  }
+  if (h0 === w.ground(cells[0][0], cells[0][1]) && !standing(w, h0, cells[0][0], cells[0][1])) {
     const q = cells.findIndex(([i, j]) => standing(w, w.ground(i, j), i, j));
     if (q < 0) return { refused: 'that\'s all water: a way wants somewhere to stand' };
     cells = cells.slice(q); h0 = w.ground(cells[0][0], cells[0][1]);
@@ -343,12 +350,12 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   if (!r?.reached && tower) return { ...tower, alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, { label: 'a walkway at the height it starts', op: walkway }] };
   // (nothing of it can be made from where it starts (begun on a rock, or the foot of a bank too steep to climb there):
   // begun a cell or two on, where it can; and if nothing at all, said, not built empty)
-  if (!r?.cells.length) {
+  if (!r?.reached && !r?.cells.length && !paved) {
     for (let q = 1; q <= 3 && q < cells.length - 1; q++) {
       const [i, j] = cells[q], g = w.ground(i, j);
       if (!standing(w, g, i, j)) continue;
       const on = way(w, g, cells.slice(q), to, now, resting);
-      if (on && !('refused' in on)) { const sim2 = new World(w.seed, w.landSeed); sim2.ops = [...w.ops, on]; sim2.rebuild(); if (sim2.reached.get(on)?.cells.length) return { ...on, note: `${on.note}, begun a step on`, reading: `${on.reading ?? on.note}, begun a step on` }; }
+      if (on && !('refused' in on)) { const sim2 = new World(w.seed, w.landSeed); sim2.ops = [...w.ops, on]; sim2.rebuild(); if (sim2.reached.get(on)?.cells.length || cells.slice(q + 1).some(([x, z]) => sim2.paved(x, z))) return { ...on, note: `${on.note}, begun a step on`, reading: `${on.reading ?? on.note}, begun a step on` }; }
     }
     return { refused: 'no way along that: it climbs too steeply for its length' };
   }
