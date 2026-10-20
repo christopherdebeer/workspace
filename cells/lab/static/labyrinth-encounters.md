@@ -210,6 +210,13 @@ The first rule, **ways meet** (encounters 12 and 19, and Astra's two bridges mee
 
 The second rule, **ways a level apart** (Astra's "two bridges cross at different heights": a connection offered by the geometry, not forced): two of the hand's ways side by side, one a level higher, a cell between them where a step would go. Rungs: left as they are (the layering legible; the restrained answer, and the default); a step between them; the step with a lantern at its head. Adding it took about forty lines of rule and an eight-line scene, and it passed every generic check in all eight orientations on its first run; the one thing the unit tests found (a derived step whose own way the hand's stone stood in) was fixed in the framework (a stair a candidate lays must have its way clear), so every later rule has it. A rung can also lay nothing (its verb *separate*); the walk check skips it, and the meeting stays selectable at its anchor.
 
+The third, **a way ends in the air** (encounter 16's balcony, and every walkway a hand lifts its finger from mid-air): a raised way of the hand's whose stroke ends on stone with nothing beyond it or beside it to step on to, and nothing near (that's a meeting of two ways, and the first rule's). Rungs: a parapet across its end (the default: a figure comes to a rail, not a drop, so every such end is resolved without being asked); a small terrace at its end, three cells across, balustraded (a belvedere); the belvedere on its own pier, a lantern at it.
+
+The fourth, **ways cross** (Astra's "a crossing: the lower passage is kept and the upper surface becomes a bridge", carried a step further): two of the hand's ways, one over the other two to four levels apart, square across. Rungs: left as they are (a way over a way is often the point); a straight flight from the lower way, up beside it, to the upper's deck (its foot by the lower way, its head on the upper's walk, on the first of the four sides with room); the flight with a lantern at its head. The one thing the generic checks caught was in the checks themselves: a flight's steps are each in the way of the step below, which is the flight going on, not a claim crossed.
+
+![ways cross: left as they are; a flight from the lane up to the bridge's deck; the flight with a lantern at its head](labyrinth/e-cross.jpg)
+![a way ends in the air: a parapet across its end; a balustraded belvedere; on its own pier, a lantern](labyrinth/e-belvedere.jpg)
+
 ### Adding an encounter
 
 1. Write the rule in `encounters.ts`: `find(w)` returns meetings, each `{ rule, name, anchor, cells, by, candidates, insists? }`; candidates are operations made with the verbs (add a verb if a new kind of change is needed, once, for every rule after).
@@ -218,3 +225,5 @@ The second rule, **ways a level apart** (Astra's "two bridges cross at different
 4. `--render` draws the scene at every rung in WebGL.
 
 Next rules, by what the exercise found most (frame, merge, step, yield, carry): a flight meeting a terrace (15: notch, top landing, half-landing), two flights opposed (switchback), a way meeting a tree (11, 14: yield, bow, ring), a balcony on rock (16: carry by what's there).
+
+Some encounters need no rule at all, because a foundation answers them: a tower over a way, or rooms on a bridge, are buildings with a passage through their foot (`buildings.ts`), so the gatehouse and the inhabited bridge come of the reserved void and the building reading together (`labyrinth-connective.md`, Progress).

@@ -26,8 +26,8 @@ export type Verb = 'merge' | 'open' | 'carry' | 'wrap' | 'step' | 'shelter' | 'f
 export type Level = 0 | 1 | 2;
 export interface Candidate { level: Level; label: string; verbs: Verb[]; op: Op }
 export interface Meeting {
-  /** which rule found it, and what it's called */
-  rule: string; name: string;
+  /** which rule found it, and what it's called; and how a stroke that makes it says where (by default "where it meets") */
+  rule: string; name: string; where?: string;
   /** where it's anchored (a choice is kept against this cell), and the cells it acts on (for selecting it) */
   anchor: Cell; cells: Cell[];
   /** the hand's operations that made it (their places in `ops`) */
@@ -167,11 +167,103 @@ const levelApart: Rule = {
   },
 };
 
+/**
+ * A raised way of the hand's that ends in the air: its stroke's last cell on stone, nothing at its height beyond it or
+ * beside it to step on to, and nothing near (that's a meeting of two ways, not an end). The ladder: a parapet across
+ * its end (a figure comes to a rail, not a drop); a small terrace there, railed (a belvedere); the terrace on its own
+ * pier, a lantern at it.
+ */
+const wayEnds: Rule = {
+  id: 'way-ends',
+  find(w) {
+    const out: Found[] = [], walks = w.ops.map((op) => w.walks.get(op) ?? []), walked = new Map<number, number>();
+    walks.forEach((cs, n) => { for (const c of cs) if (!walked.has(key(...c))) walked.set(key(...c), n); });
+    walks.forEach((cs, a) => {
+      if (cs.length < 2 || w.ops[a].derived) return;
+      const e = cs[cs.length - 1], p = cs[cs.length - 2], [k, i, j] = e, dx = i - p[1], dz = j - p[2];
+      if (k <= w.ground(i, j) || !w.stone(k - 1, i, j) || p[0] !== k || Math.abs(dx) + Math.abs(dz) !== 1) return;
+      // (nothing it arrives at: beyond it or beside it, a place or a stair, or anything at its height within two cells
+      // that another way walks or that could be stood on)
+      for (const [x, z] of [[dx, dz], [dz, dx], [-dz, -dx]]) if (place(w, [k, i + x, j + z]) || w.occupied(k, i + x, j + z) || w.stair(k - 1, i + x, j + z) >= 0) return;
+      for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) {
+        const c: Cell = [k, i + x, j + z], b = walked.get(key(...c)) ?? -1;
+        if ((b >= 0 && b !== a) || (b < 0 && place(w, c) && Math.abs(x) + Math.abs(z) > 1)) return;
+      }
+      const m: Cell = [k, i + dx, j + dz], born = w.ops[a].born ?? 0;
+      if (!open(w, m)) return;
+      const sides = [[dz, dx], [-dz, -dx]].map(([x, z]) => [k, m[1] + x, m[2] + z] as Cell).filter((c) => open(w, c));
+      const rail = (c: Cell, kind: number = DRESS.parapet): Op => ({ dress: [[c[0] - 1, c[1], c[2], kind, 1]] });
+      const terrace = join(...[m, ...sides].map((c) => join(floor(w, c, born), rail(c, DRESS.balustrade))));
+      out.push({
+        rule: this.id, name: 'a way ending in the air', where: 'at its end', anchor: m, cells: [m, e], by: [a], insists: ways,
+        candidates: [
+          { level: 0, label: 'a parapet across its end', verbs: ['frame'], op: rail(e) },
+          { level: 1, label: 'a small terrace at its end, railed: a belvedere', verbs: ['merge', 'frame'], op: terrace },
+          { level: 2, label: 'the belvedere on its own pier, a lantern at it', verbs: ['merge', 'carry', 'frame'], op: join(terrace, pier(m), lantern(m)) },
+        ],
+      });
+    });
+    return out;
+  },
+};
+
+/**
+ * Two of the hand's ways crossing at different heights, two to four levels apart (a bridge over a lane, a walkway over
+ * a way): one's walk over the other's, square across it. The ladder: left as they are, one over the other (a way over a
+ * way is often the point); a straight flight from the lower, up beside it, to the upper's deck (its foot by the lower
+ * way, its head on the upper's walk); the flight, a lantern at its head.
+ */
+const waysCross: Rule = {
+  id: 'ways-cross',
+  find(w) {
+    const out: Found[] = [], walks = w.ops.map((op) => w.walks.get(op) ?? []), at = new Map<number, number>(), pairs = new Set<string>();
+    walks.forEach((cs, n) => { for (const c of cs) if (!at.has(key(...c))) at.set(key(...c), n); });
+    /** which way a way runs at a cell of its walk (by its neighbours along it), or -1 */
+    const axis = (cs: Cell[], q: number) => { const n = cs[q + 1] ?? cs[q - 1]; return n ? (n[1] !== cs[q][1] ? 0 : 1) : -1; };
+    walks.forEach((cs, b) => cs.forEach((u, qu) => {
+      const [k2, i, j] = u, aU = axis(cs, qu);
+      for (let k = k2 - 2; k >= Math.max(0, k2 - 4); k--) {
+        const a = at.get(key(k, i, j)) ?? -1;
+        if (a < 0 || a === b || pairs.has(`${a}.${b}`)) continue;
+        const lower = walks[a], aL = axis(lower, lower.findIndex((c) => c[0] === k && c[1] === i && c[2] === j));
+        if (aU < 0 || aL < 0 || aU === aL) continue;
+        const H = k2 - k, [ux, uz] = DIRS[aU], born = Math.max(w.ops[a].born ?? 0, w.ops[b].born ?? 0);
+        // (the flight: beside the lower way, on the side the upper's walk goes on, climbing toward it, and the first of
+        // the four that has room)
+        for (const [s, t] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+          const d = t > 0 ? aL : aL + 2, [lx, lz] = DIRS[d], C: Cell = [k2, i + s * ux, j + s * uz];
+          if (at.get(key(...C)) !== b) continue;
+          const foot: Cell = [k, C[1] - (H + 1) * lx, C[2] - (H + 1) * lz];
+          if (!place(w, foot) || at.get(key(k, i - (H + 1) * lx, j - (H + 1) * lz)) !== a) continue;
+          const flight: Op[] = [];
+          for (let q = 0; q < H; q++) {
+            const c: Cell = [k + q, C[1] - (H - q) * lx, C[2] - (H - q) * lz];
+            flight.push(join(c[0] > w.ground(c[1], c[2]) && !w.stone(c[0] - 1, c[1], c[2]) ? floor(w, c, born) : {}, { stairs: [[c[0], c[1], c[2], d, born]] }));
+          }
+          const stair = join(...flight), cand: Candidate = { level: 1, label: '', verbs: [], op: stair };
+          if (!keeps(w, cand, new Set())) continue;
+          pairs.add(`${a}.${b}`);
+          out.push({
+            rule: this.id, name: 'two ways crossing, one over the other', where: 'where they cross', anchor: [k, i, j], cells: [[k, i, j], u, foot, C], by: [a, b].sort((p, q) => p - q), insists: ways,
+            candidates: [
+              { level: 0, label: 'one over the other, left as they are', verbs: ['separate'], op: {} },
+              { level: 1, label: 'a flight from the lower up to the upper', verbs: ['step'], op: stair },
+              { level: 2, label: 'the flight, a lantern at its head', verbs: ['step', 'frame'], op: join(stair, lantern(C)) },
+            ],
+          });
+          break;
+        }
+      }
+    }));
+    return out;
+  },
+};
+
 /** what counts as making two ways' meeting again: another way (not the stone round it) */
 const ways = (op: Op) => !!op.connect || !!op.pave?.length;
 
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds];
 
 // ─── resolving them ───
 

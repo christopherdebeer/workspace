@@ -1182,11 +1182,14 @@ export function parapets(w: World, plain = false) {
     // (a parapet of its own accord along anything carried high: a bridge, or an arch two levels up or more; along a
     // colonnade, a balustrade)
     const colonnade = sp?.order === 'colonnade' || onColumn(w, k, i, j);
-    const bridge = (!!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j))) || colonnade;
+    // (and along a way the hand laid to be walked two levels up or more, whatever carries it: railed as it was laid,
+    // not as the arches under it happen to fall)
+    const walkedHigh = !colonnade && w.passage(k + 1, i, j) >= 0 && k + 1 - w.ground(i, j) >= 2 && w.archway(k + 1, i, j) < 0;
+    const bridge = (!!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j))) || colonnade || walkedHigh;
     if (!d?.parapet && !bridge) continue;
     // (on a flowing wall, round its curve or along its diagonal)
     if (w.block(k, i, j) && outline(w, k, i, j).flow) { flowRails.set(v, d?.parapet && d.rail ? d.rail : DRESS.parapet); continue; }
-    const along = sp ? sp.a : colonnade ? (w.span(k, i + 1, j) || w.span(k, i - 1, j) ? 0 : 1) : -1;
+    const along = sp ? sp.a : colonnade ? (w.span(k, i + 1, j) || w.span(k, i - 1, j) ? 0 : 1) : walkedHigh ? w.passage(k + 1, i, j) : -1;
     edges.set(v, DIRS.map(([a, b], q) => (!!d?.parapet || q % 2 !== along) && !(w.stone(k, i + a, j + b) || w.earth(k, i + a, j + b) || w.stair(k, i + a, j + b) >= 0 || w.occupied(k + 1, i + a, j + b) || w.stair(k + 1, i + a, j + b) >= 0)));
     rails.set(v, d?.parapet && d.rail ? d.rail : colonnade ? DRESS.balustrade : DRESS.parapet);
   }

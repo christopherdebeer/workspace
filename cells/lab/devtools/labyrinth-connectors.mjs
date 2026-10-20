@@ -4,9 +4,9 @@
 // shut by what's added over it, a route stopped by a wall it was drawn through, a tower reached at a blank face, a
 // whole roof lost to a step on to part of it). Endpoints and clearance, not just that the world joins up somewhere.
 //   --only=NAME   --ops (print each scene's ops, to replay with ?ops= in the browser)   --render (each scene, unturned,
-//   drawn by the page in WebGL: devtools/out/connectors/*.png)
+//   drawn by the page in WebGL: devtools/out/connectors/*.png; --zoom=, --turn= to frame them)
 import './labyrinth-node.mjs';
-const { World, key } = await import('../client/labyrinth/model.ts');
+const { World, key, DIRS } = await import('../client/labyrinth/model.ts');
 const G = await import('../client/labyrinth/gesture.ts');
 const NAV = await import('../client/labyrinth/nav.ts');
 const BU = await import('../client/labyrinth/buildings.ts');
@@ -55,7 +55,9 @@ function meetings(w, tag, expect) {
       const v = replay(w.encode(), w.seed); v.apply({ choose: [[...m.anchor, c.level]], why: 'reading' });
       const n = v.meetings.find((q) => q.anchor.join() === m.anchor.join());
       ok(`${tag}: chosen, rung ${c.level} (${c.label}) is what's laid`, n?.laid === c.level, n && { laid: n.laid, wanted: n.wanted });
-      const intoClaims = (n?.at ?? []).filter(([k, i, j]) => (v.passage(k, i, j) >= 0 && !v.archway(k, i, j)) || v.way(k, i, j));
+      // (a flight's steps are each in the way of the one below: that's the flight going on, not a claim crossed)
+      const flightOn = (k, i, j) => { const d = v.stair(k, i, j); return d >= 0 && v.stair(k - 1, i - DIRS[d][0], j - DIRS[d][1]) === d; };
+      const intoClaims = (n?.at ?? []).filter(([k, i, j]) => (v.passage(k, i, j) >= 0 && !v.archway(k, i, j)) || (v.way(k, i, j) && !flightOn(k, i, j)));
       ok(`${tag}: rung ${c.level} lays nothing in a passage or a stair's way`, !intoClaims.length, intoClaims);
       // (walked between: from one's end to the other's, or to the top it fell short of; unless this rung is to leave
       // them apart)
@@ -216,6 +218,24 @@ const SCENES = [
       meetings(w, this.tag, 'ways-a-level-apart');
     },
   },
+  {
+    name: 'a way ends in the air: a raised walkway out from a top into nothing',
+    run(w, H) {
+      H.column([3, 4], 2); H.walkway([[3, 4], [4, 4], [5, 4], [6, 4], [7, 4]]);
+      meetings(w, this.tag, 'way-ends');
+      const [, i, j] = at(w, H.T, [7, 4]);
+      ok(`${this.tag}: left to itself, a rail across the end`, !!w.dressed(1, i, j)?.parapet, w.dressed(1, i, j));
+    },
+  },
+  {
+    name: 'ways cross at two levels: a way, then a bridge over it',
+    run(w, H) {
+      H.stroke([6, 3], [6, 9], 'way');
+      H.column([3, 6], 2); H.column([9, 6], 2);
+      H.stroke([3, 6], [9, 6], 'mass', [9, 6]);
+      meetings(w, this.tag, 'ways-cross');
+    },
+  },
 ];
 
 const t0 = Date.now(), scenes = [];
@@ -243,7 +263,7 @@ if (opt.render) {
   mkdirSync(new URL('./out/connectors/', import.meta.url), { recursive: true });
   await withWood(async (lab) => {
     for (const [n, sc] of scenes.entries()) {
-      const p = await lab.open(`instant&zoom=0.9&ops=${encodeURIComponent(sc.ops)}`);
+      const p = await lab.open(`instant&zoom=${opt.zoom ?? 0.9}&turn=${opt.turn ?? 0}&ops=${encodeURIComponent(sc.ops)}`);
       await p.waitForTimeout(9000);
       const file = new URL(`./out/connectors/${String(n + 1).padStart(2, '0')}-${sc.name.split(':')[0].replace(/[^a-z]+/gi, '-')}.png`, import.meta.url).pathname;
       await p.screenshot({ path: file, timeout: 300000 });

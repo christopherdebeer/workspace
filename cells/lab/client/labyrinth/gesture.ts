@@ -257,8 +257,8 @@ function meeting(w: World, op: Op): Op {
   const sim = new World(w.seed, w.landSeed); sim.ops = [...w.ops, op]; sim.rebuild();
   const m = sim.meetings.find((q) => q.by.includes(w.ops.length) && q.candidates.length > 1);
   if (!m) return op;
-  const now = m.candidates.find((c) => c.level === m.laid), note = now ? `${op.note ?? op.reading ?? op.why}; where it meets: ${now.label}` : op.note;
-  const others: Alt[] = m.candidates.filter((c) => c.level !== m.laid).map((c) => ({ label: `where it meets: ${c.label}`, op: { ...op, alts: undefined, choose: [...(op.choose ?? []), [...m.anchor, c.level] as [number, number, number, number]], note: `${op.note ?? op.why}; where it meets: ${c.label}` } }));
+  const where = m.where ?? 'where it meets', now = m.candidates.find((c) => c.level === m.laid), note = now ? `${op.note ?? op.reading ?? op.why}; ${where}: ${now.label}` : op.note;
+  const others: Alt[] = m.candidates.filter((c) => c.level !== m.laid).map((c) => ({ label: `${where}: ${c.label}`, op: { ...op, alts: undefined, choose: [...(op.choose ?? []), [...m.anchor, c.level] as [number, number, number, number]], note: `${op.note ?? op.why}; ${where}: ${c.label}` } }));
   return { ...op, note, alts: [...(op.alts ?? []), ...others] };
 }
 
