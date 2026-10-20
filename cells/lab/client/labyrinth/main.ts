@@ -208,6 +208,8 @@ type Gesture = {
   before?: World; h0?: number; cells: Array<[number, number]>; target: Pick | null; cand: string; candPick: Pick | null; count: number; laid: string; said: string; born: number;
   /** what the stroke builds now (or why it can't), for the guides */
   op?: Op | null;
+  /** refused, what it could be instead: held, they're offered, none taken unasked */
+  instead?: Alt[];
   /** where the finger paused on the way, and when it last moved */
   rest: Array<[number, number]>; moved: number;
   /** whether it's lifting (or lowering) the stone it started on: drawn straight up or down the screen from it */
@@ -415,6 +417,7 @@ const HOLD = 650, LEAN = 28, BEYOND = 170;
 function readingsNow(): Array<{ label: string; op: Op }> | null {
   if (!g) return null;
   const strip = (o: Op): Op => ({ ...o, alts: undefined });
+  if (g.mode === 'trace' && !g.op && g.instead?.length) return g.instead.map((a) => ({ label: a.label, op: strip(a.op) }));
   if (g.mode === 'trace' && g.op?.alts?.length) return [{ label: g.op.reading ?? g.op.note ?? 'as drawn', op: strip(g.op) }, ...g.op.alts.map((a) => ({ label: a.label, op: strip(a.op) }))];
   if (g.mode === 'pending' && g.start && brush === 'auto') {
     const r = tap(world, g.start, now(), false, intent);
@@ -432,6 +435,8 @@ function openFan() {
   g.offered = true;
   const tapped = g.mode === 'pending';
   if (tapped) world.apply(list[0].op, now());
+  // (a stroke refused: what it could be instead, the first of them laid while they're out)
+  else if (!g.op) lay(list[0].op);
   fan = { x: f.x, y: f.y, list, at: 0, tap: tapped };
   say('lean toward another reading · let go to keep it');
 }
@@ -558,7 +563,8 @@ function traceStep(cx: number, cy: number, final: boolean) {
   for (const [i, j] of g.cells) if (!g.seen.has(`${i}.${j}`)) g.seen.set(`${i}.${j}`, now());
   const op = trace(before, g.start, g.cells, g.target, (i, j) => g!.seen.get(`${i}.${j}`) ?? now(), g.born, g.rest, intent);
   const refused = op && 'refused' in op ? op.refused : '';
-  if (refused && refused !== g.said) say(refused);
+  g.instead = op && 'refused' in op ? op.alts : undefined;
+  if (refused && refused !== g.said) say(g.instead?.length ? `${refused} · hold to ${g.instead[0].label}` : refused);
   if (final && refused) declined('trace', refused);
   g.said = refused;
   let built = op && !('refused' in op) ? op : null;

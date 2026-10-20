@@ -36,6 +36,8 @@ export function span(w: World, k: number, i: number, j: number, only?: number): 
     while (hi < 7 && w.free(k, i + (hi + 1) * di, j + (hi + 1) * dj)) hi++;
     const n = lo + hi + 1;
     if (n > 7 || !w.stone(k, i - (lo + 1) * di, j - (lo + 1) * dj) || !w.stone(k, i + (hi + 1) * di, j + (hi + 1) * dj)) continue;
+    // (never across a stair's way: a bridge laid over its foot, its head or the room over them would shut it)
+    if (Array.from({ length: n }, (_, q) => [i + (q - lo) * di, j + (q - lo) * dj]).some(([x, z]) => w.way(k, x, z))) continue;
     if (!best || n < best.n) best = { a, i: i - lo * di, j: j - lo * dj, n };
   }
   return best;

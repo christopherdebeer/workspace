@@ -672,6 +672,11 @@ stands(s4, 'story 4');
     ok('a zigzag gathered into straight runs: it starts and ends where it did', JSON.stringify(s4[0]) === '[0,0]' && JSON.stringify(s4.at(-1)) === '[4,4]' && s4.length === z.length, s4);
     const ST = (await load('../client/labyrinth/model.ts')).straights;
     ok('and has room for stairs where the zigzag had none', ST(z, null).length === 0 && ST(s4, null).length >= 2, ST(s4, null)); }
+  // (a ring drawn on past its start, over its own second cell: closed there, not cut back to two cells by "doubling back")
+  { const ring = [[5, 13], [5, 12], [4, 12], [4, 11], [3, 11], [3, 10], [4, 10], [4, 9], [4, 8], [5, 8], [6, 8], [7, 8], [8, 8], [8, 9], [8, 10], [8, 11], [8, 12], [7, 12], [6, 12], [5, 12]], r = G.walk(ring);
+    ok('a ring drawn on past its start is a ring (a lasso), not a stroke cut short', r.closed && r.cells.length >= 18, r);
+    const short = G.walk([[1, 1], [2, 1], [3, 1], [2, 1], [2, 2]]);
+    ok('and a stroke doubling straight back over itself is still taken once', !short.closed && short.cells.length === 3, short); }
   // (a tap on a top with a way in hand: a way up on to it, that reaches it; on a house's roof, said, not a way up)
   { const w = new World(3), top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] });
     for (let k = 0; k < 2; k++) w.apply({ add: [[k, 6, 5, 0]] });

@@ -76,6 +76,9 @@ export interface Op {
   /** what it is as a reading of the gesture that made it, and the other ways that gesture could have been read (a
    * touch after it reads it so instead); neither kept */
   reading?: string; alts?: Alt[];
+  /** the liberties the reading took with the gesture as it was made (re-routed, begun elsewhere, another kind of thing
+   * than drawn: `gesture.ts` names them), so how often a hand gets other than it drew can be counted; not kept */
+  took?: string[];
 }
 /** readings of the rules' work a hand can switch to: an arch read as a lintel, a pier asked for; a building's roof (none, or
  * which kind), kept at the lowest cell of its top */

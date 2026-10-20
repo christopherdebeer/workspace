@@ -15,12 +15,13 @@ const { World, key, unkey } = await import('../client/labyrinth/model.ts');
 const G = await import('../client/labyrinth/gesture.ts');
 const { story } = await import('../client/labyrinth/demo.ts');
 const { buildings } = await import('../client/labyrinth/buildings.ts');
+const { rng, column, state, gesture, read } = await import('./labyrinth-gestures.mjs');
 
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
 const OUT = opt.out ?? 'explore-out', RUNS = Number(opt.runs) || 3, N = Number(opt.n) || 8, SAMPLE = Number(opt.sample) || 6;
 if (existsSync(OUT) && readdirSync(OUT).length) throw new Error('Use a fresh --out directory');
 mkdirSync(OUT, { recursive: true });
-const rng = (s) => () => { s |= 0; s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+
 
 // (the worlds: lands of many seeds, the bare stone, and the stories, already built on)
 const WORLDS = [
@@ -29,73 +30,12 @@ const WORLDS = [
   ...[4, 8, 12, 15].map((s) => ({ name: `story${s}`, make: () => story(s), intent: s >= 12 ? 'way' : 'mass' })),
 ];
 
-/** what's there at a column: its ground, and the top of what stands on it */
-const column = (w, i, j) => { const g = w.ground(i, j); let k = g; while (w.stone(k, i, j) || w.stair(k, i, j) >= 0) k++; return { g, top: k, built: k > g }; };
-/** where a touch lands on a column: its top, or the ground */
-const pickAt = (w, i, j) => { const c = column(w, i, j); return c.built ? { face: 'top', hit: [c.top - 1, i, j], to: [c.top, i, j] } : { face: 'ground', hit: [c.g - 1, i, j], to: [c.g, i, j] }; };
-const spline = (P, n) => {
-  const out = [];
-  for (let s = 0; s < P.length - 1; s++) {
-    const p0 = P[Math.max(0, s - 1)], p1 = P[s], p2 = P[s + 1], p3 = P[Math.min(P.length - 1, s + 2)];
-    for (let k = 0; k < n; k++) { const t = k / n, t2 = t * t, t3 = t2 * t; out.push([0, 1].map((d) => 0.5 * (2 * p1[d] + (-p0[d] + p2[d]) * t + (2 * p0[d] - 5 * p1[d] + 4 * p2[d] - p3[d]) * t2 + (-p0[d] + 3 * p1[d] - 3 * p2[d] + p3[d]) * t3))); }
-  }
-  out.push(P[P.length - 1]);
-  return out;
-};
-/** everything that stands, by cell, for telling what a gesture added and took away */
-const state = (w) => {
-  const s = new Map();
-  for (const [v] of w.mass) s.set(`m${v}`, 1);
-  for (const [v, st] of w.stairs) s.set(`s${v}`, st.d);
-  for (const v of w.paving) s.set(`p${v}`, 1);
-  for (const [v] of w.piers) s.set(`r${v}`, 1);
-  return s;
-};
 /** roofed buildings that, after, stand unroofed (the same columns, the building still there, its roof gone: walked on, or
  * read as something else). One grown taller and roofed again isn't one */
 const unroofed = (w0, w1) => {
   const after = buildings(w1);
   return buildings(w0).list.filter((b) => b.roof).some((b) => { const [i, j] = b.cols[0], n = after.list.find((c) => c.cols.some((q) => q[0] === i && q[1] === j)); return n && !n.roof && n.h >= b.h; });
 };
-
-/** a gesture, as a hand might make it, in the world's own cells */
-function gesture(w, R, intent) {
-  const e = w.extent(), box = w.land ? { i0: Math.max(e.i0, -1), i1: Math.min(e.i1, 12), j0: Math.max(e.j0, -1), j1: Math.min(e.j1, 12) } : e;
-  const cells = [];
-  for (let i = box.i0; i <= box.i1; i++) for (let j = box.j0; j <= box.j1; j++) cells.push({ i, j, ...column(w, i, j) });
-  const built = cells.filter((c) => c.built), pickC = (from = cells) => from[Math.floor(R() * from.length)];
-  const near = (c, d0, d1) => cells.filter((q) => { const d = Math.hypot(q.i - c.i, q.j - c.j); return d >= d0 && d <= d1; });
-  const kinds = [['tap', 2], ['sweep', 3], ['meander', 1.5], ['loop', 1.5], ['pause', 1], ...(built.length ? [['tapTop', 1.5], ['fromTop', 2.5], ...(intent === 'mass' ? [['lift', 0.8]] : [])] : [])];
-  let r = R() * kinds.reduce((a, k) => a + k[1], 0), kind = kinds[0][0];
-  for (const [k, wgt] of kinds) { if ((r -= wgt) <= 0) { kind = k; break; } }
-  if (kind === 'tap' || kind === 'tapTop' || kind === 'lift') { const c = pickC(kind === 'tap' ? cells : built); return { kind, intent, at: [c.i, c.j], ...(kind === 'lift' ? { by: R() < 0.7 ? 1 + Math.floor(R() * 3) : -1 - Math.floor(R() * 2) } : {}) }; }
-  let pts;
-  if (kind === 'loop') {
-    const c = pickC(), rad = 1.6 + R() * 1.6, a0 = R() * 6.28, close = R() < 0.6 ? 0.95 + R() * 0.12 : 0.8, ring = [];
-    for (let q = 0; q <= 7; q++) { const a = a0 + (q / 7) * 6.28 * close, rr = rad * (0.8 + R() * 0.4); ring.push([c.i + Math.cos(a) * rr, c.j + Math.sin(a) * rr]); }
-    pts = spline(ring, 8);
-  } else {
-    const a = kind === 'fromTop' ? pickC(built) : pickC(), far = near(a, kind === 'meander' ? 4 : 2.5, kind === 'meander' ? 9 : 7), b = far.length ? pickC(far) : pickC();
-    const L = Math.hypot(b.i - a.i, b.j - a.j), nx = -(b.j - a.j) / (L || 1), ny = (b.i - a.i) / (L || 1), mids = kind === 'meander' ? 3 : 1 + (R() < 0.5 ? 1 : 0), ctl = [[a.i, a.j]];
-    for (let q = 1; q <= mids; q++) { const t = q / (mids + 1), off = (R() - 0.5) * L * (kind === 'meander' ? 0.5 : 0.22); ctl.push([a.i + (b.i - a.i) * t + nx * off, a.j + (b.j - a.j) * t + ny * off]); }
-    ctl.push([b.i, b.j]);
-    pts = spline(ctl, 10);
-  }
-  const path = [];
-  for (const [x, z] of pts) { const c = [Math.round(x), Math.round(z)]; if (!path.length || path.at(-1)[0] !== c[0] || path.at(-1)[1] !== c[1]) path.push(c); }
-  const rests = kind === 'pause' && path.length > 3 ? [path[Math.floor(path.length * (0.35 + R() * 0.3))]] : [];
-  return { kind, intent, path, rests };
-}
-
-/** the gesture read as the page reads it */
-function read(w, g) {
-  if (g.kind === 'tap' || g.kind === 'tapTop') return G.tap(w, pickAt(w, ...g.at), 0, false, g.intent);
-  if (g.kind === 'lift') return G.lift(w, pickAt(w, ...g.at), g.by, 0);
-  const start = pickAt(w, ...g.path[0]), last = g.path.at(-1), endCol = column(w, ...last);
-  // (the page holds a destination only when the stroke rests on a top: an end over the ground is no destination)
-  const end = g.path.length > 1 && endCol.built && (last[0] !== g.path[0][0] || last[1] !== g.path[0][1]) ? pickAt(w, ...last) : null;
-  return G.trace(w, start, g.path, end, () => 0, 0, g.rests, g.intent);
-}
 
 /** what a hand wouldn't want, in what came of it */
 function judge(w0, w1, g, op) {
@@ -127,6 +67,9 @@ function judge(w0, w1, g, op) {
 
 // ─── the runs ───
 const R0 = Number(opt.seed) || 1, tally = {}, byKind = {}, flagged = [];
+// (what was built against what was drawn: how often, and how, the reading took liberties with the gesture (`Op.took`))
+const took = {}, authorship = { built: 0, literal: 0, liberty: 0, otherKind: 0, refused: 0, offered: 0 };
+const OTHER_KIND = ['tower-instead', 'walkway-instead', 'wall-instead', 'court-instead', 'chosen-instead', 'jetty'];
 let n = 0, t0 = Date.now();
 for (const W of WORLDS) for (let run = 0; run < RUNS; run++) {
   const R = rng(R0 * 7919 + run * 104729 + W.name.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7));
@@ -140,6 +83,14 @@ for (const W of WORLDS) for (let run = 0; run < RUNS; run++) {
       const w1 = new World(w.seed, w.landSeed); w1.ops = [...w.ops]; w1.rebuild(0);
       if (op && !('refused' in op)) w1.apply({ ...op, alts: undefined }, 0);
       flags = judge(w0, w1, g, op);
+      if (op && 'refused' in op) { authorship.refused++; if (op.alts?.length) authorship.offered++; }
+      else if (op) {
+        authorship.built++;
+        const t = op.took ?? [];
+        if (!t.length) authorship.literal++; else authorship.liberty++;
+        if (t.some((x) => OTHER_KIND.includes(x))) authorship.otherKind++;
+        for (const x of t) took[x] = (took[x] ?? 0) + 1;
+      }
       w = w1;
     } catch (e) { err = String(e?.stack ?? e).split('\n').slice(0, 3).join(' | '); flags = ['crash']; }
     n++;
@@ -148,11 +99,11 @@ for (const W of WORLDS) for (let run = 0; run < RUNS; run++) {
     byKind[kindKey].n++;
     if (flags.length) byKind[kindKey].flagged++;
     for (const f of flags) tally[f] = (tally[f] ?? 0) + 1;
-    if (flags.length) flagged.push({ id: `${W.name}-r${run}-g${s}`, world: W.name, step: s, gesture: g, flags, why: op && !('refused' in op) ? op.why : null, said: op ? ('refused' in op ? op.refused : op.note ?? op.reading ?? '') : '', err, before, after: w.encode() });
+    if (flags.length) flagged.push({ id: `${W.name}-r${run}-g${s}`, world: W.name, step: s, gesture: g, flags, why: op && !('refused' in op) ? op.why : null, took: op && !('refused' in op) ? op.took : undefined, said: op ? ('refused' in op ? op.refused : op.note ?? op.reading ?? '') : '', err, before, after: w.encode() });
   }
 }
 const secs = (Date.now() - t0) / 1000;
-const summary = { gestures: n, seconds: secs, perGestureMs: Math.round((secs * 1000) / n), flaggedGestures: flagged.length, tally, byKind };
+const summary = { gestures: n, seconds: secs, perGestureMs: Math.round((secs * 1000) / n), flaggedGestures: flagged.length, tally, authorship, took, byKind };
 writeFileSync(join(OUT, 'summary.json'), `${JSON.stringify(summary, null, 1)}\n`);
 // (a sample of each flag, written apart: what's to be read blind, and what's revealed after)
 const picked = new Set();
@@ -166,3 +117,4 @@ for (const c of picked) {
 }
 writeFileSync(join(OUT, 'flagged.json'), `${JSON.stringify(flagged.map(({ before, after, ...c }) => c), null, 1)}\n`);
 console.log(`${n} gestures in ${secs.toFixed(1)}s (${summary.perGestureMs}ms each) · ${flagged.length} flagged · ${JSON.stringify(tally)} · ${picked.size} cases written to ${OUT}/cases`);
+console.log(`authorship: ${authorship.built} built, ${authorship.literal} as drawn, ${authorship.liberty} with liberties (${authorship.otherKind} another kind of thing); ${authorship.refused} refused (${authorship.offered} offering another reading) · ${JSON.stringify(took)}`);
