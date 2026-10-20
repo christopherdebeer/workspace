@@ -215,6 +215,8 @@ type Gesture = {
   /** whether it's lifting (or lowering) the stone it started on: drawn straight up or down the screen from it; and what
    * it pulls (what was selected when it began, or the part touched) */
   lifting?: boolean; pulls?: 'part' | Array<[number, number]>;
+  /** for each column crossed, the point of the stroke it was crossed at (what a brush took in, before it turned to lift) */
+  cellPt?: number[];
   /** where the finger last came to rest, and when (for holding still to choose); whether it's been offered */
   still: { x: number; y: number; t: number; f?: number }; offered?: boolean;
 };
@@ -512,7 +514,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (!g.before) {
     // (read against the world as it was before this stroke: a copy, so picking never strikes the stroke's own stone)
     g.before = new World(world.seed, world.landSeed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now());
-    g.h0 = surface(g.before, g.start); g.cells = [[g.start.hit[1], g.start.hit[2]]]; g.born = now();
+    g.h0 = surface(g.before, g.start); g.cells = [[g.start.hit[1], g.start.hit[2]]]; g.cellPt = [0]; g.born = now();
   }
   const before = g.before;
   g.pts.push([cx, cy]);
@@ -522,19 +524,27 @@ function traceStep(cx: number, cy: number, final: boolean) {
   const t = performance.now();
   if (!final && g.moved && t - g.moved > PAUSE && g.cells.length > 1 && !g.rest.some((r) => r[0] === last[0] && r[1] === last[1])) { g.rest.push(last); say('a pause: a gate here, or a landing'); }
   g.moved = t;
-  if (c && (c[0] !== last[0] || c[1] !== last[1])) g.cells.push(c);
+  if (c && (c[0] !== last[0] || c[1] !== last[1])) { g.cells.push(c); g.cellPt?.push(g.pts.length - 1); }
   // (stone touched and drawn straight up or down the screen, the way no stroke across the ground goes: it's lifted, or
   // lowered, a course for each course's height the finger's gone, there under the finger as it goes)
   if (g.mode === 'trace' && g.start.face !== 'ground') {
     const [k0, i0, j0] = g.start.hit, a = at3(i0 + 0.5, j0 + 0.5, k0 + 1), b = at3(i0 + 0.5, j0 + 0.5, k0 + 2), per = Math.max(8, Math.hypot(a[0] - b[0], a[1] - b[1]));
-    const dx = cx - g.x0, dy = cy - g.y0, upright = Math.abs(dy) >= per * 0.6 && Math.abs(dx) <= Math.abs(dy) * 0.3;
+    // (a brush, then a lift: the stroke run across the top first takes in what it passes over, at the height it began;
+    // then, turned straight up or down the screen, lifts (or lowers) that. Where the run up or down began)
+    let t = g.pts.length - 1;
+    while (t > 0) { const [px, py] = g.pts[t - 1]; if (Math.abs(cx - px) > Math.abs(cy - py) * 0.3 + 4) break; t--; }
+    const brushed = g.start.face === 'top' && t > 0 && !g.lifting ? g.cells.filter((c, n) => (g!.cellPt?.[n] ?? 0) <= t && before.topFrom(before.ground(c[0], c[1]) - 1, c[0], c[1]) === g!.h0) : [];
+    const brush = brushed.length >= 2 ? brushed : null;
+    const [ox, oy] = brush ? g.pts[t] : [g.x0, g.y0];
+    const dx = cx - ox, dy = cy - oy, upright = Math.abs(dy) >= per * 0.6 && Math.abs(dx) <= Math.abs(dy) * 0.3;
     // (a side grabbed is always lifted; from a top, only with mass in hand, and not if it's come to rest on another top:
     // that's a stroke to it. A way drawn up the screen from a top goes somewhere)
     const there = final ? null : pick(cx, cy, before), other = !!goal(there) && (there?.inset ?? 0) >= SQUARE;
     const may = g.start.face === 'side' || (intent === 'mass' && !other);
     if (may && (upright || g.lifting)) {
-      const n = Math.round(-dy / per);
-      g.lifting = upright || Math.abs(dx) <= Math.abs(dy) * 0.45;
+      if (brush && !g.lifting) { g.pulls = brush; g.x0 = ox; g.y0 = oy; }
+      const n = Math.round(-(cy - g.y0) / per);
+      g.lifting = upright || Math.abs(cx - g.x0) <= Math.abs(cy - g.y0) * 0.45;
       if (g.lifting) {
         g.pulls ??= sel ? [...new Map(sel.s.cells.map(([, i, j]) => [`${i}.${j}`, [i, j] as [number, number]])).values()] : 'part';
         const r = lift(before, g.start, n, g.born, g.pulls), op = r && !('refused' in r) ? r : null;

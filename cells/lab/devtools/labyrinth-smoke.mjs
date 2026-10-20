@@ -52,6 +52,18 @@ await withWood(async (lab) => {
     c.ok('drawn straight up from a top: lifted two courses', pr.whys.at(-1) === 'lift' && await W((w) => w.stone(2, 3, 7) && w.stone(3, 3, 7) && !w.stone(4, 3, 7)), pr);
     await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(300);
   }
+  // (a brush, then a lift: drawn across a top, taking in what it passes over, then straight up the screen: all of what
+  // was brushed raised together; then undone, and the top it was on)
+  {
+    await p.evaluate(() => window.__labyrinth.world.apply({ add: [3, 4, 5, 6].flatMap((i) => [[0, i, 10, 0]]) }, 0)); await p.waitForTimeout(900);
+    const a = await at(3, 10, 1), m = await at(5, 10, 1), b = await at(5, 10, 2), per = Math.hypot(m[0] - b[0], m[1] - b[1]);
+    const across = Array.from({ length: 8 }, (_, t) => [a[0] + ((m[0] - a[0]) * (t + 1)) / 8, a[1] + ((m[1] - a[1]) * (t + 1)) / 8]);
+    const up = Array.from({ length: 10 }, (_, t) => [m[0] + 1, m[1] - (per * 2.1 * (t + 1)) / 10]);
+    await finger([a, ...across, ...up], { down: true, up: true }); await p.waitForTimeout(300);
+    const pr = await probe();
+    c.ok('brushed across a top, then up: what it brushed raised together, two courses', pr.whys.at(-1) === 'lift' && await W((w) => [3, 4, 5].every((i) => w.stone(1, i, 10) && w.stone(2, i, 10)) && !w.stone(1, 6, 10)), { pr, last: await W((w) => JSON.stringify(w.ops.at(-1))) });
+    await p.evaluate(() => { const w = window.__labyrinth.world; w.undo(0); w.undo(0); }); await p.waitForTimeout(300);
+  }
   // (a wall traced across the stone, from beside it)
   await drag([[4, 7, 0], [6, 7, 0], [8, 7, 0]]);
   { const wall = await W((w) => [4, 5, 6, 7, 8].every((i) => w.stone(0, i, 7))), pr = await probe(); c.ok('trace on the stone: a wall along it', wall && pr.whys[pr.whys.length - 1] === 'wall', { wall, pr }); }

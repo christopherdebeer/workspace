@@ -156,10 +156,14 @@ export function lift(w: World, p: Pick, n: number, now: number, scope: 'part' | 
     } }
     if (!add.length && !walls.length) return { refused: 'nothing more will stand there' };
   } else {
-    for (const [x, z] of cells) { const t = topOf(x, z); for (let k = t - 1; k >= t + n && k >= w.ground(x, z); k--) cut.push([k, x, z]); }
+    // (never the stone a way the hand made walks on: lowered round it, it's left a causeway, the way kept as it was)
+    for (const [x, z] of cells) { const t = topOf(x, z); if (w.passage(t, x, z) >= 0) continue; for (let k = t - 1; k >= t + n && k >= w.ground(x, z); k--) cut.push([k, x, z]); }
     if (!cut.length) return null;
   }
-  const m = Math.abs(n), what = scope === 'whole' && cells.length > 1 ? `, the whole of it (${cells.length} across)` : chosen && cells.length > 1 ? `, all that's selected (${cells.length} across)` : '';
+  // (and what it does to a way the hand made across it: raised over it, the way goes on under it, through arches (its
+  // reserved void); lowered round it, the way's left on a causeway)
+  const ways = cells.filter(([x, z]) => w.passage(topOf(x, z), x, z) >= 0).length;
+  const m = Math.abs(n), what = (scope === 'whole' && cells.length > 1 ? `, the whole of it (${cells.length} across)` : chosen && cells.length > 1 ? `, all that's selected (${cells.length} across)` : '') + (ways ? (n > 0 ? ', the way across it kept, under arches' : ', the way across it kept, on a causeway') : '');
   const note = `${n > 0 ? 'raised' : 'lowered'} ${m} course${m > 1 ? 's' : ''}${what}`;
   const op: Op = { ...(add.length ? { add } : {}), ...(walls.length ? { walls } : {}), ...(cut.length ? { cut } : {}), born: now, why: n > 0 ? 'lift' : 'lower', note, reading: note, ...(scope === 'whole' && cells.length > 1 ? { took: ['whole-piece'] } : {}) };
   // (the other readings: the whole piece, pulled from the part; just the column, from what's selected)

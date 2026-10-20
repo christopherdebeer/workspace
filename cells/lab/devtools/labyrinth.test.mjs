@@ -807,6 +807,18 @@ stands(s4, 'story 4');
     ok('drawn down (the whole of it): courses taken off, to the ground and no further', down && down.cut?.length === 6 && down.cut.every((c) => c[0] >= 0) && down.why === 'lower', down);
     w.apply(up.alts[0].op); ok('raised, it stands four high', w.topFrom(0, 5, 5) === 4 && w.topFrom(0, 4, 5) === 4);
     ok('a tap still adds a course (no drag, no lift)', G.lift(w, p, 0, 0) === null); }
+  // (a region brushed and lifted, a way across it: raised, the way goes on under it through arches; lowered, it's left
+  // on a causeway; either way still walked end to end)
+  { const w = new World(1), BUm = await load('../client/labyrinth/buildings.ts'), NAVm = await load('../client/labyrinth/nav.ts');
+    const add = []; for (let i = 3; i <= 8; i++) for (let j = 3; j <= 7; j++) add.push([0, i, j, 0]);
+    w.apply({ add });
+    w.apply({ connect: { from: [1, 3, 5], to: null, path: [[3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5]] }, why: 'walkway' });
+    const brushed = [[5, 4], [6, 4], [5, 5], [6, 5], [5, 6], [6, 6]], p = { face: 'top', hit: [0, 5, 4], to: [1, 5, 4] };
+    const up = G.lift(w, p, 2, 0, brushed), down = G.lift(w, p, -1, 0, brushed);
+    ok('brushed and raised: all of it, and said that the way across it is kept', up?.add?.length === 12 && /way across it kept, under arches/.test(up.note), up?.note);
+    { const v = replay(w.encode()); v.apply(up); ok('raised over the way: it goes on under it, walked end to end', v.archway(1, 5, 5) >= 0 && NAVm.reaches(BUm.walkable(v), [1, 3, 5], [1, 8, 5])); }
+    ok('brushed and lowered: round the way, a causeway left', down?.cut?.length === 4 && !down.cut.some(([, , j]) => j === 5) && /causeway/.test(down.note), down);
+    { const v = replay(w.encode()); v.apply(down); ok('lowered round the way: still walked end to end', NAVm.reaches(BUm.walkable(v), [1, 3, 5], [1, 8, 5])); } }
   // (a wall drawn a cell alongside one already there, the same way: joined to it, not doubled into a slab)
   { const w = new World(1);
     w.apply({ add: [4, 5, 6, 7, 8].map((i) => [0, i, 5, 0]) });
