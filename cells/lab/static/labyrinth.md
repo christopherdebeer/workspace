@@ -423,7 +423,7 @@ A gesture used to be read as "join where it started to where it ended", and refu
 | a stroke on the stone | a wall, its kind the rules' choice | the other kinds: a wall, a gated wall, an arcaded wall, a thin wall |
 | a stroke drawn round, back to where it began (a ring of eight cells or more) | a court, walled round, a gate where it began | a ring of wall, an arcaded court, a thin wall |
 | a pause on the way (the finger still a moment) | a gate there, in a wall; a landing there, on a climb (if the climb leaves room) | |
-| a climb too steep for a flight along the stroke | a stair tower beside the destination (an octagonal turret, its door at its foot facing the way it was come to, a stair inside, its top joined to the top it's beside) | |
+| a climb too steep for a flight along the stroke | a stair tower beside the destination (an octagonal turret a level higher than the top it serves, its door at its foot facing the way it was come to, a stair inside, and a door in its face onto that top, roofed over) | |
 | a climb whose flight would stop short on something in the way | round it, to a straight flight into the destination; or a stair tower | the flight as drawn, joining what it meets |
 | a bridge four to seven long | one great arch, or an arcade, the rules' choice | the other |
 | a bridge or walkway with something in the way at its height | round it, the shortest way | joining what it meets |

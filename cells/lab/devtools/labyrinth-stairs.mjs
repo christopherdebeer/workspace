@@ -118,6 +118,23 @@ export const SCENES = [
     },
   },
   {
+    name: 'a stair tower: chosen for a short stroke to a tall tower, a level higher than it, entered from its top',
+    run(w, H) {
+      H.block(8, 9, 5, 6, 5);
+      const [ti, tj] = H.T([7, 5]), [di, dj] = H.T([8, 5]);
+      const tower = G.stairTower(w, 0, [H.T([6, 5]), H.T([7, 5]), H.T([8, 5])], [5, di, dj], 0);
+      ok(`${this.tag}: a stair tower stands there`, tower?.why === 'tower', tower);
+      w.apply(tower);
+      const b = BU.buildings(w).of.get(key(5, ti, tj));
+      ok(`${this.tag}: a level higher than the top it serves, roofed`, w.topFrom(0, ti, tj) === 6 && !!b?.roof, { top: w.topFrom(0, ti, tj), roof: b?.roof });
+      ok(`${this.tag}: a door from that top into it`, !!b?.openings.some((o) => o.kind === 'door' && o.k === 5 && o.i + DIRS[o.d][0] === di && o.j + DIRS[o.d][1] === dj), b?.openings.filter((o) => o.kind === 'door'));
+      ok(`${this.tag}: and its door at its foot`, !!b?.openings.some((o) => o.kind === 'door' && o.k === 0));
+      ok(`${this.tag}: walked from its foot up to the top`, walks(w, at(w, H.T, [6, 5]), at(w, H.T, [8, 5], 5)));
+      const top = BU.buildings(w).of.get(key(4, di, dj));
+      ok(`${this.tag}: the top it serves is walked, not roofed over`, !!top && !top.roof || !top, top && { roof: top.roof });
+    },
+  },
+  {
     name: 'chosen: a free-standing flight made solid, then hung on piers',
     run(w, H) {
       H.block(8, 9, 5, 6, 4);

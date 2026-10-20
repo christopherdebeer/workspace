@@ -6,7 +6,8 @@
  * - **A building** is a mass of solid columns all the same height, two or more high: two cells by two somewhere in it,
  *   or a tower of one or two cells three or more high. A wall a cell thick isn't one, however it runs (round a court,
  *   on the diagonal). A stair tower (the rules' answer to a climb too steep for a flight, `RULE.tower`) is one however
- *   slim: its door at its foot facing the way it was come to.
+ *   slim: its door at its foot facing the way it was come to, a level higher than the top it serves, entered from that
+ *   top by a door in its face there, roofed over (a turret, not a stub of terrace).
  * - **A solid column** is plain stone, and stone with a passage through it (an archway: the reserved void of
  *   static/labyrinth-connective.md), standing on the ground, or on a deck (a bridge, an arcade): there it starts at the
  *   passage the deck carries, the stone under it the bridge's, not the building's. So the void a way keeps open through
@@ -128,6 +129,14 @@ function find(w: World): Buildings {
     m.deep = cs.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`));
   }
 
+  // (the tops a stair tower serves: beside its top level, a place on stone, come into from it by a door; walked, so the
+  // building it's on isn't roofed over it, and a door onto it is the tower's own)
+  const served = new Set<number>();
+  for (const [v, r] of w.rules) {
+    if (!isTower(r)) continue;
+    const [, x, z] = unkey(v), t = height(x, z);
+    for (const [a, b] of DIRS) if (standing(w, t - 1, x + a, z + b) && w.stone(t - 2, x + a, z + b)) served.add(key(t - 1, x + a, z + b));
+  }
   for (let j = e.j0; j <= e.j1; j++) for (let i = e.i0; i <= e.i1; i++) {
     const h = height(i, j);
     if (!solid(i, j, h) || seen.has(key(0, i, j))) continue;
@@ -164,12 +173,12 @@ function find(w: World): Buildings {
     // (its top: walked if a way arrives there from beyond it)
     const tops = cols.map(([x, z]) => key(h, x, z)).filter((v) => nav.places.has(v)), topSet = new Set(tops);
     // (a stair tower's top is always come to: that's what it's for, even where it's become part of what it climbs to)
-    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u))) || (!!stairTower && tops.length > 0);
+    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u)) || served.has(v));
     // (doors where ways arrive against its walls, at height)
     const placeAt = (c: Cell) => key(...c);
     // (above its own foot: a door from a way at height, or (set into a bank) from the hill above)
     // (not out onto another building's top: that's under its roof)
-    const upper = faces.filter((f) => f.plain && f.k > baseOf(f.i, f.j) && standing(w, ...f.out) && !(anyH(f.out[1], f.out[2]) && height(f.out[1], f.out[2]) === f.k));
+    const upper = faces.filter((f) => f.plain && f.k > baseOf(f.i, f.j) && standing(w, ...f.out) && (!(anyH(f.out[1], f.out[2]) && height(f.out[1], f.out[2]) === f.k) || (!!stairTower && served.has(placeAt(f.out)))));
     // (a stair inside, if a way at one of those doors, or on its top, can't be reached from the slab otherwise)
     const unreached = upper.some((f) => !ground.has(placeAt(f.out))) || (arrives && tops.some((v) => !ground.has(v)));
     const atFoot = faces.filter((f) => f.plain && foot(f) && standing(w, ...f.out) && ground.has(placeAt(f.out)));

@@ -840,8 +840,9 @@ function wall(w: World, cells: Array<[number, number]>, closed: boolean, born: (
 }
 
 /**
- * A stair tower, for a climb a flight along the stroke can't make: a tower at the high end, as high as it, a stair
- * inside it (buildings.ts), its door at its foot facing the way it was come to, its top joined to the top it's beside.
+ * A stair tower, for a climb a flight along the stroke can't make: a tower at the high end, a level higher than it, a
+ * stair inside it (buildings.ts), its door at its foot facing the way it was come to, and a door into it from the top it
+ * serves; roofed over.
  * Climbing, it stands beside the destination (a walkway at the start's height leads to it, if the start's a top);
  * going down, beside the start, its foot on the stone or beside the destination. Null where one won't stand.
  */
@@ -853,11 +854,13 @@ export function stairTower(w: World, h0: number, cells: Array<[number, number]>,
   if (!up && h1 > w.ground(dest[0], dest[1]) && DIR(e, dest) < 0) return null;
   const add: Array<[number, number, number, number]> = [];
   if (H - w.ground(e[0], e[1]) < 2) return null;
-  for (let k = w.ground(e[0], e[1]); k < H; k++) {
+  // (a level higher than the top it serves: come into from that top by a door, roofed over, a turret, not a stub of
+  // terrace beside it)
+  for (let k = w.ground(e[0], e[1]); k <= H; k++) {
     if (w.stair(k, e[0], e[1]) >= 0 || w.tree(k, e[0], e[1]) || w.pier(k, e[0], e[1]) || (k === w.ground(e[0], e[1]) && w.pool(e[0], e[1])) || (w.way(k, e[0], e[1]) && !w.stone(k, e[0], e[1]))) return null;
     if (!w.stone(k, e[0], e[1])) add.push([k, e[0], e[1], now]);
   }
-  if (w.occupied(H, e[0], e[1]) || w.tree(H, e[0], e[1])) return null;
+  if (w.occupied(H + 1, e[0], e[1]) || w.tree(H + 1, e[0], e[1])) return null;
   // (its door: toward the way it's come to by, at its foot)
   const toward = up ? (path2.length >= 2 ? path2[path2.length - 2] : null) : (path2[2] ?? (h1 === w.ground(dest[0], dest[1]) ? dest : null));
   const d = toward ? DIR(e, toward) : (DIR(e, dest) + 2) % 4;
