@@ -112,9 +112,11 @@ For each connector: rotations, reflection, uneven ground, unequal approach width
 
 ## Progress
 
-What's been built from this, and where:
+What's been built from this so far, and where (each checked in `devtools/labyrinth-connectors.mjs`: the scene made by gestures through the production code, turned to all four sides and mirrored, its failure-to-prevent as the check):
 
-- **Reserved voids (§5, §7.2)**: authored passages (ways laid, paving) are void the model keeps open. Mass added into one becomes an archway with the passage through it; piers never stand in one; a way drawn through a wall one cell thick opens a gate in it. (`model.ts`: `World.passage`.)
-- **Stable identity (§5)**: a building's character is anchored to the operation that first laid it, so an unrelated neighbour doesn't re-roll it. (`buildings.ts`.)
-- **Roof terrace seam (§4)**: arriving on part of a roof makes that part a terrace; the rest keeps its roof. (`buildings.ts`.)
-- **Connector scenarios (§8)**: `devtools/labyrinth-connectors.mjs`, each connector's failure-to-prevent as its check, both edit orders, the four rotations.
+- **Reserved voids** (§5, §7.2): the cells an authored way walks through (its paving, a walkway's or a bridge's deck, a landing, its two ends) are void the model keeps open, with the way they run (`World.passages`). Stone added there later is an **archway**, the passage kept through it (a block tapped on to a path is a gate over it; a wall drawn across a path has a gate where it crosses); a **pier never stands in one** (an arcade's bay moves a cell along, or the arch spans it); and a way drawn through a hand-built wall **one cell thick opens a gate** in it rather than going round (§6: *draw a route through a wall*). Only authored ways claim void: the rules' own work (a court's pool, a roof) doesn't.
+- **Tower landing** (§4): a way laid by hand that runs square up to a building's foot gets a door there, never a blank face.
+- **Roof terrace seam** (§4): a building arrived on along one edge only makes that edge a terrace, and the rest keeps its roof, if two cells or more are left (`Building.roofPlan`, `terrace`; `underRoof()`).
+- **Stable identity** (§5): a building's character (windows, door, roof) is anchored to the column the hand laid first (`World.firstOp`), so a column added beside it later never re-rolls it.
+
+Not yet: junctions (corner bay, split landing, switchback), buildings above air (inhabited bridge, gatehouse room), cross vaults, joined roofs, terrain and water transitions.

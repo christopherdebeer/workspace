@@ -320,6 +320,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: inside && selected.has(key(0, i, j)) };
       quad([x0, 0, z0], [x1, 0, z0], [x1, 0, z1], [x0, 0, z1], [0, 1, 0], inside ? cornerAo(0, i, j) : 1, court ? MAT.court : MAT.slab);
     }
+    // (a way laid on the stone: flags over it, as on the land, so the way the hand made reads where it runs)
+    for (let j = ex.j0; j <= ex.j1; j++) for (let i = ex.i0; i <= ex.i1; i++) {
+      if (!w.paved(i, j) || w.courts.has(key(0, i, j))) continue;
+      const e = (d: number) => { const [a, b] = DIRS[d]; return w.paved(i + a, j + b) || w.courts.has(key(0, i + a, j + b)) || w.occupied(0, i + a, j + b) ? 0 : 0.12; };
+      cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: selected.has(key(0, i, j)) };
+      quad([X(i) + e(2), 0.012, Z(j) + e(3)], [X(i + 1) - e(0), 0.012, Z(j) + e(3)], [X(i + 1) - e(0), 0.012, Z(j + 1) - e(1)], [X(i) + e(2), 0.012, Z(j + 1) - e(1)], [0, 1, 0], 0.95, MAT.court);
+    }
     const T = 90, R = 1.6;
     // (its sides, and the table round it, shut in close to its foot)
     const cs: V3[] = [[xa, 0, za], [xb, 0, za], [xb, 0, zb], [xa, 0, zb]], os: V3[] = [[xa - R, -SLAB, za - R], [xb + R, -SLAB, za - R], [xb + R, -SLAB, zb + R], [xa - R, -SLAB, zb + R]];

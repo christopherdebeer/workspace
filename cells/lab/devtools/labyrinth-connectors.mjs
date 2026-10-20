@@ -3,7 +3,8 @@
 // turned to all four sides of the grid and mirrored, and each checked for the failure it exists to prevent (a passage
 // shut by what's added over it, a route stopped by a wall it was drawn through, a tower reached at a blank face, a
 // whole roof lost to a step on to part of it). Endpoints and clearance, not just that the world joins up somewhere.
-//   --only=NAME   --ops (print each scene's ops, to replay with ?ops= in the browser)
+//   --only=NAME   --ops (print each scene's ops, to replay with ?ops= in the browser)   --render (each scene, unturned,
+//   drawn by the page in WebGL: devtools/out/connectors/*.png)
 import './labyrinth-node.mjs';
 const { World, key } = await import('../client/labyrinth/model.ts');
 const G = await import('../client/labyrinth/gesture.ts');
@@ -118,7 +119,7 @@ const SCENES = [
   },
 ];
 
-const t0 = Date.now();
+const t0 = Date.now(), scenes = [];
 for (const S of SCENES) {
   if (opt.only && !S.name.includes(opt.only)) continue;
   for (const [r, m] of ORIENT) {
@@ -126,7 +127,24 @@ for (const S of SCENES) {
     S.tag = `${S.name.split(':')[0]} (turned ${r}${m ? ', mirrored' : ''})`;
     try { S.run(w, H); } catch (e) { checks++; fails++; console.log(`FAIL  ${S.tag}: ${String(e.message ?? e).slice(0, 200)}`); }
     if (opt.ops && r === 0 && !m) console.log(`${S.name}\n  ?ops=${encodeURIComponent(w.encode())}`);
+    if (r === 0 && !m) scenes.push({ name: S.name, ops: w.encode() });
   }
 }
 console.log(`${checks - fails} of ${checks} connector checks hold (${SCENES.length} scenes × ${ORIENT.length} orientations, ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 process.exitCode = fails ? 1 : 0;
+if (opt.render) {
+  // (the page itself, WebGL and all, nothing moving: each scene as it's drawn, to be looked at)
+  process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
+  const { withWood } = await import('./harness.mjs'), { mkdirSync } = await import('node:fs');
+  mkdirSync(new URL('./out/connectors/', import.meta.url), { recursive: true });
+  await withWood(async (lab) => {
+    for (const [n, sc] of scenes.entries()) {
+      const p = await lab.open(`instant&zoom=0.9&ops=${encodeURIComponent(sc.ops)}`);
+      await p.waitForTimeout(9000);
+      const file = new URL(`./out/connectors/${String(n + 1).padStart(2, '0')}-${sc.name.split(':')[0].replace(/[^a-z]+/gi, '-')}.png`, import.meta.url).pathname;
+      await p.screenshot({ path: file, timeout: 300000 });
+      console.log(`drawn: ${file}`);
+      await p.close();
+    }
+  }, { width: 700, height: 700 });
+}
